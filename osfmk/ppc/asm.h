@@ -237,6 +237,8 @@
 #define parm	0x01000000
 #define sten	7
 #define stenm	0x01000000
+#define dnap	7
+#define dnapm	0x01000000
 #define doze	8
 #define dozem	0x00800000
 #define nap		9
@@ -458,6 +460,10 @@
 #define GUSMstgtdis 0x00000080
 #define GUSMstgttim 0x00000038
 #define GUSMstgttoff 0x00000004
+
+; PowerTune
+#define PowerTuneControlReg	0x0AA001
+#define PowerTuneStatusReg	0x408001
 
 ;	HID4
 #define hid4RMCI 23

@@ -586,7 +586,12 @@ cpu_signal_handler(
   							return;
 						
 						case CPRQscom:
-							fwSCOM((scomcomm *)holdParm2);	/* Do the function */
+							if(((scomcomm *)holdParm2)->scomfunc) {	/* Are we writing */
+								((scomcomm *)holdParm2)->scomstat = ml_scom_write(((scomcomm *)holdParm2)->scomreg, ((scomcomm *)holdParm2)->scomdata);	/* Write scom */
+							}
+							else {					/* No, reading... */
+								((scomcomm *)holdParm2)->scomstat = ml_scom_read(((scomcomm *)holdParm2)->scomreg, &((scomcomm *)holdParm2)->scomdata);	/* Read scom */
+							}
 							return;
 
 						default:

@@ -1965,6 +1965,33 @@ kern_return_t is_io_connect_map_memory(
     return( err );
 }
 
+IOMemoryMap * IOUserClient::removeMappingForDescriptor(IOMemoryDescriptor * mem)
+{
+    OSIterator *  iter;
+    IOMemoryMap * map = 0;
+
+    IOLockLock(gIOObjectPortLock);
+
+    iter = OSCollectionIterator::withCollection(mappings);
+    if(iter)
+    {
+        while ((map = OSDynamicCast(IOMemoryMap, iter->getNextObject())))
+        {
+            if(mem == map->getMemoryDescriptor())
+            {
+                map->retain();
+                mappings->removeObject(map);
+                break;
+            }
+        }
+        iter->release();
+    }
+
+    IOLockUnlock(gIOObjectPortLock);
+
+    return (map);
+}
+
 kern_return_t is_io_connect_unmap_memory(
 	io_object_t     connect,
 	int		type,

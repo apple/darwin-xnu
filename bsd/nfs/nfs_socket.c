@@ -2172,11 +2172,11 @@ nfs_timer(arg)
 				rep->r_rtt = 0;
 		}
 	}
+	microuptime(&now);
 #ifndef NFS_NOSERVER
 	/*
 	 * Call the nqnfs server timer once a second to handle leases.
 	 */
-	microuptime(&now);
 	if (lasttime != now.tv_sec) {
 		lasttime = now.tv_sec;
 		nqnfs_serverd();
@@ -2194,6 +2194,15 @@ nfs_timer(arg)
 	}
 #endif /* NFS_NOSERVER */
 	splx(s);
+
+	if (nfsbuffreeuptimestamp + 30 <= now.tv_sec) {
+		/*
+		 * We haven't called nfs_buf_freeup() in a little while.
+		 * So, see if we can free up any stale/unused bufs now.
+		 */
+		nfs_buf_freeup(1);
+	}
+
 	timeout(nfs_timer_funnel, (void *)0, nfs_ticks);
 
 }

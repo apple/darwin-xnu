@@ -103,13 +103,40 @@ extern struct nfsstats nfsstats;
 #define	NFSBUFHASH(dvp, lbn)	\
 	(&nfsbufhashtbl[((long)(dvp) / sizeof(*(dvp)) + (int)(lbn)) & nfsbufhash])
 LIST_HEAD(nfsbufhashhead, nfsbuf) *nfsbufhashtbl;
-struct nfsbuffreehead nfsbuffree, nfsbufdelwri;
+struct nfsbuffreehead nfsbuffree, nfsbuffreemeta, nfsbufdelwri;
 u_long nfsbufhash;
 int nfsbufhashlock, nfsbufcnt, nfsbufmin, nfsbufmax;
-int nfsbuffreecnt, nfsbufdelwricnt, nfsneedbuffer;
+int nfsbuffreecnt, nfsbuffreemetacnt, nfsbufdelwricnt, nfsneedbuffer;
 int nfs_nbdwrite;
+time_t nfsbuffreeuptimestamp;
 
-#define NFSBUFWRITE_THROTTLE 9
+#define NFSBUFWRITE_THROTTLE	9
+#define NFSBUF_LRU_STALE	120
+#define NFSBUF_META_STALE	240
+
+/* number of nfsbufs nfs_buf_freeup() should attempt to free from nfsbuffree list */
+#define LRU_TO_FREEUP			6
+/* number of nfsbufs nfs_buf_freeup() should attempt to free from nfsbuffreemeta list */
+#define META_TO_FREEUP			3
+/* total number of nfsbufs nfs_buf_freeup() should attempt to free */
+#define TOTAL_TO_FREEUP			(LRU_TO_FREEUP+META_TO_FREEUP)
+/* fraction of nfsbufs nfs_buf_freeup() should attempt to free from nfsbuffree list when called from nfs_timer() */
+#define LRU_FREEUP_FRAC_ON_TIMER	8
+/* fraction of nfsbufs nfs_buf_freeup() should attempt to free from nfsbuffreemeta list when called from nfs_timer() */
+#define META_FREEUP_FRAC_ON_TIMER	16
+/* fraction of total nfsbufs that nfsbuffreecnt should exceed before bothering to call nfs_buf_freeup() */
+#define LRU_FREEUP_MIN_FRAC		4
+/* fraction of total nfsbufs that nfsbuffreemetacnt should exceed before bothering to call nfs_buf_freeup() */
+#define META_FREEUP_MIN_FRAC		2
+
+#define NFS_BUF_FREEUP() \
+    	do { \
+		/* only call nfs_buf_freeup() if it has work to do: */ \
+		if (((nfsbuffreecnt > nfsbufcnt/LRU_FREEUP_MIN_FRAC) || \
+		     (nfsbuffreemetacnt > nfsbufcnt/META_FREEUP_MIN_FRAC)) && \
+		    ((nfsbufcnt - TOTAL_TO_FREEUP) > nfsbufmin)) \
+			nfs_buf_freeup(0); \
+	} while (0)
 
 /*
  * Initialize nfsbuf lists
@@ -120,41 +147,36 @@ nfs_nbinit(void)
 	nfsbufhashlock = 0;
 	nfsbufhashtbl = hashinit(nbuf, M_TEMP, &nfsbufhash);
 	TAILQ_INIT(&nfsbuffree);
+	TAILQ_INIT(&nfsbuffreemeta);
 	TAILQ_INIT(&nfsbufdelwri);
-	nfsbufcnt = nfsbuffreecnt = nfsbufdelwricnt = 0;
+	nfsbufcnt = nfsbuffreecnt = nfsbuffreemetacnt = nfsbufdelwricnt = 0;
 	nfsbufmin = 128; // XXX tune me!
 	nfsbufmax = 8192; // XXX tune me!
 	nfsneedbuffer = 0;
 	nfs_nbdwrite = 0;
+	nfsbuffreeuptimestamp = 0;
 }
 
 /*
  * try to free up some excess, unused nfsbufs
  */
-static void
-nfs_buf_freeup(void)
+void
+nfs_buf_freeup(int timer)
 {
 	struct nfsbuf *fbp;
-	int cnt;
+	struct timeval now;
+	int count;
 
-#define NFS_BUF_FREEUP() \
-    	do { \
-		/* only call nfs_buf_freeup() if it has work to do */ \
-		if ((nfsbuffreecnt > nfsbufcnt/4) && \
-		    (nfsbufcnt-nfsbuffreecnt/8 > nfsbufmin)) \
-			nfs_buf_freeup(); \
-	} while (0)
+	microuptime(&now);
+	nfsbuffreeuptimestamp = now.tv_sec;
 
-	if (nfsbuffreecnt < nfsbufcnt/4)
-		return;
-	cnt = nfsbuffreecnt/8;
-	if (nfsbufcnt-cnt < nfsbufmin)
-		return;
-
-	FSDBG(320, -1, nfsbufcnt, nfsbuffreecnt, cnt);
-	while (cnt-- > 0) {
+	FSDBG(320, nfsbufcnt, nfsbuffreecnt, nfsbuffreemetacnt, count);
+	count = timer ? nfsbuffreecnt/LRU_FREEUP_FRAC_ON_TIMER : LRU_TO_FREEUP;
+	while ((nfsbufcnt > nfsbufmin) && (count-- > 0)) {
 		fbp = TAILQ_FIRST(&nfsbuffree);
 		if (!fbp)
+			break;
+		if ((fbp->nb_timestamp + (2*NFSBUF_LRU_STALE)) > now.tv_sec)
 			break;
 		nfs_buf_remfree(fbp);
 		/* disassociate buffer from any vnode */
@@ -181,7 +203,40 @@ nfs_buf_freeup(void)
 		FREE(fbp, M_TEMP);
 		nfsbufcnt--;
 	}
-	FSDBG(320, -1, nfsbufcnt, nfsbuffreecnt, cnt);
+
+	count = timer ? nfsbuffreemetacnt/META_FREEUP_FRAC_ON_TIMER : META_TO_FREEUP;
+	while ((nfsbufcnt > nfsbufmin) && (count-- > 0)) {
+		fbp = TAILQ_FIRST(&nfsbuffreemeta);
+		if (!fbp)
+			break;
+		if ((fbp->nb_timestamp + (2*NFSBUF_META_STALE)) > now.tv_sec)
+			break;
+		nfs_buf_remfree(fbp);
+		/* disassociate buffer from any vnode */
+		if (fbp->nb_vp) {
+			struct vnode *oldvp;
+			if (fbp->nb_vnbufs.le_next != NFSNOLIST) {
+				LIST_REMOVE(fbp, nb_vnbufs);
+				fbp->nb_vnbufs.le_next = NFSNOLIST;
+			}
+			oldvp = fbp->nb_vp;
+			fbp->nb_vp = NULL;
+			HOLDRELE(oldvp);
+		}
+		LIST_REMOVE(fbp, nb_hash);
+		/* nuke any creds */
+		if (fbp->nb_rcred != NOCRED)
+			crfree(fbp->nb_rcred);
+		if (fbp->nb_wcred != NOCRED)
+			crfree(fbp->nb_wcred);
+		/* if buf was NB_META, dump buffer */
+		if (ISSET(fbp->nb_flags, NB_META) && fbp->nb_data) {
+			FREE(fbp->nb_data, M_TEMP);
+		}
+		FREE(fbp, M_TEMP);
+		nfsbufcnt--;
+	}
+	FSDBG(320, nfsbufcnt, nfsbuffreecnt, nfsbuffreemetacnt, count);
 }
 
 void
@@ -192,6 +247,9 @@ nfs_buf_remfree(struct nfsbuf *bp)
 	if (ISSET(bp->nb_flags, NB_DELWRI)) {
 		nfsbufdelwricnt--;
 		TAILQ_REMOVE(&nfsbufdelwri, bp, nb_free);
+	} else if (ISSET(bp->nb_flags, NB_META) && !ISSET(bp->nb_flags, NB_INVAL)) {
+		nfsbuffreemetacnt--;
+		TAILQ_REMOVE(&nfsbuffreemeta, bp, nb_free);
 	} else {
 		nfsbuffreecnt--;
 		TAILQ_REMOVE(&nfsbuffree, bp, nb_free);
@@ -209,11 +267,12 @@ nfs_buf_incore(struct vnode *vp, daddr_t blkno)
 	/* Search hash chain */
 	struct nfsbuf * bp = NFSBUFHASH(vp, blkno)->lh_first;
 	for (; bp != NULL; bp = bp->nb_hash.le_next)
-		if (bp->nb_lblkno == blkno && bp->nb_vp == vp &&
-		    !ISSET(bp->nb_flags, NB_INVAL)) {
-			FSDBG(547, bp, blkno, bp->nb_flags, bp->nb_vp);
-			return (bp);
-		    }
+		if (bp->nb_lblkno == blkno && bp->nb_vp == vp) {
+			if (!ISSET(bp->nb_flags, NB_INVAL)) {
+				FSDBG(547, bp, blkno, bp->nb_flags, bp->nb_vp);
+				return (bp);
+			}
+		}
 	return (NULL);
 }
 
@@ -541,85 +600,125 @@ loop:
 	/*
 	 * where to get a free buffer:
 	 * - alloc new if we haven't reached min bufs
-	 * - free list
+	 * - if free lists are NOT empty
+	 *   - if free list is stale, use it
+	 *   - else if freemeta list is stale, use it
+	 *   - else if max bufs allocated, use least-time-to-stale
 	 * - alloc new if we haven't reached max allowed
 	 * - start clearing out delwri list and try again
 	 */
 
-	if ((nfsbufcnt > nfsbufmin) && !TAILQ_EMPTY(&nfsbuffree)) {
-		/* pull an nfsbuf off the free list */
-		bp = TAILQ_FIRST(&nfsbuffree);
-		FSDBG(544, vp, blkno, bp, bp->nb_flags);
-		nfs_buf_remfree(bp);
-		if (ISSET(bp->nb_flags, NB_DELWRI))
-			panic("nfs_buf_get: delwri");
-		SET(bp->nb_flags, NB_BUSY);
-		/* disassociate buffer from previous vnode */
-		if (bp->nb_vp) {
-			struct vnode *oldvp;
-			if (bp->nb_vnbufs.le_next != NFSNOLIST) {
-				LIST_REMOVE(bp, nb_vnbufs);
-				bp->nb_vnbufs.le_next = NFSNOLIST;
+	if ((nfsbufcnt > nfsbufmin) &&
+	    (!TAILQ_EMPTY(&nfsbuffree) || !TAILQ_EMPTY(&nfsbuffreemeta))) {
+		/* try to pull an nfsbuf off a free list */
+		struct nfsbuf *lrubp, *metabp;
+		struct timeval now;
+		microuptime(&now);
+
+		/* if the next LRU or META buffer is stale, use it */
+		lrubp = TAILQ_FIRST(&nfsbuffree);
+		if (lrubp && ((lrubp->nb_timestamp + NFSBUF_LRU_STALE) < now.tv_sec))
+			bp = lrubp;
+		metabp = TAILQ_FIRST(&nfsbuffreemeta);
+		if (!bp && metabp && ((metabp->nb_timestamp + NFSBUF_META_STALE) < now.tv_sec))
+			bp = metabp;
+
+		if (!bp && (nfsbufcnt >= nfsbufmax)) {
+			/* we've already allocated all bufs, so */
+			/* choose the buffer that'll go stale first */
+			if (!metabp)
+				bp = lrubp;
+			else if (!lrubp)
+				bp = metabp;
+			else {
+				int32_t lru_stale_time, meta_stale_time;
+				lru_stale_time = lrubp->nb_timestamp + NFSBUF_LRU_STALE;
+				meta_stale_time = metabp->nb_timestamp + NFSBUF_META_STALE;
+				if (lru_stale_time <= meta_stale_time)
+					bp = lrubp;
+				else
+					bp = metabp;
 			}
-			oldvp = bp->nb_vp;
-			bp->nb_vp = NULL;
-			HOLDRELE(oldvp);
 		}
-		LIST_REMOVE(bp, nb_hash);
-		/* nuke any creds we're holding */
-		cred = bp->nb_rcred;
-		if (cred != NOCRED) {
-			bp->nb_rcred = NOCRED; 
-			crfree(cred);
-		}
-		cred = bp->nb_wcred;
-		if (cred != NOCRED) {
-			bp->nb_wcred = NOCRED; 
-			crfree(cred);
-		}
-		/* if buf will no longer be NB_META, dump old buffer */
-		if ((operation != BLK_META) &&
-		    ISSET(bp->nb_flags, NB_META) && bp->nb_data) {
-			FREE(bp->nb_data, M_TEMP);
-			bp->nb_data = NULL;
-		}
-		/* re-init buf fields */
-		bp->nb_error = 0;
-		bp->nb_validoff = bp->nb_validend = -1;
-		bp->nb_dirtyoff = bp->nb_dirtyend = 0;
-		bp->nb_valid = 0;
-		bp->nb_dirty = 0;
-	} else if (nfsbufcnt < nfsbufmax) {
-		/* just alloc a new one */
-		MALLOC(bp, struct nfsbuf *, sizeof(struct nfsbuf), M_TEMP, M_WAITOK);
-		nfsbufcnt++;
-		NFSBUFCNTCHK();
-		/* init nfsbuf */
-		bzero(bp, sizeof(*bp));
-		bp->nb_free.tqe_next = NFSNOLIST;
-		bp->nb_validoff = bp->nb_validend = -1;
-		FSDBG(545, vp, blkno, bp, 0);
-	} else {
-		/* too many bufs... wait for buffers to free up */
-		FSDBG_TOP(546, vp, blkno, nfsbufcnt, nfsbufmax);
-		/* unlock hash */
-		if (nfsbufhashlock < 0) {
-			nfsbufhashlock = 0;
-			wakeup(&nfsbufhashlock);
-		} else
-			nfsbufhashlock = 0;
 
-		/* poke the delwri list */
-		nfs_buf_delwri_push();
-
-		nfsneedbuffer = 1;
-		tsleep(&nfsneedbuffer, PCATCH, "nfsbufget", 0);
-		FSDBG_BOT(546, vp, blkno, nfsbufcnt, nfsbufmax);
-		if (nfs_sigintr(VFSTONFS(vp->v_mount), NULL, p)) {
-			FSDBG_BOT(541, vp, blkno, 0, EINTR);
-			return (NULL);
+		if (bp) {
+			/* we have a buffer to reuse */
+			FSDBG(544, vp, blkno, bp, bp->nb_flags);
+			nfs_buf_remfree(bp);
+			if (ISSET(bp->nb_flags, NB_DELWRI))
+				panic("nfs_buf_get: delwri");
+			SET(bp->nb_flags, NB_BUSY);
+			/* disassociate buffer from previous vnode */
+			if (bp->nb_vp) {
+				struct vnode *oldvp;
+				if (bp->nb_vnbufs.le_next != NFSNOLIST) {
+					LIST_REMOVE(bp, nb_vnbufs);
+					bp->nb_vnbufs.le_next = NFSNOLIST;
+				}
+				oldvp = bp->nb_vp;
+				bp->nb_vp = NULL;
+				HOLDRELE(oldvp);
+			}
+			LIST_REMOVE(bp, nb_hash);
+			/* nuke any creds we're holding */
+			cred = bp->nb_rcred;
+			if (cred != NOCRED) {
+				bp->nb_rcred = NOCRED; 
+				crfree(cred);
+			}
+			cred = bp->nb_wcred;
+			if (cred != NOCRED) {
+				bp->nb_wcred = NOCRED; 
+				crfree(cred);
+			}
+			/* if buf will no longer be NB_META, dump old buffer */
+			if ((operation != BLK_META) &&
+			    ISSET(bp->nb_flags, NB_META) && bp->nb_data) {
+				FREE(bp->nb_data, M_TEMP);
+				bp->nb_data = NULL;
+			}
+			/* re-init buf fields */
+			bp->nb_error = 0;
+			bp->nb_validoff = bp->nb_validend = -1;
+			bp->nb_dirtyoff = bp->nb_dirtyend = 0;
+			bp->nb_valid = 0;
+			bp->nb_dirty = 0;
 		}
-		goto loop;
+	}
+
+	if (!bp) {
+		if (nfsbufcnt < nfsbufmax) {
+			/* just alloc a new one */
+			MALLOC(bp, struct nfsbuf *, sizeof(struct nfsbuf), M_TEMP, M_WAITOK);
+			nfsbufcnt++;
+			NFSBUFCNTCHK();
+			/* init nfsbuf */
+			bzero(bp, sizeof(*bp));
+			bp->nb_free.tqe_next = NFSNOLIST;
+			bp->nb_validoff = bp->nb_validend = -1;
+			FSDBG(545, vp, blkno, bp, 0);
+		} else {
+			/* too many bufs... wait for buffers to free up */
+			FSDBG_TOP(546, vp, blkno, nfsbufcnt, nfsbufmax);
+			/* unlock hash */
+			if (nfsbufhashlock < 0) {
+				nfsbufhashlock = 0;
+				wakeup(&nfsbufhashlock);
+			} else
+				nfsbufhashlock = 0;
+
+			/* poke the delwri list */
+			nfs_buf_delwri_push();
+
+			nfsneedbuffer = 1;
+			tsleep(&nfsneedbuffer, PCATCH, "nfsbufget", 0);
+			FSDBG_BOT(546, vp, blkno, nfsbufcnt, nfsbufmax);
+			if (nfs_sigintr(VFSTONFS(vp->v_mount), NULL, p)) {
+				FSDBG_BOT(541, vp, blkno, 0, EINTR);
+				return (NULL);
+			}
+			goto loop;
+		}
 	}
 
 setup_nfsbuf:
@@ -671,6 +770,8 @@ buffer_setup:
 				LIST_REMOVE(bp, nb_vnbufs);
 				bp->nb_vnbufs.le_next = NFSNOLIST;
 				bp->nb_vp = NULL;
+				/* clear usage timestamp to allow immediate freeing */
+				bp->nb_timestamp = 0;
 				HOLDRELE(vp);
 				if (bp->nb_free.tqe_next != NFSNOLIST)
 					panic("nfsbuf on freelist");
@@ -700,9 +801,10 @@ buffer_setup:
 }
 
 void
-nfs_buf_release(struct nfsbuf *bp)
+nfs_buf_release(struct nfsbuf *bp, int freeup)
 {
 	struct vnode *vp = bp->nb_vp;
+	struct timeval now;
 
 	FSDBG_TOP(548, bp, NBOFF(bp), bp->nb_flags, bp->nb_data);
 	FSDBG(548, bp->nb_validoff, bp->nb_validend, bp->nb_dirtyoff, bp->nb_dirtyend);
@@ -800,12 +902,16 @@ pagelist_cleanup_done:
 			NFSBUFCNTCHK();
 			wakeup((caddr_t)&nfs_nbdwrite);
 		}
+		/* clear usage timestamp to allow immediate freeing */
+		bp->nb_timestamp = 0;
 		/* put buffer at head of free list */
 		if (bp->nb_free.tqe_next != NFSNOLIST)
 			panic("nfsbuf on freelist");
+		SET(bp->nb_flags, NB_INVAL);
 		TAILQ_INSERT_HEAD(&nfsbuffree, bp, nb_free);
 		nfsbuffreecnt++;
-		NFS_BUF_FREEUP();
+		if (freeup)
+			NFS_BUF_FREEUP();
 	} else if (ISSET(bp->nb_flags, NB_DELWRI)) {
 		/* put buffer at end of delwri list */
 		if (bp->nb_free.tqe_next != NFSNOLIST)
@@ -813,12 +919,21 @@ pagelist_cleanup_done:
 		TAILQ_INSERT_TAIL(&nfsbufdelwri, bp, nb_free);
 		nfsbufdelwricnt++;
 	} else {
+		/* update usage timestamp */
+		microuptime(&now);
+		bp->nb_timestamp = now.tv_sec;
 		/* put buffer at end of free list */
 		if (bp->nb_free.tqe_next != NFSNOLIST)
 			panic("nfsbuf on freelist");
-		TAILQ_INSERT_TAIL(&nfsbuffree, bp, nb_free);
-		nfsbuffreecnt++;
-		NFS_BUF_FREEUP();
+		if (ISSET(bp->nb_flags, NB_META)) {
+			TAILQ_INSERT_TAIL(&nfsbuffreemeta, bp, nb_free);
+			nfsbuffreemetacnt++;
+		} else {
+			TAILQ_INSERT_TAIL(&nfsbuffree, bp, nb_free);
+			nfsbuffreecnt++;
+		}
+		if (freeup)
+			NFS_BUF_FREEUP();
 	}
 
 	NFSBUFCNTCHK();
@@ -885,7 +1000,7 @@ nfs_buf_iodone(struct nfsbuf *bp)
 	}
 
 	if (ISSET(bp->nb_flags, NB_ASYNC))	/* if async, release it */
-		nfs_buf_release(bp);
+		nfs_buf_release(bp, 1);
 	else {		                        /* or just wakeup the buffer */	
 		CLR(bp->nb_flags, NB_WANTED);
 		wakeup(bp);
@@ -948,7 +1063,7 @@ nfs_buf_write_delayed(struct nfsbuf *bp)
 	 
 	/* Otherwise, the "write" is done, so mark and release the buffer. */
 	SET(bp->nb_flags, NB_DONE);
-	nfs_buf_release(bp);
+	nfs_buf_release(bp, 1);
 	FSDBG_BOT(551, bp, NBOFF(bp), bp->nb_flags, 0);
 	return;
 }
@@ -1034,6 +1149,12 @@ nfs_bioread(vp, uio, ioflag, cred, getpages)
 				FSDBG_BOT(514, vp, 0xd1e0004, 0, error);
 				return (error);
 			}
+			if (vp->v_type == VDIR) {
+				/* if directory changed, purge any name cache entries */
+				if (np->n_ncmtime != vattr.va_mtime.tv_sec)
+					cache_purge(vp);
+				np->n_ncmtime = vattr.va_mtime.tv_sec;
+			}
 			np->n_mtime = vattr.va_mtime.tv_sec;
 		} else {
 			error = VOP_GETATTR(vp, &vattr, cred, p);
@@ -1045,13 +1166,16 @@ nfs_bioread(vp, uio, ioflag, cred, getpages)
 				if (vp->v_type == VDIR) {
 					nfs_invaldir(vp);
 					/* purge name cache entries */
-					cache_purge(vp);
+					if (np->n_ncmtime != vattr.va_mtime.tv_sec)
+						cache_purge(vp);
 				}
 				error = nfs_vinvalbuf(vp, V_SAVE, cred, p, 1);
 				if (error) {
 					FSDBG_BOT(514, vp, 0xd1e0006, 0, error);
 					return (error);
 				}
+				if (vp->v_type == VDIR)
+					np->n_ncmtime = vattr.va_mtime.tv_sec;
 				np->n_mtime = vattr.va_mtime.tv_sec;
 			}
 		}
@@ -1172,10 +1296,10 @@ nfs_bioread(vp, uio, ioflag, cred, getpages)
 					if (nfs_asyncio(rabp, cred)) {
 						SET(rabp->nb_flags, (NB_INVAL|NB_ERROR));
 						rabp->nb_error = EIO;
-						nfs_buf_release(rabp);
+						nfs_buf_release(rabp, 1);
 					}
 				} else
-					nfs_buf_release(rabp);
+					nfs_buf_release(rabp, 1);
 			}
 		}
 
@@ -1272,7 +1396,7 @@ again:
 				iov.iov_len = auio.uio_resid;
 				error = nfs_readrpc(vp, &auio, cred);
 				if (error) {
-					nfs_buf_release(bp);
+					nfs_buf_release(bp, 1);
 					FSDBG_BOT(514, vp, 0xd1e000e, 0, error);
 					return (error);
 				}
@@ -1296,7 +1420,7 @@ again:
 			CLR(bp->nb_flags, (NB_DONE | NB_ERROR | NB_INVAL));
 			error = nfs_doio(bp, cred, p);
 			if (error) {
-				nfs_buf_release(bp);
+				nfs_buf_release(bp, 1);
 				FSDBG_BOT(514, vp, 0xd1e000f, 0, error);
 				return (error);
 			}
@@ -1324,7 +1448,7 @@ buffer_ready:
 			error = nfs_doio(bp, cred, p);
 			if (error) {
 				SET(bp->nb_flags, NB_ERROR);
-				nfs_buf_release(bp);
+				nfs_buf_release(bp, 1);
 				FSDBG_BOT(514, vp, 0xd1e0011, 0, error);
 				return (error);
 			}
@@ -1349,7 +1473,7 @@ buffer_ready:
 		    SET(bp->nb_flags, NB_READ);
 		    error = nfs_doio(bp, cred, p);
 		    if (error) {
-			nfs_buf_release(bp);
+			nfs_buf_release(bp, 1);
 		    }
 		    while (error == NFSERR_BAD_COOKIE) {
 			nfs_invaldir(vp);
@@ -1388,7 +1512,7 @@ buffer_ready:
 			     * block and go for the next one via the for loop.
 			     */
 			    if (error || i < lbn)
-				    nfs_buf_release(bp);
+				    nfs_buf_release(bp, 1);
 			}
 		    }
 		    /*
@@ -1420,10 +1544,10 @@ buffer_ready:
 				if (nfs_asyncio(rabp, cred)) {
 				    SET(rabp->nb_flags, (NB_INVAL|NB_ERROR));
 				    rabp->nb_error = EIO;
-				    nfs_buf_release(rabp);
+				    nfs_buf_release(rabp, 1);
 				}
 			    } else {
-				nfs_buf_release(rabp);
+				nfs_buf_release(rabp, 1);
 			    }
 			}
 		}
@@ -1478,7 +1602,7 @@ buffer_ready:
 			SET(bp->nb_flags, NB_INVAL);
 		break;
 	    }
- 	    nfs_buf_release(bp);
+ 	    nfs_buf_release(bp, 1);
 	} while (error == 0 && uio->uio_resid > 0 && n > 0);
 	FSDBG_BOT(514, vp, uio->uio_offset, uio->uio_resid, error);
 	return (error);
@@ -1509,7 +1633,7 @@ nfs_write(ap)
 	daddr_t lbn;
 	int biosize, bufsize, writeop;
 	int n, on, error = 0, iomode, must_commit;
-	off_t boff, start, end;
+	off_t boff, start, end, cureof;
 	struct iovec iov;
 	struct uio auio;
 
@@ -1710,6 +1834,7 @@ again:
 		 * If there was a partial buf at the old eof, validate
 		 * and zero the new bytes. 
 		 */
+		cureof = (off_t)np->n_size;
 		if (uio->uio_offset + n > np->n_size) {
 			struct nfsbuf *eofbp = NULL;
 			daddr_t eofbn = np->n_size / biosize;
@@ -1783,7 +1908,7 @@ again:
 					eofoff += PAGE_SIZE - poff;
 					i++;
 				}
-				nfs_buf_release(eofbp);
+				nfs_buf_release(eofbp, 1);
 			}
 		}
 		/*
@@ -1834,14 +1959,6 @@ again:
 			}
 			if (end > start) {
 				/* need to read the data in range: start...end-1 */
-
-				/*
-				 * XXX: If we know any of these reads are beyond the
-				 * current EOF (what np->n_size was before we possibly
-				 * just modified it above), we could short-circuit the
-				 * reads and just zero buffer.  No need to make a trip
-				 * across the network to read nothing.
-				 */
 
 				/* first, check for dirty pages in between */
 				/* if there are, we'll have to do two reads because */
@@ -1907,19 +2024,31 @@ again:
 							break;
 				}
 
-				/* now we'll read the (rest of the) data */
-				auio.uio_offset = boff + start;
-				auio.uio_resid = iov.iov_len = end - start;
-				iov.iov_base = bp->nb_data + start;
-				error = nfs_readrpc(vp, &auio, cred);
-				if (error) {
-					bp->nb_error = error;
-					SET(bp->nb_flags, NB_ERROR);
-					printf("nfs_write: readrpc %d", error);
-				}
-				if (auio.uio_resid > 0) {
-					FSDBG(516, bp, iov.iov_base - bp->nb_data, auio.uio_resid, 0xd00dee02);
-					bzero(iov.iov_base, auio.uio_resid);
+				if (((boff+start) >= cureof) || ((start >= on) && ((boff + on + n) >= cureof))) {
+					/*
+					 * Either this entire read is beyond the current EOF
+					 * or the range that we won't be modifying (on+n...end)
+					 * is all beyond the current EOF.
+					 * No need to make a trip across the network to
+					 * read nothing.  So, just zero the buffer instead.
+					 */
+					FSDBG(516, bp, start, end - start, 0xd00dee00);
+					bzero(bp->nb_data + start, end - start);
+				} else {
+					/* now we'll read the (rest of the) data */
+					auio.uio_offset = boff + start;
+					auio.uio_resid = iov.iov_len = end - start;
+					iov.iov_base = bp->nb_data + start;
+					error = nfs_readrpc(vp, &auio, cred);
+					if (error) {
+						bp->nb_error = error;
+						SET(bp->nb_flags, NB_ERROR);
+						printf("nfs_write: readrpc %d", error);
+					}
+					if (auio.uio_resid > 0) {
+						FSDBG(516, bp, iov.iov_base - bp->nb_data, auio.uio_resid, 0xd00dee02);
+						bzero(iov.iov_base, auio.uio_resid);
+					}
 				}
 				/* update validoff/validend if necessary */
 				if ((bp->nb_validoff < 0) || (bp->nb_validoff > start))
@@ -1940,7 +2069,7 @@ again:
 
 		if (ISSET(bp->nb_flags, NB_ERROR)) {
 			error = bp->nb_error;
-			nfs_buf_release(bp);
+			nfs_buf_release(bp, 1);
 			FSDBG_BOT(515, vp, uio->uio_offset, uio->uio_resid, error);
 			return (error);
 		}
@@ -1957,13 +2086,13 @@ again:
 				error = nqnfs_getlease(vp, ND_WRITE, cred, p);
 			} while (error == NQNFS_EXPIRED);
 			if (error) {
-				nfs_buf_release(bp);
+				nfs_buf_release(bp, 1);
 				FSDBG_BOT(515, vp, uio->uio_offset, 0x11220001, error);
 				return (error);
 			}
 			if (np->n_lrev != np->n_brev ||
 			    (np->n_flag & NQNFSNONCACHE)) {
-				nfs_buf_release(bp);
+				nfs_buf_release(bp, 1);
 				error = nfs_vinvalbuf(vp, V_SAVE, cred, p, 1);
 				if (error) {
 					FSDBG_BOT(515, vp, uio->uio_offset, 0x11220002, error);
@@ -1977,7 +2106,7 @@ again:
 		error = uiomove((char *)bp->nb_data + on, n, uio);
 		if (error) {
 			SET(bp->nb_flags, NB_ERROR);
-			nfs_buf_release(bp);
+			nfs_buf_release(bp, 1);
 			FSDBG_BOT(515, vp, uio->uio_offset, uio->uio_resid, error);
 			return (error);
 		}
@@ -2164,9 +2293,12 @@ nfs_vinvalbuf_internal(vp, flags, cred, p, slpflag, slptimeo)
 				}
 			}
 			SET(bp->nb_flags, NB_INVAL);
-			nfs_buf_release(bp);
+			// Note: We don't want to do FREEUPs here because
+			// that may modify the buffer chain we're iterating!
+			nfs_buf_release(bp, 0);
 		}
 	}
+	NFS_BUF_FREEUP();
 	if (np->n_dirtyblkhd.lh_first || np->n_cleanblkhd.lh_first)
 		panic("nfs_vinvalbuf: flush failed");
 	return (0);

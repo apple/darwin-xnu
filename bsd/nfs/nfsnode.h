@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2003 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2004 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -107,6 +107,7 @@ struct nfsbuf {
 	LIST_ENTRY(nfsbuf)	nb_vnbufs;	/* vnode's nfsbuf chain */
 	TAILQ_ENTRY(nfsbuf)	nb_free;	/* free list position if not active. */
 	volatile long		nb_flags;	/* NB_* flags. */
+	time_t			nb_timestamp;	/* buffer timestamp */
 	long			nb_bufsize;	/* buffer size */
 	daddr_t			nb_lblkno;	/* logical block number. */
 	int			nb_error;	/* errno value. */
@@ -167,9 +168,10 @@ TAILQ_HEAD(nfsbuffreehead, nfsbuf);
 #define NFSNOLIST ((struct nfsbuf *)0xdeadbeef)
 
 extern int nfsbufhashlock, nfsbufcnt, nfsbufmin, nfsbufmax;
-extern int nfsbuffreecnt, nfsbufdelwricnt, nfsneedbuffer;
+extern int nfsbuffreecnt, nfsbuffreemetacnt, nfsbufdelwricnt, nfsneedbuffer;
 extern int nfs_nbdwrite;
 extern struct nfsbuffreehead nfsbuffree, nfsbufdelwri;
+extern time_t nfsbuffreeuptimestamp;
 
 #define NFSBUFCNTCHK() \
 	do { \
@@ -178,14 +180,17 @@ extern struct nfsbuffreehead nfsbuffree, nfsbufdelwri;
 		(nfsbuffreecnt < 0) || \
 		(nfsbuffreecnt > nfsbufmax) || \
 		(nfsbuffreecnt > nfsbufcnt) || \
+		(nfsbuffreemetacnt < 0) || \
+		(nfsbuffreemetacnt > nfsbufmax) || \
+		(nfsbuffreemetacnt > nfsbufcnt) || \
 		(nfsbufdelwricnt < 0) || \
 		(nfsbufdelwricnt > nfsbufmax) || \
 		(nfsbufdelwricnt > nfsbufcnt) || \
 		(nfs_nbdwrite < 0) || \
 		(nfs_nbdwrite > nfsbufcnt) || \
 		0) \
-		panic("nfsbuf count error: max %d cnt %d free %d delwr %d bdw %d\n", \
-			nfsbufmax, nfsbufcnt, nfsbuffreecnt, \
+		panic("nfsbuf count error: max %d cnt %d free %d meta %d delwr %d bdw %d\n", \
+			nfsbufmax, nfsbufcnt, nfsbuffreecnt, nfsbuffreemetacnt, \
 			nfsbufdelwricnt, nfs_nbdwrite); \
 	} while (0)
 
@@ -215,7 +220,7 @@ struct nfsnode {
         uid_t                   n_modeuid;      /* credentials having mode */
         time_t                  n_modestamp;    /* mode cache timestamp */
 	time_t			n_mtime;	/* Prev modify time. */
-	time_t			n_ctime;	/* Prev create time. */
+	time_t			n_ncmtime;	/* namecache modify time. */
 	time_t			n_expiry;	/* Lease expiry time */
 	nfsfh_t			*n_fhp;		/* NFS File Handle */
 	union {
@@ -332,10 +337,11 @@ struct nfsbuf * nfs_buf_incore(struct vnode *, daddr_t);
 struct nfsbuf * nfs_buf_get(struct vnode *, daddr_t, int, struct proc *, int);
 int nfs_buf_upl_setup(struct nfsbuf *bp);
 void nfs_buf_upl_check(struct nfsbuf *bp);
-void nfs_buf_release(struct nfsbuf *);
+void nfs_buf_release(struct nfsbuf *, int);
 int nfs_buf_iowait(struct nfsbuf *);
 void nfs_buf_iodone(struct nfsbuf *);
 void nfs_buf_write_delayed(struct nfsbuf *);
+void nfs_buf_freeup(int);
 
 #endif /* KERNEL */
 

@@ -142,7 +142,7 @@ static int	nfsfifo_close __P((struct vop_close_args *));
 #define nfs_poll vop_nopoll
 static int	nfs_ioctl __P((struct vop_ioctl_args *));
 static int	nfs_select __P((struct vop_select_args *));
-static int	nfs_flush __P((struct vnode *,struct ucred *,int,struct proc *,int));
+static int	nfs_flush __P((struct vnode *,struct ucred *,int,struct proc *));
 static int	nfs_setattrrpc __P((struct vnode *,struct vattr *,struct ucred *,struct proc *));
 static	int	nfs_lookup __P((struct vop_lookup_args *));
 static	int	nfs_create __P((struct vop_create_args *));
@@ -716,10 +716,12 @@ nfs_open(ap)
 			error = VOP_GETATTR(vp, &vattr, ap->a_cred, ap->a_p);
 			if (error)
 				return (error);
-			/* if directory changed, purge any name cache entries */
-			if ((vp->v_type == VDIR) &&
-			    (np->n_mtime != vattr.va_mtime.tv_sec))
-				cache_purge(vp);
+			if (vp->v_type == VDIR) {
+				/* if directory changed, purge any name cache entries */
+				if (np->n_ncmtime != vattr.va_mtime.tv_sec)
+					cache_purge(vp);
+				np->n_ncmtime = vattr.va_mtime.tv_sec;
+			}
 			np->n_mtime = vattr.va_mtime.tv_sec;
 		} else {
 			error = VOP_GETATTR(vp, &vattr, ap->a_cred, ap->a_p);
@@ -730,11 +732,14 @@ nfs_open(ap)
 					np->n_direofoffset = 0;
 					nfs_invaldir(vp);
 					/* purge name cache entries */
-					cache_purge(vp);
+					if (np->n_ncmtime != vattr.va_mtime.tv_sec)
+						cache_purge(vp);
 				}
 				if ((error = nfs_vinvalbuf(vp, V_SAVE,
 					ap->a_cred, ap->a_p, 1)) == EINTR)
 					return (error);
+				if (vp->v_type == VDIR)
+					np->n_ncmtime = vattr.va_mtime.tv_sec;
 				np->n_mtime = vattr.va_mtime.tv_sec;
 			}
 		}
@@ -764,12 +769,7 @@ nfs_open(ap)
  * The current code does the following:
  * for NFS Version 2 - play it safe and flush/invalidate all dirty buffers
  * for NFS Version 3 - flush dirty buffers to the server but don't invalidate
- *                     or commit them (this satisfies 1 and 2 except for the
- *                     case where the server crashes after this close but
- *                     before the commit RPC, which is felt to be "good
- *                     enough". Changing the last argument to nfs_flush() to
- *                     a 1 would force a commit operation, if it is felt a
- *                     commit is necessary now.
+ *                     them.
  * for NQNFS         - do nothing now, since 2 is dealt with via leases and
  *                     1 should be dealt with via an fsync() system call for
  *                     cases where write errors are important.
@@ -814,7 +814,7 @@ nfs_close(ap)
 				return (error);
 		}
 		if (NFS_ISV3(vp)) {
-		    error = nfs_flush(vp, ap->a_cred, MNT_WAIT, ap->a_p, 1);
+		    error = nfs_flush(vp, ap->a_cred, MNT_WAIT, ap->a_p);
                     /*
                      * We cannot clear the NMODIFIED bit in np->n_flag due to
                      * potential races with other processes
@@ -921,12 +921,15 @@ tryagain:
 			if (vp->v_type == VDIR) {
 				nfs_invaldir(vp);
 				/* purge name cache entries */
-				cache_purge(vp);
+				if (np->n_ncmtime != ap->a_vap->va_mtime.tv_sec)
+					cache_purge(vp);
 			}
 			error = nfs_vinvalbuf(vp, V_SAVE, ap->a_cred,
 					      ap->a_p, 1);
 			FSDBG(513, -1, np, -2, error);
 			if (!error) {
+				if (vp->v_type == VDIR)
+					np->n_ncmtime = ap->a_vap->va_mtime.tv_sec;
 				np->n_mtime = ap->a_vap->va_mtime.tv_sec;
 			}
 		}
@@ -1066,7 +1069,7 @@ nfs_setattr(ap)
 					if (bp) {
 					    FSDBG(512, bp, bp->nb_flags, 0, obn);
 					    SET(bp->nb_flags, NB_INVAL);
-					    nfs_buf_release(bp);
+					    nfs_buf_release(bp, 1);
 					}
 				    }
 			}
@@ -1113,7 +1116,7 @@ nfs_setattrrpc(vp, vap, cred, procp)
 	register long t1, t2;
 	caddr_t bpos, dpos, cp2;
 	u_long *tl;
-	int error = 0, wccflag = NFSV3_WCCRATTR;
+	int error = 0, wccpostattr = 0;
 	struct mbuf *mreq, *mrep, *md, *mb, *mb2;
 	int v3;
 	u_int64_t xid;
@@ -1208,10 +1211,19 @@ nfs_setattrrpc(vp, vap, cred, procp)
 	}
 	nfsm_request(vp, NFSPROC_SETATTR, procp, cred, &xid);
 	if (v3) {
+		time_t premtime = 0;
 		if (mrep) {
-			nfsm_wcc_data(vp, wccflag, &xid);
+			nfsm_wcc_data(vp, premtime, wccpostattr, &xid);
 		}
-		if (!wccflag)
+		/* if file hadn't changed, update cached mtime */
+		if (VTONFS(vp)->n_mtime == premtime) {
+			VTONFS(vp)->n_mtime = VTONFS(vp)->n_vattr.va_mtime.tv_sec;
+		}
+		/* if directory hadn't changed, update namecache mtime */
+		if ((vp->v_type == VDIR) && (VTONFS(vp)->n_ncmtime == premtime)) {
+			VTONFS(vp)->n_ncmtime = VTONFS(vp)->n_vattr.va_mtime.tv_sec;
+		}
+		if (!wccpostattr)
     			VTONFS(vp)->n_xid = 0;
 	} else {
 		if (mrep) {
@@ -1267,10 +1279,15 @@ nfs_lookup(ap)
 	wantparent = flags & (LOCKPARENT|WANTPARENT);
 	np = VTONFS(dvp);
 
-	/* if directory has changed, purge any name cache entries */
 	if (!VOP_GETATTR(dvp, &vattr, cnp->cn_cred, p) &&
-	    (np->n_mtime != vattr.va_mtime.tv_sec))
+	    (np->n_ncmtime != vattr.va_mtime.tv_sec)) {
+		/*
+		 * This directory has changed on us.
+		 * Purge any name cache entries.
+		 */
 		cache_purge(dvp);
+		np->n_ncmtime = vattr.va_mtime.tv_sec;
+	}
 
 	if ((error = cache_lookup(dvp, vpp, cnp)) && error != ENOENT) {
 		int vpid;
@@ -1317,15 +1334,11 @@ nfs_lookup(ap)
 			VOP_UNLOCK(dvp, 0, p);
 
 		if (vpid == newvp->v_id) {
-			if (!VOP_GETATTR(newvp, &vattr, cnp->cn_cred, p)
-				&& vattr.va_ctime.tv_sec == VTONFS(newvp)->n_ctime) {
-				nfsstats.lookupcache_hits++;
-				if (cnp->cn_nameiop != LOOKUP && (flags & ISLASTCN))
-					cnp->cn_flags |= SAVENAME;
-				error = 0; /* ignore any from VOP_GETATTR  */
-				goto error_return;
-			}
-			cache_purge(newvp);
+			nfsstats.lookupcache_hits++;
+			if (cnp->cn_nameiop != LOOKUP && (flags & ISLASTCN))
+				cnp->cn_flags |= SAVENAME;
+			error = 0; /* ignore any from VOP_GETATTR  */
+			goto error_return;
 		}
 		vput(newvp);
 		if ((dvp != newvp) && lockparent && (flags & ISLASTCN))
@@ -1453,7 +1466,6 @@ cache_lookup_out:
 		cnp->cn_flags |= SAVENAME;
 	if ((cnp->cn_flags & MAKEENTRY) &&
 	    (cnp->cn_nameiop != DELETE || !(flags & ISLASTCN))) {
-		np->n_ctime = np->n_vattr.va_ctime.tv_sec;
 		cache_enter(dvp, newvp, cnp);
 	}
 	*vpp = newvp;
@@ -1667,7 +1679,7 @@ nfs_writerpc(vp, uiop, cred, iomode, must_commit)
 	caddr_t bpos, dpos, cp2;
 	struct mbuf *mreq, *mrep, *md, *mb, *mb2;
 	struct nfsmount *nmp;
-	int error = 0, len, tsiz, wccflag = NFSV3_WCCRATTR, rlen, commit;
+	int error = 0, len, tsiz, updatemtime = 0, wccpostattr = 0, rlen, commit;
 	int v3, committed = NFSV3WRITE_FILESYNC;
 	u_int64_t xid;
 
@@ -1716,9 +1728,11 @@ nfs_writerpc(vp, uiop, cred, iomode, must_commit)
 		if (!nmp)
 			error = ENXIO;
 		if (v3) {
-			wccflag = NFSV3_WCCCHK;
 			if (mrep) {
-				nfsm_wcc_data(vp, wccflag, &xid);
+				time_t premtime;
+				nfsm_wcc_data(vp, premtime, wccpostattr, &xid);
+				if (VTONFS(vp)->n_mtime == premtime)
+					updatemtime = 1;
 			}
 			if (!error) {
 				nfsm_dissect(tl, u_long *, 2 * NFSX_UNSIGNED +
@@ -1763,8 +1777,8 @@ nfs_writerpc(vp, uiop, cred, iomode, must_commit)
 			}
 		}
 
-		if (wccflag)
-		    VTONFS(vp)->n_mtime = VTONFS(vp)->n_vattr.va_mtime.tv_sec;
+		if (updatemtime)
+			VTONFS(vp)->n_mtime = VTONFS(vp)->n_vattr.va_mtime.tv_sec;
 		m_freem(mrep);
 		/*
 		 * we seem to have a case where we end up looping on shutdown
@@ -1809,7 +1823,8 @@ nfs_mknodrpc(dvp, vpp, cnp, vap)
 	struct vattr vattr;
 	char *cp2;
 	caddr_t bpos, dpos;
-	int error = 0, wccflag = NFSV3_WCCRATTR, gotvp = 0;
+	int error = 0, wccpostattr = 0, gotvp = 0;
+	time_t premtime = 0;
 	struct mbuf *mreq, *mrep, *md, *mb, *mb2;
 	u_long rdev;
 	u_int64_t xid;
@@ -1868,7 +1883,7 @@ nfs_mknodrpc(dvp, vpp, cnp, vap)
 		}
 	}
 	if (v3 && mrep)
-		nfsm_wcc_data(dvp, wccflag, &xid);
+		nfsm_wcc_data(dvp, premtime, wccpostattr, &xid);
 	nfsm_reqdone;
 	if (error) {
 		if (newvp)
@@ -1879,7 +1894,10 @@ nfs_mknodrpc(dvp, vpp, cnp, vap)
 		*vpp = newvp;
 	}
 	VTONFS(dvp)->n_flag |= NMODIFIED;
-	if (!wccflag)
+	/* if directory hadn't changed, update namecache mtime */
+	if (VTONFS(dvp)->n_ncmtime == premtime)
+		VTONFS(dvp)->n_ncmtime = VTONFS(dvp)->n_vattr.va_mtime.tv_sec;
+	if (!wccpostattr)
 		VTONFS(dvp)->n_xid = 0;
 	vput(dvp);
 	NFS_FREE_PNBUF(cnp);
@@ -1934,7 +1952,8 @@ nfs_create(ap)
 	struct nfsnode *np = (struct nfsnode *)0;
 	struct vnode *newvp = (struct vnode *)0;
 	caddr_t bpos, dpos, cp2;
-	int error = 0, wccflag = NFSV3_WCCRATTR, gotvp = 0, fmode = 0;
+	int error = 0, wccpostattr = 0, gotvp = 0, fmode = 0;
+	time_t premtime = 0;
 	struct mbuf *mreq, *mrep, *md, *mb, *mb2;
 	struct vattr vattr;
 	int v3 = NFS_ISV3(dvp);
@@ -1999,7 +2018,7 @@ again:
 		}
 	}
 	if (v3 && mrep)
-		nfsm_wcc_data(dvp, wccflag, &xid);
+		nfsm_wcc_data(dvp, premtime, wccpostattr, &xid);
 	nfsm_reqdone;
 	if (error) {
 		if (v3 && (fmode & O_EXCL) && error == NFSERR_NOTSUPP) {
@@ -2016,7 +2035,10 @@ again:
 		*ap->a_vpp = newvp;
 	}
 	VTONFS(dvp)->n_flag |= NMODIFIED;
-	if (!wccflag)
+	/* if directory hadn't changed, update namecache mtime */
+	if (VTONFS(dvp)->n_ncmtime == premtime)
+		VTONFS(dvp)->n_ncmtime = VTONFS(dvp)->n_vattr.va_mtime.tv_sec;
+	if (!wccpostattr)
 		VTONFS(dvp)->n_xid = 0;
 	vput(dvp);
 	NFS_FREE_PNBUF(cnp);
@@ -2086,9 +2108,7 @@ nfs_remove(ap)
 		/*
 		 * Purge the name cache so that the chance of a lookup for
 		 * the name succeeding while the remove is in progress is
-		 * minimized. Without node locking it can still happen, such
-		 * that an I/O op returns ESTALE, but since you get this if
-		 * another host removes the file..
+		 * minimized.
 		 */
 		cache_purge(vp);
 		/*
@@ -2160,7 +2180,8 @@ nfs_removerpc(dvp, name, namelen, cred, proc)
 	register caddr_t cp;
 	register long t1, t2;
 	caddr_t bpos, dpos, cp2;
-	int error = 0, wccflag = NFSV3_WCCRATTR;
+	int error = 0, wccpostattr = 0;
+	time_t premtime = 0;
 	struct mbuf *mreq, *mrep, *md, *mb, *mb2;
 	int v3;
 	u_int64_t xid;
@@ -2176,10 +2197,13 @@ nfs_removerpc(dvp, name, namelen, cred, proc)
 	nfsm_strtom(name, namelen, NFS_MAXNAMLEN);
 	nfsm_request(dvp, NFSPROC_REMOVE, proc, cred, &xid);
 	if (v3 && mrep)
-		nfsm_wcc_data(dvp, wccflag, &xid);
+		nfsm_wcc_data(dvp, premtime, wccpostattr, &xid);
 	nfsm_reqdone;
 	VTONFS(dvp)->n_flag |= NMODIFIED;
-	if (!wccflag)
+	/* if directory hadn't changed, update namecache mtime */
+	if (VTONFS(dvp)->n_ncmtime == premtime)
+		VTONFS(dvp)->n_ncmtime = VTONFS(dvp)->n_vattr.va_mtime.tv_sec;
+	if (!wccpostattr)
 		VTONFS(dvp)->n_xid = 0;
 	return (error);
 }
@@ -2204,7 +2228,7 @@ nfs_rename(ap)
 	register struct vnode *tdvp = ap->a_tdvp;
 	register struct componentname *tcnp = ap->a_tcnp;
 	register struct componentname *fcnp = ap->a_fcnp;
-	int error, purged=0, inuse=0;
+	int error, inuse=0;
 
 #if DIAGNOSTIC
 	if ((tcnp->cn_flags & HASBUF) == 0 ||
@@ -2271,20 +2295,10 @@ nfs_rename(ap)
 		LIST_REMOVE(VTONFS(tvp), n_hash);
 		VTONFS(tvp)->n_flag &= ~NHASHED;
 	}
-
-	if (fvp->v_type == VDIR) {
-		if (tvp != NULL && tvp->v_type == VDIR) {
-			cache_purge(tdvp);
-			if (tvp == tdvp) 
-				purged = 1;
-		}
-		cache_purge(fdvp);
-	}
 	
 	cache_purge(fvp);
 	if (tvp) {
-		if (!purged)
-			cache_purge(tvp);
+		cache_purge(tvp);
 		VOP_UNLOCK(tvp, 0, tcnp->cn_proc);
 		ubc_uncache(tvp); /* get the nfs turd file to disappear */
 	}
@@ -2337,7 +2351,8 @@ nfs_renamerpc(fdvp, fnameptr, fnamelen, tdvp, tnameptr, tnamelen, cred, proc)
 	register caddr_t cp;
 	register long t1, t2;
 	caddr_t bpos, dpos, cp2;
-	int error = 0, fwccflag = NFSV3_WCCRATTR, twccflag = NFSV3_WCCRATTR;
+	int error = 0, fwccpostattr = 0, twccpostattr = 0;
+	time_t fpremtime = 0, tpremtime = 0;
 	struct mbuf *mreq, *mrep, *md, *mb, *mb2;
 	int v3;
 	u_int64_t xid;
@@ -2358,15 +2373,21 @@ nfs_renamerpc(fdvp, fnameptr, fnamelen, tdvp, tnameptr, tnamelen, cred, proc)
 	if (v3 && mrep) {
 		u_int64_t txid = xid;
 
-		nfsm_wcc_data(fdvp, fwccflag, &xid);
-		nfsm_wcc_data(tdvp, twccflag, &txid);
+		nfsm_wcc_data(fdvp, fpremtime, fwccpostattr, &xid);
+		nfsm_wcc_data(tdvp, tpremtime, twccpostattr, &txid);
 	}
 	nfsm_reqdone;
 	VTONFS(fdvp)->n_flag |= NMODIFIED;
-	if (!fwccflag)
+	/* if directory hadn't changed, update namecache mtime */
+	if (VTONFS(fdvp)->n_ncmtime == fpremtime)
+		VTONFS(fdvp)->n_ncmtime = VTONFS(fdvp)->n_vattr.va_mtime.tv_sec;
+	if (!fwccpostattr)
 		VTONFS(fdvp)->n_xid = 0;
 	VTONFS(tdvp)->n_flag |= NMODIFIED;
-	if (!twccflag)
+	/* if directory hadn't changed, update namecache mtime */
+	if (VTONFS(tdvp)->n_ncmtime == tpremtime)
+		VTONFS(tdvp)->n_ncmtime = VTONFS(tdvp)->n_vattr.va_mtime.tv_sec;
+	if (!twccpostattr)
 		VTONFS(tdvp)->n_xid = 0;
 	return (error);
 }
@@ -2389,7 +2410,8 @@ nfs_link(ap)
 	register caddr_t cp;
 	register long t1, t2;
 	caddr_t bpos, dpos, cp2;
-	int error = 0, wccflag = NFSV3_WCCRATTR, attrflag = 0;
+	int error = 0, wccpostattr = 0, attrflag = 0;
+	time_t premtime = 0;
 	struct mbuf *mreq, *mrep, *md, *mb, *mb2;
 	int v3, didhold;
 	u_int64_t xid;
@@ -2435,14 +2457,17 @@ nfs_link(ap)
 		u_int64_t txid = xid;
 
 		nfsm_postop_attr(vp, attrflag, &xid);
-		nfsm_wcc_data(tdvp, wccflag, &txid);
+		nfsm_wcc_data(tdvp, premtime, wccpostattr, &txid);
 	}
 	nfsm_reqdone;
 
 	VTONFS(tdvp)->n_flag |= NMODIFIED;
 	if (!attrflag)
 		VTONFS(vp)->n_xid = 0;
-	if (!wccflag)
+	/* if directory hadn't changed, update namecache mtime */
+	if (VTONFS(tdvp)->n_ncmtime == premtime)
+		VTONFS(tdvp)->n_ncmtime = VTONFS(tdvp)->n_vattr.va_mtime.tv_sec;
+	if (!wccpostattr)
 		VTONFS(tdvp)->n_xid = 0;
 	if (didhold)
 		ubc_rele(vp);
@@ -2478,7 +2503,8 @@ nfs_symlink(ap)
 	register caddr_t cp;
 	register long t1, t2;
 	caddr_t bpos, dpos, cp2;
-	int slen, error = 0, wccflag = NFSV3_WCCRATTR, gotvp;
+	int slen, error = 0, wccpostattr = 0, gotvp;
+	time_t premtime = 0;
 	struct mbuf *mreq, *mrep, *md, *mb, *mb2;
 	struct vnode *newvp = (struct vnode *)0;
 	int v3 = NFS_ISV3(dvp);
@@ -2511,14 +2537,17 @@ nfs_symlink(ap)
 
 		if (!error)
 			nfsm_mtofh(dvp, newvp, v3, gotvp, &xid);
-		nfsm_wcc_data(dvp, wccflag, &dxid);
+		nfsm_wcc_data(dvp, premtime, wccpostattr, &dxid);
 	}
 	nfsm_reqdone;
 	if (newvp)
 		vput(newvp);
 
 	VTONFS(dvp)->n_flag |= NMODIFIED;
-	if (!wccflag)
+	/* if directory hadn't changed, update namecache mtime */
+	if (VTONFS(dvp)->n_ncmtime == premtime)
+		VTONFS(dvp)->n_ncmtime = VTONFS(dvp)->n_vattr.va_mtime.tv_sec;
+	if (!wccpostattr)
 		VTONFS(dvp)->n_xid = 0;
 	vput(dvp);
 	NFS_FREE_PNBUF(cnp);
@@ -2554,7 +2583,8 @@ nfs_mkdir(ap)
 	struct nfsnode *np = (struct nfsnode *)0;
 	struct vnode *newvp = (struct vnode *)0;
 	caddr_t bpos, dpos, cp2;
-	int error = 0, wccflag = NFSV3_WCCRATTR;
+	int error = 0, wccpostattr = 0;
+	time_t premtime = 0;
 	int gotvp = 0;
 	struct mbuf *mreq, *mrep, *md, *mb, *mb2;
 	struct vattr vattr;
@@ -2589,10 +2619,13 @@ nfs_mkdir(ap)
 	if (!error)
 		nfsm_mtofh(dvp, newvp, v3, gotvp, &xid);
 	if (v3 && mrep)
-		nfsm_wcc_data(dvp, wccflag, &dxid);
+		nfsm_wcc_data(dvp, premtime, wccpostattr, &dxid);
 	nfsm_reqdone;
 	VTONFS(dvp)->n_flag |= NMODIFIED;
-	if (!wccflag)
+	/* if directory hadn't changed, update namecache mtime */
+	if (VTONFS(dvp)->n_ncmtime == premtime)
+		VTONFS(dvp)->n_ncmtime = VTONFS(dvp)->n_vattr.va_mtime.tv_sec;
+	if (!wccpostattr)
 		VTONFS(dvp)->n_xid = 0;
 	/*
 	 * Kludge: Map EEXIST => 0 assuming that you have a reply to a retry
@@ -2614,8 +2647,11 @@ nfs_mkdir(ap)
 	if (error) {
 		if (newvp)
 			vput(newvp);
-	} else
+	} else {
+		if (cnp->cn_flags & MAKEENTRY)
+			cache_enter(dvp, newvp, cnp);
 		*ap->a_vpp = newvp;
+	}
 	vput(dvp);
 	NFS_FREE_PNBUF(cnp);
 	return (error);
@@ -2639,7 +2675,8 @@ nfs_rmdir(ap)
 	register caddr_t cp;
 	register long t1, t2;
 	caddr_t bpos, dpos, cp2;
-	int error = 0, wccflag = NFSV3_WCCRATTR;
+	int error = 0, wccpostattr = 0;
+	time_t premtime = 0;
 	struct mbuf *mreq, *mrep, *md, *mb, *mb2;
 	int v3 = NFS_ISV3(dvp);
 	u_int64_t xid;
@@ -2651,21 +2688,32 @@ nfs_rmdir(ap)
 	nfsm_strtom(cnp->cn_nameptr, cnp->cn_namelen, NFS_MAXNAMLEN);
 	nfsm_request(dvp, NFSPROC_RMDIR, cnp->cn_proc, cnp->cn_cred, &xid);
 	if (v3 && mrep)
-		nfsm_wcc_data(dvp, wccflag, &xid);
+		nfsm_wcc_data(dvp, premtime, wccpostattr, &xid);
 	nfsm_reqdone;
 	VTONFS(dvp)->n_flag |= NMODIFIED;
-	if (!wccflag)
+	/* if directory hadn't changed, update namecache mtime */
+	if (VTONFS(dvp)->n_ncmtime == premtime)
+		VTONFS(dvp)->n_ncmtime = VTONFS(dvp)->n_vattr.va_mtime.tv_sec;
+	if (!wccpostattr)
 		VTONFS(dvp)->n_xid = 0;
-	cache_purge(dvp);
 	cache_purge(vp);
-	vput(vp);
-	vput(dvp);
-	NFS_FREE_PNBUF(cnp);
 	/*
 	 * Kludge: Map ENOENT => 0 assuming that you have a reply to a retry.
 	 */
 	if (error == ENOENT)
 		error = 0;
+	if (!error) {
+		/*
+		 * remove nfsnode from hash now so we can't accidentally find it
+		 * again if another object gets created with the same filehandle
+		 * before this vnode gets reclaimed
+		 */
+		LIST_REMOVE(VTONFS(vp), n_hash);
+		VTONFS(vp)->n_flag &= ~NHASHED;
+	}
+	vput(vp);
+	vput(dvp);
+	NFS_FREE_PNBUF(cnp);
 	return (error);
 }
 
@@ -2703,8 +2751,10 @@ nfs_readdir(ap)
 				nfsstats.direofcache_hits++;
 				return (0);
 			}
-			/* directory changed, purge any name cache entries */
-			cache_purge(vp);
+			if (np->n_ncmtime != vattr.va_mtime.tv_sec) {
+				/* directory changed, purge any name cache entries */
+				cache_purge(vp);
+			}
 		}
 	}
 
@@ -3114,8 +3164,7 @@ nfs_readdirplusrpc(vp, uiop, cred)
 				for (cp = cnp->cn_nameptr, i = 1; i <= len;
 				    i++, cp++)
 				    cnp->cn_hash += (unsigned char)*cp * i;
-				if (cnp->cn_namelen <= NCHNAMLEN)
-				    cache_enter(ndp->ni_dvp, ndp->ni_vp, cnp);
+				cache_enter(ndp->ni_dvp, ndp->ni_vp, cnp);
 			    }
 			} else {
 			    /* Just skip over the file handle */
@@ -3203,7 +3252,7 @@ nfs_sillyrename(dvp, vp, cnp)
 	struct ucred *cred;
 	int i, j, k;
 
-	cache_purge(dvp);
+	cache_purge(vp);
 	np = VTONFS(vp);
 #if DIAGNOSTIC
 	if (vp->v_type == VDIR)
@@ -3376,7 +3425,8 @@ nfs_commit(vp, offset, cnt, cred, procp)
 	register int t1, t2;
 	register struct nfsmount *nmp = VFSTONFS(vp->v_mount);
 	caddr_t bpos, dpos, cp2;
-	int error = 0, wccflag = NFSV3_WCCRATTR;
+	int error = 0, wccpostattr = 0;
+	time_t premtime = 0;
 	struct mbuf *mreq, *mrep, *md, *mb, *mb2;
 	u_int64_t xid;
 	
@@ -3394,7 +3444,8 @@ nfs_commit(vp, offset, cnt, cred, procp)
 	*tl = txdr_unsigned(cnt);
 	nfsm_request(vp, NFSPROC_COMMIT, procp, cred, &xid);
 	if (mrep) {
-		nfsm_wcc_data(vp, wccflag, &xid);
+		nfsm_wcc_data(vp, premtime, wccpostattr, &xid);
+		/* XXX can we do anything useful with the wcc info? */
 	}
 	if (!error) {
 		nfsm_dissect(tl, u_long *, NFSX_V3WRITEVERF);
@@ -3460,7 +3511,7 @@ nfs_mmap(ap)
 }
 
 /*
- * fsync vnode op. Just call nfs_flush() with commit == 1.
+ * fsync vnode op. Just call nfs_flush().
  */
 /* ARGSUSED */
 static int
@@ -3473,7 +3524,7 @@ nfs_fsync(ap)
 		struct proc * a_p;
 	} */ *ap;
 {
-	return (nfs_flush(ap->a_vp, ap->a_cred, ap->a_waitfor, ap->a_p, 1));
+	return (nfs_flush(ap->a_vp, ap->a_cred, ap->a_waitfor, ap->a_p));
 }
  
 int
@@ -3645,7 +3696,7 @@ nfs_flushcommits(struct vnode *vp, struct proc *p)
 		CHECK_NEEDCOMMITCNT(np);
 
 		if (retv) {
-			nfs_buf_release(bp);
+			nfs_buf_release(bp, 1);
 		} else {
 			s = splbio();
 			vp->v_numoutput++;
@@ -3691,12 +3742,11 @@ done:
  *	associated with the vnode.
  */
 static int
-nfs_flush(vp, cred, waitfor, p, commit)
+nfs_flush(vp, cred, waitfor, p)
 	register struct vnode *vp;
 	struct ucred *cred;
 	int waitfor;
 	struct proc *p;
-	int commit;
 {
 	struct nfsnode *np = VTONFS(vp);
 	struct nfsbuf *bp, *nbp;
@@ -3704,7 +3754,7 @@ nfs_flush(vp, cred, waitfor, p, commit)
 	int i, s, error = 0, error2, slptimeo = 0, slpflag = 0;
 	int passone = 1;
 
-	FSDBG_TOP(517, vp, np, waitfor, commit);
+	FSDBG_TOP(517, vp, np, waitfor, 0);
 
 	if (!nmp) {
 		error = ENXIO;
@@ -3712,12 +3762,13 @@ nfs_flush(vp, cred, waitfor, p, commit)
 	}
 	if (nmp->nm_flag & NFSMNT_INT)
 		slpflag = PCATCH;
-	if (!commit)
-		passone = 0;
 
 	/*
-	 * On the first pass, commit all the bufs that can be.
-	 * On the second pass, nfs_buf_write() is called to do the job.
+	 * On the first pass, start async/unstable writes on all
+	 * delayed write buffers.  Then wait for all writes to complete
+	 * and call nfs_flushcommits() to commit any uncommitted buffers.
+	 * On all subsequent passes, start STABLE writes on any remaining
+	 * dirty buffers.  Then wait for all writes to complete.
 	 */
 again:
 	FSDBG(518, np->n_dirtyblkhd.lh_first, np->n_flag, 0, 0);
@@ -3726,13 +3777,6 @@ again:
 	if (!VFSTONFS(vp->v_mount)) {
 		error = ENXIO;
 		goto done;
-	}
-	if (NFS_ISV3(vp) && commit) {
-		/* loop while it looks like there are still buffers to be */
-		/* commited and nfs_flushcommits() seems to be handling them. */
-		while (np->n_needcommitcnt)
-			if (nfs_flushcommits(vp, p))
-				break;
 	}
 
 	/* Start/do any write(s) that are required. */
@@ -3764,17 +3808,17 @@ loop:
 		}
 		if (!ISSET(bp->nb_flags, NB_DELWRI))
 			panic("nfs_fsync: not dirty");
-		FSDBG(525, bp, passone, commit, bp->nb_flags);
-		if ((passone || !commit) && ISSET(bp->nb_flags, NB_NEEDCOMMIT))
+		FSDBG(525, bp, passone, 0, bp->nb_flags);
+		if ((passone || (waitfor != MNT_WAIT)) && ISSET(bp->nb_flags, NB_NEEDCOMMIT))
 			continue;
 		nfs_buf_remfree(bp);
 		if (ISSET(bp->nb_flags, NB_ERROR)) {
 			np->n_error = bp->nb_error ? bp->nb_error : EIO;
 			np->n_flag |= NWRITEERR;
-			nfs_buf_release(bp);
+			nfs_buf_release(bp, 1);
 			continue;
 		}
-		if (passone || !commit)
+		if (passone)
 			SET(bp->nb_flags, NB_BUSY|NB_ASYNC);
 		else {
 			/* the NB_STABLE forces this to be written FILESYNC */
@@ -3785,11 +3829,6 @@ loop:
 		goto loop;
 	}
 	splx(s);
-
-	if (passone) {
-		passone = 0;
-		goto again;
-	}
 
 	if (waitfor == MNT_WAIT) {
 		while (vp->v_numoutput) {
@@ -3809,10 +3848,27 @@ loop:
 			    }
 			}
 		}
-		if (np->n_dirtyblkhd.lh_first && commit) {
-			goto loop;
+	}
+
+	if (NFS_ISV3(vp)) {
+		/* loop while it looks like there are still buffers to be */
+		/* commited and nfs_flushcommits() seems to be handling them. */
+		while (np->n_needcommitcnt)
+			if (nfs_flushcommits(vp, p))
+				break;
+	}
+
+	if (passone) {
+		passone = 0;
+		goto again;
+	}
+
+	if (waitfor == MNT_WAIT) {
+		if (np->n_dirtyblkhd.lh_first) {
+			goto again;
 		}
 	}
+
 	FSDBG(526, np->n_flag, np->n_error, 0, 0);
 	if (np->n_flag & NWRITEERR) {
 		error = np->n_error;
@@ -4037,7 +4093,7 @@ nfs_buf_write(struct nfsbuf *bp)
 			splx(s);
 		}
 		FSDBG_BOT(553, bp, NBOFF(bp), bp->nb_flags, rv);
-		nfs_buf_release(bp);
+		nfs_buf_release(bp, 1);
 		return (rv);
 	} 
 
@@ -4610,7 +4666,7 @@ nfs_pageout(ap)
 				np->n_needcommitcnt--;
 				CHECK_NEEDCOMMITCNT(np);
 			}
-			nfs_buf_release(bp);
+			nfs_buf_release(bp, 1);
 		}
 		splx(s);
 	}

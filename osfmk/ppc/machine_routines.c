@@ -247,6 +247,11 @@ ml_processor_register(
 	per_proc_info[target_cpu].cpu_id = processor_info->cpu_id;
 	per_proc_info[target_cpu].start_paddr = processor_info->start_paddr;
 
+	if (per_proc_info[target_cpu].pf.pfPowerModes & pmPowerTune) {
+	  per_proc_info[target_cpu].pf.pfPowerTune0 = processor_info->power_mode_0;
+	  per_proc_info[target_cpu].pf.pfPowerTune1 = processor_info->power_mode_1;
+	}
+
 	donap = processor_info->supports_nap;		/* Assume we use requested nap */
 	if(forcenap) donap = forcenap - 1;			/* If there was an override, use that */
 	

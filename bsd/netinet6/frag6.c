@@ -84,7 +84,7 @@ frag6_init()
 {
 	struct timeval tv;
 
-	ip6_maxfragpackets = nmbclusters / 4;
+	ip6_maxfragpackets = nmbclusters / 32;
 
 	/*
 	 * in many cases, random() here does NOT return random number

@@ -45,8 +45,7 @@ struct savearea * interrupt(
 	unsigned int dsisr,
 	unsigned int dar)
 {
-	int	current_cpu, tmpr, targtemp;
-	unsigned int	throttle;
+	int	current_cpu;
 	uint64_t		now;
 	thread_act_t	act;
 
@@ -68,48 +67,6 @@ struct savearea * interrupt(
 
 	switch (type) {
 
-		case T_THERMAL:						/* Fix the air conditioning, I'm dripping with sweat, or freezing, whatever... */
-
-/*
- *			Note that this code is just a hackification until we have a real thermal plan.
- */
-			
-			tmpr = ml_read_temp();			/* Find out just how hot it is */
-			targtemp = (dar >> 23) & 0x7F;	/* Get the temprature we were looking for */
-			if(dar & 4) {					/* Did the temprature drop down? */
-#if 1
-				kprintf("THERMAL below (cpu %d) target = %d; actual = %d; thrm = %08X\n", current_cpu, targtemp, tmpr, dar);
-#endif	
-#if 0
-				throttle = ml_throttle(0);	/* Set throttle off */
-#if 1
-				kprintf("THERMAL (cpu %d) throttle set off; last = %d\n", current_cpu, throttle);
-#endif	
-#endif
-				ml_thrm_set(0, per_proc_info[current_cpu].thrm.throttleTemp);	/* Set no low temp and max allowable as max */
-
-#if 1
-				kprintf("THERMAL (cpu %d) temp set to: off min, %d max\n", current_cpu, per_proc_info[current_cpu].thrm.throttleTemp);
-#endif	
-			}
-			else {
-#if 1
-				kprintf("THERMAL above (cpu %d) target = %d; actual = %d; thrm = %08X\n", current_cpu, targtemp, tmpr, dar);
-#endif	
-#if 0
-				throttle = ml_throttle(32);	/* Set throttle on about 1/8th */
-#if 1
-				kprintf("THERMAL (cpu %d) throttle set to 32; last = %d\n", current_cpu, throttle);
-#endif	
-#endif
-				ml_thrm_set(per_proc_info[current_cpu].thrm.throttleTemp - 4, 0);	/* Set low temp to max - 4 and max off */
-#if 1
-				kprintf("THERMAL (cpu %d) temp set to: %d min, off max\n", current_cpu, per_proc_info[current_cpu].thrm.throttleTemp - 4);
-#endif	
-
-			}
-			break;
-			
 		case T_DECREMENTER:
 			KERNEL_DEBUG_CONSTANT(MACHDBG_CODE(DBG_MACH_EXCP_DECI, 0) | DBG_FUNC_NONE,
 				  isync_mfdec(), (unsigned int)ssp->save_srr0, 0, 0, 0);

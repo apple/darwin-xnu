@@ -351,7 +351,14 @@ int diagCall(struct savearea *save) {
 			cpu = cpu_number();						/* Get us */
 			
 			if((sarea.scomcpu < NCPUS) && machine_slot[sarea.scomcpu].running) {
-				if(sarea.scomcpu == cpu) fwSCOM(&sarea);	/* Do it if it is us */
+				if(sarea.scomcpu == cpu) {			/* Is it us? */
+					if(sarea.scomfunc) {			/* Are we writing */
+						sarea.scomstat = ml_scom_write(sarea.scomreg, sarea.scomdata);	/* Write scom */
+					}
+					else {
+						sarea.scomstat = ml_scom_read(sarea.scomreg, &sarea.scomdata);	/* Read scom */
+					}
+				}
 				else {									/* Otherwise, tell the other processor */
 					(void)cpu_signal(sarea.scomcpu, SIGPcpureq, CPRQscom ,(unsigned int)&sarea);	/* Ask him to do this */
 					(void)hw_cpu_sync((unsigned long)&sarea.scomstat, LockTimeOut);	/* Wait for the other processor to get its temperature */

@@ -63,10 +63,6 @@ struct procFeatures {
 #define pfCanNapb	5
 #define pfCanDoze	0x02000000
 #define pfCanDozeb	6
-#define pfThermal	0x01000000
-#define pfThermalb	7
-#define pfThermInt	0x00800000
-#define pfThermIntb	8
 #define pfSlowNap	0x00400000
 #define pfSlowNapb	9
 #define pfNoMuMMCK	0x00200000
@@ -139,23 +135,14 @@ struct procFeatures {
 #define pmDFSb			30
 #define pmDualPLL		0x00000001
 #define pmDualPLLb		31
+	unsigned int	pfPowerTune0;		/* 0x080 */
+	unsigned int	pfPowerTune1;		/* 0x084 */
+	unsigned int	rsrvd88[6];			/* 0x088 */
 };
 #pragma pack()
 
 typedef struct procFeatures procFeatures;
 
-#pragma pack(4)							/* Make sure the structure stays as we defined it */
-struct thrmControl {
-	unsigned int	maxTemp;			/* Maximum temprature before damage */
-	unsigned int	throttleTemp;		/* Temprature at which to throttle down */
-	unsigned int	lowTemp;			/* Interrupt when temprature drops below */
-	unsigned int	highTemp;			/* Interrupt when temprature exceeds this */
-	unsigned int	thrm3val;			/* Value for thrm3 register */
-	unsigned int	rsvd[3];			/* Pad to cache line */
-};
-#pragma pack()
-
-typedef struct thrmControl thrmControl;
 
 /*
  *
@@ -351,9 +338,6 @@ struct per_proc_info {
 
 	/* PPC cache line boundary here - 0A0 */
 	procFeatures 	pf;					/* Processor features */
-	
-	/* PPC cache line boundary here - 120 */
-	thrmControl		thrm;				/* Thermal controls */
 	
 	/* PPC cache line boundary here - 140 */
 	unsigned int	ppRsvd140[8];		/* Reserved */

@@ -125,6 +125,9 @@ private:
     static bool displayWranglerPublished( void * target, void * refCon,
                                     IOService * newService);
 
+    static bool batteryLocationPublished( void * target, void * refCon,
+                                    IOService * resourceService );
+
     void setQuickSpinDownTimeout ( void );
     void adjustPowerState( void );
     void restoreUserSpinDownTimeout ( void );
@@ -153,10 +156,12 @@ private:
 
     // Private helper to call PM setting controller
     IOReturn setPMSetting(int type, OSNumber *);
-
+ 
     struct ExpansionData {    
-        PMSettingCtrl            *_settingController;
-        thread_call_t            diskSyncCalloutEntry;
+        PMSettingCtrl           *_settingController;
+        thread_call_t           diskSyncCalloutEntry;
+        IONotifier              *_batteryLocationNotifier;
+        IONotifier              *_displayWranglerNotifier;
     };
     ExpansionData   *_reserved;
     IOOptionBits platformSleepSupport;

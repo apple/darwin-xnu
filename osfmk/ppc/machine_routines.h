@@ -158,6 +158,8 @@ struct ml_processor_info {
 	boolean_t			supports_nap;
 	unsigned long		l2cr_value;
 	time_base_enable_t	time_base_enable;
+	uint32_t			power_mode_0;
+	uint32_t			power_mode_1;
 };
 
 typedef struct ml_processor_info ml_processor_info_t;
@@ -262,6 +264,8 @@ void ml_cpu_get_info(ml_cpu_info_t *cpu_info);
 
 void ml_set_processor_speed(unsigned long speed);
 void ml_set_processor_voltage(unsigned long voltage);
+unsigned int ml_scom_write(uint32_t reg, uint64_t data);
+unsigned int ml_scom_read(uint32_t reg, uint64_t *data);
 
 #endif /* __APPLE_API_PRIVATE */
 

@@ -74,6 +74,9 @@ static IOPMPowerState ourPowerStates[number_of_power_states] = {
 // RESERVED IOPMrootDomain class variables
 #define diskSyncCalloutEntry                _reserved->diskSyncCalloutEntry
 #define _settingController                  _reserved->_settingController
+#define _batteryLocationNotifier            _reserved->_batteryLocationNotifier
+#define _displayWranglerNotifier            _reserved->_displayWranglerNotifier
+
 
 static IOPMrootDomain * gRootDomain;
 static UInt32           gSleepOrShutdownPending = 0;
@@ -257,7 +260,13 @@ bool IOPMrootDomain::start ( IOService * nub )
     registerPrioritySleepWakeInterest( &sysPowerDownHandler, this, 0);
 
     // Register for a notification when IODisplayWrangler is published
-    addNotification( gIOPublishNotification, serviceMatching("IODisplayWrangler"), &displayWranglerPublished, this, 0);
+    _displayWranglerNotifier = addNotification( gIOPublishNotification, 
+                                                serviceMatching("IODisplayWrangler"), 
+                                                &displayWranglerPublished, this, 0);
+
+    _batteryLocationNotifier = addNotification( gIOPublishNotification, 
+                                                resourceMatching("battery"), 
+                                                &batteryLocationPublished, this, this);
 
     const OSSymbol *ucClassName = OSSymbol::withCStringNoCopy("RootDomainUserClient");
     setProperty(gIOUserClientClassKey, (OSMetaClassBase *) ucClassName);
@@ -734,6 +743,18 @@ void IOPMrootDomain::unIdleDevice( IOService *theDevice, unsigned long theState 
 
 void IOPMrootDomain::announcePowerSourceChange( void )
 {
+    IORegistryEntry                 *_batteryRegEntry = getProperty("BatteryEntry");
+
+    // (if possible) re-publish power source state under IOPMrootDomain
+    // (only done if the battery controller publishes an IOResource defining battery location)
+    if(_batteryRegEntry)
+    {
+        OSArray             *batt_info;
+        batt_info = _batteryRegEntry->getProperty(kIOBatteryInfoKey);
+        if(batt_info)
+            setProperty(kIOBatteryInfoKey, batt_info);
+    }
+
     messageClients(kIOPMMessageBatteryStatusHasChanged);
 }
 
@@ -1269,6 +1290,31 @@ bool IOPMrootDomain::displayWranglerPublished( void * target, void * refCon,
     
     return true;
 }
+
+//*********************************************************************************
+// batteryLocationPublished
+//
+// Notification on AppleSMU publishing location of battery data
+//
+//*********************************************************************************
+
+bool IOPMrootDomain::batteryLocationPublished( void * target, void * root_domain,
+        IOService * resourceService )
+{
+    IORegistryEntry                     *battery_location;
+    char                                battery_reg_path[255];
+    int                                 path_len = 255;
+
+    battery_location = resourceService->getProperty("battery");
+    if (!battery_location || !OSDynamicCast(IORegistryEntry, battery_location))
+        return (true);
+        
+    ((IOPMrootDomain *)root_domain)->setProperty("BatteryEntry", battery_location);
+    
+    ((IOPMrootDomain *)root_domain)->announcePowerSourceChange();
+    return (true);
+}
+
 
 
 //*********************************************************************************

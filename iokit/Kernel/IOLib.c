@@ -69,7 +69,7 @@ static queue_head_t gIOMallocContiguousEntries;
 static mutex_t *    gIOMallocContiguousEntriesLock;
 
 enum { kIOMaxPageableMaps = 16 };
-enum { kIOPageableMapSize = 16 * 1024 * 1024 };
+enum { kIOPageableMapSize = 96 * 1024 * 1024 };
 enum { kIOPageableMaxMapSize = 96 * 1024 * 1024 };
 
 typedef struct {

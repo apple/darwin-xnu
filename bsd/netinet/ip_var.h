@@ -83,7 +83,8 @@ struct ipq {
 	u_short	ipq_id;			/* sequence id for reassembly */
 	struct mbuf *ipq_frags;		/* to ip headers of fragments */
 	struct	in_addr ipq_src,ipq_dst;
-	u_long	reserved[4];		/* for future use */
+	u_long	ipq_nfrags;
+	u_long	reserved[3];		/* for future use */
 #if IPDIVERT
 #ifdef IPDIVERT_44
 	u_int32_t ipq_div_info;		/* ipfw divert port & flags */

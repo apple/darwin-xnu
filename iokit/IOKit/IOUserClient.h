@@ -162,6 +162,15 @@ public:
                                     task_t task,
                                     IOOptionBits mapFlags = kIOMapAnywhere,
 				    IOVirtualAddress atAddress = 0 );
+
+    /*!
+        @function removeMappingForDescriptor
+        Remove the first mapping created from the memory descriptor returned by clientMemoryForType() from IOUserClient's list of mappings. If such a mapping exists, it is retained and the reference currently held by IOUserClient is returned to the caller.
+        @param memory The memory descriptor instance previously returned by the implementation of clientMemoryForType().
+        @result A reference to the first IOMemoryMap instance found in the list of mappings created by IOUserClient from that passed memory descriptor is returned, or zero if none exist. The caller should release this reference.
+    */
+    IOMemoryMap * removeMappingForDescriptor(IOMemoryDescriptor * memory);
+
     /*!
         @function exportObjectToClient
         Make an arbitrary OSObject available to the client task.

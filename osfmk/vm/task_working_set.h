@@ -150,7 +150,7 @@ typedef struct tws_hash_line *tws_hash_line_t;
 
 
 #define TWS_ADDR_HASH 1
-#define TWS_HASH_EXPANSION_MAX	5
+#define TWS_HASH_EXPANSION_MAX	10
 #define TWS_MAX_REHASH 3
 
 

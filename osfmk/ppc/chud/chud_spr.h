@@ -234,7 +234,7 @@
 
 /* PPC SPRs - 7400/7410 Specific */
 #define chud_7400_msscr1	1015
- 
+  
 /* PPC SPRs - 64-bit implementations */
 #define chud_ppc64_accr		29
 #define chud_ppc64_ctrl		152

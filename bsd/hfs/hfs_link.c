@@ -332,7 +332,7 @@ hfs_link(ap)
 	}
 
 	// XXXdbg - need to do this here as well because cp could have changed
-	error = VOP_UPDATE(vp, &tv, &tv, 1);
+	(void) VOP_UPDATE(vp, &tv, &tv, 1);
 
 
 	if (hfsmp->jnl) {

@@ -1398,6 +1398,8 @@ nfs_loadattrcache(vpp, mdp, dposp, vaper, dontshrink, xidp)
 			}
 		}
 		np->n_mtime = mtime.tv_sec;
+		if (vp->v_type == VDIR)
+			np->n_ncmtime = mtime.tv_sec;
 		FSDBG(527, vp, np->n_mtime, 0, 0);
 	}
 	np->n_xid = *xidp;

@@ -168,10 +168,6 @@ int main(int argc, char *argv[])
 	DECLARE("pfCanNapb",			pfCanNapb);
 	DECLARE("pfCanDoze",			pfCanDoze);
 	DECLARE("pfCanDozeb",			pfCanDozeb);
-	DECLARE("pfThermal",			pfThermal);
-	DECLARE("pfThermalb",			pfThermalb);
-	DECLARE("pfThermInt",			pfThermInt);
-	DECLARE("pfThermIntb",			pfThermIntb);
 	DECLARE("pfSlowNap",				pfSlowNap);
 	DECLARE("pfSlowNapb",				pfSlowNapb);
 	DECLARE("pfNoMuMMCK",				pfNoMuMMCK);
@@ -233,6 +229,8 @@ int main(int argc, char *argv[])
 	DECLARE("pfl3crOriginal", 		offsetof(struct per_proc_info *, pf.l3crOriginal));
 	DECLARE("pfBootConfig",			offsetof(struct per_proc_info *, pf.pfBootConfig));
 	DECLARE("pfPowerModes",			offsetof(struct per_proc_info *, pf.pfPowerModes));
+	DECLARE("pfPowerTune0",			offsetof(struct per_proc_info *, pf.pfPowerTune0));
+	DECLARE("pfPowerTune1",			offsetof(struct per_proc_info *, pf.pfPowerTune1));
 	DECLARE("pmDPLLVmin",			pmDPLLVmin);
 	DECLARE("pmDPLLVminb",			pmDPLLVminb);
 	DECLARE("pmPowerTune",			pmPowerTune);
@@ -246,13 +244,6 @@ int main(int argc, char *argv[])
 	DECLARE("pfMaxPAddr", 			offsetof(struct per_proc_info *, pf.pfMaxPAddr));
 	DECLARE("pfSize", 				sizeof(procFeatures));
 	
-	DECLARE("thrmmaxTemp", 			offsetof(struct per_proc_info *, thrm.maxTemp));
-	DECLARE("thrmthrottleTemp", 	offsetof(struct per_proc_info *, thrm.throttleTemp));
-	DECLARE("thrmlowTemp", 			offsetof(struct per_proc_info *, thrm.lowTemp));
-	DECLARE("thrmhighTemp", 		offsetof(struct per_proc_info *, thrm.highTemp));
-	DECLARE("thrm3val", 			offsetof(struct per_proc_info *, thrm.thrm3val));
-	DECLARE("thrmSize", 			sizeof(thrmControl));
-
 	DECLARE("validSegs", 			offsetof(struct per_proc_info *, validSegs));
 	DECLARE("ppUserPmapVirt", 		offsetof(struct per_proc_info *, ppUserPmapVirt));
 	DECLARE("ppUserPmap", 			offsetof(struct per_proc_info *, ppUserPmap));

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2002 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2004 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -239,25 +239,17 @@ struct mbuf *nfsm_rpchead __P((struct ucred *cr, int nmflag, int procid,
 			(v) = ttvp; \
 		} }
 
-/* Used as (f) for nfsm_wcc_data() */
-#define NFSV3_WCCRATTR	0
-#define NFSV3_WCCCHK	1
-
-#define	nfsm_wcc_data(v, f, x) \
-		{ int ttattrf, ttretf = 0; \
+#define	nfsm_wcc_data(v, premtime, newpostattr, x) \
+		{ \
 		nfsm_dissect(tl, u_long *, NFSX_UNSIGNED); \
 		if (*tl == nfs_true) { \
 			nfsm_dissect(tl, u_long *, 6 * NFSX_UNSIGNED); \
-			if (f) \
-				ttretf = (VTONFS(v)->n_mtime == \
-					fxdr_unsigned(u_long, *(tl + 2))); \
-		} \
-		nfsm_postop_attr((v), ttattrf, (x)); \
-		if (f) { \
-			(f) = ttretf; \
+			(premtime) = fxdr_unsigned(time_t, *(tl + 2)); \
 		} else { \
-			(f) = ttattrf; \
-		} }
+			(premtime) = 0; \
+		} \
+		nfsm_postop_attr((v), (newpostattr), (x)); \
+		}
 
 #define nfsm_v3sattr(s, a, u, g) \
 		{ (s)->sa_modetrue = nfs_true; \

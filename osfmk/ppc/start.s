@@ -45,15 +45,13 @@
 #define ptPatch		20
 #define ptInitRout	24
 #define ptRptdProc	28
-#define ptTempMax	32
-#define ptTempThr	36
-#define ptLineSize	40
-#define ptl1iSize	44
-#define ptl1dSize	48
-#define ptPTEG		52
-#define ptMaxVAddr	56
-#define ptMaxPAddr	60
-#define ptSize		64
+#define ptLineSize	32
+#define ptl1iSize	36
+#define ptl1dSize	40
+#define ptPTEG		44
+#define ptMaxVAddr	48
+#define ptMaxPAddr	52
+#define ptSize		56
 
 #define bootCPU 10
 #define firstInit 9
@@ -182,11 +180,6 @@ donePVR:	lwz		r20,ptInitRout(r26)					; Grab the special init routine
 			lwz		r13,ptPwrModes(r26)					; Get the supported power modes
 			stw		r13,pfPowerModes(r30)				; Set the supported power modes
 			
-			lwz		r13,ptTempMax(r26)					; Get maximum operating temperature
-			stw		r13,thrmmaxTemp(r30)				; Set the maximum
-			lwz		r13,ptTempThr(r26)					; Get temprature to throttle down when exceeded
-			stw		r13,thrmthrottleTemp(r30)			; Set the temperature that we throttle
-			
 			lwz		r13,ptLineSize(r26)					; Get the cache line size
 			sth		r13,pflineSize(r30)					; Save it
 			lwz		r13,ptl1iSize(r26)					; Get icache size
@@ -248,7 +241,7 @@ doOurInit:	mr.		r20,r20								; See if initialization routine
 cpyFCpu:	addic.	r2,r2,-1							; Count down
 			la		r8,pfAvailable(r23)					; Point to features of boot processor
 			la		r7,pfAvailable(r6)					; Point to features of our processor
-			li		r9,(pfSize+thrmSize)/4				; Get size of a features area
+			li		r9,pfSize/4							; Get size of a features area
 			ble--	nofeatcpy							; Copied all we need
 			
 cpyFeat:	subi	r9,r9,1								; Count word
@@ -435,18 +428,7 @@ noVector:	rlwinm.	r0,r17,0,pfSMPcapb,pfSMPcapb		; See if we can do SMP
 			lhz		r13,PP_CPU_NUMBER(r30)				; Get the CPU number
 			mtspr	pir,r13								; Set the PIR
 			
-noSMP:		rlwinm.	r0,r17,0,pfThermalb,pfThermalb		; See if there is an TAU
-			beq-	noThermometer						; Nope...
-
-			li		r13,0								; Disable thermals for now
-			mtspr	thrm3,r13							; Do it
-			li		r13,lo16(thrmtidm|thrmvm)			; Set for lower-than thermal event at 0 degrees
-			mtspr	thrm1,r13							; Do it
-			lis		r13,hi16(thrmthrm)					; Set 127 degrees
-			ori		r13,r13,lo16(thrmvm)				; Set for higher-than event 
-			mtspr	thrm2,r13							; Set it
-
-noThermometer:
+noSMP:
 			
 			bl		EXT(cacheInit)						; Initializes all caches (including the TLB)
 
@@ -783,7 +765,7 @@ init7450done:
 
 init970:	
 			li		r20,0								; Clear this
-			mtspr	hior,r20							; Make sure that  0 is interrupt prefix
+			mtspr	hior,r20							; Make sure that 0 is interrupt prefix
 			bf		firstBoot,init970nb					; No init for wakeup or second processor....
 
 
@@ -795,7 +777,21 @@ init970:
 			std		r11,pfHID4(r30)						; Save original
 			mfspr	r11,hid5							; Get original hid5
 			std		r11,pfHID5(r30)						; Save original
-		
+
+			lis		r0, hi16(dnapm)						; Create a mask for the dnap bit
+			sldi	r0, r0, 32							; Shift to the top half
+			ld		r11,pfHID0(r30)						; Load the hid0 value
+			andc	r11, r11, r0						; Clear the dnap bit
+			isync
+			mtspr	hid0,r11							; Stuff it
+			mfspr	r11,hid0							; Get it
+			mfspr	r11,hid0							; Get it
+			mfspr	r11,hid0							; Get it
+			mfspr	r11,hid0							; Get it
+			mfspr	r11,hid0							; Get it
+			mfspr	r11,hid0							; Get it
+			isync
+
 ;
 ;			We can not query or change the L2 size.  We will just
 ;			phoney up a L2CR to make sysctl "happy" and set the
@@ -814,7 +810,11 @@ init970:
 ;			Start up code for second processor or wake up from sleep
 ;
 			
-init970nb:	ld		r11,pfHID0(r30)						; Get it
+init970nb:
+			lis		r0, hi16(dnapm)						; Create a mask for the dnap bit
+			sldi	r0, r0, 32							; Shift to the top half
+			ld		r11,pfHID0(r30)						; Load the hid0 value
+			andc	r11, r11, r0						; Clear the dnap bit
 			isync
 			mtspr	hid0,r11							; Stuff it
 			mfspr	r11,hid0							; Get it
@@ -862,8 +862,6 @@ initUnsupported:
 ;	.long	ptPatch			- Patch features
 ;	.long	ptInitRout		- Initilization routine.  Can modify any of the other attributes.
 ;	.long	ptRptdProc		- Processor type reported
-;	.long	ptTempMax		- Maximum operating temprature
-;	.long	ptTempThr		- Temprature threshold. We throttle if above
 ;	.long	ptLineSize		- Level 1 cache line size
 ;	.long	ptl1iSize		- Level 1 instruction cache size
 ;	.long	ptl1dSize		- Level 1 data cache size
@@ -874,27 +872,6 @@ initUnsupported:
 	
 	.align	2
 processor_types:
-
-;       750 (ver 2.2)
-
-			.align  2
-			.long   0xFFFFFFFF              ; Exact match
-			.short  PROCESSOR_VERSION_750
-			.short  0x4202
-			.long   pfFloat | pfCanSleep | pfCanNap | pfCanDoze | pf32Byte | pfL2
-			.long   kCache32 | kHasGraphicsOps | kHasStfiwx
-			.long   0
-			.long	PatchExt32
-			.long   init750
-			.long   CPU_SUBTYPE_POWERPC_750
-			.long   105
-			.long   90
-			.long   32
-			.long   32*1024
-			.long   32*1024
-			.long	64
-			.long	52
-			.long	32
 
 ;       750CX (ver 2.x)
 
@@ -908,8 +885,6 @@ processor_types:
 			.long	PatchExt32
 			.long   init750CX
 			.long   CPU_SUBTYPE_POWERPC_750
-			.long   105
-			.long   90
 			.long   32
 			.long   32*1024
 			.long   32*1024
@@ -923,14 +898,12 @@ processor_types:
 			.long	0xFFFF0000		; All revisions
 			.short	PROCESSOR_VERSION_750
 			.short	0
-			.long	pfFloat | pfCanSleep | pfCanNap | pfCanDoze | pfThermal | pf32Byte | pfL2
+			.long	pfFloat | pfCanSleep | pfCanNap | pfCanDoze | pf32Byte | pfL2
 			.long   kCache32 | kHasGraphicsOps | kHasStfiwx
 			.long   0
 			.long	PatchExt32
 			.long	init750
 			.long	CPU_SUBTYPE_POWERPC_750
-			.long	105
-			.long	90
 			.long	32
 			.long	32*1024
 			.long	32*1024
@@ -950,8 +923,6 @@ processor_types:
 			.long	PatchExt32
 			.long   init750FX
 			.long   CPU_SUBTYPE_POWERPC_750
-			.long   105
-			.long   90
 			.long   32
 			.long   32*1024
 			.long   32*1024
@@ -971,8 +942,6 @@ processor_types:
 			.long	PatchExt32
 			.long   init750FXV2
 			.long   CPU_SUBTYPE_POWERPC_750
-			.long   105
-			.long   90
 			.long   32
 			.long   32*1024
 			.long   32*1024
@@ -986,14 +955,12 @@ processor_types:
 			.long	0xFFFFFFF8		; ver 2.0 - 2.7
 			.short	PROCESSOR_VERSION_7400
 			.short	0x0200
-			.long	pfFloat | pfAltivec | pfSMPcap | pfCanSleep | pfCanNap | pfCanDoze | pfThermal | pf32Byte | pfL1fa | pfL2 | pfL2fa | pfHasDcba
+			.long	pfFloat | pfAltivec | pfSMPcap | pfCanSleep | pfCanNap | pfCanDoze | pf32Byte | pfL1fa | pfL2 | pfL2fa | pfHasDcba
 			.long   kHasAltivec | kCache32 | kDcbaAvailable | kDataStreamsAvailable | kHasGraphicsOps | kHasStfiwx
 			.long	0
 			.long	PatchExt32
 			.long	init7400v2_7
 			.long	CPU_SUBTYPE_POWERPC_7400
-			.long	105
-			.long	90
 			.long	32
 			.long	32*1024
 			.long	32*1024
@@ -1007,14 +974,12 @@ processor_types:
 			.long	0xFFFF0000		; All revisions
 			.short	PROCESSOR_VERSION_7400
 			.short	0
-			.long	pfFloat | pfAltivec | pfSMPcap | pfCanSleep | pfCanNap | pfCanDoze | pfThermal | pf32Byte | pfL1fa | pfL2 | pfL2fa | pfHasDcba
+			.long	pfFloat | pfAltivec | pfSMPcap | pfCanSleep | pfCanNap | pfCanDoze | pf32Byte | pfL1fa | pfL2 | pfL2fa | pfHasDcba
 			.long   kHasAltivec | kCache32 | kDcbaAvailable | kDataStreamsRecommended | kDataStreamsAvailable | kHasGraphicsOps | kHasStfiwx
 			.long	0
 			.long	PatchExt32
 			.long	init7400
 			.long	CPU_SUBTYPE_POWERPC_7400
-			.long	105
-			.long	90
 			.long	32
 			.long	32*1024
 			.long	32*1024
@@ -1034,8 +999,6 @@ processor_types:
 			.long	PatchExt32
 			.long	init7410
 			.long	CPU_SUBTYPE_POWERPC_7400
-			.long	105
-			.long	90
 			.long	32
 			.long	32*1024
 			.long	32*1024
@@ -1055,8 +1018,6 @@ processor_types:
 			.long	PatchExt32
 			.long	init7410
 			.long	CPU_SUBTYPE_POWERPC_7400
-			.long	105
-			.long	90
 			.long	32
 			.long	32*1024
 			.long	32*1024
@@ -1076,8 +1037,6 @@ processor_types:
 			.long	PatchExt32
 			.long	init7450
 			.long	CPU_SUBTYPE_POWERPC_7450
-			.long	105
-			.long	90
 			.long	32
 			.long	32*1024
 			.long	32*1024
@@ -1097,8 +1056,6 @@ processor_types:
 			.long	PatchExt32
 			.long	init7450
 			.long	CPU_SUBTYPE_POWERPC_7450
-			.long	105
-			.long	90
 			.long	32
 			.long	32*1024
 			.long	32*1024
@@ -1118,8 +1075,6 @@ processor_types:
 			.long	PatchExt32
 			.long	init7450
 			.long	CPU_SUBTYPE_POWERPC_7450
-			.long	105
-			.long	90
 			.long	32
 			.long	32*1024
 			.long	32*1024
@@ -1139,8 +1094,6 @@ processor_types:
 			.long	PatchExt32
 			.long	init745X
 			.long	CPU_SUBTYPE_POWERPC_7450
-			.long	105
-			.long	90
 			.long	32
 			.long	32*1024
 			.long	32*1024
@@ -1160,8 +1113,6 @@ processor_types:
 			.long	PatchExt32
 			.long	init745X
 			.long	CPU_SUBTYPE_POWERPC_7450
-			.long	105
-			.long	90
 			.long	32
 			.long	32*1024
 			.long	32*1024
@@ -1181,8 +1132,6 @@ processor_types:
 			.long	PatchExt32
 			.long	init745X
 			.long	CPU_SUBTYPE_POWERPC_7450
-			.long	105
-			.long	90
 			.long	32
 			.long	32*1024
 			.long	32*1024
@@ -1202,8 +1151,6 @@ processor_types:
 			.long	PatchExt32
 			.long	init745X
 			.long	CPU_SUBTYPE_POWERPC_7450
-			.long	105
-			.long	90
 			.long	32
 			.long	32*1024
 			.long	32*1024
@@ -1223,35 +1170,12 @@ processor_types:
 			.long	PatchExt32
 			.long	init745X
 			.long	CPU_SUBTYPE_POWERPC_7450
-			.long	105
-			.long	90
 			.long	32
 			.long	32*1024
 			.long	32*1024
 			.long	64
 			.long	52
 			.long	36
-
-;	970FX DD1.0
-
-			.align	2
-			.long	0xFFFFFF00		; All versions so far
-			.short	PROCESSOR_VERSION_970
-			.short	0x1100
-			.long	pfFloat | pfAltivec | pfSMPcap | pfCanSleep | pfCanNap | pf128Byte | pf64Bit | pfL2
-			.long   kHasAltivec | k64Bit | kCache128 | kDataStreamsAvailable | kDcbtStreamsRecommended | kDcbtStreamsAvailable | kHasGraphicsOps | kHasStfiwx | kHasFsqrt
-			.long	pmPowerTune
-			.long	PatchLwsync
-			.long	init970
-			.long	CPU_SUBTYPE_POWERPC_970
-			.long	105
-			.long	90
-			.long	128
-			.long	64*1024
-			.long	32*1024
-			.long	128
-			.long	65
-			.long	42
 
 ;	970
 
@@ -1265,8 +1189,6 @@ processor_types:
 			.long	PatchLwsync
 			.long	init970
 			.long	CPU_SUBTYPE_POWERPC_970
-			.long	105
-			.long	90
 			.long	128
 			.long	64*1024
 			.long	32*1024
@@ -1286,8 +1208,6 @@ processor_types:
 			.long	PatchLwsync
 			.long	init970
 			.long	CPU_SUBTYPE_POWERPC_970
-			.long	105
-			.long	90
 			.long	128
 			.long	64*1024
 			.long	32*1024
@@ -1307,8 +1227,6 @@ processor_types:
 			.long	PatchExt32
 			.long	initUnsupported
 			.long	CPU_SUBTYPE_POWERPC_ALL
-			.long	105
-			.long	90
 			.long	32
 			.long	32*1024
 			.long	32*1024
