@@ -70,6 +70,7 @@
 #include <ppc/asm.h>
 #include <ppc/thread_act.h>
 #include <ppc/vmachmon.h>
+#include <ppc/low_trace.h>
 
 #include <sys/kdebug.h>
 
@@ -912,6 +913,9 @@ stack_handoff(thread_t old,
 #endif
   if (branch_tracing_enabled()) 
     per_proc_info[cpu_number()].cpu_flags |= traceBE;
+    
+  if(trcWork.traceMask) dbgTrace(0x12345678, (unsigned int)old->top_act, (unsigned int)new->top_act);	/* Cut trace entry if tracing */    
+    
   return;
 }
 

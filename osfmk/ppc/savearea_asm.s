@@ -161,7 +161,8 @@ sdqlcks:	lwz		r9,SVlock(r10)				/* Get that lock in here */
 			b		sdqlcks						/* Sniff away... */
 			
 
-sdqlckd:	lwz		r3,SVfree(r10)				/* Get the free save area list anchor */
+sdqlckd:	isync								; Clean out the prefetches
+			lwz		r3,SVfree(r10)				/* Get the free save area list anchor */
 			la		r5,SVfree(r10)				/* Remember that the we're just starting out */
 			lwz		r6,SVcount(r10)				/* Get the total count of saveareas for later */
 			lis		r8,sac_empty>>16			/* Get the empty block indication */

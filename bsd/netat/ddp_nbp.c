@@ -69,7 +69,6 @@
 #endif
 
 #define	errno	nbperrno
-#define NBP_DEBUG  0
 
 	/* externs */
 extern at_ifaddr_t *ifID_table[];

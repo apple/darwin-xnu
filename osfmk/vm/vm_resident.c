@@ -318,6 +318,7 @@ vm_page_bootstrap(
 	m->active = FALSE;
 	m->laundry = FALSE;
 	m->free = FALSE;
+	m->no_isync = TRUE;
 	m->reference = FALSE;
 	m->pageout = FALSE;
 	m->dump_cleaning = FALSE;
@@ -963,7 +964,6 @@ vm_page_grab_fictitious(void)
 
 	m = (vm_page_t)zget(vm_page_zone);
 	if (m) {
-		m->free = FALSE;
 		vm_page_init(m, vm_page_fictitious_addr);
 		m->fictitious = TRUE;
 	}
@@ -1112,10 +1112,9 @@ vm_page_convert(
 
 	m->phys_addr = real_m->phys_addr;
 	m->fictitious = FALSE;
+	m->no_isync = TRUE;
 
 	vm_page_lock_queues();
-	m->no_isync = TRUE;
-	real_m->no_isync = FALSE;
 	if (m->active)
 		vm_page_active_count++;
 	else if (m->inactive)
@@ -1921,6 +1920,7 @@ vm_page_find_contiguous(
 				assert(m->free);
 				assert(!m->wanted);
 				m->free = FALSE;
+				m->no_isync = TRUE;
 				m->gobbled = TRUE;
 			}
 			vm_page_free_count -= npages;

@@ -587,7 +587,7 @@ thread_init(void)
 	ret = kmem_suballoc(kernel_map, 		/* Suballocate from the kernel map */
 
 		&stack,
-		(stack_alloc_bndry * (THREAD_MAX + 64)),	/* Allocate enough for all of it */
+		(stack_alloc_bndry * (2*THREAD_MAX + 64)),	/* Allocate enough for all of it */
 		FALSE,								/* Say not pageable so that it is wired */
 		TRUE,								/* Allocate from anywhere */
 		&stack_map);						/* Allocate a submap */

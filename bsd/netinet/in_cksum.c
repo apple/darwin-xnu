@@ -189,9 +189,9 @@ in_cksum_skip(m, len, skip)
 		mlen = m->m_len;
 		w = mtod(m, u_short *);
 
+skip_start:
 		if (len < mlen)
 			mlen = len;
-skip_start:
 		sum = xsum_assym(w, mlen, sum, starting_on_odd);
 		len -= mlen;
 		if (mlen & 0x1)
@@ -374,9 +374,9 @@ in_cksum_skip(m, len, skip)
 		} else {
 		  mlen = m->m_len;
 		}
-		  if (len < mlen)
-		    mlen = len;
 skip_start:
+		if (len < mlen)
+		    mlen = len;
 
 		len -= mlen;
 		/*

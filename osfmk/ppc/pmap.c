@@ -1625,6 +1625,23 @@ pmap_attribute(pmap, address, size, attribute, value)
 }
 
 /*
+ * pmap_sync_caches_phys(vm_offset_t pa)
+ * 
+ * Invalidates all of the instruction cache on a physical page and
+ * pushes any dirty data from the data cache for the same physical page
+ */
+ 
+void pmap_sync_caches_phys(vm_offset_t pa) {
+	
+	spl_t s;
+
+	s = splhigh();						/* No interruptions here */
+	sync_cache(trunc_page(pa), PAGE_SIZE);			/* Sync up dem caches */
+	splx(s);							/* Allow interruptions */
+	return;
+}
+
+/*
  * pmap_collect
  * 
  * Garbage collects the physical map system for pages that are no longer used.

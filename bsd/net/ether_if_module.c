@@ -456,7 +456,8 @@ ether_frameout(ifp, m, ndest, edst, ether_type)
 	    if (lo_dlt) {
 		if ((*m)->m_flags & M_BCAST) {
 		    struct mbuf *n = m_copy(*m, 0, (int)M_COPYALL);
-		    dlil_output(lo_dlt, n, 0, ndest, 0);
+            if (n != NULL)
+                dlil_output(lo_dlt, n, 0, ndest, 0);
 		} 
 		else 
 		{

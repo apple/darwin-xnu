@@ -203,9 +203,7 @@ ipc_table_init(void)
 	assert(ipc_table_entries != ITS_NULL);
 
 	ipc_table_fill(ipc_table_entries, ipc_table_entries_size - 1,
-		        4, sizeof(struct ipc_entry) + 
-			sizeof(ipc_entry_bits_t) + 
-			sizeof(ipc_table_index_t));
+		       16, sizeof(struct ipc_entry));
 
 	/* the last two elements should have the same size */
 

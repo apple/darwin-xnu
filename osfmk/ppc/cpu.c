@@ -732,6 +732,12 @@ cpu_sleep(
 
 	proc_info = &per_proc_info[cpu];
 
+	if(proc_info->FPU_thread) fpu_save(proc_info->FPU_thread);	/* If anyone owns FPU, save it */
+	proc_info->FPU_thread = 0;						/* Set no fpu owner now */
+
+	if(proc_info->VMX_thread) vec_save(proc_info->VMX_thread);	/* If anyone owns vectors, save it */
+	proc_info->VMX_thread = 0;						/* Set no vector owner now */
+
 	if (proc_info->cpu_number == 0)  {
 		proc_info->cpu_flags &= BootDone;
 		proc_info->istackptr = (vm_offset_t)&intstack + (INTSTACK_SIZE*(cpu+1)) - sizeof (struct ppc_saved_state);
@@ -741,25 +747,24 @@ cpu_sleep(
 		proc_info->debstack_top_ss = proc_info->debstackptr;
 #endif  /* MACH_KDP || MACH_KDB */
 		proc_info->interrupts_enabled = 0;
-		proc_info->FPU_thread = 0;
 
-	    	if (proc_info->start_paddr == EXCEPTION_VECTOR(T_RESET)) {
+		if (proc_info->start_paddr == EXCEPTION_VECTOR(T_RESET)) {
 			extern void _start_cpu(void);
-
+	
 			resethandler_target.type = RESET_HANDLER_START;
 			resethandler_target.call_paddr = kvtophys((vm_offset_t)_start_cpu); 
 			resethandler_target.arg__paddr = kvtophys((vm_offset_t)proc_info);
-
+	
 			ml_phys_write((vm_offset_t)&ResetHandler + 0,
-				      resethandler_target.type);
+					  resethandler_target.type);
 			ml_phys_write((vm_offset_t)&ResetHandler + 4,
-				      resethandler_target.call_paddr);
+					  resethandler_target.call_paddr);
 			ml_phys_write((vm_offset_t)&ResetHandler + 8,
-				      resethandler_target.arg__paddr);
+					  resethandler_target.arg__paddr);
 					  
 			__asm__ volatile("sync");
 			__asm__ volatile("isync");
-			}
+		}
 	}
 
 	PE_cpu_machine_quiesce(proc_info->cpu_id);

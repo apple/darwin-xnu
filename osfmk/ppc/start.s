@@ -438,38 +438,52 @@ callcpu:
 
 ;			750CX
 
-init750CX:	bflr	firstBoot							; No init for wakeup....
+init750CX:
+			bf	firstBoot, init750						; No init for wakeup....
 			mfspr	r13,hid1							; Get HID1
 			li		r14,lo16(0xFD5F)					; Get valid
 			rlwinm	r13,r13,4,28,31						; Isolate
 			slw		r14,r14,r13							; Position
 			rlwimi	r17,r14,15-pfCanNapb,pfCanNapb,pfCanNapb	; Set it			
-			b		init750com							; Join common...
+			b		init750							; Join common...
 
 ;			750
 
-init750:	bflr	firstBoot							; No init for wakeup....
+init750:
+			bf	firstBoot, init750nb						; No init for wakeup....
 
-init750com:	mfspr	r13,l2cr							; Get the L2CR
+			mfspr	r13,l2cr							; Get the L2CR
 			rlwinm.	r0,r13,0,l2e,l2e					; Any L2?
 			bne+	i750hl2								; Yes...
 			rlwinm	r17,r17,0,pfL2b+1,pfL2b-1			; No L2, turn off feature
 			
-i750hl2:	lis		r14,hi16(256*1024)					; Base L2 size
-			addis	r15,r13,0x3000						; Hah... Figure this one out...
-			rlwinm	r15,r15,4,30,31						; Isolate
-			rlwinm.	r8,r13,0,l2siz,l2sizf				; Was size valid?
-			slw		r14,r14,r15							; Set 256KB, 512KB, or 1MB
-			beq-	init750none							; Not a valid setting...
+i750hl2:
+			lis	r14,hi16(256*1024)						; Base L2 size
+			addis	r15,r13,0x3000							; Hah... Figure this one out...
+			rlwinm	r15,r15,4,30,31							; Isolate
+			rlwinm.	r8,r13,0,l2siz,l2sizf						; Was size valid?
+			slw	r14,r14,r15							; Set 256KB, 512KB, or 1MB
+			beq-	init750l2none							; Not a valid setting...
 			
-			stw		r13,pfl2cr(r30)						; Shadow the L2CR
-			stw		r14,pfl2Size(r30)					; Set the L2 size
-			blr											; Return....
+			stw	r13,pfl2cr(r30)							; Shadow the L2CR
+			stw	r14,pfl2Size(r30)						; Set the L2 size
+			b	init750l2done							; Done with L2
 			
-init750none:
-			rlwinm	r17,r17,0,pfL2b+1,pfL2b-1			; No level 2 cache
-			blr											; Return...
-
+init750l2none:
+			rlwinm	r17,r17,0,pfL2b+1,pfL2b-1					; No level 2 cache
+			
+init750l2done:
+			mfspr	r11,hid0							; Get the current HID0
+			stw	r11,pfHID0(r30)							; Save the HID0 value
+			blr									; Return...
+			
+init750nb:
+			lwz		r11,pfHID0(r30)						; Get HID0
+			sync
+			mtspr	hid0,r11							; Set the HID
+			isync
+			sync
+			blr
 
 init7400:	bf		firstBoot,i7400nb					; Do different if not initial boot...
 			mfspr	r13,l2cr							; Get the L2CR
@@ -497,9 +511,12 @@ i7400hl2:	lis		r14,hi16(256*1024)					; Base L2 size
 			stw		r11,pfMSSCR1(r30)					; Save the MSSCR1 value
 			blr											; Return...
 			
-i7400nb:	lwz		r11,pfHID0(r30)						; Get HID0
+i7400nb:
+			lwz		r11,pfHID0(r30)						; Get HID0
 			sync
 			mtspr	hid0,r11							; Set the HID
+			isync
+			sync			
 			lwz		r11,pfMSSCR0(r30)					; Get MSSCR0
 			isync
 			sync

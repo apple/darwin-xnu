@@ -154,6 +154,7 @@ extern void sync_cache(vm_offset_t pa, unsigned length);
 extern void flush_dcache(vm_offset_t va, unsigned length, boolean_t phys);
 extern void invalidate_dcache(vm_offset_t va, unsigned length, boolean_t phys);
 extern void invalidate_icache(vm_offset_t va, unsigned length, boolean_t phys);
+extern void pmap_sync_caches_phys(vm_offset_t pa);
 extern void invalidate_cache_for_io(vm_offset_t va, unsigned length, boolean_t phys);
 extern void pmap_map_block(pmap_t pmap, vm_offset_t va, vm_offset_t pa, vm_size_t size,
 	 vm_prot_t prot, int attr, unsigned int flags);	/* Map a block */

@@ -442,6 +442,10 @@ tooshort:
 		goto bad;
 	}
 	if (m->m_pkthdr.len > ip->ip_len) {
+		/* Invalidate hwcksuming */
+		m->m_pkthdr.csum_flags = 0;
+		m->m_pkthdr.csum_data = 0;
+
 		if (m->m_len == m->m_pkthdr.len) {
 			m->m_len = ip->ip_len;
 			m->m_pkthdr.len = ip->ip_len;

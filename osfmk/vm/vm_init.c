@@ -69,7 +69,7 @@
 #include <vm/vm_init.h>
 
 #define ZONE_MAP_MIN (12 * 1024 * 1024) 
-#define ZONE_MAP_MAX (128 * 1024 * 1024) 
+#define ZONE_MAP_MAX (256 * 1024 * 1024) 
 
 /*
  *	vm_mem_bootstrap initializes the virtual memory system.

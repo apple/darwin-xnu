@@ -763,7 +763,7 @@ tws_build_cluster(
 	int		pre_heat_size;
 	int		age_of_cache;
 
-	if(object->private)
+	if((object->private) || !(object->pager))
 		return;
 
 	if (!object->internal) {
@@ -771,7 +771,7 @@ tws_build_cluster(
        		 	object->pager,
 			&object_size);
 	} else {
-		object_size = 0xFFFFFFFFFFFFFFFF;
+		object_size = object->size;
 	}
 	/*
 	 * determine age of cache in seconds
@@ -791,7 +791,7 @@ tws_build_cluster(
 
 	while ((length < max_length) &&
 		(object_size >= 
-		(object->paging_offset + after + PAGE_SIZE_64))) {
+			(after + PAGE_SIZE_64))) {
 
 		if(length >= pre_heat_size)
 		   {

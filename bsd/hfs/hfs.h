@@ -501,7 +501,8 @@ struct CatalogNodeData {
 	HFSPlusForkData	cnd_datafork;
 	HFSPlusForkData	cnd_rsrcfork;
 	u_int32_t	cnd_iNodeNumCopy;
-	u_int8_t	cnd_extra[268];	/* make struct at least 520 bytes long */
+	u_int32_t	cnd_linkCNID;	/* for hard links only */
+	u_int8_t	cnd_extra[264];	/* make struct at least 520 bytes long */
 	struct CatalogNameSpecifier		cnd_namespecifier;
 };
 typedef struct CatalogNodeData CatalogNodeData;

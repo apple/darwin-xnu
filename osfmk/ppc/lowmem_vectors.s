@@ -1309,7 +1309,7 @@ mpwait2:	lwarx	r8,0,r4							/* (TEST/DEBUG) */
 			bne-	mpwait2							/* (TEST/DEBUG) */
 
 			isync									/* (TEST/DEBUG) */
-			lwz		r4,0xD80(br0)					/* (TEST/DEBUG) */
+			lwz		r4,0xE80(br0)					/* (TEST/DEBUG) */
 			mr.		r4,r4							/* (TEST/DEBUG) */
 			li		r4,1							/* (TEST/DEBUG) */
 			bne-	doncheksv						/* (TEST/DEBUG) */
@@ -1317,7 +1317,7 @@ mpwait2:	lwarx	r8,0,r4							/* (TEST/DEBUG) */
 			lis		r8,HIGH_ADDR(EXT(saveanchor))	/* (TEST/DEBUG) */
 			ori		r8,r8,LOW_ADDR(EXT(saveanchor))	/* (TEST/DEBUG) */
 		
-			stw		r4,0xD80(br0)					/* (TEST/DEBUG) */
+			stw		r4,0xE80(br0)					/* (TEST/DEBUG) */
 
 			lwarx	r4,0,r8							; ?
 
@@ -1329,13 +1329,12 @@ mpwait2x:	lwarx	r4,0,r8							/* (TEST/DEBUG) */
 
 			isync									/* (TEST/DEBUG) */
 
-#if 0
 			rlwinm	r4,r13,0,0,19					/* (TEST/DEBUG) */
 			lwz		r21,SACflags(r4)				/* (TEST/DEBUG) */
 			rlwinm	r22,r21,24,24,31				/* (TEST/DEBUG) */
 			cmplwi	r22,0x00EE						/* (TEST/DEBUG) */
 			lwz		r22,SACvrswap(r4)				/* (TEST/DEBUG) */
-			bne-	currbad							/* (TEST/DEBUG) */
+			bnel-	currbad							/* (TEST/DEBUG) */
 			andis.	r21,r21,hi16(sac_perm)			/* (TEST/DEBUG) */
 			bne-	currnotbad						/* (TEST/DEBUG) */
 			mr.		r22,r22							/* (TEST/DEBUG) */
@@ -1353,14 +1352,15 @@ currbad:	lis		r23,hi16(EXT(debugbackpocket))	/* (TEST/DEBUG) */
 			stw		r26,SACalloc(r23)				/* (TEST/DEBUG) */
 
 			sync									/* (TEST/DEBUG) */
-			li		r28,0							/* (TEST/DEBUG) */
-			stw		r28,0x20(br0)					/* (TEST/DEBUG) */
-			stw		r28,0(r8)						/* (TEST/DEBUG) */
-			BREAKPOINT_TRAP							/* (TEST/DEBUG) */
+
+			li		r3,0							/* (TEST/DEBUG) */
+			stw		r3,0x20(br0)					/* (TEST/DEBUG) */
+			stw		r3,0(r8)						/* (TEST/DEBUG) */
+			lis		r0,hi16(Choke)					; (TEST/DEBUG)
+			ori		r0,r0,lo16(Choke)				; (TEST/DEBUG)
+			sc										; System ABEND
 
 currnotbad:			
-#endif
-		
 			lwz		r28,SVcount(r8)					/* (TEST/DEBUG) */
 			lwz		r21,SVinuse(r8)					/* (TEST/DEBUG) */
 			lwz		r23,SVmin(r8)					/* (TEST/DEBUG) */
@@ -1368,10 +1368,7 @@ currnotbad:
 			cmpw	r22,r23							/* (TEST/DEBUG) */
 			bge+	cksave0							/* (TEST/DEBUG) */
 			
-			li		r4,0							/* (TEST/DEBUG) */
-			stw		r4,0x20(br0)					/* (TEST/DEBUG) */
-			stw		r4,0(r8)						/* (TEST/DEBUG) */
-			BREAKPOINT_TRAP							/* (TEST/DEBUG) */
+			bl		currbad							; (TEST/DEBUG)
 			
 cksave0:	lwz		r28,SVfree(r8)					/* (TEST/DEBUG) */
 			li		r24,0							/* (TEST/DEBUG) */
@@ -1383,18 +1380,12 @@ cksave0a:	mr.		r28,r28							/* (TEST/DEBUG) */
 			rlwinm.	r21,r28,0,4,19					/* (TEST/DEBUG) */
 			bne+	cksave1							/* (TEST/DEBUG) */
 			
-			li		r4,0							/* (TEST/DEBUG) */
-			stw		r4,0x20(br0)					/* (TEST/DEBUG) */
-			stw		r4,0(r8)						/* (TEST/DEBUG) */
-			BREAKPOINT_TRAP							/* (TEST/DEBUG) */
+			bl		currbad							; (TEST/DEBUG)
 			
 cksave1:	rlwinm.	r21,r28,0,21,3					/* (TEST/DEBUG) */
 			beq+	cksave2							/* (TEST/DEBUG) */
 			
-			li		r4,0							/* (TEST/DEBUG) */
-			stw		r4,0x20(br0)					/* (TEST/DEBUG) */
-			stw		r4,0(r8)						/* (TEST/DEBUG) */
-			BREAKPOINT_TRAP							/* (TEST/DEBUG) */
+			bl		currbad							; (TEST/DEBUG)
 			
 cksave2:	lwz		r25,SACalloc(r28)				/* (TEST/DEBUG) */
 			lbz		r26,SACflags+2(r28)				/* (TEST/DEBUG) */
@@ -1403,18 +1394,12 @@ cksave2:	lwz		r25,SACalloc(r28)				/* (TEST/DEBUG) */
 			stb		r29,SACflags+3(r28)				/* (TEST/DEBUG) */
 			beq+	cksave2z
 			
-			li		r4,0							/* (TEST/DEBUG) */
-			stw		r4,0x20(br0)					/* (TEST/DEBUG) */
-			stw		r4,0(r8)						/* (TEST/DEBUG) */
-			BREAKPOINT_TRAP							/* (TEST/DEBUG) */
+			bl		currbad							; (TEST/DEBUG)
 
 cksave2z:	mr.		r21,r21							/* (TEST/DEBUG) */
 			beq+	cksave2a						/* (TEST/DEBUG) */
 			
-			li		r4,0							/* (TEST/DEBUG) */
-			stw		r4,0x20(br0)					/* (TEST/DEBUG) */
-			stw		r4,0(r8)						/* (TEST/DEBUG) */
-			BREAKPOINT_TRAP							/* (TEST/DEBUG) */
+			bl		currbad							; (TEST/DEBUG)
 
 cksave2a:	rlwinm	r26,r25,1,31,31					/* (TEST/DEBUG) */
 			rlwinm	r27,r25,2,31,31					/* (TEST/DEBUG) */
@@ -1426,10 +1411,7 @@ cksave2a:	rlwinm	r26,r25,1,31,31					/* (TEST/DEBUG) */
 cksave3:	cmplw	r24,r22							/* (TEST/DEBUG) */
 			beq+	cksave4							/* (TEST/DEBUG) */
 			
-			li		r4,0							/* (TEST/DEBUG) */
-			stw		r4,0x20(br0)					/* (TEST/DEBUG) */
-			stw		r4,0(r8)						/* (TEST/DEBUG) */
-			BREAKPOINT_TRAP							/* (TEST/DEBUG) */
+			bl		currbad							; (TEST/DEBUG)
 			
 cksave4:	lwz		r28,SVfree(r8)					/* (TEST/DEBUG) */
 			li		r24,0							/* (TEST/DEBUG) */
@@ -1443,7 +1425,7 @@ cksave5:	mr.		r28,r28							/* (TEST/DEBUG) */
 cksave6:	
 
 			li		r4,0							/* (TEST/DEBUG) */
-			stw		r4,0xD80(br0)					/* (TEST/DEBUG) */
+			stw		r4,0xE80(br0)					/* (TEST/DEBUG) */
 			stw		r4,0(r8)						/* (TEST/DEBUG) */
 
 doncheksv:
@@ -2040,7 +2022,7 @@ rtlcks:		lwz		r22,SVlock(r30)					/* Get that lock in here */
 ;
 ;			Lock gotten, toss the saveareas
 ;
-fretagain:	
+fretagain:	isync									; Toss those prefetches
 #if TRCSAVE
 			beq-	cr5,trkill1						; (TEST/DEBUG) Do not trace this type
 			lwz		r14,LOW_ADDR(traceMask-EXT(ExceptionVectorsStart))(br0)	; (TEST/DEBUG) Get the trace mask

@@ -104,7 +104,6 @@ int		vm_object_absent_max = 50;
 int		vm_fault_debug = 0;
 boolean_t	vm_page_deactivate_behind = TRUE;
 
-vm_machine_attribute_val_t mv_cache_sync = MATTR_VAL_CACHE_SYNC;
 
 #if	!VM_FAULT_STATIC_CONFIG
 boolean_t	vm_fault_dirty_handling = FALSE;
@@ -2202,16 +2201,10 @@ FastPmapEnter:
 					prot &= ~VM_PROT_WRITE;
 #endif	/* MACH_KDB */
 #endif	/* STATIC_CONFIG */
-				PMAP_ENTER(pmap, vaddr, m, prot, wired);
+				if (m->no_isync == TRUE)
+				        pmap_sync_caches_phys(m->phys_addr);
 
-				if (m->no_isync) {
-					pmap_attribute(pmap,
-						       vaddr,
-						       PAGE_SIZE,
-						       MATTR_CACHE,
-						       &mv_cache_sync);
-					
-				}
+				PMAP_ENTER(pmap, vaddr, m, prot, wired);
 				{
 				   tws_hash_line_t	line;
 				   task_t		task;
@@ -2236,11 +2229,6 @@ FastPmapEnter:
 					}
 				   }
 				}
-
-				if (m->clustered) {
-				        vm_pagein_cluster_used++;
-					m->clustered = FALSE;
-				}
 				/*
 				 *	Grab the object lock to manipulate
 				 *	the page queues.  Change wiring
@@ -2255,8 +2243,13 @@ FastPmapEnter:
 				 */
 				vm_object_lock(object);
 				vm_page_lock_queues();
+
+				if (m->clustered) {
+				        vm_pagein_cluster_used++;
+					m->clustered = FALSE;
+				}
 				/* 
-				 * we did the isync above... we're clearing
+				 * we did the isync above (if needed)... we're clearing
 				 * the flag here to avoid holding a lock
 				 * while calling pmap functions, however
 				 * we need hold the object lock before
@@ -2735,29 +2728,15 @@ FastPmapEnter:
 	 *	the pageout queues.  If the pageout daemon comes
 	 *	across the page, it will remove it from the queues.
 	 */
-	if(m != VM_PAGE_NULL) {
-		if (m->no_isync) {
-	        m->no_isync = FALSE;
+	if (m != VM_PAGE_NULL) {
+		if (m->no_isync == TRUE) {
+		        pmap_sync_caches_phys(m->phys_addr);
 
-	        vm_object_unlock(m->object);
-
-			PMAP_ENTER(pmap, vaddr, m, prot, wired);
-
-			/*
-		 	 *	It's critically important that a wired-down page be faulted
-		 	 *	only once in each map for which it is wired.
-		 	*/
-			/* Sync I & D caches for new mapping */
-			pmap_attribute(pmap,
-			       vaddr,
-			       PAGE_SIZE,
-			       MATTR_CACHE,
-			       &mv_cache_sync);
-		} else {
-	        vm_object_unlock(m->object);
-
-			PMAP_ENTER(pmap, vaddr, m, prot, wired);
+		        m->no_isync = FALSE;
 		}
+	        vm_object_unlock(m->object);
+
+		PMAP_ENTER(pmap, vaddr, m, prot, wired);
 		{
 			tws_hash_line_t	line;
 			task_t		task;
@@ -3181,25 +3160,14 @@ vm_fault_wire_fast(
 	 *	We have to unlock the object because pmap_enter
 	 *	may cause other faults.   
 	 */
-	if (m->no_isync) {
+	if (m->no_isync == TRUE) {
+	        pmap_sync_caches_phys(m->phys_addr);
+
 		m->no_isync = FALSE;
-
-		vm_object_unlock(object);
-
-		PMAP_ENTER(pmap, va, m, prot, TRUE);
-
-		/* Sync I & D caches for new mapping */
-		pmap_attribute(pmap,
-			       va,
-			       PAGE_SIZE,
-			       MATTR_CACHE,
-			       &mv_cache_sync);
-		
-	} else {
-		vm_object_unlock(object);
-
-		PMAP_ENTER(pmap, va, m, prot, TRUE);
 	}
+	vm_object_unlock(object);
+
+	PMAP_ENTER(pmap, va, m, prot, TRUE);
 
 	/*
 	 *	Must relock object so that paging_in_progress can be cleared.

@@ -1191,8 +1191,6 @@ vm_map_pmap_enter(
 	vm_prot_t		protection)
 {
 
-	vm_machine_attribute_val_t mv_cache_sync = MATTR_VAL_CACHE_SYNC;
-	
 	while (addr < end_addr) {
 		register vm_page_t	m;
 
@@ -1216,23 +1214,19 @@ vm_map_pmap_enter(
 			printf("map: %x, addr: %x, object: %x, offset: %x\n",
 				map, addr, object, offset);
 		}
-
 		m->busy = TRUE;
+
+		if (m->no_isync == TRUE) {
+		        pmap_sync_caches_phys(m->phys_addr);
+
+			m->no_isync = FALSE;
+		}
 		vm_object_unlock(object);
 
 		PMAP_ENTER(map->pmap, addr, m,
 			   protection, FALSE);
 
-		if (m->no_isync) {
-			pmap_attribute(map->pmap,
-			       addr,
-			       PAGE_SIZE,
-			       MATTR_CACHE,
-			       &mv_cache_sync);
-		}
 		vm_object_lock(object);
-
-		m->no_isync = FALSE;
 
 		PAGE_WAKEUP_DONE(m);
 		vm_page_lock_queues();

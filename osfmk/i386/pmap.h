@@ -512,6 +512,9 @@ extern void flush_dcache(vm_offset_t addr, unsigned count, int phys);
 #define	pmap_copy(dst_pmap,src_pmap,dst_addr,len,src_addr)
 #define	pmap_attribute(pmap,addr,size,attr,value) \
 					(KERN_INVALID_ADDRESS)
+#define pmap_sync_caches_phys(pa) \
+					(KERN_INVALID_ADDRESS)
+
 #endif	/* ASSEMBLER */
 
 #endif	/* _PMAP_MACHINE_ */

@@ -71,7 +71,7 @@ ENTRY(sync_cache, TAG_NO_FRAME_USED)
 	/* loop to flush the data cache */
 .L_sync_data_loop:
 	subic	r4,	r4,	CACHE_LINE_SIZE
-	dcbst	r3,	r4
+	dcbf	r3,	r4
 	bdnz	.L_sync_data_loop
 	
 	sync
@@ -90,7 +90,7 @@ ENTRY(sync_cache, TAG_NO_FRAME_USED)
 	blr
 
 .L_sync_one_line:
-	dcbst	0,r3
+	dcbf	0,r3
 	sync
 	icbi	0,r3
 	b	.L_sync_cache_done

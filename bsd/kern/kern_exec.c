@@ -112,6 +112,8 @@ extern vm_map_t bsd_pageable_map;
 
 static int load_return_to_errno(load_return_t lrtn);
 int execve(struct proc *p, struct execve_args *uap, register_t *retval);
+static int execargs_alloc(vm_offset_t *addrp);
+static int execargs_free(vm_offset_t addr);
 
 int
 execv(p, args, retval)
@@ -197,9 +199,9 @@ execve(p, uap, retval)
 		}
 	}
 
-	ret = kmem_alloc_pageable(bsd_pageable_map, &execargs, NCARGS);
-	if (ret != KERN_SUCCESS)
-		return(ENOMEM);
+	error = execargs_alloc(&execargs);
+	if (error)
+		return(error);
 
 	savedpath = execargs;
 
@@ -762,7 +764,7 @@ bad:
 		vput(vp);
 bad1:
 	if (execargs)
-		kmem_free(bsd_pageable_map, execargs, NCARGS);
+		execargs_free(execargs);
 	if (!error && vfexec) {
 			vfork_return(current_act(), p->p_pptr, p, retval);
 			return(0);
@@ -960,5 +962,63 @@ check_exec_access(p, vp, vap)
 	    (vap->va_mode & (S_IXUSR | S_IXGRP | S_IXOTH)) == 0)
 		return (EACCES);
 	return (0);
+}
+
+#include <mach/mach_types.h>
+#include <mach/vm_prot.h>
+#include <mach/semaphore.h>
+#include <mach/sync_policy.h>
+#include <kern/clock.h>
+#include <mach/kern_return.h>
+
+extern semaphore_t execve_semaphore;
+
+static int
+execargs_alloc(addrp)
+	vm_offset_t	*addrp;
+{
+	kern_return_t kret;
+
+	kret = semaphore_wait(execve_semaphore);
+	if (kret != KERN_SUCCESS)
+		switch (kret) {
+		default:
+			return (EINVAL);
+		case KERN_INVALID_ADDRESS:
+		case KERN_PROTECTION_FAILURE:
+			return (EACCES);
+		case KERN_ABORTED:
+		case KERN_OPERATION_TIMED_OUT:
+			return (EINTR);
+		}
+
+	kret = kmem_alloc_pageable(bsd_pageable_map, addrp, NCARGS);
+	if (kret != KERN_SUCCESS)
+		return (ENOMEM);
+
+	return (0);
+}
+
+static int
+execargs_free(addr)
+	vm_offset_t	addr;
+{
+	kern_return_t kret;
+
+	kmem_free(bsd_pageable_map, addr, NCARGS);
+
+	kret = semaphore_signal(execve_semaphore);
+	switch (kret) { 
+	case KERN_INVALID_ADDRESS:
+	case KERN_PROTECTION_FAILURE:
+		return (EINVAL);
+	case KERN_ABORTED:
+	case KERN_OPERATION_TIMED_OUT:
+		return (EINTR);
+	case KERN_SUCCESS:
+		return(0);
+	default:
+		return (EINVAL);
+	}
 }
 

@@ -107,6 +107,13 @@
 #include <dev/busvar.h>
 #include <sys/kdebug.h>
 
+#include <mach/mach_types.h>
+#include <mach/vm_prot.h>
+#include <mach/semaphore.h>
+#include <mach/sync_policy.h>
+#include <kern/clock.h>
+#include <mach/kern_return.h>
+
 extern shared_region_mapping_t       system_shared_region;
 
 char    copyright[] =
@@ -171,8 +178,10 @@ int	lbolt;				/* awoken once a second */
 struct	vnode *rootvp;
 int boothowto = RB_DEBUG;
 
+#define	BSD_PAGABLE_MAP_SIZE	(4 * 512 * 1024)
 vm_map_t	bsd_pageable_map;
 vm_map_t	mb_map;
+semaphore_t execve_semaphore;
 
 int	cmask = CMASK;
 
@@ -204,7 +213,8 @@ int enable_funnel = 0;		/* disables split funnel */
 /*
  *	Sets the name for the given task.
  */
-void proc_name(s, p)
+void
+proc_name(s, p)
 	char		*s;
 	struct proc *p;
 {
@@ -265,7 +275,7 @@ bsd_init()
 
 	kernel_flock = funnel_alloc(KERNEL_FUNNEL);
 	if (kernel_flock == (funnel_t *)0 ) {
-		panic("fail to allocate kernel mutex lock\n");
+		panic("bsd_init: Fail to allocate kernel mutex lock");
 	}
         
         
@@ -274,7 +284,7 @@ bsd_init()
 	if (!disable_funnel) {
 		network_flock = funnel_alloc(NETWORK_FUNNEL);
 		if (network_flock == (funnel_t *)0 ) {
-			panic("fail to allocate network mutex lock\n");
+			panic("bds_init: Fail to allocate network mutex lock");
 		}
 	} else {
 		network_flock = kernel_flock;
@@ -370,19 +380,32 @@ bsd_init()
 	
 	/*
 	 *	Allocate a kernel submap for pageable memory
-	 *	for temporary copying (table(), execve()).
+	 *	for temporary copying (execve()).
 	 */
 	{
 		vm_offset_t	min;
 
 		ret = kmem_suballoc(kernel_map,
 				&min,
-				(vm_size_t)512*1024,
+				(vm_size_t)BSD_PAGABLE_MAP_SIZE,
 				TRUE,
 				TRUE,
 				&bsd_pageable_map);
 	if (ret != KERN_SUCCESS) 
-		panic("Failed to allocare bsd pageable map\n");
+		panic("bsd_init: Failed to allocare bsd pageable map");
+	}
+
+	/* Initialize the execve() semaphore */
+	{
+		kern_return_t kret;
+		int value;
+
+		value = BSD_PAGABLE_MAP_SIZE / NCARGS;
+
+		kret = semaphore_create(kernel_task, &execve_semaphore,
+				SYNC_POLICY_FIFO, value);
+		if (kret != KERN_SUCCESS)
+			panic("bsd_init: Failed to create execve semaphore");
 	}
 
 	/*
@@ -472,7 +495,7 @@ bsd_init()
 
 	/* Get the vnode for '/'.  Set fdp->fd_fd.fd_cdir to reference it. */
 	if (VFS_ROOT(mountlist.cqh_first, &rootvnode))
-		panic("cannot find root vnode");
+		panic("bsd_init: cannot find root vnode");
 	filedesc0.fd_cdir = rootvnode;
 	VREF(rootvnode);
 	VOP_UNLOCK(rootvnode, 0, p);

@@ -117,6 +117,7 @@ ram_printf(int x)
 int
 signal_lock(struct proc *p)
 {
+int error = 0;
 #if SIGNAL_DEBUG
 #ifdef __ppc__
         {
@@ -135,7 +136,11 @@ signal_lock(struct proc *p)
 #endif /* __ppc__ */       
 #endif /* SIGNAL_DEBUG */
 
-	return(lockmgr(&p->signal_lock, LK_EXCLUSIVE, 0, (struct proc *)0));
+siglock_retry:
+	error = lockmgr(&p->signal_lock, LK_EXCLUSIVE, 0, (struct proc *)0);
+	if (error == EINTR)
+		goto siglock_retry;
+	return(error);
 }
 
 int

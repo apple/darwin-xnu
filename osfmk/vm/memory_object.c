@@ -188,8 +188,19 @@ memory_object_lock_page(
 	 *	does not have any data.
 	 */
 
-	if (m->absent || m->error || m->restart)
-		return(MEMORY_OBJECT_LOCK_RESULT_DONE);
+	if (m->absent || m->error || m->restart) {
+		if(m->error && should_flush) {
+			/* dump the page, pager wants us to */
+			/* clean it up and there is no      */
+			/* relevant data to return */
+			if(m->wire_count == 0) {
+				VM_PAGE_FREE(m);
+				return(MEMORY_OBJECT_LOCK_RESULT_DONE);
+			}
+		} else {
+			return(MEMORY_OBJECT_LOCK_RESULT_DONE);
+		}
+	}
 
 	assert(!m->fictitious);
 

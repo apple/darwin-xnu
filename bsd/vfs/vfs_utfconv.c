@@ -19,58 +19,70 @@
  * 
  * @APPLE_LICENSE_HEADER_END@
  */
-
 #include <sys/param.h>
 #include <sys/utfconv.h>
 #include <sys/errno.h>
 #include <architecture/byte_order.h>
 
-
 /*
- * UTF-8 (UCS Transformation Format)
+ * UTF-8 (Unicode Transformation Format)
  *
- * The following subset of UTF-8 is used to encode UCS-2 filenames. It
- * requires a maximum of three 3 bytes per UCS-2 character.  Only the
- * shortest encoding required to represent the significant UCS-2 bits
- * is legal.
+ * UTF-8 is the Unicode Transformation Format that serializes a Unicode
+ * character as a sequence of one to four bytes. Only the shortest form
+ * required to represent the significant Unicode bits is legal.
  * 
  * UTF-8 Multibyte Codes
  *
- * Bytes   Bits   UCS-2 Min   UCS-2 Max   UTF-8 Byte Sequence (binary)
- * -------------------------------------------------------------------
- *   1       7     0x0000      0x007F      0xxxxxxx
- *   2      11     0x0080      0x07FF      110xxxxx 10xxxxxx
- *   3      16     0x0800      0xFFFF      1110xxxx 10xxxxxx 10xxxxxx
- * -------------------------------------------------------------------
+ * Bytes   Bits   Unicode Min  Unicode Max   UTF-8 Byte Sequence (binary)
+ * -----------------------------------------------------------------------------
+ *   1       7       0x0000        0x007F    0xxxxxxx
+ *   2      11       0x0080        0x07FF    110xxxxx 10xxxxxx
+ *   3      16       0x0800        0xFFFF    1110xxxx 10xxxxxx 10xxxxxx
+ *   4      21      0x10000      0x10FFFF    11110xxx 10xxxxxx 10xxxxxx 10xxxxxx
+ * -----------------------------------------------------------------------------
  */
 
 
-#define UCS_TO_UTF8_LEN(c)	((c) < 0x0080 ? 1 : ((c) < 0x0800 ? 2 : 3))
+#define UNICODE_TO_UTF8_LEN(c)  \
+	((c) < 0x0080 ? 1 : ((c) < 0x0800 ? 2 : (((c) & 0xf800) == 0xd800 ? 2 : 3)))
 
 #define UCS_ALT_NULL	0x2400
 
+/* Surrogate Pair Constants */
+#define SP_HALF_SHIFT	10
+#define SP_HALF_BASE	0x0010000UL
+#define SP_HALF_MASK	0x3FFUL
 
-static u_int16_t ucs_decompose __P((u_int16_t, u_int16_t *));
+#define SP_HIGH_FIRST	0xD800UL
+#define SP_HIGH_LAST	0xDBFFUL
+#define SP_LOW_FIRST	0xDC00UL
+#define SP_LOW_LAST		0xDFFFUL
+
+
+static u_int16_t ucs_decompose(u_int16_t, u_int16_t *);
 
 static u_int16_t ucs_combine(u_int16_t base, u_int16_t comb);
 
 
+char utf_extrabytes[32] = {
+	 0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,
+	-1, -1, -1, -1, -1, -1, -1, -1,  1,  1,  1,  1,  2,  2,  3, -1
+};
+
+
 /*
- * utf8_encodelen - Calculates the UTF-8 encoding length for a UCS-2 filename
+ * utf8_encodelen - Calculates the UTF-8 encoding length for a Unicode filename
  *
  * NOTES:
  *    If '/' chars are allowed on disk then an alternate
  *    (replacement) char must be provided in altslash.
  *
  * input flags:
- *    UTF_REVERSE_ENDIAN: UCS-2 byteorder is opposite current runtime
+ *    UTF_REVERSE_ENDIAN: Unicode byteorder is opposite current runtime
  */
 size_t
-utf8_encodelen(ucsp, ucslen, altslash, flags)
-	const u_int16_t * ucsp;
-	size_t ucslen;
-	u_int16_t altslash;
-	int flags;
+utf8_encodelen(const u_int16_t * ucsp, size_t ucslen, u_int16_t altslash,
+               int flags)
 {
 	u_int16_t ucs_ch;
 	int charcnt;
@@ -90,7 +102,7 @@ utf8_encodelen(ucsp, ucslen, altslash, flags)
 		else if (ucs_ch == '\0')
 			ucs_ch = UCS_ALT_NULL;
 		
-		len += UCS_TO_UTF8_LEN(ucs_ch);
+		len += UNICODE_TO_UTF8_LEN(ucs_ch);
 	}
 
 	return (len);
@@ -98,7 +110,7 @@ utf8_encodelen(ucsp, ucslen, altslash, flags)
 
 
 /*
- * utf8_encodestr - Encodes a UCS-2 (Unicode) string to UTF-8
+ * utf8_encodestr - Encodes a Unicode string to UTF-8
  *
  * NOTES:
  *    The resulting UTF-8 string is NULL terminated.
@@ -107,21 +119,16 @@ utf8_encodelen(ucsp, ucslen, altslash, flags)
  *    (replacement) char must be provided in altslash.
  *
  * input flags:
- *    UTF_REVERSE_ENDIAN: UCS-2 byteorder is opposite current runtime
+ *    UTF_REVERSE_ENDIAN: Unicode byteorder is opposite current runtime
  *    UTF_NO_NULL_TERM:  don't add NULL termination to UTF-8 output
  *
  * result:
  *    ENAMETOOLONG: Name didn't fit; only buflen bytes were encoded
  *    EINVAL: Illegal char found; char was replaced by an '_'.
  */
-int utf8_encodestr(ucsp, ucslen, utf8p, utf8len, buflen, altslash, flags)
-	const u_int16_t * ucsp;
-	size_t ucslen;
-	u_int8_t * utf8p;
-	size_t * utf8len;
-	size_t buflen;
-	u_int16_t altslash;
-	int flags;
+int
+utf8_encodestr(const u_int16_t * ucsp, size_t ucslen, u_int8_t * utf8p,
+               size_t * utf8len, size_t buflen, u_int16_t altslash, int flags)
 {
 	u_int8_t * bufstart;
 	u_int8_t * bufend;
@@ -171,7 +178,7 @@ int utf8_encodestr(ucsp, ucslen, utf8p, utf8len, buflen, altslash, flags)
 			if (utf8p >= bufend) {
 				result = ENAMETOOLONG;
 				break;
-			}
+			}			
 			*utf8p++ = ucs_ch;
 
 		} else if (ucs_ch < 0x800) {
@@ -179,17 +186,40 @@ int utf8_encodestr(ucsp, ucslen, utf8p, utf8len, buflen, altslash, flags)
 				result = ENAMETOOLONG;
 				break;
 			}
-			*utf8p++ = (ucs_ch >> 6) | 0xc0;
-			*utf8p++ = (ucs_ch & 0x3f) | 0x80;
+			*utf8p++ = 0xc0 | (ucs_ch >> 6);
+			*utf8p++ = 0x80 | (0x3f & ucs_ch);
 
 		} else {
+			/* Combine valid surrogate pairs */
+			if (ucs_ch >= SP_HIGH_FIRST && ucs_ch <= SP_HIGH_LAST
+				&& charcnt > 0) {
+				u_int16_t ch2;
+				u_int32_t pair;
+
+				ch2 = swapbytes ? NXSwapShort(*ucsp) : *ucsp;
+				if (ch2 >= SP_LOW_FIRST && ch2 <= SP_LOW_LAST) {
+					pair = ((ucs_ch - SP_HIGH_FIRST) << SP_HALF_SHIFT)
+						+ (ch2 - SP_LOW_FIRST) + SP_HALF_BASE;
+					if ((utf8p + 3) >= bufend) {
+						result = ENAMETOOLONG;
+						break;
+					}
+					--charcnt;
+					++ucsp;				
+					*utf8p++ = 0xf0 | (pair >> 18);
+					*utf8p++ = 0x80 | (0x3f & (pair >> 12));
+					*utf8p++ = 0x80 | (0x3f & (pair >> 6));
+					*utf8p++ = 0x80 | (0x3f & pair);
+					continue;
+				}
+			}
 			if ((utf8p + 2) >= bufend) {
 				result = ENAMETOOLONG;
 				break;
 			}
-			*utf8p++ = (ucs_ch >> 12) | 0xe0;
-			*utf8p++ = ((ucs_ch >> 6) & 0x3f) | 0x80;
-			*utf8p++ = ((ucs_ch) & 0x3f) | 0x80;
+			*utf8p++ = 0xe0 | (ucs_ch >> 12);
+			*utf8p++ = 0x80 | (0x3f & (ucs_ch >> 6));
+			*utf8p++ = 0x80 | (0x3f & ucs_ch);
 		}	
 	}
 	
@@ -202,7 +232,7 @@ int utf8_encodestr(ucsp, ucslen, utf8p, utf8len, buflen, altslash, flags)
 
 
 /*
- * utf8_decodestr - Decodes a UTF-8 string back to UCS-2 (Unicode)
+ * utf8_decodestr - Decodes a UTF-8 string back to Unicode
  *
  * NOTES:
  *    The input UTF-8 string does not need to be null terminated
@@ -212,22 +242,16 @@ int utf8_encodestr(ucsp, ucslen, utf8p, utf8len, buflen, altslash, flags)
  *    (replacement) char must be provided in altslash.
  *
  * input flags:
- *    UTF_REV_ENDIAN:   UCS-2 byteorder is oposite current runtime
- *    UTF_DECOMPOSED:   UCS-2 output string must be fully decompsed
+ *    UTF_REV_ENDIAN:   Unicode byteorder is oposite current runtime
+ *    UTF_DECOMPOSED:   Unicode output string must be fully decompsed
  *
  * result:
  *    ENAMETOOLONG: Name didn't fit; only ucslen chars were decoded.
  *    EINVAL: Illegal UTF-8 sequence found.
  */
 int
-utf8_decodestr(utf8p, utf8len, ucsp, ucslen, buflen, altslash, flags)
-	const u_int8_t* utf8p;
-	size_t utf8len;
-	u_int16_t* ucsp;
-	size_t *ucslen;
-	size_t buflen;
-	u_int16_t altslash;
-	int flags;
+utf8_decodestr(const u_int8_t* utf8p, size_t utf8len, u_int16_t* ucsp,
+               size_t *ucslen, size_t buflen, u_int16_t altslash, int flags)
 {
 	u_int16_t* bufstart;
 	u_int16_t* bufend;
@@ -244,59 +268,60 @@ utf8_decodestr(utf8p, utf8len, ucsp, ucslen, buflen, altslash, flags)
 	bufend = (u_int16_t *)((u_int8_t *)ucsp + buflen);
 
 	while (utf8len-- > 0 && (byte = *utf8p++) != '\0') {
-		if (ucsp >= bufend) {
-			result = ENAMETOOLONG;
-			goto stop;
-		}
+		if (ucsp >= bufend)
+			goto toolong;
 
 		/* check for ascii */
 		if (byte < 0x80) {
-			ucs_ch = byte;
+			ucs_ch = byte;				/* 1st byte */
 		} else {
-			switch (byte & 0xf0) {
-			/* 2 byte sequence */
-			case 0xc0:
-			case 0xd0:
-				/* extract bits 6 - 10 from first byte */
-				ucs_ch = (byte & 0x1F) << 6;
-				if (ucs_ch < 0x0080) {
-					result = EINVAL;  /* seq not minimal */
-					goto stop;
-				}
-				break;
-			/* 3 byte sequence */
-			case 0xe0:
-				/* extract bits 12 - 15 from first byte */
-				ucs_ch = (byte & 0x0F) << 6;
+			u_int32_t ch;
+			int extrabytes = utf_extrabytes[byte >> 3];
 
-				/* extract bits 6 - 11 from second byte */
-				if (((byte = *utf8p++) & 0xc0) != 0x80) {
-					result = EINVAL;
-					goto stop;
-				}
-				utf8len--;
+			if (utf8len < extrabytes)
+				goto invalid;
+			utf8len -= extrabytes;
 
-				ucs_ch += (byte & 0x3F);
-				ucs_ch <<= 6;
+			switch (extrabytes) {
+			case 1: ch = byte;			/* 1st byte */
+					ch <<= 6;
+			        ch += *utf8p++;		/* 2nd byte */
+					ch -= 0x00003080UL;
+					if (ch < 0x0080)
+						goto invalid;
+					ucs_ch = ch;
+			        break;
 
-				if (ucs_ch < 0x0800) {
-					result = EINVAL; /* sequence not minimal */
-					goto stop;
-				}
-				break;
+			case 2:	ch = byte;			/* 1st byte */
+					ch <<= 6;
+					ch += *utf8p++;		/* 2nd byte */
+					ch <<= 6;
+					ch += *utf8p++;		/* 3rd byte */
+					ch -= 0x000E2080UL;
+					if (ch < 0x0800)
+						goto invalid;
+					ucs_ch = ch;
+					break;
+
+			case 3:	ch = byte;			/* 1st byte */
+					ch <<= 6;
+					ch += *utf8p++;		/* 2nd byte */
+					ch <<= 6;
+					ch += *utf8p++;		/* 3rd byte */
+					ch <<= 6;
+			        ch += *utf8p++;		/* 4th byte */
+					ch -= 0x03C82080UL + SP_HALF_BASE;
+					ucs_ch = (ch >> SP_HALF_SHIFT) + SP_HIGH_FIRST;
+					*ucsp++ = swapbytes ? NXSwapShort(ucs_ch) : ucs_ch;
+					if (ucsp >= bufend)
+						goto toolong;
+					ucs_ch = (ch & SP_HALF_MASK) + SP_LOW_FIRST;
+					*ucsp++ = swapbytes ? NXSwapShort(ucs_ch) : ucs_ch;
+			        continue;
+
 			default:
-				result = EINVAL;
-				goto stop;
+					goto invalid;
 			}
-
-			/* extract bits 0 - 5 from final byte */
-			if (((byte = *utf8p++) & 0xc0) != 0x80) {
-				result = EINVAL;
-				goto stop;
-			}
-			utf8len--;
-			ucs_ch += (byte & 0x3F);  
-
 			if (decompose) {
 				u_int16_t comb_ch[2];
 
@@ -304,17 +329,13 @@ utf8_decodestr(utf8p, utf8len, ucsp, ucslen, buflen, altslash, flags)
 
 				if (comb_ch[0]) {
 					*ucsp++ = swapbytes ? NXSwapShort(ucs_ch) : ucs_ch;
-					if (ucsp >= bufend) {
-						result = ENAMETOOLONG;
-						goto stop;
-					}
+					if (ucsp >= bufend)
+						goto toolong;
 					ucs_ch = comb_ch[0];
 					if (comb_ch[1]) {
 						*ucsp++ = swapbytes ? NXSwapShort(ucs_ch) : ucs_ch;
-						if (ucsp >= bufend) {
-							result = ENAMETOOLONG;
-							goto stop;
-						}
+						if (ucsp >= bufend)
+							goto toolong;
 						ucs_ch = comb_ch[1];
 					}
 				}
@@ -331,18 +352,24 @@ utf8_decodestr(utf8p, utf8len, ucsp, ucslen, buflen, altslash, flags)
 			if (ucs_ch == UCS_ALT_NULL)
 				ucs_ch = '\0';
 		}
-
 		if (ucs_ch == altslash)
 			ucs_ch = '/';
-		if (swapbytes)
-			ucs_ch = NXSwapShort(ucs_ch);
 
-		*ucsp++ = ucs_ch;
+		*ucsp++ = swapbytes ? NXSwapShort(ucs_ch) : ucs_ch;
 	}
-stop:
+
+exit:
 	*ucslen = (u_int8_t*)ucsp - (u_int8_t*)bufstart;
 
 	return (result);
+
+invalid:
+	result = EINVAL;
+	goto exit;
+
+toolong:
+	result = ENAMETOOLONG;
+	goto exit;
 }
 
 
@@ -505,7 +532,7 @@ static unsigned char combining_char[8*36] = {
 
 /* CYRILLIC codepoints 0x0400 ~ 0x04FF */
 static const unsigned long __CyrillicDecompBitmap[] = {
-    0x40000040, 0x00000040, 0x00004000, 0x00000000,	/* 0x0400 */
+    0x510A0040, 0x00000040, 0x0000510A, 0x00000000,	/* 0x0400 */
     0x00000000, 0x00000000, 0x00000000, 0x00000000,	/* 0x0480 */
 };
 
@@ -518,7 +545,7 @@ static const unsigned long __CJKDecompBitmap[] = {
 	(table[(unicodeVal) / 32] & (1 << (31 - ((unicodeVal) % 32))))
 
 /*
- * ucs_decompose - decompose a composed UCS-2 char
+ * ucs_decompose - decompose a composed Unicode char
  *
  * Composed Unicode characters are forbidden on
  * HFS Plus volumes. ucs_decompose will convert a
@@ -562,9 +589,17 @@ ucs_decompose(register u_int16_t ch, u_int16_t *cmb)
 		/* Handle CYRILLIC LETTERs */
 		switch(ch) {
 		case 0x0401: base = 0x0415; cmb[0] = 0x0308; break; /*  */
+		case 0x0403: base = 0x0413; cmb[0] = 0x0301; break; /*  */
+		case 0x0407: base = 0x0406; cmb[0] = 0x0308; break; /*  */
+		case 0x040C: base = 0x041A; cmb[0] = 0x0301; break; /*  */
+		case 0x040E: base = 0x0423; cmb[0] = 0x0306; break; /*  */
 		case 0x0419: base = 0x0418; cmb[0] = 0x0306; break; /*  */
 		case 0x0439: base = 0x0438; cmb[0] = 0x0306; break; /*  */
 		case 0x0451: base = 0x0435; cmb[0] = 0x0308; break; /*  */
+		case 0x0453: base = 0x0433; cmb[0] = 0x0301; break; /*  */
+		case 0x0457: base = 0x0456; cmb[0] = 0x0308; break; /*  */
+		case 0x045C: base = 0x043A; cmb[0] = 0x0301; break; /*  */
+		case 0x045E: base = 0x0443; cmb[0] = 0x0306; break; /*  */
 		
 		default:
 			/* Should not be hit from bit map table */
@@ -761,7 +796,7 @@ static const unsigned long __CJKCombBitmap[] = {
 
 
 /*
- * ucs_combine - generate a precomposed UCS-2 char
+ * ucs_combine - generate a precomposed Unicode char
  *
  * Precomposed Unicode characters are required for some volume
  * formats and network protocols.  ucs_combine will combine a
@@ -806,6 +841,10 @@ ucs_combine(u_int16_t base, u_int16_t comb)
 			switch (base) {
 			case 0x00DC:  return (0x01D7);
 			case 0x00FC:  return (0x01D8);
+			case 0x0413:  return (0x0403);
+			case 0x041A:  return (0x040C);
+			case 0x0433:  return (0x0453);
+			case 0x043A:  return (0x045C);
 			} break;
 		case 0x0304:
 			switch (base) {
@@ -817,12 +856,16 @@ ucs_combine(u_int16_t base, u_int16_t comb)
 		case 0x0306:
 			switch (base) {
 			case 0x0418:  return (0x0419);
+			case 0x0423:  return (0x040E);
 			case 0x0438:  return (0x0439);
+			case 0x0443:  return (0x045E);
 			} break;
 		case 0x0308:
 			switch (base) {
+			case 0x0406:  return (0x0407);
 			case 0x0415:  return (0x0401);
 			case 0x0435:  return (0x0451);
+			case 0x0456:  return (0x0457);
 			} break;
 		case 0x030C:
 			switch (base) {

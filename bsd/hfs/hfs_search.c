@@ -604,6 +604,7 @@ InsertMatch( struct vnode *root_vp, struct uio *a_uio, CatalogNodeData *cnp,
 	rovingVariableBuffer = variableBuffer;
 	
 	INIT_CATALOGDATA(&catalogInfo.nodeData, 0);
+	catalogInfo.nodeData.cnd_iNodeNumCopy = 0;
 
 	/* The packing call below expects a struct hfsCatalogInfo */
 	bcopy(cnp, &catalogInfo.nodeData, (cnp->cnd_type == kCatalogFileNode) ?

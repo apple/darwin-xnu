@@ -1071,7 +1071,9 @@ struct proc *a_p;
 
     if (((alist->volattr == 0) && ((alist->commonattr & HFS_ATTR_CMN_LOOKUPMASK) != 0)) ||
         ((alist->dirattr & HFS_ATTR_DIR_LOOKUPMASK) != 0) ||
-        ((alist->fileattr & HFS_ATTR_FILE_LOOKUPMASK) != 0)) {
+        ((alist->fileattr & HFS_ATTR_FILE_LOOKUPMASK) != 0) ||
+        ((alist->commonattr & (ATTR_CMN_OBJID | ATTR_CMN_OBJPERMANENTID))
+          && (hp->h_meta->h_metaflags & IN_DATANODE))) {
 
         /* lock catalog b-tree */
         error = hfs_metafilelocking(VTOHFS(vp), kHFSCatalogFileID, LK_SHARED, ap->a_p);

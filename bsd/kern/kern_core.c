@@ -51,6 +51,7 @@
 
 #include <mach-o/loader.h>
 #include <mach/vm_region.h>
+#include <mach/vm_statistics.h>
 
 #include <vm/vm_kern.h>
 
@@ -317,7 +318,7 @@ coredump(p)
 		 *	Note: if we can't read, then we end up with
 		 *	a hole in the file.
 		 */
-		if ((maxprot & VM_PROT_READ) == VM_PROT_READ) {
+		if ((maxprot & VM_PROT_READ) == VM_PROT_READ && vbr.user_tag != VM_MEMORY_IOKIT) {
 			error = vn_rdwr(UIO_WRITE, vp, (caddr_t)vmoffset, size, foffset,
 				UIO_USERSPACE, IO_NODELOCKED|IO_UNIT, cred, (int *) 0, p);
 		}

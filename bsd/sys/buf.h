@@ -158,7 +158,7 @@ struct buf {
 #define	B_WANTED	0x00800000	/* Process wants this buffer. */
 #define	B_WRITE		0x00000000	/* Write buffer (pseudo flag). */
 #define	B_WRITEINPROG	0x01000000	/* Write in progress. */
-#define	B_UNUSED0	0x02000000	/* Unused bit */
+#define	B_HDRALLOC	0x02000000	/* zone allocated buffer header */
 #define	B_UNUSED1	0x04000000	/* Unused bit */
 #define B_NEED_IODONE   0x08000000
 								/* need to do a biodone on the */
@@ -205,13 +205,14 @@ extern struct buf *buf;		/* The buffer headers. */
 /*
  * Definitions for the buffer free lists.
  */
-#define	BQUEUES		5		/* number of free buffer queues */
+#define	BQUEUES		6		/* number of free buffer queues */
 
 #define	BQ_LOCKED	0		/* super-blocks &c */
 #define	BQ_LRU		1		/* lru, useful buffers */
 #define	BQ_AGE		2		/* rubbish */
 #define	BQ_EMPTY	3		/* buffer headers with no memory */
 #define BQ_META		4		/* buffer containing metadata */
+#define BQ_LAUNDRY	5		/* buffers that need cleaning */
 
 __BEGIN_DECLS
 int	allocbuf __P((struct buf *, int));

@@ -100,6 +100,7 @@ extern void reassignbuf(struct buf *, struct vnode *);
 static struct buf *getnewbuf(int slpflag, int slptimeo, int *queue);
 
 extern int niobuf;		/* The number of IO buffer headers for cluster IO */
+int blaundrycnt;
 
 #if TRACE
 struct	proc *traceproc;
@@ -152,7 +153,7 @@ int need_iobuffer;
 
 #define BHASHENTCHECK(bp)	\
 	if ((bp)->b_hash.le_prev != (struct buf **)0xdeadbeef)	\
-		panic("%x: b_hash.le_prev is deadb", (bp));
+		panic("%x: b_hash.le_prev is not deadbeef", (bp));
 
 #define BLISTNONE(bp)	\
 	(bp)->b_hash.le_next = (struct buf *)0;	\
@@ -267,6 +268,19 @@ bremfree(bp)
 	bp->b_timestamp = 0; 
 }
 
+static __inline__ void
+bufhdrinit(struct buf *bp)
+{
+	bzero((char *)bp, sizeof *bp);
+	bp->b_dev = NODEV;
+	bp->b_rcred = NOCRED;
+	bp->b_wcred = NOCRED;
+	bp->b_vnbufs.le_next = NOLIST;
+	bp->b_flags = B_INVAL;
+
+	return;
+}
+
 /*
  * Initialize buffers and hash links for buffers.
  */
@@ -278,9 +292,8 @@ bufinit()
 	register int i;
 	int metabuf;
 	long whichq;
-#if ZALLOC_METADATA
 	static void bufzoneinit();
-#endif /* ZALLOC_METADATA */
+	static void bcleanbuf_thread_init();
 
 	/* Initialize the buffer queues ('freelists') and the hash table */
 	for (dp = bufqueues; dp < &bufqueues[BQUEUES]; dp++)
@@ -294,17 +307,13 @@ bufinit()
 	/* Initialize the buffer headers */
 	for (i = 0; i < nbuf; i++) {
 		bp = &buf[i];
-		bzero((char *)bp, sizeof *bp);
-		bp->b_dev = NODEV;
-		bp->b_rcred = NOCRED;
-		bp->b_wcred = NOCRED;
-		bp->b_vnbufs.le_next = NOLIST;
-		bp->b_flags = B_INVAL;
+		bufhdrinit(bp);
+
 		/*
 		 * metabuf buffer headers on the meta-data list and
 		 * rest of the buffer headers on the empty list
 		 */
-		if (--metabuf ) 
+		if (--metabuf) 
 			whichq = BQ_META;
 		else 
 			whichq = BQ_EMPTY;
@@ -317,24 +326,20 @@ bufinit()
 
 	for (; i < nbuf + niobuf; i++) {
 		bp = &buf[i];
-		bzero((char *)bp, sizeof *bp);
-		bp->b_dev = NODEV;
-		bp->b_rcred = NOCRED;
-		bp->b_wcred = NOCRED;
-		bp->b_vnbufs.le_next = NOLIST;
-		bp->b_flags = B_INVAL;
+		bufhdrinit(bp);
 		binsheadfree(bp, &iobufqueue, -1);
 	}
 
 	printf("using %d buffer headers and %d cluster IO buffer headers\n",
 		nbuf, niobuf);
 
-#if ZALLOC_METADATA
-	/* Set up zones for meta-data */
+	/* Set up zones used by the buffer cache */
 	bufzoneinit();
-#endif
 
-#if XXX
+	/* start the bcleanbuf() thread */
+	bcleanbuf_thread_init();
+
+#if 0	/* notyet */
 	/* create a thread to do dynamic buffer queue balancing */
 	bufq_balance_thread_init();
 #endif /* XXX */
@@ -1182,6 +1187,10 @@ struct meta_zone_entry meta_zones[] = {
 	{NULL, (MINMETA * 8), 512 * (MINMETA * 8), "buf.4096" },
 	{NULL, 0, 0, "" } /* End */
 };
+#endif /* ZALLOC_METADATA */
+
+zone_t buf_hdr_zone;
+int buf_hdr_count;
 
 /*
  * Initialize the meta data zones
@@ -1189,6 +1198,7 @@ struct meta_zone_entry meta_zones[] = {
 static void
 bufzoneinit(void)
 {
+#if ZALLOC_METADATA
 	int i;
 
 	for (i = 0; meta_zones[i].mz_size != 0; i++) {
@@ -1198,8 +1208,11 @@ bufzoneinit(void)
 					PAGE_SIZE,
 					meta_zones[i].mz_name);
 	}
+#endif /* ZALLOC_METADATA */
+	buf_hdr_zone = zinit(sizeof(struct buf), 32, PAGE_SIZE, "buf headers");
 }
 
+#if ZALLOC_METADATA
 static zone_t
 getbufzone(size_t size)
 {
@@ -1342,7 +1355,8 @@ start:
 	s = splbio();
 	
 	/* invalid request gets empty queue */
-	if ((*queue > BQUEUES) || (*queue < 0))
+	if ((*queue > BQUEUES) || (*queue < 0)
+		|| (*queue == BQ_LAUNDRY) || (*queue == BQ_LOCKED))
 		*queue = BQ_EMPTY;
 
 	/* (*queue == BQUEUES) means no preference */
@@ -1365,14 +1379,24 @@ start:
 			*queue = BQ_EMPTY;
 			goto found;
 		}
-#if DIAGNOSTIC
-		/* with UBC this is a fatal condition */
-		panic("getnewbuf: No useful buffers");
-#else
+
+		/* Create a new temparory buffer header */
+		bp = (struct buf *)zalloc(buf_hdr_zone);
+	
+		if (bp) {
+			bufhdrinit(bp);
+			BLISTNONE(bp);
+			binshash(bp, &invalhash);
+			SET(bp->b_flags, B_HDRALLOC);
+			*queue = BQ_EMPTY;
+			binsheadfree(bp, &bufqueues[BQ_EMPTY], BQ_EMPTY);
+			buf_hdr_count++;
+			goto found;
+		}
+
 		/* Log this error condition */
 		printf("getnewbuf: No useful buffers");
-#endif  /* DIAGNOSTIC */
-	
+
 		/* wait for a free buffer of any kind */
 		needbuffer = 1;
 		bufstats.bufs_sleeps++;
@@ -1480,10 +1504,15 @@ bcleanbuf(struct buf *bp)
 	if (bp->b_hash.le_prev == (struct buf **)0xdeadbeef) 
 		panic("bcleanbuf: le_prev is deadbeef");
 
-	/* If buffer was a delayed write, start it, and return 1 */
+	/*
+	 * If buffer was a delayed write, start the IO by queuing
+	 * it on the LAUNDRY queue, and return 1
+	 */
 	if (ISSET(bp->b_flags, B_DELWRI)) {
 		splx(s);
-		bawrite (bp);
+		binstailfree(bp, &bufqueues[BQ_LAUNDRY], BQ_LAUNDRY);
+		blaundrycnt++;
+		wakeup(&blaundrycnt);
 		return (1);
 	}
 
@@ -1683,7 +1712,8 @@ vfs_bufstats()
 	register struct buf *bp;
 	register struct bqueues *dp;
 	int counts[MAXBSIZE/CLBYTES+1];
-	static char *bname[BQUEUES] = { "LOCKED", "LRU", "AGE", "EMPTY", "META" };
+	static char *bname[BQUEUES] =
+		{ "LOCKED", "LRU", "AGE", "EMPTY", "META", "LAUNDRY" };
 
 	for (dp = bufqueues, i = 0; dp < &bufqueues[BQUEUES]; dp++, i++) {
 		count = 0;
@@ -1924,6 +1954,12 @@ bufq_balance_thread_init()
 		bufqlim[BQ_META].bl_target = nbuftarget/4;
 		bufqlim[BQ_META].bl_stale = META_IS_STALE;
 
+		/* LAUNDRY queue */
+		bufqlim[BQ_LOCKED].bl_nlow = 0;
+		bufqlim[BQ_LOCKED].bl_nlhigh = 32;
+		bufqlim[BQ_LOCKED].bl_target = 0;
+		bufqlim[BQ_LOCKED].bl_stale = 30;
+
 		buqlimprt(1);
 	}
 
@@ -1992,8 +2028,8 @@ balancebufq(int q)
 	if ((q < 0) || (q >= BQUEUES))
 		goto out;
 
-	/* LOCKED queue MUST not be balanced */
-	if (q == BQ_LOCKED)
+	/* LOCKED or LAUNDRY queue MUST not be balanced */
+	if ((q == BQ_LOCKED) || (q == BQ_LAUNDRY))
 		goto out;
 
 	n = (bufqlim[q].bl_num - bufqlim[q].bl_target);
@@ -2072,7 +2108,8 @@ void
 buqlimprt(int all)
 {
 	int i;
-    static char *bname[BQUEUES] = { "LOCKED", "LRU", "AGE", "EMPTY", "META" };
+    static char *bname[BQUEUES] =
+		{ "LOCKED", "LRU", "AGE", "EMPTY", "META", "LAUNDRY" };
 
 	if (all)
 		for (i = 0; i < BQUEUES; i++) {
@@ -2089,3 +2126,42 @@ buqlimprt(int all)
 			printf("cur = %d, ", (long)bufqlim[i].bl_num);
 		}
 }
+
+/*
+ * If the getnewbuf() calls bcleanbuf() on the same thread
+ * there is a potential for stack overrun and deadlocks.
+ * So we always handoff the work to worker thread for completion
+ */
+
+static void
+bcleanbuf_thread_init()
+{
+	static void bcleanbuf_thread();
+
+	/* create worker thread */
+	kernel_thread(kernel_task, bcleanbuf_thread);
+}
+
+static void
+bcleanbuf_thread()
+{
+	boolean_t 	funnel_state;
+	struct buf *bp;
+
+	funnel_state = thread_funnel_set(kernel_flock, TRUE);
+
+doit:
+	while (blaundrycnt == 0)
+		(void)tsleep((void *)&blaundrycnt, PRIBIO, "blaundry", 60 * hz);
+	bp = TAILQ_FIRST(&bufqueues[BQ_LAUNDRY]);
+	/* Remove from the queue */
+	bremfree(bp);
+	blaundrycnt--;
+	/* do the IO */
+	bawrite(bp);
+	/* start again */
+	goto doit;
+
+	(void) thread_funnel_set(kernel_flock, funnel_state);
+}
+
