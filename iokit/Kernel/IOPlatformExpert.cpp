@@ -995,6 +995,31 @@ IOReturn IODTPlatformExpert::writeNVRAMProperty(
   else return kIOReturnNotReady;
 }
 
+OSDictionary *IODTPlatformExpert::getNVRAMPartitions(void)
+{
+  if (dtNVRAM) return dtNVRAM->getNVRAMPartitions();
+  else return 0;
+}
+
+IOReturn IODTPlatformExpert::readNVRAMPartition(const OSSymbol * partitionID,
+						IOByteCount offset, UInt8 * buffer,
+						IOByteCount length)
+{
+  if (dtNVRAM) return dtNVRAM->readNVRAMPartition(partitionID, offset,
+						  buffer, length);
+  else return kIOReturnNotReady;
+}
+
+IOReturn IODTPlatformExpert::writeNVRAMPartition(const OSSymbol * partitionID,
+						 IOByteCount offset, UInt8 * buffer,
+						 IOByteCount length)
+{
+  if (dtNVRAM) return dtNVRAM->writeNVRAMPartition(partitionID, offset,
+						   buffer, length);
+  else return kIOReturnNotReady;
+}
+
+
 /* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
 
 #undef super

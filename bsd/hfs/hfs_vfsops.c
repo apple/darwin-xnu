@@ -109,7 +109,6 @@
 #include <sys/mount.h>
 #include <sys/malloc.h>
 #include <sys/stat.h>
-#include <dev/disk.h>
 #include <sys/lock.h>
 #include <miscfs/specfs/specdev.h>
 #include <hfs/hfs_mount.h>
@@ -134,6 +133,14 @@ int hfs_dbg_tree = 0;
 int hfs_dbg_err = 0;
 int hfs_dbg_test = 0;
 #endif
+
+
+/*
+ * These come from IOKit/storage/IOMediaBSDClient.h
+ */
+#define DKIOCGETBLOCKSIZE            _IOR('d', 24, u_int32_t)
+#define DKIOCSETBLOCKSIZE            _IOW('d', 24, u_int32_t)
+#define DKIOCGETBLOCKCOUNT           _IOR('d', 25, u_int64_t)
 
 /*
  * HFS File System globals:
@@ -640,7 +647,8 @@ hfs_reload(mountp, cred, p)
 	register struct vnode *vp, *nvp, *devvp;
 	struct hfsnode *hp;
 	struct buf *bp;
-	int 	size, error, i;
+	int sectorsize;
+	int error, i;
 	struct hfsmount *hfsmp;
 	struct HFSPlusVolumeHeader *vhp;
 	ExtendedVCB *vcb;
@@ -666,20 +674,18 @@ hfs_reload(mountp, cred, p)
 	/*
 	 * Re-read VolumeHeader from disk.
 	 */
-	size = kMDBSize;
-	error = bread(	hfsmp->hfs_devvp,
-			IOBLKNOFORBLK((vcb->hfsPlusIOPosOffset / 512) + kMasterDirectoryBlock, size),
-			IOBYTECCNTFORBLK(kMasterDirectoryBlock, kMDBSize, size),
-			NOCRED,
-			&bp);
+	sectorsize = hfsmp->hfs_phys_block_size;
+
+	error = meta_bread(hfsmp->hfs_devvp,
+			(vcb->hfsPlusIOPosOffset / sectorsize) + HFS_PRI_SECTOR(sectorsize),
+			sectorsize, NOCRED, &bp);
 	if (error) {
         	if (bp != NULL)
         		brelse(bp);
 		return (error);
 	}
 
-	vhp = (HFSPlusVolumeHeader *) ((char *)bp->b_data +
-			IOBYTEOFFSETFORBLK((vcb->hfsPlusIOPosOffset / 512) + kMasterDirectoryBlock, size));
+	vhp = (HFSPlusVolumeHeader *) (bp->b_data + HFS_PRI_OFFSET(sectorsize));
 
 	if ((ValidVolumeHeader(vhp) != 0) || (vcb->blockSize != SWAP_BE32 (vhp->blockSize))) {
 		brelse(bp);
@@ -833,8 +839,10 @@ hfs_mountfs(struct vnode *devvp, struct mount *mp, struct proc *p, struct hfs_mo
     HFSMasterDirectoryBlock		*mdbp;
     int                         ronly;
     struct ucred				*cred;
-	u_long diskBlks;
-	u_long blksize;
+	u_int64_t disksize;
+	u_int64_t blkcnt;
+	u_int32_t blksize;
+	u_int32_t minblksize;
     DBG_VFS(("hfs_mountfs: mp = 0x%lX\n", (u_long)mp));
 
     dev = devvp->v_rdev;
@@ -857,25 +865,59 @@ hfs_mountfs(struct vnode *devvp, struct mount *mp, struct proc *p, struct hfs_mo
     if ((retval = VOP_OPEN(devvp, ronly ? FREAD : FREAD|FWRITE, FSCRED, p)))
         return (retval);
 
-    blksize = kHFSBlockSize;
-    DBG_VFS(("hfs_mountfs: size = %d (DEV_BSIZE = %d).\n", blksize, DEV_BSIZE));
+	bp = NULL;
+	hfsmp = NULL;
+	minblksize = kHFSBlockSize;
 
-    bp = NULL;
-    hfsmp = NULL;
+	/* Get the real physical block size. */
+	if (VOP_IOCTL(devvp, DKIOCGETBLOCKSIZE, (caddr_t)&blksize, 0, cred, p)) {
+		retval = ENXIO;
+		goto error_exit;
+	}
+	/* Switch to 512 byte sectors (temporarily) */
+	if (blksize > 512) {
+		u_int32_t size512 = 512;
 
-	/*	
-	 * XXX SER Currently we only support 512 block size systems. This might change
-	 * So this is a place holder to remind us that the mdb might not be 512 aligned
-	 * retval = VOP_IOCTL(devvp, DKIOCGETBLOCKSIZE, &blksize, FWRITE, cred, p);
-	 * if (retval) return retval;
+		if (VOP_IOCTL(devvp, DKIOCSETBLOCKSIZE, (caddr_t)&size512, FWRITE, cred, p)) {
+			retval = ENXIO;
+			goto error_exit;
+		}
+	}
+	/* Get the number of 512 byte physical blocks. */
+	if (VOP_IOCTL(devvp, DKIOCGETBLOCKCOUNT, (caddr_t)&blkcnt, 0, cred, p)) {
+		retval = ENXIO;
+		goto error_exit;
+	}
+	/* Compute an accurate disk size (i.e. within 512 bytes) */
+	disksize = blkcnt * (u_int64_t)512;
+
+	/*
+	 * For large volumes use a 4K physical block size.
+	 */
+	if (blkcnt > (u_int64_t)0x000000007fffffff) {
+		minblksize = blksize = 4096;
+	}
+
+	/* Now switch to our prefered physical block size. */
+	if (blksize > 512) {
+		if (VOP_IOCTL(devvp, DKIOCSETBLOCKSIZE, (caddr_t)&blksize, FWRITE, cred, p)) {
+			retval = ENXIO;
+			goto error_exit;
+		}
+		/* Get the count of physical blocks. */
+		if (VOP_IOCTL(devvp, DKIOCGETBLOCKCOUNT, (caddr_t)&blkcnt, 0, cred, p)) {
+			retval = ENXIO;
+			goto error_exit;
+		}
+	}
+
+	/*
+	 * At this point:
+	 *   minblksize is the minimum physical block size
+	 *   blksize has our prefered physical block size
+	 *   blkcnt has the total number of physical blocks
 	 */
 
-    /*
-	 * the next three lines should probably be replaced
-	 * with a call to the yet unimplemented function VOP_SETBLOCKSIZE
-	 */
-	retval = VOP_IOCTL(devvp, DKIOCSETBLOCKSIZE, &blksize, FWRITE, cred, p);
-	if (retval) return retval;
 	devvp->v_specsize = blksize;
 
 	/* cache the IO attributes */
@@ -885,23 +927,16 @@ hfs_mountfs(struct vnode *devvp, struct mount *mp, struct proc *p, struct hfs_mo
 		return (retval);
 	}
 
-    DBG_VFS(("hfs_mountfs: reading MDB [block no. %d + %d bytes, size %d bytes]...\n",
-             IOBLKNOFORBLK(kMasterDirectoryBlock, blksize),
-             IOBYTEOFFSETFORBLK(kMasterDirectoryBlock, blksize),
-             IOBYTECCNTFORBLK(kMasterDirectoryBlock, kMDBSize, blksize)));
+	if ((retval = meta_bread(devvp, HFS_PRI_SECTOR(blksize), blksize, cred, &bp))) {
+		goto error_exit;
+	}
+	mdbp = (HFSMasterDirectoryBlock*) (bp->b_data + HFS_PRI_OFFSET(blksize));
 
-    if ((retval = bread(devvp, IOBLKNOFORBLK(kMasterDirectoryBlock, blksize),
-    						   IOBYTECCNTFORBLK(kMasterDirectoryBlock, kMDBSize, blksize), cred, &bp))) {
-        goto error_exit;
-	};
-    mdbp = (HFSMasterDirectoryBlock*) ((char *)bp->b_data + IOBYTEOFFSETFORBLK(kMasterDirectoryBlock, blksize));
-
-    MALLOC(hfsmp, struct hfsmount *, sizeof(struct hfsmount), M_HFSMNT, M_WAITOK);
-    bzero(hfsmp, sizeof(struct hfsmount));
+	MALLOC(hfsmp, struct hfsmount *, sizeof(struct hfsmount), M_HFSMNT, M_WAITOK);
+	bzero(hfsmp, sizeof(struct hfsmount));
 
 	simple_lock_init(&hfsmp->hfs_renamelock);
 
-    DBG_VFS(("hfs_mountfs: Initializing hfsmount structure at 0x%lX...\n", (u_long)hfsmp));
     /*
      *  Init the volume information structure
      */
@@ -911,9 +946,7 @@ hfs_mountfs(struct vnode *devvp, struct mount *mp, struct proc *p, struct hfs_mo
     hfsmp->hfs_raw_dev = devvp->v_rdev;
     hfsmp->hfs_devvp = devvp;
     hfsmp->hfs_phys_block_size = blksize;
-    
-    /* The hfs_log_block_size field is updated in the respective hfs_MountHFS[Plus]Volume routine */
-    hfsmp->hfs_logBlockSize = BestBlockSizeFit(SWAP_BE32 (mdbp->drAlBlkSiz), MAXBSIZE, hfsmp->hfs_phys_block_size);
+    hfsmp->hfs_phys_block_count = blkcnt;
     hfsmp->hfs_fs_ronly = ronly;
     hfsmp->hfs_unknownpermissions = ((mp->mnt_flag & MNT_UNKNOWNPERMISSIONS) != 0);
 	if (args) {
@@ -941,82 +974,136 @@ hfs_mountfs(struct vnode *devvp, struct mount *mp, struct proc *p, struct hfs_mo
 			hfsmp->hfs_file_mask = UNKNOWNPERMISSIONS & DEFFILEMODE;	/* 0666: no --x by default? */
 		};
 	};
-	
-	/*	See above comment for DKIOCGETBLOCKSIZE
-	 * retval = VOP_IOCTL(devvp, DKIOCSETBLOCKSIZE, &blksize, FWRITE, cred, p);
-	 * if (retval) return retval;
-	 */
 
-	retval = VOP_IOCTL(devvp, DKIOCNUMBLKS, (caddr_t)&diskBlks, 0, cred, p);
-	if (retval) return retval;
-
-	if (SWAP_BE16 (mdbp->drSigWord) == kHFSPlusSigWord) {
-        /* Enidan swap volume header in place */
-        /* SWAP_HFS_PLUS_VOLUME_HEADER ((HFSPlusVolumeHeader *)bp->b_data); */
-
-		/* mount wrapper-less HFS-Plus volume */
-		(void) hfs_getconverter(0, &hfsmp->hfs_get_unicode, &hfsmp->hfs_get_hfsname);
-		retval = hfs_MountHFSPlusVolume(hfsmp, (HFSPlusVolumeHeader*) bp->b_data, 0, diskBlks, p);
-
-        /* Enidan un-swap volume header in place */
-        /* SWAP_HFS_PLUS_VOLUME_HEADER ((HFSPlusVolumeHeader *)bp->b_data); */
-
-	} else if (SWAP_BE16 (mdbp->drEmbedSigWord) == kHFSPlusSigWord) {
-		u_long embBlkOffset;
-		HFSPlusVolumeHeader	*vhp;
-
-		embBlkOffset = SWAP_BE16 (mdbp->drAlBlSt) +
-		    (SWAP_BE16 (mdbp->drEmbedExtent.startBlock) * (SWAP_BE32 (mdbp->drAlBlkSiz)/kHFSBlockSize));
-		/* calculate virtual number of 512-byte sectors */
-		diskBlks = SWAP_BE16 (mdbp->drEmbedExtent.blockCount) * (SWAP_BE32 (mdbp->drAlBlkSiz)/kHFSBlockSize);
-
-		brelse(bp);
-		bp = NULL;		/* done with MDB, go grab Volume Header */
-		mdbp = NULL;
-
-		retval = bread(	devvp,
-				IOBLKNOFORBLK(kMasterDirectoryBlock+embBlkOffset, blksize),
-				IOBYTECCNTFORBLK(kMasterDirectoryBlock+embBlkOffset, kMDBSize, blksize),
-				cred,
-				&bp);
-		if (retval) {
+	/* Mount a standard HFS disk */
+	if ((SWAP_BE16(mdbp->drSigWord) == kHFSSigWord) &&
+	    (SWAP_BE16(mdbp->drEmbedSigWord) != kHFSPlusSigWord)) {
+		if (devvp == rootvp) {
+			retval = EINVAL;  /* Cannot root from HFS standard disks */
 			goto error_exit;
-		};
-		vhp = (HFSPlusVolumeHeader*) ((char *)bp->b_data + IOBYTEOFFSETFORBLK(kMasterDirectoryBlock, blksize));
-
-        /* Enidan swap volume header in place */
-        /* SWAP_HFS_PLUS_VOLUME_HEADER (vhp); */
-
-		/* mount embedded HFS Plus volume */
-		(void) hfs_getconverter(0, &hfsmp->hfs_get_unicode, &hfsmp->hfs_get_hfsname);
-		retval = hfs_MountHFSPlusVolume(hfsmp, vhp, embBlkOffset, diskBlks, p);
-
-        /* Enidan un-swap volume header in place */
-        /* SWAP_HFS_PLUS_VOLUME_HEADER (vhp); */
-
-	} else if (devvp != rootvp) {
+		}
+		/* HFS disks can only use 512 byte physical blocks */
+		if (blksize > kHFSBlockSize) {
+			blksize = kHFSBlockSize;
+			if (VOP_IOCTL(devvp, DKIOCSETBLOCKSIZE, (caddr_t)&blksize, FWRITE, cred, p)) {
+				retval = ENXIO;
+				goto error_exit;
+			}
+			if (VOP_IOCTL(devvp, DKIOCGETBLOCKCOUNT, (caddr_t)&blkcnt, 0, cred, p)) {
+				retval = ENXIO;
+				goto error_exit;
+			}
+			/* XXX do we need to call vfs_init_io_attributes again ? */
+			devvp->v_specsize = blksize;
+			hfsmp->hfs_phys_block_size = blksize;
+			hfsmp->hfs_phys_block_count = blkcnt;
+		}
 		if (args) {
 			hfsmp->hfs_encoding = args->hfs_encoding;
 			HFSTOVCB(hfsmp)->volumeNameEncodingHint = args->hfs_encoding;
-
 
 			/* establish the timezone */
 			gTimeZone = args->hfs_timezone;
 		}
 
 		retval = hfs_getconverter(hfsmp->hfs_encoding, &hfsmp->hfs_get_unicode, &hfsmp->hfs_get_hfsname);
-		if (retval) goto error_exit;
+		if (retval)
+			goto error_exit;
 
-		/* mount HFS volume */
-		retval = hfs_MountHFSVolume( hfsmp, mdbp, diskBlks, p);
-		
+		retval = hfs_MountHFSVolume(hfsmp, mdbp, p);
 		if (retval)
 			(void) hfs_relconverter(hfsmp->hfs_encoding);
 
-	} else {
-		/* sorry, we cannot root from HFS */
-		retval = EINVAL;
-    }
+	} else /* Mount an HFS Plus disk */ {
+		HFSPlusVolumeHeader *vhp;
+		off_t embeddedOffset;
+	
+		/* Get the embedded Volume Header */
+		if (SWAP_BE16(mdbp->drEmbedSigWord) == kHFSPlusSigWord) {
+			embeddedOffset = SWAP_BE16(mdbp->drAlBlSt) * kHFSBlockSize;
+			embeddedOffset += (u_int64_t)SWAP_BE16(mdbp->drEmbedExtent.startBlock) *
+			                  (u_int64_t)SWAP_BE32(mdbp->drAlBlkSiz);
+
+			disksize = (u_int64_t)SWAP_BE16(mdbp->drEmbedExtent.blockCount) *
+			           (u_int64_t)SWAP_BE32(mdbp->drAlBlkSiz);
+
+			hfsmp->hfs_phys_block_count = disksize / blksize;
+	
+			brelse(bp);
+			bp = NULL;
+			mdbp = NULL;
+
+			/*
+			 * If the embedded volume doesn't start on a block
+			 * boundary, then switch the device to a 512-byte
+			 * block size so everything will line up on a block
+			 * boundary.
+			 */
+			if ((embeddedOffset % blksize) != 0) {
+				printf("HFS Mount: embedded volume offset not"
+				    " a multiple of physical block size (%d);"
+				    " switching to 512\n", blksize);
+				blksize = 512;
+				if (VOP_IOCTL(devvp, DKIOCSETBLOCKSIZE,
+				    (caddr_t)&blksize, FWRITE, cred, p)) {
+					retval = ENXIO;
+					goto error_exit;
+				}
+				if (VOP_IOCTL(devvp, DKIOCGETBLOCKCOUNT,
+				    (caddr_t)&blkcnt, 0, cred, p)) {
+					retval = ENXIO;
+					goto error_exit;
+				}
+				/* XXX do we need to call vfs_init_io_attributes again? */
+				devvp->v_specsize = blksize;
+				/* Note: relative block count adjustment */
+				hfsmp->hfs_phys_block_count *=
+				    hfsmp->hfs_phys_block_size / blksize;
+				hfsmp->hfs_phys_block_size = blksize;
+			}
+
+			retval = meta_bread(devvp, (embeddedOffset / blksize) + HFS_PRI_SECTOR(blksize),
+			               blksize, cred, &bp);
+			if (retval)
+				goto error_exit;
+			vhp = (HFSPlusVolumeHeader*) (bp->b_data + HFS_PRI_OFFSET(blksize));
+
+		} else /* pure HFS+ */ {
+			embeddedOffset = 0;
+			vhp = (HFSPlusVolumeHeader*) mdbp;
+		}
+
+		(void) hfs_getconverter(0, &hfsmp->hfs_get_unicode, &hfsmp->hfs_get_hfsname);
+
+		retval = hfs_MountHFSPlusVolume(hfsmp, vhp, embeddedOffset, disksize, p);
+		/*
+		 * If the backend didn't like our physical blocksize
+		 * then retry with physical blocksize of 512.
+		 */
+		if ((retval == ENXIO) && (blksize > 512) && (blksize != minblksize)) {
+			printf("HFS Mount: could not use physical block size "
+				"(%d) switching to 512\n", blksize);
+			blksize = 512;
+			if (VOP_IOCTL(devvp, DKIOCSETBLOCKSIZE, (caddr_t)&blksize, FWRITE, cred, p)) {
+				retval = ENXIO;
+				goto error_exit;
+			}
+			if (VOP_IOCTL(devvp, DKIOCGETBLOCKCOUNT, (caddr_t)&blkcnt, 0, cred, p)) {
+				retval = ENXIO;
+				goto error_exit;
+			}
+			/* XXX do we need to call vfs_init_io_attributes again ? */
+			devvp->v_specsize = blksize;
+			/* Note: relative block count adjustment (in case this is an embedded volume). */
+    			hfsmp->hfs_phys_block_count *= hfsmp->hfs_phys_block_size / blksize;
+     			hfsmp->hfs_phys_block_size = blksize;
+ 
+			/* Try again with a smaller block size... */
+			retval = hfs_MountHFSPlusVolume(hfsmp, vhp, embeddedOffset, disksize, p);
+		}
+		if (retval)
+			(void) hfs_relconverter(0);
+	}
 
 	if ( retval ) {
 		goto error_exit;
@@ -1754,15 +1841,19 @@ short hfs_flushvolumeheader(struct hfsmount *hfsmp, int waitfor)
     FCB						*fcb;
     HFSPlusVolumeHeader		*volumeHeader;
     int						retval;
-    int                     size = sizeof(HFSPlusVolumeHeader);
     struct buf 				*bp;
     int						i;
+	int sectorsize;
+	int priIDSector;
 
 	if (vcb->vcbSigWord != kHFSPlusSigWord)
 		return EINVAL;
 
-	retval = bread(hfsmp->hfs_devvp, IOBLKNOFORBLK((vcb->hfsPlusIOPosOffset / 512) + kMasterDirectoryBlock, size),
-					IOBYTECCNTFORBLK(kMasterDirectoryBlock, kMDBSize, size), NOCRED, &bp);
+	sectorsize = hfsmp->hfs_phys_block_size;
+	priIDSector = (vcb->hfsPlusIOPosOffset / sectorsize) +
+			HFS_PRI_SECTOR(sectorsize);
+
+	retval = meta_bread(hfsmp->hfs_devvp, priIDSector, sectorsize, NOCRED, &bp);
 	if (retval) {
 	    DBG_VFS((" hfs_flushvolumeheader bread return error! (%d)\n", retval));
 		if (bp) brelse(bp);
@@ -1773,8 +1864,7 @@ short hfs_flushvolumeheader(struct hfsmount *hfsmp, int waitfor)
     DBG_ASSERT(bp->b_data != NULL);
     DBG_ASSERT(bp->b_bcount == size);
 
-	volumeHeader = (HFSPlusVolumeHeader *)((char *)bp->b_data +
-					IOBYTEOFFSETFORBLK((vcb->hfsPlusIOPosOffset / 512) + kMasterDirectoryBlock, size));
+	volumeHeader = (HFSPlusVolumeHeader *)((char *)bp->b_data + HFS_PRI_OFFSET(sectorsize));
 
 	/*
 	 * For embedded HFS+ volumes, update create date if it changed
@@ -1785,12 +1875,11 @@ short hfs_flushvolumeheader(struct hfsmount *hfsmp, int waitfor)
 		struct buf 				*bp2;
 		HFSMasterDirectoryBlock	*mdb;
 
-		retval = bread(hfsmp->hfs_devvp, IOBLKNOFORBLK(kMasterDirectoryBlock, kMDBSize),
-						IOBYTECCNTFORBLK(kMasterDirectoryBlock, kMDBSize, kMDBSize), NOCRED, &bp2);
+		retval = meta_bread(hfsmp->hfs_devvp, HFS_PRI_SECTOR(sectorsize), sectorsize, NOCRED, &bp2);
 		if (retval != E_NONE) {
 			if (bp2) brelse(bp2);
 		} else {
-			mdb = (HFSMasterDirectoryBlock *)((char *)bp2->b_data + IOBYTEOFFSETFORBLK(kMasterDirectoryBlock, kMDBSize));
+			mdb = (HFSMasterDirectoryBlock *)(bp2->b_data + HFS_PRI_OFFSET(sectorsize));
 
 			if ( SWAP_BE32 (mdb->drCrDate) != vcb->localCreateDate )
 			  {

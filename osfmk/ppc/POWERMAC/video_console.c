@@ -155,9 +155,10 @@ static char tab_stops[255];
 static int  scrreg_top, scrreg_bottom;
 
 /* Misc */
-void	vc_initialize(void);
-void 	vc_flush_forward_buffer(void);
-void	vc_store_char(unsigned char);
+static void	vc_initialize(void);
+static void 	vc_flush_forward_buffer(void);
+static void	vc_store_char(unsigned char);
+static void 	vc_putchar(char ch);
 
 void	vcattach(void);
 
@@ -165,14 +166,14 @@ void	vcattach(void);
 /*
  * For the color support (Michel Pollet)
  */
-unsigned char vc_color_index_table[33] = 
+static unsigned char vc_color_index_table[33] = 
 	{  0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
 	   1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 2 };
 
-unsigned long vc_color_depth_masks[4] = 
+static unsigned long vc_color_depth_masks[4] = 
 	{ 0x000000FF, 0x00007FFF, 0x00FFFFFF };
 
-unsigned long vc_colors[8][3] = {
+static unsigned long vc_colors[8][3] = {
 	{ 0xFFFFFFFF, 0x00000000, 0x00000000 },	/* black */
 	{ 0x23232323, 0x7C007C00, 0x00FF0000 },	/* red	*/
 	{ 0xb9b9b9b9, 0x03e003e0, 0x0000FF00 },	/* green */
@@ -184,10 +185,10 @@ unsigned long vc_colors[8][3] = {
 	{ 0x00000000, 0x7FFF7FFF, 0x00FFFFFF }	/* white */
 };
 
-unsigned long vc_color_mask = 0;
-unsigned long vc_color_fore = 0;
-unsigned long vc_color_back = 0;
-int vc_normal_background = 1;
+static unsigned long vc_color_mask = 0;
+static unsigned long vc_color_fore = 0;
+static unsigned long vc_color_back = 0;
+static int vc_normal_background = 1;
 
 
 /*
@@ -248,23 +249,23 @@ static int vc_forward_scroll = 0;
 static void (*vc_paintchar) (unsigned char c, int x, int y, int attrs);
 
 #ifdef RENDERALLOCATE
-unsigned char *renderedFont = NULL;	/* rendered font buffer */
+static unsigned char *renderedFont = NULL;	/* rendered font buffer */
 #else
 #define REN_MAX_DEPTH	32
 /* that's the size for a 32 bits buffer... */
 #define REN_MAX_SIZE 	(128L*1024)
-unsigned char renderedFont[REN_MAX_SIZE];
+static unsigned char renderedFont[REN_MAX_SIZE];
 #endif
 
 /* Rendered Font Size */
-unsigned long vc_rendered_font_size = REN_MAX_SIZE;
-long vc_rendered_error = 0;
+static unsigned long vc_rendered_font_size = REN_MAX_SIZE;
+static long vc_rendered_error = 0;
 
 /* If the one bit table was reversed */
-short vc_one_bit_reversed = 0;
+static short vc_one_bit_reversed = 0;
 
 /* Size of a character in the table (bytes) */
-int	vc_rendered_char_size = 0;
+static int	vc_rendered_char_size = 0;
 
 /*
 # Attribute codes: 
@@ -1404,7 +1405,7 @@ putc_square(unsigned char ch)
 
 }
 
-void 
+static void 
 vc_putchar(char ch)
 {
 	if (!ch) {
@@ -1459,7 +1460,7 @@ vc_putchar(char ch)
 /*
  * Actually draws the buffer, handle the jump scroll
  */
-void vc_flush_forward_buffer(void)
+static void vc_flush_forward_buffer(void)
 {
 	int start = 0;
 	int todo = 0;
@@ -1718,6 +1719,9 @@ void vc_flush_forward_buffer(void)
 int
 vcputc(int l, int u, int c)
 {
+        if(!vinfo.v_baseaddr)
+            return;
+
 	/*
 	 * Either we're really buffering stuff or we're not yet because
 	 * the probe hasn't been done.
@@ -1734,7 +1738,7 @@ vcputc(int l, int u, int c)
  * Store characters to be drawn 'later', handle overflows
  */
 
-void
+static void
 vc_store_char(unsigned char c)
 {
 	int	flush = 0;
@@ -1793,7 +1797,7 @@ vc_store_char(unsigned char c)
 	}
 }
 
-void
+static void
 vc_initialize(void)
 {
 #if 0
@@ -1897,7 +1901,7 @@ static boolean_t		vc_graphics_mode;
 static boolean_t		vc_acquired;
 static boolean_t		vc_need_clear;
 
-void vc_blit_rect_8c(	int x, int y,
+static void vc_blit_rect_8c(	int x, int y,
 			int width, int height, 
 			int transparent, unsigned char * dataPtr )
 {
@@ -1922,7 +1926,7 @@ void vc_blit_rect_8c(	int x, int y,
 
 }
 
-void vc_blit_rect_8m(	int x, int y,
+static void vc_blit_rect_8m(	int x, int y,
 			int width, int height,
 			int transparent, unsigned char * dataPtr )
 {
@@ -1951,7 +1955,7 @@ void vc_blit_rect_8m(	int x, int y,
 
 
 
-void vc_blit_rect_16(	int x, int y,
+static void vc_blit_rect_16(	int x, int y,
 			int width, int height,
 			int transparent, unsigned char * dataPtr )
 {
@@ -1978,7 +1982,7 @@ void vc_blit_rect_16(	int x, int y,
     }
 }
 
-void vc_blit_rect_32(	unsigned int x, unsigned int y,
+static void vc_blit_rect_32(	unsigned int x, unsigned int y,
 			unsigned int width, unsigned int height,
 			int transparent, unsigned char * dataPtr )
 {
@@ -2005,10 +2009,13 @@ void vc_blit_rect_32(	unsigned int x, unsigned int y,
     }
 }
 
-void vc_blit_rect(	int x, int y,
+static void vc_blit_rect(	int x, int y,
 			int width, int height,
 			int transparent, unsigned char * dataPtr )
 {
+    if(!vinfo.v_baseaddr)
+        return;
+
     switch( vinfo.v_depth) {
 	case 8:
 	    vc_blit_rect_8c( x, y, width, height, transparent, dataPtr);
@@ -2022,7 +2029,7 @@ void vc_blit_rect(	int x, int y,
     }
 }
 
-void vc_progress_task( void * arg )
+static void vc_progress_task( void * arg )
 {
     spl_t		s;
     int			count = (int) arg;
@@ -2076,7 +2083,7 @@ void vc_display_icon( vc_progress_element * desc,
     }
 }
 
-boolean_t
+static boolean_t
 vc_progress_set( boolean_t enable )
 {
     spl_t		s;
@@ -2124,7 +2131,7 @@ Boot_Video boot_video_info;
 
 extern int disableConsoleOutput;
 
-void vc_clear_screen( void )
+static void vc_clear_screen( void )
 {
     reversecursor();
     vt100_reset();

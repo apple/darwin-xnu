@@ -5,7 +5,7 @@ export MakeInc_dir=${SRCROOT}/makedefs/MakeInc.dir
 
 IOKIT_FRAMEDIR = $(FRAMEDIR)/IOKit.framework/Versions/A
 export INCDIR = $(IOKIT_FRAMEDIR)/Headers
-export LCLDIR = $(IOKIT_FRAMEDIR)/PrivateHeaders
+export LCLDIR = $(FRAMEDIR)/Kernel.framework/Versions/A/PrivateHeaders/IOKit
 
 include $(MakeInc_cmd)
 include $(MakeInc_def)
@@ -16,7 +16,8 @@ NOT_EXPORT_HEADERS = \
 	IOPMinformee.h		\
 	IOPMinformeeList.h	\
 	IOPMlog.h		\
-	IOPMpmChild.h
+	IOPMpmChild.h		\
+        IOPMPrivate.h
 
 INSTINC_SUBDIRS =
 INSTINC_SUBDIRS_PPC =
@@ -29,7 +30,7 @@ EXPINC_SUBDIRS_I386 = ${INSTINC_SUBDIRS_I386}
 ALL_HEADERS = $(shell (cd $(SOURCE); echo *.h))
 
 INSTALL_MI_LIST	= IOPMLibDefs.h IOPM.h
-INSTALL_MI_LCL_LIST = ""
+INSTALL_MI_LCL_LIST = IOPMPrivate.h
 INSTALL_MI_DIR = $(MI_DIR)
 
 EXPORT_MI_LIST	= $(filter-out $(NOT_EXPORT_HEADERS), $(ALL_HEADERS))

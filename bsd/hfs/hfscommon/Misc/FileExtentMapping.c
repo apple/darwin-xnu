@@ -244,9 +244,7 @@ enum
 	kDataForkType			= 0,
 	kResourceForkType		= 0xFF,
 	
-	kPreviousRecord			= -1,
-	
-	kSectorSize				= 512		// Size of a physical sector
+	kPreviousRecord			= -1
 };
 
 void HFSToHFSPlusExtents(
@@ -599,11 +597,12 @@ OSErr MapFileBlockC (
 	FCB				*fcb,				// FCB of file
 	size_t			numberOfBytes,		// number of contiguous bytes desired
 	off_t			offset,				// starting offset within file (in bytes)
-	daddr_t			*startSector,		// first 512-byte sector (NOT an allocation block)
+	daddr_t			*startSector,		// first sector (NOT an allocation block)
 	size_t			*availableBytes)	// number of contiguous bytes (up to numberOfBytes)
 {
 	OSErr				err;
 	UInt32				allocBlockSize;			//	Size of the volume's allocation block
+	UInt32			sectorSize;
 	HFSPlusExtentKey	foundKey;
 	HFSPlusExtentRecord	foundData;
 	UInt32				foundIndex;
@@ -617,6 +616,7 @@ OSErr MapFileBlockC (
 	off_t				tmpOff;
 
 	allocBlockSize = vcb->blockSize;
+	sectorSize = VCBTOHFS(vcb)->hfs_phys_block_size;
 	
 	err = SearchExtentFile(vcb, fcb, offset, &foundKey, foundData, &foundIndex, &hint, &nextFABN);
 	if (err == noErr) {
@@ -638,17 +638,20 @@ OSErr MapFileBlockC (
 		dataEnd = fcb->fcbPLen;					// Yes, so only map up to PEOF
 	
 	//	Compute the number of sectors in an allocation block
-	sectorsPerBlock = allocBlockSize / kSectorSize;	// sectors per allocation block
+	sectorsPerBlock = allocBlockSize / sectorSize;	// sectors per allocation block
 	
 	//
 	//	Compute the absolute sector number that contains the offset of the given file
 	//
-	temp = (daddr_t)((offset - (off_t)((off_t)(firstFABN) * (off_t)(allocBlockSize)))/kSectorSize);	// offset in sectors from start of the extent
+
+	// offset in sectors from start of the extent
+	temp = (daddr_t)((offset - (off_t)((off_t)(firstFABN) * (off_t)(allocBlockSize)))/sectorSize);
+	// offset in sectors from start of allocation block space
 	temp += startBlock * sectorsPerBlock;			// offset in sectors from start of allocation block space
-    if (vcb->vcbSigWord == kHFSPlusSigWord)
-        temp += vcb->hfsPlusIOPosOffset/512;  /* offset inside wrapper */
-    else
-        temp += vcb->vcbAlBlSt;		/* offset in sectors from start of volume */
+	if (vcb->vcbSigWord == kHFSPlusSigWord)
+		temp += vcb->hfsPlusIOPosOffset / sectorSize;  /* offset inside wrapper */
+	else
+		temp += vcb->vcbAlBlSt;		/* offset in sectors from start of volume */
 	
 	//	Return the desired sector for file position "offset"
 	*startSector = temp;

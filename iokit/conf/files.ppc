@@ -49,7 +49,6 @@ iokit/Drivers/platform/drvApplePowerExpressPE/PowerExpress.cpp	optional iokitcpp
 iokit/Drivers/platform/drvAppleGrandCentral/GrandCentral.cpp	optional disabled-iokitcpp
 iokit/Drivers/platform/drvAppleOHare/OHare.cpp			optional iokitcpp
 
-
 # ATA driver 
 #iokit/Drivers/ata/drvAppleUltra66ATA/AppleUltra66ATA.cpp		optional iokitcpp
 #iokit/Drivers/ata/drvAppleUltra33ATA/AppleUltra33ATA.cpp		optional iokitcpp

@@ -3058,7 +3058,7 @@ hfs_symlink(ap)
 		goto out;
 
 	/* Write the link to disk */
-	bp = getblk(vp, 0, roundup((int)hp->fcbEOF, kHFSBlockSize), 0, 0, BLK_META);
+	bp = getblk(vp, 0, roundup((int)hp->fcbEOF, VTOHFS(vp)->hfs_phys_block_size), 0, 0, BLK_META);
 	bzero(bp->b_data, bp->b_bufsize);
 	bcopy(ap->a_target, bp->b_data, len);
 	bp->b_flags |= B_DIRTY;
@@ -3749,7 +3749,8 @@ struct ucred *a_cred;
 		if (H_ISBIGLINK(hp))
 			MALLOC(hp->h_symlinkptr, char *, hp->fcbEOF, M_TEMP, M_WAITOK);
 
-		retval = meta_bread(vp, 0, roundup((int)hp->fcbEOF, kHFSBlockSize), ap->a_cred, &bp);
+		retval = meta_bread(vp, 0, roundup((int)hp->fcbEOF, VTOHFS(vp)->hfs_phys_block_size),
+				ap->a_cred, &bp);
 		if (retval) {
 			if (bp)
 				brelse(bp);

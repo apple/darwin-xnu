@@ -1278,7 +1278,11 @@ nfs_doio(bp, cr, p)
 			int s;
 
 			CLR(bp->b_flags, B_INVAL | B_NOCACHE);
-			SET(bp->b_flags, B_DELWRI);
+			if (!ISSET(bp->b_flags, B_DELWRI)) {
+				extern int nbdwrite;
+				SET(bp->b_flags, B_DELWRI);
+				nbdwrite++;
+			}
 			FSDBG(261, bp->b_validoff, bp->b_validend,
 			      bp->b_bufsize, bp->b_bcount);
 			/*

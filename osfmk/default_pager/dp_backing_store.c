@@ -2933,7 +2933,7 @@ vs_cluster_write(
 						 vm_page_size, 
 						 UPL_COMMIT_NOTIFY_EMPTY,
 						 pl,
-						 MAX_UPL_TRANSFER,
+						 page_list_count,
 						 &empty);
 					if (empty)
 						upl_deallocate(upl);

@@ -72,18 +72,19 @@ mprNoMSR:
 			mr		r0,r5
 			li		r3,0
 mprNoMSRx:
+
+			mfspr		r6, hid0					; Get a copy of hid0
 			
+
 ;
 ;			We need to insure that there is no more than 1 BAT register that
 ;			can get a hit. There could be repercussions beyond the ken
 ;			of mortal man. It is best not to tempt fate.
 ;
+
+;			Note: we will reload these from the shadow BATs later
+
 			li		r10,0							; Clear a register
-			mfdbatu	r5,0							; Save DBAT 0 high
-			mfdbatl	r6,0							; Save DBAT 0 low
-			mfdbatu	r7,1							; Save DBAT 1 high
-			mfdbatu	r8,2							; Save DBAT 2 high
-			mfdbatu	r9,3							; Save DBAT 3 high 
 			
 			sync									; Make sure all is well
 
@@ -98,6 +99,9 @@ mprNoMSRx:
 			mtdbatu	0,r10							; Now the upper
 			sync									; Just make sure
 			
+			dcbf	0,r12							; Make sure we kill the cache to avoid paradoxes
+			sync
+			
 			ori		r11,r2,lo16(MASK(MSR_DR))		; Turn on data translation
 			mtmsr	r11								; Do it for real
 			isync									; Make sure of it
@@ -110,6 +114,21 @@ mprNoMSRx:
 			eieio									; Make sure of ordering again
 			sync									; Get caught up yet again
 			isync									; Do not go further till we are here
+			
+			mtmsr	r2								; Turn translation back off
+			isync
+			
+			mtspr	hid0, r6							; Restore HID0
+			isync
+			
+			lis		r10,hi16(EXT(shadow_BAT)+shdDBAT)	; Get shadow address
+			ori		r10,r10,lo16(EXT(shadow_BAT)+shdDBAT)	; Get shadow address
+			
+			lwz		r5,0(r10)						; Pick up DBAT 0 high
+			lwz		r6,4(r10)						; Pick up DBAT 0 low
+			lwz		r7,8(r10)						; Pick up DBAT 1 high
+			lwz		r8,16(r10)						; Pick up DBAT 2 high
+			lwz		r9,24(r10)						; Pick up DBAT 3 high
 			
 			mtdbatu	0,r5							; Restore DBAT 0 high
 			mtdbatl	0,r6							; Restore DBAT 0 low
@@ -345,7 +364,8 @@ yesnap:		mftbu	r9								; Get the upper timebase
 			bne-	yesnap							; Yeah, need to get it again...
 			stw		r8,napStamp(r12)				; Set high order time stamp
 			stw		r7,napStamp+4(r12)				; Set low order nap stamp
-			
+
+
 ;
 ;			We have to open up interruptions here because book 4 says that we should
 ;			turn on only the POW bit and that we should have interrupts enabled
@@ -698,15 +718,20 @@ cinoL1:
 
 			mfspr	r8,l2cr							; Get the L2CR
 			lwz		r3,pfl2cr(r12)					; Get the L2CR value
+			rlwinm.		r0,r8,0,l2e,l2e					; Was the L2 enabled?
+			bne		ciflushl2					; Yes, force flush
+			cmplwi		r8, 0						; Was the L2 all the way off?
+			beq		ciinvdl2					; Yes, force invalidate
 			lis		r0,hi16(l2sizm|l2clkm|l2ramm|l2ohm)	; Get confiuration bits
 			xor		r2,r8,r3						; Get changing bits?
 			ori		r0,r0,lo16(l2slm|l2dfm|l2bypm)	; More config bits
 			and.	r0,r0,r2						; Did any change?
 			bne-	ciinvdl2						; Yes, just invalidate and get PLL synced...		
 			
+ciflushl2:
 			bf		pfL2fab,ciswfl2					; Flush not in hardware...
 			
-			mr		r10,r3							; Take a copy now
+			mr		r10,r8							; Take a copy now
 			
 			bf		31,cinol2lck					; Skip if pfLClck not set...
 			
@@ -728,7 +753,7 @@ cihwfl2:	mfspr	r10,l2cr						; Get back the L2CR
 			
 ciswfl2:
 			lwz		r0,pfl2Size(r12)				; Get the L2 size
-			oris	r2,r3,hi16(l2dom)				; Set L2 to data only mode
+			oris	r2,r8,hi16(l2dom)				; Set L2 to data only mode
 
 			b		ciswfl2doa					; Branch to next line...
 
@@ -755,11 +780,11 @@ ciswfldl2a:	lwz		r0,0(r10)						; Load something to flush something
 			addi	r10,r10,32						; Next line
 			bdnz	ciswfldl2a						; Do the lot...
 			
-ciinvdl2:	rlwinm	r3,r3,0,l2e+1,31				; Clear the enable bit
+ciinvdl2:	rlwinm	r8,r3,0,l2e+1,31				; Use the saved L2CR and clear the enable bit
 			b		cinla							; Branch to next line...
 
 			.align  5
-cinlc:		mtspr	l2cr,r3							; Disable L2
+cinlc:		mtspr	l2cr,r8							; Disable L2
 			sync
 			isync
 			b		ciinvl2							; It is off, go invalidate it...
@@ -772,7 +797,11 @@ cinlb:		sync									; Finish memory stuff
 			
 ciinvl2:	sync
 			isync
-			oris	r2,r3,hi16(l2im)				; Get the invalidate flag set
+
+			cmplwi	r3, 0							; Should the L2 be all the way off?
+			beq	cinol2							; Yes, done with L2
+
+			oris	r2,r8,hi16(l2im)				; Get the invalidate flag set
 			
 			mtspr	l2cr,r2							; Start the invalidate
 			sync
@@ -787,7 +816,7 @@ ciinvdl2b:
 			rlwinm.	r2,r2,0,l2ip,l2ip				; Is the invalidate still going?
 			bne+	ciinvdl2a						; Assume so, this will take a looong time...
 			sync
-			mtspr	l2cr,r3							; Turn off the invalidate request
+			mtspr	l2cr,r8							; Turn off the invalidate request
 			
 cinol2:
 			
@@ -798,14 +827,19 @@ cinol2:
 
 			mfspr	r8,l3cr							; Get the L3CR
 			lwz		r3,pfl3cr(r12)					; Get the L3CR value
+			rlwinm.		r0,r8,0,l3e,l3e					; Was the L3 enabled?
+			bne		ciflushl3					; Yes, force flush
+			cmplwi		r8, 0						; Was the L3 all the way off?
+			beq		ciinvdl3					; Yes, force invalidate
 			lis		r0,hi16(l3pem|l3sizm|l3dxm|l3clkm|l3spom|l3ckspm)	; Get configuration bits
 			xor		r2,r8,r3						; Get changing bits?
 			ori		r0,r0,lo16(l3pspm|l3repm|l3rtm|l3cyam|l3dmemm|l3dmsizm)	; More config bits
 			and.	r0,r0,r2						; Did any change?
 			bne-	ciinvdl3						; Yes, just invalidate and get PLL synced...
 			
+ciflushl3:
 			sync									; 7450 book says do this even though not needed
-			mr		r10,r3							; Take a copy now
+			mr		r10,r8							; Take a copy now
 			
 			bf		31,cinol3lck					; Skip if pfL23lck not set...
 			
@@ -825,32 +859,42 @@ cihwfl3:	mfspr	r10,l3cr						; Get back the L3CR
 			rlwinm.	r10,r10,0,l3hwf,l3hwf			; Is the flush over?
 			bne+	cihwfl3							; Nope, keep going...
 
-ciinvdl3:	rlwinm	r3,r3,0,l3e+1,31				; Clear the enable bit
+ciinvdl3:	rlwinm	r8,r3,0,l3e+1,31				; Use saved L3CR value and clear the enable bit
 			sync									; Make sure of life, liberty, and justice
-			mtspr	l3cr,r3							; Disable L3
+			mtspr	l3cr,r8							; Disable L3
 			sync
 
-			ori		r3,r3,lo16(l3im)				; Get the invalidate flag set
+			cmplwi	r3, 0							; Should the L3 be all the way off?
+			beq	cinol3							; Yes, done with L3
 
-			mtspr	l3cr,r3							; Start the invalidate
+			ori		r8,r8,lo16(l3im)				; Get the invalidate flag set
 
-ciinvdl3b:	mfspr	r3,l3cr							; Get the L3CR
-			rlwinm.	r3,r3,0,l3i,l3i					; Is the invalidate still going?
+			mtspr	l3cr,r8							; Start the invalidate
+
+ciinvdl3b:	mfspr	r8,l3cr							; Get the L3CR
+			rlwinm.	r8,r8,0,l3i,l3i					; Is the invalidate still going?
 			bne+	ciinvdl3b						; Assume so...
 			sync
 
-			bf	pfL3pdetb, ciinvdl3nopdet
-			mfspr	r3,l3pdet						; ?
-			rlwimi	r3,r3,28,0,23					; ?
-			oris	r3,r3,0xF000					; ?
-			ori		r3,r3,0x0080					; ?
-			mtspr	l3pdet,r3						; ?
+			lwz	r10, pfBootConfig(r12)					; ?
+			rlwinm.	r10, r10, 24, 28, 31					; ?
+			beq	ciinvdl3nopdet						; ?
+			
+			mfspr	r8,l3pdet						; ?
+			srw	r2, r8, r10						; ?
+			rlwimi	r2, r8, 0, 24, 31					; ?
+			subfic	r10, r10, 32						; ?
+			li	r8, -1							; ?
+			ori	r2, r2, 0x0080						; ?
+			slw	r8, r8, r10						; ?
+			or	r8, r2, r8						; ?
+			mtspr	l3pdet, r8						; ?
 			isync
 
 ciinvdl3nopdet:
-			mfspr	r3,l3cr							; Get the L3CR
-			rlwinm	r3,r3,0,l3clken+1,l3clken-1		; Clear the clock enable bit
-			mtspr	l3cr,r3							; Disable the clock
+			mfspr	r8,l3cr							; Get the L3CR
+			rlwinm	r8,r8,0,l3clken+1,l3clken-1		; Clear the clock enable bit
+			mtspr	l3cr,r8							; Disable the clock
 
 			li		r2,128							; ?
 ciinvdl3c:	addi	r2,r2,-1						; ?
@@ -862,15 +906,15 @@ ciinvdl3c:	addi	r2,r2,-1						; ?
 			mtspr	msssr0,r10						; ?
 			sync
 
-			oris	r3,r3,hi16(l3em|l3clkenm)		; Turn on enable bit
-			mtspr	l3cr,r3							; Enable it
+			mtspr	l3cr,r3							; Enable it as desired
 			sync
 cinol3:
 			bf		pfL2b,cinol2a					; No level 2 cache to enable
 
 			lwz		r3,pfl2cr(r12)					; Get the L2CR value
-			oris	r3,r3,hi16(l2em)				; Turn on enable bit
-			mtspr	l2cr,r3							; Enable it
+			cmplwi		r3, 0						; Should the L2 be all the way off?
+			beq		cinol2a						: Yes, done with L2
+			mtspr	l2cr,r3							; Enable it as desired
 			sync
 
 ;
@@ -1186,3 +1230,13 @@ LEXT(ml_sense_nmi)
 
 			blr										; Leave...
 
+/*
+**      ml_set_processor_speed()
+**
+*/
+;			Force a line boundry here
+			.align	5
+			.globl	EXT(ml_set_processor_speed)
+
+LEXT(ml_set_processor_speed)
+			blr

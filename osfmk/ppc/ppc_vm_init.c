@@ -286,31 +286,14 @@ void ppc_vm_init(unsigned int mem_limit, boot_args *args)
 	}
 #endif
 
-	/* Initialize shadow IBATs */
-	shadow_BAT.IBATs[0].upper=BAT_INVALID;
-	shadow_BAT.IBATs[0].lower=BAT_INVALID;
-	shadow_BAT.IBATs[1].upper=BAT_INVALID;
-	shadow_BAT.IBATs[1].lower=BAT_INVALID;
-	shadow_BAT.IBATs[2].upper=BAT_INVALID;
-	shadow_BAT.IBATs[2].lower=BAT_INVALID;
-	shadow_BAT.IBATs[3].upper=BAT_INVALID;
-	shadow_BAT.IBATs[3].lower=BAT_INVALID;
+/*
+ *	Note: the shadow BAT registers were already loaded in ppc_init.c
+ */
+
 
 	LoadIBATs((unsigned int *)&shadow_BAT.IBATs[0]);		/* Load up real IBATs from shadows */
-
-	/* Initialize shadow DBATs */
-	shadow_BAT.DBATs[0].upper=BAT_INVALID;
-	shadow_BAT.DBATs[0].lower=BAT_INVALID;
-	shadow_BAT.DBATs[1].upper=BAT_INVALID;
-	shadow_BAT.DBATs[1].lower=BAT_INVALID;
-	mfdbatu(shadow_BAT.DBATs[2].upper,2);
-	mfdbatl(shadow_BAT.DBATs[2].lower,2);
-	mfdbatu(shadow_BAT.DBATs[3].upper,3);
-	mfdbatl(shadow_BAT.DBATs[3].lower,3);
-
 	LoadDBATs((unsigned int *)&shadow_BAT.DBATs[0]);		/* Load up real DBATs from shadows */
 
-	sync();isync();
 #if DEBUG
 	for(i=0; i<4; i++) kprintf("DBAT%1d: %08X %08X\n", 
 		i, shadow_BAT.DBATs[i].upper, shadow_BAT.DBATs[i].lower);

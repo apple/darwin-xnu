@@ -118,7 +118,9 @@ enum {
   kIOPMClamshellClosed		 = (1<<4),  // clamshell was closed
   kIOPMPowerEmergency		 = (1<<5),  // battery dangerously low
   kIOPMDisableClamshell		 = (1<<6),  // do not sleep on clamshell closure
-  kIOPMEnableClamshell		 = (1<<7)   // sleep on clamshell closure
+  kIOPMEnableClamshell		 = (1<<7),  // sleep on clamshell closure
+  kIOPMProcessorSpeedChange	 = (1<<8),  // change the processor speed
+  kIOPMOverTemp                  = (1<<9)   // system dangerously hot
 };
                                         // Return codes
 
@@ -266,9 +268,12 @@ enum {
     kPMMinutesToSpinDown,
     kPMMinutesToSleep,
     kPMEthernetWakeOnLANSettings,
+    kPMSetProcessorSpeed
 };
 #define kMaxType kPMEthernetWakeOnLANSettings
 
+#define kAppleClamshellStateKey           "AppleClamshellState"
+#define kIOREMSleepEnabledKey             "REMSleepEnabled"
 
 #define kIOBatteryInfoKey		"IOBatteryInfo"
 #define kIOBatteryCurrentChargeKey	"Current"
@@ -276,11 +281,42 @@ enum {
 #define kIOBatteryFlagsKey		"Flags"
 #define kIOBatteryVoltageKey		"Voltage"
 #define kIOBatteryAmperageKey		"Amperage"
+
 enum {
     kIOBatteryInstalled		= (1 << 2),
     kIOBatteryCharge		= (1 << 1),
     kIOBatteryChargerConnect	= (1 << 0)
 };
+
+// These flags are deprecated. Use the version with the kIOPM prefix below.
+enum {
+  kACInstalled      = kIOBatteryChargerConnect,
+  kBatteryCharging  = kIOBatteryCharge,
+  kBatteryInstalled = kIOBatteryInstalled,
+  kUPSInstalled     = (1<<3),
+  kBatteryAtWarn    = (1<<4),
+  kBatteryDepleted  = (1<<5),
+  kACnoChargeCapability = (1<<6),     // AC adapter cannot charge battery
+  kRawLowBattery    = (1<<7),         // used only by  Platform Expert
+  kForceLowSpeed    = (1<<8)         // set by Platfm Expert, chk'd by Pwr Plugin};
+};
+
+// For use with IOPMPowerSource bFlags
+#define IOPM_POWER_SOURCE_REV   2
+enum {
+  kIOPMACInstalled      = kIOBatteryChargerConnect,
+  kIOPMBatteryCharging  = kIOBatteryCharge,
+  kIOPMBatteryInstalled = kIOBatteryInstalled,
+  kIOPMUPSInstalled     = (1<<3),
+  kIOPMBatteryAtWarn    = (1<<4),
+  kIOPMBatteryDepleted  = (1<<5),
+  kIOPMACnoChargeCapability = (1<<6),     // AC adapter cannot charge battery
+  kIOPMRawLowBattery    = (1<<7),         // used only by  Platform Expert
+  kIOPMForceLowSpeed    = (1<<8),         // set by Platfm Expert, chk'd by Pwr Plugin
+  kIOPMClosedClamshell  = (1<<9),         // set by PMU - reflects state of the clamshell
+  kIOPMClamshellStateOnWake = (1<<10)     // used only by Platform Expert
+};
+
 
 
 #if KERNEL && __cplusplus

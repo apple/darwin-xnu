@@ -47,6 +47,7 @@
 #include <net/netisr.h>
 #include <net/if_types.h>
 
+#include <machine/machine_routines.h>
 
 #define DBG_LAYER_BEG		DLILDBG_CODE(DBG_DLIL_STATIC, 0)
 #define DBG_LAYER_END		DLILDBG_CODE(DBG_DLIL_STATIC, 2)
@@ -558,6 +559,7 @@ void dlil_input_thread(void)
      *      bind it to the master cpu.
      */
     stack_privilege(self);
+    ml_thread_policy(current_thread(), MACHINE_GROUP, (MACHINE_NETWORK_GROUP|MACHINE_NETWORK_NETISR));
 
     /* The dlil thread is always funneled */
     thread_funnel_set(network_flock, TRUE);

@@ -84,18 +84,9 @@ OSStatus GetBTreeBlock(FileReference vp, UInt32 blockNum, GetBlockOptions option
     struct buf   *bp = NULL;
 
     if (options & kGetEmptyBlock)
-        bp = getblk (vp,
-                    IOBLKNOFORBLK(blockNum, VTOHFS(vp)->hfs_phys_block_size),
-                    IOBYTECCNTFORBLK(blockNum, block->blockSize, VTOHFS(vp)->hfs_phys_block_size),
-                    0,
-                    0,
-                    BLK_META);
+        bp = getblk(vp, blockNum, block->blockSize, 0, 0, BLK_META);
     else
-        retval = meta_bread(vp,
-                        IOBLKNOFORBLK(blockNum, VTOHFS(vp)->hfs_phys_block_size),
-                        IOBYTECCNTFORBLK(blockNum, block->blockSize, VTOHFS(vp)->hfs_phys_block_size),
-                        NOCRED,
-                        &bp);
+        retval = meta_bread(vp, blockNum, block->blockSize, NOCRED, &bp);
 
     DBG_ASSERT(bp != NULL);
     DBG_ASSERT(bp->b_data != NULL);
@@ -107,7 +98,7 @@ OSStatus GetBTreeBlock(FileReference vp, UInt32 blockNum, GetBlockOptions option
 
     if (retval == E_NONE) {
         block->blockHeader = bp;
-        block->buffer = bp->b_data + IOBYTEOFFSETFORBLK(bp->b_blkno, VTOHFS(vp)->hfs_phys_block_size);
+        block->buffer = bp->b_data;
         block->blockReadFromDisk = (bp->b_flags & B_CACHE) == 0;	/* not found in cache ==> came from disk */
 
 #if BYTE_ORDER == LITTLE_ENDIAN
@@ -298,27 +289,42 @@ OSStatus ExtendBTreeFile(FileReference vp, FSSize minEOF, FSSize maxEOF)
 static OSStatus
 FlushAlternate( ExtendedVCB *vcb )
 {
-	void *maindata;
-	void *altdata;
+	struct hfsmount *hfsmp = VCBTOHFS(vcb);
+	struct vnode *dev_vp = hfsmp->hfs_devvp;
+	struct buf *pri_bp = NULL;
+	struct buf *alt_bp = NULL;
+	int sectorsize;
+	u_long priIDSector;
+	u_long altIDSector;
 	int result;
 
+	sectorsize = hfsmp->hfs_phys_block_size;
+	priIDSector = (vcb->hfsPlusIOPosOffset / sectorsize) +
+			HFS_PRI_SECTOR(sectorsize);
+
+	altIDSector = (vcb->hfsPlusIOPosOffset / sectorsize) +
+			HFS_ALT_SECTOR(sectorsize, hfsmp->hfs_phys_block_count);
+
 	/* Get the main MDB/VolumeHeader block */
-	result = GetBlock_glue(gbDefault,
-                	(vcb->hfsPlusIOPosOffset / kHFSBlockSize) + kMasterDirectoryBlock,
-                	(Ptr *)&maindata, kNoFileReference, vcb);
-	if (result) return (result);
-	
+	result = meta_bread(dev_vp, priIDSector, sectorsize, NOCRED, &pri_bp);
+	if (result)
+		goto exit;
+
 	/* Get the alternate MDB/VolumeHeader block */
-	result = GetBlock_glue( gbDefault, vcb->altIDSector,
-                	(Ptr *)&altdata, kNoFileReference, vcb );
+	result = meta_bread(dev_vp, altIDSector, sectorsize, NOCRED, &alt_bp);
+	if (result)
+		goto exit;
 
-	if (result == 0) {
-		bcopy(maindata, altdata, kMDBSize);
+	bcopy(pri_bp->b_data + HFS_PRI_OFFSET(sectorsize),
+	      alt_bp->b_data + HFS_ALT_OFFSET(sectorsize), kMDBSize);
 
-		result = RelBlock_glue( (Ptr)altdata, rbWriteMask );
-	}
-
-	(void) RelBlock_glue( (Ptr)maindata, rbFreeMask );
+	result = VOP_BWRITE(alt_bp);
+	alt_bp = NULL;
+exit:
+	if (alt_bp)
+		brelse(alt_bp);
+	if (pri_bp)
+		brelse(pri_bp);
 	
 	return (result);
 }

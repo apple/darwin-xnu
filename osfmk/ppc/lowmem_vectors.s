@@ -984,7 +984,8 @@ skipz2:
 			stw		r6,napTotal+4(r2)				; Save the low total
 			stw		r8,napTotal(r2)					; Save the high total
 			stw		r3,savesrr0(r13)				; Modify to return to nap/doze exit
-			
+
+
 notNapping:	stw		r12,saver12(r13)				/* Save this one */
 						
 			bf-		featL1ena,skipz3				; L1 cache is disabled...
@@ -1774,19 +1775,26 @@ notDCache:
 ;			fix up to return directly to caller of probe.
 ;
 		
-			lwz		r30,saver5(r13)					; Get proper DBAT values
-			lwz		r28,saver6(r13)
-			lwz		r27,saver7(r13)
-			lwz		r11,saver8(r13)
-			lwz		r18,saver9(r13)
+			lis		r11,hi16(EXT(shadow_BAT)+shdDBAT)	; Get shadow address
+			ori		r11,r11,lo16(EXT(shadow_BAT)+shdDBAT)	; Get shadow address
+			
+			lwz		r30,0(r11)						; Pick up DBAT 0 high
+			lwz		r28,4(r11)						; Pick up DBAT 0 low
+			lwz		r27,8(r11)						; Pick up DBAT 1 high
+			lwz		r18,16(r11)						; Pick up DBAT 2 high
+			lwz		r11,24(r11)						; Pick up DBAT 3 high
 			
 			sync
 			mtdbatu	0,r30							; Restore DBAT 0 high
 			mtdbatl	0,r28							; Restore DBAT 0 low
 			mtdbatu	1,r27							; Restore DBAT 1 high
-			mtdbatu	2,r11							; Restore DBAT 2 high
-			mtdbatu	3,r18							; Restore DBAT 3 high 
+			mtdbatu	2,r18							; Restore DBAT 2 high
+			mtdbatu	3,r11							; Restore DBAT 3 high 
 			sync
+
+			lwz		r27,saver6(r13)					; Get the saved R6 value
+			mtspr		hid0,r27					; Restore HID0
+			isync
 
 			lwz		r28,savelr(r13)					; Get return point
 			lwz		r27,saver0(r13)					; Get the saved MSR

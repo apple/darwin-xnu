@@ -86,6 +86,16 @@ boolean_t ml_at_interrupt_context(void);
 /* Generate a fake interrupt */
 void ml_cause_interrupt(void);
 
+void ml_thread_policy(
+	thread_t thread,
+	unsigned policy_id,
+	unsigned policy_info);   
+
+#define	MACHINE_GROUP				0x00000001
+#define MACHINE_NETWORK_GROUP		0x10000000
+#define	MACHINE_NETWORK_WORKLOOP	0x00000001
+#define	MACHINE_NETWORK_NETISR		0x00000002
+
 #ifdef	MACH_KERNEL_PRIVATE
 /* check pending timers */
 void machine_clock_assist(void);
@@ -184,5 +194,8 @@ unsigned int ml_throttle(
 
 void ml_get_timebase(unsigned long long *timstamp);
 void ml_sense__nmi(void);
+
+int ml_enable_cache_level(int cache_level, int enable);
+void ml_set_processor_speed(unsigned long speed);
 
 #endif /* _PPC_MACHINE_ROUTINES_H_ */

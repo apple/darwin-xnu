@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2002 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -103,6 +103,10 @@ static struct buf *getnewbuf(int slpflag, int slptimeo, int *queue);
 extern int niobuf;	/* The number of IO buffer headers for cluster IO */
 int blaundrycnt;
 
+/* zone allocated buffer headers */
+static zone_t buf_hdr_zone;
+static int buf_hdr_count;
+
 #if TRACE
 struct	proc *traceproc;
 int	tracewhich, tracebuf[TRCSIZ];
@@ -121,6 +125,9 @@ u_long	bufhash;
 /* Definitions for the buffer stats. */
 struct bufstats bufstats;
 
+/* Number of delayed write buffers */
+int nbdwrite = 0;
+
 /*
  * Insq/Remq for the buffer hash lists.
  */
@@ -132,8 +139,8 @@ struct bufstats bufstats;
 
 TAILQ_HEAD(ioqueue, buf) iobufqueue;
 TAILQ_HEAD(bqueues, buf) bufqueues[BQUEUES];
-int needbuffer;
-int need_iobuffer;
+static int needbuffer;
+static int need_iobuffer;
 
 /*
  * Insq/Remq for the buffer free lists.
@@ -161,6 +168,9 @@ int need_iobuffer;
 	(bp)->b_hash.le_prev = (struct buf **)0xdeadbeef;
 
 simple_lock_data_t bufhashlist_slock;		/* lock on buffer hash list */
+
+/* number of per vnode, "in flight" buffer writes */
+#define	BUFWRITE_THROTTLE	9
 
 /*
  * Time in seconds before a buffer on a list is 
@@ -503,6 +513,8 @@ bwrite(bp)
 	sync = !ISSET(bp->b_flags, B_ASYNC);
 	wasdelayed = ISSET(bp->b_flags, B_DELWRI);
 	CLR(bp->b_flags, (B_READ | B_DONE | B_ERROR | B_DELWRI));
+	if (wasdelayed)
+		nbdwrite--;
 
 	if (!sync) {
 		/*
@@ -518,7 +530,7 @@ bwrite(bp)
 			p->p_stats->p_ru.ru_oublock++;		/* XXX */
 	}
 
-	trace(TR_BWRITE, pack(vp, bp->b_bcount), bp->b_lblkno);
+	trace(TR_BUFWRITE, pack(vp, bp->b_bcount), bp->b_lblkno);
 
 	/* Initiate disk write.  Make sure the appropriate party is charged. */
 	SET(bp->b_flags, B_WRITEINPROG);
@@ -571,15 +583,19 @@ vn_bwrite(ap)
  * written in the order that the writes are requested.
  *
  * Described in Leffler, et al. (pp. 208-213).
+ *
+ * Note: With the abilitty to allocate additional buffer
+ * headers, we can get in to the situation where "too" many 
+ * bdwrite()s can create situation where the kernel can create
+ * buffers faster than the disks can service. Doing a bawrite() in
+ * cases were we have "too many" outstanding bdwrite()s avoids that.
  */
 void
 bdwrite(bp)
 	struct buf *bp;
 {
 	struct proc *p = current_proc();
-	kern_return_t kret;
-	upl_t upl;
-	upl_page_info_t *pl;
+	struct vnode *vp = bp->b_vp;
 
 	/*
 	 * If the block hasn't been seen before:
@@ -591,8 +607,8 @@ bdwrite(bp)
 		SET(bp->b_flags, B_DELWRI);
 		if (p && p->p_stats) 
 			p->p_stats->p_ru.ru_oublock++;		/* XXX */
-
-		reassignbuf(bp, bp->b_vp);
+		nbdwrite ++;
+		reassignbuf(bp, vp);
 	}
 
 
@@ -603,6 +619,28 @@ bdwrite(bp)
 		return;
 	}
 
+	/*
+	 * If the vnode has "too many" write operations in progress
+	 * wait for them to finish the IO
+	 */
+	while (vp->v_numoutput >= BUFWRITE_THROTTLE) {
+		vp->v_flag |= VTHROTTLED;
+		(void)tsleep((caddr_t)&vp->v_numoutput, PRIBIO + 1, "bdwrite", 0);
+	}
+
+	/*
+	 * If we have too many delayed write buffers, 
+	 * more than we can "safely" handle, just fall back to
+	 * doing the async write
+	 */
+	if (nbdwrite < 0)
+		panic("bdwrite: Negative nbdwrite");
+
+	if (nbdwrite > ((nbuf/4)*3)) {
+		bawrite(bp);
+		return;
+	}
+	 
 	/* Otherwise, the "write" is done, so mark and release the buffer. */
 	SET(bp->b_flags, B_DONE);
 	brelse(bp);
@@ -610,11 +648,30 @@ bdwrite(bp)
 
 /*
  * Asynchronous block write; just an asynchronous bwrite().
+ *
+ * Note: With the abilitty to allocate additional buffer
+ * headers, we can get in to the situation where "too" many 
+ * bawrite()s can create situation where the kernel can create
+ * buffers faster than the disks can service.
+ * We limit the number of "in flight" writes a vnode can have to
+ * avoid this.
  */
 void
 bawrite(bp)
 	struct buf *bp;
 {
+	struct vnode *vp = bp->b_vp;
+
+	if (vp) {
+		/*
+		 * If the vnode has "too many" write operations in progress
+		 * wait for them to finish the IO
+		 */
+		while (vp->v_numoutput >= BUFWRITE_THROTTLE) {
+			vp->v_flag |= VTHROTTLED;
+			(void)tsleep((caddr_t)&vp->v_numoutput, PRIBIO + 1, "bawrite", 0);
+		}
+	}
 
 	SET(bp->b_flags, B_ASYNC);
 	VOP_BWRITE(bp);
@@ -729,7 +786,10 @@ brelse(bp)
 		 */
 		if (bp->b_vp)
 			brelvp(bp);
-		CLR(bp->b_flags, B_DELWRI);
+		if (ISSET(bp->b_flags, B_DELWRI)) {
+			CLR(bp->b_flags, B_DELWRI);
+			nbdwrite--;
+		}
 		if (bp->b_bufsize <= 0)
 			whichq = BQ_EMPTY;	/* no data */
 		else
@@ -1197,9 +1257,6 @@ struct meta_zone_entry meta_zones[] = {
 };
 #endif /* ZALLOC_METADATA */
 
-zone_t buf_hdr_zone;
-int buf_hdr_count;
-
 /*
  * Initialize the meta data zones
  */
@@ -1500,6 +1557,7 @@ bcleanbuf(struct buf *bp)
 {
 	int s;
 	struct ucred *cred;
+	int	hdralloc = 0;
 
 	s = splbio();
 
@@ -1508,6 +1566,10 @@ bcleanbuf(struct buf *bp)
 
 	/* Buffer is no longer on free lists. */
 	SET(bp->b_flags, B_BUSY);
+
+	/* Check whether the buffer header was "allocated" */
+	if (ISSET(bp->b_flags, B_HDRALLOC))
+		hdralloc = 1;
 
 	if (bp->b_hash.le_prev == (struct buf **)0xdeadbeef) 
 		panic("bcleanbuf: le_prev is deadbeef");
@@ -1568,6 +1630,8 @@ bcleanbuf(struct buf *bp)
 	bp->b_bufsize = 0;
 	bp->b_data = 0;
 	bp->b_flags = B_BUSY;
+	if (hdralloc)
+		SET(bp->b_flags, B_HDRALLOC);
 	bp->b_dev = NODEV;
 	bp->b_blkno = bp->b_lblkno = 0;
 	bp->b_iodone = 0;
@@ -1642,7 +1706,7 @@ biodone(bp)
 	struct buf *bp;
 {
 	boolean_t 	funnel_state;
-	int s;
+	struct vnode *vp;
 
 	funnel_state = thread_funnel_set(kernel_flock, TRUE);
 
@@ -1660,6 +1724,15 @@ biodone(bp)
 
 	if (!ISSET(bp->b_flags, B_READ) && !ISSET(bp->b_flags, B_RAW))
 		vwakeup(bp);	 /* wake up reader */
+
+	/* Wakeup the throttled write operations as needed */
+	vp = bp->b_vp;
+	if (vp
+		&& (vp->v_flag & VTHROTTLED)
+		&& (vp->v_numoutput <= (BUFWRITE_THROTTLE / 3))) {
+		vp->v_flag &= ~VTHROTTLED;
+		wakeup((caddr_t)&vp->v_numoutput);
+	}
 
 	if (ISSET(bp->b_flags, B_CALL)) {	/* if necessary, call out */
 		CLR(bp->b_flags, B_CALL);	/* but note callout done */

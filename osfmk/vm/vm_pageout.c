@@ -1876,13 +1876,14 @@ vm_pageout(void)
 
 static upl_t
 upl_create(
-	boolean_t	internal)
+	   boolean_t	internal,
+	   vm_size_t       size)
 {
 	upl_t	upl;
 
 	if(internal) {
 		upl = (upl_t)kalloc(sizeof(struct upl)
-			+ (sizeof(struct upl_page_info)*MAX_UPL_TRANSFER));
+			+ (sizeof(struct upl_page_info)*(size/page_size)));
 	} else {
 		upl = (upl_t)kalloc(sizeof(struct upl));
 	}
@@ -1927,7 +1928,7 @@ upl_destroy(
 	if(upl->flags & UPL_INTERNAL) {
 		kfree((vm_offset_t)upl,
 			sizeof(struct upl) + 
-			(sizeof(struct upl_page_info) * MAX_UPL_TRANSFER));
+			(sizeof(struct upl_page_info) * (upl->size/page_size)));
 	} else {
 		kfree((vm_offset_t)upl, sizeof(struct upl));
 	}
@@ -2043,12 +2044,12 @@ vm_object_upl_request(
 	}
 	if(upl_ptr) {
 		if(cntrl_flags & UPL_SET_INTERNAL) {
-			upl = upl_create(TRUE);
+			upl = upl_create(TRUE, size);
 			user_page_list = (upl_page_info_t *)
 				(((vm_offset_t)upl) + sizeof(struct upl));
 			upl->flags |= UPL_INTERNAL;
 		} else {
-			upl = upl_create(FALSE);
+			upl = upl_create(FALSE, size);
 		}
 		if(object->phys_contiguous) {
 			upl->size = size;

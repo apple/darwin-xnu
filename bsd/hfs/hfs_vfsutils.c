@@ -181,7 +181,7 @@ extern OSStatus ReleaseBTreeBlock(FileReference vp, BlockDescPtr blockPtr, Relea
 //*******************************************************************************
 
 OSErr hfs_MountHFSVolume(struct hfsmount *hfsmp, HFSMasterDirectoryBlock *mdb,
-		u_long sectors, struct proc *p)
+		struct proc *p)
 {
     ExtendedVCB 			*vcb = HFSTOVCB(hfsmp);
     struct vnode 			*tmpvnode;
@@ -244,8 +244,6 @@ OSErr hfs_MountHFSVolume(struct hfsmount *hfsmp, HFSMasterDirectoryBlock *mdb,
 	 */
 	if (err || (utf8chars == 0))
 		(void) mac_roman_to_utf8(mdb->drVN, NAME_MAX, &utf8chars, vcb->vcbVN);
-
-	vcb->altIDSector = sectors - 2;
 
     //	Initialize our dirID/nodePtr cache associated with this volume.
     err = InitMRUCache( sizeof(UInt32), kDefaultNumMRUCacheBlocks, &(vcb->hintCachePtr) );
@@ -331,7 +329,7 @@ CmdDone:;
 //*******************************************************************************
 
 OSErr hfs_MountHFSPlusVolume(struct hfsmount *hfsmp, HFSPlusVolumeHeader *vhp,
-	u_long embBlkOffset, u_long sectors, struct proc *p)
+	off_t embeddedOffset, off_t disksize, struct proc *p)
 {
     register ExtendedVCB	*vcb;
     HFSPlusForkData			*fdp;
@@ -353,6 +351,14 @@ OSErr hfs_MountHFSPlusVolume(struct hfsmount *hfsmp, HFSPlusVolumeHeader *vhp,
 	/* don't mount a writable volume if its dirty, it must be cleaned by fsck_hfs */
 	if (hfsmp->hfs_fs_ronly == 0 && (SWAP_BE32 (vhp->attributes) & kHFSVolumeUnmountedMask) == 0)
 		return (EINVAL);
+
+	/* Make sure we can live with the physical block size. */
+	if ((disksize & (hfsmp->hfs_phys_block_size - 1)) ||
+	    (embeddedOffset & (hfsmp->hfs_phys_block_size - 1)) ||
+	    (SWAP_BE32(vhp->blockSize) < hfsmp->hfs_phys_block_size)) {
+		return (ENXIO);
+	}
+
 	/*
 	 * The VolumeHeader seems OK: transfer info from it into VCB
 	 * Note - the VCB starts out clear (all zeros)
@@ -387,9 +393,7 @@ OSErr hfs_MountHFSPlusVolume(struct hfsmount *hfsmp, HFSPlusVolumeHeader *vhp,
 	vcb->checkedDate			=	SWAP_BE32 (vhp->checkedDate);
 	vcb->encodingsBitmap		=	SWAP_BE64 (vhp->encodingsBitmap);
 	
-	vcb->hfsPlusIOPosOffset		=	embBlkOffset * 512;
-
-	vcb->altIDSector = embBlkOffset + sectors - 2;
+	vcb->hfsPlusIOPosOffset		=	embeddedOffset;
 
 	vcb->localCreateDate		=	SWAP_BE32 (vhp->createDate); /* in local time, not GMT! */
 
@@ -3359,6 +3363,8 @@ short MacToVFSError(OSErr err)
 	  case fileBoundsErr:						/* -1309 */
 		return EINVAL;							/*   +22 */
 
+	  case fsBTBadNodeSize:
+		return ENXIO;
 	  default:
 		DBG_UTILS(("Unmapped MacOS error: %d\n", err));
 		return EIO;								/*   +5 */

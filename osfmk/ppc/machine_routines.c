@@ -192,6 +192,16 @@ void ml_cause_interrupt(void)
 	CreateFakeIO();
 }
 
+void ml_thread_policy( 
+	thread_t thread,
+	unsigned policy_id,
+	unsigned policy_info)
+{
+	if ((policy_id == MACHINE_GROUP) &&
+	    ((per_proc_info[0].pf.Available) & pfSMPcap))
+		thread_bind(thread, master_processor);
+}
+
 void machine_idle(void)
 {
         if (per_proc_info[cpu_number()].interrupts_enabled == TRUE) {
@@ -300,6 +310,50 @@ ml_ppc_get_info(ml_ppc_cpu_info_t *cpu_info)
     cpu_info->l3_settings = 0;
     cpu_info->l3_cache_size = 0xFFFFFFFF;
   }
+}
+
+#define l2em 0x80000000
+#define l3em 0x80000000
+
+extern int real_ncpus;
+
+int
+ml_enable_cache_level(int cache_level, int enable)
+{
+  int old_mode;
+  unsigned long available, ccr;
+  
+  if (real_ncpus != 1) return -1;
+  
+  available = per_proc_info[0].pf.Available;
+  
+  if ((cache_level == 2) && (available & pfL2)) {
+    ccr = per_proc_info[0].pf.l2cr;
+    old_mode = (ccr & l2em) ? TRUE : FALSE;
+    if (old_mode != enable) {
+      if (enable) ccr = per_proc_info[0].pf.l2crOriginal;
+      else ccr = 0;
+      per_proc_info[0].pf.l2cr = ccr;
+      cacheInit();
+    }
+    
+    return old_mode;
+  }
+  
+  if ((cache_level == 3) && (available & pfL3)) {
+    ccr = per_proc_info[0].pf.l3cr;
+    old_mode = (ccr & l3em) ? TRUE : FALSE;
+    if (old_mode != enable) {
+      if (enable) ccr = per_proc_info[0].pf.l3crOriginal;
+      else ccr = 0;
+      per_proc_info[0].pf.l3cr = ccr;
+      cacheInit();
+    }
+    
+    return old_mode;
+  }
+  
+  return -1;
 }
 
 void

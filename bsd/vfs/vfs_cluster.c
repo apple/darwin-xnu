@@ -86,7 +86,7 @@
  * can be outstanding on a single vnode
  * before we issue a synchronous write 
  */
-#define ASYNC_THROTTLE  6
+#define ASYNC_THROTTLE  9
 
 static int
 cluster_iodone(bp)
@@ -670,7 +670,7 @@ cluster_rd_prefetch(vp, f_offset, size, filesize, devblocksize)
 	if (ubc_page_op(vp, f_offset, 0, 0, 0) == KERN_SUCCESS) {
 	        KERNEL_DEBUG((FSDBG_CODE(DBG_FSRW, 49)) | DBG_FUNC_END,
 			     (int)f_offset, 0, 0, 0, 0);
-	        return(0);
+	        return(1);
 	}
 	if (size > (MAX_UPL_TRANSFER * PAGE_SIZE))
 	        size = MAX_UPL_TRANSFER * PAGE_SIZE;
@@ -784,7 +784,6 @@ cluster_rd_ahead(vp, b_lblkno, e_lblkno, filesize, devblocksize)
 	daddr_t       r_lblkno;
 	off_t         f_offset;
 	int           size_of_prefetch;
-	int           max_iosize;
 	int           max_pages;
 
 	KERNEL_DEBUG((FSDBG_CODE(DBG_FSRW, 48)) | DBG_FUNC_START,
@@ -805,12 +804,7 @@ cluster_rd_ahead(vp, b_lblkno, e_lblkno, filesize, devblocksize)
 
 		return;
 	}
-	vfs_io_attributes(vp, B_READ, &max_iosize, &max_pages);
-	
-	if ((max_iosize / PAGE_SIZE) < max_pages)
-	        max_pages = max_iosize / PAGE_SIZE;
-	if (max_pages > MAX_UPL_TRANSFER)
-	        max_pages = MAX_UPL_TRANSFER;
+	max_pages = MAX_UPL_TRANSFER;
 
 	vp->v_ralen = vp->v_ralen ? min(max_pages, vp->v_ralen << 1) : 1;
 

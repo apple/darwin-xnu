@@ -2019,7 +2019,7 @@ struct vop_bwrite_args /* {
         if (((UInt16 *)((char *)bp->b_data + bp->b_bcount - 2))[0] == 0x000e) {
             /* Prepare the block pointer */
             block.blockHeader = bp;
-            block.buffer = bp->b_data + IOBYTEOFFSETFORBLK(bp->b_blkno, VTOHFS(vp)->hfs_phys_block_size);
+            block.buffer = bp->b_data;
             block.blockReadFromDisk = (bp->b_flags & B_CACHE) == 0;	/* not found in cache ==> came from disk */
             block.blockSize = bp->b_bcount;
     

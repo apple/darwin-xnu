@@ -264,7 +264,7 @@ typedef struct memory_object_attr_info	memory_object_attr_info_data_t;
  *  Universal Page List data structures
  */
 
-#define MAX_UPL_TRANSFER 64
+#define MAX_UPL_TRANSFER 256
 
 struct upl_page_info {
 	vm_offset_t	phys_addr;

@@ -3789,6 +3789,10 @@ nfs_writebp(bp, force)
 
 	s = splbio();
 	CLR(bp->b_flags, (B_READ|B_DONE|B_ERROR|B_DELWRI));
+	if (ISSET(oldflags, B_DELWRI)) {
+		extern int nbdwrite;
+		nbdwrite--;
+	}
 
 	if (ISSET(oldflags, (B_ASYNC|B_DELWRI))) {
 		reassignbuf(bp, vp);

@@ -27,6 +27,11 @@
 #include <IOKit/IODeviceTreeSupport.h>
 #include <IOKit/nvram/IONVRAMController.h>
 
+
+#define kIODTNVRAMOFPartitionName       "common"
+#define kIODTNVRAMXPRAMPartitionName    "APL,MacOS75"
+#define kIODTNVRAMFreePartitionName     "wwwwwwwwwwww"
+
 enum {
   kIODTNVRAMImageSize        = 0x2000,
   kIODTNVRAMXPRAMSize        = 0x0100,
@@ -60,6 +65,8 @@ private:
   UInt8             *_ofImage;
   bool              _ofImageDirty;
   OSDictionary      *_ofDict;
+  OSDictionary      *_nvramPartitionOffsets;
+  OSDictionary      *_nvramPartitionLengths;
   UInt32            _xpramPartitionOffset;
   UInt32            _xpramPartitionSize;
   UInt8             *_xpramImage;
@@ -126,6 +133,16 @@ public:
   virtual IOReturn writeNVRAMProperty(IORegistryEntry *entry,
 				      const OSSymbol *name,
 				      OSData *value);
+  
+  virtual OSDictionary *getNVRAMPartitions(void);
+  
+  virtual IOReturn readNVRAMPartition(const OSSymbol *partitionID,
+				      IOByteCount offset, UInt8 *buffer,
+				      IOByteCount length);
+  
+  virtual IOReturn writeNVRAMPartition(const OSSymbol *partitionID,
+				       IOByteCount offset, UInt8 *buffer,
+				       IOByteCount length);  
 };
 
 #endif /* !_IOKIT_IONVRAM_H */

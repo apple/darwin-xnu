@@ -231,15 +231,17 @@ OSStatus	BTOpenPath			(FCB					*filePtr,
 	/////////////////////////// Read Header Node ////////////////////////////////
 
 	nodeRec.buffer				= nil;				// so we can call ReleaseNode
-	nodeRec.blockSize			= kMinNodeSize;
 	btreePtr->fileRefNum		= GetFileRefNumFromFCB(filePtr);
 	filePtr->fcbBTCBPtr			= (Ptr) btreePtr;	// attach btree cb to file
+
+	/* The minimum node size is the physical block size */
+	nodeRec.blockSize = VTOHFS(btreePtr->fileRefNum)->hfs_phys_block_size;
 
 	REQUIRE_FILE_LOCK(btreePtr->fileRefNum, false);
 
 	// it is now safe to call M_ExitOnError (err)
 
-	err = setBlockSizeProc (btreePtr->fileRefNum, kMinNodeSize, 1);
+	err = setBlockSizeProc (btreePtr->fileRefNum, nodeRec.blockSize, 1);
 	M_ExitOnError (err);
 
 
@@ -297,9 +299,15 @@ OSStatus	BTOpenPath			(FCB					*filePtr,
 
 	//€€ set kBadClose attribute bit, and UpdateNode
 
-	// if nodeSize is 512 then we don't need to release, just CheckNode
+	// if nodeSize matches then we don't need to release, just CheckNode
 
-	if ( btreePtr->nodeSize == kMinNodeSize )
+	/* b-tree node size must be at least as big as the physical block size */
+	if (btreePtr->nodeSize < nodeRec.blockSize) {
+		err = fsBTBadNodeSize;
+		goto ErrorExit;
+	}
+
+	if ( btreePtr->nodeSize == nodeRec.blockSize )
 	{
 		err = CheckNode (btreePtr, nodeRec.buffer);
 		if (err)

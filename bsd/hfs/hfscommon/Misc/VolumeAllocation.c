@@ -550,8 +550,6 @@ Exit:
 	return err;
 }
 
-extern OSErr LookupBufferMapping(caddr_t bufferAddress, struct buf **bpp, int *mappingIndexPtr);
-
 /*
 _______________________________________________________________________
 

@@ -72,6 +72,16 @@ boolean_t ml_at_interrupt_context(void);
 /* Generate a fake interrupt */
 void ml_cause_interrupt(void);
 
+void ml_thread_policy(
+	thread_t thread,
+	unsigned policy_id,
+	unsigned policy_info);
+
+#define MACHINE_GROUP				0x00000001
+#define MACHINE_NETWORK_GROUP		0x10000000
+#define MACHINE_NETWORK_WORKLOOP	0x00000001
+#define MACHINE_NETWORK_NETISR		0x00000002
+
 /* Initialize Interrupts */
 void ml_install_interrupt_handler(
     void *nub,

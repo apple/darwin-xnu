@@ -63,6 +63,10 @@ struct procFeatures {
 #define pfThermalb	7
 #define pfThermInt	0x00800000
 #define pfThermIntb	8
+#define pfSlowNap	0x00004000
+#define pfSlowNapb	17
+#define pfNoMuMMCK	0x00002000
+#define pfNoMuMMCKb	18
 #define pfLClck		0x00001000
 #define pfLClckb	19
 #define pfWillNap	0x00000800
@@ -106,7 +110,10 @@ struct procFeatures {
 	unsigned int	pfICTRL;
 	unsigned int	pfLDSTCR;
 	unsigned int	pfLDSTDB;
-	unsigned int	reserved[7];
+	unsigned int	l2crOriginal;
+	unsigned int	l3crOriginal;
+	unsigned int	pfBootConfig;
+	unsigned int	reserved[4];
 };
 
 typedef struct procFeatures procFeatures;

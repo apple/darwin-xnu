@@ -388,17 +388,6 @@ ReplaceBTreeRecord				(FileReference 				refNum,
 								 UInt16 				dataSize,
 								 UInt32 *				newHint);
 
-/*	Prototypes for C->Asm glue*/
-EXTERN_API_C( OSErr )
-GetBlock_glue					(UInt16 				flags,
-								 UInt32 				nodeNumber,
-								 Ptr *					nodeBuffer,
-                   						 FileReference 				refNum,
-								 ExtendedVCB *			vcb);
-
-EXTERN_API_C( OSErr )
-RelBlock_glue					(Ptr 					nodeBuffer,
-								 UInt16 				flags);
 
 /*	Prototypes for exported routines in VolumeAllocation.c*/
 EXTERN_API_C( OSErr )

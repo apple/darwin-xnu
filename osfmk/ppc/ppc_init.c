@@ -41,6 +41,7 @@
 #include <ppc/savearea.h>
 #include <ppc/low_trace.h>
 #include <ppc/Diagnostics.h>
+#include <ppc/mem.h>
 
 #include <pexpert/pexpert.h>
 
@@ -169,46 +170,75 @@ void ppc_init(boot_args *args)
 	/* DBAT[2] maps the I/O Segment 1:1 */
 	/* DBAT[3] maps the Video Segment 1:1 */
 
+
+	/* Initialize shadow IBATs */
+	shadow_BAT.IBATs[0].upper=BAT_INVALID;
+	shadow_BAT.IBATs[0].lower=BAT_INVALID;
+	shadow_BAT.IBATs[1].upper=BAT_INVALID;
+	shadow_BAT.IBATs[1].lower=BAT_INVALID;
+	shadow_BAT.IBATs[2].upper=BAT_INVALID;
+	shadow_BAT.IBATs[2].lower=BAT_INVALID;
+	shadow_BAT.IBATs[3].upper=BAT_INVALID;
+	shadow_BAT.IBATs[3].lower=BAT_INVALID;
+
+	/* Initialize shadow DBATs */
+	shadow_BAT.DBATs[0].upper=BAT_INVALID;
+	shadow_BAT.DBATs[0].lower=BAT_INVALID;
+	shadow_BAT.DBATs[1].upper=BAT_INVALID;
+	shadow_BAT.DBATs[1].lower=BAT_INVALID;
+	shadow_BAT.DBATs[2].upper=BAT_INVALID;
+	shadow_BAT.DBATs[2].lower=BAT_INVALID;
+	shadow_BAT.DBATs[3].upper=BAT_INVALID;
+	shadow_BAT.DBATs[3].lower=BAT_INVALID;
+
+
 	/* If v_baseAddr is non zero, use DBAT3 to map the video segment */
 	videoAddr = args->Video.v_baseAddr & 0xF0000000;
 	if (videoAddr) {
-	  /* start off specifying 1-1 mapping of video seg */
-	  bat.upper.word	     = videoAddr;
-	  bat.lower.word	     = videoAddr;
-	  
-	  bat.upper.bits.bl    = 0x7ff;	/* size = 256M */
-	  bat.upper.bits.vs    = 1;
-	  bat.upper.bits.vp    = 0;
-	  
-	  bat.lower.bits.wimg  = PTE_WIMG_IO;
-	  bat.lower.bits.pp    = 2;	/* read/write access */
-	  
-	  sync();isync();
-	  mtdbatu(3, BAT_INVALID); /* invalidate old mapping */
-	  mtdbatl(3, bat.lower.word);
-	  mtdbatu(3, bat.upper.word);
-	  sync();isync();
+		/* start off specifying 1-1 mapping of video seg */
+		bat.upper.word	     = videoAddr;
+		bat.lower.word	     = videoAddr;
+		
+		bat.upper.bits.bl    = 0x7ff;	/* size = 256M */
+		bat.upper.bits.vs    = 1;
+		bat.upper.bits.vp    = 0;
+		
+		bat.lower.bits.wimg  = PTE_WIMG_IO;
+		bat.lower.bits.pp    = 2;	/* read/write access */
+				
+		shadow_BAT.DBATs[3].upper = bat.upper.word;
+		shadow_BAT.DBATs[3].lower = bat.lower.word;
+		
+		sync();isync();
+		
+		mtdbatu(3, BAT_INVALID); /* invalidate old mapping */
+		mtdbatl(3, bat.lower.word);
+		mtdbatu(3, bat.upper.word);
+		sync();isync();
 	}
 	
 	/* Use DBAT2 to map the io segment */
 	addr = get_io_base_addr() & 0xF0000000;
 	if (addr != videoAddr) {
-	  /* start off specifying 1-1 mapping of io seg */
-	  bat.upper.word	     = addr;
-	  bat.lower.word	     = addr;
-	  
-	  bat.upper.bits.bl    = 0x7ff;	/* size = 256M */
-	  bat.upper.bits.vs    = 1;
-	  bat.upper.bits.vp    = 0;
-	  
-	  bat.lower.bits.wimg  = PTE_WIMG_IO;
-	  bat.lower.bits.pp    = 2;	/* read/write access */
-	  
-	  sync();isync();
-	  mtdbatu(2, BAT_INVALID); /* invalidate old mapping */
-	  mtdbatl(2, bat.lower.word);
-	  mtdbatu(2, bat.upper.word);
-	  sync();isync();
+		/* start off specifying 1-1 mapping of io seg */
+		bat.upper.word	     = addr;
+		bat.lower.word	     = addr;
+		
+		bat.upper.bits.bl    = 0x7ff;	/* size = 256M */
+		bat.upper.bits.vs    = 1;
+		bat.upper.bits.vp    = 0;
+		
+		bat.lower.bits.wimg  = PTE_WIMG_IO;
+		bat.lower.bits.pp    = 2;	/* read/write access */
+				
+		shadow_BAT.DBATs[2].upper = bat.upper.word;
+		shadow_BAT.DBATs[2].lower = bat.lower.word;
+		
+		sync();isync();
+		mtdbatu(2, BAT_INVALID); /* invalidate old mapping */
+		mtdbatl(2, bat.lower.word);
+		mtdbatu(2, bat.upper.word);
+		sync();isync();
 	}
 
 	if (!PE_parse_boot_arg("diag", &dgWork.dgFlags)) dgWork.dgFlags=0;	/* Set diagnostic flags */

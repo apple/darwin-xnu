@@ -1435,8 +1435,8 @@ nfs_loadattrcache(vpp, mdp, dposp, vaper, dontshrink, xidp)
 					np->n_size = vap->va_size;
 			} else
 				np->n_size = vap->va_size;
-			if (dontshrink && UBCISVALID(vp) &&
-			    np->n_size < ubc_getsize(vp)) {
+			if (!UBCINFOEXISTS(vp) ||
+			    dontshrink && np->n_size < ubc_getsize(vp)) {
 				vap->va_size = np->n_size = orig_size;
 				np->n_attrstamp = 0;
 			} else

@@ -536,18 +536,6 @@ Debugger(const char	*message) {
 	}
 
 	printf("\nNo debugger configured - dumping debug information\n");
-	mfdbatu(store[0],0);
-	mfdbatl(store[1],0);	
-	mfdbatu(store[2],1);					
-	mfdbatl(store[3],1);					
-	mfdbatu(store[4],2);				
-	mfdbatl(store[5],2);					
-	mfdbatu(store[6],3);				
-	mfdbatl(store[7],3);					
-	printf("DBAT0: %08X %08X\n", store[0], store[1]);
-	printf("DBAT1: %08X %08X\n", store[2], store[3]);
-	printf("DBAT2: %08X %08X\n", store[4], store[5]);
-	printf("DBAT3: %08X %08X\n", store[6], store[7]);
 	printf("MSR=%08X\n",mfmsr());
 	print_backtrace(NULL);
 	splx(spl);

@@ -656,7 +656,6 @@ struct hfsfid {
 
 #define E_NONE	0
 #define kHFSBlockSize 512
-#define kHFSBlockShift 9	/* 2^9 = 512 */
 
 #define IOBLKNOFORBLK(STARTINGBLOCK, BLOCKSIZEINBYTES) ((daddr_t)((STARTINGBLOCK) / ((BLOCKSIZEINBYTES) >> 9)))
 #define IOBLKCNTFORBLK(STARTINGBLOCK, BYTESTOTRANSFER, BLOCKSIZEINBYTES) \
@@ -675,6 +674,13 @@ struct hfsfid {
 #define IOBYTECNTFORBYTE(STARTINGBYTE, BYTESTOTRANSFER, BLOCKSIZEINBYTES) \
     (IOBLKCNTFORBYTE((STARTINGBYTE),(BYTESTOTRANSFER),(BLOCKSIZEINBYTES)) * (BLOCKSIZEINBYTES))
 #define IOBYTEOFFSETFORBYTE(STARTINGBYTE, BLOCKSIZEINBYTES) ((STARTINGBYTE) - (IOBLKNOFORBYTE((STARTINGBYTE), (BLOCKSIZEINBYTES)) * (BLOCKSIZEINBYTES)))
+
+
+#define HFS_PRI_SECTOR(blksize)    (1024 / (blksize))
+#define HFS_PRI_OFFSET(blksize)    ((blksize) > 1024 ? 1024 : 0)
+
+#define HFS_ALT_SECTOR(blksize, blkcnt)  (((blkcnt) - 1) - (512 / (blksize)))
+#define HFS_ALT_OFFSET(blksize)          ((blksize) > 1024 ? (blksize) - 1024 : 0)
 
 #define MAKE_VREFNUM(x)	((int32_t)((x) & 0xffff))
 /*
@@ -766,9 +772,9 @@ unsigned long BestBlockSizeFit(unsigned long allocationBlockSize,
                                unsigned long baseMultiple);
 
 OSErr	hfs_MountHFSVolume(struct hfsmount *hfsmp, HFSMasterDirectoryBlock *mdb,
-		u_long sectors, struct proc *p);
+		struct proc *p);
 OSErr	hfs_MountHFSPlusVolume(struct hfsmount *hfsmp, HFSPlusVolumeHeader *vhp,
-		u_long embBlkOffset, u_long sectors, struct proc *p);
+		off_t embeddedOffset, off_t disksize, struct proc *p);
 OSStatus  GetInitializedVNode(struct hfsmount *hfsmp, struct vnode **tmpvnode);
 
 int hfs_getconverter(u_int32_t encoding, hfs_to_unicode_func_t *get_unicode,

@@ -183,6 +183,8 @@
 #define risegm	0x00080000
 #define eiec	13
 #define eiecm	0x00040000
+#define mum		14
+#define mumm	0x00020000
 #define nhr		15
 #define nhrm	0x00010000
 #define ice		16
@@ -217,6 +219,19 @@
 #define nopdstm	0x00000002
 #define nopti	31
 #define noptim	0x00000001
+
+;	hid1 bits
+#define hid1pcem	0xF8000000
+#define hid1prem	0x06000000
+#define hid1pi0		14
+#define hid1pi0m	0x00020000
+#define hid1ps		15
+#define hid1psm		0x00010000
+#define hid1pc0		0x0000F800
+#define hid1pr0		0x00000600
+#define hid1pc1		0x000000F8
+#define hid1pc0		0x0000F800
+#define hid1pr1		0x00000006
 
 ;	msscr0 bits
 #define shden	0

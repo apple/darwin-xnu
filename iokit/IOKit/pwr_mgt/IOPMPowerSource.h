@@ -22,19 +22,9 @@
 #include <libkern/c++/OSObject.h>
 #include <IOKit/IOTypes.h>
 #include <IOKit/IOReturn.h>
+#include "IOPM.h"
 
 class ApplePMU;
-
-// Our flags
-
-enum {
-  kBatteryInstalled = (1<<0),
-  kBatteryCharging  = (1<<1),
-  kACInstalled      = (1<<2),
-  kUPSInstalled     = (1<<3),
-  kBatteryAtWarn    = (1<<4),
-  kBatteryDepleted  = (1<<5)
-};
 
 const unsigned long kSecondsPerHour = (60*60);
 const unsigned long kTenMinutesInSeconds = (10 * 60);
