@@ -220,6 +220,8 @@ void ml_thrm_set(
 unsigned int ml_throttle(
 	unsigned int);
 
+void ml_init_lock_timeout(void);
+
 #endif /* MACH_KERNEL_PRIVATE */
 
 void ml_thread_policy(

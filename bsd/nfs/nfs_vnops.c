@@ -711,7 +711,7 @@ nfs_open(ap)
 			if ((error = nfs_vinvalbuf(vp, V_SAVE, ap->a_cred,
 				ap->a_p, 1)) == EINTR)
 				return (error);
-			np->n_attrstamp = 0;
+			np->n_xid = 0;
 			if (vp->v_type == VDIR)
 				np->n_direofoffset = 0;
 			error = VOP_GETATTR(vp, &vattr, ap->a_cred, ap->a_p);
@@ -741,7 +741,7 @@ nfs_open(ap)
 		}
 	}
 	if ((nmp->nm_flag & NFSMNT_NQNFS) == 0)
-		np->n_attrstamp = 0; /* For Open/Close consistency */
+		np->n_xid = 0; /* For Open/Close consistency */
 	return (0);
 }
 
@@ -825,7 +825,7 @@ nfs_close(ap)
 		} else {
 		    error = nfs_vinvalbuf(vp, V_SAVE, ap->a_cred, ap->a_p, 1);
 		}
-		np->n_attrstamp = 0;
+		np->n_xid = 0;
 		if (getlock)
 			VOP_UNLOCK(vp, 0, ap->a_p);
 	    }
@@ -1210,7 +1210,7 @@ nfs_setattrrpc(vp, vap, cred, procp)
 	if (v3) {
 		nfsm_wcc_data(vp, wccflag, &xid);
 		if (!wccflag)
-    			VTONFS(vp)->n_attrstamp = 0;
+    			VTONFS(vp)->n_xid = 0;
 	} else
 		nfsm_loadattr(vp, (struct vattr *)0, &xid);
 	nfsm_reqdone;
@@ -1833,7 +1833,7 @@ nfs_mknodrpc(dvp, vpp, cnp, vap)
 	}
 	VTONFS(dvp)->n_flag |= NMODIFIED;
 	if (!wccflag)
-		VTONFS(dvp)->n_attrstamp = 0;
+		VTONFS(dvp)->n_xid = 0;
 	vput(dvp);
 	NFS_FREE_PNBUF(cnp);
 	return (error);
@@ -1970,7 +1970,7 @@ again:
 	}
 	VTONFS(dvp)->n_flag |= NMODIFIED;
 	if (!wccflag)
-		VTONFS(dvp)->n_attrstamp = 0;
+		VTONFS(dvp)->n_xid = 0;
 	vput(dvp);
 	NFS_FREE_PNBUF(cnp);
 	return (error);
@@ -2075,7 +2075,7 @@ nfs_remove(ap)
 	} else if (!np->n_sillyrename) {
 		error = nfs_sillyrename(dvp, vp, cnp);
 	}
-	np->n_attrstamp = 0;
+	np->n_xid = 0;
 	vput(dvp);
 
 	VOP_UNLOCK(vp, 0, cnp->cn_proc);
@@ -2133,7 +2133,7 @@ nfs_removerpc(dvp, name, namelen, cred, proc)
 	nfsm_reqdone;
 	VTONFS(dvp)->n_flag |= NMODIFIED;
 	if (!wccflag)
-		VTONFS(dvp)->n_attrstamp = 0;
+		VTONFS(dvp)->n_xid = 0;
 	return (error);
 }
 
@@ -2317,10 +2317,10 @@ nfs_renamerpc(fdvp, fnameptr, fnamelen, tdvp, tnameptr, tnamelen, cred, proc)
 	nfsm_reqdone;
 	VTONFS(fdvp)->n_flag |= NMODIFIED;
 	if (!fwccflag)
-		VTONFS(fdvp)->n_attrstamp = 0;
+		VTONFS(fdvp)->n_xid = 0;
 	VTONFS(tdvp)->n_flag |= NMODIFIED;
 	if (!twccflag)
-		VTONFS(tdvp)->n_attrstamp = 0;
+		VTONFS(tdvp)->n_xid = 0;
 	return (error);
 }
 
@@ -2394,9 +2394,9 @@ nfs_link(ap)
 
 	VTONFS(tdvp)->n_flag |= NMODIFIED;
 	if (!attrflag)
-		VTONFS(vp)->n_attrstamp = 0;
+		VTONFS(vp)->n_xid = 0;
 	if (!wccflag)
-		VTONFS(tdvp)->n_attrstamp = 0;
+		VTONFS(tdvp)->n_xid = 0;
 	if (didhold)
 		ubc_rele(vp);
 	vput(tdvp);
@@ -2472,7 +2472,7 @@ nfs_symlink(ap)
 
 	VTONFS(dvp)->n_flag |= NMODIFIED;
 	if (!wccflag)
-		VTONFS(dvp)->n_attrstamp = 0;
+		VTONFS(dvp)->n_xid = 0;
 	vput(dvp);
 	NFS_FREE_PNBUF(cnp);
 	/*
@@ -2546,7 +2546,7 @@ nfs_mkdir(ap)
 	nfsm_reqdone;
 	VTONFS(dvp)->n_flag |= NMODIFIED;
 	if (!wccflag)
-		VTONFS(dvp)->n_attrstamp = 0;
+		VTONFS(dvp)->n_xid = 0;
 	/*
 	 * Kludge: Map EEXIST => 0 assuming that you have a reply to a retry
 	 * if we can succeed in looking up the directory.
@@ -2608,7 +2608,7 @@ nfs_rmdir(ap)
 	nfsm_reqdone;
 	VTONFS(dvp)->n_flag |= NMODIFIED;
 	if (!wccflag)
-		VTONFS(dvp)->n_attrstamp = 0;
+		VTONFS(dvp)->n_xid = 0;
 	cache_purge(dvp);
 	cache_purge(vp);
 	vput(vp);

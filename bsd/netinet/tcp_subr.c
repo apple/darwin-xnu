@@ -693,6 +693,9 @@ tcp_close(tp)
 	register struct rtentry *rt;
 	int dosavessthresh;
 
+	if ( inp->inp_ppcb == NULL) /* tcp_close was called previously, bail */
+		return;
+
 #ifndef __APPLE__
 	/*
 	 * Make sure that all of our timers are stopped before we
@@ -712,6 +715,7 @@ tcp_close(tp)
 		}
 	}
 #endif
+	
 
 	KERNEL_DEBUG(DBG_FNC_TCP_CLOSE | DBG_FUNC_START, tp,0,0,0,0);
 	switch (tp->t_state) 

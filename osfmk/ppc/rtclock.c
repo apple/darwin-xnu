@@ -45,6 +45,7 @@
 
 #include <machine/mach_param.h>	/* HZ */
 #include <machine/commpage.h>
+#include <machine/machine_routines.h>
 #include <ppc/proc_reg.h>
 
 #include <pexpert/pexpert.h>
@@ -191,6 +192,8 @@ timebase_callback(
 
 		nanoseconds_to_absolutetime(NSEC_PER_HZ, &abstime);
 		rtclock_tick_interval = abstime;
+
+		ml_init_lock_timeout();
 	}
 	else {
 		UNLOCK_RTC(s);

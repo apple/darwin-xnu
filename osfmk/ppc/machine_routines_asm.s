@@ -826,7 +826,7 @@ minoslownap:
 ;			So, make sure everything we need there is already set up...
 ;
 
-			li		r10,hi16(dozem|napm|sleepm)		; Mask of power management bits
+			lis		r10,hi16(dozem|napm|sleepm)		; Mask of power management bits
 		
 			bf--	pf64Bitb,mipNSF1				; skip if 32-bit...
 			

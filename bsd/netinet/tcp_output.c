@@ -231,8 +231,8 @@ again:
 	 * come back before the TCP connection times out).
 	 */
 
-       if (tp->t_inpcb->inp_route.ro_rt != NULL &&
-           (tp->t_inpcb->inp_route.ro_rt->generation_id != route_generation)) {
+      if ((tp->t_inpcb->inp_route.ro_rt != NULL &&
+           (tp->t_inpcb->inp_route.ro_rt->generation_id != route_generation)) || (tp->t_inpcb->inp_route.ro_rt == NULL)) {
 		/* check that the source address is still valid */
 		if (ifa_foraddr(tp->t_inpcb->inp_laddr.s_addr) == NULL) {
 			if (tp->t_state >= TCPS_CLOSE_WAIT) {
@@ -257,10 +257,6 @@ again:
 				return(EADDRNOTAVAIL);
 			else
 				return(0); /* silently ignore and keep data in socket */
-		}
-		else  { /* Clear the cached route, will be reacquired later */
-			rtfree(tp->t_inpcb->inp_route.ro_rt);
-			tp->t_inpcb->inp_route.ro_rt = (struct rtentry *)0;
 		}
         }
 	}

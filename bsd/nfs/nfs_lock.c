@@ -233,14 +233,14 @@ nfs_dolock(struct vop_advlock_args *ap)
 		/* need to flush, and refetch attributes to make */
 		/* sure we have the correct end of file offset   */
 		if (np->n_flag & NMODIFIED) {
-			np->n_attrstamp = 0;
+			np->n_xid = 0;
 			error = nfs_vinvalbuf(vp, V_SAVE, p->p_ucred, p, 1);
 			if (error) {
 				vrele(wvp);
 				return (error);
 			}
 		}
-		np->n_attrstamp = 0;
+		np->n_xid = 0;
 		error = VOP_GETATTR(vp, &vattr, p->p_ucred, p);
 		if (error) {
 			vrele(wvp);

@@ -1035,6 +1035,8 @@ in6_tmpaddrtimer_funneled(void *ignored_arg)
 #endif 
 }
 
+extern size_t nd_ifinfo_indexlim;
+extern int ip6_use_tempaddr;
 void
 in6_tmpaddrtimer(ignored_arg)
 	void *ignored_arg;
@@ -1048,19 +1050,23 @@ in6_tmpaddrtimer(ignored_arg)
 		      (ip6_temp_preferred_lifetime - ip6_desync_factor -
 		       ip6_temp_regen_advance) * hz);
 
-	bzero(nullbuf, sizeof(nullbuf));
-	for (i = 1; i < if_index + 1; i++) {
-		ndi = &nd_ifinfo[i];
-		if (bcmp(ndi->randomid, nullbuf, sizeof(nullbuf)) != 0) {
-			/*
-			 * We've been generating a random ID on this interface.
-			 * Create a new one.
-			 */
-			(void)generate_tmp_ifid(ndi->randomseed0,
-						ndi->randomseed1,
-						ndi->randomid);
+	if (ip6_use_tempaddr) {
+		
+		bzero(nullbuf, sizeof(nullbuf));
+		for (i = 1; i < nd_ifinfo_indexlim + 1; i++) {
+			ndi = &nd_ifinfo[i];
+			if (ndi->flags != ND6_IFF_PERFORMNUD)
+				continue;
+			if (bcmp(ndi->randomid, nullbuf, sizeof(nullbuf)) != 0) {
+				/*
+				 * We've been generating a random ID on this interface.
+				 * Create a new one.
+				 */
+				(void)generate_tmp_ifid(ndi->randomseed0,
+							ndi->randomseed1,
+							ndi->randomid);
+			}
 		}
 	}
-
 	splx(s);
 }

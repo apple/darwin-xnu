@@ -124,6 +124,8 @@ int main(int argc, char *argv[])
 	DECLARE("FamVMmodebit",		FamVMmodebit);
 	DECLARE("perfMonitor",		perfMonitor);
 	DECLARE("perfMonitorbit",	perfMonitorbit);
+	DECLARE("OnProc",		OnProc);
+	DECLARE("OnProcbit",		OnProcbit);
 
 	/* Per Proc info structure */
 	DECLARE("PP_CPU_NUMBER",		offsetof(struct per_proc_info *, cpu_number));

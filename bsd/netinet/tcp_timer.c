@@ -316,6 +316,10 @@ tpgone:
 #endif
 		ipnxt = ip->inp_list.le_next;
 		tp = intotcpcb(ip);
+		if (tp == NULL) { /* tp already closed, remove from list */
+			LIST_REMOVE(ip, inp_list);
+			continue; 
+		}
 		if (tp->t_timer[TCPT_2MSL] >= N_TIME_WAIT_SLOTS) {
 		    tp->t_timer[TCPT_2MSL] -= N_TIME_WAIT_SLOTS;
 		    tp->t_rcvtime += N_TIME_WAIT_SLOTS;

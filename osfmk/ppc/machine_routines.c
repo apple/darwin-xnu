@@ -33,6 +33,8 @@
 #include <kern/processor.h>
 
 unsigned int max_cpus_initialized = 0;
+unsigned int LockTimeOut = 12500000;
+unsigned int MutexSpin = 0;
 extern int forcenap;
 
 #define	MAX_CPUS_SET	0x1
@@ -386,6 +388,25 @@ ml_enable_cache_level(int cache_level, int enable)
   }
   
   return -1;
+}
+
+void
+ml_init_lock_timeout(void)
+{
+	uint64_t	abstime;
+	uint32_t	mtxspin; 
+
+	nanoseconds_to_absolutetime(NSEC_PER_SEC>>2, &abstime);
+	LockTimeOut = (unsigned int)abstime;
+
+	if (PE_parse_boot_arg("mtxspin", &mtxspin)) {
+		if (mtxspin > USEC_PER_SEC>>4)
+			mtxspin =  USEC_PER_SEC>>4;
+		nanoseconds_to_absolutetime(mtxspin*NSEC_PER_USEC, &abstime);
+	} else {
+		nanoseconds_to_absolutetime(20*NSEC_PER_USEC, &abstime);
+	}
+	MutexSpin = (unsigned int)abstime;
 }
 
 void

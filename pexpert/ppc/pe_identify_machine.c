@@ -27,10 +27,6 @@
 #include <pexpert/ppc/powermac.h>
 #include <pexpert/device_tree.h>
 
-/* External declarations */
-
-unsigned int LockTimeOut = 12500000;
-
 /* pe_identify_machine:
  *
  *   Sets up platform parameters.

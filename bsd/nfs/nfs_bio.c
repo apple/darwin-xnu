@@ -1015,9 +1015,9 @@ nfs_bioread(vp, uio, ioflag, cred, getpages)
 	 * Then force a getattr rpc to ensure that you have up to date
 	 * attributes.
 	 * NB: This implies that cache data can be read when up to
-	 * NFS_MAXATTRTIMEO seconds out of date. If you find that you need current
-	 * attributes this could be forced by setting n_attrstamp to 0 before
-	 * the VOP_GETATTR() call.
+	 * NFS_MAXATTRTIMEO seconds out of date. If you find that you need
+	 * current attributes this could be forced by setting n_xid to 0
+	 * before the VOP_GETATTR() call.
 	 */
 	if ((nmp->nm_flag & NFSMNT_NQNFS) == 0) {
 		if (np->n_flag & NMODIFIED) {
@@ -1031,7 +1031,7 @@ nfs_bioread(vp, uio, ioflag, cred, getpages)
 					return (error);
 				}
 			}
-			np->n_attrstamp = 0;
+			np->n_xid = 0;
 			error = VOP_GETATTR(vp, &vattr, cred, p);
 			if (error) {
 				FSDBG_BOT(514, vp, 0xd1e0004, 0, error);
@@ -1536,7 +1536,7 @@ nfs_write(ap)
 		(void)nfs_fsinfo(nmp, vp, cred, p);
 	if (ioflag & (IO_APPEND | IO_SYNC)) {
 		if (np->n_flag & NMODIFIED) {
-			np->n_attrstamp = 0;
+			np->n_xid = 0;
 			error = nfs_vinvalbuf(vp, V_SAVE, cred, p, 1);
 			if (error) {
 				FSDBG_BOT(515, vp, uio->uio_offset, 0x10bad01, error);
@@ -1544,7 +1544,7 @@ nfs_write(ap)
 			}
 		}
 		if (ioflag & IO_APPEND) {
-			np->n_attrstamp = 0;
+			np->n_xid = 0;
 			error = VOP_GETATTR(vp, &vattr, cred, p);
 			if (error) {
 				FSDBG_BOT(515, vp, uio->uio_offset, 0x10bad02, error);

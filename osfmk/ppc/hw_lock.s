@@ -919,23 +919,86 @@ LEXT(_mutex_lock)
 #if	!MACH_LDEBUG
 			mfsprg	r6,1							; load the current thread
 			lwz		r5,0(r3)						; Get the lock quickly
+			li		r4,0
+			li		r8,0
 			mr.		r5,r5							; Quick check
-			bne--	L_mutex_lock_slow				; Can not get it right now...
+			bne--	mlckspin1						; Can not get it right now...
 
-L_mutex_lock_loop:
+mlcktry:
 			lwarx	r5,0,r3							; load the mutex lock
 			mr.		r5,r5
-			bne--	L_mutex_lock_slowX				; go to the slow path
+			bne--	mlckspin0						; Can not get it right now...
 			stwcx.	r6,0,r3							; grab the lock
-			bne--	L_mutex_lock_loop				; loop back if failed
+			bne--	mlcktry							; loop back if failed
 			isync									; stop prefeteching
+			mflr	r8
+			stw		r8,4(r3)
 			blr
 
-L_mutex_lock_slowX:
+mlckspin0:
 			li		r5,lgKillResv					; Killing field
 			stwcx.	r5,0,r5							; Kill reservation
+mlckspin1:
+			mr.		r4,r4							; Test timeout value
+			bne++	mlckspin2
+			lis		r4,hi16(EXT(MutexSpin))			; Get the high part 
+			ori		r4,r4,lo16(EXT(MutexSpin)	)	; And the low part
+			lwz		r4,0(r4)						; Get spin timerout value
+			mr.		r4,r4							; Test spin timeout value
+			beq		mlckslow1						; Is spin timeout set to zero
 
-L_mutex_lock_slow:
+mlckspin2:	mr.		r8,r8							; Is r8 set to zero
+			bne++	mlckspin3						; If yes, first spin attempt
+			lis		r0,hi16(MASK(MSR_VEC))			; Get vector enable
+			mfmsr	r9								; Get the MSR value
+			ori		r0,r0,lo16(MASK(MSR_FP))		; Get FP enable
+			ori		r7,r0,lo16(MASK(MSR_EE))		; Get EE bit on too
+			andc	r9,r9,r0						; Clear FP and VEC
+			andc	r7,r9,r7						; Clear EE as well
+			mtmsr	r7								; Turn off interruptions 
+			isync									; May have turned off vec and fp here 
+			mftb	r8								; Get timestamp on entry
+			b		mlcksniff
+
+mlckspin3:	mtmsr	r7								; Turn off interruptions 
+			mftb	r8								; Get timestamp on entry
+
+mlcksniff:	lwz		r5,0(r3)						; Get that lock in here
+			mr.		r5,r5							; Is the lock held
+			beq++	mlckretry						; No, try for it again...
+			rlwinm	r5,r5,0,0,29					; Extract the lock owner
+			mr.		r5,r5							; Quick check
+			beq++	mlckslow0						; InterLock is held
+			lwz		r10,ACT_MACT_SPF(r5)			; Get the special flags
+			rlwinm. r10,r10,0,OnProcbit,OnProcbit 	; Is OnProcbit set?
+			beq		mlckslow0						; Lock owner isn't running
+
+			mftb	r10								; Time stamp us now
+			sub		r10,r10,r8						; Get the elapsed time
+			cmplwi	r10,128							; Have we been spinning for 128 tb ticks?
+			blt++	mlcksniff						; Not yet...
+			
+			mtmsr	r9								; Say, any interrupts pending?
+
+;			The following instructions force the pipeline to be interlocked to that only one
+;			instruction is issued per cycle.  The insures that we stay enabled for a long enough
+;			time; if it's too short, pending interruptions will not have a chance to be taken
+
+			subi	r4,r4,128						; Back off elapsed time from timeout value
+			or		r4,r4,r4						; Do nothing here but force a single cycle delay
+			mr.		r4,r4							; See if we used the whole timeout
+			or		r4,r4,r4						; Do nothing here but force a single cycle delay
+			
+			ble--	mlckslow1						; We failed
+			b		mlckspin1						; Now that we've opened an enable window, keep trying...
+mlckretry:
+			mtmsr	r9								; Restore interrupt state
+			li		r8,1							; Show already through once
+			b		mlcktry
+mlckslow0:											; We couldn't get the lock
+			mtmsr	r9								; Restore interrupt state
+
+mlckslow1:
 #endif
 #if CHECKNMI
 			mflr	r12								; (TEST/DEBUG) 

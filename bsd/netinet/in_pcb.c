@@ -592,6 +592,10 @@ in_pcbdetach(inp)
 	struct inpcbinfo *ipi = inp->inp_pcbinfo;
 	struct rtentry *rt  = inp->inp_route.ro_rt;
 
+
+	if (so->so_pcb == 0) /* we've been called twice, ignore */
+		return;
+
 #if IPSEC
 	ipsec4_delete_pcbpolicy(inp);
 #endif /*IPSEC*/
@@ -820,6 +824,8 @@ in_rtchange(inp, errno)
 	int errno;
 {
 	if (inp->inp_route.ro_rt) {
+		if (ifa_foraddr(inp->inp_laddr.s_addr) == NULL) 
+			return; /* we can't remove the route now. not sure if still ok to use src */
 		rtfree(inp->inp_route.ro_rt);
 		inp->inp_route.ro_rt = 0;
 		/*

@@ -106,7 +106,7 @@ MALLOC_DEFINE(M_IFADDR, "ifaddr", "interface address");
 MALLOC_DEFINE(M_IFMADDR, "ether_multi", "link-level multicast address");
 
 int	ifqmaxlen = IFQ_MAXLEN;
-struct	ifnethead ifnet;	/* depend on static init XXX */
+struct	ifnethead ifnet = TAILQ_HEAD_INITIALIZER(ifnet);
 struct ifmultihead ifma_lostlist = LIST_HEAD_INITIALIZER(ifma_lostlist);
 
 #if INET6
@@ -124,10 +124,86 @@ extern void	nd6_setmtu __P((struct ifnet *));
  * parameters.
  */
 
-int if_index = 0;
+int if_index;
 struct ifaddr **ifnet_addrs;
-struct ifnet **ifindex2ifnet = NULL;
+struct ifnet **ifindex2ifnet;
 
+#define INITIAL_IF_INDEXLIM	8
+
+/*
+ * Function: if_next_index
+ * Purpose:
+ *   Return the next available interface index.  
+ *   Grow the ifnet_addrs[] and ifindex2ifnet[] arrays to accomodate the 
+ *   added entry when necessary.
+ *
+ * Note:
+ *   ifnet_addrs[] is indexed by (if_index - 1), whereas
+ *   ifindex2ifnet[] is indexed by ifp->if_index.  That requires us to
+ *   always allocate one extra element to hold ifindex2ifnet[0], which
+ *   is unused.
+ */
+static int
+if_next_index(void)
+{
+	static int 	if_indexlim = 0;
+	static int 	if_list_growing = 0;
+	int		new_index;
+
+	while (if_list_growing) {
+		/* wait until list is done growing */
+		(void)tsleep((caddr_t)&ifnet_addrs, PZERO, "if_next_index", 0);
+	}
+	new_index = ++if_index;
+	if (if_index > if_indexlim) {
+		unsigned 	n;
+		int		new_if_indexlim;
+		caddr_t		new_ifnet_addrs;
+		caddr_t		new_ifindex2ifnet;
+		caddr_t		old_ifnet_addrs;
+
+		/* mark list as growing */
+		if_list_growing = 1;
+
+		old_ifnet_addrs = (caddr_t)ifnet_addrs;
+		if (ifnet_addrs == NULL) {
+			new_if_indexlim = INITIAL_IF_INDEXLIM;
+		} else {
+			new_if_indexlim = if_indexlim << 1;
+		}
+
+		/* allocate space for the larger arrays */
+		n = (2 * new_if_indexlim + 1) * sizeof(caddr_t);
+		new_ifnet_addrs = _MALLOC(n, M_IFADDR, M_WAITOK);
+		new_ifindex2ifnet = new_ifnet_addrs 
+			+ new_if_indexlim * sizeof(caddr_t);
+		bzero(new_ifnet_addrs, n);
+		if (ifnet_addrs != NULL) {
+			/* copy the existing data */
+			bcopy((caddr_t)ifnet_addrs, new_ifnet_addrs,
+			      if_indexlim * sizeof(caddr_t));
+			bcopy((caddr_t)ifindex2ifnet,
+			      new_ifindex2ifnet,
+			      (if_indexlim + 1) * sizeof(caddr_t));
+		}
+
+		/* switch to the new tables and size */
+		ifnet_addrs = (struct ifaddr **)new_ifnet_addrs;
+		ifindex2ifnet = (struct ifnet **)new_ifindex2ifnet;
+		if_indexlim = new_if_indexlim;
+
+		/* release the old data */
+		if (old_ifnet_addrs != NULL) {
+			_FREE((caddr_t)old_ifnet_addrs, M_IFADDR);
+		}
+
+		/* wake up others that might be blocked */
+		if_list_growing = 0;
+		wakeup((caddr_t)&ifnet_addrs);
+	}
+	return (new_index);
+
+}
 
 /*
  * Attach an interface to the
@@ -142,21 +218,10 @@ old_if_attach(ifp)
 	char workbuf[64];
 	register struct sockaddr_dl *sdl;
 	register struct ifaddr *ifa;
-	static int if_indexlim = 8;
-	static int inited;
 
 	if (ifp->if_snd.ifq_maxlen == 0)
 	    ifp->if_snd.ifq_maxlen = ifqmaxlen;
 
-	if (!inited) {
-		TAILQ_INIT(&ifnet);
-		inited = 1;
-	}
-
-	TAILQ_INSERT_TAIL(&ifnet, ifp, if_link);
-	/* if the interface is recycled, keep the index */
-	if (!((ifp->if_eflags & IFEF_REUSE) && ifp->if_index))
-	  ifp->if_index = ++if_index;
 	/*
 	 * XXX -
 	 * The old code would work if the interface passed a pre-existing
@@ -168,64 +233,52 @@ old_if_attach(ifp)
 	TAILQ_INIT(&ifp->if_prefixhead);
 	LIST_INIT(&ifp->if_multiaddrs);
 	getmicrotime(&ifp->if_lastchange);
-	if (ifnet_addrs == 0 || if_index >= if_indexlim) {
-		unsigned n = (if_indexlim <<= 1) * sizeof(ifa);
-		struct ifaddr **q = (struct ifaddr **)
-					_MALLOC(n, M_IFADDR, M_WAITOK);
-		bzero((caddr_t)q, n);
-		if (ifnet_addrs) {
-			bcopy((caddr_t)ifnet_addrs, (caddr_t)q, n/2);
-			FREE((caddr_t)ifnet_addrs, M_IFADDR);
-		}
-		ifnet_addrs = (struct ifaddr **)q;
 
-		/* grow ifindex2ifnet */
-		n = if_indexlim * sizeof(struct ifaddr *);
-		q = (struct ifaddr **)_MALLOC(n, M_IFADDR, M_WAITOK);
-		bzero(q, n);
-		if (ifindex2ifnet) {
-			bcopy((caddr_t)ifindex2ifnet, q, n/2);
-			_FREE((caddr_t)ifindex2ifnet, M_IFADDR);
-		}
-		ifindex2ifnet = (struct ifnet **)q;
-	}
+	if ((ifp->if_eflags & IFEF_REUSE) == 0 || ifp->if_index == 0) {
+		/* allocate a new entry */
+		ifp->if_index = if_next_index();
+		ifindex2ifnet[ifp->if_index] = ifp;
 
-	ifindex2ifnet[if_index] = ifp;
-
-	/*
-	 * create a Link Level name for this device
-	 */
-	namelen = snprintf(workbuf, sizeof(workbuf),
-	    "%s%d", ifp->if_name, ifp->if_unit);
+		/*
+		 * create a Link Level name for this device
+		 */
+		namelen = snprintf(workbuf, sizeof(workbuf),
+				   "%s%d", ifp->if_name, ifp->if_unit);
 #define _offsetof(t, m) ((int)((caddr_t)&((t *)0)->m))
-	masklen = _offsetof(struct sockaddr_dl, sdl_data[0]) + namelen;
-	socksize = masklen + ifp->if_addrlen;
+		masklen = _offsetof(struct sockaddr_dl, sdl_data[0]) + namelen;
+		socksize = masklen + ifp->if_addrlen;
 #define ROUNDUP(a) (1 + (((a) - 1) | (sizeof(long) - 1)))
-	if (socksize < sizeof(*sdl))
-		socksize = sizeof(*sdl);
-	socksize = ROUNDUP(socksize);
-	ifasize = sizeof(*ifa) + 2 * socksize;
-	ifa = (struct ifaddr *) _MALLOC(ifasize, M_IFADDR, M_WAITOK);
-	if (ifa) {
-		bzero((caddr_t)ifa, ifasize);
-		sdl = (struct sockaddr_dl *)(ifa + 1);
-		sdl->sdl_len = socksize;
-		sdl->sdl_family = AF_LINK;
-		bcopy(workbuf, sdl->sdl_data, namelen);
-		sdl->sdl_nlen = namelen;
-		sdl->sdl_index = ifp->if_index;
-		sdl->sdl_type = ifp->if_type;
-		ifnet_addrs[if_index - 1] = ifa;
-		ifa->ifa_ifp = ifp;
-		ifa->ifa_rtrequest = link_rtrequest;
-		ifa->ifa_addr = (struct sockaddr *)sdl;
-		sdl = (struct sockaddr_dl *)(socksize + (caddr_t)sdl);
-		ifa->ifa_netmask = (struct sockaddr *)sdl;
-		sdl->sdl_len = masklen;
-		while (namelen != 0)
-			sdl->sdl_data[--namelen] = 0xff;
+		if (socksize < sizeof(*sdl))
+			socksize = sizeof(*sdl);
+		socksize = ROUNDUP(socksize);
+		ifasize = sizeof(*ifa) + 2 * socksize;
+		ifa = (struct ifaddr *) _MALLOC(ifasize, M_IFADDR, M_WAITOK);
+		if (ifa) {
+			bzero((caddr_t)ifa, ifasize);
+			sdl = (struct sockaddr_dl *)(ifa + 1);
+			sdl->sdl_len = socksize;
+			sdl->sdl_family = AF_LINK;
+			bcopy(workbuf, sdl->sdl_data, namelen);
+			sdl->sdl_nlen = namelen;
+			sdl->sdl_index = ifp->if_index;
+			sdl->sdl_type = ifp->if_type;
+			ifnet_addrs[ifp->if_index - 1] = ifa;
+			ifa->ifa_ifp = ifp;
+			ifa->ifa_rtrequest = link_rtrequest;
+			ifa->ifa_addr = (struct sockaddr *)sdl;
+			sdl = (struct sockaddr_dl *)(socksize + (caddr_t)sdl);
+			ifa->ifa_netmask = (struct sockaddr *)sdl;
+			sdl->sdl_len = masklen;
+			while (namelen != 0)
+				sdl->sdl_data[--namelen] = 0xff;
+		}
+	} else {
+		ifa = ifnet_addrs[ifp->if_index - 1];
+	}
+	if (ifa != NULL) {
 		TAILQ_INSERT_HEAD(&ifp->if_addrhead, ifa, ifa_link);
 	}
+	TAILQ_INSERT_TAIL(&ifnet, ifp, if_link);
 }
 
 __private_extern__ int

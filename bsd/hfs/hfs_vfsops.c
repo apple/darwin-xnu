@@ -1802,8 +1802,15 @@ loop:
 		simple_unlock(&mntvnode_slock);
 		error = vget(vp, LK_EXCLUSIVE | LK_NOWAIT | LK_INTERLOCK, p);
 		if (error) {
-			if (error == ENOENT)
+			if (error == ENOENT) {
+				/*
+				 * If vnode is being reclaimed, yield so
+				 * that it can be removed from our list.
+				 */
+				if (UBCISVALID(vp))
+					(void) tsleep((caddr_t)&lbolt, PINOD, "hfs_sync", 0);
 				goto loop;
+			}
 			simple_lock(&mntvnode_slock);
 			continue;
 		}

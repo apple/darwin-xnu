@@ -1332,7 +1332,7 @@ nfs_loadattrcache(vpp, mdp, dposp, vaper, dontshrink, xidp)
 		 * to indicate the attributes were dropped - only getattr
 		 * cares - it needs to retry the rpc.
 		 */
-		np->n_attrstamp = 0;
+		np->n_xid = 0;
 		FSDBG_BOT(527, 0, np, np->n_xid, *xidp);
 		*xidp = 0;
 		return (0);
@@ -1437,7 +1437,7 @@ nfs_loadattrcache(vpp, mdp, dposp, vaper, dontshrink, xidp)
 			if (!UBCINFOEXISTS(vp) ||
 			    dontshrink && np->n_size < ubc_getsize(vp)) {
 				vap->va_size = np->n_size = orig_size;
-				np->n_attrstamp = 0;
+				np->n_xid = 0;
 			} else {
 				ubc_setsize(vp, (off_t)np->n_size); /* XXX */
 			}
@@ -1472,6 +1472,12 @@ nfs_getattrcache(vp, vaper)
 	register struct vattr *vap;
 	struct timeval now, nowup;
 	int32_t timeo;
+
+	if (np->n_xid == 0) {
+		FSDBG(528, vp, 0, 0, 0);
+		nfsstats.attrcache_misses++;
+		return (ENOENT);
+	}
 
 	/* Set attribute timeout based on how recently the file has been modified. */
 	if ((np)->n_flag & NMODIFIED)

@@ -1255,7 +1255,7 @@ vmxonlyone:	stw		r24,VMXsave(r20)				; Dequeue this savearea
 			lwz		r3,SACvrswap+4(r3)				; Get the virtual to real conversion (bottom)
 			stw		r8,SAVprev(r22)					; Link the old in (top)					
 			stw		r9,SAVprev+4(r22)				; Link the old in (bottom)					
-			xor		r3,r24,r3						; Convert to physical
+			xor		r3,r22,r3						; Convert to physical
 			stw		r2,quickfret(r31)				; Set the first in quickfret list (top)					
 			stw		r3,quickfret+4(r31)				; Set the first in quickfret list (bottom)					
 

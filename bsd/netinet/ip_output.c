@@ -284,10 +284,15 @@ ip_output(m0, opt, ro, flags, imo)
 	 * cache with IPv6.
 	 */
 
+	if (ro->ro_rt && (ro->ro_rt->generation_id != route_generation) &&
+		((flags & (IP_ROUTETOIF | IP_FORWARDING)) == 0) && (ip->ip_src.s_addr != INADDR_ANY) &&
+	   	(ifa_foraddr(ip->ip_src.s_addr) == NULL)) {
+	 	error = EADDRNOTAVAIL;
+		goto bad;
+	}
 	if (ro->ro_rt && ((ro->ro_rt->rt_flags & RTF_UP) == 0 ||
 	   dst->sin_family != AF_INET ||
-	   dst->sin_addr.s_addr != ip->ip_dst.s_addr ||
-	   ro->ro_rt->generation_id != route_generation) ) {
+	   dst->sin_addr.s_addr != ip->ip_dst.s_addr)) {
 		rtfree(ro->ro_rt);
 		ro->ro_rt = (struct rtentry *)0;
 	}

@@ -166,6 +166,8 @@ machine_switch_context(
 		old_act->mact.specFlags &=  ~(userProtKey|FamVMmode);
 		old_act->mact.specFlags |= (ppinfo->spcFlags) & (userProtKey|FamVMmode);
 	}
+	old_act->mact.specFlags &= ~OnProc;
+	new_act->mact.specFlags |= OnProc;
 
 	/*
 	 * We do not have to worry about the PMAP module, so switch.
@@ -697,6 +699,8 @@ machine_stack_handoff(
 		old->top_act->mact.specFlags &= ~(userProtKey|FamVMmode);
 		old->top_act->mact.specFlags |= (ppinfo->spcFlags) & (userProtKey|FamVMmode);
 	}
+	old->top_act->mact.specFlags &= ~OnProc;
+	new->top_act->mact.specFlags |= OnProc;
 
 	KERNEL_DEBUG_CONSTANT(MACHDBG_CODE(DBG_MACH_SCHED,MACH_STACK_HANDOFF) | DBG_FUNC_NONE,
 		     old->reason, (int)new, old->sched_pri, new->sched_pri, 0);

@@ -1680,6 +1680,9 @@ hpmCNext:	bne++	cr1,hpmSearch				; There is another to check...
 
 hpmGotOne:	lwz		r20,mpFlags(r3)				; Get the flags
 			andi.	r9,r20,lo16(mpSpecial|mpNest|mpPerm|mpBlock)	; Are we allowed to remove it?
+			rlwinm	r21,r20,8,24,31				; Extract the busy count
+			cmplwi	cr2,r21,0					; Is it busy?
+			crand	cr0_eq,cr2_eq,cr0_eq		; not busy and can be removed?
 			beq++	hrmGotX						; Found, branch to remove the mapping...
 			b		hpmCNext					; Nope...
 

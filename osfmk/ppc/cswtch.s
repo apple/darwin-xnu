@@ -61,11 +61,15 @@ LEXT(machine_load_context)
 			mfmsr	r5								/* Since we are passing control, get our MSR values */
 			lwz		r11,SAVprev+4(r3)				/* Get the previous savearea */
 			lwz		r1,saver1+4(r3)					/* Load new stack pointer */
+			lwz		r10,ACT_MACT_SPF(r9)			/* Get the special flags */
 			stw		r0,saver3+4(r3)					/* Make sure we pass in a 0 for the continuation */
 			stw		r0,FM_BACKPTR(r1)				/* zero backptr */
 			stw		r5,savesrr1+4(r3)				/* Pass our MSR to the new guy */
 			stw		r11,ACT_MACT_PCB(r9)			/* Unstack our savearea */
+			oris	r10,r10,hi16(OnProc)			/* Set OnProc bit */
 			stw		r0,ACT_PREEMPT_CNT(r9)			/* Enable preemption */
+			stw		r10,ACT_MACT_SPF(r9)			/* Update the special flags */
+			stw		r10,spcFlags(r6)				/*  Set per_proc copy of the special flags */
 			b		EXT(exception_exit)				/* Go for it */
 	
 /* thread_t Switch_context(thread_t	old,

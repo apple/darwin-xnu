@@ -129,6 +129,7 @@ typedef struct MachineThrAct {
 #define FamVMenabit		 	    11
 #define FamVMmodebit			12
 #define perfMonitorbit          13
+#define OnProcbit				14
 /*	NOTE: Do not move or assign bit 31 without changing exception vector ultra fast path code */
 #define bbThreadbit				28
 #define bbNoMachSCbit	 		29
@@ -149,6 +150,7 @@ typedef struct MachineThrAct {
 #define	FamVMena			0x00100000  /* (1<<(31-FamVMenabit)) */
 #define	FamVMmode			0x00080000  /* (1<<(31-FamVMmodebit)) */
 #define perfMonitor         0x00040000  /* (1<<(31-perfMonitorbit)) */
+#define	OnProc				0x00020000  /* (1<<(31-OnProcbit)) */
 
 #define bbThread			0x00000008  /* (1<<(31-bbThreadbit)) */
 #define bbNoMachSC			0x00000004  /* (1<<(31-bbNoMachSCbit)) */
