@@ -221,7 +221,7 @@ static int ReadMultipleNodes( BTScanState *theScanStatePtr )
 	// release old buffer if we have one
 	if ( theScanStatePtr->bufferPtr != NULL )
 	{
-		theScanStatePtr->bufferPtr->b_flags |= (B_INVAL | B_AGE);
+	    theScanStatePtr->bufferPtr->b_flags |= (B_INVAL | B_AGE);
 		brelse( theScanStatePtr->bufferPtr );
 		theScanStatePtr->bufferPtr = NULL;
 		theScanStatePtr->currentNodePtr = NULL;
@@ -249,10 +249,10 @@ static int ReadMultipleNodes( BTScanState *theScanStatePtr )
 	
 	// now read blocks from the device 
 	myErr = bread( 	myDevPtr, 
-					myPhyBlockNum, 
-					myBufferSize,  
-					NOCRED, 
-					&theScanStatePtr->bufferPtr );
+							myPhyBlockNum, 
+							myBufferSize,  
+							NOCRED, 
+							&theScanStatePtr->bufferPtr );
 	if ( myErr != E_NONE )
 	{
 		goto ExitThisRoutine;
@@ -374,7 +374,7 @@ int	 BTScanTerminate(	BTScanState *		scanState,
 	if ( scanState->bufferPtr != NULL )
 	{
 		scanState->bufferPtr->b_flags |= (B_INVAL | B_AGE);
-		brelse( scanState->bufferPtr ); 
+		brelse( scanState->bufferPtr );
 		scanState->bufferPtr = NULL;
 		scanState->currentNodePtr = NULL;
 	}

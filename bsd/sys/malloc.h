@@ -164,8 +164,9 @@
 #define M_IP6MISC	88	/* IPv6 misc. memory */
 #define M_TSEGQ		89	/* TCP segment queue entry */
 #define M_IGMP		90
+#define M_JOURNAL       91      /* VFS Journaling code */
 
-#define	M_LAST		91	/* Must be last type + 1 */
+#define	M_LAST		92	/* Must be last type + 1 */
 
 /* Strings corresponding to types of memory */
 /* Must be in synch with the #defines above */
@@ -258,9 +259,10 @@
 	"UDF mount"	/* 85 M_UDFMNT */ \
 	"IPv6 NDP",	/* 86 M_IP6NDP */ \
 	"IPv6 options",	/* 87 M_IP6OPT */ \
-	"IPv6 Misc"	/* 88 M_IP6MISC */\
-	"TCP Segment Q"	/* 89 M_TSEGQ */\
-	"IGMP state"	/* 90 M_IGMP */\
+	"IPv6 Misc",	/* 88 M_IP6MISC */\
+	"TCP Segment Q",/* 89 M_TSEGQ */\
+	"IGMP state",	/* 90 M_IGMP */\
+	"Journaling"    /* 91 M_JOURNAL */\
 }
 
 struct kmemstats {

@@ -261,8 +261,9 @@ notfound:
 			 * creation of files in the directory.
 			 */
 			retval = VOP_ACCESS(dvp, VWRITE, cred, cnp->cn_proc);
-			if (retval)
+			if (retval) {
 				goto exit;
+			}
 		
 			cnp->cn_flags |= SAVENAME;
 			if (!(flags & LOCKPARENT))

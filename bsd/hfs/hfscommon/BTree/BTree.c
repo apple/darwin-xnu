@@ -339,6 +339,20 @@ OSStatus	BTOpenPath			(FCB					*filePtr,
 	err = ReleaseNode (btreePtr, &nodeRec);
 	M_ExitOnError (err);
 
+	/*
+	 * Under Mac OS, b-tree nodes can be non-contiguous on disk when the
+	 * allocation block size is smaller than the b-tree node size.
+	 *
+	 * If journaling is turned on for this volume we can't deal with this
+	 * situation and so we bail out.  If journaling isn't on it's ok as
+	 * hfs_strategy_fragmented() deals with it.  Journaling can't support
+	 * this because it assumes that if you give it a block that it's
+	 * contiguous on disk.
+	 */
+	if ( FCBTOHFS(filePtr)->jnl && !NodesAreContiguous(FCBTOVCB(filePtr), filePtr, btreePtr->nodeSize) ) {
+		return fsBTInvalidNodeErr;
+	}
+
 	//////////////////////////////// Success ////////////////////////////////////
 
 	//€€ align LEOF to multiple of node size?	- just on close
@@ -455,6 +469,9 @@ OSStatus	BTSearchRecord		(FCB						*filePtr,
 
 	if (filePtr == nil)									return	paramErr;
 	if (searchIterator == nil)							return	paramErr;
+
+	node.buffer = nil;
+	node.blockHeader = nil;
 
 	btreePtr = (BTreeControlBlockPtr) filePtr->fcbBTCBPtr;
 	if (btreePtr == nil)								return	fsBTInvalidFileErr;
@@ -629,9 +646,12 @@ OSStatus	BTIterateRecord		(FCB						*filePtr,
 
 	////////////////////////// Priliminary Checks ///////////////////////////////
 
-	left.buffer		= nil;
-	right.buffer	= nil;
-	node.buffer		= nil;
+	left.buffer		  = nil;
+	left.blockHeader  = nil;
+	right.buffer	  = nil;
+	right.blockHeader = nil;
+	node.buffer		  = nil;
+	node.blockHeader  = nil;
 
 
 	if (filePtr == nil)
@@ -928,9 +948,12 @@ BTIterateRecords(FCB *filePtr, BTreeIterationOperation operation, BTreeIterator 
 
 	////////////////////////// Priliminary Checks ///////////////////////////////
 
-	left.buffer  = nil;
-	right.buffer = nil;
-	node.buffer  = nil;
+	left.buffer       = nil;
+	left.blockHeader  = nil;
+	right.buffer      = nil;
+	right.blockHeader = nil;
+	node.buffer       = nil;
+	node.blockHeader  = nil;
 
 	btreePtr = (BTreeControlBlockPtr) filePtr->fcbBTCBPtr;
 
@@ -1201,10 +1224,10 @@ OSStatus	BTInsertRecord		(FCB						*filePtr,
 	UInt16					index;
 	Boolean					recordFit;
 
-
 	////////////////////////// Priliminary Checks ///////////////////////////////
 
 	nodeRec.buffer = nil;					// so we can call ReleaseNode
+	nodeRec.blockHeader = nil;
 
 	err = CheckInsertParams (filePtr, iterator, record, recordLen);
 	if (err != noErr)
@@ -1241,6 +1264,9 @@ OSStatus	BTInsertRecord		(FCB						*filePtr,
 								err = GetNewNode (btreePtr, insertNodeNum, &nodeRec);
 								M_ExitOnError (err);
 
+								// XXXdbg
+								ModifyBlockStart(btreePtr->fileRefNum, &nodeRec);
+								
 								((NodeDescPtr)nodeRec.buffer)->kind = kBTLeafNode;
 								((NodeDescPtr)nodeRec.buffer)->height	= 1;
 
@@ -1261,6 +1287,7 @@ OSStatus	BTInsertRecord		(FCB						*filePtr,
 								btreePtr->rootNode	 		= insertNodeNum;
 								btreePtr->firstLeafNode		= insertNodeNum;
 								btreePtr->lastLeafNode		= insertNodeNum;
+
 								M_BTreeHeaderDirty (btreePtr);
 
 								goto Success;
@@ -1270,6 +1297,9 @@ OSStatus	BTInsertRecord		(FCB						*filePtr,
 
 	if (index > 0)
 	{
+		// XXXdbg
+		ModifyBlockStart(btreePtr->fileRefNum, &nodeRec);
+								
 		recordFit = InsertKeyRecord (btreePtr, nodeRec.buffer, index,
 										&iterator->key, KeyLength(btreePtr, &iterator->key),
 										record->bufferAddress, recordLen);
@@ -1308,7 +1338,7 @@ Success:
 	++btreePtr->writeCount;
 	++btreePtr->leafRecords;
 	M_BTreeHeaderDirty (btreePtr);
-
+		
 	// create hint
 	iterator->hint.writeCount 	= btreePtr->writeCount;
 	iterator->hint.nodeNum		= insertNodeNum;
@@ -1359,6 +1389,7 @@ OSStatus	BTReplaceRecord		(FCB						*filePtr,
 	////////////////////////// Priliminary Checks ///////////////////////////////
 
 	nodeRec.buffer = nil;					// so we can call ReleaseNode
+	nodeRec.blockHeader = nil;
 
 	err = CheckInsertParams (filePtr, iterator, record, recordLen);
 	if (err != noErr)
@@ -1380,6 +1411,9 @@ OSStatus	BTReplaceRecord		(FCB						*filePtr,
 		err = GetNode (btreePtr, insertNodeNum, &nodeRec);
 		if( err == noErr )
 		{
+			// XXXdbg
+			ModifyBlockStart(btreePtr->fileRefNum, &nodeRec);
+								
 			err = TrySimpleReplace (btreePtr, nodeRec.buffer, iterator, record, recordLen, &recordFit);
 			M_ExitOnError (err);
 
@@ -1415,6 +1449,9 @@ OSStatus	BTReplaceRecord		(FCB						*filePtr,
 	// optimization - if simple replace will work then don't extend btree
 	// €€ if we tried this before, and failed because it wouldn't fit then we shouldn't try this again...
 
+	// XXXdbg
+	ModifyBlockStart(btreePtr->fileRefNum, &nodeRec);
+
 	err = TrySimpleReplace (btreePtr, nodeRec.buffer, iterator, record, recordLen, &recordFit);
 	M_ExitOnError (err);
 
@@ -1441,6 +1478,9 @@ OSStatus	BTReplaceRecord		(FCB						*filePtr,
 	}
 
 
+	// XXXdbg
+	ModifyBlockStart(btreePtr->fileRefNum, &nodeRec);
+								
 	DeleteRecord (btreePtr, nodeRec.buffer, index);	// delete existing key/record
 
 	err = InsertTree (btreePtr, treePathTable, &iterator->key, record->bufferAddress,
@@ -1498,6 +1538,7 @@ BTUpdateRecord(FCB *filePtr, BTreeIterator *iterator,
 	////////////////////////// Priliminary Checks ///////////////////////////////
 
 	nodeRec.buffer = nil;					// so we can call ReleaseNode
+	nodeRec.blockHeader = nil;
 
 	btreePtr = (BTreeControlBlockPtr) filePtr->fcbBTCBPtr;
 
@@ -1521,6 +1562,9 @@ BTUpdateRecord(FCB *filePtr, BTreeIterator *iterator,
 				err = GetRecordByIndex(btreePtr, nodeRec.buffer, index, &keyPtr, &recordPtr, &recordLen);
 				M_ExitOnError (err);
 
+				// XXXdbg
+				ModifyBlockStart(btreePtr->fileRefNum, &nodeRec);
+								
 				err = callBackProc(keyPtr, recordPtr, recordLen, callBackState);
 				M_ExitOnError (err);
 
@@ -1553,6 +1597,9 @@ BTUpdateRecord(FCB *filePtr, BTreeIterator *iterator,
 	err = GetRecordByIndex(btreePtr, nodeRec.buffer, index, &keyPtr, &recordPtr, &recordLen);
 	M_ExitOnError (err);
 
+	// XXXdbg
+	ModifyBlockStart(btreePtr->fileRefNum, &nodeRec);
+								
 	err = callBackProc(keyPtr, recordPtr, recordLen, callBackState);
 	M_ExitOnError (err);
 
@@ -1600,6 +1647,7 @@ OSStatus	BTDeleteRecord		(FCB						*filePtr,
 	////////////////////////// Priliminary Checks ///////////////////////////////
 
 	nodeRec.buffer = nil;					// so we can call ReleaseNode
+	nodeRec.blockHeader = nil;
 
 	M_ReturnErrorIf (filePtr == nil, 	paramErr);
 	M_ReturnErrorIf (iterator == nil,	paramErr);
@@ -1630,7 +1678,7 @@ OSStatus	BTDeleteRecord		(FCB						*filePtr,
 	++btreePtr->writeCount;
 	--btreePtr->leafRecords;
 	M_BTreeHeaderDirty (btreePtr);
-
+		
 	iterator->hint.nodeNum	= 0;
 
 	return noErr;
@@ -1682,7 +1730,16 @@ OSStatus	BTGetInformation	(FCB					*filePtr,
 	return noErr;
 }
 
+// XXXdbg
+__private_extern__
+OSStatus
+BTIsDirty(FCB *filePtr)
+{
+	BTreeControlBlockPtr	btreePtr;
 
+	btreePtr = (BTreeControlBlockPtr) filePtr->fcbBTCBPtr;
+	return TreeIsDirty(btreePtr);
+}
 
 /*-------------------------------------------------------------------------------
 Routine:	BTFlushPath	-	Flush BTreeControlBlock to Header Node.
@@ -1742,6 +1799,9 @@ BTReloadData(FCB *filePtr)
 	BlockDescriptor node;
 	BTHeaderRec *header;	
 
+
+	node.buffer = nil;
+	node.blockHeader = nil;
 
 	btreePtr = (BTreeControlBlockPtr) filePtr->fcbBTCBPtr;
 	if (btreePtr == nil)
@@ -1877,3 +1937,62 @@ OSStatus	BTSetLastSync		(FCB					*filePtr,
 }
 
 
+/*-------------------------------------------------------------------------------
+Routine:	BTCheckFreeSpace
+
+Function:	Makes sure there is enough free space so that a tree operation
+            will succeed.
+
+Input:		fcb	- pointer file control block
+
+Output:		none
+
+Result:		noErr			- success
+            
+-------------------------------------------------------------------------------*/
+
+__private_extern__
+OSStatus	BTCheckFreeSpace		(FCB					*filePtr)
+{
+	BTreeControlBlockPtr	btreePtr;
+	int 					nodesNeeded, err = noErr;
+
+
+	M_ReturnErrorIf (filePtr == nil, 	paramErr);
+
+	btreePtr = (BTreeControlBlockPtr) filePtr->fcbBTCBPtr;
+	
+	REQUIRE_FILE_LOCK(btreePtr->fileRefNum, true);
+
+	M_ReturnErrorIf (btreePtr == nil,	fsBTInvalidFileErr);
+
+	// XXXdbg this is highly conservative but so much better than
+	//        winding up with turds on your disk.
+	//
+	nodesNeeded = (btreePtr->treeDepth + 1) * 10;
+	
+	if (btreePtr->freeNodes < nodesNeeded) {
+		err = ExtendBTree(btreePtr, nodesNeeded + btreePtr->totalNodes - btreePtr->freeNodes);
+	}
+
+	return err;
+}
+
+
+__private_extern__
+OSStatus	BTHasContiguousNodes	(FCB	 				*filePtr)
+{
+	BTreeControlBlockPtr	btreePtr;
+	int 					nodesNeeded, err = noErr;
+
+
+	M_ReturnErrorIf (filePtr == nil, 	paramErr);
+
+	btreePtr = (BTreeControlBlockPtr) filePtr->fcbBTCBPtr;
+	
+	REQUIRE_FILE_LOCK(btreePtr->fileRefNum, true);
+
+	M_ReturnErrorIf (btreePtr == nil,	fsBTInvalidFileErr);
+
+	return NodesAreContiguous(FCBTOVCB(filePtr), filePtr, btreePtr->nodeSize);
+}

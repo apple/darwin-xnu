@@ -555,7 +555,8 @@ loop:
 	s = splbio();
 	for (bp = vp->v_dirtyblkhd.lh_first; bp; bp = nbp) {
 		nbp = bp->b_vnbufs.le_next;
-		if ((bp->b_flags & B_BUSY))
+		// XXXdbg - don't flush locked blocks.  they may be journaled.
+		if ((bp->b_flags & B_BUSY) || (bp->b_flags & B_LOCKED))
 			continue;
 		if ((bp->b_flags & B_DELWRI) == 0)
 			panic("spec_fsync: not dirty");

@@ -115,7 +115,8 @@ struct BlockDescriptor{
 	void		*blockHeader;
 	ByteCount	 blockSize;
 	Boolean		 blockReadFromDisk;
-	Byte		 reserved[3];
+	Byte         isModified;             // XXXdbg - for journaling
+	Byte		 reserved[2];
 };
 typedef struct BlockDescriptor BlockDescriptor;
 typedef BlockDescriptor *BlockDescPtr;
@@ -337,6 +338,10 @@ extern OSStatus	BTGetLastSync		(FCB		 				*filePtr,
 
 extern OSStatus	BTSetLastSync		(FCB		 				*filePtr,
 									 UInt32						lastfsync );
+
+extern OSStatus	BTCheckFreeSpace	(FCB		 				*filePtr);
+
+extern OSStatus	BTHasContiguousNodes(FCB		 				*filePtr);
 
 #endif /* __APPLE_API_PRIVATE */
 #endif /* KERNEL */

@@ -677,12 +677,22 @@ vinvalbuf(vp, flags, cred, p, slpflag, slptimeo)
 		if (error = VOP_FSYNC(vp, cred, MNT_WAIT, p)) {
 			return (error);
 		}
-		if (vp->v_dirtyblkhd.lh_first)
-			panic("vinvalbuf: dirty bufs");
+
+		// XXXdbg - if there are dirty bufs, wait for 'em if they're busy
+		for (bp=vp->v_dirtyblkhd.lh_first; bp; bp=nbp) {
+		    nbp = bp->b_vnbufs.le_next;
+		    if (ISSET(bp->b_flags, B_BUSY)) {
+			SET(bp->b_flags, B_WANTED);
+			tsleep((caddr_t)bp, slpflag | (PRIBIO + 1), "vinvalbuf", 0);
+			nbp = vp->v_dirtyblkhd.lh_first;
+		    } else {
+			panic("vinvalbuf: dirty buf (vp 0x%x, bp 0x%x)", vp, bp);
+		    }
+		}
 	}
 
 	for (;;) {
-		if ((blist = vp->v_cleanblkhd.lh_first) && flags & V_SAVEMETA)
+		if ((blist = vp->v_cleanblkhd.lh_first) && (flags & V_SAVEMETA))
 			while (blist && blist->b_lblkno < 0)
 				blist = blist->b_vnbufs.le_next;
 		if (!blist && (blist = vp->v_dirtyblkhd.lh_first) &&
@@ -694,7 +704,7 @@ vinvalbuf(vp, flags, cred, p, slpflag, slptimeo)
 
 		for (bp = blist; bp; bp = nbp) {
 			nbp = bp->b_vnbufs.le_next;
-			if (flags & V_SAVEMETA && bp->b_lblkno < 0)
+			if ((flags & V_SAVEMETA) && bp->b_lblkno < 0)
 				continue;
 			s = splbio();
 			if (ISSET(bp->b_flags, B_BUSY)) {
@@ -720,7 +730,13 @@ vinvalbuf(vp, flags, cred, p, slpflag, slptimeo)
 				(void) VOP_BWRITE(bp);
 				break;
 			}
-			SET(bp->b_flags, B_INVAL);
+
+			if (bp->b_flags & B_LOCKED) {
+				panic("vinvalbuf: bp @ 0x%x is locked!\n", bp);
+				break;
+			} else {
+				SET(bp->b_flags, B_INVAL);
+			}
 			brelse(bp);
 		}
 	}

@@ -58,7 +58,7 @@
 
 
 #include <sys/types.h>
-#include <stdlib.h>
+//#include <stdlib.h>
 
 static inline char	*med3 __P((char *, char *, char *, int (*)()));
 static inline void	 swapfunc __P((char *, char *, int, int));
@@ -113,6 +113,7 @@ med3(a, b, c, cmp)
               :(cmp(b, c) > 0 ? b : (cmp(a, c) < 0 ? a : c ));
 }
 
+__private_extern__
 void
 qsort(a, n, es, cmp)
 	void *a;

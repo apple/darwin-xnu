@@ -65,6 +65,9 @@ OSErr ExchangeFileIDs( ExtendedVCB *vcb, ConstUTF8Param srcName, ConstUTF8Param 
 	err = BuildCatalogKeyUTF8(vcb, destID, destName, kUndefinedStrLen, &destKey, NULL);
 	ReturnIfError(err);
 
+	err = BTCheckFreeSpace(GetFileControlBlock(vcb->extentsRefNum));
+	ReturnIfError(err);
+	
 	if ( isHFSPlus )
 	{
 		//--	Step 1: Check the catalog nodes for extents

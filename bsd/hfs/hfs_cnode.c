@@ -62,6 +62,7 @@ hfs_inactive(ap)
 	int recycle = 0;
 	int forkcount = 0;
 	int truncated = 0;
+	int started_tr = 0, grabbed_lock = 0;
 
 	if (prtactive && vp->v_usecount != 0)
 		vprint("hfs_inactive: pushing active", vp);
@@ -85,9 +86,11 @@ hfs_inactive(ap)
 	    vp->v_type == VREG &&
 	    (VTOF(vp)->ff_blocks != 0)) {			
 		error = VOP_TRUNCATE(vp, (off_t)0, IO_NDELAY, NOCRED, p);
-		if (error) goto out;
 		truncated = 1;
+		// have to do this to prevent the lost ubc_info panic
+		SET(cp->c_flag, C_TRANSIT);
 		recycle = 1;
+		if (error) goto out;
 	}
 
 	/*
@@ -103,6 +106,17 @@ hfs_inactive(ap)
 		cp->c_flag &= ~C_DELETED;
 		cp->c_rdev = 0;
 		
+		// XXXdbg
+		hfs_global_shared_lock_acquire(hfsmp);
+		grabbed_lock = 1;
+		if (hfsmp->jnl) {
+		    if (journal_start_transaction(hfsmp->jnl) != 0) {
+				error = EINVAL;
+				goto out;
+		    }
+		    started_tr = 1;
+		}
+
 		/* Lock catalog b-tree */
 		error = hfs_metafilelocking(hfsmp, kHFSCatalogFileID, LK_EXCLUSIVE, p);
 		if (error) goto out;
@@ -148,11 +162,21 @@ hfs_inactive(ap)
 		if (HFSTOVCB(hfsmp)->vcbSigWord == kHFSPlusSigWord)
 			cp->c_flag |= C_MODIFIED;
 	}
-        if (cp->c_flag & (C_ACCESS | C_CHANGE | C_MODIFIED | C_UPDATE)) {
-                tv = time;
-                VOP_UPDATE(vp, &tv, &tv, 0);
-        }
+
+	if (cp->c_flag & (C_ACCESS | C_CHANGE | C_MODIFIED | C_UPDATE)) {
+		tv = time;
+		VOP_UPDATE(vp, &tv, &tv, 0);
+	}
 out:
+	// XXXdbg - have to do this because a goto could have come here
+	if (started_tr) {
+	    journal_end_transaction(hfsmp->jnl);
+	    started_tr = 0;
+	}
+	if (grabbed_lock) {
+		hfs_global_shared_lock_release(hfsmp);
+	}
+
 	VOP_UNLOCK(vp, 0, p);
 	/*
 	 * If we are done with the vnode, reclaim it
@@ -313,6 +337,16 @@ hfs_getcnode(struct hfsmount *hfsmp, cnid_t cnid, struct cat_desc *descp, int wa
 			retval = ENOENT;
 			goto exit;
 		}
+
+		/* Hide private journal files */
+		if (hfsmp->jnl &&
+			(cp->c_parentcnid == kRootDirID) &&
+			((cp->c_cnid == hfsmp->hfs_jnlfileid) ||
+			(cp->c_cnid == hfsmp->hfs_jnlinfoblkid))) {
+		    retval = ENOENT;
+			goto exit;
+		}
+	 
 		if (wantrsrc && rvp != NULL) {
 			vp = rvp;
 			rvp = NULL;

@@ -4512,8 +4512,8 @@ again:
 #if 0
 		/* (removed for UBC) */
 		bufsize = biosize;
-		if ((lbn + 1) * biosize > np->n_size) {
-			bufsize = np->n_size - lbn * biosize;
+		if ((off_t)(lbn + 1) * biosize > np->n_size) {
+			bufsize = np->n_size - (off_t)lbn * biosize;
 			bufsize = (bufsize + DEV_BSIZE - 1) & ~(DEV_BSIZE - 1);
 		}
 #endif
@@ -4618,7 +4618,7 @@ nfs_blktooff(ap)
 
 	biosize = min(vp->v_mount->mnt_stat.f_iosize, PAGE_SIZE); /* nfs_bio.c */
 
-	*ap->a_offset = (off_t)(ap->a_lblkno *  biosize);
+	*ap->a_offset = (off_t)ap->a_lblkno *  biosize;
 
 	return (0);
 }

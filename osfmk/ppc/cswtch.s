@@ -871,7 +871,7 @@ fsenable:	lwz		r8,savesrr1(r25)				; Get the msr of the interrupted guy
 			rlwinm.	r0,r8,0,MSR_PR_BIT,MSR_PR_BIT	; See if we are doing this for user state
 			stw		r8,savesrr1(r25)				; Set the msr of the interrupted guy
 			xor		r3,r25,r5						; Get the real address of the savearea
-			bne-	fsnuser							; We are not user state...
+			beq-	fsnuser							; We are not user state...
 			stw		r10,ACT_MACT_SPF(r17)			; Set the activation copy
 			stw		r10,spcFlags(r26)				; Set per_proc copy
 
@@ -2297,7 +2297,7 @@ vrenable:	lwz		r8,savesrr1(r25)				; Get the msr of the interrupted guy
 			rlwinm.	r0,r8,0,MSR_PR_BIT,MSR_PR_BIT	; See if we are doing this for user state
 			stw		r8,savesrr1(r25)				; Set the msr of the interrupted guy
 			xor		r3,r25,r5						; Get the real address of the savearea
-			bne-	vrnuser							; We are not user state...
+			beq-	vrnuser							; We are not user state...
 			stw		r10,ACT_MACT_SPF(r17)			; Set the activation copy
 			stw		r10,spcFlags(r26)				; Set per_proc copy
 

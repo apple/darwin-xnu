@@ -44,8 +44,12 @@ typedef struct
 
 #define DKIOCGETMAXBLOCKCOUNTREAD    _IOR('d', 64, u_int64_t)
 #define DKIOCGETMAXBLOCKCOUNTWRITE   _IOR('d', 65, u_int64_t)
+#define DKIOCGETMAXBYTECOUNTREAD         _IOR('d', 70, u_int64_t)
+#define DKIOCGETMAXBYTECOUNTWRITE        _IOR('d', 71, u_int64_t)
 #define DKIOCGETMAXSEGMENTCOUNTREAD  _IOR('d', 66, u_int64_t)
 #define DKIOCGETMAXSEGMENTCOUNTWRITE _IOR('d', 67, u_int64_t)
+#define DKIOCGETMAXSEGMENTBYTECOUNTREAD  _IOR('d', 68, u_int64_t)
+#define DKIOCGETMAXSEGMENTBYTECOUNTWRITE _IOR('d', 69, u_int64_t)
 
 #ifdef KERNEL
 #define DKIOCSETBLOCKSIZE            _IOW('d', 24, u_int32_t)

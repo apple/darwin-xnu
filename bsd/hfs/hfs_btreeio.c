@@ -68,7 +68,7 @@ OSStatus GetBTreeBlock(FileReference vp, UInt32 blockNum, GetBlockOptions option
 	if (options & kGetEmptyBlock)
 		bp = getblk(vp, blockNum, block->blockSize, 0, 0, BLK_META);
 	else
-	retval = meta_bread(vp, blockNum, block->blockSize, NOCRED, &bp);
+		retval = meta_bread(vp, blockNum, block->blockSize, NOCRED, &bp);
 
     DBG_ASSERT(bp != NULL);
     DBG_ASSERT(bp->b_data != NULL);
@@ -82,6 +82,9 @@ OSStatus GetBTreeBlock(FileReference vp, UInt32 blockNum, GetBlockOptions option
         block->blockHeader = bp;
         block->buffer = bp->b_data;
         block->blockReadFromDisk = (bp->b_flags & B_CACHE) == 0;	/* not found in cache ==> came from disk */
+
+		// XXXdbg 
+		block->isModified = 0;
 
 #if BYTE_ORDER == LITTLE_ENDIAN
         /* Endian swap B-Tree node (only if it's a valid block) */
@@ -117,8 +120,30 @@ OSStatus GetBTreeBlock(FileReference vp, UInt32 blockNum, GetBlockOptions option
 
 
 __private_extern__
+void ModifyBlockStart(FileReference vp, BlockDescPtr blockPtr)
+{
+	struct hfsmount	*hfsmp = VTOHFS(vp);
+    struct buf *bp = NULL;
+
+	if (hfsmp->jnl == NULL) {
+		return;
+	}
+	
+    bp = (struct buf *) blockPtr->blockHeader;
+    if (bp == NULL) {
+		panic("ModifyBlockStart: null bp  for blockdescptr 0x%x?!?\n", blockPtr);
+		return;
+    }
+
+	journal_modify_block_start(hfsmp->jnl, bp);
+	blockPtr->isModified = 1;
+}
+
+
+__private_extern__
 OSStatus ReleaseBTreeBlock(FileReference vp, BlockDescPtr blockPtr, ReleaseBlockOptions options)
 {
+    struct hfsmount	*hfsmp = VTOHFS(vp);
     extern int bdwrite_internal(struct buf *, int);
     OSStatus	retval = E_NONE;
     struct buf *bp = NULL;
@@ -131,16 +156,25 @@ OSStatus ReleaseBTreeBlock(FileReference vp, BlockDescPtr blockPtr, ReleaseBlock
     }
 
     if (options & kTrashBlock) {
-        bp->b_flags |= B_INVAL;
-    	brelse(bp);	/* note: B-tree code will clear blockPtr->blockHeader and blockPtr->buffer */
+		bp->b_flags |= B_INVAL;
+		if (hfsmp->jnl && (bp->b_flags & B_LOCKED)) {
+			journal_kill_block(hfsmp->jnl, bp);
+		} else {
+			brelse(bp);	/* note: B-tree code will clear blockPtr->blockHeader and blockPtr->buffer */
+		}
     } else {
         if (options & kForceWriteBlock) {
-            retval = VOP_BWRITE(bp);
+			if (hfsmp->jnl) {
+				if (blockPtr->isModified == 0) {
+					panic("hfs: releaseblock: modified is 0 but forcewrite set! bp 0x%x\n", bp);
+				}
+				retval = journal_modify_block_end(hfsmp->jnl, bp);
+				blockPtr->isModified = 0;
+			} else {
+				retval = VOP_BWRITE(bp);
+			}
         } else if (options & kMarkBlockDirty) {
-#if FORCESYNCBTREEWRITES
-            VOP_BWRITE(bp);
-#else
-            if (options & kLockTransaction) {
+            if ((options & kLockTransaction) && hfsmp->jnl == NULL) {
                 /*
                  *
                  * Set the B_LOCKED flag and unlock the buffer, causing brelse to move
@@ -156,24 +190,44 @@ OSStatus ReleaseBTreeBlock(FileReference vp, BlockDescPtr blockPtr, ReleaseBlock
                      /* Rollback sync time to cause a sync on lock release... */
                      (void) BTSetLastSync(VTOF(vp), time.tv_sec - (kMaxSecsForFsync + 1));
                 }
-                bp->b_flags |= B_LOCKED;
-           }
+
+				bp->b_flags |= B_LOCKED;
+            }
+
             /* 
              * Delay-write this block.
              * If the maximum delayed buffers has been exceeded then
              * free up some buffers and fall back to an asynchronous write.
              */
-            if (bdwrite_internal(bp, 1) != 0) {
+			if (hfsmp->jnl) {
+				if (blockPtr->isModified == 0) {
+					panic("hfs: releaseblock: modified is 0 but markdirty set! bp 0x%x\n", bp);
+				}
+				retval = journal_modify_block_end(hfsmp->jnl, bp);
+				blockPtr->isModified = 0;
+			} else if (bdwrite_internal(bp, 1) != 0) {
                 hfs_btsync(vp, 0);
                 /* Rollback sync time to cause a sync on lock release... */
                 (void) BTSetLastSync(VTOF(vp), time.tv_sec - (kMaxSecsForFsync + 1));
                 bp->b_flags &= ~B_LOCKED;
                 bawrite(bp);
             }
-
-#endif
         } else {
-    		brelse(bp);	/* note: B-tree code will clear blockPtr->blockHeader and blockPtr->buffer */
+			// check if we had previously called journal_modify_block_start() 
+			// on this block and if so, abort it (which will call brelse()).
+			if (hfsmp->jnl && blockPtr->isModified) {
+				// XXXdbg - I don't want to call modify_block_abort()
+				//          because I think it may be screwing up the
+				//          journal and blowing away a block that has
+				//          valid data in it.
+				//   
+				//    journal_modify_block_abort(hfsmp->jnl, bp);
+				//panic("hfs: releaseblock called for 0x%x but mod_block_start previously called.\n", bp);
+				journal_modify_block_end(hfsmp->jnl, bp);
+				blockPtr->isModified = 0;
+			} else {
+				brelse(bp);	/* note: B-tree code will clear blockPtr->blockHeader and blockPtr->buffer */
+			}
         };
     };
 
@@ -187,17 +241,16 @@ OSStatus ExtendBTreeFile(FileReference vp, FSSize minEOF, FSSize maxEOF)
 {
 #pragma unused (maxEOF)
 
-	OSStatus	retval;
-	UInt64		actualBytesAdded;
+	OSStatus	retval, ret;
+	UInt64		actualBytesAdded, origSize;
 	UInt64		bytesToAdd;
-    UInt32		extendFlags;
 	u_int32_t	startAllocation;
 	u_int32_t	fileblocks;
 	BTreeInfoRec btInfo;
 	ExtendedVCB	*vcb;
 	FCB			*filePtr;
     struct proc *p = NULL;
-
+	UInt64 		trim = 0;	
 
 	filePtr = GetFileControlBlock(vp);
 
@@ -225,13 +278,14 @@ OSStatus ExtendBTreeFile(FileReference vp, FSSize minEOF, FSSize maxEOF)
 	{
 		p = current_proc();
 		/* lock extents b-tree (also protects volume bitmap) */
-		retval = hfs_metafilelocking(VTOHFS(vp), kHFSExtentsFileID, LK_EXCLUSIVE, p);
+ 		retval = hfs_metafilelocking(VTOHFS(vp), kHFSExtentsFileID, LK_EXCLUSIVE, p);
 		if (retval)
 			return (retval);
 	}
 
     (void) BTGetInformation(filePtr, 0, &btInfo);
 
+#if 0  // XXXdbg
 	/*
 	 * The b-tree code expects nodes to be contiguous. So when
 	 * the allocation block size is less than the b-tree node
@@ -241,14 +295,38 @@ OSStatus ExtendBTreeFile(FileReference vp, FSSize minEOF, FSSize maxEOF)
 		extendFlags = 0;
 	} else {
 		/* Ensure that all b-tree nodes are contiguous on disk */
-		extendFlags = kEFAllMask | kEFContigMask;
+		extendFlags = kEFContigMask;
 	}
+#endif
 
+	origSize = filePtr->fcbEOF;
 	fileblocks = filePtr->ff_blocks;
 	startAllocation = vcb->nextAllocation;
 
-	retval = ExtendFileC(vcb, filePtr, bytesToAdd, 0, extendFlags, &actualBytesAdded);
+	// loop trying to get a contiguous chunk that's an integer multiple
+	// of the btree node size.  if we can't get a contiguous chunk that
+	// is at least the node size then we break out of the loop and let
+	// the error propagate back up.
+	do {
+		retval = ExtendFileC(vcb, filePtr, bytesToAdd, 0, kEFContigMask, &actualBytesAdded);
+		if (retval == dskFulErr && actualBytesAdded == 0) {
 
+			if (bytesToAdd == btInfo.nodeSize || bytesToAdd < (minEOF - origSize)) {
+				// if we're here there's nothing else to try, we're out
+				// of space so we break and bail out.
+				break;
+			} else {
+				bytesToAdd >>= 1;
+				if (bytesToAdd < btInfo.nodeSize) {
+					bytesToAdd = btInfo.nodeSize;
+				} else if ((bytesToAdd % btInfo.nodeSize) != 0) {
+					// make sure it's an integer multiple of the nodeSize
+					bytesToAdd -= (bytesToAdd % btInfo.nodeSize);
+				}
+			}
+		}
+	} while (retval == dskFulErr && actualBytesAdded == 0);
+	
 	/*
 	 * If a new extent was added then move the roving allocator
 	 * reference forward by the current b-tree file size so 
@@ -260,25 +338,74 @@ OSStatus ExtendBTreeFile(FileReference vp, FSSize minEOF, FSSize maxEOF)
 		vcb->nextAllocation += fileblocks;
 	}
 		
+	filePtr->fcbEOF = (u_int64_t)filePtr->ff_blocks * (u_int64_t)vcb->blockSize;
+
+	// XXXdbg ExtendFileC() could have returned an error even though
+	// it grew the file to be big enough for our needs.  If this is
+	// the case, we don't care about retval so we blow it away.
+	//
+	if (filePtr->fcbEOF >= minEOF && retval != 0) {
+		retval = 0;
+	}
+
+	// XXXdbg if the file grew but isn't large enough or isn't an
+	// even multiple of the nodeSize then trim things back.  if
+	// the file isn't large enough we trim back to the original
+	// size.  otherwise we trim back to be an even multiple of the
+	// btree node size.
+	//
+	if ((filePtr->fcbEOF < minEOF) || (actualBytesAdded % btInfo.nodeSize) != 0) {
+
+		if (filePtr->fcbEOF < minEOF) {
+			retval = dskFulErr;
+			
+			if (filePtr->fcbEOF < origSize) {
+				panic("hfs: btree file eof %lld less than orig size %lld!\n",
+					  filePtr->fcbEOF, origSize);
+			}
+			
+			trim = filePtr->fcbEOF - origSize;
+			if (trim != actualBytesAdded) {
+				panic("hfs: trim == %lld but actualBytesAdded == %lld\n",
+					  trim, actualBytesAdded);
+			}
+		} else {
+			trim = (actualBytesAdded % btInfo.nodeSize);
+		}
+
+		ret = TruncateFileC(vcb, filePtr, filePtr->fcbEOF - trim, 0);
+		filePtr->fcbEOF = (u_int64_t)filePtr->ff_blocks * (u_int64_t)vcb->blockSize;
+
+		// XXXdbg - panic if the file didn't get trimmed back properly
+		if ((filePtr->fcbEOF % btInfo.nodeSize) != 0) {
+			panic("hfs: truncate file didn't! fcbEOF %lld nsize %d fcb 0x%x\n",
+				  filePtr->fcbEOF, btInfo.nodeSize, filePtr);
+		}
+
+		if (ret) {
+			// XXXdbg - this probably doesn't need to be a panic()
+			panic("hfs: error truncating btree files (sz 0x%llx, trim %lld, ret %d)\n",
+				  filePtr->fcbEOF, trim, ret);
+			return ret;
+		}
+		actualBytesAdded -= trim;
+	}
+
 	if(VTOC(vp)->c_fileid != kHFSExtentsFileID) {
 		/*
 		 * Get any extents overflow b-tree changes to disk ASAP!
 		 */
-		if (retval == 0) {
-			(void) BTFlushPath(VTOF(vcb->extentsRefNum));
-			(void) VOP_FSYNC(vcb->extentsRefNum, NOCRED, MNT_WAIT, p);
-		}
+		(void) BTFlushPath(VTOF(vcb->extentsRefNum));
+		(void) VOP_FSYNC(vcb->extentsRefNum, NOCRED, MNT_WAIT, p);
+
 		(void) hfs_metafilelocking(VTOHFS(vp), kHFSExtentsFileID, LK_RELEASE, p);
 	}
-	if (retval)
-		return (retval);
-	
-	filePtr->fcbEOF = (u_int64_t)filePtr->ff_blocks * (u_int64_t)vcb->blockSize;
 
-	retval = ClearBTNodes(vp, btInfo.nodeSize, filePtr->fcbEOF - actualBytesAdded, actualBytesAdded);	
-	if (retval)
-		return (retval);
-	
+	if ((filePtr->fcbEOF % btInfo.nodeSize) != 0) {
+		panic("hfs: extendbtree: fcb 0x%x has eof 0x%llx not a multiple of 0x%x (trim %llx)\n",
+			  filePtr, filePtr->fcbEOF, btInfo.nodeSize, trim);
+	}
+
 	/*
 	 * Update the Alternate MDB or Alternate VolumeHeader
 	 */
@@ -287,8 +414,12 @@ OSStatus ExtendBTreeFile(FileReference vp, FSSize minEOF, FSSize maxEOF)
 	    (VTOC(vp)->c_fileid == kHFSAttributesFileID)
 	   ) {
 		MarkVCBDirty( vcb );
-		retval = hfs_flushvolumeheader(VCBTOHFS(vcb), MNT_WAIT, HFS_ALTFLUSH);
+		ret = hfs_flushvolumeheader(VCBTOHFS(vcb), MNT_WAIT, HFS_ALTFLUSH);
 	}
+
+	ret = ClearBTNodes(vp, btInfo.nodeSize, filePtr->fcbEOF - actualBytesAdded, actualBytesAdded);
+	if (ret)
+		return (ret);
 	
 	return retval;
 }
@@ -300,6 +431,7 @@ OSStatus ExtendBTreeFile(FileReference vp, FSSize minEOF, FSSize maxEOF)
 static int
 ClearBTNodes(struct vnode *vp, long blksize, off_t offset, off_t amount)
 {
+	struct hfsmount *hfsmp = VTOHFS(vp);
 	struct buf *bp = NULL;
 	daddr_t blk;
 	daddr_t blkcnt;
@@ -311,14 +443,36 @@ ClearBTNodes(struct vnode *vp, long blksize, off_t offset, off_t amount)
 		bp = getblk(vp, blk, blksize, 0, 0, BLK_META);
 		if (bp == NULL)
 			continue;
+
+        // XXXdbg
+		if (hfsmp->jnl) {
+			// XXXdbg -- skipping this for now since it makes a transaction
+			//           become *way* too large
+		    //journal_modify_block_start(hfsmp->jnl, bp);
+		}
+
 		bzero((char *)bp->b_data, blksize);
 		bp->b_flags |= B_AGE;
 
-		 /* wait/yield every 32 blocks so we don't hog all the buffers */
-		if ((blk % 32) == 0)
-			VOP_BWRITE(bp);
-		else
-			bawrite(bp);
+        // XXXdbg
+		if (hfsmp->jnl) {
+			// XXXdbg -- skipping this for now since it makes a transaction
+			//           become *way* too large
+			//journal_modify_block_end(hfsmp->jnl, bp);
+
+			// XXXdbg - remove this once we decide what to do with the
+			//          writes to the journal
+			if ((blk % 32) == 0)
+			    VOP_BWRITE(bp);
+			else
+			    bawrite(bp);
+		} else {
+			/* wait/yield every 32 blocks so we don't hog all the buffers */
+			if ((blk % 32) == 0)
+				VOP_BWRITE(bp);
+			else
+				bawrite(bp);
+		}
 		--blkcnt;
 		++blk;
 	}

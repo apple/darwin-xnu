@@ -194,15 +194,35 @@ hfs_getattrlist(ap)
 		if ((error = hfs_write_access(vp, ap->a_cred, ap->a_p, false)) != 0)
         		return (error);
 
+		// XXXdbg
+		hfs_global_shared_lock_acquire(hfsmp);
+		if (hfsmp->jnl) {
+		    if ((error = journal_start_transaction(hfsmp->jnl)) != 0) {
+				hfs_global_shared_lock_release(hfsmp);
+				return error;
+		    }
+		}
+
 		/* Lock catalog b-tree */
 		error = hfs_metafilelocking(hfsmp, kHFSCatalogFileID, LK_SHARED, ap->a_p);
-		if (error)
-			return (error);
+		if (error) {
+		    if (hfsmp->jnl) {
+				journal_end_transaction(hfsmp->jnl);
+			}
+			hfs_global_shared_lock_release(hfsmp);
+		    return (error);
+		}
 
 		error = cat_insertfilethread(hfsmp, &cp->c_desc);
 
 		/* Unlock catalog b-tree */
 		(void) hfs_metafilelocking(hfsmp, kHFSCatalogFileID, LK_RELEASE, ap->a_p);
+
+		if (hfsmp->jnl) {
+		    journal_end_transaction(hfsmp->jnl);
+		}
+		hfs_global_shared_lock_release(hfsmp);
+
 		if (error)
 			return (error);
 	}
@@ -350,6 +370,17 @@ hfs_setattrlist(ap)
 	}
 	if (cp->c_flag & (C_NOEXISTS | C_DELETED))
 		return (ENOENT);
+
+	// XXXdbg - don't allow modifying the journal or journal_info_block
+	if (hfsmp->jnl && cp->c_datafork) {
+		struct HFSPlusExtentDescriptor *extd;
+		
+		extd = &cp->c_datafork->ff_data.cf_extents[0];
+		if (extd->startBlock == HFSTOVCB(hfsmp)->vcbJinfoBlock || extd->startBlock == hfsmp->jnl_start) {
+			return EPERM;
+		}
+	}
+
 	/*
 	 * Ownership of a file is required in one of two classes of calls:
 	 *
@@ -447,14 +478,12 @@ hfs_setattrlist(ap)
 	 * If any cnode attributes changed then do an update.
 	 */
 	if (alist->volattr == 0) {
-		struct timeval atime, mtime;
+		struct timeval tv;
 
-		atime.tv_sec = cp->c_atime;
-		atime.tv_usec = 0;
-		mtime.tv_sec = cp->c_mtime;
-		mtime.tv_usec = cp->c_mtime_nsec / 1000;
 		cp->c_flag |= C_MODIFIED;
-		if ((error = VOP_UPDATE(vp, &atime, &mtime, 1)))
+		tv = time;
+		CTIMES(cp, &tv, &tv);
+		if ((error = VOP_UPDATE(vp, &tv, &tv, 1)))
 			goto ErrorExit;
 	}
 	/* Volume Rename */
@@ -482,9 +511,28 @@ hfs_setattrlist(ap)
 			to_desc.cd_cnid = cp->c_cnid;
 			to_desc.cd_flags = CD_ISDIR;
 
+			// XXXdbg
+			hfs_global_shared_lock_acquire(hfsmp);
+			if (hfsmp->jnl) {
+			    if (journal_start_transaction(hfsmp->jnl) != 0) {
+					hfs_global_shared_lock_release(hfsmp);
+					error = EINVAL;
+					/* Restore the old name in the VCB */
+					copystr(cp->c_desc.cd_nameptr, vcb->vcbVN, sizeof(vcb->vcbVN), NULL);
+					vcb->vcbFlags |= 0xFF00;
+					goto ErrorExit;
+			    }
+			}
+
+
 			/* Lock catalog b-tree */
 			error = hfs_metafilelocking(hfsmp, kHFSCatalogFileID, LK_EXCLUSIVE, p);
 			if (error) {
+				if (hfsmp->jnl) {
+				    journal_end_transaction(hfsmp->jnl);
+				}
+				hfs_global_shared_lock_release(hfsmp);
+
 				/* Restore the old name in the VCB */
 				copystr(cp->c_desc.cd_nameptr, vcb->vcbVN, sizeof(vcb->vcbVN), NULL);
 				vcb->vcbFlags |= 0xFF00;
@@ -495,7 +543,12 @@ hfs_setattrlist(ap)
 
 			/* Unlock the Catalog */
 			(void) hfs_metafilelocking(hfsmp, kHFSCatalogFileID, LK_RELEASE, p);
-
+			
+			if (hfsmp->jnl) {
+			    journal_end_transaction(hfsmp->jnl);
+			}
+			hfs_global_shared_lock_release(hfsmp);
+			
 			if (error) {
 				/* Restore the old name in the VCB */
 				copystr(cp->c_desc.cd_nameptr, vcb->vcbVN, sizeof(vcb->vcbVN), NULL);
@@ -601,11 +654,16 @@ hfs_readdirattr(ap)
 	int error = 0;
 	int depleted = 0;
 	int index, startindex;
-	int i;
+	int i, dir_entries;
 	struct cat_desc *lastdescp = NULL;
 	struct cat_desc prevdesc;
 	char * prevnamebuf = NULL;
 	struct cat_entrylist *ce_list = NULL;
+
+	dir_entries = dcp->c_entries;
+	if (dcp->c_attr.ca_fileid == kHFSRootFolderID && hfsmp->jnl) {
+		dir_entries -= 3;
+	}
 
 	*(ap->a_actualcount) = 0;
 	*(ap->a_eofflag) = 0;
@@ -639,7 +697,7 @@ hfs_readdirattr(ap)
 
 	/* Convert uio_offset into a directory index. */
 	startindex = index = uio->uio_offset / sizeof(struct dirent);
-	if ((index + 1) > dcp->c_entries) {
+	if ((index + 1) > dir_entries) {
 		*(ap->a_eofflag) = 1;
 		error = 0;
 		goto exit;
@@ -781,7 +839,7 @@ hfs_readdirattr(ap)
 				/* Termination checks */
 				if ((--maxcount <= 0) ||
 				    (uio->uio_resid < (fixedblocksize + HFS_AVERAGE_NAME_SIZE)) ||
-				    (index >= dcp->c_entries)) {
+				    (index >= dir_entries)) {
 					depleted = 1;
 					break;
 				}
@@ -789,7 +847,7 @@ hfs_readdirattr(ap)
 		} /* for each catalog entry */
 
 		/* If there are more entries then save the last name. */
-		if (index < dcp->c_entries
+		if (index < dir_entries
 		&&  !(*(ap->a_eofflag))
 		&&  lastdescp != NULL) {
 			if (prevnamebuf == NULL)
@@ -1408,9 +1466,12 @@ packdirattr(
 	if (ATTR_DIR_ENTRYCOUNT & attr) {
 		u_long entries = cattrp->ca_entries;
 
-		if ((descp->cd_parentcnid == kRootParID) &&
-		    (hfsmp->hfs_private_metadata_dir != 0))
-			--entries;	/* hide private dir */
+		if (descp->cd_parentcnid == kRootParID) {
+			if (hfsmp->hfs_private_metadata_dir != 0)
+				--entries;	    /* hide private dir */
+			if (hfsmp->jnl)
+				entries -= 2;	/* hide the journal files */
+		}
 
 		*((u_long *)attrbufptr)++ = entries;
 	}

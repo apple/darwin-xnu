@@ -137,6 +137,7 @@ bsd/vfs/vfs_support.c			standard
 bsd/vfs/vfs_utfconv.c			standard
 bsd/vfs/vfs_vnops.c			standard
 bsd/vfs/vnode_if.c			standard
+bsd/vfs/vfs_journal.c			standard
 
 bsd/miscfs/deadfs/dead_vnops.c		standard
 bsd/miscfs/fdesc/fdesc_vfsops.c		optional fdesc
@@ -501,6 +502,8 @@ bsd/kern/mach_header.c			standard
 bsd/kern/mach_loader.c			standard
 bsd/kern/posix_sem.c			standard
 bsd/kern/posix_shm.c			standard
+# XXXdbg - I need this in the journaling and block cache code
+bsd/kern/qsort.c			standard
 
 bsd/vm/vnode_pager.c			standard
 bsd/vm/vm_unix.c			standard

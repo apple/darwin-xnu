@@ -45,9 +45,11 @@ extern "C" {
 enum {
 	kHFSSigWord		= 0x4244,	/* 'BD' in ASCII */
 	kHFSPlusSigWord		= 0x482B,	/* 'H+' in ASCII */
+	kHFSJSigWord		= 0x484a,	/* 'HJ' in ASCII */
 	kHFSPlusVersion		= 0x0004,	/* will change as format changes */
 						/* version 4 shipped with Mac OS 8.1 */
-	kHFSPlusMountVersion	= 0x31302E30	/* '10.0' for Mac OS X */
+	kHFSPlusMountVersion	= 0x31302E30,	/* '10.0' for Mac OS X */
+	kHFSJMountVersion	= 0x4846534a	/* 'HFSJ' for journaled HFS+ on OS X */
 };
 
 
@@ -452,7 +454,8 @@ enum {
 	kHFSVolumeNoCacheRequiredBit = 10,		/* don't cache volume blocks (i.e. RAM or ROM disk) */
 	kHFSBootVolumeInconsistentBit = 11,		/* boot volume is inconsistent (System 7.6 and later) */
 	kHFSCatalogNodeIDsReusedBit = 12,
-							/* Bits 13-14 are reserved for future use */
+	kHFSVolumeJournaledBit = 13,			/* this volume has a journal on it */
+							/* Bit 14 is reserved for future use */
 	kHFSVolumeSoftwareLockBit	= 15,		/* volume is locked by software */
 
 	kHFSVolumeHardwareLockMask	= 1 << kHFSVolumeHardwareLockBit,
@@ -461,6 +464,7 @@ enum {
 	kHFSVolumeNoCacheRequiredMask = 1 << kHFSVolumeNoCacheRequiredBit,
 	kHFSBootVolumeInconsistentMask = 1 << kHFSBootVolumeInconsistentBit,
 	kHFSCatalogNodeIDsReusedMask = 1 << kHFSCatalogNodeIDsReusedBit,
+	kHFSVolumeJournaledMask	= 1 << kHFSVolumeJournaledBit,
 	kHFSVolumeSoftwareLockMask	= 1 << kHFSVolumeSoftwareLockBit,
 	kHFSMDBAttributesMask		= 0x8380
 };
@@ -509,7 +513,8 @@ struct HFSPlusVolumeHeader {
 	u_int16_t 	version;		/* == kHFSPlusVersion */
 	u_int32_t 	attributes;		/* volume attributes */
 	u_int32_t 	lastMountedVersion;	/* implementation version which last mounted volume */
-	u_int32_t 	reserved;		/* reserved - initialized as zero */
+//XXXdbg	u_int32_t 	reserved;		/* reserved - initialized as zero */
+	u_int32_t 	journalInfoBlock;	/* block addr of journal info (if volume is journaled, zero otherwise) */
 
 	u_int32_t 	createDate;		/* date and time of volume creation */
 	u_int32_t 	modifyDate;		/* date and time of last modification */
@@ -600,6 +605,23 @@ enum {
 	kBTBigKeysMask		 = 0x00000002,	/* key length field is 16 bits */
 	kBTVariableIndexKeysMask = 0x00000004	/* keys in index nodes are variable length */
 };
+
+/* JournalInfoBlock - Structure that describes where our journal lives */
+struct JournalInfoBlock {
+	u_int32_t	flags;
+    	u_int32_t       device_signature[8];  // signature used to locate our device.
+	u_int64_t       offset;               // byte offset to the journal on the device
+	u_int64_t       size;                 // size in bytes of the journal
+	u_int32_t 	reserved[32];
+};
+typedef struct JournalInfoBlock JournalInfoBlock;
+
+enum {
+    kJIJournalInFSMask          = 0x00000001,
+    kJIJournalOnOtherDeviceMask = 0x00000002,
+    kJIJournalNeedInitMask      = 0x00000004
+};
+
 
 #pragma options align=reset
 

@@ -64,6 +64,49 @@
 	 */
 
 
+/*
+ * copy 'size' bytes from physical to physical address
+ * the caller must validate the physical ranges 
+ *
+ * if flush_action == 0, no cache flush necessary
+ * if flush_action == 1, flush the source
+ * if flush_action == 2, flush the dest
+ * if flush_action == 3, flush both source and dest
+ */
+
+kern_return_t copyp2p(vm_offset_t source, vm_offset_t dest, unsigned int size, unsigned int flush_action) {
+
+        switch(flush_action) {
+	case 1:
+	        flush_dcache(source, size, 1);
+		break;
+	case 2:
+	        flush_dcache(dest, size, 1);
+		break;
+	case 3:
+	        flush_dcache(source, size, 1);
+	        flush_dcache(dest, size, 1);
+		break;
+
+	}
+        bcopy_phys((char *)source, (char *)dest, size);	/* Do a physical copy */
+
+        switch(flush_action) {
+	case 1:
+	        flush_dcache(source, size, 1);
+		break;
+	case 2:
+	        flush_dcache(dest, size, 1);
+		break;
+	case 3:
+	        flush_dcache(source, size, 1);
+	        flush_dcache(dest, size, 1);
+		break;
+
+	}
+}
+
+
 
 /*
  *              Copies data from a physical page to a virtual page.  This is used to

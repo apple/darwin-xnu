@@ -132,6 +132,15 @@ struct buf {
 #define b_trans_head b_freelist.tqe_prev
 #define b_trans_next b_freelist.tqe_next
 #define b_real_bp    b_saveaddr
+#define b_iostate    b_rcred
+
+/* journaling uses this cluster i/o field for its own
+ * purposes because meta data buf's should never go
+ * through the clustering code.
+ */
+#define b_transaction b_vectorlist
+
+   
 
 /*
  * These flags are kept in b_flags.
@@ -163,7 +172,7 @@ struct buf {
 #define	B_WRITE		0x00000000	/* Write buffer (pseudo flag). */
 #define	B_WRITEINPROG	0x01000000	/* Write in progress. */
 #define	B_HDRALLOC	0x02000000	/* zone allocated buffer header */
-#define	B_UNUSED1	0x04000000	/* Unused bit */
+#define	B_NORELSE	0x04000000	/* don't brelse() in bwrite() */
 #define B_NEED_IODONE   0x08000000
 								/* need to do a biodone on the */
 								/* real_bp associated with a cluster_io */

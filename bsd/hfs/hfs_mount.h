@@ -52,10 +52,15 @@ struct hfs_mount_args {
 	u_long	hfs_encoding;		/* encoding for this volume (standard HFS only) */
 	struct	timezone hfs_timezone;	/* user time zone info (standard HFS only) */
 	int	flags;			/* mounting flags, see below */
+	int     journal_tbuffer_size;   /* size in bytes of the journal transaction buffer */
+	int	journal_flags;          /* flags to pass to journal_open/create */
+	int	journal_disable;        /* don't use journaling (potentially dangerous) */
 };
 
 #define HFSFSMNT_NOXONFILES	0x1	/* disable execute permissions for files */
 #define HFSFSMNT_WRAPPER	0x2	/* mount HFS wrapper (if it exists) */
+#define HFSFSMNT_EXTENDED_ARGS  0x4     /* indicates new fields after "flags" are valid */
+
 #endif /* __APPLE_API_UNSTABLE */
 
 #endif /* ! _HFS_MOUNT_H_ */

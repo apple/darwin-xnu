@@ -483,6 +483,9 @@ pmap_bootstrap(unsigned int mem_size, vm_offset_t *first_avail, vm_offset_t *fir
 	     hash_table_size *= 2)
 		continue;
 
+	if (num > (sizeof(pte_t) * 524288))
+		hash_table_size = hash_table_size/2; /* reduce by half above 512MB */
+
 	/* Scale to within any physical memory layout constraints */
 	do {
 		num = atop(mem_size);	/* num now holds mem_size in pages */

@@ -159,6 +159,7 @@ struct mount {
 #define MNT_DONTBROWSE	0x00100000	/* file system is not appropriate path to user data */
 #define MNT_UNKNOWNPERMISSIONS 0x00200000 /* no known mapping for uid/gid in permissions information on disk */
 #define MNT_AUTOMOUNTED 0x00400000	/* filesystem was mounted by automounter */
+#define MNT_JOURNALED   0x00800000  /* filesystem is journaled */
 
 /*
  * NFS export related mount flags.
@@ -188,7 +189,7 @@ struct mount {
 			MNT_DEFEXPORTED	| MNT_EXPORTANON| MNT_EXKERB	| \
 			MNT_LOCAL	|		MNT_QUOTA	| \
 			MNT_ROOTFS	| MNT_DOVOLFS	| MNT_DONTBROWSE | \
-			MNT_UNKNOWNPERMISSIONS | MNT_AUTOMOUNTED | MNT_FIXEDSCRIPTENCODING )
+			MNT_UNKNOWNPERMISSIONS | MNT_AUTOMOUNTED | MNT_JOURNALED | MNT_FIXEDSCRIPTENCODING )
 /*
  * External filesystem command modifier flags.
  * Unmount can use the MNT_FORCE flag.

@@ -85,9 +85,7 @@ vm_map_t	kernel_pageable_map;
 extern kern_return_t kmem_alloc_pages(
 	register vm_object_t		object,
 	register vm_object_offset_t	offset,
-	register vm_offset_t		start,
-	register vm_offset_t		end,
-	vm_prot_t			protection);
+	register vm_size_t		size);
 
 extern void kmem_remap_pages(
 	register vm_object_t		object,
@@ -254,8 +252,13 @@ kernel_memory_allocate(
 
 	/*
 	 *	Since we have not given out this address yet,
-	 *	it is safe to unlock the map.
+	 *	it is safe to unlock the map. Except of course
+	 *	we must make certain no one coalesces our address
+         *      or does a blind vm_deallocate and removes the object
+	 *	an extra object reference will suffice to protect
+	 * 	against both contingencies.
 	 */
+	vm_object_reference(object);
 	vm_map_unlock(map);
 
 	vm_object_lock(object);
@@ -271,6 +274,7 @@ kernel_memory_allocate(
 						offset + (vm_object_offset_t)i);
 				vm_object_unlock(object);
 				vm_map_remove(map, addr, addr + size, 0);
+				vm_object_deallocate(object);
 				return KERN_RESOURCE_SHORTAGE;
 			}
 			vm_object_unlock(object);
@@ -289,8 +293,11 @@ kernel_memory_allocate(
 			vm_object_unlock(object);
 		}
 		vm_map_remove(map, addr, addr + size, 0);
+		vm_object_deallocate(object);
 		return (kr);
 	}
+	/* now that the page is wired, we no longer have to fear coalesce */
+	vm_object_deallocate(object);
 	if (object == kernel_object)
 		vm_map_simplify(map, addr);
 
@@ -338,30 +345,25 @@ kmem_realloc(
 	vm_offset_t	*newaddrp,
 	vm_size_t	newsize)
 {
-	vm_offset_t oldmin, oldmax;
-	vm_offset_t newaddr;
-	vm_object_t object;
-	vm_map_entry_t oldentry, newentry;
-	kern_return_t kr;
+	vm_offset_t	oldmin, oldmax;
+	vm_offset_t	newaddr;
+	vm_offset_t	offset;
+	vm_object_t	object;
+	vm_map_entry_t	oldentry, newentry;
+	vm_page_t	mem;
+	kern_return_t	kr;
 
 	oldmin = trunc_page(oldaddr);
 	oldmax = round_page(oldaddr + oldsize);
 	oldsize = oldmax - oldmin;
 	newsize = round_page(newsize);
 
-	/*
-	 *	Find space for the new region.
-	 */
-
-	kr = vm_map_find_space(map, &newaddr, newsize, (vm_offset_t) 0,
-			       &newentry);
-	if (kr != KERN_SUCCESS) {
-		return kr;
-	}
 
 	/*
 	 *	Find the VM object backing the old region.
 	 */
+
+	vm_map_lock(map);
 
 	if (!vm_map_lookup_entry(map, oldmin, &oldentry))
 		panic("kmem_realloc");
@@ -373,36 +375,71 @@ kmem_realloc(
 	 */
 
 	vm_object_reference(object);
+	/* by grabbing the object lock before unlocking the map */
+	/* we guarantee that we will panic if more than one     */
+	/* attempt is made to realloc a kmem_alloc'd area       */
 	vm_object_lock(object);
+	vm_map_unlock(map);
 	if (object->size != oldsize)
 		panic("kmem_realloc");
 	object->size = newsize;
 	vm_object_unlock(object);
 
+	/* allocate the new pages while expanded portion of the */
+	/* object is still not mapped */
+	kmem_alloc_pages(object, oldsize, newsize-oldsize);
+
+
+	/*
+	 *	Find space for the new region.
+	 */
+
+	kr = vm_map_find_space(map, &newaddr, newsize, (vm_offset_t) 0,
+			       &newentry);
+	if (kr != KERN_SUCCESS) {
+		vm_object_lock(object);
+		for(offset = oldsize; 
+				offset<newsize; offset+=PAGE_SIZE) {
+	    		if ((mem = vm_page_lookup(object, offset)) != VM_PAGE_NULL) {
+				vm_page_lock_queues();
+				vm_page_free(mem);
+				vm_page_unlock_queues();
+			}
+		}
+		object->size = oldsize;
+		vm_object_unlock(object);
+		vm_object_deallocate(object);
+		return kr;
+	}
 	newentry->object.vm_object = object;
 	newentry->offset = 0;
 	assert (newentry->wired_count == 0);
-	newentry->wired_count = 1;
 
-	/*
-	 *	Since we have not given out this address yet,
-	 *	it is safe to unlock the map.  We are trusting
-	 *	that nobody will play with either region.
-	 */
-
+	
+	/* add an extra reference in case we have someone doing an */
+	/* unexpected deallocate */
+	vm_object_reference(object);
 	vm_map_unlock(map);
 
-	/*
-	 *	Remap the pages in the old region and
-	 *	allocate more pages for the new region.
-	 */
+	if ((kr = vm_map_wire(map, newaddr, newaddr + newsize, 
+				VM_PROT_DEFAULT, FALSE)) != KERN_SUCCESS) {
+		vm_map_remove(map, newaddr, newaddr + newsize, 0);
+		vm_object_lock(object);
+		for(offset = oldsize; 
+				offset<newsize; offset+=PAGE_SIZE) {
+	    		if ((mem = vm_page_lookup(object, offset)) != VM_PAGE_NULL) {
+				vm_page_lock_queues();
+				vm_page_free(mem);
+				vm_page_unlock_queues();
+			}
+		}
+		object->size = oldsize;
+		vm_object_unlock(object);
+		vm_object_deallocate(object);
+		return (kr);
+	}
+	vm_object_deallocate(object);
 
-	kmem_remap_pages(object, 0,
-			 newaddr, newaddr + oldsize,
-			 VM_PROT_DEFAULT);
-	kmem_alloc_pages(object, oldsize,
-			 newaddr + oldsize, newaddr + newsize,
-			 VM_PROT_DEFAULT);
 
 	*newaddrp = newaddr;
 	return KERN_SUCCESS;
@@ -500,28 +537,21 @@ kmem_free(
 }
 
 /*
- *	Allocate new wired pages in an object.
- *	The object is assumed to be mapped into the kernel map or
- *	a submap.
+ *	Allocate new pages in an object.
  */
 
 kern_return_t
 kmem_alloc_pages(
 	register vm_object_t		object,
 	register vm_object_offset_t	offset,
-	register vm_offset_t		start,
-	register vm_offset_t		end,
-	vm_prot_t			protection)
+	register vm_size_t		size)
 {
-	/*
-	 *	Mark the pmap region as not pageable.
-	 */
-	pmap_pageable(kernel_pmap, start, end, FALSE);
 
-	while (start < end) {
+	size = round_page(size);
+        vm_object_lock(object);
+	while (size) {
 	    register vm_page_t	mem;
 
-	    vm_object_lock(object);
 
 	    /*
 	     *	Allocate a page
@@ -533,27 +563,12 @@ kmem_alloc_pages(
 		vm_object_lock(object);
 	    }
 
-	    /*
-	     *	Wire it down
-	     */
-	    vm_page_lock_queues();
-	    vm_page_wire(mem);
-	    vm_page_unlock_queues();
-	    vm_object_unlock(object);
 
-	    /*
-	     *	Enter it in the kernel pmap
-	     */
-	    PMAP_ENTER(kernel_pmap, start, mem, protection, 
-				VM_WIMG_USE_DEFAULT, TRUE);
-
-	    vm_object_lock(object);
-	    PAGE_WAKEUP_DONE(mem);
-	    vm_object_unlock(object);
-
-	    start += PAGE_SIZE;
-	    offset += PAGE_SIZE_64;
+	    offset += PAGE_SIZE;
+	    size -= PAGE_SIZE;
+	    mem->busy = FALSE;
 	}
+	vm_object_unlock(object);
 	return KERN_SUCCESS;
 }
 

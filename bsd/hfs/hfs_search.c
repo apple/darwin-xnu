@@ -193,6 +193,8 @@ hfs_search( ap )
 	CatalogRecord * myCurrentDataPtr;
 	CatPosition * myCatPositionPtr;
 	BTScanState myBTScanState;
+	void *user_start = NULL;
+	int   user_len;
 
 	/* XXX Parameter check a_searchattrs? */
 
@@ -222,6 +224,20 @@ hfs_search( ap )
 
 	MALLOC( attributesBuffer, void *, eachReturnBufferSize, M_TEMP, M_WAITOK );
 	variableBuffer = (void*)((char*) attributesBuffer + fixedBlockSize);
+
+	// XXXdbg - have to lock the user's buffer so we don't fault
+	// while holding the shared catalog file lock.  see the comment
+	// in hfs_readdir() for more details.
+	//
+	if (VTOHFS(ap->a_vp)->jnl && ap->a_uio->uio_segflg == UIO_USERSPACE) {
+		user_start = ap->a_uio->uio_iov->iov_base;
+		user_len   = ap->a_uio->uio_iov->iov_len;
+
+		if ((err = vslock(user_start, user_len)) != 0) {
+			user_start = NULL;
+			goto ExitThisRoutine;
+		}
+	}
 
 	/* Lock catalog b-tree */
 	err = hfs_metafilelocking(VTOHFS(ap->a_vp), kHFSCatalogFileID, LK_SHARED, p);
@@ -382,6 +398,10 @@ QuickExit:
 
 ExitThisRoutine:
         FREE( attributesBuffer, M_TEMP );
+
+	if (VTOHFS(ap->a_vp)->jnl && user_start) {
+		vsunlock(user_start, user_len, TRUE);
+	}
 
 	return (MacToVFSError(err));
 }
@@ -854,6 +874,14 @@ InsertMatch( struct vnode *root_vp, struct uio *a_uio, CatalogRecord *rec,
 
 	/* hide our private meta data directory */
 	if ((privateDir != 0) && (c_attr.ca_fileid == privateDir)) {
+		err = 0;
+		goto exit;
+	}
+
+	/* Hide the private journal files */
+	if (VTOHFS(root_vp)->jnl &&
+	    ((c_attr.ca_fileid == VTOHFS(root_vp)->hfs_jnlfileid) ||
+	     (c_attr.ca_fileid == VTOHFS(root_vp)->hfs_jnlinfoblkid))) {
 		err = 0;
 		goto exit;
 	}

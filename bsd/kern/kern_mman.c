@@ -1086,6 +1086,10 @@ kern_return_t map_fd_funneled(
 	
 	if (fp->f_type != DTYPE_VNODE)
 		return(KERN_INVALID_ARGUMENT);
+
+	if (!(fp->f_flag & FREAD))
+		return (KERN_PROTECTION_FAILURE);
+
 	vp = (struct vnode *)fp->f_data;
 
 	if (vp->v_type != VREG)

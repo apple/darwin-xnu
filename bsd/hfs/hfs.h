@@ -36,6 +36,8 @@
 #include <sys/quota.h>
 #include <sys/dirent.h>
 
+#include <vfs/vfs_journal.h>
+
 #include <hfs/hfs_format.h>
 #include <hfs/hfs_catalog.h>
 #include <hfs/hfs_cnode.h>
@@ -108,6 +110,7 @@ struct vcb_t {
     int16_t 			vcbAtrb;
     int16_t			vcbFlags;
     int16_t 			vcbspare;
+    u_int32_t 			vcbJinfoBlock;
 
     u_int32_t 			vcbCrDate;
     u_int32_t 			vcbLsMod;
@@ -180,6 +183,7 @@ typedef struct hfsmount {
 	u_int8_t			hfs_fs_ronly;			/* Whether this was mounted as read-initially  */
 	u_int8_t			hfs_unknownpermissions;	/* Whether this was mounted with MNT_UNKNOWNPERMISSIONS */
 	u_int8_t			hfs_media_writeable;
+	u_int8_t			hfs_orphans_cleaned;
 	
 	/* Physical Description */
 	u_long				hfs_phys_block_count;	/* Num of PHYSICAL blocks of volume */
@@ -211,9 +215,54 @@ typedef struct hfsmount {
 	unicode_to_hfs_func_t	hfs_get_hfsname;
  
 	struct quotafile	hfs_qfiles[MAXQUOTAS];    /* quota files */
+
+	// XXXdbg
+	void                *jnl;           // the journal for this volume (if one exists)
+	struct vnode        *jvp;           // device where the journal lives (may be equal to devvp)
+	u_int32_t            jnl_start;     // start block of the journal file (so we don't delete it)
+	u_int32_t            hfs_jnlfileid;
+	u_int32_t            hfs_jnlinfoblkid;
+    volatile int         readers;
+	volatile int         blocker;
 } hfsmount_t;
 
 #define hfs_private_metadata_dir	hfs_privdir_desc.cd_cnid
+
+#define hfs_global_shared_lock_acquire(hfsmp)    \
+    do { \
+       if (hfsmp->blocker) { \
+	       tsleep((caddr_t)&hfsmp->blocker, PRIBIO, "journal_blocker", 0); \
+           continue; \
+	   } \
+	   hfsmp->readers++; \
+       break; \
+	} while (1)
+
+#define hfs_global_shared_lock_release(hfsmp)    \
+    do { \
+	    hfsmp->readers--; \
+	    if (hfsmp->readers == 0) { \
+	        wakeup((caddr_t)&hfsmp->readers); \
+        } \
+    } while (0)
+
+#define hfs_global_exclusive_lock_acquire(hfsmp) \
+    do { \
+       if (hfsmp->blocker) { \
+	       tsleep((caddr_t)&hfsmp->blocker, PRIBIO, "journal_blocker", 0); \
+           continue; \
+	   } \
+       if (hfsmp->readers != 0) { \
+	       tsleep((caddr_t)&hfsmp->readers, PRIBIO, "journal_enable/disble", 0); \
+           continue; \
+       } \
+       hfsmp->blocker = 1; \
+       break; \
+	} while (1)
+     
+#define hfs_global_exclusive_lock_release(hfsmp) \
+    hfsmp->blocker = 0; \
+	wakeup((caddr_t)&hfsmp->blocker)
 
 #define MAXHFSVNODELEN		31
 
@@ -325,6 +374,7 @@ enum { kdirentMaxNameBytes = NAME_MAX };
 #define VTOHFS(VP) ((struct hfsmount *)((VP)->v_mount->mnt_data))
 #define	VFSTOHFS(MP) ((struct hfsmount *)(MP)->mnt_data)	
 #define VCBTOHFS(VCB) (((struct vfsVCB *)(VCB))->vcb_hfsmp)
+#define FCBTOHFS(FCB) ((struct hfsmount *)(FCB)->ff_cp->c_vp->v_mount->mnt_data)
 
 /*
  * Various ways to acquire a VCB pointer:
@@ -332,6 +382,7 @@ enum { kdirentMaxNameBytes = NAME_MAX };
 #define VTOVCB(VP) (&(((struct hfsmount *)((VP)->v_mount->mnt_data))->hfs_vcb.vcb_vcb))
 #define VFSTOVCB(MP) (&(((struct hfsmount *)(MP)->mnt_data)->hfs_vcb.vcb_vcb))
 #define HFSTOVCB(HFSMP) (&(HFSMP)->hfs_vcb.vcb_vcb)
+#define FCBTOVCB(FCB) (&(((struct hfsmount *)((FCB)->ff_cp->c_vp->v_mount->mnt_data))->hfs_vcb.vcb_vcb))
 
 
 #define E_NONE	0
@@ -376,6 +427,8 @@ extern int hfs_metafilelocking(struct hfsmount *hfsmp, u_long fileID, u_int flag
 
 extern u_int32_t hfs_freeblks(struct hfsmount * hfsmp, int wantreserve);
 
+extern void hfs_remove_orphans(struct hfsmount *);
+
 
 short MacToVFSError(OSErr err);
 
@@ -388,6 +441,8 @@ u_long FindMetaDataDirectory(ExtendedVCB *vcb);
 #define  HFS_SYNCTRANS		1
 
 extern int hfs_btsync(struct vnode *vp, int sync_transaction);
+// used as a callback by the journaling code
+extern void hfs_sync_metadata(void *arg);
 
 short make_dir_entry(FCB **fileptr, char *name, u_int32_t fileID);
 
@@ -399,7 +454,13 @@ unsigned long BestBlockSizeFit(unsigned long allocationBlockSize,
 OSErr	hfs_MountHFSVolume(struct hfsmount *hfsmp, HFSMasterDirectoryBlock *mdb,
 		struct proc *p);
 OSErr	hfs_MountHFSPlusVolume(struct hfsmount *hfsmp, HFSPlusVolumeHeader *vhp,
-		off_t embeddedOffset, u_int64_t disksize, struct proc *p);
+		off_t embeddedOffset, u_int64_t disksize, struct proc *p, void *args);
+
+extern int     hfs_early_journal_init(struct hfsmount *hfsmp, HFSPlusVolumeHeader *vhp,
+							   void *_args, int embeddedOffset, int mdb_offset,
+							   HFSMasterDirectoryBlock *mdbp, struct ucred *cred);
+extern u_long  GetFileInfo(ExtendedVCB *vcb, u_int32_t dirid, char *name,
+					struct cat_attr *fattr, struct cat_fork *forkinfo);
 
 int hfs_getconverter(u_int32_t encoding, hfs_to_unicode_func_t *get_unicode,
 		     unicode_to_hfs_func_t *get_hfsname);

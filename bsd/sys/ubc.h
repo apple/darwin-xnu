@@ -60,6 +60,7 @@ struct ubc_info {
 	int						ui_refcount;/* ref count on the ubc_info */
 	off_t					ui_size;	/* file size for the vnode */
 	long					ui_mapped;	/* is it currently mapped */
+	void					*ui_owner;	/* for recursive ubc_busy */
 };
 
 /* Defines for ui_flags */
@@ -69,6 +70,8 @@ struct ubc_info {
 #define UI_HASOBJREF	0x00000004		/* hold a reference on object */
 #define UI_WASMAPPED	0x00000008		/* vnode was mapped */
 #define	UI_DONTCACHE	0x00000010		/* do not cache object */
+#define	UI_BUSY			0x00000020		/* for VM synchronization */
+#define	UI_WANTED		0x00000040		/* for VM synchronization */
 
 #endif /* __APPLE_API_PRIVATE */
 

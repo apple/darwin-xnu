@@ -72,11 +72,24 @@ createindirectlink(struct hfsmount *hfsmp, u_int32_t linknum,
 	fip->fdCreator = SWAP_BE32 (kHFSPlusCreator);	/* 'hfs+' */
 	fip->fdFlags   = SWAP_BE16 (kHasBeenInited);
 
+	hfs_global_shared_lock_acquire(hfsmp);
+	if (hfsmp->jnl) {
+	    if (journal_start_transaction(hfsmp->jnl) != 0) {
+			hfs_global_shared_lock_release(hfsmp);
+			return EINVAL;
+	    }
+	}
+
 	/* Create the indirect link directly in the catalog */
 	result = cat_create(hfsmp, &desc, &attr, NULL);
 
-	if (linkcnid != NULL)
+	if (result == 0 && linkcnid != NULL)
 		*linkcnid = attr.ca_fileid;
+
+	if (hfsmp->jnl) {
+	    journal_end_transaction(hfsmp->jnl);
+	}
+	hfs_global_shared_lock_release(hfsmp);
 
 	return (result);
 }
@@ -111,8 +124,9 @@ hfs_makelink(struct hfsmount *hfsmp, struct cnode *cp, struct cnode *dcp,
 
 	/* Lock catalog b-tree */
 	retval = hfs_metafilelocking(hfsmp, kHFSCatalogFileID, LK_EXCLUSIVE, p);
-	if (retval)
-		return retval;
+	if (retval) {
+	    return retval;
+	}
 
 	/*
 	 * If this is a new hardlink then we need to create the data
@@ -123,6 +137,7 @@ hfs_makelink(struct hfsmount *hfsmp, struct cnode *cp, struct cnode *dcp,
 		bzero(&to_desc, sizeof(to_desc));
 		to_desc.cd_parentcnid = hfsmp->hfs_privdir_desc.cd_cnid;
 		to_desc.cd_cnid = cp->c_fileid;
+
 		do {
 			/* get a unique indirect node number */
 			indnodeno = ((random() & 0x3fffffff) + 100);
@@ -144,7 +159,17 @@ hfs_makelink(struct hfsmount *hfsmp, struct cnode *cp, struct cnode *dcp,
 				cp->c_desc.cd_nameptr, &cp->c_desc.cd_cnid);
 		if (retval) {
 			/* put it source file back */
+		// XXXdbg
+		#if 1
+		    {
+		    	int err;
+				err = cat_rename(hfsmp, &to_desc, &dcp->c_desc, &cp->c_desc, NULL);
+				if (err)
+					panic("hfs_makelink: error %d from cat_rename backout 1", err);
+		    }
+		#else
 			(void) cat_rename(hfsmp, &to_desc, &dcp->c_desc, &cp->c_desc, NULL);
+		#endif
 			goto out;
 		}
 		cp->c_rdev = indnodeno;
@@ -161,7 +186,17 @@ hfs_makelink(struct hfsmount *hfsmp, struct cnode *cp, struct cnode *dcp,
 		(void) cat_delete(hfsmp, &cp->c_desc, &cp->c_attr);
 
 		/* Put the source file back */
+	// XXXdbg
+	#if 1
+		{
+			int err;
+			err = cat_rename(hfsmp, &to_desc, &dcp->c_desc, &cp->c_desc, NULL);
+			if (err)
+				panic("hfs_makelink: error %d from cat_rename backout 2", err);
+		}
+	#else
 		(void) cat_rename(hfsmp, &to_desc, &dcp->c_desc, &cp->c_desc, NULL);
+	#endif
 		goto out;
 	}
 
@@ -205,6 +240,7 @@ hfs_link(ap)
 		struct componentname *a_cnp;
 	} */ *ap;
 {
+	struct hfsmount *hfsmp;
 	struct vnode *vp = ap->a_vp;
 	struct vnode *tdvp = ap->a_tdvp;
 	struct componentname *cnp = ap->a_cnp;
@@ -214,6 +250,8 @@ hfs_link(ap)
 	struct timeval tv;
 	int error;
 
+	hfsmp = VTOHFS(vp);
+	
 #if HFS_DIAGNOSTIC
 	if ((cnp->cn_flags & HASBUF) == 0)
 		panic("hfs_link: no name");
@@ -226,7 +264,7 @@ hfs_link(ap)
 	if (VTOVCB(tdvp)->vcbSigWord != kHFSPlusSigWord)
 		return err_link(ap);	/* hfs disks don't support hard links */
 	
-	if (VTOHFS(vp)->hfs_private_metadata_dir == 0)
+	if (hfsmp->hfs_private_metadata_dir == 0)
 		return err_link(ap);	/* no private metadata dir, no links possible */
 
 	if (tdvp != vp && (error = vn_lock(vp, LK_EXCLUSIVE, p))) {
@@ -252,12 +290,22 @@ hfs_link(ap)
 		goto out1;
 	}
 
+	hfs_global_shared_lock_acquire(hfsmp);
+	if (hfsmp->jnl) {
+	    if (journal_start_transaction(hfsmp->jnl) != 0) {
+			hfs_global_shared_lock_release(hfsmp);
+			return EINVAL;
+	    }
+	}
+
 	cp->c_nlink++;
 	cp->c_flag |= C_CHANGE;
 	tv = time;
+
 	error = VOP_UPDATE(vp, &tv, &tv, 1);
-	if (!error)
-		error = hfs_makelink(VTOHFS(vp), cp, tdcp, cnp);
+	if (!error) {
+		error = hfs_makelink(hfsmp, cp, tdcp, cnp);
+	}
 	if (error) {
 		cp->c_nlink--;
 		cp->c_flag |= C_CHANGE;
@@ -268,10 +316,21 @@ hfs_link(ap)
 		tdcp->c_flag |= C_CHANGE | C_UPDATE;
 		tv = time;
 		(void) VOP_UPDATE(tdvp, &tv, &tv, 0);
-		hfs_volupdate(VTOHFS(vp), VOL_MKFILE,
+
+		hfs_volupdate(hfsmp, VOL_MKFILE,
 			(tdcp->c_cnid == kHFSRootFolderID));
 	}
+
+	// XXXdbg - need to do this here as well because cp could have changed
+	error = VOP_UPDATE(vp, &tv, &tv, 1);
+
 	FREE_ZONE(cnp->cn_pnbuf, cnp->cn_pnlen, M_NAMEI);
+
+	if (hfsmp->jnl) {
+	    journal_end_transaction(hfsmp->jnl);
+	}
+	hfs_global_shared_lock_release(hfsmp);
+
 out1:
 	if (tdvp != vp)
 		VOP_UNLOCK(vp, 0, p);

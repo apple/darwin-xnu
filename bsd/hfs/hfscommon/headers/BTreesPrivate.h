@@ -382,6 +382,10 @@ OSStatus	ReleaseNode				(BTreeControlBlockPtr	 btreePtr,
 OSStatus	TrashNode				(BTreeControlBlockPtr	 btreePtr,
 									 NodePtr				 nodePtr );
 
+// XXXdbg
+void ModifyBlockStart(FileReference vp, BlockDescPtr blockPtr);
+// XXXdbg
+
 OSStatus	UpdateNode				(BTreeControlBlockPtr	 btreePtr,
 									 NodePtr				 nodePtr,
 									 UInt32					 transactionID,

@@ -476,7 +476,14 @@ static OSErr ReleaseBitmapBlock(
 
 	if (bp) {
 		if (dirty) {
-			bdwrite(bp);
+			// XXXdbg
+			struct hfsmount *hfsmp = VCBTOHFS(vcb);
+			
+			if (hfsmp->jnl) {
+				journal_modify_block_end(hfsmp->jnl, bp);
+			} else {
+				bdwrite(bp);
+			}
 		} else {
 			brelse(bp);
 		}
@@ -597,6 +604,7 @@ static OSErr BlockAllocateAny(
 	UInt32  bitsPerBlock;
 	UInt32  wordsPerBlock;
 	Boolean dirty = false;
+	struct hfsmount *hfsmp = VCBTOHFS(vcb);
 
 	//	Since this routine doesn't wrap around
 	if (maxBlocks > (endingBlock - startingBlock)) {
@@ -678,6 +686,11 @@ static OSErr BlockAllocateAny(
 		endingBlock = block + maxBlocks;	//	if we get this far, we've found enough
 	}
 	
+	// XXXdbg
+	if (hfsmp->jnl) {
+		journal_modify_block_start(hfsmp->jnl, (struct buf *)blockRef);
+	}
+
 	//
 	//	Allocate all of the consecutive blocks
 	//
@@ -709,6 +722,11 @@ static OSErr BlockAllocateAny(
 				if (err != noErr) goto Exit;
                 buffer = currCache;
 
+				// XXXdbg
+				if (hfsmp->jnl) {
+					journal_modify_block_start(hfsmp->jnl, (struct buf *)blockRef);
+				}
+				
 				wordsLeft = wordsPerBlock;
 			}
 			
@@ -845,6 +863,8 @@ static OSErr BlockMarkAllocated(
 	UInt32  blockRef;
 	UInt32  bitsPerBlock;
 	UInt32  wordsPerBlock;
+	// XXXdbg
+	struct hfsmount *hfsmp = VCBTOHFS(vcb);
 
 	//
 	//	Pre-read the bitmap block containing the first word of allocation
@@ -866,6 +886,11 @@ static OSErr BlockMarkAllocated(
 		wordsLeft = wordsPerBlock - wordIndexInBlock;
 	}
 	
+	// XXXdbg
+	if (hfsmp->jnl) {
+		journal_modify_block_start(hfsmp->jnl, (struct buf *)blockRef);
+	}
+
 	//
 	//	If the first block to allocate doesn't start on a word
 	//	boundary in the bitmap, then treat that first word
@@ -909,6 +934,11 @@ static OSErr BlockMarkAllocated(
 			err = ReadBitmapBlock(vcb, startingBlock, &buffer, &blockRef);
 			if (err != noErr) goto Exit;
 
+			// XXXdbg
+			if (hfsmp->jnl) {
+				journal_modify_block_start(hfsmp->jnl, (struct buf *)blockRef);
+			}
+
 			//	Readjust currentWord and wordsLeft
 			currentWord = buffer;
 			wordsLeft = wordsPerBlock;
@@ -942,6 +972,11 @@ static OSErr BlockMarkAllocated(
 			err = ReadBitmapBlock(vcb, startingBlock, &buffer, &blockRef);
 			if (err != noErr) goto Exit;
 
+			// XXXdbg
+			if (hfsmp->jnl) {
+				journal_modify_block_start(hfsmp->jnl, (struct buf *)blockRef);
+			}
+			
 			//	Readjust currentWord and wordsLeft
 			currentWord = buffer;
 			wordsLeft = wordsPerBlock;
@@ -995,6 +1030,8 @@ static OSErr BlockMarkFree(
 	UInt32  blockRef;
 	UInt32  bitsPerBlock;
 	UInt32  wordsPerBlock;
+    // XXXdbg
+	struct hfsmount *hfsmp = VCBTOHFS(vcb);
 
 	//
 	//	Pre-read the bitmap block containing the first word of allocation
@@ -1002,6 +1039,11 @@ static OSErr BlockMarkFree(
 
 	err = ReadBitmapBlock(vcb, startingBlock, &buffer, &blockRef);
 	if (err != noErr) goto Exit;
+	// XXXdbg
+	if (hfsmp->jnl) {
+		journal_modify_block_start(hfsmp->jnl, (struct buf *)blockRef);
+	}
+
 	//
 	//	Initialize currentWord, and wordsLeft.
 	//
@@ -1058,6 +1100,11 @@ static OSErr BlockMarkFree(
 			err = ReadBitmapBlock(vcb, startingBlock, &buffer, &blockRef);
 			if (err != noErr) goto Exit;
 
+			// XXXdbg
+			if (hfsmp->jnl) {
+				journal_modify_block_start(hfsmp->jnl, (struct buf *)blockRef);
+			}
+
 			//	Readjust currentWord and wordsLeft
 			currentWord = buffer;
 			wordsLeft = wordsPerBlock;
@@ -1092,6 +1139,11 @@ static OSErr BlockMarkFree(
 			err = ReadBitmapBlock(vcb, startingBlock, &buffer, &blockRef);
 			if (err != noErr) goto Exit;
 
+			// XXXdbg
+			if (hfsmp->jnl) {
+				journal_modify_block_start(hfsmp->jnl, (struct buf *)blockRef);
+			}
+			
 			//	Readjust currentWord and wordsLeft
 			currentWord = buffer;
 			wordsLeft = wordsPerBlock;

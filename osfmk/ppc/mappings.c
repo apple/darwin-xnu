@@ -70,6 +70,7 @@
 #endif
 
 vm_map_t        mapping_map = VM_MAP_NULL;
+#define		MAPPING_MAP_SIZE	33554432	/* 32MB address space */
 
 unsigned int	incrVSID = 0;									/* VSID increment value */
 unsigned int	mappingdeb0 = 0;						
@@ -1548,7 +1549,7 @@ void mapping_free_prime(void) {									/* Primes the mapping block release list
 	mappingblok	*mbn;
 	vm_offset_t     mapping_min;
 	
-	retr = kmem_suballoc(kernel_map, &mapping_min, mem_size / 16,
+	retr = kmem_suballoc(kernel_map, &mapping_min, MAPPING_MAP_SIZE,
 			     FALSE, TRUE, &mapping_map);
 
 	if (retr != KERN_SUCCESS)
@@ -1875,6 +1876,50 @@ kern_return_t copyp2v(vm_offset_t source, vm_offset_t sink, unsigned int size) {
 	}
 	return KERN_SUCCESS;
 }
+
+
+/*
+ * copy 'size' bytes from physical to physical address
+ * the caller must validate the physical ranges 
+ *
+ * if flush_action == 0, no cache flush necessary
+ * if flush_action == 1, flush the source
+ * if flush_action == 2, flush the dest
+ * if flush_action == 3, flush both source and dest
+ */
+
+kern_return_t copyp2p(vm_offset_t source, vm_offset_t dest, unsigned int size, unsigned int flush_action) {
+
+        switch(flush_action) {
+	case 1:
+	        flush_dcache(source, size, 1);
+		break;
+	case 2:
+	        flush_dcache(dest, size, 1);
+		break;
+	case 3:
+	        flush_dcache(source, size, 1);
+	        flush_dcache(dest, size, 1);
+		break;
+
+	}
+        bcopy_phys((char *)source, (char *)dest, size);	/* Do a physical copy */
+
+        switch(flush_action) {
+	case 1:
+	        flush_dcache(source, size, 1);
+		break;
+	case 2:
+	        flush_dcache(dest, size, 1);
+		break;
+	case 3:
+	        flush_dcache(source, size, 1);
+	        flush_dcache(dest, size, 1);
+		break;
+
+	}
+}
+
 
 
 #if DEBUG
