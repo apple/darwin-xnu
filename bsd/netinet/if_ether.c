@@ -886,9 +886,18 @@ arplookup(addr, create, proxy)
 	if (rt == 0)
 		return (0);
 	rtunref(rt);
-
-	if (rt->rt_flags & RTF_GATEWAY)
+	
+	if (rt->rt_flags & RTF_GATEWAY) {
 		why = "host is not on local network";
+		
+		/* If there are no references to this route, purge it */
+		if (rt->rt_refcnt <= 0 && (rt->rt_flags & RTF_WASCLONED) != 0) {
+			rtrequest(RTM_DELETE,
+					(struct sockaddr *)rt_key(rt),
+					rt->rt_gateway, rt_mask(rt),
+					rt->rt_flags, 0);
+		}
+	}
 	else if ((rt->rt_flags & RTF_LLINFO) == 0)
 		why = "could not allocate llinfo";
 	else if (rt->rt_gateway->sa_family != AF_LINK)
