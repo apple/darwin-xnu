@@ -3,19 +3,22 @@
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
+ * Copyright (c) 1999-2003 Apple Computer, Inc.  All Rights Reserved.
  * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this
+ * file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
  * 
  * @APPLE_LICENSE_HEADER_END@
  */
@@ -642,9 +645,31 @@ in_arpinput(m)
 		return;
 	}
 	if (isaddr.s_addr == myaddr.s_addr) {
+		struct kev_msg        ev_msg;
+		struct kev_in_collision	*in_collision;
+		u_char	storage[sizeof(struct kev_in_collision) + 6];
+		in_collision = (struct kev_in_collision*)storage;
+		
 		log(LOG_ERR,
 			"duplicate IP address %s sent from ethernet address %s\n",
 			inet_ntoa(isaddr), ether_sprintf(buf, ea->arp_sha));
+		
+		/* Send a kernel event so anyone can learn of the conflict */
+		in_collision->link_data.if_family = ac->ac_if.if_family;
+		in_collision->link_data.if_unit = ac->ac_if.if_unit;
+		strncpy(&in_collision->link_data.if_name[0], ac->ac_if.if_name, IFNAMSIZ);
+		in_collision->ia_ipaddr = isaddr;
+		in_collision->hw_len = ETHER_ADDR_LEN;
+		bcopy((caddr_t)ea->arp_sha, (caddr_t)in_collision->hw_addr, sizeof(ea->arp_sha));
+		ev_msg.vendor_code = KEV_VENDOR_APPLE;
+		ev_msg.kev_class = KEV_NETWORK_CLASS;
+		ev_msg.kev_subclass = KEV_INET_SUBCLASS;
+		ev_msg.event_code = KEV_INET_ARPCOLLISION;
+		ev_msg.dv[0].data_ptr = in_collision;
+		ev_msg.dv[0].data_length = sizeof(struct kev_in_collision) + 6;
+		ev_msg.dv[1].data_length = 0;
+		kev_post_msg(&ev_msg);
+		
 		itaddr = myaddr;
 		goto reply;
 	}

@@ -89,6 +89,6 @@ struct vn_ioctl {
 
 #endif /* __APPLE_API_PRIVATE */
 
-#endif KERNEL_PRIVATE
+#endif /* KERNEL_PRIVATE */
 
 #endif	/* _SYS_VNIOCTL_H_*/

@@ -3,19 +3,22 @@
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
+ * Copyright (c) 1999-2003 Apple Computer, Inc.  All Rights Reserved.
  * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this
+ * file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
  * 
  * @APPLE_LICENSE_HEADER_END@
  */
@@ -113,7 +116,7 @@ int ss_fltsz = 1;
 SYSCTL_INT(_net_inet_tcp, OID_AUTO, slowstart_flightsize, CTLFLAG_RW,
 	&ss_fltsz, 1, "Slow start flight size");
 
-int ss_fltsz_local = TCP_MAXWIN;               /* something large */
+int ss_fltsz_local = 4; /* starts with four segments max */
 SYSCTL_INT(_net_inet_tcp, OID_AUTO, local_slowstart_flightsize, CTLFLAG_RW,
 	&ss_fltsz_local, 1, "Slow start flight size for local networks");
 
@@ -128,6 +131,8 @@ struct	mbuf *m_copym_with_hdrs __P((struct mbuf*, int, int, int, struct mbuf**, 
 #if IPSEC
 extern int ipsec_bypass;
 #endif
+
+extern int slowlink_wsize;	/* window correction for slow links */
 
 /*
  * Tcp output routine: figure out what should be sent and send it.
@@ -219,6 +224,8 @@ again:
 	sendalot = 0;
 	off = tp->snd_nxt - tp->snd_una;
 	win = min(tp->snd_wnd, tp->snd_cwnd);
+	if (tp->t_flags & TF_SLOWLINK && slowlink_wsize > 0)
+		win = min(win, slowlink_wsize);
 
 	flags = tcp_outflags[tp->t_state];
 	/*
@@ -325,7 +332,10 @@ again:
 	if (SEQ_LT(tp->snd_nxt + len, tp->snd_una + so->so_snd.sb_cc))
 		flags &= ~TH_FIN;
 
-	win = sbspace(&so->so_rcv);
+	if (tp->t_flags & TF_SLOWLINK && slowlink_wsize > 0 )	/* Clips window size for slow links */
+		win = min(sbspace(&so->so_rcv), slowlink_wsize);
+	else
+		win = sbspace(&so->so_rcv);
 
 	/*
 	 * Sender silly window avoidance.  If connection is idle
@@ -795,9 +805,17 @@ send:
 		win = 0;
 	if (win < (long)(tp->rcv_adv - tp->rcv_nxt))
 		win = (long)(tp->rcv_adv - tp->rcv_nxt);
-	if (win > (long)TCP_MAXWIN << tp->rcv_scale)
+	if (tp->t_flags & TF_SLOWLINK && slowlink_wsize > 0) {
+		if (win > (long)slowlink_wsize) 
+			win = slowlink_wsize;
+		th->th_win = htons((u_short) (win>>tp->rcv_scale));
+	}
+	else {
+
+		if (win > (long)TCP_MAXWIN << tp->rcv_scale)
 		win = (long)TCP_MAXWIN << tp->rcv_scale;
-	th->th_win = htons((u_short) (win>>tp->rcv_scale));
+		th->th_win = htons((u_short) (win>>tp->rcv_scale));
+	}
 	if (SEQ_GT(tp->snd_up, tp->snd_nxt)) {
 		th->th_urp = htons((u_short)(tp->snd_up - tp->snd_nxt));
 		th->th_flags |= TH_URG;

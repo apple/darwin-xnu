@@ -3,19 +3,22 @@
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
+ * Copyright (c) 1999-2003 Apple Computer, Inc.  All Rights Reserved.
  * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this
+ * file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
  * 
  * @APPLE_LICENSE_HEADER_END@
  */
@@ -2030,7 +2033,7 @@ free_io_buf(bp)
 
 typedef long long blsize_t;
 
-blsize_t MAXNBUF; /* initialize to (mem_size / PAGE_SIZE) */
+blsize_t MAXNBUF; /* initialize to (sane_size / PAGE_SIZE) */
 /* Global tunable limits */
 blsize_t nbufh;			/* number of buffer headers */
 blsize_t nbuflow;		/* minimum number of buffer headers required */
@@ -2126,11 +2129,11 @@ bufq_balance_thread_init()
 	if (bufqscanwait++ == 0) {
 
 		/* Initalize globals */
-		MAXNBUF = (mem_size / PAGE_SIZE);
+		MAXNBUF = (sane_size / PAGE_SIZE);
 		nbufh = nbuf;
 		nbuflow = min(nbufh, 100);
 		nbufhigh = min(MAXNBUF, max(nbufh, 2048));
-		nbuftarget = (mem_size >> 5) / PAGE_SIZE;
+		nbuftarget = (sane_size >> 5) / PAGE_SIZE;
 		nbuftarget = max(nbuflow, nbuftarget);
 		nbuftarget = min(nbufhigh, nbuftarget);
 

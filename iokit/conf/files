@@ -37,6 +37,7 @@ iokit/Kernel/IOFilterInterruptEventSource.cpp		optional iokitcpp
 iokit/Kernel/IOTimerEventSource.cpp			optional iokitcpp
 
 iokit/Kernel/IODeviceMemory.cpp				optional iokitcpp
+iokit/Kernel/IOMapper.cpp				optional iokitcpp
 iokit/Kernel/IOMemoryDescriptor.cpp			optional iokitcpp
 iokit/Kernel/IOMemoryCursor.cpp				optional iokitcpp
 iokit/Kernel/IOBufferMemoryDescriptor.cpp		optional iokitcpp

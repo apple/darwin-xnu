@@ -3,19 +3,22 @@
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
+ * Copyright (c) 1999-2003 Apple Computer, Inc.  All Rights Reserved.
  * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this
+ * file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
  * 
  * @APPLE_LICENSE_HEADER_END@
  */
@@ -305,12 +308,12 @@ fcntl(p, uap, retval)
 			return (0);
 		}
 		if ((long)uap->arg <= 0) {
-			uap->arg = (void *)(-(long)(uap->arg));
+			uap->arg = (int)(-(long)(uap->arg));
 		} else {
 			struct proc *p1 = pfind((long)uap->arg);
 			if (p1 == 0)
 				return (ESRCH);
-			uap->arg = (void *)(long)p1->p_pgrp->pg_id;
+			uap->arg = (int)p1->p_pgrp->pg_id;
 		}
 		return (fo_ioctl(fp, (int)TIOCSPGRP, (caddr_t)&uap->arg, p));
 
@@ -505,7 +508,7 @@ fcntl(p, uap, retval)
 		if (error = copyin((caddr_t)uap->arg,
 					(caddr_t)&ra_struct, sizeof (ra_struct)))
 			return(error);
-		return (VOP_IOCTL(vp, 1, &ra_struct, 0, fp->f_cred, p));
+		return (VOP_IOCTL(vp, 1, (caddr_t)&ra_struct, 0, fp->f_cred, p));
 
 	case F_READBOOTSTRAP:
 	case F_WRITEBOOTSTRAP:
@@ -535,7 +538,7 @@ fcntl(p, uap, retval)
 			if (error)
 				return (error);
 			error = VOP_IOCTL(vp, (uap->cmd == F_WRITEBOOTSTRAP) ? 3 : 2,
-					&fbt_struct, 0, fp->f_cred, p);
+					(caddr_t)&fbt_struct, 0, fp->f_cred, p);
 			VOP_UNLOCK(vp,0,p);
 		}
 		return(error);
@@ -953,9 +956,10 @@ ffree(fp)
 		crfree(cred);
 	}
 
-	fp->f_count = 0;
-
 	nfiles--;
+	memset(fp, 0xff, sizeof *fp);
+	fp->f_count = (short)0xffff;
+
 	FREE_ZONE(fp, sizeof *fp, M_FILE);
 }
 
@@ -1301,6 +1305,8 @@ dupfdopen(fdp, indx, dfd, mode, error)
 int
 fref(struct file *fp)
 {
+	if (fp->f_count == (short)0xffff)
+		return (-1);
 	if (++fp->f_count <= 0)
 		panic("fref: f_count");
 	return ((int)fp->f_count);
@@ -1309,6 +1315,8 @@ fref(struct file *fp)
 static int 
 frele_internal(struct file *fp)
 {
+	if (fp->f_count == (short)0xffff)
+		panic("frele: stale");
 	if (--fp->f_count < 0)
 		panic("frele: count < 0");
 	return ((int)fp->f_count);
@@ -1344,6 +1352,8 @@ frele(struct file *fp)
 int
 fcount(struct file *fp)
 {
+	if (fp->f_count == (short)0xffff)
+		panic("fcount: stale");
 	return ((int)fp->f_count);
 }
 

@@ -3,19 +3,22 @@
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
+ * Copyright (c) 1999-2003 Apple Computer, Inc.  All Rights Reserved.
  * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this
+ * file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
  * 
  * @APPLE_LICENSE_HEADER_END@
  */
@@ -74,7 +77,8 @@ parse_machfile(
 	unsigned long		file_offset,
 	unsigned long		macho_size,
 	int					depth,
-	load_result_t		*result
+	load_result_t		*result,
+	boolean_t		clean_regions
 ),
 load_segment(
 	struct segment_command	*scp,
@@ -118,7 +122,8 @@ load_dylinker(
 	vm_map_t				map,
 	thread_act_t			thr_act,
 	int						depth,
-	load_result_t			*result
+	load_result_t			*result,
+	boolean_t			clean_regions
 ),
 get_macho_vnode(
 	char				*path,
@@ -136,7 +141,8 @@ load_machfile(
 	unsigned long		macho_size,
 	load_result_t		*result,
 	thread_act_t 		thr_act,
-	vm_map_t 			new_map
+	vm_map_t 		new_map,
+	boolean_t		clean_regions
 )
 {
 	pmap_t			pmap;
@@ -165,20 +171,22 @@ load_machfile(
 				TRUE); /**** FIXME ****/
 	} else
 		map = new_map;
-
+		
 	if (!result)
 		result = &myresult;
 
 	*result = (load_result_t) { 0 };
 
 	lret = parse_machfile(vp, map, thr_act, header, file_offset, macho_size,
-			     0, result);
+			     0, result, clean_regions);
 
 	if (lret != LOAD_SUCCESS) {
-		if (create_map)
+		if (create_map) {
 			vm_map_deallocate(map);	/* will lose pmap reference too */
+		}
 		return(lret);
 	}
+
 	/*
 	 *	Commit to new map.  First make sure that the current
 	 *	users of the task get done with it, and that we clean
@@ -208,7 +216,6 @@ load_machfile(
 }
 
 int	dylink_test = 1;
-extern	vm_offset_t	system_shared_region;
 
 static
 load_return_t
@@ -220,7 +227,8 @@ parse_machfile(
 	unsigned long		file_offset,
 	unsigned long		macho_size,
 	int			depth,
-	load_result_t		*result
+	load_result_t		*result,
+	boolean_t		clean_regions
 )
 {
 	struct machine_slot	*ms;
@@ -228,7 +236,7 @@ parse_machfile(
 	struct load_command	*lcp, *next;
 	struct dylinker_command	*dlp = 0;
 	void *			pager;
-	load_return_t		ret;
+	load_return_t		ret = LOAD_SUCCESS;
 	vm_offset_t		addr, kl_addr;
 	vm_size_t		size,kl_size;
 	int			offset;
@@ -296,7 +304,7 @@ parse_machfile(
 	/*
 	 *	Round size of Mach-O commands up to page boundry.
 	 */
-	size = round_page(sizeof (struct mach_header) + header->sizeofcmds);
+	size = round_page_32(sizeof (struct mach_header) + header->sizeofcmds);
 	if (size <= 0)
 		return(LOAD_BADMACHO);
 
@@ -373,13 +381,13 @@ parse_machfile(
 			case LC_LOAD_DYLINKER:
 				if (pass != 2)
 					break;
-				if (depth == 1 || dlp == 0)
+				if ((depth == 1) && (dlp == 0))
 					dlp = (struct dylinker_command *)lcp;
 				else
 					ret = LOAD_FAILURE;
 				break;
 			default:
-				ret = KERN_SUCCESS;/* ignore other stuff */
+				ret = LOAD_SUCCESS;/* ignore other stuff */
 			}
 			if (ret != LOAD_SUCCESS)
 				break;
@@ -387,7 +395,7 @@ parse_machfile(
 		if (ret != LOAD_SUCCESS)
 			break;
 	}
-	if (ret == LOAD_SUCCESS && dlp != 0) {
+	if ((ret == LOAD_SUCCESS) && (depth == 1)) {
 		vm_offset_t addr;
 		shared_region_mapping_t shared_region;
 		struct shared_region_task_mappings	map_info;
@@ -405,33 +413,91 @@ RedoLookup:
 			&(map_info.client_base),
 			&(map_info.alternate_base),
 			&(map_info.alternate_next), 
+			&(map_info.fs_base),
+			&(map_info.system),
 			&(map_info.flags), &next);
 
-		if((map_info.self != (vm_offset_t)system_shared_region) &&
-			(map_info.flags & SHARED_REGION_SYSTEM)) {
-			shared_region_mapping_ref(system_shared_region);
-			vm_set_shared_region(task, system_shared_region);
-			shared_region_mapping_dealloc(
+		if((map_info.flags & SHARED_REGION_FULL) ||
+			(map_info.flags & SHARED_REGION_STALE)) {
+			shared_region_mapping_t system_region;
+			system_region = lookup_default_shared_region(
+				map_info.fs_base, map_info.system);
+			if((map_info.self != (vm_offset_t)system_region) &&
+				(map_info.flags & SHARED_REGION_SYSTEM)) {
+			   if(system_region == NULL) {
+				shared_file_boot_time_init(
+					map_info.fs_base, map_info.system);
+			   } else {
+			   	vm_set_shared_region(task, system_region);
+			   }
+			   shared_region_mapping_dealloc(
 					(shared_region_mapping_t)map_info.self);
-			goto RedoLookup;
+			   goto RedoLookup;
+			} else if (map_info.flags & SHARED_REGION_SYSTEM) {
+			      shared_region_mapping_dealloc(system_region);
+			      shared_file_boot_time_init(
+					map_info.fs_base, map_info.system);
+			      shared_region_mapping_dealloc(
+				     (shared_region_mapping_t)map_info.self);
+			} else {
+			      shared_region_mapping_dealloc(system_region);
+			}
 		}
 
 
 		if (dylink_test) {
 			p->p_flag |=  P_NOSHLIB; /* no shlibs in use */
 			addr = map_info.client_base;
-			vm_map(map, &addr, map_info.text_size, 0, 
+			if(clean_regions) {
+			   vm_map(map, &addr, map_info.text_size, 
+				0, SHARED_LIB_ALIAS,
+				map_info.text_region, 0, FALSE,
+				VM_PROT_READ, VM_PROT_READ, VM_INHERIT_SHARE);
+			} else {
+			   vm_map(map, &addr, map_info.text_size, 0, 
 				(VM_MEMORY_SHARED_PMAP << 24) 
 						| SHARED_LIB_ALIAS,
 				map_info.text_region, 0, FALSE,
 				VM_PROT_READ, VM_PROT_READ, VM_INHERIT_SHARE);
+			}
 			addr = map_info.client_base + map_info.text_size;
 			vm_map(map, &addr, map_info.data_size, 
 				0, SHARED_LIB_ALIAS,
 				map_info.data_region, 0, TRUE,
 				VM_PROT_READ, VM_PROT_READ, VM_INHERIT_SHARE);
+	
+			while (next) {
+		           /* this should be fleshed out for the general case */
+			   /* but this is not necessary for now.  Indeed we   */
+			   /* are handling the com page inside of the         */
+			   /* shared_region mapping create calls for now for  */
+			   /* simplicities sake.  If more general support is  */
+			   /* needed the code to manipulate the shared range  */
+			   /* chain can be pulled out and moved to the callers*/
+			   shared_region_mapping_info(next,
+				&(map_info.text_region),   
+				&(map_info.text_size),
+				&(map_info.data_region),
+				&(map_info.data_size),
+				&(map_info.region_mappings),
+				&(map_info.client_base),
+				&(map_info.alternate_base),
+				&(map_info.alternate_next), 
+				&(map_info.fs_base),
+				&(map_info.system),
+				&(map_info.flags), &next);
+
+			   addr = map_info.client_base;
+			   vm_map(map, &addr, map_info.text_size, 
+				0, SHARED_LIB_ALIAS,
+				map_info.text_region, 0, FALSE,
+				VM_PROT_READ, VM_PROT_READ, VM_INHERIT_SHARE);
+			}
 		}
-		ret = load_dylinker(dlp, map, thr_act, depth, result);
+        if (dlp != 0) {
+            ret = load_dylinker(dlp, map, thr_act, 
+                        depth, result, clean_regions);
+        }
 	}
 
 	if (kl_addr )
@@ -475,15 +541,15 @@ load_segment(
 	if (scp->fileoff + scp->filesize > macho_size)
 		return (LOAD_BADMACHO);
 
-	seg_size = round_page(scp->vmsize);
+	seg_size = round_page_32(scp->vmsize);
 	if (seg_size == 0)
 		return(KERN_SUCCESS);
 
 	/*
 	 *	Round sizes to page size.
 	 */
-	map_size = round_page(scp->filesize);
-	map_addr = trunc_page(scp->vmaddr);
+	map_size = round_page_32(scp->filesize);
+	map_addr = trunc_page_32(scp->vmaddr);
 
 	map_offset = pager_offset + scp->fileoff;
 
@@ -780,7 +846,8 @@ load_dylinker(
 	vm_map_t		map,
 	thread_act_t	thr_act,
 	int			depth,
-	load_result_t		*result
+	load_result_t		*result,
+	boolean_t		clean_regions
 )
 {
 	char			*name;
@@ -821,7 +888,7 @@ load_dylinker(
 
 	ret = parse_machfile(vp, copy_map, thr_act, &header,
 				file_offset, macho_size,
-				depth, &myresult);
+				depth, &myresult, clean_regions);
 
 	if (ret)
 		goto out;

@@ -1,22 +1,24 @@
-
 /*
  * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
+ * Copyright (c) 1999-2003 Apple Computer, Inc.  All Rights Reserved.
  * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this
+ * file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
  * 
  * @APPLE_LICENSE_HEADER_END@
  */
@@ -550,7 +552,7 @@ default_pager_backing_store_create(
 		priority = BS_MINPRI;
 	bs->bs_priority = priority;
 
-	bs->bs_clsize = bs_get_global_clsize(atop(clsize));
+	bs->bs_clsize = bs_get_global_clsize(atop_32(clsize));
 
 	BSL_LOCK();
 	queue_enter(&backing_store_list.bsl_queue, bs, backing_store_t,
@@ -614,7 +616,7 @@ default_pager_backing_store_info(
 	basic->bs_pages_out_fail= bs->bs_pages_out_fail;
 
 	basic->bs_priority	= bs->bs_priority;
-	basic->bs_clsize	= ptoa(bs->bs_clsize);	/* in bytes */
+	basic->bs_clsize	= ptoa_32(bs->bs_clsize);	/* in bytes */
 
 	BS_UNLOCK(bs);
 
@@ -1225,7 +1227,7 @@ ps_vstruct_create(
 	vs->vs_errors = 0;
 
 	vs->vs_clshift = local_log2(bs_get_global_clsize(0));
-	vs->vs_size = ((atop(round_page(size)) - 1) >> vs->vs_clshift) + 1;
+	vs->vs_size = ((atop_32(round_page_32(size)) - 1) >> vs->vs_clshift) + 1;
 	vs->vs_async_pending = 0;
 
 	/*
@@ -1771,7 +1773,7 @@ ps_clmap(
 	VS_MAP_LOCK(vs);
 
 	ASSERT(vs->vs_dmap);
-	cluster = atop(offset) >> vs->vs_clshift;
+	cluster = atop_32(offset) >> vs->vs_clshift;
 
 	/*
 	 * Initialize cluster error value
@@ -1887,14 +1889,14 @@ ps_clmap(
 	 * relatively quick.
 	 */
 	ASSERT(trunc_page(offset) == offset);
-	newcl = ptoa(newcl) << vs->vs_clshift;
+	newcl = ptoa_32(newcl) << vs->vs_clshift;
 	newoff = offset & ((1<<(vm_page_shift + vs->vs_clshift)) - 1);
 	if (flag == CL_ALLOC) {
 		/*
 		 * set bits in the allocation bitmap according to which
 		 * pages were requested.  size is in bytes.
 		 */
-		i = atop(newoff);
+		i = atop_32(newoff);
 		while ((size > 0) && (i < VSCLSIZE(vs))) {
 			VSM_SETALLOC(*vsmap, i);
 			i++;
@@ -1907,7 +1909,7 @@ ps_clmap(
 		 * Offset is not cluster aligned, so number of pages
 		 * and bitmaps must be adjusted
 		 */
-		clmap->cl_numpages -= atop(newoff);
+		clmap->cl_numpages -= atop_32(newoff);
 		CLMAP_SHIFT(clmap, vs);
 		CLMAP_SHIFTALLOC(clmap, vs);
 	}
@@ -1936,7 +1938,7 @@ ps_clmap(
 		} else {
 			BS_STAT(clmap->cl_ps->ps_bs,
 				clmap->cl_ps->ps_bs->bs_pages_out_fail +=
-					atop(size));
+					atop_32(size));
 			off = VSM_CLOFF(*vsmap);
 			VSM_SETERR(*vsmap, error);
 		}
@@ -1983,7 +1985,7 @@ ps_clunmap(
 		vm_offset_t 	newoff;
 		int		i;
 
-		cluster = atop(offset) >> vs->vs_clshift;
+		cluster = atop_32(offset) >> vs->vs_clshift;
 		if (vs->vs_indirect)	/* indirect map */
 			vsmap = vs->vs_imap[cluster/CLMAP_ENTRIES];
 		else
@@ -2008,7 +2010,7 @@ ps_clunmap(
 			 * Not cluster aligned.
 			 */
 			ASSERT(trunc_page(newoff) == newoff);
-			i = atop(newoff);
+			i = atop_32(newoff);
 		} else
 			i = 0;
 		while ((i < VSCLSIZE(vs)) && (length > 0)) {
@@ -2079,7 +2081,7 @@ vs_cl_write_complete(
 		dprintf(("write failed error = 0x%x\n", error));
 		/* add upl_abort code here */
 	} else
-		GSTAT(global_stats.gs_pages_out += atop(size));
+		GSTAT(global_stats.gs_pages_out += atop_32(size));
 	/*
 	 * Notify the vstruct mapping code, so it can do its accounting.
 	 */
@@ -2235,7 +2237,7 @@ ps_read_device(
 	default_pager_thread_t *dpt = NULL;
 
 	device = dev_port_lookup(ps->ps_device);
-	clustered_reads[atop(size)]++;
+	clustered_reads[atop_32(size)]++;
 
 	dev_offset = (ps->ps_offset +
 		      (offset >> (vm_page_shift - ps->ps_record_shift)));
@@ -2367,7 +2369,7 @@ ps_write_device(
 
 
 
-	clustered_writes[atop(size)]++;
+	clustered_writes[atop_32(size)]++;
 
 	dev_offset = (ps->ps_offset +
 		      (offset >> (vm_page_shift - ps->ps_record_shift)));
@@ -2404,7 +2406,7 @@ ps_write_device(
 					 "device_write_request returned ",
 					 kr, addr, size, offset));
 			BS_STAT(ps->ps_bs,
-				ps->ps_bs->bs_pages_out_fail += atop(size));
+				ps->ps_bs->bs_pages_out_fail += atop_32(size));
 			/* do the completion notification to free resources */
 			device_write_reply(reply_port, kr, 0);
 			return PAGER_ERROR;
@@ -2430,7 +2432,7 @@ ps_write_device(
 				 "device_write returned ",
 				 kr, addr, size, offset));
 			BS_STAT(ps->ps_bs,
-				ps->ps_bs->bs_pages_out_fail += atop(size));
+				ps->ps_bs->bs_pages_out_fail += atop_32(size));
 			return PAGER_ERROR;
 		}
 		if (bytes_written & ((vm_page_size >> ps->ps_record_shift) - 1))
@@ -2492,7 +2494,7 @@ pvs_object_data_provided(
 	       upl, offset, size));
 
 	ASSERT(size > 0);
-	GSTAT(global_stats.gs_pages_in += atop(size));
+	GSTAT(global_stats.gs_pages_in += atop_32(size));
 
 
 #if	USE_PRECIOUS
@@ -2550,10 +2552,16 @@ pvs_cluster_read(
 	        int     ps_info_valid;
 		int	page_list_count;
 
-	        if (cnt > VM_SUPER_CLUSTER)
+		if((vs_offset & cl_mask) && 
+			(cnt > (VM_SUPER_CLUSTER - 
+				(vs_offset & cl_mask)))) {
+			size = VM_SUPER_CLUSTER;
+			size -= vs_offset & cl_mask;
+	        } else if (cnt > VM_SUPER_CLUSTER) {
 		        size = VM_SUPER_CLUSTER;
-		else
+		} else {
 		        size = cnt;
+		}
 		cnt -= size;
 
 		ps_info_valid = 0;
@@ -2615,7 +2623,7 @@ pvs_cluster_read(
 			        /*
 				 * Let VM system know about holes in clusters.
 				 */
-			        GSTAT(global_stats.gs_pages_unavail += atop(abort_size));
+			        GSTAT(global_stats.gs_pages_unavail += atop_32(abort_size));
 
 				page_list_count = 0;
 				memory_object_super_upl_request(
@@ -2658,9 +2666,11 @@ pvs_cluster_read(
 			 */
 			for (xfer_size = 0; xfer_size < size; ) {
 
-			        while (cl_index < pages_in_cl && xfer_size < size) {
+			        while (cl_index < pages_in_cl 
+						&& xfer_size < size) {
 				        /*
-					 * accumulate allocated pages within a physical segment
+					 * accumulate allocated pages within
+					 * a physical segment
 					 */
 				        if (CLMAP_ISSET(clmap, cl_index)) {
 					        xfer_size  += vm_page_size;
@@ -2672,35 +2682,43 @@ pvs_cluster_read(
 					} else
 					        break;
 				}
-				if (cl_index < pages_in_cl || xfer_size >= size) {
+				if (cl_index < pages_in_cl 
+						|| xfer_size >= size) {
 				        /*
-					 * we've hit an unallocated page or the
-					 * end of this request... go fire the I/O
+					 * we've hit an unallocated page or
+					 * the end of this request... go fire
+					 * the I/O
 					 */
 				        break;
 				}
 				/*
-				 * we've hit the end of the current physical segment
-				 * and there's more to do, so try moving to the next one
+				 * we've hit the end of the current physical
+				 * segment and there's more to do, so try
+				 * moving to the next one
 				 */
 				seg_index++;
 				  
-				ps_offset[seg_index] = ps_clmap(vs, cur_offset & ~cl_mask, &clmap, CL_FIND, 0, 0);
-				psp[seg_index]       = CLMAP_PS(clmap);
+				ps_offset[seg_index] = 
+					ps_clmap(vs,
+						cur_offset & ~cl_mask,
+						&clmap, CL_FIND, 0, 0);
+				psp[seg_index] = CLMAP_PS(clmap);
 				ps_info_valid = 1;
 
 				if ((ps_offset[seg_index - 1] != (ps_offset[seg_index] - cl_size)) || (psp[seg_index - 1] != psp[seg_index])) {
 				        /*
-					 * if the physical segment we're about to step into
-					 * is not contiguous to the one we're currently
-					 * in, or it's in a different paging file, or
+					 * if the physical segment we're about
+					 * to step into is not contiguous to
+					 * the one we're currently in, or it's
+					 * in a different paging file, or
 					 * it hasn't been allocated....
 					 * we stop here and generate the I/O
 					 */
 				        break;
 				}
 				/*
-				 * start with first page of the next physical segment
+				 * start with first page of the next physical
+				 * segment
 				 */
 				cl_index = 0;
 			}
@@ -2711,68 +2729,78 @@ pvs_cluster_read(
 				 */
 				page_list_count = 0;
 			        memory_object_super_upl_request(vs->vs_control,
-						(memory_object_offset_t)vs_offset,
-						xfer_size, xfer_size, 
-						&upl, NULL, &page_list_count,
-						request_flags | UPL_SET_INTERNAL);
+					(memory_object_offset_t)vs_offset,
+					xfer_size, xfer_size, 
+					&upl, NULL, &page_list_count,
+					request_flags | UPL_SET_INTERNAL);
 
-				error = ps_read_file(psp[beg_pseg], upl, (vm_offset_t) 0, 
-						ps_offset[beg_pseg] + (beg_indx * vm_page_size), xfer_size, &residual, 0);
+				error = ps_read_file(psp[beg_pseg],
+					upl, (vm_offset_t) 0, 
+					ps_offset[beg_pseg] +
+						(beg_indx * vm_page_size),
+					xfer_size, &residual, 0);
 			} else
 			        continue;
 
 			failed_size = 0;
 
 			/*
-			 * Adjust counts and send response to VM.  Optimize for the
-			 * common case, i.e. no error and/or partial data.
-			 * If there was an error, then we need to error the entire
-			 * range, even if some data was successfully read.
-			 * If there was a partial read we may supply some
+			 * Adjust counts and send response to VM.  Optimize
+			 * for the common case, i.e. no error and/or partial
+			 * data.  If there was an error, then we need to error
+			 * the entire range, even if some data was successfully
+			 * read.  If there was a partial read we may supply some
 			 * data and may error some as well.  In all cases the
 			 * VM must receive some notification for every page in the
 			 * range.
 			 */
 			if ((error == KERN_SUCCESS) && (residual == 0)) {
 			        /*
-				 * Got everything we asked for, supply the data to
-				 * the VM.  Note that as a side effect of supplying
-				 * the data, the buffer holding the supplied data is
-				 * deallocated from the pager's address space.
+				 * Got everything we asked for, supply the data
+				 * to the VM.  Note that as a side effect of
+				 * supplying * the data, the buffer holding the
+				 * supplied data is * deallocated from the pager's
+				 * address space.
 				 */
-			        pvs_object_data_provided(vs, upl, vs_offset, xfer_size);
+			        pvs_object_data_provided(
+					vs, upl, vs_offset, xfer_size);
 			} else {
 			        failed_size = xfer_size;
 
 				if (error == KERN_SUCCESS) {
 				        if (residual == xfer_size) {
-					        /*
-						 * If a read operation returns no error
-						 * and no data moved, we turn it into
-						 * an error, assuming we're reading at
-						 * or beyong EOF.
-						 * Fall through and error the entire
-						 * range.
-						 */
+				        /*
+					 * If a read operation returns no error
+					 * and no data moved, we turn it into
+					 * an error, assuming we're reading at
+					 * or beyong EOF.
+					 * Fall through and error the entire
+					 * range.
+					 */
 					        error = KERN_FAILURE;
 					} else {
-					        /*
-						 * Otherwise, we have partial read. If
-						 * the part read is a integral number
-						 * of pages supply it. Otherwise round
-						 * it up to a page boundary, zero fill
-						 * the unread part, and supply it.
-						 * Fall through and error the remainder
-						 * of the range, if any.
-						 */
+				        /*
+					 * Otherwise, we have partial read. If
+					 * the part read is a integral number
+					 * of pages supply it. Otherwise round
+					 * it up to a page boundary, zero fill
+					 * the unread part, and supply it.
+					 * Fall through and error the remainder
+					 * of the range, if any.
+					 */
 					        int fill, lsize;
 
-						fill = residual & ~vm_page_size;
-						lsize = (xfer_size - residual) + fill;
-						pvs_object_data_provided(vs, upl, vs_offset, lsize);
+						fill = residual 
+							& ~vm_page_size;
+						lsize = (xfer_size - residual) 
+									 + fill;
+						pvs_object_data_provided(
+							vs, upl,
+							vs_offset, lsize);
 
 						if (lsize < xfer_size) {
-						        failed_size = xfer_size - lsize;
+						        failed_size = 
+							    xfer_size - lsize;
 							error = KERN_FAILURE;
 						}
 					}
@@ -2780,12 +2808,13 @@ pvs_cluster_read(
 			}
 			/*
 			 * If there was an error in any part of the range, tell
-			 * the VM. Note that error is explicitly checked again since
-			 * it can be modified above.
+			 * the VM. Note that error is explicitly checked again
+			 * since it can be modified above.
 			 */
 			if (error != KERN_SUCCESS) {
 				BS_STAT(psp[beg_pseg]->ps_bs,
-					psp[beg_pseg]->ps_bs->bs_pages_in_fail += atop(failed_size));
+					psp[beg_pseg]->ps_bs->bs_pages_in_fail
+						+= atop_32(failed_size));
 			}
 			size       -= xfer_size;
 			vs_offset  += xfer_size;
@@ -2865,16 +2894,18 @@ vs_cluster_write(
 				(memory_object_offset_t)offset,
 				cnt, super_size, 
 				&upl, NULL, &page_list_count,
-				request_flags | UPL_PAGEOUT);
+				request_flags | UPL_FOR_PAGEOUT);
 
 		pl = UPL_GET_INTERNAL_PAGE_LIST(upl);
 
-		for (seg_index = 0, transfer_size = upl->size; transfer_size > 0; ) {
+		for (seg_index = 0, transfer_size = upl->size; 
+						transfer_size > 0; ) {
 
-		        ps_offset[seg_index] = ps_clmap(vs, upl->offset + (seg_index * cl_size),
-						      &clmap, CL_ALLOC, 
-						      transfer_size < cl_size ? 
-						      transfer_size : cl_size, 0);
+		        ps_offset[seg_index] = 
+				ps_clmap(vs, upl->offset + (seg_index * cl_size),
+				       &clmap, CL_ALLOC, 
+				       transfer_size < cl_size ? 
+				       transfer_size : cl_size, 0);
 
 			if (ps_offset[seg_index] == (vm_offset_t) -1) {
 				upl_abort(upl, 0);
@@ -2891,21 +2922,25 @@ vs_cluster_write(
 			} else
 			        transfer_size = 0;
 		}
-		for (page_index = 0, num_of_pages = upl->size / vm_page_size; page_index < num_of_pages; ) {
+		for (page_index = 0,
+				num_of_pages = upl->size / vm_page_size;
+				page_index < num_of_pages; ) {
 			/*
 			 * skip over non-dirty pages
 			 */
 			for ( ; page_index < num_of_pages; page_index++) {
-			        if (UPL_DIRTY_PAGE(pl, page_index) || UPL_PRECIOUS_PAGE(pl, page_index))
+			        if (UPL_DIRTY_PAGE(pl, page_index)
+					|| UPL_PRECIOUS_PAGE(pl, page_index))
 				        /*
 					 * this is a page we need to write
-					 * go see if we can buddy it up with others
-					 * that are contiguous to it
+					 * go see if we can buddy it up with
+					 * others that are contiguous to it
 					 */
 				        break;
 				/*
-				 * if the page is not-dirty, but present we need to commit it...
-				 * this is an unusual case since we only asked for dirty pages
+				 * if the page is not-dirty, but present we 
+				 * need to commit it...  This is an unusual
+				 * case since we only asked for dirty pages
 				 */
 				if (UPL_PAGE_PRESENT(pl, page_index)) {
 					boolean_t empty = FALSE;
@@ -2927,14 +2962,16 @@ vs_cluster_write(
 			        break;
 
 			/*
-			 * gather up contiguous dirty pages... we have at least 1
-			 * otherwise we would have bailed above
+			 * gather up contiguous dirty pages... we have at
+			 * least 1 otherwise we would have bailed above
 			 * make sure that each physical segment that we step
 			 * into is contiguous to the one we're currently in
 			 * if it's not, we have to stop and write what we have
 			 */
-			for (first_dirty = page_index; page_index < num_of_pages; ) {
-			        if ( !UPL_DIRTY_PAGE(pl, page_index) && !UPL_PRECIOUS_PAGE(pl, page_index))
+			for (first_dirty = page_index;
+					page_index < num_of_pages; ) {
+			        if ( !UPL_DIRTY_PAGE(pl, page_index)
+					&& !UPL_PRECIOUS_PAGE(pl, page_index))
 				        break;
 				page_index++;
 				/*
@@ -2946,17 +2983,21 @@ vs_cluster_write(
 				        int cur_seg;
 				        int nxt_seg;
 
-				        cur_seg = (page_index - 1) / pages_in_cl;
+				        cur_seg =
+						(page_index - 1) / pages_in_cl;
 					nxt_seg = page_index / pages_in_cl;
 
 					if (cur_seg != nxt_seg) {
 					        if ((ps_offset[cur_seg] != (ps_offset[nxt_seg] - cl_size)) || (psp[cur_seg] != psp[nxt_seg]))
-						        /*
-							 * if the segment we're about to step into
-							 * is not contiguous to the one we're currently
-							 * in, or it's in a different paging file....
-							 * we stop here and generate the I/O
-							 */
+					        /*
+						 * if the segment we're about
+						 * to step into is not
+						 * contiguous to the one we're
+						 * currently in, or it's in a
+						 * different paging file....
+						 * we stop here and generate
+						 * the I/O
+						 */
 						        break;
 					}
 				}
@@ -2970,22 +3011,29 @@ vs_cluster_write(
 				seg_offset = upl_offset - (seg_index * cl_size);
 				transfer_size = num_dirty * vm_page_size;
 
-				error = ps_write_file(psp[seg_index], upl, upl_offset,
-						      ps_offset[seg_index] + seg_offset, transfer_size, flags);
 
-				if (error == 0) {
-				        while (transfer_size) {
-					        int seg_size;
+				while (transfer_size) {
+				        int seg_size;
 
-						if ((seg_size = cl_size - (upl_offset % cl_size)) > transfer_size)
-						        seg_size = transfer_size;
+					if ((seg_size = cl_size - 
+						(upl_offset % cl_size)) 
+							> transfer_size)
+					        seg_size = transfer_size;
 
-						ps_vs_write_complete(vs, upl->offset + upl_offset, seg_size, error);
+					ps_vs_write_complete(vs, 
+						upl->offset + upl_offset, 
+						seg_size, error);
 
-						transfer_size -= seg_size;
-						upl_offset += seg_size;
-					}
+					transfer_size -= seg_size;
+					upl_offset += seg_size;
 				}
+			        upl_offset = first_dirty * vm_page_size;
+				transfer_size = num_dirty * vm_page_size;
+				error = ps_write_file(psp[seg_index], 
+						upl, upl_offset,
+						ps_offset[seg_index] 
+								+ seg_offset, 
+						transfer_size, flags);
 				must_abort = 0;
 			}
 			if (must_abort) {
@@ -3028,14 +3076,14 @@ vs_cluster_write(
 			/* Assume that the caller has given us contiguous */
 			/* pages */
 	 	   	if(cnt) {
+				ps_vs_write_complete(vs, mobj_target_addr, 
+								cnt, error);
 				error = ps_write_file(ps, internal_upl,
 						0, actual_offset,
 						cnt, flags);
 				if (error)
 				        break;
-				ps_vs_write_complete(vs, mobj_target_addr, 
-								cnt, error);
-		   	   }
+		   	}
 			if (error)
 				break;
 		   	actual_offset += cnt;
@@ -3097,7 +3145,7 @@ ps_vstruct_allocated_size(
 		}
 	}
 
-	return ptoa(num_pages);
+	return ptoa_32(num_pages);
 }
 
 size_t
@@ -3306,7 +3354,7 @@ vs_get_map_entry(
 	struct vs_map	*vsmap;
 	vm_offset_t	cluster;
 
-	cluster = atop(offset) >> vs->vs_clshift;
+	cluster = atop_32(offset) >> vs->vs_clshift;
 	if (vs->vs_indirect) {
 		long	ind_block = cluster/CLMAP_ENTRIES;
 
@@ -3671,7 +3719,7 @@ ps_read_file(
 	int			result;
 
 
-	clustered_reads[atop(size)]++;
+	clustered_reads[atop_32(size)]++;
 
 	f_offset = (vm_object_offset_t)(ps->ps_offset + offset);
 	
@@ -3709,7 +3757,7 @@ ps_write_file(
 
 	int		error = 0;
 
-	clustered_writes[atop(size)]++;
+	clustered_writes[atop_32(size)]++;
 	f_offset = (vm_object_offset_t)(ps->ps_offset + offset);
 
 	if (vnode_pageout(ps->ps_vnode,

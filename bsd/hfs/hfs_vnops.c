@@ -3,19 +3,22 @@
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
+ * Copyright (c) 1999-2003 Apple Computer, Inc.  All Rights Reserved.
  * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this
+ * file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
  * 
  * @APPLE_LICENSE_HEADER_END@
  */
@@ -57,6 +60,8 @@
 
 
 extern uid_t console_user;
+
+extern unsigned long strtoul(const char *, char **, int);
 
 /* Global vfs data structures for hfs */
 
@@ -1076,6 +1081,23 @@ hfs_exchange(ap)
 
 	hfs_chashinsert(from_cp);
 	hfs_chashinsert(to_cp);
+
+	/*
+	 * When a file moves out of "Cleanup At Startup"
+	 * we can drop its NODUMP status.
+	 */
+	if ((from_cp->c_flags & UF_NODUMP) &&
+	    (from_cp->c_parentcnid != to_cp->c_parentcnid)) {
+		from_cp->c_flags &= ~UF_NODUMP;
+		from_cp->c_flag |= C_CHANGE;
+	}
+
+	if ((to_cp->c_flags & UF_NODUMP) &&
+	    (to_cp->c_parentcnid != from_cp->c_parentcnid)) {
+		to_cp->c_flags &= ~UF_NODUMP;
+		to_cp->c_flag |= C_CHANGE;
+	}
+
 Err_Exit:
 	if (to_rvp)
 		vrele(to_rvp);
@@ -1155,8 +1177,11 @@ hfs_fsync(ap)
 	 * When MNT_WAIT is requested and the zero fill timeout
 	 * has expired then we must explicitly zero out any areas
 	 * that are currently marked invalid (holes).
+	 *
+	 * Files with NODUMP can bypass zero filling here.
 	 */
 	if ((wait || (cp->c_flag & C_ZFWANTSYNC)) &&
+	    ((cp->c_flags & UF_NODUMP) == 0) &&
 	    UBCINFOEXISTS(vp) && (fp = VTOF(vp)) &&
 	    cp->c_zftimeout != 0) {
 		int devblksize;
@@ -1437,6 +1462,10 @@ hfs_rmdir(ap)
 		return (EINVAL);	/* cannot remove "." */
 	}
 
+#if QUOTA
+	(void)hfs_getinoquota(cp);
+#endif
+
 	// XXXdbg
 	hfs_global_shared_lock_acquire(hfsmp);
 	grabbed_lock = 1;
@@ -1480,8 +1509,7 @@ hfs_rmdir(ap)
 	if (error) goto out;
 
 #if QUOTA
-	if (!hfs_getinoquota(cp))
-		(void)hfs_chkiq(cp, -1, NOCRED, 0);
+	(void)hfs_chkiq(cp, -1, NOCRED, 0);
 #endif /* QUOTA */
 
 	/* The parent lost a child */
@@ -1612,6 +1640,10 @@ hfs_remove(ap)
 		goto out;
 	}
 
+#if QUOTA
+	(void)hfs_getinoquota(cp);
+#endif /* QUOTA */
+
 	// XXXdbg
 	hfs_global_shared_lock_acquire(hfsmp);
 	grabbed_lock = 1;
@@ -1675,15 +1707,8 @@ hfs_remove(ap)
 			cp->c_mode = 0;            /* Suppress VOP_UPDATES */
 			error = VOP_TRUNCATE(rvp, (off_t)0, IO_NDELAY, NOCRED, p);
 			cp->c_mode = mode;
-			if (error && !dataforkbusy)
+			if (error)
 				goto out;
-			else {
-				/*
-				 * XXX could also force an update on vp
-				 * and fail the remove.
-				 */
-				error = 0;
-			}
 			truncated = 1;
 		}
 	}
@@ -1813,10 +1838,11 @@ hfs_remove(ap)
 
 	} else /* Not busy */ {
 
-		if (vp->v_type == VDIR && cp->c_entries > 0)
-			panic("hfs_remove: attempting to delete a non-empty directory!");
-		if (vp->v_type != VDIR && cp->c_blocks > 0)
-			panic("hfs_remove: attempting to delete a non-empty file!");
+		if (cp->c_blocks > 0) {
+			printf("hfs_remove: attempting to delete a non-empty file!");
+			error = EBUSY;
+			goto out;
+		}
 
 		/* Lock catalog b-tree */
 		error = hfs_metafilelocking(hfsmp, kHFSCatalogFileID, LK_EXCLUSIVE, p);
@@ -1825,7 +1851,7 @@ hfs_remove(ap)
 
 		error = cat_delete(hfsmp, &cp->c_desc, &cp->c_attr);
 
-		if (error && error != ENXIO && truncated) {
+		if (error && error != ENXIO && error != ENOENT && truncated) {
 			if ((cp->c_datafork && cp->c_datafork->ff_data.cf_size != 0) ||
 				(cp->c_rsrcfork && cp->c_rsrcfork->ff_data.cf_size != 0)) {
 				panic("hfs: remove: couldn't delete a truncated file! (%d, data sz %lld; rsrc sz %lld)",
@@ -1841,8 +1867,7 @@ hfs_remove(ap)
 		if (error) goto out;
 
 #if QUOTA
-		if (!hfs_getinoquota(cp))
-			(void)hfs_chkiq(cp, -1, NOCRED, 0);
+		(void)hfs_chkiq(cp, -1, NOCRED, 0);
 #endif /* QUOTA */
 
 		cp->c_mode = 0;
@@ -1870,6 +1895,14 @@ hfs_remove(ap)
 	tv = time;
 	(void) VOP_UPDATE(dvp, &tv, &tv, 0);
 
+	// XXXdbg
+	if (started_tr) {
+	    journal_end_transaction(hfsmp->jnl);
+	}
+	if (grabbed_lock) {
+		hfs_global_shared_lock_release(hfsmp);
+	}
+
 	if (rvp)
 		vrele(rvp);
 	VOP_UNLOCK(vp, 0, p);
@@ -1879,14 +1912,6 @@ hfs_remove(ap)
 	}
 	vrele(vp);
 	vput(dvp);
-
-	// XXXdbg
-	if (started_tr) {
-	    journal_end_transaction(hfsmp->jnl);
-	}
-	if (grabbed_lock) {
-		hfs_global_shared_lock_release(hfsmp);
-	}
 
 	return (0);
 
@@ -1960,6 +1985,9 @@ replace_desc(struct cnode *cp, struct cat_desc *cdp)
  *
  * When the target is a directory, hfs_rename must ensure
  * that it is empty.
+ *
+ * The rename system call is responsible for freeing
+ * the pathname buffers (ie no need to call VOP_ABORTOP).
  */
 
 static int
@@ -1979,50 +2007,52 @@ hfs_rename(ap)
 	struct vnode *fdvp = ap->a_fdvp;
 	struct componentname *tcnp = ap->a_tcnp;
 	struct componentname *fcnp = ap->a_fcnp;
+	struct proc *p = fcnp->cn_proc;
 	struct cnode *fcp = NULL;
 	struct cnode *fdcp = NULL;
-	struct cnode *tdcp = NULL;
-	struct cnode *tcp = NULL;
+	struct cnode *tdcp = VTOC(tdvp);
 	struct cat_desc from_desc;
 	struct cat_desc to_desc;
 	struct cat_desc out_desc;
 	struct hfsmount *hfsmp;
-	struct proc *p = fcnp->cn_proc;
 	struct timeval tv;
-	int retval = 0, started_tr = 0, grabbed_lock = 0;
-	int fdvp_locked = 0;
-	int fvp_locked = 0;
-	cnid_t oldparent = 0;
-	cnid_t newparent = 0;
+	int fdvp_locked, fvp_locked, tdvp_locked;
+	int tvp_deleted;
+	int started_tr = 0, grabbed_lock = 0;
+	int error = 0;
 
-	// XXXdbg
-	if (fvp) 
-	    hfsmp = VTOHFS(fvp);
-	else if (tvp)
-	    hfsmp = VTOHFS(tvp);
-	else
-	    hfsmp = NULL;
-	
-#if HFS_DIAGNOSTIC
-    if ((tcnp->cn_flags & HASBUF) == 0 ||
-        (fcnp->cn_flags & HASBUF) == 0)
-        panic("hfs_rename: no name");
-#endif
+	hfsmp = VTOHFS(tdvp);
+
+	/* Establish our vnode lock state. */
+	tdvp_locked = 1;
+	fdvp_locked = 0;
+	fvp_locked = 0;
+	tvp_deleted = 0;
+
 	/*
 	 * When fvp matches tvp they must be case variants
-	 * or hard links, and if they are in the same directory then
-	 * tvp really doesn't exist (see VFS rename).
-	 * XXX Hard link rename is still broken/ignored.  If they are
-	 * in different directories then we must have hard links.
-	 * Comments further down describe behaviour of hard links in same dir.
-	 * Note case insensitivity was and still is presumed.
+	 * or hard links.
+	 *
+	 * For the hardlink case there can be an extra ref on fvp.
 	 */
 	if (fvp == tvp) {
-		if (fdvp != tdvp) {
-			retval = 0;
-			goto abortop;
+		if (VOP_ISLOCKED(fvp) &&
+			(VTOC(fvp)->c_lock.lk_lockholder == p->p_pid) &&
+			(VTOC(fvp)->c_lock.lk_lockthread == current_thread())) {
+			fvp_locked = 1;
+			vrele(fvp);  /* drop the extra ref */
 		}
 		tvp = NULL;
+		/*
+		 * If this a hard link and its not a case
+		 * variant then keep tvp around for removal.
+		 */
+		if ((VTOC(fvp)->c_flag & C_HARDLINK) &&
+		    ((fdvp != tdvp) ||
+		     (hfs_namecmp(fcnp->cn_nameptr, fcnp->cn_namelen,
+		                  tcnp->cn_nameptr, tcnp->cn_namelen) != 0))) {
+			tvp = fvp;
+		}
 	}
         
 	/*
@@ -2030,194 +2060,200 @@ hfs_rename(ap)
 	 */
 	if ((fvp->v_mount != tdvp->v_mount) ||
 	    (tvp && (fvp->v_mount != tvp->v_mount))) {
-		retval = EXDEV;
-		goto abortop;
-	}
-
-	/*
-	 * Make sure a remove of "to" vnode is permitted.
-	 */
-	if (tvp && ((VTOC(tvp)->c_flags & (IMMUTABLE | APPEND)) ||
-	    (VTOC(tdvp)->c_flags & APPEND))) {
-		retval = EPERM;
-		goto abortop;
+		error = EXDEV;
+		goto out;
 	}
 
 	/*
 	 * Make sure "from" vnode and its parent are changeable.
 	 */
-	fdcp = VTOC(fdvp);
-	fcp = VTOC(fvp);
-	oldparent = fdcp->c_cnid;
-	if ((fcp->c_flags & (IMMUTABLE | APPEND)) || (fdcp->c_flags & APPEND)) {
-		retval = EPERM;
-		goto abortop;
-	}
-
-	if (fcp->c_parentcnid != fdcp->c_cnid) {
-		retval = EINVAL;
-		goto abortop;
+	if ((VTOC(fvp)->c_flags & (IMMUTABLE | APPEND)) ||
+	    (VTOC(fdvp)->c_flags & APPEND)) {
+		error = EPERM;
+		goto out;
 	}
 
 	/*
-	 * Check if names already match...
-	 * XXX The name being checked is from fcp rather than fcnp!  If
-	 * there are hard links, fcp yields the name which was
-	 * most recently looked up (yes that design is vulnerable to races)
-	 * and the name most recently looked up was the target, so they
-	 * compare equal and we ignore the rename.  XXX
+	 * Be sure we are not renaming ".", "..", or an alias of ".".
 	 */
-	if (fvp == ap->a_tvp &&
-	    (bcmp(fcp->c_desc.cd_nameptr, tcnp->cn_nameptr,
-	     fcp->c_desc.cd_namelen) == 0)) {
-		retval = 0;
-		goto abortop;
+	if ((fvp->v_type == VDIR) &&
+	    (((fcnp->cn_namelen == 1) && (fcnp->cn_nameptr[0] == '.')) ||
+	      (fdvp == fvp) ||
+	      (fcnp->cn_flags&ISDOTDOT))) {
+			error = EINVAL;
+			goto out;
 	}
 
-	/* XXX This doesn't make sense for HFS...
+	/*
+	 * If the destination parent directory is "sticky", then the
+	 * user must own the parent directory, or the destination of
+	 * the rename, otherwise the destination may not be changed
+	 * (except by root). This implements append-only directories.
+	 *
+	 * Note that checks for immutable, write access, and a non-empty
+	 * target are done by the call to VOP_REMOVE.
+	 */
+	if (tvp && (tdcp->c_mode & S_ISTXT) &&
+	    (tcnp->cn_cred->cr_uid != 0) &&
+	    (tcnp->cn_cred->cr_uid != tdcp->c_uid) &&
+	    (hfs_owner_rights(hfsmp, VTOC(tvp)->c_uid, tcnp->cn_cred, p, false)) ) {
+			error = EPERM;
+			goto out;
+	}
+
+	/*
+	 * All done with preflighting.
+	 *
+	 * We now break the call into two transactions:
+	 * 1 - Remove the destionation (if any) using VOP_REMOVE,
+	 * which in itself is a complete transaction.
+	 *
+	 * 2 - Rename source to destination.
 	 * 
-	 * Be sure we are not renaming ".", "..", or an alias of ".". This
-	 * leads to a crippled directory tree.	It's pretty tough to do a
-	 * "ls" or "pwd" with the "." directory entry missing, and "cd .."
-	 * doesn't work if the ".." entry is missing.
+	 * Since all the preflighting is done, we assume that a
+	 * rename failure is unlikely once part 1 is complete.
+	 * Breaking rename into two transactions buys us a much
+	 * simpler implementation with respect to the locking
+	 * protocol.  There are only 3 vnodes to worry about
+	 * locking in the correct order (instead of 4).
 	 */
-	if (fvp->v_type == VDIR) {
-		if ((fcnp->cn_namelen == 1 && fcnp->cn_nameptr[0] == '.')
-			|| fdcp == fcp
-			|| (fcnp->cn_flags&ISDOTDOT)
-			|| (fcp->c_flag & C_RENAME)) {
-			retval = EINVAL;
-			goto abortop;
-		}
-		fcp->c_flag |= C_RENAME;
-	}
 
-	/* XXX UFS does vrele(fdvp) here */
-
-	/* From now on use bad instead of abort to exit */
-
-	tdcp = VTOC(tdvp);
-	if (tvp)
-		tcp = VTOC(tvp);
-
-	newparent = tdcp->c_cnid;
-	
-	// XXXdbg - don't allow renaming the journal or journal_info_block
-	if (hfsmp->jnl && fcp->c_datafork) {
-		struct HFSPlusExtentDescriptor *extd;
-			
-		extd = &fcp->c_datafork->ff_data.cf_extents[0];
-		if (extd->startBlock == HFSTOVCB(hfsmp)->vcbJinfoBlock || extd->startBlock == hfsmp->jnl_start) {
-			retval = EPERM;
-			goto bad;
-		}
-	}
-
-	if (hfsmp->jnl && tcp && tcp->c_datafork) {
-		struct HFSPlusExtentDescriptor *extd;
-			
-		extd = &tcp->c_datafork->ff_data.cf_extents[0];
-		if (extd->startBlock == HFSTOVCB(hfsmp)->vcbJinfoBlock || extd->startBlock == hfsmp->jnl_start) {
-			retval = EPERM;
-			goto bad;
-		}
-	}
-
-	retval = VOP_ACCESS(fvp, VWRITE, tcnp->cn_cred, tcnp->cn_proc);
-	if ((fvp->v_type == VDIR) && (newparent != oldparent)) {
-		if (retval)		/* write access check above */
-			goto bad;
-	}
-	retval = 0;  /* Reset value from above, we dont care about it anymore */
-	
-	/* XXX
-	 * Prevent lock heirarchy violation (deadlock):
-	 *
-	 * If fdvp is the parent of tdvp then we must drop
-	 * tdvp lock before aquiring the lock for fdvp.
-	 *
-	 * XXXdbg - moved this to happen up here *before* we
-	 *          start a transaction.  otherwise we can
-	 *          deadlock because the vnode layer may get
-	 *          this lock for someone else and then they'll
-	 *          never be able to start a transaction.
+	/*
+	 * Part 1 - If the destination exists then it needs to be removed.
 	 */
-	if (newparent != oldparent) {
-	    if (fdcp->c_cnid == tdcp->c_parentcnid) {
-			vput(tdvp);
-			vn_lock(fdvp, LK_EXCLUSIVE | LK_RETRY, p);
-			vget(tdvp, LK_EXCLUSIVE | LK_RETRY, p);
-	    } else {
-			vn_lock(fdvp, LK_EXCLUSIVE | LK_RETRY, p);
+	if (tvp) {
+		/*
+		 * VOP_REMOVE will vput tdvp so we better bump its
+		 * ref count and relockit, always set tvp to NULL
+		 * afterwards to indicate that we're done with it.
+		 */
+		VREF(tdvp);
+
+		if (tvp == fvp) {
+			if (fvp_locked) {
+				VREF(fvp);
+			} else {
+				error = vget(fvp, LK_EXCLUSIVE | LK_RETRY, p);
+				if (error)
+					goto out;
+				fvp_locked = 1;
+			}
+		} else {
+			cache_purge(tvp);
 		}
+
+		/* Clear SAVENAME to keep VOP_REMOVE from smashing tcnp. */
+		tcnp->cn_flags &= ~SAVENAME;
+
+		if (tvp->v_type == VDIR)
+			error = VOP_RMDIR(tdvp, tvp, tcnp);
+		else
+			error = VOP_REMOVE(tdvp, tvp, tcnp);
+
+		/* Get lock states back in sync. */
+		tdvp_locked = 0;
+		if (tvp == fvp)
+			fvp_locked = 0;	
+		tvp = NULL;	/* all done with tvp */
+		tvp_deleted = 1;
+
+		if (error)
+			goto out;  /* couldn't remove destination! */
 	}
-	fdvp_locked = 1;
-	if ((retval = vn_lock(fvp, LK_EXCLUSIVE | LK_RETRY, p)))
-		goto bad;
-	fvp_locked = 1;
-	
-	// XXXdbg
+	/*
+	 * All done with tvp.
+	 *
+	 * For POSIX compliance, if tvp was removed the only 
+	 * error we can return from this point on is EIO.
+	 */  
+
+	/*
+	 * Part 2 - rename source to destination
+	 */
+
+	/*
+	 * Lock the vnodes before starting a journal transaction.
+	 */
+	if (fdvp != tdvp) {
+		/*
+		 * fvp is a child and must be locked last.
+		 */
+		if (fvp_locked) {
+			VOP_UNLOCK(fvp, 0, p);
+			fvp_locked = 0;
+		}
+		/*
+		 *	If fdvp is the parent of tdvp then it needs to be locked first.
+		 */
+		if ((VTOC(fdvp)->c_cnid == VTOC(tdvp)->c_parentcnid)) {
+			if (tdvp_locked) {
+				VOP_UNLOCK(tdvp, 0, p);
+				tdvp_locked = 0;
+			}
+			if ((error = vn_lock(fdvp, LK_EXCLUSIVE | LK_RETRY, p)))
+				goto out;
+			fdvp_locked = 1;
+			if ((error = vn_lock(tdvp, LK_EXCLUSIVE | LK_RETRY, p)))
+				goto out;
+			tdvp_locked = 1;
+
+		} else /* Lock tdvp then fdvp */ {
+			if (!tdvp_locked) {
+				if ((error = vn_lock(tdvp, LK_EXCLUSIVE | LK_RETRY, p)))
+					goto out;
+				tdvp_locked = 1;
+			}
+			if ((error = vn_lock(fdvp, LK_EXCLUSIVE | LK_RETRY, p)))
+				goto out;
+			fdvp_locked = 1;
+		}
+	} else if (!tdvp_locked) {
+			/*
+			 * fvp is a child and must be locked last.
+			 */
+			if (fvp_locked) {
+				VOP_UNLOCK(fvp, 0, p);
+				fvp_locked = 0;
+			}
+			if ((error = vn_lock(tdvp, LK_EXCLUSIVE | LK_RETRY, p)))
+				goto out;
+			tdvp_locked = 1;
+	}
+
+	/* Now its safe to lock fvp */
+	if (!fvp_locked) {
+		if (error = vn_lock(fvp, LK_EXCLUSIVE | LK_RETRY, p))
+			goto out;
+		fvp_locked = 1;
+	}
+
+	fdcp = VTOC(fdvp);
+	fcp = VTOC(fvp);
+
+	/*
+	 * When a file moves out of "Cleanup At Startup"
+	 * we can drop its NODUMP status.
+	 */
+	if ((fcp->c_flags & UF_NODUMP) &&
+	    (fvp->v_type == VREG) &&
+	    (fdvp != tdvp) &&
+	    (fdcp->c_desc.cd_nameptr != NULL) &&
+	    (strcmp(fdcp->c_desc.cd_nameptr, "Cleanup At Startup") == 0)) {
+		fcp->c_flags &= ~UF_NODUMP;
+		fcp->c_flag |= C_CHANGE;
+		tv = time;
+		(void) VOP_UPDATE(fvp, &tv, &tv, 0);
+	}
+
 	hfs_global_shared_lock_acquire(hfsmp);
 	grabbed_lock = 1;
 	if (hfsmp->jnl) {
-	    if ((retval = journal_start_transaction(hfsmp->jnl)) != 0) {
-			goto bad;
+	    if ((error = journal_start_transaction(hfsmp->jnl)) != 0) {
+			goto out;
 	    }
 		started_tr = 1;
 	}
 
-	/*
-	 * If the destination exists, then be sure its type (file or dir)
-	 * matches that of the source.	And, if it is a directory make sure
-	 * it is empty.	 Then delete the destination.
-	 */
-	if (tvp) {
-		/*
-		 * If the parent directory is "sticky", then the user must
-		 * own the parent directory, or the destination of the rename,
-		 * otherwise the destination may not be changed (except by
-		 * root). This implements append-only directories.
-		 */
-		if ((tdcp->c_mode & S_ISTXT) && (tcnp->cn_cred->cr_uid != 0) &&
-		    tcnp->cn_cred->cr_uid != tdcp->c_uid &&
-		    tcnp->cn_cred->cr_uid != tcp->c_uid) {
-			retval = EPERM;
-			goto bad;
-		}
-
-		/*
-		 * Target must be empty if a directory.
-		 */
-		if (S_ISDIR(tcp->c_mode) && (tcp->c_nlink > 2)) {
-				retval = ENOTEMPTY;
-				goto bad;
-		}
-
-		/*
-		 * VOP_REMOVE will vput tdvp so we better bump 
-		 * its ref count and relockit, always set tvp to
-		 * NULL afterwards to indicate that were done with it.
-		 */
-		VREF(tdvp);
-
-		cache_purge(tvp);
-            
-		tcnp->cn_flags &= ~SAVENAME;
-
-		if (tvp->v_type == VDIR)
-			retval = VOP_RMDIR(tdvp, tvp, tcnp);
-		else
-			retval = VOP_REMOVE(tdvp, tvp, tcnp);
-
-		(void) vn_lock(tdvp, LK_EXCLUSIVE | LK_RETRY, p);
-		tvp = NULL;
-		tcp = NULL;		
-		if (retval)
-			goto bad;
-
-	}
-
-	/* remove the existing entry from the namei cache: */
 	cache_purge(fvp);
 
 	bzero(&from_desc, sizeof(from_desc));
@@ -2226,6 +2262,7 @@ hfs_rename(ap)
 	from_desc.cd_parentcnid = fdcp->c_cnid;
 	from_desc.cd_flags = fcp->c_desc.cd_flags & ~(CD_HASBUF | CD_DECOMPOSED);
 	from_desc.cd_cnid = fcp->c_cnid;
+
 	bzero(&to_desc, sizeof(to_desc));
 	to_desc.cd_nameptr = tcnp->cn_nameptr;
 	to_desc.cd_namelen = tcnp->cn_namelen;
@@ -2234,100 +2271,47 @@ hfs_rename(ap)
 	to_desc.cd_cnid = fcp->c_cnid;
 
 	/* Lock catalog b-tree */
-	retval = hfs_metafilelocking(hfsmp, kHFSCatalogFileID, LK_EXCLUSIVE, p);
-	if (retval) {
-		 goto bad;
- 	}
-	retval = cat_rename(hfsmp, &from_desc, &tdcp->c_desc,
-						&to_desc, &out_desc);
+	error = hfs_metafilelocking(hfsmp, kHFSCatalogFileID, LK_EXCLUSIVE, p);
+	if (error)
+		 goto out;
+
+	error = cat_rename(hfsmp, &from_desc, &tdcp->c_desc, &to_desc, &out_desc);
 
 	/* Unlock catalog b-tree */
 	(void) hfs_metafilelocking(hfsmp, kHFSCatalogFileID, LK_RELEASE, p);
+	if (error)
+		goto out;
 
-	if (newparent != oldparent) {
-		VOP_UNLOCK(fdvp, 0, p);
-		fdvp_locked = 0;
-	}
-
-	if (retval)  goto bad;
-
-	/* update cnode's catalog descriptor */
+	/* Update cnode's catalog descriptor */
    	replace_desc(fcp, &out_desc);
 
-	fcp->c_flag &= ~C_RENAME;
-
-	/*
-	 * Time stamp both parent directories.
-	 * Note that if this is a rename within the same directory,
-	 * (where tdcp == fdcp)
-	 * the code below is still safe and correct.
-	 */
-	if (fdcp->c_nlink > 0)
-		fdcp->c_nlink--;
-	if (fdcp->c_entries > 0)
-		fdcp->c_entries--;
-	tdcp->c_nlink++;
-	tdcp->c_entries++;
-	fdcp->c_flag |= C_CHANGE | C_UPDATE;
-	tdcp->c_flag |= C_CHANGE | C_UPDATE;
-	tv = time;
-	CTIMES(fdcp, &tv, &tv);
-	CTIMES(tdcp, &tv, &tv);
-	tdcp->c_childhint = out_desc.cd_hint;	/* Cache directory's location */
-
-	// make sure both directories get updated on disk.
-	if (fdvp != tdvp) {
-		(void) VOP_UPDATE(fdvp, &tv, &tv, 0);
-	}
-	(void) VOP_UPDATE(tdvp, &tv, &tv, 0);
-
 	hfs_volupdate(hfsmp, fvp->v_type == VDIR ? VOL_RMDIR : VOL_RMFILE,
-		(fdcp->c_cnid == kHFSRootFolderID));
+	              (fdcp->c_cnid == kHFSRootFolderID));
 	hfs_volupdate(hfsmp, fvp->v_type == VDIR ? VOL_MKDIR : VOL_MKFILE,
-		(tdcp->c_cnid == kHFSRootFolderID));
+	              (tdcp->c_cnid == kHFSRootFolderID));
 
-	vput(tdvp);
-	vrele(fdvp);
-	vput(fvp);
+	VOP_UNLOCK(fvp, 0, p);
+	fcp = NULL;
+	fvp_locked = 0;
+	/* All done with fvp. */  
 
-	// XXXdbg
-	if (started_tr) {
-	    journal_end_transaction(hfsmp->jnl);
-	}
-	if (grabbed_lock) {
-		hfs_global_shared_lock_release(hfsmp);
-	}
-
-	return (0);
-
-bad:
-	if (fcp)
-		fcp->c_flag &= ~C_RENAME;
-
-	// XXXdbg make sure both directories get updated on disk.
+	/* Update both parent directories. */
+	tv = time;
 	if (fdvp != tdvp) {
+		tdcp->c_nlink++;
+		tdcp->c_entries++;
+		if (fdcp->c_nlink > 0)
+			fdcp->c_nlink--;
+		if (fdcp->c_entries > 0)
+			fdcp->c_entries--;
+		fdcp->c_flag |= C_CHANGE | C_UPDATE;
 		(void) VOP_UPDATE(fdvp, &tv, &tv, 0);
 	}
+	tdcp->c_childhint = out_desc.cd_hint;	/* Cache directory's location */
+	tdcp->c_flag |= C_CHANGE | C_UPDATE;
 	(void) VOP_UPDATE(tdvp, &tv, &tv, 0);
 
-	if (tdvp == tvp)
-		vrele(tdvp);
-	else
-		vput(tdvp);
-	if (tvp)
-		vput(tvp);
-
-	if (fdvp_locked)
-		vput(fdvp);
-	else
-		vrele(fdvp);
-
-	if (fvp_locked)
-		vput(fvp);
-	else
-		vrele(fvp);
-
-	// XXXdbg
+out:
 	if (started_tr) {
 	    journal_end_transaction(hfsmp->jnl);
 	}
@@ -2335,22 +2319,30 @@ bad:
 		hfs_global_shared_lock_release(hfsmp);
 	}
 
-	return (retval);
+	if (fvp_locked) {
+		VOP_UNLOCK(fvp, 0, p);
+	}
+	if (fdvp_locked) {
+		VOP_UNLOCK(fdvp, 0, p);
+	}
+	if (tdvp_locked) {
+		VOP_UNLOCK(tdvp, 0, p);
+	}
+	if (tvp && (tvp != fvp)) {
+		if (tvp != tdvp)
+			VOP_UNLOCK(tvp, 0, p);
+		vrele(tvp);
+	}
 
-abortop:
-
-	VOP_ABORTOP(tdvp, tcnp);
-	if (tdvp == tvp)
-		vrele(tdvp);
-	else
-		vput(tdvp);
-	if (tvp)
-		vput(tvp);
-	VOP_ABORTOP(fdvp, fcnp);
-	vrele(fdvp);
 	vrele(fvp);
+	vrele(fdvp);
+	vrele(tdvp);
 
-	return (retval);
+	/* After tvp is removed the only acceptable error is EIO */
+	if ((error == ENOSPC) && tvp_deleted)
+		error = EIO;
+
+	return (error);
 }
 
 
@@ -2451,14 +2443,17 @@ hfs_symlink(ap)
 	fp = VTOF(vp);
 	fp->ff_clumpsize = VTOVCB(vp)->blockSize;
 
+#if QUOTA
+	(void)hfs_getinoquota(VTOC(vp));
+#endif /* QUOTA */
+
 	// XXXdbg
 	hfs_global_shared_lock_acquire(hfsmp);
 	if (hfsmp->jnl) {
 	    if ((error = journal_start_transaction(hfsmp->jnl)) != 0) {
 			hfs_global_shared_lock_release(hfsmp);
-			VOP_ABORTOP(ap->a_dvp, ap->a_cnp);
-			vput(ap->a_dvp);
-			return (error);
+			vput(vp);
+			return error;
 	    }
 	}
 
@@ -2791,8 +2786,10 @@ hfs_abortop(ap)
 		struct componentname *a_cnp;
 	} */ *ap;
 {
-	if ((ap->a_cnp->cn_flags & (HASBUF | SAVESTART)) == HASBUF)
+	if ((ap->a_cnp->cn_flags & (HASBUF | SAVESTART)) == HASBUF) {
 		FREE_ZONE(ap->a_cnp->cn_pnbuf, ap->a_cnp->cn_pnlen, M_NAMEI);
+		ap->a_cnp->cn_flags &= ~HASBUF;
+	}
 
 	return (0);
 }
@@ -3403,6 +3400,7 @@ hfs_makenode(mode, dvp, vpp, cnp)
 	    (error = hfs_chkiq(cp, 1, cnp->cn_cred, FORCE))) {
 		if ((cnp->cn_flags & (HASBUF | SAVESTART)) == HASBUF) {
 			FREE_ZONE(cnp->cn_pnbuf, cnp->cn_pnlen, M_NAMEI);
+			cnp->cn_flags &= ~HASBUF;
 		}
 		if (tvp->v_type == VDIR)
 			VOP_RMDIR(dvp,tvp, cnp);
@@ -3436,7 +3434,38 @@ exit:
 
 	if ((cnp->cn_flags & (HASBUF | SAVESTART)) == HASBUF)
         	FREE_ZONE(cnp->cn_pnbuf, cnp->cn_pnlen, M_NAMEI);
-	vput(dvp);
+
+	/*
+	 * Check if a file is located in the "Cleanup At Startup"
+	 * directory.  If it is then tag it as NODUMP so that we
+	 * can be lazy about zero filling data holes.
+	 */
+	if ((error == 0) && (vnodetype == VREG) &&
+	    (dcp->c_desc.cd_nameptr != NULL) &&
+	    (strcmp(dcp->c_desc.cd_nameptr, "Cleanup At Startup") == 0)) {
+	   	struct vnode *ddvp;
+		cnid_t parid;
+
+		parid = dcp->c_parentcnid;
+		vput(dvp);
+		dvp = NULL;
+
+		/*
+		 * The parent of "Cleanup At Startup" should
+		 * have the ASCII name of the userid.
+		 */
+		if (VFS_VGET(HFSTOVFS(hfsmp), &parid, &ddvp) == 0) {
+			if (VTOC(ddvp)->c_desc.cd_nameptr &&
+			    (cp->c_uid == strtoul(VTOC(ddvp)->c_desc.cd_nameptr, 0, 0))) {
+				cp->c_flags |= UF_NODUMP;
+				cp->c_flag |= C_CHANGE;
+			}
+			vput(ddvp);
+		}
+	}
+
+	if (dvp)
+		vput(dvp);
 
 	// XXXdbg
 	if (started_tr) {

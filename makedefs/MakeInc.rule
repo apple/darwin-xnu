@@ -524,7 +524,7 @@ $(INSTALL_FILE_FILES): $(DSTROOT)$(INSTALL_FILE_DIR)% : $(TARGET)/% force_file_i
 	@$(MKDIR) $(DSTROOT)$(INSTALL_FILE_DIR);			\
 	if [ "`echo $(INSTALL_ARCHS_LC) | wc -w`" -eq 1 ]; then	\
 		$(RM) $(RMFLAGS) $@;				\
-		install $(INSTALL_FLAGS) $< $(dir $@);		\
+		install $(FILE_INSTALL_FLAGS) $< $(dir $@);		\
 	else							\
 		if [ ! -e $@ ]; then				\
 			echo >empty_file;			\
@@ -555,10 +555,18 @@ $(INSTALL_FILESYS_FILES): $(SYMROOT)$(INSTALL_FILE_DIR)% : $(TARGET)/%.sys force
 		$(LIPO) $@ -replace $(ARCH_CONFIG_LC)  $< -o $@;	\
 	fi
 
+INSTALL_DATA_FILES = $(addprefix $(DSTROOT)$(INSTALL_DATA_DIR), $(INSTALL_DATA_LIST))
+
+$(INSTALL_DATA_FILES): $(DSTROOT)$(INSTALL_DATA_DIR)% : $(SOURCE)/%
+	@echo Installing $< in $@;
+	@$(MKDIR) $(dir $@);		\
+	$(RM) $(RMFLAGS) $@;		\
+	install $(DATA_INSTALL_FLAGS) $< $(dir $@);
+
 setup_build_install:
 	@echo "[ $(SOURCE) ] make setup_build_install $(KERNEL_CONFIG) $(ARCH_CONFIG) $(TARGET)"
 
-do_build_install: $(INSTALL_FILESYS_FILES) $(INSTALL_FILE_FILES)
+do_build_install: $(INSTALL_FILESYS_FILES) $(INSTALL_FILE_FILES) $(INSTALL_DATA_FILES)
 	@echo "[ $(SOURCE) ] make do_build_install $(KERNEL_CONFIG) $(ARCH_CONFIG) $(TARGET)"
 
 INSTALL_MAN_FILES = $(addprefix $(DSTROOT)/$(MANDIR)/$(INSTALL_MAN_DIR)/, $(INSTALL_MAN_LIST))

@@ -3,19 +3,22 @@
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
+ * Copyright (c) 1999-2003 Apple Computer, Inc.  All Rights Reserved.
  * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this
+ * file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
  * 
  * @APPLE_LICENSE_HEADER_END@
  */
@@ -44,9 +47,7 @@ OSMetaClassDefineReservedUnused(OSData, 7);
 #define EXTERNAL ((unsigned int) -1)
 
 #if OSALLOCDEBUG
-extern "C" {
-    extern int debug_container_malloc_size;
-};
+extern int debug_container_malloc_size;
 #define ACCUMSIZE(s) do { debug_container_malloc_size += (s); } while(0)
 #else
 #define ACCUMSIZE(s)
@@ -57,19 +58,26 @@ bool OSData::initWithCapacity(unsigned int inCapacity)
     if (!super::init())
         return false;
 
-    if(inCapacity) {
+    if (data && (!inCapacity || capacity < inCapacity) ) {
+        // clean out old data's storage if it isn't big enough
+        kfree((vm_address_t) data, capacity);
+        data = 0;
+        ACCUMSIZE(-capacity);
+    }
+
+    if (inCapacity && !data) {
         data = (void *) kalloc(inCapacity);
         if (!data)
             return false;
+        capacity = inCapacity;
+        ACCUMSIZE(inCapacity);
     }
 
     length = 0;
-    capacity = inCapacity;
-    capacityIncrement = capacity;
-    if(!capacityIncrement)
+    if (inCapacity < 16)
         capacityIncrement = 16;
-
-    ACCUMSIZE(capacity);
+    else
+        capacityIncrement = inCapacity;
 
     return true;
 }
@@ -79,7 +87,8 @@ bool OSData::initWithBytes(const void *bytes, unsigned int inLength)
     if ((inLength && !bytes) || !initWithCapacity(inLength))
         return false;
 
-    bcopy(bytes, data, inLength);
+    if (bytes != data)
+	bcopy(bytes, data, inLength);
     length = inLength;
 
     return true;
@@ -118,7 +127,7 @@ OSData *OSData::withCapacity(unsigned int inCapacity)
     OSData *me = new OSData;
 
     if (me && !me->initWithCapacity(inCapacity)) {
-        me->free();
+        me->release();
         return 0;
     }
 
@@ -130,7 +139,7 @@ OSData *OSData::withBytes(const void *bytes, unsigned int inLength)
     OSData *me = new OSData;
 
     if (me && !me->initWithBytes(bytes, inLength)) {
-        me->free();
+        me->release();
         return 0;
     }
     return me;
@@ -141,7 +150,7 @@ OSData *OSData::withBytesNoCopy(void *bytes, unsigned int inLength)
     OSData *me = new OSData;
 
     if (me && !me->initWithBytesNoCopy(bytes, inLength)) {
-        me->free();
+        me->release();
         return 0;
     }
 
@@ -153,7 +162,7 @@ OSData *OSData::withData(const OSData *inData)
     OSData *me = new OSData;
 
     if (me && !me->initWithData(inData)) {
-        me->free();
+        me->release();
         return 0;
     }
 
@@ -166,7 +175,7 @@ OSData *OSData::withData(const OSData *inData,
     OSData *me = new OSData;
 
     if (me && !me->initWithData(inData, start, inLength)) {
-        me->free();
+        me->release();
         return 0;
     }
 
@@ -225,7 +234,7 @@ bool OSData::appendBytes(const void *bytes, unsigned int inLength)
 {
     unsigned int newSize;
 
-    if (inLength == 0)
+    if (!inLength)
         return true;
 
     if (capacity == EXTERNAL)
@@ -235,7 +244,11 @@ bool OSData::appendBytes(const void *bytes, unsigned int inLength)
     if ( (newSize > capacity) && newSize > ensureCapacity(newSize) )
         return false;
 
-    bcopy(bytes, &((unsigned char *)data)[length], inLength);
+    if (bytes)
+        bcopy(bytes, &((unsigned char *)data)[length], inLength);
+    else
+        bzero(&((unsigned char *)data)[length], inLength);
+
     length = newSize;
 
     return true;
@@ -245,7 +258,7 @@ bool OSData::appendByte(unsigned char byte, unsigned int inLength)
 {
     unsigned int newSize;
 
-    if (inLength == 0)
+    if (!inLength)
         return true;
 
     if (capacity == EXTERNAL)
@@ -268,7 +281,7 @@ bool OSData::appendBytes(const OSData *other)
 
 const void *OSData::getBytesNoCopy() const
 {
-    if (length == 0)
+    if (!length)
         return 0;
     else
         return data;
@@ -323,7 +336,7 @@ bool OSData::isEqualTo(const OSString *obj) const
     unsigned int checkLen = length;
     unsigned int stringLen;
 
-    if (NULL == obj)
+    if (!obj)
       return false;
 
     stringLen = obj->getLength ();

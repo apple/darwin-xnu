@@ -3,19 +3,22 @@
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
+ * Copyright (c) 1999-2003 Apple Computer, Inc.  All Rights Reserved.
  * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this
+ * file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
  * 
  * @APPLE_LICENSE_HEADER_END@
  */
@@ -45,34 +48,28 @@ void (*PE_kputc)(char c) = 0;
 
 unsigned int disableSerialOuput = TRUE;
 
+vm_offset_t	scc = 0;
 
-static struct slock kprintf_lock;
+struct slock kprintf_lock;
 
 void PE_init_kprintf(boolean_t vm_initialized)
 {
-	static vm_offset_t	scc;
 	unsigned int	boot_arg;
 
 	if (PE_state.initialized == FALSE)
 		panic("Platform Expert not initialized");
 
-	if (!vm_initialized)
-	{
-	    if (PE_parse_boot_arg("debug", &boot_arg)) 
-	        if(boot_arg & DB_KPRT) disableSerialOuput = FALSE; 
+	if (PE_parse_boot_arg("debug", &boot_arg)) 
+		if(boot_arg & DB_KPRT) disableSerialOuput = FALSE; 
 
-	    if( (scc = PE_find_scc()))
-            {
-		initialize_serial( (void *) scc );
+	if( (scc = PE_find_scc())) {				/* See if we can find the serial port */
+		scc = io_map_spec(scc, 0x1000);			/* Map it in */
+		initialize_serial((void *)scc);			/* Start up the serial driver */
 		PE_kputc = serial_putc;
 
 		simple_lock_init(&kprintf_lock, 0);
-            } else
-		PE_kputc = cnputc;
-
-	} else if( scc){
-		initialize_serial( (void *) io_map( scc, 0x1000) );
-	}
+	} else
+			PE_kputc = cnputc;
 
 #if 0
 	/*

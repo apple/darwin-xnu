@@ -3,19 +3,22 @@
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
+ * Copyright (c) 1999-2003 Apple Computer, Inc.  All Rights Reserved.
  * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this
+ * file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
  * 
  * @APPLE_LICENSE_HEADER_END@
  */
@@ -452,11 +455,11 @@ void atp_send_replies(atp, rcbp)
      register struct atp_rcb   *rcbp;
 {       register gbuf_t *m;
 	register int     i, len;
-	int              s_gen, s, cnt;
+	int              s_gen, s, cnt, err, offset, space;
 	unsigned char *m0_rptr = NULL, *m0_wptr = NULL;
 	register at_atp_t *athp;
 	register struct atpBDS *bdsp;
-	register gbuf_t *m2, *m1, *m0, *m3;
+	register gbuf_t *m2, *m1, *m0, *mhdr;
 	caddr_t lastPage;
 	gbuf_t *mprev, *mlist = 0;
 	at_socket src_socket = (at_socket)atp->atp_socket_no;
@@ -494,109 +497,67 @@ void atp_send_replies(atp, rcbp)
 
 	m = rcbp->rc_xmt;
 	m0 = gbuf_cont(m);
-	if (m0) {
-		m0_rptr = gbuf_rptr(m0);
-		m0_wptr = gbuf_wptr(m0);
-	}
 	if (gbuf_len(m) > TOTAL_ATP_HDR_SIZE)
 	  	bdsp = (struct atpBDS *)(AT_ATP_HDR(m)->data);
 	else
 		bdsp = 0;
-
+	offset = 0;
+	if (m0)
+		space = gbuf_msgsize(m0);
 	for (i = 0; i < cnt; i++) {
-	  if (rcbp->rc_snd[i] == 0) {
-		if ((len = UAS_VALUE(bdsp->bdsBuffSz)))
-			gbuf_rinc(m0,len);
-
-	  } else {
-	        m2 = rc_xmt[i];
-		gbuf_rinc(m2,AT_WR_OFFSET);
-		gbuf_wset(m2,TOTAL_ATP_HDR_SIZE);
-		*(struct ddp_atp *)(gbuf_rptr(m2))= *(struct ddp_atp *)(gbuf_rptr(m));
-		athp = AT_ATP_HDR(m2);
-		ATP_CLEAR_CONTROL(athp);
-		athp->cmd = ATP_CMD_TRESP;
-		athp->bitmap = i;
-		if (i == (cnt - 1))
-		        athp->eom = 1; /* for the last fragment */
-		if (bdsp)
-		  	UAL_UAL(athp->user_bytes, bdsp->bdsUserData);
-
-		if (bdsp)
-		  if (len = UAS_VALUE(bdsp->bdsBuffSz)) { /* copy in data */
-		    if (m0 && gbuf_len(m0)) {
-		      if ((m1 = gbuf_dupb(m0)) == NULL) {
-				for (i = 0; i < cnt; i++)
-					if (rc_xmt[i])
-						gbuf_freem(rc_xmt[i]);
-				gbuf_rptr(m0) = m0_rptr;
-				gbuf_wset(m0,(m0_wptr-m0_rptr));
-				goto nothing_to_send;
+		if (rcbp->rc_snd[i] == 0) {
+			if ((len = UAS_VALUE(bdsp->bdsBuffSz))) {
+				offset += len;
+				space -= len;
 			}
-			gbuf_wset(m1,len);
-			gbuf_rinc(m0,len);
-			if ((len = gbuf_len(m0)) < 0) {
-				gbuf_rdec(m0,len);
-				gbuf_wdec(m1,len);
-				if (!append_copy((struct mbuf *)m1, 
-						 (struct mbuf *)gbuf_cont(m0), FALSE)) {
-				  for (i = 0; i < cnt; i++)
-					if (rc_xmt[i])
-						gbuf_freem(rc_xmt[i]);
-				  gbuf_rptr(m0) = m0_rptr;
-				  gbuf_wset(m0,(m0_wptr-m0_rptr));
-				  goto nothing_to_send;
+		} else {
+			mhdr = rc_xmt[i];
+			/* setup header fields */
+			gbuf_rinc(mhdr,AT_WR_OFFSET);
+			gbuf_wset(mhdr,TOTAL_ATP_HDR_SIZE);
+			*(struct ddp_atp *)(gbuf_rptr(mhdr))= *(struct ddp_atp *)(gbuf_rptr(m));
+			athp = AT_ATP_HDR(mhdr);
+			ATP_CLEAR_CONTROL(athp);
+			athp->cmd = ATP_CMD_TRESP;
+			athp->bitmap = i;
+			if (i == (cnt - 1))
+				athp->eom = 1; /* for the last fragment */
+			if (bdsp) {
+				UAL_UAL(athp->user_bytes, bdsp->bdsUserData);
+				if ((len = UAS_VALUE(bdsp->bdsBuffSz)) && m0 != 0 && space > 0) {
+					if ((m1 = m_copym(m0, offset, len, M_DONTWAIT)) == 0) {
+						for (i = 0; i < cnt; i++)
+							if (rc_xmt[i])
+								gbuf_freem(rc_xmt[i]);
+						goto nothing_to_send;
+					}
+					offset += len;
+					space -= len;
+					gbuf_cont(mhdr) = m1;
 				}
-			} else
-				gbuf_cont(m1) = 0;
-			gbuf_cont(m2) = m1;
+			}	
 				
-			/* temp fix for page boundary problem  - bug# 2703163 */
-			lastPage = (caddr_t)((int)(gbuf_wptr(m1) - 1) & ~PAGE_MASK);  			/* 4k page of last byte */
-			if (lastPage != (caddr_t)((int)(gbuf_rptr(m1)) & ~PAGE_MASK)) {			/* 1st byte and last on same page ? */
-				if ((m3 = gbuf_dupb(m1)) == NULL) {
-					for (i = 0; i < cnt; i++)
-						if (rc_xmt[i])
-							gbuf_freem(rc_xmt[i]);
-					(gbuf_rptr(m0)) = m0_rptr;
-					gbuf_wset(m0, (m0_wptr - m0_rptr));
-					goto nothing_to_send;
-				}
-				(gbuf_rptr(m3)) = lastPage;						/* new mbuf starts at beginning of page */
-				gbuf_wset(m3, (gbuf_wptr(m1) - lastPage));		/* len = remaining data crossing over page boundary */
-				gbuf_wset(m1, (lastPage - (gbuf_rptr(m1))));	/* adjust len of m1 */
-				(gbuf_cont(m1)) = m3;
-				(gbuf_cont(m3)) = 0;
-			}
-		  }
+			AT_DDP_HDR(mhdr)->src_socket = src_socket;
+			dPrintf(D_M_ATP_LOW, D_L_OUTPUT,
+				("atp_send_replies: %d, socket=%d, size=%d\n",
+				i, atp->atp_socket_no, gbuf_msgsize(gbuf_cont(m2))));
+	
+			if (mlist)
+				gbuf_next(mprev) = mhdr;
+			else
+				mlist = mhdr;
+			mprev = mhdr;
+	
+			rcbp->rc_snd[i] = 0;
+			rcbp->rc_not_sent_bitmap &= ~atp_mask[i];
+			if (rcbp->rc_not_sent_bitmap == 0)
+				break;
 		}
-
-	  AT_DDP_HDR(m2)->src_socket = src_socket;
-	  dPrintf(D_M_ATP_LOW, D_L_OUTPUT,
-		("atp_send_replies: %d, socket=%d, size=%d\n",
-		i, atp->atp_socket_no, gbuf_msgsize(gbuf_cont(m2))));
-
-	  if (mlist)
-	  	gbuf_next(mprev) = m2;
-	  else
-	  	mlist = m2;
-	  mprev = m2;
-
-	  rcbp->rc_snd[i] = 0;
-	  rcbp->rc_not_sent_bitmap &= ~atp_mask[i];
-	  if (rcbp->rc_not_sent_bitmap == 0)
-	  	break;
-	  }
-	  /*
-	   * on to the next frag
-	   */
-	  bdsp++;
+	  	/*
+	   	 * on to the next frag
+	   	 */
+	  	bdsp++;
 	}
-	if (m0) {
-		gbuf_rptr(m0) = m0_rptr;
-		gbuf_wset(m0,(m0_wptr-m0_rptr));
-	}
-
 	if (mlist) {
 		ATENABLE(s, atp->atp_lock);
 		DDP_OUTPUT(mlist);
@@ -703,6 +664,11 @@ atp_pack_bdsp(trp, bdsp)
 } /* atp_pack_bdsp */
 
 
+/* create an mbuf chain with mbuf packet headers for each ATP response packet
+ * to be sent.  m contains the DDP hdr, ATP hdr, and and array of atpBDS structs.  
+ * chained to m is an mbuf that contians the actual data pointed to by the atpBDS
+ * structs.
+ */
 static int
 atp_unpack_bdsp(atp, m, rcbp, cnt, wait)
 	struct atp_state *atp;
@@ -711,17 +677,19 @@ atp_unpack_bdsp(atp, m, rcbp, cnt, wait)
     register int    cnt, wait;
 {
 	register struct atpBDS *bdsp;
-	register gbuf_t        *m2, *m1, *m0, *m3;
-	caddr_t lastPage;
-        register at_atp_t        *athp;
-	register int  i, len, s_gen;
-	at_socket src_socket;
-	struct   ddp_atp {
+	register	 gbuf_t        *m2, *m1, *m0, *mhdr;
+	caddr_t 	lastPage;
+    at_atp_t    *athp;
+	int  		i, len, s_gen;
+	at_socket 	src_socket;
+	
+	struct ddp_atp {
 	         char    ddp_atp_hdr[TOTAL_ATP_HDR_SIZE];
 	};
-	gbuf_t *mprev, *mlist = 0;
-	gbuf_t *rc_xmt[ATP_TRESP_MAX];
-	unsigned char *m0_rptr, *m0_wptr;
+	gbuf_t 			*mprev, *mlist = 0;
+	gbuf_t 			*rc_xmt[ATP_TRESP_MAX];
+	unsigned char 	*m0_rptr, *m0_wptr;
+	int				err, offset, space;
 
 	/*
 	 * get the user data structure pointer
@@ -787,100 +755,69 @@ atp_unpack_bdsp(atp, m, rcbp, cnt, wait)
 		goto l_send;
 	}
 
+	/* create an array of mbuf packet headers for the packets to be sent
+	 * to contain the atp and ddp headers with room at the front for the
+	 * datalink header.
+	 */
 	for (i = 0; i < cnt; i++) {
 	        /* all hdrs, packet data and dst addr storage */
 		if ((rc_xmt[i] = 
-		     gbuf_alloc_wait(AT_WR_OFFSET+TOTAL_ATP_HDR_SIZE,
-				     wait)) == NULL) {
-			for (cnt = 0; cnt < i; cnt++)
-				if (rc_xmt[cnt])
-					gbuf_freeb(rc_xmt[cnt]);
-			return 0;
+		     gbuf_alloc_wait(AT_WR_OFFSET+TOTAL_ATP_HDR_SIZE, wait)) == NULL) {
+				for (cnt = 0; cnt < i; cnt++)
+					if (rc_xmt[cnt])
+						gbuf_freeb(rc_xmt[cnt]);
+				return 0;
 		}
 	}
-	if (m0) {
-	  	m0_rptr = gbuf_rptr(m0);
-		m0_wptr = gbuf_wptr(m0);
-	}
 
-	for (i = 0; i < cnt; i++) {
-	        m2 = rc_xmt[i];
-		gbuf_rinc(m2,AT_WR_OFFSET);
-		gbuf_wset(m2,TOTAL_ATP_HDR_SIZE);
-		*(struct ddp_atp *)(gbuf_rptr(m2))= *(struct ddp_atp *)(gbuf_rptr(m));
-		athp = AT_ATP_HDR(m2);
+	/* run through the atpBDS structs and create an mbuf for the data
+	 * portion of each packet to be sent.  these get chained to the mbufs
+	 * containing the ATP and DDP headers.  this code assumes that no ATP
+	 * packet is contained in more than 2 mbufs (e.i crosses mbuf boundary
+	 * no more than one time).
+	 */
+	offset = 0;
+	if (m0)
+		space = gbuf_msgsize(m0);
+	for (i = 0; i < cnt; i++) {			/* for each hdr mbuf */
+	    mhdr = rc_xmt[i];
+	    /* setup header fields */
+		gbuf_rinc(mhdr,AT_WR_OFFSET);
+		gbuf_wset(mhdr,TOTAL_ATP_HDR_SIZE);
+		*(struct ddp_atp *)(gbuf_rptr(mhdr))= *(struct ddp_atp *)(gbuf_rptr(m));
+		athp = AT_ATP_HDR(mhdr);
 		ATP_CLEAR_CONTROL(athp);
 		athp->cmd = ATP_CMD_TRESP;
 		athp->bitmap = i;
 		if (i == (cnt - 1))
 			athp->eom = 1; /* for the last fragment */
 		UAL_UAL(athp->user_bytes, bdsp->bdsUserData);
-
-		if ((len = UAS_VALUE(bdsp->bdsBuffSz))) { /* copy in data */
-		  if (m0 && gbuf_len(m0)) {
-		  	if ((m1 = gbuf_dupb_wait(m0, wait)) == NULL) {
+		
+		if ((len = UAS_VALUE(bdsp->bdsBuffSz)) != 0  && m0 != 0 && space > 0) {		
+			if ((m1 = m_copym(m0, offset, len, wait)) == 0) {
 				for (i = 0; i < cnt; i++)
 					if (rc_xmt[i])
 						gbuf_freem(rc_xmt[i]);
-				gbuf_rptr(m0) = m0_rptr;
-				gbuf_wset(m0,(m0_wptr-m0_rptr));
 				return 0;
 			}
-			gbuf_wset(m1,len); /* *** m1 is first len bytes of m0? *** */
-			gbuf_rinc(m0,len);
-			if ((len = gbuf_len(m0)) < 0) {
-				gbuf_rdec(m0,len);
-				gbuf_wdec(m1,len);
-				if (!append_copy((struct mbuf *)m1, 
-						 (struct mbuf *)gbuf_cont(m0), wait)) {
-				  for (i = 0; i < cnt; i++)
-				    	if (rc_xmt[i])
-						gbuf_freem(rc_xmt[i]);
-				  gbuf_rptr(m0) = m0_rptr;
-				  gbuf_wset(m0,(m0_wptr-m0_rptr));
-				  return 0;
-				}
-			} else
-				gbuf_cont(m1) = 0;
-			gbuf_cont(m2) = m1;
-			
-			/* temp fix for page boundary problem  - bug# 2703163 */
-			lastPage = (caddr_t)((int)(gbuf_wptr(m1) - 1) & ~PAGE_MASK);  			/* 4k page of last byte */
-			if (lastPage != (caddr_t)((int)(gbuf_rptr(m1)) & ~PAGE_MASK)) {			/* 1st byte and last on same page ? */
-				if ((m3 = gbuf_dupb_wait(m1, wait)) == NULL) {
-					for (i = 0; i < cnt; i++)
-						if (rc_xmt[i])
-							gbuf_freem(rc_xmt[i]);
-					(gbuf_rptr(m0)) = m0_rptr;
-					gbuf_wset(m0, (m0_wptr - m0_rptr));
-					return 0;
-				}
-				(gbuf_rptr(m3)) = lastPage;						/* new mbuf starts at beginning of page */
-				gbuf_wset(m3, (gbuf_wptr(m1) - lastPage));		/* len = remaining data crossing over page boundary */
-				gbuf_wset(m1, (lastPage - (gbuf_rptr(m1))));		/* adjust len of m1 */
-				(gbuf_cont(m1)) = m3;
-				(gbuf_cont(m3)) = 0;
-			}
-		  }
+			gbuf_cont(mhdr) = m1;
+			space -= len;
+			offset += len;
 		}
-
-		AT_DDP_HDR(m2)->src_socket = src_socket;
+				
+		AT_DDP_HDR(mhdr)->src_socket = src_socket;
 		dPrintf(D_M_ATP_LOW,D_L_INFO,
 			("atp_unpack_bdsp %d, socket=%d, size=%d, cnt=%d\n",
-			i,atp->atp_socket_no,gbuf_msgsize(gbuf_cont(m2)),cnt));
+			i,atp->atp_socket_no,gbuf_msgsize(gbuf_cont(mhdr)),cnt));
 		if (mlist)
-			gbuf_next(mprev) = m2;
+			gbuf_next(mprev) = mhdr;
 		else
-			mlist = m2;
-		mprev = m2;
+			mlist = mhdr;
+		mprev = mhdr;
 		/*
 		 * on to the next frag
 		 */
 		bdsp++;
-	}
-	if (m0) {
-	  	gbuf_rptr(m0) = m0_rptr;
-		gbuf_wset(m0,(m0_wptr-m0_rptr));
 	}
 	/*
 	 * send the message
@@ -898,6 +835,7 @@ l_send:
 
 	DDP_OUTPUT(mlist);
 	return 0;
+
 } /* atp_unpack_bdsp */
 
 #define ATP_SOCKET_LAST  (DDP_SOCKET_LAST-6)
@@ -1680,6 +1618,14 @@ _ATPsndreq(fd, buf, len, nowait, err, proc)
 	return (int)tid;
 } /* _ATPsndreq */
 
+
+/* 	entry point for ATP send response.  respbuf contains a DDP hdr,
+ *	ATP hdr, and atpBDS array.  The bdsDataSz field of the first atpBDS
+ *	struct contains the number of atpBDS structs in the array. resplen
+ *	contains the len of the data in respbuf and datalen contains the
+ * 	len of the data buffer holding the response packets which the atpBDS
+ *	struct entries point to.
+ */
 int
 _ATPsndrsp(fd, respbuff, resplen, datalen, err, proc)
 	int fd;
@@ -1689,15 +1635,18 @@ _ATPsndrsp(fd, respbuff, resplen, datalen, err, proc)
 	int *err;
 	void *proc;
 {
-	gref_t *gref;
-	int s, rc;
-	long bufaddr;
-	gbuf_t *m, *mdata;
-	register short len;
-	register int size;
-	register struct atp_state *atp;
-	register struct atpBDS *bdsp;
-	register char *buf;
+	gref_t 		*gref;
+	int 		s, rc;
+	long 		bufaddr;
+	gbuf_t 		*m, *mdata;
+	short 		space;
+	int 		size;
+	struct atp_state *atp;
+	struct atpBDS *bdsp;
+	u_int16_t	*bufsz;
+	char 		*buf;
+	int			bds_cnt, count, len;
+	caddr_t		dataptr;
 
 	if ((*err = atalk_getref(0, fd, &gref, proc)) != 0)
 		return -1;
@@ -1725,33 +1674,68 @@ _ATPsndrsp(fd, respbuff, resplen, datalen, err, proc)
 	gbuf_wset(m,resplen);
 	((at_ddp_t *)gbuf_rptr(m))->src_node = 0;
 	bdsp = (struct atpBDS *)(gbuf_rptr(m) + TOTAL_ATP_HDR_SIZE);
-	if ((resplen == TOTAL_ATP_HDR_SIZE) || ((len = UAS_VALUE(bdsp->bdsDataSz)) == 1))
-		len = 0;
-	else
-		len = 16 * sizeof(gbuf_t);
 
 	/*
-	 * allocate buffer and copy in the response data
+	 * allocate buffers and copy in the response data.
+	 * note that only the size field of the atpBDS field
+	 * is used internally in the kernel.
 	 */
-	if ((mdata = gbuf_alloc_wait(datalen+len, TRUE)) == 0) {
-	        gbuf_freem(m);
+	bds_cnt = get_bds_entries(m);		/* count of # entries */
+	/* check correctness of parameters */
+	if (bds_cnt > ATP_TRESP_MAX) {
+	    gbuf_freem(m);
+		*err = EINVAL;
+		return -1;
+	}
+	
+	for (size = 0, count = 0; count < bds_cnt; count++) {
+		size += UAS_VALUE(bdsp[count].bdsBuffSz);
+	}
+	if (size > datalen) {				
+	    gbuf_freem(m);
+		*err = EINVAL;
+		return -1;
+	}
+	
+	/* get the first mbuf */
+	if ((mdata = gbuf_alloc_wait((space = (size > MCLBYTES ? MCLBYTES : size)), TRUE)) == 0) {
+	    gbuf_freem(m);
 		*err = ENOMEM;
 		return -1;
 	}
 	gbuf_cont(m) = mdata;
-	for (size=0; bdsp < (struct atpBDS *)gbuf_wptr(m); bdsp++) {
-		if ((bufaddr = UAL_VALUE(bdsp->bdsBuffAddr)) != 0) {
-			len = UAS_VALUE(bdsp->bdsBuffSz);
-			buf = (char *)bufaddr;
-			if ((*err = copyin((caddr_t)buf,
-					(caddr_t)&gbuf_rptr(mdata)[size], len)) != 0) {
+	dataptr = mtod(mdata, caddr_t);
+	for (count = 0; count < bds_cnt; bdsp++, count++) {
+		if ((bufaddr = UAL_VALUE(bdsp->bdsBuffAddr)) != 0 && 
+				(len = UAS_VALUE(bdsp->bdsBuffSz)) != 0) {
+			if (len > space) {											/* enough room ? */
+				gbuf_wset(mdata, dataptr - mtod(mdata, caddr_t)); 		/* set len of last mbuf */
+				/* allocate the next mbuf */
+				if ((gbuf_cont(mdata) = m_get((M_WAIT), MSG_DATA)) == 0) {
+					gbuf_freem(m);
+					*err = ENOMEM;
+					return -1;
+				}
+				mdata = gbuf_cont(mdata);	
+				MCLGET(mdata, M_WAIT);
+				if (!(mdata->m_flags & M_EXT)) {
+					m_freem(m);
+					return(NULL);
+				}
+				dataptr = mtod(mdata, caddr_t);
+				space = MCLBYTES;
+			}
+			/* do the copyin */
+			if ((*err = copyin((caddr_t)bufaddr, dataptr, len)) != 0) {
 				gbuf_freem(m);
 				return -1;
 			}
-			size += len;
+			dataptr += len;
+			space -= len;
 		}
 	}
-	gbuf_wset(mdata,size);
+	gbuf_wset(mdata, dataptr - mtod(mdata, caddr_t)); 		/* set len of last mbuf */
+	gbuf_cont(m)->m_pkthdr.len = size;						/* set packet hdr len */
 
 	atp_send_rsp(gref, m, TRUE);
 	return 0;

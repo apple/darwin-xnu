@@ -1,21 +1,24 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2003 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
+ * Copyright (c) 1999-2003 Apple Computer, Inc.  All Rights Reserved.
  * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this
+ * file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
  * 
  * @APPLE_LICENSE_HEADER_END@
  */
@@ -74,6 +77,9 @@
 #include <kern/misc_protos.h>
 #include <zone_debug.h>
 #include <vm/cpm.h>
+#include <ppc/mappings.h>		/* (BRINGUP) */
+#include <pexpert/pexpert.h>	/* (BRINGUP) */
+
 
 /*	Variables used to indicate the relative age of pages in the
  *	inactive list
@@ -116,6 +122,7 @@ vm_page_bucket_t *vm_page_buckets;		/* Array of buckets */
 unsigned int	vm_page_bucket_count = 0;	/* How big is array? */
 unsigned int	vm_page_hash_mask;		/* Mask for hash function */
 unsigned int	vm_page_hash_shift;		/* Shift for hash function */
+uint32_t		vm_page_bucket_hash;	/* Basic bucket hash */
 decl_simple_lock_data(,vm_page_bucket_lock)
 
 #if	MACH_PAGE_HASH_STATS
@@ -168,6 +175,10 @@ hash_debug(void)
 vm_size_t	page_size  = 4096;
 vm_size_t	page_mask  = 4095;
 int		page_shift = 12;
+#else
+vm_size_t	page_size  = PAGE_SIZE;
+vm_size_t	page_mask  = PAGE_MASK;
+int		page_shift = PAGE_SHIFT;
 #endif /* PAGE_SIZE_FIXED */
 
 /*
@@ -209,7 +220,7 @@ decl_mutex_data(,vm_page_zero_fill_lock)
 
 /*
  *	Fictitious pages don't have a physical address,
- *	but we must initialize phys_addr to something.
+ *	but we must initialize phys_page to something.
  *	For debugging, this should be a strange value
  *	that the pmap module can recognize in assertions.
  */
@@ -347,7 +358,7 @@ vm_page_bootstrap(
 	m->restart = FALSE;
 	m->zero_fill = FALSE;
 
-	m->phys_addr = 0;		/* reset later */
+	m->phys_page = 0;		/* reset later */
 
 	m->page_lock = VM_PROT_NONE;
 	m->unlock_request = VM_PROT_NONE;
@@ -413,6 +424,10 @@ vm_page_bootstrap(
 	for (log2 = 0; size > 1; log2++) 
 		size /= 2;
 	vm_page_hash_shift = log1/2 - log2 + 1;
+	
+	vm_page_bucket_hash = 1 << ((log1 + 1) >> 1);		/* Get (ceiling of sqrt of table size) */
+	vm_page_bucket_hash |= 1 << ((log1 + 1) >> 2);		/* Get (ceiling of quadroot of table size) */
+	vm_page_bucket_hash |= 1;							/* Set bit and add 1 - always must be 1 to insure unique series */
 
 	if (vm_page_hash_mask & vm_page_bucket_count)
 		printf("vm_page_bootstrap: WARNING -- strange page hash\n");
@@ -440,8 +455,8 @@ vm_page_bootstrap(
 	 */
 
 	pmap_startup(&virtual_space_start, &virtual_space_end);
-	virtual_space_start = round_page(virtual_space_start);
-	virtual_space_end = trunc_page(virtual_space_end);
+	virtual_space_start = round_page_32(virtual_space_start);
+	virtual_space_end = trunc_page_32(virtual_space_end);
 
 	*startp = virtual_space_start;
 	*endp = virtual_space_end;
@@ -453,7 +468,7 @@ vm_page_bootstrap(
 	 *	wired, they nonetheless can't be moved. At this moment,
 	 *	all VM managed pages are "free", courtesy of pmap_startup.
 	 */
-	vm_page_wire_count = atop(mem_size) - vm_page_free_count;	/* initial value */
+	vm_page_wire_count = atop_64(max_mem) - vm_page_free_count;	/* initial value */
 
 	printf("vm_page_bootstrap: %d free pages\n", vm_page_free_count);
 	vm_page_free_count_minimum = vm_page_free_count;
@@ -469,7 +484,8 @@ vm_offset_t
 pmap_steal_memory(
 	vm_size_t size)
 {
-	vm_offset_t addr, vaddr, paddr;
+	vm_offset_t addr, vaddr;
+	ppnum_t	phys_page;
 
 	/*
 	 *	We round the size to a round multiple.
@@ -490,8 +506,8 @@ pmap_steal_memory(
 		 *	we don't trust the pmap module to do it right.
 		 */
 
-		virtual_space_start = round_page(virtual_space_start);
-		virtual_space_end = trunc_page(virtual_space_end);
+		virtual_space_start = round_page_32(virtual_space_start);
+		virtual_space_end = trunc_page_32(virtual_space_end);
 	}
 
 	/*
@@ -507,10 +523,10 @@ pmap_steal_memory(
 	 *	Allocate and map physical pages to back new virtual pages.
 	 */
 
-	for (vaddr = round_page(addr);
+	for (vaddr = round_page_32(addr);
 	     vaddr < addr + size;
 	     vaddr += PAGE_SIZE) {
-		if (!pmap_next_page(&paddr))
+		if (!pmap_next_page(&phys_page))
 			panic("pmap_steal_memory");
 
 		/*
@@ -518,7 +534,7 @@ pmap_steal_memory(
 		 *	but some pmap modules barf if they are.
 		 */
 
-		pmap_enter(kernel_pmap, vaddr, paddr,
+		pmap_enter(kernel_pmap, vaddr, phys_page,
 			   VM_PROT_READ|VM_PROT_WRITE, 
 				VM_WIMG_USE_DEFAULT, FALSE);
 		/*
@@ -536,18 +552,19 @@ pmap_startup(
 	vm_offset_t *startp,
 	vm_offset_t *endp)
 {
-	unsigned int i, npages, pages_initialized;
-	vm_page_t pages;
-	vm_offset_t paddr;
+	unsigned int i, npages, pages_initialized, fill, fillval;
+	vm_page_t	pages;
+	ppnum_t		phys_page;
+	addr64_t	tmpaddr;
 
 	/*
 	 *	We calculate how many page frames we will have
 	 *	and then allocate the page structures in one chunk.
 	 */
 
-	npages = ((PAGE_SIZE * pmap_free_pages() +
-		   (round_page(virtual_space_start) - virtual_space_start)) /
-		  (PAGE_SIZE + sizeof *pages));
+	tmpaddr = (addr64_t)pmap_free_pages() * (addr64_t)PAGE_SIZE;	/* Get the amount of memory left */
+	tmpaddr = tmpaddr + (addr64_t)(round_page_32(virtual_space_start) - virtual_space_start);	/* Account for any slop */
+	npages = (unsigned int)(tmpaddr / (addr64_t)(PAGE_SIZE + sizeof(*pages)));	/* Figure size of all vm_page_ts, including enough to hold the vm_page_ts */
 
 	pages = (vm_page_t) pmap_steal_memory(npages * sizeof *pages);
 
@@ -556,10 +573,10 @@ pmap_startup(
 	 */
 
 	for (i = 0, pages_initialized = 0; i < npages; i++) {
-		if (!pmap_next_page(&paddr))
+		if (!pmap_next_page(&phys_page))
 			break;
 
-		vm_page_init(&pages[i], paddr);
+		vm_page_init(&pages[i], phys_page);
 		vm_page_pages++;
 		pages_initialized++;
 	}
@@ -571,16 +588,60 @@ pmap_startup(
 	 * they require several consecutive pages.
 	 */
 
+/*
+ *		Check if we want to initialize pages to a known value
+ */
+	
+	fill = 0;													/* Assume no fill */
+	if (PE_parse_boot_arg("fill", &fillval)) fill = 1;			/* Set fill */
+	
 	for (i = pages_initialized; i > 0; i--) {
+		extern void fillPage(ppnum_t phys_page, unsigned int fillval);
+		if(fill) fillPage(pages[i - 1].phys_page, fillval);		/* Fill the page with a know value if requested at boot */			
 		vm_page_release(&pages[i - 1]);
 	}
+
+#if 0
+	{
+		vm_page_t xx, xxo, xxl;
+		int j, k, l;
+	
+		j = 0;													/* (BRINGUP) */
+		xxl = 0;
+		
+		for(xx = vm_page_queue_free; xx; xxl = xx, xx = xx->pageq.next) {	/* (BRINGUP) */
+			j++;												/* (BRINGUP) */
+			if(j > vm_page_free_count) {						/* (BRINGUP) */
+				panic("pmap_startup: too many pages, xx = %08X, xxl = %08X\n", xx, xxl);
+			}
+			
+			l = vm_page_free_count - j;							/* (BRINGUP) */
+			k = 0;												/* (BRINGUP) */
+			
+			if(((j - 1) & 0xFFFF) == 0) kprintf("checking number %d of %d\n", j, vm_page_free_count);
+
+			for(xxo = xx->pageq.next; xxo; xxo = xxo->pageq.next) {	/* (BRINGUP) */
+				k++;
+				if(k > l) panic("pmap_startup: too many in secondary check %d %d\n", k, l);
+				if((xx->phys_page & 0xFFFFFFFF) == (xxo->phys_page & 0xFFFFFFFF)) {	/* (BRINGUP) */
+					panic("pmap_startup: duplicate physaddr, xx = %08X, xxo = %08X\n", xx, xxo);
+				}
+			}
+		}
+		
+		if(j != vm_page_free_count) {						/* (BRINGUP) */
+			panic("pmap_startup: vm_page_free_count does not match, calc =  %d, vm_page_free_count = %08X\n", j, vm_page_free_count);
+		}
+	}
+#endif
+
 
 	/*
 	 *	We have to re-align virtual_space_start,
 	 *	because pmap_steal_memory has been using it.
 	 */
 
-	virtual_space_start = round_page(virtual_space_start);
+	virtual_space_start = round_page_32(virtual_space_start);
 
 	*startp = virtual_space_start;
 	*endp = virtual_space_end;
@@ -629,20 +690,20 @@ vm_page_module_init(void)
 
 void
 vm_page_create(
-	vm_offset_t start,
-	vm_offset_t end)
+	ppnum_t start,
+	ppnum_t end)
 {
-	vm_offset_t paddr;
-	vm_page_t m;
+	ppnum_t		phys_page;
+	vm_page_t 	m;
 
-	for (paddr = round_page(start);
-	     paddr < trunc_page(end);
-	     paddr += PAGE_SIZE) {
+	for (phys_page = start;
+	     phys_page < end;
+	     phys_page++) {
 		while ((m = (vm_page_t) vm_page_grab_fictitious())
 			== VM_PAGE_NULL)
 			vm_page_more_fictitious();
 
-		vm_page_init(m, paddr);
+		vm_page_init(m, phys_page);
 		vm_page_pages++;
 		vm_page_release(m);
 	}
@@ -653,11 +714,10 @@ vm_page_create(
  *
  *	Distributes the object/offset key pair among hash buckets.
  *
- *	NOTE:	To get a good hash function, the bucket count should
- *		be a power of two.
+ *	NOTE:	The bucket count must be a power of 2
  */
 #define vm_page_hash(object, offset) (\
-	( ((natural_t)(vm_offset_t)object<<vm_page_hash_shift) + (natural_t)atop(offset))\
+	( (natural_t)((uint32_t)object * vm_page_bucket_hash) + ((uint32_t)atop_64(offset) ^ vm_page_bucket_hash))\
 	 & vm_page_hash_mask)
 
 /*
@@ -908,6 +968,7 @@ vm_page_lookup(
 			break;
 	}
 	simple_unlock(&vm_page_bucket_lock);
+
 	return(mem);
 }
 
@@ -952,10 +1013,10 @@ vm_page_rename(
 void
 vm_page_init(
 	vm_page_t	mem,
-	vm_offset_t	phys_addr)
+	ppnum_t	phys_page)
 {
 	*mem = vm_page_template;
-	mem->phys_addr = phys_addr;
+	mem->phys_page = phys_page;
 }
 
 /*
@@ -996,7 +1057,7 @@ vm_page_release_fictitious(
 	assert(!m->free);
 	assert(m->busy);
 	assert(m->fictitious);
-	assert(m->phys_addr == vm_page_fictitious_addr);
+	assert(m->phys_page == vm_page_fictitious_addr);
 
 	c_vm_page_release_fictitious++;
 
@@ -1121,7 +1182,7 @@ vm_page_convert(
 	if (real_m == VM_PAGE_NULL)
 		return FALSE;
 
-	m->phys_addr = real_m->phys_addr;
+	m->phys_page = real_m->phys_page;
 	m->fictitious = FALSE;
 	m->no_isync = TRUE;
 
@@ -1132,7 +1193,7 @@ vm_page_convert(
 		vm_page_inactive_count++;
 	vm_page_unlock_queues();
 
-	real_m->phys_addr = vm_page_fictitious_addr;
+	real_m->phys_page = vm_page_fictitious_addr;
 	real_m->fictitious = TRUE;
 
 	vm_page_release_fictitious(real_m);
@@ -1231,7 +1292,7 @@ wakeup_pageout:
 	     (vm_page_inactive_count < vm_page_inactive_target)))
 		thread_wakeup((event_t) &vm_page_free_wanted);
 
-//	dbgLog(mem->phys_addr, vm_page_free_count, vm_page_wire_count, 4);	/* (TEST/DEBUG) */
+//	dbgLog(mem->phys_page, vm_page_free_count, vm_page_wire_count, 4);	/* (TEST/DEBUG) */
 
 	return mem;
 }
@@ -1246,9 +1307,21 @@ void
 vm_page_release(
 	register vm_page_t	mem)
 {
+
+#if 0
+	unsigned int pindex;
+	phys_entry *physent;
+
+	physent = mapping_phys_lookup(mem->phys_page, &pindex);		/* (BRINGUP) */
+	if(physent->ppLink & ppN) {											/* (BRINGUP) */
+		panic("vm_page_release: already released - %08X %08X\n", mem, mem->phys_page);
+	}
+	physent->ppLink = physent->ppLink | ppN;							/* (BRINGUP) */
+#endif
+
 	assert(!mem->private && !mem->fictitious);
 
-//	dbgLog(mem->phys_addr, vm_page_free_count, vm_page_wire_count, 5);	/* (TEST/DEBUG) */
+//	dbgLog(mem->phys_page, vm_page_free_count, vm_page_wire_count, 5);	/* (TEST/DEBUG) */
 
 	mutex_lock(&vm_page_queue_free_lock);
 	if (mem->free)
@@ -1398,7 +1471,7 @@ vm_page_free(
 	assert(!mem->free);
 	assert(!mem->cleaning);
 	assert(!mem->pageout);
-	assert(!vm_page_free_verify || pmap_verify_free(mem->phys_addr));
+	assert(!vm_page_free_verify || pmap_verify_free(mem->phys_page));
 
 	if (mem->tabled)
 		vm_page_remove(mem);	/* clears tabled, object, offset */
@@ -1454,7 +1527,7 @@ vm_page_free(
 	if (mem->private) {
 		mem->private = FALSE;
 		mem->fictitious = TRUE;
-		mem->phys_addr = vm_page_fictitious_addr;
+		mem->phys_page = vm_page_fictitious_addr;
 	}
 	if (mem->fictitious) {
 		vm_page_release_fictitious(mem);
@@ -1464,7 +1537,7 @@ vm_page_free(
 			vm_zf_count-=1;
 			mem->zero_fill = FALSE;
 		}
-		vm_page_init(mem, mem->phys_addr);
+		vm_page_init(mem, mem->phys_page);
 		vm_page_release(mem);
 	}
 }
@@ -1573,7 +1646,7 @@ vm_page_deactivate(
 {
 	VM_PAGE_CHECK(m);
 
-//	dbgLog(m->phys_addr, vm_page_free_count, vm_page_wire_count, 6);	/* (TEST/DEBUG) */
+//	dbgLog(m->phys_page, vm_page_free_count, vm_page_wire_count, 6);	/* (TEST/DEBUG) */
 
 	/*
 	 *	This page is no longer very interesting.  If it was
@@ -1593,7 +1666,7 @@ vm_page_deactivate(
 		return;
 	if (m->active || (m->inactive && m->reference)) {
 		if (!m->fictitious && !m->absent)
-			pmap_clear_reference(m->phys_addr);
+			pmap_clear_reference(m->phys_page);
 		m->reference = FALSE;
 		VM_PAGE_QUEUES_REMOVE(m);
 	}
@@ -1684,7 +1757,7 @@ vm_page_part_zero_fill(
 
 	VM_PAGE_CHECK(m);
 #ifdef PMAP_ZERO_PART_PAGE_IMPLEMENTED
-	pmap_zero_part_page(m->phys_addr, m_pa, len);
+	pmap_zero_part_page(m->phys_page, m_pa, len);
 #else
 	while (1) {
        		tmp = vm_page_grab();
@@ -1725,7 +1798,8 @@ vm_page_zero_fill(
 
 	VM_PAGE_CHECK(m);
 
-	pmap_zero_page(m->phys_addr);
+//	dbgTrace(0xAEAEAEAE, m->phys_page, 0);		/* (BRINGUP) */
+	pmap_zero_page(m->phys_page);
 }
 
 /*
@@ -1745,8 +1819,8 @@ vm_page_part_copy(
 	VM_PAGE_CHECK(src_m);
 	VM_PAGE_CHECK(dst_m);
 
-	pmap_copy_part_page(src_m->phys_addr, src_pa,
-			dst_m->phys_addr, dst_pa, len);
+	pmap_copy_part_page(src_m->phys_page, src_pa,
+			dst_m->phys_page, dst_pa, len);
 }
 
 /*
@@ -1769,7 +1843,7 @@ vm_page_copy(
 	VM_PAGE_CHECK(src_m);
 	VM_PAGE_CHECK(dest_m);
 
-	pmap_copy_page(src_m->phys_addr, dest_m->phys_addr);
+	pmap_copy_page(src_m->phys_page, dest_m->phys_page);
 }
 
 /*
@@ -1837,11 +1911,11 @@ vm_page_free_list_sort(void)
 	while (m != VM_PAGE_NULL) {
 		cpm_counter(++vpfls_pages_handled);
 		next_m = NEXT_PAGE(m);
-		if (m->phys_addr < sort_list->phys_addr) {
+		if (m->phys_page < sort_list->phys_page) {
 			cpm_counter(++vpfls_head_insertions);
 			SET_NEXT_PAGE(m, sort_list);
 			sort_list = m;
-		} else if (m->phys_addr > sort_list_end->phys_addr) {
+		} else if (m->phys_page > sort_list_end->phys_page) {
 			cpm_counter(++vpfls_tail_insertions);
 			SET_NEXT_PAGE(sort_list_end, m);
 			SET_NEXT_PAGE(m, VM_PAGE_NULL);
@@ -1851,7 +1925,7 @@ vm_page_free_list_sort(void)
 			/* general sorted list insertion */
 			prev = &sort_list;
 			for (m1=sort_list; m1!=VM_PAGE_NULL; m1=NEXT_PAGE(m1)) {
-				if (m1->phys_addr > m->phys_addr) {
+				if (m1->phys_page > m->phys_page) {
 					if (*prev != m1)
 						panic("vm_sort_free_list: ugh");
 					SET_NEXT_PAGE(m, *prev);
@@ -1870,11 +1944,11 @@ vm_page_free_list_sort(void)
 	 */
 	for (m = sort_list, npages = 0; m != VM_PAGE_NULL; m = NEXT_PAGE(m)) {
 		if (m != sort_list &&
-		    m->phys_addr <= addr) {
+		    m->phys_page <= addr) {
 			printf("m 0x%x addr 0x%x\n", m, addr);
 			panic("vm_sort_free_list");
 		}
-		addr = m->phys_addr;
+		addr = m->phys_page;
 		++npages;
 	}
 	if (old_free_count != vm_page_free_count)
@@ -1903,16 +1977,16 @@ vm_page_verify_contiguous(
 	unsigned int		page_count;
 	vm_offset_t		prev_addr;
 
-	prev_addr = pages->phys_addr;
+	prev_addr = pages->phys_page;
 	page_count = 1;
 	for (m = NEXT_PAGE(pages); m != VM_PAGE_NULL; m = NEXT_PAGE(m)) {
-		if (m->phys_addr != prev_addr + page_size) {
+		if (m->phys_page != prev_addr + 1) {
 			printf("m 0x%x prev_addr 0x%x, current addr 0x%x\n",
-			       m, prev_addr, m->phys_addr);
+			       m, prev_addr, m->phys_page);
 			printf("pages 0x%x page_count %d\n", pages, page_count);
 			panic("vm_page_verify_contiguous:  not contiguous!");
 		}
-		prev_addr = m->phys_addr;
+		prev_addr = m->phys_page;
 		++page_count;
 	}
 	if (page_count != npages) {
@@ -1942,18 +2016,18 @@ vm_page_find_contiguous(
 	int		npages)
 {
 	vm_page_t	m, *contig_prev, *prev_ptr;
-	vm_offset_t	prev_addr;
+	ppnum_t		prev_page;
 	unsigned int	contig_npages;
 	vm_page_t	list;
 
 	if (npages < 1)
 		return VM_PAGE_NULL;
 
-	prev_addr = vm_page_queue_free->phys_addr - (page_size + 1);
+	prev_page = vm_page_queue_free->phys_page - 2;
 	prev_ptr = &vm_page_queue_free;
 	for (m = vm_page_queue_free; m != VM_PAGE_NULL; m = NEXT_PAGE(m)) {
 
-		if (m->phys_addr != prev_addr + page_size) {
+		if (m->phys_page != prev_page + 1) {
 			/*
 			 *	Whoops!  Pages aren't contiguous.  Start over.
 			 */
@@ -1988,7 +2062,7 @@ vm_page_find_contiguous(
 
 		assert(contig_npages < npages);
 		prev_ptr = (vm_page_t *) &m->pageq.next;
-		prev_addr = m->phys_addr;
+		prev_page = m->phys_page;
 	}
 	cpm_counter(++vpfc_failed);
 	return VM_PAGE_NULL;
@@ -2172,7 +2246,7 @@ vm_page_print(
 		(p->restart ? "" : "!"),
 		(p->unusual ? "" : "!"));
 
-	iprintf("phys_addr=0x%x", p->phys_addr);
+	iprintf("phys_page=0x%x", p->phys_page);
 	printf(", page_error=0x%x", p->page_error);
 	printf(", page_lock=0x%x", p->page_lock);
 	printf(", unlock_request=%d\n", p->unlock_request);

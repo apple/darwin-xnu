@@ -3,151 +3,28 @@
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
+ * Copyright (c) 1999-2003 Apple Computer, Inc.  All Rights Reserved.
  * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this
+ * file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
  * 
  * @APPLE_LICENSE_HEADER_END@
  */
 /*
  * @OSF_COPYRIGHT@
  */
-/*
- * HISTORY
- * 
- * Revision 1.1.1.1  1998/09/22 21:05:48  wsanchez
- * Import of Mac OS X kernel (~semeria)
- *
- * Revision 1.1.1.1  1998/03/07 02:26:09  wsanchez
- * Import of OSF Mach kernel (~mburg)
- *
- * Revision 1.2.18.5  1996/01/09  19:16:34  devrcs
- * 	Search the alternate register names if configured
- * 	Changed declarations of 'register foo' to 'register int foo'.
- * 	[1995/12/01  21:42:42  jfraser]
- *
- * 	Merged '64-bit safe' changes from DEC alpha port.
- * 	[1995/11/21  18:03:56  jfraser]
- *
- * Revision 1.2.18.4  1995/02/23  21:43:56  alanl
- * 	Merged with DIPC2_SHARED.
- * 	[1995/01/05  13:35:55  alanl]
- * 
- * Revision 1.2.21.1  1994/11/04  09:53:26  dwm
- * 	mk6 CR668 - 1.3b26 merge
- * 	* Revision 1.2.4.6  1994/05/06  18:40:13  tmt
- * 	Merged osc1.3dec/shared with osc1.3b19
- * 	Merge Alpha changes into osc1.312b source code.
- * 	64bit cleanup.
- * 	* End1.3merge
- * 	[1994/11/04  08:50:12  dwm]
- * 
- * Revision 1.2.18.2  1994/09/23  01:22:35  ezf
- * 	change marker to not FREE
- * 	[1994/09/22  21:11:24  ezf]
- * 
- * Revision 1.2.18.1  1994/06/11  21:12:37  bolinger
- * 	Merge up to NMK17.2.
- * 	[1994/06/11  20:03:04  bolinger]
- * 
- * Revision 1.2.23.1  1994/12/06  19:43:18  alanl
- * 	Intel merge, Oct 94 code drop.
- * 	Added db_find_reg_name (came from db_print.c).
- * 	[94/11/28            mmp]
- * 
- * Revision 1.2.16.1  1994/02/08  10:59:08  bernadat
- * 	Added completion variable.
- * 	[93/08/17            paire]
- * 
- * 	Set up new fields (hidden_xxx) of db_vars[] array that are supposed
- * 	to be helpful to display variables depending on an internal value
- * 	like db_macro_level for macro arguments.
- * 	Added db_auto_wrap as new variable.
- * 	Added "set help" for listing all available variables.
- * 	Added db_show_variable() and db_show_one_variable()
- * 	to print variable values.
- * 	[93/08/12            paire]
- * 	[94/02/08            bernadat]
- * 
- * Revision 1.2.4.4  1993/08/11  20:38:20  elliston
- * 	Add ANSI Prototypes.  CR #9523.
- * 	[1993/08/11  03:34:13  elliston]
- * 
- * Revision 1.2.4.3  1993/07/27  18:28:27  elliston
- * 	Add ANSI prototypes.  CR #9523.
- * 	[1993/07/27  18:13:22  elliston]
- * 
- * Revision 1.2.4.2  1993/06/09  02:21:02  gm
- * 	Added to OSF/1 R1.3 from NMK15.0.
- * 	[1993/06/02  20:57:43  jeffc]
- * 
- * Revision 1.2  1993/04/19  16:03:25  devrcs
- * 	Changes from mk78:
- * 	Added void to db_read_write_variable().
- * 	Removed unused variable 'func' from db_set_cmd().
- * 	[92/05/16            jfriedl]
- * 	[93/02/02            bruel]
- * 
- * 	Print old value when changing register values.
- * 	[barbou@gr.osf.org]
- * 	[92/12/03            bernadat]
- * 
- * Revision 1.1  1992/09/30  02:01:31  robert
- * 	Initial revision
- * 
- * $EndLog$
- */
-/* CMU_HIST */
-/*
- * Revision 2.5  91/10/09  16:03:59  af
- * 	 Revision 2.4.3.1  91/10/05  13:08:27  jeffreyh
- * 	 	Added suffix handling and thread handling of variables.
- * 		Added new variables: lines, task, thread, work and arg.
- * 		Moved db_read_variable and db_write_variable to db_variables.h
- * 	 	  as macros, and added db_read_write_variable instead.
- * 	 	Changed some error messages.
- * 	 	[91/08/29            tak]
- * 
- * Revision 2.4.3.1  91/10/05  13:08:27  jeffreyh
- * 	Added suffix handling and thread handling of variables.
- * 	Added new variables: lines, task, thread, work and arg.
- * 	Moved db_read_variable and db_write_variable to db_variables.h
- * 	  as macros, and added db_read_write_variable instead.
- * 	Changed some error messages.
- * 	[91/08/29            tak]
- * 
- * Revision 2.4  91/05/14  15:36:57  mrt
- * 	Correcting copyright
- * 
- * Revision 2.3  91/02/05  17:07:19  mrt
- * 	Changed to new Mach copyright
- * 	[91/01/31  16:19:46  mrt]
- * 
- * Revision 2.2  90/08/27  21:53:24  dbg
- * 	New db_read/write_variable functions.  Should be used instead
- * 	of dereferencing valuep directly, which might not be a true
- * 	pointer if there is an fcn() access function.
- * 	[90/08/20            af]
- * 
- * 	Fix declarations.
- * 	Check for trailing garbage after last expression on command line.
- * 	[90/08/10  14:34:54  dbg]
- * 
- * 	Created.
- * 	[90/07/25            dbg]
- * 
- */
-/* CMU_ENDHIST */
 /* 
  * Mach Operating System
  * Copyright (c) 1991,1990 Carnegie Mellon University
@@ -387,7 +264,7 @@ db_read_write_variable(
 	} else
 	    (*func)(vp, valuep, rw_flag, ap);
 	if (rw_flag == DB_VAR_SET && vp->precious)
-		db_printf("\t$%s:%s<%#x>\t%#8n\t=\t%#8n\n", vp->name,
+		db_printf("\t$%s:%s<%#x>\t%#8lln\t=\t%#8lln\n", vp->name,
 			  ap->modif, ap->thr_act, old_value, *valuep);
 }
 
@@ -630,7 +507,7 @@ db_show_one_variable(void)
 		aux_param.suffix[0] = i;
 		(*cur->fcn)(cur, (db_expr_t *)0, DB_VAR_SHOW, &aux_param);
 	    } else {
-		db_printf("%#n", *(cur->valuep + i));
+		db_printf("%#lln", *(cur->valuep + i));
 	        db_find_xtrn_task_sym_and_offset(*(cur->valuep + i), &name,
 						 &offset, TASK_NULL);
 		if (name != (char *)0 && offset <= db_maxoff &&
@@ -776,7 +653,7 @@ db_show_variable(void)
 		    aux_param.suffix[0] = i;
 		    (*cur->fcn)(cur, (db_expr_t *)0, DB_VAR_SHOW, &aux_param);
 		} else {
-		    db_printf("%#n", *(cur->valuep + i));
+		    db_printf("%#lln", *(cur->valuep + i));
 		    db_find_xtrn_task_sym_and_offset(*(cur->valuep + i), &name,
 						     &offset, TASK_NULL);
 		    if (name != (char *)0 && offset <= db_maxoff &&

@@ -3,19 +3,22 @@
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
+ * Copyright (c) 1999-2003 Apple Computer, Inc.  All Rights Reserved.
  * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this
+ * file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
  * 
  * @APPLE_LICENSE_HEADER_END@
  */
@@ -131,7 +134,7 @@ hfs_chkdq(cp, change, cred, flags)
 	register struct dquot *dq;
 	register int i;
 	int64_t ncurbytes;
-	int error;
+	int error=0;
 	struct proc *p;
 
 #if DIAGNOSTIC
@@ -161,25 +164,29 @@ hfs_chkdq(cp, change, cred, flags)
 	p = current_proc();
 	if (cred == NOCRED)
 		cred = kernproc->p_ucred;
-	if ((flags & FORCE) == 0 && ((cred->cr_uid != 0) || (p->p_flag & P_FORCEQUOTA))) {
+	if ((cred->cr_uid != 0) || (p->p_flag & P_FORCEQUOTA)) {
 		for (i = 0; i < MAXQUOTAS; i++) {
 			if ((dq = cp->c_dquot[i]) == NODQUOT)
 				continue;
-			if (error = hfs_chkdqchg(cp, change, cred, i))
-				return (error);
+			error = hfs_chkdqchg(cp, change, cred, i);
+			if (error) {
+				break;
+			}
 		}
 	}
-	for (i = 0; i < MAXQUOTAS; i++) {
-		if ((dq = cp->c_dquot[i]) == NODQUOT)
-			continue;
-		while (dq->dq_flags & DQ_LOCK) {
-			dq->dq_flags |= DQ_WANT;
-			sleep((caddr_t)dq, PINOD+1);
+	if ((flags & FORCE) || error == 0) {
+		for (i = 0; i < MAXQUOTAS; i++) {
+			if ((dq = cp->c_dquot[i]) == NODQUOT)
+				continue;
+			while (dq->dq_flags & DQ_LOCK) {
+				dq->dq_flags |= DQ_WANT;
+				sleep((caddr_t)dq, PINOD+1);
+			}
+			dq->dq_curbytes += change;
+			dq->dq_flags |= DQ_MOD;
 		}
-		dq->dq_curbytes += change;
-		dq->dq_flags |= DQ_MOD;
 	}
-	return (0);
+	return (error);
 }
 
 /*
@@ -203,7 +210,7 @@ hfs_chkdqchg(cp, change, cred, type)
 	if (ncurbytes >= dq->dq_bhardlimit && dq->dq_bhardlimit) {
 		if ((dq->dq_flags & DQ_BLKS) == 0 &&
 		    cp->c_uid == cred->cr_uid) {
-#if 1	
+#if 0	
 			printf("\n%s: write failed, %s disk limit reached\n",
 			    vp->v_mount->mnt_stat.f_mntonname,
 			    quotatypes[type]);
@@ -220,7 +227,7 @@ hfs_chkdqchg(cp, change, cred, type)
 		if (dq->dq_curbytes < dq->dq_bsoftlimit) {
 			dq->dq_btime = time.tv_sec +
 			    VFSTOHFS(vp->v_mount)->hfs_qfiles[type].qf_btime;
-#if 1
+#if 0
 			if (cp->c_uid == cred->cr_uid)
 				printf("\n%s: warning, %s %s\n",
 				    vp->v_mount->mnt_stat.f_mntonname,
@@ -231,7 +238,7 @@ hfs_chkdqchg(cp, change, cred, type)
 		if (time.tv_sec > dq->dq_btime) {
 			if ((dq->dq_flags & DQ_BLKS) == 0 &&
 			    cp->c_uid == cred->cr_uid) {
-#if 1
+#if 0
 				printf("\n%s: write failed, %s %s\n",
 				    vp->v_mount->mnt_stat.f_mntonname,
 				    quotatypes[type],
@@ -257,7 +264,7 @@ hfs_chkiq(cp, change, cred, flags)
 {
 	register struct dquot *dq;
 	register int i;
-	int ncurinodes, error;
+	int ncurinodes, error=0;
 	struct proc *p;
 
 #if DIAGNOSTIC
@@ -287,25 +294,29 @@ hfs_chkiq(cp, change, cred, flags)
 	p = current_proc();
 	if (cred == NOCRED)
 		cred = kernproc->p_ucred;
-	if ((flags & FORCE) == 0 && ((cred->cr_uid != 0) || (p->p_flag & P_FORCEQUOTA))) {
+	if ((cred->cr_uid != 0) || (p->p_flag & P_FORCEQUOTA)) {
 		for (i = 0; i < MAXQUOTAS; i++) {
 			if ((dq = cp->c_dquot[i]) == NODQUOT)
 				continue;
-			if (error = hfs_chkiqchg(cp, change, cred, i))
-				return (error);
+			error = hfs_chkiqchg(cp, change, cred, i);
+			if (error) {
+				break;
+			}
 		}
 	}
-	for (i = 0; i < MAXQUOTAS; i++) {
-		if ((dq = cp->c_dquot[i]) == NODQUOT)
-			continue;
-		while (dq->dq_flags & DQ_LOCK) {
-			dq->dq_flags |= DQ_WANT;
-			sleep((caddr_t)dq, PINOD+1);
+	if ((flags & FORCE) || error == 0) { 
+		for (i = 0; i < MAXQUOTAS; i++) {
+			if ((dq = cp->c_dquot[i]) == NODQUOT)
+				continue;
+			while (dq->dq_flags & DQ_LOCK) {
+				dq->dq_flags |= DQ_WANT;
+				sleep((caddr_t)dq, PINOD+1);
+			}
+			dq->dq_curinodes += change;
+			dq->dq_flags |= DQ_MOD;
 		}
-		dq->dq_curinodes += change;
-		dq->dq_flags |= DQ_MOD;
 	}
-	return (0);
+	return (error);
 }
 
 /*
@@ -329,7 +340,7 @@ hfs_chkiqchg(cp, change, cred, type)
 	if (ncurinodes >= dq->dq_ihardlimit && dq->dq_ihardlimit) {
 		if ((dq->dq_flags & DQ_INODS) == 0 &&
 		    cp->c_uid == cred->cr_uid) {
-#if 1
+#if 0
 			printf("\n%s: write failed, %s cnode limit reached\n",
 			    vp->v_mount->mnt_stat.f_mntonname,
 			    quotatypes[type]);
@@ -346,7 +357,7 @@ hfs_chkiqchg(cp, change, cred, type)
 		if (dq->dq_curinodes < dq->dq_isoftlimit) {
 			dq->dq_itime = time.tv_sec +
 			    VFSTOHFS(vp->v_mount)->hfs_qfiles[type].qf_itime;
-#if 1
+#if 0
 			if (cp->c_uid == cred->cr_uid)
 				printf("\n%s: warning, %s %s\n",
 				    vp->v_mount->mnt_stat.f_mntonname,
@@ -357,7 +368,7 @@ hfs_chkiqchg(cp, change, cred, type)
 		if (time.tv_sec > dq->dq_itime) {
 			if ((dq->dq_flags & DQ_INODS) == 0 &&
 			    cp->c_uid == cred->cr_uid) {
-#if 1
+#if 0
 				printf("\n%s: write failed, %s %s\n",
 				    vp->v_mount->mnt_stat.f_mntonname,
 				    quotatypes[type],
@@ -489,6 +500,12 @@ hfs_quotaoff(p, mp, type)
 	if ((qvp = hfsmp->hfs_qfiles[type].qf_vp) == NULLVP)
 		return (0);
 	hfsmp->hfs_qfiles[type].qf_qflags |= QTF_CLOSING;
+
+	/*
+	 * Sync out any orpaned dirty dquot entries.
+	 */
+	dqsync_orphans(&hfsmp->hfs_qfiles[type]);
+
 	/*
 	 * Search vnodes associated with this mount point,
 	 * deleting any references to quota file being closed.
@@ -673,6 +690,14 @@ hfs_qsync(mp)
 			break;
 	if (i == MAXQUOTAS)
 		return (0);
+
+	/*
+	 * Sync out any orpaned dirty dquot entries.
+	 */
+	for (i = 0; i < MAXQUOTAS; i++)
+		if (hfsmp->hfs_qfiles[i].qf_vp != NULLVP)
+			dqsync_orphans(&hfsmp->hfs_qfiles[i]);
+
 	/*
 	 * Search vnodes associated with this mount point,
 	 * synchronizing any modified dquot structures.
@@ -682,9 +707,11 @@ again:
 	for (vp = mp->mnt_vnodelist.lh_first; vp != NULL; vp = nextvp) {
 		if (vp->v_mount != mp)
 			goto again;
+
 		nextvp = vp->v_mntvnodes.le_next;
 		simple_lock(&vp->v_interlock);
 		simple_unlock(&mntvnode_slock);
+
 		error = vget(vp, LK_EXCLUSIVE | LK_NOWAIT | LK_INTERLOCK, p);
 		if (error) {
 			simple_lock(&mntvnode_slock);
@@ -692,6 +719,19 @@ again:
 				goto again;
 			continue;
 		}
+
+		// Make sure that this is really an hfs vnode.
+		//
+		if (   vp->v_mount != mp
+			|| vp->v_type == VNON
+			|| vp->v_tag != VT_HFS
+			|| VTOC(vp) == NULL) {
+			
+			vput(vp);
+			simple_lock(&mntvnode_slock);
+			goto again;
+		}
+
 		for (i = 0; i < MAXQUOTAS; i++) {
 			dq = VTOC(vp)->c_dquot[i];
 			if (dq != NODQUOT && (dq->dq_flags & DQ_MOD))

@@ -3,19 +3,22 @@
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
+ * Copyright (c) 1999-2003 Apple Computer, Inc.  All Rights Reserved.
  * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this
+ * file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
  * 
  * @APPLE_LICENSE_HEADER_END@
  */
@@ -109,13 +112,13 @@ static int output_kernel_symbols(struct proc *p)
 				(void **)&orig_mh, &orig_mhsize);
     if (rc_mh && orig_mh)
 	IODTFreeLoaderInfo("Kernel-__HEADER",
-			    (void *)orig_mh, round_page(orig_mhsize));
+			    (void *)orig_mh, round_page_32(orig_mhsize));
 
     rc_sc = IODTGetLoaderInfo("Kernel-__SYMTAB",
 				(void **) &orig_st, &orig_st_size);
     if (rc_sc && orig_st)
 	IODTFreeLoaderInfo("Kernel-__SYMTAB",
-			    (void *)orig_st, round_page(orig_st_size));
+			    (void *)orig_st, round_page_32(orig_st_size));
 
     if (pcred->p_svuid != pcred->p_ruid || pcred->p_svgid != pcred->p_rgid)
 	goto out;
@@ -204,7 +207,7 @@ static int output_kernel_symbols(struct proc *p)
     mh->flags      = orig_mh->flags;
 
     // Initialise the current file offset and addr
-    offset = round_page(header_size);
+    offset = round_page_32(header_size);
     addr = (caddr_t) const_text->addr;	// Load address of __TEXT,__const
 
     /*
@@ -217,7 +220,7 @@ static int output_kernel_symbols(struct proc *p)
     sg->vmaddr   = (unsigned long) addr;
     sg->vmsize   = const_text->size;
     sg->fileoff  = 0;
-    sg->filesize = const_text->size + round_page(header_size);
+    sg->filesize = const_text->size + round_page_32(header_size);
     sg->maxprot  = 0;
     sg->initprot = 0;
     sg->flags    = 0;
@@ -234,7 +237,7 @@ static int output_kernel_symbols(struct proc *p)
 	    const_text = se;
 	}
     }
-    offset = round_page((vm_address_t) offset);
+    offset = round_page_32((vm_address_t) offset);
 
     // Now copy of the __DATA segment load command, the image need
     // not be stored to disk nobody needs it, yet!
@@ -255,7 +258,7 @@ static int output_kernel_symbols(struct proc *p)
 	se->offset = offset;
 	se->nreloc = 0;
     }
-    offset = round_page(offset);
+    offset = round_page_32(offset);
 
 
     /*

@@ -9,6 +9,7 @@ include $(MakeInc_def)
 
 INSTINC_SUBDIRS = \
 	mach	\
+	machine	\
 	default_pager \
 	device \
 	mach_debug \
@@ -17,10 +18,12 @@ INSTINC_SUBDIRS = \
 
 INSTINC_SUBDIRS_PPC = \
 	mach \
+	ppc	\
 	profiling 
 
 INSTINC_SUBDIRS_I386 = \
 	mach	\
+	i386	\
 	profiling
 
 EXPINC_SUBDIRS = \

@@ -3,19 +3,22 @@
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
+ * Copyright (c) 1999-2003 Apple Computer, Inc.  All Rights Reserved.
  * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this
+ * file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
  * 
  * @APPLE_LICENSE_HEADER_END@
  */
@@ -71,6 +74,7 @@
 #include <kern/cpu_number.h>	/* before tcp_seq.h, for tcp_random18() */
 
 #include <net/if.h>
+#include <net/if_types.h>
 #include <net/route.h>
 
 #include <netinet/in.h>
@@ -157,6 +161,11 @@ static int drop_synfin = 0;
 SYSCTL_INT(_net_inet_tcp, OID_AUTO, drop_synfin, CTLFLAG_RW,
     &drop_synfin, 0, "Drop TCP packets with SYN+FIN set");
 #endif
+
+__private_extern__ int slowlink_wsize = 8192;
+SYSCTL_INT(_net_inet_tcp, OID_AUTO, slowlink_wsize, CTLFLAG_RW,
+	&slowlink_wsize, 0, "Maximum advertised window size for slowlink");
+
 
 u_long tcp_now;
 struct inpcbhead tcb;
@@ -1135,6 +1144,10 @@ findpcb:
 	win = sbspace(&so->so_rcv);
 	if (win < 0)
 		win = 0;
+	else {	/* clip rcv window to 4K for modems */
+		if (tp->t_flags & TF_SLOWLINK && slowlink_wsize > 0)
+			win = min(win, slowlink_wsize);
+	}
 	tp->rcv_wnd = imax(win, (int)(tp->rcv_adv - tp->rcv_nxt));
 	}
 
@@ -1317,7 +1330,10 @@ findpcb:
 			 * here.  Even if we requested window scaling, it will
 			 * become effective only later when our SYN is acked.
 			 */
-			tp->rcv_adv += min(tp->rcv_wnd, TCP_MAXWIN);
+			if (tp->t_flags & TF_SLOWLINK && slowlink_wsize > 0) /* clip window size for for slow link */
+				tp->rcv_adv += min(tp->rcv_wnd, slowlink_wsize);
+			else 
+				tp->rcv_adv += min(tp->rcv_wnd, TCP_MAXWIN);
 			tcpstat.tcps_connects++;
 			soisconnected(so);
 			tp->t_timer[TCPT_KEEP] = tcp_keepinit;
@@ -2116,10 +2132,10 @@ process_ACK:
 			tp->snd_wnd -= acked;
 			ourfinisacked = 0;
 		}
-		sowwakeup(so);
 		tp->snd_una = th->th_ack;
 		if (SEQ_LT(tp->snd_nxt, tp->snd_una))
 			tp->snd_nxt = tp->snd_una;
+		sowwakeup(so);
 
 		switch (tp->t_state) {
 
@@ -2841,6 +2857,16 @@ tcp_mss(tp, offer)
 		return;
 	}
 	ifp = rt->rt_ifp;
+	/*
+	 * Slower link window correction:
+	 * If a value is specificied for slowlink_wsize use it for PPP links
+	 * believed to be on a serial modem (speed <128Kbps). Excludes 9600bps as
+	 * it is the default value adversized by pseudo-devices over ppp.
+	 */
+	if (ifp->if_type == IFT_PPP && slowlink_wsize > 0 && 
+	    ifp->if_baudrate > 9600 && ifp->if_baudrate <= 128000) {
+		tp->t_flags |= TF_SLOWLINK;
+	}
 	so = inp->inp_socket;
 
 	taop = rmx_taop(rt->rt_rmx);
@@ -3047,6 +3073,16 @@ tcp_mssopt(tp)
 			isipv6 ? tcp_v6mssdflt :
 #endif /* INET6 */
 			tcp_mssdflt;
+	/*
+	 * Slower link window correction:
+	 * If a value is specificied for slowlink_wsize use it for PPP links
+	 * believed to be on a serial modem (speed <128Kbps). Excludes 9600bps as
+	 * it is the default value adversized by pseudo-devices over ppp.
+	 */
+	if (rt->rt_ifp->if_type == IFT_PPP && slowlink_wsize > 0 && 
+	    rt->rt_ifp->if_baudrate > 9600 && rt->rt_ifp->if_baudrate <= 128000) {
+		tp->t_flags |= TF_SLOWLINK;
+	}
 
 	return rt->rt_ifp->if_mtu - min_protoh;
 }

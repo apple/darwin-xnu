@@ -3,19 +3,22 @@
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
+ * Copyright (c) 1999-2003 Apple Computer, Inc.  All Rights Reserved.
  * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this
+ * file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
  * 
  * @APPLE_LICENSE_HEADER_END@
  */
@@ -656,7 +659,7 @@ dp_memory_object_data_initialize(
 	DEBUG(DEBUG_MO_EXTERNAL,
 	      ("mem_obj=0x%x,offset=0x%x,cnt=0x%x\n",
 	       (int)mem_obj, (int)offset, (int)size));
-	GSTAT(global_stats.gs_pages_init += atop(size));
+	GSTAT(global_stats.gs_pages_init += atop_32(size));
 
 	vs_lookup(mem_obj, vs);
 	vs_lock(vs);
@@ -730,7 +733,9 @@ dp_memory_object_data_return(
 		return KERN_SUCCESS;
 	}
 
-	if ((vs->vs_seqno != vs->vs_next_seqno++) || (vs->vs_xfer_pending)) {
+	if ((vs->vs_seqno != vs->vs_next_seqno++)
+			|| (vs->vs_readers)
+			|| (vs->vs_xfer_pending)) {
 		upl_t	upl;
 		int	page_list_count = 0;
 
@@ -895,10 +900,10 @@ default_pager_objects(
 	if (kr != KERN_SUCCESS)
 		return kr;
 
-	osize = round_page(*ocountp * sizeof * objects);
+	osize = round_page_32(*ocountp * sizeof * objects);
 	kr = vm_map_wire(ipc_kernel_map, 
-			trunc_page((vm_offset_t)objects),
-			round_page(((vm_offset_t)objects) + osize), 
+			trunc_page_32((vm_offset_t)objects),
+			round_page_32(((vm_offset_t)objects) + osize), 
 			VM_PROT_READ|VM_PROT_WRITE, FALSE);
 	osize=0;
 
@@ -924,7 +929,7 @@ default_pager_objects(
 		vm_offset_t	newaddr;
 		vm_size_t	newsize;
 
-		newsize = 2 * round_page(actual * sizeof * objects);
+		newsize = 2 * round_page_32(actual * sizeof * objects);
 
 		kr = vm_allocate(kernel_map, &newaddr, newsize, TRUE);
 		if (kr != KERN_SUCCESS)
@@ -940,7 +945,7 @@ default_pager_objects(
 		vm_offset_t	newaddr;
 		vm_size_t	newsize;
 
-		newsize = 2 * round_page(actual * sizeof * pagers);
+		newsize = 2 * round_page_32(actual * sizeof * pagers);
 
 		kr = vm_allocate(kernel_map, &newaddr, newsize, TRUE);
 		if (kr != KERN_SUCCESS)
@@ -1038,7 +1043,7 @@ default_pager_objects(
 	} else {
 		vm_offset_t used;
 
-		used = round_page(actual * sizeof * objects);
+		used = round_page_32(actual * sizeof * objects);
 
 		if (used != osize)
 			(void) vm_deallocate(kernel_map,
@@ -1064,7 +1069,7 @@ default_pager_objects(
 	} else {
 		vm_offset_t used;
 
-		used = round_page(actual * sizeof * pagers);
+		used = round_page_32(actual * sizeof * pagers);
 
 		if (used != psize)
 			(void) vm_deallocate(kernel_map,
@@ -1120,10 +1125,10 @@ default_pager_object_pages(
 	if (kr != KERN_SUCCESS)
 		return kr;
 
-	size = round_page(*countp * sizeof * pages);
+	size = round_page_32(*countp * sizeof * pages);
 	kr = vm_map_wire(ipc_kernel_map, 
-			trunc_page((vm_offset_t)pages),
-			round_page(((vm_offset_t)pages) + size), 
+			trunc_page_32((vm_offset_t)pages),
+			round_page_32(((vm_offset_t)pages) + size), 
 			VM_PROT_READ|VM_PROT_WRITE, FALSE);
 	size=0;
 
@@ -1179,7 +1184,7 @@ default_pager_object_pages(
 
 		if (pages != *pagesp)
 			(void) vm_deallocate(kernel_map, addr, size);
-		size = round_page(actual * sizeof * pages);
+		size = round_page_32(actual * sizeof * pages);
 		kr = vm_allocate(kernel_map, &addr, size, TRUE);
 		if (kr != KERN_SUCCESS)
 			return kr;
@@ -1208,7 +1213,7 @@ default_pager_object_pages(
 	} else {
 		vm_offset_t used;
 
-		used = round_page(actual * sizeof * pages);
+		used = round_page_32(actual * sizeof * pages);
 
 		if (used != size)
 			(void) vm_deallocate(kernel_map,

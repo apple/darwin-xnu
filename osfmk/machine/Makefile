@@ -12,6 +12,8 @@ DATAFILES = \
 	machlimits.h 	\
 	ast.h	\
 	ast_types.h	\
+	commpage.h	\
+	cpu_capabilities.h	\
 	cpu_number.h	\
 	db_machdep.h	\
 	endian.h	\
@@ -36,6 +38,9 @@ DATAFILES = \
 	xpr.h		\
 	hw_lock_types.h
 
+INSTALL_MI_LCL_LIST = cpu_capabilities.h
+
+INSTALL_MI_DIR = machine
 
 EXPORT_MI_LIST = ${DATAFILES}
 

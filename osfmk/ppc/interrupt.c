@@ -3,19 +3,22 @@
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
+ * Copyright (c) 1999-2003 Apple Computer, Inc.  All Rights Reserved.
  * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this
+ * file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
  * 
  * @APPLE_LICENSE_HEADER_END@
  */
@@ -30,14 +33,14 @@
 #include <kern/thread.h>
 #include <kern/counters.h>
 #include <ppc/misc_protos.h>
+#include <ppc/trap.h>
 #include <ppc/proc_reg.h>
 #include <ppc/exception.h>
 #include <ppc/savearea.h>
 #include <pexpert/pexpert.h>
-#if	NCPUS > 1
-#include <ppc/POWERMAC/mp/MPPlugIn.h>
-#endif /* NCPUS > 1 */
 #include <sys/kdebug.h>
+
+perfTrap perfIntHook = 0;						/* Pointer to performance trap hook routine */
 
 struct savearea * interrupt(
         int type,
@@ -51,6 +54,10 @@ struct savearea * interrupt(
 	thread_act_t	act;
 
 	disable_preemption();
+
+	if(perfIntHook) {							/* Is there a hook? */
+		if(perfIntHook(type, ssp, dsisr, dar) == KERN_SUCCESS) return ssp;	/* If it succeeds, we are done... */
+	}
 	
 #if 0
 	{
@@ -108,7 +115,7 @@ struct savearea * interrupt(
 			
 		case T_DECREMENTER:
 			KERNEL_DEBUG_CONSTANT(MACHDBG_CODE(DBG_MACH_EXCP_DECI, 0) | DBG_FUNC_NONE,
-				  isync_mfdec(), ssp->save_srr0, 0, 0, 0);
+				  isync_mfdec(), (unsigned int)ssp->save_srr0, 0, 0, 0);
 	
 #if 0
 			if (pcsample_enable) {
@@ -136,7 +143,7 @@ struct savearea * interrupt(
 			counter_always(c_incoming_interrupts++);
 	
 			KERNEL_DEBUG_CONSTANT(MACHDBG_CODE(DBG_MACH_EXCP_INTR, 0) | DBG_FUNC_START,
-			   current_cpu, ssp->save_srr0, 0, 0, 0);
+			   current_cpu, (unsigned int)ssp->save_srr0, 0, 0, 0);
 	
 			per_proc_info[current_cpu].interrupt_handler(
 				per_proc_info[current_cpu].interrupt_target, 

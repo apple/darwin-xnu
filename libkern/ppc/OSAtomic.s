@@ -3,19 +3,22 @@
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
+ * Copyright (c) 1999-2003 Apple Computer, Inc.  All Rights Reserved.
  * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this
+ * file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
  * 
  * @APPLE_LICENSE_HEADER_END@
  */
@@ -56,17 +59,27 @@ int OSCompareAndSwap( UInt32 oldVal, UInt32 newVal, UInt32 * addr )
 
 	ENTRY	_OSCompareAndSwap
 .L_CASretry:
-	lwarx	r6,	0,r5
-	cmpw	r6,	r3
-	bne-	.L_CASfail
-	stwcx.	r4,	0,r5
-	bne-	.L_CASretry
-	isync
-	li	r3,	1
-	blr
+		lwz		r6,0(r5)		// Get the swap value
+		cmpw	r6,r3			// Is is the same
+		bne--	.L_CASfail2		// No...
+		
+.L_CASretry2:
+		lwarx	r6,0,r5			// Get it atomically now
+		cmpw	r6,r3			// Same?
+		bne--	.L_CASfail		// Nope, go say so and toss reservations...
+		stwcx.	r4,0,r5			// Stash the new value
+		bne--	.L_CASretry2	// Just got collision...
+		isync
+		li	r3,	1
+		blr
+
 .L_CASfail:
-	li	r3,	0
-	blr
+		li		a7,-4			// Point to a spot in the red zone
+		stwcx.	a7,a7,r1		// Kill reservation
+		
+.L_CASfail2:	
+		li	r3,	0
+		blr
 
 
 /*

@@ -3,19 +3,22 @@
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
+ * Copyright (c) 1999-2003 Apple Computer, Inc.  All Rights Reserved.
  * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this
+ * file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
  * 
  * @APPLE_LICENSE_HEADER_END@
  */
@@ -77,6 +80,61 @@ void IOPrintPlane( const IORegistryPlane * plane )
             IOLog(", busy %ld", service->getBusyState());
 	IOLog( ">\n");
 	IOSleep(250);
+    }
+    iter->release();
+}
+
+void dbugprintf(char *fmt, ...);
+void db_dumpiojunk( const IORegistryPlane * plane );
+
+void db_piokjunk(void) {
+
+	dbugprintf("\nDT plane:\n");
+	db_dumpiojunk( gIODTPlane );
+	dbugprintf("\n\nService plane:\n");
+	db_dumpiojunk( gIOServicePlane );
+    dbugprintf("\n\n"
+	    "ivar kalloc()       0x%08x\n"
+	    "malloc()            0x%08x\n"
+            "containers kalloc() 0x%08x\n"
+	    "IOMalloc()          0x%08x\n"
+            "----------------------------------------\n",
+	    debug_ivars_size,
+            debug_malloc_size,
+            debug_container_malloc_size,
+            debug_iomalloc_size
+            );
+
+}
+
+
+void db_dumpiojunk( const IORegistryPlane * plane )
+{
+    IORegistryEntry *		next;
+    IORegistryIterator * 	iter;
+    OSOrderedSet *		all;
+    char			format[] = "%xxxs";
+    IOService *			service;
+
+    iter = IORegistryIterator::iterateOver( plane );
+
+    all = iter->iterateAll();
+    if( all) {
+        dbugprintf("Count %d\n", all->getCount() );
+        all->release();
+    } else dbugprintf("Empty\n");
+
+    iter->reset();
+    while( (next = iter->getNextObjectRecursive())) {
+		sprintf( format + 1, "%ds", 2 * next->getDepth( plane ));
+		dbugprintf( format, "");
+		dbugprintf( "%s", next->getName( plane ));
+		if( (next->getLocation( plane )))
+				dbugprintf("@%s", next->getLocation( plane ));
+		dbugprintf(" <class %s", next->getMetaClass()->getClassName());
+			if( (service = OSDynamicCast(IOService, next)))
+				dbugprintf(", busy %ld", service->getBusyState());
+		dbugprintf( ">\n");
     }
     iter->release();
 }

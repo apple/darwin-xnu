@@ -3,121 +3,28 @@
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
+ * Copyright (c) 1999-2003 Apple Computer, Inc.  All Rights Reserved.
  * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this
+ * file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
  * 
  * @APPLE_LICENSE_HEADER_END@
  */
 /*
  * @OSF_COPYRIGHT@
  */
-/*
- * HISTORY
- * 
- * Revision 1.1.1.1  1998/09/22 21:05:48  wsanchez
- * Import of Mac OS X kernel (~semeria)
- *
- * Revision 1.1.1.1  1998/03/07 02:26:09  wsanchez
- * Import of OSF Mach kernel (~mburg)
- *
- * Revision 1.2.19.1  1997/03/27  18:46:35  barbou
- * 	ri-osc CR1561: make operators "logical and", "logical or"
- * 	lex correctly.
- * 	[1995/09/20  15:26:38  bolinger]
- * 	[97/02/25            barbou]
- *
- * Revision 1.2.10.2  1995/01/06  19:10:13  devrcs
- * 	mk6 CR668 - 1.3b26 merge
- * 	* Revision 1.2.3.5  1994/05/06  18:39:16  tmt
- * 	Merged osc1.3dec/shared with osc1.3b19
- * 	Merge Alpha changes into osc1.312b source code.
- * 	64bit cleanup.
- * 	* End1.3merge
- * 	[1994/11/04  08:49:27  dwm]
- * 
- * Revision 1.2.10.1  1994/09/23  01:19:06  ezf
- * 	change marker to not FREE
- * 	[1994/09/22  21:09:53  ezf]
- * 
- * Revision 1.2.3.3  1993/07/27  18:27:15  elliston
- * 	Add ANSI prototypes.  CR #9523.
- * 	[1993/07/27  18:11:36  elliston]
- * 
- * Revision 1.2.3.2  1993/06/09  02:20:06  gm
- * 	Added to OSF/1 R1.3 from NMK15.0.
- * 	[1993/06/02  20:56:16  jeffc]
- * 
- * Revision 1.2  1993/04/19  16:02:09  devrcs
- * 	Allow unprefixed (0x) hexadecimal constants starting by a letter:
- * 	unknown symbols are tentatively interpreted as hexadecimal constants,
- * 	and ambiguities are reported.
- * 	[93/03/24            barbou]
- * 
- * 	Changes from mk78:
- * 	Removed unused variable from db_unary().
- * 	[92/05/16            jfriedl]
- * 	[93/02/02            bruel]
- * 
- * 	Added string format arguments [barbou@gr.osf.org]
- * 	[92/12/03            bernadat]
- * 
- * Revision 1.1  1992/09/30  02:01:04  robert
- * 	Initial revision
- * 
- * $EndLog$
- */
-/* CMU_HIST */
-/*
- * Revision 2.5  91/10/09  15:59:46  af
- * 	 Revision 2.4.3.1  91/10/05  13:06:04  jeffreyh
- * 	 	Added relational expression etc. to support condition expression.
- * 	 	Supported modifier after indirect expression to specify size,
- * 	 	  sign extention and non current task space indirection.
- * 	 	Changed error messages to print more information.
- * 	 	[91/08/29            tak]
- * 
- * Revision 2.4.3.1  91/10/05  13:06:04  jeffreyh
- * 	Added relational expression etc. to support condition expression.
- * 	Supported modifier after indirect expression to specify size,
- * 	  sign extention and non current task space indirection.
- * 	Changed error messages to print more information.
- * 	[91/08/29            tak]
- * 
- * Revision 2.4  91/05/14  15:33:45  mrt
- * 	Correcting copyright
- * 
- * Revision 2.3  91/02/05  17:06:25  mrt
- * 	Changed to new Mach copyright
- * 	[91/01/31  16:17:46  mrt]
- * 
- * Revision 2.2  90/08/27  21:50:57  dbg
- * 	Use '..' instead of '$$' for db_prev.
- * 	Use '+' for db_next.
- * 	[90/08/22            dbg]
- * 
- * 	Allow repeated unary operators.
- * 	[90/08/20            dbg]
- * 
- * 	Reflected back rename of db_symbol_value->db_value_of_name
- * 	[90/08/20            af]
- * 	Reduce lint.
- * 	[90/08/07            dbg]
- * 	Created.
- * 	[90/07/25            dbg]
- * 
- */
-/* CMU_ENDHIST */
 /* 
  * Mach Operating System
  * Copyright (c) 1991,1990 Carnegie Mellon University
@@ -462,7 +369,7 @@ db_shift_expr(db_expr_t *valuep)
 		lhs <<= rhs;
 	    else {
 		/* Shift right is unsigned */
-		lhs = (natural_t) lhs >> rhs;
+		lhs = (uint64_t) lhs >> rhs;
 	    }
 	    t = db_read_token();
 	}

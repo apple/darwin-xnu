@@ -3,19 +3,22 @@
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
+ * Copyright (c) 1999-2003 Apple Computer, Inc.  All Rights Reserved.
  * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this
+ * file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
  * 
  * @APPLE_LICENSE_HEADER_END@
  */
@@ -111,6 +114,11 @@
 #if	TASK_SWAPPER
 #include <kern/task_swap.h>
 #endif	/* TASK_SWAPPER */
+
+#ifdef __ppc__
+#include <ppc/exception.h>
+#include <ppc/hw_perfmon.h>
+#endif
 
 /*
  * Exported interfaces
@@ -349,8 +357,8 @@ task_create_local(
 		new_task->map = vm_map_fork(parent_task->map);
 	else
 		new_task->map = vm_map_create(pmap_create(0),
-					round_page(VM_MIN_ADDRESS),
-					trunc_page(VM_MAX_ADDRESS), TRUE);
+					round_page_32(VM_MIN_ADDRESS),
+					trunc_page_32(VM_MAX_ADDRESS), TRUE);
 
 	mutex_init(&new_task->lock, ETAP_THREAD_TASK_NEW);
 	queue_init(&new_task->thr_acts);
@@ -371,6 +379,8 @@ task_create_local(
 	new_task->syscalls_mach = 0;
 	new_task->syscalls_unix=0;
 	new_task->csw=0;
+	new_task->taskFeatures[0] = 0;				/* Init task features */
+	new_task->taskFeatures[1] = 0;				/* Init task features */
 	new_task->dynamic_working_set = 0;
 	
 	task_working_set_create(new_task, TWS_SMALL_HASH_LINE_COUNT, 
@@ -379,6 +389,10 @@ task_create_local(
 #ifdef MACH_BSD
 	new_task->bsd_info = 0;
 #endif /* MACH_BSD */
+
+#ifdef __ppc__
+	if(per_proc_info[0].pf.Available & pf64Bit) new_task->taskFeatures[0] |= tf64BitData;	/* If 64-bit machine, show we have 64-bit registers at least */
+#endif
 
 #if	TASK_SWAPPER
 	new_task->swap_state = TASK_SW_IN;
@@ -509,6 +523,10 @@ task_deallocate(
 	/* task_terminate guarantees that this task is off the list */
 	assert((task->swap_state & TASK_SW_ELIGIBLE) == 0);
 #endif	/* TASK_SWAPPER */
+
+	if(task->dynamic_working_set)
+		tws_hash_destroy((tws_hash_t)task->dynamic_working_set);
+
 
 	eml_task_deallocate(task);
 
@@ -708,14 +726,22 @@ task_terminate_internal(
 
 	shared_region_mapping_dealloc(task->system_shared_region);
 
+	/*
+	 * Flush working set here to avoid I/O in reaper thread
+	 */
 	if(task->dynamic_working_set)
-		tws_hash_destroy((tws_hash_t)task->dynamic_working_set);
+		tws_hash_ws_flush((tws_hash_t)
+				task->dynamic_working_set);
 
 	/*
 	 * We no longer need to guard against being aborted, so restore
 	 * the previous interruptible state.
 	 */
 	thread_interrupt_level(interrupt_save);
+
+#if __ppc__
+    perfmon_release_facility(task); // notify the perfmon facility
+#endif
 
 	/*
 	 * Get rid of the task active reference on itself.

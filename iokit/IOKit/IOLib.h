@@ -3,19 +3,22 @@
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
+ * Copyright (c) 1999-2003 Apple Computer, Inc.  All Rights Reserved.
  * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this
+ * file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
  * 
  * @APPLE_LICENSE_HEADER_END@
  */
@@ -33,6 +36,8 @@
 #error IOLib.h is for kernel use only
 #endif
 
+#include <sys/cdefs.h>
+
 #include <sys/appleapiopts.h>
 
 #include <IOKit/system.h>
@@ -43,9 +48,7 @@
 
 #include <libkern/OSAtomic.h>
 
-#ifdef __cplusplus
-extern "C" {
-#endif
+__BEGIN_DECLS
 
 #include <kern/thread_call.h>
 #include <kern/clock.h>
@@ -142,6 +145,78 @@ void IOFreePageable(void * address, vm_size_t size);
  */
 #define IONew(type,number)        (type*)IOMalloc(sizeof(type) * (number) )
 #define IODelete(ptr,type,number) IOFree( (ptr) , sizeof(type) * (number) )
+
+/////////////////////////////////////////////////////////////////////////////
+//
+//
+//	These functions are now implemented in IOMapper.cpp
+//
+//
+/////////////////////////////////////////////////////////////////////////////
+
+/*! @function IOMappedRead8
+    @abstract Read one byte from the desired "Physical" IOSpace address.
+    @discussion Read one byte from the desired "Physical" IOSpace address.  This function allows the developer to read an address returned from any memory descriptor's getPhysicalSegment routine.  It can then be used by segmenting a physical page slightly to tag the physical page with its kernel space virtual address.  
+    @param address The desired address, as returned by IOMemoryDescriptor::getPhysicalSegment.
+    @result Data contained at that location */
+
+UInt8 IOMappedRead8(IOPhysicalAddress address);
+
+/*! @function IOMappedRead16
+    @abstract Read two bytes from the desired "Physical" IOSpace address.
+    @discussion Read two bytes from the desired "Physical" IOSpace address.  This function allows the developer to read an address returned from any memory descriptor's getPhysicalSegment routine.  It can then be used by segmenting a physical page slightly to tag the physical page with its kernel space virtual address.  
+    @param address The desired address, as returned by IOMemoryDescriptor::getPhysicalSegment.
+    @result Data contained at that location */
+
+UInt16 IOMappedRead16(IOPhysicalAddress address);
+
+/*! @function IOMappedRead32
+    @abstract Read four bytes from the desired "Physical" IOSpace address.
+    @discussion Read four bytes from the desired "Physical" IOSpace address.  This function allows the developer to read an address returned from any memory descriptor's getPhysicalSegment routine.  It can then be used by segmenting a physical page slightly to tag the physical page with its kernel space virtual address.  
+    @param address The desired address, as returned by IOMemoryDescriptor::getPhysicalSegment.
+    @result Data contained at that location */
+
+UInt32 IOMappedRead32(IOPhysicalAddress address);
+
+/*! @function IOMappedRead64
+    @abstract Read eight bytes from the desired "Physical" IOSpace address.
+    @discussion Read eight bytes from the desired "Physical" IOSpace address.  This function allows the developer to read an address returned from any memory descriptor's getPhysicalSegment routine.  It can then be used by segmenting a physical page slightly to tag the physical page with its kernel space virtual address.  
+    @param address The desired address, as returned by IOMemoryDescriptor::getPhysicalSegment.
+    @result Data contained at that location */
+
+UInt64 IOMappedRead64(IOPhysicalAddress address);
+
+/*! @function IOMappedWrite8
+    @abstract Write one byte to the desired "Physical" IOSpace address.
+    @discussion Write one byte to the desired "Physical" IOSpace address.  This function allows the developer to write to an address returned from any memory descriptor's getPhysicalSegment routine.
+    @param address The desired address, as returned by IOMemoryDescriptor::getPhysicalSegment.
+    @param value Data to be writen to the desired location */
+
+void IOMappedWrite8(IOPhysicalAddress address, UInt8 value);
+
+/*! @function IOMappedWrite16
+    @abstract Write two bytes to the desired "Physical" IOSpace address.
+    @discussion Write two bytes to the desired "Physical" IOSpace address.  This function allows the developer to write to an address returned from any memory descriptor's getPhysicalSegment routine.
+    @param address The desired address, as returned by IOMemoryDescriptor::getPhysicalSegment.
+    @param value Data to be writen to the desired location */
+
+void IOMappedWrite16(IOPhysicalAddress address, UInt16 value);
+
+/*! @function IOMappedWrite32
+    @abstract Write four bytes to the desired "Physical" IOSpace address.
+    @discussion Write four bytes to the desired "Physical" IOSpace address.  This function allows the developer to write to an address returned from any memory descriptor's getPhysicalSegment routine.
+    @param address The desired address, as returned by IOMemoryDescriptor::getPhysicalSegment.
+    @param value Data to be writen to the desired location */
+
+void IOMappedWrite32(IOPhysicalAddress address, UInt32 value);
+
+/*! @function IOMappedWrite64
+    @abstract Write eight bytes to the desired "Physical" IOSpace address.
+    @discussion Write eight bytes to the desired "Physical" IOSpace address.  This function allows the developer to write to an address returned from any memory descriptor's getPhysicalSegment routine.
+    @param address The desired address, as returned by IOMemoryDescriptor::getPhysicalSegment.
+    @param value Data to be writen to the desired location */
+
+void IOMappedWrite64(IOPhysicalAddress address, UInt64 value);
 
 /*! @function IOSetProcessorCacheMode
     @abstract Sets the processor cache mode for mapped memory.
@@ -289,8 +364,6 @@ extern mach_timespec_t IOZeroTvalspec;
 
 #endif /* __APPLE_API_OBSOLETE */
 
-#ifdef __cplusplus
-} /* extern "C" */
-#endif
+__END_DECLS
 
 #endif /* !__IOKIT_IOLIB_H */

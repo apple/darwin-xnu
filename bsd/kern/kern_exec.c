@@ -3,19 +3,22 @@
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
+ * Copyright (c) 1999-2003 Apple Computer, Inc.  All Rights Reserved.
  * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this
+ * file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
  * 
  * @APPLE_LICENSE_HEADER_END@
  */
@@ -166,7 +169,7 @@ execve(p, uap, retval)
 	vm_map_t old_map;
 	vm_map_t map;
 	int i;
-	boolean_t		new_shared_regions = FALSE;
+	boolean_t		clean_regions = FALSE;
 	union {
 		/* #! and name of interpreter */
 		char			ex_shell[SHSIZE];
@@ -532,23 +535,11 @@ again:
 	VOP_UNLOCK(vp, 0, p);
 	if(ws_cache_name) {
 		tws_handle_startup_file(task, cred->cr_uid, 
-			ws_cache_name, vp, &new_shared_regions);
-	}
-	if (new_shared_regions) {
-		shared_region_mapping_t	new_shared_region;
-		shared_region_mapping_t	old_shared_region;
-	
-		if (shared_file_create_system_region(&new_shared_region))
-			panic("couldn't create system_shared_region\n");
-
-		vm_get_shared_region(task, &old_shared_region);
-		vm_set_shared_region(task, new_shared_region);
-
-		shared_region_mapping_dealloc(old_shared_region);
+			ws_cache_name, vp, &clean_regions);
 	}
 
 	lret = load_machfile(vp, mach_header, arch_offset,
-				arch_size, &load_result, thr_act, map);
+		arch_size, &load_result, thr_act, map, clean_regions);
 
 	if (lret != LOAD_SUCCESS) {
 		error = load_return_to_errno(lret);
@@ -841,8 +832,8 @@ create_unix_stack(map, user_stack, customstack, p)
 
 	p->user_stack = user_stack;
 	if (!customstack) {
-		size = round_page(unix_stack_size(p));
-		addr = trunc_page(user_stack - size);
+		size = round_page_64(unix_stack_size(p));
+		addr = trunc_page_32(user_stack - size);
 		return (vm_allocate(map,&addr, size, FALSE));
 	} else
 		return(KERN_SUCCESS);

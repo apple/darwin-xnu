@@ -3,19 +3,22 @@
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
+ * Copyright (c) 1999-2003 Apple Computer, Inc.  All Rights Reserved.
  * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this
+ * file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
  * 
  * @APPLE_LICENSE_HEADER_END@
  */
@@ -309,7 +312,7 @@ free_old_stuff(journal *jnl)
 
     for(tr=jnl->tr_freeme; tr; tr=next) {
 		next = tr->next;
-		kmem_free(kernel_map, (vm_offset_t)tr, sizeof(transaction));
+		FREE_ZONE(tr, sizeof(transaction), M_JNL_TR);
     }
 
     jnl->tr_freeme = NULL;
@@ -507,7 +510,6 @@ update_fs_block(journal *jnl, void *block_ptr, off_t fs_block, size_t bsize)
 
     if ((ret = VOP_BWRITE(oblock_bp)) != 0) {
 		printf("jnl: update_fs_block: failed to update block %lld (ret %d)\n", fs_block,ret);
-		brelse(oblock_bp);
 		return ret;
     }
 
@@ -757,9 +759,7 @@ journal_create(struct vnode *jvp,
 		return NULL;
     }
 
-    if (kmem_alloc(kernel_map, (vm_offset_t *)&jnl, sizeof(struct journal))) {
-		return NULL;
-    }
+    MALLOC_ZONE(jnl, struct journal *, sizeof(struct journal), M_JNL_JNL, M_WAITOK);
     memset(jnl, 0, sizeof(*jnl));
 
     jnl->jdev         = jvp;
@@ -811,7 +811,7 @@ journal_create(struct vnode *jvp,
     kmem_free(kernel_map, (vm_offset_t)jnl->header_buf, phys_blksz);
   bad_kmem_alloc:
     jnl->jhdr = NULL;
-	kmem_free(kernel_map, (vm_offset_t)jnl, sizeof(struct journal));
+	FREE_ZONE(jnl, sizeof(struct journal), M_JNL_JNL);
     return NULL;
 }
 
@@ -848,9 +848,7 @@ journal_open(struct vnode *jvp,
 		return NULL;
     }
 
-    if (kmem_alloc(kernel_map, (vm_offset_t *)&jnl, sizeof(struct journal))) {
-		return NULL;
-    }
+    MALLOC_ZONE(jnl, struct journal *, sizeof(struct journal), M_JNL_JNL, M_WAITOK);
     memset(jnl, 0, sizeof(*jnl));
 
     jnl->jdev         = jvp;
@@ -989,7 +987,7 @@ journal_open(struct vnode *jvp,
 	}
     kmem_free(kernel_map, (vm_offset_t)jnl->header_buf, phys_blksz);
   bad_kmem_alloc:
-	kmem_free(kernel_map, (vm_offset_t)jnl, sizeof(struct journal));
+	FREE_ZONE(jnl, sizeof(struct journal), M_JNL_JNL);
     return NULL;    
 }
 
@@ -1044,7 +1042,7 @@ journal_close(journal *jnl)
 			if (jnl->flush) {
 				jnl->flush(jnl->flush_arg);
 			}
-	
+			tsleep((caddr_t)jnl, PRIBIO, "jnl_close", 1);
 		}
 
 		if (*start != *end) {
@@ -1084,7 +1082,7 @@ journal_close(journal *jnl)
     jnl->jhdr = (void *)0xbeefbabe;
 
     semaphore_destroy(kernel_task, jnl->jsem);
-	kmem_free(kernel_map, (vm_offset_t)jnl, sizeof(struct journal));
+	FREE_ZONE(jnl, sizeof(struct journal), M_JNL_JNL);
 }
 
 static void
@@ -1141,6 +1139,8 @@ check_free_space(journal *jnl, int desired_size)
 //	   desired_size, free_space(jnl));
     
     while (1) {
+		int old_start_empty;
+
 		if (counter++ == 5000) {
 			dump_journal(jnl);
 			panic("jnl: check_free_space: buffer flushing isn't working "
@@ -1161,6 +1161,7 @@ check_free_space(journal *jnl, int desired_size)
 		// here's where we lazily bump up jnl->jhdr->start.  we'll consume
 		// entries until there is enough space for the next transaction.
 		//
+		old_start_empty = 1;
 		simple_lock(&jnl->old_start_lock);
 		for(i=0; i < sizeof(jnl->old_start)/sizeof(jnl->old_start[0]); i++) {
 			int   counter;
@@ -1184,6 +1185,7 @@ check_free_space(journal *jnl, int desired_size)
 				continue;
 			}
 
+			old_start_empty   = 0;
 			jnl->jhdr->start  = jnl->old_start[i];
 			jnl->old_start[i] = 0;
 			if (free_space(jnl) > desired_size) {
@@ -1195,6 +1197,19 @@ check_free_space(journal *jnl, int desired_size)
 		
 		// if we bumped the start, loop and try again
 		if (i < sizeof(jnl->old_start)/sizeof(jnl->old_start[0])) {
+			continue;
+		} else if (old_start_empty) {
+			//
+			// if there is nothing in old_start anymore then we can
+			// bump the jhdr->start to be the same as active_start
+			// since it is possible there was only one very large
+			// transaction in the old_start array.  if we didn't do
+			// this then jhdr->start would never get updated and we
+			// would wind up looping until we hit the panic at the
+			// start of the loop.
+			//
+			jnl->jhdr->start = jnl->active_start;
+			write_journal_header(jnl);
 			continue;
 		}
 
@@ -1268,16 +1283,12 @@ journal_start_transaction(journal *jnl)
 		return 0;
     }
 
-    if (kmem_alloc(kernel_map, (vm_offset_t *)&tr, sizeof(transaction))) {
-		printf("jnl: start transaction failed: no mem\n");
-		ret = ENOMEM;
-		goto bad_start;
-    }
+	MALLOC_ZONE(tr, transaction *, sizeof(transaction), M_JNL_TR, M_WAITOK);
     memset(tr, 0, sizeof(transaction));
 
     tr->tbuffer_size = jnl->tbuffer_size;
     if (kmem_alloc(kernel_map, (vm_offset_t *)&tr->tbuffer, tr->tbuffer_size)) {
-		kmem_free(kernel_map, (vm_offset_t)tr, sizeof(transaction));
+		FREE_ZONE(tr, sizeof(transaction), M_JNL_TR);
 		printf("jnl: start transaction failed: no tbuffer mem\n");
 		ret = ENOMEM;
 		goto bad_start;
@@ -1873,6 +1884,9 @@ end_transaction(transaction *tr, int force_it)
 			} else {
 				printf("jnl: end_transaction: could not find block %Ld vp 0x%x!\n",
 					   blhdr->binfo[i].bnum, blhdr->binfo[i].bp);
+				if (bp) {
+					brelse(bp);
+				}
 			}
 		}
 
@@ -1918,7 +1932,7 @@ abort_transaction(journal *jnl, transaction *tr)
 							 blhdr->binfo[i].bp->b_bufsize,
 							 NOCRED,
 							 &bp);
-			if (ret == 0 && bp != NULL) {
+			if (ret == 0) {
 				if (bp != blhdr->binfo[i].bp) {
 					panic("jnl: abort_tr: got back a different bp! (bp 0x%x should be 0x%x, jnl 0x%x\n",
 						  bp, blhdr->binfo[i].bp, jnl);
@@ -1934,6 +1948,9 @@ abort_transaction(journal *jnl, transaction *tr)
 			} else {
 				printf("jnl: abort_tr: could not find block %Ld vp 0x%x!\n",
 					   blhdr->binfo[i].bnum, blhdr->binfo[i].bp);
+				if (bp) {
+					brelse(bp);
+				}
 			}
 		}
 
@@ -1947,7 +1964,7 @@ abort_transaction(journal *jnl, transaction *tr)
     tr->tbuffer     = NULL;
     tr->blhdr       = NULL;
     tr->total_bytes = 0xdbadc0de;
-	kmem_free(kernel_map, (vm_offset_t)tr, sizeof(transaction));
+	FREE_ZONE(tr, sizeof(transaction), M_JNL_TR);
 }
 
 

@@ -1,7 +1,7 @@
 #ifdef DEBUG
 static void print_region_list(void);
 static int check_block_list(queue_entry * block_list, malloc_block * new_block);
-#endif DEBUG
+#endif /* DEBUG */
 
 
 void print_region_list(void) {
@@ -284,7 +284,7 @@ void malloc_report(void) {
                 cur_block->buffer, cur_block->block_size,
                 cur_block->block_size - sizeof(malloc_block));
         }
-#endif 0
+#endif /* 0 */
     }
 
     printf("High water mark: %ld\n", malloc_hiwater_mark);

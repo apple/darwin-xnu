@@ -3,19 +3,22 @@
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
+ * Copyright (c) 1999-2003 Apple Computer, Inc.  All Rights Reserved.
  * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this
+ * file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
  * 
  * @APPLE_LICENSE_HEADER_END@
  */
@@ -49,9 +52,10 @@ extern char *strcpy(char *dest, const char *src);
 extern void vprintf(const char *fmt, va_list args);
 extern void printf(const char *fmt, ...);
 
+extern void	bzero_nc(char* buf, int size); /* uncached-safe */
 extern void bcopy_nc(char *from, char *to, int size); /* uncached-safe */
-extern void bcopy_phys(char *from, char *to, int size); /* Physical to physical copy (ints must be disabled) */
-extern void bcopy_physvir(char *from, char *to, int size); /* Physical to physical copy virtually (ints must be disabled) */
+extern void bcopy_phys(addr64_t from, addr64_t to, int size); /* Physical to physical copy (ints must be disabled) */
+extern void bcopy_physvir(addr64_t from, addr64_t to, int size); /* Physical to physical copy virtually (ints must be disabled) */
 
 extern void ppc_init(boot_args *args);
 extern struct savearea *enterDebugger(unsigned int trap,
@@ -59,7 +63,10 @@ extern struct savearea *enterDebugger(unsigned int trap,
 				      unsigned int dsisr);
 
 extern void draw_panic_dialog(void);
-extern void ppc_vm_init(unsigned int mem_size, boot_args *args);
+extern void ppc_vm_init(uint64_t mem_size, boot_args *args);
+
+extern int ppcNull(struct savearea *);
+extern int ppcNullinst(struct savearea *);
 
 extern void autoconf(void);
 extern void machine_init(void);
@@ -72,13 +79,14 @@ extern void interrupt_init(void);
 extern void interrupt_enable(void);
 extern void interrupt_disable(void);
 extern void disable_bluebox_internal(thread_act_t act);
+extern uint64_t hid0get64(void);
 #if	MACH_KDB
 extern void db_interrupt_enable(void);
 extern void db_interrupt_disable(void);
 #endif	/* MACH_KDB */
 
 extern void phys_zero(vm_offset_t, vm_size_t);
-extern void phys_copy(vm_offset_t, vm_offset_t, vm_size_t);
+extern void phys_copy(addr64_t, addr64_t, vm_size_t);
 
 extern void Load_context(thread_t th);
 
@@ -90,6 +98,8 @@ extern void fpu_save(struct facility_context *);
 extern void vec_save(struct facility_context *);
 extern void toss_live_fpu(struct facility_context *);
 extern void toss_live_vec(struct facility_context *);
+
+extern void condStop(unsigned int, unsigned int);
 
 extern int nsec_to_processor_clock_ticks(int nsec);
 

@@ -247,6 +247,10 @@ pseudo-device	pty	128 init pty_init
 pseudo-device	vndevice	4	init	vndevice_init
 
 #
+# memory device
+pseudo-device	mdevdevice	1	init	mdevinit
+
+#
 #
 # packet filter device
 #

@@ -3,19 +3,22 @@
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
+ * Copyright (c) 1999-2003 Apple Computer, Inc.  All Rights Reserved.
  * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this
+ * file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
  * 
  * @APPLE_LICENSE_HEADER_END@
  */
@@ -115,11 +118,6 @@ extern void	kdbprinttrap(
 			int			code,
 			int			*pc,
 			int			sp);
-extern int	db_user_to_kernel_address(
-			task_t			task,
-			vm_offset_t		addr,
-			unsigned		*kaddr,
-			int			flag);
 extern void	db_write_bytes_user_space(
 			vm_offset_t		addr,
 			int			size,
@@ -250,68 +248,22 @@ kdbprinttrap(
 /*
  *
  */
-vm_offset_t db_vtophys(
+addr64_t db_vtophys(
 	pmap_t pmap,
 	vm_offset_t va)
 {
-	register mapping	*mp;
-	register vm_offset_t	pa;
+	ppnum_t pp;
+	addr64_t pa;
 
-	pa = (vm_offset_t)LRA(pmap->space,(void *)va);
+	pp = pmap_find_phys(pmap, (addr64_t)va);
 
-	if (pa != 0)
-		return(pa);
-
-	mp = hw_lock_phys_vir(pmap->space, va);
-	if((unsigned int)mp&1) {
-		return 0;
-	}
-
-	if(!mp) {								/* If it was not a normal page */
-		pa = hw_cvp_blk(pmap, va);			/* Try to convert odd-sized page (returns 0 if not found) */
-		return pa;							/* Return physical address */
-	}
-
-	mp = hw_cpv(mp);						/* Convert to virtual address */
-
-	if(!mp->physent) {
-		pa = (vm_offset_t)((mp->PTEr & -PAGE_SIZE) | ((unsigned int)va & (PAGE_SIZE-1)));
-	} else {
-		pa = (vm_offset_t)((mp->physent->pte1 & -PAGE_SIZE) | ((unsigned int)va & (PAGE_SIZE-1)));
-		hw_unlock_bit((unsigned int *)&mp->physent->phys_link, PHYS_LOCK);
-	}
+	if (pp == 0) return(0);					/* Couldn't find it */
+	
+	pa = ((addr64_t)pp << 12) | (addr64_t)(va & 0xFFF);	/* Get physical address */
 
 	return(pa);
 }
 
-int
-db_user_to_kernel_address(
-	task_t		task,
-	vm_offset_t	addr,
-	unsigned	*kaddr,
-	int		flag)
-{
-	unsigned int	sr_val, raddr;
-
-	raddr = (unsigned int)db_vtophys(task->map->pmap, trunc_page(addr));	/* Get the real address */
-
-	if (!raddr) {
-	    if (flag) {
-		db_printf("\nno memory is assigned to address %08x\n", addr);
-		db_error(0);
-		/* NOTREACHED */
-	    }
-	    return -1;
-	}
-	sr_val = SEG_REG_PROT | task->map->pmap->space
-		 | ((addr >> 8) & 0x00F00000);
-		
-	mtsr(SR_COPYIN_NUM, sr_val);
-	sync();
-	*kaddr = (addr & 0x0fffffff) | (SR_COPYIN_NUM << 28);
-	return(0);
-}
-	
 /*
  * Read bytes from task address space for debugger.
  */
@@ -323,8 +275,8 @@ db_read_bytes(
 	task_t		task)
 {
 	int		n,max;
-	unsigned	phys_dst;
-	unsigned 	phys_src;
+	addr64_t	phys_dst;
+	addr64_t 	phys_src;
 	pmap_t	pmap;
 	
 	while (size > 0) {
@@ -333,16 +285,15 @@ db_read_bytes(
 		else
 			pmap = kernel_pmap;
 
-		phys_src = (unsigned int)db_vtophys(pmap, trunc_page(addr));  
+		phys_src = db_vtophys(pmap, (vm_offset_t)addr);  
 		if (phys_src == 0) {
 			db_printf("\nno memory is assigned to src address %08x\n",
 				  addr);
 			db_error(0);
 			/* NOTREACHED */
 		}
-		phys_src = phys_src| (addr & page_mask);
 
-		phys_dst = (unsigned int)db_vtophys(kernel_pmap, trunc_page(data)); 
+		phys_dst = db_vtophys(kernel_pmap, (vm_offset_t)data); 
 		if (phys_dst == 0) {
 			db_printf("\nno memory is assigned to dst address %08x\n",
 				  data);
@@ -350,22 +301,20 @@ db_read_bytes(
 			/* NOTREACHED */
 		}
 		
-		phys_dst = phys_dst | (((vm_offset_t) data) & page_mask);
-
 		/* don't over-run any page boundaries - check src range */
-		max = ppc_round_page(phys_src) - phys_src;
+		max = round_page_64(phys_src + 1) - phys_src;
 		if (max > size)
 			max = size;
 		/* Check destination won't run over boundary either */
-		n = ppc_round_page(phys_dst) - phys_dst;
-		if (n < max)
-			max = n;
+		n = round_page_64(phys_dst + 1) - phys_dst;
+		
+		if (n < max) max = n;
 		size -= max;
 		addr += max;
 		phys_copy(phys_src, phys_dst, max);
 
 		/* resync I+D caches */
-		sync_cache(phys_dst, max);
+		sync_cache64(phys_dst, max);
 
 		phys_src += max;
 		phys_dst += max;
@@ -383,13 +332,13 @@ db_write_bytes(
 	task_t		task)
 {
 	int		n,max;
-	unsigned	phys_dst;
-	unsigned 	phys_src;
+	addr64_t	phys_dst;
+	addr64_t 	phys_src;
 	pmap_t	pmap;
 	
 	while (size > 0) {
 
-		phys_src = (unsigned int)db_vtophys(kernel_pmap, trunc_page(data)); 
+		phys_src = db_vtophys(kernel_pmap, (vm_offset_t)data); 
 		if (phys_src == 0) {
 			db_printf("\nno memory is assigned to src address %08x\n",
 				  data);
@@ -397,27 +346,24 @@ db_write_bytes(
 			/* NOTREACHED */
 		}
 		
-		phys_src = phys_src | (((vm_offset_t) data) & page_mask);
-
 		/* space stays as kernel space unless in another task */
 		if (task == NULL) pmap = kernel_pmap;
 		else pmap = task->map->pmap;
 
-		phys_dst = (unsigned int)db_vtophys(pmap, trunc_page(addr));  
+		phys_dst = db_vtophys(pmap, (vm_offset_t)addr);  
 		if (phys_dst == 0) {
 			db_printf("\nno memory is assigned to dst address %08x\n",
 				  addr);
 			db_error(0);
 			/* NOTREACHED */
 		}
-		phys_dst = phys_dst| (addr & page_mask);
 
 		/* don't over-run any page boundaries - check src range */
-		max = ppc_round_page(phys_src) - phys_src;
+		max = round_page_64(phys_src + 1) - phys_src;
 		if (max > size)
 			max = size;
 		/* Check destination won't run over boundary either */
-		n = ppc_round_page(phys_dst) - phys_dst;
+		n = round_page_64(phys_dst + 1) - phys_dst;
 		if (n < max)
 			max = n;
 		size -= max;
@@ -425,7 +371,7 @@ db_write_bytes(
 		phys_copy(phys_src, phys_dst, max);
 
 		/* resync I+D caches */
-		sync_cache(phys_dst, max);
+		sync_cache64(phys_dst, max);
 
 		phys_src += max;
 		phys_dst += max;
@@ -442,18 +388,16 @@ db_check_access(
 	unsigned int	kern_addr;
 
 	if (task == kernel_task || task == TASK_NULL) {
-	    if (kernel_task == TASK_NULL)
-	        return(TRUE);
+	    if (kernel_task == TASK_NULL)  return(TRUE);
 	    task = kernel_task;
 	} else if (task == TASK_NULL) {
-	    if (current_act() == THR_ACT_NULL)
-		return(FALSE);
+	    if (current_act() == THR_ACT_NULL) return(FALSE);
 	    task = current_act()->task;
 	}
+
 	while (size > 0) {
-	    if (db_user_to_kernel_address(task, addr, &kern_addr, 0) < 0)
-		return(FALSE);
-	    n = ppc_trunc_page(addr+PPC_PGBYTES) - addr;
+		if(!pmap_find_phys(task->map->pmap, (addr64_t)addr)) return (FALSE);	/* Fail if page not mapped */
+	    n = trunc_page_32(addr+PPC_PGBYTES) - addr;
 	    if (n > size)
 		n = size;
 	    size -= n;
@@ -469,7 +413,7 @@ db_phys_eq(
 	task_t		task2,
 	vm_offset_t	addr2)
 {
-	vm_offset_t	physa, physb;
+	addr64_t	physa, physb;
 
 	if ((addr1 & (PPC_PGBYTES-1)) != (addr2 & (PPC_PGBYTES-1)))	/* Is byte displacement the same? */
 		return FALSE;
@@ -480,14 +424,24 @@ db_phys_eq(
 		task1 = current_act()->task;				/* If so, use that one */
 	}
 	
-	if(!(physa = db_vtophys(task1->map->pmap, trunc_page(addr1)))) return FALSE;	/* Get real address of the first */
-	if(!(physb = db_vtophys(task2->map->pmap, trunc_page(addr2)))) return FALSE;	/* Get real address of the second */
+	if(!(physa = db_vtophys(task1->map->pmap, (vm_offset_t)trunc_page_32(addr1)))) return FALSE;	/* Get real address of the first */
+	if(!(physb = db_vtophys(task2->map->pmap, (vm_offset_t)trunc_page_32(addr2)))) return FALSE;	/* Get real address of the second */
 	
 	return (physa == physb);						/* Check if they are equal, then return... */
 }
 
 #define DB_USER_STACK_ADDR		(0xc0000000)
 #define DB_NAME_SEARCH_LIMIT		(DB_USER_STACK_ADDR-(PPC_PGBYTES*3))
+
+boolean_t	db_phys_cmp(
+				vm_offset_t a1, 
+				vm_offset_t a2, 
+				vm_size_t s1) {
+
+	db_printf("db_phys_cmp: not implemented\n");
+	return 0;
+}
+
 
 int
 db_search_null(
@@ -500,65 +454,37 @@ db_search_null(
 	register unsigned vaddr;
 	register unsigned *kaddr;
 
-	kaddr = (unsigned *)*skaddr;
-	for (vaddr = *svaddr; vaddr > evaddr; ) {
-	    if (vaddr % PPC_PGBYTES == 0) {
-		vaddr -= sizeof(unsigned);
-		if (db_user_to_kernel_address(task, vaddr, skaddr, 0) < 0)
-		    return(-1);
-		kaddr = (unsigned *)*skaddr;
-	    } else {
-		vaddr -= sizeof(unsigned);
-		kaddr--;
-	    }
-	    if ((*kaddr == 0) ^ (flag  == 0)) {
-		*svaddr = vaddr;
-		*skaddr = (unsigned)kaddr;
-		return(0);
-	    }
-	}
+	db_printf("db_search_null: not implemented\n");
+
 	return(-1);
 }
+
+unsigned char *getProcName(struct proc *proc);
 
 void
 db_task_name(
 	task_t		task)
 {
-	register char *p;
+	register unsigned char *p;
 	register int n;
 	unsigned int vaddr, kaddr;
+	unsigned char tname[33];
+	int i;
 
-	vaddr = DB_USER_STACK_ADDR;
-	kaddr = 0;
-
-	/*
-	 * skip nulls at the end
-	 */
-	if (db_search_null(task, &vaddr, DB_NAME_SEARCH_LIMIT, &kaddr, 0) < 0) {
-	    db_printf(DB_NULL_TASK_NAME);
-	    return;
+	p = 0;
+	tname[0] = 0;
+	
+	if(task->bsd_info) p = getProcName((struct proc *)(task->bsd_info));	/* Point to task name */
+	
+	if(p) {
+		for(i = 0; i < 32; i++) {			/* Move no more than 32 bytes */
+			tname[i] = p[i];
+			if(p[i] == 0) break;
+		}
+		tname[i] = 0;
+		db_printf("%s", tname);
 	}
-	/*
-	 * search start of args
-	 */
-	if (db_search_null(task, &vaddr, DB_NAME_SEARCH_LIMIT, &kaddr, 1) < 0) {
-	    db_printf(DB_NULL_TASK_NAME);
-	    return;
-	}
-
-	n = DB_TASK_NAME_LEN-1;
-	p = (char *)kaddr + sizeof(unsigned);
-	for (vaddr += sizeof(int); vaddr < DB_USER_STACK_ADDR && n > 0; 
-							vaddr++, p++, n--) {
-	    if (vaddr % PPC_PGBYTES == 0) {
-		if (db_user_to_kernel_address(task, vaddr, &kaddr, 0) <0)
-			return;
-		p = (char*)kaddr;
-	    }
-	    db_printf("%c", (*p < ' ' || *p > '~')? ' ': *p);
-	}
-	while (n-- >= 0)	/* compare with >= 0 for one more space */
-	    db_printf(" ");
+	else db_printf("no name");
 }
 
 void

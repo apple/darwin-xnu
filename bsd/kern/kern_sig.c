@@ -3,19 +3,22 @@
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
+ * Copyright (c) 1999-2003 Apple Computer, Inc.  All Rights Reserved.
  * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this
+ * file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
  * 
  * @APPLE_LICENSE_HEADER_END@
  */
@@ -287,6 +290,8 @@ sigaction(p, uap, retval)
 			sa->sa_flags |= SA_SIGINFO;
 		if (ps->ps_signodefer & bit)
 			sa->sa_flags |= SA_NODEFER;
+		if (ps->ps_64regset & bit)
+			sa->sa_flags |= SA_64REGSET;
 		if ((signum == SIGCHLD) && (p->p_flag & P_NOCLDSTOP))
 			sa->sa_flags |= SA_NOCLDSTOP;
 		if ((signum == SIGCHLD) && (p->p_flag & P_NOCLDWAIT))
@@ -430,6 +435,10 @@ setsigvec(p, signum, sa)
 		ps->ps_siginfo |= bit;
 	else
 		ps->ps_siginfo &= ~bit;
+	if (sa->sa_flags & SA_64REGSET)
+		ps->ps_64regset |= bit;
+	else
+		ps->ps_64regset &= ~bit;
 	if ((sa->sa_flags & SA_RESTART) == 0)
 		ps->ps_sigintr |= bit;
 	else
@@ -2130,6 +2139,7 @@ issignal(p)
 				do_bsdexception(EXC_SOFTWARE, EXC_SOFT_SIGNAL, signum);
 				signal_lock(p);
 			} else {
+//				panic("Unsupportef gdb option \n");;
 				pp->si_pid = p->p_pid;
 				pp->si_status = p->p_xstat;
 				pp->si_code = CLD_TRAPPED;

@@ -3,19 +3,22 @@
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
+ * Copyright (c) 1999-2003 Apple Computer, Inc.  All Rights Reserved.
  * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this
+ * file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
  * 
  * @APPLE_LICENSE_HEADER_END@
  */
@@ -1587,7 +1590,12 @@ loop:
 
 		// restart our whole search if this guy is locked
 		// or being reclaimed.
-		if (cp == NULL || vp->v_flag & (VXLOCK|VORECLAIM)) {
+		// XXXdbg - at some point this should go away or we
+		//          need to change all file systems to have
+		//          this same code.  vget() should never return
+		//          success if either of these conditions is
+		//          true.
+		if (vp->v_tag != VT_HFS || cp == NULL) {
 			simple_unlock(&vp->v_interlock);
 			continue;
 		}
@@ -1841,7 +1849,11 @@ hfs_sysctl(name, namelen, oldp, oldlenp, newp, newlen, p)
 		struct cat_attr jnl_attr, jinfo_attr;
 		struct cat_fork jnl_fork, jinfo_fork;
 		void *jnl = NULL;
-		
+
+		/* Only root can enable journaling */
+        if (current_proc()->p_ucred->cr_uid != 0) {
+			return (EPERM);
+		}
 		hfsmp = VTOHFS(vp);
 		if (hfsmp->hfs_fs_ronly) {
 			return EROFS;
@@ -1923,6 +1935,10 @@ hfs_sysctl(name, namelen, oldp, oldlenp, newp, newlen, p)
 		void *jnl;
 		int retval;
 		
+		/* Only root can disable journaling */
+        if (current_proc()->p_ucred->cr_uid != 0) {
+			return (EPERM);
+		}
 		hfsmp = VTOHFS(vp);
 		if (hfsmp->jnl == NULL) {
 			return EINVAL;

@@ -3,19 +3,22 @@
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
+ * Copyright (c) 1999-2003 Apple Computer, Inc.  All Rights Reserved.
  * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this
+ * file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
  * 
  * @APPLE_LICENSE_HEADER_END@
  */
@@ -59,7 +62,7 @@ LEXT(Load_context)
 /*
  * Since this is the first thread, we came in on the interrupt
  * stack. The first thread never returns, so there is no need to
- e worry about saving its frame, hence we can reset the istackptr
+ * worry about saving its frame, hence we can reset the istackptr
  * back to the saved_state structure at it's top
  */
 			
@@ -79,19 +82,16 @@ LEXT(Load_context)
 			lwz		r12,PP_ACTIVE_STACKS(r6)
 			lwz		r1,THREAD_KERNEL_STACK(r3)
 			lwz		r9,THREAD_TOP_ACT(r3)			/* Point to the active activation */
-			mtsprg		1,r9
+			mtsprg	1,r9
 			stw		r1,0(r12)
 			li		r0,0							/* Clear a register */
-			lwz		r8,ACT_MACT_PCB(r9)				/* Get the savearea used */
-			rlwinm	r7,r8,0,0,19					/* Switch to savearea base */
-			lwz		r11,SAVprev(r8)					/* Get the previous savearea */
+			lwz		r3,ACT_MACT_PCB(r9)				/* Get the savearea used */
 			mfmsr	r5								/* Since we are passing control, get our MSR values */
-			lwz		r1,saver1(r8)					/* Load new stack pointer */
-			stw		r0,saver3(r8)					/* Make sure we pass in a 0 for the continuation */
-			lwz		r7,SACvrswap(r7)				/* Get the translation from virtual to real */
+			lwz		r11,SAVprev+4(r3)				/* Get the previous savearea */
+			lwz		r1,saver1+4(r3)					/* Load new stack pointer */
+			stw		r0,saver3+4(r3)					/* Make sure we pass in a 0 for the continuation */
 			stw		r0,FM_BACKPTR(r1)				/* zero backptr */
-			stw		r5,savesrr1(r8)					/* Pass our MSR to the new guy */
-			xor		r3,r7,r8						/* Get the physical address of the new context save area */
+			stw		r5,savesrr1+4(r3)				/* Pass our MSR to the new guy */
 			stw		r11,ACT_MACT_PCB(r9)			/* Unstack our savearea */
 			b		EXT(exception_exit)				/* Go end it all... */
 	
@@ -119,19 +119,18 @@ LEXT(Call_continuation)
 /*
  * Get the old kernel stack, and store into the thread structure.
  * See if a continuation is supplied, and skip state save if so.
- * NB. Continuations are no longer used, so this test is omitted,
- * as should the second argument, but it is in generic code.
- * We always save state. This does not hurt even if continuations
- * are put back in.
+ *
+ * Note that interrupts must be disabled before we get here (i.e., splsched)
  */
 
 /* 			Context switches are double jumps.  We pass the following to the
  *			context switch firmware call:
  *
- *			R3  = switchee's savearea
+ *			R3  = switchee's savearea, virtual if continuation, low order physical for full switch
  *			R4  = old thread
  *			R5  = new SRR0
  *			R6  = new SRR1
+ *			R7  = high order physical address of savearea for full switch
  *
  *			savesrr0 is set to go to switch_in
  *			savesrr1 is set to uninterruptible with translation on
@@ -143,169 +142,169 @@ LEXT(Call_continuation)
 
 LEXT(Switch_context)
 
+			lwz		r11,THREAD_KERNEL_STACK(r5)		; Get the new stack pointer
 			mfsprg	r12,0							; Get the per_proc block
 			lwz		r10,PP_ACTIVE_STACKS(r12)		; Get the pointer to the current stack
 #if DEBUG
-			lwz		r11,PP_ISTACKPTR(r12)			; (DEBUG/TRACE) make sure we are not
-			mr.		r11,r11							; (DEBUG/TRACE) on the interrupt
-			bne+	notonintstack					; (DEBUG/TRACE) stack
+			lwz		r0,PP_ISTACKPTR(r12)			; (DEBUG/TRACE) make sure we are not
+			mr.		r0,r0							; (DEBUG/TRACE) on the interrupt
+			bne++	notonintstack					; (DEBUG/TRACE) stack
 			BREAKPOINT_TRAP
 notonintstack:
 #endif	
- 			stw		r4,THREAD_CONTINUATION(r3)		; Set continuation into the thread
-			cmpwi	cr1,r4,0						; used waaaay down below 
-			lwz		r7,0(r10)						; Get the current stack
-/*
- * Make the new thread the current thread.
- */
-	
-			stw		r7,THREAD_KERNEL_STACK(r3)		; Remember the current stack in the thread (do not need???)
-			stw		r5,	PP_ACTIVE_THREAD(r12)		; Make the new thread current
-			
-			lwz		r11,THREAD_KERNEL_STACK(r5)		; Get the new stack pointer
 		
-			lwz		r5,THREAD_TOP_ACT(r5)			; Get the new activation
-			mtsprg		1,r5
-			lwz		r7,CTHREAD_SELF(r5)				; Pick up the user assist word
-			lwz		r8,ACT_MACT_PCB(r5)				; Get the PCB for the new guy
-			
 #if 0
-			lwz		r0,SAVflags(r8)					; (TEST/DEBUG)
-			rlwinm	r0,r0,24,24,31					; (TEST/DEBUG)
-			cmplwi	r0,SAVempty						; (TEST/DEBUG)
-			bne+	nnnn							; (TEST/DEBUG)
-			b		.								; (TEST/DEBUG)
-nnnn:												; (TEST/DEBUG)
-#endif			
-			
+			lwz		r8,lgPPStart(0)					; (TEST/DEBUG) Get the start of per_procs
+			sub		r7,r12,r8						; (TEST/DEBUG) Find offset to our per_proc
+			xori	r7,r7,0x1000					; (TEST/DEBUG) Switch to other proc
+			add		r8,r8,r7						; (TEST/DEBUG) Switch to it
+			lwz		r8,PP_ACTIVE_THREAD(r8)			; (TEST/DEBUG) Get the other active thread
+			cmplw	r8,r5							; (TEST/DEBUG) Trying to switch to an active thread?
+			bne++	snively							; (TEST/DEBUG) Nope...
+			BREAKPOINT_TRAP							; (TEST/DEBUG) Get to debugger...
+
+snively:											; (TEST/DEBUG)
+#endif
+
+			stw		r5,PP_ACTIVE_THREAD(r12)		; Make the new thread current
+ 			lwz		r5,THREAD_TOP_ACT(r5)			; Get the new activation
+			stw		r4,THREAD_CONTINUATION(r3)		; Set continuation into the thread
+			lwz		r7,0(r10)						; Get the current stack
+			cmpwi	cr1,r4,0						; Remeber if there is a continuation - used waaaay down below 
 			stw		r11,0(r10)						; Save the new kernel stack address
-			stw		r7,UAW(r12)						; Save the assist word for the "ultra fast path"
-			
+
+			lwz		r8,ACT_MACT_PCB(r5)				; Get the PCB for the new guy
+			lwz		r9,cioSpace(r5)					; Get copyin/out address space
+			stw		r7,THREAD_KERNEL_STACK(r3)		; Remember the current stack in the thread (do not need???)
+			mtsprg	1,r5							; Set the current activation pointer
+			lwz		r7,CTHREAD_SELF(r5)				; Pick up the user assist word
 			lwz		r11,ACT_MACT_BTE(r5)			; Get BlueBox Task Environment
-		
+			lwz		r6,cioRelo(r5)					; Get copyin/out relocation top
+			lwz		r2,cioRelo+4(r5)				; Get copyin/out relocation bottom
+			
+			stw		r7,UAW(r12)						; Save the assist word for the "ultra fast path"
+
 			lwz		r7,ACT_MACT_SPF(r5)				; Get the special flags
 			
-			lwz		r10,ACT_KLOADED(r5)
+			lwz		r0,ACT_KLOADED(r5)
+			sth		r9,ppCIOmp+mpSpace(r12)			; Save the space
+			stw		r6,ppCIOmp+mpNestReloc(r12)		; Save top part of physical address
+			stw		r2,ppCIOmp+mpNestReloc+4(r12)	; Save bottom part of physical address
+			lwz		r10,PP_ACTIVE_KLOADED(r12)		; Get kernel loaded flag address
+			subfic	r0,r0,0							; Get bit 0 to 0 if not kloaded, 1 otherwise
+			lwz		r2,traceMask(0)					; Get the enabled traces
 			stw		r11,ppbbTaskEnv(r12)			; Save the bb task env
-			li		r0,0
-			cmpwi	cr0,r10,0
-			lwz		r10,PP_ACTIVE_KLOADED(r12)
+			srawi	r0,r0,31						; Get 0 if not kloaded, ffffffff otherwise
 			stw		r7,spcFlags(r12)				; Set per_proc copy of the special flags
-			beq		cr0,.L_sw_ctx_not_kld
+			and		r0,r5,r0						; Get 0 if not kloaded, activation otherwise
 		
-			stw		r5,0(r10)
-			b		.L_sw_ctx_cont
-
-.L_sw_ctx_not_kld:	
-			stw		r0,0(r10)						/* act_kloaded = 0 */
-
-.L_sw_ctx_cont:	
-			lis		r10,hi16(EXT(trcWork))			; Get top of trace mask
-			rlwinm	r7,r8,0,0,19					/* Switch to savearea base */
-			ori		r10,r10,lo16(EXT(trcWork))		; Get bottom of mask
-			lwz		r11,SAVprev(r8)					/* Get the previous of the switchee's savearea */
-			lwz		r10,traceMask(r10)				; Get the enabled traces
+			mr.		r2,r2							; Any tracing going on?
+			stw		r0,0(r10)						; Set the kloaded stuff
 			lis		r0,hi16(CutTrace)				; Trace FW call
-			mr.		r10,r10							; Any tracing going on?
+			lwz		r11,SAVprev+4(r8)				; Get the previous of the switchee savearea 
 			ori		r0,r0,lo16(CutTrace)			; Trace FW call
-			beq+	cswNoTrc						; No trace today, dude...
 			mr		r10,r3							; Save across trace
+			beq++	cswNoTrc						; No trace today, dude...
 			lwz		r2,THREAD_TOP_ACT(r3)			; Trace old activation
 			mr		r3,r11							; Trace prev savearea
 			sc										; Cut trace entry of context switch
 			mr		r3,r10							; Restore
 			
-cswNoTrc:	mfmsr	r6								/* Get the MSR because the switched to thread should inherit it */
-			lwz		r7,SACvrswap(r7)				/* Get the translation from virtual to real */
-			stw		r11,ACT_MACT_PCB(r5)			/* Dequeue the savearea we're switching to */
-
-			rlwinm	r6,r6,0,MSR_FP_BIT+1,MSR_FP_BIT-1	/* Turn off the FP */
-			lwz		r2,curctx(r5)					; Grab our current context pointer
-			rlwinm	r6,r6,0,MSR_VEC_BIT+1,MSR_VEC_BIT-1	/* Turn off the vector */
-			mr		r4,r3							/* Save our old thread to pass back */
-			
-			lhz		r0,PP_CPU_NUMBER(r12)			; Get our CPU number
+cswNoTrc:	lwz		r2,curctx(r5)					; Grab our current context pointer
 			lwz		r10,FPUowner(r12)				; Grab the owner of the FPU			
 			lwz		r9,VMXowner(r12)				; Grab the owner of the vector
+			lhz		r0,PP_CPU_NUMBER(r12)			; Get our CPU number
+			mfmsr	r6								; Get the MSR because the switched to thread should inherit it 
+			stw		r11,ACT_MACT_PCB(r5)			; Dequeue the savearea we are switching to
+			li		r0,1							; Get set to hold off quickfret
+
+			rlwinm	r6,r6,0,MSR_FP_BIT+1,MSR_FP_BIT-1	; Turn off the FP
 			cmplw	r10,r2							; Do we have the live float context?
 			lwz		r10,FPUlevel(r2)				; Get the live level
+			mr		r4,r3							; Save our old thread to pass back 
 			cmplw	cr5,r9,r2						; Do we have the live vector context?		
-			bne+	cswnofloat						; Float is not ours...
+			rlwinm	r6,r6,0,MSR_VEC_BIT+1,MSR_VEC_BIT-1	; Turn off the vector
+			stw		r0,holdQFret(r12)				; Make sure we hold off releasing quickfret
+			bne++	cswnofloat						; Float is not ours...
 			
 			cmplw	r10,r11							; Is the level the same?
 			lwz		r5,FPUcpu(r2)					; Get the owning cpu
-			bne+	cswnofloat						; Level not the same, this is not live...
+			bne++	cswnofloat						; Level not the same, this is not live...
 			
 			cmplw	r5,r0							; Still owned by this cpu?
 			lwz		r10,FPUsave(r2)					; Get the level
-			bne+	cswnofloat						; CPU claimed by someone else...
+			bne++	cswnofloat						; CPU claimed by someone else...
 			
 			mr.		r10,r10							; Is there a savearea here?
 			ori		r6,r6,lo16(MASK(MSR_FP))		; Enable floating point
 			
-			beq-	cswnofloat						; No savearea to check...
+			beq--	cswnofloat						; No savearea to check...
 			
 			lwz		r3,SAVlevel(r10)				; Get the level
-			lwz		r5,SAVprev(r10)					; Get the previous of this savearea
+			lwz		r5,SAVprev+4(r10)				; Get the previous of this savearea
 			cmplw	r3,r11							; Is it for the current level?
 			
-			bne+	cswnofloat						; Nope...
+			bne++	cswnofloat						; Nope...
 			
 			stw		r5,FPUsave(r2)					; Pop off this savearea
-			rlwinm	r5,r10,0,0,19					; Move back to start of page
-			lwz		r5,SACvrswap(r5)				; Get the virtual to real conversion
-			la		r9,quickfret(r12)				; Point to the quickfret chain header					
-			xor		r5,r10,r5						; Convert savearea address to real
+
+			rlwinm	r3,r10,0,0,19					; Move back to start of page
+
+			lwz		r5,quickfret(r12)				; Get the first in quickfret list (top)					
+			lwz		r9,quickfret+4(r12)				; Get the first in quickfret list (bottom)					
+			lwz		r7,SACvrswap(r3)				; Get the virtual to real conversion (top)
+			lwz		r3,SACvrswap+4(r3)				; Get the virtual to real conversion (bottom)
+			stw		r5,SAVprev(r10)					; Link the old in (top)					
+			stw		r9,SAVprev+4(r10)				; Link the old in (bottom)					
+			xor		r3,r10,r3						; Convert to physical
+			stw		r7,quickfret(r12)				; Set the first in quickfret list (top)					
+			stw		r3,quickfret+4(r12)				; Set the first in quickfret list (bottom)					
 
 #if FPVECDBG
 			lis		r0,hi16(CutTrace)				; (TEST/DEBUG)
+			mr		r7,r2							; (TEST/DEBUG)
 			li		r2,0x4401						; (TEST/DEBUG)
 			oris	r0,r0,lo16(CutTrace)			; (TEST/DEBUG)
 			sc										; (TEST/DEBUG)
 			lhz		r0,PP_CPU_NUMBER(r12)			; (TEST/DEBUG)
+			mr		r2,r7							; (TEST/DEBUG) 
 #endif	
 
-;
-;			Note: we need to do the atomic operation here because, even though
-;			it is impossible with the current implementation, that we may take a
-;			PTE miss between the load of the quickfret anchor and the subsequent
-;			store.  The interrupt handler will dequeue everything on the list and
-;			we could end up using stale data.  I do not like doing this...
-;
-
-cswfpudq:	lwarx	r3,0,r9							; Pick up the old chain head
-			stw		r3,SAVprev(r10)					; Move it to the current guy
-			stwcx.	r5,0,r9							; Save it
-			bne-	cswfpudq						; Someone chaged the list...
-
-cswnofloat:	bne+	cr5,cswnovect					; Vector is not ours...
+cswnofloat:	bne++	cr5,cswnovect					; Vector is not ours...
 
 			lwz		r10,VMXlevel(r2)				; Get the live level
 			
 			cmplw	r10,r11							; Is the level the same?
 			lwz		r5,VMXcpu(r2)					; Get the owning cpu
-			bne+	cswnovect						; Level not the same, this is not live...
+			bne++	cswnovect						; Level not the same, this is not live...
 			
 			cmplw	r5,r0							; Still owned by this cpu?
 			lwz		r10,VMXsave(r2)					; Get the level
-			bne+	cswnovect						; CPU claimed by someone else...
+			bne++	cswnovect						; CPU claimed by someone else...
 			
 			mr.		r10,r10							; Is there a savearea here?
 			oris	r6,r6,hi16(MASK(MSR_VEC))		; Enable vector
 			
-			beq-	cswnovect						; No savearea to check...
+			beq--	cswnovect						; No savearea to check...
 			
 			lwz		r3,SAVlevel(r10)				; Get the level
-			lwz		r5,SAVprev(r10)					; Get the previous of this savearea
+			lwz		r5,SAVprev+4(r10)				; Get the previous of this savearea
 			cmplw	r3,r11							; Is it for the current level?
 			
-			bne+	cswnovect						; Nope...
+			bne++	cswnovect						; Nope...
 			
 			stw		r5,VMXsave(r2)					; Pop off this savearea
-			rlwinm	r5,r10,0,0,19					; Move back to start of page
-			lwz		r5,SACvrswap(r5)				; Get the virtual to real conversion
-			la		r9,quickfret(r12)				; Point to the quickfret chain header					
-			xor		r5,r10,r5						; Convert savearea address to real
+			rlwinm	r3,r10,0,0,19					; Move back to start of page
+
+			lwz		r5,quickfret(r12)				; Get the first in quickfret list (top)					
+			lwz		r9,quickfret+4(r12)				; Get the first in quickfret list (bottom)					
+			lwz		r2,SACvrswap(r3)				; Get the virtual to real conversion (top)
+			lwz		r3,SACvrswap+4(r3)				; Get the virtual to real conversion (bottom)
+			stw		r5,SAVprev(r10)					; Link the old in (top)					
+			stw		r9,SAVprev+4(r10)				; Link the old in (bottom)					
+			xor		r3,r10,r3						; Convert to physical
+			stw		r2,quickfret(r12)				; Set the first in quickfret list (top)					
+			stw		r3,quickfret+4(r12)				; Set the first in quickfret list (bottom)					
 
 #if FPVECDBG
 			lis		r0,hi16(CutTrace)				; (TEST/DEBUG)
@@ -314,31 +313,23 @@ cswnofloat:	bne+	cr5,cswnovect					; Vector is not ours...
 			sc										; (TEST/DEBUG)
 #endif	
 
-;
-;			Note: we need to do the atomic operation here because, even though
-;			it is impossible with the current implementation, that we may take a
-;			PTE miss between the load of the quickfret anchor and the subsequent
-;			store.  The interrupt handler will dequeue everything on the list and
-;			we could end up using stale data.  I do not like doing this...
-;
+cswnovect:	li		r0,0							; Get set to release quickfret holdoff	
+			rlwinm	r11,r8,0,0,19					; Switch to savearea base
+			lis		r9,hi16(EXT(switch_in))			; Get top of switch in routine 
+			lwz		r5,savesrr0+4(r8)				; Set up the new SRR0
+			lwz		r7,SACvrswap(r11)				; Get the high order V to R translation
+			lwz		r11,SACvrswap+4(r11)			; Get the low order V to R translation
+			ori		r9,r9,lo16(EXT(switch_in))		; Bottom half of switch in 
+			stw		r0,holdQFret(r12)				; Make sure we release quickfret holdoff
+			stw		r9,savesrr0+4(r8)				; Make us jump to the switch in routine 
 
-cswvecdq:	lwarx	r3,0,r9							; Pick up the old chain head
-			stw		r3,SAVprev(r10)					; Move it to the current guy
-			stwcx.	r5,0,r9							; Save it
-			bne-	cswvecdq						; Someone chaged the list...
-
-cswnovect:	lis		r9,hi16(EXT(switch_in))			/* Get top of switch in routine */
-			lwz		r5,savesrr0(r8)					/* Set up the new SRR0 */
-			ori		r9,r9,lo16(EXT(switch_in))		/* Bottom half of switch in */
-			lis		r0,hi16(SwitchContextCall)		/* Top part of switch context */
-			stw		r9,savesrr0(r8)					/* Make us jump to the switch in routine */
-			
-			li		r10,MSR_SUPERVISOR_INT_OFF		/* Get the switcher's MSR */
 			lwz		r9,SAVflags(r8)					/* Get the flags */
-			stw		r10,savesrr1(r8)				/* Set up for switch in */
-			rlwinm	r9,r9,0,15,13					/* Reset the syscall flag */
+			lis		r0,hi16(SwitchContextCall)		/* Top part of switch context */
+			li		r10,MSR_SUPERVISOR_INT_OFF		/* Get the switcher's MSR */
 			ori		r0,r0,lo16(SwitchContextCall)	/* Bottom part of switch context */
-			xor		r3,r7,r8						/* Get the physical address of the new context save area */
+			stw		r10,savesrr1+4(r8)				/* Set up for switch in */
+			rlwinm	r9,r9,0,15,13					/* Reset the syscall flag */
+			xor		r3,r11,r8						/* Get the physical address of the new context save area */
 			stw		r9,SAVflags(r8)					/* Set the flags */
 
 			bne		cr1,swtchtocont					; Switch to the continuation
@@ -360,9 +351,11 @@ cswnovect:	lis		r9,hi16(EXT(switch_in))			/* Get top of switch in routine */
 
 		
 swtchtocont:
-			stw		r5,savesrr0(r8)					; Set the pc
-			stw		r6,savesrr1(r8)					; Set the next MSR to use
-			stw		r4,saver3(r8)					; Make sure we pass back the old thread
+
+			stw		r5,savesrr0+4(r8)				; Set the pc
+			stw		r6,savesrr1+4(r8)				; Set the next MSR to use
+			stw		r4,saver3+4(r8)					; Make sure we pass back the old thread
+			mr		r3,r8							; Pass in the virtual address of savearea
 			
 			b		EXT(exception_exit)				; Blocking on continuation, toss old context...
 
@@ -375,7 +368,7 @@ swtchtocont:
  *			with translation on.  If we could, this should be done in lowmem_vectors
  *			before translation is turned on.  But we can't, dang it!
  *
- *			R3  = switcher's savearea
+ *			R3  = switcher's savearea (32-bit virtual)
  *			saver4  = old thread in switcher's save
  *			saver5  = new SRR0 in switcher's save
  *			saver6  = new SRR1 in switcher's save
@@ -388,31 +381,30 @@ swtchtocont:
 			.globl	EXT(switch_in)
 
 LEXT(switch_in)
+
+			lwz		r4,saver4+4(r3)					; Get the old thread 
+			lwz		r5,saver5+4(r3)					; Get the srr0 value 
 			
-			lwz		r4,saver4(r3)					/* Get the old thread */
-			lwz		r9,THREAD_TOP_ACT(r4)			/* Get the switched from ACT */
-			lwz		r5,saver5(r3)					/* Get the srr0 value */
-			lwz		r10,ACT_MACT_PCB(r9)			/* Get the top PCB on the old thread */
-			lwz		r6,saver6(r3)					/* Get the srr1 value */
+	 		mfsprg	r0,2							; Get feature flags 
+			lwz		r9,THREAD_TOP_ACT(r4)			; Get the switched from ACT
+			lwz		r6,saver6+4(r3)					; Get the srr1 value 
+			rlwinm.	r0,r0,0,pf64Bitb,pf64Bitb		; Check for 64-bit
+			lwz		r10,ACT_MACT_PCB(r9)			; Get the top PCB on the old thread 
 
-			stw		r3,ACT_MACT_PCB(r9)				/* Put the new one on top */
-			stw		r10,SAVprev(r3)					/* Chain on the old one */
+			stw		r3,ACT_MACT_PCB(r9)				; Put the new one on top
+			stw		r10,SAVprev+4(r3)				; Chain on the old one
 
-			mr		r3,r4							/* Pass back the old thread */
+			mr		r3,r4							; Pass back the old thread 
 
-			mtsrr0	r5								/* Set return point */
-			mtsrr1	r6								/* Set return MSR */
-			rfi										/* Jam... */
-			.long	0
-			.long	0
-			.long	0
-			.long	0
-			.long	0
-			.long	0
-			.long	0
-			.long	0
+			mtsrr0	r5								; Set return point
+			mtsrr1	r6								; Set return MSR
+			
+			bne++	siSixtyFour						; Go do 64-bit...
 
-
+			rfi										; Jam...
+			
+siSixtyFour:
+			rfid									; Jam...
 			
 /*
  * void fpu_save(facility_context ctx)
@@ -428,12 +420,14 @@ LEXT(switch_in)
 
 LEXT(fpu_save)
 			
+			lis		r2,hi16(MASK(MSR_VEC))			; Get the vector enable
+			li		r12,lo16(MASK(MSR_EE))			; Get the EE bit
+			ori		r2,r2,lo16(MASK(MSR_FP))		; Get FP
 
 			mfmsr	r0								; Get the MSR
-			rlwinm	r0,r0,0,MSR_VEC_BIT+1,MSR_VEC_BIT-1	; Force vectors off
-			rlwinm	r2,r0,0,MSR_EE_BIT+1,MSR_EE_BIT-1	; But do interrupts only for now
+			andc	r0,r0,r2						; Clear FP, VEC
+			andc	r2,r0,r12						; Clear EE
 			ori		r2,r2,MASK(MSR_FP)				; Enable the floating point feature for now also
-			rlwinm	r0,r0,0,MSR_FP_BIT+1,MSR_FP_BIT-1	; Force floating point off
 			mtmsr	r2								; Set the MSR
 			isync
 
@@ -448,7 +442,7 @@ LEXT(fpu_save)
 			mr.		r3,r12							; (TEST/DEBUG)
 			li		r2,0x6F00						; (TEST/DEBUG)
 			li		r5,0							; (TEST/DEBUG)
-			beq-	noowneryet						; (TEST/DEBUG)
+			beq--	noowneryet						; (TEST/DEBUG)
 			lwz		r4,FPUlevel(r12)				; (TEST/DEBUG)
 			lwz		r5,FPUsave(r12)					; (TEST/DEBUG)
 
@@ -461,17 +455,17 @@ noowneryet:	oris	r0,r0,lo16(CutTrace)			; (TEST/DEBUG)
 
 fsretry:	mr.		r12,r12							; Anyone own the FPU?
 			lhz		r11,PP_CPU_NUMBER(r6)			; Get our CPU number
-			beq-	fsret							; Nobody owns the FPU, no save required...
+			beq--	fsret							; Nobody owns the FPU, no save required...
 			
 			cmplw	cr1,r3,r12						; Is the specified context live?
 			
 			isync									; Force owner check first
 			
 			lwz		r9,FPUcpu(r12)					; Get the cpu that context was last on		
-			bne-	cr1,fsret						; No, it is not...
+			bne--	cr1,fsret						; No, it is not...
 			
 			cmplw	cr1,r9,r11						; Was the context for this processor? 
-			beq-	cr1,fsgoodcpu					; Facility last used on this processor...
+			beq--	cr1,fsgoodcpu					; Facility last used on this processor...
 
 			b		fsret							; Someone else claimed it...
 			
@@ -485,7 +479,7 @@ fsgoodcpu:	lwz		r3,FPUsave(r12)					; Get the current FPU savearea for the threa
 			
 			lwz		r8,SAVlevel(r3)					; Get the level this savearea is for
 			cmplw	cr1,r9,r8						; Correct level?
-			beq-	cr1,fsret						; The current level is already saved, bail out...
+			beq--	cr1,fsret						; The current level is already saved, bail out...
 
 fsneedone:	bl		EXT(save_get)					; Get a savearea for the context
 
@@ -494,78 +488,26 @@ fsneedone:	bl		EXT(save_get)					; Get a savearea for the context
 			lwz		r12,FPUowner(r6)				; Get back our thread
 			stb		r4,SAVflags+2(r3)				; Mark this savearea as a float
 			mr.		r12,r12							; See if we were disowned while away. Very, very small chance of it...
-			beq-	fsbackout						; If disowned, just toss savearea...
+			beq--	fsbackout						; If disowned, just toss savearea...
 			lwz		r4,facAct(r12)					; Get the activation associated with live context
-			mtlr	r2								; Restore return
 			lwz		r8,FPUsave(r12)					; Get the current top floating point savearea
 			stw		r4,SAVact(r3)					; Indicate the right activation for this context
 			lwz		r9,FPUlevel(r12)				; Get our current level indicator again		
 			stw		r3,FPUsave(r12)					; Set this as the most current floating point context
-			stw		r8,SAVprev(r3)					; And then chain this in front
+			stw		r8,SAVprev+4(r3)				; And then chain this in front
 
 			stw		r9,SAVlevel(r3)					; Show level in savearea
 
-;
-; 			Save the current FPU state into the PCB of the thread that owns it.
-; 
-
-			la		r11,savefp0(r3)					; Point to the 1st line
-			dcbz	0,r11							; Allocate the first savearea line 
-			
-			la		r11,savefp4(r3)					; Point to the 2nd line 
-			stfd    f0,savefp0(r3)
-			dcbz	0,r11							; Allocate it
-			stfd    f1,savefp1(r3)
-			stfd    f2,savefp2(r3)
-			la		r11,savefp8(r3)					; Point to the 3rd line 
-			stfd    f3,savefp3(r3)
-			dcbz	0,r11							; Allocate it 
-			stfd    f4,savefp4(r3)
-			stfd    f5,savefp5(r3)
-			stfd    f6,savefp6(r3)
-			la		r11,savefp12(r3)				; Point to the 4th line 
-			stfd    f7,savefp7(r3)
-			dcbz	0,r11							; Allocate it 
-			stfd    f8,savefp8(r3)
-			stfd    f9,savefp9(r3)
-			stfd    f10,savefp10(r3)
-			la		r11,savefp16(r3)				; Point to the 5th line 
-			stfd    f11,savefp11(r3)
-			dcbz	0,r11							; Allocate it 
-			stfd    f12,savefp12(r3)
-			stfd    f13,savefp13(r3)
-			stfd    f14,savefp14(r3)
-			la		r11,savefp20(r3)				; Point to the 6th line 
-			stfd    f15,savefp15(r3)
-			stfd    f16,savefp16(r3)
-			stfd    f17,savefp17(r3)
-			stfd    f18,savefp18(r3)
-			la		r11,savefp24(r3)				; Point to the 7th line 
-			stfd    f19,savefp19(r3)
-			dcbz	0,r11							; Allocate it 
-			stfd    f20,savefp20(r3)
-			stfd    f21,savefp21(r3)
-			stfd    f22,savefp22(r3)
-			la		r11,savefp28(r3)				; Point to the 8th line 
-			stfd    f23,savefp23(r3)
-			dcbz	0,r11							; Allocate it 
-			stfd    f24,savefp24(r3)
-			stfd    f25,savefp25(r3)
-			stfd    f26,savefp26(r3)
-			stfd    f27,savefp27(r3)
-			stfd    f28,savefp28(r3)
-
-			stfd    f29,savefp29(r3)
-			stfd    f30,savefp30(r3)
-			stfd    f31,savefp31(r3)
-
+            bl		fp_store						; save all 32 FPRs in the save area at r3
+			mtlr	r2								; Restore return
+            
 fsret:		mtmsr	r0								; Put interrupts on if they were and floating point off
 			isync
 
 			blr
 
-fsbackout:	mr		r12,r0							; Save the original MSR
-			b		EXT(save_ret_join)				; Toss savearea and return from there...
+fsbackout:	mr		r4,r0							; restore the original MSR
+			b		EXT(save_ret_wMSR)				; Toss savearea and return from there...
 
 /*
  * fpu_switch()
@@ -667,6 +609,7 @@ fswretry:	mr.		r22,r22							; See if there is any live FP status
 			mr		r5,r31							; (TEST/DEBUG)
 			oris	r0,r0,lo16(CutTrace)			; (TEST/DEBUG)
 			sc										; (TEST/DEBUG)
+			li		r3,0							; (TEST/DEBUG)
 #endif	
 
 			beq+	fsnosave						; Same level, so already saved...
@@ -676,16 +619,54 @@ fsmstsave:	stw		r3,FPUowner(r26)				; Kill the context now
 			eieio									; Make sure everyone sees it
 			bl		EXT(save_get)					; Go get a savearea
 
-			la		r11,savefp0(r3)					; Point to the 1st line in new savearea
-			lwz		r12,facAct(r22)					; Get the activation associated with the context
-			dcbz	0,r11							; Allocate cache
-			stw		r3,FPUsave(r22)					; Set this as the latest context savearea for the thread
+			mr.		r31,r31							; Are we saving the user state?
+			la		r15,FPUsync(r22)				; Point to the sync word
+			beq++	fswusave						; Yeah, no need for lock...
+;
+;			Here we make sure that the live context is not tossed while we are
+;			trying to push it.  This can happen only for kernel context and
+;			then only by a race with act_machine_sv_free.
+;
+;			We only need to hold this for a very short time, so no sniffing needed.
+;			If we find any change to the level, we just abandon.
+;
+fswsync:	lwarx	r19,0,r15						; Get the sync word
+			li		r0,1							; Get the lock
+			cmplwi	cr1,r19,0						; Is it unlocked?
+			stwcx.	r0,0,r15						; Store lock and test reservation
+			cror	cr0_eq,cr1_eq,cr0_eq			; Combine lost reservation and previously locked
+			bne--	fswsync							; Try again if lost reservation or locked...
 
-			stw		r30,SAVprev(r3)					; Point us to the old context
+			isync									; Toss speculation
+			
+			lwz		r0,FPUlevel(r22)				; Pick up the level again
+			li		r7,0							; Get unlock value
+			cmplw	r0,r31							; Same level?
+			beq++	fswusave						; Yeah, we expect it to be...
+			
+			stw		r7,FPUsync(r22)					; Unlock lock. No need to sync here
+			
+			bl		EXT(save_ret)					; Toss save area because we are abandoning save				
+			b		fsnosave						; Skip the save...
+
+			.align	5
+
+fswusave:	lwz		r12,facAct(r22)					; Get the activation associated with the context
+			stw		r3,FPUsave(r22)					; Set this as the latest context savearea for the thread
+			mr.		r31,r31							; Check again if we were user level
+			stw		r30,SAVprev+4(r3)				; Point us to the old context
 			stw		r31,SAVlevel(r3)				; Tag our level
 			li		r7,SAVfloat						; Get the floating point ID
 			stw		r12,SAVact(r3)					; Make sure we point to the right guy
 			stb		r7,SAVflags+2(r3)				; Set that we have a floating point save area
+			
+			li		r7,0							; Get the unlock value
+
+			beq--	fswnulock						; Skip unlock if user (we did not lock it)...
+			eieio									; Make sure that these updates make it out
+			stw		r7,FPUsync(r22)					; Unlock it.
+			
+fswnulock:		
 
 #if FPVECDBG
 			lis		r0,hi16(CutTrace)				; (TEST/DEBUG)
@@ -694,58 +675,7 @@ fsmstsave:	stw		r3,FPUowner(r26)				; Kill the context now
 			sc										; (TEST/DEBUG)
 #endif	
 
-;
-;			Now we will actually save the old context
-;
-			
-			la		r11,savefp4(r3)					; Point to the 2nd line
-			stfd    f0,savefp0(r3)
-			dcbz	0,r11							; Allocate cache
-			stfd    f1,savefp1(r3)
-			stfd    f2,savefp2(r3)
-			la		r11,savefp8(r3)					; Point to the 3rd line
-			stfd    f3,savefp3(r3)
-			dcbz	0,r11							; Allocate cache
-			stfd    f4,savefp4(r3)
-			stfd    f5,savefp5(r3)
-			stfd    f6,savefp6(r3)
-			la		r11,savefp12(r3)				; Point to the 4th line
-			stfd    f7,savefp7(r3)
-			dcbz	0,r11							; Allocate cache
-			stfd    f8,savefp8(r3)
-			stfd    f9,savefp9(r3)
-			stfd    f10,savefp10(r3)
-			la		r11,savefp16(r3)				; Point to the 5th line
-			stfd    f11,savefp11(r3)
-			dcbz	0,r11							; Allocate cache
-			stfd    f12,savefp12(r3)
-			stfd    f13,savefp13(r3)
-			stfd    f14,savefp14(r3)
-			la		r11,savefp20(r3)				; Point to the 6th line 
-			stfd    f15,savefp15(r3)
-			dcbz	0,r11							; Allocate cache
-			stfd    f16,savefp16(r3)
-			stfd    f17,savefp17(r3)
-			stfd    f18,savefp18(r3)
-			la		r11,savefp24(r3)				; Point to the 7th line
-			stfd    f19,savefp19(r3)
-			dcbz	0,r11							; Allocate cache
-			stfd    f20,savefp20(r3)
-
-			stfd    f21,savefp21(r3)
-			stfd    f22,savefp22(r3)
-			la		r11,savefp28(r3)				; Point to the 8th line
-			stfd    f23,savefp23(r3)
-			dcbz	0,r11							; allocate it
-			stfd    f24,savefp24(r3)
-			stfd    f25,savefp25(r3)
-			stfd    f26,savefp26(r3)
-			stfd    f27,savefp27(r3)
-			dcbz	0,r11							; allocate it
-			stfd    f28,savefp28(r3)
-			stfd    f29,savefp29(r3)
-			stfd    f30,savefp30(r3)
-			stfd    f31,savefp31(r3)
+            bl		fp_store						; store all 32 FPRs
 
 ;
 ;			The context is all saved now and the facility is free.
@@ -780,28 +710,30 @@ fsnosave:	lwz		r15,ACT_MACT_PCB(r17)			; Get the current level of the "new" one
 			ori		r18,r18,lo16(EXT(per_proc_info))	; Set base per_proc
 			li		r16,FPUowner					; Displacement to float owner
 			add		r19,r18,r19						; Point to the owner per_proc	
-			li		r0,0
 			
 fsinvothr:	lwarx	r18,r16,r19						; Get the owner
-			cmplw	r18,r29							; Does he still have this context?
-			bne		fsinvoths						; Nope...		
-			stwcx.	r0,r16,r19						; Try to invalidate it
-			bne-	fsinvothr						; Try again if there was a collision...
+			sub		r0,r18,r29						; Subtract one from the other
+			sub		r11,r29,r18						; Subtract the other from the one
+			or		r11,r11,r0						; Combine them
+			srawi	r11,r11,31						; Get a 0 if equal or -1 of not
+			and		r18,r18,r11						; Make 0 if same, unchanged if not
+			stwcx.	r18,r16,r19						; Try to invalidate it
+			bne--	fsinvothr						; Try again if there was a collision...
 		
-fsinvoths:	cmplwi	cr1,r14,0						; Do we possibly have some context to load?
+			cmplwi	cr1,r14,0						; Do we possibly have some context to load?
 			la		r11,savefp0(r14)				; Point to first line to bring in
 			stw		r15,FPUlevel(r29)				; Set the "new" active level
 			eieio
 			stw		r29,FPUowner(r26)				; Mark us as having the live context
 			
-			beq+	cr1,MakeSureThatNoTerroristsCanHurtUsByGod	; No "new" context to load...
+			beq++	cr1,MakeSureThatNoTerroristsCanHurtUsByGod	; No "new" context to load...
 			
 			dcbt	0,r11							; Touch line in
 
-			lwz		r3,SAVprev(r14)					; Get the previous context
+			lwz		r3,SAVprev+4(r14)				; Get the previous context
 			lwz		r0,SAVlevel(r14)				; Get the level of first facility savearea
 			cmplw	r0,r15							; Top level correct to load?
-			bne-	MakeSureThatNoTerroristsCanHurtUsByGod	; No, go initialize...
+			bne--	MakeSureThatNoTerroristsCanHurtUsByGod	; No, go initialize...
 
 			stw		r3,FPUsave(r29)					; Pop the context (we will toss the savearea later)
 			
@@ -811,6 +743,9 @@ fsinvoths:	cmplwi	cr1,r14,0						; Do we possibly have some context to load?
 			oris	r0,r0,lo16(CutTrace)			; (TEST/DEBUG)
 			sc										; (TEST/DEBUG)
 #endif	
+
+// Note this code is used both by 32- and 128-byte processors.  This means six extra DCBTs
+// are executed on a 128-byte machine, but that is better than a mispredicted branch.
 
 			la		r11,savefp4(r14)				; Point to next line
 			dcbt	0,r11							; Touch line in
@@ -862,18 +797,18 @@ fsinvoths:	cmplwi	cr1,r14,0						; Do we possibly have some context to load?
 			mr		r3,r14							; Get the old savearea (we popped it before)
 			bl		EXT(save_ret)					; Toss it
 			
-fsenable:	lwz		r8,savesrr1(r25)				; Get the msr of the interrupted guy
-			rlwinm	r5,r25,0,0,19					; Get the page address of the savearea 
+fsenable:	lwz		r8,savesrr1+4(r25)				; Get the msr of the interrupted guy
 			ori		r8,r8,MASK(MSR_FP)				; Enable the floating point feature
-			lwz		r10,ACT_MACT_SPF(r17)			; Get the special flags
-			lwz		r5,SACvrswap(r5)				; Get Virtual to Real translation 
+			lwz		r10,ACT_MACT_SPF(r17)			; Get the act special flags
+			lwz		r11,spcFlags(r26)				; Get per_proc spec flags cause not in sync with act
 			oris	r10,r10,hi16(floatUsed|floatCng)	; Set that we used floating point
+			oris	r11,r11,hi16(floatUsed|floatCng)	; Set that we used floating point
 			rlwinm.	r0,r8,0,MSR_PR_BIT,MSR_PR_BIT	; See if we are doing this for user state
-			stw		r8,savesrr1(r25)				; Set the msr of the interrupted guy
-			xor		r3,r25,r5						; Get the real address of the savearea
+			stw		r8,savesrr1+4(r25)				; Set the msr of the interrupted guy
+			mr		r3,r25							; Pass the virtual addres of savearea
 			beq-	fsnuser							; We are not user state...
 			stw		r10,ACT_MACT_SPF(r17)			; Set the activation copy
-			stw		r10,spcFlags(r26)				; Set per_proc copy
+			stw		r11,spcFlags(r26)				; Set per_proc copy
 
 fsnuser:
 #if FPVECDBG
@@ -954,13 +889,14 @@ fsthesame:
 			beq-	cr1,fsenable					; Not saved yet, nothing to pop, go enable and exit...
 			
 			lwz		r11,SAVlevel(r30)				; Get the level of top saved context
-			lwz		r14,SAVprev(r30)				; Get the previous savearea
+			lwz		r14,SAVprev+4(r30)				; Get the previous savearea
 			
 			cmplw	r11,r31							; Are live and saved the same?
 
 			bne+	fsenable						; Level not the same, nothing to pop, go enable and exit...
 			
 			mr		r3,r30							; Get the old savearea (we popped it before)
+			stw		r14,FPUsave(r22)				; Pop the savearea from the stack
 			bl		EXT(save_ret)					; Toss it
 			b		fsenable						; Go enable and exit...
 
@@ -975,12 +911,13 @@ fsthesame:
 
 LEXT(toss_live_fpu)
 			
-			
+			lis		r0,hi16(MASK(MSR_VEC))			; Get VEC
 			mfmsr	r9								; Get the MSR
-			rlwinm	r0,r9,0,MSR_EE_BIT+1,MSR_EE_BIT-1	; Clear interuptions
+			ori		r0,r0,lo16(MASK(MSR_FP))		; Add in FP
 			rlwinm.	r8,r9,0,MSR_FP_BIT,MSR_FP_BIT	; Are floats on right now?
-			rlwinm	r9,r9,0,MSR_VEC_BIT+1,MSR_VEC_BIT-1	; Make sure vectors are turned off
-			rlwinm	r9,r9,0,MSR_FP_BIT+1,MSR_FP_BIT-1	; Make sure floats are turned off
+			andc	r9,r9,r0						; Force off VEC and FP
+			ori		r0,r0,lo16(MASK(MSR_EE))		; Turn off EE
+			andc	r0,r9,r0						; Turn off EE now
 			mtmsr	r0								; No interruptions
 			isync
 			beq+	tlfnotours						; Floats off, can not be live here...
@@ -995,9 +932,9 @@ LEXT(toss_live_fpu)
 			lwz		r6,FPUowner(r8)					; Get the thread that owns the floats
 			li		r0,0							; Clear this just in case we need it
 			cmplw	r6,r3							; Are we tossing our own context?
-			bne-	tlfnotours						; Nope...
+			bne--	tlfnotours						; Nope...
 			
-			fsub	f1,f1,f1						; Make a 0			
+			lfd		f1,Zero(0)						; Make a 0			
 			mtfsf	0xFF,f1							; Clear it
 
 tlfnotours:	lwz		r11,FPUcpu(r3)					; Get the cpu on which we last loaded context
@@ -1006,15 +943,18 @@ tlfnotours:	lwz		r11,FPUcpu(r3)					; Get the cpu on which we last loaded contex
 			ori		r12,r12,lo16(EXT(per_proc_info))	; Set base per_proc
 			li		r10,FPUowner					; Displacement to float owner
 			add		r11,r12,r11						; Point to the owner per_proc	
-			li		r0,0							; Set a 0 to invalidate context
 			
 tlfinvothr:	lwarx	r12,r10,r11						; Get the owner
-			cmplw	r12,r3							; Does he still have this context?
-			bne+	tlfexit							; Nope, leave...		
-			stwcx.	r0,r10,r11						; Try to invalidate it
-			bne-	tlfinvothr						; Try again if there was a collision...
 
-tlfexit:	mtmsr	r9								; Restore interruptions
+			sub		r0,r12,r3						; Subtract one from the other
+			sub		r8,r3,r12						; Subtract the other from the one
+			or		r8,r8,r0						; Combine them
+			srawi	r8,r8,31						; Get a 0 if equal or -1 of not
+			and		r12,r12,r8						; Make 0 if same, unchanged if not
+			stwcx.	r12,r10,r11						; Try to invalidate it
+			bne--	tlfinvothr						; Try again if there was a collision...
+
+			mtmsr	r9								; Restore interruptions
 			isync									; Could be turning off floats here
 			blr										; Leave...
 
@@ -1047,11 +987,14 @@ tlfexit:	mtmsr	r9								; Restore interruptions
 
 LEXT(vec_save)
 
+
+			lis		r2,hi16(MASK(MSR_VEC))			; Get VEC
 			mfmsr	r0								; Get the MSR
-			rlwinm	r0,r0,0,MSR_VEC_BIT+1,MSR_VEC_BIT-1	; Make sure vectors are turned off when we leave
-			rlwinm	r2,r0,0,MSR_EE_BIT+1,MSR_EE_BIT-1	; But do interrupts only for now
+			ori		r2,r2,lo16(MASK(MSR_FP))		; Add in FP
+			andc	r0,r0,r2						; Force off VEC and FP
+			ori		r2,r2,lo16(MASK(MSR_EE))		; Clear EE
+			andc	r2,r0,r2						; Clear EE for now
 			oris	r2,r2,hi16(MASK(MSR_VEC))		; Enable the vector facility for now also
-			rlwinm	r0,r0,0,MSR_FP_BIT+1,MSR_FP_BIT-1	; Force off fp
 			mtmsr	r2								; Set the MSR
 			isync
 		
@@ -1110,17 +1053,17 @@ vsgoodcpu:	lwz		r3,VMXsave(r12)					; Get the current vector savearea for the th
 			
 			bne+	vsret							; VRsave is non-zero so we need to keep what is saved...
 						
-			lwz		r4,SAVprev(r3)					; Pick up the previous area
+			lwz		r4,SAVprev+4(r3)				; Pick up the previous area
 			lwz		r5,SAVlevel(r4)					; Get the level associated with save
 			stw		r4,VMXsave(r12)					; Dequeue this savearea
+			li		r4,0							; Clear
 			stw		r5,VMXlevel(r12)				; Save the level
 	
-			li		r3,0							; Clear
-			stw		r3,VMXowner(r12)				; Show no live context here
+			stw		r4,VMXowner(r12)				; Show no live context here
 			eieio
 
-vsbackout:	mr		r12,r0							; Set the saved MSR			
-			b		EXT(save_ret_join)				; Toss the savearea and return from there...
+vsbackout:	mr		r4,r0							; restore the saved MSR			
+			b		EXT(save_ret_wMSR)				; Toss the savearea and return from there...
 
 			.align	5
 
@@ -1136,286 +1079,22 @@ vsneedone:	mr.		r10,r10							; Is VRsave set to 0?
 			mr.		r12,r12							; See if we were disowned while away. Very, very small chance of it...
 			beq-	vsbackout						; If disowned, just toss savearea...
 			lwz		r4,facAct(r12)					; Get the activation associated with live context
-			mtlr	r2								; Restore return
 			lwz		r8,VMXsave(r12)					; Get the current top vector savearea
 			stw		r4,SAVact(r3)					; Indicate the right activation for this context
 			lwz		r9,VMXlevel(r12)				; Get our current level indicator again		
 			stw		r3,VMXsave(r12)					; Set this as the most current floating point context
-			stw		r8,SAVprev(r3)					; And then chain this in front
+			stw		r8,SAVprev+4(r3)				; And then chain this in front
 
 			stw		r9,SAVlevel(r3)					; Set level in savearea
+            mfcr	r12								; save CRs across call to vr_store
+			lwz		r10,liveVRS(r6)					; Get the right VRSave register
+            
+            bl		vr_store						; store live VRs into savearea as required (uses r4-r11)
 
-			mfcr	r2						; Save non-volatile CRs
-			lwz		r10,liveVRS(r6)			; Get the right VRSave register
-			lis		r9,0x5555				; Mask with odd bits set		
-			rlwinm	r11,r10,1,0,31			; Shift over 1
-			ori		r9,r9,0x5555			; Finish mask
-			or		r4,r10,r11				; After this, even bits show which lines to zap
-			
-			andc	r11,r4,r9				; Clear out odd bits
-			
-			la		r6,savevr0(r3)			; Point to line 0
-			rlwinm	r4,r11,15,0,15			; Move line 8-15 flags to high order odd bits
-			or		r4,r11,r4				; Set the odd bits
-											; (bit 0 is line 0, bit 1 is line 8,
-											; bit 2 is line 1, bit 3 is line 9, etc.
-			rlwimi	r4,r10,16,16,31			; Put vrsave 0 - 15 into positions 16 - 31
-			la		r7,savevr2(r3)			; Point to line 1
-			mtcrf	255,r4					; Load up the CRs
-			stw		r10,savevrvalid(r3)		; Save the validity information
-			mr		r8,r6					; Start registers off
-;	
-;			Save the current vector state
-;
-						
-			bf		0,snol0					; No line 0 to do...
-			dcba	br0,r6					; Allocate cache line 0
-			
-snol0:		
-			la		r6,savevr4(r3)			; Point to line 2
-			bf		2,snol1					; No line 1 to do...
-			dcba	br0,r7					; Allocate cache line 1
-			
-snol1:		
-			la		r7,savevr6(r3)			; Point to line 3
-			bf		4,snol2					; No line 2 to do...
-			dcba	br0,r6					; Allocate cache line 2
-			
-snol2:		
-			li		r11,16					; Get offset for odd registers
-			bf		16,snovr0				; Do not save VR0...
-			stvxl	v0,br0,r8				; Save VR0
-			
-snovr0:		
-			la		r9,savevr2(r3)			; Point to V2/V3 pair
-			bf		17,snovr1				; Do not save VR1...
-			stvxl	v1,r11,r8				; Save VR1
-			
-snovr1:
-			la		r6,savevr8(r3)			; Point to line 4
-			bf		6,snol3					; No line 3 to do...
-			dcba	br0,r7					; Allocate cache line 3
-			
-snol3:		
-			la		r8,savevr4(r3)			; Point to V4/V5 pair
-			bf		18,snovr2				; Do not save VR2...
-			stvxl	v2,br0,r9				; Save VR2
-			
-snovr2:
-			bf		19,snovr3				; Do not save VR3...
-			stvxl	v3,r11,r9				; Save VR3
-			
-snovr3:
-;
-;			Note: CR4 is now free
-;
-			la		r7,savevr10(r3)			; Point to line 5
-			bf		8,snol4					; No line 4 to do...
-			dcba	br0,r6					; Allocate cache line 4
-			
-snol4:		
-			la		r9,savevr6(r3)			; Point to R6/R7 pair
-			bf		20,snovr4				; Do not save VR4...
-			stvxl	v4,br0,r8				; Save VR4
-			
-snovr4:
-			bf		21,snovr5				; Do not save VR5...
-			stvxl	v5,r11,r8				; Save VR5
-			
-snovr5:
-			mtcrf	0x08,r10				; Set CRs for registers 16-19
-			la		r6,savevr12(r3)			; Point to line 6
-			bf		10,snol5				; No line 5 to do...
-			dcba	br0,r7					; Allocate cache line 5
-			
-snol5:		
-			la		r8,savevr8(r3)			; Point to V8/V9 pair
-			bf		22,snovr6				; Do not save VR6...
-			stvxl	v6,br0,r9				; Save VR6
-			
-snovr6:
-			bf		23,snovr7				; Do not save VR7...
-			stvxl	v7,r11,r9				; Save VR7
-			
-snovr7:
-;
-;			Note: CR5 is now free
-;
-			la		r7,savevr14(r3)			; Point to line 7
-			bf		12,snol6				; No line 6 to do...
-			dcba	br0,r6					; Allocate cache line 6
-			
-snol6:		
-			la		r9,savevr10(r3)			; Point to V10/V11 pair
-			bf		24,snovr8				; Do not save VR8...
-			stvxl	v8,br0,r8				; Save VR8
-			
-snovr8:
-			bf		25,snovr9				; Do not save VR9...
-			stvxl	v9,r11,r8				; Save VR9
-			
-snovr9:
-			mtcrf	0x04,r10				; Set CRs for registers 20-23
-			la		r6,savevr16(r3)			; Point to line 8
-			bf		14,snol7				; No line 7 to do...
-			dcba	br0,r7					; Allocate cache line 7
-			
-snol7:		
-			la		r8,savevr12(r3)			; Point to V12/V13 pair
-			bf		26,snovr10				; Do not save VR10...
-			stvxl	v10,br0,r9				; Save VR10
-			
-snovr10:
-			bf		27,snovr11				; Do not save VR11...
-			stvxl	v11,r11,r9				; Save VR11
-			
-snovr11:
-
-;
-;			Note: CR6 is now free
-;
-			la		r7,savevr18(r3)			; Point to line 9
-			bf		1,snol8					; No line 8 to do...
-			dcba	br0,r6					; Allocate cache line 8
-			
-snol8:		
-			la		r9,savevr14(r3)			; Point to V14/V15 pair
-			bf		28,snovr12				; Do not save VR12...
-			stvxl	v12,br0,r8				; Save VR12
-			
-snovr12:
-			bf		29,snovr13				; Do not save VR13...
-			stvxl	v13,r11,r8				; Save VR13
-			
-snovr13:
-			mtcrf	0x02,r10				; Set CRs for registers 24-27
-			la		r6,savevr20(r3)			; Point to line 10
-			bf		3,snol9					; No line 9 to do...
-			dcba	br0,r7					; Allocate cache line 9
-			
-snol9:		
-			la		r8,savevr16(r3)			; Point to V16/V17 pair
-			bf		30,snovr14				; Do not save VR14...
-			stvxl	v14,br0,r9				; Save VR14
-			
-snovr14:
-			bf		31,snovr15				; Do not save VR15...
-			stvxl	v15,r11,r9				; Save VR15
-			
-snovr15:
-;
-;			Note: CR7 is now free
-;
-			la		r7,savevr22(r3)			; Point to line 11
-			bf		5,snol10				; No line 10 to do...
-			dcba	br0,r6					; Allocate cache line 10
-			
-snol10:		
-			la		r9,savevr18(r3)			; Point to V18/V19 pair
-			bf		16,snovr16				; Do not save VR16...
-			stvxl	v16,br0,r8				; Save VR16
-			
-snovr16:
-			bf		17,snovr17				; Do not save VR17...
-			stvxl	v17,r11,r8				; Save VR17
-			
-snovr17:
-			mtcrf	0x01,r10				; Set CRs for registers 28-31
-;
-;			Note: All registers have been or are accounted for in CRs
-;
-			la		r6,savevr24(r3)			; Point to line 12
-			bf		7,snol11				; No line 11 to do...
-			dcba	br0,r7					; Allocate cache line 11
-			
-snol11:		
-			la		r8,savevr20(r3)			; Point to V20/V21 pair
-			bf		18,snovr18				; Do not save VR18...
-			stvxl	v18,br0,r9				; Save VR18
-			
-snovr18:
-			bf		19,snovr19				; Do not save VR19...
-			stvxl	v19,r11,r9				; Save VR19
-			
-snovr19:
-			la		r7,savevr26(r3)			; Point to line 13
-			bf		9,snol12				; No line 12 to do...
-			dcba	br0,r6					; Allocate cache line 12
-			
-snol12:		
-			la		r9,savevr22(r3)			; Point to V22/V23 pair
-			bf		20,snovr20				; Do not save VR20...
-			stvxl	v20,br0,r8				; Save VR20
-			
-snovr20:
-			bf		21,snovr21				; Do not save VR21...
-			stvxl	v21,r11,r8				; Save VR21
-			
-snovr21:
-			la		r6,savevr28(r3)			; Point to line 14
-			bf		11,snol13				; No line 13 to do...
-			dcba	br0,r7					; Allocate cache line 13
-			
-snol13:		
-			la		r8,savevr24(r3)			; Point to V24/V25 pair
-			bf		22,snovr22				; Do not save VR22...
-			stvxl	v22,br0,r9				; Save VR22
-			
-snovr22:
-			bf		23,snovr23				; Do not save VR23...
-			stvxl	v23,r11,r9				; Save VR23
-			
-snovr23:
-			la		r7,savevr30(r3)			; Point to line 15
-			bf		13,snol14				; No line 14 to do...
-			dcba	br0,r6					; Allocate cache line 14
-			
-snol14:		
-			la		r9,savevr26(r3)			; Point to V26/V27 pair
-			bf		24,snovr24				; Do not save VR24...
-			stvxl	v24,br0,r8				; Save VR24
-			
-snovr24:
-			bf		25,snovr25				; Do not save VR25...
-			stvxl	v25,r11,r8				; Save VR25
-			
-snovr25:
-			bf		15,snol15				; No line 15 to do...
-			dcba	br0,r7					; Allocate cache line 15
-			
-snol15:		
-;
-;			Note: All cache lines allocated now
-;
-			la		r8,savevr28(r3)			; Point to V28/V29 pair
-			bf		26,snovr26				; Do not save VR26...
-			stvxl	v26,br0,r9				; Save VR26
-
-snovr26:
-			bf		27,snovr27				; Do not save VR27...
-			stvxl	v27,r11,r9				; Save VR27
-			
-snovr27:
-			la		r7,savevr30(r3)			; Point to V30/V31 pair
-			bf		28,snovr28				; Do not save VR28...
-			stvxl	v28,br0,r8				; Save VR28
-			
-snovr28:		
-			bf		29,snovr29				; Do not save VR29...
-			stvxl	v29,r11,r8				; Save VR29
-			
-snovr29:		
-			bf		30,snovr30				; Do not save VR30...
-			stvxl	v30,br0,r7				; Save VR30
-			
-snovr30:
-			bf		31,snovr31				; Do not save VR31...
-			stvxl	v31,r11,r7				; Save VR31
-			
-snovr31:
-			mtcrf	255,r2					; Restore all cr
-
-vsret:		mtmsr	r0						; Put interrupts on if they were and vector off
+			mtcrf	255,r12							; Restore the non-volatile CRs
+            mtlr	r2								; restore return address
+		
+vsret:		mtmsr	r0								; Put interrupts on if they were and vector off
 			isync
 
 			blr
@@ -1529,7 +1208,7 @@ vsvretry:	mr.		r22,r22							; See if there is any live vector status
 
 			bne-	cr2,vsnosave					; Live context saved and VRSave not 0, no save and keep context...
 			
-			lwz		r4,SAVprev(r30)					; Pick up the previous area
+			lwz		r4,SAVprev+4(r30)				; Pick up the previous area
 			li		r5,0							; Assume this is the only one (which should be the ususal case)
 			mr.		r4,r4							; Was this the only one?
 			stw		r4,VMXsave(r22)					; Dequeue this savearea
@@ -1552,14 +1231,54 @@ vsmstsave:	stw		r8,VMXowner(r26)				; Clear owner
 
 			bl		EXT(save_get)					; Go get a savearea
 
-			lwz		r12,facAct(r22)					; Get the activation associated with the context
-			stw		r3,VMXsave(r22)					; Set this as the latest context savearea for the thread
+			mr.		r31,r31							; Are we saving the user state?
+			la		r15,VMXsync(r22)				; Point to the sync word
+			beq++	vswusave						; Yeah, no need for lock...
+;
+;			Here we make sure that the live context is not tossed while we are
+;			trying to push it.  This can happen only for kernel context and
+;			then only by a race with act_machine_sv_free.
+;
+;			We only need to hold this for a very short time, so no sniffing needed.
+;			If we find any change to the level, we just abandon.
+;
+vswsync:	lwarx	r19,0,r15						; Get the sync word
+			li		r0,1							; Get the lock
+			cmplwi	cr1,r19,0						; Is it unlocked?
+			stwcx.	r0,0,r15						; Store lock and test reservation
+			cror	cr0_eq,cr1_eq,cr0_eq			; Combine lost reservation and previously locked
+			bne--	vswsync							; Try again if lost reservation or locked...
 
-			stw		r30,SAVprev(r3)					; Point us to the old context
+			isync									; Toss speculation
+			
+			lwz		r0,VMXlevel(r22)				; Pick up the level again
+			li		r7,0							; Get unlock value
+			cmplw	r0,r31							; Same level?
+			beq++	fswusave						; Yeah, we expect it to be...
+			
+			stw		r7,VMXsync(r22)					; Unlock lock. No need to sync here
+			
+			bl		EXT(save_ret)					; Toss save area because we are abandoning save				
+			b		fsnosave						; Skip the save...
+
+			.align	5
+
+vswusave:	lwz		r12,facAct(r22)					; Get the activation associated with the context
+			stw		r3,VMXsave(r22)					; Set this as the latest context savearea for the thread
+			mr.		r31,r31							; Check again if we were user level
+			stw		r30,SAVprev+4(r3)				; Point us to the old context
 			stw		r31,SAVlevel(r3)				; Tag our level
 			li		r7,SAVvector					; Get the vector ID
 			stw		r12,SAVact(r3)					; Make sure we point to the right guy
 			stb		r7,SAVflags+2(r3)				; Set that we have a vector save area
+		
+			li		r7,0							; Get the unlock value
+
+			beq--	vswnulock						; Skip unlock if user (we did not lock it)...
+			eieio									; Make sure that these updates make it out
+			stw		r7,VMXsync(r22)					; Unlock it.
+			
+vswnulock:		
 
 #if FPVECDBG
 			lis		r0,hi16(CutTrace)				; (TEST/DEBUG)
@@ -1569,273 +1288,7 @@ vsmstsave:	stw		r8,VMXowner(r26)				; Clear owner
 #endif	
 
 			lwz		r10,liveVRS(r26)				; Get the right VRSave register
-			lis		r9,0x5555						; Mask with odd bits set		
-			rlwinm	r11,r10,1,0,31					; Shift over 1
-			ori		r9,r9,0x5555					; Finish mask
-			or		r21,r10,r11						; After this, even bits show which lines to zap
-			
-			andc	r13,r21,r9						; Clear out odd bits
-			
-			la		r11,savevr0(r3)					; Point to line 0
-			rlwinm	r24,r13,15,0,15					; Move line 8-15 flags to high order odd bits
-			or		r24,r13,r24						; Set the odd bits
-													; (bit 0 is line 0, bit 1 is line 8,
-													; bit 2 is line 1, bit 3 is line 9, etc.
-			rlwimi	r24,r10,16,16,31				; Put vrsave 0 - 15 into positions 16 - 31
-			la		r21,savevr2(r3)					; Point to line 1
-			mtcrf	255,r24							; Load up the CRs
-			stw		r10,savevrvalid(r3)				; Save the validity information
-			mr		r12,r11							; Start registers off
-;	
-;			Save the current vector state
-;
-						
-			bf		0,nol0							; No line 0 to do...
-			dcba	br0,r11							; Allocate cache line 0
-			
-nol0:		
-			la		r11,savevr4(r3)					; Point to line 2
-			bf		2,nol1							; No line 1 to do...
-			dcba	br0,r21							; Allocate cache line 1
-			
-nol1:		
-			la		r21,savevr6(r3)					; Point to line 3
-			bf		4,nol2							; No line 2 to do...
-			dcba	br0,r11							; Allocate cache line 2
-			
-nol2:		
-			li		r14,16							; Get offset for odd registers
-			bf		16,novr0						; Do not save VR0...
-			stvxl	v0,br0,r12						; Save VR0
-			
-novr0:		
-			la		r13,savevr2(r3)					; Point to V2/V3 pair
-			bf		17,novr1						; Do not save VR1...
-			stvxl	v1,r14,r12						; Save VR1
-			
-novr1:
-			la		r11,savevr8(r3)					; Point to line 4
-			bf		6,nol3							; No line 3 to do...
-			dcba	br0,r21							; Allocate cache line 3
-			
-nol3:		
-			la		r12,savevr4(r3)					; Point to V4/V5 pair
-			bf		18,novr2						; Do not save VR2...
-			stvxl	v2,br0,r13						; Save VR2
-			
-novr2:
-			bf		19,novr3						; Do not save VR3...
-			stvxl	v3,r14,r13						; Save VR3
-			
-novr3:
-;
-;			Note: CR4 is now free
-;
-			la		r21,savevr10(r3)				; Point to line 5
-			bf		8,nol4							; No line 4 to do...
-			dcba	br0,r11							; Allocate cache line 4
-			
-nol4:		
-			la		r13,savevr6(r3)					; Point to R6/R7 pair
-			bf		20,novr4						; Do not save VR4...
-			stvxl	v4,br0,r12						; Save VR4
-			
-novr4:
-			bf		21,novr5						; Do not save VR5...
-			stvxl	v5,r14,r12						; Save VR5
-			
-novr5:
-			mtcrf	0x08,r10						; Set CRs for registers 16-19
-			la		r11,savevr12(r3)				; Point to line 6
-			bf		10,nol5							; No line 5 to do...
-			dcba	br0,r21							; Allocate cache line 5
-			
-nol5:		
-			la		r12,savevr8(r3)					; Point to V8/V9 pair
-			bf		22,novr6						; Do not save VR6...
-			stvxl	v6,br0,r13						; Save VR6
-			
-novr6:
-			bf		23,novr7						; Do not save VR7...
-			stvxl	v7,r14,r13						; Save VR7
-			
-novr7:
-;
-;			Note: CR5 is now free
-;
-			la		r21,savevr14(r3)				; Point to line 7
-			bf		12,nol6							; No line 6 to do...
-			dcba	br0,r11							; Allocate cache line 6
-			
-nol6:		
-			la		r13,savevr10(r3)				; Point to V10/V11 pair
-			bf		24,novr8						; Do not save VR8...
-			stvxl	v8,br0,r12						; Save VR8
-			
-novr8:
-			bf		25,novr9						; Do not save VR9...
-			stvxl	v9,r14,r12						; Save VR9
-			
-novr9:
-			mtcrf	0x04,r10						; Set CRs for registers 20-23
-			la		r11,savevr16(r3)				; Point to line 8
-			bf		14,nol7							; No line 7 to do...
-			dcba	br0,r21							; Allocate cache line 7
-			
-nol7:		
-			la		r12,savevr12(r3)				; Point to V12/V13 pair
-			bf		26,novr10						; Do not save VR10...
-			stvxl	v10,br0,r13						; Save VR10
-			
-novr10:
-			bf		27,novr11						; Do not save VR11...
-			stvxl	v11,r14,r13						; Save VR11
-			
-novr11:
-
-;
-;			Note: CR6 is now free
-;
-			la		r21,savevr18(r3)				; Point to line 9
-			bf		1,nol8							; No line 8 to do...
-			dcba	br0,r11							; Allocate cache line 8
-			
-nol8:		
-			la		r13,savevr14(r3)				; Point to V14/V15 pair
-			bf		28,novr12						; Do not save VR12...
-			stvxl	v12,br0,r12						; Save VR12
-			
-novr12:
-			bf		29,novr13						; Do not save VR13...
-			stvxl	v13,r14,r12						; Save VR13
-			
-novr13:
-			mtcrf	0x02,r10						; Set CRs for registers 24-27
-			la		r11,savevr20(r3)				; Point to line 10
-			bf		3,nol9							; No line 9 to do...
-			dcba	br0,r21							; Allocate cache line 9
-			
-nol9:		
-			la		r12,savevr16(r3)				; Point to V16/V17 pair
-			bf		30,novr14						; Do not save VR14...
-			stvxl	v14,br0,r13						; Save VR14
-			
-novr14:
-			bf		31,novr15						; Do not save VR15...
-			stvxl	v15,r14,r13						; Save VR15
-			
-novr15:
-;
-;			Note: CR7 is now free
-;
-			la		r21,savevr22(r3)				; Point to line 11
-			bf		5,nol10							; No line 10 to do...
-			dcba	br0,r11							; Allocate cache line 10
-			
-nol10:		
-			la		r13,savevr18(r3)				; Point to V18/V19 pair
-			bf		16,novr16						; Do not save VR16...
-			stvxl	v16,br0,r12						; Save VR16
-			
-novr16:
-			bf		17,novr17						; Do not save VR17...
-			stvxl	v17,r14,r12						; Save VR17
-			
-novr17:
-			mtcrf	0x01,r10						; Set CRs for registers 28-31
-;
-;			Note: All registers have been or are accounted for in CRs
-;
-			la		r11,savevr24(r3)				; Point to line 12
-			bf		7,nol11							; No line 11 to do...
-			dcba	br0,r21							; Allocate cache line 11
-			
-nol11:		
-			la		r12,savevr20(r3)				; Point to V20/V21 pair
-			bf		18,novr18						; Do not save VR18...
-			stvxl	v18,br0,r13						; Save VR18
-			
-novr18:
-			bf		19,novr19						; Do not save VR19...
-			stvxl	v19,r14,r13						; Save VR19
-			
-novr19:
-			la		r21,savevr26(r3)				; Point to line 13
-			bf		9,nol12							; No line 12 to do...
-			dcba	br0,r11							; Allocate cache line 12
-			
-nol12:		
-			la		r13,savevr22(r3)				; Point to V22/V23 pair
-			bf		20,novr20						; Do not save VR20...
-			stvxl	v20,br0,r12						; Save VR20
-			
-novr20:
-			bf		21,novr21						; Do not save VR21...
-			stvxl	v21,r14,r12						; Save VR21
-			
-novr21:
-			la		r11,savevr28(r3)				; Point to line 14
-			bf		11,nol13						; No line 13 to do...
-			dcba	br0,r21							; Allocate cache line 13
-			
-nol13:		
-			la		r12,savevr24(r3)				; Point to V24/V25 pair
-			bf		22,novr22						; Do not save VR22...
-			stvxl	v22,br0,r13						; Save VR22
-			
-novr22:
-			bf		23,novr23						; Do not save VR23...
-			stvxl	v23,r14,r13						; Save VR23
-			
-novr23:
-			la		r21,savevr30(r3)				; Point to line 15
-			bf		13,nol14						; No line 14 to do...
-			dcba	br0,r11							; Allocate cache line 14
-			
-nol14:		
-			la		r13,savevr26(r3)				; Point to V26/V27 pair
-			bf		24,novr24						; Do not save VR24...
-			stvxl	v24,br0,r12						; Save VR24
-			
-novr24:
-			bf		25,novr25						; Do not save VR25...
-			stvxl	v25,r14,r12						; Save VR25
-			
-novr25:
-			bf		15,nol15						; No line 15 to do...
-			dcba	br0,r21							; Allocate cache line 15
-			
-nol15:		
-;
-;			Note: All cache lines allocated now
-;
-			la		r12,savevr28(r3)				; Point to V28/V29 pair
-			bf		26,novr26						; Do not save VR26...
-			stvxl	v26,br0,r13						; Save VR26
-			
-novr26:
-			bf		27,novr27						; Do not save VR27...
-			stvxl	v27,r14,r13						; Save VR27
-			
-novr27:
-			la		r13,savevr30(r3)				; Point to V30/V31 pair
-			bf		28,novr28						; Do not save VR28...
-			stvxl	v28,br0,r12						; Save VR28
-			
-novr28:		
-			bf		29,novr29						; Do not save VR29...
-			stvxl	v29,r14,r12						; Save VR29
-			
-novr29:		
-			bf		30,novr30						; Do not save VR30...
-			stvxl	v30,br0,r13						; Save VR30
-			
-novr30:
-			bf		31,novr31						; Do not save VR31...
-			stvxl	v31,r14,r13						; Save VR31
-			
-novr31:
-
+            bl		vr_store						; store VRs into savearea according to vrsave (uses r4-r11)
 			
 
 ;
@@ -1884,27 +1337,29 @@ vsnosave:	vspltisb v31,-10						; Get 0xF6F6F6F6
 			li		r16,VMXowner					; Displacement to vector owner
 			add		r19,r18,r19						; Point to the owner per_proc	
 			vrlb	v31,v31,v29						; Get 0xDEADDEAD	
-			li		r0,0
 			
 vsinvothr:	lwarx	r18,r16,r19						; Get the owner
-			cmplw	r18,r29							; Does he still have this context?
-			bne		vsinvoths						; Nope...		
-			stwcx.	r0,r16,r19						; Try to invalidate it
-			bne-	vsinvothr						; Try again if there was a collision...
-		
+
+			sub		r0,r18,r29						; Subtract one from the other
+			sub		r11,r29,r18						; Subtract the other from the one
+			or		r11,r11,r0						; Combine them
+			srawi	r11,r11,31						; Get a 0 if equal or -1 of not
+			and		r18,r18,r11						; Make 0 if same, unchanged if not
+			stwcx.	r18,r16,r19						; Try to invalidate it
+			bne--	vsinvothr						; Try again if there was a collision...		
 	
-vsinvoths:	cmplwi	cr1,r14,0						; Do we possibly have some context to load?
+			cmplwi	cr1,r14,0						; Do we possibly have some context to load?
 			vmrghh	v31,v30,v31						; Get 0x7FFFDEAD.  V31 keeps this value until the bitter end
 			stw		r15,VMXlevel(r29)				; Set the "new" active level
 			eieio
 			stw		r29,VMXowner(r26)				; Mark us as having the live context
 
-			beq-	cr1,ProtectTheAmericanWay		; Nothing to restore, first time use...
+			beq--	cr1,ProtectTheAmericanWay		; Nothing to restore, first time use...
 		
-			lwz		r3,SAVprev(r14)					; Get the previous context
+			lwz		r3,SAVprev+4(r14)				; Get the previous context
 			lwz		r0,SAVlevel(r14)				; Get the level of first facility savearea
 			cmplw	r0,r15							; Top level correct to load?
-			bne-	ProtectTheAmericanWay			; No, go initialize...
+			bne--	ProtectTheAmericanWay			; No, go initialize...
 			
 			stw		r3,VMXsave(r29)					; Pop the context (we will toss the savearea later)
 
@@ -1915,391 +1370,26 @@ vsinvoths:	cmplwi	cr1,r14,0						; Do we possibly have some context to load?
 			sc										; (TEST/DEBUG)
 #endif	
 
-			lwz		r22,savevrsave(r25)				; Get the most current VRSAVE
 			lwz		r10,savevrvalid(r14)			; Get the valid VRs in the savearea
-			lis		r9,0x5555						; Mask with odd bits set
+			lwz		r22,savevrsave(r25)				; Get the most current VRSAVE
 			and		r10,r10,r22						; Figure out just what registers need to be loaded
-			ori		r9,r9,0x5555					; Finish mask
-			rlwinm	r11,r10,1,0,31					; Shift over 1
-			or		r12,r10,r11						; After this, even bits show which lines to touch
-			andc	r13,r12,r9						; Clear out odd bits
+            mr		r3,r14							; r3 <- ptr to savearea with VRs
+            bl		vr_load							; load VRs from save area based on vrsave in r10
+            			
+			bl		EXT(save_ret)					; Toss the save area after loading VRs
 			
-			la		r20,savevr0(r14)				; Point to line 0
-			rlwinm	r3,r13,15,0,15					; Move line 8-15 flags to high order odd bits
-			la		r21,savevr2(r3)					; Point to line 1
-			or		r3,r13,r3						; Set the odd bits
-													; (bit 0 is line 0, bit 1 is line 8,
-													; bit 2 is line 1, bit 3 is line 9, etc.
-			rlwimi	r3,r10,16,16,31					; Put vrsave 0 - 15 into positions 16 - 31
-			mtcrf	255,r3							; Load up the CRs
-			mr		r22,r20							; Start registers off
-;	
-;			Load the new vector state
-;
-						
-			bf		0,lnol0							; No line 0 to do...
-			dcbt	br0,r20							; Touch cache line 0
-			
-lnol0:		
-			la		r20,savevr4(r14)				; Point to line 2
-			bf		2,lnol1							; No line 1 to do...
-			dcbt	br0,r21							; Touch cache line 1
-			
-lnol1:		
-			la		r21,savevr6(r14)				; Point to line 3
-			bf		4,lnol2							; No line 2 to do...
-			dcbt	br0,r20							; Touch cache line 2
-			
-lnol2:		
-			li		r30,16							; Get offset for odd registers
-			bf		16,lnovr0						; Do not restore VR0...
-			lvxl	v0,br0,r22						; Restore VR0
-			
-lnovr0:		
-			la		r23,savevr2(r14)				; Point to V2/V3 pair
-			bf		17,lnovr1						; Do not restore VR1...
-			lvxl	v1,r30,r22						; Restore VR1
-			
-lnovr1:
-			la		r20,savevr8(r14)				; Point to line 4
-			bf		6,lnol3							; No line 3 to do...
-			dcbt	br0,r21							; Touch cache line 3
-			
-lnol3:		
-			la		r22,savevr4(r14)				; Point to V4/V5 pair
-			bf		18,lnovr2						; Do not restore VR2...
-			lvxl	v2,br0,r23						; Restore VR2
-			
-lnovr2:
-			bf		19,lnovr3						; Do not restore VR3...
-			lvxl	v3,r30,r23						; Restore VR3
-			
-lnovr3:
-;
-;			Note: CR4 is now free
-;
-			la		r21,savevr10(r14)				; Point to line 5
-			bf		8,lnol4							; No line 4 to do...
-			dcbt	br0,r20							; Touch cache line 4
-			
-lnol4:		
-			la		r23,savevr6(r14)				; Point to R6/R7 pair
-			bf		20,lnovr4						; Do not restore VR4...
-			lvxl	v4,br0,r22						; Restore VR4
-			
-lnovr4:
-			bf		21,lnovr5						; Do not restore VR5...
-			lvxl	v5,r30,r22						; Restore VR5
-			
-lnovr5:
-			mtcrf	0x08,r10						; Set CRs for registers 16-19
-			la		r20,savevr12(r14)				; Point to line 6
-			bf		10,lnol5						; No line 5 to do...
-			dcbt	br0,r21							; Touch cache line 5
-			
-lnol5:		
-			la		r22,savevr8(r14)				; Point to V8/V9 pair
-			bf		22,lnovr6						; Do not restore VR6...
-			lvxl	v6,br0,r23						; Restore VR6
-			
-lnovr6:
-			bf		23,lnovr7						; Do not restore VR7...
-			lvxl	v7,r30,r23						; Restore VR7
-			
-lnovr7:
-;
-;			Note: CR5 is now free
-;
-			la		r21,savevr14(r14)				; Point to line 7
-			bf		12,lnol6						; No line 6 to do...
-			dcbt	br0,r20							; Touch cache line 6
-			
-lnol6:		
-			la		r23,savevr10(r14)				; Point to V10/V11 pair
-			bf		24,lnovr8						; Do not restore VR8...
-			lvxl	v8,br0,r22						; Restore VR8
-			
-lnovr8:
-			bf		25,lnovr9						; Do not save VR9...
-			lvxl	v9,r30,r22						; Restore VR9
-			
-lnovr9:
-			mtcrf	0x04,r10						; Set CRs for registers 20-23
-			la		r20,savevr16(r14)				; Point to line 8
-			bf		14,lnol7						; No line 7 to do...
-			dcbt	br0,r21							; Touch cache line 7
-			
-lnol7:		
-			la		r22,savevr12(r14)				; Point to V12/V13 pair
-			bf		26,lnovr10						; Do not restore VR10...
-			lvxl	v10,br0,r23						; Restore VR10
-			
-lnovr10:
-			bf		27,lnovr11						; Do not restore VR11...
-			lvxl	v11,r30,r23						; Restore VR11
-			
-lnovr11:
-
-;
-;			Note: CR6 is now free
-;
-			la		r21,savevr18(r14)				; Point to line 9
-			bf		1,lnol8							; No line 8 to do...
-			dcbt	br0,r20							; Touch cache line 8
-			
-lnol8:		
-			la		r23,savevr14(r14)				; Point to V14/V15 pair
-			bf		28,lnovr12						; Do not restore VR12...
-			lvxl	v12,br0,r22						; Restore VR12
-			
-lnovr12:
-			bf		29,lnovr13						; Do not restore VR13...
-			lvxl	v13,r30,r22						; Restore VR13
-			
-lnovr13:
-			mtcrf	0x02,r10						; Set CRs for registers 24-27
-			la		r20,savevr20(r14)				; Point to line 10
-			bf		3,lnol9							; No line 9 to do...
-			dcbt	br0,r21							; Touch cache line 9
-			
-lnol9:		
-			la		r22,savevr16(r14)				; Point to V16/V17 pair
-			bf		30,lnovr14						; Do not restore VR14...
-			lvxl	v14,br0,r23						; Restore VR14
-			
-lnovr14:
-			bf		31,lnovr15						; Do not restore VR15...
-			lvxl	v15,r30,r23						; Restore VR15
-			
-lnovr15:
-;
-;			Note: CR7 is now free
-;
-			la		r21,savevr22(r14)				; Point to line 11
-			bf		5,lnol10						; No line 10 to do...
-			dcbt	br0,r20							; Touch cache line 10
-			
-lnol10:		
-			la		r23,savevr18(r14)				; Point to V18/V19 pair
-			bf		16,lnovr16						; Do not restore VR16...
-			lvxl	v16,br0,r22						; Restore VR16
-			
-lnovr16:
-			bf		17,lnovr17						; Do not restore VR17...
-			lvxl	v17,r30,r22						; Restore VR17
-			
-lnovr17:
-			mtcrf	0x01,r10						; Set CRs for registers 28-31
-;
-;			Note: All registers have been or are accounted for in CRs
-;
-			la		r20,savevr24(r14)				; Point to line 12
-			bf		7,lnol11						; No line 11 to do...
-			dcbt	br0,r21							; Touch cache line 11
-			
-lnol11:		
-			la		r22,savevr20(r14)				; Point to V20/V21 pair
-			bf		18,lnovr18						; Do not restore VR18...
-			lvxl	v18,br0,r23						; Restore VR18
-			
-lnovr18:
-			bf		19,lnovr19						; Do not restore VR19...
-			lvxl	v19,r30,r23						; Restore VR19
-			
-lnovr19:
-			la		r21,savevr26(r14)				; Point to line 13
-			bf		9,lnol12						; No line 12 to do...
-			dcbt	br0,r20							; Touch cache line 12
-			
-lnol12:		
-			la		r23,savevr22(r14)				; Point to V22/V23 pair
-			bf		20,lnovr20						; Do not restore VR20...
-			lvxl	v20,br0,r22						; Restore VR20
-			
-lnovr20:
-			bf		21,lnovr21						; Do not restore VR21...
-			lvxl	v21,r30,r22						; Restore VR21
-			
-lnovr21:
-			la		r20,savevr28(r14)				; Point to line 14
-			bf		11,lnol13						; No line 13 to do...
-			dcbt	br0,r21							; Touch cache line 13
-			
-lnol13:		
-			la		r22,savevr24(r14)				; Point to V24/V25 pair
-			bf		22,lnovr22						; Do not restore VR22...
-			lvxl	v22,br0,r23						; Restore VR22
-			
-lnovr22:
-			bf		23,lnovr23						; Do not restore VR23...
-			lvxl	v23,r30,r23						; Restore VR23
-			
-lnovr23:
-			la		r21,savevr30(r14)				; Point to line 15
-			bf		13,lnol14						; No line 14 to do...
-			dcbt	br0,r20							; Touch cache line 14
-			
-lnol14:		
-			la		r23,savevr26(r14)				; Point to V26/V27 pair
-			bf		24,lnovr24						; Do not restore VR24...
-			lvxl	v24,br0,r22						; Restore VR24
-			
-lnovr24:
-			bf		25,lnovr25						; Do not restore VR25...
-			lvxl	v25,r30,r22						; Restore VR25
-			
-lnovr25:
-			bf		15,lnol15						; No line 15 to do...
-			dcbt	br0,r21							; Touch cache line 15
-			
-lnol15:		
-;
-;			Note: All needed cache lines have been touched now
-;
-			la		r22,savevr28(r14)				; Point to V28/V29 pair
-			bf		26,lnovr26						; Do not restore VR26...
-			lvxl	v26,br0,r23						; Restore VR26
-			
-lnovr26:
-			bf		27,lnovr27						; Do not restore VR27...
-			lvxl	v27,r30,r23						; Restore VR27
-			
-lnovr27:
-			la		r23,savevr30(r14)				; Point to V30/V31 pair
-			bf		28,lnovr28						; Do not restore VR28...
-			lvxl	v28,br0,r22						; Restore VR28
-			
-lnovr28:		
-			bf		29,lnovr29						; Do not restore VR29...
-			lvxl	v29,r30,r22						; Restore VR29
-			
-lnovr29:		
-			bf		30,lnovr30						; Do not restore VR30...
-			lvxl	v30,br0,r23						; Restore VR30
-			
-lnovr30:
-;
-;			Everything is restored now except for VR31.  We need it to get
-;			the QNaNBarbarian value to put into idle vector registers. 
-;			Note: V31 was set above to QNaNbarbarian
-;
-			
-			cmpwi	r10,-1							; Handle the quick case of all registers in use
-			beq-	mstlvr31						; Not likely, but all are in use...
-			mtcrf	255,r10							; Get mask of valid registers
-
-			bt		0,ni0							; Register is ok already...
-			vor		v0,v31,v31						; Copy into the next register
-ni0:
-			bt		1,ni1							; Register is ok already...
-			vor		v1,v31,v31						; Copy into the next register
-ni1:
-			bt		2,ni2							; Register is ok already...
-			vor		v2,v31,v31						; Copy into the next register
-ni2:
-			bt		3,ni3							; Register is ok already...
-			vor		v3,v31,v31						; Copy into the next register
-ni3:
-			bt		4,ni4							; Register is ok already...
-			vor		v4,v31,v31						; Copy into the next register
-ni4:
-			bt		5,ni5							; Register is ok already...
-			vor		v5,v31,v31						; Copy into the next register
-ni5:
-			bt		6,ni6							; Register is ok already...
-			vor		v6,v31,v31						; Copy into the next register
-ni6:
-			bt		7,ni7							; Register is ok already...
-			vor		v7,v31,v31						; Copy into the next register
-ni7:
-			bt		8,ni8							; Register is ok already...
-			vor		v8,v31,v31						; Copy into the next register
-ni8:
-			bt		9,ni9							; Register is ok already...
-			vor		v9,v31,v31						; Copy into the next register
-ni9:
-			bt		10,ni10							; Register is ok already...
-			vor		v10,v31,v31						; Copy into the next register
-ni10:
-			bt		11,ni11							; Register is ok already...
-			vor		v11,v31,v31						; Copy into the next register
-ni11:
-			bt		12,ni12							; Register is ok already...
-			vor		v12,v31,v31						; Copy into the next register
-ni12:
-			bt		13,ni13							; Register is ok already...
-			vor		v13,v31,v31						; Copy into the next register
-ni13:
-			bt		14,ni14							; Register is ok already...
-			vor		v14,v31,v31						; Copy into the next register
-ni14:
-			bt		15,ni15							; Register is ok already...
-			vor		v15,v31,v31						; Copy into the next register
-ni15:
-			bt		16,ni16							; Register is ok already...
-			vor		v16,v31,v31						; Copy into the next register
-ni16:
-			bt		17,ni17							; Register is ok already...
-			vor		v17,v31,v31						; Copy into the next register
-ni17:
-			bt		18,ni18							; Register is ok already...
-			vor		v18,v31,v31						; Copy into the next register
-ni18:
-			bt		19,ni19							; Register is ok already...
-			vor		v19,v31,v31						; Copy into the next register
-ni19:
-			bt		20,ni20							; Register is ok already...
-			vor		v20,v31,v31						; Copy into the next register
-ni20:
-			bt		21,ni21							; Register is ok already...
-			vor		v21,v31,v31						; Copy into the next register
-ni21:
-			bt		22,ni22							; Register is ok already...
-			vor		v22,v31,v31						; Copy into the next register
-ni22:
-			bt		23,ni23							; Register is ok already...
-			vor		v23,v31,v31						; Copy into the next register
-ni23:
-			bt		24,ni24							; Register is ok already...
-			vor		v24,v31,v31						; Copy into the next register
-ni24:
-			bt		25,ni25							; Register is ok already...
-			vor		v25,v31,v31						; Copy into the next register
-ni25:
-			bt		26,ni26							; Register is ok already...
-			vor		v26,v31,v31						; Copy into the next register
-ni26:
-			bt		27,ni27							; Register is ok already...
-			vor		v27,v31,v31						; Copy into the next register
-ni27:
-			bt		28,ni28							; Register is ok already...
-			vor		v28,v31,v31						; Copy into the next register
-ni28:
-			bt		29,ni29							; Register is ok already...
-			vor		v29,v31,v31						; Copy into the next register
-ni29:
-			bt		30,ni30							; Register is ok already...
-			vor		v30,v31,v31						; Copy into the next register
-ni30:
-			bf		31,lnovr31						; V31 is empty, no need to restore...
-
-mstlvr31:	lvxl	v31,r30,r23						; Restore VR31
-			
-lnovr31:	mr		r3,r14							; Get the old savearea (we popped it before)
-			bl		EXT(save_ret)					; Toss it
-			
-vrenable:	lwz		r8,savesrr1(r25)				; Get the msr of the interrupted guy
-			rlwinm	r5,r25,0,0,19					; Get the page address of the savearea 
+vrenable:	lwz		r8,savesrr1+4(r25)				; Get the msr of the interrupted guy
 			oris	r8,r8,hi16(MASK(MSR_VEC))		; Enable the vector facility
-			lwz		r10,ACT_MACT_SPF(r17)			; Get the special flags
-			lwz		r5,SACvrswap(r5)				; Get Virtual to Real translation 
+			lwz		r10,ACT_MACT_SPF(r17)			; Get the act special flags
+			lwz		r11,spcFlags(r26)				; Get per_proc spec flags cause not in sync with act
 			oris	r10,r10,hi16(vectorUsed|vectorCng)	; Set that we used vectors
+			oris	r11,r11,hi16(vectorUsed|vectorCng)	; Set that we used vectors
 			rlwinm.	r0,r8,0,MSR_PR_BIT,MSR_PR_BIT	; See if we are doing this for user state
-			stw		r8,savesrr1(r25)				; Set the msr of the interrupted guy
-			xor		r3,r25,r5						; Get the real address of the savearea
+			stw		r8,savesrr1+4(r25)				; Set the msr of the interrupted guy
+			mr		r3,r25							; Pass virtual address of the savearea
 			beq-	vrnuser							; We are not user state...
 			stw		r10,ACT_MACT_SPF(r17)			; Set the activation copy
-			stw		r10,spcFlags(r26)				; Set per_proc copy
+			stw		r11,spcFlags(r26)				; Set per_proc copy
 
 vrnuser:
 #if FPVECDBG
@@ -2378,13 +1468,14 @@ vsthesame:
 			beq-	cr1,vrenable					; Not saved yet, nothing to pop, go enable and exit...
 			
 			lwz		r11,SAVlevel(r30)				; Get the level of top saved context
-			lwz		r14,SAVprev(r30)				; Get the previous savearea
+			lwz		r14,SAVprev+4(r30)				; Get the previous savearea
 			
 			cmplw	r11,r31							; Are live and saved the same?
 
 			bne+	vrenable						; Level not the same, nothing to pop, go enable and exit...
 			
 			mr		r3,r30							; Get the old savearea (we popped it before)
+			stw		r11,VMXsave(r22)				; Pop the vector stack
 			bl		EXT(save_ret)					; Toss it
 			b		vrenable						; Go enable and exit...
 
@@ -2399,11 +1490,13 @@ vsthesame:
 
 LEXT(toss_live_vec)
 			
+			lis		r0,hi16(MASK(MSR_VEC))			; Get VEC
 			mfmsr	r9								; Get the MSR
-			rlwinm	r0,r9,0,MSR_EE_BIT+1,MSR_EE_BIT-1	; Clear interuptions
-			rlwinm.	r8,r9,0,MSR_VEC_BIT,MSR_VEC_BIT	; Is vector on right now?
-			rlwinm	r9,r9,0,MSR_VEC_BIT+1,MSR_VEC_BIT-1	; Make sure vector is turned off
-			rlwinm	r9,r9,0,MSR_FP_BIT+1,MSR_FP_BIT-1	; Make sure fpu is turned off
+			ori		r0,r0,lo16(MASK(MSR_FP))		; Add in FP
+			rlwinm.	r8,r9,0,MSR_VEC_BIT,MSR_VEC_BIT	; Are vectors on right now?
+			andc	r9,r9,r0						; Force off VEC and FP
+			ori		r0,r0,lo16(MASK(MSR_EE))		; Turn off EE
+			andc	r0,r9,r0						; Turn off EE now
 			mtmsr	r0								; No interruptions
 			isync
 			beq+	tlvnotours						; Vector off, can not be live here...
@@ -2435,12 +1528,16 @@ tlvnotours:	lwz		r11,VMXcpu(r3)					; Get the cpu on which we last loaded contex
 			li		r0,0							; Set a 0 to invalidate context
 			
 tlvinvothr:	lwarx	r12,r10,r11						; Get the owner
-			cmplw	r12,r3							; Does he still have this context?
-			bne+	tlvexit							; Nope, leave...		
-			stwcx.	r0,r10,r11						; Try to invalidate it
-			bne-	tlvinvothr						; Try again if there was a collision...
 
-tlvexit:	mtmsr	r9								; Restore interruptions
+			sub		r0,r12,r3						; Subtract one from the other
+			sub		r8,r3,r12						; Subtract the other from the one
+			or		r8,r8,r0						; Combine them
+			srawi	r8,r8,31						; Get a 0 if equal or -1 of not
+			and		r12,r12,r8						; Make 0 if same, unchanged if not
+			stwcx.	r12,r10,r11						; Try to invalidate it
+			bne--	tlvinvothr						; Try again if there was a collision...		
+
+			mtmsr	r9								; Restore interruptions
 			isync									; Could be turning off vectors here
 			blr										; Leave....
 
@@ -2470,22 +1567,26 @@ LEXT(vec_trash)
 			ori		r12,r12,lo16(EXT(per_proc_info))	; Set base per_proc
 			li		r10,VMXowner					; Displacement to vector owner
 			add		r11,r12,r11						; Point to the owner per_proc	
-			li		r0,0							; Set a 0 to invalidate context
 			
 vtinvothr:	lwarx	r12,r10,r11						; Get the owner
-			cmplw	r12,r3							; Does he still have this context?
-			bne		vtnotlive						; Nope, not live anywhere...	
-			stwcx.	r0,r10,r11						; Try to invalidate it
-			bne-	vtinvothr						; Try again if there was a collision...
 
-vtnotlive:	beqlr+	cr1								; Leave if there is no savearea
+			sub		r0,r12,r3						; Subtract one from the other
+			sub		r8,r3,r12						; Subtract the other from the one
+			or		r8,r8,r0						; Combine them
+			srawi	r8,r8,31						; Get a 0 if equal or -1 of not
+			and		r12,r12,r8						; Make 0 if same, unchanged if not
+			stwcx.	r12,r10,r11						; Try to invalidate it
+			bne--	vtinvothr						; Try again if there was a collision...		
+
+
+			beqlr++	cr1								; Leave if there is no savearea
 			lwz		r8,SAVlevel(r9)					; Get the level of the savearea
 			cmplw	r8,r11							; Savearea for the current level?
-			bnelr+									; No, nothing to release...
+			bnelr++									; No, nothing to release...
 			
-			lwz		r8,SAVprev(r9)					; Pick up the previous area
+			lwz		r8,SAVprev+4(r9)				; Pick up the previous area
 			mr.		r8,r8							; Is there a previous?
-			beq-	vtnoprev						; Nope...
+			beq--	vtnoprev						; Nope...
 			lwz		r7,SAVlevel(r8)					; Get the level associated with save
 
 vtnoprev:	stw		r8,VMXsave(r3)					; Dequeue this savearea
@@ -2517,3 +1618,660 @@ LEXT(fctx_test)
 			mtspr	vrsave,r5						; Set VRSave
 			vor		v0,v0,v0						; Use vectors
 			blr
+
+
+// *******************
+// * f p _ s t o r e *
+// *******************
+//
+// Store FPRs into a save area.   Called by fpu_save and fpu_switch.
+//
+// When called:
+//		floating pt is enabled
+//		r3 = ptr to save area
+//
+// We destroy:
+//		r11.
+
+fp_store:
+            mfsprg	r11,2					; get feature flags
+            mtcrf	0x02,r11				; put cache line size bits in cr6
+            la		r11,savefp0(r3)			; point to 1st line
+            dcbz128	0,r11					; establish 1st line no matter what linesize is
+            bt--	pf32Byteb,fp_st32		; skip if a 32-byte machine
+            
+// Store the FPRs on a 128-byte machine.
+			
+			stfd    f0,savefp0(r3)
+			stfd    f1,savefp1(r3)
+			la		r11,savefp16(r3)		; Point to the 2nd cache line
+			stfd    f2,savefp2(r3)
+			stfd    f3,savefp3(r3)
+			dcbz128	0,r11					; establish 2nd line
+			stfd    f4,savefp4(r3)
+			stfd    f5,savefp5(r3)
+			stfd    f6,savefp6(r3)
+			stfd    f7,savefp7(r3)
+			stfd    f8,savefp8(r3)
+			stfd    f9,savefp9(r3)
+			stfd    f10,savefp10(r3)
+			stfd    f11,savefp11(r3)
+			stfd    f12,savefp12(r3)
+			stfd    f13,savefp13(r3)
+			stfd    f14,savefp14(r3)
+			stfd    f15,savefp15(r3)
+			stfd    f16,savefp16(r3)
+			stfd    f17,savefp17(r3)
+			stfd    f18,savefp18(r3)
+			stfd    f19,savefp19(r3)
+			stfd    f20,savefp20(r3)
+			stfd    f21,savefp21(r3)
+			stfd    f22,savefp22(r3)
+			stfd    f23,savefp23(r3)
+			stfd    f24,savefp24(r3)
+			stfd    f25,savefp25(r3)
+			stfd    f26,savefp26(r3)
+			stfd    f27,savefp27(r3)
+			stfd    f28,savefp28(r3)
+			stfd    f29,savefp29(r3)
+			stfd    f30,savefp30(r3)
+			stfd    f31,savefp31(r3)
+            blr
+            
+// Store FPRs on a 32-byte machine.
+
+fp_st32:
+			la		r11,savefp4(r3)				; Point to the 2nd line
+			stfd    f0,savefp0(r3)
+			dcbz	0,r11						; Allocate cache
+			stfd    f1,savefp1(r3)
+			stfd    f2,savefp2(r3)
+			la		r11,savefp8(r3)				; Point to the 3rd line
+			stfd    f3,savefp3(r3)
+			dcbz	0,r11						; Allocate cache
+			stfd    f4,savefp4(r3)
+			stfd    f5,savefp5(r3)
+			stfd    f6,savefp6(r3)
+			la		r11,savefp12(r3)			; Point to the 4th line
+			stfd    f7,savefp7(r3)
+			dcbz	0,r11						; Allocate cache
+			stfd    f8,savefp8(r3)
+			stfd    f9,savefp9(r3)
+			stfd    f10,savefp10(r3)
+			la		r11,savefp16(r3)			; Point to the 5th line
+			stfd    f11,savefp11(r3)
+			dcbz	0,r11						; Allocate cache
+			stfd    f12,savefp12(r3)
+			stfd    f13,savefp13(r3)
+			stfd    f14,savefp14(r3)
+			la		r11,savefp20(r3)			; Point to the 6th line 
+			stfd    f15,savefp15(r3)
+			dcbz	0,r11						; Allocate cache
+			stfd    f16,savefp16(r3)
+			stfd    f17,savefp17(r3)
+			stfd    f18,savefp18(r3)
+			la		r11,savefp24(r3)			; Point to the 7th line
+			stfd    f19,savefp19(r3)
+			dcbz	0,r11						; Allocate cache
+			stfd    f20,savefp20(r3)
+
+			stfd    f21,savefp21(r3)
+			stfd    f22,savefp22(r3)
+			la		r11,savefp28(r3)			; Point to the 8th line
+			stfd    f23,savefp23(r3)
+			dcbz	0,r11						; allocate it
+			stfd    f24,savefp24(r3)
+			stfd    f25,savefp25(r3)
+			stfd    f26,savefp26(r3)
+			stfd    f27,savefp27(r3)
+
+			stfd    f28,savefp28(r3)
+			stfd    f29,savefp29(r3)
+			stfd    f30,savefp30(r3)
+			stfd    f31,savefp31(r3)
+            blr
+
+
+// *******************
+// * v r _ s t o r e *
+// *******************
+//
+// Store VRs into savearea, according to bits set in passed vrsave bitfield.  This routine is used
+// both by vec_save and vec_switch.  In order to minimize conditional branches and touching in
+// unnecessary cache blocks, we either save all or none of the VRs in a block.  We have separate paths
+// for each cache block size.
+//
+// When called:
+//		interrupts are off, vectors are enabled
+//		r3 = ptr to save area
+//		r10 = vrsave (not 0)
+//
+// We destroy:
+//		r4 - r11, all CRs.
+
+vr_store:
+            mfsprg	r9,2					; get feature flags
+			stw		r10,savevrvalid(r3)		; Save the validity information in savearea
+			slwi	r8,r10,1				; Shift over 1
+            mtcrf	0x02,r9					; put cache line size bits in cr6 where we can test
+			or		r8,r10,r8				; r8 <- even bits show which pairs are in use
+            bt--	pf32Byteb,vr_st32		; skip if 32-byte cacheline processor
+
+            
+; Save vectors on a 128-byte linesize processor.  We save all or none of the 8 registers in each of
+; the four cache lines.  This minimizes mispredicted branches yet handles cache lines optimally.
+
+            slwi	r7,r8,2					; shift groups-of-2 over by 2
+            li		r4,16					; load offsets for X-form stores
+            or		r8,r7,r8				; show if any in group of 4 are in use
+            li		r5,32
+            slwi	r7,r8,4					; shift groups-of-4 over by 4
+            li		r6,48
+            or		r11,r7,r8				; show if any in group of 8 are in use
+            li		r7,64
+            mtcrf	0x80,r11				; set CRs one at a time (faster)
+            li		r8,80
+            mtcrf	0x20,r11
+            li		r9,96
+            mtcrf	0x08,r11
+            li		r10,112
+            mtcrf	0x02,r11
+            
+            bf		0,vr_st64b				; skip if none of vr0-vr7 are in use
+            la		r11,savevr0(r3)			; get address of this group of registers in save area
+            dcbz128	0,r11					; zero the line
+            stvxl	v0,0,r11				; save 8 VRs in the line
+            stvxl	v1,r4,r11
+            stvxl	v2,r5,r11
+            stvxl	v3,r6,r11
+            stvxl	v4,r7,r11
+            stvxl	v5,r8,r11
+            stvxl	v6,r9,r11
+            stvxl	v7,r10,r11
+            
+vr_st64b:
+            bf		8,vr_st64c				; skip if none of vr8-vr15 are in use
+            la		r11,savevr8(r3)			; get address of this group of registers in save area
+            dcbz128	0,r11					; zero the line
+            stvxl	v8,0,r11				; save 8 VRs in the line
+            stvxl	v9,r4,r11
+            stvxl	v10,r5,r11
+            stvxl	v11,r6,r11
+            stvxl	v12,r7,r11
+            stvxl	v13,r8,r11
+            stvxl	v14,r9,r11
+            stvxl	v15,r10,r11
+
+vr_st64c:
+            bf		16,vr_st64d				; skip if none of vr16-vr23 are in use
+            la		r11,savevr16(r3)		; get address of this group of registers in save area
+            dcbz128	0,r11					; zero the line
+            stvxl	v16,0,r11				; save 8 VRs in the line
+            stvxl	v17,r4,r11
+            stvxl	v18,r5,r11
+            stvxl	v19,r6,r11
+            stvxl	v20,r7,r11
+            stvxl	v21,r8,r11
+            stvxl	v22,r9,r11
+            stvxl	v23,r10,r11
+
+vr_st64d:
+            bflr	24						; done if none of vr24-vr31 are in use
+            la		r11,savevr24(r3)		; get address of this group of registers in save area
+            dcbz128	0,r11					; zero the line
+            stvxl	v24,0,r11				; save 8 VRs in the line
+            stvxl	v25,r4,r11
+            stvxl	v26,r5,r11
+            stvxl	v27,r6,r11
+            stvxl	v28,r7,r11
+            stvxl	v29,r8,r11
+            stvxl	v30,r9,r11
+            stvxl	v31,r10,r11
+            blr            
+            
+; Save vectors on a 32-byte linesize processor.  We save in 16 groups of 2: we either save both
+; or neither in each group.  This cuts down on conditional branches.
+;			 r8 = bitmask with bit n set (for even n) if either of that pair of VRs is in use
+;		     r3 = savearea
+
+vr_st32:
+            mtcrf	0xFF,r8					; set CR bits so we can branch on them
+            li		r4,16					; load offset for X-form stores
+
+            bf		0,vr_st32b				; skip if neither VR in this pair is in use
+            la		r11,savevr0(r3)			; get address of this group of registers in save area
+            dcba	0,r11					; establish the line wo reading it
+            stvxl	v0,0,r11				; save the two VRs in the line
+            stvxl	v1,r4,r11
+
+vr_st32b:
+            bf		2,vr_st32c				; skip if neither VR in this pair is in use
+            la		r11,savevr2(r3)			; get address of this group of registers in save area
+            dcba	0,r11					; establish the line wo reading it
+            stvxl	v2,0,r11				; save the two VRs in the line
+            stvxl	v3,r4,r11
+
+vr_st32c:
+            bf		4,vr_st32d				; skip if neither VR in this pair is in use
+            la		r11,savevr4(r3)			; get address of this group of registers in save area
+            dcba	0,r11					; establish the line wo reading it
+            stvxl	v4,0,r11				; save the two VRs in the line
+            stvxl	v5,r4,r11
+
+vr_st32d:
+            bf		6,vr_st32e				; skip if neither VR in this pair is in use
+            la		r11,savevr6(r3)			; get address of this group of registers in save area
+            dcba	0,r11					; establish the line wo reading it
+            stvxl	v6,0,r11				; save the two VRs in the line
+            stvxl	v7,r4,r11
+
+vr_st32e:
+            bf		8,vr_st32f				; skip if neither VR in this pair is in use
+            la		r11,savevr8(r3)			; get address of this group of registers in save area
+            dcba	0,r11					; establish the line wo reading it
+            stvxl	v8,0,r11				; save the two VRs in the line
+            stvxl	v9,r4,r11
+
+vr_st32f:
+            bf		10,vr_st32g				; skip if neither VR in this pair is in use
+            la		r11,savevr10(r3)		; get address of this group of registers in save area
+            dcba	0,r11					; establish the line wo reading it
+            stvxl	v10,0,r11				; save the two VRs in the line
+            stvxl	v11,r4,r11
+
+vr_st32g:
+            bf		12,vr_st32h				; skip if neither VR in this pair is in use
+            la		r11,savevr12(r3)		; get address of this group of registers in save area
+            dcba	0,r11					; establish the line wo reading it
+            stvxl	v12,0,r11				; save the two VRs in the line
+            stvxl	v13,r4,r11
+
+vr_st32h:
+            bf		14,vr_st32i				; skip if neither VR in this pair is in use
+            la		r11,savevr14(r3)		; get address of this group of registers in save area
+            dcba	0,r11					; establish the line wo reading it
+            stvxl	v14,0,r11				; save the two VRs in the line
+            stvxl	v15,r4,r11
+
+vr_st32i:
+            bf		16,vr_st32j				; skip if neither VR in this pair is in use
+            la		r11,savevr16(r3)		; get address of this group of registers in save area
+            dcba	0,r11					; establish the line wo reading it
+            stvxl	v16,0,r11				; save the two VRs in the line
+            stvxl	v17,r4,r11
+
+vr_st32j:
+            bf		18,vr_st32k				; skip if neither VR in this pair is in use
+            la		r11,savevr18(r3)		; get address of this group of registers in save area
+            dcba	0,r11					; establish the line wo reading it
+            stvxl	v18,0,r11				; save the two VRs in the line
+            stvxl	v19,r4,r11
+
+vr_st32k:
+            bf		20,vr_st32l				; skip if neither VR in this pair is in use
+            la		r11,savevr20(r3)		; get address of this group of registers in save area
+            dcba	0,r11					; establish the line wo reading it
+            stvxl	v20,0,r11				; save the two VRs in the line
+            stvxl	v21,r4,r11
+
+vr_st32l:
+            bf		22,vr_st32m				; skip if neither VR in this pair is in use
+            la		r11,savevr22(r3)		; get address of this group of registers in save area
+            dcba	0,r11					; establish the line wo reading it
+            stvxl	v22,0,r11				; save the two VRs in the line
+            stvxl	v23,r4,r11
+
+vr_st32m:
+            bf		24,vr_st32n				; skip if neither VR in this pair is in use
+            la		r11,savevr24(r3)		; get address of this group of registers in save area
+            dcba	0,r11					; establish the line wo reading it
+            stvxl	v24,0,r11				; save the two VRs in the line
+            stvxl	v25,r4,r11
+
+vr_st32n:
+            bf		26,vr_st32o				; skip if neither VR in this pair is in use
+            la		r11,savevr26(r3)		; get address of this group of registers in save area
+            dcba	0,r11					; establish the line wo reading it
+            stvxl	v26,0,r11				; save the two VRs in the line
+            stvxl	v27,r4,r11
+
+vr_st32o:
+            bf		28,vr_st32p				; skip if neither VR in this pair is in use
+            la		r11,savevr28(r3)		; get address of this group of registers in save area
+            dcba	0,r11					; establish the line wo reading it
+            stvxl	v28,0,r11				; save the two VRs in the line
+            stvxl	v29,r4,r11
+
+vr_st32p:
+            bflr	30						; done if neither VR in this pair is in use
+            la		r11,savevr30(r3)		; get address of this group of registers in save area
+            dcba	0,r11					; establish the line wo reading it
+            stvxl	v30,0,r11				; save the two VRs in the line
+            stvxl	v31,r4,r11
+            blr
+
+
+// *****************
+// * v r _ l o a d *
+// *****************
+//
+// Load live VRs from a savearea, according to bits set in a passed vector.  This is the reverse
+// of "vr_store".  Like it, we avoid touching unnecessary cache blocks and minimize conditional
+// branches by loading all VRs from a cache line, if we have to load any.  If we don't load the VRs
+// in a cache line, we bug them.  Note that this behavior is slightly different from earlier kernels,
+// which would bug all VRs that aren't live.
+//
+// When called:
+//		interrupts are off, vectors are enabled
+//		r3 = ptr to save area
+//		r10 = vector of live regs to load (ie, savevrsave & savevrvalid, may be 0)
+//		v31 = bugbug constant (0x7FFFDEAD7FFFDEAD7FFFDEAD7FFFDEAD)
+//
+// We destroy:
+//		r4 - r11, all CRs.
+
+vr_load:
+            mfsprg	r9,2					; get feature flags
+            li		r6,1					; assuming 32-byte, get (#VRs)-1 in a cacheline
+            mtcrf	0x02,r9					; set cache line size bits in cr6
+            lis		r7,0xC000				; assuming 32-byte, set bits 0-1
+            bt--	pf32Byteb,vr_ld0		; skip if 32-bit processor
+            li		r6,7					; 128-byte machines have 8 VRs in a cacheline
+            lis		r7,0xFF00				; so set bits 0-7
+            
+// Loop touching in cache blocks we will load from.
+//		r3 = savearea ptr
+//		r5 = we light bits for the VRs we will be loading
+//		r6 = 1 if 32-byte, 7 if 128-byte
+//		r7 = 0xC0000000 if 32-byte, 0xFF000000 if 128-byte
+//		r10 = live VR bits
+//		v31 = bugbug constant
+
+vr_ld0:
+            li		r5,0					; initialize set of VRs to load
+            la		r11,savevr0(r3)			; get address of register file
+            b		vr_ld2					; enter loop in middle
+            
+            .align	5
+vr_ld1:										; loop over each cache line we will load
+            dcbt	r4,r11					; start prefetch of the line
+            andc	r10,r10,r9				; turn off the bits in this line
+            or		r5,r5,r9				; we will load all these
+vr_ld2:										; initial entry pt
+            cntlzw	r4,r10					; get offset to next live VR
+            andc	r4,r4,r6				; cacheline align it
+            srw.	r9,r7,r4				; position bits for VRs in that cache line
+            slwi	r4,r4,4					; get byte offset within register file to that line
+            bne		vr_ld1					; loop if more bits in r10
+            
+            bf--	pf128Byteb,vr_ld32		; skip if not 128-byte lines
+
+// Handle a processor with 128-byte cache lines.  Four groups of 8 VRs.
+//		r3 = savearea ptr
+//		r5 = 1st bit in each cacheline is 1 iff any reg in that line must be loaded
+//		r11 = addr(savevr0)
+//		v31 = bugbug constant
+
+            mtcrf	0x80,r5					; set up bits for conditional branches
+            li		r4,16					; load offsets for X-form stores
+            li		r6,48
+            mtcrf	0x20,r5					; load CRs ona at a time, which is faster
+            li		r7,64
+            li		r8,80
+            mtcrf	0x08,r5
+            li		r9,96
+            li		r10,112
+            mtcrf	0x02,r5
+            li		r5,32
+            
+            bt		0,vr_ld128a				; skip if this line must be loaded
+            vor		v0,v31,v31				; no VR must be loaded, so bug them all
+            vor		v1,v31,v31
+            vor		v2,v31,v31
+            vor		v3,v31,v31
+            vor		v4,v31,v31
+            vor		v5,v31,v31
+            vor		v6,v31,v31
+            vor		v7,v31,v31
+            b		vr_ld128b
+vr_ld128a:									; must load from this line
+            lvxl	v0,0,r11
+            lvxl	v1,r4,r11
+            lvxl	v2,r5,r11
+            lvxl	v3,r6,r11
+            lvxl	v4,r7,r11
+            lvxl	v5,r8,r11
+            lvxl	v6,r9,r11
+            lvxl	v7,r10,r11
+            
+vr_ld128b:   								; here to handle next cache line         
+            la		r11,savevr8(r3)			; load offset to it
+            bt		8,vr_ld128c				; skip if this line must be loaded
+            vor		v8,v31,v31				; no VR must be loaded, so bug them all
+            vor		v9,v31,v31
+            vor		v10,v31,v31
+            vor		v11,v31,v31
+            vor		v12,v31,v31
+            vor		v13,v31,v31
+            vor		v14,v31,v31
+            vor		v15,v31,v31
+            b		vr_ld128d
+vr_ld128c:									; must load from this line
+            lvxl	v8,0,r11
+            lvxl	v9,r4,r11
+            lvxl	v10,r5,r11
+            lvxl	v11,r6,r11
+            lvxl	v12,r7,r11
+            lvxl	v13,r8,r11
+            lvxl	v14,r9,r11
+            lvxl	v15,r10,r11
+            
+vr_ld128d:   								; here to handle next cache line         
+            la		r11,savevr16(r3)		; load offset to it
+            bt		16,vr_ld128e			; skip if this line must be loaded
+            vor		v16,v31,v31				; no VR must be loaded, so bug them all
+            vor		v17,v31,v31
+            vor		v18,v31,v31
+            vor		v19,v31,v31
+            vor		v20,v31,v31
+            vor		v21,v31,v31
+            vor		v22,v31,v31
+            vor		v23,v31,v31
+            b		vr_ld128f
+vr_ld128e:									; must load from this line
+            lvxl	v16,0,r11
+            lvxl	v17,r4,r11
+            lvxl	v18,r5,r11
+            lvxl	v19,r6,r11
+            lvxl	v20,r7,r11
+            lvxl	v21,r8,r11
+            lvxl	v22,r9,r11
+            lvxl	v23,r10,r11
+            
+vr_ld128f:   								; here to handle next cache line         
+            la		r11,savevr24(r3)		; load offset to it
+            bt		24,vr_ld128g			; skip if this line must be loaded
+            vor		v24,v31,v31				; no VR must be loaded, so bug them all
+            vor		v25,v31,v31
+            vor		v26,v31,v31
+            vor		v27,v31,v31
+            vor		v28,v31,v31
+            vor		v29,v31,v31
+            vor		v30,v31,v31
+            blr
+vr_ld128g:									; must load from this line
+            lvxl	v24,0,r11
+            lvxl	v25,r4,r11
+            lvxl	v26,r5,r11
+            lvxl	v27,r6,r11
+            lvxl	v28,r7,r11
+            lvxl	v29,r8,r11
+            lvxl	v30,r9,r11
+            lvxl	v31,r10,r11
+            blr
+            
+// Handle a processor with 32-byte cache lines.  Sixteen groups of two VRs.
+//		r5 = 1st bit in each cacheline is 1 iff any reg in that line must be loaded
+//		r11 = addr(savevr0)
+
+vr_ld32:
+            mtcrf	0xFF,r5					; set up bits for conditional branches
+            li		r4,16					; load offset for X-form stores
+            
+            bt		0,vr_ld32load0			; skip if we must load this line
+            vor		v0,v31,v31				; neither VR is live, so bug them both
+            vor		v1,v31,v31
+            b		vr_ld32test2
+vr_ld32load0:								; must load VRs in this line
+            lvxl	v0,0,r11
+            lvxl	v1,r4,r11
+            
+vr_ld32test2:								; here to handle next cache line
+            la		r11,savevr2(r3)			; get offset to next cache line
+            bt		2,vr_ld32load2			; skip if we must load this line
+            vor		v2,v31,v31				; neither VR is live, so bug them both
+            vor		v3,v31,v31
+            b		vr_ld32test4
+vr_ld32load2:								; must load VRs in this line
+            lvxl	v2,0,r11
+            lvxl	v3,r4,r11
+            
+vr_ld32test4:								; here to handle next cache line
+            la		r11,savevr4(r3)			; get offset to next cache line
+            bt		4,vr_ld32load4			; skip if we must load this line
+            vor		v4,v31,v31				; neither VR is live, so bug them both
+            vor		v5,v31,v31
+            b		vr_ld32test6
+vr_ld32load4:								; must load VRs in this line
+            lvxl	v4,0,r11
+            lvxl	v5,r4,r11
+            
+vr_ld32test6:								; here to handle next cache line
+            la		r11,savevr6(r3)			; get offset to next cache line
+            bt		6,vr_ld32load6			; skip if we must load this line
+            vor		v6,v31,v31				; neither VR is live, so bug them both
+            vor		v7,v31,v31
+            b		vr_ld32test8
+vr_ld32load6:								; must load VRs in this line
+            lvxl	v6,0,r11
+            lvxl	v7,r4,r11
+            
+vr_ld32test8:								; here to handle next cache line
+            la		r11,savevr8(r3)			; get offset to next cache line
+            bt		8,vr_ld32load8			; skip if we must load this line
+            vor		v8,v31,v31				; neither VR is live, so bug them both
+            vor		v9,v31,v31
+            b		vr_ld32test10
+vr_ld32load8:								; must load VRs in this line
+            lvxl	v8,0,r11
+            lvxl	v9,r4,r11
+            
+vr_ld32test10:								; here to handle next cache line
+            la		r11,savevr10(r3)		; get offset to next cache line
+            bt		10,vr_ld32load10		; skip if we must load this line
+            vor		v10,v31,v31				; neither VR is live, so bug them both
+            vor		v11,v31,v31
+            b		vr_ld32test12
+vr_ld32load10:								; must load VRs in this line
+            lvxl	v10,0,r11
+            lvxl	v11,r4,r11
+            
+vr_ld32test12:								; here to handle next cache line
+            la		r11,savevr12(r3)		; get offset to next cache line
+            bt		12,vr_ld32load12		; skip if we must load this line
+            vor		v12,v31,v31				; neither VR is live, so bug them both
+            vor		v13,v31,v31
+            b		vr_ld32test14
+vr_ld32load12:								; must load VRs in this line
+            lvxl	v12,0,r11
+            lvxl	v13,r4,r11
+            
+vr_ld32test14:								; here to handle next cache line
+            la		r11,savevr14(r3)		; get offset to next cache line
+            bt		14,vr_ld32load14		; skip if we must load this line
+            vor		v14,v31,v31				; neither VR is live, so bug them both
+            vor		v15,v31,v31
+            b		vr_ld32test16
+vr_ld32load14:								; must load VRs in this line
+            lvxl	v14,0,r11
+            lvxl	v15,r4,r11
+            
+vr_ld32test16:								; here to handle next cache line
+            la		r11,savevr16(r3)		; get offset to next cache line
+            bt		16,vr_ld32load16		; skip if we must load this line
+            vor		v16,v31,v31				; neither VR is live, so bug them both
+            vor		v17,v31,v31
+            b		vr_ld32test18
+vr_ld32load16:								; must load VRs in this line
+            lvxl	v16,0,r11
+            lvxl	v17,r4,r11
+            
+vr_ld32test18:								; here to handle next cache line
+            la		r11,savevr18(r3)		; get offset to next cache line
+            bt		18,vr_ld32load18		; skip if we must load this line
+            vor		v18,v31,v31				; neither VR is live, so bug them both
+            vor		v19,v31,v31
+            b		vr_ld32test20
+vr_ld32load18:								; must load VRs in this line
+            lvxl	v18,0,r11
+            lvxl	v19,r4,r11
+            
+vr_ld32test20:								; here to handle next cache line
+            la		r11,savevr20(r3)		; get offset to next cache line
+            bt		20,vr_ld32load20		; skip if we must load this line
+            vor		v20,v31,v31				; neither VR is live, so bug them both
+            vor		v21,v31,v31
+            b		vr_ld32test22
+vr_ld32load20:								; must load VRs in this line
+            lvxl	v20,0,r11
+            lvxl	v21,r4,r11
+            
+vr_ld32test22:								; here to handle next cache line
+            la		r11,savevr22(r3)		; get offset to next cache line
+            bt		22,vr_ld32load22		; skip if we must load this line
+            vor		v22,v31,v31				; neither VR is live, so bug them both
+            vor		v23,v31,v31
+            b		vr_ld32test24
+vr_ld32load22:								; must load VRs in this line
+            lvxl	v22,0,r11
+            lvxl	v23,r4,r11
+            
+vr_ld32test24:								; here to handle next cache line
+            la		r11,savevr24(r3)		; get offset to next cache line
+            bt		24,vr_ld32load24		; skip if we must load this line
+            vor		v24,v31,v31				; neither VR is live, so bug them both
+            vor		v25,v31,v31
+            b		vr_ld32test26
+vr_ld32load24:								; must load VRs in this line
+            lvxl	v24,0,r11
+            lvxl	v25,r4,r11
+            
+vr_ld32test26:								; here to handle next cache line
+            la		r11,savevr26(r3)		; get offset to next cache line
+            bt		26,vr_ld32load26		; skip if we must load this line
+            vor		v26,v31,v31				; neither VR is live, so bug them both
+            vor		v27,v31,v31
+            b		vr_ld32test28
+vr_ld32load26:								; must load VRs in this line
+            lvxl	v26,0,r11
+            lvxl	v27,r4,r11
+            
+vr_ld32test28:								; here to handle next cache line
+            la		r11,savevr28(r3)		; get offset to next cache line
+            bt		28,vr_ld32load28		; skip if we must load this line
+            vor		v28,v31,v31				; neither VR is live, so bug them both
+            vor		v29,v31,v31
+            b		vr_ld32test30
+vr_ld32load28:								; must load VRs in this line
+            lvxl	v28,0,r11
+            lvxl	v29,r4,r11
+            
+vr_ld32test30:								; here to handle next cache line
+            la		r11,savevr30(r3)		; get offset to next cache line
+            bt		30,vr_ld32load30		; skip if we must load this line
+            vor		v30,v31,v31				; neither VR is live, so bug them both
+            blr
+vr_ld32load30:								; must load VRs in this line
+            lvxl	v30,0,r11
+            lvxl	v31,r4,r11
+            blr

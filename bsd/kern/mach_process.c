@@ -3,19 +3,22 @@
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
+ * Copyright (c) 1999-2003 Apple Computer, Inc.  All Rights Reserved.
  * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this
+ * file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
  * 
  * @APPLE_LICENSE_HEADER_END@
  */
@@ -114,7 +117,7 @@ ptrace(p, uap, retval)
 	int		*locr0;
 	int error = 0;
 #if defined(ppc)
-	struct ppc_thread_state statep;
+	struct ppc_thread_state64 statep;
 #elif	defined(i386)
 	struct i386_saved_state statep;
 #else
@@ -288,8 +291,8 @@ ptrace(p, uap, retval)
 			goto errorLabel;
 		}	
 #elif defined(ppc)
-		state_count = PPC_THREAD_STATE_COUNT;
-		if (thread_getstatus(th_act, PPC_THREAD_STATE, &statep, &state_count)  != KERN_SUCCESS) {
+		state_count = PPC_THREAD_STATE64_COUNT;
+		if (thread_getstatus(th_act, PPC_THREAD_STATE64, &statep, &state_count)  != KERN_SUCCESS) {
 			goto errorLabel;
 		}	
 #else
@@ -303,9 +306,9 @@ ptrace(p, uap, retval)
 		if (!ALIGNED((int)uap->addr, sizeof(int)))
 			return (ERESTART);
 
-		statep.srr0 = (int)uap->addr;
-		state_count = PPC_THREAD_STATE_COUNT;
-		if (thread_setstatus(th_act, PPC_THREAD_STATE, &statep, &state_count)  != KERN_SUCCESS) {
+		statep.srr0 = (uint64_t)((uint32_t)uap->addr);
+		state_count = PPC_THREAD_STATE64_COUNT;
+		if (thread_setstatus(th_act, PPC_THREAD_STATE64, &statep, &state_count)  != KERN_SUCCESS) {
 			goto errorLabel;
 		}	
 #undef 	ALIGNED
@@ -321,8 +324,8 @@ ptrace(p, uap, retval)
 			psignal_lock(t, uap->data, 0);
                 }
 #if defined(ppc)
-		state_count = PPC_THREAD_STATE_COUNT;
-		if (thread_getstatus(th_act, PPC_THREAD_STATE, &statep, &state_count)  != KERN_SUCCESS) {
+		state_count = PPC_THREAD_STATE64_COUNT;
+		if (thread_getstatus(th_act, PPC_THREAD_STATE64, &statep, &state_count)  != KERN_SUCCESS) {
 			goto errorLabel;
 		}	
 #endif
@@ -346,8 +349,8 @@ ptrace(p, uap, retval)
 #endif
 		}
 #if defined (ppc)
-		state_count = PPC_THREAD_STATE_COUNT;
-		if (thread_setstatus(th_act, PPC_THREAD_STATE, &statep, &state_count)  != KERN_SUCCESS) {
+		state_count = PPC_THREAD_STATE64_COUNT;
+		if (thread_setstatus(th_act, PPC_THREAD_STATE64, &statep, &state_count)  != KERN_SUCCESS) {
 			goto errorLabel;
 		}	
 #endif
@@ -356,7 +359,8 @@ ptrace(p, uap, retval)
 		t->p_stat = SRUN;
 		if (t->sigwait) {
 			wakeup((caddr_t)&(t->sigwait));
-			task_release(task);
+			if ((t->p_flag & P_SIGEXC) == 0)
+				task_release(task);
 		}
 		break;
 		

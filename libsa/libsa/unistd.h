@@ -5,4 +5,4 @@
 #define getpagesize()    PAGE_SIZE
 
 
-#endif _LIBSA_UNISTD_H_
+#endif /* _LIBSA_UNISTD_H_ */

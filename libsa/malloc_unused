@@ -22,7 +22,7 @@ void free_all(void) {
 
 #ifdef CLIENT_DEBUG
     current_block_total = 0;
-#endif CLIENT_DEBUG
+#endif /* CLIENT_DEBUG */
 
     return;
 

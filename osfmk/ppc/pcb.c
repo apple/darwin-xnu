@@ -3,19 +3,22 @@
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
+ * Copyright (c) 1999-2003 Apple Computer, Inc.  All Rights Reserved.
  * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this
+ * file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
  * 
  * @APPLE_LICENSE_HEADER_END@
  */
@@ -128,30 +131,26 @@ machine_kernel_stack_init(
 	void		(*start_pos)(thread_t))
 {
     vm_offset_t	stack;
-    unsigned int			*kss;
+    unsigned int			*kss, *stck;
 	struct savearea 		*sv;
 
     assert(thread->top_act->mact.pcb);
     assert(thread->kernel_stack);
     stack = thread->kernel_stack;
 
-#if	MACH_ASSERT
-    if (watchacts & WA_PCB)
-		printf("machine_kernel_stack_init(thr=%x,stk=%x,start_pos=%x)\n", thread,stack,start_pos);
-#endif	/* MACH_ASSERT */
-	
 	kss = (unsigned int *)STACK_IKS(stack);
 	sv = thread->top_act->mact.pcb;						/* This for the sake of C */
 
-	sv->save_lr = (unsigned int) start_pos;				/* Set up the execution address */
-	sv->save_srr0 = (unsigned int) start_pos;			/* Here too */
+	sv->save_lr = (uint64_t) start_pos;					/* Set up the execution address */
+	sv->save_srr0 = (uint64_t) start_pos;				/* Here too */
 	sv->save_srr1  = MSR_SUPERVISOR_INT_OFF;			/* Set the normal running MSR */
-	sv->save_r1 = (vm_offset_t) ((int)kss - KF_SIZE);	/* Point to the top frame on the stack */
+	stck = (unsigned int *)((unsigned int)kss - KF_SIZE);	/* Point to the top frame */
+	sv->save_r1 = (uint64_t)stck;						/* Point to the top frame on the stack */
 	sv->save_fpscr = 0;									/* Clear all floating point exceptions */
 	sv->save_vrsave = 0;								/* Set the vector save state */
 	sv->save_vscr[3] = 0x00010000;						/* Supress java mode */
 
-	*((int *)sv->save_r1) = 0;							/* Zero the frame backpointer */
+	*stck = 0;											/* Zero the frame backpointer */
 	thread->top_act->mact.ksp = 0;						/* Show that the kernel stack is in use already */
 
 }
@@ -171,6 +170,8 @@ switch_context(
 	register struct thread_shuttle* retval;
 	pmap_t	new_pmap;
 	facility_context *fowner;
+	struct per_proc_info *ppinfo;
+	
 	
 #if	MACH_LDEBUG || MACH_KDB
 	log_thread_action("switch", 
@@ -179,10 +180,10 @@ switch_context(
 			  (long)__builtin_return_address(0));
 #endif
 
-	per_proc_info[cpu_number()].old_thread = (unsigned int)old;
-	per_proc_info[cpu_number()].cpu_flags &= ~traceBE;  /* disable branch tracing if on */
-	assert(old_act->kernel_loaded ||
-	       active_stacks[cpu_number()] == old_act->thread->kernel_stack);
+	ppinfo = getPerProc();								/* Get our processor block */
+
+	ppinfo->old_thread = (unsigned int)old;
+	ppinfo->cpu_flags &= ~traceBE; 						 /* disable branch tracing if on */
 	       
 	check_simple_locks();
 
@@ -191,13 +192,13 @@ switch_context(
 	 * so that it can be found by the other if needed
 	 */
 	if(real_ncpus > 1) {								/* This is potentially slow, so only do when actually SMP */
-		fowner = per_proc_info[cpu_number()].FPU_owner;	/* Cache this because it may change */
+		fowner = ppinfo->FPU_owner;						/* Cache this because it may change */
 		if(fowner) {									/* Is there any live context? */
 			if(fowner->facAct == old->top_act) {		/* Is it for us? */
 				fpu_save(fowner);						/* Yes, save it */
 			}
 		}
-		fowner = per_proc_info[cpu_number()].VMX_owner;	/* Cache this because it may change */
+		fowner = ppinfo->VMX_owner;						/* Cache this because it may change */
 		if(fowner) {									/* Is there any live context? */
 			if(fowner->facAct == old->top_act) {		/* Is it for us? */
 				vec_save(fowner);						/* Yes, save it */
@@ -205,12 +206,14 @@ switch_context(
 		}
 	}
 
-#if DEBUG
-	if (watchacts & WA_PCB) {
-		printf("switch_context(0x%08x, 0x%x, 0x%08x)\n",
-		       old,continuation,new);
+	/*
+	 * If old thread is running VM, save per proc userProtKey and FamVMmode spcFlags bits in the thread spcFlags
+ 	 * This bits can be modified in the per proc without updating the thread spcFlags
+	 */
+	if(old_act->mact.specFlags & runningVM) {
+		old_act->mact.specFlags &=  ~(userProtKey|FamVMmode);
+		old_act->mact.specFlags |= (ppinfo->spcFlags) & (userProtKey|FamVMmode);
 	}
-#endif /* DEBUG */
 
 	/*
 	 * We do not have to worry about the PMAP module, so switch.
@@ -221,6 +224,9 @@ switch_context(
 
 	if(new_act->mact.specFlags & runningVM) {			/* Is the new guy running a VM? */
 		pmap_switch(new_act->mact.vmmCEntry->vmmPmap);	/* Switch to the VM's pmap */
+		ppinfo->VMMareaPhys = new_act->mact.vmmCEntry->vmmContextPhys;
+		ppinfo->VMMXAFlgs = new_act->mact.vmmCEntry->vmmXAFlgs;
+		ppinfo->FAMintercept = new_act->mact.vmmCEntry->vmmFAMintercept;
 	}
 	else {												/* otherwise, we use the task's pmap */
 		new_pmap = new_act->task->map->pmap;
@@ -229,14 +235,25 @@ switch_context(
 		}
 	}
 
+	if(old_act->mact.cioSpace != invalSpace) {			/* Does our old guy have an active copyin/out? */
+		old_act->mact.cioSpace |= cioSwitchAway;		/* Show we switched away from this guy */
+		hw_blow_seg(copyIOaddr);						/* Blow off the first segment */
+		hw_blow_seg(copyIOaddr + 0x10000000ULL);		/* Blow off the second segment */
+	}
+
 	KERNEL_DEBUG_CONSTANT(MACHDBG_CODE(DBG_MACH_SCHED,MACH_SCHED) | DBG_FUNC_NONE,
 		     (int)old, (int)new, old->sched_pri, new->sched_pri, 0);
 
+/*	*********** SWITCH HERE **************/
 	retval = Switch_context(old, continuation, new);
 	assert(retval != (struct thread_shuttle*)NULL);
+/*	*********** SWITCH HERE **************/
 
-	if (branch_tracing_enabled())
-	  per_proc_info[cpu_number()].cpu_flags |= traceBE;  /* restore branch tracing */
+
+	if (branch_tracing_enabled()) {
+		ppinfo = getPerProc();							/* Get our processor block */
+	  	ppinfo->cpu_flags |= traceBE;  					/* restore branch tracing */
+	}
 
 	/* We've returned from having switched context, so we should be
 	 * back in the original context.
@@ -255,11 +272,6 @@ thread_set_syscall_return(
 	kern_return_t	retval)
 {
 
-#if	MACH_ASSERT
-	if (watchacts & WA_PCB)
-		printf("thread_set_syscall_return(thr=%x,retval=%d)\n", thread,retval);
-#endif	/* MACH_ASSERT */
-
         thread->top_act->mact.pcb->save_r3 = retval;
 }
 
@@ -277,11 +289,6 @@ thread_machine_create(
 	unsigned int	*CIsTooLimited, i;
 
 
-#if	MACH_ASSERT
-    if (watchacts & WA_PCB)
-	printf("thread_machine_create(thr=%x,thr_act=%x,st=%x)\n", thread, thr_act, start_pos);
-#endif	/* MACH_ASSERT */
-
 	hw_atomic_add(&saveanchor.savetarget, 4);				/* Account for the number of saveareas we think we "need"
 															   for this activation */
 	assert(thr_act->mact.pcb == (savearea *)0);				/* Make sure there was no previous savearea */
@@ -293,15 +300,12 @@ thread_machine_create(
 	sv->save_hdr.save_prev = 0;								/* Clear the back pointer */
 	sv->save_hdr.save_flags = (sv->save_hdr.save_flags & ~SAVtype) | (SAVgeneral << SAVtypeshft);	/* Mark as in use */
 	sv->save_hdr.save_act = thr_act;						/* Set who owns it */
-	sv->save_vscr[3] = 0x00010000;							/* Supress java mode */
 	thr_act->mact.pcb = sv;									/* Point to the save area */
 	thr_act->mact.curctx = &thr_act->mact.facctx;			/* Initialize facility context */
 	thr_act->mact.facctx.facAct = thr_act;					/* Initialize facility context pointer to activation */
+	thr_act->mact.cioSpace = invalSpace;					/* Initialize copyin/out space to invalid */
+	thr_act->mact.preemption_count = 0;						/* Initialize preemption counter */
 
-#if	MACH_ASSERT
-	if (watchacts & WA_PCB)
-		printf("pcb_init(%x) pcb=%x\n", thr_act, sv);
-#endif	/* MACH_ASSERT */
 	/*
 	 * User threads will pull their context from the pcb when first
 	 * returning to user mode, so fill in all the necessary values.
@@ -309,13 +313,14 @@ thread_machine_create(
 	 * at the base of the kernel stack (see stack_attach()).
 	 */
 
-	sv->save_srr1 = MSR_EXPORT_MASK_SET;					/* Set the default user MSR */
+	sv->save_srr1 = (uint64_t)MSR_EXPORT_MASK_SET;			/* Set the default user MSR */
+	sv->save_fpscr = 0;										/* Clear all floating point exceptions */
+	sv->save_vrsave = 0;									/* Set the vector save state */
+	sv->save_vscr[0] = 0x00000000;					
+	sv->save_vscr[1] = 0x00000000;					
+	sv->save_vscr[2] = 0x00000000;					
+	sv->save_vscr[3] = 0x00010000;							/* Disable java mode and clear saturated */
 	
-	CIsTooLimited = (unsigned int *)(&sv->save_sr0);		/* Make a pointer 'cause C can't cast on the left */
-	for(i=0; i<16; i++) {									/* Initialize all SRs */
-		CIsTooLimited[i] = SEG_REG_PROT | (i << 20) | thr_act->task->map->pmap->space;	/* Set the SR value */
-	}
-
     return(KERN_SUCCESS);
 }
 
@@ -364,25 +369,30 @@ machine_switch_act(
 {
 	pmap_t		new_pmap;
 	facility_context *fowner;
+	struct per_proc_info *ppinfo;
+	
+	ppinfo = getPerProc();								/* Get our processor block */
 
 	/* Our context might wake up on another processor, so we must
 	 * not keep hot state in our FPU, it must go back to the pcb
 	 * so that it can be found by the other if needed
 	 */
 	if(real_ncpus > 1) {								/* This is potentially slow, so only do when actually SMP */
-		fowner = per_proc_info[cpu_number()].FPU_owner;	/* Cache this because it may change */
+		fowner = ppinfo->FPU_owner;						/* Cache this because it may change */
 		if(fowner) {									/* Is there any live context? */
 			if(fowner->facAct == old) {					/* Is it for us? */
 				fpu_save(fowner);						/* Yes, save it */
 			}
 		}
-		fowner = per_proc_info[cpu_number()].VMX_owner;	/* Cache this because it may change */
+		fowner = ppinfo->VMX_owner;						/* Cache this because it may change */
 		if(fowner) {									/* Is there any live context? */
 			if(fowner->facAct == old) {					/* Is it for us? */
 				vec_save(fowner);						/* Yes, save it */
 			}
 		}
 	}
+
+	old->mact.cioSpace |= cioSwitchAway;				/* Show we switched away from this guy */
 
 	active_stacks[cpu] = thread->kernel_stack;
 
@@ -393,8 +403,8 @@ machine_switch_act(
 	 * Change space if needed
 	 */
 
-	if(new->mact.specFlags & runningVM) {			/* Is the new guy running a VM? */
-		pmap_switch(new->mact.vmmCEntry->vmmPmap);	/* Switch to the VM's pmap */
+	if(new->mact.specFlags & runningVM) {				/* Is the new guy running a VM? */
+		pmap_switch(new->mact.vmmCEntry->vmmPmap);		/* Switch to the VM's pmap */
 	}
 	else {												/* otherwise, we use the task's pmap */
 		new_pmap = new->task->map->pmap;
@@ -403,13 +413,14 @@ machine_switch_act(
 		}
 	}
 
+
 }
 
 void
 pcb_user_to_kernel(thread_act_t act)
 {
 
-	return;													/* Not needed, I hope... */
+	return;												/* Not needed, I hope... */
 }
 
 
@@ -424,8 +435,8 @@ void
 act_machine_sv_free(thread_act_t act)
 {
 	register savearea *pcb, *userpcb;
-	register savearea_vec *vsv, *vpsv;
-	register savearea_fpu *fsv, *fpsv;
+	register savearea_vec *vsv, *vpst, *vsvt;
+	register savearea_fpu *fsv, *fpst, *fsvt;
 	register savearea *svp;
 	register int i;
 
@@ -437,40 +448,68 @@ act_machine_sv_free(thread_act_t act)
  *
  *	Walk through and release all floating point and vector contexts that are not
  *	user state.  We will also blow away live context if it belongs to non-user state.
+ *	Note that the level can not change while we are in this code.  Nor can another
+ *	context be pushed on the stack.
+ *
+ *	We do nothing here if the current level is user.  Otherwise,
+ *	the live context is cleared.  Then we find the user saved context.
+ *	Next,  we take the sync lock (to keep us from munging things in *_switch).
+ *	The level is set to 0 and all stacked context other than user is dequeued.
+ *	Then we unlock.  Next, all of the old kernel contexts are released.
  *
  */
  
  	if(act->mact.curctx->VMXlevel) {						/* Is the current level user state? */
+ 		
  		toss_live_vec(act->mact.curctx);					/* Dump live vectors if is not user */
- 		act->mact.curctx->VMXlevel = 0;						/* Mark as user state */
- 	}
 
-	vsv = act->mact.curctx->VMXsave;						/* Get the top vector savearea */
- 	
-	while(vsv) {											/* Any VMX saved state? */
-		vpsv = vsv;											/* Remember so we can toss this */
-		if (!vsv->save_hdr.save_level) break;   			/* Done when hit user if any */
-		vsv = (savearea_vec *)vsv->save_hdr.save_prev;		/* Get one underneath our's */		
-		save_ret((savearea *)vpsv);							/* Release it */
-	}
+		vsv = act->mact.curctx->VMXsave;					/* Get the top vector savearea */
+		
+		while(vsv && vsv->save_hdr.save_level) vsv = (savearea_vec *)vsv->save_hdr.save_prev;	/* Find user context if any */
 	
-	act->mact.curctx->VMXsave = vsv;						/* Queue the user context to the top */
+		if(!hw_lock_to((hw_lock_t)&act->mact.curctx->VMXsync, LockTimeOut)) {	/* Get the sync lock */ 
+			panic("act_machine_sv_free - timeout getting VMX sync lock\n");	/* Tell all and die */
+		}
+		
+		vsvt = act->mact.curctx->VMXsave;					/* Get the top of the chain */
+		act->mact.curctx->VMXsave = vsv;					/* Point to the user context */
+		act->mact.curctx->VMXlevel = 0;						/* Set the level to user */
+		hw_lock_unlock((hw_lock_t)&act->mact.curctx->VMXsync);	/* Unlock */
+		
+		while(vsvt) {										/* Clear any VMX saved state */
+			if (vsvt == vsv) break;   						/* Done when hit user if any */
+			vpst = vsvt;									/* Remember so we can toss this */
+			vsvt = (savearea_vec *)vsvt->save_hdr.save_prev;	/* Get one underneath our's */		
+			save_ret((savearea *)vpst);						/* Release it */
+		}
+		
+	}
  
  	if(act->mact.curctx->FPUlevel) {						/* Is the current level user state? */
- 		toss_live_fpu(act->mact.curctx);					/* Dump live float if is not user */
- 		act->mact.curctx->FPUlevel = 0;						/* Mark as user state */
- 	}
+ 		
+ 		toss_live_fpu(act->mact.curctx);					/* Dump live floats if is not user */
 
-	fsv = act->mact.curctx->FPUsave;						/* Get the top float savearea */
+		fsv = act->mact.curctx->FPUsave;					/* Get the top floats savearea */
+		
+		while(fsv && fsv->save_hdr.save_level) fsv = (savearea_fpu *)fsv->save_hdr.save_prev;	/* Find user context if any */
 	
-	while(fsv) {											/* Any float saved state? */
-		fpsv = fsv;											/* Remember so we can toss this */
-		if (!fsv->save_hdr.save_level) break;   			/* Done when hit user if any */
-		fsv = (savearea_fpu *)fsv->save_hdr.save_prev;		/* Get one underneath our's */		
-		save_ret((savearea *)fpsv);							/* Release it */
+		if(!hw_lock_to((hw_lock_t)&act->mact.curctx->FPUsync, LockTimeOut)) {	/* Get the sync lock */ 
+			panic("act_machine_sv_free - timeout getting FPU sync lock\n");	/* Tell all and die */
+		}
+		
+		fsvt = act->mact.curctx->FPUsave;					/* Get the top of the chain */
+		act->mact.curctx->FPUsave = fsv;					/* Point to the user context */
+		act->mact.curctx->FPUlevel = 0;						/* Set the level to user */
+		hw_lock_unlock((hw_lock_t)&act->mact.curctx->FPUsync);	/* Unlock */
+		
+		while(fsvt) {										/* Clear any VMX saved state */
+			if (fsvt == fsv) break;   						/* Done when hit user if any */
+			fpst = fsvt;									/* Remember so we can toss this */
+			fsvt = (savearea_fpu *)fsvt->save_hdr.save_prev;	/* Get one underneath our's */		
+			save_ret((savearea *)fpst);						/* Release it */
+		}
+		
 	}
-	
-	act->mact.curctx->FPUsave = fsv;						/* Queue the user context to the top */
 
 /*
  * free all regular saveareas except a user savearea, if any
@@ -522,11 +561,6 @@ act_machine_destroy(thread_act_t act)
 	register savearea_fpu *fsv, *fpsv;
 	register savearea *svp;
 	register int i;
-
-#if	MACH_ASSERT
-	if (watchacts & WA_PCB)
-		printf("act_machine_destroy(0x%x)\n", act);
-#endif	/* MACH_ASSERT */
 
 /*
  *	This function will release all context.
@@ -594,10 +628,6 @@ act_machine_create(task_t task, thread_act_t thr_act)
 
 void act_machine_init()
 {
-#if	MACH_ASSERT
-    if (watchacts & WA_PCB)
-	printf("act_machine_init()\n");
-#endif	/* MACH_ASSERT */
 
     /* Good to verify these once */
     assert( THREAD_MACHINE_STATE_MAX <= THREAD_STATE_MAX );
@@ -617,14 +647,6 @@ void
 act_machine_return(int code)
 {
     thread_act_t thr_act = current_act();
-
-#if	MACH_ASSERT
-    if (watchacts & WA_EXIT)
-	printf("act_machine_return(0x%x) cur_act=%x(%d) thr=%x(%d)\n",
-	       code, thr_act, thr_act->ref_count,
-	       thr_act->thread, thr_act->thread->ref_count);
-#endif	/* MACH_ASSERT */
-
 
 	/*
 	 * This code is called with nothing locked.
@@ -792,10 +814,14 @@ stack_handoff(thread_t old,
 	vm_offset_t stack;
 	pmap_t new_pmap;
 	facility_context *fowner;
+	int	my_cpu;
+	mapping *mp;
+	struct per_proc_info *ppinfo;
 	
 	assert(new->top_act);
 	assert(old->top_act);
 	
+	my_cpu = cpu_number();
 	stack = stack_detach(old);
 	new->kernel_stack = stack;
 	if (stack == old->stack_privilege) {
@@ -804,21 +830,31 @@ stack_handoff(thread_t old,
 		new->stack_privilege = stack;
 	}
 
-	per_proc_info[cpu_number()].cpu_flags &= ~traceBE;
+	ppinfo = getPerProc();								/* Get our processor block */
+
+	ppinfo->cpu_flags &= ~traceBE;						/* Turn off special branch trace */
 
 	if(real_ncpus > 1) {								/* This is potentially slow, so only do when actually SMP */
-		fowner = per_proc_info[cpu_number()].FPU_owner;	/* Cache this because it may change */
+		fowner = ppinfo->FPU_owner;						/* Cache this because it may change */
 		if(fowner) {									/* Is there any live context? */
 			if(fowner->facAct == old->top_act) {		/* Is it for us? */
 				fpu_save(fowner);						/* Yes, save it */
 			}
 		}
-		fowner = per_proc_info[cpu_number()].VMX_owner;	/* Cache this because it may change */
+		fowner = ppinfo->VMX_owner;						/* Cache this because it may change */
 		if(fowner) {									/* Is there any live context? */
 			if(fowner->facAct == old->top_act) {		/* Is it for us? */
 				vec_save(fowner);						/* Yes, save it */
 			}
 		}
+	}
+	/*
+	 * If old thread is running VM, save per proc userProtKey and FamVMmode spcFlags bits in the thread spcFlags
+ 	 * This bits can be modified in the per proc without updating the thread spcFlags
+	 */
+	if(old->top_act->mact.specFlags & runningVM) {			/* Is the current thread running a VM? */
+		old->top_act->mact.specFlags &= ~(userProtKey|FamVMmode);
+		old->top_act->mact.specFlags |= (ppinfo->spcFlags) & (userProtKey|FamVMmode);
 	}
 
 	KERNEL_DEBUG_CONSTANT(MACHDBG_CODE(DBG_MACH_SCHED,MACH_STACK_HANDOFF) | DBG_FUNC_NONE,
@@ -827,6 +863,9 @@ stack_handoff(thread_t old,
 
 	if(new->top_act->mact.specFlags & runningVM) {	/* Is the new guy running a VM? */
 		pmap_switch(new->top_act->mact.vmmCEntry->vmmPmap);	/* Switch to the VM's pmap */
+		ppinfo->VMMareaPhys = new->top_act->mact.vmmCEntry->vmmContextPhys;
+		ppinfo->VMMXAFlgs = new->top_act->mact.vmmCEntry->vmmXAFlgs;
+		ppinfo->FAMintercept = new->top_act->mact.vmmCEntry->vmmFAMintercept;
 	}
 	else {											/* otherwise, we use the task's pmap */
 		new_pmap = new->top_act->task->map->pmap;
@@ -836,16 +875,20 @@ stack_handoff(thread_t old,
 	}
 
 	thread_machine_set_current(new);
-	active_stacks[cpu_number()] = new->kernel_stack;
-	per_proc_info[cpu_number()].Uassist = new->top_act->mact.cthread_self;
+	active_stacks[my_cpu] = new->kernel_stack;
+	ppinfo->Uassist = new->top_act->mact.cthread_self;
 
-	per_proc_info[cpu_number()].ppbbTaskEnv = new->top_act->mact.bbTaskEnv;
-	per_proc_info[cpu_number()].spcFlags = new->top_act->mact.specFlags;
+	ppinfo->ppbbTaskEnv = new->top_act->mact.bbTaskEnv;
+	ppinfo->spcFlags = new->top_act->mact.specFlags;
+	
+	old->top_act->mact.cioSpace |= cioSwitchAway;	/* Show we switched away from this guy */
+	mp = (mapping *)&ppinfo->ppCIOmp;
+	mp->mpSpace = invalSpace;						/* Since we can't handoff in the middle of copy in/out, just invalidate */
 
 	if (branch_tracing_enabled()) 
-		per_proc_info[cpu_number()].cpu_flags |= traceBE;
+		ppinfo->cpu_flags |= traceBE;
     
-	if(trcWork.traceMask) dbgTrace(0x12345678, (unsigned int)old->top_act, (unsigned int)new->top_act);	/* Cut trace entry if tracing */    
+	if(trcWork.traceMask) dbgTrace(0x12345678, (unsigned int)old->top_act, (unsigned int)new->top_act, 0);	/* Cut trace entry if tracing */    
     
   return;
 }

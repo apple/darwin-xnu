@@ -50,7 +50,8 @@ INST_SUBDIRS =	\
 	libsa   \
 	iokit	\
 	osfmk	\
-	bsd
+	bsd	\
+	config
 
 INSTALL_FILE_LIST= \
 	mach_kernel

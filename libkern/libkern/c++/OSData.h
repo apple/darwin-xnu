@@ -3,19 +3,22 @@
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
+ * Copyright (c) 1999-2003 Apple Computer, Inc.  All Rights Reserved.
  * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this
+ * file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
  * 
  * @APPLE_LICENSE_HEADER_END@
  */
@@ -92,13 +95,12 @@ public:
                                 unsigned int start, unsigned int inLength);
 
     /*!
-        @function initWithBytes
-        @abstract A member function to initialize an instance of OSData with the provided data.
-        @param bytes A pointer to a block of data to be copied.
-        @param inLength The length of the block of data.
+        @function initWithCapacity
+        @abstract A member function to initialize an instance of OSData with a minimum capacity of at least the given size.  If this function is called an an object that has been previously used then the length is set down to 0 and a new block of data is allocated if necessary to ensure the given capacity.
+        @param capacity The length of the allocated block of data.
         @result Returns true if initialization was successful, false otherwise.
     */
-    virtual bool initWithCapacity(unsigned int inCapacity);
+    virtual bool initWithCapacity(unsigned int capacity);
     /*!
         @function initWithBytes
         @abstract A member function to initialize an instance of OSData which references a block of data.
@@ -173,7 +175,7 @@ public:
     /*!
         @function appendBytes
         @abstract A member function which appends a buffer of data onto the end of the object's internal data buffer.
-        @param bytes A pointer to the block of data.
+        @param bytes A pointer to the block of data.  If the value is 0 then append zero-ed memory to the data object.
         @param inLength The length of the data block.
         @result Returns true if the object was able to append the new data, false otherwise.
     */
@@ -249,6 +251,8 @@ public:
     virtual bool appendByte(unsigned char byte, unsigned int inCount);
 
 
+
+private:
     OSMetaClassDeclareReservedUnused(OSData, 0);
     OSMetaClassDeclareReservedUnused(OSData, 1);
     OSMetaClassDeclareReservedUnused(OSData, 2);

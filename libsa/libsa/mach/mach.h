@@ -9,4 +9,4 @@ __private_extern__ vm_map_t mach_task_self(void);
 char *mach_error_string(kern_return_t);
 
 
-#endif _LIBSA_MACH_MACH_H_
+#endif /* _LIBSA_MACH_MACH_H_ */

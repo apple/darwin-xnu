@@ -3,19 +3,22 @@
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
+ * Copyright (c) 1999-2003 Apple Computer, Inc.  All Rights Reserved.
  * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this
+ * file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
  * 
  * @APPLE_LICENSE_HEADER_END@
  */
@@ -38,6 +41,9 @@
 #error This file is only useful on PowerPC.
 #endif
 
+#include <mach/vm_types.h>
+#include <ppc/Diagnostics.h>
+
 /*
  *	This routine is used to write debug output to either the modem or printer port.
  *	parm 1 is printer (0) or modem (1); parm 2 is ID (printed directly); parm 3 converted to hex
@@ -48,14 +54,18 @@ void dbgLog(unsigned int d0, unsigned int d1, unsigned int d2, unsigned int d3);
 void dbgLog2(unsigned int type, unsigned int p1, unsigned int p2);
 void dbgDispLL(unsigned int port, unsigned int id, unsigned int data);
 void fwSCCinit(unsigned int port);
+void fwEmMck(unsigned int, unsigned int, unsigned int, unsigned int, unsigned int, unsigned int);	/* Start injecting */ 
+void fwSCOM(scomcomm *);	/* Read/Write SCOM */ 
+void setPmon(unsigned int, unsigned int);	/* Set perf mon stuff */ 
 
-extern void dbgTrace(unsigned int item1, unsigned int item2, unsigned int item3);
+extern void dbgTrace(unsigned int item1, unsigned int item2, unsigned int item3, unsigned int item4);
 #if 0		/* (TEST/DEBUG) - eliminate inline */
-extern __inline__ void dbgTrace(unsigned int item1, unsigned int item2, unsigned int item3) {
+extern __inline__ void dbgTrace(unsigned int item1, unsigned int item2, unsigned int item3, unsigned int item4) {
  
  		__asm__ volatile("mr   r3,%0" : : "r" (item1) : "r3");
  		__asm__ volatile("mr   r4,%0" : : "r" (item2) : "r4");
  		__asm__ volatile("mr   r5,%0" : : "r" (item3) : "r5");
+ 		__asm__ volatile("mr   r6,%0" : : "r" (item3) : "r6");
         __asm__ volatile("lis  r0,hi16(CutTrace)" : : : "r0");
         __asm__ volatile("ori  r0,r0,lo16(CutTrace)" : : : "r0");
         __asm__ volatile("sc");
@@ -107,7 +117,7 @@ extern __inline__ void ChokeSys(unsigned int ercd) {
 typedef struct Boot_Video bootBumbleC;
 
 extern void StoreReal(unsigned int val, unsigned int addr);
-extern void ReadReal(unsigned int raddr, unsigned int *vaddr);
+extern void ReadReal(addr64_t raddr, unsigned int *vaddr);
 extern void ClearReal(unsigned int addr, unsigned int lgn);
 extern void LoadDBATs(unsigned int *bat);
 extern void LoadIBATs(unsigned int *bat);
@@ -119,6 +129,7 @@ extern void GratefulDebInit(bootBumbleC *boot_video_info);
 extern void GratefulDebDisp(unsigned int coord, unsigned int data);
 extern void checkNMI(void);
 
+#pragma pack(1)							/* Make sure the structure stays as we defined it */
 typedef struct GDWorkArea {			/* Grateful Deb work area one per processor */
 
 /*	Note that a lot of info is duplicated for each processor */
@@ -144,6 +155,7 @@ typedef struct GDWorkArea {			/* Grateful Deb work area one per processor */
 	unsigned int GDrowbuf2[128];	/* Buffer to an 8 character row */
 
 } GDWorkArea;
+#pragma pack()
 #define GDfontsize 16
 #define GDdispcols 2
 

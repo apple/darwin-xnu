@@ -3,19 +3,22 @@
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
+ * Copyright (c) 1999-2003 Apple Computer, Inc.  All Rights Reserved.
  * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this
+ * file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
  * 
  * @APPLE_LICENSE_HEADER_END@
  */
@@ -1258,6 +1261,39 @@ hfs_relnamehints(struct cnode *dcp)
 			FREE(entry, M_TEMP);
 		}
 	}
+}
+
+
+/*
+ * Perform a case-insensitive compare of two UTF-8 filenames.
+ *
+ * Returns 0 if the strings match.
+ */
+__private_extern__
+int
+hfs_namecmp(const char *str1, size_t len1, const char *str2, size_t len2)
+{
+	u_int16_t *ustr1, *ustr2;
+	size_t ulen1, ulen2;
+	size_t maxbytes;
+	int cmp = -1;
+
+	if (len1 != len2)
+		return (cmp);
+
+	maxbytes = kHFSPlusMaxFileNameChars << 1;
+	MALLOC(ustr1, u_int16_t *, maxbytes << 1, M_TEMP, M_WAITOK);
+	ustr2 = ustr1 + (maxbytes >> 1);
+
+	if (utf8_decodestr(str1, len1, ustr1, &ulen1, maxbytes, ':', 0) != 0)
+		goto out;
+	if (utf8_decodestr(str2, len2, ustr2, &ulen2, maxbytes, ':', 0) != 0)
+		goto out;
+	
+	cmp = FastUnicodeCompare(ustr1, ulen1>>1, ustr2, ulen2>>1);
+out:
+	FREE(ustr1, M_TEMP);
+	return (cmp);
 }
 
 
