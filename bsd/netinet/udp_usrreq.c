@@ -289,17 +289,26 @@ udp_input(m, iphlen)
 	 * Checksum extended UDP header and data.
 	 */
 	if (uh->uh_sum) {
-               if (m->m_pkthdr.csum_flags & CSUM_DATA_VALID) {
-                        if (m->m_pkthdr.csum_flags & CSUM_PSEUDO_HDR)
-                                uh->uh_sum = m->m_pkthdr.csum_data;
-                        else
-			    goto doudpcksum;
-                      uh->uh_sum ^= 0xffff;
-                } else {
+		if (m->m_pkthdr.csum_flags & CSUM_DATA_VALID) {
+			if (m->m_pkthdr.csum_flags & CSUM_PSEUDO_HDR)
+				uh->uh_sum = m->m_pkthdr.csum_data;
+			else
+				goto doudpcksum;
+			uh->uh_sum ^= 0xffff;
+		} else {
+			char b[9];
 doudpcksum:
+			*(uint32_t*)&b[0] = *(uint32_t*)&((struct ipovly *)ip)->ih_x1[0];
+			*(uint32_t*)&b[4] = *(uint32_t*)&((struct ipovly *)ip)->ih_x1[4];
+			*(uint8_t*)&b[8] = *(uint8_t*)&((struct ipovly *)ip)->ih_x1[8];
+			
 			bzero(((struct ipovly *)ip)->ih_x1, 9);
 			((struct ipovly *)ip)->ih_len = uh->uh_ulen;
 			uh->uh_sum = in_cksum(m, len + sizeof (struct ip));
+			
+			*(uint32_t*)&((struct ipovly *)ip)->ih_x1[0] = *(uint32_t*)&b[0];
+			*(uint32_t*)&((struct ipovly *)ip)->ih_x1[4] = *(uint32_t*)&b[4];
+			*(uint8_t*)&((struct ipovly *)ip)->ih_x1[8] = *(uint8_t*)&b[8];
 		}
 		if (uh->uh_sum) {
 			udpstat.udps_badsum++;

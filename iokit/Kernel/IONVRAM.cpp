@@ -1421,18 +1421,23 @@ IOReturn IODTNVRAM::readNVRAMPropertyType1(IORegistryEntry *entry,
       nvPath = start;
     else if (nvName == 0)
       nvName = start;
-    else if (entry ==
-	     IORegistryEntry::fromPath((const char *) nvPath, gIODTPlane)) {
-      *name = OSSymbol::withCString((const char *) nvName);
-      *value = unescapeBytesToData(start, where - start - 1);
-      if ((*name != 0) && (*value != 0))
-        err = kIOReturnSuccess;
-      else
-        err = kIOReturnNoMemory;
-      break;
-    } else
+    else {
+      IORegistryEntry * compareEntry = IORegistryEntry::fromPath((const char *) nvPath, gIODTPlane);
+      if (entry == compareEntry) {
+        if (compareEntry)
+          compareEntry->release();
+	*name = OSSymbol::withCString((const char *) nvName);
+	*value = unescapeBytesToData(start, where - start - 1);
+	if ((*name != 0) && (*value != 0))
+	  err = kIOReturnSuccess;
+	else
+	  err = kIOReturnNoMemory;
+	break;
+      }
+      if (compareEntry)
+        compareEntry->release();
       nvPath = nvName = 0;
-    
+    }
     start = where;
   }
 
@@ -1475,15 +1480,21 @@ IOReturn IODTNVRAM::writeNVRAMPropertyType1(IORegistryEntry *entry,
         nvPath = start;
       else if (nvName == 0)
         nvName = start;
-      else if (entry ==
-                IORegistryEntry::fromPath((const char *) nvPath, gIODTPlane)) {
-        // delete old property (nvPath -> where)
-        data = OSData::withBytes(propStart, nvPath - propStart);
-        if (data)
-          ok &= data->appendBytes(where, end - where);
-        break;
-      } else
+      else {
+        IORegistryEntry * compareEntry = IORegistryEntry::fromPath((const char *) nvPath, gIODTPlane);
+        if (entry == compareEntry) {
+          if (compareEntry)
+             compareEntry->release();
+           // delete old property (nvPath -> where)
+           data = OSData::withBytes(propStart, nvPath - propStart);
+           if (data)
+             ok &= data->appendBytes(where, end - where);
+	   break;
+        }
+        if (compareEntry)
+          compareEntry->release();
         nvPath = nvName = 0;
+      }
         
       start = where;
     }

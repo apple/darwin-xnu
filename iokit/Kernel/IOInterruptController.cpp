@@ -96,10 +96,10 @@ IOReturn IOInterruptController::registerInterrupt(IOService *nub, int source,
       originalNub = vector->nub;
       originalSource = vector->source;
       
-      // Save the dis/enable state for the original consumer's interrupt.
-      // Then disable the source
-      wasDisabledSoft = vector->interruptDisabledSoft;
-      disableInterrupt(originalNub, originalSource);
+      // Physically disable the interrupt, but mark it as being enables in the hardware.
+      // The interruptDisabledSoft now indicates the driver's request for enablement.
+      disableVectorHard(vectorNumber, vector);
+      vector->interruptDisabledHard = 0;
       
       // Initialize the new shared interrupt controller.
       error = vector->sharedController->initInterruptController(this,
@@ -125,7 +125,17 @@ IOReturn IOInterruptController::registerInterrupt(IOService *nub, int source,
       // put the original consumor's interrupt back to normal and
       // get rid of whats left of the shared controller.
       if (error != kIOReturnSuccess) {
+	// Save the driver's interrupt enablement state.
+	wasDisabledSoft = vector->interruptDisabledSoft;
+	
+	// Make the interrupt really hard disabled.
+	vector->interruptDisabledSoft = 1;
+	vector->interruptDisabledHard = 1;
+	
+	// Enable the original consumer's interrupt if needed.
+	if (!wasDisabledSoft) originalNub->enableInterrupt(originalSource);
         enableInterrupt(originalNub, originalSource);
+	
         vector->sharedController->release();
         vector->sharedController = 0;
         IOUnlock(vector->interruptLock);
@@ -138,6 +148,13 @@ IOReturn IOInterruptController::registerInterrupt(IOService *nub, int source,
       vector->source  = 0;
       vector->target  = vector->sharedController;
       vector->refCon  = 0;
+      
+      // Save the driver's interrupt enablement state.
+      wasDisabledSoft = vector->interruptDisabledSoft;
+      
+      // Make the interrupt really hard disabled.
+      vector->interruptDisabledSoft = 1;
+      vector->interruptDisabledHard = 1;
       
       // Enable the original consumer's interrupt if needed.
       if (!wasDisabledSoft) originalNub->enableInterrupt(originalSource);
@@ -399,7 +416,7 @@ IOReturn IOSharedInterruptController::initInterruptController(IOInterruptControl
   }
   
   // Allocate the memory for the vectors
-  numVectors = 8; // For now a constant number.
+  numVectors = 32; // For now a constant number.
   vectors = (IOInterruptVector *)IOMalloc(numVectors * sizeof(IOInterruptVector));
   if (vectors == NULL) {
     IOFree(_interruptSources, sizeof(IOInterruptSource));

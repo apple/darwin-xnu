@@ -5,7 +5,7 @@
 	<key>CFBundleDevelopmentRegion</key>
 	<string>English</string>
 	<key>CFBundleGetInfoString</key>
-	<string>Libkern Pseudoextension, Apple Computer Inc, 6.5</string>
+	<string>Libkern Pseudoextension, Apple Computer Inc, 6.6</string>
 	<key>CFBundleIdentifier</key>
 	<string>com.apple.kernel.libkern</string>
 	<key>CFBundleInfoDictionaryVersion</key>
@@ -15,11 +15,11 @@
 	<key>CFBundlePackageType</key>
 	<string>KEXT</string>
 	<key>CFBundleShortVersionString</key>
-	<string>6.5</string>
+	<string>6.6</string>
 	<key>CFBundleSignature</key>
 	<string>????</string>
 	<key>CFBundleVersion</key>
-	<string>6.5</string>
+	<string>6.6</string>
 	<key>OSBundleCompatibleVersion</key>
 	<string>1.0.0b1</string>
 	<key>OSBundleRequired</key>

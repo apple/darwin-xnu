@@ -28,16 +28,16 @@
  */
 const char * gIOKernelKmods =
 "{
-    'com.apple.kernel'                         = '6.5';
-    'com.apple.kernel.bsd'                     = '6.5';
-    'com.apple.kernel.iokit'                   = '6.5';
-    'com.apple.kernel.libkern'                 = '6.5';
-    'com.apple.kernel.mach'                    = '6.5';
-    'com.apple.iokit.IOADBFamily'              = '6.5';
-    'com.apple.iokit.IONVRAMFamily'            = '6.5';
-    'com.apple.iokit.IOSystemManagementFamily' = '6.5';
-    'com.apple.iokit.ApplePlatformFamily'      = '6.5';
-    'com.apple.driver.AppleNMI'                = '6.5';
+    'com.apple.kernel'                         = '6.6';
+    'com.apple.kernel.bsd'                     = '6.6';
+    'com.apple.kernel.iokit'                   = '6.6';
+    'com.apple.kernel.libkern'                 = '6.6';
+    'com.apple.kernel.mach'                    = '6.6';
+    'com.apple.iokit.IOADBFamily'              = '6.6';
+    'com.apple.iokit.IONVRAMFamily'            = '6.6';
+    'com.apple.iokit.IOSystemManagementFamily' = '6.6';
+    'com.apple.iokit.ApplePlatformFamily'      = '6.6';
+    'com.apple.driver.AppleNMI'                = '6.6';
 }";
 
 
