@@ -70,7 +70,6 @@
 #include <net/if_llc.h>
 #include <net/if_dl.h>
 #include <net/if_types.h>
-#include <net/ndrv.h>
 #include <netinet/if_ether.h>
 
 #include <sys/socketvar.h>
@@ -411,7 +410,7 @@ ether_attach_at(struct ifnet *ifp, u_long *at_dl_tag, u_long *aarp_dl_tag)
     desc.variants.desc_802_2_SNAP.org[1] = 0x00;
     desc.variants.desc_802_2_SNAP.org[2] = 0x07;
     desc.variants.desc_802_2_SNAP.protocol_type = 0x809B;
-    desc.native_type = (char *) &native;
+    desc.native_type = NULL;
     TAILQ_INSERT_TAIL(&reg.demux_desc_head, &desc, next);
     reg.interface_family = ifp->if_family;
     reg.unit_number      = ifp->if_unit;

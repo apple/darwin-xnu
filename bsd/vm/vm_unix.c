@@ -292,7 +292,8 @@ task_for_pid(target_tport, pid, t)
 	if (
 		((p = pfind(pid)) != (struct proc *) 0)
 		&& (p1 != (struct proc *) 0)
-		&& ((p->p_ucred->cr_uid == p1->p_ucred->cr_uid)
+		&& (((p->p_ucred->cr_uid == p1->p_ucred->cr_uid) && 
+			((p->p_cred->p_ruid == p1->p_cred->p_ruid)))
 		|| !(suser(p1->p_ucred, &p1->p_acflag)))
 		&& (p->p_stat != SZOMB)
 		) {

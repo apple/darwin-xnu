@@ -70,7 +70,6 @@
 #include <net/if_llc.h>
 #include <net/if_dl.h>
 #include <net/if_types.h>
-#include <net/ndrv.h>
 #include <netinet/if_ether.h>
 
 /*
@@ -114,22 +113,13 @@ static ivedonethis = 0;
 
 #define IFP2AC(IFP) ((struct arpcom *)IFP)
 
-u_char	etherbroadcastaddr[6] = { 0xff, 0xff, 0xff, 0xff, 0xff, 0xff };
-
-
-#define DB_HEADER_SIZE 20
 struct en_desc {
-    short           total_len;
-    u_short         ethertype;
-    u_long	    dl_tag;
-    struct ifnet    *ifp;
-    struct if_proto *proto;
-    u_long          proto_id_length;
-    u_long           proto_id_data[8]; /* probably less - proto-id and bitmasks */
+    u_int16_t		type;		/* Type of protocol stored in data */
+    struct if_proto *proto;		/* Protocol structure */
+    u_long			data[2];	/* Protocol data */
 };
-    
-#define LITMUS_SIZE 16
-#define ETHER_DESC_BLK_SIZE 50
+
+#define ETHER_DESC_BLK_SIZE (10)
 #define MAX_INTERFACES 50
 
 /*
@@ -137,201 +127,177 @@ struct en_desc {
  */
 
 struct ether_desc_blk_str {
-    u_long   n_blocks;
-    u_long   *block_ptr;
-};
-
-struct dl_es_at_entry 
-{
-     struct ifnet *ifp;
-     u_long	  dl_tag;
-     int    ref_count;
+    u_long  n_max_used;
+    u_long	n_count;
+    struct en_desc  *block_ptr;
 };
 
 
 static struct ether_desc_blk_str ether_desc_blk[MAX_INTERFACES];
-static u_long  litmus_mask[LITMUS_SIZE];
-static u_long  litmus_length = 0;
-
-
-/*
- * Temp static for protocol registration XXX
- */
-
-#define MAX_EN_COUNT 30
-
-static struct dl_es_at_entry en_at_array[MAX_EN_COUNT];
-
-/*
- * This could be done below in-line with heavy casting, but the pointer arithmetic is 
- * prone to error.
- */
-
-static
-int  desc_in_bounds(block, current_ptr, offset_length)
-    u_int  block;
-    char   *current_ptr;
-    u_long offset_length;
-{
-    u_long end_of_block;
-    u_long current_ptr_tmp;
-
-    current_ptr_tmp = (u_long) current_ptr;
-    end_of_block = (u_long) ether_desc_blk[block].block_ptr;
-    end_of_block += (ETHER_DESC_BLK_SIZE * ether_desc_blk[block].n_blocks);
-    if ((current_ptr_tmp + offset_length) < end_of_block)
-	return 1;
-    else
-	return 0;
-}
 
 
 /*
  * Release all descriptor entries owned by this dl_tag (there may be several).
- * Setting the dl_tag to 0 releases the entry. Eventually we should compact-out
+ * Setting the type to 0 releases the entry. Eventually we should compact-out
  * the unused entries.
  */
 static
 int  ether_del_proto(struct if_proto *proto, u_long dl_tag)
 {
-    char *current_ptr = (char *) ether_desc_blk[proto->ifp->family_cookie].block_ptr;
-    struct en_desc	   *ed;
-    int i;
+    struct en_desc*	ed = ether_desc_blk[proto->ifp->family_cookie].block_ptr;
+    u_long	current = 0;
     int found = 0;
-
-    ed = (struct en_desc *) current_ptr;
-
-    while(ed->total_len) {
-	if (ed->dl_tag == dl_tag) {
-	    found = 1;
-	    ed->dl_tag = 0;
-	}
-
-	current_ptr += ed->total_len;
-	ed = (struct en_desc *) current_ptr;
+    
+    for (current = ether_desc_blk[proto->ifp->family_cookie].n_max_used;
+            current > 0; current--) {
+        if (ed[current - 1].proto == proto) {
+            found = 1;
+            ed[current - 1].type = 0;
+            
+            if (current == ether_desc_blk[proto->ifp->family_cookie].n_max_used) {
+                ether_desc_blk[proto->ifp->family_cookie].n_max_used--;
+            }
+        }
     }
+    
+    return found;
  }
 
 
 
-static
-int  ether_add_proto(struct ddesc_head_str *desc_head, struct if_proto *proto, u_long dl_tag)
+static int
+ether_add_proto(struct ddesc_head_str *desc_head, struct if_proto *proto, u_long dl_tag)
 {
    char *current_ptr;
    struct dlil_demux_desc  *desc;
-   u_long		   id_length; /* IN LONGWORDS!!! */
    struct en_desc	   *ed;
+   struct en_desc *last;
    u_long		   *bitmask;
    u_long		   *proto_id;
-   int			   i;
+   u_long		   i;
    short		   total_length;
    u_long		   block_count;
    u_long                  *tmp;
 
 
-   TAILQ_FOREACH(desc, desc_head, next) {
-       switch (desc->type) 
-       {
-       case DLIL_DESC_RAW:
-	   id_length   = desc->variants.bitmask.proto_id_length;
-	   break;
-	   
-       case DLIL_DESC_802_2:
-	   id_length = 1; 
-	   break;
-	   
-       case DLIL_DESC_802_2_SNAP:
-	   id_length = 2;
-	   break;
-	   
-       default:
-	   return EINVAL;
-       }
-
-restart:
-       block_count = ether_desc_blk[proto->ifp->family_cookie].n_blocks;
-       current_ptr =  (char *) ether_desc_blk[proto->ifp->family_cookie].block_ptr;
-       ed = (struct en_desc *) current_ptr;
-       total_length = ((id_length << 2) * 2) + DB_HEADER_SIZE;
-
-       while ((ed->total_len) && (desc_in_bounds(proto->ifp->family_cookie, 
-			      current_ptr, total_length))) {
-	   if ((ed->dl_tag == 0) && (total_length <= ed->total_len)) 
-	       break;
-	   else
-	       current_ptr += *(short *)current_ptr;
-	   
-	   ed = (struct en_desc *) current_ptr;
-       }
-
-       if (!desc_in_bounds(proto->ifp->family_cookie, current_ptr, total_length)) {
-
-	   tmp = _MALLOC((ETHER_DESC_BLK_SIZE * (block_count + 1)), 
-			 M_IFADDR, M_WAITOK);
-	   if (tmp  == 0) {
-	       /*
-	   	* Remove any previous descriptors set in the call.
-	   	*/
-	       ether_del_proto(proto, dl_tag);
-	       return ENOMEM;
-	   }
-
-	   bzero(tmp, ETHER_DESC_BLK_SIZE * (block_count + 1));
-	   bcopy(ether_desc_blk[proto->ifp->family_cookie].block_ptr, 
-		 tmp, (ETHER_DESC_BLK_SIZE * block_count));
-	   FREE(ether_desc_blk[proto->ifp->family_cookie].block_ptr, M_IFADDR);
-	   ether_desc_blk[proto->ifp->family_cookie].n_blocks = block_count + 1;
-	   ether_desc_blk[proto->ifp->family_cookie].block_ptr = tmp;
-	   goto restart;
-       }
-
-       if (ed->total_len == 0)
-	   ed->total_len = total_length;
-       ed->ethertype = *((u_short *) desc->native_type);
-
-       ed->dl_tag    = dl_tag;
-       ed->proto     = proto;
-       ed->proto_id_length = id_length;
-       ed->ifp       = proto->ifp;
-
-       switch (desc->type)
-       {
-       case DLIL_DESC_RAW:
-	   bcopy(desc->variants.bitmask.proto_id, &ed->proto_id_data[0], (id_length << 2) );
-	   bcopy(desc->variants.bitmask.proto_id_mask, &ed->proto_id_data[id_length],
-		 (id_length << 2));
-	   break;
-
-       case DLIL_DESC_802_2:
-	   ed->proto_id_data[0] = 0;
-	   bcopy(&desc->variants.desc_802_2, &ed->proto_id_data[0], 3);
-	   ed->proto_id_data[1] = 0xffffff00;
-	   break;
-
-       case DLIL_DESC_802_2_SNAP:
-	   /* XXX Add verification of fixed values here */
-
-	   ed->proto_id_data[0] = 0;
-	   ed->proto_id_data[1] = 0;
-	   bcopy(&desc->variants.desc_802_2_SNAP, &ed->proto_id_data[0], 8);
-	   ed->proto_id_data[2] = 0xffffffff;
-	   ed->proto_id_data[3] = 0xffffffff;;
-	   break;  
-       }
-       
-       if (id_length) {
-	   proto_id = (u_long *) &ed->proto_id_data[0];
-	   bitmask  = (u_long *) &ed->proto_id_data[id_length];
-	   for (i=0; i < (id_length); i++) {
-	       litmus_mask[i] &= bitmask[i];
-	       litmus_mask[i] &= proto_id[i];
-	   }
-	   if (id_length > litmus_length)
-	       litmus_length = id_length;
-       }
-   }	
-
-   return 0;
+    TAILQ_FOREACH(desc, desc_head, next) {
+        switch (desc->type) {
+            /* These types are supported */
+            /* Top three are preferred */
+            case DLIL_DESC_ETYPE2:
+                if (desc->variants.native_type_length != 2)
+                    return EINVAL;
+                break;
+                
+            case DLIL_DESC_SAP:
+                if (desc->variants.native_type_length != 3)
+                    return EINVAL;
+                break;
+                
+            case DLIL_DESC_SNAP:
+                if (desc->variants.native_type_length != 5)
+                    return EINVAL;
+                break;
+                
+            case DLIL_DESC_802_2:
+            case DLIL_DESC_802_2_SNAP:
+                break;
+            
+            case DLIL_DESC_RAW:
+                if (desc->variants.bitmask.proto_id_length == 0)
+                    break;
+                /* else fall through, bitmask variant not supported */
+            
+            default:
+                ether_del_proto(proto, dl_tag);
+                return EINVAL;
+        }
+    
+    restart:
+        ed = ether_desc_blk[proto->ifp->family_cookie].block_ptr;
+        
+        /* Find a free entry */
+        for (i = 0; i < ether_desc_blk[proto->ifp->family_cookie].n_count; i++) {
+            if (ed[i].type == 0) {
+                break;
+            }
+        }
+        
+        if (i >= ether_desc_blk[proto->ifp->family_cookie].n_count) {
+            u_long	new_count = ETHER_DESC_BLK_SIZE +
+                        ether_desc_blk[proto->ifp->family_cookie].n_count;
+            tmp = _MALLOC((new_count * (sizeof(*ed))), M_IFADDR, M_WAITOK);
+            if (tmp  == 0) {
+                /*
+                * Remove any previous descriptors set in the call.
+                */
+                ether_del_proto(proto, dl_tag);
+                return ENOMEM;
+            }
+            
+            bzero(tmp, new_count * sizeof(*ed));
+            bcopy(ether_desc_blk[proto->ifp->family_cookie].block_ptr, 
+                tmp, ether_desc_blk[proto->ifp->family_cookie].n_count * sizeof(*ed));
+            FREE(ether_desc_blk[proto->ifp->family_cookie].block_ptr, M_IFADDR);
+            ether_desc_blk[proto->ifp->family_cookie].n_count = new_count;
+            ether_desc_blk[proto->ifp->family_cookie].block_ptr = (struct en_desc*)tmp;
+        }
+        
+        /* Bump n_max_used if appropriate */
+        if (i + 1 > ether_desc_blk[proto->ifp->family_cookie].n_max_used) {
+            ether_desc_blk[proto->ifp->family_cookie].n_max_used = i + 1;
+        }
+        
+        ed[i].proto	= proto;
+        ed[i].data[0]	= 0;
+        ed[i].data[1] = 0;
+        
+        switch (desc->type) {
+            case DLIL_DESC_RAW:
+                /* 2 byte ethernet raw protocol type is at native_type */
+                /* protocol is not in network byte order */
+                ed[i].type = DLIL_DESC_ETYPE2;
+                ed[i].data[0] = htons(*(u_int16_t*)desc->native_type);
+                break;
+                
+            case DLIL_DESC_ETYPE2:
+                /* 2 byte ethernet raw protocol type is at native_type */
+                /* prtocol must be in network byte order */
+                ed[i].type = DLIL_DESC_ETYPE2;
+                ed[i].data[0] = *(u_int16_t*)desc->native_type;
+                break;
+            
+            case DLIL_DESC_802_2:
+                ed[i].type = DLIL_DESC_SAP;
+                ed[i].data[0] = *(u_int32_t*)&desc->variants.desc_802_2;
+                ed[i].data[0] &= htonl(0xFFFFFF00);
+                break;
+            
+            case DLIL_DESC_SAP:
+                ed[i].type = DLIL_DESC_SAP;
+                bcopy(desc->native_type, &ed[i].data[0], 3);
+                break;
+    
+            case DLIL_DESC_802_2_SNAP:
+                ed[i].type = DLIL_DESC_SNAP;
+                desc->variants.desc_802_2_SNAP.protocol_type =
+                    htons(desc->variants.desc_802_2_SNAP.protocol_type);
+                bcopy(&desc->variants.desc_802_2_SNAP, &ed[i].data[0], 8);
+                ed[i].data[0] &= htonl(0x000000FF);
+                desc->variants.desc_802_2_SNAP.protocol_type =
+                    ntohs(desc->variants.desc_802_2_SNAP.protocol_type);
+                break;
+            
+            case DLIL_DESC_SNAP: {
+                u_int8_t*	pDest = ((u_int8_t*)&ed[i].data[0]) + 3;
+                ed[i].type = DLIL_DESC_SNAP;
+                bcopy(&desc->native_type, pDest, 5);
+            }
+            break;
+        }
+    }
+    
+    return 0;
 } 
 
 
@@ -342,9 +308,6 @@ int  ether_shutdown()
 }
 
 
-
-
-
 int ether_demux(ifp, m, frame_header, proto)
     struct ifnet *ifp;
     struct mbuf  *m;
@@ -353,65 +316,82 @@ int ether_demux(ifp, m, frame_header, proto)
 
 {
     register struct ether_header *eh = (struct ether_header *)frame_header;
-    u_short ether_type;
-    char *current_ptr = (char *) ether_desc_blk[ifp->family_cookie].block_ptr;
-    struct dlil_demux_desc  *desc;
-    register u_long          temp;
-    u_long		    *data;
-    register struct if_proto *ifproto;
-    u_long		     i;
-    struct en_desc	     *ed;
-
-
+    u_short			ether_type = eh->ether_type;
+    u_int16_t		type;
+    u_int8_t		*data;
+    u_long			i = 0;
+    u_long			max = ether_desc_blk[ifp->family_cookie].n_max_used;
+    struct en_desc	*ed = ether_desc_blk[ifp->family_cookie].block_ptr;
+    u_int32_t		extProto1 = 0;
+    u_int32_t		extProto2 = 0;
+    
     if (eh->ether_dhost[0] & 1) {
-	if (bcmp((caddr_t)etherbroadcastaddr, (caddr_t)eh->ether_dhost,
-		 sizeof(etherbroadcastaddr)) == 0)
-	    m->m_flags |= M_BCAST;
-	else
-	    m->m_flags |= M_MCAST;
+        /* Check for broadcast */
+        if (*(u_int32_t*)eh->ether_dhost == 0xFFFFFFFF &&
+            *(u_int16_t*)(eh->ether_dhost + sizeof(u_int32_t)) == 0xFFFF)
+            m->m_flags |= M_BCAST;
+        else
+            m->m_flags |= M_MCAST;
     }
-
-    ether_type = ntohs(eh->ether_type);
-
+    
+    data = mtod(m, u_int8_t*);
+    
+    /*
+     * Determine the packet's protocol type and stuff the protocol into
+     * longs for quick compares.
+     */
+    
+    if (ntohs(ether_type) < 1500) {
+        extProto1 = *(u_int32_t*)data;
+        
+        // SAP or SNAP
+        if ((extProto1 & htonl(0xFFFFFF00)) == htonl(0xAAAA0300)) {
+            // SNAP
+            type = DLIL_DESC_SNAP;
+            extProto2 = *(u_int32_t*)(data + sizeof(u_int32_t));
+            extProto1 &= htonl(0x000000FF);
+        } else {
+            type = DLIL_DESC_SAP;
+            extProto1 &= htonl(0xFFFFFF00);
+        }
+    } else {
+        type = DLIL_DESC_ETYPE2;
+    }
+    
     /* 
      * Search through the connected protocols for a match. 
      */
-
-
-    data = mtod(m, u_long *);
-    ed = (struct en_desc *) current_ptr;
-    while (desc_in_bounds(ifp->family_cookie, current_ptr, DB_HEADER_SIZE)) {
-	if (ed->total_len == 0)
-	    break;
-
-	if ((ed->dl_tag !=  0) && (ed->ifp == ifp) && 
-	    ((ed->ethertype == ntohs(eh->ether_type)) || (ed->ethertype == 0))) {
-	    if (ed->proto_id_length) {
-		for (i=0; i < (ed->proto_id_length); i++) {
-		    temp = ntohs(data[i]) & ed->proto_id_data[ed->proto_id_length + i];
-		    if ((temp ^ ed->proto_id_data[i]))
-			break;
-		}
-
-		if (i >= (ed->proto_id_length)) {
-		    *proto = ed->proto;
-		    return 0;
-		}
-	    }
-	    else {
-		*proto = ed->proto;
-		return 0;
-	    }
-	}
-	current_ptr += ed->total_len;
-	ed = (struct en_desc *) current_ptr;
+    
+    switch (type) {
+        case DLIL_DESC_ETYPE2:
+            for (i = 0; i < max; i++) {
+                if ((ed[i].type == type) && (ed[i].data[0] == ether_type)) {
+                    *proto = ed[i].proto;
+                    return 0;
+                }
+            }
+            break;
+        
+        case DLIL_DESC_SAP:
+            for (i = 0; i < max; i++) {
+                if ((ed[i].type == type) && (ed[i].data[0] == extProto1)) {
+                    *proto = ed[i].proto;
+                    return 0;
+                }
+            }
+            break;
+        
+        case DLIL_DESC_SNAP:
+            for (i = 0; i < max; i++) {
+                if ((ed[i].type == type) && (ed[i].data[0] == extProto1) &&
+                    (ed[i].data[1] == extProto2)) {
+                    *proto = ed[i].proto;
+                    return 0;
+                }
+            }
+            break;
     }
-
-/*
-    kprintf("ether_demux - No match for <%x><%x><%x><%x><%x><%x><%x<%x>\n",
-	    eh->ether_type,data[0], data[1], data[2], data[3], data[4],data[5],data[6]);
-*/
-
+    
     return ENOENT;
 }			
 
@@ -451,25 +431,25 @@ ether_frameout(ifp, m, ndest, edst, ether_type)
 	if ((ifp->if_flags & IFF_SIMPLEX) &&
 	    ((*m)->m_flags & M_LOOP)) {
 	    if (lo_dlt == 0) 
-		dlil_find_dltag(APPLE_IF_FAM_LOOPBACK, 0, PF_INET, &lo_dlt);
+            dlil_find_dltag(APPLE_IF_FAM_LOOPBACK, 0, PF_INET, &lo_dlt);
 
 	    if (lo_dlt) {
-		if ((*m)->m_flags & M_BCAST) {
-		    struct mbuf *n = m_copy(*m, 0, (int)M_COPYALL);
-            if (n != NULL)
-                dlil_output(lo_dlt, n, 0, ndest, 0);
-		} 
-		else 
-		{
-		    if (bcmp(edst,  ac->ac_enaddr, ETHER_ADDR_LEN) == 0) {
-			dlil_output(lo_dlt, *m, 0, ndest, 0);
-			return EJUSTRETURN;
-		    }
-		}
+            if ((*m)->m_flags & M_BCAST) {
+                struct mbuf *n = m_copy(*m, 0, (int)M_COPYALL);
+                if (n != NULL)
+                    dlil_output(lo_dlt, n, 0, ndest, 0);
+            } 
+            else 
+            {
+                if (bcmp(edst,  ac->ac_enaddr, ETHER_ADDR_LEN) == 0) {
+                    dlil_output(lo_dlt, *m, 0, ndest, 0);
+                    return EJUSTRETURN;
+                }
+            }
 	    }
 	}
-
-
+    
+    
 	/*
 	 * Add local net header.  If no space in first mbuf,
 	 * allocate another.
@@ -501,18 +481,19 @@ int  ether_add_if(struct ifnet *ifp)
     ifp->if_event  = 0;
 
     for (i=0; i < MAX_INTERFACES; i++)
-	if (ether_desc_blk[i].n_blocks == 0)
-	    break;
+        if (ether_desc_blk[i].n_count == 0)
+            break;
 
     if (i == MAX_INTERFACES)
-	return ENOMEM;
+        return ENOMEM;
 
-    ether_desc_blk[i].block_ptr = _MALLOC(ETHER_DESC_BLK_SIZE, M_IFADDR, M_WAITOK);
+    ether_desc_blk[i].block_ptr = _MALLOC(ETHER_DESC_BLK_SIZE * sizeof(struct en_desc),
+                                            M_IFADDR, M_WAITOK);
     if (ether_desc_blk[i].block_ptr == 0)
-	return ENOMEM;
+        return ENOMEM;
 
-    ether_desc_blk[i].n_blocks = 1;
-    bzero(ether_desc_blk[i].block_ptr, ETHER_DESC_BLK_SIZE);
+    ether_desc_blk[i].n_count = ETHER_DESC_BLK_SIZE;
+    bzero(ether_desc_blk[i].block_ptr, ETHER_DESC_BLK_SIZE * sizeof(struct en_desc));
 
     ifp->family_cookie = i;
     
@@ -523,13 +504,16 @@ static
 int  ether_del_if(struct ifnet *ifp)
 {
     if ((ifp->family_cookie < MAX_INTERFACES) &&
-	(ether_desc_blk[ifp->family_cookie].n_blocks)) {
-	FREE(ether_desc_blk[ifp->family_cookie].block_ptr, M_IFADDR);
-	ether_desc_blk[ifp->family_cookie].n_blocks = 0;
-	return 0;
+        (ether_desc_blk[ifp->family_cookie].n_count))
+    {
+        FREE(ether_desc_blk[ifp->family_cookie].block_ptr, M_IFADDR);
+        ether_desc_blk[ifp->family_cookie].block_ptr = NULL;
+        ether_desc_blk[ifp->family_cookie].n_count = 0;
+        ether_desc_blk[ifp->family_cookie].n_max_used = 0;
+        return 0;
     }
     else
-	return ENOENT;
+        return ENOENT;
 }
 
 
@@ -547,39 +531,37 @@ ether_ifmod_ioctl(ifp, command, data)
     u_char *e_addr;
 
 
-    switch (command) 
-    {
-    case SIOCRSLVMULTI: 
-	 switch(rsreq->sa->sa_family) 
-	 {
-	 case AF_UNSPEC:
-	      /* AppleTalk uses AF_UNSPEC for multicast registration.
-	       * No mapping needed. Just check that it's a valid MC address.
-	       */
-	      e_addr = &rsreq->sa->sa_data[0];
-	      if ((e_addr[0] & 1) != 1)
-		   return EADDRNOTAVAIL;
-	      *rsreq->llsa = 0;
-	      return EJUSTRETURN;
-
-
-	 case AF_LINK:
-	      /* 
-	       * No mapping needed. Just check that it's a valid MC address.
-	       */
-	      sdl = (struct sockaddr_dl *)rsreq->sa;
-	      e_addr = LLADDR(sdl);
-	      if ((e_addr[0] & 1) != 1)
-		   return EADDRNOTAVAIL;
-	      *rsreq->llsa = 0;
-	      return EJUSTRETURN;
-	      
-	 default:
-	      return EAFNOSUPPORT;
-	 }
-
-    default:
-	 return EOPNOTSUPP;
+    switch (command) {
+        case SIOCRSLVMULTI: 
+        switch(rsreq->sa->sa_family) {
+            case AF_UNSPEC:
+                /* AppleTalk uses AF_UNSPEC for multicast registration.
+                 * No mapping needed. Just check that it's a valid MC address.
+                 */
+                e_addr = &rsreq->sa->sa_data[0];
+                if ((e_addr[0] & 1) != 1)
+                    return EADDRNOTAVAIL;
+                *rsreq->llsa = 0;
+                return EJUSTRETURN;
+            
+            
+            case AF_LINK:
+                /* 
+                 * No mapping needed. Just check that it's a valid MC address.
+                 */
+                sdl = (struct sockaddr_dl *)rsreq->sa;
+                e_addr = LLADDR(sdl);
+                if ((e_addr[0] & 1) != 1)
+                    return EADDRNOTAVAIL;
+                *rsreq->llsa = 0;
+                return EJUSTRETURN;
+                
+            default:
+                return EAFNOSUPPORT;
+        }
+        
+        default:
+            return EOPNOTSUPP;
     }
 }
 
@@ -590,7 +572,7 @@ int ether_family_init()
     struct dlil_ifmod_reg_str  ifmod_reg;
 
     if (ivedonethis)
-	return 0;
+        return 0;
 
     ivedonethis = 1;
 
@@ -602,18 +584,12 @@ int ether_family_init()
     ifmod_reg.shutdown    = ether_shutdown;
 
     if (dlil_reg_if_modules(APPLE_IF_FAM_ETHERNET, &ifmod_reg)) {
-	printf("WARNING: ether_family_init -- Can't register if family modules\n");
-	return EIO;
+        printf("WARNING: ether_family_init -- Can't register if family modules\n");
+        return EIO;
     }
 
-    for (i=0; i < (LITMUS_SIZE/4); i++)
-	litmus_mask[i] = 0xffffffff;
-
     for (i=0; i < MAX_INTERFACES; i++)
-	ether_desc_blk[i].n_blocks = 0;
-
-    for (i=0; i < MAX_EN_COUNT; i++)
-	 en_at_array[i].ifp = 0;
+        ether_desc_blk[i].n_count = 0;
 
     return 0;
 }

@@ -156,13 +156,13 @@ int IORecursiveLockSleep(IORecursiveLock *_lock, void *event, UInt32 interType)
     
     res = thread_block(0);
 
-    if (THREAD_AWAKENED == res) {
-        mutex_lock(lock->mutex);
-        assert(lock->thread == 0);
-        assert(lock->count == 0);
-        lock->thread = IOThreadSelf();
-        lock->count = count;
-    }
+    // Must re-establish the recursive lock no matter why we woke up
+    // otherwise we would potentially leave the return path corrupted.
+    mutex_lock(lock->mutex);
+    assert(lock->thread == 0);
+    assert(lock->count == 0);
+    lock->thread = IOThreadSelf();
+    lock->count = count;
 
     return res;
 }

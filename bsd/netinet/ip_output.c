@@ -1043,7 +1043,7 @@ in_delayed_cksum(struct mbuf *m)
 
         csum = in_cksum_skip(m, ip->ip_len, offset);
 
-	if (csum == 0)
+	if ((m->m_pkthdr.csum_flags & CSUM_UDP) && csum == 0)
 		csum = 0xffff;
 
         offset += m->m_pkthdr.csum_data & 0xFFFF;        /* checksum offset */

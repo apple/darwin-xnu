@@ -103,11 +103,10 @@ hfs_vhashget(dev, nodeID, forkType)
 	UInt32 nodeID;
 	UInt8	forkType;
 {
-	struct proc *p = current_proc();	/* XXX */
+	struct proc *p = current_proc();
 	struct hfsnode *hp;
 	struct vnode *vp;
 
-	DBG_ASSERT(forkType!=kUndefinedFork);
 	/* 
 	 * Go through the hash list
 	 * If a vnode is in the process of being cleaned out or being
@@ -116,31 +115,32 @@ hfs_vhashget(dev, nodeID, forkType)
 loop:
 	simple_lock(&hfs_vhash_slock);
 	for (hp = HFSNODEHASH(dev, nodeID)->lh_first; hp; hp = hp->h_hash.le_next) {
-		/* The vnode might be in an incomplete state, so sleep until its ready */
 		if (hp->h_nodeflags & IN_ALLOCATING) {
+			/*
+			 * vnode is being created. Wait for it to finish...
+			 */
+			hp->h_nodeflags |= IN_WANT;
 			simple_unlock(&hfs_vhash_slock);
-			tsleep((caddr_t)hp, PINOD, "hfs_vhashlookup", 0);
+			tsleep((caddr_t)hp, PINOD, "hfs_vhashget", 0);
 			goto loop;
-		};
-			
-		DBG_ASSERT(hp->h_meta != NULL);
-		if ((H_FILEID(hp) == nodeID)  &&
-			(H_DEV(hp) == dev)  &&
-			!(hp->h_meta->h_metaflags & IN_NOEXISTS)) {
-			/* SER XXX kDefault of meta data (ksysfile) is not assumed here */
-			if ( (forkType == kAnyFork) ||
-				 (H_FORKTYPE(hp) == forkType) || 
-				 ((forkType == kDefault) && ((H_FORKTYPE(hp) == kDirectory)
-							|| (H_FORKTYPE(hp) == kDataFork)))) {
-				vp = HTOV(hp);
-				simple_lock(&vp->v_interlock);
-				simple_unlock(&hfs_vhash_slock);
-				if (vget(vp, LK_EXCLUSIVE | LK_INTERLOCK, p))
-					goto loop;
-				return (vp);
-			};
-		};
-	};
+		}	
+		if ((H_FILEID(hp) != nodeID) || (H_DEV(hp) != dev) ||
+		    (hp->h_meta->h_metaflags & IN_NOEXISTS))
+			continue;
+
+		/* SER XXX kDefault of meta data (ksysfile) is not assumed here */
+		if ( (forkType == kAnyFork) ||
+			 (H_FORKTYPE(hp) == forkType) || 
+			 ((forkType == kDefault) && ((H_FORKTYPE(hp) == kDirectory)
+						|| (H_FORKTYPE(hp) == kDataFork)))) {
+			vp = HTOV(hp);
+			simple_lock(&vp->v_interlock);
+			simple_unlock(&hfs_vhash_slock);
+			if (vget(vp, LK_EXCLUSIVE | LK_INTERLOCK, p))
+				goto loop;
+			return (vp);
+		}
+	}
 	simple_unlock(&hfs_vhash_slock);
 	return (NULL);
 }
@@ -163,14 +163,8 @@ hfs_vhashins_sibling(dev, nodeID, hp, fm)
 	struct hfsnode *thp;
 	struct hfsfilemeta *tfm;
 
-	DBG_ASSERT(fm != NULL);
-	DBG_ASSERT(hp != NULL);
-	DBG_ASSERT(hp->h_meta == NULL);
-	DBG_ASSERT(H_FORKTYPE(hp)==kDataFork || H_FORKTYPE(hp)==kRsrcFork);
-
 	tfm = NULL;
 	lockmgr(&hp->h_lock, LK_EXCLUSIVE, (struct slock *)0, current_proc());
-
 
 	/* 
 	 * Go through the hash list to see if a sibling exists
@@ -183,23 +177,24 @@ hfs_vhashins_sibling(dev, nodeID, hp, fm)
 
 loop:
 	simple_lock(&hfs_vhash_slock);
-	for (thp = ipp->lh_first; thp; thp = thp->h_hash.le_next)	{
-		if (thp->h_nodeflags & IN_ALLOCATING) {		/* Its in the process of being allocated */
+	for (thp = ipp->lh_first; thp; thp = thp->h_hash.le_next) {
+		if (thp->h_nodeflags & IN_ALLOCATING) {
+			/*
+			 * vnode is being created. Wait for it to finish...
+			 */
+			thp->h_nodeflags |= IN_WANT;
 			simple_unlock(&hfs_vhash_slock);
-			tsleep((caddr_t)thp, PINOD, "hfs_vhash_ins_meta", 0);
+			tsleep((caddr_t)thp, PINOD, "hfs_vhashins_sibling", 0);
 			goto loop;
-		};
-			
-		DBG_ASSERT(thp->h_meta != NULL);
+		}
 		if ((H_FILEID(thp) == nodeID) && (H_DEV(thp) == dev)) {
 			tfm = hp->h_meta = thp->h_meta;
 			break;
-		};
-	};
+		}
+	}
 	
 	/* Add to sibling list..if it can have them */
 	if (tfm && (H_FORKTYPE(hp)==kDataFork || H_FORKTYPE(hp)==kRsrcFork)) {
-		DBG_ASSERT(tfm->h_siblinghead.cqh_first != NULL && tfm->h_siblinghead.cqh_last != NULL);
 		simple_lock(&tfm->h_siblinglock);
 		CIRCLEQ_INSERT_HEAD(&tfm->h_siblinghead, hp, h_sibling);
 		simple_unlock(&tfm->h_siblinglock);
@@ -249,7 +244,7 @@ hfs_vhashrem(hp)
 	simple_lock(&hfs_vhash_slock);
 	
 	/* Test to see if there are siblings, should only apply to forks */
-	if (hp->h_meta->h_siblinghead.cqh_first != NULL) {
+	if (hp->h_meta != NULL && hp->h_meta->h_siblinghead.cqh_first != NULL) {
 		simple_lock(&hp->h_meta->h_siblinglock);
 		CIRCLEQ_REMOVE(&hp->h_meta->h_siblinghead, hp, h_sibling);
 		simple_unlock(&hp->h_meta->h_siblinglock);
@@ -282,20 +277,15 @@ hfs_vhashmove(hp, oldNodeID)
 	struct hfsnode *thp, *nextNode;
 	UInt32 newNodeID;
 
-	DBG_ASSERT(hp != NULL);
-	DBG_ASSERT(hp->h_meta != NULL);
-	
-    newNodeID = H_FILEID(hp);
-
-    oldHeadIndex = HFSNODEHASH(H_DEV(hp), oldNodeID);
-    newHeadIndex = HFSNODEHASH(H_DEV(hp), newNodeID);
+	newNodeID = H_FILEID(hp);
+	oldHeadIndex = HFSNODEHASH(H_DEV(hp), oldNodeID);
+	newHeadIndex = HFSNODEHASH(H_DEV(hp), newNodeID);
 	
 	/* If it is moving to the same bucket...then we are done */
-    if (oldHeadIndex == newHeadIndex)
+	if (oldHeadIndex == newHeadIndex)
 		return;
 
 loop:
-	
 	/* 
 	 * Go through the old hash list
 	 * If there is a nodeid mismatch, or the nodeid doesnt match the current bucket
@@ -304,23 +294,26 @@ loop:
 	 * allocated, wait for it to be finished and then try again
 	 */
 	simple_lock(&hfs_vhash_slock);
-    for (nextNode = oldHeadIndex->lh_first; nextNode; )	{
-        if (nextNode->h_nodeflags & IN_ALLOCATING) {		/* Its in the process of being allocated */
+	for (nextNode = oldHeadIndex->lh_first; nextNode; )	{
+		if (nextNode->h_nodeflags & IN_ALLOCATING) {
+			/*
+			 * vnode is being created. Wait for it to finish...
+			 */
+			nextNode->h_nodeflags |= IN_WANT;
 			simple_unlock(&hfs_vhash_slock);
-            tsleep((caddr_t)nextNode, PINOD, "hfs_vhashmove", 0);
+			tsleep((caddr_t)nextNode, PINOD, "hfs_vhashmove", 0);
 			goto loop;
-			};
+		}
 			
-        DBG_ASSERT(nextNode->h_meta != NULL);
 		thp = nextNode;
-        nextNode = nextNode->h_hash.le_next;
+		nextNode = nextNode->h_hash.le_next;
 		if (newNodeID == H_FILEID(thp)) {
 			LIST_REMOVE(thp, h_hash);
-            thp->h_hash.le_next = NULL;
-            thp->h_hash.le_next = NULL;
-            LIST_INSERT_HEAD(newHeadIndex, thp, h_hash);
-			};
-		};
+			thp->h_hash.le_next = NULL;
+			thp->h_hash.le_next = NULL;
+			LIST_INSERT_HEAD(newHeadIndex, thp, h_hash);
+		}
+	}
 	
 	simple_unlock(&hfs_vhash_slock);
 }

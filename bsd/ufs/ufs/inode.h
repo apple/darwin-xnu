@@ -145,6 +145,8 @@ struct inode {
 #define	IN_EXLOCK	0x0040		/* File has exclusive lock. */
 #define	IN_TRANSIT	0x0080		/* inode is getting recycled  */
 #define	IN_WTRANSIT	0x0100		/* waiting for inode getting recycled  */
+#define	IN_ALLOC	0x0200		/* being allocated */
+#define	IN_WALLOC	0x0400		/* waiting for allocation to be done */
 
 #ifdef KERNEL
 /*

@@ -28,11 +28,11 @@
  */
 const char * gIOKernelKmods =
 "{
-    'com.apple.kernel'                         = '5.1';
-    'com.apple.kernel.bsd'                     = '5.1';
-    'com.apple.kernel.iokit'                   = '5.1';
-    'com.apple.kernel.libkern'                 = '5.1';
-    'com.apple.kernel.mach'                    = '5.1';
+    'com.apple.kernel'                         = '5.2';
+    'com.apple.kernel.bsd'                     = '5.2';
+    'com.apple.kernel.iokit'                   = '5.2';
+    'com.apple.kernel.libkern'                 = '5.2';
+    'com.apple.kernel.mach'                    = '5.2';
     'com.apple.iokit.IOADBFamily'              = '1.1';
     'com.apple.iokit.IOSystemManagementFamily' = '1.1';
 }";

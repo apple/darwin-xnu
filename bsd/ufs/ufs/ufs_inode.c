@@ -110,7 +110,7 @@ ufs_inactive(ap)
 		 * marking inode in transit so that one can get this 
 		 * inode from inodecache
 		 */
-		ip->i_flag |= IN_TRANSIT;
+		SET(ip->i_flag, IN_TRANSIT);
 		error = VOP_TRUNCATE(vp, (off_t)0, 0, NOCRED, p);
 		ip->i_rdev = 0;
 		mode = ip->i_mode;
@@ -168,5 +168,9 @@ ufs_reclaim(vp, p)
 		}
 	}
 #endif
+	CLR(ip->i_flag, (IN_ALLOC|IN_TRANSIT));
+	if (ISSET(ip->i_flag, IN_WALLOC)|| ISSET(ip->i_flag, IN_WTRANSIT))
+		wakeup(ip);
+
 	return (0);
 }

@@ -1020,29 +1020,57 @@ ffs_vget(mp, ino, vpp)
 	/* Allocate a new vnode/inode. */
 	type = ump->um_devvp->v_tag == VT_MFS ? M_MFSNODE : M_FFSNODE; /* XXX */
 	MALLOC_ZONE(ip, struct inode *, sizeof(struct inode), type, M_WAITOK);
-	if (error = getnewvnode(VT_UFS, mp, ffs_vnodeop_p, &vp)) {
-		FREE_ZONE(ip, sizeof(struct inode), type);
-		*vpp = NULL;
-		return (error);
-	}
 	bzero((caddr_t)ip, sizeof(struct inode));
 	lockinit(&ip->i_lock, PINOD, "inode", 0, 0);
-	vp->v_data = ip;
-	ip->i_vnode = vp;
+	/* lock the inode */
+	lockmgr(&ip->i_lock, LK_EXCLUSIVE, (struct slock *)0, p);
+
 	ip->i_fs = fs = ump->um_fs;
 	ip->i_dev = dev;
 	ip->i_number = ino;
+	ip->i_flag |= IN_ALLOC;
 #if QUOTA
 	for (i = 0; i < MAXQUOTAS; i++)
 		ip->i_dquot[i] = NODQUOT;
 #endif
+
 	/*
-	 * Put it onto its hash chain and lock it so that other requests for
+	 * MALLOC_ZONE is blocking call. Check for race.
+	 */
+	if ((*vpp = ufs_ihashget(dev, ino)) != NULL) {
+		/* Clean up */
+		FREE_ZONE(ip, sizeof(struct inode), type);
+		vp = *vpp;
+		UBCINFOCHECK("ffs_vget", vp);
+		return (0);
+	}
+
+	/*
+	 * Put it onto its hash chain locked so that other requests for
 	 * this inode will block if they arrive while we are sleeping waiting
 	 * for old data structures to be purged or for the contents of the
 	 * disk portion of this inode to be read.
 	 */
 	ufs_ihashins(ip);
+
+	if (error = getnewvnode(VT_UFS, mp, ffs_vnodeop_p, &vp)) {
+		ufs_ihashrem(ip);
+		if (ISSET(ip->i_flag, IN_WALLOC))
+			wakeup(ip);
+		FREE_ZONE(ip, sizeof(struct inode), type);
+		*vpp = NULL;
+		return (error);
+	}
+	vp->v_data = ip;
+	ip->i_vnode = vp;
+
+	/*
+	 * A vnode is associated with the inode now,
+	 * vget() can deal with the serialization.
+	 */
+	CLR(ip->i_flag, IN_ALLOC);
+	if (ISSET(ip->i_flag, IN_WALLOC))
+		wakeup(ip);
 
 	/* Read in the disk contents for the inode, copy into the inode. */
 	if (error = bread(ump->um_devvp, fsbtodb(fs, ino_to_fsba(fs, ino)),

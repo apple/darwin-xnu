@@ -124,14 +124,26 @@ loop:
 	for (ip = INOHASH(dev, inum)->lh_first; ip; ip = ip->i_hash.le_next) {
 		if (inum == ip->i_number && dev == ip->i_dev) {
 			vp = ITOV(ip);
-			if (ip->i_flag & IN_TRANSIT) {
-				/* inode is getting reclaimed wait till
+			if (ISSET(ip->i_flag, IN_ALLOC)) {
+				/*
+				 * inode is being created. Wait for it
+				 * to finish creation
+				 */
+				SET(ip->i_flag, IN_WALLOC);
+				simple_unlock(&ufs_ihash_slock);
+				(void)tsleep((caddr_t)ip, PINOD, "ufs_ihashget", 0);
+				goto loop;
+			}
+
+			if (ISSET(ip->i_flag, IN_TRANSIT)) {
+				/*
+				 * inode is getting reclaimed wait till
 				 * the operation is complete and return
 				 * error
 				 */
-				ip->i_flag |= IN_WTRANSIT;
+				SET(ip->i_flag, IN_WTRANSIT);
 				simple_unlock(&ufs_ihash_slock);
-				tsleep((caddr_t)ip, PINOD, "ufs_ihashget", 0);
+				(void)tsleep((caddr_t)ip, PINOD, "ufs_ihashget1", 0);
 				goto loop;
 			}
 			simple_lock(&vp->v_interlock);
@@ -146,17 +158,15 @@ loop:
 }
 
 /*
-* Insert the inode into the hash table, and return it locked.
+ * Insert the inode into the hash table,
+ * inode is assumed to be locked by the caller
  */
 void
 ufs_ihashins(ip)
 	struct inode *ip;
 {
-	struct proc *p = current_proc();		/* XXX */
+	struct proc *p = current_proc();
 	struct ihashhead *ipp;
-
-	/* lock the inode, then put it on the appropriate hash list */
-	lockmgr(&ip->i_lock, LK_EXCLUSIVE, (struct slock *)0, p);
 
 	simple_lock(&ufs_ihash_slock);
 	ipp = INOHASH(ip->i_dev, ip->i_number);

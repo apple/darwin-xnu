@@ -69,8 +69,8 @@ struct procFeatures {
 #define pfWillNapb	20
 #define pfNoMSRir	0x00000400
 #define pfNoMSRirb	21
-#define pfL1nnc		0x00000200
-#define pfL1nncb	22
+#define pfL3pdet	0x00000200
+#define pfL3pdetb	22
 #define pfL1i		0x00000100
 #define pfL1ib		23
 #define pfL1d		0x00000080

@@ -115,7 +115,7 @@ mount(p, uap, retval)
 	struct vnode *vp;
 	struct mount *mp;
 	struct vfsconf *vfsp;
-	int error, flag;
+	int error, flag, err2;
 	struct vattr va;
 	u_long fstypenum;
 	struct nameidata nd;
@@ -305,11 +305,15 @@ update:
 		vfs_unbusy(mp, p);
 		return (error);
 	}
+
+	/* get the vnode lock */
+	err2 = vn_lock(vp,  LK_EXCLUSIVE|LK_RETRY, p);
+
 	/*
 	 * Put the new filesystem on the mount list after root.
 	 */
 	cache_purge(vp);
-	if (!error) {
+	if (!error && !err2) {
 		simple_lock(&vp->v_interlock);
 		CLR(vp->v_flag, VMOUNT);
 		vp->v_mountedhere =mp;
@@ -333,7 +337,10 @@ update:
 		mp->mnt_vfc->vfc_refcount--;
 		vfs_unbusy(mp, p);
 		_FREE_ZONE((caddr_t)mp, sizeof (struct mount), M_MOUNT);
-		vput(vp);
+		if (err2)
+			vrele(vp);
+		else
+			vput(vp);
 	}
 	return (error);
 }

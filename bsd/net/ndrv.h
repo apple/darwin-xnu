@@ -24,56 +24,104 @@
  *	@(#)ndrv.h	1.1 (MacOSX) 6/10/43
  * Justin Walker - 970604
  */
+#include <net/dlil.h>
 
 #ifndef _NET_NDRV_H
 #define _NET_NDRV_H
 
+
 struct sockaddr_ndrv
-{	unsigned char snd_len;
+{
+    unsigned char snd_len;
 	unsigned char snd_family;
 	unsigned char snd_name[IFNAMSIZ]; /* from if.h */
 };
 
 /*
- * The cb is plugged into the socket (so_pcb), and the ifnet structure
- *  of BIND is plugged in here.
- * For now, it looks like a raw_cb up front...
- */
-struct ndrv_cb
-{	struct ndrv_cb *nd_next;	/* Doubly-linked list */
-	struct ndrv_cb *nd_prev;
-	struct socket *nd_socket;	/* Back to the socket */
-	unsigned int nd_signature;	/* Just double-checking */
-	struct sockaddr_ndrv *nd_faddr;
-	struct sockaddr_ndrv *nd_laddr;
-	struct sockproto nd_proto;	/* proto family, protocol */
-	int nd_descrcnt;		/* # elements in nd_dlist */
-	TAILQ_HEAD(dlist, dlil_demux_desc) nd_dlist; /* Descr. list */
-	struct ifnet *nd_if;
-};
-
-#define	sotondrvcb(so)		((struct ndrv_cb *)(so)->so_pcb)
-#define NDRV_SIGNATURE	0x4e445256 /* "NDRV" */
-
-/* Nominal allocated space for NDRV sockets */
-#define NDRVSNDQ	 8192
-#define NDRVRCVQ	 8192
-
-/*
  * Support for user-mode protocol handlers
  */
 
-/* Arg to socket options */
-struct ndrv_descr
-{	unsigned int nd_len;	/* Length of descriptor buffer, in bytes */
-	unsigned char *nd_buf;	/* Descriptor buffer */
+#define NDRV_DEMUXTYPE_ETHERTYPE	DLIL_DESC_ETYPE2
+#define	NDRV_DEMUXTYPE_SAP			DLIL_DESC_SAP
+#define NDRV_DEMUXTYPE_SNAP			DLIL_DESC_SNAP
+
+#define	NDRVPROTO_NDRV				0
+
+/*
+ * Struct: ndrv_demux_desc
+ * Purpose:
+ *   To uniquely identify a packet based on its low-level framing information.
+ *
+ * Fields:
+ *		type		:	type of protocol in data field, must be understood by
+ *						the interface family of the interface the socket is bound to
+ *		length		: 	length of protocol data in "data" field
+ *		data		:	union of framing-specific data, in network byte order
+ *		ether_type	:	ethernet type in network byte order, assuming
+ *						ethernet type II framing
+ *		sap			:	first 3 bytes of sap header, network byte order
+ *		snap		:	first 5 bytes of snap header, network byte order
+ *		other		:	up to 28 bytes of protocol data for different protocol type
+ *
+ * Examples:
+ * 1) 802.1x uses ether_type 0x888e, so the descriptor would be set as:
+ *    struct ndrv_demux_desc desc;
+ *    desc.type = NDRV_DEMUXTYPE_ETHERTYPE
+ *	  desc.length = sizeof(unsigned short);
+ *    desc.ether_type = htons(0x888e);
+ * 2) AppleTalk uses SNAP 0x080007809B
+ *    struct ndrv_demux_desc desc;
+ *    desc.type = NDRV_DEMUXTYPE_SNAP;
+ *    desc.length = 5;
+ *    desc.data.snap[0] = 08;
+ *    desc.data.snap[1] = 00;
+ *    desc.data.snap[2] = 07;
+ *    desc.data.snap[3] = 80;
+ *    desc.data.snap[4] = 9B;
+ */
+struct ndrv_demux_desc
+{
+    u_int16_t	type;
+    u_int16_t	length;
+    union
+    {
+        u_int16_t	ether_type;
+        u_int8_t	sap[3];
+        u_int8_t	snap[5];
+        u_int8_t	other[28];
+    } data;
 };
 
-#define NDRV_DMXSPEC	0x01	/* Get/Set (Add) a list of protocol specs */
-#define NDRV_DELDMXSPEC 0x02	/* Delete a list of protocol specs */
-#define NDRV_DMXSPECCNT 0x03	/* Return number of active protocol specs */
+#define NDRV_PROTOCOL_DESC_VERS	1
+
+/*
+ * Struct: ndrv_protocol_desc
+ * Purpose:
+ *   Used to "bind" an NDRV socket so that packets that match
+ *   given protocol demux descriptions can be received:
+ * Field:
+ *		version			:	must be NDRV_PROTOCOL_DESC_VERS
+ *		protocol_family	:	unique identifier for this protocol
+ *		demux_count		:	number of demux_list descriptors in demux_list
+ *		demux_list		:	pointer to array of demux descriptors
+ */
+struct ndrv_protocol_desc
+{
+    u_int32_t				version;
+    u_int32_t				protocol_family;
+    u_int32_t				demux_count;
+    struct ndrv_demux_desc*	demux_list;
+};
+
+#define SOL_NDRVPROTO		NDRVPROTO_NDRV	/* Use this socket level */
+/*		NDRV_DMXSPEC		0x01		   	   Obsolete */
+#define NDRV_DELDMXSPEC		0x02			/* Delete the registered protocol */
+/*		NDRV_DMXSPECCNT		0x03			   Obsolete */
+#define NDRV_SETDMXSPEC		0x04			/* Set the protocol spec */
 
 #if KERNEL
-extern struct ndrv_cb ndrvl;		/* Head of controlblock list */
+/* Additional Kernel APIs */
+struct ifnet*	ndrv_get_ifp(caddr_t ndrv_pcb);
 #endif
+
 #endif	/* _NET_NDRV_H */

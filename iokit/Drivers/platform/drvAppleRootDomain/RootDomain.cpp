@@ -733,9 +733,11 @@ void IOPMrootDomain::tellNoChangeDown ( unsigned long )
 // type to the client or application being notified.
 //*********************************************************************************
 
-void IOPMrootDomain::tellChangeUp ( unsigned long )
+void IOPMrootDomain::tellChangeUp ( unsigned long stateNum)
 {
-    return tellClients(kIOMessageSystemHasPoweredOn);
+    if ( stateNum == ON_STATE ) {
+        return tellClients(kIOMessageSystemHasPoweredOn);
+    }
 }
 
 //*********************************************************************************

@@ -1347,21 +1347,23 @@ cluster_nocopy_write(vp, uio, newEOF, devblocksize, flags)
 	  if (error == 0) {
 	    /*
 	     * The cluster_io write completed successfully,
-	     * update the uio structure and commit.
+	     * update the uio structure.
 	     */
-
-	    ubc_upl_commit_range(upl, (upl_offset & ~PAGE_MASK), upl_size, 
-				 UPL_COMMIT_FREE_ON_EMPTY);
-	    
 	    iov->iov_base += io_size;
 	    iov->iov_len -= io_size;
 	    uio->uio_resid -= io_size;
 	    uio->uio_offset += io_size;
 	  }
-	  else {
-	    ubc_upl_abort_range(upl, (upl_offset & ~PAGE_MASK), upl_size, 
-				   UPL_ABORT_FREE_ON_EMPTY);
-	  }
+	  /*
+	   * always 'commit' the I/O via the abort primitive whether the I/O
+	   * succeeded cleanly or not... this is necessary to insure that 
+	   * we preserve the state of the DIRTY flag on the pages used to
+	   * provide the data for the I/O... the state of this flag SHOULD
+	   * NOT be changed by a write
+	   */
+	  ubc_upl_abort_range(upl, (upl_offset & ~PAGE_MASK), upl_size, 
+			      UPL_ABORT_FREE_ON_EMPTY);
+
 
 	  KERNEL_DEBUG((FSDBG_CODE(DBG_FSRW, 77)) | DBG_FUNC_END,
 		       (int)upl_offset, (int)uio->uio_offset, (int)uio->uio_resid, error, 0);

@@ -191,37 +191,71 @@ struct dlil_tag_list_entry {
 };
 
 
+/* Obsolete types */
 #define DLIL_DESC_RAW		1
 #define DLIL_DESC_802_2		2
 #define DLIL_DESC_802_2_SNAP	3
+/*
+ * DLIL_DESC_RAW - obsolete type, data in variants.bitmask or native_type
+ *				   if variants.bitmask.proto_id_length, native_type in host
+ *				   byte order.
+ * DLIL_DESC_802_2 - obsolete, data in variants.desc_802_2
+ * DLIL_DESC_802_2_SNAP - obsolete, data in variants.desc_802_2_SNAP
+ *						  protocol field in host byte order
+ */
+
+/* Ehernet specific types */
+#define DLIL_DESC_ETYPE2	4
+#define DLIL_DESC_SAP		5
+#define DLIL_DESC_SNAP		6
+/*
+ * DLIL_DESC_ETYPE2 - native_type must point to 2 byte ethernet raw protocol,
+ *                    variants.native_type_length must be set to 2
+ * DLIL_DESC_SAP - native_type must point to 3 byte SAP protocol
+ *                 variants.native_type_length must be set to 3
+ * DLIL_DESC_SNAP - native_type must point to 5 byte SNAP protocol
+ *                  variants.native_type_length must be set to 5
+ *
+ * All protocols must be in Network byte order.
+ *
+ * Future interface families may define more protocol types they know about.
+ * The type implies the offset and context of the protocol data at native_type.
+ * The length of the protocol data specified at native_type must be set in
+ * variants.native_type_length.
+ */
 
 struct dlil_demux_desc {
     TAILQ_ENTRY(dlil_demux_desc) next;
-    int				 type;
-
-    u_char  *native_type;
+    
+    int		type;
+    u_char	*native_type;
+    
     union {
-	struct {
-	    u_long   proto_id_length; /* IN LONGWORDS!!! */
-	    u_char   *proto_id;
-	    u_char   *proto_id_mask;
-
-	} bitmask;
-
-	struct {
-	    u_char   dsap;
-	    u_char   ssap;
-	    u_char   control_code;
-	    u_char   pad;
-	} desc_802_2;
-
-	struct {
-	    u_char   dsap;
-	    u_char   ssap;
-	    u_char   control_code;
-	    u_char   org[3];
-	    u_short  protocol_type;
-	} desc_802_2_SNAP;
+        /* Structs in this union are obsolete. They exist for binary compatability only */
+        /* Only the native_type_length is used */
+        struct {
+            u_long   proto_id_length; /* IN LONGWORDS!!! */
+            u_char   *proto_id;		  /* No longer supported by Ethernet family */
+            u_char   *proto_id_mask;
+        } bitmask;
+        
+        struct {
+            u_char   dsap;
+            u_char   ssap;
+            u_char   control_code;
+            u_char   pad;
+        } desc_802_2;
+        
+        struct {
+            u_char   dsap;			/* Ignored, assumed to be 0xAA */
+            u_char   ssap;			/* Ignored, assumed to be 0xAA */
+            u_char   control_code; 	/* Ignored, assumed to be 0x03 */
+            u_char   org[3];
+            u_short  protocol_type; /* In host byte order */
+        } desc_802_2_SNAP;
+        
+        /* Length of data pointed to by native_type, must be set correctly */
+        u_int32_t	native_type_length;
     } variants;
 };
 
@@ -235,7 +269,7 @@ struct dlil_proto_reg_str {
     short			unit_number;
     int				default_proto; /* 0 or 1 */
     dl_input_func		input;
-    dl_pre_output_func		pre_output;
+    dl_pre_output_func	pre_output;
     dl_event_func		event;
     dl_offer_func		offer;
     dl_ioctl_func		ioctl;

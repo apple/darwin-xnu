@@ -539,7 +539,6 @@ init7410:	li		r13,0								; Clear
 ;			7450
 
 init7450:	bf		firstBoot,i7450nb					; Do different if not initial boot...
-			oris	r17,r17,hi16(pfAvJava)				; Show that we do Java mode in non-open source version
 
 			mfspr	r13,l2cr							; Get the L2CR
 			rlwinm.	r0,r13,0,l2e,l2e					; Any L2?
@@ -556,9 +555,9 @@ i7450hl2:	lis		r14,hi16(256*1024)					; Base L2 size
 ;			Take care of level 3 cache
 
 			mfspr	r13,l3cr							; Get the L3CR
-			rlwinm.	r0,r13,0,l3e,l3e					; Any L2?
+			rlwinm.	r0,r13,0,l3e,l3e					; Any L3?
 			bne+	i7450hl3							; Yes...
-			rlwinm	r17,r17,0,pfL3b+1,pfL3b-1			; No L2, turn off feature
+			rlwinm	r17,r17,0,pfL3b+1,pfL3b-1			; No L3, turn off feature
 
 i7450hl3:	cmplwi	cr0,r13,0							; No L3 if L3CR is zero
 			beq-	init7450none							; Go turn off the features...
@@ -834,7 +833,7 @@ processor_types:
 	.long	0xFFFFFF00		; Just revisions 1.xx
 	.short	PROCESSOR_VERSION_7450
 	.short	0x0100
-	.long	pfFloat | pfAltivec | pfSMPcap | pfCanSleep | pfNoMSRir | pfLClck | pfL1nnc | pfL1i | pfL1d | pfL2 | pfL2fa | pfL2i | pfL3 | pfL3fa
+	.long	pfFloat | pfAltivec | pfSMPcap | pfCanSleep | pfNoMSRir | pfLClck | pfL1i | pfL1d | pfL2 | pfL2fa | pfL2i | pfL3 | pfL3fa | pfL3pdet
 	.long	init7450
 	.long	CPU_SUBTYPE_POWERPC_7450
 	.long	105
@@ -849,7 +848,7 @@ processor_types:
 	.long	0xFFFFFFFF		; Just revision 2.0
 	.short	PROCESSOR_VERSION_7450
 	.short	0x0200
-	.long	pfFloat | pfAltivec | pfSMPcap | pfCanSleep | pfNoMSRir | pfLClck | pfL1i | pfL1d | pfL2 | pfL2fa | pfL2i | pfL3 | pfL3fa
+	.long	pfFloat | pfAltivec | pfSMPcap | pfCanSleep | pfNoMSRir | pfLClck | pfL1i | pfL1d | pfL2 | pfL2fa | pfL2i | pfL3 | pfL3fa | pfL3pdet
 	.long	init7450
 	.long	CPU_SUBTYPE_POWERPC_7450
 	.long	105
@@ -864,7 +863,7 @@ processor_types:
 	.long	0xFFFF0000		; All other revisions
 	.short	PROCESSOR_VERSION_7450
 	.short	0
-	.long	pfFloat | pfAltivec | pfSMPcap | pfCanSleep | pfNoMSRir | pfWillNap | pfLClck | pfL1i | pfL1d | pfL2 | pfL2fa | pfL2i | pfL3 | pfL3fa
+	.long	pfFloat | pfAltivec | pfSMPcap | pfCanSleep | pfWillNap | pfNoMSRir | pfLClck | pfL1i | pfL1d | pfL2 | pfL2fa | pfL2i | pfL3 | pfL3fa | pfL3pdet
 	.long	init7450
 	.long	CPU_SUBTYPE_POWERPC_7450
 	.long	105

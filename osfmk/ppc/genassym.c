@@ -237,14 +237,14 @@ int main(int argc, char *argv[])
 	DECLARE("pfThermalb",			pfThermalb);
 	DECLARE("pfThermInt",			pfThermInt);
 	DECLARE("pfThermIntb",			pfThermIntb);
-	DECLARE("pfLClck",				pfLClck);
-	DECLARE("pfLClckb",				pfLClckb);
 	DECLARE("pfWillNap",			pfWillNap);
 	DECLARE("pfWillNapb",			pfWillNapb);
 	DECLARE("pfNoMSRir",			pfNoMSRir);
 	DECLARE("pfNoMSRirb",			pfNoMSRirb);
-	DECLARE("pfL1nnc",				pfL1nnc);
-	DECLARE("pfL1nncb",				pfL1nncb);
+	DECLARE("pfLClck",				pfLClck);
+	DECLARE("pfLClckb",				pfLClckb);
+	DECLARE("pfL3pdet",				pfL3pdet);
+	DECLARE("pfL3pdetb",				pfL3pdetb);
 	DECLARE("pfL1i",				pfL1i);
 	DECLARE("pfL1ib",				pfL1ib);
 	DECLARE("pfL1d",				pfL1d);

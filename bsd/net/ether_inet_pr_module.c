@@ -70,7 +70,6 @@
 #include <net/if_llc.h>
 #include <net/if_dl.h>
 #include <net/if_types.h>
-#include <net/ndrv.h>
 
 #include <netinet/in.h>
 #include <netinet/in_var.h>

@@ -687,8 +687,17 @@ cpu_signal(
 
 	if (!(tpproc->cpu_flags & SignalReady)) return KERN_FAILURE;
 	
+	if((tpproc->MPsigpStat & MPsigpMsgp) == MPsigpMsgp) {	/* Is there an unreceived message already pending? */
+
+		if(signal == SIGPwake) return KERN_SUCCESS;			/* SIGPwake can merge into all others... */
+
+		if((signal == SIGPast) && (tpproc->MPsigpParm0 == SIGPast)) {	/* We can merge ASTs */
+			return KERN_SUCCESS;					/* Don't bother to send this one... */
+		}
+	}	
+	
 	if(!hw_lock_mbits(&tpproc->MPsigpStat, MPsigpMsgp, 0, MPsigpBusy, 
-	  (gPEClockFrequencyInfo.bus_clock_rate_hz >> 7))) {	/* Try to lock the message block */
+	  (gPEClockFrequencyInfo.bus_clock_rate_hz >> 13))) {	/* Try to lock the message block with a .5ms timeout */
 		return KERN_FAILURE;						/* Timed out, take your ball and go home... */
 	}
 

@@ -346,52 +346,6 @@ yesnap:		mftbu	r9								; Get the upper timebase
 			stw		r8,napStamp(r12)				; Set high order time stamp
 			stw		r7,napStamp+4(r12)				; Set low order nap stamp
 			
-			bf		pfL1nncb,minoflushl1				; The L1 is coherent in nap/doze...
-;
-;			7450 does not keep L1 cache coherent across nap/sleep it must alwasy flush.
-;			It does not have a L1 flush assist, so we do not test for it here.
-;
-;			Note that the time stamp take above is not completely accurate for 7450
-;			because we are about to flush the L1 cache and that takes a bit of time.
-;
-			cror	cr0_eq,pfL1ib,pfL1db			; Check for either I- or D-cache
-			bf-		cr0_eq,minoflushl1				; No level 1 to flush...
-			rlwinm.	r0,r4,0,ice,dce					; Were either of the level 1s on?
-			beq-	minoflushl1						; No, no need to flush...
-
-miswdl1:	lwz		r0,pfl1dSize(r12)				; Get the level 1 cache size
-			rlwinm	r2,r0,0,1,30					; Double it
-			add		r0,r0,r2						; Get 3 times cache size
-			rlwinm	r2,r5,0,MSR_DR_BIT+1,MSR_DR_BIT-1	; Turn off data translation
-			rlwinm	r0,r0,26,6,31					; Get 3/2 number of cache lines
-			lis		r3,0xFFF0						; Dead recon ROM address for now
-			mtctr	r0								; Number of lines to flush
-			mtmsr	r2								; Do it
-			isync
-
-miswfldl1a:	lwz		r2,0(r3)						; Flush anything else
-			addi	r3,r3,32						; Next line
-			bdnz	miswfldl1a						; Flush the lot...
-			
-miinvdl1:	sync									; Make sure all flushes have been committed
-			mtmsr	r5								; Put back data translation
-			isync
-
-			mfspr	r8,hid0							; Get the HID0 bits
-			li		r7,lo16(icem|dcem)				; Get the cache enable bits
-			andc	r8,r8,r7						; Clear cache enables
-			mtspr	hid0,r8							; and turn off L1 cache
-			sync									; Make sure all is done
-			
-			ori		r8,r8,lo16(icfim|dcfim)	; Set the HID0 bits for invalidate
-			sync
-			isync										
-			
-			mtspr	hid0,r8							; Start the invalidate
-			sync
-			
-minoflushl1:
-			
 ;
 ;			We have to open up interruptions here because book 4 says that we should
 ;			turn on only the POW bit and that we should have interrupts enabled
@@ -885,6 +839,7 @@ ciinvdl3b:	mfspr	r3,l3cr							; Get the L3CR
 			bne+	ciinvdl3b						; Assume so...
 			sync
 
+			bf	pfL3pdetb, ciinvdl3nopdet
 			mfspr	r3,l3pdet						; ?
 			rlwimi	r3,r3,28,0,23					; ?
 			oris	r3,r3,0xF000					; ?
@@ -892,6 +847,7 @@ ciinvdl3b:	mfspr	r3,l3cr							; Get the L3CR
 			mtspr	l3pdet,r3						; ?
 			isync
 
+ciinvdl3nopdet:
 			mfspr	r3,l3cr							; Get the L3CR
 			rlwinm	r3,r3,0,l3clken+1,l3clken-1		; Clear the clock enable bit
 			mtspr	l3cr,r3							; Disable the clock
