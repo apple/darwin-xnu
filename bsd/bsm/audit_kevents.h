@@ -176,8 +176,8 @@
 #define AUE_FCHOWN      38              /*123*/
 #define AUE_FCHMOD      39              /*124*/
 #define AUE_O_RECVFROM  AUE_RECVFROM    /*125*/
-#define AUE_O_SETREUID  AUE_NULL        /*126*/   /*40*/
-#define AUE_O_SETREGID  AUE_NULL        /*127*/   /*41*/
+#define AUE_O_SETREUID  AUE_SETEUID        /*126*/   /*40*/
+#define AUE_O_SETREGID  AUE_SETEGID        /*127*/   /*41*/
 #define AUE_RENAME      42              /*128*/
 #define AUE_O_TRUNCATE  AUE_TRUNCATE    /*129*/
 #define AUE_O_FTRUNCATE AUE_FTRUNCATE   /*130*/
@@ -209,13 +209,13 @@
 #define AUE_O_GETDIRENTRIES AUE_GETDIRENTRIES /*156*/
 #define AUE_STATFS      54              /*157*/
 #define AUE_FSTATFS     55              /*158*/
-#define AUE_UMOUNT      12              /*159*/
+#define AUE_UNMOUNT     12              /*159*/
 #define AUE_O_ASYNCDAEMON AUE_NULL      /*160*/
 #define AUE_GETFH       322		/*161*/
 #define AUE_O_GETDOMAINNAME AUE_NULL    /*162*/
 #define AUE_O_SETDOMAINNAME AUE_SYSCTL  /*163*/
 #define AUE_O_PCFS_MOUNT AUE_NULL       /*164*/
-#define AUE_QUOTACTL    323		/*165*/
+#define AUE_QUOTACTL    60		/*165*/
 #define AUE_O_EXPORTFS  AUE_NULL        /*166*/
 #define AUE_MOUNT       62              /*167*/
 #define AUE_O_USTATE    AUE_NULL        /*168*/

@@ -328,65 +328,73 @@ fcntl(p, uap, retval)
 		if (fp->f_type != DTYPE_VNODE)
 			return (EBADF);
 		vp = (struct vnode *)fp->f_data;
-		AUDIT_ARG(vnpath, vp, ARG_VNODE1);
+
 		/* Copy in the lock structure */
-		error = copyin((caddr_t)uap->arg, (caddr_t)&fl,
-		    sizeof (fl));
+		error = copyin((caddr_t)uap->arg, (caddr_t)&fl, sizeof (fl));
 		if (error)
-			return (error);
+			break;
 		if (fl.l_whence == SEEK_CUR)
 			fl.l_start += fp->f_offset;
 		switch (fl.l_type) {
 
 		case F_RDLCK:
-			if ((fp->f_flag & FREAD) == 0)
-				return (EBADF);
-			p->p_flag |= P_ADVLOCK;
-			return (VOP_ADVLOCK(vp, (caddr_t)p, F_SETLK, &fl, flg));
+			if ((fp->f_flag & FREAD) != 0) {
+				p->p_flag |= P_ADVLOCK;
+				error = VOP_ADVLOCK(vp, (caddr_t)p, F_SETLK, &fl, flg);
+			} else
+				error = EBADF;
+			break;
 
 		case F_WRLCK:
-			if ((fp->f_flag & FWRITE) == 0)
-				return (EBADF);
-			p->p_flag |= P_ADVLOCK;
-			return (VOP_ADVLOCK(vp, (caddr_t)p, F_SETLK, &fl, flg));
+			if ((fp->f_flag & FWRITE) != 0) {
+				p->p_flag |= P_ADVLOCK;
+				error = VOP_ADVLOCK(vp, (caddr_t)p, F_SETLK, &fl, flg);
+			} else
+				error = EBADF;
+			break;
 
 		case F_UNLCK:
-			return (VOP_ADVLOCK(vp, (caddr_t)p, F_UNLCK, &fl,
-				F_POSIX));
+			error = VOP_ADVLOCK(vp, (caddr_t)p, F_UNLCK, &fl, F_POSIX);
+			break;
 
 		default:
-			return (EINVAL);
+			error = EINVAL;
+			break;
 		}
+		break;
 
 	case F_GETLK:
 		if (fp->f_type != DTYPE_VNODE)
 			return (EBADF);
 		vp = (struct vnode *)fp->f_data;
-		AUDIT_ARG(vnpath, vp, ARG_VNODE1);
+
 		/* Copy in the lock structure */
-		error = copyin((caddr_t)uap->arg, (caddr_t)&fl,
-		    sizeof (fl));
+		error = copyin((caddr_t)uap->arg, (caddr_t)&fl, sizeof (fl));
 		if (error)
-			return (error);
+			break;
 		if (fl.l_whence == SEEK_CUR)
 			fl.l_start += fp->f_offset;
-		if (error = VOP_ADVLOCK(vp, (caddr_t)p, F_GETLK, &fl, F_POSIX))
-			return (error);
-		return (copyout((caddr_t)&fl, (caddr_t)uap->arg,
-		    sizeof (fl)));
+		error = VOP_ADVLOCK(vp, (caddr_t)p, F_GETLK, &fl, F_POSIX);
+		if (error)
+			break;
+		error = copyout((caddr_t)&fl, (caddr_t)uap->arg, sizeof (fl));
+		break;
 
 	case F_PREALLOCATE:
 		if (fp->f_type != DTYPE_VNODE)
 			return (EBADF);
+		vp = (struct vnode *)fp->f_data;
 
 		/* make sure that we have write permission */
-		if ((fp->f_flag & FWRITE) == 0)
-			return (EBADF);
+		if ((fp->f_flag & FWRITE) == 0) {
+			error = EBADF;
+			break;
+		}
 
 		error = copyin((caddr_t)uap->arg, (caddr_t)&alloc_struct,
 		    sizeof (alloc_struct));
 		if (error)
-			return (error);
+			break;
 
 		/* now set the space allocated to 0 */
 		alloc_struct.fst_bytesalloc = 0;
@@ -413,29 +421,31 @@ fcntl(p, uap, retval)
 		switch (alloc_struct.fst_posmode) {
 	
 		case F_PEOFPOSMODE:
-			if (alloc_struct.fst_offset != 0)
-				return (EINVAL);
-
-			alloc_flags |= ALLOCATEFROMPEOF;
+			if (alloc_struct.fst_offset == 0)
+				alloc_flags |= ALLOCATEFROMPEOF;
+			else
+				error = EINVAL;
 			break;
 
 		case F_VOLPOSMODE:
-			if (alloc_struct.fst_offset <= 0)
-				return (EINVAL);
-
-			alloc_flags |= ALLOCATEFROMVOL;
+			if (alloc_struct.fst_offset > 0)
+				alloc_flags |= ALLOCATEFROMVOL;
+			else
+				error = EINVAL;
 			break;
 
 		default:
-			return(EINVAL);
+			error = EINVAL;
+			break;
 		}
 
-		vp = (struct vnode *)fp->f_data;
+		if (error)
+			break;
 
 		/* lock the vnode and call allocate to get the space */
 		error = vn_lock(vp, LK_EXCLUSIVE|LK_RETRY, p);
 		if (error)
-			return (error);
+			break;
 		error = VOP_ALLOCATE(vp,alloc_struct.fst_length,alloc_flags,
 				     &alloc_struct.fst_bytesalloc, alloc_struct.fst_offset,
 				     fp->f_cred, p);
@@ -444,21 +454,20 @@ fcntl(p, uap, retval)
 		if (error2 = copyout((caddr_t)&alloc_struct,
 						(caddr_t)uap->arg,
 						sizeof (alloc_struct))) {
-			if (error)
-				return(error);
-			else
-				return(error2);
+			if (!error)
+				error = error2;
 		}
-		return(error);
+		break;
 		
 	case F_SETSIZE:
 		if (fp->f_type != DTYPE_VNODE)
 			return (EBADF);
-		
+		vp = (struct vnode *)fp->f_data;
+
 		error = copyin((caddr_t)uap->arg, (caddr_t)&offset,
 					sizeof (off_t));
 		if (error)
-			return (error);
+			break;
 
 		/*
 		 * Make sure that we are root.  Growing a file
@@ -466,18 +475,18 @@ fcntl(p, uap, retval)
 		 * root would have access anyway so we'll allow it
 		 */
 
-		if (!is_suser())
-			return (EACCES);
-
-		vp = (struct vnode *)fp->f_data;
+		if (!is_suser()) {
+			error = EACCES;
+			break;
+		}
 
 		/* lock the vnode and call allocate to get the space */
 		error = vn_lock(vp, LK_EXCLUSIVE|LK_RETRY, p);
 		if (error)
-			return (error);
+			break;
 		error = VOP_TRUNCATE(vp,offset,IO_NOZEROFILL,fp->f_cred,p);
 		VOP_UNLOCK(vp,0,p);
-		return(error);
+		break;
 
 	case F_RDAHEAD:
 		if (fp->f_type != DTYPE_VNODE)
@@ -490,7 +499,8 @@ fcntl(p, uap, retval)
 		else
 			vp->v_flag |= VRAOFF;
 		simple_unlock(&vp->v_interlock);
-		return (0);
+		error = 0;
+		break;
 
 	case F_NOCACHE:
 		if (fp->f_type != DTYPE_VNODE)
@@ -503,7 +513,8 @@ fcntl(p, uap, retval)
 		else
 			vp->v_flag &= ~VNOCACHE_DATA;
 		simple_unlock(&vp->v_interlock);
-		return (0);
+		error = 0;
+		break;
 
 	case F_RDADVISE:
 		if (fp->f_type != DTYPE_VNODE)
@@ -512,8 +523,9 @@ fcntl(p, uap, retval)
 
 		if (error = copyin((caddr_t)uap->arg,
 					(caddr_t)&ra_struct, sizeof (ra_struct)))
-			return(error);
-		return (VOP_IOCTL(vp, 1, (caddr_t)&ra_struct, 0, fp->f_cred, p));
+			break;
+		error = VOP_IOCTL(vp, 1, (caddr_t)&ra_struct, 0, fp->f_cred, p);
+		break;
 
 	case F_CHKCLEAN:
 	        /*
@@ -525,54 +537,58 @@ fcntl(p, uap, retval)
 			return (EBADF);
 		vp = (struct vnode *)fp->f_data;
 
-		return (VOP_IOCTL(vp, 5, 0, 0, fp->f_cred, p));
+		error = VOP_IOCTL(vp, 5, 0, 0, fp->f_cred, p);
+		break;
 
 	case F_READBOOTSTRAP:
 	case F_WRITEBOOTSTRAP:
 		if (fp->f_type != DTYPE_VNODE)
 			return (EBADF);
+		vp = (struct vnode *)fp->f_data;
 
 		error = copyin((caddr_t)uap->arg, (caddr_t)&fbt_struct,
 				sizeof (fbt_struct));
 		if (error)
-			return (error);
+			break;
 
 		if (uap->cmd == F_WRITEBOOTSTRAP) {
 		  /*
 		   * Make sure that we are root.  Updating the
 		   * bootstrap on a disk could be a security hole
 		   */
-			if (!is_suser())
-				return (EACCES);
+			if (!is_suser()) {
+				error = EACCES;
+				break;
+			}
 		}
 
-		vp = (struct vnode *)fp->f_data;
 		if (vp->v_tag != VT_HFS)	/* XXX */
 			error = EINVAL;
 		else {
 			/* lock the vnode and call VOP_IOCTL to handle the I/O */
 			error = vn_lock(vp, LK_EXCLUSIVE|LK_RETRY, p);
 			if (error)
-				return (error);
+				break;
 			error = VOP_IOCTL(vp, (uap->cmd == F_WRITEBOOTSTRAP) ? 3 : 2,
 					(caddr_t)&fbt_struct, 0, fp->f_cred, p);
 			VOP_UNLOCK(vp,0,p);
 		}
-		return(error);
+		break;
 
 	case F_LOG2PHYS:
 		if (fp->f_type != DTYPE_VNODE)
 			return (EBADF);
 		vp = (struct vnode *)fp->f_data;
+
 		error = vn_lock(vp, LK_EXCLUSIVE|LK_RETRY, p);
 		if (error)
-			return (error);
+			break;
 		error = VOP_OFFTOBLK(vp, fp->f_offset, &lbn);
 		if (error)
-			return (error);
+			break;
 		error = VOP_BLKTOOFF(vp, lbn, &offset);
 		if (error)
-			return (error);
+			break;
 		error = VOP_BMAP(vp, lbn, &devvp, &bn, 0);
 		VOP_DEVBLOCKSIZE(devvp, &devBlockSize);
 		VOP_UNLOCK(vp, 0, p);
@@ -585,7 +601,7 @@ fcntl(p, uap, retval)
 					(caddr_t)uap->arg,
 					sizeof (l2p_struct));
 		}
-		return (error);
+		break;
 
 	case F_GETPATH: {
 		char *pathbuf;
@@ -602,14 +618,14 @@ fcntl(p, uap, retval)
 		error = vn_lock(vp, LK_EXCLUSIVE|LK_RETRY, p);
 		if (error) {
 		    FREE(pathbuf, M_TEMP);
-		    return (error);
+		    break;
 		}
 		error = vn_getpath(vp, pathbuf, &len);
 		if (error == 0)
 			error = copyout((caddr_t)pathbuf, (caddr_t)uap->arg, len);
 		VOP_UNLOCK(vp, 0, p);
 		FREE(pathbuf, M_TEMP);
-		return error;
+		break;
 	}
 
 	case F_FULLFSYNC: {
@@ -618,18 +634,26 @@ fcntl(p, uap, retval)
 		vp = (struct vnode *)fp->f_data;
 
 		error = vn_lock(vp, LK_EXCLUSIVE|LK_RETRY, p);
-		if (error) {
-		    return (error);
-		}
+		if (error)
+			break;
+
 		error = VOP_IOCTL(vp, 6, (caddr_t)NULL, 0, fp->f_cred, p);
 		VOP_UNLOCK(vp, 0, p);
-		return error;
+		break;
 	}
 	    
 	default:
 		return (EINVAL);
 	}
-	/* NOTREACHED */
+
+	/*
+	 * Fall thru to here for all vnode operations.
+	 * We audit the path after the call to avoid
+	 * triggering file table state changes during
+	 * the audit pathname allocation.
+	 */
+	AUDIT_ARG(vnpath, vp, ARG_VNODE1);
+	return error;
 }
 
 /*

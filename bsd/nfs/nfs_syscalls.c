@@ -88,6 +88,8 @@
 #include <sys/user.h>
 #include <machine/spl.h>
 
+#include <bsm/audit_kernel.h>
+
 #include <netinet/in.h>
 #include <netinet/tcp.h>
 #if ISO
@@ -410,6 +412,8 @@ nfssvc(p, uap)
 #endif /* NFS_NOSERVER */
 	int error;
 
+	AUDIT_ARG(cmd, uap->flag);
+
 	/*
 	 * Must be super user
 	 */
@@ -430,8 +434,8 @@ nfssvc(p, uap)
 		error = copyin(uap->argp, (caddr_t)&ncd, sizeof (ncd));
 		if (error)
 			return (error);
-		NDINIT(&nd, LOOKUP, FOLLOW | LOCKLEAF, UIO_USERSPACE,
-			ncd.ncd_dirp, p);
+		NDINIT(&nd, LOOKUP, FOLLOW | LOCKLEAF | AUDITVNPATH1,
+		       UIO_USERSPACE, ncd.ncd_dirp, p);
 		error = namei(&nd);
 		if (error)
 			return (error);

@@ -200,11 +200,11 @@ au_event_t sys_au_event[] = {
 	AUE_SETPRIVEXEC,		/* 152 = setprivexec */
 	AUE_NULL,			/* 153 = pread */
 	AUE_NULL,			/* 154 = pwrite */
-	AUE_NULL,			/* 155 = nfs_svc */
+	AUE_NFSSVC,			/* 155 = nfs_svc */
 	AUE_O_GETDIRENTRIES,		/* 156 = old getdirentries */
 	AUE_STATFS,			/* 157 = statfs */
 	AUE_FSTATFS,			/* 158 = fstatfs */
-	AUE_UMOUNT,			/* 159 = unmount */
+	AUE_UNMOUNT,			/* 159 = unmount */
 	AUE_NULL,			/* 160 was async_daemon */
 	AUE_GETFH,			/* 161 = get file handle */
 	AUE_NULL,			/* 162 = getdomainname */
@@ -278,9 +278,9 @@ au_event_t sys_au_event[] = {
 	AUE_SETATTRLIST,/* 221 = HFS setattrlist set attribute list */
 	AUE_GETDIRENTRIESATTR,/* 222 = HFS getdirentriesattr get directory attributes */
 	AUE_EXCHANGEDATA,/* 223 = HFS exchangedata exchange file contents */
-	AUE_NULL,/* 224 = HFS checkuseraccess check access to a file */
+	AUE_CHECKUSERACCESS,/* 224 = HFS checkuseraccess check access to file */
 	AUE_SEARCHFS,	/* 225 = HFS searchfs to implement catalog searching */
-	AUE_NULL,	/* 226 = private delete (Carbon semantics) */
+	AUE_DELETE,	/* 226 = private delete (Carbon semantics) */
 	AUE_NULL,	/* 227 = copyfile - orignally for AFP */
 	AUE_NULL,			/* 228 */
 	AUE_NULL,			/* 229 */

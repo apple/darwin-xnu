@@ -591,7 +591,7 @@ retry:
 	if (UBCINFOEXISTS(vp))
 		panic("getnewvnode: ubcinfo not cleaned");
 	else
-		vp->v_ubcinfo = 0;
+		vp->v_ubcinfo = UBC_INFO_NULL;
 
 	if (vp->v_flag & VHASDIRTY)
 	        cluster_release(vp);
@@ -947,7 +947,7 @@ retry:
 	/*
 	 * Recover named reference as needed
 	 */
-	if (UBCISVALID(vp) && !ubc_issetflags(vp, UI_HASOBJREF)) {
+	if (UBCISVALID(vp) && !UBCINFOMISSING(vp) && !ubc_issetflags(vp, UI_HASOBJREF)) {
 		simple_unlock(&vp->v_interlock);
 		if (ubc_getobject(vp, UBC_HOLDOBJECT) == MEMORY_OBJECT_CONTROL_NULL) {
 			error = ENOENT;

@@ -771,6 +771,13 @@ IOReturn IOPMrootDomain::registerPMSettingController
     return kIOReturnSuccess;
 }
 
+IOReturn IOPMrootDomain::registerPlatformPowerProfiles
+        (OSArray        *system_profiles)
+{
+    if(!system_profiles) return kIOReturnBadArgument;
+    if(getProperty("SystemPowerProfiles")) return kIOReturnExclusiveAccess;
+    setProperty("SystemPowerProfiles", system_profiles);
+}
 
 //*********************************************************************************
 // receivePowerNotification

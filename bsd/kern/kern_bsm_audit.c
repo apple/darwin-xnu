@@ -231,8 +231,12 @@ void kau_free(struct au_record *rec)
 		}						\
 	} while (0)
 
-#define KPATH1_VNODE1_TOKENS	\
+#define UPATH1_KPATH1_VNODE1_TOKENS	\
 	do { \
+		if (ar->ar_valid_arg & ARG_UPATH1) {  		\
+			tok = au_to_path(ar->ar_arg_upath1);	\
+			kau_write(rec, tok);			\
+		}						\
 		if (ar->ar_valid_arg & ARG_KPATH1) {  		\
 			tok = au_to_path(ar->ar_arg_kpath1);	\
 			kau_write(rec, tok);			\
@@ -242,14 +246,12 @@ void kau_free(struct au_record *rec)
 			kau_write(rec, tok);			\
 		}						\
 	} while (0)
-
-#define KPATH1_VNODE1_OR_UPATH1_TOKENS	\
+ 
+#define KPATH1_VNODE1_TOKENS	\
 	do { \
 		if (ar->ar_valid_arg & ARG_KPATH1) {  		\
 			tok = au_to_path(ar->ar_arg_kpath1);	\
 			kau_write(rec, tok);			\
-		} else {					\
-			UPATH1_TOKENS;				\
 		}						\
 		if (ar->ar_valid_arg & ARG_VNODE1) {  		\
 			tok = kau_to_attr32(&ar->ar_arg_vnode1);\
@@ -487,7 +489,7 @@ kaudit_to_bsm(struct kaudit_record *kar, struct au_record **pau)
 
 	case AUE_ACCT:
 		if (ar->ar_valid_arg & (ARG_KPATH1 | ARG_UPATH1)) {
-			KPATH1_VNODE1_OR_UPATH1_TOKENS;
+			UPATH1_KPATH1_VNODE1_TOKENS;
 		} else {
 			tok = au_to_arg32(1, "accounting off", 0);
 			kau_write(rec, tok);
@@ -551,7 +553,7 @@ kaudit_to_bsm(struct kaudit_record *kar, struct au_record **pau)
 		break;
 	
 	case AUE_AUDITCTL:
-		KPATH1_VNODE1_OR_UPATH1_TOKENS;
+		UPATH1_KPATH1_VNODE1_TOKENS;
 		break;
 
 	case AUE_ADJTIME:
@@ -590,19 +592,19 @@ kaudit_to_bsm(struct kaudit_record *kar, struct au_record **pau)
 	case AUE_UNDELETE:
 	case AUE_UNLINK:
 	case AUE_UTIMES:
-		KPATH1_VNODE1_OR_UPATH1_TOKENS;
+		UPATH1_KPATH1_VNODE1_TOKENS;
 		break;
 
 	case AUE_CHFLAGS:
 		tok = au_to_arg32(2, "flags", ar->ar_arg_fflags);
 		kau_write(rec, tok);
-		KPATH1_VNODE1_OR_UPATH1_TOKENS;
+		UPATH1_KPATH1_VNODE1_TOKENS;
 		break;
 	
 	case AUE_CHMOD:
 		tok = au_to_arg32(2, "new file mode", ar->ar_arg_mode);
 		kau_write(rec, tok);
-		KPATH1_VNODE1_OR_UPATH1_TOKENS;
+		UPATH1_KPATH1_VNODE1_TOKENS;
 		break;
 	
 	case AUE_CHOWN:
@@ -610,18 +612,18 @@ kaudit_to_bsm(struct kaudit_record *kar, struct au_record **pau)
 		kau_write(rec, tok);
 		tok = au_to_arg32(3, "new file gid", ar->ar_arg_gid);
 		kau_write(rec, tok);
-		KPATH1_VNODE1_OR_UPATH1_TOKENS;
+		UPATH1_KPATH1_VNODE1_TOKENS;
 		break;
 	
 	case AUE_EXCHANGEDATA:
-		KPATH1_VNODE1_OR_UPATH1_TOKENS;
+		UPATH1_KPATH1_VNODE1_TOKENS;
 		KPATH2_VNODE2_TOKENS;
 		break;
 
 	case AUE_CLOSE:
 		tok = au_to_arg32(2, "fd", ar->ar_arg_fd);
 		kau_write(rec, tok);
-		KPATH1_VNODE1_OR_UPATH1_TOKENS;
+		UPATH1_KPATH1_VNODE1_TOKENS;
 		break;
 
 	case AUE_FCHMOD:
@@ -630,6 +632,14 @@ kaudit_to_bsm(struct kaudit_record *kar, struct au_record **pau)
 		FD_KPATH1_VNODE1_TOKENS;
 		break;
 	
+	case AUE_NFSSVC:
+		tok = au_to_arg32(1, "request", ar->ar_arg_cmd);
+		kau_write(rec, tok);
+		if (ar->ar_valid_arg & (ARG_KPATH1 | ARG_UPATH1)) {
+			UPATH1_KPATH1_VNODE1_TOKENS;
+		}
+		break;
+
 	case AUE_FCHDIR:
 	case AUE_FPATHCONF:
 	case AUE_FSTAT:		/* XXX Need to handle sockets and shm */
@@ -650,10 +660,9 @@ kaudit_to_bsm(struct kaudit_record *kar, struct au_record **pau)
 		break;
 	
 	case AUE_FCNTL:
-		if (ar->ar_arg_cmd == F_GETLK || ar->ar_arg_cmd == F_SETLK ||
-			ar->ar_arg_cmd == F_SETLKW) {
-			tok = au_to_arg32(2, "cmd", ar->ar_arg_cmd);
-			kau_write(rec, tok);
+		tok = au_to_arg32(2, "cmd", ar->ar_arg_cmd);
+		kau_write(rec, tok);
+		if (ar->ar_valid_arg & ARG_VNODE1) {
 			FD_KPATH1_VNODE1_TOKENS;
 		}
 		break;
@@ -706,25 +715,25 @@ kaudit_to_bsm(struct kaudit_record *kar, struct au_record **pau)
 		tok = au_to_arg32(3, "trpoints", ar->ar_arg_value);
 		kau_write(rec, tok);
 		PROCESS_PID_TOKENS(4);
-		KPATH1_VNODE1_OR_UPATH1_TOKENS;
+		UPATH1_KPATH1_VNODE1_TOKENS;
 		break;
 
 	case AUE_LINK:
 	case AUE_RENAME:
-		KPATH1_VNODE1_OR_UPATH1_TOKENS;
+		UPATH1_KPATH1_VNODE1_TOKENS;
 		UPATH2_TOKENS;
 		break;
 
 	case AUE_LOADSHFILE:
 		tok = au_to_arg32(4, "base addr", (u_int32_t)ar->ar_arg_addr);
 		kau_write(rec, tok);
-		KPATH1_VNODE1_OR_UPATH1_TOKENS;
+		UPATH1_KPATH1_VNODE1_TOKENS;
 		break;
 	
 	case AUE_MKDIR:
 		tok = au_to_arg32(2, "mode", ar->ar_arg_mode);
 		kau_write(rec, tok);
-		KPATH1_VNODE1_OR_UPATH1_TOKENS;
+		UPATH1_KPATH1_VNODE1_TOKENS;
 		break;
 
 	case AUE_MKNOD:
@@ -732,7 +741,7 @@ kaudit_to_bsm(struct kaudit_record *kar, struct au_record **pau)
 		kau_write(rec, tok);
 		tok = au_to_arg32(3, "dev", ar->ar_arg_dev);
 		kau_write(rec, tok);
-		KPATH1_VNODE1_OR_UPATH1_TOKENS;
+		UPATH1_KPATH1_VNODE1_TOKENS;
 		break;
 
 	case AUE_MMAP:
@@ -766,8 +775,8 @@ kaudit_to_bsm(struct kaudit_record *kar, struct au_record **pau)
 			kau_write(rec, tok);
 		}
 		/* fall through */
-	case AUE_UMOUNT:
-		KPATH1_VNODE1_OR_UPATH1_TOKENS;
+	case AUE_UNMOUNT:
+		UPATH1_KPATH1_VNODE1_TOKENS;
 		break;
 
 	case AUE_MSGCTL:
@@ -795,20 +804,25 @@ kaudit_to_bsm(struct kaudit_record *kar, struct au_record **pau)
 		kau_write(rec, tok);
 		break;
 	
-	case AUE_OPEN_R:
 	case AUE_OPEN_RC:
 	case AUE_OPEN_RTC:
-	case AUE_OPEN_RT:
-	case AUE_OPEN_RW:
 	case AUE_OPEN_RWC:
 	case AUE_OPEN_RWTC:
-	case AUE_OPEN_RWT:
-	case AUE_OPEN_W:
 	case AUE_OPEN_WC:
 	case AUE_OPEN_WTC:
+		tok = au_to_arg32(3, "mode", ar->ar_arg_mode);
+		kau_write(rec, tok);
+		/* fall thru */
+
+	case AUE_OPEN_R:
+	case AUE_OPEN_RT:
+	case AUE_OPEN_RW:
+	case AUE_OPEN_RWT:
+	case AUE_OPEN_W:
 	case AUE_OPEN_WT:
-		UPATH1_TOKENS;		/* Save the user space path */
-		KPATH1_VNODE1_TOKENS;	/* Audit the kernel path as well */
+		tok = au_to_arg32(2, "flags", ar->ar_arg_fflags);
+		kau_write(rec, tok);
+		UPATH1_KPATH1_VNODE1_TOKENS;
 		break;
 
 	case AUE_PTRACE:
@@ -826,7 +840,7 @@ kaudit_to_bsm(struct kaudit_record *kar, struct au_record **pau)
 		kau_write(rec, tok);
 		tok = au_to_arg32(3, "uid", ar->ar_arg_uid);
 		kau_write(rec, tok);
-		KPATH1_VNODE1_OR_UPATH1_TOKENS;
+		UPATH1_KPATH1_VNODE1_TOKENS;
 		break;
 
 	case AUE_REBOOT:
@@ -1029,7 +1043,7 @@ kaudit_to_bsm(struct kaudit_record *kar, struct au_record **pau)
 			tok = au_to_text(ar->ar_arg_text);
 			kau_write(rec, tok);
 		}
-		KPATH1_VNODE1_OR_UPATH1_TOKENS;
+		UPATH1_KPATH1_VNODE1_TOKENS;
 		break;
 
 	case AUE_SYSCTL:
@@ -1087,11 +1101,11 @@ kaudit_to_bsm(struct kaudit_record *kar, struct au_record **pau)
 		tok = au_to_arg32(4, "priority", 
 			(u_int32_t)ar->ar_arg_value);
 		kau_write(rec, tok);
-		KPATH1_VNODE1_OR_UPATH1_TOKENS;
+		UPATH1_KPATH1_VNODE1_TOKENS;
 		break;
 
 	case AUE_SWAPOFF:
-		KPATH1_VNODE1_OR_UPATH1_TOKENS;
+		UPATH1_KPATH1_VNODE1_TOKENS;
 		break;
 
 	case AUE_MAPFD:

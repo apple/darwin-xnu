@@ -2879,6 +2879,14 @@ hfs_readdir(ap)
 
 		*ap->a_ncookies = ncookies;
 		*ap->a_cookies = cookies;
+		
+		/* handle cookies for "." and ".." */
+		if (off == 0) {
+			cookies[0] = 0;
+			cookies[1] = sizeof(struct hfsdotentry);
+		} else if (off == sizeof(struct hfsdotentry)) {
+			cookies[0] = sizeof(struct hfsdotentry);
+		}
 	}
 
 	/* If there are no children then we're done */	

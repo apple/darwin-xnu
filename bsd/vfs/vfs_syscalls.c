@@ -1066,15 +1066,19 @@ open(p, uap, retval)
 	extern struct fileops vnops;
 
 	oflags = uap->flags;
+	flags = FFLAGS(uap->flags);
+
+	AUDIT_ARG(fflags, oflags);
+	AUDIT_ARG(mode, uap->mode);
+
+	cmode = ((uap->mode &~ fdp->fd_cmask) & ALLPERMS) &~ S_ISTXT;
+
 	if ((oflags & O_ACCMODE) == O_ACCMODE)
 		return(EINVAL);
-	flags = FFLAGS(uap->flags);
-	AUDIT_ARG(fflags, oflags);
-	cmode = ((uap->mode &~ fdp->fd_cmask) & ALLPERMS) &~ S_ISTXT;
 	if (error = falloc(p, &nfp, &indx))
 		return (error);
 	fp = nfp;
-	NDINIT(&nd, LOOKUP, FOLLOW, UIO_USERSPACE, uap->path, p);
+	NDINIT(&nd, LOOKUP, FOLLOW | AUDITVNPATH1, UIO_USERSPACE, uap->path, p);
 	p->p_dupfd = -indx - 1;			/* XXX check for fdopen */
 	if (error = vn_open_modflags(&nd, &flags, cmode)) {
 		ffree(fp);

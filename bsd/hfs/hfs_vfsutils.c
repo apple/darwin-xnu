@@ -1386,13 +1386,10 @@ char *
 hfs_getnamehint(struct cnode *dcp, int index)
 {
 	struct hfs_index *entry;
-	void *self;
 
 	if (index > 0) {
-		self = current_act();
 		SLIST_FOREACH(entry, &dcp->c_indexlist, hi_link) {
-			if ((entry->hi_index == index)
-			&&  (entry->hi_thread == self))
+			if (entry->hi_index == index)
 				return (entry->hi_name);
 		}
 	}
@@ -1416,7 +1413,6 @@ hfs_savenamehint(struct cnode *dcp, int index, const char * namehint)
 		MALLOC(entry, struct hfs_index *, len + sizeof(struct hfs_index),
 			M_TEMP, M_WAITOK);
 		entry->hi_index = index;
-		entry->hi_thread = current_act();
 		bcopy(namehint, entry->hi_name, len + 1);
 		SLIST_INSERT_HEAD(&dcp->c_indexlist, entry, hi_link);
 	}
@@ -1431,13 +1427,10 @@ void
 hfs_relnamehint(struct cnode *dcp, int index)
 {
 	struct hfs_index *entry;
-	void *self;
 
 	if (index > 0) {
-		self = current_act();
 		SLIST_FOREACH(entry, &dcp->c_indexlist, hi_link) {
-			if ((entry->hi_index == index)
-			&&  (entry->hi_thread == self)) {
+			if (entry->hi_index == index) {
 				SLIST_REMOVE(&dcp->c_indexlist, entry, hfs_index,
 					hi_link);
 				FREE(entry, M_TEMP);

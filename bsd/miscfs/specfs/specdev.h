@@ -68,6 +68,7 @@
  * special devices. It is allocated in checkalias and freed
  * in vgone.
  */
+struct lockf;
 struct specinfo {
 	struct	vnode **si_hashchain;
 	struct	vnode *si_specnext;
@@ -75,6 +76,7 @@ struct specinfo {
 	dev_t	si_rdev;
 	daddr_t si_size;                  /* device block size in bytes */
 	u_int64_t	si_devsize;	  /* actual device size in bytes */
+	struct lockf	*si_lockf;	/* head of advisory lock list */
 };
 /*
  * Exported shorthand
@@ -151,7 +153,7 @@ int	spec_strategy __P((struct vop_strategy_args *));
 int	spec_print __P((struct vop_print_args *));
 #define spec_islocked ((int (*) __P((struct  vop_access_args *)))nop_islocked)
 int	spec_pathconf __P((struct vop_pathconf_args *));
-#define spec_advlock ((int (*) __P((struct  vop_access_args *)))err_advlock)
+int	spec_advlock __P((struct  vop_advlock_args *));
 #define spec_blkatoff ((int (*) __P((struct  vop_access_args *)))err_blkatoff)
 #define spec_valloc ((int (*) __P((struct  vop_access_args *)))err_valloc)
 #define spec_vfree ((int (*) __P((struct  vop_access_args *)))err_vfree)

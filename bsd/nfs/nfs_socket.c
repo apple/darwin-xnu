@@ -1036,10 +1036,12 @@ errout:
 				    error,
 				 rep->r_nmp->nm_mountp->mnt_stat.f_mntfromname);
 			error = nfs_sndlock(rep);
-			if (!error)
+			if (!error) {
 				error = nfs_reconnect(rep);
-			if (!error)
-				goto tryagain;
+				if (!error)
+					goto tryagain;
+				nfs_sndunlock(rep);
+			}
 		}
 	} else {
 		/*
@@ -1190,7 +1192,7 @@ nfs_reply(myrep)
 		/*
 		 * Bailout asap if nfsmount struct gone (unmounted). 
 		 */
-		if (!myrep->r_nmp || !nmp->nm_so) {
+		if (!myrep->r_nmp) {
 			FSDBG(530, myrep->r_xid, myrep, nmp, -2);
 			return (ENXIO);
 		}
@@ -1199,14 +1201,15 @@ nfs_reply(myrep)
 			nfs_rcvunlock(myrep);
 
 			/* Bailout asap if nfsmount struct gone (unmounted). */
-			if (!myrep->r_nmp || !nmp->nm_so)
+			if (!myrep->r_nmp)
 				return (ENXIO);
 
 			/*
 			 * Ignore routing errors on connectionless protocols??
 			 */
 			if (NFSIGNORE_SOERROR(nmp->nm_soflags, error)) {
-				nmp->nm_so->so_error = 0;
+				if (nmp->nm_so)
+					nmp->nm_so->so_error = 0;
 				if (myrep->r_flags & R_GETONEREP)
 					return (0);
 				continue;
@@ -1228,6 +1231,7 @@ nfs_reply(myrep)
                  * just check here and get out. (ekn)
 		 */
 		if (!mrep) {
+			nfs_rcvunlock(myrep);
                         FSDBG(530, myrep->r_xid, myrep, nmp, -3);
                         return (ENXIO); /* sounds good */
                 }

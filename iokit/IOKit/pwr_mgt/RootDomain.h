@@ -97,6 +97,7 @@ public:
     virtual IOReturn changePowerStateToPriv ( unsigned long ordinal );
 
     IOReturn registerPMSettingController(IOPMSettingControllerCallback, void *);
+    IOReturn registerPlatformPowerProfiles(OSArray *);
 
 private:
 

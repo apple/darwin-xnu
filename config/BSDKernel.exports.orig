@@ -2799,6 +2799,8 @@ _synthfs_chflags
 _synthfs_chmod
 _synthfs_chown
 _synthfs_create
+_synthfs_derive_vnode_path
+_synthfs_directlink
 _synthfs_fhtovp
 _synthfs_getattr
 _synthfs_inactive
@@ -2810,7 +2812,9 @@ _synthfs_mkdir
 _synthfs_mmap
 _synthfs_mount
 _synthfs_mount_fs
+_synthfs_mount_int
 _synthfs_move_rename_entry
+_synthfs_new_directlink
 _synthfs_new_directory
 _synthfs_new_symlink
 _synthfs_open
@@ -2820,6 +2824,7 @@ _synthfs_readdir
 _synthfs_readlink
 _synthfs_reclaim
 _synthfs_remove
+_synthfs_remove_directlink
 _synthfs_remove_directory
 _synthfs_remove_entry
 _synthfs_remove_symlink
@@ -2831,6 +2836,7 @@ _synthfs_setattr
 _synthfs_setupuio
 _synthfs_start
 _synthfs_statfs
+_synthfs_switchroot
 _synthfs_symlink
 _synthfs_sync
 _synthfs_sysctl
@@ -3575,6 +3581,7 @@ _vm_sysctl
 _vn_bwrite
 _vn_close
 _vn_default_error
+_vn_directlink
 _vn_lock
 _vn_mkdir
 _vn_open

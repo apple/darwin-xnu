@@ -383,7 +383,7 @@ class IOServiceUserNotification : public IOUserNotification
         OSNotificationHeader		notifyHeader;
     };
 
-    enum { kMaxOutstanding = 256 };
+    enum { kMaxOutstanding = 1024 };
 
     PingMsg *		pingMsg;
     vm_size_t		msgSize;

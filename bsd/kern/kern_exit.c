@@ -522,7 +522,7 @@ owait3(p, uap, retval)
 {
 	struct wait4_args *a;
 
-	a = (struct wait4_args *)get_bsduthreadarg(current_act);
+	a = (struct wait4_args *)get_bsduthreadarg(current_act());
 
 	a->rusage = uap->rusage;
 	a->options = uap->options;

@@ -78,7 +78,6 @@ typedef struct filefork filefork_t;
 struct	hfs_index {
 	SLIST_ENTRY(hfs_index) hi_link;
 	int	hi_index;
-	void	*hi_thread;	/* thread that created index entry */
 	char	hi_name[1];
 };
 

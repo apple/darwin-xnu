@@ -151,6 +151,7 @@ bsd/miscfs/nullfs/null_subr.c		optional nullfs
 bsd/miscfs/nullfs/null_vfsops.c		optional nullfs
 bsd/miscfs/nullfs/null_vnops.c		optional nullfs
 bsd/miscfs/specfs/spec_vnops.c		standard
+bsd/miscfs/specfs/spec_lockf.c		standard
 bsd/miscfs/union/union_subr.c		optional union
 bsd/miscfs/union/union_vfsops.c		optional union
 bsd/miscfs/union/union_vnops.c		optional union

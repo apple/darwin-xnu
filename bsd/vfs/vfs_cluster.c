@@ -76,7 +76,6 @@
 
 #include <sys/kdebug.h>
 
-
 #define CL_READ      0x01
 #define CL_ASYNC     0x02
 #define CL_COMMIT    0x04
@@ -115,7 +114,7 @@ static int cluster_phys_write(struct vnode *vp, struct uio *uio,
 		off_t newEOF, int devblocksize, int flags);
 static int cluster_align_phys_io(struct vnode *vp, struct uio *uio,
                 addr64_t usr_paddr, int xsize, int devblocksize, int flags);
-static int cluster_push_x(struct vnode *vp, off_t EOF, daddr_t first, daddr_t last, int can_delay);
+static int cluster_push_x(struct vnode *vp, off_t EOF, unsigned int first, unsigned int last, int can_delay);
 static int cluster_try_push(struct vnode *vp, off_t EOF, int can_delay, int push_all);
 
 static int sparse_cluster_switch(struct vnode *vp, off_t EOF);
@@ -3545,8 +3544,8 @@ static int
 cluster_push_x(vp, EOF, first, last, can_delay)
         struct vnode *vp;
 	off_t  EOF;
-	daddr_t first;
-	daddr_t last;
+	unsigned int first;
+	unsigned int last;
 	int    can_delay;
 {
 	upl_page_info_t *pl;
@@ -3573,7 +3572,7 @@ cluster_push_x(vp, EOF, first, last, can_delay)
 	        return (1);
 	}
 	upl_size = pages_in_upl * PAGE_SIZE;
-	upl_f_offset = ((off_t)first) * PAGE_SIZE_64;
+	upl_f_offset = (off_t)((unsigned long long)first * PAGE_SIZE_64);
 
 	if (upl_f_offset + upl_size >= EOF) {
 
@@ -3719,8 +3718,8 @@ sparse_cluster_switch(struct vnode *vp, off_t EOF)
 static int
 sparse_cluster_push(struct vnode *vp, off_t EOF, int push_all)
 {
-        daddr_t first;
-	daddr_t last;
+        unsigned int first;
+	unsigned int last;
         off_t offset;
 	u_int length;
 
@@ -3735,8 +3734,8 @@ sparse_cluster_push(struct vnode *vp, off_t EOF, int push_all)
 		        vp->v_clen = 0;
 			break;
 		}
-		first = (daddr_t)(offset / PAGE_SIZE_64);
-		last  = (daddr_t)((offset + length) / PAGE_SIZE_64);
+		first = (unsigned int)(offset / PAGE_SIZE_64);
+		last  = (unsigned int)((offset + length) / PAGE_SIZE_64);
 
 		cluster_push_x(vp, EOF, first, last, 0);
 

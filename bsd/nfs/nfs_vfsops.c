@@ -1109,6 +1109,11 @@ nfs_unmount(mp, mntflags, p)
 		if (hw_atomic_sub(&nfsreqqusers, 1) != 0)
 			nfsatompanic("unmount sub");
 #endif
+		/* Need to wake up any rcvlock waiters so they notice the unmount. */
+		if (nmp->nm_state & NFSSTA_WANTRCV) {
+			nmp->nm_state &= ~NFSSTA_WANTRCV;
+			wakeup(&nmp->nm_state);
+		}
 		FREE_ZONE((caddr_t)nmp, sizeof (struct nfsmount), M_NFSMNT);
 	}
 	return (0);

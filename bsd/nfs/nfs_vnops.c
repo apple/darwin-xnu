@@ -2027,8 +2027,11 @@ again:
 		}
 		if (newvp)
 			vput(newvp);
-	} else if (v3 && (fmode & O_EXCL))
+	} else if (v3 && (fmode & O_EXCL)) {
 		error = nfs_setattrrpc(newvp, vap, cnp->cn_cred, cnp->cn_proc);
+		if (error)
+			vput(newvp);
+	}
 	if (!error) {
 		if (cnp->cn_flags & MAKEENTRY)
 			cache_enter(dvp, newvp, cnp);
