@@ -900,6 +900,7 @@ nqnfs_getlease(vp, rwflag, cred, p)
 	struct mbuf *mreq, *mrep, *md, *mb, *mb2;
 	int cachable;
 	u_quad_t frev;
+	u_int64_t xid;
 
 	nfsstats.rpccnt[NQNFSPROC_GETLEASE]++;
 	mb = mreq = nfsm_reqh(vp, NQNFSPROC_GETLEASE, NFSX_V3FH+2*NFSX_UNSIGNED,
@@ -909,7 +910,7 @@ nqnfs_getlease(vp, rwflag, cred, p)
 	*tl++ = txdr_unsigned(rwflag);
 	*tl = txdr_unsigned(nmp->nm_leaseterm);
 	reqtime = time.tv_sec;
-	nfsm_request(vp, NQNFSPROC_GETLEASE, p, cred);
+	nfsm_request(vp, NQNFSPROC_GETLEASE, p, cred, &xid);
 	np = VTONFS(vp);
 	nfsm_dissect(tl, u_long *, 4 * NFSX_UNSIGNED);
 	cachable = fxdr_unsigned(int, *tl++);
@@ -917,7 +918,7 @@ nqnfs_getlease(vp, rwflag, cred, p)
 	if (reqtime > time.tv_sec) {
 		fxdr_hyper(tl, &frev);
 		nqnfs_clientlease(nmp, np, rwflag, cachable, reqtime, frev);
-		nfsm_loadattr(vp, (struct vattr *)0);
+		nfsm_loadattr(vp, (struct vattr *)0, &xid);
 	} else
 		error = NQNFS_EXPIRED;
 	nfsm_reqdone;

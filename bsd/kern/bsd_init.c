@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2001 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -496,8 +496,8 @@ bsd_init()
 	/* Get the vnode for '/'.  Set fdp->fd_fd.fd_cdir to reference it. */
 	if (VFS_ROOT(mountlist.cqh_first, &rootvnode))
 		panic("bsd_init: cannot find root vnode");
-	filedesc0.fd_cdir = rootvnode;
 	VREF(rootvnode);
+	filedesc0.fd_cdir = rootvnode;
 	VOP_UNLOCK(rootvnode, 0, p);
 	
 

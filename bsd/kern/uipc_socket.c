@@ -117,6 +117,7 @@ SYSCTL_INT(_kern_ipc, KIPC_SOMAXCONN, somaxconn, CTLFLAG_RW, &somaxconn,
 	   0, "");
 
 /* Should we get a maximum also ??? */
+static int sosendmaxchain = 65536;
 static int sosendminchain = 16384;
 SYSCTL_INT(_kern_ipc, OID_AUTO, sosendminchain, CTLFLAG_RW, &sosendminchain,
            0, "");
@@ -818,7 +819,7 @@ sosend(so, addr, uio, top, control, flags)
 
 {
 	struct mbuf **mp;
-	register struct mbuf *m;
+	register struct mbuf *m, *freelist = NULL;
 	register long space, len, resid;
 	int clen = 0, error, s, dontroute, mlen, sendflags;
 	int atomic = sosendallatonce(so) || top;
@@ -911,6 +912,7 @@ restart:
 		splx(s);
 		mp = &top;
 		space -= clen;
+
 		do {
 		    if (uio == NULL) {
 			/*
@@ -920,41 +922,69 @@ restart:
 			if (flags & MSG_EOR)
 				top->m_flags |= M_EOR;
 		    } else {
-			boolean_t 	funnel_state = TRUE;
-			int		chainmbufs = (sosendminchain > 0 && resid >= sosendminchain);
-            
-			if (chainmbufs)
-			    funnel_state = thread_funnel_set(network_flock, FALSE);
+		        boolean_t 	dropped_funnel = FALSE;
+			int             chainlength;
+			int             bytes_to_copy;
+
+			bytes_to_copy = min(resid, space);
+
+			if (sosendminchain > 0) {
+			    if (bytes_to_copy >= sosendminchain) {
+			        dropped_funnel = TRUE;
+			        (void)thread_funnel_set(network_flock, FALSE);
+			    }
+			    chainlength = 0;
+			} else
+			    chainlength = sosendmaxchain;
+
 			do {
-			KERNEL_DEBUG(DBG_FNC_SOSEND | DBG_FUNC_NONE, -1, 0, 0, 0, 0);
-			if (top == 0) {
+
+			if (bytes_to_copy >= MINCLSIZE) {
+			  if ((m = freelist) == NULL) {
+			        int num_needed;
+				int hdrs_needed = 0;
+				
+				if (top == 0)
+				    hdrs_needed = 1;
+				num_needed = bytes_to_copy / MCLBYTES;
+
+				if ((bytes_to_copy - (num_needed * MCLBYTES)) >= MINCLSIZE)
+				    num_needed++;
+
+			        if ((freelist = m_getpackets(num_needed, hdrs_needed, M_WAIT)) == NULL)
+				    goto getpackets_failed;
+				m = freelist;
+			    }
+			    freelist = m->m_next;
+			    m->m_next = NULL;
+
+			    mlen = MCLBYTES;
+			    len = min(mlen, bytes_to_copy);
+			} else {
+getpackets_failed:
+			    if (top == 0) {
 				MGETHDR(m, M_WAIT, MT_DATA);
 				mlen = MHLEN;
 				m->m_pkthdr.len = 0;
 				m->m_pkthdr.rcvif = (struct ifnet *)0;
-			} else {
+			    } else {
 				MGET(m, M_WAIT, MT_DATA);
 				mlen = MLEN;
+			    }
+			    len = min(mlen, bytes_to_copy);
+			    /*
+			     * For datagram protocols, leave room
+			     * for protocol headers in first mbuf.
+			     */
+			    if (atomic && top == 0 && len < mlen)
+			        MH_ALIGN(m, len);
 			}
-			if (resid >= MINCLSIZE) {
-				MCLGET(m, M_WAIT);
-				if ((m->m_flags & M_EXT) == 0)
-					goto nopages;
-				mlen = MCLBYTES;
-				len = min(min(mlen, resid), space);
-			} else {
-nopages:
-				len = min(min(mlen, resid), space);
-				/*
-				 * For datagram protocols, leave room
-				 * for protocol headers in first mbuf.
-				 */
-				if (atomic && top == 0 && len < mlen)
-					MH_ALIGN(m, len);
-			}
-			KERNEL_DEBUG(DBG_FNC_SOSEND | DBG_FUNC_NONE, -1, 0, 0, 0, 0);
+			chainlength += len;
+			
 			space -= len;
+
 			error = uiomove(mtod(m, caddr_t), (int)len, uio);
+
 			resid = uio->uio_resid;
 			
 			m->m_len = len;
@@ -968,9 +998,12 @@ nopages:
 					top->m_flags |= M_EOR;
 				break;
 			}
-		    } while (space > 0 && (chainmbufs || atomic || resid < MINCLSIZE));
-		    if (chainmbufs)
-			funnel_state = thread_funnel_set(network_flock, TRUE);
+			bytes_to_copy = min(resid, space);
+
+		    } while (space > 0 && (chainlength < sosendmaxchain || atomic || resid < MINCLSIZE));
+
+		    if (dropped_funnel == TRUE)
+			(void)thread_funnel_set(network_flock, TRUE);
 		    if (error)
 			goto release;
 		    }
@@ -1024,6 +1057,9 @@ nopages:
 				{	splx(s);
 					if (error == EJUSTRETURN)
 					{	sbunlock(&so->so_snd);
+					
+					        if (freelist)
+						        m_freem_list(freelist);     
 						return(0);
 					}
 					goto release;
@@ -1056,6 +1092,8 @@ out:
 		m_freem(top);
 	if (control)
 		m_freem(control);
+	if (freelist)
+	        m_freem_list(freelist);     
 
 	KERNEL_DEBUG(DBG_FNC_SOSEND | DBG_FUNC_END,
 		     so,
@@ -1093,6 +1131,7 @@ soreceive(so, psa, uio, mp0, controlp, flagsp)
 	int *flagsp;
 {
 	register struct mbuf *m, **mp;
+	register struct mbuf *free_list, *ml;
 	register int flags, len, error, s, offset;
 	struct protosw *pr = so->so_proto;
 	struct mbuf *nextrecord;
@@ -1295,6 +1334,10 @@ dontblock:
 	}
 	moff = 0;
 	offset = 0;
+
+	free_list = m;
+	ml = (struct mbuf *)0;
+
 	while (m && uio->uio_resid > 0 && error == 0) {
 		if (m->m_type == MT_OOBDATA) {
 			if (type != MT_OOBDATA)
@@ -1357,8 +1400,9 @@ dontblock:
 					so->so_rcv.sb_mb = m = m->m_next;
 					*mp = (struct mbuf *)0;
 				} else {
-					MFREE(m, so->so_rcv.sb_mb);
-					m = so->so_rcv.sb_mb;
+				        m->m_nextpkt = 0;
+				        ml = m;
+					m = m->m_next;
 				}
 				if (m)
 					m->m_nextpkt = nextrecord;
@@ -1401,6 +1445,12 @@ dontblock:
 		    !sosendallatonce(so) && !nextrecord) {
 			if (so->so_error || so->so_state & SS_CANTRCVMORE)
 				break;
+
+			if (ml) {
+			        so->so_rcv.sb_mb = ml->m_next;
+			        ml->m_next = (struct mbuf *)0;
+				m_freem_list(free_list);
+			}
 			error = sbwait(&so->so_rcv);
 			if (error) {
 				sbunlock(&so->so_rcv);
@@ -1409,9 +1459,17 @@ dontblock:
 				return (0);
 			}
 			m = so->so_rcv.sb_mb;
-			if (m)
+			if (m) {
 				nextrecord = m->m_nextpkt;
+				free_list = m;
+			}
+			ml = (struct mbuf *)0;
 		}
+	}
+	if (ml) {
+	        so->so_rcv.sb_mb = ml->m_next;
+	        ml->m_next = (struct mbuf *)0;
+	        m_freem_list(free_list);
 	}
 
 	if (m && pr->pr_flags & PR_ATOMIC) {

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2001 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -663,8 +663,8 @@ spec_close(ap)
 		 */
 		if (vcount(vp) == 2 && ap->a_p &&
 		    vp == ap->a_p->p_session->s_ttyvp) {
-			vrele(vp);
 			ap->a_p->p_session->s_ttyvp = NULL;
+			vrele(vp);
 		}
 		/*
 		 * If the vnode is locked, then we are in the midst

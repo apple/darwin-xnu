@@ -3499,9 +3499,6 @@ vs_cluster_transfer(
 			if (error == KERN_SUCCESS) {
 				error = ps_read_file(ps, upl, (vm_offset_t) 0, actual_offset, 
 							size, &residual, 0);
-				if(error)
-					upl_commit(upl, NULL);
-					upl_deallocate(upl);
 			}
 					
 #else

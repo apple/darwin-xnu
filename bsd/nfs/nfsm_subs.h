@@ -170,7 +170,7 @@ struct mbuf *nfsm_rpchead __P((struct ucred *cr, int nmflag, int procid,
 		bcopy((caddr_t)(f), (caddr_t)tl, NFSX_V3FH); \
 		}
 
-#define nfsm_mtofh(d, v, v3, f) \
+#define nfsm_mtofh(d, v, v3, f, x) \
 		{ struct nfsnode *ttnp; nfsfh_t *ttfhp; int ttfhsize; \
 		if (v3) { \
 			nfsm_dissect(tl, u_long *, NFSX_UNSIGNED); \
@@ -195,7 +195,7 @@ struct mbuf *nfsm_rpchead __P((struct ucred *cr, int nmflag, int procid,
 				nfsm_adv(NFSX_V3FATTR); \
 		} \
 		if (f) \
-			nfsm_loadattr((v), (struct vattr *)0); \
+			nfsm_loadattr((v), (struct vattr *)0, (x)); \
 		}
 
 #define nfsm_getfh(f, s, v3) \
@@ -211,26 +211,29 @@ struct mbuf *nfsm_rpchead __P((struct ucred *cr, int nmflag, int procid,
 			(s) = NFSX_V2FH; \
 		nfsm_dissect((f), nfsfh_t *, nfsm_rndup(s)); }
 
-#define	nfsm_loadattr(v, a) \
+#define	nfsm_loadattr(v, a, x) \
 		{ struct vnode *ttvp = (v); \
-		if ((t1 = nfs_loadattrcache(&ttvp, &md, &dpos, (a)))) { \
+		if ((t1 = nfs_loadattrcache(&ttvp, &md, &dpos, (a), 0, \
+					    (x)))) { \
 			error = t1; \
 			m_freem(mrep); \
 			goto nfsmout; \
 		} \
 		(v) = ttvp; }
 
-#define	nfsm_postop_attr(v, f) \
+#define	nfsm_postop_attr(v, f, x) \
 		{ struct vnode *ttvp = (v); \
 		nfsm_dissect(tl, u_long *, NFSX_UNSIGNED); \
 		if (((f) = fxdr_unsigned(int, *tl))) { \
 			if ((t1 = nfs_loadattrcache(&ttvp, &md, &dpos, \
-				(struct vattr *)0))) { \
+					(struct vattr *)0, 1, (x)))) { \
 				error = t1; \
 				(f) = 0; \
 				m_freem(mrep); \
 				goto nfsmout; \
 			} \
+			if (*(x) == 0) \
+				(f) = 0; \
 			(v) = ttvp; \
 		} }
 
@@ -238,7 +241,7 @@ struct mbuf *nfsm_rpchead __P((struct ucred *cr, int nmflag, int procid,
 #define NFSV3_WCCRATTR	0
 #define NFSV3_WCCCHK	1
 
-#define	nfsm_wcc_data(v, f) \
+#define	nfsm_wcc_data(v, f, x) \
 		{ int ttattrf, ttretf = 0; \
 		nfsm_dissect(tl, u_long *, NFSX_UNSIGNED); \
 		if (*tl == nfs_true) { \
@@ -247,7 +250,7 @@ struct mbuf *nfsm_rpchead __P((struct ucred *cr, int nmflag, int procid,
 				ttretf = (VTONFS(v)->n_mtime == \
 					fxdr_unsigned(u_long, *(tl + 2))); \
 		} \
-		nfsm_postop_attr((v), ttattrf); \
+		nfsm_postop_attr((v), ttattrf, (x)); \
 		if (f) { \
 			(f) = ttretf; \
 		} else { \
@@ -324,11 +327,11 @@ struct mbuf *nfsm_rpchead __P((struct ucred *cr, int nmflag, int procid,
 * m_freem(mrep). Wondering if some of our freeing problems could be
 * due to nfsv3 calling nfsm_reqdone unlike nfsv2. Separate problem.
 */
-#define	nfsm_request(v, t, p, c)	\
+#define	nfsm_request(v, t, p, c, x)	\
                 { \
                 int nfsv3 = (VFSTONFS((v)->v_mount))->nm_flag & NFSMNT_NFSV3; \
 		if ((error = nfs_request((v), mreq, (t), (p), \
-		   (c), &mrep, &md, &dpos))) { \
+		   (c), &mrep, &md, &dpos, (x)))) { \
 			if (error & NFSERR_RETERR) \
 				error &= ~NFSERR_RETERR; \
 			else \

@@ -351,8 +351,10 @@ ip_output(m0, opt, ro, flags, imo)
 		 */
 		if (imo != NULL) {
 			ip->ip_ttl = imo->imo_multicast_ttl;
-			if (imo->imo_multicast_ifp != NULL)
+			if (imo->imo_multicast_ifp != NULL) {
 				ifp = imo->imo_multicast_ifp;
+				dl_tag = ifp->if_data.default_proto;
+			}
 			if (imo->imo_multicast_vif != -1)
 				ip->ip_src.s_addr =
 				    ip_mcast_src(imo->imo_multicast_vif);

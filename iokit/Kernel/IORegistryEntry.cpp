@@ -440,11 +440,14 @@ bool IORegistryEntry::init( IORegistryEntry * old,
     WLOCK;
 
     fPropertyTable = old->getPropertyTable();
-    old->fPropertyTable = 0;
+    fPropertyTable->retain();
 #ifdef IOREGSPLITTABLES
     fRegistryTable = old->fRegistryTable;
-    old->fRegistryTable = 0;
+    old->fRegistryTable = OSDictionary::withDictionary( fRegistryTable );
 #endif /* IOREGSPLITTABLES */
+
+    old->registryTable()->removeObject( plane->keys[ kParentSetIndex ] );
+    old->registryTable()->removeObject( plane->keys[ kChildSetIndex ] );
 
     all = getParentSetReference( plane );
     if( all) for( index = 0;
@@ -1815,6 +1818,8 @@ unsigned int IORegistryEntry::getDepth( const IORegistryPlane * plane ) const
 
 OSDefineMetaClassAndStructors(IORegistryIterator, OSIterator)
 
+enum { kIORegistryIteratorInvalidFlag = 0x80000000 };
+
 /* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
 
 IORegistryIterator *
@@ -1838,7 +1843,7 @@ IORegistryIterator::iterateOver( IORegistryEntry * root,
             create->where = &create->start;
             create->start.current = root;
             create->plane = plane;
-            create->options = options;
+            create->options = options & ~kIORegistryIteratorInvalidFlag;
 
 	} else {
 	    create->release();
@@ -1860,10 +1865,12 @@ bool IORegistryIterator::isValid( void )
     bool		ok;
     IORegCursor *	next;
 
-    ok = true;
     next = where;
 
     RLOCK;
+
+    ok = (0 == (kIORegistryIteratorInvalidFlag & options));
+
     while( ok && next) {
 	if( where->iter)
             ok = where->iter->isValid();
@@ -1927,6 +1934,7 @@ void IORegistryIterator::reset( void )
     }
 
     where->current = root;
+    options &= ~kIORegistryIteratorInvalidFlag;
 }
 
 void IORegistryIterator::free( void )
@@ -1962,11 +1970,15 @@ IORegistryEntry * IORegistryIterator::getNextObjectFlat( void )
         if( where->current)
             where->current->release();
 
-    if( where->iter)
+    if( where->iter) {
+
         next = (IORegistryEntry *) where->iter->getNextObject();
 
-    if( next)
-	next->retain();
+        if( next)
+            next->retain();
+        else if( !where->iter->isValid())
+            options |= kIORegistryIteratorInvalidFlag;
+    }
 
     where->current = next;
 

@@ -4138,20 +4138,14 @@ void IOService::setDeviceMemory( OSArray * array )
 IOReturn IOService::resolveInterrupt(IOService *nub, int source)
 {
   IOInterruptController *interruptController;
-  OSDictionary          *propTable;
   OSArray               *array;
   OSData                *data;
   OSSymbol              *interruptControllerName;
   long                  numSources;
   IOInterruptSource     *interruptSources;
   
-  // Get the property table from the nub.
-  propTable = nub->getPropertyTable();
-  if (propTable == 0) return kIOReturnNoResources;
-
-  // Get the parents list from the property table.
-  array = OSDynamicCast(OSArray,
-			propTable->getObject(gIOInterruptControllersKey));
+  // Get the parents list from the nub.
+  array = OSDynamicCast(OSArray, nub->getProperty(gIOInterruptControllersKey));
   if (array == 0) return kIOReturnNoResources;
   
   // Allocate space for the IOInterruptSources if needed... then return early.
@@ -4173,9 +4167,8 @@ IOReturn IOService::resolveInterrupt(IOService *nub, int source)
   interruptController = getPlatform()->lookUpInterruptController(interruptControllerName);
   if (interruptController == 0) return kIOReturnNoResources;
   
-  // Get the interrupt numbers from the property table.
-  array = OSDynamicCast(OSArray,
-			propTable->getObject(gIOInterruptSpecifiersKey));
+  // Get the interrupt numbers from the nub.
+  array = OSDynamicCast(OSArray, nub->getProperty(gIOInterruptSpecifiersKey));
   if (array == 0) return kIOReturnNoResources;
   data = OSDynamicCast(OSData, array->getObject(source));
   if (data == 0) return kIOReturnNoResources;

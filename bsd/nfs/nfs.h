@@ -638,9 +638,9 @@ void	nfsm_srvpostopattr __P((struct nfsrv_descript *, int, struct vattr *,
 int	netaddr_match __P((int, union nethostaddr *, struct mbuf *));
 int	nfs_request __P((struct vnode *, struct mbuf *, int, struct proc *,
 			 struct ucred *, struct mbuf **, struct mbuf **,
-			 caddr_t *));
+			 caddr_t *, u_int64_t *));
 int	nfs_loadattrcache __P((struct vnode **, struct mbuf **, caddr_t *,
-			       struct vattr *));
+			       struct vattr *, int, u_int64_t *));
 int	nfs_namei __P((struct nameidata *, fhandle_t *, int,
 		       struct nfssvc_sock *, struct mbuf *, struct mbuf **,
 		       caddr_t *, struct vnode **, struct proc *, int, int));
@@ -747,6 +747,11 @@ int	nfsrv_write __P((struct nfsrv_descript *nfsd, struct nfssvc_sock *slp,
 void	nfsrv_rcv __P((struct socket *so, caddr_t arg, int waitflag));
 void	nfsrv_slpderef __P((struct nfssvc_sock *slp));
 
+/*
+ * NFSTRACE points were changed to FSDBG (KERNEL_DEBUG)
+ * But some of this code may prove useful someday...
+ */
+#undef NFSDIAG
 #if NFSDIAG
 
 extern int nfstraceindx;

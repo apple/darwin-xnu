@@ -280,8 +280,7 @@ IOReturn IODTNVRAM::setProperties(OSObject *properties)
 IOReturn IODTNVRAM::readXPRAM(IOByteCount offset, UInt8 *buffer,
 			      IOByteCount length)
 {
-  if ((_nvramImage == 0) || (_xpramPartitionOffset == 0))
-    return kIOReturnNotReady;
+  if (_xpramImage == 0) return kIOReturnUnsupported;
   
   if ((buffer == 0) || (length <= 0) || (offset < 0) ||
       (offset + length > kIODTNVRAMXPRAMSize))
@@ -295,8 +294,7 @@ IOReturn IODTNVRAM::readXPRAM(IOByteCount offset, UInt8 *buffer,
 IOReturn IODTNVRAM::writeXPRAM(IOByteCount offset, UInt8 *buffer,
 			       IOByteCount length)
 {
-  if ((_nvramImage == 0) || (_xpramPartitionOffset == 0))
-    return kIOReturnNotReady;
+  if (_xpramImage == 0) return kIOReturnUnsupported;
   
   if ((buffer == 0) || (length <= 0) || (offset < 0) ||
       (offset + length > kIODTNVRAMXPRAMSize))

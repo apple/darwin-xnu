@@ -32,7 +32,7 @@
 #include <IOKit/IOKitDebug.h>
 #include <IOKit/IOWorkLoop.h>
 #include <IOKit/pwr_mgt/RootDomain.h>
-
+#include <IOKit/IOMessage.h>
 #include <libkern/c++/OSContainers.h>
 
 
@@ -64,6 +64,8 @@ OSMetaClassDefineReservedUnused(IOPlatformExpert, 10);
 OSMetaClassDefineReservedUnused(IOPlatformExpert, 11);
 
 static IOPlatformExpert * gIOPlatform;
+static OSDictionary * gIOInterruptControllers;
+static IOLock * gIOInterruptControllersLock;
 
 OSSymbol * gPlatformInterruptControllerName;
 
@@ -85,6 +87,9 @@ bool IOPlatformExpert::start( IOService * provider )
     
     if (!super::start(provider))
       return false;
+    
+    gIOInterruptControllers = OSDictionary::withCapacity(1);
+    gIOInterruptControllersLock = IOLockAlloc();
     
     // Correct the bus frequency in the device tree.
     busFrequency = OSData::withBytesNoCopy((void *)&gPEClockFrequencyInfo.bus_clock_rate_hz, 4);
@@ -255,21 +260,36 @@ IOReturn IOPlatformExpert::setConsoleInfo( PE_Video * consoleInfo,
 
 IOReturn IOPlatformExpert::registerInterruptController(OSSymbol *name, IOInterruptController *interruptController)
 {
-  publishResource(name, interruptController);
+  IOLockLock(gIOInterruptControllersLock);
+  
+  gIOInterruptControllers->setObject(name, interruptController);
+  
+  thread_wakeup(gIOInterruptControllers);
+  
+  IOLockUnlock(gIOInterruptControllersLock);
   
   return kIOReturnSuccess;
 }
 
 IOInterruptController *IOPlatformExpert::lookUpInterruptController(OSSymbol *name)
 {
-  IOInterruptController *interruptController;
-  IOService             *service;
+  OSObject              *object;
   
-  service = waitForService(resourceMatching(name));
+  while (1) {
+    IOLockLock(gIOInterruptControllersLock);
+    
+    object = gIOInterruptControllers->getObject(name);
+    
+    if (object == 0) assert_wait(gIOInterruptControllers, THREAD_UNINT);
+    
+    IOLockUnlock(gIOInterruptControllersLock);
+    
+    if (object != 0) break;
+    
+    thread_block(0);
+  }
   
-  interruptController = OSDynamicCast(IOInterruptController, service->getProperty(name));  
-  
-  return interruptController;
+  return OSDynamicCast(IOInterruptController, object);
 }
 
 
@@ -628,6 +648,18 @@ static void getCStringForObject (OSObject * inObj, char * outStr)
    }
 }
 
+/* IOPMPanicOnShutdownHang
+ * - Called from a timer installed by PEHaltRestart
+ */
+static void IOPMPanicOnShutdownHang(thread_call_param_t p0, thread_call_param_t p1)
+{
+    int type = (int)p0;
+
+    /* 30 seconds has elapsed - resume shutdown */
+    gIOPlatform->haltRestart(type);
+}
+
+
 extern "C" {
 
 /*
@@ -660,6 +692,35 @@ int PEGetPlatformEpoch(void)
 
 int PEHaltRestart(unsigned int type)
 {
+  IOPMrootDomain    *pmRootDomain = IOService::getPMRootDomain();
+  bool              noWaitForResponses;
+  AbsoluteTime      deadline;
+  thread_call_t     shutdown_hang;
+  
+  /* Notify IOKit PM clients of shutdown/restart
+     Clients subscribe to this message with a call to
+     IOService::registerInterest()
+  */
+  
+  /* Spawn a thread that will panic in 30 seconds. 
+     If all goes well the machine will be off by the time
+     the timer expires.
+   */
+  shutdown_hang = thread_call_allocate( &IOPMPanicOnShutdownHang, (thread_call_param_t) type);
+  clock_interval_to_deadline( 30, kSecondScale, &deadline );
+  thread_call_enter1_delayed( shutdown_hang, 0, deadline );
+  
+  noWaitForResponses = pmRootDomain->tellChangeDown2(type); 
+  /* This notification should have few clients who all do 
+     their work synchronously.
+           
+     In this "shutdown notification" context we don't give
+     drivers the option of working asynchronously and responding 
+     later. PM internals make it very hard to wait for asynchronous
+     replies. In fact, it's a bad idea to even be calling
+     tellChangeDown2 from here at all.
+   */ 
+
   if (gIOPlatform) return gIOPlatform->haltRestart(type);
   else return -1;
 }

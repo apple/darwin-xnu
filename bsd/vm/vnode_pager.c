@@ -89,22 +89,17 @@ vnode_pageout(struct vnode *vp,
 	int		result = PAGER_SUCCESS;
 	struct proc 	*p = current_proc();
 	int		error = 0;
-	int vp_size = 0;
 	int blkno=0, s;
 	int cnt, isize;
 	int pg_index;
 	int offset;
 	struct buf *bp;
 	boolean_t	funnel_state;
-	int haveupl=0;
 	upl_page_info_t *pl;
 	upl_t vpupl = NULL;
 
 	funnel_state = thread_funnel_set(kernel_flock, TRUE);
 
-	if (upl != (upl_t)NULL) {
-		haveupl = 1;
-	}
 	isize = (int)size;
 
 	if (isize < 0)
@@ -117,54 +112,44 @@ vnode_pageout(struct vnode *vp,
 	if (UBCINVALID(vp)) {
 		result = PAGER_ERROR;
 		error  = PAGER_ERROR;
+		if (upl && !(flags & UPL_NOCOMMIT))
+			ubc_upl_abort(upl, 0);
 		goto out;
 	}
-	if (haveupl) {
+	if (upl) {
 		/*
-		 * This is a pageout form the Default pager,
+		 * This is a pageout from the Default pager,
 		 * just go ahead and call VOP_PAGEOUT
 		 */
 		dp_pgouts++;
-		if (error = VOP_PAGEOUT(vp, upl, upl_offset,
-			 (off_t)f_offset,(size_t)size, p->p_ucred, flags)) {
-			result = PAGER_ERROR;
-			error  = PAGER_ERROR;
-		}
+		if (error = VOP_PAGEOUT(vp, upl, upl_offset, (off_t)f_offset,
+					(size_t)size, p->p_ucred, flags))
+			result = error = PAGER_ERROR;
 		goto out;
 	}
-	ubc_create_upl( vp,
-					f_offset,
-					isize,
-					&vpupl,
-					&pl,
-					UPL_COPYOUT_FROM);
+	ubc_create_upl(vp, f_offset, isize, &vpupl, &pl, UPL_COPYOUT_FROM);
 	if (vpupl == (upl_t) 0)
 		return PAGER_ABSENT;
 
-	vp_size = ubc_getsize(vp);
-	if (vp_size == 0) {
-
-		while (isize) {
+	if (ubc_getsize(vp) == 0) {
+		for (offset = 0; isize; isize -= PAGE_SIZE,
+					offset += PAGE_SIZE) {
 			blkno = ubc_offtoblk(vp, (off_t)f_offset);
-start0:
-			if (bp = incore(vp, blkno)) {
-				if (ISSET(bp->b_flags, B_BUSY)) {
-					SET(bp->b_flags, B_WANTED);
-					error = tsleep(bp, (PRIBIO + 1), "vnpgout", 0);
-					goto start0;
-				} else {
-				        bremfree(bp);
-					SET(bp->b_flags, (B_BUSY|B_INVAL));
-				}
-			}
-			if (bp)
-				brelse(bp);
 			f_offset += PAGE_SIZE;
-			isize    -= PAGE_SIZE;
+			if ((bp = incore(vp, blkno)) &&
+			    ISSET(bp->b_flags, B_BUSY)) {
+				ubc_upl_abort_range(vpupl, offset, PAGE_SIZE,
+						    UPL_ABORT_FREE_ON_EMPTY);
+				result = error = PAGER_ERROR;
+				continue;
+			} else if (bp) {
+				bremfree(bp);
+				SET(bp->b_flags, B_BUSY | B_INVAL);
+				brelse(bp);
+			}
+			ubc_upl_commit_range(vpupl, offset, PAGE_SIZE,
+					     UPL_COMMIT_FREE_ON_EMPTY);
 		}
-		ubc_upl_commit_range(vpupl, 0, size, UPL_COMMIT_FREE_ON_EMPTY);
-
-		error = 0;
 		goto out;
 	}
 	pg_index = 0;
@@ -176,8 +161,7 @@ start0:
 
 		if ( !upl_valid_page(pl, pg_index)) {
 			ubc_upl_abort_range(vpupl, offset, PAGE_SIZE,
-					UPL_ABORT_FREE_ON_EMPTY);
-	         
+					    UPL_ABORT_FREE_ON_EMPTY);
 			offset += PAGE_SIZE;
 			isize  -= PAGE_SIZE;
 			pg_index++;
@@ -192,28 +176,32 @@ start0:
 			 * We also get here from vm_object_terminate()
 			 * So all you need to do in these
 			 * cases is to invalidate incore buffer if it is there
+			 * Note we must not sleep here if B_BUSY - that is
+			 * a lock inversion which causes deadlock.
 			 */
 			blkno = ubc_offtoblk(vp, (off_t)(f_offset + offset));
 			s = splbio();
 			vp_pgoclean++;			
-start:
-			if (bp = incore(vp, blkno)) {
-				if (ISSET(bp->b_flags, B_BUSY)) {
-					SET(bp->b_flags, B_WANTED);
-					error = tsleep(bp, (PRIBIO + 1), "vnpgout", 0);
-					goto start;
-				} else {
-				        bremfree(bp);
-					SET(bp->b_flags, (B_BUSY|B_INVAL));
-				}
-			}
-			splx(s);
-			if (bp)
+			if ((bp = incore(vp, blkno)) &&
+			    ISSET(bp->b_flags, B_BUSY | B_NEEDCOMMIT)) {
+				splx(s);
+				ubc_upl_abort_range(vpupl, offset, PAGE_SIZE,
+						    UPL_ABORT_FREE_ON_EMPTY);
+				result = error = PAGER_ERROR;
+				offset += PAGE_SIZE;
+				isize -= PAGE_SIZE;
+				pg_index++;
+				continue;
+			} else if (bp) {
+			        bremfree(bp);
+				SET(bp->b_flags, B_BUSY | B_INVAL );
+				splx(s);
 				brelse(bp);
+			} else
+				splx(s);
 
 			ubc_upl_commit_range(vpupl, offset, PAGE_SIZE, 
-					UPL_COMMIT_FREE_ON_EMPTY);
-
+					     UPL_COMMIT_FREE_ON_EMPTY);
 			offset += PAGE_SIZE;
 			isize  -= PAGE_SIZE;
 			pg_index++;
@@ -236,12 +224,10 @@ start:
 		xsize = num_of_pages * PAGE_SIZE;
 
 		/*  By defn callee will commit or abort upls */
-		if (error = VOP_PAGEOUT(vp, vpupl, (vm_offset_t) offset,
-					(off_t)(f_offset + offset),
-					xsize, p->p_ucred, flags & ~UPL_NOCOMMIT)) {
-			result = PAGER_ERROR;
-			error  = PAGER_ERROR;
-		}
+		if (error = VOP_PAGEOUT(vp, vpupl, (vm_offset_t)offset,
+					(off_t)(f_offset + offset), xsize,
+					p->p_ucred, flags & ~UPL_NOCOMMIT))
+			result = error = PAGER_ERROR;
 		offset += xsize;
 		isize  -= xsize;
 		pg_index += num_of_pages;
@@ -271,52 +257,42 @@ vnode_pagein(
 	int		error = 0;
 	int		xfer_size;
 	boolean_t	funnel_state;
-	int haveupl=0;
 	upl_t vpupl = NULL;
 	off_t	local_offset;
 	unsigned int  ioaddr;
 
 	funnel_state = thread_funnel_set(kernel_flock, TRUE);
 
-#if 0
-	if(pl->page_list.npages >1 )
-		panic("vnode_pageout: Can't handle more than one page");
-#endif /* 0 */
-
-	if (pl != (upl_t)NULL) {
-		haveupl = 1;
-	}
 	UBCINFOCHECK("vnode_pagein", vp);
 
 	if (UBCINVALID(vp)) {
 		result = PAGER_ERROR;
 		error  = PAGER_ERROR;
+		if (pl && !(flags & UPL_NOCOMMIT)) {
+			ubc_upl_abort(pl, 0);
+		}
 		goto out;
 	}
 
-	if (haveupl) {
+	if (pl) {
 		dp_pgins++;
 		if (error = VOP_PAGEIN(vp, pl, pl_offset, (off_t)f_offset,
-				 size,p->p_ucred, flags)) {
+				       size, p->p_ucred, flags)) {
 			result = PAGER_ERROR;
 		}
 	} else {
 
 		local_offset = 0;
 		while (size) {
-			if((size > 4096) && (vp->v_tag == VT_NFS)) {
+			if(size > 4096 && vp->v_tag == VT_NFS) {
 				xfer_size =  4096;
 				size = size - xfer_size;
 			} else {
 				xfer_size = size;
 				size = 0;
 			}
-			ubc_create_upl(	vp,
-							f_offset+local_offset,
-							xfer_size,
-							&vpupl,
-							NULL,
-							UPL_FLAGS_NONE);
+			ubc_create_upl(vp, f_offset + local_offset, xfer_size,
+				       &vpupl, NULL, UPL_FLAGS_NONE);
 			if (vpupl == (upl_t) 0) {
 				result =  PAGER_ABSENT;
 				error = PAGER_ABSENT;
@@ -327,7 +303,9 @@ vnode_pagein(
 
 			/*  By defn callee will commit or abort upls */
 			if (error = VOP_PAGEIN(vp, vpupl, (vm_offset_t) 0,
-				(off_t)f_offset+local_offset, xfer_size,p->p_ucred, flags & ~UPL_NOCOMMIT)) {
+					       (off_t)f_offset + local_offset,
+					       xfer_size, p->p_ucred,
+					       flags & ~UPL_NOCOMMIT)) {
 				result = PAGER_ERROR;
 				error  = PAGER_ERROR;
 			}
@@ -336,7 +314,7 @@ vnode_pagein(
 	}
 out:
 	if (errorp)
-	    *errorp = result;
+		*errorp = result;
 	thread_funnel_set(kernel_flock, funnel_state);
 
 	return (error);

@@ -71,6 +71,12 @@
 #include <sys/sysctl.h>
 #include <sys/ev.h>
 
+#include <sys/kdebug.h>
+
+#define DBG_FNC_SBDROP	NETDBG_CODE(DBG_NETSOCK, 4)
+#define DBG_FNC_SBAPPEND	NETDBG_CODE(DBG_NETSOCK, 5)
+
+
 /*
  * Primitive routines for operating on sockets and socket buffers
  */
@@ -281,6 +287,7 @@ sonewconn(head, connstatus)
 	so->so_pgid  = head->so_pgid;
 	so->so_uid = head->so_uid;
 	so->so_rcv.sb_flags |= SB_RECV;	/* XXX */
+
 	(void) soreserve(so, head->so_snd.sb_hiwat, head->so_rcv.sb_hiwat);
 
 	if (so->so_proto->pr_sfilter.tqh_first)
@@ -572,6 +579,9 @@ sbappend(sb, m)
 {	register struct kextcb *kp;
 	register struct mbuf *n;
 
+
+	KERNEL_DEBUG((DBG_FNC_SBAPPEND | DBG_FUNC_START), sb, m->m_len, 0, 0, 0);
+
 	if (m == 0)
 		return;
 	kp = sotokextcb(sbtoso(sb));
@@ -594,6 +604,8 @@ sbappend(sb, m)
 		} while (n->m_next && (n = n->m_next));
 	}
 	sbcompress(sb, m, n);
+
+	KERNEL_DEBUG((DBG_FNC_SBAPPEND | DBG_FUNC_END), sb, sb->sb_cc, 0, 0, 0);
 }
 
 #ifdef SOCKBUF_DEBUG
@@ -920,9 +932,11 @@ sbdrop(sb, len)
 	register struct sockbuf *sb;
 	register int len;
 {
-	register struct mbuf *m, *mn;
-	struct mbuf *next;
+	register struct mbuf *m, *free_list, *ml;
+	struct mbuf *next, *last;
 	register struct kextcb *kp;
+
+	KERNEL_DEBUG((DBG_FNC_SBDROP | DBG_FUNC_START), sb, len, 0, 0, 0);
 
 	kp = sotokextcb(sbtoso(sb));
 	while (kp)
@@ -932,13 +946,15 @@ sbdrop(sb, len)
 		}
 		kp = kp->e_next;
 	}
-
 	next = (m = sb->sb_mb) ? m->m_nextpkt : 0;
+	free_list = last = m;
+	ml = (struct mbuf *)0;
+
 	while (len > 0) {
 		if (m == 0) {
 			if (next == 0)
 				panic("sbdrop");
-			m = next;
+			m = last = next;
 			next = m->m_nextpkt;
 			continue;
 		}
@@ -950,20 +966,30 @@ sbdrop(sb, len)
 		}
 		len -= m->m_len;
 		sbfree(sb, m);
-		MFREE(m, mn);
-		m = mn;
+
+		ml = m;
+		m = m->m_next;
 	}
 	while (m && m->m_len == 0) {
 		sbfree(sb, m);
-		MFREE(m, mn);
-		m = mn;
+
+		ml = m;
+		m = m->m_next;
+	}
+	if (ml) {
+	        ml->m_next = (struct mbuf *)0;
+		last->m_nextpkt = (struct mbuf *)0;
+	        m_freem_list(free_list);
 	}
 	if (m) {
 		sb->sb_mb = m;
 		m->m_nextpkt = next;
 	} else
 		sb->sb_mb = next;
+
 	postevent(0, sb, EV_RWBYTES);
+
+	KERNEL_DEBUG((DBG_FNC_SBDROP | DBG_FUNC_END), sb, 0, 0, 0, 0);
 }
 
 /*

@@ -286,6 +286,7 @@ extern simple_lock_data_t   mbuf_slock;
 	_MINTGET(m, type);						\
 	if (m) { 							\
 		(m)->m_next = (m)->m_nextpkt = 0; 			\
+		(m)->m_len = 0;						\
 		(m)->m_type = (type); 					\
 		(m)->m_data = (m)->m_dat; 				\
 		(m)->m_flags = 0; 					\
@@ -300,6 +301,7 @@ extern simple_lock_data_t   mbuf_slock;
 		(m)->m_type = (type); 					\
 		(m)->m_data = (m)->m_pktdat; 				\
 		(m)->m_flags = M_PKTHDR; 				\
+		(m)->m_pkthdr.len = 0;					\
 		(m)->m_pkthdr.rcvif = NULL; 				\
 		(m)->m_pkthdr.header = NULL; 				\
 		(m)->m_pkthdr.csum_flags = 0; 				\

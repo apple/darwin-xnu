@@ -635,6 +635,21 @@ insmntque(vp, mp)
 	simple_unlock(&mntvnode_slock);
 }
 
+__inline void
+vpwakeup(struct vnode *vp)
+{
+	if (vp) {
+		if (--vp->v_numoutput < 0)
+			panic("vpwakeup: neg numoutput");
+		if ((vp->v_flag & VBWAIT) && vp->v_numoutput <= 0) {
+			if (vp->v_numoutput < 0)
+				panic("vpwakeup: neg numoutput 2");
+			vp->v_flag &= ~VBWAIT;
+			wakeup((caddr_t)&vp->v_numoutput);
+		}
+	}
+}
+
 /*
  * Update outstanding I/O count and do wakeup if requested.
  */
@@ -645,16 +660,7 @@ vwakeup(bp)
 	register struct vnode *vp;
 
 	CLR(bp->b_flags, B_WRITEINPROG);
-	if (vp = bp->b_vp) {
-		if (--vp->v_numoutput < 0)
-			panic("vwakeup: neg numoutput");
-		if ((vp->v_flag & VBWAIT) && vp->v_numoutput <= 0) {
-			if (vp->v_numoutput < 0)
-				panic("vwakeup: neg numoutput 2");
-			vp->v_flag &= ~VBWAIT;
-			wakeup((caddr_t)&vp->v_numoutput);
-		}
-	}
+	vpwakeup(bp->b_vp);
 }
 
 /*

@@ -813,8 +813,6 @@ IOReturn IOPMrootDomain::sysPowerDownHandler( void * target, void * refCon,
         case kIOMessageSystemWillSleep:
             rootDomain->powerOverrideOnPriv();		// start ignoring children's requests
                                                         // (fall through to other cases)
-        case kIOMessageSystemWillPowerOff:
-        case kIOMessageSystemWillRestart:
 
             // Interested applications have been notified of an impending power
             // change and have acked (when applicable).
@@ -841,6 +839,11 @@ IOReturn IOPMrootDomain::sysPowerDownHandler( void * target, void * refCon,
                 thread_call_enter1(rootDomain->diskSyncCalloutEntry, (thread_call_param_t)params->powerRef);
             ret = kIOReturnSuccess;
             break;
+
+        case kIOMessageSystemWillPowerOff:
+        case kIOMessageSystemWillRestart:
+            break;
+
         default:
             ret = kIOReturnUnsupported;
             break;

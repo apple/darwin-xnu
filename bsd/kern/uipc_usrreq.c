@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2001 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -524,11 +524,12 @@ unp_detach(unp)
 	unp->unp_gencnt = ++unp_gencnt;
 	--unp_count;
 	if (unp->unp_vnode) {
+		struct vnode *tvp = unp->unp_vnode;
 		unp->unp_vnode->v_socket = 0;
-		thread_funnel_switch(NETWORK_FUNNEL, KERNEL_FUNNEL);
-		vrele(unp->unp_vnode);
-		thread_funnel_switch(KERNEL_FUNNEL, NETWORK_FUNNEL);
 		unp->unp_vnode = 0;
+		thread_funnel_switch(NETWORK_FUNNEL, KERNEL_FUNNEL);
+		vrele(tvp);
+		thread_funnel_switch(KERNEL_FUNNEL, NETWORK_FUNNEL);
 	}
 	if (unp->unp_conn)
 		unp_disconnect(unp);

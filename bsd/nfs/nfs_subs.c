@@ -104,6 +104,17 @@
 #include <netiso/iso.h>
 #endif
 
+#include <sys/kdebug.h>
+
+#define FSDBG(A, B, C, D, E) \
+	KERNEL_DEBUG((FSDBG_CODE(DBG_FSRW, (A))) | DBG_FUNC_NONE, \
+		(int)(B), (int)(C), (int)(D), (int)(E), 0)
+#define FSDBG_TOP(A, B, C, D, E) \
+	KERNEL_DEBUG((FSDBG_CODE(DBG_FSRW, (A))) | DBG_FUNC_START, \
+		(int)(B), (int)(C), (int)(D), (int)(E), 0)
+#define FSDBG_BOT(A, B, C, D, E) \
+	KERNEL_DEBUG((FSDBG_CODE(DBG_FSRW, (A))) | DBG_FUNC_END, \
+		(int)(B), (int)(C), (int)(D), (int)(E), 0)
 /*
  * Data items converted to xdr at startup, since they are constant
  * This is kinda hokey, but may save a little time doing byte swaps
@@ -116,6 +127,7 @@ u_long nfs_prog, nqnfs_prog, nfs_true, nfs_false;
 
 /* And other global data */
 static u_long nfs_xid = 0;
+u_long nfs_xidwrap = 0;		/* to build a (non-wwrapping) 64 bit xid */
 static enum vtype nv2tov_type[8]= {
 	VNON, VREG, VDIR, VBLK, VCHR, VLNK, VNON,  VNON 
 };
@@ -691,8 +703,10 @@ nfsm_rpchead(cr, nmflag, procid, auth_type, auth_len, auth_str, verf_len,
 	/*
 	 * Skip zero xid if it should ever happen.
 	 */
-	if (++nfs_xid == 0)
+	if (++nfs_xid == 0) {
+		nfs_xidwrap++;
 		nfs_xid++;
+	}
 
 	*tl++ = *xidp = txdr_unsigned(nfs_xid);
 	*tl++ = rpc_call;
@@ -1227,11 +1241,13 @@ nfs_init(vfsp)
  *    copy the attributes to *vaper
  */
 int
-nfs_loadattrcache(vpp, mdp, dposp, vaper)
+nfs_loadattrcache(vpp, mdp, dposp, vaper, dontshrink, xidp)
 	struct vnode **vpp;
 	struct mbuf **mdp;
 	caddr_t *dposp;
 	struct vattr *vaper;
+	int dontshrink;
+	u_int64_t *xidp;
 {
 	register struct vnode *vp = *vpp;
 	register struct vattr *vap;
@@ -1247,18 +1263,24 @@ nfs_loadattrcache(vpp, mdp, dposp, vaper)
 	struct vnode *nvp;
 	int v3;
 
-        /* this routine is a good place to check for VBAD again. We caught most of them
-         * in nfsm_request, but postprocessing may indirectly get here, so check again.
-         */
-        if (vp->v_type==VBAD)
-            return (EINVAL); 
-            
-        v3 = NFS_ISV3(vp);
-	NFSTRACE(NFSTRC_LAC, vp);
+	FSDBG_TOP(527, vp, 0, *xidp >> 32, *xidp);
+	/*
+	 * this routine is a good place to check for VBAD again. We caught
+	 * most of them in nfsm_request, but postprocessing may indirectly get
+	 * here, so check again.
+	 */
+	if (vp->v_type == VBAD) {
+		FSDBG_BOT(527, EINVAL, 1, 0, *xidp);
+		return (EINVAL); 
+	}
+
+	v3 = NFS_ISV3(vp);
 	md = *mdp;
 	t1 = (mtod(md, caddr_t) + md->m_len) - *dposp;
-	if ((error = nfsm_disct(mdp, dposp, NFSX_FATTR(v3), t1, &cp2)))
+	if ((error = nfsm_disct(mdp, dposp, NFSX_FATTR(v3), t1, &cp2))) {
+		FSDBG_BOT(527, error, 2, 0, *xidp);
 		return (error);
+	}
 	fp = (struct nfs_fattr *)cp2;
 	if (v3) {
 		vtyp = nfsv3tov_type(fp->fa_type);
@@ -1308,12 +1330,30 @@ nfs_loadattrcache(vpp, mdp, dposp, vaper)
 	 * information.
 	 */
 	np = VTONFS(vp);
+	if (*xidp < np->n_xid) {
+		/*
+		 * We have already updated attributes with a response from
+		 * a later request.  The attributes we have here are probably
+		 * stale so we drop them (just return).  However, our 
+		 * out-of-order receipt could be correct - if the requests were
+		 * processed out of order at the server.  Given the uncertainty
+		 * we invalidate our cached attributes.  *xidp is zeroed here
+		 * to indicate the attributes were dropped - only getattr
+		 * cares - it needs to retry the rpc.
+		 */
+		np->n_attrstamp = 0;
+		FSDBG_BOT(527, 0, np, np->n_xid, *xidp);
+		*xidp = 0;
+		return (0);
+	}
 	if (vp->v_type != vtyp) {
 		vp->v_type = vtyp;
 
 		if (UBCINFOMISSING(vp) || UBCINFORECLAIMED(vp))
-			if (error = ubc_info_init(vp)) /* VREG */
+			if ((error = ubc_info_init(vp))) { /* VREG */
+				FSDBG_BOT(527, error, 3, 0, *xidp);
 				return(error);
+			}
 
 		if (vp->v_type == VFIFO) {
 			vp->v_op = fifo_nfsv2nodeop_p;
@@ -1342,8 +1382,9 @@ nfs_loadattrcache(vpp, mdp, dposp, vaper)
 			}
 		}
 		np->n_mtime = mtime.tv_sec;
-		NFSTRACE(NFSTRC_LAC_INIT, vp);
+		FSDBG(527, vp, np->n_mtime, 0, 0);
 	}
+	np->n_xid = *xidp;
 	vap = &np->n_vattr;
 	vap->va_type = vtyp;
 	vap->va_mode = (vmode & 07777);
@@ -1378,15 +1419,15 @@ nfs_loadattrcache(vpp, mdp, dposp, vaper)
 		vap->va_filerev = 0;
 	}
 
+	np->n_attrstamp = time.tv_sec;
 	if (vap->va_size != np->n_size) {
-		NFSTRACE4(NFSTRC_LAC_NP, vp, vap->va_size, np->n_size,
-			  (vap->va_type == VREG) |
-			  (np->n_flag & NMODIFIED ? 2 : 0));
+		FSDBG(527, vp, vap->va_size, np->n_size,
+		      (vap->va_type == VREG) |
+		      (np->n_flag & NMODIFIED ? 6 : 4));
 		if (vap->va_type == VREG) {
-		        int orig_size;
+			int orig_size;
 
 			orig_size = np->n_size;
-
 			if (np->n_flag & NMODIFIED) {
 				if (vap->va_size < np->n_size)
 					vap->va_size = np->n_size;
@@ -1394,13 +1435,16 @@ nfs_loadattrcache(vpp, mdp, dposp, vaper)
 					np->n_size = vap->va_size;
 			} else
 				np->n_size = vap->va_size;
-			if (UBCISVALID(vp) && np->n_size > orig_size)
-				ubc_setsize(vp, (off_t)np->n_size); /* XXX check error */
+			if (dontshrink && UBCISVALID(vp) &&
+			    np->n_size < ubc_getsize(vp)) {
+				vap->va_size = np->n_size = orig_size;
+				np->n_attrstamp = 0;
+			} else
+				ubc_setsize(vp, (off_t)np->n_size); /* XXX */
 		} else
 			np->n_size = vap->va_size;
 	}
 
-	np->n_attrstamp = time.tv_sec;
 	if (vaper != NULL) {
 		bcopy((caddr_t)vap, (caddr_t)vaper, sizeof(*vap));
 		if (np->n_flag & NCHG) {
@@ -1410,6 +1454,7 @@ nfs_loadattrcache(vpp, mdp, dposp, vaper)
 				vaper->va_mtime = np->n_mtim;
 		}
 	}
+	FSDBG_BOT(527, 0, np, 0, *xidp);
 	return (0);
 }
 
@@ -1427,23 +1472,19 @@ nfs_getattrcache(vp, vaper)
 	register struct vattr *vap;
 
 	if ((time.tv_sec - np->n_attrstamp) >= NFS_ATTRTIMEO(np)) {
-		NFSTRACE(NFSTRC_GAC_MISS, vp);
+		FSDBG(528, vp, 0, 0, 1);
 		nfsstats.attrcache_misses++;
 		return (ENOENT);
 	}
-	NFSTRACE(NFSTRC_GAC_HIT, vp);
+	FSDBG(528, vp, 0, 0, 2);
 	nfsstats.attrcache_hits++;
 	vap = &np->n_vattr;
 
 	if (vap->va_size != np->n_size) {
-		NFSTRACE4(NFSTRC_GAC_NP, vp, vap->va_size, np->n_size,
-			  (vap->va_type == VREG) |
-			  (np->n_flag & NMODIFIED ? 2 : 0));
+		FSDBG(528, vp, vap->va_size, np->n_size,
+		      (vap->va_type == VREG) |
+		      (np->n_flag & NMODIFIED ? 6 : 4));
 		if (vap->va_type == VREG) {
-		        int orig_size;
-
-			orig_size = np->n_size;
-
 			if (np->n_flag & NMODIFIED) {
 				if (vap->va_size < np->n_size)
 					vap->va_size = np->n_size;
@@ -1451,8 +1492,7 @@ nfs_getattrcache(vp, vaper)
 					np->n_size = vap->va_size;
 			} else
 				np->n_size = vap->va_size;
-			if (UBCISVALID(vp) && np->n_size > orig_size)
-				ubc_setsize(vp, (off_t)np->n_size); /* XXX check error */
+			ubc_setsize(vp, (off_t)np->n_size); /* XXX */
 		} else
 			np->n_size = vap->va_size;
 	}

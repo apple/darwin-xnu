@@ -58,7 +58,6 @@
  *	@(#)nfs_bio.c	8.9 (Berkeley) 3/30/95
  * FreeBSD-Id: nfs_bio.c,v 1.44 1997/09/10 19:52:25 phk Exp $
  */
-
 #include <sys/param.h>
 #include <sys/systm.h>
 #include <sys/resourcevar.h>
@@ -86,11 +85,18 @@
 
 #include <sys/kdebug.h>
 
+#define FSDBG(A, B, C, D, E) \
+	KERNEL_DEBUG((FSDBG_CODE(DBG_FSRW, (A))) | DBG_FUNC_NONE, \
+		(int)(B), (int)(C), (int)(D), (int)(E), 0)
+#define FSDBG_TOP(A, B, C, D, E) \
+	KERNEL_DEBUG((FSDBG_CODE(DBG_FSRW, (A))) | DBG_FUNC_START, \
+		(int)(B), (int)(C), (int)(D), (int)(E), 0)
+#define FSDBG_BOT(A, B, C, D, E) \
+	KERNEL_DEBUG((FSDBG_CODE(DBG_FSRW, (A))) | DBG_FUNC_END, \
+		(int)(B), (int)(C), (int)(D), (int)(E), 0)
+
 static struct buf *nfs_getcacheblk __P((struct vnode *vp, daddr_t bn, int size,
 					struct proc *p, int operation));
-static struct buf *nfs_getwriteblk __P((struct vnode *vp, daddr_t bn,
-					int size, struct proc *p,
-					struct ucred *cred, int off, int len));
 
 extern int nfs_numasync;
 extern struct nfsstats nfsstats;
@@ -129,7 +135,7 @@ nfs_bioread(vp, uio, ioflag, cred, getpages)
 	p = uio->uio_procp;
 	if ((nmp->nm_flag & (NFSMNT_NFSV3 | NFSMNT_GOTFSINFO)) == NFSMNT_NFSV3)
 		(void)nfs_fsinfo(nmp, vp, cred, p);
-        /*due to getblk/vm interractions, use vm page size or less values */
+	/*due to getblk/vm interractions, use vm page size or less values */
 	biosize = min(vp->v_mount->mnt_stat.f_iosize, PAGE_SIZE);
 	/*
 	 * For nfs, cache consistency can only be maintained approximately.
@@ -231,7 +237,8 @@ nfs_bioread(vp, uio, ioflag, cred, getpages)
 		 */
 		if (nfs_numasync > 0 && nmp->nm_readahead > 0) {
 		    for (nra = 0; nra < nmp->nm_readahead &&
-				(off_t)(lbn + 1 + nra) * biosize < np->n_size; nra++) {
+				  (off_t)(lbn + 1 + nra) * biosize < np->n_size;
+			 nra++) {
 				rabn = lbn + 1 + nra;
 				if (!incore(vp, rabn)) {
 					rabp = nfs_getcacheblk(vp, rabn, biosize, p, operation);
@@ -335,36 +342,52 @@ again:
 		    SET(bp->b_flags, B_READ);
 		    error = nfs_doio(bp, cred, p);
 		    if (error) {
-				brelse(bp);
-				while (error == NFSERR_BAD_COOKIE) {
-					nfs_invaldir(vp);
-					error = nfs_vinvalbuf(vp, 0, cred, p, 1);
-					/*
-					 * Yuck! The directory has been modified on the
-					 * server. The only way to get the block is by
-					 * reading from the beginning to get all the
-					 * offset cookies.
-					 */
-					for (i = 0; i <= lbn && !error; i++) {
-					if (np->n_direofoffset
-						&& (i * NFS_DIRBLKSIZ) >= np->n_direofoffset)
-						return (0);
-					bp = nfs_getcacheblk(vp, i, NFS_DIRBLKSIZ, p, operation);
-					if (!bp)
-						return (EINTR);
-					if (!ISSET(bp->b_flags, B_DONE)) {
-						SET(bp->b_flags, B_READ);
-						error = nfs_doio(bp, cred, p);
-						if (error) {
-							brelse(bp);
-						} else if (i < lbn)
-							brelse(bp);
-					}
-					}
-				}
-				if (error)
-					return (error);
+			brelse(bp);
 		    }
+		    while (error == NFSERR_BAD_COOKIE) {
+			nfs_invaldir(vp);
+			error = nfs_vinvalbuf(vp, 0, cred, p, 1);
+			/*
+			 * Yuck! The directory has been modified on the
+			 * server. The only way to get the block is by
+			 * reading from the beginning to get all the
+			 * offset cookies.
+			 */
+			for (i = 0; i <= lbn && !error; i++) {
+			    if (np->n_direofoffset
+				&& (i * NFS_DIRBLKSIZ) >= np->n_direofoffset)
+				    return (0);
+			    bp = nfs_getcacheblk(vp, i, NFS_DIRBLKSIZ, p,
+			    			 operation);
+			    if (!bp)
+				    return (EINTR);
+			    if (!ISSET(bp->b_flags, B_CACHE)) {
+				    SET(bp->b_flags, B_READ);
+				    error = nfs_doio(bp, cred, p);
+				    /*
+				     * no error + B_INVAL == directory EOF,
+				     * use the block.
+				     */
+				    if (error == 0 && (bp->b_flags & B_INVAL))
+					    break;
+			    }
+			    /*
+			     * An error will throw away the block and the
+			     * for loop will break out.  If no error and this
+			     * is not the block we want, we throw away the
+			     * block and go for the next one via the for loop.
+			     */
+			    if (error || i < lbn)
+				    brelse(bp);
+			}
+		    }
+		    /*
+		     * The above while is repeated if we hit another cookie
+		     * error.  If we hit an error and it wasn't a cookie error,
+		     * we give up.
+		     */
+		    if (error)
+			return (error);
 		}
 
 		/*
@@ -377,17 +400,18 @@ again:
 		    (lbn + 1) * NFS_DIRBLKSIZ < np->n_direofoffset) &&
 		    !(np->n_flag & NQNFSNONCACHE) &&
 		    !incore(vp, lbn + 1)) {
-			rabp = nfs_getcacheblk(vp, lbn + 1, NFS_DIRBLKSIZ, p, operation);
+			rabp = nfs_getcacheblk(vp, lbn + 1, NFS_DIRBLKSIZ, p,
+					       operation);
 			if (rabp) {
 			    if (!ISSET(rabp->b_flags, (B_CACHE|B_DELWRI))) {
-					SET(rabp->b_flags, (B_READ | B_ASYNC));
-					if (nfs_asyncio(rabp, cred)) {
-						SET(rabp->b_flags, (B_INVAL|B_ERROR));
-						rabp->b_error = EIO;
-						brelse(rabp);
-					}
+				SET(rabp->b_flags, (B_READ | B_ASYNC));
+				if (nfs_asyncio(rabp, cred)) {
+				    SET(rabp->b_flags, (B_INVAL|B_ERROR));
+				    rabp->b_error = EIO;
+				    brelse(rabp);
+				}
 			    } else {
-					brelse(rabp);
+				brelse(rabp);
 			    }
 			}
 		}
@@ -396,6 +420,21 @@ again:
 		 * the second term may be negative.
 		 */
 		n = lmin(uio->uio_resid, NFS_DIRBLKSIZ - bp->b_resid - on);
+		/*
+		 * Unlike VREG files, whos buffer size ( bp->b_bcount ) is
+		 * chopped for the EOF condition, we cannot tell how large
+		 * NFS directories are going to be until we hit EOF.  So
+		 * an NFS directory buffer is *not* chopped to its EOF.  Now,
+		 * it just so happens that b_resid will effectively chop it
+		 * to EOF.  *BUT* this information is lost if the buffer goes
+		 * away and is reconstituted into a B_CACHE state (recovered
+		 * from VM) later.  So we keep track of the directory eof
+		 * in np->n_direofoffset and chop it off as an extra step
+		 * right here.
+		 */
+		if (np->n_direofoffset &&
+		    n > np->n_direofoffset - uio->uio_offset)
+			n = np->n_direofoffset - uio->uio_offset;
 		break;
 	    default:
 		printf(" nfs_bioread: type %x unexpected\n",vp->v_type);
@@ -423,6 +462,7 @@ again:
 	return (error);
 }
 
+
 /*
  * Vnode op for write using bio
  */
@@ -448,6 +488,9 @@ nfs_write(ap)
 	daddr_t lbn;
 	int bufsize;
 	int n, on, error = 0, iomode, must_commit;
+	off_t boff;
+	struct iovec iov;
+	struct uio auio;
 
 #if DIAGNOSTIC
 	if (uio->uio_rw != UIO_WRITE)
@@ -496,8 +539,8 @@ nfs_write(ap)
 	 * will be the same size within a filesystem. nfs_writerpc will
 	 * still use nm_wsize when sizing the rpc's.
 	 */
-        /*due to getblk/vm interractions, use vm page size or less values */
-        biosize = min(vp->v_mount->mnt_stat.f_iosize, PAGE_SIZE);
+	/*due to getblk/vm interractions, use vm page size or less values */
+	biosize = min(vp->v_mount->mnt_stat.f_iosize, PAGE_SIZE);
 
 	do {
 		/*
@@ -530,12 +573,6 @@ nfs_write(ap)
 		on = uio->uio_offset & (biosize-1);
 		n = min((unsigned)(biosize - on), uio->uio_resid);
 again:
-		if (uio->uio_offset + n > np->n_size) {
-			np->n_size = uio->uio_offset + n;
-			np->n_flag |= NMODIFIED;
-			if (UBCISVALID(vp))
-				ubc_setsize(vp, (off_t)np->n_size); /* XXX check error */
-		}
 		bufsize = biosize;
 #if 0
 /* (removed for UBC) */
@@ -544,21 +581,175 @@ again:
 			bufsize = (bufsize + DEV_BSIZE - 1) & ~(DEV_BSIZE - 1);
 		}
 #endif
-		bp = nfs_getwriteblk(vp, lbn, bufsize, p, cred, on, n);
+		/*
+		 * Get a cache block for writing.  The range to be written is
+		 * (off..off+len) within the block.  We ensure that the block
+		 * either has no dirty region or that the given range is
+		 * contiguous with the existing dirty region.
+		 */
+		bp = nfs_getcacheblk(vp, lbn, bufsize, p, BLK_WRITE);
 		if (!bp)
 			return (EINTR);
+		/*
+		 * Resize nfsnode *after* we busy the buffer to prevent
+		 * readers from reading garbage.
+		 * If there was a partial buf at the old eof, validate
+		 * and zero the new bytes. 
+		 */
+		if (uio->uio_offset + n > np->n_size) {
+			struct buf *bp0 = NULL;
+			daddr_t bn = np->n_size / biosize;
+			int off = np->n_size & (biosize - 1);
+
+			if (off && bn < lbn && incore(vp, bn))
+				bp0 = nfs_getcacheblk(vp, bn, biosize, p,
+						      BLK_WRITE);
+			np->n_flag |= NMODIFIED;
+			np->n_size = uio->uio_offset + n;
+			ubc_setsize(vp, (off_t)np->n_size); /* XXX errors */
+			if (bp0) {
+				bzero((char *)bp0->b_data + off, biosize - off);
+				bp0->b_validend = biosize;
+				brelse(bp0);
+			}
+		}
+		/*
+		 * NFS has embedded ucred so crhold() risks zone corruption
+		 */
+		if (bp->b_wcred == NOCRED)
+			bp->b_wcred = crdup(cred);
+		/*
+		 * If dirtyend exceeds file size, chop it down.  This should
+		 * not occur unless there is a race.
+		 */
+		if ((off_t)bp->b_blkno * DEV_BSIZE + bp->b_dirtyend >
+		    np->n_size)
+			bp->b_dirtyend = np->n_size - (off_t)bp->b_blkno *
+						      DEV_BSIZE;
+		/*
+		 * UBC doesn't (yet) handle partial pages so nfs_biowrite was
+		 * hacked to never bdwrite, to start every little write right
+		 * away.  Running IE Avie noticed the performance problem, thus
+		 * this code, which permits those delayed writes by ensuring an
+		 * initial read of the entire page.  The read may hit eof
+		 * ("short read") but that we will handle.
+		 *
+		 * We are quite dependant on the correctness of B_CACHE so check
+		 * that first in case of problems.
+		 */
+		if (!ISSET(bp->b_flags, B_CACHE) && n < PAGE_SIZE) {
+			boff = (off_t)bp->b_blkno * DEV_BSIZE;
+			auio.uio_iov = &iov;
+			auio.uio_iovcnt = 1;
+			auio.uio_offset = boff;
+			auio.uio_resid = PAGE_SIZE;
+			auio.uio_segflg = UIO_SYSSPACE;
+			auio.uio_rw = UIO_READ;
+			auio.uio_procp = p;
+			iov.iov_base = bp->b_data;
+			iov.iov_len = PAGE_SIZE;
+			error = nfs_readrpc(vp, &auio, cred);
+			if (error) {
+				bp->b_error = error;
+				SET(bp->b_flags, B_ERROR);
+				printf("nfs_write: readrpc %d", error);
+			}
+			if (auio.uio_resid > 0)
+				bzero(iov.iov_base, auio.uio_resid);
+			bp->b_validoff = 0;
+			bp->b_validend = PAGE_SIZE - auio.uio_resid;
+			if (np->n_size > boff + bp->b_validend)
+				bp->b_validend = min(np->n_size - boff,
+						     PAGE_SIZE);
+			bp->b_dirtyoff = 0;
+			bp->b_dirtyend = 0;
+		}
+	
+		/*
+		 * If the new write will leave a contiguous dirty
+		 * area, just update the b_dirtyoff and b_dirtyend,
+		 * otherwise try to extend the dirty region.
+		 */
+		if (bp->b_dirtyend > 0 &&
+		    (on > bp->b_dirtyend || (on + n) < bp->b_dirtyoff)) {
+			off_t start, end;
+	
+			boff = (off_t)bp->b_blkno * DEV_BSIZE;
+			if (on > bp->b_dirtyend) {
+				start = boff + bp->b_validend;
+				end = boff + on;
+			} else {
+				start = boff + on + n;
+				end = boff + bp->b_validoff;
+			}
+			
+			/*
+			 * It may be that the valid region in the buffer
+			 * covers the region we want, in which case just
+			 * extend the dirty region.  Otherwise we try to
+			 * extend the valid region.
+			 */
+			if (end > start) {
+				auio.uio_iov = &iov;
+				auio.uio_iovcnt = 1;
+				auio.uio_offset = start;
+				auio.uio_resid = end - start;
+				auio.uio_segflg = UIO_SYSSPACE;
+				auio.uio_rw = UIO_READ;
+				auio.uio_procp = p;
+				iov.iov_base = bp->b_data + (start - boff);
+				iov.iov_len = end - start;
+				error = nfs_readrpc(vp, &auio, cred);
+				/*
+				 * If we couldn't read, do not do a VOP_BWRITE
+				 * as originally coded. That could also error
+				 * and looping back to "again" as it was doing
+				 * could have us stuck trying to write same buf
+				 * again. nfs_write, will get the entire region
+				 * if nfs_readrpc succeeded. If unsuccessful
+				 * we should just error out. Errors like ESTALE
+				 * would keep us looping rather than transient
+				 * errors justifying a retry. We can return here
+				 * instead of altering dirty region later.  We
+				 * did not write old dirty region at this point.
+				 */
+				if (error) {
+					bp->b_error = error;
+					SET(bp->b_flags, B_ERROR);
+					printf("nfs_write: readrpc2 %d", error);
+					brelse(bp);
+					return (error);
+				}
+				/*
+				 * The read worked.
+				 * If there was a short read, just zero fill.
+				 */
+				if (auio.uio_resid > 0)
+					bzero(iov.iov_base, auio.uio_resid);
+				if (on > bp->b_dirtyend)
+					bp->b_validend = on;
+				else
+					bp->b_validoff = on + n;
+			}
+			/*
+			 * We now have a valid region which extends up to the
+			 * dirty region which we want.
+			 */
+			if (on > bp->b_dirtyend)
+				bp->b_dirtyend = on;
+			else
+				bp->b_dirtyoff = on + n;
+		}
 		if (ISSET(bp->b_flags, B_ERROR)) {
 			error = bp->b_error;
 			brelse(bp);
 			return (error);
 		}
-		if (bp->b_wcred == NOCRED) {
-            /*
-             * NFS has embedded ucred.
-             * Can not crhold() here as that causes zone corruption
-             */
+		/*
+		 * NFS has embedded ucred so crhold() risks zone corruption
+		 */
+		if (bp->b_wcred == NOCRED)
 			bp->b_wcred = crdup(cred);
-		}
 		np->n_flag |= NMODIFIED;
 
 		/*
@@ -636,168 +827,6 @@ again:
 	return (0);
 }
 
-/*
- * Get a cache block for writing.  The range to be written is
- * (off..off+len) within the block.  This routine ensures that the
- * block is either has no dirty region or that the given range is
- * contiguous with the existing dirty region.
- */
-static struct buf *
-nfs_getwriteblk(vp, bn, size, p, cred, off, len)
-	struct vnode *vp;
-	daddr_t bn;
-	int size;
-	struct proc *p;
-	struct ucred *cred;
-	int off, len;
-{
-	struct nfsnode *np = VTONFS(vp);
-	struct buf *bp;
-	int error;
-	struct iovec iov;
-	struct uio uio;
-	off_t boff;
-
- again:
-	bp = nfs_getcacheblk(vp, bn, size, p, BLK_WRITE);
-	if (!bp)
-		return (NULL);
-	if (bp->b_wcred == NOCRED) {
-		/*
-		 * NFS has embedded ucred.
-		 * Can not crhold() here as that causes zone corruption
-		 */
-		bp->b_wcred = crdup(cred);
-	}
-
-	if ((bp->b_blkno * DEV_BSIZE) + bp->b_dirtyend > np->n_size) {
-		bp->b_dirtyend = np->n_size - (bp->b_blkno * DEV_BSIZE);
-	}
-
-	/*
-	 * UBC doesn't (yet) handle partial pages so nfs_biowrite was
-	 * hacked to never bdwrite, to start every little write right away.
-	 * Running IE Avie noticed the performance problem, thus this code,
-	 * which permits those delayed writes by ensuring an initial read
-	 * of the entire page.  The read may hit eof ("short read") but
-	 * that we will handle.
-	 *
-	 * We are quite dependant on the correctness of B_CACHE so check
-	 * that first in case of problems.
-	 */
-	if (!ISSET(bp->b_flags, B_CACHE) && len < PAGE_SIZE) {
-		struct nfsnode *np = VTONFS(vp);
-
-		boff = (off_t)bp->b_blkno * DEV_BSIZE;
-		uio.uio_iov = &iov;
-		uio.uio_iovcnt = 1;
-		uio.uio_offset = boff;
-		uio.uio_resid = PAGE_SIZE;
-		uio.uio_segflg = UIO_SYSSPACE;
-		uio.uio_rw = UIO_READ;
-		uio.uio_procp = p;
-		iov.iov_base = bp->b_data;
-		iov.iov_len = PAGE_SIZE;
-		error = nfs_readrpc(vp, &uio, cred);
-		if (error) {
-			bp->b_error = error;
-			SET(bp->b_flags, B_ERROR);
-			printf("nfs_getwriteblk: readrpc returned %d", error);
-		}
-		if (uio.uio_resid > 0)
-			bzero(iov.iov_base, uio.uio_resid);
-		bp->b_validoff = 0;
-		bp->b_validend = PAGE_SIZE - uio.uio_resid;
-		if (np->n_size > boff + bp->b_validend)
-			bp->b_validend = min(np->n_size - boff, PAGE_SIZE);
-		bp->b_dirtyoff = 0;
-		bp->b_dirtyend = 0;
-	}
-
-	/*
-	 * If the new write will leave a contiguous dirty
-	 * area, just update the b_dirtyoff and b_dirtyend,
-	 * otherwise try to extend the dirty region.
-	 */
-	if (bp->b_dirtyend > 0 &&
-	    (off > bp->b_dirtyend || (off + len) < bp->b_dirtyoff)) {
-		off_t start, end;
-
-		boff = (off_t)bp->b_blkno * DEV_BSIZE;
-		if (off > bp->b_dirtyend) {
-			start = boff + bp->b_validend;
-			end = boff + off;
-		} else {
-			start = boff + off + len;
-			end = boff + bp->b_validoff;
-		}
-		
-		/*
-		 * It may be that the valid region in the buffer
-		 * covers the region we want, in which case just
-		 * extend the dirty region.  Otherwise we try to
-		 * extend the valid region.
-		 */
-		if (end > start) {
-			uio.uio_iov = &iov;
-			uio.uio_iovcnt = 1;
-			uio.uio_offset = start;
-			uio.uio_resid = end - start;
-			uio.uio_segflg = UIO_SYSSPACE;
-			uio.uio_rw = UIO_READ;
-			uio.uio_procp = p;
-			iov.iov_base = bp->b_data + (start - boff);
-			iov.iov_len = end - start;
-			error = nfs_readrpc(vp, &uio, cred);
-			if (error) {
-				/*
-				 * If we couldn't read, do not do a VOP_BWRITE
-                                 * as originally coded. That, could also error
-                                 * and looping back to "again" as it was doing
-                                 * could have us stuck trying to write same buffer
-                                 * again. nfs_write, will get the entire region
-                                 * if nfs_readrpc was successful. If not successful
-                                 * we should just error out. Errors like ESTALE
-                                 * would keep us in this loop rather than transient
-                                 * errors justifying a retry. We can return from here
-                                 * instead of altering dirty region later in routine.
-                                 * We did not write out old dirty region at this point.
-                                 */
-                                bp->b_error = error;
-                                SET(bp->b_flags, B_ERROR);
-                                printf("nfs_getwriteblk: readrpc (2) returned %d", error);
-                                return bp; 
-			} else {
-				/*
-				 * The read worked.
-				 */
-				if (uio.uio_resid > 0) {
-					/*
-					 * If there was a short read,
-					 * just zero fill.
-					 */
-					bzero(iov.iov_base,
-					      uio.uio_resid);
-				}
-				if (off > bp->b_dirtyend)
-					bp->b_validend = off;
-				else
-					bp->b_validoff = off + len;
-			}
-		}
-
-		/*
-		 * We now have a valid region which extends up to the
-		 * dirty region which we want.
-		 */
-		if (off > bp->b_dirtyend)
-			bp->b_dirtyend = off;
-		else
-			bp->b_dirtyoff = off + len;
-	}
-
-	return bp;
-}
 
 /*
  * Get an nfs cache block.
@@ -816,7 +845,7 @@ nfs_getcacheblk(vp, bn, size, p, operation)
 {
 	register struct buf *bp;
 	struct nfsmount *nmp = VFSTONFS(vp->v_mount);
-        /*due to getblk/vm interractions, use vm page size or less values */
+	/*due to getblk/vm interractions, use vm page size or less values */
 	int biosize = min(vp->v_mount->mnt_stat.f_iosize, PAGE_SIZE);
 
 	if (nmp->nm_flag & NFSMNT_INT) {
@@ -887,7 +916,7 @@ nfs_vinvalbuf(vp, flags, cred, p, intrflg)
 		 * necessary. -- EKN
 		 */
 		if ((intrflg && nfs_sigintr(nmp, (struct nfsreq *)0, p)) ||
-				((error == EINTR) && current_thread_aborted())) {
+		    (error == EINTR && current_thread_aborted())) {
 			np->n_flag &= ~NFLUSHINPROG;
 			if (np->n_flag & NFLUSHWANT) {
 				np->n_flag &= ~NFLUSHWANT;
@@ -904,7 +933,7 @@ nfs_vinvalbuf(vp, flags, cred, p, intrflg)
 	}
 	didhold = ubc_hold(vp);
 	if (didhold) {
-	  (void) ubc_clean(vp, 1); /* get the pages out of vm also */
+		(void) ubc_clean(vp, 1); /* get the pages out of vm also */
 		ubc_rele(vp);
 	}
 	return (0);
@@ -1053,7 +1082,6 @@ nfs_doio(bp, cr, p)
 	struct iovec io;
 
 	vp = bp->b_vp;
-	NFSTRACE(NFSTRC_DIO, vp);
 	np = VTONFS(vp);
 	nmp = VFSTONFS(vp->v_mount);
 	uiop = &uio;
@@ -1068,7 +1096,7 @@ nfs_doio(bp, cr, p)
 	 * NFS being stateless, this case poses a problem.
 	 * By definition, the NFS server should always be consulted
 	 * for the data in that page.
-	 * So we choose to clear the B_DONE and to the IO.
+	 * So we choose to clear the B_DONE and to do the IO.
 	 *
 	 * XXX revisit this if there is a performance issue.
 	 * XXX In that case, we could play the attribute cache games ...
@@ -1078,13 +1106,10 @@ nfs_doio(bp, cr, p)
 			panic("nfs_doio: done and not async");
 		CLR(bp->b_flags, B_DONE);
 	}
-
-	KERNEL_DEBUG((FSDBG_CODE(DBG_FSRW, 256)) | DBG_FUNC_START,
-		     (int)np->n_size, bp->b_blkno * DEV_BSIZE, bp->b_bcount, bp->b_flags, 0);
-
-	KERNEL_DEBUG((FSDBG_CODE(DBG_FSRW, 257)) | DBG_FUNC_NONE,
-		     bp->b_validoff, bp->b_validend, bp->b_dirtyoff, bp->b_dirtyend, 0);
-
+	FSDBG_TOP(256, np->n_size, bp->b_blkno * DEV_BSIZE, bp->b_bcount,
+		  bp->b_flags);
+	FSDBG(257, bp->b_validoff, bp->b_validend, bp->b_dirtyoff,
+	      bp->b_dirtyend);
 	/*
 	 * Historically, paging was done with physio, but no more.
 	 */
@@ -1095,7 +1120,7 @@ nfs_doio(bp, cr, p)
 	    io.iov_len = uiop->uio_resid = bp->b_bcount;
 	    /* mapping was done by vmapbuf() */
 	    io.iov_base = bp->b_data;
-	    uiop->uio_offset = ((off_t)bp->b_blkno) * DEV_BSIZE;
+	    uiop->uio_offset = (off_t)bp->b_blkno * DEV_BSIZE;
 	    if (ISSET(bp->b_flags, B_READ)) {
 			uiop->uio_rw = UIO_READ;
 			nfsstats.read_physios++;
@@ -1118,14 +1143,11 @@ nfs_doio(bp, cr, p)
 	    uiop->uio_rw = UIO_READ;
 	    switch (vp->v_type) {
 	    case VREG:
-		uiop->uio_offset = ((off_t)bp->b_blkno) * DEV_BSIZE;
+		uiop->uio_offset = (off_t)bp->b_blkno * DEV_BSIZE;
 		nfsstats.read_bios++;
 		error = nfs_readrpc(vp, uiop, cr);
-
-		KERNEL_DEBUG((FSDBG_CODE(DBG_FSRW, 262)) | DBG_FUNC_NONE,
-			     (int)np->n_size, bp->b_blkno * DEV_BSIZE, uiop->uio_resid, error, 0);
-
-
+		FSDBG(262, np->n_size, bp->b_blkno * DEV_BSIZE,
+		      uiop->uio_resid, error);
 		if (!error) {
 		    bp->b_validoff = 0;
 		    if (uiop->uio_resid) {
@@ -1136,33 +1158,32 @@ nfs_doio(bp, cr, p)
 			 * Just zero fill the rest of the valid area.
 			 */
 			diff = bp->b_bcount - uiop->uio_resid;
-			len = np->n_size - (((u_quad_t)bp->b_blkno) * DEV_BSIZE
-				+ diff);
-				if (len > 0) {
-					len = min(len, uiop->uio_resid);
-					bzero((char *)bp->b_data + diff, len);
-					bp->b_validend = diff + len;
-
-					KERNEL_DEBUG((FSDBG_CODE(DBG_FSRW, 258)) | DBG_FUNC_NONE,
-						     diff, len, 0, 1, 0);
-
-				} else
-					bp->b_validend = diff;
+			len = np->n_size - ((u_quad_t)bp->b_blkno * DEV_BSIZE +
+					    diff);
+			if (len > 0) {
+				len = min(len, uiop->uio_resid);
+				bzero((char *)bp->b_data + diff, len);
+				bp->b_validend = diff + len;
+				FSDBG(258, diff, len, 0, 1);
+			} else
+				bp->b_validend = diff;
 		    } else
 				bp->b_validend = bp->b_bcount;
 #if 1 /* USV + JOE [ */
 		    if (bp->b_validend < bp->b_bufsize) {
-		            /*
-			     * we're about to release a partial buffer after a read... the only
-			     * way we should get here is if this buffer contains the EOF
-			     * before releasing it, we'll zero out to the end of the buffer
-			     * so that if a mmap of this page occurs, we'll see zero's even
-			     * if a ftruncate extends the file in the meantime
+			    /*
+			     * we're about to release a partial buffer after a
+			     * read... the only way we should get here is if
+			     * this buffer contains the EOF before releasing it,
+			     * we'll zero out to the end of the buffer so that
+			     * if a mmap of this page occurs, we'll see zero's
+			     * even if a ftruncate extends the file in the
+			     * meantime
 			     */
-		            bzero((caddr_t)(bp->b_data + bp->b_validend), (bp->b_bufsize - bp->b_validend));
-
-			    KERNEL_DEBUG((FSDBG_CODE(DBG_FSRW, 258)) | DBG_FUNC_NONE,
-					 bp->b_validend, (bp->b_bufsize - bp->b_validend), 0, 2, 0);
+			    bzero((caddr_t)(bp->b_data + bp->b_validend),
+			          bp->b_bufsize - bp->b_validend);
+			    FSDBG(258, bp->b_validend,
+			          bp->b_bufsize - bp->b_validend, 0, 2);
 		    }
 #endif /* ] USV + JOE */
 		}
@@ -1196,28 +1217,40 @@ nfs_doio(bp, cr, p)
 			error = nfs_readdirrpc(vp, uiop, cr);
 		break;
 	    default:
-		printf("nfs_doio:  type %x unexpected\n",vp->v_type);
+		printf("nfs_doio: type %x unexpected\n", vp->v_type);
 		break;
 	    };
 	    if (error) {
-			SET(bp->b_flags, B_ERROR);
-			bp->b_error = error;
+		SET(bp->b_flags, B_ERROR);
+		bp->b_error = error;
 	    }
 	} else {
-	    if (((bp->b_blkno * DEV_BSIZE) + bp->b_dirtyend) > np->n_size)
-		bp->b_dirtyend = np->n_size - (bp->b_blkno * DEV_BSIZE);
+	    /*
+	     * mapped I/O may have altered any bytes, so we extend
+	     * the dirty zone to the valid zone.  For best performance
+	     * a better solution would be to save & restore page dirty bits
+	     * around the uiomove which brings write-data into the buffer.
+	     * Then here we'd check if the page is dirty rather than WASMAPPED
+	     * Also vnode_pager would change - if a page is clean it might
+	     * still need to be written due to DELWRI.
+	     */
+	    if (UBCINFOEXISTS(vp) && ubc_issetflags(vp, UI_WASMAPPED)) {
+		bp->b_dirtyoff = min(bp->b_dirtyoff, bp->b_validoff);
+		bp->b_dirtyend = max(bp->b_dirtyend, bp->b_validend);
+	    }
+	    if ((off_t)bp->b_blkno * DEV_BSIZE + bp->b_dirtyend > np->n_size)
+		bp->b_dirtyend = np->n_size - (off_t)bp->b_blkno * DEV_BSIZE;
 
 	    if (bp->b_dirtyend > bp->b_dirtyoff) {
-
-		io.iov_len = uiop->uio_resid = bp->b_dirtyend
-		    - bp->b_dirtyoff;
-		uiop->uio_offset = ((off_t)bp->b_blkno) * DEV_BSIZE
-		    + bp->b_dirtyoff;
+		io.iov_len = uiop->uio_resid = bp->b_dirtyend - bp->b_dirtyoff;
+		uiop->uio_offset = (off_t)bp->b_blkno * DEV_BSIZE +
+				   bp->b_dirtyoff;
 		io.iov_base = (char *)bp->b_data + bp->b_dirtyoff;
 		uiop->uio_rw = UIO_WRITE;
 
 		nfsstats.write_bios++;
-		if ((bp->b_flags & (B_ASYNC | B_NEEDCOMMIT | B_NOCACHE)) == B_ASYNC)
+		if ((bp->b_flags & (B_ASYNC | B_NEEDCOMMIT | B_NOCACHE)) ==
+		    B_ASYNC)
 		    iomode = NFSV3WRITE_UNSTABLE;
 		else
 		    iomode = NFSV3WRITE_FILESYNC;
@@ -1228,7 +1261,6 @@ nfs_doio(bp, cr, p)
 		else
 		    CLR(bp->b_flags, B_NEEDCOMMIT);
 		CLR(bp->b_flags, B_WRITEINPROG);
-
 		/*
 		 * For an interrupted write, the buffer is still valid
 		 * and the write hasn't been pushed to the server yet,
@@ -1242,20 +1274,17 @@ nfs_doio(bp, cr, p)
 		 * the block is reused. This is indicated by setting
 		 * the B_DELWRI and B_NEEDCOMMIT flags.
 		 */
-		if (error == EINTR
-			|| (!error && (bp->b_flags & B_NEEDCOMMIT))) {
+		if (error == EINTR || (!error && bp->b_flags & B_NEEDCOMMIT)) {
 			int s;
 
-			CLR(bp->b_flags, (B_INVAL|B_NOCACHE));
+			CLR(bp->b_flags, B_INVAL | B_NOCACHE);
 			SET(bp->b_flags, B_DELWRI);
-			
-			KERNEL_DEBUG((FSDBG_CODE(DBG_FSRW, 261)) | DBG_FUNC_NONE,
-				     bp->b_validoff, bp->b_validend, bp->b_bufsize, bp->b_bcount, 0);
-	     
+			FSDBG(261, bp->b_validoff, bp->b_validend,
+			      bp->b_bufsize, bp->b_bcount);
 			/*
-			 * Since for the B_ASYNC case, nfs_bwrite() has reassigned the
-			 * buffer to the clean list, we have to reassign it back to the
-			 * dirty one. Ugh.
+			 * Since for the B_ASYNC case, nfs_bwrite() has
+			 * reassigned the buffer to the clean list, we have to
+			 * reassign it back to the dirty one. Ugh.
 			 */
 			if (ISSET(bp->b_flags, B_ASYNC)) {
 				s = splbio();
@@ -1271,51 +1300,54 @@ nfs_doio(bp, cr, p)
 				np->n_flag |= NWRITEERR;
 			}
 			bp->b_dirtyoff = bp->b_dirtyend = 0;
-
 #if 1  /* JOE */
 			/*
-			 * validoff and validend represent the real data present in this buffer
-			 * if validoff is non-zero, than we have to invalidate the buffer and kill
-			 * the page when biodone is called... the same is also true when validend
-			 * doesn't extend all the way to the end of the buffer and validend doesn't
-			 * equate to the current EOF... eventually we need to deal with this in a 
-			 * more humane way (like keeping the partial buffer without making it immediately
-			 * available to the VM page cache).
+			 * validoff and validend represent the real data present
+			 * in this buffer if validoff is non-zero, than we have
+			 * to invalidate the buffer and kill the page when
+			 * biodone is called... the same is also true when
+			 * validend doesn't extend all the way to the end of the
+			 * buffer and validend doesn't equate to the current
+			 * EOF... eventually we need to deal with this in a more
+			 * humane way (like keeping the partial buffer without
+			 * making it immediately available to the VM page cache)
 			 */
 			if (bp->b_validoff)
 				SET(bp->b_flags, B_INVAL);
 			else
 			if (bp->b_validend < bp->b_bufsize) {
-			        if ((((off_t)bp->b_blkno * (off_t)DEV_BSIZE) + bp->b_validend) == np->n_size) {
-				        bzero((caddr_t)(bp->b_data + bp->b_validend), (bp->b_bufsize - bp->b_validend));
-
-					KERNEL_DEBUG((FSDBG_CODE(DBG_FSRW, 259)) | DBG_FUNC_NONE,
-						     bp->b_validend, (bp->b_bufsize - bp->b_validend), 0, 0, 0);;
-				}
-				else
-				        SET(bp->b_flags, B_INVAL);
+				if ((off_t)bp->b_blkno * DEV_BSIZE +
+				    bp->b_validend == np->n_size) {
+					bzero((caddr_t)(bp->b_data +
+							bp->b_validend),
+					      bp->b_bufsize - bp->b_validend);
+					FSDBG(259, bp->b_validend,
+					      bp->b_bufsize - bp->b_validend, 0,
+					      0);
+				} else
+					SET(bp->b_flags, B_INVAL);
 			}
 #endif
 		}
 
 	    } else {
-
 #if 1  /* JOE */
-			if (bp->b_validoff)
-				SET(bp->b_flags, B_INVAL);
-			else if (bp->b_validend < bp->b_bufsize) {
-			        if ((((off_t)bp->b_blkno * (off_t)DEV_BSIZE) + bp->b_validend) != np->n_size)
-				         SET(bp->b_flags, B_INVAL);
-			}
-			if (bp->b_flags & B_INVAL) {
-			        KERNEL_DEBUG((FSDBG_CODE(DBG_FSRW, 260)) | DBG_FUNC_NONE,
-					     bp->b_validoff, bp->b_validend, bp->b_bufsize, bp->b_bcount, 0);
-			}
+		if (bp->b_validoff ||
+		    (bp->b_validend < bp->b_bufsize &&
+		     (off_t)bp->b_blkno * DEV_BSIZE + bp->b_validend !=
+		     np->n_size)) {
+			SET(bp->b_flags, B_INVAL);
+		}
+		if (bp->b_flags & B_INVAL) {
+			FSDBG(260, bp->b_validoff, bp->b_validend,
+			      bp->b_bufsize, bp->b_bcount);
+		}
 #endif
-			bp->b_resid = 0;
-			biodone(bp);
-			NFSTRACE(NFSTRC_DIO_DONE, vp);
-			return (0);
+		bp->b_resid = 0;
+		biodone(bp);
+		FSDBG_BOT(256, bp->b_validoff, bp->b_validend, bp->b_bufsize,
+			  np->n_size);
+		return (0);
 	    }
 	}
 	bp->b_resid = uiop->uio_resid;
@@ -1323,13 +1355,11 @@ nfs_doio(bp, cr, p)
 		nfs_clearcommit(vp->v_mount);
 
 	if (bp->b_flags & B_INVAL) {
-	        KERNEL_DEBUG((FSDBG_CODE(DBG_FSRW, 260)) | DBG_FUNC_NONE,
-			     bp->b_validoff, bp->b_validend, bp->b_bufsize, bp->b_bcount, 0);
+		FSDBG(260, bp->b_validoff, bp->b_validend, bp->b_bufsize,
+		      bp->b_bcount);
 	}
-	KERNEL_DEBUG((FSDBG_CODE(DBG_FSRW, 256)) | DBG_FUNC_END,
-		     bp->b_validoff, bp->b_validend, bp->b_bcount, error, 0);
+	FSDBG_BOT(256, bp->b_validoff, bp->b_validend, bp->b_bcount, error);
 
 	biodone(bp);
-	NFSTRACE(NFSTRC_DIO_DONE, vp);
 	return (error);
 }

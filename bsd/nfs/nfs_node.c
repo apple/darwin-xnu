@@ -206,9 +206,9 @@ loop:
 	/*
 	 * Lock the new nfsnode.
 	 */
-	vn_lock(vp, LK_EXCLUSIVE | LK_RETRY, p);
+	error =	vn_lock(vp, LK_EXCLUSIVE | LK_RETRY, p);
 
-	return (0);
+	return (error);
 }
 
 int
@@ -253,18 +253,19 @@ nfs_inactive(ap)
                 } else if (vget(ap->a_vp, 0, ap->a_p))
 			panic("nfs_inactive: vget failed");
 		(void) nfs_vinvalbuf(ap->a_vp, 0, sp->s_cred, p, 1);
+		np->n_size = 0;
 		ubc_setsize(ap->a_vp, (off_t)0);
 
-                /* We have a problem. The dvp could have gone away on us
-                 * while in the unmount path. Thus it appears as VBAD and we
-                 * cannot use it. If we tried locking the parent (future), for silly
+                /* We have a problem. The dvp could have gone away on us while
+                 * in the unmount path. Thus it appears as VBAD and we cannot
+                 * use it. If we tried locking the parent (future), for silly
                  * rename files, it is unclear where we would lock. The unmount
                  * code just pulls unlocked vnodes as it goes thru its list and
                  * yanks them. Could unmount be smarter to see if a busy reg vnode has
                  * a parent, and not yank it yet? Put in more passes at unmount
-                 * time? In the meantime, just check if it went away on us. Could
-                 * have gone away during the nfs_vinvalbuf or ubc_setsize which block.
-                 * Or perhaps even before nfs_inactive got called.
+                 * time? In the meantime, just check if it went away on us.
+                 * Could have gone away during the nfs_vinvalbuf or ubc_setsize
+                 * which block.  Or perhaps even before nfs_inactive got called.
                  */
                 if ((sp->s_dvp)->v_type != VBAD) 
                         nfs_removeit(sp); /* uses the dvp */
@@ -339,57 +340,30 @@ nfs_reclaim(ap)
 	return (0);
 }
 
-#if 0
 /*
  * Lock an nfsnode
  */
 int
 nfs_lock(ap)
 	struct vop_lock_args /* {
-		struct vnode *a_vp;
+                struct vnode *a_vp;
+                int a_flags;
+                struct proc *a_p;
 	} */ *ap;
 {
 	register struct vnode *vp = ap->a_vp;
 
 	/*
 	 * Ugh, another place where interruptible mounts will get hung.
-	 * If you make this sleep interruptible, then you have to fix all
+	 * If you make this call interruptible, then you have to fix all
 	 * the VOP_LOCK() calls to expect interruptibility.
 	 */
-	while (vp->v_flag & VXLOCK) {
-		vp->v_flag |= VXWANT;
-		(void) tsleep((caddr_t)vp, PINOD, "nfslck", 0);
-	}
 	if (vp->v_tag == VT_NON)
-		return (ENOENT);
-
-#if 0
-	/*
-	 * Only lock regular files.  If a server crashed while we were
-	 * holding a directory lock, we could easily end up sleeping
-	 * until the server rebooted while holding a lock on the root.
-	 * Locks are only needed for protecting critical sections in
-	 * VMIO at the moment.
-	 * New vnodes will have type VNON but they should be locked
-	 * since they may become VREG.  This is checked in loadattrcache
-	 * and unwanted locks are released there.
-	 */
-	if (vp->v_type == VREG || vp->v_type == VNON) {
-		while (np->n_flag & NLOCKED) {
-			np->n_flag |= NWANTED;
-			(void) tsleep((caddr_t) np, PINOD, "nfslck2", 0);
-			/*
-			 * If the vnode has transmuted into a VDIR while we
-			 * were asleep, then skip the lock.
-			 */
-			if (vp->v_type != VREG && vp->v_type != VNON)
-				return (0);
-		}
-		np->n_flag |= NLOCKED;
-	}
-#endif
-
-	return (0);
+		return (ENOENT); /* ??? -- got to check something and error, but what? */
+	 
+	return(lockmgr(&VTONFS(vp)->n_lock, ap->a_flags, &vp->v_interlock,
+                ap->a_p));
+	
 }
 
 /*
@@ -397,26 +371,16 @@ nfs_lock(ap)
  */
 int
 nfs_unlock(ap)
-	struct vop_unlock_args /* {
-		struct vnode *a_vp;
-	} */ *ap;
+        struct vop_unlock_args /* {
+                struct vnode *a_vp;
+                int a_flags;
+                struct proc *a_p;
+        } */ *ap;
 {
-#if 0
-	struct vnode* vp = ap->a_vp;
-        struct nfsnode* np = VTONFS(vp);
+        struct vnode *vp = ap->a_vp;
 
-	if (vp->v_type == VREG || vp->v_type == VNON) {
-		if (!(np->n_flag & NLOCKED))
-			panic("nfs_unlock: nfsnode not locked");
-		np->n_flag &= ~NLOCKED;
-		if (np->n_flag & NWANTED) {
-			np->n_flag &= ~NWANTED;
-			wakeup((caddr_t) np);
-		}
-	}
-#endif
-
-	return (0);
+        return (lockmgr(&VTONFS(vp)->n_lock, ap->a_flags | LK_RELEASE,
+                &vp->v_interlock, ap->a_p));
 }
 
 /*
@@ -428,9 +392,10 @@ nfs_islocked(ap)
 		struct vnode *a_vp;
 	} */ *ap;
 {
-	return VTONFS(ap->a_vp)->n_flag & NLOCKED ? 1 : 0;
+	return (lockstatus(&VTONFS(ap->a_vp)->n_lock));
+
 }
-#endif
+
 
 /*
  * Nfs abort op, called after namei() when a CREATE/DELETE isn't actually

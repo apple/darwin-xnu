@@ -339,7 +339,12 @@ int adsp_wput(gref, mp)
 	int s;
 	gbuf_t *xm;
 	ioc_t *iocbp;
-	CCBPtr sp = (CCBPtr)gbuf_rptr(((gbuf_t *)gref->info));
+	CCBPtr sp;
+	
+	if (gref->info)
+		sp = (CCBPtr)gbuf_rptr(((gbuf_t *)gref->info));
+	else
+		sp = 0;
 
 	if (gbuf_type(mp) == MSG_IOCTL) {
 		iocbp = (ioc_t *)gbuf_rptr(mp);

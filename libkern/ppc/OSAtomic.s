@@ -55,8 +55,6 @@ int OSCompareAndSwap( UInt32 oldVal, UInt32 newVal, UInt32 * addr )
 
 
 	ENTRY	_OSCompareAndSwap
-
-	lwarx	r6,	0,r5		/* CEMV10 */
 .L_CASretry:
 	lwarx	r6,	0,r5
 	cmpw	r6,	r3
@@ -94,14 +92,9 @@ SInt32	OSAddAtomic(SInt32 amount, SInt32 * value)
 	ENTRY	_OSAddAtomic
 
 	mr	r5,r3				/* Save the increment */
-	lwarx	r3,0,r4				/* CEMV10 */
-
 .L_AAretry:
 	lwarx	r3, 0, r4			/* Grab the area value */
 	add	r6, r3, r5			/* Add the value */
 	stwcx.	r6, 0, r4			/* Try to save the new value */
 	bne-	.L_AAretry			/* Didn't get it, try again... */
 	blr					/* Return the original value */
-
-
-

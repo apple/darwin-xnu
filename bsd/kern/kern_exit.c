@@ -267,6 +267,8 @@ proc_exit(struct proc *p)
 		register struct session *sp = p->p_session;
 
 		if (sp->s_ttyvp) {
+			struct vnode *ttyvp;
+
 			/*
 			 * Controlling process.
 			 * Signal foreground pgrp,
@@ -284,9 +286,10 @@ proc_exit(struct proc *p)
 				if (sp->s_ttyvp)
 					VOP_REVOKE(sp->s_ttyvp, REVOKEALL);
 			}
-			if (sp->s_ttyvp)
-				vrele(sp->s_ttyvp);
+			ttyvp = sp->s_ttyvp;
 			sp->s_ttyvp = NULL;
+			if (ttyvp)
+				vrele(ttyvp);
 			/*
 			 * s_ttyp is not zero'd; we use this to indicate
 			 * that the session once had a controlling terminal.
@@ -303,8 +306,11 @@ proc_exit(struct proc *p)
 	 * release trace file
 	 */
 	p->p_traceflag = 0;	/* don't trace the vrele() */
-	if (p->p_tracep)
-		vrele(p->p_tracep);
+	if (p->p_tracep) {
+		struct vnode *tvp = p->p_tracep;
+		p->p_tracep = NULL;
+		vrele(tvp);
+	}
 #endif
 
 
@@ -520,6 +526,7 @@ wait1(q, uap, retval, compat)
 	register int nfound;
 	register struct proc *p, *t;
 	int status, error;
+	struct vnode *tvp;
 
 retry:
 	if (uap->pid == 0)
@@ -610,8 +617,10 @@ loop:
 			/*
 			 * Release reference to text vnode
 			 */
-			if (p->p_textvp)
-				vrele(p->p_textvp);
+			tvp = p->p_textvp;
+			p->p_textvp = NULL;
+			if (tvp)
+				vrele(tvp);
 
 			/*
 			 * Finally finished with old proc entry.
@@ -824,6 +833,8 @@ vproc_exit(struct proc *p)
 		register struct session *sp = p->p_session;
 
 		if (sp->s_ttyvp) {
+			struct vnode *ttyvp;
+
 			/*
 			 * Controlling process.
 			 * Signal foreground pgrp,
@@ -841,9 +852,10 @@ vproc_exit(struct proc *p)
 				if (sp->s_ttyvp)
 					VOP_REVOKE(sp->s_ttyvp, REVOKEALL);
 			}
-			if (sp->s_ttyvp)
-				vrele(sp->s_ttyvp);
+			ttyvp = sp->s_ttyvp;
 			sp->s_ttyvp = NULL;
+			if (ttyvp)
+				vrele(ttyvp);
 			/*
 			 * s_ttyp is not zero'd; we use this to indicate
 			 * that the session once had a controlling terminal.
@@ -860,8 +872,11 @@ vproc_exit(struct proc *p)
 	 * release trace file
 	 */
 	p->p_traceflag = 0;	/* don't trace the vrele() */
-	if (p->p_tracep)
-		vrele(p->p_tracep);
+	if (p->p_tracep) {
+		struct vnode *tvp = p->p_tracep;
+		p->p_tracep = NULL;
+		vrele(tvp);
+	}
 #endif
 
 	q = p->p_children.lh_first;

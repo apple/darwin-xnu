@@ -431,6 +431,7 @@ vn_ioctl(fp, com, data, p)
 	register struct vnode *vp = ((struct vnode *)fp->f_data);
 	struct vattr vattr;
 	int error;
+	struct vnode *ttyvp;
 
 	switch (vp->v_type) {
 
@@ -454,10 +455,11 @@ vn_ioctl(fp, com, data, p)
 	case VBLK:
 		error = VOP_IOCTL(vp, com, data, fp->f_flag, p->p_ucred, p);
 		if (error == 0 && com == TIOCSCTTY) {
-			if (p->p_session->s_ttyvp)
-				vrele(p->p_session->s_ttyvp);
-			p->p_session->s_ttyvp = vp;
 			VREF(vp);
+			ttyvp = p->p_session->s_ttyvp;
+			p->p_session->s_ttyvp = vp;
+			if (ttyvp)
+				vrele(ttyvp);
 		}
 		return (error);
 	}

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2001 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -34,7 +34,6 @@
 #include <sys/proc.h>
 #include <sys/kernel.h>
 #include <mach/machine/vm_types.h>
-//#include <mach/mach_init.h>
 #include <sys/vnode.h>
 #include <sys/socket.h>
 #include <sys/mount.h>

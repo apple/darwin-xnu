@@ -721,6 +721,12 @@ findpcb:
 		goto dropwithreset;
 	if (tp->t_state == TCPS_CLOSED)
 		goto drop;
+        /* 
+         * Bogus state when listening port owned by SharedIP with loopback as the 
+         * only configured interface: BlueBox does not filters loopback
+         */ 
+	if (tp->t_state == TCP_NSTATES)
+		goto drop;
 
 	/* Unscale the window into a 32-bit value. */
 	if ((thflags & TH_SYN) == 0)

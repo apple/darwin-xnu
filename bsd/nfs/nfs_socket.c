@@ -95,6 +95,18 @@
 #include <nfs/nfsrtt.h>
 #include <nfs/nqnfs.h>
 
+#include <sys/kdebug.h>
+
+#define FSDBG(A, B, C, D, E) \
+	KERNEL_DEBUG((FSDBG_CODE(DBG_FSRW, (A))) | DBG_FUNC_NONE, \
+		(int)(B), (int)(C), (int)(D), (int)(E), 0)
+#define FSDBG_TOP(A, B, C, D, E) \
+	KERNEL_DEBUG((FSDBG_CODE(DBG_FSRW, (A))) | DBG_FUNC_START, \
+		(int)(B), (int)(C), (int)(D), (int)(E), 0)
+#define FSDBG_BOT(A, B, C, D, E) \
+	KERNEL_DEBUG((FSDBG_CODE(DBG_FSRW, (A))) | DBG_FUNC_END, \
+		(int)(B), (int)(C), (int)(D), (int)(E), 0)
+
 #define	TRUE	1
 #define	FALSE	0
 
@@ -128,6 +140,7 @@ extern time_t nqnfsstarttime;
 extern struct nfsstats nfsstats;
 extern int nfsv3_procid[NFS_NPROCS];
 extern int nfs_ticks;
+extern u_long nfs_xidwrap;
 
 /*
  * Defines which timer to use for the procnum.
@@ -203,6 +216,11 @@ int (*nfsrv3_procs[NFS_NPROCS]) __P((struct nfsrv_descript *nd,
 };
 #endif /* NFS_NOSERVER */
 
+/*
+ * NFSTRACE points were changed to FSDBG (KERNEL_DEBUG)
+ * But some of this code may prove useful someday...
+ */
+#undef NFSDIAG
 #if NFSDIAG
 int nfstraceindx = 0;
 struct nfstracerec nfstracebuf[NFSTBUFSIZ] = {{0,0,0,0}};
@@ -470,8 +488,7 @@ nfs_connect(nmp, rep)
 		nmp->nm_sdrtt[3] = 0;
 	nmp->nm_cwnd = NFS_MAXCWND / 2;	    /* Initial send window */
 	nmp->nm_sent = 0;
-	NFSTRACE4(NFSTRC_CWND_INIT, nmp, nmp->nm_flag, nmp->nm_soflags,
-		  nmp->nm_cwnd);
+	FSDBG(529, nmp, nmp->nm_flag, nmp->nm_soflags, nmp->nm_cwnd);
 	nmp->nm_timeouts = 0;
 	return (0);
 
@@ -956,25 +973,23 @@ nfs_reply(myrep)
 		 */
 		if (myrep->r_mrep != NULL) {
 			nfs_rcvunlock(&nmp->nm_flag);
-			NFSTRACE4(NFSTRC_RCVALREADY, myrep->r_xid, myrep,
-				  myrep->r_nmp, 2);
+			FSDBG(530, myrep->r_xid, myrep, myrep->r_nmp, -1);
 			return (0);
 		}
 		/*
 		 * Get the next Rpc reply off the socket. Assume myrep->r_nmp
-		 * is still in tact by checks done in nfs_rcvlock.
+		 * is still intact by checks done in nfs_rcvlock.
 		 */
 		error = nfs_receive(myrep, &nam, &mrep);
 		/*
 		 * Bailout asap if nfsmount struct gone (unmounted). 
 		 */
 		if (!myrep->r_nmp) {
-			NFSTRACE4(NFSTRC_ECONN, myrep->r_xid, myrep, nmp, 2);
+			FSDBG(530, myrep->r_xid, myrep, nmp, -2);
 			return (ECONNABORTED);
 		}
 		if (error) {
-			NFSTRACE4(NFSTRC_RCVERR, myrep->r_xid, myrep, nmp,
-				  error);
+			FSDBG(530, myrep->r_xid, myrep, nmp, error);
 			nfs_rcvunlock(&nmp->nm_flag);
 
 			/*
@@ -1005,7 +1020,7 @@ nfs_reply(myrep)
                  * just check here and get out. (ekn)
 		 */
 		if (!mrep) {
-                        NFSTRACE4(NFSTRC_ECONN, myrep->r_xid, myrep, nmp, 3);
+                        FSDBG(530, myrep->r_xid, myrep, nmp, -3);
                         return (ECONNABORTED); /* sounds good */
                 }
                         
@@ -1073,8 +1088,8 @@ nfsmout:
 				 * Do the additive increase of
 				 * one rpc/rtt.
 				 */
-				NFSTRACE4(NFSTRC_CWND_REPLY, rep->r_xid, rep,
-					  nmp->nm_sent, nmp->nm_cwnd);
+				FSDBG(530, rep->r_xid, rep, nmp->nm_sent,
+				      nmp->nm_cwnd);
 				if (nmp->nm_cwnd <= nmp->nm_sent) {
 					nmp->nm_cwnd +=
 					   (NFS_CWNDSCALE * NFS_CWNDSCALE +
@@ -1127,8 +1142,8 @@ nfsmout:
 				panic("nfs_reply: nil r_mrep");
 			return (0);
 		}
-		NFSTRACE4(NFSTRC_NOTMINE, myrep->r_xid, myrep, rep,
-			  rep ? rep->r_xid : myrep->r_flags);
+		FSDBG(530, myrep->r_xid, myrep, rep,
+		      rep ? rep->r_xid : myrep->r_flags);
 		if (myrep->r_flags & R_GETONEREP)
 			return (0); /* this path used by NQNFS */
 	}
@@ -1145,7 +1160,7 @@ nfsmout:
  * nb: always frees up mreq mbuf list
  */
 int
-nfs_request(vp, mrest, procnum, procp, cred, mrp, mdp, dposp)
+nfs_request(vp, mrest, procnum, procp, cred, mrp, mdp, dposp, xidp)
 	struct vnode *vp;
 	struct mbuf *mrest;
 	int procnum;
@@ -1154,6 +1169,7 @@ nfs_request(vp, mrest, procnum, procp, cred, mrp, mdp, dposp)
 	struct mbuf **mrp;
 	struct mbuf **mdp;
 	caddr_t *dposp;
+	u_int64_t *xidp;
 {
 	register struct mbuf *m, *mrep;
 	register struct nfsreq *rep, *rp;
@@ -1173,10 +1189,12 @@ nfs_request(vp, mrest, procnum, procp, cred, mrp, mdp, dposp)
 	char *auth_str, *verf_str;
 	NFSKERBKEY_T key;		/* save session key */
 
+	if (xidp)
+		*xidp = 0;
 	nmp = VFSTONFS(vp->v_mount);
 	MALLOC_ZONE(rep, struct nfsreq *,
 		    sizeof(struct nfsreq), M_NFSREQ, M_WAITOK);
-	NFSTRACE4(NFSTRC_REQ, vp, procnum, nmp, rep);
+	FSDBG_TOP(531, vp, procnum, nmp, rep);
 
 	/*
 	 * make sure if we blocked above, that the file system didn't get
@@ -1189,7 +1207,7 @@ nfs_request(vp, mrest, procnum, procp, cred, mrp, mdp, dposp)
 	 */
 
 	if (vp->v_type == VBAD) {
-		NFSTRACE4(NFSTRC_VBAD, 1, vp, nmp, rep);
+		FSDBG_BOT(531, 1, vp, nmp, rep);
 		_FREE_ZONE((caddr_t)rep, sizeof (struct nfsreq), M_NFSREQ);
 		return (EINVAL);
 	}
@@ -1220,6 +1238,7 @@ kerbauth:
 			error = nfs_getauth(nmp, rep, cred, &auth_str,
 				&auth_len, verf_str, &verf_len, key);
 			if (error) {
+				FSDBG_BOT(531, 2, vp, error, rep);
 				_FREE_ZONE((caddr_t)rep,
 					sizeof (struct nfsreq), M_NFSREQ);
 				m_freem(mrest);
@@ -1236,6 +1255,8 @@ kerbauth:
 	}
 	m = nfsm_rpchead(cred, nmp->nm_flag, procnum, auth_type, auth_len,
 	     auth_str, verf_len, verf_str, mrest, mrest_len, &mheadend, &xid);
+	if (xidp)
+		*xidp = xid + ((u_int64_t)nfs_xidwrap << 32);
 	if (auth_str)
 		_FREE(auth_str, M_TEMP);
 
@@ -1293,8 +1314,8 @@ tryagain:
 		 */
 		if (!error) {
 			if ((rep->r_flags & R_MUSTRESEND) == 0) {
-				NFSTRACE4(NFSTRC_CWND_REQ1, rep->r_xid, rep,
-					  nmp->nm_sent, nmp->nm_cwnd);
+				FSDBG(531, rep->r_xid, rep, nmp->nm_sent,
+				      nmp->nm_cwnd);
 				nmp->nm_sent += NFS_CWNDSCALE;
 				rep->r_flags |= R_SENT;
 			}
@@ -1336,8 +1357,7 @@ tryagain:
 	 * Decrement the outstanding request count.
 	 */
 	if (rep->r_flags & R_SENT) {
-		NFSTRACE4(NFSTRC_CWND_REQ2, rep->r_xid, rep, nmp->nm_sent,
-			  nmp->nm_cwnd);
+		FSDBG(531, rep->r_xid, rep, nmp->nm_sent, nmp->nm_cwnd);
 		rep->r_flags &= ~R_SENT;	/* paranoia */
 		nmp->nm_sent -= NFS_CWNDSCALE;
 	}
@@ -1354,7 +1374,7 @@ tryagain:
 	dpos = rep->r_dpos;
 	if (error) {
 		m_freem(rep->r_mreq);
-		NFSTRACE4(NFSTRC_REQERR, error, rep->r_xid, nmp, rep);
+		FSDBG_BOT(531, error, rep->r_xid, nmp, rep);
 		_FREE_ZONE((caddr_t)rep, sizeof (struct nfsreq), M_NFSREQ);
 		return (error);
 	}
@@ -1379,7 +1399,7 @@ tryagain:
 			error = EACCES;
 		m_freem(mrep);
 		m_freem(rep->r_mreq);
-		NFSTRACE4(NFSTRC_RPCERR, error, rep->r_xid, nmp, rep);
+		FSDBG_BOT(531, error, rep->r_xid, nmp, rep);
 		_FREE_ZONE((caddr_t)rep, sizeof (struct nfsreq), M_NFSREQ);
 		return (error);
 	}
@@ -1434,8 +1454,7 @@ tryagain:
 			} else
 				m_freem(mrep);
 			m_freem(rep->r_mreq);
-			NFSTRACE4(NFSTRC_DISSECTERR, error, rep->r_xid, nmp,
-				  rep);
+			FSDBG_BOT(531, error, rep->r_xid, nmp, rep);
 			_FREE_ZONE((caddr_t)rep,
 				   sizeof (struct nfsreq), M_NFSREQ);
 			return (error);
@@ -1463,7 +1482,7 @@ tryagain:
 		*mdp = md;
 		*dposp = dpos;
 		m_freem(rep->r_mreq);
-		NFSTRACE4(NFSTRC_REQFREE, 0xf0f0f0f0, rep->r_xid, nmp, rep);
+		FSDBG_BOT(531, 0xf0f0f0f0, rep->r_xid, nmp, rep);
 		FREE_ZONE((caddr_t)rep, sizeof (struct nfsreq), M_NFSREQ);
 		return (0);
 	}
@@ -1471,7 +1490,7 @@ tryagain:
 	error = EPROTONOSUPPORT;
 nfsmout:
 	m_freem(rep->r_mreq);
-	NFSTRACE4(NFSTRC_REQFREE, error, rep->r_xid, nmp, rep);
+	FSDBG_BOT(531, error, rep->r_xid, nmp, rep);
 	_FREE_ZONE((caddr_t)rep, sizeof (struct nfsreq), M_NFSREQ);
 	return (error);
 }
@@ -1645,8 +1664,8 @@ nfs_softterm(struct nfsreq *rep)
 {
 	rep->r_flags |= R_SOFTTERM;
 	if (rep->r_flags & R_SENT) {
-		NFSTRACE4(NFSTRC_CWND_SOFT, rep->r_xid, rep,
-			  rep->r_nmp->nm_sent, rep->r_nmp->nm_cwnd);
+		FSDBG(532, rep->r_xid, rep, rep->r_nmp->nm_sent,
+		      rep->r_nmp->nm_cwnd);
 		rep->r_nmp->nm_sent -= NFS_CWNDSCALE;
 		rep->r_flags &= ~R_SENT;
 	}
@@ -1816,8 +1835,7 @@ rescan:
 				rep->r_flags |= R_SENT;
 				nmp->nm_sent += NFS_CWNDSCALE;
 			}
-			NFSTRACE4(NFSTRC_CWND_TIMER, xid, rep,
-				  nmp->nm_sent, nmp->nm_cwnd);
+			FSDBG(535, xid, rep, nmp->nm_sent, nmp->nm_cwnd);
 
 			thread_funnel_switch(KERNEL_FUNNEL, NETWORK_FUNNEL);
 
@@ -1830,7 +1848,7 @@ rescan:
 
 			thread_funnel_switch(NETWORK_FUNNEL, KERNEL_FUNNEL);
 
-			NFSTRACE4(NFSTRC_CWND_TIMER, xid, error, sent, cwnd);
+			FSDBG(535, xid, error, sent, cwnd);
 			/*
 			 * This is to fix "nfs_sigintr" DSI panics.
 			 * We may have slept during the send so the current
@@ -1976,24 +1994,23 @@ nfs_rcvlock(rep)
 	register int *flagp = &rep->r_nmp->nm_flag;
 	int slpflag, slptimeo = 0;
 
+	FSDBG_TOP(534, rep->r_xid, rep, rep->r_nmp, *flagp);
 	if (*flagp & NFSMNT_INT)
 		slpflag = PCATCH;
 	else
 		slpflag = 0;
 	while (*flagp & NFSMNT_RCVLOCK) {
 		if (nfs_sigintr(rep->r_nmp, rep, rep->r_procp)) {
-			NFSTRACE4(NFSTRC_RCVLCKINTR, rep->r_xid, rep,
-				  rep->r_nmp, *flagp);
+			FSDBG_BOT(534, rep->r_xid, rep, rep->r_nmp, 0x100);
 			return (EINTR);
 		} else if (rep->r_mrep != NULL) {
 			/*
 			 * Don't bother sleeping if reply already arrived
 			 */
-			NFSTRACE4(NFSTRC_RCVALREADY, rep->r_xid, rep,
-				  rep->r_nmp, 1);
+			FSDBG_BOT(534, rep->r_xid, rep, rep->r_nmp, 0x101);
 			return (EALREADY);
 		}
-		NFSTRACE4(NFSTRC_RCVLCKW, rep->r_xid, rep, rep->r_nmp, *flagp);
+		FSDBG(534, rep->r_xid, rep, rep->r_nmp, 0x102);
 		*flagp |= NFSMNT_WANTRCV;
 		(void) tsleep((caddr_t)flagp, slpflag | (PZERO - 1), "nfsrcvlk",
 			      slptimeo);
@@ -2003,16 +2020,18 @@ nfs_rcvlock(rep)
 		}
 		/*
 		 * Make sure while we slept that the mountpoint didn't go away.
-		 * nfs_sigintr and caller nfs_reply expect it in tact.
+		 * nfs_sigintr and caller nfs_reply expect it intact.
 		 */
-		if (!rep->r_nmp) 
+		if (!rep->r_nmp)  {
+			FSDBG_BOT(534, rep->r_xid, rep, rep->r_nmp, 0x103);
 			return (ECONNABORTED); /* don't have lock until out of loop */
+		}
 	}
 	/*
 	 * nfs_reply will handle it if reply already arrived.
 	 * (We may have slept or been preempted while on network funnel).
 	 */
-	NFSTRACE4(NFSTRC_RCVLCK, rep->r_xid, rep, rep->r_nmp, *flagp);
+	FSDBG_BOT(534, rep->r_xid, rep, rep->r_nmp, *flagp);
 	*flagp |= NFSMNT_RCVLOCK;
 	return (0);
 }
@@ -2025,15 +2044,13 @@ nfs_rcvunlock(flagp)
 	register int *flagp;
 {
 
+	FSDBG(533, flagp, *flagp, 0, 0);
 	if ((*flagp & NFSMNT_RCVLOCK) == 0)
 		panic("nfs rcvunlock");
 	*flagp &= ~NFSMNT_RCVLOCK;
 	if (*flagp & NFSMNT_WANTRCV) {
-		NFSTRACE(NFSTRC_RCVUNLW, flagp);
 		*flagp &= ~NFSMNT_WANTRCV;
 		wakeup((caddr_t)flagp);
-	} else {
-		NFSTRACE(NFSTRC_RCVUNL, flagp);
 	}
 }
 

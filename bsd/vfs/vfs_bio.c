@@ -64,6 +64,7 @@
  *	@(#)vfs_bio.c	8.6 (Berkeley) 1/11/94
  */
 
+
 /*
  * Some references:
  *	Bach: The Design of the UNIX Operating System (Prentice Hall, 1986)
@@ -99,7 +100,7 @@ extern void bufq_balance_thread_init();
 extern void reassignbuf(struct buf *, struct vnode *);
 static struct buf *getnewbuf(int slpflag, int slptimeo, int *queue);
 
-extern int niobuf;		/* The number of IO buffer headers for cluster IO */
+extern int niobuf;	/* The number of IO buffer headers for cluster IO */
 int blaundrycnt;
 
 #if TRACE
@@ -632,7 +633,8 @@ brelse(bp)
 	long whichq;
 
 	KERNEL_DEBUG((FSDBG_CODE(DBG_FSRW, 388)) | DBG_FUNC_START,
-		     bp->b_lblkno * PAGE_SIZE, bp, bp->b_data, bp->b_flags, 0);
+		     bp->b_lblkno * PAGE_SIZE, (int)bp, (int)bp->b_data,
+		     bp->b_flags, 0);
 
 	trace(TR_BRELSE, pack(bp->b_vp, bp->b_bufsize), bp->b_lblkno);
 
@@ -674,7 +676,9 @@ brelse(bp)
 				        upl_flags = 0;
 				ubc_upl_abort(upl, upl_flags);
 			} else {
-			    if (ISSET(bp->b_flags, (B_DELWRI | B_WASDIRTY)))
+			    if (ISSET(bp->b_flags, B_NEEDCOMMIT))
+				    upl_flags = UPL_COMMIT_CLEAR_DIRTY ;
+			    else if (ISSET(bp->b_flags, B_DELWRI | B_WASDIRTY))
 					upl_flags = UPL_COMMIT_SET_DIRTY ;
 				else
 				    upl_flags = UPL_COMMIT_CLEAR_DIRTY ;
@@ -758,7 +762,7 @@ brelse(bp)
 	splx(s);
 
 	KERNEL_DEBUG((FSDBG_CODE(DBG_FSRW, 388)) | DBG_FUNC_END,
-		     bp, bp->b_data, bp->b_flags, 0, 0);
+		     (int)bp, (int)bp->b_data, bp->b_flags, 0, 0);
 }
 
 /*
@@ -791,7 +795,8 @@ incore(vp, blkno)
 	return (0);
 }
 
-/* XXX FIXME -- Update the comment to reflect the UBC changes -- */
+
+/* XXX FIXME -- Update the comment to reflect the UBC changes (please) -- */
 /*
  * Get a block of requested size that is associated with
  * a given vnode and block offset. If it is found in the
@@ -889,8 +894,11 @@ start:
 					SET(bp->b_flags, B_PAGELIST);
 					bp->b_pagelist = upl;
 
-					if ( !upl_valid_page(pl, 0))
-					        panic("getblk: incore buffer without valid page");
+					if (!upl_valid_page(pl, 0)) {
+						if (vp->v_tag != VT_NFS)
+					        	panic("getblk: incore buffer without valid page");
+						CLR(bp->b_flags, B_CACHE);
+					}
 
 					if (upl_dirty_page(pl, 0))
 					        SET(bp->b_flags, B_WASDIRTY);
@@ -1112,7 +1120,7 @@ start:
 	}
 
 	KERNEL_DEBUG((FSDBG_CODE(DBG_FSRW, 386)) | DBG_FUNC_END,
-		     bp, bp->b_data, bp->b_flags, 3, 0);
+		     (int)bp, (int)bp->b_data, bp->b_flags, 3, 0);
 
 	return (bp);
 }
@@ -1639,7 +1647,7 @@ biodone(bp)
 	funnel_state = thread_funnel_set(kernel_flock, TRUE);
 
 	KERNEL_DEBUG((FSDBG_CODE(DBG_FSRW, 387)) | DBG_FUNC_START,
-		     bp, bp->b_data, bp->b_flags, 0, 0);
+		     (int)bp, (int)bp->b_data, bp->b_flags, 0, 0);
 
 	if (ISSET(bp->b_flags, B_DONE))
 		panic("biodone already");
@@ -1664,7 +1672,7 @@ biodone(bp)
 	}
 
 	KERNEL_DEBUG((FSDBG_CODE(DBG_FSRW, 387)) | DBG_FUNC_END,
-		     bp, bp->b_data, bp->b_flags, 0, 0);
+		     (int)bp, (int)bp->b_data, bp->b_flags, 0, 0);
 
 	thread_funnel_set(kernel_flock, funnel_state);
 }

@@ -616,6 +616,7 @@ bool IODTMapInterrupts( IORegistryEntry * regEntry )
             map = OSData::withData( local, mapped->getCount() * sizeof( UInt32),
 				sizeof( UInt32));
             controller = gIODTDefaultInterruptController;
+            controller->retain();
         }
 
         localBits += skip;
@@ -734,34 +735,41 @@ bool IODTMatchNubWithKeys( IORegistryEntry * regEntry,
 OSCollectionIterator * IODTFindMatchingEntries( IORegistryEntry * from,
 			IOOptionBits options, const char * keys )
 {
-    OSSet					*result;
+    OSSet					*result = 0;
     IORegistryEntry			*next;
     IORegistryIterator		*iter;
     OSCollectionIterator	*cIter;
     bool					cmp;
     bool					minus = options & kIODTExclusive;
 
-    result = OSSet::withCapacity( 3 );
-    if( !result)
-		return( 0);
 
     iter = IORegistryIterator::iterateOver( from, gIODTPlane,
 		(options & kIODTRecursive) ? kIORegistryIterateRecursively : 0 );
     if( iter) {
-        while( (next = iter->getNextObject())) {
+        do {
 
-            // Look for existence of a debug property to skip
-            if( next->getProperty("AAPL,ignore"))
-				continue;
+            if( result)
+                result->release();
+            result = OSSet::withCapacity( 3 );
+            if( !result)
+                break;
 
-	    	if( keys) {
-                cmp = IODTMatchNubWithKeys( next, keys );
-                if( (minus && (false == cmp))
-                	|| ((false == minus) && (false != cmp)) )
+            iter->reset();
+            while( (next = iter->getNextObject())) {
+    
+                // Look for existence of a debug property to skip
+                if( next->getProperty("AAPL,ignore"))
+                                    continue;
+    
+                    if( keys) {
+                    cmp = IODTMatchNubWithKeys( next, keys );
+                    if( (minus && (false == cmp))
+                            || ((false == minus) && (false != cmp)) )
+                        result->setObject( next);
+                    } else
                     result->setObject( next);
-	    	} else
-                result->setObject( next);
-        }
+            }
+        } while( !iter->isValid());
         iter->release();
     }
 

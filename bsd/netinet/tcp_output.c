@@ -93,6 +93,7 @@
 #endif
 #include <sys/kdebug.h>
 
+
 #define DBG_LAYER_BEG		NETDBG_CODE(DBG_NETTCP, 1)
 #define DBG_LAYER_END		NETDBG_CODE(DBG_NETTCP, 3)
 #define DBG_FNC_TCP_OUTPUT	NETDBG_CODE(DBG_NETTCP, (4 << 8) | 1)
@@ -128,14 +129,19 @@ tcp_output(tp)
 #if INET6
 	int isipv6 = (tp->t_inpcb->inp_vflag & INP_IPV4) == 0;
 #endif
+	int    last_off;
+	int    m_off;
+	struct mbuf *m_last = 0;
+	struct mbuf *m_head = 0;
+
 
 	KERNEL_DEBUG(DBG_FNC_TCP_OUTPUT | DBG_FUNC_START, 0,0,0,0,0);
+
 	KERNEL_DEBUG(DBG_LAYER_BEG,
 		     ((tp->t_template->tt_dport << 16) | tp->t_template->tt_sport),
 		     (((tp->t_template->tt_src.s_addr & 0xffff) << 16) |
 		      (tp->t_template->tt_dst.s_addr & 0xffff)),
 		     0,0,0);
-
 	/*
 	 * Determine length of data that should be transmitted,
 	 * and flags that will be used.
@@ -563,33 +569,57 @@ send:
 		m->m_len += hdrlen;
 		m->m_data -= hdrlen;
 #else
-		MGETHDR(m, M_DONTWAIT, MT_HEADER);
-		if (m == NULL) {
-			error = ENOBUFS;
-			goto out;
-		}
+		m = NULL;
 #if INET6
  		if (MHLEN < hdrlen + max_linkhdr) {
+		        MGETHDR(m, M_DONTWAIT, MT_HEADER);
+			if (m == NULL) {
+			        error = ENOBUFS;
+				goto out;
+			}
  			MCLGET(m, M_DONTWAIT);
  			if ((m->m_flags & M_EXT) == 0) {
  				m_freem(m);
  				error = ENOBUFS;
  				goto out;
  			}
+			m->m_data += max_linkhdr;
+			m->m_len = hdrlen;
 		}
 #endif
-		m->m_data += max_linkhdr;
-		m->m_len = hdrlen;
 		if (len <= MHLEN - hdrlen - max_linkhdr) {
+		        if (m == NULL) {
+			        MGETHDR(m, M_DONTWAIT, MT_HEADER);
+				if (m == NULL) {
+				        error = ENOBUFS;
+					goto out;
+				}
+				m->m_data += max_linkhdr;
+				m->m_len = hdrlen;
+			}
 			m_copydata(so->so_snd.sb_mb, off, (int) len,
 			    mtod(m, caddr_t) + hdrlen);
 			m->m_len += len;
 		} else {
-			m->m_next = m_copy(so->so_snd.sb_mb, off, (int) len);
-			if (m->m_next == 0) {
-				(void) m_free(m);
-				error = ENOBUFS;
-				goto out;
+		        if (m != NULL) {
+			        m->m_next = m_copy(so->so_snd.sb_mb, off, (int) len);
+				if (m->m_next == 0) {
+				        (void) m_free(m);
+					error = ENOBUFS;
+					goto out;
+				}
+			} else {
+			        if (m_head != so->so_snd.sb_mb || last_off != off)
+				        m_last = NULL;
+				last_off = off + len;
+				m_head = so->so_snd.sb_mb;
+
+			        if ((m = m_copym_with_hdrs(so->so_snd.sb_mb, off, (int) len, M_DONTWAIT, &m_last, &m_off)) == NULL) {
+				        error = ENOBUFS;
+					goto out;
+				}
+				m->m_data += max_linkhdr;
+				m->m_len = hdrlen;
 			}
 		}
 #endif
@@ -700,6 +730,7 @@ send:
 		 * number wraparound.
 		 */
 		tp->snd_up = tp->snd_una;		/* drag it along */
+
 
 	/*
 	 * Put TCP length in extended header, and then
@@ -857,8 +888,6 @@ send:
 	KERNEL_DEBUG(DBG_LAYER_END, ((th->th_dport << 16) | th->th_sport),
 		   (((thtoti(th)->ti_src.s_addr & 0xffff) << 16) | (thtoti(th)->ti_dst.s_addr & 0xffff)),
 		    th->th_seq, th->th_ack, th->th_win);
-
-
 #if 1
 	/*
 	 * See if we should do MTU discovery.  We do it only if the following

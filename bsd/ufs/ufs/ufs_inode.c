@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2001 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -157,8 +157,9 @@ ufs_reclaim(vp, p)
 	 */
 	cache_purge(vp);
 	if (ip->i_devvp) {
-		vrele(ip->i_devvp);
-		ip->i_devvp = 0;
+		struct vnode *tvp = ip->i_devvp;
+		ip->i_devvp = NULL;
+		vrele(tvp);
 	}
 #if QUOTA
 	for (i = 0; i < MAXQUOTAS; i++) {

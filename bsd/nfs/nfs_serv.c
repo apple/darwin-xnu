@@ -2648,10 +2648,16 @@ again:
 	io.uio_rw = UIO_READ;
 	io.uio_procp = (struct proc *)0;
 	eofflag = 0;
-	vn_lock(vp, LK_EXCLUSIVE | LK_RETRY, procp);
-	if (cookies) {
-		_FREE((caddr_t)cookies, M_TEMP);
-		cookies = NULL;
+
+        if (cookies) {
+                _FREE((caddr_t)cookies, M_TEMP);
+                cookies = NULL;
+        }
+	if (error = vn_lock(vp, LK_EXCLUSIVE | LK_RETRY, procp)) {
+		FREE((caddr_t)rbuf, M_TEMP);
+		nfsm_reply(NFSX_POSTOPATTR(v3));
+		nfsm_srvpostop_attr(getret, &at);
+		return (0);
 	}
 	error = VOP_READDIR(vp, &io, cred, &eofflag, &ncookies, &cookies);
 	off = (off_t)io.uio_offset;
@@ -2922,11 +2928,16 @@ again:
 	io.uio_rw = UIO_READ;
 	io.uio_procp = (struct proc *)0;
 	eofflag = 0;
-	vn_lock(vp, LK_EXCLUSIVE | LK_RETRY, procp);
 	if (cookies) {
-		_FREE((caddr_t)cookies, M_TEMP);
-		cookies = NULL;
-	}
+                _FREE((caddr_t)cookies, M_TEMP);
+                cookies = NULL;
+        }       
+        if (error = vn_lock(vp, LK_EXCLUSIVE | LK_RETRY, procp)) {
+                FREE((caddr_t)rbuf, M_TEMP);
+                nfsm_reply(NFSX_V3POSTOPATTR);
+                nfsm_srvpostop_attr(getret, &at);
+                return (0);
+        }
 	error = VOP_READDIR(vp, &io, cred, &eofflag, &ncookies, &cookies);
 	off = (u_quad_t)io.uio_offset;
 	getret = VOP_GETATTR(vp, &at, cred, procp);

@@ -1246,6 +1246,8 @@ struct proc *p;
     struct hfsnode 		*hp;
     struct hfsmount		*hfsmp = VFSTOHFS(mp);
     ExtendedVCB			*vcb;
+    struct vnode 		*meta_vp[3];
+    int i;
     int error, allerror = 0;
 
     DBG_FUNC_NAME("hfs_sync");
@@ -1285,7 +1287,8 @@ loop:;
         nvp = vp->v_mntvnodes.le_next;
         hp = VTOH(vp);
 
-        if ((vp->v_type == VNON) || (((hp->h_nodeflags & (IN_ACCESS | IN_CHANGE | IN_MODIFIED | IN_UPDATE)) == 0) &&
+        if ((vp->v_flag & VSYSTEM) || (vp->v_type == VNON) ||
+            (((hp->h_nodeflags & (IN_ACCESS | IN_CHANGE | IN_MODIFIED | IN_UPDATE)) == 0) &&
             (vp->v_dirtyblkhd.lh_first == NULL) && !(vp->v_flag & VHASDIRTY))) {
             simple_unlock(&vp->v_interlock);
 	    simple_unlock(&mntvnode_slock);
@@ -1315,30 +1318,31 @@ loop:;
         simple_lock(&mntvnode_slock);
     };
 
-	vcb = HFSTOVCB(hfsmp);
+    vcb = HFSTOVCB(hfsmp);
+    meta_vp[0] = vcb->extentsRefNum;
+    meta_vp[1] = vcb->catalogRefNum;
+    meta_vp[2] = vcb->allocationsRefNum;  /* This is NULL for standard HFS */
 
-    /* Now reprocess the BTree node, stored above */
-    {
-    struct vnode 		*btvp;
-        /*
-         * If the vnode that we are about to sync is no longer
-         * associated with this mount point, start over.
-         */
-        btvp = vcb->extentsRefNum;
+    /* Now sync our three metadata files */
+    for (i = 0; i < 3; ++i) {
+	struct vnode *btvp;
+  
+        btvp = meta_vp[i];
+
         if ((btvp==0) || (btvp->v_type == VNON) || (btvp->v_mount != mp))
-            goto skipBtree;
+            continue;
         simple_lock(&btvp->v_interlock);
         hp = VTOH(btvp);
         if (((hp->h_nodeflags & (IN_ACCESS | IN_CHANGE | IN_MODIFIED | IN_UPDATE)) == 0) &&
             (btvp->v_dirtyblkhd.lh_first == NULL) && !(btvp->v_flag & VHASDIRTY)) {
             simple_unlock(&btvp->v_interlock);
-            goto skipBtree;
+            continue;
         }
         simple_unlock(&mntvnode_slock);
         error = vget(btvp, LK_EXCLUSIVE | LK_NOWAIT | LK_INTERLOCK, p);
         if (error) {
             simple_lock(&mntvnode_slock);
-            goto skipBtree;
+            continue;
         }
         if ((error = VOP_FSYNC(btvp, cred, waitfor, p)))
             allerror = error;
@@ -1347,15 +1351,15 @@ loop:;
         simple_lock(&mntvnode_slock);
     };
 
-skipBtree:;
-
     simple_unlock(&mntvnode_slock);
 
     /*
      * Force stale file system control information to be flushed.
      */
-    if ((error = VOP_FSYNC(hfsmp->hfs_devvp, cred, waitfor, p)))
-        allerror = error;
+    if (vcb->vcbSigWord == kHFSSigWord) {
+        if ((error = VOP_FSYNC(hfsmp->hfs_devvp, cred, waitfor, p)))
+            allerror = error;
+    }
     /*
      * Write back modified superblock.
      */
