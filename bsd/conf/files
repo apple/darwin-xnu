@@ -484,6 +484,7 @@ bsd/hfs/hfscommon/BTree/BTree.c			optional hfs
 bsd/hfs/hfscommon/BTree/BTreeAllocate.c		optional hfs
 bsd/hfs/hfscommon/BTree/BTreeMiscOps.c		optional hfs
 bsd/hfs/hfscommon/BTree/BTreeNodeOps.c		optional hfs
+bsd/hfs/hfscommon/BTree/BTreeScanner.c		optional hfs
 bsd/hfs/hfscommon/BTree/BTreeTreeOps.c		optional hfs
 bsd/hfs/hfscommon/Catalog/Catalog.c		optional hfs
 bsd/hfs/hfscommon/Catalog/CatalogIterators.c	optional hfs

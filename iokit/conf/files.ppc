@@ -49,11 +49,6 @@ iokit/Drivers/platform/drvApplePowerExpressPE/PowerExpress.cpp	optional iokitcpp
 iokit/Drivers/platform/drvAppleGrandCentral/GrandCentral.cpp	optional disabled-iokitcpp
 iokit/Drivers/platform/drvAppleOHare/OHare.cpp			optional iokitcpp
 
-# Symbios 8xx SCSI Driver
-#iokit/Drivers/scsi/drvSymbios8xx/Sym8xxClient.cpp		optional iokitcpp
-#iokit/Drivers/scsi/drvSymbios8xx/Sym8xxExecute.cpp		optional iokitcpp
-#iokit/Drivers/scsi/drvSymbios8xx/Sym8xxInit.cpp			optional iokitcpp
-#iokit/Drivers/scsi/drvSymbios8xx/Sym8xxMisc.cpp			optional iokitcpp
 
 # ATA driver 
 #iokit/Drivers/ata/drvAppleUltra66ATA/AppleUltra66ATA.cpp		optional iokitcpp

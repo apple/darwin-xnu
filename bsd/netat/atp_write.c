@@ -901,7 +901,7 @@ l_send:
 } /* atp_unpack_bdsp */
 
 #define ATP_SOCKET_LAST  (DDP_SOCKET_LAST-6)
-#define ATP_SOCKET_FIRST (DDP_SOCKET_1st_DYNAMIC-64)
+#define ATP_SOCKET_FIRST (DDP_SOCKET_1st_DYNAMIC)
 static unsigned int sNext = 0;
 
 int atp_bind(gref, sVal, flag)

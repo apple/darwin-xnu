@@ -815,7 +815,7 @@ bool IOSCSIParallelDevice::checkReqSense()
 
         tpCur = &target->targetParmsCurrent;
 
-        if ( tpCur->transferWidth != 1 )
+        if ( tpCur->transferWidth > 1 )
         {
             reqSenseCmd->scsiCmd.cdbFlags |= kCDBFlagsNegotiateWDTR;
 	    if (tpCur->transferOptions & kSCSITransferOptionPPR) {

@@ -540,7 +540,7 @@ adspAssignSocket(gref, flag)
 	int s;
 
 	sMax = flag ? DDP_SOCKET_LAST-46 : DDP_SOCKET_LAST-6;
-	sMin = DDP_SOCKET_1st_DYNAMIC-64;
+	sMin = DDP_SOCKET_1st_DYNAMIC;
 
 	ATDISABLE(s, adspall_lock);
 	for (inputC=255, sVal=sMax; sVal >= sMin; sVal--) {
