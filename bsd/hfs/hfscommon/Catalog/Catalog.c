@@ -816,7 +816,7 @@ GetDirEntrySize(BTreeIterator *bip, ExtendedVCB * vol)
 OSErr
 PositionIterator(CatalogIterator *cip, UInt32 offset, BTreeIterator *bip, UInt16 *op)
 {
-#define CAT_START_OFFSET 0
+#define CAT_START_OFFSET (2 * sizeof(struct hfsdotentry))
 	ExtendedVCB *	vol;
 	FCB *		fcb;
 	OSErr		result = 0;
@@ -877,7 +877,7 @@ PositionIterator(CatalogIterator *cip, UInt32 offset, BTreeIterator *bip, UInt16
 			pid = *idp;
 
 			curOffset = CAT_START_OFFSET;
-	 		nextOffset = GetDirEntrySize(bip, vol);
+	 		nextOffset = CAT_START_OFFSET + GetDirEntrySize(bip, vol);
 
 			while (nextOffset < offset) {
 				result = BTIterateRecord( fcb, kBTreeNextRecord, bip, NULL, NULL );		

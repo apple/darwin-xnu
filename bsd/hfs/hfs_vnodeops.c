@@ -3227,7 +3227,7 @@ struct vop_readdir_args /* {
 			goto Exit;
 	}
 	
-	diroffset = uio->uio_offset - sizeof(rootdots);
+	diroffset = uio->uio_offset;
 
 	/* lock catalog b-tree */
 	retval = hfs_metafilelocking(VTOHFS(ap->a_vp), kHFSCatalogFileID, LK_SHARED, p);
