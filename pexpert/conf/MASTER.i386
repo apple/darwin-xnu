@@ -1,0 +1,15 @@
+#
+######################################################################
+#  
+#  Standard NeXT Research Configurations:
+#  -------- ---- -------- ---------------
+#
+#  RELEASE = [i386 mach mach_pe]
+#  PROFILE = [i386 mach mach_pe profile]
+#  DEBUG = [i386 mach mach_pe debug]
+#
+######################################################################
+
+machine		"i386"					# <i386>
+cpu		"i386"					# <i386>
+

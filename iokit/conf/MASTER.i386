@@ -1,0 +1,15 @@
+#
+######################################################################
+#  
+#  Standard NeXT Research Configurations:
+#  -------- ---- -------- ---------------
+#
+#  RELEASE = [intel mach iokitcpp]
+#  PROFILE = [intel mach iokitcpp profile]
+#  DEBUG = [intel mach iokitcpp debug]
+#
+######################################################################
+
+machine		"i386"					# <intel>
+cpu		"i386"					# <intel>
+

@@ -1,0 +1,133 @@
+#!/bin/sh
+
+if [ ! $OBJROOT ]
+then
+  echo "OBJROOT not defined"
+  exit 1
+fi
+
+if [ ! $PREBUILT_OBJROOT ]
+then
+  PREBUILT_OBJROOT=/Prebuilt/$1/xnu/BUILD/obj
+fi
+
+if [ ! -e $PREBUILT_OBJROOT ]
+then
+  echo "$PREBUILT_OBJROOT doesn't exist"
+  exit 1
+else
+if [ $# = 2 -a ! -e $PREBUILT_OBJROOT/$2 ]
+then
+  echo "$PREBUILT_OBJROOT/$2 doesn't exist"
+  exit 1
+fi
+if [ -e $PREBUILT_OBJROOT/BUILDING_SEED_OBJROOT ]
+then
+  echo "Building $PREBUILT_OBJROOT, try later"
+  exit 1
+fi
+fi
+
+cd $PREBUILT_OBJROOT
+
+if [ $# = 1 ]
+then
+
+if [ ! -e $OBJROOT ]
+then
+mkdir -p $OBJROOT
+echo "Copying $PREBUILT_OBJROOT in $OBJROOT"
+pax -rw . $OBJROOT
+else
+echo "Remove $OBJROOT before calling seed_objroot"
+exit 1
+fi
+
+else
+
+if [ ! -e $OBJROOT/$2 ]
+then
+mkdir -p $OBJROOT/$2
+echo "Copying $PREBUILT_OBJROOT/$2 in $OBJROOT/$2"
+pax -rw $2 $OBJROOT
+RELEASE_OBJ=`echo $2 | sed 's/DEBUG/RELEASE/'`
+if [ $1 != $RELEASE_OBJ -a ! -e $OBJROOT/$RELEASE_OBJ ]
+then
+mkdir -p $OBJROOT/$RELEASE_OBJ
+echo "Copying $PREBUILT_OBJROOT/$RELEASE_OBJ in $OBJROOT/$RELEASE_OBJ"
+pax -rw $RELEASE_OBJ $OBJROOT
+fi
+
+else
+echo "remove $OBJROOT/$2 before calling seed_objroot"
+exit 1
+fi
+
+fi
+
+if [ ! -e $OBJROOT/EXPORT_HDRS ]
+then
+echo "Copying $PREBUILT_OBJROOT/EXPORT_HDRS in $OBJROOT/EXPORT_HDRS"
+mkdir -p $OBJROOT/EXPORT_HDRS
+pax -rw EXPORT_HDRS $OBJROOT
+fi
+
+cd $OBJROOT
+if [ -e RELEASE_PPC/osfmk/RELEASE/config.RELEASE_PPC ]
+then
+PREV_OBJROOT=`grep objectdir RELEASE_PPC/osfmk/RELEASE/config.RELEASE_PPC | cut -f 2 -d\" |
+ sed 's|/RELEASE_PPC/osfmk/RELEASE||'`
+fi
+if [ -z $PREV_OBJROOT -a -e DEBUG_PPC/osfmk/DEBUG/config.DEBUG_PPC ]
+then
+  PREV_OBJROOT=`grep objectdir DEBUG_PPC/osfmk/DEBUG/config.DEBUG_PPC | cut -f 2 -d\" |
+   sed 's|/DEBUG_PPC/osfmk/DEBUG||'`
+fi
+if [ -z $PREV_OBJROOT -a -e RELEASE_I386/osfmk/RELEASE/config.RELEASE_I386 ]
+then
+  PREV_OBJROOT=`grep objectdir RELEASE_I386/osfmk/RELEASE/config.RELEASE_I386 | cut -f 2 -d\" |
+   sed 's|/RELEASE_I386/osfmk/RELEASE||'`
+fi
+if [ -z $PREV_OBJROOT -a -e DEBUG_I386/osfmk/DEBUG/config.DEBUG_I386 ]
+then
+  PREV_OBJROOT=`grep objectdir DEBUG_I386/osfmk/DEBUG/config.DEBUG_I386 | cut -f 2 -d\" |
+   sed 's|/DEBUG_I386/osfmk/DEBUG||'`
+fi
+if [ -z $PREV_OBJROOT ]
+then
+  echo "PREV_OBJROOT not found"
+  exit 1
+fi
+
+if [ -e RELEASE_PPC/osfmk/RELEASE/config.RELEASE_PPC ]
+then
+PREV_SRCROOT=`grep sourcedir RELEASE_PPC/osfmk/RELEASE/config.RELEASE_PPC | cut -f 2 -d\"` 
+fi
+if [ -z $PREV_SRCROOT -a -e DEBUG_PPC/osfmk/DEBUG/config.DEBUG_PPC ]
+then
+  PREV_SRCROOT=`grep sourcedir DEBUG_PPC/osfmk/DEBUG/config.DEBUG_PPC | cut -f 2 -d\"` 
+fi
+if [ -z $PREV_SRCROOT -a -e RELEASE_I386/osfmk/RELEASE/config.RELEASE_I386 ]
+then
+PREV_SRCROOT=`grep sourcedir RELEASE_I386/osfmk/RELEASE/config.RELEASE_I386 | cut -f 2 -d\"` 
+fi
+if [ -z $PREV_SRCROOT -a -e DEBUG_I386/osfmk/DEBUG/config.DEBUG_I386 ]
+then
+  PREV_SRCROOT=`grep sourcedir DEBUG_I386/osfmk/DEBUG/config.DEBUG_I386 | cut -f 2 -d\"` 
+fi
+if [ -z $PREV_SRCROOT ]
+then
+  echo "PREV_SRCROOT not found"
+  exit 1
+fi
+
+echo "s|$PREV_OBJROOT|$OBJROOT|" > prebuild.sed
+echo "s|$PREV_SRCROOT|$SRCROOT|" >>prebuild.sed
+
+for i in `find . -name Makedep -print`
+do
+sed -f prebuild.sed $i > $i.tmp
+rm $i
+mv $i.tmp $i
+done
+rm -f `find $OBJROOT -name Makefile -print` prebuild.sed

@@ -1,0 +1,96 @@
+OPTIONS/show_space		optional show_space
+OPTIONS/gdb			optional gdb
+OPTIONS/iplmeas			optional iplmeas
+OPTIONS/fb			optional fb
+
+
+#machdep/i386/unix_signal.c	standard
+#machdep/i386/unix_startup.c	standard
+
+OPTIONS/debug			optional debug
+
+
+OPTIONS/gprof		optional gprof
+OPTIONS/db_machine_commands	optional db_machine_commands
+OPTIONS/dynamic_num_nodes	optional dynamic_num_nodes
+OPTIONS/vtoc_compat	optional vtoc_compat
+OPTIONS/fddi		optional fddi
+OPTIONS/mp_v1_1		optional mp_v1_1
+
+
+
+osfmk/i386/hi_res_clock_map.c 	optional hi_res_clock
+
+osfmk/i386/pmap.c		standard
+osfmk/i386/read_fault.c	standard
+
+
+osfmk/ddb/db_aout.c		optional mach_kdb
+
+osfmk/i386/bsd_i386.c		optional mach_bsd
+osfmk/i386/machdep_call.c	optional mach_bsd
+
+osfmk/i386/_setjmp.s		standard
+osfmk/i386/ast_check.c	optional ipsc386
+osfmk/i386/bcopy.s		standard
+osfmk/i386/bzero.s		standard
+osfmk/i386/cpu.c		standard
+osfmk/i386/cpuid.c		standard
+osfmk/i386/db_disasm.c	optional mach_kdb
+osfmk/i386/db_interface.c	optional mach_kdb
+osfmk/i386/db_trace.c		optional mach_kdb
+osfmk/i386/fpu.c		standard
+osfmk/i386/gcc.s		standard
+osfmk/i386/gdt.c		standard
+osfmk/i386/hardclock.c	standard
+osfmk/i386/i386_lock.s	standard
+osfmk/i386/idt.s		standard
+osfmk/i386/io_emulate.c	standard
+osfmk/i386/io_map.c		standard
+osfmk/i386/iopb.c		standard
+osfmk/i386/ktss.c		standard
+osfmk/i386/ldt.c		standard
+osfmk/i386/loose_ends.c	standard
+osfmk/i386/locore.s	standard
+osfmk/i386/start.s	standard
+osfmk/i386/cswitch.s	standard
+osfmk/i386/machine_routines.c		standard
+osfmk/i386/machine_routines_asm.s	standard
+osfmk/i386/mp_desc.c		optional mp_v1_1
+osfmk/i386/ntoh.s		standard
+osfmk/i386/pcb.c		standard
+osfmk/i386/phys.c		standard
+osfmk/i386/rtclock.c		standard
+osfmk/i386/trap.c		standard
+osfmk/i386/user_ldt.c		standard
+
+osfmk/i386/AT386/autoconf.c	standard
+osfmk/i386/AT386/bbclock.c	standard
+osfmk/i386/AT386/conf.c		standard
+osfmk/i386/AT386/himem.c	optional himem
+osfmk/i386/AT386/model_dep.c	standard
+osfmk/i386/AT386/physmem.c	optional physmem device-driver
+
+osfmk/i386/AT386/mp/mp.c		optional mp_v1_1
+osfmk/i386/AT386/mp/mp_v1_1.c	optional mp_v1_1
+
+osfmk/i386/AT386/video_console.c		standard
+
+osfmk/kern/etap_map.c		optional etap device-driver
+
+osfmk/profiling/i386/profile-md.c	optional gprof profiling-routine
+osfmk/profiling/i386/profile-asm.s	optional gprof profiling-routine
+osfmk/profiling/profile-kgmon.c	optional gprof profiling-routine
+osfmk/profiling/profile-mk.c		optional gprof profiling-routine
+
+osfmk/kdp/ml/i386/kdp_machdep.c	optional	mach_kdp
+
+osfmk/kdp/ml/i386/kdp_vm.c	optional	mach_kdp
+
+#
+# Dummy devices for now
+osfmk/OPTIONS/ln		optional ln
+osfmk/OPTIONS/eisa		optional eisa
+osfmk/OPTIONS/himem		optional himem
+osfmk/OPTIONS/ec		optional ec
+osfmk/OPTIONS/hi_res_clock	optional hi_res_clock

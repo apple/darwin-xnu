@@ -1,0 +1,76 @@
+/*********************************************************************
+* free_all()
+*
+* Empties all memory regions so that their entire buffer space is
+* considered unused. This allows the client to restart without
+* having to reallocate memory for the allocator regions, which helps
+* performance when this package gets used serially.
+*********************************************************************/
+__private_extern__
+void free_all(void) {
+    malloc_region * cur_region;
+
+    queue_iterate(&malloc_region_list, cur_region, malloc_region *, links) {
+
+        queue_init(&cur_region->block_list);
+        cur_region->free_size = cur_region->region_size - sizeof(malloc_region);
+        cur_region->free_address = &cur_region->buffer;
+
+    }
+
+    queue_init(&sorted_free_block_list);
+
+#ifdef CLIENT_DEBUG
+    current_block_total = 0;
+#endif CLIENT_DEBUG
+
+    return;
+
+} /* free_all() */
+
+
+/*********************************************************************
+* malloc_size()
+*
+*********************************************************************/
+__private_extern__
+size_t malloc_size(void * address) {
+    malloc_region * found_region = NULL;
+    malloc_block  * found_block = NULL;
+
+    malloc_find_block(address, &found_block, &found_region);
+
+
+   /* If we couldn't find the requested block, 
+    * the caller is in error so return 0.
+    */
+    if (found_block == NULL) {
+        return 0;
+        // FIXME: panic?
+    }
+
+    return (found_block->block_size - sizeof(malloc_block));
+
+} /* malloc_size() */
+
+
+/*********************************************************************
+* malloc_is_valid()
+*
+*********************************************************************/
+__private_extern__
+int malloc_is_valid(void * address){
+    malloc_region * found_region = NULL;
+    malloc_block  * found_block = NULL;
+
+    malloc_find_block(address, &found_block, &found_region);
+
+    if (found_block != NULL) {
+        return 1;
+    } else {
+        return 0;
+    }
+
+} /* malloc_is_valid() */
+
+

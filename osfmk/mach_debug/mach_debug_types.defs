@@ -1,0 +1,194 @@
+/*
+ * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ *
+ * @APPLE_LICENSE_HEADER_START@
+ * 
+ * The contents of this file constitute Original Code as defined in and
+ * are subject to the Apple Public Source License Version 1.1 (the
+ * "License").  You may not use this file except in compliance with the
+ * License.  Please obtain a copy of the License at
+ * http://www.apple.com/publicsource and read it before using this file.
+ * 
+ * This Original Code and all software distributed under the License are
+ * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
+ * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
+ * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
+ * License for the specific language governing rights and limitations
+ * under the License.
+ * 
+ * @APPLE_LICENSE_HEADER_END@
+ */
+/*
+ * @OSF_COPYRIGHT@
+ */
+/*
+ * HISTORY
+ * 
+ * Revision 1.1.1.1  1998/09/22 21:05:45  wsanchez
+ * Import of Mac OS X kernel (~semeria)
+ *
+ * Revision 1.1.1.1  1998/03/07 02:26:17  wsanchez
+ * Import of OSF Mach kernel (~mburg)
+ *
+ * Revision 1.2.18.1  1996/10/03  17:27:31  emcmanus
+ * 	Brought ipc_info_name_t, ipc_info_tree_name_t, and vm_info_object_t
+ * 	sizes into sync with the C reality.  We should not have to do this
+ * 	by hand, but that's MiG for you.  [CR 2244]
+ * 	[1996/09/17  16:35:23  emcmanus]
+ *
+ * Revision 1.2.10.2  1995/01/06  19:52:44  devrcs
+ * 	mk6 CR668 - 1.3b26 merge
+ * 	* Revision 1.2.3.5  1994/05/06  18:56:40  tmt
+ * 	Merged with osc1.3b19
+ * 	Merge Alpha changes into osc1.312b source code.
+ * 	64 bits cleanup.
+ * 	* End1.3merge
+ * 	[1994/11/02  18:32:27  dwm]
+ * 
+ * Revision 1.2.10.1  1994/09/23  02:45:37  ezf
+ * 	change marker to not FREE
+ * 	[1994/09/22  21:44:13  ezf]
+ * 
+ * Revision 1.2.3.3  1993/08/05  19:09:52  jeffc
+ * 	CR9508 - delete dead Mach3 code. Remove MACH_IPC_TYPED
+ * 	[1993/08/04  17:30:38  jeffc]
+ * 
+ * Revision 1.2.3.2  1993/06/09  02:44:48  gm
+ * 	Added to OSF/1 R1.3 from NMK15.0.
+ * 	[1993/06/02  21:19:07  jeffc]
+ * 
+ * Revision 1.2  1993/04/19  16:41:28  devrcs
+ * 	Merge untyped ipc:
+ * 	Introducing new MIG syntax for Untyped IPC (via compile option
+ * 	MACH_IPC_TYPED)
+ * 	[1993/02/17  23:46:03  travos]
+ * 
+ * Revision 1.1  1992/09/30  02:23:07  robert
+ * 	Initial revision
+ * 
+ * $EndLog$
+ */
+/* CMU_HIST */
+/*
+ * Revision 2.9.4.2  92/04/08  15:45:11  jeffreyh
+ * 	Back out changes from TRUNK. Now back to a Revision 2.9 base.
+ * 	[92/04/07  10:30:25  jeffreyh]
+ * 
+ * Revision 2.9  91/07/31  17:55:42  dbg
+ * 	Add symtab_name_t.
+ * 	[91/07/30  17:11:38  dbg]
+ * 
+ * Revision 2.8  91/05/14  17:03:43  mrt
+ * 	Correcting copyright
+ * 
+ * Revision 2.7  91/02/05  17:37:59  mrt
+ * 	Changed to new Mach copyright
+ * 	[91/02/01  17:28:58  mrt]
+ * 
+ * Revision 2.6  91/01/08  16:18:08  rpd
+ * 	Changed ipc_info_bucket_t to hash_info_bucket_t.
+ * 	[91/01/02            rpd]
+ * 
+ * Revision 2.5  90/10/25  14:46:18  rwd
+ * 	Updated vm_info_region_t size.
+ * 	[90/10/17            rpd]
+ * 
+ * Revision 2.4  90/06/19  23:00:23  rpd
+ * 	Adjusted zone_info_t definition to account for new collectable field.
+ * 	[90/06/05            rpd]
+ * 
+ * Revision 2.3  90/06/02  15:00:39  rpd
+ * 	Added vm_info_region_t, vm_info_object_t.
+ * 	[90/05/02  14:47:17  rpd]
+ * 
+ * 	Converted to new IPC.
+ * 	[90/03/26  22:43:24  rpd]
+ * 
+ * Revision 2.2  90/05/03  15:48:49  dbg
+ * 	Remove callout types.  Add zone_name, zone_info, page_address
+ * 	types.
+ * 	[90/04/06            dbg]
+ * 
+ * Revision 2.1  89/08/03  17:20:25  rwd
+ * Created.
+ * 
+ * Revision 2.4  89/02/25  18:43:41  gm0w
+ * 	Changes for cleanup.
+ * 
+ * Revision 2.3  89/01/15  16:32:43  rpd
+ * 	Updated includes for the new mach/ directory.
+ * 	[89/01/15  15:11:33  rpd]
+ * 
+ * Revision 2.2  89/01/12  08:00:34  rpd
+ * 	Created.
+ * 	[89/01/12  04:21:37  rpd]
+ * 
+ */
+/* CMU_ENDHIST */
+/* 
+ * Mach Operating System
+ * Copyright (c) 1991,1990,1989,1988 Carnegie Mellon University
+ * All Rights Reserved.
+ * 
+ * Permission to use, copy, modify and distribute this software and its
+ * documentation is hereby granted, provided that both the copyright
+ * notice and this permission notice appear in all copies of the
+ * software, derivative works or modified versions, and any portions
+ * thereof, and that both notices appear in supporting documentation.
+ * 
+ * CARNEGIE MELLON ALLOWS FREE USE OF THIS SOFTWARE IN ITS "AS IS"
+ * CONDITION.  CARNEGIE MELLON DISCLAIMS ANY LIABILITY OF ANY KIND FOR
+ * ANY DAMAGES WHATSOEVER RESULTING FROM THE USE OF THIS SOFTWARE.
+ * 
+ * Carnegie Mellon requests users of this software to return to
+ * 
+ *  Software Distribution Coordinator  or  Software.Distribution@CS.CMU.EDU
+ *  School of Computer Science
+ *  Carnegie Mellon University
+ *  Pittsburgh PA 15213-3890
+ * 
+ * any improvements or extensions that they make and grant Carnegie Mellon
+ * the rights to redistribute these changes.
+ */
+/*
+ */
+/*
+ *	Mach kernel debugging interface type declarations
+ */
+
+#ifndef	_MACH_DEBUG_MACH_DEBUG_TYPES_DEFS_
+#define _MACH_DEBUG_MACH_DEBUG_TYPES_DEFS_
+
+#include <mach/std_types.defs>
+
+type zone_name_t = struct[80] of char;
+type zone_name_array_t = array[] of zone_name_t;
+
+type zone_info_t = struct[9] of integer_t;
+type zone_info_array_t = array[] of zone_info_t;
+
+type hash_info_bucket_t = struct[1] of natural_t;
+type hash_info_bucket_array_t = array[] of hash_info_bucket_t;
+
+type ipc_info_space_t = struct[6] of natural_t;
+
+type ipc_info_name_t = struct[7] of natural_t;
+type ipc_info_name_array_t = array[] of ipc_info_name_t;
+
+type ipc_info_tree_name_t = struct[9] of natural_t;
+type ipc_info_tree_name_array_t = array[] of ipc_info_tree_name_t;
+
+type vm_info_region_t = struct[10] of natural_t;
+type vm_info_region_64_t = struct[11] of natural_t;
+
+type vm_info_object_t = struct[21] of natural_t;
+type vm_info_object_array_t = ^array[] of vm_info_object_t;
+
+type page_address_array_t = ^array[] of integer_t;
+
+type symtab_name_t = c_string[*:32];
+
+import <mach_debug/mach_debug_types.h>;
+
+#endif	/* _MACH_DEBUG_MACH_DEBUG_TYPES_DEFS_ */

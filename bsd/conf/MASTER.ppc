@@ -1,0 +1,87 @@
+#
+# Mach Operating System
+# Copyright (c) 1986 Carnegie-Mellon University
+# All rights reserved.  The CMU software License Agreement
+# specifies the terms and conditions for use and redistribution.
+#  
+######################################################################
+#
+#  Master Apple configuration file (see the master machine independent
+#  configuration file for a description of the file format).
+#
+######################################################################
+#
+#  Apple (PSEUDO-)DEVICES (select any combination)
+#	ex   = Excelan EXOS 202 Ethernet interface
+#	ip   = Interphase V/SMD 3200 disk controller
+#	od   = Canon OMD-1 Optical Disk
+#	rd   = RAM disk
+#	sd   = SCSI disk
+#	sg   = Generic SCSI Device
+#	st   = SCSI tape
+#	fd   = Floppy Disk 
+#	en   = Integrated Ethernet controller
+#	dsp  = DSP560001 digital signal processor
+#	iplmeas = ipl time measurement
+#	nextp = NeXT Laser Printer
+#	sound = sound I/O
+#	vol   = removable volume support device
+#	venip = virtual Ethernet/IP network interface
+#	zs    = Serial device
+#
+#  MULTIPROCESSOR SUPPORT (select exactly one)
+#	multi = support 4 processors
+#	uni   = supports single processor
+#
+#  SPECIAL CHARACTERISTICS (select any combination)
+#	gdb        = GNU kernel debugger
+#	posix_kern = POSIX support
+#
+#  CPU TYPE (select exactly one)
+#	NeXT   = FIXME
+#
+######################################################################
+#  
+#  Standard Apple Research Configurations:
+#  -------- ----- -------- ---------------
+#
+#  RELEASE = [ppc mach medium vol pst gdb simple_clock kernstack nfsclient nfsserver quota fifo fdesc union  ffs cd9660 compat_43 revfs noprofiling hfs volfs devfs synthfs netat mrouting ipdivert ipfirewall]
+#  RELEASE_TRACE = [RELEASE kdebug]
+#  PROFILE = [ppc mach medium vol pst gdb debug simple_clock kernstack nfsclient nfsserver quota fifo fdesc union ffs cd9660 compat_43 revfs profile hfs volfs devfs synthfs netat mrouting ipdivert ipfirewall]
+#  DEBUG = [ppc mach medium vol pst gdb debug simple_clock kernstack nfsclient nfsserver quota fifo fdesc union ffs cd9660 compat_43 revfs profiling hfs volfs devfs synthfs netat mrouting mach_assert ipdivert ipfirewall]
+#  DEBUG_TRACE = [DEBUG kdebug]
+#
+######################################################################
+#
+machine		"ppc"						# <ppc>
+cpu		"ppc"						# <ppc>
+
+options		GDB		# GNU kernel debugger		# <gdb>
+options		DEBUG		# general debugging code	# <debug>
+options		SHOW_SPACE	# print size of structures	# <debug>
+options		EVENTMETER	# event meter support		# <debug>
+options		FP_EMUL		# floating point emulation	# <fp>
+options		UXPR		# user-level XPR package	# <uxpr>
+config		mach_kernel	swap generic			# <mach>
+
+options		EVENT						# <event>
+
+#
+#  Ipl measurement system
+#
+pseudo-device	iplmeas						# <iplmeas>
+
+#
+#  NFS measurement system
+#
+pseudo-device	nfsmeas						# <nfsmeas>
+
+#
+#  Removable Volume support
+#
+pseudo-device	vol						# <vol>
+
+#
+#  Point-to-Point Protocol support
+#
+pseudo-device ppp 2						# <ppp>

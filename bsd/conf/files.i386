@@ -1,0 +1,20 @@
+OPTIONS/show_space		optional show_space
+OPTIONS/gdb			optional gdb
+OPTIONS/iplmeas			optional iplmeas
+
+
+bsd/dev/i386/conf.c		standard
+bsd/dev/i386/cons.c		standard
+bsd/dev/i386/mem.c		standard
+bsd/dev/i386/km.c		standard
+bsd/dev/i386/kern_machdep.c	standard
+bsd/dev/i386/memmove.c		standard
+bsd/dev/i386/stubs.c		standard
+bsd/dev/i386/lock_stubs.c	standard
+bsd/dev/i386/unix_signal.c	standard
+bsd/dev/i386/unix_startup.c	standard
+
+
+bsd/kern/bsd_stubs.c		standard
+bsd/netinet/in_cksum.c		standard
+

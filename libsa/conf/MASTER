@@ -1,0 +1,55 @@
+#
+# Mach Operating System
+# Copyright (c) 1986 Carnegie-Mellon University
+# All rights reserved.  The CMU software License Agreement
+# specifies the terms and conditions for use and redistribution.
+#  
+#######################################################################
+#
+#	Master machine independent configuration file.
+#
+#	Specific configuration files are created based on this and
+#	the machine specific master file using the doconf script.
+#
+#	Any changes to the master configuration files will affect all
+#	other configuration files based upon it.
+#
+#######################################################################
+#
+#	To build a configuration, execute "doconf <configuration>."
+#	Configurations are specified in the "Configurations:" section
+#	of the MASTER and MASTER.* files as follows:
+#
+#	<configuration> = [ <attribute0> <attribute1> ... <attributeN> ]
+#
+#	Lines in the MASTER and MASTER.* files are selected based on
+#	the attribute selector list, found in a comment at the end of
+#	the line.  This is a list of attributes separated by commas.
+#	The "!" operator selects the line if none of the attributes are
+#	specified.
+#
+#	For example:
+#
+#	<foo,bar>	selects a line if "foo" or "bar" are specified.
+#	<!foo,bar>	selects a line if neither "foo" nor "bar" is
+#			specified.
+#
+#	Lines with no attributes specified are selected for all
+#	configurations.
+#
+#######################################################################
+#  
+#  Standard Mach Research Configurations:
+#  -------- ---- -------- ---------------
+#
+#  These are the default configurations that can be used by most sites.
+#  They are used internally by the Mach project.
+#
+#  LIBSA      = [debug]
+#
+#######################################################################
+#
+ident		LIBSA
+
+options		KDEBUG		# kernel tracing		# <kdebug>
+

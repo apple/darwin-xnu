@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist SYSTEM "file://localhost/System/Library/DTDs/PropertyList.dtd">
+<plist version="0.9">
+<dict>
+    <key>Module</key>
+    <dict>
+        <key>Version</key>
+            <string>0.1</string>
+        <key>Name</key>
+            <string>test1</string>
+        <key>File</key>
+            <string>test1</string>
+        <key>Initialize</key>
+            <string>test1_start</string>
+        <key>Finalize</key>
+            <string>test1_stop</string>
+        <key>Target</key>
+            <string>Kernel</string>
+        <key>Format</key>
+            <string>mach-o</string>
+    </dict>
+</dict>
+</plist>
+

@@ -1,0 +1,15 @@
+OPTIONS/gprof                    optional gprof
+
+pexpert/i386/pe_bootargs.c            standard
+pexpert/i386/pe_init.c                standard
+pexpert/i386/pe_identify_machine.c    standard
+pexpert/i386/pe_interrupt.c           standard
+pexpert/i386/pe_kprintf.c             standard
+pexpert/i386/fakePPCDeviceTree.c      standard
+
+# Graphics and text console support.
+pexpert/i386/text_console.c           standard
+pexpert/i386/kdasm.s                  standard
+
+# Polled-mode keyboard driver.
+pexpert/i386/kd.c                     standard

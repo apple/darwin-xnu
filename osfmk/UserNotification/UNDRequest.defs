@@ -1,0 +1,113 @@
+/*
+ * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ *
+ * @APPLE_LICENSE_HEADER_START@
+ *
+ * The contents of this file constitute Original Code as defined in and
+ * are subject to the Apple Public Source License Version 1.1 (the
+ * "License").  You may not use this file except in compliance with the
+ * License.  Please obtain a copy of the License at
+ * http://www.apple.com/publicsource and read it before using this file.
+ *
+ * This Original Code and all software distributed under the License are
+ * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
+ * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
+ * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
+ * License for the specific language governing rights and limitations
+ * under the License.
+ *
+ * @APPLE_LICENSE_HEADER_END@
+ */
+
+subsystem
+#if KERNEL_USER
+	KernelUser
+#endif /* KERNEL_USER */
+	UNDRequest 6000;
+
+#include <mach/std_types.defs>
+#include <UserNotification/UNDTypes.defs>
+
+
+/*
+--	Messages sent by the UserNotification Client to the Server
+*/
+
+/* Execution information */
+simpleroutine UNDExecute_rpc(
+				server: UNDServerRef;
+			in	executionPath: UNDPath;
+			in	uid: int;
+			in 	gid: int);
+
+/* Bundle notice and bundle alert */
+
+simpleroutine UNDDisplayNoticeFromBundle_rpc(
+				server: UNDServerRef;
+			in	reply: UNDReplyRef;
+			in	bundlePath: UNDPath;
+			in	fileName: UNDPath;
+			in	fileExtension: UNDPath;
+			in	messageKey: UNDKey);
+
+simpleroutine UNDDisplayAlertFromBundle_rpc(
+				server: UNDServerRef;
+			in	reply: UNDReplyRef;
+			in	bundlePath: UNDPath;
+			in	fileName: UNDKey;
+			in	fileExtension: UNDKey;
+			in	messageKey: UNDKey);
+
+simpleroutine UNDDisplayCustomFromBundle_rpc(
+				server: UNDServerRef;
+			in	reply: UNDReplyRef;
+			in	bundlePath: UNDPath;
+			in	fileName: UNDKey;
+			in	fileExtension: UNDKey;
+			in	messageKey: UNDKey;
+			in	tokenKey: UNDPath);
+
+simpleroutine UNDDisplayCustomFromDictionary_rpc(
+				server: UNDServerRef;
+			in	reply: UNDReplyRef;
+			in	data: xmlData);
+
+simpleroutine UNDCancelNotification_rpc(
+				server: UNDServerRef;
+			in	userLandNotificationKey: int);
+
+/*
+ * Just pops up a notice with a single OK button and the label and message
+ * specified below.  As such, there is no acknowledgement from the server.
+ */
+simpleroutine UNDDisplayNoticeSimple_rpc(
+				server: UNDServerRef;
+                        in	timeout: int;
+                        in	flags: unsigned;
+                        in	iconPath:UNDLabel;
+                        in	soundPath:UNDLabel;
+                        in	localizationPath:UNDLabel;
+			in	header: UNDLabel;
+			in	message: UNDMessage;
+                        in	defaultButtonTitle:UNDLabel);
+
+/*
+ * A synchronous routine to display an alert.  This will wait for the
+ * result to come back.  As this can take an exceedingly long time to
+ * complete (and will block the calling thread for the duration) great
+ * care should be exercised before using this method.
+ */
+routine UNDDisplayAlertSimple_rpc(
+				server: UNDServerRef;
+                        in	timeout: int;
+                        in	flags: unsigned;
+                        in	iconPath:UNDLabel;
+                        in	soundPath:UNDLabel;
+                        in	localizationPath:UNDLabel;
+			in	header: UNDLabel;
+			in	message: UNDMessage;
+                        in	defaultButtonTitle:UNDLabel;
+                        in	alternateButtonTitle:UNDLabel;
+                        in	otherButtonTitle:UNDLabel;
+			out	response: int);

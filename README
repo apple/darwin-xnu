@@ -1,0 +1,122 @@
+How to build XNU:
+
+1) Setup your environment:
+
+  Create and go to your sandbox directory </sandbox/my_xnu>
+
+  $ cd </sandbox/my_xnu>
+
+  Extract the xnu project from cvs:
+
+  $ cvs co -r <xnu-tag> xnu
+
+  where <xnu-tag> must be replaced by the matching xnu tag for
+  the xnu project level.
+
+  Go to the top directory in your XNU project.
+
+  $ cd </sandbox/my_xnu>/xnu
+
+  If you are using a sh-style shell, run the following command:
+    $ . SETUP/setup.sh
+
+  If you are using a csh-style shell, run the following command:
+    % source SETUP/setup.csh
+
+  This will define the following environmental variables:
+    SRCROOT, OBJROOT, DSTROOT, SYMROOT
+
+2) Export the Component Header Files
+
+  From the top directory, run:
+
+  $ make exporthdrs
+
+  This exports the component header files in the $OBJROOT/EXPORT_HDRS 
+  directory.
+
+3) Build all the Components
+
+  From the top directory. run:
+
+    $ make all
+
+  This builds all the components for all architectures defined in 
+  ARCH_CONFIGS and for all kernel configurations defined in KERNEL_CONFIGS.
+  By default, ARCH_CONFIGS contains one architecture, the build machine 
+  architecture, and KERNEL_CONFIGS is set to build for RELEASE.
+  This will also create a bootable image, mach_kernel,  and a kernel binary 
+  with symbols, mach_kernel.sys.
+
+  Example:
+    $(OBJROOT)/RELEASE_PPC/osfmk/RELEASE/osfmk.o: pre-linked object for osfmk component
+    $(OBJROOT)/RELEASE_PPC/mach_kernel: bootable image
+
+4) Building a Component
+
+  From a component top directory:
+
+    $ make all
+
+  This builds a component for all architectures defined in ARCH_CONFIGS 
+  and for all kernel configurations defined in KERNEL_CONFIGS. 
+  By default, ARCH_CONFIGS contains one architecture, the build machine 
+  architecture, and KERNEL_CONFIGS is set to build for RELEASE .
+
+  WARNING: If a component header file has been modified, you will have to do 
+           the above procedures 3 and 4.
+
+  Example:
+    $(OBJROOT)/RELEASE_PPC/osfmk/RELEASE/osfmk.o: pre-linked object for osfmk component
+
+  From the component top directory:
+
+    $ make mach_kernel
+
+  This includes your component in the bootable image, mach_kernel,  and 
+  in the kernel binary with symbols, mach_kernel.sys.
+
+5) Building DEBUG
+
+  Define KERNEL_CONFIGS to DEBUG in your environment or when running a 
+  make command.  Then, apply procedures 4, 5
+
+  $ make KERNEL_CONFIGS=DEBUG all
+
+  or
+
+  $ export KERNEL_CONFIGS=DEBUG
+  $ make all
+
+  Example:
+    $(OBJROOT)/DEBUG_PPC/osfmk/DEBUG/osfmk.o: pre-linked object for osfmk component
+    $(OBJROOT)/DEBUG_PPC/mach_kernel: bootable image
+
+6) Building fat
+
+  Define ARCH_CONFIGS in your environment or when running a make command.
+  Apply procedures 3, 4, 5
+
+  $ make ARCH_CONFIGS="PPC I386" exporthdrs all
+
+  or
+
+  $ export ARCH_CONFIGS="PPC I386"
+  $ make exporthdrs all
+
+7) Build check before integration
+
+  From the top directory, run:
+
+    $ ~rc/bin/buildit . -arch ppc -arch i386 -noinstallsrc -nosum
+
+8) Creating tags and cscope
+
+  Set up your build environment as per instructions in 2a
+
+  From the top directory, run:
+
+    $ make tags		# this will build ctags and etags
+
+    $ make cscope	# this will build cscope database
+

@@ -1,0 +1,715 @@
+#
+# Copyright (c) 1995, 1997-1998 Apple Computer, Inc. All Rights Reserved.
+# Copyright (c) 1992, 1993
+#	The Regents of the University of California.  All rights reserved.
+#
+# Redistribution and use in source and binary forms, with or without
+# modification, are permitted provided that the following conditions
+# are met:
+# 1. Redistributions of source code must retain the above copyright
+#    notice, this list of conditions and the following disclaimer.
+# 2. Redistributions in binary form must reproduce the above copyright
+#    notice, this list of conditions and the following disclaimer in the
+#    documentation and/or other materials provided with the distribution.
+# 3. All advertising materials mentioning features or use of this software
+#    must display the following acknowledgement:
+#	This product includes software developed by the University of
+#	California, Berkeley and its contributors.
+# 4. Neither the name of the University nor the names of its contributors
+#    may be used to endorse or promote products derived from this software
+#    without specific prior written permission.
+#
+# THIS SOFTWARE IS PROVIDED BY THE REGENTS AND CONTRIBUTORS ``AS IS'' AND
+# ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+# IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
+# ARE DISCLAIMED.  IN NO EVENT SHALL THE REGENTS OR CONTRIBUTORS BE LIABLE
+# FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
+# DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS
+# OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION)
+# HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT
+# LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
+# OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
+# SUCH DAMAGE.
+#
+#	@(#)vnode_if.src	8.12 (Berkeley) 5/14/95
+#
+
+#
+# Above each of the vop descriptors is a specification of the locking
+# protocol used by each vop call.  The first column is the name of
+# the variable, the remaining three columns are in, out and error
+# respectively.  The "in" column defines the lock state on input,
+# the "out" column defines the state on succesful return, and the
+# "error" column defines the locking state on error exit.
+#
+# The locking value can take the following values:
+# L: locked.
+# U: unlocked/
+# -: not applicable.  vnode does not yet (or no longer) exists.
+# =: the same on input and output, may be either L or U.
+# X: locked if not nil.
+#
+
+# If a vnode operation if likely to generate buffer cache IO
+# for file data, add the word "UBC" on the line containing the
+# name of the vnode operation. The word "UBC" must be the third
+# word on the line, right after "{".
+
+
+#
+#% lookup	dvp	L ? ?
+#% lookup	vpp	- L -
+#
+# XXX - the lookup locking protocol defies simple description and depends
+#	on the flags and operation fields in the (cnp) structure.  Note
+#	ebly that *vpp may equal dvp and both may be locked.
+#
+vop_lookup {
+	IN struct vnode *dvp;
+	INOUT struct vnode **vpp;
+	IN struct componentname *cnp;
+};
+
+#
+#% cachedlookup	dvp	L ? ?
+#% cachedlookup	vpp	- L -
+#
+# This must be an exact copy of lookup.  See kern/vfs_cache.c for details.
+#
+vop_cachedlookup {
+	IN struct vnode *dvp;
+	INOUT struct vnode **vpp;
+	IN struct componentname *cnp;
+};
+
+#
+#% create	dvp	L L L
+#% create	vpp	- L -
+#
+vop_create {
+	IN WILLRELE struct vnode *dvp;
+	OUT struct vnode **vpp;
+	IN struct componentname *cnp;
+	IN struct vattr *vap;
+};
+
+#
+#% whiteout	dvp	L L L
+#% whiteout	cnp	- - -
+#% whiteout	flag	- - -
+#
+vop_whiteout {
+	IN WILLRELE struct vnode *dvp;
+	IN struct componentname *cnp;
+	IN int flags;
+};
+
+#
+#% mknod	dvp	L U U
+#% mknod	vpp	- X -
+#
+vop_mknod {
+	IN WILLRELE struct vnode *dvp;
+	OUT WILLRELE struct vnode **vpp;
+	IN struct componentname *cnp;
+	IN struct vattr *vap;
+};
+
+#
+#% mkcomplex	dvp	L U U
+#% mkcomplex	vpp	- X -
+#
+vop_mkcomplex {
+	IN WILLRELE struct vnode *dvp;
+	OUT WILLRELE struct vnode **vpp;
+	IN struct componentname *cnp;
+	IN struct vattr *vap;
+	IN u_long type;
+};
+
+#
+#% open		vp	L L L
+#
+vop_open {
+	IN struct vnode *vp;
+	IN int mode;
+	IN struct ucred *cred;
+	IN struct proc *p;
+};
+
+#
+#% close	vp	U U U
+#
+vop_close {
+	IN struct vnode *vp;
+	IN int fflag;
+	IN struct ucred *cred;
+	IN struct proc *p;
+};
+
+#
+#% access	vp	L L L
+#
+vop_access {
+	IN struct vnode *vp;
+	IN int mode;
+	IN struct ucred *cred;
+	IN struct proc *p;
+};
+
+#
+#% getattr	vp	= = =
+#
+vop_getattr {
+	IN struct vnode *vp;
+	IN struct vattr *vap;
+	IN struct ucred *cred;
+	IN struct proc *p;
+};
+
+#
+#% setattr	vp	L L L
+#
+vop_setattr {
+	IN struct vnode *vp;
+	IN struct vattr *vap;
+	IN struct ucred *cred;
+	IN struct proc *p;
+};
+
+#
+#% getattrlist	vp	= = =
+#
+vop_getattrlist {
+	IN struct vnode *vp;
+	IN struct attrlist *alist;
+	INOUT struct uio *uio;
+	IN struct ucred *cred;
+	IN struct proc *p;
+};
+
+#
+#% setattrlist	vp	L L L
+#
+vop_setattrlist {
+	IN struct vnode *vp;
+	IN struct attrlist *alist;
+	INOUT struct uio *uio;
+	IN struct ucred *cred;
+	IN struct proc *p;
+};
+
+#
+#% read		vp	L L L
+#
+vop_read { UBC
+	IN struct vnode *vp;
+	INOUT struct uio *uio;
+	IN int ioflag;
+	IN struct ucred *cred;
+};
+
+#
+#% write	vp	L L L
+#
+vop_write { UBC
+	IN struct vnode *vp;
+	INOUT struct uio *uio;
+	IN int ioflag;
+	IN struct ucred *cred;
+};
+
+#
+#% lease	vp	= = =
+#
+vop_lease {
+	IN struct vnode *vp;
+	IN struct proc *p;
+	IN struct ucred *cred;
+	IN int flag;
+};
+
+#
+#% ioctl	vp	U U U
+#
+vop_ioctl {
+	IN struct vnode *vp;
+	IN u_long command;
+	IN caddr_t data;
+	IN int fflag;
+	IN struct ucred *cred;
+	IN struct proc *p;
+};
+
+#
+#% select	vp	U U U
+#
+# Needs work?  (fflags)
+#
+vop_select {
+	IN struct vnode *vp;
+	IN int which;
+	IN int fflags;
+	IN struct ucred *cred;
+	IN struct proc *p;
+};
+
+#
+#% exchange fvp		L L L
+#% exchange tvp		L L L
+#
+vop_exchange {
+	IN struct vnode *fvp;
+	IN struct vnode *tvp;
+	IN struct ucred *cred;
+	IN struct proc *p;
+};
+
+#
+#% revoke	vp	U U U
+#
+vop_revoke {
+	IN struct vnode *vp;
+	IN int flags;
+};
+
+#
+# XXX - not used
+#
+vop_mmap {
+	IN struct vnode *vp;
+	IN int fflags;
+	IN struct ucred *cred;
+	IN struct proc *p;
+};
+
+#
+#% fsync	vp	L L L
+#
+vop_fsync { UBC
+	IN struct vnode *vp;
+	IN struct ucred *cred;
+	IN int waitfor;
+	IN struct proc *p;
+};
+
+#
+# XXX - not used
+# Needs work: Is newoff right?  What's it mean?
+#
+vop_seek {
+	IN struct vnode *vp;
+	IN off_t oldoff;
+	IN off_t newoff;
+	IN struct ucred *cred;
+};
+
+#
+#% remove	dvp	L U U
+#% remove	vp	L U U
+#
+vop_remove {
+	IN WILLRELE struct vnode *dvp;
+	IN WILLRELE struct vnode *vp;
+	IN struct componentname *cnp;
+};
+
+#
+#% link		vp	U U U
+#% link		tdvp	L U U
+#
+vop_link {
+	IN WILLRELE struct vnode *vp;
+	IN struct vnode *tdvp;
+	IN struct componentname *cnp;
+};
+
+#
+#% rename	fdvp	U U U
+#% rename	fvp	U U U
+#% rename	tdvp	L U U
+#% rename	tvp	X U U
+#
+vop_rename {
+	IN WILLRELE struct vnode *fdvp;
+	IN WILLRELE struct vnode *fvp;
+	IN struct componentname *fcnp;
+	IN WILLRELE struct vnode *tdvp;
+	IN WILLRELE struct vnode *tvp;
+	IN struct componentname *tcnp;
+};
+
+#
+#% mkdir	dvp	L U U
+#% mkdir	vpp	- L -
+#
+vop_mkdir {
+	IN WILLRELE struct vnode *dvp;
+	OUT struct vnode **vpp;
+	IN struct componentname *cnp;
+	IN struct vattr *vap;
+};
+
+#
+#% rmdir	dvp	L U U
+#% rmdir	vp	L U U
+#
+vop_rmdir {
+	IN WILLRELE struct vnode *dvp;
+	IN WILLRELE struct vnode *vp;
+	IN struct componentname *cnp;
+};
+
+#
+#% symlink	dvp	L U U
+#% symlink	vpp	- U -
+#
+# XXX - note that the return vnode has already been VRELE'ed
+#	by the filesystem layer.  To use it you must use vget,
+#	possibly with a further namei.
+#
+vop_symlink {
+	IN WILLRELE struct vnode *dvp;
+	OUT WILLRELE struct vnode **vpp;
+	IN struct componentname *cnp;
+	IN struct vattr *vap;
+	IN char *target;
+};
+
+#
+#% readdir	vp	L L L
+#
+vop_readdir {
+	IN struct vnode *vp;
+	INOUT struct uio *uio;
+	IN struct ucred *cred;
+	INOUT int *eofflag;
+	OUT int *ncookies;
+	INOUT u_long **cookies;
+};
+
+#
+#% readdirattr	vp	L L L
+#
+vop_readdirattr {
+	IN struct vnode *vp;
+	IN struct attrlist *alist;
+	INOUT struct uio *uio;
+	IN u_long maxcount;
+	IN u_long options;
+	OUT u_long *newstate;
+	OUT int *eofflag;
+	OUT u_long *actualcount;
+	OUT u_long **cookies;
+	IN struct ucred *cred;
+};
+
+#
+#% readlink	vp	L L L
+#
+vop_readlink {
+	IN struct vnode *vp;
+	INOUT struct uio *uio;
+	IN struct ucred *cred;
+};
+
+#
+#% abortop	dvp	= = =
+#
+vop_abortop {
+	IN struct vnode *dvp;
+	IN struct componentname *cnp;
+};
+
+#
+#% inactive	vp	L U U
+#
+vop_inactive {
+	IN struct vnode *vp;
+	IN struct proc *p;
+};
+
+#
+#% reclaim	vp	U U U
+#
+vop_reclaim {
+	IN struct vnode *vp;
+	IN struct proc *p;
+};
+
+#
+#% lock		vp	U L U
+#
+vop_lock {
+	IN struct vnode *vp;
+	IN int flags;
+	IN struct proc *p;
+};
+
+#
+#% unlock	vp	L U L
+#
+vop_unlock {
+	IN struct vnode *vp;
+	IN int flags;
+	IN struct proc *p;
+};
+
+#
+#% bmap		vp	L L L
+#% bmap		vpp	- U -
+#
+vop_bmap {
+	IN struct vnode *vp;
+	IN daddr_t bn;
+	OUT struct vnode **vpp;
+	IN daddr_t *bnp;
+	OUT int *runp;
+};
+
+#
+# Needs work: no vp?
+#
+#vop_strategy {
+#	IN struct buf *bp;
+#};
+
+#
+#% print	vp	= = =
+#
+vop_print {
+	IN struct vnode *vp;
+};
+
+#
+#% islocked	vp	= = =
+#
+vop_islocked {
+	IN struct vnode *vp;
+};
+
+#
+#% pathconf	vp	L L L
+#
+vop_pathconf {
+	IN struct vnode *vp;
+	IN int name;
+	OUT register_t *retval;
+};
+
+#
+#% advlock	vp	U U U
+#
+vop_advlock {
+	IN struct vnode *vp;
+	IN caddr_t id;
+	IN int op;
+	IN struct flock *fl;
+	IN int flags;
+};
+
+#
+#% blkatoff	vp	L L L
+#
+vop_blkatoff {
+	IN struct vnode *vp;
+	IN off_t offset;
+	OUT char **res;
+	OUT struct buf **bpp;
+};
+
+#
+#% valloc	pvp	L L L
+#
+vop_valloc {
+	IN struct vnode *pvp;
+	IN int mode;
+	IN struct ucred *cred;
+	OUT struct vnode **vpp;
+};
+
+#
+#% reallocblks	vp	L L L
+#
+vop_reallocblks {
+	IN struct vnode *vp;
+	IN struct cluster_save *buflist;
+};
+
+#
+#% vfree	pvp	L L L
+#
+vop_vfree {
+	IN struct vnode *pvp;
+	IN ino_t ino;
+	IN int mode;
+};
+
+#
+#% truncate	vp	L L L
+#
+vop_truncate { UBC
+	IN struct vnode *vp;
+	IN off_t length;
+	IN int flags;
+	IN struct ucred *cred;
+	IN struct proc *p;
+};
+
+#
+#% allocate	vp	L L L
+#
+vop_allocate {
+	IN struct vnode *vp;
+	IN off_t length;
+	IN u_int32_t flags;
+	OUT off_t *bytesallocated;
+	IN struct ucred *cred;
+	IN struct proc *p;
+};
+
+#
+#% update	vp	L L L
+#
+vop_update {
+	IN struct vnode *vp;
+	IN struct timeval *access;
+	IN struct timeval *modify;
+	IN int waitfor;
+};
+
+#
+#% pgrd		vp	L L L
+#
+vop_pgrd {
+	IN struct vnode *vp;
+	INOUT struct uio *uio;
+	IN struct ucred *cred;
+};
+
+#
+#% pgwr		vp	L L L
+#
+vop_pgwr {
+	IN struct vnode *vp;
+	INOUT struct uio *uio;
+	IN struct ucred *cred;
+	IN vm_offset_t	offset;
+};
+
+#
+# Needs work: no vp?
+#
+#vop_bwrite {
+#	IN struct buf *bp;
+#};
+
+#
+#% pagein	vp	= = =
+#
+vop_pagein {
+	IN struct vnode *vp;
+	IN upl_t pl;
+	IN vm_offset_t pl_offset;
+	IN off_t f_offset;
+	IN size_t size;
+	IN struct ucred *cred;
+	IN int flags;
+};
+
+#
+#% pageout	vp	= = =
+#
+vop_pageout {
+	IN struct vnode *vp;
+	IN upl_t pl;
+	IN vm_offset_t pl_offset;
+	IN off_t f_offset;
+	IN size_t size;
+	IN struct ucred *cred;
+	IN int flags;
+};
+
+#
+#% devblocksize	vp	= = =
+#
+vop_devblocksize {
+	IN struct vnode *vp;
+	OUT register_t *retval;
+};
+
+#
+#% searchfs	vp	L L L
+#
+vop_searchfs {
+	IN struct vnode *vp;
+	IN void *searchparams1;
+	IN void *searchparams2;
+	IN struct attrlist *searchattrs;
+	IN u_long maxmatches;
+	IN struct timeval *timelimit;
+	OUT struct attrlist *returnattrs;
+	OUT u_long *nummatches;
+	IN u_long scriptcode;
+	IN u_long options;
+	INOUT struct uio *uio;
+	INOUT struct searchstate *searchstate;
+};
+
+#
+#% copyfile fvp U U U
+#% copyfile tdvp L U U
+#% copyfile tvp X U U
+#
+vop_copyfile {
+    IN WILLRELE struct vnode *fvp;
+    IN WILLRELE struct vnode *tdvp;
+    IN WILLRELE struct vnode *tvp;
+    IN struct componentname *tcnp;
+    IN int mode;
+    IN int flags;
+};
+
+#
+#% blktooff vp = = =
+#
+# Given a logical block number for a vnode
+# return file offset
+#
+vop_blktooff {
+	IN struct vnode *vp;
+	IN daddr_t lblkno;
+	OUT off_t *offset;
+};
+
+#
+#% offtoblk vp = = =
+#
+# Given a file offset for a vnode
+# return logical block number
+#
+vop_offtoblk {
+	IN struct vnode *vp;
+	IN off_t offset;
+	OUT daddr_t *lblkno;
+};
+
+#
+#% cmap vp L L L
+#
+# Given a file offset and size of IO for a vnode
+# return physical block number and bytes physically
+# contiguous at that physical block.
+#
+# An offset into the physical block may be returned [optional]
+# This is needed to support 4K/1K UFS on the devices with 2K
+# sector size.
+vop_cmap {
+	IN struct vnode *vp;
+	IN off_t foffset;
+	IN size_t size;
+	OUT daddr_t *bpn;
+	OUT size_t *run;
+	OUT void *poff;
+};
+

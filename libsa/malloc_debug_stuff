@@ -1,0 +1,294 @@
+#ifdef DEBUG
+static void print_region_list(void);
+static int check_block_list(queue_entry * block_list, malloc_block * new_block);
+#endif DEBUG
+
+
+void print_region_list(void) {
+    unsigned int i;
+    malloc_region * cur_region;
+
+    cur_region = (malloc_region *)&malloc_region_list;
+    printf("First region:\n");
+    printf("curr: 0x%8x    prev: 0x%8x    next: 0x%8x\n",
+        (unsigned int)cur_region,
+        (unsigned int)(cur_region->links.prev),
+        (unsigned int)(cur_region->links.next));
+
+    printf("Region list contents:\n");
+
+    i = 0;
+    queue_iterate(&malloc_region_list, cur_region, malloc_region *, links) {
+        if (i > num_regions) {
+            break;
+        }
+        printf("curr: 0x%8x    prev: 0x%8x    next: 0x%8x\n",
+            (unsigned int)cur_region,
+            (unsigned int)(cur_region->links.prev),
+            (unsigned int)(cur_region->links.next));
+        i++;
+    }
+    return;
+}
+
+void print_block_list(queue_entry * block_list) {
+    malloc_block * cur_block;
+
+    queue_iterate(block_list, cur_block, malloc_block *, links) {
+        printf("curr: 0x%8x    prev: 0x%8x    next: 0x%8x\n",
+            (unsigned int)cur_block,
+            (unsigned int)(cur_block->links.prev),
+            (unsigned int)(cur_block->links.next));
+    }
+    return;
+}
+
+int break_here(void) {
+    return 0;
+}
+
+
+int check_block_list(queue_entry * block_list, malloc_block * new_block) {
+    void * end_of_new_block;
+    malloc_block * cur_block;
+    unsigned int i = 0;
+
+    end_of_new_block = new_block + sizeof(malloc_block);
+
+    queue_iterate(block_list, cur_block, malloc_block *, links) {
+        malloc_region * cur_region;
+        void * end_of_region;
+        void * scratch_block;
+        void * end_of_block;
+
+        cur_region = cur_block->region;
+        end_of_region = cur_region + cur_region->region_size;
+        scratch_block = cur_block;
+        end_of_block = scratch_block + sizeof(malloc_block);
+
+        if ( ((void *)new_block >= scratch_block && (void *)new_block <= end_of_block) ||
+             (end_of_new_block >= scratch_block && end_of_new_block <= end_of_block) ||
+             (scratch_block >= (void *)new_block && scratch_block <= end_of_new_block) ||
+             (end_of_block >= (void *)new_block && end_of_block <= end_of_new_block) ) {
+
+            printf("New block %p overlaps existing block %p.\n",
+                new_block, scratch_block);
+            break_here();
+            exit(1);
+            return 1;
+
+        }
+
+        if (scratch_block < (void *)cur_region ||
+            end_of_block >= end_of_region) {
+
+            printf("Found invalid block link at block %d.\n", i);
+            printf("curr: 0x%8x    prev: 0x%8x    next: 0x%8x\n",
+                (unsigned int)cur_block,
+                (unsigned int)(cur_block->links.prev),
+                (unsigned int)(cur_block->links.next));
+            break_here();
+            exit(1);
+            return 1;
+        }
+
+        scratch_block = (malloc_block *)cur_block->links.prev;
+        end_of_block = scratch_block + sizeof(malloc_block);
+
+        if (scratch_block < (void *)cur_region ||
+            end_of_block >= end_of_region) {
+
+            printf("Found invalid block link at block %d.\n", i);
+            printf("curr: 0x%8x    prev: 0x%8x    next: 0x%8x\n",
+                (unsigned int)cur_block,
+                (unsigned int)(cur_block->links.prev),
+                (unsigned int)(cur_block->links.next));
+            break_here();
+            exit(1);
+            return 1;
+        }
+
+        scratch_block = (malloc_block *)cur_block->links.next;
+        end_of_block = scratch_block + sizeof(malloc_block);
+
+        if (scratch_block < (void *)cur_region ||
+            end_of_block >= end_of_region) {
+            printf("Found invalid block link at block %d.\n", i);
+
+            printf("curr: 0x%8x    prev: 0x%8x    next: 0x%8x\n",
+                (unsigned int)cur_block,
+                (unsigned int)(cur_block->links.prev),
+                (unsigned int)(cur_block->links.next));
+            break_here();
+            exit(1);
+            return 1;
+        }
+
+        i++;
+    }
+    return 0;
+}
+
+
+int malloc_sanity_check(void) {
+    unsigned int i;
+    malloc_region * cur_region;
+
+    i = 0;
+    queue_iterate(&malloc_region_list, cur_region, malloc_region *, links) {
+        if (i > num_regions) {
+            return 0;
+        }
+        if (cur_region->links.next != &malloc_region_list &&
+            cur_region->links.next < (queue_entry *)cur_region) {
+            printf("inconsistency detected\n");
+            return 0;
+        }
+        i++;
+    }
+    return 1;
+}
+
+
+/*********************************************************************
+* malloc_hiwat()
+*
+* Returns the maximum amount of memory ever reserved by this package.
+*********************************************************************/
+size_t malloc_hiwat() {
+    return malloc_hiwater_mark;
+}
+
+void malloc_clear_hiwat(void) {
+    malloc_hiwater_mark = 0;
+    return;
+}
+
+size_t malloc_current_usage(void)
+{
+    return current_block_total;
+}
+
+size_t malloc_region_usage(void) {
+    size_t total = 0;
+    malloc_region * cur_region;
+
+    queue_iterate(&malloc_region_list, cur_region, malloc_region *, links) {
+        total += cur_region->region_size - sizeof(malloc_region);
+
+    }
+    return total;
+}
+
+
+double malloc_peak_usage(void)
+{
+    return peak_usage;
+}
+
+double malloc_min_usage(void)
+{
+    return min_usage;
+}
+
+size_t malloc_unused(void) {
+    size_t total = 0;
+    malloc_region * cur_region;
+    malloc_block * cur_block;
+
+    queue_iterate(&malloc_region_list, cur_region, malloc_region *, links) {
+        total += cur_region->free_size;
+
+    }
+    queue_iterate(&sorted_free_block_list, cur_block, malloc_block *, links) {
+        total += cur_block->block_size;
+    }
+
+    return total;
+}
+
+double malloc_current_efficiency(void)
+{
+    double efficiency = 0.0;
+    double total_block_size = 0;
+    double total_request_size = 0;
+    unsigned long total_block_sizeL = 0;
+    unsigned long total_request_sizeL = 0;
+    size_t discrepancy;
+    size_t max_discrepancy = 0;
+    malloc_region * cur_region;
+    malloc_block * cur_block;
+
+    queue_iterate(&malloc_region_list, cur_region, malloc_region *, links) {
+        queue_iterate(&cur_region->block_list, cur_block, malloc_block *, links) {
+            size_t cur_block_size = cur_block->block_size - sizeof(malloc_block);
+            total_block_sizeL += cur_block_size;
+            total_request_sizeL += cur_block->request_size;
+            total_block_size += (double)cur_block_size;
+            total_request_size += (double)cur_block->request_size;
+            discrepancy = cur_block_size - cur_block->request_size;
+            if (discrepancy > max_discrepancy) {
+                max_discrepancy = discrepancy;
+            }
+        }
+    }
+
+    if (total_block_size > 0) {
+        efficiency = (double)total_request_size / (double)total_block_size;
+    } else {
+        efficiency = 1.0;
+    }
+
+    printf("requested %.2f, actual %.2f\n", total_request_size, total_block_size);
+    printf("requested %ld, actual %ld\n", total_request_sizeL, total_block_sizeL);
+    printf("max discrepancy %ld\n", max_discrepancy);
+
+    return efficiency;
+}
+
+
+/*********************************************************************
+* malloc_report()
+*
+* Print stats on allocated regions and blocks.
+*********************************************************************/
+void malloc_report(void) {
+    malloc_region * cur_region;
+    malloc_block  * cur_block;
+    size_t          total_block_size;
+
+    queue_iterate(&malloc_region_list, cur_region, malloc_region *, links) {
+
+        printf("VM Region, size, free: ");
+        printf("%p, %d, %d\n", cur_region,
+            cur_region->region_size,
+            cur_region->free_size);
+
+        total_block_size = 0;
+
+        queue_iterate(&cur_region->block_list, cur_block, malloc_block *, links) {
+
+            total_block_size += cur_block->block_size;
+            printf("    Block address, size: %p,  %ld (%ld)\n",
+                cur_block->buffer, cur_block->block_size,
+                cur_block->block_size - sizeof(malloc_block));
+            printf("          Block content: %s\n",
+                (char *)cur_block->buffer);
+        }
+        printf("  Total blocks size: %ld\n", total_block_size);
+#if 0
+        queue_iterate(&cur_region->free_list, cur_block, malloc_block *, links) {
+
+            total_block_size += cur_block->block_size;
+            printf("    Free block address, size: %p,  %ld (%ld)\n",
+                cur_block->buffer, cur_block->block_size,
+                cur_block->block_size - sizeof(malloc_block));
+        }
+#endif 0
+    }
+
+    printf("High water mark: %ld\n", malloc_hiwater_mark);
+
+    return;
+} /* malloc_report() */
+

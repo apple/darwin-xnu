@@ -1,0 +1,118 @@
+Note: The following comments are from the original FreeBSD 3.1 README
+
+this file is: /sys/miscfs/devfs/README
+
+to enable: add
+options	DEVFS
+
+to your config file..
+expect it to be highly useless for a while,
+as the only devices that register themselves are the floppy,
+the pcaudio stuff, speaker, null,mem,zero,io,kmem.
+
+it works like this:
+
+There is a tree of nodes that describe the layout of the DEVFS as seen by
+the drivers.. they add nodes to this tree. This is called the 'back' layer
+for reasons that will become obvious in a second. Think of it as a
+BLUEPRINT of the DEVFS tree. Each back node has associated with it 
+a "devnode" struct, that holds information about the device
+(or directory) and a pointer to the vnode if one has been associated 
+with that node. The back node itself can be considered to be 
+a directory entry, and contains the default name of the device,
+and a link to the directory that holds it. It is sometimes refered
+to in the code as the dev_name. The devnode can be considered the inode.
+
+When you mount the devfs somewhere (you can mount it multiple times in
+multiple places), a front layer is created that contains a tree of 'front'
+nodes.
+
+Think of this as a Transparency, layed over the top of the blueprint.
+(or possibly a photocopy).
+
+The front and back nodes are identical in type, but the back nodes
+are reserved for kernel use only, and are protected from the user.
+The back plane has a mount structure and all that stuff, but it is in
+fact not really mounted. (and is thus not reachable via namei).
+Internal kernel routines can open devices in this plane
+even if the external devfs has not been mounted yet :)
+(e.g. to find the root device)
+
+To start with there is a 1:1 relationship between the front nodes
+and the backing nodes, however once the front plane has been created
+the nodes can be moved around within that plane (or deleted).
+Think of this as the ability to revise a transparency...
+the blueprint is untouched.
+
+There is a "devnode" struct associated with each front note also.
+Front nodes that refer to devices, use the same "devnode" struct that is used 
+by their associated backing node, so that multiple front nodes that
+point to the same device will use the same "devnode" struct, and through
+that, the same vnode, ops, modification times, flags, owner and group.
+Front nodes representing directories and symlinks have their own
+"devnode" structs, and may therefore differ. (have different vnodes)
+i.e. if you have two devfs trees mounted, you can change the 
+directories in one without changing the other. 
+e.g. remove or rename nodes
+
+Multiple mountings are like multiple transparencies,
+each showing through to the original blueprint.
+
+Information that is to be shared between these mounts is stored
+in the 'backing' node for that object.  Once you have erased 'front'
+object, there is no memory of where the backing object was, and
+except for the possibility of searching the entire backing tree
+for the node with the correct major/minor/type, I don't see that
+it is easily recovered.. Particularly as there will eventually be
+(I hope) devices that go direct from the backing node to the driver
+without going via the cdevsw table.. they may not even have
+major/minor numbers.
+
+I see 'mount -u' as a possible solution to recovering a broken dev tree.
+(though umount+mount would do the same)
+
+Because non device nodes (directories and symlinks) have their own
+"devnode" structs on each layer, these may have different
+flags, owners, and contents on each layer.
+e.g. if you have a chroot tree like erf.tfs.com has, you
+may want different permissions or owners on the chroot mount of the DEVFS
+than you want in the real one. You might also want to delete some sensitive
+devices from the chroot tree.
+
+Directories also have backing nodes but there is nothing to stop
+the user from removing a front node from the directory front node.
+(except permissions of course).  This is because the front directory
+nodes keep their own records as to which front nodes are members
+of that directory and do not refer to their original backing node
+for this information.
+
+The front nodes may be moved to other directories (including
+directories) however this does not break the linkage between the
+backing nodes and the front nodes. The backing node never moves. If
+a driver decides to remove a device from the backing tree, the FS
+code follows the links to all the front nodes linked to that backing
+node, and deletes them, no matter where they've been moved to.
+(active vnodes are redirected to point to the deadfs).
+
+If a directory has been moved, and a new backing node is inserted
+into its own back node, the new front node will appear in that front
+directory, even though it's been moved, because the directory that
+gets the front node is found via the links and not by name.
+
+a mount -u might be considered to be a request to 'refresh' the
+plane that controls to the mount being updated.. that would have the
+effect of 're-propogating' through any backing nodes that find they
+have no front nodes in that plane.
+
+
+NOTES FOR RELEASE 1.2
+1/ this is very preliminary
+2/ the routines have greatly simplified since release 1.1
+(I guess the break did me good :)
+3/ many features are not present yet..
+e.g. symlinks, a comprehensive registration interface (only a crude one)
+ability to unlink and mv nodes.
+4/ I'm pretty sure my use of vnodes is bad and it may be 'losing'
+them, or alternatively, corrupting things.. I need a vnode specialist
+to look at this.
+

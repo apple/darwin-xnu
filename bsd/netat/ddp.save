@@ -1,0 +1,903 @@
+/* From ddp.c:
+
+	ddp_shrink_hdr()
+	ddp_extend_hdr()
+
+	Saved from xnu/bsd/bsd/netat/ddp.c on 4/14/99.
+*/
+
+#ifdef NOT_USED
+/* This routine shrinks the ddp header from long to short, 
+ * It also prepends ALAP header and fills up some of the
+ * fields as appropriate.
+ */
+static	at_ddp_short_t	*ddp_shrink_hdr (mp)
+register gbuf_t	*mp;
+{
+	register at_ddp_t	*ddp;
+	register at_ddp_short_t	*ddp_short;
+	register at_llap_hdr_t	*llap;
+	gbuf_t *newmp;
+
+	if ((newmp = (gbuf_t *)gbuf_copym((gbuf_t *) mp)) == (gbuf_t *)NULL)
+	    return ((at_ddp_short_t *)NULL);
+	gbuf_freem(mp);
+	mp = newmp;
+
+	ddp = (at_ddp_t *)gbuf_rptr(mp);
+	gbuf_rinc(mp,((DDP_X_HDR_SIZE - DDP_HDR_SIZE) - LLAP_HDR_SIZE));
+	llap = (at_llap_hdr_t *)gbuf_rptr(mp);
+	ddp_short = (at_ddp_short_t *)(gbuf_rptr(mp) + LLAP_HDR_SIZE);
+
+	llap->destination = ddp->dst_node;
+	llap->type = LLAP_TYPE_DDP;
+	ddp_short->length = ddp->length - (DDP_X_HDR_SIZE - DDP_HDR_SIZE);
+	ddp_short->unused = 0;
+	return ((at_ddp_short_t *)mp);
+}
+
+
+/* mp points to message of the form {llap, short ddp, ...}.
+ * Get rid of llap, extend ddp header to make it of the form
+ * {extended ddp, ... }
+ */
+static	gbuf_t	*ddp_extend_hdr(mp)
+register gbuf_t	*mp;
+{
+	register at_llap_hdr_t	*llap;
+	register at_ddp_short_t	*ddp_short;
+	register at_ddp_t	*ddp;
+	char		buf[DDP_HDR_SIZE + LLAP_HDR_SIZE];
+	gbuf_t		*m1, *m2;
+
+	/* We need to remove the llap header from the packet and extend the
+	 * short DDP header in to a long one.  5 bytes of additional space
+	 * is required in effect, but we can not afford to put these 5 bytes
+	 * in a separate buffer, since the ddp buffer would end up being
+	 * fragmented into two pieces, which is a no-no.  So, we first get
+	 * rid of the llap and ddp short headers and then add the extended
+	 * header.
+	 */
+	
+	/* Assuming that the llap and ddp short headers are placed next
+	 * to each other in the same buffer
+	 */
+	bcopy(gbuf_rptr(mp), buf, LLAP_HDR_SIZE + DDP_HDR_SIZE);
+	m1 = ddp_adjmsg(mp, LLAP_HDR_SIZE+DDP_HDR_SIZE) ? mp : 0;
+
+	/* If the message did not contain any ddp data bytes, then m would
+	 * be NULL at this point... and we can't just grow a NULL message, 
+	 * we need to ALLOC a new one.
+	 */
+	if (m1) {
+		if ((m2 = (gbuf_t *)ddp_growmsg(m1, -DDP_X_HDR_SIZE)) == NULL) {
+			dPrintf(D_M_DDP, D_L_WARNING,
+				("Dropping packet - no bufs to extend hdr"));
+			at_ddp_stats.rcv_dropped_nobuf++;
+			gbuf_freem(m1);
+			return(NULL);
+		}
+	} else
+		/* Original message mp has already been freed by ddp_adjmsg if we
+		 * managed to arrive here... this case occurs only when the
+		 * message mp did not contain any ddp data bytes, only lap and
+		 * ddp headers
+		 */
+		if ((m2 = gbuf_alloc(AT_WR_OFFSET+DDP_X_HDR_SIZE, PRI_MED)) == NULL) {
+			dPrintf(D_M_DDP,D_L_WARNING,
+				("Packet (no data) dropped - no bufs to extend hdr"));
+			at_ddp_stats.rcv_dropped_nobuf++;
+			return(NULL);
+		} else {
+			gbuf_rinc(m2,AT_WR_OFFSET);
+			gbuf_wset(m2,DDP_X_HDR_SIZE);
+		}
+	
+	/* By the time we arrive here, m2 points to message of the form
+	 * {Extended DDP, ... }
+	 * mp and m1 are either non-existent or irrelevant.
+	 */
+	ddp = (at_ddp_t *)gbuf_rptr(m2);
+	llap = (at_llap_hdr_t *)buf;
+	ddp_short = (at_ddp_short_t *)(buf + LLAP_HDR_SIZE);
+
+	ddp->unused = ddp->hopcount = 0;
+	ddp->length = ddp_short->length + DDP_X_HDR_SIZE - DDP_HDR_SIZE;
+	UAS_ASSIGN(ddp->checksum, 0);
+	NET_NET(ddp->dst_net, ifID_home->ifThisNode.atalk_net);
+	NET_NET(ddp->src_net, ifID_home->ifThisNode.atalk_net);
+	ddp->src_node = llap->source;
+	ddp->dst_node = llap->destination;
+	ddp->dst_socket = ddp_short->dst_socket;
+	ddp->src_socket = ddp_short->src_socket;
+	ddp->type = ddp_short->type;
+	return (m2);
+}
+#endif
+
+From sys_dep.c:
+
+#ifdef _AIX  /* This AIX code (to the end of this file) is no longer supported. */
+
+int ATsocket(proto)  /* AIX version */
+	int proto;
+{
+	int err, rc = -1;
+
+	if (sys_ATsocket)
+		rc = (*sys_ATsocket)(proto, &err, 0);
+	else
+		err = ENXIO;
+	if (err)
+		setuerror(err);
+	return rc;
+}
+
+int ATgetmsg(fd, ctlptr, datptr, flags)  /* AIX version */
+	int fd;
+	void *ctlptr;
+	void *datptr;
+	int *flags;
+{
+	int err, rc = -1;
+
+	if (sys_ATgetmsg)
+		rc = (*sys_ATgetmsg)(fd, ctlptr, datptr, flags, &err, 0);
+	else
+		err = ENXIO;
+	if (err)
+		setuerror(err);
+	return rc;
+}
+
+int ATputmsg(fd, ctlptr, datptr, flags)  /* AIX version */
+	int fd;
+	void *ctlptr;
+	void *datptr;
+	int flags;
+{
+	int err, rc = -1;
+
+	if (sys_ATputmsg)
+		rc = (*sys_ATputmsg)(fd, ctlptr, datptr, flags, &err, 0);
+	else
+		err = ENXIO;
+	if (err)
+		setuerror(err);
+	return rc;
+}
+
+int ATPsndreq(fd, buf, len, nowait)   /* AIX version */
+	int fd;
+	unsigned char *buf;
+	int len;
+	int nowait;
+{
+	int err, rc = -1;
+
+	if (sys_ATPsndreq)
+		rc = (*sys_ATPsndreq)(fd, buf, len, nowait, &err, 0);
+	else
+		err = ENXIO;
+	if (err)
+		setuerror(err);
+	return rc;
+}
+
+int ATPsndrsp(fd, respbuff, resplen, datalen)   /* AIX version */
+	int fd;
+	unsigned char *respbuff;
+	int resplen;
+	int datalen;
+{
+	int err, rc = -1;
+
+	if (sys_ATPsndrsp)
+		rc = (*sys_ATPsndrsp)(fd, respbuff, resplen, datalen, &err, 0);
+	else
+		err = ENXIO;
+	if (err)
+		setuerror(err);
+	return rc;
+}
+
+int ATPgetreq(fd, buf, buflen)  /* AIX version */
+	int fd;
+	unsigned char *buf;
+	int buflen;
+{
+	int err, rc = -1;
+
+	if (sys_ATPgetreq)
+		rc = (*sys_ATPgetreq)(fd, buf, buflen, &err, 0);
+	else
+		err = ENXIO;
+	if (err)
+		setuerror(err);
+	return rc;
+}
+
+int ATPgetrsp(fd, bdsp)  /* AIX version */
+	int fd;
+	unsigned char *bdsp;
+{
+	int err, rc = -1;
+
+	if (sys_ATPgetrsp)
+		rc = (*sys_ATPgetrsp)(fd, bdsp, &err, 0);
+	else
+		err = ENXIO;
+	if (err)
+		setuerror(err);
+	return rc;
+}
+
+void *atalk_kalloc(size)   /* AIX version */
+	int size;
+{
+     return (void *)xmalloc(size, 2, pinned_heap);
+}
+
+void atalk_kfree(buf)   /* AIX version */
+	void *buf;
+{
+	xmfree(buf, pinned_heap);
+}
+
+int atalk_closeref(fp, grefp)   /* AIX version */
+	struct file *fp;
+	gref_t **grefp;
+{
+	*grefp = (gref_t *)fp->f_data;
+	fp->f_data = 0;
+	return 0;
+}
+
+int atalk_openref(gref, retfd, proc)  /* AIX version */
+	gref_t *gref;
+	int *retfd;
+	void *proc;
+{
+extern int _ATrw(), _ATioctl(), _ATselect(), _ATclose(), _ATstat();
+static struct fileops fileops = {_ATrw, _ATioctl, _ATselect, _ATclose, _ATstat};
+	int err, fd;
+	struct file *fp;
+	void *crp;
+
+	crp = (void *)crref();
+#ifdef _AIX
+	if ((err = ufdcreate(FREAD|FWRITE,
+			&fileops, 0, DTYPE_OTHER, &fd, crp)) != 0)
+#else
+	if ((err = ufdcreate(FREAD|FWRITE,
+			&fileops, 0, DTYPE_ATALK, &fd, crp)) != 0)
+#endif
+		return err;
+	*retfd = fd;
+	fp = U.U_ufd[fd].fp;
+	fp->f_data = (void *)gref;
+	gref->next = (void *)fp;
+	return 0;
+}
+
+int atalk_getref(fp, fd, grefp, proc)  /* AIX version */
+	struct file *fp;
+	int fd;
+	gref_t **grefp;
+	struct proc *proc;
+{
+	if (fp == 0) {
+		if ((fd < 0) || (fd > U.U_maxofile) || ((fp = U.U_ufd[fd].fp) == 0)) {
+			*grefp = (gref_t *)0;
+			return EBADF;
+		}
+	}
+	if ((*grefp = (gref_t *)fp->f_data) == 0)
+		return EBADF;
+	return 0;
+}
+
+gbuf_t *gbuf_alloc(size, pri)  /* AIX version */
+	int size;
+	int pri;
+{
+	gbuf_t *m;
+
+	m = (size > MHLEN) ? (gbuf_t *)m_getclustm(M_DONTWAIT, MSG_DATA, size)
+		: (gbuf_t *)m_gethdr(M_DONTWAIT, MSG_DATA);
+#ifdef APPLETALK_DEBUG
+	kprintf("gbuf_alloc: for size = %d m=%x\n", size, m);
+#endif
+	gbuf_next(m) = 0;
+	gbuf_cont(m) = 0;
+	gbuf_wset(m,0);
+	return m;
+}
+
+void gbuf_freeb(m)  /* AIX version */
+	gbuf_t *m;
+{
+	if (m)
+		m_free(m);
+}
+
+static struct trb *trb_freehead = 0;
+static struct trb *trb_freetail = 0;
+static struct trb *trb_pendhead = 0;
+static int trb_cnt = 0;
+static atlock_t trb_lock;
+
+static void atalk_rem_timeoutcf()  /* AIX version */
+{
+	register int s;
+	register struct trb *trb;
+	register struct trb *tmp_freehead, *tmp_pendhead;
+
+	ATDISABLE(s, trb_lock);
+	tmp_freehead = trb_freehead;
+	trb_freehead = 0;
+	tmp_pendhead = trb_pendhead;
+	trb_pendhead = 0;
+	trb_cnt = 0;
+	ATENABLE(s, trb_lock);
+	while ((trb = tmp_pendhead) != 0) {
+		tmp_pendhead = trb->to_next;
+		while (tstop(trb));
+		tfree(trb);
+	}
+	while ((trb = tmp_freehead) != 0) {
+		tmp_freehead = trb->to_next;
+		tfree(trb);
+	}
+	dPrintf(D_M_ATP,D_L_ERROR, "atalk: timer stopped!\n",0,0,0,0,0);
+}
+
+static void atalk_timeoutcf(cnt)  /* AIX version */
+	int cnt;
+{
+	register int i;
+	register struct trb *trb;
+
+	if (trb_freehead == 0) {
+		for (i=0; i < cnt-1; i++) {
+			trb = (struct trb *)talloc();
+			trb->to_next = trb_freehead;
+			trb_freehead = trb;
+			if (!i) trb_freetail = trb;
+			trb_cnt++;
+		}
+	}
+	ATLOCKINIT(trb_lock);
+}
+
+static void atalk_clock(trb)  /* AIX version */
+	register struct trb *trb;
+{
+	register int s;
+	register struct trb *next;
+	void (*tof)();
+	void *arg;
+
+	ATDISABLE(s, trb_lock);
+	if (trb_pendhead && trb->func) {
+		/*
+		 * remove the timeout from the pending queue
+		 */
+		if (trb_pendhead == trb)
+			trb_pendhead = trb->to_next;
+		else {
+			for (next=trb_pendhead; next->to_next; next=next->to_next) {
+				if (next->to_next == trb) {
+					next->to_next = trb->to_next;
+					trb->func = 0;
+					break;
+				}
+			}
+			if (trb->func) {
+				dPrintf(D_M_ATP,D_L_WARNING,
+					"atalk_clock: %d,%x,%x\n", trb_cnt,trb,trb_pendhead,0,0);
+				/*
+				 * we have not found the trb in the pending list - something
+				 * has gone wrong here. maybe the trb has been returned to
+				 * the free list; in which case, we should simply ignore
+				 * this timeout event!
+				 */
+				for (next=trb_freehead; next; next=next->to_next) {
+					if (next == trb)
+					{
+						ATENABLE(s, trb_lock);
+						return;
+					}
+				}
+				/*
+				 * the trb is not in the free list either - something has
+				 * really gone wacky here! all we can do now is put the
+				 * trb back into the free list and hope that it will be ok.
+				 */
+				trb->to_next = 0;
+				if (trb_freehead)
+					trb_freetail->to_next = trb;
+				else
+					trb_freehead = trb;
+				trb_freetail = trb;
+				trb_cnt++;
+				ATENABLE(s, trb_lock);
+				return;
+			}
+		}
+
+		/*
+		 * process the timeout
+		 */
+		trb->func = 0;
+		trb->to_next = 0;
+		tof = trb->tof;
+		trb->tof = 0;
+		arg = (void *)trb->func_data;
+		trb->func_data = 999;
+		if (trb_freehead)
+			trb_freetail->to_next = trb;
+		else
+			trb_freehead = trb;
+		trb_freetail = trb;
+		trb_cnt++;
+		ATENABLE(s, trb_lock);
+		if (tof) {
+			dPrintf(D_M_ATP,D_L_VERBOSE, "atalk_clock: func=%x, arg=%x, %d\n",
+				tof,arg,trb_cnt,0,0);
+			(*tof)(arg);
+		} else {
+			dPrintf(D_M_ATP,D_L_ERROR, "atalk_clock: func=%x, arg=%x, %d\n",
+				tof,arg,trb_cnt,0,0);
+		}
+	} else
+		ATENABLE(s, trb_lock);
+}
+
+void *atalk_timeout(func, arg, ticks)  /* AIX version */
+	void (*func)();
+	void *arg;
+	int ticks;
+{
+	register int s;
+	register struct trb *trb;
+
+	dPrintf(D_M_ATP,D_L_VERBOSE,
+		"atalk_timeout: func=%x,arg=%x,time=%d, %d,%x\n", func,arg,ticks,trb_cnt,trb_pendhead);
+	/*
+	 * set up the timeout request
+	 */
+	ATDISABLE(s, trb_lock);
+	if ((trb = trb_freehead) == 0) {
+		ATENABLE(s, trb_lock);
+		dPrintf(D_M_ATP,D_L_WARNING,
+			"atalk_timeout: NO TRB! time=%d, %d\n", ticks,trb_cnt,0,0,0);
+		return 0;
+	}
+	trb_freehead = trb->to_next;
+	trb->to_next = trb_pendhead;
+	trb_pendhead = trb;
+	trb_cnt--;
+	trb->timeout.it_value.tv_sec  =  ticks / HZ;
+	trb->timeout.it_value.tv_nsec = (ticks % HZ) * (NS_PER_SEC / HZ);
+	trb->knext     = 0;
+	trb->kprev     = 0;
+	trb->flags     = 0;
+	trb->tof       = func;
+	trb->func      = (void (*)())atalk_clock;
+	trb->func_data = (ulong)arg;
+	trb->ipri      = PL_IMP;
+	trb->id        = -1;
+
+	/*
+	 * start the timeout
+	 */
+	ATENABLE(s, trb_lock);
+	tstart(trb);
+	return (void *)trb;
+}
+
+void atalk_untimeout(func, arg, trb)  /* AIX version */
+	void (*func)();
+	void *arg;
+	register struct trb *trb;
+{
+	register int s;
+	register struct trb *next;
+
+	dPrintf(D_M_ATP,D_L_VERBOSE,
+		"atalk_untimeout: func=%x,arg=%x, %d\n", func,arg,trb_cnt,0,0);
+
+	ATDISABLE(s, trb_lock);
+	if (trb == 0) {
+		for (trb=trb_pendhead; trb; trb=trb->to_next) {
+			if ((func == trb->tof) && (arg == (void *)trb->func_data))
+				break;
+		}
+	}
+	if (trb && (trb->func == (void (*)())atalk_clock)
+			&& (func == trb->tof) && (arg == (void *)trb->func_data)) {
+		trb->func_data = 999;
+		if (!(trb->flags & T_PENDING))
+			{
+			trb->tof = 0;
+			ATENABLE(s, trb_lock);
+			return;
+			}
+		trb->func = 0;
+		while (tstop(trb));
+		if (trb_pendhead == trb)
+			trb_pendhead = trb->to_next;
+		else {
+			for (next=trb_pendhead; next->to_next != trb; next=next->to_next) {
+				if (next->to_next == 0) {
+					ATENABLE(s, trb_lock);
+					dPrintf(D_M_ATP,D_L_WARNING,
+						"atalk_untimeout: UNKNOWN TRB %x...\n",trb,0,0,0,0);
+					return;
+				}
+			}
+			next->to_next = trb->to_next;
+		}
+		trb->to_next = 0;
+		trb_freetail->to_next = trb;
+		trb_freetail = trb;
+		trb_cnt++;
+	}
+	ATENABLE(s, trb_lock);
+}
+
+int config_atalk(dev, cmd, uiop)  /* AIX only */
+dev_t dev;
+int cmd;
+void *uiop;
+{
+	static int loaded = 0;
+	int err, nest;
+
+	err = 0;
+	nest = lockl(&kernel_lock, LOCK_SHORT);
+
+	if (cmd == CFG_INIT) {
+		if (loaded)
+			goto out;
+		vm_protect(0, 4096, 3);
+		atalk_timeoutcf(256);
+		atalk_load();
+		loaded = 1;
+
+	} else if (cmd == CFG_TERM) {
+		if (!loaded)
+			goto out;
+		atalk_rem_timeoutcf();
+		atalk_unload();
+		loaded = 0;
+
+	} else
+		err =  EINVAL;
+
+out:
+	if (nest != LOCK_NEST)
+		unlockl(&kernel_lock);
+	return(err);
+}
+
+#endif
+
+From sys_glue.c:
+
+#ifdef _AIX  /* AIX code, to the end of this file, is no longer supported. */
+
+int _ATselect(fp, corl, reqevents, retevents, notify) /* AIX version */
+	void *fp;
+	int corl;
+	unsigned short reqevents;
+	unsigned short *retevents;
+	void (*notify)();
+{
+	int s, err, rc = 0;
+	gref_t *gref;
+	unsigned short sevents = 0;
+
+	if ((err = atalk_getref(fp, 0, &gref, 0)) != 0)
+		return err;
+
+	ATDISABLE(s, gref->lock);
+	if (reqevents & POLLIN) {
+		if (gref->rdhead || (gref->readable && (*gref->readable)(gref)))
+			sevents |= POLLIN;
+	}
+
+	if (reqevents & POLLOUT) {
+		if (gref->writeable) {
+			if ((*gref->writeable)(gref))
+				sevents |= POLLOUT;
+		} else
+			sevents |= POLLOUT;
+	}
+
+	if ((sevents == 0) && ((reqevents & POLLSYNC) == 0)) {
+		if (rc = selreg(corl, 99, gref, reqevents, notify)) {
+			ATENABLE(s, gref->lock);
+			goto l_done;
+		}
+
+          if (reqevents & POLLIN) {
+			if (gref->rdhead || (gref->readable && (*gref->readable)(gref)))
+				sevents |= POLLIN;
+			else
+				gref->sevents |= POLLIN;
+          }
+
+          if (reqevents & POLLOUT) {
+			if (gref->writeable) {
+				if ((*gref->writeable)(gref))
+					sevents |= POLLOUT;
+				else
+					gref->sevents |= POLLOUT;
+			} else
+				sevents |= POLLOUT;
+          }
+     }
+	ATENABLE(s, gref->lock);
+     *retevents = sevents;
+
+l_done:
+	return rc;
+}
+#endif  /* end AIX section */
+
+From drv_dep.c:
+
+
+
+
+#ifdef _AIX
+/* AIX section to end of file (not supported) */
+
+/* from beginning of file ... */
+#include <sys/cdli.h>
+#include <sys/ndd.h>
+static struct ns_8022 elap_link;     /* The SNAP header description */
+static struct ns_user elap_user;     /* The interface to the demuxer */
+
+int
+pat_ifpresent(name) /* AIX */
+	char *name;
+{
+	return (int)ifunit(name);
+}
+
+int 
+pat_output(pat_id, mlist, dst_addr, type) /* AIX */
+	int	pat_id;
+	gbuf_t *mlist;
+	unsigned char *dst_addr;
+	int 	type;
+{
+	int len;
+	pat_unit_t *patp;
+	gbuf_t *m, *m_prev, *new_mlist, *m_temp;
+	struct ndd *nddp;
+	short size;
+	enet_header_t *enet_header;
+	llc_header_t *llc_header;
+
+	patp = (pat_unit_t *)&pat_units[pat_id];
+	if (patp->state != PAT_ONLINE) {
+		gbuf_freel(mlist);
+		return ENOTREADY;
+	}
+
+	if (patp->xtype == IFTYPE_NULLTALK) {
+		gbuf_freel(mlist);
+		return 0;
+	}
+
+	nddp = (void *)patp->nddp;
+	new_mlist = 0;
+
+  for (m = mlist; m; m = mlist) {
+	mlist = gbuf_next(m);
+	gbuf_next(m) = 0;
+
+	gbuf_prepend(m,ENET_LLC_SIZE);
+	if (m == 0) {
+		if (mlist)
+			gbuf_freel(mlist);
+		if (new_mlist)
+			gbuf_freel(new_mlist);
+		return 0;
+	}
+
+	enet_header = (enet_header_t *)gbuf_rptr(m);
+	bcopy(dst_addr, enet_header->dst, sizeof(enet_header->dst));
+	bcopy(patp->xaddr, enet_header->src, sizeof(enet_header->src));
+	size = gbuf_msgsize(m);
+	enet_header->len = size - sizeof(enet_header_t);
+	llc_header = (llc_header_t *)(gbuf_rptr(m)+sizeof(enet_header_t));
+	*llc_header = (type == AARP_AT_TYPE) ? snap_hdr_aarp : snap_hdr_at;
+
+	m->m_pkthdr.len = size;
+	m->m_pkthdr.rcvif = 0;
+
+	if (new_mlist)
+		gbuf_next(m_prev) = m;
+	else
+		new_mlist = m;
+	m_prev = m;
+	pktsOut++;
+  }
+
+	if (new_mlist)
+		(*nddp->ndd_output)(nddp, new_mlist);
+
+	return 0;
+}
+
+int
+pat_online (ifName, ifType)  /* AIX */
+	char	*ifName;
+	char	*ifType;
+{
+	void pat_input();
+	int pat_id;
+	pat_unit_t *patp;
+	struct ndd *nddp;
+	char ns_name[8];
+
+	if ((pat_id = pat_ID(ifName)) == -1)
+		return (-1);
+	patp = &pat_units[pat_id];
+
+	if (patp->xtype == IFTYPE_ETHERTALK) {
+		ns_name[0] = ifName[0];
+		ns_name[1] = 'n';
+		strcpy(&ns_name[2], &ifName[1]);
+	} else if (patp->xtype == IFTYPE_NULLTALK) {
+		patp->xaddrlen = 6;
+		bzero(patp->xaddr, patp->xaddrlen);
+		if (ifType)
+			*ifType = patp->xtype;
+		patp->nddp = (void *)0;
+		patp->state  = PAT_ONLINE;
+		at_statep->flags |= AT_ST_IF_CHANGED;
+		return (pat_id);
+	} else
+		return -1;
+
+	if (ns_alloc(ns_name, &nddp))
+		return -1;
+
+	bzero(&elap_user, sizeof(elap_user));
+	elap_user.isr = pat_input;
+	elap_user.pkt_format = NS_HANDLE_HEADERS|NS_INCLUDE_MAC;
+
+	elap_link.filtertype = NS_8022_LLC_DSAP_SNAP;
+	elap_link.orgcode[0] = 0;
+	elap_link.orgcode[2] = 0;
+	elap_link.dsap = DSAP_SNAP;
+	elap_link.ethertype = 0x80f3;	/* AARP SNAP code */
+	if (ns_add_filter(nddp, &elap_link, sizeof(elap_link), &elap_user))
+		return -1;
+
+	elap_link.orgcode[0] = 0x08;
+	elap_link.orgcode[2] = 0x07;
+	elap_link.ethertype = 0x809b;	/* DDP SNAP code */
+	if (ns_add_filter(nddp, &elap_link, sizeof(elap_link), &elap_user)) {
+		elap_link.orgcode[0] = 0;
+		elap_link.orgcode[2] = 0;
+		elap_link.ethertype = 0x80f3;	/* AARP SNAP code */
+		(void)ns_del_filter(nddp, &elap_link, sizeof(elap_link));
+		return -1;
+	}
+
+	patp->xaddrlen = nddp->ndd_addrlen;
+	bcopy(nddp->ndd_physaddr, patp->xaddr, patp->xaddrlen);
+
+	if (ifType)
+		*ifType = patp->xtype;
+
+	patp->nddp = (void *)nddp;
+	patp->state  = PAT_ONLINE;
+	at_statep->flags |= AT_ST_IF_CHANGED;
+
+	return (pat_id);
+}
+
+void
+pat_offline(pat_id)  /* AIX */
+	int pat_id;
+{
+	pat_unit_t *patp = &pat_units[pat_id];
+
+	if (patp->state == PAT_ONLINE) {
+	  if (patp->xtype != IFTYPE_NULLTALK) {
+		elap_link.filtertype = NS_8022_LLC_DSAP_SNAP;
+		elap_link.orgcode[0] = 0;
+		elap_link.orgcode[2] = 0;
+		elap_link.dsap = DSAP_SNAP;
+		elap_link.ethertype = 0x80f3;	/* AARP SNAP code */
+		(void)ns_del_filter(patp->nddp, &elap_link, sizeof(elap_link));
+		elap_link.orgcode[0] = 0x08;
+		elap_link.orgcode[2] = 0x07;
+		elap_link.ethertype = 0x809b;	/* DDP SNAP code */
+		(void)ns_del_filter(patp->nddp, &elap_link, sizeof(elap_link));
+		ns_free(patp->nddp);
+	  }
+		at_statep->flags |= AT_ST_IF_CHANGED;
+		bzero(patp, sizeof(pat_unit_t));
+	}
+}
+
+int
+pat_mcast(pat_id, control, data) /* AIX */
+	int pat_id;
+	int control;
+	unsigned char *data;
+{
+	struct ndd *nddp;
+
+	nddp = (struct ndd *)pat_units[pat_id].nddp;
+	return (*nddp->ndd_ctl)(nddp, (control == PAT_REG_MCAST) ?
+		NDD_ENABLE_ADDRESS : NDD_DISABLE_ADDRESS,
+			data, nddp->ndd_addrlen);
+}
+
+void
+pat_input(nddp, m, unused)  /* AIX */
+	struct ndd *nddp;
+	gbuf_t *m;
+	void *unused;
+{
+	extern int ddprunning_flag;
+	llc_header_t *llc_header;
+	int pat_id;
+	pat_unit_t *patp;
+	char src[6];
+	enet_header_t *enet_header = (enet_header_t *)gbuf_rptr(m);
+
+	for (pat_id=0, patp = &pat_units[pat_id];
+	     pat_id < xpatcnt; pat_id++, patp++) {
+		if ((patp->state == PAT_ONLINE) && (patp->nddp == nddp))
+			break;
+	}
+	if (pat_id == xpatcnt) {
+		gbuf_freem(m);
+		return;
+	}
+
+	/* Ignore multicast packets from local station */
+  	if (patp->xtype == IFTYPE_ETHERTALK) {
+		bcopy((char *)enet_header->src, src, sizeof(src));
+		if ((enet_header->dst[0] & 1) && 
+				(bcmp(src, patp->xaddr, sizeof(src)) == 0)) {
+			gbuf_freem(m);
+			return;
+		}
+		llc_header = (llc_header_t *)(enet_header+1);
+  	}
+
+	gbuf_rinc(m,(ENET_LLC_SIZE));
+	(void)fetch_and_add((atomic_p)&ddprunning_flag, 1);
+	pktsIn++;
+	if (LLC_PROTO_EQUAL(llc_header->protocol,snap_proto_aarp)) {
+		patp->aarp_func(gbuf_rptr(m), patp->context);
+		gbuf_freem(m);
+	} else if (LLC_PROTO_EQUAL(llc_header->protocol,snap_proto_ddp)) {
+		/* if we're a router take all pkts */
+		if (!ROUTING_MODE) {
+			if (patp->addr_check(gbuf_rptr(m), patp->context)
+					== AARP_ERR_NOT_OURS) {
+				gbuf_freem(m);
+				(void)fetch_and_add((atomic_p)&ddprunning_flag, -1);
+				return;
+			}
+		}
+		gbuf_set_type(m, MSG_DATA);
+		elap_input(m, patp->context, src);
+	} else
+		gbuf_freem(m);
+	(void)fetch_and_add((atomic_p)&ddprunning_flag, -1);
+}
+#endif  /* AIX */

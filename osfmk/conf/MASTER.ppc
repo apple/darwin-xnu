@@ -1,0 +1,65 @@
+#
+# Mach Operating System
+# Copyright (c) 1986 Carnegie-Mellon University
+# All rights reserved.  The CMU software License Agreement
+# specifies the terms and conditions for use and redistribution.
+#  
+######################################################################
+#
+#  Standard Apple MacOS X Configurations:
+#  -------- ---- -------- ---------------
+#
+#  RELEASE       = [ mach_bsd mach_kdp iokit mach_pe ppc mach              ]
+#  RELEASE_TRACE = [ RELEASE kdebug ]
+#  DEBUG         = [ RELEASE mach_kdb debug ]
+#  DEBUG_TRACE   = [ DEBUG kdebug ]
+#  PROFILE       = [ RELEASE ]
+#
+######################################################################
+#
+##############################################################################
+#
+# Statistics and timing options.
+#
+# STAT_TIME indicates that this machine uses a statistical timer for gathering
+#       usage statistics, and has no higher resolution timer to measure actual
+#       intervals.
+#
+options		STAT_TIME
+#options	MACH_MACHINE_ROUTINES
+
+#
+# MACH_PROF enables code for mach profiling.
+#
+options         MACH_PROF	#		# <mach_prof>
+##############################################################################
+#
+# Debug
+#
+options		DEBUG		#		# <debug>
+
+machine		"ppc"
+cpu		"ppc"
+pseudo-device	cpus		2
+pseudo-device	scc		1
+pseudo-device	vc		1
+
+
+
+# Disabled by default, since mklinux does not need this
+# unless running multiserver - the atalk stack at time of
+# writing inserts a null filter!
+#options	NET_FILTER_COMPILER
+
+# Turn on the serial console by uncommenting the this:
+#options	SERIAL_CONSOLE_DEFAULT
+
+options		MACH_KDP	#		# <mach_kdp>
+options		MACH_KDB	#		# <mach_kdb>
+options		MACH_BSD	#		# <mach_bsd>
+options		IOKIT		#		# <iokit>
+options		MACH_PE		#		# <mach_pe>
+
+# XXX for bringup, turns on mac disklabels, 
+# and some other nice stuff for the diskshim
+options		POWERMAC

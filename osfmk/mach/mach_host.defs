@@ -1,0 +1,235 @@
+/*
+ * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ *
+ * @APPLE_LICENSE_HEADER_START@
+ * 
+ * The contents of this file constitute Original Code as defined in and
+ * are subject to the Apple Public Source License Version 1.1 (the
+ * "License").  You may not use this file except in compliance with the
+ * License.  Please obtain a copy of the License at
+ * http://www.apple.com/publicsource and read it before using this file.
+ * 
+ * This Original Code and all software distributed under the License are
+ * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
+ * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
+ * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
+ * License for the specific language governing rights and limitations
+ * under the License.
+ * 
+ * @APPLE_LICENSE_HEADER_END@
+ */
+/*
+ * @OSF_COPYRIGHT@
+ */
+/* 
+ * Mach Operating System
+ * Copyright (c) 1991,1990,1989 Carnegie Mellon University
+ * All Rights Reserved.
+ * 
+ * Permission to use, copy, modify and distribute this software and its
+ * documentation is hereby granted, provided that both the copyright
+ * notice and this permission notice appear in all copies of the
+ * software, derivative works or modified versions, and any portions
+ * thereof, and that both notices appear in supporting documentation.
+ * 
+ * CARNEGIE MELLON ALLOWS FREE USE OF THIS SOFTWARE IN ITS "AS IS"
+ * CONDITION.  CARNEGIE MELLON DISCLAIMS ANY LIABILITY OF ANY KIND FOR
+ * ANY DAMAGES WHATSOEVER RESULTING FROM THE USE OF THIS SOFTWARE.
+ * 
+ * Carnegie Mellon requests users of this software to return to
+ * 
+ *  Software Distribution Coordinator  or  Software.Distribution@CS.CMU.EDU
+ *  School of Computer Science
+ *  Carnegie Mellon University
+ *  Pittsburgh PA 15213-3890
+ * 
+ * any improvements or extensions that they make and grant Carnegie Mellon
+ * the rights to redistribute these changes.
+ */
+/*
+ */
+
+/*
+ * File:	mach/mach_host.defs
+ *
+ * Abstract:
+ *	Mach host operations support.  Includes processor allocation and
+ *	control.  
+ */
+
+#ifdef	MACH_KERNEL
+#include <mach_prof.h>
+#include <advisory_pageout.h>
+#endif	/* MACH_KERNEL */
+
+subsystem
+#if	KERNEL_SERVER
+	  KernelServer
+#endif	/* KERNEL_SERVER */
+		       mach_host 200;
+
+/*
+ *	Basic types
+ */
+
+#include <mach/std_types.defs>
+#include <mach/mach_types.defs>
+#include <mach/clock_types.defs>
+#include <mach_debug/mach_debug_types.defs>
+
+/*
+ * References to host objects are returned by:
+ *	mach_host_self() - trap
+ */
+
+/*
+ *	Return information about this host.
+ */
+routine host_info(
+		host		: host_t;
+		flavor		: host_flavor_t;
+	out	host_info_out	: host_info_t, CountInOut);
+
+/*
+ *	Get string describing current kernel version.
+ */
+routine	host_kernel_version(
+		host		: host_t;
+	out	kernel_version	: kernel_version_t);
+
+/*
+ *      Get host page size
+ */
+routine host_page_size(
+		host		: host_t;
+	out	page_size	: vm_size_t);
+
+/*
+ *	Allow pagers to create named entries that point to un-mapped
+ *	abstract memory object.  The named entries are generally mappable
+ *	and can be subsetted through the mach_make_memory_entry call
+ */
+routine mach_memory_object_memory_entry(
+		host		:host_t;
+		internal	:boolean_t;
+		size		:vm_size_t;
+		permission	:vm_prot_t;
+		pager		:memory_object_t;
+	out	entry_handle	:mach_port_move_send_t);
+
+
+/*
+ *      Get processor info for all the processors on this host.
+ *	The returned data is an OOL array of processor info.
+ */
+routine host_processor_info(
+		host		: host_t;
+                flavor          : processor_flavor_t;
+	out	processor_count : natural_t;
+        out     processor_info  : processor_info_array_t);
+
+/*
+ * 	Return host IO master access port
+ */
+routine host_get_io_master(
+                host            : host_t;
+        out     io_master       : io_master_t);
+
+/*
+ *	Get service port for a processor set.
+ *	Available to all.
+ */
+routine host_get_clock_service(
+		host		: host_t;
+		clock_id	: clock_id_t;
+	out	clock_serv	: clock_serv_t);
+
+
+routine	kmod_get_info(
+		host		: host_t;
+	out	modules		: kmod_args_t);
+
+/*
+ *	Returns information about the memory allocation zones.
+ *      Supported in all kernels..
+ */
+routine host_zone_info(
+		host		: host_t;
+	out	names		: zone_name_array_t,
+					Dealloc;
+	out	info		: zone_info_array_t,
+					Dealloc);
+
+/*
+ *	Returns information about the global VP table.
+ *      Only supported in MACH_VM_DEBUG kernels,
+ *      otherwise returns KERN_FAILURE.
+ */
+routine host_virtual_physical_table_info(
+		host		: host_t;
+	out	info		: hash_info_bucket_array_t,
+					Dealloc);
+
+/*
+ *	Returns information about the global reverse hash table.
+ *      This call is only valid on MACH_IPC_DEBUG kernels.
+ *      Otherwise, KERN_FAILURE is returned.
+ */
+routine host_ipc_hash_info(
+		host		: host_t;
+	out	info		: hash_info_bucket_array_t,
+					Dealloc);
+
+/*
+ * JMM - These routines should be on the host_priv port.  We need
+ * to verify the move before putting them there.
+ */
+routine enable_bluebox(
+		host			: host_t;
+	in	taskID			: unsigned;
+	in	TWI_TableStart	: unsigned;
+	in	Desc_TableStart	: unsigned);
+
+routine disable_bluebox(
+		host		: host_t);
+
+/*
+ * JMM - Keep processor_set related items at the end for easy
+ * removal.
+ */
+/*
+ *	Get default processor set for host.
+ */
+routine processor_set_default(
+		host		: host_t;
+	out	default_set	: processor_set_name_t);
+
+/*
+ *	Create new processor set.  Returns real port for manipulations,
+ *	and name port for obtaining information.
+ */
+routine processor_set_create(
+		host		: host_t;
+	out	new_set		: processor_set_t;
+	out	new_name	: processor_set_name_t);
+
+/*
+ * 	Temporary interfaces for conversion to 64 bit data path 
+ */
+
+routine mach_memory_object_memory_entry_64(
+		host		:host_t;
+		internal	:boolean_t;
+		size		:memory_object_size_t;
+		permission	:vm_prot_t;
+		pager		:memory_object_t;
+	out	entry_handle	:mach_port_move_send_t);
+
+/*
+ *	Return statistics from this host.
+ */
+routine host_statistics(
+		host_priv	: host_t;
+		flavor		: host_flavor_t;
+	out	host_info_out	: host_info_t, CountInOut);

@@ -1,0 +1,7 @@
+
+pexpert/ppc/pe_init.c				standard
+pexpert/ppc/pe_bootargs.c			standard
+pexpert/ppc/pe_identify_machine.c		standard
+pexpert/ppc/pe_kprintf.c			standard
+pexpert/ppc/pe_clock_speed.c			standard
+pexpert/ppc/pe_clock_speed_asm.s		standard

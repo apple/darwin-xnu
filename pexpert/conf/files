@@ -1,0 +1,14 @@
+#
+OPTIONS/mach_kdb				optional mach_kdb
+
+
+#
+# pexpert generic
+#
+
+pexpert/gen/device_tree.c			standard
+pexpert/gen/bootargs.c				standard
+pexpert/gen/pe_gen.c				standard
+
+#
+

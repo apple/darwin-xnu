@@ -1,0 +1,127 @@
+#
+# Mach Operating System
+# Copyright (c) 1986 Carnegie-Mellon University
+# All rights reserved.  The CMU software License Agreement specifies
+# the terms and conditions for use and redistribution.
+#
+
+#
+# Export IDENT for sub-makefiles
+#
+export IDENT
+
+#
+# XXX: INCFLAGS to include libsa prototypes
+#
+INCFLAGS_MAKEFILE= -I$(SOURCE)libsa
+
+export MakeInc_cmd=${SRCROOT}/makedefs/MakeInc.cmd
+export MakeInc_def=${SRCROOT}/makedefs/MakeInc.def
+export MakeInc_rule=${SRCROOT}/makedefs/MakeInc.rule
+export MakeInc_dir=${SRCROOT}/makedefs/MakeInc.dir
+
+include $(MakeInc_cmd)
+include $(MakeInc_def)
+
+#
+# XXX: CFLAGS
+#
+CFLAGS+= -DMACH_KERNEL_PRIVATE
+
+#
+# Directories for mig generated files
+#
+COMP_SUBDIRS = \
+	default_pager \
+	device \
+	mach_debug \
+	mach \
+	UserNotification
+
+COMP_SUBDIRS_I386 = \
+	mach
+
+#
+#  Make sure we don't remove this by accident if interrupted at the wrong
+#  time.
+#
+.PRECIOUS: Makefile
+
+VERSION_FILES= \
+	$(SOURCE_DIR)/$(COMPONENT)/conf/version.major  \
+	$(SOURCE_DIR)/$(COMPONENT)/conf/version.minor   \
+	$(SOURCE_DIR)/$(COMPONENT)/conf/version.variant
+
+COPYRIGHT_FILES = \
+	$(SOURCE_DIR)/$(COMPONENT)/conf/copyright.osf \
+	$(SOURCE_DIR)/$(COMPONENT)/conf/copyright.cmu
+
+#
+#  Theses macros are filled in by the config program depending on the
+#  current configuration.  The MACHDEP macro is replaced by the
+#  contents of the machine dependent makefile template and the others
+#  are replaced by the corresponding symbol definitions for the
+#  configuration.
+#
+
+%OBJS
+
+%CFILES
+
+%MFILES
+
+%SFILES
+
+%BFILES
+
+%ORDERED
+%MACHDEP
+
+#
+#  OBJSDEPS is the set of files (defined in the machine dependent
+#  template if necessary) which all objects depend on (such as an
+#  in-line assembler expansion filter)
+#
+${OBJS}: ${OBJSDEPS}
+
+
+%LOAD
+
+LDOBJS = $(OBJS)
+
+$(COMPONENT).o: $(LDOBJS) assym.s
+	@echo "[ creating $(COMPONENT).o ]"
+	$(RM) $(RMFLAGS) vers.c
+	$(OBJROOT)/$(KERNEL_CONFIG)_$(ARCH_CONFIG)/$(COMPONENT)/newvers \
+	`$(CAT) ${VERSION_FILES}` ${COPYRIGHT_FILES}
+	${KCC} $(CFLAGS) $(INCLUDES) -c vers.c
+	@echo [ updating $(COMPONENT).o ${OSFMK_KERNEL_CONFIG} ]
+	$(LD)  $(LDFLAGS_COMPONENT)  -o $(COMPONENT).o ${LDOBJS} vers.o 
+
+do_all: $(COMPONENT).o
+
+do_depend: do_all
+	${MD} -u Makedep -f -d `ls *.d`;
+	
+do_build_all: do_depend
+
+# genassym.o actually is an assembly file,
+# we name it genassym.o to help with the automatic
+# dependency generation
+
+genassym.o: $(SOURCE_DIR)/$(COMPONENT)/$(arch_config)/genassym.c
+	${KCC} ${CFLAGS} -MD ${_HOST_EXTRA_CFLAGS} -S -o ${@} -c ${INCFLAGS} $<
+
+assym.s: genassym.o
+	sed -e '/#DEFINITION#/!d' -e 's/^.*#DEFINITION#//' -e 's/\$$//' genassym.o > ${@}
+
+${SOBJS}: assym.s
+
+
+%RULES
+
+-include Makedep
+
+include $(MakeInc_rule)
+include $(MakeInc_dir)
+

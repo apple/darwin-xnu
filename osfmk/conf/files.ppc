@@ -1,0 +1,101 @@
+# @OSF_COPYRIGHT@
+# 
+
+OPTIONS/db_machine_commands	optional db_machine_commands
+OPTIONS/gprof			optional gprof
+OPTIONS/fpe			optional fpe
+OPTIONS/fddi			optional fddi
+OPTIONS/serial_console_default	optional serial_console_default
+OPTIONS/mp			optional mp
+
+# lowmem_vectors.s must be at head of link line.
+# template.mk treats this as a special case and makes sure
+# that the file is placed at the front of the line
+
+
+osfmk/ddb/db_aout.c		optional mach_kdb
+./ppc_disasm.c		optional mach_kdb
+osfmk/ppc/db_disasm.c	optional mach_kdb
+osfmk/ppc/db_asm.s	optional mach_kdb
+osfmk/ppc/db_interface.c	optional mach_kdb
+osfmk/ppc/db_trace.c		optional mach_kdb
+osfmk/ppc/db_low_trace.c	optional mach_kdb
+
+osfmk/ppc/lowmem_vectors.s	standard
+osfmk/ppc/start.s			standard
+osfmk/ppc/_setjmp.s			standard
+
+osfmk/ppc/cpu.c 		standard
+osfmk/ppc/ppc_init.c		standard
+osfmk/ppc/ppc_vm_init.c		standard
+osfmk/ppc/bat_init.c		standard
+osfmk/ppc/model_dep.c		standard
+osfmk/ppc/mem.c				standard
+osfmk/ppc/pmap.c			standard
+osfmk/ppc/mappings.c		standard
+osfmk/ppc/savearea.c		standard
+osfmk/ppc/savearea_asm.s	standard
+osfmk/ppc/hw_vm.s			standard
+osfmk/ppc/hw_lock.s			standard
+osfmk/ppc/misc_asm.s		standard
+osfmk/ppc/status.c			standard
+osfmk/ppc/io_map.c			standard
+osfmk/ppc/trap.c			standard
+osfmk/ppc/alignment.c		standard
+osfmk/ppc/pcb.c				standard
+osfmk/ppc/bits.s			standard
+osfmk/ppc/stubs.c			standard
+osfmk/ppc/cswtch.s			standard
+osfmk/ppc/cache.s			standard
+osfmk/ppc/movc.s			standard
+osfmk/ppc/hw_exception.s	standard
+osfmk/ppc/bzero.s			standard
+osfmk/ppc/bcopy.s			standard
+osfmk/ppc/atomic_switch.s	standard
+osfmk/ppc/PseudoKernel.c	standard
+osfmk/ppc/misc.c			standard
+osfmk/ppc/interrupt.c		standard
+osfmk/ppc/machine_routines.c		standard
+osfmk/ppc/machine_routines_asm.s		standard
+#osfmk/ppc/Performance.s	standard
+osfmk/ppc/Emulate.s			standard
+osfmk/ppc/AltiAssist.s		standard
+osfmk/ppc/bsd_ppc.c			optional mach_bsd
+osfmk/ppc/conf.c			standard
+osfmk/ppc/rtclock.c			standard
+osfmk/ppc/Diagnostics.c		standard
+osfmk/ppc/PPCcalls.c		standard
+osfmk/ppc/vmachmon.c		standard
+osfmk/ppc/vmachmon_asm.s		standard
+
+#osfmk/ppc/POWERMAC/ser16550.c		standard
+osfmk/ppc/POWERMAC/autoconf.c		optional xxx
+osfmk/ppc/POWERMAC/pci.c		optional xxx
+osfmk/ppc/POWERMAC/pci_probe.c		optional xxx
+osfmk/ppc/POWERMAC/pci_compat.c		optional xxx
+
+osfmk/ppc/Firmware.s			standard
+osfmk/ppc/FirmwareC.c			standard
+osfmk/ppc/MPinterfaces.s		standard
+osfmk/ppc/POWERMAC/mp/MP_2p.s	standard
+osfmk/ppc/POWERMAC/mp/mp.c		standard
+
+osfmk/ppc/aligned_data.s		standard
+
+osfmk/kdp/ml/ppc/kdp_machdep.c        optional mach_kdp
+osfmk/kdp/ml/ppc/kdp_vm.c             optional mach_kdp
+osfmk/kdp/ml/ppc/kdp_misc.s           optional mach_kdp
+#osfmk/kdp/pe/POWERMAC/kdp_mace.c      optional mach_kdp
+
+osfmk/ppc/serial_console.c		optional	scc device-driver
+osfmk/ppc/POWERMAC/serial_io.c	optional	scc device-driver
+
+osfmk/ppc/POWERMAC/video_console.c	optional	vc device-driver
+osfmk/ppc/POWERMAC/video_scroll.s	optional	vc device-driver
+
+osfmk/ppc/POWERMAC/dbdma.c		standard
+
+# DUMMIES TO FORCE GENERATION OF .h FILES
+OPTIONS/hi_res_clock		optional hi_res_clock
+OPTIONS/bm			optional bm
+OPTIONS/debug			optional debug

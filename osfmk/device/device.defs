@@ -1,0 +1,444 @@
+/*
+ * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ *
+ * @APPLE_LICENSE_HEADER_START@
+ * 
+ * The contents of this file constitute Original Code as defined in and
+ * are subject to the Apple Public Source License Version 1.1 (the
+ * "License").  You may not use this file except in compliance with the
+ * License.  Please obtain a copy of the License at
+ * http://www.apple.com/publicsource and read it before using this file.
+ * 
+ * This Original Code and all software distributed under the License are
+ * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
+ * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
+ * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
+ * License for the specific language governing rights and limitations
+ * under the License.
+ * 
+ * @APPLE_LICENSE_HEADER_END@
+ */
+/*
+ * @OSF_COPYRIGHT@
+ */
+/* 
+ * Mach Operating System
+ * Copyright (c) 1991,1990,1989 Carnegie Mellon University
+ * All Rights Reserved.
+ * 
+ * Permission to use, copy, modify and distribute this software and its
+ * documentation is hereby granted, provided that both the copyright
+ * notice and this permission notice appear in all copies of the
+ * software, derivative works or modified versions, and any portions
+ * thereof, and that both notices appear in supporting documentation.
+ * 
+ * CARNEGIE MELLON ALLOWS FREE USE OF THIS SOFTWARE IN ITS "AS IS"
+ * CONDITION.  CARNEGIE MELLON DISCLAIMS ANY LIABILITY OF ANY KIND FOR
+ * ANY DAMAGES WHATSOEVER RESULTING FROM THE USE OF THIS SOFTWARE.
+ * 
+ * Carnegie Mellon requests users of this software to return to
+ * 
+ *  Software Distribution Coordinator  or  Software.Distribution@CS.CMU.EDU
+ *  School of Computer Science
+ *  Carnegie Mellon University
+ *  Pittsburgh PA 15213-3890
+ * 
+ * any improvements or extensions that they make and grant Carnegie Mellon
+ * the rights to redistribute these changes.
+ */
+/*
+ * File:	device/device.defs
+ * Author:	Douglas Orr
+ *		Feb 10, 1988
+ * Abstract:
+ *	Mach device support.  Mach devices are accessed through
+ *	block and character device interfaces to the kernel.
+ */
+
+subsystem
+#if	KERNEL_SERVER
+	  KernelServer
+#endif	/* KERNEL_SERVER */
+		       iokit 2800;
+
+#include <mach/std_types.defs>
+#include <mach/mach_types.defs>
+#include <mach/clock_types.defs>
+#include <mach/clock_types.defs>
+
+import <device/device_types.h>;
+
+serverprefix	is_;
+
+type reply_port_t = MACH_MSG_TYPE_MAKE_SEND_ONCE | polymorphic
+	ctype: mach_port_t;
+
+#if	IOKIT
+
+type io_name_t          = c_string[*:128];
+type io_string_t        = c_string[*:512];
+type io_struct_inband_t = array[*:4096] of char;
+type io_scalar_inband_t = array[*:16] of int;
+type io_async_ref_t 	= array[*:8] of natural_t;
+type io_buf_ptr_t	= ^array[] of MACH_MSG_TYPE_INTEGER_8;
+
+type io_object_t = mach_port_t
+		ctype: mach_port_t
+#if	KERNEL_SERVER
+		intran: io_object_t iokit_lookup_object_port(mach_port_t)
+		outtran: mach_port_t iokit_make_object_port(io_object_t)
+		destructor: iokit_remove_reference(io_object_t)
+#endif	/* KERNEL_SERVER */
+		;
+
+type io_connect_t = mach_port_t
+		ctype: mach_port_t
+#if	KERNEL_SERVER
+		intran: io_connect_t iokit_lookup_connect_port(mach_port_t)
+		outtran: mach_port_t iokit_make_connect_port(io_connect_t)
+		destructor: iokit_remove_reference(io_connect_t)
+#endif	/* KERNEL_SERVER */
+		;
+
+routine io_object_get_class(
+	    object		: io_object_t;
+	out className		: io_name_t
+	);
+
+routine io_object_conforms_to(
+	    object		: io_object_t;
+	in  className		: io_name_t;
+	out conforms		: boolean_t
+	);
+
+routine io_iterator_next(
+	    iterator		: io_object_t;
+	out object		: io_object_t
+	);
+
+routine io_iterator_reset(
+	    iterator		: io_object_t
+	);
+
+routine io_service_get_matching_services(
+	    master_port		: mach_port_t;
+	in  matching		: io_string_t;
+	out existing		: io_object_t
+	);
+
+routine io_service_add_notification_old(
+	    master_port		: mach_port_t;
+	in  notification_type	: io_name_t;
+	in  matching		: io_string_t;
+	in  wake_port		: mach_port_make_send_t;
+	in  reference		: natural_t;
+	out notification	: io_object_t
+	);
+
+routine io_registry_create_iterator(
+	    master_port		: mach_port_t;
+	in  plane		: io_name_t;
+	in  options		: int;
+	out iterator		: io_object_t
+	);
+
+routine io_registry_iterator_enter_entry(
+	    iterator		: io_object_t
+	);
+
+routine io_registry_iterator_exit_entry(
+	    iterator		: io_object_t
+	);
+
+routine io_registry_entry_from_path(
+	    master_port		: mach_port_t;
+	in  path		: io_string_t;
+	out registry_entry	: io_object_t
+	);
+
+routine io_registry_entry_get_name(
+	    registry_entry	: io_object_t;
+	out name		: io_name_t
+	);
+
+routine io_registry_entry_get_properties(
+	    registry_entry	: io_object_t;
+	out properties		: io_buf_ptr_t, physicalcopy
+	);
+
+routine io_registry_entry_get_property(
+	    registry_entry	: io_object_t;
+	in  property_name	: io_name_t;
+	out data		: io_struct_inband_t, CountInOut
+	);
+
+routine io_registry_entry_get_child_iterator(
+	    registry_entry	: io_object_t;
+	in  plane		: io_name_t;
+	out iterator		: io_object_t
+	);
+
+routine io_registry_entry_get_parent_iterator(
+	    registry_entry	: io_object_t;
+	in  plane		: io_name_t;
+	out iterator		: io_object_t
+	);
+
+routine io_service_open(
+	    service		: io_object_t;
+	in  owningTask		: task_t;
+	in  connect_type	: int;
+	out connection		: io_connect_t
+	);
+
+routine io_service_close(
+	    connection		: io_connect_t
+	);
+
+routine io_connect_get_service(
+	    connection		: io_connect_t;
+	out service		: io_object_t
+	);
+
+routine io_connect_set_notification_port(
+	    connection		: io_connect_t;
+	in  notification_type	: int;
+	in  port		: mach_port_make_send_t;
+	in  reference		: int
+	);
+
+routine io_connect_map_memory(
+	    connection		: io_connect_t;
+	in  memory_type		: int;
+	in  into_task		: task_t;
+	inout address		: vm_address_t;
+	inout size		: vm_size_t;
+	in  flags		: int
+	);
+
+routine io_connect_add_client(
+	    connection		: io_connect_t;
+	in  connect_to		: io_connect_t
+	);
+
+routine io_connect_set_properties(
+	    connection		: io_connect_t;
+	in  properties		: io_buf_ptr_t, physicalcopy;
+        out result		: natural_t
+	);
+
+
+routine io_connect_method_scalarI_scalarO(
+	    connection		: io_connect_t;
+	in  selector		: int;
+	in  input		: io_scalar_inband_t;
+	out output		: io_scalar_inband_t, CountInOut
+	);
+
+routine io_connect_method_scalarI_structureO(
+	    connection		: io_connect_t;
+	in  selector		: int;
+	in  input		: io_scalar_inband_t;
+	out output		: io_struct_inband_t, CountInOut
+	);
+
+routine io_connect_method_scalarI_structureI(
+	    connection		: io_connect_t;
+	in  selector		: int;
+	in  input		: io_scalar_inband_t;
+	in  inputStruct		: io_struct_inband_t
+	);
+
+routine io_connect_method_structureI_structureO(
+	    connection		: io_connect_t;
+	in  selector		: int;
+	in  input		: io_struct_inband_t;
+	out output		: io_struct_inband_t, CountInOut
+	);
+
+routine io_registry_entry_get_path(
+	    registry_entry	: io_object_t;
+	in  plane		: io_name_t;
+	out path		: io_string_t
+	);
+
+routine io_registry_get_root_entry(
+	    master_port		: mach_port_t;
+	out root		: io_object_t
+	);
+
+routine io_registry_entry_set_properties(
+	    registry_entry	: io_object_t;
+	in  properties		: io_buf_ptr_t, physicalcopy;
+        out result		: natural_t
+	);
+
+routine io_registry_entry_in_plane(
+	    registry_entry	: io_object_t;
+	in  plane		: io_name_t;
+	out inPlane		: boolean_t
+	);
+
+routine io_object_get_retain_count(
+	    object		: io_object_t;
+	out retainCount		: int
+	);
+
+routine io_service_get_busy_state(
+	    service		: io_object_t;
+	out busyState		: int
+	);
+
+routine io_service_wait_quiet(
+	    service		: io_object_t;
+	    wait_time		: mach_timespec_t
+	);
+
+routine io_registry_entry_create_iterator(
+	    registry_entry	: io_object_t;
+	in  plane		: io_name_t;
+	in  options		: int;
+	out iterator		: io_object_t
+	);
+
+routine io_iterator_is_valid(
+	    iterator		: io_object_t;
+	out is_valid		: boolean_t
+	);
+
+routine io_make_matching(
+	    master_port		: mach_port_t;
+	in  of_type		: int;
+	in  options		: int;
+	in  input		: io_struct_inband_t;
+	out matching		: io_string_t
+	);
+
+routine io_catalog_send_data(
+	    master_port		: mach_port_t;
+        in  flag                : int;
+	in  inData		: io_buf_ptr_t;
+        out result		: natural_t
+	);
+
+routine io_catalog_terminate(
+	    master_port		: mach_port_t;
+        in  flag                : int;
+	in  name		: io_name_t
+	);
+
+routine io_catalog_get_data(
+	    master_port		: mach_port_t;
+        in  flag                : int;
+	out outData		: io_buf_ptr_t
+	);
+
+routine io_catalog_get_gen_count(
+	    master_port		: mach_port_t;
+        out genCount            : int
+	);
+
+routine io_catalog_module_loaded(
+	    master_port		: mach_port_t;
+	in  name		: io_name_t
+	);
+
+routine io_catalog_reset(
+	    master_port		: mach_port_t;
+	in  flag		: int
+	);
+
+routine io_service_request_probe(
+	    service		: io_object_t;
+	in  options		: int
+	);
+
+routine io_registry_entry_get_name_in_plane(
+	    registry_entry	: io_object_t;
+	in  plane		: io_name_t;
+	out name		: io_name_t
+	);
+
+routine io_service_match_property_table(
+	    service		: io_object_t;
+	in  matching		: io_string_t;
+	out matches		: boolean_t
+	);
+
+routine io_async_method_scalarI_scalarO(
+	    connection		: io_connect_t;
+	in  wake_port		: mach_port_make_send_t;
+	in  reference		: io_async_ref_t;
+	in  selector		: int;
+	in  input		: io_scalar_inband_t;
+	out output		: io_scalar_inband_t, CountInOut
+	);
+
+routine io_async_method_scalarI_structureO(
+	    connection		: io_connect_t;
+	in  wake_port		: mach_port_make_send_t;
+	in  reference		: io_async_ref_t;
+	in  selector		: int;
+	in  input		: io_scalar_inband_t;
+	out output		: io_struct_inband_t, CountInOut
+	);
+
+routine io_async_method_scalarI_structureI(
+	    connection		: io_connect_t;
+	in  wake_port		: mach_port_make_send_t;
+	in  reference		: io_async_ref_t;
+	in  selector		: int;
+	in  input		: io_scalar_inband_t;
+	in  inputStruct		: io_struct_inband_t
+	);
+
+routine io_async_method_structureI_structureO(
+	    connection		: io_connect_t;
+	in  wake_port		: mach_port_make_send_t;
+	in  reference		: io_async_ref_t;
+	in  selector		: int;
+	in  input		: io_struct_inband_t;
+	out output		: io_struct_inband_t, CountInOut
+	);
+
+routine io_service_add_notification(
+	    master_port		: mach_port_t;
+	in  notification_type	: io_name_t;
+	in  matching		: io_string_t;
+	in  wake_port		: mach_port_make_send_t;
+	in  reference		: io_async_ref_t;
+	out notification	: io_object_t
+	);
+
+routine io_service_add_interest_notification(
+	    service		: io_object_t;
+	in  type_of_interest	: io_name_t;
+	in  wake_port		: mach_port_make_send_t;
+	in  reference		: io_async_ref_t;
+	out notification	: io_object_t
+	);
+
+routine io_service_acknowledge_notification(
+	    service		: io_object_t;
+	in  notify_ref		: natural_t;
+	in  response		: natural_t
+	);
+
+routine io_connect_get_notification_semaphore(
+	    connection		: io_connect_t;
+	in  notification_type	: natural_t;
+	out semaphore		: semaphore_t
+	);
+
+
+routine io_connect_unmap_memory(
+	    connection		: io_connect_t;
+	in  memory_type		: int;
+	in  into_task		: task_t;
+	in  address		: vm_address_t
+	);
+
+#endif
+
+

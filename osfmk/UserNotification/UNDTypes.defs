@@ -1,0 +1,60 @@
+/*
+ * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ *
+ * @APPLE_LICENSE_HEADER_START@
+ *
+ * The contents of this file constitute Original Code as defined in and
+ * are subject to the Apple Public Source License Version 1.1 (the
+ * "License").  You may not use this file except in compliance with the
+ * License.  Please obtain a copy of the License at
+ * http://www.apple.com/publicsource and read it before using this file.
+ *
+ * This Original Code and all software distributed under the License are
+ * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
+ * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
+ * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
+ * License for the specific language governing rights and limitations
+ * under the License.
+ *
+ * @APPLE_LICENSE_HEADER_END@
+ */
+
+#ifndef _USERNOTIFICATION_UNDTYPES_DEFS_
+#define _USERNOTIFICATION_UNDTYPES_DEFS_
+
+#include <mach/std_types.defs>
+
+/*
+ * UserNotification message types
+*/
+
+type UNDMessage = c_string[*:1024];
+type UNDLabel = c_string[*:128];
+
+type UNDKey = c_string[*:128];
+type UNDPath = c_string[*:1024];
+
+type UNDXMLDict = c_string[*:2048];
+
+/*
+ * serialized XML data
+ */
+type xmlData    = ^ array [] of MACH_MSG_TYPE_BYTE
+	ctype : xmlData_t;
+
+
+type UNDServerRef = mach_port_t;
+
+type UNDReplyRef = mach_port_t
+#if	KERNEL_SERVER
+		intran: UNDReplyRef convert_port_to_UNDReply(mach_port_t)
+#endif	/* KERNEL_SERVER */
+#if	KERNEL_USER
+		ctype: mach_port_t
+#endif /* KERNEL_USER */
+		;
+
+import <UserNotification/UNDTypes.h>;
+
+#endif /* _USERNOTIFICATION_UNDTYPES_DEFS_ */

@@ -1,0 +1,80 @@
+DELETED		sys	linedesc.h
+DELETED		sys	mach_extra.h
+kernserv	kern	kalloc.h
+kernserv	kern	lock.h
+kernserv	kern	queue.h
+kernserv	kern	sched_prim.h
+kernserv	sys	printf.h
+kernserv	next	loadable_fs.h
+mach		kern	exc.defs
+mach		kern	exc.h
+mach		kern	mach.defs
+mach		kern	mach_host.defs
+mach		kern	mach_host.h
+mach		kern	mach_interface.h
+mach		kern	mach_param.h
+mach		kern	mach_traps.h
+mach		kern	mach_types.defs
+mach		kern	mach_types.h
+mach		kern	std_types.defs
+mach		kern	std_types.h
+mach		kern	syscall_sw.h
+mach		sys	boolean.h
+mach		sys	exception.h
+mach		sys	features.h
+mach		sys	host_info.h
+mach		sys	kern_return.h
+mach		sys	machine.h
+mach		sys	message.h
+mach		sys	mig_errors.h
+mach		sys	msg_type.h
+mach		sys	notify.h
+mach		sys	policy.h
+mach		sys	port.h
+mach		sys	processor_info.h
+mach		sys	task_info.h
+mach		sys	task_special_ports.h
+mach		sys	thread_info.h
+mach		sys	thread_special_ports.h
+mach		sys	thread_status.h		COMPATMACHINE
+mach		sys	thread_switch.h
+mach		sys	time_stamp.h		DELETED
+mach		sys	time_value.h
+mach		vm	memory_object.h
+mach		vm	vm_inherit.h
+mach		vm	vm_param.h		COMPATMACHINE
+mach		vm	vm_prot.h
+mach		vm	vm_statistics.h
+mach_debug	kern	ipc_statistics.h	DELETED
+mach_debug	kern	mach_debug.defs		DELETED
+mach_debug	kern	mach_debug.h		DELETED
+mach_debug	kern	mach_debug_types.defs	DELETED
+mach_debug	kern	mach_debug_types.h	DELETED
+mach_debug	kern	zone_info.h		DELETED
+bsd/dev		nextdev	ldd.h
+bsd/dev		nextdev	npio.h
+bsd/dev		nextdev	scsireg.h
+bsd/dev		nextdev	fd_extern.h
+bsd/dev		nextdev	disk.h
+bsd/dev		nextdev	zsreg.h			zsio.h
+bsd/machine	next	cpu.h
+bsd/machine	next	machparam.h
+bsd/machine	next	param.h
+bsd/machine	next	psl.h
+bsd/machine	next	reg.h
+bsd/machine	next	signal.h
+bsd/machine	next	spl.h
+bsd/machine	next	table.h
+bsd/machine	next	user.h
+bsd/machine	next	vmparam.h
+bsd/sys		kern	mach_swapon.h
+kernserv	next	printf.h
+kernserv	next	us_timer.h
+mach/machine	next	boolean.h
+mach/machine	next	exception.h
+mach/machine	next	kern_return.h
+mach/machine	next	syscall_sw.h
+mach/machine	next	thread_status.h		COMPATMACHINE
+mach/machine	next	time_stamp.h		DELETED
+mach/machine	next	vm_param.h		COMPATMACHINE
+mach/machine	next	vm_types.h

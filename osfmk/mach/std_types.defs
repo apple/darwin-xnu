@@ -1,0 +1,124 @@
+/*
+ * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ *
+ * @APPLE_LICENSE_HEADER_START@
+ * 
+ * The contents of this file constitute Original Code as defined in and
+ * are subject to the Apple Public Source License Version 1.1 (the
+ * "License").  You may not use this file except in compliance with the
+ * License.  Please obtain a copy of the License at
+ * http://www.apple.com/publicsource and read it before using this file.
+ * 
+ * This Original Code and all software distributed under the License are
+ * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
+ * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
+ * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
+ * License for the specific language governing rights and limitations
+ * under the License.
+ * 
+ * @APPLE_LICENSE_HEADER_END@
+ */
+/*
+ * @OSF_COPYRIGHT@
+ */
+/* 
+ * Mach Operating System
+ * Copyright (c) 1991,1990,1989,1988 Carnegie Mellon University
+ * All Rights Reserved.
+ * 
+ * Permission to use, copy, modify and distribute this software and its
+ * documentation is hereby granted, provided that both the copyright
+ * notice and this permission notice appear in all copies of the
+ * software, derivative works or modified versions, and any portions
+ * thereof, and that both notices appear in supporting documentation.
+ * 
+ * CARNEGIE MELLON ALLOWS FREE USE OF THIS SOFTWARE IN ITS "AS IS"
+ * CONDITION.  CARNEGIE MELLON DISCLAIMS ANY LIABILITY OF ANY KIND FOR
+ * ANY DAMAGES WHATSOEVER RESULTING FROM THE USE OF THIS SOFTWARE.
+ * 
+ * Carnegie Mellon requests users of this software to return to
+ * 
+ *  Software Distribution Coordinator  or  Software.Distribution@CS.CMU.EDU
+ *  School of Computer Science
+ *  Carnegie Mellon University
+ *  Pittsburgh PA 15213-3890
+ * 
+ * any improvements or extensions that they make and grant Carnegie Mellon
+ * the rights to redistribute these changes.
+ */
+/*
+ */
+/*
+ *	Mach kernel standard interface type declarations
+ */
+
+#ifndef	_MACH_STD_TYPES_DEFS_
+#define _MACH_STD_TYPES_DEFS_
+
+type char = MACH_MSG_TYPE_CHAR;
+type short = MACH_MSG_TYPE_INTEGER_16;
+type int = MACH_MSG_TYPE_INTEGER_32;
+type int32 = MACH_MSG_TYPE_INTEGER_32;
+type boolean_t = MACH_MSG_TYPE_BOOLEAN;
+type unsigned = MACH_MSG_TYPE_INTEGER_32;
+type unsigned32 = MACH_MSG_TYPE_INTEGER_32;
+type int64 = MACH_MSG_TYPE_INTEGER_64;
+type unsigned64 = MACH_MSG_TYPE_INTEGER_64;
+#include <mach/machine/machine_types.defs>
+
+type kern_return_t = int;
+
+type pointer_t = ^array[] of MACH_MSG_TYPE_BYTE
+	ctype: vm_offset_t;
+
+
+type mach_port_t = MACH_MSG_TYPE_COPY_SEND;
+type mach_port_array_t = array[] of mach_port_t;
+
+type mach_port_name_t = MACH_MSG_TYPE_PORT_NAME
+	ctype: mach_port_name_t;
+type mach_port_name_array_t = array[] of mach_port_name_t
+	ctype: mach_port_name_array_t;
+
+type mach_port_right_t = natural_t;
+
+type mach_port_type_t = natural_t;
+type mach_port_type_array_t = array[] of mach_port_type_t;
+
+type mach_port_urefs_t = natural_t;
+type mach_port_delta_t = integer_t;
+type mach_port_seqno_t = natural_t;
+type mach_port_mscount_t = unsigned;
+type mach_port_msgcount_t = unsigned;
+type mach_port_rights_t = unsigned;
+type mach_msg_id_t = integer_t;
+type mach_msg_type_name_t = unsigned;
+type mach_msg_options_t = integer_t;
+
+type mach_port_move_receive_t =		MACH_MSG_TYPE_MOVE_RECEIVE
+	ctype: mach_port_t;
+type mach_port_copy_send_t =		MACH_MSG_TYPE_COPY_SEND
+	ctype: mach_port_t;
+type mach_port_make_send_t =		MACH_MSG_TYPE_MAKE_SEND
+	ctype: mach_port_t;
+type mach_port_move_send_t =		MACH_MSG_TYPE_MOVE_SEND
+	ctype: mach_port_t;
+type mach_port_make_send_once_t =	MACH_MSG_TYPE_MAKE_SEND_ONCE
+	ctype: mach_port_t;
+type mach_port_move_send_once_t =	MACH_MSG_TYPE_MOVE_SEND_ONCE
+	ctype: mach_port_t;
+
+type mach_port_receive_t =		MACH_MSG_TYPE_PORT_RECEIVE
+	ctype: mach_port_t;
+type mach_port_send_t =			MACH_MSG_TYPE_PORT_SEND
+	ctype: mach_port_t;
+type mach_port_send_once_t =		MACH_MSG_TYPE_PORT_SEND_ONCE
+	ctype: mach_port_t;
+
+type mach_port_poly_t = polymorphic
+	ctype: mach_port_t;
+
+import <mach/std_types.h>;
+
+#endif	_MACH_STD_TYPES_DEFS_

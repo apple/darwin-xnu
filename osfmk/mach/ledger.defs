@@ -1,0 +1,72 @@
+/*
+ * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ *
+ * @APPLE_LICENSE_HEADER_START@
+ * 
+ * The contents of this file constitute Original Code as defined in and
+ * are subject to the Apple Public Source License Version 1.1 (the
+ * "License").  You may not use this file except in compliance with the
+ * License.  Please obtain a copy of the License at
+ * http://www.apple.com/publicsource and read it before using this file.
+ * 
+ * This Original Code and all software distributed under the License are
+ * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
+ * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
+ * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
+ * License for the specific language governing rights and limitations
+ * under the License.
+ * 
+ * @APPLE_LICENSE_HEADER_END@
+ */
+/*
+ * @OSF_COPYRIGHT@
+ */
+
+subsystem
+#if	KERNEL_USER
+	  KernelUser
+#endif	/* KERNEL_USER */
+#if	KERNEL_SERVER
+	  KernelServer
+#endif	/* KERNEL_SERVER */
+		       ledger 5000;
+
+#ifdef	KERNEL_USER
+userprefix r_;
+#endif	/* KERNEL_USER */
+
+#include <mach/std_types.defs>
+#include <mach/mach_types.defs>
+
+/*
+ *	Create a subordinate ledger
+ */
+routine ledger_create(
+		parent_ledger		: ledger_t;
+		ledger_ledger		: ledger_t;
+	out	new_ledger		: ledger_t;
+		transfer		: ledger_item_t);
+
+/*
+ *	Destroy a ledger
+ */
+routine ledger_terminate(
+		ledger			: ledger_t);
+
+/*
+ *	Transfer resources from a parent ledger to a child
+ */
+routine ledger_transfer(
+		parent_ledger		: ledger_t;
+		child_ledger		: ledger_t;
+		transfer		: ledger_item_t);
+
+/*
+ *	Return the ledger limit and balance
+ */
+routine ledger_read(
+		ledger			: ledger_t;
+	out	balance			: ledger_item_t;
+	out	limit			: ledger_item_t);
+

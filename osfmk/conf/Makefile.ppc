@@ -1,0 +1,23 @@
+######################################################################
+#BEGIN	Machine dependent Makefile fragment for ppc
+######################################################################
+
+#
+# KDB support
+#
+
+makedis: $(SRCROOT)/osfmk/ddb/makedis.c
+	$(CC) -o $@ $<
+
+ppc_disasm.o_CFLAGS = -Dperror=db_printf -Dexit=db_error -Dmalloc=db_disasm_malloc
+
+ppc_disasm : $(SRCROOT)/osfmk/ppc/ppc_disasm.i makedis
+	./makedis -w -h ./ppc_disasm.h $(SOURCE_DIR)/osfmk/ppc/ppc_disasm.i > ./ppc_disasm.c
+
+ppc_disasm.c ppc_disasm.h : ppc_disasm
+
+db_disasm.o : ppc_disasm.h
+
+######################################################################
+#END	Machine dependent Makefile fragment for ppc
+######################################################################

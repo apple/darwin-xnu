@@ -1,0 +1,17 @@
+# options
+
+# OPTIONS/libkerncpp                                          optional libkerncpp
+# OPTIONS/kdebug                                              optional kdebug
+
+# libsa
+
+libsa/bootstrap.cpp                                           standard
+libsa/catalogue.cpp                                           standard
+libsa/kmod.cpp                                                standard
+libsa/mach.c                                                  standard
+libsa/malloc.c                                                standard
+libsa/misc.c                                                  standard
+libsa/mkext.c                                                 standard
+libsa/sort.c                                                  standard
+libsa/bsearch.c                                               standard
+libsa/vers_rsrc.c                                             standard

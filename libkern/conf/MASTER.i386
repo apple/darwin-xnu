@@ -1,0 +1,11 @@
+######################################################################
+#
+#  RELEASE = [intel mach libkerncpp]
+#  PROFILE = [intel mach libkerncpp profile]
+#  DEBUG = [intel mach libkerncpp debug]
+#
+######################################################################
+
+machine		"i386"					# <intel>
+cpu		"i386"					# <intel>
+

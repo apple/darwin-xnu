@@ -1,0 +1,241 @@
+/*
+ * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ *
+ * @APPLE_LICENSE_HEADER_START@
+ * 
+ * The contents of this file constitute Original Code as defined in and
+ * are subject to the Apple Public Source License Version 1.1 (the
+ * "License").  You may not use this file except in compliance with the
+ * License.  Please obtain a copy of the License at
+ * http://www.apple.com/publicsource and read it before using this file.
+ * 
+ * This Original Code and all software distributed under the License are
+ * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
+ * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
+ * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
+ * License for the specific language governing rights and limitations
+ * under the License.
+ * 
+ * @APPLE_LICENSE_HEADER_END@
+ */
+/*
+ * @OSF_COPYRIGHT@
+ */
+/* 
+ * Mach Operating System
+ * Copyright (c) 1991,1990,1989,1988,1987 Carnegie Mellon University
+ * All Rights Reserved.
+ * 
+ * Permission to use, copy, modify and distribute this software and its
+ * documentation is hereby granted, provided that both the copyright
+ * notice and this permission notice appear in all copies of the
+ * software, derivative works or modified versions, and any portions
+ * thereof, and that both notices appear in supporting documentation.
+ * 
+ * CARNEGIE MELLON ALLOWS FREE USE OF THIS SOFTWARE IN ITS "AS IS"
+ * CONDITION.  CARNEGIE MELLON DISCLAIMS ANY LIABILITY OF ANY KIND FOR
+ * ANY DAMAGES WHATSOEVER RESULTING FROM THE USE OF THIS SOFTWARE.
+ * 
+ * Carnegie Mellon requests users of this software to return to
+ * 
+ *  Software Distribution Coordinator  or  Software.Distribution@CS.CMU.EDU
+ *  School of Computer Science
+ *  Carnegie Mellon University
+ *  Pittsburgh PA 15213-3890
+ * 
+ * any improvements or extensions that they make and grant Carnegie Mellon
+ * the rights to redistribute these changes.
+ */
+/*
+ */
+/*
+ * File:	mach/memory_object.defs
+ *
+ * Abstract:
+ *	Basic Mach external memory management interface declaration.
+ */
+
+subsystem
+#if	KERNEL_USER
+	  KernelUser
+#endif	KERNEL_USER
+#if	KERNEL_SERVER
+	  KernelServer
+#endif	KERNEL_SERVER
+		     memory_object 2200;
+
+#ifdef	MACH_KERNEL
+#include <advisory_pageout.h>
+#endif	/* MACH_KERNEL */
+
+#include <mach/std_types.defs>
+#include <mach/mach_types.defs>
+
+#if	KERNEL_SERVER
+serverprefix dp_;
+#else
+#if	SEQNOS
+serverprefix seqnos_;
+serverdemux seqnos_memory_object_server;
+#endif	SEQNOS
+#endif
+
+/*
+ *	Initialize the specified memory object, providing
+ *	a reqeust port on which control calls can be made.
+ *	[To allow the mapping of this object to be used, the
+ *	memory manager must call memory_object_set_attributes,
+ *	specifying the "ready" parameter as TRUE.  To reject
+ *	all mappings of this object, the memory manager may
+ *	use memory_object_destroy.]
+ */
+simpleroutine	memory_object_init(
+		memory_object		: memory_object_t;
+#if	SEQNOS
+	msgseqno seqno			: mach_port_seqno_t;
+#endif	SEQNOS
+		memory_control		: memory_object_control_t =
+						MACH_MSG_TYPE_MAKE_SEND
+						ctype: mach_port_t;
+		memory_object_page_size	: vm_size_t);
+
+
+/*
+ *	Indicates that the specified memory object is no longer
+ *	mapped (or cached -- see memory_object_set_attributes),
+ *	and that further mappings will cause another memory_object_init
+ *	call to be made.  No further calls will be made on
+ *	the memory object by this kernel.
+ *
+ *	[All rights to the control and name ports are included
+ *	in this call.  The memory manager should use port_deallocate
+ *	to release them once they are no longer needed.]
+ */
+simpleroutine	memory_object_terminate(
+		memory_object		: memory_object_t =
+						MACH_MSG_TYPE_MOVE_SEND
+						ctype: mach_port_t;
+#if	SEQNOS
+	msgseqno seqno			: mach_port_seqno_t;
+#endif	SEQNOS
+		memory_control		: memory_object_control_t =
+						MACH_MSG_TYPE_MOVE_RECEIVE
+						ctype: mach_port_t);
+
+/*
+ *	Request data from this memory object.  At least
+ *	the specified data should be returned with at
+ *	least the specified access permitted.
+ *
+ *	[Reply should be memory_object_data_provided.]
+ */
+simpleroutine	memory_object_data_request(
+		memory_object		: memory_object_t;
+#if	SEQNOS
+	msgseqno seqno			: mach_port_seqno_t;
+#endif	SEQNOS
+		memory_control		: memory_object_control_t =
+						MACH_MSG_TYPE_MAKE_SEND
+						ctype: mach_port_t;
+		offset			: memory_object_offset_t;
+		length			: vm_size_t;
+		desired_access		: vm_prot_t);
+
+/*
+ *	Request that the specified portion of this
+ *	memory object be unlocked to allow the specified
+ *	forms of access; the kernel already has the data.
+ *
+ *	[Reply should be memory_object_lock_request.]
+ */
+simpleroutine	memory_object_data_unlock(
+		memory_object		: memory_object_t;
+#if	SEQNOS
+	msgseqno seqno			: mach_port_seqno_t;
+#endif	SEQNOS
+		memory_control		: memory_object_control_t =
+						MACH_MSG_TYPE_MAKE_SEND
+						ctype: mach_port_t;
+		offset			: memory_object_offset_t;
+		length			: vm_size_t;
+		desired_access		: vm_prot_t);
+
+/*
+ *	Indicate that a previous memory_object_lock_reqeust has been
+ *	completed.  Note that this call is made on whatever
+ *	port is specified in the memory_object_lock_request; that port
+ *	need not be the memory object port itself.
+ *
+ *	[No reply expected.]
+ */
+simpleroutine	memory_object_lock_completed(
+		memory_object		: memory_object_t =
+			polymorphic|MACH_MSG_TYPE_PORT_SEND_ONCE
+			ctype: mach_port_t;
+#if	SEQNOS
+	msgseqno seqno			: mach_port_seqno_t;
+#endif	SEQNOS
+		memory_control		: memory_object_control_t =
+						MACH_MSG_TYPE_MAKE_SEND
+						ctype: mach_port_t;
+		offset			: memory_object_offset_t;
+		length			: vm_size_t);
+
+	skip;
+
+/*
+ *	Return data to manager.  This call is used in place of data_write
+ *	for objects initialized by object_ready instead of set_attributes.
+ *	This call indicates whether the returned data is dirty and whether
+ *	the kernel kept a copy.  Precious data remains precious if the
+ *	kernel keeps a copy.  The indication that the kernel kept a copy
+ *	is only a hint if the data is not precious; the cleaned copy may
+ *	be discarded without further notifying the manager.
+ *
+ *	[Reply should be vm_deallocate to release the data.]
+ */
+simpleroutine   memory_object_data_return(
+		memory_object		: memory_object_t;
+#if	SEQNOS
+	msgseqno seqno			: mach_port_seqno_t;
+#endif	SEQNOS
+		memory_control		: memory_object_control_t =
+						MACH_MSG_TYPE_MAKE_SEND
+						ctype: mach_port_t;
+		offset		 	: memory_object_offset_t;
+		data		 	: pointer_t;
+		dirty			: boolean_t;
+		kernel_copy		: boolean_t);
+
+
+simpleroutine memory_object_synchronize(
+		memory_object           : memory_object_t;
+#if	SEQNOS
+	msgseqno seqno                  : mach_port_seqno_t;
+#endif	SEQNOS
+		memory_control          : memory_object_control_t =
+					  MACH_MSG_TYPE_MAKE_SEND
+					  ctype: mach_port_t;
+			offset          : memory_object_offset_t;
+			length          : vm_offset_t;
+			sync_flags      : vm_sync_t );
+
+
+/*
+ *	Confirm a successful memory_object_change attributes message.
+ */
+simpleroutine   memory_object_change_completed(
+                memory_object           : memory_object_t =
+                        	polymorphic|MACH_MSG_TYPE_PORT_SEND_ONCE
+                        	ctype: mach_port_t;
+#if     SEQNOS
+        msgseqno seqno                  : mach_port_seqno_t;
+#endif  SEQNOS
+                memory_control          : memory_object_control_t =
+                                MACH_MSG_TYPE_MAKE_SEND
+                                ctype: mach_port_t;
+                flavor               	: memory_object_flavor_t);
+
+
+	skip;

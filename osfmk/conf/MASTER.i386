@@ -1,0 +1,103 @@
+#
+# Mach Operating System
+# Copyright (c) 1986 Carnegie-Mellon University
+# All rights reserved.  The CMU software License Agreement
+# specifies the terms and conditions for use and redistribution.
+#  
+######################################################################
+#
+#  Master Apple MacOS X configuration file
+#  (see the master machine independent
+#  configuration file for a description of the file format).
+#
+######################################################################
+# HISTORY
+# 5-Jun-1998	Umesh Vaishampayan	(umeshv@apple.com)
+#	Deleted obsolete history. Created tagets like RELEASEX, PROFILEX,
+#	DEBUGX for MacOS X. These in short term will facilitate development
+#	concurrent to MacOSX.
+######################################################################
+#
+#  NeXT (PSEUDO-)DEVICES (select any combination)
+#	ex   = Excelan EXOS 202 Ethernet interface
+#	ip   = Interphase V/SMD 3200 disk controller
+#	od   = Canon OMD-1 Optical Disk
+#	rd   = RAM disk
+#	sd   = SCSI disk
+#	sg   = Generic SCSI Device
+#	st   = SCSI tape
+#	fd   = Floppy Disk 
+#	en   = Integrated Ethernet controller
+#	dsp  = DSP560001 digital signal processor
+#	iplmeas = ipl time measurement
+#	nextp = NeXT Laser Printer
+#	sound = sound I/O
+#	vol   = removable volume support device
+#	venip = virtual Ethernet/IP network interface
+#	zs    = Serial device
+#
+#  MULTIPROCESSOR SUPPORT (select exactly one)
+#	multi = support 4 processors
+#	uni   = supports single processor
+#
+#  SPECIAL CHARACTERISTICS (select any combination)
+#	gdb        = GNU kernel debugger
+#	posix_kern = POSIX support
+#
+#  CPU TYPE (select exactly one)
+#	NeXT   = FIXME
+#
+######################################################################
+#  
+#  Standard Apple MacOS X Configurations:
+#  -------- ---- -------- ---------------
+#
+#  MOSTX = [intel pc mach medium event vol pst gdb kernobjc fixpri simple_clock mdebug kernserv driverkit uxpr kernstack ipc_compat ipc_debug nfsclient nfsserver quota fifo fdesc union portal ffs cd9660 compat_43 revfs]
+#  RELEASEX = [MOSTX libdriver]
+#  PROFILEX = [RELEASE profile]
+#  DEBUGX = [MOSTX libdriver_g debug xpr_debug uxpr diagnostic]
+#  DEBUG-PROFILEX = [DEBUGX profile]
+#  osfmk = [intel pc mach small event vol pst gdb kernobjc fixpri simple_clock mkernserv driverkit uxpr kernstack ipc_compat ipc_debug nfsclient nfsserver quota fifo fdesc union portal ffs cd9660 compat_43 revfs mk30 mk30_i386]
+#  RELEASE = [intel pc iokit mach_pe mach mach_kdp small event vol hd pst gdb kernobjc fixpri simple_clock mkernserv driverkit uxpr kernstack ipc_compat ipc_debug nfsclient nfsserver quota fifo fdesc union portal ffs fb cd9660 compat_43 revfs mk30 mk30_i386]
+#  DEBUG_KDP = [intel pc iokit mach_pe mach mach_kdp small event vol hd pst gdb kernobjc fixpri simple_clock mkernserv driverkit uxpr kernstack ipc_compat ipc_debug nfsclient nfsserver quota fifo fdesc union portal ffs fb cd9660 compat_43 revfs mk30 mk30_i386 osf_debug debug]
+#  DEBUG= [intel pc iokit mach_pe mach mach_kdp small event vol hd pst gdb kernobjc fixpri simple_clock mkernserv driverkit uxpr kernstack ipc_compat ipc_debug nfsclient nfsserver quota fifo fdesc union portal ffs fb cd9660 compat_43 revfs mk30 mk30_i386 osf_debug debug]
+#  RELEASEX = [MOSTX libdriver]
+#
+######################################################################
+#
+machine		"i386"						# <intel>
+cpu		"i386"						# <intel>
+
+pseudo-device	cpus	2
+
+# choices for platform_bus are pci at386 sqt and kkt
+makeoptions	OSFMK_MACHINE = "i386"				# <mk30>
+makeoptions	CCONFIGFLAGS = "-g -O -fno-omit-frame-pointer"	# <debug>
+makeoptions	CCONFIGFLAGS = "-O3"				# <!debug>
+makeoptions	RELOC = "00100000"				# <intel>
+makeoptions	SYMADDR = "00780000"				# <intel>
+
+options		GDB		# GNU kernel debugger		# <gdb>
+options		DEBUG		# general debugging code	# <debug>
+options		SHOW_SPACE	# print size of structures	# <debug>
+options		EVENTMETER	# event meter support		# <debug>
+options		FP_EMUL		# floating point emulation	# <fp>
+options		PC_SUPPORT	# virtual PC support		# <pc>
+options		UXPR		# user-level XPR package	# <uxpr>
+options		STAT_TIME	# time stats
+config		mach_kernel	swap generic			# <mach>
+
+options		EVENT						# <event>
+
+options		MACH_BSD
+options         IOKIT		#				# <iokit>
+options         MACH_PE		#				# <mach_pe>
+
+#options	DDB		# Inline debugger		# <debug>
+options		MACH_KDP	# KDP				# <mach_kdp>
+
+# SMP
+options		MP_V1_1
+
+# FIXME
+pseudo-device com 2

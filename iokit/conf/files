@@ -1,0 +1,233 @@
+# options
+
+OPTIONS/iokitcpp					optional iokitcpp
+OPTIONS/kdebug						optional kdebug
+
+# libIOKit
+
+iokit/Kernel/IOLib.c					optional iokitcpp
+iokit/Kernel/IOLocks.cpp				optional iokitcpp
+iokit/Kernel/IOConditionLock.cpp			optional iokitcpp
+iokit/Kernel/IOSyncer.cpp				optional iokitcpp
+
+#iokit/Kernel/IORuntime.cpp				optional iokitcpp
+iokit/Kernel/IOStartIOKit.cpp				optional iokitcpp
+
+iokit/Kernel/IODeviceTreeSupport.cpp			optional iokitcpp
+
+iokit/Kernel/IORegistryEntry.cpp			optional iokitcpp
+iokit/Kernel/IOService.cpp				optional iokitcpp
+iokit/Kernel/IOServicePM.cpp				optional iokitcpp
+iokit/Kernel/IOPMchangeNoteList.cpp			optional iokitcpp
+iokit/Kernel/IOPMinformee.cpp				optional iokitcpp
+iokit/Kernel/IOPMinformeeList.cpp			optional iokitcpp
+iokit/Kernel/IOCatalogue.cpp				optional iokitcpp
+iokit/Kernel/IOPMPowerSource.cpp                        optional iokitcpp
+iokit/Kernel/IOPMPowerSourceList.cpp                    optional iokitcpp
+
+iokit/Kernel/IOWorkLoop.cpp				optional iokitcpp
+iokit/Kernel/IOEventSource.cpp				optional iokitcpp
+iokit/Kernel/IOInterruptEventSource.cpp			optional iokitcpp
+iokit/Kernel/IOCommandGate.cpp				optional iokitcpp
+iokit/Kernel/IOCommand.cpp				optional iokitcpp
+iokit/Kernel/IOCommandPool.cpp				optional iokitcpp
+iokit/Kernel/IOCommandQueue.cpp				optional iokitcpp
+iokit/Kernel/IOFilterInterruptEventSource.cpp		optional iokitcpp
+iokit/Kernel/IOTimerEventSource.cpp			optional iokitcpp
+
+iokit/Kernel/IODeviceMemory.cpp				optional iokitcpp
+iokit/Kernel/IOMemoryDescriptor.cpp			optional iokitcpp
+iokit/Kernel/IOMemoryCursor.cpp				optional iokitcpp
+iokit/Kernel/IOBufferMemoryDescriptor.cpp		optional iokitcpp
+iokit/Kernel/IOMultiMemoryDescriptor.cpp		optional iokitcpp
+iokit/Kernel/IORangeAllocator.cpp			optional iokitcpp
+
+iokit/Kernel/IOPlatformExpert.cpp			optional iokitcpp
+
+iokit/Kernel/IOCPU.cpp					optional iokitcpp
+
+iokit/Kernel/IONVRAM.cpp				optional iokitcpp
+
+iokit/Kernel/IOInterruptController.cpp			optional iokitcpp
+
+iokit/Kernel/IOUserClient.cpp				optional iokitcpp
+
+iokit/Kernel/IOKitDebug.cpp				optional iokitcpp
+iokit/Kernel/IODataQueue.cpp				optional iokitcpp
+# iokit/Tests/Tests.cpp					optional iokitcpp
+# iokit/Tests/TestDevice.cpp				optional iokitcpp
+# iokit/Tests/TestContainers.cpp			optional iokitcpp
+# iokit/Tests/TestCollections.cpp			optional iokitcpp
+
+iokit/Kernel/IOStringFuncs.c				standard
+
+# Property tables for kernel-linked objects
+
+iokit/KernelConfigTables.cpp				optional iokitcpp
+
+# Networking
+
+iokit/Families/IONetworking/IOPacketQueue.cpp           optional iokitcpp
+iokit/Families/IONetworking/IOMbufMemoryCursor.cpp      optional iokitcpp
+iokit/Families/IONetworking/IOOutputQueue.cpp           optional iokitcpp
+iokit/Families/IONetworking/IOKernelDebugger.cpp        optional iokitcpp
+iokit/Families/IONetworking/IONetworkController.cpp     optional iokitcpp
+iokit/Families/IONetworking/IONetworkInterface.cpp      optional iokitcpp
+iokit/Families/IONetworking/IONetworkData.cpp           optional iokitcpp
+iokit/Families/IONetworking/IONetworkMedium.cpp         optional iokitcpp
+iokit/Families/IONetworking/IONetworkStack.cpp          optional iokitcpp
+iokit/Families/IONetworking/IONetworkUserClient.cpp     optional iokitcpp
+iokit/Families/IONetworking/IOEthernetController.cpp    optional iokitcpp
+iokit/Families/IONetworking/IOEthernetInterface.cpp     optional iokitcpp
+
+# PCI support
+
+iokit/Families/IOPCIBus/IOPCIBridge.cpp			optional iokitcpp
+iokit/Families/IOPCIBus/IOPCIDevice.cpp			optional iokitcpp
+
+# Event driver
+
+iokit/Families/IOHIDSystem/IOHIDevice.cpp		optional iokitcpp
+iokit/Families/IOHIDSystem/IOHIDIO.cpp			optional iokitcpp
+iokit/Families/IOHIDSystem/IOHIDSystem.cpp		optional iokitcpp
+iokit/Families/IOHIDSystem/IOHIKeyboard.cpp		optional iokitcpp
+iokit/Families/IOHIDSystem/IOHIKeyboardMapper.cpp	optional iokitcpp
+iokit/Families/IOHIDSystem/IOHIPointing.cpp		optional iokitcpp
+iokit/Families/IOHIDSystem/IOHITablet.cpp		optional iokitcpp
+iokit/Families/IOHIDSystem/IOHITabletPointer.cpp	optional iokitcpp§
+iokit/Families/IOHIDSystem/IOHIDUserClient.cpp		optional iokitcpp
+iokit/Families/IOHIDSystem/IOHIDDescriptorParser/HIDCheckReport.c            optional iokitcpp
+iokit/Families/IOHIDSystem/IOHIDDescriptorParser/HIDCountDescriptorItems.c   optional iokitcpp
+iokit/Families/IOHIDSystem/IOHIDDescriptorParser/HIDGetButtonCaps.c          optional iokitcpp
+iokit/Families/IOHIDSystem/IOHIDDescriptorParser/HIDGetButtons.c             optional iokitcpp
+iokit/Families/IOHIDSystem/IOHIDDescriptorParser/HIDGetButtonsOnPage.c       optional iokitcpp
+iokit/Families/IOHIDSystem/IOHIDDescriptorParser/HIDGetCaps.c                optional iokitcpp
+iokit/Families/IOHIDSystem/IOHIDDescriptorParser/HIDGetCollectionNodes.c     optional iokitcpp
+iokit/Families/IOHIDSystem/IOHIDDescriptorParser/HIDGetData.c                optional iokitcpp
+iokit/Families/IOHIDSystem/IOHIDDescriptorParser/HIDGetNextButtonInfo.c      optional iokitcpp
+iokit/Families/IOHIDSystem/IOHIDDescriptorParser/HIDGetNextUsageValueInfo.c  optional iokitcpp
+iokit/Families/IOHIDSystem/IOHIDDescriptorParser/HIDGetReportLength.c        optional iokitcpp
+iokit/Families/IOHIDSystem/IOHIDDescriptorParser/HIDGetUsageValue.c          optional iokitcpp
+iokit/Families/IOHIDSystem/IOHIDDescriptorParser/HIDGetUsageValueArray.c     optional iokitcpp
+iokit/Families/IOHIDSystem/IOHIDDescriptorParser/HIDGetValueCaps.c           optional iokitcpp
+iokit/Families/IOHIDSystem/IOHIDDescriptorParser/HIDHasUsage.c               optional iokitcpp
+iokit/Families/IOHIDSystem/IOHIDDescriptorParser/HIDInitReport.c             optional iokitcpp
+iokit/Families/IOHIDSystem/IOHIDDescriptorParser/HIDIsButtonOrValue.c        optional iokitcpp
+iokit/Families/IOHIDSystem/IOHIDDescriptorParser/HIDMaxUsageListLength.c     optional iokitcpp
+iokit/Families/IOHIDSystem/IOHIDDescriptorParser/HIDNextItem.c               optional iokitcpp
+iokit/Families/IOHIDSystem/IOHIDDescriptorParser/HIDOpenCloseDescriptor.c    optional iokitcpp
+iokit/Families/IOHIDSystem/IOHIDDescriptorParser/HIDParseDescriptor.c        optional iokitcpp
+iokit/Families/IOHIDSystem/IOHIDDescriptorParser/HIDPostProcessRIValue.c     optional iokitcpp
+iokit/Families/IOHIDSystem/IOHIDDescriptorParser/HIDProcessCollection.c      optional iokitcpp
+iokit/Families/IOHIDSystem/IOHIDDescriptorParser/HIDProcessGlobalItem.c      optional iokitcpp
+iokit/Families/IOHIDSystem/IOHIDDescriptorParser/HIDProcessLocalItem.c       optional iokitcpp
+iokit/Families/IOHIDSystem/IOHIDDescriptorParser/HIDProcessMainItem.c        optional iokitcpp
+iokit/Families/IOHIDSystem/IOHIDDescriptorParser/HIDProcessReportItem.c      optional iokitcpp
+iokit/Families/IOHIDSystem/IOHIDDescriptorParser/HIDPutData.c                optional iokitcpp
+iokit/Families/IOHIDSystem/IOHIDDescriptorParser/HIDScaleUsageValue.c        optional iokitcpp
+iokit/Families/IOHIDSystem/IOHIDDescriptorParser/HIDSetButtons.c             optional iokitcpp
+iokit/Families/IOHIDSystem/IOHIDDescriptorParser/HIDSetScaledUsageValue.c    optional iokitcpp
+iokit/Families/IOHIDSystem/IOHIDDescriptorParser/HIDSetUsageValue.c          optional iokitcpp
+iokit/Families/IOHIDSystem/IOHIDDescriptorParser/HIDSetUsageValueArray.c     optional iokitcpp
+iokit/Families/IOHIDSystem/IOHIDDescriptorParser/HIDUsageAndPageFromIndex.c  optional iokitcpp
+iokit/Families/IOHIDSystem/IOHIDDescriptorParser/HIDUsageInRange.c           optional iokitcpp
+iokit/Families/IOHIDSystem/IOHIDDescriptorParser/HIDUsageListDifference.c    optional iokitcpp
+iokit/Families/IOHIDSystem/IOHIDDescriptorParser/PoolAlloc.c                 optional iokitcpp
+
+# Graphics support
+
+iokit/Families/IOGraphics/IOGraphicsDevice.cpp		optional iokitcpp
+iokit/Families/IOGraphics/IOFramebuffer.cpp		optional iokitcpp
+iokit/Families/IOGraphics/IOFramebufferUserClient.cpp	optional iokitcpp
+iokit/Families/IOGraphics/IODisplay.cpp			optional iokitcpp
+iokit/Families/IOGraphics/IODisplayWrangler.cpp		optional iokitcpp
+iokit/Families/IOGraphics/AppleDDCDisplay.cpp		optional iokitcpp
+iokit/Families/IOGraphics/IOBootFramebuffer.cpp		optional iokitcpp
+iokit/Families/IOGraphics/IOAccelerator.cpp		optional iokitcpp
+
+# BSD shim files
+
+iokit/bsddev/IOBSDConsole.cpp				optional iokitcpp
+iokit/bsddev/IOKitBSDInit.cpp				optional iokitcpp
+
+# SCSI support
+iokit/Families/IOSCSIParallel/IOSCSIParallelController.cpp	optional iokitcpp
+iokit/Families/IOSCSIParallel/IOSCSIParallelDevice.cpp		optional iokitcpp
+iokit/Families/IOSCSIParallel/IOSCSIParallelCommand.cpp		optional iokitcpp
+iokit/Families/IOSCSIParallel/queueHelpers.cpp			optional iokitcpp
+
+# ATA support
+#iokit/Families/IOATAStandard/IOATAStandardController.cpp	optional iokitcpp
+#iokit/Families/IOATAStandard/IOATAStandardDevice.cpp		optional iokitcpp
+#iokit/Families/IOATAStandard/IOATAStandardCommand.cpp		optional iokitcpp
+#iokit/Families/IOATAStandard/IOATAStandardData.cpp		optional iokitcpp
+#iokit/Families/IOATAStandard/ATAQueueHelpers.cpp		optional iokitcpp
+
+#iokit/Families/IOATAStandard/IOATAStandardDriver.cpp            optional iokitcpp
+#iokit/Families/IOATAStandard/IOATAStandardDriverPio.cpp         optional iokitcpp
+#iokit/Families/IOATAStandard/IOATAStandardDriverDma.cpp         optional iokitcpp
+
+# Power Management
+iokit/Drivers/platform/drvAppleRootDomain/RootDomainUserClient.cpp	optional iokitcpp
+iokit/Kernel/IOPowerConnection.cpp						optional iokitcpp
+
+
+# Storage Family
+iokit/Families/IOStorage/IOApplePartitionScheme.cpp			optional iokitcpp
+iokit/Families/IOStorage/IOBlockStorageDriver.cpp			optional iokitcpp
+iokit/Families/IOStorage/IOFDiskPartitionScheme.cpp			optional iokitcpp
+iokit/Families/IOStorage/IOMedia.cpp						optional iokitcpp
+iokit/Families/IOStorage/IOMediaBSDClient.cpp				optional iokitcpp
+iokit/Families/IOStorage/IONeXTPartitionScheme.cpp			optional iokitcpp
+iokit/Families/IOStorage/IOPartitionScheme.cpp				optional iokitcpp
+iokit/Families/IOStorage/IOStorage.cpp						optional iokitcpp
+
+# Storage Family: CDs
+iokit/Families/IOCDStorage/IOCDAudioControl.cpp				optional iokitcpp
+iokit/Families/IOCDStorage/IOCDAudioControlUserClient.cpp	optional iokitcpp
+iokit/Families/IOCDStorage/IOCDBlockStorageDriver.cpp		optional iokitcpp
+iokit/Families/IOCDStorage/IOCDMedia.cpp					optional iokitcpp
+iokit/Families/IOCDStorage/IOCDPartitionScheme.cpp			optional iokitcpp
+
+# Storage Family: DVDs
+iokit/Families/IODVDStorage/IODVDBlockStorageDriver.cpp		optional iokitcpp
+iokit/Families/IODVDStorage/IODVDMedia.cpp		optional iokitcpp
+
+
+# Block Storage Family
+iokit/Families/IOBlockStorage/IOBlockStorageDevice.cpp		optional iokitcpp
+iokit/Families/IOCDBlockStorage/IOCDBlockStorageDevice.cpp	optional iokitcpp
+iokit/Families/IODVDBlockStorage/IODVDBlockStorageDevice.cpp	optional iokitcpp
+
+# Block Storage Family: SCSI
+iokit/Families/IOSCSIHDDrive/IOBasicSCSI.cpp		optional iokitcpp
+iokit/Families/IOSCSIHDDrive/IOSCSIHDDrive.cpp		optional iokitcpp
+iokit/Families/IOSCSIHDDrive/IOSCSIHDDriveNub.cpp	optional iokitcpp
+
+iokit/Families/IOSCSICDDrive/IOSCSICDDrive.cpp		optional iokitcpp
+iokit/Families/IOSCSICDDrive/IOSCSICDDriveNub.cpp	optional iokitcpp
+
+iokit/Families/IOSCSIDVDDrive/IOSCSIDVDDrive.cpp	optional iokitcpp
+iokit/Families/IOSCSIDVDDrive/IOSCSIDVDDriveNub.cpp	optional iokitcpp
+
+# Block Storage Family: ATA
+#iokit/Families/IOATAHDDrive/IOATAHDDrive.cpp        optional iokitcpp
+#iokit/Families/IOATAHDDrive/IOATAHDDriveNub.cpp     optional iokitcpp
+#iokit/Families/IOATAHDDrive/IOATAHDCommand.cpp      optional iokitcpp
+#iokit/Families/IOATAHDDrive/IOATAHDPower.cpp		optional iokitcpp
+
+# Block Storage Family: ATAPI
+#iokit/Families/IOATAPIHDDrive/IOATAPIHDDrive.cpp    optional iokitcpp
+#iokit/Families/IOATAPIHDDrive/IOATAPIHDDriveNub.cpp optional iokitcpp
+#iokit/Families/IOATAPIHDDrive/IOATAPIHDCommand.cpp  optional iokitcpp
+
+#iokit/Families/IOATAPICDDrive/IOATAPICDDrive.cpp    optional iokitcpp
+#iokit/Families/IOATAPICDDrive/IOATAPICDDriveNub.cpp optional iokitcpp
+#iokit/Families/IOATAPICDDrive/IOATAPICDCommand.cpp  optional iokitcpp
+
+#iokit/Families/IOATAPIDVDDrive/IOATAPIDVDDrive.cpp    optional iokitcpp
+#iokit/Families/IOATAPIDVDDrive/IOATAPIDVDDriveNub.cpp optional iokitcpp
+#iokit/Families/IOATAPIDVDDrive/IOATAPIDVDCommand.cpp  optional iokitcpp
+
+# System Management
+iokit/Families/IOSystemManagement/IOWatchDogTimer.cpp	optional iokitcpp

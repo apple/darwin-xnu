@@ -1,0 +1,17 @@
+#
+######################################################################
+#  
+#  Standard Apple MacOS X Configurations:
+#  -------- ---- -------- ---------------
+#
+#  RELEASE = [ppc mach iokitcpp]
+#  PROFILE = [ppc mach iokitcpp profile]
+#  DEBUG = [ppc mach iokitcpp debug]
+#  RELEASE_TRACE = [ RELEASE kdebug ]
+#  DEBUG_TRACE   = [ DEBUG kdebug ]
+#
+######################################################################
+
+machine		"ppc"					# <ppc>
+cpu		"ppc"					# <ppc>
+

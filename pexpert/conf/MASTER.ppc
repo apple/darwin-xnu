@@ -1,0 +1,17 @@
+#
+######################################################################
+#  
+#  Standard NeXT Research Configurations:
+#  -------- ---- -------- ---------------
+#
+#  RELEASE = [ppc mach mach_pe]
+#  RELEASE_TRACE = [RELEASE kdebug]
+#  PROFILE = [ppc mach mach_pe profile]
+#  DEBUG = [ppc mach mach_pe debug]
+#  DEBUG_TRACE = [DEBUG kdebug]
+#
+######################################################################
+
+machine		"ppc"					# <ppc>
+cpu		"ppc"					# <ppc>
+

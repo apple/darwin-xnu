@@ -1,0 +1,253 @@
+/*
+ * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ *
+ * @APPLE_LICENSE_HEADER_START@
+ * 
+ * The contents of this file constitute Original Code as defined in and
+ * are subject to the Apple Public Source License Version 1.1 (the
+ * "License").  You may not use this file except in compliance with the
+ * License.  Please obtain a copy of the License at
+ * http://www.apple.com/publicsource and read it before using this file.
+ * 
+ * This Original Code and all software distributed under the License are
+ * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
+ * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
+ * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
+ * License for the specific language governing rights and limitations
+ * under the License.
+ * 
+ * @APPLE_LICENSE_HEADER_END@
+ */
+/*
+ * @OSF_COPYRIGHT@
+ */
+/*
+ * HISTORY
+ * 
+ * Revision 1.1.1.1  1998/09/22 21:05:30  wsanchez
+ * Import of Mac OS X kernel (~semeria)
+ *
+ * Revision 1.1.1.1  1998/03/07 02:25:45  wsanchez
+ * Import of OSF Mach kernel (~mburg)
+ *
+ * Revision 1.3.17.2  1994/09/23  02:38:45  ezf
+ * 	change marker to not FREE
+ * 	[1994/09/22  21:40:54  ezf]
+ *
+ * Revision 1.3.17.1  1994/06/13  20:49:36  dlb
+ * 	Merge MK6 and NMK17
+ * 	[1994/06/13  20:47:52  dlb]
+ * 
+ * Revision 1.3.11.1  1994/02/08  11:01:11  bernadat
+ * 	Checked in NMK16_1 changes
+ * 	[94/02/04            bernadat]
+ * 
+ * Revision 1.3.4.2  1993/07/22  13:54:29  bernadat
+ * 	[Joe Barerra: joebar@microsoft.com] Added norma_task_teleport as
+ * 	an alternative migration mechanism.
+ * 	Change from NORMA_MK14.6 [93/03/08            sjs]
+ * 	[93/07/16            bernadat]
+ * 
+ * Revision 1.3.2.2  1993/06/02  23:45:24  jeffc
+ * 	Added to OSF/1 R1.3 from NMK15.0.
+ * 	[1993/06/02  21:16:50  jeffc]
+ * 
+ * Revision 1.3  1992/12/07  21:29:17  robert
+ * 	integrate any changes below for 14.0 (branch from 13.16 base)
+ * 
+ * 	Joseph Barrera (jsb) at Carnegie-Mellon University 03-Jul-92
+ * 	Added norma_task_clone to support task migration.
+ * 	[1992/12/06  20:25:30  robert]
+ * 
+ * Revision 1.2  1992/11/25  01:13:00  robert
+ * 	fix history
+ * 	[1992/11/09  21:25:21  robert]
+ * 
+ * 	integrate changes below for norma_14
+ * 	[1992/11/09  16:42:52  robert]
+ * 
+ * Revision 0.0  92/10/02            dwm
+ * 	Add Comment: norma_port_location_hint requires send rights on 'port'.
+ * 
+ * 	Revision 1.1  1992/11/05  20:59:18  robert
+ * 	Initial revision
+ * 	[92/10/02            dwm]
+ * 
+ * $EndLog$
+ */
+/* CMU_HIST */
+/*
+ * Revision 2.6  91/12/13  13:45:12  jsb
+ * 	Moved non-exported interfaces to norma/norma_internal.defs.
+ * 	Changed name of task_create_remote to norma_task_create.
+ * 	Added comments.
+ * 
+ * Revision 2.5  91/11/14  16:56:43  rpd
+ * 	Picked up mysterious norma changes.
+ * 	[91/11/14            rpd]
+ * 
+ * Revision 2.4  91/08/28  11:15:08  jsb
+ * 	Added KERNEL_USER definitions.
+ * 	Removed norma_set_task_server.
+ * 	Added task_create_remote, norma_copy_create.
+ * 	[91/08/15  13:28:27  jsb]
+ * 
+ * Revision 2.3  91/08/03  18:19:02  jsb
+ * 	Removed norma_get_{host,host_priv,device}_port;
+ * 	Use norma_{get,set}_special_port instead.
+ * 	[91/07/25  07:51:11  jsb]
+ * 
+ * Revision 2.2  91/06/06  17:07:57  jsb
+ * 	First checkin.
+ * 	[91/05/25  10:37:22  jsb]
+ * 
+ */
+/* CMU_ENDHIST */
+/* 
+ * Mach Operating System
+ * Copyright (c) 1991 Carnegie Mellon University
+ * All Rights Reserved.
+ * 
+ * Permission to use, copy, modify and distribute this software and its
+ * documentation is hereby granted, provided that both the copyright
+ * notice and this permission notice appear in all copies of the
+ * software, derivative works or modified versions, and any portions
+ * thereof, and that both notices appear in supporting documentation.
+ * 
+ * CARNEGIE MELLON ALLOWS FREE USE OF THIS SOFTWARE IN ITS "AS IS"
+ * CONDITION.  CARNEGIE MELLON DISCLAIMS ANY LIABILITY OF ANY KIND FOR
+ * ANY DAMAGES WHATSOEVER RESULTING FROM THE USE OF THIS SOFTWARE.
+ * 
+ * Carnegie Mellon requests users of this software to return to
+ * 
+ *  Software Distribution Coordinator  or  Software.Distribution@CS.CMU.EDU
+ *  School of Computer Science
+ *  Carnegie Mellon University
+ *  Pittsburgh PA 15213-3890
+ * 
+ * any improvements or extensions that they make and grant Carnegie Mellon
+ * the rights to redistribute these changes.
+ */
+/*
+ */
+
+subsystem
+#if	KERNEL_USER
+	  KernelUser
+#endif	KERNEL_USER
+#if	KERNEL_SERVER
+	  KernelServer
+#endif	KERNEL_SERVER
+		       mach_norma 555000;
+#ifdef	KERNEL_USER
+userprefix r_;
+#endif	KERNEL_USER
+
+#include <mach/std_types.defs>
+#include <mach/mach_types.defs>
+
+skip;
+
+/*
+ * Specify a node upon which children tasks will be created.
+ * This call exists only to allow testing with unmodified servers.
+ * Server developers should use norma_task_create instead.
+ */
+routine	task_set_child_node(
+		target_task	: task_t;
+		child_node	: int);
+
+/*
+ * THIS CALL WILL BE ELIMINATED.
+ * Use norma_port_location_hint(,mach_task_self(),) instead.
+ */
+routine norma_node_self(
+		host		: host_t;
+	out	node		: int);
+
+skip;
+
+skip;
+
+/*
+ * Create a task on the given node, possibly inheriting memory.
+ * Same inheritance semantics as task_create, including inheritance
+ * of initial ports and emulation library, except for memory:
+ * inheritance attributes are ignored, so that all regions appear
+ * in the child task, shared with the parent, until the parent
+ * is destroyed. (The inheritance of the regions in the child
+ * will, however, be set to match the parent.)
+ *
+ * This call is intended to support process migration, where the
+ * inheritance semantics of norma_task_create would break migrated
+ * programs that depended upon sharing relationships remaining
+ * after migration.
+ *
+ * This call is not a true task migration call, in that it does not
+ * migrate the port space, threads, and other non-address-space
+ * attributes of the task.
+ */
+routine norma_task_clone(
+		target_task	: task_t;
+		inherit_memory	: boolean_t;
+		child_node	: int;
+	out	child_task	: task_t);
+
+/*
+ * Create a task on the given node, possibly inheriting memory.
+ * Same inheritance semantics as task_create, including inheritance
+ * of initial ports and emulation library.
+ * Setting child_node to node_self forces local task creation.
+ */
+routine norma_task_create(
+		target_task	: task_t;
+		inherit_memory	: boolean_t;
+		child_node	: int;
+	out	child_task	: task_t);
+
+/*
+ * Get a given special port for a given node.
+ * Norma special ports are defined in norma_special_ports.h;
+ * examples include the master device port.
+ * There are a limited number of slots available for system servers.
+ */
+routine	norma_get_special_port(
+		host_priv	: host_priv_t;
+		node		: int;
+		which		: int;
+	out	port		: mach_port_t);
+
+/*
+ * Set a given special port for a given node.
+ * See norma_get_special_port.
+ */
+routine	norma_set_special_port(
+		host_priv	: host_priv_t;
+		which		: int;
+		port		: mach_port_t);
+
+/*
+ * Just like norma_task_clone, except target_task is terminated,
+ * allowing useful VM optimizations.
+ */
+routine norma_task_teleport(
+		target_task	: task_t;
+		inherit_memory	: boolean_t;
+		child_node	: int;
+	out	child_task	: task_t);
+
+skip;
+
+skip;
+
+/*
+ * Return best guess of port's current location.
+ * Guaranteed to be a node where the port once was.
+ * Guaranteed to be accurate if port has never moved.
+ * Can be used to determine residence node for hosts, tasks, threads, etc.
+ */
+routine norma_port_location_hint(
+		task		: task_t;
+		port		: mach_port_t;
+	out	node		: int);

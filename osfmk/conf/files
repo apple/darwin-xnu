@@ -1,0 +1,260 @@
+#
+# @OSF_COPYRIGHT@
+#
+# Mach Operating System
+# Copyright (c) 1991,1990,1989 Carnegie Mellon University
+# All Rights Reserved.
+# 
+# Permission to use, copy, modify and distribute this software and its
+# documentation is hereby granted, provided that both the copyright
+# notice and this permission notice appear in all copies of the
+# software, derivative works or modified versions, and any portions
+# thereof, and that both notices appear in supporting documentation.
+# 
+# CARNEGIE MELLON ALLOWS FREE USE OF THIS SOFTWARE IN ITS "AS IS" 
+# CONDITION.  CARNEGIE MELLON DISCLAIMS ANY LIABILITY OF ANY KIND FOR
+# ANY DAMAGES WHATSOEVER RESULTING FROM THE USE OF THIS SOFTWARE.
+# 
+# Carnegie Mellon requests users of this software to return to
+# 
+#  Software Distribution Coordinator  or  Software.Distribution@CS.CMU.EDU
+#  School of Computer Science
+#  Carnegie Mellon University
+#  Pittsburgh PA 15213-3890
+# 
+# any improvements or extensions that they make and grant Carnegie Mellon
+# the rights to redistribute these changes.
+#
+
+#
+# N.B. "kern/lock.c" is listed as "optional cpus" so that config will
+# create a "cpus.h" file.
+#
+
+OPTIONS/dli			optional dli
+OPTIONS/etap			optional etap
+OPTIONS/etap_lock_accumulate	optional etap_lock_accumulate
+OPTIONS/etap_lock_monitor	optional etap_lock_monitor
+OPTIONS/etap_event_monitor	optional etap_event_monitor
+OPTIONS/fast_idle		optional fast_idle
+OPTIONS/kdebug			optional kdebug
+OPTIONS/mach_assert		optional mach_assert
+OPTIONS/mach_debug		optional mach_debug
+OPTIONS/mach_machine_routines.h	optional mach_machine_routines
+#
+OPTIONS/norma_vm		optional norma_vm
+OPTIONS/norma_task		optional norma_task
+OPTIONS/norma_ether		optional norma_ether
+OPTIONS/norma_scsi		optional norma_scsi
+OPTIONS/mach_cluster_stats	optional mach_cluster_stats
+OPTIONS/mach_counters		optional mach_counters
+OPTIONS/mach_host		optional mach_host
+OPTIONS/mach_ipc_debug		optional mach_ipc_debug
+OPTIONS/mach_ipc_test		optional mach_ipc_test
+OPTIONS/mach_kdb		optional mach_kdb
+OPTIONS/mach_kgdb		optional mach_kgdb
+OPTIONS/mach_kdp		optional mach_kdp
+OPTIONS/mach_kprof		optional mach_kprof
+OPTIONS/mach_ldebug		optional mach_ldebug
+OPTIONS/mach_lock_mon		optional mach_lock_mon
+OPTIONS/mach_mp_debug		optional mach_mp_debug
+OPTIONS/mach_pagemap		optional mach_pagemap
+OPTIONS/mach_prof		optional mach_prof
+OPTIONS/mach_rt			optional mach_rt
+OPTIONS/advisory_pageout	optional advisory_pageout
+#
+# MACH_RT is real-time.  MACH_TR is debugging.
+# Unfortunate choice of letters.
+#
+OPTIONS/mach_tr			optional mach_tr
+OPTIONS/mach_vm_debug		optional mach_vm_debug
+OPTIONS/mach_page_hash_stats    optional mach_page_hash_stats
+OPTIONS/mig_debug		optional mig_debug
+OPTIONS/hw_footprint		optional hw_footprint
+OPTIONS/simple_clock		optional simple_clock
+OPTIONS/stat_time		optional stat_time
+OPTIONS/time_stamp		optional time_stamp
+OPTIONS/xpr_debug		optional xpr_debug
+OPTIONS/bootstrap_symbols	optional bootstrap_symbols
+OPTIONS/fast_tas		optional fast_tas
+OPTIONS/power_save		optional power_save
+OPTIONS/zone_debug		optional zone_debug
+OPTIONS/vm_cpm			optional vm_cpm
+OPTIONS/task_swapper		optional task_swapper
+OPTIONS/thread_swapper		optional thread_swapper
+OPTIONS/stack_usage		optional stack_usage
+
+# Default pager and system pager files, to be moved to separate component
+ 
+osfmk/default_pager/default_pager.c	standard
+osfmk/default_pager/dp_backing_store.c	standard
+osfmk/default_pager/dp_memory_object.c	standard
+./default_pager/default_pager_alerts_user.c	standard
+./default_pager/default_pager_object_server.c	standard
+
+#
+# UserNotification files
+#
+./UserNotification/UNDRequest.c			standard
+./UserNotification/UNDReplyServer.c		standard
+osfmk/UserNotification/KUNCUserNotifications.c	standard
+
+osfmk/ddb/db_access.c			optional mach_kdb
+osfmk/ddb/db_break.c			optional mach_kdb
+osfmk/ddb/db_command.c		optional mach_kdb
+osfmk/ddb/db_cond.c			optional mach_kdb
+osfmk/ddb/db_examine.c		optional mach_kdb
+osfmk/ddb/db_expr.c			optional mach_kdb
+osfmk/ddb/db_ext_symtab.c		standard
+osfmk/ddb/db_input.c			optional mach_kdb
+osfmk/ddb/db_lex.c			optional mach_kdb
+osfmk/ddb/db_macro.c			optional mach_kdb
+osfmk/ddb/db_output.c			optional mach_kdb
+osfmk/ddb/db_print.c			optional mach_kdb
+osfmk/ddb/db_run.c			optional mach_kdb
+osfmk/ddb/db_sym.c			optional mach_kdb
+osfmk/ddb/db_task_thread.c		optional mach_kdb
+osfmk/ddb/db_trap.c			optional mach_kdb
+osfmk/ddb/db_variables.c		optional mach_kdb
+osfmk/ddb/db_watch.c			optional mach_kdb
+osfmk/ddb/db_write_cmd.c		optional mach_kdb
+
+osfmk/ddb/tr.c			optional mach_tr
+osfmk/kdp/kdp.c			optional mach_kdp
+osfmk/kdp/kdp_udp.c			optional mach_kdp
+osfmk/ipc/ipc_entry.c			standard
+osfmk/ipc/ipc_hash.c			standard
+osfmk/ipc/ipc_init.c			standard
+osfmk/ipc/ipc_kmsg.c			standard
+osfmk/ipc/ipc_mqueue.c		standard
+osfmk/ipc/ipc_notify.c		standard
+osfmk/ipc/ipc_object.c		standard
+osfmk/ipc/ipc_port.c			standard
+osfmk/ipc/ipc_pset.c			standard
+osfmk/ipc/ipc_right.c			standard
+osfmk/ipc/ipc_space.c			standard
+osfmk/ipc/ipc_splay.c			standard
+osfmk/ipc/ipc_table.c			standard
+osfmk/ipc/mach_debug.c		standard
+osfmk/ipc/mach_msg.c			standard
+osfmk/ipc/mach_port.c			standard
+osfmk/ipc/mig_log.c			optional mig_debug
+osfmk/kern/ast.c			standard
+osfmk/kern/clock.c			standard
+osfmk/kern/counters.c			standard
+osfmk/kern/cpu_data.c                 standard
+osfmk/kern/debug.c			standard
+osfmk/kern/exception.c		standard
+osfmk/kern/etap.c			standard
+osfmk/kern/etap_pool.c		optional etap
+osfmk/kern/host.c			standard
+osfmk/kern/ipc_clock.c		standard
+osfmk/kern/ipc_host.c			standard
+osfmk/kern/ipc_kobject.c		standard
+osfmk/kern/ipc_mig.c			standard
+osfmk/kern/ipc_subsystem.c		standard
+osfmk/kern/ipc_sync.c			standard
+osfmk/kern/ipc_tt.c			standard
+osfmk/kern/kalloc.c			standard
+osfmk/kern/ledger.c			standard
+osfmk/kern/lock.c			optional cpus
+osfmk/kern/lock_mon.c			optional mach_lock_mon
+osfmk/kern/mach_clock.c		standard
+osfmk/kern/mach_factor.c		standard
+osfmk/kern/machine.c			standard
+osfmk/kern/mk_sp.c			standard
+osfmk/kern/mk_timer.c		standard
+osfmk/kern/profile.c			standard
+osfmk/kern/printf.c			standard
+osfmk/kern/priority.c			standard
+osfmk/kern/processor.c		standard
+osfmk/kern/queue.c			standard
+osfmk/kern/sched_prim.c		standard
+osfmk/kern/sf.c			standard
+osfmk/kern/spl.c			standard
+osfmk/kern/sscanf.c			standard
+osfmk/kern/startup.c			standard
+osfmk/kern/subsystem.c		standard
+osfmk/kern/sync_lock.c		standard
+osfmk/kern/sync_sema.c		standard
+osfmk/kern/syscall_emulation.c	standard
+osfmk/kern/syscall_subr.c		standard
+osfmk/kern/syscall_sw.c		standard
+osfmk/kern/task.c			standard
+osfmk/kern/task_policy.c	standard
+osfmk/kern/task_swap.c		standard
+osfmk/kern/thread.c			standard
+osfmk/kern/thread_act.c		standard
+osfmk/kern/thread_call.c	standard
+osfmk/kern/thread_policy.c	standard
+osfmk/kern/thread_pool.c		standard
+osfmk/kern/thread_swap.c	standard
+osfmk/kern/timer.c			standard
+osfmk/kern/timer_call.c		standard
+osfmk/kern/wait_queue.c		standard
+osfmk/kern/xpr.c			optional xpr_debug
+osfmk/kern/zalloc.c			standard
+osfmk/kern/bsd_kern.c		optional mach_bsd
+./mach/clock_server.c			standard
+./mach/clock_priv_server.c		standard
+./mach/clock_reply_user.c		standard
+./mach/exc_user.c			standard
+./mach/exc_server.c			optional mach_bsd
+./mach/host_priv_server.c		standard
+./mach/host_security_server.c		standard
+./mach/ledger_server.c			standard
+./mach/lock_set_server.c		standard
+./mach/mach_host_server.c		standard
+./mach/mach_port_server.c		standard
+./mach/memory_object_user.c		standard
+./mach/memory_object_server.c		standard
+./mach/memory_object_default_user.c	standard
+./mach/memory_object_control_server.c	standard
+./mach/memory_object_default_server.c	standard
+./mach/memory_object_name_server.c	standard
+./mach/upl_server.c			standard
+#
+# JMM- right now we don't use the MIG-generated client interface
+# for notifications, instead we hand create them. We need to switch
+# when we can (i.e. when we can get the send-always behavior covered
+# even with MIG-generated code).
+# ./mach/notify_user.c			standard
+#
+./mach/processor_server.c		standard
+./mach/processor_set_server.c		standard
+./mach/prof_user.c			optional mach_prof
+./mach/semaphore_server.c		standard
+./mach/task_server.c			standard
+./mach/thread_act_server.c		standard
+./mach/vm_map_server.c			standard
+osfmk/mach-o/mach_header.c		standard
+osfmk/vm/memory_object.c		standard
+osfmk/vm/vm_debug.c			standard
+osfmk/vm/vm_external.c                optional mach_pagemap
+osfmk/vm/vm_fault.c			standard
+osfmk/vm/vm_init.c			standard
+osfmk/vm/vm_kern.c			standard
+osfmk/vm/vm_map.c			standard
+osfmk/vm/vm_object.c			standard
+osfmk/vm/vm_pageout.c			standard
+osfmk/vm/vm_resident.c		standard
+osfmk/vm/vm_shared_memory_server.c	standard
+osfmk/vm/vm_user.c			standard
+osfmk/vm/bsd_vm.c			optional mach_bsd
+
+#
+# IOKit files, for a while
+#
+osfmk/device/iokit_rpc.c		optional iokit
+./device/device_server.c		optional iokit
+osfmk/device/device_init.c		optional iokit
+
+# kernel module loader interface
+osfmk/kern/kmod.c			standard
+
+#
+# This file should go away when we get 
+# libsa (it now only contains string
+# funcs).
+#
+osfmk/device/subrs.c			standard

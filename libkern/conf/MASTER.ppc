@@ -1,0 +1,17 @@
+#
+######################################################################
+#  
+#  Standard Apple MacOS X Configurations:
+#  -------- ---- -------- ---------------
+#
+#  RELEASE = [ppc mach libkerncpp]
+#  PROFILE = [ppc mach libkerncpp profile]
+#  DEBUG = [ppc mach libkerncpp debug]
+#  RELEASE_TRACE = [ RELEASE kdebug ]
+#  DEBUG_TRACE   = [ DEBUG kdebug ]
+#
+######################################################################
+
+machine		"ppc"					# <ppc>
+cpu		"ppc"					# <ppc>
+

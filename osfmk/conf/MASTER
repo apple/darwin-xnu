@@ -1,0 +1,198 @@
+#
+# Mach Operating System
+# Copyright (c) 1986 Carnegie-Mellon University
+# All rights reserved.	The CMU software License Agreement
+# specifies the terms and conditions for use and redistribution.
+#  
+#######################################################################
+#
+#	Master machine independent configuration file.
+#
+#	Specific configuration files are created based on this and
+#	the machine specific master file using the doconf script.
+#
+#	Any changes to the master configuration files will affect all
+#	other configuration files based upon it.
+#
+#######################################################################
+#
+#	To build a configuration, execute "doconf <configuration>."
+#	Configurations are specified in the "Configurations:" section
+#	of the MASTER and MASTER.* files as follows:
+#
+#	<configuration> = [ <attribute0> <attribute1> ... <attributeN> ]
+#
+#	Lines in the MASTER and MASTER.* files are selected based on
+#	the attribute selector list, found in a comment at the end of
+#	the line.  This is a list of attributes separated by commas.
+#	The "!" operator selects the line if none of the attributes are
+#	specified.
+#
+#	For example:
+#
+#	<foo,bar>	selects a line if "foo" or "bar" are specified.
+#	<!foo,bar>	selects a line if neither "foo" nor "bar" is
+#			specified.
+#
+#	Lines with no attributes specified are selected for all
+#	configurations.
+#
+#######################################################################
+#
+# Basic compilation options.
+#
+# The MACH ident is passed to every kernel file compilation as -DMACH.
+#	This is useful in order to #ifdef code that is intended to be used in
+#	a MACH kernel.
+#
+ident		MACH
+##############################################################################
+#
+# MACH configuration options.
+#
+# TASK_SWAPPER enables code that manages demand for physical memory by
+#	forcibly suspending tasks when the demand exceeds supply. This
+#	option should be on.
+#
+options		MACH_KERNEL
+options		MACH_PAGEMAP
+options		MACH_LOAD
+options		MACH_RT
+options		THREAD_SWAPPER	#	<thread_swapper_disabled>
+options		TASK_SWAPPER	#	<task_swapper_disabled>
+pseudo-device	test_device	1
+options		ADVISORY_PAGEOUT
+##########################################################
+#
+# conf/config.debug
+#
+# This defines configuration options that are normally used only during
+# kernel code development and debugging. They add run-time error checks or
+# statistics gathering, which will slow down the system
+#
+##########################################################
+#
+# MACH_ASSERT controls the assert() and ASSERT() macros, used to verify the
+#	consistency of various algorithms in the kernel. The performance impact
+#	of this option is significant.
+#
+options		MACH_ASSERT	#		# <debug>
+#
+# MACH_DEBUG enables the mach_debug_server, a message interface used to
+#	retrieve or control various statistics. This interface may expose data
+#	structures that would not normally be allowed outside the kernel, and
+#	MUST NOT be enabled on a released configuration.
+#	Other options here enable information retrieval for specific subsystems
+#
+options		MACH_DEBUG	#		#
+#
+options		MACH_IPC_DEBUG	#		# <debug>
+options		MACH_VM_DEBUG	#		# <debug>
+#
+# MACH_MP_DEBUG control the possible dead locks that may occur by controlling
+#	that IPL level has been raised down to SPL0 after some calls to
+#	hardclock device driver.
+#
+options		MACH_MP_DEBUG	#		# <debug>
+#
+# ZONE_DEBUG keeps track of all zalloc()ed elements to perform further
+#	operations on each element.
+#
+options		ZONE_DEBUG	#		# <debug>
+# 
+# XPR_DEBUG enables the gathering of data through the XPR macros inserted
+#	into various subsystems. This option is normally only enabled for
+#	specific performance or behavior studies, as the overhead in both
+#	code and data space is large. The data is normally retrieved through
+#	the kernel debugger (kdb) or by reading /dev/kmem.
+#	
+options		XPR_DEBUG	#		# <debug>
+# 
+# MACH_LDEBUG controls the internal consistency checks and
+#	data gathering in the locking package. This also enables a debug-only
+#	version of simple-locks on uniprocessor machines. The code size and
+#	performance impact of this option is significant.
+# 
+options		MACH_LDEBUG	#		# <debug>
+
+#
+# 
+#
+options		KDEBUG		# kernel tracing	# <kdebug>
+
+#	
+# MACH_COUNTERS enables code that handles various counters in the system.
+# 
+options		MACH_COUNTERS	#		# <debug>
+#
+# ETAP	The Event Trace Analysis Package enables user-level tasks to monitor
+#	and analyze kernel events.  ETAP supports three modes of tracing:
+#
+#		1. General event tracing:	ETAP_EVENT_MONITOR
+#		2. Monitored lock tracing:	ETAP_LOCK_MONITOR
+#		3. Cumulative lock tracing:	ETAP_LOCK_ACCUMULATE
+#
+#	Each of these trace modes are mutually exclusive.
+#
+#	CONFIGURING ETAP:  To enable the trace package, the ETAP switch
+#	along with *ONE* ETAP trace mode is selected.  The selected ETAP
+#	mode determines the level of instrumentation built into the kernel.
+#	Mode 1 configures event probes through-out the system.	Modes 2 & 3
+#	add instumentation to the kernel lock mechanisms.
+#
+#	ETAP (and all its trace modes) is mutually exclusive with the
+#	MACH_LDEBUG option.  It is assumed that general lock debugging is
+#	completed before gathering event information.
+#
+#	ETAP functionality is normally only enabled for event profiling and
+#	performance studies.  Event tracing should not be enabled for release
+#	configurations, as the code size and performance impact of these
+#	options are significant.
+#
+#
+#options	ETAP			# ETAP enable
+#options	ETAP_EVENT_MONITOR	# Monitor events
+#options	ETAP_LOCK_MONITOR	# Monitor lock behavior
+#options	ETAP_LOCK_ACCUMULATE	# Collect cumulative lock data
+
+##########################################################
+#
+# This defines configuration options that are normally used only during
+# kernel code development and performance characterization. They add run-time
+# statistics gathering, which will slow down the system,
+#
+##########################################################
+#
+# MACH_PROF enables the profiling server, a message interface used to
+#	retrieve profiling statistics.
+#
+#options	MACH_PROF		#		# <mach_prof>
+#
+# MACH_IPC_STATS controls the collection of statistics in the MACH IPC
+#	subsystem.
+#
+#options	MACH_IPC_STATS
+#
+# MACH_CO_INFO controls the collection of callout statistics. This
+#	information is retrieved via a mach_debug message, or though
+#	/dev/kmem. The runtime impact of the option is minimal.
+#
+#options	MACH_CO_INFO
+#
+# MACH_CLUSTER_STATS controls the collection of various statistics concerning
+#	the effectiveness and behavior of the clustered pageout and pagein
+#	code.
+#
+#options	MACH_CLUSTER_STATS
+#
+# MACH_SCTIMES enables optional code that can be used to measure the
+#	execution overhead of performing Mach traps with 1 through 6
+#	arguments.
+#
+#options	MACH_SCTIMES
+#
+# MACH_COUNTERS enables various code-path statistics. Most of these
+#	are accessed through the debugger.
+#
+options		MACH_COUNTERS		#		# <stats>
+

@@ -1,0 +1,43 @@
+export MakeInc_cmd=${SRCROOT}/makedefs/MakeInc.cmd
+export MakeInc_def=${SRCROOT}/makedefs/MakeInc.def
+export MakeInc_rule=${SRCROOT}/makedefs/MakeInc.rule
+export MakeInc_dir=${SRCROOT}/makedefs/MakeInc.dir
+
+
+include $(MakeInc_cmd)
+include $(MakeInc_def)
+
+MIGKSFLAGS      = -DKERNEL_SERVER
+MIGKUFLAGS      = -DKERNEL_USER -maxonstack 1024
+
+DEFAULT_PAGER_FILES = default_pager_object_server.h default_pager_object_server.c
+
+DEFAULT_PAGER_ALERTS = default_pager_alerts.h default_pager_alerts.c
+
+ 
+OTHERS	= ${DEFAULT_PAGER_FILES} ${DEFAULT_PAGER_ALERTS}
+        
+.ORDER: ${DEFAULT_PAGER_FILES} ${DEFAULT_PAGER_ALERTS} 
+
+${DEFAULT_PAGER_FILES}: default_pager_object.defs
+	${_MIG_} ${_MIGFLAGS_} ${MIGKSFLAGS}	\
+	-header /dev/null			\
+	-user /dev/null				\
+	-sheader default_pager_object_server.h	\
+	-server default_pager_object_server.c	\
+	$<
+
+${DEFAULT_PAGER_ALERTS}: default_pager_alerts.defs
+	${_MIG_} ${_MIGFLAGS_} ${MIGKUFLAGS}	\
+	-header default_pager_alerts.h		\
+	-user default_pager_alerts.c		\
+	-sheader /dev/null			\
+	-server /dev/null			\
+	$<
+
+        
+ 
+include $(MakeInc_rule)
+include $(MakeInc_dir)
+
+

@@ -1,0 +1,9 @@
+#	$NetBSD: TODO.hibler,v 1.6 1994/12/13 22:33:10 mycroft Exp $
+
+1. Investiate making ISOFS another UFS shared filesystem (ala FFS/MFS/LFS).
+   Since it was modelled after the inode code, we might be able to merge
+   them back.  It looks like a seperate (but very similar) lookup routine
+   will be needed due to the associated file stuff.
+
+2. Seems like there should be a "notrans" or some such mount option to show
+   filenames as they really are without lower-casing.  Does this make sense?

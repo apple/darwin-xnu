@@ -1,0 +1,219 @@
+/*
+ * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ *
+ * @APPLE_LICENSE_HEADER_START@
+ * 
+ * The contents of this file constitute Original Code as defined in and
+ * are subject to the Apple Public Source License Version 1.1 (the
+ * "License").  You may not use this file except in compliance with the
+ * License.  Please obtain a copy of the License at
+ * http://www.apple.com/publicsource and read it before using this file.
+ * 
+ * This Original Code and all software distributed under the License are
+ * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
+ * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
+ * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
+ * License for the specific language governing rights and limitations
+ * under the License.
+ * 
+ * @APPLE_LICENSE_HEADER_END@
+ */
+/*
+ * @OSF_COPYRIGHT@
+ */
+/* 
+ * Mach Operating System
+ * Copyright (c) 1991,1990,1989,1988,1987 Carnegie Mellon University
+ * All Rights Reserved.
+ * 
+ * Permission to use, copy, modify and distribute this software and its
+ * documentation is hereby granted, provided that both the copyright
+ * notice and this permission notice appear in all copies of the
+ * software, derivative works or modified versions, and any portions
+ * thereof, and that both notices appear in supporting documentation.
+ * 
+ * CARNEGIE MELLON ALLOWS FREE USE OF THIS SOFTWARE IN ITS "AS IS"
+ * CONDITION.  CARNEGIE MELLON DISCLAIMS ANY LIABILITY OF ANY KIND FOR
+ * ANY DAMAGES WHATSOEVER RESULTING FROM THE USE OF THIS SOFTWARE.
+ * 
+ * Carnegie Mellon requests users of this software to return to
+ * 
+ *  Software Distribution Coordinator  or  Software.Distribution@CS.CMU.EDU
+ *  School of Computer Science
+ *  Carnegie Mellon University
+ *  Pittsburgh PA 15213-3890
+ * 
+ * any improvements or extensions that they make and grant Carnegie Mellon
+ * the rights to redistribute these changes.
+ */
+/*
+ */
+/*
+ * File:	mach/memory_object.defs
+ *
+ * Abstract:
+ *	Basic Mach external memory management interface declaration.
+ */
+
+subsystem
+#if	KERNEL_USER
+	  KernelUser
+#endif	KERNEL_USER
+#if	KERNEL_SERVER
+	  KernelServer
+#endif	KERNEL_SERVER
+		     memory_object_control 2000;
+
+#ifdef	MACH_KERNEL
+#include <advisory_pageout.h>
+#endif	/* MACH_KERNEL */
+
+#include <mach/std_types.defs>
+#include <mach/mach_types.defs>
+
+/*
+ * JMM - For now we define back-and-forth paging until we get the code
+ * cleaned up.
+ */
+#define _BACK_AND_FORTH_PAGING_
+
+/*
+ *      Retrieves the attributes currently associated with
+ *      a memory object.
+ */
+routine memory_object_get_attributes(
+                memory_control  : vm_object_t;
+		flavor		: memory_object_flavor_t;
+	out	attributes	: memory_object_info_t, CountInOut);
+
+
+simpleroutine memory_object_change_attributes(
+                memory_control  : vm_object_t;
+                flavor          : memory_object_flavor_t;
+        	attributes      : memory_object_info_t
+#ifdef _BACK_AND_FORTH_PAGING_
+                ; reply_to      : mach_port_t =
+                        MACH_MSG_TYPE_MAKE_SEND|polymorphic
+#endif
+		);
+
+simpleroutine memory_object_synchronize_completed (
+			memory_control	: vm_object_t;
+			offset		: memory_object_offset_t;
+			length		: vm_offset_t);
+
+skip;
+
+/*
+ *	Control use of the data associated with the given
+ *	memory object.  For each page in the given range,
+ *	perform the following operations, in order:
+ *		1)  restrict access to the page (disallow
+ *		    forms specified by "prot");
+ *		2)  write back modifications (if "should_return"
+ *		    is RETURN_DIRTY and the page is dirty, or
+ *		    "should_return" is RETURN_ALL and the page
+ * 		    is either dirty or precious); and,
+ *		3)  flush the cached copy (if "should_flush"
+ *		    is asserted).
+ *	The set of pages is defined by a starting offset
+ *	("offset") and size ("size").  Only pages with the
+ *	same page alignment as the starting offset are
+ *	considered.
+ *
+ *	A single acknowledgement is sent (to the "reply_to"
+ *	port) when these actions are complete.
+ *
+ *	There are two versions of this routine because IPC distinguishes
+ *	between booleans and integers (a 2-valued integer is NOT a
+ *	boolean).  The new routine is backwards compatible at the C
+ *	language interface.
+ */
+simpleroutine memory_object_lock_request(
+		memory_control	: vm_object_t;
+		offset		: memory_object_offset_t;
+		size		: memory_object_size_t;
+		should_return	: memory_object_return_t;
+		flags		: integer_t;
+		lock_value	: vm_prot_t
+#ifdef _BACK_AND_FORTH_PAGING_
+		; reply_to	: mach_port_t =
+			MACH_MSG_TYPE_MAKE_SEND|polymorphic
+#endif
+		);
+
+
+	skip;
+
+/*
+ */
+simpleroutine memory_object_destroy(
+		memory_control	: vm_object_t;
+		reason		: kern_return_t);
+
+/*
+ *	Provide the data contents of a range of the given memory
+ *	object, with the access restriction specified, optional
+ *	precious attribute, and reply message.  [Only
+ *	whole virtual pages of data can be accepted; partial pages
+ *	will be discarded.  Data should be provided on request, but
+ *	may be provided in advance as desired.  When data already
+ *	held by this kernel is provided again, the new data is ignored.
+ *	The access restriction is the subset of {read, write, execute}
+ *	which are prohibited.  The kernel may not provide any data (or
+ *	protection) consistency among pages with different virtual page
+ *	alignments within the same object.  The precious value controls
+ *	how the kernel treats the data.  If it is FALSE, the kernel treats
+ *	its copy as a temporary and may throw it away if it hasn't been
+ *	changed.  If the precious value is TRUE, the kernel treats its
+ *	copy as a data repository and promises to return it to the manager;
+ *	the manager may tell the kernel to throw it away instead by flushing
+ *	and not cleaning the data -- see memory_object_lock_request.  The
+ *	reply_to port is for a compeletion message; it will be
+ *	memory_object_supply_completed.]
+ */
+
+	skip;
+
+	skip;
+
+routine vm_object_upl_request(
+		object		:vm_object_entry_t;
+	in	offset		:memory_object_offset_t;
+	in	size		:vm_size_t;
+	out	upl		:mach_port_move_send_t;
+	out	page_list	:upl_page_list_ptr_t, CountInOut;
+	in	cntrl_flags	:integer_t);
+
+routine vm_pager_upl_request(
+		object		:vm_object_entry_t;
+	in	offset		:memory_object_offset_t;
+	in	size		:vm_size_t;
+	in	super_size	:vm_size_t;
+	out	upl		:mach_port_move_send_t;
+	out	page_list	:upl_page_list_ptr_t, CountInOut;
+	in	cntrl_flags	:integer_t);
+
+routine vm_upl_map(
+		map		:vm_task_entry_t;
+	in	upl		:upl_object_t;
+	inout	dst_addr	:vm_offset_t);
+
+routine vm_upl_unmap(
+		map		:vm_task_entry_t;
+	in	upl		:upl_object_t);
+
+routine vm_upl_abort(
+		upl_object	:upl_object_entry_t;
+	in	abort_cond	:integer_t);
+ 
+routine vm_upl_commit(
+		upl_object	:upl_object_entry_t;
+	in	page_list	:upl_page_list_ptr_t);
+
+routine vm_upl_commit_range(
+		upl_object	:upl_object_entry_t;
+		offset		:vm_offset_t;
+		size		:vm_size_t;
+	in	page_list	:upl_page_list_ptr_t);

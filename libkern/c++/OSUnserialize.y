@@ -1,0 +1,659 @@
+/*
+ * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ *
+ * @APPLE_LICENSE_HEADER_START@
+ * 
+ * The contents of this file constitute Original Code as defined in and
+ * are subject to the Apple Public Source License Version 1.1 (the
+ * "License").  You may not use this file except in compliance with the
+ * License.  Please obtain a copy of the License at
+ * http://www.apple.com/publicsource and read it before using this file.
+ * 
+ * This Original Code and all software distributed under the License are
+ * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
+ * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
+ * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
+ * License for the specific language governing rights and limitations
+ * under the License.
+ * 
+ * @APPLE_LICENSE_HEADER_END@
+ */
+
+/*  OSUnserialize.y created by rsulack on Nov 21 1998 */
+
+// 		"classic" parser for unserializing OSContainer objects
+//
+//  XXX - this code should really be removed!
+//	- the XML format is now prefered
+//	- this code leaks on syntax errors, the XML doesn't
+//	- "classic" looks, reads, ... much better than XML :-(
+//	- well except the XML is more efficent on OSData
+//
+//
+// to build :
+//	bison -p OSUnserialize OSUnserialize.y
+//	head -50 OSUnserialize.y > OSUnserialize.cpp
+//	sed -e "s/stdio.h/stddef.h/" < OSUnserialize.tab.c >> OSUnserialize.cpp
+//
+//	when changing code check in both OSUnserialize.y and OSUnserialize.cpp
+//
+//
+//
+//
+//		 DO NOT EDIT OSUnserialize.tab.cpp!
+//
+//			this means you!
+//
+//
+//
+//
+//
+
+     
+%{
+#include <libkern/c++/OSMetaClass.h>
+#include <libkern/c++/OSContainers.h>
+#include <libkern/c++/OSLib.h>
+
+typedef	struct object {
+	struct object	*next;
+	struct object	*prev;
+	void		*object;
+	int		size;		// for data
+	union {
+		void	*key;		// for dictionary
+		long long offset;	// for offset
+	} u;
+
+} object_t;
+
+static int yyparse();
+static int yyerror(char *s);
+static int yylex();
+
+static object_t * newObject();
+static void freeObject(object_t *o);
+
+static OSObject *buildOSDictionary(object_t *);
+static OSObject *buildOSArray(object_t *);
+static OSObject *buildOSSet(object_t *);
+static OSObject *buildOSString(object_t *);
+static OSObject *buildOSData(object_t *);
+static OSObject *buildOSOffset(object_t *);
+static OSObject *buildOSBoolean(object_t *o);
+
+static void rememberObject(int, object_t *);
+static OSObject *retrieveObject(int);
+
+// temp variable to use during parsing
+static object_t *o;
+
+// resultant object of parsed text
+static OSObject	*parsedObject;
+
+#define YYSTYPE object_t *
+
+extern "C" {
+extern void *kern_os_malloc(size_t size);
+extern void *kern_os_realloc(void * addr, size_t size);
+extern void kern_os_free(void * addr);
+} /* extern "C" */
+
+#define malloc(s) kern_os_malloc(s)
+#define realloc(a, s) kern_os_realloc(a, s)
+#define free(a) kern_os_free(a)
+
+%}
+%token NUMBER
+%token STRING
+%token DATA
+%token BOOLEAN
+%token SYNTAX_ERROR
+     
+%% /* Grammar rules and actions follow */
+
+input:	  /* empty */		{ parsedObject = (OSObject *)NULL; YYACCEPT; }
+	| object		{ parsedObject = (OSObject *)$1;   YYACCEPT; }
+	| SYNTAX_ERROR		{ yyerror("syntax error");	   YYERROR; }
+	;
+
+object:	  dict			{ $$ = (object_t *)buildOSDictionary($1); }
+	| array			{ $$ = (object_t *)buildOSArray($1); }
+	| set			{ $$ = (object_t *)buildOSSet($1); }
+	| string		{ $$ = (object_t *)buildOSString($1); }
+	| data			{ $$ = (object_t *)buildOSData($1); }
+	| offset		{ $$ = (object_t *)buildOSOffset($1); }
+	| boolean		{ $$ = (object_t *)buildOSBoolean($1); }
+	| '@' NUMBER		{ $$ = (object_t *)retrieveObject($2->u.offset);
+				  if ($$) {
+				    ((OSObject *)$$)->retain();
+				  } else { 
+				    yyerror("forward reference detected");
+				    YYERROR;
+				  }
+				  freeObject($2); 
+				}
+	| object '@' NUMBER	{ $$ = $1; 
+				  rememberObject($3->u.offset, $1);
+				  freeObject($3); 
+				}
+	;
+
+//------------------------------------------------------------------------------
+
+dict:	  '{' '}'		{ $$ = NULL; }
+	| '{' pairs '}'		{ $$ = $2; }
+	;
+
+pairs:	  pair
+	| pairs pair		{ $2->next = $1; $1->prev = $2; $$ = $2; }
+	;
+
+pair:	  object '=' object ';'	{ $$ = newObject();
+				  $$->next = NULL; 
+				  $$->prev = NULL;
+				  $$->u.key = $1;
+				  $$->object = $3; 
+				}
+	;
+
+//------------------------------------------------------------------------------
+
+array:	  '(' ')'		{ $$ = NULL; }
+	| '(' elements ')'	{ $$ = $2; }
+	;
+
+set:	  '[' ']'		{ $$ = NULL; }
+	| '[' elements ']'	{ $$ = $2; }
+	;
+
+elements: object		{ $$ = newObject(); 
+				  $$->object = $1; 
+				  $$->next = NULL; 
+				  $$->prev = NULL; 
+				}
+	| elements ',' object	{ o = newObject();
+				  o->object = $3;
+				  o->next = $1;
+				  o->prev = NULL; 
+				  $1->prev = o;
+				  $$ = o; 
+				}
+	;
+
+//------------------------------------------------------------------------------
+
+offset:	  NUMBER ':' NUMBER	{ $$ = $1;
+				  $$->size = $3->u.offset;
+				  freeObject($3); 
+				}
+	;
+
+//------------------------------------------------------------------------------
+
+data:	  DATA
+	;
+
+//------------------------------------------------------------------------------
+
+string:	  STRING
+	;
+
+//------------------------------------------------------------------------------
+
+boolean:  BOOLEAN
+	;
+
+%%
+     
+static int		lineNumber = 0;
+static const char	*parseBuffer;
+static int		parseBufferIndex;
+
+#define currentChar()	(parseBuffer[parseBufferIndex])
+#define nextChar()	(parseBuffer[++parseBufferIndex])
+#define prevChar()	(parseBuffer[parseBufferIndex - 1])
+
+#define isSpace(c)	((c) == ' ' || (c) == '\t')
+#define isAlpha(c)	(((c) >= 'A' && (c) <= 'Z') || ((c) >= 'a' && (c) <= 'z'))
+#define isDigit(c)	((c) >= '0' && (c) <= '9')
+#define isAlphaDigit(c)	((c) >= 'a' && (c) <= 'f')
+#define isHexDigit(c)	(isDigit(c) || isAlphaDigit(c))
+#define isAlphaNumeric(c) (isAlpha(c) || isDigit(c) || ((c) == '-')) 
+
+static char yyerror_message[128];
+
+int
+yyerror(char *s)  /* Called by yyparse on error */
+{
+	sprintf(yyerror_message, "OSUnserialize: %s near line %d\n", s, lineNumber);
+	return 0;
+}
+
+int
+yylex()
+{
+	int c;
+
+	if (parseBufferIndex == 0) lineNumber = 1;
+
+ top:
+	c = currentChar();
+
+	/* skip white space  */
+	if (isSpace(c)) while ((c = nextChar()) != 0 && isSpace(c)) {};
+
+	/* skip over comments */
+	if (c == '#') while ((c = nextChar()) != 0 && c != '\n') {};
+
+	/* keep track of line number, don't return \n's */
+	if (c == '\n') {
+		lineNumber++;
+		(void)nextChar();
+		goto top;
+	}
+
+	/* parse boolean */
+	if (c == '.') {
+		bool boolean = false;
+		if (nextChar() == 't') {
+			if (nextChar() != 'r') return SYNTAX_ERROR;
+			if (nextChar() != 'u') return SYNTAX_ERROR;
+			if (nextChar() != 'e') return SYNTAX_ERROR;
+			boolean = true;
+		} else {
+			if (currentChar() != 'f') return SYNTAX_ERROR;
+			if (nextChar() != 'a') return SYNTAX_ERROR;
+			if (nextChar() != 'l') return SYNTAX_ERROR;
+			if (nextChar() != 's') return SYNTAX_ERROR;
+			if (nextChar() != 'e') return SYNTAX_ERROR;
+		}
+		if (nextChar() != '.') return SYNTAX_ERROR;
+		/* skip over dot */
+		(void)nextChar();
+
+		yylval = (object_t *)boolean;
+		return BOOLEAN;
+	}
+
+	/* parse unquoted string */
+	if (isAlpha(c)) {
+		int start, length;
+		char * tempString;
+
+		start = parseBufferIndex;
+		/* find end of string */
+		while (isAlphaNumeric(c)) { 
+			c = nextChar();
+		}
+		length = parseBufferIndex - start;
+
+		/* copy to null terminated buffer */
+		tempString = (char *)malloc(length + 1);
+		if (tempString == 0) {
+			printf("OSUnserialize: can't alloc temp memory\n");
+			return 0;
+		}
+		bcopy(&parseBuffer[start], tempString, length);
+		tempString[length] = 0;
+		yylval = (object_t *)tempString;
+		return STRING;
+	}
+
+	/* parse quoted string */
+	if (c == '"' || c == '\'') {
+		int start, length;
+		char * tempString;
+		char quoteChar = c;
+
+		start = parseBufferIndex + 1;		// skip quote
+		/* find end of string, line, buffer */
+		while ((c = nextChar()) != quoteChar) {
+			if (c == '\\') c = nextChar();
+			if (c == '\n') lineNumber++;
+			if (c == 0) return SYNTAX_ERROR;
+		}
+		length = parseBufferIndex - start;
+		/* skip over trailing quote */
+		(void)nextChar();
+		/* copy to null terminated buffer */
+		tempString = (char *)malloc(length + 1);
+		if (tempString == 0) {
+			printf("OSUnserialize: can't alloc temp memory\n");
+			return 0;
+		}
+
+		int to = 0;
+		for (int from=start; from < parseBufferIndex; from++) {
+			// hack - skip over backslashes
+			if (parseBuffer[from] == '\\') {
+				length--;
+				continue;
+			}
+			tempString[to] = parseBuffer[from]; 
+			to++;
+		}
+		tempString[length] = 0;
+		yylval = (object_t *)tempString;
+		return STRING;
+	}
+
+	/* process numbers */
+	if (isDigit (c))
+	{
+		unsigned long long n = 0;
+		int base = 10;
+
+		if (c == '0') {
+			c = nextChar();
+			if (c == 'x') {
+				base = 16;
+				c = nextChar();
+			}
+		}
+		if (base == 10) {
+			while(isDigit(c)) {
+				n = (n * base + c - '0');
+				c = nextChar();
+			}
+		} else {
+			while(isHexDigit(c)) {
+				if (isDigit(c)) {
+					n = (n * base + c - '0');
+				} else {
+					n = (n * base + 0xa + c - 'a');
+				}
+				c = nextChar();
+			}
+		}
+
+		yylval = newObject();
+		yylval->u.offset = n;
+			
+		return NUMBER;
+	}
+
+#define OSDATA_ALLOC_SIZE 4096
+	
+	/* process data */
+	if (c == '<') {
+		unsigned char *d, *start, *lastStart;
+
+		start = lastStart = d = (unsigned char *)malloc(OSDATA_ALLOC_SIZE);
+		c = nextChar();	// skip over '<'
+		while (c != 0 && c != '>') {
+
+			if (isSpace(c)) while ((c = nextChar()) != 0 && isSpace(c)) {};
+			if (c == '#') while ((c = nextChar()) != 0 && c != '\n') {};
+			if (c == '\n') {
+				lineNumber++;
+				c = nextChar();
+				continue;
+			}
+
+			// get high nibble
+			if (!isHexDigit(c)) break;
+			if (isDigit(c)) {
+				*d = (c - '0') << 4;
+			} else {
+				*d =  (0xa + (c - 'a')) << 4;
+			}
+
+			// get low nibble
+			c = nextChar();
+			if (!isHexDigit(c)) break;
+			if (isDigit(c)) {
+				*d |= c - '0';
+			} else {
+				*d |= 0xa + (c - 'a');
+			}
+	
+			d++;
+			if ((d - lastStart) >= OSDATA_ALLOC_SIZE) {
+				int oldsize = d - start;
+				start = (unsigned char *)realloc(start, oldsize + OSDATA_ALLOC_SIZE);
+				d = lastStart = start + oldsize;
+			}
+			c = nextChar();
+		}
+		if (c != '>' ) {
+			free(start);
+			return SYNTAX_ERROR;
+		}
+
+		// got it!
+		yylval = newObject();
+		yylval->object = start;
+		yylval->size = d - start;
+
+		(void)nextChar();	// skip over '>'
+		return DATA;
+	}
+
+
+	/* return single chars, move pointer to next char */
+	(void)nextChar();
+	return c;
+}
+
+// !@$&)(^Q$&*^!$(*!@$_(^%_(*Q#$(_*&!$_(*&!$_(*&!#$(*!@&^!@#%!_!#
+// !@$&)(^Q$&*^!$(*!@$_(^%_(*Q#$(_*&!$_(*&!$_(*&!#$(*!@&^!@#%!_!#
+// !@$&)(^Q$&*^!$(*!@$_(^%_(*Q#$(_*&!$_(*&!$_(*&!#$(*!@&^!@#%!_!#
+
+#ifdef DEBUG
+int debugUnserializeAllocCount = 0;
+#endif
+
+object_t *
+newObject()
+{
+#ifdef DEBUG
+	debugUnserializeAllocCount++;
+#endif
+	return (object_t *)malloc(sizeof(object_t));
+}
+
+void
+freeObject(object_t *o)
+{
+#ifdef DEBUG
+	debugUnserializeAllocCount--;
+#endif
+	free(o);
+}
+
+static OSDictionary *tags;
+
+static void 
+rememberObject(int tag, object_t *o)
+{
+	char key[16];
+	sprintf(key, "%u", tag);
+
+	tags->setObject(key, (OSObject *)o);
+}
+
+static OSObject *
+retrieveObject(int tag)
+{
+	char key[16];
+	sprintf(key, "%u", tag);
+
+	return tags->getObject(key);
+}
+
+OSObject *
+buildOSDictionary(object_t *o)
+{
+	object_t *temp, *last = o;
+	int count = 0;
+
+	// get count and last object
+	while (o) {
+		count++;
+		last = o;
+		o = o->next;
+	}
+	o = last;
+
+	OSDictionary *d = OSDictionary::withCapacity(count);
+
+	while (o) {
+#ifdef metaclass_stuff_worksXXX
+		if (((OSObject *)o->u.key)->metaCast("OSSymbol")) {
+			// XXX the evil frontdoor
+			d->setObject((OSSymbol *)o->u.key, (OSObject *)o->object);
+		} else {
+                        // If it isn't a symbol, I hope it's a string!
+			d->setObject((OSString *)o->u.key, (OSObject *)o->object);
+		}
+#else
+		d->setObject((OSString *)o->u.key, (OSObject *)o->object);
+#endif
+		((OSObject *)o->object)->release();
+		((OSObject *)o->u.key)->release();
+		temp = o;
+		o = o->prev;
+		freeObject(temp);
+	}
+	return d;
+};
+
+OSObject *
+buildOSArray(object_t *o)
+{
+	object_t *temp, *last = o;
+	int count = 0;
+
+	// get count and last object
+	while (o) {
+		count++;
+		last = o;
+		o = o->next;
+	}
+	o = last;
+
+	OSArray *a = OSArray::withCapacity(count);
+
+	while (o) {
+		a->setObject((OSObject *)o->object);
+		((OSObject *)o->object)->release();
+		temp = o;
+		o = o->prev;
+		freeObject(temp);
+	}
+	return a;
+};
+
+OSObject *
+buildOSSet(object_t *o)
+{
+	OSArray *a = (OSArray *)buildOSArray(o);
+	OSSet *s = OSSet::withArray(a, a->getCapacity());
+
+	a->release();
+	return s;
+};
+
+OSObject *
+buildOSString(object_t *o)
+{
+	OSString *s = OSString::withCString((char *)o);
+
+	free(o);
+
+	return s;
+};
+
+OSObject *
+buildOSData(object_t *o)
+{
+	OSData *d;
+
+	if (o->size) {
+		d = OSData::withBytes(o->object, o->size);
+	} else {
+		d = OSData::withCapacity(0);
+	}
+	free(o->object);
+	freeObject(o);
+	return d;
+};
+
+OSObject *
+buildOSOffset(object_t *o)
+{
+	OSNumber *off = OSNumber::withNumber(o->u.offset, o->size);
+	freeObject(o);
+	return off;
+};
+
+OSObject *
+buildOSBoolean(object_t *o)
+{
+	OSBoolean *b = OSBoolean::withBoolean((bool)o);
+	return b;
+};
+
+__BEGIN_DECLS
+#include <kern/lock.h>
+__END_DECLS
+
+static mutex_t *lock = 0;
+
+OSObject*
+OSUnserialize(const char *buffer, OSString **errorString)
+{
+	OSObject *object;
+
+	if (!lock) {
+		lock = mutex_alloc(ETAP_IO_AHA);
+		_mutex_lock(lock);
+	} else {
+		_mutex_lock(lock);
+
+	}
+
+#ifdef DEBUG
+	debugUnserializeAllocCount = 0;
+#endif
+	yyerror_message[0] = 0;	//just in case
+	parseBuffer = buffer;
+	parseBufferIndex = 0;
+	tags = OSDictionary::withCapacity(128);
+	if (yyparse() == 0) {
+		object = parsedObject;
+		if (errorString) *errorString = 0;
+	} else {
+		object = 0;
+		if (errorString)
+			*errorString = OSString::withCString(yyerror_message);
+	}
+
+	tags->release();
+#ifdef DEBUG
+	if (debugUnserializeAllocCount) {
+		printf("OSUnserialize: allocation check failed, count = %d.\n", 
+		       debugUnserializeAllocCount);
+	}
+#endif
+	mutex_unlock(lock);
+
+	return object;
+}
+
+
+//
+//
+//
+//
+//
+//		 DO NOT EDIT OSUnserialize.cpp!
+//
+//			this means you!
+//
+//
+//
+//
+//

@@ -1,0 +1,63 @@
+#
+# Kernel Module Library code makefile
+#
+
+export MakeInc_cmd=${SRCROOT}/makedefs/MakeInc.cmd
+export MakeInc_def=${SRCROOT}/makedefs/MakeInc.def
+export MakeInc_rule=${SRCROOT}/makedefs/MakeInc.rule
+export MakeInc_dir=${SRCROOT}/makedefs/MakeInc.dir
+
+
+include $(MakeInc_cmd)
+include $(MakeInc_def)
+
+INSTALL_DIR = 		$(DSTROOT)/usr/lib
+KMOD_NAME =		libkmod
+KMODCPP_NAME =		libkmodc++
+LIB_INSTALL_FLAGS = 	-c -m 444 -S "-S"
+
+CFLAGS += -Wall -Wno-four-char-constants
+CFLAGS_PPC += -mlong-branch
+
+COMPOBJROOT = $(OBJROOT)/$(KERNEL_CONFIG)_$(ARCH_CONFIG)/$(COMPONENT)/kmod
+INSTOBJROOT = $(OBJROOT)/$(INSTALL_TYPE)_$(ARCH_CONFIG)/$(COMPONENT)/kmod
+
+KMOD_CFILES    = c_start.c c_stop.c
+KMODCPP_CFILES = cplus_start.c cplus_stop.c
+
+KMOD_OFILES    = $(KMOD_CFILES:.c=.o)
+KMODCPP_OFILES = $(KMODCPP_CFILES:.c=.o)
+
+ALL_OFILES = $(KMOD_OFILES) $(KMODCPP_OFILES)
+
+$(ALL_OFILES): %.o : %.c
+	${KCC} -c ${CFLAGS} ${${join $@,_CFLAGS}} ${INCFLAGS} ${${join $@,_INCFLAGS}} -o $(COMPOBJROOT)/$(*F).o $<
+
+$(COMPOBJROOT)/$(KMOD_NAME).a: $(KMOD_OFILES)
+	libtool -static -o $@ $^
+
+$(COMPOBJROOT)/$(KMODCPP_NAME).a: $(KMODCPP_OFILES)
+	libtool -static -o $@ $^
+
+do_build_all: $(COMPOBJROOT)/$(KMOD_NAME).a $(COMPOBJROOT)/$(KMODCPP_NAME).a
+
+$(INSTALL_DIR)/%.a: $(INSTOBJROOT)/%.a
+	@allarchs="";							\
+	for onearch in $(INSTALL_ARCHS); do				\
+            archdir=$(OBJROOT)/$(KERNEL_CONFIG)_$$onearch/$(COMPONENT);	\
+	    if [ -e $$archdir/kmod/$(*F).a ]; then			\
+		allarchs="$$allarchs $$archdir/kmod/$(*F).a";		\
+	    fi;								\
+	done;								\
+	$(RM) $@ || true;						\
+	${MKDIR} $(INSTALL_DIR) $(SYMROOT);				\
+        cmd="lipo $$allarchs -create -output $(SYMROOT)/$(*F).a";	\
+	echo $$cmd; eval $$cmd;						\
+	cmd="install $(LIB_INSTALL_FLAGS) $(SYMROOT)/$(*F).a $@";	\
+	echo $$cmd; eval $$cmd
+
+
+do_build_install: $(INSTALL_DIR)/$(KMOD_NAME).a $(INSTALL_DIR)/$(KMODCPP_NAME).a
+
+# include $(MakeInc_rule)
+include $(MakeInc_dir)

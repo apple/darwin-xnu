@@ -1,0 +1,17 @@
+{
+    BUNDLE_EXTENSION = kext; 
+    DYNAMIC_CODE_GEN = YES; 
+    FILESTABLE = {
+        OTHER_SOURCES = (Makefile.preamble, Makefile, Makefile.postamble, CustomInfo.xml); 
+        SUBPROJECTS = (test1.kmodproj, test2.kmodproj); 
+    }; 
+    LANGUAGE = English; 
+    MAKEFILEDIR = "$(MAKEFILEPATH)/pb_makefiles"; 
+    NEXTSTEP_BUILDTOOL = /bin/gnumake; 
+    NEXTSTEP_INSTALLDIR = /System/Library/Extensions; 
+    NEXTSTEP_JAVA_COMPILER = /usr/bin/javac; 
+    NEXTSTEP_OBJCPLUS_COMPILER = /usr/bin/cc; 
+    PROJECTNAME = TestSerialization; 
+    PROJECTTYPE = "Kernel Extension"; 
+    PROJECTVERSION = 2.8; 
+}
