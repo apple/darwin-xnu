@@ -517,6 +517,8 @@ hw_sysctl(name, namelen, oldp, oldlenp, newp, newlen, p)
 		return (sysctl_rdint(oldp, oldlenp, newp, gPEClockFrequencyInfo.bus_clock_rate_hz));
 	case HW_CPU_FREQ:
 		return (sysctl_rdint(oldp, oldlenp, newp, gPEClockFrequencyInfo.cpu_clock_rate_hz));
+	case HW_TB_FREQ:
+		return (sysctl_rdint(oldp, oldlenp, newp, gPEClockFrequencyInfo.timebase_frequency_hz));
 #if __ppc__
 	case HW_VECTORUNIT:
 		return (sysctl_rdint(oldp, oldlenp, newp, cpu_info.vector_unit));

@@ -23,7 +23,7 @@
  *  pe_clock_speed.c - Determine the best guess for the processor and bus
  *                     speed buy using the values returned by run_clock_test.
  *
- *  (c) Apple Computer, Inc. 1998-2000
+ *  (c) Apple Computer, Inc. 1998-2002
  *
  *  Writen by:   Josh de Cesare
  *
@@ -81,10 +81,15 @@ void PE_Determine_Clock_Speeds(unsigned int via_addr, int num_speeds,
   gPEClockFrequencyInfo.bus_to_dec_rate_num = 1;
   gPEClockFrequencyInfo.bus_to_dec_rate_den = 4;
   
+  // Assume that the timebase frequency is derived from the bus clock.
+  gPEClockFrequencyInfo.timebase_frequency_num = bus_freq_num;
+  gPEClockFrequencyInfo.timebase_frequency_den = bus_freq_den * 4;
+  
   // Set the truncated numbers in gPEClockFrequencyInfo.
   gPEClockFrequencyInfo.bus_clock_rate_hz = tmp_bus_speed;
   gPEClockFrequencyInfo.cpu_clock_rate_hz = tmp_cpu_speed;
   gPEClockFrequencyInfo.dec_clock_rate_hz = tmp_bus_speed / 4;
+  gPEClockFrequencyInfo.timebase_frequency_hz = tmp_bus_speed / 4;
   
   PE_call_timebase_callback();
 }

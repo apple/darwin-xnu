@@ -79,7 +79,8 @@
 #endif	/* KERNEL_PRIVATE */
 
 #include <mach/machine/vm_param.h>
-#include <mach/machine/vm_types.h>
+
+#include <mach/vm_types.h>
 
 /*
  *	The machine independent pages are refered to as PAGES.  A page
@@ -118,25 +119,119 @@ extern int		page_shift;
 #endif	/* PAGE_SIZE_FIXED */
 
 #ifndef	ASSEMBLER
+
 /*
- *	Convert addresses to pages and vice versa.
- *	No rounding is used.
+ *	Convert addresses to pages and vice versa.  No rounding is used.
+ *      The atop_32 and ptoa_32 macros should not be use on 64 bit types.
+ *      The round_page_64 and trunc_page_64 macros should be used instead.
  */
 
-#define atop(x)		(((natural_t)(x)) >> PAGE_SHIFT)
-#define ptoa(x)		((vm_offset_t)((x) << PAGE_SHIFT))
+#define atop_32(x) ((uint32_t)(x) >> PAGE_SHIFT)
+#define ptoa_32(x) ((uint32_t)(x) << PAGE_SHIFT)
+#define atop_64(x) ((uint64_t)(x) >> PAGE_SHIFT)
+#define ptoa_64(x) ((uint64_t)(x) << PAGE_SHIFT)
+
+/*
+ *      While the following block is enabled, the legacy atop and ptoa
+ *      macros will behave correctly.  If not, they will generate
+ *      invalid lvalue errors.
+ */
+
+#if 1
+#define atop(x)	((uint32_t)(x) >> PAGE_SHIFT)
+#define ptoa(x)	((uint32_t)(x) << PAGE_SHIFT)
+#else
+#define atop(x) (0UL = 0)
+#define ptoa(x) (0UL = 0)
+#endif
+
 
 /*
  *	Round off or truncate to the nearest page.  These will work
  *	for either addresses or counts.  (i.e. 1 byte rounds to 1 page
- *	bytes.
+ *	bytes.  The round_page_32 and trunc_page_32 macros should not be
+ *      use on 64 bit types.  The round_page_64 and trunc_page_64 macros
+ *      should be used instead.
  */
 
-#define round_page(x)	((vm_offset_t)((((vm_offset_t)(x)) + PAGE_MASK) & ~PAGE_MASK))
-#define trunc_page(x)	((vm_offset_t)(((vm_offset_t)(x)) & ~PAGE_MASK))
+#define round_page_32(x) (((uint32_t)(x) + PAGE_MASK) & ~((signed)PAGE_MASK))
+#define trunc_page_32(x) ((uint32_t)(x) & ~((signed)PAGE_MASK))
+#define round_page_64(x) (((uint64_t)(x) + PAGE_MASK) & ~((signed)PAGE_MASK))
+#define trunc_page_64(x) ((uint64_t)(x) & ~((signed)PAGE_MASK))
 
-#define round_page_64(x)	((unsigned long long)((((unsigned long long)(x)) + PAGE_MASK_64) & ~PAGE_MASK_64))
-#define trunc_page_64(x)	((unsigned long long)(((unsigned long long)(x)) & ~PAGE_MASK_64))
+
+/*
+ *      While the following block is enabled, the legacy round_page
+ *      and trunc_page macros will behave correctly.  If not, they will
+ *      generate invalid lvalue errors.
+ */
+
+#if 1
+#define round_page(x) (((uint32_t)(x) + PAGE_MASK) & ~((signed)PAGE_MASK))
+#define trunc_page(x) ((uint32_t)(x) & ~((signed)PAGE_MASK))
+#else
+#define round_page(x) (0UL = 0)
+#define trunc_page(x) (0UL = 0)
+#endif
+
+/*
+ *      Enable the following block to find uses of xxx_32 macros that should
+ *      be xxx_64.  These macros only work in C code, not C++.  The resulting
+ *      binaries are not functional.  Look for invalid lvalue errors in
+ *      the compiler output.
+ *
+ *      Enabling the following block will also find use of the xxx_64 macros
+ *      that have been passed pointers.  The parameters should be case to an
+ *      unsigned long type first.  Look for invalid operands to binary + error
+ *      in the compiler output.
+ */
+
+#if 0
+#undef atop_32
+#undef ptoa_32
+#undef round_page_32
+#undef trunc_page_32
+#undef atop_64
+#undef ptoa_64
+#undef round_page_64
+#undef trunc_page_64
+
+#ifndef __cplusplus
+
+#define atop_32(x) \
+    (__builtin_choose_expr (sizeof(x) != sizeof(uint64_t), \
+        (*(long *)0), \
+        (0UL)) = 0)
+
+#define ptoa_32(x) \
+    (__builtin_choose_expr (sizeof(x) != sizeof(uint64_t), \
+        (*(long *)0), \
+        (0UL)) = 0)
+
+#define round_page_32(x) \
+    (__builtin_choose_expr (sizeof(x) != sizeof(uint64_t), \
+        (*(long *)0), \
+        (0UL)) = 0)
+
+#define trunc_page_32(x) \
+    (__builtin_choose_expr (sizeof(x) != sizeof(uint64_t), \
+        (*(long *)0), \
+        (0UL)) = 0)
+#else
+
+#define atop_32(x) (0)
+#define ptoa_32(x) (0)
+#define round_page_32(x) (0)
+#define trunc_page_32(x) (0)
+
+#endif /* ! __cplusplus */
+
+#define atop_64(x) ((uint64_t)((x) + (uint8_t *)0))
+#define ptoa_64(x) ((uint64_t)((x) + (uint8_t *)0))
+#define round_page_64(x) ((uint64_t)((x) + (uint8_t *)0))
+#define trunc_page_64(x) ((uint64_t)((x) + (uint8_t *)0))
+
+#endif
 
 /*
  *	Determine whether an address is page-aligned, or a count is

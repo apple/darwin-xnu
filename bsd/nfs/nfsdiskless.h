@@ -109,7 +109,10 @@ struct nfsv3_diskless {
 struct nfs_dlmount {
 	struct sockaddr_in ndm_saddr;  		/* Address of file server */
 	char		ndm_host[MNAMELEN]; 	/* Host name for mount pt */
-	u_char		ndm_fh[NFSX_V2FH]; 		/* The file's file handle */
+	char		*ndm_path; 		/* path name for mount pt */
+	u_long		ndm_nfsv3;		/* NFSv3 or NFSv2? */
+	u_long		ndm_fhlen;		/* length of file handle */
+	u_char		ndm_fh[NFSX_V3FHMAX];	/* The file's file handle */
 };
 
 /*

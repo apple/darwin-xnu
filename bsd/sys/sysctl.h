@@ -495,7 +495,8 @@ struct kinfo_proc {
 #define HW_L2CACHESIZE	20		/* int: L2 Cache Size in Bytes */
 #define HW_L3SETTINGS	21		/* int: L3 Cache Settings */
 #define HW_L3CACHESIZE	22		/* int: L3 Cache Size in Bytes */
-#define	HW_MAXID	23		/* number of valid hw ids */
+#define HW_TB_FREQ	23		/* int: Bus Frequency */
+#define	HW_MAXID	24		/* number of valid hw ids */
 
 #define CTL_HW_NAMES { \
 	{ 0, 0 }, \
@@ -520,7 +521,8 @@ struct kinfo_proc {
 	{ "l2settings", CTLTYPE_INT }, \
 	{ "l2cachesize", CTLTYPE_INT }, \
 	{ "l3settings", CTLTYPE_INT }, \
-	{ "l3cachesize", CTLTYPE_INT } \
+	{ "l3cachesize", CTLTYPE_INT }, \
+	{ "tbfrequency", CTLTYPE_INT } \
 }
 
 /*

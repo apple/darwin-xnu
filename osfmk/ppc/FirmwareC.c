@@ -265,11 +265,11 @@ void GratefulDebInit(bootBumbleC *boot_video_info) {	/* Initialize the video deb
 		GratefulDebWork[i].GDdepth = boot_video_info->v_depth;
 		GratefulDebWork[i].GDcollgn = nrmlgn;
 	
-//		RuptCtrs[(48*i)+47].timed = gPEClockFrequencyInfo.bus_clock_rate_hz >> 6;	/* (Update every 16th of a second (16 fps) */
-		RuptCtrs[(48*i)+47].timed = gPEClockFrequencyInfo.bus_clock_rate_hz >> 5;	/* (Update every 8th of a second (8 fps) */
-//		RuptCtrs[(48*i)+47].timed = gPEClockFrequencyInfo.bus_clock_rate_hz >> 4;	/* (Update every 4th of a second (4 fps) */
-//		RuptCtrs[(48*i)+47].timed = gPEClockFrequencyInfo.bus_clock_rate_hz >> 3;	/* (Update every 2th of a second (2 fps) */
-//		RuptCtrs[(48*i)+47].timed = gPEClockFrequencyInfo.bus_clock_rate_hz >> 2;	/* (Update every 1 second (1 fps) */
+//		RuptCtrs[(48*i)+47].timed = gPEClockFrequencyInfo.timebase_frequency_hz >> 4;	/* (Update every 16th of a second (16 fps) */
+		RuptCtrs[(48*i)+47].timed = gPEClockFrequencyInfo.timebase_frequency_hz >> 3;	/* (Update every 8th of a second (8 fps) */
+//		RuptCtrs[(48*i)+47].timed = gPEClockFrequencyInfo.timebase_frequency_hz >> 2;	/* (Update every 4th of a second (4 fps) */
+//		RuptCtrs[(48*i)+47].timed = gPEClockFrequencyInfo.timebase_frequency_hz >> 1;	/* (Update every 2th of a second (2 fps) */
+//		RuptCtrs[(48*i)+47].timed = gPEClockFrequencyInfo.timebase_frequency_hz >> 0;	/* (Update every 1 second (1 fps) */
 		
 		sync();
 		

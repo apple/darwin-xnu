@@ -245,8 +245,8 @@ void PE_call_timebase_callback(void)
   struct timebase_freq_t timebase_freq;
   unsigned long          num, den, cnt;
   
-  num = gPEClockFrequencyInfo.bus_clock_rate_num * gPEClockFrequencyInfo.bus_to_dec_rate_num;
-  den = gPEClockFrequencyInfo.bus_clock_rate_den * gPEClockFrequencyInfo.bus_to_dec_rate_den;
+  num = gPEClockFrequencyInfo.timebase_frequency_num;
+  den = gPEClockFrequencyInfo.timebase_frequency_den;
   
   cnt = 2;
   while (cnt <= den) {

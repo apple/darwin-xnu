@@ -322,7 +322,7 @@ tws_hash_line_clear(
 }
 
 kern_return_t
-tws_lookup(
+tws_internal_lookup(
 	tws_hash_t		tws,	
 	vm_object_offset_t	offset, 
 	vm_object_t		object,
@@ -341,10 +341,6 @@ tws_lookup(
 	if(object->private)
 		return KERN_SUCCESS;
 
-	if(!tws_lock_try(tws)) {
-		return KERN_FAILURE;
-	}
-
 	index = do_tws_hash(object, offset, 
 			tws->number_of_elements, tws->number_of_lines);
 	loop = 0;
@@ -357,7 +353,6 @@ tws_lookup(
 		age_of_cache = ((sched_tick 
 			- tws->time_of_creation) >> SCHED_TICK_SHIFT);
        		if (age_of_cache > 35) {
-			tws_unlock(tws); 
 			return KERN_OPERATION_TIMED_OUT;
 		}
 	}
@@ -370,7 +365,6 @@ tws_lookup(
 			age_of_cache = ((sched_tick 
 				- tws->time_of_creation) >> SCHED_TICK_SHIFT);
 	        	if (age_of_cache > 60) {
-				tws_unlock(tws); 
 				return KERN_OPERATION_TIMED_OUT;
 			}
       		}
@@ -385,14 +379,30 @@ tws_lookup(
 		set = cache_ele->element->line/tws->number_of_lines;
 		ele_line = cache_ele->element->line - set;
 		*line = &tws->cache[set][ele_line];
-		tws_unlock(tws);
 		return KERN_SUCCESS;
 	}
 
-	tws_unlock(tws);
 	return KERN_FAILURE;
 
 
+}
+
+kern_return_t
+tws_lookup(
+	tws_hash_t		tws,	
+	vm_object_offset_t	offset, 
+	vm_object_t		object,
+	tws_hash_line_t		 *line) 
+{
+	kern_return_t kr;
+
+	if(!tws_lock_try(tws)) {
+		return KERN_FAILURE;
+	}
+	kr = tws_internal_lookup(tws,
+		offset, object, line);
+	tws_unlock(tws);
+	return kr;
 }
 
 kern_return_t
@@ -1040,6 +1050,10 @@ tws_build_cluster(
 		object_size = object->size;
 	}
 
+	if((!tws) || (!tws_lock_try(tws))) {
+		return;
+	}
+
 	age_of_cache = ((sched_tick 
 			- tws->time_of_creation) >> SCHED_TICK_SHIFT);
 
@@ -1145,6 +1159,7 @@ tws_build_cluster(
 			if (*start >= *end)
 			  panic("bad clipping occurred\n");
 
+			tws_unlock(tws);
 			return;
 		}
 	}
@@ -1153,12 +1168,12 @@ tws_build_cluster(
 		(object_size >= 
 			(after + PAGE_SIZE_64))) {
 		if(length >= pre_heat_size) {
-		   if(tws_lookup(tws, after, object,
+		   if(tws_internal_lookup(tws, after, object,
 				&line) != KERN_SUCCESS) {
 			vm_object_offset_t	extend;
 				
 			extend = after + PAGE_SIZE_64;
-			if(tws_lookup(tws, extend, object,
+			if(tws_internal_lookup(tws, extend, object,
 						&line) != KERN_SUCCESS) {
 				break;
 			}
@@ -1212,7 +1227,7 @@ tws_build_cluster(
 		before -= PAGE_SIZE_64;
 
 		if(length >= pre_heat_size) {
-		   if(tws_lookup(tws, before, object,
+		   if(tws_internal_lookup(tws, before, object,
 				&line) != KERN_SUCCESS) {
 			vm_object_offset_t	extend;
 				
@@ -1220,7 +1235,7 @@ tws_build_cluster(
 			if (extend == 0)
 				break;
 			extend -= PAGE_SIZE_64;
-			if(tws_lookup(tws, extend, object,
+			if(tws_internal_lookup(tws, extend, object,
 					&line) != KERN_SUCCESS) {
 				break;
 			}
@@ -1266,6 +1281,7 @@ tws_build_cluster(
 		*start -= PAGE_SIZE_64;
 		length += PAGE_SIZE;
 	}
+	tws_unlock(tws);
 }
 
 tws_line_signal(
@@ -1834,6 +1850,39 @@ tws_read_startup_file(
 		return KERN_SUCCESS;
 }
 
+
+void
+tws_hash_ws_flush(tws_hash_t tws) {
+	tws_startup_t 		scache;
+	if(tws == NULL) {
+		return;
+	}
+	tws_lock(tws);
+	if(tws->startup_name != NULL) {
+		scache = tws_create_startup_list(tws);
+		if(scache == NULL) {
+			/* dump the name cache, we'll */
+			/* get it next time */
+			kfree((vm_offset_t) 	
+				tws->startup_name, 
+				tws->startup_name_length);
+			tws->startup_name = NULL;
+			tws_unlock(tws);
+			return;
+		}
+		bsd_write_page_cache_file(tws->uid, tws->startup_name, 
+				scache, scache->tws_hash_size, 
+				tws->mod, tws->fid);
+		kfree((vm_offset_t)scache, 
+				scache->tws_hash_size);
+		kfree((vm_offset_t) 
+				tws->startup_name, 
+				tws->startup_name_length);
+		tws->startup_name = NULL;
+	}
+	tws_unlock(tws);
+	return;
+}
 
 void
 tws_hash_destroy(tws_hash_t	tws)

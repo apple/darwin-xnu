@@ -115,6 +115,13 @@ struct kev_in_data {
 	struct  in_addr ia_dstaddr;
 };
 
+struct kev_in_collision {
+	struct	net_event_data	link_data;	/* link colliding arp was received on */
+	struct	in_addr	ia_ipaddr;	/* IP address we and another node are using */
+	u_char	hw_len;	/* length of hardware address */
+	u_char	hw_addr[0];	/* variable length hardware address */
+};
+
 
 /*
  * Define inet event subclass and specific inet events.
@@ -128,6 +135,7 @@ struct kev_in_data {
 #define KEV_INET_SIFDSTADDR   4
 #define KEV_INET_SIFBRDADDR   5
 #define KEV_INET_SIFNETMASK   6
+#define KEV_INET_ARPCOLLISION 7	/* use kev_in_collision */
 #endif /* __APPLE__ */
 
 /*

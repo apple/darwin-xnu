@@ -258,6 +258,10 @@ kern_return_t	tws_read_startup_file(
 		tws_startup_t		startup,
 		vm_offset_t		cache_size);
 
+void
+tws_hash_ws_flush(
+		tws_hash_t	tws);
+
 
 
 #endif  /* _VM_TASK_WORKING_SET_H_ */

@@ -1835,6 +1835,7 @@ private:
     bool responseValid ( unsigned long x );
     IOReturn allowCancelCommon ( void );
     void computeDesiredState ( void );
+    void rebuildChildClampBits ( void );
 };
 
 #endif /* ! _IOKIT_IOSERVICE_H */

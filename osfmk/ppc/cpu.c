@@ -539,10 +539,10 @@ cpu_signal_handler(
 	pproc = &per_proc_info[cpu];					/* Point to our block */
 
 /*
- *	Since we've been signaled, wait just under 1ms for the signal lock to pass
+ *	Since we've been signaled, wait about 31 ms for the signal lock to pass
  */
 	if(!hw_lock_mbits(&pproc->MPsigpStat, (MPsigpMsgp | MPsigpAck), (MPsigpBusy | MPsigpPass),
-	  (MPsigpBusy | MPsigpPass | MPsigpAck), (gPEClockFrequencyInfo.bus_clock_rate_hz >> 7))) {
+	  (MPsigpBusy | MPsigpPass | MPsigpAck), (gPEClockFrequencyInfo.timebase_frequency_hz >> 5))) {
 		panic("cpu_signal_handler: Lock pass timed out\n");
 	}
 	
@@ -710,7 +710,7 @@ cpu_signal(
 	
 	if((busybitset == 0) && 
 	   (!hw_lock_mbits(&tpproc->MPsigpStat, MPsigpMsgp, 0, MPsigpBusy, 
-	   (gPEClockFrequencyInfo.bus_clock_rate_hz >> 13)))) {	/* Try to lock the message block with a .5ms timeout */
+	   (gPEClockFrequencyInfo.timebase_frequency_hz >> 11)))) {	/* Try to lock the message block with a .5ms timeout */
 		mpproc->numSIGPtimo++;						/* Account for timeouts */
 		return KERN_FAILURE;						/* Timed out, take your ball and go home... */
 	}

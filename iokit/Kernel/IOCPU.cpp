@@ -142,7 +142,7 @@ void IOCPU::initCPUs(void)
 
 bool IOCPU::start(IOService *provider)
 {
-  OSData *busFrequency, *cpuFrequency, *decFrequency;
+  OSData *busFrequency, *cpuFrequency, *timebaseFrequency;
   
   if (!super::start(provider)) return false;
   
@@ -156,13 +156,13 @@ bool IOCPU::start(IOService *provider)
   // Correct the bus, cpu and dec frequencies in the device tree.
   busFrequency = OSData::withBytesNoCopy((void *)&gPEClockFrequencyInfo.bus_clock_rate_hz, 4);
   cpuFrequency = OSData::withBytesNoCopy((void *)&gPEClockFrequencyInfo.cpu_clock_rate_hz, 4);
-  decFrequency = OSData::withBytesNoCopy((void *)&gPEClockFrequencyInfo.dec_clock_rate_hz, 4);
+  timebaseFrequency = OSData::withBytesNoCopy((void *)&gPEClockFrequencyInfo.timebase_frequency_hz, 4);
   provider->setProperty("bus-frequency", busFrequency);
   provider->setProperty("clock-frequency", cpuFrequency);
-  provider->setProperty("timebase-frequency", decFrequency);
+  provider->setProperty("timebase-frequency", timebaseFrequency);
   busFrequency->release();
   cpuFrequency->release();
-  decFrequency->release();
+  timebaseFrequency->release();
   
   setProperty("IOCPUID", (UInt32)this, 32);
   

@@ -510,6 +510,10 @@ task_deallocate(
 	assert((task->swap_state & TASK_SW_ELIGIBLE) == 0);
 #endif	/* TASK_SWAPPER */
 
+	if(task->dynamic_working_set)
+		tws_hash_destroy((tws_hash_t)task->dynamic_working_set);
+
+
 	eml_task_deallocate(task);
 
 	ipc_task_terminate(task);
@@ -708,8 +712,12 @@ task_terminate_internal(
 
 	shared_region_mapping_dealloc(task->system_shared_region);
 
+	/*
+	 * Flush working set here to avoid I/O in reaper thread
+	 */
 	if(task->dynamic_working_set)
-		tws_hash_destroy((tws_hash_t)task->dynamic_working_set);
+		tws_hash_ws_flush((tws_hash_t)
+				task->dynamic_working_set);
 
 	/*
 	 * We no longer need to guard against being aborted, so restore

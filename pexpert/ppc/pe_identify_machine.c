@@ -46,7 +46,8 @@ void pe_identify_machine(void)
   gPEClockFrequencyInfo.bus_clock_rate_hz = 100000000;
   gPEClockFrequencyInfo.cpu_clock_rate_hz = 300000000;
   gPEClockFrequencyInfo.dec_clock_rate_hz =  25000000;
-  
+  gPEClockFrequencyInfo.timebase_frequency_hz =  25000000;
+
   // Try to get the values from the device tree.
   if (DTFindEntry("device_type", "cpu", &cpu) == kSuccess) {
     if (DTGetProperty(cpu, "bus-frequency",
@@ -64,11 +65,16 @@ void pe_identify_machine(void)
       gPEClockFrequencyInfo.cpu_clock_rate_hz = *value;
     
     if (DTGetProperty(cpu, "timebase-frequency",
-		      (void **)&value, &size) == kSuccess)
+		      (void **)&value, &size) == kSuccess) {
       gPEClockFrequencyInfo.dec_clock_rate_hz = *value;
+      gPEClockFrequencyInfo.timebase_frequency_hz= *value;
+    }
   }
   
   // Set the num / den pairs form the hz values.
+  gPEClockFrequencyInfo.timebase_frequency_num = gPEClockFrequencyInfo.timebase_frequency_hz;
+  gPEClockFrequencyInfo.timebase_frequency_den = 1;
+
   gPEClockFrequencyInfo.bus_clock_rate_num = gPEClockFrequencyInfo.bus_clock_rate_hz;
   gPEClockFrequencyInfo.bus_clock_rate_den = 1;
   

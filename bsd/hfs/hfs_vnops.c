@@ -58,6 +58,8 @@
 
 extern uid_t console_user;
 
+extern unsigned long strtoul(const char *, char **, int);
+
 /* Global vfs data structures for hfs */
 
 
@@ -1076,6 +1078,23 @@ hfs_exchange(ap)
 
 	hfs_chashinsert(from_cp);
 	hfs_chashinsert(to_cp);
+
+	/*
+	 * When a file moves out of "Cleanup At Startup"
+	 * we can drop its NODUMP status.
+	 */
+	if ((from_cp->c_flags & UF_NODUMP) &&
+	    (from_cp->c_parentcnid != to_cp->c_parentcnid)) {
+		from_cp->c_flags &= ~UF_NODUMP;
+		from_cp->c_flag |= C_CHANGE;
+	}
+
+	if ((to_cp->c_flags & UF_NODUMP) &&
+	    (to_cp->c_parentcnid != from_cp->c_parentcnid)) {
+		to_cp->c_flags &= ~UF_NODUMP;
+		to_cp->c_flag |= C_CHANGE;
+	}
+
 Err_Exit:
 	if (to_rvp)
 		vrele(to_rvp);
@@ -1155,8 +1174,11 @@ hfs_fsync(ap)
 	 * When MNT_WAIT is requested and the zero fill timeout
 	 * has expired then we must explicitly zero out any areas
 	 * that are currently marked invalid (holes).
+	 *
+	 * Files with NODUMP can bypass zero filling here.
 	 */
 	if ((wait || (cp->c_flag & C_ZFWANTSYNC)) &&
+	    ((cp->c_flags & UF_NODUMP) == 0) &&
 	    UBCINFOEXISTS(vp) && (fp = VTOF(vp)) &&
 	    cp->c_zftimeout != 0) {
 		int devblksize;
@@ -1682,15 +1704,8 @@ hfs_remove(ap)
 			cp->c_mode = 0;            /* Suppress VOP_UPDATES */
 			error = VOP_TRUNCATE(rvp, (off_t)0, IO_NDELAY, NOCRED, p);
 			cp->c_mode = mode;
-			if (error && !dataforkbusy)
+			if (error)
 				goto out;
-			else {
-				/*
-				 * XXX could also force an update on vp
-				 * and fail the remove.
-				 */
-				error = 0;
-			}
 			truncated = 1;
 		}
 	}
@@ -1820,10 +1835,11 @@ hfs_remove(ap)
 
 	} else /* Not busy */ {
 
-		if (vp->v_type == VDIR && cp->c_entries > 0)
-			panic("hfs_remove: attempting to delete a non-empty directory!");
-		if (vp->v_type != VDIR && cp->c_blocks > 0)
-			panic("hfs_remove: attempting to delete a non-empty file!");
+		if (cp->c_blocks > 0) {
+			printf("hfs_remove: attempting to delete a non-empty file!");
+			error = EBUSY;
+			goto out;
+		}
 
 		/* Lock catalog b-tree */
 		error = hfs_metafilelocking(hfsmp, kHFSCatalogFileID, LK_EXCLUSIVE, p);
@@ -1832,7 +1848,7 @@ hfs_remove(ap)
 
 		error = cat_delete(hfsmp, &cp->c_desc, &cp->c_attr);
 
-		if (error && error != ENXIO && truncated) {
+		if (error && error != ENXIO && error != ENOENT && truncated) {
 			if ((cp->c_datafork && cp->c_datafork->ff_data.cf_size != 0) ||
 				(cp->c_rsrcfork && cp->c_rsrcfork->ff_data.cf_size != 0)) {
 				panic("hfs: remove: couldn't delete a truncated file! (%d, data sz %lld; rsrc sz %lld)",
@@ -2210,6 +2226,21 @@ hfs_rename(ap)
 
 	fdcp = VTOC(fdvp);
 	fcp = VTOC(fvp);
+
+	/*
+	 * When a file moves out of "Cleanup At Startup"
+	 * we can drop its NODUMP status.
+	 */
+	if ((fcp->c_flags & UF_NODUMP) &&
+	    (fvp->v_type == VREG) &&
+	    (fdvp != tdvp) &&
+	    (fdcp->c_desc.cd_nameptr != NULL) &&
+	    (strcmp(fdcp->c_desc.cd_nameptr, "Cleanup At Startup") == 0)) {
+		fcp->c_flags &= ~UF_NODUMP;
+		fcp->c_flag |= C_CHANGE;
+		tv = time;
+		(void) VOP_UPDATE(fvp, &tv, &tv, 0);
+	}
 
 	hfs_global_shared_lock_acquire(hfsmp);
 	grabbed_lock = 1;
@@ -3400,7 +3431,38 @@ exit:
 
 	if ((cnp->cn_flags & (HASBUF | SAVESTART)) == HASBUF)
         	FREE_ZONE(cnp->cn_pnbuf, cnp->cn_pnlen, M_NAMEI);
-	vput(dvp);
+
+	/*
+	 * Check if a file is located in the "Cleanup At Startup"
+	 * directory.  If it is then tag it as NODUMP so that we
+	 * can be lazy about zero filling data holes.
+	 */
+	if ((error == 0) && (vnodetype == VREG) &&
+	    (dcp->c_desc.cd_nameptr != NULL) &&
+	    (strcmp(dcp->c_desc.cd_nameptr, "Cleanup At Startup") == 0)) {
+	   	struct vnode *ddvp;
+		cnid_t parid;
+
+		parid = dcp->c_parentcnid;
+		vput(dvp);
+		dvp = NULL;
+
+		/*
+		 * The parent of "Cleanup At Startup" should
+		 * have the ASCII name of the userid.
+		 */
+		if (VFS_VGET(HFSTOVFS(hfsmp), &parid, &ddvp) == 0) {
+			if (VTOC(ddvp)->c_desc.cd_nameptr &&
+			    (cp->c_uid == strtoul(VTOC(ddvp)->c_desc.cd_nameptr, 0, 0))) {
+				cp->c_flags |= UF_NODUMP;
+				cp->c_flag |= C_CHANGE;
+			}
+			vput(ddvp);
+		}
+	}
+
+	if (dvp)
+		vput(dvp);
 
 	// XXXdbg
 	if (started_tr) {

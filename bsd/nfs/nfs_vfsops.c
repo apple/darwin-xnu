@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2001 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2002 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -161,34 +161,6 @@ struct vfsops nfs_vfsops = {
 /* XXX CSM 11/25/97 Mysterious kernel.h ld crud */
 #ifdef notyet
 VFS_SET(nfs_vfsops, nfs, MOUNT_NFS, VFCF_NETWORK);
-#endif
-
-/*
- * This structure must be filled in by a primary bootstrap or bootstrap
- * server for a diskless/dataless machine. It is initialized below just
- * to ensure that it is allocated to initialized data (.data not .bss).
- */
-struct nfs_diskless nfs_diskless = { 0 };
-int nfs_diskless_valid = 0;
-
-/* XXX CSM 11/25/97 Upgrade sysctl.h someday */
-#ifdef notyet
-SYSCTL_INT(_vfs_nfs, OID_AUTO, diskless_valid, CTLFLAG_RD, 
-	&nfs_diskless_valid, 0, "");
-
-SYSCTL_STRING(_vfs_nfs, OID_AUTO, diskless_rootpath, CTLFLAG_RD,
-	nfs_diskless.root_hostnam, 0, "");
-
-SYSCTL_OPAQUE(_vfs_nfs, OID_AUTO, diskless_rootaddr, CTLFLAG_RD,
-	&nfs_diskless.root_saddr, sizeof nfs_diskless.root_saddr,
-	"%Ssockaddr_in", "");
-
-SYSCTL_STRING(_vfs_nfs, OID_AUTO, diskless_swappath, CTLFLAG_RD,
-	nfs_diskless.swap_hostnam, 0, "");
-
-SYSCTL_OPAQUE(_vfs_nfs, OID_AUTO, diskless_swapaddr, CTLFLAG_RD,
-	&nfs_diskless.swap_saddr, sizeof nfs_diskless.swap_saddr, 
-	"%Ssockaddr_in","");
 #endif
 
 
@@ -413,6 +385,7 @@ nfs_mountroot()
 	struct mount *mppriv;
 	struct vnode *vppriv;
 #endif /* NO_MOUNT_PRIVATE */
+	int v3;
 
 	procp = current_proc(); /* XXX */
 
@@ -427,6 +400,20 @@ nfs_mountroot()
 		panic("nfs_boot_init failed with %d\n", error);
 	}
 
+	/* try NFSv3 first, if that fails then try NFSv2 */
+	v3 = 1;
+
+tryagain:
+	error = nfs_boot_getfh(&nd, procp, v3);
+	if (error) {
+		if (v3) {
+			printf("nfs_boot_getfh(v3) failed with %d, trying v2...\n", error);
+			v3 = 0;
+			goto tryagain;
+		}
+		panic("nfs_boot_getfh(v2) failed with %d\n", error);
+	}
+
 	/*
 	 * Create the root mount point.
 	 */
@@ -435,7 +422,12 @@ nfs_mountroot()
 #else
 	if (error = nfs_mount_diskless(&nd.nd_root, "/", NULL, &vp, &mp)) {
 #endif /* NO_MOUNT_PRIVATE */
-		panic("nfs_mount_diskless failed with %d\n", error);
+		if (v3) {
+			printf("nfs_mount_diskless(v3) failed with %d, trying v2...\n", error);
+			v3 = 0;
+			goto tryagain;
+		}
+		panic("nfs_mount_diskless root failed with %d\n", error);
 	}
 	printf("root on %s\n", (char *)&nd.nd_root.ndm_host);
 
@@ -450,7 +442,7 @@ nfs_mountroot()
 	    error = nfs_mount_diskless_private(&nd.nd_private, "/private",
 					       NULL, &vppriv, &mppriv);
 	    if (error) {
-		panic("nfs_mount_diskless failed with %d\n", error);
+		panic("nfs_mount_diskless private failed with %d\n", error);
 	    }
 	    printf("private on %s\n", (char *)&nd.nd_private.ndm_host);
 	    
@@ -461,6 +453,11 @@ nfs_mountroot()
 	}
 
 #endif /* NO_MOUNT_PRIVATE */
+
+	if (nd.nd_root.ndm_path)
+		FREE_ZONE(nd.nd_root.ndm_path, MAXPATHLEN, M_NAMEI);
+	if (nd.nd_private.ndm_path)
+		FREE_ZONE(nd.nd_private.ndm_path, MAXPATHLEN, M_NAMEI);
 
 	/* Get root attributes (for the time). */
 	error = VOP_GETATTR(vp, &attr, procp->p_ucred, procp);
@@ -501,9 +498,11 @@ nfs_mount_diskless(ndmntp, mntname, mntflag, vpp, mpp)
 	args.addrlen  = args.addr->sa_len;
 	args.sotype   = SOCK_DGRAM;
 	args.fh       = ndmntp->ndm_fh;
-	args.fhsize   = NFSX_V2FH; /* need to try v3, then v2 */
+	args.fhsize   = ndmntp->ndm_fhlen;
 	args.hostname = ndmntp->ndm_host;
 	args.flags    = NFSMNT_RESVPORT;
+	if (ndmntp->ndm_nfsv3)
+		args.flags |= NFSMNT_NFSV3;
 
 	MGET(m, M_DONTWAIT, MT_SONAME);
 	bcopy((caddr_t)args.addr, mtod(m, caddr_t), 
@@ -631,9 +630,11 @@ nfs_mount_diskless_private(ndmntp, mntname, mntflag, vpp, mpp)
 	args.addrlen  = args.addr->sa_len;
 	args.sotype   = SOCK_DGRAM;
 	args.fh       = ndmntp->ndm_fh;
-	args.fhsize   = NFSX_V2FH;
+	args.fhsize   = ndmntp->ndm_fhlen;
 	args.hostname = ndmntp->ndm_host;
 	args.flags    = NFSMNT_RESVPORT;
+	if (ndmntp->ndm_nfsv3)
+		args.flags |= NFSMNT_NFSV3;
 
 	MGET(m, M_DONTWAIT, MT_SONAME);
 	bcopy((caddr_t)args.addr, mtod(m, caddr_t), 

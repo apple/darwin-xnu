@@ -642,9 +642,31 @@ in_arpinput(m)
 		return;
 	}
 	if (isaddr.s_addr == myaddr.s_addr) {
+		struct kev_msg        ev_msg;
+		struct kev_in_collision	*in_collision;
+		u_char	storage[sizeof(struct kev_in_collision) + 6];
+		in_collision = (struct kev_in_collision*)storage;
+		
 		log(LOG_ERR,
 			"duplicate IP address %s sent from ethernet address %s\n",
 			inet_ntoa(isaddr), ether_sprintf(buf, ea->arp_sha));
+		
+		/* Send a kernel event so anyone can learn of the conflict */
+		in_collision->link_data.if_family = ac->ac_if.if_family;
+		in_collision->link_data.if_unit = ac->ac_if.if_unit;
+		strncpy(&in_collision->link_data.if_name[0], ac->ac_if.if_name, IFNAMSIZ);
+		in_collision->ia_ipaddr = isaddr;
+		in_collision->hw_len = ETHER_ADDR_LEN;
+		bcopy((caddr_t)ea->arp_sha, (caddr_t)in_collision->hw_addr, sizeof(ea->arp_sha));
+		ev_msg.vendor_code = KEV_VENDOR_APPLE;
+		ev_msg.kev_class = KEV_NETWORK_CLASS;
+		ev_msg.kev_subclass = KEV_INET_SUBCLASS;
+		ev_msg.event_code = KEV_INET_ARPCOLLISION;
+		ev_msg.dv[0].data_ptr = in_collision;
+		ev_msg.dv[0].data_length = sizeof(struct kev_in_collision) + 6;
+		ev_msg.dv[1].data_length = 0;
+		kev_post_msg(&ev_msg);
+		
 		itaddr = myaddr;
 		goto reply;
 	}

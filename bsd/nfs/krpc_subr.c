@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2002 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -401,13 +401,40 @@ krpc_call(sa, prog, vers, func, data, from_p)
 			if (reply->rp_astatus != 0) {
 				error = ntohl(reply->rp_u.rpu_errno);
 				printf("rpc denied, error=%d\n", error);
-				continue;
+				/* convert rpc error to errno */
+				switch (error) {
+				case RPC_MISMATCH:
+					error = ERPCMISMATCH;
+					break;
+				case RPC_AUTHERR:
+					error = EAUTH;
+					break;
+				}
+				goto out;
 			}
 
 			/* Did the call succeed? */
 			if ((error = ntohl(reply->rp_u.rpu_ok.rp_rstatus)) != 0) {
 				printf("rpc status=%d\n", error);
-				continue;
+				/* convert rpc error to errno */
+				switch (error) {
+				case RPC_PROGUNAVAIL:
+					error = EPROGUNAVAIL;
+					break;
+				case RPC_PROGMISMATCH:
+					error = EPROGMISMATCH;
+					break;
+				case RPC_PROCUNAVAIL:
+					error = EPROCUNAVAIL;
+					break;
+				case RPC_GARBAGE:
+					error = EINVAL;
+					break;
+				case RPC_SYSTEM_ERR:
+					error = EIO;
+					break;
+				}
+				goto out;
 			}
 
 			goto gotreply;	/* break two levels */

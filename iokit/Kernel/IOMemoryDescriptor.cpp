@@ -1736,7 +1736,7 @@ IOReturn IOMemoryDescriptor::doUnmap(
                 addressMap, logical, length );
 #endif
 
-    if( (addressMap == kernel_map) || (addressMap == get_task_map(current_task()))) {
+    if( true /* && (addressMap == kernel_map) || (addressMap == get_task_map(current_task()))*/) {
 
         if( _memEntry && (addressMap == kernel_map) && (kIOMemoryRequiresWire & _flags))
             addressMap = IOPageableMapForAddress( logical );

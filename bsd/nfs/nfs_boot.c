@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2002 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -130,6 +130,14 @@ int nfs_boot_init(nd, procp)
 	panic("nfs_boot_init: no ether");
 }
 
+int nfs_boot_getfh(nd, procp, v3)
+	struct nfs_diskless *nd;
+	struct proc *procp;
+	int v3;
+{
+	panic("nfs_boot_getfh: no ether");
+}
+
 #else /* NETHER */
 
 /*
@@ -159,11 +167,11 @@ static int bp_getfile __P((struct sockaddr_in *bpsin, char *key,
 	struct sockaddr_in *mdsin, char *servname, char *path));
 
 /* mountd RPC */
-static int md_mount __P((struct sockaddr_in *mdsin, char *path,
-	u_char *fh));
+static int md_mount __P((struct sockaddr_in *mdsin, char *path, int v3,
+	u_char *fhp, u_long *fhlenp));
 
 /* other helpers */
-static int get_file_handle __P((char *pathname, struct nfs_dlmount *ndmntp));
+static int get_file_handle __P((struct nfs_dlmount *ndmntp));
 
 
 #define IP_FORMAT	"%d.%d.%d.%d"
@@ -191,7 +199,6 @@ nfs_boot_init(nd, procp)
 	boolean_t		do_bpgetfile = TRUE;
 	int 			error = 0;
 	struct in_addr 		my_ip;
-	char * 			root_path = NULL;
 	struct sockaddr_in *	sin_p;
 
 	/* by this point, networking must already have been configured */
@@ -202,14 +209,14 @@ nfs_boot_init(nd, procp)
 	}
 
 	/* get the root path information */
-	MALLOC(root_path, char *, MAXPATHLEN, M_TEMP, M_WAITOK);
+	MALLOC_ZONE(nd->nd_root.ndm_path, char *, MAXPATHLEN, M_NAMEI, M_WAITOK);
 	sin_p = &nd->nd_root.ndm_saddr;
 	bzero((caddr_t)sin_p, sizeof(*sin_p));
 	sin_p->sin_len = sizeof(*sin_p);
 	sin_p->sin_family = AF_INET;
 	if (netboot_rootpath(&sin_p->sin_addr, nd->nd_root.ndm_host, 
 			     sizeof(nd->nd_root.ndm_host),
-			     root_path, MAXPATHLEN) == TRUE) {
+			     nd->nd_root.ndm_path, MAXPATHLEN) == TRUE) {
 	    do_bpgetfile = FALSE;
 	    do_bpwhoami = FALSE;
 	}
@@ -244,53 +251,37 @@ nfs_boot_init(nd, procp)
 	}
 	if (do_bpgetfile) {
 		error = bp_getfile(&bp_sin, "root", &nd->nd_root.ndm_saddr,
-				   nd->nd_root.ndm_host, root_path);
+				   nd->nd_root.ndm_host, nd->nd_root.ndm_path);
 		if (error) {
 			printf("nfs_boot: bootparam get root: %d\n", error);
 			goto failed;
 		}
 	}
-	
-	error = get_file_handle(root_path, &nd->nd_root);
-	if (error) {
-		printf("nfs_boot: get_file_handle() root failed, %d\n", error);
-		goto failed;
-	}
 
 #if !defined(NO_MOUNT_PRIVATE) 
 	if (do_bpgetfile) { /* get private path */
-		char * private_path = NULL;
-		
-		MALLOC(private_path, char *, MAXPATHLEN, M_TEMP, M_WAITOK);
+		MALLOC_ZONE(nd->nd_private.ndm_path, char *, MAXPATHLEN, M_NAMEI, M_WAITOK);
 		error = bp_getfile(&bp_sin, "private", 
 				   &nd->nd_private.ndm_saddr,
-				   nd->nd_private.ndm_host, private_path);
+				   nd->nd_private.ndm_host,
+				   nd->nd_private.ndm_path);
 		if (!error) {
 			char * check_path = NULL;
 			
-			MALLOC(check_path, char *, MAXPATHLEN, M_TEMP, M_WAITOK);
-			sprintf(check_path, "%s/private", root_path);
+			MALLOC_ZONE(check_path, char *, MAXPATHLEN, M_NAMEI, M_WAITOK);
+			snprintf(check_path, MAXPATHLEN, "%s/private", nd->nd_root.ndm_path);
 			if ((nd->nd_root.ndm_saddr.sin_addr.s_addr 
 			     == nd->nd_private.ndm_saddr.sin_addr.s_addr)
-			    && (strcmp(check_path, private_path) == 0)) {
+			    && (strcmp(check_path, nd->nd_private.ndm_path) == 0)) {
 				/* private path is prefix of root path, don't mount */
 				nd->nd_private.ndm_saddr.sin_addr.s_addr = 0;
 			}
-			else {
-				error = get_file_handle(private_path, 
-							&nd->nd_private);
-				if (error) {
-					printf("nfs_boot: get_file_handle() private failed, %d\n", error);
-					goto failed;
-				}
-			}
-			_FREE(check_path, M_TEMP);
+			FREE_ZONE(check_path, MAXPATHLEN, M_NAMEI);
 		}
 		else { 
 			/* private key not defined, don't mount */
 			nd->nd_private.ndm_saddr.sin_addr.s_addr = 0;
 		}
-		_FREE(private_path, M_TEMP);
 	}
 	else {
 		error = 0;
@@ -298,14 +289,51 @@ nfs_boot_init(nd, procp)
 #endif NO_MOUNT_PRIVATE
  failed:
 	thread_funnel_switch(NETWORK_FUNNEL, KERNEL_FUNNEL);
-	_FREE(root_path, M_TEMP);
+	return (error);
+}
+
+/*
+ * Called with a partially initialized nfs_diskless struct
+ * with file handles to be filled in.
+ */
+int
+nfs_boot_getfh(nd, procp, v3)
+	struct nfs_diskless *nd;
+	struct proc *procp;
+	int v3;
+{
+	int error = 0;
+
+	thread_funnel_switch(KERNEL_FUNNEL, NETWORK_FUNNEL);
+	
+	nd->nd_root.ndm_nfsv3 = v3;
+	error = get_file_handle(&nd->nd_root);
+	if (error) {
+		printf("nfs_boot: get_file_handle(v%d) root failed, %d\n",
+			v3 ? 3 : 2, error);
+		goto failed;
+	}
+
+#if !defined(NO_MOUNT_PRIVATE) 
+	if (nd->nd_private.ndm_saddr.sin_addr.s_addr) {
+		/* get private file handle */
+		nd->nd_private.ndm_nfsv3 = v3;
+		error = get_file_handle(&nd->nd_private);
+		if (error) {
+			printf("nfs_boot: get_file_handle(v%d) private failed, %d\n",
+				v3 ? 3 : 2, error);
+			goto failed;
+		}
+	}
+#endif NO_MOUNT_PRIVATE
+ failed:
+	thread_funnel_switch(NETWORK_FUNNEL, KERNEL_FUNNEL);
 	return (error);
 }
 
 static int
-get_file_handle(pathname, ndmntp)
- 	char 		   *pathname;	/* path on server */
-	struct nfs_dlmount *ndmntp;	/* output */
+get_file_handle(ndmntp)
+	struct nfs_dlmount *ndmntp;
 {
 	char *sp, *dp, *endp;
 	int error;
@@ -314,7 +342,8 @@ get_file_handle(pathname, ndmntp)
 	 * Get file handle for "key" (root or swap)
 	 * using RPC to mountd/mount
 	 */
-	error = md_mount(&ndmntp->ndm_saddr, pathname, ndmntp->ndm_fh);
+	error = md_mount(&ndmntp->ndm_saddr, ndmntp->ndm_path, ndmntp->ndm_nfsv3,
+			ndmntp->ndm_fh, &ndmntp->ndm_fhlen);
 	if (error)
 		return (error);
 
@@ -323,7 +352,7 @@ get_file_handle(pathname, ndmntp)
 	endp = dp + MNAMELEN - 1;
 	dp += strlen(dp);
 	*dp++ = ':';
-	for (sp = pathname; *sp && dp < endp;)
+	for (sp = ndmntp->ndm_path; *sp && dp < endp;)
 		*dp++ = *sp++;
 	*dp = '\0';
 	return (0);
@@ -647,22 +676,25 @@ out:
  * Also, sets sin->sin_port to the NFS service port.
  */
 static int
-md_mount(mdsin, path, fhp)
+md_mount(mdsin, path, v3, fhp, fhlenp)
 	struct sockaddr_in *mdsin;		/* mountd server address */
 	char *path;
+	int v3;
 	u_char *fhp;
+	u_long *fhlenp;
 {
 	/* The RPC structures */
 	struct rpc_string *str;
 	struct rdata {
 		u_long	errno;
-		u_char	fh[NFSX_V2FH];
+		u_char	data[NFSX_V3FHMAX + sizeof(u_long)];
 	} *rdata;
 	struct mbuf *m;
 	int error, mlen, slen;
+	int mntversion = v3 ? RPCMNT_VER3 : RPCMNT_VER1;
 
 	/* Get port number for MOUNTD. */
-	error = krpc_portmap(mdsin, RPCPROG_MNT, RPCMNT_VER1,
+	error = krpc_portmap(mdsin, RPCPROG_MNT, mntversion,
 						 &mdsin->sin_port);
 	if (error) return error;
 
@@ -677,22 +709,43 @@ md_mount(mdsin, path, fhp)
 	bcopy(path, str->data, slen);
 
 	/* Do RPC to mountd. */
-	error = krpc_call(mdsin, RPCPROG_MNT, RPCMNT_VER1,
+	error = krpc_call(mdsin, RPCPROG_MNT, mntversion,
 			RPCMNT_MOUNT, &m, NULL);
 	if (error)
 		return error;	/* message already freed */
 
+	/*
+	 * the reply must be long enough to hold the errno plus either of:
+	 * + a v2 filehandle
+	 * + a v3 filehandle length + a v3 filehandle
+	 */
 	mlen = m->m_len;
-	if (mlen < sizeof(*rdata))
+	if (mlen < sizeof(u_long))
 		goto bad;
 	rdata = mtod(m, struct rdata *);
 	error = ntohl(rdata->errno);
 	if (error)
-		goto bad;
-	bcopy(rdata->fh, fhp, NFSX_V2FH);
+		goto out;
+	if (v3) {
+		u_long fhlen;
+		u_char *fh;
+		if (mlen < sizeof(u_long)*2)
+			goto bad;
+		fhlen = ntohl(*(u_long*)rdata->data);
+		fh = rdata->data + sizeof(u_long);
+		if (mlen < (sizeof(u_long)*2 + fhlen))
+			goto bad;
+		bcopy(fh, fhp, fhlen);
+		*fhlenp = fhlen;
+	} else {
+		if (mlen < (sizeof(u_long) + NFSX_V2FH))
+			goto bad;
+		bcopy(rdata->data, fhp, NFSX_V2FH);
+		*fhlenp = NFSX_V2FH;
+	}
 
 	/* Set port number for NFS use. */
-	error = krpc_portmap(mdsin, NFS_PROG, NFS_VER2,
+	error = krpc_portmap(mdsin, NFS_PROG, v3 ? NFS_VER3 : NFS_VER2,
 						 &mdsin->sin_port);
 	goto out;
 

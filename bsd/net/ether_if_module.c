@@ -332,6 +332,24 @@ int ether_demux(ifp, m, frame_header, proto)
             m->m_flags |= M_BCAST;
         else
             m->m_flags |= M_MCAST;
+    } else {
+        /*
+         * When the driver is put into promiscuous mode we may receive unicast
+         * frames that are not intended for our interfaces.  They are filtered
+         * here to keep them from traveling further up the stack to code that
+         * is not expecting them or prepared to deal with them.  In the near
+         * future, the filtering done here will be moved even further down the
+         * stack into the IONetworkingFamily, preventing even interface
+         * filter NKE's from receiving promiscuous packets.  Please use BPF.
+         */
+        #define ETHER_CMP(x, y) ( ((u_int16_t *) x)[0] != ((u_int16_t *) y)[0] || \
+                                  ((u_int16_t *) x)[1] != ((u_int16_t *) y)[1] || \
+                                  ((u_int16_t *) x)[2] != ((u_int16_t *) y)[2] )
+    
+        if (ETHER_CMP(eh->ether_dhost, ((struct arpcom *) ifp)->ac_enaddr)) {
+            m_freem(m);
+            return EJUSTRETURN;
+        }
     }
     
     data = mtod(m, u_int8_t*);

@@ -99,6 +99,7 @@
 #define	RPC_PROGMISMATCH	2
 #define	RPC_PROCUNAVAIL	3
 #define	RPC_GARBAGE	4		/* I like this one */
+#define	RPC_SYSTEM_ERR	5
 #define	RPC_MISMATCH	0
 #define	RPC_AUTHERR	1
 
