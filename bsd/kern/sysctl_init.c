@@ -115,6 +115,7 @@ extern struct sysctl_oid sysctl__net_inet_tcp_keepintvl;
 extern struct sysctl_oid sysctl__net_inet_tcp_mssdflt;
 extern struct sysctl_oid sysctl__net_inet_tcp_recvspace;
 extern struct sysctl_oid sysctl__net_inet_tcp_sendspace;
+extern struct sysctl_oid sysctl__net_inet_tcp_slowlink_wsize;
 extern struct sysctl_oid sysctl__net_inet_tcp_blackhole;
 extern struct sysctl_oid sysctl__net_inet_tcp_tcp_lq_overflow;
 extern struct sysctl_oid sysctl__net_inet_tcp_path_mtu_discovery;
@@ -442,6 +443,7 @@ struct sysctl_oid *newsysctl_list[] =
     ,&sysctl__net_inet_tcp_mssdflt
     ,&sysctl__net_inet_tcp_recvspace
     ,&sysctl__net_inet_tcp_sendspace
+    ,&sysctl__net_inet_tcp_slowlink_wsize
     ,&sysctl__net_inet_tcp_blackhole
     ,&sysctl__net_inet_tcp_tcp_lq_overflow
     ,&sysctl__net_inet_tcp_path_mtu_discovery

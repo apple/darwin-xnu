@@ -143,24 +143,28 @@ mount(p, uap, retval)
 			return (EINVAL);
 		}
 		mp = vp->v_mount;
-		flag = mp->mnt_flag;
+
+		if (vfs_busy(mp, LK_NOWAIT, 0, p)) {
+			vput(vp);
+			return (EBUSY);
+		}
 		/*
 		 * We only allow the filesystem to be reloaded if it
 		 * is currently mounted read-only.
 		 */
 		if ((uap->flags & MNT_RELOAD) &&
 		    ((mp->mnt_flag & MNT_RDONLY) == 0)) {
+		        vfs_unbusy(mp, p);
 			vput(vp);
 			return (EOPNOTSUPP);	/* Needs translation */
 		}
-		mp->mnt_flag |=
-		    uap->flags & (MNT_RELOAD | MNT_FORCE | MNT_UPDATE);
 		/*
 		 * Only root, or the user that did the original mount is
 		 * permitted to update it.
 		 */
 		if (mp->mnt_stat.f_owner != p->p_ucred->cr_uid &&
 		    (error = suser(p->p_ucred, &p->p_acflag))) {
+		        vfs_unbusy(mp, p);
 			vput(vp);
 			return (error);
 		}
@@ -171,18 +175,21 @@ mount(p, uap, retval)
 		 */
 		if (p->p_ucred->cr_uid != 0) {
 			if (uap->flags & MNT_EXPORTED) {
+			        vfs_unbusy(mp, p);
 				vput(vp);
 				return (EPERM);
 			}
 			uap->flags |= MNT_NOSUID | MNT_NODEV;
-			if (flag & MNT_NOEXEC)
+			if (mp->mnt_flag & MNT_NOEXEC)
 				uap->flags |= MNT_NOEXEC;
 		}
-		if (vfs_busy(mp, LK_NOWAIT, 0, p)) {
-			vput(vp);
-			return (EBUSY);
-		}
+		flag = mp->mnt_flag;
+
+		mp->mnt_flag |=
+		    uap->flags & (MNT_RELOAD | MNT_FORCE | MNT_UPDATE);
+
 		VOP_UNLOCK(vp, 0, p);
+
 		goto update;
 	}
 	/*
@@ -296,7 +303,8 @@ update:
 	 * Mount the filesystem.
 	 */
 	error = VFS_MOUNT(mp, uap->path, uap->data, &nd, p);
-	if (mp->mnt_flag & MNT_UPDATE) {
+
+	if (uap->flags & MNT_UPDATE) {
 		vrele(vp);
 		if (mp->mnt_kern_flag & MNTK_WANTRDWR)
 			mp->mnt_flag &= ~MNT_RDONLY;
@@ -324,6 +332,7 @@ update:
 		vp->v_mountedhere =mp;
 		simple_unlock(&vp->v_interlock);
 		simple_lock(&mountlist_slock);
+
 		CIRCLEQ_INSERT_TAIL(&mountlist, mp, mnt_list);
 		simple_unlock(&mountlist_slock);
 		checkdirs(vp);
@@ -544,6 +553,7 @@ dounmount(mp, flags, p)
 	/* increment the operations count */
 	if (!error)
 		vfs_nummntops++;
+
 	CIRCLEQ_REMOVE(&mountlist, mp, mnt_list);
 	if ((coveredvp = mp->mnt_vnodecovered) != NULLVP) {
 		coveredvp->v_mountedhere = (struct mount *)0;

@@ -127,6 +127,7 @@ struct tcpcb {
 #define	TF_MORETOCOME	0x10000		/* More data to be appended to sock */
 #define	TF_LQ_OVERFLOW	0x20000		/* listen queue overflow */
 #define	TF_RXWIN0SENT	0x40000		/* sent a receiver win 0 in response */
+#define	TF_SLOWLINK	0x80000		/* route is a on a modem speed link */
 
 	int	t_force;		/* 1 if forcing out a byte */
 

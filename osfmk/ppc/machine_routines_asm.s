@@ -1338,3 +1338,18 @@ sps1:
 
 sps2:
 			blr
+
+/*
+**      ml_set_processor_voltage()
+**
+*/
+;			Force a line boundry here
+			.align	5
+			.globl	EXT(ml_set_processor_voltage)
+
+LEXT(ml_set_processor_voltage)
+			mfspr	r4, hid2							; Get HID2 value
+			rlwimi	r4, r3, 31-hid2vmin, hid2vmin, hid2vmin				; Insert the voltage mode bit
+			mtspr	hid2, r4							; Set the voltage mode
+			sync									; Make sure it is done
+			blr

@@ -201,6 +201,7 @@ typedef struct ml_ppc_cpu_info_t ml_ppc_cpu_info_t;
 void ml_ppc_get_info(ml_ppc_cpu_info_t *cpu_info);
 
 void ml_set_processor_speed(unsigned long speed);
+void ml_set_processor_voltage(unsigned long voltage);
 
 #endif /* __APPLE_API_PRIVATE */
 

@@ -730,7 +730,9 @@ dp_memory_object_data_return(
 		return KERN_SUCCESS;
 	}
 
-	if ((vs->vs_seqno != vs->vs_next_seqno++) || (vs->vs_xfer_pending)) {
+	if ((vs->vs_seqno != vs->vs_next_seqno++)
+			|| (vs->vs_readers)
+			|| (vs->vs_xfer_pending)) {
 		upl_t	upl;
 		int	page_list_count = 0;
 

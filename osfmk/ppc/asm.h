@@ -137,6 +137,8 @@
 #define hid0	1008	/* Checkstop and misc enables */
 #define HID1	1009	/* Clock configuration */
 #define hid1	1009	/* Clock configuration */
+#define HID2	1016	/* Other processor controls */
+#define hid2	1016	/* Other processor controls */
 #define iabr	1010	/* Instruction address breakpoint register */
 #define ictrl	1011	/* Instruction Cache Control */
 #define ldstdb	1012	/* Load/Store Debug */
@@ -232,6 +234,11 @@
 #define hid1pc1		0x000000F8
 #define hid1pc0		0x0000F800
 #define hid1pr1		0x00000006
+
+
+;	hid2 bits
+#define hid2vmin	18
+#define hid2vminm	0x00002000
 
 ;	msscr0 bits
 #define shden	0

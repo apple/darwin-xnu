@@ -998,6 +998,7 @@ hfs_cmap(ap)
 		return (0);
 
 	p = current_proc();
+  retry:
 	if (fp->ff_unallocblocks) {
 		lockExtBtree = 1;
 
@@ -1035,6 +1036,22 @@ hfs_cmap(ap)
 	 */
 	if (fp->ff_unallocblocks) {
 		SInt64 reqbytes, actbytes;
+
+		//
+		// Make sure we have a transaction.  It's possible
+		// that we came in and fp->ff_unallocblocks was zero
+		// but during the time we blocked acquiring the extents
+		// btree, ff_unallocblocks became non-zero and so we
+		// will need to start a transaction.
+		//
+		if (hfsmp->jnl && started_tr == 0) {
+		    if (lockExtBtree) {
+			(void) hfs_metafilelocking(hfsmp, kHFSExtentsFileID, LK_RELEASE, p);
+			lockExtBtree = 0;
+		    }
+    
+		    goto retry;
+		}
 
 		reqbytes = (SInt64)fp->ff_unallocblocks *
 		             (SInt64)HFSTOVCB(hfsmp)->blockSize;

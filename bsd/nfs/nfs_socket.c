@@ -993,6 +993,10 @@ nfs_reply(myrep)
 			FSDBG(530, myrep->r_xid, myrep, nmp, error);
 			nfs_rcvunlock(&nmp->nm_flag);
 
+			/* Bailout asap if nfsmount struct gone (unmounted). */
+			if (!myrep->r_nmp || !nmp->nm_so)
+				return (ECONNABORTED);
+
 			/*
 			 * Ignore routing errors on connectionless protocols??
 			 */
@@ -1996,9 +2000,17 @@ static int
 nfs_rcvlock(rep)
 	register struct nfsreq *rep;
 {
-	register int *flagp = &rep->r_nmp->nm_flag;
+	register int *flagp;
 	int slpflag, slptimeo = 0;
 
+	/* make sure we still have our mountpoint */
+	if (!rep->r_nmp) {
+		if (rep->r_mrep != NULL)
+			return (EALREADY);
+		return (ECONNABORTED);
+	}
+
+	flagp = &rep->r_nmp->nm_flag;
 	FSDBG_TOP(534, rep->r_xid, rep, rep->r_nmp, *flagp);
 	if (*flagp & NFSMNT_INT)
 		slpflag = PCATCH;

@@ -3384,7 +3384,7 @@ ipsec_copypkt(m)
 			 */
 			if (
 				n->m_ext.ext_free ||
-				mclrefcnt[mtocl(n->m_ext.ext_buf)] > 1
+				m_mclhasreference(n)
 			    )
 			{
 				int remain, copied;

@@ -1394,6 +1394,6 @@ void if_rtproto_del(struct ifnet *ifp, int protocol)
 	
         struct radix_node_head  *rnh;
 
-	if (((rnh = rt_tables[protocol]) != NULL) && (ifp != NULL)) 
+	if ((protocol <= AF_MAX) && ((rnh = rt_tables[protocol]) != NULL) && (ifp != NULL))
 		(void) rnh->rnh_walktree(rnh, if_rtdel, ifp);
 }

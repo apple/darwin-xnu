@@ -524,6 +524,21 @@ init750FXnbloop:
 			mtspr	hid1, r11							; Select the desired PLL
 			blr
 
+;			750FX vers 2.0 or later
+init750FXV2:
+			bf	firstBoot, init750FXV2nb					; Wake from sleep
+
+			mfspr	r11, hid2
+			stw	r11, pfHID2(r30)						; Save the HID2 value
+			b	init750FX							; Continue with 750FX init
+
+init750FXV2nb:
+			lwz	r13, pfHID2(r30)						; Get HID2
+			rlwinm	r13, r13, 0, hid2vmin+1, hid2vmin-1				; Clear the vmin bit
+			mtspr	hid2, r13							; Restore HID2 value
+			sync									; Wait for it to be done
+			b	init750FX
+
 ;			7400
 
 init7400:	bf		firstBoot,i7400nb					; Do different if not initial boot...
@@ -857,6 +872,21 @@ processor_types:
 	.long	32*1024
 	.long	32*1024
 	
+;       750FX (ver 1.x)
+
+        .align  2
+        .long   0xFFFF0F00              ; 1.x vers
+        .short  PROCESSOR_VERSION_750FX
+        .short  0x0100
+        .long   pfFloat | pfCanSleep | pfCanNap | pfCanDoze | pfSlowNap | pfNoMuMMCK | pfL1i | pfL1d | pfL2
+        .long   init750FX
+        .long   CPU_SUBTYPE_POWERPC_750
+        .long   105
+        .long   90
+        .long   32
+        .long   32*1024
+        .long   32*1024
+	
 ;       750FX (generic)
 
         .align  2
@@ -864,7 +894,7 @@ processor_types:
         .short  PROCESSOR_VERSION_750FX
         .short  0
         .long   pfFloat | pfCanSleep | pfCanNap | pfCanDoze | pfSlowNap | pfNoMuMMCK | pfL1i | pfL1d | pfL2
-        .long   init750FX
+        .long   init750FXV2
         .long   CPU_SUBTYPE_POWERPC_750
         .long   105
         .long   90

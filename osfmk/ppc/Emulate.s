@@ -1127,7 +1127,7 @@ aaSetSegs:	addi	r3,r25,-1						; Point at last accessed offset in range
 			lis		r0,0x4000						; This is the address of the first segment outside of the kernel
 			rlwinm	r5,r23,6,26,29					; Get index into pmap table
 			add		r4,r23,r3						; Point to the last byte accessed
-			addi	r5,r5,PMAP_SEGS					; Point to the segment slot
+			addi	r7,r7,PMAP_SEGS					; Point to the segment slot
 			cmplw	r23,r0							; See if first segment register needs to be reloaded
 			cmplw	cr2,r4,r0						; Do we need to set the second (if any) SR?
 			xor		r0,r4,r23						; See if we are in the same segment as first
