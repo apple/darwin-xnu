@@ -610,13 +610,15 @@ thread_stop(
 	wake_lock(thread);
 
 	while (thread->state & TH_SUSP) {
+		int wait_result;
+
 		thread->wake_active = TRUE;
 		assert_wait((event_t)&thread->wake_active, THREAD_ABORTSAFE);
 		wake_unlock(thread);
 		splx(s);
 
-		thread_block((void (*)(void)) 0);
-		if (current_thread()->wait_result != THREAD_AWAKENED)
+		wait_result = thread_block((void (*)(void)) 0);
+		if (wait_result != THREAD_AWAKENED)
 			return (FALSE);
 
 		s = splsched();
@@ -694,6 +696,8 @@ thread_wait(
 	wake_lock(thread);
 
 	while (thread->state & (TH_RUN/*|TH_UNINT*/)) {
+		int wait_result;
+
 		if (thread->last_processor != PROCESSOR_NULL)
 			cause_ast_check(thread->last_processor);
 
@@ -702,18 +706,16 @@ thread_wait(
 		wake_unlock(thread);
 		splx(s);
 
-		thread_block((void (*)(void))0);
-		if (current_thread()->wait_result != THREAD_AWAKENED)
-			return (FALSE);
+		wait_result = thread_block((void (*)(void))0);
+		if (wait_result != THREAD_AWAKENED)
+			return FALSE;
 
 		s = splsched();
 		wake_lock(thread);
 	}
-
 	wake_unlock(thread);
 	splx(s);
-
-	return (TRUE);
+	return TRUE;
 }
 
 

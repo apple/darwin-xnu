@@ -655,7 +655,8 @@ _eRegistryCStrEntryLookup(  const RegEntryID *	parentEntry,
     char *		buf;
     char *		cvtPath;
     char		c;
-#define kDTRoot	"Devices:device-tree:"
+#define kDTRoot		"Devices:device-tree:"
+#define kMacIORoot	"Devices:device-tree:pci:mac-io:"
 
     if( parentEntry) {
         REG_ENTRY_TO_OBJ( parentEntry, regEntry)
@@ -669,6 +670,10 @@ _eRegistryCStrEntryLookup(  const RegEntryID *	parentEntry,
     cvtPath = buf;
     if( ':' == path[0])
 	path++;
+    else if( 0 == strncmp( path, kMacIORoot, strlen( kMacIORoot ))) {
+	path += strlen( kMacIORoot ) - 7;
+	regEntry = 0;
+    }
     else if( 0 == strncmp( path, kDTRoot, strlen( kDTRoot ))) {
 	path += strlen( kDTRoot ) - 1;
 	regEntry = 0;

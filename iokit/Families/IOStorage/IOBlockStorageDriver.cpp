@@ -1759,7 +1759,7 @@ IOByteCount IODeblocker::readBytes( IOByteCount offset,
 
     for ( ; index < _chunksCount && withLength; index++)
     {
-        IOByteCount copy   = min(_chunks[index].length, withLength);
+        IOByteCount copy   = min(_chunks[index].length - offset, withLength);
         IOByteCount copied = _chunks[index].buffer->readBytes(
                                     /* offset */ offset + _chunks[index].offset,
                                     /* bytes  */ bytes,
@@ -1798,7 +1798,7 @@ IOByteCount IODeblocker::writeBytes( IOByteCount  offset,
 
     for ( ; index < _chunksCount && withLength; index++)
     {
-        IOByteCount copy   = min(_chunks[index].length, withLength);
+        IOByteCount copy   = min(_chunks[index].length - offset, withLength);
         IOByteCount copied = _chunks[index].buffer->writeBytes(
                                     /* offset */ offset + _chunks[index].offset,
                                     /* bytes  */ bytes,

@@ -154,6 +154,8 @@ private:
     static const IOTVector * _undefinedSymbolHandler( void * self, 
                             const char * libraryName, const char * symbolName );
     void displayI2CPower( bool enable );
+    static bool _videoJackStateChangeHandler( void * target, void * ref,
+                                                IOService * resourceService );
 
 public:
     virtual IOReturn doControl( UInt32 code, void * params );

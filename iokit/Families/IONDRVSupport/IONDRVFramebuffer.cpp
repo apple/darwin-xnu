@@ -46,6 +46,8 @@
 
 #include <string.h>
 
+#define kAppleAudioVideoJackStateKey	"AppleAudioVideoJackState"
+
 /* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
 
 class IOATINDRV : public IONDRVFramebuffer
@@ -242,6 +244,12 @@ IOReturn IONDRVFramebuffer::enableController( void )
 
     if( kIOReturnSuccess == err) do {
 
+        // find out about onboard audio/video jack state
+        // OSObject * notify =
+        addNotification( gIOPublishNotification,
+                         resourceMatching(kAppleAudioVideoJackStateKey), 
+                         _videoJackStateChangeHandler, this, 0 );
+
         ignore_zero_fault( true );
 	err = checkDriver();
         ignore_zero_fault( false );
@@ -271,6 +279,25 @@ IOReturn IONDRVFramebuffer::enableController( void )
     } while( false);
 
     return( err);
+}
+
+bool IONDRVFramebuffer::_videoJackStateChangeHandler( void * target, void * ref,
+                                                        IOService * resourceService )
+{
+    IONDRVFramebuffer * self = (IONDRVFramebuffer *) target;
+    IOReturn		err;
+    UInt32		jackData;
+
+    OSObject * jackValue = resourceService->getProperty(kAppleAudioVideoJackStateKey);
+    if( !jackValue)
+        return( true );
+
+    jackData = (jackValue == kOSBooleanTrue);
+
+    self->nub->setProperty( kAppleAudioVideoJackStateKey, &jackData, sizeof(jackData) );
+    resourceService->removeProperty(kAppleAudioVideoJackStateKey);
+
+    return( true );
 }
 
 IODeviceMemory * IONDRVFramebuffer::getVRAMRange( void )

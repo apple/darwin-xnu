@@ -427,7 +427,8 @@ current_thread_aborted (
 {
 	thread_t th = current_thread();
 
-	return(!th->top_act || (th->state & TH_ABORT)); 
+	return(!th->top_act ||
+	       ((th->state & TH_ABORT) && (th->interruptible))); 
 }
 
 /*

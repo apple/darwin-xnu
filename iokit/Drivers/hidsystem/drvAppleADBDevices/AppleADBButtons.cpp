@@ -20,6 +20,7 @@
  * @APPLE_LICENSE_HEADER_END@
  */
 #include "AppleADBButtons.h"
+#include "AppleADBKeyboard.h"
 #include <IOKit/IOLib.h>
 #include <IOKit/pwr_mgt/IOPM.h>
 #include <IOKit/hidsystem/IOHIDTypes.h>
@@ -88,6 +89,24 @@ UInt32 AppleADBButtons::interfaceID()
 
 UInt32 AppleADBButtons::deviceType()
 {
+    //if initial id is 31 then this is a post-WallStreet PowerBook, so 
+    //look for a AppleADBKeyboard driver and return the handler ID from it.
+    //Note though that the ADB keyboard driver may not exist.
+    if (_initial_handler_id == 31)
+    {
+    	mach_timespec_t     t;
+	AppleADBKeyboard  *adbkeyboard;
+
+	t.tv_sec = 2;	
+	t.tv_nsec = 0;
+	adbkeyboard = (AppleADBKeyboard *)waitForService(serviceMatching("AppleADBKeyboard"), &t);
+	if (adbkeyboard)
+	{
+	    return adbkeyboard->deviceType();
+	}
+
+    }
+
     return adbDevice->handlerID();
 }
 

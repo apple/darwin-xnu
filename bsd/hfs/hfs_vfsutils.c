@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2001 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -2866,6 +2866,7 @@ void UnpackCommonAttributeBlock(struct attrlist *alist,
 		catInfo->nodeData.cnd_contentModDate = to_hfs_time((UInt32)((struct timespec *)attrbufptr)->tv_sec);
 		VTOH(vp)->h_meta->h_mtime = (UInt32)((struct timespec *)attrbufptr)->tv_sec;
 		++((struct timespec *)attrbufptr);
+		hp->h_nodeflags &= ~IN_UPDATE;
 #if HFS_DIAGNOSTIC
 		a &= ~ATTR_CMN_MODTIME;
 #endif
@@ -2874,6 +2875,7 @@ void UnpackCommonAttributeBlock(struct attrlist *alist,
 		catInfo->nodeData.cnd_attributeModDate = to_hfs_time((UInt32)((struct timespec *)attrbufptr)->tv_sec);
 		VTOH(vp)->h_meta->h_ctime = (UInt32)((struct timespec *)attrbufptr)->tv_sec;
 		++((struct timespec *)attrbufptr);
+		hp->h_nodeflags &= ~IN_CHANGE;
 #if HFS_DIAGNOSTIC
 		a &= ~ATTR_CMN_CHGTIME;
 #endif
@@ -2882,6 +2884,7 @@ void UnpackCommonAttributeBlock(struct attrlist *alist,
 		catInfo->nodeData.cnd_accessDate = to_hfs_time((UInt32)((struct timespec *)attrbufptr)->tv_sec);
 		VTOH(vp)->h_meta->h_atime = (UInt32)((struct timespec *)attrbufptr)->tv_sec;
 		++((struct timespec *)attrbufptr);
+		hp->h_nodeflags &= ~IN_ACCESS;
 #if HFS_DIAGNOSTIC
 		a &= ~ATTR_CMN_ACCTIME;
 #endif

@@ -720,13 +720,10 @@ selrecord(selector, sip)
 	} else {
 		sip->si_thread = my_thread;
 		splx(oldpri);
+		act_reference(current_act());
 		if (selthread) {
-			/* thread_deallocate(selthread); */
 			act_deallocate(getact_thread(selthread));
 		}
-		/* do I need act reference ??? */
-		/* thread_reference(sip->si_thread); */
-		act_reference(getact_thread(sip->si_thread));
 	}
 
 	return;

@@ -837,6 +837,7 @@ again:
 			break;
 		}
 		if (buflen >= sizeof(struct kinfo_proc)) {
+			bzero(&kproc, sizeof(struct kinfo_proc));
 			fill_proc(p, &kproc, doingzomb);
 			if (error = copyout((caddr_t)&kproc, &dp->kp_proc,
 			    sizeof(struct kinfo_proc)))
@@ -881,6 +882,12 @@ fill_eproc(p, ep)
 	register struct eproc *ep;
 {
 	register struct tty *tp;
+
+	/*
+	 * Skip zombie processes.
+	 */
+	if (p->p_stat == SZOMB)
+		return;
 
 	ep->e_paddr = p;
 	ep->e_sess = p->p_pgrp->pg_session;

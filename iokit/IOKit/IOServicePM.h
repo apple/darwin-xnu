@@ -148,6 +148,9 @@ class IOPMpriv : public OSObject
     /*! @field device_active			true: there has been device activity since last idle timer expiration  */
     bool			device_active;
 
+    /*! @field device_active_timestamp    time in ticks of last activity */
+    AbsoluteTime                device_active_timestamp;
+
     /*! @field driverDesire
 This is the power state desired by our controlling driver.  It is initialized to myCurrentState and is changed
 when the controlling driver calls changePowerStateTo.   A change in driverDesire may cause a change in ourDesiredPowerState.

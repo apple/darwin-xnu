@@ -797,7 +797,6 @@ GetDirEntrySize(BTreeIterator *bip, ExtendedVCB * vol)
 				    cnp->ustr.length * sizeof(UniChar), ':', 0);
 		if (utf8chars > kdirentMaxNameBytes)
 			utf8chars = kdirentMaxNameBytes;
-		utf8chars++;  /* account for NULL termination */
 	} else { /* hfs */
 		cnp = (CatalogName*) ckp->hfs.nodeName;
 		result = hfs_to_utf8(vol, cnp->pstr, kdirentMaxNameBytes + 1,
@@ -817,7 +816,7 @@ GetDirEntrySize(BTreeIterator *bip, ExtendedVCB * vol)
 OSErr
 PositionIterator(CatalogIterator *cip, UInt32 offset, BTreeIterator *bip, UInt16 *op)
 {
-#define CAT_START_OFFSET (2 * sizeof(struct hfsdotentry))
+#define CAT_START_OFFSET 0
 	ExtendedVCB *	vol;
 	FCB *		fcb;
 	OSErr		result = 0;

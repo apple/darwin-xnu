@@ -93,23 +93,18 @@ return NX_EVS_DEVICE_INTERFACE_ADB;
 UInt32 AppleADBKeyboard::deviceType ( void )
 {
     UInt32	id;	//We need handler ID to remap adjustable JIS keyboard
-    
-    id = adbDevice->handlerID();
-    if (id == 18)  //Adjustable JIS
-    {
-	kmapConvert[0x32] = 0x35; //tilde to ESC 
-    }
     IORegistryEntry 	*regEntry;
     OSData *		data = 0;
     UInt32 		*dataptr;
-    
+        
     id = adbDevice->handlerID();
     if (id == 18)  //Adjustable JIS
     {
 	kmapConvert[0x32] = 0x35; //tilde to ESC 
     }
 
-    if ((id == kgestaltPwrBkEKDomKbd) || (id == kgestaltPwrBkEKISOKbd) || (id == kgestaltPwrBkEKJISKbd))
+    if ((id == kgestaltPwrBkEKDomKbd) || (id == kgestaltPwrBkEKISOKbd) || 
+	(id == kgestaltPwrBkEKJISKbd) || (id == kgestaltPwrBk99JISKbd))
     {	
 	if( (regEntry = IORegistryEntry::fromPath( "/pci@f2000000/mac-io/via-pmu/adb/keyboard", gIODTPlane ))) 
 	{
@@ -122,7 +117,7 @@ UInt32 AppleADBKeyboard::deviceType ( void )
 	    regEntry->release();
 	}
     }    
-
+        
     return id;
 }
 

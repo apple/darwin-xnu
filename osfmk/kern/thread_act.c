@@ -124,9 +124,6 @@ thread_terminate_internal(
 	task_t		task;
 	struct ipc_port	*iplock;
 	kern_return_t	ret;
-#if	NCPUS > 1
-	boolean_t	held;
-#endif	/* NCPUS > 1 */
 
 #if	THREAD_SWAPPER
 	thread_swap_disable(thr_act);
@@ -138,6 +135,9 @@ thread_terminate_internal(
 		return(KERN_TERMINATED);
 	}
 
+	act_disable_task_locked(thr_act);
+	ret = act_abort(thr_act,FALSE);
+
 #if	NCPUS > 1
 	/* 
 	 * Make sure this thread enters the kernel
@@ -146,34 +146,17 @@ thread_terminate_internal(
 		thread_hold(thr_act);
 		act_unlock_thread(thr_act);
 
-		if (!thread_stop_wait(thread)) {
+		if (thread_stop_wait(thread))
+			thread_unstop(thread);
+		else
 			ret = KERN_ABORTED;
-			(void)act_lock_thread(thr_act);
-			thread_release(thr_act);
-			act_unlock_thread(thr_act);
-			return (ret);
-		}
 
-		held = TRUE;
-		(void)act_lock_thread(thr_act);
-	} else {
-		held = FALSE;
-	}
-#endif	/* NCPUS > 1 */
-
-	assert(thr_act->active);
-	act_disable_task_locked(thr_act);
-	ret = act_abort(thr_act,FALSE);
-	act_unlock_thread(thr_act);
-
-#if	NCPUS > 1
-	if (held) {
-		thread_unstop(thread);
 		(void)act_lock_thread(thr_act);
 		thread_release(thr_act);
-		act_unlock_thread(thr_act);
 	}
 #endif	/* NCPUS > 1 */
+
+	act_unlock_thread(thr_act);
 	return(ret);
 }
 
@@ -509,8 +492,7 @@ act_abort( thread_act_t thr_act, int chain_break )
 	thread_lock(thr_act->thread);
 	if (thr_act->thread->top_act == thr_act) {
 	    thr_act->thread->state |= TH_ABORT;
-	    if (thr_act->thread->state & TH_ABORT)
-	    	clear_wait_internal(thr_act->thread, THREAD_INTERRUPTED);
+	    clear_wait_internal(thr_act->thread, THREAD_INTERRUPTED);
 	    thread_unlock(thr_act->thread);
 	    splx(spl);
 	    install_special_handler(thr_act);
@@ -1459,12 +1441,9 @@ install_special_handler(
 #endif	/* MACH_ASSERT */
 
 	spl = splsched();
-	if (thread)
-		thread_lock(thread);
+	thread_lock(thread);
 	install_special_handler_locked(thr_act);
-	act_set_apc(thr_act);
-	if (thread)
-		thread_unlock(thread);
+	thread_unlock(thread);
 	splx(spl);
 }
 

@@ -19,6 +19,9 @@
  * 
  * @APPLE_LICENSE_HEADER_END@
  */
+#ifndef IOADBDEVICE_H
+#define IOADBDEVICE_H
+
 #include <IOKit/IOService.h>
 #include <IOKit/adb/adb.h>
 #include <IOKit/adb/IOADBBus.h>
@@ -53,3 +56,6 @@ IOReturn setHandlerID ( UInt8 handlerID );
 void * busRef ( void );
 
 };
+
+#endif
+

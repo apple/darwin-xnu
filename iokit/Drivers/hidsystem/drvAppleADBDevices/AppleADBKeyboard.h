@@ -25,7 +25,8 @@
 enum {
     kgestaltPwrBkEKDomKbd = 0xc3,
     kgestaltPwrBkEKISOKbd = 0xc4,
-    kgestaltPwrBkEKJISKbd = 0xc5
+    kgestaltPwrBkEKJISKbd = 0xc5,
+    kgestaltPwrBk99JISKbd = 0xc9
 };
 
 class AppleADBKeyboard :  public IOHIKeyboard
@@ -39,7 +40,6 @@ void setNumLockFeedback ( bool to );
 UInt32 maxKeyCodes ( void );
 const unsigned char * defaultKeymapOfLength (UInt32 * length );
 UInt32 interfaceID ( void );
-UInt32 deviceType ( void );
 bool doesKeyLock ( unsigned key);
 unsigned getLEDStatus (void );
 bool programmerKey;
@@ -49,6 +49,7 @@ AbsoluteTime  debuggerTime;
 
 public:
 
+UInt32 deviceType ( void );
 IOADBDevice *	adbDevice;
 UInt16       	turnLEDon;		// used by setAlphaLockFeedback mechanism
 UInt16		LEDStatus;		//For ADB device TALK commands

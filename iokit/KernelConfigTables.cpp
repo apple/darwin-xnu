@@ -28,21 +28,21 @@
  */
 const char * gIOKernelKmods =
 "{
-    'com.apple.kernel'                         = '1.0.0b1';
-    'com.apple.kernel.bsd'                     = '1.0.0b1';
-    'com.apple.kernel.iokit'                   = '1.0.0b1';
-    'com.apple.kernel.libkern'                 = '1.0.0b1';
-    'com.apple.kernel.mach'                    = '1.0.0b1';
-    'com.apple.iokit.IOADBFamily'              = '1.0.0b1';
-    'com.apple.iokit.IOCDStorageFamily'        = '1.0.0b1';
-    'com.apple.iokit.IODVDStorageFamily'       = '1.0.0b1';
-    'com.apple.iokit.IOGraphicsFamily'         = '1.0.0b1';
-    'com.apple.iokit.IOHIDSystem'              = '1.0.0b1';
-    'com.apple.iokit.IONDRVSupport'            = '1.0.0b1';
-    'com.apple.iokit.IONetworkingFamily'       = '1.0.0b1';
-    'com.apple.iokit.IOPCIFamily'              = '1.0.0b1';
-    'com.apple.iokit.IOStorageFamily'          = '1.0.0b1';
-    'com.apple.iokit.IOSystemManagementFamily' = '1.0.0b1';
+    'com.apple.kernel'                         = '1.3.2';
+    'com.apple.kernel.bsd'                     = '1.0.2';
+    'com.apple.kernel.iokit'                   = '1.0.2';
+    'com.apple.kernel.libkern'                 = '1.0.2';
+    'com.apple.kernel.mach'                    = '1.0.2';
+    'com.apple.iokit.IOADBFamily'              = '1.0.2';
+    'com.apple.iokit.IOCDStorageFamily'        = '1.0.2';
+    'com.apple.iokit.IODVDStorageFamily'       = '1.0.2';
+    'com.apple.iokit.IOGraphicsFamily'         = '1.0.2';
+    'com.apple.iokit.IOHIDSystem'              = '1.0.2';
+    'com.apple.iokit.IONDRVSupport'            = '1.0.2';
+    'com.apple.iokit.IONetworkingFamily'       = '1.0.2';
+    'com.apple.iokit.IOPCIFamily'              = '1.0.2';
+    'com.apple.iokit.IOStorageFamily'          = '1.0.2';
+    'com.apple.iokit.IOSystemManagementFamily' = '1.0.2';
 }";
 
 

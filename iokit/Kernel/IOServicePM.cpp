@@ -34,6 +34,7 @@
 #include "IOKit/pwr_mgt/IOPMchangeNoteList.h"
 #include "IOKit/pwr_mgt/IOPMlog.h"
 #include "IOKit/pwr_mgt/IOPowerConnection.h"
+#include <kern/clock.h>
 
 static void ack_timer_expired(thread_call_param_t);
 static void settle_timer_expired(thread_call_param_t);
@@ -1188,6 +1189,8 @@ unsigned long IOService::currentPowerConsumption ( void )
 
 bool IOService::activityTickle ( unsigned long type, unsigned long stateNumber=0 )
 {
+    AbsoluteTime uptime;
+
     if ( type == kIOPMSuperclassPolicy1 ) {
         if ( (priv->activityLock == NULL) ||
              (pm_vars->theControllingDriver == NULL) ||
@@ -1196,6 +1199,10 @@ bool IOService::activityTickle ( unsigned long type, unsigned long stateNumber=0
         }
         IOTakeLock(priv->activityLock);
         priv->device_active = true;
+
+        clock_get_uptime(&uptime);
+        priv->device_active_timestamp = uptime;
+
         if ( pm_vars->myCurrentState >= stateNumber) {
             IOUnlock(priv->activityLock);
             return true;
@@ -1285,7 +1292,38 @@ IOReturn  IOService::setIdleTimerPeriod ( unsigned long period )
 //*********************************************************************************
 void IOService::start_PM_idle_timer ( void )
 {
-    priv->timerEventSrc->setTimeout(priv->idle_timer_period, NSEC_PER_SEC);
+    AbsoluteTime uptime;
+    AbsoluteTime delta;
+    UInt64       delta_ns;
+    UInt64       delta_secs;
+    UInt64       delay_secs;
+
+    IOLockLock(priv->activityLock);
+
+    clock_get_uptime(&uptime);
+
+   /* Calculate time difference using funky macro from clock.h.
+    */
+    delta = uptime;
+    SUB_ABSOLUTETIME(&delta, &(priv->device_active_timestamp));
+
+   /* Figure it in seconds.
+    */
+    absolutetime_to_nanoseconds(delta, &delta_ns);
+    delta_secs = delta_ns / NSEC_PER_SEC;
+
+   /* Be paranoid about delta somehow exceeding timer period.
+    */
+    if (delta_secs < priv->idle_timer_period ) {
+        delay_secs = priv->idle_timer_period - delta_secs;
+    } else {
+        delay_secs = priv->idle_timer_period;
+    }
+
+    priv->timerEventSrc->setTimeout(delay_secs, NSEC_PER_SEC);
+
+    IOLockUnlock(priv->activityLock);
+    return;
 }
 
 
