@@ -400,6 +400,7 @@ struct msghdr {
 #define MSG_RCVMORE	0x4000		/* Data remains in current pkt */
 #endif
 #define MSG_COMPAT      0x8000		/* used in sendit() */
+#define MSG_NEEDSA	0x10000		/* Fail receive if socket address cannot be allocated */
 
 /*
  * Header for ancillary data objects in msg_control buffer.

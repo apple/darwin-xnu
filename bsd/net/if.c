@@ -102,12 +102,18 @@ static int ifconf __P((u_long, caddr_t));
 static void if_qflush __P((struct ifqueue *));
 static void link_rtrequest __P((int, struct rtentry *, struct sockaddr *));
 
+static struct	if_clone *if_clone_lookup(const char *, int *);
+static int	if_clone_list(struct if_clonereq *);
+
 MALLOC_DEFINE(M_IFADDR, "ifaddr", "interface address");
 MALLOC_DEFINE(M_IFMADDR, "ether_multi", "link-level multicast address");
 
 int	ifqmaxlen = IFQ_MAXLEN;
 struct	ifnethead ifnet = TAILQ_HEAD_INITIALIZER(ifnet);
 struct ifmultihead ifma_lostlist = LIST_HEAD_INITIALIZER(ifma_lostlist);
+
+static int	if_cloners_count;
+LIST_HEAD(, if_clone) if_cloners = LIST_HEAD_INITIALIZER(if_cloners);
 
 #if INET6
 /*
@@ -116,6 +122,8 @@ struct ifmultihead ifma_lostlist = LIST_HEAD_INITIALIZER(ifma_lostlist);
  */
 extern void	nd6_setmtu __P((struct ifnet *));
 #endif
+
+#define M_CLONE		M_IFADDR
 
 /*
  * Network interface utility routines.
@@ -279,6 +287,245 @@ old_if_attach(ifp)
 		TAILQ_INSERT_HEAD(&ifp->if_addrhead, ifa, ifa_link);
 	}
 	TAILQ_INSERT_TAIL(&ifnet, ifp, if_link);
+}
+
+/*
+ * Create a clone network interface.
+ */
+static int
+if_clone_create(char *name, int len)
+{
+	struct if_clone *ifc;
+	char *dp;
+	int wildcard, bytoff, bitoff;
+	int unit;
+	int err;
+
+	ifc = if_clone_lookup(name, &unit);
+	if (ifc == NULL)
+		return (EINVAL);
+
+	if (ifunit(name) != NULL)
+		return (EEXIST);
+
+	bytoff = bitoff = 0;
+	wildcard = (unit < 0);
+	/*
+	 * Find a free unit if none was given.
+	 */
+	if (wildcard) {
+		while ((bytoff < ifc->ifc_bmlen)
+		    && (ifc->ifc_units[bytoff] == 0xff))
+			bytoff++;
+		if (bytoff >= ifc->ifc_bmlen)
+			return (ENOSPC);
+		while ((ifc->ifc_units[bytoff] & (1 << bitoff)) != 0)
+			bitoff++;
+		unit = (bytoff << 3) + bitoff;
+	}
+
+	if (unit > ifc->ifc_maxunit)
+		return (ENXIO);
+
+	err = (*ifc->ifc_create)(ifc, unit);
+	if (err != 0)
+		return (err);
+
+	if (!wildcard) {
+		bytoff = unit >> 3;
+		bitoff = unit - (bytoff << 3);
+	}
+
+	/*
+	 * Allocate the unit in the bitmap.
+	 */
+	KASSERT((ifc->ifc_units[bytoff] & (1 << bitoff)) == 0,
+	    ("%s: bit is already set", __func__));
+	ifc->ifc_units[bytoff] |= (1 << bitoff);
+
+	/* In the wildcard case, we need to update the name. */
+	if (wildcard) {
+		for (dp = name; *dp != '\0'; dp++);
+		if (snprintf(dp, len - (dp-name), "%d", unit) >
+		    len - (dp-name) - 1) {
+			/*
+			 * This can only be a programmer error and
+			 * there's no straightforward way to recover if
+			 * it happens.
+			 */
+			panic("if_clone_create(): interface name too long");
+		}
+
+	}
+
+	return (0);
+}
+
+/*
+ * Destroy a clone network interface.
+ */
+int
+if_clone_destroy(const char *name)
+{
+	struct if_clone *ifc;
+	struct ifnet *ifp;
+	int bytoff, bitoff;
+	int unit;
+
+	ifc = if_clone_lookup(name, &unit);
+	if (ifc == NULL)
+		return (EINVAL);
+
+	if (unit < ifc->ifc_minifs)
+		return (EINVAL);
+
+	ifp = ifunit(name);
+	if (ifp == NULL)
+		return (ENXIO);
+
+	if (ifc->ifc_destroy == NULL)
+		return (EOPNOTSUPP);
+
+	(*ifc->ifc_destroy)(ifp);
+
+	/*
+	 * Compute offset in the bitmap and deallocate the unit.
+	 */
+	bytoff = unit >> 3;
+	bitoff = unit - (bytoff << 3);
+	KASSERT((ifc->ifc_units[bytoff] & (1 << bitoff)) != 0,
+	    ("%s: bit is already cleared", __func__));
+	ifc->ifc_units[bytoff] &= ~(1 << bitoff);
+	return (0);
+}
+
+/*
+ * Look up a network interface cloner.
+ */
+
+static struct if_clone *
+if_clone_lookup(const char *name, int *unitp)
+{
+	struct if_clone *ifc;
+	const char *cp;
+	int i;
+
+	for (ifc = LIST_FIRST(&if_cloners); ifc != NULL;) {
+		for (cp = name, i = 0; i < ifc->ifc_namelen; i++, cp++) {
+			if (ifc->ifc_name[i] != *cp)
+				goto next_ifc;
+		}
+		goto found_name;
+ next_ifc:
+		ifc = LIST_NEXT(ifc, ifc_list);
+	}
+
+	/* No match. */
+	return ((struct if_clone *)NULL);
+
+ found_name:
+	if (*cp == '\0') {
+		i = -1;
+	} else {
+		for (i = 0; *cp != '\0'; cp++) {
+			if (*cp < '0' || *cp > '9') {
+				/* Bogus unit number. */
+				return (NULL);
+			}
+			i = (i * 10) + (*cp - '0');
+		}
+	}
+
+	if (unitp != NULL)
+		*unitp = i;
+	return (ifc);
+}
+
+/*
+ * Register a network interface cloner.
+ */
+void
+if_clone_attach(struct if_clone *ifc)
+{
+	int bytoff, bitoff;
+	int err;
+	int len, maxclone;
+	int unit;
+
+	KASSERT(ifc->ifc_minifs - 1 <= ifc->ifc_maxunit,
+	    ("%s: %s requested more units then allowed (%d > %d)",
+	    __func__, ifc->ifc_name, ifc->ifc_minifs,
+	    ifc->ifc_maxunit + 1));
+	/*
+	 * Compute bitmap size and allocate it.
+	 */
+	maxclone = ifc->ifc_maxunit + 1;
+	len = maxclone >> 3;
+	if ((len << 3) < maxclone)
+		len++;
+	ifc->ifc_units = _MALLOC(len, M_CLONE, M_WAITOK | M_ZERO);
+	bzero(ifc->ifc_units, len);
+	ifc->ifc_bmlen = len;
+
+	LIST_INSERT_HEAD(&if_cloners, ifc, ifc_list);
+	if_cloners_count++;
+
+	for (unit = 0; unit < ifc->ifc_minifs; unit++) {
+		err = (*ifc->ifc_create)(ifc, unit);
+		KASSERT(err == 0,
+		    ("%s: failed to create required interface %s%d",
+		    __func__, ifc->ifc_name, unit));
+
+		/* Allocate the unit in the bitmap. */
+		bytoff = unit >> 3;
+		bitoff = unit - (bytoff << 3);
+		ifc->ifc_units[bytoff] |= (1 << bitoff);
+	}
+}
+
+/*
+ * Unregister a network interface cloner.
+ */
+void
+if_clone_detach(struct if_clone *ifc)
+{
+
+	LIST_REMOVE(ifc, ifc_list);
+	FREE(ifc->ifc_units, M_CLONE);
+	if_cloners_count--;
+}
+
+/*
+ * Provide list of interface cloners to userspace.
+ */
+static int
+if_clone_list(struct if_clonereq *ifcr)
+{
+	char outbuf[IFNAMSIZ], *dst;
+	struct if_clone *ifc;
+	int count, error = 0;
+
+	ifcr->ifcr_total = if_cloners_count;
+	if ((dst = ifcr->ifcr_buffer) == NULL) {
+		/* Just asking how many there are. */
+		return (0);
+	}
+
+	if (ifcr->ifcr_count < 0)
+		return (EINVAL);
+
+	count = (if_cloners_count < ifcr->ifcr_count) ?
+	    if_cloners_count : ifcr->ifcr_count;
+
+	for (ifc = LIST_FIRST(&if_cloners); ifc != NULL && count != 0;
+	     ifc = LIST_NEXT(ifc, ifc_list), count--, dst += IFNAMSIZ) {
+		strncpy(outbuf, ifc->ifc_name, IFNAMSIZ - 1);
+		error = copyout(outbuf, dst, IFNAMSIZ);
+		if (error)
+			break;
+	}
+
+	return (error);
 }
 
 __private_extern__ int
@@ -723,6 +970,22 @@ ifioctl(so, cmd, data, p)
 		return (ifconf(cmd, data));
 	}
 	ifr = (struct ifreq *)data;
+
+	switch (cmd) {
+	case SIOCIFCREATE:
+	case SIOCIFDESTROY:
+		error = suser(p->p_ucred, &p->p_acflag);
+		if (error)
+			return (error);
+		return ((cmd == SIOCIFCREATE) ?
+			if_clone_create(ifr->ifr_name, sizeof(ifr->ifr_name)) :
+			if_clone_destroy(ifr->ifr_name));
+#if 0
+	case SIOCIFGCLONERS:
+		return (if_clone_list((struct if_clonereq *)data));
+#endif 0
+	}
+
 	ifp = ifunit(ifr->ifr_name);
 	if (ifp == 0)
 		return (ENXIO);
@@ -921,6 +1184,10 @@ ifioctl(so, cmd, data, p)
 		}
 		return error;
 
+	case SIOCSETVLAN:
+		if (ifp->if_type != IFT_L2VLAN) {
+			return (EOPNOTSUPP);
+		}
 	case SIOCSIFPHYADDR:
 	case SIOCDIFPHYADDR:
 #ifdef INET6
@@ -951,6 +1218,12 @@ ifioctl(so, cmd, data, p)
 	case SIOCGIFMEDIA:
 	case SIOCGIFGENERIC:
 
+		return dlil_ioctl(so->so_proto->pr_domain->dom_family, 
+				   ifp, cmd, (caddr_t) data);
+	case SIOCGETVLAN:
+		if (ifp->if_type != IFT_L2VLAN) {
+			return (EOPNOTSUPP);
+		}
 		return dlil_ioctl(so->so_proto->pr_domain->dom_family, 
 				   ifp, cmd, (caddr_t) data);
 

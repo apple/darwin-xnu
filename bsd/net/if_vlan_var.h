@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2003 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -50,26 +50,11 @@
  * OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
  * SUCH DAMAGE.
  *
+ * $FreeBSD: src/sys/net/if_vlan_var.h,v 1.16 2003/07/08 21:54:20 wpaul Exp $
  */
 
 #ifndef _NET_IF_VLAN_VAR_H_
 #define	_NET_IF_VLAN_VAR_H_	1
-#include <sys/appleapiopts.h>
-
-#ifdef __APPLE_API_PRIVATE
-#ifdef KERNEL
-struct	ifvlan {
-	struct	arpcom ifv_ac;	/* make this an interface */
-	struct	ifnet *ifv_p;	/* parent inteface of this vlan */
-	struct	ifv_linkmib {
-		int	ifvm_parent;
-		u_int16_t ifvm_proto; /* encapsulation ethertype */
-		u_int16_t ifvm_tag; /* tag to apply on packets leaving if */
-	}	ifv_mib;
-};
-#define	ifv_if	ifv_ac.ac_if
-#define	ifv_tag	ifv_mib.ifvm_tag
-#endif /* KERNEL */
 
 struct	ether_vlan_header {
 	u_char	evl_dhost[ETHER_ADDR_LEN];
@@ -79,16 +64,15 @@ struct	ether_vlan_header {
 	u_int16_t evl_proto;
 };
 
-#define	EVL_VLANOFTAG(tag) ((tag) & 4095)
+#define EVL_VLID_MASK	0x0FFF
+#define	EVL_VLANOFTAG(tag) ((tag) & EVL_VLID_MASK)
 #define	EVL_PRIOFTAG(tag) (((tag) >> 13) & 7)
-#define	EVL_ENCAPLEN	4	/* length in octets of encapsulation */
 
-/* When these sorts of interfaces get their own identifier... */
-#define	IFT_8021_VLAN	IFT_PROPVIRTUAL
-
+#if 0
 /* sysctl(3) tags, for compatibility purposes */
 #define	VLANCTL_PROTO	1
 #define	VLANCTL_MAX	2
+#endif 0
 
 /*
  * Configuration structure for SIOCSETVLAN and SIOCGETVLAN ioctls.
@@ -97,14 +81,5 @@ struct	vlanreq {
 	char	vlr_parent[IFNAMSIZ];
 	u_short	vlr_tag;
 };
-#define	SIOCSETVLAN	SIOCSIFGENERIC
-#define	SIOCGETVLAN	SIOCGIFGENERIC
 
-#ifdef KERNEL
-/* shared with if_ethersubr.c: */
-extern	u_int vlan_proto;
-extern	int vlan_input(struct ether_header *eh, struct mbuf *m);
-#endif
-
-#endif /* __APPLE_API_PRIVATE */
 #endif /* _NET_IF_VLAN_VAR_H_ */

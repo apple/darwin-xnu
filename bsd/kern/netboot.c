@@ -40,6 +40,7 @@
 #include <sys/vnode.h>
 #include <sys/malloc.h>
 #include <sys/socket.h>
+#include <sys/socketvar.h>
 #include <sys/reboot.h>
 #include <net/if.h>
 #include <net/if_dl.h>
@@ -48,16 +49,17 @@
 #include <netinet/in.h>
 #include <netinet/if_ether.h>
 #include <netinet/dhcp_options.h>
-
+#include <kern/kalloc.h>
+#include <pexpert/pexpert.h>
 
 //#include <libkern/libkern.h>
-
-extern dev_t		rootdev;		/* device of the root */
 extern struct filedesc 	filedesc0;
 
+extern int	strncmp(const char *,const char *, size_t);
+extern unsigned long strtoul(const char *, char **, int);
 extern char *	strchr(const char *str, int ch);
 
-extern int 	nfs_mountroot(); 	/* nfs_vfsops.c */
+extern int 	nfs_mountroot(void); 	/* nfs_vfsops.c */
 extern int (*mountroot)(void);
 
 extern unsigned char 	rootdevice[];
@@ -66,23 +68,18 @@ static int 			S_netboot = 0;
 static struct netboot_info *	S_netboot_info_p;
 
 void *
-IOBSDRegistryEntryForDeviceTree(char * path);
+IOBSDRegistryEntryForDeviceTree(const char * path);
 
 void
 IOBSDRegistryEntryRelease(void * entry);
 
 const void *
-IOBSDRegistryEntryGetData(void * entry, char * property_name, 
+IOBSDRegistryEntryGetData(void * entry, const char * property_name, 
 			  int * packet_length);
 
 extern int vndevice_root_image(const char * path, char devname[], 
 			       dev_t * dev_p);
 extern int di_root_image(const char *path, char devname[], dev_t *dev_p);
-
-
-static boolean_t path_getfile __P((char * image_path, 
-				   struct sockaddr_in * sin_p, 
-				   char * serv_name, char * pathname));
 
 #define BOOTP_RESPONSE	"bootp-response"
 #define BSDP_RESPONSE	"bsdp-response"
@@ -92,6 +89,20 @@ extern int
 bootp(struct ifnet * ifp, struct in_addr * iaddr_p, int max_retry,
       struct in_addr * netmask_p, struct in_addr * router_p,
       struct proc * procp);
+
+
+/* forward declarations */
+int	inet_aton(char * cp, struct in_addr * pin);
+
+boolean_t	netboot_iaddr(struct in_addr * iaddr_p);
+boolean_t	netboot_rootpath(struct in_addr * server_ip,
+				 char * name, int name_len, 
+				 char * path, int path_len);
+int	netboot_setup(struct proc * p);
+int	netboot_mountroot(void);
+int	netboot_root(void);
+
+
 
 #define IP_FORMAT	"%d.%d.%d.%d"
 #define IP_CH(ip)	((u_char *)ip)
@@ -304,13 +315,13 @@ get_root_path(char * root_path)
 	return (FALSE);
     }
     pkt = IOBSDRegistryEntryGetData(entry, BSDP_RESPONSE, &pkt_len);
-    if (pkt != NULL && pkt_len >= sizeof(struct dhcp)) {
+    if (pkt != NULL && pkt_len >= (int)sizeof(struct dhcp)) {
 	printf("netboot: retrieving root path from BSDP response\n");
     }
     else {
 	pkt = IOBSDRegistryEntryGetData(entry, BOOTP_RESPONSE, 
 					&pkt_len);
-	if (pkt != NULL && pkt_len >= sizeof(struct dhcp)) {
+	if (pkt != NULL && pkt_len >= (int)sizeof(struct dhcp)) {
 	    printf("netboot: retrieving root path from BOOTP response\n");
 	}
     }
@@ -380,7 +391,7 @@ netboot_info_init(struct in_addr iaddr)
 	    printf("Server %s Mount %s", 
 		   server_name, info->mount_point);
 	    if (image_path != NULL) {
-		boolean_t 	needs_slash;
+		boolean_t 	needs_slash = FALSE;
 
 		info->image_path_length = strlen(image_path) + 1;
 		if (image_path[0] != '/') {
@@ -423,15 +434,15 @@ netboot_info_free(struct netboot_info * * info_p)
 
     if (info) {
 	if (info->mount_point) {
-	    kfree(info->mount_point, info->mount_point_length);
+	    kfree((vm_offset_t)info->mount_point, info->mount_point_length);
 	}
 	if (info->server_name) {
-	    kfree(info->server_name, info->server_name_length);
+	    kfree((vm_offset_t)info->server_name, info->server_name_length);
 	}
 	if (info->image_path) {
-	    kfree(info->image_path, info->image_path_length);
+	    kfree((vm_offset_t)info->image_path, info->image_path_length);
 	}
-	kfree(info, sizeof(*info));
+	kfree((vm_offset_t)info, sizeof(*info));
     }
     *info_p = NULL;
     return;
@@ -487,12 +498,12 @@ get_ip_parameters(struct in_addr * iaddr_p, struct in_addr * netmask_p,
 	return (FALSE);
     }
     pkt = IOBSDRegistryEntryGetData(entry, DHCP_RESPONSE, &pkt_len);
-    if (pkt != NULL && pkt_len >= sizeof(struct dhcp)) {
+    if (pkt != NULL && pkt_len >= (int)sizeof(struct dhcp)) {
 	printf("netboot: retrieving IP information from DHCP response\n");
     }
     else {
 	pkt = IOBSDRegistryEntryGetData(entry, BOOTP_RESPONSE, &pkt_len);
-	if (pkt != NULL && pkt_len >= sizeof(struct dhcp)) {
+	if (pkt != NULL && pkt_len >= (int)sizeof(struct dhcp)) {
 	    printf("netboot: retrieving IP information from BOOTP response\n");
 	}
     }
@@ -526,8 +537,12 @@ inet_aifaddr(struct socket * so, char * name, const struct in_addr * addr,
 	     const struct in_addr * mask,
 	     const struct in_addr * broadcast)
 {
-    struct sockaddr	blank_sin = { sizeof(blank_sin), AF_INET };
+    struct sockaddr	blank_sin;
     struct ifaliasreq	ifra;
+
+    bzero(&blank_sin, sizeof(blank_sin));
+    blank_sin.sa_len = sizeof(blank_sin);
+    blank_sin.sa_family = AF_INET;
 
     bzero(&ifra, sizeof(ifra));
     strncpy(ifra.ifra_name, name, sizeof(ifra.ifra_name));
@@ -547,42 +562,60 @@ inet_aifaddr(struct socket * so, char * name, const struct in_addr * addr,
 }
 
 static int
-default_route_add(struct in_addr router, boolean_t proxy_arp)
+route_cmd(int cmd, struct in_addr d, struct in_addr g, 
+	  struct in_addr m, u_long more_flags)
 {
     struct sockaddr_in 		dst;
     u_long			flags = RTF_UP | RTF_STATIC;
     struct sockaddr_in		gw;
     struct sockaddr_in		mask;
     
-    if (proxy_arp == FALSE) {
-	flags |= RTF_GATEWAY;
-    }
+    flags |= more_flags;
 
-    /* dest 0.0.0.0 */
+    /* destination */
     bzero((caddr_t)&dst, sizeof(dst));
     dst.sin_len = sizeof(dst);
     dst.sin_family = AF_INET;
+    dst.sin_addr = d;
 
     /* gateway */
     bzero((caddr_t)&gw, sizeof(gw));
     gw.sin_len = sizeof(gw);
     gw.sin_family = AF_INET;
-    gw.sin_addr = router;
+    gw.sin_addr = g;
 
-    /* mask 0.0.0.0 */
+    /* mask */
     bzero(&mask, sizeof(mask));
     mask.sin_len = sizeof(mask);
     mask.sin_family = AF_INET;
+    mask.sin_addr = m;
 
-    printf("netboot: adding default route " IP_FORMAT "\n", 
-	   IP_LIST(&router));
-
-    return (rtrequest(RTM_ADD, (struct sockaddr *)&dst, (struct sockaddr *)&gw,
+    return (rtrequest(cmd, (struct sockaddr *)&dst, (struct sockaddr *)&gw,
 		      (struct sockaddr *)&mask, flags, NULL));
 }
 
+static int
+default_route_add(struct in_addr router, boolean_t proxy_arp)
+{
+    u_long			flags = 0;
+    struct in_addr		zeroes = { 0 };
+    
+    if (proxy_arp == FALSE) {
+	flags |= RTF_GATEWAY;
+    }
+    return (route_cmd(RTM_ADD, zeroes, router, zeroes, flags));
+}
+
+static int
+host_route_delete(struct in_addr host)
+{
+    struct in_addr		zeroes = { 0 };
+    
+    return (route_cmd(RTM_DELETE, host, zeroes, zeroes, RTF_HOST));
+}
+
 static struct ifnet *
-find_interface()
+find_interface(void)
 {
     struct ifnet *		ifp = NULL;
 
@@ -599,7 +632,7 @@ find_interface()
 }
 
 int
-netboot_mountroot()
+netboot_mountroot(void)
 {
     int 			error = 0;
     struct in_addr 		iaddr = { 0 };
@@ -609,6 +642,7 @@ netboot_mountroot()
     struct proc *		procp = current_proc();
     struct in_addr		router = { 0 };
     struct socket *		so = NULL;
+    unsigned int		try;
 
     bzero(&ifr, sizeof(ifr));
 
@@ -662,6 +696,8 @@ netboot_mountroot()
 	/* enable proxy arp if we don't have a router */
 	router.s_addr = iaddr.s_addr;
     }
+    printf("netboot: adding default route " IP_FORMAT "\n", 
+	   IP_LIST(&router));
     error = default_route_add(router, router.s_addr == iaddr.s_addr);
     if (error) {
 	printf("netboot: default_route_add failed %d\n", error);
@@ -674,7 +710,43 @@ netboot_mountroot()
     switch (S_netboot_info_p->image_type) {
     default:
     case kNetBootImageTypeNFS:
-	error = nfs_mountroot();
+	for (try = 1; TRUE; try++) {
+	    error = nfs_mountroot();
+	    if (error == 0) {
+		break;
+	    }
+	    printf("netboot: nfs_mountroot() attempt %u failed; "
+		   "clearing ARP entry and trying again\n", try);
+	    /* 
+	     * error is either EHOSTDOWN or EHOSTUNREACH, which likely means
+	     * that the port we're plugged into has spanning tree enabled,
+	     * and either the router or the server can't answer our ARP
+	     * requests.  Clear the incomplete ARP entry by removing the
+	     * appropriate route, depending on the error code:
+	     *     EHOSTDOWN		NFS server's route
+	     *     EHOSTUNREACH		router's route
+	     */
+	    switch (error) {
+	    default:
+		/* NOT REACHED */
+	    case EHOSTDOWN:
+		/* remove the server's arp entry */
+		error = host_route_delete(S_netboot_info_p->server_ip);
+		if (error) {
+		    printf("netboot: host_route_delete(" IP_FORMAT
+			   ") failed %d\n", 
+			   IP_LIST(&S_netboot_info_p->server_ip), error);
+		}
+		break;
+	    case EHOSTUNREACH:
+		error = host_route_delete(router);
+		if (error) {
+		    printf("netboot: host_route_delete(" IP_FORMAT
+			   ") failed %d\n", IP_LIST(&router), error);
+		}
+		break;
+	    }
+	}
 	break;
     case kNetBootImageTypeHTTP:
 	error = netboot_setup(procp);
@@ -751,7 +823,7 @@ netboot_setup(struct proc * p)
 }
 
 int
-netboot_root()
+netboot_root(void)
 {
     return (S_netboot);
 }

@@ -102,6 +102,7 @@ static kdp_receive_t kdp_en_recv_pkt = 0;
 
 static u_long kdp_current_ip_address = 0;
 static struct ether_addr kdp_current_mac_address = {{0, 0, 0, 0, 0, 0}};
+static void *kdp_current_ifp = 0;
 
 static void kdp_handler( void *);
 
@@ -349,6 +350,19 @@ kdp_send(
     (*kdp_en_send_pkt)(&pkt.data[pkt.off], pkt.len);
 }
 
+/* We don't interpret this pointer, we just give it to the
+bsd stack so it can decide when to set the MAC and IP info. */
+void
+kdp_set_interface(void *ifp)
+{
+	kdp_current_ifp = ifp;
+}
+
+void *
+kdp_get_interface()
+{
+	return kdp_current_ifp;
+}
 
 void 
 kdp_set_ip_and_mac_addresses(

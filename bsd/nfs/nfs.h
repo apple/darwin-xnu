@@ -201,6 +201,7 @@ struct nfs_args {
 #define	NFSMNT_READDIRSIZE	0x00020000  /* Set readdir size */
 #define	NFSMNT_NOLOCKS		0x00040000  /* don't support file locking */
 
+#define	NFSSTA_MOUNTED		0x00004000  /* completely mounted */
 #define NFSSTA_TIMEO		0x00010000  /* experienced a timeout. */
 #define NFSSTA_FORCE		0x00020000  /* doing a forced unmount. */
 #define NFSSTA_HASWRITEVERF	0x00040000  /* Has write verifier for V3 */
@@ -685,6 +686,7 @@ int	nfsrv_getcache __P((struct nfsrv_descript *, struct nfssvc_sock *,
 			    struct mbuf **));
 void	nfsrv_updatecache __P((struct nfsrv_descript *, int, struct mbuf *));
 void	nfsrv_cleancache __P((void));
+int	nfs_bind_resv_thread_wake __P((void));
 int	nfs_connect __P((struct nfsmount *, struct nfsreq *));
 void	nfs_disconnect __P((struct nfsmount *));
 int	nfs_getattrcache __P((struct vnode *, struct vattr *));

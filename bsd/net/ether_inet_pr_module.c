@@ -106,6 +106,7 @@ static u_char	etherbroadcastaddr[6] = { 0xff, 0xff, 0xff, 0xff, 0xff, 0xff };
 
 
 
+extern void * kdp_get_interface();
 
 /*
  * Process a received Ethernet packet;
@@ -227,7 +228,7 @@ inet_ether_pre_output(ifp, m0, dst_netaddr, route, type, edst, dl_tag )
     register struct rtentry *rt;
     register struct ether_header *eh;
     int off, len = m->m_pkthdr.len;
-    int hlen;	/* link layer header lenght */
+    int hlen;	/* link layer header length */
     struct arpcom *ac = IFP2AC(ifp);
 
 
@@ -366,12 +367,13 @@ ether_inet_prmod_ioctl(dl_tag, ifp, command, data)
 		ifp->if_init(ifp->if_softc);	/* before arpwhohas */
 
 	    arp_ifinit(IFP2AC(ifp), ifa);
-
 	    /*
 	     * Register new IP and MAC addresses with the kernel debugger
-	     * for the en0 interface.
+	     * if the interface is the same as was registered by IOKernelDebugger. If
+		 * no interface was registered, fall back and just match against en0 interface.
 	     */
-	    if (ifp->if_unit == 0)
+	    if ((kdp_get_interface() != 0 && kdp_get_interface() == ifp->if_private)
+		 || (kdp_get_interface() == 0 && ifp->if_unit == 0))
 		kdp_set_ip_and_mac_addresses(&(IA_SIN(ifa)->sin_addr), &(IFP2AC(ifp)->ac_enaddr));
 
 	    break;

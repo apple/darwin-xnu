@@ -44,18 +44,19 @@
 #define ptRevision	6
 #define ptFeatures	8
 #define ptCPUCap	12
-#define ptPatch		16
-#define ptInitRout	20
-#define ptRptdProc	24
-#define ptTempMax	28
-#define ptTempThr	32
-#define ptLineSize	36
-#define ptl1iSize	40
-#define ptl1dSize	44
-#define ptPTEG		48
-#define ptMaxVAddr	52
-#define ptMaxPAddr	56
-#define ptSize		60
+#define ptPwrModes	16
+#define ptPatch		20
+#define ptInitRout	24
+#define ptRptdProc	28
+#define ptTempMax	32
+#define ptTempThr	36
+#define ptLineSize	40
+#define ptl1iSize	44
+#define ptl1dSize	48
+#define ptPTEG		52
+#define ptMaxVAddr	56
+#define ptMaxPAddr	60
+#define ptSize		64
 
 #define bootCPU 10
 #define firstInit 9
@@ -180,6 +181,9 @@ donePVR:	lwz		r20,ptInitRout(r26)					; Grab the special init routine
 			
 			lwz		r18,ptRptdProc(r26)					; Get the reported processor
 			sth		r18,pfrptdProc(r30)					; Set the reported processor
+			
+			lwz		r13,ptPwrModes(r26)					; Get the supported power modes
+			stw		r13,pfPowerModes(r30)				; Set the supported power modes
 			
 			lwz		r13,ptTempMax(r26)					; Get maximum operating temperature
 			stw		r13,thrmmaxTemp(r30)				; Set the maximum
@@ -855,6 +859,7 @@ initUnsupported:
 ;	.short	ptRevision		- Revision code from PVR. A zero value denotes the generic attributes if not specific
 ;	.long	ptFeatures		- Available features
 ;	.long	ptCPUCap		- Default value for _cpu_capabilities
+;	.long	ptPwrModes		- Available power management features
 ;	.long	ptPatch			- Patch features
 ;	.long	ptInitRout		- Initilization routine.  Can modify any of the other attributes.
 ;	.long	ptRptdProc		- Processor type reported
@@ -879,6 +884,7 @@ processor_types:
 			.short  0x4202
 			.long   pfFloat | pfCanSleep | pfCanNap | pfCanDoze | pf32Byte | pfL2
 			.long   kCache32 | kHasGraphicsOps | kHasStfiwx
+			.long   0
 			.long	PatchExt32
 			.long   init750
 			.long   CPU_SUBTYPE_POWERPC_750
@@ -899,6 +905,7 @@ processor_types:
 			.short  0x0200
 			.long   pfFloat | pfCanSleep | pfCanNap | pfCanDoze | pf32Byte | pfL2
 			.long   kCache32 | kHasGraphicsOps | kHasStfiwx
+			.long   0
 			.long	PatchExt32
 			.long   init750CX
 			.long   CPU_SUBTYPE_POWERPC_750
@@ -919,6 +926,7 @@ processor_types:
 			.short	0
 			.long	pfFloat | pfCanSleep | pfCanNap | pfCanDoze | pfThermal | pf32Byte | pfL2
 			.long   kCache32 | kHasGraphicsOps | kHasStfiwx
+			.long   0
 			.long	PatchExt32
 			.long	init750
 			.long	CPU_SUBTYPE_POWERPC_750
@@ -939,6 +947,7 @@ processor_types:
 			.short  0x0100
 			.long   pfFloat | pfCanSleep | pfCanNap | pfCanDoze | pfSlowNap | pfNoMuMMCK | pf32Byte | pfL2
 			.long   kCache32 | kHasGraphicsOps | kHasStfiwx
+			.long   pmDualPLL
 			.long	PatchExt32
 			.long   init750FX
 			.long   CPU_SUBTYPE_POWERPC_750
@@ -959,6 +968,7 @@ processor_types:
 			.short  0
 			.long   pfFloat | pfCanSleep | pfCanNap | pfCanDoze | pfSlowNap | pfNoMuMMCK | pf32Byte | pfL2
 			.long   kCache32 | kHasGraphicsOps | kHasStfiwx
+			.long   pmDualPLL | pmDPLLVmin
 			.long	PatchExt32
 			.long   init750FXV2
 			.long   CPU_SUBTYPE_POWERPC_750
@@ -979,6 +989,7 @@ processor_types:
 			.short	0x0200
 			.long	pfFloat | pfAltivec | pfSMPcap | pfCanSleep | pfCanNap | pfCanDoze | pfThermal | pf32Byte | pfL1fa | pfL2 | pfL2fa | pfHasDcba
 			.long   kHasAltivec | kCache32 | kDcbaAvailable | kDataStreamsAvailable | kHasGraphicsOps | kHasStfiwx
+			.long	0
 			.long	PatchExt32
 			.long	init7400v2_7
 			.long	CPU_SUBTYPE_POWERPC_7400
@@ -999,6 +1010,7 @@ processor_types:
 			.short	0
 			.long	pfFloat | pfAltivec | pfSMPcap | pfCanSleep | pfCanNap | pfCanDoze | pfThermal | pf32Byte | pfL1fa | pfL2 | pfL2fa | pfHasDcba
 			.long   kHasAltivec | kCache32 | kDcbaAvailable | kDataStreamsRecommended | kDataStreamsAvailable | kHasGraphicsOps | kHasStfiwx
+			.long	0
 			.long	PatchExt32
 			.long	init7400
 			.long	CPU_SUBTYPE_POWERPC_7400
@@ -1019,6 +1031,7 @@ processor_types:
 			.short	0x1101
 			.long	pfFloat | pfAltivec | pfSMPcap | pfCanSleep | pfCanNap | pfCanDoze | pf32Byte | pfL1fa | pfL2 | pfL2fa | pfHasDcba
 			.long   kHasAltivec | kCache32 | kDcbaAvailable | kDataStreamsRecommended | kDataStreamsAvailable | kHasGraphicsOps | kHasStfiwx
+			.long	0
 			.long	PatchExt32
 			.long	init7410
 			.long	CPU_SUBTYPE_POWERPC_7400
@@ -1039,6 +1052,7 @@ processor_types:
 			.short	0
 			.long	pfFloat | pfAltivec | pfSMPcap | pfCanSleep | pfCanNap | pfCanDoze | pf32Byte | pfL1fa | pfL2 | pfL2fa | pfHasDcba
 			.long   kHasAltivec | kCache32 | kDcbaAvailable | kDataStreamsRecommended | kDataStreamsAvailable | kHasGraphicsOps | kHasStfiwx
+			.long	0
 			.long	PatchExt32
 			.long	init7410
 			.long	CPU_SUBTYPE_POWERPC_7400
@@ -1059,6 +1073,7 @@ processor_types:
 			.short	0x0100
 			.long	pfFloat | pfAltivec | pfSMPcap | pfCanSleep | pfNoMSRir | pfNoL2PFNap | pfLClck | pf32Byte | pfL2 | pfL2fa | pfL2i | pfL3 | pfL3fa  | pfHasDcba
 			.long   kHasAltivec | kCache32 | kDcbaAvailable | kDataStreamsRecommended | kDataStreamsAvailable | kHasGraphicsOps | kHasStfiwx
+			.long	0
 			.long	PatchExt32
 			.long	init7450
 			.long	CPU_SUBTYPE_POWERPC_7450
@@ -1079,6 +1094,7 @@ processor_types:
 			.short	0x0200
 			.long	pfFloat | pfAltivec | pfSMPcap | pfCanSleep | pfNoMSRir | pfNoL2PFNap | pfLClck | pf32Byte | pfL2 | pfL2fa | pfL2i | pfL3 | pfL3fa | pfHasDcba
 			.long   kHasAltivec | kCache32 | kDcbaAvailable | kDataStreamsRecommended | kDataStreamsAvailable | kHasGraphicsOps | kHasStfiwx
+			.long	0
 			.long	PatchExt32
 			.long	init7450
 			.long	CPU_SUBTYPE_POWERPC_7450
@@ -1099,6 +1115,7 @@ processor_types:
 			.short	0
 			.long	pfFloat | pfAltivec | pfSMPcap | pfCanSleep | pfWillNap | pfNoMSRir | pfNoL2PFNap | pfLClck | pf32Byte | pfL2 | pfL2fa | pfL2i | pfL3 | pfL3fa | pfHasDcba
 			.long   kHasAltivec | kCache32 | kDcbaAvailable | kDataStreamsRecommended | kDataStreamsAvailable | kHasGraphicsOps | kHasStfiwx
+			.long	0
 			.long	PatchExt32
 			.long	init7450
 			.long	CPU_SUBTYPE_POWERPC_7450
@@ -1119,6 +1136,7 @@ processor_types:
 			.short	0x0100
 			.long	pfFloat | pfAltivec | pfSMPcap | pfCanSleep | pfNoMSRir | pfNoL2PFNap | pfLClck | pf32Byte | pfL2 | pfL2fa | pfL2i | pfL3 | pfL3fa | pfHasDcba
 			.long   kHasAltivec | kCache32 | kDcbaAvailable | kDataStreamsRecommended | kDataStreamsAvailable | kHasGraphicsOps | kHasStfiwx
+			.long	0
 			.long	PatchExt32
 			.long	init745X
 			.long	CPU_SUBTYPE_POWERPC_7450
@@ -1139,6 +1157,7 @@ processor_types:
 			.short	0x0200
 			.long	pfFloat | pfAltivec | pfSMPcap | pfCanSleep | pfWillNap | pfNoMSRir | pfNoL2PFNap | pfLClck | pf32Byte | pfL2 | pfL2fa | pfL2i | pfL3 | pfL3fa | pfHasDcba
 			.long   kHasAltivec | kCache32 | kDcbaAvailable | kDataStreamsRecommended | kDataStreamsAvailable | kHasGraphicsOps | kHasStfiwx
+			.long	0
 			.long	PatchExt32
 			.long	init745X
 			.long	CPU_SUBTYPE_POWERPC_7450
@@ -1159,6 +1178,7 @@ processor_types:
 			.short	0
 			.long	pfFloat | pfAltivec | pfSMPcap | pfCanSleep | pfCanNap | pfNoMSRir | pfNoL2PFNap | pfLClck | pf32Byte | pfL2 | pfL2fa | pfL2i | pfL3 | pfL3fa | pfHasDcba
 			.long   kHasAltivec | kCache32 | kDcbaAvailable | kDataStreamsRecommended | kDataStreamsAvailable | kHasGraphicsOps | kHasStfiwx
+			.long	0
 			.long	PatchExt32
 			.long	init745X
 			.long	CPU_SUBTYPE_POWERPC_7450
@@ -1179,6 +1199,7 @@ processor_types:
 			.short	0
 			.long	pfFloat | pfAltivec | pfSMPcap | pfCanSleep | pfCanNap | pfNoMSRir | pfNoL2PFNap | pfLClck | pf32Byte | pfL2 | pfL2fa | pfL2i | pfL3 | pfL3fa | pfHasDcba
 			.long   kHasAltivec | kCache32 | kDcbaAvailable | kDataStreamsRecommended | kDataStreamsAvailable | kHasGraphicsOps | kHasStfiwx
+			.long	0
 			.long	PatchExt32
 			.long	init745X
 			.long	CPU_SUBTYPE_POWERPC_7450
@@ -1191,6 +1212,27 @@ processor_types:
 			.long	52
 			.long	36
 
+;	970FX DD1.0
+
+			.align	2
+			.long	0xFFFFFF00		; All versions so far
+			.short	PROCESSOR_VERSION_970
+			.short	0x1100
+			.long	pfFloat | pfAltivec | pfSMPcap | pfCanSleep | pfCanNap | pf128Byte | pf64Bit | pfL2
+			.long   kHasAltivec | k64Bit | kCache128 | kDataStreamsAvailable | kDcbtStreamsRecommended | kDcbtStreamsAvailable | kHasGraphicsOps | kHasStfiwx | kHasFsqrt
+			.long	pmPowerTune
+			.long	PatchLwsync
+			.long	init970
+			.long	CPU_SUBTYPE_POWERPC_970
+			.long	105
+			.long	90
+			.long	128
+			.long	64*1024
+			.long	32*1024
+			.long	128
+			.long	65
+			.long	42
+
 ;	970
 
 			.align	2
@@ -1199,6 +1241,28 @@ processor_types:
 			.short	0
 			.long	pfFloat | pfAltivec | pfSMPcap | pfCanSleep | pfCanNap | pf128Byte | pf64Bit | pfL2 | pfSCOMFixUp
 			.long   kHasAltivec | k64Bit | kCache128 | kDataStreamsAvailable | kDcbtStreamsRecommended | kDcbtStreamsAvailable | kHasGraphicsOps | kHasStfiwx | kHasFsqrt
+			.long	0
+			.long	PatchLwsync
+			.long	init970
+			.long	CPU_SUBTYPE_POWERPC_970
+			.long	105
+			.long	90
+			.long	128
+			.long	64*1024
+			.long	32*1024
+			.long	128
+			.long	65
+			.long	42
+
+;	970FX
+
+			.align	2
+			.long	0xFFFF0000		; All versions so far
+			.short	PROCESSOR_VERSION_970FX
+			.short	0
+			.long	pfFloat | pfAltivec | pfSMPcap | pfCanSleep | pfCanNap | pf128Byte | pf64Bit | pfL2
+			.long   kHasAltivec | k64Bit | kCache128 | kDataStreamsAvailable | kDcbtStreamsRecommended | kDcbtStreamsAvailable | kHasGraphicsOps | kHasStfiwx | kHasFsqrt
+			.long	pmPowerTune
 			.long	PatchLwsync
 			.long	init970
 			.long	CPU_SUBTYPE_POWERPC_970
@@ -1219,6 +1283,7 @@ processor_types:
 			.short	0
 			.long	pfFloat | pf32Byte
 			.long   kCache32 | kHasGraphicsOps | kHasStfiwx
+			.long	0
 			.long	PatchExt32
 			.long	initUnsupported
 			.long	CPU_SUBTYPE_POWERPC_ALL

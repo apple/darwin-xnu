@@ -3717,10 +3717,14 @@ exit:
 		 * have the ASCII name of the userid.
 		 */
 		if (VFS_VGET(HFSTOVFS(hfsmp), &parid, &ddvp) == 0) {
-			if (VTOC(ddvp)->c_desc.cd_nameptr &&
-			    (cp->c_uid == strtoul(VTOC(ddvp)->c_desc.cd_nameptr, 0, 0))) {
-				cp->c_flags |= UF_NODUMP;
-				cp->c_flag |= C_CHANGE;
+			if (VTOC(ddvp)->c_desc.cd_nameptr) {
+				uid_t uid;
+
+				uid = strtoul(VTOC(ddvp)->c_desc.cd_nameptr, 0, 0);
+				if (uid == cp->c_uid || uid == cnp->cn_cred->cr_uid) {
+					cp->c_flags |= UF_NODUMP;
+					cp->c_flag |= C_CHANGE;
+				}
 			}
 			vput(ddvp);
 		}

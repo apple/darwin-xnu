@@ -182,10 +182,15 @@ proc_shutdown()
 	/*
 	 * send SIGTERM to those procs interested in catching one
 	 */
+sigterm_loop:
 	for (p = allproc.lh_first; p; p = p->p_list.le_next) {
-	        if (((p->p_flag&P_SYSTEM) == 0) && (p->p_pptr->p_pid != 0) && (p != self)) {
-		        if (p->p_sigcatch & sigmask(SIGTERM))
+	        if (((p->p_flag&P_SYSTEM) == 0) && (p->p_pptr->p_pid != 0) && (p != self) && (p->p_shutdownstate == 0)) {
+		        if (p->p_sigcatch & sigmask(SIGTERM)) {
+			        p->p_shutdownstate = 1;
 			        psignal(p, SIGTERM);
+
+				goto sigterm_loop;
+			}
 		}
 	}
 	/*
@@ -203,10 +208,8 @@ proc_shutdown()
 		TERM_catch = 0;
 
 	        for (p = allproc.lh_first; p; p = p->p_list.le_next) {
-		        if (((p->p_flag&P_SYSTEM) == 0) && (p->p_pptr->p_pid != 0) && (p != self)) {
-			        if (p->p_sigcatch & sigmask(SIGTERM))
-				        TERM_catch++;
-			}
+		        if (p->p_shutdownstate == 1)
+			        TERM_catch++;
 		}
 		if (TERM_catch == 0)
 		        break;
@@ -215,12 +218,9 @@ proc_shutdown()
 	        /*
 		 * log the names of the unresponsive tasks
 		 */
-
 	        for (p = allproc.lh_first; p; p = p->p_list.le_next) {
-		        if (((p->p_flag&P_SYSTEM) == 0) && (p->p_pptr->p_pid != 0) && (p != self)) {
-			        if (p->p_sigcatch & sigmask(SIGTERM))
+		        if (p->p_shutdownstate == 1)
 				  printf("%s[%d]: didn't act on SIGTERM\n", p->p_comm, p->p_pid);
-			}
 		}
 		IOSleep(1000 * 5);
 	}
@@ -228,9 +228,14 @@ proc_shutdown()
 	/*
 	 * send a SIGKILL to all the procs still hanging around
 	 */
+sigkill_loop:
 	for (p = allproc.lh_first; p; p = p->p_list.le_next) {
-	        if (((p->p_flag&P_SYSTEM) == 0) && (p->p_pptr->p_pid != 0) && (p != self))
+	        if (((p->p_flag&P_SYSTEM) == 0) && (p->p_pptr->p_pid != 0) && (p != self) && (p->p_shutdownstate != 2)) {
 		        psignal(p, SIGKILL);
+			p->p_shutdownstate = 2;
+			
+			goto sigkill_loop;
+		}
 	}
 	/*
 	 * wait for up to 60 seconds to allow these procs to exit normally
@@ -239,7 +244,7 @@ proc_shutdown()
 		IOSleep(200);  /* double the time from 100 to 200 for NFS requests in particular */
 
 	        for (p = allproc.lh_first; p; p = p->p_list.le_next) {
-		        if (((p->p_flag&P_SYSTEM) == 0) && (p->p_pptr->p_pid != 0) && (p != self))
+		        if (p->p_shutdownstate == 2)
 			        break;
 		}
 		if (!p)
@@ -278,18 +283,19 @@ proc_shutdown()
 	/*
 	 *	Forcibly free resources of what's left.
 	 */
+#ifdef notyet
 	p = allproc.lh_first;
 	while (p) {
 	/*
 	 * Close open files and release open-file table.
 	 * This may block!
 	 */
-#ifdef notyet
+
 	/* panics on reboot due to "zfree: non-allocated memory in collectable zone" message */
 	fdfree(p);
-#endif /* notyet */
 	p = p->p_list.le_next;
 	}
+#endif /* notyet */
 	/* Wait for the reaper thread to run, and clean up what we have done 
 	 * before we proceed with the hardcore shutdown. This reduces the race
 	 * between kill_tasks and the reaper thread.

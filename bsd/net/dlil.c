@@ -1037,10 +1037,8 @@ dlil_ioctl(u_long	proto_fam,
 
 
      if (proto_fam) {
-	  retval = dlil_find_dltag(ifp->if_family, ifp->if_unit,
-				   proto_fam, &dl_tag);
-
-	  if (retval == 0) {
+	  if (dlil_find_dltag(ifp->if_family, ifp->if_unit,
+			      proto_fam, &dl_tag) == 0) {
 	       if (dl_tag_array[dl_tag].ifp != ifp)
 		    return ENOENT;
 	
@@ -1073,8 +1071,6 @@ dlil_ioctl(u_long	proto_fam,
 	       else
 		    retval = EOPNOTSUPP;
 	  }
-	  else
-	       retval = 0;
      }
 
      if ((retval) && (retval != EOPNOTSUPP)) {

@@ -92,7 +92,8 @@
 									(mbuf_ptr)->m_pkthdr.csum_flags = 0; \
 									(mbuf_ptr)->m_pkthdr.csum_data = 0; \
 									(mbuf_ptr)->m_pkthdr.aux = (struct mbuf*)NULL; \
-									(mbuf_ptr)->m_pkthdr.reserved1 = NULL; \
+									(mbuf_ptr)->m_pkthdr.reserved_1 = 0; \
+									(mbuf_ptr)->m_pkthdr.vlan_tag = 0; \
 									(mbuf_ptr)->m_pkthdr.reserved2 = NULL;
 
 extern pmap_t kernel_pmap;    /* The kernel's pmap */
@@ -1693,7 +1694,8 @@ m_dup(register struct mbuf *m, int how)
                                 n->m_pkthdr.csum_flags = 0;
                                 n->m_pkthdr.csum_data = 0;
                                 n->m_pkthdr.aux = NULL;
-                                n->m_pkthdr.reserved1 = 0;
+                                n->m_pkthdr.vlan_tag = 0;
+                                n->m_pkthdr.reserved_1 = 0;
                                 n->m_pkthdr.reserved2 = 0;
                                 bcopy(m->m_data, n->m_data, m->m_pkthdr.len);
 				return(n);

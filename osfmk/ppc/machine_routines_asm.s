@@ -855,10 +855,38 @@ mipNSF1:	andc	r6,r6,r10						; Clean up the old power bits
 			beq-	minovec							; No...
 			dssall									; Stop the streams before we nap/doze
 
-minovec:	sync									; Make sure queues are clear			
-			mtmsr	r5								; Nap or doze
+minovec:
+			bf--	pf64Bitb,mipowloop				; skip if 32-bit...
+			
+			li		r3,0x10							; Fancy nap threashold is 0x10 ticks
+			mftb	r8								; Get the low half of the time base
+			mfdec	r4								; Get the decrementer ticks
+			cmplw	r4,r3							; Less than threashold?
+			blt		mipowloop
+			
+			mtdec	r3								; Load decrimenter with threshold
+			isync									; and make sure,
+			mfdec	r3								; really sure, it gets there
+			
+			rlwinm	r6,r5,0,MSR_EE_BIT+1,MSR_EE_BIT-1	; Clear out the EE bit
+			sync									; Make sure queues are clear
+			mtmsr	r6								; Set MSR with EE off but POW on
 			isync									; Make sure this takes before we proceed
-			b		minovec							; loop if POW does not take
+			
+			mftb	r9								; Get the low half of the time base
+			sub		r9,r9,r8						; Get the number of ticks spent waiting
+			sub		r4,r4,r9						; Adjust the decrementer value
+			
+			mtdec	r4								; Load decrimenter with the rest of the timeout
+			isync									; and make sure,
+			mfdec	r4								; really sure, it gets there
+			
+mipowloop:
+			sync									; Make sure queues are clear
+			mtmsr	r5								; Nap or doze, MSR with POW and EE set
+			isync									; Make sure this takes before we proceed
+			b		mipowloop						; loop if POW does not take
+
 ;
 ;			Note that the interrupt handler will turn off the nap/doze bits in the hid.
 ;			Also remember that the interrupt handler will force return to here whenever
@@ -926,16 +954,15 @@ mpsL2PFok:
 
 			rlwinm	r4,r4,0,sleep+1,doze-1			; Clear all possible power-saving modes (not DPM though)
 			oris	r4,r4,hi16(sleepm)				; Set sleep
-			b	mpsClearDEC
+			b		mpsClearDEC
 
 mpsPF64bit:
-			lis	r5, hi16(dozem|napm|sleepm)			; Clear all possible power-saving modes (not DPM though)
+			lis		r5, hi16(dozem|napm|sleepm)		; Clear all possible power-saving modes (not DPM though)
 			sldi	r5, r5, 32
 			andc	r4, r4, r5
-			lis	r5, hi16(napm)						; Set sleep
-//			lis	r5, hi16(dozem)						; Set sleep
+			lis		r5, hi16(napm)					; Set sleep
 			sldi	r5, r5, 32
-			or	r4, r4, r5
+			or		r4, r4, r5
 
 mpsClearDEC:
 			mfmsr	r5								; Get the current MSR
@@ -999,10 +1026,24 @@ mpsNoMSRx:
 			ori		r11,r11,SleepState				; Marked SleepState
 			sth		r11,PP_CPU_FLAGS(r12)			; Set the flags
 			dcbf	r10,r12
+			
+			mfsprg	r11,2							; Get CPU specific features
+			rlwinm.	r0,r11,0,pf64Bitb,pf64Bitb		; Test for 64 bit processor
+			eqv		r4,r4,r4						; Get all foxes
+			rlwinm	r4,r4,0,1,31					; Make 0x7FFFFFFF
+			beq		slSleepNow						; skip if 32-bit...
+			li		r3, 0x4000						; Cause decrimenter to roll over soon
+			mtdec	r3								; Load decrimenter with 0x00004000
+			isync									; and make sure,
+			mfdec	r3								; really sure, it gets there
+			
 slSleepNow:
 			sync									; Sync it all up
 			mtmsr	r5								; Do sleep with interruptions enabled
 			isync									; Take a pill
+			mtdec	r4								; Load decrimenter with 0x7FFFFFFF
+			isync									; and make sure,
+			mfdec	r3								; really sure, it gets there
 			b		slSleepNow						; Go back to sleep if we wake up...
 			
 
@@ -1478,20 +1519,6 @@ cinoexit:	mtspr	hid0,r9							; Turn off the invalidate (needed for some older m
 			.align	5
 			
 cin64:		
-			li		r10,hi16(dozem|napm|sleepm)		; Mask of power management bits we want cleared
-			sldi	r10,r10,32						; Position the masks
-			andc	r9,r9,r10						; Clean up the old power bits
-			mr		r4,r9	
-			isync
-			mtspr	hid0,r4							; Set up the HID
-			mfspr	r4,hid0							; Yes, this is silly, keep it here
-			mfspr	r4,hid0							; Yes, this is a duplicate, keep it here
-			mfspr	r4,hid0							; Yes, this is a duplicate, keep it here
-			mfspr	r4,hid0							; Yes, this is a duplicate, keep it here
-			mfspr	r4,hid0							; Yes, this is a duplicate, keep it here
-			mfspr	r4,hid0							; Yes, this is a duplicate, keep it here
-			isync
-
 			mfspr	r10,hid1						; Save hid1
 			mfspr	r4,hid4							; Save hid4
 			mr		r12,r10							; Really save hid1
@@ -1607,7 +1634,17 @@ cflicbi:	icbi	0,r6							; Kill I$
 			mfspr	r3,scomc						; Get back the status
 			sync
 			isync							
-			
+
+			isync
+			mtspr	hid0,r9							; Restore entry hid0
+			mfspr	r9,hid0							; Yes, this is silly, keep it here
+			mfspr	r9,hid0							; Yes, this is a duplicate, keep it here
+			mfspr	r9,hid0							; Yes, this is a duplicate, keep it here
+			mfspr	r9,hid0							; Yes, this is a duplicate, keep it here
+			mfspr	r9,hid0							; Yes, this is a duplicate, keep it here
+			mfspr	r9,hid0							; Yes, this is a duplicate, keep it here
+			isync
+
 			isync
 			mtspr	hid1,r12						; Restore entry hid1
 			mtspr	hid1,r12						; Stick it again
@@ -2000,32 +2037,47 @@ LEXT(ml_sense_nmi)
 			.globl	EXT(ml_set_processor_speed)
 
 LEXT(ml_set_processor_speed)
-			mfsprg	r5, 0								; Get the per_proc_info
+			mfsprg	r5, 0									; Get the per_proc_info
 
-			cmpli	cr0, r3, 0							; Turn off BTIC before low speed
-			beq	sps1
-			mfspr	r4, hid0							; Get the current hid0 value
-			rlwinm	r4, r4, 0, btic+1, btic-1					; Clear the BTIC bit
+			lwz		r6, pfPowerModes(r5)					; Get the supported power modes
+
+			rlwinm.	r0, r6, 0, pmDualPLLb, pmDualPLLb		; Is DualPLL supported?
+			bne		spsDPLL
+
+			rlwinm.	r0, r6, 0, pmPowerTuneb, pmPowerTuneb	; Is DualPLL supported?
+			bne		spsPowerTune
+
+			b		spsDone									; No supported power modes
+
+spsDPLL:
+			cmpli	cr0, r3, 0								; Turn off BTIC before low speed
+			beq		spsDPLL1
+			mfspr	r4, hid0								; Get the current hid0 value
+			rlwinm	r4, r4, 0, btic+1, btic-1				; Clear the BTIC bit
 			sync
-			mtspr	hid0, r4							; Set the new hid0 value
+			mtspr	hid0, r4								; Set the new hid0 value
 			isync
 			sync
 
-sps1:
-			mfspr	r4, hid1							; Get the current PLL settings
-			rlwimi  r4, r3, 31-hid1ps, hid1ps, hid1ps				; Copy the PLL Select bit
-			stw	r4, pfHID1(r5)							; Save the new hid1 value
-			mtspr	hid1, r4							; Select desired PLL
+spsDPLL1:
+			mfspr	r4, hid1								; Get the current PLL settings
+			rlwimi  r4, r3, 31-hid1ps, hid1ps, hid1ps		; Copy the PLL Select bit
+			stw		r4, pfHID1(r5)							; Save the new hid1 value
+			mtspr	hid1, r4								; Select desired PLL
 
-			cmpli	cr0, r3, 0							; Restore BTIC after high speed
-			bne	sps2
-			lwz	r4, pfHID0(r5)							; Load the hid0 value
+			cmpli	cr0, r3, 0								; Restore BTIC after high speed
+			bne		spsDone
+			lwz		r4, pfHID0(r5)							; Load the hid0 value
 			sync
-			mtspr	hid0, r4							; Set the hid0 value
+			mtspr	hid0, r4								; Set the hid0 value
 			isync
 			sync
+			b		spsDone
 
-sps2:
+spsPowerTune:
+			b		spsDone
+
+spsDone:
 			blr
 
 /*
@@ -2037,8 +2089,17 @@ sps2:
 			.globl	EXT(ml_set_processor_voltage)
 
 LEXT(ml_set_processor_voltage)
-			mfspr	r4, hid2							; Get HID2 value
-			rlwimi	r4, r3, 31-hid2vmin, hid2vmin, hid2vmin				; Insert the voltage mode bit
-			mtspr	hid2, r4							; Set the voltage mode
-			sync									; Make sure it is done
+			mfsprg	r5, 0									; Get the per_proc_info
+
+			lwz		r6, pfPowerModes(r5)					; Get the supported power modes
+
+			rlwinm.	r0, r6, 0, pmDPLLVminb, pmDPLLVminb		; Is DPLL Vmin supported
+			beq		spvDone
+
+			mfspr	r4, hid2								; Get HID2 value
+			rlwimi	r4, r3, 31-hid2vmin, hid2vmin, hid2vmin	; Insert the voltage mode bit
+			mtspr	hid2, r4								; Set the voltage mode
+			sync											; Make sure it is done
+
+spvDone:
 			blr

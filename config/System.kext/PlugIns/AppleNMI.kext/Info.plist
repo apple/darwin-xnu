@@ -5,7 +5,7 @@
 	<key>CFBundleDevelopmentRegion</key>
 	<string>English</string>
 	<key>CFBundleGetInfoString</key>
-	<string>AppleNMI Pseudoextension, Apple Computer Inc, 7.2</string>
+	<string>AppleNMI Pseudoextension, Apple Computer Inc, 7.3</string>
 	<key>CFBundleIdentifier</key>
 	<string>com.apple.driver.AppleNMI</string>
 	<key>CFBundleInfoDictionaryVersion</key>
@@ -15,11 +15,11 @@
 	<key>CFBundlePackageType</key>
 	<string>KEXT</string>
 	<key>CFBundleShortVersionString</key>
-	<string>7.2</string>
+	<string>7.3</string>
 	<key>CFBundleSignature</key>
 	<string>????</string>
 	<key>CFBundleVersion</key>
-	<string>7.2</string>
+	<string>7.3</string>
 	<key>OSBundleRequired</key>
 	<string>Root</string>
 	<key>OSKernelResource</key>

@@ -619,11 +619,13 @@ struct sysctl_oid *newsysctl_list[] =
     ,&sysctl__net_link_generic_system
 #endif
 
+#if 0
 #if VLAN
     ,&sysctl__net_link_vlan_link_proto
     ,&sysctl__net_link_vlan
     ,&sysctl__net_link_vlan_link
 #endif
+#endif 0
 
     ,&sysctl__net_local_inflight
     ,&sysctl__net_local_dgram_maxdgram

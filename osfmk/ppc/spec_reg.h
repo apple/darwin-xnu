@@ -38,5 +38,6 @@
 #define PROCESSOR_VERSION_7455		0x8001	/* ? */
 #define PROCESSOR_VERSION_7457		0x8002	/* ? */
 #define PROCESSOR_VERSION_970		0x0039	/* ? */
+#define PROCESSOR_VERSION_970FX		0x003C	/* ? */
 
 #endif /* _PPC_SPEC_REG_H_ */

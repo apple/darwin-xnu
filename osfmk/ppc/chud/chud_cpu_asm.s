@@ -571,3 +571,4 @@ EXT(chudxnu_mtmsr_64):
             mtmsrd	r5
             blr
 
+.L_end:

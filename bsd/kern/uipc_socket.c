@@ -1424,9 +1424,14 @@ dontblock:
 	if ((pr->pr_flags & PR_ADDR) && m->m_type == MT_SONAME) {
 		KASSERT(m->m_type == MT_SONAME, ("receive 1a"));
 		orig_resid = 0;
-		if (psa)
+		if (psa) {
 			*psa = dup_sockaddr(mtod(m, struct sockaddr *),
 					    mp0 == 0);
+			if ((*psa == 0) && (flags & MSG_NEEDSA)) {
+				error = EWOULDBLOCK;
+				goto release;
+			}
+		}
 		if (flags & MSG_PEEK) {
 			m = m->m_next;
 		} else {

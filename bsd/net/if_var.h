@@ -143,6 +143,21 @@ TAILQ_HEAD(ifprefixhead, ifprefix);
 LIST_HEAD(ifmultihead, ifmultiaddr);
 
 #ifdef __APPLE__
+#ifdef KERNEL_PRIVATE
+/* bottom 16 bits reserved for hardware checksum */
+#define IF_HWASSIST_CSUM_IP		0x0001	/* will csum IP */
+#define IF_HWASSIST_CSUM_TCP		0x0002	/* will csum TCP */
+#define IF_HWASSIST_CSUM_UDP		0x0004	/* will csum UDP */
+#define IF_HWASSIST_CSUM_IP_FRAGS	0x0008	/* will csum IP fragments */
+#define IF_HWASSIST_CSUM_FRAGMENT	0x0010  /* will do IP fragmentation */
+#define IF_HWASSIST_CSUM_TCP_SUM16	0x1000	/* simple TCP Sum16 computation */
+#define IF_HWASSIST_CSUM_MASK		0xffff
+#define IF_HWASSIST_CSUM_FLAGS(hwassist)	((hwassist) & IF_HWASSIST_CSUM_MASK)
+
+/* VLAN support */
+#define IF_HWASSIST_VLAN_TAGGING	0x10000	/* supports VLAN tagging */
+#define IF_HWASSIST_VLAN_MTU		0x20000 /* supports VLAN MTU-sized packet (for software VLAN) */
+#endif KERNEL_PRIVATE
 /*
  * Structure describing information about an interface
  * which may be of interest to management entities.
@@ -183,7 +198,12 @@ struct if_data {
 								 * on dlil_output */
 #endif
 	u_long	ifi_hwassist;		/* HW offload capabilities */
+#ifdef KERNEL_PRIVATE
+	u_short ifi_nvlans;		/* number of attached vlans */
+	u_short ifi_reserved_1;		/* for future use */
+#else KERNEL_PRIVATE
 	u_long	ifi_reserved1;		/* for future use */
+#endif KERNEL_PRIVATE
 	u_long	ifi_reserved2;		/* for future use */
 };
 #endif
@@ -316,12 +336,35 @@ typedef void if_init_f_t __P((void *));
 #define	if_lastchange	if_data.ifi_lastchange
 #define if_recvquota	if_data.ifi_recvquota
 #define	if_xmitquota	if_data.ifi_xmitquota
+#ifdef KERNEL_PRIVATE
+#define if_nvlans	if_data.ifi_nvlans
+#endif KERNEL_PRIVATE
 #define if_rawoutput(if, m, sa) if_output(if, m, sa, (struct rtentry *)0)
 
 #ifndef __APPLE__
 /* for compatibility with other BSDs */
 #define	if_addrlist	if_addrhead
 #define	if_list		if_link
+#endif
+#ifdef KERNEL_PRIVATE
+/*
+ * Structure describing a `cloning' interface.
+ */
+struct if_clone {
+	LIST_ENTRY(if_clone) ifc_list;	/* on list of cloners */
+	const char *ifc_name;		/* name of device, e.g. `vlan' */
+	size_t ifc_namelen;		/* length of name */
+	int ifc_minifs;			/* minimum number of interfaces */
+	int ifc_maxunit;		/* maximum unit number */
+	unsigned char *ifc_units;	/* bitmap to handle units */
+	int ifc_bmlen;			/* bitmap length */
+
+	int	(*ifc_create)(struct if_clone *, int);
+	void	(*ifc_destroy)(struct ifnet *);
+};
+
+#define IF_CLONE_INITIALIZER(name, create, destroy, minifs, maxunit)	\
+    { { 0 }, name, sizeof(name) - 1, minifs, maxunit, NULL, 0, create, destroy }
 #endif
 
 /*
@@ -509,6 +552,10 @@ void	if_poll_throttle __P((void));
 void	if_poll_unthrottle __P((void *));
 void	if_poll_init __P((void));
 void	if_poll __P((void));
+#ifdef KERNEL_PRIVATE
+void	if_clone_attach(struct if_clone *);
+void	if_clone_detach(struct if_clone *);
+#endif KERNEL_PRIVATE
 
 struct	ifaddr *ifa_ifwithaddr __P((struct sockaddr *));
 struct	ifaddr *ifa_ifwithdstaddr __P((struct sockaddr *));

@@ -93,10 +93,18 @@
  */
 #include <sys/time.h>
 
+
 #ifdef __APPLE__
 #include <net/if_var.h>
 #endif
 
+#ifdef KERNEL_PRIVATE
+struct if_clonereq {
+	int	ifcr_total;		/* total cloners (out) */
+	int	ifcr_count;		/* room for this many in user buffer */
+	char	*ifcr_buffer;		/* buffer for cloner names */
+};
+#endif KERNEL_PRIVATE
 
 #define	IFF_UP		0x1		/* interface is up */
 #define	IFF_BROADCAST	0x2		/* broadcast address valid */
@@ -116,7 +124,7 @@
 #define	IFF_ALTPHYS	IFF_LINK2	/* use alternate physical connection */
 #define	IFF_MULTICAST	0x8000		/* supports multicast */
 
-#if KERNEL_PRIVATE
+#ifdef KERNEL_PRIVATE
 /* extended flags definitions:  (all bits are reserved for internal/future use) */
 #define IFEF_AUTOCONFIGURING	0x1
 #define IFEF_DVR_REENTRY_OK	0x20	/* When set, driver may be reentered from its own thread */

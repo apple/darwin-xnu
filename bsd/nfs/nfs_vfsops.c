@@ -102,6 +102,8 @@
 extern int	nfs_mountroot __P((void));
 
 extern int	nfs_ticks;
+extern int	nfs_mount_type;
+extern int	nfs_resv_mounts;
 
 struct nfsstats	nfsstats;
 static int nfs_sysctl(int *, u_int, void *, size_t *, void *, size_t,
@@ -423,6 +425,15 @@ nfs_mountroot()
 tryagain:
 	error = nfs_boot_getfh(&nd, procp, v3);
 	if (error) {
+		if (error == EHOSTDOWN || error == EHOSTUNREACH) {
+			if (nd.nd_root.ndm_path)
+				FREE_ZONE(nd.nd_root.ndm_path, 
+					  MAXPATHLEN, M_NAMEI);
+			if (nd.nd_private.ndm_path)
+				FREE_ZONE(nd.nd_private.ndm_path, 
+					  MAXPATHLEN, M_NAMEI);
+			return (error);
+		}
 		if (v3) {
 			printf("nfs_boot_getfh(v3) failed with %d, trying v2...\n", error);
 			v3 = 0;
@@ -956,6 +967,9 @@ mountnfs(argp, mp, nam, pth, hst, vpp)
 	 */
 	VOP_UNLOCK(*vpp, 0, curproc);
 
+	if (nmp->nm_flag & NFSMNT_RESVPORT)
+		nfs_resv_mounts++;
+	nmp->nm_state |= NFSSTA_MOUNTED;
 	return (0);
 bad:
 	nfs_disconnect(nmp);
@@ -1034,6 +1048,11 @@ nfs_unmount(mp, mntflags, p)
 	 */
 	if (nmp->nm_flag & (NFSMNT_NQNFS | NFSMNT_KERB))
 		nmp->nm_state |= NFSSTA_DISMNT;
+	nmp->nm_state &= ~NFSSTA_MOUNTED;
+	if (nmp->nm_flag & NFSMNT_RESVPORT) {
+		if (--nfs_resv_mounts == 0)
+			nfs_bind_resv_thread_wake();
+	}
 
 	/*
 	 * Release the root vnode reference held by mountnfs()

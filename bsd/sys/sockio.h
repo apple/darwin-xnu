@@ -134,6 +134,14 @@
 
 
 #ifdef KERNEL_PRIVATE
+#define	SIOCIFCREATE	_IOWR('i', 120, struct ifreq)	/* create clone if */
+#define	SIOCIFDESTROY	 _IOW('i', 121, struct ifreq)	/* destroy clone if */
+#if 0
+#define	SIOCIFGCLONERS	_IOWR('i', 129, struct if_clonereq) /* get cloners */
+#endif 0
+#define	SIOCSETVLAN	 _IOW('i', 126, struct ifreq)	/* set VLAN config */
+#define	SIOCGETVLAN	_IOWR('i', 127, struct ifreq)	/* get VLAN config */
+
 /* 
  * temporary control calls to attach/detach IP to/from an ethernet interface
  */

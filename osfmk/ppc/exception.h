@@ -132,8 +132,14 @@ struct procFeatures {
 	uint64_t		pfHID5;				/* 0x068 */
 	unsigned int	l2crOriginal;		/* 0x070 */
 	unsigned int	l3crOriginal;		/* 0x074 */
-	unsigned int	pfBootConfig;		/* 0x07C */
-	unsigned int	reserved[1];		/* 0x80 */
+	unsigned int	pfBootConfig;		/* 0x078 */
+	unsigned int	pfPowerModes;		/* 0x07C */
+#define pmDPLLVmin		0x00010000
+#define pmDPLLVminb		15
+#define pmPowerTune		0x00000004
+#define pmPowerTuneb	29
+#define pmDualPLL		0x00000001
+#define pmDualPLLb		31
 };
 #pragma pack()
 

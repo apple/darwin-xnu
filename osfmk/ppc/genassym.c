@@ -235,6 +235,13 @@ int main(int argc, char *argv[])
 	DECLARE("pfl2crOriginal", 		offsetof(struct per_proc_info *, pf.l2crOriginal));
 	DECLARE("pfl3crOriginal", 		offsetof(struct per_proc_info *, pf.l3crOriginal));
 	DECLARE("pfBootConfig",			offsetof(struct per_proc_info *, pf.pfBootConfig));
+	DECLARE("pfPowerModes",			offsetof(struct per_proc_info *, pf.pfPowerModes));
+	DECLARE("pmDPLLVmin",			pmDPLLVmin);
+	DECLARE("pmDPLLVminb",			pmDPLLVminb);
+	DECLARE("pmPowerTune",			pmPowerTune);
+	DECLARE("pmPowerTuneb",			pmPowerTuneb);
+	DECLARE("pmDualPLL",			pmDualPLL);
+	DECLARE("pmDualPLLb",			pmDualPLLb);
 	DECLARE("pfPTEG", 				offsetof(struct per_proc_info *, pf.pfPTEG));
 	DECLARE("pfMaxVAddr", 			offsetof(struct per_proc_info *, pf.pfMaxVAddr));
 	DECLARE("pfMaxPAddr", 			offsetof(struct per_proc_info *, pf.pfMaxPAddr));

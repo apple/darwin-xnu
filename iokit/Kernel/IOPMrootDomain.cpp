@@ -274,20 +274,34 @@ IOReturn IOPMrootDomain::setProperties ( OSObject *props_obj)
 {
     OSDictionary                        *dict = OSDynamicCast(OSDictionary, props_obj);
     OSBoolean                           *b;
+    OSString                            *boot_complete_string = OSString::withCString("System Boot Complete");
+    OSString                            *power_button_string = OSString::withCString("DisablePowerButtonSleep");
+    OSString                            *stall_halt_string = OSString::withCString("StallSystemAtHalt");
     
     if(!dict) return kIOReturnBadArgument;
 
-    if(systemBooting && dict->getObject(OSString::withCString("System Boot Complete"))) 
+    
+
+    if(systemBooting && dict->getObject(boot_complete_string)) 
     {
         systemBooting = false;
         //kprintf("IOPM: received System Boot Complete property\n");
         adjustPowerState();
     }
     
-    if(b = dict->getObject(OSString::withCString("DisablePowerButtonSleep"))) 
+    if(b = dict->getObject(power_button_string)) 
     {
-        setProperty(OSString::withCString("DisablePowerButtonSleep"), b);
+        setProperty(power_button_string, b);
     }
+
+    if(b = dict->getObject(stall_halt_string)) 
+    {
+        setProperty(stall_halt_string, b);
+    }
+    
+    if(boot_complete_string) boot_complete_string->release();
+    if(power_button_string) power_button_string->release();
+    if(stall_halt_string) stall_halt_string->release();
         
     return kIOReturnSuccess;
 }

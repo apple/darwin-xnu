@@ -3059,7 +3059,7 @@ EXT(lowGlo):
 			.long	0								; 5008 Zero
 			.long	0								; 500C Zero cont...
 			.long	EXT(per_proc_info)				; 5010 pointer to per_procs
-			.long	0
+			.long	0								;
 			.long	0								; 5018 reserved
 			.long	0								; 501C reserved
 			.long	0								; 5020 reserved

@@ -97,6 +97,7 @@ uid_t console_user;
 static int change_dir __P((struct nameidata *ndp, struct proc *p));
 static void checkdirs __P((struct vnode *olddp));
 static void enablequotas __P((struct proc *p, struct mount *mp));
+void notify_filemod_watchers(struct vnode *vp, struct proc *p);
 
 /* counts number of mount and unmount operations */
 unsigned int vfs_nummntops=0;
@@ -2103,6 +2104,7 @@ chmod(p, uap, retval)
 	VATTR_NULL(&vattr);
 	vattr.va_mode = uap->mode & ALLPERMS;
 	error = VOP_SETATTR(vp, &vattr, p->p_ucred, p);
+
 	vput(vp);
 	return (error);
 }
@@ -2141,6 +2143,7 @@ fchmod(p, uap, retval)
 	vattr.va_mode = uap->mode & ALLPERMS;
 	AUDIT_ARG(mode, (mode_t)vattr.va_mode);
 	error = VOP_SETATTR(vp, &vattr, p->p_ucred, p);
+
 	VOP_UNLOCK(vp, 0, p);
 
 	return (error);
@@ -2190,6 +2193,7 @@ chown(p, uap, retval)
 	vattr.va_uid = uap->uid;
 	vattr.va_gid = uap->gid;
 	error = VOP_SETATTR(vp, &vattr, p->p_ucred, p);
+
 	vput(vp);
 	return (error);
 }
@@ -2230,6 +2234,7 @@ fchown(p, uap, retval)
 	vattr.va_uid = uap->uid;
 	vattr.va_gid = uap->gid;
 	error = VOP_SETATTR(vp, &vattr, p->p_ucred, p);
+
 	VOP_UNLOCK(vp, 0, p);
 	return (error);
 }
@@ -2275,6 +2280,7 @@ setutimes(p, vp, ts, nullflag)
 	if (nullflag)
 		vattr.va_vaflags |= VA_UTIMES_NULL;
 	error = VOP_SETATTR(vp, &vattr, p->p_ucred, p);
+
 	VOP_UNLOCK(vp, 0, p);
 out:
 	return error;
@@ -4142,6 +4148,7 @@ sync_internal(void)
 #define NUM_CHANGE_NODES 256
 static int                    changed_init=0;
 static volatile int           fmod_watch_enabled = 0;
+static pid_t                  fmod_watch_owner;
 static simple_lock_data_t     changed_nodes_lock;    // guard access
 static volatile struct vnode *changed_nodes[NUM_CHANGE_NODES];
 static volatile pid_t         changed_nodes_pid[NUM_CHANGE_NODES];
@@ -4155,7 +4162,7 @@ notify_filemod_watchers(struct vnode *vp, struct proc *p)
     int ret;
     
     // only want notification on regular files.
-    if (vp->v_type != VREG || fmod_watch_enabled == 0) {
+    if (fmod_watch_enabled == 0 || (vp->v_type != VREG && vp->v_type != VDIR)) {
 	return;
     }
 
@@ -4254,8 +4261,10 @@ fmod_watch(struct proc *p, struct fmod_watch_args *uap, register_t *retval)
     changed_rd_index = (changed_rd_index + 1) % NUM_CHANGE_NODES;
 
     if (vp == NULL) {
-	panic("watch_file_changes: Someone put a null vnode in my table! (%d %d)\n",
-	      changed_rd_index, changed_wr_index);
+	printf("watch_file_changes: Someone put a null vnode in my table! (%d %d)\n",
+	       changed_rd_index, changed_wr_index);
+	error = EINVAL;
+	goto err0;
     }
 
     simple_unlock(&changed_nodes_lock);
@@ -4266,7 +4275,7 @@ fmod_watch(struct proc *p, struct fmod_watch_args *uap, register_t *retval)
 	wakeup((caddr_t)&changed_wr_index);
     }
 
-    if (vp->v_type != VREG) {
+    if (vp->v_type != VREG && vp->v_type != VDIR) {
 	error = EBADF;
 	goto err1;
     }
@@ -4351,6 +4360,7 @@ fmod_watch(struct proc *p, struct fmod_watch_args *uap, register_t *retval)
   err1:
     vrele(vp);    // undoes the vref() in notify_filemod_watchers()
 
+  err0:
     *retval = -1;
     return error;
 }
@@ -4370,6 +4380,8 @@ enable_fmod_watching(register_t *retval)
     }
     
     fmod_watch_enabled++;
+    fmod_watch_owner = current_proc()->p_pid;
+
     *retval = 0;
     return 0;
 }
@@ -4377,10 +4389,16 @@ enable_fmod_watching(register_t *retval)
 static int
 disable_fmod_watching(register_t *retval)
 {
-    fmod_watch_enabled--;
-    if (fmod_watch_enabled < 0) {
-	panic("fmod_watching: too many disables! (%d)\n", fmod_watch_enabled);
+    if (!is_suser()) {
+	return EPERM;
     }
+    
+    if (fmod_watch_enabled < 1) {
+	printf("fmod_watching: too many disables! (%d)\n", fmod_watch_enabled);
+	return EINVAL;
+    }
+
+    fmod_watch_enabled--;
     
     // if we're the last guy, clear out any remaining vnodes
     // in the table so they don't remain referenced.
@@ -4396,6 +4414,8 @@ disable_fmod_watching(register_t *retval)
 	    i = (i + 1) % NUM_CHANGE_NODES;
 	}
 	changed_wr_index = changed_rd_index = 0;
+
+	fmod_watch_owner = 0;
     }
 
     // wake up anyone that may be waiting for the
@@ -4429,4 +4449,14 @@ fmod_watch_enable(struct proc *p, struct fmod_watch_enable_args *uap, register_t
     }
 
     return ret;
+}
+
+void
+clean_up_fmod_watch(struct proc *p)
+{
+    if (fmod_watch_enabled && fmod_watch_owner == p->p_pid) {
+	register_t *retval;
+	
+	disable_fmod_watching(&retval);
+    }
 }

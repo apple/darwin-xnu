@@ -128,10 +128,18 @@ struct	pkthdr {
 	/* variables for ip and tcp reassembly */
 	void	*header;		/* pointer to packet header */
         /* variables for hardware checksum */
+#ifdef KERNEL_PRIVATE
+    	/* Note: csum_flags is used for hardware checksum and VLAN */
+#endif KERNEL_PRIVATE
         int     csum_flags;             /* flags regarding checksum */       
         int     csum_data;              /* data field used by csum routines */
 	struct mbuf *aux;		/* extra data buffer; ipsec/others */
+#ifdef KERNEL_PRIVATE
+	u_short	vlan_tag;		/* VLAN tag, host byte order */
+	u_short reserved_1;		/* for future use */
+#else KERNEL_PRIVATE
 	void	*reserved1;		/* for future use */
+#endif KERNEL_PRIVATE
 	void	*reserved2;		/* for future use */
 };
 
@@ -209,6 +217,16 @@ struct mbuf {
  
 #define CSUM_DELAY_DATA         (CSUM_TCP | CSUM_UDP)
 #define CSUM_DELAY_IP           (CSUM_IP)       /* XXX add ipv6 here too? */
+#ifdef KERNEL_PRIVATE
+/*
+ * Note: see also IF_HWASSIST_CSUM defined in <net/if_var.h>
+ */
+/* bottom 16 bits reserved for hardware checksum */
+#define CSUM_CHECKSUM_MASK	0xffff
+
+/* VLAN tag present */
+#define CSUM_VLAN_TAG_VALID	0x10000		/* vlan_tag field is valid */
+#endif KERNEL_PRIVATE
 
 
 /* mbuf types */

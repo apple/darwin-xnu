@@ -45,9 +45,9 @@
 #  Standard Apple Research Configurations:
 #  -------- ----- -------- ---------------
 #
-#  RELEASE = [intel pc mach medium event vol pst gdb kernobjc libdriver fixpri simple_clock mdebug kernserv driverkit uxpr kernstack ipc_compat ipc_debug nfsclient nfsserver quota fifo fdesc union ffs cd9660 compat_43 volfs devfs synthfs revfs hfs mrouting ipdivert ipfirewall inet6 ipsec gif tcpdrop_synfin ktrace stf]
+#  RELEASE = [intel pc mach medium event vol pst gdb kernobjc libdriver fixpri simple_clock mdebug kernserv driverkit uxpr kernstack ipc_compat ipc_debug nfsclient nfsserver quota fifo fdesc union ffs cd9660 compat_43 volfs devfs synthfs revfs hfs mrouting ipdivert ipfirewall inet6 ipsec gif tcpdrop_synfin ktrace stf vlan]
 #  PROFILE = [RELEASE profile]
-#  DEBUG = [intel pc mach medium event vol pst gdb kernobjc libdriver_g fixpri debug simple_clock mdebug kernserv driverkit xpr_debug uxpr kernstack ipc_compat ipc_debug nfsclient nfsserver quota fifo fdesc union ffs cd9660 compat_43 revfs hfs volfs devfs synthfs mach_assert mrouting ipdivert ipfirewall inet6 ipsec gif tcpdrop_synfin ktrace stf]
+#  DEBUG = [intel pc mach medium event vol pst gdb kernobjc libdriver_g fixpri debug simple_clock mdebug kernserv driverkit xpr_debug uxpr kernstack ipc_compat ipc_debug nfsclient nfsserver quota fifo fdesc union ffs cd9660 compat_43 revfs hfs volfs devfs synthfs mach_assert mrouting ipdivert ipfirewall inet6 ipsec gif tcpdrop_synfin ktrace stf vlan]
 #
 ######################################################################
 #

@@ -5653,6 +5653,7 @@ _kdp_call_kdb
 _kdp_exception
 _kdp_exception_ack
 _kdp_flag
+_kdp_get_interface
 _kdp_get_ip_address
 _kdp_get_mac_addr
 _kdp_getc
@@ -5669,6 +5670,7 @@ _kdp_reboot
 _kdp_register_send_receive
 _kdp_remove_all_breakpoints
 _kdp_reset
+_kdp_set_interface
 _kdp_set_ip_and_mac_addresses
 _kdp_sync_cache
 _kdp_unregister_send_receive

@@ -672,7 +672,6 @@ nfsm_rpchead(cr, nmflag, procid, auth_type, auth_len, auth_str, verf_len,
 	struct mbuf *mreq, *mb2;
 	int siz, grpsiz, authsiz;
 	struct timeval tv;
-	static u_long base;
 
 	authsiz = nfsm_rndup(auth_len);
 	MGETHDR(mb, M_WAIT, MT_DATA);
@@ -695,10 +694,15 @@ nfsm_rpchead(cr, nmflag, procid, auth_type, auth_len, auth_str, verf_len,
 	/*
 	 * derive initial xid from system time
 	 */
-	if (!base && (rootvp)) {
+	if (!nfs_xid) {
+		/*
+		 * Note: it's OK if this code inits nfs_xid to 0 (for example,
+		 * due to a broken clock) because we immediately increment it
+		 * and we guarantee to never use xid 0.  So, nfs_xid should only
+		 * ever be 0 the first time this function is called.
+		 */
 		microtime(&tv);
-		base = tv.tv_sec << 12;
-		nfs_xid = base;
+		nfs_xid = tv.tv_sec << 12;
 	}
 	/*
 	 * Skip zero xid if it should ever happen.

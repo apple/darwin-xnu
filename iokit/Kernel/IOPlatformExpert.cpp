@@ -251,7 +251,19 @@ int (*PE_halt_restart)(unsigned int type) = 0;
 
 int IOPlatformExpert::haltRestart(unsigned int type)
 {
+  IOPMrootDomain *rd = getPMRootDomain();
+  OSBoolean   *b = 0;
+    
+  if(rd) b = (OSBoolean *)OSDynamicCast(OSBoolean, rd->getProperty(OSString::withCString("StallSystemAtHalt")));
+
   if (type == kPEHangCPU) while (1);
+
+  if (kOSBooleanTrue == b) {
+    // Stall shutdown for 5 minutes, and if no outside force has removed our power, continue with
+    // a reboot.
+    IOSleep(1000*60*5);
+    type = kPERestartCPU;
+  }
   
   if (PE_halt_restart) return (*PE_halt_restart)(type);
   else return -1;

@@ -459,6 +459,7 @@ again:
 	p2->p_stat = SIDL;
 	p2->p_pid = nextpid;
 
+	p2->p_shutdownstate = 0;
 	/*
 	 * Make a proc table entry for the new process.
 	 * Start by zeroing the section of proc that is zero-initialized,

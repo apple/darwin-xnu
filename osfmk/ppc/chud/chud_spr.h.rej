@@ -1,0 +1,42 @@
+***************
+*** 235,238 ****
+  #define chud_970_mmcr1		798
+  #define chud_970_imc		799
+  
+  
+--- 235,269 ----
+  #define chud_970_mmcr1		798
+  #define chud_970_imc		799
+  
++ /* PPC SPRs - 7400/7410 Specific */
++ #define chud_7400_msscr1	1015
+  
++ /* PPC SPRs - 64-bit implementations */
++ #define chud_ppc64_accr		29
++ #define chud_ppc64_ctrl		152
++ 
++ /* PPC SPRs - 970 Specific */
++ #define chud_970_scomc		276
++ #define chud_970_scomd		277
++ #define chud_970_hsprg0		304
++ #define chud_970_hsprg1		305
++ #define chud_970_hdec		310
++ #define chud_970_hior		311
++ #define chud_970_rmor		312
++ #define chud_970_hrmor		313
++ #define chud_970_hsrr0		314
++ #define chud_970_hsrr1		315
++ #define chud_970_lpcr		318
++ #define chud_970_lpidr		319
++ #define chud_970_trig0		976
++ #define chud_970_trig1		977
++ #define chud_970_trig2		978
++ #define chud_970_hid0		1008
++ #define chud_970_hid1		1009
++ #define chud_970_hid4		1012
++ #define chud_970_hid5		1014
++ #define chud_970_dabrx		1015
++ #define chud_970_trace		1022
++ #define chud_970_pir		1023
++ 
++ #endif // _CHUD_SPR_H_

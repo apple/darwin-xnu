@@ -69,3 +69,4 @@ public:
  };
  
  #endif /* _IOPMPOWERSTATEQUEUE_H_ */
+ 

@@ -453,7 +453,8 @@ ip_input(struct mbuf *m)
 				goto bad;
 		}
 	}
-	if ((m->m_pkthdr.rcvif->if_hwassist == 0) || (apple_hwcksum_rx == 0) ||
+	if ((IF_HWASSIST_CSUM_FLAGS(m->m_pkthdr.rcvif->if_hwassist) == 0) 
+	    || (apple_hwcksum_rx == 0) ||
 	   ((m->m_pkthdr.csum_flags & CSUM_TCP_SUM16) && ip->ip_p != IPPROTO_TCP))
 		m->m_pkthdr.csum_flags = 0; /* invalidate HW generated checksum flags */
 
