@@ -7,19 +7,17 @@ export MakeInc_dir=${SRCROOT}/makedefs/MakeInc.dir
 include $(MakeInc_cmd)
 include $(MakeInc_def)
 
-DATAFILES = \
-	asm.h eflags.h exec.h machlimits.h \
-	endian.h trap.h soundcard.h
-
-EXPORT_ONLY_FILES = cpu_number.h \
+EXPORT_ONLY_FILES = 	\
+		    cpu_capabilities.h	\
+		    cpu_number.h \
 		    hw_lock_types.h \
 		    io_map_entries.h \
 		    lock.h \
 		    machine_routines.h
 
-INSTALL_MD_LIST = ${DATAFILES}
-
 INSTALL_MD_DIR = i386
+
+INSTALL_MD_LCL_LIST = cpu_capabilities.h
 
 EXPORT_MD_LIST = ${EXPORT_ONLY_FILES}
 

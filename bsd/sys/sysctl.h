@@ -3,19 +3,22 @@
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
+ * Copyright (c) 1999-2003 Apple Computer, Inc.  All Rights Reserved.
  * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this
+ * file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
  * 
  * @APPLE_LICENSE_HEADER_END@
  */
@@ -111,6 +114,9 @@ struct ctlname {
 #define CTLFLAG_NOLOCK	0x20000000	/* XXX Don't Lock */
 #define CTLFLAG_ANYBODY	0x10000000	/* All users can set this var */
 #define CTLFLAG_SECURE	0x08000000	/* Permit set only if securelevel<=0 */
+#define CTLFLAG_MASKED	0x04000000	/* deprecated variable, do not display */
+#define CTLFLAG_NOAUTO	0x02000000	/* do not auto-register */
+#define CTLFLAG_KERN	0x01000000	/* valid inside the kernel */
 
 /*
  * USE THIS instead of a hardwired number from the categories below
@@ -166,7 +172,9 @@ struct sysctl_oid {
 
 int sysctl_handle_int SYSCTL_HANDLER_ARGS;
 int sysctl_handle_long SYSCTL_HANDLER_ARGS;
-int sysctl_handle_intptr SYSCTL_HANDLER_ARGS;
+int sysctl_handle_quad SYSCTL_HANDLER_ARGS;
+int sysctl_handle_int2quad SYSCTL_HANDLER_ARGS;
+/*int sysctl_handle_intptr SYSCTL_HANDLER_ARGS; XXX not implemented */
 int sysctl_handle_string SYSCTL_HANDLER_ARGS;
 int sysctl_handle_opaque SYSCTL_HANDLER_ARGS;
 
@@ -208,6 +216,16 @@ void sysctl_unregister_oid(struct sysctl_oid *oidp);
 #define SYSCTL_LONG(parent, nbr, name, access, ptr, descr) \
 	SYSCTL_OID(parent, nbr, name, CTLTYPE_INT|access, \
 		ptr, 0, sysctl_handle_long, "L", descr)
+
+/* Oid for a quad.  The pointer must be non NULL. */
+#define SYSCTL_QUAD(parent, nbr, name, access, ptr, descr) \
+	SYSCTL_OID(parent, nbr, name, CTLTYPE_QUAD|access, \
+		ptr, 0, sysctl_handle_quad, "Q", descr)
+
+/* Oid for a int returned as quad.  The pointer must be non NULL. */
+#define SYSCTL_INT2QUAD(parent, nbr, name, access, ptr, descr) \
+	SYSCTL_OID(parent, nbr, name, CTLTYPE_QUAD|access, \
+		ptr, 0, sysctl_handle_int2quad, "Q", descr)
 
 /* Oid for an opaque object.  Specified by a pointer and a length. */
 #define SYSCTL_OPAQUE(parent, nbr, name, access, ptr, len, fmt, descr) \
@@ -496,7 +514,9 @@ struct kinfo_proc {
 #define HW_L3SETTINGS	21		/* int: L3 Cache Settings */
 #define HW_L3CACHESIZE	22		/* int: L3 Cache Size in Bytes */
 #define HW_TB_FREQ	23		/* int: Bus Frequency */
-#define	HW_MAXID	24		/* number of valid hw ids */
+#define HW_MEMSIZE	24		/* uint64_t: physical ram size */
+#define HW_AVAILCPU	25		/* int: number of available CPUs */
+#define	HW_MAXID	26		/* number of valid hw ids */
 
 #define CTL_HW_NAMES { \
 	{ 0, 0 }, \
@@ -522,8 +542,71 @@ struct kinfo_proc {
 	{ "l2cachesize", CTLTYPE_INT }, \
 	{ "l3settings", CTLTYPE_INT }, \
 	{ "l3cachesize", CTLTYPE_INT }, \
-	{ "tbfrequency", CTLTYPE_INT } \
+	{ "tbfrequency", CTLTYPE_INT }, \
+	{ "memsize", CTLTYPE_QUAD }, \
+	{ "availcpu", CTLTYPE_INT } \
 }
+
+/*
+ * These are the support HW selectors for sysctlbyname.  Parameters that are byte count or frequencies are 64 bit numbers.
+ * All other parameters are 32 bit numbers.
+ *
+ *   hw.memsize                - The number of bytes of physical memory in the system.
+ *
+ *   hw.ncpu                   - The number maximum number of processor that could be available this boot.
+ *                               Use this value for sizing of static per processor arrays; i.e. processor load statistics.
+ *
+ *   hw.activecpu              - The number of cpus currently available for executing threads.
+ *                               Use this number to determine the number threads to create in SMP aware applications.
+ *                               This number can change when power management modes are changed.
+ *   
+ *   hw.tbfrequency            - This gives the time base frequency used by the OS and is the basis of all timing services.
+ *                               In general is is better to use mach's or higher level timing services, but this value
+ *                               is needed to convert the PPC Time Base registers to real time.
+ *
+ *   hw.cpufrequency           - These values provide the current, min and max cpu frequency.  The min and max are for
+ *   hw.cpufrequency_max       - all power management modes.  The current frequency is the max frequency in the current mode.
+ *   hw.cpufrequency_min       - All frequencies are in Hz.
+ *
+ *   hw.busfrequency           - These values provide the current, min and max bus frequency.  The min and max are for
+ *   hw.busfrequency_max       - all power management modes.  The current frequency is the max frequency in the current mode.
+ *   hw.busfrequency_min       - All frequencies are in Hz.
+ *
+ *   hw.cputype                - These values provide the mach-o cpu type and subtype.  A complete list is in <mach/machine.h>
+ *   hw.cpusubtype             - These values should be used to determine what processor family the running cpu is from so that
+ *                               the best binary can be chosen, or the best dynamic code generated.  They should not be used
+ *                               to determine if a given processor feature is available.
+ *
+ *   hw.byteorder              - Gives the byte order of the processor.  4321 for big endian, 1234 for little.
+ *
+ *   hw.pagesize               - Gives the size in bytes of the pages used by the processor and VM system.
+ *
+ *   hw.cachelinesize          - Gives the size in bytes of the processor's cache lines.
+ *                               This value should be use to control the strides of loops that use cache control instructions
+ *                               like dcbz, dcbt or dcbst.
+ *
+ *   hw.l1dcachesize           - These values provide the size in bytes of the L1, L2 and L3 caches.  If a cache is not present
+ *   hw.l1icachesize           - then the selector will return and error.
+ *   hw.l2cachesize            -
+ *   hw.l3cachesize            -
+ *
+ *
+ * These are the selectors for optional processor features.  Selectors that return errors are not support on the system.
+ * Supported features will return 1 if they are recommended or 0 if they are supported but are not expected to help performance.
+ * Future versions of these selectors may return larger values as necessary so it is best to test for non zero.
+ *
+ *   hw.optional.floatingpoint - Floating Point Instructions
+ *   hw.optional.altivec       - AltiVec Instructions
+ *   hw.optional.graphicsops   - Graphics Operations
+ *   hw.optional.64bitops      - 64-bit Instructions
+ *   hw.optional.fsqrt         - HW Floating Point Square Root Instruction
+ *   hw.optional.stfiwx        - Store Floating Point as Integer Word Indexed Instructions
+ *   hw.optional.dcba          - Data Cache Block Allocate Instruction
+ *   hw.optional.datastreams   - Data Streams Instructions
+ *   hw.optional.dcbtstreams   - Data Cache Block Touch Steams Instruction Form
+ *
+ */
+
 
 /*
  * CTL_USER definitions
@@ -632,12 +715,21 @@ struct linker_set;
 
 void	sysctl_register_set(struct linker_set *lsp);
 void	sysctl_unregister_set(struct linker_set *lsp);
+void	sysctl_mib_init(void);
 int	kernel_sysctl(struct proc *p, int *name, u_int namelen, void *old,
-		      size_t *oldlenp, void *new, size_t newlen,
-		      size_t *retval);
+		      size_t *oldlenp, void *newp, size_t newlen);
 int	userland_sysctl(struct proc *p, int *name, u_int namelen, void *old,
-			size_t *oldlenp, int inkernel, void *new, size_t newlen,
+			size_t *oldlenp, int inkernel, void *newp, size_t newlen,
 			size_t *retval);
+
+/*
+ * Sysctl handling within the kernel.
+ *
+ * May be called with either or no funnel held; will take and
+ * switch funnels as required.
+ */
+int	sysctlbyname __P((const char *, void *, size_t *, void *, size_t));
+
 /*
  * Internal sysctl function calling convention:
  *

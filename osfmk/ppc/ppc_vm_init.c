@@ -3,19 +3,22 @@
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
+ * Copyright (c) 1999-2003 Apple Computer, Inc.  All Rights Reserved.
  * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this
+ * file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
  * 
  * @APPLE_LICENSE_HEADER_END@
  */
@@ -57,12 +60,12 @@
 extern unsigned int intstack[];	/* declared in start.s */
 extern unsigned int intstack_top_ss;	/* declared in start.s */
 
-vm_offset_t mem_size;	/* Size of actual physical memory present
+vm_offset_t	mem_size;	/* Size of actual physical memory present
 						   minus any performance buffer and possibly limited
 						   by mem_limit in bytes */
-vm_offset_t mem_actual;	/* The "One True" physical memory size 
+vm_offset_t	mem_actual;	/* The "One True" physical memory size 
 						   actually, it's the highest physical address + 1 */
-						  
+uint64_t	max_mem;	/* Size of physical memory (bytes), adjusted by maxmem */
 
 mem_region_t pmap_mem_regions[PMAP_MEM_REGION_MAX];
 int	 pmap_mem_regions_count = 0;	/* No non-contiguous memory regions */
@@ -207,6 +210,8 @@ void ppc_vm_init(unsigned int mem_limit, boot_args *args)
 		/* incremement number of regions found */
 		pmap_mem_regions_count++;
 	}
+
+	max_mem = mem_size;
 
 	kprintf("mem_size: %d M\n",mem_size / (1024 * 1024));
 

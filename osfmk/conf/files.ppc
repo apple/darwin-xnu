@@ -76,6 +76,9 @@ osfmk/ppc/FirmwareC.c			standard
 
 osfmk/ppc/aligned_data.s		standard
 
+osfmk/ppc/commpage/commpage.c	standard
+osfmk/ppc/commpage/commpage_asm.s	standard
+
 osfmk/kdp/ml/ppc/kdp_machdep.c        optional mach_kdp
 osfmk/kdp/ml/ppc/kdp_vm.c             optional mach_kdp
 osfmk/kdp/ml/ppc/kdp_misc.s           optional mach_kdp
