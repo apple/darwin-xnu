@@ -1,24 +1,21 @@
 /*
- * Copyright (c) 2000-2001 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2004 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
- * Copyright (c) 1999-2003 Apple Computer, Inc.  All Rights Reserved.
+ * The contents of this file constitute Original Code as defined in and
+ * are subject to the Apple Public Source License Version 1.1 (the
+ * "License").  You may not use this file except in compliance with the
+ * License.  Please obtain a copy of the License at
+ * http://www.apple.com/publicsource and read it before using this file.
  * 
- * This file contains Original Code and/or Modifications of Original Code
- * as defined in and that are subject to the Apple Public Source License
- * Version 2.0 (the 'License'). You may not use this file except in
- * compliance with the License. Please obtain a copy of the License at
- * http://www.opensource.apple.com/apsl/ and read it before using this
- * file.
- * 
- * The Original Code and all software distributed under the License are
- * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * This Original Code and all software distributed under the License are
+ * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
- * Please see the License for the specific language governing rights and
- * limitations under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
+ * License for the specific language governing rights and limitations
+ * under the License.
  * 
  * @APPLE_LICENSE_HEADER_END@
  */
@@ -72,6 +69,9 @@
 #endif
 #include <sys/malloc.h>
 #include <sys/syslog.h>
+#include <sys/ubc.h>
+
+#include <bsm/audit_kernel.h>
 
 #if KTRACE
 static struct ktr_header *ktrgetheader __P((int type));
@@ -301,6 +301,9 @@ ktrace(curp, uap, retval)
 	int error = 0;
 	struct nameidata nd;
 
+	AUDIT_ARG(cmd, uap->ops);
+	AUDIT_ARG(pid, uap->pid);
+	AUDIT_ARG(value, uap->facs);
 	curp->p_traceflag |= KTRFAC_ACTIVE;
 	if (ops != KTROP_CLEAR) {
 		/*
@@ -332,6 +335,9 @@ ktrace(curp, uap, retval)
 					p->p_traceflag = 0;
 					if (tvp != NULL) {
 						p->p_tracep = NULL;
+
+						VOP_CLOSE(vp, FREAD|FWRITE, curp->p_ucred, curp);
+						ubc_rele(tvp);
 						vrele(tvp);
 					}
 				} else
@@ -375,6 +381,7 @@ ktrace(curp, uap, retval)
 			error = ESRCH;
 			goto done;
 		}
+		AUDIT_ARG(process, p);
 		if (descend)
 			ret |= ktrsetchildren(curp, p, ops, facs, vp);
 		else
@@ -451,10 +458,17 @@ ktrops(curp, p, ops, facs, vp)
 			 * if trace file already in use, relinquish
 			 */
 			tvp = p->p_tracep;
+			
+			if (UBCINFOEXISTS(vp))
+			        ubc_hold(vp);
 			VREF(vp);
+
 			p->p_tracep = vp;
-			if (tvp != NULL)
+			if (tvp != NULL) {
+				VOP_CLOSE(tvp, FREAD|FWRITE, p->p_ucred, p);
+			        ubc_rele(tvp);
 				vrele(tvp);
+			}
 		}
 		p->p_traceflag |= facs;
 		if (curp->p_ucred->cr_uid == 0)
@@ -467,6 +481,9 @@ ktrops(curp, p, ops, facs, vp)
 			p->p_traceflag = 0;
 			if (tvp != NULL) {
 				p->p_tracep = NULL;
+
+				VOP_CLOSE(tvp, FREAD|FWRITE, p->p_ucred, p);
+				ubc_rele(tvp);
 				vrele(tvp);
 			}
 		}
@@ -599,6 +616,9 @@ bad:
 		if (p->p_tracep == vp) {
 			p->p_tracep = NULL;
 			p->p_traceflag = 0;
+
+			VOP_CLOSE(vp, FREAD|FWRITE, p->p_ucred, p);
+			ubc_rele(vp);
 			vrele(vp);
 		}
 	}

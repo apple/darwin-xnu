@@ -1,24 +1,21 @@
 /*
- * Copyright (c) 2000-2003 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2004 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
- * Copyright (c) 1999-2003 Apple Computer, Inc.  All Rights Reserved.
+ * The contents of this file constitute Original Code as defined in and
+ * are subject to the Apple Public Source License Version 1.1 (the
+ * "License").  You may not use this file except in compliance with the
+ * License.  Please obtain a copy of the License at
+ * http://www.apple.com/publicsource and read it before using this file.
  * 
- * This file contains Original Code and/or Modifications of Original Code
- * as defined in and that are subject to the Apple Public Source License
- * Version 2.0 (the 'License'). You may not use this file except in
- * compliance with the License. Please obtain a copy of the License at
- * http://www.opensource.apple.com/apsl/ and read it before using this
- * file.
- * 
- * The Original Code and all software distributed under the License are
- * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * This Original Code and all software distributed under the License are
+ * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
- * Please see the License for the specific language governing rights and
- * limitations under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
+ * License for the specific language governing rights and limitations
+ * under the License.
  * 
  * @APPLE_LICENSE_HEADER_END@
  */
@@ -259,7 +256,6 @@ nfs_statfs(mp, sbp, p)
 	int error = 0, v3 = (nmp->nm_flag & NFSMNT_NFSV3), retattr;
 	struct mbuf *mreq, *mrep, *md, *mb, *mb2;
 	struct ucred *cred;
-	u_quad_t tquad;
 	extern int nfs_mount_type;
 	u_int64_t xid;
 
@@ -277,7 +273,7 @@ nfs_statfs(mp, sbp, p)
 	nfsm_reqhead(vp, NFSPROC_FSSTAT, NFSX_FH(v3));
 	nfsm_fhtom(vp, v3);
 	nfsm_request(vp, NFSPROC_FSSTAT, p, cred, &xid);
-	if (v3)
+	if (v3 && mrep)
 		nfsm_postop_attr(vp, retattr, &xid);
 	nfsm_dissect(sfp, struct nfs_statfs *, NFSX_STATFS(v3));
 
@@ -290,17 +286,40 @@ nfs_statfs(mp, sbp, p)
 	sbp->f_flags = nmp->nm_flag;
 	sbp->f_iosize = nfs_iosize(nmp);
 	if (v3) {
-		sbp->f_bsize = NFS_FABLKSIZE;
+		/*
+		 * Adjust block size to get total block count to fit in a long.
+		 * If we can't increase block size enough, clamp to max long.
+		 */
+		u_quad_t tquad, tquad2, bsize;
+		bsize = NFS_FABLKSIZE;
+
 		fxdr_hyper(&sfp->sf_tbytes, &tquad);
-		sbp->f_blocks = (long)(tquad / ((u_quad_t)NFS_FABLKSIZE));
+		tquad /= bsize;
+		while ((tquad & ~0x7fffffff) && (bsize < 0x40000000)) {
+			bsize <<= 1;
+			tquad >>= 1;
+		}
+		sbp->f_blocks = (tquad & ~0x7fffffff) ? 0x7fffffff : (long)tquad;
+
 		fxdr_hyper(&sfp->sf_fbytes, &tquad);
-		sbp->f_bfree = (long)(tquad / ((u_quad_t)NFS_FABLKSIZE));
+		tquad /= bsize;
+		sbp->f_bfree = (tquad & ~0x7fffffff) ? 0x7fffffff : (long)tquad;
+
 		fxdr_hyper(&sfp->sf_abytes, &tquad);
-		sbp->f_bavail = (long)(tquad / ((u_quad_t)NFS_FABLKSIZE));
-		sbp->f_files = (fxdr_unsigned(long, sfp->sf_tfiles.nfsuquad[1])
-			& 0x7fffffff);
-		sbp->f_ffree = (fxdr_unsigned(long, sfp->sf_ffiles.nfsuquad[1])
-			& 0x7fffffff);
+		tquad /= bsize;
+		sbp->f_bavail = (tquad & ~0x7fffffff) ? 0x7fffffff : (long)tquad;
+
+		sbp->f_bsize = (long)bsize;
+
+		/* adjust file slots too... */
+		fxdr_hyper(&sfp->sf_tfiles, &tquad);
+		fxdr_hyper(&sfp->sf_ffiles, &tquad2);
+		while (tquad & ~0x7fffffff) {
+			tquad >>= 1;
+			tquad2 >>= 1;
+		}
+		sbp->f_files = tquad;
+		sbp->f_ffree = tquad2;
 	} else {
 		sbp->f_bsize = fxdr_unsigned(long, sfp->sf_bsize);
 		sbp->f_blocks = fxdr_unsigned(long, sfp->sf_blocks);
@@ -342,7 +361,9 @@ nfs_fsinfo(nmp, vp, cred, p)
 	nfsm_reqhead(vp, NFSPROC_FSINFO, NFSX_FH(1));
 	nfsm_fhtom(vp, 1);
 	nfsm_request(vp, NFSPROC_FSINFO, p, cred, &xid);
-	nfsm_postop_attr(vp, retattr, &xid);
+	if (mrep) {
+		nfsm_postop_attr(vp, retattr, &xid);
+	}
 	if (!error) {
 		nfsm_dissect(fsp, struct nfsv3_fsinfo *, NFSX_V3FSINFO);
 		pref = fxdr_unsigned(u_long, fsp->fs_wtpref);
@@ -1248,7 +1269,7 @@ static int
 nfs_sysctl(int *name, u_int namelen, void *oldp, size_t *oldlenp, void *newp,
 	   size_t newlen, struct proc *p)
 {
-	int error;
+	int error = 0, val;
 	struct sysctl_req *req;
 	struct vfsidctl vc;
 	struct mount *mp;
@@ -1265,6 +1286,7 @@ nfs_sysctl(int *name, u_int namelen, void *oldp, size_t *oldlenp, void *newp,
 	switch (name[0]) {
 	case VFS_CTL_TIMEO:
 	case VFS_CTL_QUERY:
+	case VFS_CTL_NOLOCKS:
 		req = oldp;
 		error = SYSCTL_IN(req, &vc, sizeof(vc));
 		if (error)
@@ -1302,9 +1324,29 @@ nfs_sysctl(int *name, u_int namelen, void *oldp, size_t *oldlenp, void *newp,
 			return copyin(newp, &nfsstats, sizeof nfsstats);
 		}
 		return 0;
+	case VFS_CTL_NOLOCKS:
+		val = (nmp->nm_flag & NFSMNT_NOLOCKS) ? 1 : 0;
+ 		if (req->oldptr != NULL) {
+ 			error = SYSCTL_OUT(req, &val, sizeof(val));
+ 			if (error)
+ 				return (error);
+ 		}
+ 		if (req->newptr != NULL) {
+ 			error = SYSCTL_IN(req, &val, sizeof(val));
+ 			if (error)
+ 				return (error);
+			if (val)
+				nmp->nm_flag |= NFSMNT_NOLOCKS;
+			else
+				nmp->nm_flag &= ~NFSMNT_NOLOCKS;
+ 		}
+		break;
 	case VFS_CTL_QUERY:
 		if ((nmp->nm_state & NFSSTA_TIMEO))
 			vq.vq_flags |= VQ_NOTRESP;
+		if (!(nmp->nm_flag & NFSMNT_NOLOCKS) &&
+		    (nmp->nm_state & NFSSTA_LOCKTIMEO))
+			vq.vq_flags |= VQ_NOTRESPLOCK;
 		error = SYSCTL_OUT(req, &vq, sizeof(vq));
 		break;
  	case VFS_CTL_TIMEO:

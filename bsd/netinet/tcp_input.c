@@ -3,22 +3,19 @@
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
- * Copyright (c) 1999-2003 Apple Computer, Inc.  All Rights Reserved.
+ * The contents of this file constitute Original Code as defined in and
+ * are subject to the Apple Public Source License Version 1.1 (the
+ * "License").  You may not use this file except in compliance with the
+ * License.  Please obtain a copy of the License at
+ * http://www.apple.com/publicsource and read it before using this file.
  * 
- * This file contains Original Code and/or Modifications of Original Code
- * as defined in and that are subject to the Apple Public Source License
- * Version 2.0 (the 'License'). You may not use this file except in
- * compliance with the License. Please obtain a copy of the License at
- * http://www.opensource.apple.com/apsl/ and read it before using this
- * file.
- * 
- * The Original Code and all software distributed under the License are
- * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * This Original Code and all software distributed under the License are
+ * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
- * Please see the License for the specific language governing rights and
- * limitations under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
+ * License for the specific language governing rights and limitations
+ * under the License.
  * 
  * @APPLE_LICENSE_HEADER_END@
  */
@@ -162,6 +159,25 @@ SYSCTL_INT(_net_inet_tcp, OID_AUTO, drop_synfin, CTLFLAG_RW,
     &drop_synfin, 0, "Drop TCP packets with SYN+FIN set");
 #endif
 
+SYSCTL_NODE(_net_inet_tcp, OID_AUTO, reass, CTLFLAG_RW, 0,
+    "TCP Segment Reassembly Queue");
+
+__private_extern__ int tcp_reass_maxseg = 0;
+SYSCTL_INT(_net_inet_tcp_reass, OID_AUTO, maxsegments, CTLFLAG_RW,
+    &tcp_reass_maxseg, 0,
+    "Global maximum number of TCP Segments in Reassembly Queue");
+
+__private_extern__ int tcp_reass_qsize = 0;
+SYSCTL_INT(_net_inet_tcp_reass, OID_AUTO, cursegments, CTLFLAG_RD,
+    &tcp_reass_qsize, 0,
+    "Global number of TCP Segments currently in Reassembly Queue");
+
+static int tcp_reass_overflows = 0;
+SYSCTL_INT(_net_inet_tcp_reass, OID_AUTO, overflows, CTLFLAG_RD,
+    &tcp_reass_overflows, 0,
+    "Global number of TCP Segment Reassembly Queue Overflows");
+
+
 __private_extern__ int slowlink_wsize = 8192;
 SYSCTL_INT(_net_inet_tcp, OID_AUTO, slowlink_wsize, CTLFLAG_RW,
 	&slowlink_wsize, 0, "Maximum advertised window size for slowlink");
@@ -229,6 +245,21 @@ tcp_reass(tp, th, tlenp, m)
 	if (th == 0)
 		goto present;
 
+	/*
+	 * Limit the number of segments in the reassembly queue to prevent
+	 * holding on to too many segments (and thus running out of mbufs).
+	 * Make sure to let the missing segment through which caused this
+	 * queue.  Always keep one global queue entry spare to be able to
+	 * process the missing segment.
+	 */
+	if (th->th_seq != tp->rcv_nxt &&
+	    tcp_reass_qsize + 1 >= tcp_reass_maxseg) {
+		tcp_reass_overflows++;
+		tcpstat.tcps_rcvmemdrop++;
+		m_freem(m);
+		return (0);
+	}
+
 	/* Allocate a new queue entry. If we can't, just drop the pkt. XXX */
 	MALLOC(te, struct tseg_qent *, sizeof (struct tseg_qent), M_TSEGQ,
 	       M_NOWAIT);
@@ -237,6 +268,7 @@ tcp_reass(tp, th, tlenp, m)
 		m_freem(m);
 		return (0);
 	}
+	tcp_reass_qsize++;
 
 	/*
 	 * Find a segment which begins after this one does.
@@ -262,6 +294,7 @@ tcp_reass(tp, th, tlenp, m)
 				tcpstat.tcps_rcvdupbyte += *tlenp;
 				m_freem(m);
 				FREE(te, M_TSEGQ);
+				tcp_reass_qsize--;
 				/*
 				 * Try to present any queued data
 				 * at the left window edge to the user.
@@ -297,6 +330,7 @@ tcp_reass(tp, th, tlenp, m)
 		LIST_REMOVE(q, tqe_q);
 		m_freem(q->tqe_m);
 		FREE(q, M_TSEGQ);
+		tcp_reass_qsize--;
 		q = nq;
 	}
 
@@ -331,6 +365,7 @@ present:
 		else
 			sbappend(&so->so_rcv, q->tqe_m);
 		FREE(q, M_TSEGQ);
+		tcp_reass_qsize--;
 		q = nq;
 	} while (q && q->tqe_th->th_seq == tp->rcv_nxt);
 	ND6_HINT(tp);
@@ -2922,7 +2957,12 @@ tcp_mss(tp, offer)
 			isipv6 ? tcp_v6mssdflt :
 #endif /* INET6 */
 			tcp_mssdflt;
-	else
+	else {
+		/*
+		 * Prevent DoS attack with too small MSS. Round up
+		 * to at least minmss.
+		 */
+		offer = max(offer, tcp_minmss);
 		/*
 		 * Sanity check: make sure that maxopd will be large
 		 * enough to allow some data on segments even is the
@@ -2930,6 +2970,7 @@ tcp_mss(tp, offer)
 		 * funny things may happen in tcp_output.
 		 */
 		offer = max(offer, 64);
+	}
 	taop->tao_mssopt = offer;
 
 	/*

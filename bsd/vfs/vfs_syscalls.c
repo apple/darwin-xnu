@@ -1,24 +1,21 @@
 /*
- * Copyright (c) 1995-2003 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 1995-2004 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
- * Copyright (c) 1999-2003 Apple Computer, Inc.  All Rights Reserved.
+ * The contents of this file constitute Original Code as defined in and
+ * are subject to the Apple Public Source License Version 1.1 (the
+ * "License").  You may not use this file except in compliance with the
+ * License.  Please obtain a copy of the License at
+ * http://www.apple.com/publicsource and read it before using this file.
  * 
- * This file contains Original Code and/or Modifications of Original Code
- * as defined in and that are subject to the Apple Public Source License
- * Version 2.0 (the 'License'). You may not use this file except in
- * compliance with the License. Please obtain a copy of the License at
- * http://www.opensource.apple.com/apsl/ and read it before using this
- * file.
- * 
- * The Original Code and all software distributed under the License are
- * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * This Original Code and all software distributed under the License are
+ * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
- * Please see the License for the specific language governing rights and
- * limitations under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
+ * License for the specific language governing rights and limitations
+ * under the License.
  * 
  * @APPLE_LICENSE_HEADER_END@
  */
@@ -79,8 +76,10 @@
 #include <sys/sysctl.h>
 #include <sys/ubc.h>
 #include <sys/quota.h>
-#include <sys/kern_audit.h>
-#include <sys/bsm_kevents.h>
+
+#include <bsm/audit_kernel.h>
+#include <bsm/audit_kevents.h>
+
 #include <machine/cons.h>
 #include <miscfs/specfs/specdev.h>
 
@@ -1755,7 +1754,7 @@ ostat(p, uap, retval)
 	int error;
 	struct nameidata nd;
 
-	NDINIT(&nd, LOOKUP, FOLLOW | LOCKLEAF, UIO_USERSPACE,
+	NDINIT(&nd, LOOKUP, FOLLOW | LOCKLEAF | AUDITVNPATH1, UIO_USERSPACE,
 	    uap->path, p);
 	if (error = namei(&nd))
 		return (error);
@@ -1788,8 +1787,8 @@ olstat(p, uap, retval)
 	int error;
 	struct nameidata nd;
 
-	NDINIT(&nd, LOOKUP, NOFOLLOW | LOCKLEAF | LOCKPARENT, UIO_USERSPACE,
-	    uap->path, p);
+	NDINIT(&nd, LOOKUP, NOFOLLOW | LOCKLEAF | LOCKPARENT | AUDITVNPATH1,
+	       UIO_USERSPACE, uap->path, p);
 	if (error = namei(&nd))
 		return (error);
 	/*
@@ -2062,10 +2061,11 @@ fchflags(p, uap, retval)
 
 	vp = (struct vnode *)fp->f_data;
 
-	AUDIT_ARG(vnpath, vp, ARG_VNODE1);
-
 	VOP_LEASE(vp, p, p->p_ucred, LEASE_WRITE);
 	vn_lock(vp, LK_EXCLUSIVE | LK_RETRY, p);
+
+	AUDIT_ARG(vnpath, vp, ARG_VNODE1);
+
 	VATTR_NULL(&vattr);
 	vattr.va_flags = uap->flags;
 	error = VOP_SETATTR(vp, &vattr, p->p_ucred, p);
@@ -2274,6 +2274,9 @@ setutimes(p, vp, ts, nullflag)
 	error = vn_lock(vp, LK_EXCLUSIVE | LK_RETRY, p);
 	if (error)
 		goto out;
+
+	AUDIT_ARG(vnpath, vp, ARG_VNODE1);
+
 	VATTR_NULL(&vattr);
 	vattr.va_atime = ts[0];
 	vattr.va_mtime = ts[1];
@@ -2349,8 +2352,6 @@ futimes(p, uap, retval)
 	if ((error = getvnode(p, uap->fd, &fp)) != 0)
 		return (error);
 
-	AUDIT_ARG(vnpath, (struct vnode *)fp->f_data, ARG_VNODE1);
-
 	return setutimes(p, (struct vnode *)fp->f_data, ts, usrtvp == NULL);
 }
 
@@ -2425,13 +2426,13 @@ ftruncate(p, uap, retval)
 	if (error = fdgetf(p, uap->fd, &fp))
 		return (error);
 
-	AUDIT_ARG(vnpath, (struct vnode *)fp->f_data, ARG_VNODE1);
-
 	if (fp->f_type == DTYPE_PSXSHM) {
 		return(pshm_truncate(p, fp, uap->fd, uap->length, retval));
 	}
 	if (fp->f_type != DTYPE_VNODE) 
 		return (EINVAL);
+
+	AUDIT_ARG(vnpath, (struct vnode *)fp->f_data, ARG_VNODE1);
 
 	if ((fp->f_flag & FWRITE) == 0)
 		return (EINVAL);
@@ -2563,14 +2564,14 @@ copyfile(p, uap, retval)
 		return(EINVAL);
 	}
 
-	NDINIT(&fromnd, LOOKUP, SAVESTART, UIO_USERSPACE,
-	    uap->from, p);
+	NDINIT(&fromnd, LOOKUP, SAVESTART | AUDITVNPATH1,
+	       UIO_USERSPACE, uap->from, p);
 	if (error = namei(&fromnd))
 		return (error);
 	fvp = fromnd.ni_vp;
 
-	NDINIT(&tond, CREATE,  LOCKPARENT | LOCKLEAF | NOCACHE | SAVESTART,
-	    UIO_USERSPACE, uap->to, p);
+	NDINIT(&tond, CREATE, LOCKPARENT | LOCKLEAF | NOCACHE | SAVESTART | AUDITVNPATH2,
+	       UIO_USERSPACE, uap->to, p);
 	if (error = namei(&tond)) {
 		vrele(fvp);
 		goto out1;
@@ -3023,8 +3024,12 @@ ogetdirentries(p, uap, retval)
 	int error, eofflag, readcnt;
 	long loff;
 
+	AUDIT_ARG(fd, uap->fd);
 	if (error = getvnode(p, uap->fd, &fp))
 		return (error);
+
+	AUDIT_ARG(vnpath, (struct vnode *)fp->f_data, ARG_VNODE1);
+
 	if ((fp->f_flag & FREAD) == 0)
 		return (EBADF);
 	vp = (struct vnode *)fp->f_data;
@@ -3861,7 +3866,7 @@ checkuseraccess (p,uap,retval)
 
 	nameiflags = LOCKLEAF;
 	if ((uap->options & FSOPT_NOFOLLOW) == 0) nameiflags |= FOLLOW;
-	NDINIT(&nd, LOOKUP, nameiflags, UIO_USERSPACE, (char *)uap->path, p);
+	NDINIT(&nd, LOOKUP, nameiflags | AUDITVNPATH1, UIO_USERSPACE, (char *)uap->path, p);
 
 	if (error = namei(&nd))
        		 return (error);

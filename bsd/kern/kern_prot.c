@@ -1,24 +1,21 @@
 /*
- * Copyright (c) 2000-2003 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2004 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
- * Copyright (c) 1999-2003 Apple Computer, Inc.  All Rights Reserved.
+ * The contents of this file constitute Original Code as defined in and
+ * are subject to the Apple Public Source License Version 1.1 (the
+ * "License").  You may not use this file except in compliance with the
+ * License.  Please obtain a copy of the License at
+ * http://www.apple.com/publicsource and read it before using this file.
  * 
- * This file contains Original Code and/or Modifications of Original Code
- * as defined in and that are subject to the Apple Public Source License
- * Version 2.0 (the 'License'). You may not use this file except in
- * compliance with the License. Please obtain a copy of the License at
- * http://www.opensource.apple.com/apsl/ and read it before using this
- * file.
- * 
- * The Original Code and all software distributed under the License are
- * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * This Original Code and all software distributed under the License are
+ * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
- * Please see the License for the specific language governing rights and
- * limitations under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
+ * License for the specific language governing rights and limitations
+ * under the License.
  * 
  * @APPLE_LICENSE_HEADER_END@
  */
@@ -75,7 +72,8 @@
 #include <sys/timeb.h>
 #include <sys/times.h>
 #include <sys/malloc.h>
-#include <sys/kern_audit.h>
+
+#include <bsm/audit_kernel.h>
 
 #include <sys/mount.h>
 #include <mach/message.h>
@@ -96,6 +94,7 @@ setprivexec(p, uap, retval)
 	register struct setprivexec_args *uap;
 	register_t *retval;
 {
+	AUDIT_ARG(value, uap->flag);
 	*retval = p->p_debugger;
 	p->p_debugger = (uap->flag != 0);
 	return(0);
@@ -801,7 +800,9 @@ setlogin(p, uap, retval)
 	error = copyinstr((caddr_t) uap->namebuf,
 	    (caddr_t) p->p_pgrp->pg_session->s_login,
 	    sizeof (p->p_pgrp->pg_session->s_login) - 1, (size_t *)&dummy);
-	if (error == ENAMETOOLONG)
+	if(!error)
+		AUDIT_ARG(text, p->p_pgrp->pg_session->s_login);
+	else if (error == ENAMETOOLONG)
 		error = EINVAL;
 	return (error);
 }
@@ -815,16 +816,26 @@ set_security_token(struct proc * p)
 	audit_token_t    audit_token;
 
 	sec_token.val[0] = p->p_ucred->cr_uid;
-	sec_token.val[1] = p->p_ucred->cr_gid;
+ 	sec_token.val[1] = p->p_ucred->cr_gid;
+
+	/*
+	 * The current layout of the Mach audit token explicitly
+	 * adds these fields.  But nobody should rely on such
+	 * a literal representation.  Instead, the BSM library
+	 * provides a function to convert an audit token into
+	 * a BSM subject.  Use of that mechanism will isolate
+	 * the user of the trailer from future representation
+	 * changes.
+	 */
 	audit_token.val[0] = p->p_au->ai_auid;
-	audit_token.val[1] = p->p_au->ai_asid;
-	/* use au_tid for now, until au_tid_addr is put to use */
-	audit_token.val[2] = p->p_au->ai_termid.port;
-	audit_token.val[3] = p->p_au->ai_termid.machine;
-	audit_token.val[4] = 0; 
-	audit_token.val[5] = 0;
-	audit_token.val[6] = 0;
-	audit_token.val[7] = 0;
+	audit_token.val[1] = p->p_ucred->cr_uid;
+ 	audit_token.val[2] = p->p_ucred->cr_gid;
+	audit_token.val[3] = p->p_cred->p_ruid;
+        audit_token.val[4] = p->p_cred->p_rgid;
+	audit_token.val[5] = p->p_pid;
+	audit_token.val[6] = p->p_au->ai_asid;
+	audit_token.val[7] = p->p_au->ai_termid.port;
+
 	return host_security_set_task_token(host_security_self(),
 					   p->task,
 					   sec_token,

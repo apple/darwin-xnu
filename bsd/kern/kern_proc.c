@@ -3,22 +3,19 @@
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
- * Copyright (c) 1999-2003 Apple Computer, Inc.  All Rights Reserved.
+ * The contents of this file constitute Original Code as defined in and
+ * are subject to the Apple Public Source License Version 1.1 (the
+ * "License").  You may not use this file except in compliance with the
+ * License.  Please obtain a copy of the License at
+ * http://www.apple.com/publicsource and read it before using this file.
  * 
- * This file contains Original Code and/or Modifications of Original Code
- * as defined in and that are subject to the Apple Public Source License
- * Version 2.0 (the 'License'). You may not use this file except in
- * compliance with the License. Please obtain a copy of the License at
- * http://www.opensource.apple.com/apsl/ and read it before using this
- * file.
- * 
- * The Original Code and all software distributed under the License are
- * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * This Original Code and all software distributed under the License are
+ * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
- * Please see the License for the specific language governing rights and
- * limitations under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
+ * License for the specific language governing rights and limitations
+ * under the License.
  * 
  * @APPLE_LICENSE_HEADER_END@
  */
@@ -82,6 +79,7 @@
 #include <sys/ioctl.h>
 #include <sys/tty.h>
 #include <sys/signalvar.h>
+#include <sys/syslog.h>
 
 /*
  * Structure associated with user cacheing.
@@ -104,6 +102,11 @@ struct pgrphashhead *pgrphashtbl;
 u_long pgrphash;
 struct proclist allproc;
 struct proclist zombproc;
+
+/* Name to give to core files */
+__private_extern__ char corefilename[MAXPATHLEN+1] = {"/cores/core.%P"};
+
+static void orphanpg(struct pgrp *pg);
 
 /*
  * Initialize global process hashing structures.
@@ -174,9 +177,7 @@ inferior(p)
  * Is p an inferior of t ?
  */
 int
-isinferior(p, t)
-	register struct proc *p;
-	register struct proc *t;
+isinferior(struct proc *p, register struct proc *t)
 {
 
 	/* if p==t they are not inferior */
@@ -358,8 +359,6 @@ sessrele(sess)
 		FREE_ZONE(sess, sizeof (struct session), M_SESSION);
 }
 
-static void orphanpg();
-
 /*
  * Adjust pgrp jobc counters when specified process changes process group.
  * We count the number of processes in each process group that "qualify"
@@ -371,10 +370,7 @@ static void orphanpg();
  * entering == 1 => p is entering specified group.
  */
 void
-fixjobc(p, pgrp, entering)
-	register struct proc *p;
-	register struct pgrp *pgrp;
-	int entering;
+fixjobc(struct proc *p, struct pgrp *pgrp, int entering)
 {
 	register struct pgrp *hispgrp;
 	register struct session *mysession = pgrp->pg_session;
@@ -384,11 +380,12 @@ fixjobc(p, pgrp, entering)
 	 * group; if so, adjust count for p's process group.
 	 */
 	if ((hispgrp = p->p_pptr->p_pgrp) != pgrp &&
-	    hispgrp->pg_session == mysession)
+	    hispgrp->pg_session == mysession) {
 		if (entering)
 			pgrp->pg_jobc++;
 		else if (--pgrp->pg_jobc == 0)
 			orphanpg(pgrp);
+	}
 
 	/*
 	 * Check this process' children to see whether they qualify
@@ -398,11 +395,12 @@ fixjobc(p, pgrp, entering)
 	for (p = p->p_children.lh_first; p != 0; p = p->p_sibling.le_next)
 		if ((hispgrp = p->p_pgrp) != pgrp &&
 		    hispgrp->pg_session == mysession &&
-		    p->p_stat != SZOMB)
+		    p->p_stat != SZOMB) {
 			if (entering)
 				hispgrp->pg_jobc++;
 			else if (--hispgrp->pg_jobc == 0)
 				orphanpg(hispgrp);
+}
 }
 
 /* 
@@ -411,8 +409,7 @@ fixjobc(p, pgrp, entering)
  * hang-up all process in that group.
  */
 static void
-orphanpg(pg)
-	struct pgrp *pg;
+orphanpg(struct pgrp *pg)
 {
 	register struct proc *p;
 
@@ -456,13 +453,84 @@ pgrpdump()
 }
 #endif /* DEBUG */
 
+/* XXX should be __private_extern__ */
 int
 proc_is_classic(struct proc *p)
 {
     return (p->p_flag & P_CLASSIC) ? 1 : 0;
 }
 
-struct proc * current_proc_EXTERNAL()
+/* XXX Why does this function exist?  Need to kill it off... */
+struct proc *
+current_proc_EXTERNAL(void)
 {
 	return (current_proc());
+}
+
+/*
+ * proc_core_name(name, uid, pid)
+ * Expand the name described in corefilename, using name, uid, and pid.
+ * corefilename is a printf-like string, with three format specifiers:
+ *	%N	name of process ("name")
+ *	%P	process id (pid)
+ *	%U	user id (uid)
+ * For example, "%N.core" is the default; they can be disabled completely
+ * by using "/dev/null", or all core files can be stored in "/cores/%U/%N-%P".
+ * This is controlled by the sysctl variable kern.corefile (see above).
+ */
+__private_extern__ char *
+proc_core_name(const char *name, uid_t uid, pid_t pid)
+{
+	const char *format, *appendstr;
+	char *temp;
+	char id_buf[11];		/* Buffer for pid/uid -- max 4B */
+	size_t i, l, n;
+
+	format = corefilename;
+	MALLOC(temp, char *, MAXPATHLEN, M_TEMP, M_NOWAIT | M_ZERO);
+	if (temp == NULL)
+		return (NULL);
+	for (i = 0, n = 0; n < MAXPATHLEN && format[i]; i++) {
+		switch (format[i]) {
+		case '%':	/* Format character */
+			i++;
+			switch (format[i]) {
+			case '%':
+				appendstr = "%";
+				break;
+			case 'N':	/* process name */
+				appendstr = name;
+				break;
+			case 'P':	/* process id */
+				sprintf(id_buf, "%u", pid);
+				appendstr = id_buf;
+				break;
+			case 'U':	/* user id */
+				sprintf(id_buf, "%u", uid);
+				appendstr = id_buf;
+				break;
+			default:
+				appendstr = "";
+			  	log(LOG_ERR,
+				    "Unknown format character %c in `%s'\n",
+				    format[i], format);
+			}
+			l = strlen(appendstr);
+			if ((n + l) >= MAXPATHLEN)
+				goto toolong;
+			bcopy(appendstr, temp + n, l);
+			n += l;
+			break;
+		default:
+			temp[n++] = format[i];
+		}
+	}
+	if (format[i] != '\0')
+		goto toolong;
+	return (temp);
+toolong:
+	log(LOG_ERR, "pid %ld (%s), uid (%lu): corename is too long\n",
+	    (long)pid, name, (u_long)uid);
+	FREE(temp, M_TEMP);
+	return (NULL);
 }

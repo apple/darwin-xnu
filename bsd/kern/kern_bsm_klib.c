@@ -1,24 +1,21 @@
 /*
- * Copyright (c) 2003 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2004 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
- * Copyright (c) 1999-2003 Apple Computer, Inc.  All Rights Reserved.
+ * The contents of this file constitute Original Code as defined in and
+ * are subject to the Apple Public Source License Version 1.1 (the
+ * "License").  You may not use this file except in compliance with the
+ * License.  Please obtain a copy of the License at
+ * http://www.apple.com/publicsource and read it before using this file.
  * 
- * This file contains Original Code and/or Modifications of Original Code
- * as defined in and that are subject to the Apple Public Source License
- * Version 2.0 (the 'License'). You may not use this file except in
- * compliance with the License. Please obtain a copy of the License at
- * http://www.opensource.apple.com/apsl/ and read it before using this
- * file.
- * 
- * The Original Code and all software distributed under the License are
- * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * This Original Code and all software distributed under the License are
+ * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
- * Please see the License for the specific language governing rights and
- * limitations under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
+ * License for the specific language governing rights and limitations
+ * under the License.
  * 
  * @APPLE_LICENSE_HEADER_END@
  */
@@ -28,10 +25,11 @@
 #include <sys/fcntl.h>
 #include <sys/filedesc.h>
 #include <sys/sem.h>
-#include <sys/audit.h>
-#include <sys/kern_audit.h>
-#include <sys/bsm_kevents.h>
-#include <sys/bsm_klib.h>
+
+#include <bsm/audit.h>
+#include <bsm/audit_kernel.h>
+#include <bsm/audit_kevents.h>
+#include <bsm/audit_klib.h>
 
 /*
  * Initialize the system call to audit event mapping table. This table 
@@ -45,13 +43,13 @@
 au_event_t sys_au_event[] = {
 	AUE_NULL,			/*   0 = indir */
 	AUE_EXIT,			/*   1 = exit */
-	AUE_NULL,			/*   2 = fork */
+	AUE_FORK,			/*   2 = fork */
 	AUE_NULL,			/*   3 = read */
 	AUE_NULL,			/*   4 = write */
-	AUE_OPEN_R,			/*   5 = open */
-	AUE_NULL,			/*   6 = close */
+	AUE_OPEN_RWTC,			/*   5 = open */
+	AUE_CLOSE,			/*   6 = close */
 	AUE_NULL,			/*   7 = wait4 */
-	AUE_NULL,			/*   8 = old creat */
+	AUE_O_CREAT,			/*   8 = old creat */
 	AUE_LINK,			/*   9 = link */
 	AUE_UNLINK,			/*  10 = unlink */
 	AUE_NULL,			/*  11 was obsolete execv */
@@ -62,9 +60,9 @@ au_event_t sys_au_event[] = {
 	AUE_CHOWN,			/*  16 = chown; now 3 args */
 	AUE_NULL,			/*  17 = old break */
 #if COMPAT_GETFSSTAT
-	AUE_NULL,			/*  18 = ogetfsstat */
-#else
 	AUE_GETFSSTAT,			/*  18 = getfsstat */
+#else
+	AUE_NULL,			/*  18 = ogetfsstat */
 #endif
 	AUE_NULL,			/*  19 = old lseek */
 	AUE_NULL,			/*  20 = getpid */
@@ -73,7 +71,7 @@ au_event_t sys_au_event[] = {
 	AUE_SETUID,			/*  23 = setuid */
 	AUE_NULL,			/*  24 = getuid */
 	AUE_NULL,			/*  25 = geteuid */
-	AUE_NULL,			/*  26 = ptrace */
+	AUE_PTRACE,			/*  26 = ptrace */
 	AUE_RECVMSG,			/*  27 = recvmsg */
 	AUE_SENDMSG,			/*  28 = sendmsg */
 	AUE_RECVFROM,			/*  29 = recvfrom */
@@ -84,44 +82,44 @@ au_event_t sys_au_event[] = {
 	AUE_CHFLAGS,			/* 34 = chflags */
 	AUE_FCHFLAGS,			/* 35 = fchflags */
 	AUE_NULL,			/*  36 = sync */
-	AUE_NULL,			/*  37 = kill */
-	AUE_NULL,			/*  38 = old stat */
+	AUE_KILL,			/*  37 = kill */
+	AUE_O_STAT,			/*  38 = old stat */
 	AUE_NULL,			/*  39 = getppid */
-	AUE_NULL,			/*  40 = old lstat */
+	AUE_O_LSTAT,			/*  40 = old lstat */
 	AUE_NULL,			/*  41 = dup */
 	AUE_PIPE,			/*  42 = pipe */
 	AUE_NULL,			/*  43 = getegid */
 	AUE_NULL,			/*  44 = profil */
-	AUE_NULL,			/*  45 = ktrace */
+	AUE_KTRACE,			/*  45 = ktrace */
 	AUE_NULL,			/*  46 = sigaction */
 	AUE_NULL,			/*  47 = getgid */
 	AUE_NULL,			/*  48 = sigprocmask */
 	AUE_NULL,			/*  49 = getlogin */
-	AUE_NULL,			/*  50 = setlogin */
-	AUE_NULL,			/*  51 = turn acct off/on */
+	AUE_SETLOGIN,			/*  50 = setlogin */
+	AUE_ACCT,			/*  51 = turn acct off/on */
 	AUE_NULL,			/*  52 = sigpending */
 	AUE_NULL,			/*  53 = sigaltstack */
-	AUE_NULL,			/*  54 = ioctl */
-	AUE_NULL,			/*  55 = reboot */
+	AUE_IOCTL,			/*  54 = ioctl */
+	AUE_REBOOT,			/*  55 = reboot */
 	AUE_REVOKE,			/*  56 = revoke */
 	AUE_SYMLINK,			/*  57 = symlink */
 	AUE_READLINK,			/*  58 = readlink */
 	AUE_EXECVE,			/*  59 = execve */
 	AUE_UMASK,			/*  60 = umask */
 	AUE_CHROOT,			/*  61 = chroot */
-	AUE_NULL,			/*  62 = old fstat */
+	AUE_O_FSTAT,			/*  62 = old fstat */
 	AUE_NULL,			/*  63 = used internally, reserved */
 	AUE_NULL,			/*  64 = old getpagesize */
 	AUE_NULL,			/*  65 = msync */
-	AUE_NULL,			/*  66 = vfork */
+	AUE_VFORK,			/*  66 = vfork */
 	AUE_NULL,			/*  67 was obsolete vread */
 	AUE_NULL,			/*  68 was obsolete vwrite */
 	AUE_NULL,			/*  69 = sbrk */
 	AUE_NULL,			/*  70 = sstk */
-	AUE_NULL,			/*  71 = old mmap */
+	AUE_O_MMAP,			/*  71 = old mmap */
 	AUE_NULL,			/*  72 = old vadvise */
-	AUE_NULL,			/*  73 = munmap */
-	AUE_NULL,			/*  74 = mprotect */
+	AUE_MUNMAP,			/*  73 = munmap */
+	AUE_MPROTECT,			/*  74 = mprotect */
 	AUE_NULL,			/*  75 = madvise */
 	AUE_NULL,			/*  76 was obsolete vhangup */
 	AUE_NULL,			/*  77 was obsolete vlimit */
@@ -135,7 +133,7 @@ au_event_t sys_au_event[] = {
 	AUE_NULL,			/*  85 = swapon */
 	AUE_NULL,			/*  86 = getitimer */
 	AUE_NULL,			/*  87 = old gethostname */
-	AUE_NULL,			/*  88 = old sethostname */
+	AUE_O_SETHOSTNAME,		/*  88 = old sethostname */
 	AUE_NULL,			/* 89 getdtablesize */
 	AUE_NULL,			/*  90 = dup2 */
 	AUE_NULL,			/*  91 was obsolete getdopt */
@@ -143,13 +141,13 @@ au_event_t sys_au_event[] = {
 	AUE_NULL,			/*  93 = select */
 	AUE_NULL,			/*  94 was obsolete setdopt */
 	AUE_NULL,			/*  95 = fsync */
-	AUE_NULL,			/*  96 = setpriority */
+	AUE_SETPRIORITY,		/*  96 = setpriority */
 	AUE_SOCKET,			/*  97 = socket */
 	AUE_CONNECT,			/*  98 = connect */
 	AUE_NULL,			/*  99 = accept */
 	AUE_NULL,			/* 100 = getpriority */
-	AUE_NULL,			/* 101 = old send */
-	AUE_NULL,			/* 102 = old recv */
+	AUE_O_SEND,			/* 101 = old send */
+	AUE_O_RECV,			/* 102 = old recv */
 	AUE_NULL,			/* 103 = sigreturn */
 	AUE_BIND,			/* 104 = bind */
 	AUE_SETSOCKOPT,			/* 105 = setsockopt */
@@ -160,8 +158,8 @@ au_event_t sys_au_event[] = {
 	AUE_NULL,			/* 110 = sigsetmask */
 	AUE_NULL,			/* 111 = sigpause */
 	AUE_NULL,			/* 112 = sigstack */
-	AUE_NULL,			/* 113 = recvmsg */
-	AUE_NULL,			/* 114 = sendmsg */
+	AUE_O_RECVMSG,			/* 113 = recvmsg */
+	AUE_O_SENDMSG,			/* 114 = sendmsg */
 	AUE_NULL,			/* 115 = old vtrace */
 	AUE_NULL,			/* 116 = gettimeofday */
 	AUE_NULL,			/* 117 = getrusage */
@@ -169,15 +167,15 @@ au_event_t sys_au_event[] = {
 	AUE_NULL,			/* 119 = old resuba */
 	AUE_NULL,			/* 120 = readv */
 	AUE_NULL,			/* 121 = writev */
-	AUE_NULL,			/* 122 = settimeofday */
+	AUE_SETTIMEOFDAY,		/* 122 = settimeofday */
 	AUE_FCHOWN,			/* 123 = fchown */
 	AUE_FCHMOD,			/* 124 = fchmod */
-	AUE_NULL,			/* 125 = recvfrom */
+	AUE_O_RECVFROM,			/* 125 = recvfrom */
 	AUE_NULL,			/* 126 = setreuid */
 	AUE_NULL,			/* 127 = setregid */
 	AUE_RENAME,			/* 128 = rename */
-	AUE_NULL,			/* 129 = old truncate */
-	AUE_NULL,			/* 130 = old ftruncate */
+	AUE_O_TRUNCATE,			/* 129 = old truncate */
+	AUE_O_FTRUNCATE,		/* 130 = old ftruncate */
 	AUE_FLOCK,			/* 131 = flock */
 	AUE_MKFIFO,			/* 132 = mkfifo */
 	AUE_SENDTO,			/* 133 = sendto */
@@ -192,25 +190,25 @@ au_event_t sys_au_event[] = {
 	AUE_NULL,			/* 142 = old gethostid */
 	AUE_NULL,			/* 143 = old sethostid */
 	AUE_NULL,			/* 144 = old getrlimit */
-	AUE_NULL,			/* 145 = old setrlimit */
-	AUE_NULL,			/* 146 = old killpg */
-	AUE_NULL,			/* 147 = setsid */
+	AUE_O_SETRLIMIT,		/* 145 = old setrlimit */
+	AUE_O_KILLPG,			/* 146 = old killpg */
+	AUE_SETSID,			/* 147 = setsid */
 	AUE_NULL,			/* 148 was setquota */
 	AUE_NULL,			/* 149 was qquota */
 	AUE_NULL,			/* 150 = getsockname */
 	AUE_NULL,			/* 151 = getpgid */
-	AUE_NULL,			/* 152 = setprivexec */
+	AUE_SETPRIVEXEC,		/* 152 = setprivexec */
 	AUE_NULL,			/* 153 = pread */
 	AUE_NULL,			/* 154 = pwrite */
 	AUE_NULL,			/* 155 = nfs_svc */
-	AUE_NULL,			/* 156 = old getdirentries */
+	AUE_O_GETDIRENTRIES,		/* 156 = old getdirentries */
 	AUE_STATFS,			/* 157 = statfs */
 	AUE_FSTATFS,			/* 158 = fstatfs */
 	AUE_UMOUNT,			/* 159 = unmount */
 	AUE_NULL,			/* 160 was async_daemon */
 	AUE_GETFH,			/* 161 = get file handle */
 	AUE_NULL,			/* 162 = getdomainname */
-	AUE_NULL,			/* 163 = setdomainname */
+	AUE_O_SETDOMAINNAME,		/* 163 = setdomainname */
 	AUE_NULL,			/* 164 */
 #if	QUOTA
 	AUE_QUOTACTL,			/* 165 = quotactl */
@@ -244,7 +242,6 @@ au_event_t sys_au_event[] = {
 	AUE_LSTAT,			/* 190 = lstat */
 	AUE_PATHCONF,			/* 191 = pathconf */
 	AUE_FPATHCONF,			/* 192 = fpathconf */
-
 #if COMPAT_GETFSSTAT
 	AUE_GETFSSTAT,			/* 193 = getfsstat */
 #else
@@ -253,14 +250,14 @@ au_event_t sys_au_event[] = {
 	AUE_NULL,			/* 194 = getrlimit */
 	AUE_SETRLIMIT,			/* 195 = setrlimit */
 	AUE_GETDIRENTRIES,		/* 196 = getdirentries */
-	AUE_NULL,			/* 197 = mmap */
+	AUE_MMAP,			/* 197 = mmap */
 	AUE_NULL,			/* 198 = __syscall */
 	AUE_NULL,			/* 199 = lseek */
 	AUE_TRUNCATE,			/* 200 = truncate */
 	AUE_FTRUNCATE,			/* 201 = ftruncate */
-	AUE_NULL,			/* 202 = __sysctl */
-	AUE_NULL,			/* 203 = mlock */
-	AUE_NULL,			/* 204 = munlock */
+	AUE_SYSCTL,			/* 202 = __sysctl */
+	AUE_MLOCK,			/* 203 = mlock */
+	AUE_MUNLOCK,			/* 204 = munlock */
 	AUE_UNDELETE,			/* 205 = undelete */
 	AUE_NULL,			/* 206 = ATsocket */
 	AUE_NULL,			/* 207 = ATgetmsg*/
@@ -307,7 +304,7 @@ au_event_t sys_au_event[] = {
 	AUE_NULL,			/* 247 = nfsclnt*/
 	AUE_NULL,			/* 248 = fhopen */
 	AUE_NULL,			/* 249 */
-	AUE_NULL,			/* 250 = minherit */
+	AUE_MINHERIT,			/* 250 = minherit */
 	AUE_NULL,			/* 251 = semsys */
 	AUE_NULL,			/* 252 = msgsys */
 	AUE_NULL,			/* 253 = shmsys */
@@ -323,11 +320,11 @@ au_event_t sys_au_event[] = {
 	AUE_SHMCTL,			/* 263 = shmctl */
 	AUE_SHMDT,			/* 264 = shmdt */
 	AUE_SHMGET,			/* 265 = shmget */
-	AUE_NULL,			/* 266 = shm_open */
-	AUE_NULL,			/* 267 = shm_unlink */
-	AUE_NULL,			/* 268 = sem_open */
-	AUE_NULL,			/* 269 = sem_close */
-	AUE_NULL,			/* 270 = sem_unlink */
+	AUE_SHMOPEN,			/* 266 = shm_open */
+	AUE_SHMUNLINK,			/* 267 = shm_unlink */
+	AUE_SEMOPEN,			/* 268 = sem_open */
+	AUE_SEMCLOSE,			/* 269 = sem_close */
+	AUE_SEMUNLINK,			/* 270 = sem_unlink */
 	AUE_NULL,			/* 271 = sem_wait */
 	AUE_NULL,			/* 272 = sem_trywait */
 	AUE_NULL,			/* 273 = sem_post */
@@ -353,9 +350,9 @@ au_event_t sys_au_event[] = {
 	AUE_NULL,			/* 293 */
 	AUE_NULL,			/* 294 */
 	AUE_NULL,			/* 295 */
-	AUE_NULL, 			/* 296 = load_shared_file */
-	AUE_NULL, 			/* 297 = reset_shared_file */
-	AUE_NULL, 			/* 298 = new_system_shared_regions */
+	AUE_LOADSHFILE,			/* 296 = load_shared_file */
+	AUE_RESETSHFILE,		/* 297 = reset_shared_file */
+	AUE_NEWSYSTEMSHREG, 		/* 298 = new_system_shared_regions */
 	AUE_NULL,			/* 299 */
 	AUE_NULL,			/* 300 */
 	AUE_NULL,			/* 301 */
@@ -408,15 +405,15 @@ au_event_t sys_au_event[] = {
 	AUE_NULL,			/* 348 */
 	AUE_NULL,			/* 349 */
 	AUE_AUDIT,			/* 350 */
-	AUE_NULL,			/* 351 */
+	AUE_AUDITON,			/* 351 */
 	AUE_NULL,			/* 352 */
 	AUE_GETAUID,			/* 353 */
 	AUE_SETAUID,			/* 354 */
-	AUE_NULL,			/* 355 */
-	AUE_NULL,			/* 356 */
-	AUE_NULL,			/* 357 */
-	AUE_NULL,			/* 358 */
-	AUE_NULL,			/* 359 */
+	AUE_GETAUDIT,			/* 355 */
+	AUE_SETAUDIT,			/* 356 */
+	AUE_GETAUDIT_ADDR,		/* 357 */
+	AUE_SETAUDIT_ADDR,		/* 358 */
+	AUE_AUDITCTL,			/* 359 */
 	AUE_NULL,			/* 360 */
 	AUE_NULL,			/* 361 */
 	AUE_NULL,			/* 362 = kqueue */
@@ -431,168 +428,120 @@ au_event_t sys_au_event[] = {
 int	nsys_au_event = sizeof(sys_au_event) / sizeof(sys_au_event[0]);
 
 /*
+ * Hash table functions for the audit event number to event class mask mapping.
+ */
+
+#define EVCLASSMAP_HASH_TABLE_SIZE 251
+struct evclass_elem {
+	au_event_t event;
+	au_class_t class;
+	LIST_ENTRY(evclass_elem) entry;
+};
+struct evclass_list {
+	LIST_HEAD(, evclass_elem) head;
+};
+
+struct evclass_list evclass_hash[EVCLASSMAP_HASH_TABLE_SIZE];
+
+au_class_t au_event_class(au_event_t event)
+{
+
+	struct evclass_list *evcl;
+	struct evclass_elem *evc;
+
+	evcl = &evclass_hash[event % EVCLASSMAP_HASH_TABLE_SIZE];
+
+	/* If an entry at our hash location matches the event, just return */
+	LIST_FOREACH(evc, &evcl->head, entry) {
+		if (evc->event == event)
+			return (evc->class);
+	}
+	return (AU_NULL);
+}
+
+/* 
+ * Insert a event to class mapping. If the event already exists in the
+ * mapping, then replace the mapping with the new one.
+ * XXX There is currently no constraints placed on the number of mappings.
+ *     May want to either limit to a number, or in terms of memory usage.
+ */
+void au_evclassmap_insert(au_event_t event, au_class_t class) 
+{
+	struct evclass_list *evcl;
+	struct evclass_elem *evc;
+
+	evcl = &evclass_hash[event % EVCLASSMAP_HASH_TABLE_SIZE];
+
+	LIST_FOREACH(evc, &evcl->head, entry) {
+		if (evc->event == event) {
+			evc->class = class;
+			return;
+		}
+	}
+	kmem_alloc(kernel_map, &evc, sizeof(*evc));
+	if (evc == NULL) {
+		return;
+	}
+	evc->event = event;
+	evc->class = class;
+	LIST_INSERT_HEAD(&evcl->head, evc, entry);
+		
+}
+
+void au_evclassmap_init() 
+{
+	int i;
+	for (i = 0; i < EVCLASSMAP_HASH_TABLE_SIZE; i++) {
+		LIST_INIT(&evclass_hash[i].head);
+	}
+
+	/* Set up the initial event to class mapping for system calls.  */ 
+	for (i = 0; i < nsys_au_event; i++) {
+		if (sys_au_event[i] != AUE_NULL) {
+			au_evclassmap_insert(sys_au_event[i], AU_NULL);
+		}
+	}
+	/* Add the Mach system call events */
+	au_evclassmap_insert(AUE_TASKFORPID, AU_NULL);
+	au_evclassmap_insert(AUE_PIDFORTASK, AU_NULL);
+	au_evclassmap_insert(AUE_SWAPON, AU_NULL);
+	au_evclassmap_insert(AUE_SWAPOFF, AU_NULL);
+	au_evclassmap_insert(AUE_MAPFD, AU_NULL);
+	au_evclassmap_insert(AUE_INITPROCESS, AU_NULL);
+	
+	/* Add the specific open events to the mapping. */
+	au_evclassmap_insert(AUE_OPEN_R, AU_FREAD);
+        au_evclassmap_insert(AUE_OPEN_RC, AU_FREAD|AU_FCREATE);
+        au_evclassmap_insert(AUE_OPEN_RTC, AU_FREAD|AU_FCREATE|AU_FDELETE);
+        au_evclassmap_insert(AUE_OPEN_RT, AU_FREAD|AU_FDELETE);
+        au_evclassmap_insert(AUE_OPEN_RW, AU_FREAD|AU_FWRITE);
+        au_evclassmap_insert(AUE_OPEN_RWC, AU_FREAD|AU_FWRITE|AU_FCREATE);
+        au_evclassmap_insert(AUE_OPEN_RWTC, AU_FREAD|AU_FWRITE|AU_FCREATE|AU_FDELETE);
+        au_evclassmap_insert(AUE_OPEN_RWT, AU_FREAD|AU_FWRITE|AU_FDELETE);
+        au_evclassmap_insert(AUE_OPEN_W, AU_FWRITE);
+        au_evclassmap_insert(AUE_OPEN_WC, AU_FWRITE|AU_FCREATE);
+        au_evclassmap_insert(AUE_OPEN_WTC, AU_FWRITE|AU_FCREATE|AU_FDELETE);
+        au_evclassmap_insert(AUE_OPEN_WT, AU_FWRITE|AU_FDELETE);
+}
+
+/*
  * Check whether an event is aditable by comparing the mask of classes this
- * event is part of against the kernel's preselection mask the given mask
- * which will be the process event mask.
+ * event is part of against the given mask.
  *
- * XXX This needs to eventually implement the selection based on the 
- *     event->class mapping that is controlled by a configuration file.
  */
 int au_preselect(au_event_t event, au_mask_t *mask_p, int sorf)
 {
-	au_class_t ae_class;
 	au_class_t effmask = 0;
+	au_class_t ae_class;
 
 	if(mask_p == NULL)
 		return (-1);
 
-	/*
-	 * XXX Set the event class using a big ugly switch statement. This	
-	 * will change to use the mapping defined by a configuration file.
-	 */
-	switch (event) {
-	case AUE_MMAP:
-	case AUE_PIPE:
-		/* mmap() and pipe() are AU_NULL in some systems; we'll
-		 * place them in AU_IPC for now.
-		 */
-		ae_class = AU_IPC; break;
-	case AUE_READLINK:
-	case AUE_GETDIRENTRIES:
-		ae_class = AU_FREAD; break;
-	case AUE_ACCESS:
-	case AUE_FSTAT:
-	case AUE_FSTATFS:
-	case AUE_GETFH:
-	case AUE_LSTAT:
-	case AUE_FPATHCONF:
-	case AUE_PATHCONF:
-	case AUE_STAT:
-	case AUE_STATFS:
-	case AUE_GETATTRLIST:
-	case AUE_GETFSSTAT:
-	case AUE_GETDIRENTRIESATTR:
-	case AUE_SEARCHFS:
-		ae_class = AU_FACCESS; break;
-	case AUE_CHMOD:
-	case AUE_CHOWN:
-	case AUE_FCHMOD:
-	case AUE_FCHOWN:
-	case AUE_FCNTL:
-	case AUE_FLOCK:
-	case AUE_UTIMES:
-	case AUE_CHFLAGS:
-	case AUE_FCHFLAGS:
-	case AUE_FUTIMES:
-	case AUE_SETATTRLIST:
-	case AUE_TRUNCATE:
-	case AUE_FTRUNCATE:
-	case AUE_UNDELETE:
-	case AUE_EXCHANGEDATA:
-		ae_class = AU_FMODIFY; break;
-	case AUE_LINK:
-	case AUE_MKDIR:
-	case AUE_MKNOD:
-	case AUE_SYMLINK:
-	case AUE_MKFIFO:
-		ae_class = AU_FCREATE; break;
-	case AUE_RMDIR:
-	case AUE_UNLINK:
-		ae_class = AU_FDELETE; break;
-	case AUE_CLOSE:
-	case AUE_MUNMAP:
-	case AUE_REVOKE:
-		ae_class = AU_CLOSE; break;
-	case AUE_CHDIR:
-	case AUE_CHROOT:
-	case AUE_EXIT:
-	case AUE_FCHDIR:
-	case AUE_FORK:
-	case AUE_KILL:
-	case AUE_SETEGID:
-	case AUE_SETEUID:
-	case AUE_SETGID:
-	case AUE_SETGROUPS:
-	case AUE_SETPGRP:
-	case AUE_SETUID:
-	case AUE_VFORK:
-	case AUE_UMASK:
-		ae_class = AU_PROCESS; break;
-	case AUE_ACCEPT:
-	case AUE_BIND:
-	case AUE_CONNECT:
-	case AUE_RECVFROM:
-	case AUE_RECVMSG:
-	case AUE_SENDMSG:
-	case AUE_SENDTO:
-	case AUE_SETSOCKOPT:
-	case AUE_SHUTDOWN:
-	case AUE_SOCKET:
-	case AUE_SOCKETPAIR:
-		ae_class = AU_NET; break;
-	case AUE_MSGCTL:
-	case AUE_MSGGET:
-	case AUE_MSGRCV:
-	case AUE_MSGSND:
-	case AUE_SEMCTL:
-	case AUE_SEMGET:
-	case AUE_SEMOP:
-	case AUE_SHMAT:
-	case AUE_SHMCTL:
-	case AUE_SHMDT:
-	case AUE_SHMGET:
-		ae_class = AU_IPC; break;
-	case AUE_ACCT:
-	case AUE_ADJTIME:
-	case AUE_GETAUID:
-	case AUE_MOUNT:
-	case AUE_SETAUID:
-	case AUE_SETRLIMIT:
-	case AUE_UMOUNT:
-		ae_class = AU_ADMIN; break;
-	case AUE_IOCTL:
-		ae_class = AU_IOCTL; break;
-	case AUE_EXECVE:
-		ae_class = AU_PROCESS|AU_EXEC; break;
-	case AUE_OPEN_R:
-		ae_class = AU_FREAD; break;
-        case AUE_OPEN_RC:
-		ae_class = AU_FREAD|AU_FCREATE; break;
-        case AUE_OPEN_RTC:
-		ae_class = AU_FREAD|AU_FCREATE|AU_FDELETE; break;
-        case AUE_OPEN_RT:
-		ae_class = AU_FREAD|AU_FDELETE; break;
-        case AUE_OPEN_RW:
-		ae_class = AU_FREAD|AU_FWRITE; break;
-        case AUE_OPEN_RWC:
-		ae_class = AU_FREAD|AU_FWRITE|AU_FCREATE; break;
-        case AUE_OPEN_RWTC:
-		ae_class = AU_FREAD|AU_FWRITE|AU_FCREATE|AU_FDELETE; break;
-        case AUE_OPEN_RWT:
-		ae_class = AU_FREAD|AU_FWRITE|AU_FDELETE; break;
-        case AUE_OPEN_W:
-		ae_class = AU_FWRITE; break;
-        case AUE_OPEN_WC:
-		ae_class = AU_FWRITE|AU_FCREATE; break;
-        case AUE_OPEN_WTC:
-		ae_class = AU_FWRITE|AU_FCREATE|AU_FDELETE; break;
-        case AUE_OPEN_WT:
-		ae_class = AU_FWRITE|AU_FDELETE; break;
-	case AUE_RENAME:
-		ae_class = AU_FCREATE|AU_FDELETE; break;
-	default:	/* Assign the event to all classes */
-		ae_class = AU_ALL; break;
-	}
-
+	ae_class = au_event_class(event);
 	/* 
 	 * Perform the actual check of the masks against the event.
 	 */
-	/*
-	 * XXX Need to compare against the kernel mask??? Or do we not do
-	 * that by default and let the client code just call this function
-	 * with the kernel preselection mask as the mask parameter?
-	 */
-	if(sorf & AU_PRS_SUCCESS) {
+	if (sorf & AU_PRS_SUCCESS) {
 		effmask |= (mask_p->am_success & ae_class);
 	}
                         
@@ -607,10 +556,59 @@ int au_preselect(au_event_t event, au_mask_t *mask_p, int sorf)
 }
 
 /*
+ * Convert sysctl names and present arguments to events
+ */
+au_event_t ctlname_to_sysctlevent(int name[], uint64_t valid_arg) {
+
+	/* can't parse it - so return the worst case */
+	if ((valid_arg & (ARG_CTLNAME | ARG_LEN)) != 
+	                 (ARG_CTLNAME | ARG_LEN))
+		return AUE_SYSCTL;
+
+	switch (name[0]) {
+	/* non-admin "lookups" treat them special */
+	case KERN_OSTYPE:
+	case KERN_OSRELEASE:
+	case KERN_OSREV:
+	case KERN_VERSION:
+	case KERN_ARGMAX:
+	case KERN_CLOCKRATE:
+	case KERN_BOOTTIME:
+	case KERN_POSIX1:
+	case KERN_NGROUPS:
+	case KERN_JOB_CONTROL:
+	case KERN_SAVED_IDS:
+	case KERN_NETBOOT:
+	case KERN_SYMFILE:
+		return AUE_SYSCTL_NONADMIN;
+
+	/* only treat the sets as admin */
+	case KERN_MAXVNODES:
+	case KERN_MAXPROC:
+	case KERN_MAXFILES:
+	case KERN_MAXPROCPERUID:
+	case KERN_MAXFILESPERPROC:
+	case KERN_HOSTID:
+	case KERN_AIOMAX:
+	case KERN_AIOPROCMAX:
+	case KERN_AIOTHREADS:
+	case KERN_COREDUMP:
+	case KERN_SUGID_COREDUMP:
+		return (valid_arg & ARG_VALUE) ?
+			AUE_SYSCTL : AUE_SYSCTL_NONADMIN;
+
+	default:
+		return AUE_SYSCTL;
+	}
+	/* NOTREACHED */
+}
+
+/*
  * Convert an open flags specifier into a specific type of open event for 
  * auditing purposes.
  */
-au_event_t flags_to_openevent(int oflags) {
+au_event_t flags_and_error_to_openevent(int oflags, int error) {
+	au_event_t aevent;
 
 	/* Need to check only those flags we care about. */
 	oflags = oflags & (O_RDONLY | O_CREAT | O_TRUNC | O_RDWR | O_WRONLY);
@@ -618,47 +616,64 @@ au_event_t flags_to_openevent(int oflags) {
 	/* These checks determine what flags are on with the condition
 	 * that ONLY that combination is on, and no other flags are on.
 	 */
-	if (!(oflags ^ O_RDONLY))
-		return AUE_OPEN_R;
-	if (!(oflags ^ (O_RDONLY | O_CREAT)))
-		return AUE_OPEN_RC;
-	if (!(oflags ^ (O_RDONLY | O_CREAT | O_TRUNC)))
-		return AUE_OPEN_RTC;
-	if (!(oflags ^ (O_RDONLY | O_TRUNC)))
-		return AUE_OPEN_RT;
-	if (!(oflags ^ O_RDWR))
-		return AUE_OPEN_RW;
-	if (!(oflags ^ (O_RDWR | O_CREAT)))
-		return AUE_OPEN_RWC;
-	if (!(oflags ^ (O_RDWR | O_CREAT | O_TRUNC)))
-		return AUE_OPEN_RWTC;
-	if (!(oflags ^ (O_RDWR | O_TRUNC)))
-		return AUE_OPEN_RWT;
-	if (!(oflags ^ O_WRONLY))
-		return AUE_OPEN_W;
-	if (!(oflags ^ (O_WRONLY | O_CREAT)))
-		return AUE_OPEN_WC;
-	if (!(oflags ^ (O_WRONLY | O_CREAT | O_TRUNC)))
-		return AUE_OPEN_WTC;
-	if (!(oflags ^ (O_WRONLY | O_TRUNC)))
-		return AUE_OPEN_WT;
+	switch (oflags) {
+	case O_RDONLY:
+		aevent = AUE_OPEN_R;
+		break;
+	case (O_RDONLY | O_CREAT):
+		aevent = AUE_OPEN_RC;
+		break;
+	case (O_RDONLY | O_CREAT | O_TRUNC):
+		aevent = AUE_OPEN_RTC;
+		break;
+	case (O_RDONLY | O_TRUNC):
+		aevent = AUE_OPEN_RT;
+		break;
+	case O_RDWR:
+		aevent = AUE_OPEN_RW;
+		break;
+	case (O_RDWR | O_CREAT):
+		aevent = AUE_OPEN_RWC;
+		break;
+	case (O_RDWR | O_CREAT | O_TRUNC):
+		aevent = AUE_OPEN_RWTC;
+		break;
+	case (O_RDWR | O_TRUNC):
+		aevent = AUE_OPEN_RWT;
+		break;
+	case O_WRONLY:
+		aevent = AUE_OPEN_W;
+		break;
+	case (O_WRONLY | O_CREAT):
+		aevent = AUE_OPEN_WC;
+		break;
+	case (O_WRONLY | O_CREAT | O_TRUNC):
+		aevent = AUE_OPEN_WTC;
+		break;
+	case (O_WRONLY | O_TRUNC):
+		aevent = AUE_OPEN_WT;
+		break;
+	default:
+		aevent = AUE_OPEN;
+		break;
+	}
 
-	return AUE_OPEN_R;
-}
-
-/*
- * Fill in a vattr struct from kernel audit record fields. This function
- * would be unecessary if we store a vattr in the kernel audit record
- * directly.
-*/
-void fill_vattr(struct vattr *v, struct vnode_au_info *vn_info)
-{
-	v->va_mode = vn_info->vn_mode;
-	v->va_uid = vn_info->vn_uid;
-	v->va_gid = vn_info->vn_gid;
-	v->va_fsid = vn_info->vn_fsid;
-	v->va_fileid = vn_info->vn_fileid;
-	v->va_rdev = vn_info->vn_dev;
+	/* 
+	 * Convert chatty errors to better matching events.
+	 * Failures to find a file are really just attribute
+	 * events - so recast them as such.
+	 */
+	switch (aevent) {
+	case AUE_OPEN_R:
+	case AUE_OPEN_RT:
+	case AUE_OPEN_RW:
+	case AUE_OPEN_RWT:
+	case AUE_OPEN_W:
+	case AUE_OPEN_WT:
+		if (error == ENOENT)
+			aevent = AUE_OPEN;
+	}
+	return aevent;
 }
 
 /* Convert a MSGCTL command to a specific event. */
@@ -707,6 +722,71 @@ int semctl_to_event(int cmd)
 	}
 }
 
+/* Convert a command for the auditon() system call to a audit event. */
+int auditon_command_event(int cmd)
+{
+	switch(cmd) {
+	case A_GETPOLICY:
+		return AUE_AUDITON_GPOLICY;
+		break;
+	case A_SETPOLICY:
+		return AUE_AUDITON_SPOLICY;
+		break;
+	case A_GETKMASK:
+		return AUE_AUDITON_GETKMASK;
+		break;
+	case A_SETKMASK:
+		return AUE_AUDITON_SETKMASK;
+		break;
+	case A_GETQCTRL:
+		return AUE_AUDITON_GQCTRL;
+		break;
+	case A_SETQCTRL:
+		return AUE_AUDITON_SQCTRL;
+		break;
+	case A_GETCWD:
+		return AUE_AUDITON_GETCWD;
+		break;
+	case A_GETCAR:
+		return AUE_AUDITON_GETCAR;
+		break;
+	case A_GETSTAT:
+		return AUE_AUDITON_GETSTAT;
+		break;
+	case A_SETSTAT:
+		return AUE_AUDITON_SETSTAT;
+		break;
+	case A_SETUMASK:
+		return AUE_AUDITON_SETUMASK;
+		break;
+	case A_SETSMASK:
+		return AUE_AUDITON_SETSMASK;
+		break;
+	case A_GETCOND:
+		return AUE_AUDITON_GETCOND;
+		break;
+	case A_SETCOND:
+		return AUE_AUDITON_SETCOND;
+		break;
+	case A_GETCLASS:
+		return AUE_AUDITON_GETCLASS;
+		break;
+	case A_SETCLASS:
+		return AUE_AUDITON_SETCLASS;
+		break;
+	case A_GETPINFO:
+	case A_SETPMASK:
+	case A_SETFSIZE:
+	case A_GETFSIZE:
+	case A_GETPINFO_ADDR:
+	case A_GETKAUDIT:
+	case A_SETKAUDIT:
+	default:
+		return AUE_AUDITON;	/* No special record */
+		break;
+	}
+}
+
 /* 
  * Create a canonical path from given path by prefixing either the
  * root directory, or the current working directory.
@@ -715,12 +795,13 @@ int semctl_to_event(int cmd)
  * written to the audit log. So we will leave the filename starting
  * with '/' in the audit log in this case.
  */
-void canon_path(struct proc *p, char *path, char *cpath)
+int canon_path(struct proc *p, char *path, char *cpath)
 {
 	char *bufp;
 	int len;
 	struct vnode *vnp;
 	struct filedesc *fdp;
+	int ret;
 
 	fdp = p->p_fd;
 	bufp = path;
@@ -743,7 +824,11 @@ void canon_path(struct proc *p, char *path, char *cpath)
 	}
 	if (vnp != NULL) {
 		len = MAXPATHLEN;
-		vn_getpath(vnp, cpath, &len);
+		ret = vn_getpath(vnp, cpath, &len);
+		if (ret != 0) {
+			cpath[0] = '\0';
+			return (ret);
+		}
 		/* The length returned by vn_getpath() is two greater than the 
 		 * number of characters in the string.
 		 */
@@ -753,4 +838,5 @@ void canon_path(struct proc *p, char *path, char *cpath)
 	} else {
 		strncpy(cpath, bufp, MAXPATHLEN);
 	}
+	return (0);
 }

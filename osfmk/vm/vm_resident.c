@@ -3,22 +3,19 @@
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
- * Copyright (c) 1999-2003 Apple Computer, Inc.  All Rights Reserved.
+ * The contents of this file constitute Original Code as defined in and
+ * are subject to the Apple Public Source License Version 1.1 (the
+ * "License").  You may not use this file except in compliance with the
+ * License.  Please obtain a copy of the License at
+ * http://www.apple.com/publicsource and read it before using this file.
  * 
- * This file contains Original Code and/or Modifications of Original Code
- * as defined in and that are subject to the Apple Public Source License
- * Version 2.0 (the 'License'). You may not use this file except in
- * compliance with the License. Please obtain a copy of the License at
- * http://www.opensource.apple.com/apsl/ and read it before using this
- * file.
- * 
- * The Original Code and all software distributed under the License are
- * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * This Original Code and all software distributed under the License are
+ * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
- * Please see the License for the specific language governing rights and
- * limitations under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
+ * License for the specific language governing rights and limitations
+ * under the License.
  * 
  * @APPLE_LICENSE_HEADER_END@
  */
@@ -1965,93 +1962,6 @@ cpm_counter(unsigned int	vpfls_general_insertions = 0;)
 cpm_counter(unsigned int	vpfc_failed = 0;)
 cpm_counter(unsigned int	vpfc_satisfied = 0;)
 
-/*
- *	Sort free list by ascending physical address,
- *	using a not-particularly-bright sort algorithm.
- *	Caller holds vm_page_queue_free_lock.
- */
-static void
-vm_page_free_list_sort(void)
-{
-	vm_page_t	sort_list;
-	vm_page_t	sort_list_end;
-	vm_page_t	m, m1, *prev, next_m;
-	vm_offset_t	addr;
-#if	MACH_ASSERT
-	unsigned int	npages;
-	int		old_free_count;
-#endif	/* MACH_ASSERT */
-
-#if	MACH_ASSERT
-	/*
-	 *	Verify pages in the free list..
-	 */
-	npages = 0;
-	for (m = vm_page_queue_free; m != VM_PAGE_NULL; m = NEXT_PAGE(m))
-		++npages;
-	if (npages != vm_page_free_count)
-		panic("vm_sort_free_list:  prelim:  npages %d free_count %d",
-		      npages, vm_page_free_count);
-	old_free_count = vm_page_free_count;
-#endif	/* MACH_ASSERT */
-
-	sort_list = sort_list_end = vm_page_queue_free;
-	m = NEXT_PAGE(vm_page_queue_free);
-	SET_NEXT_PAGE(vm_page_queue_free, VM_PAGE_NULL);
-	cpm_counter(vpfls_pages_handled = 0);
-	while (m != VM_PAGE_NULL) {
-		cpm_counter(++vpfls_pages_handled);
-		next_m = NEXT_PAGE(m);
-		if (m->phys_page < sort_list->phys_page) {
-			cpm_counter(++vpfls_head_insertions);
-			SET_NEXT_PAGE(m, sort_list);
-			sort_list = m;
-		} else if (m->phys_page > sort_list_end->phys_page) {
-			cpm_counter(++vpfls_tail_insertions);
-			SET_NEXT_PAGE(sort_list_end, m);
-			SET_NEXT_PAGE(m, VM_PAGE_NULL);
-			sort_list_end = m;
-		} else {
-			cpm_counter(++vpfls_general_insertions);
-			/* general sorted list insertion */
-			prev = &sort_list;
-			for (m1=sort_list; m1!=VM_PAGE_NULL; m1=NEXT_PAGE(m1)) {
-				if (m1->phys_page > m->phys_page) {
-					if (*prev != m1)
-						panic("vm_sort_free_list: ugh");
-					SET_NEXT_PAGE(m, *prev);
-					*prev = m;
-					break;
-				}
-				prev = (vm_page_t *) &m1->pageq.next;
-			}
-		}
-		m = next_m;
-	}
-
-#if	MACH_ASSERT
-	/*
-	 *	Verify that pages are sorted into ascending order.
-	 */
-	for (m = sort_list, npages = 0; m != VM_PAGE_NULL; m = NEXT_PAGE(m)) {
-		if (m != sort_list &&
-		    m->phys_page <= addr) {
-			printf("m 0x%x addr 0x%x\n", m, addr);
-			panic("vm_sort_free_list");
-		}
-		addr = m->phys_page;
-		++npages;
-	}
-	if (old_free_count != vm_page_free_count)
-		panic("vm_sort_free_list:  old_free %d free_count %d",
-		      old_free_count, vm_page_free_count);
-	if (npages != vm_page_free_count)
-		panic("vm_sort_free_list:  npages %d free_count %d",
-		      npages, vm_page_free_count);
-#endif	/* MACH_ASSERT */
-
-	vm_page_queue_free = sort_list;
-}
 
 
 #if	MACH_ASSERT
@@ -2066,7 +1976,7 @@ vm_page_verify_contiguous(
 {
 	register vm_page_t	m;
 	unsigned int		page_count;
-	vm_offset_t		prev_addr;
+	ppnum_t			prev_addr;
 
 	prev_addr = pages->phys_page;
 	page_count = 1;
@@ -2074,7 +1984,7 @@ vm_page_verify_contiguous(
 		if (m->phys_page != prev_addr + 1) {
 			printf("m 0x%x prev_addr 0x%x, current addr 0x%x\n",
 			       m, prev_addr, m->phys_page);
-			printf("pages 0x%x page_count %d\n", pages, page_count);
+			printf("pages 0x%x page_count %u\n", pages, page_count);
 			panic("vm_page_verify_contiguous:  not contiguous!");
 		}
 		prev_addr = m->phys_page;
@@ -2101,62 +2011,189 @@ vm_page_verify_contiguous(
  *
  *	Returns a pointer to a list of gobbled pages or	VM_PAGE_NULL.
  *
+ * Algorithm:
+ *	Loop over the free list, extracting one page at a time and
+ *	inserting those into a sorted sub-list.  We stop as soon as
+ *	there's a contiguous range within the sorted list that can
+ *	satisfy the contiguous memory request.  This contiguous sub-
+ *	list is chopped out of the sorted sub-list and the remainder
+ *	of the sorted sub-list is put back onto the beginning of the
+ *	free list.
  */
 static vm_page_t
 vm_page_find_contiguous(
-	int		npages)
+	unsigned int	contig_pages)
 {
-	vm_page_t	m, *contig_prev, *prev_ptr;
-	ppnum_t		prev_page;
-	unsigned int	contig_npages;
-	vm_page_t	list;
+	vm_page_t	sort_list;
+	vm_page_t	*contfirstprev, contlast;
+	vm_page_t	m, m1;
+	ppnum_t		prevcontaddr;
+	ppnum_t		nextcontaddr;
+	unsigned int	npages;
 
-	if (npages < 1)
+#if	MACH_ASSERT
+	/*
+	 *	Verify pages in the free list..
+	 */
+	npages = 0;
+	for (m = vm_page_queue_free; m != VM_PAGE_NULL; m = NEXT_PAGE(m))
+		++npages;
+	if (npages != vm_page_free_count)
+		panic("vm_sort_free_list:  prelim:  npages %u free_count %d",
+		      npages, vm_page_free_count);
+#endif	/* MACH_ASSERT */
+
+	if (contig_pages == 0 || vm_page_queue_free == VM_PAGE_NULL)
 		return VM_PAGE_NULL;
 
-	prev_page = vm_page_queue_free->phys_page - 2;
-	prev_ptr = &vm_page_queue_free;
-	for (m = vm_page_queue_free; m != VM_PAGE_NULL; m = NEXT_PAGE(m)) {
+#define PPNUM_PREV(x) (((x) > 0) ? ((x) - 1) : 0)
+#define PPNUM_NEXT(x) (((x) < PPNUM_MAX) ? ((x) + 1) : PPNUM_MAX)
 
-		if (m->phys_page != prev_page + 1) {
-			/*
-			 *	Whoops!  Pages aren't contiguous.  Start over.
-			 */
-			contig_npages = 0;
-			contig_prev = prev_ptr;
+	npages = 1;
+	contfirstprev = &sort_list;
+	contlast = sort_list = vm_page_queue_free;
+	vm_page_queue_free = NEXT_PAGE(sort_list);
+	SET_NEXT_PAGE(sort_list, VM_PAGE_NULL);
+	prevcontaddr = PPNUM_PREV(sort_list->phys_page);
+	nextcontaddr = PPNUM_NEXT(sort_list->phys_page);
+
+ 	while (npages < contig_pages && 
+	       (m = vm_page_queue_free) != VM_PAGE_NULL)
+	{
+		cpm_counter(++vpfls_pages_handled);
+
+		/* prepend to existing run? */
+		if (m->phys_page == prevcontaddr)
+		{
+			vm_page_queue_free = NEXT_PAGE(m);
+			cpm_counter(++vpfls_head_insertions);
+			prevcontaddr = PPNUM_PREV(prevcontaddr);
+			SET_NEXT_PAGE(m, *contfirstprev);
+			*contfirstprev = m;
+			npages++;
+			continue; /* no tail expansion check needed */
+		} 
+
+		/* append to tail of existing run? */
+		else if (m->phys_page == nextcontaddr)
+		{
+			vm_page_queue_free = NEXT_PAGE(m);
+			cpm_counter(++vpfls_tail_insertions);
+			nextcontaddr = PPNUM_NEXT(nextcontaddr);
+			SET_NEXT_PAGE(m, NEXT_PAGE(contlast));
+			SET_NEXT_PAGE(contlast, m);
+			contlast = m;
+			npages++;
 		}
 
-		if (++contig_npages == npages) {
-			/*
-			 *	Chop these pages out of the free list.
-			 *	Mark them all as gobbled.
-			 */
-			list = *contig_prev;
-			*contig_prev = NEXT_PAGE(m);
-			SET_NEXT_PAGE(m, VM_PAGE_NULL);
-			for (m = list; m != VM_PAGE_NULL; m = NEXT_PAGE(m)) {
-				assert(m->free);
-				assert(!m->wanted);
-				m->free = FALSE;
-				m->no_isync = TRUE;
-				m->gobbled = TRUE;
+		/* prepend to the very front of sorted list? */
+		else if (m->phys_page < sort_list->phys_page)
+		{
+			vm_page_queue_free = NEXT_PAGE(m);
+			cpm_counter(++vpfls_general_insertions);
+			prevcontaddr = PPNUM_PREV(m->phys_page);
+			nextcontaddr = PPNUM_NEXT(m->phys_page);
+			SET_NEXT_PAGE(m, sort_list);
+			contfirstprev = &sort_list;
+			contlast = sort_list = m;
+			npages = 1;
+		}
+
+		else /* get to proper place for insertion */
+		{
+			if (m->phys_page < nextcontaddr)
+			{
+				prevcontaddr = PPNUM_PREV(sort_list->phys_page);
+				nextcontaddr = PPNUM_NEXT(sort_list->phys_page);
+				contfirstprev = &sort_list;
+				contlast = sort_list;
+				npages = 1;
 			}
-			vm_page_free_count -= npages;
-			if (vm_page_free_count < vm_page_free_count_minimum)
-				vm_page_free_count_minimum = vm_page_free_count;
-			vm_page_wire_count += npages;
-			vm_page_gobble_count += npages;
-			cpm_counter(++vpfc_satisfied);
-			assert(vm_page_verify_contiguous(list, contig_npages));
-			return list;
-		}
+			for (m1 = NEXT_PAGE(contlast);
+			     npages < contig_pages &&
+			     m1 != VM_PAGE_NULL && m1->phys_page < m->phys_page;
+			     m1 = NEXT_PAGE(m1))
+			{
+				if (m1->phys_page != nextcontaddr) {
+					prevcontaddr = PPNUM_PREV(m1->phys_page);
+					contfirstprev = NEXT_PAGE_PTR(contlast);
+					npages = 1;
+				} else {
+					npages++;
+				}
+				nextcontaddr = PPNUM_NEXT(m1->phys_page);
+				contlast = m1;
+			}
 
-		assert(contig_npages < npages);
-		prev_ptr = (vm_page_t *) &m->pageq.next;
-		prev_page = m->phys_page;
+			/*
+			 * We may actually already have enough.
+			 * This could happen if a previous prepend
+			 * joined up two runs to meet our needs.
+			 * If so, bail before we take the current
+			 * page off the free queue.
+			 */
+			if (npages == contig_pages)
+				break;
+
+			if (m->phys_page != nextcontaddr) {
+				contfirstprev = NEXT_PAGE_PTR(contlast);
+				prevcontaddr = PPNUM_PREV(m->phys_page);
+				nextcontaddr = PPNUM_NEXT(m->phys_page);
+				npages = 1;
+			} else {
+				nextcontaddr = PPNUM_NEXT(nextcontaddr);
+				npages++;
+			}
+			vm_page_queue_free = NEXT_PAGE(m);
+			cpm_counter(++vpfls_general_insertions);
+			SET_NEXT_PAGE(m, NEXT_PAGE(contlast));
+			SET_NEXT_PAGE(contlast, m);
+			contlast = m;
+		}
+		
+		/* See how many pages are now contiguous after the insertion */
+		for (m1 = NEXT_PAGE(m);
+		     npages < contig_pages &&
+		     m1 != VM_PAGE_NULL && m1->phys_page == nextcontaddr;
+		     m1 = NEXT_PAGE(m1))
+		{
+			nextcontaddr = PPNUM_NEXT(nextcontaddr);
+			contlast = m1;
+			npages++;
+		}
 	}
-	cpm_counter(++vpfc_failed);
-	return VM_PAGE_NULL;
+
+	/* how did we do? */
+	if (npages == contig_pages)
+	{
+		cpm_counter(++vpfc_satisfied);
+
+		/* remove the contiguous range from the sorted list */
+		m = *contfirstprev;
+		*contfirstprev = NEXT_PAGE(contlast);
+		SET_NEXT_PAGE(contlast, VM_PAGE_NULL);
+		assert(vm_page_verify_contiguous(m, npages));
+
+		/* inline vm_page_gobble() for each returned page */
+		for (m1 = m; m1 != VM_PAGE_NULL; m1 = NEXT_PAGE(m1)) {
+			assert(m1->free);
+			assert(!m1->wanted);
+			m1->free = FALSE;
+			m1->no_isync = TRUE;
+			m1->gobbled = TRUE;
+		}
+		vm_page_wire_count += npages;
+		vm_page_gobble_count += npages;
+		vm_page_free_count -= npages;
+
+		/* stick free list at the tail of the sorted list  */
+		while ((m1 = *contfirstprev) != VM_PAGE_NULL)
+			contfirstprev = (vm_page_t *)&m1->pageq.next;
+		*contfirstprev = vm_page_queue_free;
+	}
+
+	vm_page_queue_free = sort_list;
+	return m;
 }
 
 /*
@@ -2173,6 +2210,7 @@ cpm_allocate(
 	vm_page_t		free_list, pages;
 	unsigned int		npages, n1pages;
 	int			vm_pages_available;
+	boolean_t		wakeup;
 
 	if (size % page_size != 0)
 		return KERN_INVALID_ARGUMENT;
@@ -2184,16 +2222,14 @@ cpm_allocate(
 	 *	Should also take active and inactive pages
 	 *	into account...  One day...
 	 */
+	npages = size / page_size;
 	vm_pages_available = vm_page_free_count - vm_page_free_reserved;
 
-	if (size > vm_pages_available * page_size) {
+	if (npages > vm_pages_available) {
 		mutex_unlock(&vm_page_queue_free_lock);
+		vm_page_unlock_queues();
 		return KERN_RESOURCE_SHORTAGE;
 	}
-
-	vm_page_free_list_sort();
-
-	npages = size / page_size;
 
 	/*
 	 *	Obtain a pointer to a subset of the free
@@ -2201,13 +2237,21 @@ cpm_allocate(
 	 *	the region will be physically contiguous.
 	 */
 	pages = vm_page_find_contiguous(npages);
+
+	/* adjust global freelist counts and determine need for wakeups */
+	if (vm_page_free_count < vm_page_free_count_minimum)
+		vm_page_free_count_minimum = vm_page_free_count;
+
+	wakeup = ((vm_page_free_count < vm_page_free_min) ||
+		  ((vm_page_free_count < vm_page_free_target) &&
+		   (vm_page_inactive_count < vm_page_inactive_target)));
+		
+	mutex_unlock(&vm_page_queue_free_lock);
+
 	if (pages == VM_PAGE_NULL) {
-		mutex_unlock(&vm_page_queue_free_lock);
 		vm_page_unlock_queues();
 		return KERN_NO_SPACE;
 	}
-
-	mutex_unlock(&vm_page_queue_free_lock);
 
 	/*
 	 *	Walk the returned list, wiring the pages.
@@ -2228,6 +2272,9 @@ cpm_allocate(
 			--vm_page_gobble_count;
 		}
 	vm_page_unlock_queues();
+
+	if (wakeup)
+		thread_wakeup((event_t) &vm_page_free_wanted);
 
 	/*
 	 *	The CPM pages should now be available and

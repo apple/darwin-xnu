@@ -3,22 +3,19 @@
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
- * Copyright (c) 1999-2003 Apple Computer, Inc.  All Rights Reserved.
+ * The contents of this file constitute Original Code as defined in and
+ * are subject to the Apple Public Source License Version 1.1 (the
+ * "License").  You may not use this file except in compliance with the
+ * License.  Please obtain a copy of the License at
+ * http://www.apple.com/publicsource and read it before using this file.
  * 
- * This file contains Original Code and/or Modifications of Original Code
- * as defined in and that are subject to the Apple Public Source License
- * Version 2.0 (the 'License'). You may not use this file except in
- * compliance with the License. Please obtain a copy of the License at
- * http://www.opensource.apple.com/apsl/ and read it before using this
- * file.
- * 
- * The Original Code and all software distributed under the License are
- * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * This Original Code and all software distributed under the License are
+ * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
- * Please see the License for the specific language governing rights and
- * limitations under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
+ * License for the specific language governing rights and limitations
+ * under the License.
  * 
  * @APPLE_LICENSE_HEADER_END@
  */
@@ -922,7 +919,7 @@ aio_suspend( struct proc *p, struct aio_suspend_args *uap, int *retval )
 		goto ExitThisRoutine;
 	}
 
-	if ( uap->nent < 1 || uap->nent > aio_max_requests_per_process ) {
+	if ( uap->nent < 1 || uap->nent > AIO_LISTIO_MAX ) {
 		error = EINVAL;
 		goto ExitThisRoutine;
 	}
@@ -950,29 +947,24 @@ aio_suspend( struct proc *p, struct aio_suspend_args *uap, int *retval )
 		goto ExitThisRoutine;
 	}
 
-	/* copyin our aiocb pointers from list */
+	/* check list of aio requests to see if any have completed */
 	for ( i = 0; i < uap->nent; i++ ) {
 		struct aiocb	*aiocbp;
 	
 		/* copyin in aiocb pointer from list */
-		error = copyin( (void *)(uap->aiocblist + i), (aiocbpp + i), sizeof(*aiocbpp) );
+		error = copyin( (void *)(uap->aiocblist + i), (aiocbpp + i), sizeof(aiocbp) );
 		if ( error != 0 ) {
 			error = EAGAIN;
 			goto ExitThisRoutine;
 		}
-	} /* for ( ; i < uap->nent; ) */
-
-	/* check list of aio requests to see if any have completed */
-	AIO_LOCK;
-	for ( i = 0; i < uap->nent; i++ ) {
-		struct aiocb	*aiocbp;
-
+	
 		/* NULL elements are legal so check for 'em */
 		aiocbp = *(aiocbpp + i);
 		if ( aiocbp == NULL )
 			continue;
-	
+
 		/* return immediately if any aio request in the list is done */
+		AIO_LOCK;
 		TAILQ_FOREACH( entryp, &p->aio_doneq, aio_workq_link ) {
 			if ( entryp->uaiocbp == aiocbp ) {
 				*retval = 0;
@@ -981,6 +973,7 @@ aio_suspend( struct proc *p, struct aio_suspend_args *uap, int *retval )
 				goto ExitThisRoutine;
 			}
 		}
+		AIO_UNLOCK;
 	} /* for ( ; i < uap->nent; ) */
 
 	KERNEL_DEBUG( (BSDDBG_CODE(DBG_BSD_AIO, AIO_suspend_sleep)) | DBG_FUNC_NONE,
@@ -994,13 +987,10 @@ aio_suspend( struct proc *p, struct aio_suspend_args *uap, int *retval )
 	 * use tsleep() here in order to avoid getting kernel funnel lock.
 	 */
 	assert_wait( (event_t) &p->AIO_SUSPEND_SLEEP_CHAN, THREAD_ABORTSAFE );
-	AIO_UNLOCK;
-
 	if ( abstime > 0 ) {
 		thread_set_timer_deadline( abstime );
 	}
 	error = thread_block( THREAD_CONTINUE_NULL );
-
 	if ( error == THREAD_AWAKENED ) {
 		/* got our wakeup call from aio_work_thread() */
 		if ( abstime > 0 ) {
@@ -1180,11 +1170,11 @@ lio_listio( struct proc *p, struct lio_listio_args *uap, int *retval )
 			aio_anchor.lio_sync_workq_count++;
 		}
 	}
+	AIO_UNLOCK;
 
-	if ( uap->mode == LIO_NOWAIT ) { 
+	if ( uap->mode == LIO_NOWAIT ) 
 		/* caller does not want to wait so we'll fire off a worker thread and return */
 		wakeup_one( &aio_anchor.aio_async_workq );
-	}
 	else {
 		aio_workq_entry		 	*entryp;
 		int 					error;
@@ -1192,6 +1182,7 @@ lio_listio( struct proc *p, struct lio_listio_args *uap, int *retval )
 		/* 
 		 * mode is LIO_WAIT - handle the IO requests now.
 		 */
+		AIO_LOCK;
  		entryp = TAILQ_FIRST( &aio_anchor.lio_sync_workq );
  		while ( entryp != NULL ) {
 			if ( p == entryp->procp && group_tag == entryp->group_tag ) {
@@ -1236,8 +1227,8 @@ lio_listio( struct proc *p, struct lio_listio_args *uap, int *retval )
 			
  			entryp = TAILQ_NEXT( entryp, aio_workq_link );
         } /* while ( entryp != NULL ) */
+		AIO_UNLOCK;
 	} /* uap->mode == LIO_WAIT */
-	AIO_UNLOCK;
 
 	/* call_result == -1 means we had no trouble queueing up requests */
 	if ( call_result == -1 ) {
@@ -1270,7 +1261,6 @@ aio_work_thread( void )
 	struct uthread			*uthread = (struct uthread *)get_bsdthread_info(current_act());
 	
 	for( ;; ) {
-		AIO_LOCK;
 		entryp = aio_get_some_work();
         if ( entryp == NULL ) {
         	/* 
@@ -1281,7 +1271,6 @@ aio_work_thread( void )
 			 * tsleep() here in order to avoid getting kernel funnel lock.
         	 */
 			assert_wait( (event_t) &aio_anchor.aio_async_workq, THREAD_UNINT );
-			AIO_UNLOCK; 
 			thread_block( THREAD_CONTINUE_NULL );
 			
 			KERNEL_DEBUG( (BSDDBG_CODE(DBG_BSD_AIO, AIO_worker_wake)) | DBG_FUNC_NONE,
@@ -1293,8 +1282,6 @@ aio_work_thread( void )
 			vm_map_t 		currentmap;
 			vm_map_t 		oldmap = VM_MAP_NULL;
 			task_t			oldaiotask = TASK_NULL;
-
-			AIO_UNLOCK; 
 
 			KERNEL_DEBUG( (BSDDBG_CODE(DBG_BSD_AIO, AIO_worker_thread)) | DBG_FUNC_START,
 						  (int)entryp->procp, (int)entryp->uaiocbp, entryp->flags, 0, 0 );
@@ -1387,7 +1374,6 @@ aio_work_thread( void )
  * aio_get_some_work - get the next async IO request that is ready to be executed.
  * aio_fsync complicates matters a bit since we cannot do the fsync until all async
  * IO requests at the time the aio_fsync call came in have completed.
- * NOTE - AIO_LOCK must be held by caller
  */
 
 static aio_workq_entry *
@@ -1397,6 +1383,7 @@ aio_get_some_work( void )
 	int							skip_count = 0;
 	
 	/* pop some work off the work queue and add to our active queue */
+	AIO_LOCK;
 	for ( entryp = TAILQ_FIRST( &aio_anchor.aio_async_workq );
 		  entryp != NULL;
 		  entryp = TAILQ_NEXT( entryp, aio_workq_link ) ) {
@@ -1421,6 +1408,7 @@ aio_get_some_work( void )
 		aio_anchor.aio_active_count++;
 		entryp->procp->aio_active_count++;
 	}
+	AIO_UNLOCK;
 		
 	return( entryp );
 	
@@ -1522,12 +1510,13 @@ aio_queue_async_request( struct proc *procp, struct aiocb *aiocbp, int kindOfIO 
 	TAILQ_INSERT_TAIL( &aio_anchor.aio_async_workq, entryp, aio_workq_link );
 	aio_anchor.aio_async_workq_count++;
 	
-	wakeup_one( &aio_anchor.aio_async_workq );
-	AIO_UNLOCK; 
+	AIO_UNLOCK;
 
 	KERNEL_DEBUG( (BSDDBG_CODE(DBG_BSD_AIO, AIO_work_queued)) | DBG_FUNC_NONE,
 		     	  (int)procp, (int)aiocbp, 0, 0, 0 );
-	
+
+	wakeup_one( &aio_anchor.aio_async_workq );
+
 	return( 0 );
 	
 error_exit:
@@ -1909,15 +1898,15 @@ do_aio_completion( aio_workq_entry *entryp )
 		
 		AIO_LOCK;
 		active_requests = aio_active_requests_for_process( entryp->procp );
-		//AIO_UNLOCK;
+		AIO_UNLOCK;
 		if ( active_requests < 1 ) {
 			/* no active aio requests for this process, continue exiting */
-			wakeup_one( &entryp->procp->AIO_CLEANUP_SLEEP_CHAN );
 
 			KERNEL_DEBUG( (BSDDBG_CODE(DBG_BSD_AIO, AIO_completion_cleanup_wake)) | DBG_FUNC_NONE,
 					  	  (int)entryp->procp, (int)entryp->uaiocbp, 0, 0, 0 );
+		
+			wakeup_one( &entryp->procp->AIO_CLEANUP_SLEEP_CHAN );
 		}
-		AIO_UNLOCK;
 		return;
 	}
 
@@ -1931,12 +1920,10 @@ do_aio_completion( aio_workq_entry *entryp )
 	 * call wakeup for them.  If we do mark them we should unmark them after
 	 * the aio_suspend wakes up.
 	 */
-	AIO_LOCK; 
-	wakeup_one( &entryp->procp->AIO_SUSPEND_SLEEP_CHAN ); 
-	AIO_UNLOCK;
-
 	KERNEL_DEBUG( (BSDDBG_CODE(DBG_BSD_AIO, AIO_completion_suspend_wake)) | DBG_FUNC_NONE,
 				  (int)entryp->procp, (int)entryp->uaiocbp, 0, 0, 0 );
+		
+	wakeup_one( &entryp->procp->AIO_SUSPEND_SLEEP_CHAN ); 
 	
 	return;
 	

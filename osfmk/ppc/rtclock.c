@@ -3,22 +3,19 @@
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
- * Copyright (c) 1999-2003 Apple Computer, Inc.  All Rights Reserved.
+ * The contents of this file constitute Original Code as defined in and
+ * are subject to the Apple Public Source License Version 1.1 (the
+ * "License").  You may not use this file except in compliance with the
+ * License.  Please obtain a copy of the License at
+ * http://www.apple.com/publicsource and read it before using this file.
  * 
- * This file contains Original Code and/or Modifications of Original Code
- * as defined in and that are subject to the Apple Public Source License
- * Version 2.0 (the 'License'). You may not use this file except in
- * compliance with the License. Please obtain a copy of the License at
- * http://www.opensource.apple.com/apsl/ and read it before using this
- * file.
- * 
- * The Original Code and all software distributed under the License are
- * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * This Original Code and all software distributed under the License are
+ * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
- * Please see the License for the specific language governing rights and
- * limitations under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
+ * License for the specific language governing rights and limitations
+ * under the License.
  * 
  * @APPLE_LICENSE_HEADER_END@
  */
@@ -456,24 +453,28 @@ clock_get_calendar_microtime(
 	else {
 		uint32_t	delta, t32;
 
-		delta = -rtclock_calend.adjdelta;		
+		delta = -rtclock_calend.adjdelta;
 
-		t64 = mach_absolute_time() - rtclock_calend.epoch1;
+		now = mach_absolute_time();
 
 		*secs = rtclock_calend.epoch;
 		*microsecs = rtclock_calend.microepoch;
 
-		simple_unlock(&rtclock_lock);
+		if (now > rtclock_calend.epoch1) {
+			t64 = now - rtclock_calend.epoch1;
 
-		t32 = (t64 * USEC_PER_SEC) / rtclock_sec_divisor;
+			t32 = (t64 * USEC_PER_SEC) / rtclock_sec_divisor;
 
-		if (t32 > delta)
-			*microsecs += (t32 - delta);
+			if (t32 > delta)
+				*microsecs += (t32 - delta);
 
-		if (*microsecs >= USEC_PER_SEC) {
-			*microsecs -= USEC_PER_SEC;
-			*secs += 1;
+			if (*microsecs >= USEC_PER_SEC) {
+				*microsecs -= USEC_PER_SEC;
+				*secs += 1;
+			}
 		}
+
+		simple_unlock(&rtclock_lock);
 	}
 
 	splx(s);
@@ -523,22 +524,27 @@ clock_gettimeofday(
 	else {
 		uint32_t	delta, t32;
 
-		delta = -rtclock_calend.adjdelta;		
+		delta = -rtclock_calend.adjdelta;
 
-		now = mach_absolute_time() - rtclock_calend.epoch1;
+		now = mach_absolute_time();
 
 		secs = rtclock_calend.epoch;
 		microsecs = rtclock_calend.microepoch;
 
-		t32 = (now * USEC_PER_SEC) / rtclock_sec_divisor;
+		if (now > rtclock_calend.epoch1) {
+			t64 = now - rtclock_calend.epoch1;
 
-		if (t32 > delta)
-			microsecs += (t32 - delta);
+			t32 = (t64 * USEC_PER_SEC) / rtclock_sec_divisor;
 
-		if (microsecs >= USEC_PER_SEC) {
-			microsecs -= USEC_PER_SEC;
-			secs += 1;
+			if (t32 > delta)
+				microsecs += (t32 - delta);
+
+			if (microsecs >= USEC_PER_SEC) {
+				microsecs -= USEC_PER_SEC;
+				secs += 1;
+			}
 		}
+
         /* no need to disable timestamp, it is already off */
 	}
 
@@ -586,22 +592,26 @@ clock_get_calendar_nanotime(
 
 		delta = -rtclock_calend.adjdelta;
 
-		t64 = mach_absolute_time() - rtclock_calend.epoch1;
+		now = mach_absolute_time();
 
 		*secs = rtclock_calend.epoch;
 		*nanosecs = rtclock_calend.microepoch * NSEC_PER_USEC;
 
-		simple_unlock(&rtclock_lock);
+		if (now > rtclock_calend.epoch1) {
+			t64 = now - rtclock_calend.epoch1;
 
-		t32 = (t64 * USEC_PER_SEC) / rtclock_sec_divisor;
+			t32 = (t64 * USEC_PER_SEC) / rtclock_sec_divisor;
 
-		if (t32 > delta)
-			*nanosecs += ((t32 - delta) * NSEC_PER_USEC);
+			if (t32 > delta)
+				*nanosecs += ((t32 - delta) * NSEC_PER_USEC);
 
-		if (*nanosecs >= NSEC_PER_SEC) {
-			*nanosecs -= NSEC_PER_SEC;
-			*secs += 1;
+			if (*nanosecs >= NSEC_PER_SEC) {
+				*nanosecs -= NSEC_PER_SEC;
+				*secs += 1;
+			}
 		}
+
+		simple_unlock(&rtclock_lock);
 	}
 
 	splx(s);
@@ -672,7 +682,11 @@ clock_set_calendar_adjtime(
 
 		now = mach_absolute_time();
 
-		t64 = now - rtclock_calend.epoch1;
+		if (now > rtclock_calend.epoch1)
+			t64 = now - rtclock_calend.epoch1;
+		else
+			t64 = 0;
+
 		t32 = (t64 * USEC_PER_SEC) / rtclock_sec_divisor;
 
 		if (t32 > delta)
@@ -787,7 +801,10 @@ clock_adjust_calendar(void)
 
 		now = mach_absolute_time();
 
-		t64 = now - rtclock_calend.epoch1;
+		if (now > rtclock_calend.epoch1)
+			t64 = now - rtclock_calend.epoch1;
+		else
+			t64 = 0;
 
 		rtclock_calend.epoch1 = now;
 

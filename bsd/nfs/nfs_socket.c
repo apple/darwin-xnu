@@ -1,24 +1,21 @@
 /*
- * Copyright (c) 2000-2003 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2004 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
- * Copyright (c) 1999-2003 Apple Computer, Inc.  All Rights Reserved.
+ * The contents of this file constitute Original Code as defined in and
+ * are subject to the Apple Public Source License Version 1.1 (the
+ * "License").  You may not use this file except in compliance with the
+ * License.  Please obtain a copy of the License at
+ * http://www.apple.com/publicsource and read it before using this file.
  * 
- * This file contains Original Code and/or Modifications of Original Code
- * as defined in and that are subject to the Apple Public Source License
- * Version 2.0 (the 'License'). You may not use this file except in
- * compliance with the License. Please obtain a copy of the License at
- * http://www.opensource.apple.com/apsl/ and read it before using this
- * file.
- * 
- * The Original Code and all software distributed under the License are
- * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * This Original Code and all software distributed under the License are
+ * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
- * Please see the License for the specific language governing rights and
- * limitations under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
+ * License for the specific language governing rights and limitations
+ * under the License.
  * 
  * @APPLE_LICENSE_HEADER_END@
  */
@@ -181,8 +178,6 @@ int nfsrtton = 0;
 struct nfsrtt nfsrtt;
 
 static int	nfs_msg __P((struct proc *, const char *, const char *, int));
-static void	nfs_up(struct nfsreq *, const char *, int);
-static void	nfs_down(struct nfsreq *, const char *, int);
 static int	nfs_rcvlock __P((struct nfsreq *));
 static void	nfs_rcvunlock __P((struct nfsreq *));
 static int	nfs_receive __P((struct nfsreq *rep, struct mbuf **aname,
@@ -670,7 +665,8 @@ nfs_reconnect(rep)
 			return (EINTR);
 		if (error == EIO)
 			return (EIO);
-		nfs_down(rep, "can not connect", error);
+		nfs_down(rep, rep->r_nmp, rep->r_procp, "can not connect",
+			error, NFSSTA_TIMEO);
 		if (!(nmp->nm_state & NFSSTA_MOUNTED)) {
 			/* we're not yet completely mounted and */
 			/* we can't reconnect, so we fail */
@@ -1001,6 +997,7 @@ tryagain:
 
 			thread_funnel_switch(KERNEL_FUNNEL, NETWORK_FUNNEL);
 			do {
+			    control = NULL;
 			    rcvflg = 0;
 			    error =  soreceive(so, (struct sockaddr **)0,
 					       &auio, mp, &control, &rcvflg);
@@ -1186,6 +1183,7 @@ nfs_reply(myrep)
 		 * Get the next Rpc reply off the socket. Assume myrep->r_nmp
 		 * is still intact by checks done in nfs_rcvlock.
 		 */
+		/* XXX why do we ask for nam here? we don't use it! */
 		error = nfs_receive(myrep, &nam, &mrep);
 		if (nam)
 			m_freem(nam);
@@ -1404,6 +1402,8 @@ nfs_request(vp, mrest, procnum, procp, cred, mrp, mdp, dposp, xidp)
 	int nmsotype;
 	struct timeval now;
 
+	if (mrp)
+		*mrp = NULL;
 	if (xidp)
 		*xidp = 0;
 
@@ -1598,7 +1598,8 @@ tryagain:
 	 * If there was a successful reply and a tprintf msg.
 	 * tprintf a response.
 	 */
-	nfs_up(rep, "is alive again", error);
+	if (!error)
+		nfs_up(rep, nmp, procp, "is alive again", NFSSTA_TIMEO);
 	mrep = rep->r_mrep;
 	md = rep->r_md;
 	dpos = rep->r_dpos;
@@ -1688,8 +1689,10 @@ tryagain:
 				*mdp = md;
 				*dposp = dpos;
 				error |= NFSERR_RETERR;
-			} else
+			} else {
 				m_freem(mrep);
+				error &= ~NFSERR_RETERR;
+			}
 			m_freem(rep->r_mreq);
 			FSDBG_BOT(531, error, rep->r_xid, nmp, rep);
 			FREE_ZONE((caddr_t)rep,
@@ -2044,7 +2047,8 @@ nfs_timer(arg)
 		    (rep->r_rexmit > 2 || (rep->r_flags & R_RESENDERR)) &&
 		    rep->r_lastmsg + nmp->nm_tprintf_delay < now.tv_sec) {
 			rep->r_lastmsg = now.tv_sec;
-			nfs_down(rep, "not responding", 0);
+			nfs_down(rep, rep->r_nmp, rep->r_procp, "not responding",
+				0, NFSSTA_TIMEO);
 			if (!(nmp->nm_state & NFSSTA_MOUNTED)) {
 				/* we're not yet completely mounted and */
 				/* we can't complete an RPC, so we fail */
@@ -3038,41 +3042,52 @@ nfs_msg(p, server, msg, error)
 	return (0);
 }
 
-static void
-nfs_down(rep, msg, error)
+void
+nfs_down(rep, nmp, proc, msg, error, flags)
 	struct nfsreq *rep;
+	struct nfsmount *nmp;
+	struct proc *proc;
 	const char *msg;
-	int error;
+	int error, flags;
 {
-	int dosignal;
-
-	if (rep == NULL || rep->r_nmp == NULL)
+	if (nmp == NULL)
 		return;
-	if (!(rep->r_nmp->nm_state & NFSSTA_TIMEO)) {
-		vfs_event_signal(&rep->r_nmp->nm_mountp->mnt_stat.f_fsid,
+	if ((flags & NFSSTA_TIMEO) && !(nmp->nm_state & NFSSTA_TIMEO)) {
+		vfs_event_signal(&nmp->nm_mountp->mnt_stat.f_fsid,
 		    VQ_NOTRESP, 0);
-		rep->r_nmp->nm_state |= NFSSTA_TIMEO;
+		nmp->nm_state |= NFSSTA_TIMEO;
 	}
-	rep->r_flags |= R_TPRINTFMSG;
-	nfs_msg(rep->r_procp, rep->r_nmp->nm_mountp->mnt_stat.f_mntfromname,
-	    msg, error);
+	if ((flags & NFSSTA_LOCKTIMEO) && !(nmp->nm_state & NFSSTA_LOCKTIMEO)) {
+		vfs_event_signal(&nmp->nm_mountp->mnt_stat.f_fsid,
+		    VQ_NOTRESPLOCK, 0);
+		nmp->nm_state |= NFSSTA_LOCKTIMEO;
+	}
+	if (rep)
+		rep->r_flags |= R_TPRINTFMSG;
+	nfs_msg(proc, nmp->nm_mountp->mnt_stat.f_mntfromname, msg, error);
 }
 
-static void
-nfs_up(rep, msg, error)
+void
+nfs_up(rep, nmp, proc, msg, flags)
 	struct nfsreq *rep;
+	struct nfsmount *nmp;
+	struct proc *proc;
 	const char *msg;
-	int error;
+	int flags;
 {
-
-	if (error != 0 || rep == NULL || rep->r_nmp == NULL)
+	if (nmp == NULL)
 		return;
-	if ((rep->r_flags & R_TPRINTFMSG) != 0)
-		nfs_msg(rep->r_procp,
-		    rep->r_nmp->nm_mountp->mnt_stat.f_mntfromname, msg, 0);
-	if ((rep->r_nmp->nm_state & NFSSTA_TIMEO)) {
-		rep->r_nmp->nm_state &= ~NFSSTA_TIMEO;
-		vfs_event_signal(&rep->r_nmp->nm_mountp->mnt_stat.f_fsid,
+	if ((rep == NULL) || (rep->r_flags & R_TPRINTFMSG) != 0)
+		nfs_msg(proc, nmp->nm_mountp->mnt_stat.f_mntfromname, msg, 0);
+	if ((flags & NFSSTA_TIMEO) && (nmp->nm_state & NFSSTA_TIMEO)) {
+		nmp->nm_state &= ~NFSSTA_TIMEO;
+		vfs_event_signal(&nmp->nm_mountp->mnt_stat.f_fsid,
 		    VQ_NOTRESP, 1);
 	}
+	if ((flags & NFSSTA_LOCKTIMEO) && (nmp->nm_state & NFSSTA_LOCKTIMEO)) {
+		nmp->nm_state &= ~NFSSTA_LOCKTIMEO;
+		vfs_event_signal(&nmp->nm_mountp->mnt_stat.f_fsid,
+		    VQ_NOTRESPLOCK, 1);
+	}
 }
+

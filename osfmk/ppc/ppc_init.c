@@ -3,22 +3,19 @@
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
- * Copyright (c) 1999-2003 Apple Computer, Inc.  All Rights Reserved.
+ * The contents of this file constitute Original Code as defined in and
+ * are subject to the Apple Public Source License Version 1.1 (the
+ * "License").  You may not use this file except in compliance with the
+ * License.  Please obtain a copy of the License at
+ * http://www.apple.com/publicsource and read it before using this file.
  * 
- * This file contains Original Code and/or Modifications of Original Code
- * as defined in and that are subject to the Apple Public Source License
- * Version 2.0 (the 'License'). You may not use this file except in
- * compliance with the License. Please obtain a copy of the License at
- * http://www.opensource.apple.com/apsl/ and read it before using this
- * file.
- * 
- * The Original Code and all software distributed under the License are
- * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * This Original Code and all software distributed under the License are
+ * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
- * Please see the License for the specific language governing rights and
- * limitations under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
+ * License for the specific language governing rights and limitations
+ * under the License.
  * 
  * @APPLE_LICENSE_HEADER_END@
  */
@@ -99,9 +96,9 @@ void ppc_init(boot_args *args)
 	char *str;
 	unsigned long	addr, videoAddr;
 	unsigned int	maxmem;
-	uint64_t		xmaxmem;
+	uint64_t		xmaxmem, newhid;
 	unsigned int	cputrace;
-	unsigned int	novmx;
+	unsigned int	novmx, fhrdl1;
 	extern vm_offset_t static_memory_end;
 	thread_t		thread;
 	mapping *mp;
@@ -182,7 +179,7 @@ void ppc_init(boot_args *args)
 
 	if(trcWork.traceSize < 1) trcWork.traceSize = 1;	/* Minimum size of 1 page */
 	if(trcWork.traceSize > 256) trcWork.traceSize = 256;	/* Maximum size of 256 pages */
-	trcWork.traceSize = trcWork.traceSize * 4096;	/* Change page count to size */
+	trcWork.traceSize = trcWork.traceSize * 4096;		/* Change page count to size */
 
 	if (!PE_parse_boot_arg("maxmem", &maxmem))
 		xmaxmem=0;
@@ -194,6 +191,19 @@ void ppc_init(boot_args *args)
  */
 
 	ppc_vm_init(xmaxmem, args);
+	
+	if(per_proc_info[0].pf.Available & pf64Bit) {		/* Are we on a 64-bit machine */
+		if(PE_parse_boot_arg("fhrdl1", &fhrdl1)) {		/* Have they supplied "Force Hardware Recovery of Data cache level 1 errors? */
+			newhid = per_proc_info[0].pf.pfHID5;		/* Get the old HID5 */
+			if(fhrdl1 < 2) {
+				newhid &= 0xFFFFFFFFFFFFDFFFULL;		/* Clear the old one */
+				newhid |= (fhrdl1 ^ 1) << 13;			/* Set new value to enable machine check recovery */
+				for(i = 0; i < NCPUS; i++)	per_proc_info[i].pf.pfHID5 = newhid;	/* Set all shadows */
+				hid5set64(newhid);						/* Set the hid for this processir */
+			}
+		}
+	}
+	
 	
 	PE_init_platform(TRUE, args);
 	

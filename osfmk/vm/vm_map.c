@@ -3,22 +3,19 @@
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
- * Copyright (c) 1999-2003 Apple Computer, Inc.  All Rights Reserved.
+ * The contents of this file constitute Original Code as defined in and
+ * are subject to the Apple Public Source License Version 1.1 (the
+ * "License").  You may not use this file except in compliance with the
+ * License.  Please obtain a copy of the License at
+ * http://www.apple.com/publicsource and read it before using this file.
  * 
- * This file contains Original Code and/or Modifications of Original Code
- * as defined in and that are subject to the Apple Public Source License
- * Version 2.0 (the 'License'). You may not use this file except in
- * compliance with the License. Please obtain a copy of the License at
- * http://www.opensource.apple.com/apsl/ and read it before using this
- * file.
- * 
- * The Original Code and all software distributed under the License are
- * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * This Original Code and all software distributed under the License are
+ * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
- * Please see the License for the specific language governing rights and
- * limitations under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
+ * License for the specific language governing rights and limitations
+ * under the License.
  * 
  * @APPLE_LICENSE_HEADER_END@
  */
@@ -7372,6 +7369,7 @@ vm_region_64(
 	vm_region_basic_info_64_t	basic;
 	vm_region_extended_info_t	extended;
 	vm_region_top_info_t	top;
+	vm_region_object_info_64_t	object_info_64;
 
 	if (map == VM_MAP_NULL) 
 		return(KERN_INVALID_ARGUMENT);
@@ -7496,6 +7494,51 @@ vm_region_64(
 	        *object_name = IP_NULL;
 	    *address = start;
 	    *size = (entry->vme_end - start);
+
+	    vm_map_unlock_read(map);
+	    return(KERN_SUCCESS);
+	}
+	case VM_REGION_OBJECT_INFO_64:
+	{
+	    if (*count < VM_REGION_OBJECT_INFO_COUNT_64)
+		return(KERN_INVALID_ARGUMENT);
+
+	    object_info_64 = (vm_region_object_info_64_t) info;
+	    *count = VM_REGION_OBJECT_INFO_COUNT_64;
+
+	    vm_map_lock_read(map);
+
+	    start = *address;
+	    if (!vm_map_lookup_entry(map, start, &tmp_entry)) {
+		if ((entry = tmp_entry->vme_next) == vm_map_to_entry(map)) {
+			vm_map_unlock_read(map);
+		   	return(KERN_INVALID_ADDRESS);
+		}
+	    } else {
+		entry = tmp_entry;
+	    }
+
+	    start = entry->vme_start;
+
+	    object_info_64->offset = entry->offset;
+	    object_info_64->protection = entry->protection;
+	    object_info_64->inheritance = entry->inheritance;
+	    object_info_64->max_protection = entry->max_protection;
+	    object_info_64->behavior = entry->behavior;
+	    object_info_64->user_wired_count = entry->user_wired_count;
+	    object_info_64->is_sub_map = entry->is_sub_map;
+	    *address = start;
+	    *size = (entry->vme_end - start);
+
+	    if (object_name) *object_name = IP_NULL;
+	    if (entry->is_sub_map) {
+	        object_info_64->shared = FALSE;
+		object_info_64->object_id = 0;
+	    } else {
+	        object_info_64->shared = entry->is_shared;
+		object_info_64->object_id =
+			(vm_offset_t) entry->object.vm_object;
+	    }
 
 	    vm_map_unlock_read(map);
 	    return(KERN_SUCCESS);

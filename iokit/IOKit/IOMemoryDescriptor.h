@@ -3,22 +3,19 @@
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
- * Copyright (c) 1999-2003 Apple Computer, Inc.  All Rights Reserved.
+ * The contents of this file constitute Original Code as defined in and
+ * are subject to the Apple Public Source License Version 1.1 (the
+ * "License").  You may not use this file except in compliance with the
+ * License.  Please obtain a copy of the License at
+ * http://www.apple.com/publicsource and read it before using this file.
  * 
- * This file contains Original Code and/or Modifications of Original Code
- * as defined in and that are subject to the Apple Public Source License
- * Version 2.0 (the 'License'). You may not use this file except in
- * compliance with the License. Please obtain a copy of the License at
- * http://www.opensource.apple.com/apsl/ and read it before using this
- * file.
- * 
- * The Original Code and all software distributed under the License are
- * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * This Original Code and all software distributed under the License are
+ * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
- * Please see the License for the specific language governing rights and
- * limitations under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
+ * License for the specific language governing rights and limitations
+ * under the License.
  * 
  * @APPLE_LICENSE_HEADER_END@
  */
@@ -112,6 +109,13 @@ protected:
     IOOptionBits 	_tag;
 
 public:
+
+/*! @function getBackingID
+    @abstract Get an unique identifier for the virtual memory systems backing memory object.
+    @discussion For memory descriptors that are directly mapped by real memory, IOGeneralMemoryDescriptors that are also persistent (kIOMemoryPersistent) return the id of the backing vm object.  This returned value can be tested to see if 2 memory persistent memory descriptors share the same backing.  The call itself is fairly heavy weight and can only be applied to persistent memory descriptors so it is not generally useful.  This function is NOT virtual at the moment.  We may choose to make it virtual in the future however.
+    @result 0 on non-persistent or non IOGeneralMemoryDescriptors, unique id if not. */
+    // See implementation at end of file
+    inline void * getBackingID() const;
 
     virtual IOPhysicalAddress getSourceSegment( IOByteCount offset,
 						IOByteCount * length );
@@ -668,6 +672,11 @@ public:
      * IOMemoryDescriptor required methods
      */
 
+/*! @function getBackingID
+    @abstract Returns the vm systems unique id for the memory backing this IOGeneralMemoryDescriptor.  See IOMemoryDescriptor::getBackingID for details.
+    @result 0 on non-persistent or non IOGeneralMemoryDescriptors, unique id if not. */
+    void * getBackingID() const;
+
     // Master initaliser
     virtual bool initWithOptions(void *		buffers,
                                  UInt32		count,
@@ -826,5 +835,17 @@ protected:
 };
 
 /* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
+
+// Implementation of inline functions
+void * IOMemoryDescriptor::getBackingID() const
+{
+    const IOGeneralMemoryDescriptor *genMD = (const IOGeneralMemoryDescriptor *)
+	OSDynamicCast(IOGeneralMemoryDescriptor, this);
+
+    if (genMD)
+        return genMD->getBackingID();
+    else
+	return 0;
+}
 
 #endif /* !_IOMEMORYDESCRIPTOR_H */

@@ -3,22 +3,19 @@
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
- * Copyright (c) 1999-2003 Apple Computer, Inc.  All Rights Reserved.
+ * The contents of this file constitute Original Code as defined in and
+ * are subject to the Apple Public Source License Version 1.1 (the
+ * "License").  You may not use this file except in compliance with the
+ * License.  Please obtain a copy of the License at
+ * http://www.apple.com/publicsource and read it before using this file.
  * 
- * This file contains Original Code and/or Modifications of Original Code
- * as defined in and that are subject to the Apple Public Source License
- * Version 2.0 (the 'License'). You may not use this file except in
- * compliance with the License. Please obtain a copy of the License at
- * http://www.opensource.apple.com/apsl/ and read it before using this
- * file.
- * 
- * The Original Code and all software distributed under the License are
- * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * This Original Code and all software distributed under the License are
+ * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
- * Please see the License for the specific language governing rights and
- * limitations under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
+ * License for the specific language governing rights and limitations
+ * under the License.
  * 
  * @APPLE_LICENSE_HEADER_END@
  */
@@ -2044,6 +2041,9 @@ LEXT(ml_set_processor_speed)
 			rlwinm.	r0, r6, 0, pmDualPLLb, pmDualPLLb		; Is DualPLL supported?
 			bne		spsDPLL
 
+			rlwinm.	r0, r6, 0, pmDFSb, pmDFSb				; Is DFS supported?
+			bne		spsDFS
+
 			rlwinm.	r0, r6, 0, pmPowerTuneb, pmPowerTuneb	; Is DualPLL supported?
 			bne		spsPowerTune
 
@@ -2072,6 +2072,20 @@ spsDPLL1:
 			mtspr	hid0, r4								; Set the hid0 value
 			isync
 			sync
+			b		spsDone
+
+spsDFS:
+			cmplwi	r3, 0									; full speed?
+			mfspr	r3, hid1								; Get the current HID1
+			rlwinm	r3, r3, 0, hid1dfs1+1, hid1dfs0-1		; assume full speed, clear dfs bits
+			beq		spsDFS1
+			oris	r3, r3, hi16(hid1dfs1m)					; slow, set half speed dfs1 bit
+spsDFS1:
+			stw		r3, pfHID1(r5)							; Save the new hid1 value
+			sync
+			mtspr	hid1, r3								; Set the new HID1
+			sync
+			isync
 			b		spsDone
 
 spsPowerTune:

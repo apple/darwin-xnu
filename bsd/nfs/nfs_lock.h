@@ -51,49 +51,63 @@
 #define	_PATH_LCKFIFO	"/var/run/nfslockd"
 
 /*
- * This structure is used to uniquely identify the process which originated
- * a particular message to lockd.  A sequence number is used to differentiate
- * multiple messages from the same process.  A process start time is used to
- * detect the unlikely, but possible, event of the recycling of a pid.
+ * The structure that the kernel hands lockd for each lock request.
  */
-struct lockd_msg_ident {
-	pid_t		pid;            /* The process ID. */
-	struct timeval	pid_start;	/* Start time of process id */
-	int		msg_seq;	/* Sequence number of message */
-	struct uthread	*ut;
-};
-
-#define LOCKD_MSG_VERSION	2
-
-/*
- * The structure that the kernel hands us for each lock request.
- */
-typedef struct __lock_msg {
-	int			lm_version;	/* which version is this */
-	struct lockd_msg_ident	lm_msg_ident;	/* originator of the message */
-	struct flock		lm_fl;             /* The lock request. */
-	int			lm_wait;           /* The F_WAIT flag. */
-	int			lm_getlk;		/* is this a F_GETLK request */
+#define LOCKD_MSG_VERSION	3
+typedef struct nfs_lock_msg {
+	int			lm_version;		/* LOCKD_MSG version */
+	int			lm_flags;		/* request flags */
+	u_int64_t		lm_xid;			/* unique message transaction ID */
+	struct flock		lm_fl;			/* The lock request. */
 	struct sockaddr_storage lm_addr;		/* The address. */
-	int			lm_nfsv3;		/* If NFS version 3. */
 	size_t			lm_fh_len;		/* The file handle length. */
 	struct xucred		lm_cred;		/* user cred for lock req */
-	u_int8_t		lm_fh[NFS_SMALLFH];/* The file handle. */
+	u_int8_t		lm_fh[NFS_SMALLFH];	/* The file handle. */
 } LOCKD_MSG;
 
-#define LOCKD_ANS_VERSION	1
+/* lm_flags */
+#define LOCKD_MSG_BLOCK		0x0001	/* a blocking request */
+#define LOCKD_MSG_TEST		0x0002	/* just a lock test */
+#define LOCKD_MSG_NFSV3		0x0004  /* NFSv3 request */
+#define LOCKD_MSG_CANCEL	0x0008  /* cancelling blocked request */
 
+/* The structure used to maintain the pending request queue */
+typedef struct nfs_lock_msg_request {
+	TAILQ_ENTRY(nfs_lock_msg_request) lmr_next;	/* in-kernel pending request list */
+	int			lmr_answered;		/* received an answer? */
+	int			lmr_errno;		/* return status */
+	int			lmr_saved_errno;	/* original return status */
+	LOCKD_MSG		lmr_msg;		/* the message */
+} LOCKD_MSG_REQUEST;
+
+TAILQ_HEAD(nfs_lock_msg_queue, nfs_lock_msg_request);
+typedef struct nfs_lock_msg_queue LOCKD_MSG_QUEUE;
+
+
+/*
+ * The structure that lockd hands the kernel for each lock answer.
+ */
+#define LOCKD_ANS_VERSION	2
 struct lockd_ans {
-	int		la_vers;
-	struct lockd_msg_ident	la_msg_ident;	/* originator of the message */
-	int		la_errno;
-	int		la_getlk_set;		/* use returned getlk values */
-	int		la_getlk_pid;		/* returned pid for F_GETLK */
-	off_t		la_getlk_start;		/* returned starting offset */
-	off_t		la_getlk_len;		/* returned length */
+	int		la_version;		/* lockd_ans version */
+	int		la_errno;		/* return status */
+	u_int64_t	la_xid;			/* unique message transaction ID */
+	int		la_flags;		/* answer flags */
+	pid_t		la_pid;			/* pid of lock requester/owner */
+	off_t		la_start;		/* lock starting offset */
+	off_t		la_len;			/* lock length */
+	size_t		la_fh_len;		/* The file handle length. */
+	u_int8_t	la_fh[NFS_SMALLFH];	/* The file handle. */
 };
 
+/* la_flags */
+#define LOCKD_ANS_GRANTED	0x0001	/* NLM_GRANTED request */
+#define LOCKD_ANS_LOCK_INFO	0x0002	/* lock info valid */
+#define LOCKD_ANS_LOCK_EXCL	0x0004	/* lock is exclusive */
+
+
 #ifdef KERNEL
+void	nfs_lockinit(void);
 int	nfs_dolock(struct vop_advlock_args *ap);
 int	nfslockdans(struct proc *p, struct lockd_ans *ansp);
 int	nfslockdfd(struct proc *p, int fd);

@@ -3,22 +3,19 @@
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
- * Copyright (c) 1999-2003 Apple Computer, Inc.  All Rights Reserved.
+ * The contents of this file constitute Original Code as defined in and
+ * are subject to the Apple Public Source License Version 1.1 (the
+ * "License").  You may not use this file except in compliance with the
+ * License.  Please obtain a copy of the License at
+ * http://www.apple.com/publicsource and read it before using this file.
  * 
- * This file contains Original Code and/or Modifications of Original Code
- * as defined in and that are subject to the Apple Public Source License
- * Version 2.0 (the 'License'). You may not use this file except in
- * compliance with the License. Please obtain a copy of the License at
- * http://www.opensource.apple.com/apsl/ and read it before using this
- * file.
- * 
- * The Original Code and all software distributed under the License are
- * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * This Original Code and all software distributed under the License are
+ * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
- * Please see the License for the specific language governing rights and
- * limitations under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
+ * License for the specific language governing rights and limitations
+ * under the License.
  * 
  * @APPLE_LICENSE_HEADER_END@
  */
@@ -95,6 +92,17 @@ typedef struct {
 	int tstate_size;
 } tir_t;
 
+/* XXX should be static */
+void collectth_state(thread_act_t th_act, tir_t *t);
+
+/* XXX not in a Mach header anywhere */
+kern_return_t thread_getstatus(register thread_act_t act, int flavor,
+	thread_state_t tstate, mach_msg_type_number_t *count);
+
+
+__private_extern__ do_coredump = 1;	/* default: dump cores */
+__private_extern__ sugid_coredump = 0;	/* deafult: but not on SGUID binaries */
+
 void
 collectth_state(thread_act_t th_act, tir_t *t)
 {
@@ -124,20 +132,23 @@ collectth_state(thread_act_t th_act, tir_t *t)
 			  flavors[i];
 			hoffset += sizeof(mythread_state_flavor_t);
 			thread_getstatus(th_act, flavors[i].flavor,
-					(thread_state_t *)(header+hoffset),
+					(thread_state_t)(header+hoffset),
 					&flavors[i].count);
 			hoffset += flavors[i].count*sizeof(int);
 		}
 
 		t->hoffset = hoffset;
 }
+
+extern boolean_t coredumpok(vm_map_t map, vm_offset_t va);  /* temp fix */
+extern task_t current_task(void);	/* XXX */
+
 /*
  * Create a core image on the file "core".
  */
 #define	MAX_TSTATE_FLAVORS	10
 int
-coredump(p)
-	register struct proc *p;
+coredump(struct proc *p)
 {
 	int error=0;
 	register struct pcred *pcred = p->p_cred;
@@ -152,17 +163,16 @@ coredump(p)
 	struct machine_slot	*ms;
 	struct mach_header	*mh;
 	struct segment_command	*sc;
-	struct thread_command	*tc;
 	vm_size_t	size;
 	vm_prot_t	prot;
 	vm_prot_t	maxprot;
 	vm_inherit_t	inherit;
-	vm_offset_t	offset;
 	int		error1;
 	task_t		task;
 	char		core_name[MAXCOMLEN+6];
+	char		*name;
 	mythread_state_flavor_t flavors[MAX_TSTATE_FLAVORS];
-	vm_size_t	nflavors,mapsize;
+	vm_size_t	mapsize;
 	int		i;
 	int nesting_depth = 0;
 	kern_return_t	kret;
@@ -170,11 +180,14 @@ coredump(p)
 	int vbrcount=0;
 	tir_t tir1;
 	struct vnode * vp;
-	extern boolean_t coredumpok(vm_map_t map, vm_offset_t va);  /* temp fix */
-	extern task_t current_task();	/* XXX */
 
-	if (pcred->p_svuid != pcred->p_ruid || pcred->p_svgid != pcred->p_rgid)
+	if (do_coredump == 0 ||		/* Not dumping at all */
+	    ( (sugid_coredump == 0) &&	/* Not dumping SUID/SGID binaries */
+	      ( (pcred->p_svuid != pcred->p_ruid) ||
+	        (pcred->p_svgid != pcred->p_rgid)))) {
+	    
 		return (EFAULT);
+	}
 
 	task = current_task();
 	map = current_map();
@@ -184,9 +197,17 @@ coredump(p)
 		return (EFAULT);
 	(void) task_suspend(task);
 
+	/* create name according to sysctl'able format string */
+	name = proc_core_name(p->p_comm, p->p_ucred->cr_uid, p->p_pid);
+
+	/* if name creation fails, fall back to historical behaviour... */
+	if (name == NULL) {
 	sprintf(core_name, "/cores/core.%d", p->p_pid);
-	NDINIT(&nd, LOOKUP, NOFOLLOW, UIO_SYSSPACE, core_name, p);
-	if(error = vn_open(&nd, O_CREAT | FWRITE | O_NOFOLLOW, S_IRUSR ))
+		name = core_name;
+	}
+
+	NDINIT(&nd, LOOKUP, NOFOLLOW, UIO_SYSSPACE, name, p);
+	if((error = vn_open(&nd, O_CREAT | FWRITE | O_NOFOLLOW, S_IRUSR )) != 0)
 		return (error);
 	vp = nd.ni_vp;
 	
@@ -211,14 +232,9 @@ coredump(p)
 
 	thread_count = get_task_numacts(task);
 	segment_count = get_vmmap_entries(map);	/* XXX */
-	/*
-	 * nflavors here is really the number of ints in flavors
-	 * to meet the thread_getstatus() calling convention
-	 */
-	nflavors = mynum_flavors;
 	bcopy(thread_flavor_array,flavors,sizeof(thread_flavor_array));
 	tstate_size = 0;
-	for (i = 0; i < nflavors; i++)
+	for (i = 0; i < mynum_flavors; i++)
 		tstate_size += sizeof(mythread_state_flavor_t) +
 		  (flavors[i].count * sizeof(int));
 

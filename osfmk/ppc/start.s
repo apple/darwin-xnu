@@ -3,22 +3,19 @@
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
- * Copyright (c) 1999-2003 Apple Computer, Inc.  All Rights Reserved.
+ * The contents of this file constitute Original Code as defined in and
+ * are subject to the Apple Public Source License Version 1.1 (the
+ * "License").  You may not use this file except in compliance with the
+ * License.  Please obtain a copy of the License at
+ * http://www.apple.com/publicsource and read it before using this file.
  * 
- * This file contains Original Code and/or Modifications of Original Code
- * as defined in and that are subject to the Apple Public Source License
- * Version 2.0 (the 'License'). You may not use this file except in
- * compliance with the License. Please obtain a copy of the License at
- * http://www.opensource.apple.com/apsl/ and read it before using this
- * file.
- * 
- * The Original Code and all software distributed under the License are
- * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * This Original Code and all software distributed under the License are
+ * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
- * Please see the License for the specific language governing rights and
- * limitations under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
+ * License for the specific language governing rights and limitations
+ * under the License.
  * 
  * @APPLE_LICENSE_HEADER_END@
  */
@@ -676,18 +673,20 @@ init745X:
 			rlwinm	r17,r17,0,pfL2b+1,pfL2b-1			; No L2, turn off feature
 			
 init745Xhl2:
-			mfpvr	r14								; Get processor version
-			rlwinm	r14,r14,16,16,31						; Isolate processor version
-			cmpli	cr0, r14, PROCESSOR_VERSION_7457
+			mfpvr	r14									; Get processor version
+			rlwinm	r14,r14,16,16,31					; Isolate processor version
+			cmpli	cr0, r14, PROCESSOR_VERSION_7457	; Test for 7457 or
+			cmpli	cr1, r14, PROCESSOR_VERSION_7447A	; 7447A
+			cror	cr0_eq, cr1_eq, cr0_eq
 			lis		r14,hi16(512*1024)					; 512KB L2
-			beq	init745Xhl2_2
+			beq		init745Xhl2_2
 
 			lis		r14,hi16(256*1024)					; Base L2 size
 			rlwinm	r15,r13,22,12,13					; Convert to 256k, 512k, or 768k
 			add		r14,r14,r15							; Add in minimum
 
 init745Xhl2_2:
-			stw		r13,pfl2crOriginal(r30)					; Shadow the L2CR
+			stw		r13,pfl2crOriginal(r30)				; Shadow the L2CR
 			stw		r13,pfl2cr(r30)						; Shadow the L2CR
 			stw		r14,pfl2Size(r30)					; Set the L2 size
 				
@@ -1200,6 +1199,27 @@ processor_types:
 			.long	pfFloat | pfAltivec | pfSMPcap | pfCanSleep | pfCanNap | pfNoMSRir | pfNoL2PFNap | pfLClck | pf32Byte | pfL2 | pfL2fa | pfL2i | pfL3 | pfL3fa | pfHasDcba
 			.long   kHasAltivec | kCache32 | kDcbaAvailable | kDataStreamsRecommended | kDataStreamsAvailable | kHasGraphicsOps | kHasStfiwx
 			.long	0
+			.long	PatchExt32
+			.long	init745X
+			.long	CPU_SUBTYPE_POWERPC_7450
+			.long	105
+			.long	90
+			.long	32
+			.long	32*1024
+			.long	32*1024
+			.long	64
+			.long	52
+			.long	36
+
+;	7447A
+
+			.align	2
+			.long	0xFFFF0000		; All revisions
+			.short	PROCESSOR_VERSION_7447A
+			.short	0
+			.long	pfFloat | pfAltivec | pfSMPcap | pfCanSleep | pfCanNap | pfNoMSRir | pfNoL2PFNap | pfLClck | pf32Byte | pfL2 | pfL2fa | pfL2i | pfL3 | pfL3fa | pfHasDcba
+			.long   kHasAltivec | kCache32 | kDcbaAvailable | kDataStreamsRecommended | kDataStreamsAvailable | kHasGraphicsOps | kHasStfiwx
+			.long	pmDFS
 			.long	PatchExt32
 			.long	init745X
 			.long	CPU_SUBTYPE_POWERPC_7450

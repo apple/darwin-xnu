@@ -1,9 +1,7 @@
 /*
- * Copyright (c) 2003 Apple Computer, Inc. All rights reserved.
- *
  * @APPLE_LICENSE_HEADER_START@
  * 
- * Copyright (c) 1999-2003 Apple Computer, Inc.  All Rights Reserved.
+ * Copyright (c) 1999-2004 Apple Computer, Inc.  All Rights Reserved.
  * 
  * This file contains Original Code and/or Modifications of Original Code
  * as defined in and that are subject to the Apple Public Source License
@@ -23,8 +21,8 @@
  * @APPLE_LICENSE_HEADER_END@
  */
 
-#ifndef _BSM_KEVENTS_H_
-#define _BSM_KEVENTS_H_
+#ifndef _BSM_AUDIT_KEVENTS_H_
+#define _BSM_AUDIT_KEVENTS_H_
 
 /* 
  * Values marked as AUE_NULL are not required to be audited as per CAPP 
@@ -42,8 +40,9 @@
 #define	AUE_NULL        0
 #define	AUE_EXIT        1               /*1*/	
 #define	AUE_FORK        2               /*2*/
-#define	AUE_READ        AUE_NULL        /*3*/
-#define	AUE_WRITE       AUE_NULL        /*4*/
+#define	AUE_OPEN        3               /*3*/
+#define	AUE_READ        AUE_NULL        /*4*/
+#define	AUE_WRITE       AUE_NULL        /*5*/
 #define	AUE_OPEN_R      72              /*5*/
 #define	AUE_OPEN_RC     73              /*5*/
 #define	AUE_OPEN_RTC    75              /*5*/
@@ -58,7 +57,7 @@
 #define	AUE_OPEN_WT	78              /*5*/
 #define	AUE_CLOSE       112              /*6*/
 #define	AU_WAIT4        AUE_NULL        /*7*/	
-#define	AUE_O_CREAT     AUE_NULL        /*8*/     /*4*/
+#define	AUE_O_CREAT     AUE_OPEN_RWTC   /*8*/     /*4*/
 #define	AUE_LINK        5               /*9*/	
 #define	AUE_UNLINK      6               /*10*/	
 #define AUE_O_EXECV     AUE_NULL        /*11*/
@@ -88,9 +87,9 @@
 #define AUE_FCHFLAGS    304		/*35*/
 #define AUE_SYNC        AUE_NULL        /*36*/				
 #define	AUE_KILL        15              /*37*/	
-#define	AUE_O_STAT      AUE_NULL        /*38*/
+#define	AUE_O_STAT      AUE_STAT        /*38*/
 #define AUE_GETPPID     AUE_NULL	/*39*/
-#define	AUE_O_LSTAT     AUE_NULL	/*40*/
+#define	AUE_O_LSTAT     AUE_LSTAT	/*40*/
 #define AUE_DUP         AUE_NULL        /*41*/
 #define	AUE_PIPE        185             /*42*/
 #define AUE_GETEGID     AUE_NULL        /*43*/
@@ -98,7 +97,7 @@
 #define AUE_KTRACE      306		/*45*/
 #define AUE_REBOOT      308
 #define AUE_SIGACTION   AUE_NULL        /*46*/    /*XXX*/
-#define AUE_GETGID	AUE_NULL		/*47*/
+#define AUE_GETGID	AUE_NULL	/*47*/
 #define AUE_SIGPROCMASK AUE_NULL        /*48*/    /*XXX*/
 #define AUE_GETLOGIN    AUE_NULL        /*49*/
 #define AUE_SETLOGIN    307		/*50*/
@@ -106,14 +105,14 @@
 #define AUE_SIGPENDING  AUE_NULL        /*52*/    /*XXX*/
 #define AUE_SIGALTSTACK AUE_NULL        /*53*/    /*XXX*/
 #define AUE_IOCTL       158             /*54*/
-#define AUE_SYSTEMBOOT  113				/*55*/
+#define AUE_SYSTEMBOOT  113		/*55*/
 #define AUE_REVOKE      309		/*56*/
 #define AUE_SYMLINK     21              /*57*/
 #define AUE_READLINK    22              /*58*/
 #define AUE_EXECVE      23              /*59*/
 #define AUE_UMASK       310		/*60*/
 #define AUE_CHROOT      24              /*61*/ 
-#define	AUE_O_FSTAT     AUE_NULL        /*62*/
+#define AUE_O_FSTAT     AUE_FSTAT       /*62*/
 
 #define AUE_O_GETPAGESIZE AUE_NULL      /*64*/
 #define AUE_MSYNC       AUE_NULL        /*65*/
@@ -122,7 +121,7 @@
 #define AUE_O_VWRITE    AUE_NULL        /*68*/
 #define AUE_SBRK        AUE_NULL        /*69*/    /*EOPNOTSUP*/
 #define AUE_SSTK        AUE_NULL        /*70*/    /*EOPNOTSUP*/
-#define AUE_O_MMAN      AUE_NULL        /*71*/
+#define AUE_O_MMAP      AUE_MMAP        /*71*/
 #define AUE_O_VADVISE   AUE_NULL        /*72*/
 #define AUE_MUNMAP      213             /*73*/
 #define AUE_MPROTECT    311		/*74*/
@@ -136,10 +135,10 @@
 #define AUE_SETPGRP     27		/*82*/
 #define AUE_SETITIMER   AUE_NULL        /*83*/    /*XXX*/
 #define AUE_O_WAIT      AUE_NULL        /*84*/
-#define AUE_SWAPON      AUE_NULL        /*85*/    /*EOPNOTSUP*/
+#define AUE_SWAPON      28              /*85*/
 #define AUE_GETITIMER   AUE_NULL        /*86*/
 #define AUE_O_GETHOSTNAME AUE_NULL      /*87*/
-#define AUE_O_SETHOSTNAME AUE_NULL      /*88*/
+#define AUE_O_SETHOSTNAME AUE_SYSCTL    /*88*/
 #define AUE_GETDTABLESIZE AUE_NULL      /*89*/
 #define AUE_DUP2        AUE_NULL        /*90*/
 #define AUE_O_GETDOPT   AUE_NULL        /*91*/
@@ -152,8 +151,8 @@
 #define AUE_CONNECT     32              /*98*/
 #define AUE_O_ACCEPT    AUE_NULL        /*99*/
 #define AUE_GETPRIORITY AUE_NULL        /*100*/
-#define AUE_O_SEND      AUE_NULL        /*101*/
-#define AUE_O_RECV      AUE_NULL        /*102*/
+#define AUE_O_SEND      AUE_SENDMSG     /*101*/
+#define AUE_O_RECV      AUE_RECVMSG     /*102*/
 #define AUE_SIGRETURN   AUE_NULL        /*103*/   /*XXX*/
 #define AUE_BIND        34              /*104*/
 #define AUE_SETSOCKOPT  35              /*105*/
@@ -164,8 +163,8 @@
 #define AUE_O_SIGSETMASK AUE_NULL       /*110*/
 #define AUE_SIGSUSPEND  AUE_NULL        /*111*/   /*XXX*/
 #define AUE_O_SIGSTACK  AUE_NULL        /*112*/
-#define AUE_O_RECVMSG   AUE_NULL        /*113*/
-#define AUE_O_SENDMSG   AUE_NULL        /*114*/
+#define AUE_O_RECVMSG   AUE_RECVMSG     /*113*/
+#define AUE_O_SENDMSG   AUE_SENDMSG     /*114*/
 #define AUE_O_VTRACE    AUE_NULL        /*115*/   /*36*/
 #define AUE_GETTIMEOFDAY AUE_NULL       /*116*/
 #define AUE_GETRUSAGE   AUE_NULL        /*117*/
@@ -176,12 +175,12 @@
 #define AUE_SETTIMEOFDAY 313		/*122*/
 #define AUE_FCHOWN      38              /*123*/
 #define AUE_FCHMOD      39              /*124*/
-#define AUE_O_RECVFROM  AUE_NULL        /*125*/
+#define AUE_O_RECVFROM  AUE_RECVFROM    /*125*/
 #define AUE_O_SETREUID  AUE_NULL        /*126*/   /*40*/
 #define AUE_O_SETREGID  AUE_NULL        /*127*/   /*41*/
 #define AUE_RENAME      42              /*128*/
-#define AUE_O_TRUNCATE  AUE_NULL        /*129*/
-#define AUE_O_FTRUNCATE AUE_NULL        /*130*/
+#define AUE_O_TRUNCATE  AUE_TRUNCATE    /*129*/
+#define AUE_O_FTRUNCATE AUE_FTRUNCATE   /*130*/
 #define AUE_FLOCK       314		/*131*/
 #define AUE_MKFIFO      315		/*132*/
 #define AUE_SENDTO      184             /*133*/
@@ -196,8 +195,8 @@
 #define AUE_O_GETHOSTID AUE_NULL        /*142*/
 #define AUE_O_SETHOSTID AUE_NULL        /*143*/
 #define AUE_O_GETRLIMIT AUE_NULL        /*144*/
-#define AUE_O_SETRLIMIT AUE_NULL        /*145*/ 
-#define AUE_O_KILLPG    AUE_NULL        /*146*/
+#define AUE_O_SETRLIMIT AUE_SETRLIMIT   /*145*/ 
+#define AUE_O_KILLPG    AUE_KILL        /*146*/
 #define AUE_SETSID      319		/*147*/
 #define AUE_O_SETQUOTA  AUE_NULL        /*148*/
 #define AUE_O_QUOTA     AUE_NULL        /*149*/
@@ -207,14 +206,14 @@
 #define AUE_PREAD       AUE_NULL        /*153*/
 #define AUE_PWRITE      AUE_NULL        /*154*/
 #define AUE_NFSSVC      321		/*155*/
-#define AUE_O_GETDIRENTRIES	AUE_NULL    /*156*/
+#define AUE_O_GETDIRENTRIES AUE_GETDIRENTRIES /*156*/
 #define AUE_STATFS      54              /*157*/
 #define AUE_FSTATFS     55              /*158*/
 #define AUE_UMOUNT      12              /*159*/
 #define AUE_O_ASYNCDAEMON AUE_NULL      /*160*/
 #define AUE_GETFH       322		/*161*/
 #define AUE_O_GETDOMAINNAME AUE_NULL    /*162*/
-#define AUE_O_SETDOMAINNAME	AUE_NULL    /*163*/
+#define AUE_O_SETDOMAINNAME AUE_SYSCTL  /*163*/
 #define AUE_O_PCFS_MOUNT AUE_NULL       /*164*/
 #define AUE_QUOTACTL    323		/*165*/
 #define AUE_O_EXPORTFS  AUE_NULL        /*166*/
@@ -258,11 +257,11 @@
 #define AUE_SETATTRLIST 336		/*221*/ 
 #define AUE_GETDIRENTRIESATTR 337	/*222*/
 #define AUE_EXCHANGEDATA 338		/*223*/
-#define AUE_CHECKUSERACCESS	AUE_NULL    /*224*/   /* To Be Removed */
+#define AUE_CHECKUSERACCESS AUE_ACCESS    /*224*/   /* To Be Removed */
 #define AUE_SEARCHFS    339		/*225*/
 
-#define AUE_DELETE      AUE_NULL        /*226*/   /* reserved */
-#define AUE_COPYFILE    AUE_NULL        /*227*/   /* reserved */
+#define AUE_DELETE      AUE_UNLINK        /*226*/   /* reserved */
+#define AUE_COPYFILE    361        /*227*/   /* reserved */
 #define AUE_WATCHEVENT  AUE_NULL        /*231*/   /* reserved */
 #define AUE_WAITEVENT   AUE_NULL        /*232*/   /* reserved */
 #define AUE_MODWATCH    AUE_NULL        /*233*/   /* reserved */
@@ -272,7 +271,7 @@
 #define AUE_SEMSYS      AUE_NULL        /*251*/   /* To Be Removed */
 #define AUE_MSGSYS      AUE_NULL        /*252*/   /* To Be Removed */
 #define AUE_SHMSYS      AUE_NULL        /*253*/
-#define AUE_SEMCTL      98              /*254*/
+#define AUE_SEMCTL	98              /*254*/
 #define AUE_SEMCTL_GETALL  105          /*254*/
 #define AUE_SEMCTL_GETNCNT 102          /*254*/
 #define AUE_SEMCTL_GETPID  103          /*254*/
@@ -322,29 +321,34 @@
 #define AUE_PTHREADKILL 350		/*328*/
 #define AUE_PTHREADSIGMASK 351		/*329*/
 #define AUE_SIGWAIT     AUE_NULL        /*330*/   /*XXX*/
-
-
+#define AUE_SWAPOFF	355
+#define AUE_INITPROCESS	356
+#define AUE_MAPFD	357
+#define AUE_TASKFORPID	358
+#define AUE_PIDFORTASK	359
+#define AUE_SYSCTL_NONADMIN	360
 
 // BSM events - Have to identify which ones are relevant to MacOSX
 #define AUE_ACLSET                      251
 #define AUE_AUDIT                       211
+#define AUE_AUDITON			138
 #define AUE_AUDITON_GETCAR              224
 #define AUE_AUDITON_GETCLASS            231
 #define AUE_AUDITON_GETCOND             229
 #define AUE_AUDITON_GETCWD              223
 #define AUE_AUDITON_GETKMASK            221
 #define AUE_AUDITON_GETSTAT             225
-#define AUE_AUDITON_GPOLICY             114
+#define AUE_AUDITON_GPOLICY             141
 #define AUE_AUDITON_GQCTRL              145
 #define AUE_AUDITON_SETCLASS            232
 #define AUE_AUDITON_SETCOND             230
 #define AUE_AUDITON_SETKMASK            222
-#define AUE_AUDITON_SESKMASK            228
+#define AUE_AUDITON_SETSMASK            228
 #define AUE_AUDITON_SETSTAT             226
 #define AUE_AUDITON_SETUMASK            227
-#define AUE_AUDITON_SPOLICY             147
+#define AUE_AUDITON_SPOLICY             142
 #define AUE_AUDITON_SQCTRL              146
-#define AUE_AUDITSVC                    136
+#define AUE_AUDITCTL                    352
 #define AUE_DOORFS_DOOR_BIND            260
 #define AUE_DOORFS_DOOR_CALL            254
 #define AUE_DOORFS_DOOR_CREATE          256
@@ -400,4 +404,4 @@
 #define AUE_XMKNOD                      240
 #define AUE_XSTAT                       235
 
-#endif /* !_BSM_KEVENTS_H_ */
+#endif /* !_BSM_AUDIT_KEVENTS_H_ */

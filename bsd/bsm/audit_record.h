@@ -1,9 +1,7 @@
 /*
- * Copyright (c) 2003 Apple Computer, Inc. All rights reserved.
- *
  * @APPLE_LICENSE_HEADER_START@
  * 
- * Copyright (c) 1999-2003 Apple Computer, Inc.  All Rights Reserved.
+ * Copyright (c) 1999-2004 Apple Computer, Inc.  All Rights Reserved.
  * 
  * This file contains Original Code and/or Modifications of Original Code
  * as defined in and that are subject to the Apple Public Source License
@@ -23,12 +21,14 @@
  * @APPLE_LICENSE_HEADER_END@
  */
 
-#ifndef _BSM_TOKEN_H_
-#define _BSM_TOKEN_H_
+#ifndef _BSM_AUDIT_RECORD_H_
+#define _BSM_AUDIT_RECORD_H_
 
+#include <sys/cdefs.h>
 #include <sys/vnode.h>
 #include <sys/ipc.h>
 #include <sys/un.h>
+#include <sys/event.h>
 #include <netinet/in_systm.h>
 #include <netinet/in.h>
 #include <netinet/ip.h>
@@ -103,7 +103,6 @@
 #define AU_HEADER_32_TOKEN          0x14	
 #define AU_HEADER_EX_32_TOKEN       0x15
 
-
 /*
  * Data token types
 #define AUT_SERVER              ((char)0x25)
@@ -148,15 +147,12 @@
 #define AU_EXEC_ENV_TOKEN           0x3D
 #define AU_ATTR32_TOKEN             0x3E
 
-
 /*
  * Command token types
  */
  
 #define AU_CMD_TOKEN                0x51
 #define AU_EXIT_TOKEN               0x52
-
-
 
 /*
  * Miscellaneous token types
@@ -180,8 +176,6 @@
 #define AU_SUBJECT_64_TOKEN         0x75
 #define AU_PROCESS_64_TOKEN         0x77
 
-
- 
 /*
  * Extended network address token types
  */
@@ -191,14 +185,13 @@
 #define AU_PROCESS_32_EX_TOKEN      0x7b
 #define AU_SUBJECT_64_EX_TOKEN      0x7c
 #define AU_PROCESS_64_EX_TOKEN      0x7d
-#define AU_IN_ADDR_EX_TOKEN	        0x7e
+#define AU_IN_ADDR_EX_TOKEN	    0x7e
 #define AU_SOCK_EX32_TOKEN          0x7f
 #define AU_SOCK_EX128_TOKEN         AUT_INVALID         /*XXX*/
 #define AU_IP_EX_TOKEN              AUT_INVALID         /*XXX*/
 
-
 /*
- * The values for the following token ids is not
+ * The values for the following token ids are not
  * defined by BSM
  */
 #define AU_SOCK_INET_32_TOKEN       0x80         /*XXX*/ 
@@ -211,7 +204,6 @@
 #define AUP_DECIMAL     2
 #define AUP_HEX         3
 #define AUP_STRING      4
-
 
 /* data-types for the arbitrary token */
 #define AUR_BYTE        0
@@ -233,6 +225,8 @@
 #define TRAILER_PAD_MAGIC   0xB105
 
 /* BSM library calls */
+
+__BEGIN_DECLS
 
 int			au_open(void);
 int			au_write(int d, token_t *m);
@@ -288,8 +282,10 @@ token_t			*au_to_return32(char status, u_int32_t ret);
 token_t			*au_to_return64(char status, u_int64_t ret);
 token_t			*au_to_seq(long audit_count);
 token_t			*au_to_socket(struct socket *so);
-token_t			*au_to_socket_ex_32(struct socket *so);
-token_t			*au_to_socket_ex_128(struct socket *so);
+token_t			*au_to_socket_ex_32(u_int16_t lp, u_int16_t rp, 
+				struct sockaddr *la, struct sockaddr *ta);
+token_t			*au_to_socket_ex_128(u_int16_t lp, u_int16_t rp, 
+				struct sockaddr *la, struct sockaddr *ta);
 token_t			*au_to_sock_inet(struct sockaddr_in *so);
 token_t			*au_to_sock_inet32(struct sockaddr_in *so);
 token_t			*au_to_sock_inet128(struct sockaddr_in6 *so);
@@ -315,6 +311,9 @@ token_t			*au_to_subject64_ex(au_id_t auid, uid_t euid,
 token_t			*au_to_exec_args(const char **);
 token_t			*au_to_exec_env(const char **);
 token_t			*au_to_text(char *text);
+token_t			*au_to_kevent(struct kevent *kev);
 token_t			*au_to_trailer(int rec_size);
 
-#endif /* ! _BSM_TOKEN_H_ */
+__END_DECLS
+
+#endif /* ! _BSM_AUDIT_RECORD_H_ */

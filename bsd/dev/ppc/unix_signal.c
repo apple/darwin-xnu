@@ -3,22 +3,19 @@
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
- * Copyright (c) 1999-2003 Apple Computer, Inc.  All Rights Reserved.
+ * The contents of this file constitute Original Code as defined in and
+ * are subject to the Apple Public Source License Version 1.1 (the
+ * "License").  You may not use this file except in compliance with the
+ * License.  Please obtain a copy of the License at
+ * http://www.apple.com/publicsource and read it before using this file.
  * 
- * This file contains Original Code and/or Modifications of Original Code
- * as defined in and that are subject to the Apple Public Source License
- * Version 2.0 (the 'License'). You may not use this file except in
- * compliance with the License. Please obtain a copy of the License at
- * http://www.opensource.apple.com/apsl/ and read it before using this
- * file.
- * 
- * The Original Code and all software distributed under the License are
- * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * This Original Code and all software distributed under the License are
+ * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
- * Please see the License for the specific language governing rights and
- * limitations under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
+ * License for the specific language governing rights and limitations
+ * under the License.
  * 
  * @APPLE_LICENSE_HEADER_END@
  */
@@ -202,7 +199,6 @@ sendsig(p, catcher, sig, mask, code)
                     state_count = PPC_VECTOR_STATE_COUNT;
                     if (thread_getstatus(th_act, flavor, (thread_state_t)tstate, &state_count)  != KERN_SUCCESS)
                     goto bad;
-                    infostyle += 5;
             } 
        
             if ((ctx32 == 0) || dualcontext) {
@@ -211,8 +207,8 @@ sendsig(p, catcher, sig, mask, code)
                     state_count = PPC_VECTOR_STATE_COUNT;
                     if (thread_getstatus(th_act, flavor, (thread_state_t)tstate, &state_count)  != KERN_SUCCESS)
                         goto bad;
-                    infostyle += 5;
            }
+        infostyle += 5;
 	}  
 
 	trampact = ps->ps_trampact[sig];
@@ -372,16 +368,16 @@ sendsig(p, catcher, sig, mask, code)
 		goto bad;
 	if (copyout((caddr_t)&sinfo, (caddr_t)p_sinfo, sizeof(siginfo_t)))
 		goto bad;
-        if ((ctx32 == 0) || dualcontext) {
+	if ((ctx32 == 0) || dualcontext) {
 		tstate = &mctx64;
-            if (copyout((caddr_t)tstate, (caddr_t)p_mctx64, uctx.uc_mcsize))
-		goto bad;
-        }
-        if ((ctx32 == 1) || dualcontext) {
+		if (copyout((caddr_t)tstate, (caddr_t)p_mctx64, (vec_used? UC_FLAVOR64_VEC_SIZE: UC_FLAVOR64_SIZE)))
+			goto bad;
+	}
+	if ((ctx32 == 1) || dualcontext) {
 		tstate = &mctx;
-            if (copyout((caddr_t)tstate, (caddr_t)p_mctx, uctx.uc_mcsize))
-		goto bad;
-        }    
+		if (copyout((caddr_t)tstate, (caddr_t)p_mctx, uctx.uc_mcsize))
+			goto bad;
+	}    
 
 
 	/* Place our arguments in arg registers: rtm dependent */
@@ -464,6 +460,18 @@ osigreturn(p, uap, retval)
 	if (error = copyin(uap->uctx, &uctx, sizeof(struct ucontext))) {
 		return(error);
 	}
+	
+	/* validate the machine context size */
+	switch (uctx.uc_mcsize)  {
+		case UC_FLAVOR64_VEC_SIZE :
+		case UC_FLAVOR64_SIZE : 
+		case UC_FLAVOR_VEC_SIZE :
+		case UC_FLAVOR_SIZE:
+			break;
+		default: 
+			return(EINVAL);
+	}
+
 	if (error = copyin(uctx.uc_mcontext, mactx, uctx.uc_mcsize)) {
 		return(error);
 	}
@@ -572,7 +580,16 @@ sigreturn(p, uap, retval)
 		return(error);
 	}
         
-        
+	/* validate the machine context size */
+	switch (uctx.uc_mcsize) {
+		case UC_FLAVOR64_VEC_SIZE:
+		case UC_FLAVOR64_SIZE:
+		case UC_FLAVOR_VEC_SIZE:
+		case UC_FLAVOR_SIZE:
+			break;
+		default:
+			return(EINVAL);
+	}
 	if (error = copyin(uctx.uc_mcontext, mactx, uctx.uc_mcsize)) {
 		return(error);
 	}

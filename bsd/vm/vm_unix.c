@@ -1,24 +1,21 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2004 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
- * Copyright (c) 1999-2003 Apple Computer, Inc.  All Rights Reserved.
+ * The contents of this file constitute Original Code as defined in and
+ * are subject to the Apple Public Source License Version 1.1 (the
+ * "License").  You may not use this file except in compliance with the
+ * License.  Please obtain a copy of the License at
+ * http://www.apple.com/publicsource and read it before using this file.
  * 
- * This file contains Original Code and/or Modifications of Original Code
- * as defined in and that are subject to the Apple Public Source License
- * Version 2.0 (the 'License'). You may not use this file except in
- * compliance with the License. Please obtain a copy of the License at
- * http://www.opensource.apple.com/apsl/ and read it before using this
- * file.
- * 
- * The Original Code and all software distributed under the License are
- * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * This Original Code and all software distributed under the License are
+ * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
- * Please see the License for the specific language governing rights and
- * limitations under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
+ * License for the specific language governing rights and limitations
+ * under the License.
  * 
  * @APPLE_LICENSE_HEADER_END@
  */
@@ -58,6 +55,9 @@
 #include <sys/kernel.h>
 #include <sys/ubc.h>
 #include <sys/stat.h>
+
+#include <bsm/audit_kernel.h>
+#include <bsm/audit_kevents.h>
 
 #include <kern/kalloc.h>
 #include <vm/vm_map.h>
@@ -243,6 +243,9 @@ pid_for_task(t, x)
 	kern_return_t	err = KERN_SUCCESS;
 	boolean_t funnel_state;
 
+	AUDIT_MACH_SYSCALL_ENTER(AUE_PIDFORTASK);
+	AUDIT_ARG(mach_port1, t);
+
 	funnel_state = thread_funnel_set(kernel_flock, TRUE);
 	t1 = port_name_to_task(t);
 
@@ -260,8 +263,10 @@ pid_for_task(t, x)
 	}
 	task_deallocate(t1);
 pftout:
+	AUDIT_ARG(pid, pid);
 	(void) copyout((char *) &pid, (char *) x, sizeof(*x));
 	thread_funnel_set(kernel_flock, funnel_state);
+	AUDIT_MACH_SYSCALL_EXIT(err);
 	return(err);
 }
 
@@ -289,9 +294,14 @@ task_for_pid(target_tport, pid, t)
 	int error = 0;
 	boolean_t funnel_state;
 
+	AUDIT_MACH_SYSCALL_ENTER(AUE_TASKFORPID);
+	AUDIT_ARG(pid, pid);
+	AUDIT_ARG(mach_port1, target_tport);
+
 	t1 = port_name_to_task(target_tport);
 	if (t1 == TASK_NULL) {
 		(void ) copyout((char *)&t1, (char *)t, sizeof(mach_port_t));
+		AUDIT_MACH_SYSCALL_EXIT(KERN_FAILURE);
 		return(KERN_FAILURE);
 	} 
 
@@ -299,8 +309,10 @@ task_for_pid(target_tport, pid, t)
 
  restart:
 	p1 = get_bsdtask_info(t1);
+	p = pfind(pid);
+	AUDIT_ARG(process, p);
 	if (
-		((p = pfind(pid)) != (struct proc *) 0)
+		(p != (struct proc *) 0)
 		&& (p1 != (struct proc *) 0)
 		&& (((p->p_ucred->cr_uid == p1->p_ucred->cr_uid) && 
 			((p->p_cred->p_ruid == p1->p_cred->p_ruid)))
@@ -318,6 +330,7 @@ task_for_pid(target_tport, pid, t)
 					   get_task_ipcspace(current_task()));
 			} else
 				tret  = MACH_PORT_NULL;
+			AUDIT_ARG(mach_port2, tret);
 			(void ) copyout((char *)&tret, (char *) t, sizeof(mach_port_t));
 	        task_deallocate(t1);
 			error = KERN_SUCCESS;
@@ -329,6 +342,7 @@ task_for_pid(target_tport, pid, t)
 	error = KERN_FAILURE;
 tfpout:
 	thread_funnel_set(kernel_flock, funnel_state);
+	AUDIT_MACH_SYSCALL_EXIT(error);
 	return(error);
 }
 
@@ -381,7 +395,7 @@ load_shared_file(
 
 	ndp = &nd;
 
-
+	AUDIT_ARG(addr, base_address);
 	/* Retrieve the base address */
 	if (error = copyin(base_address, &local_base, sizeof (caddr_t))) {
 			goto lsf_bailout;
@@ -451,7 +465,7 @@ load_shared_file(
 	/*
 	 * Get a vnode for the target file
 	 */
-	NDINIT(ndp, LOOKUP, FOLLOW | LOCKLEAF, UIO_SYSSPACE,
+	NDINIT(ndp, LOOKUP, FOLLOW | LOCKLEAF | AUDITVNPATH1, UIO_SYSSPACE,
 	    filename_str, p);
 
 	if ((error = namei(ndp))) {
@@ -666,6 +680,7 @@ reset_shared_file(
 	int		i;
 	kern_return_t	kret;
 
+	AUDIT_ARG(addr, base_address);
 	/* Retrieve the base address */
 	if (error = copyin(base_address, &local_base, sizeof (caddr_t))) {
 			goto rsf_bailout;

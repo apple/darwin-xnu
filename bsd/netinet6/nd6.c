@@ -2076,6 +2076,22 @@ nd6_output(ifp, origifp, m0, dst, rt0)
 	if ((ifp->if_flags & IFF_LOOPBACK) != 0) {
 		m->m_pkthdr.rcvif = origifp; /* forwarding rules require the original scope_id */
 		return (dlil_output(ifptodlt(origifp, PF_INET6), m, (caddr_t)rt, (struct sockaddr *)dst,0));	
+	} else {
+		/* Do not allow loopback address to wind up on a wire */
+		struct ip6_hdr *ip6 = mtod(m, struct ip6_hdr *);
+		
+		if ((IN6_IS_ADDR_LOOPBACK(&ip6->ip6_src) ||
+			IN6_IS_ADDR_LOOPBACK(&ip6->ip6_dst))) {
+			ip6stat.ip6s_badscope++;
+			/* 
+			 * Simply drop the packet just like a firewall -- we do not want the 
+			 * the application to feel the pain, not yet...
+			 * Returning ENETUNREACH like ip6_output does in some similar cases  
+			 * could startle the otherwise clueless process that specifies
+			 * loopback as the source address.
+			 */
+			goto bad;
+		}
 	}
 
 	m->m_pkthdr.rcvif = (struct ifnet *)0;

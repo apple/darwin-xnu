@@ -1,24 +1,21 @@
 /*
- * Copyright (c) 2000-2003 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2004 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
- * Copyright (c) 1999-2003 Apple Computer, Inc.  All Rights Reserved.
+ * The contents of this file constitute Original Code as defined in and
+ * are subject to the Apple Public Source License Version 1.1 (the
+ * "License").  You may not use this file except in compliance with the
+ * License.  Please obtain a copy of the License at
+ * http://www.apple.com/publicsource and read it before using this file.
  * 
- * This file contains Original Code and/or Modifications of Original Code
- * as defined in and that are subject to the Apple Public Source License
- * Version 2.0 (the 'License'). You may not use this file except in
- * compliance with the License. Please obtain a copy of the License at
- * http://www.opensource.apple.com/apsl/ and read it before using this
- * file.
- * 
- * The Original Code and all software distributed under the License are
- * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * This Original Code and all software distributed under the License are
+ * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
- * Please see the License for the specific language governing rights and
- * limitations under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
+ * License for the specific language governing rights and limitations
+ * under the License.
  * 
  * @APPLE_LICENSE_HEADER_END@
  */
@@ -551,7 +548,9 @@ nfs3_access_otw(struct vnode *vp,
 	nfsm_build(tl, u_long *, NFSX_UNSIGNED);
 	*tl = txdr_unsigned(wmode);
 	nfsm_request(vp, NFSPROC_ACCESS, p, cred, &xid);
-	nfsm_postop_attr(vp, attrflag, &xid);
+	if (mrep) {
+		nfsm_postop_attr(vp, attrflag, &xid);
+	}
 	if (!error) {
 		nfsm_dissect(tl, u_long *, NFSX_UNSIGNED);
 		rmode = fxdr_unsigned(u_int32_t, *tl);
@@ -908,6 +907,7 @@ tryagain:
 		nfsm_loadattr(vp, ap->a_vap, &xid);
 		if (!xid) { /* out-of-order rpc - attributes were dropped */
 			m_freem(mrep);
+			mrep = NULL;
 			FSDBG(513, -1, np, np->n_xid << 32, np->n_xid);
 			if (avoidfloods++ < 100)
 				goto tryagain;
@@ -1208,11 +1208,16 @@ nfs_setattrrpc(vp, vap, cred, procp)
 	}
 	nfsm_request(vp, NFSPROC_SETATTR, procp, cred, &xid);
 	if (v3) {
-		nfsm_wcc_data(vp, wccflag, &xid);
+		if (mrep) {
+			nfsm_wcc_data(vp, wccflag, &xid);
+		}
 		if (!wccflag)
     			VTONFS(vp)->n_xid = 0;
-	} else
-		nfsm_loadattr(vp, (struct vattr *)0, &xid);
+	} else {
+		if (mrep) {
+			nfsm_loadattr(vp, (struct vattr *)0, &xid);
+		}
+	}
 	nfsm_reqdone;
 	return (error);
 }
@@ -1345,8 +1350,10 @@ cache_lookup_out:
 	nfsm_request(dvp, NFSPROC_LOOKUP, cnp->cn_proc, cnp->cn_cred, &xid); 
 
 	if (error) {
-		nfsm_postop_attr(dvp, attrflag, &xid);
-		m_freem(mrep);
+		if (mrep) {
+			nfsm_postop_attr(dvp, attrflag, &xid);
+			m_freem(mrep);
+		}
 		goto nfsmout;
 	}
 	nfsm_getfh(fhp, fhsize, v3);
@@ -1370,6 +1377,18 @@ cache_lookup_out:
 
 			nfsm_postop_attr(newvp, attrflag, &xid);
 			nfsm_postop_attr(dvp, attrflag, &dxid);
+			if (np->n_xid == 0) {
+				/*
+				 * VFS currently requires that we have valid
+				 * attributes when returning success.
+				 */
+				error = VOP_GETATTR(newvp, &vattr, cnp->cn_cred, p);
+				if (error) {
+					m_freem(mrep);
+					vput(newvp);
+					goto error_return;
+				}
+			}
 		} else
 			nfsm_loadattr(newvp, (struct vattr *)0, &xid);
 		*vpp = newvp;
@@ -1414,6 +1433,20 @@ cache_lookup_out:
 
 		nfsm_postop_attr(newvp, attrflag, &xid);
 		nfsm_postop_attr(dvp, attrflag, &dxid);
+		if (np->n_xid == 0) {
+			/*
+			 * VFS currently requires that we have valid
+			 * attributes when returning success.
+			 */
+			error = VOP_GETATTR(newvp, &vattr, cnp->cn_cred, p);
+			if (error) {
+				if (unlockdvp)
+					VOP_UNLOCK(dvp, 0, p);
+				m_freem(mrep);
+				vput(newvp);
+				goto error_return;
+			}
+		}
 	} else
 		nfsm_loadattr(newvp, (struct vattr *)0, &xid);
 	if (cnp->cn_nameiop != LOOKUP && (flags & ISLASTCN))
@@ -1517,7 +1550,7 @@ nfs_readlinkrpc(vp, uiop, cred)
 	nfsm_reqhead(vp, NFSPROC_READLINK, NFSX_FH(v3));
 	nfsm_fhtom(vp, v3);
 	nfsm_request(vp, NFSPROC_READLINK, uiop->uio_procp, cred, &xid);
-	if (v3)
+	if (v3 && mrep)
 		nfsm_postop_attr(vp, attrflag, &xid);
 	if (!error) {
 		nfsm_strsiz(len, NFS_MAXPATHLEN);
@@ -1585,18 +1618,27 @@ nfs_readrpc(vp, uiop, cred)
 		FSDBG(536, vp, uiop->uio_offset, len, 0);
 		nfsm_request(vp, NFSPROC_READ, uiop->uio_procp, cred, &xid);
 		if (v3) {
-			nfsm_postop_attr(vp, attrflag, &xid);
+			if (mrep) {
+				nfsm_postop_attr(vp, attrflag, &xid);
+			}
 			if (error) {
 				m_freem(mrep);
 				goto nfsmout;
 			}
 			nfsm_dissect(tl, u_long *, 2 * NFSX_UNSIGNED);
 			eof = fxdr_unsigned(int, *(tl + 1));
-		} else
-			nfsm_loadattr(vp, (struct vattr *)0, &xid);
-		nfsm_strsiz(retlen, nmrsize);
-		nfsm_mtouio(uiop, retlen);
-		m_freem(mrep);
+		} else {
+			if (mrep) {
+				nfsm_loadattr(vp, (struct vattr *)0, &xid);
+			}
+		}
+		if (mrep) {
+			nfsm_strsiz(retlen, nmrsize);
+			nfsm_mtouio(uiop, retlen);
+			m_freem(mrep);
+		} else {
+			retlen = 0;
+		}
 		tsiz -= retlen;
 		if (v3) {
 			if (eof || retlen == 0)
@@ -1675,7 +1717,9 @@ nfs_writerpc(vp, uiop, cred, iomode, must_commit)
 			error = ENXIO;
 		if (v3) {
 			wccflag = NFSV3_WCCCHK;
-			nfsm_wcc_data(vp, wccflag, &xid);
+			if (mrep) {
+				nfsm_wcc_data(vp, wccflag, &xid);
+			}
 			if (!error) {
 				nfsm_dissect(tl, u_long *, 2 * NFSX_UNSIGNED +
 					NFSX_V3WRITEVERF);
@@ -1713,8 +1757,11 @@ nfs_writerpc(vp, uiop, cred, iomode, must_commit)
 					NFSX_V3WRITEVERF);
 				}
 			}
-		} else
-		    nfsm_loadattr(vp, (struct vattr *)0, &xid);
+		} else {
+			if (mrep) {
+				nfsm_loadattr(vp, (struct vattr *)0, &xid);
+			}
+		}
 
 		if (wccflag)
 		    VTONFS(vp)->n_mtime = VTONFS(vp)->n_vattr.va_mtime.tv_sec;
@@ -1820,7 +1867,7 @@ nfs_mknodrpc(dvp, vpp, cnp, vap)
 				newvp = NFSTOV(np);
 		}
 	}
-	if (v3)
+	if (v3 && mrep)
 		nfsm_wcc_data(dvp, wccflag, &xid);
 	nfsm_reqdone;
 	if (error) {
@@ -1951,7 +1998,7 @@ again:
 				newvp = NFSTOV(np);
 		}
 	}
-	if (v3)
+	if (v3 && mrep)
 		nfsm_wcc_data(dvp, wccflag, &xid);
 	nfsm_reqdone;
 	if (error) {
@@ -2128,7 +2175,7 @@ nfs_removerpc(dvp, name, namelen, cred, proc)
 	nfsm_fhtom(dvp, v3);
 	nfsm_strtom(name, namelen, NFS_MAXNAMLEN);
 	nfsm_request(dvp, NFSPROC_REMOVE, proc, cred, &xid);
-	if (v3)
+	if (v3 && mrep)
 		nfsm_wcc_data(dvp, wccflag, &xid);
 	nfsm_reqdone;
 	VTONFS(dvp)->n_flag |= NMODIFIED;
@@ -2308,7 +2355,7 @@ nfs_renamerpc(fdvp, fnameptr, fnamelen, tdvp, tnameptr, tnamelen, cred, proc)
 	nfsm_fhtom(tdvp, v3);
 	nfsm_strtom(tnameptr, tnamelen, NFS_MAXNAMLEN);
 	nfsm_request(fdvp, NFSPROC_RENAME, proc, cred, &xid);
-	if (v3) {
+	if (v3 && mrep) {
 		u_int64_t txid = xid;
 
 		nfsm_wcc_data(fdvp, fwccflag, &xid);
@@ -2384,7 +2431,7 @@ nfs_link(ap)
 	nfsm_fhtom(tdvp, v3);
 	nfsm_strtom(cnp->cn_nameptr, cnp->cn_namelen, NFS_MAXNAMLEN);
 	nfsm_request(vp, NFSPROC_LINK, cnp->cn_proc, cnp->cn_cred, &xid);
-	if (v3) {
+	if (v3 && mrep) {
 		u_int64_t txid = xid;
 
 		nfsm_postop_attr(vp, attrflag, &xid);
@@ -2459,7 +2506,7 @@ nfs_symlink(ap)
 		txdr_nfsv2time(&vap->va_mtime, &sp->sa_mtime);
 	}
 	nfsm_request(dvp, NFSPROC_SYMLINK, cnp->cn_proc, cnp->cn_cred, &xid);
-	if (v3) {
+	if (v3 && mrep) {
 		u_int64_t dxid = xid;
 
 		if (!error)
@@ -2541,7 +2588,7 @@ nfs_mkdir(ap)
 	dxid = xid;
 	if (!error)
 		nfsm_mtofh(dvp, newvp, v3, gotvp, &xid);
-	if (v3)
+	if (v3 && mrep)
 		nfsm_wcc_data(dvp, wccflag, &dxid);
 	nfsm_reqdone;
 	VTONFS(dvp)->n_flag |= NMODIFIED;
@@ -2603,7 +2650,7 @@ nfs_rmdir(ap)
 	nfsm_fhtom(dvp, v3);
 	nfsm_strtom(cnp->cn_nameptr, cnp->cn_namelen, NFS_MAXNAMLEN);
 	nfsm_request(dvp, NFSPROC_RMDIR, cnp->cn_proc, cnp->cn_cred, &xid);
-	if (v3)
+	if (v3 && mrep)
 		nfsm_wcc_data(dvp, wccflag, &xid);
 	nfsm_reqdone;
 	VTONFS(dvp)->n_flag |= NMODIFIED;
@@ -2745,7 +2792,9 @@ nfs_readdirrpc(vp, uiop, cred)
 		*tl = txdr_unsigned(nmreaddirsize);
 		nfsm_request(vp, NFSPROC_READDIR, uiop->uio_procp, cred, &xid);
 		if (v3) {
-			nfsm_postop_attr(vp, attrflag, &xid);
+			if (mrep) {
+				nfsm_postop_attr(vp, attrflag, &xid);
+			}
 			if (!error) {
 				nfsm_dissect(tl, u_long *, 2 * NFSX_UNSIGNED);
 				dnp->n_cookieverf.nfsuquad[0] = *tl++;
@@ -2754,6 +2803,9 @@ nfs_readdirrpc(vp, uiop, cred)
 				m_freem(mrep);
 				goto nfsmout;
 			}
+		} else if (!mrep) {
+			// XXX assert error?
+			goto nfsmout;
 		}
 		nfsm_dissect(tl, u_long *, NFSX_UNSIGNED);
 		more_dirs = fxdr_unsigned(int, *tl);
@@ -2938,7 +2990,9 @@ nfs_readdirplusrpc(vp, uiop, cred)
 		nfsm_request(vp, NFSPROC_READDIRPLUS, uiop->uio_procp, cred,
 			     &xid);
 		savexid = xid;
-		nfsm_postop_attr(vp, attrflag, &xid);
+		if (mrep) {
+			nfsm_postop_attr(vp, attrflag, &xid);
+		}
 		if (error) {
 			m_freem(mrep);
 			goto nfsmout;
@@ -3339,7 +3393,9 @@ nfs_commit(vp, offset, cnt, cred, procp)
 	tl += 2;
 	*tl = txdr_unsigned(cnt);
 	nfsm_request(vp, NFSPROC_COMMIT, procp, cred, &xid);
-	nfsm_wcc_data(vp, wccflag, &xid);
+	if (mrep) {
+		nfsm_wcc_data(vp, wccflag, &xid);
+	}
 	if (!error) {
 		nfsm_dissect(tl, u_long *, NFSX_V3WRITEVERF);
 		if (bcmp((caddr_t)nmp->nm_verf, (caddr_t)tl,

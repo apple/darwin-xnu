@@ -3,22 +3,19 @@
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
- * Copyright (c) 1999-2003 Apple Computer, Inc.  All Rights Reserved.
+ * The contents of this file constitute Original Code as defined in and
+ * are subject to the Apple Public Source License Version 1.1 (the
+ * "License").  You may not use this file except in compliance with the
+ * License.  Please obtain a copy of the License at
+ * http://www.apple.com/publicsource and read it before using this file.
  * 
- * This file contains Original Code and/or Modifications of Original Code
- * as defined in and that are subject to the Apple Public Source License
- * Version 2.0 (the 'License'). You may not use this file except in
- * compliance with the License. Please obtain a copy of the License at
- * http://www.opensource.apple.com/apsl/ and read it before using this
- * file.
- * 
- * The Original Code and all software distributed under the License are
- * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * This Original Code and all software distributed under the License are
+ * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
- * Please see the License for the specific language governing rights and
- * limitations under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
+ * License for the specific language governing rights and limitations
+ * under the License.
  * 
  * @APPLE_LICENSE_HEADER_END@
  */
@@ -329,9 +326,12 @@ void sysctl_unregister_oid(struct sysctl_oid *oidp);
 #define	KERN_AIOPROCMAX		47	/* int: max aio requests per process */
 #define	KERN_AIOTHREADS		48	/* int: max aio worker threads */
 #ifdef __APPLE_API_UNSTABLE
-#define	KERN_PROCARGS2			49	/* number of valid kern ids */
+#define	KERN_PROCARGS2		49
 #endif /* __APPLE_API_UNSTABLE */
-#define	KERN_MAXID			50	/* number of valid kern ids */
+#define KERN_COREFILE		50	/* string: corefile format string */
+#define KERN_COREDUMP		51	/* int: whether to coredump at all */
+#define	KERN_SUGID_COREDUMP	52	/* int: whether to dump SUGID cores */
+#define	KERN_MAXID		53	/* number of valid kern ids */
 
 
 /* KERN_KDEBUG types */
@@ -432,7 +432,10 @@ void sysctl_unregister_oid(struct sysctl_oid *oidp);
 	{ "aiomax", CTLTYPE_INT }, \
 	{ "aioprocmax", CTLTYPE_INT }, \
 	{ "aiothreads", CTLTYPE_INT }, \
-	{ "procargs2",CTLTYPE_STRUCT } \
+	{ "procargs2",CTLTYPE_STRUCT }, \
+	{ "corefile",CTLTYPE_STRING }, \
+	{ "coredump", CTLTYPE_INT }, \
+	{ "sugid_coredump", CTLTYPE_INT } \
 }
 
 /*

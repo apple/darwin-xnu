@@ -3,22 +3,19 @@
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
- * Copyright (c) 1999-2003 Apple Computer, Inc.  All Rights Reserved.
+ * The contents of this file constitute Original Code as defined in and
+ * are subject to the Apple Public Source License Version 1.1 (the
+ * "License").  You may not use this file except in compliance with the
+ * License.  Please obtain a copy of the License at
+ * http://www.apple.com/publicsource and read it before using this file.
  * 
- * This file contains Original Code and/or Modifications of Original Code
- * as defined in and that are subject to the Apple Public Source License
- * Version 2.0 (the 'License'). You may not use this file except in
- * compliance with the License. Please obtain a copy of the License at
- * http://www.opensource.apple.com/apsl/ and read it before using this
- * file.
- * 
- * The Original Code and all software distributed under the License are
- * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * This Original Code and all software distributed under the License are
+ * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
- * Please see the License for the specific language governing rights and
- * limitations under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
+ * License for the specific language governing rights and limitations
+ * under the License.
  * 
  * @APPLE_LICENSE_HEADER_END@
  */
@@ -2069,6 +2066,48 @@ mck64:
 			mfspr	r8,scomc						; Get back the status (we just ignore it)
 			sync
 			isync							
+
+			lis		r8,l2FIR						; Get the L2 FIR register address
+			ori		r8,r8,0x8000					; Set to read data
+			
+			sync
+
+			mtspr	scomc,r8						; Request the L2 FIR
+			mfspr	r26,scomd						; Get the source
+			mfspr	r8,scomc						; Get back the status (we just ignore it)
+			sync
+			isync							
+			
+			lis		r8,l2FIRrst						; Get the L2 FIR AND mask address
+			
+			sync
+
+			mtspr	scomd,r9						; Set the AND mask to 0
+			mtspr	scomc,r8						; Write the AND mask and clear conditions
+			mfspr	r8,scomc						; Get back the status (we just ignore it)
+			sync
+			isync							
+
+			lis		r8,busFIR						; Get the Bus FIR register address
+			ori		r8,r8,0x8000					; Set to read data
+			
+			sync
+
+			mtspr	scomc,r8						; Request the Bus FIR
+			mfspr	r27,scomd						; Get the source
+			mfspr	r8,scomc						; Get back the status (we just ignore it)
+			sync
+			isync							
+			
+			lis		r8,busFIRrst					; Get the Bus FIR AND mask address
+			
+			sync
+
+			mtspr	scomd,r9						; Set the AND mask to 0
+			mtspr	scomc,r8						; Write the AND mask and clear conditions
+			mfspr	r8,scomc						; Get back the status (we just ignore it)
+			sync
+			isync							
 			
 ;			Note: bug in early chips where scom reads are shifted right by 1. We fix that here.
 ;			Also note that we will lose bit 63
@@ -2076,9 +2115,13 @@ mck64:
 			beq++	mckNoFix						; No fix up is needed
 			sldi	r24,r24,1						; Shift left 1
 			sldi	r25,r25,1						; Shift left 1
+			sldi	r26,r26,1						; Shift left 1
+			sldi	r27,r27,1						; Shift left 1
 			
-mckNoFix:	std		r24,savemisc0(r13)				; Save the MCK source in case we pass the error
-			std		r25,savemisc1(r13)				; Save the Core FIR in case we pass the error
+mckNoFix:	std		r24,savexdat0(r13)				; Save the MCK source in case we pass the error
+			std		r25,savexdat1(r13)				; Save the Core FIR in case we pass the error
+			std		r26,savexdat2(r13)				; Save the L2 FIR in case we pass the error
+			std		r27,savexdat3(r13)				; Save the BUS FIR in case we pass the error
 
 			rlwinm.	r0,r20,0,mckIFUE-32,mckIFUE-32	; Is this some kind of uncorrectable?
 			bne		mckUE							; Yeah...
@@ -2098,7 +2141,7 @@ mckNoFix:	std		r24,savemisc0(r13)				; Save the MCK source in case we pass the e
 			isync
 			tlbiel	r23								; Locally invalidate TLB entry for iaddr
 			sync									; Wait for it
-			b		EatRupt							; All recovered...
+			b		ceMck							; All recovered...
 			
 ;			SLB parity error.  This could be software caused.  We get one if there is
 ;			more than 1 valid SLBE with a matching ESID. That one we do not want to
@@ -2148,8 +2191,8 @@ mckSLBclr:	slbmte	r0,r3							; Clear the whole entry to 0s
 			bne++	cr1,mckSLBclr					; Yup....
 			
 			sth		r3,ppInvSeg(r2)					; Store non-zero to trigger SLB reload 
-			bne++	EatRupt							; This was not a programming error, all recovered...
-			b		PassUpTrap						; Pass the software error up...
+			bne++	ceMck							; This was not a programming error, all recovered...
+			b		ueMck							; Pass the software error up...
 
 ;
 ;			Handle a load/store unit error.  We need to decode the DSISR
@@ -2183,7 +2226,7 @@ mckInvDAR:	isync
 			addi	r21,r21,1						; Count this one
 			stw		r21,0(r9)						; Stick it back
 			
-			b		EatRupt							; All recovered...
+			b		ceMck							; All recovered...
 		
 ;
 ;			When we come here, we are not quite sure what the error is.  We need to
@@ -2212,7 +2255,7 @@ mckNotSure:
 mckUnk:		lwz		r21,hwMckUnk(r2)				; Get unknown error count
 			addi	r21,r21,1						; Count it
 			stw		r21,hwMckUnk(r2)				; Stuff it
-			b		PassUpTrap						; Go south, young man...
+			b		ueMck							; Go south, young man...
 
 ;
 ;			Hang recovery.  This is just a notification so we only count.
@@ -2222,7 +2265,7 @@ mckHangRcrvr:
 			lwz		r21,hwMckHang(r2)				; Get hang recovery count
 			addi	r21,r21,1						; Count this one
 			stw		r21,hwMckHang(r2)				; Stick it back
-			b		EatRupt							; All recovered...
+			b		ceMck							; All recovered...
 
 ;
 ;			Externally signaled MCK.  No recovery for the moment, but we this may be
@@ -2232,7 +2275,7 @@ mckExtMck:
 			lwz		r21,hwMckHang(r2)				; Get hang recovery count
 			addi	r21,r21,1						; Count this one
 			stw		r21,hwMckHang(r2)				; Stick it back
-			b		EatRupt							; All recovered...
+			b		ceMck							; All recovered...
 
 ;
 ;			Machine check cause is in a FIR.  Suss it out here.
@@ -2309,7 +2352,7 @@ mckIcbi:	icbi	0,r6							; Kill I$
 			lwz		r5,0(r19)						; Get the counter
 			addi	r5,r5,1							; Count it
 			stw		r5,0(r19)						; Stuff it back
-			b		EatRupt							; All recovered...
+			b		ceMck							; All recovered...
 			
 		
 ;			General recovery for ERAT problems - handled in exception vector already
@@ -2317,7 +2360,7 @@ mckIcbi:	icbi	0,r6							; Kill I$
 mckInvERAT:	lwz		r21,0(r19)						; Get the exception count spot
 			addi	r21,r21,1						; Count this one
 			stw		r21,0(r19)						; Save count
-			b		EatRupt							; All recovered...
+			b		ceMck							; All recovered...
 			
 ;			General hang recovery - this is a notification only, just count.	
 			
@@ -2325,7 +2368,7 @@ mckHangRcvr:
 			lwz		r21,hwMckHang(r2)				; Get hang recovery count
 			addi	r21,r21,1						; Count this one
 			stw		r21,hwMckHang(r2)				; Stick it back
-			b		EatRupt							; All recovered...
+			b		ceMck							; All recovered...
 
 
 ;
@@ -2335,12 +2378,12 @@ mckHangRcvr:
 mckUE:		lwz		r21,hwMckUE(r2)					; Get general uncorrectable error count
 			addi	r21,r21,1						; Count it
 			stw		r21,hwMckUE(r2)					; Stuff it
-			b		PassUpTrap						; Go south, young man...
+			b		ueMck							; Go south, young man...
 	
 mckhIFUE:	lwz		r21,hwMckIUEr(r2)				; Get I-Fetch TLB reload uncorrectable error count
 			addi	r21,r21,1						; Count it
 			stw		r21,hwMckIUEr(r2)				; Stuff it
-			b		PassUpTrap						; Go south, young man...
+			b		ueMck							; Go south, young man...
 
 mckDUE:		lwz		r21,hwMckDUE(r2)				; Get deferred uncorrectable error count
 			addi	r21,r21,1						; Count it
@@ -2358,31 +2401,38 @@ mckDUE:		lwz		r21,hwMckDUE(r2)				; Get deferred uncorrectable error count
 			cmpld	r23,r8							; Too soon?
 			cmpld	cr1,r23,r9						; Too late?
 			
-			cror	cr0_lt,cr0_lt,cr1_gt			; Too soo or too late?
+			cror	cr0_lt,cr0_lt,cr1_gt			; Too soon or too late?
 			ld		r3,saver12(r13)					; Get the original MSR
 			ld		r5,savelr(r13)					; Get the return address
 			li		r4,0							; Get fail code
-			blt--	PassUpTrap						; This is a normal machine check, just pass up...
+			blt--	ueMck							; This is a normal machine check, just pass up...
 			std		r5,savesrr0(r13)				; Set the return MSR
 			
 			std		r3,savesrr1(r13)				; Set the return address
 			std		r4,saver3(r13)					; Set failure return code
-			b		EatRupt							; Go return from ml_probe_read_64...
+			b		ceMck							; All recovered...
 
 mckDTW:		lwz		r21,hwMckDTW(r2)				; Get deferred tablewalk uncorrectable error count
 			addi	r21,r21,1						; Count it
 			stw		r21,hwMckDTW(r2)				; Stuff it
-			b		PassUpTrap						; Go south, young man...
+			b		ueMck							; Go south, young man...
 
 mckL1D:		lwz		r21,hwMckL1DPE(r2)				; Get data cache parity error count
 			addi	r21,r21,1						; Count it
 			stw		r21,hwMckL1DPE(r2)				; Stuff it
-			b		PassUpTrap						; Go south, young man...
+			b		ceMck							; All recovered...
 
 mckL1T:		lwz		r21,hwMckL1TPE(r2)				; Get TLB parity error count
 			addi	r21,r21,1						; Count it
 			stw		r21,hwMckL1TPE(r2)				; Stuff it
-			b		PassUpTrap						; Go south, young man...
+
+ceMck:		li		r0,1							; Set the recovered flag before passing up
+			stw		r0,savemisc3(r13)				; Set it
+			b		PassUpTrap						; Go up and log error...
+
+ueMck:		li		r0,0							; Set the unrecovered flag before passing up
+			stw		r0,savemisc3(r13)				; Set it
+			b		PassUpTrap						; Go up and log error and probably panic
 			
 
 /*

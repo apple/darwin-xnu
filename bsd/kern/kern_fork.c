@@ -1,24 +1,21 @@
 /*
- * Copyright (c) 2000-2003 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2004 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
- * Copyright (c) 1999-2003 Apple Computer, Inc.  All Rights Reserved.
+ * The contents of this file constitute Original Code as defined in and
+ * are subject to the Apple Public Source License Version 1.1 (the
+ * "License").  You may not use this file except in compliance with the
+ * License.  Please obtain a copy of the License at
+ * http://www.apple.com/publicsource and read it before using this file.
  * 
- * This file contains Original Code and/or Modifications of Original Code
- * as defined in and that are subject to the Apple Public Source License
- * Version 2.0 (the 'License'). You may not use this file except in
- * compliance with the License. Please obtain a copy of the License at
- * http://www.opensource.apple.com/apsl/ and read it before using this
- * file.
- * 
- * The Original Code and all software distributed under the License are
- * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * This Original Code and all software distributed under the License are
+ * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
- * Please see the License for the specific language governing rights and
- * limitations under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
+ * License for the specific language governing rights and limitations
+ * under the License.
  * 
  * @APPLE_LICENSE_HEADER_END@
  */
@@ -75,9 +72,13 @@
 #include <sys/vnode.h>
 #include <sys/file.h>
 #include <sys/acct.h>
-#include <sys/kern_audit.h>
+#include <sys/wait.h>
+
+#include <bsm/audit_kernel.h>
+
 #if KTRACE
 #include <sys/ktrace.h>
+#include <sys/ubc.h>
 #endif
 
 #include <mach/mach_types.h>
@@ -157,6 +158,8 @@ vfork(p, uap, retval)
 	/* The newly created process comes with signal lock held */
 	newproc = (struct proc *)forkproc(p,1);
 
+	AUDIT_ARG(pid, newproc->p_pid);
+
 	LIST_INSERT_AFTER(p, newproc, p_pglist);
 	newproc->p_pptr = p;
 	newproc->task = p->task;
@@ -207,21 +210,22 @@ vfork_return(th_act, p, p2, retval)
 {
 	long flags;
 	register uid_t uid;
-	thread_act_t cur_act = (thread_act_t)current_act();
 	int s, count;
 	task_t t;
 	uthread_t ut;
 	
-	ut = (struct uthread *)get_bsdthread_info(cur_act);
+	ut = (struct uthread *)get_bsdthread_info(th_act);
 
 	act_thread_catt(ut->uu_userstate);
 
 	/* Make sure only one at this time */
-	p->p_vforkcnt--;
-	if (p->p_vforkcnt <0)
-		panic("vfork cnt is -ve");
-	if (p->p_vforkcnt <=0)
-		p->p_flag  &= ~P_VFORK;
+	if (p) {
+		p->p_vforkcnt--;
+		if (p->p_vforkcnt <0)
+			panic("vfork cnt is -ve");
+		if (p->p_vforkcnt <=0)
+			p->p_flag  &= ~P_VFORK;
+	}
 	ut->uu_userstate = 0;
 	ut->uu_flag &= ~P_VFORK;
 	ut->uu_proc = 0;
@@ -229,7 +233,7 @@ vfork_return(th_act, p, p2, retval)
 	p2->p_flag  &= ~P_INVFORK;
 	p2->p_vforkact = (void *)0;
 
-	thread_set_parent(cur_act, p2->p_pid);
+	thread_set_parent(th_act, p2->p_pid);
 
 	if (retval) {
 		retval[0] = p2->p_pid;
@@ -311,6 +315,8 @@ fork1(p1, flags, retval)
 	thread_dup(newth);
 	/* p2 = newth->task->proc; */
 	p2 = (struct proc *)(get_bsdtask_info(get_threadtask(newth)));
+
+	AUDIT_ARG(pid, p2->p_pid);
 
 	thread_set_child(newth, p2->p_pid);
 
@@ -559,8 +565,11 @@ again:
 	 */
 	if (p1->p_traceflag&KTRFAC_INHERIT) {
 		p2->p_traceflag = p1->p_traceflag;
-		if ((p2->p_tracep = p1->p_tracep) != NULL)
+		if ((p2->p_tracep = p1->p_tracep) != NULL) {
+			if (UBCINFOEXISTS(p2->p_tracep))
+			        ubc_hold(p2->p_tracep);
 			VREF(p2->p_tracep);
+		}
 	}
 #endif
 	return(p2);
@@ -624,7 +633,7 @@ uthread_alloc(task_t task, thread_act_t thr_act )
 
 
 void
-uthread_free(task_t task, void *uthread, void * bsd_info)
+uthread_free(task_t task, thread_t act, void *uthread, void * bsd_info)
 {
 	struct _select *sel;
 	struct uthread *uth = (struct uthread *)uthread;
@@ -633,6 +642,7 @@ uthread_free(task_t task, void *uthread, void * bsd_info)
 	int size;
 	boolean_t funnel_state;
 	struct nlminfo *nlmp;
+	struct proc * vproc;
 
 	/*
 	 * Per-thread audit state should never last beyond system
@@ -662,11 +672,18 @@ uthread_free(task_t task, void *uthread, void * bsd_info)
 		FREE(nlmp, M_LOCKF);
 	}
 
-	if ((task != kernel_task) && p) {
+	if ((task != kernel_task) ) {
+		int vfork_exit(struct proc *, int);
+
 		funnel_state = thread_funnel_set(kernel_flock, TRUE);
-		//signal_lock(p);
-		TAILQ_REMOVE(&p->p_uthlist, uth, uu_list);
-		//signal_unlock(p);
+		if (p)
+			TAILQ_REMOVE(&p->p_uthlist, uth, uu_list);
+		if ((uth->uu_flag & P_VFORK) && (vproc = uth->uu_proc) 
+					&& (vproc->p_flag & P_INVFORK)) {
+			if (!vfork_exit(vproc, W_EXITCODE(0, SIGKILL)))	
+				vfork_return(act, p, vproc, NULL);
+
+		}
 		(void)thread_funnel_set(kernel_flock, funnel_state);
 	}
 	/* and free the uthread itself */

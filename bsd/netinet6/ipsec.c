@@ -285,6 +285,11 @@ ipsec4_getpolicybysock(m, dir, so, error)
 	/* sanity check */
 	if (m == NULL || so == NULL || error == NULL)
 		panic("ipsec4_getpolicybysock: NULL pointer was passed.\n");
+
+	if (so->so_pcb == NULL) {
+		/* Socket may be closing or without PCB */
+		return ipsec4_getpolicybyaddr(m, dir, 0, error);
+	}
 	
 	switch (so->so_proto->pr_domain->dom_family) {
 	case AF_INET:

@@ -205,6 +205,7 @@ osfmk/kern/bsd_kern.c		optional mach_bsd
 ./mach/memory_object_default_server.c	standard
 ./mach/memory_object_name_server.c	standard
 ./mach/upl_server.c			standard
+./mach/audit_triggers_user.c		standard
 #
 # For now, no external pagers
 #

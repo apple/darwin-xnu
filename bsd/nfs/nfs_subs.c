@@ -3,22 +3,19 @@
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
- * Copyright (c) 1999-2003 Apple Computer, Inc.  All Rights Reserved.
+ * The contents of this file constitute Original Code as defined in and
+ * are subject to the Apple Public Source License Version 1.1 (the
+ * "License").  You may not use this file except in compliance with the
+ * License.  Please obtain a copy of the License at
+ * http://www.apple.com/publicsource and read it before using this file.
  * 
- * This file contains Original Code and/or Modifications of Original Code
- * as defined in and that are subject to the Apple Public Source License
- * Version 2.0 (the 'License'). You may not use this file except in
- * compliance with the License. Please obtain a copy of the License at
- * http://www.opensource.apple.com/apsl/ and read it before using this
- * file.
- * 
- * The Original Code and all software distributed under the License are
- * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * This Original Code and all software distributed under the License are
+ * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
- * Please see the License for the specific language governing rights and
- * limitations under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
+ * License for the specific language governing rights and limitations
+ * under the License.
  * 
  * @APPLE_LICENSE_HEADER_END@
  */
@@ -81,6 +78,7 @@
 #include <sys/syscall.h>
 #include <sys/sysctl.h>
 #include <sys/ubc.h>
+#include <sys/fcntl.h>
 
 #include <sys/vm.h>
 #include <sys/vmparam.h>
@@ -100,6 +98,7 @@
 #include <nfs/nfsmount.h>
 #include <nfs/nqnfs.h>
 #include <nfs/nfsrtt.h>
+#include <nfs/nfs_lock.h>
 
 #include <miscfs/specfs/specdev.h>
 
@@ -1185,6 +1184,7 @@ nfs_init(vfsp)
 	}
 	nfs_nbinit();			/* Init the nfsbuf table */
 	nfs_nhinit();			/* Init the nfsnode table */
+	nfs_lockinit();			/* Init the nfs lock state */
 #ifndef NFS_NOSERVER
 	nfsrv_init(0);			/* Init server data structures */
 	nfsrv_initcache();		/* Init the server request cache */
@@ -1342,7 +1342,34 @@ nfs_loadattrcache(vpp, mdp, dposp, vaper, dontshrink, xidp)
 		return (0);
 	}
 	if (vp->v_type != vtyp) {
-		vp->v_type = vtyp;
+		if (vp->v_type != VNON) {
+			/*
+			 * The filehandle has changed type on us.  This can be
+			 * caused by either the server not having unique filehandles
+			 * or because another client has removed the previous
+			 * filehandle and a new object (of a different type)
+			 * has been created with the same filehandle.
+			 *
+			 * We can't simply switch the type on the vnode because
+			 * there may be type-specific fields that need to be
+			 * cleaned up or set up.
+			 *
+			 * So, what should we do with this vnode?
+			 *
+			 * About the best we can do is log a warning and return
+			 * an error.  ESTALE is about the closest error, but it
+			 * is a little strange that we come up with this error
+			 * internally instead of simply passing it through from
+			 * the server.  Hopefully, the vnode will be reclaimed
+			 * soon so the filehandle can be reincarnated as the new
+			 * object type.
+			 */
+			printf("nfs loadattrcache vnode changed type, was %d now %d", vp->v_type, vtyp);
+			FSDBG_BOT(527, ESTALE, 3, 0, *xidp);
+			return (ESTALE);
+		} else  {
+			vp->v_type = vtyp;
+		}
 
 		if (vp->v_type == VFIFO) {
 			vp->v_op = fifo_nfsv2nodeop_p;

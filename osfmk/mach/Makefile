@@ -31,6 +31,7 @@ MIG_TYPES = \
 	std_types.defs
 
 MIG_DEFS =	\
+	audit_triggers.defs \
 	clock.defs \
 	clock_priv.defs \
 	clock_reply.defs \
@@ -69,6 +70,7 @@ MIG_USHDRS = \
 	notify_server.h
 
 MIG_UUHDRS = \
+	audit_triggers.h \
 	clock.h \
 	clock_priv.h \
 	host_priv.h \
@@ -213,6 +215,7 @@ MIG_KUHDRS = \
 	vm_map.h
 
 MIG_KUSRC = \
+	audit_triggers_user.c \
 	clock_reply_user.c \
 	exc_user.c \
 	host_notify_reply_user.c \

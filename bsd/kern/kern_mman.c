@@ -1,24 +1,21 @@
 /*
- * Copyright (c) 2000-2002 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2004 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
- * Copyright (c) 1999-2003 Apple Computer, Inc.  All Rights Reserved.
+ * The contents of this file constitute Original Code as defined in and
+ * are subject to the Apple Public Source License Version 1.1 (the
+ * "License").  You may not use this file except in compliance with the
+ * License.  Please obtain a copy of the License at
+ * http://www.apple.com/publicsource and read it before using this file.
  * 
- * This file contains Original Code and/or Modifications of Original Code
- * as defined in and that are subject to the Apple Public Source License
- * Version 2.0 (the 'License'). You may not use this file except in
- * compliance with the License. Please obtain a copy of the License at
- * http://www.opensource.apple.com/apsl/ and read it before using this
- * file.
- * 
- * The Original Code and all software distributed under the License are
- * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * This Original Code and all software distributed under the License are
+ * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
- * Please see the License for the specific language governing rights and
- * limitations under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
+ * License for the specific language governing rights and limitations
+ * under the License.
  * 
  * @APPLE_LICENSE_HEADER_END@
  */
@@ -84,6 +81,9 @@
 #include <sys/conf.h>
 #include <sys/stat.h>
 #include <sys/ubc.h>
+
+#include <bsm/audit_kernel.h>
+#include <bsm/audit_kevents.h>
 
 #include <mach/mach_types.h>
 
@@ -220,6 +220,10 @@ mmap(p, uap, retval)
 
 	user_addr = (vm_offset_t)uap->addr;
 	user_size = (vm_size_t) uap->len;
+	AUDIT_ARG(addr, (void *)user_addr);
+	AUDIT_ARG(len, (int) user_size);
+	AUDIT_ARG(fd, uap->fd);
+
 	prot = (uap->prot & VM_PROT_ALL);
 	flags = uap->flags;
 
@@ -318,6 +322,9 @@ mmap(p, uap, retval)
 
 		if (vp->v_type != VREG && vp->v_type != VCHR)
 			return (EINVAL);
+
+		AUDIT_ARG(vnpath, vp, ARG_VNODE1);
+
 		/*
 		 * XXX hack to handle use of /dev/zero to map anon memory (ala
 		 * SunOS).
@@ -598,6 +605,9 @@ munmap(p, uap, retval)
 	user_addr = (vm_offset_t) uap->addr;
 	user_size = (vm_size_t) uap->len;
 
+	AUDIT_ARG(addr, (void *)user_addr);
+	AUDIT_ARG(len, (int) user_size);
+
 	pageoff = (user_addr & PAGE_MASK);
 
 	user_addr -= pageoff;
@@ -651,6 +661,9 @@ mprotect(p, uap, retval)
 	kern_return_t	result;
 	vm_map_t	user_map;
 
+	AUDIT_ARG(addr, uap->addr);
+	AUDIT_ARG(len, uap->len);
+	AUDIT_ARG(value, uap->prot);
 	user_addr = (vm_offset_t) uap->addr;
 	user_size = (vm_size_t) uap->len;
 	prot = (vm_prot_t)(uap->prot & VM_PROT_ALL);
@@ -702,6 +715,9 @@ minherit(p, uap, retval)
 	vm_map_t	user_map;
 	kern_return_t	result;
 
+	AUDIT_ARG(addr, uap->addr);
+	AUDIT_ARG(len, uap->len);
+	AUDIT_ARG(value, uap->inherit);
 	addr = (vm_offset_t)uap->addr;
 	size = uap->len;
 	inherit = uap->inherit;
@@ -919,6 +935,8 @@ mlock(p, uap, retval)
 	int error;
 	kern_return_t	result;
 
+	AUDIT_ARG(addr, uap->addr);
+	AUDIT_ARG(len, uap->len);
 	addr = (vm_offset_t) uap->addr;
 	size = uap->len;
 
@@ -968,6 +986,8 @@ munlock(p, uap, retval)
 	vm_map_t user_map;
 	kern_return_t	result;
 
+	AUDIT_ARG(addr, uap->addr);
+	AUDIT_ARG(len, uap->len);
 	addr = (vm_offset_t) uap->addr;
 	size = uap->len;
 
@@ -1061,6 +1081,10 @@ map_fd(
 	kern_return_t ret;
 	boolean_t funnel_state;
 
+	AUDIT_MACH_SYSCALL_ENTER(AUE_MAPFD);
+	AUDIT_ARG(addr, va);
+	AUDIT_ARG(fd, fd);
+
 	funnel_state = thread_funnel_set(kernel_flock, TRUE);
 
 	ret = map_fd_funneled( fd, (vm_object_offset_t)offset, 
@@ -1068,6 +1092,7 @@ map_fd(
 
 	(void) thread_funnel_set(kernel_flock, FALSE);
 
+	AUDIT_MACH_SYSCALL_EXIT(ret);
 	return ret;
 }
 
@@ -1108,6 +1133,8 @@ map_fd_funneled(
 
 	if (vp->v_type != VREG)
 		return (KERN_INVALID_ARGUMENT);
+
+	AUDIT_ARG(vnpath, vp, ARG_VNODE1);
 
 	if (offset & PAGE_MASK_64) {
 		printf("map_fd: file offset not page aligned(%d : %s)\n",p->p_pid, p->p_comm);

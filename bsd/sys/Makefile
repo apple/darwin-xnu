@@ -21,7 +21,6 @@ EXPINC_SUBDIRS_I386 = \
 
 DATAFILES = \
 	appleapiopts.h 	acct.h aio.h attr.h \
-	audit.h bsm_kevents.h bsm_token.h bsm_uevents.h \
 	buf.h callout.h cdefs.h clist.h conf.h \
 	dir.h dirent.h disk.h disklabel.h disktab.h dkstat.h dmap.h domain.h \
 	errno.h ev.h event.h exec.h fcntl.h file.h filedesc.h filio.h gmon.h ioccom.h ioctl.h \

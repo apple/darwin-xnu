@@ -3,22 +3,19 @@
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
- * Copyright (c) 1999-2003 Apple Computer, Inc.  All Rights Reserved.
+ * The contents of this file constitute Original Code as defined in and
+ * are subject to the Apple Public Source License Version 1.1 (the
+ * "License").  You may not use this file except in compliance with the
+ * License.  Please obtain a copy of the License at
+ * http://www.apple.com/publicsource and read it before using this file.
  * 
- * This file contains Original Code and/or Modifications of Original Code
- * as defined in and that are subject to the Apple Public Source License
- * Version 2.0 (the 'License'). You may not use this file except in
- * compliance with the License. Please obtain a copy of the License at
- * http://www.opensource.apple.com/apsl/ and read it before using this
- * file.
- * 
- * The Original Code and all software distributed under the License are
- * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * This Original Code and all software distributed under the License are
+ * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
- * Please see the License for the specific language governing rights and
- * limitations under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
+ * License for the specific language governing rights and limitations
+ * under the License.
  * 
  * @APPLE_LICENSE_HEADER_END@
  */
@@ -95,6 +92,9 @@ static void unresolved_kernel_trap(int trapno,
 				   addr64_t dar,
 				   char *message);
 
+static void handleMck(struct savearea *ssp);		/* Common machine check handler */
+
+
 struct savearea *trap(int trapno,
 			     struct savearea *ssp,
 			     unsigned int dsisr,
@@ -167,7 +167,6 @@ struct savearea *trap(int trapno,
 		 */
 		case T_DECREMENTER:
 		case T_IN_VAIN:			/* Shouldn't ever see this, lowmem_vectors eats it */
-		case T_MACHINE_CHECK:
 		case T_SYSTEM_MANAGEMENT:
 		case T_ALTIVEC_ASSIST:
 		case T_INTERRUPT:
@@ -176,6 +175,15 @@ struct savearea *trap(int trapno,
 		case T_RESERVED:
 		default:
 			unresolved_kernel_trap(trapno, ssp, dsisr, dar, NULL);
+			break;
+
+
+/*
+ *			Here we handle a machine check in the kernel
+ */
+
+		case T_MACHINE_CHECK:
+			handleMck(ssp);						/* Common to both user and kernel */
 			break;
 
 
@@ -401,7 +409,6 @@ struct savearea *trap(int trapno,
 			 */
 		case T_DECREMENTER:
 		case T_IN_VAIN:								/* Shouldn't ever see this, lowmem_vectors eats it */
-		case T_MACHINE_CHECK:
 		case T_INTERRUPT:
 		case T_FP_UNAVAILABLE:
 		case T_SYSTEM_MANAGEMENT:
@@ -414,6 +421,15 @@ struct savearea *trap(int trapno,
 
 			panic("Unexpected user state trap(cpu %d): 0x%08X DSISR=0x%08X DAR=0x%016llX PC=0x%016llX, MSR=0x%016llX\n",
 			       cpu_number(), trapno, dsisr, dar, ssp->save_srr0, ssp->save_srr1);
+			break;
+
+
+/*
+ *			Here we handle a machine check in user state
+ */
+
+		case T_MACHINE_CHECK:
+			handleMck(ssp);						/* Common to both user and kernel */
 			break;
 
 		case T_RESET:
@@ -813,6 +829,30 @@ void unresolved_kernel_trap(int trapno,
 	if( panicDebugging )
 		(void *)Call_Debugger(trapno, ssp);
 	panic(message);
+}
+
+char *corr[2] = {"uncorrected", "corrected  "};
+
+void handleMck(struct savearea *ssp) {					/* Common machine check handler */
+
+	int cpu;
+	
+	cpu = cpu_number();
+
+	printf("Machine check (%d) - %s - pc = %016llX, msr = %016llX, dsisr = %08X, dar = %016llX\n",
+		cpu, corr[ssp->save_hdr.save_misc3], ssp->save_srr0, ssp->save_srr1, ssp->save_dsisr, ssp->save_dar);		/* Tell us about it */
+	printf("Machine check (%d) -   AsyncSrc = %016llX, CoreFIR = %016llx\n", cpu, ssp->save_xdat0, ssp->save_xdat1);
+	printf("Machine check (%d) -      L2FIR = %016llX,  BusFir = %016llx\n", cpu, ssp->save_xdat2, ssp->save_xdat3);
+	
+	if(ssp->save_hdr.save_misc3) return;				/* Leave the the machine check was recovered */
+
+	panic("Uncorrectable machine check: pc = %016llX, msr = %016llX, dsisr = %08X, dar = %016llX\n"
+	      "  AsyncSrc = %016llX, CoreFIR = %016llx\n"
+	      "     L2FIR = %016llX,  BusFir = %016llx\n",
+		  ssp->save_srr0, ssp->save_srr1, ssp->save_dsisr, ssp->save_dar, 
+		  ssp->save_xdat0, ssp->save_xdat1, ssp->save_xdat2, ssp->save_xdat3);
+	
+	return;
 }
 
 void

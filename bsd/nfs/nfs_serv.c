@@ -1,24 +1,21 @@
 /*
- * Copyright (c) 2000-2003 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2004 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
- * Copyright (c) 1999-2003 Apple Computer, Inc.  All Rights Reserved.
+ * The contents of this file constitute Original Code as defined in and
+ * are subject to the Apple Public Source License Version 1.1 (the
+ * "License").  You may not use this file except in compliance with the
+ * License.  Please obtain a copy of the License at
+ * http://www.apple.com/publicsource and read it before using this file.
  * 
- * This file contains Original Code and/or Modifications of Original Code
- * as defined in and that are subject to the Apple Public Source License
- * Version 2.0 (the 'License'). You may not use this file except in
- * compliance with the License. Please obtain a copy of the License at
- * http://www.opensource.apple.com/apsl/ and read it before using this
- * file.
- * 
- * The Original Code and all software distributed under the License are
- * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * This Original Code and all software distributed under the License are
+ * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
- * Please see the License for the specific language governing rights and
- * limitations under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
+ * License for the specific language governing rights and limitations
+ * under the License.
  * 
  * @APPLE_LICENSE_HEADER_END@
  */
@@ -591,22 +588,26 @@ nfsrv_readlink(nfsd, slp, procp, mrq)
 out:
 	getret = VOP_GETATTR(vp, &attr, cred, procp);
 	vput(vp);
-	if (error)
+	if (error) {
 		m_freem(mp3);
+		mp3 = NULL;
+	}
 	nfsm_reply(NFSX_POSTOPATTR(v3) + NFSX_UNSIGNED);
 	if (v3) {
 		nfsm_srvpostop_attr(getret, &attr);
 		if (error)
 			return (0);
 	}
-	if (uiop->uio_resid > 0) {
-		len -= uiop->uio_resid;
-		tlen = nfsm_rndup(len);
-		nfsm_adj(mp3, NFS_MAXPATHLEN-tlen, tlen-len);
+	if (!error) {
+		if (uiop->uio_resid > 0) {
+			len -= uiop->uio_resid;
+			tlen = nfsm_rndup(len);
+			nfsm_adj(mp3, NFS_MAXPATHLEN-tlen, tlen-len);
+		}
+		nfsm_build(tl, u_long *, NFSX_UNSIGNED);
+		*tl = txdr_unsigned(len);
+		mb->m_next = mp3;
 	}
-	nfsm_build(tl, u_long *, NFSX_UNSIGNED);
-	*tl = txdr_unsigned(len);
-	mb->m_next = mp3;
 	nfsm_srvdone;
 }
 
@@ -749,18 +750,24 @@ nfsrv_read(nfsd, slp, procp, mrq)
 		error = VOP_READ(vp, uiop, IO_NODELOCKED, cred);
 		off = uiop->uio_offset;
 		FREE((caddr_t)iv2, M_TEMP);
-		/* Though our code replaces error with getret, the way I read
-		* the v3 spec, it appears you should leave the error alone, but
-		* still return vap and not assign error = getret. But leaving
-		* that alone. m_freem(mreq) looks bogus. Taking it out. Should be
-		* mrep or not there at all. Causes panic.  ekn */
+		/*
+		 * This may seem a little weird that we drop the whole
+		 * successful read if we get an error on the getattr.
+		 * The reason is because we've already set up the reply
+		 * to have postop attrs and omitting these optional bits
+		 * would require shifting all the data in the reply.
+		 *
+		 * It would be more correct if we would simply drop the
+		 * postop attrs if the getattr fails.  We might be able to
+		 * do that easier if we allocated separate mbufs for the data.
+		 */
 		if (error || (getret = VOP_GETATTR(vp, vap, cred, procp))) {
 			VOP_UNLOCK(vp, 0, procp);
 			if (didhold)
 				ubc_rele(vp);
 			if (!error)
 				error = getret;
-			/* 	m_freem(mreq);*/
+			m_freem(mreq);
 			vrele(vp);
 			nfsm_reply(NFSX_POSTOPATTR(v3));
 			nfsm_srvpostop_attr(getret, vap);
@@ -1090,6 +1097,7 @@ nfsrv_writegather(ndp, slp, procp, mrq)
 	    if (len > NFS_MAXDATA || len < 0  || i < len) {
 nfsmout:
 		m_freem(mrep);
+		mrep = NULL;
 		error = EIO;
 		nfsm_writereply(2 * NFSX_UNSIGNED, v3);
 		if (v3)
@@ -1230,6 +1238,7 @@ loop1:
 		    FREE((caddr_t)iov, M_TEMP);
 		}
 		m_freem(mrep);
+		mrep = NULL;
 		if (vp) {
 		    aftat_ret = VOP_GETATTR(vp, &va, cred, procp);
 		    VOP_UNLOCK(vp, 0, procp);
@@ -3346,14 +3355,14 @@ nfsrv_statfs(nfsd, slp, procp, mrq)
 		return (0);
 	nfsm_build(sfp, struct nfs_statfs *, NFSX_STATFS(v3));
 	if (v3) {
-		tval = (u_quad_t)sf->f_blocks;
-		tval *= (u_quad_t)sf->f_bsize;
+		tval = (u_quad_t)(unsigned long)sf->f_blocks;
+		tval *= (u_quad_t)(unsigned long)sf->f_bsize;
 		txdr_hyper(&tval, &sfp->sf_tbytes);
-		tval = (u_quad_t)sf->f_bfree;
-		tval *= (u_quad_t)sf->f_bsize;
+		tval = (u_quad_t)(unsigned long)sf->f_bfree;
+		tval *= (u_quad_t)(unsigned long)sf->f_bsize;
 		txdr_hyper(&tval, &sfp->sf_fbytes);
-		tval = (u_quad_t)sf->f_bavail;
-		tval *= (u_quad_t)sf->f_bsize;
+		tval = (u_quad_t)(unsigned long)sf->f_bavail;
+		tval *= (u_quad_t)(unsigned long)sf->f_bsize;
 		txdr_hyper(&tval, &sfp->sf_abytes);
 		sfp->sf_tfiles.nfsuquad[0] = 0;
 		sfp->sf_tfiles.nfsuquad[1] = txdr_unsigned(sf->f_files);

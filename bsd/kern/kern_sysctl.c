@@ -1,24 +1,21 @@
 /*
- * Copyright (c) 2000-2002 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2004 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
- * Copyright (c) 1999-2003 Apple Computer, Inc.  All Rights Reserved.
+ * The contents of this file constitute Original Code as defined in and
+ * are subject to the Apple Public Source License Version 1.1 (the
+ * "License").  You may not use this file except in compliance with the
+ * License.  Please obtain a copy of the License at
+ * http://www.apple.com/publicsource and read it before using this file.
  * 
- * This file contains Original Code and/or Modifications of Original Code
- * as defined in and that are subject to the Apple Public Source License
- * Version 2.0 (the 'License'). You may not use this file except in
- * compliance with the License. Please obtain a copy of the License at
- * http://www.opensource.apple.com/apsl/ and read it before using this
- * file.
- * 
- * The Original Code and all software distributed under the License are
- * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * This Original Code and all software distributed under the License are
+ * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
- * Please see the License for the specific language governing rights and
- * limitations under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
+ * License for the specific language governing rights and limitations
+ * under the License.
  * 
  * @APPLE_LICENSE_HEADER_END@
  */
@@ -82,6 +79,9 @@
 #include <sys/sysctl.h>
 #include <sys/user.h>
 #include <sys/aio_kern.h>
+
+#include <bsm/audit_kernel.h>
+
 #include <mach/machine.h>
 #include <mach/mach_types.h>
 #include <mach/vm_param.h>
@@ -215,6 +215,8 @@ __sysctl(p, uap, retval)
 	    copyin(uap->name, &name, uap->namelen * sizeof(int)))
 		return (error);
 
+	AUDIT_ARG(ctlname, name, uap->namelen);
+
 	/* CTL_UNSPEC is used to get oid to AUTO_OID */
 	if (uap->new != NULL
 		&& ((name[0] == CTL_KERN
@@ -328,6 +330,10 @@ extern int domainnamelen;
 extern char classichandler[32];
 extern long classichandler_fsid;
 extern long classichandler_fileid;
+__private_extern__ char corefilename[MAXPATHLEN+1];
+__private_extern__ do_coredump;
+__private_extern__ sugid_coredump;
+
 
 extern long hostid;
 #ifdef INSECURE
@@ -471,7 +477,7 @@ kern_sysctl(name, namelen, oldp, oldlenp, newp, newlen, p)
 	size_t newlen;
 	struct proc *p;
 {
-	int error, level, inthostid;
+	int error, level, inthostid, tmp;
 	unsigned int oldval=0;
 	char *str;
 	extern char ostype[], osrelease[], version[];
@@ -608,6 +614,26 @@ kern_sysctl(name, namelen, oldp, oldlenp, newp, newlen, p)
 		return( sysctl_aioprocmax( oldp, oldlenp, newp, newlen ) );
 	case KERN_AIOTHREADS:
 		return( sysctl_aiothreads( oldp, oldlenp, newp, newlen ) );
+	case KERN_COREFILE:
+		error = sysctl_string(oldp, oldlenp, newp, newlen,
+		    corefilename, sizeof(corefilename));
+		return (error);
+	case KERN_COREDUMP:
+		tmp = do_coredump;
+		error = sysctl_int(oldp, oldlenp, newp, newlen, &do_coredump);
+		if (!error && (do_coredump < 0) || (do_coredump > 1)) {
+			do_coredump = tmp;
+			error = EINVAL;
+		}
+		return (error);
+	case KERN_SUGID_COREDUMP:
+		tmp = sugid_coredump;
+		error = sysctl_int(oldp, oldlenp, newp, newlen, &sugid_coredump);
+		if (!error && (sugid_coredump < 0) || (sugid_coredump > 1)) {
+			sugid_coredump = tmp;
+			error = EINVAL;
+		}
+		return (error);
 	default:
 		return (EOPNOTSUPP);
 	}
@@ -683,8 +709,10 @@ sysctl_int(oldp, oldlenp, newp, newlen, valp)
 	*oldlenp = sizeof(int);
 	if (oldp)
 		error = copyout(valp, oldp, sizeof(int));
-	if (error == 0 && newp)
+	if (error == 0 && newp) {
 		error = copyin(newp, valp, sizeof(int));
+		AUDIT_ARG(value, *valp);
+	}
 	return (error);
 }
 
@@ -785,6 +813,7 @@ sysctl_string(oldp, oldlenp, newp, newlen, str, maxlen)
 	if (error == 0 && newp) {
 		error = copyin(newp, str, newlen);
 		str[newlen] = 0;
+		AUDIT_ARG(text, (char *)str);
 	}
 	return (error);
 }
@@ -1554,8 +1583,13 @@ sysctl_maxprocperuid( void *oldp, size_t *oldlenp, void *newp, size_t newlen )
 		error = copyout( &maxprocperuid, oldp, sizeof(int) );
 	if ( error == 0 && newp != NULL ) {
 		error = copyin( newp, &new_value, sizeof(int) );
-		if ( error == 0 && new_value <= maxproc && new_value > 0 )
-			maxprocperuid = new_value;
+		if ( error == 0 ) {
+			AUDIT_ARG(value, new_value);
+			if ( new_value <= maxproc && new_value > 0 )
+				maxprocperuid = new_value;
+			else
+				error = EINVAL;
+		}
 		else
 			error = EINVAL;
 	}
@@ -1585,8 +1619,13 @@ sysctl_maxfilesperproc( void *oldp, size_t *oldlenp, void *newp, size_t newlen )
 		error = copyout( &maxfilesperproc, oldp, sizeof(int) );
 	if ( error == 0 && newp != NULL ) {
 		error = copyin( newp, &new_value, sizeof(int) );
-		if ( error == 0 && new_value < maxfiles && new_value > 0 )
-			maxfilesperproc = new_value;
+		if ( error == 0 ) {
+			AUDIT_ARG(value, new_value);
+			if ( new_value < maxfiles && new_value > 0 )
+				maxfilesperproc = new_value;
+			else
+				error = EINVAL;
+		}
 		else
 			error = EINVAL;
 	}
@@ -1617,8 +1656,13 @@ sysctl_maxproc( void *oldp, size_t *oldlenp, void *newp, size_t newlen )
 		error = copyout( &maxproc, oldp, sizeof(int) );
 	if ( error == 0 && newp != NULL ) {
 		error = copyin( newp, &new_value, sizeof(int) );
-		if ( error == 0 && new_value <= hard_maxproc && new_value > 0 )
-			maxproc = new_value;
+		if ( error == 0 ) {
+			AUDIT_ARG(value, new_value);
+			if ( new_value <= hard_maxproc && new_value > 0 )
+				maxproc = new_value;
+			else
+				error = EINVAL;
+		}
 		else
 			error = EINVAL;
 	}

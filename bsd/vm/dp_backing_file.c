@@ -1,24 +1,21 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2004 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
- * Copyright (c) 1999-2003 Apple Computer, Inc.  All Rights Reserved.
+ * The contents of this file constitute Original Code as defined in and
+ * are subject to the Apple Public Source License Version 1.1 (the
+ * "License").  You may not use this file except in compliance with the
+ * License.  Please obtain a copy of the License at
+ * http://www.apple.com/publicsource and read it before using this file.
  * 
- * This file contains Original Code and/or Modifications of Original Code
- * as defined in and that are subject to the Apple Public Source License
- * Version 2.0 (the 'License'). You may not use this file except in
- * compliance with the License. Please obtain a copy of the License at
- * http://www.opensource.apple.com/apsl/ and read it before using this
- * file.
- * 
- * The Original Code and all software distributed under the License are
- * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * This Original Code and all software distributed under the License are
+ * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
- * Please see the License for the specific language governing rights and
- * limitations under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
+ * License for the specific language governing rights and limitations
+ * under the License.
  * 
  * @APPLE_LICENSE_HEADER_END@
  */
@@ -33,6 +30,9 @@
 #include <sys/vnode.h>
 #include <sys/namei.h>
 #include <sys/ubc.h>
+
+#include <bsm/audit_kernel.h>
+#include <bsm/audit_kevents.h>
 
 #include <mach/mach_types.h>
 #include <vm/vm_map.h>
@@ -152,6 +152,9 @@ macx_swapon(
 
 	struct vattr	vattr;
 
+	AUDIT_MACH_SYSCALL_ENTER(AUE_SWAPON);
+	AUDIT_ARG(value, priority);
+
 	funnel_state = thread_funnel_set(kernel_flock, TRUE);
 	ndp = &nd;
 
@@ -166,7 +169,7 @@ macx_swapon(
 	/*
 	 * Get a vnode for the paging area.
 	 */
-	NDINIT(ndp, LOOKUP, FOLLOW | LOCKLEAF, UIO_USERSPACE,
+	NDINIT(ndp, LOOKUP, FOLLOW | LOCKLEAF | AUDITVNPATH1, UIO_USERSPACE,
 	    filename, p);
 
 	if ((error = namei(ndp)))
@@ -280,6 +283,7 @@ swapon_bailout:
 		vrele(vp);
 	}
 	(void) thread_funnel_set(kernel_flock, FALSE);
+	AUDIT_MACH_SYSCALL_EXIT(error);
 	return(error);
 }
 
@@ -303,6 +307,7 @@ macx_swapoff(
 	int			error;
 	boolean_t		funnel_state;
 
+	AUDIT_MACH_SYSCALL_ENTER(AUE_SWAPOFF);
 	funnel_state = thread_funnel_set(kernel_flock, TRUE);
 	backing_store = NULL;
 	ndp = &nd;
@@ -313,7 +318,7 @@ macx_swapoff(
 	/*
 	 * Get the vnode for the paging area.
 	 */
-	NDINIT(ndp, LOOKUP, FOLLOW | LOCKLEAF, UIO_USERSPACE,
+	NDINIT(ndp, LOOKUP, FOLLOW | LOCKLEAF | AUDITVNPATH1, UIO_USERSPACE,
 	    filename, p);
 
 	if ((error = namei(ndp)))
@@ -369,5 +374,6 @@ swapoff_bailout:
 		vrele(vp);
 
 	(void) thread_funnel_set(kernel_flock, FALSE);
+	AUDIT_MACH_SYSCALL_EXIT(error);
 	return(error);
 }

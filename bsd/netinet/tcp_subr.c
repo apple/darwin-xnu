@@ -3,22 +3,19 @@
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
- * Copyright (c) 1999-2003 Apple Computer, Inc.  All Rights Reserved.
+ * The contents of this file constitute Original Code as defined in and
+ * are subject to the Apple Public Source License Version 1.1 (the
+ * "License").  You may not use this file except in compliance with the
+ * License.  Please obtain a copy of the License at
+ * http://www.apple.com/publicsource and read it before using this file.
  * 
- * This file contains Original Code and/or Modifications of Original Code
- * as defined in and that are subject to the Apple Public Source License
- * Version 2.0 (the 'License'). You may not use this file except in
- * compliance with the License. Please obtain a copy of the License at
- * http://www.opensource.apple.com/apsl/ and read it before using this
- * file.
- * 
- * The Original Code and all software distributed under the License are
- * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * This Original Code and all software distributed under the License are
+ * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
- * Please see the License for the specific language governing rights and
- * limitations under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
+ * License for the specific language governing rights and limitations
+ * under the License.
  * 
  * @APPLE_LICENSE_HEADER_END@
  */
@@ -139,6 +136,18 @@ SYSCTL_INT(_net_inet_tcp, TCPCTL_V6MSSDFLT, v6mssdflt,
 	CTLFLAG_RW, &tcp_v6mssdflt , 0,
 	"Default TCP Maximum Segment Size for IPv6");
 #endif
+
+/*
+ * Minimum MSS we accept and use. This prevents DoS attacks where
+ * we are forced to a ridiculous low MSS like 20 and send hundreds
+ * of packets instead of one. The effect scales with the available
+ * bandwidth and quickly saturates the CPU and network interface
+ * with packet generation and sending. Set to zero to disable MINMSS
+ * checking. This setting prevents us from sending too small packets.
+ */
+int	tcp_minmss = TCP_MINMSS;
+SYSCTL_INT(_net_inet_tcp, OID_AUTO, minmss, CTLFLAG_RW,
+    &tcp_minmss , 0, "Minmum TCP Maximum Segment Size");
 
 static int	tcp_do_rfc1323 = 1;
 SYSCTL_INT(_net_inet_tcp, TCPCTL_DO_RFC1323, rfc1323, CTLFLAG_RW, 
@@ -275,6 +284,13 @@ tcp_init()
 	tcbinfo.ipi_zone = zinit("tcpcb", sizeof(struct inp_tp), maxsockets,
 				 ZONE_INTERRUPT, 0);
 #endif
+
+	tcp_reass_maxseg = nmbclusters / 16;
+#ifndef __APPLE__
+	TUNABLE_INT_FETCH("net.inet.tcp.reass.maxsegments",
+	    &tcp_reass_maxseg);
+#endif
+
 #if INET6
 #define TCP_MINPROTOHDR (sizeof(struct ip6_hdr) + sizeof(struct tcphdr))
 #else /* INET6 */
@@ -883,6 +899,7 @@ tcp_freeq(tp)
 		LIST_REMOVE(q, tqe_q);
 		m_freem(q->tqe_m);
 		FREE(q, M_TSEGQ);
+		tcp_reass_qsize--;
 		rv = 1;
 	}
 	return (rv);
@@ -913,6 +930,7 @@ tcp_drain()
 					LIST_REMOVE(te, tqe_q);
 					m_freem(te->tqe_m);
 					FREE(te, M_TSEGQ);
+					tcp_reass_qsize--;
 				}
 			}
 		}
