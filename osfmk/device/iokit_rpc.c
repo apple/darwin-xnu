@@ -312,7 +312,7 @@ iokit_no_senders( mach_no_senders_notification_t * notification )
             if( (IKOT_IOKIT_OBJECT  == type)
 	     || (IKOT_IOKIT_CONNECT == type))
                 iokit_add_reference( obj );
-	    else
+            else
                 obj = NULL;
 	}
         ip_unlock(port);
@@ -393,6 +393,22 @@ kern_return_t IOMapPages(vm_map_t map, vm_offset_t va, vm_offset_t pa,
 #endif
 
     return( KERN_SUCCESS );
+}
+
+kern_return_t IOUnmapPages(vm_map_t map, vm_offset_t va, vm_size_t length)
+{
+    pmap_t	pmap = map->pmap;
+    vm_size_t	off;
+    boolean_t	b;
+
+#if __ppc__
+    b = mapping_remove(pmap, va);
+#else
+    pmap_remove(pmap, va, va + length);
+    b = TRUE;
+#endif
+
+    return( b ? KERN_SUCCESS : KERN_INVALID_ADDRESS );
 }
 
 void IOGetTime( mach_timespec_t * clock_time);

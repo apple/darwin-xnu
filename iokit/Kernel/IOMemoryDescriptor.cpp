@@ -787,7 +787,7 @@ IOReturn IOGeneralMemoryDescriptor::prepare(
         if(forDirection == kIODirectionNone)
             forDirection = _direction;
 
-        vm_prot_t access = VM_PROT_DEFAULT;	// Could be cleverer using direction
+        vm_prot_t access = VM_PROT_DEFAULT;    // Could be cleverer using direction
 
         //
         // Check user read/write access to the data buffer.
@@ -1055,6 +1055,7 @@ extern "C" {
 // osfmk/device/iokit_rpc.c
 extern kern_return_t IOMapPages( vm_map_t map, vm_offset_t va, vm_offset_t pa,
                                  vm_size_t length, unsigned int mapFlags);
+extern kern_return_t IOUnmapPages(vm_map_t map, vm_offset_t va, vm_size_t length);
 };
 
 /* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
@@ -1122,6 +1123,9 @@ public:
 	IOOptionBits		options,
         IOByteCount		offset,
         IOByteCount		length );
+
+    IOReturn redirect(
+	task_t			intoTask, bool redirect );
 };
 
 /* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
@@ -1204,7 +1208,8 @@ bool _IOMemoryMap::init(
 						 options, offset, length ));
     if( !ok) {
 	logical = 0;
-        _memory->release();
+        memory->release();
+        memory = 0;
         vm_map_deallocate(addressMap);
         addressMap = 0;
     }
@@ -1324,6 +1329,71 @@ IOReturn IOMemoryDescriptor::doUnmap(
         err = vm_deallocate( addressMap, logical, length );
     else
         err = kIOReturnSuccess;
+
+    return( err );
+}
+
+IOReturn IOMemoryDescriptor::redirect( task_t safeTask, bool redirect )
+{
+    IOReturn		err;
+    _IOMemoryMap *	mapping = 0;
+    OSIterator *	iter;
+
+    LOCK;
+
+    do {
+	if( (iter = OSCollectionIterator::withCollection( _mappings))) {
+            while( (mapping = (_IOMemoryMap *) iter->getNextObject()))
+                mapping->redirect( safeTask, redirect );
+
+            iter->release();
+        }
+    } while( false );
+
+    UNLOCK;
+
+    // temporary binary compatibility
+    IOSubMemoryDescriptor * subMem;
+    if( (subMem = OSDynamicCast( IOSubMemoryDescriptor, this)))
+        err = subMem->redirect( safeTask, redirect );
+    else
+        err = kIOReturnSuccess;
+
+    return( err );
+}
+
+IOReturn IOSubMemoryDescriptor::redirect( task_t safeTask, bool redirect )
+{
+// temporary binary compatibility   IOMemoryDescriptor::redirect( safeTask, redirect );
+    return( _parent->redirect( safeTask, redirect ));
+}
+
+IOReturn _IOMemoryMap::redirect( task_t safeTask, bool redirect )
+{
+    IOReturn err = kIOReturnSuccess;
+
+    if( superMap) {
+//        err = ((_IOMemoryMap *)superMap)->redirect( safeTask, redirect );
+    } else {
+
+        LOCK;
+        if( logical && addressMap
+        && (get_task_map( safeTask) != addressMap)
+        && (0 == (options & kIOMapStatic))) {
+    
+            IOUnmapPages( addressMap, logical, length );
+            if( !redirect) {
+                err = vm_deallocate( addressMap, logical, length );
+                err = memory->doMap( addressMap, &logical,
+                                     (options & ~kIOMapAnywhere) /*| kIOMapReserve*/ );
+            } else
+                err = kIOReturnSuccess;
+#ifdef DEBUG
+            IOLog("IOMemoryMap::redirect(%d, %x) %x from %lx\n", redirect, err, logical, addressMap);
+#endif
+        }
+        UNLOCK;
+    }
 
     return( err );
 }

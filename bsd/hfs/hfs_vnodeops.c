@@ -1314,13 +1314,45 @@ struct proc *a_p;
         goto ErrorExit;
     };
 
-	/* do we have permission to change the dates? */
-//  if (alist->commonattr & (ATTR_CMN_CRTIME | ATTR_CMN_MODTIME | ATTR_CMN_CHGTIME | ATTR_CMN_ACCTIME | ATTR_CMN_BKUPTIME)) {
-    if (alist->commonattr & (ATTR_CMN_CHGTIME | ATTR_CMN_ACCTIME)) {
-    	if ((error = hfs_owner_rights(vp, cred, p, true)) != 0) {
-            goto ErrorExit;
-        };
-    };
+	/* 
+	 * If we are going to change the times:
+	 * 1. do we have permission to change the dates?
+	 * 2. Is there another fork? If so then clear any flags associated with the times
+	 */
+    if (alist->commonattr & (ATTR_CMN_MODTIME | ATTR_CMN_CHGTIME | ATTR_CMN_ACCTIME)) {
+		if (alist->commonattr & (ATTR_CMN_CHGTIME | ATTR_CMN_ACCTIME)) {
+			if ((error = hfs_owner_rights(vp, cred, p, true)) != 0)
+				goto ErrorExit;
+		}
+
+		/* If there is another fork, clear the flags */
+		if ((hp->h_meta->h_usecount > 1) && (H_FORKTYPE(hp) == kDataFork)) {
+			struct vnode *sib_vp = NULL;
+			struct hfsnode *nhp;
+			
+			/* Loop through all siblings, skipping ourselves */
+			simple_lock(&hp->h_meta->h_siblinglock);
+			CIRCLEQ_FOREACH(nhp, &hp->h_meta->h_siblinghead, h_sibling) {
+				if (nhp == hp)		/* skip ourselves */
+					continue;
+				sib_vp = HTOV(nhp);
+			}
+			simple_unlock(&hp->h_meta->h_siblinglock);
+	
+			/* The only error that vget returns is when the vnode is going away, so ignore the vnode */
+			if (sib_vp && vget(sib_vp, LK_EXCLUSIVE | LK_RETRY, p) == 0) {
+				if (VTOH(sib_vp)->h_nodeflags & (IN_ACCESS | IN_CHANGE | IN_UPDATE)) {
+					if (alist->commonattr & ATTR_CMN_MODTIME)
+							VTOH(sib_vp)->h_nodeflags &= ~IN_UPDATE;
+					if (alist->commonattr & ATTR_CMN_CHGTIME)
+							VTOH(sib_vp)->h_nodeflags &= ~IN_CHANGE;
+					if (alist->commonattr & ATTR_CMN_ACCTIME)
+							VTOH(sib_vp)->h_nodeflags &= ~IN_ACCESS;
+				}
+				vput(sib_vp);
+			}		/* vget() */
+		}		/* h_use_count > 1 */
+	}
 
     /* save these in case hfs_chown() or hfs_chmod() fail */
 	saved_uid = hp->h_meta->h_uid;
@@ -1363,59 +1395,40 @@ struct proc *a_p;
         if ((error = hfs_chflags(vp, flags, cred, p)))
             goto ErrorExit;
     };
-
+	
+	
+	/* Update Catalog Tree */
 	if (alist->volattr == 0) {
 		error = MacToVFSError( UpdateCatalogNode(HTOVCB(hp), pid, filename, H_HINT(hp), &catInfo.nodeData));
 	}
 
-   if (alist->volattr & ATTR_VOL_NAME) {
-        ExtendedVCB *vcb 	= VTOVCB(vp);
-        int			namelen = strlen(vcb->vcbVN);
-    	
+	/* Volume Rename */
+	if (alist->volattr & ATTR_VOL_NAME) {
+			ExtendedVCB *vcb 	= VTOVCB(vp);
+			int			namelen = strlen(vcb->vcbVN);
+			
 	if (vcb->vcbVN[0] == 0) {
 	  /*
-	    Ignore attempts to rename a volume to a zero-length name:
-	    restore the original name from the metadata.
+			 *	Ignore attempts to rename a volume to a zero-length name:
+			 *	restore the original name from the metadata.
 	   */
 	  copystr(H_NAME(hp), vcb->vcbVN, sizeof(vcb->vcbVN), NULL);
 	} else {
-	  error = MoveRenameCatalogNode(vcb, kRootParID, H_NAME(hp), H_HINT(hp), kRootParID, vcb->vcbVN, &H_HINT(hp));
+			error = MoveRenameCatalogNode(vcb, kRootParID, H_NAME(hp), H_HINT(hp), 
+					kRootParID, vcb->vcbVN, &H_HINT(hp));
 	  if (error) {
-            VCB_LOCK(vcb);
-            copystr(H_NAME(hp), vcb->vcbVN, sizeof(vcb->vcbVN), NULL);	/* Restore the old name in the VCB */
-            vcb->vcbFlags |= 0xFF00;		// Mark the VCB dirty
-            VCB_UNLOCK(vcb);
-            goto ErrorExit;
+					VCB_LOCK(vcb);
+					copystr(H_NAME(hp), vcb->vcbVN, sizeof(vcb->vcbVN), NULL);	/* Restore the old name in the VCB */
+					vcb->vcbFlags |= 0xFF00;		// Mark the VCB dirty
+					VCB_UNLOCK(vcb);
+					goto ErrorExit;
 	  };
-
+		
 		hfs_set_metaname(vcb->vcbVN, hp->h_meta, HTOHFS(hp));
 		hp->h_nodeflags |= IN_CHANGE;
 		
-#if 0
-	  /* if hfs wrapper exists, update its name too */
-	  if (vcb->vcbSigWord == kHFSPlusSigWord && vcb->vcbAlBlSt != 0) {
-	    HFSMasterDirectoryBlock *mdb;
-	    struct buf *bp = NULL;
-	    int size = kMDBSize;	/* 512 */
-            int volnamelen = MIN(sizeof(Str27), namelen);
-	    
-	    if ( bread(VTOHFS(vp)->hfs_devvp, IOBLKNOFORBLK(kMasterDirectoryBlock, size),
-		       IOBYTECCNTFORBLK(kMasterDirectoryBlock, kMDBSize, size), NOCRED, &bp) == 0) {
-	      
-	      mdb = (HFSMasterDirectoryBlock *)((char *)bp->b_data + IOBYTEOFFSETFORBLK(kMasterDirectoryBlock, size));
-	      if (SWAP_BE16 (mdb->drSigWord) == kHFSSigWord) {
-            /* Convert the string to MacRoman, ignoring any errors, */
-            (void) utf8_to_hfs(vcb, volnamelen, vcb->vcbVN, Str31 mdb->drVN)
-            bawrite(bp);
-            bp = NULL;
-	      }
-	    }
-	    
-	    if (bp) brelse(bp);
-	  }
-#endif
-	}; /* vcb->vcbVN[0] == 0 ... else ... */
-   }; /* alist->volattr & ATTR_VOL_NAME */
+		}	 /* vcb->vcbVN[0] == 0 ... else ... */
+	} 	/* alist->volattr & ATTR_VOL_NAME */
 
 ErrorExit:
     /* unlock catalog b-tree */

@@ -449,7 +449,7 @@ tp_sbdrop(tpcb, seq)
 		printf("tp_sbdroping %d pkts %d bytes on %x at 0x%x\n",
 			oldi, oldcc - sb->sb_cc, tpcb, seq);
 	ENDDEBUG
-	if (sb->sb_flags & SB_NOTIFY)
+	if ((sb->sb_flags & SB_NOTIFY) || (sb->sb_sel.si_flags & SI_SBSEL))
 		sowwakeup(tpcb->tp_sock);
 	return (oldcc - sb->sb_cc);
 }

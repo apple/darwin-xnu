@@ -2050,6 +2050,16 @@ IOReturn IONDRVFramebuffer::setPowerState( unsigned long powerStateOrdinal,
     sleepInfo.powerFlags = 0;
     sleepInfo.powerReserved1 = 0;
     sleepInfo.powerReserved2 = 0;
+
+#if 1
+    if( newState == kHardwareSleep) {
+        IOMemoryDescriptor * vram;
+        if( (vram = getVRAMRange())) {
+            vram->redirect( kernel_task, true );
+            vram->release();
+        }
+    }
+#endif
         
     ignore_zero_fault( true );
     boolean_t ints = ml_set_interrupts_enabled( false );
@@ -2058,6 +2068,16 @@ IOReturn IONDRVFramebuffer::setPowerState( unsigned long powerStateOrdinal,
 
     ml_set_interrupts_enabled( ints );
     ignore_zero_fault( false );
+
+#if 1
+    if( newState == kHardwareWake) {
+        IOMemoryDescriptor * vram;
+        if( (vram = getVRAMRange())) {
+            vram->redirect( kernel_task, false );
+            vram->release();
+        }
+    }
+#endif
 
     if( powerStateOrdinal) {
         powerState = powerStateOrdinal;

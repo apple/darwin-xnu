@@ -88,7 +88,7 @@ char netcon[] = "netcon";
  * called during processing of connect() call,
  * resulting in an eventual call to soisconnected() if/when the
  * connection is established.  When the connection is torn down
- * soisdisconnecting() is called during processing of disconnect() call,
+ * soisdisconnecting() is called during processing of disconnect() call,   
  * and soisdisconnected() is called when the connection to the peer
  * is totally severed.  The semantics of these routines are such that
  * connectionless protocols can call soisconnected() and soisdisconnected()
@@ -96,16 +96,16 @@ char netcon[] = "netcon";
  * takes no time.
  *
  * From the passive side, a socket is created with
- * two queues of sockets: so_q0 for connections in progress
- * and so_q for connections already made and awaiting user acceptance.
- * As a protocol is preparing incoming connections, it creates a socket
- * structure queued on so_q0 by calling sonewconn().  When the connection
+ * two queues of sockets: so_incomp for connections in progress
+ * and so_comp for connections already made and awaiting user acceptance.
+ * As a protocol is preparing incoming connections, it creates a socket      
+ * structure queued on so_incomp by calling sonewconn().  When the connection
  * is established, soisconnected() is called, and transfers the
- * socket structure to so_q, making it available to accept().
+ * socket structure to so_comp, making it available to accept().
  *
- * If a socket is closed with sockets on either
- * so_q0 or so_q, these sockets are dropped.
- *
+ * If a socket is closed with sockets on either       
+ * so_incomp or so_comp, these sockets are dropped.
+ * 
  * If higher level protocols are implemented in
  * the kernel, the wakeups done here will sometimes
  * cause software-interrupt process scheduling.
@@ -408,11 +408,11 @@ sowakeup(so, sb)
 	struct proc *p = current_proc();
 
 
-	sb->sb_flags &= ~SB_SEL;
 
 	thread_funnel_switch(NETWORK_FUNNEL, KERNEL_FUNNEL);
+	sb->sb_sel.si_flags &= ~SI_SBSEL;
 	selwakeup(&sb->sb_sel);
-    thread_funnel_switch(KERNEL_FUNNEL, NETWORK_FUNNEL); 
+    	thread_funnel_switch(KERNEL_FUNNEL, NETWORK_FUNNEL); 
 
 	if (sb->sb_flags & SB_WAIT) {
 		sb->sb_flags &= ~SB_WAIT;

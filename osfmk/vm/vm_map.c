@@ -6030,16 +6030,31 @@ RestartCopy:
 				if (tmp_entry->is_shared  || 
 				     tmp_entry->object.vm_object->true_share ||
 				     map_share) {
-					/* dec ref gained in copy_quickly */
-					vm_object_lock(src_object);
-					src_object->ref_count--; 
-					vm_object_res_deallocate(src_object);
-					vm_object_unlock(src_object);
+					vm_map_unlock(src_map);
 					new_entry->object.vm_object = 
 						vm_object_copy_delayed(
 							src_object,
 							src_offset,	
 							src_size);
+					/* dec ref gained in copy_quickly */
+					vm_object_lock(src_object);
+					src_object->ref_count--; 
+					vm_object_res_deallocate(src_object);
+					vm_object_unlock(src_object);
+		    			vm_map_lock(src_map);
+					/* 
+					 * it turns out that we have
+					 * finished our copy. No matter
+					 * what the state of the map
+					 * we will lock it again here
+					 * knowing that if there is
+					 * additional data to copy
+					 * it will be checked at
+					 * the top of the loop
+					 *
+					 * Don't do timestamp check
+					 */
+					
 				} else {
 					vm_object_pmap_protect(
 						src_object,

@@ -394,6 +394,11 @@ public:
 	IOVirtualAddress	mapAddress,
 	IOOptionBits		options = 0 );
 
+    // Following methods are private implementation
+
+    // make virtual
+    IOReturn redirect( task_t safeTask, bool redirect );
+
 protected:
     virtual IOMemoryMap * 	makeMapping(
 	IOMemoryDescriptor *	owner,
@@ -497,6 +502,10 @@ public:
 };
 
 /* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
+
+// The following classes are private implementation of IOMemoryDescriptor - they
+// should not be reference directly, just through the public API's in the 
+// IOMemoryDescriptor class.
 
 enum {
     kIOMemoryRequiresWire	= 0x00000001
@@ -674,6 +683,9 @@ public:
     virtual IOReturn prepare(IODirection forDirection = kIODirectionNone);
 
     virtual IOReturn complete(IODirection forDirection = kIODirectionNone);
+
+    // make virtual
+    IOReturn redirect( task_t safeTask, bool redirect );
 
 protected:
     virtual IOMemoryMap * 	makeMapping(

@@ -283,7 +283,7 @@ accept1(p, uap, retval, compat)
 		splx(s);
 		return (EWOULDBLOCK);
 	}
-	while (head->so_comp.tqh_first == NULL && head->so_error == 0) {
+        while (TAILQ_EMPTY(&head->so_comp) && head->so_error == 0) {
 		if (head->so_state & SS_CANTRCVMORE) {
 			head->so_error = ECONNABORTED;
 			break;
@@ -310,7 +310,7 @@ accept1(p, uap, retval, compat)
 	 * block allowing another process to accept the connection
 	 * instead.
 	 */
-	so = head->so_comp.tqh_first;
+	so = TAILQ_FIRST(&head->so_comp);
 	TAILQ_REMOVE(&head->so_comp, so, so_list);
 	head->so_qlen--;
 

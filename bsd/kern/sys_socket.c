@@ -317,33 +317,36 @@ soo_select(fp, which, p)
 	switch (which) {
 
 	case FREAD:
+		so->so_rcv.sb_sel.si_flags |= SI_SBSEL;
 		if (soreadable(so)) {
 			splx(s);
 			retnum = 1;
+			so->so_rcv.sb_sel.si_flags &= ~SI_SBSEL;
 			goto done;
 		}
 		selrecord(p, &so->so_rcv.sb_sel);
-		so->so_rcv.sb_flags |= SB_SEL;
 		break;
 
 	case FWRITE:
+		so->so_snd.sb_sel.si_flags |= SI_SBSEL;
 		if (sowriteable(so)) {
 			splx(s);
 			retnum = 1;
+			so->so_snd.sb_sel.si_flags &= ~SI_SBSEL;
 			goto done;
 		}
 		selrecord(p, &so->so_snd.sb_sel);
-		so->so_snd.sb_flags |= SB_SEL;
 		break;
 
 	case 0:
+		so->so_rcv.sb_sel.si_flags |= SI_SBSEL;
 		if (so->so_oobmark || (so->so_state & SS_RCVATMARK)) {
 			splx(s);
 			retnum = 1;
+			so->so_rcv.sb_sel.si_flags &= ~SI_SBSEL;
 			goto done;
 		}
 		selrecord(p, &so->so_rcv.sb_sel);
-		so->so_rcv.sb_flags |= SB_SEL;
 		break;
 	}
 	splx(s);

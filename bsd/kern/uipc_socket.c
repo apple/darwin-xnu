@@ -461,7 +461,7 @@ solisten(so, backlog)
 		splx(s);
 		return (error);
 	}
-	if (so->so_comp.tqh_first == NULL)
+        if (TAILQ_EMPTY(&so->so_comp))
 		so->so_options |= SO_ACCEPTCONN;
 	if (backlog < 0 || backlog > somaxconn)
 		backlog = somaxconn;
@@ -505,15 +505,21 @@ sofree(so)
 
 	if (so->so_pcb || (so->so_state & SS_NOFDREF) == 0)
 		return;
-	if (head != NULL) {
-		if (so->so_state & SS_INCOMP) {
-			TAILQ_REMOVE(&head->so_incomp, so, so_list);
-			head->so_incqlen--;
-		} else if (so->so_state & SS_COMP) {
-			TAILQ_REMOVE(&head->so_comp, so, so_list);
-		} else {
-			panic("sofree: not queued");
-		}
+        if (head != NULL) {
+                if (so->so_state & SS_INCOMP) {  
+                        TAILQ_REMOVE(&head->so_incomp, so, so_list);
+                        head->so_incqlen--;
+                } else if (so->so_state & SS_COMP) {
+                        /*
+                         * We must not decommission a socket that's   
+                         * on the accept(2) queue.  If we do, then
+                         * accept(2) may hang after select(2) indicated
+                         * that the listening socket was ready.
+                         */
+                        return;
+                } else {
+                        panic("sofree: not queued");
+                }
 		head->so_qlen--;
 		so->so_state &= ~(SS_INCOMP|SS_COMP);
 		so->so_head = NULL;
@@ -556,14 +562,21 @@ soclose(so)
 	if (so->so_options & SO_ACCEPTCONN) {
 		struct socket *sp, *sonext;
 
-		for (sp = so->so_incomp.tqh_first; sp != NULL; sp = sonext) {
-			sonext = sp->so_list.tqe_next;
-			(void) soabort(sp);
-		}
-		for (sp = so->so_comp.tqh_first; sp != NULL; sp = sonext) {
-			sonext = sp->so_list.tqe_next;
-			(void) soabort(sp);
-		}
+                sp = TAILQ_FIRST(&so->so_incomp);
+                for (; sp != NULL; sp = sonext) {
+                        sonext = TAILQ_NEXT(sp, so_list);
+                        (void) soabort(sp);
+                }
+                for (sp = TAILQ_FIRST(&so->so_comp); sp != NULL; sp = sonext) {
+                        sonext = TAILQ_NEXT(sp, so_list);
+                        /* Dequeue from so_comp since sofree() won't do it */
+                        TAILQ_REMOVE(&so->so_comp, sp, so_list);
+                        so->so_qlen--;
+                        sp->so_state &= ~SS_COMP;
+                        sp->so_head = NULL;
+                        (void) soabort(sp);
+                }
+
 	}
 	if (so->so_pcb == 0)
 		goto discard;
@@ -592,7 +605,7 @@ drop:
 			error = error2;
 	}
 discard:
-	if (so->so_state & SS_NOFDREF)
+	if (so->so_pcb && so->so_state & SS_NOFDREF)
 		panic("soclose: NOFDREF");
 	so->so_state |= SS_NOFDREF;
 	so->so_proto->pr_domain->dom_refs--;
@@ -1955,12 +1968,12 @@ sopoll(struct socket *so, int events, struct ucred *cred)
 	if (revents == 0) {
 		if (events & (POLLIN | POLLPRI | POLLRDNORM | POLLRDBAND)) {
 			selrecord(p, &so->so_rcv.sb_sel);
-			so->so_rcv.sb_flags |= SB_SEL;
+			so->so_rcv.sb_sel.si_flags |= SI_SBSEL;
 		}
 
 		if (events & (POLLOUT | POLLWRNORM)) {
 			selrecord(p, &so->so_snd.sb_sel);
-			so->so_snd.sb_flags |= SB_SEL;
+			so->so_snd.sb_sel.si_flags |= SI_SBSEL;
 		}
 	}
 

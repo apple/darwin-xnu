@@ -165,8 +165,10 @@ aurpd_start()
 	so->so_upcall = aurp_wakeup;
 	so->so_upcallarg = (caddr_t)AE_UDPIP; /* Yuck */
 	so->so_state |= SS_NBIO;
-	so->so_rcv.sb_flags |=(SB_SEL|SB_NOINTR);
-	so->so_snd.sb_flags |=(SB_SEL|SB_NOINTR);
+	so->so_rcv.sb_flags |=SB_NOINTR;
+	so->so_rcv.sb_sel.si_flags |=SI_SBSEL;
+	so->so_snd.sb_flags |=SB_NOINTR;
+	so->so_snd.sb_sel.si_flags |=SI_SBSEL;
 
 out:
 	sbunlock(&so->so_snd);

@@ -260,8 +260,8 @@ decl_simple_lock_data(, mbuf_slock);
  * and internal data.
  */
 
-#ifdef DIAGNOSE
-#define MCHECK(m) if ((m)->m_type != MT_FREE) panic("mget")
+#if 1
+#define MCHECK(m) if ((m)->m_type != MT_FREE) panic("mget MCHECK: m_type=%x m=%x", m->m_type, m)
 #else
 #define MCHECK(m)
 #endif

@@ -143,9 +143,9 @@ struct socket {
 #define	SB_LOCK		0x01		/* lock on data queue */
 #define	SB_WANT		0x02		/* someone is waiting to lock */
 #define	SB_WAIT		0x04		/* someone is waiting for data/space */
-#define	SB_SEL		0x08		/* someone is selecting */
+#define	SB_SEL_XXX	0x08		/* Don't use. replaced by  SI_SBSEL in selinfo */
 #define	SB_ASYNC	0x10		/* ASYNC I/O, need signals */
-#define	SB_NOTIFY	(SB_WAIT|SB_SEL|SB_ASYNC)
+#define	SB_NOTIFY	(SB_WAIT|SB_ASYNC)
 #define	SB_UPCALL	0x20		/* someone wants an upcall */
 #define	SB_NOINTR	0x40		/* operations not interruptible */
 #define SB_RECV		0x8000		/* this is rcv sb */
@@ -226,7 +226,7 @@ struct	xsocket {
 /*
  * Do we need to notify the other side when I/O is possible?
  */
-#define sb_notify(sb)	(((sb)->sb_flags & (SB_WAIT|SB_SEL|SB_ASYNC|SB_UPCALL)) != 0)
+#define sb_notify(sb)	(((sb)->sb_flags & (SB_WAIT|SB_ASYNC|SB_UPCALL)) != 0 || ((sb)->sb_sel.si_flags & SI_SBSEL) != 0)
 
 /*
  * How much space is there in a socket buffer (so->so_snd or so->so_rcv)?
