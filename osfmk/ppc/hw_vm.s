@@ -574,6 +574,7 @@ tlbhang1:	lwarx	r5,0,r12					/* Get the TLBIE lock */
 			
 			eieio								/* Make sure that the tlbie happens first */
 			tlbsync								/* wait for everyone to catch up */
+			isync								
 			
 its603a:	sync								/* Make sure of it all */
 			stw		r11,0(r12)					/* Clear the tlbie lock */
@@ -798,6 +799,7 @@ tlbhangp:	lwarx	r11,0,r12					/* Get the TLBIE lock */
 			
 			eieio								/* Make sure that the tlbie happens first */
 			tlbsync								/* wait for everyone to catch up */
+			isync								
 			
 its603p:	stw		r11,0(r12)					/* Clear the lock */
 			srw		r5,r5,r8					/* Make a "free slot" mask */
@@ -974,6 +976,7 @@ tlbhangpv:	lwarx	r11,0,r12					/* Get the TLBIE lock */
 			
 			eieio								/* Make sure that the tlbie happens first */
 			tlbsync								/* wait for everyone to catch up */
+			isync								
 			
 its603pv:	stw		r11,0(r12)					/* Clear the lock */
 			srw		r5,r5,r8					/* Make a "free slot" mask */
@@ -1148,6 +1151,7 @@ tlbhangav:	lwarx	r11,0,r12					/* Get the TLBIE lock */
 			
 			eieio								/* Make sure that the tlbie happens first */
 			tlbsync								/* wait for everyone to catch up */
+			isync								
 			
 its603av:	stw		r11,0(r12)					/* Clear the lock */
 			srw		r5,r5,r8					/* Make a "free slot" mask */
@@ -1431,6 +1435,7 @@ tlbhangco:	lwarx	r11,0,r12					/* Get the TLBIE lock */
 			
 			eieio								/* Make sure that the tlbie happens first */
 			tlbsync								/* wait for everyone to catch up */
+			isync								
 			
 its603co:	stw		r11,0(r12)					/* Clear the lock */
 			srw		r5,r5,r8					/* Make a "free slot" mask */
@@ -1667,6 +1672,7 @@ htrtlbhang:	lwarx	r11,0,r12					; Get the TLBIE lock
 			
 			eieio								; Make sure that the tlbie happens first
 			tlbsync								; wait for everyone to catch up
+			isync								
 			
 htr603:		stw		r11,0(r12)					; Clear the lock
 			srw		r5,r5,r8					; Make a "free slot" mask 
@@ -2273,6 +2279,7 @@ tlbhang:	lwarx	r5,0,r9						/* Get the TLBIE lock */
 			
 			eieio								/* Make sure that the tlbie happens first */
 			tlbsync								/* wait for everyone to catch up */
+			isync								
 			
 its603:		rlwinm.	r21,r21,0,0,0				; See if we just stole an autogenned entry
 			sync								/* Make sure of it all */
@@ -2693,7 +2700,8 @@ rbnFirst:	bne-	rbPerm						; This is permanent, do not remove...
 			blt		rbHash						; Nope, length is right
 			subi	r6,r4,32+31					; Back down to correct length
 			
-rbHash:		xor		r2,r8,r5					; Hash into table
+rbHash:		rlwinm	r5,r5,0,10,25				; Keep only the page index
+			xor		r2,r8,r5					; Hash into table
 			and		r2,r2,r4					; Wrap into the table
 			add		r2,r2,r12					; Point right at the PCA
 
@@ -2784,6 +2792,7 @@ rbTlbN:		addic.	r5,r5,-1					; See if we did them all
 			
 			eieio								; Make sure that the tlbie happens first
 			tlbsync								; wait for everyone to catch up
+			isync								
 
 rbits603a:	sync								; Wait for quiet again
 			stw		r2,0(r12)					; Unlock invalidates

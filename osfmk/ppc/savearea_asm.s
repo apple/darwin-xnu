@@ -49,24 +49,32 @@
 ENTRY(save_queue,TAG_NO_FRAME_USED)
 
 
-			mfmsr	r12							/* Get the MSR */
-			lis		r10,HIGH_ADDR(EXT(saveanchor))	/* Get the high part of the anchor */
-			andi.	r11,r12,0x7FCF				/* Turn off all translation and 'rupts */
-			ori		r10,r10,LOW_ADDR(EXT(saveanchor))	/* Bottom half of the anchor */
-			mtmsr	r11							/* Make the MSR current */
+			mfsprg	r9,2						; Get the feature flags
+			mr		r11,r3						; Save the block
+			mtcrf	0x04,r9						; Set the features			
+			mfmsr	r12							; Get the MSR
+			lis		r10,HIGH_ADDR(EXT(saveanchor))	; Get the high part of the anchor
+			andi.	r3,r12,0x7FCF				; Turn off all translation and rupts
+			ori		r10,r10,LOW_ADDR(EXT(saveanchor))	; Bottom half of the anchor 
 
-			isync
+			bt		pfNoMSRirb,sqNoMSR			; No MSR...
+
+			mtmsr	r3							; Translation and all off
+			isync								; Toss prefetch
+			b		sqNoMSRx
+			
+sqNoMSR:	li		r0,loadMSR					; Get the MSR setter SC
+			sc									; Set it
+sqNoMSRx:
 			
 #if 0
-			rlwinm.	r3,r3,0,0,19				/* (TEST/DEBUG) */
+			rlwinm.	r3,r11,0,0,19				/* (TEST/DEBUG) */
 			bne+	notraceit					/* (TEST/DEBUG) */
 			BREAKPOINT_TRAP						/* (TEST/DEBUG) */
 notraceit:										/* (TEST/DEBUG) */
 #else
-			rlwinm	r3,r3,0,0,19				/* Make sure it's clean and tidy */
+			rlwinm	r3,r11,0,0,19				/* Make sure it's clean and tidy */
 #endif
-
-			lwarx	r9,0,r10					; ?
 
 sqlck:		lwarx	r9,0,r10					/* Grab the lock value */
 			li		r8,1						/* Use part of the delay time */
@@ -122,14 +130,22 @@ sqlckd:		isync								/* Make sure translation is off */
 ENTRY(save_dequeue,TAG_NO_FRAME_USED)
 
 
+			mfsprg	r9,2						; Get the feature flags
 			mfmsr	r12							/* Get the MSR */
+			mtcrf	0x04,r9						; Set the features			
 			lis		r10,HIGH_ADDR(EXT(saveanchor))	/* Get the high part of the anchor */
-			andi.	r11,r12,0x7FCF				/* Turn off all translation and 'rupts */
+			andi.	r3,r12,0x7FCF				/* Turn off all translation and 'rupts */
 			ori		r10,r10,LOW_ADDR(EXT(saveanchor))	/* Bottom half of the anchor */
-			mtmsr	r11							/* Make the MSR current */
-			isync								/* Make sure translation is off */
 
-			lwarx	r9,0,r10					; ?
+			bt		pfNoMSRirb,sdNoMSR			; No MSR...
+
+			mtmsr	r3							; Translation and all off
+			isync								; Toss prefetch
+			b		sdNoMSRx
+			
+sdNoMSR:	li		r0,loadMSR					; Get the MSR setter SC
+			sc									; Set it
+sdNoMSRx:
 
 sdqlck:		lwarx	r9,0,r10					/* Grab the lock value */
 			li		r8,1						/* Use part of the delay time */
@@ -211,14 +227,25 @@ ENTRY(save_get,TAG_NO_FRAME_USED)
 			
 			cmplwi	cr1,r1,0					; Set CR1_ne to indicate we want virtual address
 
-csaveget:	mfmsr	r11							/* Get the MSR */
+csaveget:	mfsprg	r9,2						; Get the feature flags
+			mfmsr	r11							; Get the MSR 
+			mtcrf	0x04,r9						; Set the features			
 			lis		r10,HIGH_ADDR(EXT(saveanchor))	/* Get the high part of the anchor */
-			andi.	r8,r11,0x7FCF				/* Turn off all translation and 'rupts */
+			andi.	r3,r11,0x7FCF				/* Turn off all translation and 'rupts */
 			ori		r10,r10,LOW_ADDR(EXT(saveanchor))	/* Bottom half of the anchor */
-			mtmsr	r8							/* Make the MSR current */
-			isync								; Make sure it is done
+
+			bt		pfNoMSRirb,sgNoMSR			; No MSR...
+
+			mtmsr	r3							; Translation and all off
+			isync								; Toss prefetch
+			b		sgNoMSRx
 			
-			lwarx	r9,0,r10					; ?
+sgNoMSR:	mr		r9,r0						; Save this
+			li		r0,loadMSR					; Get the MSR setter SC
+			sc									; Set it
+			mr		r0,r9						; Restore it
+
+sgNoMSRx:
 
 sglck:		lwarx	r9,0,r10					/* Grab the lock value */
 			li		r7,1						/* Use part of the delay time */
@@ -313,20 +340,31 @@ notpage0:	rlwinm	r6,r3,0,0,19				/* (TEST/DEBUG) */
 nodoublefret:									/* (TEST/DEBUG) */		
 #endif
 
+			mfsprg	r9,2						; Get the feature flags
 			lwz		r7,SAVflags(r3)				/* Get the flags */
 			rlwinm	r6,r3,0,0,19				/* Round back down to the savearea page block */
 			andis.	r7,r7,HIGH_ADDR(SAVinuse)	/* Still in use? */
 			mfmsr	r12							/* Get the MSR */
 			bnelr-								/* Still in use, just leave... */
 			lwz		r5,SACvrswap(r6)			/* Get the conversion to real */
+			mr		r8,r3						; Save the savearea address
+			mtcrf	0x04,r9						; Set the features			
 			lis		r10,HIGH_ADDR(EXT(saveanchor))	/* Get the high part of the anchor */
-			andi.	r11,r12,0x7FCF				/* Turn off all translation and 'rupts */
+			andi.	r3,r12,0x7FCF				/* Turn off all translation and 'rupts */
 			ori		r10,r10,LOW_ADDR(EXT(saveanchor))	/* Bottom half of the anchor */
-			mtmsr	r11							/* Make the MSR current */
-			isync								/* Make sure translation is off */
+
+			bt		pfNoMSRirb,srNoMSR			; No MSR...
+
+			mtmsr	r3							; Translation and all off
+			isync								; Toss prefetch
+			b		srNoMSRx
+			
+srNoMSR:	li		r0,loadMSR					; Get the MSR setter SC
+			sc									; Set it
+srNoMSRx:
 
 			mfsprg	r11,1						/* Get the active save area */
-			xor		r3,r3,r5					/* Get the real address of the savearea */
+			xor		r3,r8,r5					/* Get the real address of the savearea */
 			cmplw	r11,r3						/* Are we trying to toss the active one? */
 			xor		r6,r6,r5					/* Make the savearea block real also */
 			beq-	srbigtimepanic				/* This is a no-no... */
@@ -335,8 +373,6 @@ nodoublefret:									/* (TEST/DEBUG) */
 			lis		r8,0x8000					/* Build a bit mask and assume first savearea */
 			srw		r8,r8,r7					/* Get bit position of do deallocate */
 			
-			lwarx	r11,0,r10					; ?
-
 srlck:		lwarx	r11,0,r10					/* Grab the lock value */
 			li		r7,1						/* Use part of the delay time */
 			mr.		r11,r11						/* Is it locked? */
@@ -422,20 +458,31 @@ LEXT(save_cpv)
  *			block and disable for interruptions.
  *			Note really well: this is only for debugging, don't expect it to always work!
  *
- *			We take a virtual address in R4 to save the original MSR, and 
+ *			We take a virtual address in R3 to save the original MSR, and 
  *			return the virtual address.
  *
  */
 
 ENTRY(save_deb,TAG_NO_FRAME_USED)
 
+			mfsprg	r9,2						; Get the feature flags
 			mfmsr	r12							/* Get the MSR */
 			lis		r10,HIGH_ADDR(EXT(saveanchor))	/* Get the high part of the anchor */
+			mtcrf	0x04,r9						; Set the features			
 			stw		r12,0(r3)					/* Save it */
-			andi.	r11,r12,0x7FCF				/* Turn off all translation and 'rupts */
+			andi.	r3,r12,0x7FCF				/* Turn off all translation and 'rupts */
 			ori		r10,r10,LOW_ADDR(EXT(saveanchor))	/* Bottom half of the anchor */
-			mtmsr	r11							/* Make the MSR current */
-			isync								/* Make sure translation is off */
+
+			bt		pfNoMSRirb,sdbNoMSR			; No MSR...
+
+			mtmsr	r3							; Translation and all off
+			isync								; Toss prefetch
+			b		sdbNoMSRx
+			
+sdbNoMSR:	li		r0,loadMSR					; Get the MSR setter SC
+			sc									; Set it
+sdbNoMSRx:
+
 			lwz		r3,SVfree(r10)				/* Get the physical first in list */
 			andi.	r11,r12,0x7FFF				/* Clear only interruption */
 			lwz		r5,SACvrswap(r3)			/* Get the conversion to virtual */

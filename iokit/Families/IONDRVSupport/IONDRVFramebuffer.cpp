@@ -1506,13 +1506,164 @@ UInt32 IONDRVFramebuffer::getConnectionCount( void )
     return 1;
 }
 
+/*
+    File:	DDCPowerOnOffUtils.c <CS3>
+*/
+
+enum{
+    kVCPSendSize			= 8,
+    kVCPReplySize			= 64,
+    kI2CDisplayWriteAddress		= 0x6E,
+    kI2CDisplayReadAddress		= 0x6F,
+    // Messed up specification says checksum should be calculated with ACCESS.bus value of 50.
+    kI2CDisplayReadHostCheckSumAddress	= 0x50,
+    // Messed up specification says checksum should be calculated with ACCESS.bus value of 50.
+    kI2CDisplayReadHostAddress		= 0x51,
+
+    kI2CVCPGetCode			= 0x01,
+    kI2CVCPGetLength			= 0x82,
+    kI2CVCPGetMessageSize		= 0x05,
+
+    kI2CVCPReplyLength			= 0x88,
+    kI2CNullReplyLength			= 0x80,
+    kI2CNullReplyCheckSum		= 0xBE,
+
+    kI2CVCPSetCode			= 0x03,
+    kI2CVCPSetLength			= 0x84,
+    kI2CVCPReplyCode			= 0x02,
+            
+    kDDCPowerOn				= 0x01,
+    kDDCPowerOff			= 0x04
+};
+enum {
+    kBasicI2CCommTransactionsMask = ( (1<<kVideoNoTransactionType) | (1<<kVideoSimpleI2CType)
+                                    | (1<<kVideoDDCciReplyType) )
+};
+
+void IONDRVFramebuffer::displayI2CPower( bool enable )
+{
+    VDCommunicationRec	i2CRecord;
+    VDCommunicationInfoRec i2cInfoRecord;
+    Byte		sendBuffer[8];
+    Byte		replyBuffer[kVCPReplySize];
+    UInt32		supportedCommFlags = 0;
+    // Don't do it if we're told it's not supported
+    bool		setThisDisplay = true;
+
+    // 
+    // Some displays (like Fiji) do not support the reading
+    // of the current power state.  Others (like Mitsubishi
+    // Diamond Pro 710) report that they do not support 
+    // power management calls.
+    //
+    // I'll avoid sending the power command only in the 
+    // case that I get a valid reply that does says 
+    // it does not support the power selector.
+    //
+
+    bzero( &i2cInfoRecord, sizeof(i2cInfoRecord) );
+    if( noErr != doStatus( cscGetCommunicationInfo, &i2cInfoRecord))
+        return;
+    if( kBasicI2CCommTransactionsMask != (i2cInfoRecord.csSupportedTypes & kBasicI2CCommTransactionsMask))
+        return;
+    if( !shouldDoI2CPower)
+        return;
+
+    supportedCommFlags = i2cInfoRecord.csSupportedCommFlags;
+    bzero( &i2CRecord, sizeof(i2CRecord) );
+    bzero( &sendBuffer, sizeof(sendBuffer) );
+    bzero( &replyBuffer, sizeof(replyBuffer) );
+
+    sendBuffer[0]	= kI2CDisplayReadHostAddress;
+    sendBuffer[1]	= kI2CVCPGetLength;
+    sendBuffer[2]	= kI2CVCPGetCode;		// GetVCP command
+    sendBuffer[3]	= 0xD6;
+    sendBuffer[4]	= kI2CDisplayWriteAddress ^
+                            sendBuffer[0] ^ sendBuffer[1] ^
+                            sendBuffer[2] ^ sendBuffer[3];
+
+    i2CRecord.csBusID		= kVideoDefaultBus;
+    i2CRecord.csSendType	= kVideoSimpleI2CType;
+    i2CRecord.csSendAddress	= kI2CDisplayWriteAddress;
+    i2CRecord.csSendBuffer	= &sendBuffer;
+    i2CRecord.csSendSize	= 7;
+    i2CRecord.csReplyType	= kVideoDDCciReplyType;
+    i2CRecord.csReplyAddress	= kI2CDisplayReadAddress;
+    i2CRecord.csReplyBuffer	= &replyBuffer;
+    i2CRecord.csReplySize	= kVCPReplySize;
+
+    if( supportedCommFlags & kVideoReplyMicroSecDelayMask )
+    {
+        // We know some displays are slow, this is an important call to get right
+	i2CRecord.csCommFlags	|= kVideoReplyMicroSecDelayMask;
+        // 50 milliseconds should be enough time for the display to respond.
+	i2CRecord.csMinReplyDelay = 50 * 1000;
+    }
+
+    if( (noErr == doControl( cscDoCommunication, &i2CRecord))
+      && (kI2CDisplayWriteAddress == replyBuffer[0])
+      && (kI2CVCPReplyLength == replyBuffer[1])
+      && (kI2CVCPReplyCode == replyBuffer[2])) {
+	Byte checkSum = kI2CDisplayReadHostCheckSumAddress ^	// host address
+            replyBuffer[0] ^	// source address
+            replyBuffer[1] ^	// message length (0x88)
+            replyBuffer[2] ^	// VCP type code
+            replyBuffer[3] ^	// result code
+            replyBuffer[4] ^	// VCP op code
+            replyBuffer[5] ^	// VCP type code
+            replyBuffer[6] ^	// Max value MSB
+            replyBuffer[7] ^	// Max value LSB
+            replyBuffer[8] ^	// Current value MSB
+            replyBuffer[9];	// Current value LSB
+
+        if( (checkSum == replyBuffer[10]) &&		// Did the check sum match AND
+                        (0 != replyBuffer[3]))		// Are we not supposed to support this feature?
+            setThisDisplay = false;			// Don't do it if we're told it's not supported
+    }
+        
+    if( setThisDisplay) {
+
+        bzero( &i2CRecord, sizeof(i2CRecord) );
+        bzero( &sendBuffer, sizeof(sendBuffer) );
+        bzero( &replyBuffer, sizeof(replyBuffer) );
+
+        sendBuffer[0]	= kI2CDisplayReadHostAddress;
+        sendBuffer[1]	= kI2CVCPSetLength;
+        sendBuffer[2]	= kI2CVCPSetCode;			// SetVCP command
+        sendBuffer[3]	= 0xD6;
+        sendBuffer[4]	= 0;					// MSB
+        sendBuffer[5]	= enable ? kDDCPowerOn : kDDCPowerOff;	// LSB
+        sendBuffer[6]	= kI2CDisplayWriteAddress ^
+                            sendBuffer[0] ^ sendBuffer[1] ^
+                            sendBuffer[2] ^ sendBuffer[3] ^
+                            sendBuffer[4] ^ sendBuffer[5];
+
+        i2CRecord.csBusID		= kVideoDefaultBus;
+        i2CRecord.csSendAddress		= kI2CDisplayWriteAddress;
+        i2CRecord.csSendType		= kVideoSimpleI2CType;
+        i2CRecord.csSendBuffer		= &sendBuffer;
+        i2CRecord.csSendSize		= 7;
+        i2CRecord.csReplyType		= kVideoNoTransactionType;
+        i2CRecord.csReplyAddress	= 0;
+        i2CRecord.csReplyBuffer		= 0;
+        i2CRecord.csReplySize		= 0;
+
+        if( supportedCommFlags & kVideoReplyMicroSecDelayMask) {
+            // We know some displays are slow, this is an important call to get right
+            i2CRecord.csCommFlags |= kVideoReplyMicroSecDelayMask;
+            // 50 milliseconds should be enough time for the display to respond.
+            i2CRecord.csMinReplyDelay	= 50 * 1000;
+        }
+
+        doControl( cscDoCommunication, &i2CRecord);
+    }
+}
 IOReturn IONDRVFramebuffer::setAttributeForConnection( IOIndex connectIndex,
                                          IOSelect attribute, UInt32 info )
 {
     IOReturn		err;
     VDSyncInfoRec	theVDSyncInfoRec;
     VDPowerStateRec	sleepInfo;
-
 
     switch( attribute ) {
 
@@ -1527,6 +1678,8 @@ IOReturn IONDRVFramebuffer::setAttributeForConnection( IOIndex connectIndex,
             sleepInfo.powerReserved1 = 0;
             sleepInfo.powerReserved2 = 0;
             doControl( cscSetPowerState, &sleepInfo);
+
+            displayI2CPower( ((info>>8) & 0xff) ? false : true );
 
             err = kIOReturnSuccess;
             break;
@@ -1668,6 +1821,40 @@ bool IONDRVFramebuffer::hasDDCConnect( IOIndex  connectIndex )
 		== kNeedFlags );
 }
 
+// I2C first year for Apple displays.
+// Apple monitors older than this (and Manta)
+// are never called with I2C commands
+enum {
+    kFirstAppleI2CYear	= 1999,
+    kAppleVESAVendorID	= 0x0610
+};
+
+struct EDID {
+    UInt8	header[8];
+    UInt8	vendorProduct[4];
+    UInt8	serialNumber[4];
+    UInt8	weekOfManufacture;
+    UInt8	yearOfManufacture;
+    UInt8	version;
+    UInt8	revision;
+    UInt8	displayParams[5];
+    UInt8	colorCharacteristics[10];
+    UInt8	establishedTimings[3];
+    UInt16	standardTimings[8];
+    UInt8	descriptors[4][18];
+    UInt8	extension;
+    UInt8	checksum;
+};
+
+static bool IsApplePowerBlock(UInt8 * theBlock)
+{    
+    return( theBlock &&
+            0x00000000		== *(UInt32 *)&theBlock[0] &&
+            0x00		== theBlock[4] &&
+            0x06		== theBlock[5] &&
+            0x10		== theBlock[6] );
+}
+
 IOReturn IONDRVFramebuffer::getDDCBlock( IOIndex /* connectIndex */, 
 					UInt32 blockNumber,
                                         IOSelect blockType,
@@ -1693,7 +1880,32 @@ IOReturn IONDRVFramebuffer::getDDCBlock( IOIndex /* connectIndex */,
             actualLength = kDDCBlockSize;
         bcopy( ddcRec.ddcBlockData, data, actualLength);
 	*length = actualLength;
+
+        if( (1 == blockNumber) && (kIODDCBlockTypeEDID == blockType)
+         && (actualLength >= sizeof( EDID))) do {
+
+            EDID * edid;
+            UInt32 vendor;
+            UInt32 product;
+
+            edid = (EDID *) data;
+            vendor = (edid->vendorProduct[0] << 8) | edid->vendorProduct[1];
+            product = (edid->vendorProduct[3] << 8) | edid->vendorProduct[2];
+            if( kAppleVESAVendorID == vendor) {
+                if( (0x01F4 == product) || (0x9D02 == product))
+                    continue;
+                if( edid->yearOfManufacture && ((edid->yearOfManufacture + 1990) < kFirstAppleI2CYear))
+                    continue;
+            }
+            shouldDoI2CPower =    (IsApplePowerBlock( &edid->descriptors[1][0])
+                                || IsApplePowerBlock( &edid->descriptors[2][0])
+                                || IsApplePowerBlock( &edid->descriptors[3][0]));
+
+        } while( false );
     }
+
+    IOLog("%s: i2cPower %d\n", getName(), shouldDoI2CPower);
+
     return( err);
 }
 

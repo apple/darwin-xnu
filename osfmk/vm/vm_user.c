@@ -1924,8 +1924,16 @@ vm_map_get_upl(
 {
 	vm_map_entry_t	entry;
 	int		caller_flags;
+	int		sync_cow_data = FALSE;
+	vm_object_t	local_object;
+	vm_offset_t	local_offset;
+	vm_offset_t	local_start;
+	kern_return_t	ret;
 
 	caller_flags = *flags;
+	if (!(caller_flags & UPL_COPYOUT_FROM)) {
+		sync_cow_data = TRUE;
+	}
 	if(upl == NULL)
 		return KERN_INVALID_ARGUMENT;
 REDISCOVER_ENTRY:
@@ -1977,49 +1985,105 @@ REDISCOVER_ENTRY:
 			}
 		}
 		if (entry->is_sub_map) {
+			vm_map_t	submap;
+
+			submap = entry->object.sub_map;
+			local_start = entry->vme_start;
+			local_offset = entry->offset;
+			vm_map_reference(submap);
 			vm_map_unlock(map);
-			return (vm_map_get_upl(entry->object.sub_map, 
-				entry->offset + (offset - entry->vme_start), 
+
+			ret = (vm_map_get_upl(submap, 
+				local_offset + (offset - local_start), 
 				upl_size, upl, page_list, count, 
 				flags, force_data_sync));
+
+			vm_map_deallocate(submap);
+			return ret;
 		}
 					
-		if (!(caller_flags & UPL_COPYOUT_FROM)) {
+		if (sync_cow_data) {
 			if (entry->object.vm_object->shadow) {
-				int	flags;
+				int		flags;
+
+				local_object = entry->object.vm_object;
+				local_start = entry->vme_start;
+				local_offset = entry->offset;
+				vm_object_reference(local_object);
 				vm_map_unlock(map);
 
-				vm_object_reference(entry->object.vm_object);
-				if(entry->object.vm_object->copy == NULL) {
+				if(local_object->copy == NULL) {
 					flags = MEMORY_OBJECT_DATA_SYNC;
 				} else {
 					flags = MEMORY_OBJECT_COPY_SYNC;
 				}
+
+				if((local_object->paging_offset) &&
+						(local_object->pager == 0)) {
+				   /* 
+				    * do a little clean-up for our unorthodox
+				    * entry into a pager call from a non-pager
+				    * context.  Normally the pager code 
+				    * assumes that an object it has been called
+				    * with has a backing pager and so does
+				    * not bother to check the pager field
+				    * before relying on the paging_offset
+				    */
+				    vm_object_lock(local_object);
+				    if (local_object->pager == 0) {
+					local_object->paging_offset = 0;
+				    }
+				    vm_object_unlock(local_object);
+				}
 					
 				memory_object_lock_request(
-					entry->object.vm_object,
-					(offset - entry->vme_start) 
-						+ entry->offset,
+					local_object, ((offset - local_start) 
+						+ local_offset) +
+						local_object->paging_offset,
 					(vm_object_size_t)*upl_size, FALSE, 
 					flags,
 					VM_PROT_NO_CHANGE, NULL, 0);
-				vm_map_lock(map);
+				sync_cow_data = FALSE;
+				goto REDISCOVER_ENTRY;
 			}
 		}
 
 		if (force_data_sync) {
-		        vm_map_unlock(map);
-			vm_object_reference(entry->object.vm_object);
 
+			local_object = entry->object.vm_object;
+			local_start = entry->vme_start;
+			local_offset = entry->offset;
+			vm_object_reference(local_object);
+		        vm_map_unlock(map);
+
+			if((local_object->paging_offset) && 
+					(local_object->pager == 0)) {
+			   /* 
+			    * do a little clean-up for our unorthodox
+			    * entry into a pager call from a non-pager
+			    * context.  Normally the pager code 
+			    * assumes that an object it has been called
+			    * with has a backing pager and so does
+			    * not bother to check the pager field
+			    * before relying on the paging_offset
+			    */
+			    vm_object_lock(local_object);
+			    if (local_object->pager == 0) {
+				local_object->paging_offset = 0;
+			    }
+			    vm_object_unlock(local_object);
+			}
+					
 			memory_object_lock_request(
-						   entry->object.vm_object,
-						   (offset - entry->vme_start) 
-						   + entry->offset,
-						   (vm_object_size_t)*upl_size, FALSE, 
-						   MEMORY_OBJECT_DATA_SYNC,
-						   VM_PROT_NO_CHANGE, 
-						   NULL, 0);
-			vm_map_lock(map);
+				   local_object, ((offset - local_start) 
+					   + local_offset) + 
+					   local_object->paging_offset,
+				   (vm_object_size_t)*upl_size, FALSE, 
+				   MEMORY_OBJECT_DATA_SYNC,
+				   VM_PROT_NO_CHANGE, 
+				   NULL, 0);
+			force_data_sync = FALSE;
+			goto REDISCOVER_ENTRY;
 		}
 
 		if(!(entry->object.vm_object->private)) {
@@ -2033,14 +2097,20 @@ REDISCOVER_ENTRY:
 		} else {
 			*flags = UPL_DEV_MEMORY | UPL_PHYS_CONTIG;
 		}
+		local_object = entry->object.vm_object;
+		local_offset = entry->offset;
+		local_start = entry->vme_start;
+		vm_object_reference(local_object);
 		vm_map_unlock(map);
-		return(vm_fault_list_request(entry->object.vm_object, 
-			((offset - entry->vme_start) + entry->offset),
+		ret = (vm_fault_list_request(local_object, 
+			((offset - local_start) + local_offset),
 			*upl_size,
 			upl,
 			page_list,
 			*count,
 			caller_flags));
+		vm_object_deallocate(local_object);
+		return(ret);
 	} 
 
 	vm_map_unlock(map);
@@ -2627,7 +2697,7 @@ shared_region_mapping_dealloc(
 		sm_info.alternate_base = shared_region->alternate_base;
 		sm_info.alternate_next = shared_region->alternate_next;
 		sm_info.flags = shared_region->flags;
-		sm_info.self = shared_region;
+		sm_info.self = (vm_offset_t)shared_region;
 
 		lsf_remove_regions_mappings(shared_region, &sm_info);
 		pmap_remove(((vm_named_entry_t)

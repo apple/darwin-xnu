@@ -569,9 +569,12 @@ hfs_lookup(ap)
 		/*
 		* Insert name in cache if wanted.
 		 * Names with composed chars are not put into the name cache.
+		 * Resource forks are not entered in the name cache. This
+		 * avoids deadlocks.
 		 */
 		if ((cnp->cn_flags & MAKEENTRY)
-		    && (cnp->cn_namelen == catInfo.nodeData.cnm_length))	{
+		    && (cnp->cn_namelen == catInfo.nodeData.cnm_length)
+			&& ((H_FORKTYPE(VTOH(target_vp))) != kRsrcFork))	{
 			/*
 			 * XXX SER - Might be good idea to bcopy(catInfo.nodeData.fsspec.name, cnp->cn_nameptr)
 			 * to "normalize" the name cache. This will avoid polluting the name cache with

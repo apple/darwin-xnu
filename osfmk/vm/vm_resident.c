@@ -958,10 +958,8 @@ vm_page_grab_fictitious(void)
 	m = (vm_page_t)zget(vm_page_zone);
 	if (m) {
 		m->free = FALSE;
-#if	MACH_ASSERT || ZONE_DEBUG
 		vm_page_init(m, vm_page_fictitious_addr);
 		m->fictitious = TRUE;
-#endif	/* MACH_ASSERT || ZONE_DEBUG */
 	}
 
 	c_vm_page_grab_fictitious++;

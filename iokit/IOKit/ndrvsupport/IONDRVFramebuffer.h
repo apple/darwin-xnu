@@ -91,8 +91,10 @@ protected:
     struct _VSLService *	vslServices;
 
     UInt32			accessFlags;
+    UInt8			shouldDoI2CPower;
 
-    UInt32			__reserved[32];
+    UInt8			__reservedB[3];
+    UInt32			__reservedA[31];
 
 private:
     OSMetaClassDeclareReservedUnused(IONDRVFramebuffer, 0);
@@ -151,6 +153,7 @@ private:
     virtual void getCurrentConfiguration( void );
     static const IOTVector * _undefinedSymbolHandler( void * self, 
                             const char * libraryName, const char * symbolName );
+    void displayI2CPower( bool enable );
 
 public:
     virtual IOReturn doControl( UInt32 code, void * params );

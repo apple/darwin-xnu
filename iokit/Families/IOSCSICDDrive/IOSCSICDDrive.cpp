@@ -579,6 +579,7 @@ IOSCSICDDrive::readTOC(IOMemoryDescriptor *buffer)
     req->setCDB( &scsiCDB );
     req->setPointers(cx->senseDataDesc, 255, false, true);    
 
+    buffer->retain();			/* bump the retain count */
     cx->memory = buffer;
 
     req->setPointers( cx->memory, cx->memory->getLength(), false );

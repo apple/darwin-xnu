@@ -200,7 +200,6 @@ ENTRY(invalidate_dcache, TAG_NO_FRAME_USED)
 .L_invalidate_dcache_invalidate_loop:
 	subic	r4,	r4,	CACHE_LINE_SIZE
 	dcbi	r3,	r4
-	dcbi	r3,	r4
 	bdnz	.L_invalidate_dcache_invalidate_loop
 
 .L_invalidate_dcache_done:
@@ -215,7 +214,6 @@ ENTRY(invalidate_dcache, TAG_NO_FRAME_USED)
 
 .L_invalidate_dcache_one_line:
 	xor	r4,r4,r4
-	dcbi	0,r3
 	dcbi	0,r3
 	b	.L_invalidate_dcache_done
 
@@ -260,21 +258,15 @@ ENTRY(invalidate_icache, TAG_NO_FRAME_USED)
 .L_invalidate_icache_invalidate_loop:
 	subic	r4,	r4,	CACHE_LINE_SIZE
 	icbi	r3,	r4
-	icbi	r3,	r4
 	bdnz	.L_invalidate_icache_invalidate_loop
 
 .L_invalidate_icache_done:
-	/* Sync restore msr if it was modified */
-	cmpwi	r5,	0
 	sync			/* make sure invalidates have completed */
-	beq+	0f
 	mtmsr	r6		/* Restore original translations */
 	isync			/* Ensure data translations are on */
-0:
 	blr
 
 .L_invalidate_icache_one_line:
 	xor	r4,r4,r4
-	icbi	0,r3
 	icbi	0,r3
 	b	.L_invalidate_icache_done

@@ -752,7 +752,10 @@ enum {
     kVideoDDCciReplyType        = 2                             /* DDC/ci message (with imbedded length)*/
 };
 
-
+// VDCommunicationRec.csCommFlags and VDCommunicationInfoRec.csSupportedCommFlags
+enum {
+    kVideoReplyMicroSecDelayMask	= (1<<0)		/* If set, the driver should delay csMinReplyDelay micro seconds between send and receive*/
+};
 
 
 struct VDResolutionInfoRec {
@@ -1171,8 +1174,8 @@ enum {
 
 struct VDCommunicationRec {
     SInt32                          csBusID;                    /* kVideoDefaultBus for single headed cards.*/
-    UInt32                          csReserved0;                /* Always zero*/
-    UInt32                          csReserved1;                /* Always zero*/
+    UInt32			    csCommFlags;		/* Always zero*/
+    UInt32			    csMinReplyDelay;		/* Minimum delay between send and reply transactions (units depend on csCommFlags)*/
     UInt32                          csReserved2;                /* Always zero*/
 
     UInt32                          csSendAddress;              /* Usually I2C address (eg 0x6E)*/
@@ -1201,7 +1204,7 @@ struct VDCommunicationInfoRec {
     SInt32                          csMaxBus;                   /* Max bus (usually kVideoDefaultBus).  Used to probe additional busses*/
 
     UInt32                          csSupportedTypes;           /* Bit field for first 32 supported transaction types.  Eg. 0x07 => support for kVideoNoTransactionType, kVideoSimpleI2CType and kVideoDDCciReplyType.*/
-    UInt32                          csReserved1;                /* Always zero*/
+    UInt32			    csSupportedCommFlags;	/* Return the flags csCommFlags understood by this driver. */
     UInt32                          csReserved2;                /* Always zero*/
     UInt32                          csReserved3;                /* Always zero*/
 

@@ -587,6 +587,7 @@ cipurgeTLB:	tlbie	r6								; Purge this entry
 			
 			tlbsync									; Sync all TLBs
 			sync
+			isync
 			
 cinoSMP:	stw		r2,0(r5)						; Unlock TLBIE lock
 
