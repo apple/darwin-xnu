@@ -67,8 +67,6 @@
 #define RTALLOC1(A,B)		rtalloc1((A),(B),0UL)
 #endif
 
-#warning if_atm.h is not used by the darwin kernel
-
 
 /*
  * pseudo header for packet transmission

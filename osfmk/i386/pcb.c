@@ -85,6 +85,10 @@
 #include <i386/fpu.h>
 #include <i386/iopb_entries.h>
 
+vm_offset_t         active_stacks[NCPUS];
+vm_offset_t         kernel_stack[NCPUS];
+thread_act_t		active_kloaded[NCPUS];
+
 /*
  * Maps state flavor to number of words in the state:
  */
@@ -146,15 +150,6 @@ machine_kernel_stack_init(
 	stack = thread->kernel_stack;
 	assert(stack);
 
-#if	MACH_ASSERT
-	if (watchacts & WA_PCB) {
-		printf("machine_kernel_stack_init(thr=%x,stk=%x,start_pos=%x)\n",
-				thread,stack,start_pos);
-		printf("\tstack_iks=%x, stack_iel=%x\n",
-			STACK_IKS(stack), STACK_IEL(stack));
-	}
-#endif	/* MACH_ASSERT */
-
 	/*
 	 *	We want to run at start_pos, giving it as an argument
 	 *	the return value from Load_context/Switch_context.
@@ -176,9 +171,11 @@ machine_kernel_stack_init(
 
 #if	NCPUS > 1
 #define	curr_gdt(mycpu)		(mp_gdt[mycpu])
+#define	curr_ldt(mycpu)		(mp_ldt[mycpu])
 #define	curr_ktss(mycpu)	(mp_ktss[mycpu])
 #else
 #define	curr_gdt(mycpu)		(gdt)
+#define	curr_ldt(mycpu)		(ldt)
 #define	curr_ktss(mycpu)	(&ktss)
 #endif
 
@@ -190,9 +187,9 @@ act_machine_switch_pcb( thread_act_t new_act )
 {
 	pcb_t			pcb = new_act->mact.pcb;
 	int			mycpu;
-    {
 	register iopb_tss_t	tss = pcb->ims.io_tss;
 	vm_offset_t		pcb_stack_top;
+	register user_ldt_t	ldt = pcb->ims.ldt;
 
         assert(new_act->thread != NULL);
         assert(new_act->thread->kernel_stack != 0);
@@ -234,17 +231,17 @@ act_machine_switch_pcb( thread_act_t new_act )
 	    set_tr(USER_TSS);
 	    gdt_desc_p(mycpu,KERNEL_TSS)->access &= ~ ACC_TSS_BUSY;
 	}
-    }
 
-    {
-	register user_ldt_t	ldt = pcb->ims.ldt;
 	/*
 	 * Set the thread`s LDT.
 	 */
 	if (ldt == 0) {
+	    struct real_descriptor *ldtp;
 	    /*
 	     * Use system LDT.
 	     */
+	    ldtp = (struct real_descriptor *)curr_ldt(mycpu);
+	    ldtp[sel_idx(USER_CTHREAD)] = pcb->cthread_desc;
 	    set_ldt(KERNEL_LDT);
 	}
 	else {
@@ -254,7 +251,7 @@ act_machine_switch_pcb( thread_act_t new_act )
 	    *gdt_desc_p(mycpu,USER_LDT) = ldt->desc;
 	    set_ldt(USER_LDT);
 	}
-    }
+
 	mp_enable_preemption();
 	/*
 	 * Load the floating-point context, if necessary.
@@ -264,20 +261,10 @@ act_machine_switch_pcb( thread_act_t new_act )
 }
 
 /*
- * flush out any lazily evaluated HW state in the
- * owning thread's context, before termination.
- */
-void
-thread_machine_flush( thread_act_t cur_act )
-{
-    fpflush(cur_act);
-}
-
-/*
  * Switch to the first thread on a CPU.
  */
 void
-load_context(
+machine_load_context(
 	thread_t		new)
 {
 	act_machine_switch_pcb(new->top_act);
@@ -300,9 +287,10 @@ void
 machine_switch_act( 
 	thread_t	thread,
 	thread_act_t	old,
-	thread_act_t	new,
-	int				cpu)
+	thread_act_t	new)
 {
+	int		cpu = cpu_number();
+
 	/*
 	 *	Switch the vm, ast and pcb context. 
 	 *	Save FP registers if in use and set TS (task switch) bit.
@@ -322,7 +310,7 @@ machine_switch_act(
  * and return it.
  */
 thread_t
-switch_context(
+machine_switch_context(
 	thread_t		old,
 	void			(*continuation)(void),
 	thread_t		new)
@@ -331,9 +319,7 @@ switch_context(
 				new_act = new->top_act;
 
 #if MACH_RT
-        assert(old_act->kernel_loaded ||
-               active_stacks[cpu_number()] == old_act->thread->kernel_stack);
-        assert (get_preemption_level() == 1);
+        assert(active_stacks[cpu_number()] == old_act->thread->kernel_stack);
 #endif
 	check_simple_locks();
 
@@ -341,12 +327,6 @@ switch_context(
 	 *	Save FP registers if in use.
 	 */
 	fpu_save_context(old);
-
-#if	MACH_ASSERT
-	if (watchacts & WA_SWITCH)
-		printf("\tswitch_context(old=%x con=%x new=%x)\n",
-					    old, continuation, new);
-#endif	/* MACH_ASSERT */
 
 	/*
 	 *	Switch address maps if need be, even if not switching tasks.
@@ -364,95 +344,8 @@ switch_context(
 	act_machine_switch_pcb(new_act);
 	KERNEL_DEBUG_CONSTANT(MACHDBG_CODE(DBG_MACH_SCHED,MACH_SCHED) | DBG_FUNC_NONE,
 		     (int)old, (int)new, old->sched_pri, new->sched_pri, 0);
+	old->continuation = NULL;
 	return(Switch_context(old, continuation, new));
-}
-
-void
-pcb_module_init(void)
-{
-	fpu_module_init();
-	iopb_init();
-}
-
-void
-pcb_init( register thread_act_t thr_act )
-{
-	register pcb_t pcb;
-
-	assert(thr_act->mact.pcb == (pcb_t)0);
-	pcb = thr_act->mact.pcb = &thr_act->mact.xxx_pcb;
-
-#if	MACH_ASSERT
-	if (watchacts & WA_PCB)
-		printf("pcb_init(%x) pcb=%x\n", thr_act, pcb);
-#endif	/* MACH_ASSERT */
-
-	/*
-	 *	We can't let random values leak out to the user.
-	 * (however, act_create() zeroed the entire thr_act, mact, pcb)
-	 * bzero((char *) pcb, sizeof *pcb);
-	 */
-	simple_lock_init(&pcb->lock, ETAP_MISC_PCB);
-
-	/*
-	 *	Guarantee that the bootstrapped thread will be in user
-	 *	mode.
-	 */
-	pcb->iss.cs = USER_CS;
-	pcb->iss.ss = USER_DS;
-	pcb->iss.ds = USER_DS;
-	pcb->iss.es = USER_DS;
-	pcb->iss.fs = USER_DS;
-	pcb->iss.gs = USER_DS;
-	pcb->iss.efl = EFL_USER_SET;
-}
-
-/*
- * Adjust saved register state for thread belonging to task
- * created with kernel_task_create().
- */
-void
-pcb_user_to_kernel(
-	thread_act_t thr_act)
-{
-	register pcb_t pcb = thr_act->mact.pcb;
-
-	pcb->iss.cs = KERNEL_CS;
-	pcb->iss.ss = KERNEL_DS;
-	pcb->iss.ds = KERNEL_DS;
-	pcb->iss.es = KERNEL_DS;
-	pcb->iss.fs = KERNEL_DS;
-	pcb->iss.gs = CPU_DATA;
-}
-
-void
-pcb_terminate(
-	register thread_act_t thr_act)
-{
-	register pcb_t	pcb = thr_act->mact.pcb;
-
-	assert(pcb);
-
-	if (pcb->ims.io_tss != 0)
-		iopb_destroy(pcb->ims.io_tss);
-	if (pcb->ims.ifps != 0)
-		fp_free(pcb->ims.ifps);
-	if (pcb->ims.ldt != 0)
-		user_ldt_free(pcb->ims.ldt);
-	thr_act->mact.pcb = (pcb_t)0;
-}
-
-/*
- *	pcb_collect:
- *
- *	Attempt to free excess pcb memory.
- */
-
-void
-pcb_collect(
-	register thread_act_t  thr_act)
-{
-	/* accomplishes very little */
 }
 
 /*
@@ -463,7 +356,6 @@ pcb_collect(
 void
 act_machine_sv_free(thread_act_t act, int flag)
 {
-
 }
 
 /*
@@ -475,20 +367,13 @@ act_machine_sv_free(thread_act_t act, int flag)
  */
 
 kern_return_t
-act_machine_set_state(
+machine_thread_set_state(
 	thread_act_t thr_act,
 	thread_flavor_t flavor,
 	thread_state_t tstate,
 	mach_msg_type_number_t count)
 {
-	int 			kernel_act = thr_act->kernel_loading ||
-					thr_act->kernel_loaded;
-
-#if	MACH_ASSERT
-	if (watchacts & WA_STATE)
-	    printf("act_%x act_m_set_state(thr_act=%x,flav=%x,st=%x,cnt=%x)\n",
-		    current_act(), thr_act, flavor, tstate, count);
-#endif	/* MACH_ASSERT */
+	int kernel_act = 0;
 
 	switch (flavor) {
 	    case THREAD_SYSCALL_STATE:
@@ -569,17 +454,17 @@ act_machine_set_state(
 			    state->efl & (EFL_TF | EFL_IF);
 		    }
 		}
-		else if (!kernel_act) {
+		else if (kernel_act) {
 		    /*
 		     * 386 mode.  Set segment registers for flat
 		     * 32-bit address space.
 		     */
-		    saved_state->cs = USER_CS;
-		    saved_state->ss = USER_DS;
-		    saved_state->ds = USER_DS;
-		    saved_state->es = USER_DS;
-		    saved_state->fs = USER_DS;
-		    saved_state->gs = USER_DS;
+		  saved_state->cs = KERNEL_CS;
+		  saved_state->ss = KERNEL_DS;
+		  saved_state->ds = KERNEL_DS;
+		  saved_state->es = KERNEL_DS;
+		  saved_state->fs = KERNEL_DS;
+		  saved_state->gs = CPU_DATA;
 		}
 		else {
 		    /*
@@ -679,17 +564,17 @@ act_machine_set_state(
 			    state->efl & (EFL_TF | EFL_IF);
 		    }
 		}
-		else if (flavor == i386_NEW_THREAD_STATE && !kernel_act) {
+		else if (flavor == i386_NEW_THREAD_STATE && kernel_act) {
 		    /*
 		     * 386 mode.  Set segment registers for flat
 		     * 32-bit address space.
 		     */
-		    saved_state->cs = USER_CS;
-		    saved_state->ss = USER_DS;
-		    saved_state->ds = USER_DS;
-		    saved_state->es = USER_DS;
-		    saved_state->fs = USER_DS;
-		    saved_state->gs = USER_DS;
+		  saved_state->cs = KERNEL_CS;
+		  saved_state->ss = KERNEL_DS;
+		  saved_state->ds = KERNEL_DS;
+		  saved_state->es = KERNEL_DS;
+		  saved_state->fs = KERNEL_DS;
+		  saved_state->gs = CPU_DATA;
 		}
 		else {
 		    /*
@@ -709,11 +594,12 @@ act_machine_set_state(
 	    }
 
 	    case i386_FLOAT_STATE: {
-
-		if (count < i386_FLOAT_STATE_COUNT)
+                struct i386_float_state *state = (struct i386_float_state*)tstate;
+		if (count < i386_old_FLOAT_STATE_COUNT)
 			return(KERN_INVALID_ARGUMENT);
-
-		return fpu_set_state(thr_act,(struct i386_float_state*)tstate);
+                if (count < i386_FLOAT_STATE_COUNT)
+                    return fpu_set_state(thr_act,(struct i386_float_state*)tstate);
+                else return fpu_set_fxstate(thr_act,(struct i386_float_state*)tstate);
 	    }
 
 	    /*
@@ -778,8 +664,8 @@ act_machine_set_state(
 		saved_state->ss = USER_DS;
 		saved_state->ds = USER_DS;
 		saved_state->es = USER_DS;
-		saved_state->fs = USER_DS;
-		saved_state->gs = USER_DS;
+		saved_state->fs = state25->fs;
+		saved_state->gs = state25->gs;
 	}
 		break;
 
@@ -798,19 +684,12 @@ act_machine_set_state(
 
 
 kern_return_t
-act_machine_get_state(
+machine_thread_get_state(
 	thread_act_t thr_act,
 	thread_flavor_t flavor,
 	thread_state_t tstate,
 	mach_msg_type_number_t *count)
 {
-#if	MACH_ASSERT
-	if (watchacts & WA_STATE)
-	    printf("act_%x act_m_get_state(thr_act=%x,flav=%x,st=%x,cnt@%x=%x)\n",
-		current_act(), thr_act, flavor, tstate,
-		count, (count ? *count : 0));
-#endif	/* MACH_ASSERT */
-
 	switch (flavor)  {
 
 	    case i386_SAVED_STATE:
@@ -946,12 +825,17 @@ act_machine_get_state(
 		break;
 
 	    case i386_FLOAT_STATE: {
+                struct i386_float_state *state = (struct i386_float_state*)tstate;
 
-		if (*count < i386_FLOAT_STATE_COUNT)
+		if (*count < i386_old_FLOAT_STATE_COUNT)
 			return(KERN_INVALID_ARGUMENT);
-
-		*count = i386_FLOAT_STATE_COUNT;
-		return fpu_get_state(thr_act,(struct i386_float_state *)tstate);
+                if (*count< i386_FLOAT_STATE_COUNT) {
+                    *count = i386_old_FLOAT_STATE_COUNT;
+                    return fpu_get_state(thr_act,(struct i386_float_state *)tstate);
+                } else {
+                    *count = i386_FLOAT_STATE_COUNT;
+                    return fpu_get_fxstate(thr_act,(struct i386_float_state *)tstate);
+                }
 	    }
 
 	    /*
@@ -1039,45 +923,48 @@ act_machine_get_state(
 }
 
 /*
- * Alter the thread`s state so that a following thread_exception_return
- * will make the thread return 'retval' from a syscall.
- */
-void
-thread_set_syscall_return(
-	thread_t	thread,
-	kern_return_t	retval)
-{
-	thread->top_act->mact.pcb->iss.eax = retval;
-}
-
-/*
  * Initialize the machine-dependent state for a new thread.
  */
 kern_return_t
-thread_machine_create(thread_t thread, thread_act_t thr_act, void (*start_pos)(thread_t))
+machine_thread_create(
+	thread_t		thread,
+	task_t			task)
 {
-	MachineThrAct_t mact = &thr_act->mact;
+	pcb_t	pcb = &thread->mact.xxx_pcb;
 
-#if	MACH_ASSERT
-	if (watchacts & WA_PCB)
-		printf("thread_machine_create(thr=%x,thr_act=%x,st=%x)\n",
-			thread, thr_act, start_pos);
-#endif	/* MACH_ASSERT */
+	thread->mact.pcb = pcb;
 
-	assert(thread != NULL);
-	assert(thr_act != NULL);
+	simple_lock_init(&pcb->lock, ETAP_MISC_PCB);
+
+	/*
+	 *	Guarantee that the bootstrapped thread will be in user
+	 *	mode.
+	 */
+	pcb->iss.cs = USER_CS;
+	pcb->iss.ss = USER_DS;
+	pcb->iss.ds = USER_DS;
+	pcb->iss.es = USER_DS;
+	pcb->iss.fs = USER_DS;
+	pcb->iss.gs = USER_DS;
+	pcb->iss.efl = EFL_USER_SET;
+	{
+	  extern struct fake_descriptor ldt[];
+	  struct real_descriptor *ldtp;
+	  ldtp = (struct real_descriptor *)ldt;
+	  pcb->cthread_desc = ldtp[sel_idx(USER_DS)];
+	}
 
 	/*
 	 *      Allocate a kernel stack per shuttle
 	 */
-	thread->kernel_stack = (int)stack_alloc(thread,start_pos);
+	thread->kernel_stack = (int)stack_alloc(thread, thread_continue);
 	thread->state &= ~TH_STACK_HANDOFF;
 	assert(thread->kernel_stack != 0);
 
 	/*
 	 *      Point top of kernel stack to user`s registers.
 	 */
-	STACK_IEL(thread->kernel_stack)->saved_state = &mact->pcb->iss;
+	STACK_IEL(thread->kernel_stack)->saved_state = &pcb->iss;
 
 	return(KERN_SUCCESS);
 }
@@ -1086,15 +973,20 @@ thread_machine_create(thread_t thread, thread_act_t thr_act, void (*start_pos)(t
  * Machine-dependent cleanup prior to destroying a thread
  */
 void
-thread_machine_destroy( thread_t thread )
+machine_thread_destroy(
+	thread_t		thread)
 {
-        spl_t s;
+	register pcb_t	pcb = thread->mact.pcb;
 
-        if (thread->kernel_stack != 0) {
-		s = splsched();
-		stack_free(thread);
-		splx(s);
-	}
+	assert(pcb);
+
+	if (pcb->ims.io_tss != 0)
+		iopb_destroy(pcb->ims.io_tss);
+	if (pcb->ims.ifps != 0)
+		fp_free(pcb->ims.ifps);
+	if (pcb->ims.ldt != 0)
+		user_ldt_free(pcb->ims.ldt);
+	thread->mact.pcb = (pcb_t)0;
 }
 
 /*
@@ -1102,93 +994,28 @@ thread_machine_destroy( thread_t thread )
  * when starting up a new processor
  */
 void
-thread_machine_set_current( thread_t thread )
+machine_thread_set_current( thread_t thread )
 {
 	register int	my_cpu;
 
 	mp_disable_preemption();
 	my_cpu = cpu_number();
 
-        cpu_data[my_cpu].active_thread = thread;
-	active_kloaded[my_cpu] =
-		thread->top_act->kernel_loaded ? thread->top_act : THR_ACT_NULL;
+        cpu_data[my_cpu].active_thread = thread->top_act;
+		active_kloaded[my_cpu] = THR_ACT_NULL;
 
 	mp_enable_preemption();
 }
 
-
-/*
- * Pool of kernel activations.
- */
-
-void act_machine_init()
-{
-	int i;
-	thread_act_t thr_act;
-
-#if	MACH_ASSERT
-	if (watchacts & WA_PCB)
-		printf("act_machine_init()\n");
-#endif	/* MACH_ASSERT */
-
-	/* Good to verify this once */
-	assert( THREAD_MACHINE_STATE_MAX <= THREAD_STATE_MAX );
-}
-
-kern_return_t
-act_machine_create(task_t task, thread_act_t thr_act)
-{
-	MachineThrAct_t mact = &thr_act->mact;
-	pcb_t pcb;
-
-#if	MACH_ASSERT
-	if (watchacts & WA_PCB)
-		printf("act_machine_create(task=%x,thr_act=%x) pcb=%x\n",
-			task,thr_act, &mact->xxx_pcb);
-#endif	/* MACH_ASSERT */
-
-	/*
-	 * Clear & Init the pcb  (sets up user-mode s regs)
-	 */
-	pcb_init(thr_act);
-
-	return KERN_SUCCESS;
-}
-
 void
-act_virtual_machine_destroy(thread_act_t thr_act)
+machine_thread_terminate_self(void)
 {
-	return;
-}
-
-void
-act_machine_destroy(thread_act_t thr_act)
-{
-
-#if	MACH_ASSERT
-	if (watchacts & WA_PCB)
-		printf("act_machine_destroy(0x%x)\n", thr_act);
-#endif	/* MACH_ASSERT */
-
-	pcb_terminate(thr_act);
 }
 
 void
 act_machine_return(int code)
 {
 	thread_act_t	thr_act = current_act();
-
-#if	MACH_ASSERT
-	/*
-	* We don't go through the locking dance here needed to
-	* acquire thr_act->thread safely.
-	*/
-
-	if (watchacts & WA_EXIT)
-		printf("act_machine_return(0x%x) cur_act=%x(%d) thr=%x(%d)\n",
-			code, thr_act, thr_act->ref_count,
-		       thr_act->thread, thr_act->thread->ref_count);
-#endif	/* MACH_ASSERT */
 
 	/*
 	 * This code is called with nothing locked.
@@ -1218,9 +1045,10 @@ act_machine_return(int code)
  * Perform machine-dependent per-thread initializations
  */
 void
-thread_machine_init(void)
+machine_thread_init(void)
 {
-	pcb_module_init();
+	fpu_module_init();
+	iopb_init();
 }
 
 /*
@@ -1278,8 +1106,7 @@ dump_act(thread_act_t thr_act)
 	       thr_act->thread, thr_act->thread ? thr_act->thread->ref_count:0,
 	       thr_act->task,   thr_act->task   ? thr_act->task->ref_count : 0);
 
-	printf("\talerts=%x mask=%x susp=%d user_stop=%d active=%x ast=%x\n",
-		       thr_act->alerts, thr_act->alert_mask,
+	printf("\tsusp=%d user_stop=%d active=%x ast=%x\n",
 		       thr_act->suspend_count, thr_act->user_stop_count,
 		       thr_act->active, thr_act->ast);
 	printf("\thi=%x lo=%x\n", thr_act->higher, thr_act->lower);
@@ -1322,7 +1149,7 @@ thread_swapin_mach_alloc(thread_t thread)
  */
 
 vm_offset_t
-stack_detach(thread_t thread)
+machine_stack_detach(thread_t thread)
 {
   vm_offset_t stack;
 
@@ -1341,7 +1168,7 @@ stack_detach(thread_t thread)
  */
 
 void
-stack_attach(struct thread_shuttle *thread,
+machine_stack_attach(thread_t thread,
 	     vm_offset_t stack,
 	     void (*start_pos)(thread_t))
 {
@@ -1359,8 +1186,8 @@ stack_attach(struct thread_shuttle *thread,
   statep->k_eip = (unsigned long) Thread_continue;
   statep->k_ebx = (unsigned long) start_pos;
   statep->k_esp = (unsigned long) STACK_IEL(stack);
-  assert(thread->top_act);
-  STACK_IEL(stack)->saved_state = &thread->top_act->mact.pcb->iss;
+
+  STACK_IEL(stack)->saved_state = &thread->mact.pcb->iss;
 
   return;
 }
@@ -1370,12 +1197,11 @@ stack_attach(struct thread_shuttle *thread,
  */
 
 void
-stack_handoff(thread_t old,
+machine_stack_handoff(thread_t old,
 	      thread_t new)
 {
 
   vm_offset_t stack;
-  pmap_t new_pmap;
 
 		KERNEL_DEBUG(MACHDBG_CODE(DBG_MACH_SCHED,MACH_STACK_HANDOFF),
 			thread, thread->priority,
@@ -1385,17 +1211,15 @@ stack_handoff(thread_t old,
   assert(new->top_act);
   assert(old->top_act);
 
-  stack = stack_detach(old);
-  stack_attach(new, stack, 0);
+  stack = machine_stack_detach(old);
+  machine_stack_attach(new, stack, 0);
 
-  new_pmap = new->top_act->task->map->pmap;
-  if (old->top_act->task->map->pmap != new_pmap)
-  	PMAP_ACTIVATE_MAP(new->top_act->task->map, cpu_number());
+  PMAP_SWITCH_CONTEXT(old->top_act->task, new->top_act->task, cpu_number());
 
   KERNEL_DEBUG_CONSTANT(MACHDBG_CODE(DBG_MACH_SCHED,MACH_STACK_HANDOFF) | DBG_FUNC_NONE,
 		     (int)old, (int)new, old->sched_pri, new->sched_pri, 0);
 
-  thread_machine_set_current(new);
+  machine_thread_set_current(new);
 
   active_stacks[cpu_number()] = new->kernel_stack;
 
@@ -1420,13 +1244,19 @@ int val;
 				return((void *)0);
 
 		val = i386_SAVED_STATE_COUNT; 
-		kret = act_machine_get_state(current_act(), i386_SAVED_STATE, &ic->ss, &val);
+		kret = machine_thread_get_state(current_act(),
+						i386_SAVED_STATE,
+						(thread_state_t) &ic->ss,
+						&val);
 		if (kret != KERN_SUCCESS) {
 				kfree((vm_offset_t)ic,sizeof(struct i386_act_context));
 				return((void *)0);
 		}
 		val = i386_FLOAT_STATE_COUNT; 
-		kret = act_machine_get_state(current_act(), i386_FLOAT_STATE, &ic->fs, &val);
+		kret = machine_thread_get_state(current_act(),
+						i386_FLOAT_STATE,
+						(thread_state_t) &ic->fs,
+						&val);
 		if (kret != KERN_SUCCESS) {
 				kfree((vm_offset_t)ic,sizeof(struct i386_act_context));
 				return((void *)0);
@@ -1445,11 +1275,17 @@ int val;
 		if (ic == (struct i386_act_context *)NULL)
 				return;
 
-		kret = act_machine_set_state(current_act(), i386_SAVED_STATE, &ic->ss, i386_SAVED_STATE_COUNT);
+		kret = machine_thread_set_state(current_act(),
+						i386_SAVED_STATE,
+						(thread_state_t) &ic->ss,
+						i386_SAVED_STATE_COUNT);
 		if (kret != KERN_SUCCESS) 
 				goto out;
 
-		kret = act_machine_set_state(current_act(), i386_FLOAT_STATE, &ic->fs, i386_FLOAT_STATE_COUNT);
+		kret = machine_thread_set_state(current_act(),
+						i386_FLOAT_STATE,
+						(thread_state_t) &ic->fs,
+						i386_FLOAT_STATE_COUNT);
 		if (kret != KERN_SUCCESS)
 				goto out;
 out:

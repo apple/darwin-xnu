@@ -140,7 +140,7 @@ task_priority(
 
 	task->priority = priority;
 
-	queue_iterate(&task->thr_acts, act, thread_act_t, thr_acts) {
+	queue_iterate(&task->threads, act, thread_act_t, task_threads) {
 		thread_t		thread = act_lock_thread(act);
 
 		if (act->active)

@@ -85,6 +85,24 @@ static void abort_transaction(journal *jnl, transaction *tr);
 static void dump_journal(journal *jnl);
 
 
+//
+// 3105942 - Coalesce writes to the same block on journal replay
+//
+
+typedef struct bucket {
+    off_t block_num;
+    size_t jnl_offset;
+    size_t block_size;
+} bucket;
+
+#define STARTING_BUCKETS 256
+
+static int add_block(journal *jnl, struct bucket **buf_ptr, off_t block_num, size_t size, size_t offset, int *num_buckets_ptr, int *num_full_ptr);
+static int grow_table(struct bucket **buf_ptr, int num_buckets, int new_size);
+static int lookup_bucket(struct bucket **buf_ptr, off_t block_num, int num_full);
+static int do_overlap(journal *jnl, struct bucket **buf_ptr, int blk_index, off_t block_num, size_t size, size_t offset, int *num_buckets_ptr, int *num_full_ptr);
+static int insert_block(journal *jnl, struct bucket **buf_ptr, int blk_index, off_t num, size_t size, size_t offset, int *num_buckets_ptr, int *num_full_ptr, int overwriting);
+
 #define CHECK_JOURNAL(jnl) \
     do { \
     if (jnl == NULL) {\
@@ -102,17 +120,17 @@ static void dump_journal(journal *jnl);
     }\
     if (   jnl->jhdr->start <= 0 \
 	|| jnl->jhdr->start > jnl->jhdr->size\
-	|| jnl->jhdr->start > 128*1024*1024) {\
+	|| jnl->jhdr->start > 1024*1024*1024) {\
 	panic("%s:%d: jhdr start looks bad (0x%llx max size 0x%llx)\n", \
 	__FILE__, __LINE__, jnl->jhdr->start, jnl->jhdr->size);\
     }\
     if (   jnl->jhdr->end <= 0 \
 	|| jnl->jhdr->end > jnl->jhdr->size\
-	|| jnl->jhdr->end > 128*1024*1024) {\
+	|| jnl->jhdr->end > 1024*1024*1024) {\
 	panic("%s:%d: jhdr end looks bad (0x%llx max size 0x%llx)\n", \
 	__FILE__, __LINE__, jnl->jhdr->end, jnl->jhdr->size);\
     }\
-    if (jnl->jhdr->size > 128*1024*1024) {\
+    if (jnl->jhdr->size > 1024*1024*1024) {\
 	panic("%s:%d: jhdr size looks bad (0x%llx)\n",\
 	__FILE__, __LINE__, jnl->jhdr->size);\
     } \
@@ -132,13 +150,13 @@ static void dump_journal(journal *jnl);
     if (tr->total_bytes < 0) {\
 	panic("%s:%d: tr total_bytes looks bad: %d\n", __FILE__, __LINE__, tr->total_bytes);\
     }\
-    if (tr->journal_start < 0 || tr->journal_start > 128*1024*1024) {\
+    if (tr->journal_start < 0 || tr->journal_start > 1024*1024*1024) {\
 	panic("%s:%d: tr journal start looks bad: 0x%llx\n", __FILE__, __LINE__, tr->journal_start);\
     }\
-    if (tr->journal_end < 0 || tr->journal_end > 128*1024*1024) {\
+    if (tr->journal_end < 0 || tr->journal_end > 1024*1024*1024) {\
 	panic("%s:%d: tr journal end looks bad: 0x%llx\n", __FILE__, __LINE__, tr->journal_end);\
     }\
-    if (tr->blhdr && (tr->blhdr->max_blocks <= 0 || tr->blhdr->max_blocks > 2048)) {\
+    if (tr->blhdr && (tr->blhdr->max_blocks <= 0 || tr->blhdr->max_blocks > (tr->jnl->jhdr->size/tr->jnl->jhdr->jhdr_size))) {\
 	panic("%s:%d: tr blhdr max_blocks looks bad: %d\n", __FILE__, __LINE__, tr->blhdr->max_blocks);\
     }\
     } while(0)
@@ -164,8 +182,9 @@ calc_checksum(char *ptr, int len)
 }
 
 
-#define JNL_WRITE 1
-#define JNL_READ  2
+#define JNL_WRITE    0x0001
+#define JNL_READ     0x0002
+#define JNL_HEADER   0x8000
 
 //
 // This function sets up a fake buf and passes it directly to the
@@ -190,11 +209,11 @@ do_journal_io(journal *jnl, off_t *offset, void *data, size_t len, int direction
   again:
     bp = alloc_io_buf(jnl->jdev, 1);
 
-    if (direction == JNL_WRITE) {
+    if (direction & JNL_WRITE) {
 		bp->b_flags  |= 0;   // don't have to set any flags (was: B_WRITEINPROG)
 		jnl->jdev->v_numoutput++;
 		vfs_io_attributes(jnl->jdev, B_WRITE, &max_iosize, &max_vectors);
-    } else if (direction == JNL_READ) {
+    } else if (direction & JNL_READ) {
 		bp->b_flags  |= B_READ;
 		vfs_io_attributes(jnl->jdev, B_READ, &max_iosize, &max_vectors);
     }
@@ -218,6 +237,10 @@ do_journal_io(journal *jnl, off_t *offset, void *data, size_t len, int direction
     if (curlen <= 0) {
 		panic("jnl: do_jnl_io: curlen == %d, offset 0x%llx len %d\n", curlen, *offset, len);
     }
+
+	if (*offset == 0 && (direction & JNL_HEADER) == 0) {
+		panic("jnl: request for i/o to jnl-header without JNL_HEADER flag set! (len %d, data %p)\n", curlen, data);
+	}
 
     bp->b_bufsize = curlen;
     bp->b_bcount  = curlen;
@@ -270,8 +293,17 @@ write_journal_data(journal *jnl, off_t *offset, void *data, size_t len)
 
 
 static int
+read_journal_header(journal *jnl, void *data, size_t len)
+{
+	off_t hdr_offset = 0;
+	
+	return do_journal_io(jnl, &hdr_offset, data, len, JNL_READ|JNL_HEADER);
+}
+
+static int
 write_journal_header(journal *jnl)
 {
+	static int num_err_prints = 0;
     int ret;
     off_t jhdr_offset = 0;
     
@@ -280,17 +312,43 @@ write_journal_header(journal *jnl)
     //
     ret = VOP_IOCTL(jnl->jdev, DKIOCSYNCHRONIZECACHE, NULL, FWRITE, NOCRED, current_proc());
     if (ret != 0) {
-		printf("jnl: flushing fs disk buffer returned 0x%x\n", ret);
+	//
+	// Only print this error if it's a different error than the
+	// previous one, or if it's the first time for this device
+	// or if the total number of printfs is less than 25.  We
+	// allow for up to 25 printfs to insure that some make it
+	// into the on-disk syslog.  Otherwise if we only printed
+	// one, it's possible it would never make it to the syslog
+	// for the root volume and that makes debugging hard.
+	//
+	if (   ret != jnl->last_flush_err
+	    || (jnl->flags & JOURNAL_FLUSHCACHE_ERR) == 0
+	    || num_err_prints++ < 25) {
+	    
+	    printf("jnl: flushing fs disk buffer returned 0x%x\n", ret);
+	    
+	    jnl->flags |= JOURNAL_FLUSHCACHE_ERR;
+	    jnl->last_flush_err = ret;
+	}
     }
 
-
+    
     jnl->jhdr->checksum = 0;
     jnl->jhdr->checksum = calc_checksum((char *)jnl->jhdr, sizeof(struct journal_header));
-    if (write_journal_data(jnl, &jhdr_offset, jnl->header_buf, jnl->jhdr->jhdr_size) != jnl->jhdr->jhdr_size) {
-		printf("jnl: write_journal_header: error writing the journal header!\n");
-		jnl->flags |= JOURNAL_INVALID;
-		return -1;
+    if (do_journal_io(jnl, &jhdr_offset, jnl->header_buf, jnl->jhdr->jhdr_size, JNL_WRITE|JNL_HEADER) != jnl->jhdr->jhdr_size) {
+	printf("jnl: write_journal_header: error writing the journal header!\n");
+	jnl->flags |= JOURNAL_INVALID;
+	return -1;
     }	
+
+    // Have to flush after writing the journal header so that
+    // a future transaction doesn't sneak out to disk before
+    // the header does and thus overwrite data that the old
+    // journal header refers to.  Saw this exact case happen
+    // on an IDE bus analyzer with Larry Barras so while it
+    // may seem obscure, it's not.
+    //
+    VOP_IOCTL(jnl->jdev, DKIOCSYNCHRONIZECACHE, NULL, FWRITE, NOCRED, current_proc());
 
     return 0;
 }
@@ -475,6 +533,51 @@ buffer_flushed_callback(struct buf *bp)
     }
 }
 
+
+#include <libkern/OSByteOrder.h>
+
+#define SWAP16(x) OSSwapInt16(x)
+#define SWAP32(x) OSSwapInt32(x)
+#define SWAP64(x) OSSwapInt64(x)
+
+
+static void
+swap_journal_header(journal *jnl)
+{
+    jnl->jhdr->magic      = SWAP32(jnl->jhdr->magic);
+    jnl->jhdr->endian     = SWAP32(jnl->jhdr->endian);
+    jnl->jhdr->start      = SWAP64(jnl->jhdr->start);
+    jnl->jhdr->end        = SWAP64(jnl->jhdr->end);
+    jnl->jhdr->size       = SWAP64(jnl->jhdr->size);
+    jnl->jhdr->blhdr_size = SWAP32(jnl->jhdr->blhdr_size);
+    jnl->jhdr->checksum   = SWAP32(jnl->jhdr->checksum);
+    jnl->jhdr->jhdr_size  = SWAP32(jnl->jhdr->jhdr_size);
+}
+
+static void
+swap_block_list_header(journal *jnl, block_list_header *blhdr)
+{
+    int i;
+    
+    blhdr->max_blocks = SWAP16(blhdr->max_blocks);
+    blhdr->num_blocks = SWAP16(blhdr->num_blocks);
+    blhdr->bytes_used = SWAP32(blhdr->bytes_used);
+    blhdr->checksum   = SWAP32(blhdr->checksum);
+    blhdr->pad        = SWAP32(blhdr->pad);
+
+	if (blhdr->num_blocks * sizeof(blhdr->binfo[0]) > jnl->jhdr->blhdr_size) {
+		printf("jnl: blhdr num blocks looks suspicious (%d).  not swapping.\n", blhdr->num_blocks);
+		return;
+	}
+
+    for(i=0; i < blhdr->num_blocks; i++) {
+		blhdr->binfo[i].bnum  = SWAP64(blhdr->binfo[i].bnum);
+		blhdr->binfo[i].bsize = SWAP32(blhdr->binfo[i].bsize);
+		blhdr->binfo[i].bp    = (void *)SWAP32((int)blhdr->binfo[i].bp);
+    }
+}
+
+
 static int
 update_fs_block(journal *jnl, void *block_ptr, off_t fs_block, size_t bsize)
 {
@@ -524,16 +627,291 @@ update_fs_block(journal *jnl, void *block_ptr, off_t fs_block, size_t bsize)
     return 0;
 }
 
+static int
+grow_table(struct bucket **buf_ptr, int num_buckets, int new_size)
+{
+    struct bucket *newBuf;
+    int current_size = num_buckets, i;
+    
+    // return if newsize is less than the current size
+    if (new_size < num_buckets) {
+	return current_size;
+    }
+    
+    if ((MALLOC(newBuf, struct bucket *, new_size*sizeof(struct bucket), M_TEMP, M_WAITOK)) == NULL) {
+	printf("jnl: grow_table: no memory to expand coalesce buffer!\n");
+	return -1;
+    }
+    
+    //  printf("jnl: lookup_bucket: expanded co_buf to %d elems\n", new_size);
+    
+    // copy existing elements 
+    bcopy(*buf_ptr, newBuf, num_buckets*sizeof(struct bucket));
+    
+    // initialize the new ones
+    for(i=num_buckets; i < new_size; i++) {
+	newBuf[i].block_num = (off_t)-1;
+    }
+    
+    // free the old container
+    FREE(*buf_ptr, M_TEMP);
+    
+    // reset the buf_ptr
+    *buf_ptr = newBuf;
+    
+    return new_size;
+}
+
+static int
+lookup_bucket(struct bucket **buf_ptr, off_t block_num, int num_full)
+{
+    int lo, hi, index, matches, i;
+    
+    if (num_full == 0) {
+	return 0; // table is empty, so insert at index=0
+    }
+    
+    lo = 0;
+    hi = num_full - 1;
+    index = -1;
+    
+    // perform binary search for block_num
+    do {
+	int mid = (hi - lo)/2 + lo;
+	off_t this_num = (*buf_ptr)[mid].block_num;
+	
+	if (block_num == this_num) {
+	    index = mid;
+	    break;
+	}
+	
+	if (block_num < this_num) {
+	    hi = mid;
+	    continue;
+	}
+	
+	if (block_num > this_num) {
+	    lo = mid + 1;
+	    continue;
+	}
+    } while(lo < hi);
+    
+    // check if lo and hi converged on the match
+    if (block_num == (*buf_ptr)[hi].block_num) {
+	index = hi;
+    }
+    
+    // if no existing entry found, find index for new one
+    if (index == -1) {
+	index = (block_num < (*buf_ptr)[hi].block_num) ? hi : hi + 1;
+    } else {
+	// make sure that we return the right-most index in the case of multiple matches
+	matches = 0;
+	i = index + 1;
+	while(i < num_full && block_num == (*buf_ptr)[i].block_num) {
+	    matches++;
+	    i++;
+	}
+
+	index += matches;
+    }
+    
+    return index;
+}
+
+static int
+insert_block(journal *jnl, struct bucket **buf_ptr, int blk_index, off_t num, size_t size, size_t offset, int *num_buckets_ptr, int *num_full_ptr, int overwriting)
+{
+    if (!overwriting) {
+	// grow the table if we're out of space
+	if (*num_full_ptr >= *num_buckets_ptr) {
+	    int new_size = *num_buckets_ptr * 2;
+	    int grow_size = grow_table(buf_ptr, *num_buckets_ptr, new_size);
+	    
+	    if (grow_size < new_size) {
+		printf("jnl: add_block: grow_table returned an error!\n");
+		return -1;
+	    }
+	    
+	    *num_buckets_ptr = grow_size; //update num_buckets to reflect the new size
+	}
+	
+	// if we're not inserting at the end, we need to bcopy
+	if (blk_index != *num_full_ptr) {
+	    bcopy( (*buf_ptr)+(blk_index), (*buf_ptr)+(blk_index+1), (*num_full_ptr-blk_index)*sizeof(struct bucket) );
+	}
+	
+	(*num_full_ptr)++; // increment only if we're not overwriting
+    }
+
+    // sanity check the values we're about to add
+    if (offset >= jnl->jhdr->size) {
+	offset = jnl->jhdr->jhdr_size + (offset - jnl->jhdr->size);
+    }
+    if (size <= 0) {
+	panic("jnl: insert_block: bad size in insert_block (%d)\n", size);
+    }	 
+
+    (*buf_ptr)[blk_index].block_num = num;
+    (*buf_ptr)[blk_index].block_size = size;
+    (*buf_ptr)[blk_index].jnl_offset = offset;
+    
+    return blk_index;
+}
+
+static int
+do_overlap(journal *jnl, struct bucket **buf_ptr, int blk_index, off_t block_num, size_t size, size_t offset, int *num_buckets_ptr, int *num_full_ptr)
+{
+    int num_to_remove, index, i, overwrite, err;
+    size_t jhdr_size = jnl->jhdr->jhdr_size, new_offset;
+    off_t overlap, block_start, block_end;
+
+    block_start = block_num*jhdr_size;
+    block_end = block_start + size;
+    overwrite = (block_num == (*buf_ptr)[blk_index].block_num && size >= (*buf_ptr)[blk_index].block_size);
+
+    // first, eliminate any overlap with the previous entry
+    if (blk_index != 0 && !overwrite) {
+	off_t prev_block_start = (*buf_ptr)[blk_index-1].block_num*jhdr_size;
+	off_t prev_block_end = prev_block_start + (*buf_ptr)[blk_index-1].block_size;
+	overlap = prev_block_end - block_start;
+	if (overlap > 0) {
+	    if (overlap % jhdr_size != 0) {
+		panic("jnl: do_overlap: overlap with previous entry not a multiple of %d\n", jhdr_size);
+	    }
+
+	    // if the previous entry completely overlaps this one, we need to break it into two pieces.
+	    if (prev_block_end > block_end) {
+		off_t new_num = block_end / jhdr_size;
+		size_t new_size = prev_block_end - block_end;
+		size_t new_offset = (*buf_ptr)[blk_index-1].jnl_offset + (block_end - prev_block_start);
+		
+		err = insert_block(jnl, buf_ptr, blk_index, new_num, new_size, new_offset, num_buckets_ptr, num_full_ptr, 0);
+		if (err < 0) {
+		    panic("jnl: do_overlap: error inserting during pre-overlap\n");
+		}
+	    }
+	    
+	    // Regardless, we need to truncate the previous entry to the beginning of the overlap
+	    (*buf_ptr)[blk_index-1].block_size = block_start - prev_block_start;
+	}
+    }
+
+    // then, bail out fast if there's no overlap with the entries that follow
+    if (!overwrite && block_end <= (*buf_ptr)[blk_index].block_num*jhdr_size) {
+	return 0; // no overlap, no overwrite
+    } else if (overwrite && (blk_index + 1 >= *num_full_ptr || block_end <= (*buf_ptr)[blk_index+1].block_num*jhdr_size)) {
+	return 1; // simple overwrite
+    }
+    
+    // Otherwise, find all cases of total and partial overlap. We use the special
+    // block_num of -2 to designate entries that are completely overlapped and must
+    // be eliminated. The block_num, size, and jnl_offset of partially overlapped
+    // entries must be adjusted to keep the array consistent.
+    index = blk_index;
+    num_to_remove = 0;
+    while(index < *num_full_ptr && block_end > (*buf_ptr)[index].block_num*jhdr_size) {
+	if (block_end >= ((*buf_ptr)[index].block_num*jhdr_size + (*buf_ptr)[index].block_size)) {
+	    (*buf_ptr)[index].block_num = -2; // mark this for deletion
+	    num_to_remove++;
+	} else {
+	    overlap = block_end - (*buf_ptr)[index].block_num*jhdr_size;
+	    if (overlap > 0) {
+		if (overlap % jhdr_size != 0) {
+		    panic("jnl: do_overlap: overlap of %d is not multiple of %d\n", overlap, jhdr_size);
+		}
+		
+		// if we partially overlap this entry, adjust its block number, jnl offset, and size
+		(*buf_ptr)[index].block_num += (overlap / jhdr_size); // make sure overlap is multiple of jhdr_size, or round up
+		
+		new_offset = (*buf_ptr)[index].jnl_offset + overlap; // check for wrap-around
+		if (new_offset >= jnl->jhdr->size) {
+		    new_offset = jhdr_size + (new_offset - jnl->jhdr->size);
+		}
+		(*buf_ptr)[index].jnl_offset = new_offset;
+		
+		(*buf_ptr)[index].block_size -= overlap; // sanity check for negative value
+		if ((*buf_ptr)[index].block_size <= 0) {
+		    panic("jnl: do_overlap: after overlap, new block size is invalid (%d)\n", (*buf_ptr)[index].block_size);
+		    // return -1; // if above panic is removed, return -1 for error
+		}
+	    }
+	    
+	}
+
+	index++;
+    }
+
+    // bcopy over any completely overlapped entries, starting at the right (where the above loop broke out)
+    index--; // start with the last index used within the above loop
+    while(index >= blk_index) {
+	if ((*buf_ptr)[index].block_num == -2) {
+	    if (index == *num_full_ptr-1) {
+		(*buf_ptr)[index].block_num = -1; // it's the last item in the table... just mark as free
+	    } else {
+		bcopy( (*buf_ptr)+(index+1), (*buf_ptr)+(index), (*num_full_ptr - (index + 1)) * sizeof(struct bucket) );
+	    }
+	    (*num_full_ptr)--;
+	}
+	index--;
+    }
+
+    // eliminate any stale entries at the end of the table
+    for(i=*num_full_ptr; i < (*num_full_ptr + num_to_remove); i++) {
+	(*buf_ptr)[i].block_num = -1;
+    }
+    
+    return 0; // if we got this far, we need to insert the entry into the table (rather than overwrite) 
+}
+
+// PR-3105942: Coalesce writes to the same block in journal replay
+// We coalesce writes by maintaining a dynamic sorted array of physical disk blocks
+// to be replayed and the corresponding location in the journal which contains
+// the most recent data for those blocks. The array is "played" once the all the
+// blocks in the journal have been coalesced. The code for the case of conflicting/
+// overlapping writes to a single block is the most dense. Because coalescing can
+// disrupt the existing time-ordering of blocks in the journal playback, care
+// is taken to catch any overlaps and keep the array consistent. 
+static int
+add_block(journal *jnl, struct bucket **buf_ptr, off_t block_num, size_t size, size_t offset, int *num_buckets_ptr, int *num_full_ptr)
+{
+    int blk_index, overwriting;
+    size_t jhdr_size = jnl->jhdr->jhdr_size;
+    
+    // on return from lookup_bucket(), blk_index is the index into the table where block_num should be
+    // inserted (or the index of the elem to overwrite). 
+    blk_index = lookup_bucket( buf_ptr, block_num, *num_full_ptr);
+    
+    // check if the index is within bounds (if we're adding this block to the end of
+    // the table, blk_index will be equal to num_full)
+    if (blk_index < 0 || blk_index > *num_full_ptr) {
+        //printf("jnl: add_block: trouble adding block to co_buf\n");
+	return -1;
+    } // else printf("jnl: add_block: adding block 0x%llx at i=%d\n", block_num, blk_index);
+    
+    // Determine whether we're overwriting an existing entry by checking for overlap
+    overwriting = do_overlap(jnl, buf_ptr, blk_index, block_num, size, offset, num_buckets_ptr, num_full_ptr);
+    if (overwriting < 0) {
+	return -1; // if we got an error, pass it along
+    }
+        
+    // returns the index, or -1 on error
+    blk_index = insert_block(jnl, buf_ptr, blk_index, block_num, size, offset, num_buckets_ptr, num_full_ptr, overwriting);
+    
+    return blk_index;
+}
 
 static int
 replay_journal(journal *jnl)
 {
-    int i, ret, checksum, max_bsize;
+    int i, ret, orig_checksum, checksum, max_bsize;
     struct buf *oblock_bp;
     block_list_header *blhdr;
     off_t offset;
     char *buf, *block_ptr=NULL;
-    
+    struct bucket *co_buf;
+    int num_buckets = STARTING_BUCKETS, num_full;
+
     // wrap the start ptr if it points to the very end of the journal
     if (jnl->jhdr->start == jnl->jhdr->size) {
 		jnl->jhdr->start = jnl->jhdr->jhdr_size;
@@ -552,7 +930,19 @@ replay_journal(journal *jnl)
 			   jnl->jhdr->blhdr_size);
 		return -1;
     }
-    
+
+    // allocate memory for the coalesce buffer
+    if ((MALLOC(co_buf, struct bucket *, num_buckets*sizeof(struct bucket), M_TEMP, M_WAITOK)) == NULL) {
+        printf("jnl: replay_journal: no memory for coalesce buffer!\n");
+	return -1;
+    }
+
+    // initialize entries
+    for(i=0; i < num_buckets; i++) {
+        co_buf[i].block_num = -1;
+    }
+    num_full = 0; // empty at first
+
 
     printf("jnl: replay_journal: from: %lld to: %lld (joffset 0x%llx)\n",
 		   jnl->jhdr->start, jnl->jhdr->end, jnl->jdev_offset);
@@ -566,13 +956,23 @@ replay_journal(journal *jnl)
 		}
 
 		blhdr = (block_list_header *)buf;
-		checksum = blhdr->checksum;
+		
+		orig_checksum = blhdr->checksum;
 		blhdr->checksum = 0;
-		if (checksum != calc_checksum((char *)blhdr, BLHDR_CHECKSUM_SIZE)) {
-			printf("jnl: replay_journal: bad block list header @ 0x%llx (checksum 0x%x != 0x%x)\n",
-				   offset, checksum, calc_checksum((char *)blhdr, BLHDR_CHECKSUM_SIZE));
-			goto bad_replay;
+		if (jnl->flags & JOURNAL_NEED_SWAP) {
+			// calculate the checksum based on the unswapped data
+			// because it is done byte-at-a-time.
+			orig_checksum = SWAP32(orig_checksum);
+			checksum = calc_checksum((char *)blhdr, BLHDR_CHECKSUM_SIZE);
+			swap_block_list_header(jnl, blhdr);
+		} else {
+			checksum = calc_checksum((char *)blhdr, BLHDR_CHECKSUM_SIZE);
 		}
+		if (checksum != orig_checksum) {
+				printf("jnl: replay_journal: bad block list header @ 0x%llx (checksum 0x%x != 0x%x)\n",
+					   offset, orig_checksum, checksum);
+				goto bad_replay;
+			}
 		if (   blhdr->max_blocks <= 0 || blhdr->max_blocks > 2048
 			   || blhdr->num_blocks <= 0 || blhdr->num_blocks > blhdr->max_blocks) {
 			printf("jnl: replay_journal: bad looking journal entry: max: %d num: %d\n",
@@ -595,62 +995,98 @@ replay_journal(journal *jnl)
 			max_bsize = (max_bsize + PAGE_SIZE) & ~(PAGE_SIZE - 1);
 		}
 
-		if (kmem_alloc(kernel_map, (vm_offset_t *)&block_ptr, max_bsize)) {
-			goto bad_replay;
-		}
 
-		//printf("jnl: replay_journal: %d blocks in journal entry @ 0x%llx\n", blhdr->num_blocks-1,
-		//	   jnl->jhdr->start);
+		//printf("jnl: replay_journal: adding %d blocks in journal entry @ 0x%llx to co_buf\n", 
+		//       blhdr->num_blocks-1, jnl->jhdr->start);
 		for(i=1; i < blhdr->num_blocks; i++) {
-			int size;
+			int size, ret_val;
+			off_t number;
 
 			size = blhdr->binfo[i].bsize;
-
-			ret = read_journal_data(jnl, &offset, block_ptr, size);
-			if (ret != size) {
-				printf("jnl: replay_journal: Could not read journal entry data @ offset 0x%llx!\n", offset);
-				goto bad_replay;
-			}
-
-			// don't replay "killed" blocks
-			if (blhdr->binfo[i].bnum == (off_t)-1) {
-				// printf("jnl: replay_journal: skipping killed fs block (slot %d)\n", i);
+			number = blhdr->binfo[i].bnum;
+			
+			// don't add "killed" blocks
+			if (number == (off_t)-1) {
+			    //printf("jnl: replay_journal: skipping killed fs block (index %d)\n", i);
 			} else {
-				//printf("jnl: replay_journal: fixing fs block # %lld (%d)\n",
-				//	   blhdr->binfo[i].bnum, blhdr->binfo[i].bsize);
-
-				if (update_fs_block(jnl, block_ptr, blhdr->binfo[i].bnum, blhdr->binfo[i].bsize) != 0) {
-					goto bad_replay;
-				}
+			    // add this bucket to co_buf, coalescing where possible
+			    // printf("jnl: replay_journal: adding block 0x%llx\n", number);
+			    ret_val = add_block(jnl, &co_buf, number, size, (size_t) offset, &num_buckets, &num_full);
+			    
+			    if (ret_val == -1) {
+				printf("jnl: replay_journal: trouble adding block to co_buf\n");
+				goto bad_replay;
+			    } // else printf("jnl: replay_journal: added block 0x%llx at i=%d\n", number);
 			}
-
-			// check if we need to wrap offset back to the beginning
-			// (which is just past the journal header)
+			
+			// increment offset
+			offset += size;
+			
+			// check if the last block added puts us off the end of the jnl.
+			// if so, we need to wrap to the beginning and take any remainder
+			// into account
 			//
 			if (offset >= jnl->jhdr->size) {
-				offset = jnl->jhdr->jhdr_size;
+			    offset = jnl->jhdr->jhdr_size + (offset - jnl->jhdr->size);
 			}
 		}
 
-		kmem_free(kernel_map, (vm_offset_t)block_ptr, max_bsize);
-		block_ptr = NULL;
-
+		
 		jnl->jhdr->start += blhdr->bytes_used;
 		if (jnl->jhdr->start >= jnl->jhdr->size) {
 			// wrap around and skip the journal header block
 			jnl->jhdr->start = (jnl->jhdr->start % jnl->jhdr->size) + jnl->jhdr->jhdr_size;
 		}
-
-		// only update the on-disk journal header if we've reached the
-		// last chunk of updates from this transaction.  if binfo[0].bnum
-		// is zero then we know we're at the end.
-		if (blhdr->binfo[0].bnum == 0) {
-			if (write_journal_header(jnl) != 0) {
-				goto bad_replay;
-			}
-		}
     }
 
+
+    //printf("jnl: replay_journal: replaying %d blocks\n", num_full);
+    
+    if (kmem_alloc(kernel_map, (vm_offset_t *)&block_ptr, max_bsize)) {
+	goto bad_replay;
+    }
+    
+    // Replay the coalesced entries in the co-buf
+    for(i=0; i < num_full; i++) {
+	size_t size = co_buf[i].block_size;
+	off_t jnl_offset = (off_t) co_buf[i].jnl_offset;
+	off_t number = co_buf[i].block_num;
+	
+	
+	// printf("replaying co_buf[%d]: block 0x%llx, size 0x%x, jnl_offset 0x%llx\n", i, co_buf[i].block_num,
+	//      co_buf[i].block_size, co_buf[i].jnl_offset);
+	
+	if (number == (off_t)-1) {
+	    // printf("jnl: replay_journal: skipping killed fs block\n");
+	} else {
+	    
+	    // do journal read, and set the phys. block 
+	    ret = read_journal_data(jnl, &jnl_offset, block_ptr, size);
+	    if (ret != size) {
+		printf("jnl: replay_journal: Could not read journal entry data @ offset 0x%llx!\n", offset);
+		goto bad_replay;
+	    }
+	    	    
+	    if (update_fs_block(jnl, block_ptr, number, size) != 0) {
+		goto bad_replay;
+	    }
+	}
+    }
+    
+
+    // done replaying; update jnl header
+    if (write_journal_header(jnl) != 0) {
+	goto bad_replay;
+    }
+    
+    // free block_ptr
+    kmem_free(kernel_map, (vm_offset_t)block_ptr, max_bsize);
+    block_ptr = NULL;
+    
+    // free the coalesce buffer
+    FREE(co_buf, M_TEMP);
+    co_buf = NULL;
+  
     kmem_free(kernel_map, (vm_offset_t)buf, jnl->jhdr->blhdr_size);
     return 0;
 
@@ -658,7 +1094,11 @@ replay_journal(journal *jnl)
     if (block_ptr) {
 		kmem_free(kernel_map, (vm_offset_t)block_ptr, max_bsize);
     }
+    if (co_buf) {
+      FREE(co_buf, M_TEMP);
+    }
     kmem_free(kernel_map, (vm_offset_t)buf, jnl->jhdr->blhdr_size);
+
     return -1;
 }
 
@@ -721,9 +1161,12 @@ size_up_tbuffer(journal *jnl, int tbuffer_size, int phys_blksz)
     }
 
     jnl->jhdr->blhdr_size = (jnl->tbuffer_size / jnl->jhdr->jhdr_size) * sizeof(block_info);
-	if (jnl->jhdr->blhdr_size < phys_blksz) {
-		jnl->jhdr->blhdr_size = phys_blksz;
-	}
+    if (jnl->jhdr->blhdr_size < phys_blksz) {
+	jnl->jhdr->blhdr_size = phys_blksz;
+    } else if ((jnl->jhdr->blhdr_size % phys_blksz) != 0) {
+		// have to round up so we're an even multiple of the physical block size
+		jnl->jhdr->blhdr_size = (jnl->jhdr->blhdr_size + (phys_blksz - 1)) & ~(phys_blksz - 1);
+    }
 }
 
 
@@ -792,10 +1235,7 @@ journal_create(struct vnode *jvp,
     // jnl->jhdr->start = jnl->jhdr->size - (phys_blksz*3);
     // jnl->jhdr->end   = jnl->jhdr->size - (phys_blksz*3);
     
-    if (semaphore_create(kernel_task, &jnl->jsem, SYNC_POLICY_FIFO, 1) != 0) {
-		printf("jnl: journal_create: failed to create journal semaphore..\n");
-		goto bad_sem;
-    }
+	lockinit(&jnl->jlock, PINOD, "journal", 0, 0);
 
     if (write_journal_header(jnl) != 0) {
 		printf("jnl: journal_create: failed to write journal header.\n");
@@ -806,8 +1246,6 @@ journal_create(struct vnode *jvp,
 
 
   bad_write:
-    semaphore_destroy(kernel_task, jnl->jsem);
-  bad_sem:
     kmem_free(kernel_map, (vm_offset_t)jnl->header_buf, phys_blksz);
   bad_kmem_alloc:
     jnl->jhdr = NULL;
@@ -829,7 +1267,7 @@ journal_open(struct vnode *jvp,
 {
     journal *jnl;
     int      orig_blksz=0, phys_blksz, blhdr_size;
-    off_t    hdr_offset=0;
+	int      orig_checksum, checksum;
 
     /* Get the real physical block size. */
     if (VOP_IOCTL(jvp, DKIOCGETBLOCKSIZE, (caddr_t)&phys_blksz, 0, FSCRED, NULL)) {
@@ -870,11 +1308,24 @@ journal_open(struct vnode *jvp,
     // we have to set this up here so that do_journal_io() will work
     jnl->jhdr->jhdr_size = phys_blksz;
 
-    if (read_journal_data(jnl, &hdr_offset, jnl->jhdr, phys_blksz) != phys_blksz) {
+    if (read_journal_header(jnl, jnl->jhdr, phys_blksz) != phys_blksz) {
 		printf("jnl: open: could not read %d bytes for the journal header.\n",
 			   phys_blksz);
 		goto bad_journal;
     }
+
+	orig_checksum = jnl->jhdr->checksum;
+	jnl->jhdr->checksum = 0;
+
+	if (jnl->jhdr->magic == SWAP32(JOURNAL_HEADER_MAGIC)) {
+		// do this before the swap since it's done byte-at-a-time
+		orig_checksum = SWAP32(orig_checksum);
+		checksum = calc_checksum((char *)jnl->jhdr, sizeof(struct journal_header));
+		swap_journal_header(jnl);
+		jnl->flags |= JOURNAL_NEED_SWAP;
+	} else {
+		checksum = calc_checksum((char *)jnl->jhdr, sizeof(struct journal_header));
+	}
 
     if (jnl->jhdr->magic != JOURNAL_HEADER_MAGIC && jnl->jhdr->magic != OLD_JOURNAL_HEADER_MAGIC) {
 		printf("jnl: open: journal magic is bad (0x%x != 0x%x)\n",
@@ -884,12 +1335,11 @@ journal_open(struct vnode *jvp,
 
 	// only check if we're the current journal header magic value
 	if (jnl->jhdr->magic == JOURNAL_HEADER_MAGIC) {
-		int orig_checksum = jnl->jhdr->checksum;
 
-		jnl->jhdr->checksum = 0;
-		if (orig_checksum != calc_checksum((char *)jnl->jhdr, sizeof(struct journal_header))) {
-			printf("jnl: open: journal checksum is bad (0x%x != 0x%x)\n", orig_checksum,
-				   calc_checksum((char *)jnl->jhdr, sizeof(struct journal_header)));
+		if (orig_checksum != checksum) {
+			printf("jnl: open: journal checksum is bad (0x%x != 0x%x)\n",
+				   orig_checksum, checksum);
+				   
 			//goto bad_journal;
 		}
 	}
@@ -914,7 +1364,7 @@ journal_open(struct vnode *jvp,
 
     if (   jnl->jhdr->start <= 0
 		   || jnl->jhdr->start > jnl->jhdr->size
-		   || jnl->jhdr->start > 128*1024*1024) {
+		   || jnl->jhdr->start > 1024*1024*1024) {
 		printf("jnl: open: jhdr start looks bad (0x%llx max size 0x%llx)\n",
 			   jnl->jhdr->start, jnl->jhdr->size);
 		goto bad_journal;
@@ -922,13 +1372,13 @@ journal_open(struct vnode *jvp,
 
     if (   jnl->jhdr->end <= 0
 		   || jnl->jhdr->end > jnl->jhdr->size
-		   || jnl->jhdr->end > 128*1024*1024) {
+		   || jnl->jhdr->end > 1024*1024*1024) {
 		printf("jnl: open: jhdr end looks bad (0x%llx max size 0x%llx)\n",
 			   jnl->jhdr->end, jnl->jhdr->size);
 		goto bad_journal;
     }
 
-    if (jnl->jhdr->size > 128*1024*1024) {
+    if (jnl->jhdr->size > 1024*1024*1024) {
 		printf("jnl: open: jhdr size looks bad (0x%llx)\n", jnl->jhdr->size);
 		goto bad_journal;
     }
@@ -965,6 +1415,12 @@ journal_open(struct vnode *jvp,
 	if (orig_blksz != 0) {
 		VOP_IOCTL(jvp, DKIOCSETBLOCKSIZE, (caddr_t)&orig_blksz, FWRITE, FSCRED, NULL);
 		phys_blksz = orig_blksz;
+		if (orig_blksz < jnl->jhdr->jhdr_size) {
+			printf("jnl: open: jhdr_size is %d but orig phys blk size is %d.  switching.\n",
+				   jnl->jhdr->jhdr_size, orig_blksz);
+				   
+			jnl->jhdr->jhdr_size = orig_blksz;
+		}
 	}
 
 	// make sure this is in sync!
@@ -973,10 +1429,7 @@ journal_open(struct vnode *jvp,
     // set this now, after we've replayed the journal
     size_up_tbuffer(jnl, tbuffer_size, phys_blksz);
 
-    if (semaphore_create(kernel_task, &jnl->jsem, SYNC_POLICY_FIFO, 1) != 0) {
-		printf("jnl: journal_create: failed to create journal semaphore..\n");
-		goto bad_journal;
-    }
+	lockinit(&jnl->jlock, PINOD, "journal", 0, 0);
 
     return jnl;
 
@@ -1007,11 +1460,9 @@ journal_close(journal *jnl)
     if (jnl->owner != current_act()) {
 		int ret;
 
-		while ((ret = semaphore_wait(jnl->jsem)) == KERN_ABORTED) {
-			// just keep trying if we've been ^C'ed
-		}
+		ret = lockmgr(&jnl->jlock, LK_EXCLUSIVE|LK_RETRY, NULL, current_proc());
 		if (ret != 0) {
-			printf("jnl: close: sem wait failed.\n");
+			printf("jnl: close: locking the journal (0x%x) failed %d.\n", jnl, ret);
 			return;
 		}
     }
@@ -1081,7 +1532,6 @@ journal_close(journal *jnl)
     kmem_free(kernel_map, (vm_offset_t)jnl->header_buf, jnl->jhdr->jhdr_size);
     jnl->jhdr = (void *)0xbeefbabe;
 
-    semaphore_destroy(kernel_task, jnl->jsem);
 	FREE_ZONE(jnl, sizeof(struct journal), M_JNL_JNL);
 }
 
@@ -1139,6 +1589,8 @@ check_free_space(journal *jnl, int desired_size)
 //	   desired_size, free_space(jnl));
     
     while (1) {
+		int old_start_empty;
+		
 		if (counter++ == 5000) {
 			dump_journal(jnl);
 			panic("jnl: check_free_space: buffer flushing isn't working "
@@ -1159,6 +1611,7 @@ check_free_space(journal *jnl, int desired_size)
 		// here's where we lazily bump up jnl->jhdr->start.  we'll consume
 		// entries until there is enough space for the next transaction.
 		//
+		old_start_empty = 1;
 		simple_lock(&jnl->old_start_lock);
 		for(i=0; i < sizeof(jnl->old_start)/sizeof(jnl->old_start[0]); i++) {
 			int   counter;
@@ -1182,6 +1635,7 @@ check_free_space(journal *jnl, int desired_size)
 				continue;
 			}
 
+			old_start_empty   = 0;
 			jnl->jhdr->start  = jnl->old_start[i];
 			jnl->old_start[i] = 0;
 			if (free_space(jnl) > desired_size) {
@@ -1193,6 +1647,19 @@ check_free_space(journal *jnl, int desired_size)
 		
 		// if we bumped the start, loop and try again
 		if (i < sizeof(jnl->old_start)/sizeof(jnl->old_start[0])) {
+			continue;
+		} else if (old_start_empty) {
+			//
+			// if there is nothing in old_start anymore then we can
+			// bump the jhdr->start to be the same as active_start
+			// since it is possible there was only one very large
+			// transaction in the old_start array.  if we didn't do
+			// this then jhdr->start would never get updated and we
+			// would wind up looping until we hit the panic at the
+			// start of the loop.
+			//
+			jnl->jhdr->start = jnl->active_start;
+			write_journal_header(jnl);
 			continue;
 		}
 
@@ -1217,6 +1684,7 @@ journal_start_transaction(journal *jnl)
 {
     int ret;
     transaction *tr;
+	int prev_priv;
 
     CHECK_JOURNAL(jnl);
     
@@ -1233,11 +1701,9 @@ journal_start_transaction(journal *jnl)
 		return 0;
     }
 
-    while ((ret = semaphore_wait(jnl->jsem)) == KERN_ABORTED) {
-		// just keep looping if we've been ^C'ed
-    }
+	ret = lockmgr(&jnl->jlock, LK_EXCLUSIVE|LK_RETRY, NULL, current_proc());
     if (ret != 0) {
-		printf("jnl: start_tr: sem wait failed.\n");
+		printf("jnl: start_tr: locking the journal (0x%x) failed %d.\n", jnl, ret);
 		return EINVAL;
     }
 
@@ -1270,12 +1736,15 @@ journal_start_transaction(journal *jnl)
     memset(tr, 0, sizeof(transaction));
 
     tr->tbuffer_size = jnl->tbuffer_size;
+	thread_wire_internal(host_priv_self(), current_act(), TRUE, &prev_priv);
     if (kmem_alloc(kernel_map, (vm_offset_t *)&tr->tbuffer, tr->tbuffer_size)) {
 		FREE_ZONE(tr, sizeof(transaction), M_JNL_TR);
 		printf("jnl: start transaction failed: no tbuffer mem\n");
 		ret = ENOMEM;
+		thread_wire_internal(host_priv_self(), current_act(), prev_priv, NULL);
 		goto bad_start;
     }
+	thread_wire_internal(host_priv_self(), current_act(), prev_priv, NULL);
 
     // journal replay code checksum check depends on this.
     memset(tr->tbuffer, 0, BLHDR_CHECKSUM_SIZE);
@@ -1298,7 +1767,7 @@ journal_start_transaction(journal *jnl)
   bad_start:
 	jnl->owner        = NULL;
 	jnl->nested_count = 0;
-	semaphore_signal(jnl->jsem);
+	lockmgr(&jnl->jlock, LK_RELEASE, NULL, current_proc());
 	return ret;
 }
 
@@ -1492,6 +1961,7 @@ journal_modify_block_end(journal *jnl, struct buf *bp)
 		blhdr = prev;
     } else if (blhdr == NULL) {
 		block_list_header *nblhdr;
+		int prev_priv;
 
 		if (prev == NULL) {
 			panic("jnl: modify block end: no way man, prev == NULL?!?, jnl 0x%x, bp 0x%x\n", jnl, bp);
@@ -1504,10 +1974,12 @@ journal_modify_block_end(journal *jnl, struct buf *bp)
 		// through prev->binfo[0].bnum.  that's a skanky way to do things but
 		// avoids having yet another linked list of small data structures to manage.
 
+		thread_wire_internal(host_priv_self(), current_act(), TRUE, &prev_priv);
 		if (kmem_alloc(kernel_map, (vm_offset_t *)&nblhdr, tr->tbuffer_size)) {
 			panic("jnl: end_tr: no space for new block tr @ 0x%x (total bytes: %d)!\n",
 				  tr, tr->total_bytes);
 		}
+		thread_wire_internal(host_priv_self(), current_act(), prev_priv, NULL);
 
 		// journal replay code checksum check depends on this.
 		memset(nblhdr, 0, BLHDR_CHECKSUM_SIZE);
@@ -1542,7 +2014,7 @@ journal_modify_block_end(journal *jnl, struct buf *bp)
     if (i >= blhdr->num_blocks) {
 		vget(bp->b_vp, 0, current_proc());
 
-		blhdr->binfo[i].bnum  = bp->b_blkno;
+		blhdr->binfo[i].bnum  = (off_t)((unsigned)bp->b_blkno);
 		blhdr->binfo[i].bsize = bp->b_bufsize;
 		blhdr->binfo[i].bp    = bp;
 
@@ -1764,7 +2236,7 @@ end_transaction(transaction *tr, int force_it)
 			}
 	    
 			// update this so we write out the correct physical block number!
-			blhdr->binfo[i].bnum = bp->b_blkno;
+			blhdr->binfo[i].bnum = (off_t)((unsigned)bp->b_blkno);
 		}
 
 		next = (block_list_header *)((long)blhdr->binfo[0].bnum);
@@ -1897,6 +2369,7 @@ abort_transaction(journal *jnl, transaction *tr)
     int                i, ret;
     block_list_header *blhdr, *next;
     struct buf        *bp;
+    struct vnode      *save_vp;
 
     // for each block list header, iterate over the blocks then
     // free up the memory associated with the block list.
@@ -1925,8 +2398,11 @@ abort_transaction(journal *jnl, transaction *tr)
 				// don't want these blocks going to disk.
 				bp->b_flags &= ~(B_LOCKED|B_DELWRI);
 				bp->b_flags |= B_INVAL;
+				save_vp = bp->b_vp;
 
 				brelse(bp);
+
+				vrele(save_vp);
 
 			} else {
 				printf("jnl: abort_tr: could not find block %Ld vp 0x%x!\n",
@@ -1992,7 +2468,7 @@ journal_end_transaction(journal *jnl)
 		}
 
 		jnl->owner = NULL;
-		semaphore_signal(jnl->jsem);
+		lockmgr(&jnl->jlock, LK_RELEASE, NULL, current_proc());
 
 		return EINVAL;
     }
@@ -2009,7 +2485,7 @@ journal_end_transaction(journal *jnl)
     ret = end_transaction(tr, 0);
 
     jnl->owner = NULL;
-    semaphore_signal(jnl->jsem);
+	lockmgr(&jnl->jlock, LK_RELEASE, NULL, current_proc());
 
     return ret;
 }
@@ -2029,11 +2505,9 @@ journal_flush(journal *jnl)
     if (jnl->owner != current_act()) {
 		int ret;
 
-		while ((ret = semaphore_wait(jnl->jsem)) == KERN_ABORTED) {
-			// just keep looping if we've ben ^C'ed 
-		}
+		ret = lockmgr(&jnl->jlock, LK_EXCLUSIVE|LK_RETRY, NULL, current_proc());
 		if (ret != 0) {
-			printf("jnl: flush: sem wait failed.\n");
+			printf("jnl: flush: locking the journal (0x%x) failed %d.\n", jnl, ret);
 			return -1;
 		}
 		need_signal = 1;
@@ -2050,7 +2524,7 @@ journal_flush(journal *jnl)
     }
 
     if (need_signal) {
-		semaphore_signal(jnl->jsem);
+		lockmgr(&jnl->jlock, LK_RELEASE, NULL, current_proc());
     }
 
     return 0;

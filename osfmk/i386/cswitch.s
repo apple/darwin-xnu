@@ -67,7 +67,7 @@
 #endif
 
 #if	AT386
-#include <i386/AT386/mp/mp.h>
+#include <i386/mp.h>
 #endif	/* AT386 */
 
 #define	CX(addr, reg)	addr(,reg,4)
@@ -116,14 +116,11 @@ Entry(Switch_context)
 	popl	KSS_EIP(%ecx)			/* save return PC */
 	movl	%esp,KSS_ESP(%ecx)		/* save SP */
 
-	movl	0(%esp),%eax			/* get old thread */
-	movl	4(%esp),%ebx			/* get continuation */
-	movl	%ebx,TH_CONTINUATION(%eax)	/* save continuation */
-	movl	%ecx,TH_KERNEL_STACK(%eax)	/* save kernel stack */
-
+	movl	0(%esp),%eax			/* return old thread */
 	movl	8(%esp),%esi			/* get new thread */
-        movl    $ CPD_ACTIVE_THREAD,%ecx
-        movl    %esi,%gs:(%ecx)                 /* new thread is active */
+	movl	TH_TOP_ACT(%esi),%ebx	/* get new_thread->top_act */
+	movl    $ CPD_ACTIVE_THREAD,%ecx
+	movl    %ebx,%gs:(%ecx)                /* new thread is active */
 	movl	TH_KERNEL_STACK(%esi),%ecx	/* get its kernel stack */
 	lea	KERNEL_STACK_SIZE-IKS_SIZE-IEL_SIZE(%ecx),%ebx
 						/* point to stack top */
@@ -131,14 +128,9 @@ Entry(Switch_context)
 	movl	%ecx,CX(EXT(active_stacks),%edx) /* set current stack */
 	movl	%ebx,CX(EXT(kernel_stack),%edx)	/* set stack top */
 
-	movl	TH_TOP_ACT(%esi),%esi		/* get new_thread->top_act */
-	cmpl	$0,ACT_KLOADED(%esi)		/* check kernel-loaded flag */
-	je	0f
-	movl	%esi,CX(EXT(active_kloaded),%edx)
-	jmp	1f
-0:
+
 	movl	$0,CX(EXT(active_kloaded),%edx)
-1:
+
 	movl	KSS_ESP(%ecx),%esp		/* switch stacks */
 	movl	KSS_ESI(%ecx),%esi		/* restore registers */
 	movl	KSS_EDI(%ecx),%edi
@@ -176,7 +168,6 @@ Entry(switch_to_shutdown_context)
 	movl	%esp,KSS_ESP(%ecx)		/* save SP */
 
 	movl	0(%esp),%eax			/* get old thread */
-	movl	$0,TH_CONTINUATION(%eax)	/* clear continuation */
 	movl	%ecx,TH_KERNEL_STACK(%eax)	/* save old stack */
 	movl	4(%esp),%ebx			/* get routine to run next */
 	movl	8(%esp),%esi			/* get its argument */

@@ -290,8 +290,28 @@ typedef struct upl_page_info	upl_page_info_t;
 typedef upl_page_info_t		*upl_page_info_array_t;
 typedef upl_page_info_array_t	upl_page_list_ptr_t;
 
+/* named entry processor mapping options */
+/* enumerated */
+#define MAP_MEM_NOOP		0
+#define MAP_MEM_COPYBACK	1
+#define MAP_MEM_IO		2
+#define MAP_MEM_WTHRU		3
+#define MAP_MEM_WCOMB		4	/* Write combining mode */
+					/* aka store gather     */
+
+#define GET_MAP_MEM(flags)	\
+	((((unsigned int)(flags)) >> 24) & 0xFF)
+
+#define SET_MAP_MEM(caching, flags)	\
+	((flags) = ((((unsigned int)(caching)) << 24) \
+			& 0xFF000000) | ((flags) & 0xFFFFFF));
+
+/* leave room for vm_prot bits */
+#define MAP_MEM_ONLY		0x10000	/* change processor caching  */
+#define MAP_MEM_NAMED_CREATE	0x20000 /* create extant object      */
 
 /* upl invocation flags */
+/* top nibble is used by super upl */
 
 #define UPL_FLAGS_NONE		0x0
 #define UPL_COPYOUT_FROM	0x1
@@ -304,6 +324,12 @@ typedef upl_page_info_array_t	upl_page_list_ptr_t;
 #define	UPL_QUERY_OBJECT_TYPE	0x80
 #define UPL_RET_ONLY_ABSENT	0x100  /* used only for COPY_FROM = FALSE */
 #define UPL_FILE_IO             0x200
+#define UPL_SET_LITE		0x400
+#define UPL_SET_INTERRUPTIBLE	0x800
+#define UPL_SET_IO_WIRE		0x1000
+#define UPL_FOR_PAGEOUT		0x2000
+#define UPL_WILL_BE_DUMPED      0x4000
+
 
 /* upl abort error flags */
 #define UPL_ABORT_RESTART	0x1
@@ -382,6 +408,27 @@ typedef upl_page_info_array_t	upl_page_list_ptr_t;
 #define UPL_POP_SET		0x40000000
 #define UPL_POP_CLR		0x80000000
 
+/* 
+ * Flags for the UPL range op routine.  This routine is not exported 
+ * out of the kernel at the moemet and so the defs live here.
+ */
+/*
+ * UPL_ROP_ABSENT: Returns the extent of the range presented which
+ * is absent, starting with the start address presented    
+ */
+#define UPL_ROP_ABSENT		0x01
+/*
+ * UPL_ROP_PRESENT: Returns the extent of the range presented which
+ * is present (i.e. resident), starting with the start address presented
+ */
+#define UPL_ROP_PRESENT		0x02
+/*
+ * UPL_ROP_DUMP: Dump the pages which are found in the target object
+ * for the target range.
+ */
+#define UPL_ROP_DUMP		0x04
+
+
 
 #ifdef KERNEL_PRIVATE
 
@@ -419,6 +466,60 @@ extern vm_offset_t	upl_phys_page(upl_page_info_t *upl, int index);
 extern void	   	upl_set_dirty(upl_t   upl);
 
 extern void		upl_clear_dirty(upl_t   upl);
+
+
+/* 
+ * The following interface definitions should be generated automatically 
+ * through Mig definitions or whatever follows the MIG tool as part of the
+ * component API.  Until this is up and running however this explicit 
+ * description will do.
+ */
+
+#include <mach/message.h>
+
+/*  supply a map and a range, a upl will be returned. */
+extern int kernel_vm_map_get_upl(
+	vm_map_t		map,
+	vm_address_t		offset,
+	vm_size_t		*upl_size,
+	upl_t			*upl,
+	upl_page_info_array_t	page_list,
+	unsigned int		*count,
+	int			*flags,
+	int             	force_data_sync);
+
+extern int kernel_upl_map(
+	vm_map_t        map,
+	upl_t           upl,
+	vm_offset_t     *dst_addr);
+
+extern int kernel_upl_unmap(
+	vm_map_t        map,
+	upl_t           upl);
+
+extern int     kernel_upl_commit(
+	upl_t                   upl,
+	upl_page_info_t         *pl,
+	mach_msg_type_number_t	 count);
+
+extern int kernel_upl_commit_range(
+	upl_t                   upl,
+	vm_offset_t             offset,
+	vm_size_t		size,
+	int			flags,
+	upl_page_info_array_t	pl,
+	mach_msg_type_number_t	count);
+
+extern int kernel_upl_abort(
+	upl_t                   upl,
+	int                     abort_type);
+
+extern int kernel_upl_abort_range(
+	upl_t                   upl,
+	vm_offset_t             offset,
+	vm_size_t               size,
+	int                     abort_flags);
+
 
 #endif  /* KERNEL_PRIVATE */
 

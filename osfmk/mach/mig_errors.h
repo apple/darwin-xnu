@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2002 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2003 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -96,4 +96,20 @@ typedef struct {
 	kern_return_t		RetCode;
 } mig_reply_error_t;
 
+#define __NDR_convert__mig_reply_error_t__defined
+#if mig_internal
+mig_internal
+#else
+static
+#endif
+__inline__ void
+__NDR_convert__mig_reply_error_t(mig_reply_error_t *x)
+{
+#if defined(__NDR_convert__int_rep__kern_return_t__defined)
+	if (x->NDR.int_rep != NDR_record.int_rep)
+		__NDR_convert__int_rep__kern_return_t(&x->RetCode, x->NDR.int_rep);
+#endif /* __NDR_convert__int_rep__kern_return_t__defined */
+}
+
 #endif	/* _MACH_MIG_ERRORS_H_ */
+

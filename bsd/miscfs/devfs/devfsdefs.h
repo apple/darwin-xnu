@@ -71,7 +71,7 @@ typedef enum {
     DEV_DIR,
     DEV_BDEV,
     DEV_CDEV,
-    DEV_SLNK,
+    DEV_SLNK
 } devfstype_t;
 
 extern int (**devfs_vnodeop_p)(void *);	/* our own vector array for dirs */
@@ -180,19 +180,7 @@ struct devfsmount
 #define M_DEVFSNODE	M_DEVFS
 #define M_DEVFSMNT	M_DEVFS
 
-static __inline__ void
-getnanotime(struct timespec * t_p)
-{
-    struct timeval tv;
-
-    microtime(&tv);
-    t_p->tv_sec = tv.tv_sec;
-    t_p->tv_nsec = tv.tv_usec * 1000;
-    return;
-}
-
 #define VTODN(vp)	((devnode_t *)(vp)->v_data)
-extern void cache_purge(struct vnode *vp); /* vfs_cache.c */
 
 static __inline__ int
 DEVFS_LOCK(struct proc * p)

@@ -21,6 +21,7 @@ iokit/Kernel/IOServicePM.cpp				optional iokitcpp
 iokit/Kernel/IOPMchangeNoteList.cpp			optional iokitcpp
 iokit/Kernel/IOPMinformee.cpp				optional iokitcpp
 iokit/Kernel/IOPMinformeeList.cpp			optional iokitcpp
+iokit/Kernel/IOPMPowerStateQueue.cpp			optional iokitcpp
 iokit/Kernel/IOCatalogue.cpp				optional iokitcpp
 iokit/Kernel/IOPMPowerSource.cpp                        optional iokitcpp
 iokit/Kernel/IOPMPowerSourceList.cpp                    optional iokitcpp
@@ -37,6 +38,7 @@ iokit/Kernel/IOFilterInterruptEventSource.cpp		optional iokitcpp
 iokit/Kernel/IOTimerEventSource.cpp			optional iokitcpp
 
 iokit/Kernel/IODeviceMemory.cpp				optional iokitcpp
+iokit/Kernel/IOMapper.cpp				optional iokitcpp
 iokit/Kernel/IOMemoryDescriptor.cpp			optional iokitcpp
 iokit/Kernel/IOMemoryCursor.cpp				optional iokitcpp
 iokit/Kernel/IOBufferMemoryDescriptor.cpp		optional iokitcpp
@@ -74,8 +76,8 @@ iokit/bsddev/IOKitBSDInit.cpp				optional iokitcpp
 iokit/bsddev/DINetBootHook.cpp				optional iokitcpp
 
 # Power Management
-iokit/Drivers/platform/drvAppleRootDomain/RootDomainUserClient.cpp	optional iokitcpp
-iokit/Kernel/IOPowerConnection.cpp						optional iokitcpp
+iokit/Kernel/RootDomainUserClient.cpp			optional iokitcpp
+iokit/Kernel/IOPowerConnection.cpp			optional iokitcpp
 
 # System Management
 iokit/Families/IOSystemManagement/IOWatchDogTimer.cpp	optional iokitcpp

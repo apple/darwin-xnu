@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2003 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -70,6 +70,7 @@
 #include <kern/ipc_host.h>
 #include <kern/misc_protos.h>
 #include <mach/host_info.h>
+#include <mach/host_special_ports.h>
 #include <mach/kern_return.h>
 #include <mach/machine.h>
 #include <mach/port.h>
@@ -514,7 +515,7 @@ host_processor_info(
 		if (machine_slot[i].is_cpu)
 			num++;
 
-	size = (vm_size_t)round_page(num * count * sizeof(natural_t));
+	size = (vm_size_t)round_page_32(num * count * sizeof(natural_t));
 
 	kr = vm_allocate(ipc_kernel_map, &addr, size, TRUE);
 	if (kr != KERN_SUCCESS)
@@ -559,44 +560,24 @@ host_processor_info(
 	return(KERN_SUCCESS);
 }
 
-
 /*
- * 	host_get_io_master
- *
- *	Return the IO master access port for this host.
+ *      Kernel interface for setting a special port.
  */
 kern_return_t
-host_get_io_master(
-        host_t host,
-        io_master_t *io_master)
+kernel_set_special_port(
+	host_priv_t	host_priv,		
+	int		id,
+	ipc_port_t	port)
 {
-	if (host == HOST_NULL)
-		return KERN_INVALID_ARGUMENT;
-	*io_master = ipc_port_copy_send(realhost.io_master);
-        return KERN_SUCCESS;
-}
+	ipc_port_t old_port;
 
-#define io_master_deallocate(x)
-
-/*
- * 	host_get_io_master
- *
- *	Return the IO master access port for this host.
- */
-kern_return_t
-host_set_io_master(
-        host_priv_t host_priv,
-        io_master_t io_master)
-{
-	io_master_t old_master;
-
-	if (host_priv == HOST_PRIV_NULL)
-		return KERN_INVALID_ARGUMENT;
-
-	old_master = realhost.io_master;
-	realhost.io_master = io_master;
-	io_master_deallocate(old_master);
-        return KERN_SUCCESS;
+	host_lock(host_priv);
+	old_port = host_priv->special[id];
+	host_priv->special[id] = port;
+	host_unlock(host_priv);
+	if (IP_VALID(old_port))
+		ipc_port_release_send(old_port);
+	return KERN_SUCCESS;
 }
 
 /*
@@ -614,26 +595,19 @@ host_set_special_port(
         int             id,
         ipc_port_t      port)
 {
-#if     DIPC
-        return norma_set_special_port(host_priv, id, port);
-#else
-        return KERN_FAILURE;
-#endif
+	if (host_priv == HOST_PRIV_NULL ||
+	    id <= HOST_MAX_SPECIAL_KERNEL_PORT || id > HOST_MAX_SPECIAL_PORT ) {
+		if (IP_VALID(port))
+			ipc_port_release_send(port);
+		return KERN_INVALID_ARGUMENT;
+	}
+
+	return kernel_set_special_port(host_priv, id, port);
 }
 
 
 /*
  *      User interface for retrieving a special port.
- *
- *      When all processing is local, this call does not block.
- *      If processing goes remote to discover a remote UID,
- *      this call blocks but not indefinitely.  If the remote
- *      node does not exist, has panic'ed, or is booting but
- *      hasn't yet turned on DIPC, then we expect the transport
- *      to return an error.
- *
- *      This routine always returns SUCCESS, even if there's
- *      no resulting port.
  *
  *      Note that there is nothing to prevent a user special
  *      port from disappearing after it has been discovered by
@@ -648,11 +622,40 @@ host_get_special_port(
         int             id,
         ipc_port_t      *portp)
 {
+	ipc_port_t	port;
+
+	if (host_priv == HOST_PRIV_NULL ||
+	    id == HOST_SECURITY_PORT )
+		return KERN_INVALID_ARGUMENT;
+
 #if     DIPC
-        return norma_get_special_port(host_priv, node, id, portp);
-#else
-        return KERN_FAILURE;
+	if (node != HOST_LOCAL_NODE)
+        	return norma_get_special_port(host_priv, node, id, portp);
 #endif
+
+	host_lock(host_priv);
+	port = realhost.special[id];
+	*portp = ipc_port_copy_send(port);
+	host_unlock(host_priv);
+
+	return KERN_SUCCESS;
+}
+
+
+/*
+ * 	host_get_io_master
+ *
+ *	Return the IO master access port for this host.
+ */
+kern_return_t
+host_get_io_master(
+        host_t host,
+        io_master_t *io_masterp)
+{
+	if (host == HOST_NULL)
+		return KERN_INVALID_ARGUMENT;
+
+	return (host_get_io_master_port(host_priv_self(), io_masterp));
 }
 
 host_t

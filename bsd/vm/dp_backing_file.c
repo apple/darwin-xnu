@@ -69,6 +69,65 @@ struct bs_map		bs_port_table[MAX_BACKING_STORE] = {
 #include <kern/assert.h>
 
 /*
+ *	Routine:	macx_backing_store_recovery
+ *	Function:
+ *		Syscall interface to set a tasks privilege
+ *		level so that it is not subject to 
+ *		macx_backing_store_suspend
+ */
+int
+macx_backing_store_recovery(
+	int		pid)
+{
+	int		error;
+	struct proc	*p =  current_proc();
+	boolean_t	funnel_state;
+
+	funnel_state = thread_funnel_set(kernel_flock, TRUE);
+	if ((error = suser(p->p_ucred, &p->p_acflag)))
+		goto backing_store_recovery_return;
+
+	/* for now restrict backing_store_recovery */
+	/* usage to only present task */
+	if(pid != p->p_pid) {
+		error = EINVAL;
+		goto backing_store_recovery_return;
+	}
+
+	task_backing_store_privileged(p->task);
+
+backing_store_recovery_return:
+	(void) thread_funnel_set(kernel_flock, FALSE);
+	return(error);
+}
+
+/*
+ *	Routine:	macx_backing_store_suspend
+ *	Function:
+ *		Syscall interface to stop new demand for 
+ *		backing store when backing store is low
+ */
+
+int
+macx_backing_store_suspend(
+	boolean_t	suspend)
+{
+	int		error;
+	struct proc	*p =  current_proc();
+	boolean_t	funnel_state;
+
+	funnel_state = thread_funnel_set(kernel_flock, TRUE);
+	if ((error = suser(p->p_ucred, &p->p_acflag)))
+		goto backing_store_suspend_return;
+
+	vm_backing_store_disable(suspend);
+
+backing_store_suspend_return:
+	(void) thread_funnel_set(kernel_flock, FALSE);
+	return(error);
+}
+
+/*
  *	Routine:	macx_swapon
  *	Function:
  *		Syscall interface to add a file to backing store
@@ -204,6 +263,8 @@ macx_swapon(
 
 	/* Mark this vnode as being used for swapfile */
 	SET(vp->v_flag, VSWAP);
+
+	ubc_setcred(vp, p);
 
 	/*
 	 * take an extra reference on the vnode to keep

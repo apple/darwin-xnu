@@ -85,7 +85,7 @@
  * hour rule for hosts).  they should never be modified by nd6_timeout or
  * anywhere else.
  *	userland -> kernel: accept pltime/vltime
- *	kernel -> userland: throuw up everything
+ *	kernel -> userland: throw up everything
  *	in kernel: modify preferred/expire only
  */
 struct in6_addrlifetime {
@@ -467,6 +467,20 @@ void in6_post_msg(struct ifnet *, u_long, struct in6_ifaddr *);
 #define SIOCGETMIFCNT_IN6	_IOWR('u', 107, \
 				      struct sioc_mif_req6) /* get pkt cnt per if */
 
+#ifdef KERNEL_PRIVATE
+/*
+ * temporary control calls to attach/detach IP to/from an ethernet interface 
+ */
+#define SIOCPROTOATTACH_IN6 _IOWR('i', 110, struct in6_aliasreq)    /* attach proto to interface */
+#define SIOCPROTODETACH_IN6 _IOWR('i', 111, struct in6_ifreq)    /* detach proto from interface */
+
+#define SIOCLL_START _IOWR('i', 130, struct in6_aliasreq)    /* start aquiring linklocal on interface */
+#define SIOCLL_STOP _IOWR('i', 131, struct in6_ifreq)    /* deconfigure linklocal from interface */
+#define SIOCAUTOCONF_START _IOWR('i', 132, struct in6_ifreq)    /* accept rtadvd on this interface */
+#define SIOCAUTOCONF_STOP _IOWR('i', 133, struct in6_ifreq)    /* stop accepting rtadv for this interface */
+#endif KERNEL_PRIVATE
+
+
 #define IN6_IFF_ANYCAST		0x01	/* anycast address */
 #define IN6_IFF_TENTATIVE	0x02	/* tentative address */
 #define IN6_IFF_DUPLICATED	0x04	/* DAD detected duplicate */
@@ -564,7 +578,7 @@ extern LIST_HEAD(in6_multihead, in6_multi) in6_multihead;
 
 /*
  * Structure used by macros below to remember position when stepping through
- * all of eht in6_multi records.
+ * all of the in6_multi records.
  */
 struct	in6_multistep {
 	struct	in6_ifaddr *i_ia;

@@ -39,7 +39,7 @@
 #include <device/ds_routines.h>
 #include <device/cirbuf.h>
 #include <ppc/console_feed_entries.h>
-#include <ppc/POWERMAC/serial_io.h>
+#include <ppc/serial_io.h>
 
 #if	MACH_KDB
 #include <ppc/db_machdep.h>

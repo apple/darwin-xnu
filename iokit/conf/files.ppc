@@ -3,22 +3,15 @@ iokit/Kernel/ppc/IOAsmSupport.s					standard
 iokit/Kernel/ppc/IODBDMA.cpp					optional iokitcpp
 iokit/Kernel/ppc/IOSharedLock.s					standard
 
-iokit/Families/IOADBBus/IOADBBus.cpp				optional iokitcpp
-iokit/Families/IOADBBus/IOADBController.cpp			optional iokitcpp
-iokit/Families/IOADBBus/IOADBDevice.cpp				optional iokitcpp
-iokit/Families/IOADBBus/IOADBControllerUserClient.cpp		optional iokitcpp
-
 iokit/Families/IONVRAM/IONVRAMController.cpp			optional iokitcpp
 iokit/Drivers/platform/drvAppleNVRAM/AppleNVRAM.cpp		optional iokitcpp
-
-iokit/Drivers/platform/drvApplePMU/IOPMUADBController.cpp	optional iokitcpp
 
 # Apple Platform Expert
 iokit/Drivers/platform/drvApplePlatformExpert/ApplePlatformExpert.cpp	optional iokitcpp
 iokit/Drivers/platform/drvApplePlatformExpert/AppleCPU.cpp		optional iokitcpp
 
 # Power Domains
-iokit/Drivers/platform/drvAppleRootDomain/RootDomain.cpp	optional iokitcpp
+iokit/Kernel/IOPMrootDomain.cpp					optional iokitcpp
 
 # Apple Mac-IO driver
 iokit/Drivers/platform/drvAppleMacIO/AppleMacIO.cpp		optional iokitcpp

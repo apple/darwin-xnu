@@ -214,6 +214,7 @@ static struct tcpcb dummy_tcb;
 extern struct	inpcbhead	time_wait_slots[];
 extern int		cur_tw_slot;
 extern u_long		*delack_bitmask;
+extern u_long  route_generation;
 
 
 int  get_inpcb_str_size()
@@ -702,6 +703,14 @@ tcp_close(tp)
 	callout_stop(tp->tt_keep);
 	callout_stop(tp->tt_2msl);
 	callout_stop(tp->tt_delack);
+#else
+	/* Clear the timers before we delete the PCB. */
+	{
+		int i;
+		for (i = 0; i < TCPT_NTIMERS; i++) {
+			tp->t_timer[i] = 0;
+		}
+	}
 #endif
 
 	KERNEL_DEBUG(DBG_FNC_TCP_CLOSE | DBG_FUNC_START, tp,0,0,0,0);
@@ -740,11 +749,16 @@ tcp_close(tp)
 				goto no_valid_rt;
 		}
 		else
-#endif /* INET6 */		
-		if ((rt = inp->inp_route.ro_rt) == NULL ||
+#endif /* INET6 */
+		rt = inp->inp_route.ro_rt;	
+		if (rt == NULL ||
 		    ((struct sockaddr_in *)rt_key(rt))->sin_addr.s_addr
-		    == INADDR_ANY)
+		    == INADDR_ANY || rt->generation_id != route_generation) {
+			if (tp->t_state >= TCPS_CLOSE_WAIT)
+				tp->t_state = TCPS_CLOSING;
+
 			goto no_valid_rt;
+		}
 
 		if ((rt->rt_rmx.rmx_locks & RTV_RTT) == 0) {
 			i = tp->t_srtt *
@@ -915,7 +929,12 @@ tcp_notify(inp, error)
 	struct inpcb *inp;
 	int error;
 {
-	struct tcpcb *tp = (struct tcpcb *)inp->inp_ppcb;
+	struct tcpcb *tp;
+
+	if (inp == NULL)
+		return; /* pcb is gone already */
+
+	tp = (struct tcpcb *)inp->inp_ppcb;
 
 	/*
 	 * Ignore some errors if we are hooked up.
@@ -1453,13 +1472,7 @@ tcp_mtudisc(inp, errno)
 		if ((tp->t_flags & (TF_REQ_CC|TF_NOOPT)) == TF_REQ_CC &&
 		    (tp->t_flags & TF_RCVD_CC) == TF_RCVD_CC)
 			mss -= TCPOLEN_CC_APPA;
-#if	(MCLBYTES & (MCLBYTES - 1)) == 0
-		if (mss > MCLBYTES)
-			mss &= ~(MCLBYTES-1);
-#else
-		if (mss > MCLBYTES)
-			mss = mss / MCLBYTES * MCLBYTES;
-#endif
+
 		if (so->so_snd.sb_hiwat < mss)
 			mss = so->so_snd.sb_hiwat;
 
@@ -1489,7 +1502,7 @@ tcp_rtlookup(inp)
 	if (ro == NULL)
 		return (NULL);
 	rt = ro->ro_rt;
-	if (rt == NULL || !(rt->rt_flags & RTF_UP)) {
+	if (rt == NULL || !(rt->rt_flags & RTF_UP) || rt->generation_id != route_generation) {
 		/* No route yet, so try to acquire one */
 		if (inp->inp_faddr.s_addr != INADDR_ANY) {
 			ro->ro_dst.sa_family = AF_INET;

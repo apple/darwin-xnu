@@ -35,8 +35,4 @@
 #define kIOBSDMinorKey "BSD Minor" // (an OSNumber)
 #define kIOBSDUnitKey  "BSD Unit"  // (an OSNumber)
 
-#define kIOBSDName  "BSD Name"  ///d:deprecated
-#define kIOBSDMajor "BSD Major" ///d:deprecated
-#define kIOBSDMinor "BSD Minor" ///d:deprecated
-
 #endif /* !_IOBSD_H */

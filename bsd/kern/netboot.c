@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2001 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2001-2002 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -348,7 +348,7 @@ netboot_info_init(struct in_addr iaddr)
     if (PE_parse_boot_arg("vndevice", vndevice) == TRUE) {
 	use_hdix = FALSE;
     }
-    _FREE_ZONE(vndevice, MAXPATHLEN, M_NAMEI);
+    FREE_ZONE(vndevice, MAXPATHLEN, M_NAMEI);
 
     info = (struct netboot_info *)kalloc(sizeof(*info));
     bzero(info, sizeof(*info));
@@ -412,7 +412,7 @@ netboot_info_init(struct in_addr iaddr)
 	    printf("netboot: root path uses unrecognized format\n");
 	}
     }
-    _FREE_ZONE(root_path, MAXPATHLEN, M_NAMEI);
+    FREE_ZONE(root_path, MAXPATHLEN, M_NAMEI);
     return (info);
 }
 

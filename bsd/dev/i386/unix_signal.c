@@ -52,9 +52,11 @@
 
 #define	USER_CS	0x17
 #define	USER_DS	0x1f
+#define USER_CTHREAD 0x27
 
 #define	UDATA_SEL	USER_DS
 #define	UCODE_SEL	USER_CS
+#define UCTHREAD_SEL    USER_CTHREAD
 
 #define	valid_user_code_selector(x)	(TRUE)
 #define	valid_user_data_selector(x)	(TRUE)
@@ -62,6 +64,10 @@
 
 
 #define	NULL_SEG	0
+
+/* Signal handler flavors supported */
+/* These defns should match the Libc implmn */
+#define UC_TRAD			1
 
 /*
  * Send an interrupt to process.
@@ -95,7 +101,8 @@ sendsig(p, catcher, sig, mask, code)
 	thread_t thread = current_thread();
 	thread_act_t th_act = current_act();
 	struct uthread * ut;
-	struct i386_saved_state * saved_state = get_user_regs(th_act);
+	struct i386_saved_state * saved_state = (struct i386_saved_state *)
+							get_user_regs(th_act);
 	sig_t trampact;
     
 	ut = get_bsdthread_info(th_act);
@@ -116,7 +123,7 @@ sendsig(p, catcher, sig, mask, code)
 	/* Handler should call sigreturn to get out of it */
 	frame.retaddr = 0xffffffff;	
 	frame.catcher = catcher;
-	frame.sigstyle = 1;
+	frame.sigstyle = UC_TRAD;
 	frame.sig = sig;
 
 	if (sig == SIGILL || sig == SIGFPE) {
@@ -179,7 +186,7 @@ sendsig(p, catcher, sig, mask, code)
 	saved_state->ds = UDATA_SEL;
 	saved_state->es = UDATA_SEL;
 	saved_state->fs = NULL_SEG;
-	saved_state->gs = NULL_SEG;
+	saved_state->gs = USER_CTHREAD;
 	return;
 
 bad:
@@ -217,7 +224,8 @@ sigreturn(p, uap, retval)
     thread_t			thread = current_thread();
     thread_act_t		th_act = current_act();
 	int error;
-    struct i386_saved_state*	saved_state = get_user_regs(th_act);	
+    struct i386_saved_state*	saved_state = (struct i386_saved_state*)
+							get_user_regs(th_act);	
 	struct uthread * ut;
 
 

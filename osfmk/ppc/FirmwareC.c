@@ -42,11 +42,9 @@
 #include <ppc/proc_reg.h>
 #include <ppc/mem.h>
 #include <ppc/pmap.h>
-#include <ppc/pmap_internals.h>
 #include <ppc/new_screen.h>
 #include <ppc/Firmware.h>
 #include <ppc/mappings.h>
-//#include <pexpert/ppc/powermac.h>
 #include <pexpert/pexpert.h>
 #include <ddb/db_output.h>
 
@@ -281,4 +279,7 @@ void GratefulDebInit(bootBumbleC *boot_video_info) {	/* Initialize the video deb
 
 }
 
-
+void debugNoop(void);
+void debugNoop(void) {								/* This does absolutely nothing */
+	return;
+}

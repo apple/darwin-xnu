@@ -136,7 +136,7 @@ void	IOLockWakeup(IOLock * lock, void *event, bool oneThread)
 
 typedef enum {
     kIOLockStateUnlocked	= 0,
-    kIOLockStateLocked		= 1,
+    kIOLockStateLocked		= 1
 } IOLockState;
 
 void	IOLockInitWithState( IOLock * lock, IOLockState state);

@@ -41,26 +41,26 @@ OSMetaClassDefineReservedUnused(IOCommandGate, 7);
 
 bool IOCommandGate::checkForWork() { return false; }
 
-bool IOCommandGate::init(OSObject *inOwner, Action inAction = 0)
+bool IOCommandGate::init(OSObject *inOwner, Action inAction)
 {
     return super::init(inOwner, (IOEventSource::Action) inAction);
 }
 
 IOCommandGate *
-IOCommandGate::commandGate(OSObject *inOwner, Action inAction = 0)
+IOCommandGate::commandGate(OSObject *inOwner, Action inAction)
 {
     IOCommandGate *me = new IOCommandGate;
 
     if (me && !me->init(inOwner, inAction)) {
-        me->free();
+        me->release();
         return 0;
     }
 
     return me;
 }
 
-IOReturn IOCommandGate::runCommand(void *arg0 = 0, void *arg1 = 0,
-                                   void *arg2 = 0, void *arg3 = 0)
+IOReturn IOCommandGate::runCommand(void *arg0, void *arg1,
+                                   void *arg2, void *arg3)
 {
     IOReturn res;
 
@@ -82,8 +82,8 @@ IOReturn IOCommandGate::runCommand(void *arg0 = 0, void *arg1 = 0,
 }
 
 IOReturn IOCommandGate::runAction(Action inAction,
-                                  void *arg0 = 0, void *arg1 = 0,
-                                  void *arg2 = 0, void *arg3 = 0)
+                                  void *arg0, void *arg1,
+                                  void *arg2, void *arg3)
 {
     IOReturn res;
 
@@ -104,8 +104,8 @@ IOReturn IOCommandGate::runAction(Action inAction,
     return res;
 }
 
-IOReturn IOCommandGate::attemptCommand(void *arg0 = 0, void *arg1 = 0,
-                                       void *arg2 = 0, void *arg3 = 0)
+IOReturn IOCommandGate::attemptCommand(void *arg0, void *arg1,
+                                       void *arg2, void *arg3)
 {
     IOReturn res;
 
@@ -130,8 +130,8 @@ IOReturn IOCommandGate::attemptCommand(void *arg0 = 0, void *arg1 = 0,
 }
 
 IOReturn IOCommandGate::attemptAction(Action inAction,
-                                      void *arg0 = 0, void *arg1 = 0,
-                                      void *arg2 = 0, void *arg3 = 0)
+                                      void *arg0, void *arg1,
+                                      void *arg2, void *arg3)
 {
     IOReturn res;
 
@@ -156,8 +156,6 @@ IOReturn IOCommandGate::attemptAction(Action inAction,
 
 IOReturn IOCommandGate::commandSleep(void *event, UInt32 interruptible)
 {
-    IOReturn ret;
-
     if (!workLoop->inGate())
         return kIOReturnNotPermitted;
 

@@ -82,7 +82,7 @@ SYSCTL_STRUCT(_net_appletalk, OID_AUTO, debug, CTLFLAG_WR,
 	      &dbgBits, dbgBits, "AppleTalk Debug Flags");
 volatile int RouterMix = RT_MIX_DEFAULT; /* default for nbr of ppsec */
 SYSCTL_INT(_net_appletalk, OID_AUTO, routermix, CTLFLAG_WR, 
-	   &RouterMix, 0, "Appletalk RouterMix");
+	   (int *)&RouterMix, 0, "Appletalk RouterMix");
 at_ddp_stats_t at_ddp_stats;		/* DDP statistics */
 SYSCTL_STRUCT(_net_appletalk, OID_AUTO, ddpstats, CTLFLAG_RD,
 	      &at_ddp_stats, at_ddp_stats, "AppleTalk DDP Stats");
@@ -635,6 +635,14 @@ int _ATselect(fp, which, wql, proc)
 	return rc;
 }
 
+int _ATkqfilter(fp, kn, p)
+	struct file *fp;
+	struct knote *kn;
+	struct proc *p;
+{
+	return (EOPNOTSUPP);
+}
+
 void atalk_putnext(gref, m)
 	gref_t *gref;
 	gbuf_t *m;
@@ -925,9 +933,9 @@ int gref_close(gref_t *gref)
 
 struct mbuf *m_clattach(extbuf, extfree, extsize, extarg, wait)
 	caddr_t extbuf;	
-	int (*extfree)();
-	int extsize;
-	int extarg;
+	void (*extfree)(caddr_t , u_int, caddr_t);
+	u_int extsize;
+	caddr_t extarg;
 	int wait;
 {
         struct mbuf *m;
@@ -985,8 +993,9 @@ void atp_delete_free_clusters()
 */
 
 void m_lgbuf_free(buf, size, arg)
-     void *buf;
-     int size, arg; /* not needed, but they're in m_free() */
+     caddr_t buf;
+     u_int size;
+     caddr_t arg; /* not needed, but they're in m_free() */
 {
 	/* FREE(buf, M_MCLUST); - can't free here - called from m_free while under lock */
 	
@@ -1030,7 +1039,7 @@ struct mbuf *m_lgbuf_alloc(size, wait)
 		if (NULL == 
 		    (m = m_clattach(buf, m_lgbuf_free, size, 0, 
 				    (wait)? M_WAIT: M_DONTWAIT))) {
-			m_lgbuf_free(buf);
+			m_lgbuf_free(buf, 0, 0);
 			return(NULL);
 		}
 	} else {

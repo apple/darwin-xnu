@@ -1,5 +1,5 @@
-/*	$FreeBSD: src/sys/crypto/sha2/sha2.c,v 1.2.2.1 2001/07/03 11:01:36 ume Exp $	*/
-/*	$KAME: sha2.c,v 1.6 2001/03/12 11:31:04 itojun Exp $	*/
+/*	$FreeBSD: src/sys/crypto/sha2/sha2.c,v 1.2.2.2 2002/03/05 08:36:47 ume Exp $	*/
+/*	$KAME: sha2.c,v 1.8 2001/11/08 01:07:52 itojun Exp $	*/
 
 /*
  * sha2.c
@@ -565,7 +565,7 @@ void SHA256_Final(sha2_byte digest[], SHA256_CTX* context) {
 			/* Begin padding with a 1 bit: */
 			context->buffer[usedspace++] = 0x80;
 
-			if (usedspace < SHA256_SHORT_BLOCK_LENGTH) {
+			if (usedspace <= SHA256_SHORT_BLOCK_LENGTH) {
 				/* Set-up for the last transform: */
 				bzero(&context->buffer[usedspace], SHA256_SHORT_BLOCK_LENGTH - usedspace);
 			} else {
@@ -882,7 +882,7 @@ void SHA512_Last(SHA512_CTX* context) {
 		/* Begin padding with a 1 bit: */
 		context->buffer[usedspace++] = 0x80;
 
-		if (usedspace < SHA512_SHORT_BLOCK_LENGTH) {
+		if (usedspace <= SHA512_SHORT_BLOCK_LENGTH) {
 			/* Set-up for the last transform: */
 			bzero(&context->buffer[usedspace], SHA512_SHORT_BLOCK_LENGTH - usedspace);
 		} else {

@@ -120,6 +120,57 @@ kdp_getintegerstate(
    
     bzero((char *)state,sizeof (struct ppc_thread_state)) ;
 
+    state->srr0	= (unsigned int)saved_state->save_srr0;
+    state->srr1	= (unsigned int)saved_state->save_srr1;
+    state->r0	= (unsigned int)saved_state->save_r0;
+    state->r1	= (unsigned int)saved_state->save_r1;
+    state->r2	= (unsigned int)saved_state->save_r2;
+    state->r3	= (unsigned int)saved_state->save_r3;
+    state->r4	= (unsigned int)saved_state->save_r4;
+    state->r5	= (unsigned int)saved_state->save_r5;
+    state->r6	= (unsigned int)saved_state->save_r6;
+    state->r7	= (unsigned int)saved_state->save_r7;
+    state->r8	= (unsigned int)saved_state->save_r8;
+    state->r9	= (unsigned int)saved_state->save_r9;
+    state->r10	= (unsigned int)saved_state->save_r10;
+    state->r11	= (unsigned int)saved_state->save_r11;
+    state->r12	= (unsigned int)saved_state->save_r12;
+    state->r13	= (unsigned int)saved_state->save_r13;
+    state->r14	= (unsigned int)saved_state->save_r14;
+    state->r15	= (unsigned int)saved_state->save_r15;
+    state->r16	= (unsigned int)saved_state->save_r16;
+    state->r17	= (unsigned int)saved_state->save_r17;
+    state->r18	= (unsigned int)saved_state->save_r18;
+    state->r19	= (unsigned int)saved_state->save_r19;
+    state->r20	= (unsigned int)saved_state->save_r20;
+    state->r21	= (unsigned int)saved_state->save_r21;
+    state->r22	= (unsigned int)saved_state->save_r22;
+    state->r23	= (unsigned int)saved_state->save_r23;
+    state->r24	= (unsigned int)saved_state->save_r24;
+    state->r25	= (unsigned int)saved_state->save_r25;
+    state->r26	= (unsigned int)saved_state->save_r26;
+    state->r27	= (unsigned int)saved_state->save_r27;
+    state->r28	= (unsigned int)saved_state->save_r28;
+    state->r29	= (unsigned int)saved_state->save_r29;
+    state->r30	= (unsigned int)saved_state->save_r30;
+    state->r31	= (unsigned int)saved_state->save_r31;
+    state->cr	= (unsigned int)saved_state->save_cr;
+    state->xer	= (unsigned int)saved_state->save_xer;
+    state->lr	= (unsigned int)saved_state->save_lr;
+    state->ctr	= (unsigned int)saved_state->save_ctr;
+}
+
+static void
+kdp_getintegerstate64(
+    struct ppc_thread_state64	*state
+)
+{
+    struct savearea	*saved_state;
+   
+    saved_state = kdp.saved_state;
+   
+    bzero((char *)state,sizeof (struct ppc_thread_state64)) ;
+
     state->srr0	= saved_state->save_srr0;
     state->srr1	= saved_state->save_srr1;
     state->r0	= saved_state->save_r0;
@@ -175,13 +226,19 @@ kdp_machine_read_regs(
 		kdp_getintegerstate((struct ppc_thread_state *)data);
 		*size = PPC_THREAD_STATE_COUNT * sizeof(int);
 		return KDPERR_NO_ERROR;
-	
+
+    case PPC_THREAD_STATE64:
+		dprintf(("kdp_readregs THREAD_STATE\n"));
+		kdp_getintegerstate64((struct ppc_thread_state64 *)data);
+		*size = PPC_THREAD_STATE64_COUNT * sizeof(int);
+		return KDPERR_NO_ERROR;
+
     case PPC_FLOAT_STATE:
 		dprintf(("kdp_readregs THREAD_FPSTATE\n"));
 		bzero((char *)data ,sizeof(struct ppc_float_state));	
 		*size = PPC_FLOAT_STATE_COUNT * sizeof(int);
 		return KDPERR_NO_ERROR;
-	
+
     default:
 		dprintf(("kdp_readregs bad flavor %d\n"));
 		return KDPERR_BADFLAVOR;
@@ -191,6 +248,55 @@ kdp_machine_read_regs(
 static void
 kdp_setintegerstate(
     struct ppc_thread_state		*state
+)
+{
+    struct savearea	*saved_state;
+   
+    saved_state = kdp.saved_state;
+
+    saved_state->save_srr0	= state->srr0;
+    saved_state->save_srr1	= state->srr1;
+    saved_state->save_r0	= state->r0;
+    saved_state->save_r1	= state->r1;
+    saved_state->save_r2	= state->r2;
+    saved_state->save_r3	= state->r3;
+    saved_state->save_r4	= state->r4;
+    saved_state->save_r5	= state->r5;
+    saved_state->save_r6	= state->r6;
+    saved_state->save_r7	= state->r7;
+    saved_state->save_r8	= state->r8;
+    saved_state->save_r9	= state->r9;
+    saved_state->save_r10	= state->r10;
+    saved_state->save_r11	= state->r11;
+    saved_state->save_r12	= state->r12;
+    saved_state->save_r13	= state->r13;
+    saved_state->save_r14	= state->r14;
+    saved_state->save_r15	= state->r15;
+    saved_state->save_r16	= state->r16;
+    saved_state->save_r17	= state->r17;
+    saved_state->save_r18	= state->r18;
+    saved_state->save_r19	= state->r19;
+    saved_state->save_r20	= state->r20;
+    saved_state->save_r21	= state->r21;
+    saved_state->save_r22	= state->r22;
+    saved_state->save_r23	= state->r23;
+    saved_state->save_r24	= state->r24;
+    saved_state->save_r25	= state->r25;
+    saved_state->save_r26	= state->r26;
+    saved_state->save_r27	= state->r27;
+    saved_state->save_r28	= state->r28;
+    saved_state->save_r29	= state->r29;
+    saved_state->save_r30	= state->r30;
+    saved_state->save_r31	= state->r31;
+    saved_state->save_cr	= state->cr;
+    saved_state->save_xer	= state->xer;
+    saved_state->save_lr	= state->lr;
+    saved_state->save_ctr	= state->ctr;
+}
+
+static void
+kdp_setintegerstate64(
+    struct ppc_thread_state64		*state
 )
 {
     struct savearea	*saved_state;
@@ -255,11 +361,19 @@ kdp_machine_write_regs(
 		DumpTheSave((struct savearea *)data);		/* (TEST/DEBUG) */
 #endif
 		return KDPERR_NO_ERROR;
-	
+
+    case PPC_THREAD_STATE64:
+		dprintf(("kdp_writeregs THREAD_STATE64\n"));
+		kdp_setintegerstate64((struct ppc_thread_state64 *)data);
+
+#if KDP_TEST_HARNESS
+		DumpTheSave((struct savearea *)data);		/* (TEST/DEBUG) */
+#endif
+		return KDPERR_NO_ERROR;
     case PPC_FLOAT_STATE:
 		dprintf(("kdp_writeregs THREAD_FPSTATE\n"));
 		return KDPERR_NO_ERROR;
-	
+
     default:
 		dprintf(("kdp_writeregs bad flavor %d\n"));
 		return KDPERR_BADFLAVOR;
@@ -421,7 +535,7 @@ kdp_trap(
 )
 {
 	unsigned int *fp;
-	unsigned int register sp;
+	unsigned int sp;
 	struct savearea *state;
 
 	if (kdp_noisy) {
@@ -449,7 +563,7 @@ kdp_trap(
 	if (kdp_noisy)
 		printf("kdp_trap: kdp_raise_exception() ret\n");
 
-	if (*((int *)saved_state->save_srr0) == 0x7c800008)
+	if ((unsigned int)(saved_state->save_srr0) == 0x7c800008)
 		saved_state->save_srr0 += 4;			/* BKPT_SIZE */
 
 	if(saved_state->save_srr1 & (MASK(MSR_SE) | MASK(MSR_BE))) {	/* Are we just stepping or continuing */

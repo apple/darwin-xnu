@@ -68,8 +68,8 @@
 #include <ppc/proc_reg.h>
 #include <ppc/savearea.h>
 
-typedef	vm_offset_t	db_addr_t;	/* address - unsigned */
-typedef	int		db_expr_t;	/* expression - signed */
+typedef	addr64_t db_addr_t;	/* address - unsigned */
+typedef	uint64_t db_expr_t;	/* expression - signed???  try unsigned */
 
 typedef struct savearea db_regs_t;
 db_regs_t	ddb_regs;	/* register state */
@@ -104,7 +104,7 @@ int db_inst_store(unsigned long);
 	db_phys_eq(task1,addr1,task2,addr2)
 #define DB_VALID_KERN_ADDR(addr)				\
 	((addr) >= VM_MIN_KERNEL_ADDRESS && 			\
-	 (addr) < VM_MAX_KERNEL_ADDRESS)
+	 (addr) < vm_last_addr)
 #define DB_VALID_ADDRESS(addr,user)				\
 	((!(user) && DB_VALID_KERN_ADDR(addr)) ||		\
 	 ((user) && (addr) < VM_MAX_ADDRESS))
@@ -130,10 +130,6 @@ extern db_addr_t	db_disasm(
 				db_addr_t	loc,
 				boolean_t	altfmt,
 				task_t		task);
-extern vm_offset_t	db_kvtophys( 
-				space_t space,
-				vm_offset_t va);
-
 extern void		db_read_bytes(
 				vm_offset_t	addr,
 				int		size,
@@ -186,11 +182,6 @@ extern void		kdb_on(
 				int			cpu);
 extern void		cnpollc(
 				boolean_t		on);
-				
-extern void		db_phys_copy(
-				vm_offset_t, 
-				vm_offset_t, 
-				vm_size_t);
 
 extern boolean_t	db_phys_cmp(
 				vm_offset_t, 

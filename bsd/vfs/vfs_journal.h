@@ -37,6 +37,7 @@
 #ifdef __APPLE_API_UNSTABLE
 
 #include <sys/types.h>
+#include <sys/lock.h>
 
 typedef struct block_info {
     off_t       bnum;                // block # on the file system device
@@ -96,6 +97,8 @@ typedef struct journal_header {
  * In memory structure about the journal.
  */
 typedef struct journal {
+	struct lock__bsd__	jlock;
+
     struct vnode       *jdev;              // vnode of the device where the journal lives
     off_t               jdev_offset;       // byte offset to the start of the journal
 
@@ -122,12 +125,14 @@ typedef struct journal {
 	simple_lock_data_t  old_start_lock;    // guard access
 	volatile off_t      old_start[16];     // this is how we do lazy start update
 
-    semaphore_t         jsem;
+	int                 last_flush_err;    // last error from flushing the cache
 } journal;
 
 /* internal-only journal flags (top 16 bits) */
 #define JOURNAL_CLOSE_PENDING     0x00010000
 #define JOURNAL_INVALID           0x00020000
+#define JOURNAL_FLUSHCACHE_ERR    0x00040000   // means we already printed this err
+#define JOURNAL_NEED_SWAP         0x00080000   // swap any data read from disk
 
 /* journal_open/create options are always in the low-16 bits */
 #define JOURNAL_OPTION_FLAGS_MASK 0x0000ffff

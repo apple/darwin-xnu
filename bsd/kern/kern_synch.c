@@ -61,21 +61,16 @@ static void
 _sleep_continue(void)
 {
 	register struct proc *p;
-	register thread_t thread = current_thread();
-	thread_act_t th_act;
+	register thread_t self = current_act();
 	struct uthread * ut;
 	int sig, catch;
 	int error = 0;
 
-	th_act = current_act();
-	ut = get_bsdthread_info(th_act);
+	ut = get_bsdthread_info(self);
 	catch = ut->uu_pri & PCATCH;
 	p = current_proc();
 
-#if FIXME  /* [ */
-	thread->wait_mesg = NULL;
-#endif  /* FIXME ] */
-	switch (get_thread_waitresult(thread)) {
+	switch (get_thread_waitresult(self)) {
 		case THREAD_TIMED_OUT:
 			error = EWOULDBLOCK;
 			break;
@@ -90,7 +85,7 @@ _sleep_continue(void)
 			/* else fall through */
 		case THREAD_INTERRUPTED:
 			if (catch) {
-				if (thread_should_abort(current_thread())) {
+				if (thread_should_abort(self)) {
 					error = EINTR;
 				} else if (SHOULDissignal(p,ut)) {
 					if (sig = CURSIG(p)) {
@@ -99,7 +94,7 @@ _sleep_continue(void)
 						else
 							error = ERESTART;
 					}
-					if (thread_should_abort(current_thread())) {
+					if (thread_should_abort(self)) {
 						error = EINTR;
 					}
 				}
@@ -109,7 +104,7 @@ _sleep_continue(void)
 	}
 
 	if (error == EINTR || error == ERESTART)
-		act_set_astbsd(th_act);
+		act_set_astbsd(self);
 
 	if (ut->uu_timo)
 		thread_cancel_timer();
@@ -145,8 +140,7 @@ _sleep(
 	int			(*continuation)(int))
 {
 	register struct proc *p;
-	register thread_t thread = current_thread();
-	thread_act_t th_act;
+	register thread_t self = current_act();
 	struct uthread * ut;
 	int sig, catch = pri & PCATCH;
 	int sigttblock = pri & PTTYBLOCK;
@@ -156,8 +150,7 @@ _sleep(
 
 	s = splhigh();
 
-	th_act = current_act();
-	ut = get_bsdthread_info(th_act);
+	ut = get_bsdthread_info(self);
 	
 	p = current_proc();
 #if KTRACE
@@ -166,11 +159,11 @@ _sleep(
 #endif	
 	p->p_priority = pri & PRIMASK;
 		
-	if (chan)
-		wait_result = assert_wait(chan,
-								  (catch) ? THREAD_ABORTSAFE : THREAD_UNINT);
-
-	if (abstime)
+	if (chan != NULL)
+		assert_wait_prim(chan, NULL, abstime,
+							(catch) ? THREAD_ABORTSAFE : THREAD_UNINT);
+	else
+	if (abstime != 0)
 		thread_set_timer_deadline(abstime);
 
 	/*
@@ -185,7 +178,8 @@ _sleep(
 	if (catch) {
 		if (SHOULDissignal(p,ut)) {
 			if (sig = CURSIG(p)) {
-				clear_wait(thread, THREAD_INTERRUPTED);
+				if (clear_wait(self, THREAD_INTERRUPTED) == KERN_FAILURE)
+					goto block;
 				/* if SIGTTOU or SIGTTIN then block till SIGCONT */
 				if (sigttblock && ((sig == SIGTTOU) || (sig == SIGTTIN))) {
 					p->p_flag |= P_TTYSLEEP;
@@ -206,24 +200,24 @@ _sleep(
 				goto out;
 			}
 		}
-		if (thread_should_abort(current_thread())) {
-			clear_wait(thread, THREAD_INTERRUPTED);
+		if (thread_should_abort(self)) {
+			if (clear_wait(self, THREAD_INTERRUPTED) == KERN_FAILURE)
+				goto block;
 			error = EINTR;
 			goto out;
 		}
-		if (get_thread_waitresult(thread) != THREAD_WAITING) {
+		if (get_thread_waitresult(self) != THREAD_WAITING) {
 			/*already happened */
 			goto out;
 		}
 	}
 
-#if FIXME  /* [ */
-	thread->wait_mesg = wmsg;
-#endif  /* FIXME ] */
+block:
+
 	splx(s);
 	p->p_stats->p_ru.ru_nvcsw++;
 
-	if (continuation != THREAD_CONTINUE_NULL ) {
+	if ((thread_continue_t)continuation != THREAD_CONTINUE_NULL ) {
 	  ut->uu_continuation = continuation;
 	  ut->uu_pri = pri;
 	  ut->uu_timo = abstime? 1: 0;
@@ -233,9 +227,6 @@ _sleep(
 
 	wait_result = thread_block(THREAD_CONTINUE_NULL);
 
-#if FIXME  /* [ */
-	thread->wait_mesg = NULL;
-#endif  /* FIXME ] */
 	switch (wait_result) {
 		case THREAD_TIMED_OUT:
 			error = EWOULDBLOCK;
@@ -251,7 +242,7 @@ _sleep(
 			/* else fall through */
 		case THREAD_INTERRUPTED:
 			if (catch) {
-				if (thread_should_abort(current_thread())) {
+				if (thread_should_abort(self)) {
 					error = EINTR;
 				} else if (SHOULDissignal(p,ut)) {
 					if (sig = CURSIG(p)) {
@@ -260,7 +251,7 @@ _sleep(
 						else
 							error = ERESTART;
 					}
-					if (thread_should_abort(current_thread())) {
+					if (thread_should_abort(self)) {
 						error = EINTR;
 					}
 				}
@@ -270,7 +261,7 @@ _sleep(
 	}
 out:
 	if (error == EINTR || error == ERESTART)
-		act_set_astbsd(th_act);
+		act_set_astbsd(self);
 	if (abstime)
 		thread_cancel_timer();
 	(void) splx(s);

@@ -66,6 +66,8 @@
 #include <mach/kern_return.h>
 #include <kern/mach_param.h>
 #include <kern/ipc_host.h>
+#include <kern/host_notify.h>
+#include <kern/mk_timer.h>
 #include <kern/misc_protos.h>
 #include <vm/vm_map.h>
 #include <vm/vm_kern.h>
@@ -172,11 +174,12 @@ ipc_bootstrap(void)
 #endif
 	mig_init();
 	ipc_table_init();
-	ipc_notify_init();
 	ipc_hash_init();
 	ipc_kmsg_init();
 	semaphore_init();
 	lock_set_init();
+	mk_timer_init();
+	host_notify_init();
 }
 
 /* 

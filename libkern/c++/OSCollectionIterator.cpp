@@ -63,7 +63,7 @@ OSCollectionIterator::withCollection(const OSCollection *inColl)
     OSCollectionIterator *me = new OSCollectionIterator;
 
     if (me && !me->initWithCollection(inColl)) {
-        me->free();
+        me->release();
         return 0;
     }
 

@@ -92,6 +92,8 @@ kernel_trap(pid_for_task,-46,2)
 kernel_trap(macx_swapon,-48, 4)
 kernel_trap(macx_swapoff,-49, 2)
 kernel_trap(macx_triggers,-51, 4)
+kernel_trap(macx_backing_store_suspend,-52, 1)
+kernel_trap(macx_backing_store_recovery,-53, 1)
 
 kernel_trap(swtch_pri,-59,1)
 kernel_trap(swtch,-60,0)

@@ -79,7 +79,7 @@ void IOSyncer::free()
     OSObject::free();
 }
 
-IOReturn IOSyncer::wait(bool autoRelease = true)
+IOReturn IOSyncer::wait(bool autoRelease)
 {
     IOInterruptState is = IOSimpleLockLockDisableInterrupt(guardLock);
 
@@ -99,8 +99,7 @@ IOReturn IOSyncer::wait(bool autoRelease = true)
     return result;
 }
 
-void IOSyncer::signal(IOReturn res = kIOReturnSuccess,
-					bool autoRelease = true)
+void IOSyncer::signal(IOReturn res, bool autoRelease)
 {
     fResult = res;
     privateSignal();

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2002 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -126,7 +126,7 @@ struct vnodeopv_entry_desc ffs_vnodeop_entries[] = {
 	{ &vop_symlink_desc, (VOPFUNC)ufs_symlink },		/* symlink */
 	{ &vop_readdir_desc, (VOPFUNC)ufs_readdir },		/* readdir */
 	{ &vop_readlink_desc, (VOPFUNC)ufs_readlink },		/* readlink */
-	{ &vop_abortop_desc, (VOPFUNC)ufs_abortop },		/* abortop */
+	{ &vop_abortop_desc, (VOPFUNC)nop_abortop },		/* abortop */
 	{ &vop_inactive_desc, (VOPFUNC)ufs_inactive },		/* inactive */
 	{ &vop_reclaim_desc, (VOPFUNC)ffs_reclaim },		/* reclaim */
 	{ &vop_lock_desc, (VOPFUNC)ufs_lock },			/* lock */
@@ -150,6 +150,9 @@ struct vnodeopv_entry_desc ffs_vnodeop_entries[] = {
 	{ &vop_blktooff_desc, (VOPFUNC)ffs_blktooff },		/* blktooff */
 	{ &vop_offtoblk_desc, (VOPFUNC)ffs_offtoblk },		/* offtoblk */
 	{ &vop_cmap_desc, (VOPFUNC)ufs_cmap },			/* cmap */
+	{ &vop_getattrlist_desc, (VOPFUNC)ufs_getattrlist },	/* getattrlist */
+	{ &vop_setattrlist_desc, (VOPFUNC)ufs_setattrlist },	/* setattrlist */
+	{ &vop_kqfilt_add_desc, (VOPFUNC)ufs_kqfilt_add },  /* kqfilt_add */
 	{ (struct vnodeop_desc*)NULL, (int(*)())NULL }
 };
 struct vnodeopv_desc ffs_vnodeop_opv_desc =
@@ -266,6 +269,7 @@ struct vnodeopv_entry_desc ffs_fifoop_entries[] = {
 	{ &vop_blktooff_desc, (VOPFUNC)ffs_blktooff },		/* blktooff */
 	{ &vop_offtoblk_desc, (VOPFUNC)ffs_offtoblk },		/* offtoblk */
 	{ &vop_cmap_desc, (VOPFUNC)ufs_cmap },			/* cmap */
+	{ &vop_kqfilt_add_desc, (VOPFUNC)ufsfifo_kqfilt_add },  /* kqfilt_add */
 	{ (struct vnodeop_desc*)NULL, (int(*)())NULL }
 };
 struct vnodeopv_desc ffs_fifoop_opv_desc =

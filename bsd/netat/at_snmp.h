@@ -215,4 +215,4 @@ typedef struct snmpStats {
 
 #define SNMP_TYPE(var,type)	 ((var & SNMP_OBJ_TYPE_MASK) == type)	
 
-#endif _NETAT_AT_SNMP_H_
+#endif /* _NETAT_AT_SNMP_H_ */

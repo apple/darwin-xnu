@@ -204,7 +204,7 @@ bbc_settime(
 	rtclk.rtc_hr = dectohexdec(n/60);
 	n = (new_time->tv_sec - diff) / (3600 * 24);	/* days */
 	rtclk.rtc_dow = (n + 4) % 7;  /* 1/1/70 is Thursday */
-	for (j = 1970; n >= (i = yeartoday(j)); j++)
+	for (j = 70; n >= (i = yeartoday(j)); j++)
 		n -= i;
 	rtclk.rtc_yr = dectohexdec(j % 100);
 	if (yeartoday(j) == 366)
@@ -289,7 +289,7 @@ int
 yeartoday(
 	int	year)
 {
-  year += 1900;
+        year += 1900;
 	return((year % 4) ? 365 :
 	       ((year % 100) ? 366 : ((year % 400) ? 365: 366)));
 }

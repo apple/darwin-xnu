@@ -42,7 +42,7 @@
 #include <sys/buf.h>
 #include <sys/mbuf.h>
 #include <sys/file.h>
-#include <dev/disk.h>
+#include <sys/disk.h>
 #include <sys/ioctl.h>
 #include <sys/errno.h>
 #include <sys/malloc.h>
@@ -265,6 +265,8 @@ volfs_mount(mp, path, data, ndp, p)
     root_vp->v_data = priv_vn_data;
 
     priv_mnt_data->volfs_rootvp = root_vp;
+    
+    mp->mnt_flag &= ~MNT_RDONLY;
 	
     return (0);
 }
@@ -403,6 +405,14 @@ volfs_sync(mp, waitfor, cred, p)
 	struct proc *p;
 {
 //	DBG_VOP(("volfs_sync called\n"));
+
+    /* Release a few entries from the permissions cache to keep them from getting stale.
+     * Since sync is called at least every 30 seconds or so, releasing 1/20 of the cache
+     * every time through should free all entries in no less than 10 minutes, which should
+     * be adequate to prevent pid-wrapping from mis-associating PLC entries:
+     */
+    volfs_PLC_reclaim_entries(MAXPLCENTRIES / 20);
+    
 	return 0;
 }
 /*
@@ -462,6 +472,9 @@ volfs_init(vfsp)
 	struct vfsconf *vfsp;
 {
 	DBG_VOP(("volfs_init called\n"));
+	
+    volfs_PLChashinit();
+	
 	return (0);
 }
 

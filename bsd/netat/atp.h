@@ -434,7 +434,7 @@ void atp_drop_req(gref_t *, gbuf_t *);
 void atp_send_rsp(gref_t *, gbuf_t *, int);
 void atp_wput(gref_t *, gbuf_t *);
 void atp_rput(gref_t *, gbuf_t *);
-void atp_retry_req(gbuf_t *);
+void atp_retry_req(void *);
 void atp_stop(gbuf_t *, int);
 void atp_cancel_req(gref_t *, unsigned short);
 int atp_open(gref_t *, int);

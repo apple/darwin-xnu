@@ -26,7 +26,7 @@
 #include <pexpert/GearImage.h>
 
 
-#warning shared video_console.c
+// XXX #warning shared video_console.c
 struct vc_progress_element {
     unsigned int	version;
     unsigned int	flags;

@@ -92,8 +92,8 @@ extern short	ErrorZIPoverflow;
 static	int	netinfo_reply_pending;
 static	void	zip_netinfo_reply(at_x_zip_t *, at_ifaddr_t *);
 static	void	zip_getnetinfo(at_ifaddr_t *);
-static	void	zip_getnetinfo_funnel(at_ifaddr_t *);
-static	void	send_phony_reply(gbuf_t *);
+static	void	zip_getnetinfo_funnel(void *);
+static	void	send_phony_reply(void *);
 
 /*
  * zip_send_getnetinfo_reply: we received a GetNetInfo packet, we need to reply
@@ -992,9 +992,10 @@ int zip_control (ifID, control)
 }
 
 /* funnel version of zip_getnetinfo */
-static void zip_getnetinfo_funnel(ifID)
-     register at_ifaddr_t       *ifID;
+static void zip_getnetinfo_funnel(arg)
+     void       *arg;
 {
+	at_ifaddr_t       *ifID = (at_ifaddr_t *)arg;
         thread_funnel_set(network_flock, TRUE);
 	zip_getnetinfo(ifID);
         thread_funnel_set(network_flock, FALSE);
@@ -1261,9 +1262,10 @@ int zip_handle_getmyzone(ifID, m)
 }
 
 static	void
-send_phony_reply(rm)
-	gbuf_t	*rm;
+send_phony_reply(arg)
+	void	*arg;
 {
+	gbuf_t  *rm = (gbuf_t *)arg;
 	boolean_t 	funnel_state;
 
 	funnel_state = thread_funnel_set(network_flock, TRUE);

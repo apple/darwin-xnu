@@ -267,19 +267,30 @@ OSMetaClassDefineReservedUnused(AppleMacIODevice,  3);
 /* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
 
 bool AppleMacIODevice::compareName( OSString * name,
-					OSString ** matched = 0 ) const
+					OSString ** matched ) const
 {
-    return( ((AppleMacIO *)getProvider())->
-		compareNubName( this, name, matched ));
+  return (IODTCompareNubName(this, name, matched) ||
+	  IORegistryEntry::compareName(name, matched));
 }
 
 IOService * AppleMacIODevice::matchLocation( IOService * /* client */ )
 {
-      return( this );
+  return this;
 }
 
 IOReturn AppleMacIODevice::getResources( void )
 {
-    return( ((AppleMacIO *)getProvider())->getNubResources( this ));
+  IOService *macIO = this;
+  
+  if (getDeviceMemory() != 0) return kIOReturnSuccess;
+  
+  while (macIO && ((macIO = macIO->getProvider()) != 0))
+    if (strcmp("mac-io", macIO->getName()) == 0) break;
+  
+  if (macIO == 0) return kIOReturnError;
+  
+  IODTResolveAddressing(this, "reg", macIO->getDeviceMemoryWithIndex(0));
+  
+  return kIOReturnSuccess;
 }
 

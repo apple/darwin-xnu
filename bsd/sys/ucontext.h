@@ -37,6 +37,18 @@ struct ucontext {
 	mcontext_t	uc_mcontext;	/* machine specific context */
 };
 
+
 typedef struct ucontext ucontext_t;
+
+struct ucontext64 {
+	int		uc_onstack;
+	sigset_t	uc_sigmask;	/* signal mask used by this context */
+	stack_t 	uc_stack;	/* stack used by this context */
+	struct ucontext	*uc_link;	/* pointer to resuming context */
+	size_t		uc_mcsize;	/* size of the machine context passed in */
+	mcontext64_t	uc_mcontext64;	/* machine specific context */
+};
+
+typedef struct ucontext64 ucontext64_t;
 
 #endif /* _SYS_UCONTEXT_H_ */

@@ -102,8 +102,6 @@ extern struct ifqueue pkintrq;
 #include <net/if_vlan_var.h>
 #endif /* NVLAN > 0 */
 
-static	int ether_resolvemulti __P((struct ifnet *, struct sockaddr **, 
-				    struct sockaddr *));
 extern u_char	etherbroadcastaddr[];
 #define senderr(e) do { error = (e); goto bad;} while (0)
 #define IFP2AC(IFP) ((struct arpcom *)IFP)
@@ -132,7 +130,6 @@ ether_ifattach(ifp)
 	ifp->if_addrlen = 6;
 	ifp->if_hdrlen = 14;
 	ifp->if_mtu = ETHERMTU;
-	ifp->if_resolvemulti = ether_resolvemulti;
 	if (ifp->if_baudrate == 0)
 	    ifp->if_baudrate = 10000000;
 

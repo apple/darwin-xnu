@@ -76,18 +76,9 @@
 #include <mach/rpc.h>
 
 /*
- * Debugging printf control
- */
-#if	MACH_ASSERT
-unsigned int	watchacts =	  0 /* WA_ALL */
-				    ;	/* Do-it-yourself & patchable */
-#endif
-
-/*
  * Track the number of times we need to swapin a thread to deallocate it.
  */
 int act_free_swapin = 0;
-boolean_t first_act;
 
 /*
  * Forward declarations for functions local to this file.
@@ -102,16 +93,11 @@ kern_return_t	act_get_state_locked(thread_act_t, int,
 					mach_msg_type_number_t *);
 void		act_set_astbsd(thread_act_t);
 void		act_set_apc(thread_act_t);
-void		act_user_to_kernel(thread_act_t);
 void		act_ulock_release_all(thread_act_t thr_act);
 
 void		install_special_handler_locked(thread_act_t);
 
 static void		act_disable(thread_act_t);
-
-struct thread_activation	pageout_act;
-
-static zone_t	thr_act_zone;
 
 /*
  * Thread interfaces accessed via a thread_activation:
@@ -155,7 +141,7 @@ thread_terminate_internal(
 		act_lock(act);
 	}
 
-	clear_wait(thread, act->inited? THREAD_INTERRUPTED: THREAD_AWAKENED);
+	clear_wait(thread, act->started? THREAD_INTERRUPTED: THREAD_AWAKENED);
 	act_unlock_thread(act);
 
 	return (result);
@@ -173,8 +159,7 @@ thread_terminate(
 	if (act == THR_ACT_NULL)
 		return (KERN_INVALID_ARGUMENT);
 
-	if (	(act->task == kernel_task	||
-			 act->kernel_loaded			)	&&
+	if (	act->task == kernel_task	&&
 			act != current_act()			)
 		return (KERN_FAILURE);
 
@@ -186,10 +171,10 @@ thread_terminate(
 	 * code - and all threads finish their own termination in the
 	 * special handler APC.
 	 */
-	if (	act->task == kernel_task	||
-			 act->kernel_loaded			) {
+	if (act->task == kernel_task) {
+		ml_set_interrupts_enabled(FALSE);
 		assert(act == current_act());
-		ast_taken(AST_APC, FALSE);
+		ast_taken(AST_APC, TRUE);
 		panic("thread_terminate");
 	}
 
@@ -211,7 +196,7 @@ thread_hold(
 
 	if (act->suspend_count++ == 0) {
 		install_special_handler(act);
-		if (	act->inited					&&
+		if (	act->started				&&
 				thread != THREAD_NULL		&&
 				thread->top_act == act		)
 			thread_wakeup_one(&act->suspend_count);
@@ -234,9 +219,9 @@ thread_release(
 			--act->suspend_count == 0	&&
 			thread != THREAD_NULL		&&
 			thread->top_act == act		) {
-		if (!act->inited) {
+		if (!act->started) {
 			clear_wait(thread, THREAD_AWAKENED);
-			act->inited = TRUE;
+			act->started = TRUE;
 		}
 		else
 			thread_wakeup_one(&act->suspend_count);
@@ -249,7 +234,7 @@ thread_suspend(
 {
 	thread_t	thread;
 
-	if (act == THR_ACT_NULL)
+	if (act == THR_ACT_NULL || act->task == kernel_task)
 		return (KERN_INVALID_ARGUMENT);
 
 	thread = act_lock_thread(act);
@@ -265,7 +250,7 @@ thread_suspend(
 		if (	thread != current_thread()		&&
 				thread != THREAD_NULL			&&
 				thread->top_act == act			) {
-			assert(act->inited);
+			assert(act->started);
 			thread_wakeup_one(&act->suspend_count);
 			act_unlock_thread(act);
 
@@ -287,7 +272,7 @@ thread_resume(
 	kern_return_t	result = KERN_SUCCESS;
 	thread_t		thread;
 
-	if (act == THR_ACT_NULL)
+	if (act == THR_ACT_NULL || act->task == kernel_task)
 		return (KERN_INVALID_ARGUMENT);
 
 	thread = act_lock_thread(act);
@@ -298,9 +283,9 @@ thread_resume(
 					--act->suspend_count == 0		&&
 					thread != THREAD_NULL			&&
 					thread->top_act == act			) {
-				if (!act->inited) {
+				if (!act->started) {
 					clear_wait(thread, THREAD_AWAKENED);
-					act->inited = TRUE;
+					act->started = TRUE;
 				}
 				else
 					thread_wakeup_one(&act->suspend_count);
@@ -315,21 +300,6 @@ thread_resume(
 	act_unlock_thread(act);
 
 	return (result);
-}
-
-/* 
- * This routine walks toward the head of an RPC chain starting at
- * a specified thread activation. An alert bit is set and a special 
- * handler is installed for each thread it encounters.
- *
- * The target thread act and thread shuttle are already locked.
- */
-kern_return_t
-post_alert( 
-	register thread_act_t	act,
-	unsigned				alert_bits)
-{
-	panic("post_alert");
 }
 
 /*
@@ -509,12 +479,6 @@ thread_get_special_port(
 	ipc_port_t	port;
 	thread_t	thread;
 
-#if	MACH_ASSERT
-	if (watchacts & WA_PORT)
-	    printf("thread_get_special_port(thr_act=%x, which=%x port@%x=%x\n",
-		thr_act, which, portp, (portp ? *portp : 0));
-#endif	/* MACH_ASSERT */
-
 	if (!thr_act)
 		return KERN_INVALID_ARGUMENT;
  	thread = act_lock_thread(thr_act);
@@ -564,12 +528,6 @@ thread_set_special_port(
 	ipc_port_t	*whichp;
 	ipc_port_t	old;
 	thread_t	thread;
-
-#if	MACH_ASSERT
-	if (watchacts & WA_PORT)
-		printf("thread_set_special_port(thr_act=%x,which=%x,port=%x\n",
-			thr_act, which, port);
-#endif	/* MACH_ASSERT */
 
 	if (thr_act == 0)
 		return KERN_INVALID_ARGUMENT;
@@ -651,7 +609,7 @@ thread_get_state(
 	}
 
 	if (result == KERN_SUCCESS)
-		result = act_machine_get_state(act, flavor, state, state_count);
+		result = machine_thread_get_state(act, flavor, state, state_count);
 
 	if (	thread != THREAD_NULL		&&
 			thread->top_act == act		)
@@ -713,7 +671,7 @@ thread_set_state(
 	}
 
 	if (result == KERN_SUCCESS)
-		result = act_machine_set_state(act, flavor, state, state_count);
+		result = machine_thread_set_state(act, flavor, state, state_count);
 
 	if (	thread != THREAD_NULL		&&
 			thread->top_act == act		)
@@ -773,7 +731,7 @@ thread_dup(
 	}
 
 	if (result == KERN_SUCCESS)
-		result = act_thread_dup(self, target);
+		result = machine_thread_dup(self, target);
 
 	if (	thread != THREAD_NULL		&&
 			thread->top_act == target	)
@@ -812,7 +770,7 @@ thread_setstatus(
 		result = KERN_FAILURE;
 
 	if (result == KERN_SUCCESS)
-		result = act_machine_set_state(act, flavor, tstate, count);
+		result = machine_thread_set_state(act, flavor, tstate, count);
 
 	act_unlock_thread(act);
 
@@ -844,7 +802,7 @@ thread_getstatus(
 		result = KERN_FAILURE;
 
 	if (result == KERN_SUCCESS)
-		result = act_machine_get_state(act, flavor, tstate, count);
+		result = machine_thread_get_state(act, flavor, tstate, count);
 
 	act_unlock_thread(act);
 
@@ -855,225 +813,81 @@ thread_getstatus(
  * Kernel-internal thread_activation interfaces used outside this file:
  */
 
-/*
- * act_init()	- Initialize activation handling code
- */
 void
-act_init()
+act_reference(
+	thread_act_t	act)
 {
-	thr_act_zone = zinit(
-			sizeof(struct thread_activation),
-			ACT_MAX * sizeof(struct thread_activation), /* XXX */
-			ACT_CHUNK * sizeof(struct thread_activation),
-			"activations");
-	first_act = TRUE;
-	act_machine_init();
+	if (act == NULL)
+		return;
+
+	act_lock(act);
+	act_reference_locked(act);
+	act_unlock(act);
 }
 
-
-/*
- * act_create	- Create a new activation in a specific task.
- */
-kern_return_t
-act_create(task_t task,
-           thread_act_t *new_act)
-{
-	thread_act_t thr_act;
-	int rc;
-	vm_map_t map;
-
-	if (first_act) {
-		thr_act = &pageout_act;
-		first_act = FALSE;
-	} else
-		thr_act = (thread_act_t)zalloc(thr_act_zone);
-	if (thr_act == 0)
-		return(KERN_RESOURCE_SHORTAGE);
-
-#if	MACH_ASSERT
-	if (watchacts & WA_ACT_LNK)
-		printf("act_create(task=%x,thr_act@%x=%x)\n",
-			task, new_act, thr_act);
-#endif	/* MACH_ASSERT */
-
-	/* Start by zeroing everything; then init non-zero items only */
-	bzero((char *)thr_act, sizeof(*thr_act));
-
-	if (thr_act == &pageout_act)
-		thr_act->thread = &pageout_thread;
-
-#ifdef MACH_BSD
-	{
-		/*
-		 * Take care of the uthread allocation
-		 * do it early in order to make KERN_RESOURCE_SHORTAGE
-		 * handling trivial
-		 * uthread_alloc() will bzero the storage allocated.
-		 */
-		extern void *uthread_alloc(task_t, thread_act_t);
-
-		thr_act->uthread = uthread_alloc(task, thr_act);
-		if(thr_act->uthread == 0) {
-			/* Put the thr_act back on the thr_act zone */
-			zfree(thr_act_zone, (vm_offset_t)thr_act);
-			return(KERN_RESOURCE_SHORTAGE);
-		}
-	}
-#endif	/* MACH_BSD */
-
-	/*
-	 * Start with one reference for the caller and one for the
-	 * act being alive.
-	 */
-	act_lock_init(thr_act);
-	thr_act->ref_count = 2;
-
-	/* Latch onto the task.  */
-	thr_act->task = task;
-	task_reference(task);
-
-	/* special_handler will always be last on the returnhandlers list.  */
-	thr_act->special_handler.next = 0;
-	thr_act->special_handler.handler = special_handler;
-
-#if	MACH_PROF
-	thr_act->act_profiled = FALSE;
-	thr_act->act_profiled_own = FALSE;
-	thr_act->profil_buffer = NULLPROFDATA;
-#endif
-
-	/* Initialize the held_ulocks queue as empty */
-	queue_init(&thr_act->held_ulocks);
-
-	/* Inherit the profiling status of the parent task */
-	act_prof_init(thr_act, task);
-
-	ipc_thr_act_init(task, thr_act);
-	act_machine_create(task, thr_act);
-
-	/*
-	 * If thr_act created in kernel-loaded task, alter its saved
-	 * state to so indicate
-	 */
-	if (task->kernel_loaded) {
-		act_user_to_kernel(thr_act);
-	}
-
-	/* Cache the task's map and take a reference to it */
-	map = task->map;
-	thr_act->map = map;
-
-	/* Inline vm_map_reference cause we don't want to increment res_count */
-	mutex_lock(&map->s_lock);
-	map->ref_count++;
-	mutex_unlock(&map->s_lock);
-
-	*new_act = thr_act;
-	return KERN_SUCCESS;
-}
-
-/*
- * act_free	- called when an thr_act's ref_count drops to zero.
- *
- * This can only happen after the activation has been reaped, and
- * all other references to it have gone away.  We can now release
- * the last critical resources, unlink the activation from the
- * task, and release the reference on the thread shuttle itself.
- *
- * Called with activation locked.
- */
-#if	MACH_ASSERT
-int	dangerous_bzero = 1;	/* paranoia & safety */
-#endif
-
 void
-act_free(thread_act_t thr_act)
+act_deallocate(
+	thread_act_t	act)
 {
 	task_t		task;
-	thread_t	thr;
-	vm_map_t	map;
-	unsigned int	ref;
-	void * task_proc;
+	thread_t	thread;
+	void		*task_proc;
 
-#if	MACH_ASSERT
-	if (watchacts & WA_EXIT)
-		printf("act_free(%x(%d)) thr=%x tsk=%x(%d) %sactive\n",
-			thr_act, thr_act->ref_count, thr_act->thread,
-			thr_act->task,
-			thr_act->task ? thr_act->task->ref_count : 0,
-			thr_act->active ? " " : " !");
-#endif	/* MACH_ASSERT */
+	if (act == NULL)
+		return;
 
-	assert(!thr_act->active);
+	act_lock(act);
 
-	task = thr_act->task;
+	if (--act->act_ref_count > 0) {
+		act_unlock(act);
+		return;
+	}
+
+	assert(!act->active);
+
+	thread = act->thread;
+	assert(thread != NULL);
+
+	thread->top_act = NULL;
+
+	act_unlock(act);
+
+	task = act->task;
 	task_lock(task);
 
 	task_proc = task->bsd_info;
-	if (thr = thr_act->thread) {
+
+	{
 		time_value_t	user_time, system_time;
 
-		thread_read_times(thr, &user_time, &system_time);
+		thread_read_times(thread, &user_time, &system_time);
 		time_value_add(&task->total_user_time, &user_time);
 		time_value_add(&task->total_system_time, &system_time);
 	
-		/* Unlink the thr_act from the task's thr_act list,
-		 * so it doesn't appear in calls to task_threads and such.
-		 * The thr_act still keeps its ref on the task, however.
-		 */
-		queue_remove(&task->thr_acts, thr_act, thread_act_t, thr_acts);
-		thr_act->thr_acts.next = NULL;
-		task->thr_act_count--;
-		task->res_act_count--;
-		task_unlock(task);
-		task_deallocate(task);
-		thread_deallocate(thr);
-		act_machine_destroy(thr_act);
-	} else {
-		/*
-		 * Must have never really gotten started
-		 * no unlinking from the task and no need
-		 * to free the shuttle.
-		 */
-		task_unlock(task);
-		task_deallocate(task);
+		queue_remove(&task->threads, act, thread_act_t, task_threads);
+		act->task_threads.next = NULL;
+		task->thread_count--;
+		task->res_thread_count--;
 	}
 
-	act_prof_deallocate(thr_act);
-	ipc_thr_act_terminate(thr_act);
+	task_unlock(task);
 
-	/*
-	 * Drop the cached map reference.
-	 * Inline version of vm_map_deallocate() because we
-	 * don't want to decrement the map's residence count here.
-	 */
-	map = thr_act->map;
-	mutex_lock(&map->s_lock);
-	ref = --map->ref_count;
-	mutex_unlock(&map->s_lock);
-	if (ref == 0)
-		vm_map_destroy(map);
+	act_prof_deallocate(act);
+	ipc_thr_act_terminate(act);
 
 #ifdef MACH_BSD 
 	{
-		/*
-		 * Free uthread BEFORE the bzero.
-		 * Not doing so will result in a leak.
-		 */
 		extern void uthread_free(task_t, void *, void *);
+		void *ut = act->uthread;
 
-		void *ut = thr_act->uthread;
-		thr_act->uthread = 0;
+		act->uthread = NULL;
 		uthread_free(task, ut, task_proc);
 	}
 #endif  /* MACH_BSD */   
 
-#if	MACH_ASSERT
-	if (dangerous_bzero)	/* dangerous if we're still using it! */
-		bzero((char *)thr_act, sizeof(*thr_act));
-#endif	/* MACH_ASSERT */
-	/* Put the thr_act back on the thr_act zone */
-	zfree(thr_act_zone, (vm_offset_t)thr_act);
+	task_deallocate(task);
+
+	thread_deallocate(thread);
 }
 
 
@@ -1088,37 +902,22 @@ act_free(thread_act_t thr_act)
  */
 void 
 act_attach(
-	thread_act_t	thr_act,
-	thread_t	thread,
-	unsigned	init_alert_mask)
+	thread_act_t		act,
+	thread_t			thread)
 {
-        thread_act_t    lower;
-
-#if	MACH_ASSERT
-	assert(thread == current_thread() || thread->top_act == THR_ACT_NULL);
-	if (watchacts & WA_ACT_LNK)
-		printf("act_attach(thr_act %x(%d) thread %x(%d) mask %d)\n",
-		       thr_act, thr_act->ref_count, thread, thread->ref_count,
-		       init_alert_mask);
-#endif	/* MACH_ASSERT */
+	thread_act_t    lower;
 
 	/* 
-	 *	Chain the thr_act onto the thread's thr_act stack.  
-	 *	Set mask and auto-propagate alerts from below.
+	 *	Chain the act onto the thread's act stack.  
 	 */
-	thr_act->ref_count++;
-	thr_act->thread = thread;
-	thr_act->higher = THR_ACT_NULL;  /*safety*/
-	thr_act->alerts = 0;
-	thr_act->alert_mask = init_alert_mask;
-	lower = thr_act->lower = thread->top_act;
+	act->act_ref_count++;
+	act->thread = thread;
+	act->higher = THR_ACT_NULL;
+	lower = act->lower = thread->top_act;
+	if (lower != THR_ACT_NULL)
+		lower->higher = act;
 
-        if (lower != THR_ACT_NULL) {
-                lower->higher = thr_act;
-                thr_act->alerts = (lower->alerts & init_alert_mask);
-        }
-
-	thread->top_act = thr_act;
+	thread->top_act = act;
 }
 
 /*
@@ -1134,20 +933,11 @@ act_detach(
 {
 	thread_t	cur_thread = cur_act->thread;
 
-#if	MACH_ASSERT
-	if (watchacts & (WA_EXIT|WA_ACT_LNK))
-		printf("act_detach: thr_act %x(%d), thrd %x(%d) task=%x(%d)\n",
-		       cur_act, cur_act->ref_count,
-		       cur_thread, cur_thread->ref_count,
-		       cur_act->task,
-		       cur_act->task ? cur_act->task->ref_count : 0);
-#endif	/* MACH_ASSERT */
-
 	/* Unlink the thr_act from the thread's thr_act stack */
 	cur_thread->top_act = cur_act->lower;
 	cur_act->thread = 0;
-	cur_act->ref_count--;
-	assert(cur_act->ref_count > 0);
+	cur_act->act_ref_count--;
+	assert(cur_act->act_ref_count > 0);
 
 #if	MACH_ASSERT
 	cur_act->lower = cur_act->higher = THR_ACT_NULL; 
@@ -1241,15 +1031,11 @@ thread_act_t
 switch_act( 
 	thread_act_t act)
 {
-	thread_t	thread;
 	thread_act_t	old, new;
-	unsigned	cpu;
-	spl_t		spl;
-
+	thread_t		thread;
 
 	disable_preemption();
 
-	cpu = cpu_number();
 	thread  = current_thread();
 
 	/*
@@ -1266,17 +1052,16 @@ switch_act(
 	}
 
 	assert(new != THR_ACT_NULL);
-	assert(cpu_to_processor(cpu)->cpu_data->active_thread == thread);
-	active_kloaded[cpu] = (new->kernel_loaded) ? new : 0;
+	assert(current_processor()->active_thread == thread);
 
 	/* This is where all the work happens */
-	machine_switch_act(thread, old, new, cpu);
+	machine_switch_act(thread, old, new);
 
 	/*
 	 *	Push or pop an activation on the chain.
 	 */
 	if (act) {
-		act_attach(new, thread, 0);
+		act_attach(new, thread);
 	}
 	else {
 		act_detach(old);
@@ -1301,11 +1086,6 @@ install_special_handler(
 {
 	spl_t		spl;
 	thread_t	thread = thr_act->thread;
-
-#if	MACH_ASSERT
-	if (watchacts & WA_ACT_HDLR)
-	    printf("act_%x: install_special_hdlr(%x)\n",current_act(),thr_act);
-#endif	/* MACH_ASSERT */
 
 	spl = splsched();
 	thread_lock(thread);
@@ -1351,9 +1131,9 @@ install_special_handler_locked(
 	else {
 		processor_t		processor = thread->last_processor;
 
-		if (	processor != PROCESSOR_NULL						&&
-				processor->state == PROCESSOR_RUNNING			&&
-				processor->cpu_data->active_thread == thread	)
+		if (	processor != PROCESSOR_NULL					&&
+				processor->state == PROCESSOR_RUNNING		&&
+				processor->active_thread == thread			)
 			cause_ast_check(processor);
 	}
 }
@@ -1395,11 +1175,6 @@ act_execute_returnhandlers(void)
 {
 	thread_act_t	act = current_act();
 
-#if	MACH_ASSERT
-	if (watchacts & WA_ACT_HDLR)
-		printf("execute_rtn_hdlrs: act=%x\n", act);
-#endif	/* MACH_ASSERT */
-
 	thread_ast_clear(act, AST_APC);
 	spllo();
 
@@ -1420,12 +1195,6 @@ act_execute_returnhandlers(void)
 		thread_unlock(thread);
 		spllo();
 		act_unlock_thread(act);
-
-#if	MACH_ASSERT
-		if (watchacts & WA_ACT_HDLR)
-		    printf( (rh == &act->special_handler) ?
-			"\tspecial_handler\n" : "\thandler=%x\n", rh->handler);
-#endif	/* MACH_ASSERT */
 
 		/* Execute it */
 		(*rh->handler)(rh, act);
@@ -1488,13 +1257,10 @@ special_handler(
 	thread_unlock(thread);
 	splx(s);
 
-	/*
-	 * If someone has killed this invocation,
-	 * invoke the return path with a terminated exception.
-	 */
 	if (!self->active) {
 		act_unlock_thread(self);
-		act_machine_return(KERN_TERMINATED);
+		thread_terminate_self();
+		/*NOTREACHED*/
 	}
 
 	/*
@@ -1505,7 +1271,7 @@ special_handler(
 			assert_wait(&self->suspend_count, THREAD_ABORTSAFE);
 			act_unlock_thread(self);
 			thread_block(special_handler_continue);
-			/* NOTREACHED */
+			/*NOTREACHED*/
 		}
 
 		act_unlock_thread(self);
@@ -1518,17 +1284,6 @@ special_handler(
 }
 
 /*
- * Update activation that belongs to a task created via kernel_task_create().
- */
-void
-act_user_to_kernel(
-	thread_act_t	thr_act)
-{
-	pcb_user_to_kernel(thr_act);
-	thr_act->kernel_loading = TRUE;
-}
-
-/*
  * Already locked: activation (shuttle frozen within)
  *
  * Mark an activation inactive, and prepare it to terminate
@@ -1538,17 +1293,6 @@ static void
 act_disable(
 	thread_act_t	thr_act)
 {
-
-#if	MACH_ASSERT
-	if (watchacts & WA_EXIT) {
-		printf("act_%x: act_disable_tl(thr_act=%x(%d))%sactive",
-			       current_act(), thr_act, thr_act->ref_count,
-			   		(thr_act->active ? " " : " !"));
-		printf("\n");
-		(void) dump_act(thr_act);
-	}
-#endif	/* MACH_ASSERT */
-
 	thr_act->active = 0;
 
 	/* Drop the thr_act reference taken for being active.
@@ -1556,46 +1300,7 @@ act_disable(
 	 * the one we were passed.)
 	 * Inline the deallocate because thr_act is locked.
 	 */
-	act_locked_act_deallocate(thr_act);
-}
-
-/*
- * act_alert	- Register an alert from this activation.
- *
- * Each set bit is propagated upward from (but not including) this activation,
- * until the top of the chain is reached or the bit is masked.
- */
-kern_return_t
-act_alert(thread_act_t thr_act, unsigned alerts)
-{
-	thread_t thread = act_lock_thread(thr_act);
-
-#if	MACH_ASSERT
-	if (watchacts & WA_ACT_LNK)
-		printf("act_alert %x: %x\n", thr_act, alerts);
-#endif	/* MACH_ASSERT */
-
-	if (thread) {
-		thread_act_t act_up = thr_act;
-		while ((alerts) && (act_up != thread->top_act)) {
-			act_up = act_up->higher;
-			alerts &= act_up->alert_mask;
-			act_up->alerts |= alerts;
-		}
-		/*
-		 * XXXX If we reach the top, and it is blocked in glue
-		 * code, do something to kick it.  XXXX
-		 */
-	}
-	act_unlock_thread(thr_act);
-
-	return KERN_SUCCESS;
-}
-
-kern_return_t act_alert_mask(thread_act_t thr_act, unsigned alert_mask)
-{
-	panic("act_alert_mask NOT YET IMPLEMENTED\n");
-	return KERN_SUCCESS;
+	act_deallocate_locked(thr_act);
 }
 
 typedef struct GetSetState {
@@ -1646,24 +1351,13 @@ get_set_state(
 
 	act_set_apc(act);
 
-#if	MACH_ASSERT
-	if (watchacts & WA_ACT_HDLR) {
-	    printf("act_%x: get_set_state(act=%x flv=%x state=%x ptr@%x=%x)",
-		    current_act(), act, flavor, state,
-		    pcount, (pcount ? *pcount : 0));
-	    printf((handler == get_state_handler ? "get_state_hdlr\n" :
-		    (handler == set_state_handler ? "set_state_hdlr\n" :
-			"hndler=%x\n")), handler); 
-	}
-#endif	/* MACH_ASSERT */
-
 	assert(act->thread);
 	assert(act != current_act());
 
 	for (;;) {
 		wait_result_t		result;
 
-		if (	act->inited						&&
+		if (	act->started					&&
 				act->thread->top_act == act		)
 				thread_wakeup_one(&act->suspend_count);
 
@@ -1692,12 +1386,6 @@ get_set_state(
 		act_lock_thread(act);
 	}
 
-#if	MACH_ASSERT
-	if (watchacts & WA_ACT_HDLR)
-	    printf("act_%x: get_set_state returns %x\n",
-			    current_act(), gss.result);
-#endif	/* MACH_ASSERT */
-
 	return (gss.result);
 }
 
@@ -1706,13 +1394,7 @@ set_state_handler(ReturnHandler *rh, thread_act_t thr_act)
 {
 	GetSetState *gss = (GetSetState*)rh;
 
-#if	MACH_ASSERT
-	if (watchacts & WA_ACT_HDLR)
-		printf("act_%x: set_state_handler(rh=%x,thr_act=%x)\n",
-			current_act(), rh, thr_act);
-#endif	/* MACH_ASSERT */
-
-	gss->result = act_machine_set_state(thr_act, gss->flavor,
+	gss->result = machine_thread_set_state(thr_act, gss->flavor,
 						gss->state, *gss->pcount);
 	thread_wakeup((event_t)gss);
 }
@@ -1722,13 +1404,7 @@ get_state_handler(ReturnHandler *rh, thread_act_t thr_act)
 {
 	GetSetState *gss = (GetSetState*)rh;
 
-#if	MACH_ASSERT
-	if (watchacts & WA_ACT_HDLR)
-		printf("act_%x: get_state_handler(rh=%x,thr_act=%x)\n",
-			current_act(), rh, thr_act);
-#endif	/* MACH_ASSERT */
-
-	gss->result = act_machine_get_state(thr_act, gss->flavor,
+	gss->result = machine_thread_get_state(thr_act, gss->flavor,
 			gss->state, 
 			(mach_msg_type_number_t *) gss->pcount);
 	thread_wakeup((event_t)gss);
@@ -1738,13 +1414,6 @@ kern_return_t
 act_get_state_locked(thread_act_t thr_act, int flavor, thread_state_t state,
 					mach_msg_type_number_t *pcount)
 {
-#if	MACH_ASSERT
-    if (watchacts & WA_ACT_HDLR)
-	printf("act_%x: act_get_state_L(thr_act=%x,flav=%x,st=%x,pcnt@%x=%x)\n",
-		current_act(), thr_act, flavor, state, pcount,
-		(pcount? *pcount : 0));
-#endif	/* MACH_ASSERT */
-
     return(get_set_state(thr_act, flavor, state, (int*)pcount, get_state_handler));
 }
 
@@ -1752,12 +1421,6 @@ kern_return_t
 act_set_state_locked(thread_act_t thr_act, int flavor, thread_state_t state,
 					mach_msg_type_number_t count)
 {
-#if	MACH_ASSERT
-    if (watchacts & WA_ACT_HDLR)
-	printf("act_%x: act_set_state_L(thr_act=%x,flav=%x,st=%x,pcnt@%x=%x)\n",
-		current_act(), thr_act, flavor, state, count, count);
-#endif	/* MACH_ASSERT */
-
     return(get_set_state(thr_act, flavor, state, (int*)&count, set_state_handler));
 }
 
@@ -1801,9 +1464,9 @@ act_set_astbsd(
 		thread_lock(thread);
 		thread_ast_set(act, AST_BSD);
 		processor = thread->last_processor;
-		if (	processor != PROCESSOR_NULL						&&
-				processor->state == PROCESSOR_RUNNING			&&
-				processor->cpu_data->active_thread == thread	)
+		if (	processor != PROCESSOR_NULL					&&
+				processor->state == PROCESSOR_RUNNING		&&
+				processor->active_thread == thread			)
 			cause_ast_check(processor);
 		thread_unlock(thread);
 	}
@@ -1828,9 +1491,9 @@ act_set_apc(
 		thread_lock(thread);
 		thread_ast_set(act, AST_APC);
 		processor = thread->last_processor;
-		if (	processor != PROCESSOR_NULL						&&
-				processor->state == PROCESSOR_RUNNING			&&
-				processor->cpu_data->active_thread == thread	)
+		if (	processor != PROCESSOR_NULL					&&
+				processor->state == PROCESSOR_RUNNING		&&
+				processor->active_thread == thread			)
 			cause_ast_check(processor);
 		thread_unlock(thread);
 	}
@@ -1870,20 +1533,4 @@ mach_thread_self(void)
 
 	act_reference(self);
 	return self;
-}
-
-#undef act_reference
-void
-act_reference(
-	thread_act_t thr_act)
-{
-	act_reference_fast(thr_act);
-}
-
-#undef act_deallocate
-void
-act_deallocate(
-	thread_act_t thr_act) 
-{
-	act_deallocate_fast(thr_act);
 }

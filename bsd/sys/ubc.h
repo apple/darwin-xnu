@@ -112,7 +112,7 @@ int	ubc_release_named __P((struct vnode *));
 int	ubc_invalidate __P((struct vnode *, off_t, size_t));
 int	ubc_isinuse __P((struct vnode *, int));
 
-int	ubc_page_op __P((struct vnode *, off_t, int, vm_offset_t *, int *));
+int	ubc_page_op __P((struct vnode *, off_t, int, ppnum_t *, int *));
 
 /* cluster IO routines */
 int	cluster_read __P((struct vnode *, struct uio *, off_t, int, int));
@@ -120,11 +120,14 @@ int	advisory_read __P((struct vnode *, off_t, off_t, int, int));
 int	cluster_write __P((struct vnode *, struct uio*, off_t, off_t,
 		off_t, off_t,  int, int));
 int	cluster_push __P((struct vnode *));
+int	cluster_release __P((struct vnode *));
 int	cluster_pageout __P((struct vnode *, upl_t, vm_offset_t, off_t, int,
 		off_t, int, int));
 int	cluster_pagein __P((struct vnode *, upl_t, vm_offset_t, off_t, int,
 		off_t, int, int));
 int	cluster_bp __P((struct buf *));
+int	cluster_copy_upl_data __P((struct uio *, upl_t, int, int));
+int	cluster_copy_ubc_data __P((struct vnode *, struct uio *, int *, int));
 
 /* UPL routines */
 int	ubc_create_upl __P((struct vnode *, off_t, long, upl_t *,
@@ -164,6 +167,7 @@ __END_DECLS
 /* Flags for ubc_getobject() */
 #define UBC_FLAGS_NONE		0x0000
 #define UBC_HOLDOBJECT		0x0001
+#define UBC_FOR_PAGEOUT         0x0002
 
 #endif /* __APPLE_API_EVOLVING */
 

@@ -120,6 +120,8 @@ typedef struct pmap_statistics	*pmap_statistics_t;
 #define VM_MEMORY_MALLOC_LARGE 3
 #define VM_MEMORY_MALLOC_HUGE 4
 #define VM_MEMORY_SBRK 5// uninteresting -- no one should call
+#define VM_MEMORY_REALLOC 6
+#define VM_MEMORY_MALLOC_TINY 7
 
 #define VM_MEMORY_ANALYSIS_TOOL 10
 

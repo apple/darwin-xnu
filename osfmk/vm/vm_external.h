@@ -82,7 +82,7 @@ typedef int	vm_external_state_t;
 /*
  * Useful macros
  */
-#define stob(s)	((atop((s)) + 07) >> 3)
+#define stob(s)	((atop_32((s)) + 07) >> 3)
 
 /*
  *	Routines exported by this module.

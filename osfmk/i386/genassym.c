@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2003 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -97,6 +97,7 @@ cpu_data_t    cpu_data[NCPUS];
  * the values, but we cannot run anything on the target machine.
  */
 
+#undef	offsetof
 #define offsetof(TYPE, MEMBER) ((size_t) &((TYPE)0)->MEMBER)
 
 #if  0
@@ -119,15 +120,30 @@ main(
 
 	DECLARE("AST_URGENT",		AST_URGENT);
 
+	/* Simple Lock structure */
+	DECLARE("SLOCK_ILK",	offsetof(usimple_lock_t, interlock));
 #if	MACH_LDEBUG
-	/*
-	 * XXX 
-	 */
-#define	SIMPLE_LOCK_TAG	0x5353
-#define	MUTEX_TAG	0x4d4d
+	DECLARE("SLOCK_TYPE",	offsetof(usimple_lock_t, lock_type));
+	DECLARE("SLOCK_PC",	offsetof(usimple_lock_t, debug.lock_pc));
+	DECLARE("SLOCK_THREAD",	offsetof(usimple_lock_t, debug.lock_thread));
+	DECLARE("SLOCK_DURATIONH",offsetof(usimple_lock_t, debug.duration[0]));
+	DECLARE("SLOCK_DURATIONL",offsetof(usimple_lock_t, debug.duration[1]));
+	DECLARE("USLOCK_TAG",	USLOCK_TAG);
+#endif	/* MACH_LDEBUG */
+
+	/* Mutex structure */
+	DECLARE("MUTEX_LOCKED",	offsetof(mutex_t *, locked));
+	DECLARE("MUTEX_WAITERS",offsetof(mutex_t *, waiters));
+	DECLARE("MUTEX_PROMOTED_PRI",offsetof(mutex_t *, promoted_pri));
+#if	MACH_LDEBUG
+	DECLARE("MUTEX_TYPE",	offsetof(mutex_t *, type));
+	DECLARE("MUTEX_PC",	offsetof(mutex_t *, pc));
+	DECLARE("MUTEX_THREAD",	offsetof(mutex_t *, thread));
+	DECLARE("MUTEX_TAG",	MUTEX_TAG);
+#endif	/* MACH_LDEBUG */
+						 
+#if	MACH_LDEBUG
 	DECLARE("TH_MUTEX_COUNT",	offsetof(thread_t, mutex_count));
-	DECLARE("SIMPLE_LOCK_TAG",	SIMPLE_LOCK_TAG);
-	DECLARE("MUTEX_TAG",		MUTEX_TAG);
 #endif	/* MACH_LDEBUG */
 	DECLARE("TH_RECOVER",		offsetof(thread_t, recover));
 	DECLARE("TH_CONTINUATION",	offsetof(thread_t, continuation));
@@ -145,14 +161,10 @@ main(
         DECLARE("ACT_THREAD",	offsetof(thread_act_t, thread));
 	DECLARE("ACT_TASK",	offsetof(thread_act_t, task));
 	DECLARE("ACT_PCB",	offsetof(thread_act_t, mact.pcb));
-	DECLARE("ACT_KLOADED",	offsetof(thread_act_t, kernel_loaded));
-	DECLARE("ACT_KLOADING",	offsetof(thread_act_t, kernel_loading));
 	DECLARE("ACT_LOWER",	offsetof(thread_act_t, lower));
 	DECLARE("ACT_MAP",	offsetof(thread_act_t, map));
 
 	DECLARE("MAP_PMAP",	offsetof(vm_map_t, pmap));
-
-	DECLARE("HOST_NAME",	offsetof(host_t, host_self));
 
 	DECLARE("DISP_MIN",	offsetof(eml_dispatch_t, disp_min));
 	DECLARE("DISP_COUNT",	offsetof(eml_dispatch_t, disp_count));
@@ -240,6 +252,14 @@ main(
 		offsetof(cpu_data_t *, interrupt_level));
         DECLARE("CPD_SIMPLE_LOCK_COUNT",
 		offsetof(cpu_data_t *,simple_lock_count));
+        DECLARE("CPD_CPU_NUMBER",
+		offsetof(cpu_data_t *,cpu_number));
+        DECLARE("CPD_CPU_PHYS_NUMBER",
+		offsetof(cpu_data_t *,cpu_phys_number));
+        DECLARE("CPD_CPU_STATUS",
+		offsetof(cpu_data_t *,cpu_status));
+        DECLARE("CPD_MCOUNT_OFF",
+		offsetof(cpu_data_t *,mcount_off));
 
 	DECLARE("PTES_PER_PAGE",	NPTES);
 	DECLARE("INTEL_PTE_KERNEL",	INTEL_PTE_VALID|INTEL_PTE_WRITE);

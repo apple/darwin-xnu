@@ -3,6 +3,7 @@ extern bool addExtensionsFromArchive(OSData * mkext);
 extern void removeStartupExtension(const char * extensionName);
 
 extern OSDictionary * getStartupExtensions(void);
+extern OSArray * getPrelinkedModules(void);
 
 extern void clearStartupExtensionsAndLoaderInfo(void);
 

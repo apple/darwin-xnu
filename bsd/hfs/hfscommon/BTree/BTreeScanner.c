@@ -25,6 +25,7 @@
  *	@(#)BTreeScanner.c
  */
 #include <sys/kernel.h>
+#include "../../hfs_endian.h"
 
 #include "../headers/BTreeScanner.h"
 
@@ -182,6 +183,23 @@ static int FindNextLeafNode(	BTScanState *scanState, Boolean avoidIO )
 			(u_int8_t *) scanState->currentNodePtr += scanState->btcb->nodeSize;
 		}
 		
+#if BYTE_ORDER == LITTLE_ENDIAN
+		{
+		BlockDescriptor block;
+		FileReference fref;
+
+		/* Fake a BlockDescriptor */
+		block.buffer = scanState->currentNodePtr;
+		block.blockSize = scanState->btcb->nodeSize;
+		block.blockReadFromDisk = 1;
+		block.isModified = 0;
+		
+		fref = scanState->btcb->fileRefNum;
+		
+		SWAP_BT_NODE(&block, ISHFSPLUS(VTOVCB(fref)), VTOC(fref)->c_fileid, 0);
+		}
+#endif
+
 		// Make sure this is a valid node
 		if ( CheckNode( scanState->btcb, scanState->currentNodePtr ) != noErr )
 		{

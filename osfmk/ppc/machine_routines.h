@@ -32,6 +32,7 @@
 #include <mach/mach_types.h>
 #include <mach/boolean.h>
 #include <kern/kern_types.h>
+#include <kern/sched_prim.h>
 #include <pexpert/pexpert.h>
 
 #include <sys/appleapiopts.h>
@@ -92,25 +93,68 @@ vm_offset_t ml_vtophys(
 boolean_t ml_probe_read(
 	vm_offset_t paddr,
 	unsigned int *val);
+boolean_t ml_probe_read_64(
+	addr64_t paddr,
+	unsigned int *val);
 
 /* Read physical address byte */
 unsigned int ml_phys_read_byte(
 	vm_offset_t paddr);
+unsigned int ml_phys_read_byte_64(
+	addr64_t paddr);
 
-/* Read physical address */
+/* Read physical address half word */
+unsigned int ml_phys_read_half(
+	vm_offset_t paddr);
+unsigned int ml_phys_read_half_64(
+	addr64_t paddr);
+
+/* Read physical address word*/
 unsigned int ml_phys_read(
 	vm_offset_t paddr);
+unsigned int ml_phys_read_64(
+	addr64_t paddr);
+unsigned int ml_phys_read_word(
+	vm_offset_t paddr);
+unsigned int ml_phys_read_word_64(
+	addr64_t paddr);
+
+/* Read physical address double word */
+unsigned long long ml_phys_read_double(
+	vm_offset_t paddr);
+unsigned long long ml_phys_read_double_64(
+	addr64_t paddr);
 
 /* Write physical address byte */
 void ml_phys_write_byte(
 	vm_offset_t paddr, unsigned int data);
+void ml_phys_write_byte_64(
+	addr64_t paddr, unsigned int data);
 
-/* Write physical address */
+/* Write physical address half word */
+void ml_phys_write_half(
+	vm_offset_t paddr, unsigned int data);
+void ml_phys_write_half_64(
+	addr64_t paddr, unsigned int data);
+
+/* Write physical address word */
 void ml_phys_write(
 	vm_offset_t paddr, unsigned int data);
+void ml_phys_write_64(
+	addr64_t paddr, unsigned int data);
+void ml_phys_write_word(
+	vm_offset_t paddr, unsigned int data);
+void ml_phys_write_word_64(
+	addr64_t paddr, unsigned int data);
+
+/* Write physical address double word */
+void ml_phys_write_double(
+	vm_offset_t paddr, unsigned long long data);
+void ml_phys_write_double_64(
+	addr64_t paddr, unsigned long long data);
 
 /* Struct for ml_processor_register */
-struct ml_processor_info_t {
+struct ml_processor_info {
 	cpu_id_t			cpu_id;
 	boolean_t			boot_cpu;
 	vm_offset_t			start_paddr;
@@ -119,13 +163,18 @@ struct ml_processor_info_t {
 	time_base_enable_t	time_base_enable;
 };
 
-typedef struct ml_processor_info_t ml_processor_info_t;
+typedef struct ml_processor_info ml_processor_info_t;
 
 /* Register a processor */
 kern_return_t ml_processor_register(
 	ml_processor_info_t *processor_info,
 	processor_t *processor,
 	ipi_handler_t *ipi_handler);
+
+/* Zero bytes starting at a physical address */
+void bzero_phys(
+	addr64_t phys_address,
+	uint32_t length);
 
 #endif /* __APPLE_API_UNSTABLE */
 
@@ -151,9 +200,6 @@ boolean_t fake_get_interrupts_enabled(void);
 
 boolean_t fake_set_interrupts_enabled(
 	boolean_t enable);
-
-/* check pending timers */
-void machine_clock_assist(void);
 
 void machine_idle(void);
 

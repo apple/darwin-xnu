@@ -35,6 +35,7 @@
 #include <kern/zalloc.h>
 #include <mach/kern_return.h>
 #include <mach/vm_inherit.h>
+#include <machine/cpu_capabilities.h>
 #include <vm/vm_kern.h>
 #include <vm/vm_map.h>
 #include <vm/vm_page.h>
@@ -55,6 +56,7 @@ static load_struct_t  *
 lsf_hash_lookup(   
         queue_head_t    		*hash_table,
         void    			*file_object,  
+        vm_offset_t                     recognizableOffset,
         int     			size,
 	boolean_t			alternate,
 	shared_region_task_mappings_t	sm_info);
@@ -98,13 +100,34 @@ vm_offset_t		shared_file_data_region;
 ipc_port_t		shared_text_region_handle;
 ipc_port_t		shared_data_region_handle;
 vm_offset_t		shared_file_mapping_array = 0;
-shared_region_mapping_t	system_shared_region = NULL;
+
+shared_region_mapping_t default_environment_shared_regions = NULL;
+static decl_mutex_data(,default_regions_list_lock_data)
+
+#define default_regions_list_lock()		\
+		mutex_lock(&default_regions_list_lock_data)
+#define default_regions_list_lock_try()	\
+		mutex_try(&default_regions_list_lock_data)
+#define default_regions_list_unlock()	\
+		mutex_unlock(&default_regions_list_lock_data)
+
 
 ipc_port_t		sfma_handle = NULL;
 zone_t          	lsf_zone;
 
 int		shared_file_available_hash_ele;
 
+/* com region support */
+ipc_port_t		com_region_handle = NULL;
+vm_map_t		com_region_map = NULL;
+vm_size_t		com_region_size = _COMM_PAGE_AREA_LENGTH;
+shared_region_mapping_t	com_mapping_resource = NULL;
+
+#define		GLOBAL_COM_REGION_BASE _COMM_PAGE_BASE_ADDRESS
+
+/* called for the non-default, private branch shared region support */
+/* system default fields for fs_base and system supported are not   */
+/* relevant as the system default flag is not set */
 kern_return_t
 shared_file_create_system_region(
 		shared_region_mapping_t	*shared_region)
@@ -126,20 +149,230 @@ shared_file_create_system_region(
 	kret = shared_region_mapping_create(text_handle,
 			text_size, data_handle, data_size, mapping_array,
 			GLOBAL_SHARED_TEXT_SEGMENT, shared_region, 
-			0x9000000, 0x9000000);
+			SHARED_ALTERNATE_LOAD_BASE, SHARED_ALTERNATE_LOAD_BASE);
 	if(kret)
 		return kret;
 	(*shared_region)->flags = 0;
+	if(com_mapping_resource) {
+        	shared_region_mapping_ref(com_mapping_resource);
+        	(*shared_region)->next = com_mapping_resource;
+	}
+
 	return KERN_SUCCESS;
 }
 
+/*
+ * load a new default for a specified environment into the default share
+ * regions list.  If a previous default exists for the envrionment specification
+ * it is returned along with its reference.  It is expected that the new
+ * sytem region structure passes a reference.
+ */
+
+shared_region_mapping_t
+update_default_shared_region(
+		shared_region_mapping_t new_system_region)
+{
+	shared_region_mapping_t old_system_region;
+	unsigned int fs_base;
+	unsigned int system;
+
+	fs_base = new_system_region->fs_base;
+	system = new_system_region->system;
+	new_system_region->flags |= SHARED_REGION_SYSTEM;
+	default_regions_list_lock();
+	old_system_region = default_environment_shared_regions;
+
+	if((old_system_region != NULL) && 
+		(old_system_region->fs_base == fs_base) &&
+			(old_system_region->system == system)) {
+		new_system_region->default_env_list =
+			old_system_region->default_env_list;
+		default_environment_shared_regions = new_system_region;
+		default_regions_list_unlock();
+		old_system_region->flags |= SHARED_REGION_STALE;
+		return old_system_region;
+	}
+	if (old_system_region) {
+	   while(old_system_region->default_env_list != NULL) {
+		if((old_system_region->default_env_list->fs_base == fs_base) &&
+		      (old_system_region->default_env_list->system == system)) {
+			new_system_region->default_env_list =
+			   		old_system_region->default_env_list
+						->default_env_list;
+			old_system_region->default_env_list = 
+					new_system_region;
+			default_regions_list_unlock();
+			old_system_region->flags |= SHARED_REGION_STALE;
+			return old_system_region;
+		}
+		old_system_region = old_system_region->default_env_list;
+	   }
+	}
+	/* If we get here, we are at the end of the system list and we */
+	/* did not find a pre-existing entry */
+	if(old_system_region) {
+		old_system_region->default_env_list = new_system_region;
+	} else {
+		default_environment_shared_regions = new_system_region;
+	}
+	default_regions_list_unlock();
+	return NULL;
+}
+
+/* 
+ * lookup a system_shared_region for the environment specified.  If one is
+ * found, it is returned along with a reference against the structure
+ */
+
+shared_region_mapping_t
+lookup_default_shared_region(
+		unsigned int fs_base,
+		unsigned int system)
+{
+	shared_region_mapping_t	system_region;
+	default_regions_list_lock();
+	system_region = default_environment_shared_regions;
+
+	while(system_region != NULL) {
+		if((system_region->fs_base == fs_base) &&
+		      	(system_region->system == system)) {
+			break;
+		}
+		system_region = system_region->default_env_list;
+	}
+	if(system_region)
+		shared_region_mapping_ref(system_region);
+	default_regions_list_unlock();
+	return system_region;
+}
+
+/*
+ * remove a system_region default if it appears in the default regions list. 
+ * Drop a reference on removal.
+ */
+
+__private_extern__ void
+remove_default_shared_region_lock(
+		shared_region_mapping_t system_region,
+		int need_lock)
+{
+	shared_region_mapping_t old_system_region;
+	unsigned int fs_base;
+	unsigned int system;
+
+	default_regions_list_lock();
+	old_system_region = default_environment_shared_regions;
+
+	if(old_system_region == NULL) {
+		default_regions_list_unlock();
+		return;
+	}
+
+	if (old_system_region == system_region) {
+		default_environment_shared_regions 
+			= old_system_region->default_env_list;
+		old_system_region->flags |= SHARED_REGION_STALE;
+               	shared_region_mapping_dealloc_lock(old_system_region,
+								need_lock);
+		default_regions_list_unlock();
+		return;
+	}
+
+	while(old_system_region->default_env_list != NULL) {
+		if(old_system_region->default_env_list == system_region) {
+			shared_region_mapping_t dead_region;
+			dead_region = old_system_region->default_env_list;
+			old_system_region->default_env_list = 
+				old_system_region->default_env_list->default_env_list;
+			dead_region->flags |= SHARED_REGION_STALE;
+               		shared_region_mapping_dealloc_lock(dead_region,
+								need_lock);
+			default_regions_list_unlock();
+			return;
+		}
+		old_system_region = old_system_region->default_env_list;
+	}
+	default_regions_list_unlock();
+}
+
+/*
+ * Symbol compatability; we believe shared_region_mapping_dealloc_lock() is
+ * the only caller.  Remove this stub function and the corresponding symbol
+ * export for Merlot.
+ */
+void
+remove_default_shared_region(
+		shared_region_mapping_t system_region)
+{
+	remove_default_shared_region_lock(system_region, 1);
+}
+
+void
+remove_all_shared_regions()
+{
+	shared_region_mapping_t system_region;
+	shared_region_mapping_t next_system_region;
+
+	default_regions_list_lock();
+	system_region = default_environment_shared_regions;
+
+	if(system_region == NULL) {
+		default_regions_list_unlock();
+		return;
+	}
+
+	while(system_region != NULL) {
+		next_system_region = system_region->default_env_list;
+		system_region->flags |= SHARED_REGION_STALE;
+               	shared_region_mapping_dealloc(system_region);
+		system_region = next_system_region;
+	}
+	default_environment_shared_regions = NULL;
+	default_regions_list_unlock();
+}
+		
+/* shared_com_boot_time_init initializes the common page shared data and */
+/* text region.  This region is semi independent of the split libs       */
+/* and so its policies have to be handled differently by the code that   */
+/* manipulates the mapping of shared region environments.  However,      */
+/* the shared region delivery system supports both */
+shared_com_boot_time_init()
+{
+	kern_return_t		 kret;
+	vm_named_entry_t	named_entry;
+
+	if(com_region_handle) {
+		panic("shared_com_boot_time_init: "
+			"com_region_handle already set\n");
+	}
+
+	/* create com page region */
+	if(kret = vm_region_object_create(kernel_map, 
+			com_region_size, 
+			&com_region_handle)) {
+		panic("shared_com_boot_time_init: "
+				"unable to create comm page\n");
+		return;
+	}
+	/* now set export the underlying region/map */
+	named_entry = (vm_named_entry_t)com_region_handle->ip_kobject;
+	com_region_map = named_entry->backing.map;
+	/* wrap the com region in its own shared file mapping structure */
+	shared_region_mapping_create(com_region_handle,
+		com_region_size, NULL, 0, 0,
+		GLOBAL_COM_REGION_BASE, &com_mapping_resource,
+		0, 0);
+
+}
+
 shared_file_boot_time_init(
-)
+		unsigned int fs_base, 
+		unsigned int system)
 {
 	long			shared_text_region_size;
 	long			shared_data_region_size;
 	shared_region_mapping_t	new_system_region;
-	shared_region_mapping_t	old_system_region;
+	shared_region_mapping_t	old_default_env;
 
 	shared_text_region_size = 0x10000000;
 	shared_data_region_size = 0x10000000;
@@ -151,20 +384,26 @@ shared_file_boot_time_init(
 		shared_text_region_size, shared_data_region_handle,
 		shared_data_region_size, shared_file_mapping_array,
 		GLOBAL_SHARED_TEXT_SEGMENT, &new_system_region,
-		0x9000000, 0x9000000);
-	old_system_region = system_shared_region;
-	system_shared_region = new_system_region;
-	system_shared_region->flags = SHARED_REGION_SYSTEM;
-        /* consume the reference held because this is the  */
-        /* system shared region */
-	if(old_system_region) {
-                shared_region_mapping_dealloc(old_system_region);
-	}
+		SHARED_ALTERNATE_LOAD_BASE, SHARED_ALTERNATE_LOAD_BASE);
+
+	new_system_region->fs_base = fs_base;
+	new_system_region->system = system;
+	new_system_region->flags = SHARED_REGION_SYSTEM;
+
+	/* grab an extra reference for the caller */
+	/* remember to grab before call to update */
+	shared_region_mapping_ref(new_system_region);
+	old_default_env = update_default_shared_region(new_system_region);
 	/* hold an extra reference because these are the system */
 	/* shared regions. */
-	shared_region_mapping_ref(system_shared_region);
-	vm_set_shared_region(current_task(), system_shared_region);
-
+	if(old_default_env)
+        	shared_region_mapping_dealloc(old_default_env);
+	if(com_mapping_resource == NULL) {
+		shared_com_boot_time_init();
+	}
+	shared_region_mapping_ref(com_mapping_resource);
+	new_system_region->next = com_mapping_resource;
+	vm_set_shared_region(current_task(), new_system_region);
 }
 
 
@@ -229,7 +468,7 @@ shared_file_init(
 
 		for (b = *mapping_array, alloced = 0; 
 			   alloced < (hash_size +
-				round_page(sizeof(struct sf_mapping)));
+				round_page_32(sizeof(struct sf_mapping)));
 			   alloced += PAGE_SIZE,  b += PAGE_SIZE) {
 			vm_object_lock(buf_object);
 			p = vm_page_alloc(buf_object, alloced);
@@ -238,9 +477,11 @@ shared_file_init(
 			} 	
 			p->busy = FALSE;
 			vm_object_unlock(buf_object);
-			pmap_enter(kernel_pmap, b, p->phys_addr,
+			pmap_enter(kernel_pmap, b, p->phys_page,
 				VM_PROT_READ | VM_PROT_WRITE, 
-				VM_WIMG_USE_DEFAULT, TRUE);
+				((unsigned int)(p->object->wimg_bits)) 
+							& VM_WIMG_MASK,
+				TRUE);
 		}
 
 
@@ -260,20 +501,24 @@ shared_file_init(
 
 		if (vm_map_wire(kernel_map, *mapping_array, 
 			*mapping_array + 
- 			   (hash_size + round_page(sizeof(struct sf_mapping))),
+ 			   (hash_size + round_page_32(sizeof(struct sf_mapping))),
 		   	VM_PROT_DEFAULT, FALSE) != KERN_SUCCESS) {
 			panic("shared_file_init: No memory for data table");
 		}
 
 		lsf_zone = zinit(sizeof(struct load_file_ele), 
 			data_table_size - 
-			   (hash_size + round_page(sizeof(struct sf_mapping))),
+			   (hash_size + round_page_32(sizeof(struct sf_mapping))),
 			0, "load_file_server"); 
 
 		zone_change(lsf_zone, Z_EXHAUST, TRUE);
 		zone_change(lsf_zone, Z_COLLECT, FALSE);
 		zone_change(lsf_zone, Z_EXPAND, FALSE);
 		zone_change(lsf_zone, Z_FOREIGN, TRUE);
+
+		/* initialize the global default environment lock */
+		mutex_init(&default_regions_list_lock_data, ETAP_NO_TRACE);
+
 	} else {
 		*mapping_array = shared_file_mapping_array;
 	}
@@ -336,7 +581,7 @@ copyin_shared_file(
 		hash_table_size = (shared_file_header->hash_size) 
 						* sizeof(struct queue_entry);
 		hash_table_offset = hash_table_size + 
-					round_page(sizeof(struct sf_mapping));
+					round_page_32(sizeof(struct sf_mapping));
 		for (i = 0; i < shared_file_header->hash_size; i++)
             		queue_init(&shared_file_header->hash[i]);
 
@@ -399,7 +644,7 @@ copyin_shared_file(
 	alternate = (*flags & ALTERNATE_LOAD_SITE) ? TRUE : FALSE;
 
 	if (file_entry = lsf_hash_lookup(shared_file_header->hash, 
-			(void *) file_object, shared_file_header->hash_size, 
+			(void *) file_object, mappings[0].file_offset, shared_file_header->hash_size, 
 			alternate, sm_info)) {
 		/* File is loaded, check the load manifest for exact match */
 		/* we simplify by requiring that the elements be the same  */
@@ -452,17 +697,27 @@ copyin_shared_file(
 		*flags = 0;
 		if(ret == KERN_NO_SPACE) {
 			shared_region_mapping_t	regions;
+			shared_region_mapping_t	system_region;
 			regions = (shared_region_mapping_t)sm_info->self;
 			regions->flags |= SHARED_REGION_FULL;
-			if(regions == system_shared_region) {
+			system_region = lookup_default_shared_region(
+				regions->fs_base, regions->system);
+			if(system_region == regions) {
 				shared_region_mapping_t	new_system_shared_regions;
-				shared_file_boot_time_init();
+				shared_file_boot_time_init(
+					regions->fs_base, regions->system);
 				/* current task must stay with its current */
 				/* regions, drop count on system_shared_region */
 				/* and put back our original set */
-				vm_get_shared_region(current_task(), &new_system_shared_regions);
-                		shared_region_mapping_dealloc(new_system_shared_regions);
+				vm_get_shared_region(current_task(), 
+						&new_system_shared_regions);
+                		shared_region_mapping_dealloc_lock(
+						new_system_shared_regions, 0);
 				vm_set_shared_region(current_task(), regions);
+			}
+			if(system_region != NULL) {
+                		shared_region_mapping_dealloc_lock(
+							system_region, 0);
 			}
 		}
 		mutex_unlock(&shared_file_header->lock);
@@ -477,6 +732,7 @@ static load_struct_t  *
 lsf_hash_lookup(
 	queue_head_t			*hash_table,
 	void				*file_object,
+  vm_offset_t                           recognizableOffset,
 	int				size,
 	boolean_t			alternate,
 	shared_region_task_mappings_t	sm_info)
@@ -490,7 +746,12 @@ lsf_hash_lookup(
 	for (entry = (load_struct_t *)queue_first(bucket);
 		!queue_end(bucket, &entry->links);
 		entry = (load_struct_t *)queue_next(&entry->links)) {
-		if (entry->file_object == (int)file_object) {
+
+		if ((entry->file_object == (int) file_object) &&
+                    (entry->file_offset != recognizableOffset)) {
+                }
+		if ((entry->file_object == (int)file_object) &&
+                    (entry->file_offset == recognizableOffset)) {
 		   target_region = (shared_region_mapping_t)sm_info->self;
 		   depth = target_region->depth;
 		   while(target_region) {
@@ -521,10 +782,11 @@ lsf_hash_lookup(
 	return (load_struct_t *)0;
 }
 
-load_struct_t *
-lsf_remove_regions_mappings(
+__private_extern__ load_struct_t *
+lsf_remove_regions_mappings_lock(
 	shared_region_mapping_t	region,
-	shared_region_task_mappings_t	sm_info)
+	shared_region_task_mappings_t	sm_info,
+	int need_lock)
 {
 	int			i;
 	register queue_t	bucket;
@@ -535,9 +797,11 @@ lsf_remove_regions_mappings(
 
 	shared_file_header = (shared_file_info_t *)sm_info->region_mappings;
 
-	mutex_lock(&shared_file_header->lock);
+	if (need_lock)
+		mutex_lock(&shared_file_header->lock);
 	if(shared_file_header->hash_init == FALSE) {
-		mutex_unlock(&shared_file_header->lock);
+		if (need_lock)
+			mutex_unlock(&shared_file_header->lock);
 		return NULL;
 	}
 	for(i = 0;  i<shared_file_header->hash_size; i++) {
@@ -552,7 +816,21 @@ lsf_remove_regions_mappings(
 		   entry = next_entry;
 		}
 	}
-	mutex_unlock(&shared_file_header->lock);
+	if (need_lock)
+		mutex_unlock(&shared_file_header->lock);
+}
+
+/*
+ * Symbol compatability; we believe shared_region_mapping_dealloc() is the
+ * only caller.  Remove this stub function and the corresponding symbol
+ * export for Merlot.
+ */
+load_struct_t *
+lsf_remove_regions_mappings(
+	shared_region_mapping_t	region,
+	shared_region_task_mappings_t	sm_info)
+{
+	return lsf_remove_regions_mappings_lock(region, sm_info, 1);
 }
 
 /* Removes a map_list, (list of loaded extents) for a file from     */
@@ -644,6 +922,7 @@ lsf_load(
 	entry->links.next = (queue_entry_t) 0;
 	entry->regions_instance = (shared_region_mapping_t)sm_info->self;
 	entry->depth=((shared_region_mapping_t)sm_info->self)->depth;
+        entry->file_offset = mappings[0].file_offset;
 
 	lsf_hash_insert(entry, sm_info);
 	tptr = &(entry->mappings);
@@ -667,12 +946,15 @@ lsf_load(
 						+ mappings[i].size;
 			}
 		}
-		if((alternate_load_next + round_page(max_loadfile_offset)) >=
+		if((alternate_load_next + round_page_32(max_loadfile_offset)) >=
 			(sm_info->data_size - (sm_info->data_size>>9))) {
+			entry->base_address = 
+				(*base_address) & SHARED_TEXT_REGION_MASK;
+			lsf_unload(file_object, entry->base_address, sm_info);
 
 			return KERN_NO_SPACE;
 		}
-		alternate_load_next += round_page(max_loadfile_offset);
+		alternate_load_next += round_page_32(max_loadfile_offset);
 
 	} else {
 		if (((*base_address) & SHARED_TEXT_REGION_MASK) > 
@@ -686,6 +968,51 @@ lsf_load(
 
 	entry->base_address = (*base_address) & SHARED_TEXT_REGION_MASK;
 
+        // Sanity check the mappings -- make sure we don't stray across the
+        // alternate boundary.  If any bit of a library that we're not trying
+        // to load in the alternate load space strays across that boundary,
+        // return KERN_INVALID_ARGUMENT immediately so that the caller can
+        // try to load it in the alternate shared area.  We do this to avoid
+        // a nasty case: if a library tries to load so that it crosses the
+        // boundary, it'll occupy a bit of the alternate load area without
+        // the kernel being aware.  When loads into the alternate load area
+        // at the first free address are tried, the load will fail.
+        // Thus, a single library straddling the boundary causes all sliding
+        // libraries to fail to load.  This check will avoid such a case.
+        
+        if (!(flags & ALTERNATE_LOAD_SITE)) {
+ 	  for (i = 0; i<map_cnt;i++) {
+            vm_offset_t region_mask;
+            vm_address_t region_start;
+            vm_address_t region_end;
+ 
+            if ((mappings[i].protection & VM_PROT_WRITE) == 0) {
+ // mapping offsets are relative to start of shared segments.
+              region_mask = SHARED_TEXT_REGION_MASK;
+              region_start = (mappings[i].mapping_offset & region_mask)+entry->base_address;
+              region_end = (mappings[i].size + region_start);
+              if (region_end >= SHARED_ALTERNATE_LOAD_BASE) {
+                // No library is permitted to load so any bit of it is in the 
+                // shared alternate space.  If they want it loaded, they can put
+                // it in the alternate space explicitly.
+printf("Library trying to load across alternate shared region boundary -- denied!\n");
+		lsf_unload(file_object, entry->base_address, sm_info);
+                return KERN_INVALID_ARGUMENT;
+              }
+            } else {
+              // rw section?
+              region_mask = SHARED_DATA_REGION_MASK;
+              region_start = (mappings[i].mapping_offset & region_mask)+entry->base_address;
+              region_end = (mappings[i].size + region_start);
+              if (region_end >= SHARED_ALTERNATE_LOAD_BASE) {
+printf("Library trying to load across alternate shared region boundary-- denied!\n");
+	       lsf_unload(file_object, entry->base_address, sm_info);
+               return KERN_INVALID_ARGUMENT;
+              }
+            } // write?
+          } // for
+        } // if not alternate load site.
+ 
 	/* copyin mapped file data */
 	for(i = 0; i<map_cnt; i++) {
 		vm_offset_t	target_address;
@@ -730,7 +1057,7 @@ lsf_load(
 		if(!(mappings[i].protection & VM_PROT_ZF)) {
 		   if(vm_map_copyin(current_map(), 
 			mapped_file + mappings[i].file_offset, 
-			round_page(mappings[i].size), FALSE, &copy_object)) {
+			round_page_32(mappings[i].size), FALSE, &copy_object)) {
 			vm_deallocate(((vm_named_entry_t)local_map->ip_kobject)
 			      ->backing.map, target_address, mappings[i].size);
 			lsf_unload(file_object, entry->base_address, sm_info);
@@ -747,13 +1074,13 @@ lsf_load(
 		}
 		vm_map_protect(((vm_named_entry_t)local_map->ip_kobject)
 				->backing.map, target_address,
-				round_page(target_address + mappings[i].size),
+				round_page_32(target_address + mappings[i].size),
 				(mappings[i].protection & 
 					(VM_PROT_READ | VM_PROT_EXECUTE)),
 				TRUE);
 		vm_map_protect(((vm_named_entry_t)local_map->ip_kobject)
 				->backing.map, target_address,
-				round_page(target_address + mappings[i].size),
+				round_page_32(target_address + mappings[i].size),
 				(mappings[i].protection & 
 					(VM_PROT_READ | VM_PROT_EXECUTE)),
 				FALSE);

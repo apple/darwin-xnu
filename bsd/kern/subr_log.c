@@ -259,7 +259,7 @@ klogwakeup()
 
 /*ARGSUSED*/
 int
-logioctl(com, data, flag)
+logioctl(dev, com, data, flag)
 	caddr_t data;
 {
 	long l;

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2003 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -70,7 +70,7 @@
 #include <sys/buf.h>
 #include <sys/mbuf.h>
 #include <sys/file.h>
-#include <dev/disk.h>
+#include <sys/disk.h>
 #include <sys/ioctl.h>
 #include <sys/errno.h>
 #include <sys/malloc.h>
@@ -138,11 +138,18 @@ ffs_mountroot()
 	/* Must set the MNT_ROOTFS flag before doing the actual mount */
 	mp->mnt_flag |= MNT_ROOTFS;
 
+	/* Set asynchronous flag by default */
+	mp->mnt_flag |= MNT_ASYNC;
+
 	if (error = ffs_mountfs(rootvp, mp, p)) {
 		mp->mnt_vfc->vfc_refcount--;
+
+		if (mp->mnt_kern_flag & MNTK_IO_XINFO)
+		        FREE(mp->mnt_xinfo_ptr, M_TEMP);
 		vfs_unbusy(mp, p);
+
 		vrele(rootvp); /* release the reference from bdevvp() */
-		_FREE_ZONE(mp, sizeof (struct mount), M_MOUNT);
+		FREE_ZONE(mp, sizeof (struct mount), M_MOUNT);
 		return (error);
 	}
 	simple_lock(&mountlist_slock);
@@ -301,12 +308,13 @@ ffs_mount(mp, path, data, ndp, p)
 	}
 	ump = VFSTOUFS(mp);
 	fs = ump->um_fs;
-	(void) copyinstr(path, fs->fs_fsmnt, sizeof(fs->fs_fsmnt) - 1, &size);
+	(void) copyinstr(path, fs->fs_fsmnt, sizeof(fs->fs_fsmnt) - 1,
+		(size_t *)&size);
 	bzero(fs->fs_fsmnt + size, sizeof(fs->fs_fsmnt) - size);
 	bcopy((caddr_t)fs->fs_fsmnt, (caddr_t)mp->mnt_stat.f_mntonname,
 	    MNAMELEN);
 	(void) copyinstr(args.fspec, mp->mnt_stat.f_mntfromname, MNAMELEN - 1, 
-	    &size);
+	    (size_t *)&size);
 	bzero(mp->mnt_stat.f_mntfromname + size, MNAMELEN - size);
 	(void)ffs_statfs(mp, &mp->mnt_stat, p);
 	return (0);
@@ -383,6 +391,7 @@ ffs_reload(mountp, cred, p)
 	 */
 	newfs->fs_csp = fs->fs_csp;
 	newfs->fs_maxcluster = fs->fs_maxcluster;
+	newfs->fs_contigdirs = fs->fs_contigdirs;
 	bcopy(newfs, fs, (u_int)fs->fs_sbsize);
 	if (fs->fs_sbsize < SBSIZE)
 		bp->b_flags |= B_INVAL;
@@ -393,7 +402,7 @@ ffs_reload(mountp, cred, p)
 	brelse(bp);
 	mountp->mnt_maxsymlinklen = fs->fs_maxsymlinklen;
 	ffs_oldfscompat(fs);
-	maxfilesize = (u_int64_t)0x100000000;                  /* 4GB */
+	maxfilesize = 0x100000000ULL;    /* 4GB */
 	if (fs->fs_maxfilesize > maxfilesize)			/* XXX */
 		fs->fs_maxfilesize = maxfilesize;		/* XXX */
 	/*
@@ -423,6 +432,7 @@ ffs_reload(mountp, cred, p)
 			byte_swap_ints((int *)bp->b_data, size / sizeof(int));
 		}
 #endif /* REV_ENDIAN_FS */
+		space = (char *) space + size;
 		brelse(bp);
 	}
 	/*
@@ -602,14 +612,14 @@ ffs_mountfs(devvp, mp, p)
 	dbsize = fs->fs_fsize / NSPF(fs);
 	if(dbsize <= 0 ) {
 		kprintf("device blocksize computaion failed\n");
-        } else {
-                if (VOP_IOCTL(devvp, DKIOCSETBLOCKSIZE, &dbsize, FWRITE, NOCRED,
- p) != 0) {  
+	} else {
+		if (VOP_IOCTL(devvp, DKIOCSETBLOCKSIZE, (caddr_t)&dbsize,
+				FWRITE, NOCRED, p) != 0) {  
 			kprintf("failed to set device blocksize\n");
-                }  
+		}  
 		/* force the specfs to reread blocksize from size() */
 		set_fsblocksize(devvp);
-        } 
+	} 
 
 	/* cache the IO attributes */
 	error = vfs_init_io_attributes(devvp, mp);
@@ -690,6 +700,7 @@ ffs_mountfs(devvp, mp, p)
 	blks = howmany(size, fs->fs_fsize);
 	if (fs->fs_contigsumsize > 0)
 		size += fs->fs_ncg * sizeof(int32_t);
+	size += fs->fs_ncg * sizeof(u_int8_t);
 	space = _MALLOC((u_long)size, M_UFSMNT, M_WAITOK);
 	fs->fs_csp = space;
 	for (i = 0; i < blks; i += fs->fs_frag) {
@@ -714,11 +725,22 @@ ffs_mountfs(devvp, mp, p)
 		fs->fs_maxcluster = lp = space;
 		for (i = 0; i < fs->fs_ncg; i++)
 			*lp++ = fs->fs_contigsumsize;
+		space = lp;
 	}
+	size = fs->fs_ncg * sizeof(u_int8_t);
+	fs->fs_contigdirs = (u_int8_t *)space;
+	space = (u_int8_t *)space + size;
+	bzero(fs->fs_contigdirs, size);
+	/* XXX Compatibility for old filesystems */
+	if (fs->fs_avgfilesize <= 0)
+		fs->fs_avgfilesize = AVFILESIZ;
+	if (fs->fs_avgfpdir <= 0)
+		fs->fs_avgfpdir = AFPDIR;
+	/* XXX End of compatibility */
 	mp->mnt_data = (qaddr_t)ump;
 	mp->mnt_stat.f_fsid.val[0] = (long)dev;
 	mp->mnt_stat.f_fsid.val[1] = mp->mnt_vfc->vfc_typenum;
-#warning hardcoded max symlen and not "mp->mnt_maxsymlinklen = fs->fs_maxsymlinklen;"
+	/* XXX warning hardcoded max symlen and not "mp->mnt_maxsymlinklen = fs->fs_maxsymlinklen;" */
 	mp->mnt_maxsymlinklen = 60;
 #if REV_ENDIAN_FS
 	if (rev_endian)
@@ -735,7 +757,7 @@ ffs_mountfs(devvp, mp, p)
 	devvp->v_specflags |= SI_MOUNTEDON;
 	ffs_oldfscompat(fs);
 	ump->um_savedmaxfilesize = fs->fs_maxfilesize;		/* XXX */
-	maxfilesize = (u_int64_t)0x100000000;                  /* 4GB */
+	maxfilesize = 0x100000000ULL;    /* 4GB */
 #if 0
 	maxfilesize = (u_int64_t)0x40000000 * fs->fs_bsize - 1;	/* XXX */
 #endif /* 0 */
@@ -853,10 +875,46 @@ ffs_flushfiles(mp, flags, p)
 	int i, error;
 
 	ump = VFSTOUFS(mp);
+
 #if QUOTA
+	/*
+	 * NOTE: The open quota files have an indirect reference
+	 * on the root directory vnode.  We must account for this
+	 * extra reference when doing the intial vflush.
+	 */
 	if (mp->mnt_flag & MNT_QUOTA) {
-		if (error = vflush(mp, NULLVP, SKIPSYSTEM|flags))
+		struct vnode *rootvp = NULLVP;
+		int quotafilecnt = 0;
+
+		/* Find out how many quota files we have open. */
+		for (i = 0; i < MAXQUOTAS; i++) {
+			if (ump->um_qfiles[i].qf_vp != NULLVP)
+				++quotafilecnt;
+		}
+
+		/*
+		 * Check if the root vnode is in our inode hash
+		 * (so we can skip over it).
+		 */
+		rootvp = ufs_ihashget(ump->um_dev, ROOTINO);
+
+		error = vflush(mp, rootvp, SKIPSYSTEM|flags);
+
+		if (rootvp) {
+			/*
+			 * See if there are additional references on the
+			 * root vp besides the ones obtained from the open
+			 * quota files and the hfs_chashget call above.
+			 */
+			if ((error == 0) &&
+			    (rootvp->v_usecount > (1 + quotafilecnt))) {
+				error = EBUSY;  /* root dir is still open */
+			}
+			vput(rootvp);
+		}
+		if (error && (flags & FORCECLOSE) == 0)
 			return (error);
+
 		for (i = 0; i < MAXQUOTAS; i++) {
 			if (ump->um_qfiles[i].qf_vp == NULLVP)
 				continue;
@@ -951,6 +1009,14 @@ loop:
 		simple_lock(&vp->v_interlock);
 		nvp = vp->v_mntvnodes.le_next;
 		ip = VTOI(vp);
+
+		// restart our whole search if this guy is locked
+		// or being reclaimed.
+		if (ip == NULL || vp->v_flag & (VXLOCK|VORECLAIM)) {
+			simple_unlock(&vp->v_interlock);
+			continue;
+		}
+
 		if ((vp->v_type == VNON) ||
 		    ((ip->i_flag & (IN_ACCESS | IN_CHANGE | IN_MODIFIED | IN_UPDATE)) == 0 &&
 		     vp->v_dirtyblkhd.lh_first == NULL && !(vp->v_flag & VHASDIRTY))) {
@@ -1002,9 +1068,9 @@ loop:
  * done by the calling routine.
  */
 int
-ffs_vget(mp, ino, vpp)
+ffs_vget(mp, inop, vpp)
 	struct mount *mp;
-	ino_t ino;
+	void *inop;
 	struct vnode **vpp;
 {
 	struct proc *p = current_proc();		/* XXX */
@@ -1013,9 +1079,11 @@ ffs_vget(mp, ino, vpp)
 	struct ufsmount *ump;
 	struct buf *bp;
 	struct vnode *vp;
+	ino_t ino;
 	dev_t dev;
-	int i, type, error;
+	int i, type, error = 0;
 
+	ino = (ino_t) inop;
 	ump = VFSTOUFS(mp);
 	dev = ump->um_dev;
 
@@ -1025,12 +1093,17 @@ ffs_vget(mp, ino, vpp)
 		return (EPERM);
 	}
 
+	/* check in the inode hash */
 	if ((*vpp = ufs_ihashget(dev, ino)) != NULL) {
 		vp = *vpp;
 		UBCINFOCHECK("ffs_vget", vp);
 		return (0);
 	}
-	/* Allocate a new vnode/inode. */
+
+	/*
+	 * Not in inode hash.
+	 * Allocate a new vnode/inode.
+	 */
 	type = ump->um_devvp->v_tag == VT_MFS ? M_MFSNODE : M_FFSNODE; /* XXX */
 	MALLOC_ZONE(ip, struct inode *, sizeof(struct inode), type, M_WAITOK);
 	bzero((caddr_t)ip, sizeof(struct inode));
@@ -1041,17 +1114,17 @@ ffs_vget(mp, ino, vpp)
 	ip->i_fs = fs = ump->um_fs;
 	ip->i_dev = dev;
 	ip->i_number = ino;
-	ip->i_flag |= IN_ALLOC;
+	SET(ip->i_flag, IN_ALLOC);
 #if QUOTA
 	for (i = 0; i < MAXQUOTAS; i++)
 		ip->i_dquot[i] = NODQUOT;
 #endif
 
 	/*
-	 * MALLOC_ZONE is blocking call. Check for race.
+	 * We could have blocked in MALLOC_ZONE. Check for the race.
 	 */
 	if ((*vpp = ufs_ihashget(dev, ino)) != NULL) {
-		/* Clean up */
+		/* lost the race, clean up */
 		FREE_ZONE(ip, sizeof(struct inode), type);
 		vp = *vpp;
 		UBCINFOCHECK("ffs_vget", vp);
@@ -1066,49 +1139,28 @@ ffs_vget(mp, ino, vpp)
 	 */
 	ufs_ihashins(ip);
 
-	if (error = getnewvnode(VT_UFS, mp, ffs_vnodeop_p, &vp)) {
-		ufs_ihashrem(ip);
-		if (ISSET(ip->i_flag, IN_WALLOC))
-			wakeup(ip);
-		FREE_ZONE(ip, sizeof(struct inode), type);
-		*vpp = NULL;
-		return (error);
-	}
-	vp->v_data = ip;
-	ip->i_vnode = vp;
-
-	/*
-	 * A vnode is associated with the inode now,
-	 * vget() can deal with the serialization.
-	 */
-	CLR(ip->i_flag, IN_ALLOC);
-	if (ISSET(ip->i_flag, IN_WALLOC))
-		wakeup(ip);
-
 	/* Read in the disk contents for the inode, copy into the inode. */
 	if (error = bread(ump->um_devvp, fsbtodb(fs, ino_to_fsba(fs, ino)),
 	    (int)fs->fs_bsize, NOCRED, &bp)) {
-		/*
-		 * The inode does not contain anything useful, so it would
-		 * be misleading to leave it on its hash chain. With mode
-		 * still zero, it will be unlinked and returned to the free
-		 * list by vput().
-		 */
-		vput(vp);
 		brelse(bp);
-		*vpp = NULL;
-		return (error);
+		goto errout;
 	}
 #if REV_ENDIAN_FS
 	if (mp->mnt_flag & MNT_REVEND) {
 		byte_swap_inode_in(((struct dinode *)bp->b_data + ino_to_fsbo(fs, ino)),ip);
 	} else {
-#endif /* REV_ENDIAN_FS */
-	ip->i_din = *((struct dinode *)bp->b_data + ino_to_fsbo(fs, ino));
-#if REV_ENDIAN_FS
+		ip->i_din = *((struct dinode *)bp->b_data + ino_to_fsbo(fs, ino));
 	}
+#else
+	ip->i_din = *((struct dinode *)bp->b_data + ino_to_fsbo(fs, ino));
 #endif /* REV_ENDIAN_FS */
 	brelse(bp);
+
+	if (error = getnewvnode(VT_UFS, mp, ffs_vnodeop_p, &vp))
+		goto errout;
+
+	vp->v_data = ip;
+	ip->i_vnode = vp;
 
 	/*
 	 * Initialize the vnode from the inode, check for aliases.
@@ -1117,7 +1169,7 @@ ffs_vget(mp, ino, vpp)
 	if (error = ufs_vinit(mp, ffs_specop_p, FFS_FIFOOPS, &vp)) {
 		vput(vp);
 		*vpp = NULL;
-		return (error);
+		goto out;
 	}
 	/*
 	 * Finish inode initialization now that aliasing has been resolved.
@@ -1144,10 +1196,24 @@ ffs_vget(mp, ino, vpp)
 		ip->i_gid = ip->i_din.di_ogid;		/* XXX */
 	}						/* XXX */
 
-	*vpp = vp;
 	if (UBCINFOMISSING(vp) || UBCINFORECLAIMED(vp))
 		ubc_info_init(vp);
-	return (0);
+	*vpp = vp;
+
+out:
+	CLR(ip->i_flag, IN_ALLOC);
+	if (ISSET(ip->i_flag, IN_WALLOC))
+		wakeup(ip);
+	return (error);
+
+errout:
+	ufs_ihashrem(ip);
+	CLR(ip->i_flag, IN_ALLOC);
+	if (ISSET(ip->i_flag, IN_WALLOC))
+		wakeup(ip);
+	FREE_ZONE(ip, sizeof(struct inode), type);
+	*vpp = NULL;
+	return (error);
 }
 
 /*

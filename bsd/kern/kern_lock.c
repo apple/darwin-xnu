@@ -192,7 +192,7 @@ lockmgr(lkp, flags, interlkp, p)
 	int extflags;
 	void *self;
 
-	error = 0; self = current_thread();
+	error = 0; self = current_act();
 	if (p)
 		pid = p->p_pid;
 	else

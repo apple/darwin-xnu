@@ -105,7 +105,7 @@ ufs_root(mp, vpp)
 	struct vnode *nvp;
 	int error;
 
-	if (error = VFS_VGET(mp, (ino_t)ROOTINO, &nvp))
+	if (error = VFS_VGET(mp, (void *)ROOTINO, &nvp))
 		return (error);
 	*vpp = nvp;
 	return (0);
@@ -234,10 +234,10 @@ ufs_check_export(mp, ufhp, nam, vpp, exflagsp, credanonp)
 	 * Get the export permission structure for this <mp, client> tuple.
 	 */
 	np = vfs_export_lookup(mp, &ump->um_export, nam);
-	if (np == NULL)
+	if (nam && (np == NULL))
 		return (EACCES);
 
-	if (error = VFS_VGET(mp, ufhp->ufid_ino, &nvp)) {
+	if (error = VFS_VGET(mp, (void *)ufhp->ufid_ino, &nvp)) {
 		*vpp = NULLVP;
 		return (error);
 	}
@@ -248,7 +248,9 @@ ufs_check_export(mp, ufhp, nam, vpp, exflagsp, credanonp)
 		return (ESTALE);
 	}
 	*vpp = nvp;
-	*exflagsp = np->netc_exflags;
-	*credanonp = &np->netc_anon;
+	if (np) {
+		*exflagsp = np->netc_exflags;
+		*credanonp = &np->netc_anon;
+	}
 	return (0);
 }

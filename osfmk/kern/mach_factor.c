@@ -94,46 +94,49 @@ static uint32_t		fract[3] = {
 void
 compute_mach_factor(void)
 {
-	register processor_set_t	pset;
+	register processor_set_t	pset = &default_pset;
 	register int				ncpus;
-	register int				nthreads;
+	register int				nthreads, nshared;
 	register uint32_t			factor_now = 0;
 	register uint32_t			average_now = 0;
 	register uint32_t			load_now = 0;
 
-	pset = &default_pset;
 	if ((ncpus = pset->processor_count) > 0) {
 		/*
-		 *	Number of threads running in pset.
+		 *	Retrieve thread counts.
 		 */
 		nthreads = pset->run_count;
+		nshared = pset->share_count;
 
 		/*
-		 *	The current thread (running this calculation)
-		 *	doesn't count; it's always in the default pset.
+		 *	Don't include the current thread.
 		 */
-		if (pset == &default_pset)
-			nthreads -= 1;
-
-		if (nthreads > ncpus) {
-			factor_now = (ncpus * LOAD_SCALE) / (nthreads + 1);
-			load_now = (nthreads << SCHED_SHIFT) / ncpus;
-		}
-		else
-			factor_now = (ncpus - nthreads) * LOAD_SCALE;
+		nthreads -= 1;
 
 		/*
 		 *	Load average and mach factor calculations for
-		 *	those that ask about these things.
+		 *	those which ask about these things.
 		 */
 		average_now = nthreads * LOAD_SCALE;
+
+		if (nthreads > ncpus)
+			factor_now = (ncpus * LOAD_SCALE) / (nthreads + 1);
+		else
+			factor_now = (ncpus - nthreads) * LOAD_SCALE;
 
 		pset->mach_factor =	((pset->mach_factor << 2) + factor_now) / 5;
 		pset->load_average = ((pset->load_average << 2) + average_now) / 5;
 
 		/*
-		 *	sched_load is used by the timesharing algorithm.
+		 *	Compute the load factor used by the timesharing
+		 *	algorithm.
 		 */
+		if (nshared > nthreads)
+			nshared = nthreads;
+
+		if (nshared > ncpus)
+			load_now = (nshared << SCHED_SHIFT) / ncpus;
+
 		pset->sched_load = (pset->sched_load + load_now) >> 1;
 	}
 	else {

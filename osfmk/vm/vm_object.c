@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2001 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2003 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -88,8 +88,6 @@ extern int	vnode_pager_workaround;
 #include <vm/vm_page.h>
 #include <vm/vm_pageout.h>
 #include <kern/misc_protos.h>
-
-
 
 /*
  *	Virtual memory objects maintain the actual data
@@ -409,8 +407,8 @@ vm_object_bootstrap(void)
 	register 	i;
 
 	vm_object_zone = zinit((vm_size_t) sizeof(struct vm_object),
-				round_page(512*1024),
-				round_page(12*1024),
+				round_page_32(512*1024),
+				round_page_32(12*1024),
 				"vm objects");
 
 	queue_init(&vm_object_cached_list);
@@ -418,8 +416,8 @@ vm_object_bootstrap(void)
 
 	vm_object_hash_zone =
 			zinit((vm_size_t) sizeof (struct vm_object_hash_entry),
-			      round_page(512*1024),
-			      round_page(12*1024),
+			      round_page_32(512*1024),
+			      round_page_32(12*1024),
 			      "vm object hash entries");
 
 	for (i = 0; i < VM_OBJECT_HASH_COUNT; i++)
@@ -440,7 +438,7 @@ vm_object_bootstrap(void)
 	vm_object_template.copy = VM_OBJECT_NULL;
 	vm_object_template.shadow = VM_OBJECT_NULL;
 	vm_object_template.shadow_offset = (vm_object_offset_t) 0;
-	vm_object_template.cow_hint = 0;
+	vm_object_template.cow_hint = ~(vm_offset_t)0;
 	vm_object_template.true_share = FALSE;
 
 	vm_object_template.pager = MEMORY_OBJECT_NULL;
@@ -496,10 +494,17 @@ vm_object_bootstrap(void)
 
 /*
  *	Note that in the following size specifications, we need to add 1 because 
- *	VM_MAX_KERNEL_ADDRESS is a maximum address, not a size.
+ *	VM_MAX_KERNEL_ADDRESS (vm_last_addr) is a maximum address, not a size.
  */
+
+#ifdef ppc
+	_vm_object_allocate((vm_last_addr - VM_MIN_KERNEL_ADDRESS) + 1,
+			kernel_object);
+#else
 	_vm_object_allocate((VM_MAX_KERNEL_ADDRESS - VM_MIN_KERNEL_ADDRESS) + 1,
 			kernel_object);
+#endif
+	kernel_object->copy_strategy = MEMORY_OBJECT_COPY_NONE;
 
 	/*
 	 *	Initialize the "submap object".  Make it as large as the
@@ -507,8 +512,15 @@ vm_object_bootstrap(void)
 	 */
 
 	vm_submap_object = &vm_submap_object_store;
+#ifdef ppc
+	_vm_object_allocate((vm_last_addr - VM_MIN_KERNEL_ADDRESS) + 1,
+			vm_submap_object);
+#else
 	_vm_object_allocate((VM_MAX_KERNEL_ADDRESS - VM_MIN_KERNEL_ADDRESS) + 1,
 			vm_submap_object);
+#endif
+	vm_submap_object->copy_strategy = MEMORY_OBJECT_COPY_NONE;
+
 	/*
 	 * Create an "extra" reference to this object so that we never
 	 * try to deallocate it; zfree doesn't like to be called with
@@ -571,10 +583,21 @@ vm_object_deallocate(
 		 *	the object; we must lock it before removing
 		 *	the object.
 		 */
+	        for (;;) {
+		        vm_object_cache_lock();
 
-		vm_object_cache_lock();
-		vm_object_lock(object);
-
+			/*
+			 * if we try to take a regular lock here
+			 * we risk deadlocking against someone
+			 * holding a lock on this object while
+			 * trying to vm_object_deallocate a different
+			 * object
+			 */
+			if (vm_object_lock_try(object))
+			        break;
+		        vm_object_cache_unlock();
+			mutex_pause();  /* wait a bit */
+		}
 		assert(object->ref_count > 0);
 
 		/*
@@ -594,8 +617,21 @@ vm_object_deallocate(
 					
 				memory_object_unmap(pager);
 
-				vm_object_cache_lock();
-				vm_object_lock(object);
+				for (;;) {
+				        vm_object_cache_lock();
+
+					/*
+					 * if we try to take a regular lock here
+					 * we risk deadlocking against someone
+					 * holding a lock on this object while
+					 * trying to vm_object_deallocate a different
+					 * object
+					 */
+					if (vm_object_lock_try(object))
+					        break;
+					vm_object_cache_unlock();
+					mutex_pause();  /* wait a bit */
+				}
 				assert(object->ref_count > 0);
 			}
 		}
@@ -904,6 +940,7 @@ vm_object_terminate(
 		}
 
 		vm_page_lock_queues();
+		p->busy = TRUE;
 		VM_PAGE_QUEUES_REMOVE(p);
 		vm_page_unlock_queues();
 
@@ -924,16 +961,10 @@ vm_object_terminate(
 			panic("vm_object_terminate.4 0x%x 0x%x", object, p);
 
 		if (!p->dirty)
-			p->dirty = pmap_is_modified(p->phys_addr);
+			p->dirty = pmap_is_modified(p->phys_page);
 
 		if ((p->dirty || p->precious) && !p->error && object->alive) {
-			p->busy = TRUE;
-			vm_object_paging_begin(object);
-			/* protect the object from re-use/caching while it */
-			/* is unlocked */
-			vm_object_unlock(object);
 			vm_pageout_cluster(p); /* flush page */
-			vm_object_lock(object);
 			vm_object_paging_wait(object, THREAD_UNINT);
 			XPR(XPR_VM_OBJECT,
 			    "vm_object_terminate restart, object 0x%X ref %d\n",
@@ -982,14 +1013,14 @@ vm_object_terminate(
 
 	/*
 	 *	Detach the object from its shadow if we are the shadow's
-	 *	copy.
+	 *	copy. The reference we hold on the shadow must be dropped
+	 *	by our caller.
 	 */
 	if (((shadow_object = object->shadow) != VM_OBJECT_NULL) &&
 	    !(object->pageout)) {
 		vm_object_lock(shadow_object);
-		assert((shadow_object->copy == object) ||
-		       (shadow_object->copy == VM_OBJECT_NULL));
-		shadow_object->copy = VM_OBJECT_NULL;
+		if (shadow_object->copy == object)
+			shadow_object->copy = VM_OBJECT_NULL;
 		vm_object_unlock(shadow_object);
 	}
 
@@ -1320,12 +1351,12 @@ vm_object_deactivate_pages(
 				if ((m->wire_count == 0) && (!m->private) && (!m->gobbled) && (!m->busy)) {
 
 					m->reference = FALSE;
-					pmap_clear_reference(m->phys_addr);
+					pmap_clear_reference(m->phys_page);
 
 					if ((kill_page) && (object->internal)) {
 				        	m->precious = FALSE;
 					        m->dirty = FALSE;
-						pmap_clear_modify(m->phys_addr);
+						pmap_clear_modify(m->phys_page);
 						vm_external_state_clr(object->existence_map, offset);
 					}
 					VM_PAGE_QUEUES_REMOVE(m);
@@ -1411,10 +1442,10 @@ vm_object_pmap_protect(
 
 	vm_object_lock(object);
 
-	assert(object->copy_strategy == MEMORY_OBJECT_COPY_SYMMETRIC);
+	assert(object->internal);
 
 	while (TRUE) {
-	    if (object->resident_page_count > atop(size) / 2 &&
+	    if (object->resident_page_count > atop_32(size) / 2 &&
 		    pmap != PMAP_NULL) {
 		vm_object_unlock(object);
 		pmap_protect(pmap, pmap_start, pmap_start + size, prot);
@@ -1424,7 +1455,7 @@ vm_object_pmap_protect(
 	    /* if we are doing large ranges with respect to resident */
 	    /* page count then we should interate over pages otherwise */
 	    /* inverse page look-up will be faster */
-	    if ((object->resident_page_count / 4) <  atop(size)) {
+	    if ((object->resident_page_count / 4) <  atop_32(size)) {
 		vm_page_t		p;
 		vm_object_offset_t	end;
 
@@ -1446,7 +1477,7 @@ vm_object_pmap_protect(
 		    if (!p->fictitious &&
 			(offset <= p->offset) && (p->offset < end)) {
 
-			    pmap_page_protect(p->phys_addr,
+			    pmap_page_protect(p->phys_page,
 					      prot & ~p->page_lock);
 		    }
 		  }
@@ -1472,7 +1503,7 @@ vm_object_pmap_protect(
 			for(target_off = offset; 
 				target_off < end; target_off += PAGE_SIZE) {
 				if(p = vm_page_lookup(object, target_off)) {
-		    			pmap_page_protect(p->phys_addr,
+		    			pmap_page_protect(p->phys_page,
 						      prot & ~p->page_lock);
 				}
 		    	}
@@ -1935,7 +1966,8 @@ static int copy_delayed_protect_lookup_wait = 0;
  *		the asymmetric copy-on-write algorithm.
  *
  *	In/out conditions:
- *		The object must be unlocked on entry.
+ *		The src_object must be locked on entry.  It will be unlocked
+ *		on exit - so the caller must also hold a reference to it.
  *
  *		This routine will not block waiting for user-generated
  *		events.  It is not interruptible.
@@ -1949,7 +1981,7 @@ vm_object_copy_delayed(
 	vm_object_t		new_copy = VM_OBJECT_NULL;
 	vm_object_t		old_copy;
 	vm_page_t		p;
-	vm_object_size_t	copy_size;
+	vm_object_size_t	copy_size = src_offset + size;
 
 	int collisions = 0;
 	/*
@@ -1992,8 +2024,13 @@ vm_object_copy_delayed(
 	 */
 
  Retry:
-	vm_object_lock(src_object);
  
+	/*
+	 * Wait for paging in progress.
+	 */
+	if (!src_object->true_share)
+		vm_object_paging_wait(src_object, THREAD_UNINT);
+
 	/*
 	 *	See whether we can reuse the result of a previous
 	 *	copy operation.
@@ -2016,6 +2053,7 @@ vm_object_copy_delayed(
 			if (collisions > copy_delayed_max_collisions)
 				copy_delayed_max_collisions = collisions;
 
+			vm_object_lock(src_object);
 			goto Retry;
 		}
 
@@ -2030,52 +2068,66 @@ vm_object_copy_delayed(
 			 *	It has not been modified.
 			 *
 			 *	Return another reference to
-			 *	the existing copy-object.
+			 *	the existing copy-object if
+			 *	we can safely grow it (if
+			 *	needed).
 			 */
-			assert(old_copy->ref_count > 0);
-			old_copy->ref_count++;
-
-			if (old_copy->size < src_offset+size)
-				old_copy->size = src_offset+size;
-
-#if	TASK_SWAPPER
-			/*
-			 * We have to reproduce some of the code from
-			 * vm_object_res_reference because we've taken
-			 * the locks out of order here, and deadlock
-			 * would result if we simply called that function.
-			 */
-			if (++old_copy->res_count == 1) {
-				assert(old_copy->shadow == src_object);
-				vm_object_res_reference(src_object);
-			}
-#endif	/* TASK_SWAPPER */
-
-			vm_object_unlock(old_copy);
-			vm_object_unlock(src_object);
 
 			if (new_copy != VM_OBJECT_NULL) {
 				vm_object_unlock(new_copy);
 				vm_object_deallocate(new_copy);
 			}
 
-			return(old_copy);
-		}
-		if (new_copy == VM_OBJECT_NULL) {
+			if (old_copy->size < copy_size) {
+				/*
+				 * We can't perform a delayed copy if any of the
+				 * pages in the extended range are wired (because
+				 * we can't safely take write permission away from
+				 * wired pages).  If the pages aren't wired, then
+				 * go ahead and protect them.
+				 */
+				copy_delayed_protect_iterate++;
+				queue_iterate(&src_object->memq, p, vm_page_t, listq) {
+					if (!p->fictitious && 
+					    p->offset >= old_copy->size && 
+					    p->offset < copy_size) {
+						if (p->wire_count > 0) {
+							vm_object_unlock(old_copy);
+							vm_object_unlock(src_object);
+							return VM_OBJECT_NULL;
+						} else {
+							pmap_page_protect(p->phys_page, 
+								(VM_PROT_ALL & ~VM_PROT_WRITE &
+								 ~p->page_lock));
+						}
+					}
+				}
+				old_copy->size = copy_size;
+			}
+				
+			vm_object_reference_locked(old_copy);
 			vm_object_unlock(old_copy);
 			vm_object_unlock(src_object);
-			new_copy = vm_object_allocate(src_offset + size);
-			vm_object_lock(new_copy);
-			goto Retry;
+			return(old_copy);
 		}
 
 		/*
 		 * Adjust the size argument so that the newly-created 
 		 * copy object will be large enough to back either the
-		 * new old copy object or the new mapping.
+		 * old copy object or the new mapping.
 		 */
-		if (old_copy->size > src_offset+size)
-			size =  old_copy->size - src_offset;
+		if (old_copy->size > copy_size)
+			copy_size = old_copy->size;
+
+		if (new_copy == VM_OBJECT_NULL) {
+			vm_object_unlock(old_copy);
+			vm_object_unlock(src_object);
+			new_copy = vm_object_allocate(copy_size);
+			vm_object_lock(src_object);
+			vm_object_lock(new_copy);
+			goto Retry;
+		}
+		new_copy->size = copy_size;	
 
 		/*
 		 *	The copy-object is always made large enough to
@@ -2087,6 +2139,44 @@ vm_object_copy_delayed(
 		assert((old_copy->shadow == src_object) &&
 		    (old_copy->shadow_offset == (vm_object_offset_t) 0));
 
+	} else if (new_copy == VM_OBJECT_NULL) {
+		vm_object_unlock(src_object);
+		new_copy = vm_object_allocate(copy_size);
+		vm_object_lock(src_object);
+		vm_object_lock(new_copy);
+		goto Retry;
+	}
+
+	/*
+	 * We now have the src object locked, and the new copy object
+	 * allocated and locked (and potentially the old copy locked).
+	 * Before we go any further, make sure we can still perform
+	 * a delayed copy, as the situation may have changed.
+	 *
+	 * Specifically, we can't perform a delayed copy if any of the
+	 * pages in the range are wired (because we can't safely take
+	 * write permission away from wired pages).  If the pages aren't
+	 * wired, then go ahead and protect them.
+	 */
+	copy_delayed_protect_iterate++;
+	queue_iterate(&src_object->memq, p, vm_page_t, listq) {
+		if (!p->fictitious && p->offset < copy_size) {
+			if (p->wire_count > 0) {
+				if (old_copy)
+					vm_object_unlock(old_copy);
+				vm_object_unlock(src_object);
+				vm_object_unlock(new_copy);
+				vm_object_deallocate(new_copy);
+				return VM_OBJECT_NULL;
+			} else {
+				pmap_page_protect(p->phys_page, 
+					(VM_PROT_ALL & ~VM_PROT_WRITE &
+					 ~p->page_lock));
+			}
+		}
+	}
+
+	if (old_copy != VM_OBJECT_NULL) {
 		/*
 		 *	Make the old copy-object shadow the new one.
 		 *	It will receive no more pages from the original
@@ -2107,26 +2197,11 @@ vm_object_copy_delayed(
 #endif
 
 		vm_object_unlock(old_copy);	/* done with old_copy */
-	} else if (new_copy == VM_OBJECT_NULL) {
-		vm_object_unlock(src_object);
-		new_copy = vm_object_allocate(src_offset + size);
-		vm_object_lock(new_copy);
-		goto Retry;
-	}
-
-	/*
-	 * Readjust the copy-object size if necessary.
-	 */
-	copy_size = new_copy->size;
-	if (copy_size < src_offset+size) {
-		copy_size = src_offset+size;
-		new_copy->size = copy_size;
 	}
 
 	/*
 	 *	Point the new copy at the existing object.
 	 */
-
 	new_copy->shadow = src_object;
 	new_copy->shadow_offset = 0;
 	new_copy->shadowed = TRUE;	/* caller must set needs_copy */
@@ -2134,23 +2209,9 @@ vm_object_copy_delayed(
 	src_object->ref_count++;
 	VM_OBJ_RES_INCR(src_object);
 	src_object->copy = new_copy;
+	vm_object_unlock(src_object);
 	vm_object_unlock(new_copy);
 
-	/*
-	 *	Mark all (current) pages of the existing object copy-on-write.
-	 *	This object may have a shadow chain below it, but
-	 *	those pages will already be marked copy-on-write.
-	 */
-
-	vm_object_paging_wait(src_object, THREAD_UNINT);
-	copy_delayed_protect_iterate++;
-	queue_iterate(&src_object->memq, p, vm_page_t, listq) {
-	    if (!p->fictitious)
-		pmap_page_protect(p->phys_addr, 
-				  (VM_PROT_ALL & ~VM_PROT_WRITE &
-				   ~p->page_lock));
-	}
-	vm_object_unlock(src_object);
 	XPR(XPR_VM_OBJECT,
 		"vm_object_copy_delayed: used copy object %X for source %X\n",
 		(integer_t)new_copy, (integer_t)src_object, 0, 0, 0);
@@ -2210,6 +2271,18 @@ vm_object_copy_strategically(
 	 */
 
 	switch (copy_strategy) {
+	    case MEMORY_OBJECT_COPY_DELAY:
+		*dst_object = vm_object_copy_delayed(src_object,
+						     src_offset, size);
+		if (*dst_object != VM_OBJECT_NULL) {
+			*dst_offset = src_offset;
+			*dst_needs_copy = TRUE;
+			result = KERN_SUCCESS;
+			break;
+		}
+		vm_object_lock(src_object);
+		/* fall thru when delayed copy not allowed */
+
 	    case MEMORY_OBJECT_COPY_NONE:
 		result = vm_object_copy_slowly(src_object, src_offset, size,
 					       interruptible, dst_object);
@@ -2226,15 +2299,6 @@ vm_object_copy_strategically(
 			*dst_offset = src_offset;
 			*dst_needs_copy = TRUE;
 		}
-		break;
-
-	    case MEMORY_OBJECT_COPY_DELAY:
-		vm_object_unlock(src_object);
-		*dst_object = vm_object_copy_delayed(src_object,
-						     src_offset, size);
-		*dst_offset = src_offset;
-		*dst_needs_copy = TRUE;
-		result = KERN_SUCCESS;
 		break;
 
 	    case MEMORY_OBJECT_COPY_SYMMETRIC:
@@ -2525,69 +2589,53 @@ vm_object_enter(
 	 *	Look for an object associated with this port.
 	 */
 
-restart:
 	vm_object_cache_lock();
-	for (;;) {
+	do {
 		entry = vm_object_hash_lookup(pager, FALSE);
 
-		/*
-		 *	If a previous object is being terminated,
-		 *	we must wait for the termination message
-		 *	to be queued.
-		 *
-		 *	We set kobject to a non-null value to let the
-		 *	terminator know that someone is waiting.
-		 *	Among the possibilities is that the port
-		 *	could die while we're waiting.  Must restart
-		 *	instead of continuing the loop.
-		 */
-
-		if (entry != VM_OBJECT_HASH_ENTRY_NULL) {
-			if (entry->object != VM_OBJECT_NULL)
-				break;
-
+		if (entry == VM_OBJECT_HASH_ENTRY_NULL) {
+			if (new_object == VM_OBJECT_NULL) {
+				/*
+				 *	We must unlock to create a new object;
+				 *	if we do so, we must try the lookup again.
+				 */
+				vm_object_cache_unlock();
+				assert(new_entry == VM_OBJECT_HASH_ENTRY_NULL);
+				new_entry = vm_object_hash_entry_alloc(pager);
+				new_object = vm_object_allocate(size);
+				vm_object_cache_lock();
+			} else {
+				/*
+				 *	Lookup failed twice, and we have something
+				 *	to insert; set the object.
+				 */
+				vm_object_hash_insert(new_entry);
+				entry = new_entry;
+				entry->object = new_object;
+				new_entry = VM_OBJECT_HASH_ENTRY_NULL;
+				new_object = VM_OBJECT_NULL;
+				must_init = TRUE;
+			}
+		} else if (entry->object == VM_OBJECT_NULL) {
+			/*
+		 	 *	If a previous object is being terminated,
+			 *	we must wait for the termination message
+			 *	to be queued (and lookup the entry again).
+			 */
 			entry->waiting = TRUE;
+			entry = VM_OBJECT_HASH_ENTRY_NULL;
 			assert_wait((event_t) pager, THREAD_UNINT);
 			vm_object_cache_unlock();
 			thread_block((void (*)(void))0);
-			goto restart;
-		}
-
-		/*
-		 *	We must unlock to create a new object;
-		 *	if we do so, we must try the lookup again.
-		 */
-
-		if (new_object == VM_OBJECT_NULL) {
-			vm_object_cache_unlock();
-			assert(new_entry == VM_OBJECT_HASH_ENTRY_NULL);
-			new_entry = vm_object_hash_entry_alloc(pager);
-			new_object = vm_object_allocate(size);
 			vm_object_cache_lock();
-		} else {
-			/*
-			 *	Lookup failed twice, and we have something
-			 *	to insert; set the object.
-			 */
-
-			if (entry == VM_OBJECT_HASH_ENTRY_NULL) {
-				vm_object_hash_insert(new_entry);
-				entry = new_entry;
-				new_entry = VM_OBJECT_HASH_ENTRY_NULL;
-			}
-
-			entry->object = new_object;
-			new_object = VM_OBJECT_NULL;
-			must_init = TRUE;
 		}
-	}
+	} while (entry == VM_OBJECT_HASH_ENTRY_NULL);
 
 	object = entry->object;
 	assert(object != VM_OBJECT_NULL);
 
 	if (!must_init) {
 		vm_object_lock(object);
-		assert(object->pager_created);
 		assert(!internal || object->internal);
 		if (named) {
 			assert(!object->named);
@@ -2958,8 +3006,13 @@ vm_object_do_collapse(
 		}
 	}
 	
-	assert(object->pager == MEMORY_OBJECT_NULL ||
-	       backing_object->pager == MEMORY_OBJECT_NULL);
+#if	!MACH_PAGEMAP
+	assert(!object->pager_created && object->pager == MEMORY_OBJECT_NULL
+		|| (!backing_object->pager_created
+		&&  backing_object->pager == MEMORY_OBJECT_NULL));
+#else 
+        assert(!object->pager_created && object->pager == MEMORY_OBJECT_NULL);
+#endif	/* !MACH_PAGEMAP */
 
 	if (backing_object->pager != MEMORY_OBJECT_NULL) {
 		vm_object_hash_entry_t	entry;
@@ -2972,6 +3025,7 @@ vm_object_do_collapse(
 		 *	unused portion.
 		 */
 
+		assert(!object->paging_in_progress);
 		object->pager = backing_object->pager;
 		entry = vm_object_hash_lookup(object->pager, FALSE);
 		assert(entry != VM_OBJECT_HASH_ENTRY_NULL);
@@ -2990,8 +3044,6 @@ vm_object_do_collapse(
 	}
 
 	vm_object_cache_unlock();
-
-	object->paging_offset = backing_object->paging_offset + backing_offset;
 
 #if	MACH_PAGEMAP
 	/*
@@ -3028,7 +3080,7 @@ vm_object_do_collapse(
 	object->shadow = backing_object->shadow;
 	object->shadow_offset += backing_object->shadow_offset;
 	assert((object->shadow == VM_OBJECT_NULL) ||
-	       (object->shadow->copy == VM_OBJECT_NULL));
+	       (object->shadow->copy != backing_object));
 
 	/*
 	 *	Discard backing_object.
@@ -3168,15 +3220,12 @@ vm_object_do_bypass(
  */
 __private_extern__ void
 vm_object_collapse(
-	register vm_object_t	object)
+	register vm_object_t			object,
+	register vm_object_offset_t		hint_offset)
 {
 	register vm_object_t			backing_object;
-	register vm_object_offset_t		backing_offset;
-	register vm_object_size_t		size;
-	register vm_object_offset_t		new_offset;
-	register vm_page_t			p;
-
-	vm_offset_t			current_offset;	
+	register unsigned int			rcount;
+	register unsigned int			size;
 
 	if (! vm_object_collapse_allowed && ! vm_object_bypass_allowed) {
 		return;
@@ -3233,7 +3282,7 @@ vm_object_collapse(
 		 *	parent object.
 		 */
 		if (backing_object->shadow != VM_OBJECT_NULL &&
-		    backing_object->shadow->copy != VM_OBJECT_NULL) {
+		    backing_object->shadow->copy == backing_object) {
 			vm_object_unlock(backing_object);
 			return;
 		}
@@ -3248,16 +3297,22 @@ vm_object_collapse(
 		 *	object, we may be able to collapse it into the
 		 *	parent.
 		 *
-		 *	The backing object must not have a pager
-		 *	created for it, since collapsing an object
-		 *	into a backing_object dumps new pages into
-		 *	the backing_object that its pager doesn't
-		 *	know about.
+		 *	If MACH_PAGEMAP is defined:
+		 *	The parent must not have a pager created for it,
+		 *	since collapsing a backing_object dumps new pages
+		 *	into the parent that its pager doesn't know about
+		 *	(and the collapse code can't merge the existence
+		 *	maps).
+		 *	Otherwise:
+		 *	As long as one of the objects is still not known
+		 *	to the pager, we can collapse them.
 		 */
-
 		if (backing_object->ref_count == 1 &&
-		    ! object->pager_created &&
-		    vm_object_collapse_allowed) {
+		    (!object->pager_created 
+#if	!MACH_PAGEMAP
+			|| !backing_object->pager_created
+#endif	/*!MACH_PAGEMAP */
+		    ) && vm_object_collapse_allowed) {
 
 			XPR(XPR_VM_OBJECT, 
 		   "vm_object_collapse: %x to %x, pager %x, pager_request %x\n",
@@ -3298,96 +3353,161 @@ vm_object_collapse(
 
 
 		/*
-		 *	If the backing object has a pager but no pagemap,
-		 *	then we cannot bypass it, because we don't know
-		 *	what pages it has.
+		 *	If the object doesn't have all its pages present,
+		 *	we have to make sure no pages in the backing object
+		 *	"show through" before bypassing it.
 		 */
-		if (backing_object->pager_created
+		size = atop(object->size);
+		rcount = object->resident_page_count;
+		if (rcount != size) {
+			vm_object_size_t	size;
+			vm_object_offset_t	offset;
+			vm_object_offset_t	backing_offset;
+			unsigned int     	backing_rcount;
+			unsigned int		lookups = 0;
+
+			/*
+			 *	If the backing object has a pager but no pagemap,
+			 *	then we cannot bypass it, because we don't know
+			 *	what pages it has.
+			 */
+			if (backing_object->pager_created
 #if	MACH_PAGEMAP
-		    && (backing_object->existence_map == VM_EXTERNAL_NULL)
+				&& (backing_object->existence_map == VM_EXTERNAL_NULL)
 #endif	/* MACH_PAGEMAP */
-		    ) {
-			vm_object_unlock(backing_object);
-			return;
-		}
-
-		/*
-		 *	If the object has a pager but no pagemap,
-		 *	then we cannot bypass it, because we don't know
-		 *	what pages it has.
-		 */
-		if (object->pager_created
-#if	MACH_PAGEMAP
-		    && (object->existence_map == VM_EXTERNAL_NULL)
-#endif	/* MACH_PAGEMAP */
-		    ) {
-			vm_object_unlock(backing_object);
-			return;
-		}
-
-		backing_offset = object->shadow_offset;
-		size = object->size;
-
-		/*
-		 *	If all of the pages in the backing object are
-		 *	shadowed by the parent object, the parent
-		 *	object no longer has to shadow the backing
-		 *	object; it can shadow the next one in the
-		 *	chain.
-		 *
-		 *	If the backing object has existence info,
-		 *	we must check examine its existence info
-		 *	as well.
-		 *
-		 */
-
-		if(object->cow_hint >= size)
-			object->cow_hint = 0;
-		current_offset = object->cow_hint;
-		while(TRUE) {
-			if (vm_page_lookup(object, 
-				(vm_object_offset_t)current_offset) 
-							!= VM_PAGE_NULL) {
-				current_offset+=PAGE_SIZE;
-			} else if ((object->pager_created) &&
-				(object->existence_map != NULL) &&
-				(vm_external_state_get(object->existence_map, 
-				current_offset) 
-					!= VM_EXTERNAL_STATE_ABSENT)) {
-				current_offset+=PAGE_SIZE;
-			} else if (vm_page_lookup(backing_object,
-				(vm_object_offset_t)current_offset
-				+ backing_offset)!= VM_PAGE_NULL) {
-				/* found a dependency */
-				object->cow_hint = current_offset;
+				) {
 				vm_object_unlock(backing_object);
 				return;
-			} else if ((backing_object->pager_created) &&
-				(backing_object->existence_map != NULL) &&
-					(vm_external_state_get(
-					backing_object->existence_map, 
-					current_offset + backing_offset) 
-						!= VM_EXTERNAL_STATE_ABSENT)) {
-				/* found a dependency */
-				object->cow_hint = current_offset;
+			}
+
+			/*
+			 *	If the object has a pager but no pagemap,
+			 *	then we cannot bypass it, because we don't know
+			 *	what pages it has.
+			 */
+			if (object->pager_created
+#if	MACH_PAGEMAP
+				&& (object->existence_map == VM_EXTERNAL_NULL)
+#endif	/* MACH_PAGEMAP */
+				) {
 				vm_object_unlock(backing_object);
 				return;
-			} else {
-				current_offset+=PAGE_SIZE;
 			}
-			if(current_offset >= size) {
-				/* wrap at end of object */
-				current_offset = 0;
+
+			/*
+			 *	If all of the pages in the backing object are
+			 *	shadowed by the parent object, the parent
+			 *	object no longer has to shadow the backing
+			 *	object; it can shadow the next one in the
+			 *	chain.
+			 *
+			 *	If the backing object has existence info,
+			 *	we must check examine its existence info
+			 *	as well.
+			 *
+			 */
+
+			backing_offset = object->shadow_offset;
+			backing_rcount = backing_object->resident_page_count;
+
+#define EXISTS_IN_OBJECT(obj, off, rc) \
+	(vm_external_state_get((obj)->existence_map, \
+	 (vm_offset_t)(off)) == VM_EXTERNAL_STATE_EXISTS || \
+	 ((rc) && ++lookups && vm_page_lookup((obj), (off)) != VM_PAGE_NULL && (rc)--))
+
+			/*
+			 * Check the hint location first
+			 * (since it is often the quickest way out of here).
+			 */
+			if (object->cow_hint != ~(vm_offset_t)0)
+				hint_offset = (vm_object_offset_t)object->cow_hint;
+			else
+				hint_offset = (hint_offset > 8 * PAGE_SIZE_64) ?
+				              (hint_offset - 8 * PAGE_SIZE_64) : 0;
+
+			if (EXISTS_IN_OBJECT(backing_object, hint_offset +
+			                     backing_offset, backing_rcount) &&
+			    !EXISTS_IN_OBJECT(object, hint_offset, rcount)) {
+				/* dependency right at the hint */
+				object->cow_hint = (vm_offset_t)hint_offset;
+				vm_object_unlock(backing_object);
+				return;
 			}
-			if(current_offset == object->cow_hint) {
-				/* we are free of shadow influence */
-				break;
+
+			/*
+			 * If the object's window onto the backing_object
+			 * is large compared to the number of resident
+			 * pages in the backing object, it makes sense to
+			 * walk the backing_object's resident pages first.
+			 *
+			 * NOTE: Pages may be in both the existence map and 
+			 * resident.  So, we can't permanently decrement
+			 * the rcount here because the second loop may
+			 * find the same pages in the backing object'
+			 * existence map that we found here and we would
+			 * double-decrement the rcount.  We also may or
+			 * may not have found the 
+			 */
+			if (backing_rcount && size >
+			    ((backing_object->existence_map) ?
+			     backing_rcount : (backing_rcount >> 1))) {
+				unsigned int rc = rcount;
+				vm_page_t p;
+
+				backing_rcount = backing_object->resident_page_count;
+				p = (vm_page_t)queue_first(&backing_object->memq);
+				do {
+					/* Until we get more than one lookup lock */
+					if (lookups > 256) {
+						lookups = 0;
+						delay(1);
+					}
+
+					offset = (p->offset - backing_offset);
+					if (offset < object->size &&
+					    offset != hint_offset &&
+					    !EXISTS_IN_OBJECT(object, offset, rc)) {
+						/* found a dependency */
+						object->cow_hint = (vm_offset_t)offset;
+						vm_object_unlock(backing_object);
+						return;
+					}
+					p = queue_next(p);
+
+				} while (--backing_rcount);
+			}
+
+			/*
+			 * Walk through the offsets looking for pages in the
+			 * backing object that show through to the object.
+			 */
+			if (backing_rcount || backing_object->existence_map) {
+				offset = hint_offset;
+				
+				while((offset =
+				      (offset + PAGE_SIZE_64 < object->size) ?
+				      (offset + PAGE_SIZE_64) : 0) != hint_offset) {
+
+					/* Until we get more than one lookup lock */
+					if (lookups > 256) {
+						lookups = 0;
+						delay(1);
+					}
+
+					if (EXISTS_IN_OBJECT(backing_object, offset +
+				            backing_offset, backing_rcount) &&
+					    !EXISTS_IN_OBJECT(object, offset, rcount)) {
+						/* found a dependency */
+						object->cow_hint = (vm_offset_t)offset;
+						vm_object_unlock(backing_object);
+						return;
+					}
+				}
 			}
 		}
-		/* reset the cow_hint for any objects deeper in the chain */
-		object->cow_hint = 0;
 
-
+		/* reset the offset hint for any objects deeper in the chain */
+		object->cow_hint = (vm_offset_t)0;
 
 		/*
 		 *	All interesting pages in the backing object
@@ -3433,7 +3553,7 @@ vm_object_page_remove(
 	 *	It balances vm_object_lookup vs iteration.
 	 */
 
-	if (atop(end - start) < (unsigned)object->resident_page_count/16) {
+	if (atop_64(end - start) < (unsigned)object->resident_page_count/16) {
 		vm_object_page_remove_lookup++;
 
 		for (; start < end; start += PAGE_SIZE_64) {
@@ -3441,7 +3561,7 @@ vm_object_page_remove(
 			if (p != VM_PAGE_NULL) {
 				assert(!p->cleaning && !p->pageout);
 				if (!p->fictitious)
-					pmap_page_protect(p->phys_addr,
+					pmap_page_protect(p->phys_page,
 							  VM_PROT_NONE);
 				VM_PAGE_FREE(p);
 			}
@@ -3455,7 +3575,7 @@ vm_object_page_remove(
 			if ((start <= p->offset) && (p->offset < end)) {
 				assert(!p->cleaning && !p->pageout);
 				if (!p->fictitious)
-				    pmap_page_protect(p->phys_addr,
+				    pmap_page_protect(p->phys_page,
 						      VM_PROT_NONE);
 				VM_PAGE_FREE(p);
 			}
@@ -3522,7 +3642,7 @@ vm_object_coalesce(
 	/*
 	 *	Try to collapse the object first
 	 */
-	vm_object_collapse(prev_object);
+	vm_object_collapse(prev_object, prev_offset);
 
 	/*
 	 *	Can't coalesce if pages not mapped to
@@ -3600,7 +3720,7 @@ vm_object_page_map(
 	vm_page_t	old_page;
 	vm_object_offset_t	addr;
 
-	num_pages = atop(size);
+	num_pages = atop_64(size);
 
 	for (i = 0; i < num_pages; i++, offset += PAGE_SIZE_64) {
 
@@ -3965,27 +4085,24 @@ vm_object_find(
 
 kern_return_t
 vm_object_populate_with_private(
-		vm_object_t	object,
+		vm_object_t		object,
 		vm_object_offset_t	offset,
-		vm_offset_t	phys_addr,
-		vm_size_t	size)
+		ppnum_t			phys_page,
+		vm_size_t		size)
 {
-	vm_offset_t		base_addr;
+	ppnum_t			base_page;
 	vm_object_offset_t	base_offset;
 
 
 	if(!object->private)
 		return KERN_FAILURE;
 
-	if((base_addr = trunc_page(phys_addr)) != phys_addr) {
-		return KERN_FAILURE;
-	}
-
+	base_page = phys_page;
 
 	vm_object_lock(object);
 	if(!object->phys_contiguous) {
 		vm_page_t	m;
-		if((base_offset = trunc_page(offset)) != offset) {
+		if((base_offset = trunc_page_64(offset)) != offset) {
 			vm_object_unlock(object);
 			return KERN_FAILURE;
 		}
@@ -3997,7 +4114,7 @@ vm_object_populate_with_private(
 					vm_page_lock_queues();
 					m->fictitious = FALSE;
 					m->private = TRUE;
-					m->phys_addr = base_addr;
+					m->phys_page = base_page;
 					if(!m->busy) {
 						m->busy = TRUE;
 					}
@@ -4007,11 +4124,11 @@ vm_object_populate_with_private(
 					}
 					m->list_req_pending = TRUE;
 					vm_page_unlock_queues();
-				} else if (m->phys_addr != base_addr) {
+				} else if (m->phys_page != base_page) {
 					/* pmap call to clear old mapping */
-					pmap_page_protect(m->phys_addr,
+					pmap_page_protect(m->phys_page,
 								VM_PROT_NONE);
-					m->phys_addr = base_addr;
+					m->phys_page = base_page;
 				}
 			} else {
 				while ((m = vm_page_grab_fictitious()) 
@@ -4020,7 +4137,7 @@ vm_object_populate_with_private(
 				vm_page_lock_queues();
 				m->fictitious = FALSE;
 				m->private = TRUE;
-				m->phys_addr = base_addr;
+				m->phys_page = base_page;
 				m->list_req_pending = TRUE;
 				m->absent = TRUE;
 				m->unusual = TRUE;
@@ -4028,7 +4145,7 @@ vm_object_populate_with_private(
 				vm_page_unlock_queues();
 	    			vm_page_insert(m, object, base_offset);
 			}
-			base_addr += PAGE_SIZE;
+			base_page++;									/* Go to the next physical page */
 			base_offset += PAGE_SIZE;
 			size -= PAGE_SIZE;
 		}
@@ -4041,7 +4158,7 @@ vm_object_populate_with_private(
 		
 		/* shadows on contiguous memory are not allowed */
 		/* we therefore can use the offset field */
-		object->shadow_offset = (vm_object_offset_t)phys_addr;
+		object->shadow_offset = (vm_object_offset_t)(phys_page << 12);
 		object->size = size;
 	}
 	vm_object_unlock(object);
@@ -4382,7 +4499,7 @@ vm_object_lock_request(
 	if ((prot & ~VM_PROT_ALL) != 0 && prot != VM_PROT_NO_CHANGE)
 		return (KERN_INVALID_ARGUMENT);
 
-	size = round_page(size);
+	size = round_page_64(size);
 
 	/*
 	 *	Lock the object, and acquire a paging reference to
@@ -4390,7 +4507,6 @@ vm_object_lock_request(
 	 */
 	vm_object_lock(object);
 	vm_object_paging_begin(object);
-	offset -= object->paging_offset;
 
 	(void)vm_object_update(object,
 		offset, size, should_return, flags, prot);

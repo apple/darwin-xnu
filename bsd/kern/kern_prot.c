@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2002 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2003 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -75,6 +75,7 @@
 #include <sys/timeb.h>
 #include <sys/times.h>
 #include <sys/malloc.h>
+#include <sys/kern_audit.h>
 
 #include <sys/mount.h>
 #include <mach/message.h>
@@ -279,7 +280,7 @@ setsid(p, uap, retval)
 	register_t *retval;
 {
 
-	if (p->p_pgid == p->p_pid || pgfind(p->p_pid)) {
+	if (p->p_pgid == p->p_pid || pgfind(p->p_pid) || p->p_flag & P_INVFORK) {
 		return (EPERM);
 	} else {
 		(void)enterpgrp(p, p->p_pid, 1);
@@ -329,7 +330,7 @@ setpgid(curp, uap, retval)
 		uap->pgid = targp->p_pid;
 	else if (uap->pgid != targp->p_pid)
 		if ((pgrp = pgfind(uap->pgid)) == 0 ||
-	            pgrp->pg_session != curp->p_session)
+		    pgrp->pg_session != curp->p_session)
 			return (EPERM);
 	return (enterpgrp(targp, uap->pgid, 0));
 }
@@ -369,6 +370,7 @@ setuid(p, uap, retval)
 	int error;
 
 	uid = uap->uid;
+	AUDIT_ARG(uid, uid, 0, 0, 0);
 	if (uid != pc->p_ruid &&
 	    (error = suser(pc->pc_ucred, &p->p_acflag)))
 		return (error);
@@ -407,6 +409,7 @@ seteuid(p, uap, retval)
 	int error;
 
 	euid = uap->euid;
+	AUDIT_ARG(uid, 0, euid, 0, 0);
 	if (euid != pc->p_ruid && euid != pc->p_svuid &&
 	    (error = suser(pc->pc_ucred, &p->p_acflag)))
 		return (error);
@@ -437,6 +440,7 @@ setgid(p, uap, retval)
 	int error;
 
 	gid = uap->gid;
+	AUDIT_ARG(gid, gid, 0, 0, 0);
 	if (gid != pc->p_rgid && (error = suser(pc->pc_ucred, &p->p_acflag)))
 		return (error);
 	pcred_writelock(p);
@@ -464,6 +468,7 @@ setegid(p, uap, retval)
 	int error;
 
 	egid = uap->egid;
+	AUDIT_ARG(gid, 0, egid, 0, 0);
 	if (egid != pc->p_rgid && egid != pc->p_svgid &&
 	    (error = suser(pc->pc_ucred, &p->p_acflag)))
 		return (error);
@@ -495,16 +500,23 @@ setgroups(p, uap, retval)
 	if (error = suser(pc->pc_ucred, &p->p_acflag))
 		return (error);
 	ngrp = uap->gidsetsize;
-	if (ngrp < 1 || ngrp > NGROUPS)
+	if (ngrp > NGROUPS)
 		return (EINVAL);
 	new = crget();
-	error = copyin((caddr_t)uap->gidset,
-	    (caddr_t)new->cr_groups, ngrp * sizeof(gid_t));
-	if (error) {
-		crfree(new);
-		return (error);
+	
+	if ( ngrp < 1 ) {
+		ngrp = 1;
+	}
+	else {
+		error = copyin((caddr_t)uap->gidset,
+			(caddr_t)new->cr_groups, ngrp * sizeof(gid_t));
+		if (error) {
+			crfree(new);
+			return (error);
+		}
 	}
 	new->cr_ngroups = ngrp;
+	AUDIT_ARG(groupset, new->cr_groups, ngrp);
 	pcred_writelock(p);
 	old = pc->pc_ucred;
 	new->cr_uid = old->cr_uid;
@@ -723,6 +735,32 @@ crdup(cr)
 }
 
 /*
+ * compare two cred structs
+ */
+int
+crcmp(cr1, cr2)
+	struct ucred *cr1;
+	struct ucred *cr2;
+{
+	int i;
+
+	if (cr1 == cr2)
+		return 0;
+	if (cr1 == NOCRED || cr1 == FSCRED ||
+	    cr2 == NOCRED || cr2 == FSCRED)
+		return 1;
+	if (cr1->cr_uid != cr2->cr_uid)
+		return 1;
+	if (cr1->cr_ngroups != cr2->cr_ngroups)
+		return 1;
+	// XXX assumes groups will always be listed in some order
+	for (i=0; i < cr1->cr_ngroups; i++)
+		if (cr1->cr_groups[i] != cr2->cr_groups[i])
+			return 1;
+	return (0);
+}
+
+/*
  * Get login name, if available.
  */
 struct getlogin_args {
@@ -774,13 +812,40 @@ kern_return_t
 set_security_token(struct proc * p)
 {
 	security_token_t sec_token;
+	audit_token_t    audit_token;
 
 	sec_token.val[0] = p->p_ucred->cr_uid;
 	sec_token.val[1] = p->p_ucred->cr_gid;
+	audit_token.val[0] = p->p_au->ai_auid;
+	audit_token.val[1] = p->p_au->ai_asid;
+	/* use au_tid for now, until au_tid_addr is put to use */
+	audit_token.val[2] = p->p_au->ai_termid.port;
+	audit_token.val[3] = p->p_au->ai_termid.machine;
+	audit_token.val[4] = 0; 
+	audit_token.val[5] = 0;
+	audit_token.val[6] = 0;
+	audit_token.val[7] = 0;
 	return host_security_set_task_token(host_security_self(),
 					   p->task,
 					   sec_token,
+					   audit_token,
 					   (sec_token.val[0]) ?
-					        HOST_PRIV_NULL :
+						HOST_PRIV_NULL :
 						host_priv_self());
+}
+
+
+/*
+ * Fill in a struct xucred based on a struct ucred.
+ */
+__private_extern__
+void
+cru2x(struct ucred *cr, struct xucred *xcr)
+{
+
+	bzero(xcr, sizeof(*xcr));
+	xcr->cr_version = XUCRED_VERSION;
+	xcr->cr_uid = cr->cr_uid;
+	xcr->cr_ngroups = cr->cr_ngroups;
+	bcopy(cr->cr_groups, xcr->cr_groups, sizeof(xcr->cr_groups));
 }

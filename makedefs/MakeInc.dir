@@ -272,7 +272,18 @@ build_all:
 			TARGET=$${TARGET}				\
 		build_all;						\
 	done;								\
-	${MAKE} ${MAKEJOBS} INCL_MAKEDEP=TRUE TARGET=$${TARGET} do_build_all;
+	${MAKE} ${MAKEJOBS} INCL_MAKEDEP=TRUE TARGET=$${TARGET} do_build_all;	\
+	_TMP_comp_subdir="$(CONFIG_SUBDIRS) $($(addprefix CONFIG_SUBDIRS_, $(ARCH_CONFIG)))";	\
+	for comp_subdir in $${_TMP_comp_subdir};			\
+	do								\
+		$(MKDIR) $${comp_subdir};				\
+		${MAKE} -C $${comp_subdir}				\
+			MAKEFILES=${SOURCE}/$${comp_subdir}/Makefile	\
+			SOURCE=${SOURCE}$${comp_subdir}/		\
+			TARGET=$${TARGET}				\
+		build_all;						\
+	done;								\
+	
 
 #
 # Build all architectures for all Configuration/Architecture options
@@ -303,6 +314,7 @@ do_build_mach_kernel:
 build_mach_kernel: 
 	@echo "[ $(SOURCE) ] make build_mach_kernel $(COMPONENT) $(KERNEL_CONFIG) $(ARCH_CONFIG) $(TARGET)";	\
 	${MAKE} ${MAKEJOBS} do_build_mach_kernel;
+
 
 #
 #

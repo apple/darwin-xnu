@@ -168,6 +168,13 @@ ctl_connect(struct socket *so, struct sockaddr *nam, struct proc *p)
     if (ctl == NULL)
         return(EADDRNOTAVAIL);
 
+    if (ctl->flags & CTL_FLAG_PRIVILEGED) {
+        if (p == 0)
+            return(EINVAL);
+        if (error = suser(p->p_ucred, &p->p_acflag))
+            return error;
+    }
+
     if (ctl->skt != NULL)
         return(EBUSY);
 
@@ -178,13 +185,6 @@ ctl_connect(struct socket *so, struct sockaddr *nam, struct proc *p)
         return error;
     
     ctl->skt = so;
-    
-    if (ctl->flags & CTL_FLAG_PRIVILEGED) {
-        if (p == 0)
-            return(EPERM);
-        if (error = suser(p->p_ucred, &p->p_acflag))
-            return error;
-    }
     
     if (ctl->connect)
         error = (*ctl->connect)(ctl, ctl->userdata);
@@ -284,7 +284,8 @@ ctl_enqueuedata(void *ctlref, void *data, size_t len, u_int32_t flags)
     }
 
     bcopy(data, mtod(m, void *), len);
-    
+    m->m_pkthdr.len = m->m_len = len;
+
     sbappend(&so->so_rcv, m);
     if ((flags & CTL_DATA_NOWAKEUP) == 0)
         sorwakeup(so);

@@ -79,6 +79,7 @@ routine host_security_create_task_token(
 		host_security	: host_security_t;
 		parent_task	: task_t;
 		sec_token	: security_token_t;
+		audit_token	: audit_token_t;
 		host		: host_t;
 		ledgers		: ledger_array_t;
 		inherit_memory	: boolean_t;
@@ -91,5 +92,6 @@ routine host_security_set_task_token(
 		host_security	: host_security_t;
 		target_task	: task_t;
 		sec_token	: security_token_t;
+		audit_token	: audit_token_t;
 		host		: host_t);
 

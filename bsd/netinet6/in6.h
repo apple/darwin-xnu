@@ -418,9 +418,10 @@ struct route_in6 {
 
 #define IPV6_CHECKSUM		26 /* int; checksum offset for raw socket */
 #define IPV6_V6ONLY		27 /* bool; only bind INET6 at wildcard bind */
-#ifndef _KERNEL
+#ifndef KERNEL
 #define IPV6_BINDV6ONLY		IPV6_V6ONLY
 #endif
+
 
 #if 1 /*IPSEC*/
 #define IPV6_IPSEC_POLICY	28 /* struct; get/set security policy */
@@ -587,13 +588,14 @@ struct in6_pktinfo {
 struct cmsghdr;
 struct mbuf;
 struct ifnet;
+struct in6_aliasreq;
 
 int	in6_cksum __P((struct mbuf *, u_int8_t, u_int32_t, u_int32_t));
 int	in6_localaddr __P((struct in6_addr *));
 int	in6_addrscope __P((struct in6_addr *));
 struct	in6_ifaddr *in6_ifawithscope __P((struct ifnet *, struct in6_addr *));
 struct	in6_ifaddr *in6_ifawithifp __P((struct ifnet *, struct in6_addr *));
-extern void in6_if_up __P((struct ifnet *));
+extern void in6_if_up __P((struct ifnet *, struct in6_aliasreq *));
 struct sockaddr;
 
 void	in6_sin6_2_sin __P((struct sockaddr_in *sin,

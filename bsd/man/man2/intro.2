@@ -404,6 +404,47 @@ locks was reached.
 .It Er 78 ENOSYS Em "Function not implemented" .
 Attempted a system call that is not available on this 
 system.
+.It Er 79 EFTYPE Em "Inappropriate file type or format" .
+The file was the wrong type for the operation, or a data
+file had the wrong format.
+.It Er 80 EAUTH Em "Authentication error" .
+Attempted to use an invalid authentication ticket to
+mount an NFS file system.
+.It Er 81 ENEEDAUTH Em "Need authenticator" .
+An authentication ticket must be obtained before the
+given NFS file system may be mounted.
+.It Er 82 EPWROFF Em "Device power is off" .
+The device power is off.
+.It Er 83 EDEVERR Em "Device error" .
+A device error has occurred, e.g. a printer running out of paper.
+.It Er 84 EOVERFLOW Em "Value too large to be stored in data type" .
+A numerical result of the function was too large to be
+stored in the caller provided space.
+.It Er 85 EBADEXEC Em "Bad executable (or shared library)" .
+The executable or shared library being referenced was malformed.
+.It Er 86 EBADARCH Em "Bad CPU type in executable" .
+The executable in question does not support the current CPU.
+.It Er 87 ESHLIBVERS Em "Shared library version mismatch" .
+The version of the shared library on the system does not match
+the version which was expected.
+.It Er 88 EBADMACHO Em "Malformed Mach-o file" .
+The Mach object file is malformed.
+.It Er 89 ECANCELED Em "Operation canceled" .
+The scheduled operation was canceled.
+.It Er 90 EIDRM Em "Identifier removed" .
+An IPC identifier was removed while the current process
+was waiting on it.
+.It Er 91 ENOMSG Em "No message of desired type" .
+An IPC message queue does not contain a message of the
+desired type, or a message catalog does not contain the
+requested message.
+.It Er 92 EILSEQ Em "Illegal byte sequence" .
+While decoding a multibyte character the function came
+along an invalid or an incomplete sequence of bytes or
+the given wide character is invalid.
+.It Er 93 ENOATTR Em "Attribute not found" .
+The specified extended attribute does not exist.
+.El
 .Sh DEFINITIONS
 .Bl -tag -width Ds
 .It  Process ID .
@@ -664,8 +705,8 @@ communications protocols.  Each protocol set supports addresses
 of a certain format.  An Address Family is the set of addresses
 for a specific group of protocols.  Each socket has an address
 chosen from the address family in which the socket was created.
+.El
 .Sh SEE ALSO
-.Xr intro 3 ,
 .Xr perror 3 
 .Sh HISTORY
 An

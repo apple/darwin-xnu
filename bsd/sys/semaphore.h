@@ -43,6 +43,9 @@ typedef int sem_t;
 #define SEM_FAILED -1
 
 #ifndef KERNEL
+#include <sys/cdefs.h>
+
+__BEGIN_DECLS
 int sem_close(sem_t *);
 int sem_destroy(sem_t *);
 int sem_getvalue(sem_t *, int *);
@@ -52,6 +55,7 @@ int sem_post(sem_t *);
 int sem_trywait(sem_t *);
 int sem_unlink(const char *);
 int sem_wait(sem_t *);
+__END_DECLS
 
 #endif /* KERNEL */
 

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1999, 2000-2002 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 1999, 2000-2003 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -40,6 +40,8 @@
 
 #define RANDOM_MAJOR  -1 /* let the kernel pick the device number */
 
+d_ioctl_t       random_ioctl;
+
 /*
  * A struct describing which functions will get invoked for certain
  * actions.
@@ -50,7 +52,7 @@ static struct cdevsw random_cdevsw =
 	random_close,		/* close */
 	random_read,		/* read */
 	random_write,		/* write */
-	eno_ioctl,			/* ioctl */
+	random_ioctl,			/* ioctl */
 	nulldev,			/* stop */
 	nulldev,			/* reset */
 	NULL,				/* tty's */
@@ -142,14 +144,33 @@ random_init()
 	}
 
 	devfs_make_node(makedev (ret, 0), DEVFS_CHAR,
-		UID_ROOT, GID_WHEEL, 0644, "random", 0);
+		UID_ROOT, GID_WHEEL, 0666, "random", 0);
 
 	/*
 	 * also make urandom 
 	 * (which is exactly the same thing in our context)
 	 */
 	devfs_make_node(makedev (ret, 1), DEVFS_CHAR,
-		UID_ROOT, GID_WHEEL, 0644, "urandom", 0);
+		UID_ROOT, GID_WHEEL, 0666, "urandom", 0);
+}
+
+int
+random_ioctl(dev, cmd, data, flag, p)
+        dev_t dev;
+        u_long cmd;
+        caddr_t data;
+        int flag;
+        struct proc *p;
+{
+	switch (cmd) {
+	case FIONBIO:
+	case FIOASYNC:
+		break;
+	default:
+		return ENODEV;
+	}
+
+	return (0);
 }
 
 /*
@@ -172,8 +193,10 @@ random_open(dev_t dev, int flags, int devtype, struct proc *p)
 	if (flags & FWRITE) {
 		if (securelevel >= 2)
 			return (EPERM);
+#ifndef __APPLE__
 		if ((securelevel >= 1) && suser(p->p_ucred, &p->p_acflag))
 			return (EPERM);
+#endif	/* !__APPLE__ */
 	}
 
 	return (0);

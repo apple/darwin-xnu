@@ -132,6 +132,16 @@ struct if_family_str {
 };
 
 
+struct proto_family_str {
+	TAILQ_ENTRY(proto_family_str) proto_fam_next;
+	u_long	proto_family;
+	u_long	if_family;
+
+	int (*attach_proto)(struct ifnet *ifp, u_long *dl_tag);
+	int (*detach_proto)(struct ifnet *ifp, u_long dl_tag);
+};
+
+
 
 struct dlil_stats_str dlil_stats;
 
@@ -147,6 +157,9 @@ TAILQ_HEAD(, dlil_ifnet) dlil_ifnet_head;
 static 
 TAILQ_HEAD(, if_family_str) if_family_head;
 
+static 
+TAILQ_HEAD(, proto_family_str) proto_family_head;
+
 static		    ifnet_inited = 0;
 static u_long	dl_tag_nb = 0; 
 static u_long	dlil_filters_nb = 0; 
@@ -154,7 +167,6 @@ static u_long	dlil_filters_nb = 0;
 int dlil_initialized = 0;
 decl_simple_lock_data(, dlil_input_lock)
 int dlil_input_thread_wakeup = 0;
-int dlil_expand_mcl;
 static struct mbuf *dlil_input_mbuf_head = NULL;
 static struct mbuf *dlil_input_mbuf_tail = NULL;
 #if NLOOP > 1
@@ -162,11 +174,13 @@ static struct mbuf *dlil_input_mbuf_tail = NULL;
 #endif
 static struct mbuf *dlil_input_loop_head = NULL;
 static struct mbuf *dlil_input_loop_tail = NULL;
+extern struct ifmultihead ifma_lostlist;
 
 static void dlil_input_thread(void);
 extern void run_netisr(void);
 extern void bpfdetach(struct ifnet*);
 
+int dlil_expand_mcl;
 
 /*
  * Internal functions.
@@ -183,6 +197,20 @@ struct if_family_str *find_family_module(u_long if_family)
     }
 
     return mod;
+}
+
+static 
+struct proto_family_str *find_proto_module(u_long proto_family, u_long if_family)
+{
+	struct proto_family_str  *mod = NULL;
+
+	TAILQ_FOREACH(mod, &proto_family_head, proto_fam_next) {
+		if ((mod->proto_family == (proto_family & 0xffff)) 
+			&& (mod->if_family == (if_family & 0xffff))) 
+			break;
+		}
+
+	return mod;
 }
 
 
@@ -296,6 +324,7 @@ dlil_init()
 
     TAILQ_INIT(&dlil_ifnet_head);
     TAILQ_INIT(&if_family_head);
+    TAILQ_INIT(&proto_family_head);
 
     // create the dl tag array
     MALLOC(dl_tag_array, void *, sizeof(struct dl_tag_str) * MAX_DL_TAGS, M_NKE, M_WAITOK);
@@ -497,13 +526,11 @@ end:
     return retval;
 }
 
-
 void
 dlil_input_thread_continue(void)
 {
     while (1) {
         struct mbuf *m, *m_loop;
-	int expand_mcl;
 
         usimple_lock(&dlil_input_lock);
         m = dlil_input_mbuf_head;
@@ -514,16 +541,6 @@ dlil_input_thread_continue(void)
         dlil_input_loop_tail = NULL;
         usimple_unlock(&dlil_input_lock);
 	
-	MBUF_LOCK();
-	expand_mcl = dlil_expand_mcl;
-	dlil_expand_mcl = 0;
-	MBUF_UNLOCK();
-	if (expand_mcl) {
-		caddr_t	p;
-		MCLALLOC(p, M_WAIT);
-		if (p) MCLFREE(p);
-	}
-
         /*
          * NOTE warning %%% attention !!!!
          * We should think about putting some thread starvation safeguards if 
@@ -565,17 +582,10 @@ dlil_input_thread_continue(void)
 
 void dlil_input_thread(void)
 {
-    register thread_t self = current_thread();
-    extern void stack_privilege(thread_t thread);
+    register thread_t self = current_act();
 
-    /*
-     *      Make sure that this thread
-     *      always has a kernel stack, and
-     *      bind it to the master cpu.
-     */
-    stack_privilege(self);
-    ml_thread_policy(current_thread(), MACHINE_GROUP, 
-    			(MACHINE_NETWORK_GROUP|MACHINE_NETWORK_NETISR));
+    ml_thread_policy(self, MACHINE_GROUP,
+						(MACHINE_NETWORK_GROUP|MACHINE_NETWORK_NETISR));
 
     /* The dlil thread is always funneled */
     thread_funnel_set(network_flock, TRUE);
@@ -1443,59 +1453,69 @@ dlil_if_attach(struct ifnet	*ifp)
 int
 dlil_if_detach(struct ifnet *ifp)
 {
-    struct if_proto  *proto;
-    struct dlil_filterq_entry *if_filter;
-    struct if_family_str    *if_family;
-    struct dlil_filterq_head *fhead = (struct dlil_filterq_head *) &ifp->if_flt_head;
-    int s;
-    struct kev_msg   ev_msg;
-    boolean_t funnel_state;
-
-    funnel_state = thread_funnel_set(network_flock, TRUE);
-    s = splnet();
-
-    if_family = find_family_module(ifp->if_family);
-
-    if (!if_family) {
-	kprintf("Attempt to detach interface without family module - %s\n", 
-	       ifp->if_name);
-	splx(s);
-	thread_funnel_set(network_flock, funnel_state);
-	return ENODEV;
-    }
-
-    while (if_filter = TAILQ_FIRST(fhead)) 
-	   dlil_detach_filter(if_filter->filter_id);
-
-    ifp->refcnt--;
-
-    if (ifp->refcnt == 0) {
-    /* Let BPF know the interface is detaching. */
-    bpfdetach(ifp);
+	struct if_proto  *proto;
+	struct dlil_filterq_entry *if_filter;
+	struct if_family_str    *if_family;
+	struct dlil_filterq_head *fhead = (struct dlil_filterq_head *) &ifp->if_flt_head;
+	struct kev_msg   ev_msg;
+	boolean_t funnel_state;
+	
+	funnel_state = thread_funnel_set(network_flock, TRUE);
+	
+	if_family = find_family_module(ifp->if_family);
+	
+	if (!if_family) {
+		kprintf("Attempt to detach interface without family module - %s\n", 
+				ifp->if_name);
+		thread_funnel_set(network_flock, funnel_state);
+		return ENODEV;
+	}
+	
+	while (if_filter = TAILQ_FIRST(fhead)) 
+		dlil_detach_filter(if_filter->filter_id);
+	
+	ifp->refcnt--;
+	
+	if (ifp->refcnt > 0) {
+		dlil_post_msg(ifp, KEV_DL_SUBCLASS, KEV_DL_IF_DETACHING, 0, 0);
+		thread_funnel_set(network_flock, funnel_state);
+		return DLIL_WAIT_FOR_FREE;
+	}
+	
+	while (ifp->if_multiaddrs.lh_first) {
+		struct ifmultiaddr *ifma = ifp->if_multiaddrs.lh_first;
+		
+		/*
+		 * When the interface is gone, we will no
+		 * longer be listening on these multicasts.
+		 * Various bits of the stack may be referencing
+		 * these multicasts, so we can't just free them.
+		 * We place them on a list so they may be cleaned
+		 * up later as the other bits of the stack release
+		 * them.
+		 */
+		LIST_REMOVE(ifma, ifma_link);
+		ifma->ifma_ifp = NULL;
+		LIST_INSERT_HEAD(&ifma_lostlist, ifma, ifma_link);
+	}
+	
+	/* Let BPF know the interface is detaching. */
+	bpfdetach(ifp);
 	TAILQ_REMOVE(&ifnet, ifp, if_link);
 	
 	(*if_family->del_if)(ifp);
-
+	
 	if (--if_family->refcnt == 0) {
-	    if (if_family->shutdown)
-		(*if_family->shutdown)();
-	    
-	    TAILQ_REMOVE(&if_family_head, if_family, if_fam_next);
-	    FREE(if_family, M_IFADDR);
+		if (if_family->shutdown)
+			(*if_family->shutdown)();
+		
+		TAILQ_REMOVE(&if_family_head, if_family, if_fam_next);
+		FREE(if_family, M_IFADDR);
 	}
-
-        dlil_post_msg(ifp, KEV_DL_SUBCLASS, KEV_DL_IF_DETACHED, 0, 0);
-	splx(s);
+	
+	dlil_post_msg(ifp, KEV_DL_SUBCLASS, KEV_DL_IF_DETACHED, 0, 0);
 	thread_funnel_set(network_flock, funnel_state);
 	return 0;
-    }
-    else
-    {
-        dlil_post_msg(ifp, KEV_DL_SUBCLASS, KEV_DL_IF_DETACHING, 0, 0);
-	splx(s);
-	thread_funnel_set(network_flock, funnel_state);
-	return DLIL_WAIT_FOR_FREE;
-    }
 }
 
 
@@ -1605,6 +1625,126 @@ int dlil_dereg_if_modules(u_long interface_family)
 					    
 	    
 
+int
+dlil_reg_proto_module(u_long protocol_family, u_long  interface_family, 
+		    struct dlil_protomod_reg_str  *protomod_reg)
+{
+	struct proto_family_str *proto_family;
+	int s;
+	boolean_t funnel_state;
+
+
+	funnel_state = thread_funnel_set(network_flock, TRUE);
+	s = splnet();
+	if (find_proto_module(protocol_family, interface_family))  {
+		splx(s);
+		thread_funnel_set(network_flock, funnel_state);
+		return EEXIST;
+	}
+    
+	if (protomod_reg->reserved[0] != 0 || protomod_reg->reserved[1] != 0
+	    || protomod_reg->reserved[2] != 0 || protomod_reg->reserved[3] !=0) {
+		splx(s);
+		thread_funnel_set(network_flock, funnel_state);
+		return EINVAL;
+	}
+
+	if (protomod_reg->attach_proto == NULL) {
+		splx(s);
+		thread_funnel_set(network_flock, funnel_state);
+		return EINVAL;
+	}
+
+	proto_family = (struct proto_family_str *) _MALLOC(sizeof(struct proto_family_str), M_IFADDR, M_WAITOK);
+	if (!proto_family) {
+		splx(s);
+		thread_funnel_set(network_flock, funnel_state);
+		return ENOMEM;
+	}
+
+	bzero(proto_family, sizeof(struct proto_family_str));
+	proto_family->proto_family	= protocol_family;
+	proto_family->if_family		= interface_family & 0xffff;
+	proto_family->attach_proto	= protomod_reg->attach_proto;
+	proto_family->detach_proto	= protomod_reg->detach_proto;
+
+	TAILQ_INSERT_TAIL(&proto_family_head, proto_family, proto_fam_next);
+	splx(s);
+	thread_funnel_set(network_flock, funnel_state);
+	return 0;
+}
+
+int dlil_dereg_proto_module(u_long protocol_family, u_long interface_family)
+{
+	struct proto_family_str  *proto_family;
+	int s, ret = 0;
+	boolean_t funnel_state;
+
+	funnel_state = thread_funnel_set(network_flock, TRUE);
+	s = splnet();
+	proto_family = find_proto_module(protocol_family, interface_family);
+	if (proto_family == 0) {
+		splx(s);
+		thread_funnel_set(network_flock, funnel_state);
+		return ENOENT;
+	}
+
+	TAILQ_REMOVE(&proto_family_head, proto_family, proto_fam_next);
+	FREE(proto_family, M_IFADDR);
+
+	splx(s);
+	thread_funnel_set(network_flock, funnel_state);
+	return ret;
+}
+
+int dlil_plumb_protocol(u_long protocol_family, struct ifnet *ifp, u_long *dl_tag)
+{
+	struct proto_family_str  *proto_family;
+	int s, ret = 0;
+	boolean_t funnel_state;
+
+	funnel_state = thread_funnel_set(network_flock, TRUE);
+	s = splnet();
+	proto_family = find_proto_module(protocol_family, ifp->if_family);
+	if (proto_family == 0) {
+		splx(s);
+		thread_funnel_set(network_flock, funnel_state);
+		return ENOENT;
+	}
+
+	ret = (*proto_family->attach_proto)(ifp, dl_tag);
+
+	splx(s);
+	thread_funnel_set(network_flock, funnel_state);
+   	return ret;
+}
+
+
+int dlil_unplumb_protocol(u_long protocol_family, struct ifnet *ifp)
+{
+	struct proto_family_str  *proto_family;
+	int s, ret = 0;
+	u_long tag;
+	boolean_t funnel_state;
+
+	funnel_state = thread_funnel_set(network_flock, TRUE);
+	s = splnet();
+
+	ret = dlil_find_dltag(ifp->if_family, ifp->if_unit, protocol_family, &tag);
+
+	if (ret == 0) {
+		proto_family = find_proto_module(protocol_family, ifp->if_family);
+		if (proto_family && proto_family->detach_proto)
+			ret = (*proto_family->detach_proto)(ifp, tag);
+		else
+			ret = dlil_detach_protocol(tag);
+	}
+    
+	splx(s);
+	thread_funnel_set(network_flock, funnel_state);
+	return ret;
+}
+					    	    
 
 
 /*

@@ -134,6 +134,8 @@
 #endif
 
 #ifndef _ANSI_SOURCE
+#include <sys/types.h>
+
 typedef unsigned int sigset_t;
 
 union sigval {
@@ -142,11 +144,19 @@ union sigval {
 	void	*sigval_ptr;
 };
 
-#define	SIGEV_NONE	0		/* No async notification */
+#define	SIGEV_NONE		0		/* No async notification */
+#define	SIGEV_SIGNAL	1		/* aio - completion notification */
 #ifdef __APPLE_API_PRIVATE
-#define	SIGEV_SIGNAL	1		/* Generate a queued signal */
-#define SIGEV_THREAD	3		/* A notification function will be called to perfrom notification */
+#define SIGEV_THREAD	3		/* A notification function will be called to perform notification */
 #endif /*__APPLE_API_PRIVATE */
+
+struct sigevent {
+	int				sigev_notify;				/* Notification type */
+	int				sigev_signo;				/* Signal number */
+	union sigval	sigev_value;				/* Signal value */
+	void			(*sigev_notify_function)(union sigval);	  /* Notification function */
+	pthread_attr_t	*sigev_notify_attributes;	/* Notification attributes */
+};
 
 typedef struct __siginfo {
 	int	si_signo;		/* signal number */
@@ -158,7 +168,7 @@ typedef struct __siginfo {
 	void	*si_addr;		/* faulting instruction */
 	union sigval si_value;		/* signal value */
 	long	si_band;		/* band event for SIGPOLL */
-	int	pad[7];			/* RFU */
+	unsigned int	pad[7];		/* Reserved for Future Use */
 } siginfo_t;
 
 /* 
@@ -244,6 +254,8 @@ struct	sigaction {
 #define	SA_NOCLDWAIT	0x0020	/* don't keep zombies around */
 #define	SA_SIGINFO	0x0040	/* signal handler with SA_SIGINFO args */
 #define	SA_USERTRAMP	0x0100	/* do not bounce off kernel's sigtramp */
+/* This will provide 64bit register set in a 32bit user address space */
+#define	SA_64REGSET	0x0200	/* signal handler with SA_SIGINFO args with 64bit regs information */
 #endif
 #define SA_NOCLDSTOP	0x0008	/* do not generate SIGCHLD on child stop */
 
@@ -278,8 +290,8 @@ typedef struct  sigaltstack stack_t;
 
 #define SS_ONSTACK	0x0001	/* take signal on signal stack */
 #define	SS_DISABLE	0x0004	/* disable taking signals on alternate stack */
-#define	MINSIGSTKSZ	8192			/* minimum allowable stack */
-#define	SIGSTKSZ	(MINSIGSTKSZ + 32768)	/* recommended stack size */
+#define	MINSIGSTKSZ	32768	/* (32K)minimum allowable stack */
+#define	SIGSTKSZ	131072	/* (128K)recommended stack size */
 
 /*
  * 4.3 compatibility:

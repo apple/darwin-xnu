@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2002 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -84,14 +84,13 @@
 #include <machine/spl.h>
 
 #define FREE_BSDSTATIC __private_extern__
-#define d_open_t        open_close_fcn_t
-#define d_close_t       open_close_fcn_t
 #define d_devtotty_t    struct tty **
-#define d_ioctl_t       ioctl_fcn_t
-#define d_read_t        read_write_fcn_t 
-#define d_write_t       read_write_fcn_t
-#define d_select_t      select_fcn_t
+
+#ifdef d_stop_t
+#undef d_stop_t
+#endif
 typedef void d_stop_t	__P((struct tty *tp, int rw));
+
 #endif /* NeXT */
 
 #ifdef notyet
@@ -238,7 +237,7 @@ int pty_init(int n_ptys)
  done:
     return (0);
 }
-#endif DEVFS
+#endif /* DEVFS */
 
 /*ARGSUSED*/
 FREE_BSDSTATIC int

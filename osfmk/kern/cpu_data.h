@@ -38,18 +38,6 @@
 #include <cpus.h>
 #include <mach/mach_types.h>
 
-typedef struct
-{
-	thread_t	active_thread;
-	int		preemption_level;
-	int		simple_lock_count;
-	int		interrupt_level;
-#ifdef __I386__
-	int		cpu_number;		/* Logical CPU number */
-	int		cpu_phys_number;	/* Physical CPU Number */
-#endif
-} cpu_data_t;
-
 #include <machine/cpu_data.h>
 
 #else	/* MACH_KERNEL_PRIVATE */

@@ -226,10 +226,14 @@ kmod_send_generic(int type, void *generic_data, int size)
     return kmod_queue_cmd((vm_address_t)data, size + sizeof(int));
 }
 
+extern vm_offset_t sectPRELINKB;
+extern int sectSizePRELINK;
+
 kern_return_t
 kmod_create_internal(kmod_info_t *info, kmod_t *id)
 {
     kern_return_t rc;
+    boolean_t     isPrelink;
 
     if (!info) return KERN_INVALID_ADDRESS;
 
@@ -238,10 +242,13 @@ kmod_create_internal(kmod_info_t *info, kmod_t *id)
         return KERN_INVALID_ADDRESS;
     }
 
-    rc = vm_map_wire(kernel_map, info->address + info->hdr_size, 
-             info->address + info->size, VM_PROT_DEFAULT, FALSE);
-    if (rc != KERN_SUCCESS) {
-        return rc;
+    isPrelink = ((info->address >= sectPRELINKB) && (info->address < (sectPRELINKB + sectSizePRELINK)));
+    if (!isPrelink) {
+	rc = vm_map_wire(kernel_map, info->address + info->hdr_size, 
+		info->address + info->size, VM_PROT_DEFAULT, FALSE);
+	if (rc != KERN_SUCCESS) {
+	    return rc;
+	}
     }
 #if WRITE_PROTECT_MODULE_TEXT
      {
@@ -253,16 +260,18 @@ kmod_create_internal(kmod_info_t *info, kmod_t *id)
 				    VM_PROT_READ|VM_PROT_EXECUTE, TRUE);
 	}
     }
-#endif
+#endif /* WRITE_PROTECT_MODULE_TEXT */
 
     simple_lock(&kmod_lock);
 
     // check to see if already loaded
     if (kmod_lookupbyname(info->name)) {
         simple_unlock(&kmod_lock);
-        rc = vm_map_unwire(kernel_map, info->address + info->hdr_size, 
-            info->address + info->size, FALSE);
-        assert(rc == KERN_SUCCESS);
+	if (!isPrelink) {
+	    rc = vm_map_unwire(kernel_map, info->address + info->hdr_size, 
+		info->address + info->size, FALSE);
+	    assert(rc == KERN_SUCCESS);
+	}
         return KERN_INVALID_ARGUMENT;
     }
 
@@ -279,7 +288,7 @@ kmod_create_internal(kmod_info_t *info, kmod_t *id)
 #if DEBUG
     printf("kmod_create: %s (id %d), %d pages loaded at 0x%x, header size 0x%x\n", 
         info->name, info->id, info->size / PAGE_SIZE, info->address, info->hdr_size);
-#endif DEBUG
+#endif /* DEBUG */
 
     return KERN_SUCCESS;
 }
@@ -375,15 +384,25 @@ kmod_destroy_internal(kmod_t id)
 #if DEBUG
             printf("kmod_destroy: %s (id %d), deallocating %d pages starting at 0x%x\n", 
                    k->name, k->id, k->size / PAGE_SIZE, k->address);
-#endif DEBUG
+#endif /* DEBUG */
 
-            rc = vm_map_unwire(kernel_map, k->address + k->hdr_size, 
-                       k->address + k->size, FALSE);
-            assert(rc == KERN_SUCCESS);
-
-            rc = vm_deallocate(kernel_map, k->address, k->size);
-            assert(rc == KERN_SUCCESS);
-
+	    if( (k->address >= sectPRELINKB) && (k->address < (sectPRELINKB + sectSizePRELINK)))
+	    {
+		vm_offset_t
+		virt = ml_static_ptovirt(k->address);
+		if( virt) {
+		    ml_static_mfree( virt, k->size);
+		}
+	    }
+	    else
+	    {
+		rc = vm_map_unwire(kernel_map, k->address + k->hdr_size, 
+			k->address + k->size, FALSE);
+		assert(rc == KERN_SUCCESS);
+    
+		rc = vm_deallocate(kernel_map, k->address, k->size);
+		assert(rc == KERN_SUCCESS);
+	    }
             return KERN_SUCCESS;
         }
         p = k;
@@ -791,7 +810,7 @@ kmod_dump(vm_offset_t *addr, unsigned int cnt)
         if (!k->address) {
             continue; // skip fake entries for built-in kernel components
         }
-        if (pmap_extract(kernel_pmap, (vm_offset_t)k) == 0) {
+        if (pmap_find_phys(kernel_pmap, (addr64_t)((uintptr_t)k)) == 0) {
             kdb_printf("         kmod scan stopped due to missing "
                 "kmod page: %08x\n", stop_kmod);
             break;
@@ -811,7 +830,7 @@ kmod_dump(vm_offset_t *addr, unsigned int cnt)
                 for (r = k->reference_list; r; r = r->next) {
                     kmod_info_t * rinfo;
 
-                    if (pmap_extract(kernel_pmap, (vm_offset_t)r) == 0) {
+                    if (pmap_find_phys(kernel_pmap, (addr64_t)((uintptr_t)r)) == 0) {
                         kdb_printf("            kmod dependency scan stopped "
                             "due to missing dependency page: %08x\n", r);
                         break;
@@ -823,7 +842,7 @@ kmod_dump(vm_offset_t *addr, unsigned int cnt)
                         continue; // skip fake entries for built-ins
                     }
 
-                    if (pmap_extract(kernel_pmap, (vm_offset_t)rinfo) == 0) {
+                    if (pmap_find_phys(kernel_pmap, (addr64_t)((uintptr_t)rinfo)) == 0) {
                         kdb_printf("            kmod dependency scan stopped "
                             "due to missing kmod page: %08x\n", rinfo);
                         break;

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2001 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2003 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -219,14 +219,24 @@ ucsfncmp(fn, fnlen, ucsfn, ucslen)
  * translate a filename
  */
 void
-isofntrans(infn, infnlen, outfn, outfnlen, original)
+isofntrans(infn, infnlen, outfn, outfnlen, original, assoc)
 	u_char *infn, *outfn;
 	int infnlen;
 	u_short *outfnlen;
 	int original;
+	int assoc;
 {
 	int fnidx = 0;
 	
+	/*
+	 * Add a "._" prefix for associated files
+	 */
+	if (assoc) {
+		*outfn++ = ASSOCCHAR1;
+		*outfn++ = ASSOCCHAR2;
+		fnidx += 2;
+		infnlen +=2;
+	}
 	for (; fnidx < infnlen; fnidx++) {
 		char c = *infn++;
 		
@@ -259,12 +269,13 @@ isofntrans(infn, infnlen, outfn, outfnlen, original)
  * translate a UCS-2 filename to UTF-8
  */
 void
-ucsfntrans(infn, infnlen, outfn, outfnlen, dir)
+ucsfntrans(infn, infnlen, outfn, outfnlen, dir, assoc)
 	u_int16_t *infn;
 	int infnlen;
 	u_char *outfn;
 	u_short *outfnlen;
 	int dir;
+	int assoc;
 {
 	if (infnlen == 1) {
 		strcpy(outfn, "..");
@@ -281,6 +292,13 @@ ucsfntrans(infn, infnlen, outfn, outfnlen, dir)
 		fnidx = infnlen/2;
 		flags = 0;
 
+		/*
+		 * Add a "._" prefix for associated files
+		 */
+		if (assoc) {
+			*outfn++ = ASSOCCHAR1;
+			*outfn++ = ASSOCCHAR2;
+		}
 		if (!dir) {
 			/* strip file version number */
 			for (fnidx--; fnidx > 0; fnidx--) {
@@ -301,7 +319,7 @@ ucsfntrans(infn, infnlen, outfn, outfnlen, dir)
 			flags |= UTF_REVERSE_ENDIAN;
 
 		(void) utf8_encodestr(infn, fnidx * 2, outfn, &outbytes, ISO_JOLIET_NAMEMAX, 0, flags);
-		*outfnlen = outbytes;
+		*outfnlen = assoc ? outbytes + 2 : outbytes;
 	}
 }
 
@@ -317,6 +335,7 @@ isochildcount(vdp, dircnt, filcnt)
 {
 	struct iso_node *dp;
 	struct buf *bp = NULL;
+	struct iso_mnt *imp;
 	struct iso_directory_record *ep;
 	u_long bmask;
 	int error = 0;
@@ -327,8 +346,9 @@ isochildcount(vdp, dircnt, filcnt)
 	long diroffset;
 
 	dp = VTOI(vdp);
-	bmask = dp->i_mnt->im_bmask;
-	logblksize = dp->i_mnt->logical_block_size;
+	imp = dp->i_mnt;
+	bmask = imp->im_sector_size - 1;
+	logblksize = imp->im_sector_size;
 	blkoffset = diroffset = 0;
 	dirs = files = 0;
 
@@ -340,7 +360,7 @@ isochildcount(vdp, dircnt, filcnt)
 		if ((diroffset & bmask) == 0) {
 			if (bp != NULL)
 				brelse(bp);
-			if ( (error = VOP_BLKATOFF(vdp, diroffset, NULL, &bp)) )
+			if ( (error = VOP_BLKATOFF(vdp, SECTOFF(imp, diroffset), NULL, &bp)) )
 				break;
 			blkoffset = 0;
 		}
@@ -361,6 +381,15 @@ isochildcount(vdp, dircnt, filcnt)
 		    (reclen < ISO_DIRECTORY_RECORD_SIZE + isonum_711(ep->name_len))){
 			/* illegal, so give up */
 			break;
+		}
+
+		/*
+		 * Some poorly mastered discs have an incorrect directory
+		 * file size.  If the '.' entry has a better size (bigger)
+		 * then use that instead.
+		 */
+		if ((diroffset == 0) && (isonum_733(ep->size) > dp->i_size)) {
+			dp->i_size = isonum_733(ep->size);
 		}
 
 		if ( isonum_711(ep->flags) & directoryBit )
@@ -666,16 +695,42 @@ packvolattr (struct attrlist *alist,
         };
         if (a & ATTR_VOL_ENCODINGSUSED) *((unsigned long long *)attrbufptr)++ = (unsigned long long)0;
         if (a & ATTR_VOL_CAPABILITIES) {
-        	((vol_capabilities_attr_t *)attrbufptr)->capabilities[VOL_CAPABILITIES_FORMAT] = VOL_CAP_FMT_PERSISTENTOBJECTIDS;
+        	((vol_capabilities_attr_t *)attrbufptr)->capabilities[VOL_CAPABILITIES_FORMAT] =
+        			(imp->iso_ftype == ISO_FTYPE_RRIP ? VOL_CAP_FMT_SYMBOLICLINKS : 0) |
+        			(imp->iso_ftype == ISO_FTYPE_RRIP ? VOL_CAP_FMT_HARDLINKS : 0) |
+        			(imp->iso_ftype == ISO_FTYPE_RRIP || imp->iso_ftype == ISO_FTYPE_JOLIET
+        				? VOL_CAP_FMT_CASE_SENSITIVE : 0) |
+					VOL_CAP_FMT_CASE_PRESERVING |
+        			VOL_CAP_FMT_FAST_STATFS;
         	((vol_capabilities_attr_t *)attrbufptr)->capabilities[VOL_CAPABILITIES_INTERFACES] =
-        			VOL_CAP_INT_ATTRLIST | VOL_CAP_INT_NFSEXPORT;
+        			VOL_CAP_INT_ATTRLIST |
+        			VOL_CAP_INT_NFSEXPORT;
         	((vol_capabilities_attr_t *)attrbufptr)->capabilities[VOL_CAPABILITIES_RESERVED1] = 0;
         	((vol_capabilities_attr_t *)attrbufptr)->capabilities[VOL_CAPABILITIES_RESERVED2] = 0;
 
         	((vol_capabilities_attr_t *)attrbufptr)->valid[VOL_CAPABILITIES_FORMAT] =
-        			VOL_CAP_FMT_PERSISTENTOBJECTIDS | VOL_CAP_FMT_SYMBOLICLINKS | VOL_CAP_FMT_HARDLINKS;
+        			VOL_CAP_FMT_PERSISTENTOBJECTIDS |
+        			VOL_CAP_FMT_SYMBOLICLINKS |
+        			VOL_CAP_FMT_HARDLINKS |
+					VOL_CAP_FMT_JOURNAL |
+					VOL_CAP_FMT_JOURNAL_ACTIVE |
+					VOL_CAP_FMT_NO_ROOT_TIMES |
+					VOL_CAP_FMT_SPARSE_FILES |
+					VOL_CAP_FMT_ZERO_RUNS |
+					VOL_CAP_FMT_CASE_SENSITIVE |
+					VOL_CAP_FMT_CASE_PRESERVING |
+					VOL_CAP_FMT_FAST_STATFS;
         	((vol_capabilities_attr_t *)attrbufptr)->valid[VOL_CAPABILITIES_INTERFACES] =
-        			VOL_CAP_INT_SEARCHFS | VOL_CAP_INT_ATTRLIST | VOL_CAP_INT_NFSEXPORT;
+        			VOL_CAP_INT_SEARCHFS |
+        			VOL_CAP_INT_ATTRLIST |
+        			VOL_CAP_INT_NFSEXPORT |
+					VOL_CAP_INT_READDIRATTR |
+					VOL_CAP_INT_EXCHANGEDATA |
+					VOL_CAP_INT_COPYFILE |
+					VOL_CAP_INT_ALLOCATE |
+					VOL_CAP_INT_VOL_RENAME |
+					VOL_CAP_INT_ADVLOCK |
+					VOL_CAP_INT_FLOCK;
         	((vol_capabilities_attr_t *)attrbufptr)->valid[VOL_CAPABILITIES_RESERVED1] = 0;
         	((vol_capabilities_attr_t *)attrbufptr)->valid[VOL_CAPABILITIES_RESERVED2] = 0;
 

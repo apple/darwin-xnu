@@ -202,7 +202,7 @@ kern_return_t
 device_pager_populate_object(
 	memory_object_t		device,
 	memory_object_offset_t	offset,
-	vm_offset_t		phys_addr,
+	ppnum_t			page_num,
 	vm_size_t		size)
 {
 	device_pager_t	device_object;
@@ -221,7 +221,7 @@ device_pager_populate_object(
 		return KERN_FAILURE;
 
 	kr =  vm_object_populate_with_private(
-				vm_object, offset, phys_addr, size);
+				vm_object, offset, page_num, size);
 	if(kr != KERN_SUCCESS)
 		return kr;
 

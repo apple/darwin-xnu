@@ -187,13 +187,14 @@ IOReturn IOCPU::setProperties(OSObject *properties)
 {
   OSDictionary *dict = OSDynamicCast(OSDictionary, properties);
   OSString     *stateStr;
+  IOReturn     result;
   
   if (dict == 0) return kIOReturnUnsupported;
   
   stateStr = OSDynamicCast(OSString, dict->getObject(gIOCPUStateKey));
   if (stateStr != 0) {
-    if (!IOUserClient::clientHasPrivilege(current_task(), "root"))
-      return kIOReturnNotPrivileged;
+    result = IOUserClient::clientHasPrivilege(current_task(), kIOClientPrivilegeAdministrator);
+    if (result != kIOReturnSuccess) return result;
     
     if (_cpuNumber == 0) return kIOReturnUnsupported;
     

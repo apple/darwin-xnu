@@ -102,7 +102,7 @@ ubc_busy(struct vnode *vp)
 
 	while (ISSET(uip->ui_flags, UI_BUSY)) {
 
-		if (uip->ui_owner == (void *)current_thread())
+		if (uip->ui_owner == (void *)current_act())
 			return (2);
 
 		SET(uip->ui_flags, UI_WANTED);
@@ -111,7 +111,7 @@ ubc_busy(struct vnode *vp)
 		if (!UBCINFOEXISTS(vp))
 			return (0);
 	}
-	uip->ui_owner = (void *)current_thread();
+	uip->ui_owner = (void *)current_act();
 
 	SET(uip->ui_flags, UI_BUSY);
 
@@ -321,7 +321,8 @@ ubc_setsize(struct vnode *vp, off_t nsize)
 	memory_object_control_t control;
 	kern_return_t kret;
 
-	assert(nsize >= (off_t)0);
+	if (nsize < (off_t)0)
+		return (0);
 
 	if (UBCINVALID(vp))
 		return (0);
@@ -590,6 +591,9 @@ ubc_getobject(struct vnode *vp, int flags)
 	if (UBCINVALID(vp))
 		return (0);
 
+	if (flags & UBC_FOR_PAGEOUT)
+	        return(vp->v_ubcinfo->ui_control);
+
 	if ((recursed = ubc_busy(vp)) == 0)
 		return (0);
 
@@ -747,7 +751,7 @@ ubc_clean(struct vnode *vp, int invalidate)
 	control = uip->ui_control;
 	assert(control);
 
-	vp->v_flag &= ~VHASDIRTY;
+	cluster_release(vp);
 	vp->v_clen = 0;
 
 	/* Write the dirty data in the file and discard cached pages */
@@ -854,8 +858,27 @@ ubc_hold(struct vnode *vp)
 	int    recursed;
 	memory_object_control_t object;
 
+retry:
+
 	if (UBCINVALID(vp))
 		return (0);
+
+	ubc_lock(vp);
+	if (ISSET(vp->v_flag,  VUINIT)) {
+		/*
+		 * other thread is not done initializing this
+		 * yet, wait till it's done and try again
+		 */
+		while (ISSET(vp->v_flag,  VUINIT)) {
+			SET(vp->v_flag, VUWANT); /* XXX overloaded! */
+			ubc_unlock(vp);
+			(void) tsleep((caddr_t)vp, PINOD, "ubchold", 0);
+			ubc_lock(vp);
+		}
+		ubc_unlock(vp);
+		goto retry;
+	}
+	ubc_unlock(vp);
 
 	if ((recursed = ubc_busy(vp)) == 0) {
 		/* must be invalid or dying vnode */
@@ -972,6 +995,12 @@ ubc_release_named(struct vnode *vp)
 		(uip->ui_refcount == 1) && !uip->ui_mapped) {
 		control = uip->ui_control;
 		assert(control);
+
+		// XXXdbg
+		if (vp->v_flag & VDELETED) {
+		    ubc_setsize(vp, (off_t)0);
+		}
+
 		CLR(uip->ui_flags, UI_HASOBJREF);
 		kret = memory_object_release_name(control,
 				MEMORY_OBJECT_RESPECT_CACHE);
@@ -1102,24 +1131,22 @@ ubc_invalidate(struct vnode *vp, off_t offset, size_t size)
  * Returns 1 if file is in use by UBC, 0 if not
  */
 int
-ubc_isinuse(struct vnode *vp, int tookref)
+ubc_isinuse(struct vnode *vp, int busycount)
 {
-	int busycount = tookref ? 2 : 1;
-
 	if (!UBCINFOEXISTS(vp))
 		return (0);
 
-	if (tookref == 0) {
+	if (busycount == 0) {
 		printf("ubc_isinuse: called without a valid reference"
 		    ": v_tag = %d\v", vp->v_tag);
 		vprint("ubc_isinuse", vp);
 		return (0);
 	}
 
-	if (vp->v_usecount > busycount)
+	if (vp->v_usecount > busycount+1)
 		return (1);
 
-	if ((vp->v_usecount == busycount)
+	if ((vp->v_usecount == busycount+1)
 		&& (vp->v_ubcinfo->ui_mapped == 1))
 		return (1);
 	else
@@ -1166,7 +1193,7 @@ ubc_page_op(
 	struct vnode 	*vp,
 	off_t		f_offset,
 	int		ops,
-	vm_offset_t	*phys_entryp,
+	ppnum_t	*phys_entryp,
 	int		*flagsp)
 {
 	memory_object_control_t		control;
@@ -1182,6 +1209,42 @@ ubc_page_op(
 				      flagsp));
 }
 				      
+__private_extern__ kern_return_t
+ubc_page_op_with_control(
+	memory_object_control_t	 control,
+	off_t		         f_offset,
+	int		         ops,
+	ppnum_t	                 *phys_entryp,
+	int		         *flagsp)
+{
+	return (memory_object_page_op(control,
+				      (memory_object_offset_t)f_offset,
+				      ops,
+				      phys_entryp,
+				      flagsp));
+}
+				      
+kern_return_t
+ubc_range_op(
+	struct vnode 	*vp,
+	off_t		f_offset_beg,
+	off_t		f_offset_end,
+	int             ops,
+	int             *range)
+{
+	memory_object_control_t		control;
+
+	control = ubc_getobject(vp, UBC_FLAGS_NONE);
+	if (control == MEMORY_OBJECT_CONTROL_NULL)
+		return KERN_INVALID_ARGUMENT;
+
+	return (memory_object_range_op(control,
+				      (memory_object_offset_t)f_offset_beg,
+				      (memory_object_offset_t)f_offset_end,
+				      ops,
+				      range));
+}
+				      
 kern_return_t
 ubc_create_upl(
 	struct vnode	*vp,
@@ -1192,18 +1255,29 @@ ubc_create_upl(
 	int				uplflags)
 {
 	memory_object_control_t		control;
-	int							count;
-	off_t						file_offset;
-	kern_return_t				kr;
+	int				count;
+	int                             ubcflags;
+	off_t				file_offset;
+	kern_return_t			kr;
 	
 	if (bufsize & 0xfff)
 		return KERN_INVALID_ARGUMENT;
 
-	control = ubc_getobject(vp, UBC_FLAGS_NONE);
+	if (uplflags & UPL_FOR_PAGEOUT) {
+		uplflags &= ~UPL_FOR_PAGEOUT;
+	        ubcflags  =  UBC_FOR_PAGEOUT;
+	} else
+	        ubcflags = UBC_FLAGS_NONE;
+
+	control = ubc_getobject(vp, ubcflags);
 	if (control == MEMORY_OBJECT_CONTROL_NULL)
 		return KERN_INVALID_ARGUMENT;
 
-	uplflags |= (UPL_NO_SYNC|UPL_CLEAN_IN_PLACE|UPL_SET_INTERNAL);
+	if (uplflags & UPL_WILL_BE_DUMPED) {
+	        uplflags &= ~UPL_WILL_BE_DUMPED;
+		uplflags |= (UPL_NO_SYNC|UPL_SET_INTERNAL);
+	} else
+	        uplflags |= (UPL_NO_SYNC|UPL_CLEAN_IN_PLACE|UPL_SET_INTERNAL);
 	count = 0;
 	kr = memory_object_upl_request(control, f_offset, bufsize,
 								   uplp, NULL, &count, uplflags);

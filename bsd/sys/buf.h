@@ -251,6 +251,8 @@ int	breada __P((struct vnode *, daddr_t, int, daddr_t, int,
 	    struct ucred *, struct buf **));
 int	breadn __P((struct vnode *, daddr_t, int, daddr_t *, int *, int,
 	    struct ucred *, struct buf **));
+int	meta_breadn __P((struct vnode *, daddr_t, int, daddr_t *, int *, int,
+	    struct ucred *, struct buf **));
 void	brelse __P((struct buf *));
 void	bremfree __P((struct buf *));
 void	bufinit __P((void));

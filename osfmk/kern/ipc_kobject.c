@@ -77,8 +77,9 @@
 #include <kern/etap_macros.h>
 #include <kern/ipc_mig.h>
 #include <kern/ipc_kobject.h>
-#include <kern/misc_protos.h>
+#include <kern/host_notify.h>
 #include <kern/mk_timer.h>
+#include <kern/misc_protos.h>
 #include <ipc/ipc_kmsg.h>
 #include <ipc/ipc_port.h>
 #include <kern/counters.h>
@@ -492,7 +493,11 @@ ipc_kobject_destroy(
 		mach_destroy_memory_entry(port);
 		break;
 
-	default:	/* XXX (bogon) */
+	case IKOT_HOST_NOTIFY:
+		host_notify_port_destroy(port);
+		break;
+
+	default:
 		break;
 	}
 }

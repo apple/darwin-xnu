@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 1999-2003 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -22,85 +22,104 @@
  * 
  * @APPLE_LICENSE_HEADER_END@
  */
-/*
- * Copyright (c) 1999 Apple Computer, Inc.  All rights reserved. 
- *
- * HISTORY
- *
- */
 
 #ifndef _OS_OSBYTEORDERI386_H
 #define _OS_OSBYTEORDERI386_H
 
-#include <libkern/OSTypes.h>
+#include <stdint.h>
+
+#if !defined(OS_INLINE)
+#        define OS_INLINE static inline
+#endif
+
+/* Generic byte swapping functions. */
+
+OS_INLINE
+uint16_t
+_OSSwapInt16(
+    uint16_t        data
+)
+{
+    __asm__ ("xchgb %b0, %h0" : "+q" (data));
+    return data;
+}
+
+OS_INLINE
+uint32_t
+_OSSwapInt32(
+    uint32_t        data
+)
+{
+    __asm__ ("bswap %0" : "+r" (data));
+    return data;
+}
+
+OS_INLINE
+uint64_t
+_OSSwapInt64(
+    uint64_t        data
+)
+{
+    union {
+        uint64_t ull;
+        uint32_t ul[2];
+    } u;
+
+    /* This actually generates the best code */
+    u.ul[0] = data >> 32;
+    u.ul[1] = data & 0xffffffff;
+    u.ul[0] = _OSSwapInt32(u.ul[0]);
+    u.ul[1] = _OSSwapInt32(u.ul[1]);
+    return u.ull;
+}
 
 /* Functions for byte reversed loads. */
 
 OS_INLINE
-UInt16
+uint16_t
 OSReadSwapInt16(
-    volatile void               * base,
-    UInt                          offset
+    volatile void   * base,
+    uintptr_t       offset
 )
 {
-    UInt16 result;
+    uint16_t result;
 
-    result = *(volatile UInt16 *)((UInt8 *)base + offset);
-    __asm__ volatile("xchgb %b0,%h0"
-                     : "=q" (result)
-                     : "0"  (result));
-    return result;
+    result = *(uint16_t *)((uintptr_t)base + offset);
+    return _OSSwapInt16(result);
 }
 
 OS_INLINE
-UInt32
+uint32_t
 OSReadSwapInt32(
-    volatile void               * base,
-    UInt                          offset
+    volatile void   * base,
+    uintptr_t       offset
 )
 {
-    UInt32 result;
+    uint32_t result;
 
-    result = *(volatile UInt32 *)((UInt8 *)base + offset);
-    __asm__ volatile("bswap %0"
-                     : "=r" (result)
-                     : "0"  (result));
-    return result;
+    result = *(uint32_t *)((uintptr_t)base + offset);
+    return _OSSwapInt32(result);
 }
 
 OS_INLINE
-UInt64
+uint64_t
 OSReadSwapInt64(
-    volatile void               * base,
-    UInt                          offset
+    volatile void   * base,
+    uintptr_t       offset
 )
 {
-    UInt64 * inp;
+    uint32_t * inp;
     union ullc {
-        UInt64     ull;
-        UInt       ul[2];
+        uint64_t     ull;
+        uint32_t     ul[2];
     } outv;
 
-    inp = (UInt64 *)base;
-    outv.ul[0] = OSReadSwapInt32(inp, offset + 4);
-    outv.ul[1] = OSReadSwapInt32(inp, offset);
+    inp = (uint32_t *)((uintptr_t)base + offset);
+    outv.ul[0] = inp[1];
+    outv.ul[1] = inp[0];
+    outv.ul[0] = _OSSwapInt32(outv.ul[0]);
+    outv.ul[1] = _OSSwapInt32(outv.ul[1]);
     return outv.ull;
-}
-
-OS_INLINE
-UInt
-OSReadSwapInt(
-    volatile void               * base,
-    UInt                          offset
-)
-{
-    UInt result;
-
-    result = *(volatile UInt *)((UInt8 *)base + offset);
-    __asm__ volatile("bswap %0"
-                     : "=r" (result)
-                     : "0"  (result));
-    return result;
 }
 
 /* Functions for byte reversed stores. */
@@ -108,105 +127,34 @@ OSReadSwapInt(
 OS_INLINE
 void
 OSWriteSwapInt16(
-    volatile void               * base,
-    UInt                          offset,
-    UInt16                        data
+    volatile void   * base,
+    uintptr_t       offset,
+    uint16_t        data
 )
 {
-    __asm__ volatile("xchgb %b0,%h0"
-                     : "=q" (data)
-                     : "0"  (data));
-    *(volatile UInt16 *)((UInt8 *)base + offset) = data;
+    *(uint16_t *)((uintptr_t)base + offset) = _OSSwapInt16(data);
 }
 
 OS_INLINE
 void
 OSWriteSwapInt32(
-    volatile void               * base,
-    UInt                          offset,
-    UInt32                        data
+    volatile void   * base,
+    uintptr_t       offset,
+    uint32_t        data
 )
 {
-    __asm__ volatile("bswap %0"
-                     : "=r" (data)
-                     : "0"  (data));
-    *(volatile UInt32 *)((UInt8 *)base + offset) = data;
+    *(uint32_t *)((uintptr_t)base + offset) = _OSSwapInt32(data);
 }
 
 OS_INLINE
 void
 OSWriteSwapInt64(
-    volatile void               * base,
-    UInt                          offset,
-    UInt64                        data
+    volatile void    * base,
+    uintptr_t        offset,
+    uint64_t         data
 )
 {
-    UInt64 * outp;
-    union ullc {
-        UInt64     ull;
-        UInt       ul[2];
-    } *inp;
-
-    outp = (UInt64 *)base;
-    inp  = (union ullc *)&data;
-    OSWriteSwapInt32(outp, offset, inp->ul[1]);
-    OSWriteSwapInt32(outp, offset + 4, inp->ul[0]);
-}
-
-OS_INLINE
-void
-OSWriteSwapInt(
-    volatile void               * base,
-    UInt                          offset,
-    UInt                          data
-)
-{
-    __asm__ volatile("bswap %0"
-                     : "=r" (data)
-                     : "0"  (data));
-    *(volatile UInt *)((UInt8 *)base + offset) = data;
-}
-
-/* Generic byte swapping functions. */
-
-OS_INLINE
-UInt16
-OSSwapInt16(
-    UInt16                        data
-)
-{
-    UInt16 temp = data;
-    return OSReadSwapInt16(&temp, 0);
-}
-
-OS_INLINE
-UInt32
-OSSwapInt32(
-    UInt32                        data
-)
-{
-    UInt32 temp = data;
-    return OSReadSwapInt32(&temp, 0);
-}
-
-OS_INLINE
-UInt64
-OSSwapInt64(
-    UInt64                        data
-)
-{
-    UInt64 temp = data;
-    return OSReadSwapInt64(&temp, 0);
-}
-
-OS_INLINE
-UInt
-OSSwapInt(
-    UInt                          data
-)
-{
-    UInt temp = data;
-    return OSReadSwapInt(&temp, 0);
+    *(uint64_t *)((uintptr_t)base + offset) = _OSSwapInt64(data);
 }
 
 #endif /* ! _OS_OSBYTEORDERI386_H */

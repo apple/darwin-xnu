@@ -86,3 +86,10 @@ io_map(phys_addr, size)
 			VM_PROT_READ|VM_PROT_WRITE);
 	return (start);
 }
+
+/* just wrap this since io_map handles it */
+
+vm_offset_t io_map_spec(vm_offset_t phys_addr, vm_size_t size)
+{
+  return (io_map(phys_addr, size));
+}

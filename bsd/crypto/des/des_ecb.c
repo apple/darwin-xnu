@@ -1,8 +1,8 @@
-/*	$FreeBSD: src/sys/crypto/des/des_ecb.c,v 1.1.2.2 2001/07/03 11:01:31 ume Exp $	*/
-/*	$KAME: des_ecb.c,v 1.5 2000/11/06 13:58:08 itojun Exp $	*/
+/*	$FreeBSD: src/sys/crypto/des/des_ecb.c,v 1.1.2.3 2002/03/26 10:12:24 ume Exp $	*/
+/*	$KAME: des_ecb.c,v 1.6 2001/09/10 04:03:58 itojun Exp $	*/
 
 /* crypto/des/ecb_enc.c */
-/* Copyright (C) 1995-1996 Eric Young (eay@mincom.oz.au)
+/* Copyright (C) 1995-1998 Eric Young (eay@mincom.oz.au)
  * All rights reserved.
  *
  * This file is part of an SSL implementation written
@@ -53,182 +53,84 @@
 #include <crypto/des/des_locl.h>
 #include <crypto/des/spr.h>
 
-char *libdes_version="libdes v 3.24 - 20-Apr-1996 - eay";
-char *DES_version="DES part of SSLeay 0.6.4 30-Aug-1996";
+/* char *libdes_version="libdes v 3.24 - 20-Apr-1996 - eay"; */ /* wrong */
+/* char *DES_version="DES part of SSLeay 0.6.4 30-Aug-1996"; */
 
-char *des_options()
-	{
+char *des_options(void)
+        {
+        static int init=1;
+        static char buf[32];
+
+        if (init)
+                {
+                const char *ptr,*unroll,*risc,*size;
+
 #ifdef DES_PTR
-	if (sizeof(DES_LONG) != sizeof(long))
-		return("des(ptr,int)");
-	else
-		return("des(ptr,long)");
+                ptr="ptr";
 #else
-	if (sizeof(DES_LONG) != sizeof(long))
-		return("des(idx,int)");
-	else
-		return("des(idx,long)");
+                ptr="idx";
 #endif
-	}
-		
-
-void des_ecb_encrypt(input, output, ks, encrypt)
-des_cblock (*input);
-des_cblock (*output);
-des_key_schedule ks;
-int encrypt;
-	{
+#if defined(DES_RISC1) || defined(DES_RISC2)
+#ifdef DES_RISC1
+                risc="risc1";
+#endif
+#ifdef DES_RISC2
+                risc="risc2";
+#endif
+#else
+                risc="cisc";
+#endif
+#ifdef DES_UNROLL
+                unroll="16";
+#else
+                unroll="4";
+#endif
+                if (sizeof(DES_LONG) != sizeof(long))
+                        size="int";
+                else
+                        size="long";
+                sprintf(buf,"des(%s,%s,%s,%s)",ptr,risc,unroll,size);
+                init=0;
+                }
+        return(buf);
+}
+void des_ecb_encrypt(des_cblock *input, des_cblock *output, 
+		     des_key_schedule ks, int enc)
+{
 	register DES_LONG l;
-	register unsigned char *in,*out;
 	DES_LONG ll[2];
+	const unsigned char *in=&(*input)[0];
+	unsigned char *out = &(*output)[0];
 
-	in=(unsigned char *)input;
-	out=(unsigned char *)output;
 	c2l(in,l); ll[0]=l;
 	c2l(in,l); ll[1]=l;
-	des_encrypt(ll,ks,encrypt);
+	des_encrypt1(ll,ks,enc);
 	l=ll[0]; l2c(l,out);
 	l=ll[1]; l2c(l,out);
 	l=ll[0]=ll[1]=0;
-	}
+}
 
-void des_encrypt(data, ks, encrypt)
-DES_LONG *data;
-des_key_schedule ks;
-int encrypt;
-	{
-	register DES_LONG l,r,t,u;
-#ifdef DES_PTR
-	register unsigned char *des_SP=(unsigned char *)des_SPtrans;
-#endif
-#ifdef undef
-	union fudge {
-		DES_LONG  l;
-		unsigned short s[2];
-		unsigned char  c[4];
-		} U,T;
-#endif
-	register int i;
-	register DES_LONG *s;
+void des_ecb3_encrypt(des_cblock *input, des_cblock *output,
+             des_key_schedule ks1, des_key_schedule ks2, des_key_schedule ks3,
+             int enc)
+{
+	register DES_LONG l0,l1;
+	DES_LONG ll[2];
+	const unsigned char *in = &(*input)[0];
+	unsigned char *out = &(*output)[0];
+ 
+	c2l(in,l0); 
+	c2l(in,l1);
+	ll[0]=l0; 
+	ll[1]=l1;
 
-	u=data[0];
-	r=data[1];
-
-	IP(u,r);
-	/* Things have been modified so that the initial rotate is
-	 * done outside the loop.  This required the
-	 * des_SPtrans values in sp.h to be rotated 1 bit to the right.
-	 * One perl script later and things have a 5% speed up on a sparc2.
-	 * Thanks to Richard Outerbridge <71755.204@CompuServe.COM>
-	 * for pointing this out. */
-	l=(r<<1)|(r>>31);
-	r=(u<<1)|(u>>31);
-
-	/* clear the top bits on machines with 8byte longs */
-	l&=0xffffffffL;
-	r&=0xffffffffL;
-
-	s=(DES_LONG *)ks;
-	/* I don't know if it is worth the effort of loop unrolling the
-	 * inner loop
-	 */
-	if (encrypt)
-		{
-		for (i=0; i<32; i+=8)
-			{
-			D_ENCRYPT(l,r,i+0); /*  1 */
-			D_ENCRYPT(r,l,i+2); /*  2 */
-			D_ENCRYPT(l,r,i+4); /*  3 */
-			D_ENCRYPT(r,l,i+6); /*  4 */
-			}
-		}
+	if (enc)
+		des_encrypt3(ll,ks1,ks2,ks3);
 	else
-		{
-		for (i=30; i>0; i-=8)
-			{
-			D_ENCRYPT(l,r,i-0); /* 16 */
-			D_ENCRYPT(r,l,i-2); /* 15 */
-			D_ENCRYPT(l,r,i-4); /* 14 */
-			D_ENCRYPT(r,l,i-6); /* 13 */
-			}
-		}
-	l=(l>>1)|(l<<31);
-	r=(r>>1)|(r<<31);
-	/* clear the top bits on machines with 8byte longs */
-	l&=0xffffffffL;
-	r&=0xffffffffL;
+		des_decrypt3(ll,ks1,ks2,ks3);
 
-	FP(r,l);
-	data[0]=l;
-	data[1]=r;
-	l=r=t=u=0;
-	}
-
-void des_encrypt2(data, ks, encrypt)
-DES_LONG *data;
-des_key_schedule ks;
-int encrypt;
-	{
-	register DES_LONG l,r,t,u;
-#ifdef DES_PTR
-	register unsigned char *des_SP=(unsigned char *)des_SPtrans;
-#endif
-#ifdef undef
-	union fudge {
-		DES_LONG  l;
-		unsigned short s[2];
-		unsigned char  c[4];
-		} U,T;
-#endif
-	register int i;
-	register DES_LONG *s;
-
-	u=data[0];
-	r=data[1];
-
-	/* Things have been modified so that the initial rotate is
-	 * done outside the loop.  This required the
-	 * des_SPtrans values in sp.h to be rotated 1 bit to the right.
-	 * One perl script later and things have a 5% speed up on a sparc2.
-	 * Thanks to Richard Outerbridge <71755.204@CompuServe.COM>
-	 * for pointing this out. */
-	l=(r<<1)|(r>>31);
-	r=(u<<1)|(u>>31);
-
-	/* clear the top bits on machines with 8byte longs */
-	l&=0xffffffffL;
-	r&=0xffffffffL;
-
-	s=(DES_LONG *)ks;
-	/* I don't know if it is worth the effort of loop unrolling the
-	 * inner loop */
-	if (encrypt)
-		{
-		for (i=0; i<32; i+=8)
-			{
-			D_ENCRYPT(l,r,i+0); /*  1 */
-			D_ENCRYPT(r,l,i+2); /*  2 */
-			D_ENCRYPT(l,r,i+4); /*  3 */
-			D_ENCRYPT(r,l,i+6); /*  4 */
-			}
-		}
-	else
-		{
-		for (i=30; i>0; i-=8)
-			{
-			D_ENCRYPT(l,r,i-0); /* 16 */
-			D_ENCRYPT(r,l,i-2); /* 15 */
-			D_ENCRYPT(l,r,i-4); /* 14 */
-			D_ENCRYPT(r,l,i-6); /* 13 */
-			}
-		}
-	l=(l>>1)|(l<<31);
-	r=(r>>1)|(r<<31);
-	/* clear the top bits on machines with 8byte longs */
-	l&=0xffffffffL;
-	r&=0xffffffffL;
-
-	data[0]=l;
-	data[1]=r;
-	l=r=t=u=0;
-	}
+	l0=ll[0];
+	l1=ll[1];
+	l2c(l0,out);
+	l2c(l1,out);
+}

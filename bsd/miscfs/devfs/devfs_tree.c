@@ -99,7 +99,7 @@ struct devfs_stats	devfs_stats;		/* hold stats */
 
 #ifdef HIDDEN_MOUNTPOINT
 static struct mount *devfs_hidden_mount;
-#endif HIDDEN_MOINTPOINT
+#endif /* HIDDEN_MOINTPOINT */
 
 static int devfs_ready = 0;
 
@@ -137,7 +137,7 @@ devfs_sinit(void)
 	devfs_mount(devfs_hidden_mount,"dummy",NULL,NULL,NULL);
 	dev_root->de_dnp->dn_dvm 
 	    = (struct devfsmount *)devfs_hidden_mount->mnt_data;
-#endif HIDDEN_MOUNTPOINT
+#endif /* HIDDEN_MOUNTPOINT */
 	devfs_ready = 1;
 	return (0);
 }
@@ -287,7 +287,7 @@ dev_finddir(char * orig_path, 	/* find this dir (err if not dir) */
 		return 0;
 	}
 }
-#endif 0
+#endif
 /***********************************************************************\
 * Given a starting node (0 for root) and a pathname, return the node	*
 * for the end item on the path. It MUST BE A DIRECTORY. If the 'CREATE'	*
@@ -338,6 +338,7 @@ dev_finddir(char * path,
 		scan++;
 
 	    strncpy(component, start, scan - start);
+		component[ scan - start ] = '\0';
 	    if (*scan == '/')
 		scan++;
 
@@ -670,14 +671,14 @@ devfs_dn_free(devnode_t * dnp)
 		if (dnp->dn_vn == NULL) {
 #if 0
 		    printf("devfs_dn_free: free'ing %x\n", (unsigned int)dnp);
-#endif 0
+#endif
 		    devnode_free(dnp); /* no accesses/references */
 		}
 		else {
 #if 0
 		    printf("devfs_dn_free: marking %x for deletion\n",
 			   (unsigned int)dnp);
-#endif 0
+#endif
 		    dnp->dn_delete = TRUE;
 		}
 	}

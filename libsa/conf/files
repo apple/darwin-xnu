@@ -2,14 +2,17 @@
 
 # OPTIONS/libkerncpp                                          optional libkerncpp
 # OPTIONS/kdebug                                              optional kdebug
+# OPTIONS/gprof                                               optional gprof
 
 # libsa
 
 libsa/bootstrap.cpp                                           standard
 libsa/catalogue.cpp                                           standard
 libsa/c++rem3.c                                               standard
+libsa/dgraph.c                                                standard
 libsa/kld_patch.c                                             standard
-libsa/kmod.cpp                                                standard
+libsa/kext.cpp                                                standard
+libsa/load.c                                                  standard
 libsa/mach.c                                                  standard
 libsa/misc.c                                                  standard
 libsa/mkext.c                                                 standard

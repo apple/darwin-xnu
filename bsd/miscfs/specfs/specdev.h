@@ -76,7 +76,8 @@ struct specinfo {
 	struct	vnode *si_specnext;
 	long	si_flags;
 	dev_t	si_rdev;
-	daddr_t si_size;                  /* block device size in bytes */
+	daddr_t si_size;                  /* device block size in bytes */
+	u_int64_t	si_devsize;	  /* actual device size in bytes */
 };
 /*
  * Exported shorthand
@@ -86,6 +87,7 @@ struct specinfo {
 #define v_specnext v_specinfo->si_specnext
 #define v_specflags v_specinfo->si_flags
 #define v_specsize v_specinfo->si_size
+#define v_specdevsize v_specinfo->si_devsize
 
 /*
  * Flags for specinfo

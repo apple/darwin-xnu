@@ -55,7 +55,7 @@ extern struct host realhost;
 
 #define MAX_HFS_UNICODE_CHARS	(15*5)
 
-int mac_roman_to_unicode(Str31 hfs_str, UniChar *uni_str, UInt32 maxCharLen, UInt32 *usedCharLen);
+int mac_roman_to_unicode(const Str31 hfs_str, UniChar *uni_str, UInt32 maxCharLen, UInt32 *usedCharLen);
 
 static int unicode_to_mac_roman(UniChar *uni_str, UInt32 unicodeChars, Str31 hfs_str);
 
@@ -202,7 +202,7 @@ hfs_relconverter(UInt32 encoding)
     				encp = NULL;
 
 				simple_unlock(&hfs_encoding_list_slock);
-				kmod_destroy(host_priv_self(), id);
+				kmod_destroy((host_priv_t) host_priv_self(), id);
 				simple_lock(&hfs_encoding_list_slock);
 			}
 			break;
@@ -614,7 +614,7 @@ static UniChar gHiBitCombUnicode[128] = {
  * Unicode output is fully decomposed
  */
 int
-mac_roman_to_unicode(Str31 hfs_str, UniChar *uni_str,
+mac_roman_to_unicode(const Str31 hfs_str, UniChar *uni_str,
 				UInt32 maxCharLen, UInt32 *unicodeChars)
 {
 	const UInt8  *p;

@@ -82,64 +82,120 @@ and
 .Xr mount 8 . )
 .Pp
 The directory entry format is defined in the file
+.Aq sys/dirent.h 
+and further in the file
 .Aq dirent.h :
 .Bd -literal
-#ifndef _DIRENT_H_
-#define _DIRENT_H_
-
+/*** Excerpt from <sys/dirent.h> ***/
 /*
-* A directory entry has a struct dirent at the front of it, containing its
-* inode number, the length of the entry, and the length of the name
-* contained in the entry.  These are followed by the name padded to a 4
-* byte boundary with null bytes.  All names are guaranteed null terminated.
-* The maximum length of a name in a directory is MAXNAMLEN.
-*/
+ * The dirent structure defines the format of directory entries returned by 
+ * the getdirentries(2) system call.
+ *
+ * A directory entry has a struct dirent at the front of it, containing its
+ * inode number, the length of the entry, and the length of the name
+ * contained in the entry.  These are followed by the name padded to a 4
+ * byte boundary with null bytes.  All names are guaranteed null terminated.
+ * The maximum length of a name in a directory is MAXNAMLEN.
+ * The dirent structure defines the format of directory entries returned by 
+ * the getdirentries(2) system call.
+ */
+
+#ifndef _SYS_DIRENT_H 
+#define _SYS_DIRENT_H 
 
 struct dirent {
-	u_long	d_fileno;	/* file number of entry */
-	u_short	d_reclen;	/* length of this record */
-	u_short	d_namlen;	/* length of string in d_name */
+        u_int32_t d_fileno;             /* file number of entry */
+        u_int16_t d_reclen;             /* length of this record */
+        u_int8_t  d_type;               /* file type, see below */
+        u_int8_t  d_namlen;             /* length of string in d_name */
 #ifdef _POSIX_SOURCE
-	char	d_name[MAXNAMLEN + 1];	/* maximum name length */
+        char    d_name[255 + 1];        /* name must be no longer than this */
 #else
 #define MAXNAMLEN       255
-	char    d_name[MAXNAMLEN + 1];  /* maximum name length */
+        char    d_name[MAXNAMLEN + 1];  /* name must be no longer than this */
 #endif
-
 };
 
+/*
+ * File types
+ */
+#define DT_UNKNOWN       0
+#define DT_FIFO          1
+#define DT_CHR           2
+#define DT_DIR           4
+#define DT_BLK           6
+#define DT_REG           8
+#define DT_LNK          10
+#define DT_SOCK         12
+#define DT_WHT          14
+
+#endif /* !_SYS_DIRENT_H_ */
+
+.Ed
+-----------------------------------------
+.Bd -literal
+/*** Excerpt from <dirent.h> ***/
+
+#ifndef _DIRENT_H 
+#define _DIRENT_H 
+
 #ifdef _POSIX_SOURCE
-typedef void *	DIR;
+typedef void *  DIR;
 #else
 
-#define	d_ino		d_fileno	/* backward compatibility */
+#define d_ino           d_fileno        /* backward compatibility */
 
 /* definitions for library routines operating on directories. */
-#define	DIRBLKSIZ	1024
+#define DIRBLKSIZ       1024
+
+struct _telldir;                /* see telldir.h */
 
 /* structure describing an open directory. */
 typedef struct _dirdesc {
-	int	dd_fd;    /* file descriptor associated with directory */
-	long	dd_loc;	  /* offset in current buffer */
-	long	dd_size;  /* amount of data returned by getdirentries */
-	char	*dd_buf;  /* data buffer */
-	int	dd_len;   /* size of data buffer */
-	long	dd_seek;  /* magic cookie returned by getdirentries */
+        int     dd_fd;          /* file descriptor associated with directory */
+        long    dd_loc;         /* offset in current buffer */
+        long    dd_size;        /* amount of data returned by getdirentries */
+        char    *dd_buf;        /* data buffer */
+        int     dd_len;         /* size of data buffer */
+        long    dd_seek;        /* magic cookie returned by getdirentries */
+        long    dd_rewind;      /* magic cookie for rewinding */
+        int     dd_flags;       /* flags for readdir */
+        pthread_mutex_t dd_lock; /* for thread locking */
+        struct _telldir *dd_td; /* telldir position recording */
 } DIR;
 
-#define	dirfd(dirp)	((dirp)->dd_fd)
+#define dirfd(dirp)     ((dirp)->dd_fd)
+
+/* flags for opendir2 */
+#define DTF_HIDEW       0x0001  /* hide whiteout entries */
+#define DTF_NODUP       0x0002  /* don't return duplicate names */
+/* structure describing an open directory. */
+typedef struct _dirdesc {
+        int     dd_fd;          /* file descriptor associated with directory */
+        long    dd_loc;         /* offset in current buffer */
+        long    dd_size;        /* amount of data returned by getdirentries */
+        char    *dd_buf;        /* data buffer */
+        int     dd_len;         /* size of data buffer */
+        long    dd_seek;        /* magic cookie returned by getdirentries */
+        long    dd_rewind;      /* magic cookie for rewinding */
+        int     dd_flags;       /* flags for readdir */
+        pthread_mutex_t dd_lock; /* for thread locking */
+        struct _telldir *dd_td; /* telldir position recording */
+} DIR;
+
+#define dirfd(dirp)     ((dirp)->dd_fd)
+
+/* flags for opendir2 */
+#define DTF_HIDEW       0x0001  /* hide whiteout entries */
+#define DTF_NODUP       0x0002  /* don't return duplicate names */
+#define DTF_REWIND      0x0004  /* rewind after reading union stack */
+#define __DTF_READALL   0x0008  /* everything has been read */
 
 #ifndef NULL
-#define	NULL	0
+#define NULL    0
 #endif
 
 #endif /* _POSIX_SOURCE */
-
-#ifndef _KERNEL
-
-#include <sys/cdefs.h>
-
-#endif /* !_KERNEL */
 
 #endif /* !_DIRENT_H_ */
 .Ed

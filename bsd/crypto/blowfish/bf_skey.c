@@ -1,5 +1,5 @@
-/*	$FreeBSD: src/sys/crypto/blowfish/bf_skey.c,v 1.1.2.2 2001/07/03 11:01:28 ume Exp $	*/
-/*	$KAME: bf_skey.c,v 1.5 2000/11/06 13:58:08 itojun Exp $	*/
+/*	$FreeBSD: src/sys/crypto/blowfish/bf_skey.c,v 1.1.2.3 2002/03/26 10:12:23 ume Exp $	*/
+/*	$KAME: bf_skey.c,v 1.7 2002/02/27 01:33:59 itojun Exp $	*/
 
 /* crypto/bf/bf_skey.c */
 /* Copyright (C) 1995-1997 Eric Young (eay@mincom.oz.au)
@@ -76,7 +76,7 @@ BF_set_key(key, len, data)
 	BF_LONG *p, ri, in[2];
 	unsigned char *d, *end;
 
-	memcpy((char *)key, (char *)&bf_init, sizeof(BF_KEY));
+	memcpy((char *)key, (const char *)&bf_init, sizeof(BF_KEY));
 	p = key->P;
 
 	if (len > ((BF_ROUNDS + 2) * 4))
@@ -106,14 +106,14 @@ BF_set_key(key, len, data)
 	in[0] = 0L;
 	in[1] = 0L;
 	for (i = 0; i < BF_ROUNDS + 2; i += 2) {
-		BF_encrypt(in, key, BF_ENCRYPT);
+		BF_encrypt(in, key);
 		p[i  ] = in[0];
 		p[i+1] = in[1];
 	}
 
 	p = key->S;
 	for (i = 0; i < 4 * 256; i += 2) {
-		BF_encrypt(in, key, BF_ENCRYPT);
+		BF_encrypt(in, key);
 		p[i  ] = in[0];
 		p[i+1] = in[1];
 	}

@@ -70,17 +70,17 @@
 #endif   /* BUILD_STACK_FRAMES */
 
 
-#define	M_ILK			(%edx)
-#define	M_LOCKED		1(%edx)
-#define	M_WAITERS		2(%edx)
-#define	M_PROMOTED_PRI	4(%edx)
+#define	M_ILK		(%edx)
+#define	M_LOCKED	MUTEX_LOCKED(%edx)
+#define	M_WAITERS	MUTEX_WAITERS(%edx)
+#define	M_PROMOTED_PRI	MUTEX_PROMOTED_PRI(%edx)
 #if	MACH_LDEBUG
-#define	M_TYPE			6(%edx)
-#define	M_PC			10(%edx)
-#define	M_THREAD		14(%edx)
+#define	M_TYPE		MUTEX_TYPE(%edx)
+#define	M_PC		MUTEX_PC(%edx)
+#define	M_THREAD	MUTEX_THREAD(%edx)
 #endif	/* MACH_LDEBUG */
 
-#include <i386/AT386/mp/mp.h>
+#include <i386/mp.h>
 #if	(NCPUS > 1)
 #define	CX(addr,reg)	addr(,reg,4)
 #else
@@ -92,11 +92,11 @@
 /*
  *  Routines for general lock debugging.
  */
-#define	S_TYPE		4(%edx)
-#define	S_PC		8(%edx)
-#define	S_THREAD	12(%edx)
-#define	S_DURATIONH	16(%edx)
-#define	S_DURATIONL	20(%edx)
+#define	S_TYPE		SLOCK_TYPE(%edx)
+#define	S_PC		SLOCK_PC(%edx)
+#define	S_THREAD	SLOCK_THREAD(%edx)
+#define	S_DURATIONH	SLOCK_DURATIONH(%edx)
+#define	S_DURATIONL	SLOCK_DURATIONL(%edx)
 
 /* 
  * Checks for expected lock types and calls "panic" on
@@ -115,7 +115,7 @@
 1:
 
 #define	CHECK_SIMPLE_LOCK_TYPE()				\
-	cmpl	$ SIMPLE_LOCK_TAG,S_TYPE 		;	\
+	cmpl	$ USLOCK_TAG,S_TYPE 			;	\
 	je	1f					;	\
 	pushl	$2f					;	\
 	call	EXT(panic)				;	\
@@ -223,26 +223,24 @@ ENTRY(hw_lock_init)
 	FRAME
 	movl	L_ARG0,%edx		/* fetch lock pointer */
 	xorl	%eax,%eax
-	movb	%al,0(%edx)		/* clear the lock */
+	movl	%eax,0(%edx)		/* clear the lock */
 	EMARF
 	ret
 
 /*
  *	void hw_lock_lock(hw_lock_t)
- *	unsigned int hw_lock_to(hw_lock_t, unsigned int)
  *
  *	Acquire lock, spinning until it becomes available.
- *	XXX:  For now, we don't actually implement the timeout.
  *	MACH_RT:  also return with preemption disabled.
  */
-ENTRY2(hw_lock_lock,hw_lock_to)
+ENTRY(hw_lock_lock)
 	FRAME
 	movl	L_ARG0,%edx		/* fetch lock pointer */
 
 1:	DISABLE_PREEMPTION(%eax)
-	movb	$1,%cl
-	xchgb	0(%edx),%cl		/* try to acquire the HW lock */
-	testb	%cl,%cl			/* success? */
+	movl	$1,%ecx
+	xchgl	0(%edx),%ecx		/* try to acquire the HW lock */
+	testl	%ecx,%ecx		/* success? */
 	jne	3f
 	movl	$1,%eax			/* In case this was a timeout call */
 	EMARF				/* if yes, then nothing left to do */
@@ -250,10 +248,97 @@ ENTRY2(hw_lock_lock,hw_lock_to)
 
 3:	ENABLE_PREEMPTION(%eax)		/* no reason we can't be preemptable now */
 
-	movb	$1,%cl
-2:	testb	%cl,0(%edx)		/* spin checking lock value in cache */
+	movl	$1,%ecx
+2:
+	rep; nop			/* pause for hyper-threading */
+	testl	%ecx,0(%edx)		/* spin checking lock value in cache */
 	jne	2b			/* non-zero means locked, keep spinning */
 	jmp	1b			/* zero means unlocked, try to grab it */
+
+/*
+ *	unsigned int hw_lock_to(hw_lock_t, unsigned int)
+ *
+ *	Acquire lock, spinning until it becomes available or timeout.
+ *	MACH_RT:  also return with preemption disabled.
+ */
+ENTRY(hw_lock_to)
+	FRAME
+	movl	L_ARG0,%edx		/* fetch lock pointer */
+1:
+	/*
+	 * Attempt to grab the lock immediately
+	 * - fastpath without timeout nonsense.
+	 */
+	DISABLE_PREEMPTION(%eax)
+	movl	$1,%eax
+	xchgl	0(%edx),%eax		/* try to acquire the HW lock */
+	testl	%eax,%eax			/* success? */
+	jne	2f			/* no */
+	movl	$1,%eax			/* yes, return true */
+	EMARF
+	ret
+
+2:
+#define	INNER_LOOP_COUNT	1000
+	/*
+	 * Failed to get the lock so set the timeout
+	 * and then spin re-checking the lock but pausing
+	 * every so many (INNER_LOOP_COUNT) spins to check for timeout.
+	 */
+	movl	L_ARG1,%ecx		/* fetch timeout */
+	push	%edi
+	push	%ebx
+	mov	%edx,%edi
+
+	rdtsc				/* read cyclecount into %edx:%eax */
+	addl	%ecx,%eax		/* fetch and timeout */
+	adcl	$0,%edx			/* add carry */
+	mov	%edx,%ecx
+	mov	%eax,%ebx		/* %ecx:%ebx is the timeout expiry */
+3:
+	ENABLE_PREEMPTION(%eax)		/* no reason not to be preempted now */
+4:
+	/*
+	 * The inner-loop spin to look for the lock being freed.
+	 */
+	movl	$1,%eax
+	mov	$(INNER_LOOP_COUNT),%edx
+5:
+	rep; nop			/* pause for hyper-threading */
+	testl	%eax,0(%edi)		/* spin checking lock value in cache */
+	je	6f			/* zero => unlocked, try to grab it */
+	decl	%edx			/* decrement inner loop count */
+	jnz	5b			/* time to check for timeout? */
+
+	/*
+	 * Here after spinning INNER_LOOP_COUNT times, check for timeout
+	 */
+	rdtsc				/* cyclecount into %edx:%eax */
+	cmpl	%ecx,%edx		/* compare high-order 32-bits */
+	jb	4b			/* continue spinning if less, or */
+	cmpl	%ebx,%eax		/* compare low-order 32-bits */ 
+	jb	5b			/* continue is less, else bail */
+	xor	%eax,%eax		/* with 0 return value */
+	pop	%ebx
+	pop	%edi
+	EMARF
+	ret
+
+6:
+	/*
+	 * Here to try to grab the lock that now appears to be free
+	 * after contention.
+	 */
+	DISABLE_PREEMPTION(%eax)
+	movl	$1,%eax
+	xchgl	0(%edi),%eax		/* try to acquire the HW lock */
+	testl	%eax,%eax		/* success? */
+	jne	3b			/* no - spin again */
+	movl	$1,%eax			/* yes */
+	pop	%ebx
+	pop	%edi
+	EMARF
+	ret
 
 /*
  *	void hw_lock_unlock(hw_lock_t)
@@ -265,7 +350,7 @@ ENTRY(hw_lock_unlock)
 	FRAME
 	movl	L_ARG0,%edx		/* fetch lock pointer */
 	xorl	%eax,%eax
-	xchgb	0(%edx),%al		/* clear the lock... a mov instruction */
+	xchgl	0(%edx),%eax		/* clear the lock... a mov instruction */
 					/* ...might be cheaper and less paranoid */
 	ENABLE_PREEMPTION(%eax)
 	EMARF
@@ -280,9 +365,9 @@ ENTRY(hw_lock_try)
 	movl	L_ARG0,%edx		/* fetch lock pointer */
 
 	DISABLE_PREEMPTION(%eax)
-	movb	$1,%cl
-	xchgb	0(%edx),%cl		/* try to acquire the HW lock */
-	testb	%cl,%cl			/* success? */
+	movl	$1,%ecx
+	xchgl	0(%edx),%ecx		/* try to acquire the HW lock */
+	testl	%ecx,%ecx		/* success? */
 	jne	1f			/* if yes, let the caller know */
 
 	movl	$1,%eax			/* success */
@@ -303,8 +388,8 @@ ENTRY(hw_lock_held)
 	FRAME
 	movl	L_ARG0,%edx		/* fetch lock pointer */
 
-	movb	$1,%cl
-	testb	%cl,0(%edx)		/* check lock value */
+	movl	$1,%ecx
+	testl	%ecx,0(%edx)		/* check lock value */
 	jne	1f			/* non-zero means locked */
 	xorl	%eax,%eax		/* tell caller:  lock wasn't locked */
 	EMARF
@@ -323,7 +408,7 @@ ENTRY(_usimple_lock_init)
 	FRAME
 	movl	L_ARG0,%edx		/* fetch lock pointer */
 	xorl	%eax,%eax
-	movb	%al,USL_INTERLOCK(%edx)	/* unlock the HW lock */
+	movl	%eax,USL_INTERLOCK(%edx)	/* unlock the HW lock */
 	EMARF
 	ret
 
@@ -336,9 +421,9 @@ ENTRY(_simple_lock)
 	DISABLE_PREEMPTION(%eax)
 
 sl_get_hw:
-	movb	$1,%cl
-	xchgb	USL_INTERLOCK(%edx),%cl	/* try to acquire the HW lock */
-	testb	%cl,%cl			/* did we succeed? */
+	movl	$1,%ecx
+	xchgl	USL_INTERLOCK(%edx),%ecx/* try to acquire the HW lock */
+	testl	%ecx,%ecx		/* did we succeed? */
 
 #if	MACH_LDEBUG
 	je	5f
@@ -380,9 +465,9 @@ ENTRY(_simple_lock_try)
 
 	DISABLE_PREEMPTION(%eax)
 
-	movb	$1,%cl
-	xchgb	USL_INTERLOCK(%edx),%cl	/* try to acquire the HW lock */
-	testb	%cl,%cl			/* did we succeed? */
+	movl	$1,%ecx
+	xchgl	USL_INTERLOCK(%edx),%ecx/* try to acquire the HW lock */
+	testl	%ecx,%ecx		/* did we succeed? */
 	jne	1f			/* no, return failure */
 
 #if	MACH_LDEBUG
@@ -445,8 +530,8 @@ ENTRY(_simple_unlock)
 #endif	/* NCPUS == 1 */
 #endif	/* MACH_LDEBUG */
 
-	xorb	%cl,%cl
-	xchgb	USL_INTERLOCK(%edx),%cl	/* unlock the HW lock */
+	xorl	%ecx,%ecx
+	xchgl	USL_INTERLOCK(%edx),%ecx	/* unlock the HW lock */
 
 	ENABLE_PREEMPTION(%eax)
 
@@ -460,8 +545,8 @@ ENTRY(mutex_init)
 	FRAME
 	movl	L_ARG0,%edx		/* fetch lock pointer */
 	xorl	%eax,%eax
-	movb	%al,M_ILK		/* clear interlock */
-	movb	%al,M_LOCKED		/* clear locked flag */
+	movl	%eax,M_ILK		/* clear interlock */
+	movl	%eax,M_LOCKED		/* clear locked flag */
 	movw	%ax,M_WAITERS		/* init waiter count */
 	movw	%ax,M_PROMOTED_PRI
 
@@ -501,14 +586,14 @@ ml_retry:
 	DISABLE_PREEMPTION(%eax)
 
 ml_get_hw:
-	movb	$1,%cl
-	xchgb	%cl,M_ILK
-	testb	%cl,%cl			/* did we succeed? */
+	movl	$1,%ecx
+	xchgl	%ecx,M_ILK
+	testl	%ecx,%ecx		/* did we succeed? */
 	jne	ml_get_hw		/* no, try again */
 
-	movb	$1,%cl
-	xchgb	%cl,M_LOCKED		/* try to set locked flag */
-	testb	%cl,%cl			/* is the mutex locked? */
+	movl	$1,%ecx
+	xchgl	%ecx,M_LOCKED		/* try to set locked flag */
+	testl	%ecx,%ecx		/* is the mutex locked? */
 	jne	ml_fail			/* yes, we lose */
 
 	pushl	%edx
@@ -528,8 +613,8 @@ ml_get_hw:
 3:
 #endif
 
-	xorb	%cl,%cl
-	xchgb	%cl,M_ILK
+	xorl	%ecx,%ecx
+	xchgl	%ecx,M_ILK
 
 	ENABLE_PREEMPTION(%eax)
 
@@ -585,14 +670,14 @@ ENTRY2(mutex_try,_mutex_try)
 	DISABLE_PREEMPTION(%eax)
 
 mt_get_hw:
-	movb	$1,%cl
-	xchgb	%cl,M_ILK
-	testb	%cl,%cl
+	movl	$1,%ecx
+	xchgl	%ecx,M_ILK
+	testl	%ecx,%ecx
 	jne		mt_get_hw
 
-	movb	$1,%cl
-	xchgb	%cl,M_LOCKED
-	testb	%cl,%cl
+	movl	$1,%ecx
+	xchgl	%ecx,M_LOCKED
+	testl	%ecx,%ecx
 	jne		mt_fail
 
 	pushl	%edx
@@ -612,8 +697,8 @@ mt_get_hw:
 1:
 #endif
 
-	xorb	%cl,%cl
-	xchgb	%cl,M_ILK
+	xorl	%ecx,%ecx
+	xchgl	%ecx,M_ILK
 
 	ENABLE_PREEMPTION(%eax)
 
@@ -639,20 +724,8 @@ mt_get_hw:
 	ret
 
 mt_fail:
-#if	MACH_LDEBUG
-	movl	L_PC,%ecx
-	movl	%ecx,M_PC
-	movl	$ CPD_ACTIVE_THREAD,%ecx
-	movl	%gs:(%ecx),%ecx
-	movl	%ecx,M_THREAD
-	testl	%ecx,%ecx
-	je	1f
-	incl	TH_MUTEX_COUNT(%ecx)
-1:
-#endif
-
-	xorb	%cl,%cl
-	xchgb	%cl,M_ILK
+	xorl	%ecx,%ecx
+	xchgl	%ecx,M_ILK
 
 	ENABLE_PREEMPTION(%eax)
 
@@ -693,9 +766,9 @@ ENTRY(mutex_unlock)
 	DISABLE_PREEMPTION(%eax)
 
 mu_get_hw:
-	movb	$1,%cl
-	xchgb	%cl,M_ILK
-	testb	%cl,%cl			/* did we succeed? */
+	movl	$1,%ecx
+	xchgl	%ecx,M_ILK
+	testl	%ecx,%ecx		/* did we succeed? */
 	jne	mu_get_hw		/* no, try again */
 
 	cmpw	$0,M_WAITERS		/* are there any waiters? */
@@ -713,11 +786,11 @@ mu_doit:
 0:
 #endif
 
-	xorb	%cl,%cl
-	xchgb	%cl,M_LOCKED		/* unlock the mutex */
+	xorl	%ecx,%ecx
+	xchgl	%ecx,M_LOCKED		/* unlock the mutex */
 
-	xorb	%cl,%cl
-	xchgb	%cl,M_ILK
+	xorl	%ecx,%ecx
+	xchgl	%ecx,M_ILK
 
 	ENABLE_PREEMPTION(%eax)
 
@@ -737,8 +810,8 @@ ENTRY(interlock_unlock)
 	FRAME
 	movl	L_ARG0,%edx
 
-	xorb	%cl,%cl
-	xchgb	%cl,M_ILK
+	xorl	%ecx,%ecx
+	xchgl	%ecx,M_ILK
 
 	ENABLE_PREEMPTION(%eax)
 

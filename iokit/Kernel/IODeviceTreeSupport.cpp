@@ -24,6 +24,11 @@
  */
 /*
  * Copyright (c) 1998 Apple Computer, Inc.  All rights reserved. 
+ *
+ * HISTORY
+ * 23 Nov 98 sdouglas, created from IODeviceTreeBus.m, & MacOS exp mgr.
+ * 05 Apr 99 sdouglas, add interrupt mapping.
+ *
  */
 
 #include <IOKit/IODeviceTreeSupport.h>
@@ -35,7 +40,8 @@
 #include <IOKit/IOLib.h>
 #include <IOKit/IOKitKeys.h>
 
-#include <DeviceTree.h>
+#include <pexpert/device_tree.h>
+
 extern "C" {
     #include <machine/machine_routines.h>
     void DTInit( void * data );
@@ -94,8 +100,6 @@ IODeviceTreeAlloc( void * dtTop )
     bool				intMap;
     bool				freeDT;
 
-    IOLog("IODeviceTreeSupport ");
-
     gIODTPlane = IORegistryEntry::makePlane( kIODeviceTreePlane );
 
     gIODTNameKey 		= OSSymbol::withCStringNoCopy( "name" );
@@ -146,7 +150,7 @@ IODeviceTreeAlloc( void * dtTop )
 
     parent = MakeReferenceTable( (DTEntry)dtTop, freeDT );
 
-    stack = OSArray::withObjects( & (const OSObject *) parent, 1, 10 );
+    stack = OSArray::withObjects( (const OSObject **) &parent, 1, 10 );
     DTCreateEntryIterator( (DTEntry)dtTop, &iter );
 
     do {
@@ -191,7 +195,7 @@ IODeviceTreeAlloc( void * dtTop )
         // free original device tree
         DTInit(0);
         IODTFreeLoaderInfo( "DeviceTree",
-			(void *)dtMap[0], round_page(dtMap[1]) );
+			(void *)dtMap[0], round_page_32(dtMap[1]) );
     }
 
     // adjust tree
@@ -229,8 +233,6 @@ IODeviceTreeAlloc( void * dtTop )
         // set a key in the root to indicate we found NW interrupt mapping
         parent->setProperty( gIODTNWInterruptMappingKey,
                 (OSObject *) gIODTNWInterruptMappingKey );
-
-    IOLog("done\n");
 
     return( parent);
 }

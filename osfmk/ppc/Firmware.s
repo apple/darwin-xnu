@@ -43,7 +43,6 @@
 #include <ppc/asm.h>
 #include <ppc/proc_reg.h>
 #include <ppc/spec_reg.h>
-#include <ppc/POWERMAC/mp/MPPlugIn.h>
 #include <ppc/exception.h>
 #include <mach/machine/vm_param.h>
 #include <assym.s>
@@ -83,54 +82,57 @@ EXT(FWtable):
  *			R3 is as passed in by the user.  All others must be gotten from the save area
  */
 
-ENTRY(FirmwareCall, TAG_NO_FRAME_USED)
+
+			.align	5
+			.globl	EXT(FirmwareCall)
+
+LEXT(FirmwareCall)
 		
 			rlwinm	r1,r0,2,1,29					/* Clear out bit 0 and multiply by 4 */
 			lis		r12,HIGH_ADDR(EXT(FWtable))		/* Get the high part of the firmware call table */
 			cmplwi	r1,EXT(FirmwareCnt)*4			/* Is it a valid firmware call number */
-			mflr	r11								/* Save the return */
 			ori		r12,r12,LOW_ADDR(EXT(FWtable))	/* Now the low part */
 			ble+	goodCall						/* Yeah, it is... */
 			
 			li		r3,T_SYSTEM_CALL				/* Tell the vector handler that we know nothing */
-			blr										/* Return for errors... */
+			b		EXT(FCReturn)					; Bye dudes...
 			
 goodCall:	mfsprg	r10,0							/* Make sure about the per_proc block */
 			lwzx	r1,r1,r12						/* Pick up the address of the routine */
-			lwz		r4,saver4(r13)					/* Pass in caller's R4 */
-			lwz		r5,saver5(r13)					/* Pass in caller's R5 */
+			lwz		r4,saver4+4(r13)				/* Pass in caller's R4 */
+			lwz		r5,saver5+4(r13)				/* Pass in caller's R5 */
 			rlwinm.	r1,r1,0,0,29					/* Make sure the flag bits are clear */
-			stw		r11,PP_TEMPWORK1(r10)			/* Save our return point */
 
 			mtlr	r1								/* Put it in the LR */
 			beq-	callUnimp						/* This one was unimplimented... */
 
 			blrl									/* Call the routine... */
 
-			mfsprg	r10,0							/* Make sure about the per_proc again */
-			stw		r3,saver3(r13)					/* Pass back the return code to caller */
-			lwz		r11,PP_TEMPWORK1(r10)			/* Get our return point */
+			stw		r3,saver3+4(r13)				/* Pass back the return code to caller */
 			li		r3,T_IN_VAIN					/* Tell the vector handler that we took care of it */
-			mtlr	r11								/* Set the return */
-			blr										/* Bye, dudes... */
+			b		EXT(FCReturn)					; Bye dudes...
 	
-callUnimp:	lwz		r11,PP_TEMPWORK1(r10)			/* Restore the return address */
-			li		r3,T_SYSTEM_CALL				/* Tell the vector handler that we know nothing */
-			mtlr	r11								/* Restore the LR */
-			blr										/* Return for errors... */
+callUnimp:	li		r3,T_SYSTEM_CALL				/* Tell the vector handler that we know nothing */
+			b		EXT(FCReturn)					; Bye dudes...
 
 /*
  *			This routine is used to store using a real address. It stores parmeter1 at parameter2.
  */
 
-ENTRY(StoreReal, TAG_NO_FRAME_USED)
+			.align	5
+			.globl	EXT(StoreReal)
+
+LEXT(StoreReal)
 
 			lis		r0,HIGH_ADDR(StoreRealCall)		/* Get the top part of the SC number */
 			ori		r0,r0,LOW_ADDR(StoreRealCall)	/* and the bottom part */
 			sc										/* Do it to it */
 			blr										/* Bye bye, Birdie... */
 			
-ENTRY(StoreRealLL, TAG_NO_FRAME_USED)
+			.align	5
+			.globl	EXT(StoreRealLL)
+
+LEXT(StoreRealLL)
 
 			stw		r3,0(r4)						/* Store the word */
 			blr										/* Leave... */
@@ -138,15 +140,22 @@ ENTRY(StoreRealLL, TAG_NO_FRAME_USED)
 /*
  *			This routine is used to clear a range of physical pages.
  */
+			
+			.align	5
+			.globl	EXT(ClearReal)
 
-ENTRY(ClearReal, TAG_NO_FRAME_USED)
+LEXT(ClearReal)
 
 			lis		r0,HIGH_ADDR(ClearRealCall)		/* Get the top part of the SC number */
 			ori		r0,r0,LOW_ADDR(ClearRealCall)	/* and the bottom part */
 			sc										/* Do it to it */
 			blr										/* Bye bye, Birdie... */
 			
-ENTRY(ClearRealLL, TAG_NO_FRAME_USED)
+			
+			.align	5
+			.globl	EXT(ClearRealLL)
+
+LEXT(ClearRealLL)
 
 /*
  *			We take the first parameter as a physical address.  The second is the length in bytes.
@@ -175,30 +184,56 @@ clrloop:	subi	r4,r4,32						/* Back off a cache line */
 /*
  *			This routine will read in 32 byte of real storage.
  */
- 
-ENTRY(ReadReal, TAG_NO_FRAME_USED)
+ 			
+			.align	5
+			.globl	EXT(ReadReal)
 
-			mfmsr	r0								/* Get the MSR */
-			rlwinm	r5,r0,0,28,26					/* Clear DR bit */
-			rlwinm	r5,r5,0,17,15					/* Clear EE bit */
-			mtmsr	r5								/* Disable EE and DR */
+LEXT(ReadReal)
+
+			mfsprg	r9,2							; Get the features
+			mfmsr	r0								; Get the MSR 
+			li		r8,lo16(MASK(MSR_DR))			; Get the DR bit
+			rlwinm.	r9,r9,0,pf64Bitb,pf64Bitb		; Are we 64-bit?
+			ori		r8,r8,lo16(MASK(MSR_EE))		; Add in the EE bit
+			li		r7,1							; Get set for it
+			andc	r8,r0,r8						; Turn off EE and DR
+			bt--	cr0_eq,rr32a					; Yes, we are...
+			
+			rldimi	r8,r7,63,MSR_SF_BIT				; Set SF bit (bit 0)
+			sldi	r3,r3,32						; Slide on over for true 64-bit address
+			mtmsrd	r8
+			isync
+			or		r3,r3,r4						; Join top and bottom of address
+			mr		r4,r5							; Set destination address
+			b		rrJoina							; Join on up...
+			
+rr32a:		mr		r3,r4							; Position bottom of long long
+			mr		r4,r5							; Set destination address
+			mtmsr	r8								/* Disable EE and DR */
 			isync									/* Just make sure about it */
 			
-			lwz		r5,0(r3)						/* Get word 0 */
+rrJoina:	lwz		r5,0(r3)						/* Get word 0 */
 			lwz		r6,4(r3)						/* Get word 1 */
 			lwz		r7,8(r3)						/* Get word 2 */
 			lwz		r8,12(r3)						/* Get word 3 */
-			rlwinm	r0,r0,0,MSR_FP_BIT+1,MSR_FP_BIT-1	; Force floating point off
+			lis		r2,hi16(MASK(MSR_VEC))			; Get the vector enable 
 			lwz		r9,16(r3)						/* Get word 4 */
+			ori		r2,r2,lo16(MASK(MSR_FP))		; Get the FP enable 
 			lwz		r10,20(r3)						/* Get word 5 */
-			rlwinm	r0,r0,0,MSR_VEC_BIT+1,MSR_VEC_BIT-1	; Force vectors off
+			andc	r0,r0,r2						; Clear VEC and FP enables
 			lwz		r11,24(r3)						/* Get word 6 */
 			lwz		r12,28(r3)						/* Get word 7 */
 			
-			mtmsr	r0								/* Restore original machine state */
+			bt--	cr0_eq,rr32b					; We are not 64-bit...
+
+			mtmsrd	r0
+			isync
+			b		rrJoinb							; Join on up...
+
+rr32b:		mtmsr	r0								/* Restore original machine state */
 			isync									/* Insure goodness */
 			
-			stw		r5,0(r4)						/* Set word 0 */
+rrJoinb:	stw		r5,0(r4)						/* Set word 0 */
 			stw		r6,4(r4)						/* Set word 1 */
 			stw		r7,8(r4)						/* Set word 2 */
 			stw		r8,12(r4)						/* Set word 3 */
@@ -213,8 +248,12 @@ ENTRY(ReadReal, TAG_NO_FRAME_USED)
 /*
  *			This routine is used to load all 4 DBATs.
  */
+ 			
+			.align	5
+			.globl	EXT(LoadDBATs)
 
-ENTRY(LoadDBATs, TAG_NO_FRAME_USED)
+LEXT(LoadDBATs)
+
 
 			lis		r0,HIGH_ADDR(LoadDBATsCall)		/* Top half of LoadDBATsCall firmware call number */
 			ori		r0,r0,LOW_ADDR(LoadDBATsCall)	/* Bottom half */
@@ -222,7 +261,11 @@ ENTRY(LoadDBATs, TAG_NO_FRAME_USED)
 
 			blr										/* Bye bye, Birdie... */
 			
-ENTRY(xLoadDBATsLL, TAG_NO_FRAME_USED)
+ 			
+			.align	5
+			.globl	EXT(xLoadDBATsLL)
+
+LEXT(xLoadDBATsLL)
 
 			lwz		r4,0(r3)						/* Get DBAT 0 high */
 			lwz		r5,4(r3)						/* Get DBAT 0 low */
@@ -251,14 +294,21 @@ ENTRY(xLoadDBATsLL, TAG_NO_FRAME_USED)
  *			This routine is used to load all 4 IBATs.
  */
 
-ENTRY(LoadIBATs, TAG_NO_FRAME_USED)
+			.align	5
+			.globl	EXT(LoadIBATs)
+
+LEXT(LoadIBATs)
+
 
 			lis		r0,HIGH_ADDR(LoadIBATsCall)		/* Top half of LoadIBATsCall firmware call number */
 			ori		r0,r0,LOW_ADDR(LoadIBATsCall)	/* Bottom half */
 			sc										/* Do it to it */
 			blr										/* Bye bye, Birdie... */
 			
-ENTRY(xLoadIBATsLL, TAG_NO_FRAME_USED)
+			.align	5
+			.globl	EXT(xLoadIBATsLL)
+
+LEXT(xLoadIBATsLL)
 
 			lwz		r4,0(r3)						/* Get IBAT 0 high */
 			lwz		r5,4(r3)						/* Get IBAT 0 low */
@@ -287,8 +337,11 @@ ENTRY(xLoadIBATsLL, TAG_NO_FRAME_USED)
 /*
  *			This is the glue to call the CutTrace firmware call
  */
- 
-ENTRY(dbgTrace, TAG_NO_FRAME_USED)
+ 			
+			.align	5
+			.globl	EXT(dbgTrace)
+
+LEXT(dbgTrace)
 			
 			lis		r0,HIGH_ADDR(CutTrace)			/* Top half of CreateFakeIO firmware call number */
 			ori		r0,r0,LOW_ADDR(CutTrace)		/* Bottom half */
@@ -298,8 +351,11 @@ ENTRY(dbgTrace, TAG_NO_FRAME_USED)
 /*
  *			This is the glue to create a fake I/O interruption
  */
- 
-ENTRY(CreateFakeIO, TAG_NO_FRAME_USED)
+  			
+			.align	5
+			.globl	EXT(CreateFakeIO)
+
+LEXT(CreateFakeIO)
 			
 			lis		r0,HIGH_ADDR(CreateFakeIOCall)	/* Top half of CreateFakeIO firmware call number */
 			ori		r0,r0,LOW_ADDR(CreateFakeIOCall)	/* Bottom half */
@@ -309,14 +365,18 @@ ENTRY(CreateFakeIO, TAG_NO_FRAME_USED)
 /*
  *			This is the glue to create a fake Dec interruption
  */
- 
-ENTRY(CreateFakeDEC, TAG_NO_FRAME_USED)
+   			
+			.align	5
+			.globl	EXT(CreateFakeDEC)
+
+LEXT(CreateFakeDEC)
 			
 #if 0
 			mflr	r4								; (TEST/DEBUG)
 			bl		EXT(ml_sense_nmi)				; (TEST/DEBUG)
 			mtlr	r4								; (TEST/DEBUG)
-#endif
+#endif			
+			
 			lis		r0,HIGH_ADDR(CreateFakeDECCall)	/* Top half of CreateFakeDEC firmware call number */
 			ori		r0,r0,LOW_ADDR(CreateFakeDECCall)	/* Bottom half */
 			sc										/* Do it to it */
@@ -327,7 +387,10 @@ ENTRY(CreateFakeDEC, TAG_NO_FRAME_USED)
  *			This is the glue to create a shutdown context
  */
  
-ENTRY(CreateShutdownCTX, TAG_NO_FRAME_USED)
+			.align	5
+			.globl	EXT(CreateShutdownCTX)
+
+LEXT(CreateShutdownCTX)
 			
 			lis		r0,HIGH_ADDR(CreateShutdownCTXCall)	/* Top half of CreateFakeIO firmware call number */
 			ori		r0,r0,LOW_ADDR(CreateShutdownCTXCall)	/* Bottom half */
@@ -337,8 +400,11 @@ ENTRY(CreateShutdownCTX, TAG_NO_FRAME_USED)
 /*
  *			This is the glue to choke system
  */
- 
-ENTRY(ChokeSys, TAG_NO_FRAME_USED)
+  
+			.align	5
+			.globl	EXT(ChokeSys)
+
+LEXT(ChokeSys)
 			
 			lis		r0,HIGH_ADDR(Choke)				/* Top half of Choke firmware call number */
 			ori		r0,r0,LOW_ADDR(Choke)			/* Bottom half */
@@ -349,8 +415,11 @@ ENTRY(ChokeSys, TAG_NO_FRAME_USED)
  *			Used to initialize the SCC for debugging output
  */
 
+  
+			.align	5
+			.globl	EXT(fwSCCinit)
 
-ENTRY(fwSCCinit, TAG_NO_FRAME_USED)
+LEXT(fwSCCinit)
 		
 			mfmsr	r8										/* Save the MSR */
 			mr.		r3,r3									/* See if printer or modem */
@@ -635,8 +704,11 @@ wSCCrdy:	eieio											/* Barricade it */
  *			This routine is used to write debug output to either the modem or printer port.
  *			parm 1 is printer (0) or modem (1); parm 2 is ID (printed directly); parm 3 converted to hex
  */
+  
+			.align	5
+			.globl	EXT(dbgDisp)
 
-ENTRY(dbgDisp, TAG_NO_FRAME_USED)
+LEXT(dbgDisp)
 
 			mr		r12,r0									/* Keep R0 pristene */
 			lis		r0,HIGH_ADDR(dbgDispCall)				/* Top half of dbgDispCall firmware call number */
@@ -649,7 +721,10 @@ ENTRY(dbgDisp, TAG_NO_FRAME_USED)
 			
 /*			Here's the low-level part of dbgDisp			*/
 
-ENTRY(dbgDispLL, TAG_NO_FRAME_USED)
+			.align	5
+			.globl	EXT(dbgDispLL)
+
+LEXT(dbgDispLL)
 
 dbgDispInt:	mfmsr	r8										/* Save the MSR */
 
@@ -1032,21 +1107,22 @@ hexTab:		STRINGD	"0123456789ABCDEF"						/* Convert hex numbers to printable hex
  */
  
 
-ENTRY(dbgRegsLL, TAG_NO_FRAME_USED)
+			.align	5
+			.globl	EXT(dbgRegsLL)
 
+LEXT(dbgRegsLL)
+
+			b		EXT(FCReturn)					; Bye dudes...
+#if 0
 			li		r3,0									/* ? */
 			bl		dbgRegsCm								/* Join on up... */
-
-/*
- *			Note that we bypass the normal return 'cause we don't wanna mess up R3
- */
-			mfsprg	r11,0									/* Get the per_proc */
-			lwz		r11,PP_TEMPWORK1(r11)					/* Get our return point */
-			li		r3,T_IN_VAIN							/* Tell the vector handler that we took care of it */
-			mtlr	r11										/* Set the return */
-			blr												/* Bye, dudes... */
+			b		EXT(FCReturn)					; Bye dudes...
 			
-ENTRY(dbgRegs, TAG_NO_FRAME_USED)
+			
+			.align	5
+			.globl	EXT(dbgRegs)
+
+LEXT(dbgRegs)
 
 dbgRegsCm:	mfmsr	r8										/* Save the MSR */
 			mr.		r3,r3									/* ? */
@@ -1431,14 +1507,17 @@ ddwait1:	lwarx	r5,0,r3									/* Get the lock */
 			mtmsr	r8										/* Restore the MSR */
 			isync											/* Wait for it */
 			blr												/* Leave... */
-			
+#endif			
 			
 /*
  *			Used for debugging to leave stuff in 0x380-0x3FF (128 bytes).
  *			Mapping is V=R.  Stores and loads are real.
  */
+			
+			.align	5
+			.globl	EXT(dbgCkpt)
 
-ENTRY(dbgCkpt, TAG_NO_FRAME_USED)
+LEXT(dbgCkpt)
 
 			mr		r12,r0									/* Keep R0 pristene */
 			lis		r0,HIGH_ADDR(dbgCkptCall)				/* Top half of dbgCkptCall firmware call number */
@@ -1451,7 +1530,11 @@ ENTRY(dbgCkpt, TAG_NO_FRAME_USED)
 			
 /*			Here's the low-level part of dbgCkpt			*/
 
-ENTRY(dbgCkptLL, TAG_NO_FRAME_USED)
+			.align	5
+			.globl	EXT(dbgCkptLL)
+
+LEXT(dbgCkptLL)
+
 
 			li		r12,0x380								/* Point to output area */
 			li		r1,32									/* Get line size */
@@ -1556,14 +1639,14 @@ ENTRY(dbgCkptLL, TAG_NO_FRAME_USED)
  *			Do Preemption.  Forces a T_PREEMPT trap to allow a preemption to occur.
  */
 
-ENTRY(DoPreemptLL, TAG_NO_FRAME_USED)
+			.align	5
+			.globl	EXT(DoPreemptLL)
 
-			mfsprg	r11,0							/* Get the per_proc address */
-			lwz		r11,PP_TEMPWORK1(r11)			/* Restore the return address */
+LEXT(DoPreemptLL)
+
 			li		r3,T_PREEMPT					/* Set preemption interrupt value */
-			mtlr	r11								/* Restore the LR */
 			stw		r3,saveexception(r13)			/* Modify the exception type to preemption */
-			blr										/* Return to interrupt handler */
+			b		EXT(FCReturn)					; Bye dudes...
 
 			
 /*
@@ -1573,14 +1656,14 @@ ENTRY(DoPreemptLL, TAG_NO_FRAME_USED)
  *			Forces a T_CSWITCH
  */
 
-ENTRY(SwitchContextLL, TAG_NO_FRAME_USED)
+			.align	5
+			.globl	EXT(SwitchContextLL)
 
-			mfsprg	r11,0							/* Get the per_proc address */
-			lwz		r11,PP_TEMPWORK1(r11)			/* Restore the return address */
+LEXT(SwitchContextLL)
+
 			li		r3,T_CSWITCH					/* Set context switch value */
-			mtlr	r11								/* Restore the LR */
 			stw		r3,saveexception(r13)			/* Modify the exception type to switch context */
-			blr										/* Return to interrupt handler */
+			b		EXT(FCReturn)					; Bye dudes...
 
 			
 /*
@@ -1588,92 +1671,106 @@ ENTRY(SwitchContextLL, TAG_NO_FRAME_USED)
  *			Forces a T_INTERRUPT trap to pretend that an actual I/O interrupt occurred.
  */
 
-ENTRY(CreateFakeIOLL, TAG_NO_FRAME_USED)
+			.align	5
+			.globl	EXT(CreateFakeIOLL)
 
-			mfsprg	r11,0							/* Get the per_proc address */
-			lwz		r11,PP_TEMPWORK1(r11)			/* Restore the return address */
+LEXT(CreateFakeIOLL)
+
 			li		r3,T_INTERRUPT					/* Set external interrupt value */
-			mtlr	r11								/* Restore the LR */
 			stw		r3,saveexception(r13)			/* Modify the exception type to external */
-			blr										/* Return to interrupt handler */
+			b		EXT(FCReturn)					; Bye dudes...
 			
 /*
  *			Create a shutdown context
  *			Forces a T_SHUTDOWN trap.
  */
 
-ENTRY(CreateShutdownCTXLL, TAG_NO_FRAME_USED)
+			.align	5
+			.globl	EXT(CreateShutdownCTXLL)
 
-			mfsprg	r11,0							/* Get the per_proc address */
-			lwz		r11,PP_TEMPWORK1(r11)			/* Restore the return address */
+LEXT(CreateShutdownCTXLL)
+
 			li		r3,T_SHUTDOWN					/* Set external interrupt value */
-			mtlr	r11								/* Restore the LR */
 			stw		r3,saveexception(r13)			/* Modify the exception type to external */
-			blr										/* Return to interrupt handler */
+			b		EXT(FCReturn)					; Bye dudes...
 			
 /*
  *			Create a fake decrementer 'rupt.  
  *			Forces a T_DECREMENTER trap to pretend that an actual decrementer interrupt occurred.
  */
 
-ENTRY(CreateFakeDECLL, TAG_NO_FRAME_USED)
+			.align	5
+			.globl	EXT(CreateFakeDECLL)
 
-			mfsprg	r11,0							/* Get the per_proc address */
-			lwz		r11,PP_TEMPWORK1(r11)			/* Restore the return address */
+LEXT(CreateFakeDECLL)
+
 			li		r3,T_DECREMENTER				/* Set decrementer interrupt value */
-			mtlr	r11								/* Restore the LR */
 			stw		r3,saveexception(r13)			/* Modify the exception type to external */
-			blr										/* Return to interrupt handler */
+			b		EXT(FCReturn)					; Bye dudes...
 
 /*
  *			Choke the system.  
  */
 
-ENTRY(DoChokeLL, TAG_NO_FRAME_USED)
+			.align	5
+			.globl	EXT(DoChokeLL)
 
-			mfsprg	r11,0							; Get the per_proc address 
-			lwz		r11,PP_TEMPWORK1(r11)			; Restore the return address 
+LEXT(DoChokeLL)
+
 			li		r3,T_CHOKE						; Set external interrupt value
-			mtlr	r11								; Restore the LR 
 			stw		r3,saveexception(r13)			; Modify the exception type to external
-			blr										; Return to interrupt handler 
-			
+			b		EXT(FCReturn)					; Bye dudes...
+
 /*
- *			Set the low level trace flags 
+ *			Null firmware call 
  */
- 
-ENTRY(LLTraceSet, TAG_NO_FRAME_USED)
 
-			mfsprg	r6,2							; Get feature flags 
-			mfmsr	r12								/* Get the MSR */
-			mr		r4,r3							/* Save the new value */
-			andi.	r3,r12,0x01C0					/* Clear interrupts and translation */
-			mtcrf	0x04,r6							; Set the features			
-			bt		pfNoMSRirb,ltsNoMSR				; Use MSR...
+			.align	5
+			.globl	EXT(NullLL)
 
-			mtmsr	r3								; Translation and all off
-			isync									; Toss prefetch
-			b		ltsNoMSRx
-			
-ltsNoMSR:	li		r0,loadMSR						; Get the MSR setter SC
-			sc										; Set it
+LEXT(NullLL)
 
-ltsNoMSRx:
-			
-			lis		r5,hi16(EXT(trcWork))			; Get trace area
-			rlwinm	r12,r12,0,MSR_FP_BIT+1,MSR_FP_BIT-1	; Force floating point off
-			ori		r5,r5,lo16(EXT(trcWork))		; again
-			
-			lwz		r3,traceMask(r5)				/* Get the old trace flags to pass back */
-			rlwinm	r12,r12,0,MSR_VEC_BIT+1,MSR_VEC_BIT-1	; Force vectors off
-			stw		r4,traceMask(r5)				/* Replace with the new ones */
-			
-			mtmsr	r12								/* Restore the MSR */
-			isync
-			
-			blr										/* Leave... */
+			li		r3,T_IN_VAIN					; Set to just ignore this one
+			b		EXT(FCReturn)					; Bye dudes...
 
+;
+;			Null firmware call 
+;
+
+			.align	5
+			.globl	EXT(iNullLL)
+
+LEXT(iNullLL)
+
+			mfspr	r4,pmc1							; Get stamp
+			stw		r4,0x6100+(9*16)+0x0(0)			; Save it
 #if 1
+			mfspr	r4,pmc2							; Get stamp
+			stw		r4,0x6100+(9*16)+0x4(0)			; Save it
+			mfspr	r4,pmc3							; Get stamp
+			stw		r4,0x6100+(9*16)+0x8(0)			; Save it
+			mfspr	r4,pmc4							; Get stamp
+			stw		r4,0x6100+(9*16)+0xC(0)			; Save it
+#endif
+			li		r3,T_IN_VAIN					; Set to just ignore this one
+			b		EXT(FCReturn)					; Bye dudes...
+			
+;
+;			Set the low level trace flags 
+;
+ 
+			.align	5
+			.globl	EXT(LLTraceSet)
+
+LEXT(LLTraceSet)
+
+			mr		r4,r3							; Save the new value 
+			
+			lwz		r3,traceMask(0)					; Get the old trace flags to pass back 
+			stw		r4,traceMask(0)					; Replace with the new ones
+			blr										; Leave... 
+
+#if 0
 	
 /*
 ; ***************************************************************************
@@ -1698,7 +1795,11 @@ ltsNoMSRx:
 #define GDfromright 20
 #define GDfontsize 16
 
-ENTRY(GratefulDeb,TAG_NO_FRAME_USED)
+			.align	5
+			.globl	EXT(GratefulDeb)
+
+LEXT(GratefulDeb)
+
 			mfspr	r6,pir							/* Get the PIR */
 			lis		r5,HIGH_ADDR(EXT(GratefulDebWork))	/* Point to our work area */
 			rlwinm	r6,r6,8,23,23					/* Get part of the offset to our processors area */
@@ -1828,7 +1929,10 @@ GDbailout:	mr		r1,r31							/* Move the workarea base */
  */
 
 
-ENTRY(GratefulDebDisp,TAG_NO_FRAME_USED)
+			.align	5
+			.globl	EXT(GratefulDebDisp)
+
+LEXT(GratefulDebDisp)
 
 			mfmsr	r9								/* Save the current MSR */
 			mflr	r7								/* Save the return */
@@ -1849,22 +1953,26 @@ ENTRY(GratefulDebDisp,TAG_NO_FRAME_USED)
  */
 
 
-ENTRY(checkNMI,TAG_NO_FRAME_USED)
+			.align	5
+			.globl	EXT(checkNMI)
+
+LEXT(checkNMI)
 		
 			mfmsr	r9								/* Save it */
 			andi.	r8,r9,0x7FCF					/* Clear it */
 			mtmsr	r8								/* Disable it */
 			isync									/* Fence it */
 			lis		r7,0xF300						/* Find it */
+			lis		r2,hi16(MASK(MSR_VEC))			; Get the vector enable 
 			ori		r7,r7,0x0020					/* Find it */
+			ori		r2,r2,lo16(MASK(MSR_FP))		; Get the FP enable 
 			dcbi	0,r7							/* Toss it */
 			sync									/* Sync it */
-			rlwinm	r9,r9,0,MSR_FP_BIT+1,MSR_FP_BIT-1	; Force floating point off
+			andc	r9,r9,r2						; Clear VEC and FP enables
 			eieio									/* Get it */
 			lwz		r6,0x000C(r7)					/* Check it */
 			eieio									/* Fence it */
 			dcbi	0,r7							/* Toss it */
-			rlwinm	r9,r9,0,MSR_VEC_BIT+1,MSR_VEC_BIT-1	; Force vectors off
 			rlwinm.	r4,r6,0,19,19					/* Check it */
 			rlwinm	r6,r6,0,20,18					/* Clear it */
 			sync									/* Sync it */
@@ -1887,193 +1995,6 @@ xnonmi:												/* Label it */
 			isync									/* Hold it */
 			blr										/* Return from it */
 
-
-/*
- *			Early debug code
- */
- 
-dumpr7:		lis		r9,HIGH_ADDR(hexTab)	/* (TEST/DEBUG) */
-			li		r5,8					/* (TEST/DEBUG) */
-			ori		r9,r9,LOW_ADDR(hexTab)	/* (TEST/DEBUG) */
-
-dumpr7n:	rlwinm	r7,r7,4,0,31		/* (TEST/DEBUG) */
-			mr		r6,r7				/* (TEST/DEBUG) */
-			andi.	r6,r6,15			/* (TEST/DEBUG) */
-			lbzx	r6,r9,r6			/* (TEST/DEBUG) */
-			lis		r10,0xF301			/* (TEST/DEBUG) */
-			ori		r10,r10,0x2000		/* (TEST/DEBUG) */
-
-#if 0
-xqrw2:		eieio						/* (TEST/DEBUG) */
-			lbz		r7,0(r10)			/* (TEST/DEBUG) */
-			dcbi	0,r10				/* (TEST/DEBUG) */
-			sync						/* (TEST/DEBUG) */
-			andi.	r7,r7,0x04			/* (TEST/DEBUG) */
-			beq		xqrw2				/* (TEST/DEBUG) */
-#endif
-			
-			dcbf	0,r10				/* (TEST/DEBUG) */
-			sync						/* (TEST/DEBUG) */
-			dcbi	0,r10				/* (TEST/DEBUG) */
-			eieio						/* (TEST/DEBUG) */
-			stb		r6,4(r10)			/* (TEST/DEBUG) */
-			
-			lis		r6,10				/* (TEST/DEBUG) */
-dumpr7d:	addi	r6,r6,-1			/* (TEST/DEBUG) */
-			mr.		r6,r6				/* (TEST/DEBUG) */
-			bne-	dumpr7d				/* (TEST/DEBUG) */
-			dcbf	0,r10				/* (TEST/DEBUG) */
-			sync						/* (TEST/DEBUG) */
-			dcbi	0,r10				/* (TEST/DEBUG) */
-			eieio						/* (TEST/DEBUG) */
-		
-			addic.	r5,r5,-1			/* (TEST/DEBUG) */
-			bne+	dumpr7n				/* (TEST/DEBUG) */
-
-			blr							/* (TEST/DEBUG) */
-
-;			
-;			Log a special entry in physical memory.
-;			This assumes that memory size has been significantly lowered using
-;			the maxmem boot option. The buffer starts just after the end of mem_size.
-;
-;			This is absolutely for special tracing cases. Do not ever leave in...
-;
-
-ENTRY(dbgLog,TAG_NO_FRAME_USED)
-
-			li		r11,0				; Clear callers callers callers return
-			li		r10,0				; Clear callers callers callers callers return
-			li		r9,0				; Clear callers callers callers callers callers return
-			lwz		r2,0(r1)			; Get callers callers stack frame
-			lis		r0,0x4000			; First invalid address
-			lwz		r12,8(r2)			; Get our callers return
-			lwz		r2,0(r2)			; Back chain
-
-			mr.		r2,r2				; End of chain?
-			cmplw	cr1,r2,r0			; Valid kernel address?
-			beq-	nosavehere			; Yes, end of chain...
-			bge-	cr1,nosavehere		; No...
-			lwz		r11,8(r2)			; Get our callers return
-			lwz		r2,0(r2)			; Back chain
-
-			mr.		r2,r2				; End of chain?
-			cmplw	cr1,r2,r0			; Valid kernel address?
-			beq-	nosavehere			; Yes, end of chain...
-			bge-	cr1,nosavehere		; No...
-			lwz		r10,8(r2)			; Get our callers return
-			lwz		r2,0(r2)			; Back chain
-
-			mr.		r2,r2				; End of chain?
-			cmplw	cr1,r2,r0			; Valid kernel address?
-			beq-	nosavehere			; Yes, end of chain...
-			bge-	cr1,nosavehere		; No...
-			lwz		r9,8(r2)			; Get our callers return
-
-nosavehere:	mfmsr	r8					; Get the MSR	
-			lis		r2,hi16(EXT(DebugWork))	; High part of area
-			lis		r7,hi16(EXT(mem_actual))	; High part of actual
-			andi.	r0,r8,0x7FCF		; Interrupts and translation off
-			ori		r2,r2,lo16(EXT(DebugWork))	; Get the entry
-			mtmsr	r0					; Turn stuff off
-			ori		r7,r7,lo16(EXT(mem_actual))	; Get the actual
-			isync
-		
-			lwz		r0,4(r2)			; Get the flag
-			mr.		r0,r0				; Should we log?
-			lwz		r0,0(r7)			; Get the end of memory
-			lwz		r7,0(r2)			; Get the position
-			bne-	waytoofar			; No logging...
-			mr.		r7,r7				; Is this the first? 
-			bne+	gotspot				; Nope...
-			
-			lis		r7,hi16(EXT(mem_size))	; High part of defined memory
-			ori		r7,r7,lo16(EXT(mem_size))	; Low part of defined memory
-			lwz		r7,0(r7)			; Make it end of defined
-			
-gotspot:	cmplw	r7,r0				; Do we fit in memory
-			addi	r0,r7,0x0020		; Next slot
-			bge-	waytoofar			; No fit...
-			
-			stw		r0,0(r2)			; Set next time slot
-			dcbz	0,r7				; Zap it
-			
-			stw		r3,0(r7)			; First data
-			li		r3,32				; Disp to next line
-			stw		r4,4(r7)			; Second data
-			dcbz	r3,r7				; Zap it
-			stw		r5,8(r7)			; Third data
-			stw		r6,12(r7)			; Fourth data
-			
-			stw		r12,16(r7)			; Callers callers
-			stw		r11,20(r7)			; Callers callers caller
-			stw		r10,24(r7)			; Callers callers callers caller
-			stw		r9,28(r7)			; Callers callers callers callers caller
-
-waytoofar:	mtmsr	r8					; Back to normal
-			isync
-			blr
-
-;
-;			Same as the other, but no traceback and 16 byte entry
-;			Trashes R0, R2, R10, R12
-;
-
-			.align	5
-			.globl	EXT(dbgLog2)
-
-LEXT(dbgLog2)
-
-
-			mfmsr	r10					; Get the MSR	
-			lis		r2,hi16(EXT(DebugWork))	; High part of area
-			lis		r12,hi16(EXT(mem_actual))	; High part of actual
-			andi.	r0,r10,0x7FCF		; Interrupts and translation off
-			ori		r2,r2,lo16(EXT(DebugWork))	; Get the entry
-			mtmsr	r0					; Turn stuff off
-			ori		r12,r12,lo16(EXT(mem_actual))	; Get the actual
-			isync
-		
-			lwz		r0,4(r2)			; Get the flag
-			mr.		r0,r0				; Should we log?
-			lwz		r0,0(r12)			; Get the end of memory
-			lwz		r12,0(r2)			; Get the position
-			bne-	waytoofar2			; No logging...
-			mr.		r12,r12				; Is this the first? 
-			bne+	gotspot2			; Nope...
-			
-			lis		r12,hi16(EXT(mem_size))	; High part of defined memory
-			ori		r12,r12,lo16(EXT(mem_size))	; Low part of defined memory
-			lwz		r12,0(r12)			; Make it end of defined
-			
-gotspot2:	cmplw	cr1,r12,r0			; Do we fit in memory
-			rlwinm.	r0,r12,0,27,27		; Are we on a new line?
-			bge-	cr1,waytoofar2		; No fit...
-			addi	r0,r12,0x0010		; Next slot
-			
-			bne+	nonewline			; Not on a new line...
-			dcbz	br0,r12				; Clear it so we do not fetch it
-			
-nonewline:	cmplwi	r3,68				; Special place for time stamp?
-			
-			stw		r0,0(r2)			; Set next time slot
-			bne+	nospcts				; Nope...
-
-			lwz		r0,0x17C(br0)		; Get special saved time stamp
-			b		nospctt				; Skip...
-			
-nospcts:	mftb	r0					; Get the current time
-						
-nospctt:	stw		r3,4(r12)			; First data
-			stw		r4,8(r12)			; Second data
-			stw		r5,12(r12)			; Third data
-			stw		r0,0(r12)			; Time stamp
-
-waytoofar2:	mtmsr	r10					; Back to normal
-			isync
-			blr
-
-
 ;
 ;			Saves floating point registers
 ;
@@ -2083,13 +2004,19 @@ waytoofar2:	mtmsr	r10					; Back to normal
 
 LEXT(stFloat)
 
-			mfmsr	r0					; Save the MSR
-			rlwinm	r0,r0,0,MSR_FP_BIT+1,MSR_FP_BIT-1	; Force floating point off
-			rlwinm	r0,r0,0,MSR_VEC_BIT+1,MSR_VEC_BIT-1	; Force vectors off
-			rlwinm	r4,r0,0,MSR_EE_BIT,MSR_EE_BIT	; Turn off interruptions
-			ori		r4,r4,lo16(MASK(MSR_FP))	; Enable floating point
+			lis		r2,hi16(MASK(MSR_VEC))			; Get the vector enable 
+			li		r4,0
+			ori		r2,r2,lo16(MASK(MSR_FP))		; Get the FP enable 
+			ori		r4,r4,lo16(MASK(MSR_EE))		; Get the EE bit
+
+			mfmsr	r0								; Save the MSR
+
+			andc	r4,r0,r4						; Clear EE
+			ori		r4,r4,lo16(MASK(MSR_FP))		; Enable floating point
 			mtmsr	r4
 			isync
+
+			andc	r0,r0,r2						; Clear VEC and FP enables
 			
 			stfd	f0,0x00(r3)
 			stfd	f1,0x08(r3)
@@ -2140,6 +2067,10 @@ LEXT(stFloat)
 
 LEXT(stVectors)
 
+			lis		r2,hi16(MASK(MSR_VEC))			; Get the vector enable 
+			li		r4,0
+			ori		r2,r2,lo16(MASK(MSR_FP))		; Get the FP enable 
+			ori		r4,r4,lo16(MASK(MSR_EE))		; Get the EE bit
 			
 			mfsprg	r6,2				; Get features
 			mr		r5,r3				; Save area address
@@ -2148,12 +2079,14 @@ LEXT(stVectors)
 			beqlr-						; No...
 			
 			mfmsr	r0					; Save the MSR
-			rlwinm	r0,r0,0,MSR_FP_BIT+1,MSR_FP_BIT-1	; Force floating point off
-			rlwinm	r0,r0,0,MSR_VEC_BIT+1,MSR_VEC_BIT-1	; Force vectors off
-			rlwinm	r4,r0,0,MSR_EE_BIT,MSR_EE_BIT	; Turn off interruptions
+	
+			andc	r4,r0,r4			; Clear EE
+
 			oris	r4,r4,hi16(MASK(MSR_VEC))	; Enable vectors
 			mtmsr	r4
 			isync
+			
+			andc	r0,r0,r2			; Clear FP and VEC
 			
 			stvxl	v0,0,r5
 			addi	r5,r5,16
@@ -2238,10 +2171,16 @@ LEXT(stVectors)
 
 LEXT(stSpecrs)
 
+
+			lis		r2,hi16(MASK(MSR_VEC))			; Get the vector enable 
+			li		r4,0
+			ori		r2,r2,lo16(MASK(MSR_FP))		; Get the FP enable 
+			ori		r4,r4,lo16(MASK(MSR_EE))		; Get the EE bit
+
+
 			mfmsr	r0					; Save the MSR
-			rlwinm	r0,r0,0,MSR_FP_BIT+1,MSR_FP_BIT-1	; Force floating point off
-			rlwinm	r0,r0,0,MSR_VEC_BIT+1,MSR_VEC_BIT-1	; Force vectors off
-			rlwinm	r4,r0,0,MSR_EE_BIT,MSR_EE_BIT	; Turn off interruptions
+			andc	r0,r0,r2			; Turn of VEC and FP
+			andc	r4,r0,r4			; And EE
 			mtmsr	r4
 			isync
 			
@@ -2305,9 +2244,6 @@ stSnsr:		mfsrin	r6,r5
 			addi	r4,r4,4
 			bne+	stSnsr
 
-			cmplwi	cr1,r12,PROCESSOR_VERSION_604e		
-			cmplwi	cr5,r12,PROCESSOR_VERSION_604ev
-			cror	cr1_eq,cr1_eq,cr5_eq			; Set if 604 type
 			cmplwi	r12,PROCESSOR_VERSION_750
 			mfspr	r4,hid0
 			stw		r4,(39*4)(r3)
@@ -2316,15 +2252,13 @@ stSnsr:		mfsrin	r6,r5
 			li		r5,0
 			li		r6,0
 			li		r7,0
-			beq-	cr1,before750
-			blt-	before750
 			
 			mfspr	r4,hid1
 			mfspr	r5,l2cr
 			mfspr	r6,msscr0
 			mfspr	r7,msscr1
 
-before750:	stw		r4,(40*4)(r3)
+			stw		r4,(40*4)(r3)
 			stw		r6,(42*4)(r3)
 			stw		r5,(41*4)(r3)
 			stw		r7,(43*4)(r3)
@@ -2339,7 +2273,6 @@ isis750:	stw		r4,0(r3)
 			li		r5,0
 			li		r6,0
 			li		r7,0
-			beq-	cr1,b4750
 			blt-	b4750
 			
 			mfspr	r4,thrm1
@@ -2353,9 +2286,11 @@ b4750:		stw		r4,(44*4)(r3)
 			stw		r7,(47*4)(r3)
 			
 			li		r4,0
+			li		r6,0
 			cmplwi	r12,PROCESSOR_VERSION_7400
 			bne		nnmax
 			
+			mfspr	r6,dabr
 			mfpvr	r5
 			rlwinm	r5,r5,0,16,31
 			cmplwi	r5,0x1101
@@ -2366,8 +2301,167 @@ b4750:		stw		r4,(44*4)(r3)
 gnmax:		mfspr	r4,1016
 
 nnmax:		stw		r4,(48*4)(r3)
+			stw		r6,(49*4)(r3)
 			
 			mtmsr	r0
 			isync
 
 			blr
+
+
+;
+;			fwEmMck - this forces the hardware to emulate machine checks
+;			Only valid on 64-bit machines
+;			Note: we want interruptions disabled here
+;
+
+			.globl	EXT(fwEmMck)
+			
+			.align	5
+
+LEXT(fwEmMck)
+
+
+			rlwinm	r3,r3,0,1,0						; Copy low of high high - scomd
+			rlwinm	r5,r5,0,1,0						; Copy low of high high - hid1
+			rlwinm	r7,r7,0,1,0						; Copy low of high high - hid4
+			rlwimi	r3,r4,0,0,31					; Copy low of low low
+			rlwimi	r5,r6,0,0,31					; Copy low of low low
+			rlwimi	r7,r8,0,0,31					; Copy low of low low
+
+			lis		r9,3							; Start forming hid1 error inject mask
+			lis		r10,hi16(0x01084083)			; Start formaing hid4 error inject mask
+			ori		r9,r9,0xC000					; Next bit
+			ori		r10,r10,lo16(0x01084083)		; Next part
+			sldi	r9,r9,32						; Shift up high
+			sldi	r10,r10,8						; Shift into position
+			
+			mfspr	r0,hid1							; Get hid1
+			mfspr	r2,hid4							; and hid4
+			
+			and		r5,r5,r9						; Keep only error inject controls - hid1
+			and		r7,r7,r10						; Keep only error inject controls - hid4
+			
+			andc	r0,r0,r9						; Clear error inject controls hid1
+			andc	r2,r2,r10						; Clear error inject controls hid4
+			
+			or		r0,r0,r5						; Add in the new controls hid1
+			or		r2,r2,r7						; Add in the new controls hid4
+			
+/* ? */
+#if 0
+			lis		r12,CoreErrI					; Get the error inject controls
+			sync
+
+			mtspr	scomd,r3						; Set the error inject controls
+			mtspr	scomc,r12						; Request error inject
+			mfspr	r11,scomc						; Get back the status (we just ignore it)
+#endif
+			sync
+			isync							
+			
+			mtspr	hid1,r0							; Move in hid1 controls
+			mtspr	hid1,r0							; We need to do it twice
+			isync
+			
+			sync
+			mtspr	hid4,r2							; Move in hid4 controls
+			isync
+			
+			blr										; Leave...
+
+;
+;			fwSCOMrd - read/write SCOM
+;
+			.align	5
+			.globl	EXT(fwSCOM)
+
+LEXT(fwSCOM)
+
+			lhz		r12,scomfunc(r3)				; Get the function
+			lwz		r4,scomreg(r3)					; Get the register
+			rldicr	r4,r4,8,47						; Position for SCOM
+
+			mr.		r12,r12							; See if read or write
+			bne		fwSCwrite						; Go do a write
+
+			mfsprg	r0,2							; Get the feature flags
+			ori		r4,r4,0x8000					; Set to read data
+			rlwinm.	r0,r0,pfSCOMFixUpb+1,31,31		; Set shift if we need a fix me up
+			sync
+
+			mtspr	scomc,r4						; Request the register
+			mfspr	r11,scomd						; Get the register contents
+			mfspr	r10,scomc						; Get back the status
+			sync
+			isync							
+
+			sld		r11,r11,r0						; Fix up if needed
+			
+			std		r11,scomdata(r3)				; Save result
+			eieio
+			std		r10,scomstat(r3)				; Save status
+
+			blr
+
+fwSCwrite:	ld		r5,scomdata(r3)					; Get the data
+			
+			sync
+
+			mtspr	scomd,r5						; Set the data
+			mtspr	scomc,r4						; Set it
+			mfspr	r10,scomc						; Get back the status
+			sync
+			isync							
+
+			std		r10,scomstat(r3)				; Save status
+			
+			blr
+
+;
+;			diagTrap - this is used to trigger checks from user space
+;			any "twi 31,r31,0xFFFx" will come here (x = 0 to F).
+;			On entry R3 points to savearea.
+;			R4 is the "x" from instruction;
+;			Pass back 1 to no-op twi and return to user
+;			Pass back 0 to treat as normal twi.
+;
+
+			.globl	EXT(diagTrap)
+			
+			.align	5
+
+LEXT(diagTrap)
+
+			li		r3,1							; Ignore TWI
+			blr										; Leave...
+
+
+
+
+;
+;			setPmon - this is used to manipulate MMCR0 and MMCR1
+
+			.globl	EXT(setPmon)
+			
+			.align	5
+
+LEXT(setPmon)
+
+			li		r0,0
+			isync
+			mtspr	mmcr0,r0						; Clear MMCR0
+			mtspr	mmcr1,r0						; Clear MMCR1
+			mtspr	pmc1,r0
+			mtspr	pmc2,r0
+			mtspr	pmc3,r0
+			mtspr	pmc4,r0
+
+			isync
+
+			mtspr	mmcr0,r3						; Set MMCR0
+			mtspr	mmcr1,r4						; Set MMCR1
+			isync
+			blr										; Leave...
+
+

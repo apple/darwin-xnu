@@ -69,7 +69,10 @@ only once; datagram sockets may use
 .Fn connect
 multiple times to change their association.
 Datagram sockets may dissolve the association
-by connecting to an invalid address, such as a null address.
+by connecting to an invalid address, such as a null address 
+or an address with 
+the address family set to AF_UNPSEC (the error 
+EAFNOSUPPORT will be harmlessly returned).
 .Sh RETURN VALUES
 If the connection or binding succeeds, 0 is returned.
 Otherwise a -1 is returned, and a more specific error

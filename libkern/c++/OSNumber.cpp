@@ -85,7 +85,7 @@ OSNumber *OSNumber::withNumber(unsigned long long value,
     OSNumber *me = new OSNumber;
 
     if (me && !me->init(value, numberOfBits)) {
-        me->free();
+        me->release();
         return 0;
     }
 
@@ -97,7 +97,7 @@ OSNumber *OSNumber::withNumber(const char *value, unsigned int numberOfBits)
     OSNumber *me = new OSNumber;
 
     if (me && !me->init(value, numberOfBits)) {
-        me->free();
+        me->release();
         return 0;
     }
 

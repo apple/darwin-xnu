@@ -40,4 +40,14 @@ struct mcontext {
 
 typedef struct mcontext  * mcontext_t;
 
+struct mcontext64 {
+	ppc_exception_state_t	es;
+	ppc_thread_state64_t	ss;
+	ppc_float_state_t	fs;
+	ppc_vector_state_t	vs;
+};
+#define PPC_MCONTEXT64_SIZE	(PPC_THREAD_STATE64_COUNT + PPC_FLOAT_STATE_COUNT + PPC_EXCEPTION_STATE_COUNT + PPC_VECTOR_STATE_COUNT) * sizeof(int)
+
+typedef struct mcontext64  * mcontext64_t;
+
 #endif /* _PPC_UCONTEXT_H_ */

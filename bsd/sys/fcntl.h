@@ -119,6 +119,9 @@
 #define	FDEFER		0x2000		/* defer for next gc pass */
 #define	FHASLOCK	0x4000		/* descriptor holds advisory lock */
 #endif
+#ifndef _POSIX_SOURCE
+#define	O_EVTONLY	0x8000		/* descriptor requested for event notifications only */
+#endif
 
 /* defined by POSIX 1003.1; BSD default, so no bit required */
 #define	O_NOCTTY	0		/* don't assign controlling terminal */
@@ -175,6 +178,7 @@
 #define	F_GETLK		7		/* get record locking information */
 #define	F_SETLK		8		/* set record locking information */
 #define	F_SETLKW	9		/* F_SETLK; wait if blocked */
+#define F_CHKCLEAN      41              /* Used for regression test */
 #define F_PREALLOCATE   42		/* Preallocate storage */
 #define F_SETSIZE       43		/* Truncate a file without zeroing space */	
 #define F_RDADVISE      44              /* Issue an advisory read async with no copy to user */
@@ -183,6 +187,8 @@
 #define F_WRITEBOOTSTRAP 47             /* Write bootstrap on disk */
 #define F_NOCACHE       48              /* turning data caching off/on */
 #define F_LOG2PHYS	49		/* file offset to device offset */
+#define F_GETPATH       50              /* return the full path of the fd */
+#define F_FULLFSYNC     51		/* fsync + ask the drive to flush to the media */
 
 /* file descriptor flags (F_GETFD, F_SETFD) */
 #define	FD_CLOEXEC	1		/* close-on-exec flag */

@@ -72,6 +72,8 @@
 #include <netinet/in.h>
 #include <netinet/ip_mroute.h>
 
+#include <net/if_dl.h>
+
 #define	SA(p) ((struct sockaddr *)(p))
 
 struct route_cb route_cb;
@@ -83,6 +85,10 @@ static int	rttrash;		/* routes not in table but not freed */
 static void rt_maskedcopy __P((struct sockaddr *,
 	    struct sockaddr *, struct sockaddr *));
 static void rtable_init __P((void **));
+
+__private_extern__ u_long route_generation = 0;
+extern int use_routegenid;
+
 
 static void
 rtable_init(table)
@@ -130,6 +136,8 @@ rtalloc_ign(ro, ignore)
 		splx(s);
 	}
 	ro->ro_rt = rtalloc1(&ro->ro_dst, 1, ignore);
+	if (ro->ro_rt)
+		ro->ro_rt->generation_id = route_generation;
 }
 
 /*
@@ -220,11 +228,12 @@ rtfree(rt)
 {
 	/*
 	 * find the tree for that address family
+	 * Note: in the case of igmp packets, there might not be an rnh
 	 */
 	register struct radix_node_head *rnh =
 		rt_tables[rt_key(rt)->sa_family];
 
-	if (rt == 0 || rnh == 0)
+	if (rt == 0)
 		panic("rtfree");
 
 	/*
@@ -232,7 +241,7 @@ rtfree(rt)
 	 * and there is a close function defined, call the close function
 	 */
 	rt->rt_refcnt--;
-	if(rnh->rnh_close && rt->rt_refcnt == 0) {
+	if(rnh && rnh->rnh_close && rt->rt_refcnt == 0) {
 		rnh->rnh_close((struct radix_node *)rt, rnh);
 	}
 
@@ -717,9 +726,7 @@ rtrequest(req, dst, gateway, netmask, flags, ret_nrt)
 		ifaref(ifa);
 		rt->rt_ifa = ifa;
 		rt->rt_ifp = ifa->ifa_ifp;
-#ifdef __APPLE__
-		rt->rt_dlt = ifa->ifa_dlt; /* dl_tag */
-#endif
+
 		/* XXX mtu manipulation will be done in rnh_addaddr -- itojun */
 
 		rn = rnh->rnh_addaddr((caddr_t)ndst, (caddr_t)netmask,
@@ -956,7 +963,7 @@ rt_setgate(rt0, dst, gate)
 	int dlen = ROUNDUP(dst->sa_len), glen = ROUNDUP(gate->sa_len);
 	register struct rtentry *rt = rt0;
 	struct radix_node_head *rnh = rt_tables[dst->sa_family];
-
+	extern void kdp_set_gateway_mac (void *gatewaymac);
 	/*
 	 * A host route with the destination equal to the gateway
 	 * will interfere with keeping LLINFO in the routing
@@ -1034,6 +1041,12 @@ rt_setgate(rt0, dst, gate)
 			rtfree(rt->rt_gwroute);
 			rt->rt_gwroute = 0;
 			return EDQUOT; /* failure */
+		}
+		/* Tell the kernel debugger about the new default gateway */
+		if ((AF_INET == rt->rt_gateway->sa_family) && 
+		    rt->rt_gwroute && rt->rt_gwroute->rt_gateway && 
+		    (AF_LINK == rt->rt_gwroute->rt_gateway->sa_family)) {
+		  kdp_set_gateway_mac(((struct sockaddr_dl *)rt0->rt_gwroute->rt_gateway)->sdl_data);
 		}
 	}
 
@@ -1166,6 +1179,8 @@ rtinit(ifa, cmd, flags)
 		 * notify any listenning routing agents of the change
 		 */
 		rt_newaddrmsg(cmd, ifa, error, nrt);
+		if (use_routegenid)
+			route_generation++;
 		if (rt->rt_refcnt <= 0) {
 			rt->rt_refcnt++; /* need a 1->0 transition to free */
 			rtfree(rt);
@@ -1206,9 +1221,6 @@ rtinit(ifa, cmd, flags)
 			 * we are adding.
 			 */
 			rt->rt_ifp = ifa->ifa_ifp;
-#ifdef __APPLE__
-			rt->rt_dlt = ifa->ifa_dlt;	/* dl_tag */
-#endif
 			rt->rt_rmx.rmx_mtu = ifa->ifa_ifp->if_mtu;	/*XXX*/
 			/*
 			 * Now ask the protocol to check if it needs
@@ -1221,6 +1233,8 @@ rtinit(ifa, cmd, flags)
 		 * notify any listenning routing agents of the change
 		 */
 		rt_newaddrmsg(cmd, ifa, error, nrt);
+		if (use_routegenid)
+			route_generation++;
 	}
 	return (error);
 }

@@ -105,15 +105,9 @@
 
 #include <mach/boolean.h>
 
-#if defined(__ppc__)
 struct slock{
 	volatile unsigned int lock_data[10];
 };
-#else
-struct slock{
-	volatile unsigned int lock_data[9];
-};
-#endif
 typedef struct slock	simple_lock_data_t;
 typedef struct slock	*simple_lock_t;
 #define	decl_simple_lock_data(class,name) \

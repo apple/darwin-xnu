@@ -86,6 +86,7 @@
 #include <kern/timer_call.h>
 #include <kern/xpr.h>
 #include <kern/zalloc.h>
+#include <vm/vm_shared_memory_server.h>
 #include <vm/vm_kern.h>
 #include <vm/vm_init.h>
 #include <vm/vm_map.h>
@@ -106,9 +107,8 @@ extern void	rtclock_reset(void);
 
 /* Forwards */
 void		cpu_launch_first_thread(
-			thread_t			thread);
+				thread_t		thread);
 void		start_kernel_threads(void);
-void        swapin_thread();
 
 /*
  *	Running in virtual memory, on the interrupt stack.
@@ -155,7 +155,6 @@ setup_main(void)
 	 */
 	ledger_init();
 	task_init();
-	act_init();
 	thread_init();
 
 	/*
@@ -168,21 +167,14 @@ setup_main(void)
 	 *	Create a kernel thread to start the other kernel
 	 *	threads.
 	 */
-	startup_thread = kernel_thread_with_priority(
-										kernel_task, MAXPRI_KERNEL,
-											start_kernel_threads, TRUE, FALSE);
-	/*
-	 * Pretend it is already running.
-	 *
-	 * We can do this without locking, because nothing
-	 * else is running yet.
-	 */
-	startup_thread->state = TH_RUN;
-	hw_atomic_add(&startup_thread->processor_set->run_count, 1);
+	startup_thread = kernel_thread_create(start_kernel_threads, MAXPRI_KERNEL);
 
 	/*
 	 * Start the thread.
 	 */
+	startup_thread->state = TH_RUN;
+	pset_run_incr(startup_thread->processor_set);
+
 	cpu_launch_first_thread(startup_thread);
 	/*NOTREACHED*/
 	panic("cpu_launch_first_thread returns!");
@@ -208,16 +200,15 @@ start_kernel_threads(void)
 		thread_t		thread;
 		spl_t			s;
 
-		thread = kernel_thread_with_priority(
-									kernel_task, MAXPRI_KERNEL,
-											idle_thread, TRUE, FALSE);
+		thread = kernel_thread_create(idle_thread, MAXPRI_KERNEL);
+
 		s = splsched();
 		thread_lock(thread);
-		thread_bind_locked(thread, processor);
+		thread->bound_processor = processor;
 		processor->idle_thread = thread;
 		thread->ref_count++;
-		thread->state |= TH_IDLE;
-		thread_go_locked(thread, THREAD_AWAKENED);
+		thread->sched_pri = thread->priority = IDLEPRI;
+		thread->state = (TH_RUN | TH_IDLE);
 		thread_unlock(thread);
 		splx(s);
 	}
@@ -259,7 +250,7 @@ start_kernel_threads(void)
 	 */
 	device_service_create();
 
-	shared_file_boot_time_init();
+	shared_file_boot_time_init(ENV_DEFAULT_ROOT, machine_slot[cpu_number()].cpu_type);
 
 #ifdef	IOKIT
 	{
@@ -285,6 +276,10 @@ start_kernel_threads(void)
 	}
 #endif
 
+#if __ppc__
+	serial_keyboard_init();		/* Start serial keyboard if wanted */
+#endif
+
 	thread_bind(current_thread(), PROCESSOR_NULL);
 
 	/*
@@ -301,16 +296,12 @@ slave_main(void)
 	processor_t		myprocessor = current_processor();
 	thread_t		thread;
 
-	myprocessor->cpu_data = get_cpu_data();
 	thread = myprocessor->next_thread;
 	myprocessor->next_thread = THREAD_NULL;
 	if (thread == THREAD_NULL) {
 		thread = machine_wake_thread;
 		machine_wake_thread = THREAD_NULL;
 	}
-        thread_machine_set_current(thread);
-	if (thread == machine_wake_thread)
-		thread_bind(thread, myprocessor);
 
 	cpu_launch_first_thread(thread);
 	/*NOTREACHED*/
@@ -323,16 +314,7 @@ slave_main(void)
 void
 start_cpu_thread(void)
 {
-	processor_t	processor;
-
-	processor = cpu_to_processor(cpu_number());
-
 	slave_machine_init();
-
-	if (processor->processor_self == IP_NULL) {
-		ipc_processor_init(processor);
-		ipc_processor_enable(processor);
-	}
 
 	(void) thread_terminate(current_act());
 }
@@ -347,22 +329,18 @@ cpu_launch_first_thread(
 	register int	mycpu = cpu_number();
 	processor_t		processor = cpu_to_processor(mycpu);
 
-	processor->cpu_data->preemption_level = 0;
-
-	cpu_up(mycpu);
-	start_timer(&kernel_timer[mycpu]);
 	clock_get_uptime(&processor->last_dispatch);
-
-	if (thread == THREAD_NULL || thread == processor->idle_thread)
-		panic("cpu_launch_first_thread");
+	start_timer(&kernel_timer[mycpu]);
+	machine_thread_set_current(thread);
+	cpu_up(mycpu);
 
 	rtclock_reset();		/* start realtime clock ticking */
 	PMAP_ACTIVATE_KERNEL(mycpu);
 
-	thread_machine_set_current(thread);
 	thread_lock(thread);
 	thread->state &= ~TH_UNINT;
 	thread->last_processor = processor;
+	processor->active_thread = thread;
 	processor->current_pri = thread->sched_pri;
 	_mk_sp_thread_begin(thread, processor);
 	thread_unlock(thread);
@@ -371,6 +349,6 @@ cpu_launch_first_thread(
 	PMAP_ACTIVATE_USER(thread->top_act, mycpu);
 
 	/* preemption enabled by load_context */
-	load_context(thread);
+	machine_load_context(thread);
 	/*NOTREACHED*/
 }

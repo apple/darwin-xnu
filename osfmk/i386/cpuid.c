@@ -26,387 +26,431 @@
  * @OSF_COPYRIGHT@
  */
 
-/*
- * Values from http://einstein.et.tudelft.nl/~offerman/chiplist.html
- * (dated 18 Oct 1995)
- */
+#include "cpuid.h"
 
-#include <kern/misc_protos.h>
-#include <i386/cpuid.h>
+#define min(a,b) ((a) < (b) ? (a) : (b))
 
 /*
- * Generic product array (before CPUID)
+ * CPU identification routines.
+ *
+ * Note that this code assumes a processor that supports the
+ * 'cpuid' instruction.
  */
-unsigned int cpuid_i386_freq[] = { 12, 16, 20, 25, 33, 0 };
-unsigned int cpuid_i486_freq[] = { 20, 25, 33, 50, 0 };
 
-struct cpuid_product cpuid_generic[] = {
-    {
-	0,		CPUID_FAMILY_386,	0,
-	80,	cpuid_i386_freq,		"i386"
-    },
-    {
-	0,		CPUID_FAMILY_486,	0,
-	240,	cpuid_i486_freq,		"i486"
-    },
+static unsigned int	cpuid_maxcpuid;
+
+static i386_cpu_info_t	cpuid_cpu_info;
+
+uint32_t		cpuid_feature;		/* XXX obsolescent for compat */
+
+/*
+ * We only identify Intel CPUs here.  Adding support
+ * for others would be straightforward.
+ */
+static void	set_cpu_intel(i386_cpu_info_t *);
+static void	set_cpu_unknown(i386_cpu_info_t *);
+
+struct {
+	char	*vendor;
+	void	(* func)(i386_cpu_info_t *);
+} cpu_vendors[] = {
+	{CPUID_VID_INTEL,	set_cpu_intel},
+	{0,			set_cpu_unknown}
 };
 
-/*
- * INTEL product array
- */
-unsigned int cpuid_i486_dx_freq[] = { 20, 25, 33, 0 };
-unsigned int cpuid_i486_dx_s_freq[] = { 50, 0 };
-unsigned int cpuid_i486_sx_freq[] = { 16, 20, 25, 33, 0 };
-unsigned int cpuid_i486_dx2_freq[] = { 32, 40, 50, 66, 0 };
-unsigned int cpuid_i486_sl_freq[] = { 25, 33, 0 };
-unsigned int cpuid_i486_sx2_freq[] = { 50, 0 };
-unsigned int cpuid_i486_dx2wb_freq[] = { 50, 66, 0 };
-unsigned int cpuid_i486_dx4_freq[] = { 90, 100, 0 };
-
-unsigned int cpuid_i486_dx2wb_od_freq[] = { 32, 40, 50, 66, 0 };
-unsigned int cpuid_i486_dx4_od_freq[] = { 75, 99, 0 };
-
-unsigned int cpuid_p5_freq[] = { 60, 66, 0 };
-unsigned int cpuid_p54_freq[] = { 60, 66, 75, 90, 100, 120, 133, 166, 200, 0 };
-
-unsigned int cpuid_p24t_freq[] = { 25, 33, 0 };
-unsigned int cpuid_p24ct_freq[] = { 63, 83, 0 };
-
-unsigned int cpuid_pii_freq[] = { 300, 0 };
-
-struct cpuid_product cpuid_intel[] = {
-    {
-	CPUID_TYPE_OEM,		CPUID_FAMILY_486,	CPUID_MODEL_I486_DX,
-	240,	cpuid_i486_dx_freq,		"Intel 486DX"
-    },
-    {
-	CPUID_TYPE_OEM,		CPUID_FAMILY_486,	CPUID_MODEL_I486_DX_S,
-	240,	cpuid_i486_dx_s_freq,		"Intel 486DX-S"
-    },
-    {
-	CPUID_TYPE_OEM,		CPUID_FAMILY_486,	CPUID_MODEL_I486_SX,
-	240,	cpuid_i486_sx_freq,		"Intel 486SX"
-    },
-    {
-	CPUID_TYPE_OEM,		CPUID_FAMILY_486,	CPUID_MODEL_I486_DX2,
-	240,	cpuid_i486_dx2_freq,		"Intel 486DX2"
-    },
-    {
-	CPUID_TYPE_OEM,		CPUID_FAMILY_486,	CPUID_MODEL_I486_SL,
-	240,	cpuid_i486_sl_freq,		"Intel 486SL"
-    },
-    {  
-	CPUID_TYPE_OEM,		CPUID_FAMILY_486,	CPUID_MODEL_I486_SX2,
-	240,	cpuid_i486_sx2_freq,		"Intel 486SX2"
-    },
-    {
-	CPUID_TYPE_OEM,		CPUID_FAMILY_486,	CPUID_MODEL_I486_DX2WB,
-	240,	cpuid_i486_dx2wb_freq,		"Intel 486DX2WB"
-    },
-    {
-	CPUID_TYPE_OEM,		CPUID_FAMILY_486,	CPUID_MODEL_I486_DX4,
-	240,	cpuid_i486_dx4_freq,		"Intel 486DX4"
-    },
-    {
-	CPUID_TYPE_OVERDRIVE,	CPUID_FAMILY_486,	CPUID_MODEL_I486_DX2,
-	240,	cpuid_i486_dx2_freq,		"Intel 486DX2 OverDrive"
-    },
-    {
-	CPUID_TYPE_OVERDRIVE,	CPUID_FAMILY_486,	CPUID_MODEL_I486_DX2WB,
-	240,	cpuid_i486_dx2wb_od_freq,	"Intel 486DX2WB OverDrive"
-    },
-    {
-	CPUID_TYPE_OVERDRIVE,	CPUID_FAMILY_486,	CPUID_MODEL_I486_DX4,
-	240,	cpuid_i486_dx4_od_freq,		"Intel 486DX4 OverDrive"
-    },
-    {
-	CPUID_TYPE_OVERDRIVE,	CPUID_FAMILY_P5,	CPUID_MODEL_P24T,
-	208,	cpuid_p24t_freq,		"Intel Pentium P24T OverDrive"
-    },
-    {
-	CPUID_TYPE_OVERDRIVE,	CPUID_FAMILY_P5,	CPUID_MODEL_P54,
-	207,	cpuid_p24ct_freq,		"Intel Pentium P24CT OverDrive"
-    },
-    {
-	CPUID_TYPE_OEM,		CPUID_FAMILY_P5,	CPUID_MODEL_P5A,
-	207,	cpuid_p5_freq,			"Intel Pentium P5 rev A"
-    },
-    {
-	CPUID_TYPE_OEM,		CPUID_FAMILY_P5,	CPUID_MODEL_P5,
-	207,	cpuid_p5_freq,			"Intel Pentium P5"
-    },
-    {
-	CPUID_TYPE_OEM,		CPUID_FAMILY_P5,	CPUID_MODEL_P54,
-	207,	cpuid_p54_freq,			"Intel Pentium P54"
-    },
-    {
-	CPUID_TYPE_OEM,		CPUID_FAMILY_PPRO,	CPUID_MODEL_PII,
-	480,	cpuid_pii_freq,			"Intel Pentium II"
-    }
-};
-unsigned int cpuid_intel_size = sizeof (cpuid_intel) / sizeof (cpuid_intel[0]);
-
-/*
- * AMD product arrays
- */
-unsigned int cpuid_am486_dx_freq[] = { 33, 40, 0 };
-unsigned int cpuid_am486_dx2_freq[] = { 50, 66, 80, 99, 0 };
-unsigned int cpuid_am486_dx4_freq[] = { 99, 120, 133, 0 };
-unsigned int cpuid_am486_dx4wb_freq[] = { 99, 120, 133, 0 };
-
-/*
- * UMC product array 
- */
-unsigned int cpuid_u5sd_freq[] = { 25, 33, 40, 0 };
-unsigned int cpuid_u5s_freq[] = { 25, 33, 40, 0 };
-
-/*
- * Vendor ID array
- */
-struct cpuid_name cpuid_name[] = {
-    {	CPUID_VID_INTEL,
-	cpuid_intel,	sizeof (cpuid_intel) / sizeof (cpuid_intel[0])
-    },
-    {	CPUID_VID_UMC,
-	(struct cpuid_product *)0,
-    },
-    {	CPUID_VID_AMD,
-	(struct cpuid_product *)0,
-    },
-    {	CPUID_VID_CYRIX,
-	(struct cpuid_product *)0,
-    },
-    {	CPUID_VID_NEXTGEN,
-	(struct cpuid_product *)0
-    },
-    {	"",
-	cpuid_generic,	sizeof (cpuid_generic) / sizeof (cpuid_generic[0])
-    },
-    {	(char *)0,
-    }
-};
-
-/*
- * Feature Flag values
- */
-char *cpuid_flag[] = {
-    "FPU",	/* Floating point unit on-chip */
-    "VME",	/* Virtual Mode Extension */
-    "DE",	/* Debugging Extension */
-    "PSE",	/* Page Size Extension */
-    "TSC",	/* Time Stamp Counter */
-    "MSR",	/* Model Specific Registers */
-    "PAE",	/* Physical Address Extension */
-    "MCE",	/* Machine Check Exception */
-    "CX8",	/* CMPXCHG8 Instruction sSupported */
-    "APIC",	/* Local APIC Supported */
-    "(bit 10)",
-    "(bit 11)",
-    "MTRR",	/* Machine Type Range Register */
-    "PGE",	/* Page Global Enable */
-    "MCA",	/* Machine Check Architecture */
-    "CMOV",	/* Conditional Move Instruction Supported */
-    "(bit 16)",
-    "(bit 17)",
-    "(bit 18)",
-    "(bit 19)",
-    "(bit 20)",
-    "(bit 21)",
-    "(bit 22)",
-    "MMX",	/* Supports MMX instructions */
-    "(bit 24)",
-    "(bit 25)",
-    "(bit 26)",
-    "(bit 27)",
-    "(bit 28)",
-    "(bit 29)",
-    "(bit 30)",
-    "(bit 31)",
-};
-
-/*
- * Cache description array
- */
-struct cpuid_cache_desc cpuid_cache_desc[] = {
-    {	CPUID_CACHE_ITLB_4K,
-	"Instruction TBL, 4K, pages 4-way set associative, 64 entries"
-    },
-    {	CPUID_CACHE_ITLB_4M,
-	"Instruction TBL, 4M, pages 4-way set associative, 4 entries"
-    },
-    {	CPUID_CACHE_DTLB_4K,
-	"Data TBL, 4K pages, 4-way set associative, 64 entries"
-    },
-    {	CPUID_CACHE_DTLB_4M,
-	"Data TBL, 4M pages, 4-way set associative, 4 entries"
-    },
-    {	CPUID_CACHE_ICACHE_8K,
-	"Instruction L1 cache, 8K, 4-way set associative, 32byte line size"
-    },
-    {	CPUID_CACHE_DCACHE_8K,
-	"Data L1 cache, 8K, 2-way set associative, 32byte line size"
-    },
-    {	CPUID_CACHE_UCACHE_128K,
-	"Unified L2 cache, 128K, 4-way set associative, 32byte line size"
-    },
-    {	CPUID_CACHE_UCACHE_256K,
-	"Unified L2 cache, 256K, 4-way set associative, 32byte line size"
-    },
-    {	CPUID_CACHE_UCACHE_512K,
-	"Unified L2 cache, 512K, 4-way set associative, 32byte line size"
-    },
-    {	CPUID_CACHE_NULL,
-	(char *)0
-    }
-};
-    
-/*
- * CPU identification
- */
-unsigned int	cpuid_value;
-unsigned char	cpuid_type;
-unsigned char	cpuid_family;
-unsigned char	cpuid_model;
-unsigned char	cpuid_stepping;
-unsigned int	cpuid_feature;
-char		cpuid_vid[CPUID_VID_SIZE + 1];
-unsigned char	cpuid_cache[CPUID_CACHE_SIZE];
-
-/*
- * Return correct CPU_TYPE
- */
-/*ARGSUSED*/
-cpu_type_t
-cpuid_cputype(
-    int my_cpu)
+void
+cpuid_get_info(i386_cpu_info_t *info_p)
 {
-#ifndef MACH_BSD	/* FIXME  - add more family/chip types */
-    switch (cpuid_family) {
-    case CPUID_FAMILY_PPRO:
-	return (CPU_TYPE_PENTIUMPRO);
-    case CPUID_FAMILY_P5:
-	return (CPU_TYPE_PENTIUM);
-    case CPUID_FAMILY_486:
-	return (CPU_TYPE_I486);
-    default:
-	break;
-    }
-#endif
-    return (CPU_TYPE_I386);
+	uint32_t	cpuid_result[4];
+	int		i;
+
+	bzero((void *)info_p, sizeof(i386_cpu_info_t));
+
+	/* do cpuid 0 to get vendor */
+	do_cpuid(0, cpuid_result);
+	cpuid_maxcpuid = cpuid_result[0];
+	bcopy((char *)&cpuid_result[1], &info_p->cpuid_vendor[0], 4); /* ugh */
+	bcopy((char *)&cpuid_result[2], &info_p->cpuid_vendor[8], 4);
+	bcopy((char *)&cpuid_result[3], &info_p->cpuid_vendor[4], 4);
+	info_p->cpuid_vendor[12] = 0;
+
+	/* look up vendor */
+	for (i = 0; ; i++) {
+		if ((cpu_vendors[i].vendor == 0) ||
+		    (!strcmp(cpu_vendors[i].vendor, info_p->cpuid_vendor))) {
+			cpu_vendors[i].func(info_p);
+			break;
+		}
+	}
 }
 
 /*
- * Display processor signature
+ * A useful model name string takes some decoding.
  */
-/*ARGSUSED*/
+char *
+cpuid_intel_get_model_name(
+	uint8_t		brand,
+	uint8_t		family,
+	uint8_t		model,
+	uint32_t	signature)
+{
+	/* check for brand id */
+	switch(brand) {
+	    case 0:
+		/* brand ID not supported; use alternate method. */
+		switch(family) {
+		    case CPUID_FAMILY_486:
+			return "486";
+		    case CPUID_FAMILY_P5:
+			return "Pentium";
+		    case CPUID_FAMILY_PPRO:
+			switch(model) {
+			    case CPUID_MODEL_P6:
+				return "Pentium Pro";
+			    case CPUID_MODEL_PII:
+				return "Pentium II";
+			    case CPUID_MODEL_P65:
+			    case CPUID_MODEL_P66:
+				return "Celeron";
+			    case CPUID_MODEL_P67:
+			    case CPUID_MODEL_P68:
+			    case CPUID_MODEL_P6A:
+			    case CPUID_MODEL_P6B:
+				return "Pentium III";
+			    default:
+				return "Unknown P6 Family";
+			}
+		    case CPUID_FAMILY_PENTIUM4:
+			return "Pentium 4";
+		    default:
+			return "Unknown Family";
+   		}
+	    case 0x01:
+		return "Celeron";
+	    case 0x02:
+	    case 0x04:
+		return "Pentium III";
+	    case 0x03:
+		if (signature == 0x6B1)
+			return "Celeron";
+		else
+			return "Pentium III Xeon";
+	    case 0x06:
+		return "Mobile Pentium III";
+	    case 0x07:
+		return "Mobile Celeron";
+	    case 0x08:
+		if (signature >= 0xF20)
+			return "Genuine Intel";
+		else
+			return "Pentium 4";
+	    case 0x09:
+		return "Pentium 4";
+	    case 0x0b:
+		return "Xeon";
+	    case 0x0e:
+	    case 0x0f:
+		return "Mobile Pentium 4";
+	    default:
+		return "Unknown Pentium";
+	}
+}
+
+/*
+ * Cache descriptor table. Each row has the form:
+ *	   (descriptor_value,		cache,	size,		linesize,
+ * 				description)
+ * Note: the CACHE_DESC macro does not expand description text in the kernel.
+ */
+static cpuid_cache_desc_t cpuid_cache_desc_tab[] = {
+CACHE_DESC(CPUID_CACHE_ITLB_4K, 	Lnone,	0,		0, \
+	"Instruction TLB, 4K, pages 4-way set associative, 64 entries"),
+CACHE_DESC(CPUID_CACHE_ITLB_4M, 	Lnone,	0,		0, \
+	"Instruction TLB, 4M, pages 4-way set associative, 4 entries"),
+CACHE_DESC(CPUID_CACHE_DTLB_4K, 	Lnone,	0,		0, \
+	"Data TLB, 4K pages, 4-way set associative, 64 entries"),
+CACHE_DESC(CPUID_CACHE_DTLB_4M, 	Lnone,	0,		0, \
+	"Data TLB, 4M pages, 4-way set associative, 4 entries"),
+CACHE_DESC(CPUID_CACHE_ITLB_64, 	Lnone,	0,		0, \
+	"Instruction TLB, 4K and 2M or 4M pages, 64 entries"),
+CACHE_DESC(CPUID_CACHE_ITLB_128, 	Lnone,	0,		0, \
+	"Instruction TLB, 4K and 2M or 4M pages, 128 entries"),
+CACHE_DESC(CPUID_CACHE_ITLB_256, 	Lnone,	0,		0, \
+	"Instruction TLB, 4K and 2M or 4M pages, 256 entries"),
+CACHE_DESC(CPUID_CACHE_DTLB_64,		Lnone,	0,		0, \
+	"Data TLB, 4K and 4M pages, 64 entries"),
+CACHE_DESC(CPUID_CACHE_DTLB_128,	Lnone,	0,		0, \
+	"Data TLB, 4K and 4M pages, 128 entries"),
+CACHE_DESC(CPUID_CACHE_DTLB_256,	Lnone,	0,		0, \
+	"Data TLB, 4K and 4M pages, 256 entries"),
+CACHE_DESC(CPUID_CACHE_ICACHE_8K,	L1I,	8*1024, 	32, \
+	"Instruction L1 cache, 8K, 4-way set associative, 32byte line size"),
+CACHE_DESC(CPUID_CACHE_DCACHE_8K,	L1D,	8*1024, 	32, \
+	"Data L1 cache, 8K, 2-way set associative, 32byte line size"),
+CACHE_DESC(CPUID_CACHE_ICACHE_16K,	L1I,	16*1024,	 32, \
+	"Instruction L1 cache, 16K, 4-way set associative, 32byte line size"),
+CACHE_DESC(CPUID_CACHE_DCACHE_16K,	L1D,	16*1024, 	32, \
+	"Data L1 cache, 16K, 4-way set associative, 32byte line size"),
+CACHE_DESC(CPUID_CACHE_DCACHE_8K_64,	L1D,	8*1024,		64, \
+	"Data L1 cache, 8K, 4-way set associative, 64byte line size"),
+CACHE_DESC(CPUID_CACHE_DCACHE_16K_64,	L1D,	16*1024,	64, \
+	"Data L1 cache, 16K, 4-way set associative, 64byte line size"),
+CACHE_DESC(CPUID_CACHE_DCACHE_32K_64,	L1D,	32*1024,	64, \
+	"Data L1 cache, 32K, 4-way set associative, 64byte line size"),
+CACHE_DESC(CPUID_CACHE_TRACE_12K,	L1I,	12*1024,	64, \
+	"Trace cache, 12K-uop, 8-way set associative"),
+CACHE_DESC(CPUID_CACHE_TRACE_12K,	L1I,	16*1024,	64, \
+	"Trace cache, 16K-uop, 8-way set associative"),
+CACHE_DESC(CPUID_CACHE_TRACE_12K,	L1I,	32*1024,	64, \
+	"Trace cache, 32K-uop, 8-way set associative"),
+CACHE_DESC(CPUID_CACHE_UCACHE_128K,	L2U,	128*1024,	32, \
+	"Unified L2 cache, 128K, 4-way set associative, 32byte line size"),
+CACHE_DESC(CPUID_CACHE_UCACHE_256K,	L2U,	128*1024,	32, \
+	"Unified L2 cache, 256K, 4-way set associative, 32byte line size"),
+CACHE_DESC(CPUID_CACHE_UCACHE_512K,	L2U,	512*1024,	32, \
+	"Unified L2 cache, 512K, 4-way set associative, 32byte line size"),
+CACHE_DESC(CPUID_CACHE_UCACHE_1M,	L2U,	1*1024*1024,	32, \
+	"Unified L2 cache, 1M, 4-way set associative, 32byte line size"),
+CACHE_DESC(CPUID_CACHE_UCACHE_2M,	L2U,	2*1024*1024,	32, \
+	"Unified L2 cache, 2M, 4-way set associative, 32byte line size"),
+CACHE_DESC(CPUID_CACHE_UCACHE_128K_64,	L2U,	128*1024,	64, \
+	"Unified L2 cache, 128K, 8-way set associative, 64byte line size"),
+CACHE_DESC(CPUID_CACHE_UCACHE_256K_64,	L2U,	256*1024,	64, \
+	"Unified L2 cache, 256K, 8-way set associative, 64byte line size"),
+CACHE_DESC(CPUID_CACHE_UCACHE_512K_64,	L2U,	512*1024,	64, \
+	"Unified L2 cache, 512K, 8-way set associative, 64byte line size"),
+CACHE_DESC(CPUID_CACHE_UCACHE_1M_64,	L2U,	1*1024*1024,	64, \
+	"Unified L2 cache, 1M, 8-way set associative, 64byte line size"),
+CACHE_DESC(CPUID_CACHE_UCACHE_256K_32,	L2U,	256*1024,	32, \
+	"Unified L2 cache, 256K, 8-way set associative, 32byte line size"),
+CACHE_DESC(CPUID_CACHE_UCACHE_512K_32,	L2U,	512*1024,	32, \
+	"Unified L2 cache, 512K, 8-way set associative, 32byte line size"),
+CACHE_DESC(CPUID_CACHE_UCACHE_1M_32,	L2U,	1*1024*1024,	32, \
+	"Unified L2 cache, 1M, 8-way set associative, 32byte line size"),
+CACHE_DESC(CPUID_CACHE_UCACHE_2M_32,	L2U,	2*1024*1024,	32, \
+	"Unified L2 cache, 2M, 8-way set associative, 32byte line size"),
+CACHE_DESC(CPUID_CACHE_NULL, Lnone, 0, 0, \
+	(char *)0),
+};
+
+static void
+set_cpu_intel(i386_cpu_info_t *info_p)
+{
+	uint32_t	cpuid_result[4];
+	uint32_t	max_extid;
+        char            str[128], *p;
+	char		*model;
+	int		i;
+	int		j;
+
+	/* get extended cpuid results */
+	do_cpuid(0x80000000, cpuid_result);
+	max_extid = cpuid_result[0];
+
+	/* check to see if we can get brand string */
+	if (max_extid > 0x80000000) {
+		/*
+		 * The brand string 48 bytes (max), guaranteed to
+		 * be NUL terminated.
+		 */
+		do_cpuid(0x80000002, cpuid_result);
+		bcopy((char *)cpuid_result, &str[0], 16);
+		do_cpuid(0x80000003, cpuid_result);
+		bcopy((char *)cpuid_result, &str[16], 16);
+		do_cpuid(0x80000004, cpuid_result);
+		bcopy((char *)cpuid_result, &str[32], 16);
+		for (p = str; *p != '\0'; p++) {
+			if (*p != ' ') break;
+		}
+		strncpy(info_p->cpuid_brand_string,
+			p, sizeof(info_p->cpuid_brand_string)-1);
+		info_p->cpuid_brand_string[sizeof(info_p->cpuid_brand_string)-1] = '\0';
+	}
+    
+	/* get processor signature and decode */
+	do_cpuid(1, cpuid_result);
+	info_p->cpuid_signature =  cpuid_result[0];
+	info_p->cpuid_stepping  =  cpuid_result[0]        & 0x0f;
+	info_p->cpuid_model     = (cpuid_result[0] >> 4)  & 0x0f;
+	info_p->cpuid_family    = (cpuid_result[0] >> 8)  & 0x0f;
+        info_p->cpuid_type      = (cpuid_result[0] >> 12) & 0x03;
+	info_p->cpuid_extmodel  = (cpuid_result[0] >> 16) & 0x0f;
+	info_p->cpuid_extfamily = (cpuid_result[0] >> 20) & 0xff;
+	info_p->cpuid_brand     =  cpuid_result[1]        & 0xff;
+	info_p->cpuid_features  =  cpuid_result[3];
+
+	/* decode family/model/type */
+	switch (info_p->cpuid_type) {
+	    case CPUID_TYPE_OVERDRIVE:
+		strcat(info_p->model_string, "Overdrive ");
+		break;
+	    case CPUID_TYPE_DUAL:
+		strcat(info_p->model_string, "Dual ");
+		break;
+	}
+	strcat(info_p->model_string,
+	       cpuid_intel_get_model_name(info_p->cpuid_brand,
+					  info_p->cpuid_family,
+					  info_p->cpuid_model,
+					  info_p->cpuid_signature));
+	info_p->model_string[sizeof(info_p->model_string)-1] = '\0';
+
+	/* get processor cache descriptor info */
+	do_cpuid(2, cpuid_result);
+	for (j = 0; j < 4; j++) {
+		if ((cpuid_result[j] >> 31) == 1) 	/* bit31 is validity */
+			continue;
+		((uint32_t *) info_p->cache_info)[j] = cpuid_result[j];
+	}
+	/* first byte gives number of cpuid calls to get all descriptors */
+	for (i = 1; i < info_p->cache_info[0]; i++) {
+		if (i*16 > sizeof(info_p->cache_info))
+			break;
+		do_cpuid(2, cpuid_result);
+		for (j = 0; j < 4; j++) {
+			if ((cpuid_result[j] >> 31) == 1) 
+				continue;
+			((uint32_t *) info_p->cache_info)[4*i+j] =
+				cpuid_result[j];
+		}
+	}
+
+	/* decode the descriptors looking for L1/L2/L3 size info */
+	for (i = 1; i < sizeof(info_p->cache_info); i++) {
+		cpuid_cache_desc_t	*descp;
+		uint8_t			desc = info_p->cache_info[i];
+
+		if (desc == CPUID_CACHE_NULL)
+			continue;
+		for (descp = cpuid_cache_desc_tab;
+			descp->value != CPUID_CACHE_NULL; descp++) {
+			if (descp->value != desc)
+				continue;
+			info_p->cache_size[descp->type] = descp->size;
+			if (descp->type == L2U)
+				info_p->cache_linesize = descp->linesize;
+			break;
+		}
+	}
+	/* For P-IIIs, L2 could be 256k or 512k but we can't tell */ 
+	if (info_p->cache_size[L2U] == 0 &&
+	    info_p->cpuid_family == 0x6 && info_p->cpuid_model == 0xb) {
+		info_p->cache_size[L2U] = 256*1024;
+		info_p->cache_linesize = 32;
+	}
+
+	return;
+}
+
+static void
+set_cpu_unknown(i386_cpu_info_t *info_p)
+{
+	strcat(info_p->model_string, "Unknown");
+}
+
+
+static struct {
+	uint32_t	mask;
+	char		*name;
+} feature_names[] = {
+	{CPUID_FEATURE_FPU,   "FPU",},
+	{CPUID_FEATURE_VME,   "VME",},
+	{CPUID_FEATURE_DE,    "DE",},
+	{CPUID_FEATURE_PSE,   "PSE",},
+	{CPUID_FEATURE_TSC,   "TSC",},
+	{CPUID_FEATURE_MSR,   "MSR",},
+	{CPUID_FEATURE_PAE,   "PAE",},
+	{CPUID_FEATURE_MCE,   "MCE",},
+	{CPUID_FEATURE_CX8,   "CX8",},
+	{CPUID_FEATURE_APIC,  "APIC",},
+	{CPUID_FEATURE_SEP,   "SEP",},
+	{CPUID_FEATURE_MTRR,  "MTRR",},
+	{CPUID_FEATURE_PGE,   "PGE",},
+	{CPUID_FEATURE_MCA,   "MCA",},
+	{CPUID_FEATURE_CMOV,  "CMOV",},
+	{CPUID_FEATURE_PAT,   "PAT",},
+	{CPUID_FEATURE_PSE36, "PSE36",},
+	{CPUID_FEATURE_PSN,   "PSN",},
+	{CPUID_FEATURE_CLFSH, "CLFSH",},
+	{CPUID_FEATURE_DS,    "DS",},
+	{CPUID_FEATURE_ACPI,  "ACPI",},
+	{CPUID_FEATURE_MMX,   "MMX",},
+	{CPUID_FEATURE_FXSR,  "FXSR",},
+	{CPUID_FEATURE_SSE,   "SSE",},
+	{CPUID_FEATURE_SSE2,  "SSE2",},
+	{CPUID_FEATURE_SS,    "SS",},
+	{CPUID_FEATURE_HTT,   "HTT",},
+	{CPUID_FEATURE_TM,    "TM",},
+	{0, 0}
+};
+
+char *
+cpuid_get_feature_names(uint32_t feature, char *buf, unsigned buf_len)
+{
+	int	i;
+	int	len;
+	char	*p = buf;
+
+	for (i = 0; feature_names[i].mask != 0; i++) {
+		if ((feature & feature_names[i].mask) == 0)
+			continue;
+		if (i > 0)
+			*p++ = ' ';
+		len = min(strlen(feature_names[i].name), (buf_len-1) - (p-buf));
+		if (len == 0)
+			break;
+		bcopy(feature_names[i].name, p, len);
+		p += len;
+	}
+	*p = '\0';
+	return buf;
+}
+
+void
+cpuid_feature_display(
+	char	*header,
+	int	my_cpu)
+{
+	char	buf[256];
+
+	printf("%s: %s\n", header,
+		  cpuid_get_feature_names(cpuid_features(), buf, sizeof(buf)));
+}
+
 void
 cpuid_cpu_display(
-    char *header,
-    int my_cpu)
+	char	*header,
+	int	my_cpu)
 {
-    struct cpuid_name *name;
-    unsigned int i;
-    unsigned int *freq;
-    unsigned int mhz;
-    unsigned int feature;
-    char **flag;
-    extern unsigned int delaycount;
-
-    /*
-     * Identify vendor ID
-     */
-    for (name = cpuid_name; name->name != (char *)0; name++) {
-	char *p = name->name;
-	char *q = cpuid_vid;
-	while (*p == *q && *p != 0) {
-	    p++;
-	    q++;
-	}
-	if (*p == '\0' && *q == '\0')
-	    break;
-    }
-    if (name->name == (char *)0) {
-	printf("Unrecognized processor vendor id = '%s'\n", cpuid_vid);
-	return;
-    }
-
-    /*
-     * Identify Product ID
-     */
-    for (i = 0; i < name->size; i++)
-	if (name->product[i].type == cpuid_type &&
-	    name->product[i].family == cpuid_family &&
-	    name->product[i].model == cpuid_model)
-	    break;
-    if (i == name->size) {
-	printf("%s processor (type = 0x%x, family = 0x%x, model = 0x%x)\n",
-	       "Unrecognized", cpuid_type, cpuid_family, cpuid_model);
-	return;
-    }
-
-    /*
-     * Look for frequency and adjust it to known values
-     */
-    mhz = (1000 * delaycount) / name->product[i].delay;
-    for (freq = name->product[i].frequency; *freq != 0; freq++)
-	if (*freq >= mhz)
-	    break;
-    if (*freq == 0)
-	mhz = *(freq - 1);
-    else if (freq == name->product[i].frequency)
-	mhz = *freq;
-    else if (*freq - mhz > mhz - *(freq - 1))
-	mhz = *(freq - 1);
-    else if (*freq != mhz)
-	mhz = *freq;
-
-    /*
-     * Display product and frequency
-     */
-    printf("%s: %s at %d MHz (signature = %d/%d/%d/%d)\n",
-	   header, name->product[i].name, mhz, cpuid_type,
-	   cpuid_family, cpuid_model, cpuid_stepping);
-
-    /*
-     * Display feature (if any)
-     */
-    if (cpuid_feature) {
-	i = 0;
-	flag = cpuid_flag;
-	for (feature = cpuid_feature; feature != 0; feature >>= 1) {
-	    if (feature & 1)
-		if (i == 0) {
-		    printf("%s: %s", header, *flag);
-		    i = 1;
-		} else 
-		    printf(", %s", *flag);
-	    flag++;
-	}
-	printf("\n");
-    }
+	printf("%s: %s\n", header,
+		(cpuid_cpu_info.cpuid_brand_string[0] != '\0') ?
+			cpuid_cpu_info.cpuid_brand_string :
+			cpuid_cpu_info.model_string);
 }
 
-/*
- * Display processor configuration information
- */
-/*ARGSUSED*/
+unsigned int
+cpuid_family(void)
+{
+	return cpuid_cpu_info.cpuid_family;
+}
+
+unsigned int
+cpuid_features(void)
+{
+	return cpuid_cpu_info.cpuid_features;
+}
+
+i386_cpu_info_t	*
+cpuid_info(void)
+{
+	return &cpuid_cpu_info;
+}
+
+/* XXX for temporary compatibility */
 void
-cpuid_cache_display(
-    char *header,
-    int my_cpu)
+set_cpu_model(void)
 {
-    struct cpuid_cache_desc *desc;
-    unsigned int i;
-
-    if (cpuid_cache[CPUID_CACHE_VALID] == 1)
-	for (i = 0; i < CPUID_CACHE_SIZE; i++) {
-	    if (i != CPUID_CACHE_VALID || cpuid_cache[i] == CPUID_CACHE_NULL)
-		continue;
-	    for (desc = cpuid_cache_desc;
-		 desc->description != (char *)0; desc++)
-		if (desc->value == cpuid_cache[i])
-		    break;
-	    if (desc->description != (char *)0)
-		printf("%s: %s\n", header, desc->description);
-	}
+	cpuid_get_info(&cpuid_cpu_info);
+	cpuid_feature = cpuid_cpu_info.cpuid_features;	/* XXX compat */
 }
+

@@ -111,8 +111,10 @@
 					~(I386_PGBYTES-1))
 #define i386_trunc_page(x)	(((unsigned)(x)) & ~(I386_PGBYTES-1))
 
+#define VM_MAX_PAGE_ADDRESS     0x00000000C0000000ULL
+
 #define VM_MIN_ADDRESS		((vm_offset_t) 0)
-#define VM_MAX_ADDRESS		((vm_offset_t) 0xc0000000U)
+#define VM_MAX_ADDRESS		((vm_offset_t) (VM_MAX_PAGE_ADDRESS & 0xFFFFFFFF))
 
 #define LINEAR_KERNEL_ADDRESS	((vm_offset_t) 0xc0000000)
 
@@ -125,30 +127,6 @@
 /* FIXME  - always leave like this? */
 #define	INTSTACK_SIZE	(I386_PGBYTES*4)
 #define	KERNEL_STACK_SIZE	(I386_PGBYTES*4)
-
-#if 0		/* FIXME */
-
-#include <norma_vm.h>
-#include <task_swapper.h>
-#include <thread_swapper.h>
-
-#if defined(AT386)
-#include <i386/cpuid.h>
-#endif
-
-#if !NORMA_VM 
-#if !TASK_SWAPPER && !THREAD_SWAPPER
-#define KERNEL_STACK_SIZE	(I386_PGBYTES/2)
-#else
-/* stack needs to be a multiple of page size to get unwired  when swapped */
-#define KERNEL_STACK_SIZE	(I386_PGBYTES)
-#endif	/* TASK || THREAD SWAPPER */
-#define INTSTACK_SIZE		(I386_PGBYTES)	/* interrupt stack size */
-#else	/* NORMA_VM */
-#define KERNEL_STACK_SIZE	(I386_PGBYTES*2)
-#define INTSTACK_SIZE		(I386_PGBYTES*2)	/* interrupt stack size */
-#endif	/* NORMA_VM */
-#endif	/* MACH_KERNEL */
 
 /*
  *	Conversion between 80386 pages and VM pages
@@ -202,7 +180,7 @@
 	pmap_enter(					\
 		(pmap),					\
 		(virtual_address),			\
-		(page)->phys_addr,			\
+		(page)->phys_page,			\
 		__prot__,				\
 		flags,					\
 		(wired)					\

@@ -812,4 +812,6 @@ extern boolean_t	bs_set_default_clsize(unsigned int);
 
 extern boolean_t	verbose;
 
+extern void		default_pager_backing_store_monitor(thread_call_param_t, thread_call_param_t);
+
 #endif	/* _DEFAULT_PAGER_INTERNAL_H_ */

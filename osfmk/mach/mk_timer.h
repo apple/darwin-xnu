@@ -51,9 +51,7 @@ kern_return_t	mk_timer_cancel(
 
 struct mk_timer_expire_msg {
 	mach_msg_header_t	header;
-	uint64_t			time_of_arming;
-	uint64_t			armed_time;
-	uint64_t			time_of_posting;
+	uint64_t			unused[3];
 };
 
 typedef struct mk_timer_expire_msg		mk_timer_expire_msg_t;

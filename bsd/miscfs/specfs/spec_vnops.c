@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2001 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2002 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -72,7 +72,7 @@
 #include <sys/ioctl.h>
 #include <sys/file.h>
 #include <sys/malloc.h>
-#include <dev/disk.h>
+#include <sys/disk.h>
 #include <miscfs/specfs/specdev.h>
 #include <vfs/vfs_support.h>
 
@@ -275,7 +275,30 @@ spec_open(ap)
 			return (error);
 		error = (*bdevsw[maj].d_open)(dev, ap->a_mode, S_IFBLK, p);
 		if (!error) {
+		    u_int64_t blkcnt;
+		    u_int32_t blksize;
+
 		    set_blocksize(vp, dev);
+
+		    /*
+		     * Cache the size in bytes of the block device for later
+		     * use by spec_write().
+		     */
+		    vp->v_specdevsize = (u_int64_t)0;	/* Default: Can't get */
+		    if (!VOP_IOCTL(vp, DKIOCGETBLOCKSIZE, (caddr_t)&blksize, 0, NOCRED, p)) {
+			/* Switch to 512 byte sectors (temporarily) */
+			u_int32_t size512 = 512;
+
+			if (!VOP_IOCTL(vp, DKIOCSETBLOCKSIZE, (caddr_t)&size512, FWRITE, NOCRED, p)) {
+			    /* Get the number of 512 byte physical blocks. */
+			    if (!VOP_IOCTL(vp, DKIOCGETBLOCKCOUNT, (caddr_t)&blkcnt, 0, NOCRED, p)) {
+				vp->v_specdevsize = blkcnt * (u_int64_t)size512;
+			    }
+			}
+			/* If it doesn't set back, we can't recover */
+			if (VOP_IOCTL(vp, DKIOCSETBLOCKSIZE, (caddr_t)&blksize, FWRITE, NOCRED, p))
+			    error = ENXIO;
+		    }
 		}
 		return(error);
 	}
@@ -439,11 +462,35 @@ spec_write(ap)
 
 			n = min((unsigned)(bsize - on), uio->uio_resid);
 
+			/*
+			 * Use getblk() as an optimization IFF:
+			 *
+			 * 1)	We are reading exactly a block on a block
+			 *	aligned boundary
+			 * 2)	We know the size of the device from spec_open
+			 * 3)	The read doesn't span the end of the device
+			 *
+			 * Otherwise, we fall back on bread().
+			 */
+			if (n == bsize &&
+			    vp->v_specdevsize != (u_int64_t)0 &&
+			    (uio->uio_offset + (u_int64_t)n) > vp->v_specdevsize) {
+			    /* reduce the size of the read to what is there */
+			    n = (uio->uio_offset + (u_int64_t)n) - vp->v_specdevsize;
+			}
+
 			if (n == bsize)
 			        bp = getblk(vp, bn, bsize, 0, 0, BLK_WRITE);
 			else
 			        error = bread(vp, bn, bsize, NOCRED, &bp);
 
+			/* Translate downstream error for upstream, if needed */
+			if (!error) {
+				error = bp->b_error;
+				if (!error && (bp->b_flags & B_ERROR) != 0) {
+					error = EIO;
+				}
+			}
 			if (error) {
 				brelse(bp);
 				return (error);
@@ -595,6 +642,7 @@ spec_strategy(ap)
 	} */ *ap;
 {
         struct buf *bp;
+	extern int hard_throttle_on_root;
 
         bp = ap->a_bp;
 
@@ -612,8 +660,11 @@ spec_strategy(ap)
                 code |= DKIO_PAGING;
 
             KERNEL_DEBUG_CONSTANT(FSDBG_CODE(DBG_DKRW, code) | DBG_FUNC_NONE,
-                                bp, bp->b_dev, bp->b_blkno, bp->b_bcount, 0);
+				(unsigned int)bp, bp->b_dev, bp->b_blkno, bp->b_bcount, 0);
         }
+	if ((bp->b_flags & B_PGIN) && (bp->b_vp->v_mount->mnt_kern_flag & MNTK_ROOTDEV))
+	       hard_throttle_on_root = 1;
+
         (*bdevsw[major(bp->b_dev)].d_strategy)(bp);
         return (0);
 }

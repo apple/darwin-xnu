@@ -129,6 +129,27 @@ struct i386_fp_regs {
 					/* space for 8 80-bit FP registers */
 };
 
+/* note when allocating this data structure, it must be 16 byte aligned. */
+struct i386_fx_save {
+        unsigned short  fx_control;     /* control */
+        unsigned short  fx_status;      /* status */
+        unsigned char  	fx_tag;         /* register tags */
+        unsigned char	fx_bbz1;	/* better be zero when calling fxrtstor */
+        unsigned short  fx_opcode;
+        unsigned int    fx_eip;         /* eip  instruction */
+        unsigned short  fx_cs;          /* cs instruction */
+        unsigned short  fx_bbz2;	/* better be zero when calling fxrtstor */ 
+        unsigned int    fx_dp;          /* data address */
+        unsigned short  fx_ds;          /* data segment */
+        unsigned short  fx_bbz3;	/* better be zero when calling fxrtstor */
+        unsigned int  	fx_MXCSR;
+        unsigned int  	fx_MXCSR_MASK;
+        unsigned short  fx_reg_word[8][8];      /* STx/MMx registers */
+        unsigned short  fx_XMM_reg[8][8];       /* XMM0-XMM7 */
+        unsigned char 	fx_reserved[16*14];     /* reserved by intel for future expansion */
+};
+
+
 /*
  * Control register
  */
@@ -183,5 +204,6 @@ struct i386_fp_regs {
 #define	FP_SOFT		1		/* software FP emulator */
 #define	FP_287		2		/* 80287 */
 #define	FP_387		3		/* 80387 or 80486 */
+#define FP_FXSR		4		/* Fast save/restore SIMD Extension */
 
 #endif	/* _I386_FP_SAVE_H_ */

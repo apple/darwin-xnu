@@ -31,8 +31,8 @@ boot_args fakePPCBootArgs = {
     0,                // Revision
     kBootArgsVersion, // Version
     "",               // CommandLine
-    0,                // PhysicalDRAM
-    0,                // machine_type
+    {{0}},            // PhysicalDRAM
+    {0},              // machine_type
     0,                // deviceTreeP
     0,                // deviceTreeLength
     0,                // topOfKernelData

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2002 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2003 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -89,18 +89,24 @@
 #ifndef NFS_MAXATTRTIMO
 #define	NFS_MAXATTRTIMO 60
 #endif
-#define	NFS_WSIZE	8192		/* Def. write data size <= 8192 */
-#define	NFS_RSIZE	8192		/* Def. read data size <= 8192 */
+#define	NFS_WSIZE	16384		/* Def. write data size <= 16K */
+#define	NFS_RSIZE	16384		/* Def. read data size <= 16K */
+#define	NFS_DGRAM_WSIZE	8192		/* UDP Def. write data size <= 8K */
+#define	NFS_DGRAM_RSIZE	8192		/* UDP Def. read data size <= 8K */
 #define NFS_READDIRSIZE	8192		/* Def. readdir size */
-#define	NFS_DEFRAHEAD	1		/* Def. read ahead # blocks */
-#define	NFS_MAXRAHEAD	4		/* Max. read ahead # blocks */
+#define	NFS_DEFRAHEAD	4		/* Def. read ahead # blocks */
+#define	NFS_MAXRAHEAD	16		/* Max. read ahead # blocks */
 #define	NFS_MAXUIDHASH	64		/* Max. # of hashed uid entries/mp */
-#define	NFS_MAXASYNCDAEMON 	20	/* Max. number async_daemons runnable */
+#define	NFS_MAXASYNCDAEMON 	32	/* Max. number async_daemons runnable */
 #define NFS_MAXGATHERDELAY	100	/* Max. write gather delay (msec) */
 #ifndef NFS_GATHERDELAY
 #define NFS_GATHERDELAY		10	/* Default write gather delay (msec) */
 #endif
 #define	NFS_DIRBLKSIZ	4096		/* Must be a multiple of DIRBLKSIZ */
+#if defined(KERNEL) && !defined(DIRBLKSIZ)
+#define	DIRBLKSIZ	512		/* XXX we used to use ufs's DIRBLKSIZ */
+ 					/* can't be larger than NFS_FABLKSIZE */
+#endif
 
 /*
  * Oddballs
@@ -115,13 +121,13 @@
 
 /*
  * XXX
- * The B_INVAFTERWRITE flag should be set to whatever is required by the
+ * The NB_INVAFTERWRITE flag should be set to whatever is required by the
  * buffer cache code to say "Invalidate the block after it is written back".
  */
 #ifdef __FreeBSD__
-#define	B_INVAFTERWRITE	B_NOCACHE
+#define	NB_INVAFTERWRITE	NB_NOCACHE
 #else
-#define	B_INVAFTERWRITE	B_INVAL
+#define	NB_INVAFTERWRITE	NB_INVAL
 #endif
 
 /*
@@ -131,15 +137,6 @@
 #ifndef IO_METASYNC
 #define IO_METASYNC	0
 #endif
-
-/*
- * Set the attribute timeout based on how recently the file has been modified.
- */
-#define	NFS_ATTRTIMEO(np) \
-	((((np)->n_flag & NMODIFIED) || \
-	 (time.tv_sec - (np)->n_mtime) / 10 < NFS_MINATTRTIMO) ? NFS_MINATTRTIMO : \
-	 ((time.tv_sec - (np)->n_mtime) / 10 > NFS_MAXATTRTIMO ? NFS_MAXATTRTIMO : \
-	  (time.tv_sec - (np)->n_mtime) / 10))
 
 /*
  * Expected allocation sizes for major data structures. If the actual size
@@ -202,21 +199,24 @@ struct nfs_args {
 #define	NFSMNT_RESVPORT		0x00008000  /* Allocate a reserved port */
 #define	NFSMNT_RDIRPLUS		0x00010000  /* Use Readdirplus for V3 */
 #define	NFSMNT_READDIRSIZE	0x00020000  /* Set readdir size */
-#define	NFSMNT_INTERNAL		0xfffc0000  /* Bits set internally */
-#define NFSMNT_HASWRITEVERF	0x00040000  /* Has write verifier for V3 */
-#define NFSMNT_GOTPATHCONF	0x00080000  /* Got the V3 pathconf info */
-#define NFSMNT_GOTFSINFO	0x00100000  /* Got the V3 fsinfo */
-#define	NFSMNT_MNTD		0x00200000  /* Mnt server for mnt point */
-#define	NFSMNT_DISMINPROG	0x00400000  /* Dismount in progress */
-#define	NFSMNT_DISMNT		0x00800000  /* Dismounted */
-#define	NFSMNT_SNDLOCK		0x01000000  /* Send socket lock */
-#define	NFSMNT_WANTSND		0x02000000  /* Want above */
-#define	NFSMNT_RCVLOCK		0x04000000  /* Rcv socket lock */
-#define	NFSMNT_WANTRCV		0x08000000  /* Want above */
-#define	NFSMNT_WAITAUTH		0x10000000  /* Wait for authentication */
-#define	NFSMNT_HASAUTH		0x20000000  /* Has authenticator */
-#define	NFSMNT_WANTAUTH		0x40000000  /* Wants an authenticator */
-#define	NFSMNT_AUTHERR		0x80000000  /* Authentication error */
+#define	NFSMNT_NOLOCKS		0x00040000  /* don't support file locking */
+
+#define NFSSTA_TIMEO		0x00010000  /* experienced a timeout. */
+#define NFSSTA_FORCE		0x00020000  /* doing a forced unmount. */
+#define NFSSTA_HASWRITEVERF	0x00040000  /* Has write verifier for V3 */
+#define NFSSTA_GOTPATHCONF	0x00080000  /* Got the V3 pathconf info */
+#define NFSSTA_GOTFSINFO	0x00100000  /* Got the V3 fsinfo */
+#define	NFSSTA_MNTD		0x00200000  /* Mnt server for mnt point */
+#define	NFSSTA_DISMINPROG	0x00400000  /* Dismount in progress */
+#define	NFSSTA_DISMNT		0x00800000  /* Dismounted */
+#define	NFSSTA_SNDLOCK		0x01000000  /* Send socket lock */
+#define	NFSSTA_WANTSND		0x02000000  /* Want above */
+#define	NFSSTA_RCVLOCK		0x04000000  /* Rcv socket lock */
+#define	NFSSTA_WANTRCV		0x08000000  /* Want above */
+#define	NFSSTA_WAITAUTH		0x10000000  /* Wait for authentication */
+#define	NFSSTA_HASAUTH		0x20000000  /* Has authenticator */
+#define	NFSSTA_WANTAUTH		0x40000000  /* Wants an authenticator */
+#define	NFSSTA_AUTHERR		0x80000000  /* Authentication error */
 
 /*
  * Structures for the nfssvc(2) syscall. Not that anyone but nfsd and mount_nfs
@@ -311,6 +311,13 @@ struct nfsstats {
 #define	NFSSVC_MNTD	0x100
 
 /*
+ * Flags for nfsclnt() system call.
+ */
+#define NFSCLNT_LOCKDANS	0x200
+#define NFSCLNT_LOCKDFD		0x400
+#define NFSCLNT_LOCKDWAIT	0x800
+
+/*
  * fs.nfs sysctl(3) identifiers
  */
 #define NFS_NFSSTATS	1		/* struct: struct nfsstats */
@@ -350,7 +357,8 @@ MALLOC_DECLARE(M_NFSD);
 MALLOC_DECLARE(M_NFSBIGFH);
 #endif
 
-struct uio; struct buf; struct vattr; struct nameidata;	/* XXX */
+struct uio; struct vattr; struct nameidata;	/* XXX */
+struct nfsbuf;
 
 #define	NFSINT_SIGMASK	(sigmask(SIGINT)|sigmask(SIGTERM)|sigmask(SIGKILL)| \
 			 sigmask(SIGHUP)|sigmask(SIGQUIT))
@@ -361,7 +369,7 @@ struct uio; struct buf; struct vattr; struct nameidata;	/* XXX */
  */
 #define	NFSIGNORE_SOERROR(s, e) \
 		((e) != EINTR && (e) != ERESTART && (e) != EWOULDBLOCK && \
-		((s) & PR_CONNREQUIRED) == 0)
+		 (e) != EIO && ((s) & PR_CONNREQUIRED) == 0)
 
 /*
  * Nfs outstanding request list element
@@ -382,6 +390,7 @@ struct nfsreq {
 	u_int32_t	r_procnum;	/* NFS procedure number */
 	int		r_rtt;		/* RTT for rpc */
 	struct proc	*r_procp;	/* Proc that did I/O system call */
+	long		r_lastmsg;	/* time of last tprintf */
 };
 
 /*
@@ -390,14 +399,17 @@ struct nfsreq {
 extern TAILQ_HEAD(nfs_reqq, nfsreq) nfs_reqq;
 
 /* Flag values for r_flags */
-#define R_TIMING	0x01		/* timing request (in mntp) */
-#define R_SENT		0x02		/* request has been sent */
-#define	R_SOFTTERM	0x04		/* soft mnt, too many retries */
-#define	R_INTR		0x08		/* intr mnt, signal pending */
-#define	R_SOCKERR	0x10		/* Fatal error on socket */
-#define	R_TPRINTFMSG	0x20		/* Did a tprintf msg. */
-#define	R_MUSTRESEND	0x40		/* Must resend request */
-#define	R_GETONEREP	0x80		/* Probe for one reply only */
+#define R_TIMING	0x0001		/* timing request (in mntp) */
+#define R_SENT		0x0002		/* request has been sent */
+#define R_SOFTTERM	0x0004		/* soft mnt, too many retries */
+#define R_INTR		0x0008		/* intr mnt, signal pending */
+#define R_SOCKERR	0x0010		/* Fatal error on socket */
+#define R_TPRINTFMSG	0x0020		/* Did a tprintf msg. */
+#define R_MUSTRESEND	0x0040		/* Must resend request */
+#define R_GETONEREP	0x0080		/* Probe for one reply only */
+#define R_BUSY		0x0100		/* Locked. */
+#define R_WAITING	0x0200		/* Someone waiting for lock. */
+#define R_RESENDERR	0x0400		/* resend failed. */
 
 /*
  * A list of nfssvc_sock structures is maintained with all the sockets
@@ -464,7 +476,8 @@ struct nfssvc_sock {
 	struct mbuf	*ns_rec;
 	struct mbuf	*ns_recend;
 	struct mbuf	*ns_frag;
-	int		ns_flag;
+	short		ns_flag;	/* modified under kernel funnel */
+	short		ns_nflag;	/* modified under network funnel */
 	int		ns_solock;
 	int		ns_cc;
 	int		ns_reclen;
@@ -475,14 +488,14 @@ struct nfssvc_sock {
 	LIST_HEAD(nfsrvw_delayhash, nfsrv_descript) ns_wdelayhashtbl[NFS_WDELAYHASHSIZ];
 };
 
-/* Bits for "ns_flag" */
-#define	SLP_VALID	0x01
-#define	SLP_DOREC	0x02
-#define	SLP_NEEDQ	0x04
-#define	SLP_DISCONN	0x08
-#define	SLP_GETSTREAM	0x10
-#define	SLP_LASTFRAG	0x20
-#define SLP_ALLFLAGS	0xff
+/* Bits for "ns_*flag" */
+#define	SLP_VALID	0x01 /* ns_flag */
+#define	SLP_DOREC	0x02 /* ns_flag */
+#define	SLPN_NEEDQ	0x04 /* ns_nflag */
+#define	SLPN_DISCONN	0x08 /* ns_nflag */
+#define	SLPN_GETSTREAM	0x10 /* ns_nflag */
+#define	SLPN_LASTFRAG	0x20 /* ns_nflag */
+#define SLP_ALLFLAGS	0xff /* ns_flag && ns_nflag */
 
 extern TAILQ_HEAD(nfssvc_sockhead, nfssvc_sock) nfssvc_sockhead;
 extern int nfssvc_sockhead_flag;
@@ -620,8 +633,10 @@ int	nfs_send __P((struct socket *, struct mbuf *, struct mbuf *,
 int	nfs_rephead __P((int, struct nfsrv_descript *, struct nfssvc_sock *,
 			 int, int, u_quad_t *, struct mbuf **, struct mbuf **,
 			 caddr_t *));
-int	nfs_sndlock __P((int *, struct nfsreq *));
-void	nfs_sndunlock __P((int *flagp));
+int	nfs_sndlock __P((struct nfsreq *));
+void	nfs_sndunlock __P((struct nfsreq *));
+int	nfs_slplock __P((struct nfssvc_sock *, int));
+void	nfs_slpunlock __P((struct nfssvc_sock *));
 int	nfs_disct __P((struct mbuf **, caddr_t *, int, int, caddr_t *));
 int	nfs_vinvalbuf __P((struct vnode *, int, struct ucred *, struct proc *,
 			   int));
@@ -629,8 +644,8 @@ int	nfs_readrpc __P((struct vnode *, struct uio *, struct ucred *));
 int	nfs_writerpc __P((struct vnode *, struct uio *, struct ucred *, int *, 
 			  int *));
 int	nfs_readdirrpc __P((struct vnode *, struct uio *, struct ucred *));
-int	nfs_asyncio __P((struct buf *, struct ucred *));
-int	nfs_doio __P((struct buf *, struct ucred *, struct proc *));
+int	nfs_asyncio __P((struct nfsbuf *, struct ucred *));
+int	nfs_doio __P((struct nfsbuf *, struct ucred *, struct proc *));
 int	nfs_readlinkrpc __P((struct vnode *, struct uio *, struct ucred *));
 int	nfs_sigintr __P((struct nfsmount *, struct nfsreq *, struct proc *));
 int	nfs_readdirplusrpc __P((struct vnode *, struct uio *, struct ucred *));
@@ -678,11 +693,14 @@ int	nfs_bioread __P((struct vnode *, struct uio *, int, struct ucred *,
 			 int));
 int	nfsm_uiotombuf __P((struct uio *, struct mbuf **, int, caddr_t *));
 void	nfsrv_init __P((int));
+int	nfs_commit __P((struct vnode *vp, u_quad_t offset, int cnt,
+			struct ucred *cred, struct proc *procp));
+int	nfs_flushcommits(struct vnode *, struct proc *);
 void	nfs_clearcommit __P((struct mount *));
 int	nfsrv_errmap __P((struct nfsrv_descript *, int));
 void	nfsrvw_sort __P((gid_t *, int));
 void	nfsrv_setcred __P((struct ucred *, struct ucred *));
-int	nfs_writebp __P((struct buf *, int));
+int	nfs_buf_write __P((struct nfsbuf *));
 int	nfsrv_object_create __P((struct vnode *));
 void	nfsrv_wakenfsd __P((struct nfssvc_sock *slp));
 int	nfsrv_writegather __P((struct nfsrv_descript **, struct nfssvc_sock *,
@@ -842,8 +860,8 @@ extern uint nfstracemask; /* 32 bits - trace points over 31 are unconditional */
 
 #else	/* NFSDIAG */
 
-	#define NFSTRACE(cnst, fptr)
-	#define NFSTRACE4(cnst, fptr, a2, a3, a4)
+#	define NFSTRACE(cnst, fptr)
+#	define NFSTRACE4(cnst, fptr, a2, a3, a4)
 
 #endif	/* NFSDIAG */
 

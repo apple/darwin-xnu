@@ -91,7 +91,7 @@ int kern_invalid_debug = 0;
 
 extern kern_return_t iokit_user_client_trap();
 
-mach_trap_t	mach_trap_table[] = {
+mach_trap_t	mach_trap_table[MACH_TRAP_TABLE_COUNT] = {
 	MACH_TRAP(kern_invalid, 0),			/* 0 */		/* Unix */
 	MACH_TRAP(kern_invalid, 0),			/* 1 */		/* Unix */
 	MACH_TRAP(kern_invalid, 0),			/* 2 */		/* Unix */
@@ -144,8 +144,8 @@ mach_trap_t	mach_trap_table[] = {
 	MACH_TRAP(macx_swapoff, 2),			/* 49 */
 	MACH_TRAP(kern_invalid, 0),			/* 50 */
 	MACH_TRAP(macx_triggers, 4),			/* 51 */
-	MACH_TRAP(kern_invalid, 0),			/* 52 */
-	MACH_TRAP(kern_invalid, 0),			/* 53 */
+	MACH_TRAP(macx_backing_store_suspend, 1),	/* 52 */
+	MACH_TRAP(macx_backing_store_recovery, 1),	/* 53 */
 	MACH_TRAP(kern_invalid, 0),			/* 54 */
 	MACH_TRAP(kern_invalid, 0),			/* 55 */
 	MACH_TRAP(kern_invalid, 0),			/* 56 */

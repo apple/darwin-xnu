@@ -96,33 +96,47 @@
 
 #ifndef KERNEL
 LEAF(_ev_lock)
-	li	a6,1			// lock value
-	lwarx	a7,0,a0			// CEMV10
-9:
-	sync
-	lwarx	a7,0,a0			// read the lock
-	cmpwi	cr0,a7,0		// is it busy?
-	bne-	9b 			// yes, spin
-	sync
-	stwcx.	a6,0,a0			// try to get the lock
-	bne-	9b 			// failed, try again
-	isync
-	blr				// got it, return
+
+		li		a6,1			// lock value
+		
+8:		lwz		a7,0(a0)		// Get lock word
+		mr.		a7,a7			// Is it held?
+		bne--	8b				// Yup...
+
+9:		lwarx	a7,0,a0			// read the lock
+		mr.		a7,a7			// Is it held?
+		bne--	7f				// yes, kill reservation
+		stwcx.	a6,0,a0			// try to get the lock
+		bne--	9b 				// failed, try again
+		isync
+		blr						// got it, return
+		
+7:		li		a7,-4			// Point to a spot in the red zone
+		stwcx.	a7,a7,r1		// Kill reservation
+		b		8b				// Go wait some more...
+		
+		
 END(_ev_lock)
 
 LEAF(_IOSpinLock)
-	li	a6,1			// lock value
-	lwarx	a7,0,a0			// CEMV10
-9:
-	sync
-	lwarx	a7,0,a0			// read the lock
-	cmpwi	cr0,a7,0		// is it busy?
-	bne-	9b			// yes, spin
-	sync
-	stwcx.	a6,0,a0			// try to get the lock
-	bne-	9b			// failed, try again
-	isync
-	blr				// got it, return
+
+		li		a6,1			// lock value
+		
+8:		lwz		a7,0(a0)		// Get lock word
+		mr.		a7,a7			// Is it held?
+		bne--	8b				// Yup...
+
+9:		lwarx	a7,0,a0			// read the lock
+		mr.		a7,a7			// Is it held?
+		bne--	7f				// yes, kill reservation
+		stwcx.	a6,0,a0			// try to get the lock
+		bne--	9b 				// failed, try again
+		isync
+		blr						// got it, return
+		
+7:		li		a7,-4			// Point to a spot in the red zone
+		stwcx.	a7,a7,r1		// Kill reservation
+		b		8b				// Go wait some more...
 END(_IOSpinLock)
 #endif
 
@@ -159,45 +173,61 @@ END(_IOSpinUnlock)
  */
 
 LEAF(_ev_try_lock)
-	li	a6,1			// lock value
-        DISABLE_PREEMPTION()
-	lwarx	a7,0,a0			// CEMV10
-8:
-	sync
-	lwarx	a7,0,a0			// read the lock
-	cmpwi	cr0,a7,0		// is it busy?
-	bne-	9f			// yes, give up
-	sync
-	stwcx.	a6,0,a0			// try to get the lock
-	bne-	8b			// failed, try again
-	li	a0,1			// return TRUE
-	isync
-	blr
-9:
-	ENABLE_PREEMPTION()
-	li	a0,0			// return FALSE
-	blr
+	
+		DISABLE_PREEMPTION()
+
+		li		a6,1			// lock value
+		
+		lwz		a7,0(a0)		// Get lock word
+		mr.		a7,a7			// Is it held?
+		bne--	6f				// Yup...
+
+9:		lwarx	a7,0,a0			// read the lock
+		mr.		a7,a7			// Is it held?
+		bne--	7f				// yes, kill reservation
+		stwcx.	a6,0,a0			// try to get the lock
+		bne--	9b 				// failed, try again
+		li		a0,1			// return TRUE
+		isync
+		blr						// got it, return
+		
+7:		li		a7,-4			// Point to a spot in the red zone
+		stwcx.	a7,a7,r1		// Kill reservation
+
+6:
+		ENABLE_PREEMPTION()
+		li	a0,0				// return FALSE
+		blr
+		
 END(_ev_try_lock)
 
 LEAF(_IOTrySpinLock)
-	li	a6,1			// lock value
-        DISABLE_PREEMPTION()
-	lwarx	a7,0,a0			// CEMV10
-8:
-	sync
-	lwarx	a7,0,a0			// read the lock
-	cmpwi	cr0,a7,0		// is it busy?
-	bne-	9f			// yes, give up
-	sync
-	stwcx.	a6,0,a0			// try to get the lock
-	bne-	8b			// failed, try again
-	li	a0,1			// return TRUE
-	isync
-	blr
-9:
-	ENABLE_PREEMPTION()
-	li	a0,0			// return FALSE
-	blr
+	
+		DISABLE_PREEMPTION()
+
+		li		a6,1			// lock value
+		
+		lwz		a7,0(a0)		// Get lock word
+		mr.		a7,a7			// Is it held?
+		bne--	6f				// Yup...
+
+9:		lwarx	a7,0,a0			// read the lock
+		mr.		a7,a7			// Is it held?
+		bne--	7f				// yes, kill reservation
+		stwcx.	a6,0,a0			// try to get the lock
+		bne--	9b 				// failed, try again
+		li		a0,1			// return TRUE
+		isync
+		blr						// got it, return
+		
+7:		li		a7,-4			// Point to a spot in the red zone
+		stwcx.	a7,a7,r1		// Kill reservation
+
+6:
+		ENABLE_PREEMPTION()
+		li	a0,0				// return FALSE
+		blr
+		
 END(_IOTrySpinLock)
 
 #endif /* ! _IOKIT_IOSHAREDLOCKIMP_H */

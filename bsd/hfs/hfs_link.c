@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1999-2002 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 1999-2003 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -116,6 +116,7 @@ hfs_makelink(struct hfsmount *hfsmp, struct cnode *cp, struct cnode *dcp,
 	struct cat_desc to_desc;
 	int newlink = 0;
 	int retval;
+	cat_cookie_t cookie = {0};
 
 
 	/* We don't allow link nodes in our Private Meta Data folder! */
@@ -125,10 +126,15 @@ hfs_makelink(struct hfsmount *hfsmp, struct cnode *cp, struct cnode *dcp,
 	if (hfs_freeblks(hfsmp, 0) == 0)
 		return (ENOSPC);
 
+	/* Reserve some space in the Catalog file. */
+	if ((retval = cat_preflight(hfsmp, (2 * CAT_CREATE)+ CAT_RENAME, &cookie, p))) {
+		return (retval);
+	}
+
 	/* Lock catalog b-tree */
 	retval = hfs_metafilelocking(hfsmp, kHFSCatalogFileID, LK_EXCLUSIVE, p);
 	if (retval) {
-	    return retval;
+	   goto out2;
 	}
 
 	/*
@@ -219,7 +225,8 @@ hfs_makelink(struct hfsmount *hfsmp, struct cnode *cp, struct cnode *dcp,
 out:
 	/* Unlock catalog b-tree */
 	(void) hfs_metafilelocking(hfsmp, kHFSCatalogFileID, LK_RELEASE, p);
-
+out2:
+	cat_postflight(hfsmp, &cookie, p);
 	return (retval);
 }
 
@@ -235,6 +242,7 @@ out:
      IN struct componentname *cnp;
 
      */
+__private_extern__
 int
 hfs_link(ap)
 	struct vop_link_args /* {
@@ -267,7 +275,7 @@ hfs_link(ap)
 	if (VTOVCB(tdvp)->vcbSigWord != kHFSPlusSigWord)
 		return err_link(ap);	/* hfs disks don't support hard links */
 	
-	if (hfsmp->hfs_private_metadata_dir == 0)
+	if (hfsmp->hfs_privdir_desc.cd_cnid == 0)
 		return err_link(ap);	/* no private metadata dir, no links possible */
 
 	if (tdvp != vp && (error = vn_lock(vp, LK_EXCLUSIVE, p))) {
@@ -329,12 +337,22 @@ hfs_link(ap)
 	// XXXdbg - need to do this here as well because cp could have changed
 	error = VOP_UPDATE(vp, &tv, &tv, 1);
 
-	FREE_ZONE(cnp->cn_pnbuf, cnp->cn_pnlen, M_NAMEI);
 
 	if (hfsmp->jnl) {
 	    journal_end_transaction(hfsmp->jnl);
 	}
 	hfs_global_shared_lock_release(hfsmp);
+
+	/* free the pathname buffer */
+	{
+		char *tmp = cnp->cn_pnbuf;
+		cnp->cn_pnbuf = NULL;
+		cnp->cn_flags &= ~HASBUF;
+		FREE_ZONE(tmp, cnp->cn_pnlen, M_NAMEI);
+	}
+	
+	HFS_KNOTE(vp, NOTE_LINK);
+	HFS_KNOTE(tdvp, NOTE_WRITE);
 
 out1:
 	if (tdvp != vp)

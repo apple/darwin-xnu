@@ -85,7 +85,7 @@
  */
 
 #ifndef	DB_MAX_LINE
-#define	DB_MAX_LINE		24	/* maximum line */
+#define	DB_MAX_LINE		43	/* maximum line */
 #define DB_MAX_WIDTH		132	/* maximum width */
 #endif	/* DB_MAX_LINE */
 
@@ -147,10 +147,6 @@ db_more(void)
 	register  char *p;
 	boolean_t quit_output = FALSE;
 
-#if defined(__alpha)
-	extern boolean_t kdebug_mode;
-	if (kdebug_mode) return;
-#endif /* defined(__alpha) */
 	for (p = "--db_more--"; *p; p++)
 	    cnputc(*p);
 	switch(cngetc()) {
@@ -292,9 +288,6 @@ db_printf(char *fmt, ...)
 {
 	va_list	listp;
 
-#ifdef	luna88k
-	db_printing();
-#endif
 	va_start(listp, fmt);
 	_doprnt(fmt, &listp, db_putchar, db_radix);
 	va_end(listp);
@@ -343,9 +336,7 @@ void
 db_output_prompt(void)
 {
 	db_printf("db%s", (db_default_act) ? "t": "");
-#if	NCPUS > 1
 	db_printf("{%d}", cpu_number());
-#endif
 	db_printf("> ");
 }
 

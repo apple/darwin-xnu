@@ -138,8 +138,10 @@ static int psem_select  __P((struct file *fp, int which, void *wql,
 			    struct proc *p));
 static int psem_closefile  __P((struct file *fp, struct proc *p));
 
+static int psem_kqfilter  __P((struct file *fp, struct knote *kn, struct proc *p));
+
 struct 	fileops psemops =
-	{ psem_read, psem_write, psem_ioctl, psem_select, psem_closefile };
+	{ psem_read, psem_write, psem_ioctl, psem_select, psem_closefile, psem_kqfilter };
 
 /*
  * Lookup an entry in the cache 
@@ -310,7 +312,7 @@ sem_open(p, uap, retval)
 	register struct filedesc *fdp = p->p_fd;
 	register struct file *fp;
 	register struct vnode *vp;
-	int flags, i;
+	int i;
 	struct file *nfp;
 	int type, indx, error;
 	struct psemname nd;
@@ -334,7 +336,7 @@ sem_open(p, uap, retval)
 	MALLOC_ZONE(pnbuf, caddr_t,
 			MAXPATHLEN, M_NAMEI, M_WAITOK);
 	pathlen = MAXPATHLEN;
-	error = copyinstr(uap->name, pnbuf,
+	error = copyinstr((void *)uap->name, pnbuf,
 		MAXPATHLEN, &pathlen);
 	if (error) {
 		goto bad;
@@ -446,13 +448,13 @@ sem_open(p, uap, retval)
 	pinfo->psem_flags &= ~PSEM_INCREATE;
 	pinfo->psem_usecount++;
 	pnode->pinfo = pinfo;
-	fp->f_flag = flags & FMASK;
+	fp->f_flag = fmode & FMASK;
 	fp->f_type = DTYPE_PSXSEM;
 	fp->f_ops = &psemops;
 	fp->f_data = (caddr_t)pnode;
 	*fdflags(p, indx) &= ~UF_RESERVED;
 	*retval = indx;
-	_FREE_ZONE(pnbuf, MAXPATHLEN, M_NAMEI);
+	FREE_ZONE(pnbuf, MAXPATHLEN, M_NAMEI);
 	return (0);
 
 bad3:
@@ -473,7 +475,7 @@ bad1:
 	fdrelse(p, indx);
 	ffree(nfp);
 bad:
-	_FREE_ZONE(pnbuf, MAXPATHLEN, M_NAMEI);
+	FREE_ZONE(pnbuf, MAXPATHLEN, M_NAMEI);
 	return (error);
 }
 
@@ -553,7 +555,7 @@ sem_unlink(p, uap, retval)
 	MALLOC_ZONE(pnbuf, caddr_t,
 			MAXPATHLEN, M_NAMEI, M_WAITOK);
 	pathlen = MAXPATHLEN;
-	error = copyinstr(uap->name, pnbuf,
+	error = copyinstr((void *)uap->name, pnbuf,
 		MAXPATHLEN, &pathlen);
 	if (error) {
 		goto bad;
@@ -624,7 +626,7 @@ sem_unlink(p, uap, retval)
 	_FREE(pcache, M_SHM);
 	error = 0;
 bad:
-	_FREE_ZONE(pnbuf, MAXPATHLEN, M_NAMEI);
+	FREE_ZONE(pnbuf, MAXPATHLEN, M_NAMEI);
 	return (error);
 }
 
@@ -943,3 +945,13 @@ psem_select(fp, which, wql, p)
 {
 	return(EOPNOTSUPP);
 }
+
+static int
+psem_kqfilter(fp, kn, p)
+	struct file *fp;
+	struct knote *kn;
+	struct proc *p;
+{
+	return (EOPNOTSUPP);
+}
+

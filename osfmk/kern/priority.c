@@ -111,6 +111,8 @@ thread_quantum_expire(
 				thread->sched_mode &= ~TH_MODE_REALTIME;
 			}
 
+			pset_share_incr(thread->processor_set);
+
 			thread->safe_release = sched_tick + sched_safe_duration;
 			thread->sched_mode |= (TH_MODE_FAILSAFE|TH_MODE_TIMESHARE);
 			thread->sched_mode &= ~TH_MODE_PREEMPT;
@@ -141,11 +143,10 @@ thread_quantum_expire(
 	/*
 	 *	This quantum is up, give this thread another.
 	 */
-	if (first_quantum(myprocessor))
-		myprocessor->slice_quanta--;
+	if (first_timeslice(myprocessor))
+		myprocessor->timeslice--;
 
-	thread->current_quantum = (thread->sched_mode & TH_MODE_REALTIME)?
-									thread->realtime.computation: std_quantum;
+	thread_quantum_init(thread);
 	myprocessor->quantum_end += thread->current_quantum;
 	timer_call_enter1(&myprocessor->quantum_timer,
 							thread, myprocessor->quantum_end);

@@ -28,7 +28,7 @@ include $(MakeInc_def)
 #
 # -D_KERNEL_BUILD -DKERNEL_BUILD -DARCH_PRIVATE -DBSD_BUILD -DMACH_KERNEL
 #
-CFLAGS+= -DPEXPERT_KERNEL_PRIVATE -DKERNEL -DDRIVER_PRIVATE -DNCPUS=1			\
+CFLAGS+= -DPEXPERT_KERNEL_PRIVATE -DKERNEL -DDRIVER_PRIVATE 	\
 	-Wall -Wno-four-char-constants -fno-common		\
 	-DRelease3CompatibilityBuild
 
@@ -89,7 +89,7 @@ LDOBJS = $(OBJS)
 $(COMPONENT).o: $(LDOBJS)
 	@echo "creating $(COMPONENT).o"
 	$(RM) $(RMFLAGS) vers.c
-	$(OBJROOT)/$(KERNEL_CONFIG)_$(ARCH_CONFIG)/$(COMPONENT)/newvers \
+	$(COMPOBJROOT)/newvers \
 	`$(CAT) ${VERSION_FILES}` ${COPYRIGHT_FILES}
 	${KCC} $(CFLAGS) $(INCLUDES) -c vers.c
 	@echo [ updating $(COMPONENT).o ${PEXPERT_KERNEL_CONFIG} ]

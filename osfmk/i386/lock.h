@@ -286,27 +286,6 @@ extern void bit_unlock(
 
 #endif	/* !defined(__GNUC__) */
 
-
-#if	!(USLOCK_DEBUG || USLOCK_STATS)
-/*
- *	Take responsibility for production-quality usimple_locks.
- *	Let the portable lock package build simple_locks in terms
- *	of usimple_locks, which is done efficiently with macros.
- *	Currently, these aren't inlined although they probably
- *	should be.  The portable lock package is used for the
- *	usimple_lock prototypes and data declarations.
- *
- *	For non-production configurations, punt entirely to the
- *	portable lock package.
- *
- *	N.B.  I've left in the hooks for ETAP, so we can
- *	compare the performance of stats-gathering on top
- *	of "production" locks v. stats-gathering on top
- *	of portable, C-based locks.
- */
-#define	USIMPLE_LOCK_CALLS
-#endif	/* !(USLOCK_DEBUG || USLOCK_STATS) */
-
 extern void		kernel_preempt_check (void);
 
 #endif /* MACH_KERNEL_PRIVATE */

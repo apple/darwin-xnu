@@ -40,7 +40,8 @@
 .Nm getdirentries
 .Nd "get directory entries in a filesystem independent format"
 .Sh SYNOPSIS
-.Fd #include <dirent.h>
+.Fd #include <sys/types.h>
+.Fd #include <sys/dirent.h>
 .Ft int
 .Fn getdirentries "int fd" "char *buf" "int nbytes" "long *basep"
 .Sh DESCRIPTION
@@ -67,9 +68,10 @@ The data in the buffer is a series of
 .Em dirent
 structures each containing the following entries:
 .Bd -literal -offset indent
-unsigned long	d_fileno;
-unsigned short	d_reclen;
-unsigned short	d_namlen;
+u_int32_t	d_fileno;             /* file number of entry */
+u_int16_t	d_reclen;             /* length of this record */
+u_int8_t	d_type;               /* file type, see below */
+u_int8_t	d_namlen;             /* length of string in d_name */
 char    	d_name[MAXNAMELEN + 1]; /* see below */
 .Ed
 .Pp
@@ -81,6 +83,12 @@ Files that are linked by hard links (see
 .Xr link 2 )
 have the same
 .Fa d_fileno .
+Users of 
+.Fn getdirentries
+should skip 
+entries with 
+.Fa d_fileno 
+= 0, as such entries represent files which have been deleted but not yet removed from the directory entry.
 The
 .Fa d_reclen
 entry is the length, in bytes, of the directory record.
@@ -95,6 +103,20 @@ Thus the actual size of
 may vary from 1 to
 .Dv MAXNAMELEN
 \&+ 1.
+.Fa d_type
+is a integer representing the type of the directory entry.  The following types are defined in 
+.Aq sys/dirent.h :
+.Bd -literal -offset indent
+#define DT_UNKNOWN       0
+#define DT_FIFO          1
+#define DT_CHR           2
+#define DT_DIR           4
+#define DT_BLK           6
+#define DT_REG           8
+#define DT_LNK          10
+#define DT_SOCK         12
+#define DT_WHT          14
+.Ed
 .Pp
 Entries may be separated by extra space.
 The

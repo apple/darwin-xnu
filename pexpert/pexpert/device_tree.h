@@ -1,3 +1,4 @@
+
 /*
  * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
  *
@@ -25,6 +26,13 @@
 #ifndef _PEXPERT_DEVICE_TREE_H_
 #define _PEXPERT_DEVICE_TREE_H_
 
+#include <sys/appleapiopts.h>
+
+#ifdef __APPLE_API_PRIVATE
+
+#ifdef __cplusplus
+extern "C" {
+#endif
 
 /*
 -------------------------------------------------------------------------------
@@ -239,7 +247,12 @@ extern int DTIterateProperties(DTPropertyIterator iterator,
 
 extern int DTRestartPropertyIteration(DTPropertyIterator iterator);
 
+#ifdef __cplusplus
+}
+#endif
 
 #endif /* __MWERKS__ */
+
+#endif /* __APPLE_API_PRIVATE */
 
 #endif /* _PEXPERT_DEVICE_TREE_H_ */

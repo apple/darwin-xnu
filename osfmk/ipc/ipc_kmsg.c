@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2003 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -90,6 +90,12 @@
 #include <ipc/ipc_table.h>
 
 #include <string.h>
+
+#ifdef ppc
+#include <ppc/Firmware.h>
+#include <ppc/low_trace.h>
+#endif
+
 
 extern vm_map_t		ipc_kernel_copy_map;
 extern vm_size_t	ipc_kmsg_max_vm_space;
@@ -650,7 +656,7 @@ ipc_kmsg_get(
 {
 	mach_msg_size_t			msg_and_trailer_size;
 	ipc_kmsg_t 			kmsg;
-	mach_msg_format_0_trailer_t 	*trailer;
+	mach_msg_max_trailer_t	 	*trailer;
 	mach_port_name_t		dest_name;
 	ipc_entry_t			dest_entry;
 	ipc_port_t			dest_port;
@@ -678,11 +684,17 @@ ipc_kmsg_get(
 	 * is initialized to the minimum (sizeof(mach_msg_trailer_t)), to optimize
 	 * the cases where no implicit data is requested.
 	 */
-	trailer = (mach_msg_format_0_trailer_t *) ((vm_offset_t)&kmsg->ikm_header + size);
-	trailer->msgh_sender = current_thread()->top_act->task->sec_token;
+	trailer = (mach_msg_max_trailer_t *) ((vm_offset_t)&kmsg->ikm_header + size);
+	trailer->msgh_sender = current_act()->task->sec_token;
+	trailer->msgh_audit = current_act()->task->audit_token;
 	trailer->msgh_trailer_type = MACH_MSG_TRAILER_FORMAT_0;
 	trailer->msgh_trailer_size = MACH_MSG_TRAILER_MINIMUM_SIZE;
-
+	
+#ifdef ppc
+	if(trcWork.traceMask) dbgTrace((unsigned int)kmsg->ikm_header.msgh_id, 
+		(unsigned int)kmsg->ikm_header.msgh_remote_port, 
+		(unsigned int)kmsg->ikm_header.msgh_local_port, 0); 
+#endif
 	*kmsgp = kmsg;
 	return MACH_MSG_SUCCESS;
 }
@@ -709,7 +721,7 @@ ipc_kmsg_get_from_kernel(
 {
 	ipc_kmsg_t 	kmsg;
 	mach_msg_size_t	msg_and_trailer_size;
-	mach_msg_format_0_trailer_t *trailer;
+	mach_msg_max_trailer_t *trailer;
 	ipc_port_t	dest_port;
 
 	assert(size >= sizeof(mach_msg_header_t));
@@ -759,9 +771,10 @@ ipc_kmsg_get_from_kernel(
 	 * is initialized to the minimum (sizeof(mach_msg_trailer_t)), to
 	 * optimize the cases where no implicit data is requested.
 	 */
-	trailer = (mach_msg_format_0_trailer_t *) 
+	trailer = (mach_msg_max_trailer_t *) 
 	          ((vm_offset_t)&kmsg->ikm_header + size);
 	trailer->msgh_sender = KERNEL_SECURITY_TOKEN;
+	trailer->msgh_audit = KERNEL_AUDIT_TOKEN;
 	trailer->msgh_trailer_type = MACH_MSG_TRAILER_FORMAT_0;
 	trailer->msgh_trailer_size = MACH_MSG_TRAILER_MINIMUM_SIZE;
 
@@ -1394,7 +1407,7 @@ ipc_kmsg_copyin_body(
 		      	 * Out-of-line memory descriptor, accumulate kernel
 		      	 * memory requirements
 		      	 */
-		    	space_needed += round_page(sstart->out_of_line.size);
+		    	space_needed += round_page_32(sstart->out_of_line.size);
 		    	if (space_needed > ipc_kmsg_max_vm_space) {
 
 			    	/*
@@ -1501,7 +1514,7 @@ ipc_kmsg_copyin_body(
 			 */
 			if (!page_aligned(length)) {
 				(void) memset((void *) (paddr + length), 0,
-					round_page(length) - length);
+					round_page_32(length) - length);
 			}
 			if (vm_map_copyin(ipc_kernel_copy_map, paddr, length,
 					   TRUE, &copy) != KERN_SUCCESS) {
@@ -1510,8 +1523,8 @@ ipc_kmsg_copyin_body(
 			    return MACH_MSG_VM_KERNEL;
 		        }
 			dsc->address = (void *) copy;
-			paddr += round_page(length);
-			space_needed -= round_page(length);
+			paddr += round_page_32(length);
+			space_needed -= round_page_32(length);
 		} else {
 
 			/*
@@ -1594,9 +1607,8 @@ ipc_kmsg_copyin_body(
 
 			for(k = 0; k < j; k++) {
 			    object = objects[k];
-		    	    if (!MACH_PORT_VALID(port))
-			 	continue;
-		    	    ipc_object_destroy(object, dsc->disposition);
+		    	    if (IPC_OBJECT_VALID(object))
+		    	    	ipc_object_destroy(object, dsc->disposition);
 			}
 			kfree(data, length);
 			ipc_kmsg_clean_partial(kmsg, i, paddr, space_needed);

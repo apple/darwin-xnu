@@ -93,6 +93,13 @@
 #define DBG_FNC_TCP_FAST	NETDBG_CODE(DBG_NETTCP, (5 << 8))
 #define DBG_FNC_TCP_SLOW	NETDBG_CODE(DBG_NETTCP, (5 << 8) | 1)
 
+/*
+ * NOTE - WARNING
+ *
+ *
+ * 
+ *
+ */
 static int
 sysctl_msec_to_ticks SYSCTL_HANDLER_ARGS
 {
@@ -360,6 +367,10 @@ tcp_timers(tp, timer)
 	struct socket *so_tmp;
 	struct tcptemp *t_template;
 
+#if TCPDEBUG
+	int ostate;
+#endif
+
 #if INET6
 	int isipv6 = (tp->t_inpcb->inp_vflag & INP_IPV4) == 0;
 #endif /* INET6 */
@@ -537,7 +548,7 @@ tcp_timers(tp, timer)
 		if ((always_keepalive ||
 		    tp->t_inpcb->inp_socket->so_options & SO_KEEPALIVE) &&
 		    tp->t_state <= TCPS_CLOSING) {
-		    	if (tp->t_rcvtime >= tcp_keepidle + tcp_maxidle)
+		    	if (tp->t_rcvtime >= TCP_KEEPIDLE(tp) + tcp_maxidle)
 				goto dropit;
 			/*
 			 * Send a packet designed to force a response
@@ -561,7 +572,7 @@ tcp_timers(tp, timer)
 			}
 			tp->t_timer[TCPT_KEEP] = tcp_keepintvl;
 		} else
-			tp->t_timer[TCPT_KEEP] = tcp_keepidle;
+			tp->t_timer[TCPT_KEEP] = TCP_KEEPIDLE(tp);
 		break;
 
 #if TCPDEBUG

@@ -158,13 +158,23 @@ struct upl {
 #define UPL_PAGE_SYNC_DONE	0x20
 #define UPL_DEVICE_MEMORY	0x40
 #define UPL_PAGEOUT		0x80
+#define UPL_LITE		0x100
+#define UPL_IO_WIRE		0x200
 
 #define	UPL_PAGE_TICKET_MASK	0xF00
 #define UPL_PAGE_TICKET_SHIFT	8
 
 
 
+/* flags for upl_create flags parameter */
+#define UPL_CREATE_EXTERNAL	0
+#define UPL_CREATE_INTERNAL	0x1
+#define UPL_CREATE_LITE		0x2
 
+
+
+/* wired  page list structure */
+typedef unsigned long *wpl_array_t;
 
 	 
 

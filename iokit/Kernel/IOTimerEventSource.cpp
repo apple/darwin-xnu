@@ -106,7 +106,7 @@ IOTimerEventSource::timerEventSource(OSObject *inOwner, Action inAction)
     IOTimerEventSource *me = new IOTimerEventSource;
 
     if (me && !me->init(inOwner, inAction)) {
-        me->free();
+        me->release();
         return 0;
     }
 

@@ -45,6 +45,7 @@
 #include <kern/lock.h>
 #include <kern/host.h>
 #include <kern/spl.h>
+#include <kern/sched_prim.h>
 #include <kern/thread.h>
 #include <kern/thread_swap.h>
 #include <kern/ipc_host.h>
@@ -55,8 +56,6 @@
 #include <mach/mach_syscalls.h>
 #include <mach/clock_reply.h>
 #include <mach/mach_time.h>
-
-#include <kern/mk_timer.h>
 
 /*
  * Exported interface
@@ -74,11 +73,11 @@ static long					alrm_seqno;		/* uniquely identifies alarms */
 static thread_call_data_t	alarm_deliver;
 
 decl_simple_lock_data(static,calend_adjlock)
-static int64_t				calend_adjtotal;
-static uint32_t				calend_adjdelta;
 
 static timer_call_data_t	calend_adjcall;
 static uint64_t				calend_adjinterval, calend_adjdeadline;
+
+static thread_call_data_t	calend_wakecall;
 
 /* backwards compatibility */
 int             hz = HZ;                /* GET RID OF THIS !!! */
@@ -110,9 +109,14 @@ void	clock_alarm_deliver(
 			thread_call_param_t		p1);
 
 static
-void	clock_calend_adjust(
+void	calend_adjust_call(
 			timer_call_param_t	p0,
 			timer_call_param_t	p1);
+
+static
+void	calend_dowakeup(
+			thread_call_param_t		p0,
+			thread_call_param_t		p1);
 
 /*
  *	Macros to lock/unlock clock system.
@@ -138,11 +142,17 @@ clock_config(void)
 	if (cpu_number() != master_cpu)
 		panic("clock_config");
 
+	simple_lock_init(&ClockLock, ETAP_MISC_CLOCK);
+	thread_call_setup(&alarm_deliver, clock_alarm_deliver, NULL);
+
+	simple_lock_init(&calend_adjlock, ETAP_MISC_CLOCK);
+	timer_call_setup(&calend_adjcall, calend_adjust_call, NULL);
+
+	thread_call_setup(&calend_wakecall, calend_dowakeup, NULL);
+
 	/*
 	 * Configure clock devices.
 	 */
-	simple_lock_init(&calend_adjlock, ETAP_MISC_CLOCK);
-	simple_lock_init(&ClockLock, ETAP_MISC_CLOCK);
 	for (i = 0; i < clock_count; i++) {
 		clock = &clock_list[i];
 		if (clock->cl_ops) {
@@ -175,6 +185,18 @@ clock_init(void)
 }
 
 /*
+ * Called by machine dependent code
+ * to initialize areas dependent on the
+ * timebase value.  May be called multiple
+ * times during start up.
+ */
+void
+clock_timebase_init(void)
+{
+	sched_timebase_init();
+}
+
+/*
  * Initialize the clock ipc service facility.
  */
 void
@@ -182,8 +204,6 @@ clock_service_create(void)
 {
 	clock_t			clock;
 	register int	i;
-
-	mk_timer_initialize();
 
 	/*
 	 * Initialize ipc clock services.
@@ -196,15 +216,12 @@ clock_service_create(void)
 		}
 	}
 
-	timer_call_setup(&calend_adjcall, clock_calend_adjust, NULL);
-
 	/*
-	 * Initialize clock service alarms.
+	 * Perform miscellaneous late
+	 * initialization.
 	 */
 	i = sizeof(struct alarm);
 	alarm_zone = zinit(i, (4096/i)*i, 10*i, "alarms");
-
-	thread_call_setup(&alarm_deliver, clock_alarm_deliver, NULL);
 }
 
 /*
@@ -294,15 +311,10 @@ clock_set_time(
 	mach_timespec_t	*clock_time;
 	kern_return_t	(*settime)(
 						mach_timespec_t		*clock_time);
-	extern kern_return_t
-					calend_settime(
-						mach_timespec_t		*clock_time);
 
 	if (clock == CLOCK_NULL)
 		return (KERN_INVALID_ARGUMENT);
 	if ((settime = clock->cl_ops->c_settime) == 0)
-		return (KERN_FAILURE);
-	if (settime == calend_settime)
 		return (KERN_FAILURE);
 	clock_time = &new_time;
 	if (BAD_MACH_TIMESPEC(clock_time))
@@ -806,15 +818,6 @@ clock_get_calendar_value(void)
 }
 
 void
-clock_set_calendar_value(
-	mach_timespec_t		value)
-{
-	clock_t				clock = &clock_list[CALENDAR_CLOCK];
-
-	(void) (*clock->cl_ops->c_settime)(&value);
-}
-
-void
 clock_deadline_for_periodic_event(
 	uint64_t			interval,
 	uint64_t			abstime,
@@ -825,14 +828,11 @@ clock_deadline_for_periodic_event(
 	*deadline += interval;
 
 	if (*deadline <= abstime) {
-		*deadline = abstime;
-		clock_get_uptime(&abstime);
-		*deadline += interval;
+		*deadline = abstime + interval;
+		abstime = mach_absolute_time();
 
-		if (*deadline <= abstime) {
-			*deadline = abstime;
-			*deadline += interval;
-		}
+		if (*deadline <= abstime)
+			*deadline = abstime + interval;
 	}
 }
 
@@ -888,94 +888,68 @@ mach_wait_until(
 	return ((wait_result == THREAD_INTERRUPTED)? KERN_ABORTED: KERN_SUCCESS);
 }
 
-int64_t
-clock_set_calendar_adjtime(
-	int64_t					total,
-	uint32_t				delta)
+void
+clock_adjtime(
+	int32_t		*secs,
+	int32_t		*microsecs)
 {
-	int64_t			ototal;
-	spl_t			s;
-
-	s = splclock();
-	simple_lock(&calend_adjlock);
-
-	if (calend_adjinterval == 0)
-		clock_interval_to_absolutetime_interval(10000, NSEC_PER_USEC,
-														&calend_adjinterval);
-
-	ototal = calend_adjtotal;
-
-	if (total != 0) {
-		uint64_t		abstime;
-
-		if (total > 0) {
-			if (delta > total)
-				delta = total;
-		}
-		else {
-			if (delta > -total)
-				delta = -total;
-		}
-
-		calend_adjtotal = total;
-		calend_adjdelta = delta;
-
-		if (calend_adjdeadline >= calend_adjinterval)
-			calend_adjdeadline -= calend_adjinterval;
-		clock_get_uptime(&abstime);
-		clock_deadline_for_periodic_event(calend_adjinterval, abstime,
-														&calend_adjdeadline);
-
-		timer_call_enter(&calend_adjcall, calend_adjdeadline);
-	}
-	else {
-		calend_adjtotal = 0;
-
-		timer_call_cancel(&calend_adjcall);
-	}
-
-	simple_unlock(&calend_adjlock);
-	splx(s);
-
-	return (ototal);
-}
-
-static void
-clock_calend_adjust(
-	timer_call_param_t		p0,
-	timer_call_param_t		p1)
-{
+	uint32_t	interval;
 	spl_t		s;
 
 	s = splclock();
 	simple_lock(&calend_adjlock);
 
-	if (calend_adjtotal > 0) {
-		clock_adjust_calendar((clock_res_t)calend_adjdelta);
-		calend_adjtotal -= calend_adjdelta;
+	interval = clock_set_calendar_adjtime(secs, microsecs);
+	if (interval != 0) {
+		if (calend_adjdeadline >= interval)
+			calend_adjdeadline -= interval;
+		clock_deadline_for_periodic_event(interval, mach_absolute_time(),
+												&calend_adjdeadline);
 
-		if (calend_adjdelta > calend_adjtotal)
-			calend_adjdelta = calend_adjtotal;
+		timer_call_enter(&calend_adjcall, calend_adjdeadline);
 	}
 	else
-	if (calend_adjtotal < 0) {
-		clock_adjust_calendar(-(clock_res_t)calend_adjdelta);
-		calend_adjtotal += calend_adjdelta;
+		timer_call_cancel(&calend_adjcall);
 
-		if (calend_adjdelta > -calend_adjtotal)
-			calend_adjdelta = -calend_adjtotal;
-	}
+	simple_unlock(&calend_adjlock);
+	splx(s);
+}
 
-	if (calend_adjtotal != 0) {
-		uint64_t	abstime;
+static void
+calend_adjust_call(
+	timer_call_param_t		p0,
+	timer_call_param_t		p1)
+{
+	uint32_t	interval;
+	spl_t		s;
 
-		clock_get_uptime(&abstime);
-		clock_deadline_for_periodic_event(calend_adjinterval, abstime,
-														&calend_adjdeadline);
+	s = splclock();
+	simple_lock(&calend_adjlock);
+
+	interval = clock_adjust_calendar();
+	if (interval != 0) {
+		clock_deadline_for_periodic_event(interval, mach_absolute_time(),
+								  				&calend_adjdeadline);
 
 		timer_call_enter(&calend_adjcall, calend_adjdeadline);
 	}
 
 	simple_unlock(&calend_adjlock);
 	splx(s);
+}
+
+void
+clock_wakeup_calendar(void)
+{
+	thread_call_enter(&calend_wakecall);
+}
+
+static void
+calend_dowakeup(
+	thread_call_param_t		p0,
+	thread_call_param_t		p1)
+{
+	void		IOKitResetTime(void);
+
+	IOKitResetTime();
 }

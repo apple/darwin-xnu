@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2002 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -219,6 +219,8 @@ ffs_write(ap)
 	int save_error=0, save_size=0;
 	int blkalloc = 0;
 	int error = 0;
+	int file_extended = 0;
+	int doingdirectory = 0;
 
 #if REV_ENDIAN_FS
 	int rev_endian=0;
@@ -247,6 +249,7 @@ ffs_write(ap)
 	case VLNK:
 		break;
 	case VDIR:
+		doingdirectory = 1;
 		if ((ioflag & IO_SYNC) == 0)
 			panic("ffs_write: nonsync dir write");
 		break;
@@ -277,7 +280,9 @@ ffs_write(ap)
 
 	resid = uio->uio_resid;
 	osize = ip->i_size;
-	flags = ioflag & IO_SYNC ? B_SYNC : 0;
+	flags = 0;
+	if ((ioflag & IO_SYNC) && !((vp)->v_mount->mnt_flag & MNT_ASYNC))
+		flags = B_SYNC;
 
     if (UBCISVALID(vp)) {
 	off_t filesize;
@@ -289,7 +294,6 @@ ffs_write(ap)
 	int fboff;
 	int fblk;
 	int loopcount;
-        int file_extended = 0;
 
 	endofwrite = uio->uio_offset + uio->uio_resid;
 
@@ -304,7 +308,9 @@ ffs_write(ap)
 	/* Go ahead and allocate the block that are going to be written */
 	rsd = uio->uio_resid;
 	local_offset = uio->uio_offset;
-	local_flags = ioflag & IO_SYNC ? B_SYNC : 0;
+	local_flags = 0;
+	if ((ioflag & IO_SYNC) && !((vp)->v_mount->mnt_flag & MNT_ASYNC))
+		local_flags = B_SYNC;
 	local_flags |= B_NOBUFF;
 	
 	first_block = 1;
@@ -400,7 +406,9 @@ ffs_write(ap)
 	}
 	 ip->i_flag |= IN_CHANGE | IN_UPDATE;
     } else {
-	flags = ioflag & IO_SYNC ? B_SYNC : 0;
+	flags = 0;
+	if ((ioflag & IO_SYNC) && !((vp)->v_mount->mnt_flag & MNT_ASYNC))
+		flags = B_SYNC;
 
 	for (error = 0; uio->uio_resid > 0;) {
 		lbn = lblkno(fs, uio->uio_offset);
@@ -436,11 +444,11 @@ ffs_write(ap)
 			byte_swap_dir_out((char *)bp->b_data + blkoffset, xfersize);
 		}
 #endif /* REV_ENDIAN_FS */
-		if (ioflag & IO_SYNC)
+		if (doingdirectory == 0 && (ioflag & IO_SYNC))
 			(void)bwrite(bp);
 		else if (xfersize + blkoffset == fs->fs_bsize) {
 		        bp->b_flags |= B_AGE;
-			bawrite(bp);
+			bdwrite(bp);
 		}
 		else
 			bdwrite(bp);
@@ -456,6 +464,8 @@ ffs_write(ap)
 	 */
 	if (resid > uio->uio_resid && ap->a_cred && ap->a_cred->cr_uid != 0)
 		ip->i_mode &= ~(ISUID | ISGID);
+	if (resid > uio->uio_resid)
+		VN_KNOTE(vp, NOTE_WRITE | (file_extended ? NOTE_EXTEND : 0));
 	if (error) {
 		if (ioflag & IO_UNIT) {
 			(void)VOP_TRUNCATE(vp, osize,
@@ -464,44 +474,9 @@ ffs_write(ap)
 			uio->uio_resid = resid;
 		}
 	} else if (resid > uio->uio_resid && (ioflag & IO_SYNC))
-		error = VOP_UPDATE(vp, &time, &time, 1);
+		error = VOP_UPDATE(vp, (struct timeval *)&time,
+					(struct timeval *)&time, 1);
 	return (error);
-}
-
-/*
- * Vnode op for page read.
- */
-/* ARGSUSED */
-PGRD(ap)
-	struct vop_pgrd_args /* {
-	struct vnode *a_vp;
-	struct uio *a_uio;
-	struct ucred *a_cred;
-	} */ *ap;
-{
-
-#warning ufs_readwrite PGRD need to implement
-return (EOPNOTSUPP);
-
-}
-
-/*
- * Vnode op for page read.
- */
-/* ARGSUSED */
-PGWR(ap)
-	struct vop_pgwr_args /* {
-	struct vnode *a_vp;
-	struct uio *a_uio;
-	struct ucred *a_cred;
-	memory_object_t a_pager;
-	vm_offset_t a_offset;
-	} */ *ap;
-{
-
-#warning ufs_readwrite PGWR need to implement
-return (EOPNOTSUPP);
-
 }
 
 /*
@@ -668,11 +643,11 @@ ffs_pageout(ap)
 	}
         
 
-	error = cluster_pageout(vp, pl, pl_offset, f_offset, round_page(xfer_size), ip->i_size, devBlockSize, flags);
+	error = cluster_pageout(vp, pl, pl_offset, f_offset, round_page_32(xfer_size), ip->i_size, devBlockSize, flags);
 
 	if(save_error) {
 		lupl_offset = size - save_size;
-		resid = round_page(save_size);
+		resid = round_page_32(save_size);
 		if (!nocommit)
 			ubc_upl_abort_range(pl, lupl_offset, resid,
 				UPL_ABORT_FREE_ON_EMPTY);

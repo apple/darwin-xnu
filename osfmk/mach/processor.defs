@@ -62,7 +62,7 @@
 subsystem
 #if	KERNEL_SERVER
 	  KernelServer
-#endif	KERNEL_SERVER
+#endif	/* KERNEL_SERVER */
 	  processor 3000;
 
 #include <mach/std_types.defs>

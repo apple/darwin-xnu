@@ -85,4 +85,9 @@ struct fake_descriptor	ldt[LDTSZ] = {
 	  SZ_32|SZ_G,
 	  ACC_P|ACC_PL_U|ACC_DATA_W
 	},				/* user data segment */
+/*027*/	{ 0,
+	  (VM_MAX_ADDRESS-VM_MIN_ADDRESS-1)>>12,
+	  SZ_32|SZ_G,
+	  ACC_P|ACC_PL_U|ACC_DATA_W
+	},				/* user cthread segment */
 };

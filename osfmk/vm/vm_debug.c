@@ -252,7 +252,7 @@ mach_vm_region_info(
 
 		if (size != 0)
 			kmem_free(ipc_kernel_map, addr, size);
-		size = round_page(2 * used * sizeof(vm_info_object_t));
+		size = round_page_32(2 * used * sizeof(vm_info_object_t));
 
 		kr = vm_allocate(ipc_kernel_map, &addr, size, TRUE);
 		if (kr != KERN_SUCCESS)
@@ -272,7 +272,7 @@ mach_vm_region_info(
 			kmem_free(ipc_kernel_map, addr, size);
 	} else {
 		vm_size_t size_used =
-			round_page(used * sizeof(vm_info_object_t));
+			round_page_32(used * sizeof(vm_info_object_t));
 
 		kr = vm_map_unwire(ipc_kernel_map, addr, addr + size_used, FALSE);
 		assert(kr == KERN_SUCCESS);
@@ -451,7 +451,7 @@ mach_vm_region_info_64(
 
 		if (size != 0)
 			kmem_free(ipc_kernel_map, addr, size);
-		size = round_page(2 * used * sizeof(vm_info_object_t));
+		size = round_page_32(2 * used * sizeof(vm_info_object_t));
 
 		kr = vm_allocate(ipc_kernel_map, &addr, size, TRUE);
 		if (kr != KERN_SUCCESS)
@@ -471,7 +471,7 @@ mach_vm_region_info_64(
 			kmem_free(ipc_kernel_map, addr, size);
 	} else {
 		vm_size_t size_used =
-			round_page(used * sizeof(vm_info_object_t));
+			round_page_32(used * sizeof(vm_info_object_t));
 
 		kr = vm_map_unwire(ipc_kernel_map, addr, addr + size_used, FALSE);
 		assert(kr == KERN_SUCCESS);
@@ -514,7 +514,7 @@ vm_mapped_pages_info(
 
 	pmap = map->pmap;
 	size = pmap_resident_count(pmap) * sizeof(vm_offset_t);
-	size = round_page(size);
+	size = round_page_32(size);
 
 	for (;;) {
 	    (void) vm_allocate(ipc_kernel_map, &addr, size, TRUE);
@@ -537,7 +537,7 @@ vm_mapped_pages_info(
 	    /*
 	     * Try again, doubling the size
 	     */
-	    size = round_page(actual * sizeof(vm_offset_t));
+	    size = round_page_32(actual * sizeof(vm_offset_t));
 	}
 	if (actual == 0) {
 	    *pages = 0;
@@ -546,7 +546,7 @@ vm_mapped_pages_info(
 	}
 	else {
 	    *pages_count = actual;
-	    size_used = round_page(actual * sizeof(vm_offset_t));
+	    size_used = round_page_32(actual * sizeof(vm_offset_t));
 	    (void) vm_map_wire(ipc_kernel_map,
 				addr, addr + size, 
 				VM_PROT_READ|VM_PROT_WRITE, FALSE);
@@ -612,7 +612,7 @@ host_virtual_physical_table_info(
 		if (info != *infop)
 			kmem_free(ipc_kernel_map, addr, size);
 
-		size = round_page(actual * sizeof *info);
+		size = round_page_32(actual * sizeof *info);
 		kr = kmem_alloc_pageable(ipc_kernel_map, &addr, size);
 		if (kr != KERN_SUCCESS)
 			return KERN_RESOURCE_SHORTAGE;
@@ -633,7 +633,7 @@ host_virtual_physical_table_info(
 		vm_map_copy_t copy;
 		vm_size_t used;
 
-		used = round_page(actual * sizeof *info);
+		used = round_page_32(actual * sizeof *info);
 
 		if (used != size)
 			kmem_free(ipc_kernel_map, addr + used, size - used);

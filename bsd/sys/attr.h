@@ -113,14 +113,129 @@ typedef struct vol_capabilities_attr {
 	vol_capabilities_set_t valid;
 } vol_capabilities_attr_t;
 
+/*
+ * VOL_CAP_FMT_PERSISTENTOBJECTIDS: When set, the volume has object IDs
+ * that are persistent (retain their values even when the volume is
+ * unmounted and remounted), and a file or directory can be looked up
+ * by ID.  Volumes that support VolFS and can support Carbon File ID
+ * references should set this bit.
+ *
+ * VOL_CAP_FMT_SYMBOLICLINKS: When set, the volume supports symbolic
+ * links.  The symlink(), readlink(), and lstat() calls all use this
+ * symbolic link.
+ *
+ * VOL_CAP_FMT_HARDLINKS: When set, the volume supports hard links.
+ * The link() call creates hard links.
+ *
+ * VOL_CAP_FMT_JOURNAL: When set, the volume is capable of supporting
+ * a journal used to speed recovery in case of unplanned shutdown
+ * (such as a power outage or crash).  This bit does not necessarily
+ * mean the volume is actively using a journal for recovery.
+ *
+ * VOL_CAP_FMT_JOURNAL_ACTIVE: When set, the volume is currently using
+ * a journal for use in speeding recovery after an unplanned shutdown.
+ * This bit can be set only if VOL_CAP_FMT_JOURNAL is also set.
+ *
+ * VOL_CAP_FMT_NO_ROOT_TIMES: When set, the volume format does not
+ * store reliable times for the root directory, so you should not
+ * depend on them to detect changes, etc.
+ *
+ * VOL_CAP_FMT_SPARSE_FILES: When set, the volume supports sparse files.
+ * That is, files which can have "holes" that have never been written
+ * to, and are not allocated on disk.  Sparse files may have an
+ * allocated size that is less than the file's logical length.
+ *
+ * VOL_CAP_FMT_ZERO_RUNS: For security reasons, parts of a file (runs)
+ * that have never been written to must appear to contain zeroes.  When
+ * this bit is set, the volume keeps track of allocated but unwritten
+ * runs of a file so that it can substitute zeroes without actually
+ * writing zeroes to the media.  This provides performance similar to
+ * sparse files, but not the space savings.
+ *
+ * VOL_CAP_FMT_CASE_SENSITIVE: When set, file and directory names are
+ * case sensitive (upper and lower case are different).  When clear,
+ * an upper case character is equivalent to a lower case character,
+ * and you can't have two names that differ solely in the case of
+ * the characters.
+ *
+ * VOL_CAP_FMT_CASE_PRESERVING: When set, file and directory names
+ * preserve the difference between upper and lower case.  If clear,
+ * the volume may change the case of some characters (typically
+ * making them all upper or all lower case).  A volume that sets
+ * VOL_CAP_FMT_CASE_SENSITIVE should also set VOL_CAP_FMT_CASE_PRESERVING.
+ *
+ * VOL_CAP_FMT_FAST_STATFS: This bit is used as a hint to upper layers
+ * (especially Carbon) that statfs() is fast enough that its results
+ * need not be cached by those upper layers.  A volume that caches
+ * the statfs information in its in-memory structures should set this bit.
+ * A volume that must always read from disk or always perform a network
+ * transaction should not set this bit.  
+ */
 #define VOL_CAP_FMT_PERSISTENTOBJECTIDS 0x00000001
 #define VOL_CAP_FMT_SYMBOLICLINKS 0x00000002
 #define VOL_CAP_FMT_HARDLINKS 0x00000004
+#define VOL_CAP_FMT_JOURNAL 0x00000008
+#define VOL_CAP_FMT_JOURNAL_ACTIVE 0x00000010
+#define VOL_CAP_FMT_NO_ROOT_TIMES 0x00000020
+#define VOL_CAP_FMT_SPARSE_FILES 0x00000040
+#define VOL_CAP_FMT_ZERO_RUNS 0x00000080
+#define VOL_CAP_FMT_CASE_SENSITIVE 0x00000100
+#define VOL_CAP_FMT_CASE_PRESERVING 0x00000200
+#define VOL_CAP_FMT_FAST_STATFS 0x00000400
 
+
+/*
+ * VOL_CAP_INT_SEARCHFS: When set, the volume implements the
+ * searchfs() system call (the VOP_SEARCHFS vnode operation).
+ *
+ * VOL_CAP_INT_ATTRLIST: When set, the volume implements the
+ * getattrlist() and setattrlist() system calls (VOP_GETATTRLIST
+ * and VOP_SETATTRLIST vnode operations) for the volume, files,
+ * and directories.  The volume may or may not implement the
+ * readdirattr() system call.  XXX Is there any minimum set
+ * of attributes that should be supported?  To determine the
+ * set of supported attributes, get the ATTR_VOL_ATTRIBUTES
+ * attribute of the volume.
+ *
+ * VOL_CAP_INT_NFSEXPORT: When set, the volume implements exporting
+ * of NFS volumes.
+ *
+ * VOL_CAP_INT_READDIRATTR: When set, the volume implements the
+ * readdirattr() system call (VOP_READDIRATTR vnode operation).
+ *
+ * VOL_CAP_INT_EXCHANGEDATA: When set, the volume implements the
+ * exchangedata() system call (VOP_EXCHANGE vnode operation).
+ *
+ * VOL_CAP_INT_COPYFILE: When set, the volume implements the
+ * VOP_COPYFILE vnode operation.  (XXX There should be a copyfile()
+ * system call in <unistd.h>.)
+ *
+ * VOL_CAP_INT_ALLOCATE: When set, the volume implements the
+ * VOP_ALLOCATE vnode operation, which means it implements the
+ * F_PREALLOCATE selector of fcntl(2).
+ *
+ * VOL_CAP_INT_VOL_RENAME: When set, the volume implements the
+ * ATTR_VOL_NAME attribute for both getattrlist() and setattrlist().
+ * The volume can be renamed by setting ATTR_VOL_NAME with setattrlist().
+ *
+ * VOL_CAP_INT_ADVLOCK: When set, the volume implements POSIX style
+ * byte range locks via VOP_ADVLOCK (accessible from fcntl(2)).
+ *
+ * VOL_CAP_INT_FLOCK: When set, the volume implements whole-file flock(2)
+ * style locks via VOP_ADVLOCK.  This includes the O_EXLOCK and O_SHLOCK
+ * flags of the open(2) call.
+ *
+ */
 #define VOL_CAP_INT_SEARCHFS 0x00000001
 #define VOL_CAP_INT_ATTRLIST 0x00000002
 #define VOL_CAP_INT_NFSEXPORT 0x00000004
 #define VOL_CAP_INT_READDIRATTR 0x00000008
+#define VOL_CAP_INT_EXCHANGEDATA 0x00000010
+#define VOL_CAP_INT_COPYFILE 0x00000020
+#define VOL_CAP_INT_ALLOCATE 0x00000040
+#define VOL_CAP_INT_VOL_RENAME 0x00000080
+#define VOL_CAP_INT_ADVLOCK 0x00000100
+#define VOL_CAP_INT_FLOCK 0x00000200
 
 typedef struct vol_attributes_attr {
 	attribute_set_t validattr;
@@ -218,8 +333,13 @@ typedef struct vol_attributes_attr {
 #define SRCHFS_MATCHPARTIALNAMES 		0x00000002
 #define SRCHFS_MATCHDIRS 				0x00000004
 #define SRCHFS_MATCHFILES 				0x00000008
+#define SRCHFS_SKIPLINKS 				0x00000010
+#define SRCHFS_SKIPINVISIBLE            0x00000020
+#define SRCHFS_SKIPPACKAGES             0x00000040
+#define SRCHFS_SKIPINAPPROPRIATE        0x00000080
+
 #define SRCHFS_NEGATEPARAMS 			0x80000000
-#define SRCHFS_VALIDOPTIONSMASK			0x8000000F
+#define SRCHFS_VALIDOPTIONSMASK			0x800000FF
 
 struct fssearchblock {
 	struct attrlist		*returnattrs;

@@ -78,6 +78,8 @@ struct	arphdr {
 #define ARPHRD_ETHER 	1	/* ethernet hardware format */
 #define ARPHRD_IEEE802	6	/* token-ring hardware format */
 #define ARPHRD_FRELAY 	15	/* frame relay hardware format */
+#define ARPHRD_IEEE1394	24	/* IEEE1394 hardware address */
+#define ARPHRD_IEEE1394_EUI64 27 /* IEEE1394 EUI-64 */
 	u_short	ar_pro;		/* format of protocol address */
 	u_char	ar_hln;		/* length of hardware address */
 	u_char	ar_pln;		/* length of protocol address */

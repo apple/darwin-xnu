@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2002 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2003 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -89,6 +89,8 @@ extern int unicode_to_hfs(ExtendedVCB *vcb, ByteCount srcLen,
 
 int resolvelink(struct hfsmount *hfsmp, u_long linkref, struct HFSPlusCatalogFile *recp);
 
+static int resolvelinkid(struct hfsmount *hfsmp, u_long linkref, ino_t *ino);
+
 static int getkey(struct hfsmount *hfsmp, cnid_t cnid, CatalogKey * key);
 
 static int buildkey(struct hfsmount *hfsmp, struct cat_desc *descp,
@@ -118,8 +120,46 @@ static int isadir(const CatalogRecord *crp);
 static int buildthread(void *keyp, void *recp, int std_hfs, int directory);
 
 
+__private_extern__
+int
+cat_preflight(struct hfsmount *hfsmp, catops_t ops, cat_cookie_t *cookie, struct proc *p)
+{
+	FCB *fcb;
+	int result;
+
+	fcb = GetFileControlBlock(HFSTOVCB(hfsmp)->catalogRefNum);
+
+	/* Lock catalog b-tree */
+	result = hfs_metafilelocking(hfsmp, kHFSCatalogFileID, LK_EXCLUSIVE, p);
+	if (result)
+		 return (result);
+	 
+	result = BTReserveSpace(fcb, ops, (void*)cookie);
+	
+	/* Unlock catalog b-tree */
+	(void) hfs_metafilelocking(hfsmp, kHFSCatalogFileID, LK_RELEASE, p);
+
+	MacToVFSError(result);
+}
+
+__private_extern__
+void
+cat_postflight(struct hfsmount *hfsmp, cat_cookie_t *cookie, struct proc *p)
+{
+	FCB *fcb;
+	int error;
+
+	fcb = GetFileControlBlock(HFSTOVCB(hfsmp)->catalogRefNum);
+
+	error = hfs_metafilelocking(hfsmp, kHFSCatalogFileID, LK_EXCLUSIVE, p);
+	(void) BTReleaseReserve(fcb, (void*)cookie);
+	if (error == 0) {
+		hfs_metafilelocking(hfsmp, kHFSCatalogFileID, LK_RELEASE, p);
+	}
+}
+
  
- 
+__private_extern__
 void
 cat_convertattr(
 	struct hfsmount *hfsmp,
@@ -145,11 +185,39 @@ cat_convertattr(
 		promotefork(hfsmp, (HFSCatalogFile *)&recp->hfsFile, 0, datafp);
 		promotefork(hfsmp, (HFSCatalogFile *)&recp->hfsFile, 1, rsrcfp);
 	} else {
-		bcopy(&recp->hfsPlusFile.dataFork, datafp, sizeof(*datafp));
-		bcopy(&recp->hfsPlusFile.resourceFork, rsrcfp, sizeof(*rsrcfp));
+		/* Convert the data fork. */
+		datafp->cf_size = recp->hfsPlusFile.dataFork.logicalSize;
+		datafp->cf_blocks = recp->hfsPlusFile.dataFork.totalBlocks;
+		if ((hfsmp->hfc_stage == HFC_RECORDING) &&
+		    (attrp->ca_atime >= hfsmp->hfc_timebase)) {
+			datafp->cf_bytesread =
+				recp->hfsPlusFile.dataFork.clumpSize *
+				HFSTOVCB(hfsmp)->blockSize;
+		} else {
+			datafp->cf_bytesread = 0;
+		}
+		datafp->cf_vblocks = 0;
+		bcopy(&recp->hfsPlusFile.dataFork.extents[0],
+		      &datafp->cf_extents[0], sizeof(HFSPlusExtentRecord));
+
+		/* Convert the resource fork. */
+		rsrcfp->cf_size = recp->hfsPlusFile.resourceFork.logicalSize;
+		rsrcfp->cf_blocks = recp->hfsPlusFile.resourceFork.totalBlocks;
+		if ((hfsmp->hfc_stage == HFC_RECORDING) &&
+		    (attrp->ca_atime >= hfsmp->hfc_timebase)) {
+			datafp->cf_bytesread =
+				recp->hfsPlusFile.resourceFork.clumpSize *
+				HFSTOVCB(hfsmp)->blockSize;
+		} else {
+			datafp->cf_bytesread = 0;
+		}
+		rsrcfp->cf_vblocks = 0;
+		bcopy(&recp->hfsPlusFile.resourceFork.extents[0],
+		      &rsrcfp->cf_extents[0], sizeof(HFSPlusExtentRecord));
 	}
 }
 
+__private_extern__
 int
 cat_convertkey(
 	struct hfsmount *hfsmp,
@@ -181,6 +249,7 @@ cat_convertkey(
 /*
  * cat_releasedesc
  */
+__private_extern__
 void
 cat_releasedesc(struct cat_desc *descp)
 {
@@ -195,7 +264,7 @@ cat_releasedesc(struct cat_desc *descp)
 		descp->cd_nameptr = NULL;
 		descp->cd_namelen = 0;
 		descp->cd_flags &= ~CD_HASBUF;
-		FREE(name, M_TEMP);
+		remove_name(name);
 	}
 	descp->cd_nameptr = NULL;
 	descp->cd_namelen = 0;
@@ -209,6 +278,7 @@ cat_releasedesc(struct cat_desc *descp)
 /*
  * cat_lookup - lookup a catalog node using a cnode decriptor
  */
+__private_extern__
 int
 cat_lookup(struct hfsmount *hfsmp, struct cat_desc *descp, int wantrsrc,
              struct cat_desc *outdescp, struct cat_attr *attrp,
@@ -243,6 +313,7 @@ exit:
 	return (result);
 }
 
+__private_extern__
 int
 cat_insertfilethread(struct hfsmount *hfsmp, struct cat_desc *descp)
 {
@@ -261,11 +332,6 @@ cat_insertfilethread(struct hfsmount *hfsmp, struct cat_desc *descp)
 	MALLOC(iterator, BTreeIterator *, 2 * sizeof(*iterator), M_TEMP, M_WAITOK);
 	bzero(&iterator[0], 2* sizeof(*iterator));
 	result = buildkey(hfsmp, descp, (HFSPlusCatalogKey *)&iterator[0].key, 0);
-	if (result)
-		goto exit;
-
-	// XXXdbg - preflight all btree operations to make sure there's enough space
-	result = BTCheckFreeSpace(fcb);
 	if (result)
 		goto exit;
 
@@ -306,6 +372,7 @@ exit:
 /*
  * cat_idlookup - lookup a catalog node using a cnode id
  */
+__private_extern__
 int
 cat_idlookup(struct hfsmount *hfsmp, cnid_t cnid, struct cat_desc *outdescp,
                  struct cat_attr *attrp, struct cat_fork *forkp)
@@ -473,14 +540,41 @@ cat_lookupbykey(struct hfsmount *hfsmp, CatalogKey *keyp, u_long hint, int wantr
 		}
 	}
 	if (forkp != NULL) {
-		if (isadir(recp))
+		if (isadir(recp)) {
 			bzero(forkp, sizeof(*forkp));
-		else if (std_hfs)
+		} else if (std_hfs) {
 			promotefork(hfsmp, (HFSCatalogFile *)&recp->hfsFile, wantrsrc, forkp);
-		else if (wantrsrc)
-			bcopy(&recp->hfsPlusFile.resourceFork, forkp, sizeof(*forkp));
-		else
-			bcopy(&recp->hfsPlusFile.dataFork, forkp, sizeof(*forkp));
+		} else if (wantrsrc) {
+			/* Convert the resource fork. */
+			forkp->cf_size = recp->hfsPlusFile.resourceFork.logicalSize;
+			forkp->cf_blocks = recp->hfsPlusFile.resourceFork.totalBlocks;
+			if ((hfsmp->hfc_stage == HFC_RECORDING) &&
+			    (to_bsd_time(recp->hfsPlusFile.accessDate) >= hfsmp->hfc_timebase)) {
+				forkp->cf_bytesread =
+					recp->hfsPlusFile.resourceFork.clumpSize *
+					HFSTOVCB(hfsmp)->blockSize;
+			} else {
+				forkp->cf_bytesread = 0;
+			}
+			forkp->cf_vblocks = 0;
+			bcopy(&recp->hfsPlusFile.resourceFork.extents[0],
+			      &forkp->cf_extents[0], sizeof(HFSPlusExtentRecord));
+		} else {
+			/* Convert the data fork. */
+			forkp->cf_size = recp->hfsPlusFile.dataFork.logicalSize;
+			forkp->cf_blocks = recp->hfsPlusFile.dataFork.totalBlocks;
+			if ((hfsmp->hfc_stage == HFC_RECORDING) &&
+			    (to_bsd_time(recp->hfsPlusFile.accessDate) >= hfsmp->hfc_timebase)) {
+				forkp->cf_bytesread =
+					recp->hfsPlusFile.dataFork.clumpSize *
+					HFSTOVCB(hfsmp)->blockSize;
+			} else {
+				forkp->cf_bytesread = 0;
+			}
+			forkp->cf_vblocks = 0;
+			bcopy(&recp->hfsPlusFile.dataFork.extents[0],
+			      &forkp->cf_extents[0], sizeof(HFSPlusExtentRecord));
+		}
 	}
 	if (descp != NULL) {
 		HFSPlusCatalogKey * pluskey = NULL;
@@ -508,6 +602,7 @@ exit:
 /*
  * cat_create - create a node in the catalog
  */
+__private_extern__
 int
 cat_create(struct hfsmount *hfsmp, struct cat_desc *descp, struct cat_attr *attrp,
 	struct cat_desc *out_descp)
@@ -546,11 +641,6 @@ cat_create(struct hfsmount *hfsmp, struct cat_desc *descp, struct cat_attr *attr
 			bto->key.nodeName.length);
 		hfs_setencodingbits(hfsmp, encoding);
 	}
-
-	// XXXdbg - preflight all btree operations to make sure there's enough space
-	result = BTCheckFreeSpace(fcb);
-	if (result)
-		goto exit;
 
 	/*
 	 * Insert the thread record first
@@ -660,6 +750,7 @@ exit:
  *	4. BTDeleteRecord(from_thread);
  *	5. BTInsertRecord(to_thread);
  */
+__private_extern__
 int 
 cat_rename (
 	struct hfsmount * hfsmp,
@@ -699,11 +790,6 @@ cat_rename (
 	bzero(to_iterator, sizeof(*to_iterator));
 	if ((result = buildkey(hfsmp, to_cdp, (HFSPlusCatalogKey *)&to_iterator->key, 0)))
 		goto exit;	
-
-	// XXXdbg - preflight all btree operations to make sure there's enough space
-	result = BTCheckFreeSpace(fcb);
-	if (result)
-		goto exit;
 
 	to_key = (HFSPlusCatalogKey *)&to_iterator->key;
 	MALLOC(recp, CatalogRecord *, sizeof(CatalogRecord), M_TEMP, M_WAITOK);
@@ -753,7 +839,7 @@ cat_rename (
 	if (result)
 		goto exit;
 
-	/* Update the text encoding (on disk and in descriptor */
+	/* Update the text encoding (on disk and in descriptor) */
 	if (!std_hfs) {
 		encoding = hfs_pickencoding(to_key->nodeName.unicode,
 				to_key->nodeName.length);
@@ -871,6 +957,14 @@ cat_rename (
 		if (std_hfs) {
 			MALLOC(pluskey, HFSPlusCatalogKey *, sizeof(HFSPlusCatalogKey), M_TEMP, M_WAITOK);
 			promotekey(hfsmp, (HFSCatalogKey *)&to_iterator->key, pluskey, &encoding);
+
+			/* Save the real encoding hint in the Finder Info (field 4). */
+			if (directory && from_cdp->cd_cnid == kHFSRootFolderID) {
+				u_long realhint;
+
+				realhint = hfs_pickencoding(pluskey->nodeName.unicode, pluskey->nodeName.length);
+				vcb->vcbFndrInfo[4] = SET_HFS_TEXT_ENCODING(realhint);
+			}
 	
 		} else
 			pluskey = (HFSPlusCatalogKey *)&to_iterator->key;
@@ -901,6 +995,7 @@ exit:
  *	2. BTDeleteRecord(thread);
  *	3. BTUpdateRecord(parent);
  */
+__private_extern__
 int
 cat_delete(struct hfsmount *hfsmp, struct cat_desc *descp, struct cat_attr *attrp)
 {
@@ -945,11 +1040,6 @@ cat_delete(struct hfsmount *hfsmp, struct cat_desc *descp, struct cat_attr *attr
 	if (result)
 		goto exit;
 
-	// XXXdbg - preflight all btree operations to make sure there's enough space
-	result = BTCheckFreeSpace(fcb);
-	if (result)
-		goto exit;
-
 	/* Delete record */
 	result = BTDeleteRecord(fcb, iterator);
 	if (result)
@@ -973,6 +1063,7 @@ exit:
  * cnode_update - update the catalog node described by descp
  * using the data from attrp and forkp.
  */
+__private_extern__
 int
 cat_update(struct hfsmount *hfsmp, struct cat_desc *descp, struct cat_attr *attrp,
 	struct cat_fork *dataforkp, struct cat_fork *rsrcforkp)
@@ -1217,6 +1308,9 @@ catrec_update(const CatalogKey *ckp, CatalogRecord *crp, u_int16_t reclen,
 			file->resourceFork.totalBlocks = forkp->cf_blocks;
 			bcopy(&forkp->cf_extents[0], &file->resourceFork.extents,
 				sizeof(HFSPlusExtentRecord));
+			/* Push blocks read to disk */
+			file->resourceFork.clumpSize =
+					howmany(forkp->cf_bytesread, blksize);
 		}
 		if (state->s_datafork) {
 			forkp = state->s_datafork;
@@ -1224,6 +1318,9 @@ catrec_update(const CatalogKey *ckp, CatalogRecord *crp, u_int16_t reclen,
 			file->dataFork.totalBlocks = forkp->cf_blocks;
 			bcopy(&forkp->cf_extents[0], &file->dataFork.extents,
 				sizeof(HFSPlusExtentRecord));
+			/* Push blocks read to disk */
+			file->resourceFork.clumpSize =
+					howmany(forkp->cf_bytesread, blksize);
 		}
 
 		if ((file->resourceFork.extents[0].startBlock != 0) &&
@@ -1295,7 +1392,7 @@ catrec_readattr(const CatalogKey *key, const CatalogRecord *rec,
 	/* Hide the private meta data directory and journal files */
 	if (parentcnid == kRootDirID) {
 		if ((rec->recordType == kHFSPlusFolderRecord) &&
-		    (rec->hfsPlusFolder.folderID == hfsmp->hfs_private_metadata_dir)) {
+		    (rec->hfsPlusFolder.folderID == hfsmp->hfs_privdir_desc.cd_cnid)) {
 			return (1);	/* continue */
 		}
 		if (hfsmp->jnl &&
@@ -1355,6 +1452,7 @@ catrec_readattr(const CatalogKey *key, const CatalogRecord *rec,
 /*
  * Note: index is zero relative
  */
+__private_extern__
 int
 cat_getentriesattr(struct hfsmount *hfsmp, struct cat_desc *prevdesc, int index,
 		struct cat_entrylist *ce_list)
@@ -1463,6 +1561,10 @@ exit:
 	return MacToVFSError(result);
 }
 
+struct linkinfo {
+	u_long  link_ref;
+	void *  dirent_addr;
+};
 
 struct read_state {
 	u_int32_t	cbs_parentID;
@@ -1472,20 +1574,40 @@ struct read_state {
 	off_t		cbs_lastoffset;
 	struct uio *	cbs_uio;
 	ExtendedVCB *	cbs_vcb;
-	int16_t		cbs_hfsPlus;
+	int8_t		cbs_hfsPlus;
+	int8_t		cbs_case_sensitive;
 	int16_t		cbs_result;
+	int32_t         cbs_numresults;
+	u_long         *cbs_cookies;
+	int32_t         cbs_ncookies;
+	int32_t         cbs_nlinks;
+	int32_t         cbs_maxlinks;
+	struct linkinfo *cbs_linkinfo;
 };
 
+/* Map file mode type to directory entry types */
+u_char modetodirtype[16] = {
+	DT_REG, DT_FIFO, DT_CHR, DT_UNKNOWN,
+	DT_DIR, DT_UNKNOWN, DT_BLK, DT_UNKNOWN,
+	DT_REG, DT_UNKNOWN, DT_LNK, DT_UNKNOWN,
+	DT_SOCK, DT_UNKNOWN, DT_WHT, DT_UNKNOWN
+};
+
+#define MODE_TO_DT(mode)  (modetodirtype[((mode) & S_IFMT) >> 12])
 
 static int
 catrec_read(const CatalogKey *ckp, const CatalogRecord *crp,
 		    u_int16_t recordLen, struct read_state *state)
 {
+	struct hfsmount *hfsmp;
 	CatalogName *cnp;
 	size_t utf8chars;
 	u_int32_t curID;
 	OSErr result;
 	struct dirent catent;
+	time_t itime;
+	u_long ilinkref = 0;
+	void * uiobase;
 	
 	if (state->cbs_hfsPlus)
 		curID = ckp->hfsPlus.parentID;
@@ -1529,7 +1651,18 @@ lastitem:
 			catent.d_fileno = crp->hfsPlusFolder.folderID;
 			break;
 		case kHFSPlusFileRecord:
-			catent.d_type = DT_REG;
+			itime = to_bsd_time(crp->hfsPlusFile.createDate);
+			hfsmp = VCBTOHFS(state->cbs_vcb);
+			/*
+			 * When a hardlink link is encountered save its link ref.
+			 */
+			if ((SWAP_BE32(crp->hfsPlusFile.userInfo.fdType) == kHardLinkFileType) &&
+			    (SWAP_BE32(crp->hfsPlusFile.userInfo.fdCreator) == kHFSPlusCreator) &&
+			    ((itime == state->cbs_vcb->vcbCrDate) ||
+			     (itime == hfsmp->hfs_metadata_createdate))) {
+				ilinkref = crp->hfsPlusFile.bsdInfo.special.iNodeNum;
+			}
+			catent.d_type = MODE_TO_DT(crp->hfsPlusFile.bsdInfo.fileMode);
 			catent.d_fileno = crp->hfsPlusFile.fileID;
 			break;
 		default:
@@ -1575,37 +1708,76 @@ lastitem:
 	/* hide our private meta data directory */
 	if (curID == kRootDirID				&&
 	    catent.d_fileno == state->cbs_hiddenDirID	&&
-	    catent.d_type == DT_DIR)
-		goto lastitem;
+	    catent.d_type == DT_DIR) {
+		if (state->cbs_case_sensitive) {
+			// This is how we skip over these entries.  The next
+			// time we fill in a real item the uio_offset will
+			// point to the correct place in the "virtual" directory
+			// so that PositionIterator() will do the right thing
+		 	// when scanning to get to a particular position in the
+		 	// directory.
+			state->cbs_uio->uio_offset += catent.d_reclen;
+			state->cbs_lastoffset = state->cbs_uio->uio_offset;
 
+			return (1);	/* skip and continue */
+		} else
+			goto lastitem;
+	}
+	
 	/* Hide the journal files */
 	if ((curID == kRootDirID) &&
 	    (catent.d_type == DT_REG) &&
 	    ((catent.d_fileno == state->cbs_hiddenJournalID) ||
 	     (catent.d_fileno == state->cbs_hiddenInfoBlkID))) {
 
+		// see comment up above for why this is here
+	    	state->cbs_uio->uio_offset += catent.d_reclen;
+		state->cbs_lastoffset = state->cbs_uio->uio_offset;
+
 		return (1);	/* skip and continue */
 	}
 
 	state->cbs_lastoffset = state->cbs_uio->uio_offset;
+	uiobase = state->cbs_uio->uio_iov->iov_base;
 
 	/* if this entry won't fit then we're done */
-	if (catent.d_reclen > state->cbs_uio->uio_resid)
+	if (catent.d_reclen > state->cbs_uio->uio_resid ||
+	    (ilinkref != 0 && state->cbs_nlinks == state->cbs_maxlinks) ||
+	    (state->cbs_ncookies != 0 && state->cbs_numresults >= state->cbs_ncookies))
 		return (0);	/* stop */
 
 	state->cbs_result = uiomove((caddr_t) &catent, catent.d_reclen, state->cbs_uio);
+
+	/*
+	 * Record any hard links for post processing.
+	 */
+	if ((ilinkref != 0) &&
+	    (state->cbs_result == 0) &&
+	    (state->cbs_nlinks < state->cbs_maxlinks)) {
+		state->cbs_linkinfo[state->cbs_nlinks].dirent_addr = uiobase;
+		state->cbs_linkinfo[state->cbs_nlinks].link_ref = ilinkref;
+		state->cbs_nlinks++;
+	}
+
+	if (state->cbs_cookies) {
+	    state->cbs_cookies[state->cbs_numresults++] = state->cbs_uio->uio_offset;
+	} else {
+	    state->cbs_numresults++;
+	}
 
 	/* continue iteration if there's room */
 	return (state->cbs_result == 0  &&
 		state->cbs_uio->uio_resid >= AVERAGE_HFSDIRENTRY_SIZE);
 }
 
+#define SMALL_DIRENTRY_SIZE  (sizeof(struct dirent) - (MAXNAMLEN + 1) + 8)
 /*
  *
  */
+__private_extern__
 int
-cat_getdirentries(struct hfsmount *hfsmp, struct cat_desc *descp,
-		struct uio *uio, int *eofflag)
+cat_getdirentries(struct hfsmount *hfsmp, struct cat_desc *descp, int entrycnt,
+		struct uio *uio, int *eofflag, u_long *cookies, int ncookies)
 {
 	ExtendedVCB *vcb = HFSTOVCB(hfsmp);
 	BTreeIterator * iterator;
@@ -1614,13 +1786,24 @@ cat_getdirentries(struct hfsmount *hfsmp, struct cat_desc *descp,
 	u_int16_t op;
 	struct read_state state;
 	u_int32_t dirID = descp->cd_cnid;
+	void * buffer;
+	int bufsize;
+	int maxdirentries;
 	int result;
 
 	diroffset = uio->uio_offset;
 	*eofflag = 0;
+	maxdirentries = MIN(entrycnt, uio->uio_resid / SMALL_DIRENTRY_SIZE);
 
-	MALLOC(iterator, BTreeIterator *, sizeof(*iterator), M_TEMP, M_WAITOK);
-	bzero(iterator, sizeof(*iterator));
+	/* Get a buffer for collecting link info and for a btree iterator */
+	bufsize = (maxdirentries * sizeof(struct linkinfo)) + sizeof(*iterator);
+	MALLOC(buffer, void *, bufsize, M_TEMP, M_WAITOK);
+	bzero(buffer, bufsize);
+
+	state.cbs_nlinks = 0;
+	state.cbs_maxlinks = maxdirentries;
+	state.cbs_linkinfo = (struct linkinfo *) buffer;
+	iterator = (BTreeIterator *) ((char *)buffer + (maxdirentries * sizeof(struct linkinfo)));
 
 	/* get an iterator and position it */
 	cip = GetCatalogIterator(vcb, dirID, diroffset);
@@ -1634,7 +1817,7 @@ cat_getdirentries(struct hfsmount *hfsmp, struct cat_desc *descp,
 	} else if ((result = MacToVFSError(result)))
 		goto cleanup;
 
-	state.cbs_hiddenDirID = hfsmp->hfs_private_metadata_dir;
+	state.cbs_hiddenDirID = hfsmp->hfs_privdir_desc.cd_cnid;
 	if (hfsmp->jnl) {
 		state.cbs_hiddenJournalID = hfsmp->hfs_jnlfileid;
 		state.cbs_hiddenInfoBlkID = hfsmp->hfs_jnlinfoblkid;
@@ -1645,16 +1828,58 @@ cat_getdirentries(struct hfsmount *hfsmp, struct cat_desc *descp,
 	state.cbs_uio = uio;
 	state.cbs_result = 0;
 	state.cbs_parentID = dirID;
+	if (diroffset <= 2*sizeof(struct hfsdotentry)) {
+	    state.cbs_numresults = diroffset/sizeof(struct hfsdotentry);
+	} else {
+	    state.cbs_numresults = 0;
+	}
+	state.cbs_cookies = cookies;
+	state.cbs_ncookies = ncookies;
 
 	if (vcb->vcbSigWord == kHFSPlusSigWord)
 		state.cbs_hfsPlus = 1;
 	else
 		state.cbs_hfsPlus = 0;
 
+	if (hfsmp->hfs_flags & HFS_CASE_SENSITIVE)
+		state.cbs_case_sensitive = 1;
+	else
+		state.cbs_case_sensitive = 0;
+
 	/* process as many entries as possible... */
 	result = BTIterateRecords(GetFileControlBlock(vcb->catalogRefNum), op,
 		 iterator, (IterateCallBackProcPtr)catrec_read, &state);
 
+	/*
+	 * Post process any hard links to get the real file id.
+	 */
+	if (state.cbs_nlinks > 0) {
+		struct iovec aiov;
+		struct uio auio;
+		u_int32_t fileid;
+		int i;
+		u_int32_t tempid;
+
+		auio.uio_iov = &aiov;
+		auio.uio_iovcnt = 1;
+		auio.uio_segflg = uio->uio_segflg;
+		auio.uio_rw = UIO_READ;  /* read kernel memory into user memory */
+		auio.uio_procp = uio->uio_procp;
+
+		for (i = 0; i < state.cbs_nlinks; ++i) {
+			fileid = 0;
+			
+			if (resolvelinkid(hfsmp, state.cbs_linkinfo[i].link_ref, &fileid) != 0)
+				continue;
+
+			/* Update the file id in the user's buffer */
+			aiov.iov_base = (char *) state.cbs_linkinfo[i].dirent_addr;
+			aiov.iov_len = sizeof(fileid);
+			auio.uio_offset = 0;
+			auio.uio_resid = aiov.iov_len;
+			(void) uiomove((caddr_t)&fileid, sizeof(fileid), &auio);
+		}
+	}
 	if (state.cbs_result)
 		result = state.cbs_result;
 	else
@@ -1679,9 +1904,67 @@ cleanup:
 	}
 
 	(void) ReleaseCatalogIterator(cip);
-	FREE(iterator, M_TEMP);
+	FREE(buffer, M_TEMP);
 	
 	return (result);
+}
+
+
+/*
+ * cat_binarykeycompare - compare two HFS Plus catalog keys.
+
+ * The name portion of the key is comapred using a 16-bit binary comparison. 
+ * This is called from the b-tree code.
+ */
+__private_extern__
+int
+cat_binarykeycompare(HFSPlusCatalogKey *searchKey, HFSPlusCatalogKey *trialKey)
+{
+	u_int32_t searchParentID, trialParentID;
+	int result;
+
+	searchParentID = searchKey->parentID;
+	trialParentID = trialKey->parentID;
+	result = 0;
+	
+	if (searchParentID > trialParentID) {
+		++result;
+	} else if (searchParentID < trialParentID) {
+		--result;
+	} else {
+		u_int16_t * str1 = &searchKey->nodeName.unicode[0];
+		u_int16_t * str2 = &trialKey->nodeName.unicode[0];
+		int length1 = searchKey->nodeName.length;
+		int length2 = trialKey->nodeName.length;
+		u_int16_t c1, c2;
+		int length;
+	
+		if (length1 < length2) {
+			length = length1;
+			--result;
+		} else if (length1 > length2) {
+			length = length2;
+			++result;
+		} else {
+			length = length1;
+		}
+	
+		while (length--) {
+			c1 = *(str1++);
+			c2 = *(str2++);
+	
+			if (c1 > c2) {
+				result = 1;
+				break;
+			}
+			if (c1 < c2) {
+				result = -1;
+				break;
+			}
+		}
+	}
+
+	return result;
 }
 
 
@@ -1766,7 +2049,7 @@ resolvelink(struct hfsmount *hfsmp, u_long linkref, struct HFSPlusCatalogFile *r
 	bzero(iterator, sizeof(*iterator));
 
 	/* Build a descriptor for private dir. */	
-	idesc.cd_parentcnid = hfsmp->hfs_private_metadata_dir;
+	idesc.cd_parentcnid = hfsmp->hfs_privdir_desc.cd_cnid;
 	idesc.cd_nameptr = inodename;
 	idesc.cd_namelen = strlen(inodename);
 	idesc.cd_flags = 0;
@@ -1788,6 +2071,25 @@ resolvelink(struct hfsmount *hfsmp, u_long linkref, struct HFSPlusCatalogFile *r
 	FREE(iterator, M_TEMP);
 
 	return (result ? ENOENT : 0);
+}
+
+/*
+ * Resolve hard link reference to obtain the inode number.
+ */
+static int
+resolvelinkid(struct hfsmount *hfsmp, u_long linkref, ino_t *ino)
+{
+	struct HFSPlusCatalogFile record;
+	int error;
+	
+	error = resolvelink(hfsmp, linkref, &record);
+	if (error == 0) {
+		if (record.fileID == 0)
+			error = ENOENT;
+		else
+			*ino = record.fileID;
+	}
+	return (error);
 }
 
 /*
@@ -1947,10 +2249,15 @@ builddesc(const HFSPlusCatalogKey *key, cnid_t cnid, u_long hint, u_long encodin
 	char * nameptr;
 	long bufsize;
 	size_t utf8len;
+	char tmpbuff[128];
 
 	/* guess a size... */
 	bufsize = (3 * key->nodeName.length) + 1;
-	MALLOC(nameptr, char *, bufsize, M_TEMP, M_WAITOK);
+	if (bufsize >= sizeof(tmpbuff)-1) {
+	    MALLOC(nameptr, char *, bufsize, M_TEMP, M_WAITOK);
+	} else {
+	    nameptr = &tmpbuff[0];
+	}
 
 	result = utf8_encodestr(key->nodeName.unicode,
 			key->nodeName.length * sizeof(UniChar),
@@ -1970,14 +2277,17 @@ builddesc(const HFSPlusCatalogKey *key, cnid_t cnid, u_long hint, u_long encodin
 		                        bufsize, ':', 0);
 	}
 	descp->cd_parentcnid = key->parentID;
-	descp->cd_nameptr = nameptr;
+	descp->cd_nameptr = add_name(nameptr, utf8len, 0, 0);
 	descp->cd_namelen = utf8len;
 	descp->cd_cnid = cnid;
 	descp->cd_hint = hint;
 	descp->cd_flags = CD_DECOMPOSED | CD_HASBUF;
 	if (isdir)
-		descp->cd_flags |= CD_ISDIR;
+		descp->cd_flags |= CD_ISDIR;	
 	descp->cd_encoding = encoding;
+	if (nameptr != &tmpbuff[0]) {
+	    FREE(nameptr, M_TEMP);
+	}
 	return result;
 }
 
@@ -2115,6 +2425,8 @@ promotefork(struct hfsmount *hfsmp, const struct HFSCatalogFile *filep,
 	if (resource) {
 		forkp->cf_size = filep->rsrcLogicalSize;
 		forkp->cf_blocks = filep->rsrcPhysicalSize / blocksize;
+		forkp->cf_bytesread = 0;
+		forkp->cf_vblocks = 0;
 		xp[0].startBlock = (u_int32_t)filep->rsrcExtents[0].startBlock;
 		xp[0].blockCount = (u_int32_t)filep->rsrcExtents[0].blockCount;
 		xp[1].startBlock = (u_int32_t)filep->rsrcExtents[1].startBlock;
@@ -2124,6 +2436,8 @@ promotefork(struct hfsmount *hfsmp, const struct HFSCatalogFile *filep,
 	} else {
 		forkp->cf_size = filep->dataLogicalSize;
 		forkp->cf_blocks = filep->dataPhysicalSize / blocksize;
+		forkp->cf_bytesread = 0;
+		forkp->cf_vblocks = 0;
 		xp[0].startBlock = (u_int32_t)filep->dataExtents[0].startBlock;
 		xp[0].blockCount = (u_int32_t)filep->dataExtents[0].blockCount;
 		xp[1].startBlock = (u_int32_t)filep->dataExtents[1].startBlock;

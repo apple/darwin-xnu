@@ -77,16 +77,19 @@
 #include <ufs/ufs/inode.h>
 #include <miscfs/fifofs/fifo.h>
 #include <sys/shm.h>
+#include <sys/aio_kern.h>
 
 struct	timezone tz = { TIMEZONE, PST };
 
 #define	NPROC (20 + 16 * MAXUSERS)
+#define HNPROC (20 + 64 * MAXUSERS)
 int	maxproc = NPROC;
+__private_extern__ int hard_maxproc = HNPROC;	/* hardcoded limit */
 int nprocs = 0; /* XXX */
 
 #define	NTEXT (80 + NPROC / 8)			/* actually the object cache */
 #define	NVNODE (NPROC + NTEXT + 300)
-int	desiredvnodes = NVNODE + 350;
+int	desiredvnodes = NVNODE + 700;
 
 #define MAXFILES (OPEN_MAX + 2048)
 int	maxfiles = MAXFILES;
@@ -97,6 +100,16 @@ int	nport = NPROC / 2;
 
 #define MAXSOCKETS NMBCLUSTERS
 int	maxsockets = MAXSOCKETS;
+
+/*
+ *  async IO (aio) configurable limits
+ */
+#define AIO_MAX				90	/* system wide limit of async IO requests */
+#define AIO_PROCESS_MAX		AIO_LISTIO_MAX 	/* process limit of async IO requests */
+#define AIO_THREAD_COUNT	4	/* number of async IO worker threads created */
+int aio_max_requests = AIO_MAX;
+int aio_max_requests_per_process = AIO_PROCESS_MAX;
+int aio_worker_threads = AIO_THREAD_COUNT;
 
 /*
  * These have to be allocated somewhere; allocating

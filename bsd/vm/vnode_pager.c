@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2003 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -137,7 +137,7 @@ vnode_pageout(struct vnode *vp,
 
 		goto out;
 	}
-	ubc_create_upl(vp, f_offset, isize, &vpupl, &pl, UPL_COPYOUT_FROM);
+	ubc_create_upl(vp, f_offset, isize, &vpupl, &pl, UPL_FOR_PAGEOUT | UPL_COPYOUT_FROM | UPL_SET_LITE);
 
 	if (vpupl == (upl_t) 0) {
 		result = error = PAGER_ABSENT;
@@ -201,7 +201,20 @@ vnode_pageout(struct vnode *vp,
 			blkno = ubc_offtoblk(vp, (off_t)(f_offset + offset));
 			s = splbio();
 			vp_pgoclean++;			
-			if ((bp = incore(vp, blkno)) &&
+			if (vp->v_tag == VT_NFS) {
+				/* check with nfs if page is OK to drop */
+				error = nfs_buf_page_inval(vp, (off_t)(f_offset + offset));
+				splx(s);
+				if (error) {
+					ubc_upl_abort_range(vpupl, offset, PAGE_SIZE,
+							    UPL_ABORT_FREE_ON_EMPTY);
+					result = error = PAGER_ERROR;
+					offset += PAGE_SIZE;
+					isize -= PAGE_SIZE;
+					pg_index++;
+					continue;
+				}
+			} else if ((bp = incore(vp, blkno)) &&
 			    ISSET(bp->b_flags, B_BUSY | B_NEEDCOMMIT)) {
 				splx(s);
 				ubc_upl_abort_range(vpupl, offset, PAGE_SIZE,
@@ -309,7 +322,7 @@ vnode_pagein(
 			error  = PAGER_ERROR;
 			goto out;
 		}
-	        ubc_create_upl(vp, f_offset, size, &upl, &pl, UPL_RET_ONLY_ABSENT);
+	        ubc_create_upl(vp, f_offset, size, &upl, &pl, UPL_RET_ONLY_ABSENT | UPL_SET_LITE);
 
 		if (upl == (upl_t)NULL) {
 		        result =  PAGER_ABSENT;

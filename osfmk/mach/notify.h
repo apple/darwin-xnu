@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2002 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2003 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -83,6 +83,18 @@
 			/* Send or send-once right died, leaving a dead-name */
 #define MACH_NOTIFY_LAST		(MACH_NOTIFY_FIRST + 015)
 
+typedef mach_port_t notify_port_t;
+
+#include <sys/appleapiopts.h>
+#ifdef __APPLE_API_OBSOLETE
+/*
+ * Hard-coded message structures for receiving Mach port notification
+ * messages.  However, they are not actual large enough to receive 
+ * the largest trailers current exported by Mach IPC (so they cannot
+ * be used for space allocations in situations using these new larger
+ * trailers).  Instead, the MIG-generated server routines (and
+ * related prototypes should be used).
+ */
 typedef struct {
     mach_msg_header_t	not_header;
     NDR_record_t	NDR;
@@ -115,5 +127,7 @@ typedef struct {
     mach_port_name_t not_port;/* MACH_MSG_TYPE_PORT_NAME */
     mach_msg_format_0_trailer_t trailer;
 } mach_dead_name_notification_t;
+
+#endif  /* __APPLE_API_OBSOLETE */
 
 #endif	/* _MACH_NOTIFY_H_ */

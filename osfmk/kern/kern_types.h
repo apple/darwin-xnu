@@ -119,17 +119,16 @@ typedef struct mig_object		*mig_object_t;
 typedef struct mig_notify		*mig_notify_t;
 #define MIG_NOTIFY_NULL 		((mig_notify_t) 0)
 
-typedef boolean_t (*thread_roust_t)(wait_result_t);	/* how to roust it */
+typedef boolean_t				(*thread_roust_t)(thread_t, wait_result_t);
 #define THREAD_ROUST_NULL	 	((thread_roust_t) 0)
 
 #endif /* __APPLE_API_EVOLVING */
 
 #ifdef __APPLE_API_UNSTABLE
 
-typedef struct thread_shuttle	*thread_shuttle_t;
-#define THREAD_SHUTTLE_NULL		((thread_shuttle_t)0)
-
 /* legacy definitions - going away */
+typedef struct thread			*thread_shuttle_t;
+#define THREAD_SHUTTLE_NULL		((thread_shuttle_t)0)
 struct wait_queue_sub ;
 typedef struct wait_queue_sub	*wait_queue_sub_t;
 #define WAIT_QUEUE_SUB_NULL 	((wait_queue_sub_t)0)

@@ -1,3 +1,4 @@
+
 /*
  * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
  *
@@ -33,20 +34,16 @@
 #define PPC_PGBYTES	4096	/* bytes per ppc page */
 #define PPC_PGSHIFT	12	/* number of bits to shift for pages */
 
+#define VM_MAX_PAGE_ADDRESS     0xFFFFFFFFFFFFF000ULL
+
 #define VM_MIN_ADDRESS	((vm_offset_t) 0)
-#define VM_MAX_ADDRESS	((vm_offset_t) 0xfffff000U)
+#define VM_MAX_ADDRESS	((vm_offset_t) (VM_MAX_PAGE_ADDRESS & 0xFFFFFFFF))
 
 #define VM_MIN_KERNEL_ADDRESS	((vm_offset_t) 0x00001000)
 
-/* We map the kernel using only SR0,SR1,SR2,SR3 leaving segments alone */
-#define VM_MAX_KERNEL_ADDRESS	((vm_offset_t) 0x3fffffff)
+#define VM_MAX_KERNEL_ADDRESS	((vm_offset_t) 0xDFFFFFFF)
 
 #define USER_STACK_END  ((vm_offset_t) 0xffff0000U)
-
-#define ppc_round_page(x)	((((unsigned)(x)) + PPC_PGBYTES - 1) & \
-					~(PPC_PGBYTES-1))
-#define ppc_trunc_page(x)	(((unsigned)(x)) & ~(PPC_PGBYTES-1))
-
 
 #define KERNEL_STACK_SIZE	(4 * PPC_PGBYTES)
 #define INTSTACK_SIZE		(5 * PPC_PGBYTES)

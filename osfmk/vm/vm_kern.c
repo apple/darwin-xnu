@@ -120,7 +120,7 @@ kmem_alloc_contig(
 		return KERN_INVALID_ARGUMENT;
 	}
 
-	size = round_page(size);
+	size = round_page_32(size);
 	if ((flags & KMA_KOBJECT) == 0) {
 		object = vm_object_allocate(size);
 		kr = vm_map_find_space(map, &addr, size, mask, &entry);
@@ -213,7 +213,7 @@ kernel_memory_allocate(
 	vm_offset_t		i;
 	kern_return_t 		kr;
 
-	size = round_page(size);
+	size = round_page_32(size);
 	if ((flags & KMA_KOBJECT) == 0) {
 		/*
 		 *	Allocate a new object.  We must do this before locking
@@ -356,10 +356,10 @@ kmem_realloc(
 	vm_page_t	mem;
 	kern_return_t	kr;
 
-	oldmin = trunc_page(oldaddr);
-	oldmax = round_page(oldaddr + oldsize);
+	oldmin = trunc_page_32(oldaddr);
+	oldmax = round_page_32(oldaddr + oldsize);
 	oldsize = oldmax - oldmin;
-	newsize = round_page(newsize);
+	newsize = round_page_32(newsize);
 
 
 	/*
@@ -506,7 +506,7 @@ kmem_alloc_pageable(
 #else
 	addr = vm_map_min(map);
 #endif
-	kr = vm_map_enter(map, &addr, round_page(size),
+	kr = vm_map_enter(map, &addr, round_page_32(size),
 			  (vm_offset_t) 0, TRUE,
 			  VM_OBJECT_NULL, (vm_object_offset_t) 0, FALSE,
 			  VM_PROT_DEFAULT, VM_PROT_ALL, VM_INHERIT_DEFAULT);
@@ -533,8 +533,9 @@ kmem_free(
 {
 	kern_return_t kr;
 
-	kr = vm_map_remove(map, trunc_page(addr),
-			   round_page(addr + size), VM_MAP_REMOVE_KUNWIRE);
+	kr = vm_map_remove(map, trunc_page_32(addr),
+				round_page_32(addr + size), 
+				VM_MAP_REMOVE_KUNWIRE);
 	if (kr != KERN_SUCCESS)
 		panic("kmem_free");
 }
@@ -550,7 +551,7 @@ kmem_alloc_pages(
 	register vm_size_t		size)
 {
 
-	size = round_page(size);
+	size = round_page_32(size);
         vm_object_lock(object);
 	while (size) {
 	    register vm_page_t	mem;
@@ -617,7 +618,9 @@ kmem_remap_pages(
 	     *	but this shouldn't be a problem because it is wired.
 	     */
 	    PMAP_ENTER(kernel_pmap, start, mem, protection, 
-				VM_WIMG_USE_DEFAULT, TRUE);
+			((unsigned int)(mem->object->wimg_bits))
+					& VM_WIMG_MASK,
+			TRUE);
 
 	    start += PAGE_SIZE;
 	    offset += PAGE_SIZE;
@@ -651,7 +654,7 @@ kmem_suballoc(
 	vm_map_t map;
 	kern_return_t kr;
 
-	size = round_page(size);
+	size = round_page_32(size);
 
 	/*
 	 *	Need reference on submap object because it is internal
@@ -723,9 +726,9 @@ kmem_init(
         /*
          * Account for kernel memory (text, data, bss, vm shenanigans).
          * This may include inaccessible "holes" as determined by what
-         * the machine-dependent init code includes in mem_size.
+         * the machine-dependent init code includes in max_mem.
          */
-        vm_page_wire_count = (atop(mem_size) - (vm_page_free_count
+        vm_page_wire_count = (atop_64(max_mem) - (vm_page_free_count
                                                 + vm_page_active_count
                                                 + vm_page_inactive_count));
 }
@@ -750,7 +753,7 @@ kmem_io_object_trunc(copy, new_size)
 
 	old_size = (vm_size_t)round_page_64(copy->size);
 	copy->size = new_size;
-	new_size = round_page(new_size);
+	new_size = round_page_32(new_size);
 
         vm_object_lock(copy->cpy_object);
         vm_object_page_remove(copy->cpy_object,
@@ -886,6 +889,7 @@ vm_conflict_check(
 		}
 		if (entry->is_sub_map) {
 			vm_map_t	old_map;
+
 			old_map = map;
 			vm_map_lock(entry->object.sub_map);
 			map = entry->object.sub_map;
@@ -906,21 +910,46 @@ vm_conflict_check(
 					return KERN_FAILURE;
 				}
 				kr = KERN_ALREADY_WAITING;
-			} else if(
-				((file_off < ((obj->paging_offset) + obj_off)) &&
-				((file_off + len) > 
-					((obj->paging_offset) + obj_off))) ||
-				((file_off > ((obj->paging_offset) + obj_off)) &&
-				(((((obj->paging_offset) + obj_off)) + len) 
-					> file_off))) { 
-				vm_map_unlock(map);
-				return KERN_FAILURE;
+			} else {
+			       	vm_object_offset_t	obj_off_aligned;
+				vm_object_offset_t	file_off_aligned;
+
+				obj_off_aligned = obj_off & ~PAGE_MASK;
+				file_off_aligned = file_off & ~PAGE_MASK;
+
+				if (file_off_aligned == (obj->paging_offset + obj_off_aligned)) {
+				        /*
+					 * the target map and the file offset start in the same page
+					 * but are not identical... 
+					 */
+				        vm_map_unlock(map);
+					return KERN_FAILURE;
+				}
+				if ((file_off < (obj->paging_offset + obj_off_aligned)) &&
+				    ((file_off + len) > (obj->paging_offset + obj_off_aligned))) {
+				        /*
+					 * some portion of the tail of the I/O will fall
+					 * within the encompass of the target map
+					 */
+				        vm_map_unlock(map);
+					return KERN_FAILURE;
+				}
+				if ((file_off_aligned > (obj->paging_offset + obj_off)) &&
+				    (file_off_aligned < (obj->paging_offset + obj_off) + len)) {
+				        /*
+					 * the beginning page of the file offset falls within
+					 * the target map's encompass
+					 */
+				        vm_map_unlock(map);
+					return KERN_FAILURE;
+				}
 			}
 		} else if(kr != KERN_SUCCESS) {
+		        vm_map_unlock(map);
 			return KERN_FAILURE;
 		}
 
-		if(len < ((entry->vme_end - entry->vme_start) -
+		if(len <= ((entry->vme_end - entry->vme_start) -
 						(off - entry->vme_start))) {
 			vm_map_unlock(map);
 			return kr;
@@ -940,6 +969,4 @@ vm_conflict_check(
 
 	vm_map_unlock(map);
 	return kr;
-
-
 }

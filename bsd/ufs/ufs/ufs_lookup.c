@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2002 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -537,7 +537,7 @@ found:
 			*vpp = vdp;
 			return (0);
 		}
-		if (error = VFS_VGET(vdp->v_mount, dp->i_ino, &tdp))
+		if (error = VFS_VGET(vdp->v_mount, (void *)dp->i_ino, &tdp))
 			return (error);
 		/*
 		 * If directory is "sticky", then user must own
@@ -574,7 +574,7 @@ found:
 		 */
 		if (dp->i_number == dp->i_ino)
 			return (EISDIR);
-		if (error = VFS_VGET(vdp->v_mount, dp->i_ino, &tdp))
+		if (error = VFS_VGET(vdp->v_mount, (void *)dp->i_ino, &tdp))
 			return (error);
 		*vpp = tdp;
 		cnp->cn_flags |= SAVENAME;
@@ -605,7 +605,7 @@ found:
 	pdp = vdp;
 	if (flags & ISDOTDOT) {
 		VOP_UNLOCK(pdp, 0, p);	/* race to get the inode */
-		if (error = VFS_VGET(vdp->v_mount, dp->i_ino, &tdp)) {
+		if (error = VFS_VGET(vdp->v_mount, (void *)dp->i_ino, &tdp)) {
 			vn_lock(pdp, LK_EXCLUSIVE | LK_RETRY, p);
 			return (error);
 		}
@@ -619,7 +619,7 @@ found:
 		VREF(vdp);	/* we want ourself, ie "." */
 		*vpp = vdp;
 	} else {
-		if (error = VFS_VGET(vdp->v_mount, dp->i_ino, &tdp))
+		if (error = VFS_VGET(vdp->v_mount, (void *)dp->i_ino, &tdp))
 			return (error);
 		if (!lockparent || !(flags & ISLASTCN))
 			VOP_UNLOCK(pdp, 0, p);
@@ -714,7 +714,7 @@ ufs_direnter(ip, dvp, cnp)
 	struct direct newdir;
 
 #if DIAGNOSTIC
-	if ((cnp->cn_flags & SAVENAME) == 0)
+	if ((cnp->cn_flags & HASBUF) == 0)
 		panic("direnter: missing name");
 #endif
 	dp = VTOI(dvp);
@@ -862,7 +862,12 @@ ufs_direnter2(dvp, dirp, cr, p)
 	if (rev_endian)
 		byte_swap_dir_block_out(bp);
 #endif /* REV_ENDIAN_FS */
-	error = VOP_BWRITE(bp);
+	if (mp->mnt_flag & MNT_ASYNC) {
+		error = 0;
+		bdwrite(bp);
+	} else {
+		error = VOP_BWRITE(bp);
+	}
 	dp->i_flag |= IN_CHANGE | IN_UPDATE;
 	if (!error && dp->i_endoff && dp->i_endoff < dp->i_size)
 		error = VOP_TRUNCATE(dvp, (off_t)dp->i_endoff, IO_SYNC, cr, p);
@@ -910,7 +915,12 @@ ufs_dirremove(dvp, cnp)
 		if (rev_endian)
 			byte_swap_dir_block_out(bp);
 #endif /* REV_ENDIAN_FS */
-		error = VOP_BWRITE(bp);
+		if (mp->mnt_flag & MNT_ASYNC) {
+			error = 0;
+			bdwrite(bp);
+		} else {
+			error = VOP_BWRITE(bp);
+		}
 		dp->i_flag |= IN_CHANGE | IN_UPDATE;
 		return (error);
 	}
@@ -927,7 +937,12 @@ ufs_dirremove(dvp, cnp)
 		if (rev_endian)
 			byte_swap_dir_block_out(bp);
 #endif /* REV_ENDIAN_FS */
-		error = VOP_BWRITE(bp);
+		if (mp->mnt_flag & MNT_ASYNC) {
+			error = 0;
+			bdwrite(bp);
+		} else {
+			error = VOP_BWRITE(bp);
+		}
 		dp->i_flag |= IN_CHANGE | IN_UPDATE;
 		return (error);
 	}
@@ -942,7 +957,12 @@ ufs_dirremove(dvp, cnp)
 	if (rev_endian)
 		byte_swap_dir_block_out(bp);
 #endif /* REV_ENDIAN_FS */
-	error = VOP_BWRITE(bp);
+	if (mp->mnt_flag & MNT_ASYNC) {
+		error = 0;
+		bdwrite(bp);
+	} else {
+		error = VOP_BWRITE(bp);
+	}
 	dp->i_flag |= IN_CHANGE | IN_UPDATE;
 	return (error);
 }
@@ -971,7 +991,12 @@ ufs_dirrewrite(dp, ip, cnp)
 	if (vdp->v_mount->mnt_flag & MNT_REVEND)
 		byte_swap_dir_block_out(bp);
 #endif /* REV_ENDIAN_FS */
-	error = VOP_BWRITE(bp);
+	if (vdp->v_mount->mnt_flag & MNT_ASYNC) {
+		error = 0;
+		bdwrite(bp);
+	} else {
+		error = VOP_BWRITE(bp);
+	}
 	dp->i_flag |= IN_CHANGE | IN_UPDATE;
 	return (error);
 }
@@ -1104,7 +1129,7 @@ ufs_checkpath(source, target, cred)
 		if (dirbuf.dotdot_ino == rootino)
 			break;
 		vput(vp);
-		if (error = VFS_VGET(vp->v_mount, dirbuf.dotdot_ino, &vp)) {
+		if (error = VFS_VGET(vp->v_mount, (void *)dirbuf.dotdot_ino, &vp)) {
 			vp = NULL;
 			break;
 		}

@@ -63,7 +63,11 @@
 #define _SYS_SYSLIMITS_H_
 
 #if !defined(_ANSI_SOURCE)
-#define	ARG_MAX		   (64 * 1024)	/* max bytes for an exec function */
+/*
+ * Note: CHILD_MAX *must* be less than hard_maxproc, which is set at
+ * compile time; you *cannot* set it higher than the hard limit!!
+ */
+#define	ARG_MAX		   (256 * 1024)	/* max bytes for an exec function */
 #define	CHILD_MAX		   100	/* max simultaneous processes */
 #define	GID_MAX		   2147483647U	/* max value for a gid_t (2^31-2) */
 #define	LINK_MAX		32767	/* max file link count */

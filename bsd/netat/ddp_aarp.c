@@ -81,7 +81,6 @@ aarp_amt_array *aarp_table[IF_TOTAL_MAX];
 
 int aarp_init1(), aarp_init2();
 int aarp_send_data();
-int aarp_sched_probe();
 
 StaticProc int aarp_req_cmd_in();
 StaticProc int aarp_resp_cmd_in();
@@ -93,7 +92,7 @@ StaticProc aarp_amt_t *aarp_lru_entry();
 StaticProc int aarp_glean_info();
 StaticProc int aarp_delete_amt_info();
 StaticProc void aarp_build_pkt();
-StaticProc int aarp_sched_req();
+StaticProc void aarp_sched_req(void *);
 StaticProc int aarp_get_rand_node();
 StaticProc int aarp_get_next_node();
 StaticProc int aarp_get_rand_net();
@@ -767,13 +766,14 @@ register aarp_amt_t	*amt_ptr;
  *
  ****************************************************************************/
 
-int  aarp_sched_probe()
+void  aarp_sched_probe(void *arg)
 {
 	boolean_t 	funnel_state;
 
 	funnel_state = thread_funnel_set(network_flock, TRUE);
 
-	if (probe_cb.no_of_retries != AARP_MAX_PROBE_RETRIES) {
+	if (probe_cb.elapp->aa_ifp != 0 &&
+            probe_cb.no_of_retries != AARP_MAX_PROBE_RETRIES) {
 		if (aarp_send_probe() == -1)
 			AARPwakeup(&probe_cb);
 	} else {
@@ -782,7 +782,6 @@ int  aarp_sched_probe()
 	}
 
 	(void) thread_funnel_set(network_flock, FALSE);
-	return(0);
 }
 
 
@@ -810,11 +809,12 @@ StaticProc void aarp_build_pkt(pkt, elapp)
  *
  ****************************************************************************/
 
-StaticProc int	aarp_sched_req(amt_ptr)
-     register aarp_amt_t *amt_ptr;
+StaticProc void	aarp_sched_req(arg)
+     void *arg;
 {
 	int s, i;
 	boolean_t 	funnel_state;
+	aarp_amt_t *amt_ptr = (aarp_amt_t *)arg;
 
 	funnel_state = thread_funnel_set(network_flock, TRUE);
 
@@ -824,7 +824,8 @@ StaticProc int	aarp_sched_req(amt_ptr)
 	 * into one of the amt arrays.
 	 */
 	for (i = 0; i < IF_TOTAL_MAX; i++) {
-	    if (aarp_table[i] == NULL || amt_ptr < aarp_table[i] || amt_ptr >= (aarp_table[i] + 1))
+	    if (aarp_table[i] == NULL || (void *)amt_ptr < (void *)aarp_table[i] || 
+		(void *)amt_ptr >= (void *)(aarp_table[i] + 1))
 	        continue;  /* no match - try next entry */
 		
 	    /*
@@ -834,13 +835,13 @@ StaticProc int	aarp_sched_req(amt_ptr)
 	    if (amt_ptr->tmo == 0) {
 	        ATENABLE(s, arpinp_lock);
 	        (void) thread_funnel_set(network_flock, FALSE);
-	        return(0);
+	        return;
 	    }
 	    if (amt_ptr->no_of_retries < AARP_MAX_REQ_RETRIES) {
 	        ATENABLE(s, arpinp_lock);
 	        if (aarp_send_req(amt_ptr) == 0) {
 	            (void) thread_funnel_set(network_flock, FALSE);
-	            return(0);
+	            return;
 	        }
 	        ATDISABLE(s, arpinp_lock);
 	    }
@@ -850,7 +851,7 @@ StaticProc int	aarp_sched_req(amt_ptr)
 	}	
 	(void) thread_funnel_set(network_flock, FALSE);
 
-	return(0);
+	return;
 }
 
 

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2002 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -28,9 +28,6 @@
  *
  *	This file contains machine independent code for performing core dumps.
  *
- * HISTORY
- * 16-Feb-91  Mike DeMoney (mike@next.com)
- *	Massaged into MI form from m68k/core.c.
  */
 
 #include <mach/vm_param.h>
@@ -68,9 +65,10 @@ typedef struct {
 mythread_state_flavor_t thread_flavor_array[]={
 		{PPC_THREAD_STATE , PPC_THREAD_STATE_COUNT},
 		{PPC_FLOAT_STATE, PPC_FLOAT_STATE_COUNT}, 
-		{PPC_EXCEPTION_STATE, PPC_EXCEPTION_STATE_COUNT}
+		{PPC_EXCEPTION_STATE, PPC_EXCEPTION_STATE_COUNT},
+		{PPC_VECTOR_STATE, PPC_VECTOR_STATE_COUNT}
 		};
-int mynum_flavors=3;
+int mynum_flavors=4;
 #elif defined (__i386__)
 mythread_state_flavor_t thread_flavor_array [] = { 
 		{i386_THREAD_STATE, i386_THREAD_STATE_COUNT},
@@ -97,6 +95,7 @@ typedef struct {
 	int tstate_size;
 } tir_t;
 
+void
 collectth_state(thread_act_t th_act, tir_t *t)
 {
 	vm_offset_t	header;
@@ -172,6 +171,7 @@ coredump(p)
 	tir_t tir1;
 	struct vnode * vp;
 	extern boolean_t coredumpok(vm_map_t map, vm_offset_t va);  /* temp fix */
+	extern task_t current_task();	/* XXX */
 
 	if (pcred->p_svuid != pcred->p_ruid || pcred->p_svgid != pcred->p_rgid)
 		return (EFAULT);
@@ -185,8 +185,8 @@ coredump(p)
 	(void) task_suspend(task);
 
 	sprintf(core_name, "/cores/core.%d", p->p_pid);
-	NDINIT(&nd, LOOKUP, FOLLOW, UIO_SYSSPACE, core_name, p);
-	if(error = vn_open(&nd, O_CREAT | FWRITE, S_IRUSR ))
+	NDINIT(&nd, LOOKUP, NOFOLLOW, UIO_SYSSPACE, core_name, p);
+	if(error = vn_open(&nd, O_CREAT | FWRITE | O_NOFOLLOW, S_IRUSR ))
 		return (error);
 	vp = nd.ni_vp;
 	
@@ -215,18 +215,8 @@ coredump(p)
 	 * nflavors here is really the number of ints in flavors
 	 * to meet the thread_getstatus() calling convention
 	 */
-#if 0
-	nflavors = sizeof(flavors)/sizeof(int);
-	if (thread_getstatus(current_thread(), THREAD_STATE_FLAVOR_LIST,
-				(thread_state_t)(flavors),
-				 &nflavors) != KERN_SUCCESS)
-	    panic("core flavor list");
-	/* now convert to number of flavors */
-	nflavors /= sizeof(mythread_state_flavor_t)/sizeof(int);
-#else
 	nflavors = mynum_flavors;
 	bcopy(thread_flavor_array,flavors,sizeof(thread_flavor_array));
-#endif
 	tstate_size = 0;
 	for (i = 0; i < nflavors; i++)
 		tstate_size += sizeof(mythread_state_flavor_t) +
@@ -255,9 +245,10 @@ coredump(p)
 	mh->sizeofcmds = command_size;
 
 	hoffset = sizeof(struct mach_header);	/* offset into header */
-	foffset = round_page(header_size);	/* offset into file */
+	foffset = round_page_32(header_size);	/* offset into file */
 	vmoffset = VM_MIN_ADDRESS;		/* offset into VM */
-	/* We use to check for an error, here, now we try and get 
+	/*
+	 * We use to check for an error, here, now we try and get 
 	 * as much as we can
 	 */
 	while (segment_count > 0){
@@ -314,7 +305,9 @@ coredump(p)
 		 *	Note: if we can't read, then we end up with
 		 *	a hole in the file.
 		 */
-		if ((maxprot & VM_PROT_READ) == VM_PROT_READ && vbr.user_tag != VM_MEMORY_IOKIT && coredumpok(map,vmoffset)) {
+		if ((maxprot & VM_PROT_READ) == VM_PROT_READ
+			&& vbr.user_tag != VM_MEMORY_IOKIT
+			&& coredumpok(map,vmoffset)) {
 			error = vn_rdwr(UIO_WRITE, vp, (caddr_t)vmoffset, size, foffset,
 				UIO_USERSPACE, IO_NODELOCKED|IO_UNIT, cred, (int *) 0, p);
 		}
@@ -325,44 +318,12 @@ coredump(p)
 		segment_count--;
 	}
 
-#if 0 /* [ */
-	task_lock(task);
-	thread = (thread_t) queue_first(&task->thread_list);
-	while (thread_count > 0) {
-		/*
-		 *	Fill in thread command structure.
-		 */
-		tc = (struct thread_command *) (header + hoffset);
-		tc->cmd = LC_THREAD;
-		tc->cmdsize = sizeof(struct thread_command)
-				+ tstate_size;
-		hoffset += sizeof(struct thread_command);
-		/*
-		 * Follow with a struct thread_state_flavor and
-		 * the appropriate thread state struct for each
-		 * thread state flavor.
-		 */
-		for (i = 0; i < nflavors; i++) {
-			*(mythread_state_flavor_t *)(header+hoffset) =
-			  flavors[i];
-			hoffset += sizeof(mythread_state_flavor_t);
-			thread_getstatus(thread, flavors[i].flavor,
-					(thread_state_t *)(header+hoffset),
-					&flavors[i].count);
-			hoffset += flavors[i].count*sizeof(int);
-		}
-		thread = (thread_t) queue_next(&thread->thread_list);
-		thread_count--;
-	}
-	task_unlock(task);
-#else /* /* 0 ][ */
 	tir1.header = header;
 	tir1.hoffset = hoffset;
 	tir1.flavors = flavors;
 	tir1.tstate_size = tstate_size;
 	task_act_iterate_wth_args(task, collectth_state,&tir1);
 
-#endif /* 0 ] */
 	/*
 	 *	Write out the Mach header at the beginning of the
 	 *	file.
@@ -375,4 +336,5 @@ out:
 	error1 = vn_close(vp, FWRITE, cred, p);
 	if (error == 0)
 		error = error1;
+	return (error);
 }

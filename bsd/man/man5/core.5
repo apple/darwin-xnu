@@ -41,17 +41,25 @@ Files which would be larger than the limit are not created.
 The core file consists of the
 .Pa Xr Mach-O 5
 header as  described in the
-.Aq Pa sys/loader.h
+.Aq Pa mach-o/loader.h
 file.
 The remainder of the core
 file consists of various sections described in the
 .Xr Mach-O 5
 header.
+.Sh NOTE
+Core dumps are disabled by default under Darwin/Mac OS X.  To re-enable core dumps, a 
+privlaged user must edit
+.Pa /etc/hostconfig
+to contain the line:
+.Bd -literal
+COREDUMPS=-YES-
+.Ed
 .Sh SEE ALSO
 .Xr gdb 1 ,
 .Xr setrlimit 2 ,
 .Xr sigaction 2 ,
-.Xr Mach-O 5,
+.Xr Mach-O 5 ,
 .Xr sysctl 8
 .Sh HISTORY
 A

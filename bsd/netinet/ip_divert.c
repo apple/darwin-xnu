@@ -554,7 +554,9 @@ div_pcblist SYSCTL_HANDLER_ARGS
 	return error;
 }
 
+#ifndef __APPLE__
 #warning Fix SYSCTL net_inet_divert
+#endif
 #if 0
 SYSCTL_DECL(_net_inet_divert);
 SYSCTL_PROC(_net_inet_divert, OID_AUTO, pcblist, CTLFLAG_RD, 0, 0,

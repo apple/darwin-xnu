@@ -262,7 +262,7 @@ AURPgetmsg(err)
 				("AURPgetmsg: soreceive returned %d, aurp_global.event==0x%x\n", *err, events));
 			/* soreceive() sets *mp to zero! at start */
 			if (p_mbuf)
-			        ip_to_atalk(from, p_mbuf);
+			        ip_to_atalk((struct sockaddr_in *)from, p_mbuf);
 			if (*err || (p_mbuf == NULL)) {
 				/*
 				 * An error occurred in soreceive(),

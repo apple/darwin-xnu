@@ -1,5 +1,5 @@
-/*	$FreeBSD: src/sys/crypto/blowfish/blowfish.h,v 1.1.2.2 2001/07/03 11:01:28 ume Exp $	*/
-/*	$KAME: blowfish.h,v 1.10 2000/09/18 21:21:20 itojun Exp $	*/
+/*	$FreeBSD: src/sys/crypto/blowfish/blowfish.h,v 1.1.2.3 2002/03/26 10:12:23 ume Exp $	*/
+/*	$KAME: blowfish.h,v 1.12 2002/02/27 01:33:59 itojun Exp $	*/
 
 /* crypto/bf/blowfish.h */
 /* Copyright (C) 1995-1997 Eric Young (eay@mincom.oz.au)
@@ -81,7 +81,11 @@ typedef struct bf_key_st {
 } BF_KEY;
 
 void BF_set_key __P((BF_KEY *, int, unsigned char *));
-void BF_encrypt __P((BF_LONG *, BF_KEY *, int));
+void BF_encrypt __P((BF_LONG *, BF_KEY *));
+void BF_decrypt __P((BF_LONG *, BF_KEY *));
+void BF_cbc_encrypt(const unsigned char *, unsigned char *, long,
+		    const BF_KEY *, unsigned char *, int);
+
 #ifdef  __cplusplus
 }
 #endif

@@ -131,36 +131,10 @@
 #define	_PC_CASE_PRESERVING		 12
 #endif
 
-/* configurable system variables */
-#define	_SC_ARG_MAX		 1
-#define	_SC_CHILD_MAX		 2
-#define	_SC_CLK_TCK		 3
-#define	_SC_NGROUPS_MAX		 4
-#define	_SC_OPEN_MAX		 5
-#define	_SC_JOB_CONTROL		 6
-#define	_SC_SAVED_IDS		 7
-#define	_SC_VERSION		 8
-#define	_SC_BC_BASE_MAX		 9
-#define	_SC_BC_DIM_MAX		10
-#define	_SC_BC_SCALE_MAX	11
-#define	_SC_BC_STRING_MAX	12
-#define	_SC_COLL_WEIGHTS_MAX	13
-#define	_SC_EXPR_NEST_MAX	14
-#define	_SC_LINE_MAX		15
-#define	_SC_RE_DUP_MAX		16
-#define	_SC_2_VERSION		17
-#define	_SC_2_C_BIND		18
-#define	_SC_2_C_DEV		19
-#define	_SC_2_CHAR_TERM		20
-#define	_SC_2_FORT_DEV		21
-#define	_SC_2_FORT_RUN		22
-#define	_SC_2_LOCALEDEF		23
-#define	_SC_2_SW_DEV		24
-#define	_SC_2_UPE		25
-#define	_SC_STREAM_MAX		26
-#define	_SC_TZNAME_MAX		27
-
 /* configurable system strings */
 #define	_CS_PATH		 1
+
+/* async IO support */
+#define _POSIX_ASYNCHRONOUS_IO
 
 #endif /* !_SYS_UNISTD_H_ */

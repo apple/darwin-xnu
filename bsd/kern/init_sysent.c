@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1995-1999, 2000-2002 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 1995-1999, 2000-2003 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -127,6 +127,9 @@ int	setpriority();
 int	socket();
 int	connect();
 int	getpriority();
+#ifdef __ppc__
+int	osigreturn();
+#endif
 int	sigreturn();
 int	bind();
 int	setsockopt();
@@ -302,6 +305,9 @@ int sem_getvalue();
 int sem_init();
 int sem_destroy();
 
+int fmod_watch_enable();
+int fmod_watch();
+
 int	issetugid();
 int	utrace();
 int	pread();
@@ -314,8 +320,47 @@ int sigwait();
 int pthread_sigmask();
 int __disable_threadsignal();
 
+int	nfsclnt();
+int	fhopen();
+
+int	aio_cancel();
+int	aio_error();
+int	aio_fsync();
+int	aio_read();
+int	aio_return();
+int aio_suspend();
+int	aio_write();
+int	lio_listio();
+
+int	kqueue();
+int	kqueue_portset_np();
+int	kqueue_from_portset_np();
+int	kevent();
+
+int audit();
+int auditon();
+int auditsvc();
+int getauid();
+int setauid();
+int getaudit();
+int setaudit();
+int getaudit_addr();
+int setaudit_addr();
+int auditctl();
+
 /*
  * System call switch table.
+ */
+
+/*
+ * N.B.
+ * The argument count numbers in this table are actually
+ * the number of UInt32 words that comprise the arguments
+ * not the number of arguments
+ *
+ * This value is not currently used on PPC but Intel Darwin
+ * does use it and will not work correctly if the values
+ * are wrong
  */
 
 struct sysent sysent[] = {
@@ -396,7 +441,7 @@ struct sysent sysent[] = {
 	syss(sstk,1),			/*  70 = sstk */
 	compat(smmap,6),		/*  71 = old mmap */
 	syss(ovadvise,1),		/*  72 = old vadvise */
-	syss(munmap,2),			/*  73 = munmap */
+	sysnofnl(munmap,2),		/*  73 = munmap */
 	syss(mprotect,3),		/*  74 = mprotect */
 	syss(madvise,3),		/*  75 = madvise */
 	syss(nosys,0),			/*  76 was obsolete vhangup */
@@ -407,7 +452,7 @@ struct sysent sysent[] = {
 	sysp(getpgrp,0),		/*  81 = getpgrp */
 	sysp(setpgid,2),		/*  82 = setpgid */
 	syss(setitimer,3),		/*  83 = setitimer */
-	compat(wait,0),	/*  84 = old wait */
+	compat(wait,1),	/*  84 = old wait */
 	syss(swapon,1),			/*  85 = swapon */
 	syss(getitimer,2),		/*  86 = getitimer */
 	compat(gethostname,2),	/*  87 = old gethostname */
@@ -426,7 +471,11 @@ struct sysent sysent[] = {
 	sysp(getpriority,2),	/* 100 = getpriority */
 	comaptnet(send,4),		/* 101 = old send */
 	comaptnet(recv,4),		/* 102 = old recv */
-	syss(sigreturn,1),		/* 103 = sigreturn */
+#ifdef __ppc__
+	syss(osigreturn,1),		/* 103 = sigreturn ; compat for jaguar*/
+#else
+	syss(sigreturn,1),		/* 103 = sigreturn  */
+#endif
 	sysnets(bind,3),		/* 104 = bind */
 	sysnets(setsockopt,5),	/* 105 = setsockopt */
 	sysnets(listen,2),		/* 106 = listen */
@@ -439,6 +488,18 @@ struct sysent sysent[] = {
 	comaptnet(recvmsg,3),	/* 113 = recvmsg */
 	comaptnet(sendmsg,3),	/* 114 = sendmsg */
 	syss(nosys,0),			/* 115 = old vtrace */
+
+/*
+ * N.B.
+ * The argument count numbers in this table are actually
+ * the number of UInt32 words that comprise the arguments
+ * not the number of arguments
+ *
+ * This value is not currently used on PPC but Intel Darwin
+ * does use it and will not work correctly if the values
+ * are wrong
+ */
+
 #ifdef __ppc__
 	sysnofnl(ppc_gettimeofday,2),	/* 116 = gettimeofday */
 #else
@@ -481,11 +542,11 @@ struct sysent sysent[] = {
 	syss(getpgid,1),		/* 151 = getpgid */
 	sysp(setprivexec,1),/* 152 = setprivexec */
 #ifdef DOUBLE_ALIGN_PARAMS
+	syss(pread,6),		/* 153 = pread */
+	syss(pwrite,6),		/* 154 = pwrite */
+#else
 	syss(pread,5),		/* 153 = pread */
 	syss(pwrite,5),		/* 154 = pwrite */
-#else
-	syss(pread,4),		/* 153 = pread */
-	syss(pwrite,4),		/* 154 = pwrite */
 #endif
 	syss(nfssvc,2),			/* 155 = nfs_svc */
 	compat(getdirentries,4),	/* 156 = old getdirentries */
@@ -499,7 +560,7 @@ struct sysent sysent[] = {
 	syss(nosys,0),			/* 164 */
 #if	QUOTA
 	syss(quotactl, 4),		/* 165 = quotactl */
-#else	QUOTA
+#else	/* QUOTA */
 	syss(nosys, 0),		/* 165 = not configured */
 #endif	/* QUOTA */
 	syss(nosys,0),			/* 166 was exportfs */
@@ -516,11 +577,15 @@ struct sysent sysent[] = {
 	syss(nosys,0),			/* 177 */
 	syss(nosys,0),			/* 178 */
 	syss(nosys,0),			/* 179 */
-	syss(kdebug_trace,6),           /* 180 */
+	sysnofnl(kdebug_trace,6),       /* 180 */
 	syss(setgid,1),			/* 181 */
 	syss(setegid,1),		/* 182 */
 	syss(seteuid,1),		/* 183 */
+#ifdef __ppc__
+	syss(sigreturn, 2),		/* 184 = nosys */
+#else
 	syss(nosys,0),			/* 184 = nosys */
+#endif
 	syss(nosys,0),			/* 185 = nosys */
 	syss(nosys,0),			/* 186 = nosys */
 	syss(nosys,0),			/* 187 = nosys */
@@ -529,6 +594,18 @@ struct sysent sysent[] = {
 	syss(lstat,2),			/* 190 = lstat */
 	syss(pathconf,2),		/* 191 = pathconf */
 	syss(fpathconf,2),		/* 192 = fpathconf */
+
+/*
+ * N.B.
+ * The argument count numbers in this table are actually
+ * the number of UInt32 words that comprise the arguments
+ * not the number of arguments
+ *
+ * This value is not currently used on PPC but Intel Darwin
+ * does use it and will not work correctly if the values
+ * are wrong
+ */
+
 #if COMPAT_GETFSSTAT
 	syss(getfsstat,3),		/* 193 = getfsstat */
 #else
@@ -568,8 +645,8 @@ struct sysent sysent[] = {
 	sysnets(ATPgetreq,3),		/* 211 = ATPgetreq*/
 	sysnets(ATPgetrsp,2),		/* 212 = ATPgetrsp*/
 	syss(nosys,0),			/* 213 = Reserved for AppleTalk */
-	syss(nosys,0),			/* 214 = Reserved for AppleTalk */
-	syss(nosys,0),			/* 215 = Reserved for AppleTalk */
+	syss(kqueue_from_portset_np,1), /* 214 = kqueue_from_portset_np */
+	syss(kqueue_portset_np,1),	/* 215 = kqueue_portset_np */
 #else
 	syss(nosys,0),			/* 206 = Reserved for AppleTalk */
 	syss(nosys,0),			/* 207 = Reserved for AppleTalk */
@@ -592,6 +669,18 @@ struct sysent sysent[] = {
  * We expect all filesystems to recognize the call and report that it is
  * not supported or to actually implement it.
  */
+
+/*
+ * N.B.
+ * The argument count numbers in this table are actually
+ * the number of UInt32 words that comprise the arguments
+ * not the number of arguments
+ *
+ * This value is not currently used on PPC but Intel Darwin
+ * does use it and will not work correctly if the values
+ * are wrong
+ */
+
 	syss(nosys,3),	/* 216 = HFS make complex file call (multipel forks */
 	syss(nosys,2),		/* 217 = HFS statv extended stat call for HFS */
 	syss(nosys,2),		/* 218 = HFS lstatv extended lstat call for HFS */	
@@ -607,7 +696,7 @@ struct sysent sysent[] = {
 #endif /* __APPLE_API_OBSOLETE */
 	syss(searchfs,6),	/* 225 = HFS searchfs to implement catalog searching */
 	syss(delete,1),		/* 226 = private delete (Carbon semantics) */
-	syss(copyfile,4),	/* 227 = copyfile - orignally for AFP */
+	syss(copyfile,6),	/* 227 = copyfile - orignally for AFP */
 	syss(nosys,0),		/* 228 */
 	syss(nosys,0),		/* 229 */
 	syss(nosys,0),		/* 230 */
@@ -627,8 +716,8 @@ struct sysent sysent[] = {
 	syss(nosys,0),		/* 244 */
 	syss(nosys,0),		/* 245 */
 	syss(nosys,0),		/* 246 */
-	syss(nosys,0),		/* 247 */
-	syss(nosys,0),		/* 248 */
+	syss(nfsclnt,2),	/* 247 = nfsclnt*/
+	syss(fhopen,2),		/* 248 = fhopen */
 	syss(nosys,0),		/* 249 */
 	syss(minherit,3),	/* 250 = minherit */
 	syss(semsys,5),		/* 251 = semsys */
@@ -669,8 +758,8 @@ struct sysent sysent[] = {
 	syss(nosys,0),		/* 286 */
 	syss(nosys,0),		/* 287 */
 	syss(nosys,0),		/* 288 */
-	syss(nosys,0),		/* 289 */
-	syss(nosys,0),		/* 290 */
+	syss(fmod_watch_enable, 1),     /* 289 = fmod_watching */
+	syss(fmod_watch, 4),    /* 290 = fmod_watch */
 	syss(nosys,0),		/* 291 */
 	syss(nosys,0),		/* 292 */
 	syss(nosys,0),		/* 293 */
@@ -693,14 +782,14 @@ struct sysent sysent[] = {
 	syss(getsid,1),		/* 310 = getsid */
 	syss(nosys,0),		/* 311 */
 	syss(nosys,0),		/* 312 */
-	syss(nosys,0),		/* 313 */
-	syss(nosys,0),		/* 314 */
-	syss(nosys,0),		/* 315 */
-	syss(nosys,0),		/* 316 */
-	syss(nosys,0),		/* 317 */
-	syss(nosys,0),		/* 318 */
-	syss(nosys,0),		/* 319 */
-	syss(nosys,0),		/* 320 */
+	sysnofnl(aio_fsync,1),		/* 313 = aio_fsync */
+	sysnofnl(aio_return,1),		/* 314 = aio_return */
+	sysnofnl(aio_suspend,3),	/* 315 = aio_suspend */
+	sysnofnl(aio_cancel,2),		/* 316 = aio_cancel */
+	sysnofnl(aio_error,1),		/* 317 = aio_error */
+	sysnofnl(aio_read,1),		/* 318 = aio_read */
+	sysnofnl(aio_write,1),		/* 319 = aio_write */
+	sysnofnl(lio_listio,4),		/* 320 = lio_listio */
 	syss(nosys,0),		/* 321 */
 	syss(nosys,0),		/* 322 */
 	syss(nosys,0),		/* 323 */
@@ -729,6 +818,38 @@ struct sysent sysent[] = {
 	syss(nosys,0),		/* 346 */
 	syss(nosys,0),		/* 347 */
 	syss(nosys,0),		/* 348 */
-	syss(nosys,0)		/* 349 */
+	syss(nosys,0),		/* 349 */
+	syss(audit,2),		/* 350 */
+	syss(auditon,3),	/* 351 */
+	syss(auditsvc,2),	/* 352 */
+	syss(getauid,1),	/* 353 */
+	syss(setauid,1),	/* 354 */
+	syss(getaudit,1),	/* 355 */
+	syss(setaudit,1),	/* 356 */
+	syss(getaudit_addr,2),	/* 357 */
+	syss(setaudit_addr,2),	/* 358 */
+	syss(auditctl,1),	/* 359 */
+	syss(nosys,0),		/* 360 */
+	syss(nosys,0),		/* 361 */
+	syss(kqueue,0),		/* 362 = kqueue */
+	syss(kevent,6),		/* 363 = kevent */
+	syss(nosys,0),		/* 364 */
+	syss(nosys,0),		/* 365 */
+	syss(nosys,0),		/* 366 */
+	syss(nosys,0),		/* 367 */
+	syss(nosys,0),		/* 368 */
+	syss(nosys,0)		/* 369 */
+
+/*
+ * N.B.
+ * The argument count numbers in this table are actually
+ * the number of UInt32 words that comprise the arguments
+ * not the number of arguments
+ *
+ * This value is not currently used on PPC but Intel Darwin
+ * does use it and will not work correctly if the values
+ * are wrong
+ */
+
 };
 int	nsysent = sizeof(sysent) / sizeof(sysent[0]);

@@ -109,7 +109,7 @@ typedef struct {
 	gbuf_t			*m;		/* ptr to msg blk to be sent out */
 	at_ifaddr_t		*elapp;
 	int                     error;
-	void	*tmo;
+	int			tmo;
 } aarp_amt_t;
 
 #define	AMT_BSIZ			 4		/* bucket size */

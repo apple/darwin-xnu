@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2003 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -193,6 +193,10 @@ OSStatus	AllocateNode (BTreeControlBlockPtr		btreePtr, UInt32	*nodeNum)
 	
 	--btreePtr->freeNodes;
 	btreePtr->flags |= kBTHeaderDirty;
+	
+	/* Account for allocations from node reserve */
+	BTUpdateReserve(btreePtr, 1);
+
 	*nodeNum = nodeNumber;
 	
 	return noErr;

@@ -1,0 +1,135 @@
+.\"
+.\" Copyright (c) 2003 Apple Computer, Inc. All rights reserved.
+.\"
+.\" @APPLE_LICENSE_HEADER_START@
+.\" 
+.\" The contents of this file constitute Original Code as defined in and
+.\" are subject to the Apple Public Source License Version 1.1 (the
+.\" "License").  You may not use this file except in compliance with the
+.\" License.  Please obtain a copy of the License at
+.\" http://www.apple.com/publicsource and read it before using this file.
+.\" 
+.\" This Original Code and all software distributed under the License are
+.\" distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+.\" EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
+.\" INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
+.\" FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
+.\" License for the specific language governing rights and limitations
+.\" under the License.
+.\" 
+.\" @APPLE_LICENSE_HEADER_END@
+.\"
+.Dd January 14, 2003
+.Dt FSCTL 2
+.Os "Mac OS X"
+.Sh NAME
+.Nm fsctl
+.Nd control filesystems
+.Sh SYNOPSIS
+.Fd #include <sys/attr.h>
+.Fd #include <sys/ioctl.h>
+.Ft int
+.Fn fsctl "const char *path" "unsigned long request" "void *data" "unsigned long options"
+.Sh DESCRIPTION
+The
+.Fn fsctl
+function manipulates the filesystem controlling mounted volumes.
+In particular, many filesystem-specific operating
+characteristics of mounted filesystems may be controlled
+with
+.Fn fsctl
+requests.
+.Fn fsctl
+requests can also be used to extract filesystem-specific
+information for a mounted volumes.
+.Pp
+.Fa path
+is the path name of any file within the mounted filesystem.
+An  fsctl
+.Fa request
+has encoded in it whether the argument is an
+.Dq in
+parameter
+or
+.Dq out
+parameter, and the size of the argument
+.Fa data
+in bytes.
+Values for
+.Fa request
+are entirely filesystem-specific except for the following, defined in
+.Ao Pa sys/fsctl.h Ac :
+.Bd -literal  -offset indent
+FSGETMOUNTINFOSIZE	/* Return size of mount info data */
+.Ed
+.Pp
+Macros and defines used in specifying an fsctl
+.Fa request
+are the same as for
+.Fn ioctl
+requests and are located in the file
+.Ao Pa sys/ioccom.h Ac .
+.Fa options
+may specify special flags for the processing of the
+.Fn fsctl
+call.  The options are specified by
+.Em or Ns 'ing
+the option values.  The only option currently defined is
+.Bd -literal -offset indent
+#define FSOPT_NOFOLLOW	0x00000001	/* Don't follow symlinks */
+.Ed
+.Pp
+which is interpreted by the
+.Fn fsctl
+call to prevent following of symlinks.  The
+.Fa options
+argument is passed to the filesystem, which may define and handle
+additional
+.Fa options
+bit values.
+.Sh RETURN VALUES
+.Pp
+If an error has occurred, a value of -1 is returned and
+.Va errno
+is set to indicate the error.
+.Sh ERRORS
+.Fn fsctl
+will fail if:
+.Bl -tag -width Er
+.It Bq Er ENOTDIR
+A component of the path prefix is not a directory.
+.It Bq Er ENAMETOOLONG
+A component of a pathname exceeded 
+.Dv {NAME_MAX}
+characters, or an entire path name exceeded 
+.Dv {PATH_MAX}
+characters.
+.It Bq Er ENOENT
+The named file does not exist.
+.It Bq Er EACCES
+Search permission is denied for a component of the path prefix.
+.It Bq Er ELOOP
+Too many symbolic links were encountered in translating the pathname.
+.It Bq Er EFAULT
+.Fa path
+or
+.Em data
+points to an invalid address.
+.It Bq Er EIO
+An
+.Tn I/O
+error occurred while reading from or writing to the file system.
+.It Bq Er EINVAL
+.Fa request
+or
+.Fa data
+is not valid.
+.El
+.Sh SEE ALSO
+.Xr ioctl 2 ,
+.Xr getattrlist 2 ,
+.Xr setattrlist 2
+.Sh HISTORY
+The
+.Fn fsctl
+function call appeared in Mac OS X version 10.0.

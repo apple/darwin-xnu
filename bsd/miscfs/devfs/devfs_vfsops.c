@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2002 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -90,7 +90,6 @@ devfs_init(struct vfsconf *vfsp)
 
     if (devfs_sinit())
 	return (EOPNOTSUPP);
-    printf("devfs enabled\n");
     devfs_make_node(makedev(0, 0), DEVFS_CHAR, 
 		    UID_ROOT, GID_WHEEL, 0622, "console");
     devfs_make_node(makedev(2, 0), DEVFS_CHAR, 
@@ -379,7 +378,8 @@ devfs_kernel_mount(char * mntname)
 	/*
 	 * Allocate and initialize the filesystem.
 	 */
-	mp = _MALLOC_ZONE((u_long)sizeof(struct mount), M_MOUNT, M_WAITOK);
+	MALLOC_ZONE(mp, struct mount *, (u_long)sizeof(struct mount),
+		M_MOUNT, M_WAITOK);
 	bzero((char *)mp, (u_long)sizeof(struct mount));
 
     /* Initialize the default IO constraints */
@@ -406,12 +406,15 @@ devfs_kernel_mount(char * mntname)
 	if (error) {
 	    printf("devfs_kernel_mount: mount %s failed: %d", mntname, error);
 	    mp->mnt_vfc->vfc_refcount--;
+
+	    if (mp->mnt_kern_flag & MNTK_IO_XINFO)
+	            FREE(mp->mnt_xinfo_ptr, M_TEMP);
 	    vfs_unbusy(mp, procp);
-	    _FREE_ZONE(mp, sizeof (struct mount), M_MOUNT);
+
+	    FREE_ZONE(mp, sizeof (struct mount), M_MOUNT);
 	    vput(vp);
 	    return (error);
 	}
-	printf("devfs on %s\n", mntname);
 	simple_lock(&mountlist_slock);
 	CIRCLEQ_INSERT_TAIL(&mountlist, mp, mnt_list);
 	simple_unlock(&mountlist_slock);

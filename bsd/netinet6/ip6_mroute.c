@@ -1,5 +1,5 @@
-/*	$FreeBSD: src/sys/netinet6/ip6_mroute.c,v 1.2.2.4 2001/07/03 11:01:53 ume Exp $	*/
-/*	$KAME: ip6_mroute.c,v 1.46 2001/04/04 05:17:30 itojun Exp $	*/
+/*	$FreeBSD: src/sys/netinet6/ip6_mroute.c,v 1.16.2.1 2002/12/18 21:39:40 suz Exp $	*/
+/*	$KAME: ip6_mroute.c,v 1.58 2001/12/18 02:36:31 itojun Exp $	*/
 
 /*
  * Copyright (C) 1998 WIDE Project.
@@ -100,7 +100,7 @@ struct mrt6stat	mrt6stat;
 #define RTE_FOUND	0x2
 
 struct mf6c	*mf6ctable[MF6CTBLSIZ];
-u_char		nexpire[MF6CTBLSIZ];
+u_char		n6expire[MF6CTBLSIZ];
 static struct mif6 mif6table[MAXMIFS];
 #if MRT6DEBUG
 u_int		mrt6debug = 0;	  /* debug level 	*/
@@ -144,11 +144,6 @@ static mifi_t nummifs = 0;
 static mifi_t reg_mif_num = (mifi_t)-1;
 
 static struct pim6stat pim6stat;
-
-/*
- * one-back cache used by ipip_input to locate a tunnel's mif
- * given a datagram's src ip address.
- */
 static int pim6;
 
 /*
@@ -414,7 +409,7 @@ ip6_mrouter_init(so, m, cmd)
 	ip6_mrouter_ver = cmd;
 
 	bzero((caddr_t)mf6ctable, sizeof(mf6ctable));
-	bzero((caddr_t)nexpire, sizeof(nexpire));
+	bzero((caddr_t)n6expire, sizeof(n6expire));
 
 	pim6 = 0;/* used for stubbing out/in pim stuff */
 
@@ -685,7 +680,8 @@ add_m6fc(mfccp)
 	if (rt) {
 #if MRT6DEBUG
 		if (mrt6debug & DEBUG_MFC)
-			log(LOG_DEBUG,"add_m6fc update o %s g %s p %x\n",
+			log(LOG_DEBUG,
+			    "add_m6fc no upcall h %d o %s g %s p %x\n",
 			    ip6_sprintf(&mfccp->mf6cc_origin.sin6_addr),
 			    ip6_sprintf(&mfccp->mf6cc_mcastgrp.sin6_addr),
 			    mfccp->mf6cc_parent);
@@ -738,7 +734,7 @@ add_m6fc(mfccp)
 			rt->mf6c_wrong_if   = 0;
 
 			rt->mf6c_expire = 0;	/* Don't clean this guy up */
-			nexpire[hash]--;
+			n6expire[hash]--;
 
 			/* free packets Qed at the end of this entry */
 			for (rte = rt->mf6c_stall; rte != NULL; ) {
@@ -785,7 +781,7 @@ add_m6fc(mfccp)
 				rt->mf6c_wrong_if   = 0;
 
 				if (rt->mf6c_expire)
-					nexpire[hash]--;
+					n6expire[hash]--;
 				rt->mf6c_expire	   = 0;
 			}
 		}
@@ -1149,7 +1145,7 @@ ip6_mforward(ip6, ifp, m)
 			rt->mf6c_mcastgrp.sin6_len = sizeof(struct sockaddr_in6);
 			rt->mf6c_mcastgrp.sin6_addr = ip6->ip6_dst;
 			rt->mf6c_expire = UPCALL_EXPIRE;
-			nexpire[hash]++;
+			n6expire[hash]++;
 			rt->mf6c_parent = MF6C_INCOMPLETE_PARENT;
 
 			/* link into table */
@@ -1217,7 +1213,7 @@ expire_upcalls(unused)
 
 	s = splnet();
 	for (i = 0; i < MF6CTBLSIZ; i++) {
-		if (nexpire[i] == 0)
+		if (n6expire[i] == 0)
 			continue;
 		nptr = &mf6ctable[i];
 		while ((mfc = *nptr) != NULL) {
@@ -1247,7 +1243,7 @@ expire_upcalls(unused)
 					rte = n;
 				} while (rte != NULL);
 				mrt6stat.mrt6s_cache_cleanups++;
-				nexpire[i]--;
+				n6expire[i]--;
 
 				*nptr = mfc->mf6c_next;
 				FREE(mfc, M_MRTABLE);
@@ -1283,7 +1279,7 @@ ip6_mdq(m, ifp, rt)
 /*
  * Macro to send packet on mif.  Since RSVP packets don't get counted on
  * input, they shouldn't get counted on output, so statistics keeping is
- * seperate.
+ * separate.
  */
 
 #define MC6_SEND(ip6, mifp, m) do {				\
@@ -1510,7 +1506,7 @@ phyint_send(ip6, mifp, m)
 	 * Put the packet into the sending queue of the outgoing interface
 	 * if it would fit in the MTU of the interface.
 	 */
-	if (mb_copy->m_pkthdr.len < ifp->if_mtu || ifp->if_mtu < IPV6_MMTU) {
+	if (mb_copy->m_pkthdr.len <= ifp->if_mtu || ifp->if_mtu < IPV6_MMTU) {
 		dst6->sin6_len = sizeof(struct sockaddr_in6);
 		dst6->sin6_family = AF_INET6;
 		dst6->sin6_addr = ip6->ip6_dst;
@@ -1617,7 +1613,7 @@ register_send(ip6, mif, m)
 #if MRT6DEBUG
 		if (mrt6debug)
 			log(LOG_WARNING,
-			    "register_send: ip_mrouter socket queue full\n");
+			    "register_send: ip6_mrouter socket queue full\n");
 #endif
 		++mrt6stat.mrt6s_upq_sockfull;
 		return ENOBUFS;

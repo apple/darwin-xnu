@@ -133,10 +133,18 @@
  */
 #if defined(__MWERKS__) && (__MWERKS__ > 0x2400)
 	/* newer Metrowerks compilers support __attribute__() */
-#elif !defined(__GNUC__) || __GNUC__ < 2 || \
-	(__GNUC__ == 2 && __GNUC_MINOR__ < 5)
+#elif __GNUC__ > 2 || __GNUC__ == 2 && __GNUC_MINOR__ >= 5
+#define	__dead2		__attribute__((__noreturn__))
+#define	__pure2		__attribute__((__const__))
+#if __GNUC__ == 2 && __GNUC_MINOR__ >= 5 && __GNUC_MINOR__ < 7
+#define	__unused	/* no attribute */
+#else
+#define	__unused	__attribute__((__unused__))
+#endif
+#else
 #define	__attribute__(x)	/* delete __attribute__ if non-gcc or gcc1 */
 #if defined(__GNUC__) && !defined(__STRICT_ANSI__)
+/* __dead and __pure are depreciated.  Use __dead2 and __pure2 instead */
 #define	__dead		__volatile
 #define	__pure		__const
 #endif
@@ -147,9 +155,13 @@
 #define	__dead
 #define	__pure
 #endif
+#ifndef __dead2
+#define	__dead2
+#define	__pure2
+#define	__unused
+#endif
 
-#define __IDSTRING(name,string) \
-     static const char name[] __attribute__((__unused__)) = string
+#define __IDSTRING(name,string) static const char name[] __unused = string
 
 #ifndef __COPYRIGHT
 #define __COPYRIGHT(s) __IDSTRING(copyright,s)

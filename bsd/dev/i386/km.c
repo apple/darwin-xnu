@@ -62,7 +62,6 @@ int disableConsoleOutput;
 int initialized = 0;
 
 static int kmoutput(struct tty *tp);
-static void kmtimeout(struct tty *tp);
 static void kmstart(struct tty *tp);
 
 extern void KeyboardOpen(void);
@@ -311,9 +310,10 @@ out:
 }
 
 static void
-kmtimeout( struct tty *tp)
+kmtimeout(void *arg)
 {
 	boolean_t 	funnel_state;
+	struct tty	*tp = (struct tty *) arg;
 
 	funnel_state = thread_funnel_set(kernel_flock, TRUE);
 	kmoutput(tp);

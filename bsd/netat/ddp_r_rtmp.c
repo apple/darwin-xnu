@@ -86,7 +86,7 @@ gbuf_t *rtmp_prep_new_packet();
 void rtmp_timeout();
 void rtmp_send_port();
 void rtmp_send_port_funnel();
-void rtmp_dropper();
+void rtmp_dropper(void *);
 void rtmp_shutdown();
 static void rtmp_update();
 static void rtmp_request();
@@ -1223,7 +1223,7 @@ void rtmp_send_port(ifID)
  *               the actual packet dropping is done in ddp_input
  */
 
-void rtmp_dropper()
+void rtmp_dropper(void *arg)
 {
 	boolean_t 	funnel_state;
 

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2002 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -179,22 +179,22 @@ fifo_open(ap)
 	int error;
 
 	if ((fip = vp->v_fifoinfo) == NULL) {
-		MALLOC_ZONE(fip, struct fifoinfo *,
-				sizeof(*fip), M_VNODE, M_WAITOK);
+		MALLOC(fip, struct fifoinfo *,
+				sizeof(*fip), M_TEMP, M_WAITOK);
 		vp->v_fifoinfo = fip;
 		thread_funnel_switch(KERNEL_FUNNEL, NETWORK_FUNNEL);
 		if (error = socreate(AF_LOCAL, &rso, SOCK_STREAM, 0)) {
 			thread_funnel_switch(NETWORK_FUNNEL, KERNEL_FUNNEL);
-			_FREE_ZONE(fip, sizeof *fip, M_VNODE);
 			vp->v_fifoinfo = NULL;
+			FREE(fip, M_TEMP);
 			return (error);
 		}
 		fip->fi_readsock = rso;
 		if (error = socreate(AF_LOCAL, &wso, SOCK_STREAM, 0)) {
 			(void)soclose(rso);
 			thread_funnel_switch(NETWORK_FUNNEL, KERNEL_FUNNEL);
-			_FREE_ZONE(fip, sizeof *fip, M_VNODE);
 			vp->v_fifoinfo = NULL;
+			FREE(fip, M_TEMP);
 			return (error);
 		}
 		fip->fi_writesock = wso;
@@ -202,8 +202,8 @@ fifo_open(ap)
 			(void)soclose(wso);
 			(void)soclose(rso);
 			thread_funnel_switch(NETWORK_FUNNEL, KERNEL_FUNNEL);
-			_FREE_ZONE(fip, sizeof *fip, M_VNODE);
 			vp->v_fifoinfo = NULL;
+			FREE(fip, M_TEMP);
 			return (error);
 		}
 		wso->so_state |= SS_CANTRCVMORE;
@@ -479,8 +479,8 @@ fifo_close(ap)
 	error1 = soclose(fip->fi_readsock);
 	error2 = soclose(fip->fi_writesock);
 	thread_funnel_switch(NETWORK_FUNNEL, KERNEL_FUNNEL);
-	FREE_ZONE(fip, sizeof *fip, M_VNODE);
 	vp->v_fifoinfo = NULL;
+	FREE(fip, M_TEMP);
 	if (error1)
 		return (error1);
 	return (error2);

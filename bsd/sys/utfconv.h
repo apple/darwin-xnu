@@ -27,6 +27,7 @@
 #define	_SYS_UTFCONV_H_
 
 #include <sys/appleapiopts.h>
+#include <sys/cdefs.h> 
 
 #ifdef KERNEL
 #ifdef __APPLE_API_UNSTABLE

@@ -51,7 +51,7 @@
     
     /* HFS is always big endian, no swapping needed */
     #define SWAP_HFS_PLUS_FORK_DATA(__a)
-    #define SWAP_BT_NODE(__a, __b, __c)
+    #define SWAP_BT_NODE(__a, __b, __c, __d)
 
 /************************/
 /* LITTLE ENDIAN Macros */

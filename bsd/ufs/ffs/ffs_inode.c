@@ -537,9 +537,14 @@ ffs_indirtrunc(ip, lbn, dbn, lastbn, level, countp)
 	  (u_int)(NINDIR(fs) - (last + 1)) * sizeof (ufs_daddr_t));
 	if (last == -1)
 		bp->b_flags |= B_INVAL;
-	error = bwrite(bp);
-	if (error)
-		allerror = error;
+	if (last != -1 && (vp)->v_mount->mnt_flag & MNT_ASYNC) {
+		error = 0;
+		bdwrite(bp);
+	} else {
+		error = bwrite(bp);
+		if (error)
+			allerror = error;
+	}
 	bap = copy;
 
 	/*

@@ -129,6 +129,7 @@ CODE prioritynames[] = {
 #define	LOG_FTP		(11<<3)	/* ftp daemon */
 #define	LOG_NETINFO	(12<<3)	/* NetInfo */
 #define	LOG_REMOTEAUTH	(13<<3)	/* remote authentication/authorization */
+#define	LOG_INSTALL	(14<<3)	/* installer subsystem */
 
 	/* other codes through 15 reserved for system use */
 #define	LOG_LOCAL0	(16<<3)	/* reserved for local use */
@@ -152,6 +153,7 @@ CODE facilitynames[] = {
 	"cron", 	LOG_CRON,
 	"daemon",	LOG_DAEMON,
 	"ftp",		LOG_FTP,
+	"install",	LOG_INSTALL,
 	"kern",		LOG_KERN,
 	"lpr",		LOG_LPR,
 	"mail",		LOG_MAIL,

@@ -140,7 +140,12 @@ struct mount {
 	struct statfs	mnt_stat;		/* cache of filesystem stats */
 	qaddr_t		mnt_data;		/* private data */
 	/* Cached values of the IO constraints for the device */
-	u_int32_t	mnt_maxreadcnt;	/* Max. byte count for read */
+        union {
+	  u_int32_t	mntu_maxreadcnt;	/* Max. byte count for read */
+	  void         *mntu_xinfo_ptr;         /* points at extended IO constraints */
+	} mnt_un;                               /* if MNTK_IO_XINFO is set */
+#define mnt_maxreadcnt mnt_un.mntu_maxreadcnt
+#define mnt_xinfo_ptr  mnt_un.mntu_xinfo_ptr
 	u_int32_t	mnt_maxwritecnt;	/* Max. byte count for write */
 	u_int16_t	mnt_segreadcnt;	/* Max. segment count for read */
 	u_int16_t	mnt_segwritecnt;	/* Max. segment count for write */
@@ -212,12 +217,16 @@ struct mount {
  * past the mount point.  This keeps the subtree stable during mounts
  * and unmounts.
  */
+#define MNTK_VIRTUALDEV 0x00200000      /* mounted on a virtual device i.e. a disk image */
+#define MNTK_ROOTDEV    0x00400000      /* this filesystem resides on the same device as the root */
+#define MNTK_IO_XINFO   0x00800000      /* mnt_un.mntu_ioptr has a malloc associated with it */
 #define MNTK_UNMOUNT	0x01000000	/* unmount in progress */
 #define	MNTK_MWAIT	0x02000000	/* waiting for unmount to finish */
 #define MNTK_WANTRDWR	0x04000000	/* upgrade to read/write requested */
 #if REV_ENDIAN_FS
 #define MNT_REVEND	0x08000000	/* Reverse endian FS */
 #endif /* REV_ENDIAN_FS */
+#define MNTK_FRCUNMOUNT	0x10000000	/* Forced unmount wanted. */
 /*
  * Sysctl CTL_VFS definitions.
  *
@@ -234,6 +243,9 @@ struct mount {
 #define VFS_MAXTYPENUM	1	/* int: highest defined filesystem type */
 #define VFS_CONF	2	/* struct: vfsconf for filesystem given
 				   as next argument */
+#define VFS_FMOD_WATCH        3 /* block waiting for the next modified file */
+#define VFS_FMOD_WATCH_ENABLE 4 /* 1==enable, 0==disable */
+
 /*
  * Flags for various system call interfaces.
  *
@@ -281,6 +293,61 @@ struct vfsconf {
 };
 
 #endif /*__APPLE_API_UNSTABLE */
+
+struct vfsidctl {
+	int		vc_vers;	/* should be VFSIDCTL_VERS1 (below) */
+	fsid_t		vc_fsid;	/* fsid to operate on. */
+	void		*vc_ptr;	/* pointer to data structure. */
+	size_t		vc_len;		/* sizeof said structure. */
+	u_int32_t	vc_spare[12];	/* spare (must be zero). */
+};
+
+/* vfsidctl API version. */
+#define VFS_CTL_VERS1	0x01
+
+/*
+ * New style VFS sysctls, do not reuse/conflict with the namespace for
+ * private sysctls.
+ */
+#define VFS_CTL_STATFS	0x00010001	/* statfs */
+#define VFS_CTL_UMOUNT	0x00010002	/* unmount */
+#define VFS_CTL_QUERY	0x00010003	/* anything wrong? (vfsquery) */
+#define VFS_CTL_NEWADDR	0x00010004	/* reconnect to new address */
+#define VFS_CTL_TIMEO	0x00010005	/* set timeout for vfs notification */
+
+struct vfsquery {
+	u_int32_t	vq_flags;
+	u_int32_t	vq_spare[31];
+};
+
+/* vfsquery flags */
+#define VQ_NOTRESP	0x0001	/* server down */
+#define VQ_NEEDAUTH	0x0002	/* server bad auth */
+#define VQ_LOWDISK	0x0004	/* we're low on space */
+#define VQ_MOUNT	0x0008	/* new filesystem arrived */
+#define VQ_UNMOUNT	0x0010	/* filesystem has left */
+#define VQ_DEAD		0x0020	/* filesystem is dead, needs force unmount */
+#define VQ_ASSIST	0x0040	/* filesystem needs assistance from external
+				   program */
+#define VQ_FLAG0080	0x0080	/* placeholder */
+#define VQ_FLAG0100	0x0100	/* placeholder */
+#define VQ_FLAG0200	0x0200	/* placeholder */
+#define VQ_FLAG0400	0x0400	/* placeholder */
+#define VQ_FLAG0800	0x0800	/* placeholder */
+#define VQ_FLAG1000	0x1000	/* placeholder */
+#define VQ_FLAG2000	0x2000	/* placeholder */
+#define VQ_FLAG4000	0x4000	/* placeholder */
+#define VQ_FLAG8000	0x8000	/* placeholder */
+
+#ifdef KERNEL
+/* Point a sysctl request at a vfsidctl's data. */
+#define VCTLTOREQ(vc, req)						\
+	do {								\
+		(req)->newptr = (vc)->vc_ptr;				\
+		(req)->newlen = (vc)->vc_len;				\
+		(req)->newidx = 0;					\
+	} while (0)
+#endif
 
 #ifdef KERNEL
 #ifdef __APPLE_API_UNSTABLE
@@ -371,6 +438,10 @@ void	vfs_unbusy __P((struct mount *, struct proc *));
 int	vfs_mountroot __P((void));
 int	vfs_rootmountalloc __P((char *, char *, struct mount **));
 void	vfs_unmountall __P((void));
+int	safedounmount(struct mount *, int, struct proc *);
+int	dounmount(struct mount *, int, struct proc *);
+void	vfs_event_signal(fsid_t *, u_int32_t, intptr_t);
+void	vfs_event_init(void);
 #endif /* __APPLE_API_PRIVATE */
 extern	CIRCLEQ_HEAD(mntlist, mount) mountlist;
 extern	struct slock mountlist_slock;
@@ -381,6 +452,7 @@ extern	struct slock mountlist_slock;
 #include <sys/cdefs.h>
 
 __BEGIN_DECLS
+int	fhopen __P((const struct fhandle *, int));
 int	fstatfs __P((int, struct statfs *));
 int	getfh __P((const char *, fhandle_t *));
 int	getfsstat __P((struct statfs *, long, int));

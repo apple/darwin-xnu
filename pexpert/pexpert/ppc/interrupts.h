@@ -27,7 +27,7 @@
 
 #include <mach/ppc/thread_status.h> /* for struct ppc_saved_state */
 
-extern void	(PE_incoming_interrupt)(int type, struct ppc_saved_state *ssp,
+extern void	(PE_incoming_interrupt)(int type, ppc_saved_state_t *ssp,
 					unsigned int dsisr, unsigned int dar);
 
 #endif /* POWERMAC_INTERRUPTS_H_ */

@@ -71,7 +71,7 @@
 #include <assym.s>
 #include <mach/exception_types.h>
 
-#include <i386/AT386/mp/mp.h>
+#include <i386/mp.h>
 
 #define	PREEMPT_DEBUG_LOG 0
 
@@ -651,11 +651,16 @@ Entry(t_debug)
 	testl	$3,4(%esp)		/* is trap from kernel mode? */
 	jnz	0f			/* if so: */
 	cmpl	$syscall_entry,(%esp)	/* system call entry? */
-	jne	0f			/* if so: */
+	jne	1f			/* if so: */
 					/* flags are sitting where syscall */
 					/* wants them */
 	addl	$8,%esp			/* remove eip/cs */
 	jmp	syscall_entry_2		/* continue system call entry */
+
+1:	cmpl	$trap_unix_addr,(%esp)
+	jne	0f
+	addl	$8,%esp
+	jmp	trap_unix_2
 
 0:	pushl	$0			/* otherwise: */
 	pushl	$(T_DEBUG)		/* handle as normal */
@@ -774,9 +779,6 @@ LEXT(return_to_user)
 	jnz	EXT(return_xfer_stack)
 	movl	$ CPD_ACTIVE_THREAD,%ebx
 	movl	%gs:(%ebx),%ebx			/* get active thread */
-	movl	TH_TOP_ACT(%ebx),%ebx		/* get thread->top_act */
-	cmpl	$0,ACT_KLOADING(%ebx)		/* check if kernel-loading */
-	jnz	EXT(return_kernel_loading)
 
 #if	MACH_RT
 #if	MACH_ASSERT
@@ -842,13 +844,10 @@ LEXT(return_kernel_loading)
 	movl	CX(EXT(kernel_stack),%eax),%esp
 	movl	$ CPD_ACTIVE_THREAD,%ebx
 	movl	%gs:(%ebx),%ebx			/* get active thread */
-	movl	TH_TOP_ACT(%ebx),%ebx		/* get thread->top_act */
 	movl	%ebx,%edx			/* save for later */
-	movl	$0,ACT_KLOADING(%edx)		/* clear kernel-loading bit */
 	FRAME_PCB_TO_STACK(%ebx)
 	movl	%ebx,%esp			/* start running on new stack */
-	movl	$1,ACT_KLOADED(%edx)		/* set kernel-loaded bit */
-	movl	%edx,CX(EXT(active_kloaded),%eax) /* set cached indicator */
+	movl	$0,CX(EXT(active_kloaded),%eax) /* set cached indicator */
 	jmp	EXT(return_from_kernel)
 
 /*
@@ -1055,11 +1054,13 @@ Entry(call_continuation)
 #define CHECK_INTERRUPT_TIME(n)
 #endif
 	 
+.data
 imsg_start:
 	String	"interrupt start"
 imsg_end:
 	String	"interrupt end"
 
+.text
 /*
  * All interrupts enter here.
  * old %eax on stack; interrupt number in %eax.
@@ -1074,6 +1075,8 @@ Entry(all_intrs)
 
 	pushl	%ds			/* save segment registers */
 	pushl	%es
+	pushl	%fs
+	pushl	%gs
 	mov	%ss,%dx			/* switch to kernel segments */
 	mov	%dx,%ds
 	mov	%dx,%es
@@ -1083,7 +1086,7 @@ Entry(all_intrs)
 	CPU_NUMBER(%edx)
 
 	movl	CX(EXT(int_stack_top),%edx),%ecx
-	movl	20(%esp),%edx		/* get eip */
+	movl	%esp,%edx		/* & i386_interrupt_state */
 	xchgl	%ecx,%esp		/* switch to interrupt stack */
 
 #if	STAT_TIME
@@ -1095,7 +1098,7 @@ Entry(all_intrs)
 	TIME_INT_ENTRY			/* do timing */
 #endif
 
-	pushl	%edx			/* pass eip to pe_incoming_interrupt */
+	pushl	%edx			/* pass &i386_interrupt_state to pe_incoming_interrupt */
 	
 #if	MACH_RT
 	movl	$ CPD_PREEMPTION_LEVEL,%edx
@@ -1182,6 +1185,8 @@ LEXT(return_to_iret)			/* (label for kdb_kintr and hardclock) */
 #endif	/* MACH_RT */
 
 1:
+	pop	%gs
+	pop	%fs
 	pop	%es			/* restore segment regs */
 	pop	%ds
 	pop	%edx
@@ -1198,13 +1203,14 @@ int_from_intstack:
 	movl	$ CPD_INTERRUPT_LEVEL,%edx
 	incl	%gs:(%edx)
 
-	movl	12(%esp),%edx
-	pushl	%edx			/* push eip */
+	subl	$16, %esp		/* dummy ds, es, fs, gs */
+	movl	%esp, %edx		/* &i386_interrupt_state */
+	pushl	%edx			/* pass &i386_interrupt_state to PE_incoming_interrupt /*
 	
 	pushl	%eax			/* Push trap number */
 
 	call	EXT(PE_incoming_interrupt)
-	addl	$4,%esp			/* pop eip */
+	addl	$20,%esp			/* pop i386_interrupt_state, dummy gs,fs,es,ds */
 
 LEXT(return_to_iret_i)			/* ( label for kdb_kintr) */
 
@@ -1238,6 +1244,8 @@ LEXT(return_to_iret_i)			/* ( label for kdb_kintr) */
  *	ss
  */
 ast_from_interrupt:
+	pop	%gs
+	pop	%fs
 	pop	%es			/* restore all registers ... */
 	pop	%ds
 	popl	%edx
@@ -1561,9 +1569,22 @@ Entry(mach_rpc)
  *   ebx contains user regs pointer
  */
 2:
+
+	pushl	%ebx			/* arg ptr */
+	pushl	%eax			/* call # - preserved across */
+	call	EXT(mach_call_start)
+	addl	$ 8, %esp
+	movl	%eax, %ebx		/* need later */
+	
 	CAH(call_call)
 	call	*EXT(mach_trap_table)+4(%eax)
 					/* call procedure */
+
+	pushl	%eax			/* retval */
+	pushl	%ebx			/* call # */
+	call	EXT(mach_call_end)
+	addl	$ 8, %esp
+	
 	movl	%esp,%ecx		/* get kernel stack */
 	or	$(KERNEL_STACK_SIZE-1),%ecx
 	movl	-3-IKS_SIZE(%ecx),%esp	/* switch back to PCB stack */
@@ -1687,8 +1708,6 @@ syscall_entry_3:
 1:
 	movl	$ CPD_ACTIVE_THREAD,%edx
 	movl	%gs:(%edx),%edx			/* get active thread */
-					/* point to current thread */
-	movl	TH_TOP_ACT(%edx),%edx	/* get thread->top_act */
 	movl	ACT_TASK(%edx),%edx	/* point to task */
 	movl	TASK_EMUL(%edx),%edx	/* get emulation vector */
 	orl	%edx,%edx		/* if none, */
@@ -1725,8 +1744,6 @@ syscall_native:
 
 	movl	$ CPD_ACTIVE_THREAD,%edx
 	movl	%gs:(%edx),%edx			/* get active thread */
-					/* point to current thread */
-	movl	TH_TOP_ACT(%edx),%edx	/* get thread->top_act */
 	movl	ACT_TASK(%edx),%edx	/* point to task */
 	movl	TASK_EMUL(%edx),%edx	/* get emulation vector */
 	orl	%edx,%edx		/* if it exists, */
@@ -1794,7 +1811,20 @@ mach_call_call:
 #endif	/* ETAP_EVENT_MONITOR */
 
 make_syscall:
+
+	pushl	%ebx			/* arg ptr */
+	pushl	%eax			/* call # - preserved across */
+	call	EXT(mach_call_start)
+	addl	$ 8, %esp
+	movl	%eax, %ebx		/* need later */
+
 	call	*EXT(mach_trap_table)+4(%eax)	/* call procedure */
+
+	pushl	%eax			/* retval */
+	pushl	%ebx			/* call # */
+	call	EXT(mach_call_end)
+	addl	$ 8, %esp
+
 skip_syscall:
 
 	movl	%esp,%ecx		/* get kernel stack */
@@ -1829,8 +1859,6 @@ mach_call_addr:
 mach_call_range:
 	movl	$ CPD_ACTIVE_THREAD,%edx
 	movl	%gs:(%edx),%edx		/* get active thread */
-
-	movl	TH_TOP_ACT(%edx),%edx	/* get thread->top_act */
 	movl	ACT_TASK(%edx),%edx	/* point to task */
 	movl	TASK_EMUL(%edx),%edx	/* get emulation vector */
 	orl	%edx,%edx		/* if emulator, */
@@ -1946,7 +1974,6 @@ ENTRY(copyin)
 
 	movl	$ CPD_ACTIVE_THREAD,%ecx
 	movl	%gs:(%ecx),%ecx			/* get active thread */
-	movl	TH_TOP_ACT(%ecx),%ecx		/* get thread->top_act */
 	movl	ACT_MAP(%ecx),%ecx		/* get act->map */
 	movl	MAP_PMAP(%ecx),%ecx		/* get map->pmap */
 	cmpl	EXT(kernel_pmap), %ecx
@@ -2001,7 +2028,6 @@ Entry(copyinstr)
 
 	movl	$ CPD_ACTIVE_THREAD,%ecx
 	movl	%gs:(%ecx),%ecx			/* get active thread */
-	movl	TH_TOP_ACT(%ecx),%ecx		/* get thread->top_act */
 	movl	ACT_MAP(%ecx),%ecx		/* get act->map */
 	movl	MAP_PMAP(%ecx),%ecx		/* get map->pmap */
 	cmpl	EXT(kernel_pmap), %ecx
@@ -2029,11 +2055,10 @@ Entry(copyinstr)
 	je	5f			/* Zero count.. error out */
 	cmpl	$0,%eax
 	jne	2b			/* .. a NUL found? */
-	jmp	4f
+	jmp	4f			/* return zero (%eax) */
 5:
 	movl	$ ENAMETOOLONG,%eax	/* String is too long.. */
 4:
-	xorl	%eax,%eax		/* return zero for success */
 	movl	8+S_ARG3,%edi		/* get OUT len ptr */
 	cmpl	$0,%edi
 	jz	copystr_ret		/* if null, just return */
@@ -2068,7 +2093,6 @@ ENTRY(copyout)
 
 	movl	$ CPD_ACTIVE_THREAD,%ecx
 	movl	%gs:(%ecx),%ecx			/* get active thread */
-	movl	TH_TOP_ACT(%ecx),%ecx		/* get thread->top_act */
 	movl	ACT_MAP(%ecx),%ecx		/* get act->map */
 	movl	MAP_PMAP(%ecx),%ecx		/* get map->pmap */
 	cmpl	EXT(kernel_pmap), %ecx
@@ -2102,41 +2126,6 @@ copyout_retry:
 	subl	%edi,%edx		/
 	movl	%edi,%ebx		/* ebx = edi; */
 
-	mov	%es,%cx		
-	cmpl	$ USER_DS,%cx		/* If kernel data segment */
-	jnz	0f			/* skip check */
-
-	cmpb	$(CPUID_FAMILY_386), EXT(cpuid_family)
-	ja	0f
-
-	movl	%cr3,%ecx		/* point to page directory */
-#if	NCPUS > 1
-	andl	$(~0x7), %ecx		/* remove cpu number */
-#endif	/* NCPUS > 1 && AT386 */
-	movl	%edi,%eax		/* get page directory bits */
-	shrl	$(PDESHIFT),%eax	/* from user address */
-	movl	KERNELBASE(%ecx,%eax,4),%ecx
-					/* get page directory pointer */
-	testl	$(PTE_V),%ecx		/* present? */
-	jz	0f			/* if not, fault is OK */
-	andl	$(PTE_PFN),%ecx		/* isolate page frame address */
-	movl	%edi,%eax		/* get page table bits */
-	shrl	$(PTESHIFT),%eax
-	andl	$(PTEMASK),%eax		/* from user address */
-	leal	KERNELBASE(%ecx,%eax,4),%ecx
-					/* point to page table entry */
-	movl	(%ecx),%eax		/* get it */
-	testl	$(PTE_V),%eax		/* present? */
-	jz	0f			/* if not, fault is OK */
-	testl	$(PTE_W),%eax		/* writable? */
-	jnz	0f			/* OK if so */
-/*
- * Not writable - must fake a fault.  Turn off access to the page.
- */
-	andl	$(PTE_INVALID),(%ecx)	/* turn off valid bit */
-	movl	%cr3,%eax		/* invalidate TLB */
-	movl	%eax,%cr3
-0:
 /*
  * Copy only what fits on the current destination page.
  * Check for write-fault again on the next page.
@@ -2776,79 +2765,6 @@ ENTRY(dr_addr)
 	.long	0,0,0,0
 	.text
 
-/*
- * Determine cpu model and set global cpuid_xxx variables
- *
- * Relies on 386 eflags bit 18 (AC) always being zero & 486 preserving it.
- * Relies on 486 eflags bit 21 (ID) always being zero & 586 preserving it.
- * Relies on CPUID instruction for next x86 generations
- * (assumes cpuid-family-homogenous MPs; else convert to per-cpu array)
- */
-
-ENTRY(set_cpu_model)
-	FRAME
-	pushl	%ebx			/* save ebx */
-	andl	$~0x3,%esp		/* Align stack to avoid AC fault */
-	pushfl				/* push EFLAGS */
-	popl	%eax			/* pop into eax */
-	movl	%eax,%ecx		/* Save original EFLAGS */
-	xorl	$(EFL_AC+EFL_ID),%eax	/* toggle ID,AC bits */
-	pushl	%eax			/* push new value */
-	popfl				/* through the EFLAGS register */
-	pushfl				/* and back */
-	popl	%eax			/* into eax */
-	movb	$(CPUID_FAMILY_386),EXT(cpuid_family)
-	pushl	%ecx			/* push original EFLAGS */
-	popfl				/* restore EFLAGS */
-	xorl	%ecx,%eax		/* see what changed */
-	testl	$ EFL_AC,%eax		/* test AC bit */
-	jz	0f			/* if AC toggled (486 or higher) */
-	
-	movb	$(CPUID_FAMILY_486),EXT(cpuid_family)
-	testl	$ EFL_ID,%eax		/* test ID bit */
-	jz	0f			/* if ID toggled use cpuid instruction */
-	
-	xorl	%eax,%eax		/* get vendor identification string */
-	.word	0xA20F			/* cpuid instruction */
-	movl	%eax,EXT(cpuid_value)	/* Store high value */ 
-	movl	%ebx,EXT(cpuid_vid)	/* Store byte 0-3 of Vendor ID */
-	movl	%edx,EXT(cpuid_vid)+4	/* Store byte 4-7 of Vendor ID */
-	movl	%ecx,EXT(cpuid_vid)+8	/* Store byte 8-B of Vendor ID */
-	movl	$1,%eax			/* get processor signature */
-	.word	0xA20F			/* cpuid instruction */
-	movl	%edx,EXT(cpuid_feature)	/* Store feature flags */
-	movl	%eax,%ecx		/* Save original signature */
-	andb	$0xF,%al		/* Get Stepping ID */
-	movb	%al,EXT(cpuid_stepping)	/* Save Stepping ID */
-	movl	%ecx,%eax		/* Get original signature */
-	shrl	$4,%eax			/* Shift Stepping ID */
-	movl	%eax,%ecx		/* Save original signature */
-	andb	$0xF,%al		/* Get Model */
-	movb	%al,EXT(cpuid_model)	/* Save Model */
-	movl	%ecx,%eax		/* Get original signature */
-	shrl	$4,%eax			/* Shift Stepping ID */
-	movl	%eax,%ecx		/* Save original signature */
-	andb	$0xF,%al		/* Get Family */
-	movb	%al,EXT(cpuid_family)	/* Save Family */
-	movl	%ecx,%eax		/* Get original signature */
-	shrl	$4,%eax			/* Shift Stepping ID */
-	andb	$0x3,%al		/* Get Type */
-	movb	%al,EXT(cpuid_type)	/* Save Type */
-
-	movl	EXT(cpuid_value),%eax	/* Get high value */
-	cmpl	$2,%eax			/* Test if processor configuration */
-	jle	0f			/* is present */
-	movl	$2,%eax			/* get processor configuration */
-	.word	0xA20F			/* cpuid instruction */
-	movl	%eax,EXT(cpuid_cache)	/* Store byte 0-3 of configuration */
-	movl	%ebx,EXT(cpuid_cache)+4	/* Store byte 4-7 of configuration */
-	movl	%ecx,EXT(cpuid_cache)+8	/* Store byte 8-B of configuration */
-	movl	%edx,EXT(cpuid_cache)+12 /* Store byte C-F of configuration */
-0:
-	popl	%ebx			/* restore ebx */
-	EMARF
-	ret				/* return */
-
 ENTRY(get_cr0)
 	movl	%cr0, %eax
 	ret
@@ -2983,25 +2899,6 @@ ENTRY(jail)
 #endif	/* NCPUS > 1 */
 
 /*
- * delay(microseconds)
- */
-
-ENTRY(delay)
-	movl	4(%esp),%eax
-	testl	%eax, %eax
-	jle	3f
-	movl	EXT(delaycount), %ecx
-1:
-	movl	%ecx, %edx
-2:
-	decl	%edx
-	jne	2b
-	decl	%eax
-	jne	1b
-3:
-	ret
-
-/*
  * unsigned int
  * div_scale(unsigned int dividend,
  *	     unsigned int divisor,
@@ -3074,19 +2971,15 @@ ENTRY(mul_scale)
 	POP_FRAME
 	ret
 
-#if	NCPUS > 1
-ENTRY(_cpu_number)
-	CPU_NUMBER(%eax)
-	ret
-#endif	/* NCPUS > 1 */
-
 #ifdef	MACH_BSD
 /*
  * BSD System call entry point.. 
  */
 
 Entry(trap_unix_syscall)
+trap_unix_addr:	
 	pushf				/* save flags as soon as possible */
+trap_unix_2:	
 	pushl	%eax			/* save system call number */
 	pushl	$0			/* clear trap number slot */
 

@@ -285,6 +285,7 @@ enum {
 #define kAppleClamshellStateKey           "AppleClamshellState"
 #define kIOREMSleepEnabledKey             "REMSleepEnabled"
 
+// Strings for deciphering the dictionary returned from IOPMCopyBatteryInfo
 #define kIOBatteryInfoKey		"IOBatteryInfo"
 #define kIOBatteryCurrentChargeKey	"Current"
 #define kIOBatteryCapacityKey		"Capacity"
@@ -297,6 +298,15 @@ enum {
     kIOBatteryCharge		= (1 << 1),
     kIOBatteryChargerConnect	= (1 << 0)
 };
+
+// Private power management message indicating battery data has changed
+// Indicates new data resides in the IORegistry
+#define kIOPMMessageBatteryStatusHasChanged         iokit_family_msg(sub_iokit_pmu, 0x100)
+
+// Apple private Legacy messages for re-routing AutoWake and AutoPower messages to the PMU
+// through newer user space IOPMSchedulePowerEvent API
+#define kIOPMUMessageLegacyAutoWake                 iokit_family_msg(sub_iokit_pmu, 0x200)
+#define kIOPMUMessageLegacyAutoPower            	iokit_family_msg(sub_iokit_pmu, 0x210)
 
 // These flags are deprecated. Use the version with the kIOPM prefix below.
 enum {
@@ -328,6 +338,9 @@ enum {
 };
 
 
+// **********************************************
+// Internal power management data structures
+// **********************************************
 
 #if KERNEL && __cplusplus
 class IOService;

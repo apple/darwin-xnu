@@ -154,10 +154,10 @@ union_lookup1(udvp, dvpp, vpp, cnp)
 	 */
 	while (dvp != udvp && (dvp->v_type == VDIR) &&
 	       (mp = dvp->v_mountedhere)) {
-
-		if (vfs_busy(mp, 0, 0, p))
-			continue;
-
+		if (vfs_busy(mp, LK_NOWAIT, 0, p)) {
+			vput(dvp);
+			return(ENOENT);
+		}
 		error = VFS_ROOT(mp, &tdvp);
 		vfs_unbusy(mp, p);
 		if (error) {

@@ -43,7 +43,7 @@ struct mk_timer {
 	decl_simple_lock_data(,lock)
 	call_entry_data_t	call_entry;
 	uint64_t			time_of_arming;
-	boolean_t			is_dead:1,
+	uint32_t			is_dead:1,
 						is_armed:1;
 	int					active;
 	ipc_port_t			port;
@@ -54,7 +54,7 @@ typedef struct mk_timer		*mk_timer_t, mk_timer_data_t;
 void		mk_timer_port_destroy(
 				ipc_port_t				port);
 
-void		mk_timer_initialize(void);
+void		mk_timer_init(void);
 
 #endif /* MACH_KERNEL_PRIVATE */
 

@@ -26,15 +26,12 @@
 #include <mach/kmod.h>
 #include <libkern/c++/OSDictionary.h>
 
-#include <libsa/kmod.h>
+#include <libsa/kext.h>
 #include <libsa/catalogue.h>
-extern "C" {
 #include <libsa/malloc.h>
-};
 
 #include "kld_patch.h"
 
-extern "C" {
 /*****
  * This function is used by IOCatalogue to load a kernel
  * extension. libsa initially sets it to be a function
@@ -54,7 +51,6 @@ extern void (*remove_startup_extension_function)(const char * name);
  * about loading and matching drivers.
  */
 extern int kernelLinkerPresent;
-};
 
 
 class KLDBootstrap {
@@ -71,6 +67,8 @@ static KLDBootstrap bootstrap_obj;
  * table for functions used to record and load kmods.
  */
 KLDBootstrap::KLDBootstrap() {
+
+    malloc_init();
 
     kmod_load_function = &load_kernel_extension;
 

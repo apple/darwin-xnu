@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2002 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -194,27 +194,25 @@ int synthfs_move_rename_entry(struct vnode *source_vp, struct vnode *newparent_v
 	struct synthfsnode *source_sp = VTOS(source_vp);
 	struct synthfsnode *parent_sp = VTOS(newparent_vp);
 	char *new_name_ptr;
-	int result;
-	
-	if (parent_sp == source_sp->s_parent) return 0;
+	int result = 0;
 	
 	/* Unlink the entry from its current place: */
 	result = synthfs_remove_entry(source_vp);
-	if (result) return result;
+	if (result) goto err_exit;
 
 	/* Change the name as necessary: */
-	FREE(source_sp->s_name, M_TEMP);
-	if (new_name == NULL) {
-		MALLOC(new_name_ptr, char *, 1, M_TEMP, M_WAITOK);
-		new_name_ptr[0] = 0;
-	} else {
-    	MALLOC(new_name_ptr, char *, strlen(new_name) + 1, M_TEMP, M_WAITOK);
-    	strcpy(new_name_ptr, new_name);
-    };
-    source_sp->s_name = new_name_ptr;
-
+	if (new_name) {
+		FREE(source_sp->s_name, M_TEMP);
+		MALLOC(new_name_ptr, char *, strlen(new_name) + 1, M_TEMP, M_WAITOK);
+		strcpy(new_name_ptr, new_name);
+		source_sp->s_name = new_name_ptr;
+	};
+	
 	/* Insert the entry in its new home: */
-	return synthfs_insertnode(source_sp, parent_sp);
+	result = synthfs_insertnode(source_sp, parent_sp);
+
+err_exit:
+	return result;
 }
 
 
@@ -320,7 +318,7 @@ long synthfs_adddirentry(u_int32_t fileno, u_int8_t type, const char *name, stru
     long padtext = 0;
     unsigned short direntrylength;
 
-    namelength = ((name == NULL) ? 0 : strlen(name));
+    namelength = ((name == NULL) ? 0 : strlen(name) + 1);
     padding = (4 - (namelength & 3)) & 3;
     direntrylength = sizeof(struct synthfs_direntry_head) + namelength + padding;
 

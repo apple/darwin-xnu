@@ -11,9 +11,9 @@ DATAFILES = \
         boot.h \
 	protos.h
 
-INSTALL_MI_LIST	= 
+INSTALL_MI_LIST	= ${DATAFILES}
 
-INSTALL_MI_DIR = 
+INSTALL_MI_DIR = pexpert/machine
 
 EXPORT_MI_LIST	= ${DATAFILES}
 

@@ -35,6 +35,7 @@ DATAFILES = \
 	fpathconf.2	\
 	fstat.2	\
 	fstatfs.2	\
+	fsctl.2	\
 	fsync.2	\
 	ftruncate.2	\
 	futimes.2	\
@@ -64,6 +65,7 @@ DATAFILES = \
 	ioctl.2	\
 	issetugid.2	\
 	kill.2	\
+	kqueue.2	\
 	ktrace.2	\
 	lchown.2	\
 	link.2	\
@@ -105,6 +107,9 @@ DATAFILES = \
 	rmdir.2	\
 	sbrk.2	\
 	select.2	\
+	semctl.2	\
+	semget.2	\
+	semop.2	\
 	send.2	\
 	sendmsg.2	\
 	sendto.2	\

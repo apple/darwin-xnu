@@ -62,10 +62,10 @@
 subsystem
 #if	KERNEL_USER
 	  KernelUser
-#endif	KERNEL_USER
+#endif	/* KERNEL_USER */
 #if	KERNEL_SERVER
 	  KernelServer
-#endif	KERNEL_SERVER
+#endif	/* KERNEL_SERVER */
 		     memory_object_control 2000;
 
 #ifdef	MACH_KERNEL
@@ -165,7 +165,7 @@ routine memory_object_page_op(
 		memory_control	: memory_object_control_t;
 	in	offset		: memory_object_offset_t;
 	in	ops		: integer_t;
-	out	phys_entry	: vm_offset_t;
+	out	phys_entry	: uint32_t;
 	out	flags		: integer_t);
 
 routine memory_object_recover_named(
@@ -176,5 +176,11 @@ routine memory_object_release_name(
 		memory_control	: memory_object_control_t;
 		flags		: integer_t);
 
+routine memory_object_range_op(
+		memory_control	: memory_object_control_t;
+	in	offset_beg	: memory_object_offset_t;
+	in	offset_end	: memory_object_offset_t;
+	in      ops             : integer_t;
+	out     range		: integer_t);
 
 

@@ -36,6 +36,7 @@ extern void		interrupt_processor(
 extern void		mp_probe_cpus(void);
 extern void		remote_kdb(void);
 extern void		clear_kdb_intr(void);
+extern void             draw_panic_dialog(void);
 extern void		set_cpu_model(void);
 extern void		cpu_shutdown(void);
 extern void		fix_desc(
@@ -70,7 +71,5 @@ extern unsigned int	mul_scale(
 				unsigned int	*scale);
 
 /* Move arbitrarily-aligned data from one physical address to another */
-extern void bcopy_phys(
-		       const char *from,
-		       char       *to,
-		       vm_size_t  nbytes);
+extern void bcopy_phys(addr64_t from, addr64_t to, vm_size_t nbytes);
+

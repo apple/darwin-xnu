@@ -28,12 +28,11 @@
 #include <IOKit/IOMemoryDescriptor.h>
 
 enum {
-    kIOMemoryDirectionMask		= 0x0000000f,
     kIOMemoryPhysicallyContiguous	= 0x00000010,
     kIOMemoryPageable	      		= 0x00000020,
     kIOMemorySharingTypeMask		= 0x000f0000,
     kIOMemoryUnshared			= 0x00000000,
-    kIOMemoryKernelUserShared		= 0x00010000,
+    kIOMemoryKernelUserShared		= 0x00010000
 };
 
 #define _IOBUFFERMEMORYDESCRIPTOR_INTASKWITHOPTIONS_	1
@@ -240,15 +239,6 @@ public:
      * will not copy past the end of the memory descriptor's current capacity.
      */
     virtual bool appendBytes(const void *bytes, vm_size_t withLength);
-
-    /*
-     * getPhysicalSegment:
-     *
-     * Get the physical address of the buffer, relative to the current position.
-     * If the current position is at the end of the buffer, a zero is returned.
-     */
-    virtual IOPhysicalAddress getPhysicalSegment(IOByteCount offset,
-						 IOByteCount * length);    
 };
 
 #endif /* !_IOBUFFERMEMORYDESCRIPTOR_H */

@@ -397,8 +397,8 @@ db_set_watchpoints(void)
 	    for (watch = db_watchpoint_list; watch != 0; watch = watch->link) {
 		map = (watch->task)? watch->task->map: kernel_map;
 		pmap_protect(map->pmap,
-			     trunc_page(watch->loaddr),
-			     round_page(watch->hiaddr),
+			     trunc_page_32(watch->loaddr),
+			     round_page_32(watch->hiaddr),
 			     VM_PROT_READ);
 	    }
 	    db_watchpoints_inserted = TRUE;
@@ -427,8 +427,8 @@ db_find_watchpoint(
 	    if (watch->task == task_space) {
 		if ((watch->loaddr <= addr) && (addr < watch->hiaddr))
 		    return (TRUE);
-		else if ((trunc_page(watch->loaddr) <= addr) &&
-			 (addr < round_page(watch->hiaddr)))
+		else if ((trunc_page_32(watch->loaddr) <= addr) &&
+			 (addr < round_page_32(watch->hiaddr)))
 		    found = watch;
 	    }
 	}

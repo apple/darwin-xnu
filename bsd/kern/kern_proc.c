@@ -207,6 +207,21 @@ pfind(pid)
 }
 
 /*
+ * Locate a zombie by PID
+ */
+__private_extern__ struct proc *
+pzfind(pid)
+	register pid_t pid;
+{
+	register struct proc *p;
+
+	for (p = zombproc.lh_first; p != 0; p = p->p_list.le_next)
+		if (p->p_pid == pid)
+			return (p);
+	return (NULL);
+}
+
+/*
  * Locate a process group by number
  */
 struct pgrp *
@@ -440,6 +455,12 @@ pgrpdump()
 	}
 }
 #endif /* DEBUG */
+
+int
+proc_is_classic(struct proc *p)
+{
+    return (p->p_flag & P_CLASSIC) ? 1 : 0;
+}
 
 struct proc * current_proc_EXTERNAL()
 {

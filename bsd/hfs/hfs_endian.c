@@ -358,9 +358,31 @@ hfs_swap_HFSPlusBTInternalNode (
             if (unswap) srcPtr[0] = SWAP_BE16 (srcPtr[0]);
         }
         
+    } else if (fileID > kHFSFirstUserCatalogNodeID) {
+		HotFileKey *srcKey;
+		UInt32 *srcRec;
+        
+		for (i = 0; i < srcDesc->numRecords; i++) {
+			srcKey = (HotFileKey *)((char *)src->buffer + srcOffs[i]);
+
+			if (!unswap)
+				srcKey->keyLength = SWAP_BE16 (srcKey->keyLength);
+			srcRec = (u_int32_t *)((char *)srcKey + srcKey->keyLength + 2);
+			if (unswap)
+				srcKey->keyLength = SWAP_BE16 (srcKey->keyLength);
+
+			/* Don't swap srcKey->forkType */
+			/* Don't swap srcKey->pad */
+
+			srcKey->temperature = SWAP_BE32 (srcKey->temperature);
+			srcKey->fileID = SWAP_BE32 (srcKey->fileID);
+             
+			*((UInt32 *)srcRec) = SWAP_BE32 (*((UInt32 *)srcRec));
+		}
     } else {
         panic ("%s unrecognized B-Tree type", "hfs_swap_BTNode:");
     }
+
 
     return (0);
 }

@@ -113,6 +113,13 @@ void psignal_lock __P((struct proc *, int, int));
 void psignal_uthread __P((thread_act_t, int));
 kern_return_t do_bsdexception(int, int, int);
 
+static int	filt_sigattach(struct knote *kn);
+static void	filt_sigdetach(struct knote *kn);
+static int	filt_signal(struct knote *kn, long hint);
+
+struct filterops sig_filtops =
+	{ 0, filt_sigattach, filt_sigdetach, filt_signal };
+
 #if SIGNAL_DEBUG
 void ram_printf __P((int));
 int ram_debug=0;
@@ -290,6 +297,8 @@ sigaction(p, uap, retval)
 			sa->sa_flags |= SA_SIGINFO;
 		if (ps->ps_signodefer & bit)
 			sa->sa_flags |= SA_NODEFER;
+		if (ps->ps_64regset & bit)
+			sa->sa_flags |= SA_64REGSET;
 		if ((signum == SIGCHLD) && (p->p_flag & P_NOCLDSTOP))
 			sa->sa_flags |= SA_NOCLDSTOP;
 		if ((signum == SIGCHLD) && (p->p_flag & P_NOCLDWAIT))
@@ -427,12 +436,16 @@ setsigvec(p, signum, sa)
 	 * Change setting atomically.
 	 */
 	ps->ps_sigact[signum] = sa->sa_handler;
-	ps->ps_trampact[signum] = sa->sa_tramp;
+	ps->ps_trampact[signum] = (sig_t) sa->sa_tramp;
 	ps->ps_catchmask[signum] = sa->sa_mask &~ sigcantmask;
 	if (sa->sa_flags & SA_SIGINFO)
 		ps->ps_siginfo |= bit;
 	else
 		ps->ps_siginfo &= ~bit;
+	if (sa->sa_flags & SA_64REGSET)
+		ps->ps_64regset |= bit;
+	else
+		ps->ps_64regset &= ~bit;
 	if ((sa->sa_flags & SA_RESTART) == 0)
 		ps->ps_sigintr |= bit;
 	else
@@ -655,7 +668,6 @@ osigvec(p, uap, retval)
 	register int signum;
 	int bit, error=0;
 
-	panic("osigvec: notsupp");
 #if 0
 	signum = uap->signum;
 	if (signum <= 0 || signum >= NSIG ||
@@ -684,6 +696,8 @@ osigvec(p, uap, retval)
 		sv->sv_flags ^= SA_RESTART;	/* opposite of SV_INTERRUPT */
 		error = setsigvec(p, signum, (struct sigaction *)sv);
 	}
+#else
+error = ENOSYS;
 #endif
 	return (error);
 }
@@ -814,8 +828,7 @@ __pthread_kill(p, uap, retval)
 	}
 
 	uth = (struct uthread *)get_bsdthread_info(target_act);
-	{ void *tht = getshuttle_thread(target_act);
-}
+
 	if (uth->uu_flag & UNO_SIGMASK) {
 		error = ESRCH;
 		goto out;
@@ -1048,7 +1061,9 @@ sigaltstack(p, uap, retval)
 		psp->ps_sigstk.ss_flags = ss.ss_flags;
 		return (0);
 	}
-	if (ss.ss_size < MINSIGSTKSZ)
+/* The older stacksize was 8K, enforce that one so no compat problems */
+#define OLDMINSIGSTKSZ 8*1024
+	if (ss.ss_size < OLDMINSIGSTKSZ)
 		return (ENOMEM);
 	psp->ps_flags |= SAS_ALTSTACK;
 	psp->ps_sigstk= ss;
@@ -1073,8 +1088,16 @@ kill(cp, uap, retval)
 		return (EINVAL);
 	if (uap->pid > 0) {
 		/* kill single process */
-		if ((p = pfind(uap->pid)) == NULL)
+		if ((p = pfind(uap->pid)) == NULL) {
+			if ((p = pzfind(uap->pid)) != NULL) {
+				/*
+				 * IEEE Std 1003.1-2001: return success
+				 * when killing a zombie.
+				 */
+				return (0);
+			}
 			return (ESRCH);
+		}
 		if (!cansignal(cp, pc, p, uap->signum))
 			return (EPERM);
 		if (uap->signum)
@@ -1376,12 +1399,11 @@ get_signalthread(struct proc *p, int signum)
 	sigset_t mask = sigmask(signum);
 	thread_act_t sig_thread_act;
 	struct task * sig_task = p->task;
-	thread_t sig_thread;
 	kern_return_t kret;
 	
 	if ((p->p_flag & P_INVFORK) && p->p_vforkact) {
 		sig_thread_act = p->p_vforkact;	
-		kret = check_actforsig(sig_task, sig_thread_act, &sig_thread, 1);
+		kret = check_actforsig(sig_task, sig_thread_act, 1);
 		if (kret == KERN_SUCCESS) 
 			return(sig_thread_act);
 		else
@@ -1391,11 +1413,11 @@ get_signalthread(struct proc *p, int signum)
 	TAILQ_FOREACH(uth, &p->p_uthlist, uu_list) {
 		if(((uth->uu_flag & UNO_SIGMASK)== 0) && 
 			(((uth->uu_sigmask & mask) == 0) || (uth->uu_sigwait & mask))) {
-			if (check_actforsig(p->task, uth->uu_act, NULL, 1) == KERN_SUCCESS)
+			if (check_actforsig(p->task, uth->uu_act, 1) == KERN_SUCCESS)
 				return(uth->uu_act);
 		}
 	}
-	if (get_signalact(p->task, &thr_act, NULL, 1) == KERN_SUCCESS) {
+	if (get_signalact(p->task, &thr_act, 1) == KERN_SUCCESS) {
 		return(thr_act);
 	}
 
@@ -1424,10 +1446,7 @@ psignal_lock(p, signum, withlock)
 	register int s, prop;
 	register sig_t action;
 	thread_act_t	sig_thread_act;
-	thread_t	sig_thread;
 	register task_t		sig_task;
-	register thread_t	cur_thread;
-	thread_act_t	cur_act;
 	int mask;
 	struct uthread *uth;
 	kern_return_t kret;
@@ -1459,6 +1478,10 @@ psignal_lock(p, signum, withlock)
 		return;
 	}
 
+        s = splhigh();
+        KNOTE(&p->p_klist, NOTE_SIGNAL | signum);
+        splx(s);
+
 	/*
 	 * do not send signals to the process that has the thread
 	 * doing a reboot(). Not doing so will mark that thread aborted
@@ -1477,7 +1500,7 @@ psignal_lock(p, signum, withlock)
 	 *	Deliver the signal to the first thread in the task. This
 	 *	allows single threaded applications which use signals to
 	 *	be able to be linked with multithreaded libraries.  We have
-	 *	an implicit reference to the current_thread, but need
+	 *	an implicit reference to the current thread, but need
 	 *	an explicit one otherwise.  The thread reference keeps
 	 *	the corresponding task data structures around too.  This
 	 *	reference is released by thread_deallocate.
@@ -1486,9 +1509,6 @@ psignal_lock(p, signum, withlock)
 	if (((p->p_flag & P_TRACED) == 0) && (p->p_sigignore & mask))
 		goto psigout;
 
-	cur_thread = current_thread();	 /* this is a shuttle */
-	cur_act = current_act();
-        
 	/* If successful return with ast set */
 	sig_thread_act = get_signalthread(p, signum);
 
@@ -1602,8 +1622,15 @@ psignal_lock(p, signum, withlock)
 		 *	Wake up the thread, but don't un-suspend it
 		 *	(except for SIGCONT).
 		 */
-		if (prop & SA_CONT)
-			(void) task_resume(sig_task);
+		if (prop & SA_CONT) {
+			if (p->p_flag & P_TTYSLEEP) {
+				p->p_flag &= ~P_TTYSLEEP;
+				wakeup(&p->p_siglist);
+			} else {
+				(void) task_resume(sig_task);
+			}
+			p->p_stat = SRUN;
+		}
 		goto run;
 	} else {
 		/*	Default action - varies */
@@ -1726,10 +1753,7 @@ psignal_uthread(thr_act, signum)
 	register int s, prop;
 	register sig_t action;
 	thread_act_t	sig_thread_act;
-	thread_t	sig_thread;
 	register task_t		sig_task;
-	register thread_t	cur_thread;
-	thread_act_t	cur_act;
 	int mask;
 	struct uthread *uth;
 	kern_return_t kret;
@@ -1772,7 +1796,7 @@ psignal_uthread(thr_act, signum)
 	 *	Deliver the signal to the first thread in the task. This
 	 *	allows single threaded applications which use signals to
 	 *	be able to be linked with multithreaded libraries.  We have
-	 *	an implicit reference to the current_thread, but need
+	 *	an implicit reference to the current thread, but need
 	 *	an explicit one otherwise.  The thread reference keeps
 	 *	the corresponding task data structures around too.  This
 	 *	reference is released by thread_deallocate.
@@ -1781,10 +1805,7 @@ psignal_uthread(thr_act, signum)
 	if (((p->p_flag & P_TRACED) == 0) && (p->p_sigignore & mask))
 		goto puthout;
 
-	cur_thread = current_thread();	 /* this is a shuttle */
-	cur_act = current_act();
-        
-	kret = check_actforsig(sig_task, sig_thread_act, &sig_thread, 1);
+	kret = check_actforsig(sig_task, sig_thread_act, 1);
 
 	if (kret != KERN_SUCCESS) {
 		error = EINVAL;
@@ -2007,7 +2028,7 @@ __inline__ void
 sig_lock_to_exit(
 	struct proc	*p)
 {
-	thread_t	self = current_thread();
+	thread_t	self = current_act();
 
 	p->exit_thread = self;
 	(void) task_suspend(p->task);
@@ -2017,7 +2038,7 @@ __inline__ int
 sig_try_locked(
 	struct proc	*p)
 {
-	thread_t	self = current_thread();
+	thread_t	self = current_act();
 
 	while (p->sigwait || p->exit_thread) {
 		if (p->exit_thread) {
@@ -2025,7 +2046,7 @@ sig_try_locked(
 				/*
 				 * Already exiting - no signals.
 				 */
-				thread_abort(current_act());
+				thread_abort(self);
 			}
 			return(0);
 		}
@@ -2064,14 +2085,12 @@ issignal(p)
 {
 	register int signum, mask, prop, sigbits;
 	task_t task = p->task;
-	thread_t cur_thread;
 	thread_act_t cur_act;
 	int	s;
 	struct uthread * ut;
 	kern_return_t kret;
 	struct proc *pp;
 
-	cur_thread = current_thread();
 	cur_act = current_act();
 
 #if SIGNAL_DEBUG
@@ -2133,6 +2152,7 @@ issignal(p)
 				do_bsdexception(EXC_SOFTWARE, EXC_SOFT_SIGNAL, signum);
 				signal_lock(p);
 			} else {
+//				panic("Unsupportef gdb option \n");;
 				pp->si_pid = p->p_pid;
 				pp->si_status = p->p_xstat;
 				pp->si_code = CLD_TRAPPED;
@@ -2177,7 +2197,7 @@ issignal(p)
 				 * clear it, since sig_lock_to_exit will
 				 * wait.
 				 */
-				clear_wait(current_thread(), THREAD_INTERRUPTED);
+				clear_wait(current_act(), THREAD_INTERRUPTED);
 				sig_lock_to_exit(p);
 				/*
 			 	* Since this thread will be resumed
@@ -2194,7 +2214,7 @@ issignal(p)
 			/*
 			 *	We may have to quit
 			 */
-			if (thread_should_abort(current_thread())) {
+			if (thread_should_abort(current_act())) {
 				signal_unlock(p);
 				return(0);
 			}
@@ -2314,14 +2334,12 @@ CURSIG(p)
 {
 	register int signum, mask, prop, sigbits;
 	task_t task = p->task;
-	thread_t cur_thread;
 	thread_act_t cur_act;
 	int	s;
 	struct uthread * ut;
 	int retnum = 0;
            
 
-	cur_thread = current_thread();
 	cur_act = current_act();
 
 	ut = get_bsdthread_info(cur_act);
@@ -2584,6 +2602,48 @@ sigexit_locked(p, signum)
 	/* NOTREACHED */
 }
 
+
+static int
+filt_sigattach(struct knote *kn)
+{
+	struct proc *p = current_proc();
+
+	kn->kn_ptr.p_proc = p;
+	kn->kn_flags |= EV_CLEAR;		/* automatically set */
+
+	/* XXX lock the proc here while adding to the list? */
+	KNOTE_ATTACH(&p->p_klist, kn);
+
+	return (0);
+}
+
+static void
+filt_sigdetach(struct knote *kn)
+{
+	struct proc *p = kn->kn_ptr.p_proc;
+
+	KNOTE_DETACH(&p->p_klist, kn);
+}
+
+/*
+ * signal knotes are shared with proc knotes, so we apply a mask to 
+ * the hint in order to differentiate them from process hints.  This
+ * could be avoided by using a signal-specific knote list, but probably
+ * isn't worth the trouble.
+ */
+static int
+filt_signal(struct knote *kn, long hint)
+{
+
+	if (hint & NOTE_SIGNAL) {
+		hint &= ~NOTE_SIGNAL;
+
+		if (kn->kn_id == hint)
+			kn->kn_data++;
+	}
+	return (kn->kn_data != 0);
+}
+
 void
 bsd_ast(thread_act_t thr_act)
 {
@@ -2605,7 +2665,7 @@ bsd_ast(thread_act_t thr_act)
 		p->p_flag &= ~P_OWEUPC;
 	}
 
-	if (CHECK_SIGNALS(p, current_thread(), ut)) {
+	if (CHECK_SIGNALS(p, current_act(), ut)) {
 		while (signum = issignal(p))
 			postsig(signum);
 	}

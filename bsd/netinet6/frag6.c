@@ -128,9 +128,9 @@ frag6_init()
  * Fragment input
  */
 int
-frag6_input(mp, offp, proto)
+frag6_input(mp, offp)
 	struct mbuf **mp;
-	int *offp, proto;
+	int *offp;
 {
 	struct mbuf *m = *mp, *t;
 	struct ip6_hdr *ip6;

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2002 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2002-2003 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -140,7 +140,7 @@ loop:
 			(void)tsleep((caddr_t)cp, PINOD, "hfs_chashget-2", 0);
 			goto loop;
 		}
-		if (cp->c_flag & C_NOEXISTS)
+		if (cp->c_flag & (C_NOEXISTS | C_DELETED))
 			continue;
 
 		/*
@@ -177,7 +177,7 @@ loop:
 		 */
 		if (wantrsrc && *rvpp == NULL && cp->c_rsrc_vp) {
 			error = vget(cp->c_rsrc_vp, 0, p);
-			vput(*vpp);	/* ref no longer needed */
+			vrele(*vpp);	/* ref no longer needed */
 			*vpp = NULL;
 			if (error)
 				goto loop;
@@ -185,7 +185,7 @@ loop:
 
 		} else if (!wantrsrc && *vpp == NULL && cp->c_vp) {
 			error = vget(cp->c_vp, 0, p);
-			vput(*rvpp);	/* ref no longer needed */
+			vrele(*rvpp);	/* ref no longer needed */
 			*rvpp = NULL;
 			if (error)
 				goto loop;
@@ -205,11 +205,11 @@ __private_extern__
 void
 hfs_chashinsert(struct cnode *cp)
 {
-	if (cp->c_fileid == 0)
-		panic("hfs_chashinsert: trying to insert file id 0");
-	simple_lock(&hfs_chash_slock);
-	LIST_INSERT_HEAD(CNODEHASH(cp->c_dev, cp->c_fileid), cp, c_hash);
-	simple_unlock(&hfs_chash_slock);
+	if (cp->c_fileid != 0) {
+		simple_lock(&hfs_chash_slock);
+		LIST_INSERT_HEAD(CNODEHASH(cp->c_dev, cp->c_fileid), cp, c_hash);
+		simple_unlock(&hfs_chash_slock);
+	}
 }
 
 

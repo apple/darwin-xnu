@@ -62,10 +62,10 @@
 subsystem
 #if	KERNEL_USER
 	  KernelUser
-#endif	KERNEL_USER
+#endif	/* KERNEL_USER */
 #if	KERNEL_SERVER
 	  KernelServer
-#endif	KERNEL_SERVER
+#endif	/* KERNEL_SERVER */
 		     memory_object 2200;
 
 #ifdef	MACH_KERNEL

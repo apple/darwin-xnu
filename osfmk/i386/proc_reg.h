@@ -142,6 +142,8 @@
 /*
  * CR4
  */
+#define CR4_FXS 0x00000200    	/* SSE/SSE2 OS supports FXSave */
+#define CR4_XMM 0x00000400    	/* SSE/SSE2 instructions supported in OS */
 #define	CR4_MCE	0x00000040	/* p5:   Machine Check Exceptions */
 #define	CR4_PSE	0x00000010	/* p5:   Page Size Extensions */
 #define	CR4_DE	0x00000008	/* p5:   Debugging Extensions */
@@ -250,7 +252,82 @@ extern __inline__ void invlpg(unsigned long addr)
 {
 	__asm__  volatile("invlpg (%0)" :: "r" (addr) : "memory");
 }
+
+/*
+ * Access to machine-specific registers (available on 586 and better only)
+ * Note: the rd* operations modify the parameters directly (without using
+ * pointer indirection), this allows gcc to optimize better
+ */
+
+#define rdmsr(msr,lo,hi) \
+	__asm__ volatile("rdmsr" : "=a" (lo), "=d" (hi) : "c" (msr))
+
+#define wrmsr(msr,lo,hi) \
+	__asm__ volatile("wrmsr" : : "c" (msr), "a" (lo), "d" (hi))
+
+#define rdtsc(lo,hi) \
+	__asm__ volatile("rdtsc" : "=a" (lo), "=d" (hi))
+
+#define write_tsc(lo,hi) wrmsr(0x10, lo, hi)
+
+#define rdpmc(counter,lo,hi) \
+	__asm__ volatile("rdpmc" : "=a" (lo), "=d" (hi) : "c" (counter))
+
+extern __inline__ uint64_t rdmsr64(uint32_t msr)
+{
+	uint64_t ret;
+	__asm__ volatile("rdmsr" : "=A" (ret) : "c" (msr));
+	return ret;
+}
+
+extern __inline__ void wrmsr64(uint32_t msr, uint64_t val)
+{
+	__asm__ volatile("wrmsr" : : "c" (msr), "A" (val));
+}
+
+extern __inline__ uint64_t rdtsc64(void)
+{
+	uint64_t ret;
+	__asm__ volatile("rdtsc" : "=A" (ret));
+	return ret;
+}
 #endif	/* __GNUC__ */
 #endif	/* ASSEMBLER */
+
+#define MSR_IA32_P5_MC_ADDR		0
+#define MSR_IA32_P5_MC_TYPE		1
+#define MSR_IA32_PLATFORM_ID		0x17
+#define MSR_IA32_EBL_CR_POWERON		0x2a
+
+#define MSR_IA32_APIC_BASE		0x1b
+#define MSR_IA32_APIC_BASE_BSP		(1<<8)
+#define MSR_IA32_APIC_BASE_ENABLE	(1<<11)
+#define MSR_IA32_APIC_BASE_BASE		(0xfffff<<12)
+
+#define MSR_IA32_UCODE_WRITE		0x79
+#define MSR_IA32_UCODE_REV		0x8b
+
+#define MSR_IA32_PERFCTR0		0xc1
+#define MSR_IA32_PERFCTR1		0xc2
+
+#define MSR_IA32_BBL_CR_CTL		0x119
+
+#define MSR_IA32_MCG_CAP		0x179
+#define MSR_IA32_MCG_STATUS		0x17a
+#define MSR_IA32_MCG_CTL		0x17b
+
+#define MSR_IA32_EVNTSEL0		0x186
+#define MSR_IA32_EVNTSEL1		0x187
+
+#define MSR_IA32_DEBUGCTLMSR		0x1d9
+#define MSR_IA32_LASTBRANCHFROMIP	0x1db
+#define MSR_IA32_LASTBRANCHTOIP		0x1dc
+#define MSR_IA32_LASTINTFROMIP		0x1dd
+#define MSR_IA32_LASTINTTOIP		0x1de
+
+#define MSR_IA32_MC0_CTL		0x400
+#define MSR_IA32_MC0_STATUS		0x401
+#define MSR_IA32_MC0_ADDR		0x402
+#define MSR_IA32_MC0_MISC		0x403
 
 #endif	/* _I386_PROC_REG_H_ */

@@ -104,6 +104,12 @@ static const char *getClassName(const OSObject *obj)
 bool OSObject::init()
     { return true; }
 
+#if (!__ppc__) || (__GNUC__ < 3)
+
+// Implemented in assembler in post gcc 3.x systems as we have a problem
+// where the destructor in gcc2.95 gets 2 arguments.  The second argument
+// appears to be a flag argument.  I have copied the assembler from Puma xnu
+// to OSRuntimeSupport.c  So for 2.95 builds use the C 
 void OSObject::free()
 {
     const OSMetaClass *meta = getMetaClass();
@@ -112,6 +118,7 @@ void OSObject::free()
 	meta->instanceDestructed();
     delete this;
 }
+#endif /* (!__ppc__) || (__GNUC__ < 3) */
 
 int OSObject::getRetainCount() const
 {
@@ -120,42 +127,44 @@ int OSObject::getRetainCount() const
 
 void OSObject::taggedRetain(const void *tag) const
 {
+    volatile UInt32 *countP = (volatile UInt32 *) &retainCount;
+    UInt32 inc = 1;
+    UInt32 origCount;
+    UInt32 newCount;
+
+    // Increment the collection bucket.
+    if ((const void *) OSTypeID(OSCollection) == tag)
+	inc |= (1UL<<16);
+
+    do {
+	origCount = *countP;
+        if ( ((UInt16) origCount | 0x1) == 0xffff ) {
+            const char *msg;
+            if (origCount & 0x1) {
+                // If count == 0xffff that means we are freeing now so we can
+                // just return obviously somebody is cleaning up dangling
+                // references.
+                msg = "Attempting to retain a freed object";
+            }
+            else {
+                // If count == 0xfffe then we have wrapped our reference count.
+                // We should stop counting now as this reference must be
+                // leaked rather than accidently wrapping around the clock and
+                // freeing a very active object later.
+
 #if !DEBUG
-    volatile UInt32 *countP = (volatile UInt32 *) &retainCount;
-    UInt32 inc = 1;
-    UInt32 origCount;
-    UInt32 newCount;
-
-    // Increment the collecion bucket.
-    if ((const void *) OSTypeID(OSCollection) == tag)
-	inc |= (1UL<<16);
-
-    do {
-	origCount = *countP;
-	if (-1UL == origCount)
-	    // @@@ Pinot: panic("Attempting to retain a freed object");
-	    return;
+		break;	// Break out of update loop which pegs the reference
+#else DEBUG
+                // @@@ gvdl: eventually need to make this panic optional
+                // based on a boot argument i.e. debug= boot flag
+                msg = "About to wrap the reference count, reference leak?";
+#endif /* !DEBUG */
+            }
+            panic("OSObject::refcount: %s", msg);
+        }
 
 	newCount = origCount + inc;
     } while (!OSCompareAndSwap(origCount, newCount, (UInt32 *) countP));
-#else
-    volatile UInt32 *countP = (volatile UInt32 *) &retainCount;
-    UInt32 inc = 1;
-    UInt32 origCount;
-    UInt32 newCount;
-
-    // Increment the collecion bucket.
-    if ((const void *) OSTypeID(OSCollection) == tag)
-	inc |= (1UL<<16);
-
-    do {
-	origCount = *countP;
-	if (-1UL == origCount)
-	    return;	// We are freeing so leave now.
-
-	newCount = origCount + inc;
-    } while (!OSCompareAndSwap(origCount, newCount, (UInt32 *) countP));
-#endif
 }
 
 void OSObject::taggedRelease(const void *tag) const
@@ -165,25 +174,44 @@ void OSObject::taggedRelease(const void *tag) const
 
 void OSObject::taggedRelease(const void *tag, const int when) const
 {
-#if !DEBUG
     volatile UInt32 *countP = (volatile UInt32 *) &retainCount;
     UInt32 dec = 1;
     UInt32 origCount;
     UInt32 newCount;
     UInt32 actualCount;
 
-    // Increment the collecion bucket.
+    // Increment the collection bucket.
     if ((const void *) OSTypeID(OSCollection) == tag)
 	dec |= (1UL<<16);
 
     do {
 	origCount = *countP;
-	if (-1UL == origCount)
-	    return;	// We are freeing already leave now.
+        
+        if ( ((UInt16) origCount | 0x1) == 0xffff ) {
+            if (origCount & 0x1) {
+                // If count == 0xffff that means we are freeing now so we can
+                // just return obviously somebody is cleaning up some dangling
+                // references.  So we blow out immediately.
+                return;
+            }
+            else {
+                // If count == 0xfffe then we have wrapped our reference
+                // count.  We should stop counting now as this reference must be
+                // leaked rather than accidently freeing an active object later.
 
+#if !DEBUG
+		return;	// return out of function which pegs the reference
+#else DEBUG
+                // @@@ gvdl: eventually need to make this panic optional
+                // based on a boot argument i.e. debug= boot flag
+                panic("OSObject::refcount: %s",
+                      "About to unreference a pegged object, reference leak?");
+#endif /* !DEBUG */
+            }
+        }
 	actualCount = origCount - dec;
-        if ((SInt16) actualCount < when)
-            newCount = (UInt32) -1;
+        if ((UInt16) actualCount < when)
+            newCount = 0xffff;
         else
             newCount = actualCount;
 
@@ -202,49 +230,8 @@ void OSObject::taggedRelease(const void *tag, const int when) const
 	    getClassName(this));
 
     // Check for a 'free' condition and that if we are first through
-    if ((UInt32) -1 == newCount)
+    if (newCount == 0xffff)
 	((OSObject *) this)->free();
-#else
-    // @@@ Pinot:  Need to update the debug build release code.
-    volatile UInt32 *countP = (volatile UInt32 *) &retainCount;
-    UInt32 dec = 1;
-    UInt32 origCount;
-    UInt32 newCount;
-
-    // Increment the collecion bucket.
-    if ((const void *) OSTypeID(OSCollection) == tag)
-	dec |= (1UL<<16);
-
-    do {
-	origCount = *countP;
-	if (-1UL == origCount)
-	    return;	// We are freeing already leave now.
-
-	newCount = origCount - dec;
-    } while (!OSCompareAndSwap(origCount, newCount, (UInt32 *) countP));
-
-    //
-    // This panic means that we have just attempted to release an object
-    // who's retain count has gone to less than the number of collections
-    // it is a member off.  Take a panic immediately.
-    // In Fact the panic MAY not be a registry corruption but it is 
-    // ALWAYS the wrong thing to do.  I call it a registry corruption 'cause
-    // the registry is the biggest single use of a network of collections.
-    //
-    if ((UInt16) newCount < (newCount >> 16))
-	panic("A driver releasing a(n) %s has corrupted the registry\n",
-	    getClassName(this));
-
-    // Check for a release too many
-    if ((SInt16) newCount < 0)
-	panic("An object has had a release too many\n",
-	    getClassName(this));
-
-    // Check for a 'free' condition and that if we are first through
-    if ((SInt16) newCount < when
-    && OSCompareAndSwap(newCount, -1UL, (UInt32 *) countP))
-	((OSObject *) this)->free();
-#endif
 }
 
 void OSObject::release() const

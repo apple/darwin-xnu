@@ -48,17 +48,9 @@
 .Sh DESCRIPTION
 The
 .Fn msync
-system call
-writes any modified pages back to the filesystem and updates
-the file modification time.
-If
-.Fa len
-is 0, all modified pages within the region containing
-.Fa addr
-will be flushed;
-if
-.Fa len
-is non-zero, only those pages containing 
+system call writes modified whole pages back to the filesystem
+and updates the file modification time.
+Only those pages containing 
 .Fa addr
 and
 .Fa len-1
@@ -71,6 +63,10 @@ MS_ASYNC	Return immediately
 MS_SYNC		Perform synchronous writes
 MS_INVALIDATE	Invalidate all cached data
 .Ed
+.Pp
+The
+.Fa MS_ASYNC
+flag is not permitted to be combined with other flags.
 .Sh RETURN VALUES
 If any errors occur, -1 is returned and errno is set to indicate the
 error.
@@ -84,11 +80,10 @@ will fail if:
 is not a multiple of the hardware page size.
 .It Bq Er EINVAL
 .Fa len
-is too large or negative.
+is too large, or less than 1.
 .It Bq Er EINVAL
 .Fa flags
-was both MS_ASYNC and MS_INVALIDATE.
-Only one of these flags is allowed.
+combined MS_ASYNC with another flag, which is not permitted.
 .It Bq Er EIO
 An I/O error occurred while writing to the file system.
 .El

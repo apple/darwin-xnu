@@ -102,7 +102,7 @@ gettimeofday(p, uap, retval)
 /*  NOTE THIS implementation is for non ppc architectures only */
 
 	if (uap->tp) {
-		microtime(&atv);
+		clock_get_calendar_microtime(&atv.tv_sec, &atv.tv_usec);
 		if (error = copyout((caddr_t)&atv, (caddr_t)uap->tp,
 			sizeof (atv)))
 			return(error);
@@ -158,20 +158,13 @@ setthetime(tv)
 	struct timeval *tv;
 {
 	long delta = tv->tv_sec - time.tv_sec;
-	mach_timespec_t	now;
 
-	now.tv_sec = tv->tv_sec;
-	now.tv_nsec = tv->tv_usec * NSEC_PER_USEC;
-
-	clock_set_calendar_value(now);
+	clock_set_calendar_microtime(tv->tv_sec, tv->tv_usec);
 	boottime.tv_sec += delta;
 #if NFSCLIENT || NFSSERVER
 	lease_updatetime(delta);
 #endif
 }
-
-#define tickadj		(40 * NSEC_PER_USEC)	/* "standard" skew, ns / 10 ms */
-#define	bigadj		(1 * NSEC_PER_SEC)		/* use 10x skew above bigadj ns */
 
 struct adjtime_args {
 	struct timeval *delta;
@@ -185,8 +178,6 @@ adjtime(p, uap, retval)
 	register_t *retval;
 {
 	struct timeval atv;
-	int64_t total;
-	uint32_t delta;
 	int error;
 
 	if (error = suser(p->p_ucred, &p->p_acflag))
@@ -198,17 +189,9 @@ adjtime(p, uap, retval)
     /*
      * Compute the total correction and the rate at which to apply it.
      */
-	total = (int64_t)atv.tv_sec * NSEC_PER_SEC + atv.tv_usec * NSEC_PER_USEC;
-	if (total > bigadj || total < -bigadj)
-		delta = 10 * tickadj;
-	else
-		delta = tickadj;
-
-	total = clock_set_calendar_adjtime(total, delta);
+	clock_adjtime(&atv.tv_sec, &atv.tv_usec);
 
 	if (uap->olddelta) {
-		atv.tv_sec = total / NSEC_PER_SEC;
-		atv.tv_usec = (total / NSEC_PER_USEC) % USEC_PER_SEC;
 		(void) copyout((caddr_t)&atv,
 							(caddr_t)uap->olddelta, sizeof (struct timeval));
 	}
@@ -226,6 +209,8 @@ void
 inittodr(base)
 	time_t base;
 {
+	struct timeval	tv;
+
 	/*
 	 * Assertion:
 	 * The calendar has already been
@@ -234,21 +219,17 @@ inittodr(base)
 	 * The value returned by microtime()
 	 * is gotten from the calendar.
 	 */
-	microtime(&time);
+	microtime(&tv);
 
-	/*
-	 * This variable still exists to keep
-	 * 'w' happy.  It should only be considered
-	 * an approximation.
-	 */
-	boottime.tv_sec = time.tv_sec;
+	time = tv;
+	boottime.tv_sec = tv.tv_sec;
 	boottime.tv_usec = 0;
 
 	/*
 	 * If the RTC does not have acceptable value, i.e. time before
 	 * the UNIX epoch, set it to the UNIX epoch
 	 */
-	if (time.tv_sec < 0) {
+	if (tv.tv_sec < 0) {
 		printf ("WARNING: preposterous time in Real Time Clock");
 		time.tv_sec = 0;	/* the UNIX epoch */
 		time.tv_usec = 0;
@@ -430,9 +411,9 @@ realitexpire(
 		}
 	}
 
-	thread_call_func_delayed(realitexpire, pid, tvtoabstime(&p->p_rtime));
-
 	psignal(p, SIGALRM);
+
+	thread_call_func_delayed(realitexpire, pid, tvtoabstime(&p->p_rtime));
 
 	(void) thread_funnel_set(kernel_flock, FALSE);
 }
@@ -549,20 +530,14 @@ void
 microtime(
 	struct timeval	*tvp)
 {
-	mach_timespec_t		now = clock_get_calendar_value();
-
-	tvp->tv_sec = now.tv_sec;
-	tvp->tv_usec = now.tv_nsec / NSEC_PER_USEC;
+	clock_get_calendar_microtime(&tvp->tv_sec, &tvp->tv_usec);
 }
 
 void
 microuptime(
 	struct timeval	*tvp)
 {
-	mach_timespec_t		now = clock_get_system_value();
-
-	tvp->tv_sec = now.tv_sec;
-	tvp->tv_usec = now.tv_nsec / NSEC_PER_USEC;
+	clock_get_system_microtime(&tvp->tv_sec, &tvp->tv_usec);
 }
 
 /*
@@ -572,20 +547,14 @@ void
 nanotime(
 	struct timespec *tsp)
 {
-	mach_timespec_t		now = clock_get_calendar_value();
-
-	tsp->tv_sec = now.tv_sec;
-	tsp->tv_nsec = now.tv_nsec;
+	clock_get_calendar_nanotime((uint32_t *)&tsp->tv_sec, &tsp->tv_nsec);
 }
 
 void
 nanouptime(
 	struct timespec *tsp)
 {
-	mach_timespec_t		now = clock_get_system_value();
-
-	tsp->tv_sec = now.tv_sec;
-	tsp->tv_nsec = now.tv_nsec;
+	clock_get_system_nanotime((uint32_t *)&tsp->tv_sec, &tsp->tv_nsec);
 }
 
 uint64_t

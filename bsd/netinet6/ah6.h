@@ -42,7 +42,7 @@
 #ifdef __APPLE_API_PRIVATE
 struct secasvar;
 
-extern int ah6_input __P((struct mbuf **, int *, int));
+extern int ah6_input __P((struct mbuf **, int *));
 extern int ah6_output __P((struct mbuf *, u_char *, struct mbuf *,
 	struct ipsecrequest *));
 extern int ah6_calccksum __P((struct mbuf *, caddr_t, size_t,

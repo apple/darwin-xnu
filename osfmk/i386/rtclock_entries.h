@@ -45,5 +45,6 @@ extern kern_return_t	rtc_setattr(
 extern void		rtc_setalrm(
 				mach_timespec_t		* alarmtime);
 extern void		rtclock_reset(void);
-extern int		rtclock_intr(void);
+extern int		rtclock_intr(
+				struct i386_interrupt_state	*regs);
 extern void		calibrate_delay(void);

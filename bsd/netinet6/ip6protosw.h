@@ -129,8 +129,7 @@ struct ip6protosw {
 	int	(*pr_output)	__P((struct mbuf *m, struct socket *so,
 				     struct sockaddr_in6 *, struct mbuf *));
 					/* output to protocol (from above) */
-	void	(*pr_ctlinput)__P((int, struct sockaddr *, struct ip6_hdr *,
-				   struct mbuf *, int));
+	void	(*pr_ctlinput)__P((int, struct sockaddr *, void *));
 					/* control input (from below) */
 	int	(*pr_ctloutput)__P((struct socket *, struct sockopt *));
 					/* control output (from above) */

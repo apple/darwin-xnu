@@ -153,8 +153,9 @@ struct fake_descriptor {
 #define	USER_RPC	0x0f		/* mach rpc call gate */
 #define	USER_CS		0x17		/* user code segment */
 #define	USER_DS		0x1f		/* user data segment */
+#define USER_CTHREAD    0x27            /* user cthread area */
 
-#define	LDTSZ		4
+#define	LDTSZ		5
 
 /*
  * Kernel descriptors for MACH - 32-bit flat address space.

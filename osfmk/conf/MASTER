@@ -58,7 +58,6 @@ options		MACH_KERNEL
 options		MACH_PAGEMAP
 options		MACH_LOAD
 options		MACH_RT
-options		THREAD_SWAPPER	#	<thread_swapper_disabled>
 options		TASK_SWAPPER	#	<task_swapper_disabled>
 pseudo-device	test_device	1
 options		ADVISORY_PAGEOUT

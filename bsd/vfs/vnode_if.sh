@@ -315,13 +315,15 @@ function doit() {
 	printf("\t0");
 	vpnum = 0;
 	for (i=0; i<argc; i++) {
-		if (willrele[i]) {
-			if (argdir[i] ~ /OUT/) {
-				printf(" | VDESC_VPP_WILLRELE");
-			} else {
-				printf(" | VDESC_VP%s_WILLRELE", vpnum);
-			};
-			vpnum++;
+		if (match(argtype[i], "struct vnode *") == 1) {
+			if (willrele[i]) {
+				if (argdir[i] ~ /OUT/) {
+					printf(" | VDESC_VPP_WILLRELE");
+				} else {
+					printf(" | VDESC_VP%s_WILLRELE", vpnum);
+				};
+			}
+		vpnum++;
 		}
 	}
 	print ",";

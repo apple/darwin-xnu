@@ -68,7 +68,6 @@
 #ifndef	ASSEMBLER
 
 #include <platforms.h>
-#include <mp_v1_1.h>
 
 #include <mach/kern_return.h>
 #include <mach/machine/vm_types.h>
@@ -109,7 +108,14 @@ typedef unsigned int	pt_entry_t;
 #define PTEMASK		0x3ff	/* mask for page table index */
 
 
+#define	VM_WIMG_COPYBACK	VM_MEM_COHERENT
 #define	VM_WIMG_DEFAULT		VM_MEM_COHERENT
+/* ?? intel ?? */
+#define VM_WIMG_IO		(VM_MEM_COHERENT | 	\
+				VM_MEM_NOT_CACHEABLE | VM_MEM_GUARDED)
+#define VM_WIMG_WTHRU		(VM_MEM_WRITE_THROUGH | VM_MEM_COHERENT | VM_MEM_GUARDED)
+/* write combining mode, aka store gather */
+#define VM_WIMG_WCOMB		(VM_MEM_NOT_CACHEABLE | VM_MEM_COHERENT) 
 
 /*
  *	Convert kernel virtual address to linear address
@@ -151,6 +157,7 @@ typedef unsigned int	pt_entry_t;
 #define INTEL_PTE_MOD		0x00000040
 #define INTEL_PTE_WIRED		0x00000200
 #define INTEL_PTE_PFN		0xfffff000
+#define INTEL_PTE_PTA		0x00000080
 
 #define	pa_to_pte(a)		((a) & INTEL_PTE_PFN)
 #define	pte_to_pa(p)		((p) & INTEL_PTE_PFN)
@@ -256,11 +263,18 @@ extern cpu_set		cpus_idle;
 
 
 /*
+ *	Quick test for pmap update requests.
+ */
+extern volatile
+boolean_t	cpu_update_needed[NCPUS];
+
+/*
  *	External declarations for PMAP_ACTIVATE.
  */
 
 extern void		process_pmap_updates(struct pmap *pmap);
 extern void		pmap_update_interrupt(void);
+extern pmap_t		kernel_pmap;
 
 #endif	/* NCPUS > 1 */
 
@@ -303,7 +317,7 @@ extern int		pmap_list_resident_pages(
 extern void		flush_tlb(void);
 extern void invalidate_icache(vm_offset_t addr, unsigned cnt, int phys);
 extern void flush_dcache(vm_offset_t addr, unsigned count, int phys);
-
+extern ppnum_t          pmap_find_phys(pmap_t map, addr64_t va);
 
 /*
  *	Macros for speed.
@@ -312,6 +326,13 @@ extern void flush_dcache(vm_offset_t addr, unsigned count, int phys);
 #if	NCPUS > 1
 
 #include <kern/spl.h>
+
+#if defined(PMAP_ACTIVATE_KERNEL)
+#undef PMAP_ACTIVATE_KERNEL
+#undef PMAP_DEACTIVATE_KERNEL
+#undef PMAP_ACTIVATE_USER
+#undef PMAP_DEACTIVATE_USER
+#endif
 
 /*
  *	For multiple CPUS, PMAP_ACTIVATE and PMAP_DEACTIVATE must manage
@@ -330,6 +351,12 @@ extern void flush_dcache(vm_offset_t addr, unsigned count, int phys);
 	 *	Wait for updates here.					\
 	 */								\
 	simple_lock(&kernel_pmap->lock);				\
+									\
+	/*								\
+	 *	Process invalidate requests for the kernel pmap.	\
+	 */								\
+	if (cpu_update_needed[(my_cpu)])				\
+	    process_pmap_updates(kernel_pmap);				\
 									\
 	/*								\
 	 *	Mark that this cpu is using the pmap.			\
@@ -354,7 +381,7 @@ extern void flush_dcache(vm_offset_t addr, unsigned count, int phys);
 }
 
 #define PMAP_ACTIVATE_MAP(map, my_cpu)	{				\
-	register struct pmap	*tpmap;					\
+	register pmap_t		tpmap;					\
 									\
 	tpmap = vm_map_pmap(map);					\
 	if (tpmap == kernel_pmap) {					\
@@ -430,11 +457,6 @@ extern void flush_dcache(vm_offset_t addr, unsigned count, int phys);
 	splx(spl);							\
 }
 
-#if	MP_V1_1
-#define	set_led(cpu)
-#define clear_led(cpu)
-#endif	/* MP_V1_1  */
-
 #define MARK_CPU_IDLE(my_cpu)	{					\
 	/*								\
 	 *	Mark this cpu idle, and remove it from the active set,	\
@@ -464,6 +486,9 @@ extern void flush_dcache(vm_offset_t addr, unsigned count, int phys);
 	 *	interrupt if this happens.				\
 	 */								\
 	i_bit_clear((my_cpu), &cpus_idle);				\
+									\
+	if (cpu_update_needed[(my_cpu)])				\
+	    pmap_update_interrupt();					\
 									\
 	/*								\
 	 *	Mark that this cpu is now active.			\
@@ -526,8 +551,6 @@ extern void flush_dcache(vm_offset_t addr, unsigned count, int phys);
 #define	pmap_attribute(pmap,addr,size,attr,value) \
 					(KERN_INVALID_ADDRESS)
 #define	pmap_attribute_cache_sync(addr,size,attr,value) \
-					(KERN_INVALID_ADDRESS)
-#define pmap_sync_caches_phys(pa) \
 					(KERN_INVALID_ADDRESS)
 
 #endif	/* ASSEMBLER */

@@ -53,7 +53,7 @@
 
 static void atp_trans_complete();
 void atp_x_done();
-void atp_x_done_funnel();
+void atp_x_done_funnel(void *);
 extern void atp_req_timeout();
 
 /*
@@ -61,9 +61,9 @@ extern void atp_req_timeout();
  *	Version 1.7 of atp_read.c on 89/02/09 17:53:16
  */
 
-void atp_treq_event(gref)
-register gref_t *gref;
+void atp_treq_event(void *arg)
 {
+	register gref_t *gref = (gref_t *)arg;
 	register gbuf_t *m;
 	register struct atp_state *atp;
 	boolean_t 	funnel_state;
@@ -459,10 +459,10 @@ gbuf_t   *m;
 
 void 
 atp_x_done_funnel(trp)
-register struct atp_trans *trp;
+void *trp;
 {
 	thread_funnel_set(network_flock, TRUE);
-	atp_x_done(trp);
+	atp_x_done((struct atp_trans *)trp);
 	(void) thread_funnel_set(network_flock, FALSE);
 
 }

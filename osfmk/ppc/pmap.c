@@ -99,6 +99,7 @@
 #include <kern/simple_lock.h>
 #include <mach/vm_attributes.h>
 #include <mach/vm_param.h>
+#include <vm/vm_kern.h>
 #include <kern/spl.h>
 
 #include <kern/misc_protos.h>
@@ -110,7 +111,6 @@
 #include <vm/vm_page.h>
 
 #include <ppc/pmap.h>
-#include <ppc/pmap_internals.h>
 #include <ppc/mem.h>
 #include <ppc/mappings.h>
 
@@ -118,34 +118,20 @@
 #include <ppc/Firmware.h>
 #include <ppc/savearea.h>
 #include <ppc/exception.h>
+#include <ppc/low_trace.h>
 #include <ddb/db_output.h>
-
-#if	DB_MACHINE_COMMANDS
-/* optionally enable traces of pmap operations in post-mortem trace table */
-/* #define PMAP_LOWTRACE 1 */
-#define PMAP_LOWTRACE 0
-#else	/* DB_MACHINE_COMMANDS */
-/* Can not trace even if we wanted to */
-#define PMAP_LOWTRACE 0
-#endif	/* DB_MACHINE_COMMANDS */
-
-#define PERFTIMES 0
-
-#if PERFTIMES && DEBUG
-#define debugLog2(a, b, c) dbgLog2(a, b, c)
-#else
-#define debugLog2(a, b, c)
-#endif
 
 extern unsigned int	avail_remaining;
 extern unsigned int	mappingdeb0;
 extern	struct 	Saveanchor saveanchor;						/* Aliged savearea anchor */
 extern int 		real_ncpus;									/* Number of actual CPUs */
-unsigned int debugbackpocket;								/* (TEST/DEBUG) */
+unsigned int 	debugbackpocket;							/* (TEST/DEBUG) */
 
-vm_offset_t		avail_next;
 vm_offset_t		first_free_virt;
 int          	current_free_region;						/* Used in pmap_next_page */
+
+pmapTransTab *pmapTrans;									/* Point to the hash to pmap translations */
+struct phys_entry *phys_table;
 
 /* forward */
 void pmap_activate(pmap_t pmap, thread_t th, int which_cpu);
@@ -156,27 +142,19 @@ void copy_to_phys(vm_offset_t sva, vm_offset_t dpa, int bytecount);
 int pmap_list_resident_pages(pmap_t pmap, vm_offset_t *listp, int space);
 #endif
 
-#if DEBUG
-#define PDB_USER	0x01	/* exported functions */
-#define PDB_MAPPING	0x02	/* low-level mapping routines */
-#define PDB_ENTER	0x04	/* pmap_enter specifics */
-#define PDB_COPY	0x08	/* copy page debugging */
-#define PDB_ZERO	0x10	/* zero page debugging */
-#define PDB_WIRED	0x20	/* things concerning wired entries */
-#define PDB_PTEG	0x40	/* PTEG overflows */
-#define PDB_LOCK	0x100	/* locks */
-#define PDB_IO		0x200	/* Improper use of WIMG_IO checks - PCI machines */
-
-int pmdebug=0;
-#endif
-
 /*  NOTE:  kernel_pmap_store must be in V=R storage and aligned!!!!!!!!!!!!!! */
 
 extern struct pmap	kernel_pmap_store;
 pmap_t		kernel_pmap;			/* Pointer to kernel pmap and anchor for in-use pmaps */		
+addr64_t	kernel_pmap_phys;		/* Pointer to kernel pmap and anchor for in-use pmaps, physical address */		
 pmap_t		cursor_pmap;			/* Pointer to last pmap allocated or previous if removed from in-use list */
+pmap_t		sharedPmap;				/* Pointer to common pmap for 64-bit address spaces */
 struct zone	*pmap_zone;				/* zone of pmap structures */
 boolean_t	pmap_initialized = FALSE;
+
+int ppc_max_pmaps;					/* Maximum number of concurrent address spaces allowed. This is machine dependent */	
+addr64_t vm_max_address;			/* Maximum effective address supported */
+addr64_t vm_max_physical;			/* Maximum physical address supported */
 
 /*
  * Physical-to-virtual translations are handled by inverted page table
@@ -185,11 +163,6 @@ boolean_t	pmap_initialized = FALSE;
  * for phys_tables of the physical memory we know about, but more may be
  * added as it is discovered (eg. by drivers).
  */
-struct phys_entry *phys_table;		/* For debugging */
-
-lock_t	pmap_system_lock;
-
-decl_simple_lock_data(,tlb_system_lock)
 
 /*
  *	free pmap list. caches the first free_pmap_max pmaps that are freed up
@@ -203,121 +176,34 @@ decl_simple_lock_data(,free_pmap_lock)
  * Function to get index into phys_table for a given physical address
  */
 
-struct phys_entry *pmap_find_physentry(vm_offset_t pa)
+struct phys_entry *pmap_find_physentry(ppnum_t pa)
 {
 	int i;
-	struct phys_entry *entry;
+	unsigned int entry;
 
-	for (i = pmap_mem_regions_count-1; i >= 0; i--) {
-		if (pa < pmap_mem_regions[i].start)
-			continue;
-		if (pa >= pmap_mem_regions[i].end)
-			return PHYS_NULL;
+	for (i = pmap_mem_regions_count - 1; i >= 0; i--) {
+		if (pa < pmap_mem_regions[i].mrStart) continue;	/* See if we fit in this region */
+		if (pa > pmap_mem_regions[i].mrEnd) continue;	/* Check the end too */
 		
-		entry = &pmap_mem_regions[i].phys_table[(pa - pmap_mem_regions[i].start) >> PPC_PGSHIFT];
-		__asm__ volatile("dcbt 0,%0" : : "r" (entry));	/* We will use this in a little bit */
-		return entry;
+		entry = (unsigned int)pmap_mem_regions[i].mrPhysTab + ((pa - pmap_mem_regions[i].mrStart) * sizeof(phys_entry));
+		return (struct phys_entry *)entry;
 	}
-	kprintf("DEBUG : pmap_find_physentry 0x%08x out of range\n",pa);
-	return PHYS_NULL;
+//	kprintf("DEBUG - pmap_find_physentry: page 0x%08X not found\n", pa);
+	return 0;
 }
 
 /*
  * kern_return_t
  * pmap_add_physical_memory(vm_offset_t spa, vm_offset_t epa,
  *                          boolean_t available, unsigned int attr)
- *	Allocate some extra physentries for the physical addresses given,
- *	specifying some default attribute that on the powerpc specifies
- *      the default cachability for any mappings using these addresses
- *	If the memory is marked as available, it is added to the general
- *	VM pool, otherwise it is not (it is reserved for card IO etc).
+ *
+ *	THIS IS NOT SUPPORTED
  */
 kern_return_t pmap_add_physical_memory(vm_offset_t spa, vm_offset_t epa,
 				       boolean_t available, unsigned int attr)
 {
-	int i,j;
-	spl_t s;
-
-	/* Only map whole pages */
 	
 	panic("Forget it! You can't map no more memory, you greedy puke!\n");
-
-	spa = trunc_page(spa);
-	epa = round_page(epa);
-
-	/* First check that the region doesn't already exist */
-
-	assert (epa >= spa);
-	for (i = 0; i < pmap_mem_regions_count; i++) {
-		/* If we're below the next region, then no conflict */
-		if (epa < pmap_mem_regions[i].start)
-			break;
-		if (spa < pmap_mem_regions[i].end) {
-#if DEBUG
-			kprintf("pmap_add_physical_memory(0x%08x,0x%08x,0x%08x) - memory already present\n",spa,epa,attr);
-#endif /* DEBUG */
-			return KERN_NO_SPACE;
-		}
-	}
-
-#if DEBUG
-	kprintf("pmap_add_physical_memory; region insert spot: %d out of %d\n", i, pmap_mem_regions_count);	/* (TEST/DEBUG) */
-#endif
-
-	/* Check that we've got enough space for another region */
-	if (pmap_mem_regions_count == PMAP_MEM_REGION_MAX)
-		return KERN_RESOURCE_SHORTAGE;
-
-	/* Once here, i points to the mem_region above ours in physical mem */
-
-	/* allocate a new phys_table for this new region */
-#if DEBUG
-	kprintf("pmap_add_physical_memory; kalloc\n");	/* (TEST/DEBUG) */
-#endif
-
-	phys_table =  (struct phys_entry *)
-		kalloc(sizeof(struct phys_entry) * atop(epa-spa));
-#if DEBUG
-	kprintf("pmap_add_physical_memory; new phys_table: %08X\n", phys_table);	/* (TEST/DEBUG) */
-#endif
-
-	/* Initialise the new phys_table entries */
-	for (j = 0; j < atop(epa-spa); j++) {
-		
-		phys_table[j].phys_link = MAPPING_NULL;
-		
-		mapping_phys_init(&phys_table[j], spa+(j*PAGE_SIZE), attr);	/* Initialize the hardware specific portions */
-
-	}
-	s = splhigh();
-	
-	/* Move all the phys_table entries up some to make room in
-	 * the ordered list.
-	 */
-	for (j = pmap_mem_regions_count; j > i ; j--)
-		pmap_mem_regions[j] = pmap_mem_regions[j-1];
-
-	/* Insert a new entry with some memory to back it */
-
-	pmap_mem_regions[i].start 	     = spa;
-	pmap_mem_regions[i].end           = epa;
-	pmap_mem_regions[i].phys_table    = phys_table;
-
-	pmap_mem_regions_count++;
-	splx(s);
-	
-#if DEBUG
-	for(i=0; i<pmap_mem_regions_count; i++) {			/* (TEST/DEBUG) */
-		kprintf("region %d: %08X %08X %08X\n", i, pmap_mem_regions[i].start,
-			pmap_mem_regions[i].end, pmap_mem_regions[i].phys_table);	/* (TEST/DEBUG) */
-	}
-#endif
-
-	if (available) {
-		kprintf("warning : pmap_add_physical_mem() "
-		       "available not yet supported\n");
-	}
-
 	return KERN_SUCCESS;
 }
 
@@ -334,7 +220,10 @@ kern_return_t pmap_add_physical_memory(vm_offset_t spa, vm_offset_t epa,
  *	Pages with a contiguous virtual address range, the same protection, and attributes.
  *	therefore, we map it with a single block.
  *
+ *	Note that this call will only map into 32-bit space
+ *
  */
+
 vm_offset_t
 pmap_map(
 	vm_offset_t va,
@@ -343,71 +232,18 @@ pmap_map(
 	vm_prot_t prot)
 {
 
-
-	if (spa == epa)
-		return(va);
-
-	assert(epa > spa);
-	debugLog2(40, va, spa);								/* Log pmap_map call */
-
-	pmap_map_block(kernel_pmap, va, spa, epa - spa, prot, PTE_WIMG_DEFAULT, blkPerm);	/* Set up a permanent block mapped area */
-
-	debugLog2(41, epa, prot);							/* Log pmap_map call */
-
-	return(va);
-}
-
-/*
- * pmap_map_bd(va, spa, epa, prot)
- *	Back-door routine for mapping kernel VM at initialisation.
- *	Used for mapping memory outside the known physical memory
- *      space, with caching disabled. Designed for use by device probes.
- * 
- *	A virtual address range starting at "va" is mapped to the physical
- *	address range "spa" to "epa" with machine independent protection
- *	"prot".
- *
- *	"va", "spa", and "epa" are byte addresses and must be on machine
- *	independent page boundaries.
- *
- * WARNING: The current version of memcpy() can use the dcbz instruction
- * on the destination addresses.  This will cause an alignment exception
- * and consequent overhead if the destination is caching-disabled.  So
- * avoid memcpy()ing into the memory mapped by this function.
- *
- * also, many other pmap_ routines will misbehave if you try and change
- * protections or remove these mappings, they are designed to be permanent.
- *
- * These areas will be added to the autogen list, if possible.  Existing translations
- * are overridden and their mapping stuctures are released.  This takes place in
- * the autogen_map function.
- *
- * Locking:
- *	this routine is called only during system initialization when only
- *	one processor is active, so no need to take locks...
- */
-vm_offset_t
-pmap_map_bd(
-	vm_offset_t va,
-	vm_offset_t spa,
-	vm_offset_t epa,
-	vm_prot_t prot)
-{
-	register struct mapping *mp;
-	register struct phys_entry 	*pp;
+	addr64_t colladr;
 	
-
-	if (spa == epa)
-		return(va);
+	if (spa == epa) return(va);
 
 	assert(epa > spa);
 
-	debugLog2(42, va, epa);								/* Log pmap_map_bd call */
+	colladr = mapping_make(kernel_pmap, (addr64_t)va, (ppnum_t)(spa >> 12), (mmFlgBlock | mmFlgPerm), (epa - spa) >> 12, prot & VM_PROT_ALL);
 
-	pmap_map_block(kernel_pmap, va, spa, epa - spa, prot, PTE_WIMG_IO, blkPerm);	/* Set up autogen area */
-
-	debugLog2(43, epa, prot);							/* Log pmap_map_bd exit */
-
+	if(colladr) {											/* Was something already mapped in the range? */
+		panic("pmap_map: attempt to map previously mapped range - va = %08X, pa = %08X, epa = %08X, collision = %016llX\n",
+			va, spa, epa, colladr);
+	}				
 	return(va);
 }
 
@@ -417,303 +253,203 @@ pmap_map_bd(
  *	Called with mapping done by BATs. Page_size must already be set.
  *
  *	Parameters:
- *	mem_size:	Total memory present
+ *	msize:	Total memory present
  *	first_avail:	First virtual address available
- *	first_phys_avail:	First physical address available
+ *	kmapsize:	Size of kernel text and data
  */
 void
-pmap_bootstrap(unsigned int mem_size, vm_offset_t *first_avail, vm_offset_t *first_phys_avail, unsigned int kmapsize)
+pmap_bootstrap(uint64_t msize, vm_offset_t *first_avail, unsigned int kmapsize)
 {
 	register struct mapping *mp;
 	vm_offset_t 	addr;
 	vm_size_t 		size;
-	int 			i, num, j, rsize, mapsize, vmpagesz, vmmapsz;
-	unsigned int	 mask;
-	vm_offset_t		first_used_addr;
-	PCA				*pcaptr;
+	int 			i, num, j, rsize, mapsize, vmpagesz, vmmapsz, bank, nbits;
+	uint64_t		tmemsize;
+	uint_t			htslop;
+	vm_offset_t		first_used_addr, PCAsize;
+	struct phys_entry *phys_table;
 
-	*first_avail = round_page(*first_avail);
-	
-#if DEBUG
-	kprintf("first_avail=%08X; first_phys_avail=%08X; avail_remaining=%d\n", 
-		*first_avail, *first_phys_avail, avail_remaining);
-#endif
-
-	assert(PAGE_SIZE == PPC_PGBYTES);
+	*first_avail = round_page_32(*first_avail);				/* Make sure we start out on a page boundary */
+	vm_last_addr = VM_MAX_KERNEL_ADDRESS;					/* Set the highest address know to VM */
 
 	/*
 	 * Initialize kernel pmap
 	 */
 	kernel_pmap = &kernel_pmap_store;
+	kernel_pmap_phys = (addr64_t)&kernel_pmap_store;
 	cursor_pmap = &kernel_pmap_store;
-
-	lock_init(&pmap_system_lock,
-		  FALSE,		/* NOT a sleep lock */
-		  ETAP_VM_PMAP_SYS,
-		  ETAP_VM_PMAP_SYS_I);
 
 	simple_lock_init(&kernel_pmap->lock, ETAP_VM_PMAP_KERNEL);
 
 	kernel_pmap->pmap_link.next = (queue_t)kernel_pmap;		/* Set up anchor forward */
 	kernel_pmap->pmap_link.prev = (queue_t)kernel_pmap;		/* Set up anchor reverse */
 	kernel_pmap->ref_count = 1;
+	kernel_pmap->pmapFlags = pmapKeyDef;					/* Set the default keys */
+	kernel_pmap->pmapCCtl = pmapCCtlVal;					/* Initialize cache control */
 	kernel_pmap->space = PPC_SID_KERNEL;
-	kernel_pmap->pmapvr = 0;						/* Virtual = Real  */
-	kernel_pmap->bmaps = 0;							/* No block pages just yet */
-	for(i=0; i < 128; i++) {						/* Clear usage slots */
-		kernel_pmap->pmapUsage[i] = 0;
-	}
-	for(i=0; i < 16; i++) {							/* Initialize for laughs */
-		kernel_pmap->pmapSegs[i] = SEG_REG_PROT | (i << 20) | PPC_SID_KERNEL;
-	}
+	kernel_pmap->pmapvr = 0;								/* Virtual = Real  */
 
-	/*
-	 * Allocate: (from first_avail up)
-	 *      Aligned to its own size:
-     	 *       hash table (for mem size 2**x, allocate 2**(x-10) entries)
-	 *	 mapping table (same size and immediatly following hash table)
-	 */
-	/* hash_table_size must be a power of 2, recommended sizes are
-	 * taken from PPC601 User Manual, table 6-19. We take the next
-	 * highest size if mem_size is not a power of two.
-	 * TODO NMGS make this configurable at boot time.
-	 */
-
-	num = sizeof(pte_t) * (mem_size >> 10);
-
-	for (hash_table_size = 64 * 1024;	/* minimum size = 64Kbytes */
-	     hash_table_size < num; 
-	     hash_table_size *= 2)
-		continue;
-
-	if (num > (sizeof(pte_t) * 524288))
-		hash_table_size = hash_table_size/2; /* reduce by half above 512MB */
-
-	/* Scale to within any physical memory layout constraints */
-	do {
-		num = atop(mem_size);	/* num now holds mem_size in pages */
-
-		/* size of all structures that we're going to allocate */
-
-		size = (vm_size_t) (
-			(InitialSaveBloks * PAGE_SIZE) +	/* Allow space for the initial context saveareas */
-			((InitialSaveBloks / 2) * PAGE_SIZE) +	/* For backpocket saveareas */
-			hash_table_size +					/* For hash table */
-			hash_table_size +					/* For PTEG allocation table */
-			(num * sizeof(struct phys_entry))	/* For the physical entries */
-			);
-
-		mapsize = size = round_page(size);		/* Get size of area to map that we just calculated */
-		mapsize = mapsize + kmapsize;			/* Account for the kernel text size */
-
-		vmpagesz = round_page(num * sizeof(struct vm_page));	/* Allow for all vm_pages needed to map physical mem */
-		vmmapsz = round_page((num / 8) * sizeof(struct vm_map_entry));	/* Allow for vm_maps */
-		
-		mapsize = mapsize + vmpagesz + vmmapsz;	/* Add the VM system estimates into the grand total */
-
-		mapsize = mapsize + (4 * 1024 * 1024);	/* Allow for 4 meg of extra mappings */
-		mapsize = ((mapsize / PAGE_SIZE) + MAPPERBLOK - 1) / MAPPERBLOK;	/* Get number of blocks of mappings we need */
-		mapsize = mapsize + ((mapsize  + MAPPERBLOK - 1) / MAPPERBLOK);	/* Account for the mappings themselves */
-
-#if DEBUG
-		kprintf("pmap_bootstrap: initial vm_pages     = %08X\n", vmpagesz);
-		kprintf("pmap_bootstrap: initial vm_maps      = %08X\n", vmmapsz);
-		kprintf("pmap_bootstrap: size before mappings = %08X\n", size);
-		kprintf("pmap_bootstrap: kernel map size      = %08X\n", kmapsize);
-		kprintf("pmap_bootstrap: mapping blocks rqrd  = %08X\n", mapsize);
-#endif
-		
-		size = size + (mapsize * PAGE_SIZE);	/* Get the true size we need */
-
-		/* hash table must be aligned to its size */
-
-		addr = (*first_avail +
-			(hash_table_size-1)) & ~(hash_table_size-1);
-
-		if (addr + size > pmap_mem_regions[0].end) {
-			hash_table_size /= 2;
-		} else {
-			break;
-		}
-		/* If we have had to shrink hash table to too small, panic */
-		if (hash_table_size == 32 * 1024)
-			panic("cannot lay out pmap memory map correctly");
-	} while (1);
-	
-#if DEBUG
-	kprintf("hash table size=%08X, total size of area=%08X, addr=%08X\n", 
-		hash_table_size, size, addr);
-#endif
-	if (round_page(*first_phys_avail) < trunc_page(addr)) {
-		/* We are stepping over at least one page here, so
-		 * add this region to the free regions so that it can
-		 * be allocated by pmap_steal
-		 */
-		free_regions[free_regions_count].start = round_page(*first_phys_avail);
-		free_regions[free_regions_count].end = trunc_page(addr);
-
-		avail_remaining += (free_regions[free_regions_count].end -
-				    free_regions[free_regions_count].start) /
-					    PPC_PGBYTES;
-#if DEBUG
-		kprintf("ADDED FREE REGION from 0x%08x to 0x%08x, avail_remaining = %d\n",
-			free_regions[free_regions_count].start,free_regions[free_regions_count].end, 
-			avail_remaining);
-#endif /* DEBUG */
-		free_regions_count++;
-	}
-
-	/* Zero everything - this also invalidates the hash table entries */
-	bzero((char *)addr, size);
-
-	/* Set up some pointers to our new structures */
-
-	/* from here,  addr points to the next free address */
-	
-	first_used_addr = addr;	/* remember where we started */
-
-	/* Set up hash table address and dma buffer address, keeping
-	 * alignment. These mappings are all 1-1,  so dma_r == dma_v
-	 * 
-	 * If hash_table_size == dma_buffer_alignment, then put hash_table
-	 * first, since dma_buffer_size may be smaller than alignment, but
-	 * hash table alignment==hash_table_size.
-	 */
-	hash_table_base = addr;
-		
-	addr += hash_table_size;
-	addr += hash_table_size;							/* Add another for the PTEG Control Area */
-	assert((hash_table_base & (hash_table_size-1)) == 0);
-
-	pcaptr = (PCA *)(hash_table_base+hash_table_size);	/* Point to the PCA table */
-	mapCtl.mapcflush.pcaptr = pcaptr;
-	
-	for(i=0; i < (hash_table_size/64) ; i++) {			/* For all of PTEG control areas: */
-		pcaptr[i].flgs.PCAalflgs.PCAfree=0xFF;			/* Mark all slots free */
-		pcaptr[i].flgs.PCAalflgs.PCAsteal=0x01;			/* Initialize steal position */
-	}
-	
- 	savearea_init(&addr);								/* Initialize the savearea chains and data */
+/*
+ *	The hash table wants to have one pteg for every 2 physical pages.
+ *	We will allocate this in physical RAM, outside of kernel virtual memory,
+ *	at the top of the highest bank that will contain it.
+ *	Note that "bank" doesn't refer to a physical memory slot here, it is a range of
+ *	physically contiguous memory.
+ *
+ *	The PCA will go there as well, immediately before the hash table.
+ */
  
-	/* phys_table is static to help debugging,
-	 * this variable is no longer actually used
-	 * outside of this scope
-	 */
+	nbits = cntlzw(((msize << 1) - 1) >> 32);				/* Get first bit in upper half */
+	if(nbits == 32) nbits = nbits + cntlzw((uint_t)((msize << 1) - 1));	/* If upper half was empty, find bit in bottom half */
+ 	tmemsize = 0x8000000000000000ULL >> nbits;					/* Get memory size rounded up to power of 2 */
+ 	
+ 	if(tmemsize > 0x0000002000000000ULL) tmemsize = 0x0000002000000000ULL;	/* Make sure we don't make an unsupported hash table size */
 
-	phys_table = (struct phys_entry *) addr;
+ 	hash_table_size = (uint_t)(tmemsize >> 13) * per_proc_info[0].pf.pfPTEG;	/* Get provisional hash_table_size */
+ 	if(hash_table_size < (256 * 1024)) hash_table_size = (256 * 1024);	/* Make sure we are at least minimum size */	
 
-#if DEBUG
-	kprintf("hash_table_base                 =%08X\n", hash_table_base);
-	kprintf("phys_table                      =%08X\n", phys_table);
-	kprintf("pmap_mem_regions_count          =%08X\n", pmap_mem_regions_count);
-#endif
+	while(1) {												/* Try to fit hash table in PCA into contiguous memory */
 
-	for (i = 0; i < pmap_mem_regions_count; i++) {
-		
-		pmap_mem_regions[i].phys_table = phys_table;
-		rsize = (pmap_mem_regions[i].end - (unsigned int)pmap_mem_regions[i].start)/PAGE_SIZE;
-		
-#if DEBUG
-		kprintf("Initializing physical table for region %d\n", i);
-		kprintf("   table=%08X, size=%08X, start=%08X, end=%08X\n",
-			phys_table, rsize, pmap_mem_regions[i].start, 
-			(unsigned int)pmap_mem_regions[i].end);
-#endif		
-		
-		for (j = 0; j < rsize; j++) {
-			phys_table[j].phys_link = MAPPING_NULL;
-			mapping_phys_init(&phys_table[j], (unsigned int)pmap_mem_regions[i].start+(j*PAGE_SIZE), 
-				PTE_WIMG_DEFAULT);						/* Initializes hw specific storage attributes */
+		if(hash_table_size < (256 * 1024)) {				/* Have we dropped too short? This should never, ever happen */
+			panic("pmap_bootstrap: Can't find space for hash table\n");	/* This will never print, system isn't up far enough... */
 		}
-		phys_table = phys_table +
-			atop(pmap_mem_regions[i].end - pmap_mem_regions[i].start);
+
+		PCAsize = (hash_table_size / per_proc_info[0].pf.pfPTEG) * sizeof(PCA);	/* Get total size of PCA table */
+		PCAsize = round_page_32(PCAsize);					/* Make sure it is at least a page long */
+	
+		for(bank = pmap_mem_regions_count - 1; bank >= 0; bank--) {	/* Search backwards through banks */
+			
+			hash_table_base = ((addr64_t)pmap_mem_regions[bank].mrEnd << 12) - hash_table_size + PAGE_SIZE;	/* Get tenative address */
+			
+			htslop = hash_table_base & (hash_table_size - 1);	/* Get the extra that we will round down when we align */
+			hash_table_base = hash_table_base & -(addr64_t)hash_table_size;	/* Round down to correct boundary */
+			
+			if((hash_table_base - round_page_32(PCAsize)) >= ((addr64_t)pmap_mem_regions[bank].mrStart << 12)) break;	/* Leave if we fit */
+		}
+		
+		if(bank >= 0) break;								/* We are done if we found a suitable bank */
+		
+		hash_table_size = hash_table_size >> 1;				/* Try the next size down */
 	}
 
-	/* restore phys_table for debug */
-	phys_table = (struct phys_entry *) addr;
-
-	addr += sizeof(struct phys_entry) * num;
+	if(htslop) {											/* If there was slop (i.e., wasted pages for alignment) add a new region */
+		for(i = pmap_mem_regions_count - 1; i >= bank; i--) {	/* Copy from end to our bank, including our bank */
+			pmap_mem_regions[i + 1].mrStart  = pmap_mem_regions[i].mrStart;	/* Set the start of the bank */
+			pmap_mem_regions[i + 1].mrAStart = pmap_mem_regions[i].mrAStart;	/* Set the start of allocatable area */
+			pmap_mem_regions[i + 1].mrEnd    = pmap_mem_regions[i].mrEnd;	/* Set the end address of bank */
+			pmap_mem_regions[i + 1].mrAEnd   = pmap_mem_regions[i].mrAEnd;	/* Set the end address of allocatable area */
+		}
+		
+		pmap_mem_regions[i + 1].mrStart  = (hash_table_base + hash_table_size) >> 12;	/* Set the start of the next bank to the start of the slop area */
+		pmap_mem_regions[i + 1].mrAStart = (hash_table_base + hash_table_size) >> 12;	/* Set the start of allocatable area to the start of the slop area */
+		pmap_mem_regions[i].mrEnd        = (hash_table_base + hash_table_size - 4096) >> 12;	/* Set the end of our bank to the end of the hash table */
+		
+	}		
 	
-	simple_lock_init(&tlb_system_lock, ETAP_VM_PMAP_TLB);
+	pmap_mem_regions[bank].mrAEnd = (hash_table_base - PCAsize - 4096) >> 12;	/* Set the maximum allocatable in this bank */
+	
+	hw_hash_init();											/* Initiaize the hash table and PCA */
+	hw_setup_trans();										/* Set up hardware registers needed for translation */
+	
+/*
+ *	The hash table is now all initialized and so is the PCA.  Go on to do the rest of it.
+ *	This allocation is from the bottom up.
+ */	
+	
+	num = atop_64(msize);										/* Get number of pages in all of memory */
 
-	/* Initialise the registers necessary for supporting the hashtable */
-#if DEBUG
-	kprintf("*** hash_table_init: base=%08X, size=%08X\n", hash_table_base, hash_table_size);
-#endif
+/* Figure out how much we need to allocate */
 
-	hash_table_init(hash_table_base, hash_table_size);
-			
+	size = (vm_size_t) (
+		(InitialSaveBloks * PAGE_SIZE) +					/* Allow space for the initial context saveareas */
+		(BackPocketSaveBloks * PAGE_SIZE) +					/* For backpocket saveareas */
+		trcWork.traceSize +								/* Size of trace table */
+		((((1 << maxAdrSpb) * sizeof(pmapTransTab)) + 4095) & -4096) +	/* Size of pmap translate table */
+		(((num * sizeof(struct phys_entry)) + 4095) & -4096) 	/* For the physical entries */
+	);
+
+	mapsize = size = round_page_32(size);						/* Get size of area to map that we just calculated */
+	mapsize = mapsize + kmapsize;							/* Account for the kernel text size */
+
+	vmpagesz = round_page_32(num * sizeof(struct vm_page));	/* Allow for all vm_pages needed to map physical mem */
+	vmmapsz = round_page_32((num / 8) * sizeof(struct vm_map_entry));	/* Allow for vm_maps */
+	
+	mapsize = mapsize + vmpagesz + vmmapsz;					/* Add the VM system estimates into the grand total */
+
+	mapsize = mapsize + (4 * 1024 * 1024);					/* Allow for 4 meg of extra mappings */
+	mapsize = ((mapsize / PAGE_SIZE) + MAPPERBLOK - 1) / MAPPERBLOK;	/* Get number of blocks of mappings we need */
+	mapsize = mapsize + ((mapsize  + MAPPERBLOK - 1) / MAPPERBLOK);	/* Account for the mappings themselves */
+
+	size = size + (mapsize * PAGE_SIZE);					/* Get the true size we need */
+
+	/* hash table must be aligned to its size */
+
+	addr = *first_avail;									/* Set the address to start allocations */
+	first_used_addr = addr;									/* Remember where we started */
+
+	bzero((char *)addr, size);								/* Clear everything that we are allocating */
+
+ 	savearea_init(addr);									/* Initialize the savearea chains and data */
+
+	addr = (vm_offset_t)((unsigned int)addr + ((InitialSaveBloks + BackPocketSaveBloks) * PAGE_SIZE));	/* Point past saveareas */
+
+	trcWork.traceCurr = (unsigned int)addr;					/* Set first trace slot to use */
+	trcWork.traceStart = (unsigned int)addr;				/* Set start of trace table */
+	trcWork.traceEnd = (unsigned int)addr + trcWork.traceSize;		/* Set end of trace table */
+
+	addr = (vm_offset_t)trcWork.traceEnd;					/* Set next allocatable location */
+		
+	pmapTrans = (pmapTransTab *)addr;						/* Point to the pmap to hash translation table */
+		
+	pmapTrans[PPC_SID_KERNEL].pmapPAddr = (addr64_t)((uintptr_t)kernel_pmap);	/* Initialize the kernel pmap in the translate table */
+	pmapTrans[PPC_SID_KERNEL].pmapVAddr = CAST_DOWN(unsigned int, kernel_pmap);  /* Initialize the kernel pmap in the translate table */
+		
+	addr += ((((1 << maxAdrSpb) * sizeof(pmapTransTab)) + 4095) & -4096);	/* Point past pmap translate table */
+
+/*	NOTE: the phys_table must be within the first 2GB of physical RAM. This makes sure we only need to do 32-bit arithmetic */
+
+	phys_table = (struct phys_entry *) addr;				/* Get pointer to physical table */
+
+	for (bank = 0; bank < pmap_mem_regions_count; bank++) {	/* Set pointer and initialize all banks of ram */
+		
+		pmap_mem_regions[bank].mrPhysTab = phys_table;		/* Set pointer to the physical table for this bank */
+		
+		phys_table = phys_table + (pmap_mem_regions[bank].mrEnd - pmap_mem_regions[bank].mrStart + 1);	/* Point to the next */
+	}
+
+	addr += (((num * sizeof(struct phys_entry)) + 4095) & -4096);	/* Step on past the physical entries */
+	
 /*
  * 		Remaining space is for mapping entries.  Tell the initializer routine that
  * 		the mapping system can't release this block because it's permanently assigned
  */
 
-	mapping_init();									/* Initialize the mapping tables */
+	mapping_init();											/* Initialize the mapping tables */
 
 	for(i = addr; i < first_used_addr + size; i += PAGE_SIZE) {	/* Add initial mapping blocks */
-		mapping_free_init(i, 1, 0);					/* Pass block address and say that this one is not releasable */
+		mapping_free_init(i, 1, 0);							/* Pass block address and say that this one is not releasable */
 	}
-	mapCtl.mapcmin = MAPPERBLOK;					/* Make sure we only adjust one at a time */
-
-#if DEBUG
-
-	kprintf("mapping kernel memory from 0x%08x to 0x%08x, to address 0x%08x\n",
-		 first_used_addr, round_page(first_used_addr+size),
-		 first_used_addr);
-#endif /* DEBUG */
+	mapCtl.mapcmin = MAPPERBLOK;							/* Make sure we only adjust one at a time */
 
 	/* Map V=R the page tables */
 	pmap_map(first_used_addr, first_used_addr,
-		 round_page(first_used_addr+size), VM_PROT_READ | VM_PROT_WRITE);
+		 round_page_32(first_used_addr + size), VM_PROT_READ | VM_PROT_WRITE);
 
-#if DEBUG
-
-	for(i=first_used_addr; i < round_page(first_used_addr+size); i+=PAGE_SIZE) {	/* Step through all these mappings */
-		if(i != (j = kvtophys(i))) {							/* Verify that the mapping was made V=R */
-			kprintf("*** V=R mapping failed to verify: V=%08X; R=%08X\n", i, j);
-		}
-	}
-#endif
-
-	*first_avail = round_page(first_used_addr + size);
-	first_free_virt = round_page(first_used_addr + size);
+	*first_avail = round_page_32(first_used_addr + size);		/* Set next available page */
+	first_free_virt = *first_avail;							/* Ditto */
 
 	/* All the rest of memory is free - add it to the free
 	 * regions so that it can be allocated by pmap_steal
 	 */
-	free_regions[free_regions_count].start = *first_avail;
-	free_regions[free_regions_count].end = pmap_mem_regions[0].end;
 
-	avail_remaining += (free_regions[free_regions_count].end -
-			    free_regions[free_regions_count].start) /
-				    PPC_PGBYTES;
+	pmap_mem_regions[0].mrAStart = (*first_avail >> 12);	/* Set up the free area to start allocations (always in the first bank) */
 
-#if DEBUG
-	kprintf("ADDED FREE REGION from 0x%08x to 0x%08x, avail_remaining = %d\n",
-		free_regions[free_regions_count].start,free_regions[free_regions_count].end, 
-		avail_remaining);
-#endif /* DEBUG */
-
-	free_regions_count++;
-
-	current_free_region = 0;
-
-	avail_next = free_regions[current_free_region].start;
-	
-#if DEBUG
-	kprintf("Number of free regions=%d\n",free_regions_count);	/* (TEST/DEBUG) */
-	kprintf("Current free region=%d\n",current_free_region);	/* (TEST/DEBUG) */
-	for(i=0;i<free_regions_count; i++) {					/* (TEST/DEBUG) */
-		kprintf("Free region %3d - from %08X to %08X\n", i, free_regions[i].start,
-			free_regions[i].end);							/* (TEST/DEBUG) */
+	current_free_region = 0;								/* Set that we will start allocating in bank 0 */
+	avail_remaining = 0;									/* Clear free page count */
+	for(bank = 0; bank < pmap_mem_regions_count; bank++) {	/* Total up all of the pages in the system that are available */
+		avail_remaining += (pmap_mem_regions[bank].mrAEnd - pmap_mem_regions[bank].mrAStart) + 1;	/* Add in allocatable pages in this bank */
 	}
-	for (i = 0; i < pmap_mem_regions_count; i++) {			/* (TEST/DEBUG) */
-		kprintf("PMAP region %3d - from %08X to %08X; phys=%08X\n", i,	/* (TEST/DEBUG) */
-			pmap_mem_regions[i].start,						/* (TEST/DEBUG) */
-			pmap_mem_regions[i].end,						/* (TEST/DEBUG) */
-			pmap_mem_regions[i].phys_table);				/* (TEST/DEBUG) */
-	}
-#endif
+
 
 }
 
@@ -733,6 +469,7 @@ void
 pmap_init(void)
 {
 
+	addr64_t cva;
 
 	pmap_zone = zinit(pmapSize, 400 * pmapSize, 4096, "pmap");
 #if	ZONE_DEBUG
@@ -747,6 +484,7 @@ pmap_init(void)
 	free_pmap_list = 0;					/* Set that there are no free pmaps */
 	free_pmap_count = 0;
 	simple_lock_init(&free_pmap_lock, ETAP_VM_PMAP_CACHE);
+	
 }
 
 unsigned int pmap_free_pages(void)
@@ -754,63 +492,32 @@ unsigned int pmap_free_pages(void)
 	return avail_remaining;
 }
 
-boolean_t pmap_next_page(vm_offset_t *addrp)
+/*
+ *	This function allocates physical pages.
+ */
+
+/* Non-optimal, but only used for virtual memory startup.
+ * Allocate memory from a table of free physical addresses
+ * If there are no more free entries, too bad. 
+ */
+
+boolean_t pmap_next_page(ppnum_t *addrp)
 {
-	/* Non optimal, but only used for virtual memory startup.
-     * Allocate memory from a table of free physical addresses
-	 * If there are no more free entries, too bad. We have two
-	 * tables to look through, free_regions[] which holds free
-	 * regions from inside pmap_mem_regions[0], and the others...
-	 * pmap_mem_regions[1..]
-     */
-	 
-	/* current_free_region indicates the next free entry,
-	 * if it's less than free_regions_count, then we're still
-	 * in free_regions, otherwise we're in pmap_mem_regions
-	 */
+		int i;
 
-	if (current_free_region >= free_regions_count) {
-		/* We're into the pmap_mem_regions, handle this
-		 * separately to free_regions
-		 */
-
-		int current_pmap_mem_region = current_free_region -
-					 free_regions_count + 1;
-		if (current_pmap_mem_region > pmap_mem_regions_count)
-			return FALSE;
-		*addrp = avail_next;
-		avail_next += PAGE_SIZE;
-		avail_remaining--;
-		if (avail_next >= pmap_mem_regions[current_pmap_mem_region].end) {
-			current_free_region++;
-			current_pmap_mem_region++;
-			avail_next = pmap_mem_regions[current_pmap_mem_region].start;
-#if DEBUG
-			kprintf("pmap_next_page : next region start=0x%08x\n",avail_next);
-#endif /* DEBUG */
-		}
-		return TRUE;
+	if(current_free_region >= pmap_mem_regions_count) return FALSE;	/* Return failure if we have used everything... */
+	
+	for(i = current_free_region; i < pmap_mem_regions_count; i++) {	/* Find the next bank with free pages */
+		if(pmap_mem_regions[i].mrAStart <= pmap_mem_regions[i].mrAEnd) break;	/* Found one */
 	}
 	
-	/* We're in the free_regions, allocate next page and increment
-	 * counters
-	 */
-	*addrp = avail_next;
+	current_free_region = i;										/* Set our current bank */
+	if(i >= pmap_mem_regions_count) return FALSE;					/* Couldn't find a free page */
 
-	avail_next += PAGE_SIZE;
-	avail_remaining--;
+	*addrp = pmap_mem_regions[i].mrAStart;					/* Allocate the page */
+	pmap_mem_regions[i].mrAStart = pmap_mem_regions[i].mrAStart + 1;	/* Set the next one to go */
+	avail_remaining--;												/* Drop free count */
 
-	if (avail_next >= free_regions[current_free_region].end) {
-		current_free_region++;
-		if (current_free_region < free_regions_count)
-			avail_next = free_regions[current_free_region].start;
-		else
-			avail_next = pmap_mem_regions[current_free_region -
-						 free_regions_count + 1].start;
-#if DEBUG
-		kprintf("pmap_next_page : next region start=0x%08x\n",avail_next);
-#endif 
-	}
 	return TRUE;
 }
 
@@ -818,8 +525,8 @@ void pmap_virtual_space(
 	vm_offset_t *startp,
 	vm_offset_t *endp)
 {
-	*startp = round_page(first_free_virt);
-	*endp   = VM_MAX_KERNEL_ADDRESS;
+	*startp = round_page_32(first_free_virt);
+	*endp   = vm_last_addr;
 }
 
 /*
@@ -845,17 +552,8 @@ pmap_create(vm_size_t size)
 {
 	pmap_t pmap, ckpmap, fore, aft;
 	int s, i;
-	space_t sid;
-	unsigned int currSID;
-
-#if PMAP_LOWTRACE
-	dbgTrace(0xF1D00001, size, 0);			/* (TEST/DEBUG) */
-#endif
-
-#if DEBUG
-	if (pmdebug & PDB_USER)
-		kprintf("pmap_create(size=%x)%c", size, size ? '\n' : ' ');
-#endif
+	unsigned int currSID, hspace;
+	addr64_t physpmap;
 
 	/*
 	 * A software use-only map doesn't even need a pmap structure.
@@ -871,76 +569,69 @@ pmap_create(vm_size_t size)
 	s = splhigh();
 	simple_lock(&free_pmap_lock);
 	
-	if(free_pmap_list) {					/* Any free? */
-		pmap = free_pmap_list;				/* Yes, allocate it */
-		free_pmap_list = (pmap_t)pmap->bmaps;	/* Dequeue this one (we chain free ones through bmaps) */
+	if(free_pmap_list) {							/* Any free? */
+		pmap = free_pmap_list;						/* Yes, allocate it */
+		free_pmap_list = (pmap_t)pmap->freepmap;	/* Dequeue this one (we chain free ones through freepmap) */
 		free_pmap_count--;
 	}
 	else {
-		simple_unlock(&free_pmap_lock);		/* Unlock just in case */
+		simple_unlock(&free_pmap_lock);				/* Unlock just in case */
 		splx(s);
 
-		pmap = (pmap_t) zalloc(pmap_zone);	/* Get one */
+		pmap = (pmap_t) zalloc(pmap_zone);			/* Get one */
 		if (pmap == PMAP_NULL) return(PMAP_NULL);	/* Handle out-of-memory condition */
 		
-		bzero((char *)pmap, pmapSize);		/* Clean up the pmap */
+		bzero((char *)pmap, pmapSize);				/* Clean up the pmap */
 		
 		s = splhigh();
-		simple_lock(&free_pmap_lock);		/* Lock it back up	*/
+		simple_lock(&free_pmap_lock);				/* Lock it back up	*/
 		
-		ckpmap = cursor_pmap;				/* Get starting point for free ID search */
-		currSID = ckpmap->spaceNum;			/* Get the actual space ID number */
+		ckpmap = cursor_pmap;						/* Get starting point for free ID search */
+		currSID = ckpmap->spaceNum;					/* Get the actual space ID number */
 
-		while(1) {							/* Keep trying until something happens */
+		while(1) {									/* Keep trying until something happens */
 		
-			currSID = (currSID + 1) & SID_MAX;	/* Get the next in the sequence */
+			currSID = (currSID + 1) & (maxAdrSp - 1);	/* Get the next in the sequence */
+			if(((currSID * incrVSID) & (maxAdrSp - 1)) == invalSpace) continue;	/* Skip the space we have reserved */
 			ckpmap = (pmap_t)ckpmap->pmap_link.next;	/* On to the next in-use pmap */
 	
 			if(ckpmap->spaceNum != currSID) break;	/* If we are out of sequence, this is free */
 			
-			if(ckpmap == cursor_pmap) {		/* See if we have 2^20 already allocated */
-				panic("pmap_create: Maximum number (2^20) active address spaces reached\n");	/* Die pig dog */
+			if(ckpmap == cursor_pmap) {				/* See if we have 2^20 already allocated */
+				panic("pmap_create: Maximum number (%d) active address spaces reached\n", maxAdrSp);	/* Die pig dog */
 			}
 		}
 
-		pmap->space = (currSID * incrVSID) & SID_MAX;	/* Calculate the actual VSID */
-		pmap->spaceNum = currSID;			/* Set the space ID number */
-
+		pmap->space = (currSID * incrVSID) & (maxAdrSp - 1);	/* Calculate the actual VSID */
+		pmap->spaceNum = currSID;					/* Set the space ID number */
 /*
  *		Now we link into the chain just before the out of sequence guy.
  */
 
-		fore = (pmap_t)ckpmap->pmap_link.prev;	/* Get the current's previous */
-		pmap->pmap_link.next = (queue_t)ckpmap;	/* My next points to the current */
-		fore->pmap_link.next = (queue_t)pmap;	/* Current's previous's next points to me */
-		pmap->pmap_link.prev = (queue_t)fore;	/* My prev points to what the current pointed to */
-		ckpmap->pmap_link.prev = (queue_t)pmap;	/* Current's prev points to me */
+		fore = (pmap_t)ckpmap->pmap_link.prev;		/* Get the current's previous */
+		pmap->pmap_link.next = (queue_t)ckpmap;		/* My next points to the current */
+		fore->pmap_link.next = (queue_t)pmap;		/* Current's previous's next points to me */
+		pmap->pmap_link.prev = (queue_t)fore;		/* My prev points to what the current pointed to */
+		ckpmap->pmap_link.prev = (queue_t)pmap;		/* Current's prev points to me */
 
 		simple_lock_init(&pmap->lock, ETAP_VM_PMAP);
-		pmap->pmapvr = (unsigned int)pmap ^ (unsigned int)pmap_extract(kernel_pmap, (vm_offset_t)pmap);	/* Get physical pointer to the pmap and make mask */
+		
+		physpmap = ((addr64_t)pmap_find_phys(kernel_pmap, (addr64_t)((uintptr_t)pmap)) << 12) | (addr64_t)((unsigned int)pmap & 0xFFF);	/* Get the physical address of the pmap */
+		
+		pmap->pmapvr = (addr64_t)((uintptr_t)pmap) ^ physpmap;	/* Make V to R translation mask */
+		
+		pmapTrans[pmap->space].pmapPAddr = physpmap;	/* Set translate table physical to point to us */
+		pmapTrans[pmap->space].pmapVAddr = CAST_DOWN(unsigned int, pmap);	/* Set translate table virtual to point to us */
 	}
+
+	pmap->pmapFlags = pmapKeyDef;					/* Set default key */
+	pmap->pmapCCtl = pmapCCtlVal;					/* Initialize cache control */
 	pmap->ref_count = 1;
 	pmap->stats.resident_count = 0;
 	pmap->stats.wired_count = 0;
-	pmap->bmaps = 0;						/* Clear block map pointer to 0 */
-	pmap->vflags = 0;						/* Mark all alternates invalid for now */
-	for(i=0; i < 128; i++) {				/* Clean out usage slots */
-		pmap->pmapUsage[i] = 0;
-	}
-	for(i=0; i < 16; i++) {					/* Initialize for laughs */
-		pmap->pmapSegs[i] = SEG_REG_PROT | (i << 20) | pmap->space;
-	}
-	
-#if PMAP_LOWTRACE
-	dbgTrace(0xF1D00002, (unsigned int)pmap, (unsigned int)pmap->space);	/* (TEST/DEBUG) */
-#endif
-
-#if DEBUG
-	if (pmdebug & PDB_USER)
-		kprintf("-> %x, space id = %d\n", pmap, pmap->space);
-#endif
-
+	pmap->pmapSCSubTag = 0x0000000000000000ULL;		/* Make sure this is clean an tidy */
 	simple_unlock(&free_pmap_lock);
+
 	splx(s);
 	return(pmap);
 }
@@ -960,15 +651,6 @@ pmap_destroy(pmap_t pmap)
 	spl_t s;
 	pmap_t fore, aft;
 
-#if PMAP_LOWTRACE
-	dbgTrace(0xF1D00003, (unsigned int)pmap, 0);			/* (TEST/DEBUG) */
-#endif
-
-#if DEBUG
-	if (pmdebug & PDB_USER)
-		kprintf("pmap_destroy(pmap=%x)\n", pmap);
-#endif
-
 	if (pmap == PMAP_NULL)
 		return;
 
@@ -983,7 +665,7 @@ pmap_destroy(pmap_t pmap)
 		panic("PMAP_DESTROY: pmap not empty");
 #else
 	if(pmap->stats.resident_count != 0) {
-		pmap_remove(pmap, 0, 0xFFFFF000);
+		pmap_remove(pmap, 0, 0xFFFFFFFFFFFFF000ULL);
 	}
 #endif
 
@@ -997,9 +679,9 @@ pmap_destroy(pmap_t pmap)
 	 */
 	simple_lock(&free_pmap_lock);
 	
-	if (free_pmap_count <= free_pmap_max) {					/* Do we have enough spares? */
+	if (free_pmap_count <= free_pmap_max) {		/* Do we have enough spares? */
 		
-		pmap->bmaps = (struct blokmap *)free_pmap_list;		/* Queue in front */
+		pmap->freepmap = free_pmap_list;		/* Queue in front */
 		free_pmap_list = pmap;
 		free_pmap_count++;
 		simple_unlock(&free_pmap_lock);
@@ -1011,6 +693,8 @@ pmap_destroy(pmap_t pmap)
 		fore->pmap_link.next = pmap->pmap_link.next;	/* My previous's next is my next */
 		aft->pmap_link.prev = pmap->pmap_link.prev;		/* My next's previous is my previous */	
 		simple_unlock(&free_pmap_lock);
+		pmapTrans[pmap->space].pmapPAddr = -1;			/* Invalidate the translate table physical */
+		pmapTrans[pmap->space].pmapVAddr = -1;			/* Invalidate the translate table virtual */
 		zfree(pmap_zone, (vm_offset_t) pmap);
 	}
 	splx(s);
@@ -1024,15 +708,6 @@ void
 pmap_reference(pmap_t pmap)
 {
 	spl_t s;
-
-#if PMAP_LOWTRACE
-	dbgTrace(0xF1D00004, (unsigned int)pmap, 0);			/* (TEST/DEBUG) */
-#endif
-
-#if DEBUG
-	if (pmdebug & PDB_USER)
-		kprintf("pmap_reference(pmap=%x)\n", pmap);
-#endif
 
 	if (pmap != PMAP_NULL) hw_atomic_add(&pmap->ref_count, 1);	/* Bump the count */
 }
@@ -1048,20 +723,36 @@ void pmap_remove_some_phys(
 	     vm_offset_t pa)
 {
 	register struct phys_entry 	*pp;
-	register struct mapping 	*mp, *mpv;
+	register struct mapping 	*mp;
+	unsigned int pindex;
 
+	if (pmap == PMAP_NULL) {					/* This should never be called with a null pmap */
+		panic("pmap_remove_some_phys: null pmap\n");
+	}
 
-	if (pmap == PMAP_NULL) return;				/* Do nothing if no pmap */
+	pp = mapping_phys_lookup(pa, &pindex);		/* Get physical entry */
+	if (pp == 0) return;						/* Leave if not in physical RAM */
 
-	pp = pmap_find_physentry(pa);				/* Get the physent for this page */
-	if (pp == PHYS_NULL) return;				/* Leave if not in physical RAM */
+	while(1) {									/* Keep going until we toss all pages from this pmap */
+		if (pmap->pmapFlags & pmapVMhost) {
+			mp = hw_purge_phys(pp);				/* Toss a map */
+			if(!mp ) return;					
+			if((unsigned int)mp & mapRetCode) {		/* Was there a failure? */
+				panic("pmap_remove_some_phys: hw_purge_phys failed - pp = %08X, pmap = %08X, code = %08X\n",
+					pp, pmap, mp);
+			}
+		} else { 
+			mp = hw_purge_space(pp, pmap);			/* Toss a map */
+			if(!mp ) return;					
+			if((unsigned int)mp & mapRetCode) {		/* Was there a failure? */
+				panic("pmap_remove_some_phys: hw_purge_pmap failed - pp = %08X, pmap = %08X, code = %08X\n",
+					pp, pmap, mp);
+			}
+		}
+		mapping_free(mp);						/* Toss the mapping */
+	}
 
-	if (pmap->vflags & pmapVMhost)
-		mapping_purge(pp);
-	else
-		mapping_purge_pmap(pp, pmap);	
-
-	return;							/* Leave... */
+	return;										/* Leave... */
 }
 
 /*
@@ -1077,25 +768,13 @@ void pmap_remove_some_phys(
 void
 pmap_remove(
 	    pmap_t pmap,
-	    vm_offset_t sva,
-	    vm_offset_t eva)
+	    addr64_t sva,
+	    addr64_t eva)
 {
-	spl_t			spl;
-	struct mapping	*mp, *blm;
-	vm_offset_t		lpage;
+	addr64_t		va, endva;
 
-#if PMAP_LOWTRACE
-	dbgTrace(0xF1D00005, (unsigned int)pmap, sva|((eva-sva)>>12));	/* (TEST/DEBUG) */
-#endif
+	if (pmap == PMAP_NULL) return;					/* Leave if software pmap */
 
-#if DEBUG
-	if (pmdebug & PDB_USER)
-		kprintf("pmap_remove(pmap=%x, sva=%x, eva=%x)\n",
-		       pmap, sva, eva);
-#endif
-
-	if (pmap == PMAP_NULL)
-		return;
 
 	/* It is just possible that eva might have wrapped around to zero,
 	 * and sometimes we get asked to liberate something of size zero
@@ -1104,49 +783,17 @@ pmap_remove(
 	assert(eva >= sva);
 
 	/* If these are not page aligned the loop might not terminate */
-	assert((sva == trunc_page(sva)) && (eva == trunc_page(eva)));
+	assert((sva == trunc_page_64(sva)) && (eva == trunc_page_64(eva)));
 
-	/* We liberate addresses from high to low, since the stack grows
-	 * down. This means that we won't need to test addresses below
-	 * the limit of stack growth
-	 */
+	va = sva & -4096LL;							/* Round start down to a page */
+	endva = eva & -4096LL;						/* Round end down to a page */
 
-	debugLog2(44, sva, eva);					/* Log pmap_map call */
-	
-	sva = trunc_page(sva);						/* Make it clean */
-	lpage = trunc_page(eva) - PAGE_SIZE;		/* Point to the last page contained in the range */
-
-/*
- *	Here we will remove all of the block mappings that overlap this range.
- *	hw_rem_blk removes one mapping in the range and returns.  If it returns
- *	0, there are no blocks in the range.
- */
-
-	while(mp = (mapping *)hw_rem_blk(pmap, sva, lpage)) {	/* Keep going until no more */
-		if((unsigned int)mp & 1) {							/* Make sure we don't unmap a permanent one */
-			blm = (struct mapping  *)hw_cpv((mapping *)((unsigned int)mp & 0xFFFFFFFC));		/* Get virtual address */
-			panic("mapping_remove: attempt to unmap a permanent mapping - pmap = %08X, va = %08X, mapping = %08X\n",
-				pmap, sva, blm);
-		}
-		if (!((unsigned int)mp & 2))
-			mapping_free(hw_cpv(mp));							/* Release it */
-	}
-	while (pmap->stats.resident_count && (eva > sva)) {
-
-		eva -= PAGE_SIZE;						/* Back up a page */
-
-#if 1
-		if((0x00008000 >> (sva >> 28)) & pmap->vflags)
-		   panic("pmap_remove: attempt to remove nested vaddr; pmap = %08X, vaddr = %08X\n", pmap, sva);	/* (TEST/DEBUG) panic */
-#endif
-		if(!(pmap->pmapUsage[(eva >> pmapUsageShft) & pmapUsageMask])) {	/* See if this chunk has anything in it */
-			eva = eva & (-pmapUsageSize);		/* Back up into the previous slot */
-			continue;							/* Check the next... */
-		}
-		mapping_remove(pmap, eva);				/* Remove the mapping for this address */
+	while(1) {									/* Go until we finish the range */
+		va = mapping_remove(pmap, va);			/* Remove the mapping and see what's next */
+		va = va & -4096LL;						/* Make sure the "not found" indication is clear */
+		if((va == 0) || (va >= endva)) break;	/* End loop if we finish range or run off the end */
 	}
 
-	debugLog2(45, 0, 0);						/* Log pmap_map call */
 }
 
 /*
@@ -1158,23 +805,14 @@ pmap_remove(
  */
 void
 pmap_page_protect(
-	vm_offset_t pa,
+	ppnum_t pa,
 	vm_prot_t prot)
 {
 	register struct phys_entry 	*pp;
 	boolean_t 			remove;
+	unsigned int		pindex;
+	mapping				*mp;
 
-
-#if PMAP_LOWTRACE
-	dbgTrace(0xF1D00006, (unsigned int)pa, (unsigned int)prot);	/* (TEST/DEBUG) */
-#endif
-
-#if DEBUG
-	if (pmdebug & PDB_USER)
-		kprintf("pmap_page_protect(pa=%x, prot=%x)\n", pa, prot);
-#endif
-
-	debugLog2(46, pa, prot);					/* Log pmap_page_protect call */
 
 	switch (prot) {
 		case VM_PROT_READ:
@@ -1188,23 +826,31 @@ pmap_page_protect(
 			break;
 	}
 
-	pp = pmap_find_physentry(pa);				/* Get the physent for this page */
-	if (pp == PHYS_NULL) return;				/* Leave if not in physical RAM */
+
+	pp = mapping_phys_lookup(pa, &pindex);	/* Get physical entry */
+	if (pp == 0) return;						/* Leave if not in physical RAM */
 
 	if (remove) {								/* If the protection was set to none, we'll remove all mappings */
-		mapping_purge(pp);						/* Get rid of them all */
+		
+		while(1) {								/* Keep going until we toss all pages from this physical page */
+			mp = hw_purge_phys(pp);				/* Toss a map */
+			if(!mp ) return;					
+			if((unsigned int)mp & mapRetCode) {	/* Was there a failure? */
+				panic("pmap_page_protect: hw_purge_phys failed - pp = %08X, code = %08X\n",
+					pp, mp);
+			}
+			mapping_free(mp);					/* Toss the mapping */
+		}
 
-		debugLog2(47, 0, 0);					/* Log pmap_map call */
 		return;									/* Leave... */
 	}
-	
-	/*	When we get here, it means that we are to change the protection for a 
-	 *	physical page.  
-	 */
-	 
-	mapping_protect_phys(pp, prot, 0);			/* Change protection of all mappings to page. */
 
-	debugLog2(47, 1, 0);						/* Log pmap_map call */
+/*	When we get here, it means that we are to change the protection for a 
+ *	physical page.  
+ */
+ 
+	mapping_protect_phys(pa, prot & VM_PROT_ALL);	/* Change protection of all mappings to page. */
+
 }
 
 /*
@@ -1223,54 +869,24 @@ void pmap_protect(
 	     vm_offset_t eva,
 	     vm_prot_t prot)
 {
-	spl_t						spl;
-	register struct phys_entry 	*pp;
-	register struct mapping 	*mp, *mpv;
 
-#if PMAP_LOWTRACE
-	dbgTrace(0xF1D00008, (unsigned int)pmap, (unsigned int)(sva|((eva-sva)>>12)));	/* (TEST/DEBUG) */
-#endif
-
-#if DEBUG
-	if (pmdebug & PDB_USER)
-		kprintf("pmap_protect(pmap=%x, sva=%x, eva=%x, prot=%x)\n", pmap, sva, eva, prot);
-	
-	assert(sva < eva);
-#endif
+	addr64_t va, endva, nextva;
 
 	if (pmap == PMAP_NULL) return;				/* Do nothing if no pmap */
 
-	debugLog2(48, sva, eva);					/* Log pmap_map call */
-
 	if (prot == VM_PROT_NONE) {					/* Should we kill the address range?? */
-		pmap_remove(pmap, sva, eva);			/* Yeah, dump 'em */
-
-		debugLog2(49, prot, 0);								/* Log pmap_map call */
-
+		pmap_remove(pmap, (addr64_t)sva, (addr64_t)eva);	/* Yeah, dump 'em */
 		return;									/* Leave... */
 	}
 
-	sva = trunc_page(sva);						/* Start up a page boundary */
-	
-	while(sva < eva) {							/* Step through */
+	va = sva & -4096LL;							/* Round start down to a page */
+	endva = eva & -4096LL;						/* Round end down to a page */
 
-		if(!(pmap->pmapUsage[(sva >> pmapUsageShft) & pmapUsageMask])) {	/* See if this chunk has anything in it */
-			sva = (sva + pmapUsageSize) &(-pmapUsageSize);	/* Jump up into the next slot if nothing here */
-			if(!sva) break;						/* We tried to wrap, kill loop... */
-			continue;							/* Check the next... */
-		}
-
-#if 1
-		if((0x00008000 >> (sva >> 28)) & pmap->vflags)
-		   panic("pmap_protect: attempt to protect nested vaddr; pmap = %08X, vaddr = %08X\n", pmap, sva);	/* (TEST/DEBUG) panic */
-#endif
-
-		mapping_protect(pmap, sva, prot);		/* Change the protection on the page */
-		sva += PAGE_SIZE;						/* On to the next page */
+	while(1) {									/* Go until we finish the range */
+		(void)mapping_protect(pmap, va, prot & VM_PROT_ALL, &va);	/* Change the protection and see what's next */
+		if((va == 0) || (va >= endva)) break;	/* End loop if we finish range or run off the end */
 	}
 
-	debugLog2(49, prot, 1);						/* Log pmap_map call */
-	return;										/* Leave... */
 }
 
 
@@ -1289,61 +905,104 @@ void pmap_protect(
  *     insert this page into the given map NOW.
  */
 void
-pmap_enter(pmap_t pmap, vm_offset_t va, vm_offset_t pa, vm_prot_t prot, 
+pmap_enter(pmap_t pmap, vm_offset_t va, ppnum_t pa, vm_prot_t prot, 
 		unsigned int flags, boolean_t wired)
 {
-	spl_t				spl;
-	struct mapping		*mp;
-	struct phys_entry	*pp;
 	int					memattr;
+	pmap_t				opmap;
+	unsigned int		mflags;
+	addr64_t			colva;
 	
-#if PMAP_LOWTRACE
-	dbgTrace(0xF1D00009, (unsigned int)pmap, (unsigned int)va);	/* (TEST/DEBUG) */
-	dbgTrace(0xF1D04009, (unsigned int)pa, (unsigned int)prot);	/* (TEST/DEBUG) */
-#endif		
-	
-	if (pmap == PMAP_NULL) return;					/* If they gave us no pmap, just leave... */
+	if (pmap == PMAP_NULL) return;					/* Leave if software pmap */
 
-	debugLog2(50, va, pa);							/* Log pmap_map call */
+	disable_preemption();							/* Don't change threads */
 
-	pp = pmap_find_physentry(pa);					/* Get the physent for this physical page */
-
-	if((0x00008000 >> (va >> 28)) & pmap->vflags)
-	   panic("pmap_enter: attempt to map into nested vaddr; pmap = %08X, vaddr = %08X\n", pmap, va);	/* (TEST/DEBUG) panic */
-
-	spl=splhigh();									/* Have to disallow interrupts between the
-													   time we possibly clear a mapping and the time
-													   we get it remapped again.  An I/O SLIH could
-													   try to drive an IOR using the page before
-													   we get it mapped (Dude! This was a tough 
-													   bug!!!!) */
-
-	mapping_remove(pmap, va);						/* Remove any other mapping at this address */
-
-	if(flags & VM_WIMG_USE_DEFAULT) {
-	    if(pp) {
-			/* Set attr to the phys default */
-			memattr = ((pp->pte1&0x00000078) >> 3);	
-		} else {
-			memattr = PTE_WIMG_UNCACHED_COHERENT_GUARDED;
-		}
-	} else {
-		memattr = flags & VM_WIMG_MASK;
+	mflags = 0;										/* Make sure this is initialized to nothing special */
+	if(!(flags & VM_WIMG_USE_DEFAULT)) {			/* Are they supplying the attributes? */
+		mflags = mmFlgUseAttr | (flags & VM_MEM_GUARDED) | ((flags & VM_MEM_NOT_CACHEABLE) >> 1);	/* Convert to our mapping_make flags */
 	}
 	
+/*
+ *	It is possible to hang here if another processor is remapping any pages we collide with and are removing
+ */ 
 
-	/* Make the address mapping */
-	mp=mapping_make(pmap, pp, va, pa, prot, memattr, 0);	
+	while(1) {										/* Keep trying the enter until it goes in */
+	
+		colva = mapping_make(pmap, va, pa, mflags, 1, prot & VM_PROT_ALL);	/* Enter the mapping into the pmap */
+		
+		if(!colva) break;							/* If there were no collisions, we are done... */
+		
+		mapping_remove(pmap, colva);				/* Remove the mapping that collided */
+	}
 
-	splx(spl);										/* I'm not busy no more - come what may */
+	enable_preemption();							/* Thread change ok */
 
-	debugLog2(51, prot, 0);							/* Log pmap_map call */
+}
 
-#if	DEBUG
-	if (pmdebug & (PDB_USER|PDB_ENTER))
-		kprintf("leaving pmap_enter\n");
-#endif
+/*
+ *		Enters translations for odd-sized V=F blocks.
+ *
+ *		The higher level VM map should be locked to insure that we don't have a
+ *		double diddle here.
+ *
+ *		We panic if we get a block that overlaps with another. We do not merge adjacent
+ *		blocks because removing any address within a block removes the entire block and if
+ *		would really mess things up if we trashed too much.
+ *
+ *		Once a block is mapped, it is unmutable, that is, protection, catch mode, etc. can
+ *		not be changed.  The block must be unmapped and then remapped with the new stuff.
+ *		We also do not keep track of reference or change flags.
+ *
+ *		Note that pmap_map_block_rc is the same but doesn't panic if collision.
+ *
+ */
+ 
+void pmap_map_block(pmap_t pmap, addr64_t va, ppnum_t pa, vm_size_t size, vm_prot_t prot, int attr, unsigned int flags) {	/* Map an autogenned block */
 
+	int					memattr;
+	unsigned int		mflags;
+	addr64_t			colva;
+
+	
+	if (pmap == PMAP_NULL) {						/* Did they give us a pmap? */
+		panic("pmap_map_block: null pmap\n");		/* No, like that's dumb... */
+	}
+
+//	kprintf("pmap_map_block: (%08X) va = %016llX, pa = %08X, size = %08X, prot = %08X, attr = %08X, flags = %08X\n", 	/* (BRINGUP) */
+//		current_act(), va, pa, size, prot, attr, flags);	/* (BRINGUP) */
+
+
+	mflags = mmFlgBlock | mmFlgUseAttr | (attr & VM_MEM_GUARDED) | ((attr & VM_MEM_NOT_CACHEABLE) >> 1);	/* Convert to our mapping_make flags */
+	if(flags) mflags |= mmFlgPerm;					/* Mark permanent if requested */
+	
+	colva = mapping_make(pmap, va, pa, mflags, (size >> 12), prot);	/* Enter the mapping into the pmap */
+	
+	if(colva) {										/* If there was a collision, panic */
+		panic("pmap_map_block: collision at %016llX, pmap = %08X\n", colva, pmap);
+	}
+	
+	return;											/* Return */
+}
+
+int pmap_map_block_rc(pmap_t pmap, addr64_t va, ppnum_t pa, vm_size_t size, vm_prot_t prot, int attr, unsigned int flags) {	/* Map an autogenned block */
+
+	int					memattr;
+	unsigned int		mflags;
+	addr64_t			colva;
+
+	
+	if (pmap == PMAP_NULL) {						/* Did they give us a pmap? */
+		panic("pmap_map_block_rc: null pmap\n");	/* No, like that's dumb... */
+	}
+
+	mflags = mmFlgBlock | mmFlgUseAttr | (attr & VM_MEM_GUARDED) | ((attr & VM_MEM_NOT_CACHEABLE) >> 1);	/* Convert to our mapping_make flags */
+	if(flags) mflags |= mmFlgPerm;					/* Mark permanent if requested */
+	
+	colva = mapping_make(pmap, va, pa, mflags, (size >> 12), prot);	/* Enter the mapping into the pmap */
+	
+	if(colva) return 0;								/* If there was a collision, fail */
+	
+	return 1;										/* Return true of we worked */
 }
 
 /*
@@ -1351,101 +1010,90 @@ pmap_enter(pmap_t pmap, vm_offset_t va, vm_offset_t pa, vm_prot_t prot,
  *	returns the physical address corrsponding to the 
  *	virtual address specified by pmap and va if the
  *	virtual address is mapped and 0 if it is not.
+ *	Note: we assume nothing is ever mapped to phys 0.
+ *
+ *	NOTE: This call always will fail for physical addresses greater than 0xFFFFF000.
  */
 vm_offset_t pmap_extract(pmap_t pmap, vm_offset_t va) {
 
 	spl_t					spl;
-	register struct mapping	*mp, *mpv;
+	register struct mapping	*mp;
 	register vm_offset_t	pa;
-	unsigned int			seg;
-	pmap_t					actpmap;
+	addr64_t				nextva;
+	ppnum_t					ppoffset;
+	unsigned int			gva;
 
+#ifdef BOGUSCOMPAT
+	panic("pmap_extract: THIS CALL IS BOGUS. NEVER USE IT EVER. So there...\n");	/* Don't use this */
+#else
 
-#if PMAP_LOWTRACE
-	dbgTrace(0xF1D0000B, (unsigned int)pmap, (unsigned int)va);	/* (TEST/DEBUG) */
-#endif
-#if DEBUG
-	if (pmdebug & PDB_USER)
-		kprintf("pmap_extract(pmap=%x, va=%x)\n", pmap, va);
-#endif
-
-	seg = va >> 28;									/* Isolate segment */
-	if((0x00008000 >> seg) & pmap->vflags) actpmap = pmap->pmapPmaps[seg];	/* Set nested pmap if there is one */
-	else actpmap = pmap;							/* Otherwise use the one passed in */
-
-	pa = (vm_offset_t) 0;							/* Clear this to 0 */ 
-
-	debugLog2(52, actpmap->space, va);					/* Log pmap_map call */
+	gva = (unsigned int)va;							/* Make sure we don't have a sign */
 
 	spl = splhigh();								/* We can't allow any loss of control here */
-
-	if(mp=hw_lock_phys_vir(actpmap->space, va)) {	/* Find the mapping for this vaddr and lock physent */	
-		if((unsigned int)mp&1) {					/* Did the lock on the phys entry time out? */
-			panic("pmap_extract: timeout obtaining lock on physical entry\n");	/* Scream bloody murder! */
-			splx(spl);								/* Interruptions are cool now */
-			return 0;
-		}
-
-		mpv = hw_cpv(mp);							/* Get virtual address of mapping */
-		pa = (vm_offset_t)((mpv->PTEr & -PAGE_SIZE) | ((unsigned int)va & (PAGE_SIZE-1)));	/* Build the physical address */
-		if(mpv->physent) hw_unlock_bit((unsigned int *)&mpv->physent->phys_link, PHYS_LOCK);	/* Unlock the physical entry */
-		splx(spl);									/* Interruptions are cool now */
-
-		debugLog2(53, pa, 0);						/* Log pmap_map call */
-
-		return pa;									/* Return the physical address... */
+	
+	mp = mapping_find(pmap, (addr64_t)gva, &nextva,1);	/* Find the mapping for this address */
+	
+	if(!mp) {										/* Is the page mapped? */
+		splx(spl);									/* Enable interrupts */
+		return 0;									/* Pass back 0 if not found */
 	}
 
-	pa = hw_cvp_blk(pmap, va);						/* Try to convert odd-sized page (returns 0 if not found) */
-													/* Note no nested pmaps here */
+	ppoffset = (ppnum_t)(((gva & -4096LL) - (mp->mpVAddr & -4096LL)) >> 12);	/* Get offset from va to base va */
+	
+	
+	pa = mp->mpPAddr + ppoffset;					/* Remember ppage because mapping may vanish after drop call */
+			
+	mapping_drop_busy(mp);							/* We have everything we need from the mapping */
 	splx(spl);										/* Restore 'rupts */
-	debugLog2(53, pa, 0);							/* Log pmap_map call */
+
+	if(pa > maxPPage32) return 0;					/* Force large addresses to fail */
+	
+	pa = (pa << 12) | (va & 0xFFF);					/* Convert physical page number to address */
+	
+#endif
 	return pa;										/* Return physical address or 0 */
 }
 
 /*
- *	pmap_attribute_cache_sync
- *	Handle the machine attribute calls which involve sync the prcessor
- *	cache.
+ * ppnum_t pmap_find_phys(pmap, addr64_t va)
+ *	returns the physical page corrsponding to the 
+ *	virtual address specified by pmap and va if the
+ *	virtual address is mapped and 0 if it is not.
+ *	Note: we assume nothing is ever mapped to phys 0.
+ *
  */
-kern_return_t
-pmap_attribute_cache_sync(address, size, attribute, value)
-	vm_offset_t	address;
-	vm_size_t	size;
-	vm_machine_attribute_t	attribute;
-	vm_machine_attribute_val_t* value;	
-{
-	while(size) {
-		switch (*value) {					/* What type was that again? */
-			case MATTR_VAL_CACHE_SYNC:			/* It is sync I+D caches */
-				sync_cache(address, PAGE_SIZE);		/* Sync up dem caches */
-				break;					/* Done with this one here... */
-						
-			case MATTR_VAL_CACHE_FLUSH:			/* It is flush from all caches */
-				flush_dcache(address, PAGE_SIZE, TRUE);	/* Flush out the data cache */
-				invalidate_icache(address, 
-						PAGE_SIZE, TRUE);	/* Flush out the instruction cache */
-				break;					/* Done with this one here... */
-				
-			case MATTR_VAL_DCACHE_FLUSH:			/* It is flush from data cache(s) */
-				flush_dcache(address, PAGE_SIZE, TRUE);	/* Flush out the data cache */
-				break;					/* Done with this one here... */
+ppnum_t pmap_find_phys(pmap_t pmap, addr64_t va) {
 
-			case MATTR_VAL_ICACHE_FLUSH:			/* It is flush from instr cache(s) */
-				invalidate_icache(address, 
-						PAGE_SIZE, TRUE);	/* Flush out the instruction cache */
-				break;					/* Done with this one here... */
-		}
-		size -= PAGE_SIZE;
-	}
-	return KERN_SUCCESS;;
-}
+	spl_t					spl;
+	register struct mapping	*mp;
+	ppnum_t					pa, ppoffset;
+	addr64_t				nextva, curva;
+
+	spl = splhigh();								/* We can't allow any loss of control here */
 	
+	mp = mapping_find(pmap, va, &nextva, 1);		/* Find the mapping for this address */
+	
+	if(!mp) {										/* Is the page mapped? */
+		splx(spl);									/* Enable interrupts */
+		return 0;									/* Pass back 0 if not found */
+	}
+		
+	
+	ppoffset = (ppnum_t)(((va & -4096LL) - (mp->mpVAddr & -4096LL)) >> 12);	/* Get offset from va to base va */
+	
+	pa = mp->mpPAddr + ppoffset;					/* Get the actual physical address */
+
+	mapping_drop_busy(mp);							/* We have everything we need from the mapping */
+
+	splx(spl);										/* Restore 'rupts */
+	return pa;										/* Return physical address or 0 */
+}
+
 
 /*
  *	pmap_attributes:
  *
- *	Set/Get special memory attributes; Set is not implemented.
+ *	Set/Get special memory attributes; not implemented.
  *
  *	Note: 'VAL_GET_INFO' is used to return info about a page.
  *	  If less than 1 page is specified, return the physical page
@@ -1453,6 +1101,7 @@ pmap_attribute_cache_sync(address, size, attribute, value)
  *	  If more than one page is specified, return the number
  *	  of resident pages and the number of shared (more than
  *	  one mapping) pages in the range;
+ *
  *
  */
 kern_return_t
@@ -1463,181 +1112,50 @@ pmap_attribute(pmap, address, size, attribute, value)
 	vm_machine_attribute_t	attribute;
 	vm_machine_attribute_val_t* value;	
 {
-	spl_t			s;
-	vm_offset_t 	sva, eva;
-	vm_offset_t		pa;
-	kern_return_t	ret;
-	register struct mapping	*mp, *mpv;
-	register struct phys_entry *pp;
-	int 			total, seg;
-	pmap_t			actpmap;
-
-	if (attribute != MATTR_CACHE)
-		return KERN_INVALID_ARGUMENT;
-
-	/* We can't get the caching attribute for more than one page
-	 * at a time
-	 */
-	if ((*value == MATTR_VAL_GET) &&
-	    (trunc_page(address) != trunc_page(address+size-1)))
-		return KERN_INVALID_ARGUMENT;
-
-	if (pmap == PMAP_NULL)
-		return KERN_SUCCESS;
-
-	sva = trunc_page(address);
-	eva = round_page(address + size);
-	ret = KERN_SUCCESS;
-
-	debugLog2(54, address, attribute);						/* Log pmap_map call */
-
-	switch (*value) {
-		case MATTR_VAL_CACHE_SYNC:							/* sync I+D caches */
-		case MATTR_VAL_CACHE_FLUSH:							/* flush from all caches */
-		case MATTR_VAL_DCACHE_FLUSH:						/* flush from data cache(s) */
-		case MATTR_VAL_ICACHE_FLUSH:						/* flush from instr cache(s) */
-			sva = trunc_page(sva);
-			s = splhigh();
-
-			while (sva < eva) {	
-				seg = sva >> 28;							/* Isolate segment */
-				if((0x00008000 >> seg) & pmap->vflags) actpmap = pmap->pmapPmaps[seg];	/* Set nested pmap if there is one */
-				else actpmap = pmap;						/* Otherwise use the one passed in */
-			
-/*
- *				Note: the following should work ok with nested pmaps because there are not overlayed mappings 
- */
-				if(!(actpmap->pmapUsage[(sva >> pmapUsageShft) & pmapUsageMask])) {	/* See if this chunk has anything in it */
-					sva = (sva + pmapUsageSize) & (-pmapUsageSize);	/* Jump up into the next slot if nothing here */
-					if(!sva) break;							/* We tried to wrap, kill loop... */
-					continue;								/* Check the next... */
-				}
-
-				if(!(mp = hw_lock_phys_vir(actpmap->space, sva))) {	/* Find the mapping for this vaddr and lock physent */
- 					sva += PAGE_SIZE;						/* Point to the next page */
-					continue;								/* Skip if the page is not mapped... */
-				}
-
-				if((unsigned int)mp&1) {					/* Did the lock on the phys entry time out? */
-					panic("pmap_attribute: timeout obtaining lock on physical entry\n");	/* Scream bloody murder! */
-					continue;
-				}
-				
-				mpv = hw_cpv(mp);							/* Get virtual address of mapping */
-				if((unsigned int)mpv->physent) {			/* Is there a physical entry? */
-					pa = (vm_offset_t)mpv->physent->pte1 & -PAGE_SIZE;	/* Yes, get the physical address from there */
-				} 
-				else {
-					pa = (vm_offset_t)(mpv->PTEr & PAGE_SIZE);	/* Otherwise from the mapping */
-				}
-
-				switch (*value) {							/* What type was that again? */
-					case MATTR_VAL_CACHE_SYNC:				/* It is sync I+D caches */
-						sync_cache(pa, PAGE_SIZE);			/* Sync up dem caches */
-						break;								/* Done with this one here... */
-					
-					case MATTR_VAL_CACHE_FLUSH:				/* It is flush from all caches */
-						flush_dcache(pa, PAGE_SIZE, TRUE);	/* Flush out the data cache */
-						invalidate_icache(pa, PAGE_SIZE, TRUE);	/* Flush out the instruction cache */
-						break;								/* Done with this one here... */
-					
-					case MATTR_VAL_DCACHE_FLUSH:			/* It is flush from data cache(s) */
-						flush_dcache(pa, PAGE_SIZE, TRUE);	/* Flush out the data cache */
-						break;								/* Done with this one here... */
-
-					case MATTR_VAL_ICACHE_FLUSH:			/* It is flush from instr cache(s) */
-						invalidate_icache(pa, PAGE_SIZE, TRUE);	/* Flush out the instruction cache */
-						break;								/* Done with this one here... */
-				}
-				if(mpv->physent) hw_unlock_bit((unsigned int *)&mpv->physent->phys_link, PHYS_LOCK);	/* Unlock the physical entry if it exists*/
- 				
- 				sva += PAGE_SIZE;							/* Point to the next page */
-			}
-			splx(s);
-			break;
-
-		case MATTR_VAL_GET_INFO:							/* Get info */
-			total = 0;
-			s = splhigh();									/* Lock 'em out */
-		
-			if (size <= PAGE_SIZE) {						/* Do they want just one page */
-				seg = sva >> 28;							/* Isolate segment */
-				if((0x00008000 >> seg) & pmap->vflags) actpmap = pmap->pmapPmaps[seg];	/* Set nested pmap if there is one */
-				else actpmap = pmap;						/* Otherwise use the one passed in */
-				if(!(mp = hw_lock_phys_vir(actpmap->space, sva))) {	/* Find the mapping for this vaddr and lock physent */
-					*value = 0;								/* Return nothing if no mapping */
-				}
-				else {
-					if((unsigned int)mp&1) {				/* Did the lock on the phys entry time out? */
-						panic("pmap_attribute: timeout obtaining lock on physical entry\n");	/* Scream bloody murder! */
-					}
-					mpv = hw_cpv(mp);						/* Get virtual address of mapping */
-					if(pp = mpv->physent) {					/* Check for a physical entry */
-						total = 0;							/* Clear the count */
-						for (mpv = (mapping *)hw_cpv((mapping *)((unsigned int)pp->phys_link & ~PHYS_FLAGS)); mpv != NULL; mpv = hw_cpv(mp->next)) total++;	/* Count the mapping */
-						*value = (vm_machine_attribute_val_t) ((pp->pte1 & -PAGE_SIZE) | total);	/* Pass back the physical address and the count of mappings */
-						hw_unlock_bit((unsigned int *)&pp->phys_link, PHYS_LOCK);	/* Clear the physical entry lock */
-					}
-					else {									/* This is the case for an I/O mapped area */
-						*value = (vm_machine_attribute_val_t) ((mpv->PTEr & -PAGE_SIZE) | 1);	/* Pass back the physical address and the count of mappings */
-					}
-				}
-			}
-			else {
-				total = 0;
-				while (sva < eva) {
-					seg = sva >> 28;						/* Isolate segment */
-					if((0x00008000 >> seg) & pmap->vflags) actpmap = pmap->pmapPmaps[seg];	/* Set nested pmap if there is one */
-					else actpmap = pmap;					/* Otherwise use the one passed in */
-					
-					if(!(actpmap->pmapUsage[(sva >> pmapUsageShft) & pmapUsageMask])) {	/* See if this chunk has anything in it */
-						sva = (sva + pmapUsageSize) & (-pmapUsageSize);	/* Jump up into the next slot if nothing here */
-						if(!sva) break;						/* We tried to wrap, kill loop... */
-						continue;							/* Check the next... */
-					}
-					if(mp = hw_lock_phys_vir(actpmap->space, sva)) {	/* Find the mapping for this vaddr and lock physent */
-						if((unsigned int)mp&1) {			/* Did the lock on the phys entry time out? */
-							panic("pmap_attribute: timeout obtaining lock on physical entry\n");	/* Scream bloody murder! */
-							continue;
-						}
-						mpv = hw_cpv(mp);					/* Get virtual address of mapping */
-						total += 65536 + (mpv->physent && ((mapping *)((unsigned int)mpv->physent->phys_link & -32))->next);	/* Count the "resident" and shared pages */
-						hw_unlock_bit((unsigned int *)&mpv->physent->phys_link, PHYS_LOCK);	/* Clear the physical entry lock */
-					}
-					sva += PAGE_SIZE;
-				}
-				*value = total;
-			}
-			splx(s);
-			break;
 	
-		case MATTR_VAL_GET:		/* return current value */
-		case MATTR_VAL_OFF:		/* turn attribute off */
-		case MATTR_VAL_ON:		/* turn attribute on */
-		default:
-			ret = KERN_INVALID_ARGUMENT;
-			break;
-	}
+	return KERN_INVALID_ARGUMENT;
 
-	debugLog2(55, 0, 0);					/* Log pmap_map call */
-
-	return ret;
 }
 
 /*
- * pmap_sync_caches_phys(vm_offset_t pa)
+ * pmap_attribute_cache_sync(vm_offset_t pa)
  * 
  * Invalidates all of the instruction cache on a physical page and
  * pushes any dirty data from the data cache for the same physical page
  */
  
-void pmap_sync_caches_phys(vm_offset_t pa) {
+kern_return_t pmap_attribute_cache_sync(ppnum_t pp, vm_size_t size,
+				vm_machine_attribute_t  attribute,
+				vm_machine_attribute_val_t* value) {
 	
 	spl_t s;
+	unsigned int i, npages;
+	
+	npages = round_page_32(size) >> 12;			/* Get the number of pages to do */
+	
+	for(i = 0; i < npages; i++) {				/* Do all requested pages */
+		s = splhigh();							/* No interruptions here */
+		sync_ppage(pp + i);						/* Go flush data cache and invalidate icache */
+		splx(s);								/* Allow interruptions */
+	}
+	
+	return KERN_SUCCESS;
+}
 
-	s = splhigh();						/* No interruptions here */
-	sync_cache(trunc_page(pa), PAGE_SIZE);			/* Sync up dem caches */
-	splx(s);							/* Allow interruptions */
+/*
+ * pmap_sync_caches_phys(ppnum_t pa)
+ * 
+ * Invalidates all of the instruction cache on a physical page and
+ * pushes any dirty data from the data cache for the same physical page
+ */
+ 
+void pmap_sync_caches_phys(ppnum_t pa) {
+	
+	spl_t s;
+	
+	s = splhigh();								/* No interruptions here */
+	sync_ppage(pa);								/* Sync up dem caches */
+	splx(s);									/* Allow interruptions */
 	return;
 }
 
@@ -1681,69 +1199,6 @@ pmap_deactivate(
 	return;
 }
 
-#if DEBUG
-
-/*
- * pmap_zero_page
- * pmap_copy page
- * 
- * are implemented in movc.s, these
- * are just wrappers to help debugging
- */
-
-extern void pmap_zero_page_assembler(vm_offset_t p);
-extern void pmap_copy_page_assembler(vm_offset_t src, vm_offset_t dst);
-
-/*
- * pmap_zero_page(pa)
- *
- * pmap_zero_page zeros the specified (machine independent) page pa.
- */
-void
-pmap_zero_page(
-	vm_offset_t p)
-{
-	register struct mapping *mp;
-	register struct phys_entry *pp;
-
-	if (pmdebug & (PDB_USER|PDB_ZERO))
-		kprintf("pmap_zero_page(pa=%x)\n", p);
-
-	/*
-	 * XXX can these happen?
-	 */
-	if (pmap_find_physentry(p) == PHYS_NULL)
-		panic("zero_page: physaddr out of range");
-
-	pmap_zero_page_assembler(p);
-}
-
-/*
- * pmap_copy_page(src, dst)
- *
- * pmap_copy_page copies the specified (machine independent)
- * page from physical address src to physical address dst.
- *
- * We need to invalidate the cache for address dst before
- * we do the copy. Apparently there won't be any mappings
- * to the dst address normally.
- */
-void
-pmap_copy_page(
-	vm_offset_t src,
-	vm_offset_t dst)
-{
-	register struct phys_entry *pp;
-
-	if (pmdebug & (PDB_USER|PDB_COPY))
-		kprintf("pmap_copy_page(spa=%x, dpa=%x)\n", src, dst);
-	if (pmdebug & PDB_COPY)
-		kprintf("pmap_copy_page: phys_copy(%x, %x, %x)\n",
-		       src, dst, PAGE_SIZE);
-
-	pmap_copy_page_assembler(src, dst);
-}
-#endif /* DEBUG */
 
 /*
  * pmap_pageable(pmap, s, e, pageable)
@@ -1773,7 +1228,7 @@ pmap_pageable(
 }
 /*
  *	Routine:	pmap_change_wiring
- *	NOTE USED ANYMORE.
+ *	NOT USED ANYMORE.
  */
 void
 pmap_change_wiring(
@@ -1790,6 +1245,8 @@ pmap_change_wiring(
  *	virtual address range determined by [s, e] and pmap,
  *	s and e must be on machine independent page boundaries and
  *	s must be less than or equal to e.
+ *
+ *  Note that this function will not descend nested pmaps.
  */
 void
 pmap_modify_pages(
@@ -1799,38 +1256,41 @@ pmap_modify_pages(
 {
 	spl_t		spl;
 	mapping		*mp;
+	ppnum_t		pa;
+	addr64_t		va, endva, nextva;
+	unsigned int	saveflags;
 
-#if PMAP_LOWTRACE
-	dbgTrace(0xF1D00010, (unsigned int)pmap, (unsigned int)(sva|((eva-sva)>>12)));	/* (TEST/DEBUG) */
-#endif
+	if (pmap == PMAP_NULL) return;					/* If no pmap, can't do it... */
+	
+	va = sva & -4096;								/* Round to page */
+	endva = eva & -4096;							/* Round to page */
 
-#if DEBUG
-	if (pmdebug & PDB_USER) kprintf("pmap_modify_pages(pmap=%x, sva=%x, eva=%x)\n", pmap, sva, eva);
-#endif
+	while (va < endva) {							/* Walk through all pages */
 
-	if (pmap == PMAP_NULL) return;						/* If no pmap, can't do it... */
-
-	debugLog2(56, sva, eva);							/* Log pmap_map call */
-
-	spl=splhigh();										/* Don't bother me */
-
-	for ( ; sva < eva; sva += PAGE_SIZE) {				/* Cycle through the whole range */	
-		mp = hw_lock_phys_vir(pmap->space, sva);		/* Lock the physical entry for this mapping */
-		if(mp) {										/* Did we find one? */
-			if((unsigned int)mp&1) {					/* Did the lock on the phys entry time out? */
-				panic("pmap_modify_pages: timeout obtaining lock on physical entry\n");	/* Scream bloody murder! */
-				continue;
-			}
-			mp = hw_cpv(mp);							/* Convert to virtual addressing */				
-			if(!mp->physent) continue;					/* No physical entry means an I/O page, we can't set attributes */
-			mapping_set_mod(mp->physent);				/* Set the modfied bit for this page */
-			hw_unlock_bit((unsigned int *)&mp->physent->phys_link, PHYS_LOCK);	/* Unlock the physical entry */
+		spl = splhigh();							/* We can't allow any loss of control here */
+	
+		mp = mapping_find(pmap, (addr64_t)va, &va, 0);	/* Find the mapping for this address */
+		
+		if(!mp) {									/* Is the page mapped? */
+			splx(spl);								/* Page not mapped, restore interruptions */
+			if((va == 0) || (va >= endva)) break;	/* We are done if there are no more or we hit the end... */
+			continue;								/* We are not done and there is more to check... */
 		}
+		
+		saveflags = mp->mpFlags;					/* Remember the flags */
+		pa = mp->mpPAddr;							/* Remember ppage because mapping may vanish after drop call */
+	
+		mapping_drop_busy(mp);						/* We have everything we need from the mapping */
+	
+		splx(spl);									/* Restore 'rupts */
+	
+		if(saveflags & (mpNest | mpBlock)) continue;	/* Can't mess around with these guys... */	
+		
+		mapping_set_mod(pa);						/* Set the modfied bit for this page */
+		
+		if(va == 0) break;							/* We hit the end of the pmap, might as well leave now... */
 	}
-	splx(spl);											/* Restore the interrupt level */
-
-	debugLog2(57, 0, 0);								/* Log pmap_map call */
-	return;												/* Leave... */
+	return;											/* Leave... */
 }
 
 /*
@@ -1843,36 +1303,9 @@ pmap_modify_pages(
 void
 pmap_clear_modify(vm_offset_t pa)
 {
-	register struct phys_entry	*pp;
-	spl_t		spl;
 
-#if PMAP_LOWTRACE
-	dbgTrace(0xF1D00011, (unsigned int)pa, 0);			/* (TEST/DEBUG) */
-#endif
-#if DEBUG
-	if (pmdebug & PDB_USER)
-		kprintf("pmap_clear_modify(pa=%x)\n", pa);
-#endif
+	mapping_clr_mod((ppnum_t)pa);				/* Clear all change bits for physical page */
 
-	pp = pmap_find_physentry(pa);						/* Find the physent for this page */
-	if (pp == PHYS_NULL) return;						/* If there isn't one, just leave... */
-
-	debugLog2(58, pa, 0);					/* Log pmap_map call */
-
-	spl=splhigh();										/* Don't bother me */
-
-	if(!hw_lock_bit((unsigned int *)&pp->phys_link, PHYS_LOCK, LockTimeOut)) {	/* Try to get the lock on the physical entry */
-		panic("pmap_clear_modify: Timeout getting lock on physent at %08X\n", pp);	/* Arrrgghhhh! */
-		splx(spl);										/* Restore 'rupts */
-		return;											/* Should die before here */
-	}
-
-	mapping_clr_mod(pp);								/* Clear all change bits for physical page */
-
-	hw_unlock_bit((unsigned int *)&pp->phys_link, PHYS_LOCK);	/* Unlock the physical entry */
- 	splx(spl);											/* Restore the interrupt level */
-
-	debugLog2(59, 0, 0);					/* Log pmap_map call */
 }
 
 /*
@@ -1883,40 +1316,8 @@ pmap_clear_modify(vm_offset_t pa)
 boolean_t
 pmap_is_modified(register vm_offset_t pa)
 {
-	register struct phys_entry	*pp;
-	spl_t		spl;
-	boolean_t	ret;
-
-
-#if PMAP_LOWTRACE
-	dbgTrace(0xF1D00012, (unsigned int)pa, 0);			/* (TEST/DEBUG) */
-#endif
-#if DEBUG
-	if (pmdebug & PDB_USER)
-		kprintf("pmap_is_modified(pa=%x)\n", pa);
-#endif
-
-	pp = pmap_find_physentry(pa);						/* Find the physent for this page */
-	if (pp == PHYS_NULL) return(FALSE);					/* Just indicate not set... */
+	return mapping_tst_mod((ppnum_t)pa);	/* Check for modified */
 	
-	debugLog2(60, pa, 0);					/* Log pmap_map call */
-
-	spl=splhigh();										/* Don't bother me */
-
-	if(!hw_lock_bit((unsigned int *)&pp->phys_link, PHYS_LOCK, LockTimeOut)) {	/* Try to get the lock on the physical entry */
-		panic("pmap_is_modified: Timeout getting lock on physent at %08X\n", pp);	/* Arrrgghhhh! */
-		splx(spl);										/* Restore 'rupts */
-		return 0;										/* Should die before here */
-	}
-	
-	ret = mapping_tst_mod(pp);							/* Check for modified */
-	
-	hw_unlock_bit((unsigned int *)&pp->phys_link, PHYS_LOCK);	/* Unlock the physical entry */
- 	splx(spl);											/* Restore the interrupt level */
-	
-	debugLog2(61, ret, 0);					/* Log pmap_map call */
-
-	return ret;										
 }
 
 /*
@@ -1928,29 +1329,7 @@ pmap_is_modified(register vm_offset_t pa)
 void
 pmap_clear_reference(vm_offset_t pa)
 {
-	register struct phys_entry	*pp;
-	spl_t		spl;
-
-
-#if PMAP_LOWTRACE
-	dbgTrace(0xF1D00013, (unsigned int)pa, 0);				/* (TEST/DEBUG) */
-#endif
-#if DEBUG
-	if (pmdebug & PDB_USER)
-		kprintf("pmap_clear_reference(pa=%x)\n", pa);
-#endif
-
-	pp = pmap_find_physentry(pa);							/* Find the physent for this page */
-	if (pp == PHYS_NULL) return;							/* If there isn't one, just leave... */
-
-	debugLog2(62, pa, 0);					/* Log pmap_map call */
-
-	spl=splhigh();											/* Don't bother me */
-	mapping_clr_ref(pp);									/* Clear all reference bits for physical page */
- 	splx(spl);												/* Restore the interrupt level */
-
-	debugLog2(63, 0, 0);					/* Log pmap_map call */
-
+	mapping_clr_ref((ppnum_t)pa);			/* Check for modified */
 }
 
 /*
@@ -1961,40 +1340,27 @@ pmap_clear_reference(vm_offset_t pa)
 boolean_t
 pmap_is_referenced(vm_offset_t pa)
 {
-	register struct phys_entry 	*pp;
-	spl_t		spl;
-	boolean_t	ret;
+	return mapping_tst_ref((ppnum_t)pa);	/* Check for referenced */
+}
 
+/*
+ * pmap_canExecute(ppnum_t pa)
+ *  returns 1 if instructions can execute
+ *  returns 0 if know not (i.e. guarded and/or non-executable set)
+ *  returns -1 if we don't know (i.e., the page is no RAM)
+ */
+int
+pmap_canExecute(ppnum_t pa)
+{		
+	phys_entry *physent;
+	unsigned int pindex;
 
-#if PMAP_LOWTRACE
-	dbgTrace(0xF1D00014, (unsigned int)pa, 0);			/* (TEST/DEBUG) */
-#endif
-#if DEBUG
-	if (pmdebug & PDB_USER)
-		kprintf("pmap_is_referenced(pa=%x)\n", pa);
-#endif
+	physent = mapping_phys_lookup(pa, &pindex);				/* Get physical entry */
 
-	pp = pmap_find_physentry(pa);						/* Find the physent for this page */
-	if (pp == PHYS_NULL) return(FALSE);					/* Just indicate not set... */
-	
-	debugLog2(64, pa, 0);					/* Log pmap_map call */
+	if(!physent) return -1;									/* If there is no physical entry, we don't know... */
 
-	spl=splhigh();										/* Don't bother me */
-
-	if(!hw_lock_bit((unsigned int *)&pp->phys_link, PHYS_LOCK, LockTimeOut)) {	/* Try to get the lock on the physical entry */
-		panic("pmap_is_referenced: Timeout getting lock on physent at %08X\n", pp);	/* Arrrgghhhh! */
-		splx(spl);										/* Restore 'rupts */
-		return 0;										/* Should die before here */
-	}
-	
-	ret = mapping_tst_ref(pp);							/* Check for referenced */
-	
-	hw_unlock_bit((unsigned int *)&pp->phys_link, PHYS_LOCK);	/* Unlock the physical entry */
- 	splx(spl);											/* Restore the interrupt level */
-	
-	debugLog2(65, ret, 0);					/* Log pmap_map call */
-
-	return ret;										
+	if((physent->ppLink & (ppN | ppG))) return 0;			/* If we are marked non-executable or guarded, say we can not execute */
+	return 1;												/* Good to go... */
 }
 
 #if	MACH_VM_DEBUG
@@ -2022,25 +1388,15 @@ pmap_copy_part_page(
 {
 	register struct phys_entry *pp_src, *pp_dst;
 	spl_t	s;
+	addr64_t fsrc, fdst;
 
+	assert(((dst <<12) & PAGE_MASK+dst_offset+len) <= PAGE_SIZE);
+	assert(((src <<12) & PAGE_MASK+src_offset+len) <= PAGE_SIZE);
 
-#if PMAP_LOWTRACE
-	dbgTrace(0xF1D00019, (unsigned int)src+src_offset, (unsigned int)dst+dst_offset);	/* (TEST/DEBUG) */
-	dbgTrace(0xF1D04019, (unsigned int)len, 0);			/* (TEST/DEBUG) */
-#endif
-	s = splhigh();
+	fsrc = ((addr64_t)src << 12) + src_offset;
+	fdst = ((addr64_t)dst << 12) + dst_offset;
 
-        assert(((dst & PAGE_MASK)+dst_offset+len) <= PAGE_SIZE);
-        assert(((src & PAGE_MASK)+src_offset+len) <= PAGE_SIZE);
-
-	/*
-	 * Since the source and destination are physical addresses, 
-	 * turn off data translation to perform a  bcopy() in bcopy_phys().
-	 */
-	phys_copy((vm_offset_t) src+src_offset,
-		  (vm_offset_t) dst+dst_offset, len);
-
-	splx(s);
+	phys_copy(fsrc, fdst, len);								/* Copy the stuff physically */
 }
 
 void
@@ -2052,24 +1408,16 @@ pmap_zero_part_page(
     panic("pmap_zero_part_page");
 }
 
-boolean_t pmap_verify_free(vm_offset_t pa) {
+boolean_t pmap_verify_free(ppnum_t pa) {
 
 	struct phys_entry	*pp;
+	unsigned int pindex;
 
-#if PMAP_LOWTRACE
-	dbgTrace(0xF1D00007, (unsigned int)pa, 0);				/* (TEST/DEBUG) */
-#endif
+	pp = mapping_phys_lookup(pa, &pindex);	/* Get physical entry */
+	if (pp == 0) return FALSE;					/* If there isn't one, show no mapping... */
 
-#if DEBUG
-	if (pmdebug & PDB_USER)
-		kprintf("pmap_verify_free(pa=%x)\n", pa);
-#endif
-
-	if (!pmap_initialized) return(TRUE);
-
-	pp = pmap_find_physentry(pa);							/* Look up the physical entry */
-	if (pp == PHYS_NULL) return FALSE;						/* If there isn't one, show no mapping... */
-	return ((mapping *)((unsigned int)pp->phys_link & ~PHYS_FLAGS) == MAPPING_NULL);	/* Otherwise, return TRUE if mapping exists... */
+	if(pp->ppLink & ~(ppLock | ppN | ppFlags)) return TRUE;	/* We have at least one mapping */
+	return FALSE;								/* No mappings */
 }
 
 
@@ -2079,13 +1427,9 @@ void pmap_switch(pmap_t map)
 {
 	unsigned int i;
 
-#if DEBUG
-	if (watchacts & WA_PCB) {
-		kprintf("Switching to map at 0x%08x, space=%d\n",
-		       map,map->space);
-	}
-#endif /* DEBUG */
 
+	hw_blow_seg(copyIOaddr);					/* Blow off the first segment */
+	hw_blow_seg(copyIOaddr + 0x10000000ULL);	/* Blow off the second segment */
 
 /* when changing to kernel space, don't bother
  * doing anything, the kernel is mapped from here already.
@@ -2099,113 +1443,117 @@ void pmap_switch(pmap_t map)
 }
 
 /*
- *	kern_return_t pmap_nest(grand, subord, vaddr, size)
+ *	kern_return_t pmap_nest(grand, subord, vstart, size)
  *
  *	grand  = the pmap that we will nest subord into
  *	subord = the pmap that goes into the grand
- *	vaddr  = start of range in pmap to be inserted
- *	size   = size of range in pmap to be inserted
+ *	vstart  = start of range in pmap to be inserted
+ *	nstart  = start of range in pmap nested pmap
+ *	size   = Size of nest area (up to 16TB)
  *
  *	Inserts a pmap into another.  This is used to implement shared segments.
  *	On the current PPC processors, this is limited to segment (256MB) aligned
  *	segment sized ranges.
- */
-
-kern_return_t pmap_nest(pmap_t grand, pmap_t subord, vm_offset_t vaddr, vm_size_t size) {
-			
-	unsigned int oflags, seg, grandr;
-	int i;
-	
-	if(size != 0x10000000) return KERN_INVALID_VALUE;	/* We can only do this for 256MB for now */
-	if(vaddr & 0x0FFFFFFF) return KERN_INVALID_VALUE;	/* We can only do this aligned to 256MB */
-
-	while(1) {									/* Test and set the subordinate flag */
-		oflags = subord->vflags & ~pmapAltSeg;	/* Get old unset value */
-		if(subord->vflags & pmapAltSeg) {		/* Are trying to nest one already nested? */
-			panic("pmap_nest: Attempt to nest an already nested pmap\n");
-		}
-		if(hw_compare_and_store(oflags, oflags | pmapSubord, &subord->vflags)) break;	/* Done if we got it set */
-	}
-	
-	simple_lock(&grand->lock);					/* Lock the superior pmap */
-
-	if(grand->vflags & pmapSubord) {			/* Are we only one level deep? */
-		simple_unlock(&grand->lock);			/* Unlock the superior pmap */
-		panic("pmap_nest: Attempt to nest into subordinate pmap\n");
-		return KERN_FAILURE;					/* Shame on you */
-	}
-
-	seg = vaddr >> 28;							/* Isolate the segment number */
-	if((0x00008000 >> seg) & grand->vflags) {	/* See if it is already in use */
-		simple_unlock(&grand->lock);			/* Unlock the superior pmap */
-		panic("pmap_nest: Attempt to nest into already nested segment\n");
-		return KERN_FAILURE;					/* Shame on you */
-	}
-	
-	grand->pmapPmaps[seg] = subord;				/* Set the pointer to the subordinate */
-	grand->pmapSegs[seg] = SEG_REG_PROT | (seg << 20) | subord->space;		/* Set the vsid to the subordinate's vsid */
-	grand->vflags |= (0x00008000 >> seg);		/* Set in-use bit */
-
-	grandr = (unsigned int)grand ^ grand->pmapvr;	/* Get real address of the grand pmap */
-	
-	simple_unlock(&grand->lock);				/* Unlock the grand pmap */
-	
-
-/*
- *	Note that the following will force the segment registers to be reloaded following
- *	the next interrupt on all processors if they are using the pmap we just changed.
  *
+ *	We actually kinda allow recursive nests.  The gating factor is that we do not allow 
+ *	nesting on top of something that is already mapped, i.e., the range must be empty.
+ *
+ *	
+ *
+ *	Note that we depend upon higher level VM locks to insure that things don't change while
+ *	we are doing this.  For example, VM should not be doing any pmap enters while it is nesting
+ *	or do 2 nests at once.
  */
 
-
-	for(i=0; i < real_ncpus; i++) {							/* Cycle through processors */
-		(void)hw_compare_and_store((unsigned int)grandr, 0, &per_proc_info[i].Lastpmap);	/* Clear if ours */
-	}
+kern_return_t pmap_nest(pmap_t grand, pmap_t subord, addr64_t vstart, addr64_t nstart, uint64_t size) {
 		
-	return KERN_SUCCESS;						/* Bye, bye, butterfly... */
+	addr64_t nextva, vend, colladdr;
+	unsigned int msize;
+	int i, nlists, asize;
+	spl_t	s;
+	mapping *mp;
+	
+	
+	if(size & 0x0FFFFFFFULL) return KERN_INVALID_VALUE;	/* We can only do this for multiples of 256MB */
+	if((size >> 28) > 65536)  return KERN_INVALID_VALUE;	/* Max size we can nest is 16TB */
+	if(vstart & 0x0FFFFFFFULL) return KERN_INVALID_VALUE;	/* We can only do this aligned to 256MB */
+	if(nstart & 0x0FFFFFFFULL) return KERN_INVALID_VALUE;	/* We can only do this aligned to 256MB */
+	
+	if(size == 0) {								/*	Is the size valid? */
+		panic("pmap_nest: size is invalid - %016llX\n", size);
+	}
+	
+	msize = (size >> 28) - 1;							/* Change size to blocks of 256MB */
+	
+	nlists = mapSetLists(grand);						/* Set number of lists this will be on */
+
+	mp = mapping_alloc(nlists);							/* Get a spare mapping block */
+	
+	mp->mpFlags = 0x01000000 | mpNest | nlists;			/* Set the flags. Make sure busy count is 1 */
+	mp->mpSpace = subord->space;						/* Set the address space/pmap lookup ID */
+	mp->mpBSize = msize;								/* Set the size */
+	mp->mpPte = 0;										/* Set the PTE invalid */
+	mp->mpPAddr = 0;									/* Set the physical page number */
+	mp->mpVAddr = vstart;								/* Set the address */
+	mp->mpNestReloc = nstart - vstart;					/* Set grand to nested vaddr relocation value */
+	
+	colladdr = hw_add_map(grand, mp);					/* Go add the mapping to the pmap */
+	
+	if(colladdr) {										/* Did it collide? */
+		vend = vstart + size - 4096;					/* Point to the last page we would cover in nest */	
+		panic("pmap_nest: attempt to nest into a non-empty range - pmap = %08X, start = %016llX, end = %016llX\n",
+			grand, vstart, vend);
+	}
+	
+	return KERN_SUCCESS;
 }
 
-
 /*
- *	kern_return_t pmap_unnest(grand, vaddr, size)
+ *	kern_return_t pmap_unnest(grand, vaddr)
  *
  *	grand  = the pmap that we will nest subord into
- *	vaddr  = start of range in pmap to be inserted
- *	size   = size of range in pmap to be inserted
+ *	vaddr  = start of range in pmap to be unnested
  *
  *	Removes a pmap from another.  This is used to implement shared segments.
  *	On the current PPC processors, this is limited to segment (256MB) aligned
  *	segment sized ranges.
  */
 
-kern_return_t pmap_unnest(pmap_t grand, vm_offset_t vaddr, vm_size_t size) {
+kern_return_t pmap_unnest(pmap_t grand, addr64_t vaddr) {
 			
 	unsigned int oflags, seg, grandr, tstamp;
 	int i, tcpu, mycpu;
+	addr64_t nextva;
+	spl_t s;
+	mapping *mp;
 		
-	if(size != 0x10000000) return KERN_INVALID_VALUE;	/* We can only do this for 256MB for now */
-	if(vaddr & 0x0FFFFFFF) return KERN_INVALID_VALUE;	/* We can only do this aligned to 256MB */
+	s = splhigh();										/* Make sure interruptions are disabled */
 
-	simple_lock(&grand->lock);					/* Lock the superior pmap */
-	disable_preemption();						/* It's all for me! */
+	mp = mapping_find(grand, vaddr, &nextva, 0);		/* Find the nested map */
 
-	seg = vaddr >> 28;							/* Isolate the segment number */
-	if(!((0x00008000 >> seg) & grand->vflags)) {	/* See if it is already in use */
-		enable_preemption();					/* Ok, your turn */
-		simple_unlock(&grand->lock);			/* Unlock the superior pmap */
-		panic("pmap_unnest: Attempt to unnest an unnested segment\n");
-		return KERN_FAILURE;					/* Shame on you */
+	if(((unsigned int)mp & mapRetCode) != mapRtOK) {	/* See if it was even nested */
+		panic("pmap_unnest: Attempt to unnest an unnested segment - va = %016llX\n", vaddr);
+	}
+
+	if(!(mp->mpFlags & mpNest)) {						/* Did we find something other than a nest? */
+		panic("pmap_unnest: Attempt to unnest something that is not a nest - va = %016llX\n", vaddr);
 	}
 	
-	grand->pmapPmaps[seg] = (pmap_t)0;			/* Clear the pointer to the subordinate */
-	grand->pmapSegs[seg] = grand->space;		/* Set the pointer to the subordinate's vsid */
-	grand->pmapSegs[seg] = SEG_REG_PROT | (seg << 20) | grand->space;		/* Set the vsid to the grand's vsid */
-	grand->vflags &= ~(0x00008000 >> seg);		/* Clear in-use bit */
+	if(mp->mpVAddr != vaddr) {							/* Make sure the address is the same */
+		panic("pmap_unnest: Attempt to unnest something that is not at start of nest - va = %016llX\n", vaddr);
+	}
 
-	grandr = (unsigned int)grand ^ grand->pmapvr;	/* Get real address of the grand pmap */
+	(void)hw_atomic_or(&mp->mpFlags, mpRemovable);		/* Show that this mapping is now removable */
 	
-	simple_unlock(&grand->lock);				/* Unlock the superior pmap */
+	mapping_drop_busy(mp);								/* Go ahead and relase the mapping now */
 
+	disable_preemption();								/* It's all for me! */
+	splx(s);											/* Restore 'rupts */
+		
+	(void)mapping_remove(grand, vaddr);					/* Toss the nested pmap mapping */
+	
+	invalidateSegs(grand);								/* Invalidate the pmap segment cache */
+	
 /*
  *	Note that the following will force the segment registers to be reloaded 
  *	on all processors (if they are using the pmap we just changed) before returning.
@@ -2221,66 +1569,228 @@ kern_return_t pmap_unnest(pmap_t grand, vm_offset_t vaddr, vm_size_t size) {
  */
 
 
-	mycpu = cpu_number();						/* Who am I? Am I just a dream? */
-	for(i=0; i < real_ncpus; i++) {				/* Cycle through processors */
-		if(hw_compare_and_store((unsigned int)grandr, 0, &per_proc_info[i].Lastpmap)) {	/* Clear if ours and kick the other guy if he was using it */
-			if(i == mycpu) continue;				/* Don't diddle ourselves */
-			tstamp = per_proc_info[i].ruptStamp[1];	/* Save the processor's last interrupt time stamp */
-			if(cpu_signal(i, SIGPwake, 0, 0) != KERN_SUCCESS) {	/* Make sure we see the pmap change */
+	mycpu = cpu_number();								/* Who am I? Am I just a dream? */
+	for(i=0; i < real_ncpus; i++) {						/* Cycle through processors */
+		if((unsigned int)grand == per_proc_info[i].ppUserPmapVirt) {	/* Is this guy using the changed pmap? */
+			
+			per_proc_info[i].ppInvSeg = 1;				/* Show that we need to invalidate the segments */
+			
+			if(i == mycpu) continue;					/* Don't diddle ourselves */
+		
+			tstamp = per_proc_info[i].ruptStamp[1];		/* Save the processor's last interrupt time stamp */
+			if(cpu_signal(i, SIGPcpureq, CPRQsegload, 0) != KERN_SUCCESS) {	/* Make sure we see the pmap change */
 				continue;
 			}
+			
 			if(!hw_cpu_wcng(&per_proc_info[i].ruptStamp[1], tstamp, LockTimeOut)) {	/* Wait for the other processors to enter debug */
 				panic("pmap_unnest: Other processor (%d) did not see interruption request\n", i);
 			}
 		}
 	}
 
-	enable_preemption();						/* Others can run now */
-	return KERN_SUCCESS;						/* Bye, bye, butterfly... */
+	enable_preemption();								/* Others can run now */
+	return KERN_SUCCESS;								/* Bye, bye, butterfly... */
 }
 
 
-void pmap_ver(pmap_t pmap, vm_offset_t sva, vm_offset_t eva) {
+/*
+ *	void MapUserAddressSpaceInit(void)
+ *
+ *	Initialized anything we need to in order to map user address space slices into
+ *	the kernel.  Primarily used for copy in/out.
+ *
+ *	Currently we only support one 512MB slot for this purpose.  There are two special
+ *	mappings defined for the purpose: the special pmap nest, and linkage mapping.
+ *
+ *	The special pmap nest (which is allocated in this function) is used as a place holder
+ *	in the kernel's pmap search list. It is 512MB long and covers the address range
+ *	starting at copyIOaddr.  It points to no actual memory and when the fault handler 
+ *	hits in it, it knows to look in the per_proc and start using the linkage
+ *	mapping contained therin.
+ *
+ *	The linkage mapping is used to glue the user address space slice into the 
+ *	kernel.  It contains the relocation information used to transform the faulting
+ *	kernel address into the user address space.  It also provides the link to the
+ *	user's pmap.  This is pointed to by the per_proc and is switched in and out
+ *	whenever there is a context switch.
+ *
+ */
 
-	int cnt, i, j, k;
-	vm_offset_t xx;
-	
-	if(!pmap) return;
-
-	sva = trunc_page(sva);
-	eva = trunc_page(eva);
-	
-	for(i = 0; i < (pmapUsageMask + 1); i++) {	/* Step through them all */
-		if((pmap->pmapUsage[i]) > 8192) {		/* See if this is a sane number */
-			panic("pmap_ver: pmapUsage slot for %08X has invalid count (%d) for pmap %08X\n",
-				i * pmapUsageSize, pmap->pmapUsage[i], pmap);
-		}
-	}
-	j = 0;
-	while(1) {									/* Try multiple times */
-		cnt = 0;
-		for(i = 0; i < (pmapUsageMask + 1); i++) {	/* Step through them all */
-			cnt = cnt + pmap->pmapUsage[i];			/* Sum all slots */
-		}
-		if(cnt == pmap->stats.resident_count) break;	/* We're ok if we match... */
+void MapUserAddressSpaceInit(void) {
 		
-		j++;
-		for(i = 0; i < 100000; i++) {
-			k = j + i;
-		}
-		if(j >= 10) {
-			panic("pmap_ver: pmapUsage total (%d) does not match resident count (%d) for pmap %08X\n",
-				cnt, pmap->stats.resident_count, pmap);
-		}
+	addr64_t colladdr;
+	int nlists, asize;
+	mapping *mp;
+	
+	nlists = mapSetLists(kernel_pmap);					/* Set number of lists this will be on */
+	
+	mp = mapping_alloc(nlists);							/* Get a spare mapping block */
+	
+	mp->mpFlags = 0x01000000 |mpNest | mpSpecial | nlists;	/* Set the flags. Make sure busy count is 1 */
+	mp->mpSpace = kernel_pmap->space;					/* Set the address space/pmap lookup ID */
+	mp->mpBSize = 1;									/* Set the size to 2 segments */
+	mp->mpPte = 0;										/* Means nothing */
+	mp->mpPAddr = 0;									/* Means nothing */
+	mp->mpVAddr = copyIOaddr;							/* Set the address range we cover */
+	mp->mpNestReloc = 0;								/* Means nothing */
+	
+	colladdr = hw_add_map(kernel_pmap, mp);				/* Go add the mapping to the pmap */
+	
+	if(colladdr) {										/* Did it collide? */
+		panic("MapUserAddressSpaceInit: MapUserAddressSpace range already mapped\n");
 	}
 	
-	for(xx = sva; xx < eva; xx += PAGE_SIZE) {	/* See if any slots not clear */
-		if(pmap_extract(pmap, xx)) {
-			panic("pmap_ver: range (%08X to %08X) not empty at %08X for pmap %08X\n",
-				sva, eva, xx, pmap);
-		}
-	}
+	return;
 }
+
+/*
+ *	addr64_t MapUserAddressSpace(vm_map_t map, vm_offset_t va, size)
+ *
+ *	map  = the vm_map that we are mapping into the kernel
+ *	va = start of the address range we are mapping
+ *	size  = size of the range.  No greater than 256MB and not 0.
+ *	Note that we do not test validty, we chose to trust our fellows...
+ *
+ *	Maps a slice of a user address space into a predefined kernel range
+ *	on a per-thread basis.  In the future, the restriction of a predefined
+ *	range will be loosened.
+ *
+ *	Builds the proper linkage map to map the user range
+ *  We will round this down to the previous segment boundary and calculate
+ *	the relocation to the kernel slot
+ *
+ *	We always make a segment table entry here if we need to.  This is mainly because of
+ *	copyin/out and if we don't, there will be multiple segment faults for
+ *	each system call.  I have seen upwards of 30000 per second.
+ *
+ *	We do check, however, to see if the slice is already mapped and if so,
+ *	we just exit.  This is done for performance reasons.  It was found that 
+ *	there was a considerable boost in copyin/out performance if we did not
+ *	invalidate the segment at ReleaseUserAddressSpace time, so we dumped the
+ *	restriction that you had to bracket MapUserAddressSpace.  Further, there 
+ *	is a yet further boost if you didn't need to map it each time.  The theory
+ *	behind this is that many times copies are to or from the same segment and
+ *	done multiple times within the same system call.  To take advantage of that,
+ *	we check cioSpace and cioRelo to see if we've already got it.  
+ *
+ *	We also need to half-invalidate the slice when we context switch or go
+ *	back to user state.  A half-invalidate does not clear the actual mapping,
+ *	but it does force the MapUserAddressSpace function to reload the segment
+ *	register/SLBE.  If this is not done, we can end up some pretty severe
+ *	performance penalties. If we map a slice, and the cached space/relocation is
+ *	the same, we won't reload the segment registers.  Howver, since we ran someone else,
+ *	our SR is cleared and we will take a fault.  This is reasonable if we block
+ *	while copying (e.g., we took a page fault), but it is not reasonable when we 
+ *	just start.  For this reason, we half-invalidate to make sure that the SR is
+ *	explicitly reloaded.
+ *	 
+ *	Note that we do not go to the trouble of making a pmap segment cache
+ *	entry for these guys because they are very short term -- 99.99% of the time
+ *	they will be unmapped before the next context switch.
+ *
+ */
+
+addr64_t MapUserAddressSpace(vm_map_t map, addr64_t va, unsigned int size) {
+		
+	addr64_t baddrs, reladd;
+	thread_act_t act;
+	mapping *mp;
+	struct per_proc_info *perproc;
+	
+	baddrs = va & 0xFFFFFFFFF0000000ULL;				/* Isolate the segment */
+	act = current_act();								/* Remember our activation */
+
+	reladd = baddrs - copyIOaddr;						/* Get the relocation from user to kernel */
+	
+	if((act->mact.cioSpace == map->pmap->space) && (act->mact.cioRelo == reladd)) {	/* Already mapped? */
+		return ((va & 0x0FFFFFFFULL) | copyIOaddr);		/* Pass back the kernel address we are to use */
+	}
+
+	disable_preemption();								/* Don't move... */	
+	perproc = getPerProc();								/* Get our per_proc_block */
+	
+	mp = (mapping *)&perproc->ppCIOmp;					/* Make up for C */
+	act->mact.cioRelo = reladd;							/* Relocation from user to kernel */
+	mp->mpNestReloc = reladd;							/* Relocation from user to kernel */
+	
+	act->mact.cioSpace = map->pmap->space;				/* Set the address space/pmap lookup ID */
+	mp->mpSpace = map->pmap->space;						/* Set the address space/pmap lookup ID */
+	
+/*
+ *	Here we make an assumption that we are going to be using the base pmap's address space.
+ *	If we are wrong, and that would be very, very, very rare, the fault handler will fix us up.
+ */ 
+
+	hw_map_seg(map->pmap,  copyIOaddr, baddrs);			/* Make the entry for the first segment */
+
+	enable_preemption();								/* Let's move */
+	return ((va & 0x0FFFFFFFULL) | copyIOaddr);			/* Pass back the kernel address we are to use */
+}
+
+/*
+ *	void ReleaseUserAddressMapping(addr64_t kva)
+ *
+ *	kva = kernel address of the user copy in/out slice
+ *
+ */
+
+void ReleaseUserAddressSpace(addr64_t kva) {
+		
+	int i;
+	addr64_t nextva, vend, kaddr, baddrs;
+	unsigned int msize;
+	thread_act_t act;
+	mapping *mp;
+	
+	if(kva == 0) return;								/* Handle a 0 */
+		
+	disable_preemption();								/* Don't move... */
+	
+	act = current_act();								/* Remember our activation */
+
+	if(act->mact.cioSpace == invalSpace) {				/* We only support one at a time */
+		panic("ReleaseUserAddressMapping: attempt release undefined copy in/out user address space slice\n");
+	}
+
+	act->mact.cioSpace = invalSpace;					/* Invalidate space */
+	mp = (mapping *)&per_proc_info[cpu_number()].ppCIOmp;	/* Make up for C */
+	mp->mpSpace = invalSpace;							/* Trash it in the per_proc as well */
+	
+	hw_blow_seg(copyIOaddr);							/* Blow off the first segment */
+	hw_blow_seg(copyIOaddr + 0x10000000ULL);			/* Blow off the second segment */
+	
+	enable_preemption();								/* Let's move */
+	
+	return;												/* Let's leave */
+}
+
+
+
+/*
+ *	kern_return_t pmap_boot_map(size)
+ *
+ *	size   = size of virtual address range to be mapped
+ *
+ *	This function is used to assign a range of virtual addresses before VM in 
+ *	initialized.  It starts at VM_MAX_KERNEL_ADDRESS and works downward.
+ *	The variable vm_last_addr contains the current highest possible VM
+ *	assignable address.  It is a panic to attempt to call this after VM has
+ *	started up.  The only problem is, is that we may not have the serial or
+ *	framebuffer mapped, so we'll never know we died.........
+ */
+
+vm_offset_t pmap_boot_map(vm_size_t size) {
+			
+	if(kernel_map != VM_MAP_NULL) {				/* Has VM already started? */
+		panic("pmap_boot_map: VM started\n");
+	}
+	
+	size = round_page_32(size);					/* Make sure this is in pages */
+	vm_last_addr = vm_last_addr - size;			/* Allocate the memory */
+	return (vm_last_addr + 1);					/* Return the vaddr we just allocated */
+
+}
+
 
 
 /* temporary workaround */
@@ -2289,4 +1799,3 @@ coredumpok(vm_map_t map, vm_offset_t va)
 {
   return TRUE;
 }
-

@@ -13,7 +13,12 @@ EXPORT_ONLY_FILES = 	\
 		    hw_lock_types.h \
 		    io_map_entries.h \
 		    lock.h \
-		    machine_routines.h
+		    machine_routines.h \
+		    machine_cpu.h \
+		    mp.h \
+		    mp_events.h \
+		    apic.h \
+		    cpuid.h
 
 INSTALL_MD_DIR = i386
 

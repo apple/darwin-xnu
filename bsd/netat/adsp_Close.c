@@ -176,7 +176,7 @@ void RemoveCCB(sp, pb)		/* (CCBPtr sp, DSPPBPtr pb) */
     /*
      * Unlink CCB from list
      */
-    qRemove(AT_ADSP_STREAMS, sp); /* remove sp from active streams queue */
+    qRemove((CCB *)AT_ADSP_STREAMS, sp); /* remove sp from active streams queue */
 
     if (pb) {
 	pb->ioResult = 0;

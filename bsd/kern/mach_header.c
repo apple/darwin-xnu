@@ -398,7 +398,7 @@ struct segment_command *getfakefvmseg(void)
 #if	DEBUG
 	printf("fake fvm seg __USER/\"%s\" at 0x%x, size 0x%x\n",
 		sp->sectname, sp->addr, sp->size);
-#endif	DEBUG
+#endif	/* DEBUG */
 }
 
 /*

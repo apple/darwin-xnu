@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2002 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2002-2003 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -65,6 +65,7 @@ struct cat_desc {
 /* cd_flags */
 #define	CD_HASBUF	0x01	/* allocated filename buffer */
 #define CD_DECOMPOSED	0x02	/* name is fully decomposed */
+#define	CD_ISMETA	0x40	/* describes a metadata file */
 #define	CD_ISDIR	0x80	/* describes a directory */
 
 /*
@@ -95,14 +96,23 @@ struct cat_attr {
 #define	ca_entries	ca_union.cau_entries
 
 /*
- * Catalog Node Fork (runtime + on disk)
+ * Catalog Node Fork (runtime)
+ *
+ * NOTE: this is not the same as a struct HFSPlusForkData
  */
 struct cat_fork {
-	u_int64_t	cf_size;	/* fork's logical size in bytes */
-	u_int32_t	cf_clump;	/* fork's clump size in bytes */
-	u_int32_t	cf_blocks;	/* total blocks used by this fork */
-	struct HFSPlusExtentDescriptor	cf_extents[8];	/* initial set of extents */
+	u_int64_t      cf_size;        /* fork's logical size in bytes */
+	union {
+	    u_int32_t  cfu_clump;      /* fork's clump size in bytes (sys files only) */
+	    u_int64_t  cfu_bytesread;  /* bytes read from this fork */
+	} cf_union;
+	u_int32_t      cf_vblocks;     /* virtual (unalloated) blocks */
+	u_int32_t      cf_blocks;      /* total blocks used by this fork */
+	struct HFSPlusExtentDescriptor  cf_extents[8];  /* initial set of extents */
 };
+
+#define cf_clump	cf_union.cfu_clump
+#define cf_bytesread	cf_union.cfu_bytesread
 
 
 /*
@@ -130,6 +140,28 @@ struct cat_entrylist {
 	u_long  realentries;   /* valid entry count */
 	struct cat_entry  entry[MAXCATENTRIES];   /* array of entries */
 };
+
+/*
+ * Catalog Operations Hint
+ *
+ * lower 16 bits: count of B-tree insert operations
+ * upper 16 bits: count of B-tree delete operations
+ *
+ */
+#define CAT_DELETE	0x00020000
+#define CAT_CREATE	0x00000002
+#define CAT_RENAME	0x00020002
+#define CAT_EXCHANGE	0x00020002
+
+typedef u_int32_t	catops_t;
+
+/*
+ * The size of cat_cookie_t much match the size of
+ * the nreserve struct (in BTreeNodeReserve.c).
+ */
+typedef	struct cat_cookie_t {
+	char	opaque[24];
+} cat_cookie_t;
 
 /*
  * Catalog Interface
@@ -186,12 +218,30 @@ extern int cat_update (	struct hfsmount *hfsmp,
 extern int cat_getdirentries(
 			struct hfsmount *hfsmp,
 			struct cat_desc *descp,
+			int entrycnt,
 			struct uio *uio,
-			int *eofflag);
+			int *eofflag,
+			u_long *cookies,
+			int ncookies);
 
 extern int cat_insertfilethread (
 			struct hfsmount *hfsmp,
 			struct cat_desc *descp);
+
+extern int cat_preflight(
+			struct hfsmount *hfsmp,
+			catops_t ops,
+			cat_cookie_t *cookie,
+			struct proc *p);
+
+extern void cat_postflight(
+			struct hfsmount *hfsmp,
+			cat_cookie_t *cookie,
+			struct proc *p);
+
+extern int cat_binarykeycompare(
+			HFSPlusCatalogKey *searchKey,
+			HFSPlusCatalogKey *trialKey);
 
 #endif /* __APPLE_API_PRIVATE */
 #endif /* KERNEL */

@@ -60,6 +60,7 @@ OPTIONS/diagnostic			optional diagnostic
 OPTIONS/ktrace				optional ktrace
 OPTIONS/profiling			optional profiling
 OPTIONS/vndevice			optional vndevice
+OPTIONS/audit				optional audit
 
 #
 # Network options
@@ -115,6 +116,9 @@ bsd/dev/random/YarrowCoreLib/src/comp.c				standard
 bsd/dev/random/YarrowCoreLib/src/prng.c				standard
 bsd/dev/random/YarrowCoreLib/src/sha1mod.c			standard
 bsd/dev/random/YarrowCoreLib/src/yarrowUtils.c		standard
+
+bsd/dev/memdev.c				standard
+
 bsd/dev/vn/vn.c				optional vndevice
 bsd/dev/vn/shadow.c			optional vndevice
 
@@ -289,6 +293,7 @@ bsd/kern/md5c.c    		        optional crypto
 bsd/crypto/sha1.c         		optional crypto
 bsd/crypto/sha2/sha2.c			optional crypto
 bsd/crypto/des/des_ecb.c  		optional crypto
+bsd/crypto/des/des_enc.c  		optional crypto
 bsd/crypto/des/des_setkey.c       	optional crypto
 bsd/crypto/blowfish/bf_enc.c      	optional crypto
 bsd/crypto/blowfish/bf_skey.c     	optional crypto
@@ -380,6 +385,7 @@ bsd/nfs/nfs_subs.c			optional nfsclient nfsserver
 bsd/nfs/nfs_syscalls.c			optional nfsclient nfsserver
 bsd/nfs/nfs_vfsops.c			optional nfsclient
 bsd/nfs/nfs_vnops.c			optional nfsclient
+bsd/nfs/nfs_lock.c			optional nfsclient
 
 bsd/kern/netboot.c			optional nfsclient
 
@@ -392,6 +398,7 @@ bsd/ufs/ffs/ffs_vfsops.c		standard
 bsd/ufs/ffs/ffs_vnops.c			standard
 bsd/ufs/mfs/mfs_vfsops.c		optional mfs
 bsd/ufs/mfs/mfs_vnops.c			optional mfs
+bsd/ufs/ufs/ufs_attrlist.c		standard
 bsd/ufs/ufs/ufs_bmap.c			standard
 bsd/ufs/ufs/ufs_byte_order.c		optional rev_endian_fs
 bsd/ufs/ufs/ufs_ihash.c			standard
@@ -410,9 +417,11 @@ bsd/hfs/hfs_cnode.c				optional hfs
 bsd/hfs/hfs_encodinghint.c			optional hfs
 bsd/hfs/hfs_encodings.c				optional hfs
 bsd/hfs/hfs_endian.c				optional hfs
+bsd/hfs/hfs_hotfiles.c				optional hfs
 bsd/hfs/hfs_link.c				optional hfs
 bsd/hfs/hfs_lockf.c				optional hfs
 bsd/hfs/hfs_lookup.c				optional hfs
+bsd/hfs/hfs_notification.c			optional hfs
 bsd/hfs/hfs_quota.c				optional quota
 bsd/hfs/hfs_readwrite.c				optional hfs
 bsd/hfs/hfs_search.c				optional hfs
@@ -425,6 +434,7 @@ bsd/hfs/hfscommon/BTree/BTree.c			optional hfs
 bsd/hfs/hfscommon/BTree/BTreeAllocate.c		optional hfs
 bsd/hfs/hfscommon/BTree/BTreeMiscOps.c		optional hfs
 bsd/hfs/hfscommon/BTree/BTreeNodeOps.c		optional hfs
+bsd/hfs/hfscommon/BTree/BTreeNodeReserve.c	optional hfs
 bsd/hfs/hfscommon/BTree/BTreeScanner.c		optional hfs
 bsd/hfs/hfscommon/BTree/BTreeTreeOps.c		optional hfs
 bsd/hfs/hfscommon/Catalog/Catalog.c		optional hfs
@@ -440,6 +450,11 @@ bsd/kern/bsd_init.c			standard
 bsd/kern/init_sysent.c			standard
 bsd/kern/kdebug.c			standard
 bsd/kern/kern_acct.c			standard
+bsd/kern/kern_aio.c				standard
+bsd/kern/kern_audit.c			standard
+bsd/kern/kern_bsm_token.c		standard
+bsd/kern/kern_bsm_audit.c		standard
+bsd/kern/kern_bsm_klib.c		standard
 bsd/kern/kern_clock.c			standard
 bsd/kern/kern_core.c			standard
 bsd/kern/kern_symfile.c			standard

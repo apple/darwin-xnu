@@ -61,16 +61,15 @@
 
 #include <platforms.h>
 #include <cpus.h>
-#include <mp_v1_1.h>
 #include <time_stamp.h>
 
-#if 	NCPUS == 1 || MP_V1_1
+#if 	NCPUS == 1
 extern	int	xpr_time(void);
 #define	XPR_TIMESTAMP	xpr_time()
 
-#else	/* NCPUS == 1 || MP_V1_1 */
+#else	/* NCPUS == 1 */
 
 #define XPR_TIMESTAMP	(0)
 
-#endif	/* NCPUS == 1 || MP_V1_1 */
+#endif	/* NCPUS == 1 */
 

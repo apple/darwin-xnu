@@ -344,6 +344,161 @@ struct dlil_ifmod_reg_str {
 int dlil_reg_if_modules(u_long  interface_family,
 			struct dlil_ifmod_reg_str  *ifmod_reg);
 
+struct dlil_protomod_reg_str {
+    /* 
+     *   attach the protocol to the interface and return the dl_tag 
+     */
+    int (*attach_proto)(struct ifnet *ifp, u_long *dl_tag);
+
+    /*
+     *   detach the protocol from the interface. 
+     *   this is optionnal. If it is NULL, DLIL will use 0 default detach function.
+     */
+    int (*detach_proto)(struct ifnet *ifp, u_long dl_tag); 
+
+    /*
+     *   reserved for future use. MUST be NULL.
+     */
+    u_long	reserved[4];
+};
+
+/* 
+
+Function : dlil_reg_proto_module
+
+    A DLIL protocol module is a piece of code that know how to handle a certain type
+    of protocol (PF_INET, PF_INET6, ...) for a certain family of interface (APPLE_IF_FAM_ETHERNET, 
+    APPLE_IF_FAM_PPP, ...).
+    
+    dlil_reg_proto_module() allows the registration of such a protocol/interface handler before any 
+    interface is attached.
+    Typically, the attach and detach function of the protocol handler will call 
+    dlil_{attach/detach}_protocol with the parameter specific to the protocol.
+    
+    The goal of this modules is to insulate the actual protocol (IP, IPv6) from the DLIL details.
+
+Parameters :
+    'protocol_family' is PF_INET, PF_INET6, ...
+    'interface_family' is APPLE_IF_FAM_ETHERNET, APPLE_IF_FAM_PPP, ...
+    'protomod_reg' is the protocol registration structure.
+            'attach_proto' funtion is mandatory.
+            'detach_proto' funtion is optional (DLIL will manage it).
+
+Return code :    
+
+0 :
+
+    No error.
+
+ENOMEM:
+
+    No memory can be allocated for internal data structure.
+
+EEXIST:
+
+    The protocol family has already been registered for this interface family.
+
+EINVAL:
+
+    The dlil_protomod_reg_str structure contains incorrect values.
+
+*/
+
+int dlil_reg_proto_module(u_long protocol_family, u_long interface_family,
+			struct dlil_protomod_reg_str  *protomod_reg);
+
+/* 
+
+Function : dlil_dereg_proto_module
+
+    dlil_dereg_proto_module() will unregister the protocol module previously 
+    registered with dlil_dereg_proto_module().
+    
+    There is no restriction when to call it. 
+    Interfaces or protoco can be attached, it will not prevent the deregistration of the module.
+    
+Parameters :
+    'protocol_family' is PF_INET, PF_INET6, ...
+    'interface_family' is APPLE_IF_FAM_ETHERNET, APPLE_IF_FAM_PPP, ...
+
+Return code :    
+
+0 :
+
+    No error.
+
+ENOENT:
+
+    No module was registered..
+
+*/
+
+int dlil_dereg_proto_module(u_long protocol_family, u_long interface_family);
+
+/* 
+
+Function : dlil_plumb_protocol
+
+    dlil_plumb_protocol() will plumb a protocol to an actual interface.
+    This will find a registered protocol module and call its attach function.
+    The module will typically call dlil_attach_protocol with the appropriate parameters,
+    and will return the dl_tag of the attachement.
+    It is up to the caller to handle the dl_tag. 
+    Some protocol (IPv4) will stick it in their internal structure for future use.
+    Some other protocol (IPv6) can ignore the dl_tag.
+        
+Parameters :
+    'protocol_family' is PF_INET, PF_INET6, ...
+    'ifp' is the interface to plumb the protocol to.
+    'dl_tag' is the tag returned from the succesful attachement.
+    
+Return code :    
+
+0 :
+
+    No error.
+
+ENOENT:
+
+    No module was registered.
+
+other: 
+    
+    Error returned by the attach_proto function
+
+*/
+int dlil_plumb_protocol(u_long protocol_family, struct ifnet *ifp, u_long *dl_tag);
+
+/* 
+
+Function : dlil_unplumb_protocol
+
+    dlil_unplumb_protocol() will unplumb a protocol from an interface.
+    This will find a registered protocol module and call its detach function.
+    The module will typically call dlil_detach_protocol with the appropriate parameters.
+    If no module is found, this function will call dlil_detach_protocol directly. 
+    
+Parameters :
+    'protocol_family' is PF_INET, PF_INET6, ...
+    'ifp' is APPLE_IF_FAM_ETHERNET, APPLE_IF_FAM_PPP, ...
+    
+Return code :    
+
+0 :
+
+    No error.
+
+ENOENT:
+
+    No module was registered.
+
+other: 
+    
+    Error returned by the attach_proto function
+
+*/
+int dlil_unplumb_protocol(u_long protocol_family, struct ifnet *ifp);
+
 int 
 dlil_inject_if_input(struct mbuf *m, char *frame_header, u_long from_id);
 

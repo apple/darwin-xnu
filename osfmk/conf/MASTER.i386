@@ -6,43 +6,6 @@
 #  
 ######################################################################
 #
-#  Master Apple MacOS X configuration file
-#  (see the master machine independent
-#  configuration file for a description of the file format).
-#
-######################################################################
-#
-#  NeXT (PSEUDO-)DEVICES (select any combination)
-#	ex   = Excelan EXOS 202 Ethernet interface
-#	ip   = Interphase V/SMD 3200 disk controller
-#	od   = Canon OMD-1 Optical Disk
-#	rd   = RAM disk
-#	sd   = SCSI disk
-#	sg   = Generic SCSI Device
-#	st   = SCSI tape
-#	fd   = Floppy Disk 
-#	en   = Integrated Ethernet controller
-#	dsp  = DSP560001 digital signal processor
-#	iplmeas = ipl time measurement
-#	nextp = NeXT Laser Printer
-#	sound = sound I/O
-#	vol   = removable volume support device
-#	venip = virtual Ethernet/IP network interface
-#	zs    = Serial device
-#
-#  MULTIPROCESSOR SUPPORT (select exactly one)
-#	multi = support 4 processors
-#	uni   = supports single processor
-#
-#  SPECIAL CHARACTERISTICS (select any combination)
-#	gdb        = GNU kernel debugger
-#	posix_kern = POSIX support
-#
-#  CPU TYPE (select exactly one)
-#	NeXT   = FIXME
-#
-######################################################################
-#  
 #  Standard Apple MacOS X Configurations:
 #  -------- ---- -------- ---------------
 #
@@ -50,13 +13,16 @@
 #  RELEASE = [intel pc iokit mach_pe mach mach_kdp small event vol hd pst gdb fixpri simple_clock mkernserv uxpr kernstack ipc_compat ipc_debug fb mk30 mk30_i386]
 #  DEBUG_KDP = [intel pc iokit mach_pe mach mach_kdp small event vol hd pst gdb fixpri simple_clock mkernserv uxpr kernstack ipc_compat ipc_debug fb mk30 mk30_i386 osf_debug debug]
 #  DEBUG= [intel pc iokit mach_pe mach mach_kdp small event vol hd pst gdb fixpri simple_clock mkernserv uxpr kernstack ipc_compat ipc_debug fb mk30 mk30_i386 osf_debug debug]
+#  PROFILE = [ RELEASE profile ]
 #
 ######################################################################
 #
 machine		"i386"						# <intel>
 cpu		"i386"						# <intel>
 
-pseudo-device	cpus	2
+pseudo-device	cpus		4
+pseudo-device	com		2
+pseudo-device	vc		1
 
 # choices for platform_bus are pci at386 sqt and kkt
 makeoptions	OSFMK_MACHINE = "i386"				# <mk30>
@@ -71,9 +37,12 @@ options		SHOW_SPACE	# print size of structures	# <debug>
 options		EVENTMETER	# event meter support		# <debug>
 options		FP_EMUL		# floating point emulation	# <fp>
 options		PC_SUPPORT	# virtual PC support		# <pc>
+options		PROFILE		# kernel profiling		# <profile>
 options		UXPR		# user-level XPR package	# <uxpr>
 options		STAT_TIME	# time stats
 config		mach_kernel	swap generic			# <mach>
+
+options		GPROF		# kgmon profiling 		# <profile>
 
 options		EVENT						# <event>
 
@@ -84,8 +53,3 @@ options         MACH_PE		#				# <mach_pe>
 #options	DDB		# Inline debugger		# <debug>
 options		MACH_KDP	# KDP				# <mach_kdp>
 
-# SMP
-options		MP_V1_1
-
-# FIXME
-pseudo-device com 2

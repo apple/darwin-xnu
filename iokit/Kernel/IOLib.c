@@ -39,10 +39,14 @@
 
 #include <IOKit/IOReturn.h>
 #include <IOKit/IOLib.h> 
+#include <IOKit/IOMapper.h>
 #include <IOKit/IOKitDebug.h> 
 
 mach_timespec_t IOZeroTvalspec = { 0, 0 };
 
+extern ppnum_t pmap_find_phys(pmap_t pmap, addr64_t va);
+
+/* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
 
 /*
  * Global variables for use by iLogger
@@ -61,13 +65,15 @@ void *_giDebugReserved2		= NULL;
  */
 
 static IOThreadFunc threadArgFcn;
-static void * threadArgArg;
-static lock_t * threadArgLock;
+static void *       threadArgArg;
+static lock_t *     threadArgLock;
 
+static queue_head_t gIOMallocContiguousEntries;
+static mutex_t *    gIOMallocContiguousEntriesLock;
 
 enum { kIOMaxPageableMaps = 16 };
 enum { kIOPageableMapSize = 16 * 1024 * 1024 };
-enum { kIOPageableMaxMapSize = 64 * 1024 * 1024 };
+enum { kIOPageableMaxMapSize = 96 * 1024 * 1024 };
 
 typedef struct {
     vm_map_t	map;
@@ -82,6 +88,7 @@ static struct {
     mutex_t *	lock;
 } gIOKitPageableSpace;
 
+/* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
 
 void IOLibInit(void)
 {
@@ -108,6 +115,9 @@ void IOLibInit(void)
     gIOKitPageableSpace.maps[0].end	= gIOKitPageableSpace.maps[0].address + kIOPageableMapSize;
     gIOKitPageableSpace.hint		= 0;
     gIOKitPageableSpace.count		= 1;
+
+    gIOMallocContiguousEntriesLock 	= mutex_alloc( 0 );
+    queue_init( &gIOMallocContiguousEntries );
 
     libInitialized = true;
 }
@@ -275,6 +285,14 @@ void IOFreeAligned(void * address, vm_size_t size)
 
 /* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
 
+struct _IOMallocContiguousEntry
+{
+    void *		virtual;
+    ppnum_t		ioBase;
+    queue_chain_t	link;
+};
+typedef struct _IOMallocContiguousEntry _IOMallocContiguousEntry;
+
 void * IOMallocContiguous(vm_size_t size, vm_size_t alignment,
 			   IOPhysicalAddress * physicalAddress)
 {
@@ -283,6 +301,7 @@ void * IOMallocContiguous(vm_size_t size, vm_size_t alignment,
     vm_address_t	allocationAddress;
     vm_size_t		adjustedSize;
     vm_offset_t		alignMask;
+    ppnum_t		pagenum;
 
     if (size == 0)
         return 0;
@@ -292,15 +311,24 @@ void * IOMallocContiguous(vm_size_t size, vm_size_t alignment,
     alignMask = alignment - 1;
     adjustedSize = (2 * size) + sizeof(vm_size_t) + sizeof(vm_address_t);
 
-    if (adjustedSize >= page_size) {
-
-        kr = kmem_alloc_contig(kernel_map, &address, size,
-				alignMask, 0);
+    if (adjustedSize >= page_size)
+    {
+	adjustedSize = size;
+	if (adjustedSize > page_size)
+	{
+	    kr = kmem_alloc_contig(kernel_map, &address, size,
+				    alignMask, 0);
+	}
+	else
+	{
+	    kr = kernel_memory_allocate(kernel_map, &address,
+					size, alignMask, 0);
+	}
 	if (KERN_SUCCESS != kr)
 	    address = 0;
-
-    } else {
-
+    }
+    else
+    {
 	adjustedSize += alignMask;
         allocationAddress = (vm_address_t) kalloc(adjustedSize);
 
@@ -310,8 +338,8 @@ void * IOMallocContiguous(vm_size_t size, vm_size_t alignment,
                     + (sizeof(vm_size_t) + sizeof(vm_address_t)))
                     & (~alignMask);
 
-            if (atop(address) != atop(address + size - 1))
-                address = round_page(address);
+            if (atop_32(address) != atop_32(address + size - 1))
+                address = round_page_32(address);
 
             *((vm_size_t *)(address - sizeof(vm_size_t)
                             - sizeof(vm_address_t))) = adjustedSize;
@@ -321,9 +349,49 @@ void * IOMallocContiguous(vm_size_t size, vm_size_t alignment,
 	    address = 0;
     }
 
-    if( address && physicalAddress)
-	*physicalAddress = (IOPhysicalAddress) pmap_extract( kernel_pmap,
-								 address );
+    /* Do we want a physical address? */
+    if (address && physicalAddress)
+    {
+	do
+	{
+	    /* Get the physical page */
+	    pagenum = pmap_find_phys(kernel_pmap, (addr64_t) address);
+	    if(pagenum)
+	    {
+		IOByteCount offset;
+		ppnum_t base;
+    
+		base = IOMapperIOVMAlloc((size + PAGE_MASK) >> PAGE_SHIFT);
+		if (base)
+		{
+		    _IOMallocContiguousEntry *
+		    entry = IONew(_IOMallocContiguousEntry, 1);
+		    if (!entry)
+		    {
+			IOFreeContiguous((void *) address, size);
+			address = 0;
+			break;
+		    }
+		    entry->virtual = (void *) address;
+		    entry->ioBase  = base;
+		    mutex_lock(gIOMallocContiguousEntriesLock);
+		    queue_enter( &gIOMallocContiguousEntries, entry, 
+				_IOMallocContiguousEntry *, link );
+		    mutex_unlock(gIOMallocContiguousEntriesLock);
+    
+		    *physicalAddress = (IOPhysicalAddress)((base << PAGE_SHIFT) | (address & PAGE_MASK));
+		    for (offset = 0; offset < ((size + PAGE_MASK) >> PAGE_SHIFT); offset++, pagenum++)
+			IOMapperInsertPage( base, offset, pagenum );
+		}
+		else
+		    *physicalAddress = (IOPhysicalAddress)((pagenum << PAGE_SHIFT) | (address & PAGE_MASK));
+	    } 
+	    else
+		/* Did not find, return 0 */
+		*physicalAddress = (IOPhysicalAddress) 0;
+	}
+	while (false);
+    }
 
     assert(0 == (address & alignMask));
 
@@ -337,13 +405,34 @@ void * IOMallocContiguous(vm_size_t size, vm_size_t alignment,
 
 void IOFreeContiguous(void * address, vm_size_t size)
 {
-    vm_address_t	allocationAddress;
-    vm_size_t		adjustedSize;
+    vm_address_t	       allocationAddress;
+    vm_size_t		       adjustedSize;
+    _IOMallocContiguousEntry * entry;
+    ppnum_t		       base = 0;
 
     if( !address)
 	return;
 
     assert(size);
+
+    mutex_lock(gIOMallocContiguousEntriesLock);
+    queue_iterate( &gIOMallocContiguousEntries, entry,
+		    _IOMallocContiguousEntry *, link )
+    {
+	if( entry->virtual == address ) {
+	    base = entry->ioBase;
+	    queue_remove( &gIOMallocContiguousEntries, entry,
+			    _IOMallocContiguousEntry *, link );
+	    break;
+	}
+    }
+    mutex_unlock(gIOMallocContiguousEntriesLock);
+
+    if (base)
+    {
+	IOMapperIOVMFree(base, (size + PAGE_MASK) >> PAGE_SHIFT);
+	IODelete(entry, _IOMallocContiguousEntry, 1);
+    }
 
     adjustedSize = (2 * size) + sizeof(vm_size_t) + sizeof(vm_address_t);
     if (adjustedSize >= page_size) {
@@ -469,7 +558,7 @@ void * IOMallocPageable(vm_size_t size, vm_size_t alignment)
 
 #if IOALLOCDEBUG
     if( ref.address)
-       debug_iomalloc_size += round_page(size);
+       debug_iomalloc_size += round_page_32(size);
 #endif
 
     return( (void *) ref.address );
@@ -502,7 +591,7 @@ void IOFreePageable(void * address, vm_size_t size)
         kmem_free( map, (vm_offset_t) address, size);
 
 #if IOALLOCDEBUG
-    debug_iomalloc_size -= round_page(size);
+    debug_iomalloc_size -= round_page_32(size);
 #endif
 }
 
@@ -510,30 +599,34 @@ void IOFreePageable(void * address, vm_size_t size)
 
 extern kern_return_t IOMapPages(vm_map_t map, vm_offset_t va, vm_offset_t pa,
 			vm_size_t length, unsigned int options);
+extern kern_return_t IOUnmapPages(vm_map_t map, vm_offset_t va, vm_size_t length);
 
 IOReturn IOSetProcessorCacheMode( task_t task, IOVirtualAddress address,
 				  IOByteCount length, IOOptionBits cacheMode )
 {
     IOReturn	ret = kIOReturnSuccess;
-    vm_offset_t	physAddr;
+    ppnum_t	pagenum;
 
     if( task != kernel_task)
 	return( kIOReturnUnsupported );
 
-    length = round_page(address + length) - trunc_page( address );
-    address = trunc_page( address );
+    length = round_page_32(address + length) - trunc_page_32( address );
+    address = trunc_page_32( address );
 
     // make map mode
     cacheMode = (cacheMode << kIOMapCacheShift) & kIOMapCacheMask;
 
     while( (kIOReturnSuccess == ret) && (length > 0) ) {
 
-	physAddr = pmap_extract( kernel_pmap, address );
-	if( physAddr)
-            ret = IOMapPages( get_task_map(task), address, physAddr, page_size, cacheMode );
-	else
+	// Get the physical page number
+	pagenum = pmap_find_phys(kernel_pmap, (addr64_t)address);
+	if( pagenum) {
+            ret = IOUnmapPages( get_task_map(task), address, page_size );
+	    ret = IOMapPages( get_task_map(task), address, pagenum << PAGE_SHIFT, page_size, cacheMode );
+	} else
 	    ret = kIOReturnVMError;
 
+	address += page_size;
 	length -= page_size;
     }
 
@@ -548,7 +641,7 @@ IOReturn IOFlushProcessorCache( task_t task, IOVirtualAddress address,
 	return( kIOReturnUnsupported );
 
 #if __ppc__
-    flush_dcache( (vm_offset_t) address, (unsigned) length, false );
+    flush_dcache64( (addr64_t) address, (unsigned) length, false );
 #endif
 
     return( kIOReturnSuccess );

@@ -165,17 +165,15 @@ struct stat {
 #define	S_ISVTX	 0001000		/* save swapped text even after use */
 #endif
 
-#define	S_ISDIR(m)	((m & 0170000) == 0040000)	/* directory */
-#define	S_ISCHR(m)	((m & 0170000) == 0020000)	/* char special */
-#define	S_ISBLK(m)	((m & 0170000) == 0060000)	/* block special */
-#define	S_ISREG(m)	((m & 0170000) == 0100000)	/* regular file */
-#define	S_ISFIFO(m)	((m & 0170000) == 0010000 || \
-			 (m & 0170000) == 0140000)	/* fifo or socket */
+#define	S_ISDIR(m)	(((m) & 0170000) == 0040000)	/* directory */
+#define	S_ISCHR(m)	(((m) & 0170000) == 0020000)	/* char special */
+#define	S_ISBLK(m)	(((m) & 0170000) == 0060000)	/* block special */
+#define	S_ISREG(m)	(((m) & 0170000) == 0100000)	/* regular file */
+#define	S_ISFIFO(m)	(((m) & 0170000) == 0010000)	/* fifo or socket */
 #ifndef _POSIX_SOURCE
-#define	S_ISLNK(m)	((m & 0170000) == 0120000)	/* symbolic link */
-#define	S_ISSOCK(m)	((m & 0170000) == 0010000 || \
-			 (m & 0170000) == 0140000)	/* fifo or socket */
-#define	S_ISWHT(m)	((m & 0170000) == 0160000)	/* whiteout */
+#define	S_ISLNK(m)	(((m) & 0170000) == 0120000)	/* symbolic link */
+#define	S_ISSOCK(m)	(((m) & 0170000) == 0140000)	/* socket */
+#define	S_ISWHT(m)	(((m) & 0170000) == 0160000)	/* whiteout */
 #endif
 
 #ifndef _POSIX_SOURCE

@@ -8,9 +8,6 @@ include $(MakeInc_cmd)
 include $(MakeInc_def)
 
 
-DATAFILES = \
-	asm.h machlimits.h 
-
 EXPORT_ONLY_FILES = 		\
 	asm.h 			\
 	cpu_capabilities.h	\
@@ -19,12 +16,10 @@ EXPORT_ONLY_FILES = 		\
 	hw_lock_types.h		\
 	io_map_entries.h	\
 	proc_reg.h		\
-	machine_routines.h		\
+	machine_routines.h	\
 	Diagnostics.h		\
 	savearea.h		\
 	mappings.h
-
-INSTALL_MD_LIST = ${DATAFILES}
 
 INSTALL_MD_DIR = ppc
 

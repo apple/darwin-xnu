@@ -69,7 +69,7 @@ indicates the reason.
 .Fn Setpgid
 will fail and the process group will not be altered if:
 .Bl -tag -width Er
-.It Bq Er EACCESS
+.It Bq Er EACCES
 The value of the
 .Fa pid
 argument matches the process ID of a child process of the calling process, 

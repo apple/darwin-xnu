@@ -1,4 +1,4 @@
-/*	$FreeBSD: src/sys/netinet6/esp_core.c,v 1.1.2.2 2001/07/03 11:01:49 ume Exp $	*/
+/*	$FreeBSD: src/sys/netinet6/esp_core.c,v 1.1.2.4 2002/03/26 10:12:29 ume Exp $	*/
 /*	$KAME: esp_core.c,v 1.50 2000/11/02 12:27:38 itojun Exp $	*/
 
 /*
@@ -76,6 +76,11 @@
 #include <crypto/cast128/cast128.h>
 
 #include <net/net_osdep.h>
+
+#include <sys/kdebug.h>
+#define DBG_LAYER_BEG		NETDBG_CODE(DBG_NETIPSEC, 1)
+#define DBG_LAYER_END		NETDBG_CODE(DBG_NETIPSEC, 3)
+#define DBG_FNC_ESPAUTH		NETDBG_CODE(DBG_NETIPSEC, (8 << 8))
 
 static int esp_null_mature __P((struct secasvar *));
 static int esp_null_decrypt __P((struct mbuf *, size_t,
@@ -219,6 +224,8 @@ esp_schedule(algo, sav)
 	sav->schedlen = (*algo->schedlen)(algo);
 	if (sav->schedlen < 0)
 		return EINVAL;
+
+//#### that malloc should be replaced by a saved buffer...
 	sav->sched = _MALLOC(sav->schedlen, M_SECA, M_DONTWAIT);
 	if (!sav->sched) {
 		sav->schedlen = 0;
@@ -229,6 +236,7 @@ esp_schedule(algo, sav)
 	if (error) {
 		ipseclog((LOG_ERR, "esp_schedule %s: error %d\n",
 		    algo->name, error));
+		bzero(sav->sched, sav->schedlen);
 		FREE(sav->sched, M_SECA);
 		sav->sched = NULL;
 		sav->schedlen = 0;
@@ -470,13 +478,13 @@ esp_blowfish_blockdecrypt(algo, sav, s, d)
 	u_int8_t *s;
 	u_int8_t *d;
 {
-	/* HOLY COW!  BF_encrypt() takes values in host byteorder */
+	/* HOLY COW!  BF_decrypt() takes values in host byteorder */
 	BF_LONG t[2];
 
 	bcopy(s, t, sizeof(t));
 	t[0] = ntohl(t[0]);
 	t[1] = ntohl(t[1]);
-	BF_encrypt(t, (BF_KEY *)sav->sched, BF_DECRYPT);
+	BF_decrypt(t, (BF_KEY *)sav->sched);
 	t[0] = htonl(t[0]);
 	t[1] = htonl(t[1]);
 	bcopy(t, d, sizeof(t));
@@ -496,7 +504,7 @@ esp_blowfish_blockencrypt(algo, sav, s, d)
 	bcopy(s, t, sizeof(t));
 	t[0] = ntohl(t[0]);
 	t[1] = ntohl(t[1]);
-	BF_encrypt(t, (BF_KEY *)sav->sched, BF_ENCRYPT);
+	BF_encrypt(t, (BF_KEY *)sav->sched);
 	t[0] = htonl(t[0]);
 	t[1] = htonl(t[1]);
 	bcopy(t, d, sizeof(t));
@@ -592,9 +600,8 @@ esp_3des_blockdecrypt(algo, sav, s, d)
 	/* assumption: d has a good alignment */
 	p = (des_key_schedule *)sav->sched;
 	bcopy(s, d, sizeof(DES_LONG) * 2);
-	des_ecb_encrypt((des_cblock *)d, (des_cblock *)d, p[2], DES_DECRYPT);
-	des_ecb_encrypt((des_cblock *)d, (des_cblock *)d, p[1], DES_ENCRYPT);
-	des_ecb_encrypt((des_cblock *)d, (des_cblock *)d, p[0], DES_DECRYPT);
+	des_ecb3_encrypt((des_cblock *)d, (des_cblock *)d, 
+			 p[0], p[1], p[2], DES_DECRYPT);
 	return 0;
 }
 
@@ -610,9 +617,8 @@ esp_3des_blockencrypt(algo, sav, s, d)
 	/* assumption: d has a good alignment */
 	p = (des_key_schedule *)sav->sched;
 	bcopy(s, d, sizeof(DES_LONG) * 2);
-	des_ecb_encrypt((des_cblock *)d, (des_cblock *)d, p[0], DES_ENCRYPT);
-	des_ecb_encrypt((des_cblock *)d, (des_cblock *)d, p[1], DES_DECRYPT);
-	des_ecb_encrypt((des_cblock *)d, (des_cblock *)d, p[2], DES_ENCRYPT);
+	des_ecb3_encrypt((des_cblock *)d, (des_cblock *)d, 
+			 p[0], p[1], p[2], DES_ENCRYPT);
 	return 0;
 }
 
@@ -637,8 +643,8 @@ esp_cbc_decrypt(m, off, sav, algo, ivlen)
 {
 	struct mbuf *s;
 	struct mbuf *d, *d0, *dp;
-	int soff, doff;	/*offset from the head of chain, to head of this mbuf */
-	int sn, dn;	/*offset from the head of the mbuf, to meat */
+	int soff, doff;	/* offset from the head of chain, to head of this mbuf */
+	int sn, dn;	/* offset from the head of the mbuf, to meat */
 	size_t ivoff, bodyoff;
 	u_int8_t iv[MAXIVLEN], *ivp;
 	u_int8_t sbuf[MAXIVLEN], *sp;
@@ -841,8 +847,8 @@ esp_cbc_encrypt(m, off, plen, sav, algo, ivlen)
 {
 	struct mbuf *s;
 	struct mbuf *d, *d0, *dp;
-	int soff, doff;	/*offset from the head of chain, to head of this mbuf */
-	int sn, dn;	/*offset from the head of the mbuf, to meat */
+	int soff, doff;	/* offset from the head of chain, to head of this mbuf */
+	int sn, dn;	/* offset from the head of the mbuf, to meat */
 	size_t ivoff, bodyoff;
 	u_int8_t iv[MAXIVLEN], *ivp;
 	u_int8_t sbuf[MAXIVLEN], *sp;
@@ -1067,16 +1073,20 @@ esp_auth(m0, skip, length, sav, sum)
 		    "esp_auth: mbuf length < skip + length\n"));
 		return EINVAL;
 	}
+
+	KERNEL_DEBUG(DBG_FNC_ESPAUTH | DBG_FUNC_START, skip,length,0,0,0);
 	/*
 	 * length of esp part (excluding authentication data) must be 4n,
 	 * since nexthdr must be at offset 4n+3.
 	 */
 	if (length % 4) {
 		ipseclog((LOG_ERR, "esp_auth: length is not multiple of 4\n"));
+		KERNEL_DEBUG(DBG_FNC_ESPAUTH | DBG_FUNC_END, 1,0,0,0,0);
 		return EINVAL;
 	}
 	if (!sav) {
 		ipseclog((LOG_DEBUG, "esp_auth: NULL SA passed\n"));
+		KERNEL_DEBUG(DBG_FNC_ESPAUTH | DBG_FUNC_END, 2,0,0,0,0);
 		return EINVAL;
 	}
 	algo = ah_algorithm_lookup(sav->alg_auth);
@@ -1084,6 +1094,7 @@ esp_auth(m0, skip, length, sav, sum)
 		ipseclog((LOG_ERR,
 		    "esp_auth: bad ESP auth algorithm passed: %d\n",
 		    sav->alg_auth));
+		KERNEL_DEBUG(DBG_FNC_ESPAUTH | DBG_FUNC_END, 3,0,0,0,0);
 		return EINVAL;
 	}
 
@@ -1095,6 +1106,7 @@ esp_auth(m0, skip, length, sav, sum)
 		ipseclog((LOG_DEBUG,
 		    "esp_auth: AH_MAXSUMSIZE is too small: siz=%lu\n",
 		    (u_long)siz));
+		KERNEL_DEBUG(DBG_FNC_ESPAUTH | DBG_FUNC_END, 4,0,0,0,0);
 		return EINVAL;
 	}
 
@@ -1113,8 +1125,10 @@ esp_auth(m0, skip, length, sav, sum)
 	}
 
 	error = (*algo->init)(&s, sav);
-	if (error)
+	if (error) {
+		KERNEL_DEBUG(DBG_FNC_ESPAUTH | DBG_FUNC_END, 5,0,0,0,0);
 		return error;
+	}
 
 	while (0 < length) {
 		if (!m)
@@ -1134,5 +1148,6 @@ esp_auth(m0, skip, length, sav, sum)
 	(*algo->result)(&s, sumbuf);
 	bcopy(sumbuf, sum, siz);	/*XXX*/
 	
+	KERNEL_DEBUG(DBG_FNC_ESPAUTH | DBG_FUNC_END, 6,0,0,0,0);
 	return 0;
 }

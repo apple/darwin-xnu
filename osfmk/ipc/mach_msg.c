@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2003 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -122,6 +122,7 @@ mach_msg_return_t msg_receive_error(
 	ipc_space_t		space);
 
 security_token_t KERNEL_SECURITY_TOKEN = KERNEL_SECURITY_TOKEN_VALUE;
+audit_token_t KERNEL_AUDIT_TOKEN = KERNEL_AUDIT_TOKEN_VALUE;
 
 mach_msg_format_0_trailer_t trailer_template = {
 	/* mach_msg_trailer_type_t */ MACH_MSG_TRAILER_FORMAT_0,
@@ -1048,21 +1049,23 @@ mach_msg_overwrite_trap(
 
 		assert(ip_active(dest_port));
 		assert(dest_port->ip_receiver != ipc_space_kernel);
-		assert(!imq_full(&dest_port->ip_messages) ||
-		       (MACH_MSGH_BITS_REMOTE(hdr->msgh_bits) ==
-						MACH_MSG_TYPE_PORT_SEND_ONCE));
+//		assert(!imq_full(&dest_port->ip_messages) ||
+//		       (MACH_MSGH_BITS_REMOTE(hdr->msgh_bits) ==
+//						MACH_MSG_TYPE_PORT_SEND_ONCE));
 		assert((hdr->msgh_bits & MACH_MSGH_BITS_CIRCULAR) == 0);
 
 	    {
 		  register ipc_mqueue_t dest_mqueue;
 		  wait_queue_t waitq;
 		  thread_t receiver;
-#if	THREAD_SWAPPER
-		  thread_act_t rcv_act;
-#endif
+		  processor_t processor;
 		  spl_t s;
 
 		  s = splsched();
+		  processor = current_processor();
+		  if (processor->current_pri >= BASEPRI_RTQUEUES)
+			  goto abort_send_receive1;
+
 		  dest_mqueue = &dest_port->ip_messages;
 		  waitq = &dest_mqueue->imq_wait_queue;
 		  imq_lock(dest_mqueue);
@@ -1070,9 +1073,10 @@ mach_msg_overwrite_trap(
 		  wait_queue_peek64_locked(waitq, IPC_MQUEUE_RECEIVE, &receiver, &waitq);
 		  /* queue still locked, thread locked - but still on q */
 
-		  if (receiver == THREAD_NULL) {
+		  if (	receiver == THREAD_NULL ) {
 		  abort_send_receive:
 			imq_unlock(dest_mqueue);
+		  abort_send_receive1:
 			splx(s);
 			ip_unlock(dest_port);
 			ipc_object_release(rcv_object);
@@ -1084,18 +1088,21 @@ mach_msg_overwrite_trap(
 		  assert(receiver->wait_event == IPC_MQUEUE_RECEIVE);
 		
 		  /*
-		   * See if it is still running on another processor (trying to
-		   * block itself).  If so, fall off.
+		   * Make sure that the scheduling state of the receiver is such
+		   * that we can handoff to it here.  If not, fall off.
 		   *
-		   * JMM - We have an opportunity here.  Since the thread is locked
-		   * and we find it runnable, it must still be trying to get into
+		   * JMM - We have an opportunity here.  If the thread is locked
+		   * and we find it runnable, it may still be trying to get into
 		   * thread_block on itself.  We could just "hand him the message"
 		   * and let him go (thread_go_locked()) and then fall down into a
 		   * slow receive for ourselves.  Only his RECEIVE_TOO_LARGE handling
 		   * runs afoul of that.  Clean this up!
 		   */
-		  if ((receiver->state & (TH_RUN|TH_WAIT)) != TH_WAIT) {
-			assert(NCPUS > 1);
+		  if ((receiver->state & (TH_RUN|TH_WAIT)) != TH_WAIT ||
+				receiver->sched_pri >= BASEPRI_RTQUEUES ||
+			  	receiver->processor_set != processor->processor_set ||
+				(receiver->bound_processor != PROCESSOR_NULL &&
+				 receiver->bound_processor != processor)) {
 			HOT(c_mmot_cold_033++);
 		fall_off:
 			thread_unlock(receiver);
@@ -1115,52 +1122,6 @@ mach_msg_overwrite_trap(
 			HOT(c_mmot_bad_rcvr++);
 			goto fall_off;
 		  }
-
-#if	THREAD_SWAPPER
-		  /*
-		   * Receiver looks okay -- is it swapped in?
-		   */
-		  rcv_act = receiver->top_act;
-		  if (rcv_act->swap_state != TH_SW_IN &&
-			  rcv_act->swap_state != TH_SW_UNSWAPPABLE) {
-			HOT(c_mmot_rcvr_swapped++);
-			goto fall_off;
-		  }
-
-		  /*
-		   * Make sure receiver stays swapped in (if we can).
-		   */
-		  if (!act_lock_try(rcv_act)) {	/* out of order! */
-			HOT(c_mmot_rcvr_locked++);
-			goto fall_off;
-		  }
-		
-		  /*
-		   * Check for task swapping in progress affecting
-		   * receiver.  Since rcv_act is attached to a shuttle,
-		   * its swap_state is covered by shuttle's thread_lock()
-		   * (sigh).
-		   */
-		  if ((rcv_act->swap_state != TH_SW_IN &&
-			rcv_act->swap_state != TH_SW_UNSWAPPABLE) ||
-		 	rcv_act->ast & AST_SWAPOUT) {
-			act_unlock(rcv_act);
-			HOT(c_mmot_rcvr_tswapped++);
-			goto fall_off;
-		  }
-
-		  /*
-		   * We don't need to make receiver unswappable here -- holding
-		   * act_lock() of rcv_act is sufficient to prevent either thread
-		   * or task swapping from changing its state (see swapout_scan(),
-		   * task_swapout()).  Don't release lock till receiver's state
-		   * is consistent.  Its task may then be marked for swapout,
-		   * but that's life.
-		   */
-		  /*
-		   * NB:  act_lock(rcv_act) still held
-		   */
-#endif	/* THREAD_SWAPPER */
 
 		  /*
 		   * Before committing to the handoff, make sure that we are
@@ -1203,25 +1164,21 @@ mach_msg_overwrite_trap(
 		  receiver->ith_seqno = dest_mqueue->imq_seqno++;
 
 		  /*
-		   * Inline thread_go_locked
-		   *
-		   * JMM - Including hacked in version of setrun scheduler op
-		   * that doesn't try to put thread on a runq.
+		   * Update the scheduling state for the handoff.
 		   */
-		  {
-			  receiver->state &= ~(TH_WAIT|TH_UNINT);
-			  hw_atomic_add(&receiver->processor_set->run_count, 1);
-			  receiver->state |= TH_RUN;
-			  receiver->wait_result = THREAD_AWAKENED;
+		  receiver->state &= ~(TH_WAIT|TH_UNINT);
+		  receiver->state |= TH_RUN;
 
-			  receiver->computation_metered = 0;
-			  receiver->reason = AST_NONE;
-		  }
-		  
+		  pset_run_incr(receiver->processor_set);
+		  if (receiver->sched_mode & TH_MODE_TIMESHARE)
+			  pset_share_incr(receiver->processor_set);
+
+		  receiver->wait_result = THREAD_AWAKENED;
+
+		  receiver->computation_metered = 0;
+		  receiver->reason = AST_NONE;
+
 		  thread_unlock(receiver);
-#if	THREAD_SWAPPER
-		  act_unlock(rcv_act);
-#endif	/* THREAD_SWAPPER */
 
 		  imq_unlock(dest_mqueue);
 		  ip_unlock(dest_port);
@@ -1234,6 +1191,7 @@ mach_msg_overwrite_trap(
 		   *	our reply message needs to determine if it
 		   *	can hand off directly back to us.
 		   */
+		  thread_lock(self);
 		  self->ith_msg = (rcv_msg) ? rcv_msg : msg;
 		  self->ith_object = rcv_object; /* still holds reference */
 		  self->ith_msize = rcv_size;
@@ -1245,8 +1203,9 @@ mach_msg_overwrite_trap(
 		  (void)wait_queue_assert_wait64_locked(waitq,
 										IPC_MQUEUE_RECEIVE,
 										THREAD_ABORTSAFE,
-										TRUE); /* unlock? */
-		  /* rcv_mqueue is unlocked */
+										self);
+		  thread_unlock(self);
+		  imq_unlock(rcv_mqueue);
 
 		  /*
 		   * Switch directly to receiving thread, and block

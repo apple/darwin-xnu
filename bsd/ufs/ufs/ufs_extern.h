@@ -89,7 +89,6 @@ char	*readdisklabel __P((dev_t, int (*)(), struct disklabel *));
 int	 setdisklabel __P((struct disklabel *, struct disklabel *, u_long));
 int	 writedisklabel __P((dev_t, int (*)(), struct disklabel *));
 
-int	 ufs_abortop __P((struct vop_abortop_args *));
 int	 ufs_access __P((struct vop_access_args *));
 int	 ufs_advlock __P((struct vop_advlock_args *));
 int	 ufs_bmap __P((struct vop_bmap_args *));
@@ -106,6 +105,7 @@ int	 ufs_dirremove __P((struct vnode *, struct componentname*));
 int	 ufs_dirrewrite
 	    __P((struct inode *, struct inode *, struct componentname *));
 int	 ufs_getattr __P((struct vop_getattr_args *));
+int	 ufs_getattrlist __P((struct vop_getattrlist_args *));
 int	 ufs_getlbns __P((struct vnode *, ufs_daddr_t, struct indir *, int *));
 struct vnode *
 	 ufs_ihashget __P((dev_t, ino_t));
@@ -144,7 +144,9 @@ int	 ufs_rmdir __P((struct vop_rmdir_args *));
 int	 ufs_root __P((struct mount *, struct vnode **));
 int	 ufs_seek __P((struct vop_seek_args *));
 int	 ufs_select __P((struct vop_select_args *));
+int	 ufs_kqfilt_add __P((struct vop_kqfilt_add_args *));
 int	 ufs_setattr __P((struct vop_setattr_args *));
+int	 ufs_setattrlist __P((struct vop_setattrlist_args *));
 int	 ufs_start __P((struct mount *, int, struct proc *));
 int	 ufs_strategy __P((struct vop_strategy_args *));
 int	 ufs_symlink __P((struct vop_symlink_args *));
@@ -160,6 +162,7 @@ int	 ufsspec_write __P((struct vop_write_args *));
 int	ufsfifo_read __P((struct vop_read_args *));
 int	ufsfifo_write __P((struct vop_write_args *));
 int	ufsfifo_close __P((struct vop_close_args *));
+int ufsfifo_kqfilt_add __P((struct vop_kqfilt_add_args *));
 #endif
 int	 ufs_blktooff __P((struct vop_blktooff_args *));
 int	 ufs_cmap __P((struct vop_cmap_args *));

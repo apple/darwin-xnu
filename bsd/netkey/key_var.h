@@ -46,7 +46,9 @@
 #define KEYCTL_ESP_KEYMIN		9
 #define KEYCTL_ESP_AUTH			10
 #define KEYCTL_AH_KEYMIN		11
-#define KEYCTL_MAXID			12
+#define KEYCTL_PREFERED_OLDSA		12
+#define KEYCTL_NATT_KEEPALIVE_INTERVAL 13
+#define KEYCTL_MAXID			14
 
 #define KEYCTL_NAMES { \
 	{ 0, 0 }, \
@@ -58,9 +60,13 @@
 	{ "larval_lifetime", CTLTYPE_INT }, \
 	{ "blockacq_count", CTLTYPE_INT }, \
 	{ "blockacq_lifetime", CTLTYPE_INT }, \
+	{ "esp_keymin", CTLTYPE_INT }, \
+	{ "esp_auth", CTLTYPE_INT }, \
+	{ "ah_keymin", CTLTYPE_INT }, \
+	{ "prefered_oldsa", CTLTYPE_INT }, \
+	{ "natt_keepalive_interval", CTLTYPE_INT }, \
 }
 
-//#if IPSEC_DEBUG
 #define KEYCTL_VARS { \
 	0, \
 	&key_debug_level, \
@@ -73,22 +79,9 @@
 	&key_blockacq_lifetime, \
 	&ipsec_esp_keymin, \
 	&ipsec_ah_keymin, \
+	&ipsec_prefered_oldsa, \
+	&natt_keepalive_interval, \
 }
-//#else
-//#define KEYCTL_VARS { \
-//	0, \
-//	0, \
-//	&key_spi_trycnt, \
-//	&key_spi_minval, \
-//	&key_spi_maxval, \
-//	&key_int_random, \
-//	&key_larval_lifetime, \
-//	&key_blockacq_count, \
-//	&key_blockacq_lifetime, \
-//	&ipsec_esp_keymin, \
-//	&ipsec_ah_keymin, \
-//}
-//#endif
 
 #ifdef KERNEL
 #define _ARRAYLEN(p) (sizeof(p)/sizeof(p[0]))

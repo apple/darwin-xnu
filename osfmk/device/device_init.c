@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2003 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -75,8 +75,8 @@ device_service_create(void)
 	    panic("can't allocate master device port");
 
 	ipc_kobject_set(master_device_port, 1, IKOT_MASTER_DEVICE);
-	host_set_io_master(host_priv_self(),
-			   ipc_port_make_send(master_device_port));
+	kernel_set_special_port(host_priv_self(), HOST_IO_MASTER_PORT,
+				ipc_port_make_send(master_device_port));
 
 #if 0
 	ds_init();

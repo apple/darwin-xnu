@@ -72,7 +72,7 @@
 
 #endif	/* NCPUS > 1 */
 
-#include <i386/AT386/mp/mp.h>
+#include <i386/mp.h>
 
 /*
  * GAS won't handle an intersegment jump with a relocatable offset.
@@ -197,6 +197,7 @@ EXT(mp_boot_pde):
 	.globl	EXT(_start)
 LEXT(_start)
 LEXT(pstart)
+	mov     %eax, %ebx		/* save pointer to kernbootstruct */
 	mov	$0,%ax			/* fs must be zeroed; */
 	mov	%ax,%fs			/* some bootstrappers don`t do this */
 	mov	%ax,%gs
@@ -377,7 +378,7 @@ LEXT(vstart)
 	mov	%ax,%gs
 
 	lea	EXT(eintstack),%esp	/* switch to the bootup stack */
-	call	EXT(machine_startup)	/* run C code */
+	call	EXT(i386_init)		/* run C code */
 	/*NOTREACHED*/
 	hlt
 
@@ -482,9 +483,9 @@ LEXT(svstart)
 	movl	%edx,2(%esp)		/* point to local IDT (linear address) */
 	lidt	0(%esp)			/* load new IDT */
 	
-	movw	$(KERNEL_LDT),%ax
-	lldt	%ax			/* load new LDT */
-	
+	movw	$(KERNEL_LDT),%ax	/* get LDT segment */
+	lldt	%ax			/* load LDT */
+
 	movw	$(KERNEL_TSS),%ax
 	ltr	%ax			/* load new KTSS */
 

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2001 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2003 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -75,7 +75,7 @@
 #include <sys/buf.h>
 #include <sys/file.h>
 #include <sys/ioctl.h>
-#include <dev/disk.h>
+#include <sys/disk.h>
 #include <sys/errno.h>
 #include <sys/malloc.h>
 #include <sys/stat.h>
@@ -87,6 +87,38 @@
 #include <isofs/cd9660/iso_rrip.h>
 #include <isofs/cd9660/cd9660_node.h>
 #include <isofs/cd9660/cd9660_mount.h>
+
+/*
+ * Minutes, Seconds, Frames (M:S:F)
+ */
+struct CDMSF {
+	u_char   minute;
+	u_char   second;
+	u_char   frame;
+};
+
+/*
+ * Table Of Contents
+ */
+struct CDTOC_Desc {
+	u_char        session;
+	u_char        ctrl_adr;  /* typed to be machine and compiler independent */
+	u_char        tno;
+	u_char        point;
+	struct CDMSF  address;
+	u_char        zero;
+	struct CDMSF  p;
+};
+
+struct CDTOC {
+	u_short            length;  /* in native cpu endian */
+	u_char             first_session;
+	u_char             last_session;
+	struct CDTOC_Desc  trackdesc[1];
+};
+
+#define MSF_TO_LBA(msf)		\
+	(((((msf).minute * 60UL) + (msf).second) * 75UL) + (msf).frame - 150)
 
 u_char isonullname[] = "\0";
 
@@ -162,8 +194,14 @@ cd9660_mountroot()
 	LIST_INIT(&mp->mnt_vnodelist);
 	args.flags = ISOFSMNT_ROOT;
 	args.ssector = 0;
+	args.fspec = 0;
+	args.toc_length = 0;
+	args.toc = 0;
 	if ((error = iso_mountfs(rootvp, mp, p, &args))) {
 		vrele(rootvp); /* release the reference from bdevvp() */
+
+		if (mp->mnt_kern_flag & MNTK_IO_XINFO)
+		        FREE(mp->mnt_xinfo_ptr, M_TEMP);
 		FREE_ZONE(mp, sizeof (struct mount), M_MOUNT);
 		return (error);
 	}
@@ -246,8 +284,8 @@ cd9660_mount(mp, path, data, ndp, p)
 		return (error);
 	}
 
-	/* Set the mount flag to indicate that we support volfs  */
-	mp->mnt_flag |= MNT_DOVOLFS;
+	/* Indicate that we don't support volfs */
+	mp->mnt_flag &= ~MNT_DOVOLFS;
 
 	(void) copyinstr(path, mp->mnt_stat.f_mntonname, MNAMELEN - 1, &size);
 	bzero(mp->mnt_stat.f_mntonname + size, MNAMELEN - size);
@@ -255,6 +293,119 @@ cd9660_mount(mp, path, data, ndp, p)
 		&size);
 	bzero(mp->mnt_stat.f_mntfromname + size, MNAMELEN - size);
 	return (0);
+}
+
+/*
+ * Find the BSD device for the physical disk corresponding to the
+ * mount point's device.  We use this physical device to read whole
+ * (2352 byte) sectors from the CD to get the content for the video
+ * files (tracks).
+ *
+ * The "path" argument is the path to the block device that the volume
+ * is being mounted on (args.fspec).  It should be of the form:
+ *	/dev/disk1s0
+ * where the last "s0" part is stripped off to determine the physical
+ * device's path.  It is assumed to be in user memory.
+ */
+static struct vnode *
+cd9660_phys_device(char *path, struct proc *p)
+{
+	int err;
+	char *whole_path = NULL;	// path to "whole" device
+	char *s, *saved;
+	struct nameidata nd;
+	struct vnode *result;
+	size_t actual_size;
+	
+	if (path == NULL)
+		return NULL;
+
+	result = NULL;
+
+	/* Make a copy of the mount from name, then remove trailing "s...". */
+	MALLOC(whole_path, char *, MNAMELEN, M_ISOFSMNT, M_WAITOK);
+	copyinstr(path, whole_path, MNAMELEN-1, &actual_size);
+	
+	/*
+	 * I would use strrchr or rindex here, but those are declared __private_extern__,
+	 * and can't be used across component boundaries at this time.
+	 */
+	for (s=whole_path, saved=NULL; *s; ++s)
+		if (*s == 's')
+			saved = s;
+	*saved = '\0';
+
+	/* Lookup the "whole" device. */
+	NDINIT(&nd, LOOKUP, FOLLOW, UIO_SYSSPACE, whole_path, p);
+	err = namei(&nd);
+	if (err) {
+		printf("isofs: Cannot find physical device: %s\n", whole_path);
+		goto done;
+	}
+	
+	/* Open the "whole" device. */
+	err = VOP_OPEN(nd.ni_vp, FREAD, FSCRED, p);
+	if (err) {
+		vrele(nd.ni_vp);
+		printf("isofs: Cannot open physical device: %s\n", whole_path);
+		goto done;
+	}
+
+	result = nd.ni_vp;
+
+done:
+	FREE(whole_path, M_ISOFSMNT);
+	return result;
+}
+
+
+/*
+ * See if the given CD-ROM XA disc appears to be a Video CD
+ * (version < 2.0; so, not SVCD).  If so, fill in the extent
+ * information for the MPEGAV directory, set the VCD flag,
+ * and return true.
+ */
+static int
+cd9660_find_video_dir(struct iso_mnt *isomp)
+{
+	int result, err;
+	struct vnode *rootvp = NULL;
+	struct vnode *videovp = NULL;
+	struct componentname cn;
+	char dirname[] = "MPEGAV";
+	
+	result = 0;		/* Assume not a video CD */
+	
+	err = cd9660_root(isomp->im_mountp, &rootvp);
+	if (err) {
+		printf("cd9660_find_video_dir: cd9660_root failed (%d)\n", err);
+		return 0;	/* couldn't find video dir */
+	}
+	
+	cn.cn_nameiop = LOOKUP;
+	cn.cn_flags = LOCKPARENT|ISLASTCN;
+	cn.cn_proc = current_proc();
+	cn.cn_cred = cn.cn_proc->p_ucred;
+	cn.cn_pnbuf = dirname;
+	cn.cn_pnlen = sizeof(dirname)-1;
+	cn.cn_nameptr = cn.cn_pnbuf;
+	cn.cn_namelen = cn.cn_pnlen;
+	
+	err = VOP_LOOKUP(rootvp, &videovp, &cn);
+	if (err == 0) {
+		struct iso_node *ip = VTOI(videovp);
+		result = 1;		/* Looks like video CD */
+		isomp->video_dir_start = ip->iso_start;
+		isomp->video_dir_end = ip->iso_start + (ip->i_size >> isomp->im_bshift);
+		isomp->im_flags2 |= IMF2_IS_VCD;
+	}
+
+	if (videovp != NULL)
+		vput(videovp);
+	if (rootvp != NULL)
+		vput(rootvp);
+	
+	return result;
 }
 
 /*
@@ -336,6 +487,16 @@ iso_mountfs(devvp, mp, p, argp)
 		        printf("cd9660_vfsops.c: iso_mountfs: "
 					"Invalid ID in volume desciptor.\n");
 #endif
+			/* There should be a primary volume descriptor followed by any
+			 * secondary volume descriptors, then an end volume descriptor.
+			 * Some discs are mastered without an end volume descriptor or
+			 * they have the type field set and the volume descriptor ID is
+			 * not set. If we at least found a primary volume descriptor,
+			 * mount the disc.
+			 */
+			if (pri != NULL)
+				break;
+			
 			error = EINVAL;
 			goto out;
 		}
@@ -405,6 +566,7 @@ iso_mountfs(devvp, mp, p, argp)
 	
 	MALLOC(isomp, struct iso_mnt *, sizeof *isomp, M_ISOFSMNT, M_WAITOK);
 	bzero((caddr_t)isomp, sizeof *isomp);
+	isomp->im_sector_size = ISO_DEFAULT_BLOCK_SIZE;
 	isomp->logical_block_size = logical_block_size;
 	isomp->volume_space_size = isonum_733 (pri->volume_space_size);
 	/*
@@ -444,8 +606,9 @@ iso_mountfs(devvp, mp, p, argp)
 
 	/* See if this is a CD-XA volume */
 	if (bcmp( pri->CDXASignature, ISO_XA_ID,
-			sizeof(pri->CDXASignature) ) == 0 ) 
+			sizeof(pri->CDXASignature) ) == 0 ) {
 		isomp->im_flags2 |= IMF2_IS_CDXA;
+	}
 
 	isomp->im_bmask = logical_block_size - 1;
 	isomp->im_bshift = 0;
@@ -467,6 +630,20 @@ iso_mountfs(devvp, mp, p, argp)
 	isomp->im_devvp = devvp;	
 
 	devvp->v_specflags |= SI_MOUNTEDON;
+
+	/*
+	 * If the logical block size is not 2K then we must
+	 * set the block device's physical block size to this
+	 * disc's logical block size.
+	 *
+	 */
+	if (logical_block_size != iso_bsize) {
+		iso_bsize = logical_block_size;
+		if ((error = VOP_IOCTL(devvp, DKIOCSETBLOCKSIZE,
+		     (caddr_t)&iso_bsize, FWRITE, p->p_ucred, p)))
+			goto out;
+		devvp->v_specsize = iso_bsize;
+	}
 	
 	/* Check the Rock Ridge Extention support */
 	if (!(argp->flags & ISOFSMNT_NORRIP)) {
@@ -523,13 +700,13 @@ skipRRIP:
 		/*
 		 * On Joliet CDs use the UCS-2 volume identifier.
 		 *
-		 * This name can have up to 15 UCS-2 chars and is
-		 * terminated with 0x0000 or padded with 0x0020.
+		 * This name can have up to 16 UCS-2 chars.
 		 */
 		convflags = UTF_DECOMPOSED;
 		if (BYTE_ORDER != BIG_ENDIAN)
 			convflags |= UTF_REVERSE_ENDIAN;
-		for (i = 0, uchp = (u_int16_t *)sup->volume_id; i < 15 && uchp[i]; ++i);
+		uchp = (u_int16_t *)sup->volume_id;
+		for (i = 0; i < 16 && uchp[i]; ++i);
 		if ((utf8_encodestr((u_int16_t *)sup->volume_id, (i * 2), vol_id,
 			&convbytes, sizeof(vol_id), 0, convflags) == 0)
 			&& convbytes && (vol_id[0] != ' ')) {
@@ -539,7 +716,7 @@ skipRRIP:
 			strp = vol_id + convbytes - 1;
 			while (strp > vol_id && *strp == ' ')
 				*strp-- = '\0';
-			bcopy(vol_id, isomp->volume_id, convbytes);
+			bcopy(vol_id, isomp->volume_id, convbytes + 1);
 		}
 
 		rootp = (struct iso_directory_record *)
@@ -556,6 +733,19 @@ skipRRIP:
 		supbp = NULL;
 	}
 
+	/* If there was a TOC in the arguments, copy it in. */
+	if (argp->flags & ISOFSMNT_TOC) {
+		MALLOC(isomp->toc, struct CDTOC *, argp->toc_length, M_ISOFSMNT, M_WAITOK);
+		if ((error = copyin(argp->toc, isomp->toc, argp->toc_length)))
+			goto out;
+	}
+
+	/* See if this could be a Video CD */
+	if ((isomp->im_flags2 & IMF2_IS_CDXA) && cd9660_find_video_dir(isomp)) {
+		/* Get the 2352-bytes-per-block device. */
+		isomp->phys_devvp = cd9660_phys_device(argp->fspec, p);
+	}
+
 	return (0);
 out:
 	if (bp)
@@ -567,6 +757,8 @@ out:
 	if (needclose)
 		(void)VOP_CLOSE(devvp, FREAD, NOCRED, p);
 	if (isomp) {
+		if (isomp->toc)
+			FREE((caddr_t)isomp->toc, M_ISOFSMNT);
 		FREE((caddr_t)isomp, M_ISOFSMNT);
 		mp->mnt_data = (qaddr_t)0;
 	}
@@ -630,6 +822,17 @@ cd9660_unmount(mp, mntflags, p)
 		return(error);
 
 	vrele(isomp->im_devvp);
+	
+	if (isomp->phys_devvp) {
+		error = VOP_CLOSE(isomp->phys_devvp, FREAD, FSCRED, p);
+		if (error && !force)
+			return error;
+		vrele(isomp->phys_devvp);
+	}
+
+	if (isomp->toc)
+		FREE((caddr_t)isomp->toc, M_ISOFSMNT);
+
 	FREE((caddr_t)isomp, M_ISOFSMNT);
 	mp->mnt_data = (qaddr_t)0;
 	mp->mnt_flag &= ~MNT_LOCAL;
@@ -767,7 +970,7 @@ cd9660_fhtovp(mp, fhp, nam, vpp, exflagsp, credanonp)
 	 * Get the export permission structure for this <mp, client> tuple.
 	 */
 	np = vfs_export_lookup(mp, &imp->im_export, nam);
-	if (np == NULL)
+	if (nam && (np == NULL))
 		return (EACCES);
 
 	if ( (error = VFS_VGET(mp, &ifhp->ifid_ino, &nvp)) ) {
@@ -781,9 +984,97 @@ cd9660_fhtovp(mp, fhp, nam, vpp, exflagsp, credanonp)
 		return (ESTALE);
 	}
 	*vpp = nvp;
-	*exflagsp = np->netc_exflags;
-	*credanonp = &np->netc_anon;
+	if (np) {
+		*exflagsp = np->netc_exflags;
+		*credanonp = &np->netc_anon;
+	}
 	return (0);
+}
+
+/*
+ * Scan the TOC for the track which contains the given sector.
+ *
+ * If there is no matching track, or no TOC, then return -1.
+ */
+static int
+cd9660_track_for_sector(struct CDTOC *toc, u_int sector)
+{
+	int i, tracks, result;
+	
+	if (toc == NULL)
+		return -1;
+
+	tracks = toc->length / sizeof(struct CDTOC_Desc);
+	
+	result = -1;		/* Sentinel in case we don't find the right track. */
+	for (i=0; i<tracks; ++i) {
+		if (toc->trackdesc[i].point < 100 && MSF_TO_LBA(toc->trackdesc[i].p) <= sector) {
+			result = toc->trackdesc[i].point;
+		}
+	}
+	
+	return result;
+}
+
+/*
+ * Determine whether the given node is really a video CD video
+ * file.  Return non-zero if it appears to be a video file.
+ */
+static int
+cd9660_is_video_file(struct iso_node *ip, struct iso_mnt *imp)
+{
+	int lbn;
+	int track;
+	
+	/* Check whether this could really be a Video CD at all */
+	if (((imp->im_flags2 & IMF2_IS_VCD) == 0) ||
+		imp->phys_devvp == NULL ||
+		imp->toc == NULL)
+	{
+		return 0;	/* Doesn't even look like VCD... */
+	}
+
+	/* Make sure it is a file */
+	if ((ip->inode.iso_mode & S_IFMT) != S_IFREG)
+		return 0;	/* Not even a file... */
+
+	/*
+	 * And in the right directory.  This assumes the same inode
+	 * number convention that cd9660_vget_internal uses (that
+	 * part of the inode number is the block containing the
+	 * file's directory entry).
+	 */
+	lbn = lblkno(imp, ip->i_number);
+	if (lbn < imp->video_dir_start || lbn >= imp->video_dir_end)
+		return 0;	/* Not in the correct directory */
+	
+	/*
+	 * If we get here, the file should be a video file, but
+	 * do a couple of extra sanity checks just to be sure.
+	 * First, verify the form of the name
+	 */
+	if (strlen(ip->i_namep) != 11 ||		/* Wrong length? */
+		bcmp(ip->i_namep+7, ".DAT", 4) ||	/* Wrong extension? */
+		(bcmp(ip->i_namep, "AVSEQ", 5) &&	/* Wrong beginning? */
+		 bcmp(ip->i_namep, "MUSIC", 5)))
+	{
+		return 0;	/* Invalid name format */
+	}
+	
+	/*
+	 * Verify that AVSEQnn.DAT is in track #(nn+1).  This would
+	 * not be appropriate for Super Video CD, which allows
+	 * multiple sessions, so the track numbers might not
+	 * match up like this. 
+	 */
+	track = (ip->i_namep[5] - '0') * 10 + ip->i_namep[6] - '0';
+	if (track != (cd9660_track_for_sector(imp->toc, ip->iso_start) - 1))
+	{
+		return 0;	/* Wrong number in name */
+	}
+
+	/* It must be a video file if we got here. */
+	return 1;
 }
 
 int
@@ -936,15 +1227,31 @@ cd9660_vget_internal(mp, ino, vpp, relocated, isodir, p)
 	 * go get apple extensions to ISO directory record or use
 	 * defaults when there are no apple extensions.
 	 */
-	if ( (isonum_711( isodir->flags ) & directoryBit) == 0 ) {
+	if ( ((isonum_711( isodir->flags ) & directoryBit) == 0) &&
+	     (imp->iso_ftype != ISO_FTYPE_RRIP) ) {
 		/* This is an ISO directory record for a file */
-		DRGetTypeCreatorAndFlags( imp, isodir, &ip->i_FileType, 
-								  &ip->i_Creator, &ip->i_FinderFlags );
+		DRGetTypeCreatorAndFlags(imp, isodir, &ip->i_FileType, 
+		                         &ip->i_Creator, &ip->i_FinderFlags);
+
+		if (isonum_711(isodir->flags) & associatedBit)
+			ip->i_flag |= ISO_ASSOCIATED;
+	}
+
+	/*
+	 * Shadow the ISO 9660 invisible state to the FinderInfo
+	 */
+	if (isonum_711(isodir->flags) & existenceBit) {
+		ip->i_FinderFlags |= fInvisibleBit;
 	}
 
 	ip->iso_extent = isonum_733(isodir->extent);
 	ip->i_size = isonum_733(isodir->size);
 	ip->iso_start = isonum_711(isodir->ext_attr_length) + ip->iso_extent;
+	/*
+	 * account for AppleDouble header
+	 */
+	if (ip->i_flag & ISO_ASSOCIATED)
+		ip->i_size += ADH_SIZE;
 
 	/*
 	 * if we have a valid name, fill in i_namep with UTF-8 name
@@ -965,13 +1272,13 @@ cd9660_vget_internal(mp, ino, vpp, relocated, isodir, p)
 		case ISO_FTYPE_JOLIET:
 			ucsfntrans((u_int16_t *)isodir->name, namelen,
 				   utf8namep, &namelen,
-				   isonum_711(isodir->flags) & directoryBit);
+				   isonum_711(isodir->flags) & directoryBit, ip->i_flag & ISO_ASSOCIATED);
 			break;
 
 		default:
 			isofntrans (isodir->name, namelen,
 					utf8namep, &namelen,
-					imp->iso_ftype == ISO_FTYPE_9660);
+					imp->iso_ftype == ISO_FTYPE_9660, ip->i_flag & ISO_ASSOCIATED);
 		}
 
 		utf8namep[namelen] = '\0';
@@ -1003,6 +1310,22 @@ cd9660_vget_internal(mp, ino, vpp, relocated, isodir, p)
 	case ISO_FTYPE_RRIP:
 		cd9660_rrip_analyze(isodir, ip, imp);
 		break;
+	}
+
+	/*
+	 * See if this is a Video CD file.  If so, we must adjust the
+	 * length to account for larger sectors plus the RIFF header.
+	 * We also must substitute the VOP_READ and VOP_PAGEIN functions.
+	 *
+	 * The cd9660_is_video_file routine assumes that the inode has
+	 * been completely set up; it refers to several fields.
+	 *
+	 * This must be done before we release bp, because isodir
+	 * points into bp's data.
+	 */
+	if (cd9660_is_video_file(ip, imp))
+	{
+		cd9660_xa_init(vp, isodir);
 	}
 
 	if (bp != 0)
@@ -1158,8 +1481,14 @@ DRGetTypeCreatorAndFlags(	struct iso_mnt * theMountPointPtr,
 		myPtr += 14;/* add in CD-XA fixed record offset (tnx, Phillips) */
 	myNewAppleExtPtr = (NewAppleExtension *) myPtr;
 
-	/* calculate the "real" end of the directory record information */
+	/*
+	 * Calculate the "real" end of the directory record information.
+	 *
+	 * Note: We always read the first 4 bytes of the System-Use data, so
+	 * adjust myPtr down so we don't read off the end of the directory!
+	 */
 	myPtr = ((char *) theDirRecPtr) + (isonum_711(theDirRecPtr->length));
+	myPtr -= sizeof(NewAppleExtension) - 1;
 	while( (char *) myNewAppleExtPtr < myPtr ) 	/* end of directory buffer */
 	{
 		/*
@@ -1169,8 +1498,8 @@ DRGetTypeCreatorAndFlags(	struct iso_mnt * theMountPointPtr,
 		 *		struct OptionalSystemUse
 		 *		{
 		 *			byte	Signature[2];
-		 *			byte	systemUseID;
 		 *			byte	OSULength;
+		 *			byte	systemUseID;
 		 *			byte	fileType[4];		# only if HFS
 		 *			byte	fileCreator[4];		# only if HFS
 		 *			byte	finderFlags[2];		# only if HFS

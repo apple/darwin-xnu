@@ -138,50 +138,51 @@ vm_offset_t get_io_base_addr(void)
   return 0;
 }
 
-boolean_t PE_init_ethernet_debugger(void)
-{
-  boolean_t result;
-#if 0
-  DTEntry       entryP;
-  vm_offset_t   *address;
-  unsigned char *netAddr;
-  int           size;
-  vm_offset_t   io;
-  
-  if ((io = get_io_base_addr())
-      && (DTFindEntry("name", "mace", &entryP) == kSuccess)
-      && (DTGetProperty(entryP, "local-mac-address", (void **)&netAddr, &size) == kSuccess)
-      && (DTGetProperty(entryP, "reg", (void **)&address, &size) == kSuccess)
-      && (size == (2 * 3 * sizeof(vm_offset_t)) ))
-    {
-      extern boolean_t kdp_mace_init(void *baseAddresses[3],
-				     unsigned char *netAddr);
-      void *maceAddrs[3];
-      
-      // address calculation not correct
-      maceAddrs[0] = (void *) io_map(io + address[0], address[1]);
-      maceAddrs[1] = (void *) io_map(io + address[2], 0x1000);
-      maceAddrs[2] = (void *) (((vm_offset_t)maceAddrs[1])
-			       + address[4] - address[2]);
-      result = kdp_mace_init( maceAddrs, netAddr );
-      
-    } else
-#endif
-      result = FALSE;
-  
-  return result;
-}
-
 vm_offset_t PE_find_scc(void)
 {
-  vm_offset_t io;
-  DTEntry     entryP;
-  
-  if ((io = get_io_base_addr())
-      && (DTFindEntry("name", "escc", &entryP) == kSuccess))
-    io += 0x12000; /* Offset to legacy SCC Registers */
-  else
-    io = 0;
-  
-  return io;
+	vm_offset_t io, sccadd;
+	DTEntry     entryP;
+	vm_offset_t *sccregs;
+	unsigned int sccrsize;
+	
+	if(!(io = get_io_base_addr())) {		/* Get the I/O controller base address */
+		return (vm_offset_t)0;				/* Hmmm, no I/O??? What gives??? How'd we even boot? */
+	}
+
+	
+/*	Note: if we find a escc-legacy, we need to kind of hack because it can be either an offset
+	into the iobase or the actual address itself.  ORint the two should provide the correct 
+	for either */
+
+	sccadd = 0;								/* Assume none for now */
+
+	if(DTFindEntry("name", "escc-legacy", &entryP) == kSuccess)	{	/* Find the old fashioned serial port */
+		if (DTGetProperty(entryP, "reg", (void **)&sccregs, &sccrsize) == kSuccess) {	/* Do we have some registers? */
+			sccadd = ((vm_offset_t)*sccregs | io);	/* Get the address */
+		}
+	}
+	
+	if(DTFindEntry("name", "escc", &entryP) == kSuccess) {	/* Well, see if we just have the new fangled one */
+		sccadd = io + 0x12000; 				/* Yeah, but still return the oldie goldie... */
+	}
+	
+	return sccadd;							/* Return it if you found it */
+}
+
+unsigned int PE_init_taproot(vm_offset_t *taddr)
+{
+	DTEntry     entryP;
+	vm_offset_t *tappdata;
+	unsigned int tappsize;
+	
+	
+	if(DTFindEntry("name", "memory-map", &entryP) != kSuccess) return 0;	/* no memory map */
+
+	if (DTGetProperty(entryP, "TapRoot", (void **)&tappdata, &tappsize) != kSuccess) return 0;	/* No TapRoot */
+
+	tappdata[1] = (tappdata[1] + 4095 ) & -4096;	/* Make sure this is a whole page */
+
+	*taddr = io_map_spec(tappdata[0], tappdata[1]);		/* Map it in and return the address */
+	tappdata[0] = *taddr;					/* Also change property */
+	return tappdata[1];						/* And the size */
 }

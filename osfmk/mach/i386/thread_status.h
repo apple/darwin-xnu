@@ -213,13 +213,13 @@ struct i386_saved_state {
  * choose the most efficient state flavor for exception RPC's:
  */
 #define MACHINE_THREAD_STATE		i386_SAVED_STATE
-#define MACHINE_THREAD_STATE_COUNT	i386_SAVED_STATE_COUNT
+#define MACHINE_THREAD_STATE_COUNT	144
 
 /*
  * Largest state on this machine:
  * (be sure mach/machine/thread_state.h matches!)
  */
-#define THREAD_MACHINE_STATE_MAX	i386_SAVED_STATE_COUNT
+#define THREAD_MACHINE_STATE_MAX	THREAD_STATE_MAX
 
 /* 
  * Floating point state.
@@ -246,8 +246,7 @@ struct i386_saved_state {
  * according to physical register number.
  */
 
-#define FP_STATE_BYTES \
-	(sizeof (struct i386_fp_save) + sizeof (struct i386_fp_regs))
+#define FP_STATE_BYTES 512
 
 struct i386_float_state {
 	int		fpkind;			/* FP_NO..FP_387 (readonly) */
@@ -257,6 +256,19 @@ struct i386_float_state {
 };
 #define i386_FLOAT_STATE_COUNT \
 		(sizeof(struct i386_float_state)/sizeof(unsigned int))
+
+
+#define FP_old_STATE_BYTES \
+	(sizeof (struct i386_fp_save) + sizeof (struct i386_fp_regs))
+
+struct i386_old_float_state {
+	int		fpkind;			/* FP_NO..FP_387 (readonly) */
+	int		initialized;
+	unsigned char	hw_state[FP_old_STATE_BYTES]; /* actual "hardware" state */
+	int		exc_status;		/* exception status (readonly) */
+};
+#define i386_old_FLOAT_STATE_COUNT \
+		(sizeof(struct i386_old_float_state)/sizeof(unsigned int))
 
 
 #define PORT_MAP_BITS 0x400

@@ -501,6 +501,10 @@ ipc_port_alloc(
 
 	ipc_port_init(port, space, name);
 
+	if (task_is_classic(current_task())) {
+		IP_SET_CLASSIC(port);
+	}
+
 	*namep = name;
 	*portp = port;
 
@@ -539,6 +543,10 @@ ipc_port_alloc_name(
 	/* port is locked */
 
 	ipc_port_init(port, space, name);
+
+	if (task_is_classic(current_task())) {
+		IP_SET_CLASSIC(port);
+	}
 
 	*portp = port;
 
@@ -618,24 +626,9 @@ ipc_port_destroy(
 		port->ip_destination = IP_NULL;
 		ip_unlock(port);
 
-		if (!ipc_port_check_circularity(port, pdrequest)) {
-			/* consumes our refs for port and pdrequest */
-			ipc_notify_port_destroyed(pdrequest, port);
-			return;
-		} else {
-			/* consume pdrequest and destroy port */
-			ipc_port_release_sonce(pdrequest);
-		}
-
-		ip_lock(port);
-		assert(ip_active(port));
-		assert(port->ip_pset_count == 0);
-		assert(port->ip_mscount == 0);
-		assert(port->ip_pdrequest == IP_NULL);
-		assert(port->ip_receiver_name == MACH_PORT_NULL);
-		assert(port->ip_destination == IP_NULL);
-
-		/* fall through and destroy the port */
+		/* consumes our refs for port and pdrequest */
+		ipc_notify_port_destroyed(pdrequest, port);
+		return;
 	}
 
 	/* once port is dead, we don't need to keep it locked */
@@ -1159,7 +1152,7 @@ ipc_port_dealloc_special(
 {
 	ip_lock(port);
 	assert(ip_active(port));
-	assert(port->ip_receiver_name != MACH_PORT_NULL);
+//	assert(port->ip_receiver_name != MACH_PORT_NULL);
 	assert(port->ip_receiver == space);
 
 	/*

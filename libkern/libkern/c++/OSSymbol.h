@@ -60,13 +60,28 @@ private:
 
 protected:
     /*!
+        @function taggedRelease
+        @abstract Overriden super class release method so we can synchronise with the symbol pool.
+        @discussion When we release an symbol we need to synchronise the destruction of the object with any potential searches that may be occuring through the family factor methods.  See OSObject::taggedRelease
+    */
+    virtual void taggedRelease(const void *tag, const int when) const;
+
+    /*!
         @function free
-        @abstract A member function to release all resources created or used by the OSString object.
-        @discussion This function should not be called directly, use release() instead.
+        @abstract Overriden super class release method so we can synchronise with the symbol pool.
+        @discussion When we release an symbol we need to synchronise the destruction of the object with any potential searches that may be occuring through the family factor methods.  See OSObject::free
     */
     virtual void free();
 
 public:
+    /*!
+        @function taggedRelease
+        @abstract Release a tag.
+        @discussion The C++ language has forced me to override this method even though I have implemented it as { super::taggedRelease(tag) }. It seems that C++ is confused about the appearance of the protected taggedRelease with 2 args and refuses to only inherit one function.  See OSObject::taggedRelease
+    */
+    virtual void taggedRelease(const void *tag) const;
+
+
     /*!
         @function withString
         @abstract A static constructor function to create an OSSymbol instance from an OSString object or returns an existing OSSymbol object based on the OSString object given.

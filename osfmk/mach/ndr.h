@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2003 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -25,40 +25,11 @@
 /*
  * @OSF_COPYRIGHT@
  */
-/*
- * HISTORY
- * 
- * Revision 1.1.1.1  1998/09/22 21:05:30  wsanchez
- * Import of Mac OS X kernel (~semeria)
- *
- * Revision 1.1.1.1  1998/03/07 02:25:46  wsanchez
- * Import of OSF Mach kernel (~mburg)
- *
- * Revision 1.2.6.1  1994/09/23  02:40:51  ezf
- * 	change marker to not FREE
- * 	[1994/09/22  21:42:00  ezf]
- *
- * Revision 1.2.2.2  1993/06/09  02:42:37  gm
- * 	Added to OSF/1 R1.3 from NMK15.0.
- * 	[1993/06/02  21:17:34  jeffc]
- * 
- * Revision 1.2  1993/04/19  16:38:03  devrcs
- * 		Merge untyped ipc:
- * 		New names for the fields - the structure isn't changed
- * 		[1993/03/12  23:01:38  travos]
- * 		Extended NDR record to include version number(s)
- * 		[1993/03/05  23:10:21  travos]
- * 		a new NDR structure
- * 	 	1993/02/13  00:47:46  travos]
- * 		Created. [travos@osf.org]
- * 		[1993/01/27  11:21:44  rod]
- * 	[1993/03/16  13:23:15  rod]
- * 
- * $EndLog$
- */
 
-#ifndef _NDR_H_
-#define _NDR_H_
+#ifndef _MACH_NDR_H_
+#define _MACH_NDR_H_
+
+#include <stdint.h>
 
 typedef struct {
     unsigned char       mig_vers;
@@ -90,4 +61,133 @@ typedef struct {
 
 extern NDR_record_t NDR_record;
 
-#endif /* _NDR_H_ */
+#ifndef __NDR_convert__
+#define __NDR_convert__ 1
+#endif /* __NDR_convert__ */
+
+#ifndef __NDR_convert__int_rep__
+#define __NDR_convert__int_rep__ 1
+#endif /* __NDR_convert__int_rep__ */
+
+#ifndef __NDR_convert__char_rep__
+#define __NDR_convert__char_rep__ 0
+#endif /* __NDR_convert__char_rep__ */
+
+#ifndef __NDR_convert__float_rep__
+#define __NDR_convert__float_rep__ 0
+#endif /* __NDR_convert__float_rep__ */
+
+#if __NDR_convert__
+
+#define __NDR_convert__NOOP		do ; while (0)
+#define __NDR_convert__UNKNOWN(s)	__NDR_convert__NOOP
+#define __NDR_convert__SINGLE(a, f, r)	do { r((a), (f)); } while (0)
+#define __NDR_convert__ARRAY(a, f, c, r) \
+	do { int __i__, __C__ = (c); \
+	for (__i__ = 0; __i__ < __C__; __i__++) \
+	r(&(a)[__i__], f); } while (0)
+#define __NDR_convert__2DARRAY(a, f, s, c, r) \
+	do { int __i__, __C__ = (c), __S__ = (s); \
+	for (__i__ = 0; __i__ < __C__; __i__++) \
+	r(&(a)[__i__ * __S__], f, __S__); } while (0)
+
+#if __NDR_convert__int_rep__
+
+#include <libkern/OSByteOrder.h>
+
+#define __NDR_READSWAP_assign(a, rs)	do { *(a) = rs(a); } while (0)
+
+#define __NDR_READSWAP__uint16_t(a) 	OSReadSwapInt16((void *)a, 0)
+#define __NDR_READSWAP__int16_t(a)	(int16_t)OSReadSwapInt16((void *)a, 0)
+#define __NDR_READSWAP__uint32_t(a) 	OSReadSwapInt32((void *)a, 0)
+#define __NDR_READSWAP__int32_t(a)	(int32_t)OSReadSwapInt32((void *)a, 0)
+#define __NDR_READSWAP__uint64_t(a)	OSReadSwapInt64((void *)a, 0)
+#define __NDR_READSWAP__int64_t(a)	(int64_t)OSReadSwapInt64((void *)a, 0)
+
+static __inline__ float __NDR_READSWAP__float(float *argp) {
+	union {
+		float sv;
+		uint32_t ull;
+	} result;
+	result.ull = __NDR_READSWAP__uint32_t((uint32_t *)argp);
+	return result.sv;
+}
+
+static __inline__ double __NDR_READSWAP__double(double *argp) {
+	union {
+		double sv;
+		uint64_t ull;
+	} result;
+	result.ull = __NDR_READSWAP__uint64_t((uint64_t *)argp);
+	return result.sv;
+}
+
+#define __NDR_convert__int_rep__int16_t__defined
+#define __NDR_convert__int_rep__int16_t(v,f)		\
+	__NDR_READSWAP_assign(v, __NDR_READSWAP__int16_t)
+
+#define __NDR_convert__int_rep__uint16_t__defined
+#define __NDR_convert__int_rep__uint16_t(v,f)		\
+	__NDR_READSWAP_assign(v, __NDR_READSWAP__uint16_t)
+
+#define __NDR_convert__int_rep__int32_t__defined
+#define __NDR_convert__int_rep__int32_t(v,f)		\
+	__NDR_READSWAP_assign(v, __NDR_READSWAP__int32_t)
+
+#define __NDR_convert__int_rep__uint32_t__defined
+#define __NDR_convert__int_rep__uint32_t(v,f)		\
+	__NDR_READSWAP_assign(v, __NDR_READSWAP__uint32_t)
+
+#define __NDR_convert__int_rep__int64_t__defined
+#define __NDR_convert__int_rep__int64_t(v,f)		\
+	__NDR_READSWAP_assign(v, __NDR_READSWAP__int64_t)
+
+#define __NDR_convert__int_rep__uint64_t__defined
+#define __NDR_convert__int_rep__uint64_t(v,f)		\
+	__NDR_READSWAP_assign(v, __NDR_READSWAP__uint64_t)
+
+#define __NDR_convert__int_rep__float__defined
+#define __NDR_convert__int_rep__float(v,f)		\
+	__NDR_READSWAP_assign(v, __NDR_READSWAP__float)
+
+#define __NDR_convert__int_rep__double__defined
+#define __NDR_convert__int_rep__double(v,f)		\
+	__NDR_READSWAP_assign(v, __NDR_READSWAP__double)
+
+#define __NDR_convert__int_rep__boolean_t__defined
+#define __NDR_convert__int_rep__boolean_t(v, f)		\
+	__NDR_convert__int_rep__int32_t(v,f)
+
+#define __NDR_convert__int_rep__kern_return_t__defined
+#define __NDR_convert__int_rep__kern_return_t(v,f)	\
+	__NDR_convert__int_rep__int32_t(v,f)
+
+#define __NDR_convert__int_rep__mach_port_name_t__defined
+#define __NDR_convert__int_rep__mach_port_name_t(v,f)	\
+	__NDR_convert__int_rep__uint32_t(v,f)
+
+#define __NDR_convert__int_rep__mach_msg_type_number_t__defined
+#define __NDR_convert__int_rep__mach_msg_type_number_t(v,f) \
+	__NDR_convert__int_rep__uint32_t(v,f)
+
+#endif /* __NDR_convert__int_rep__ */
+
+#if __NDR_convert__char_rep__
+
+#warning  NDR character representation conversions not implemented yet!
+#define __NDR_convert__char_rep__char(v,f)	__NDR_convert__NOOP
+#define __NDR_convert__char_rep__string(v,f,l)	__NDR_convert__NOOP
+
+#endif /* __NDR_convert__char_rep__ */
+
+#if __NDR_convert__float_rep__
+
+#warning  NDR floating point representation conversions not implemented yet!
+#define __NDR_convert__float_rep__float(v,f)	__NDR_convert__NOOP
+#define __NDR_convert__float_rep__double(v,f)	__NDR_convert__NOOP
+
+#endif /* __NDR_convert__float_rep__ */
+
+#endif /* __NDR_convert__ */
+
+#endif /* _MACH_NDR_H_ */

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2001-2002 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2001-2003 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -34,16 +34,16 @@
 #define CJK_CHINESE_SIMP	0x8
 #define CJK_ALL	            0xF
 
-#define CJK_CHINESE	    (CJK_CHINESE_TRAD | CJK_CHINESE_SIMP)
-#define CJK_KATAKANA	(CJK_JAPAN | CJK_CHINESE_SIMP | CJK_KOREAN)
+#define CJK_CHINESE    (CJK_CHINESE_TRAD | CJK_CHINESE_SIMP)
+#define CJK_KATAKANA   (CJK_JAPAN)
 
 
 /* Remember the last unique CJK bit */
 u_int8_t cjk_lastunique = 0;
 
-/* CJK encoding bias */
+/* Encoding bias */
 u_int32_t hfs_encodingbias = 0;
-
+int hfs_islatinbias = 0;
 
 /* Map CJK bits to Mac encoding */
 u_int8_t cjk_encoding[] = {
@@ -793,6 +793,14 @@ hfs_pickencoding(const u_int16_t *src, int len)
 				cjkstate = CJK_ALL;
 			continue;
 		}
+		if (hfs_islatinbias && ch >= 0x0300 && ch <= 0x0329) {
+			guess = hfs_encodingbias;
+			continue;
+		}
+		if (ch <= 0x03CE && ch >= 0x0384) {
+			guess = kTextEncodingMacGreek;
+			continue;
+		}
 		if (ch <= 0x0491 && ch >= 0x0401) {
 			guess = kTextEncodingMacCyrillic;
 			continue;
@@ -805,6 +813,35 @@ hfs_pickencoding(const u_int16_t *src, int len)
 		}
 		if (ch >= 0x0E00 && ch <= 0x0E5B) {
 			return kTextEncodingMacThai;
+		}
+		/* Catch a few Shift-JIS strays */
+		if (guess == 0 || guess == kTextEncodingMacUnicode) {
+			if (ch == 0x2010 || ch == 0x2014 || ch == 0x2015 || ch == 0x2016) {
+				guess = kTextEncodingMacJapanese;
+				if ((cjkstate == 0) || (cjkstate & CJK_JAPAN))
+					cjkstate = CJK_JAPAN;
+				else
+					cjkstate |= CJK_JAPAN;
+				continue;
+			}
+			if ((hfs_encodingbias == kTextEncodingMacJapanese) &&
+			    (ch == 0x00A2 || ch == 0x00A3 || ch == 0x00AC)) {
+				guess = kTextEncodingMacJapanese;
+				continue;
+			}
+			/* TM char depends on the Mac encoding used. */
+			if (ch == 0x2122) {
+				switch(hfs_encodingbias) {
+				case kTextEncodingMacJapanese:
+				case kTextEncodingMacChineseTrad:
+				case kTextEncodingMacKorean:
+				case kTextEncodingMacGreek:
+				case kTextEncodingMacThai:
+				case kTextEncodingMacChineseSimp:
+					guess = hfs_encodingbias;
+					break;
+				}
+			}
 		}
 		if (guess == 0 && ch > 0x2122) {
 			guess = kTextEncodingMacUnicode;
@@ -852,4 +889,33 @@ hfs_pickencoding(const u_int16_t *src, int len)
 	return guess;
 }
 
+
+__private_extern__
+u_int32_t
+hfs_getencodingbias()
+{
+	return (hfs_encodingbias);
+}
+
+
+__private_extern__
+void
+hfs_setencodingbias(u_int32_t bias)
+{
+	hfs_encodingbias = bias;
+
+	switch (bias) {
+	case kTextEncodingMacRoman:
+	case kTextEncodingMacCentralEurRoman:
+	case kTextEncodingMacTurkish:
+	case kTextEncodingMacCroatian:
+	case kTextEncodingMacIcelandic:
+	case kTextEncodingMacRomanian:
+		hfs_islatinbias = 1;
+		break;
+	default:
+		hfs_islatinbias = 0;
+		break;					
+	}
+}
 

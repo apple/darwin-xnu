@@ -76,7 +76,7 @@ struct llc {
 	    struct {
 		u_char control;
 		u_char format_id;
-		u_char class;
+		u_char class_id;
 		u_char window_x2;
 	    } type_u;
 	    struct {
@@ -111,7 +111,7 @@ struct llc {
 #define llc_control            llc_un.type_u.control
 #define	llc_control_ext        llc_un.type_raw.control_ext
 #define llc_fid                llc_un.type_u.format_id
-#define llc_class              llc_un.type_u.class
+#define llc_class              llc_un.type_u.class_id
 #define llc_window             llc_un.type_u.window_x2
 #define llc_frmrinfo           llc_un.type_frmr.frmrinfo
 #define llc_frmr_pdu0          llc_un.type_frmr.frmrinfo.rej_pdu0

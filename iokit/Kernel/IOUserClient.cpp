@@ -22,17 +22,11 @@
  * 
  * @APPLE_LICENSE_HEADER_END@
  */
-/*
- * Copyright (c) 1998 Apple Computer, Inc.  All rights reserved. 
- *
- * HISTORY
- *
- * 14 Aug 98 sdouglas created.
- * 08 Dec 98 sdouglas cpp.
- */
+
 
 #include <IOKit/IOKitServer.h>
 #include <IOKit/IOUserClient.h>
+#include <IOKit/IOService.h>
 #include <IOKit/IOService.h>
 #include <IOKit/IORegistryEntry.h>
 #include <IOKit/IOCatalogue.h>
@@ -40,6 +34,8 @@
 #include <IOKit/IOLib.h>
 
 #include <IOKit/assert.h>
+
+#include "IOServicePrivate.h"
 
 /* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
 
@@ -89,6 +85,7 @@ public:
     OSObject *	object;
     ipc_port_t	port;
     UInt32      mscount;
+    UInt8	holdDestroy;
 
     static IOMachPort * portForObject( OSObject * obj,
 				ipc_kobject_type_t type );
@@ -96,6 +93,8 @@ public:
 				ipc_kobject_type_t type, mach_port_mscount_t * mscount );
     static void releasePortForObject( OSObject * obj,
 				ipc_kobject_type_t type );
+    static void setHoldDestroy( OSObject * obj, ipc_kobject_type_t type );
+
     static OSDictionary * dictForType( ipc_kobject_type_t type );
 
     static mach_port_name_t makeSendRightForTask( task_t task,
@@ -196,7 +195,7 @@ bool IOMachPort::noMoreSendersForObject( OSObject * obj,
 		dict->removeObject( (const OSSymbol *) obj );
 	    else
 		*mscount = machPort->mscount;
-	}
+	} 
 	obj->release();
     }
 
@@ -209,16 +208,35 @@ void IOMachPort::releasePortForObject( OSObject * obj,
 				ipc_kobject_type_t type )
 {
     OSDictionary *	dict;
+    IOMachPort *	machPort;
 
     IOTakeLock( gIOObjectPortLock);
 
     if( (dict = dictForType( type ))) {
         obj->retain();
-        dict->removeObject( (const OSSymbol *) obj );
+	machPort = (IOMachPort *) dict->getObject( (const OSSymbol *) obj );
+	if( machPort && !machPort->holdDestroy)
+            dict->removeObject( (const OSSymbol *) obj );
         obj->release();
     }
 
     IOUnlock( gIOObjectPortLock);
+}
+
+void IOMachPort::setHoldDestroy( OSObject * obj, ipc_kobject_type_t type )
+{
+    OSDictionary *	dict;
+    IOMachPort * 	machPort;
+
+    IOLockLock( gIOObjectPortLock );
+
+    if( (dict = dictForType( type ))) {
+        machPort = (IOMachPort *) dict->getObject( (const OSSymbol *) obj );
+        if( machPort)
+            machPort->holdDestroy = true;
+    }
+
+    IOLockUnlock( gIOObjectPortLock );
 }
 
 void IOUserClient::destroyUserReferences( OSObject * obj )
@@ -253,7 +271,6 @@ void IOUserClient::destroyUserReferences( OSObject * obj )
     }
     obj->release();
     IOUnlock( gIOObjectPortLock);
-
 }
 
 mach_port_name_t IOMachPort::makeSendRightForTask( task_t task,
@@ -268,6 +285,26 @@ void IOMachPort::free( void )
 	iokit_destroy_object_port( port );
     super::free();
 }
+
+/* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
+
+class IOUserNotification : public OSIterator
+{
+    OSDeclareDefaultStructors(IOUserNotification)
+
+    IONotifier 	* 	holdNotify;
+    IOLock 	*	lock;
+
+public:
+
+    virtual bool init( void );
+    virtual void free();
+
+    virtual void setNotification( IONotifier * obj );
+
+    virtual void reset();
+    virtual bool isValid();
+};
 
 /* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
 
@@ -315,15 +352,23 @@ iokit_client_died( io_object_t obj, ipc_port_t /* port */,
 {
     IOUserClient *	client;
     IOMemoryMap *	map;
+    IOUserNotification * notify;
 
     if( !IOMachPort::noMoreSendersForObject( obj, type, mscount ))
 	return( kIOReturnNotReady );
 
-    if( (IKOT_IOKIT_CONNECT == type)
-     && (client = OSDynamicCast( IOUserClient, obj )))
-	client->clientDied();
-    if( (map = OSDynamicCast( IOMemoryMap, obj )))
-	map->taskDied();
+    if( IKOT_IOKIT_CONNECT == type)
+    {
+	if( (client = OSDynamicCast( IOUserClient, obj )))
+	    client->clientDied();
+    }
+    else if( IKOT_IOKIT_OBJECT == type)
+    {
+	if( (map = OSDynamicCast( IOMemoryMap, obj )))
+	    map->taskDied();
+	else if( (notify = OSDynamicCast( IOUserNotification, obj )))
+	    notify->setNotification( 0 );
+    }
 
     return( kIOReturnSuccess );
 }
@@ -332,39 +377,19 @@ iokit_client_died( io_object_t obj, ipc_port_t /* port */,
 
 /* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
 
-class IOUserNotification : public OSIterator
-{
-    OSDeclareDefaultStructors(IOUserNotification)
-
-    struct PingMsg {
-        mach_msg_header_t	msgHdr;
-        OSNotificationHeader	notifyHeader;
-    };
-
-    PingMsg 	*	pingMsg;
-    vm_size_t		msgSize;
-    IONotifier 	* 	holdNotify;
-    IOLock 	*	lock;
-
-public:
-
-    virtual bool init( mach_port_t port, natural_t type,
-                       OSAsyncReference reference,
-                       vm_size_t messageSize );
-    virtual void free();
-
-    virtual void setNotification( IONotifier * obj );
-
-    virtual void reset();
-    virtual bool isValid();
-};
-
 class IOServiceUserNotification : public IOUserNotification
 {
     OSDeclareDefaultStructors(IOServiceUserNotification)
 
+    struct PingMsg {
+        mach_msg_header_t		msgHdr;
+        OSNotificationHeader		notifyHeader;
+    };
+
     enum { kMaxOutstanding = 256 };
 
+    PingMsg *		pingMsg;
+    vm_size_t		msgSize;
     OSArray 	*	newSet;
     OSObject	*	lastEntry;
     bool		armed;
@@ -385,6 +410,16 @@ public:
 class IOServiceMessageUserNotification : public IOUserNotification
 {
     OSDeclareDefaultStructors(IOServiceMessageUserNotification)
+
+    struct PingMsg {
+        mach_msg_header_t		msgHdr;
+	mach_msg_body_t			msgBody;
+	mach_msg_port_descriptor_t	ports[1];
+        OSNotificationHeader		notifyHeader;
+    };
+
+    PingMsg *		pingMsg;
+    vm_size_t		msgSize;
 
 public:
 
@@ -411,8 +446,7 @@ OSDefineAbstractStructors( IOUserNotification, OSIterator )
 
 /* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
 
-bool IOUserNotification::init( mach_port_t port, natural_t type,
-                               OSAsyncReference reference, vm_size_t extraSize )
+bool IOUserNotification::init( void )
 {
     if( !super::init())
 	return( false );
@@ -420,24 +454,6 @@ bool IOUserNotification::init( mach_port_t port, natural_t type,
     lock = IOLockAlloc();
     if( !lock)
         return( false );
-
-    msgSize = sizeof( PingMsg) + extraSize;
-    pingMsg = (PingMsg *) IOMalloc( msgSize);
-    if( !pingMsg)
-        return( false );
-
-    bzero( pingMsg, msgSize);
-
-    pingMsg->msgHdr.msgh_remote_port	= port;
-    pingMsg->msgHdr.msgh_bits 		= MACH_MSGH_BITS(
-                                            MACH_MSG_TYPE_COPY_SEND,
-                                            MACH_MSG_TYPE_MAKE_SEND );
-    pingMsg->msgHdr.msgh_size 		= msgSize;
-    pingMsg->msgHdr.msgh_id		= kOSNotificationMessageID;
-
-    pingMsg->notifyHeader.size = extraSize;
-    pingMsg->notifyHeader.type = type;
-    bcopy( reference, pingMsg->notifyHeader.reference, sizeof(OSAsyncReference) );
 
     return( true );
 }
@@ -448,9 +464,6 @@ void IOUserNotification::free( void )
 	holdNotify->remove();
     // can't be in handler now
 
-    if( pingMsg)
-        IOFree( pingMsg, msgSize);
-
     if( lock)
 	IOLockFree( lock );
 
@@ -460,10 +473,17 @@ void IOUserNotification::free( void )
 
 void IOUserNotification::setNotification( IONotifier * notify )
 {
-    if( holdNotify)
-	holdNotify->remove();
+    IONotifier * previousNotify;
 
+    IOLockLock( gIOObjectPortLock);
+
+    previousNotify = holdNotify;
     holdNotify = notify;
+
+    IOLockUnlock( gIOObjectPortLock);
+
+    if( previousNotify)
+	previousNotify->remove();
 }
 
 void IOUserNotification::reset()
@@ -491,18 +511,49 @@ bool IOServiceUserNotification::init( mach_port_t port, natural_t type,
     if( !newSet)
         return( false );
 
-    return( super::init( port, type, reference, 0) );
+    msgSize = sizeof( PingMsg) + 0;
+    pingMsg = (PingMsg *) IOMalloc( msgSize);
+    if( !pingMsg)
+        return( false );
+
+    bzero( pingMsg, msgSize);
+
+    pingMsg->msgHdr.msgh_remote_port	= port;
+    pingMsg->msgHdr.msgh_bits 		= MACH_MSGH_BITS(
+                                            MACH_MSG_TYPE_COPY_SEND /*remote*/,
+                                            MACH_MSG_TYPE_MAKE_SEND /*local*/);
+    pingMsg->msgHdr.msgh_size 		= msgSize;
+    pingMsg->msgHdr.msgh_id		= kOSNotificationMessageID;
+
+    pingMsg->notifyHeader.size = 0;
+    pingMsg->notifyHeader.type = type;
+    bcopy( reference, pingMsg->notifyHeader.reference, sizeof(OSAsyncReference) );
+
+    return( super::init() );
 }
 
 void IOServiceUserNotification::free( void )
 {
-    if( lastEntry)
-        lastEntry->release();
+    PingMsg   *	_pingMsg;
+    vm_size_t	_msgSize;
+    OSArray   *	_newSet;
+    OSObject  *	_lastEntry;
 
-    if( newSet)
-        newSet->release();
+    _pingMsg   = pingMsg;
+    _msgSize   = msgSize;
+    _lastEntry = lastEntry;
+    _newSet    = newSet;
 
     super::free();
+
+    if( _pingMsg && _msgSize)
+        IOFree( _pingMsg, _msgSize);
+
+    if( _lastEntry)
+        _lastEntry->release();
+
+    if( _newSet)
+        _newSet->release();
 }
 
 bool IOServiceUserNotification::_handler( void * target,
@@ -511,7 +562,7 @@ bool IOServiceUserNotification::_handler( void * target,
     return( ((IOServiceUserNotification *) target)->handler( ref, newService ));
 }
 
-bool IOServiceUserNotification::handler( void * /* ref */,
+bool IOServiceUserNotification::handler( void * ref,
                                 IOService * newService )
 {
     unsigned int	count;
@@ -530,6 +581,9 @@ bool IOServiceUserNotification::handler( void * /* ref */,
     }
 
     IOUnlock( lock );
+
+    if( kIOServiceTerminatedNotificationType == pingMsg->notifyHeader.type)
+        IOMachPort::setHoldDestroy( newService, IKOT_IOKIT_OBJECT );
 
     if( sendPing) {
 	if( (port = iokit_port_for_object( this, IKOT_IOKIT_OBJECT ) ))
@@ -584,13 +638,48 @@ OSDefineMetaClassAndStructors(IOServiceMessageUserNotification, IOUserNotificati
 bool IOServiceMessageUserNotification::init( mach_port_t port, natural_t type,
                        OSAsyncReference reference, vm_size_t extraSize )
 {
-    return( super::init( port, type, reference,
-                       sizeof(IOServiceInterestContent) + extraSize) );
+
+    extraSize += sizeof(IOServiceInterestContent);
+    msgSize = sizeof( PingMsg) + extraSize;
+    pingMsg = (PingMsg *) IOMalloc( msgSize);
+    if( !pingMsg)
+        return( false );
+
+    bzero( pingMsg, msgSize);
+
+    pingMsg->msgHdr.msgh_remote_port	= port;
+    pingMsg->msgHdr.msgh_bits 		= MACH_MSGH_BITS_COMPLEX
+					|  MACH_MSGH_BITS(
+                                            MACH_MSG_TYPE_COPY_SEND /*remote*/,
+                                            MACH_MSG_TYPE_MAKE_SEND /*local*/);
+    pingMsg->msgHdr.msgh_size 		= msgSize;
+    pingMsg->msgHdr.msgh_id		= kOSNotificationMessageID;
+
+    pingMsg->msgBody.msgh_descriptor_count = 1;
+
+    pingMsg->ports[0].name 		= 0;
+    pingMsg->ports[0].disposition 	= MACH_MSG_TYPE_MAKE_SEND;
+    pingMsg->ports[0].type 		= MACH_MSG_PORT_DESCRIPTOR;
+
+    pingMsg->notifyHeader.size 		= extraSize;
+    pingMsg->notifyHeader.type 		= type;
+    bcopy( reference, pingMsg->notifyHeader.reference, sizeof(OSAsyncReference) );
+
+    return( super::init() );
 }
 
 void IOServiceMessageUserNotification::free( void )
 {
+    PingMsg *	_pingMsg;
+    vm_size_t	_msgSize;
+
+    _pingMsg   = pingMsg;
+    _msgSize   = msgSize;
+
     super::free();
+
+    if( _pingMsg && _msgSize)
+        IOFree( _pingMsg, _msgSize);
 }
 
 IOReturn IOServiceMessageUserNotification::_handler( void * target, void * ref,
@@ -606,7 +695,7 @@ IOReturn IOServiceMessageUserNotification::handler( void * ref,
                                     void * messageArgument, vm_size_t argSize )
 {
     kern_return_t		kr;
-    ipc_port_t 			port;
+    ipc_port_t 			thisPort, providerPort;
     IOServiceInterestContent * 	data = (IOServiceInterestContent *)
                                        pingMsg->notifyHeader.content;
 
@@ -624,16 +713,16 @@ IOReturn IOServiceMessageUserNotification::handler( void * ref,
         - sizeof( data->messageArgument)
         + argSize;
 
-    if( (port = iokit_port_for_object( provider, IKOT_IOKIT_OBJECT ) ))
-	pingMsg->msgHdr.msgh_local_port = port;
-    else
-	pingMsg->msgHdr.msgh_local_port = NULL;
-    
+    providerPort = iokit_port_for_object( provider, IKOT_IOKIT_OBJECT );
+    pingMsg->ports[0].name = providerPort;
+    thisPort = iokit_port_for_object( this, IKOT_IOKIT_OBJECT );
+    pingMsg->msgHdr.msgh_local_port = thisPort;
     kr = mach_msg_send_from_kernel( &pingMsg->msgHdr,
-                                    pingMsg->msgHdr.msgh_size);
-
-    if( port)
-	iokit_release_port( port );
+				    pingMsg->msgHdr.msgh_size);
+    if( thisPort)
+	iokit_release_port( thisPort );
+    if( providerPort)
+	iokit_release_port( providerPort );
 
     if( KERN_SUCCESS != kr)
         IOLog("%s: mach_msg_send_from_kernel {%x}\n", __FILE__, kr );
@@ -675,17 +764,43 @@ IOReturn IOUserClient::clientHasPrivilege( void * securityToken,
     security_token_t	   token;
     mach_msg_type_number_t count;
 
-    if( 0 != strcmp( privilegeName, kIOClientPrivilegeAdministrator))
-        return( kIOReturnUnsupported );
-
     count = TASK_SECURITY_TOKEN_COUNT;
     kr = task_info( (task_t) securityToken, TASK_SECURITY_TOKEN,
-                    (task_info_t) &token, &count );
-    if( (kr == kIOReturnSuccess)
-      && (0 != token.val[0]))
-        kr = kIOReturnNotPrivileged;
+		    (task_info_t) &token, &count );
 
-    return( kr );
+    if (KERN_SUCCESS != kr)
+    {}
+    else if (!strcmp(privilegeName, kIOClientPrivilegeAdministrator))
+    {
+	if (0 != token.val[0])
+	    kr = kIOReturnNotPrivileged;
+    }
+    else if (!strcmp(privilegeName, kIOClientPrivilegeLocalUser))
+    {
+	OSArray *      array;
+	OSDictionary * user = 0;
+
+	if ((array = OSDynamicCast(OSArray,
+	    IORegistryEntry::getRegistryRoot()->copyProperty(gIOConsoleUsersKey))))
+	{
+	    for (unsigned int idx = 0;
+		    (user = OSDynamicCast(OSDictionary, array->getObject(idx)));
+		    idx++)
+	    {
+		OSNumber * num;
+		if ((num = OSDynamicCast(OSNumber, user->getObject(gIOConsoleSessionUIDKey)))
+		  && (token.val[0] == num->unsigned32BitValue()))
+		    break;
+	    }
+	    array->release();
+	}
+	if (!user)
+	    kr = kIOReturnNotPrivileged;
+    }
+    else
+	kr = kIOReturnUnsupported;
+
+    return (kr);
 }
 
 bool IOUserClient::initWithTask(task_t owningTask,
@@ -866,7 +981,8 @@ IOReturn IOUserClient::sendAsyncResult(OSAsyncReference reference,
     
     if(numArgs > kMaxAsyncArgs)
         return kIOReturnMessageTooLarge;
-    replyMsg.msgHdr.msgh_bits = MACH_MSGH_BITS(MACH_MSG_TYPE_COPY_SEND,0);
+    replyMsg.msgHdr.msgh_bits = MACH_MSGH_BITS(MACH_MSG_TYPE_COPY_SEND /*remote*/,
+                                                0 /*local*/);
     replyMsg.msgHdr.msgh_size =
         sizeof(replyMsg) - (kMaxAsyncArgs-numArgs)*sizeof(void *);
     replyMsg.msgHdr.msgh_remote_port = replyPort;
@@ -1001,6 +1117,29 @@ kern_return_t is_io_service_match_property_table(
     return( kr );
 }
 
+/* Routine io_service_match_property_table_ool */
+kern_return_t is_io_service_match_property_table_ool(
+	io_object_t service,
+	io_buf_ptr_t matching,
+	mach_msg_type_number_t matchingCnt,
+	natural_t *result,
+	boolean_t *matches )
+{
+    kern_return_t	kr;
+    vm_offset_t 	data;
+
+    kr = vm_map_copyout( kernel_map, &data, (vm_map_copy_t) matching );
+
+    if( KERN_SUCCESS == kr) {
+        // must return success after vm_map_copyout() succeeds
+	*result = is_io_service_match_property_table( service,
+		(char *) data, matches );
+	vm_deallocate( kernel_map, data, matchingCnt );
+    }
+
+    return( kr );
+}
+
 /* Routine io_service_get_matching_services */
 kern_return_t is_io_service_get_matching_services(
 	mach_port_t master_port,
@@ -1028,6 +1167,29 @@ kern_return_t is_io_service_get_matching_services(
     return( kr );
 }
 
+/* Routine io_service_get_matching_services_ool */
+kern_return_t is_io_service_get_matching_services_ool(
+	mach_port_t master_port,
+	io_buf_ptr_t matching,
+	mach_msg_type_number_t matchingCnt,
+	natural_t *result,
+	io_object_t *existing )
+{
+    kern_return_t	kr;
+    vm_offset_t 	data;
+
+    kr = vm_map_copyout( kernel_map, &data, (vm_map_copy_t) matching );
+
+    if( KERN_SUCCESS == kr) {
+        // must return success after vm_map_copyout() succeeds
+	*result = is_io_service_get_matching_services( master_port,
+			(char *) data, existing );
+	vm_deallocate( kernel_map, data, matchingCnt );
+    }
+
+    return( kr );
+}
+
 /* Routine io_service_add_notification */
 kern_return_t is_io_service_add_notification(
 	mach_port_t master_port,
@@ -1038,7 +1200,6 @@ kern_return_t is_io_service_add_notification(
 	mach_msg_type_number_t referenceCnt,
 	io_object_t * notification )
 {
-
     IOServiceUserNotification *	userNotify = 0;
     IONotifier *		notify = 0;
     const OSSymbol *		sym;
@@ -1103,6 +1264,34 @@ kern_return_t is_io_service_add_notification(
     return( err );
 }
 
+/* Routine io_service_add_notification_ool */
+kern_return_t is_io_service_add_notification_ool(
+	mach_port_t master_port,
+	io_name_t notification_type,
+	io_buf_ptr_t matching,
+	mach_msg_type_number_t matchingCnt,
+	mach_port_t wake_port,
+	io_async_ref_t reference,
+	mach_msg_type_number_t referenceCnt,
+	natural_t *result,
+	io_object_t *notification )
+{
+    kern_return_t	kr;
+    vm_offset_t 	data;
+
+    kr = vm_map_copyout( kernel_map, &data, (vm_map_copy_t) matching );
+
+    if( KERN_SUCCESS == kr) {
+        // must return success after vm_map_copyout() succeeds
+	*result = is_io_service_add_notification( master_port, notification_type,
+			(char *) data, wake_port, reference, referenceCnt, notification );
+	vm_deallocate( kernel_map, data, matchingCnt );
+    }
+
+    return( kr );
+}
+
+
 /* Routine io_service_add_notification_old */
 kern_return_t is_io_service_add_notification_old(
 	mach_port_t master_port,
@@ -1154,6 +1343,8 @@ kern_return_t is_io_service_add_interest_notification(
             err = kIOReturnSuccess;
         } else
             err = kIOReturnUnsupported;
+
+	sym->release();
 
     } while( false );
 
@@ -1421,7 +1612,7 @@ kern_return_t is_io_registry_entry_get_property_bytes(
 	offsetBytes = off->unsigned64BitValue();
 	len = off->numberOfBytes();
 	bytes = &offsetBytes;
-#if __BIG_ENDIAN__
+#ifdef __BIG_ENDIAN__
 	bytes = (const void *)
 		(((UInt32) bytes) + (sizeof( UInt64) - len));
 #endif
@@ -1627,6 +1818,18 @@ kern_return_t is_io_service_get_busy_state(
     return( kIOReturnSuccess );
 }
 
+/* Routine io_service_get_state */
+kern_return_t is_io_service_get_state(
+	io_object_t _service,
+	uint64_t *state )
+{
+    CHECK( IOService, _service, service );
+
+    *state = service->getState();
+
+    return( kIOReturnSuccess );
+}
+
 /* Routine io_service_wait_quiet */
 kern_return_t is_io_service_wait_quiet(
 	io_object_t _service,
@@ -1740,7 +1943,10 @@ kern_return_t is_io_connect_map_memory(
         if( task != current_task()) {
             // push a name out to the task owning the map,
             // so we can clean up maps
-            mach_port_name_t name = IOMachPort::makeSendRightForTask(
+#if IOASSERT
+	    mach_port_name_t name =
+#endif
+	    IOMachPort::makeSendRightForTask(
                                     task, map, IKOT_IOKIT_OBJECT );
             assert( name );
 
@@ -2630,17 +2836,8 @@ kern_return_t is_io_catalog_get_data(
         return kIOReturnNoMemory;
 
     s->clearText();
-    switch ( flag ) {
-        case kIOCatalogGetContents:
-            if ( !gIOCatalogue->serialize(s) ) {
-                kr = kIOReturnNoMemory;
-            }
-            break;
 
-        default:
-            kr = kIOReturnBadArgument;
-            break;
-    }
+    kr = gIOCatalogue->serializeData(flag, s);
 
     if ( kr == kIOReturnSuccess ) {
         vm_offset_t data;

@@ -658,7 +658,7 @@ struct	in6_multi;
 void	icmp6_init __P((void));
 void	icmp6_paramerror __P((struct mbuf *, int));
 void	icmp6_error __P((struct mbuf *, int, int, int));
-int	icmp6_input __P((struct mbuf **, int *, int));
+int	icmp6_input __P((struct mbuf **, int *));
 void	icmp6_fasttimo __P((void));
 void	icmp6_reflect __P((struct mbuf *, size_t));
 void	icmp6_prepare __P((struct mbuf *));

@@ -47,6 +47,8 @@ extern void thread_bootstrap_return(void);
 extern struct   Saveanchor saveanchor;
 extern int      real_ncpus;                     /* Number of actual CPUs */
 
+#define       USRSTACK        0xc0000000
+
 kern_return_t
 thread_userstack(
     thread_t,
@@ -69,6 +71,7 @@ thread_entrypoint(
 unsigned int get_msr_exportmask(void);
 unsigned int get_msr_nbits(void);
 unsigned int get_msr_rbits(void);
+void ppc_checkthreadstate(void *, int);
 void thread_set_child(thread_act_t child, int pid);
 void thread_set_parent(thread_act_t parent, int pid);
 		
@@ -80,6 +83,9 @@ unsigned int state_count[] = {
 	PPC_THREAD_STATE_COUNT,
 	PPC_FLOAT_STATE_COUNT,
 	PPC_EXCEPTION_STATE_COUNT,
+	PPC_VECTOR_STATE_COUNT,
+	PPC_THREAD_STATE64_COUNT,
+	PPC_EXCEPTION_STATE64_COUNT,
 };
 
 /*
@@ -89,7 +95,7 @@ unsigned int state_count[] = {
  */
 
 kern_return_t 
-act_machine_get_state(
+machine_thread_get_state(
 		      thread_act_t           thr_act,
 		      thread_flavor_t        flavor,
 		      thread_state_t         tstate,
@@ -104,32 +110,29 @@ act_machine_get_state(
 	unsigned int vrvalidwrk;
 
 	register struct ppc_thread_state *ts;
+	register struct ppc_thread_state64 *xts;
 	register struct ppc_exception_state *es;
+	register struct ppc_exception_state64 *xes;
 	register struct ppc_float_state *fs;
 	register struct ppc_vector_state *vs;
 	
-	
-#if	MACH_ASSERT
-    if (watchacts & WA_STATE)
-	printf("act_%x act_machine_get_state(thr_act=%x,flav=%x,st=%x,cnt@%x=%x)\n",
-	       current_act(), thr_act, flavor, tstate,
-	       count, (count ? *count : 0));
-#endif	/* MACH_ASSERT */
-
 	genuser = find_user_regs(thr_act);						/* Find the current user general context for this activation */
 
 	switch (flavor) {
 		
 		case THREAD_STATE_FLAVOR_LIST:
 			
-			if (*count < 3)  {
+			if (*count < 6)  {
 				return (KERN_INVALID_ARGUMENT);
 			}
 		
 			tstate[0] = PPC_THREAD_STATE;
 			tstate[1] = PPC_FLOAT_STATE;
 			tstate[2] = PPC_EXCEPTION_STATE;
-			*count = 3;
+			tstate[3] = PPC_VECTOR_STATE;
+			tstate[4] = PPC_THREAD_STATE64;
+			tstate[5] = PPC_EXCEPTION_STATE64;
+			*count = 6;
 		
 			return KERN_SUCCESS;
 	
@@ -144,46 +147,46 @@ act_machine_get_state(
 			sv = genuser;									/* Copy this over */
 			
 			if(sv) {										/* Is there a save area yet? */
-				ts->r0	= sv->save_r0;
-				ts->r1	= sv->save_r1;
-				ts->r2	= sv->save_r2;
-				ts->r3	= sv->save_r3;
-				ts->r4	= sv->save_r4;
-				ts->r5	= sv->save_r5;
-				ts->r6	= sv->save_r6;
-				ts->r7	= sv->save_r7;
-				ts->r8	= sv->save_r8;
-				ts->r9	= sv->save_r9;
-				ts->r10	= sv->save_r10;
-				ts->r11	= sv->save_r11;
-				ts->r12	= sv->save_r12;
-				ts->r13	= sv->save_r13;
-				ts->r14	= sv->save_r14;
-				ts->r15	= sv->save_r15;
-				ts->r16	= sv->save_r16;
-				ts->r17	= sv->save_r17;
-				ts->r18	= sv->save_r18;
-				ts->r19	= sv->save_r19;
-				ts->r20	= sv->save_r20;
-				ts->r21	= sv->save_r21;
-				ts->r22	= sv->save_r22;
-				ts->r23	= sv->save_r23;
-				ts->r24	= sv->save_r24;
-				ts->r25	= sv->save_r25;
-				ts->r26	= sv->save_r26;
-				ts->r27	= sv->save_r27;
-				ts->r28	= sv->save_r28;
-				ts->r29	= sv->save_r29;
-				ts->r30	= sv->save_r30;
-				ts->r31	= sv->save_r31;
-				ts->cr	= sv->save_cr;
-				ts->xer	= sv->save_xer;
-				ts->lr	= sv->save_lr;
-				ts->ctr	= sv->save_ctr;
-				ts->srr0 = sv->save_srr0;
-				ts->srr1 = sv->save_srr1;
+				ts->r0	= (unsigned int)sv->save_r0;
+				ts->r1	= (unsigned int)sv->save_r1;
+				ts->r2	= (unsigned int)sv->save_r2;
+				ts->r3	= (unsigned int)sv->save_r3;
+				ts->r4	= (unsigned int)sv->save_r4;
+				ts->r5	= (unsigned int)sv->save_r5;
+				ts->r6	= (unsigned int)sv->save_r6;
+				ts->r7	= (unsigned int)sv->save_r7;
+				ts->r8	= (unsigned int)sv->save_r8;
+				ts->r9	= (unsigned int)sv->save_r9;
+				ts->r10	= (unsigned int)sv->save_r10;
+				ts->r11	= (unsigned int)sv->save_r11;
+				ts->r12	= (unsigned int)sv->save_r12;
+				ts->r13	= (unsigned int)sv->save_r13;
+				ts->r14	= (unsigned int)sv->save_r14;
+				ts->r15	= (unsigned int)sv->save_r15;
+				ts->r16	= (unsigned int)sv->save_r16;
+				ts->r17	= (unsigned int)sv->save_r17;
+				ts->r18	= (unsigned int)sv->save_r18;
+				ts->r19	= (unsigned int)sv->save_r19;
+				ts->r20	= (unsigned int)sv->save_r20;
+				ts->r21	= (unsigned int)sv->save_r21;
+				ts->r22	= (unsigned int)sv->save_r22;
+				ts->r23	= (unsigned int)sv->save_r23;
+				ts->r24	= (unsigned int)sv->save_r24;
+				ts->r25	= (unsigned int)sv->save_r25;
+				ts->r26	= (unsigned int)sv->save_r26;
+				ts->r27	= (unsigned int)sv->save_r27;
+				ts->r28	= (unsigned int)sv->save_r28;
+				ts->r29	= (unsigned int)sv->save_r29;
+				ts->r30	= (unsigned int)sv->save_r30;
+				ts->r31	= (unsigned int)sv->save_r31;
+				ts->cr	= (unsigned int)sv->save_cr;
+				ts->xer	= (unsigned int)sv->save_xer;
+				ts->lr	= (unsigned int)sv->save_lr;
+				ts->ctr	= (unsigned int)sv->save_ctr;
+				ts->srr0 = (unsigned int)sv->save_srr0;
+				ts->srr1 = (unsigned int)sv->save_srr1;
 				ts->mq	= 0;							/* MQ register (601 only) */
-				ts->vrsave	= sv->save_vrsave;			/* VRSAVE register (Altivec only) */
+				ts->vrsave	= (unsigned int)sv->save_vrsave;			/* VRSAVE register (Altivec only) */
 			}
 			else {										/* No user state yet. Save seemingly random values. */
 						
@@ -204,6 +207,75 @@ act_machine_get_state(
 			*count = PPC_THREAD_STATE_COUNT;			/* Pass back the amount we actually copied */
 			return KERN_SUCCESS;
 	
+	
+		case PPC_THREAD_STATE64:
+	
+			if (*count < PPC_THREAD_STATE64_COUNT) {	/* Is the count ok? */
+				return KERN_INVALID_ARGUMENT;
+			}
+		
+			xts = (struct ppc_thread_state64 *) tstate;
+
+			sv = genuser;								/* Copy this over */
+			
+			if(sv) {									/* Is there a save area yet? */
+				xts->r0		= sv->save_r0;
+				xts->r1		= sv->save_r1;
+				xts->r2		= sv->save_r2;
+				xts->r3		= sv->save_r3;
+				xts->r4		= sv->save_r4;
+				xts->r5		= sv->save_r5;
+				xts->r6		= sv->save_r6;
+				xts->r7		= sv->save_r7;
+				xts->r8		= sv->save_r8;
+				xts->r9		= sv->save_r9;
+				xts->r10	= sv->save_r10;
+				xts->r11	= sv->save_r11;
+				xts->r12	= sv->save_r12;
+				xts->r13	= sv->save_r13;
+				xts->r14	= sv->save_r14;
+				xts->r15	= sv->save_r15;
+				xts->r16	= sv->save_r16;
+				xts->r17	= sv->save_r17;
+				xts->r18	= sv->save_r18;
+				xts->r19	= sv->save_r19;
+				xts->r20	= sv->save_r20;
+				xts->r21	= sv->save_r21;
+				xts->r22	= sv->save_r22;
+				xts->r23	= sv->save_r23;
+				xts->r24	= sv->save_r24;
+				xts->r25	= sv->save_r25;
+				xts->r26	= sv->save_r26;
+				xts->r27	= sv->save_r27;
+				xts->r28	= sv->save_r28;
+				xts->r29	= sv->save_r29;
+				xts->r30	= sv->save_r30;
+				xts->r31	= sv->save_r31;
+				xts->cr		= sv->save_cr;
+				xts->xer	= sv->save_xer;
+				xts->lr		= sv->save_lr;
+				xts->ctr	= sv->save_ctr;
+				xts->srr0 	= sv->save_srr0;
+				xts->srr1 	= sv->save_srr1;
+				xts->vrsave	= sv->save_vrsave;			/* VRSAVE register (Altivec only) */
+			}
+			else {										/* No user state yet. Save seemingly random values. */
+						
+				for(i=0; i < 32; i++) {					/* Fill up with defaults */
+					((unsigned long long *)&xts->r0)[i] = ((unsigned long long *)&FloatInit)[0];
+				}
+				xts->cr		= 0;
+				xts->xer	= 0;
+				xts->lr		= ((unsigned long long *)&FloatInit)[0];
+				xts->ctr	= ((unsigned long long *)&FloatInit)[0];
+				xts->srr0	= ((unsigned long long *)&FloatInit)[0];
+				xts->srr1 	= MSR_EXPORT_MASK_SET;
+				xts->vrsave	= 0;						/* VRSAVE register (Altivec only) */
+			}
+		
+			*count = PPC_THREAD_STATE64_COUNT;			/* Pass back the amount we actually copied */
+			return KERN_SUCCESS;
+	
 		case PPC_EXCEPTION_STATE:
 	
 			if (*count < PPC_EXCEPTION_STATE_COUNT) {
@@ -211,17 +283,10 @@ act_machine_get_state(
 			}
 		
 			es = (struct ppc_exception_state *) tstate;
+			sv = genuser;								/* Copy this over */
 		
-			sv = thr_act->mact.pcb;						/* Start with the normal savearea */
-			while(sv) {									/* Find the user context */
-				if(sv->save_srr1 & MASK(MSR_PR)) {		/* Are we looking at the user context? */
-					break;								/* Outta here */
-				}
-				sv = sv->save_hdr.save_prev;			/* Back chain */
-			}
-
 			if(sv) {									/* See if valid state yet */
-				es->dar = sv->save_dar;
+				es->dar = (unsigned int)sv->save_dar;
 				es->dsisr = sv->save_dsisr;
 				es->exception = sv->save_exception;
 			}
@@ -234,6 +299,29 @@ act_machine_get_state(
 			*count = PPC_EXCEPTION_STATE_COUNT;
 			return KERN_SUCCESS;
 	
+		case PPC_EXCEPTION_STATE64:
+	
+			if (*count < PPC_EXCEPTION_STATE64_COUNT) {
+				return KERN_INVALID_ARGUMENT;
+			}
+		
+			xes = (struct ppc_exception_state64 *) tstate;
+			sv = genuser;								/* Copy this over */
+		
+			if(sv) {									/* See if valid state yet */
+				xes->dar = sv->save_dar;
+				xes->dsisr = sv->save_dsisr;
+				xes->exception = sv->save_exception;
+			}
+			else {										/* Nope, not yet */
+				xes->dar = 0;
+				xes->dsisr = 0;
+				xes->exception = ((unsigned int *)&FloatInit)[0];
+			}
+		
+			*count = PPC_EXCEPTION_STATE64_COUNT;
+			return KERN_SUCCESS;
+	
 		case PPC_FLOAT_STATE: 
 		
 			if (*count < PPC_FLOAT_STATE_COUNT)  {
@@ -244,14 +332,7 @@ act_machine_get_state(
 		
 			fs = (struct ppc_float_state *) tstate;		/* Point to destination */
 			
-			fsv = (savearea_fpu *)thr_act->mact.curctx->FPUsave;	/* Start with the top FPU savearea */
-			
-			while(fsv) {								/* Find the user context */
-				if(!fsv->save_hdr.save_level) {			/* Are we looking at the user context? */
-					break;								/* Outta here */
-				}
-				fsv = (savearea_fpu *)fsv->save_hdr.save_prev;	/* Back chain */
-			}
+			fsv = find_user_fpu(thr_act);				/* Get the user's fpu savearea */
 			
 			if(fsv) {									/* See if we have any */
 				bcopy((char *)&fsv->save_fp0, (char *)fs, 32*8); /* 32 registers  */
@@ -282,14 +363,7 @@ act_machine_get_state(
 		
 			vs = (struct ppc_vector_state *) tstate;	/* Point to destination */
 			
-			vsv = (savearea_vec *)thr_act->mact.curctx->VMXsave;	/* Start with the top vector savearea */
-			
-			while(vsv) {								/* Find the user context */
-				if(!vsv->save_hdr.save_level) {			/* Are we looking at the user context? */
-					break;								/* Outta here */
-				}
-				vsv = (savearea_vec *)vsv->save_hdr.save_prev;	/* Back chain */
-			}
+			vsv = find_user_vec(thr_act);				/* Find the vector savearea */
 			
 			if(vsv) {									/* See if we have any */
 				
@@ -300,7 +374,7 @@ act_machine_get_state(
 					vs->save_vscr[0] = 0;				/* Set an initial value if no general user yet */
 					vs->save_vscr[1] = 0;
 					vs->save_vscr[2] = 0;
-					vs->save_vscr[3] = 0x00010000;
+					vs->save_vscr[3] = 0x00010000;		/* Always start with Java mode off */
 				}
 				for(i=0; i < 32; i++) {					/* Copy the saved registers and invalidate the others */
 					for(j=0; j < 4; j++) {
@@ -322,7 +396,7 @@ act_machine_get_state(
 					vs->save_vscr[0] = 0;				/* Set an initial value if no general user yet */
 					vs->save_vscr[1] = 0;
 					vs->save_vscr[2] = 0;
-					vs->save_vscr[3] = 0x00010000;
+					vs->save_vscr[3] = 0x00010000;		/* Always start with Java mode off */
 				}
 				vs->save_vrvalid = 0;					/* Clear the valid flags */
 			}
@@ -337,6 +411,241 @@ act_machine_get_state(
 			return KERN_INVALID_ARGUMENT;
 	}
 }
+/* Close cousin of machine_thread_get_state(). 
+ * This function is currently incomplete since we don't really need vector
+ * or FP for the core dump (the save area can be accessed directly if the 
+ * user is so inclined). Also the function name is something of a misnomer,
+ * see the comment above find_kern_regs(). 
+ */
+
+kern_return_t 
+machine_thread_get_kern_state(
+		      thread_act_t           thr_act,
+		      thread_flavor_t        flavor,
+		      thread_state_t         tstate,
+		      mach_msg_type_number_t *count)
+{
+	
+	register struct savearea *sv;						/* Pointer to the context savearea */
+	savearea *genkern;
+	int i, j;
+	unsigned int vrvalidwrk;
+
+	register struct ppc_thread_state *ts;
+	register struct ppc_thread_state64 *xts;
+	register struct ppc_exception_state *es;
+	register struct ppc_exception_state64 *xes;
+	
+	genkern = find_kern_regs(thr_act);
+
+	switch (flavor) {
+		
+		case THREAD_STATE_FLAVOR_LIST:
+			
+			if (*count < 6)  {
+				return (KERN_INVALID_ARGUMENT);
+			}
+		
+			tstate[0] = PPC_THREAD_STATE;
+			tstate[1] = PPC_FLOAT_STATE;
+			tstate[2] = PPC_EXCEPTION_STATE;
+			tstate[3] = PPC_VECTOR_STATE;
+			tstate[4] = PPC_THREAD_STATE64;
+			tstate[5] = PPC_EXCEPTION_STATE64;
+			*count = 6;
+		
+			return KERN_SUCCESS;
+	
+		case PPC_THREAD_STATE:
+	
+			if (*count < PPC_THREAD_STATE_COUNT) {			/* Is the count ok? */
+				return KERN_INVALID_ARGUMENT;
+			}
+		
+			ts = (struct ppc_thread_state *) tstate;
+
+			sv = genkern;									/* Copy this over */
+			
+			if(sv) {										/* Is there a save area yet? */
+				ts->r0	= (unsigned int)sv->save_r0;
+				ts->r1	= (unsigned int)sv->save_r1;
+				ts->r2	= (unsigned int)sv->save_r2;
+				ts->r3	= (unsigned int)sv->save_r3;
+				ts->r4	= (unsigned int)sv->save_r4;
+				ts->r5	= (unsigned int)sv->save_r5;
+				ts->r6	= (unsigned int)sv->save_r6;
+				ts->r7	= (unsigned int)sv->save_r7;
+				ts->r8	= (unsigned int)sv->save_r8;
+				ts->r9	= (unsigned int)sv->save_r9;
+				ts->r10	= (unsigned int)sv->save_r10;
+				ts->r11	= (unsigned int)sv->save_r11;
+				ts->r12	= (unsigned int)sv->save_r12;
+				ts->r13	= (unsigned int)sv->save_r13;
+				ts->r14	= (unsigned int)sv->save_r14;
+				ts->r15	= (unsigned int)sv->save_r15;
+				ts->r16	= (unsigned int)sv->save_r16;
+				ts->r17	= (unsigned int)sv->save_r17;
+				ts->r18	= (unsigned int)sv->save_r18;
+				ts->r19	= (unsigned int)sv->save_r19;
+				ts->r20	= (unsigned int)sv->save_r20;
+				ts->r21	= (unsigned int)sv->save_r21;
+				ts->r22	= (unsigned int)sv->save_r22;
+				ts->r23	= (unsigned int)sv->save_r23;
+				ts->r24	= (unsigned int)sv->save_r24;
+				ts->r25	= (unsigned int)sv->save_r25;
+				ts->r26	= (unsigned int)sv->save_r26;
+				ts->r27	= (unsigned int)sv->save_r27;
+				ts->r28	= (unsigned int)sv->save_r28;
+				ts->r29	= (unsigned int)sv->save_r29;
+				ts->r30	= (unsigned int)sv->save_r30;
+				ts->r31	= (unsigned int)sv->save_r31;
+				ts->cr	= (unsigned int)sv->save_cr;
+				ts->xer	= (unsigned int)sv->save_xer;
+				ts->lr	= (unsigned int)sv->save_lr;
+				ts->ctr	= (unsigned int)sv->save_ctr;
+				ts->srr0 = (unsigned int)sv->save_srr0;
+				ts->srr1 = (unsigned int)sv->save_srr1;
+				ts->mq	= 0;							/* MQ register (601 only) */
+				ts->vrsave	= (unsigned int)sv->save_vrsave;			/* VRSAVE register (Altivec only) */
+			}
+			else {										/* No state yet. Save seemingly random values. */
+						
+				for(i=0; i < 32; i+=2) {				/* Fill up with defaults */
+					((unsigned int *)&ts->r0)[i] = ((unsigned int *)&FloatInit)[0];
+					((unsigned int *)&ts->r0)[i+1] = ((unsigned int *)&FloatInit)[1];
+				}
+				ts->cr	= 0;
+				ts->xer	= 0;
+				ts->lr	= ((unsigned int *)&FloatInit)[0];
+				ts->ctr	= ((unsigned int *)&FloatInit)[1];
+				ts->srr0	= ((unsigned int *)&FloatInit)[0];
+				ts->srr1 = MSR_EXPORT_MASK_SET;
+				ts->mq	= 0;
+				ts->vrsave	= 0;						/* VRSAVE register (Altivec only) */
+			}
+		
+			*count = PPC_THREAD_STATE_COUNT;			/* Pass back the amount we actually copied */
+			return KERN_SUCCESS;
+	
+	
+		case PPC_THREAD_STATE64:
+	
+			if (*count < PPC_THREAD_STATE64_COUNT) {	/* Is the count ok? */
+				return KERN_INVALID_ARGUMENT;
+			}
+		
+			xts = (struct ppc_thread_state64 *) tstate;
+
+			sv = genkern;								/* Copy this over */
+			
+			if(sv) {									/* Is there a save area yet? */
+				xts->r0		= sv->save_r0;
+				xts->r1		= sv->save_r1;
+				xts->r2		= sv->save_r2;
+				xts->r3		= sv->save_r3;
+				xts->r4		= sv->save_r4;
+				xts->r5		= sv->save_r5;
+				xts->r6		= sv->save_r6;
+				xts->r7		= sv->save_r7;
+				xts->r8		= sv->save_r8;
+				xts->r9		= sv->save_r9;
+				xts->r10	= sv->save_r10;
+				xts->r11	= sv->save_r11;
+				xts->r12	= sv->save_r12;
+				xts->r13	= sv->save_r13;
+				xts->r14	= sv->save_r14;
+				xts->r15	= sv->save_r15;
+				xts->r16	= sv->save_r16;
+				xts->r17	= sv->save_r17;
+				xts->r18	= sv->save_r18;
+				xts->r19	= sv->save_r19;
+				xts->r20	= sv->save_r20;
+				xts->r21	= sv->save_r21;
+				xts->r22	= sv->save_r22;
+				xts->r23	= sv->save_r23;
+				xts->r24	= sv->save_r24;
+				xts->r25	= sv->save_r25;
+				xts->r26	= sv->save_r26;
+				xts->r27	= sv->save_r27;
+				xts->r28	= sv->save_r28;
+				xts->r29	= sv->save_r29;
+				xts->r30	= sv->save_r30;
+				xts->r31	= sv->save_r31;
+				xts->cr		= sv->save_cr;
+				xts->xer	= sv->save_xer;
+				xts->lr		= sv->save_lr;
+				xts->ctr	= sv->save_ctr;
+				xts->srr0 	= sv->save_srr0;
+				xts->srr1 	= sv->save_srr1;
+				xts->vrsave	= sv->save_vrsave;			/* VRSAVE register (Altivec only) */
+			}
+			else {										/* No user state yet. Save seemingly random values. */
+						
+				for(i=0; i < 32; i++) {					/* Fill up with defaults */
+					((unsigned long long *)&xts->r0)[i] = ((unsigned long long *)&FloatInit)[0];
+				}
+				xts->cr		= 0;
+				xts->xer	= 0;
+				xts->lr		= ((unsigned long long *)&FloatInit)[0];
+				xts->ctr	= ((unsigned long long *)&FloatInit)[0];
+				xts->srr0	= ((unsigned long long *)&FloatInit)[0];
+				xts->srr1 	= MSR_EXPORT_MASK_SET;
+				xts->vrsave	= 0;						/* VRSAVE register (Altivec only) */
+			}
+		
+			*count = PPC_THREAD_STATE64_COUNT;			/* Pass back the amount we actually copied */
+			return KERN_SUCCESS;
+	
+		case PPC_EXCEPTION_STATE:
+	
+			if (*count < PPC_EXCEPTION_STATE_COUNT) {
+				return KERN_INVALID_ARGUMENT;
+			}
+		
+			es = (struct ppc_exception_state *) tstate;
+			sv = genkern;								/* Copy this over */
+		
+			if(sv) {									/* See if valid state yet */
+				es->dar = (unsigned int)sv->save_dar;
+				es->dsisr = sv->save_dsisr;
+				es->exception = sv->save_exception;
+			}
+			else {										/* Nope, not yet */
+				es->dar = 0;
+				es->dsisr = 0;
+				es->exception = ((unsigned int *)&FloatInit)[0];
+			}
+		
+			*count = PPC_EXCEPTION_STATE_COUNT;
+			return KERN_SUCCESS;
+	
+		case PPC_EXCEPTION_STATE64:
+	
+			if (*count < PPC_EXCEPTION_STATE64_COUNT) {
+				return KERN_INVALID_ARGUMENT;
+			}
+		
+			xes = (struct ppc_exception_state64 *) tstate;
+			sv = genkern;								/* Copy this over */
+		
+			if(sv) {									/* See if valid state yet */
+				xes->dar = sv->save_dar;
+				xes->dsisr = sv->save_dsisr;
+				xes->exception = sv->save_exception;
+			}
+			else {										/* Nope, not yet */
+				xes->dar = 0;
+				xes->dsisr = 0;
+				xes->exception = ((unsigned int *)&FloatInit)[0];
+			}
+		
+			*count = PPC_EXCEPTION_STATE64_COUNT;
+			return KERN_SUCCESS;
+	
+		default:
+			return KERN_INVALID_ARGUMENT;
+	}
+}
 
 
 /*
@@ -345,7 +654,7 @@ act_machine_get_state(
  * Set the status of the specified thread.
  */
 kern_return_t 
-act_machine_set_state(
+machine_thread_set_state(
 		      thread_act_t	     thr_act,
 		      thread_flavor_t	     flavor,
 		      thread_state_t	     tstate,
@@ -358,18 +667,12 @@ act_machine_set_state(
 	unsigned int	i;
 	int				clgn;
 	register struct ppc_thread_state *ts;
+	register struct ppc_thread_state64 *xts;
 	register struct ppc_exception_state *es;
+	register struct ppc_exception_state *xes;
 	register struct ppc_float_state *fs;
 	register struct ppc_vector_state *vs;
 	
-    int	kernel_act = thr_act->kernel_loading ||	thr_act->kernel_loaded;
-
-#if	MACH_ASSERT
-    if (watchacts & WA_STATE)
-	printf("act_%x act_machine_set_state(thr_act=%x,flav=%x,st=%x,cnt=%x)\n",
-	       current_act(), thr_act, flavor, tstate, count);
-#endif	/* MACH_ASSERT */
-		
 //	dbgTrace((unsigned int)thr_act, (unsigned int)sv, flavor);	/* (TEST/DEBUG) */
 
 	clgn = count;											/* Get the count */
@@ -381,10 +684,23 @@ act_machine_set_state(
 				return KERN_INVALID_ARGUMENT;				/* Yeah, just leave... */
 			}
 			break;
+	
+		case PPC_THREAD_STATE64:
+			
+			if (clgn < PPC_THREAD_STATE64_COUNT)  {			/* Is it too short? */
+				return KERN_INVALID_ARGUMENT;				/* Yeah, just leave... */
+			}
+			break;
 			
 		case PPC_EXCEPTION_STATE:
 			
 			if (clgn < PPC_EXCEPTION_STATE_COUNT)  {		/* Is it too short? */
+				return KERN_INVALID_ARGUMENT;				/* Yeah, just leave... */
+			}
+			
+		case PPC_EXCEPTION_STATE64:
+			
+			if (clgn < PPC_EXCEPTION_STATE64_COUNT)  {		/* Is it too short? */
 				return KERN_INVALID_ARGUMENT;				/* Yeah, just leave... */
 			}
 			
@@ -416,67 +732,132 @@ act_machine_set_state(
 	switch (flavor) {
 		
 		case PPC_THREAD_STATE:
-		case PPC_EXCEPTION_STATE:
 				
 			ts = (struct ppc_thread_state *)tstate;
-										
-			if(flavor == PPC_THREAD_STATE) {				/* Are we updating plain state? */
-			
-				genuser->save_r0	= ts->r0;
-				genuser->save_r1	= ts->r1;
-				genuser->save_r2	= ts->r2;
-				genuser->save_r3	= ts->r3;
-				genuser->save_r4	= ts->r4;
-				genuser->save_r5	= ts->r5;
-				genuser->save_r6	= ts->r6;
-				genuser->save_r7	= ts->r7;
-				genuser->save_r8	= ts->r8;
-				genuser->save_r9	= ts->r9;
-				genuser->save_r10	= ts->r10;
-				genuser->save_r11	= ts->r11;
-				genuser->save_r12	= ts->r12;
-				genuser->save_r13	= ts->r13;
-				genuser->save_r14	= ts->r14;
-				genuser->save_r15	= ts->r15;
-				genuser->save_r16	= ts->r16;
-				genuser->save_r17	= ts->r17;
-				genuser->save_r18	= ts->r18;
-				genuser->save_r19	= ts->r19;
-				genuser->save_r20	= ts->r20;
-				genuser->save_r21	= ts->r21;
-				genuser->save_r22	= ts->r22;
-				genuser->save_r23	= ts->r23;
-				genuser->save_r24	= ts->r24;
-				genuser->save_r25	= ts->r25;
-				genuser->save_r26	= ts->r26;
-				genuser->save_r27	= ts->r27;
-				genuser->save_r28	= ts->r28;
-				genuser->save_r29	= ts->r29;
-				genuser->save_r30	= ts->r30;
-				genuser->save_r31	= ts->r31;
-			
-				genuser->save_cr	= ts->cr;
-				genuser->save_xer	= ts->xer;
-				genuser->save_lr	= ts->lr;
-				genuser->save_ctr	= ts->ctr;
-				genuser->save_srr0	= ts->srr0;
-				genuser->save_vrsave	= ts->vrsave;					/* VRSAVE register (Altivec only) */
 
-				genuser->save_srr1 = MSR_PREPARE_FOR_IMPORT(genuser->save_srr1, ts->srr1);	/* Set the bits we can change */
-	
-				if(!kernel_act) genuser->save_srr1 |= MSR_EXPORT_MASK_SET;	/* If not a kernel guy, force the magic bits on */	
-			
-				genuser->save_srr1 &= ~(MASK(MSR_FP) | MASK(MSR_VEC));	/* Make sure we don't enable the floating point unit */
-			
-				return KERN_SUCCESS;
+			genuser->save_r0	= (uint64_t)ts->r0;
+			genuser->save_r1	= (uint64_t)ts->r1;
+			genuser->save_r2	= (uint64_t)ts->r2;
+			genuser->save_r3	= (uint64_t)ts->r3;
+			genuser->save_r4	= (uint64_t)ts->r4;
+			genuser->save_r5	= (uint64_t)ts->r5;
+			genuser->save_r6	= (uint64_t)ts->r6;
+			genuser->save_r7	= (uint64_t)ts->r7;
+			genuser->save_r8	= (uint64_t)ts->r8;
+			genuser->save_r9	= (uint64_t)ts->r9;
+			genuser->save_r10	= (uint64_t)ts->r10;
+			genuser->save_r11	= (uint64_t)ts->r11;
+			genuser->save_r12	= (uint64_t)ts->r12;
+			genuser->save_r13	= (uint64_t)ts->r13;
+			genuser->save_r14	= (uint64_t)ts->r14;
+			genuser->save_r15	= (uint64_t)ts->r15;
+			genuser->save_r16	= (uint64_t)ts->r16;
+			genuser->save_r17	= (uint64_t)ts->r17;
+			genuser->save_r18	= (uint64_t)ts->r18;
+			genuser->save_r19	= (uint64_t)ts->r19;
+			genuser->save_r20	= (uint64_t)ts->r20;
+			genuser->save_r21	= (uint64_t)ts->r21;
+			genuser->save_r22	= (uint64_t)ts->r22;
+			genuser->save_r23	= (uint64_t)ts->r23;
+			genuser->save_r24	= (uint64_t)ts->r24;
+			genuser->save_r25	= (uint64_t)ts->r25;
+			genuser->save_r26	= (uint64_t)ts->r26;
+			genuser->save_r27	= (uint64_t)ts->r27;
+			genuser->save_r28	= (uint64_t)ts->r28;
+			genuser->save_r29	= (uint64_t)ts->r29;
+			genuser->save_r30	= (uint64_t)ts->r30;
+			genuser->save_r31	= (uint64_t)ts->r31;
+		
+			genuser->save_cr	= ts->cr;
+			genuser->save_xer	= (uint64_t)ts->xer;
+			genuser->save_lr	= (uint64_t)ts->lr;
+			genuser->save_ctr	= (uint64_t)ts->ctr;
+			genuser->save_srr0	= (uint64_t)ts->srr0;
+			genuser->save_vrsave	= ts->vrsave;					/* VRSAVE register (Altivec only) */
+
+			genuser->save_srr1 = MSR_PREPARE_FOR_IMPORT(genuser->save_srr1, ts->srr1);	/* Set the bits we can change */
+
+			genuser->save_srr1 |= MSR_EXPORT_MASK_SET;
+		
+			genuser->save_srr1 &= ~(MASK(MSR_FP) | MASK(MSR_VEC));	/* Make sure we don't enable the floating point unit */
+		
+			return KERN_SUCCESS;
+
+
+		case PPC_THREAD_STATE64:
 				
-			}
+			xts = (struct ppc_thread_state64 *)tstate;
 
+			genuser->save_r0	= xts->r0;
+			genuser->save_r1	= xts->r1;
+			genuser->save_r2	= xts->r2;
+			genuser->save_r3	= xts->r3;
+			genuser->save_r4	= xts->r4;
+			genuser->save_r5	= xts->r5;
+			genuser->save_r6	= xts->r6;
+			genuser->save_r7	= xts->r7;
+			genuser->save_r8	= xts->r8;
+			genuser->save_r9	= xts->r9;
+			genuser->save_r10	= xts->r10;
+			genuser->save_r11	= xts->r11;
+			genuser->save_r12	= xts->r12;
+			genuser->save_r13	= xts->r13;
+			genuser->save_r14	= xts->r14;
+			genuser->save_r15	= xts->r15;
+			genuser->save_r16	= xts->r16;
+			genuser->save_r17	= xts->r17;
+			genuser->save_r18	= xts->r18;
+			genuser->save_r19	= xts->r19;
+			genuser->save_r20	= xts->r20;
+			genuser->save_r21	= xts->r21;
+			genuser->save_r22	= xts->r22;
+			genuser->save_r23	= xts->r23;
+			genuser->save_r24	= xts->r24;
+			genuser->save_r25	= xts->r25;
+			genuser->save_r26	= xts->r26;
+			genuser->save_r27	= xts->r27;
+			genuser->save_r28	= xts->r28;
+			genuser->save_r29	= xts->r29;
+			genuser->save_r30	= xts->r30;
+			genuser->save_r31	= xts->r31;
+		
+			genuser->save_cr	= xts->cr;
+			genuser->save_xer	= xts->xer;
+			genuser->save_lr	= xts->lr;
+			genuser->save_ctr	= xts->ctr;
+			genuser->save_srr0	= xts->srr0;
+			genuser->save_vrsave	= xts->vrsave;					/* VRSAVE register (Altivec only) */
+
+			genuser->save_srr1 = MSR_PREPARE_FOR_IMPORT(genuser->save_srr1, xts->srr1);	/* Set the bits we can change */
+
+			genuser->save_srr1 |= MSR_EXPORT_MASK_SET;
+		
+			genuser->save_srr1 &= ~(MASK(MSR_FP) | MASK(MSR_VEC));	/* Make sure we don't enable the floating point unit */
+		
+			return KERN_SUCCESS;
+				
+				
+		case PPC_EXCEPTION_STATE:
+			
 			es = (struct ppc_exception_state *) tstate;
 		
-			genuser->save_dar = es->dar;
+			genuser->save_dar = (uint64_t)es->dar;
 			genuser->save_dsisr = es->dsisr;
 			genuser->save_exception = es->exception;
+
+			return KERN_SUCCESS;
+	
+/*
+ *		It's pretty worthless to try to change this stuff, but we'll do it anyway.
+ */
+ 
+		case PPC_EXCEPTION_STATE64:
+			
+			xes = (struct ppc_exception_state *) tstate;
+		
+			genuser->save_dar 	= xes->dar;
+			genuser->save_dsisr = xes->dsisr;
+			genuser->save_exception = xes->exception;
 
 			return KERN_SUCCESS;
 	
@@ -489,7 +870,7 @@ act_machine_set_state(
 			if(!fsv) {										/* Do we have one yet? */
 				fsv = (savearea_fpu *)save_alloc();			/* If we still don't have one, get a new one */
 				fsv->save_hdr.save_flags = (fsv->save_hdr.save_flags & ~SAVtype) | (SAVfloat << SAVtypeshft);	/* Mark as in use as float */
-				fsv->save_hdr.save_act = thr_act;			/* Point to the activation */
+				fsv->save_hdr.save_act = (struct thread_activation *)thr_act;	/* Point to the activation */
 				fsv->save_hdr.save_prev = 0;				/* Mark no more */
 				fsv->save_hdr.save_level = 0;				/* Mark user state */
 				
@@ -500,10 +881,10 @@ act_machine_set_state(
 					
 					while (fsvn) {							/* Go until we hit the end */
 						fsvo = fsvn;						/* Remember the previous one */
-						fsvn = (savearea_fpu *)fsvo->save_hdr.save_prev;	/* Skip on to the next */
+						fsvn = CAST_DOWN(savearea_fpu *, fsvo->save_hdr.save_prev);	/* Skip on to the next */
 					}
 					
-					fsvo->save_hdr.save_prev = (savearea *)fsv;		/* Queue us on in */
+					fsvo->save_hdr.save_prev = (addr64_t)((uintptr_t)fsv);		/* Queue us on in */
 				}
 				
 			}
@@ -527,7 +908,7 @@ act_machine_set_state(
 			if(!vsv) {										/* Do we have one yet? */
 				vsv = (savearea_vec *)save_alloc();			/* If we still don't have one, get a new one */
 				vsv->save_hdr.save_flags = (vsv->save_hdr.save_flags & ~SAVtype) | (SAVvector << SAVtypeshft);	/* Mark as in use as vector */
-				vsv->save_hdr.save_act = thr_act;			/* Point to the activation */
+				vsv->save_hdr.save_act = (struct thread_activation *)thr_act;	/* Point to the activation */
 				vsv->save_hdr.save_prev = 0;				/* Mark no more */
 				vsv->save_hdr.save_level = 0;				/* Mark user state */
 				
@@ -538,10 +919,10 @@ act_machine_set_state(
 					
 					while (vsvn) {							/* Go until we hit the end */
 						vsvo = vsvn;						/* Remember the previous one */
-						vsvn = (savearea_vec *)vsvo->save_hdr.save_prev;	/* Skip on to the next */
+						vsvn = CAST_DOWN(savearea_vec *, vsvo->save_hdr.save_prev);	/* Skip on to the next */
 					}
 					
-					vsvo->save_hdr.save_prev = (savearea *)vsv;	/* Queue us on in */
+					vsvo->save_hdr.save_prev = (addr64_t)((uintptr_t)vsv);	/* Queue us on in */
 				}
 				
 			}
@@ -571,22 +952,21 @@ act_machine_set_state(
  *		eliminate any floating point or vector kernel contexts and carry across the user state ones.
  */
 
-void act_thread_dup(thread_act_t old, thread_act_t new) {
+kern_return_t machine_thread_dup(thread_act_t self, thread_act_t target) {
 
   	savearea		*sv, *osv; 
   	savearea_fpu	*fsv, *fsvn;
   	savearea_vec	*vsv, *vsvn;
 	unsigned int	spc, i, *srs;
 	
-	fpu_save(old->mact.curctx);						/* Make certain floating point state is all saved */
-	vec_save(old->mact.curctx);						/* Make certain the vector state is all saved */
+	fpu_save(self->mact.curctx);						/* Make certain floating point state is all saved */
+	vec_save(self->mact.curctx);						/* Make certain the vector state is all saved */
 	
-	sv = get_user_regs(new);						/* Allocate and initialze context in the new activation */
+	sv = get_user_regs(target);						/* Allocate and initialze context in the new activation */
 	
-	osv = find_user_regs(old);						/* Find the original context */
-	if(!osv) {
-		panic("act_thread_dup: old activation (%08X) has no general user context\n", old);
-	}
+	osv = find_user_regs(self);						/* Find the original context */
+	if(!osv)
+		return (KERN_FAILURE);
 	
 	bcopy((char *)((unsigned int)osv + sizeof(savearea_comm)),	/* Copy everything but the headers */
 		(char *)((unsigned int)sv + sizeof(savearea_comm)), 
@@ -594,43 +974,43 @@ void act_thread_dup(thread_act_t old, thread_act_t new) {
 	
 	sv->save_srr1 &= ~(MASK(MSR_FP) | MASK(MSR_VEC));	/* Make certain that floating point and vector are turned off */
 
-	fsv = find_user_fpu(old);						/* Get any user floating point */
+	fsv = find_user_fpu(self);						/* Get any user floating point */
 	
-	new->mact.curctx->FPUsave = 0;					/* Assume no floating point */
+	target->mact.curctx->FPUsave = 0;					/* Assume no floating point */
 
 	if(fsv) {										/* Did we find one? */
 		fsvn = (savearea_fpu *)save_alloc();		/* If we still don't have one, get a new one */
 		fsvn->save_hdr.save_flags = (fsvn->save_hdr.save_flags & ~SAVtype) | (SAVfloat << SAVtypeshft);	/* Mark as in use as float */
-		fsvn->save_hdr.save_act = new;				/* Point to the activation */
+		fsvn->save_hdr.save_act = (struct thread_activation *)target;	/* Point to the activation */
 		fsvn->save_hdr.save_prev = 0;				/* Mark no more */
 		fsvn->save_hdr.save_level = 0;				/* Mark user state */
 
-		new->mact.curctx->FPUsave = fsvn;			/* Chain in the floating point */
+		target->mact.curctx->FPUsave = fsvn;			/* Chain in the floating point */
 
 		bcopy((char *)((unsigned int)fsv + sizeof(savearea_comm)),	/* Copy everything but the headers */
 			(char *)((unsigned int)fsvn + sizeof(savearea_comm)), 
 			sizeof(struct savearea) - sizeof(savearea_comm));
 	}
 
-	vsv = find_user_vec(old);						/* Get any user vector */
+	vsv = find_user_vec(self);						/* Get any user vector */
 	
-	new->mact.curctx->VMXsave = 0;					/* Assume no vector */
+	target->mact.curctx->VMXsave = 0;					/* Assume no vector */
 
 	if(vsv) {										/* Did we find one? */
 		vsvn = (savearea_vec *)save_alloc();		/* If we still don't have one, get a new one */
 		vsvn->save_hdr.save_flags = (vsvn->save_hdr.save_flags & ~SAVtype) | (SAVvector << SAVtypeshft);	/* Mark as in use as float */
-		vsvn->save_hdr.save_act = new;				/* Point to the activation */
+		vsvn->save_hdr.save_act = (struct thread_activation *)target;	/* Point to the activation */
 		vsvn->save_hdr.save_prev = 0;				/* Mark no more */
 		vsvn->save_hdr.save_level = 0;				/* Mark user state */
 
-		new->mact.curctx->VMXsave = vsvn;			/* Chain in the floating point */
+		target->mact.curctx->VMXsave = vsvn;			/* Chain in the floating point */
 
 		bcopy((char *)((unsigned int)vsv + sizeof(savearea_comm)),	/* Copy everything but the headers */
 			(char *)((unsigned int)vsvn + sizeof(savearea_comm)), 
 			sizeof(struct savearea) - sizeof(savearea_comm));
 	}
 
-	return;											/* Bye bye... */
+	return (KERN_SUCCESS);
 }
 
 /*
@@ -645,28 +1025,30 @@ savearea *get_user_regs(thread_act_t act) {
   	savearea		*sv, *osv;
 	unsigned int	spc, i, *srs;
 
+	if (act->mact.upcb)
+		return	act->mact.upcb;
+
 	sv = act->mact.pcb;								/* Get the top savearea on the stack */
 	osv = 0;										/* Set no user savearea yet */	
 	
 	while(sv) {										/* Find the user context */
-		if(sv->save_srr1 & MASK(MSR_PR)) return sv;	/* We found a user state context... */
-
 		osv = sv;									/* Save the last one */
-		sv = sv->save_hdr.save_prev;				/* Get the previous context */
+		sv = CAST_DOWN(savearea *, sv->save_hdr.save_prev);	/* Get the previous context */ 
 	}
 
 	sv = save_alloc();								/* Get one */
 	sv->save_hdr.save_flags = (sv->save_hdr.save_flags & ~SAVtype) | (SAVgeneral << SAVtypeshft);	/* Mark as in use as general */
-	sv->save_hdr.save_act = act;					/* Point to the activation */
+	sv->save_hdr.save_act = (struct thread_activation *)act;	/* Point to the activation */
 	sv->save_hdr.save_prev = 0;						/* Mark no more */
 	sv->save_hdr.save_level = 0;					/* Mark user state */
 	
 	if(osv) {										/* Did we already have one? */
-		osv->save_hdr.save_prev = sv;				/* Chain us on the end */
+		osv->save_hdr.save_prev = (addr64_t)((uintptr_t)sv);		/* Chain us on the end */
 	}
 	else {											/* We are the first */
 		act->mact.pcb = sv;							/* Put it there */
 	}
+	act->mact.upcb = sv;							/* Set user pcb */
 
 	for(i=0; i < 32; i+=2) {						/* Fill up with defaults */
 		((unsigned int *)&sv->save_r0)[i] = ((unsigned int *)&FloatInit)[0];
@@ -674,10 +1056,10 @@ savearea *get_user_regs(thread_act_t act) {
 	}
 	sv->save_cr	= 0;
 	sv->save_xer	= 0;
-	sv->save_lr	= ((unsigned int *)&FloatInit)[0];
-	sv->save_ctr	= ((unsigned int *)&FloatInit)[1];
-	sv->save_srr0	= ((unsigned int *)&FloatInit)[0];
-	sv->save_srr1 = MSR_EXPORT_MASK_SET;
+	sv->save_lr	= (uint64_t)FloatInit;
+	sv->save_ctr	= (uint64_t)FloatInit;
+	sv->save_srr0	= (uint64_t)FloatInit;
+	sv->save_srr1 = (uint64_t)MSR_EXPORT_MASK_SET;
 
 	sv->save_fpscr = 0;								/* Clear all floating point exceptions */
 
@@ -685,14 +1067,7 @@ savearea *get_user_regs(thread_act_t act) {
 	sv->save_vscr[0] = 0x00000000;					
 	sv->save_vscr[1] = 0x00000000;					
 	sv->save_vscr[2] = 0x00000000;					
-	sv->save_vscr[3] = 0x00010000;					/* Supress java mode and clear saturated */
-	
-	spc = (unsigned int)act->map->pmap->space;		/* Get the space we're in */
-	
-	srs = (unsigned int *)&sv->save_sr0;			/* Point to the SRs */
-	for(i = 0; i < 16; i++) {						/* Fill in the SRs for the new context */
-		srs[i] = SEG_REG_PROT | (i<<20) | spc;		/* Set the SR */
-	}
+	sv->save_vscr[3] = 0x00010000;					/* Disable java mode and clear saturated */
 	
 	return sv;										/* Bye bye... */
 }
@@ -703,19 +1078,14 @@ savearea *get_user_regs(thread_act_t act) {
  */
 
 savearea *find_user_regs(thread_act_t act) {
+	return act->mact.upcb;
+}
 
-  	savearea		*sv;
-
-	sv = act->mact.pcb;								/* Get the top savearea on the stack */
-	
-	while(sv) {										/* Find the user context */
-		if(sv->save_srr1 & MASK(MSR_PR)) {			/* Are we looking at the user context? */
-			break;									/* Outta here */
-		}
-		sv = sv->save_hdr.save_prev;				/* Get the previous context */
-	}
-	
-	return sv;										/* Bye bye... */
+/* The name of this call is something of a misnomer since the mact.pcb can 
+ * contain chained saveareas, but it will do for now..
+ */
+savearea *find_kern_regs(thread_act_t act) {
+        return act->mact.pcb;
 }
 
 /*
@@ -731,7 +1101,7 @@ savearea_fpu *find_user_fpu(thread_act_t act) {
 	
 	while(fsv) {									/* Look until the end or we find it */
 		if(!(fsv->save_hdr.save_level)) break;		/* Is the the user state stuff? (the level is 0 if so) */	
-		fsv = (savearea_fpu *)fsv->save_hdr.save_prev;	/* Try the previous one */
+		fsv = CAST_DOWN(savearea_fpu *, fsv->save_hdr.save_prev);	/* Try the previous one */ 
 	}
 	
 	return fsv;										/* Bye bye... */
@@ -750,7 +1120,30 @@ savearea_vec *find_user_vec(thread_act_t act) {
 	
 	while(vsv) {									/* Look until the end or we find it */
 		if(!(vsv->save_hdr.save_level)) break;		/* Is the the user state stuff? (the level is 0 if so) */	
-		vsv = (savearea_vec *)vsv->save_hdr.save_prev;	/* Try the previous one */
+		vsv = CAST_DOWN(savearea_vec *, vsv->save_hdr.save_prev);	/* Try the previous one */ 
+	}
+	
+	return vsv;										/* Bye bye... */
+}
+/*
+ *		Find the user state vector context for the current thread.  If there is no user state context,
+ *		we just return a 0.
+ */
+
+savearea_vec *find_user_vec_curr(void) {
+
+  	savearea_vec	*vsv;
+	thread_act_t 	act;
+	
+	act = current_act();							/* Get the current activation */			
+	
+	vec_save(act->mact.curctx);						/* Force save if live */
+
+	vsv = act->mact.curctx->VMXsave;				/* Get the start of the vector chain */
+	
+	while(vsv) {									/* Look until the end or we find it */
+		if(!(vsv->save_hdr.save_level)) break;		/* Is the the user state stuff? (the level is 0 if so) */	
+		vsv = CAST_DOWN(savearea_vec *, vsv->save_hdr.save_prev);	/* Try the previous one */ 
 	}
 	
 	return vsv;										/* Bye bye... */
@@ -774,8 +1167,13 @@ thread_userstack(
 {
         struct ppc_thread_state *state;
 
-	if (customstack)
-		*customstack = 0;
+        /*
+         * Set a default.
+         */
+        if (*user_stack == 0)
+                *user_stack = USRSTACK;
+		if (customstack)
+			*customstack = 0;
 
         switch (flavor) {
         case PPC_THREAD_STATE:
@@ -784,13 +1182,14 @@ thread_userstack(
  
                 state = (struct ppc_thread_state *) tstate;
     
-                /* If a valid user stack is specified, use it. */
-		if (state->r1)
-			*user_stack = state->r1;
+                /*
+                 * If a valid user stack is specified, use it.
+                 */
+                *user_stack = state->r1 ? state->r1: USRSTACK;
 
-		if (customstack && state->r1)
-			*customstack = 1;
-
+				if (customstack && state->r1)
+					*customstack = 1;
+					
                 break;
         default :
                 return (KERN_INVALID_ARGUMENT);
@@ -806,13 +1205,13 @@ thread_userstack(
  * Sets the user stack pointer into the machine
  * dependent thread state info.
  */
-void thread_setuserstack(struct thread_activation *act, unsigned int user_stack)
+void thread_setuserstack(thread_act_t act, unsigned int user_stack)
 {
 	savearea *sv;
 	
 	sv = get_user_regs(act);		/* Get the user state registers */
 	
-	sv->save_r1 = user_stack;
+	sv->save_r1 = (uint64_t)user_stack;
 	
 	return;
 }    
@@ -823,7 +1222,7 @@ void thread_setuserstack(struct thread_activation *act, unsigned int user_stack)
  * Returns the adjusted user stack pointer from the machine
  * dependent thread state info.
  */
-unsigned int thread_adjuserstack(struct thread_activation *act, int adjust)
+unsigned int thread_adjuserstack(thread_act_t act, int adjust)
 {
 	savearea *sv;
 	
@@ -831,7 +1230,7 @@ unsigned int thread_adjuserstack(struct thread_activation *act, int adjust)
 	
 	sv->save_r1 += adjust;			/* Adjust the stack */
 	
-	return sv->save_r1;				/* Return the adjusted stack */
+	return (unsigned int)sv->save_r1;	/* Return the adjusted stack */
 	
 }    
 
@@ -842,13 +1241,13 @@ unsigned int thread_adjuserstack(struct thread_activation *act, int adjust)
  * dependent thread state info.
  */
 
-void thread_setentrypoint(struct thread_activation *act, unsigned int entry)
+void thread_setentrypoint(thread_act_t act, unsigned int entry)
 {
 	savearea *sv;
 	
 	sv = get_user_regs(act);		/* Get the user state registers */
 	
-	sv->save_srr0 = entry;
+	sv->save_srr0 = (uint64_t)entry;
 	
 	return;
 }    
@@ -904,14 +1303,32 @@ unsigned int get_msr_rbits(void)
 	return (MASK(MSR_PR)|MASK(MSR_ME)|MASK(MSR_IR)|MASK(MSR_DR)|MASK(MSR_EE));
 }
 
+void ppc_checkthreadstate(void * tsptr, int flavor)
+{
+	if (flavor == PPC_THREAD_STATE64) {
+		struct ppc_thread_state64 *ts64 =(struct ppc_thread_state64 *)tsptr;
+
+		/* Make sure naughty bits are off and necessary bits are on */
+		ts64->srr1 &= ~(MASK(MSR_POW)|MASK(MSR_ILE)|MASK(MSR_IP)|MASK(MSR_LE));
+		ts64->srr1 |= (MASK(MSR_PR)|MASK(MSR_ME)|MASK(MSR_IR)|MASK(MSR_DR)|MASK(MSR_EE));
+	} else {
+		struct ppc_thread_state *ts =(struct ppc_thread_state *)tsptr;
+
+		/* Make sure naughty bits are off and necessary bits are on */
+		ts->srr1 &= ~(MASK(MSR_POW)|MASK(MSR_ILE)|MASK(MSR_IP)|MASK(MSR_LE));
+		ts->srr1 |= (MASK(MSR_PR)|MASK(MSR_ME)|MASK(MSR_IR)|MASK(MSR_DR)|MASK(MSR_EE));
+	}
+	return;
+}
+
 void  thread_set_child(thread_act_t child, int pid)
 {
 	struct savearea *child_state;
 	
 	child_state = get_user_regs(child);
 	
-	child_state->save_r3 = pid;
-	child_state->save_r4 = 1;
+	child_state->save_r3 = (uint_t)pid;
+	child_state->save_r4 = 1ULL;
 }
 void  thread_set_parent(thread_act_t parent, int pid)
 {
@@ -919,7 +1336,7 @@ void  thread_set_parent(thread_act_t parent, int pid)
 	
 	parent_state = get_user_regs(parent);
 	
-	parent_state->save_r3 = pid;
+	parent_state->save_r3 = (uint64_t)pid;
 	parent_state->save_r4 = 0;
 }
 
@@ -955,7 +1372,7 @@ void *act_thread_csave(void) {
 	
 	sv = save_alloc();								/* Get a fresh save area to save into */
 	sv->save_hdr.save_flags = (sv->save_hdr.save_flags & ~SAVtype) | (SAVgeneral << SAVtypeshft);	/* Mark as in use as general */
-	sv->save_hdr.save_act = act;					/* Point to the activation */
+	sv->save_hdr.save_act = (struct thread_activation *)act;	/* Point to the activation */
 	sv->save_hdr.save_prev = 0;						/* Mark no more */
 	sv->save_hdr.save_level = 0;					/* Mark user state */
 	
@@ -977,13 +1394,13 @@ void *act_thread_csave(void) {
 	if(ofsv) {										/* Did we find one? */
 		fsv = (savearea_fpu *)save_alloc();			/* If we still don't have one, get a new one */
 		fsv->save_hdr.save_flags = (fsv->save_hdr.save_flags & ~SAVtype) | (SAVfloat << SAVtypeshft);	/* Mark as in use as float */
-		fsv->save_hdr.save_act = act;				/* Point to the activation */
+		fsv->save_hdr.save_act = (struct thread_activation *)act;	/* Point to the activation */
 		fsv->save_hdr.save_prev = 0;				/* Mark no more */
 		fsv->save_hdr.save_level = 0;				/* Mark user state */
 		fsv->save_hdr.save_misc2 = 0xDEBB1ED0;		/* Eye catcher for debug */
 		fsv->save_hdr.save_misc3 = 0xE5DA11A5;		/* Eye catcher for debug */
 
-		sv->save_hdr.save_misc0 = (unsigned int)fsv;	/* Remember this one */
+		sv->save_hdr.save_misc0 = (uint64_t)((uintptr_t)fsv);	/* Remember this one */
 
 		bcopy((char *)((unsigned int)ofsv + sizeof(savearea_comm)),	/* Copy everything but the headers */
 			(char *)((unsigned int)fsv + sizeof(savearea_comm)), 
@@ -997,13 +1414,13 @@ void *act_thread_csave(void) {
 	if(ovsv) {										/* Did we find one? */
 		vsv = (savearea_vec *)save_alloc();			/* If we still don't have one, get a new one */
 		vsv->save_hdr.save_flags = (vsv->save_hdr.save_flags & ~SAVtype) | (SAVvector << SAVtypeshft);	/* Mark as in use as float */
-		vsv->save_hdr.save_act = act;				/* Point to the activation */
+		vsv->save_hdr.save_act = (struct thread_activation *)act;	/* Point to the activation */
 		vsv->save_hdr.save_prev = 0;				/* Mark no more */
 		vsv->save_hdr.save_level = 0;				/* Mark user state */
 		vsv->save_hdr.save_misc2 = 0xDEBB1ED0;		/* Eye catcher for debug */
 		vsv->save_hdr.save_misc3 = 0xE5DA11A5;		/* Eye catcher for debug */
 
-		sv->save_hdr.save_misc1 = (unsigned int)vsv;	/* Chain in the floating point */
+		sv->save_hdr.save_misc1 = (uint64_t)((uintptr_t)vsv);	/* Chain in the floating point */
 
 		bcopy((char *)((unsigned int)ovsv + sizeof(savearea_comm)),	/* Copy everything but the headers */
 			(char *)((unsigned int)vsv + sizeof(savearea_comm)), 
@@ -1036,8 +1453,8 @@ void act_thread_catt(void *ctx) {
 	
 	sv = (savearea *)ctx;							/* Make this easier for C */
 	
-	fsv = (savearea_fpu *)sv->save_hdr.save_misc0;	/* Get a possible floating point savearea */
-	vsv = (savearea_vec *)sv->save_hdr.save_misc1;	/* Get a possible vector savearea */
+	fsv = CAST_DOWN(savearea_fpu *, sv->save_hdr.save_misc0);	/* Get a possible floating point savearea */ 
+	vsv = CAST_DOWN(savearea_vec *, sv->save_hdr.save_misc1);	/* Get a possible vector savearea */ 
 	
 	if((sv->save_hdr.save_misc2 != 0xDEBB1ED0) || (sv->save_hdr.save_misc3 != 0xE5DA11A5)) {	/* See if valid savearea */
 		panic("act_thread_catt: attempt to attach invalid general context savearea - %08X\n", sv);	/* Die */
@@ -1058,21 +1475,16 @@ void act_thread_catt(void *ctx) {
 		
 	sv->save_hdr.save_misc2 = 0;					/* Eye catcher for debug */
 	sv->save_hdr.save_misc3 = 0;					/* Eye catcher for debug */
-	sv->save_hdr.save_act = act;					/* Set us as owner */
+	sv->save_hdr.save_act = (struct thread_activation *)act;	/* Set us as owner */
 	
 	spc = (unsigned int)act->map->pmap->space;		/* Get the space we're in */
-	
-	srs = (unsigned int *)&sv->save_sr0;			/* Point to the SRs */
-	for(i = 0; i < 16; i++) {						/* Fill in the SRs for the new context */
-		srs[i] = SEG_REG_PROT | (i<<20) | spc;		/* Set the SRs */
-	}
 	
 	osv = act->mact.pcb;							/* Get the top general savearea */
 	psv = 0;
 	while(osv) {									/* Any saved state? */
 		if(osv->save_srr1 & MASK(MSR_PR)) break;	/* Leave if this is user state */
 		psv = osv;									/* Save previous savearea address */
-		osv = osv->save_hdr.save_prev;				/* Get one underneath our's */
+		osv = CAST_DOWN(savearea *, osv->save_hdr.save_prev);	/* Get one underneath our's */
 	}
 	
 	if(osv) {										/* Did we find one? */
@@ -1083,8 +1495,9 @@ void act_thread_catt(void *ctx) {
 		
 	}
 
-	if(psv)	psv->save_hdr.save_prev = sv;			/* Chain us to the end or */
+	if(psv)	psv->save_hdr.save_prev = (addr64_t)((uintptr_t)sv);	/* Chain us to the end or */
 	else act->mact.pcb = (pcb_t)sv;					/* to the start if the only one */
+	act->mact.upcb = (pcb_t)sv;						/* Set the user pcb */
 	
 	ovsv = act->mact.curctx->VMXsave;				/* Get the top vector savearea */
 	
@@ -1092,7 +1505,7 @@ void act_thread_catt(void *ctx) {
 	while(ovsv) {									/* Any VMX saved state? */
 		if(!(ovsv->save_hdr.save_level)) break;		/* Leave if this is user state */
 		pvsv = ovsv;								/* Save previous savearea address */
-		ovsv = (savearea_vec *)ovsv->save_hdr.save_prev;	/* Get one underneath our's */
+		ovsv = CAST_DOWN(savearea_vec *, ovsv->save_hdr.save_prev);	/* Get one underneath our's */ 
 	}
 	
 	if(ovsv) {										/* Did we find one? */
@@ -1103,12 +1516,12 @@ void act_thread_catt(void *ctx) {
 	}
 	
 	if(vsv) {										/* Are we sticking any vector on this one? */
-		if(pvsv) pvsv->save_hdr.save_prev = (savearea *)vsv;	/* Yes, chain us to the end or */
+		if(pvsv) pvsv->save_hdr.save_prev = (addr64_t)((uintptr_t)vsv);	/* Yes, chain us to the end or */
 		else act->mact.curctx->VMXsave = vsv;		/* to the start if the only one */
 
 		vsv->save_hdr.save_misc2 = 0;				/* Eye catcher for debug */
 		vsv->save_hdr.save_misc3 = 0;				/* Eye catcher for debug */
-		vsv->save_hdr.save_act = act;				/* Set us as owner */
+		vsv->save_hdr.save_act = (struct thread_activation *)act;	/* Set us as owner */
 	}
 	
 	ofsv = act->mact.curctx->FPUsave;				/* Get the top float savearea */
@@ -1117,7 +1530,7 @@ void act_thread_catt(void *ctx) {
 	while(ofsv) {									/* Any float saved state? */
 		if(!(ofsv->save_hdr.save_level)) break;		/* Leave if this is user state */
 		pfsv = ofsv;								/* Save previous savearea address */
-		ofsv = (savearea_fpu *)ofsv->save_hdr.save_prev;	/* Get one underneath our's */
+		ofsv = CAST_DOWN(savearea_fpu *, ofsv->save_hdr.save_prev);	/* Get one underneath our's */
 	}
 	
 	if(ofsv) {										/* Did we find one? */
@@ -1128,12 +1541,12 @@ void act_thread_catt(void *ctx) {
 	}
 	
 	if(fsv) {										/* Are we sticking any vector on this one? */
-		if(pfsv) pfsv->save_hdr.save_prev = (savearea *)fsv;	/* Yes, chain us to the end or */
+		if(pfsv) pfsv->save_hdr.save_prev = (addr64_t)((uintptr_t)fsv);	/* Yes, chain us to the end or */
 		else act->mact.curctx->FPUsave = fsv;		/* to the start if the only one */
 
 		fsv->save_hdr.save_misc2 = 0;				/* Eye catcher for debug */
 		fsv->save_hdr.save_misc3 = 0;				/* Eye catcher for debug */
-		fsv->save_hdr.save_act = act;				/* Set us as owner */
+		fsv->save_hdr.save_act = (struct thread_activation *)act;	/* Set us as owner */
 	}
 	
 }
@@ -1154,8 +1567,8 @@ void act_thread_cfree(void *ctx) {
 
 	sv = (savearea *)ctx;							/* Make this easier for C */
 	
-	fsv = (savearea_fpu *)sv->save_hdr.save_misc0;	/* Get a possible floating point savearea */
-	vsv = (savearea_vec *)sv->save_hdr.save_misc1;	/* Get a possible vector savearea */
+	fsv = CAST_DOWN(savearea_fpu *, sv->save_hdr.save_misc0);	/* Get a possible floating point savearea */ 
+	vsv = CAST_DOWN(savearea_vec *, sv->save_hdr.save_misc1);	/* Get a possible vector savearea */ 
 	
 	if((sv->save_hdr.save_misc2 != 0xDEBB1ED0) || (sv->save_hdr.save_misc3 != 0xE5DA11A5)) {	/* See if valid savearea */
 		panic("act_thread_cfree: attempt to detatch invalid general context savearea - %08X\n", sv);	/* Die */

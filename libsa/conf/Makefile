@@ -14,47 +14,48 @@ COMP_SUBDIRS =
 
 INST_SUBDIRS = 
 
-ifndef LIBKERN_KERNEL_CONFIG
-export LIBKERN_KERNEL_CONFIG = $(KERNEL_CONFIG)
+ifndef LIBSA_KERNEL_CONFIG
+export LIBSA_KERNEL_CONFIG = $(KERNEL_CONFIG)
 endif
 
-COMPOBJROOT=$(OBJROOT)/$(KERNEL_CONFIG)_$(ARCH_CONFIG)/$(COMPONENT)
+export COMPOBJROOT=$(OBJROOT)/$(KERNEL_CONFIG)_$(ARCH_CONFIG)/$(COMPONENT)
 
 $(OBJROOT)/$(KERNEL_CONFIG)_$(ARCH_CONFIG)/$(COMPONENT)/doconf:
 	make build_setup 
 
-$(COMPOBJROOT)/$(LIBKERN_KERNEL_CONFIG)/Makefile :  $(SOURCE)/MASTER  \
+$(COMPOBJROOT)/$(LIBSA_KERNEL_CONFIG)/Makefile :  $(SOURCE)/MASTER  \
 	$(SOURCE)/MASTER.$(ARCH_CONFIG_LC) \
 	$(SOURCE)/Makefile.template  \
 	$(SOURCE)/Makefile.$(ARCH_CONFIG_LC)  \
 	$(SOURCE)/files \
 	$(SOURCE)/files.$(ARCH_CONFIG_LC) \
 	$(OBJROOT)/$(KERNEL_CONFIG)_$(ARCH_CONFIG)/$(COMPONENT)/doconf
-	@echo "Running doconf for $(LIBKERN_KERNEL_CONFIG)";
+	@echo "Running doconf for $(LIBSA_KERNEL_CONFIG)";
 	(doconf_target=$(addsuffix /conf, $(TARGET)); \
 	echo $${doconf_target};\
 	$(MKDIR) $${doconf_target}; \
 	cd $${doconf_target}; \
 	rm -f $(notdir $?); \
 	cp  $? $${doconf_target}; \
-	$(OBJROOT)/$(KERNEL_CONFIG)_$(ARCH_CONFIG)/$(COMPONENT)/doconf -c -cpu $(ARCH_CONFIG_LC) -d  $(TARGET)/$(LIBKERN_KERNEL_CONFIG) $(LIBKERN_KERNEL_CONFIG); \
+	$(OBJROOT)/$(KERNEL_CONFIG)_$(ARCH_CONFIG)/$(COMPONENT)/doconf -c -cpu $(ARCH_CONFIG_LC) -d  $(TARGET)/$(LIBSA_KERNEL_CONFIG) $(LIBSA_KERNEL_CONFIG); \
 	);
 
-.ORDER: $(COMPOBJROOT)/$(LIBKERN_KERNEL_CONFIG)/Makefile
+.ORDER: $(COMPOBJROOT)/$(LIBSA_KERNEL_CONFIG)/Makefile
 
 do_setup_conf: $(OBJROOT)/$(KERNEL_CONFIG)_$(ARCH_CONFIG)/$(COMPONENT)/doconf \
-		$(COMPOBJROOT)/$(LIBKERN_KERNEL_CONFIG)/Makefile
+		$(COMPOBJROOT)/$(LIBSA_KERNEL_CONFIG)/Makefile
 
 do_all: do_setup_conf
-	@echo "[ $(SOURCE) ] Starting do_all  $(COMPONENT) $(LIBKERN_KERNEL_CONFIG) $(ARCH_CONFIG) $(TARGET)";	\
+	@echo "[ $(SOURCE) ] Starting do_all  $(COMPONENT) $(LIBSA_KERNEL_CONFIG) $(ARCH_CONFIG) $(TARGET)";	\
 	next_source=$(subst conf/,,$(SOURCE));			\
-	${MAKE} -C $(COMPOBJROOT)/$(LIBKERN_KERNEL_CONFIG)	\
-		MAKEFILES=$(TARGET)/$(LIBKERN_KERNEL_CONFIG)/Makefile	\
+	${MAKE} -C $(COMPOBJROOT)/$(LIBSA_KERNEL_CONFIG)	\
+		MAKEFILES=$(TARGET)/$(LIBSA_KERNEL_CONFIG)/Makefile	\
 		SOURCE=$${next_source}			\
 		TARGET=$(TARGET)					\
 		INCL_MAKEDEP=FALSE	\
+		KERNEL_CONFIG=$(LIBSA_KERNEL_CONFIG)	\
 		build_all;	\
-	echo "[ $(SOURCE) ] Returning do_all $(COMPONENT) $(LIBKERN_KERNEL_CONFIG) $(ARCH_CONFIG) $(TARGET)";
+	echo "[ $(SOURCE) ] Returning do_all $(COMPONENT) $(LIBSA_KERNEL_CONFIG) $(ARCH_CONFIG) $(TARGET)";
 
 do_build_all: do_all 
 

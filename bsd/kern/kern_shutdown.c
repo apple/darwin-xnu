@@ -59,6 +59,7 @@
 #include <mach/vm_param.h>
 #include <sys/filedesc.h>
 #include <mach/host_reboot.h>
+#include <sys/kern_audit.h>
 
 int	waittime = -1;
 
@@ -93,6 +94,8 @@ boot(paniced, howto, command)
 
 		/* handle live procs (deallocate their root and current directories). */		
 		proc_shutdown();
+
+		audit_shutdown();
 
 		sync(p, (void *)NULL, (int *)NULL);
 
@@ -208,6 +211,19 @@ proc_shutdown()
 		if (TERM_catch == 0)
 		        break;
 	}
+	if (TERM_catch) {
+	        /*
+		 * log the names of the unresponsive tasks
+		 */
+
+	        for (p = allproc.lh_first; p; p = p->p_list.le_next) {
+		        if (((p->p_flag&P_SYSTEM) == 0) && (p->p_pptr->p_pid != 0) && (p != self)) {
+			        if (p->p_sigcatch & sigmask(SIGTERM))
+				  printf("%s[%d]: didn't act on SIGTERM\n", p->p_comm, p->p_pid);
+			}
+		}
+		IOSleep(1000 * 5);
+	}
 
 	/*
 	 * send a SIGKILL to all the procs still hanging around
@@ -251,7 +267,7 @@ proc_shutdown()
 			        thread_block(THREAD_CONTINUE_NULL);
 			}
 			else {
-			        p->exit_thread = current_thread();
+			        p->exit_thread = current_act();
 				printf(".");
 				exit1(p, 1, (int *)NULL);
 			}

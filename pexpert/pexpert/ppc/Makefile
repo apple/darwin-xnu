@@ -9,7 +9,6 @@ include $(MakeInc_def)
 
 DATAFILES = \
         boot.h \
-        dbdma.h \
 	interrupts.h \
 	powermac.h
 

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2002 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2003 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -64,6 +64,7 @@
  */
 
 #include <sys/param.h>
+#include <sys/systm.h>
 #include <sys/syslimits.h>
 #include <sys/time.h>
 #include <sys/namei.h>
@@ -76,10 +77,13 @@
 #include <sys/proc.h>
 #include <sys/kdebug.h>
 #include <sys/unistd.h>		/* For _PC_NAME_MAX */
+#include <sys/kern_audit.h>
 
 #if KTRACE
 #include <sys/ktrace.h>
 #endif
+
+static void kdebug_lookup(struct vnode *dp, struct componentname *cnp);
 
 /*
  * Convert a pathname into a pointer to a locked inode.
@@ -113,6 +117,7 @@ namei(ndp)
 	int error, linklen;
 	struct componentname *cnp = &ndp->ni_cnd;
 	struct proc *p = cnp->cn_proc;
+	char *tmppn;
 
 	ndp->ni_cnd.cn_cred = ndp->ni_cnd.cn_proc->p_ucred;
 #if DIAGNOSTIC
@@ -123,7 +128,7 @@ namei(ndp)
 	if (cnp->cn_flags & OPMASK)
 		panic ("namei: flags contaminated with nameiops");
 #endif
-	fdp = cnp->cn_proc->p_fd;
+	fdp = p->p_fd;
 
 	/*
 	 * Get a buffer for the name to be translated, and copy the
@@ -133,28 +138,42 @@ namei(ndp)
 		MALLOC_ZONE(cnp->cn_pnbuf, caddr_t,
 				MAXPATHLEN, M_NAMEI, M_WAITOK);
 		cnp->cn_pnlen = MAXPATHLEN;
+		cnp->cn_flags |= HASBUF;
 	}
 	if (ndp->ni_segflg == UIO_SYSSPACE)
 		error = copystr(ndp->ni_dirp, cnp->cn_pnbuf,
-			    MAXPATHLEN, &ndp->ni_pathlen);
+			    MAXPATHLEN, (size_t *)&ndp->ni_pathlen);
 	else
 		error = copyinstr(ndp->ni_dirp, cnp->cn_pnbuf,
-			    MAXPATHLEN, &ndp->ni_pathlen);
+			    MAXPATHLEN, (size_t *)&ndp->ni_pathlen);
+
+	/* If we are auditing the kernel pathname, save the user pathname */
+	if (cnp->cn_flags & AUDITVNPATH1)
+		AUDIT_ARG(upath, p, cnp->cn_pnbuf, ARG_UPATH1); 
+	if (cnp->cn_flags & AUDITVNPATH2)
+		AUDIT_ARG(upath, p, cnp->cn_pnbuf, ARG_UPATH2); 
+
 	/*
 	 * Do not allow empty pathnames
 	 */
 	if (!error && *cnp->cn_pnbuf == '\0')
 		error = ENOENT;
 
+	if (!error && ((dp = fdp->fd_cdir) == NULL))
+		error = EPERM;		/* 3382843 */
+
 	if (error) {
-		_FREE_ZONE(cnp->cn_pnbuf, cnp->cn_pnlen, M_NAMEI);
+		tmppn = cnp->cn_pnbuf;
+		cnp->cn_pnbuf = NULL;
+		cnp->cn_flags &= ~HASBUF;
+		FREE_ZONE(tmppn, cnp->cn_pnlen, M_NAMEI);
 		ndp->ni_vp = NULL;
 		return (error);
 	}
 	ndp->ni_loopcnt = 0;
 #if KTRACE
-	if (KTRPOINT(cnp->cn_proc, KTR_NAMEI))
-		ktrnamei(cnp->cn_proc->p_tracep, cnp->cn_pnbuf);
+	if (KTRPOINT(p, KTR_NAMEI))
+		ktrnamei(p->p_tracep, cnp->cn_pnbuf);
 #endif
 
 	/*
@@ -162,7 +181,13 @@ namei(ndp)
 	 */
 	if ((ndp->ni_rootdir = fdp->fd_rdir) == NULL)
 		ndp->ni_rootdir = rootvnode;
-	dp = fdp->fd_cdir;
+	if (ndp->ni_cnd.cn_flags & USEDVP) {
+	    dp = ndp->ni_dvp;
+	    ndp->ni_dvp = NULL;
+	} else {
+	    dp = fdp->fd_cdir;
+	}
+
 	VREF(dp);
 	for (;;) {
 		/*
@@ -181,7 +206,11 @@ namei(ndp)
 		}
 		ndp->ni_startdir = dp;
 		if (error = lookup(ndp)) {
-			FREE_ZONE(cnp->cn_pnbuf, cnp->cn_pnlen, M_NAMEI);
+			long len = cnp->cn_pnlen;
+			tmppn = cnp->cn_pnbuf;
+			cnp->cn_pnbuf = NULL;
+			cnp->cn_flags &= ~HASBUF;
+			FREE_ZONE(tmppn, len, M_NAMEI);
 			return (error);
 		}
 		/*
@@ -189,8 +218,10 @@ namei(ndp)
 		 */
 		if ((cnp->cn_flags & ISSYMLINK) == 0) {
 			if ((cnp->cn_flags & (SAVENAME | SAVESTART)) == 0) {
-				FREE_ZONE(cnp->cn_pnbuf,
-						cnp->cn_pnlen, M_NAMEI);
+				tmppn = cnp->cn_pnbuf;
+				cnp->cn_pnbuf = NULL;
+				cnp->cn_flags &= ~HASBUF;
+				FREE_ZONE(tmppn, cnp->cn_pnlen, M_NAMEI);
 			} else {
 				cnp->cn_flags |= HASBUF;
 			}
@@ -218,28 +249,35 @@ namei(ndp)
 		auio.uio_resid = MAXPATHLEN;
 		if (error = VOP_READLINK(ndp->ni_vp, &auio, cnp->cn_cred)) {
 			if (ndp->ni_pathlen > 1)
-				_FREE_ZONE(cp, MAXPATHLEN, M_NAMEI);
+				FREE_ZONE(cp, MAXPATHLEN, M_NAMEI);
 			break;
 		}
 		linklen = MAXPATHLEN - auio.uio_resid;
 		if (linklen + ndp->ni_pathlen >= MAXPATHLEN) {
 			if (ndp->ni_pathlen > 1)
-				_FREE_ZONE(cp, MAXPATHLEN, M_NAMEI);
+				FREE_ZONE(cp, MAXPATHLEN, M_NAMEI);
 			error = ENAMETOOLONG;
 			break;
 		}
 		if (ndp->ni_pathlen > 1) {
+			long len = cnp->cn_pnlen;
+			tmppn = cnp->cn_pnbuf;
 			bcopy(ndp->ni_next, cp + linklen, ndp->ni_pathlen);
-			FREE_ZONE(cnp->cn_pnbuf, cnp->cn_pnlen, M_NAMEI);
 			cnp->cn_pnbuf = cp;
 			cnp->cn_pnlen = MAXPATHLEN;
+			FREE_ZONE(tmppn, len, M_NAMEI);
 		} else
 			cnp->cn_pnbuf[linklen] = '\0';
 		ndp->ni_pathlen += linklen;
 		vput(ndp->ni_vp);
 		dp = ndp->ni_dvp;
 	}
-	FREE_ZONE(cnp->cn_pnbuf, cnp->cn_pnlen, M_NAMEI);
+
+	tmppn = cnp->cn_pnbuf;
+	cnp->cn_pnbuf = NULL;
+	cnp->cn_flags &= ~HASBUF;
+	FREE_ZONE(tmppn, cnp->cn_pnlen, M_NAMEI);
+
 	vrele(ndp->ni_dvp);
 	vput(ndp->ni_vp);
 	ndp->ni_vp = NULL;
@@ -297,7 +335,7 @@ lookup(ndp)
 	int wantparent;			/* 1 => wantparent or lockparent flag */
 	int dp_unlocked = 0;	/* 1 => dp already VOP_UNLOCK()-ed */
 	int rdonly;			/* lookup read-only flag bit */
-	int trailing_slash;
+	int trailing_slash = 0;
 	int error = 0;
 	struct componentname *cnp = &ndp->ni_cnd;
 	struct proc *p = cnp->cn_proc;
@@ -318,28 +356,45 @@ lookup(ndp)
 	dp = ndp->ni_startdir;
 	ndp->ni_startdir = NULLVP;
 	vn_lock(dp, LK_EXCLUSIVE | LK_RETRY, p);
+	cnp->cn_consume = 0;
 
 dirloop:
 	/*
 	 * Search a new directory.
 	 *
 	 * The cn_hash value is for use by vfs_cache.
-	 * Check pathconf for maximun length of name
 	 * The last component of the filename is left accessible via
 	 * cnp->cn_nameptr for callers that need the name. Callers needing
 	 * the name set the SAVENAME flag. When done, they assume
 	 * responsibility for freeing the pathname buffer.
 	 */
-	cnp->cn_consume = 0;
-	cnp->cn_hash = 0;
-	for (cp = cnp->cn_nameptr, i=1; *cp != 0 && *cp != '/'; i++, cp++)
-		cnp->cn_hash += (unsigned char)*cp * i;
+	{
+		register unsigned int hash;
+		register unsigned int ch;
+		register int i;
+	
+		hash = 0;
+		cp = cnp->cn_nameptr;
+		ch = *cp;
+		if (ch == '\0') {
+			cnp->cn_namelen = 0;
+			goto emptyname;
+		}
+
+		for (i = 1; (ch != '/') && (ch != '\0'); i++) {
+			hash += ch * i;
+			ch = *(++cp);
+		}
+		cnp->cn_hash = hash;
+	}
 	cnp->cn_namelen = cp - cnp->cn_nameptr;
-    if (VOP_PATHCONF(dp, _PC_NAME_MAX, &namemax))
-		namemax = NAME_MAX;
-    if (cnp->cn_namelen > namemax) {
-		error = ENAMETOOLONG;
-		goto bad;
+	if (cnp->cn_namelen > NCHNAMLEN) {
+		if (VOP_PATHCONF(dp, _PC_NAME_MAX, &namemax))
+			namemax = NAME_MAX;
+		if (cnp->cn_namelen > namemax) {
+			error = ENAMETOOLONG;
+			goto bad;
+		}
 	}
 #ifdef NAMEI_DIAGNOSTIC
 	{ char c = *cp;
@@ -371,42 +426,11 @@ dirloop:
 	cnp->cn_flags |= MAKEENTRY;
 	if (*cp == '\0' && docache == 0)
 		cnp->cn_flags &= ~MAKEENTRY;
-	if (cnp->cn_namelen == 2 &&
-	    cnp->cn_nameptr[1] == '.' && cnp->cn_nameptr[0] == '.')
-		cnp->cn_flags |= ISDOTDOT;
-	else
-		cnp->cn_flags &= ~ISDOTDOT;
+
 	if (*ndp->ni_next == 0)
 		cnp->cn_flags |= ISLASTCN;
 	else
 		cnp->cn_flags &= ~ISLASTCN;
-
-
-	/*
-	 * Check for degenerate name (e.g. / or "")
-	 * which is a way of talking about a directory,
-	 * e.g. like "/." or ".".
-	 */
-	if (cnp->cn_nameptr[0] == '\0') {
-		if (dp->v_type != VDIR) {
-			error = ENOTDIR;
-			goto bad;
-		}
-		if (cnp->cn_nameiop != LOOKUP) {
-			error = EISDIR;
-			goto bad;
-		}
-		if (wantparent) {
-			ndp->ni_dvp = dp;
-			VREF(dp);
-		}
-		ndp->ni_vp = dp;
-		if (!(cnp->cn_flags & (LOCKPARENT | LOCKLEAF)))
-			VOP_UNLOCK(dp, 0, p);
-		if (cnp->cn_flags & SAVESTART)
-			panic("lookup: SAVESTART");
-		return (0);
-	}
 
 	/*
 	 * Handle "..": two special cases.
@@ -418,7 +442,10 @@ dirloop:
 	 *    vnode which was mounted on so we take the
 	 *    .. in the other file system.
 	 */
-	if (cnp->cn_flags & ISDOTDOT) {
+	if (cnp->cn_namelen == 2 &&
+	    cnp->cn_nameptr[1] == '.' && cnp->cn_nameptr[0] == '.') {
+		cnp->cn_flags |= ISDOTDOT;
+
 		for (;;) {
 			if (dp == ndp->ni_rootdir || dp == rootvnode) {
 				ndp->ni_dvp = dp;
@@ -440,6 +467,8 @@ dirloop:
 			VREF(dp);
 			vn_lock(dp, LK_EXCLUSIVE | LK_RETRY, p);
 		}
+	} else {
+		cnp->cn_flags &= ~ISDOTDOT;
 	}
 
 	/*
@@ -508,6 +537,19 @@ unionlookup:
 		ndp->ni_next += cnp->cn_consume;
 		ndp->ni_pathlen -= cnp->cn_consume;
 		cnp->cn_consume = 0;
+	} else {
+	    int isdot_or_dotdot;
+
+	    isdot_or_dotdot = (cnp->cn_namelen == 1 && cnp->cn_nameptr[0] == '.') || (cnp->cn_flags & ISDOTDOT);
+	    
+	    if (VNAME(ndp->ni_vp) == NULL &&  isdot_or_dotdot == 0) {
+		VNAME(ndp->ni_vp) = add_name(cnp->cn_nameptr, cnp->cn_namelen, cnp->cn_hash, 0);
+	    }
+	    if (VPARENT(ndp->ni_vp) == NULL && isdot_or_dotdot == 0) {
+		if (vget(ndp->ni_dvp, 0, p) == 0) {
+		    VPARENT(ndp->ni_vp) = ndp->ni_dvp;
+		}
+	    }
 	}
 
 	dp = ndp->ni_vp;
@@ -517,8 +559,10 @@ unionlookup:
 	 */
 	while (dp->v_type == VDIR && (mp = dp->v_mountedhere) &&
 	       (cnp->cn_flags & NOCROSSMOUNT) == 0) {
-		if (vfs_busy(mp, 0, 0, p))
-			continue;
+		if (vfs_busy(mp, LK_NOWAIT, 0, p)) {
+			error = ENOENT;
+			goto bad2;
+		}
 		VOP_UNLOCK(dp, 0, p);
 		error = VFS_ROOT(mp, &tdp);
 		vfs_unbusy(mp, p);
@@ -543,9 +587,12 @@ unionlookup:
 	/*
 	 * Check for bogus trailing slashes.
 	 */
-	 if (trailing_slash && dp->v_type != VDIR) {
-		error = ENOTDIR;
-		goto bad2;
+	if (trailing_slash) {
+		if (dp->v_type != VDIR) {
+			error = ENOTDIR;
+			goto bad2;
+		}
+		trailing_slash = 0;
 	 }
 
 nextname:
@@ -554,7 +601,8 @@ nextname:
 	 * continue at next component, else return.
 	 */
 	if (*ndp->ni_next == '/') {
-		cnp->cn_nameptr = ndp->ni_next;
+		cnp->cn_nameptr = ndp->ni_next + 1;
+		ndp->ni_pathlen--;
 		while (*cnp->cn_nameptr == '/') {
 			cnp->cn_nameptr++;
 			ndp->ni_pathlen--;
@@ -577,10 +625,45 @@ nextname:
 	}
 	if (!wantparent)
 		vrele(ndp->ni_dvp);
+	if (cnp->cn_flags & AUDITVNPATH1)
+		AUDIT_ARG(vnpath, dp, ARG_VNODE1);
+	else if (cnp->cn_flags & AUDITVNPATH2)
+		AUDIT_ARG(vnpath, dp, ARG_VNODE2);
 	if ((cnp->cn_flags & LOCKLEAF) == 0)
 		VOP_UNLOCK(dp, 0, p);
 	if (kdebug_enable)
 	        kdebug_lookup(dp, cnp);
+	return (0);
+
+emptyname:
+	/*
+	 * A degenerate name (e.g. / or "") which is a way of
+	 * talking about a directory, e.g. like "/." or ".".
+	 */
+	if (dp->v_type != VDIR) {
+		error = ENOTDIR;
+		goto bad;
+	}
+	if (cnp->cn_nameiop != LOOKUP) {
+		error = EISDIR;
+		goto bad;
+	}
+	if (wantparent) {
+		ndp->ni_dvp = dp;
+		VREF(dp);
+	}
+	cnp->cn_flags &= ~ISDOTDOT;
+	cnp->cn_flags |= ISLASTCN;
+	ndp->ni_next = cp;
+	ndp->ni_vp = dp;
+	if (cnp->cn_flags & AUDITVNPATH1)
+		AUDIT_ARG(vnpath, dp, ARG_VNODE1);
+	else if (cnp->cn_flags & AUDITVNPATH2)
+		AUDIT_ARG(vnpath, dp, ARG_VNODE2);
+	if (!(cnp->cn_flags & (LOCKPARENT | LOCKLEAF)))
+		VOP_UNLOCK(dp, 0, p);
+	if (cnp->cn_flags & SAVESTART)
+		panic("lookup: SAVESTART");
 	return (0);
 
 bad2:
@@ -615,7 +698,7 @@ relookup(dvp, vpp, cnp)
 	int rdonly;			/* lookup read-only flag bit */
 	int error = 0;
 #ifdef NAMEI_DIAGNOSTIC
-	int newhash;			/* DEBUG: check name hash */
+	int i, newhash;			/* DEBUG: check name hash */
 	char *cp;			/* DEBUG: check name ptr/len */
 #endif
 
@@ -643,8 +726,8 @@ relookup(dvp, vpp, cnp)
 	 * responsibility for freeing the pathname buffer.
 	 */
 #ifdef NAMEI_DIAGNOSTIC
-	for (newhash = 0, cp = cnp->cn_nameptr; *cp != 0 && *cp != '/'; cp++)
-		newhash += (unsigned char)*cp;
+	for (i=1, newhash = 0, cp = cnp->cn_nameptr; *cp != 0 && *cp != '/'; cp++)
+		newhash += (unsigned char)*cp * i;
 	if (newhash != cnp->cn_hash)
 		panic("relookup: bad hash");
 	if (cnp->cn_namelen != cp - cnp->cn_nameptr)
@@ -748,11 +831,12 @@ bad:
 
 #define NUMPARMS 23
 
+static void
 kdebug_lookup(dp, cnp)
-        struct vnode *dp;
+	struct vnode *dp;
 	struct componentname *cnp;
 {
-        register int i, n;
+	register int i, n;
 	register int dbg_namelen;
 	register int save_dbg_namelen;
 	register char *dbg_nameptr;
@@ -802,7 +886,7 @@ kdebug_lookup(dp, cnp)
 	  entries, we must mark the start of the path's string.
 	*/
 	KERNEL_DEBUG_CONSTANT((FSDBG_CODE(DBG_FSRW,36)) | DBG_FUNC_START,
-			      dp, dbg_parms[0], dbg_parms[1], dbg_parms[2], 0);
+		(unsigned int)dp, dbg_parms[0], dbg_parms[1], dbg_parms[2], 0);
 
 	for (dbg_namelen = save_dbg_namelen-12, i=3;
 	     dbg_namelen > 0;

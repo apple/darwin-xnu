@@ -73,21 +73,22 @@
  ***/
 #include <mach/thread_act_server.h>
 #include <mach/host_priv_server.h>
-#include <sys/kdebug.h>
 
 void
 _mk_sp_thread_unblock(
 	thread_t			thread)
 {
-	thread_setrun(thread, TAIL_Q);
+	if (thread->state & TH_IDLE)
+		return;
+
+	if (thread->sched_mode & TH_MODE_REALTIME) {
+		thread->realtime.deadline = mach_absolute_time();
+		thread->realtime.deadline += thread->realtime.constraint;
+	}
 
 	thread->current_quantum = 0;
 	thread->computation_metered = 0;
 	thread->reason = AST_NONE;
-
-	KERNEL_DEBUG_CONSTANT(
-			MACHDBG_CODE(DBG_MACH_SCHED,MACH_MAKE_RUNNABLE) | DBG_FUNC_NONE,
-					(int)thread, (int)thread->sched_pri, 0, 0, 0);
 }
 
 void
@@ -99,49 +100,58 @@ _mk_sp_thread_done(
 	/*
 	 * A running thread is being taken off a processor:
 	 */
-	clock_get_uptime(&processor->last_dispatch);
-	if (!(old_thread->state & TH_IDLE)) {
-		/*
-		 * Compute remainder of current quantum.
-		 */
-		if (		first_quantum(processor)							&&
-				processor->quantum_end > processor->last_dispatch		)
-			old_thread->current_quantum =
-					(processor->quantum_end - processor->last_dispatch);
-		else
-			old_thread->current_quantum = 0;
+	processor->last_dispatch = mach_absolute_time();
 
+	if (old_thread->state & TH_IDLE)
+		return;
+
+	/*
+	 * Compute remainder of current quantum.
+	 */
+	if (		first_timeslice(processor)							&&
+			processor->quantum_end > processor->last_dispatch		)
+		old_thread->current_quantum =
+			(processor->quantum_end - processor->last_dispatch);
+	else
+		old_thread->current_quantum = 0;
+
+	if (old_thread->sched_mode & TH_MODE_REALTIME) {
+		/*
+		 * Cancel the deadline if the thread has
+		 * consumed the entire quantum.
+		 */
+		if (old_thread->current_quantum == 0) {
+			old_thread->realtime.deadline = UINT64_MAX;
+			old_thread->reason |= AST_QUANTUM;
+		}
+	}
+	else {
 		/*
 		 * For non-realtime threads treat a tiny
 		 * remaining quantum as an expired quantum
 		 * but include what's left next time.
 		 */
-		if (!(old_thread->sched_mode & TH_MODE_REALTIME)) {
-			if (old_thread->current_quantum < min_std_quantum) {
-				old_thread->reason |= AST_QUANTUM;
-				old_thread->current_quantum += std_quantum;
-			}
-		}
-		else
-		if (old_thread->current_quantum == 0)
+		if (old_thread->current_quantum < min_std_quantum) {
 			old_thread->reason |= AST_QUANTUM;
-
-		/*
-		 * If we are doing a direct handoff then
-		 * give the remainder of our quantum to
-		 * the next guy.
-		 */
-		if ((old_thread->reason & (AST_HANDOFF|AST_QUANTUM)) == AST_HANDOFF) {
-			new_thread->current_quantum = old_thread->current_quantum;
-			old_thread->reason |= AST_QUANTUM;
-			old_thread->current_quantum = 0;
+			old_thread->current_quantum += std_quantum;
 		}
-
-		old_thread->last_switch = processor->last_dispatch;
-
-		old_thread->computation_metered +=
-					(old_thread->last_switch - old_thread->computation_epoch);
 	}
+
+	/*
+	 * If we are doing a direct handoff then
+	 * give the remainder of our quantum to
+	 * the next guy.
+	 */
+	if ((old_thread->reason & (AST_HANDOFF|AST_QUANTUM)) == AST_HANDOFF) {
+		new_thread->current_quantum = old_thread->current_quantum;
+		old_thread->reason |= AST_QUANTUM;
+		old_thread->current_quantum = 0;
+	}
+
+	old_thread->last_switch = processor->last_dispatch;
+
+	old_thread->computation_metered +=
+			(old_thread->last_switch - old_thread->computation_epoch);
 }
 
 void
@@ -153,30 +163,26 @@ _mk_sp_thread_begin(
 	/*
 	 * The designated thread is beginning execution:
 	 */
-	if (!(thread->state & TH_IDLE)) {
-		if (thread->current_quantum == 0)
-			thread->current_quantum =
-						(thread->sched_mode & TH_MODE_REALTIME)?
-									thread->realtime.computation: std_quantum;
-
-		processor->quantum_end =
-						(processor->last_dispatch + thread->current_quantum);
-		timer_call_enter1(&processor->quantum_timer,
-								thread, processor->quantum_end);
-
-		processor->slice_quanta =
-						(thread->sched_mode & TH_MODE_TIMESHARE)?
-									processor->processor_set->set_quanta: 1;
-
-		thread->last_switch = processor->last_dispatch;
-
-		thread->computation_epoch = thread->last_switch;
-	}
-	else {
+	if (thread->state & TH_IDLE) {
 		timer_call_cancel(&processor->quantum_timer);
+		processor->timeslice = 1;
 
-		processor->slice_quanta = 1;
+		return;
 	}
+
+	if (thread->current_quantum == 0)
+		thread_quantum_init(thread);
+
+	processor->quantum_end =
+				(processor->last_dispatch + thread->current_quantum);
+	timer_call_enter1(&processor->quantum_timer,
+							thread, processor->quantum_end);
+
+	processor_timeslice_setup(processor, thread);
+
+	thread->last_switch = processor->last_dispatch;
+
+	thread->computation_epoch = thread->last_switch;
 }
 
 void
@@ -184,9 +190,12 @@ _mk_sp_thread_dispatch(
 	thread_t		thread)
 {
 	if (thread->reason & AST_QUANTUM)
-		thread_setrun(thread, TAIL_Q);
+		thread_setrun(thread, SCHED_TAILQ);
 	else
-		thread_setrun(thread, HEAD_Q);
+	if (thread->reason & AST_PREEMPT)
+		thread_setrun(thread, SCHED_HEADQ);
+	else
+		thread_setrun(thread, SCHED_PREEMPT | SCHED_TAILQ);
 
 	thread->reason = AST_NONE;
 }
@@ -214,10 +223,21 @@ thread_policy_common(
 	if (	!(thread->sched_mode & TH_MODE_REALTIME)	&&
 			!(thread->safe_mode & TH_MODE_REALTIME)			) {
 		if (!(thread->sched_mode & TH_MODE_FAILSAFE)) {
-			if (policy == POLICY_TIMESHARE)
+			integer_t	oldmode = (thread->sched_mode & TH_MODE_TIMESHARE);
+
+			if (policy == POLICY_TIMESHARE && !oldmode) {
 				thread->sched_mode |= TH_MODE_TIMESHARE;
+
+				if (thread->state & TH_RUN)
+					pset_share_incr(thread->processor_set);
+			}
 			else
+			if (policy != POLICY_TIMESHARE && oldmode) {
 				thread->sched_mode &= ~TH_MODE_TIMESHARE;
+
+				if (thread->state & TH_RUN)
+					pset_share_decr(thread->processor_set);
+			}
 		}
 		else {
 			if (policy == POLICY_TIMESHARE)
@@ -755,12 +775,15 @@ update_priority(
 			thread->sched_stamp >= thread->safe_release		) {
 		if (!(thread->safe_mode & TH_MODE_TIMESHARE)) {
 			if (thread->safe_mode & TH_MODE_REALTIME) {
-				thread->priority = BASEPRI_REALTIME;
+				thread->priority = BASEPRI_RTQUEUES;
 
 				thread->sched_mode |= TH_MODE_REALTIME;
 			}
 
 			thread->sched_mode &= ~TH_MODE_TIMESHARE;
+
+			if (thread->state & TH_RUN)
+				pset_share_decr(thread->processor_set);
 
 			if (!(thread->sched_mode & TH_MODE_ISDEPRESSED))
 				set_sched_pri(thread, thread->priority);
@@ -782,10 +805,10 @@ update_priority(
 		if (new_pri != thread->sched_pri) {
 			run_queue_t		runq;
 
-			runq = rem_runq(thread);
+			runq = run_queue_remove(thread);
 			thread->sched_pri = new_pri;
 			if (runq != RUN_QUEUE_NULL)
-				thread_setrun(thread, TAIL_Q);
+				thread_setrun(thread, SCHED_TAILQ);
 		}
 	}
 }
@@ -831,7 +854,6 @@ _mk_sp_thread_switch(
 	mach_msg_timeout_t		option_time)
 {
     register thread_t		self = current_thread();
-    register processor_t	myprocessor;
 	int						s;
 
     /*
@@ -844,16 +866,26 @@ _mk_sp_thread_switch(
 		if (		thread != THREAD_NULL			&&
 					thread != self					&&
 					thread->top_act == hint_act				) {
+			processor_t		processor;
+
 			s = splsched();
 			thread_lock(thread);
 
 			/*
-			 *	Check if the thread is in the right pset. Then
-			 *	pull it off its run queue.  If it
-			 *	doesn't come, then it's not eligible.
+			 *	Check if the thread is in the right pset,
+			 *	is not bound to a different processor,
+			 *	and that realtime is not involved.
+			 *
+			 *	Next, pull it off its run queue.  If it
+			 *	doesn't come, it's not eligible.
 			 */
-			if (	thread->processor_set == self->processor_set	&&
-					rem_runq(thread) != RUN_QUEUE_NULL					) {
+			processor = current_processor();
+			if (processor->current_pri < BASEPRI_RTQUEUES			&&
+				thread->sched_pri < BASEPRI_RTQUEUES				&&
+				thread->processor_set == processor->processor_set	&&
+				(thread->bound_processor == PROCESSOR_NULL	||
+				 thread->bound_processor == processor)				&&
+					run_queue_remove(thread) != RUN_QUEUE_NULL			) {
 				/*
 				 *	Hah, got it!!
 				 */
@@ -890,29 +922,16 @@ _mk_sp_thread_switch(
      *	highest priority thread (can easily happen with a collection
      *	of timesharing threads).
      */
-	mp_disable_preemption();
-    myprocessor = current_processor();
-    if (	option != SWITCH_OPTION_NONE					||
-			myprocessor->processor_set->runq.count > 0		||
-			myprocessor->runq.count > 0							) {
-		mp_enable_preemption();
-
-		if (option == SWITCH_OPTION_WAIT)
-			assert_wait_timeout(option_time, THREAD_ABORTSAFE);
-		else
-		if (option == SWITCH_OPTION_DEPRESS)
-			_mk_sp_thread_depress_ms(option_time);
-	  
-		self->saved.swtch.option = option;
-
-		thread_block_reason(_mk_sp_thread_switch_continue,
-									(option == SWITCH_OPTION_DEPRESS)?
-											AST_YIELD: AST_NONE);
-	}
+	if (option == SWITCH_OPTION_WAIT)
+		assert_wait_timeout(option_time, THREAD_ABORTSAFE);
 	else
-		mp_enable_preemption();
+	if (option == SWITCH_OPTION_DEPRESS)
+		_mk_sp_thread_depress_ms(option_time);
+	  
+	self->saved.swtch.option = option;
 
-out:
+	thread_block_reason(_mk_sp_thread_switch_continue, AST_YIELD);
+
 	if (option == SWITCH_OPTION_WAIT)
 		thread_cancel_timer();
 	else
@@ -935,7 +954,6 @@ _mk_sp_thread_depress_abstime(
     spl_t					s;
 
     s = splsched();
-	wake_lock(self);
     thread_lock(self);
 	if (!(self->sched_mode & TH_MODE_ISDEPRESSED)) {
 		processor_t		myprocessor = self->last_processor;
@@ -944,7 +962,6 @@ _mk_sp_thread_depress_abstime(
 		myprocessor->current_pri = self->sched_pri;
 		self->sched_mode &= ~TH_MODE_PREEMPT;
 		self->sched_mode |= TH_MODE_DEPRESS;
-		thread_unlock(self);
 
 		if (interval != 0) {
 			clock_absolutetime_interval_to_deadline(interval, &deadline);
@@ -952,9 +969,7 @@ _mk_sp_thread_depress_abstime(
 				self->depress_timer_active++;
 		}
 	}
-	else
-		thread_unlock(self);
-	wake_unlock(self);
+	thread_unlock(self);
     splx(s);
 }
 
@@ -981,17 +996,12 @@ thread_depress_expire(
     spl_t			s;
 
     s = splsched();
-    wake_lock(thread);
+    thread_lock(thread);
 	if (--thread->depress_timer_active == 1) {
-		thread_lock(thread);
 		thread->sched_mode &= ~TH_MODE_ISDEPRESSED;
 		compute_priority(thread, FALSE);
-		thread_unlock(thread);
 	}
-	else
-	if (thread->depress_timer_active == 0)
-		thread_wakeup_one(&thread->depress_timer_active);
-    wake_unlock(thread);
+    thread_unlock(thread);
     splx(s);
 }
 
@@ -1007,7 +1017,6 @@ _mk_sp_thread_depress_abort(
     spl_t					s;
 
     s = splsched();
-	wake_lock(thread);
     thread_lock(thread);
 	if (abortall || !(thread->sched_mode & TH_MODE_POLLDEPRESS)) {
 		if (thread->sched_mode & TH_MODE_ISDEPRESSED) {
@@ -1016,14 +1025,10 @@ _mk_sp_thread_depress_abort(
 			result = KERN_SUCCESS;
 		}
 
-		thread_unlock(thread);
-
 		if (timer_call_cancel(&thread->depress_timer))
 			thread->depress_timer_active--;
 	}
-	else
-		thread_unlock(thread);
-	wake_unlock(thread);
+	thread_unlock(thread);
     splx(s);
 
     return (result);
@@ -1041,16 +1046,15 @@ _mk_sp_thread_perhaps_yield(
 	if (!(self->sched_mode & (TH_MODE_REALTIME|TH_MODE_TIMESHARE))) {
 		extern uint64_t		max_poll_computation;
 		extern int			sched_poll_yield_shift;
-		uint64_t			abstime, total_computation;
+		uint64_t			total_computation, abstime;
 
-		clock_get_uptime(&abstime);
+		abstime = mach_absolute_time();
 		total_computation = abstime - self->computation_epoch;
 		total_computation += self->computation_metered;
 		if (total_computation >= max_poll_computation) {
 			processor_t		myprocessor = current_processor();
 			ast_t			preempt;
 
-			wake_lock(self);
 			thread_lock(self);
 			if (!(self->sched_mode & TH_MODE_ISDEPRESSED)) {
 				self->sched_pri = DEPRESSPRI;
@@ -1060,12 +1064,11 @@ _mk_sp_thread_perhaps_yield(
 			self->computation_epoch = abstime;
 			self->computation_metered = 0;
 			self->sched_mode |= TH_MODE_POLLDEPRESS;
-			thread_unlock(self);
 
 			abstime += (total_computation >> sched_poll_yield_shift);
 			if (!timer_call_enter(&self->depress_timer, abstime))
 				self->depress_timer_active++;
-			wake_unlock(self);
+			thread_unlock(self);
 
 			if ((preempt = csw_check(self, myprocessor)) != AST_NONE)
 				ast_on(preempt);

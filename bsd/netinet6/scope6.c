@@ -1,4 +1,4 @@
-/*	$FreeBSD: src/sys/netinet6/scope6.c,v 1.1.2.2 2001/07/03 11:01:55 ume Exp $	*/
+/*	$FreeBSD: src/sys/netinet6/scope6.c,v 1.3 2002/03/25 10:12:51 ume Exp $	*/
 /*	$KAME: scope6.c,v 1.10 2000/07/24 13:29:31 itojun Exp $	*/
 
 /*
@@ -222,7 +222,7 @@ struct in6_addr *addr;
 		}
 	}
 
-	if (bcmp(&in6addr_loopback, addr, sizeof(addr) - 1) == 0) {
+	if (bcmp(&in6addr_loopback, addr, sizeof(*addr) - 1) == 0) {
 		if (addr->s6_addr8[15] == 1) /* loopback */
 			return IPV6_ADDR_SCOPE_NODELOCAL;
 		if (addr->s6_addr8[15] == 0) /* unspecified */

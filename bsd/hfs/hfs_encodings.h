@@ -32,10 +32,6 @@
 #include <sys/appleapiopts.h>
 
 #ifdef __APPLE_API_UNSTABLE
-/*
- * Sysctl value for HFS Unicode encoding matching.
- */
-#define HFS_ENCODINGBIAS	1	/* encoding matching CJK bias */
 
 #define CTL_HFS_NAMES { \
 	{ 0, 0 }, \
@@ -55,7 +51,7 @@
  * encoding conversion routines.
  */
 
-typedef int (* hfs_to_unicode_func_t)(Str31 hfs_str, UniChar *uni_str,
+typedef int (* hfs_to_unicode_func_t)(const Str31 hfs_str, UniChar *uni_str,
 		UInt32 maxCharLen, UInt32 *usedCharLen);
 
 typedef int (* unicode_to_hfs_func_t)(UniChar *uni_str, UInt32 unicodeChars,

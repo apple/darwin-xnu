@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2003 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -250,15 +250,12 @@ enum
 	kPreviousRecord			= -1
 };
 
-void HFSToHFSPlusExtents(
-	const HFSExtentRecord	oldExtents,
-	HFSPlusExtentRecord		newExtents);
 
-OSErr HFSPlusToHFSExtents(
+static OSErr HFSPlusToHFSExtents(
 	const HFSPlusExtentRecord	oldExtents,
 	HFSExtentRecord				newExtents);
 
-OSErr FindExtentRecord(
+static OSErr FindExtentRecord(
 	const ExtendedVCB		*vcb,
 	UInt8					forkType,
 	UInt32					fileID,
@@ -268,7 +265,7 @@ OSErr FindExtentRecord(
 	HFSPlusExtentRecord		foundData,
 	UInt32					*foundHint);
 
-OSErr DeleteExtentRecord(
+static OSErr DeleteExtentRecord(
 	const ExtendedVCB		*vcb,
 	UInt8					forkType,
 	UInt32					fileID,
@@ -281,7 +278,7 @@ static OSErr CreateExtentRecord(
 	UInt32					*hint);
 
 
-OSErr GetFCBExtentRecord(
+static OSErr GetFCBExtentRecord(
 	const FCB				*fcb,
 	HFSPlusExtentRecord		extents);
 
@@ -359,7 +356,7 @@ static Boolean ExtentsAreIntegral(
 //					fourth entry will be zeroes.
 //		foundHint	The BTree hint to find the node again
 //_________________________________________________________________________________
-OSErr FindExtentRecord(
+static OSErr FindExtentRecord(
 	const ExtendedVCB	*vcb,
 	UInt8				forkType,
 	UInt32				fileID,
@@ -376,7 +373,8 @@ OSErr FindExtentRecord(
 	UInt16				btRecordSize;
 	
 	err = noErr;
-	*foundHint = 0;
+	if (foundHint)
+		*foundHint = 0;
 	fcb = GetFileControlBlock(vcb->extentsRefNum);
 	
 	MALLOC(btIterator, BTreeIterator *, sizeof(*btIterator), M_TEMP, M_WAITOK);
@@ -416,14 +414,15 @@ OSErr FindExtentRecord(
 		if (err == noErr) {
 			UInt16	i;
 			
-			//	Copy the found key back for the caller
-			foundKey->keyLength 	= kHFSPlusExtentKeyMaximumLength;
-			foundKey->forkType		= extentKeyPtr->forkType;
-			foundKey->pad			= 0;
-			foundKey->fileID		= extentKeyPtr->fileID;
-			foundKey->startBlock	= extentKeyPtr->startBlock;
-			
-			//	Copy the found data back for the caller
+			// Copy the found key back for the caller
+			if (foundKey) {
+				foundKey->keyLength  = kHFSPlusExtentKeyMaximumLength;
+				foundKey->forkType   = extentKeyPtr->forkType;
+				foundKey->pad        = 0;
+				foundKey->fileID     = extentKeyPtr->fileID;
+				foundKey->startBlock = extentKeyPtr->startBlock;
+			}
+			// Copy the found data back for the caller
 			foundData[0].startBlock = extentData[0].startBlock;
 			foundData[0].blockCount = extentData[0].blockCount;
 			foundData[1].startBlock = extentData[1].startBlock;
@@ -471,14 +470,16 @@ OSErr FindExtentRecord(
 		}
 
 		if (err == noErr) {
-			//	Copy the found key back for the caller
-			BlockMoveData(extentKeyPtr, foundKey, sizeof(HFSPlusExtentKey));
-			//	Copy the found data back for the caller
+			// Copy the found key back for the caller
+			if (foundKey)
+				BlockMoveData(extentKeyPtr, foundKey, sizeof(HFSPlusExtentKey));
+			// Copy the found data back for the caller
 			BlockMoveData(&extentData, foundData, sizeof(HFSPlusExtentRecord));
 		}
 	}
-	
-	*foundHint = btIterator->hint.nodeNum;
+
+	if (foundHint)
+		*foundHint = btIterator->hint.nodeNum;
 	FREE(btIterator, M_TEMP);	
 	return err;
 }
@@ -498,11 +499,6 @@ static OSErr CreateExtentRecord(
 	
 	err = noErr;
 	*hint = 0;
-
-	// XXXdbg - preflight that there's enough space
-	err = BTCheckFreeSpace(GetFileControlBlock(vcb->extentsRefNum));
-	if (err)
-		return err;
 
 	MALLOC(btIterator, BTreeIterator *, sizeof(*btIterator), M_TEMP, M_WAITOK);
 	bzero(btIterator, sizeof(*btIterator));
@@ -546,7 +542,7 @@ static OSErr CreateExtentRecord(
 }
 
 
-OSErr DeleteExtentRecord(
+static OSErr DeleteExtentRecord(
 	const ExtendedVCB	*vcb,
 	UInt8				forkType,
 	UInt32				fileID,
@@ -556,11 +552,6 @@ OSErr DeleteExtentRecord(
 	OSErr				err;
 	
 	err = noErr;
-
-	// XXXdbg - preflight that there's enough space
-	err = BTCheckFreeSpace(GetFileControlBlock(vcb->extentsRefNum));
-	if (err)
-		return err;
 
 	MALLOC(btIterator, BTreeIterator *, sizeof(*btIterator), M_TEMP, M_WAITOK);
 	bzero(btIterator, sizeof(*btIterator));
@@ -616,6 +607,7 @@ OSErr DeleteExtentRecord(
 // Called By:	Log2Phys (read/write in place), Cache (map a file block).
 //_________________________________________________________________________________
 
+__private_extern__
 OSErr MapFileBlockC (
 	ExtendedVCB		*vcb,				// volume that file resides on
 	FCB				*fcb,				// FCB of file
@@ -685,12 +677,14 @@ OSErr MapFileBlockC (
 	//	Determine the number of contiguous bytes until the end of the extent
 	//	(or the amount they asked for, whichever comes first).
 	//
-	tmpOff = dataEnd - offset;
-	if (tmpOff > (off_t)(numberOfBytes))
-		*availableBytes = numberOfBytes;	// more there than they asked for, so pin the output
-	else
-		*availableBytes = tmpOff;
-
+	if (availableBytes)
+	{
+		tmpOff = dataEnd - offset;
+		if (tmpOff > (off_t)(numberOfBytes))
+			*availableBytes = numberOfBytes;  // more there than they asked for, so pin the output
+		else
+			*availableBytes = tmpOff;
+	}
 	return noErr;
 }
 
@@ -827,6 +821,7 @@ static OSErr DeallocateFork(
 //	Function: 	Flushes the extent file for a specified volume
 //‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹
 
+__private_extern__
 OSErr FlushExtentFile( ExtendedVCB *vcb )
 {
 	FCB *	fcb;
@@ -856,6 +851,7 @@ OSErr FlushExtentFile( ExtendedVCB *vcb )
 //				an HFS volume.
 //‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹
 
+__private_extern__
 SInt32 CompareExtentKeys( const HFSExtentKey *searchKey, const HFSExtentKey *trialKey )
 {
 	SInt32	result;		//	± 1
@@ -919,6 +915,7 @@ SInt32 CompareExtentKeys( const HFSExtentKey *searchKey, const HFSExtentKey *tri
 //				an HFS volume.
 //‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹
 
+__private_extern__
 SInt32 CompareExtentKeysPlus( const HFSPlusExtentKey *searchKey, const HFSPlusExtentKey *trialKey )
 {
 	SInt32	result;		//	± 1
@@ -973,6 +970,72 @@ SInt32 CompareExtentKeysPlus( const HFSPlusExtentKey *searchKey, const HFSPlusEx
 	return( result );
 }
 
+/*
+ * Add a file extent to a file.
+ *
+ * Used by hfs_extendfs to extend the volume allocation bitmap file.
+ *
+ */
+__private_extern__
+int
+AddFileExtent(ExtendedVCB *vcb, FCB *fcb, UInt32 startBlock, UInt32 blockCount)
+{
+	HFSPlusExtentKey foundKey;
+	HFSPlusExtentRecord foundData;
+	UInt32 foundIndex;
+	UInt32 hint;
+	UInt32 nextBlock;
+	SInt64 peof;
+	int i;
+	int error;
+
+	peof = (SInt64)(fcb->ff_blocks + blockCount) * (SInt64)vcb->blockSize;
+
+	error = SearchExtentFile(vcb, fcb, peof-1, &foundKey, foundData, &foundIndex, &hint, &nextBlock);
+	if (error != fxRangeErr)
+		return (EBUSY);
+
+	/*
+	 * Add new extent.  See if there is room in the current record.
+	 */
+	if (foundData[foundIndex].blockCount != 0)
+		++foundIndex;
+	if (foundIndex == kHFSPlusExtentDensity) {
+		/*
+		 * Existing record is full so create a new one.
+		 */
+		foundKey.keyLength = kHFSPlusExtentKeyMaximumLength;
+		foundKey.forkType = kDataForkType;
+		foundKey.pad = 0;
+		foundKey.fileID = FTOC(fcb)->c_fileid;
+		foundKey.startBlock = nextBlock;
+		
+		foundData[0].startBlock = startBlock;
+		foundData[0].blockCount = blockCount;
+		
+		/* zero out remaining extents. */
+		for (i = 1; i < kHFSPlusExtentDensity; ++i) {
+			foundData[i].startBlock = 0;
+			foundData[i].blockCount = 0;
+		}
+
+		foundIndex = 0;
+
+		error = CreateExtentRecord(vcb, &foundKey, foundData, &hint);
+		if (error == fxOvFlErr)
+			error = dskFulErr;
+	} else {
+		/* 
+		 * Add a new extent into existing record.
+		 */
+		foundData[foundIndex].startBlock = startBlock;
+		foundData[foundIndex].blockCount = blockCount;
+		error = UpdateExtentRecord(vcb, fcb, &foundKey, foundData, hint);
+	}
+	(void) FlushExtentFile(vcb);
+
+	return (error);
+}
 
 
 //_________________________________________________________________________________
@@ -1000,6 +1063,7 @@ SInt32 CompareExtentKeysPlus( const HFSPlusExtentKey *searchKey, const HFSPlusEx
 // Note: 		ExtendFile updates the PEOF in the FCB.
 //_________________________________________________________________________________
 
+__private_extern__
 OSErr ExtendFileC (
 	ExtendedVCB		*vcb,				// volume that file resides on
 	FCB				*fcb,				// FCB of file to truncate
@@ -1021,6 +1085,7 @@ OSErr ExtendFileC (
 	Boolean				allOrNothing;
 	Boolean				forceContig;
 	Boolean				wantContig;
+	Boolean				useMetaZone;
 	Boolean				needsFlush;
 	UInt32				actualStartBlock;
 	UInt32				actualNumBlocks;
@@ -1055,7 +1120,7 @@ OSErr ExtendFileC (
 	//	Determine how many blocks need to be allocated.
 	//	Round up the number of desired bytes to add.
 	//
-	blocksToAdd = FileBytesToBlocks(bytesToAdd, volumeBlockSize);
+	blocksToAdd = howmany(bytesToAdd, volumeBlockSize);
 	bytesToAdd = (SInt64)((SInt64)blocksToAdd * (SInt64)volumeBlockSize);
 
 	/*
@@ -1070,7 +1135,7 @@ OSErr ExtendFileC (
 		FTOC(fcb)->c_blocks   += blocksToAdd;
 		fcb->ff_blocks        += blocksToAdd;
 
-		FTOC(fcb)->c_flag |= C_MODIFIED;
+		FTOC(fcb)->c_flag |= C_MODIFIED | C_FORCEUPDATE;
 		*actualBytesAdded = bytesToAdd;
 		return (0);
 	}
@@ -1092,11 +1157,11 @@ OSErr ExtendFileC (
 	//	then set the maximum number of bytes to the requested number of bytes
 	//	rounded up to a multiple of the clump size.
 	//
-	if ((fcb->fcbClmpSize > volumeBlockSize)
+	if ((vcb->vcbClpSiz > volumeBlockSize)
 	&&  (bytesToAdd < (SInt64)HFS_MAX_DEFERED_ALLOC)
 	&&  (flags & kEFNoClumpMask) == 0) {
-		maximumBytes = (SInt64)FileBytesToBlocks(bytesToAdd, fcb->fcbClmpSize);
-		maximumBytes *= fcb->fcbClmpSize;
+		maximumBytes = (SInt64)howmany(bytesToAdd, vcb->vcbClpSiz);
+		maximumBytes *= vcb->vcbClpSiz;
 	} else {
 		maximumBytes = bytesToAdd;
 	}
@@ -1131,7 +1196,7 @@ OSErr ExtendFileC (
 		//	Enough blocks are already allocated.  Just update the FCB to reflect the new length.
 		fcb->ff_blocks = peof / volumeBlockSize;
 		FTOC(fcb)->c_blocks += (bytesToAdd / volumeBlockSize);
-		FTOC(fcb)->c_flag |= C_MODIFIED;
+		FTOC(fcb)->c_flag |= C_MODIFIED | C_FORCEUPDATE;
 		goto Exit;
 	}
 	if (err != fxRangeErr)		// Any real error?
@@ -1158,6 +1223,7 @@ OSErr ExtendFileC (
 	//		else, keep getting bits and pieces (non-contig)
 	err = noErr;
 	wantContig = true;
+	useMetaZone = flags & kEFMetadataMask;
 	vcb->vcbFreeExtCnt = 0;	/* For now, force rebuild of free extent list */
 	do {
 		if (blockHint != 0)
@@ -1183,16 +1249,18 @@ OSErr ExtendFileC (
 					err = BlockAllocate(
 						  vcb,
 						  startBlock,
-						  MIN(bytesToAdd, availbytes),
-						  MIN(maximumBytes, availbytes),
+						  howmany(MIN(bytesToAdd, availbytes), volumeBlockSize),
+						  howmany(MIN(maximumBytes, availbytes), volumeBlockSize),
 						  wantContig,
+						  useMetaZone,
 						  &actualStartBlock,
 						  &actualNumBlocks);
 				}
 			}
 		} else {
-			err = BlockAllocate(vcb, startBlock, bytesToAdd, maximumBytes,
-					wantContig, &actualStartBlock, &actualNumBlocks);
+			err = BlockAllocate(vcb, startBlock, howmany(bytesToAdd, volumeBlockSize),
+			                    howmany(maximumBytes, volumeBlockSize), wantContig, useMetaZone,
+			                    &actualStartBlock, &actualNumBlocks);
 		}
 		if (err == dskFulErr) {
 			if (forceContig)
@@ -1205,8 +1273,20 @@ OSErr ExtendFileC (
 			}
 			if (actualNumBlocks != 0)
 				err = noErr;
+			if (useMetaZone == 0) {
+				/* Couldn't get anything so dip into metadat zone */
+				err = noErr;
+				useMetaZone = 1;
+				continue;
+			}
 		}
 		if (err == noErr) {
+		    if (actualNumBlocks != 0) {
+				// this catalog entry *must* get forced to disk when
+				// hfs_update() is called
+				FTOC(fcb)->c_flag |= C_FORCEUPDATE;
+			}
+
 			//	Add the new extent to the existing extent record, or create a new one.
 			if ((actualStartBlock == startBlock) && (blockHint == 0)) {
 				//	We grew the file's last extent, so just adjust the number of blocks.
@@ -1284,7 +1364,7 @@ OSErr ExtendFileC (
 			}
 			fcb->ff_blocks += (bytesThisExtent / volumeBlockSize);
 			FTOC(fcb)->c_blocks += (bytesThisExtent / volumeBlockSize);
-			FTOC(fcb)->c_flag |= C_MODIFIED;
+			FTOC(fcb)->c_flag |= C_MODIFIED | C_FORCEUPDATE;
 
 			//	If contiguous allocation was requested, then we've already got one contiguous
 			//	chunk.  If we didn't get all we wanted, then adjust the error to disk full.
@@ -1298,6 +1378,13 @@ OSErr ExtendFileC (
 
 ErrorExit:
 Exit:
+	if (VCBTOHFS(vcb)->hfs_flags & HFS_METADATA_ZONE) {
+		/* Keep the roving allocator out of the metadata zone. */
+		if (vcb->nextAllocation >= VCBTOHFS(vcb)->hfs_metazone_start &&
+		    vcb->nextAllocation <= VCBTOHFS(vcb)->hfs_metazone_end) {
+			vcb->nextAllocation = VCBTOHFS(vcb)->hfs_metazone_end + 1;
+		}
+	}
 	*actualBytesAdded = (SInt64)(fcb->ff_blocks - prevblocks) * (SInt64)volumeBlockSize;
 
 	if (needsFlush)
@@ -1335,6 +1422,7 @@ Overflow:
 // Note: 		TruncateFile updates the PEOF in the FCB.
 //_________________________________________________________________________________
 
+__private_extern__
 OSErr TruncateFileC (
 	ExtendedVCB		*vcb,				// volume that file resides on
 	FCB				*fcb,				// FCB of file to truncate
@@ -1378,7 +1466,7 @@ OSErr TruncateFileC (
 	//	two gigabytes or more, then round down by one allocation block (??? really?
 	//	shouldn't that be an error?).
 	//
-	nextBlock = FileBytesToBlocks(peof, vcb->blockSize);	// number of allocation blocks to remain in file
+	nextBlock = howmany(peof, vcb->blockSize);	// number of allocation blocks to remain in file
 	peof = (SInt64)((SInt64)nextBlock * (SInt64)vcb->blockSize);					// number of bytes in those blocks
 	if ((vcb->vcbSigWord == kHFSSigWord) && (peof >= kTwoGigabytes)) {
 		#if DEBUG_BUILD
@@ -1391,10 +1479,16 @@ OSErr TruncateFileC (
 	//
 	//	Update FCB's length
 	//
+	/*
+	 * XXX Any errors could cause ff_blocks and c_blocks to get out of sync...
+	 */
 	numBlocks = peof / vcb->blockSize;
 	FTOC(fcb)->c_blocks -= (fcb->ff_blocks - numBlocks);
 	fcb->ff_blocks = numBlocks;
-	FTOC(fcb)->c_flag |= C_MODIFIED;
+
+	// this catalog entry is modified and *must* get forced 
+	// to disk when hfs_update() is called
+	FTOC(fcb)->c_flag |= C_MODIFIED | C_FORCEUPDATE;
 	
 	//
 	//	If the new PEOF is 0, then truncateToExtent has no meaning (we should always deallocate
@@ -1499,6 +1593,147 @@ ErrorExit:
 		(void) FlushExtentFile(vcb);
 
 	return err;
+}
+
+
+/*
+ * HFS Plus only
+ *
+ */
+__private_extern__
+OSErr HeadTruncateFile (
+	ExtendedVCB  *vcb,
+	FCB  *fcb,
+	UInt32  headblks)
+{
+	HFSPlusExtentRecord  extents;
+	HFSPlusExtentRecord  tailExtents;
+	HFSCatalogNodeID  fileID;
+	UInt8  forkType;
+	UInt32  blkcnt;
+	UInt32  startblk;
+	UInt32  blksfreed;
+	int  i, j;
+	int  error;
+
+
+	if (vcb->vcbSigWord != kHFSPlusSigWord)
+		return (-1);
+
+	forkType = FORK_IS_RSRC(fcb) ? kResourceForkType : kDataForkType;
+	fileID = FTOC(fcb)->c_fileid;
+	bzero(tailExtents, sizeof(tailExtents));
+
+	blksfreed = 0;
+	startblk = 0;
+
+	/*
+	 * Process catalog resident extents
+	 */
+	for (i = 0, j = 0; i < kHFSPlusExtentDensity; ++i) {
+		blkcnt = fcb->fcbExtents[i].blockCount;
+		if (blkcnt == 0)
+			break;  /* end of extents */
+
+		if (blksfreed < headblks) {
+			error = BlockDeallocate(vcb, fcb->fcbExtents[i].startBlock, blkcnt);
+			/*
+			 * Any errors after the first BlockDeallocate
+			 * must be ignored so we can put the file in
+			 * a known state.
+			 */
+			if (error ) {
+				if (i == 0)
+					goto ErrorExit;  /* uh oh */
+				else {
+					error = 0;
+					printf("HeadTruncateFile: problems deallocating %s (%d)\n",
+					       FTOC(fcb)->c_desc.cd_nameptr ? FTOC(fcb)->c_desc.cd_nameptr : "", error);
+				}
+			}
+
+			blksfreed += blkcnt;
+			fcb->fcbExtents[i].startBlock = 0;
+			fcb->fcbExtents[i].blockCount = 0;
+		} else {
+			tailExtents[j].startBlock = fcb->fcbExtents[i].startBlock;
+			tailExtents[j].blockCount = blkcnt;
+			++j;
+		}
+		startblk += blkcnt;	
+	}
+	
+	if (blkcnt == 0)
+		goto CopyExtents;
+
+	/* 
+	 * Process overflow extents
+	 */
+	for (;;) {
+		UInt32  extblks;
+
+		error = FindExtentRecord(vcb, forkType, fileID, startblk, false, NULL, extents, NULL);
+		if (error) {
+			/*
+			 * Any errors after the first BlockDeallocate
+			 * must be ignored so we can put the file in
+			 * a known state.
+			 */
+			if (error != btNotFound)
+				printf("HeadTruncateFile: problems finding extents %s (%d)\n",
+				       FTOC(fcb)->c_desc.cd_nameptr ? FTOC(fcb)->c_desc.cd_nameptr : "", error);
+			error = 0;
+			break;
+		}
+
+		for(i = 0, extblks = 0; i < kHFSPlusExtentDensity; ++i) {
+			blkcnt = extents[i].blockCount;
+			if (blkcnt == 0)
+				break;  /* end of extents */
+
+			if (blksfreed < headblks) {
+				error = BlockDeallocate(vcb, extents[i].startBlock, blkcnt);
+				if (error) {
+					printf("HeadTruncateFile: problems deallocating %s (%d)\n",
+					       FTOC(fcb)->c_desc.cd_nameptr ? FTOC(fcb)->c_desc.cd_nameptr : "", error);
+					error = 0;
+				}
+				blksfreed += blkcnt;
+			} else {
+				tailExtents[j].startBlock = extents[i].startBlock;
+				tailExtents[j].blockCount = blkcnt;
+				++j;
+			}
+			extblks += blkcnt;		
+		}
+		
+		error = DeleteExtentRecord(vcb, forkType, fileID, startblk);
+		if (error) {
+			printf("HeadTruncateFile: problems deallocating %s (%d)\n",
+				FTOC(fcb)->c_desc.cd_nameptr ? FTOC(fcb)->c_desc.cd_nameptr : "", error);
+			error = 0;
+		}
+		
+		if (blkcnt == 0)
+			break;  /* all done */
+
+		startblk += extblks;
+	}
+
+CopyExtents:
+	if (blksfreed) {
+		bcopy(tailExtents, fcb->fcbExtents, sizeof(tailExtents));
+		blkcnt = fcb->ff_blocks - headblks;
+		FTOC(fcb)->c_blocks -= blkcnt;
+		fcb->ff_blocks = blkcnt;
+
+		FTOC(fcb)->c_flag |= C_CHANGE | C_FORCEUPDATE;
+
+		(void) FlushExtentFile(vcb);
+	}
+
+ErrorExit:	
+	return MacToVFSError(error);
 }
 
 
@@ -1749,11 +1984,6 @@ static OSErr UpdateExtentRecord (
 		//
 		btFCB = GetFileControlBlock(vcb->extentsRefNum);
 
-		// XXXdbg - preflight that there's enough space
-		err = BTCheckFreeSpace(btFCB);
-		if (err)
-			return err;
-
 		MALLOC(btIterator, BTreeIterator *, sizeof(*btIterator), M_TEMP, M_WAITOK);
 		bzero(btIterator, sizeof(*btIterator));
 
@@ -1811,31 +2041,8 @@ static OSErr UpdateExtentRecord (
 
 
 
-void HFSToHFSPlusExtents(
-	const HFSExtentRecord	oldExtents,
-	HFSPlusExtentRecord		newExtents)
-{
-	UInt32	i;
 
-	// copy the first 3 extents
-	newExtents[0].startBlock = oldExtents[0].startBlock;
-	newExtents[0].blockCount = oldExtents[0].blockCount;
-	newExtents[1].startBlock = oldExtents[1].startBlock;
-	newExtents[1].blockCount = oldExtents[1].blockCount;
-	newExtents[2].startBlock = oldExtents[2].startBlock;
-	newExtents[2].blockCount = oldExtents[2].blockCount;
-
-	// zero out the remaining ones
-	for (i = 3; i < kHFSPlusExtentDensity; ++i)
-	{
-		newExtents[i].startBlock = 0;
-		newExtents[i].blockCount = 0;
-	}
-}
-
-
-
-OSErr HFSPlusToHFSExtents(
+static OSErr HFSPlusToHFSExtents(
 	const HFSPlusExtentRecord	oldExtents,
 	HFSExtentRecord		newExtents)
 {
@@ -1864,7 +2071,7 @@ OSErr HFSPlusToHFSExtents(
 
 
 
-OSErr GetFCBExtentRecord(
+static OSErr GetFCBExtentRecord(
 	const FCB			*fcb,
 	HFSPlusExtentRecord	extents)
 {
@@ -1923,6 +2130,7 @@ static Boolean ExtentsAreIntegral(
 //				Called by BTOpenPath during volume mount
 //_________________________________________________________________________________
 
+__private_extern__
 Boolean NodesAreContiguous(
 	ExtendedVCB	*vcb,
 	FCB			*fcb,

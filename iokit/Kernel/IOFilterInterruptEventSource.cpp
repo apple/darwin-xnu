@@ -77,9 +77,9 @@ OSMetaClassDefineReservedUnused(IOFilterInterruptEventSource, 7);
  * Implement the call throughs for the private protection conversion
  */
 bool IOFilterInterruptEventSource::init(OSObject *inOwner,
-                                        Action inAction = 0,
-                                        IOService *inProvider = 0,
-                                        int inIntIndex = 0)
+                                        Action inAction,
+                                        IOService *inProvider,
+                                        int inIntIndex)
 {
     return false;
 }
@@ -98,7 +98,7 @@ IOFilterInterruptEventSource::init(OSObject *inOwner,
                                    Action inAction,
                                    Filter inFilterAction,
                                    IOService *inProvider,
-                                   int inIntIndex = 0)
+                                   int inIntIndex)
 {
     if ( !super::init(inOwner, inAction, inProvider, inIntIndex) )
         return false;
@@ -115,13 +115,13 @@ IOFilterInterruptEventSource *IOFilterInterruptEventSource
                              Action inAction,
                              Filter inFilterAction,
                              IOService *inProvider,
-                             int inIntIndex = 0)
+                             int inIntIndex)
 {
     IOFilterInterruptEventSource *me = new IOFilterInterruptEventSource;
 
     if (me
     && !me->init(inOwner, inAction, inFilterAction, inProvider, inIntIndex)) {
-        me->free();
+        me->release();
         return 0;
     }
 

@@ -78,17 +78,327 @@ void (*remove_startup_extension_function)(const char * name) = 0;
  */
 int kernelLinkerPresent = 0;
 
-
-#define super OSObject
 #define kModuleKey "CFBundleIdentifier"
 
+#define super OSObject
 OSDefineMetaClassAndStructors(IOCatalogue, OSObject)
 
 #define CATALOGTEST 0
 
-IOCatalogue                   * gIOCatalogue;
-const OSSymbol                * gIOClassKey;
-const OSSymbol                * gIOProbeScoreKey;
+IOCatalogue    * gIOCatalogue;
+const OSSymbol * gIOClassKey;
+const OSSymbol * gIOProbeScoreKey;
+const OSSymbol * gIOModuleIdentifierKey;
+OSSet *          gIOCatalogModuleRequests;
+OSSet *          gIOCatalogCacheMisses;
+OSSet *		 gIOCatalogROMMkexts;
+IOLock *	 gIOCatalogLock;
+IOLock *	 gIOKLDLock;
+
+/*********************************************************************
+*********************************************************************/
+
+OSArray * gIOPrelinkedModules = 0;
+
+extern "C" kern_return_t
+kmod_create_internal(
+            kmod_info_t *info,
+            kmod_t *id);
+
+extern "C" kern_return_t
+kmod_destroy_internal(kmod_t id);
+
+extern "C" kern_return_t
+kmod_start_or_stop(
+    kmod_t id,
+    int start,
+    kmod_args_t *data,
+    mach_msg_type_number_t *dataCount);
+
+extern "C" kern_return_t kmod_retain(kmod_t id);
+extern "C" kern_return_t kmod_release(kmod_t id);
+
+static 
+kern_return_t start_prelink_module(UInt32 moduleIndex)
+{
+    kern_return_t  kr = KERN_SUCCESS;
+    UInt32 *       togo;
+    SInt32	   count, where, end;
+    UInt32 *       prelink;
+    SInt32	   next, lastDep;
+    OSData *       data;
+    OSString *     str;
+    OSDictionary * dict;
+
+    OSArray *
+    prelinkedModules = gIOPrelinkedModules;
+
+    togo    = IONew(UInt32, prelinkedModules->getCount());
+    togo[0] = moduleIndex;
+    count   = 1;
+
+    for (next = 0; next < count; next++)
+    {
+	dict = (OSDictionary *) prelinkedModules->getObject(togo[next]);
+
+	data = OSDynamicCast(OSData, dict->getObject("OSBundlePrelink"));
+	if (!data)
+	{
+	    // already started or no code
+	    if (togo[next] == moduleIndex)
+	    {
+		kr = KERN_FAILURE;
+		break;
+	    }
+	    continue;
+	}
+	prelink = (UInt32 *) data->getBytesNoCopy();
+	lastDep = OSReadBigInt32(prelink, 12);
+	for (SInt32 idx = OSReadBigInt32(prelink, 8); idx < lastDep; idx += sizeof(UInt32))
+	{
+	    UInt32 depIdx = OSReadBigInt32(prelink, idx) - 1;
+
+	    for (where = next + 1;
+		 (where < count) && (togo[where] > depIdx);
+		 where++)	{}
+
+	    if (where != count)
+	    {
+		if (togo[where] == depIdx)
+		    continue;
+		for (end = count; end != where; end--)
+		    togo[end] = togo[end - 1];
+	    }
+	    count++;
+	    togo[where] = depIdx;
+	}
+    }
+
+    if (KERN_SUCCESS != kr)
+	return kr;
+
+    for (next = (count - 1); next >= 0; next--)
+    {
+	dict = (OSDictionary *) prelinkedModules->getObject(togo[next]);
+
+	data = OSDynamicCast(OSData, dict->getObject("OSBundlePrelink"));
+	if (!data)
+	    continue;
+	prelink = (UInt32 *) data->getBytesNoCopy();
+    
+	kmod_t id;
+	kmod_info_t * kmod_info = (kmod_info_t *) OSReadBigInt32(prelink, 0);
+
+	kr = kmod_create_internal(kmod_info, &id);
+	if (KERN_SUCCESS != kr)
+	    break;
+
+	lastDep = OSReadBigInt32(prelink, 12);
+	for (SInt32 idx = OSReadBigInt32(prelink, 8); idx < lastDep; idx += sizeof(UInt32))
+	{
+	    OSDictionary * depDict;
+	    kmod_info_t *  depInfo;
+
+	    depDict = (OSDictionary *) prelinkedModules->getObject(OSReadBigInt32(prelink, idx) - 1);
+	    str = OSDynamicCast(OSString, depDict->getObject(kModuleKey));
+	    depInfo = kmod_lookupbyname_locked(str->getCStringNoCopy());
+	    if (depInfo)
+	    {
+		kr = kmod_retain(KMOD_PACK_IDS(id, depInfo->id));
+		kfree((vm_offset_t) depInfo, sizeof(kmod_info_t));
+	    } else
+		IOLog("%s: NO DEP %s\n", kmod_info->name, str->getCStringNoCopy());
+	}
+	dict->removeObject("OSBundlePrelink");
+
+	if (kmod_info->start)
+	    kr = kmod_start_or_stop(kmod_info->id, 1, 0, 0);
+    }
+
+    IODelete(togo, UInt32, prelinkedModules->getCount());
+
+    return kr;
+}
+
+/*********************************************************************
+* This is a function that IOCatalogue calls in order to load a kmod.
+*********************************************************************/
+
+static 
+kern_return_t kmod_load_from_cache_sym(const OSSymbol * kmod_name)
+{
+    OSArray *      prelinkedModules = gIOPrelinkedModules;
+    kern_return_t  result = KERN_FAILURE;
+    OSDictionary * dict;
+    OSObject *     ident;
+    UInt32	   idx;
+
+    if (!gIOPrelinkedModules)
+	return KERN_FAILURE;
+
+    for (idx = 0; 
+	 (dict = (OSDictionary *) prelinkedModules->getObject(idx));
+	 idx++)
+    {
+	if ((ident = dict->getObject(kModuleKey))
+	 && kmod_name->isEqualTo(ident))
+	    break;
+    }
+    if (dict) 
+    {
+	if (kernelLinkerPresent && dict->getObject("OSBundleDefer"))
+	{
+	    kmod_load_extension((char *) kmod_name->getCStringNoCopy());
+	    result = kIOReturnOffline;
+	}
+	else
+	    result = start_prelink_module(idx);
+    }
+
+    return result;
+}
+
+extern "C" Boolean kmod_load_request(const char * moduleName, Boolean make_request)
+{
+    bool 		ret, cacheMiss = false;
+    kern_return_t	kr;
+    const OSSymbol *	sym = 0;
+    kmod_info_t *	kmod_info;
+
+    if (!moduleName)
+        return false;
+
+    /* To make sure this operation completes even if a bad extension needs
+    * to be removed, take the kld lock for this whole block, spanning the
+    * kmod_load_function() and remove_startup_extension_function() calls.
+    */
+    IOLockLock(gIOKLDLock);
+    do
+    {
+	// Is the module already loaded?
+	ret = (0 != (kmod_info = kmod_lookupbyname_locked((char *)moduleName)));
+	if (ret) {
+	    kfree((vm_offset_t) kmod_info, sizeof(kmod_info_t));
+	    break;
+	}
+	sym = OSSymbol::withCString(moduleName);
+	if (!sym) {
+	    ret = false;
+	    break;
+	}
+
+	kr = kmod_load_from_cache_sym(sym);
+	ret = (kIOReturnSuccess == kr);
+	cacheMiss = !ret;
+	if (ret || !make_request || (kr == kIOReturnOffline))
+	    break;
+
+        // If the module hasn't been loaded, then load it.
+        if (!kmod_load_function) {
+            IOLog("IOCatalogue: %s cannot be loaded "
+                "(kmod load function not set).\n",
+                moduleName);
+	    break;
+	}
+
+	kr = kmod_load_function((char *)moduleName);
+
+	if (ret != kIOReturnSuccess) {
+	    IOLog("IOCatalogue: %s cannot be loaded.\n", moduleName);
+
+	    /* If the extension couldn't be loaded this time,
+	    * make it unavailable so that no more requests are
+	    * made in vain. This also enables other matching
+	    * extensions to have a chance.
+	    */
+	    if (kernelLinkerPresent && remove_startup_extension_function) {
+		(*remove_startup_extension_function)(moduleName);
+	    }
+	    ret = false;
+
+	} else if (kernelLinkerPresent) {
+	    // If kern linker is here, the driver is actually loaded,
+	    // so return true.
+	    ret = true;
+
+	} else {
+	    // kern linker isn't here, a request has been queued
+	    // but the module isn't necessarily loaded yet, so stall.
+	    ret = false;
+	}
+    }
+    while (false);
+
+    IOLockUnlock(gIOKLDLock);
+
+    if (sym)
+    {
+	IOLockLock(gIOCatalogLock);
+	gIOCatalogModuleRequests->setObject(sym);
+	if (cacheMiss)
+	    gIOCatalogCacheMisses->setObject(sym);
+	IOLockUnlock(gIOCatalogLock);
+    }
+
+    return ret;
+}
+
+extern "C" kern_return_t kmod_unload_cache(void)
+{
+    OSArray *      prelinkedModules = gIOPrelinkedModules;
+    kern_return_t  result = KERN_FAILURE;
+    OSDictionary * dict;
+    UInt32	   idx;
+    UInt32 *       prelink;
+    OSData *       data;
+
+    if (!gIOPrelinkedModules)
+	return KERN_SUCCESS;
+
+    IOLockLock(gIOKLDLock);
+    for (idx = 0; 
+	 (dict = (OSDictionary *) prelinkedModules->getObject(idx));
+	 idx++)
+    {
+	data = OSDynamicCast(OSData, dict->getObject("OSBundlePrelink"));
+	if (!data)
+	    continue;
+	prelink = (UInt32 *) data->getBytesNoCopy();
+    
+	kmod_info_t * kmod_info = (kmod_info_t *) OSReadBigInt32(prelink, 0);
+	vm_offset_t
+	virt = ml_static_ptovirt(kmod_info->address);
+	if( virt) {
+	    ml_static_mfree(virt, kmod_info->size);
+	}
+    }
+
+    gIOPrelinkedModules->release();
+    gIOPrelinkedModules = 0;
+
+    IOLockUnlock(gIOKLDLock);
+
+    return result;
+}
+
+extern "C" kern_return_t kmod_load_from_cache(const char * kmod_name)
+{
+    kern_return_t kr;
+    const OSSymbol * sym = OSSymbol::withCStringNoCopy(kmod_name);
+
+    if (sym)
+    {
+	kr = kmod_load_from_cache_sym(sym);
+	sym->release();
+    }
+    else
+	kr = kIOReturnNoMemory;
+
+    return kr;
+}
+
+/*********************************************************************
+*********************************************************************/
 
 static void UniqueProperties( OSDictionary * dict )
 {
@@ -126,9 +436,15 @@ void IOCatalogue::initialize( void )
 	errorString->release();
     }
 
-    gIOClassKey = OSSymbol::withCStringNoCopy( kIOClassKey );
-    gIOProbeScoreKey = OSSymbol::withCStringNoCopy( kIOProbeScoreKey );
-    assert( array && gIOClassKey && gIOProbeScoreKey);
+    gIOClassKey              = OSSymbol::withCStringNoCopy( kIOClassKey );
+    gIOProbeScoreKey 	     = OSSymbol::withCStringNoCopy( kIOProbeScoreKey );
+    gIOModuleIdentifierKey   = OSSymbol::withCStringNoCopy( kModuleKey );
+    gIOCatalogModuleRequests = OSSet::withCapacity(16);
+    gIOCatalogCacheMisses    = OSSet::withCapacity(16);
+    gIOCatalogROMMkexts      = OSSet::withCapacity(4);
+
+    assert( array && gIOClassKey && gIOProbeScoreKey 
+	    && gIOModuleIdentifierKey && gIOCatalogModuleRequests);
 
     gIOCatalogue = new IOCatalogue;
     assert(gIOCatalogue);
@@ -152,8 +468,11 @@ bool IOCatalogue::init(OSArray * initArray)
     array->retain();
     kernelTables = OSCollectionIterator::withCollection( array );
 
-    lock = IOLockAlloc();
-    kld_lock = IOLockAlloc();
+    gIOCatalogLock = IOLockAlloc();
+    gIOKLDLock     = IOLockAlloc();
+
+    lock     = gIOCatalogLock;
+    kld_lock = gIOKLDLock;
 
     kernelTables->reset();
     while( (dict = (OSDictionary *) kernelTables->getNextObject())) {
@@ -204,7 +523,7 @@ void IOCatalogue::ping( thread_call_param_t arg, thread_call_param_t)
 
     set = OSOrderedSet::withCapacity( 1 );
 
-    IOTakeLock( &self->lock );
+    IOLockLock( &self->lock );
 
     for( newLimit = 0; newLimit < kDriversPerIter; newLimit++) {
 	table = (OSDictionary *) self->array->getObject(
@@ -226,7 +545,7 @@ void IOCatalogue::ping( thread_call_param_t arg, thread_call_param_t)
     hackLimit += newLimit;
     self->generation++;
 
-    IOUnlock( &self->lock );
+    IOLockUnlock( &self->lock );
 
     if( kDriversPerIter == newLimit) {
         AbsoluteTime deadline;
@@ -248,7 +567,7 @@ OSOrderedSet * IOCatalogue::findDrivers( IOService * service,
     if( !set )
 	return( 0 );
 
-    IOTakeLock( lock );
+    IOLockLock( lock );
     kernelTables->reset();
 
 #if CATALOGTEST
@@ -267,7 +586,7 @@ OSOrderedSet * IOCatalogue::findDrivers( IOService * service,
 
     *generationCount = getGenerationCount();
 
-    IOUnlock( lock );
+    IOLockUnlock( lock );
 
     return( set );
 }
@@ -284,7 +603,7 @@ OSOrderedSet * IOCatalogue::findDrivers( OSDictionary * matching,
     set = OSOrderedSet::withCapacity( 1, IOServiceOrdering,
                                       (void *)gIOProbeScoreKey );
 
-    IOTakeLock( lock );
+    IOLockLock( lock );
     kernelTables->reset();
     while ( (dict = (OSDictionary *) kernelTables->getNextObject()) ) {
 
@@ -295,7 +614,7 @@ OSOrderedSet * IOCatalogue::findDrivers( OSDictionary * matching,
             set->setObject(dict);
     }
     *generationCount = getGenerationCount();
-    IOUnlock( lock );
+    IOLockUnlock( lock );
 
     return set;
 }
@@ -311,12 +630,13 @@ static void AddNewImports( OSOrderedSet * set, OSDictionary * dict )
 
 // Add driver config tables to catalog and start matching process.
 bool IOCatalogue::addDrivers(OSArray * drivers,
-                              bool doNubMatching = true )
+                              bool doNubMatching )
 {
     OSCollectionIterator * iter;
     OSDictionary         * dict;
     OSOrderedSet         * set;
     OSArray              * persons;
+    OSString             * moduleName;
     bool                   ret;
 
     ret = true;
@@ -335,44 +655,56 @@ bool IOCatalogue::addDrivers(OSArray * drivers,
         return false;
     }
 
-    IOTakeLock( lock );
-    while ( (dict = (OSDictionary *) iter->getNextObject()) ) {
-        UInt count;
-        
-        UniqueProperties( dict );
-
-        // Add driver personality to catalogue.
-        count = array->getCount();
-        while ( count-- ) {
-            OSDictionary         * driver;
-
-            // Be sure not to double up on personalities.
-            driver = (OSDictionary *)array->getObject(count);
-
-           /* Unlike in other functions, this comparison must be exact!
-            * The catalogue must be able to contain personalities that
-            * are proper supersets of others.
-            * Do not compare just the properties present in one driver
-            * pesonality or the other.
-            */
-            if ( dict->isEqualTo(driver) ) {
-                array->removeObject(count);
-                break;
-            }
-        }
-        
-        ret = array->setObject( dict );
-        if ( !ret )
-            break;
-
-        AddNewImports( set, dict );
+    IOLockLock( lock );
+    while ( (dict = (OSDictionary *) iter->getNextObject()) )
+    {
+	if ((moduleName = OSDynamicCast(OSString, dict->getObject("OSBundleModuleDemand"))))
+	{
+	    IOLockUnlock( lock );
+	    ret = kmod_load_request(moduleName->getCStringNoCopy(), false);
+	    IOLockLock( lock );
+	    ret = true;
+	}
+	else
+	{
+	    SInt count;
+	    
+	    UniqueProperties( dict );
+    
+	    // Add driver personality to catalogue.
+	    count = array->getCount();
+	    while ( count-- ) {
+		OSDictionary * driver;
+    
+		// Be sure not to double up on personalities.
+		driver = (OSDictionary *)array->getObject(count);
+    
+	    /* Unlike in other functions, this comparison must be exact!
+		* The catalogue must be able to contain personalities that
+		* are proper supersets of others.
+		* Do not compare just the properties present in one driver
+		* pesonality or the other.
+		*/
+		if (dict->isEqualTo(driver))
+		    break;
+	    }
+	    if (count >= 0)
+		// its a dup
+		continue;
+	    
+	    ret = array->setObject( dict );
+	    if (!ret)
+		break;
+    
+	    AddNewImports( set, dict );
+	}
     }
     // Start device matching.
-    if ( doNubMatching && (set->getCount() > 0) ) {
+    if (doNubMatching && (set->getCount() > 0)) {
         IOService::catalogNewDrivers( set );
         generation++;
     }
-    IOUnlock( lock );
+    IOLockUnlock( lock );
 
     set->release();
     iter->release();
@@ -383,7 +715,7 @@ bool IOCatalogue::addDrivers(OSArray * drivers,
 // Remove drivers from the catalog which match the
 // properties in the matching dictionary.
 bool IOCatalogue::removeDrivers( OSDictionary * matching,
-                                 bool doNubMatching = true)
+                                 bool doNubMatching)
 {
     OSCollectionIterator * tables;
     OSDictionary         * dict;
@@ -414,7 +746,7 @@ bool IOCatalogue::removeDrivers( OSDictionary * matching,
 
     UniqueProperties( matching );
 
-    IOTakeLock( lock );
+    IOLockLock( lock );
     kernelTables->reset();
     arrayCopy->merge(array);
     array->flushCollection();
@@ -436,7 +768,7 @@ bool IOCatalogue::removeDrivers( OSDictionary * matching,
         IOService::catalogNewDrivers(set);
         generation++;
     }
-    IOUnlock( lock );
+    IOLockUnlock( lock );
     
     set->release();
     tables->release();
@@ -457,67 +789,7 @@ bool IOCatalogue::isModuleLoaded( OSString * moduleName ) const
 
 bool IOCatalogue::isModuleLoaded( const char * moduleName ) const
 {
-    kmod_info_t          * k_info;
-
-    if ( !moduleName )
-        return false;
-
-    // Is the module already loaded?
-    k_info = kmod_lookupbyname_locked((char *)moduleName);
-    if ( !k_info ) {
-        kern_return_t            ret;
-
-       /* To make sure this operation completes even if a bad extension needs
-        * to be removed, take the kld lock for this whole block, spanning the
-        * kmod_load_function() and remove_startup_extension_function() calls.
-        */
-        IOLockLock(kld_lock);
-
-        // If the module hasn't been loaded, then load it.
-        if (kmod_load_function != 0) {
-
-            ret = kmod_load_function((char *)moduleName);
-
-            if  ( ret != kIOReturnSuccess ) {
-                IOLog("IOCatalogue: %s cannot be loaded.\n", moduleName);
-
-               /* If the extension couldn't be loaded this time,
-                * make it unavailable so that no more requests are
-                * made in vain. This also enables other matching
-                * extensions to have a chance.
-                */
-                if (kernelLinkerPresent && remove_startup_extension_function) {
-                    (*remove_startup_extension_function)(moduleName);
-                }
-                IOLockUnlock(kld_lock);
-                return false;
-            } else if (kernelLinkerPresent) {
-                // If kern linker is here, the driver is actually loaded,
-                // so return true.
-                IOLockUnlock(kld_lock);
-                return true;
-            } else {
-                // kern linker isn't here, a request has been queued
-                // but the module isn't necessarily loaded yet, so stall.
-                IOLockUnlock(kld_lock);
-                return false;
-            }
-        } else {
-            IOLog("IOCatalogue: %s cannot be loaded "
-                "(kmod load function not set).\n",
-                moduleName);
-        }
-
-        IOLockUnlock(kld_lock);
-        return false;
-    }
-
-    if (k_info) {
-        kfree(k_info, sizeof(kmod_info_t));
-    }
-
-    /* Lock wasn't taken if we get here. */
-    return true;
+    return (kmod_load_request(moduleName, true));
 }
 
 // Check to see if module has been loaded already.
@@ -528,7 +800,7 @@ bool IOCatalogue::isModuleLoaded( OSDictionary * driver ) const
     if ( !driver )
         return false;
 
-    moduleName = OSDynamicCast(OSString, driver->getObject(kModuleKey));
+    moduleName = OSDynamicCast(OSString, driver->getObject(gIOModuleIdentifierKey));
     if ( moduleName )
         return isModuleLoaded(moduleName);
 
@@ -544,7 +816,7 @@ void IOCatalogue::moduleHasLoaded( OSString * moduleName )
     OSDictionary         * dict;
 
     dict = OSDictionary::withCapacity(2);
-    dict->setObject(kModuleKey, moduleName);
+    dict->setObject(gIOModuleIdentifierKey, moduleName);
     startMatching(dict);
     dict->release();
 }
@@ -572,7 +844,7 @@ IOReturn IOCatalogue::unloadModule( OSString * moduleName ) const
             if ( k_info->stop &&
                  !((ret = k_info->stop(k_info, 0)) == kIOReturnSuccess) ) {
 
-                kfree(k_info, sizeof(kmod_info_t));
+                kfree((vm_offset_t) k_info, sizeof(kmod_info_t));
                 return ret;
            }
             
@@ -581,7 +853,7 @@ IOReturn IOCatalogue::unloadModule( OSString * moduleName ) const
     }
  
     if (k_info) {
-        kfree(k_info, sizeof(kmod_info_t));
+        kfree((vm_offset_t) k_info, sizeof(kmod_info_t));
     }
 
     return ret;
@@ -670,10 +942,10 @@ IOReturn IOCatalogue::terminateDrivers( OSDictionary * matching )
     IOReturn ret;
 
     ret = kIOReturnSuccess;
-    IOTakeLock( lock );
+    IOLockLock( lock );
     ret = _terminateDrivers(array, matching);
     kernelTables->reset();
-    IOUnlock( lock );
+    IOLockUnlock( lock );
 
     return ret;
 }
@@ -689,9 +961,9 @@ IOReturn IOCatalogue::terminateDriversForModule(
     if ( !dict )
         return kIOReturnNoMemory;
 
-    dict->setObject(kModuleKey, moduleName);
+    dict->setObject(gIOModuleIdentifierKey, moduleName);
 
-    IOTakeLock( lock );
+    IOLockLock( lock );
 
     ret = _terminateDrivers(array, dict);
     kernelTables->reset();
@@ -702,7 +974,7 @@ IOReturn IOCatalogue::terminateDriversForModule(
         ret = unloadModule(moduleName);
     }
 
-    IOUnlock( lock );
+    IOLockUnlock( lock );
 
     dict->release();
 
@@ -739,7 +1011,7 @@ bool IOCatalogue::startMatching( OSDictionary * matching )
     if ( !set )
         return false;
 
-    IOTakeLock( lock );
+    IOLockLock( lock );
     kernelTables->reset();
 
     while ( (dict = (OSDictionary *)kernelTables->getNextObject()) ) {
@@ -756,7 +1028,7 @@ bool IOCatalogue::startMatching( OSDictionary * matching )
         generation++;
     }
 
-    IOUnlock( lock );
+    IOLockUnlock( lock );
 
     set->release();
 
@@ -765,42 +1037,73 @@ bool IOCatalogue::startMatching( OSDictionary * matching )
 
 void IOCatalogue::reset(void)
 {
-    OSArray              * tables;
-    OSDictionary         * entry;
-    unsigned int           count;
-
     IOLog("Resetting IOCatalogue.\n");
-    
-    IOTakeLock( lock );
-    tables = OSArray::withArray(array);
-    array->flushCollection();
-    
-    count = tables->getCount();
-    while ( count-- ) {
-        entry = (OSDictionary *)tables->getObject(count);
-        if ( entry && !entry->getObject(kModuleKey) ) {
-            array->setObject(entry);
-        }
-    }
-    
-    kernelTables->reset();
-    IOUnlock( lock );
-    
-    tables->release();
 }
 
 bool IOCatalogue::serialize(OSSerialize * s) const
 {
-    bool                   ret;
+    bool ret;
     
     if ( !s )
         return false;
 
-    IOTakeLock( lock );
+    IOLockLock( lock );
+
     ret = array->serialize(s);
-    IOUnlock( lock );
+
+    IOLockUnlock( lock );
 
     return ret;
+}
+
+bool IOCatalogue::serializeData(IOOptionBits kind, OSSerialize * s) const
+{
+    kern_return_t kr = kIOReturnSuccess;
+
+    switch ( kind )
+    {
+        case kIOCatalogGetContents:
+            if (!serialize(s))
+                kr = kIOReturnNoMemory;
+            break;
+
+        case kIOCatalogGetModuleDemandList:
+	    IOLockLock( lock );
+            if (!gIOCatalogModuleRequests->serialize(s))
+                kr = kIOReturnNoMemory;
+	    IOLockUnlock( lock );
+            break;
+
+        case kIOCatalogGetCacheMissList:
+	    IOLockLock( lock );
+            if (!gIOCatalogCacheMisses->serialize(s))
+                kr = kIOReturnNoMemory;
+	    IOLockUnlock( lock );
+            break;
+
+        case kIOCatalogGetROMMkextList:
+	    IOLockLock( lock );
+
+	    if (!gIOCatalogROMMkexts || !gIOCatalogROMMkexts->getCount())
+		kr = kIOReturnNoResources;
+            else if (!gIOCatalogROMMkexts->serialize(s))
+                kr = kIOReturnNoMemory;
+
+	    if (gIOCatalogROMMkexts)
+	    {
+		gIOCatalogROMMkexts->release();
+		gIOCatalogROMMkexts = 0;
+	    }
+
+	    IOLockUnlock( lock );
+            break;
+
+        default:
+            kr = kIOReturnBadArgument;
+            break;
+    }
+
+    return kr;
 }
 
 
@@ -823,18 +1126,43 @@ bool IOCatalogue::recordStartupExtensions(void) {
 
 /*********************************************************************
 *********************************************************************/
-bool IOCatalogue::addExtensionsFromArchive(OSData * mkext) {
+bool IOCatalogue::addExtensionsFromArchive(OSData * mkext)
+{
+    OSData * copyData;
     bool result = false;
+    bool prelinked;
 
-    IOLockLock(kld_lock);
-    if (kernelLinkerPresent && add_from_mkext_function) {
-        result = (*add_from_mkext_function)(mkext);
-    } else {
-        IOLog("Can't add startup extensions from archive; "
-            "kernel linker is not present.\n");
-        result = false;
+   /* The mkext we've been handed (or the data it references) can go away,
+    * so we need to make a local copy to keep around as long as it might
+    * be needed.
+    */
+    copyData = OSData::withData(mkext);
+    if (copyData)
+    {
+	struct section * infosect;
+    
+	infosect  = getsectbyname("__PRELINK", "__info");
+	prelinked = (infosect && infosect->addr && infosect->size);
+
+	IOLockLock(kld_lock);
+
+	if (gIOCatalogROMMkexts)
+	    gIOCatalogROMMkexts->setObject(copyData);
+
+	if (prelinked) {
+	    result = true;
+	} else if (kernelLinkerPresent && add_from_mkext_function) {
+	    result = (*add_from_mkext_function)(copyData);
+	} else {
+	    IOLog("Can't add startup extensions from archive; "
+		"kernel linker is not present.\n");
+	    result = false;
+	}
+
+	IOLockUnlock(kld_lock);
+
+	copyData->release();
     }
-    IOLockUnlock(kld_lock);
 
     return result;
 }
@@ -847,7 +1175,6 @@ bool IOCatalogue::addExtensionsFromArchive(OSData * mkext) {
 *********************************************************************/
 kern_return_t IOCatalogue::removeKernelLinker(void) {
     kern_return_t result = KERN_SUCCESS;
-    extern struct mach_header _mh_execute_header;
     struct segment_command * segment;
     char * dt_segment_name;
     void * segment_paddress;
@@ -885,19 +1212,19 @@ kern_return_t IOCatalogue::removeKernelLinker(void) {
     * memory so that any cross-dependencies (not that there
     * should be any) are handled.
     */
-    segment = getsegbynamefromheader(
-        &_mh_execute_header, "__KLD");
+    segment = getsegbyname("__KLD");
     if (!segment) {
-        IOLog("error removing kernel linker: can't find __KLD segment\n");
+        IOLog("error removing kernel linker: can't find %s segment\n",
+            "__KLD");
         result = KERN_FAILURE;
         goto finish;
     }
     OSRuntimeUnloadCPPForSegment(segment);
 
-    segment = getsegbynamefromheader(
-        &_mh_execute_header, "__LINKEDIT");
+    segment = getsegbyname("__LINKEDIT");
     if (!segment) {
-        IOLog("error removing kernel linker: can't find __LINKEDIT segment\n");
+        IOLog("error removing kernel linker: can't find %s segment\n",
+            "__LINKEDIT");
         result = KERN_FAILURE;
         goto finish;
     }
@@ -918,6 +1245,16 @@ kern_return_t IOCatalogue::removeKernelLinker(void) {
             (int)segment_size);
     }
 
+    struct section * sect;
+    sect = getsectbyname("__PRELINK", "__symtab");
+    if (sect && sect->addr)
+    {
+	vm_offset_t
+	virt = ml_static_ptovirt(sect->addr);
+	if( virt) {
+	    ml_static_mfree(virt, sect->size);
+	}
+    }
 
 finish:
 

@@ -5,7 +5,7 @@
 #  -------- ---- -------- ---------------
 #
 #  RELEASE = [intel mach iokitcpp]
-#  PROFILE = [intel mach iokitcpp profile]
+#  PROFILE = [RELEASE profile]
 #  DEBUG = [intel mach iokitcpp debug]
 #
 ######################################################################

@@ -54,7 +54,8 @@
 #define KEYDEBUG_IPSEC_DATA	(KEYDEBUG_IPSEC | KEYDEBUG_DATA)
 #define KEYDEBUG_IPSEC_DUMP	(KEYDEBUG_IPSEC | KEYDEBUG_DUMP)
 
-#define KEYDEBUG(lev,arg) if ((key_debug_level & (lev)) == (lev)) { arg; }
+#define KEYDEBUG(lev,arg) \
+	do { if ((key_debug_level & (lev)) == (lev)) { arg; } } while (0)
 
 struct sadb_msg;
 struct sadb_ext;

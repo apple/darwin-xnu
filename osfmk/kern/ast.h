@@ -82,24 +82,24 @@ typedef uint32_t		ast_t;
 /*
  *      Bits for reasons
  */
-#define AST_BLOCK       0x01
-#define AST_QUANTUM     0x02
-#define AST_HANDOFF		0x04
-#define AST_YIELD		0x08
-#define	AST_URGENT		0x10
+#define AST_PREEMPT		0x01
+#define AST_QUANTUM		0x02
+#define AST_URGENT		0x04
+#define AST_HANDOFF		0x08
+#define AST_YIELD		0x10
 #define AST_APC			0x20	/* migration APC hook */
 /*
  * JMM - This is here temporarily. AST_BSD is used to simulate a
  * general purpose mechanism for setting asynchronous procedure calls
  * from the outside.
  */
-#define	AST_BSD			0x80
+#define AST_BSD			0x80
 
 #define AST_NONE		0x00
-#define	AST_ALL			(~AST_NONE)
+#define AST_ALL			(~AST_NONE)
 
-#define AST_SCHEDULING	(AST_PREEMPT | AST_YIELD | AST_HANDOFF)
-#define	AST_PREEMPT		(AST_BLOCK | AST_QUANTUM | AST_URGENT)
+#define AST_SCHEDULING	(AST_PREEMPTION | AST_YIELD | AST_HANDOFF)
+#define AST_PREEMPTION	(AST_PREEMPT | AST_QUANTUM | AST_URGENT)
 
 extern volatile ast_t	need_ast[NCPUS];
 
@@ -180,11 +180,5 @@ MACRO_END
  *	NOTE: if thread is the current thread, thread_ast_set() should
  *  be followed by ast_propagate().
  */
-
-#ifdef MACH_KERNEL_PRIVATE
-
-#define ast_urgency()		(need_ast[cpu_number()] & AST_URGENT)
-
-#endif /* MACH_KERNEL_PRIVATE */
 
 #endif  /* _KERN_AST_H_ */

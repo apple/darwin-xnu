@@ -91,4 +91,4 @@ extern int     dlil_input_thread_wakeup;
 #endif	/* defined(KERNEL) && !defined(LOCORE) */
 
 #define	schednetisr(anisr)	{ netisr |= 1<<(anisr); setsoftnet(); }
-#endif __APPLE_API_PRIVATE
+#endif /* __APPLE_API_PRIVATE */

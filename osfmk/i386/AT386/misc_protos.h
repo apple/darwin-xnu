@@ -29,14 +29,14 @@
 #ifndef	_AT386_MISC_PROTOS_H_
 #define	_AT386_MISC_PROTOS_H_
 
-#include <types.h>			/* for dev_t */
-#include <mach/machine/vm_types.h>	/* for vm_offset_t */
+#include <pexpert/i386/boot.h>	/* for KernelBootArgs_t */
 
 /*
  * i386/AT386/model_dep.c
  */
 
 extern void		i386_init(void);
+extern void		i386_vm_init(unsigned int maxmem, KernelBootArgs_t *args);
 extern void		machine_init(void);
 extern void		machine_startup(void);
 

@@ -78,12 +78,13 @@ extern void			thread_exception_return(void);
 extern struct savearea*	trap(int trapno,
 				     struct savearea *ss,
 				     unsigned int dsisr,
-				     unsigned int dar);
+				     addr64_t dar);
 
 typedef kern_return_t (*perfTrap)(int trapno, struct savearea *ss, 
-	unsigned int dsisr, unsigned int dar);
+	unsigned int dsisr, addr64_t dar);
 
 extern perfTrap perfTrapHook;
+extern perfTrap perfIntHook;
 
 extern struct savearea* interrupt(int intno,
 					 struct savearea *ss,

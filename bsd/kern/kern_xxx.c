@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2003 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -118,8 +118,7 @@ register_t *retval;
 
 	name = KERN_HOSTNAME;
 
-	return (kern_sysctl(&name, 1, uap->hostname, &uap->len),
-	    0, 0);
+	return (kern_sysctl(&name, 1, uap->hostname, &uap->len, 0, 0));
 }
 
 struct osethostname_args {
@@ -204,8 +203,8 @@ register_t *retval;
 		return(error);	
 	
 	if (uap->opt & RB_COMMAND)
-		error = copyinstr(uap->command,
-					command, sizeof(command), &dummy);
+		error = copyinstr((void *)uap->command,
+					(void *)command, sizeof(command), (size_t *)&dummy);
 	if (!error) {
 		SET(p->p_flag, P_REBOOT);	/* No more signals for this proc */
 		boot(RB_BOOT, uap->opt, command);

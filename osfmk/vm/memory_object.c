@@ -102,7 +102,6 @@
 #include <vm/vm_external.h>
 #endif	/* MACH_PAGEMAP */
 
-
 memory_object_default_t	memory_manager_default = MEMORY_OBJECT_DEFAULT_NULL;
 vm_size_t		memory_manager_default_cluster = 0;
 decl_mutex_data(,	memory_manager_default_lock)
@@ -135,7 +134,7 @@ vm_object_update(vm_object_t, vm_object_offset_t,
 
 #define	memory_object_should_return_page(m, should_return) \
     (should_return != MEMORY_OBJECT_RETURN_NONE && \
-     (((m)->dirty || ((m)->dirty = pmap_is_modified((m)->phys_addr))) || \
+     (((m)->dirty || ((m)->dirty = pmap_is_modified((m)->phys_page))) || \
       ((m)->precious && (should_return) == MEMORY_OBJECT_RETURN_ALL) || \
       (should_return) == MEMORY_OBJECT_RETURN_ANYTHING))
 
@@ -258,7 +257,7 @@ memory_object_lock_page(
 
 	if (prot != VM_PROT_NO_CHANGE) {
 		if ((m->page_lock ^ prot) & prot) {
-			pmap_page_protect(m->phys_addr, VM_PROT_ALL & ~prot);
+			pmap_page_protect(m->phys_page, VM_PROT_ALL & ~prot);
 		}
 #if 0
 		/* code associated with the vestigial 
@@ -303,7 +302,7 @@ memory_object_lock_page(
 		vm_page_unlock_queues();
 
 		if (!should_flush)
-			pmap_page_protect(m->phys_addr, VM_PROT_NONE);
+			pmap_page_protect(m->phys_page, VM_PROT_NONE);
 
 		if (m->dirty)
 			return(MEMORY_OBJECT_LOCK_RESULT_MUST_CLEAN);
@@ -409,7 +408,7 @@ memory_object_lock_request(
 	if ((prot & ~VM_PROT_ALL) != 0 && prot != VM_PROT_NO_CHANGE)
 		return (KERN_INVALID_ARGUMENT);
 
-	size = round_page(size);
+	size = round_page_64(size);
 
 	/*
 	 *	Lock the object, and acquire a paging reference to
@@ -629,7 +628,7 @@ vm_object_update(
 		   if(copy_size < 0)
 			copy_size = 0;
 
-		   copy_size+=offset;
+		   copy_size+=copy_offset;
 
 		   vm_object_unlock(object);
 		   vm_object_lock(copy_object);
@@ -963,7 +962,7 @@ vm_object_set_attributes_common(
 		temporary = TRUE;
 	if (cluster_size != 0) {
 		int	pages_per_cluster;
-		pages_per_cluster = atop(cluster_size);
+		pages_per_cluster = atop_32(cluster_size);
 		/*
 		 * Cluster size must be integral multiple of page size,
 		 * and be a power of 2 number of pages.
@@ -1099,7 +1098,7 @@ memory_object_change_attributes(
                 perf = (memory_object_perf_info_t) attributes;
 
 		may_cache = perf->may_cache;
-		cluster_size = round_page(perf->cluster_size);
+		cluster_size = round_page_32(perf->cluster_size);
 
 		break;
 	    }
@@ -1295,6 +1294,128 @@ memory_object_get_attributes(
 }
 
 
+kern_return_t
+memory_object_iopl_request(
+	ipc_port_t		port,
+	memory_object_offset_t	offset,
+	vm_size_t		*upl_size,
+	upl_t			*upl_ptr,
+	upl_page_info_array_t	user_page_list,
+	unsigned int		*page_list_count,
+	int			*flags)
+{
+	vm_object_t		object;
+	kern_return_t		ret;
+	int			caller_flags;
+
+	caller_flags = *flags;
+
+	if (ip_kotype(port) == IKOT_NAMED_ENTRY) {
+		vm_named_entry_t	named_entry;
+
+		named_entry = (vm_named_entry_t)port->ip_kobject;
+		/* a few checks to make sure user is obeying rules */
+		if(*upl_size == 0) {
+			if(offset >= named_entry->size)
+				return(KERN_INVALID_RIGHT);
+			*upl_size = named_entry->size - offset;
+		}
+		if(caller_flags & UPL_COPYOUT_FROM) {
+			if((named_entry->protection & VM_PROT_READ) 
+						!= VM_PROT_READ) {
+				return(KERN_INVALID_RIGHT);
+			}
+		} else {
+			if((named_entry->protection & 
+				(VM_PROT_READ | VM_PROT_WRITE)) 
+				!= (VM_PROT_READ | VM_PROT_WRITE)) {
+				return(KERN_INVALID_RIGHT);
+			}
+		}
+		if(named_entry->size < (offset + *upl_size))
+			return(KERN_INVALID_ARGUMENT);
+
+		/* the callers parameter offset is defined to be the */
+		/* offset from beginning of named entry offset in object */
+		offset = offset + named_entry->offset;
+
+		if(named_entry->is_sub_map) 
+			return (KERN_INVALID_ARGUMENT);
+		
+		named_entry_lock(named_entry);
+
+		if(named_entry->object) {
+			/* This is the case where we are going to map */
+			/* an already mapped object.  If the object is */
+			/* not ready it is internal.  An external     */
+			/* object cannot be mapped until it is ready  */
+			/* we can therefore avoid the ready check     */
+			/* in this case.  */
+			vm_object_reference(named_entry->object);
+			object = named_entry->object;
+			named_entry_unlock(named_entry);
+		} else {
+			object = vm_object_enter(named_entry->backing.pager, 
+					named_entry->offset + named_entry->size, 
+					named_entry->internal, 
+					FALSE,
+					FALSE);
+			if (object == VM_OBJECT_NULL) {
+				named_entry_unlock(named_entry);
+				return(KERN_INVALID_OBJECT);
+			}
+			vm_object_lock(object);
+
+			/* create an extra reference for the named entry */
+			vm_object_reference_locked(object);
+			named_entry->object = object;
+			named_entry_unlock(named_entry);
+
+			/* wait for object to be ready */
+			while (!object->pager_ready) {
+				vm_object_wait(object,
+						VM_OBJECT_EVENT_PAGER_READY,
+						THREAD_UNINT);
+				vm_object_lock(object);
+			}
+			vm_object_unlock(object);
+		}
+	} else  {
+		memory_object_control_t	control;
+		control = (memory_object_control_t)port->ip_kobject;
+		if (control == NULL)
+			return (KERN_INVALID_ARGUMENT);
+		object = memory_object_control_to_vm_object(control);
+		if (object == VM_OBJECT_NULL)
+			return (KERN_INVALID_ARGUMENT);
+		vm_object_reference(object);
+	}
+	if (object == VM_OBJECT_NULL)
+		return (KERN_INVALID_ARGUMENT);
+
+	if (!object->private) {
+		if (*upl_size > (MAX_UPL_TRANSFER*PAGE_SIZE))
+			*upl_size = (MAX_UPL_TRANSFER*PAGE_SIZE);
+		if (object->phys_contiguous) {
+			*flags = UPL_PHYS_CONTIG;
+		} else {
+			*flags = 0;
+		}
+	} else {
+		*flags = UPL_DEV_MEMORY | UPL_PHYS_CONTIG;
+	}
+
+	ret = vm_object_iopl_request(object,
+				     offset,
+				     *upl_size,
+				     upl_ptr,
+				     user_page_list,
+				     page_list_count,
+				     caller_flags);
+	vm_object_deallocate(object);
+	return ret;
+}
+
 /*  
  *	Routine:	memory_object_upl_request [interface]
  *	Purpose:
@@ -1424,7 +1545,7 @@ host_default_memory_manager(
 			mutex_unlock(&memory_manager_default_lock);
 			return KERN_INVALID_ARGUMENT;
 #else
-			cluster_size = round_page(cluster_size);
+			cluster_size = round_page_32(cluster_size);
 #endif
 		}
 		memory_manager_default_cluster = cluster_size;
@@ -1551,12 +1672,12 @@ memory_object_deactivate_pages(
 				if ((m->wire_count == 0) && (!m->private) && (!m->gobbled) && (!m->busy)) {
 
 					m->reference = FALSE;
-					pmap_clear_reference(m->phys_addr);
+					pmap_clear_reference(m->phys_page);
 
 					if ((kill_page) && (object->internal)) {
 				        	m->precious = FALSE;
 					        m->dirty = FALSE;
-						pmap_clear_modify(m->phys_addr);
+						pmap_clear_modify(m->phys_page);
 						vm_external_state_clr(object->existence_map, offset);
 					}
 					VM_PAGE_QUEUES_REMOVE(m);
@@ -1610,7 +1731,7 @@ memory_object_page_op(
 	memory_object_control_t	control,
 	memory_object_offset_t	offset,
 	int			ops,
-	vm_offset_t		*phys_entry,
+	ppnum_t			*phys_entry,
 	int			*flags)
 {
 	vm_object_t		object;
@@ -1626,8 +1747,8 @@ memory_object_page_op(
 	if(ops & UPL_POP_PHYSICAL) {
 		if(object->phys_contiguous) {
 			if (phys_entry) {
-				*phys_entry = (vm_offset_t)
-						object->shadow_offset;
+				*phys_entry = (ppnum_t)
+					(object->shadow_offset >> 12);
 			}
 			vm_object_unlock(object);
 			return KERN_SUCCESS;
@@ -1636,13 +1757,12 @@ memory_object_page_op(
 			return KERN_INVALID_OBJECT;
 		}
 	}
+	if(object->phys_contiguous) {
+		vm_object_unlock(object);
+		return KERN_INVALID_OBJECT;
+	}
 
 	while(TRUE) {
-		if(object->phys_contiguous) {
-			vm_object_unlock(object);
-			return KERN_INVALID_OBJECT;
-		}
-
 		if((dst_page = vm_page_lookup(object,offset)) == VM_PAGE_NULL) {
 			vm_object_unlock(object);
 			return KERN_FAILURE;
@@ -1659,10 +1779,14 @@ memory_object_page_op(
 		}
 
 		if (ops & UPL_POP_DUMP) {
-		  vm_page_lock_queues();
-                  vm_page_free(dst_page);
-		  vm_page_unlock_queues();
-		  break;
+		        vm_page_lock_queues();
+
+			if (dst_page->no_isync == FALSE)
+			        pmap_page_protect(dst_page->phys_page, VM_PROT_NONE);
+			vm_page_free(dst_page);
+
+			vm_page_unlock_queues();
+			break;
 		}
 
 		if (flags) {
@@ -1678,7 +1802,7 @@ memory_object_page_op(
 			if(dst_page->busy) *flags |= UPL_POP_BUSY;
 		}
 		if (phys_entry)
-			*phys_entry = dst_page->phys_addr;
+			*phys_entry = dst_page->phys_page;
 	
 		/* The caller should have made a call either contingent with */
 		/* or prior to this call to set UPL_POP_BUSY */
@@ -1715,6 +1839,88 @@ memory_object_page_op(
 	vm_object_unlock(object);
 	return KERN_SUCCESS;
 				
+}
+
+/*
+ * memory_object_range_op offers performance enhancement over 
+ * memory_object_page_op for page_op functions which do not require page 
+ * level state to be returned from the call.  Page_op was created to provide 
+ * a low-cost alternative to page manipulation via UPLs when only a single 
+ * page was involved.  The range_op call establishes the ability in the _op 
+ * family of functions to work on multiple pages where the lack of page level
+ * state handling allows the caller to avoid the overhead of the upl structures.
+ */
+
+kern_return_t
+memory_object_range_op(
+	memory_object_control_t	control,
+	memory_object_offset_t	offset_beg,
+	memory_object_offset_t	offset_end,
+	int                     ops,
+	int                     *range)
+{
+        memory_object_offset_t	offset;
+	vm_object_t		object;
+	vm_page_t		dst_page;
+
+	object = memory_object_control_to_vm_object(control);
+	if (object == VM_OBJECT_NULL)
+		return (KERN_INVALID_ARGUMENT);
+
+	if (object->resident_page_count == 0) {
+	        if (range) {
+		        if (ops & UPL_ROP_PRESENT)
+			        *range = 0;
+			else
+			        *range = offset_end - offset_beg;
+		}
+		return KERN_SUCCESS;
+	}
+	vm_object_lock(object);
+
+	if (object->phys_contiguous)
+	        return KERN_INVALID_OBJECT;
+	
+	offset = offset_beg;
+
+	while (offset < offset_end) {
+	        if (dst_page = vm_page_lookup(object, offset)) {
+		        if (ops & UPL_ROP_DUMP) {
+			        if (dst_page->busy || dst_page->cleaning) {
+				        /*
+					 * someone else is playing with the 
+					 * page, we will have to wait
+					 */
+				        PAGE_SLEEP(object, 
+						dst_page, THREAD_UNINT);
+					/*
+					 * need to relook the page up since it's
+					 * state may have changed while we slept
+					 * it might even belong to a different object
+					 * at this point
+					 */
+					continue;
+				}
+				vm_page_lock_queues();
+
+				if (dst_page->no_isync == FALSE)
+				        pmap_page_protect(dst_page->phys_page, VM_PROT_NONE);
+				vm_page_free(dst_page);
+
+				vm_page_unlock_queues();
+			} else if (ops & UPL_ROP_ABSENT)
+			        break;
+		} else if (ops & UPL_ROP_PRESENT)
+		        break;
+
+		offset += PAGE_SIZE;
+	}
+	vm_object_unlock(object);
+
+	if (range)
+	        *range = offset - offset_beg;
+
+	return KERN_SUCCESS;
 }
 
 static zone_t mem_obj_control_zone;

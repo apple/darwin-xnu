@@ -11,7 +11,6 @@ include $(MakeInc_cmd)
 include $(MakeInc_def)
 
 INSTINC_SUBDIRS = \
-        adb \
 	nvram \
 	platform \
 	power \
@@ -29,7 +28,8 @@ EXPINC_SUBDIRS = ${INSTINC_SUBDIRS}
 EXPINC_SUBDIRS_PPC = ${INSTINC_SUBDIRS_PPC}
 EXPINC_SUBDIRS_I386 = ${INSTINC_SUBDIRS_I386}
 
-NOT_EXPORT_HEADERS = 
+NOT_EXPORT_HEADERS = IOKitKeysPrivate.h
+
 NOT_LOCAL_HEADERS = 
 
 ALL_HEADERS = $(shell (cd $(SOURCE); echo *.h))
@@ -38,7 +38,7 @@ INSTALL_MI_LIST	= IOBSD.h IOKitKeys.h IOKitServer.h IOReturn.h\
 		  IOSharedLock.h IOTypes.h OSMessageNotification.h\
 		  IODataQueueShared.h IOMessage.h
                   
-INSTALL_MI_LCL_LIST = ""
+INSTALL_MI_LCL_LIST = IOKitKeysPrivate.h
 
 INSTALL_MI_DIR = .
 

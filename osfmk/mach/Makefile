@@ -35,6 +35,7 @@ MIG_DEFS =	\
 	clock_priv.defs \
 	clock_reply.defs \
 	exc.defs \
+	host_notify_reply.defs \
 	host_priv.defs \
 	host_security.defs \
 	ledger.defs \
@@ -50,6 +51,7 @@ MIG_DEFS =	\
 	upl.defs
 
 MACH_PRIVATE_DEFS = \
+	mach_notify.defs \
 	memory_object.defs \
 	memory_object_control.defs \
 	memory_object_default.defs \
@@ -94,8 +96,10 @@ DATAFILES = \
         error.h \
 	exception.h \
 	exception_types.h \
+	host_notify.h \
         host_info.h \
 	host_reboot.h \
+	host_special_ports.h \
 	kern_return.h \
         kmod.h \
         mach_param.h \
@@ -200,6 +204,8 @@ MIGKUFLAGS      = -DMACH_KERNEL_PRIVATE -DKERNEL_USER=1 -maxonstack 1024
 MIG_KUHDRS = \
 	clock_reply.h \
 	exc.h \
+	host_notify_reply.h \
+	mach_notify.h \
 	memory_object.h \
 	memory_object_control.h \
 	memory_object_default.h \
@@ -209,6 +215,8 @@ MIG_KUHDRS = \
 MIG_KUSRC = \
 	clock_reply_user.c \
 	exc_user.c \
+	host_notify_reply_user.c \
+	mach_notify_user.c \
 	memory_object_user.c \
 	memory_object_control_user.c \
 	memory_object_default_user.c \
@@ -224,12 +232,12 @@ MIG_KSHDRS = \
 	ledger_server.h \
 	lock_set_server.h \
 	mach_host_server.h \
+	mach_notify_server.h \
 	mach_port_server.h \
 	memory_object_server.h \
 	memory_object_control_server.h \
 	memory_object_default_server.h \
 	memory_object_name_server.h \
-	notify_server.h \
 	processor_server.h \
 	processor_set_server.h \
 	semaphore_server.h \
@@ -247,12 +255,12 @@ MIG_KSSRC = \
 	ledger_server.c \
 	lock_set_server.c \
 	mach_host_server.c \
+	mach_notify_server.c \
 	mach_port_server.c \
 	memory_object_server.c \
 	memory_object_control_server.c \
 	memory_object_default_server.c \
 	memory_object_name_server.c \
-	notify_server.c \
 	processor_server.c \
 	processor_set_server.c \
 	semaphore_server.c \
@@ -302,7 +310,6 @@ ${MIG_KSSRC}: \
 		-server  $*_server.c		\
 		-sheader $*_server.h		\
 		$<
-        
 
 include $(MakeInc_rule)
 include $(MakeInc_dir)

@@ -48,9 +48,9 @@ static int ip6_rthdr0 __P((struct mbuf *, struct ip6_hdr *,
     struct ip6_rthdr0 *));
 
 int
-route6_input(mp, offp, proto)
+route6_input(mp, offp)
 	struct mbuf **mp;
-	int *offp, proto;	/* proto is unused */
+	int *offp;
 {
 	struct ip6_hdr *ip6;
 	struct mbuf *m = *mp;

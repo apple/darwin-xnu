@@ -108,7 +108,7 @@ struct	in_aliasreq {
  * Event data, internet style.
  */
 struct kev_in_data {
-        struct net_event_data   link_data;
+	struct net_event_data   link_data;
 	struct in_addr  ia_addr;
 	u_long	ia_net;			/* network number of interface */
 	u_long	ia_netmask;		/* mask of net part */

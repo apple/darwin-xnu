@@ -47,6 +47,8 @@
 
 #include <kern/timer_call.h>
 
+#include <sys/kdebug.h>
+
 #define internal_call_num	768
 
 #define thread_call_thread_min	4
@@ -59,20 +61,16 @@ decl_simple_lock_data(static,thread_call_lock)
 
 static
 timer_call_data_t
-	thread_call_delayed_timer;
+	thread_call_delaytimer;
 
 static
 queue_head_t
-	internal_call_free_queue,
-	pending_call_queue, delayed_call_queue;
+	thread_call_xxx_queue,
+	thread_call_pending_queue, thread_call_delayed_queue;
 
 static
 struct wait_queue
-	call_thread_idle_queue;
-
-static
-thread_t
-	activate_thread;
+	call_thread_waitqueue;
 
 static
 boolean_t
@@ -90,10 +88,7 @@ static struct {
 	int		thread_num,
 			thread_hiwat,
 			thread_lowat;
-} thread_calls;
-
-static boolean_t
-	thread_call_initialized = FALSE;
+} thread_call_vars;
 
 static __inline__ thread_call_t
 	_internal_call_allocate(void);
@@ -167,40 +162,34 @@ thread_call_initialize(void)
     thread_call_t		call;
 	spl_t				s;
 
-    if (thread_call_initialized)
-    	panic("thread_call_initialize");
-
     simple_lock_init(&thread_call_lock, ETAP_MISC_TIMER);
 
 	s = splsched();
 	simple_lock(&thread_call_lock);
 
-    queue_init(&pending_call_queue);
-    queue_init(&delayed_call_queue);
+    queue_init(&thread_call_pending_queue);
+    queue_init(&thread_call_delayed_queue);
 
-    queue_init(&internal_call_free_queue);
+    queue_init(&thread_call_xxx_queue);
     for (
 	    	call = internal_call_storage;
 			call < &internal_call_storage[internal_call_num];
 			call++) {
 
-		enqueue_tail(&internal_call_free_queue, qe(call));
+		enqueue_tail(&thread_call_xxx_queue, qe(call));
     }
 
-	timer_call_setup(&thread_call_delayed_timer, _delayed_call_timer, NULL);
+	timer_call_setup(&thread_call_delaytimer, _delayed_call_timer, NULL);
 
-	wait_queue_init(&call_thread_idle_queue, SYNC_POLICY_FIFO);
-	thread_calls.thread_lowat = thread_call_thread_min;
+	wait_queue_init(&call_thread_waitqueue, SYNC_POLICY_FIFO);
+	thread_call_vars.thread_lowat = thread_call_thread_min;
 
 	activate_thread_awake = TRUE;
-    thread_call_initialized = TRUE;
 
 	simple_unlock(&thread_call_lock);
 	splx(s);
 
-    activate_thread = kernel_thread_with_priority(
-										kernel_task, MAXPRI_KERNEL - 2,
-												_activate_thread, TRUE, TRUE);
+    kernel_thread_with_priority(_activate_thread, MAXPRI_KERNEL - 2);
 }
 
 void
@@ -228,10 +217,10 @@ _internal_call_allocate(void)
 {
     thread_call_t		call;
     
-    if (queue_empty(&internal_call_free_queue))
+    if (queue_empty(&thread_call_xxx_queue))
     	panic("_internal_call_allocate");
 	
-    call = TC(dequeue_head(&internal_call_free_queue));
+    call = TC(dequeue_head(&thread_call_xxx_queue));
     
     return (call);
 }
@@ -255,7 +244,7 @@ _internal_call_release(
 {
     if (    call >= internal_call_storage						&&
 	   	    call < &internal_call_storage[internal_call_num]		)
-		enqueue_tail(&internal_call_free_queue, qe(call));
+		enqueue_head(&thread_call_xxx_queue, qe(call));
 }
 
 /*
@@ -275,9 +264,9 @@ _pending_call_enqueue(
     thread_call_t		call
 )
 {
-    enqueue_tail(&pending_call_queue, qe(call));
-	if (++thread_calls.pending_num > thread_calls.pending_hiwat)
-		thread_calls.pending_hiwat = thread_calls.pending_num;
+    enqueue_tail(&thread_call_pending_queue, qe(call));
+	if (++thread_call_vars.pending_num > thread_call_vars.pending_hiwat)
+		thread_call_vars.pending_hiwat = thread_call_vars.pending_num;
 
     call->state = PENDING;
 }
@@ -300,7 +289,7 @@ _pending_call_dequeue(
 )
 {
     (void)remque(qe(call));
-	thread_calls.pending_num--;
+	thread_call_vars.pending_num--;
     
     call->state = IDLE;
 }
@@ -325,10 +314,10 @@ _delayed_call_enqueue(
 {
     thread_call_t		current;
     
-    current = TC(queue_first(&delayed_call_queue));
+    current = TC(queue_first(&thread_call_delayed_queue));
     
     while (TRUE) {
-    	if (	queue_end(&delayed_call_queue, qe(current))		||
+    	if (	queue_end(&thread_call_delayed_queue, qe(current))		||
 					call->deadline < current->deadline			) {
 			current = TC(queue_prev(qe(current)));
 			break;
@@ -338,8 +327,8 @@ _delayed_call_enqueue(
     }
 
     insque(qe(call), qe(current));
-	if (++thread_calls.delayed_num > thread_calls.delayed_hiwat)
-		thread_calls.delayed_hiwat = thread_calls.delayed_num;
+	if (++thread_call_vars.delayed_num > thread_call_vars.delayed_hiwat)
+		thread_call_vars.delayed_hiwat = thread_call_vars.delayed_num;
     
     call->state = DELAYED;
 }
@@ -362,7 +351,7 @@ _delayed_call_dequeue(
 )
 {
     (void)remque(qe(call));
-	thread_calls.delayed_num--;
+	thread_call_vars.delayed_num--;
     
     call->state = IDLE;
 }
@@ -383,7 +372,7 @@ _set_delayed_call_timer(
     thread_call_t		call
 )
 {
-    timer_call_enter(&thread_call_delayed_timer, call->deadline);
+    timer_call_enter(&thread_call_delaytimer, call->deadline);
 }
 
 /*
@@ -411,9 +400,9 @@ _remove_from_pending_queue(
 	boolean_t			call_removed = FALSE;
 	thread_call_t		call;
     
-    call = TC(queue_first(&pending_call_queue));
+    call = TC(queue_first(&thread_call_pending_queue));
     
-    while (!queue_end(&pending_call_queue, qe(call))) {
+    while (!queue_end(&thread_call_pending_queue, qe(call))) {
     	if (	call->func == func			&&
 				call->param0 == param0			) {
 			thread_call_t	next = TC(queue_next(qe(call)));
@@ -460,9 +449,9 @@ _remove_from_delayed_queue(
     boolean_t			call_removed = FALSE;
     thread_call_t		call;
     
-    call = TC(queue_first(&delayed_call_queue));
+    call = TC(queue_first(&thread_call_delayed_queue));
     
-    while (!queue_end(&delayed_call_queue, qe(call))) {
+    while (!queue_end(&thread_call_delayed_queue, qe(call))) {
     	if (	call->func == func			&&
 				call->param0 == param0			) {
 			thread_call_t	next = TC(queue_next(qe(call)));
@@ -505,17 +494,14 @@ thread_call_func(
 )
 {
     thread_call_t		call;
-    int					s;
+    spl_t				s;
     
-    if (!thread_call_initialized)
-    	panic("thread_call_func");
-	
     s = splsched();
     simple_lock(&thread_call_lock);
     
-    call = TC(queue_first(&pending_call_queue));
+    call = TC(queue_first(&thread_call_pending_queue));
     
-	while (unique_call && !queue_end(&pending_call_queue, qe(call))) {
+	while (unique_call && !queue_end(&thread_call_pending_queue, qe(call))) {
     	if (	call->func == func			&&
 				call->param0 == param			) {
 			break;
@@ -524,7 +510,7 @@ thread_call_func(
 		call = TC(queue_next(qe(call)));
     }
     
-    if (!unique_call || queue_end(&pending_call_queue, qe(call))) {
+    if (!unique_call || queue_end(&thread_call_pending_queue, qe(call))) {
 		call = _internal_call_allocate();
 		call->func			= func;
 		call->param0		= param;
@@ -532,7 +518,7 @@ thread_call_func(
 	
 		_pending_call_enqueue(call);
 		
-		if (thread_calls.active_num <= 0)
+		if (thread_call_vars.active_num <= 0)
 			_call_thread_wake();
     }
 
@@ -560,11 +546,8 @@ thread_call_func_delayed(
 )
 {
     thread_call_t		call;
-    int					s;
+    spl_t				s;
     
-    if (!thread_call_initialized)
-    	panic("thread_call_func_delayed");
-
     s = splsched();
     simple_lock(&thread_call_lock);
     
@@ -576,7 +559,7 @@ thread_call_func_delayed(
     
     _delayed_call_enqueue(call);
     
-    if (queue_first(&delayed_call_queue) == qe(call))
+    if (queue_first(&thread_call_delayed_queue) == qe(call))
     	_set_delayed_call_timer(call);
     
     simple_unlock(&thread_call_lock);
@@ -609,7 +592,7 @@ thread_call_func_cancel(
 )
 {
 	boolean_t			result;
-    int					s;
+    spl_t				s;
     
     s = splsched();
     simple_lock(&thread_call_lock);
@@ -669,7 +652,7 @@ thread_call_free(
     thread_call_t		call
 )
 {
-    int			s;
+    spl_t		s;
     
     s = splsched();
     simple_lock(&thread_call_lock);
@@ -709,7 +692,7 @@ thread_call_enter(
 )
 {
 	boolean_t		result = TRUE;
-    int				s;
+    spl_t			s;
     
     s = splsched();
     simple_lock(&thread_call_lock);
@@ -722,7 +705,7 @@ thread_call_enter(
 
     	_pending_call_enqueue(call);
 		
-		if (thread_calls.active_num <= 0)
+		if (thread_call_vars.active_num <= 0)
 			_call_thread_wake();
 	}
 
@@ -741,7 +724,7 @@ thread_call_enter1(
 )
 {
 	boolean_t			result = TRUE;
-    int					s;
+    spl_t				s;
     
     s = splsched();
     simple_lock(&thread_call_lock);
@@ -754,7 +737,7 @@ thread_call_enter1(
 
     	_pending_call_enqueue(call);
 
-		if (thread_calls.active_num <= 0)
+		if (thread_call_vars.active_num <= 0)
 			_call_thread_wake();
     }
 
@@ -787,7 +770,7 @@ thread_call_enter_delayed(
 )
 {
 	boolean_t		result = TRUE;
-    int				s;
+    spl_t			s;
 
     s = splsched();
     simple_lock(&thread_call_lock);
@@ -804,7 +787,7 @@ thread_call_enter_delayed(
 
 	_delayed_call_enqueue(call);
 
-	if (queue_first(&delayed_call_queue) == qe(call))
+	if (queue_first(&thread_call_delayed_queue) == qe(call))
 		_set_delayed_call_timer(call);
 
     simple_unlock(&thread_call_lock);
@@ -821,7 +804,7 @@ thread_call_enter1_delayed(
 )
 {
 	boolean_t			result = TRUE;
-    int					s;
+    spl_t				s;
 
     s = splsched();
     simple_lock(&thread_call_lock);
@@ -838,7 +821,7 @@ thread_call_enter1_delayed(
 
 	_delayed_call_enqueue(call);
 
-	if (queue_first(&delayed_call_queue) == qe(call))
+	if (queue_first(&thread_call_delayed_queue) == qe(call))
 		_set_delayed_call_timer(call);
 
     simple_unlock(&thread_call_lock);
@@ -867,7 +850,7 @@ thread_call_cancel(
 )
 {
 	boolean_t		result = TRUE;
-    int				s;
+    spl_t			s;
     
     s = splsched();
     simple_lock(&thread_call_lock);
@@ -905,7 +888,7 @@ thread_call_is_delayed(
 	uint64_t			*deadline)
 {
 	boolean_t		result = FALSE;
-	int				s;
+	spl_t			s;
 
 	s = splsched();
 	simple_lock(&thread_call_lock);
@@ -940,16 +923,16 @@ void
 _call_thread_wake(void)
 {
 	if (wait_queue_wakeup_one(
-					&call_thread_idle_queue, &call_thread_idle_queue,
+					&call_thread_waitqueue, &call_thread_waitqueue,
 										THREAD_AWAKENED) == KERN_SUCCESS) {
-		thread_calls.idle_thread_num--;
+		thread_call_vars.idle_thread_num--;
 
-		if (++thread_calls.active_num > thread_calls.active_hiwat)
-			thread_calls.active_hiwat = thread_calls.active_num;
+		if (++thread_call_vars.active_num > thread_call_vars.active_hiwat)
+			thread_call_vars.active_hiwat = thread_call_vars.active_num;
 	}
 	else
 	if (!activate_thread_awake) {
-		clear_wait(activate_thread, THREAD_AWAKENED);
+		thread_wakeup_one(&activate_thread_awake);
 		activate_thread_awake = TRUE;
 	}
 }
@@ -970,11 +953,11 @@ call_thread_block(void)
 {
 	simple_lock(&thread_call_lock);
 
-	if (--thread_calls.active_num < thread_calls.active_lowat)
-		thread_calls.active_lowat = thread_calls.active_num;
+	if (--thread_call_vars.active_num < thread_call_vars.active_lowat)
+		thread_call_vars.active_lowat = thread_call_vars.active_num;
 
-	if (	thread_calls.active_num <= 0	&&
-			thread_calls.pending_num > 0		)
+	if (	thread_call_vars.active_num <= 0	&&
+			thread_call_vars.pending_num > 0		)
 		_call_thread_wake();
 
 	simple_unlock(&thread_call_lock);
@@ -996,8 +979,8 @@ call_thread_unblock(void)
 {
 	simple_lock(&thread_call_lock);
 
-	if (++thread_calls.active_num > thread_calls.active_hiwat)
-		thread_calls.active_hiwat = thread_calls.active_num;
+	if (++thread_call_vars.active_num > thread_call_vars.active_hiwat)
+		thread_call_vars.active_hiwat = thread_call_vars.active_num;
 
 	simple_unlock(&thread_call_lock);
 }
@@ -1023,13 +1006,13 @@ _call_thread_continue(void)
 
 	self->active_callout = TRUE;
 
-    while (thread_calls.pending_num > 0) {
+    while (thread_call_vars.pending_num > 0) {
 		thread_call_t			call;
 		thread_call_func_t		func;
 		thread_call_param_t		param0, param1;
 
-		call = TC(dequeue_head(&pending_call_queue));
-		thread_calls.pending_num--;
+		call = TC(dequeue_head(&thread_call_pending_queue));
+		thread_call_vars.pending_num--;
 
 		func = call->func;
 		param0 = call->param0;
@@ -1042,6 +1025,10 @@ _call_thread_continue(void)
 		simple_unlock(&thread_call_lock);
 		(void) spllo();
 
+		KERNEL_DEBUG_CONSTANT(
+			MACHDBG_CODE(DBG_MACH_SCHED,MACH_CALLOUT) | DBG_FUNC_NONE,
+				(int)func, (int)param0, (int)param1, 0, 0);
+
 		(*func)(param0, param1);
 
 		(void)thread_funnel_set(self->funnel_lock, FALSE);
@@ -1052,14 +1039,14 @@ _call_thread_continue(void)
 
 	self->active_callout = FALSE;
 
-	if (--thread_calls.active_num < thread_calls.active_lowat)
-		thread_calls.active_lowat = thread_calls.active_num;
+	if (--thread_call_vars.active_num < thread_call_vars.active_lowat)
+		thread_call_vars.active_lowat = thread_call_vars.active_num;
 	
-    if (thread_calls.idle_thread_num < thread_calls.thread_lowat) {
-		thread_calls.idle_thread_num++;
+    if (thread_call_vars.idle_thread_num < thread_call_vars.thread_lowat) {
+		thread_call_vars.idle_thread_num++;
 
 		wait_queue_assert_wait(
-					&call_thread_idle_queue, &call_thread_idle_queue,
+					&call_thread_waitqueue, &call_thread_waitqueue,
 														THREAD_INTERRUPTIBLE);
 	
 		simple_unlock(&thread_call_lock);
@@ -1069,7 +1056,7 @@ _call_thread_continue(void)
 		/* NOTREACHED */
     }
     
-    thread_calls.thread_num--;
+    thread_call_vars.thread_num--;
     
     simple_unlock(&thread_call_lock);
     (void) spllo();
@@ -1082,10 +1069,6 @@ static
 void
 _call_thread(void)
 {
-	thread_t					self = current_thread();
-
-    stack_privilege(self);
-
     _call_thread_continue();
     /* NOTREACHED */
 }
@@ -1107,21 +1090,20 @@ _activate_thread_continue(void)
     (void) splsched();
     simple_lock(&thread_call_lock);
         
-	while (		thread_calls.active_num <= 0	&&
-				thread_calls.pending_num > 0		) {
+	while (		thread_call_vars.active_num <= 0	&&
+				thread_call_vars.pending_num > 0		) {
 
-		if (++thread_calls.active_num > thread_calls.active_hiwat)
-			thread_calls.active_hiwat = thread_calls.active_num;
+		if (++thread_call_vars.active_num > thread_call_vars.active_hiwat)
+			thread_call_vars.active_hiwat = thread_call_vars.active_num;
 
-		if (++thread_calls.thread_num > thread_calls.thread_hiwat)
-			thread_calls.thread_hiwat = thread_calls.thread_num;
+		if (++thread_call_vars.thread_num > thread_call_vars.thread_hiwat)
+			thread_call_vars.thread_hiwat = thread_call_vars.thread_num;
 
 		simple_unlock(&thread_call_lock);
 		(void) spllo();
 	
-		(void) kernel_thread_with_priority(
-									kernel_task, MAXPRI_KERNEL - 1,
-													_call_thread, TRUE, TRUE);
+		kernel_thread_with_priority(_call_thread, MAXPRI_KERNEL - 1);
+
 		(void) splsched();
 		simple_lock(&thread_call_lock);
     }
@@ -1140,11 +1122,10 @@ static
 void
 _activate_thread(void)
 {
-	thread_t		self = current_thread();
+	thread_t	self = current_thread();
 
 	self->vm_privilege = TRUE;
 	vm_page_free_reserve(2);	/* XXX */
-    stack_privilege(self);
     
     _activate_thread_continue();
     /* NOTREACHED */
@@ -1160,16 +1141,16 @@ _delayed_call_timer(
 	uint64_t			timestamp;
     thread_call_t		call;
 	boolean_t			new_pending = FALSE;
-    int					s;
+    spl_t				s;
 
     s = splsched();
     simple_lock(&thread_call_lock);
 
 	clock_get_uptime(&timestamp);
     
-    call = TC(queue_first(&delayed_call_queue));
+    call = TC(queue_first(&thread_call_delayed_queue));
     
-    while (!queue_end(&delayed_call_queue, qe(call))) {
+    while (!queue_end(&thread_call_delayed_queue, qe(call))) {
     	if (call->deadline <= timestamp) {
 			_delayed_call_dequeue(call);
 
@@ -1179,13 +1160,13 @@ _delayed_call_timer(
 		else
 			break;
 	    
-		call = TC(queue_first(&delayed_call_queue));
+		call = TC(queue_first(&thread_call_delayed_queue));
     }
 
-	if (!queue_end(&delayed_call_queue, qe(call)))
+	if (!queue_end(&thread_call_delayed_queue, qe(call)))
 		_set_delayed_call_timer(call);
 
-    if (new_pending && thread_calls.active_num <= 0)
+    if (new_pending && thread_call_vars.active_num <= 0)
 		_call_thread_wake();
 
     simple_unlock(&thread_call_lock);

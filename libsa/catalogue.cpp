@@ -36,6 +36,7 @@ extern "C" {
 #include <mach/kmod.h>
 #include <libsa/mkext.h>
 #include <libsa/vers_rsrc.h>
+#include <mach-o/loader.h>
 };
 
 #include <IOKit/IOLib.h>
@@ -49,30 +50,37 @@ extern kern_return_t host_info(host_t host,
     host_info_t info,
     mach_msg_type_number_t  *count);
 extern int check_cpu_subtype(cpu_subtype_t cpu_subtype);
+extern struct section *
+getsectbyname(
+    char *segname,
+    char *sectname);
+extern struct segment_command *
+getsegbyname(char *seg_name);
 };
-
 
 #define LOG_DELAY()
 
+#if 0
 #define VTYELLOW   "\033[33m"
 #define VTRESET    "\033[0m"
-
+#else
+#define VTYELLOW   ""
+#define VTRESET    ""
+#endif
 
 /*********************************************************************
 *********************************************************************/
 static OSDictionary * gStartupExtensions = 0;
 static OSArray * gBootLoaderObjects = 0;
+extern OSArray * gIOPrelinkedModules;
 
 OSDictionary * getStartupExtensions(void) {
     if (gStartupExtensions) {
         return gStartupExtensions;
     }
     gStartupExtensions = OSDictionary::withCapacity(1);
-    if (!gStartupExtensions) {
-        IOLog("Error: Couldn't allocate "
-            "startup extensions dictionary.\n");
-        LOG_DELAY();
-    }
+    assert (gStartupExtensions);
+
     return gStartupExtensions;
 }
 
@@ -87,60 +95,307 @@ OSArray * getBootLoaderObjects(void) {
         return gBootLoaderObjects;
     }
     gBootLoaderObjects = OSArray::withCapacity(1);
-    if (! gBootLoaderObjects) {
-        IOLog("Error: Couldn't allocate "
-            "bootstrap objects array.\n");
-        LOG_DELAY();
-    }
+    assert (gBootLoaderObjects);
+
     return gBootLoaderObjects;
 }
-
 
 /*********************************************************************
 * This function checks that a driver dict has all the required
 * entries and does a little bit of value checking too.
+*
+* index is nonnegative if the index of an entry from an mkext
+* archive.
 *********************************************************************/
-bool validateExtensionDict(OSDictionary * extension) {
+bool validateExtensionDict(OSDictionary * extension, int index) {
 
     bool result = true;
-    OSString * name;         // do not release
-    OSString * stringValue;  // do not release
-    UInt32 vers;
+    bool not_a_dict = false;
+    bool id_missing = false;
+    bool is_kernel_resource = false;
+    bool has_executable = false;
+    OSString * bundleIdentifier = NULL;    // do not release
+    OSObject * rawValue = NULL;            // do not release
+    OSString * stringValue = NULL;         // do not release
+    OSBoolean * booleanValue = NULL;       // do not release
+    OSDictionary * personalities = NULL;   // do not release
+    OSDictionary * libraries = NULL;       // do not release
+    OSCollectionIterator * keyIterator = NULL;  // must release
+    OSString * key = NULL;                 // do not release
+    VERS_version vers;
+    VERS_version compatible_vers;
 
-    name = OSDynamicCast(OSString,
-        extension->getObject("CFBundleIdentifier"));
-    if (!name) {
-        IOLog(VTYELLOW "Extension has no \"CFBundleIdentifier\" property.\n"
-            VTRESET);
-        LOG_DELAY();
+    // Info dict is a dictionary
+    if (!OSDynamicCast(OSDictionary, extension)) {
+        not_a_dict = true;
         result = false;
         goto finish;
     }
 
+    // CFBundleIdentifier is a string - REQUIRED
+    bundleIdentifier = OSDynamicCast(OSString,
+        extension->getObject("CFBundleIdentifier"));
+    if (!bundleIdentifier) {
+        id_missing = true;
+        result = false;
+        goto finish;
+    }
+
+    // Length of CFBundleIdentifier is not >= KMOD_MAX_NAME
+    if (bundleIdentifier->getLength() >= KMOD_MAX_NAME) {
+        result = false;
+        goto finish;
+    }
+
+    // CFBundlePackageType is "KEXT" - REQUIRED
+    stringValue = OSDynamicCast(OSString,
+        extension->getObject("CFBundlePackageType"));
+    if (!stringValue) {
+        result = false;
+        goto finish;
+    }
+    if (!stringValue->isEqualTo("KEXT")) {
+        result = false;
+        goto finish;
+    }
+
+    // CFBundleVersion is a string - REQUIRED
     stringValue = OSDynamicCast(OSString,
         extension->getObject("CFBundleVersion"));
     if (!stringValue) {
-        IOLog(VTYELLOW "Extension \"%s\" has no \"CFBundleVersion\" "
-            "property.\n" VTRESET,
-            name->getCStringNoCopy());
-        LOG_DELAY();
         result = false;
         goto finish;
     }
-    if (!VERS_parse_string(stringValue->getCStringNoCopy(),
-        &vers)) {
-        IOLog(VTYELLOW "Extension \"%s\" has an invalid "
-            "\"CFBundleVersion\" property.\n" VTRESET,
-            name->getCStringNoCopy());
-        LOG_DELAY();
+    // CFBundleVersion is of valid form
+    vers = VERS_parse_string(stringValue->getCStringNoCopy());
+    if (vers < 0) {
         result = false;
         goto finish;
+    }
+
+    // OSBundleCompatibleVersion is a string - OPTIONAL
+    rawValue = extension->getObject("OSBundleCompatibleVersion");
+    if (rawValue) {
+        stringValue = OSDynamicCast(OSString, rawValue);
+        if (!stringValue) {
+            result = false;
+            goto finish;
+        }
+
+        // OSBundleCompatibleVersion is of valid form
+        compatible_vers = VERS_parse_string(stringValue->getCStringNoCopy());
+        if (compatible_vers < 0) {
+            result = false;
+            goto finish;
+        }
+
+        // OSBundleCompatibleVersion <= CFBundleVersion
+        if (compatible_vers > vers) {
+            result = false;
+            goto finish;
+        }
+    }
+
+    // CFBundleExecutable is a string - OPTIONAL
+    rawValue = extension->getObject("CFBundleExecutable");
+    if (rawValue) {
+        stringValue = OSDynamicCast(OSString, rawValue);
+        if (!stringValue || stringValue->getLength() == 0) {
+            result = false;
+            goto finish;
+        }
+        has_executable = true;
+    }
+
+    // OSKernelResource is a boolean value - OPTIONAL
+    rawValue = extension->getObject("OSKernelResource");
+    if (rawValue) {
+        booleanValue = OSDynamicCast(OSBoolean, rawValue);
+        if (!booleanValue) {
+            result = false;
+            goto finish;
+        }
+        is_kernel_resource = booleanValue->isTrue();
+    }
+
+    // IOKitPersonalities is a dictionary - OPTIONAL
+    rawValue = extension->getObject("IOKitPersonalities");
+    if (rawValue) {
+        personalities = OSDynamicCast(OSDictionary, rawValue);
+        if (!personalities) {
+            result = false;
+            goto finish;
+        }
+
+        keyIterator = OSCollectionIterator::withCollection(personalities);
+        if (!keyIterator) {
+            IOLog("Error: Failed to allocate iterator for personalities.\n");
+            LOG_DELAY();
+            result = false;
+            goto finish;
+        }
+
+        while ((key = OSDynamicCast(OSString, keyIterator->getNextObject()))) {
+            OSDictionary * personality = NULL;  // do not release
+
+            // Each personality is a dictionary
+            personality = OSDynamicCast(OSDictionary,
+                personalities->getObject(key));
+            if (!personality) {
+                result = false;
+                goto finish;
+            }
+
+            //   IOClass exists as a string - REQUIRED
+            if (!OSDynamicCast(OSString, personality->getObject("IOClass"))) {
+                result = false;
+                goto finish;
+            }
+
+            //   IOProviderClass exists as a string - REQUIRED
+            if (!OSDynamicCast(OSString,
+                personality->getObject("IOProviderClass"))) {
+
+                result = false;
+                goto finish;
+            }
+
+            // CFBundleIdentifier is a string - OPTIONAL - INSERT IF ABSENT!
+            rawValue = personality->getObject("CFBundleIdentifier");
+            if (!rawValue) {
+                personality->setObject("CFBundleIdentifier", bundleIdentifier);
+            } else {
+                OSString * personalityID = NULL;    // do not release
+                personalityID = OSDynamicCast(OSString, rawValue);
+                if (!personalityID) {
+                    result = false;
+                    goto finish;
+                } else {
+                    // Length of CFBundleIdentifier is not >= KMOD_MAX_NAME
+                    if (personalityID->getLength() >= KMOD_MAX_NAME) {
+                        result = false;
+                        goto finish;
+                    }
+                }
+            }
+
+            // IOKitDebug is a number - OPTIONAL
+            rawValue = personality->getObject("IOKitDebug");
+            if (rawValue && !OSDynamicCast(OSNumber, rawValue)) {
+                result = false;
+                goto finish;
+            }
+        }
+
+        keyIterator->release();
+        keyIterator = NULL;
+    }
+
+
+    // OSBundleLibraries is a dictionary - REQUIRED if
+    // not kernel resource & has executable
+    //
+    rawValue = extension->getObject("OSBundleLibraries");
+    if (!rawValue && !is_kernel_resource && has_executable) {
+        result = false;
+        goto finish;
+    }
+
+    if (rawValue) {
+        libraries = OSDynamicCast(OSDictionary, rawValue);
+        if (!libraries) {
+            result = false;
+            goto finish;
+        }
+
+        keyIterator = OSCollectionIterator::withCollection(libraries);
+        if (!keyIterator) {
+            IOLog("Error: Failed to allocate iterator for libraries.\n");
+            LOG_DELAY();
+            result = false;
+            goto finish;
+        }
+
+        while ((key = OSDynamicCast(OSString,
+            keyIterator->getNextObject()))) {
+
+            OSString * libraryVersion = NULL;  // do not release
+
+            // Each key's length is not >= KMOD_MAX_NAME
+            if (key->getLength() >= KMOD_MAX_NAME) {
+                result = false;
+                goto finish;
+            }
+
+            libraryVersion = OSDynamicCast(OSString,
+                libraries->getObject(key));
+            if (!libraryVersion) {
+                result = false;
+                goto finish;
+            }
+
+            // Each value is a valid version string
+            vers = VERS_parse_string(libraryVersion->getCStringNoCopy());
+            if (vers < 0) {
+                result = false;
+                goto finish;
+            }
+        }
+
+        keyIterator->release();
+        keyIterator = NULL;
+    }
+
+    // OSBundleRequired is a legal value - *not* required at boot time
+    // so we can do install CDs and the like with mkext files containing
+    // all normally-used drivers.
+    rawValue = extension->getObject("OSBundleRequired");
+    if (rawValue) {
+        stringValue = OSDynamicCast(OSString, rawValue);
+        if (!stringValue) {
+            result = false;
+            goto finish;
+        }
+        if (!stringValue->isEqualTo("Root") &&
+            !stringValue->isEqualTo("Local-Root") &&
+            !stringValue->isEqualTo("Network-Root") &&
+            !stringValue->isEqualTo("Safe Boot") &&
+            !stringValue->isEqualTo("Console")) {
+
+            result = false;
+            goto finish;
+        }
+
     }
 
 
 finish:
-    // FIXME: Make return real result after kext conversion
-    return true;
+    if (keyIterator)   keyIterator->release();
+
+    if (!result) {
+        if (not_a_dict) {
+            if (index > -1) {
+                IOLog(VTYELLOW "mkext entry %d:." VTRESET, index);
+            } else {
+                IOLog(VTYELLOW "kernel extension" VTRESET);
+            }
+            IOLog(VTYELLOW "info dictionary isn't a dictionary\n"
+                VTRESET);
+        } else if (id_missing) {
+            if (index > -1) {
+                IOLog(VTYELLOW "mkext entry %d:." VTRESET, index);
+            } else {
+                IOLog(VTYELLOW "kernel extension" VTRESET);
+            }
+            IOLog(VTYELLOW "\"CFBundleIdentifier\" property is "
+                "missing or not a string\n"
+                VTRESET);
+        } else {
+            IOLog(VTYELLOW "kernel extension \"%s\": info dictionary is invalid\n"
+                VTRESET, bundleIdentifier->getCStringNoCopy());
+        }
+        LOG_DELAY();
+    }
 
     return result;
 }
@@ -160,8 +415,8 @@ OSDictionary * compareExtensionVersions(
     OSString * candidateName = NULL;
     OSString * incumbentVersionString = NULL;
     OSString * candidateVersionString = NULL;
-    UInt32 incumbent_vers = 0;
-    UInt32 candidate_vers = 0;
+    VERS_version incumbent_vers = 0;
+    VERS_version candidate_vers = 0;
 
     incumbentPlist = OSDynamicCast(OSDictionary,
         incumbent->getObject("plist"));
@@ -207,8 +462,8 @@ OSDictionary * compareExtensionVersions(
         goto finish;
     }
 
-    if (!VERS_parse_string(incumbentVersionString->getCStringNoCopy(),
-        &incumbent_vers)) {
+    incumbent_vers = VERS_parse_string(incumbentVersionString->getCStringNoCopy());
+    if (incumbent_vers < 0) {
 
         IOLog(VTYELLOW "Error parsing version string for extension %s (%s)\n"
             VTRESET,
@@ -219,8 +474,8 @@ OSDictionary * compareExtensionVersions(
         goto finish;
     }
 
-    if (!VERS_parse_string(candidateVersionString->getCStringNoCopy(),
-        &candidate_vers)) {
+    candidate_vers = VERS_parse_string(candidateVersionString->getCStringNoCopy());
+    if (candidate_vers < 0) {
 
         IOLog(VTYELLOW "Error parsing version string for extension %s (%s)\n"
             VTRESET,
@@ -503,10 +758,8 @@ OSDictionary * readExtension(OSDictionary * propertyDict,
         goto finish;
     }
 
-    if (!validateExtensionDict(driverPlist)) {
-        IOLog("Error: Failed to validate property list "
-            "for device tree entry \"%s\".\n", memory_map_name);
-        LOG_DELAY();
+    if (!validateExtensionDict(driverPlist, -1)) {
+        // validateExtensionsDict() logs an error
         error = 1;
         goto finish;
     }
@@ -542,7 +795,7 @@ OSDictionary * readExtension(OSDictionary * propertyDict,
 finish:
 
     if (loaded_kmod) {
-        kfree(loaded_kmod, sizeof(kmod_info_t));
+        kfree((unsigned int)loaded_kmod, sizeof(kmod_info_t));
     }
 
     // do not release bootxDriverDataObject
@@ -758,11 +1011,15 @@ bool extractExtensionsFromArchive(MemoryMapFileInfo * mkext_file_info,
          i++) {
 
         if (loaded_kmod) {
-            kfree(loaded_kmod, sizeof(kmod_info_t));
+            kfree((unsigned int)loaded_kmod, sizeof(kmod_info_t));
             loaded_kmod = 0;
         }
 
         if (driverPlistDataObject) {
+            kmem_free(kernel_map,
+                (unsigned int)driverPlistDataObject->getBytesNoCopy(),
+                driverPlistDataObject->getLength());
+
             driverPlistDataObject->release();
             driverPlistDataObject = NULL;
         }
@@ -818,10 +1075,8 @@ bool extractExtensionsFromArchive(MemoryMapFileInfo * mkext_file_info,
                 continue;
             }
 
-            if (!validateExtensionDict(driverPlist)) {
-                IOLog("Error: Failed to validate property list "
-                      "for multikext archive entry %d.\n", i);
-                LOG_DELAY();
+            if (!validateExtensionDict(driverPlist, i)) {
+                // validateExtensionsDict() logs an error
                 continue;
             }
 
@@ -868,10 +1123,10 @@ bool extractExtensionsFromArchive(MemoryMapFileInfo * mkext_file_info,
         * compressed binary module, if there is one. If all four fields
         * of the module entry are zero, there isn't one.
         */
-        if (OSSwapBigToHostInt32(module_file->offset) ||
+        if (!(loaded_kmod && loaded_kmod->address) && (OSSwapBigToHostInt32(module_file->offset) ||
             OSSwapBigToHostInt32(module_file->compsize) ||
             OSSwapBigToHostInt32(module_file->realsize) ||
-            OSSwapBigToHostInt32(module_file->modifiedsecs)) {
+            OSSwapBigToHostInt32(module_file->modifiedsecs))) {
 
             moduleInfo = OSData::withCapacity(sizeof(MkextEntryInfo));
             if (!moduleInfo) {
@@ -934,8 +1189,13 @@ bool extractExtensionsFromArchive(MemoryMapFileInfo * mkext_file_info,
 
 finish:
 
-    if (loaded_kmod) kfree(loaded_kmod, sizeof(kmod_info_t));
-    if (driverPlistDataObject) driverPlistDataObject->release();
+    if (loaded_kmod) kfree((unsigned int)loaded_kmod, sizeof(kmod_info_t));
+    if (driverPlistDataObject) {
+        kmem_free(kernel_map,
+            (unsigned int)driverPlistDataObject->getBytesNoCopy(),
+            driverPlistDataObject->getLength());
+        driverPlistDataObject->release();
+    }
     if (driverPlist) driverPlist->release();
     if (driverCode)  driverCode->release();
     if (moduleInfo)  moduleInfo->release();
@@ -1082,7 +1342,6 @@ bool addExtensionsFromArchive(OSData * mkextDataObject) {
 
     OSDictionary * startupExtensions = NULL;  // don't release
     OSArray      * bootLoaderObjects = NULL;  // don't release
-    OSData       * localMkextDataObject = NULL; // don't release
     OSDictionary * extensions = NULL;         // must release
     MemoryMapFileInfo mkext_file_info;
     OSCollectionIterator * keyIterator = NULL;   // must release
@@ -1114,25 +1373,12 @@ bool addExtensionsFromArchive(OSData * mkextDataObject) {
         goto finish;
     }
 
-   /* The mkext we've been handed (or the data it references) can go away,
-    * so we need to make a local copy to keep around as long as it might
-    * be needed.
-    */
-    localMkextDataObject = OSData::withData(mkextDataObject);
-    if (!localMkextDataObject) {
-        IOLog("Error: Couldn't copy extension archive.\n");
-        LOG_DELAY();
-        result = false;
-        goto finish;
-    }
-
-    mkext_file_info.paddr = (UInt32)localMkextDataObject->getBytesNoCopy();
-    mkext_file_info.length = localMkextDataObject->getLength();
+    mkext_file_info.paddr = (UInt32)mkextDataObject->getBytesNoCopy();
+    mkext_file_info.length = mkextDataObject->getLength();
 
    /* Save the local mkext data object so that we can deallocate it later.
     */
-    bootLoaderObjects->setObject(localMkextDataObject);
-    localMkextDataObject->release();
+    bootLoaderObjects->setObject(mkextDataObject);
 
     result = extractExtensionsFromArchive(&mkext_file_info, extensions);
     if (!result) {
@@ -1201,6 +1447,7 @@ finish:
 * a single extension is not considered fatal, and this function
 * will simply skip the problematic extension to try the next one.
 *********************************************************************/
+
 bool recordStartupExtensions(void) {
     bool result = true;
     OSDictionary         * startupExtensions = NULL; // must release
@@ -1214,8 +1461,9 @@ bool recordStartupExtensions(void) {
     OSDictionary * newDriverDict = NULL;  // must release
     OSDictionary * driverPlist = NULL; // don't release
 
-    IOLog("Recording startup extensions.\n");
-    LOG_DELAY();
+    struct section * infosect;
+    struct section * symsect;
+    unsigned int     prelinkedCount = 0;
 
     existingExtensions = getStartupExtensions();
     if (!existingExtensions) {
@@ -1233,6 +1481,92 @@ bool recordStartupExtensions(void) {
         result = false;
         goto finish;
     }
+
+    // --
+    // add any prelinked modules as startup extensions
+
+    infosect   = getsectbyname("__PRELINK", "__info");
+    symsect    = getsectbyname("__PRELINK", "__symtab");
+    if (infosect && infosect->addr && infosect->size 
+     && symsect && symsect->addr && symsect->size) do
+    {
+	gIOPrelinkedModules = OSDynamicCast(OSArray,
+	    OSUnserializeXML((const char *) infosect->addr, NULL));
+
+	if (!gIOPrelinkedModules)
+	    break;
+	for( unsigned int idx = 0; 
+		(propertyDict = OSDynamicCast(OSDictionary, gIOPrelinkedModules->getObject(idx)));
+		idx++)
+	{
+	    enum { kPrelinkReservedCount = 4 };
+
+           /* Get the extension's module name. This is used to record
+            * the extension. Do *not* release the moduleName.
+            */
+            OSString * moduleName = OSDynamicCast(OSString,
+                propertyDict->getObject("CFBundleIdentifier"));
+            if (!moduleName) {
+                IOLog("Error: Prelinked module entry has "
+                    "no \"CFBundleIdentifier\" property.\n");
+                LOG_DELAY();
+                continue;
+            }
+
+           /* Add the kext, & its plist.
+            */
+	    newDriverDict = OSDictionary::withCapacity(4);
+	    assert(newDriverDict);
+	    newDriverDict->setObject("plist", propertyDict);
+	    startupExtensions->setObject(moduleName, newDriverDict);
+	    newDriverDict->release();
+
+           /* Add the code if present.
+            */
+	    OSData * data = OSDynamicCast(OSData, propertyDict->getObject("OSBundlePrelink"));
+            if (data) {
+		if (data->getLength() < (kPrelinkReservedCount * sizeof(UInt32))) {
+		    IOLog("Error: Prelinked module entry has "
+			"invalid \"OSBundlePrelink\" property.\n");
+		    LOG_DELAY();
+		    continue;
+		}
+		UInt32 * prelink;
+		prelink = (UInt32 *) data->getBytesNoCopy();
+		kmod_info_t * kmod_info = (kmod_info_t *) OSReadBigInt32(prelink, 0);
+		// end of "file" is end of symbol sect
+		data = OSData::withBytesNoCopy((void *) kmod_info->address,
+			    symsect->addr + symsect->size - kmod_info->address);
+		newDriverDict->setObject("code", data);
+		data->release();
+		prelinkedCount++;
+                continue;
+            }
+           /* Add the symbols if present.
+            */
+	    OSNumber * num = OSDynamicCast(OSNumber, propertyDict->getObject("OSBundlePrelinkSymbols"));
+            if (num) {
+		UInt32 offset = num->unsigned32BitValue();
+		data = OSData::withBytesNoCopy((void *) (symsect->addr + offset), symsect->size - offset);
+		newDriverDict->setObject("code", data);
+		data->release();
+		prelinkedCount++;
+                continue;
+	    }
+	} 
+	if (gIOPrelinkedModules)
+	    IOLog("%d prelinked modules\n", prelinkedCount);
+
+	// free __info
+	vm_offset_t
+	virt = ml_static_ptovirt(infosect->addr);
+	if( virt) {
+	    ml_static_mfree(virt, infosect->size);
+	}
+	newDriverDict = NULL;
+    }
+    while (false);
+    // --
 
     bootxMemoryMap =
         IORegistryEntry::fromPath(
@@ -1438,7 +1772,7 @@ finish:
             keyIterator->release();
             keyIterator = 0;
         }
-#endif DEBUG
+#endif /* DEBUG */
     }
 
     if (newDriverDict)     newDriverDict->release();

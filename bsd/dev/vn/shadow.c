@@ -61,11 +61,11 @@
 #include <stdlib.h>
 #define my_malloc(a)	malloc(a)
 #define my_free(a)	free(a)
-#else TEST_SHADOW
+#else /* !TEST_SHADOW */
 #include <sys/malloc.h>
 #define my_malloc(a)	_MALLOC(a, M_TEMP, M_WAITOK)
 #define my_free(a)	FREE(a, M_TEMP)
-#endif TEST_SHADOW
+#endif /* TEST_SHADOW */
 
 #include "shadow.h"
 

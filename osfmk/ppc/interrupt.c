@@ -33,14 +33,14 @@
 #include <kern/thread.h>
 #include <kern/counters.h>
 #include <ppc/misc_protos.h>
+#include <ppc/trap.h>
 #include <ppc/proc_reg.h>
 #include <ppc/exception.h>
 #include <ppc/savearea.h>
 #include <pexpert/pexpert.h>
-#if	NCPUS > 1
-#include <ppc/POWERMAC/mp/MPPlugIn.h>
-#endif /* NCPUS > 1 */
 #include <sys/kdebug.h>
+
+perfTrap perfIntHook = 0;						/* Pointer to performance trap hook routine */
 
 struct savearea * interrupt(
         int type,
@@ -54,6 +54,10 @@ struct savearea * interrupt(
 	thread_act_t	act;
 
 	disable_preemption();
+
+	if(perfIntHook) {							/* Is there a hook? */
+		if(perfIntHook(type, ssp, dsisr, dar) == KERN_SUCCESS) return ssp;	/* If it succeeds, we are done... */
+	}
 	
 #if 0
 	{
@@ -111,7 +115,7 @@ struct savearea * interrupt(
 			
 		case T_DECREMENTER:
 			KERNEL_DEBUG_CONSTANT(MACHDBG_CODE(DBG_MACH_EXCP_DECI, 0) | DBG_FUNC_NONE,
-				  isync_mfdec(), ssp->save_srr0, 0, 0, 0);
+				  isync_mfdec(), (unsigned int)ssp->save_srr0, 0, 0, 0);
 	
 #if 0
 			if (pcsample_enable) {
@@ -139,7 +143,7 @@ struct savearea * interrupt(
 			counter_always(c_incoming_interrupts++);
 	
 			KERNEL_DEBUG_CONSTANT(MACHDBG_CODE(DBG_MACH_EXCP_INTR, 0) | DBG_FUNC_START,
-			   current_cpu, ssp->save_srr0, 0, 0, 0);
+			   current_cpu, (unsigned int)ssp->save_srr0, 0, 0, 0);
 	
 			per_proc_info[current_cpu].interrupt_handler(
 				per_proc_info[current_cpu].interrupt_target, 

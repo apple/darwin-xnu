@@ -377,10 +377,10 @@ task_set_emulation_vector(
 	 *	Can't fault while we hold locks.
 	 */
 	kr = vm_map_wire(ipc_kernel_map,
-			     trunc_page(emul_vector_addr),
-			     round_page(emul_vector_addr +
-					emulation_vector_count *
-					sizeof(eml_dispatch_t)),
+			     trunc_page_32(emul_vector_addr),
+			     round_page_32(emul_vector_addr +
+					   emulation_vector_count *
+					   sizeof(eml_dispatch_t)),
 			     VM_PROT_READ|VM_PROT_WRITE, FALSE);
 	assert(kr == KERN_SUCCESS);
 
@@ -447,7 +447,7 @@ task_get_emulation_vector(
 	     */
 	    vector_size = eml->disp_count * sizeof(vm_offset_t);
 
-	    size_needed = round_page(vector_size);
+	    size_needed = round_page_32(vector_size);
 	    if (size_needed <= size)
 		break;
 
@@ -484,7 +484,7 @@ task_get_emulation_vector(
 	/*
 	 * Free any unused memory beyond the end of the last page used
 	 */
-	size_used = round_page(vector_size);
+	size_used = round_page_32(vector_size);
 	if (size_used != size)
 	    (void) kmem_free(ipc_kernel_map,
 			     addr + size_used,

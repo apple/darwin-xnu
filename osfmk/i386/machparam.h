@@ -58,3 +58,12 @@
  *
  *	SPLs are true functions on i386, defined elsewhere.
  */
+
+/*
+ * XXX Temporary workaround to null out the call to compute_my_priority()
+ * from thread_quantum_expire() -- which for x86 may occur on the wrong cpu
+ * and this can lead to run queue corruption.
+ * Making this slimey re-definition here avoids the need for ifdefs in
+ * machine-independent code.
+ */
+#define compute_my_priority(x)

@@ -75,6 +75,9 @@ typedef struct {
 #endif /* !MACH_ASSERT */
 } mach_trap_t;
 
+#define MACH_TRAP_TABLE_COUNT   128
+
+
 extern mach_trap_t		mach_trap_table[];
 extern int				mach_trap_count;
 extern kern_return_t	kern_invalid(void);

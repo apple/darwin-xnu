@@ -47,6 +47,7 @@
 #include <mach/mach_types.h>
 
 #include <kern/mach_loader.h>
+#include <kern/task.h>
 
 #include <mach-o/fat.h>
 #include <mach-o/loader.h>
@@ -77,7 +78,8 @@ parse_machfile(
 	unsigned long		file_offset,
 	unsigned long		macho_size,
 	int					depth,
-	load_result_t		*result
+	load_result_t		*result,
+	boolean_t		clean_regions
 ),
 load_segment(
 	struct segment_command	*scp,
@@ -121,7 +123,8 @@ load_dylinker(
 	vm_map_t				map,
 	thread_act_t			thr_act,
 	int						depth,
-	load_result_t			*result
+	load_result_t			*result,
+	boolean_t			clean_regions
 ),
 get_macho_vnode(
 	char				*path,
@@ -139,7 +142,8 @@ load_machfile(
 	unsigned long		macho_size,
 	load_result_t		*result,
 	thread_act_t 		thr_act,
-	vm_map_t 			new_map
+	vm_map_t 		new_map,
+	boolean_t		clean_regions
 )
 {
 	pmap_t			pmap;
@@ -149,6 +153,9 @@ load_machfile(
 	kern_return_t		kret;
 	load_return_t		lret;
 	boolean_t create_map = TRUE;
+#ifndef i386
+	extern pmap_t pmap_create(vm_size_t   size); /* XXX */
+#endif
 
 	if (new_map != VM_MAP_NULL) {
 		create_map = FALSE;
@@ -168,29 +175,30 @@ load_machfile(
 				TRUE); /**** FIXME ****/
 	} else
 		map = new_map;
-
+		
 	if (!result)
 		result = &myresult;
 
 	*result = (load_result_t) { 0 };
 
 	lret = parse_machfile(vp, map, thr_act, header, file_offset, macho_size,
-			     0, result);
+			     0, result, clean_regions);
 
 	if (lret != LOAD_SUCCESS) {
-		if (create_map)
+		if (create_map) {
 			vm_map_deallocate(map);	/* will lose pmap reference too */
+		}
 		return(lret);
 	}
+
 	/*
 	 *	Commit to new map.  First make sure that the current
 	 *	users of the task get done with it, and that we clean
 	 *	up the old contents of IPC and memory.  The task is
 	 *	guaranteed to be single threaded upon return (us).
 	 *
-	 *	Swap the new map for the old at the task level and at
-	 *	our activation.  The latter consumes our new map reference
-	 *	but each leaves us responsible for the old_map reference.
+	 *	Swap the new map for the old, which  consumes our new map
+	 *	reference but each leaves us responsible for the old_map reference.
 	 *	That lets us get off the pmap associated with it, and
 	 *	then we can release it.
 	 */
@@ -198,10 +206,6 @@ load_machfile(
 		task_halt(current_task());
 
 		old_map = swap_task_map(current_task(), map);
-		vm_map_deallocate(old_map);
-
-		old_map = swap_act_map(current_act(), map);
-
 #ifndef i386
 		pmap_switch(pmap);	/* Make sure we are using the new pmap */
 #endif
@@ -211,7 +215,6 @@ load_machfile(
 }
 
 int	dylink_test = 1;
-extern	vm_offset_t	system_shared_region;
 
 static
 load_return_t
@@ -223,7 +226,8 @@ parse_machfile(
 	unsigned long		file_offset,
 	unsigned long		macho_size,
 	int			depth,
-	load_result_t		*result
+	load_result_t		*result,
+	boolean_t		clean_regions
 )
 {
 	struct machine_slot	*ms;
@@ -231,7 +235,7 @@ parse_machfile(
 	struct load_command	*lcp, *next;
 	struct dylinker_command	*dlp = 0;
 	void *			pager;
-	load_return_t		ret;
+	load_return_t		ret = LOAD_SUCCESS;
 	vm_offset_t		addr, kl_addr;
 	vm_size_t		size,kl_size;
 	int			offset;
@@ -299,7 +303,7 @@ parse_machfile(
 	/*
 	 *	Round size of Mach-O commands up to page boundry.
 	 */
-	size = round_page(sizeof (struct mach_header) + header->sizeofcmds);
+	size = round_page_32(sizeof (struct mach_header) + header->sizeofcmds);
 	if (size <= 0)
 		return(LOAD_BADMACHO);
 
@@ -313,11 +317,11 @@ parse_machfile(
 	if (addr == NULL)
 		return(LOAD_NOSPACE);
 
-	if(error = vn_rdwr(UIO_READ, vp, addr, size, file_offset,
+	if(error = vn_rdwr(UIO_READ, vp, (caddr_t)addr, size, file_offset,
 	    UIO_SYSSPACE, 0, p->p_ucred, &resid, p)) {
 		if (kl_addr )
 			kfree(kl_addr, kl_size);
-		return(EIO);
+		return(LOAD_IOERROR);
 	}
 	/* ubc_map(vp); */ /* NOT HERE */
 	
@@ -376,13 +380,13 @@ parse_machfile(
 			case LC_LOAD_DYLINKER:
 				if (pass != 2)
 					break;
-				if (depth == 1 || dlp == 0)
+				if ((depth == 1) && (dlp == 0))
 					dlp = (struct dylinker_command *)lcp;
 				else
 					ret = LOAD_FAILURE;
 				break;
 			default:
-				ret = KERN_SUCCESS;/* ignore other stuff */
+				ret = LOAD_SUCCESS;/* ignore other stuff */
 			}
 			if (ret != LOAD_SUCCESS)
 				break;
@@ -390,7 +394,7 @@ parse_machfile(
 		if (ret != LOAD_SUCCESS)
 			break;
 	}
-	if (ret == LOAD_SUCCESS && dlp != 0) {
+	if ((ret == LOAD_SUCCESS) && (depth == 1)) {
 		vm_offset_t addr;
 		shared_region_mapping_t shared_region;
 		struct shared_region_task_mappings	map_info;
@@ -408,33 +412,91 @@ RedoLookup:
 			&(map_info.client_base),
 			&(map_info.alternate_base),
 			&(map_info.alternate_next), 
+			&(map_info.fs_base),
+			&(map_info.system),
 			&(map_info.flags), &next);
 
-		if((map_info.self != (vm_offset_t)system_shared_region) &&
-			(map_info.flags & SHARED_REGION_SYSTEM)) {
-			shared_region_mapping_ref(system_shared_region);
-			vm_set_shared_region(task, system_shared_region);
-			shared_region_mapping_dealloc(
+		if((map_info.flags & SHARED_REGION_FULL) ||
+			(map_info.flags & SHARED_REGION_STALE)) {
+			shared_region_mapping_t system_region;
+			system_region = lookup_default_shared_region(
+				map_info.fs_base, map_info.system);
+			if((map_info.self != (vm_offset_t)system_region) &&
+				(map_info.flags & SHARED_REGION_SYSTEM)) {
+			   if(system_region == NULL) {
+				shared_file_boot_time_init(
+					map_info.fs_base, map_info.system);
+			   } else {
+			   	vm_set_shared_region(task, system_region);
+			   }
+			   shared_region_mapping_dealloc(
 					(shared_region_mapping_t)map_info.self);
-			goto RedoLookup;
+			   goto RedoLookup;
+			} else if (map_info.flags & SHARED_REGION_SYSTEM) {
+			      shared_region_mapping_dealloc(system_region);
+			      shared_file_boot_time_init(
+					map_info.fs_base, map_info.system);
+			      shared_region_mapping_dealloc(
+				     (shared_region_mapping_t)map_info.self);
+			} else {
+			      shared_region_mapping_dealloc(system_region);
+			}
 		}
 
 
 		if (dylink_test) {
 			p->p_flag |=  P_NOSHLIB; /* no shlibs in use */
 			addr = map_info.client_base;
-			vm_map(map, &addr, map_info.text_size, 0, 
+			if(clean_regions) {
+			   vm_map(map, &addr, map_info.text_size, 
+				0, SHARED_LIB_ALIAS,
+				map_info.text_region, 0, FALSE,
+				VM_PROT_READ, VM_PROT_READ, VM_INHERIT_SHARE);
+			} else {
+			   vm_map(map, &addr, map_info.text_size, 0, 
 				(VM_MEMORY_SHARED_PMAP << 24) 
 						| SHARED_LIB_ALIAS,
 				map_info.text_region, 0, FALSE,
 				VM_PROT_READ, VM_PROT_READ, VM_INHERIT_SHARE);
+			}
 			addr = map_info.client_base + map_info.text_size;
 			vm_map(map, &addr, map_info.data_size, 
 				0, SHARED_LIB_ALIAS,
 				map_info.data_region, 0, TRUE,
 				VM_PROT_READ, VM_PROT_READ, VM_INHERIT_SHARE);
+	
+			while (next) {
+		           /* this should be fleshed out for the general case */
+			   /* but this is not necessary for now.  Indeed we   */
+			   /* are handling the com page inside of the         */
+			   /* shared_region mapping create calls for now for  */
+			   /* simplicities sake.  If more general support is  */
+			   /* needed the code to manipulate the shared range  */
+			   /* chain can be pulled out and moved to the callers*/
+			   shared_region_mapping_info(next,
+				&(map_info.text_region),   
+				&(map_info.text_size),
+				&(map_info.data_region),
+				&(map_info.data_size),
+				&(map_info.region_mappings),
+				&(map_info.client_base),
+				&(map_info.alternate_base),
+				&(map_info.alternate_next), 
+				&(map_info.fs_base),
+				&(map_info.system),
+				&(map_info.flags), &next);
+
+			   addr = map_info.client_base;
+			   vm_map(map, &addr, map_info.text_size, 
+				0, SHARED_LIB_ALIAS,
+				map_info.text_region, 0, FALSE,
+				VM_PROT_READ, VM_PROT_READ, VM_INHERIT_SHARE);
+			}
 		}
-		ret = load_dylinker(dlp, map, thr_act, depth, result);
+        if (dlp != 0) {
+            ret = load_dylinker(dlp, map, thr_act, 
+                        depth, result, clean_regions);
+        }
 	}
 
 	if (kl_addr )
@@ -467,9 +529,6 @@ load_segment(
 	caddr_t			tmp;
 	vm_prot_t 		initprot;
 	vm_prot_t		maxprot;
-#if 1
-	extern int print_map_addr;
-#endif /* 1 */
 
 	/*
 	 * Make sure what we get from the file is really ours (as specified
@@ -478,15 +537,15 @@ load_segment(
 	if (scp->fileoff + scp->filesize > macho_size)
 		return (LOAD_BADMACHO);
 
-	seg_size = round_page(scp->vmsize);
+	seg_size = round_page_32(scp->vmsize);
 	if (seg_size == 0)
 		return(KERN_SUCCESS);
 
 	/*
 	 *	Round sizes to page size.
 	 */
-	map_size = round_page(scp->filesize);
-	map_addr = trunc_page(scp->vmaddr);
+	map_size = round_page_32(scp->filesize);
+	map_addr = trunc_page_32(scp->vmaddr);
 
 	map_offset = pager_offset + scp->fileoff;
 
@@ -504,10 +563,6 @@ load_segment(
 		if (ret != KERN_SUCCESS)
 			return(LOAD_NOSPACE);
 	
-#if 1
-		if (print_map_addr)
-			printf("LSegment: Mapped addr= %x; size = %x\n", map_addr, map_size);
-#endif /* 1 */
 		/*
 		 *	If the file didn't end on a page boundary,
 		 *	we need to zero the leftover.
@@ -570,18 +625,16 @@ static
 load_return_t
 load_unixthread(
 	struct thread_command	*tcp,
-	thread_act_t		thr_act,
+	thread_act_t		thread,
 	load_result_t		*result
 )
 {
-	thread_t	thread = current_thread();
 	load_return_t	ret;
 	int customstack =0;
 	
 	if (result->thread_count != 0)
 		return (LOAD_FAILURE);
 	
-	thread = getshuttle_thread(thr_act);
 	ret = load_threadstack(thread,
 		       (unsigned long *)(((vm_offset_t)tcp) + 
 		       		sizeof(struct thread_command)),
@@ -620,25 +673,23 @@ static
 load_return_t
 load_thread(
 	struct thread_command	*tcp,
-	thread_act_t			thr_act,
+	thread_act_t			thread,
 	load_result_t		*result
 )
 {
-	thread_t	thread;
 	kern_return_t	kret;
 	load_return_t	lret;
 	task_t			task;
 	int customstack=0;
 
-	task = get_threadtask(thr_act);
-	thread = getshuttle_thread(thr_act);
+	task = get_threadtask(thread);
 
 	/* if count is 0; same as thr_act */
 	if (result->thread_count != 0) {
 		kret = thread_create(task, &thread);
 		if (kret != KERN_SUCCESS)
 			return(LOAD_RESOURCE);
-		thread_deallocate(thread);
+		act_deallocate(thread);
 	}
 
 	lret = load_threadstate(thread,
@@ -706,7 +757,7 @@ load_threadstate(
 		total_size -= (size+2)*sizeof(unsigned long);
 		if (total_size < 0)
 			return(LOAD_BADMACHO);
-		ret = thread_setstatus(getact_thread(thread), flavor, ts, size);
+		ret = thread_setstatus(thread, flavor, ts, size);
 		if (ret != KERN_SUCCESS)
 			return(LOAD_FAILURE);
 		ts += size;	/* ts is a (unsigned long *) */
@@ -783,7 +834,8 @@ load_dylinker(
 	vm_map_t		map,
 	thread_act_t	thr_act,
 	int			depth,
-	load_result_t		*result
+	load_result_t		*result,
+	boolean_t		clean_regions
 )
 {
 	char			*name;
@@ -798,6 +850,7 @@ load_dylinker(
 	vm_map_copy_t	tmp;
 	vm_offset_t	dyl_start, map_addr;
 	vm_size_t	dyl_length;
+	extern pmap_t pmap_create(vm_size_t   size); /* XXX */
 
 	name = (char *)lcp + lcp->name.offset;
 	/*
@@ -824,7 +877,7 @@ load_dylinker(
 
 	ret = parse_machfile(vp, copy_map, thr_act, &header,
 				file_offset, macho_size,
-				depth, &myresult);
+				depth, &myresult, clean_regions);
 
 	if (ret)
 		goto out;
@@ -898,7 +951,7 @@ get_macho_vnode(
 	struct proc *p = current_proc();		/* XXXX */
 	boolean_t		is_fat;
 	struct fat_arch		fat_arch;
-	int			error = KERN_SUCCESS;
+	int			error = LOAD_SUCCESS;
 	int resid;
 	union {
 		struct mach_header	mach_header;
@@ -907,6 +960,7 @@ get_macho_vnode(
 	} header;
 	off_t fsize = (off_t)0;
 	struct	ucred *cred = p->p_ucred;
+	int err2;
 	
 	ndp = &nid;
 	atp = &attr;
@@ -914,24 +968,31 @@ get_macho_vnode(
 	/* init the namei data to point the file user's program name */
 	NDINIT(ndp, LOOKUP, FOLLOW | LOCKLEAF, UIO_SYSSPACE, path, p);
 
-	if (error = namei(ndp))
+	if (error = namei(ndp)) {
+		if (error == ENOENT)
+			error = LOAD_ENOENT;
+		else
+			error = LOAD_FAILURE;
 		return(error);
+	}
 	
 	vp = ndp->ni_vp;
 	
 	/* check for regular file */
 	if (vp->v_type != VREG) {
-		error = EACCES;
+		error = LOAD_PROTECT;
 		goto bad1;
 	}
 
 	/* get attributes */
-	if (error = VOP_GETATTR(vp, &attr, cred, p))
+	if (error = VOP_GETATTR(vp, &attr, cred, p)) {
+		error = LOAD_FAILURE;
 		goto bad1;
+	}
 
 	/* Check mount point */
 	if (vp->v_mount->mnt_flag & MNT_NOEXEC) {
-		error = EACCES;
+		error = LOAD_PROTECT;
 		goto bad1;
 	}
 
@@ -939,28 +1000,33 @@ get_macho_vnode(
 		atp->va_mode &= ~(VSUID | VSGID);
 
 	/* check access.  for root we have to see if any exec bit on */
-	if (error = VOP_ACCESS(vp, VEXEC, cred, p))
+	if (error = VOP_ACCESS(vp, VEXEC, cred, p)) {
+		error = LOAD_PROTECT;
 		goto bad1;
+	}
 	if ((atp->va_mode & (S_IXUSR | S_IXGRP | S_IXOTH)) == 0) {
-		error = EACCES;
+		error = LOAD_PROTECT;
 		goto bad1;
 	}
 
 	/* hold the vnode for the IO */
 	if (UBCINFOEXISTS(vp) && !ubc_hold(vp)) {
-		error = ENOENT;
+		error = LOAD_ENOENT;
 		goto bad1;
 	}
 
 	/* try to open it */
 	if (error = VOP_OPEN(vp, FREAD, cred, p)) {
+		error = LOAD_PROTECT;
 		ubc_rele(vp);
 		goto bad1;
 	}
 
 	if(error = vn_rdwr(UIO_READ, vp, (caddr_t)&header, sizeof(header), 0,
-	    UIO_SYSSPACE, IO_NODELOCKED, cred, &resid, p))
+	    UIO_SYSSPACE, IO_NODELOCKED, cred, &resid, p)) {
+		error = LOAD_IOERROR;
 		goto bad2;
+	}
 	
 	if (header.mach_header.magic == MH_MAGIC)
 	    is_fat = FALSE;
@@ -979,11 +1045,11 @@ get_macho_vnode(
 			goto bad2;
 
 		/* Read the Mach-O header out of it */
-		error = vn_rdwr(UIO_READ, vp, &header.mach_header,
+		error = vn_rdwr(UIO_READ, vp, (caddr_t)&header.mach_header,
 				sizeof(header.mach_header), fat_arch.offset,
 				UIO_SYSSPACE, IO_NODELOCKED, cred, &resid, p);
 		if (error) {
-			error = LOAD_FAILURE;
+			error = LOAD_IOERROR;
 			goto bad2;
 		}
 
@@ -1012,7 +1078,7 @@ get_macho_vnode(
 
 bad2:
 	VOP_UNLOCK(vp, 0, p);
-	error = VOP_CLOSE(vp, FREAD, cred, p);
+	err2 = VOP_CLOSE(vp, FREAD, cred, p);
 	ubc_rele(vp);
 	vrele(vp);
 	return (error);

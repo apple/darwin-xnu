@@ -2,6 +2,7 @@
 
 OPTIONS/libkerncpp					optional libkerncpp
 OPTIONS/kdebug						optional kdebug
+OPTIONS/gprof						optional gprof
 
 # libkern
 

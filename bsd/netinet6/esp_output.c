@@ -1,5 +1,5 @@
-/*	$FreeBSD: src/sys/netinet6/esp_output.c,v 1.1.2.2 2001/07/03 11:01:50 ume Exp $	*/
-/*	$KAME: esp_output.c,v 1.43 2001/03/01 07:10:45 itojun Exp $	*/
+/*	$FreeBSD: src/sys/netinet6/esp_output.c,v 1.1.2.3 2002/04/28 05:40:26 suz Exp $	*/
+/*	$KAME: esp_output.c,v 1.44 2001/07/26 06:53:15 jinmei Exp $	*/
 
 /*
  * Copyright (C) 1995, 1996, 1997, and 1998 WIDE Project.
@@ -56,6 +56,7 @@
 #include <netinet/in_systm.h>
 #include <netinet/ip.h>
 #include <netinet/in_var.h>
+#include <netinet/udp.h> /* for nat traversal */
 
 #if INET6
 #include <netinet/ip6.h>
@@ -80,8 +81,17 @@
 
 #include <net/net_osdep.h>
 
+#include <sys/kdebug.h>
+#define DBG_LAYER_BEG		NETDBG_CODE(DBG_NETIPSEC, 1)
+#define DBG_LAYER_END		NETDBG_CODE(DBG_NETIPSEC, 3)
+#define DBG_FNC_ESPOUT		NETDBG_CODE(DBG_NETIPSEC, (4 << 8))
+#define DBG_FNC_ENCRYPT		NETDBG_CODE(DBG_NETIPSEC, (5 << 8))
+
 static int esp_output __P((struct mbuf *, u_char *, struct mbuf *,
 	struct ipsecrequest *, int));
+
+extern int	esp_udp_encap_port;
+extern u_int32_t natt_now;
 
 /*
  * compute ESP header size.
@@ -96,6 +106,7 @@ esp_hdrsiz(isr)
 	size_t ivlen;
 	size_t authlen;
 	size_t hdrsiz;
+	size_t maxpad;
 
 	/* sanity check */
 	if (isr == NULL)
@@ -120,16 +131,15 @@ esp_hdrsiz(isr)
 	if (ivlen < 0)
 		goto estimate;
 
-	/*
-	 * XXX
-	 * right now we don't calcurate the padding size.  simply
-	 * treat the padding size as constant, for simplicity.
-	 *
-	 * XXX variable size padding support
-	 */
+	if (algo->padbound)
+		maxpad = algo->padbound;
+	else
+		maxpad = 4;
+	maxpad += 1; /* maximum 'extendsiz' is padbound + 1, see esp_output */
+	
 	if (sav->flags & SADB_X_EXT_OLD) {
 		/* RFC 1827 */
-		hdrsiz = sizeof(struct esp) + ivlen + 9;
+		hdrsiz = sizeof(struct esp) + ivlen + maxpad;
 	} else {
 		/* RFC 2406 */
 		aalgo = ah_algorithm_lookup(sav->alg_auth);
@@ -137,21 +147,28 @@ esp_hdrsiz(isr)
 			authlen = (aalgo->sumsiz)(sav);
 		else
 			authlen = 0;
-		hdrsiz = sizeof(struct newesp) + ivlen + 9 + authlen;
+		hdrsiz = sizeof(struct newesp) + ivlen + maxpad + authlen;
 	}
+	
+	/*
+	 * If the security association indicates that NATT is required,
+	 * add the size of the NATT encapsulation header:
+	 */
+	if ((sav->flags & SADB_X_EXT_NATT) != 0) hdrsiz += sizeof(struct udphdr) + 4;
 
 	return hdrsiz;
 
    estimate:
 	/*
 	 * ASSUMING:
-	 *	sizeof(struct newesp) > sizeof(struct esp).
+	 *	sizeof(struct newesp) > sizeof(struct esp). (8)
 	 *	esp_max_ivlen() = max ivlen for CBC mode
-	 *	9 = (maximum padding length without random padding length)
+	 *	17 = (maximum padding length without random padding length)
 	 *	   + (Pad Length field) + (Next Header field).
 	 *	16 = maximum ICV we support.
+	 *  sizeof(struct udphdr) in case NAT traversal is used
 	 */
-	return sizeof(struct newesp) + esp_max_ivlen() + 9 + 16;
+	return sizeof(struct newesp) + esp_max_ivlen() + 17 + 16 + sizeof(struct udphdr);
 }
 
 /*
@@ -197,7 +214,11 @@ esp_output(m, nexthdrp, md, isr, af)
 	size_t extendsiz;
 	int error = 0;
 	struct ipsecstat *stat;
+	struct udphdr *udp = NULL;
+	int	udp_encapsulate = (sav->flags & SADB_X_EXT_NATT && af == AF_INET &&
+			(esp_udp_encap_port & 0xFFFF) != 0);
 
+	KERNEL_DEBUG(DBG_FNC_ESPOUT | DBG_FUNC_START, sav->ivlen,0,0,0,0);
 	switch (af) {
 #if INET
 	case AF_INET:
@@ -213,6 +234,7 @@ esp_output(m, nexthdrp, md, isr, af)
 #endif
 	default:
 		ipseclog((LOG_ERR, "esp_output: unsupported af %d\n", af));
+		KERNEL_DEBUG(DBG_FNC_ESPOUT | DBG_FUNC_END, 1,0,0,0,0);
 		return 0;	/* no change at all */
 	}
 
@@ -246,6 +268,7 @@ esp_output(m, nexthdrp, md, isr, af)
 			panic("esp_output: should not reach here");
 		}
 		m_freem(m);
+		KERNEL_DEBUG(DBG_FNC_ESPOUT | DBG_FUNC_END, 2,0,0,0,0);
 		return EINVAL;
 	}
 
@@ -254,6 +277,7 @@ esp_output(m, nexthdrp, md, isr, af)
 		ipseclog((LOG_ERR, "esp_output: unsupported algorithm: "
 		    "SPI=%u\n", (u_int32_t)ntohl(sav->spi)));
 		m_freem(m);
+		KERNEL_DEBUG(DBG_FNC_ESPOUT | DBG_FUNC_END, 3,0,0,0,0);
 		return EINVAL;
 	}
 	spi = sav->spi;
@@ -276,9 +300,9 @@ esp_output(m, nexthdrp, md, isr, af)
 #if INET6
 	struct ip6_hdr *ip6 = NULL;
 #endif
-	size_t esplen;	/*sizeof(struct esp/newesp)*/
-	size_t esphlen;	/*sizeof(struct esp/newesp) + ivlen*/
-	size_t hlen = 0;	/*ip header len*/
+	size_t esplen;	/* sizeof(struct esp/newesp) */
+	size_t esphlen;	/* sizeof(struct esp/newesp) + ivlen */
+	size_t hlen = 0;	/* ip header len */
 
 	if (sav->flags & SADB_X_EXT_OLD) {
 		/* RFC 1827 */
@@ -298,6 +322,7 @@ esp_output(m, nexthdrp, md, isr, af)
 		ipseclog((LOG_DEBUG, "esp%d_output: md is not in chain\n",
 		    afnumber));
 		m_freem(m);
+		KERNEL_DEBUG(DBG_FNC_ESPOUT | DBG_FUNC_END, 4,0,0,0,0);
 		return EINVAL;
 	}
 
@@ -334,11 +359,16 @@ esp_output(m, nexthdrp, md, isr, af)
 	mprev->m_next = md;
 
 	espoff = m->m_pkthdr.len - plen;
+	
+	if (udp_encapsulate) {
+		esphlen += sizeof(struct udphdr);
+		espoff += sizeof(struct udphdr);
+	}
 
 	/*
 	 * grow the mbuf to accomodate ESP header.
 	 * before: IP ... payload
-	 * after:  IP ... ESP IV payload
+	 * after:  IP ... [UDP] ESP IV payload
 	 */
 	if (M_LEADINGSPACE(md) < esphlen || (md->m_flags & M_EXT) != 0) {
 		MGET(n, M_DONTWAIT, MT_DATA);
@@ -351,16 +381,25 @@ esp_output(m, nexthdrp, md, isr, af)
 		mprev->m_next = n;
 		n->m_next = md;
 		m->m_pkthdr.len += esphlen;
-		esp = mtod(n, struct esp *);
+		if (udp_encapsulate) {
+			udp = mtod(n, struct udphdr *);
+			esp = (struct esp *)((caddr_t)udp + sizeof(struct udphdr));
+		} else {
+			esp = mtod(n, struct esp *);
+		}
 	} else {
 		md->m_len += esphlen;
 		md->m_data -= esphlen;
 		m->m_pkthdr.len += esphlen;
 		esp = mtod(md, struct esp *);
+		if (udp_encapsulate) {
+			udp = mtod(md, struct udphdr *);
+			esp = (struct esp *)((caddr_t)udp + sizeof(struct udphdr));
+		} else {
+			esp = mtod(md, struct esp *);
+		}
 	}
 	
-	nxt = *nexthdrp;
-	*nexthdrp = IPPROTO_ESP;
 	switch (af) {
 #if INET
 	case AF_INET:
@@ -397,6 +436,7 @@ esp_output(m, nexthdrp, md, isr, af)
 				    ipsec_logsastr(sav)));
 				stat->out_inval++;
 				m_freem(m);
+				KERNEL_DEBUG(DBG_FNC_ESPOUT | DBG_FUNC_END, 5,0,0,0,0);
 				return EINVAL;
 			}
 		}
@@ -523,6 +563,22 @@ esp_output(m, nexthdrp, md, isr, af)
 			extend[i] = (i + 1) & 0xff;
 		break;
 	}
+	
+	nxt = *nexthdrp;
+	if (udp_encapsulate) {
+		*nexthdrp = IPPROTO_UDP;
+
+		/* Fill out the UDP header */
+		udp->uh_sport = ntohs((u_short)esp_udp_encap_port);
+		udp->uh_dport = ntohs(sav->remote_ike_port);
+//		udp->uh_len set later, after all length tweaks are complete
+		udp->uh_sum = 0;
+		
+		/* Update last sent so we know if we need to send keepalive */
+		sav->natt_last_activity = natt_now;
+	} else {
+		*nexthdrp = IPPROTO_ESP;
+	}
 
 	/* initialize esp trailer. */
 	esptail = (struct esptail *)
@@ -571,13 +627,16 @@ esp_output(m, nexthdrp, md, isr, af)
 	 */
 	if (!algo->encrypt)
 		panic("internal error: no encrypt function");
+	KERNEL_DEBUG(DBG_FNC_ENCRYPT | DBG_FUNC_START, 0,0,0,0,0);
 	if ((*algo->encrypt)(m, espoff, plen + extendsiz, sav, algo, ivlen)) {
 		/* m is already freed */
 		ipseclog((LOG_ERR, "packet encryption failure\n"));
 		stat->out_inval++;
 		error = EINVAL;
+		KERNEL_DEBUG(DBG_FNC_ENCRYPT | DBG_FUNC_END, 1,error,0,0,0);
 		goto fail;
 	}
+	KERNEL_DEBUG(DBG_FNC_ENCRYPT | DBG_FUNC_END, 2,0,0,0,0);
 
 	/*
 	 * calculate ICV if required.
@@ -618,7 +677,7 @@ esp_output(m, nexthdrp, md, isr, af)
 	while (n->m_next)
 		n = n->m_next;
 
-	if (!(n->m_flags & M_EXT) && siz < M_TRAILINGSPACE(n)) {	/*XXX*/
+	if (!(n->m_flags & M_EXT) && siz < M_TRAILINGSPACE(n)) { /* XXX */
 		n->m_len += siz;
 		m->m_pkthdr.len += siz;
 		p = mtod(n, u_char *) + n->m_len - siz;
@@ -666,6 +725,13 @@ esp_output(m, nexthdrp, md, isr, af)
 #endif
 	}
     }
+    
+	if (udp_encapsulate) {
+		struct ip *ip;
+		ip = mtod(m, struct ip *);
+		udp->uh_ulen = htons(ntohs(ip->ip_len) - (IP_VHL_HL(ip->ip_vhl) << 2));
+	}
+
 
 noantireplay:
 	if (!m) {
@@ -675,10 +741,12 @@ noantireplay:
 		stat->out_success++;
 	stat->out_esphist[sav->alg_enc]++;
 	key_sa_recordxfer(sav, m);
+	KERNEL_DEBUG(DBG_FNC_ESPOUT | DBG_FUNC_END, 6,0,0,0,0);
 	return 0;
 
 fail:
 #if 1
+	KERNEL_DEBUG(DBG_FNC_ESPOUT | DBG_FUNC_END, 7,error,0,0,0);
 	return error;
 #else
 	panic("something bad in esp_output");

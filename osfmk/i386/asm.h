@@ -85,7 +85,7 @@
 
 /* There is another definition of ALIGN for .c sources */
 #ifdef ASSEMBLER
-#define ALIGN 2
+#define ALIGN 2,0x90
 #endif /* ASSEMBLER */
 
 #ifndef FALIGN
@@ -158,7 +158,7 @@
 			.align ALIGN;\
 			LBc(x, 8) .long 0;\
 			.text;\
-			movl $LBb(x,8),%edx;\
+			movl LBb(x,8),%edx;\
 			call *EXT(_mcount_ptr);
 
 #endif /* GPROF */

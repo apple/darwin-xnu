@@ -27,7 +27,7 @@
 #include <pexpert/device_tree.h>
 
 /* External declarations */
-unsigned int LockTimeOut = 12500000; /* XXX - Need real value for i386 */
+unsigned int LockTimeOut = 1250000000; /* XXX - Need real value for i386 */
 
 /* Local declarations */
 void pe_identify_machine(boot_args *args);

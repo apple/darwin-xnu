@@ -57,7 +57,7 @@ void IOEventSource::wakeupGate(void *event, bool oneThread)
         { workLoop->wakeupGate(event, oneThread); }
 
 bool IOEventSource::init(OSObject *inOwner,
-                         Action inAction = 0)
+                         Action inAction)
 {
     if (!inOwner)
         return false;

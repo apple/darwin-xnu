@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1999-2002 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 1999-2003 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -274,16 +274,15 @@ notfound:
 			retval = EJUSTRETURN;
 			goto exit;
 		}
-	
+
 		/*
 		 * Insert name into cache (as non-existent) if appropriate.
 		 *
-		 * Disable negative caching since HFS is case-insensitive.
+		 * Only done for case-sensitive HFS+ volumes.
 		 */
-#if 0
-		if ((cnp->cn_flags & MAKEENTRY) && nameiop != CREATE)
+		if ((hfsmp->hfs_flags & HFS_CASE_SENSITIVE) &&
+		    (cnp->cn_flags & MAKEENTRY) && nameiop != CREATE)
 			cache_enter(dvp, *vpp, cnp);
-#endif
 		retval = ENOENT;
 		goto exit;
 	}
@@ -456,6 +455,34 @@ found:
 		cache_enter(dvp, *vpp, cnp);
 	}
 
+
+	//
+	// have to patch up the resource fork name because
+	// it won't happen properly in the layers above us.
+	//
+	if (wantrsrc) {
+	    if (VTOC(*vpp)->c_vp == NULL) {
+		if (VNAME(*vpp) == NULL) {
+		    VNAME(*vpp) = add_name(cnp->cn_nameptr, cnp->cn_namelen, cnp->cn_hash, 0);
+		}
+		if (VPARENT(*vpp) == NULL) {
+		    vget(dvp, 0, p);
+		    VPARENT(*vpp) = dvp;
+		}
+	    } else {
+		if (VNAME(*vpp) == NULL) {
+		    // the +1/-2 thing is to skip the leading "/" on the rsrc fork spec
+		    // and to not count the trailing null byte at the end of the string.
+		    VNAME(*vpp) = add_name(_PATH_RSRCFORKSPEC+1, sizeof(_PATH_RSRCFORKSPEC)-2, 0, 0);
+		}
+		if (VPARENT(*vpp) == NULL && *vpp != VTOC(*vpp)->c_vp) {
+		    VPARENT(*vpp) = VTOC(*vpp)->c_vp;
+		    VTOC(*vpp)->c_flag |= C_VPREFHELD;
+		    vget(VTOC(*vpp)->c_vp, 0, p);
+		}
+	    }
+	}
+
 exit:
 	cat_releasedesc(&desc);
 	return (retval);
@@ -483,6 +510,8 @@ exit:
  *
  */
 
+#define	S_IXALL	0000111
+
 __private_extern__
 int
 hfs_cache_lookup(ap)
@@ -495,16 +524,15 @@ hfs_cache_lookup(ap)
 	struct vnode *dvp;
 	struct vnode *vp;
 	struct cnode *cp;
+	struct cnode *dcp;
 	int lockparent; 
 	int error;
 	struct vnode **vpp = ap->a_vpp;
 	struct componentname *cnp = ap->a_cnp;
-	struct ucred *cred = cnp->cn_cred;
 	int flags = cnp->cn_flags;
 	struct proc *p = cnp->cn_proc;
 	u_long vpid;	/* capability number of vnode */
 
-	*vpp = NULL;
 	dvp = ap->a_dvp;
 	lockparent = flags & LOCKPARENT;
 
@@ -514,11 +542,17 @@ hfs_cache_lookup(ap)
 	if (dvp->v_type != VDIR)
 		return (ENOTDIR);
 	if ((flags & ISLASTCN) && (dvp->v_mount->mnt_flag & MNT_RDONLY) &&
-	    (cnp->cn_nameiop == DELETE || cnp->cn_nameiop == RENAME))
-		return (EROFS);
-	if ((error = VOP_ACCESS(dvp, VEXEC, cred, cnp->cn_proc)))
-		return (error);
+	    (cnp->cn_nameiop == DELETE || cnp->cn_nameiop == RENAME)) {
+		error = EROFS;
+		goto err_exit;
+	}
+	dcp = VTOC(dvp);
 
+	if (((dcp->c_mode & S_IXALL) != S_IXALL) && (cnp->cn_cred->cr_uid != 0)) {
+		if ((error = VOP_ACCESS(dvp, VEXEC, cnp->cn_cred, p))) {
+			goto err_exit;
+		}
+	}
 	/*
 	 * Lookup an entry in the cache
 	 * If the lookup succeeds, the vnode is returned in *vpp, and a status of -1 is
@@ -527,14 +561,15 @@ hfs_cache_lookup(ap)
 	 * fails, a status of zero is returned.
 	 */
 	error = cache_lookup(dvp, vpp, cnp);
-	if (error == 0)  {		/* Unsuccessfull */
-		error = hfs_lookup(ap);
-		return (error);
+	if (error != -1) {
+		if (error == 0)  {		/* Unsuccessfull */
+			goto lookup;
+		}
+		
+		if (error == ENOENT) {
+			goto err_exit;
+		}
 	}
-	
-	if (error == ENOENT)
-		return (error);
-	
 	/* We have a name that matched */
 	vp = *vpp;
 	vpid = vp->v_id;
@@ -583,20 +618,51 @@ hfs_cache_lookup(ap)
 			int wantrsrc = 0;
 
 			cnp->cn_consume = forkcomponent(cnp, &wantrsrc);
-			
-			/* Fork names are only for lookups */
-			if (cnp->cn_consume &&
-			    (cnp->cn_nameiop != LOOKUP && cnp->cn_nameiop != CREATE))
-				return (EPERM);
-			/* 
-			 * We only store data forks in the name cache.
-			 */				 
-			if (wantrsrc)
-				return (hfs_lookup(ap));
+			if (cnp->cn_consume) {
+				flags |= ISLASTCN;
+				/* Fork names are only for lookups */
+				if (cnp->cn_nameiop != LOOKUP &&
+				    cnp->cn_nameiop != CREATE) {
+					error = EPERM;
+
+					goto err_exit;
+				}
+			}
+
+			if (wantrsrc) {
+				/* Use cnode's rsrcfork vnode (if available) */
+				if (cp->c_rsrc_vp != NULL) {
+					*vpp = vp = cp->c_rsrc_vp;
+					if (VNAME(vp) == NULL) {
+					    // the +1/-2 thing is to skip the leading "/" on the rsrc fork spec
+					    // and to not count the trailing null byte at the end of the string.
+					    VNAME(vp) = add_name(_PATH_RSRCFORKSPEC+1, sizeof(_PATH_RSRCFORKSPEC)-2, 0, 0);
+					}
+					if (VPARENT(vp) == NULL) {
+					    vget(cp->c_vp, 0, p);
+					    VPARENT(vp) = cp->c_vp;
+					}
+					vpid = vp->v_id;
+				} else {
+					goto lookup;
+				}
+			}
 		}
-		error = vget(vp, LK_EXCLUSIVE, p);
-		if (!lockparent || error || !(flags & ISLASTCN))
-			VOP_UNLOCK(dvp, 0, p);
+		error = vget(vp, 0, p);
+		if (error == 0) {
+			if (VTOC(vp) == NULL || vp->v_data != (void *)cp) {
+				panic("hfs: cache lookup: my cnode disappeared/went bad! vp 0x%x 0x%x 0x%x\n",
+					  vp, vp->v_data, cp);
+			}
+			if (cnp->cn_nameiop == LOOKUP &&
+			    (!(flags & ISLASTCN) || (flags & SHAREDLEAF)))
+				error = lockmgr(&VTOC(vp)->c_lock, LK_SHARED, NULL, p);
+			else
+				error = lockmgr(&VTOC(vp)->c_lock, LK_EXCLUSIVE, NULL, p);
+		}
+		if (!lockparent || error || !(flags & ISLASTCN)) {
+			(void) lockmgr(&dcp->c_lock, LK_RELEASE, NULL, p);
+		}
 	}
 	/*
 	 * Check that the capability number did not change
@@ -616,8 +682,12 @@ hfs_cache_lookup(ap)
 
 	if ((error = vn_lock(dvp, LK_EXCLUSIVE, p)))
 		return (error);
-
+lookup:
 	return (hfs_lookup(ap));
+
+err_exit:
+	*vpp = NULL;
+	return (error);
 }
 
 

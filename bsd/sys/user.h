@@ -78,6 +78,7 @@
 #ifdef KERNEL
 
 #ifdef __APPLE_API_PRIVATE
+struct nlminfo;
 /*
  *	Per-thread U area.
  */
@@ -92,7 +93,7 @@ struct uthread {
 	/* thread exception handling */
 	int	uu_code;			/* ``code'' to trap */
 	char uu_cursig;				/* p_cursig for exc. */
-	int  XXX_dummy;				/* NOT USED LEFT FOR COMPATIBILITY. */
+	struct nlminfo *uu_nlminfo;	/* for rpc.lockd */
 	/* support for syscalls which use continuations */
 	union {
 		struct _select {
@@ -134,6 +135,9 @@ struct uthread {
 	sigset_t  uu_vforkmask;				/* saved signal mask during vfork */
 
 	TAILQ_ENTRY(uthread) uu_list;		/* List of uthreads in proc */
+
+	struct kaudit_record 		*uu_ar;		/* audit record */
+	struct task*	uu_aio_task;			/* target task for async io */
 };
 
 typedef struct uthread * uthread_t;

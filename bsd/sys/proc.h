@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2002 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2003 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -72,6 +72,8 @@
 #include <sys/queue.h>
 #include <sys/lock.h>
 #include <sys/param.h>
+#include <sys/event.h>
+#include <sys/audit.h>
 
 #ifdef __APPLE_API_PRIVATE
 
@@ -144,7 +146,8 @@ struct	proc {
 	fixpt_t	p_pctcpu;	 /* %cpu for this process during p_swtime */
 	void	*p_wchan;	 /* Sleep address. */
 	char	*p_wmesg;	 /* Reason for sleep. */
-	u_int	p_swtime;	 /* Time swapped in or out. */
+	u_int	p_swtime;	 /* DEPRECATED (Time swapped in or out.) */
+#define	p_argslen p_swtime	 /* Length of process arguments. */
 	u_int	p_slptime;	 /* Time since last blocked. */
 
 	struct	itimerval p_realtimer;	/* Alarm timer. */
@@ -168,7 +171,7 @@ struct	proc {
 	 * Belongs after p_pid, but here to avoid shifting proc elements.
 	 */
 	LIST_ENTRY(proc) p_hash;	/* Hash chain. */
-        TAILQ_HEAD( ,eventqelt) p_evlist;
+	TAILQ_HEAD( ,eventqelt) p_evlist;
 
 /* The following fields are all copied upon creation in fork. */
 #define	p_startcopy	p_sigmask
@@ -201,7 +204,7 @@ struct	proc {
 	caddr_t	user_stack;		/* where user stack was allocated */
 	void * exitarg;			/* exit arg for proc terminate */
 	void * vm_shm;			/* for sysV shared memory */
-	sigset_t p_xxxsigpending;	/* DEPRECATED . */
+	int  p_argc;			/* saved argc for sysctl_procargs() */
 	int		p_vforkcnt;		/* number of outstanding vforks */
     void *  p_vforkact;     /* activation running this vfork proc */
 	TAILQ_HEAD( , uthread) p_uthlist; /* List of uthreads  */
@@ -210,6 +213,13 @@ struct	proc {
 	u_short si_status;
 	u_short	si_code;
 	uid_t	si_uid;
+	TAILQ_HEAD( , aio_workq_entry ) aio_activeq; /* active async IO requests */
+	int		aio_active_count;	/* entries on aio_activeq */
+	TAILQ_HEAD( , aio_workq_entry ) aio_doneq;	 /* completed async IO requests */
+	int		aio_done_count;		/* entries on aio_doneq */
+
+	struct klist p_klist;  /* knote list */
+	struct  auditinfo		*p_au;	/* User auditing data */
 #if DIAGNOSTIC
 #if SIGNAL_DEBUG
 	unsigned int lockpc[8];
@@ -218,11 +228,11 @@ struct	proc {
 #endif /* DIAGNOSTIC */
 };
 
-#else /* __APPLE_API_PRIVATE */
+#else /* !__APPLE_API_PRIVATE */
 struct session;
 struct pgrp;
 struct proc;
-#endif /* __APPLE_API_PRIVATE */
+#endif /* !__APPLE_API_PRIVATE */
 
 #ifdef __APPLE_API_UNSTABLE
 /* Exported fields for kern sysctls */
@@ -311,9 +321,12 @@ struct extern_proc {
 /* Should be moved to machine-dependent areas. */
 #define	P_OWEUPC	0x08000	/* Owe process an addupc() call at next ast. */
 
-/* XXX Not sure what to do with these, yet. */
-#define	P_FSTRACE	0x10000	/* tracing via file system (elsewhere?) */
-#define	P_SSTEP		0x20000	/* process needs single-step fixup ??? */
+#define	P_AFFINITY	0x0010000	/* xxx */
+#define	P_CLASSIC	0x0020000	/* xxx */
+/*
+#define	P_FSTRACE	  0x10000	/ * tracing via file system (elsewhere?) * /
+#define	P_SSTEP		  0x20000	/ * process needs single-step fixup ??? * /
+*/
 
 #define	P_WAITING	0x0040000	/* process has a wait() in progress */
 #define	P_KDEBUG	0x0080000	/* kdebug tracing is on for this process */
@@ -329,9 +342,12 @@ struct extern_proc {
 					/* flag set on exec */
 #define	P_FORCEQUOTA	0x20000000	/* Force quota for root */
 #define	P_NOCLDWAIT	0x40000000	/* No zombies when chil procs exit */
+#define	P_NOREMOTEHANG	0x80000000	/* Don't hang on remote FS ops */
 
 #define	P_NOSWAP	0		/* Obsolete: retained so that nothing breaks */
-#define	P_PHYSIO	0		/*  Obsolete: retained so that nothing breaks */
+#define	P_PHYSIO	0		/* Obsolete: retained so that nothing breaks */
+#define	P_FSTRACE	0		/* Obsolete: retained so that nothing breaks */
+#define	P_SSTEP		0		/* Obsolete: retained so that nothing breaks */
 
 /*
  * Shareable process credentials (always resident).  This includes a reference
@@ -365,6 +381,7 @@ __BEGIN_DECLS
  * as it is used to represent "no process group".
  */
 extern int nprocs, maxproc;		/* Current and max number of procs. */
+__private_extern__ int hard_maxproc;	/* hard limit */
 
 #define	PID_MAX		30000
 #define	NO_PID		30001
@@ -393,6 +410,7 @@ extern void	procinit __P((void));
 #ifdef __APPLE_API_UNSTABLE
 
 extern struct	proc *pfind __P((pid_t));	/* Find process by id. */
+__private_extern__ struct proc *pzfind(pid_t);	/* Find zombie by id. */
 extern struct	pgrp *pgfind __P((pid_t));	/* Find process group by id. */
 
 extern int	chgproccnt __P((uid_t uid, int diff));

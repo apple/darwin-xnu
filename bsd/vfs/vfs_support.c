@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2002 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -738,8 +738,13 @@ struct vop_abortop_args /* {
 int
 nop_abortop(struct vop_abortop_args *ap)
 {
-	if ((ap->a_cnp->cn_flags & (HASBUF | SAVESTART)) == HASBUF)
-		FREE_ZONE(ap->a_cnp->cn_pnbuf, ap->a_cnp->cn_pnlen, M_NAMEI);
+	if ((ap->a_cnp->cn_flags & (HASBUF | SAVESTART)) == HASBUF) {
+		char *tmp = ap->a_cnp->cn_pnbuf;
+		ap->a_cnp->cn_pnbuf = NULL;
+		ap->a_cnp->cn_flags &= ~HASBUF;
+		FREE_ZONE(tmp, ap->a_cnp->cn_pnlen, M_NAMEI);
+	}
+
 	return (0);
 }
 

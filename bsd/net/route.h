@@ -145,7 +145,7 @@ struct rtentry {
 				  struct sockaddr *, struct rtentry *));
 					/* output routine for this (rt,if) */
 	struct	rtentry *rt_parent; 	/* cloning parent of this route */
-	void	*rt_filler2;		/* more filler */
+	u_long	generation_id;		/* route generation id */
 };
 #endif /* __APPLE_API_UNSTABLE */
 
@@ -240,6 +240,9 @@ struct rt_msghdr {
 #define RTM_IFINFO	0xe	/* iface going up/down etc. */
 #define	RTM_NEWMADDR	0xf	/* mcast group membership being added to if */
 #define	RTM_DELMADDR	0x10	/* mcast group membership being deleted */
+#ifdef KERNEL_PRIVATE
+#define RTM_GET_SILENT	0x11
+#endif
 
 /*
  * Bitmask values for rtm_inits and rmx_locks.

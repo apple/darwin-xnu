@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2002 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -151,6 +151,7 @@ struct osmmap_args {
 		long	pos;
 };
 
+int
 osmmap(curp, uap, retval)
 	struct proc *curp;
 	register struct osmmap_args *uap;
@@ -246,7 +247,7 @@ mmap(p, uap, retval)
 
 	/* Adjust size for rounding (on both ends). */
 	user_size += pageoff;			/* low end... */
-	user_size = (vm_size_t) round_page(user_size);	/* hi end */
+	user_size = (vm_size_t) round_page_32(user_size);	/* hi end */
 
 
 	/*
@@ -280,8 +281,8 @@ mmap(p, uap, retval)
 	 * There should really be a pmap call to determine a reasonable
 	 * location.
 	 */
-	else if (addr < round_page(p->p_vmspace->vm_daddr + MAXDSIZ))
-		addr = round_page(p->p_vmspace->vm_daddr + MAXDSIZ);
+	else if (addr < round_page_32(p->p_vmspace->vm_daddr + MAXDSIZ))
+		addr = round_page_32(p->p_vmspace->vm_daddr + MAXDSIZ);
 
 #endif
 
@@ -303,7 +304,7 @@ mmap(p, uap, retval)
 		if (err)
 			return(err);
 		if(fp->f_type == DTYPE_PSXSHM) {
-			uap->addr = user_addr;
+			uap->addr = (caddr_t)user_addr;
 			uap->len = user_size;
 			uap->prot = prot;
 			uap->flags = flags;
@@ -322,7 +323,7 @@ mmap(p, uap, retval)
 		 * SunOS).
 		 */
 		if (vp->v_type == VCHR || vp->v_type == VSTR) {
-			return(EOPNOTSUPP);
+			return(ENODEV);
 		} else {
 			/*
 			 * Ensure that file and memory protections are
@@ -374,7 +375,7 @@ mmap(p, uap, retval)
 	 *	We bend a little - round the start and end addresses
 	 *	to the nearest page boundary.
 	 */
-	user_size = round_page(user_size);
+	user_size = round_page_32(user_size);
 
 	if (file_pos & PAGE_MASK_64)
 		return (EINVAL);
@@ -383,9 +384,9 @@ mmap(p, uap, retval)
 
 	if ((flags & MAP_FIXED) == 0) {
 		find_space = TRUE;
-		user_addr = round_page(user_addr); 
+		user_addr = round_page_32(user_addr); 
 	} else {
-		if (user_addr != trunc_page(user_addr))
+		if (user_addr != trunc_page_32(user_addr))
 			return (EINVAL);
 		find_space = FALSE;
 		(void) vm_deallocate(user_map, user_addr, user_size);
@@ -419,9 +420,16 @@ mmap(p, uap, retval)
 		if (result != KERN_SUCCESS) 
 				goto out;
 		
+		result = vm_protect(user_map, user_addr, user_size, TRUE, maxprot);
+		if (result != KERN_SUCCESS) 
+				goto out;
+		result = vm_protect(user_map, user_addr, user_size, FALSE, prot);
+		if (result != KERN_SUCCESS) 
+				goto out;
+
 	} else {
 		UBCINFOCHECK("mmap", vp);
-		pager = ubc_getpager(vp);
+		pager = (vm_pager_t)ubc_getpager(vp);
 		
 		if (pager == NULL)
 			return (ENOMEM);
@@ -461,7 +469,7 @@ mmap(p, uap, retval)
 		ubc_map(vp);
 	}
 
-	if (flags & (MAP_SHARED|MAP_INHERIT)) {
+	if (flags & MAP_SHARED) {
 		result = vm_inherit(user_map, user_addr, user_size,
 				VM_INHERIT_SHARE);
 		if (result != KERN_SUCCESS) {
@@ -510,13 +518,16 @@ msync(p, uap, retval)
 	pageoff = (addr & PAGE_MASK);
 	addr -= pageoff;
 	size = uap->len;
-	size = (vm_size_t) round_page(size);
+	size = (vm_size_t) round_page_32(size);
 	flags = uap->flags;
 
 	if (addr + size < addr)
 		return(EINVAL);
 
 	user_map = current_map();
+
+	if ((flags & (MS_ASYNC|MS_SYNC)) == (MS_ASYNC|MS_SYNC))
+		return (EINVAL);
 
 	if ((flags & (MS_ASYNC|MS_INVALIDATE)) == (MS_ASYNC|MS_INVALIDATE))
 		return (EINVAL);
@@ -529,7 +540,7 @@ msync(p, uap, retval)
 		 * inaccurate results, lets just return error as invalid size
 		 * specified
 		 */
-		return(EINVAL);
+		return (EINVAL); /* XXX breaks posix apps */
 	}
 
 	if (flags & MS_KILLPAGES)
@@ -559,10 +570,10 @@ msync(p, uap, retval)
 	}
 
 	return (0);
-
 }
 
 
+int
 mremap()
 {
 	/* Not yet implemented */
@@ -573,6 +584,7 @@ struct munmap_args {
 		caddr_t	addr;
 		int	len;
 };
+int
 munmap(p, uap, retval)
 	struct proc *p;
 	struct munmap_args *uap;
@@ -590,7 +602,7 @@ munmap(p, uap, retval)
 
 	user_addr -= pageoff;
 	user_size += pageoff;
-	user_size = round_page(user_size);
+	user_size = round_page_32(user_size);
 	if (user_addr + user_size < user_addr)
 		return(EINVAL);
 
@@ -654,7 +666,7 @@ mprotect(p, uap, retval)
 	pageoff = (user_addr & PAGE_MASK);
 	user_addr -= pageoff;
 	user_size += pageoff;
-	user_size = round_page(user_size);
+	user_size = round_page_32(user_size);
 	if (user_addr + user_size < user_addr)
 		return(EINVAL);
 
@@ -697,7 +709,7 @@ minherit(p, uap, retval)
 	pageoff = (addr & PAGE_MASK);
 	addr -= pageoff;
 	size += pageoff;
-	size = (vm_size_t) round_page(size);
+	size = (vm_size_t) round_page_32(size);
 	if (addr + size < addr)
 		return(EINVAL);
 
@@ -747,8 +759,8 @@ madvise(p, uap, retval)
 	 * Since this routine is only advisory, we default to conservative
 	 * behavior.
 	 */
-	start = trunc_page((vm_offset_t) uap->addr);
-	end = round_page((vm_offset_t) uap->addr + uap->len);
+	start = trunc_page_32((vm_offset_t) uap->addr);
+	end = round_page_32((vm_offset_t) uap->addr + uap->len);
 	
 	user_map = current_map();
 
@@ -812,8 +824,8 @@ mincore(p, uap, retval)
 	 * Make sure that the addresses presented are valid for user
 	 * mode.
 	 */
-	first_addr = addr = trunc_page((vm_offset_t) uap->addr);
-	end = addr + (vm_size_t)round_page(uap->len);
+	first_addr = addr = trunc_page_32((vm_offset_t) uap->addr);
+	end = addr + (vm_size_t)round_page_32(uap->len);
 
 	if (VM_MAX_ADDRESS > 0 && end > VM_MAX_ADDRESS)
 		return (EINVAL);
@@ -913,7 +925,7 @@ mlock(p, uap, retval)
 	pageoff = (addr & PAGE_MASK);
 	addr -= pageoff;
 	size += pageoff;
-	size = (vm_size_t) round_page(size);
+	size = (vm_size_t) round_page_32(size);
 
 	/* disable wrap around */
 	if (addr + size < addr)
@@ -962,7 +974,7 @@ munlock(p, uap, retval)
 	pageoff = (addr & PAGE_MASK);
 	addr -= pageoff;
 	size += pageoff;
-	size = (vm_size_t) round_page(size);
+	size = (vm_size_t) round_page_32(size);
 
 	/* disable wrap around */
 	if (addr + size < addr)
@@ -1014,6 +1026,7 @@ munlockall(p, uap)
 struct obreak_args {
 	char *nsiz;
 };
+int
 obreak(p, uap, retval)
 	struct proc *p;
 	struct obreak_args *uap;
@@ -1025,6 +1038,7 @@ obreak(p, uap, retval)
 
 int	both;
 
+int
 ovadvise()
 {
 
@@ -1033,12 +1047,11 @@ ovadvise()
 #endif
 }
 /* END DEFUNCT */
-#if 1
-int print_map_addr=0;
-#endif /* 1 */
 
 /* CDY need to fix interface to allow user to map above 32 bits */
-kern_return_t map_fd(
+/* USV: No! need to obsolete map_fd()! mmap() already supports 64 bits */
+kern_return_t
+map_fd(
 	int		fd,
 	vm_offset_t	offset,
 	vm_offset_t	*va,
@@ -1058,7 +1071,8 @@ kern_return_t map_fd(
 	return ret;
 }
 
-kern_return_t map_fd_funneled(
+kern_return_t
+map_fd_funneled(
 	int			fd,
 	vm_object_offset_t	offset,
 	vm_offset_t		*va,
@@ -1075,9 +1089,6 @@ kern_return_t map_fd_funneled(
 	int		err=0;
 	vm_map_t	my_map;
 	struct proc	*p =(struct proc *)current_proc();
-#if 0
-	extern int print_map_addr;
-#endif /* 0 */
 
 	/*
 	 *	Find the inode; verify that it's a regular file.
@@ -1102,7 +1113,7 @@ kern_return_t map_fd_funneled(
 		printf("map_fd: file offset not page aligned(%d : %s)\n",p->p_pid, p->p_comm);
 		return (KERN_INVALID_ARGUMENT);
 	}
-	map_size = round_page(size);
+	map_size = round_page_32(size);
 
 	/*
 	 * Allow user to map in a zero length file.
@@ -1135,7 +1146,7 @@ kern_return_t map_fd_funneled(
 		vm_map_copy_t	tmp;
 
 		if (copyin(va, &dst_addr, sizeof (dst_addr))	||
-					trunc_page(dst_addr) != dst_addr) {
+					trunc_page_32(dst_addr) != dst_addr) {
 			(void) vm_map_remove(
 					my_map,
 					map_addr, map_addr + map_size,

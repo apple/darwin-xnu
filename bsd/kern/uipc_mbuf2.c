@@ -382,7 +382,7 @@ m_aux_add(m, af, type)
 	if (n)
 		return n;
 
-	MGET(n, M_WAIT, m->m_type);
+	MGET(n, M_DONTWAIT, m->m_type);
 	if (n == NULL)
 		return NULL;
 

@@ -68,6 +68,7 @@
 #include <sys/proc.h>
 #include <sys/malloc.h>
 #include <sys/queue.h>
+#include <vm/pmap.h>
 
 #include <kdebug.h>
 
@@ -81,6 +82,12 @@ uiomove(cp, n, uio)
 	register caddr_t cp;
 	register int n;
 	register struct uio *uio;
+{
+	return uiomove64((addr64_t)((unsigned int)cp), n, uio);
+}
+
+int
+uiomove64(addr64_t cp, int n, struct uio *uio)
 {
 	register struct iovec *iov;
 	u_int cnt;
@@ -110,22 +117,22 @@ uiomove(cp, n, uio)
 			if (uio->uio_rw == UIO_READ)
 			  {
 			        KERNEL_DEBUG((FSDBG_CODE(DBG_FSRW, DBG_UIO_COPYOUT)) | DBG_FUNC_START,
-					 cp, iov->iov_base, cnt, 0,0);
+					 (int)cp, (int)iov->iov_base, cnt, 0,0);
 
-				error = copyout(cp, iov->iov_base, cnt);
+				error = copyout( CAST_DOWN(caddr_t, cp), iov->iov_base, cnt );
 
 			        KERNEL_DEBUG((FSDBG_CODE(DBG_FSRW, DBG_UIO_COPYOUT)) | DBG_FUNC_END,
-					 cp, iov->iov_base, cnt, 0,0);
+					 (int)cp, (int)iov->iov_base, cnt, 0,0);
 			  }
 			else
 			  {
 			        KERNEL_DEBUG((FSDBG_CODE(DBG_FSRW, DBG_UIO_COPYIN)) | DBG_FUNC_START,
-					 iov->iov_base, cp, cnt, 0,0);
+					 (int)iov->iov_base, (int)cp, cnt, 0,0);
 
-			        error = copyin(iov->iov_base, cp, cnt);
+			        error = copyin(iov->iov_base, CAST_DOWN(caddr_t, cp), cnt);
 
 			        KERNEL_DEBUG((FSDBG_CODE(DBG_FSRW, DBG_UIO_COPYIN)) | DBG_FUNC_END,
-					 iov->iov_base, cp, cnt, 0,0);
+					 (int)iov->iov_base, (int)cp, cnt, 0,0);
 			  }
 			if (error)
 				return (error);
@@ -133,10 +140,10 @@ uiomove(cp, n, uio)
 
 		case UIO_SYSSPACE:
 			if (uio->uio_rw == UIO_READ)
-				error = copywithin((caddr_t)cp, iov->iov_base,
+				error = copywithin(CAST_DOWN(caddr_t, cp), iov->iov_base,
 						   cnt);
 			else
-				error = copywithin(iov->iov_base, (caddr_t)cp,
+				error = copywithin(iov->iov_base, CAST_DOWN(caddr_t, cp),
 						   cnt);
 			break;
 
@@ -144,23 +151,51 @@ uiomove(cp, n, uio)
 			if (uio->uio_rw == UIO_READ)
 			  {
 			        KERNEL_DEBUG((FSDBG_CODE(DBG_FSRW, DBG_UIO_COPYOUT)) | DBG_FUNC_START,
-					 cp, iov->iov_base, cnt, 1,0);
+					 (int)cp, (int)iov->iov_base, cnt, 1,0);
 
-				error = copyp2v(cp, iov->iov_base, cnt);
-
+				if (error = copypv((addr64_t)cp, (addr64_t)((unsigned int)iov->iov_base), cnt, cppvPsrc | cppvNoRefSrc)) 	/* Copy physical to virtual */
+				        error = EFAULT;
 
 			        KERNEL_DEBUG((FSDBG_CODE(DBG_FSRW, DBG_UIO_COPYOUT)) | DBG_FUNC_END,
-					 cp, iov->iov_base, cnt, 1,0);
+					 (int)cp, (int)iov->iov_base, cnt, 1,0);
 			  }
 			else
 			  {
 			        KERNEL_DEBUG((FSDBG_CODE(DBG_FSRW, DBG_UIO_COPYIN)) | DBG_FUNC_START,
-					 iov->iov_base, cp, cnt, 1,0);
+					 (int)iov->iov_base, (int)cp, cnt, 1,0);
 
-				panic("copyv2p not implemented yet\n");
+				if (error = copypv((addr64_t)((unsigned int)iov->iov_base), (addr64_t)cp, cnt, cppvPsnk | cppvNoRefSrc | cppvNoModSnk))	/* Copy virtual to physical */
+				        error = EFAULT;
 
 			        KERNEL_DEBUG((FSDBG_CODE(DBG_FSRW, DBG_UIO_COPYIN)) | DBG_FUNC_END,
-					 iov->iov_base, cp, cnt, 1,0);
+					 (int)iov->iov_base, (int)cp, cnt, 1,0);
+			  }
+			if (error)
+				return (error);
+			break;
+
+		case UIO_PHYS_SYSSPACE:
+			if (uio->uio_rw == UIO_READ)
+			  {
+			        KERNEL_DEBUG((FSDBG_CODE(DBG_FSRW, DBG_UIO_COPYOUT)) | DBG_FUNC_START,
+					 (int)cp, (int)iov->iov_base, cnt, 2,0);
+
+				if (error = copypv((addr64_t)cp, (addr64_t)((unsigned int)iov->iov_base), cnt, cppvKmap | cppvPsrc | cppvNoRefSrc)) 	/* Copy physical to virtual */
+				        error = EFAULT;
+
+			        KERNEL_DEBUG((FSDBG_CODE(DBG_FSRW, DBG_UIO_COPYOUT)) | DBG_FUNC_END,
+					 (int)cp, (int)iov->iov_base, cnt, 2,0);
+			  }
+			else
+			  {
+			        KERNEL_DEBUG((FSDBG_CODE(DBG_FSRW, DBG_UIO_COPYIN)) | DBG_FUNC_START,
+					 (int)iov->iov_base, (int)cp, cnt, 2,0);
+
+				if (error = copypv((addr64_t)((unsigned int)iov->iov_base), (addr64_t)cp, cnt, cppvKmap | cppvPsnk | cppvNoRefSrc | cppvNoModSnk))	/* Copy virtual to physical */
+				        error = EFAULT;
+
+			        KERNEL_DEBUG((FSDBG_CODE(DBG_FSRW, DBG_UIO_COPYIN)) | DBG_FUNC_END,
+					 (int)iov->iov_base, (int)cp, cnt, 2,0);
 			  }
 			if (error)
 				return (error);

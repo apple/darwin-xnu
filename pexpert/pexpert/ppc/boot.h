@@ -60,8 +60,9 @@ typedef struct DRAMBank DRAMBank;
 
 /* Boot argument structure - passed into Mach kernel at boot time.
  */
-#define kBootArgsVersion		1
 #define kBootArgsRevision		1
+#define kBootArgsVersion1		1
+#define kBootArgsVersion2		2
 
 typedef struct boot_args {
   unsigned short	Revision;	/* Revision of boot_args structure */

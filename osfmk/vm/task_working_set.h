@@ -263,7 +263,7 @@ kern_return_t	tws_read_startup_file(
 
 void
 tws_hash_ws_flush(
-		tws_hash_t	tws);
+	tws_hash_t	tws);
 
 
 

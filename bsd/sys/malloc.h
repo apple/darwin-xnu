@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2002 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2003 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -71,6 +71,7 @@
  */
 #define	M_WAITOK	0x0000
 #define	M_NOWAIT	0x0001
+#define M_ZERO          0x0004          /* bzero the allocation */
 
 /*
  * Types of memory to be allocated (not all are used by us)
@@ -169,8 +170,10 @@
 #define M_IGMP		90
 #define M_JNL_JNL   91  /* Journaling: "struct journal" */
 #define M_JNL_TR    92  /* Journaling: "struct transaction" */ 
+#define	M_SPECINFO	93	/* special file node */
+#define M_KQUEUE	94	/* kqueue */
 
-#define	M_LAST		93	/* Must be last type + 1 */
+#define	M_LAST		95	/* Must be last type + 1 */
 
 /* Strings corresponding to types of memory */
 /* Must be in synch with the #defines above */
@@ -267,7 +270,9 @@
 	"TCP Segment Q",/* 89 M_TSEGQ */\
 	"IGMP state",	/* 90 M_IGMP */\
 	"Journal",    /* 91 M_JNL_JNL */\
-	"Transaction"    /* 92 M_JNL_TR */\
+	"Transaction",    /* 92 M_JNL_TR */\
+	"specinfo",		/* 93 M_SPECINFO */\
+	"kqueue"		/* 94 M_KQUEUE */\
 }
 
 struct kmemstats {

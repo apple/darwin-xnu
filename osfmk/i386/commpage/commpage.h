@@ -26,6 +26,46 @@
 #ifndef _I386_COMMPAGE_H
 #define _I386_COMMPAGE_H
 
-/* we don't have a comm page on Intel, yet */
+#ifndef	__ASSEMBLER__
+#include <stdint.h>
+#endif /* __ASSEMBLER__ */
+
+#ifdef	__ASSEMBLER__
+#include <machine/asm.h>
+
+#define	COMMPAGE_DESCRIPTOR(label,address,must,cant)	\
+L ## label ## _end:					;\
+.const_data						;\
+L ## label ## _size = L ## label ## _end - L ## label	;\
+.private_extern _commpage_ ## label			;\
+_commpage_ ## label ## :				;\
+    .long	L ## label 				;\
+    .long	L ## label ## _size			;\
+    .long	address					;\
+    .long	must					;\
+    .long	cant					;\
+.text
+
+#else /* __ASSEMBLER__ */
+
+/* Each potential commpage routine is described by one of these.
+ * Note that the COMMPAGE_DESCRIPTOR macro (above), used in
+ * assembly language, must agree with this.
+ */
+ 
+typedef	struct	commpage_descriptor	{
+    void	*code_address;					// address of code
+    long 	code_length;					// length in bytes
+    long	commpage_address;				// put at this address (_COMM_PAGE_BCOPY etc)
+    long	musthave;					// _cpu_capability bits we must have
+    long	canthave;					// _cpu_capability bits we can't have
+} commpage_descriptor;
+
+
+extern	char	*commPagePtr;				// virt address of commpage in kernel map
+
+extern	void	commpage_set_timestamp(uint64_t tbr,uint32_t secs,uint32_t usecs,uint32_t ticks_per_sec);
+
+#endif	/* __ASSEMBLER__ */
 
 #endif /* _I386_COMMPAGE_H */

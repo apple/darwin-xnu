@@ -1,19 +1,11 @@
 
-# Intel platform support
-
-iokit/Drivers/platform/drvAppleI386Generic/AppleI386PlatformExpert.cpp	optional iokitcpp
-iokit/Drivers/platform/drvAppleI386Generic/AppleI386CPU.cpp            optional iokitcpp
-
 # Shared lock
 
 iokit/Kernel/i386/IOSharedLock.s                            standard
 iokit/Kernel/i386/IOAsmSupport.s                            standard
 
-# Interrupt Controller
-iokit/Drivers/platform/drvAppleIntelClassicPIC/PIC8259.cpp  optional iokitcpp
-
 # Real Time Clock hack
 iokit/Drivers/platform/drvAppleIntelClock/IntelClock.cpp    optional iokitcpp
 
 # Power Domains
-iokit/Drivers/platform/drvAppleRootDomain/RootDomain.cpp    optional iokitcpp
+iokit/Kernel/IOPMrootDomain.cpp    				optional iokitcpp

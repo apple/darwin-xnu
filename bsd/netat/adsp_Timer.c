@@ -55,6 +55,8 @@
 #include <netat/adsp.h>
 #include <netat/adsp_internal.h>
 
+void TimerTick();
+
 /*
  * TrashSession
  * 
@@ -178,7 +180,7 @@ send:
     CheckSend(sp);
 }
 
-void TimerTick_funnel()
+void TimerTick_funnel(void *arg)
 {
         thread_funnel_set(network_flock, TRUE);
 	TimerTick();

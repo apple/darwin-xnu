@@ -369,7 +369,7 @@ GetCatalogIterator(ExtendedVCB *volume, HFSCatalogNodeID folderID, UInt32 offset
 
 		bestIterator->volume = volume;			// update the iterator's volume
 		bestIterator->folderID = folderID;			// ... and folderID
-		bestIterator->currentIndex = 0xFFFFFFFF;			// ... and offspring index marker
+		bestIterator->currentIndex = 0xFFFF;		// ... and offspring index marker
 		bestIterator->currentOffset = 0xFFFFFFFF;
 		bestIterator->nextOffset = 0xFFFFFFFF;
 		

@@ -109,7 +109,7 @@ extern int	volopen(),volclose(),volioctl();
 extern int	cttyopen(), cttyread(), cttywrite(), cttyioctl(), cttyselect();
 
 extern int 	mmread(),mmwrite();
-#define	mmselect	seltrue
+#define	mmselect	(select_fcn_t *)seltrue
 #define mmmmap		eno_mmap
 
 #include <pty.h>
@@ -137,8 +137,6 @@ extern int	ptcopen(),ptcclose(),ptcread(),ptcwrite(),ptcselect(),
 extern int	logopen(),logclose(),logread(),logioctl(),logselect();
 extern int	fdesc_open(), fdesc_read(), fdesc_write(),
 		fdesc_ioctl(), fdesc_select();
-
-extern int	seltrue();
 
 struct cdevsw	cdevsw[] =
 {
@@ -241,7 +239,7 @@ struct cdevsw	cdevsw[] =
     NO_CDEVICE,								/*41*/
     {
 	volopen,	volclose,	eno_rdwrt,	eno_rdwrt,	/*42*/
-	volioctl,	eno_stop,	eno_reset,	0,		seltrue,
+	volioctl,	eno_stop,	eno_reset,	0,		(select_fcn_t *)seltrue,
 	eno_mmap,	eno_strat,	eno_getc,	eno_putc,	0
     },
 };

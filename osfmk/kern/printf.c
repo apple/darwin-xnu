@@ -153,6 +153,9 @@
  * output bases such as x, X, u, U, o, and O also work.
  */
 
+#include <debug.h>
+#include <mach_kdb.h>
+#include <mach_kdp.h>
 #include <platforms.h>
 #include <mach/boolean.h>
 #include <cpus.h>
@@ -719,6 +722,22 @@ conslog_putc(
 #ifdef	MACH_BSD
 	log_putc(c);
 #endif
+}
+
+void
+dbugprintf(const char *fmt, ...)
+{
+
+#if	MACH_KDB
+
+	extern void db_putchar(char c);
+	va_list	listp;
+
+	va_start(listp, fmt);
+	_doprnt(fmt, &listp, db_putchar, 16);
+	va_end(listp);
+#endif
+	return;
 }
 
 void

@@ -1,4 +1,4 @@
-/*	$FreeBSD: src/sys/netinet6/ip6_forward.c,v 1.4.2.4 2001/07/03 11:01:53 ume Exp $	*/
+/*	$FreeBSD: src/sys/netinet6/ip6_forward.c,v 1.16 2002/10/16 02:25:05 sam Exp $	*/
 /*	$KAME: ip6_forward.c,v 1.69 2001/05/17 03:48:30 itojun Exp $	*/
 
 /*
@@ -268,7 +268,7 @@ ip6_forward(m, srcrt)
 			break;
 		default:
 			printf("ip6_output (ipsec): error code %d\n", error);
-			/*fall through*/
+			/* fall through */
 		case ENOENT:
 			/* don't show these error codes to the user */
 			break;
@@ -344,7 +344,7 @@ ip6_forward(m, srcrt)
 	 * for the reason that the destination is beyond the scope of the
 	 * source address, discard the packet and return an icmp6 destination
 	 * unreachable error with Code 2 (beyond scope of source address).
-	 * [draft-ietf-ipngwg-icmp-v3-00.txt, Section 3.1]
+	 * [draft-ietf-ipngwg-icmp-v3-02.txt, Section 3.1]
 	 */
 	if (in6_addr2scopeid(m->m_pkthdr.rcvif, &ip6->ip6_src) !=
 	    in6_addr2scopeid(rt->rt_ifp, &ip6->ip6_src)) {
@@ -380,7 +380,7 @@ ip6_forward(m, srcrt)
 #endif
 
 			mtu = rt->rt_ifp->if_mtu;
-#if IPSEC_IPV6FWD
+#if IPSEC
 			/*
 			 * When we do IPsec tunnel ingress, we need to play
 			 * with if_mtu value (decrement IPsec header size
@@ -482,11 +482,11 @@ ip6_forward(m, srcrt)
 #endif
 		{
 			printf("ip6_forward: outgoing interface is loopback. "
-			       "src %s, dst %s, nxt %d, rcvif %s, outif %s\n",
-			       ip6_sprintf(&ip6->ip6_src),
-			       ip6_sprintf(&ip6->ip6_dst),
-			       ip6->ip6_nxt, if_name(m->m_pkthdr.rcvif),
-			       if_name(rt->rt_ifp));
+				"src %s, dst %s, nxt %d, rcvif %s, outif %s\n",
+				ip6_sprintf(&ip6->ip6_src),
+				ip6_sprintf(&ip6->ip6_dst),
+				ip6->ip6_nxt, if_name(m->m_pkthdr.rcvif),
+				if_name(rt->rt_ifp));
 		}
 
 		/* we can just use rcvif in forwarding. */

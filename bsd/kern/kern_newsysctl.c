@@ -80,6 +80,7 @@ struct sysctl_oid_list sysctl__sysctl_children;
 */
 
 extern struct sysctl_oid *newsysctl_list[];
+extern struct sysctl_oid *machdep_sysctl_list[];
 
 
 static void
@@ -211,12 +212,13 @@ void sysctl_unregister_set(struct linker_set *lsp)
 
 void sysctl_register_fixed()
 {
-    int i = 0;
+    int i;
 
-
-    while (newsysctl_list[i]) {
-/*	printf("Registering %d\n", i); */
-	sysctl_register_oid(newsysctl_list[i++]);
+    for (i=0; newsysctl_list[i]; i++) {
+	sysctl_register_oid(newsysctl_list[i]);
+    }
+    for (i=0; machdep_sysctl_list[i]; i++) {
+	sysctl_register_oid(machdep_sysctl_list[i]);
     }
 }
 
@@ -1052,6 +1054,9 @@ userland_sysctl(struct proc *p, int *name, u_int namelen, void *old, size_t *old
 	}
 	return (error);
 }
+
+/* Non-standard BSDI extension - only present on their 4.3 net-2 releases */
+#define	KINFO_BSDI_SYSINFO	(101<<8)
 
 /*
  * Kernel versions of the userland sysctl helper functions.

@@ -64,7 +64,6 @@
 
 #ifdef __ppc__
 #include <ppc/mappings.h>
-#include <ppc/pmap_internals.h>
 #endif
 #include <IOKit/IOTypes.h>
 
@@ -83,7 +82,7 @@ extern ipc_port_t iokit_port_for_object( io_object_t obj,
 			ipc_kobject_type_t type );
 
 extern kern_return_t iokit_client_died( io_object_t obj,
-                        ipc_port_t port, ipc_kobject_type_t type, mach_port_mscount_t mscount );
+                        ipc_port_t port, ipc_kobject_type_t type, mach_port_mscount_t * mscount );
 
 extern kern_return_t
 iokit_client_memory_for_type(
@@ -390,67 +389,80 @@ iokit_notify( mach_msg_header_t * msg )
     }
 }
 
-#ifndef i386
-unsigned int IOTranslateCacheBits(struct phys_entry *pp)
+/* need to create a pmap function to generalize */
+unsigned int IODefaultCacheBits(addr64_t pa)
 {
-	unsigned int	flags;
-	unsigned int	memattr;
+    unsigned int	flags;
+#ifndef i386
+    struct phys_entry * pp;
 
-	/* need to create a pmap function to generalize */
-	memattr = ((pp->pte1 & 0x00000078) >> 3);
+    // Find physical address
+    if ((pp = pmap_find_physentry(pa >> 12))) {
+	// Use physical attributes as default
+	// NOTE: DEVICE_PAGER_FLAGS are made to line up
+	flags = VM_MEM_COHERENT;						/* We only support coherent memory */
+	if(pp->ppLink & ppG) flags |= VM_MEM_GUARDED;	/* Add in guarded if it is */
+	if(pp->ppLink & ppI) flags |= VM_MEM_NOT_CACHEABLE;	/* Add in cache inhibited if so */
+    } else
+	// If no physical, just hard code attributes
+        flags = VM_WIMG_IO;
+#else
+    extern vm_offset_t	avail_end;
 
-	/* NOTE: DEVICE_PAGER_FLAGS are made to line up */
-	flags = memattr & VM_WIMG_MASK;
-	return flags;
-}
+    if (pa < avail_end)
+	flags = VM_WIMG_COPYBACK;
+    else
+	flags = VM_WIMG_IO;
 #endif
+
+    return flags;
+}
 
 kern_return_t IOMapPages(vm_map_t map, vm_offset_t va, vm_offset_t pa,
 			vm_size_t length, unsigned int options)
 {
     vm_size_t	off;
     vm_prot_t	prot;
-    int			memattr;
-    struct phys_entry *pp;
-    pmap_t 		pmap = map->pmap;
+    unsigned int flags;
+    pmap_t 	 pmap = map->pmap;
 
     prot = (options & kIOMapReadOnly)
 		? VM_PROT_READ : (VM_PROT_READ|VM_PROT_WRITE);
 
+    switch(options & kIOMapCacheMask ) {			/* What cache mode do we need? */
+
+	case kIOMapDefaultCache:
+	default:
+	    flags = IODefaultCacheBits(pa);
+	    break;
+
+	case kIOMapInhibitCache:
+	    flags = VM_WIMG_IO;
+	    break;
+
+	case kIOMapWriteThruCache:
+	    flags = VM_WIMG_WTHRU;
+	    break;
+
+	case kIOWriteCombineCache:
+	    flags = VM_WIMG_WCOMB;
+	    break;
+
+	case kIOMapCopybackCache:
+	    flags = VM_WIMG_COPYBACK;
+	    break;
+    }
 #if __ppc__
 
-	switch(options & kIOMapCacheMask ) {			/* What cache mode do we need? */
+    // Set up a block mapped area
+    pmap_map_block(pmap, (addr64_t)va, (ppnum_t)(pa >> 12), length, prot, flags, 0);
 
-		case kIOMapDefaultCache:
-		default:
-			if(pp = pmap_find_physentry(pa)) {		/* Find physical address */
-				memattr = ((pp->pte1 & 0x00000078) >> 3);	/* Use physical attributes as default */
-			}
-			else {									/* If no physical, just hard code attributes */
-				memattr = PTE_WIMG_UNCACHED_COHERENT_GUARDED;
-			}
-			break;
-	
-		case kIOMapInhibitCache:
-			memattr = PTE_WIMG_UNCACHED_COHERENT_GUARDED;
-			break;
-	
-		case kIOMapWriteThruCache:
-			memattr = PTE_WIMG_WT_CACHED_COHERENT_GUARDED;
-			break;
-
-		case kIOMapCopybackCache:
-			memattr = PTE_WIMG_CB_CACHED_COHERENT;
-			break;
-	}
-
-	pmap_map_block(pmap, va, pa, length, prot, memattr, 0);	/* Set up a block mapped area */
-	
 #else
-// 	enter each page's physical address in the target map
-	for (off = 0; off < length; off += page_size) {		/* Loop for the whole length */
-	 	pmap_enter(pmap, va + off, pa + off, prot, VM_WIMG_USE_DEFAULT, TRUE);	/* Map it in */
-	}
+//  enter each page's physical address in the target map
+
+    for (off = 0; off < length; off += page_size)
+	pmap_enter(pmap, va + off, (pa + off) >> 12, prot, flags, TRUE);
+
 #endif
 
     return( KERN_SUCCESS );
@@ -460,7 +472,7 @@ kern_return_t IOUnmapPages(vm_map_t map, vm_offset_t va, vm_size_t length)
 {
     pmap_t	pmap = map->pmap;
 
-    pmap_remove(pmap, trunc_page(va), round_page(va + length));
+    pmap_remove(pmap, trunc_page_64(va), round_page_64(va + length));
 
     return( KERN_SUCCESS );
 }
@@ -468,6 +480,5 @@ kern_return_t IOUnmapPages(vm_map_t map, vm_offset_t va, vm_size_t length)
 void IOGetTime( mach_timespec_t * clock_time);
 void IOGetTime( mach_timespec_t * clock_time)
 {
-	*clock_time = clock_get_system_value();
+	clock_get_system_nanotime(&clock_time->tv_sec, &clock_time->tv_nsec);
 }
-

@@ -139,6 +139,10 @@ struct ether_desc_blk_str {
 static struct ether_desc_blk_str ether_desc_blk[MAX_INTERFACES];
 
 
+/* from if_ethersubr.c */
+int ether_resolvemulti __P((struct ifnet *, struct sockaddr **,
+                                    struct sockaddr *));
+
 /*
  * Release all descriptor entries owned by this dl_tag (there may be several).
  * Setting the type to 0 releases the entry. Eventually we should compact-out
@@ -500,6 +504,7 @@ int  ether_add_if(struct ifnet *ifp)
     ifp->if_framer = ether_frameout;
     ifp->if_demux  = ether_demux;
     ifp->if_event  = 0;
+    ifp->if_resolvemulti = ether_resolvemulti;
 
     for (i=0; i < MAX_INTERFACES; i++)
         if (ether_desc_blk[i].n_count == 0)
@@ -605,10 +610,15 @@ ether_ifmod_ioctl(ifp, command, data)
 }
 
 
+extern int ether_attach_inet(struct ifnet *ifp, u_long *dl_tag);
+extern int ether_detach_inet(struct ifnet *ifp, u_long dl_tag);
+extern int ether_attach_inet6(struct ifnet *ifp, u_long *dl_tag);
+extern int ether_detach_inet6(struct ifnet *ifp, u_long dl_tag);
 int ether_family_init()
 {
-    int  i;
+    int  i, error=0;
     struct dlil_ifmod_reg_str  ifmod_reg;
+    struct dlil_protomod_reg_str enet_protoreg;
 
     /* ethernet family is built-in, called from bsd_init */
     thread_funnel_switch(KERNEL_FUNNEL, NETWORK_FUNNEL);
@@ -630,7 +640,23 @@ int ether_family_init()
     for (i=0; i < MAX_INTERFACES; i++)
         ether_desc_blk[i].n_count = 0;
 
+	/* Register protocol registration functions */
+
+	bzero(&enet_protoreg, sizeof(enet_protoreg));
+	enet_protoreg.attach_proto = ether_attach_inet;
+	enet_protoreg.detach_proto = ether_detach_inet;
+	
+	if ( error = dlil_reg_proto_module(PF_INET, APPLE_IF_FAM_ETHERNET, &enet_protoreg) != 0)
+		kprintf("dlil_reg_proto_module failed for AF_INET6 error=%d\n", error);
+
+
+	enet_protoreg.attach_proto = ether_attach_inet6;
+	enet_protoreg.detach_proto = ether_detach_inet6;
+	
+	if ( error = dlil_reg_proto_module(PF_INET6, APPLE_IF_FAM_ETHERNET, &enet_protoreg) != 0)
+		kprintf("dlil_reg_proto_module failed for AF_INET6 error=%d\n", error);
+
     thread_funnel_switch(NETWORK_FUNNEL, KERNEL_FUNNEL);
 
-    return 0;
+    return (error);
 }

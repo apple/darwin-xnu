@@ -103,7 +103,6 @@ typedef struct {
  * in MacOSX. Need to find a better Error code ###LD
  */
 #define ENOTREADY 	ESHUTDOWN
-#define ENOMSG 		EOPNOTSUPP
 #define EPROTO 		EPROTOTYPE
 
 /* T_MPSAFE is used only in atp_open. I suspect it's a

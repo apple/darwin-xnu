@@ -197,7 +197,6 @@ thread_switch(
 	int						option,
 	mach_msg_timeout_t		option_time)
 {
-    register thread_t		self = current_thread();
     register thread_act_t 	hint_act = THR_ACT_NULL;
 
     /*
@@ -217,7 +216,7 @@ thread_switch(
     if (thread_name != MACH_PORT_NULL) {
 		ipc_port_t			port;
 
-		if (ipc_port_translate_send(self->top_act->task->itk_space,
+		if (ipc_port_translate_send(current_task()->itk_space,
 									thread_name, &port) == KERN_SUCCESS) {
 			ip_reference(port);
 			ip_unlock(port);

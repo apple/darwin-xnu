@@ -27,6 +27,7 @@
 #include <mach/machine.h>
 #include <mach/exception_types.h>
 #include <i386/trap.h>
+#include <i386/mp.h>
 #include <kdp/kdp_internal.h>
 
 #define KDP_TEST_HARNESS 0
@@ -340,7 +341,7 @@ kdp_i386_backtrace(void	*_frame, int nframes)
 	}
 	return;
 invalid:
-	printf("invalid frame pointer %x\n",frame->prev);
+	printf("invalid frame pointer %x\n",frame);
 }
 
 void
@@ -352,6 +353,8 @@ kdp_i386_trap(
 )
 {
     unsigned int exception, subcode = 0, code;
+
+    mp_kdp_enter();
 
     if (trapno != T_INT3 && trapno != T_DEBUG)
     	printf("unexpected kernel trap %x eip %x\n", trapno, saved_state->eip);
@@ -419,9 +422,11 @@ kdp_i386_trap(
 	break;
     }
 
-    kdp_i386_backtrace((void *) saved_state->ebp, 10);
+//    kdp_i386_backtrace((void *) saved_state->ebp, 10);
 
     kdp_raise_exception(exception, code, subcode, saved_state);
+
+    mp_kdp_exit();
 }
 
 boolean_t 

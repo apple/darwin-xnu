@@ -103,6 +103,9 @@ extern int 	mmread(),mmwrite();
 #define	mmselect	seltrue
 
 #if 1
+#ifdef NPTY
+#undef NPTY
+#endif /* NPTY */
 #define NPTY 32
 #else /* 1 */
 #include <pty.h>
@@ -147,7 +150,7 @@ struct cdevsw	cdevsw[] =
     {
 	consopen,	consclose,	consread,	conswrite,	/* 0*/
 	consioctl,	nulldev,	nulldev,	0,	consselect,
-	eno_mmap,	eno_strat,	cons_getc,	cons_putc, D_TTY
+	eno_mmap,	eno_strat,	(getc_fcn_t *)cons_getc,	(putc_fcn_t *)cons_putc, D_TTY
    },
     NO_CDEVICE,								/* 1*/
     {
@@ -157,7 +160,7 @@ struct cdevsw	cdevsw[] =
     },
     {
 	nulldev,	nulldev,	mmread,		mmwrite,	/* 3*/
-	eno_ioctl,	nulldev,	nulldev,	0,		mmselect,
+	eno_ioctl,	nulldev,	nulldev,	0,		(select_fcn_t *)mmselect,
 	eno_mmap,		eno_strat,	eno_getc,	eno_putc,	0
     },
     {

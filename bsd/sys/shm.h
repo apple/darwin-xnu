@@ -108,6 +108,7 @@ struct proc;
 
 void	shmexit __P((struct proc *));
 void	shmfork __P((struct proc *, struct proc *));
+__private_extern__ void	shmexec __P((struct proc *));
 #endif /* __APPLE_API_PRIVATE */
 #else /* !KERNEL */
 

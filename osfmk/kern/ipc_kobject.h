@@ -94,7 +94,7 @@ typedef natural_t	ipc_kobject_type_t;
 #define	IKOT_XMM_KERNEL			13
 #define	IKOT_XMM_REPLY			14
 #define IKOT_UND_REPLY			15
-/*		NOT DEFINED				16	*/
+#define IKOT_HOST_NOTIFY		16
 #define IKOT_HOST_SECURITY		17
 #define	IKOT_LEDGER				18
 #define IKOT_MASTER_DEVICE		19

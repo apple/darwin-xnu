@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2002 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2003 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -212,6 +212,11 @@ void sysctl_unregister_oid(struct sysctl_oid *oidp);
 	SYSCTL_OID(parent, nbr, name, CTLTYPE_INT|access, \
 		ptr, val, sysctl_handle_int, "I", descr)
 
+/* Oid for an unsigned int.  If ptr is NULL, val is returned. */
+#define SYSCTL_UINT(parent, nbr, name, access, ptr, val, descr) \
+	SYSCTL_OID(parent, nbr, name, CTLTYPE_INT|access, \
+		ptr, val, sysctl_handle_int, "IU", descr)
+
 /* Oid for a long.  The pointer must be non NULL. */
 #define SYSCTL_LONG(parent, nbr, name, access, ptr, descr) \
 	SYSCTL_OID(parent, nbr, name, CTLTYPE_INT|access, \
@@ -298,7 +303,7 @@ void sysctl_unregister_oid(struct sysctl_oid *oidp);
 #define KERN_NISDOMAINNAME	22	/* string: YP domain name */
 #define KERN_DOMAINNAME		KERN_NISDOMAINNAME
 #define	KERN_MAXPARTITIONS	23	/* int: number of partitions/disk */
-#define	KERN_KDEBUG		24	/* int: kernel trace points */
+#define	KERN_KDEBUG			24	/* int: kernel trace points */
 #define KERN_UPDATEINTERVAL	25	/* int: update process sleep time */
 #define KERN_OSRELDATE		26	/* int: OS release date */
 #define KERN_NTP_PLL		27	/* node: NTP PLL control */
@@ -306,8 +311,8 @@ void sysctl_unregister_oid(struct sysctl_oid *oidp);
 #define	KERN_MAXFILESPERPROC	29	/* int: max open files per proc */
 #define	KERN_MAXPROCPERUID 	30	/* int: max processes per uid */
 #define KERN_DUMPDEV		31	/* dev_t: device to dump on */
-#define	KERN_IPC		32	/* node: anything related to IPC */
-#define	KERN_DUMMY		33	/* unused */
+#define	KERN_IPC			32	/* node: anything related to IPC */
+#define	KERN_DUMMY			33	/* unused */
 #define	KERN_PS_STRINGS		34	/* int: address of PS_STRINGS */
 #define	KERN_USRSTACK		35	/* int: address of USRSTACK */
 #define	KERN_LOGSIGEXIT		36	/* int: do we log sigexit procs? */
@@ -316,8 +321,17 @@ void sysctl_unregister_oid(struct sysctl_oid *oidp);
 #define KERN_PCSAMPLES		39	/* node: pc sampling */
 #define KERN_NETBOOT		40	/* int: are we netbooted? 1=yes,0=no */
 #define	KERN_PANICINFO		41	/* node: panic UI information */
-#define	KERN_SYSV		42	/* node: panic UI information */
-#define	KERN_MAXID		43	/* number of valid kern ids */
+#define	KERN_SYSV			42	/* node: panic UI information */
+#define KERN_AFFINITY		43	/* xxx */
+#define KERN_CLASSIC	   	44	/* xxx */
+#define KERN_CLASSICHANDLER	45	/* xxx */
+#define	KERN_AIOMAX			46	/* int: max aio requests */
+#define	KERN_AIOPROCMAX		47	/* int: max aio requests per process */
+#define	KERN_AIOTHREADS		48	/* int: max aio worker threads */
+#ifdef __APPLE_API_UNSTABLE
+#define	KERN_PROCARGS2			49	/* number of valid kern ids */
+#endif /* __APPLE_API_UNSTABLE */
+#define	KERN_MAXID			50	/* number of valid kern ids */
 
 
 /* KERN_KDEBUG types */
@@ -331,7 +345,7 @@ void sysctl_unregister_oid(struct sysctl_oid *oidp);
 #define KERN_KDSETREG		8
 #define KERN_KDGETREG		9
 #define KERN_KDREADTR		10
-#define KERN_KDPIDTR            11
+#define KERN_KDPIDTR        11
 #define KERN_KDTHRMAP           12
 /* Don't use 13 as it is overloaded with KERN_VNODE */
 #define KERN_KDPIDEX            14
@@ -361,6 +375,11 @@ void sysctl_unregister_oid(struct sysctl_oid *oidp);
 #define	KSYSV_SHMMNI		3	/* int: max number of shared memory identifiers */
 #define	KSYSV_SHMSEG		4	/* int: max shared memory segments per process */
 #define	KSYSV_SHMALL		5	/* int: max amount of shared memory (pages) */
+#define KSYSV_SEMMNI		6	/* int: max num of semaphore identifiers  */
+#define KSYSV_SEMMNS		7	/* int: max num of semaphores in system */
+#define KSYSV_SEMMNU		8	/* int: max num of undo structures in system  */
+#define KSYSV_SEMMSL		9	/* int: max num of semaphores per id  */
+#define KSYSV_SEMUNE		10	/* int: max num of undo entries per process */
 
 
 #define CTL_KERN_NAMES { \
@@ -406,7 +425,14 @@ void sysctl_unregister_oid(struct sysctl_oid *oidp);
 	{ "pcsamples",CTLTYPE_STRUCT },\
 	{ "netboot", CTLTYPE_INT }, \
 	{ "panicinfo", CTLTYPE_NODE }, \
-	{ "sysv", CTLTYPE_NODE } \
+	{ "sysv", CTLTYPE_NODE }, \
+	{ "dummy", CTLTYPE_INT }, \
+	{ "dummy", CTLTYPE_INT }, \
+	{ "dummy", CTLTYPE_INT }, \
+	{ "aiomax", CTLTYPE_INT }, \
+	{ "aioprocmax", CTLTYPE_INT }, \
+	{ "aiothreads", CTLTYPE_INT }, \
+	{ "procargs2",CTLTYPE_STRUCT } \
 }
 
 /*
@@ -749,7 +775,6 @@ int sysctl_rdquad __P((void *, size_t *, void *, quad_t));
 int sysctl_string __P((void *, size_t *, void *, size_t, char *, int));
 int sysctl_rdstring __P((void *, size_t *, void *, char *));
 int sysctl_rdstruct __P((void *, size_t *, void *, void *, int));
-void fill_eproc __P((struct proc *, struct eproc *));
 
 #endif /* __APPLE_API_UNSTABLE */
 #else	/* !KERNEL */
@@ -758,6 +783,7 @@ void fill_eproc __P((struct proc *, struct eproc *));
 __BEGIN_DECLS
 int	sysctl __P((int *, u_int, void *, size_t *, void *, size_t));
 int	sysctlbyname __P((const char *, void *, size_t *, void *, size_t));
+int	sysctlnametomib __P((const char *, int *, size_t *));
 __END_DECLS
 #endif	/* KERNEL */
 #endif	/* !_SYS_SYSCTL_H_ */

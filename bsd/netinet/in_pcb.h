@@ -103,8 +103,8 @@ struct	icmp6_filter;
 
 struct inpcb {
 	LIST_ENTRY(inpcb) inp_hash;	/* hash list */
-	struct	in_addr inp_faddr;	/* foreign host table entry */
-	struct	in_addr inp_laddr;	/* local host table entry */
+	struct	in_addr reserved1;	/* APPLE reserved: inp_faddr defined in protcol indep. part */
+	struct	in_addr reserved2; /* APPLE reserved */
 	u_short	inp_fport;		/* foreign port */
 	u_short	inp_lport;		/* local port */
 	LIST_ENTRY(inpcb) inp_list;	/* list for all PCBs of this proto */
@@ -273,7 +273,10 @@ struct inpcbinfo {		/* XXX documentation, prefixes */
 #ifdef __APPLE__
 #define INP_STRIPHDR	0x200	/* Strip headers in raw_ip, for OT support */
 #endif
-#define	INP_FAITH		0x400	/* accept FAITH'ed connections */
+#define  INP_FAITH			0x400   /* accept FAITH'ed connections */
+#define  INP_INADDR_ANY 	0x800   /* local address wasn't specified */
+
+#define INP_RECVTTL			0x1000
 
 #define IN6P_IPV6_V6ONLY	0x008000 /* restrict AF_INET6 socket for v6 */
 
@@ -290,7 +293,7 @@ struct inpcbinfo {		/* XXX documentation, prefixes */
 					INP_RECVIF|\
 				 IN6P_PKTINFO|IN6P_HOPLIMIT|IN6P_HOPOPTS|\
 				 IN6P_DSTOPTS|IN6P_RTHDR|IN6P_RTHDRDSTOPTS|\
-				 IN6P_AUTOFLOWLABEL)
+				 IN6P_AUTOFLOWLABEL|INP_RECVTTL)
 #define	INP_UNMAPPABLEOPTS	(IN6P_HOPOPTS|IN6P_DSTOPTS|IN6P_RTHDR|\
 				 IN6P_AUTOFLOWLABEL)
 

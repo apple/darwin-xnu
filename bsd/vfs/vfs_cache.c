@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2003 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -94,8 +94,8 @@
 /*
  * Structures associated with name cacheing.
  */
-#define NCHHASH(dvp, cnp) \
-	(&nchashtbl[((dvp)->v_id + (cnp)->cn_hash) & nchash])
+#define NCHHASH(dvp, hash_val) \
+	(&nchashtbl[((u_long)(dvp) ^ ((dvp)->v_id ^ (hash_val))) & nchash])
 LIST_HEAD(nchashhead, namecache) *nchashtbl;	/* Hash Table */
 u_long	nchash;				/* size of hash table - 1 */
 long	numcache;			/* number of cache entries allocated */
@@ -107,6 +107,10 @@ int doingcache = 1;			/* 1 => enable the cache */
 /*
  * Delete an entry from its hash list and move it to the front
  * of the LRU list for immediate reuse.
+ *
+ * NOTE: THESE MACROS CAN BLOCK (in the call to remove_name())
+ *       SO BE CAREFUL IF YOU HOLD POINTERS TO nclruhead OR
+ *       nchashtbl.
  */
 #if DIAGNOSTIC
 #define PURGE(ncp)  {						\
@@ -118,6 +122,9 @@ int doingcache = 1;			/* 1 => enable the cache */
 	ncp->nc_hash.le_prev = 0;				\
 	TAILQ_REMOVE(&nclruhead, ncp, nc_lru);			\
 	TAILQ_INSERT_HEAD(&nclruhead, ncp, nc_lru);		\
+	/* this has to come last because it could block */      \
+	remove_name(ncp->nc_name);                              \
+	ncp->nc_name = NULL;                                    \
 }
 #else
 #define PURGE(ncp)  {						\
@@ -125,6 +132,9 @@ int doingcache = 1;			/* 1 => enable the cache */
 	ncp->nc_hash.le_prev = 0;				\
 	TAILQ_REMOVE(&nclruhead, ncp, nc_lru);			\
 	TAILQ_INSERT_HEAD(&nclruhead, ncp, nc_lru);		\
+ 	/* this has to come last because it could block */      \
+	remove_name(ncp->nc_name);                              \
+	ncp->nc_name = NULL;                                    \
 }
 #endif /* DIAGNOSTIC */
 
@@ -138,6 +148,32 @@ int doingcache = 1;			/* 1 => enable the cache */
 		TAILQ_INSERT_TAIL(&nclruhead, ncp, nc_lru);	\
 	}							\
 }
+
+
+//
+// Have to take a len argument because we may only need to
+// hash part of a componentname.
+//
+static unsigned int
+hash_string(const char *str, int len)
+{
+    unsigned int i, hashval = 0;
+
+    if (len == 0) {
+	for(i=1; *str != 0; i++, str++) {
+	    hashval += (unsigned char)*str * i;
+	}
+    } else {
+	for(i=len; i > 0; i--, str++) {
+	    hashval += (unsigned char)*str * (len - i + 1);
+	}
+    }
+
+    return hashval;
+}
+
+
+
 
 /*
  * Lookup an entry in the cache 
@@ -162,32 +198,30 @@ cache_lookup(dvp, vpp, cnp)
 {
 	register struct namecache *ncp, *nnp;
 	register struct nchashhead *ncpp;
+	register long namelen = cnp->cn_namelen;
+	char *nameptr = cnp->cn_nameptr;
 
 	if (!doingcache) {
 		cnp->cn_flags &= ~MAKEENTRY;
 		return (0);
 	}
-	if (cnp->cn_namelen > NCHNAMLEN) {
-		nchstats.ncs_long++;
-		cnp->cn_flags &= ~MAKEENTRY;
-		return (0);
-	}
 
-	ncpp = NCHHASH(dvp, cnp);
+	ncpp = NCHHASH(dvp, cnp->cn_hash);
 	for (ncp = ncpp->lh_first; ncp != 0; ncp = nnp) {
 		nnp = ncp->nc_hash.le_next;
-		/* If one of the vp's went stale, don't bother anymore. */
-		if ((ncp->nc_dvpid != ncp->nc_dvp->v_id) ||
-		    (ncp->nc_vp && ncp->nc_vpid != ncp->nc_vp->v_id)) {
-			nchstats.ncs_falsehits++;
-			PURGE(ncp);
-			continue;
-		}
-		/* Now that we know the vp's to be valid, is it ours ? */
+
 		if (ncp->nc_dvp == dvp &&
-		    ncp->nc_nlen == cnp->cn_namelen &&
-		    !bcmp(ncp->nc_name, cnp->cn_nameptr, (u_int)ncp->nc_nlen))
+		    strncmp(ncp->nc_name, nameptr, namelen) == 0 &&
+		    ncp->nc_name[namelen] == 0) {
+			/* Make sure the vp isn't stale. */
+			if ((ncp->nc_dvpid != dvp->v_id) ||
+			    (ncp->nc_vp && ncp->nc_vpid != ncp->nc_vp->v_id)) {
+				nchstats.ncs_falsehits++;
+				PURGE(ncp);
+				continue;
+			}
 			break;
+		}
 	}
 
 	/* We failed to find an entry */
@@ -205,6 +239,11 @@ cache_lookup(dvp, vpp, cnp)
 
 	/* We found a "positive" match, return the vnode */
         if (ncp->nc_vp) {
+		if (ncp->nc_vp->v_flag & (VUINIT|VXLOCK|VTERMINATE|VORECLAIM)) {
+		    PURGE(ncp);
+		    return (0);
+		}
+
 		nchstats.ncs_goodhits++;
 		TOUCH(ncp);
 		*vpp = ncp->nc_vp;
@@ -244,15 +283,6 @@ cache_enter(dvp, vp, cnp)
 		return;
 
 	/*
-	 * If an entry that is too long, is entered, bad things happen.
-	 * cache_lookup acts as the sentinel to make sure longer names
-	 * are not stored. This here will prevent outsiders from doing
-	 * something that is unexpected.
-	 */
-	if (cnp->cn_namelen > NCHNAMLEN)
-		panic("cache_enter: name too long");
-
-	/*
 	 * We allocate a new entry if we are less than the maximum
 	 * allowed and the one at the front of the LRU list is in use.
 	 * Otherwise we use the one at the front of the LRU list.
@@ -273,6 +303,8 @@ cache_enter(dvp, vp, cnp)
 				panic("cache_enter: le_next");
 #endif
 			LIST_REMOVE(ncp, nc_hash);
+			remove_name(ncp->nc_name);
+			ncp->nc_name = NULL;
 			ncp->nc_hash.le_prev = 0;
 		}
 	} else {
@@ -293,10 +325,9 @@ cache_enter(dvp, vp, cnp)
 		ncp->nc_vpid = cnp->cn_flags & ISWHITEOUT;
 	ncp->nc_dvp = dvp;
 	ncp->nc_dvpid = dvp->v_id;
-	ncp->nc_nlen = cnp->cn_namelen;
-	bcopy(cnp->cn_nameptr, ncp->nc_name, (unsigned)ncp->nc_nlen);
+	ncp->nc_name = add_name(cnp->cn_nameptr, cnp->cn_namelen, cnp->cn_hash, 0);
 	TAILQ_INSERT_TAIL(&nclruhead, ncp, nc_lru);
-	ncpp = NCHHASH(dvp, cnp);
+	ncpp = NCHHASH(dvp, cnp->cn_hash);
 #if DIAGNOSTIC
 	{
 		register struct namecache *p;
@@ -315,10 +346,65 @@ cache_enter(dvp, vp, cnp)
 void
 nchinit()
 {
+    static void init_string_table(void);
 
-	TAILQ_INIT(&nclruhead);
-	nchashtbl = hashinit(desiredvnodes, M_CACHE, &nchash);
+    TAILQ_INIT(&nclruhead);
+    nchashtbl = hashinit(MAX(4096, desiredvnodes), M_CACHE, &nchash);
+
+    init_string_table();
 }
+
+
+int
+resize_namecache(u_int newsize)
+{
+    struct nchashhead *new_table;
+    struct nchashhead *old_table;
+    struct nchashhead *old_head, *head;
+    struct namecache  *entry, *next;
+    uint32_t           i;
+    u_long             new_mask, old_mask;
+
+    // we don't support shrinking yet
+    if (newsize < nchash) {
+	return 0;
+    }
+
+    new_table = hashinit(newsize, M_CACHE, &new_mask);
+    if (new_table == NULL) {
+	return ENOMEM;
+    }
+
+    // do the switch!
+    old_table = nchashtbl;
+    nchashtbl = new_table;
+    old_mask  = nchash;
+    nchash    = new_mask;
+
+    // walk the old table and insert all the entries into
+    // the new table
+    //
+    for(i=0; i <= old_mask; i++) {
+	old_head = &old_table[i];
+	for (entry=old_head->lh_first; entry != NULL; entry=next) {
+	    //
+	    // XXXdbg - Beware: this assumes that hash_string() does
+	    //                  the same thing as what happens in
+	    //                  lookup() over in vfs_lookup.c
+	    head = NCHHASH(entry->nc_dvp, hash_string(entry->nc_name, 0));
+
+	    next = entry->nc_hash.le_next;
+	    LIST_INSERT_HEAD(head, entry, nc_hash);
+	}
+    }
+    
+    FREE(old_table, M_CACHE);
+
+    return 0;
+}
+
+
+
 
 /*
  * Invalidate a all entries to particular vnode.
@@ -369,4 +455,188 @@ cache_purgevfs(mp)
 			}
 		}
 	}
+}
+
+
+
+//
+// String ref routines
+//
+static LIST_HEAD(stringhead, string_t) *string_ref_table;
+static u_long   string_table_mask;
+static uint32_t max_chain_len=0;
+static struct stringhead *long_chain_head=NULL;
+static uint32_t filled_buckets=0;
+static uint32_t num_dups=0;
+static uint32_t nstrings=0;
+
+typedef struct string_t {
+    LIST_ENTRY(string_t)  hash_chain;
+    unsigned char        *str;
+    uint32_t              refcount;
+} string_t;
+
+
+
+static int
+resize_string_ref_table()
+{
+    struct stringhead *new_table;
+    struct stringhead *old_table;
+    struct stringhead *old_head, *head;
+    string_t          *entry, *next;
+    uint32_t           i, hashval;
+    u_long             new_mask, old_mask;
+
+    new_table = hashinit((string_table_mask + 1) * 2, M_CACHE, &new_mask);
+    if (new_table == NULL) {
+	return ENOMEM;
+    }
+
+    // do the switch!
+    old_table         = string_ref_table;
+    string_ref_table  = new_table;
+    old_mask          = string_table_mask;
+    string_table_mask = new_mask;
+
+    printf("resize: max chain len %d, new table size %d\n",
+	   max_chain_len, new_mask + 1);
+    max_chain_len   = 0;
+    long_chain_head = NULL;
+    filled_buckets  = 0;
+
+    // walk the old table and insert all the entries into
+    // the new table
+    //
+    for(i=0; i <= old_mask; i++) {
+	old_head = &old_table[i];
+	for (entry=old_head->lh_first; entry != NULL; entry=next) {
+	    hashval = hash_string(entry->str, 0);
+	    head = &string_ref_table[hashval & string_table_mask];
+	    if (head->lh_first == NULL) {
+		filled_buckets++;
+	    }
+
+	    next = entry->hash_chain.le_next;
+	    LIST_INSERT_HEAD(head, entry, hash_chain);
+	}
+    }
+    
+    FREE(old_table, M_CACHE);
+
+    return 0;
+}
+
+
+static void
+init_string_table(void)
+{
+    string_ref_table = hashinit(4096, M_CACHE, &string_table_mask);
+}
+
+
+char *
+add_name(const char *name, size_t len, u_int hashval, u_int flags)
+{
+    struct stringhead *head;
+    string_t          *entry;
+    int                chain_len = 0;
+    
+    //
+    // If the table gets more than 3/4 full, resize it
+    //
+    if (4*filled_buckets >= ((string_table_mask + 1) * 3)) {
+		if (resize_string_ref_table() != 0) {
+			printf("failed to resize the hash table.\n");
+		}
+    }
+
+    if (hashval == 0) {
+	hashval = hash_string(name, len);
+    }
+
+    head = &string_ref_table[hashval & string_table_mask];
+    for (entry=head->lh_first; entry != NULL; chain_len++, entry=entry->hash_chain.le_next) {
+	if (strncmp(entry->str, name, len) == 0 && entry->str[len] == '\0') {
+	    entry->refcount++;
+	    num_dups++;
+	    break;
+	}
+    }
+
+    if (entry == NULL) {
+	// it wasn't already there so add it.
+	MALLOC(entry, string_t *, sizeof(string_t) + len + 1, M_TEMP, M_WAITOK);
+
+	// have to get "head" again because we could have blocked
+	// in malloc and thus head could have changed.
+	//
+	head = &string_ref_table[hashval & string_table_mask];
+	if (head->lh_first == NULL) {
+	    filled_buckets++;
+	}
+
+	LIST_INSERT_HEAD(head, entry, hash_chain);
+	entry->str = (char *)((char *)entry + sizeof(string_t));
+	strncpy(entry->str, name, len);
+	entry->str[len] = '\0';
+	entry->refcount = 1;
+
+	if (chain_len > max_chain_len) {
+	    max_chain_len   = chain_len;
+	    long_chain_head = head;
+	}
+
+	nstrings++;
+    }
+    
+    return entry->str;
+}
+
+int
+remove_name(const char *nameref)
+{
+    struct stringhead *head;
+    string_t          *entry;
+    uint32_t           hashval;
+
+    hashval = hash_string(nameref, 0);
+    head = &string_ref_table[hashval & string_table_mask];
+    for (entry=head->lh_first; entry != NULL; entry=entry->hash_chain.le_next) {
+	if (entry->str == (unsigned char *)nameref) {
+	    entry->refcount--;
+	    if (entry->refcount == 0) {
+		LIST_REMOVE(entry, hash_chain);
+		if (head->lh_first == NULL) {
+		    filled_buckets--;
+		}
+		entry->str = NULL;
+		nstrings--;
+
+		FREE(entry, M_TEMP);
+	    } else {
+		num_dups--;
+	    }
+
+	    return 0;
+	}
+    }
+
+    return ENOENT;
+}
+
+
+void
+dump_string_table(void)
+{
+    struct stringhead *head;
+    string_t          *entry;
+    int                i;
+    
+    for(i=0; i <= string_table_mask; i++) {
+	head = &string_ref_table[i];
+	for (entry=head->lh_first; entry != NULL; entry=entry->hash_chain.le_next) {
+	    printf("%6d - %s\n", entry->refcount, entry->str);
+	}
+    }
 }

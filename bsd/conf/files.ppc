@@ -17,6 +17,10 @@ bsd/dev/ppc/stubs.c		standard
 bsd/dev/ppc/systemcalls.c	standard
 bsd/dev/ppc/km.c		standard
 bsd/dev/ppc/xsumas.s		standard	
+bsd/dev/ppc/sysctl.c		standard	
+
+bsd/dev/ppc/chud/chud_bsd_callback.c	standard
+bsd/dev/ppc/chud/chud_process.c		standard
 
 bsd/kern/bsd_stubs.c		standard
 

@@ -349,6 +349,7 @@ ipc_mqueue_send(
 		imq_unlock(mqueue);
 		splx(s);
 	} else {
+		thread_t cur_thread = current_thread();
 
 		/* 
 		 * We have to wait for space to be granted to us.
@@ -359,12 +360,14 @@ ipc_mqueue_send(
 			return MACH_SEND_TIMED_OUT;
 		}
 		mqueue->imq_fullwaiters = TRUE;
+		thread_lock(cur_thread);
 		wresult = wait_queue_assert_wait64_locked(
 						&mqueue->imq_wait_queue,
 						IPC_MQUEUE_FULL,
 						THREAD_ABORTSAFE,
-						TRUE); /* unlock? */
-		/* wait/mqueue is unlocked */
+						cur_thread);
+		thread_unlock(cur_thread);
+		imq_unlock(mqueue);
 		splx(s);
 		
 		if (wresult == THREAD_WAITING) {
@@ -733,15 +736,17 @@ ipc_mqueue_receive(
 		}
 	}
 
+	thread_lock(self);
 	self->ith_state = MACH_RCV_IN_PROGRESS;
 	self->ith_option = option;
 	self->ith_msize = max_size;
-		
+
 	wresult = wait_queue_assert_wait64_locked(&mqueue->imq_wait_queue,
 						IPC_MQUEUE_RECEIVE,
 						interruptible,
-						TRUE); /* unlock? */
-	/* mqueue/waitq is unlocked */
+						self);
+	thread_unlock(self);
+	imq_unlock(mqueue);
 	splx(s);
 
 	if (wresult == THREAD_WAITING) {

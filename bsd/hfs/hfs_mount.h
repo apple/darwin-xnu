@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2002 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2003 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -63,6 +63,17 @@ struct hfs_mount_args {
 #define HFSFSMNT_NOXONFILES	0x1	/* disable execute permissions for files */
 #define HFSFSMNT_WRAPPER	0x2	/* mount HFS wrapper (if it exists) */
 #define HFSFSMNT_EXTENDED_ARGS  0x4     /* indicates new fields after "flags" are valid */
+
+/*
+ * Sysctl values for HFS
+ */
+#define HFS_ENCODINGBIAS	1	    /* encoding matching CJK bias */
+#define HFS_EXTEND_FS		2
+#define HFS_ENCODINGHINT	3	    /* guess encoding for string */
+#define HFS_ENABLE_JOURNALING   0x082969
+#define HFS_DISABLE_JOURNALING  0x031272
+#define HFS_GET_JOURNAL_INFO    0x6a6e6c69
+#define HFS_SET_PKG_EXTENSIONS  0x121031
 
 #endif /* __APPLE_API_UNSTABLE */
 

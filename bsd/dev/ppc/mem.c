@@ -89,7 +89,6 @@
 
 static caddr_t devzerobuf;
 
-extern vm_offset_t mem_actual;
 extern pmap_t kernel_pmap;
 
 mmread(dev, uio)
@@ -115,6 +114,7 @@ mmrw(dev, uio, rw)
 {
 	register int o;
 	register u_int c, v;
+	addr64_t vll;
 	register struct iovec *iov;
 	int error = 0;
 	vm_offset_t	where;
@@ -135,45 +135,48 @@ mmrw(dev, uio, rw)
 
 /* minor device 0 is physical memory */
 		case 0:
-			v = trunc_page(uio->uio_offset);
-			if (uio->uio_offset >= ((dgWork.dgFlags & enaDiagDM) ? mem_actual : mem_size))
+			vll = trunc_page_64(uio->uio_offset);
+			if(((vll >> 31) == 1) || vll >= ((dgWork.dgFlags & enaDiagDM) ? mem_actual : max_mem))
 				goto fault;
 
-			size= PAGE_SIZE;
-
 			if(dgWork.dgFlags & enaDiagDM) {			/* Can we really get all memory? */
-				if (kmem_alloc_pageable(kernel_map, &where, size) != KERN_SUCCESS) {
+				if (kmem_alloc_pageable(kernel_map, &where, PAGE_SIZE) != KERN_SUCCESS) {
 					goto fault;
 				}
 				else {
-					(void)mapping_make(kernel_pmap, 0, where, v, 
-						VM_PROT_READ, 2, 0);	/* Map it in for the moment */
+					addr64_t collad;
+					
+					collad = mapping_make(kernel_pmap, (addr64_t)where, (ppnum_t)(vll >> 12), 0, 1, VM_PROT_READ);	/* Map it in for the moment */
+					if(collad) {						/* See if it failed (shouldn't happen)  */
+						kmem_free(kernel_map, where, PAGE_SIZE);	/* Toss the page */
+						goto fault;						/* Kill the transfer */
+					}
 				}
 			}
 			else {
-				if (kmem_alloc(kernel_map, &where, size) 
+				if (kmem_alloc(kernel_map, &where, 4096) 
 					!= KERN_SUCCESS) {
 					goto fault;
 				}
 			}
-			o = uio->uio_offset - v;
+			o = uio->uio_offset - vll;
 			c = min(PAGE_SIZE - o, (u_int)iov->iov_len);
-			error = uiomove((caddr_t) (where + o), c, uio);
+			error = uiomove((caddr_t)(where + o), c, uio);
 
-			if(dgWork.dgFlags & enaDiagDM) (void)mapping_remove(kernel_pmap, where);	/* Unmap it */
+			if(dgWork.dgFlags & enaDiagDM) (void)mapping_remove(kernel_pmap, (addr64_t)where);	/* Unmap it */
 			kmem_free(kernel_map, where, PAGE_SIZE);
 			continue;
 
 		/* minor device 1 is kernel memory */
 		case 1:
 			/* Do some sanity checking */
-			if (((caddr_t)uio->uio_offset >= VM_MAX_KERNEL_ADDRESS) ||
-				((caddr_t)uio->uio_offset <= VM_MIN_KERNEL_ADDRESS))
+			if (((addr64_t)uio->uio_offset > vm_last_addr) ||
+				((addr64_t)uio->uio_offset < VM_MIN_KERNEL_ADDRESS))
 				goto fault;
 			c = iov->iov_len;
-			if (!kernacc((caddr_t)uio->uio_offset, c))
+			if (!kernacc(uio->uio_offset, c))
 				goto fault;
-			error = uiomove((caddr_t)uio->uio_offset, (int)c, uio);
+			error = uiomove64(uio->uio_offset, (int)c, uio);
 			continue;
 
 		/* minor device 2 is EOF/RATHOLE */

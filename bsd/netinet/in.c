@@ -105,11 +105,6 @@ SYSCTL_INT(_net_inet_ip, OID_AUTO, subnets_are_local, CTLFLAG_RW,
 struct in_multihead in_multihead; /* XXX BSS initialization */
 
 extern void arp_rtrequest();
-extern int  ether_detach_inet(struct ifnet *ifp);
-
-#if INET6
-extern int ip6_auto_on;
-#endif
 
 /*
  * Return 1 if an internet address is for a ``local'' host
@@ -340,24 +335,15 @@ in_control(so, cmd, data, ifp, p)
  * Temorary code for protocol attachment XXX
  */
 			
-			if (ifp->if_type == IFT_ETHER)
-			    dl_tag = ether_attach_inet(ifp);
-			
-			if (ifp->if_type == IFT_LOOP)
-			    dl_tag = lo_attach_inet(ifp);
-#if NFAITH
-			/* Is this right? */
-			if (ifp && ifp->if_type == IFT_FAITH)
-			    dl_tag = faith_attach_inet(ifp);
-#endif
-#if NGIF
-			/* Is this right? */
-			if (ifp && ifp->if_type == IFT_GIF)
-			   dl_tag = gif_attach_proto_family(ifp, PF_INET);
-#endif
+			/* Generic protocol plumbing */
+
+			if (error = dlil_plumb_protocol(PF_INET, ifp, &dl_tag)) {
+				kprintf("in.c: warning can't plumb proto if=%s%n type %d error=%d\n",
+					ifp->if_name, ifp->if_unit, ifp->if_type, error);
+				error = 0; /*discard error, can be cold with unsupported interfaces */
+			}
 /* End of temp code */
 
-			ifa->ifa_dlt = dl_tag;
 			ifa->ifa_addr = (struct sockaddr *)&ia->ia_addr;
 			ifa->ifa_dstaddr = (struct sockaddr *)&ia->ia_dstaddr;
 			ifa->ifa_netmask = (struct sockaddr *)&ia->ia_sockmask;
@@ -379,8 +365,6 @@ in_control(so, cmd, data, ifp, p)
 			return error;
 		if (ifp == 0)
 			return (EADDRNOTAVAIL);
-		if (strcmp(ifp->if_name, "en"))
-			return ENODEV;
 		break;
                 
 	case SIOCSIFBRDADDR:
@@ -523,11 +507,9 @@ in_control(so, cmd, data, ifp, p)
 		    (struct sockaddr_in *) &ifr->ifr_addr, 1));
 
 	case SIOCPROTOATTACH:
-                ether_attach_inet(ifp);
-#if INET6
-		if (ip6_auto_on) /* FreeBSD compat mode: Acquire linklocal addresses for IPv6 for if */
-			in6_if_up(ifp);  
-#endif
+		error = dlil_plumb_protocol(PF_INET, ifp, &dl_tag);
+		if (error)
+			return(error);
                 break;
                 
 	case SIOCPROTODETACH:
@@ -535,17 +517,10 @@ in_control(so, cmd, data, ifp, p)
          	TAILQ_FOREACH(ifa, &ifp->if_addrhead, ifa_link) 
                 if (ifa->ifa_addr->sa_family == AF_INET)
                    return EBUSY;
-		error = ether_detach_inet(ifp);
+
+		error = dlil_unplumb_protocol(PF_INET, ifp);
 		if (error)
 			return(error);
-#if INET6
-		if (ip6_auto_on) { /* if we linked ipv6 addresses to v4, remove them now */
-			in6_purgeif(ifp);
-			error = ether_detach_inet6(ifp);
-			if (error)
-				return(error);
-		}
-#endif
 		break;
 		
 
@@ -1062,7 +1037,6 @@ in_ifinit(ifp, ia, sin, scrub)
 	register u_long i = ntohl(sin->sin_addr.s_addr);
 	struct sockaddr_in oldaddr;
 	int s = splimp(), flags = RTF_UP, error;
-	u_long      dl_tag;
 
 	oldaddr = ia->ia_addr;
 	ia->ia_addr = *sin;
@@ -1243,7 +1217,13 @@ in_addmulti(ap, ifp)
 	/*
 	 * Let IGMP know that we have joined a new IP multicast group.
 	 */
-	igmp_joingroup(inm);
+	error = igmp_joingroup(inm);
+	if (error) {
+		if_delmultiaddr(ifma);
+		LIST_REMOVE(inm, inm_link);
+		_FREE(inm, M_IPMADDR);
+		inm = NULL;
+	}
 	splx(s);
 	return (inm);
 }
@@ -1260,7 +1240,7 @@ in_delmulti(inm)
 	
 	/* We intentionally do this a bit differently than BSD */
 
-	if (ifma->ifma_refcount == 1) {
+	if (ifma && ifma->ifma_refcount == 1) {
 		/*
 		 * No remaining claims to this record; let IGMP know that
 		 * we are leaving the multicast group.
@@ -1271,6 +1251,7 @@ in_delmulti(inm)
 		FREE(inm, M_IPMADDR);
 	}
 	/* XXX - should be separate API for when we have an ifma? */
-	if_delmulti(ifma->ifma_ifp, ifma->ifma_addr);
+	if (ifma)
+		if_delmultiaddr(ifma);
 	splx(s);
 }

@@ -65,6 +65,7 @@
 #define	_SYS_LOCKF_H_
 
 #include <sys/appleapiopts.h>
+#include <sys/cdefs.h> 
 
 #ifdef __APPLE_API_PRIVATE
 /*

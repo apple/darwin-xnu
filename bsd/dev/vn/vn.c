@@ -73,11 +73,10 @@
 #include <sys/proc.h>
 #include <sys/buf.h>
 #include <sys/malloc.h>
-#include <sys/mount.h>
 #include <sys/vnode.h>
 #include <sys/fcntl.h>
 #include <sys/conf.h>
-#include <dev/disk.h>
+#include <sys/disk.h>
 #include <sys/stat.h>
 #include <sys/conf.h>
 
@@ -90,6 +89,17 @@
 #include <mach/memory_object_types.h>
 
 #include <miscfs/devfs/devfs.h>
+
+extern void
+vfs_io_maxsegsize(struct vnode	*vp,
+		  int	flags,	/* B_READ or B_WRITE */
+		  int	*maxsegsize);
+
+extern void
+vfs_io_attributes(struct vnode	*vp,
+		  int	flags,	/* B_READ or B_WRITE */
+		  int	*iosize,
+		  int	*vectors);
 
 #include "shadow.h"
 
@@ -388,7 +398,7 @@ shadow_write(struct vn_softc * vn, struct buf * bp, char * base,
 			VOP_TRUNCATE(vn->sc_shadow_vp, size,
 				     IO_SYNC, vn->sc_cred, p);
 			VOP_UNLOCK(vn->sc_shadow_vp, 0, p);
-#endif 0
+#endif
 		}
 		error = file_io(vn->sc_shadow_vp, vn->sc_cred, UIO_WRITE, 
 				base + start,
@@ -494,8 +504,10 @@ vnstrategy(struct buf *bp)
 	 * simply read or write less.
 	 */
 	if (bp->b_blkno >= vn->sc_size) {
-		bp->b_error = EINVAL;
-		bp->b_flags |= B_ERROR | B_INVAL;
+		if (bp->b_blkno > vn->sc_size) {
+			bp->b_error = EINVAL;
+			bp->b_flags |= B_ERROR | B_INVAL;
+		}
 		biodone(bp);
 		return;
 	}
@@ -531,8 +543,10 @@ vnioctl(dev_t dev, u_long cmd, caddr_t data, int flag, struct proc *p,
 	struct vn_ioctl *vio;
 	int error;
 	u_long *f;
+	int num = 0;
 	u_int64_t * o;
 	int unit;
+	int size = 0;
 
 	unit = vnunit(dev);
 	if (vnunit(dev) >= NVNDEVICE) {
@@ -548,10 +562,15 @@ vnioctl(dev_t dev, u_long cmd, caddr_t data, int flag, struct proc *p,
 	o = (u_int64_t *)data;
 	switch (cmd) {
 	case VNIOCDETACH:
+	case DKIOCGETBLOCKSIZE:
+        case DKIOCSETBLOCKSIZE:
 	case DKIOCGETMAXBLOCKCOUNTREAD:
 	case DKIOCGETMAXBLOCKCOUNTWRITE:
 	case DKIOCGETMAXSEGMENTCOUNTREAD:
 	case DKIOCGETMAXSEGMENTCOUNTWRITE:
+	case DKIOCGETMAXSEGMENTBYTECOUNTREAD:
+	case DKIOCGETMAXSEGMENTBYTECOUNTWRITE:
+	case DKIOCGETBLOCKCOUNT:
 	case DKIOCGETBLOCKCOUNT32:
 		if ((vn->sc_flags & VNF_INITED) == 0) {
 			return (ENXIO);
@@ -562,16 +581,36 @@ vnioctl(dev_t dev, u_long cmd, caddr_t data, int flag, struct proc *p,
 	}
 	switch (cmd) {
 	case DKIOCGETMAXBLOCKCOUNTREAD:
-		*o = vn->sc_vp->v_mount->mnt_maxreadcnt / vn->sc_secsize;
+		vfs_io_attributes(vn->sc_vp, B_READ, &size, &num);
+		*o = size / vn->sc_secsize;
 		break;
 	case DKIOCGETMAXBLOCKCOUNTWRITE:
-		*o = vn->sc_vp->v_mount->mnt_maxwritecnt / vn->sc_secsize;
+		vfs_io_attributes(vn->sc_vp, B_WRITE, &size, &num);
+		*o = size / vn->sc_secsize;
+		break;
+	case DKIOCGETMAXBYTECOUNTREAD:
+		vfs_io_attributes(vn->sc_vp, B_READ, &size, &num);
+		*o = size;
+		break;
+	case DKIOCGETMAXBYTECOUNTWRITE:
+		vfs_io_attributes(vn->sc_vp, B_WRITE, &size, &num);
+		*o = size;
 		break;
 	case DKIOCGETMAXSEGMENTCOUNTREAD:
-		*o = vn->sc_vp->v_mount->mnt_segreadcnt;
+		vfs_io_attributes(vn->sc_vp, B_READ, &size, &num);
+		*o = num;
 		break;
 	case DKIOCGETMAXSEGMENTCOUNTWRITE:
-		*o = vn->sc_vp->v_mount->mnt_segwritecnt;
+		vfs_io_attributes(vn->sc_vp, B_WRITE, &size, &num);
+		*o = num;
+		break;
+	case DKIOCGETMAXSEGMENTBYTECOUNTREAD:
+		vfs_io_maxsegsize(vn->sc_vp, B_READ, &size);
+		*o = size;
+		break;
+	case DKIOCGETMAXSEGMENTBYTECOUNTWRITE:
+		vfs_io_maxsegsize(vn->sc_vp, B_WRITE, &size);
+		*o = size;
 		break;
         case DKIOCGETBLOCKSIZE:
 		*f = vn->sc_secsize;
@@ -598,7 +637,7 @@ vnioctl(dev_t dev, u_long cmd, caddr_t data, int flag, struct proc *p,
 	case DKIOCGETBLOCKCOUNT32:
 		*f = vn->sc_size;
 		break;
-	case DKIOCGETBLOCKCOUNT64:
+	case DKIOCGETBLOCKCOUNT:
 		*o = vn->sc_size;
 		break;
 	case VNIOCSHADOW:
@@ -757,7 +796,7 @@ vniocattach_file(struct vn_softc *vn,
 		vn->sc_size = (quad_t)vio->vn_size * PAGE_SIZE / vn->sc_secsize;
 	else
 		vn->sc_size = vattr.va_size / vn->sc_secsize;
-#endif 0
+#endif
 	vn->sc_secsize = DEV_BSIZE;
 	vn->sc_fsize = vattr.va_size;
 	vn->sc_size = vattr.va_size / vn->sc_secsize;
@@ -980,4 +1019,4 @@ vndevice_init()
 			printf("vninit: devfs_make_node failed!\n");
 	}
 }
-#endif NVNDEVICE
+#endif /* NVNDEVICE */

@@ -104,6 +104,7 @@ extern struct i386_tss		*mp_dbtss[NCPUS];
  */
 extern struct fake_descriptor	*mp_gdt[NCPUS];
 extern struct fake_descriptor	*mp_idt[NCPUS];
+extern struct fake_descriptor	*mp_ldt[NCPUS];
 
 
 /*

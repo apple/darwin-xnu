@@ -334,10 +334,10 @@ void	ip6_clearpktopts __P((struct ip6_pktopts *, int, int));
 struct ip6_pktopts *ip6_copypktopts __P((struct ip6_pktopts *, int));
 int	ip6_optlen __P((struct inpcb *));
 
-int	route6_input __P((struct mbuf **, int *, int));
+int	route6_input __P((struct mbuf **, int *));
 
 void	frag6_init __P((void));
-int	frag6_input __P((struct mbuf **, int *, int));
+int	frag6_input __P((struct mbuf **, int *));
 void	frag6_slowtimo __P((void));
 void	frag6_drain __P((void));
 
@@ -349,8 +349,8 @@ int	rip6_output __P((struct mbuf *, struct socket *, struct sockaddr_in6 *, stru
 int	rip6_usrreq __P((struct socket *,
 	    int, struct mbuf *, struct mbuf *, struct mbuf *, struct proc *));
 
-int	dest6_input __P((struct mbuf **, int *, int));
-int	none_input __P((struct mbuf **, int *, int));
+int	dest6_input __P((struct mbuf **, int *));
+int	none_input __P((struct mbuf **, int *));
 #endif /* KERNEL */
 #endif /* __APPLE_API_PRIVATE */
 

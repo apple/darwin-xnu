@@ -200,6 +200,14 @@ MACRO_BEGIN								\
 	(port)->ip_premsg = IKM_NULL;					\
 MACRO_END
 
+#define IP_BIT_CLASSIC        0x00004000     
+#define IP_CLASSIC(port)     ((port)->ip_bits & IP_BIT_CLASSIC)
+
+#define IP_SET_CLASSIC(port)					\
+MACRO_BEGIN										\
+	(port)->ip_bits |= IP_BIT_CLASSIC;		\
+MACRO_END
+
 typedef ipc_table_index_t ipc_port_request_index_t;
 
 typedef struct ipc_port_request {

@@ -61,6 +61,9 @@ struct volfs_vndata
 
 #define ROOT_DIRID	2
 
+#define MAXPLCENTRIES 250
+#define PLCHASHSIZE 128
+
 extern int (**volfs_vnodeop_p)(void *);
 __BEGIN_DECLS
 

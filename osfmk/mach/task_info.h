@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2003 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -147,5 +147,9 @@ typedef struct task_thread_times_info	*task_thread_times_info_t;
 #define TASK_SECURITY_TOKEN		13
 #define TASK_SECURITY_TOKEN_COUNT	\
 		(sizeof(security_token_t) / sizeof(natural_t))
+
+#define TASK_AUDIT_TOKEN		15
+#define TASK_AUDIT_TOKEN_COUNT	\
+		(sizeof(audit_token_t) / sizeof(natural_t))
 
 #endif	/* TASK_INFO_H_ */

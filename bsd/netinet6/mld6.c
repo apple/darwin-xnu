@@ -102,6 +102,7 @@
 
 static struct ip6_pktopts ip6_opts;
 static int mld6_timers_are_running;
+static int mld6_init_done = 0 ;
 /* XXX: These are necessary for KAME's link-local hack */
 static struct in6_addr mld6_all_nodes_linklocal = IN6ADDR_LINKLOCAL_ALLNODES_INIT;
 static struct in6_addr mld6_all_routers_linklocal = IN6ADDR_LINKLOCAL_ALLROUTERS_INIT;
@@ -115,6 +116,10 @@ mld6_init()
 	struct ip6_hbh *hbh = (struct ip6_hbh *)hbh_buf;
 	u_int16_t rtalert_code = htons((u_int16_t)IP6OPT_RTALERT_MLD);
 
+	if (mld6_init_done)
+		return;
+
+	mld6_init_done = 1;
 	mld6_timers_are_running = 0;
 
 	/* ip6h_nxt will be fill in later */

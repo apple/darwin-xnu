@@ -74,7 +74,8 @@
 #define APPLE_IF_FAM_MDECAP    9
 #define APPLE_IF_FAM_GIF       10
 #define APPLE_IF_FAM_FAITH     11
-#define APPLE_IF_FAM_STF	   12
+#define APPLE_IF_FAM_STF       12
+#define APPLE_IF_FAM_FIREWIRE  13
 #endif
 
 /*
@@ -490,6 +491,7 @@ int	if_addmulti __P((struct ifnet *, struct sockaddr *,
 			 struct ifmultiaddr **));
 int	if_allmulti __P((struct ifnet *, int));
 void	if_attach __P((struct ifnet *));
+int	if_delmultiaddr __P((struct ifmultiaddr *ifma));
 int	if_delmulti __P((struct ifnet *, struct sockaddr *));
 void	if_down __P((struct ifnet *));
 void	if_route __P((struct ifnet *, int flag, int fam));

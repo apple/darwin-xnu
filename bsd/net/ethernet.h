@@ -121,7 +121,7 @@ __BEGIN_DECLS
 
 int	ether_hostton __P((char *, struct ether_addr *));
 int	ether_line __P((char *, struct ether_addr *, char *));
-char 	*ether_ntoa __P((struct ether_addr *));
+char 	*ether_ntoa __P((const struct ether_addr *));
 int	ether_ntohost __P((char *, struct ether_addr *));
 __END_DECLS
 #endif /* !KERNEL */

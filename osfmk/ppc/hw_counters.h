@@ -33,6 +33,7 @@
 #error This file is only useful on PowerPC.
 #endif
 
+#pragma pack(4)								/* Make sure the structure stays as we defined it */
 
 typedef struct hw_counters {	
 
@@ -58,8 +59,9 @@ typedef struct hw_counters {
 	unsigned int hw_rsvd3; 					/* Reserved */
 	unsigned int hw_InstBreakpoints; 		/* Instruction breakpoint */
 	unsigned int hw_SystemManagements; 		/* System management */
-	unsigned int hw_rsvd4; 					/* Reserved */
-	unsigned int hw_AltivecAssists;			/* Altivec Assist */
+	unsigned int hw_AltivecAssists; 		/* Altivec Assist */
+	unsigned int hw_Thermal;				/* Thermals */
+	unsigned int hw_rsvd5; 					/* Reserved */
 	unsigned int hw_rsvd6; 					/* Reserved */
 	unsigned int hw_rsvd7; 					/* Reserved */
 	unsigned int hw_rsvd8;					/* Reserved */
@@ -68,15 +70,23 @@ typedef struct hw_counters {
 	unsigned int hw_rsvd11; 				/* Reserved */
 	unsigned int hw_rsvd12; 				/* Reserved */
 	unsigned int hw_rsvd13; 				/* Reserved */
-	unsigned int hw_rsvd14; 				/* Reserved */
 	unsigned int hw_Trace601;				/* Trace */
 	unsigned int hw_SIGPs; 					/* SIGP */
 	unsigned int hw_Preemptions; 			/* Preemption */
 	unsigned int hw_ContextSwitchs;			/* Context switch */
+	unsigned int hw_Shutdowns;				/* Shutdowns */
+	unsigned int hw_Chokes;					/* System ABENDs */
+	unsigned int hw_DataSegments;			/* Data Segment Interruptions */
+	unsigned int hw_InstructionSegments;	/* Instruction Segment Interruptions */
+	unsigned int hw_SoftPatches;			/* Soft Patch interruptions */
+	unsigned int hw_Maintenances;			/* Maintenance interruptions */
+	unsigned int hw_Instrumentations;		/* Instrumentation interruptions */
+	unsigned int hw_rsvd14;					/* Reswerved */
 	
-	unsigned int hw_spare[27];				/* Pad to 256 bytes */
+	unsigned int hw_spare[19];				/* Pad to 256 bytes */
 
 } hw_counters;
+#pragma pack()
 
 extern hw_counters hw_counts(NCPUS);
 

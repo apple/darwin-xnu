@@ -1,3 +1,6 @@
+/*	$FreeBSD: src/sys/netkey/key_debug.c,v 1.10.2.5 2002/04/28 05:40:28 suz Exp $	*/
+/*	$KAME: key_debug.c,v 1.26 2001/06/27 10:46:50 sakane Exp $	*/
+
 /*
  * Copyright (C) 1995, 1996, 1997, and 1998 WIDE Project.
  * All rights reserved.
@@ -379,9 +382,9 @@ kdebug_sadb_x_sa2(ext)
 
 	printf("sadb_x_sa2{ mode=%u reqid=%u\n",
 	    sa2->sadb_x_sa2_mode, sa2->sadb_x_sa2_reqid);
-	printf("  reserved1=%u reserved2=%u reserved3=%u }\n",
-	    sa2->sadb_x_sa2_reserved1, sa2->sadb_x_sa2_reserved1,
-	    sa2->sadb_x_sa2_reserved1);
+	printf("  reserved1=%u reserved2=%u sequence=%u }\n",
+	    sa2->sadb_x_sa2_reserved1, sa2->sadb_x_sa2_reserved2,
+	    sa2->sadb_x_sa2_sequence);
 
 	return;
 }
@@ -671,7 +674,7 @@ void
 kdebug_sockaddr(addr)
 	struct sockaddr *addr;
 {
-	struct sockaddr_in *sin;
+	struct sockaddr_in *sin4;
 #ifdef INET6
 	struct sockaddr_in6 *sin6;
 #endif
@@ -685,9 +688,9 @@ kdebug_sockaddr(addr)
 
 	switch (addr->sa_family) {
 	case AF_INET:
-		sin = (struct sockaddr_in *)addr;
-		printf(" port=%u\n", ntohs(sin->sin_port));
-		ipsec_hexdump((caddr_t)&sin->sin_addr, sizeof(sin->sin_addr));
+		sin4 = (struct sockaddr_in *)addr;
+		printf(" port=%u\n", ntohs(sin4->sin_port));
+		ipsec_hexdump((caddr_t)&sin4->sin_addr, sizeof(sin4->sin_addr));
 		break;
 #ifdef INET6
 	case AF_INET6:

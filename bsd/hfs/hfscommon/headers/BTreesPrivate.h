@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2003 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -188,7 +188,7 @@ typedef enum {
 
 typedef struct BTreeControlBlock {					// fields specific to BTree CBs
 
-	UInt8						 reserved1;			// keep for alignment with old style fields
+	UInt8		keyCompareType;   /* Key string Comparison Type */
 	UInt8						 btreeType;
 	UInt16						 treeDepth;
 	FileReference				 fileRefNum;		// refNum of btree file
@@ -224,7 +224,7 @@ typedef struct BTreeControlBlock {					// fields specific to BTree CBs
 	UInt32						 numHintChecks;
 	UInt32						 numPossibleHints;	// Looks like a formated hint
 	UInt32						 numValidHints;		// Hint used to find correct record.
-
+	UInt32					reservedNodes;
 } BTreeControlBlock, *BTreeControlBlockPtr;
 
 
@@ -317,6 +317,10 @@ OSStatus	ExtendBTree				(BTreeControlBlockPtr	 btreePtr,
 
 UInt32		CalcMapBits				(BTreeControlBlockPtr	 btreePtr);
 
+SInt32		BTAvailableNodes			(BTreeControlBlock *btree);
+
+void 		BTUpdateReserve				(BTreeControlBlockPtr btreePtr,
+                                                         int nodes);
 
 //////////////////////////////// Misc Operations ////////////////////////////////
 

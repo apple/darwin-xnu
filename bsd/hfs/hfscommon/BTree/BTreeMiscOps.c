@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2003 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -176,7 +176,7 @@ OSStatus	VerifyHeader	(FCB				*filePtr,
 
 	forkSize = (UInt64)totalNodes * (UInt64)header->nodeSize;
 	
-	if ( forkSize != filePtr->fcbEOF )
+	if ( forkSize > filePtr->fcbEOF )
 		return fsBTInvalidHeaderErr;
 	
 	if ( header->freeNodes >= totalNodes )

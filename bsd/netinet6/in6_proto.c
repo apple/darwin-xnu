@@ -1,4 +1,4 @@
-/*	$FreeBSD: src/sys/netinet6/in6_proto.c,v 1.6.2.7 2001/07/24 19:10:18 brooks Exp $	*/
+/*	$FreeBSD: src/sys/netinet6/in6_proto.c,v 1.19 2002/10/16 02:25:05 sam Exp $	*/
 /*	$KAME: in6_proto.c,v 1.91 2001/05/27 13:28:35 itojun Exp $	*/
 
 /*
@@ -141,6 +141,8 @@ extern struct domain inet6domain;
 extern int in6_inithead __P((void **, int));
 void in6_dinit(void);
 
+static int rip6_pr_output(struct mbuf *m, struct socket *so, struct sockaddr_in6 *, struct mbuf *);
+
 struct ip6protosw inet6sw[] = {
 { 0,		&inet6domain,	IPPROTO_IPV6,	0,
   0,		0,		0,		0,
@@ -165,13 +167,13 @@ struct ip6protosw inet6sw[] = {
   0, &tcp6_usrreqs,
 },
 { SOCK_RAW,	&inet6domain,	IPPROTO_RAW,	PR_ATOMIC|PR_ADDR,
-  rip6_input,	rip6_output,	rip6_ctlinput,	rip6_ctloutput,
+  rip6_input,	rip6_pr_output,	rip6_ctlinput,	rip6_ctloutput,
   0,
   0,		0,		0,		0,
   0, &rip6_usrreqs
 },
 { SOCK_RAW,	&inet6domain,	IPPROTO_ICMPV6,	PR_ATOMIC|PR_ADDR|PR_LASTHDR,
-  icmp6_input,	rip6_output,	rip6_ctlinput,	rip6_ctloutput,
+  icmp6_input,	rip6_pr_output,	rip6_ctlinput,	rip6_ctloutput,
   0,
   icmp6_init,	icmp6_fasttimo,	0,		0,
   0, &rip6_usrreqs
@@ -220,27 +222,27 @@ struct ip6protosw inet6sw[] = {
 #endif /* IPSEC */
 #if INET
 { SOCK_RAW,	&inet6domain,	IPPROTO_IPV4,	PR_ATOMIC|PR_ADDR|PR_LASTHDR,
-  encap6_input,	rip6_output, 	0,		rip6_ctloutput,
+  encap6_input,	rip6_pr_output, 	0,		rip6_ctloutput,
   0,
   encap_init,	0,		0,		0,
   0, &rip6_usrreqs
 },
 #endif /*INET*/
 { SOCK_RAW,	&inet6domain,	IPPROTO_IPV6,	PR_ATOMIC|PR_ADDR|PR_LASTHDR,
-  encap6_input, rip6_output,	0,		rip6_ctloutput,
+  encap6_input, rip6_pr_output,	0,		rip6_ctloutput,
   0,
   encap_init,	0,		0,		0,
   0, &rip6_usrreqs
 },
 { SOCK_RAW,     &inet6domain,	IPPROTO_PIM,	PR_ATOMIC|PR_ADDR|PR_LASTHDR,
-  pim6_input,	rip6_output,	0,              rip6_ctloutput,
+  pim6_input,	rip6_pr_output,	0,              rip6_ctloutput,
   0,
   0,            0,              0,              0,
   0, &rip6_usrreqs
 },
 /* raw wildcard */
 { SOCK_RAW,	&inet6domain,	0,		PR_ATOMIC|PR_ADDR,
-  rip6_input,	rip6_output,	0,		rip6_ctloutput,
+  rip6_input,	rip6_pr_output,	0,		rip6_ctloutput,
   0,
   0,		0,		0,		0,
   0, &rip6_usrreqs
@@ -252,7 +254,7 @@ int in6_proto_count = (sizeof (inet6sw) / sizeof (struct ip6protosw));
 
 struct domain inet6domain =
     { AF_INET6, "internet6", in6_dinit, 0, 0, 
-      inet6sw, 0,
+      (struct protosw *)inet6sw, 0,
       in6_inithead, offsetof(struct sockaddr_in6, sin6_addr) << 3, sizeof(struct sockaddr_in6) ,
       sizeof(struct sockaddr_in6), 0
     };
@@ -278,6 +280,11 @@ in6_dinit()
 	}
 }
 
+int rip6_pr_output(struct mbuf *m, struct socket *so, struct sockaddr_in6 *sin6, struct mbuf *m1)
+{
+	panic("rip6_pr_output\n");
+	return 0;
+}
 
 /*
  * Internet configuration info
@@ -298,8 +305,7 @@ int	ip6_forwarding = IPV6FORWARDING;	/* act as router? */
 int	ip6_sendredirects = IPV6_SENDREDIRECTS;
 int	ip6_defhlim = IPV6_DEFHLIM;
 int	ip6_defmcasthlim = IPV6_DEFAULT_MULTICAST_HOPS;
-//int	ip6_accept_rtadv = 0;	/* "IPV6FORWARDING ? 0 : 1" is dangerous */
-int	ip6_accept_rtadv = 1;	/* "IPV6FORWARDING ? 0 : 1" is dangerous */
+int	ip6_accept_rtadv = 0;	/* "IPV6FORWARDING ? 0 : 1" is dangerous */
 int	ip6_maxfragpackets;	/* initialized in frag6.c:frag6_init() */
 int	ip6_log_interval = 5;
 int	ip6_hdrnestlimit = 50;	/* appropriate? */
@@ -310,10 +316,7 @@ int	ip6_gif_hlim = 0;
 int	ip6_use_deprecated = 1;	/* allow deprecated addr (RFC2462 5.5.4) */
 int	ip6_rr_prune = 5;	/* router renumbering prefix
 				 * walk list every 5 sec.    */
-int	ip6_v6only = 0;
-#ifdef __APPLE__
-int	ip6_auto_on = 1;	/* Start IPv6 per interface triggered by IPv4 address assignment */
-#endif
+int	ip6_v6only = 0;		/* Mapped addresses on by default -  Radar 3347718 */
 
 u_int32_t ip6_id = 0UL;
 int	ip6_keepfaith = 0;
@@ -342,7 +345,7 @@ u_long	rip6_recvspace = RIPV6RCVQ;
 int	icmp6_rediraccept = 1;		/* accept and process redirects */
 int	icmp6_redirtimeout = 10 * 60;	/* 10 minutes */
 int	icmp6errppslim = 100;		/* 100pps */
-int	icmp6_nodeinfo = 1;		/* enable/disable NI response */
+int	icmp6_nodeinfo = 3;		/* enable/disable NI response */
 
 /* UDP on IP6 parameters */
 int	udp6_sendspace = 9216;		/* really max datagram size */
@@ -475,6 +478,3 @@ SYSCTL_INT(_net_inet6_icmp6, ICMPV6CTL_ND6_MAXNUDHINT,
 SYSCTL_INT(_net_inet6_icmp6, ICMPV6CTL_ND6_DEBUG,
 	nd6_debug, CTLFLAG_RW,	&nd6_debug,		0, "");
 
-#ifdef __APPLE__
-SYSCTL_INT(_net_inet6_ip6, OID_AUTO, auto_on, CTLFLAG_RW, &ip6_auto_on,0, "");
-#endif

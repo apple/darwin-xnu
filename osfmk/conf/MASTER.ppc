@@ -13,7 +13,7 @@
 #  RELEASE_TRACE = [ RELEASE kdebug ]
 #  DEBUG         = [ RELEASE mach_kdb debug ]
 #  DEBUG_TRACE   = [ DEBUG kdebug ]
-#  PROFILE       = [ RELEASE ]
+#  PROFILE       = [ RELEASE profile ]
 #
 ######################################################################
 #
@@ -37,6 +37,8 @@ options         MACH_PROF	#		# <mach_prof>
 # Debug
 #
 options		DEBUG		#		# <debug>
+
+options		PROFILE		# kernel profiling	# <profile>
 
 machine		"ppc"
 cpu		"ppc"

@@ -53,6 +53,9 @@
 #include <netat/aurp.h>
 #include <netat/debug.h>
 
+
+static void AURPsndRIRsp(aurp_state_t *);
+
 /* */
 void AURPsndRIAck(state, m, flags)
 	aurp_state_t *state;

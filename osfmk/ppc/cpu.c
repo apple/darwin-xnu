@@ -41,8 +41,12 @@
 #include <ppc/machine_cpu.h>
 #include <ppc/exception.h>
 #include <ppc/asm.h>
+#include <ppc/hw_perfmon.h>
 #include <pexpert/pexpert.h>
 #include <kern/cpu_data.h>
+#include <ppc/mappings.h>
+#include <ppc/Diagnostics.h>
+#include <ppc/trap.h>
 
 /* TODO: BOGUS TO BE REMOVED */
 int real_ncpus = 1;
@@ -95,20 +99,15 @@ cpu_control(
 	     cpu_subtype != cmd->cmd_cpu_subtype)
 	  return(KERN_FAILURE);
 
+	if (perfmon_acquire_facility(current_task()) != KERN_SUCCESS) {
+		return(KERN_RESOURCE_SHORTAGE); /* cpu performance facility in use by another task */
+	}
+
 	switch (cmd->cmd_op)
 	  {
 	  case PROCESSOR_PM_CLR_PMC:       /* Clear Performance Monitor Counters */
 	    switch (cpu_subtype)
 	      {
-	      case CPU_SUBTYPE_POWERPC_604:
-		{
-		  oldlevel = ml_set_interrupts_enabled(FALSE);    /* disable interrupts */
-		  mtpmc1(0x0);
-		  mtpmc2(0x0);
-		  ml_set_interrupts_enabled(oldlevel);     /* enable interrupts */
-		  return(KERN_SUCCESS);
-		}
-	      case CPU_SUBTYPE_POWERPC_604e:
 	      case CPU_SUBTYPE_POWERPC_750:
 	      case CPU_SUBTYPE_POWERPC_7400:
 	      case CPU_SUBTYPE_POWERPC_7450:
@@ -127,21 +126,6 @@ cpu_control(
 	  case PROCESSOR_PM_SET_REGS:      /* Set Performance Monitor Registors */
 	    switch (cpu_subtype)
 	      {
-	      case CPU_SUBTYPE_POWERPC_604:
-		if (count <  (PROCESSOR_CONTROL_CMD_COUNT 
-			       + PROCESSOR_PM_REGS_COUNT_POWERPC_604))
-		  return(KERN_FAILURE);
-		else
-		  {
-		    perf_regs = (processor_pm_regs_t)cmd->cmd_pm_regs;
-		    oldlevel = ml_set_interrupts_enabled(FALSE);    /* disable interrupts */
-		    mtmmcr0(PERFMON_MMCR0(perf_regs) & MMCR0_SUPPORT_MASK);
-		    mtpmc1(PERFMON_PMC1(perf_regs));
-		    mtpmc2(PERFMON_PMC2(perf_regs));
-		    ml_set_interrupts_enabled(oldlevel);     /* enable interrupts */
-		    return(KERN_SUCCESS);
-		  }
-	      case CPU_SUBTYPE_POWERPC_604e:
 	      case CPU_SUBTYPE_POWERPC_750:
 		if (count <  (PROCESSOR_CONTROL_CMD_COUNT +
 		       PROCESSOR_PM_REGS_COUNT_POWERPC_750))
@@ -184,17 +168,6 @@ cpu_control(
 	  case PROCESSOR_PM_SET_MMCR:
 	    switch (cpu_subtype)
 	      {
-	      case CPU_SUBTYPE_POWERPC_604:
-		if (count < (PROCESSOR_CONTROL_CMD_COUNT +
-		       PROCESSOR_PM_REGS_COUNT_POWERPC_604))
-		  return(KERN_FAILURE);
-		else
-		  {
-		    perf_regs = (processor_pm_regs_t)cmd->cmd_pm_regs;
-		    mtmmcr0(PERFMON_MMCR0(perf_regs) & MMCR0_SUPPORT_MASK);
-		    return(KERN_SUCCESS);
-		  }
-	      case CPU_SUBTYPE_POWERPC_604e:
 	      case CPU_SUBTYPE_POWERPC_750:
 		if (count < (PROCESSOR_CONTROL_CMD_COUNT +
 		      PROCESSOR_PM_REGS_COUNT_POWERPC_750))
@@ -245,11 +218,6 @@ cpu_info_count(
 	switch (flavor) {
 		case PROCESSOR_PM_REGS_INFO:
 			switch (cpu_subtype) {
-				case CPU_SUBTYPE_POWERPC_604:
-					*count = PROCESSOR_PM_REGS_COUNT_POWERPC_604;
-					return(KERN_SUCCESS);
-
-				case CPU_SUBTYPE_POWERPC_604e:
 				case CPU_SUBTYPE_POWERPC_750:
 		
 					*count = PROCESSOR_PM_REGS_COUNT_POWERPC_750;
@@ -297,21 +265,6 @@ cpu_info(
 			perf_regs = (processor_pm_regs_t) info;
 
 			switch (cpu_subtype) {
-				case CPU_SUBTYPE_POWERPC_604:
-
-					if (*count < PROCESSOR_PM_REGS_COUNT_POWERPC_604)
-					  return(KERN_FAILURE);
-				  
-					oldlevel = ml_set_interrupts_enabled(FALSE);    /* disable interrupts */
-					PERFMON_MMCR0(perf_regs) = mfmmcr0();
-					PERFMON_PMC1(perf_regs)  = mfpmc1();
-					PERFMON_PMC2(perf_regs)  = mfpmc2();
-					ml_set_interrupts_enabled(oldlevel);     /* enable interrupts */
-		
-					*count = PROCESSOR_PM_REGS_COUNT_POWERPC_604;
-					return(KERN_SUCCESS);
-
-				case CPU_SUBTYPE_POWERPC_604e:
 				case CPU_SUBTYPE_POWERPC_750:
 
 					if (*count < PROCESSOR_PM_REGS_COUNT_POWERPC_750)
@@ -448,8 +401,8 @@ cpu_start(
 {
 	struct per_proc_info	*proc_info;
 	kern_return_t		ret;
+	mapping *mp;
 
-	extern void (*exception_handlers[])(void);
 	extern vm_offset_t	intstack;
 	extern vm_offset_t	debstack;
 
@@ -473,20 +426,20 @@ cpu_start(
 		proc_info->debstack_top_ss = proc_info->debstackptr;
 #endif  /* MACH_KDP || MACH_KDB */
 		proc_info->interrupts_enabled = 0;
-		proc_info->active_kloaded = (unsigned int)&active_kloaded[cpu];
-		proc_info->active_stacks = (unsigned int)&active_stacks[cpu];
 		proc_info->need_ast = (unsigned int)&need_ast[cpu];
 		proc_info->FPU_owner = 0;
 		proc_info->VMX_owner = 0;
-
+		mp = (mapping *)(&proc_info->ppCIOmp);
+		mp->mpFlags = 0x01000000 | mpSpecial | 1;
+		mp->mpSpace = invalSpace;
 
 		if (proc_info->start_paddr == EXCEPTION_VECTOR(T_RESET)) {
 
 			/* TODO: get mutex lock reset_handler_lock */
 
 			resethandler_target.type = RESET_HANDLER_START;
-			resethandler_target.call_paddr = kvtophys((vm_offset_t)_start_cpu); 
-			resethandler_target.arg__paddr = kvtophys((vm_offset_t)proc_info);
+			resethandler_target.call_paddr = (vm_offset_t)_start_cpu; 	/* Note: these routines are always V=R */
+			resethandler_target.arg__paddr = (vm_offset_t)proc_info; 	/* Note: these routines are always V=R */
 			
 			ml_phys_write((vm_offset_t)&ResetHandler + 0,
 				      resethandler_target.type);
@@ -518,6 +471,8 @@ cpu_start(
 		return(ret);
 	}
 }
+
+perfTrap perfCpuSigHook = 0;            /* Pointer to CHUD cpu signal hook routine */
 
 /*
  *	Here is where we implement the receiver of the signaling protocol.
@@ -568,7 +523,7 @@ cpu_signal_handler(
 			switch (holdParm0) {					/* Decode SIGP message order */
 
 				case SIGPast:						/* Should we do an AST? */
-					pproc->numSIGPast++;			/* Count this one */
+					pproc->hwCtr.numSIGPast++;		/* Count this one */
 #if 0
 					kprintf("cpu_signal_handler: AST check on cpu %x\n", cpu_number());
 #endif
@@ -577,7 +532,7 @@ cpu_signal_handler(
 					
 				case SIGPcpureq:					/* CPU specific function? */
 				
-					pproc->numSIGPcpureq++;			/* Count this one */
+					pproc->hwCtr.numSIGPcpureq++;	/* Count this one */
 					switch (holdParm1) {			/* Select specific function */
 					
 						case CPRQtemp:				/* Get the temperature */
@@ -618,6 +573,25 @@ cpu_signal_handler(
 
 							return;
 
+						case CPRQsegload:
+							return;
+						
+ 						case CPRQchud:
+ 							parmAddr = (unsigned int *)holdParm2;	/* Get the destination address */
+ 							if(perfCpuSigHook) {
+ 								struct savearea *ssp = current_act()->mact.pcb;
+ 								if(ssp) {
+ 									(perfCpuSigHook)(parmAddr[1] /* request */, ssp, 0, 0);
+ 								}
+   							}
+ 							parmAddr[1] = 0;
+ 							parmAddr[0] = 0;		/* Show we're done */
+  							return;
+						
+						case CPRQscom:
+							fwSCOM((scomcomm *)holdParm2);	/* Do the function */
+							return;
+
 						default:
 							panic("cpu_signal_handler: unknown CPU request - %08X\n", holdParm1);
 							return;
@@ -626,14 +600,14 @@ cpu_signal_handler(
 	
 				case SIGPdebug:						/* Enter the debugger? */		
 
-					pproc->numSIGPdebug++;			/* Count this one */
+					pproc->hwCtr.numSIGPdebug++;	/* Count this one */
 					debugger_is_slave[cpu]++;		/* Bump up the count to show we're here */
 					hw_atomic_sub(&debugger_sync, 1);	/* Show we've received the 'rupt */
 					__asm__ volatile("tw 4,r3,r3");	/* Enter the debugger */
 					return;							/* All done now... */
 					
 				case SIGPwake:						/* Wake up CPU */
-					pproc->numSIGPwake++;			/* Count this one */
+					pproc->hwCtr.numSIGPwake++;		/* Count this one */
 					return;							/* No need to do anything, the interrupt does it all... */
 					
 				default:
@@ -693,12 +667,12 @@ cpu_signal(
 	if((tpproc->MPsigpStat & MPsigpMsgp) == MPsigpMsgp) {	/* Is there an unreceived message already pending? */
 
 		if(signal == SIGPwake) {					/* SIGPwake can merge into all others... */
-			mpproc->numSIGPmwake++;					/* Account for merged wakes */
+			mpproc->hwCtr.numSIGPmwake++;			/* Account for merged wakes */
 			return KERN_SUCCESS;
 		}
 
 		if((signal == SIGPast) && (tpproc->MPsigpParm0 == SIGPast)) {	/* We can merge ASTs */
-			mpproc->numSIGPmast++;					/* Account for merged ASTs */
+			mpproc->hwCtr.numSIGPmast++;			/* Account for merged ASTs */
 			return KERN_SUCCESS;					/* Don't bother to send this one... */
 		}
 
@@ -706,7 +680,7 @@ cpu_signal(
 			if (hw_lock_mbits(&tpproc->MPsigpStat, (MPsigpMsgp | MPsigpAck), 
 			                  (MPsigpBusy | MPsigpPass ), MPsigpBusy, 0)) {
 				busybitset = 1;
-				mpproc->numSIGPmwake++;	
+				mpproc->hwCtr.numSIGPmwake++;	
 			}
 		}
 	}	
@@ -714,7 +688,7 @@ cpu_signal(
 	if((busybitset == 0) && 
 	   (!hw_lock_mbits(&tpproc->MPsigpStat, MPsigpMsgp, 0, MPsigpBusy, 
 	   (gPEClockFrequencyInfo.timebase_frequency_hz >> 11)))) {	/* Try to lock the message block with a .5ms timeout */
-		mpproc->numSIGPtimo++;						/* Account for timeouts */
+		mpproc->hwCtr.numSIGPtimo++;				/* Account for timeouts */
 		return KERN_FAILURE;						/* Timed out, take your ball and go home... */
 	}
 
@@ -738,7 +712,8 @@ void
 cpu_doshutdown(
 	void)
 {
-	processor_doshutdown(current_processor());
+	enable_preemption();
+	processor_offline(current_processor());
 }
 
 void
@@ -746,17 +721,14 @@ cpu_sleep(
 	void)
 {
 	struct per_proc_info	*proc_info;
-	unsigned int	cpu;
+	unsigned int	cpu, i;
+	unsigned int	wait_ncpus_sleep, ncpus_sleep;
 	facility_context *fowner;
-	extern void (*exception_handlers[])(void);
 	extern vm_offset_t	intstack;
 	extern vm_offset_t	debstack;
 	extern void _restart_cpu(void);
 
 	cpu = cpu_number();
-#if 0
-	kprintf("******* About to sleep cpu %d\n", cpu);
-#endif
 
 	proc_info = &per_proc_info[cpu];
 
@@ -782,8 +754,8 @@ cpu_sleep(
 			extern void _start_cpu(void);
 	
 			resethandler_target.type = RESET_HANDLER_START;
-			resethandler_target.call_paddr = kvtophys((vm_offset_t)_start_cpu); 
-			resethandler_target.arg__paddr = kvtophys((vm_offset_t)proc_info);
+			resethandler_target.call_paddr = (vm_offset_t)_start_cpu; 	/* Note: these routines are always V=R */
+			resethandler_target.arg__paddr = (vm_offset_t)proc_info; 	/* Note: these routines are always V=R */
 	
 			ml_phys_write((vm_offset_t)&ResetHandler + 0,
 					  resethandler_target.type);
@@ -794,6 +766,16 @@ cpu_sleep(
 					  
 			__asm__ volatile("sync");
 			__asm__ volatile("isync");
+		}
+
+		wait_ncpus_sleep = real_ncpus-1; 
+		ncpus_sleep = 0;
+		while (wait_ncpus_sleep != ncpus_sleep) {
+			ncpus_sleep = 0;
+			for(i=1; i < real_ncpus ; i++) {
+				if ((*(volatile short *)&per_proc_info[i].cpu_flags) & SleepState)
+					ncpus_sleep++;
+			}
 		}
 	}
 

@@ -4,6 +4,8 @@ export MakeInc_rule=${SRCROOT}/makedefs/MakeInc.rule
 export MakeInc_dir=${SRCROOT}/makedefs/MakeInc.dir
 
 
+export COMP_LDFLAGS_COMPONENT_PPC = -i_OSCompareAndSwap:_hw_compare_and_store
+
 include $(MakeInc_cmd)
 include $(MakeInc_def)
 

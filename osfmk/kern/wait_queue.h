@@ -172,7 +172,7 @@ __private_extern__ wait_result_t wait_queue_assert_wait64_locked(
 			wait_queue_t wait_queue,
 			event64_t wait_event,
 			wait_interrupt_t interruptible,
-			boolean_t unlock);
+			thread_t thread);
 
 /* peek to see which thread would be chosen for a wakeup - but keep on queue */
 __private_extern__ void wait_queue_peek64_locked(

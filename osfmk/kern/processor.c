@@ -100,7 +100,7 @@ void	processor_init(
 		register processor_t	pr,
 		int			slot_num);
 
-void	pset_quanta_set(
+void	pset_quanta_setup(
 		processor_set_t		pset);
 
 kern_return_t	processor_set_base(
@@ -131,6 +131,7 @@ pset_sys_bootstrap(void)
 	register int	i;
 
 	pset_init(&default_pset);
+
 	for (i = 0; i < NCPUS; i++) {
 		/*
 		 *	Initialize processor data structures.
@@ -139,8 +140,9 @@ pset_sys_bootstrap(void)
 		processor_ptr[i] = &processor_array[i];
 		processor_init(processor_ptr[i], i);
 	}
+
 	master_processor = cpu_to_processor(master_cpu);
-	master_processor->cpu_data = get_cpu_data();
+
 	default_pset.active = TRUE;
 }
 
@@ -154,11 +156,10 @@ void pset_init(
 	register int	i;
 
 	/* setup run queue */
-	simple_lock_init(&pset->runq.lock, ETAP_THREAD_PSET_RUNQ);
+	pset->runq.highq = IDLEPRI;
 	for (i = 0; i < NRQBM; i++)
 	    pset->runq.bitmap[i] = 0;
 	setbit(MAXPRI - IDLEPRI, pset->runq.bitmap); 
-	pset->runq.highq = IDLEPRI;
 	pset->runq.urgency = pset->runq.count = 0;
 	for (i = 0; i < NRQS; i++)
 	    queue_init(&pset->runq.queues[i]);
@@ -167,12 +168,11 @@ void pset_init(
 	pset->idle_count = 0;
 	queue_init(&pset->active_queue);
 	simple_lock_init(&pset->sched_lock, ETAP_THREAD_PSET_IDLE);
-	pset->run_count = 0;
+	pset->run_count = pset->share_count = 0;
 	pset->mach_factor = pset->load_average = 0;
 	pset->sched_load = 0;
 	queue_init(&pset->processors);
 	pset->processor_count = 0;
-	simple_lock_init(&pset->processors_lock, ETAP_THREAD_PSET);
 	queue_init(&pset->tasks);
 	pset->task_count = 0;
 	queue_init(&pset->threads);
@@ -182,10 +182,10 @@ void pset_init(
 	mutex_init(&pset->lock, ETAP_THREAD_PSET);
 	pset->pset_self = IP_NULL;
 	pset->pset_name_self = IP_NULL;
-	pset->set_quanta = 1;
+	pset->timeshare_quanta = 1;
 
 	for (i = 0; i <= NCPUS; i++)
-	    pset->machine_quanta[i] = 1;
+	    pset->quantum_factors[i] = 1;
 }
 
 /*
@@ -200,23 +200,21 @@ processor_init(
 	register int	i;
 
 	/* setup run queue */
-	simple_lock_init(&p->runq.lock, ETAP_THREAD_PROC_RUNQ);
+	p->runq.highq = IDLEPRI;
 	for (i = 0; i < NRQBM; i++)
 	    p->runq.bitmap[i] = 0;
 	setbit(MAXPRI - IDLEPRI, p->runq.bitmap); 
-	p->runq.highq = IDLEPRI;
 	p->runq.urgency = p->runq.count = 0;
 	for (i = 0; i < NRQS; i++)
 	    queue_init(&p->runq.queues[i]);
 
 	p->state = PROCESSOR_OFF_LINE;
-	p->current_pri = MINPRI;
-	p->next_thread = THREAD_NULL;
-	p->idle_thread = THREAD_NULL;
-	timer_call_setup(&p->quantum_timer, thread_quantum_expire, p);
-	p->slice_quanta = 0;
+	p->active_thread = p->next_thread = p->idle_thread = THREAD_NULL;
 	p->processor_set = PROCESSOR_SET_NULL;
-	p->processor_set_next = PROCESSOR_SET_NULL;
+	p->current_pri = MINPRI;
+	timer_call_setup(&p->quantum_timer, thread_quantum_expire, p);
+	p->timeslice = 0;
+	p->deadline = UINT64_MAX;
 	simple_lock_init(&p->lock, ETAP_THREAD_PROC);
 	p->processor_self = IP_NULL;
 	p->slot_num = slot_num;
@@ -269,7 +267,7 @@ pset_remove_processor(
 	queue_remove(&pset->processors, processor, processor_t, processors);
 	processor->processor_set = PROCESSOR_SET_NULL;
 	pset->processor_count--;
-	pset_quanta_set(pset);
+	pset_quanta_setup(pset);
 }
 
 /*
@@ -286,7 +284,7 @@ pset_add_processor(
 	queue_enter(&pset->processors, processor, processor_t, processors);
 	processor->processor_set = pset;
 	pset->processor_count++;
-	pset_quanta_set(pset);
+	pset_quanta_setup(pset);
 }
 
 /*
@@ -469,31 +467,34 @@ kern_return_t
 processor_start(
 	processor_t	processor)
 {
-	int	state;
-	spl_t	s;
-	kern_return_t	kr;
+	kern_return_t	result;
+	spl_t			s;
 
 	if (processor == PROCESSOR_NULL)
 		return(KERN_INVALID_ARGUMENT);
 
 	if (processor == master_processor) {
-		thread_bind(current_thread(), processor);
-		thread_block(THREAD_CONTINUE_NULL);
-		kr = cpu_start(processor->slot_num);
-		thread_bind(current_thread(), PROCESSOR_NULL);
+		processor_t		prev;
 
-		return(kr);
+		prev = thread_bind(current_thread(), processor);
+		thread_block(THREAD_CONTINUE_NULL);
+
+		result = cpu_start(processor->slot_num);
+
+		thread_bind(current_thread(), prev);
+
+		return (result);
 	}
 
 	s = splsched();
 	processor_lock(processor);
-
-	state = processor->state;
-	if (state != PROCESSOR_OFF_LINE) {
+	if (processor->state != PROCESSOR_OFF_LINE) {
 		processor_unlock(processor);
 		splx(s);
-		return(KERN_FAILURE);
+
+		return (KERN_FAILURE);
 	}
+
 	processor->state = PROCESSOR_START;
 	processor_unlock(processor);
 	splx(s);
@@ -502,31 +503,35 @@ processor_start(
 		thread_t		thread;   
 		extern void		start_cpu_thread(void);
 	
-		thread = kernel_thread_with_priority(
-									kernel_task, MAXPRI_KERNEL,
-										start_cpu_thread, TRUE, FALSE);
+		thread = kernel_thread_create(start_cpu_thread, MAXPRI_KERNEL);
 
 		s = splsched();
 		thread_lock(thread);
-		thread_bind_locked(thread, processor);
-		thread_go_locked(thread, THREAD_AWAKENED);
-		(void)rem_runq(thread);
+		thread->bound_processor = processor;
 		processor->next_thread = thread;
+		thread->state = TH_RUN;
+		pset_run_incr(thread->processor_set);
 		thread_unlock(thread);
 		splx(s);
 	}
 
-	kr = cpu_start(processor->slot_num);
+	if (processor->processor_self == IP_NULL)
+		ipc_processor_init(processor);
 
-	if (kr != KERN_SUCCESS) {
+	result = cpu_start(processor->slot_num);
+	if (result != KERN_SUCCESS) {
 		s = splsched();
 		processor_lock(processor);
 		processor->state = PROCESSOR_OFF_LINE;
 		processor_unlock(processor);
 		splx(s);
+
+		return (result);
 	}
 
-	return(kr);
+	ipc_processor_enable(processor);
+
+	return (KERN_SUCCESS);
 }
 
 kern_return_t
@@ -553,23 +558,23 @@ processor_control(
 
 /*
  *	Precalculate the appropriate timesharing quanta based on load.  The
- *	index into machine_quanta is the number of threads on the
+ *	index into quantum_factors[] is the number of threads on the
  *	processor set queue.  It is limited to the number of processors in
  *	the set.
  */
 
 void
-pset_quanta_set(
+pset_quanta_setup(
 	processor_set_t		pset)
 {
 	register int	i, count = pset->processor_count;
 
 	for (i = 1; i <= count; i++)
-		pset->machine_quanta[i] = (count + (i / 2)) / i;
+		pset->quantum_factors[i] = (count + (i / 2)) / i;
 
-	pset->machine_quanta[0] = pset->machine_quanta[1];
+	pset->quantum_factors[0] = pset->quantum_factors[1];
 
-	pset_quanta_update(pset);
+	timeshare_quanta_update(pset);
 }
 	    
 kern_return_t
@@ -905,9 +910,9 @@ processor_set_things(
 	    	 thread = (thread_t) queue_next(&thread->pset_threads)) {
 
 		  	thr_act = thread_lock_act(thread);
-			if (thr_act && thr_act->ref_count > 0) {
+			if (thr_act && thr_act->act_ref_count > 0) {
 				/* take ref for convert_act_to_port */
-				act_locked_act_reference(thr_act);
+				act_reference_locked(thr_act);
 				thr_acts[i++] = thr_act;
 			}
 			thread_unlock_act(thread);

@@ -44,7 +44,7 @@
 #define _BSD_DEV_LDD_PRIV_
 
 #include <sys/cdefs.h>
-#include <dev/disk.h>
+#include <sys/disk.h>
 
 typedef int (*PFI)();
 

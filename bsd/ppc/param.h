@@ -113,7 +113,7 @@
 #define	bdbtofsb(bn)	((bn) / (BLKDEV_IOSIZE/DEV_BSIZE))
 
 /* from machdep/ppc/proc_reg.h */
-#if __BIG_ENDIAN__
+#ifdef __BIG_ENDIAN__
 #define ENDIAN_MASK(val,size) (1 << (size-1 - val))
 #else
 #error code not ported to little endian targets yet

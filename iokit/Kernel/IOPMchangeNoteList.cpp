@@ -24,6 +24,7 @@
  */
 #include <IOKit/pwr_mgt/IOPM.h>
 #include <IOKit/pwr_mgt/IOPMchangeNoteList.h>
+#include <IOKit/pwr_mgt/IOPowerConnection.h>
 
 #define super OSObject
 OSDefineMetaClassAndStructors(IOPMchangeNoteList,OSObject)
@@ -107,6 +108,13 @@ long IOPMchangeNoteList::latestChange ( void )
 
 IOReturn IOPMchangeNoteList::releaseHeadChangeNote ( void )
 {
+    IOPowerConnection *tmp;
+
+    if(tmp = changeNote[firstInList].parent) {
+       changeNote[firstInList].parent = 0;
+       tmp->release();
+    }
+
     changeNote[firstInList].flags = IOPMNotInUse;
     firstInList = increment(firstInList);
     return IOPMNoErr;
@@ -124,6 +132,13 @@ IOReturn IOPMchangeNoteList::releaseHeadChangeNote ( void )
 
 IOReturn IOPMchangeNoteList::releaseTailChangeNote ( void )
 {
+    IOPowerConnection *tmp;
+    
+    if(tmp = changeNote[firstInList].parent) {
+       changeNote[firstInList].parent = 0;
+       tmp->release();
+    }
+
     firstUnused = decrement(firstUnused);
     changeNote[firstUnused].flags = IOPMNotInUse;
     return IOPMNoErr;

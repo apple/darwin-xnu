@@ -144,6 +144,7 @@ options		TCPDEBUG	# TCP debug			# <tcpdebug>
 options		RANDOM_IP_ID	# random (not sequential) ip ids	# <randomipid>
 options		TCP_DROP_SYNFIN	# Drop TCP packets with SYN+FIN set	# <tcpdrop_synfin>
 options		ICMP_BANDLIM	# ICMP bandwidth limiting sysctl
+options		AUDIT		# Security event auditing	# <audit>
 
 
 #
@@ -152,6 +153,7 @@ options		ICMP_BANDLIM	# ICMP bandwidth limiting sysctl
 options 	COMPAT_43	# 4.3 BSD compatibility		# <compat_43>
 options 	DIAGNOSTIC	# diagnostics				# <diagnostic>
 options		KTRACE		# ktrace support			# <ktrace>
+options		GPROF		# build profiling			# <profile>
 
 #
 #	4.4 filesystems 
@@ -245,6 +247,10 @@ pseudo-device	pty	128 init pty_init
 #
 # vnode device
 pseudo-device	vndevice	4	init	vndevice_init
+
+#
+# memory device
+pseudo-device	mdevdevice	1	init	mdevinit
 
 #
 #

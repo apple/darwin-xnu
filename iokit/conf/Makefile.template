@@ -28,8 +28,11 @@ include $(MakeInc_def)
 #
 CFLAGS+= -DKERNEL -DDRIVER_PRIVATE				\
 	-Wall -Wno-four-char-constants -fno-common		\
-	-DIOMATCHDEBUG=1 -DIOALLOCDEBUG=1 -DIOASSERT=0		\
+	-DIOMATCHDEBUG=1 -DIOALLOCDEBUG=1			\
 #-DIOKITDEBUG=-1
+
+CFLAGS_RELEASE += -DIOASSERT=0
+CFLAGS_DEBUG += -DIOASSERT=1
 
 SFLAGS+= -DKERNEL
 
@@ -88,7 +91,7 @@ LDOBJS = $(OBJS)
 $(COMPONENT).o: $(LDOBJS)
 	@echo "creating $(COMPONENT).o"
 	$(RM) $(RMFLAGS) vers.c
-	$(OBJROOT)/$(KERNEL_CONFIG)_$(ARCH_CONFIG)/$(COMPONENT)/newvers \
+	$(COMPOBJROOT)/newvers \
 	`$(CAT) ${VERSION_FILES}` ${COPYRIGHT_FILES}
 	${KCC} $(CFLAGS) $(INCLUDES) -c vers.c
 	@echo [ updating $(COMPONENT).o ${IOKIT_KERNEL_CONFIG} ]

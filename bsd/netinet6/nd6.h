@@ -80,7 +80,7 @@ struct nd_ifinfo {
 	int recalctm;			/* BaseReacable re-calculation timer */
 	u_int8_t chlim;			/* CurHopLimit */
 	u_int8_t receivedra;
-	/* the followings are for privacy extension for addrconf */
+	/* the following 3 members are for privacy extension for addrconf */
 	u_int8_t randomseed0[8]; /* upper 64 bits of MD5 digest */
 	u_int8_t randomseed1[8]; /* lower 64 bits (usually the EUI64 IFID) */
 	u_int8_t randomid[8];	/* current random ID */
@@ -205,7 +205,7 @@ TAILQ_HEAD(nd_drhead, nd_defrouter);
 struct	nd_defrouter {
 	TAILQ_ENTRY(nd_defrouter) dr_entry;
 	struct	in6_addr rtaddr;
-	u_char	flags;
+	u_char	flags;		/* flags on RA message */
 	u_short	rtlifetime;
 	u_long	expire;
 	u_long	advint;		/* Mobile IPv6 addition (milliseconds) */
@@ -250,7 +250,7 @@ struct nd_prefix {
  */
 struct inet6_ndpr_msghdr {
 	u_short	inpm_msglen;	/* to skip over non-understood messages */
-	u_char	inpm_version;	/* future binary compatability */
+	u_char	inpm_version;	/* future binary compatibility */
 	u_char	inpm_type;	/* message type */
 	struct in6_addr inpm_prefix;
 	u_long	prm_vltim;
@@ -312,7 +312,7 @@ union nd_opts {
 		struct nd_opt_hdr *zero;
 		struct nd_opt_hdr *src_lladdr;
 		struct nd_opt_hdr *tgt_lladdr;
-		struct nd_opt_prefix_info *pi_beg;/* multiple opts, start */
+		struct nd_opt_prefix_info *pi_beg; /* multiple opts, start */
 		struct nd_opt_rd_hdr *rh;
 		struct nd_opt_mtu *mtu;
 		struct nd_opt_hdr *six;

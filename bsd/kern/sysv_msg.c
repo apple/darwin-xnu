@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2003 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -48,6 +48,7 @@
 #include <sys/proc.h>
 #include <sys/msg.h>
 #include <sys/sysent.h>
+#include <sys/kern_audit.h>
 
 static void msginit __P((void *));
 SYSINIT(sysv_msg, SI_SUB_SYSV_MSG, SI_ORDER_FIRST, msginit, NULL)
@@ -209,6 +210,8 @@ msgctl(p, uap)
 	printf("call to msgctl(%d, %d, 0x%x)\n", msqid, cmd, user_msqptr);
 #endif
 
+	AUDIT_ARG(svipc_cmd, cmd);
+	AUDIT_ARG(svipc_id, msqid);
 	msqid = IPCID_TO_IX(msqid);
 
 	if (msqid < 0 || msqid >= msginfo.msgmni) {
@@ -426,6 +429,7 @@ msgget(p, uap)
 found:
 	/* Construct the unique msqid */
 	p->p_retval[0] = IXSEQ_TO_IPCID(msqid, msqptr->msg_perm);
+	AUDIT_ARG(svipc_id, p->p_retval[0]);
 	return(0);
 }
 
@@ -458,6 +462,7 @@ msgsnd(p, uap)
 	    msgflg);
 #endif
 
+	AUDIT_ARG(svipc_id, msqid);
 	msqid = IPCID_TO_IX(msqid);
 
 	if (msqid < 0 || msqid >= msginfo.msgmni) {
@@ -796,6 +801,7 @@ msgrcv(p, uap)
 	    msgsz, msgtyp, msgflg);
 #endif
 
+	AUDIT_ARG(svipc_id, msqid);
 	msqid = IPCID_TO_IX(msqid);
 
 	if (msqid < 0 || msqid >= msginfo.msgmni) {

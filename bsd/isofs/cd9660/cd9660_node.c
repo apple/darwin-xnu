@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2001 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2003 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -82,6 +82,7 @@
 #include <sys/malloc.h>
 #include <sys/stat.h>
 #include <sys/lock.h>
+#include <sys/namei.h>
 
 #include <isofs/cd9660/iso.h>
 #include <isofs/cd9660/cd9660_node.h>
@@ -101,10 +102,8 @@ u_long idvhash;
 #define	DNOHASH(device, inum)	(((device) + ((inum)>>12)) & idvhash)
 #endif
 
-/* defined in bsd/ufs/ufs/ufs_inode.c */
+/* defined in bsd/vfs/vfs_subr.c */
 extern int prtactive;	/* 1 => print out reclaim of active vnodes */
-
-extern void cache_purge (struct vnode *vp);
 
 extern u_char isonullname[];
 /*
@@ -315,6 +314,8 @@ cd9660_reclaim(ap)
 	}
 	if (ip->i_namep != isonullname)
 		FREE(ip->i_namep, M_TEMP);
+	if (ip->i_riff != NULL)
+		FREE(ip->i_riff, M_TEMP);
 	FREE_ZONE(vp->v_data, sizeof(struct iso_node), M_ISOFSNODE);
 	vp->v_data = NULL;
 	return (0);

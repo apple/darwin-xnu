@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2002 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -823,7 +823,7 @@ fdesc_badop()
 #define fdesc_mkdir ((int (*) __P((struct  vop_mkdir_args *)))eopnotsupp)
 #define fdesc_rmdir ((int (*) __P((struct  vop_rmdir_args *)))eopnotsupp)
 #define fdesc_symlink ((int (*) __P((struct vop_symlink_args *)))eopnotsupp)
-#define fdesc_abortop ((int (*) __P((struct  vop_abortop_args *)))nullop)
+#define fdesc_abortop ((int (*) __P((struct  vop_abortop_args *)))nop_abortop)
 #define fdesc_lock ((int (*) __P((struct  vop_lock_args *)))vop_nolock)
 #define fdesc_unlock ((int (*) __P((struct  vop_unlock_args *)))vop_nounlock)
 #define fdesc_bmap ((int (*) __P((struct  vop_bmap_args *)))fdesc_badop)

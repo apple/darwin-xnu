@@ -294,7 +294,12 @@ If a receive operation has been blocked for this much time without
 receiving additional data, it returns with a short count
 or with the error
 .Er EWOULDBLOCK
-if no data were received.
+if no data were received. The struct timeval parameter must represent a 
+positive time interval less than SHRT_MAX * 10 milliseconds (5 minutes 
+and 28 seconds) otherwise 
+.Fn setsockopt 
+returns with the error
+.Er EDOM .
 .Pp
 .Dv SO_NOSIGPIPE is an option that prevents SIGPIPE from being raised 
 when a write fails on a socket to which there is no reader; 
@@ -341,6 +346,8 @@ For
 this error may also be returned if
 .Fa optlen
 is not in a valid part of the process address space.
+.It Bq Er EDOM
+The argument value is out of bounds. 
 .El
 .Sh SEE ALSO
 .Xr ioctl 2 ,

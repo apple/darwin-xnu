@@ -90,9 +90,9 @@ bool IORangeAllocator::init( IORangeScalar endOfRange,
 
 IORangeAllocator * IORangeAllocator:: withRange(
 					IORangeScalar endOfRange,
-				        IORangeScalar defaultAlignment = 0,
-				        UInt32 capacity = 0,
-					IOOptionBits options = 0 )
+				        IORangeScalar defaultAlignment,
+				        UInt32 capacity,
+					IOOptionBits options )
 {
     IORangeAllocator * thingy;
 
@@ -180,7 +180,7 @@ void IORangeAllocator::deallocElement( UInt32 index )
 
 bool IORangeAllocator::allocate( IORangeScalar size,
 				 IORangeScalar * result,
-				 IORangeScalar alignment = 0 )
+				 IORangeScalar alignment )
 {
     IORangeScalar	data, dataEnd;
     IORangeScalar	thisStart, thisEnd;

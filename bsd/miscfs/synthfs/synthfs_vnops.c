@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2002 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -64,13 +64,6 @@
  */
 #include <sys/ubc.h>
 #endif
-
-/* external routines defined in vfs_cache.c */
-extern void cache_purge (struct vnode *vp);
-extern int cache_lookup (struct vnode *dvp, struct vnode **vpp, struct componentname *cnp);
-extern void cache_enter (struct vnode *dvp, struct vnode *vpp, struct componentname *cnp);
-
-//extern void vnode_uncache(struct vnode *);
 
 extern int groupmember(gid_t gid, struct ucred* cred);
 
@@ -185,7 +178,7 @@ struct vop_create_args /* {
 	Debugger(debugmsg);
 #endif
 
-	return EOPNOTSUPP;
+	return err_create(ap);
 }
 
 

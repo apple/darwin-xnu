@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2003 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -115,6 +115,11 @@
 #include <kern/task_swap.h>
 #endif	/* TASK_SWAPPER */
 
+#ifdef __ppc__
+#include <ppc/exception.h>
+#include <ppc/hw_perfmon.h>
+#endif
+
 /*
  * Exported interfaces
  */
@@ -147,6 +152,16 @@ kern_return_t	task_set_ledger(
 			ledger_t	paged);
 
 void
+task_backing_store_privileged(
+			task_t task)
+{
+	task_lock(task);
+	task->priv_flags |= VM_BACKING_STORE_PRIV;
+	task_unlock(task);
+	return;
+}
+
+void
 task_init(void)
 {
 	task_zone = zinit(
@@ -159,20 +174,12 @@ task_init(void)
 
 	/*
 	 * Create the kernel task as the first task.
-	 * Task_create_local must assign to kernel_task as a side effect,
-	 * for other initialization. (:-()
 	 */
-	if (task_create_local(
-			TASK_NULL, FALSE, FALSE, &kernel_task) != KERN_SUCCESS)
+	if (task_create_internal(TASK_NULL, FALSE, &kernel_task) != KERN_SUCCESS)
 		panic("task_init\n");
+
 	vm_map_deallocate(kernel_task->map);
 	kernel_task->map = kernel_map;
-
-#if	MACH_ASSERT
-	if (watchacts & WA_TASK)
-	    printf("task_init: kernel_task = %x map=%x\n",
-				kernel_task, kernel_map);
-#endif	/* MACH_ASSERT */
 }
 
 #if	MACH_HOST
@@ -235,48 +242,7 @@ kernel_task_create(
 	vm_size_t		map_size,
 	task_t			*child_task)
 {
-	kern_return_t		result;
-	task_t			new_task;
-	vm_map_t		old_map;
-
-	/*
-	 * Create the task.
-	 */
-	result = task_create_local(parent_task, FALSE, TRUE, &new_task);
-	if (result != KERN_SUCCESS)
-		return (result);
-
-	/*
-	 * Task_create_local creates the task with a user-space map.
-	 * We attempt to replace the map and free it afterwards; else
-	 * task_deallocate will free it (can NOT set map to null before
-	 * task_deallocate, this impersonates a norma placeholder task).
-	 * _Mark the memory as pageable_ -- this is what we
-	 * want for images (like servers) loaded into the kernel.
-	 */
-	if (map_size == 0) {
-		vm_map_deallocate(new_task->map);
-		new_task->map = kernel_map;
-		*child_task = new_task;
-	} else {
-		old_map = new_task->map;
-		if ((result = kmem_suballoc(kernel_map, &map_base,
-					    map_size, TRUE, FALSE,
-					    &new_task->map)) != KERN_SUCCESS) {
-			/*
-			 * New task created with ref count of 2 -- decrement by
-			 * one to force task deletion.
-			 */
-			printf("kmem_suballoc(%x,%x,%x,1,0,&new) Fails\n",
-			       kernel_map, map_base, map_size);
-			--new_task->ref_count;
-			task_deallocate(new_task);
-			return (result);
-		}
-		vm_map_deallocate(old_map);
-		*child_task = new_task;
-	}
-	return (KERN_SUCCESS);
+	return (KERN_INVALID_ARGUMENT);
 }
 
 kern_return_t
@@ -290,8 +256,8 @@ task_create(
 	if (parent_task == TASK_NULL)
 		return(KERN_INVALID_ARGUMENT);
 
-	return task_create_local(
-	    		parent_task, inherit_memory, FALSE, child_task);
+	return task_create_internal(
+	    		parent_task, inherit_memory, child_task);
 }
 
 kern_return_t
@@ -299,6 +265,7 @@ host_security_create_task_token(
         host_security_t		host_security,
 	task_t			parent_task,
         security_token_t	sec_token,
+	audit_token_t		audit_token,
 	host_priv_t		host_priv,
         ledger_port_array_t	ledger_ports,
         mach_msg_type_number_t	num_ledger_ports,
@@ -313,8 +280,8 @@ host_security_create_task_token(
 	if (host_security == HOST_NULL)
 		return(KERN_INVALID_SECURITY);
 
-	result = task_create_local(
-			parent_task, inherit_memory, FALSE, child_task);
+	result = task_create_internal(
+			parent_task, inherit_memory, child_task);
 
         if (result != KERN_SUCCESS)
                 return(result);
@@ -322,6 +289,7 @@ host_security_create_task_token(
 	result = host_security_set_task_token(host_security,
 					      *child_task,
 					      sec_token,
+					      audit_token,
 					      host_priv);
 
 	if (result != KERN_SUCCESS)
@@ -331,10 +299,9 @@ host_security_create_task_token(
 }
 
 kern_return_t
-task_create_local(
+task_create_internal(
 	task_t		parent_task,
 	boolean_t	inherit_memory,
-	boolean_t	kernel_loaded,
 	task_t		*child_task)		/* OUT */
 {
 	task_t		new_task;
@@ -352,19 +319,18 @@ task_create_local(
 		new_task->map = vm_map_fork(parent_task->map);
 	else
 		new_task->map = vm_map_create(pmap_create(0),
-					round_page(VM_MIN_ADDRESS),
-					trunc_page(VM_MAX_ADDRESS), TRUE);
+					round_page_32(VM_MIN_ADDRESS),
+					trunc_page_32(VM_MAX_ADDRESS), TRUE);
 
 	mutex_init(&new_task->lock, ETAP_THREAD_TASK_NEW);
-	queue_init(&new_task->thr_acts);
+	queue_init(&new_task->threads);
 	new_task->suspend_count = 0;
-	new_task->thr_act_count = 0;
-	new_task->res_act_count = 0;
-	new_task->active_act_count = 0;
+	new_task->thread_count = 0;
+	new_task->res_thread_count = 0;
+	new_task->active_thread_count = 0;
 	new_task->user_stop_count = 0;
 	new_task->role = TASK_UNSPECIFIED;
 	new_task->active = TRUE;
-	new_task->kernel_loaded = kernel_loaded;
 	new_task->user_data = 0;
 	new_task->faults = 0;
 	new_task->cow_faults = 0;
@@ -372,8 +338,11 @@ task_create_local(
 	new_task->messages_sent = 0;
 	new_task->messages_received = 0;
 	new_task->syscalls_mach = 0;
+	new_task->priv_flags = 0;
 	new_task->syscalls_unix=0;
 	new_task->csw=0;
+	new_task->taskFeatures[0] = 0;				/* Init task features */
+	new_task->taskFeatures[1] = 0;				/* Init task features */
 	new_task->dynamic_working_set = 0;
 	
 	task_working_set_create(new_task, TWS_SMALL_HASH_LINE_COUNT, 
@@ -382,6 +351,10 @@ task_create_local(
 #ifdef MACH_BSD
 	new_task->bsd_info = 0;
 #endif /* MACH_BSD */
+
+#ifdef __ppc__
+	if(per_proc_info[0].pf.Available & pf64Bit) new_task->taskFeatures[0] |= tf64BitData;	/* If 64-bit machine, show we have 64-bit registers at least */
+#endif
 
 #if	TASK_SWAPPER
 	new_task->swap_state = TASK_SW_IN;
@@ -425,6 +398,7 @@ task_create_local(
 			pset = &default_pset;
 
 		new_task->sec_token = parent_task->sec_token;
+		new_task->audit_token = parent_task->audit_token;
 
 		shared_region_mapping_ref(parent_task->system_shared_region);
 		new_task->system_shared_region = parent_task->system_shared_region;
@@ -438,12 +412,13 @@ task_create_local(
 		pset = &default_pset;
 
 		new_task->sec_token = KERNEL_SECURITY_TOKEN;
+		new_task->audit_token = KERNEL_AUDIT_TOKEN;
 		new_task->wired_ledger_port = ledger_copy(root_wired_ledger);
 		new_task->paged_ledger_port = ledger_copy(root_paged_ledger);
 	}
 
 	if (kernel_task == TASK_NULL) {
-		new_task->priority = MINPRI_KERNEL;
+		new_task->priority = BASEPRI_KERNEL;
 		new_task->max_priority = MAXPRI_KERNEL;
 	}
 	else {
@@ -459,27 +434,10 @@ task_create_local(
 		task_unfreeze(parent_task);
 #endif	/* MACH_HOST */
 
-#if	FAST_TAS
- 	if (inherit_memory) {
- 		new_task->fast_tas_base = parent_task->fast_tas_base;
- 		new_task->fast_tas_end  = parent_task->fast_tas_end;
- 	} else {
- 		new_task->fast_tas_base = (vm_offset_t)0;
- 		new_task->fast_tas_end  = (vm_offset_t)0;
- 	}
-#endif	/* FAST_TAS */
+	if (vm_backing_store_low && parent_task != NULL)
+		new_task->priv_flags |= (parent_task->priv_flags&VM_BACKING_STORE_PRIV);
 
 	ipc_task_enable(new_task);
-
-#if	TASK_SWAPPER
-	task_swapout_eligible(new_task);
-#endif	/* TASK_SWAPPER */
-
-#if	MACH_ASSERT
-	if (watchacts & WA_TASK)
-	    printf("*** task_create_local(par=%x inh=%x) == 0x%x\n",
-			parent_task, inherit_memory, new_task);
-#endif	/* MACH_ASSERT */
 
 	*child_task = new_task;
 	return(KERN_SUCCESS);
@@ -516,7 +474,6 @@ task_deallocate(
 	if(task->dynamic_working_set)
 		tws_hash_destroy((tws_hash_t)task->dynamic_working_set);
 
-
 	eml_task_deallocate(task);
 
 	ipc_task_terminate(task);
@@ -535,9 +492,6 @@ task_deallocate(
 	task_unfreeze(task);
 #endif
 
-	if (task->kernel_loaded)
-	    vm_map_remove(kernel_map, task->map->min_offset,
-			  task->map->max_offset, VM_MAP_NO_FLAGS);
 	vm_map_deallocate(task->map);
 	is_release(task->itk_space);
 	task_prof_deallocate(task);
@@ -675,18 +629,17 @@ task_terminate_internal(
 	 *	handed over to the reaper, who will finally remove the
 	 *	thread from the task list and free the structures.
          */
-	queue_iterate(&task->thr_acts, thr_act, thread_act_t, thr_acts) {
+	queue_iterate(&task->threads, thr_act, thread_act_t, task_threads) {
 			thread_terminate_internal(thr_act);
 	}
 
 	/*
-	 *	Clean up any virtual machine state/resources associated
-	 *	with the current activation because it may hold wiring
-	 *	and other references on resources we will be trying to
-	 *	release below.
+	 *	Give the machine dependent code a chance
+	 *	to perform cleanup before ripping apart
+	 *	the task.
 	 */
 	if (cur_thr_act->task == task)
-		act_virtual_machine_destroy(cur_thr_act);
+		machine_thread_terminate_self();
 
 	task_unlock(task);
 
@@ -698,8 +651,7 @@ task_terminate_internal(
 	/*
 	 *	Destroy the IPC space, leaving just a reference for it.
 	 */
-	if (!task->kernel_loaded)
-		ipc_space_destroy(task->itk_space);
+	ipc_space_destroy(task->itk_space);
 
 	/*
 	 * If the current thread is a member of the task
@@ -727,6 +679,10 @@ task_terminate_internal(
 	 * the previous interruptible state.
 	 */
 	thread_interrupt_level(interrupt_save);
+
+#if __ppc__
+    perfmon_release_facility(task); // notify the perfmon facility
+#endif
 
 	/*
 	 * Get rid of the task active reference on itself.
@@ -781,7 +737,7 @@ task_halt(
 		return(KERN_FAILURE);
 	}
 
-	if (task->thr_act_count > 1) {
+	if (task->thread_count > 1) {
 		/*
 		 * Mark all the threads to keep them from starting any more
 		 * user-level execution.  The thread_terminate_internal code
@@ -799,7 +755,7 @@ task_halt(
 		 *	handed over to the reaper, who will finally remove the
 		 *	thread from the task list and free the structures.
 		 */
-		queue_iterate(&task->thr_acts, thr_act, thread_act_t,thr_acts) {
+		queue_iterate(&task->threads, thr_act, thread_act_t, task_threads) {
 			if (thr_act != cur_thr_act)
 				thread_terminate_internal(thr_act);
 		}
@@ -807,12 +763,11 @@ task_halt(
 	}
 
 	/*
-	 *	If the current thread has any virtual machine state
-	 *	associated with it, we need to explicitly clean that
-	 *	up now (because we did not terminate the current act)
-	 *	before we try to clean up the task VM and port spaces.
+	 *	Give the machine dependent code a chance
+	 *	to perform cleanup before ripping apart
+	 *	the task.
 	 */
-	act_virtual_machine_destroy(cur_thr_act);
+	machine_thread_terminate_self();
 
 	task_unlock(task);
 
@@ -825,8 +780,7 @@ task_halt(
 	 *	Destroy the contents of the IPC space, leaving just
 	 *	a reference for it.
 	 */
-	if (!task->kernel_loaded)
-		ipc_space_clean(task->itk_space);
+	ipc_space_clean(task->itk_space);
 
 	/*
 	 * Clean out the address space, as we are going to be
@@ -862,7 +816,7 @@ task_hold_locked(
 	/*
 	 *	Iterate through all the thread_act's and hold them.
 	 */
-	queue_iterate(&task->thr_acts, thr_act, thread_act_t, thr_acts) {
+	queue_iterate(&task->threads, thr_act, thread_act_t, task_threads) {
 		act_lock_thread(thr_act);
 		thread_hold(thr_act);
 		act_unlock_thread(thr_act);
@@ -920,12 +874,12 @@ task_wait_locked(
 	 *	stop.  Do not wait for the current thread if it is within
 	 *	the task.
 	 */
-	queue_iterate(&task->thr_acts, thr_act, thread_act_t, thr_acts) {
+	queue_iterate(&task->threads, thr_act, thread_act_t, task_threads) {
 		if (thr_act != cur_thr_act) {
-			thread_shuttle_t thr_shuttle;
+			thread_t thread;
 
-			thr_shuttle = act_lock_thread(thr_act);
-			thread_wait(thr_shuttle);
+			thread = act_lock_thread(thr_act);
+			thread_wait(thread);
 			act_unlock_thread(thr_act);
 		}
 	}
@@ -955,7 +909,7 @@ task_release_locked(
 	 *	Do not hold the current thread_act if it is within the
 	 *	task.
 	 */
-	queue_iterate(&task->thr_acts, thr_act, thread_act_t, thr_acts) {
+	queue_iterate(&task->threads, thr_act, thread_act_t, task_threads) {
 		act_lock_thread(thr_act);
 		thread_release(thr_act);
 		act_unlock_thread(thr_act);
@@ -1017,7 +971,7 @@ task_threads(
 			return KERN_FAILURE;
 		}
 
-		actual = task->thr_act_count;
+		actual = task->thread_count;
 
 		/* do we have the memory we need? */
 		size_needed = actual * sizeof(mach_port_t);
@@ -1041,17 +995,17 @@ task_threads(
 	/* OK, have memory and the task is locked & active */
 	thr_acts = (thread_act_t *) addr;
 
-	for (i = j = 0, thr_act = (thread_act_t) queue_first(&task->thr_acts);
+	for (i = j = 0, thr_act = (thread_act_t) queue_first(&task->threads);
 	     i < actual;
-	     i++, thr_act = (thread_act_t) queue_next(&thr_act->thr_acts)) {
+	     i++, thr_act = (thread_act_t) queue_next(&thr_act->task_threads)) {
 		act_lock(thr_act);
-		if (thr_act->ref_count > 0) {
-			act_locked_act_reference(thr_act);
+		if (thr_act->act_ref_count > 0) {
+			act_reference_locked(thr_act);
 			thr_acts[j++] = thr_act;
 		}
 		act_unlock(thr_act);
 	}
-	assert(queue_end(&task->thr_acts, (queue_entry_t) thr_act));
+	assert(queue_end(&task->threads, (queue_entry_t) thr_act));
 
 	actual = j;
 	size_needed = actual * sizeof(mach_port_t);
@@ -1184,8 +1138,10 @@ host_security_set_task_token(
         host_security_t  host_security,
         task_t		 task,
         security_token_t sec_token,
+	audit_token_t	 audit_token,
 	host_priv_t	 host_priv)
 {
+	ipc_port_t	 host_port;
 	kern_return_t	 kr;
 
 	if (task == TASK_NULL)
@@ -1196,17 +1152,16 @@ host_security_set_task_token(
 
         task_lock(task);
         task->sec_token = sec_token;
+	task->audit_token = audit_token;
         task_unlock(task);
 
 	if (host_priv != HOST_PRIV_NULL) {
-		kr = task_set_special_port(task,
-				TASK_HOST_PORT,
-				ipc_port_make_send(realhost.host_priv_self));
+		kr = host_get_host_priv_port(host_priv, &host_port);
 	} else {
-		kr = task_set_special_port(task,
-				TASK_HOST_PORT,
-				ipc_port_make_send(realhost.host_self));
+		kr = host_get_host_port(host_priv_self(), &host_port);
 	}
+	assert(kr == KERN_SUCCESS);
+	kr = task_set_special_port(task, TASK_HOST_PORT, host_port);
         return(kr);
 }
 
@@ -1329,8 +1284,8 @@ task_info(
 		times_info->system_time.microseconds = 0;
 
 		task_lock(task);
-		queue_iterate(&task->thr_acts, thr_act,
-			      thread_act_t, thr_acts)
+		queue_iterate(&task->threads, thr_act,
+			      thread_act_t, task_threads)
 		{
 		    time_value_t user_time, system_time;
 		    spl_t	 s;
@@ -1430,6 +1385,24 @@ task_info(
 		task_unlock(task);
 
 		*task_info_count = TASK_SECURITY_TOKEN_COUNT;
+                break;
+            }
+            
+            case TASK_AUDIT_TOKEN:
+	    {
+                register audit_token_t	*audit_token_p;
+
+		if (*task_info_count < TASK_AUDIT_TOKEN_COUNT) {
+		    return(KERN_INVALID_ARGUMENT);
+		}
+
+		audit_token_p = (audit_token_t *) task_info_out;
+
+		task_lock(task);
+		*audit_token_p = task->audit_token;
+		task_unlock(task);
+
+		*task_info_count = TASK_AUDIT_TOKEN_COUNT;
                 break;
             }
             
@@ -1720,6 +1693,25 @@ task_set_port_space(
 }
 
 /*
+ *     Routine:	
+ *			task_is_classic
+ *     Purpose:	
+ *			Returns true if the task is a P_CLASSIC task.
+ */
+boolean_t
+task_is_classic(
+	task_t  task)   
+{
+	boolean_t result = FALSE;
+
+	if (task) {
+		struct proc *p = get_bsdtask_info(task);
+		result = proc_is_classic(p) ? TRUE : FALSE;
+	}
+	return result;
+}
+
+/*
  * We need to export some functions to other components that
  * are currently implemented in macros within the osfmk
  * component.  Just export them as functions of the same name.
@@ -1727,9 +1719,9 @@ task_set_port_space(
 boolean_t is_kerneltask(task_t t)
 {
 	if (t == kernel_task)
-		return(TRUE);
-	else
-		return((t->kernel_loaded));
+		return (TRUE);
+
+	return (FALSE);
 }
 
 #undef current_task

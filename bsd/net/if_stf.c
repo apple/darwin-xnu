@@ -145,7 +145,7 @@ static int ip_stf_ttl = 40;
 extern  struct domain inetdomain;
 struct protosw in_stf_protosw =
 { SOCK_RAW,	&inetdomain,	IPPROTO_IPV6,	PR_ATOMIC|PR_ADDR,
-  in_stf_input, rip_output,	0,		rip_ctloutput,
+  in_stf_input, 0,	0,		rip_ctloutput,
   0,
   0,            0,              0,              0,
   0,
@@ -209,33 +209,17 @@ int stf_shutdown()
 	return 0;
 }
 
-void stf_reg_if_mods()
-{   
-     struct dlil_ifmod_reg_str  stf_ifmod;
-
-     bzero(&stf_ifmod, sizeof(stf_ifmod));
-     stf_ifmod.add_if 	= stf_add_if;
-     stf_ifmod.del_if	= stf_del_if;
-     stf_ifmod.add_proto = stf_add_proto;
-     stf_ifmod.del_proto = stf_del_proto;
-     stf_ifmod.ifmod_ioctl = 0;
-     stf_ifmod.shutdown    = stf_shutdown;
-
-    
-    if (dlil_reg_if_modules(APPLE_IF_FAM_STF, &stf_ifmod))
-        panic("Couldn't register stf modules\n");
-    
-}   
-    
-u_long  stf_attach_inet6(struct ifnet *ifp)
+int  stf_attach_inet6(struct ifnet *ifp, u_long *dl_tag)
 {       
     struct dlil_proto_reg_str   reg;
     struct dlil_demux_desc      desc;
     short native=0;
     int   stat, i;
 
-    if (stf_dl_tag != 0)
-		return stf_dl_tag;
+    if (stf_dl_tag != 0) {
+		*dl_tag = stf_dl_tag;
+		return 0;
+    }
 
     TAILQ_INIT(&reg.demux_desc_head); 
     desc.type = DLIL_DESC_RAW;
@@ -255,21 +239,18 @@ u_long  stf_attach_inet6(struct ifnet *ifp)
     reg.protocol_family  = PF_INET6;
 
     stat = dlil_attach_protocol(&reg, &stf_dl_tag);
-    if (stat) {
-        panic("stf_attach_inet6 can't attach interface\n");
-    }
+    *dl_tag = stf_dl_tag;
 
-    return stf_dl_tag;
+    return stat;
 }
 
-u_long  stf_detach_inet6(struct ifnet *ifp)
+int  stf_detach_inet6(struct ifnet *ifp, u_long dl_tag)
 {
-    u_long      ip_dl_tag = 0;
     int         stat;
 
-    stat = dlil_find_dltag(ifp->if_family, ifp->if_unit, AF_INET6, &ip_dl_tag);
+    stat = dlil_find_dltag(ifp->if_family, ifp->if_unit, AF_INET6, &dl_tag);
     if (stat == 0) {
-        stat = dlil_detach_protocol(ip_dl_tag);
+        stat = dlil_detach_protocol(dl_tag);
         if (stat) {
             printf("WARNING: stf_detach can't detach IP AF_INET6 from interface\n");
 	}
@@ -277,6 +258,33 @@ u_long  stf_detach_inet6(struct ifnet *ifp)
     return (stat);
 }
 
+void stf_reg_if_mods()
+{   
+	struct dlil_ifmod_reg_str  stf_ifmod;
+	struct dlil_protomod_reg_str stf_protoreg;
+	int error;
+
+	bzero(&stf_ifmod, sizeof(stf_ifmod));
+	stf_ifmod.add_if 	= stf_add_if;
+	stf_ifmod.del_if	= stf_del_if;
+	stf_ifmod.add_proto = stf_add_proto;
+	stf_ifmod.del_proto = stf_del_proto;
+	stf_ifmod.ifmod_ioctl = 0;
+	stf_ifmod.shutdown    = stf_shutdown;
+
+    
+	if (dlil_reg_if_modules(APPLE_IF_FAM_STF, &stf_ifmod))
+        panic("Couldn't register stf modules\n");
+
+	/* Register protocol registration functions */
+
+	bzero(&stf_protoreg, sizeof(stf_protoreg));
+	stf_protoreg.attach_proto = stf_attach_inet6;
+	stf_protoreg.detach_proto = stf_detach_inet6;
+	
+	if ( error = dlil_reg_proto_module(AF_INET6, APPLE_IF_FAM_STF, &stf_protoreg) != 0)
+		kprintf("dlil_reg_proto_module failed for AF_INET6 error=%d\n", error);
+}
 
 void
 stfattach(void)
@@ -753,6 +761,8 @@ in_stf_input(m, off)
 	ifp->if_ipackets++;
 	ifp->if_ibytes += m->m_pkthdr.len;
 	splx(s);
+
+	return;
 }
 
 /* ARGSUSED */

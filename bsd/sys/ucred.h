@@ -74,6 +74,17 @@ struct ucred {
 	short	cr_ngroups;		/* number of groups */
 	gid_t	cr_groups[NGROUPS];	/* groups */
 };
+/*
+ * This is the external representation of struct ucred.
+ */
+struct xucred {
+        u_int   cr_version;             /* structure layout version */
+        uid_t   cr_uid;                 /* effective user id */
+        short   cr_ngroups;             /* number of groups */
+        gid_t   cr_groups[NGROUPS];     /* groups */
+};
+#define XUCRED_VERSION  0
+
 #define cr_gid cr_groups[0]
 #define NOCRED ((struct ucred *)0)	/* no credential available */
 #define FSCRED ((struct ucred *)-1)	/* filesystem credential */
@@ -89,7 +100,9 @@ struct ucred	*crcopy __P((struct ucred *cr));
 struct ucred	*crdup __P((struct ucred *cr));
 void		crfree __P((struct ucred *cr));
 struct ucred	*crget __P((void));
+int		crcmp __P((struct ucred *cr1, struct ucred *cr2));
 int		suser __P((struct ucred *cred, u_short *acflag));
+void		cru2x __P((struct ucred *cr, struct xucred *xcr));
 
 #endif /* KERNEL */
 #endif /* __APPLE_API_UNSTABLE */

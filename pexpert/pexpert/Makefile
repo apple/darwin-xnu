@@ -31,7 +31,8 @@ INSTALL_MI_LIST	= ${DATAFILES}
 
 INSTALL_MI_DIR = pexpert
 
-EXPORT_MI_LIST	= ${DATAFILES}
+EXPORT_MI_LIST	= ${DATAFILES} \
+		    device_tree.h
 
 EXPORT_MI_DIR = pexpert
 

@@ -68,7 +68,7 @@ bsd_startupearly()
 	kern_return_t	ret;
 
 	if (nbuf == 0)
-		nbuf = atop(mem_size / 100); /* 1% */
+		nbuf = atop_64(sane_size / 100); /* Get 1% of ram, but no more than we can map */
 	if (nbuf > 8192)
 		nbuf = 8192;
 	if (nbuf < 256)
@@ -82,7 +82,7 @@ bsd_startupearly()
 		niobuf = 128;
 
 	size = (nbuf + niobuf) * sizeof (struct buf);
-	size = round_page(size);
+	size = round_page_32(size);
 
 	ret = kmem_suballoc(kernel_map,
 			&firstaddr,
@@ -106,13 +106,13 @@ bsd_startupearly()
 	buf = (struct buf * )firstaddr;
 	bzero(buf,size);
 
-	if ((mem_size > (64 * 1024 * 1024)) || ncl) {
+	if ((sane_size > (64 * 1024 * 1024)) || ncl) {
 		int scale;
 		extern u_long tcp_sendspace;
 		extern u_long tcp_recvspace;
 
 		if ((nmbclusters = ncl) == 0) {
-			if ((nmbclusters = ((mem_size / 16) / MCLBYTES)) > 16384)
+			if ((nmbclusters = ((sane_size / 16) / MCLBYTES)) > 16384)
 				nmbclusters = 16384;
 		}
 		if ((scale = nmbclusters / NMBCLUSTERS) > 1) {
@@ -137,7 +137,7 @@ bsd_bufferinit()
 	bsd_startupearly();
 
    	ret = kmem_suballoc(kernel_map,
-			&mbutl,
+			(vm_offset_t *) &mbutl,
 			(vm_size_t) (nmbclusters * MCLBYTES),
 			FALSE,
 			TRUE,

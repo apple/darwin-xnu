@@ -69,17 +69,11 @@
 #ifdef	__APPLE_API_PRIVATE
 #ifdef	__APPLE_API_EVOLVING
 
-#define THREAD_MAX	1024		/* Max number of threads */
+#define THREAD_MAX		2560	/* Max number of threads */
 #define THREAD_CHUNK	64		/* Allocation chunk */
 
 #define TASK_MAX	1024		/* Max number of tasks */
-#define TASK_CHUNK	64		/* Allocation chunk */
-
-#define	ACT_MAX		1024		/* Max number of acts */
-#define ACT_CHUNK	64		/* Allocation chunk */
-
-#define	THREAD_POOL_MAX	1024		/* Max number of thread_pools */
-#define THREAD_POOL_CHUNK 64		/* Allocation chunk */
+#define TASK_CHUNK	64			/* Allocation chunk */
 
 #define PORT_MAX	((TASK_MAX * 3 + THREAD_MAX)	/* kernel */ \
 				+ (THREAD_MAX * 2)	/* user */ \

@@ -554,6 +554,8 @@ void OSMetaClass::reportModInstances(const char *kmodName)
     iter->release();
 }
 
+extern "C" kern_return_t kmod_unload_cache(void);
+
 static void _OSMetaClassConsiderUnloads(thread_call_param_t p0,
                                         thread_call_param_t p1)
 {
@@ -578,7 +580,7 @@ static void _OSMetaClassConsiderUnloads(thread_call_param_t p0,
         while ( (kmodName = (OSSymbol *) kmods->getNextObject()) ) {
 
             if (ki) {
-                kfree(ki, sizeof(kmod_info_t));
+                kfree((vm_offset_t) ki, sizeof(kmod_info_t));
                 ki = 0;
             }
 
@@ -614,6 +616,8 @@ static void _OSMetaClassConsiderUnloads(thread_call_param_t p0,
     } while (didUnload);
 
     mutex_unlock(loadLock);
+
+    kmod_unload_cache();
 }
 
 void OSMetaClass::considerUnloads()
@@ -801,31 +805,50 @@ void OSMetaClass::printInstanceCounts()
 
 OSDictionary * OSMetaClass::getClassDictionary()
 {
-    return sAllClassesDict;
+    panic("OSMetaClass::getClassDictionary(): Obsoleted\n");
+    return 0;
 }
 
 bool OSMetaClass::serialize(OSSerialize *s) const
 {
-    OSDictionary *	dict;
-    OSNumber *		off;
-    bool		ok = false;
-
-    if (s->previouslySerialized(this)) return true;
-
-    dict = 0;// IODictionary::withCapacity(2);
-    off = OSNumber::withNumber(getInstanceCount(), 32);
-
-    if (dict) {
-	dict->setObject("InstanceCount", off );
-	ok = dict->serialize(s);
-    } else if( off)
-	ok = off->serialize(s);
-
-    if (dict)
-	dict->release();
-    if (off)
-	off->release();
-
-    return ok;
+    panic("OSMetaClass::serialize(): Obsoleted\n");
+    return false;
 }
 
+void OSMetaClass::serializeClassDictionary(OSDictionary *serializeDictionary)
+{
+    OSDictionary *classDict;
+
+    classDict = OSDictionary::withCapacity(sAllClassesDict->getCount());
+    if (!classDict)
+        return;
+
+    mutex_lock(loadLock);
+    do {
+        OSCollectionIterator *classes;
+        const OSSymbol *className;
+
+        classes = OSCollectionIterator::withCollection(sAllClassesDict);
+        if (!classes)
+            break;
+    
+        while ((className = (const OSSymbol *) classes->getNextObject())) {
+            const OSMetaClass *meta;
+            OSNumber *count;
+
+            meta = (OSMetaClass *) sAllClassesDict->getObject(className);
+            count = OSNumber::withNumber(meta->getInstanceCount(), 32);
+            if (count) {
+                classDict->setObject(className, count);
+                count->release();
+            }
+        }
+        classes->release();
+
+        serializeDictionary->setObject("Classes", classDict);
+    } while (0);
+
+    mutex_unlock(loadLock);
+
+    classDict->release();
+}

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2003 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -98,8 +98,6 @@
 #include <sys/kernel.h>
 #include <sys/sysctl.h>
 #include <sys/ubc.h>
-
-#include <ufs/ufs/dir.h>
 
 #include <sys/vm.h>
 #include <sys/vmparam.h>
@@ -485,6 +483,7 @@ nfsrv_lookup(nfsd, slp, procp, mrq)
 	nqsrv_getl(ndp->ni_startdir, ND_READ);
 	vrele(ndp->ni_startdir);
 	FREE_ZONE(nd.ni_cnd.cn_pnbuf, nd.ni_cnd.cn_pnlen, M_NAMEI);
+	nd.ni_cnd.cn_flags &= ~HASBUF;
 	vp = ndp->ni_vp;
 	bzero((caddr_t)fhp, sizeof(nfh));
 	fhp->fh_fsid = vp->v_mount->mnt_stat.f_fsid;
@@ -645,6 +644,7 @@ nfsrv_read(nfsd, slp, procp, mrq)
 	struct vattr va, *vap = &va;
 	off_t off;
 	u_quad_t frev;
+	int didhold = 0;
 
 	fhp = &nfh.fh_generic;
 	nfsm_srvmtofh(fhp);
@@ -745,6 +745,7 @@ nfsrv_read(nfsd, slp, procp, mrq)
 		uiop->uio_resid = cnt;
 		uiop->uio_rw = UIO_READ;
 		uiop->uio_segflg = UIO_SYSSPACE;
+		didhold = ubc_hold(vp);
 		error = VOP_READ(vp, uiop, IO_NODELOCKED, cred);
 		off = uiop->uio_offset;
 		FREE((caddr_t)iv2, M_TEMP);
@@ -754,17 +755,25 @@ nfsrv_read(nfsd, slp, procp, mrq)
 		* that alone. m_freem(mreq) looks bogus. Taking it out. Should be
 		* mrep or not there at all. Causes panic.  ekn */
 		if (error || (getret = VOP_GETATTR(vp, vap, cred, procp))) {
+			VOP_UNLOCK(vp, 0, procp);
+			if (didhold)
+				ubc_rele(vp);
 			if (!error)
 				error = getret;
 			/* 	m_freem(mreq);*/
-			vput(vp);
+			vrele(vp);
 			nfsm_reply(NFSX_POSTOPATTR(v3));
 			nfsm_srvpostop_attr(getret, vap);
 			return (0);
 		}
-	} else
+		VOP_UNLOCK(vp, 0, procp);
+		if (didhold)
+			ubc_rele(vp);
+		vrele(vp);
+	} else {
 		uiop->uio_resid = 0;
-	vput(vp);
+		vput(vp);
+	}
 	nfsm_srvfillattr(vap, fp);
 	len -= uiop->uio_resid;
 	tlen = nfsm_rndup(len);
@@ -817,6 +826,7 @@ nfsrv_write(nfsd, slp, procp, mrq)
 	struct uio io, *uiop = &io;
 	off_t off;
 	u_quad_t frev;
+	int didhold = 0;
 
 	if (mrep == NULL) {
 		*mrq = NULL;
@@ -933,12 +943,16 @@ nfsrv_write(nfsd, slp, procp, mrq)
 	    uiop->uio_segflg = UIO_SYSSPACE;
 	    uiop->uio_procp = (struct proc *)0;
 	    uiop->uio_offset = off;
+	    didhold = ubc_hold(vp);
 	    error = VOP_WRITE(vp, uiop, ioflags, cred);
 	    nfsstats.srvvop_writes++;
 	    FREE((caddr_t)iv, M_TEMP);
 	}
 	aftat_ret = VOP_GETATTR(vp, vap, cred, procp);
-	vput(vp);
+	VOP_UNLOCK(vp, 0, procp);
+	if (didhold)
+	    ubc_rele(vp);
+	vrele(vp);
 	if (!error)
 		error = aftat_ret;
 	nfsm_reply(NFSX_PREOPATTR(v3) + NFSX_POSTOPORFATTR(v3) +
@@ -1003,6 +1017,8 @@ nfsrv_writegather(ndp, slp, procp, mrq)
 	struct vnode *vp;
 	struct uio io, *uiop = &io;
 	u_quad_t frev, cur_usec;
+	int didhold;
+	struct timeval now;
 
 #ifndef nolint
 	i = 0;
@@ -1020,7 +1036,8 @@ nfsrv_writegather(ndp, slp, procp, mrq)
 	    LIST_INIT(&nfsd->nd_coalesce);
 	    nfsd->nd_mreq = NULL;
 	    nfsd->nd_stable = NFSV3WRITE_FILESYNC;
-	    cur_usec = (u_quad_t)time.tv_sec * 1000000 + (u_quad_t)time.tv_usec;
+	    microuptime(&now);
+	    cur_usec = (u_quad_t)now.tv_sec * 1000000 + (u_quad_t)now.tv_usec;
 	    nfsd->nd_time = cur_usec +
 		(v3 ? nfsrvw_procrastinate_v3 : nfsrvw_procrastinate);
     
@@ -1136,7 +1153,8 @@ nfsmout:
 	 * and generate the associated reply mbuf list(s).
 	 */
 loop1:
-	cur_usec = (u_quad_t)time.tv_sec * 1000000 + (u_quad_t)time.tv_usec;
+	microuptime(&now);
+	cur_usec = (u_quad_t)now.tv_sec * 1000000 + (u_quad_t)now.tv_usec;
 	s = splsoftclock();
 	for (nfsd = slp->ns_tq.lh_first; nfsd; nfsd = owp) {
 		owp = nfsd->nd_tq.le_next;
@@ -1182,6 +1200,7 @@ loop1:
 		uiop->uio_procp = (struct proc *)0;
 		uiop->uio_offset = nfsd->nd_off;
 		uiop->uio_resid = nfsd->nd_eoff - nfsd->nd_off;
+		didhold = 0;
 		if (uiop->uio_resid > 0) {
 		    mp = mrep;
 		    i = 0;
@@ -1204,6 +1223,7 @@ loop1:
 			mp = mp->m_next;
 		    }
 		    if (!error) {
+			didhold = ubc_hold(vp);
 			error = VOP_WRITE(vp, uiop, ioflags, cred);
 			nfsstats.srvvop_writes++;
 		    }
@@ -1212,7 +1232,10 @@ loop1:
 		m_freem(mrep);
 		if (vp) {
 		    aftat_ret = VOP_GETATTR(vp, &va, cred, procp);
-		    vput(vp);
+		    VOP_UNLOCK(vp, 0, procp);
+		    if (didhold)
+			ubc_rele(vp);
+		    vrele(vp);
 		}
 
 		/*
@@ -1503,6 +1526,7 @@ nfsrv_create(nfsd, slp, procp, mrq)
 			    	nfsrv_object_create(nd.ni_vp);
 				FREE_ZONE(nd.ni_cnd.cn_pnbuf,
 						nd.ni_cnd.cn_pnlen, M_NAMEI);
+				nd.ni_cnd.cn_flags &= ~HASBUF;
 				if (exclusive_flag) {
 					exclusive_flag = 0;
 					VATTR_NULL(vap);
@@ -1519,8 +1543,9 @@ nfsrv_create(nfsd, slp, procp, mrq)
 			if (vap->va_type != VFIFO &&
 			    (error = suser(cred, (u_short *)0))) {
 				vrele(nd.ni_startdir);
-				_FREE_ZONE(nd.ni_cnd.cn_pnbuf,
+				FREE_ZONE(nd.ni_cnd.cn_pnbuf,
 						nd.ni_cnd.cn_pnlen, M_NAMEI);
+				nd.ni_cnd.cn_flags &= ~HASBUF;
 				VOP_ABORTOP(nd.ni_dvp, &nd.ni_cnd);
 				vput(nd.ni_dvp);
 				nfsm_reply(0);
@@ -1537,13 +1562,15 @@ nfsrv_create(nfsd, slp, procp, mrq)
 			nd.ni_cnd.cn_proc = procp;
 			nd.ni_cnd.cn_cred = cred;
 			if ((error = lookup(&nd))) {
-				_FREE_ZONE(nd.ni_cnd.cn_pnbuf,
+				FREE_ZONE(nd.ni_cnd.cn_pnbuf,
 					   nd.ni_cnd.cn_pnlen, M_NAMEI);
+				nd.ni_cnd.cn_flags &= ~HASBUF;
 				nfsm_reply(0);
 			}
 			nfsrv_object_create(nd.ni_vp);
 			FREE_ZONE(nd.ni_cnd.cn_pnbuf,
 					nd.ni_cnd.cn_pnlen, M_NAMEI);
+			nd.ni_cnd.cn_flags &= ~HASBUF;
 			if (nd.ni_cnd.cn_flags & ISSYMLINK) {
 				vrele(nd.ni_dvp);
 				vput(nd.ni_vp);
@@ -1553,8 +1580,9 @@ nfsrv_create(nfsd, slp, procp, mrq)
 			}
 		} else {
 			vrele(nd.ni_startdir);
-			_FREE_ZONE(nd.ni_cnd.cn_pnbuf,
+			FREE_ZONE(nd.ni_cnd.cn_pnbuf,
 					nd.ni_cnd.cn_pnlen, M_NAMEI);
+			nd.ni_cnd.cn_flags &= ~HASBUF;
 			VOP_ABORTOP(nd.ni_dvp, &nd.ni_cnd);
 			vput(nd.ni_dvp);
 			error = ENXIO;
@@ -1562,7 +1590,8 @@ nfsrv_create(nfsd, slp, procp, mrq)
 		vp = nd.ni_vp;
 	} else {
 		vrele(nd.ni_startdir);
-		_FREE_ZONE(nd.ni_cnd.cn_pnbuf, nd.ni_cnd.cn_pnlen, M_NAMEI);
+		FREE_ZONE(nd.ni_cnd.cn_pnbuf, nd.ni_cnd.cn_pnlen, M_NAMEI);
+		nd.ni_cnd.cn_flags &= ~HASBUF;
 		vp = nd.ni_vp;
 		if (nd.ni_dvp == vp)
 			vrele(nd.ni_dvp);
@@ -1614,14 +1643,15 @@ nfsrv_create(nfsd, slp, procp, mrq)
 		nfsm_build(fp, struct nfs_fattr *, NFSX_V2FATTR);
 		nfsm_srvfillattr(vap, fp);
 	}
-	return (error);
+	return (0);
 nfsmout:
 	if (dirp)
 		vrele(dirp);
 	if (nd.ni_cnd.cn_nameiop) {
 		vrele(nd.ni_startdir);
-		_FREE_ZONE((caddr_t)nd.ni_cnd.cn_pnbuf,
+		FREE_ZONE((caddr_t)nd.ni_cnd.cn_pnbuf,
 					nd.ni_cnd.cn_pnlen, M_NAMEI);
+		nd.ni_cnd.cn_flags &= ~HASBUF;
 	}
 	VOP_ABORTOP(nd.ni_dvp, &nd.ni_cnd);
 	if (nd.ni_dvp == nd.ni_vp)
@@ -1685,8 +1715,9 @@ nfsrv_mknod(nfsd, slp, procp, mrq)
 	vtyp = nfsv3tov_type(*tl);
 	if (vtyp != VCHR && vtyp != VBLK && vtyp != VSOCK && vtyp != VFIFO) {
 		vrele(nd.ni_startdir);
-		_FREE_ZONE((caddr_t)nd.ni_cnd.cn_pnbuf,
+		FREE_ZONE((caddr_t)nd.ni_cnd.cn_pnbuf,
 					nd.ni_cnd.cn_pnlen, M_NAMEI);
+		nd.ni_cnd.cn_flags &= ~HASBUF;
 		error = NFSERR_BADTYPE;
 		VOP_ABORTOP(nd.ni_dvp, &nd.ni_cnd);
 		vput(nd.ni_dvp);
@@ -1706,8 +1737,9 @@ nfsrv_mknod(nfsd, slp, procp, mrq)
 	 */
 	if (nd.ni_vp) {
 		vrele(nd.ni_startdir);
-		_FREE_ZONE((caddr_t)nd.ni_cnd.cn_pnbuf,
+		FREE_ZONE((caddr_t)nd.ni_cnd.cn_pnbuf,
 					nd.ni_cnd.cn_pnlen, M_NAMEI);
+		nd.ni_cnd.cn_flags &= ~HASBUF;
 		error = EEXIST;
 		VOP_ABORTOP(nd.ni_dvp, &nd.ni_cnd);
 		vput(nd.ni_dvp);
@@ -1721,11 +1753,13 @@ nfsrv_mknod(nfsd, slp, procp, mrq)
 		if (!error)
 			FREE_ZONE(nd.ni_cnd.cn_pnbuf,
 					nd.ni_cnd.cn_pnlen, M_NAMEI);
+			nd.ni_cnd.cn_flags &= ~HASBUF;
 	} else {
 		if (vtyp != VFIFO && (error = suser(cred, (u_short *)0))) {
 			vrele(nd.ni_startdir);
-			_FREE_ZONE((caddr_t)nd.ni_cnd.cn_pnbuf,
+			FREE_ZONE((caddr_t)nd.ni_cnd.cn_pnbuf,
 						nd.ni_cnd.cn_pnlen, M_NAMEI);
+			nd.ni_cnd.cn_flags &= ~HASBUF;
 			VOP_ABORTOP(nd.ni_dvp, &nd.ni_cnd);
 			vput(nd.ni_dvp);
 			goto out;
@@ -1741,6 +1775,7 @@ nfsrv_mknod(nfsd, slp, procp, mrq)
 		nd.ni_cnd.cn_cred = procp->p_ucred;
 		error = lookup(&nd);
 		FREE_ZONE(nd.ni_cnd.cn_pnbuf, nd.ni_cnd.cn_pnlen, M_NAMEI);
+		nd.ni_cnd.cn_flags &= ~HASBUF;
 		if (error)
 			goto out;
 		if (nd.ni_cnd.cn_flags & ISSYMLINK) {
@@ -1774,8 +1809,9 @@ nfsmout:
 		vrele(dirp);
 	if (nd.ni_cnd.cn_nameiop) {
 		vrele(nd.ni_startdir);
-		_FREE_ZONE((caddr_t)nd.ni_cnd.cn_pnbuf,
+		FREE_ZONE((caddr_t)nd.ni_cnd.cn_pnbuf,
 					nd.ni_cnd.cn_pnlen, M_NAMEI);
+		nd.ni_cnd.cn_flags &= ~HASBUF;
 	}
 	VOP_ABORTOP(nd.ni_dvp, &nd.ni_cnd);
 	if (nd.ni_dvp == nd.ni_vp)
@@ -2039,6 +2075,7 @@ out:
 	}
 	vrele(tond.ni_startdir);
 	FREE_ZONE(tond.ni_cnd.cn_pnbuf, tond.ni_cnd.cn_pnlen, M_NAMEI);
+	tond.ni_cnd.cn_flags &= ~HASBUF;
 out1:
 	if (fdirp) {
 		fdiraft_ret = VOP_GETATTR(fdirp, &fdiraft, cred, procp);
@@ -2050,6 +2087,7 @@ out1:
 	}
 	vrele(fromnd.ni_startdir);
 	FREE_ZONE(fromnd.ni_cnd.cn_pnbuf, fromnd.ni_cnd.cn_pnlen, M_NAMEI);
+	fromnd.ni_cnd.cn_flags &= ~HASBUF;
 	nfsm_reply(2 * NFSX_WCCDATA(v3));
 	if (v3) {
 		nfsm_srvwcc_data(fdirfor_ret, &fdirfor, fdiraft_ret, &fdiraft);
@@ -2065,11 +2103,13 @@ nfsmout:
 	if (tond.ni_cnd.cn_nameiop) {
 		vrele(tond.ni_startdir);
 		FREE_ZONE(tond.ni_cnd.cn_pnbuf, tond.ni_cnd.cn_pnlen, M_NAMEI);
+		tond.ni_cnd.cn_flags &= ~HASBUF;
 	}
 	if (fromnd.ni_cnd.cn_nameiop) {
 		vrele(fromnd.ni_startdir);
 		FREE_ZONE(fromnd.ni_cnd.cn_pnbuf,
 				fromnd.ni_cnd.cn_pnlen, M_NAMEI);
+		fromnd.ni_cnd.cn_flags &= ~HASBUF;
 		VOP_ABORTOP(fromnd.ni_dvp, &fromnd.ni_cnd);
 		vrele(fromnd.ni_dvp);
 		vrele(fvp);
@@ -2249,7 +2289,8 @@ nfsrv_symlink(nfsd, slp, procp, mrq)
 	*(pathcp + len2) = '\0';
 	if (nd.ni_vp) {
 		vrele(nd.ni_startdir);
-		_FREE_ZONE(nd.ni_cnd.cn_pnbuf, nd.ni_cnd.cn_pnlen, M_NAMEI);
+		FREE_ZONE(nd.ni_cnd.cn_pnbuf, nd.ni_cnd.cn_pnlen, M_NAMEI);
+		nd.ni_cnd.cn_flags &= ~HASBUF;
 		VOP_ABORTOP(nd.ni_dvp, &nd.ni_cnd);
 		if (nd.ni_dvp == nd.ni_vp)
 			vrele(nd.ni_dvp);
@@ -2283,6 +2324,7 @@ nfsrv_symlink(nfsd, slp, procp, mrq)
 	    } else
 		vrele(nd.ni_startdir);
 	    FREE_ZONE(nd.ni_cnd.cn_pnbuf, nd.ni_cnd.cn_pnlen, M_NAMEI);
+		nd.ni_cnd.cn_flags &= ~HASBUF;
 	}
 out:
 	if (pathcp)
@@ -2303,7 +2345,8 @@ out:
 nfsmout:
 	if (nd.ni_cnd.cn_nameiop) {
 		vrele(nd.ni_startdir);
-		_FREE_ZONE(nd.ni_cnd.cn_pnbuf, nd.ni_cnd.cn_pnlen, M_NAMEI);
+		FREE_ZONE(nd.ni_cnd.cn_pnbuf, nd.ni_cnd.cn_pnlen, M_NAMEI);
+		nd.ni_cnd.cn_flags &= ~HASBUF;
 	}
 	if (dirp)
 		vrele(dirp);
@@ -2550,13 +2593,11 @@ out:
  *	example, client NFS does not { although it is never remote mounted
  *	anyhow }
  *     The alternate call nfsrv_readdirplus() does lookups as well.
- * PS: The NFS protocol spec. does not clarify what the "count" byte
- *	argument is a count of.. just name strings and file id's or the
- *	entire reply rpc or ...
- *	I tried just file name and id sizes and it confused the Sun client,
- *	so I am using the full rpc size now. The "paranoia.." comment refers
- *	to including the status longwords that are not a part of the dir.
- *	"entry" structures, but are in the rpc.
+ * PS:  The XNFS protocol spec clearly describes what the "count"s arguments
+ *      are supposed to cover.  For readdir, the count is the total number of
+ *      bytes included in everything from the directory's postopattr through
+ *      the EOF flag.  For readdirplus, the maxcount is the same, and the
+ *      dircount includes all that except for the entry attributes and handles.
  */
 struct flrep {
 	nfsuint64	fl_off;
@@ -2754,13 +2795,14 @@ again:
 		goto again;
 	}
 
-	len = 3 * NFSX_UNSIGNED;	/* paranoia, probably can be 0 */
 	nfsm_reply(NFSX_POSTOPATTR(v3) + NFSX_COOKIEVERF(v3) + siz);
 	if (v3) {
+		len = NFSX_V3POSTOPATTR + NFSX_V3COOKIEVERF + 2 * NFSX_UNSIGNED;
 		nfsm_srvpostop_attr(getret, &at);
 		nfsm_build(tl, u_long *, 2 * NFSX_UNSIGNED);
 		txdr_hyper(&at.va_filerev, tl);
-	}
+	} else
+		len = 2 * NFSX_UNSIGNED;
 	mp = mp2 = mb;
 	bp = bpos;
 	be = bp + M_TRAILINGSPACE(mp);
@@ -3090,7 +3132,7 @@ again:
 			 * are calculated conservatively, including all
 			 * XDR overheads.
 			 */
-			len += (7 * NFSX_UNSIGNED + nlen + rem + NFSX_V3FH +
+			len += (8 * NFSX_UNSIGNED + nlen + rem + NFSX_V3FH +
 				NFSX_V3POSTOPATTR);
 			dirlen += (6 * NFSX_UNSIGNED + nlen + rem);
 			if (len > cnt || dirlen > fullsiz) {
@@ -3211,6 +3253,7 @@ nfsrv_commit(nfsd, slp, procp, mrq)
 	char *cp2;
 	struct mbuf *mb, *mb2, *mreq;
 	u_quad_t frev, off;
+	int didhold;
 
 #ifndef nolint
 	cache = 0;
@@ -3233,9 +3276,13 @@ nfsrv_commit(nfsd, slp, procp, mrq)
 		return (0);
 	}
 	for_ret = VOP_GETATTR(vp, &bfor, cred, procp);
+	didhold = ubc_hold(vp);
 	error = VOP_FSYNC(vp, cred, MNT_WAIT, procp);
 	aft_ret = VOP_GETATTR(vp, &aft, cred, procp);
-	vput(vp);
+	VOP_UNLOCK(vp, 0, procp);
+	if (didhold)
+		ubc_rele(vp);
+	vrele(vp);
 	nfsm_reply(NFSX_V3WCCDATA + NFSX_V3WRITEVERF);
 	nfsm_srvwcc_data(for_ret, &bfor, aft_ret, &aft);
 	if (!error) {
@@ -3316,7 +3363,7 @@ nfsrv_statfs(nfsd, slp, procp, mrq)
 		sfp->sf_afiles.nfsuquad[1] = txdr_unsigned(sf->f_ffree);
 		sfp->sf_invarsec = 0;
 	} else {
-		sfp->sf_tsize = txdr_unsigned(NFS_MAXDGRAMDATA);
+		sfp->sf_tsize = txdr_unsigned(NFS_V2MAXDATA);
 		sfp->sf_bsize = txdr_unsigned(sf->f_bsize);
 		sfp->sf_blocks = txdr_unsigned(sf->f_blocks);
 		sfp->sf_bfree = txdr_unsigned(sf->f_bfree);
@@ -3343,7 +3390,7 @@ nfsrv_fsinfo(nfsd, slp, procp, mrq)
 	register struct nfsv3_fsinfo *sip;
 	register long t1;
 	caddr_t bpos;
-	int error = 0, rdonly, cache, getret = 1, pref;
+	int error = 0, rdonly, cache, getret = 1, pref, max;
 	char *cp2;
 	struct mbuf *mb, *mb2, *mreq;
 	struct vnode *vp;
@@ -3372,16 +3419,16 @@ nfsrv_fsinfo(nfsd, slp, procp, mrq)
 	/*
 	 * XXX
 	 * There should be file system VFS OP(s) to get this information.
-	 * For now, assume ufs.
+	 * For now, assume our usual NFS defaults.
 	 */
 	if (slp->ns_so->so_type == SOCK_DGRAM)
-		pref = NFS_MAXDGRAMDATA;
+		max = pref = NFS_MAXDGRAMDATA;
 	else
-		pref = NFS_MAXDATA;
-	sip->fs_rtmax = txdr_unsigned(NFS_MAXDATA);
+		max = pref = NFS_MAXDATA;
+	sip->fs_rtmax = txdr_unsigned(max);
 	sip->fs_rtpref = txdr_unsigned(pref);
 	sip->fs_rtmult = txdr_unsigned(NFS_FABLKSIZE);
-	sip->fs_wtmax = txdr_unsigned(NFS_MAXDATA);
+	sip->fs_wtmax = txdr_unsigned(max);
 	sip->fs_wtpref = txdr_unsigned(pref);
 	sip->fs_wtmult = txdr_unsigned(NFS_FABLKSIZE);
 	sip->fs_dtpref = txdr_unsigned(pref);
@@ -3414,7 +3461,7 @@ nfsrv_pathconf(nfsd, slp, procp, mrq)
 	register long t1;
 	caddr_t bpos;
 	int error = 0, rdonly, cache, getret = 1, linkmax, namemax;
-	int chownres, notrunc;
+	int chownres, notrunc, case_sensitive, case_preserving;
 	char *cp2;
 	struct mbuf *mb, *mb2, *mreq;
 	struct vnode *vp;
@@ -3441,6 +3488,10 @@ nfsrv_pathconf(nfsd, slp, procp, mrq)
 		error = VOP_PATHCONF(vp, _PC_CHOWN_RESTRICTED, &chownres);
 	if (!error)
 		error = VOP_PATHCONF(vp, _PC_NO_TRUNC, &notrunc);
+	if (!error)
+		error = VOP_PATHCONF(vp, _PC_CASE_SENSITIVE, &case_sensitive);
+	if (!error)
+		error = VOP_PATHCONF(vp, _PC_CASE_PRESERVING, &case_preserving);
 	getret = VOP_GETATTR(vp, &at, cred, procp);
 	vput(vp);
 	nfsm_reply(NFSX_V3POSTOPATTR + NFSX_V3PATHCONF);
@@ -3453,14 +3504,9 @@ nfsrv_pathconf(nfsd, slp, procp, mrq)
 	pc->pc_namemax = txdr_unsigned(namemax);
 	pc->pc_notrunc = txdr_unsigned(notrunc);
 	pc->pc_chownrestricted = txdr_unsigned(chownres);
+	pc->pc_caseinsensitive = txdr_unsigned(!case_sensitive);
+	pc->pc_casepreserving = txdr_unsigned(case_preserving);
 
-	/*
-	 * These should probably be supported by VOP_PATHCONF(), but
-	 * until msdosfs is exportable (why would you want to?), the
-	 * Unix defaults should be ok.
-	 */
-	pc->pc_caseinsensitive = nfs_false;
-	pc->pc_casepreserving = nfs_true;
 	nfsm_srvdone;
 }
 

@@ -337,7 +337,7 @@ extern	void	simple_unlock_no_trace(simple_lock_t l);
 #define	__slock_held_func__(l)	usimple_lock_held(l)
 #define thread_sleep_simple_lock(l, e, i) \
 				thread_sleep_usimple_lock((l), (e), (i))
-#endif / * !defined(simple_lock_init) */
+#endif /* !defined(simple_lock_init) */
 
 #if	USLOCK_DEBUG
 /*

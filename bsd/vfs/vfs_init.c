@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2002 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -146,9 +146,8 @@ vfs_opv_init()
 		 * Also handle backwards compatibility.
 		 */
 		if (*opv_desc_vector_p == NULL) {
-			/* XXX - shouldn't be M_VNODE */
 			MALLOC(*opv_desc_vector_p, PFI*,
-			       vfs_opv_numops*sizeof(PFI), M_VNODE, M_WAITOK);
+			       vfs_opv_numops*sizeof(PFI), M_TEMP, M_WAITOK);
 			bzero (*opv_desc_vector_p, vfs_opv_numops*sizeof(PFI));
 			DODEBUG(printf("vector at %x allocated\n",
 			    opv_desc_vector_p));
@@ -259,6 +258,10 @@ vfsinit()
 	 */
 	vntblinit();
 	/*
+	 * Initialize the filesystem event mechanism.
+	 */
+	vfs_event_init();
+	/*
 	 * Initialize the vnode name cache
 	 */
 	nchinit();
@@ -268,7 +271,8 @@ vfsinit()
 	vfs_op_init();
 	vfs_opv_init();   /* finish the job */
 	/*
-	 * Initialize each file system type.
+	 * Initialize each file system type in the static list,
+	 * until the first NULL ->vfs_vfsops is encountered.
 	 */
 	vattr_null(&va_null);
 	numused_vfsslots = maxtypenum = 0;
@@ -285,57 +289,137 @@ vfsinit()
 	maxvfsconf = maxtypenum;
 }
 
+/*
+ * Name:	vfsconf_add
+ *
+ * Description:	Add a filesystem to the vfsconf list at the first
+ *		unused slot.  If no slots are available, return an
+ *		error.
+ *
+ * Parameter:	nvfsp		vfsconf for VFS to add
+ *
+ * Returns:	0		Success
+ *		-1		Failure
+ *
+ * Notes:	The vfsconf should be treated as a linked list by
+ *		all external references, as the implementation is
+ *		expected to change in the future.  The linkage is
+ *		through ->vfc_next, and the list is NULL terminated.
+ *
+ * Warning:	This code assumes that vfsconf[0] is non-empty.
+ */
 int
 vfsconf_add(struct vfsconf *nvfsp)
 {
-	struct vfsconf *vfsp;
+	int slot;
+	struct vfsconf *slotp;
 
-	if ((numused_vfsslots >= maxvfsslots) || (nvfsp == (struct vfsconf *)0))
+	if (nvfsp == NULL)	/* overkill */
 		return (-1);
-	bcopy(nvfsp, &vfsconf[numused_vfsslots], sizeof(struct vfsconf));
-	vfsconf[numused_vfsslots-1].vfc_next = &vfsconf[numused_vfsslots];
 	
-	if (nvfsp->vfc_typenum <= maxvfsconf )
-			maxvfsconf = nvfsp->vfc_typenum + 1;
+	/*
+	 * Find the next empty slot; we recognize an empty slot by a
+	 * NULL-valued ->vfc_vfsops, so if we delete a VFS, we must
+	 * ensure we set the entry back to NULL.
+	 */
+	for (slot = 0; slot < maxvfsslots; slot++) {
+		if (vfsconf[slot].vfc_vfsops == NULL)
+			break;
+	}
+	if (slot == maxvfsslots) {
+		/* out of static slots; allocate one instead */
+		MALLOC(slotp, struct vfsconf *, sizeof(struct vfsconf),
+							M_TEMP, M_WAITOK);
+	} else {
+		slotp = &vfsconf[slot];
+	}
+
+	/*
+	 * Replace the contents of the next empty slot with the contents
+	 * of the provided nvfsp.
+	 *
+	 * Note; Takes advantage of the fact that 'slot' was left
+	 * with the value of 'maxvfslots' in the allocation case.
+	 */
+	bcopy(nvfsp, slotp, sizeof(struct vfsconf));
+	if (slot != 0) {
+		slotp->vfc_next = vfsconf[slot - 1].vfc_next;
+		vfsconf[slot - 1].vfc_next = slotp;
+	} else {
+		slotp->vfc_next = NULL;
+	}
 	numused_vfsslots++;
+
+	/*
+	 * Call through the ->vfs_init(); use slotp instead of nvfsp,
+	 * so that if the FS cares where it's instance record is, it
+	 * can find it later.
+	 *
+	 * XXX All code that calls ->vfs_init treats it as if it
+	 * XXX returns a "void', and can never fail.
+	 */
 	if (nvfsp->vfc_vfsops->vfs_init)
-		(*nvfsp->vfc_vfsops->vfs_init)(nvfsp);
+		(*nvfsp->vfc_vfsops->vfs_init)(slotp);
+
 	return(0);
 }
 
+/*
+ * Name:	vfsconf_del
+ *
+ * Description:	Remove a filesystem from the vfsconf list by name.
+ *		If no such filesystem exists, return an error.
+ *
+ * Parameter:	fs_name		name of VFS to remove
+ *
+ * Returns:	0		Success
+ *		-1		Failure
+ *
+ * Notes:	Hopefully all filesystems have unique names.
+ */
 int
 vfsconf_del(char * fs_name)
 {
-    int entriesRemaining;
-    struct vfsconf *vfsconflistentry;
-    struct vfsconf *prevconf = NULL;
-    struct vfsconf *targetconf = NULL;
+	struct vfsconf **vcpp;
+	struct vfsconf *vcdelp;
 
-    prevconf = vfsconflistentry = vfsconf;
-    for (entriesRemaining = maxvfsslots;
-         (entriesRemaining > 0) && (vfsconflistentry != NULL);
-         --entriesRemaining) {
-        if ((vfsconflistentry->vfc_vfsops != NULL) && (strcmp(vfsconflistentry->vfc_name, fs_name) == 0)) {
-            targetconf = vfsconflistentry;
+	/*
+	 * Traverse the list looking for fs_name; if found, *vcpp
+	 * will contain the address of the pointer to the entry to
+	 * be removed.
+	 */
+	for( vcpp = &vfsconf; *vcpp; vcpp = &(*vcpp)->vfc_next) {
+		if (strcmp( (*vcpp)->vfc_name, fs_name) == 0)
             break;
-        };
-        prevconf = vfsconflistentry;
-        vfsconflistentry = vfsconflistentry->vfc_next;
-    };
-
-    if (targetconf != NULL) {
-        if (prevconf != NULL) {
-            /* Unlink the target entry from the list: 
-	       and decrement our count                */
-            prevconf->vfc_next = targetconf->vfc_next;
-	    numused_vfsslots--;
-        } else {
-	    /* XXX need real error code for no previous entry in list */
-            return(-1);
         }
-    } else {
+
+	if (*vcpp == NULL) {
 	   /* XXX need real error code for entry not found */
 	   return(-1);
-    };
+	}
+
+	/* Unlink entry */
+	vcdelp = *vcpp;
+	*vcpp = (*vcpp)->vfc_next;
+
+	/*
+	 * Is this an entry from our static table?  We find out by
+	 * seeing if the pointer to the object to be deleted places
+	 * the object in the address space containing the table (or not).
+	 */
+	if (vcdelp >= vfsconf && vcdelp < (vfsconf + maxvfsslots)) {	/* Y */
+		/* Mark as empty for vfscon_add() */
+		bzero(vcdelp, sizeof(struct vfsconf));
+		numused_vfsslots--;
+	} else {							/* N */
+		/*
+		 * This entry was dynamically allocated; we must free it;
+		 * we would prefer to have just linked the caller's
+		 * vfsconf onto our list, but it may not be persistent
+		 * because of the previous (copying) implementation.
+		 */
+		 FREE(vcdelp, M_TEMP);
+	}
+
 	return(0);
 }

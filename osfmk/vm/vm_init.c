@@ -106,8 +106,9 @@ vm_mem_bootstrap(void)
 	if (PE_parse_boot_arg("zsize", &zsize))
 		zsize = zsize * 1024 * 1024;
 	else {
-		zsize = mem_size >> 2;			/* Get target zone size as 1/4 of physical memory */
+		zsize = sane_size >> 2;				/* Get target zone size as 1/4 of physical memory */
 	}
+
 	if(zsize < ZONE_MAP_MIN) zsize = ZONE_MAP_MIN;	/* Clamp to min */
 	if(zsize > ZONE_MAP_MAX) zsize = ZONE_MAP_MAX;	/* Clamp to max */
 	zone_init(zsize);						/* Allocate address space for zones */

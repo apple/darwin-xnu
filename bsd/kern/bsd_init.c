@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2001 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2003 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -69,13 +69,6 @@
  * All rights reserved.  The CMU software License Agreement specifies
  * the terms and conditions for use and redistribution.
  */
-/*
- * HISTORY
- * 16-Apr-98  A. Ramesh at Apple
- *	Created for Apple Core from DR2 init_main.c.
- */
-
-#include <quota.h>
 
 #include <sys/param.h>
 #include <sys/filedesc.h>
@@ -88,7 +81,10 @@
 #include <sys/buf.h>
 #include <sys/clist.h>
 #include <sys/user.h>
-#include <ufs/ufs/quota.h>
+#include <sys/time.h>
+#include <sys/systm.h>
+
+#include <sys/kern_audit.h>
 
 #include <sys/malloc.h>
 #include <sys/dkstat.h>
@@ -103,11 +99,11 @@
 #include <vm/vm_map.h>
 #include <vm/vm_kern.h>
 
-#include <sys/ux_exception.h>
+#include <sys/ux_exception.h>	/* for ux_exception_port */
 
 #include <sys/reboot.h>
 #include <mach/exception_types.h>
-#include <dev/busvar.h>
+#include <dev/busvar.h>			/* for pseudo_inits */
 #include <sys/kdebug.h>
 
 #include <mach/mach_types.h>
@@ -120,11 +116,12 @@
 #include <mach/shared_memory_server.h>
 #include <vm/vm_shared_memory_server.h>
 
-extern shared_region_mapping_t       system_shared_region;
 extern int app_profile;		/* on/off switch for pre-heat cache */
 
 char    copyright[] =
-"Copyright (c) 1982, 1986, 1989, 1991, 1993\n\tThe Regents of the University of California.  All rights reserved.\n\n";
+"Copyright (c) 1982, 1986, 1989, 1991, 1993\n\t"
+"The Regents of the University of California. "
+"All rights reserved.\n\n";
 
 extern void	ux_handler();
 
@@ -155,9 +152,12 @@ dev_t	dumpdev;		/* device to take dumps on */
 long	dumplo;			/* offset into dumpdev */
 long	hostid;
 char	hostname[MAXHOSTNAMELEN];
-int	hostnamelen;
+int		hostnamelen;
 char	domainname[MAXDOMNAMELEN];
-int	domainnamelen;
+int		domainnamelen;
+char	classichandler[32] = {0};  
+long	classichandler_fsid = -1L;
+long	classichandler_fileid = -1L;
 
 char rootdevice[16]; 	/* hfs device names have at least 9 chars */
 struct	timeval boottime;		/* GRODY!  This has to go... */
@@ -170,7 +170,7 @@ int	lbolt;				/* awoken once a second */
 struct	vnode *rootvp;
 int boothowto = RB_DEBUG;
 
-#define	BSD_PAGABLE_MAP_SIZE	(4 * 512 * 1024)
+#define	BSD_PAGABLE_MAP_SIZE	(16 * 512 * 1024)
 vm_map_t	bsd_pageable_map;
 vm_map_t	mb_map;
 semaphore_t execve_semaphore;
@@ -183,8 +183,8 @@ extern task_t bsd_init_task;
 extern char    init_task_failure_data[];
 extern void time_zone_slock_init(void);
 
-funnel_t * kernel_flock;
-funnel_t * network_flock;
+funnel_t *kernel_flock;
+funnel_t *network_flock;
 int disable_funnel = 0;		/* disables split funnel */
 int enable_funnel = 0;		/* disables split funnel */
 
@@ -194,13 +194,10 @@ int enable_funnel = 0;		/* disables split funnel */
  * soon as a stack and segmentation
  * have been established.
  * Functions:
- *	clear and free user core
  *	turn on clock
  *	hand craft 0th process
  *	call all initialization routines
- *	fork - process 0 to schedule
- *	     - process 1 execute bootstrap
- *	     - process 2 to page out
+ *  hand craft 1st user process
  */
 
 /*
@@ -247,19 +244,8 @@ bsd_init()
 	extern void uthread_zone_init();
 
 
-
-#if 1
 	/* split funnel is enabled by default */
 	PE_parse_boot_arg("dfnl", &disable_funnel);
-#else
-	/* split funnel is disabled befault */
-	disable_funnel = 1;
-	PE_parse_boot_arg("efnl", &enable_funnel);
-	if (enable_funnel)  {
-			/* enable only if efnl is set in bootarg */
-			disable_funnel = 0;
-	}
-#endif
 
 	kernel_flock = funnel_alloc(KERNEL_FUNNEL);
 	if (kernel_flock == (funnel_t *)0 ) {
@@ -339,11 +325,23 @@ bsd_init()
 	p->p_cred = &cred0;
 	p->p_ucred = crget();
 	p->p_ucred->cr_ngroups = 1;	/* group 0 */
+	
+	TAILQ_INIT(&p->aio_activeq);
+	TAILQ_INIT(&p->aio_doneq);
+	p->aio_active_count = 0;
+	p->aio_done_count = 0;
+
+	/* Set the audit info for this process */
+	audit_proc_init(p);
 
 	/* Create the file descriptor table. */
 	filedesc0.fd_refcnt = 1+1;	/* +1 so shutdown will not _FREE_ZONE */
 	p->p_fd = &filedesc0;
 	filedesc0.fd_cmask = cmask;
+	filedesc0.fd_knlistsize = -1;
+	filedesc0.fd_knlist = NULL;
+	filedesc0.fd_knhash = NULL;
+	filedesc0.fd_knhashmask = 0;
 
 	/* Create the limits structures. */
 	p->p_limit = &limit0;
@@ -352,6 +350,7 @@ bsd_init()
 			limit0.pl_rlimit[i].rlim_max = RLIM_INFINITY;
 	limit0.pl_rlimit[RLIMIT_NOFILE].rlim_cur = NOFILE;
 	limit0.pl_rlimit[RLIMIT_NPROC].rlim_cur = MAXUPRC;
+	limit0.pl_rlimit[RLIMIT_NPROC].rlim_max = maxproc;
 	limit0.pl_rlimit[RLIMIT_STACK] = vm_initial_limit_stack;
 	limit0.pl_rlimit[RLIMIT_DATA] = vm_initial_limit_data;
 	limit0.pl_rlimit[RLIMIT_CORE] = vm_initial_limit_core;
@@ -404,6 +403,18 @@ bsd_init()
 	/* Initialize syslog */
 	log_init();
 
+	/*
+	 * Initializes security event auditing.
+	 * XXX: Should/could this occur later?
+	 */
+	audit_init();  
+
+	/* Initialize kqueues */
+	knote_init();
+
+	/* Initialize for async IO */
+	aio_init();
+
 	/* POSIX Shm and Sem */
 	pshm_cache_init();
 	psem_cache_init();
@@ -431,7 +442,7 @@ bsd_init()
 
 	/* kick off timeout driven events by calling first time */
 	thread_wakeup(&lbolt);
-	timeout(lightning_bolt,0,hz);
+	timeout((void (*)(void *))lightning_bolt, 0, hz);
 
 	bsd_autoconf();
 
@@ -459,7 +470,7 @@ bsd_init()
 		 * read the time after clock_initialize_calendar()
 		 * and before nfs mount
 		 */
-		microtime(&time);
+		microtime((struct timeval  *)&time);
 
 		bsd_hardclockinit = -1;	/* start ticking */
 
@@ -507,12 +518,10 @@ bsd_init()
 	    
 	    devfs_kernel_mount("/dev");
 	}
-#endif DEVFS
+#endif /* DEVFS */
 	
 	/* Initialize signal state for process 0. */
 	siginit(p);
-
-	/* printf("Launching user process\n"); */
 
 	bsd_utaskbootstrap();
 
@@ -531,6 +540,7 @@ bsdinit_task(void)
 	struct uthread *ut;
 	kern_return_t	kr;
 	thread_act_t th_act;
+	shared_region_mapping_t system_region;
 
 	proc_name("init", p);
 
@@ -560,8 +570,14 @@ bsdinit_task(void)
 	bsd_hardclockinit = 1;	/* Start bsd hardclock */
 	bsd_init_task = get_threadtask(th_act);
 	init_task_failure_data[0] = 0;
-	shared_region_mapping_ref(system_shared_region);
-	vm_set_shared_region(get_threadtask(th_act), system_shared_region);
+	system_region = lookup_default_shared_region(ENV_DEFAULT_ROOT,
+				machine_slot[cpu_number()].cpu_type);
+        if (system_region == NULL) {
+		shared_file_boot_time_init(ENV_DEFAULT_ROOT,
+				machine_slot[cpu_number()].cpu_type);
+	} else {
+		vm_set_shared_region(get_threadtask(th_act), system_region);
+	}
 	load_init_program(p);
 	/* turn on app-profiling i.e. pre-heating */
 	app_profile = 1;
@@ -602,7 +618,7 @@ bsd_autoconf()
 }
 
 
-#include <sys/disklabel.h>  // for MAXPARTITIONS
+#include <sys/disklabel.h>  /* for MAXPARTITIONS */
 
 setconf()
 {	
@@ -649,11 +665,7 @@ bsd_utaskbootstrap()
 
 	ut = (struct uthread *)get_bsdthread_info(th_act);
 	ut->uu_sigmask = 0;
-	thread_hold(th_act);
-	(void)thread_stop(getshuttle_thread(th_act));
 	act_set_astbsd(th_act);
-	thread_release(th_act);
-	thread_unstop(getshuttle_thread(th_act));
 	(void) thread_resume(th_act);
 }
 
@@ -675,6 +687,7 @@ parse_bsd_args()
 		else
 			strcat(init_args,"-s");
 	}
+
 	if (PE_parse_boot_arg("-b", namep)) {
 		boothowto |= RB_NOBOOTRC;
 		len = strlen(init_args);
@@ -708,6 +721,14 @@ parse_bsd_args()
 			strcat(init_args,"-x");
 	}
 
+	if (PE_parse_boot_arg("-d", namep)) {
+		len = strlen(init_args);
+		if(len != 0)
+			strcat(init_args," -d");
+		else
+			strcat(init_args,"-d");
+	}
+
 	PE_parse_boot_arg("srv", &srv);
 	PE_parse_boot_arg("ncl", &ncl);
 	PE_parse_boot_arg("nbuf", &nbuf);
@@ -720,7 +741,6 @@ thread_funnel_switch(
         int	oldfnl,
 	int	newfnl)
 {
-	thread_t	cur_thread;
 	boolean_t	funnel_state_prev;
 	int curfnl;
 	funnel_t * curflock;
@@ -747,8 +767,6 @@ thread_funnel_switch(
 	if((curflock = thread_funnel_get()) == THR_FUNNEL_NULL) {
             panic("thread_funnel_switch: no funnel held");
 	}
-        
-	cur_thread = current_thread();
         
         if ((oldfnl == NETWORK_FUNNEL) && (curflock != network_flock))
             panic("thread_funnel_switch: network funnel not held");

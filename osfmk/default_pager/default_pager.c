@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2001, 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2003 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -273,8 +273,8 @@ start_def_pager(char *bs_device)
 /*
 	MACH_PORT_FACE		master_device_port;
 */
-	MACH_PORT_FACE		security_port;
 /*
+	MACH_PORT_FACE		security_port;
 	MACH_PORT_FACE		root_ledger_wired;
 	MACH_PORT_FACE		root_ledger_paged;
 */
@@ -288,8 +288,8 @@ start_def_pager(char *bs_device)
 	master_device_port = ipc_port_make_send(master_device_port);
 	root_ledger_wired = ipc_port_make_send(root_wired_ledger_port);
 	root_ledger_paged = ipc_port_make_send(root_paged_ledger_port);
-*/
 	security_port = ipc_port_make_send(realhost.host_security_self);
+*/
 
 
 #if NORMA_VM
@@ -302,6 +302,9 @@ start_def_pager(char *bs_device)
 	/* setup read buffers, etc */
 	default_pager_initialize();
 	default_pager();
+	
+	/* start the backing store monitor, it runs on a callout thread */
+	thread_call_func(default_pager_backing_store_monitor, NULL, FALSE);
 }
 
 /*
@@ -332,8 +335,8 @@ default_pager_info(
 
 	bs_global_info(&pages_total, &pages_free);
 
-	infop->dpi_total_space = ptoa(pages_total);
-	infop->dpi_free_space = ptoa(pages_free);
+	infop->dpi_total_space = ptoa_32(pages_total);
+	infop->dpi_free_space = ptoa_32(pages_free);
 	infop->dpi_page_size = vm_page_size;
 
 	return KERN_SUCCESS;

@@ -411,14 +411,12 @@ wait_queue_link_noalloc(
 	 */
 	s = splsched();
 	wait_queue_lock(wq);
-	wqs_lock(wq_set);
 	q = &wq->wq_queue;
 	wq_element = (wait_queue_element_t) queue_first(q);
 	while (!queue_end(q, (queue_entry_t)wq_element)) {
 		WAIT_QUEUE_ELEMENT_CHECK(wq, wq_element);
 		if (wq_element->wqe_type == WAIT_QUEUE_LINK &&
 		    ((wait_queue_link_t)wq_element)->wql_setqueue == wq_set) {
-			wqs_unlock(wq_set);
 			wait_queue_unlock(wq);
 			splx(s);
 			return KERN_ALREADY_IN_SET;
@@ -430,6 +428,7 @@ wait_queue_link_noalloc(
 	/*
 	 * Not already a member, so we can add it.
 	 */
+	wqs_lock(wq_set);
 
 	WAIT_QUEUE_SET_CHECK(wq_set);
 
@@ -836,6 +835,7 @@ wait_queue_unlink_one(
  *
  *	Conditions:
  *		The wait queue is assumed locked.
+ *		The waiting thread is assumed locked.
  *
  */
 __private_extern__ wait_result_t
@@ -843,18 +843,18 @@ wait_queue_assert_wait64_locked(
 	wait_queue_t wq,
 	event64_t event,
 	wait_interrupt_t interruptible,
-	boolean_t unlock)
+	thread_t thread)
 {
-	thread_t thread;
 	wait_result_t wait_result;
+
+	if (!wait_queue_assert_possible(thread))
+		panic("wait_queue_assert_wait64_locked");
 
 	if (wq->wq_type == _WAIT_QUEUE_SET_inited) {
 		wait_queue_set_t wqs = (wait_queue_set_t)wq;
-		if (wqs->wqs_isprepost && wqs->wqs_refcount > 0) {
-			if (unlock)
-				wait_queue_unlock(wq);
+
+		if (wqs->wqs_isprepost && wqs->wqs_refcount > 0)
 			return(THREAD_AWAKENED);
-		}
 	}
 	  
 	/*
@@ -863,8 +863,6 @@ wait_queue_assert_wait64_locked(
 	 * the front of the queue.  Later, these queues will honor the policy
 	 * value set at wait_queue_init time.
 	 */
-	thread = current_thread();
-	thread_lock(thread);
 	wait_result = thread_mark_wait_locked(thread, interruptible);
 	if (wait_result == THREAD_WAITING) {
 		if (thread->vm_privilege)
@@ -874,9 +872,6 @@ wait_queue_assert_wait64_locked(
 		thread->wait_event = event;
 		thread->wait_queue = wq;
 	}
-	thread_unlock(thread);
-	if (unlock)
-		wait_queue_unlock(wq);
 	return(wait_result);
 }
 
@@ -897,6 +892,7 @@ wait_queue_assert_wait(
 {
 	spl_t s;
 	wait_result_t ret;
+	thread_t cur_thread = current_thread();
 
 	/* If it is an invalid wait queue, you can't wait on it */
 	if (!wait_queue_is_valid(wq)) {
@@ -906,10 +902,12 @@ wait_queue_assert_wait(
 
 	s = splsched();
 	wait_queue_lock(wq);
+	thread_lock(cur_thread);
 	ret = wait_queue_assert_wait64_locked(
 				wq, (event64_t)((uint32_t)event),
-				interruptible, TRUE);
-	/* wait queue unlocked */
+				interruptible, cur_thread);
+	thread_unlock(cur_thread);
+	wait_queue_unlock(wq);
 	splx(s);
 	return(ret);
 }
@@ -930,6 +928,7 @@ wait_queue_assert_wait64(
 {
 	spl_t s;
 	wait_result_t ret;
+	thread_t cur_thread = current_thread();
 
 	/* If it is an invalid wait queue, you cant wait on it */
 	if (!wait_queue_is_valid(wq)) {
@@ -939,8 +938,10 @@ wait_queue_assert_wait64(
 
 	s = splsched();
 	wait_queue_lock(wq);
-	ret = wait_queue_assert_wait64_locked(wq, event, interruptible, TRUE);
-	/* wait queue unlocked */
+	thread_lock(cur_thread);
+	ret = wait_queue_assert_wait64_locked(wq, event, interruptible, cur_thread);
+	thread_unlock(cur_thread);
+	wait_queue_unlock(wq);
 	splx(s);
 	return(ret);
 }

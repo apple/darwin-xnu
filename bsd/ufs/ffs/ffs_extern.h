@@ -133,7 +133,7 @@ int	ffs_unmount __P((struct mount *, int, struct proc *));
 int	ffs_update __P((struct vop_update_args *));
 int	ffs_valloc __P((struct vop_valloc_args *));
 int	ffs_vfree __P((struct vop_vfree_args *));
-int	ffs_vget __P((struct mount *, ino_t, struct vnode **));
+int	ffs_vget __P((struct mount *, void *, struct vnode **));
 int	ffs_vptofh __P((struct vnode *, struct fid *));
 int	ffs_write __P((struct vop_write_args *));
 int ffs_pagein __P((struct vop_pagein_args *));

@@ -59,6 +59,13 @@ void db_display_long(
 	char 		*modif
 );
 
+void db_display_char(
+	db_expr_t	addr,
+	int			have_addr,
+	db_expr_t	count,
+	char 		*modif
+);
+
 void db_display_real(
 	db_expr_t	addr,
 	int			have_addr,
@@ -68,10 +75,14 @@ void db_display_real(
 
 void db_display_virtual(db_expr_t addr, int have_addr, db_expr_t count, char * modif);
 void db_display_mappings(db_expr_t addr, int have_addr, db_expr_t count, char * modif);
+void db_display_hash(db_expr_t addr, int have_addr, db_expr_t count, char * modif);
 void db_display_pmap(db_expr_t addr, int have_addr, db_expr_t count, char * modif);
+void db_display_iokit(db_expr_t addr, int have_addr, db_expr_t count, char * modif);
 void db_display_save(db_expr_t addr, int have_addr, db_expr_t count, char * modif);
 void db_display_xregs(db_expr_t addr, int have_addr, db_expr_t count, char * modif);
 void db_display_kmod(db_expr_t addr, int have_addr, db_expr_t count, char * modif);
 void db_gsnoop(db_expr_t addr, int have_addr, db_expr_t count, char * modif);
+void db_check_mappings(db_expr_t addr, int have_addr, db_expr_t count, char * modif);
+void db_check_pmaps(db_expr_t addr, int have_addr, db_expr_t count, char * modif);
 
 #endif	/* !_DDB_DB_LTR_H_ */

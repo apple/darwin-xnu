@@ -267,6 +267,24 @@ vop_exchange {
 };
 
 #
+#% kqfilt_add   vp	L L L
+#
+vop_kqfilt_add {
+	IN struct vnode *vp;
+	IN struct knote *kn;
+	IN struct proc *p;
+};
+
+#
+#% kqfilt_remove	vp	L L L
+#
+vop_kqfilt_remove {
+	IN struct vnode *vp;
+	IN uintptr_t ident;
+	IN struct proc *p;
+};
+
+#
 #% revoke	vp	U U U
 #
 vop_revoke {
@@ -320,8 +338,8 @@ vop_remove {
 #% link		tdvp	L U U
 #
 vop_link {
-	IN WILLRELE struct vnode *vp;
-	IN struct vnode *tdvp;
+	IN struct vnode *vp;
+	IN WILLRELE struct vnode *tdvp;
 	IN struct componentname *cnp;
 };
 

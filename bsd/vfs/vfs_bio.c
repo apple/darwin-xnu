@@ -98,8 +98,11 @@
 static __inline__ void bufqinc(int q);
 static __inline__ void bufqdec(int q);
 
+static int do_breadn_for_type(struct vnode *vp, daddr_t blkno, int size, daddr_t *rablks, 
+	        int *rasizes, int nrablks, struct ucred *cred, struct buf **bpp, int queuetype);
 static struct buf *getnewbuf(int slpflag, int slptimeo, int *queue);
 static int bcleanbuf(struct buf *bp);
+static int brecover_data(struct buf *bp);
 extern void vwakeup();
 
 extern int niobuf;	/* The number of IO buffer headers for cluster IO */
@@ -523,7 +526,6 @@ meta_bread(vp, blkno, size, cred, bpp)
 
 /*
  * Read-ahead multiple disk blocks. The first is sync, the rest async.
- * Trivial modification to the breada algorithm presented in Bach (p.55).
  */
 int
 breadn(vp, blkno, size, rablks, rasizes, nrablks, cred, bpp)
@@ -534,10 +536,37 @@ breadn(vp, blkno, size, rablks, rasizes, nrablks, cred, bpp)
 	struct ucred *cred;
 	struct buf **bpp;
 {
+	return (do_breadn_for_type(vp, blkno, size, rablks, rasizes, nrablks, cred, bpp, BLK_READ));
+}
+
+/*
+ * Read-ahead multiple disk blocks. The first is sync, the rest async.
+ * [breadn() for meta-data]
+ */
+int
+meta_breadn(vp, blkno, size, rablks, rasizes, nrablks, cred, bpp)
+	struct vnode *vp;
+	daddr_t blkno; int size;
+	daddr_t rablks[]; int rasizes[];
+	int nrablks;
+	struct ucred *cred;
+	struct buf **bpp;
+{
+	return (do_breadn_for_type(vp, blkno, size, rablks, rasizes, nrablks, cred, bpp, BLK_META));
+}
+
+/*
+ * Perform the reads for breadn() and meta_breadn(). 
+ * Trivial modification to the breada algorithm presented in Bach (p.55). 
+ */
+static int 
+do_breadn_for_type(struct vnode *vp, daddr_t blkno, int size, daddr_t *rablks, int *rasizes, 
+		   int nrablks, struct ucred *cred, struct buf **bpp, int queuetype)
+{
 	register struct buf *bp;
 	int i;
 
-	bp = *bpp = bio_doread(vp, blkno, size, cred, 0, BLK_READ);
+	bp = *bpp = bio_doread(vp, blkno, size, cred, 0, queuetype);
 
 	/*
 	 * For each of the read-ahead blocks, start a read, if necessary.
@@ -548,7 +577,7 @@ breadn(vp, blkno, size, rablks, rasizes, nrablks, cred, bpp)
 			continue;
 
 		/* Get a buffer for the read-ahead block */
-		(void) bio_doread(vp, rablks[i], rasizes[i], cred, B_ASYNC, BLK_READ);
+		(void) bio_doread(vp, rablks[i], rasizes[i], cred, B_ASYNC, queuetype);
 	}
 
 	/* Otherwise, we had to start a read for it; wait until it's valid. */
@@ -583,6 +612,10 @@ bwrite(bp)
 	struct proc	*p = current_proc();
 	struct vnode *vp = bp->b_vp;
 
+	if (bp->b_data == 0) {
+	        if (brecover_data(bp) == 0)
+		        return (0);
+	}
 	/* Remember buffer type, to switch on it later. */
 	sync = !ISSET(bp->b_flags, B_ASYNC);
 	wasdelayed = ISSET(bp->b_flags, B_DELWRI);
@@ -865,11 +898,14 @@ brelse(bp)
 				upl = (upl_t) 0;
 		} else {
 			upl = bp->b_pagelist;
-			kret = ubc_upl_unmap(upl);
 
-			if (kret != KERN_SUCCESS)
-			        panic("kernel_upl_unmap failed");
-			bp->b_data = 0;
+			if (bp->b_data) {
+			        kret = ubc_upl_unmap(upl);
+
+				if (kret != KERN_SUCCESS)
+				        panic("kernel_upl_unmap failed");
+				bp->b_data = 0;
+			}
 		}
 		if (upl) {
 			if (bp->b_flags & (B_ERROR | B_INVAL)) {
@@ -883,7 +919,7 @@ brelse(bp)
 				    upl_flags = UPL_COMMIT_CLEAR_DIRTY ;
 			    else if (ISSET(bp->b_flags, B_DELWRI | B_WASDIRTY))
 					upl_flags = UPL_COMMIT_SET_DIRTY ;
-				else
+			        else
 				    upl_flags = UPL_COMMIT_CLEAR_DIRTY ;
 				ubc_upl_commit_range(upl, 0, bp->b_bufsize, upl_flags |
 					UPL_COMMIT_INACTIVATE | UPL_COMMIT_FREE_ON_EMPTY);
@@ -1442,14 +1478,23 @@ allocbuf(bp, size)
 				if (bp->b_bufsize <= MAXMETA) {
 					if (bp->b_bufsize < nsize) {
 						/* reallocate to a bigger size */
-						desired_size = nsize;
 
 						zprev = getbufzone(bp->b_bufsize);
-						z = getbufzone(nsize);
-						bp->b_data = (caddr_t)zalloc(z);
-						if(bp->b_data == 0)
-							panic("allocbuf: zalloc() returned NULL");
-						bcopy(elem, bp->b_data, bp->b_bufsize);
+						if (nsize <= MAXMETA) {
+							desired_size = nsize;
+							z = getbufzone(nsize);
+							bp->b_data = (caddr_t)zalloc(z);
+							if(bp->b_data == 0)
+								panic("allocbuf: zalloc() returned NULL");
+						} else {
+							kret = kmem_alloc(kernel_map, &bp->b_data, desired_size);
+							if (kret != KERN_SUCCESS)
+								panic("allocbuf: kmem_alloc() 0 returned %d", kret);
+							if(bp->b_data == 0)
+								panic("allocbuf: null b_data 0");
+							CLR(bp->b_flags, B_ZALLOC);
+						}
+						bcopy((const void *)elem, bp->b_data, bp->b_bufsize);
 						zfree(zprev, elem);
 					} else {
 						desired_size = bp->b_bufsize;
@@ -1464,7 +1509,7 @@ allocbuf(bp, size)
 						panic("allocbuf: kmem_alloc() returned %d", kret);
 					if(bp->b_data == 0)
 						panic("allocbuf: null b_data");
-					bcopy(elem, bp->b_data, bp->b_bufsize);
+					bcopy((const void *)elem, bp->b_data, bp->b_bufsize);
 					kmem_free(kernel_map, elem, bp->b_bufsize); 
 				} else {
 					desired_size = bp->b_bufsize;
@@ -1819,6 +1864,8 @@ biodone(bp)
 {
 	boolean_t 	funnel_state;
 	struct vnode *vp;
+	extern struct timeval priority_IO_timestamp_for_root;
+	extern int hard_throttle_on_root;
 
 	funnel_state = thread_funnel_set(kernel_flock, TRUE);
 
@@ -1851,7 +1898,8 @@ biodone(bp)
                 code |= DKIO_PAGING;
 
             KERNEL_DEBUG_CONSTANT(FSDBG_CODE(DBG_DKRW, code) | DBG_FUNC_NONE,
-                                    bp, bp->b_vp, bp->b_resid, bp->b_error, 0);
+				(unsigned int)bp, (unsigned int)bp->b_vp,
+				bp->b_resid, bp->b_error, 0);
         }
         
 	/* Wakeup the throttled write operations as needed */
@@ -1862,7 +1910,10 @@ biodone(bp)
 		vp->v_flag &= ~VTHROTTLED;
 		wakeup((caddr_t)&vp->v_numoutput);
 	}
-
+	if ((bp->b_flags & B_PGIN) && (vp->v_mount->mnt_kern_flag & MNTK_ROOTDEV)) {
+	        priority_IO_timestamp_for_root = time;
+	        hard_throttle_on_root = 0;
+	}
 	if (ISSET(bp->b_flags, B_CALL)) {	/* if necessary, call out */
 		void	(*iodone_func)(struct buf *) = bp->b_iodone;
 
@@ -2033,7 +2084,7 @@ free_io_buf(bp)
 
 typedef long long blsize_t;
 
-blsize_t MAXNBUF; /* initialize to (mem_size / PAGE_SIZE) */
+blsize_t MAXNBUF; /* initialize to (sane_size / PAGE_SIZE) */
 /* Global tunable limits */
 blsize_t nbufh;			/* number of buffer headers */
 blsize_t nbuflow;		/* minimum number of buffer headers required */
@@ -2129,11 +2180,11 @@ bufq_balance_thread_init()
 	if (bufqscanwait++ == 0) {
 
 		/* Initalize globals */
-		MAXNBUF = (mem_size / PAGE_SIZE);
+		MAXNBUF = (sane_size / PAGE_SIZE);
 		nbufh = nbuf;
 		nbuflow = min(nbufh, 100);
 		nbufhigh = min(MAXNBUF, max(nbufh, 2048));
-		nbuftarget = (mem_size >> 5) / PAGE_SIZE;
+		nbuftarget = (sane_size >> 5) / PAGE_SIZE;
 		nbuftarget = max(nbuflow, nbuftarget);
 		nbuftarget = min(nbufhigh, nbuftarget);
 
@@ -2377,6 +2428,7 @@ doit:
 	/* Remove from the queue */
 	bremfree(bp);
 	blaundrycnt--;
+
 	/* do the IO */
 	error = bawrite_internal(bp, 0);
 	if (error) {
@@ -2394,6 +2446,62 @@ doit:
 	goto doit;
 
 	(void) thread_funnel_set(kernel_flock, funnel_state);
+}
+
+
+static int
+brecover_data(struct buf *bp)
+{
+        upl_t upl;
+	upl_page_info_t *pl;
+	int upl_offset;
+	kern_return_t kret;
+	struct vnode *vp = bp->b_vp;
+
+	if (vp->v_tag == VT_NFS)
+	        /*
+		 * NFS currently deals with this case
+		 * in a slightly different manner...
+		 * continue to let it do so
+		 */
+	        return(1);
+
+	if (!UBCISVALID(vp) || bp->b_bufsize == 0)
+	        goto dump_buffer;
+
+	kret = ubc_create_upl(vp,
+			      ubc_blktooff(vp, bp->b_lblkno), 
+			      bp->b_bufsize, 
+			      &upl, 
+			      &pl,
+			      UPL_PRECIOUS);
+	if (kret != KERN_SUCCESS)
+	        panic("Failed to get pagelists");
+
+	for (upl_offset = 0; upl_offset < bp->b_bufsize; upl_offset += PAGE_SIZE) {
+
+	        if (!upl_valid_page(pl, upl_offset / PAGE_SIZE) || !upl_dirty_page(pl, upl_offset / PAGE_SIZE)) {
+		        ubc_upl_abort(upl, 0);
+			goto dump_buffer;
+		}
+	}
+	SET(bp->b_flags, B_PAGELIST);
+	bp->b_pagelist = upl;
+					
+	kret = ubc_upl_map(upl, (vm_address_t *)&(bp->b_data));
+	if (kret != KERN_SUCCESS)
+	        panic("getblk: ubc_upl_map() failed with (%d)", kret);
+	if (bp->b_data == 0)
+	        panic("ubc_upl_map mapped 0");
+	
+	return (1);
+
+dump_buffer:
+	bp->b_bufsize = 0;
+	SET(bp->b_flags, B_INVAL);
+	brelse(bp);
+
+	return(0);
 }
 
 

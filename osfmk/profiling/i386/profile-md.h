@@ -143,6 +143,8 @@
 #ifndef _PROFILE_MD_H
 #define _PROFILE_MD_H
 
+#include <types.h>
+
 /*
  * Define the interfaces between the assembly language profiling support
  * that is common between the kernel, mach servers, and user space library.

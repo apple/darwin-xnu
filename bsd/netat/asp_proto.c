@@ -84,11 +84,10 @@ void asp_init();
 void asp_ack_reply();
 void asp_nak_reply();
 void asp_clock();
-void asp_clock_funnel();
+void asp_clock_funnel(void *);
 int  asp_open();
 int  asp_close();
 int  asp_wput();
-void atp_retry_req();
 StaticProc asp_scb_t *asp_find_scb();
 StaticProc asp_scb_t *asp_scb_alloc();
 
@@ -101,7 +100,7 @@ StaticProc void asp_timout();
 StaticProc void asp_untimout();
 StaticProc void asp_hangup();
 StaticProc void asp_send_tickle();
-StaticProc void asp_send_tickle_funnel();
+StaticProc void asp_send_tickle_funnel(void *);
 StaticProc void asp_accept();
 StaticProc int  asp_send_req();
 
@@ -374,7 +373,7 @@ void trace_end(str)
 	dPrintf(D_M_ASP, D_L_TRACE,
 		("  %s: %s\n", str, mbuf_totals()));
 }
-#endif AT_MBUF_TRACE
+#endif /* AT_MBUF_TRACE */
 
 /*
  * the write routine
@@ -662,7 +661,7 @@ int asp_wput(gref, m)
 		{
 		struct atp_state *atp = (struct atp_state *)gref->info;
 		if (atp->dflag)
-			atp = atp->atp_msgq;
+			atp = (struct atp_state *)atp->atp_msgq;
 					
 		if (gbuf_cont(mioc) == 0) {
 			asp_iocnak(gref, mioc, EINVAL);
@@ -782,10 +781,10 @@ asp_send_req(gref, mioc, dest, retry, awp, xo, state, bitmap)
  */
 StaticProc void
 asp_send_tickle_funnel(scb)
-	asp_scb_t *scb;
+	void *scb;
 {
         thread_funnel_set(network_flock, TRUE);
-	asp_send_tickle(scb);
+	asp_send_tickle((asp_scb_t *)scb);
         thread_funnel_set(network_flock, FALSE);
 }
 
@@ -1915,8 +1914,8 @@ asp_putnext(gref, mproto)
 
 int ASPputmsg(gref_t *gref, strbuf_t *ctlptr, strbuf_t *datptr, gbuf_t *mreq, int flags, int *errp)
 {
-    int s, i, err, len;
-    gbuf_t *mioc, *mdata, *mx;
+    int s, i, err, len, offset, remain, size, copy_len;
+    gbuf_t *mioc, *mdata, *mx, *m0;
     ioc_t *iocbp;
     strbuf_t ctlbuf;
     strbuf_t datbuf;
@@ -1930,6 +1929,7 @@ int ASPputmsg(gref_t *gref, strbuf_t *ctlptr, strbuf_t *datptr, gbuf_t *mreq, in
     asp_word_t *awp;
     union asp_primitives *primitives;
     unsigned short tid;
+    caddr_t		dataptr;
     
     if ((scb = (asp_scb_t *)gref->info) == 0) {
 		dPrintf(D_M_ASP, D_L_ERROR,
@@ -1991,46 +1991,77 @@ int ASPputmsg(gref_t *gref, strbuf_t *ctlptr, strbuf_t *datptr, gbuf_t *mreq, in
 		("ASPputmsg: %s\n", aspCmdStr(Primitive)));
 
     /*
-     * allocate buffer and copy in the data content
+     * copy in the data content into multiple mbuf clusters if
+     * required.  ATP now expects reply data to be placed in
+     * standard clusters, not the large external clusters that
+     * were used previously.
      */
-    len = (Primitive == ASPFUNC_CmdReply) ? 0 : aspCMDsize;
+         
+    /* set offset for use by some commands */
+    offset = (Primitive == ASPFUNC_CmdReply) ? 0 : aspCMDsize;
+	size = 0;
+    if (mreq != NULL) {
+        /* The data from the in-kernel call for use by AFP is passed
+         * in as one large external cluster.  This needs to be copied
+         * to a chain of standard clusters.
+         */
+        remain = gbuf_len(mreq);
+        dataptr = mtod(mreq, caddr_t);
+    } else {
+    	/* copyin from user space */
+    	remain = datbuf.len; 
+    	dataptr = (caddr_t)datbuf.buf;  
+    }	
     
-    if (!(mdata = gbuf_alloc_wait(datbuf.len+len, TRUE))) {
+    /* allocate first buffer */
+    if (!(mdata = gbuf_alloc_wait((remain + offset > MCLBYTES ? MCLBYTES : remain + offset), TRUE))) {
         /* error return should not be possible */
         err = ENOBUFS;
         gbuf_freem(mioc);
         goto l_err;
     }
-    gbuf_wset(mdata, (datbuf.len+len));
+    gbuf_wset(mdata, 0);		/* init length to zero */
     gbuf_cont(mioc) = mdata;
-    
-    if (mreq != NULL) {
-        /* being called from kernel space */
-        gbuf_t *tmp = mreq;
-        unsigned long offset = 0;
-        
-        /* copy afp cmd data from the passed in mbufs to mdata.  I cant
-        chain mreq to mdata since the rest of this code assumes
-        just one big mbuf with space in front for the BDS */
-        offset = len;
-        while (tmp != NULL) {
-            bcopy (gbuf_rptr(tmp), (gbuf_rptr(mdata) + offset), gbuf_len(tmp));
-            offset += gbuf_len(tmp);
-            tmp = gbuf_cont(tmp);           /* on to next mbuf in chain */
-        }
-        
-        /* all data copied out of mreq so free it */
-        gbuf_freem(mreq);
-    } else {
-        /* being called from user space */
-        if ((err = copyin((caddr_t)datbuf.buf,
-                  (caddr_t)(gbuf_rptr(mdata)+len), datbuf.len)) != 0) {
-            gbuf_freem(mioc);
-            goto l_err;
-        }
-    }
 
-    switch (Primitive) {
+	while (remain) {
+		if (remain + offset > MCLBYTES)
+			copy_len = MCLBYTES - offset;
+		else
+			copy_len = remain;
+		remain -= copy_len;
+		if (mreq != NULL)
+			bcopy (dataptr, (gbuf_rptr(mdata) + offset), copy_len);
+		else if ((err = copyin(dataptr, (caddr_t)(gbuf_rptr(mdata) + offset), copy_len)) != 0) {
+			gbuf_freem(mioc);
+			goto l_err;
+		}
+		gbuf_wset(mdata, (copy_len + offset));
+		size += copy_len + offset;
+		dataptr += copy_len;
+		offset = 0;
+		if (remain) {
+			/* allocate the next mbuf */
+			if ((gbuf_cont(mdata) = m_get((M_WAIT), MSG_DATA)) == 0) {
+				err = ENOBUFS;
+				gbuf_freem(mioc);
+				goto l_err;
+			}
+			mdata = gbuf_cont(mdata);
+			MCLGET(mdata, M_WAIT);
+			if (!(mdata->m_flags & M_EXT)) {
+				err = ENOBUFS;
+				gbuf_freem(mioc);
+				goto l_err;
+			}
+		}
+	}
+	mdata = gbuf_cont(mioc);			/* code further on down expects this to b e set */
+	mdata->m_pkthdr.len = size;			/* set packet hdr len */
+
+	if (mreq != 0)
+		gbuf_freem(mreq);
+
+   	switch (Primitive) {
 
     case ASPFUNC_Command:
     case ASPFUNC_Write:
@@ -2147,16 +2178,20 @@ int ASPputmsg(gref_t *gref, strbuf_t *ctlptr, strbuf_t *datptr, gbuf_t *mreq, in
             atp->xo = 1;
             atp->xo_relt = 1;
         }
+        /* setup the atpBDS struct - only the length field is used,
+         * except for the first one which contains the bds count in
+         * bdsDataSz.
+         */
         atpBDS = (struct atpBDS *)gbuf_wptr(mioc);
         msize = mdata ? gbuf_msgsize(mdata) : 0;
-       for (nbds=0; (nbds < ATP_TRESP_MAX) && (msize > 0); nbds++) {
+       	for (nbds=0; (nbds < ATP_TRESP_MAX) && (msize > 0); nbds++) {
             len = msize < ATP_DATA_SIZE ? msize : ATP_DATA_SIZE;
             msize -= ATP_DATA_SIZE;
             *(long *)atpBDS[nbds].bdsUserData = 0;
             UAL_ASSIGN(atpBDS[nbds].bdsBuffAddr, 1);
             UAS_ASSIGN(atpBDS[nbds].bdsBuffSz, len);
         }
-        UAS_ASSIGN(atpBDS[0].bdsDataSz, nbds);
+       	UAS_ASSIGN(atpBDS[0].bdsDataSz, nbds);
         *(long *)atpBDS[0].bdsUserData = (long)result;
         *(long *)atp->user_bytes = (long)result;
         gbuf_winc(mioc,atpBDSsize);

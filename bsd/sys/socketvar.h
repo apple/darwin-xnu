@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2002 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2003 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -162,9 +162,9 @@ struct socket {
 #define	SB_ASYNC		0x10		/* ASYNC I/O, need signals */
 #define	SB_UPCALL		0x20		/* someone wants an upcall */
 #define	SB_NOINTR		0x40		/* operations not interruptible */
+#define SB_KNOTE		0x100	/* kernel note attached */
 #ifndef __APPLE__
 #define SB_AIO		0x80		/* AIO operations queued */
-#define SB_KNOTE		0x100	/* kernel note attached */
 #else
 #define	SB_NOTIFY	(SB_WAIT|SB_SEL|SB_ASYNC)
 #define SB_RECV		0x8000		/* this is rcv sb */
@@ -197,6 +197,7 @@ struct socket {
 	struct	kextcb *so_ext;		/* NKE hook */
 	u_long	so_flags;		/* Flags */
 #define SOF_NOSIGPIPE	0x00000001
+#define SOF_NOADDRAVAIL	0x00000002	/* returns EADDRNOTAVAIL if src address is gone */
 	void	*reserved2;
 	void	*reserved3;
 	void	*reserved4;
@@ -340,9 +341,7 @@ struct sockaddr;
 struct stat;
 struct ucred;
 struct uio;
-#ifndef __APPLE
 struct knote;
-#endif
 
 /*
  * File operations on sockets.
@@ -356,6 +355,8 @@ int	soo_ioctl __P((struct file *fp, u_long cmd, caddr_t data,
 	    struct proc *p));
 int	soo_stat __P((struct socket *so, struct stat *ub));
 int	soo_select __P((struct file *fp, int which, void * wql, struct proc *p));
+int     soo_kqfilter __P((struct file *fp, struct knote *kn, struct proc *p));
+
 
 /*
  * From uipc_socket and friends

@@ -1,4 +1,4 @@
-/*	$FreeBSD: src/sys/netinet6/nd6_rtr.c,v 1.2.2.3 2001/07/03 11:01:54 ume Exp $	*/
+/*	$FreeBSD: src/sys/netinet6/nd6_rtr.c,v 1.11 2002/04/19 04:46:23 suz Exp $	*/
 /*	$KAME: nd6_rtr.c,v 1.111 2001/04/27 01:37:15 jinmei Exp $	*/
 
 /*
@@ -126,7 +126,7 @@ nd6_rs_input(m, off, icmp6len)
 	union nd_opts ndopts;
 
 	/* If I'm not a router, ignore it. */
-	if (ip6_accept_rtadv != 0 || ip6_forwarding != 1)
+	if (ip6_accept_rtadv != 0 || (ifp->if_eflags & IFEF_ACCEPT_RTADVD) || ip6_forwarding != 1)
 		goto freeit;
 
 	/* Sanity checks */
@@ -215,7 +215,7 @@ nd6_ra_input(m, off, icmp6len)
 	union nd_opts ndopts;
 	struct nd_defrouter *dr;
 
-	if (ip6_accept_rtadv == 0)
+	if (ip6_accept_rtadv == 0 && ((ifp->if_eflags & IFEF_ACCEPT_RTADVD) == 0))
 		goto freeit;
 
 	if (ip6->ip6_hlim != 255) {
@@ -267,7 +267,7 @@ nd6_ra_input(m, off, icmp6len)
 	dr0.advints_lost = 0;	/* Mobile IPv6 */
 	/* unspecified or not? (RFC 2461 6.3.4) */
 	if (advreachable) {
-		NTOHL(advreachable);
+		advreachable = ntohl(advreachable);
 		if (advreachable <= MAX_REACHABLE_TIME &&
 		    ndi->basereachable != advreachable) {
 			ndi->basereachable = advreachable;
@@ -396,7 +396,7 @@ nd6_ra_input(m, off, icmp6len)
  skip:
 	
 	/*
-	 * Src linkaddress
+	 * Source link layer address
 	 */
     {
 	char *lladdr = NULL;
@@ -451,7 +451,7 @@ nd6_rtmsg(cmd, rt)
 	info.rti_info[RTAX_GATEWAY] = rt->rt_gateway;
 	info.rti_info[RTAX_NETMASK] = rt_mask(rt);
 	info.rti_info[RTAX_IFP] =
-		(struct sockaddr *)TAILQ_FIRST(&rt->rt_ifp->if_addrlist);
+		TAILQ_FIRST(&rt->rt_ifp->if_addrlist)->ifa_addr;
 	info.rti_info[RTAX_IFA] = rt->rt_ifa->ifa_addr;
 
 	rt_missmsg(cmd, &info, rt->rt_flags, 0);
@@ -530,7 +530,7 @@ defrouter_addifreq(ifp)
 			nd6_rtmsg(RTM_ADD, newrt);
 			rtunref(newrt);
 		}
-		in6_post_msg(ifp, KEV_INET6_DEFROUTER, &def);
+		in6_post_msg(ifp, KEV_INET6_DEFROUTER, (struct in6_ifaddr *)ifa);
 	}
 }
 
@@ -598,7 +598,7 @@ defrtrlist_del(dr)
 	 * Flush all the routing table entries that use the router
 	 * as a next hop.
 	 */
-	if (!ip6_forwarding && ip6_accept_rtadv) {
+	if (!ip6_forwarding && (ip6_accept_rtadv || (dr->ifp->if_eflags & IFEF_ACCEPT_RTADVD))) {
 		/* above is a good condition? */
 		rt6_flush(&dr->rtaddr, dr->ifp);
 	}
@@ -1735,6 +1735,7 @@ in6_ifadd(pr, ifid)
 int
 in6_tmpifadd(ia0, forcegen)
 	const struct in6_ifaddr *ia0; /* corresponding public address */
+	int forcegen;
 {
 	struct ifnet *ifp = ia0->ia_ifa.ifa_ifp;
 	struct in6_ifaddr *newia;
@@ -1830,6 +1831,16 @@ in6_tmpifadd(ia0, forcegen)
 	}
 	newia->ia6_ndpr = ia0->ia6_ndpr;
 	newia->ia6_ndpr->ndpr_refcnt++;
+
+	/*
+	 * A newly added address might affect the status of other addresses.
+	 * XXX: when the temporary address is generated with a new public
+	 * address, the onlink check is redundant.  However, it would be safe
+	 * to do the check explicitly everywhere a new address is generated,
+	 * and, in fact, we surely need the check when we create a new
+	 * temporary address due to deprecation of an old temporary address.
+	 */
+	pfxlist_onlink_check();
 
 	return(0);
 }	    

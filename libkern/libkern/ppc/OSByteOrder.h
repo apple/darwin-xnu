@@ -33,72 +33,61 @@
 #ifndef _OS_OSBYTEORDERPPC_H
 #define _OS_OSBYTEORDERPPC_H
 
-#include <libkern/OSTypes.h>
+#include <stdint.h>
+
+#if !defined(OS_INLINE)
+#        define OS_INLINE static inline
+#endif
 
 /* Functions for byte reversed loads. */
 
 OS_INLINE
-UInt16
+uint16_t
 OSReadSwapInt16(
     volatile void               * base,
-    UInt                          offset
+    uintptr_t                          offset
 )
 {
-    UInt16 result;
+    uint16_t result;
     __asm__ volatile("lhbrx %0, %1, %2"
                      : "=r" (result)
-                     : "b"  (base), "r" (offset)
+                     : "b%"  (base), "r" (offset)
                      : "memory");
     return result;
 }
 
 OS_INLINE
-UInt32
+uint32_t
 OSReadSwapInt32(
     volatile void               * base,
-    UInt                          offset
+    uintptr_t                          offset
 )
 {
-    UInt32 result;
+    uint32_t result;
     __asm__ volatile("lwbrx %0, %1, %2"
                      : "=r" (result)
-                     : "b"  (base), "r" (offset)
+                     : "b%"  (base), "r" (offset)
                      : "memory");
     return result;
 }
 
 OS_INLINE
-UInt64
+uint64_t
 OSReadSwapInt64(
     volatile void               * base,
-    UInt                          offset
+    uintptr_t                          offset
 )
 {
-    UInt64 * inp;
+    uint64_t * inp;
     union ullc {
-        UInt64     ull;
-        UInt       ul[2];
+        uint64_t     ull;
+        uint32_t     ul[2];
     } outv;
 
-    inp = (UInt64 *)base;
+    inp = (uint64_t *)base;
     outv.ul[0] = OSReadSwapInt32(inp, offset + 4);
     outv.ul[1] = OSReadSwapInt32(inp, offset);
     return outv.ull;
-}
-
-OS_INLINE
-UInt
-OSReadSwapInt(
-    volatile void               * base,
-    UInt                          offset
-)
-{
-    UInt result;
-    __asm__ volatile("lwbrx %0, %1, %2"
-                     : "=r" (result)
-                     : "b"  (base), "r" (offset)
-                     : "memory");
-    return result;
 }
 
 /* Functions for byte reversed stores. */
@@ -107,13 +96,13 @@ OS_INLINE
 void
 OSWriteSwapInt16(
     volatile void               * base,
-    UInt                          offset,
-    UInt16                        data
+    uintptr_t                          offset,
+    uint16_t                        data
 )
 {
     __asm__ volatile("sthbrx %0, %1, %2"
                      :
-                     : "r" (data), "b" (base), "r" (offset)
+                     : "r" (data), "b%" (base), "r" (offset)
                      : "memory");
 }
 
@@ -121,13 +110,13 @@ OS_INLINE
 void
 OSWriteSwapInt32(
     volatile void               * base,
-    UInt                          offset,
-    UInt32                        data
+    uintptr_t                          offset,
+    uint32_t                        data
 )
 {
     __asm__ volatile("stwbrx %0, %1, %2"
                      :
-                     : "r" (data), "b" (base), "r" (offset)
+                     : "r" (data), "b%" (base), "r" (offset)
                      : "memory" );
 }
 
@@ -135,76 +124,52 @@ OS_INLINE
 void
 OSWriteSwapInt64(
     volatile void               * base,
-    UInt                          offset,
-    UInt64                        data
+    uintptr_t                          offset,
+    uint64_t                        data
 )
 {
-    UInt64 * outp;
+    uint64_t * outp;
     union ullc {
-        UInt64     ull;
-        UInt       ul[2];
+        uint64_t     ull;
+        uint32_t     ul[2];
     } *inp;
 
-    outp = (UInt64 *)base;
+    outp = (uint64_t *)base;
     inp  = (union ullc *)&data;
     OSWriteSwapInt32(outp, offset, inp->ul[1]);
     OSWriteSwapInt32(outp, offset + 4, inp->ul[0]);
 }
 
-OS_INLINE
-void
-OSWriteSwapInt(
-    volatile void               * base,
-    UInt                          offset,
-    UInt                          data
-)
-{
-    __asm__ volatile("stwbrx %0, %1, %2"
-                     :
-                     : "r" (data), "b" (base), "r" (offset)
-                     : "memory" );
-}
-
 /* Generic byte swapping functions. */
 
 OS_INLINE
-UInt16
-OSSwapInt16(
-    UInt16                        data
+uint16_t
+_OSSwapInt16(
+    uint16_t                        data
 )
 {
-    UInt16 temp = data;
+    uint16_t temp = data;
     return OSReadSwapInt16(&temp, 0);
 }
 
 OS_INLINE
-UInt32
-OSSwapInt32(
-    UInt32                        data
+uint32_t
+_OSSwapInt32(
+    uint32_t                        data
 )
 {
-    UInt32 temp = data;
+    uint32_t temp = data;
     return OSReadSwapInt32(&temp, 0);
 }
 
 OS_INLINE
-UInt64
-OSSwapInt64(
-    UInt64                        data
+uint64_t
+_OSSwapInt64(
+    uint64_t                        data
 )
 {
-    UInt64 temp = data;
+    uint64_t temp = data;
     return OSReadSwapInt64(&temp, 0);
-}
-
-OS_INLINE
-UInt
-OSSwapInt(
-    UInt                          data
-)
-{
-    UInt temp = data;
-    return OSReadSwapInt(&temp, 0);
 }
 
 #endif /* ! _OS_OSBYTEORDERPPC_H */

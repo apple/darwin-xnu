@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2003 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -429,8 +429,10 @@ nqsrv_instimeq(lp, duration)
 {
 	register struct nqlease *tlp;
 	time_t newexpiry;
+	struct timeval now;
 
-	newexpiry = time.tv_sec + duration + nqsrv_clockskew;
+	microtime(&now);
+	newexpiry = now.tv_sec + duration + nqsrv_clockskew;
 	if (lp->lc_expiry == newexpiry)
 		return;
 	if (lp->lc_timer.cqe_next != 0) {
@@ -523,7 +525,7 @@ nqsrv_send_eviction(vp, lp, slp, nam, cred)
 	caddr_t bpos, cp;
 	u_long xid, *tl;
 	int len = 1, ok = 1, i = 0;
-	int sotype, *solockp;
+	int sotype, solock;
 
 	while (ok && (lph->lph_flag & LC_VALID)) {
 		if (nqsrv_cmpnam(slp, nam, lph))
@@ -547,10 +549,7 @@ nqsrv_send_eviction(vp, lp, slp, nam, cred)
 			} else
 				goto nextone;
 			sotype = so->so_type;
-			if (so->so_proto->pr_flags & PR_CONNREQUIRED)
-				solockp = &lph->lph_slp->ns_solock;
-			else
-				solockp = (int *)0;
+			solock = (so->so_proto->pr_flags & PR_CONNREQUIRED);
 			nfsm_reqhead((struct vnode *)0, NQNFSPROC_EVICTED,
 				NFSX_V3FH + NFSX_UNSIGNED);
 			fhp = &nfh.fh_generic;
@@ -583,15 +582,13 @@ nqsrv_send_eviction(vp, lp, slp, nam, cred)
 			}
 			if (((lph->lph_flag & (LC_UDP | LC_CLTP)) == 0 &&
 			    (lph->lph_slp->ns_flag & SLP_VALID) == 0) ||
-			    (solockp && (*solockp & NFSMNT_SNDLOCK)))
+			    (solock && nfs_slplock(lph->lph_slp, 0) == 0)) {
 				m_freem(m);
-			else {
-				if (solockp)
-					*solockp |= NFSMNT_SNDLOCK;
+			} else {
 				(void) nfs_send(so, nam2, m,
 						(struct nfsreq *)0);
-				if (solockp)
-					nfs_sndunlock(solockp);
+				if (solock)
+					nfs_slpunlock(lph->lph_slp);
 			}
 			if (lph->lph_flag & LC_UDP)
 				MFREE(nam2, m);
@@ -623,9 +620,11 @@ nqsrv_waitfor_expiry(lp)
 	register int i;
 	struct nqm *lphnext;
 	int len, ok;
+	struct timeval now;
 
 tryagain:
-	if (time.tv_sec > lp->lc_expiry)
+	microtime(&now);
+	if (now.tv_sec > lp->lc_expiry)
 		return;
 	lph = &lp->lc_host;
 	lphnext = lp->lc_morehosts;
@@ -669,10 +668,12 @@ nqnfs_serverd()
 	struct nqm *lphnext, *olphnext;
 	struct mbuf *n;
 	int i, len, ok;
+	struct timeval now;
 
+	microtime(&now);
 	for (lp = nqtimerhead.cqh_first; lp != (void *)&nqtimerhead;
 	    lp = nextlp) {
-		if (lp->lc_expiry >= time.tv_sec)
+		if (lp->lc_expiry >= now.tv_sec)
 			break;
 		nextlp = lp->lc_timer.cqe_next;
 		if (lp->lc_flag & LC_EXPIREDWANTED) {
@@ -717,7 +718,7 @@ nqnfs_serverd()
 					nfsrv_slpderef(lph->lph_slp);
 				if (++i == len) {
 					if (olphnext) {
-						_FREE_ZONE((caddr_t)olphnext,
+						FREE_ZONE((caddr_t)olphnext,
 							sizeof (struct nqm),
 								M_NQMHOST);
 						olphnext = (struct nqm *)0;
@@ -736,7 +737,7 @@ nqnfs_serverd()
 			FREE_ZONE((caddr_t)lp,
 					sizeof (struct nqlease), M_NQLEASE);
 			if (olphnext)
-				_FREE_ZONE((caddr_t)olphnext,
+				FREE_ZONE((caddr_t)olphnext,
 					sizeof (struct nqm), M_NQMHOST);
 			nfsstats.srvnqnfs_leases--;
 		    }
@@ -896,14 +897,19 @@ nqnfs_getlease(vp, rwflag, cred, p)
 	register caddr_t cp;
 	register long t1, t2;
 	register struct nfsnode *np;
-	struct nfsmount *nmp = VFSTONFS(vp->v_mount);
+	struct nfsmount *nmp;
 	caddr_t bpos, dpos, cp2;
+	struct timeval now;
 	time_t reqtime;
 	int error = 0;
 	struct mbuf *mreq, *mrep, *md, *mb, *mb2;
 	int cachable;
 	u_quad_t frev;
 	u_int64_t xid;
+
+	nmp = VFSTONFS(vp->v_mount);
+	if (!nmp)
+		return (ENXIO);
 
 	nfsstats.rpccnt[NQNFSPROC_GETLEASE]++;
 	mb = mreq = nfsm_reqh(vp, NQNFSPROC_GETLEASE, NFSX_V3FH+2*NFSX_UNSIGNED,
@@ -912,16 +918,24 @@ nqnfs_getlease(vp, rwflag, cred, p)
 	nfsm_build(tl, u_long *, 2 * NFSX_UNSIGNED);
 	*tl++ = txdr_unsigned(rwflag);
 	*tl = txdr_unsigned(nmp->nm_leaseterm);
-	reqtime = time.tv_sec;
+	microtime(&now);
+	reqtime = now.tv_sec;
 	nfsm_request(vp, NQNFSPROC_GETLEASE, p, cred, &xid);
 	np = VTONFS(vp);
 	nfsm_dissect(tl, u_long *, 4 * NFSX_UNSIGNED);
 	cachable = fxdr_unsigned(int, *tl++);
 	reqtime += fxdr_unsigned(int, *tl++);
-	if (reqtime > time.tv_sec) {
-		fxdr_hyper(tl, &frev);
-		nqnfs_clientlease(nmp, np, rwflag, cachable, reqtime, frev);
-		nfsm_loadattr(vp, (struct vattr *)0, &xid);
+	microtime(&now);
+	if (reqtime > now.tv_sec) {
+		nmp = VFSTONFS(vp->v_mount);
+		if (!nmp) {
+			error = ENXIO;
+		} else {
+			fxdr_hyper(tl, &frev);
+			nqnfs_clientlease(nmp, np, rwflag, cachable,
+				reqtime, frev);
+			nfsm_loadattr(vp, (struct vattr *)0, &xid);
+		}
 	} else
 		error = NQNFS_EXPIRED;
 	nfsm_reqdone;
@@ -947,8 +961,12 @@ nqnfs_vacated(vp, cred)
 	struct mbuf *mreq, *mb, *mb2, *mheadend;
 	struct nfsmount *nmp;
 	struct nfsreq myrep;
+	int connrequired;
+	int *flagp;
 
 	nmp = VFSTONFS(vp->v_mount);
+	if (!nmp)
+		return (ENXIO);
 	nfsstats.rpccnt[NQNFSPROC_VACATED]++;
 	nfsm_reqhead(vp, NQNFSPROC_VACATED, NFSX_FH(1));
 	nfsm_fhtom(vp, 1);
@@ -968,11 +986,15 @@ nqnfs_vacated(vp, cred)
 	}
 	myrep.r_flags = 0;
 	myrep.r_nmp = nmp;
-	if (nmp->nm_soflags & PR_CONNREQUIRED)
-		(void) nfs_sndlock(&nmp->nm_flag, (struct nfsreq *)0);
+
+	connrequired = (nmp->nm_soflags & PR_CONNREQUIRED);
+	if (connrequired)
+		(void) nfs_sndlock(&myrep);
+
 	(void) nfs_send(nmp->nm_so, nmp->nm_nam, m, &myrep);
-	if (nmp->nm_soflags & PR_CONNREQUIRED)
-		nfs_sndunlock(&nmp->nm_flag);
+
+	if (connrequired)
+		nfs_sndunlock(&myrep);
 nfsmout:
 	return (error);
 }
@@ -1060,17 +1082,19 @@ nqnfs_clientd(nmp, cred, ncd, flag, argp, p)
 	struct nfsuid *nuidp, *nnuidp;
 	int error = 0, vpid;
 	register struct nfsreq *rp;
+	struct timeval now;
 
 	/*
 	 * First initialize some variables
 	 */
+	microtime(&now);
 
 	/*
 	 * If an authorization string is being passed in, get it.
 	 */
 	if ((flag & NFSSVC_GOTAUTH) &&
-	    (nmp->nm_flag & (NFSMNT_WAITAUTH | NFSMNT_DISMNT)) == 0) {
-	    if (nmp->nm_flag & NFSMNT_HASAUTH)
+	    (nmp->nm_state & (NFSSTA_WAITAUTH | NFSSTA_DISMNT)) == 0) {
+	    if (nmp->nm_state & NFSSTA_HASAUTH)
 		panic("cld kerb");
 	    if ((flag & NFSSVC_AUTHINFAIL) == 0) {
 		if (ncd->ncd_authlen <= nmp->nm_authlen &&
@@ -1084,18 +1108,18 @@ nqnfs_clientd(nmp, cred, ncd, flag, argp, p)
 		    nmp->nm_key = ncd->ncd_key;
 #endif
 		} else
-		    nmp->nm_flag |= NFSMNT_AUTHERR;
+		    nmp->nm_state |= NFSSTA_AUTHERR;
 	    } else
-		nmp->nm_flag |= NFSMNT_AUTHERR;
-	    nmp->nm_flag |= NFSMNT_HASAUTH;
+		nmp->nm_state |= NFSSTA_AUTHERR;
+	    nmp->nm_state |= NFSSTA_HASAUTH;
 	    wakeup((caddr_t)&nmp->nm_authlen);
 	} else
-	    nmp->nm_flag |= NFSMNT_WAITAUTH;
+	    nmp->nm_state |= NFSSTA_WAITAUTH;
 
 	/*
 	 * Loop every second updating queue until there is a termination sig.
 	 */
-	while ((nmp->nm_flag & NFSMNT_DISMNT) == 0) {
+	while ((nmp->nm_state & NFSSTA_DISMNT) == 0) {
 	    if (nmp->nm_flag & NFSMNT_NQNFS) {
 		/*
 		 * If there are no outstanding requests (and therefore no
@@ -1116,10 +1140,10 @@ nqnfs_clientd(nmp, cred, ncd, flag, argp, p)
 		 */
 		np = nmp->nm_timerhead.cqh_first;
 		while (np != (void *)&nmp->nm_timerhead &&
-		       (nmp->nm_flag & NFSMNT_DISMINPROG) == 0) {
+		       (nmp->nm_state & NFSSTA_DISMINPROG) == 0) {
 			vp = NFSTOV(np);
 			vpid = vp->v_id;
-			if (np->n_expiry < time.tv_sec) {
+			if (np->n_expiry < now.tv_sec) {
 			   if (vget(vp, LK_EXCLUSIVE, p) == 0) {
 			     nmp->nm_inprog = vp;
 			     if (vpid == vp->v_id) {
@@ -1144,9 +1168,9 @@ nqnfs_clientd(nmp, cred, ncd, flag, argp, p)
 			      vrele(vp);
 			      nmp->nm_inprog = NULLVP;
 			    }
-			} else if ((np->n_expiry - NQ_RENEWAL) < time.tv_sec) {
+			} else if ((np->n_expiry - NQ_RENEWAL) < now.tv_sec) {
 			    if ((np->n_flag & (NQNFSWRITE | NQNFSNONCACHE))
-				 == NQNFSWRITE && vp->v_dirtyblkhd.lh_first &&
+				 == NQNFSWRITE && np->n_dirtyblkhd.lh_first &&
 				 vget(vp, LK_EXCLUSIVE, p) == 0) {
 				 nmp->nm_inprog = vp;
 				 if (vpid == vp->v_id &&
@@ -1166,10 +1190,10 @@ nqnfs_clientd(nmp, cred, ncd, flag, argp, p)
 	    /*
 	     * Get an authorization string, if required.
 	     */
-	    if ((nmp->nm_flag & (NFSMNT_WAITAUTH | NFSMNT_DISMNT | NFSMNT_HASAUTH)) == 0) {
+	    if ((nmp->nm_state & (NFSSTA_WAITAUTH | NFSSTA_DISMNT | NFSSTA_HASAUTH)) == 0) {
 		ncd->ncd_authuid = nmp->nm_authuid;
 		if (copyout((caddr_t)ncd, argp, sizeof (struct nfsd_cargs)))
-			nmp->nm_flag |= NFSMNT_WAITAUTH;
+			nmp->nm_state |= NFSSTA_WAITAUTH;
 		else
 			return (ENEEDAUTH);
 	    }
@@ -1177,8 +1201,8 @@ nqnfs_clientd(nmp, cred, ncd, flag, argp, p)
 	    /*
 	     * Wait a bit (no pun) and do it again.
 	     */
-	    if ((nmp->nm_flag & NFSMNT_DISMNT) == 0 &&
-		(nmp->nm_flag & (NFSMNT_WAITAUTH | NFSMNT_HASAUTH))) {
+	    if ((nmp->nm_state & NFSSTA_DISMNT) == 0 &&
+		(nmp->nm_state & (NFSSTA_WAITAUTH | NFSSTA_HASAUTH))) {
 		    error = tsleep((caddr_t)&nmp->nm_authstr, PSOCK | PCATCH,
 			"nqnfstimr", hz / 3);
 		    if (error == EINTR || error == ERESTART)
@@ -1193,7 +1217,7 @@ nqnfs_clientd(nmp, cred, ncd, flag, argp, p)
 		nnuidp = nuidp->nu_lru.tqe_next;
 		LIST_REMOVE(nuidp, nu_hash);
 		TAILQ_REMOVE(&nmp->nm_uidlruhead, nuidp, nu_lru);
-		_FREE_ZONE((caddr_t)nuidp, sizeof (struct nfsuid), M_NFSUID);
+		FREE_ZONE((caddr_t)nuidp, sizeof (struct nfsuid), M_NFSUID);
 	}
 	/*
 	 * Loop through outstanding request list and remove dangling
@@ -1202,7 +1226,7 @@ nqnfs_clientd(nmp, cred, ncd, flag, argp, p)
 	for (rp = nfs_reqq.tqh_first; rp; rp = rp->r_chain.tqe_next)
 		if (rp->r_nmp == nmp)
 			rp->r_nmp = (struct nfsmount *)0;
-	_FREE_ZONE((caddr_t)nmp, sizeof (struct nfsmount), M_NFSMNT);
+	FREE_ZONE((caddr_t)nmp, sizeof (struct nfsmount), M_NFSMNT);
 	if (error == EWOULDBLOCK)
 		error = 0;
 	return (error);

@@ -296,16 +296,54 @@ u_long  gif_detach_proto_family(struct ifnet *ifp, int af)
     return (stat);
 }
 
+int gif_attach_inet(struct ifnet *ifp, u_long *dl_tag) {
+	*dl_tag = gif_attach_proto_family(ifp, AF_INET);
+	return 0;
+}
+
+int gif_detach_inet(struct ifnet *ifp, u_long dl_tag) {
+	gif_detach_proto_family(ifp, AF_INET);
+	return 0;
+}
+
+int gif_attach_inet6(struct ifnet *ifp, u_long *dl_tag) {
+	*dl_tag = gif_attach_proto_family(ifp, AF_INET6);
+	return 0;
+}
+
+int gif_detach_inet6(struct ifnet *ifp, u_long dl_tag) {
+	gif_detach_proto_family(ifp, AF_INET6);
+	return 0;
+}
 #endif
 
 /* Function to setup the first gif interface */
 void
 gifattach(void)
 {
+     	struct dlil_protomod_reg_str gif_protoreg;
+	int error;
+
 	/* Init the list of interfaces */
 	TAILQ_INIT(&gifs);
 
 	gif_reg_if_mods(); /* DLIL modules */
+
+	/* Register protocol registration functions */
+
+	bzero(&gif_protoreg, sizeof(gif_protoreg));
+	gif_protoreg.attach_proto = gif_attach_inet;
+	gif_protoreg.detach_proto = gif_detach_inet;
+	
+	if ( error = dlil_reg_proto_module(AF_INET, APPLE_IF_FAM_GIF, &gif_protoreg) != 0)
+		printf("dlil_reg_proto_module failed for AF_INET error=%d\n", error);
+
+	gif_protoreg.attach_proto = gif_attach_inet6;
+	gif_protoreg.detach_proto = gif_detach_inet6;
+	
+	if ( error = dlil_reg_proto_module(AF_INET6, APPLE_IF_FAM_GIF, &gif_protoreg) != 0)
+		printf("dlil_reg_proto_module failed for AF_INET6 error=%d\n", error);
+
 
 	/* Create first device */
 	gif_create_dev();
@@ -463,6 +501,7 @@ gif_pre_output(ifp, m0, dst, rt, frame, address, dl_tag)
 		log(LOG_NOTICE,
 		    "gif_output: recursively called too many times(%d)\n",
 		    called);
+		m_freem(m);	/* free it here not in dlil_output*/
 		error = EIO;	/* is there better errno? */
 		goto end;
 	}
@@ -471,6 +510,7 @@ gif_pre_output(ifp, m0, dst, rt, frame, address, dl_tag)
 	m->m_flags &= ~(M_BCAST|M_MCAST);
 	if (!(ifp->if_flags & IFF_UP) ||
 	    sc->gif_psrc == NULL || sc->gif_pdst == NULL) {
+		m_freem(m);	/* free it here not in dlil_output */
 		error = ENETDOWN;
 		goto end;
 	}
@@ -518,8 +558,11 @@ gif_pre_output(ifp, m0, dst, rt, frame, address, dl_tag)
 
   end:
 	called = 0;		/* reset recursion counter */
-	if (error)
+	if (error) {
+		/* the mbuf was freed either by in_gif_output or in here */
+		*m0 = NULL; /* avoid getting dlil_output freeing it */
 		ifp->if_oerrors++;
+	}
 	if (error == 0) 
 		error = EJUSTRETURN; /* if no error, packet got sent already */
 	return error;

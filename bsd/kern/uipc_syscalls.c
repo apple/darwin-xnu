@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2001 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2003 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -77,6 +77,7 @@
 #include <sys/ktrace.h>
 #endif
 #include <sys/kernel.h>
+#include <sys/kern_audit.h>
 
 #include <sys/kdebug.h>
 
@@ -96,29 +97,29 @@
 #endif
 
 struct getsockname_args  {
-    int	fdes;
+    int		fdes;
     caddr_t	asa;
-    int	*alen;
+    socklen_t	*alen;
 };
 
 struct getsockopt_args  {
-    int	s;
-    int	level;
-    int	name;
+    int		s;
+    int		level;
+    int		name;
     caddr_t	val;
-    int	*avalsize;
+    socklen_t	*avalsize;
 } ;
 
 struct accept_args {
-	int	s;
-	caddr_t	name;
-	int	*anamelen;
+	int		s;
+	caddr_t		name;
+	socklen_t	*anamelen;
 };
 
 struct getpeername_args {
-	int	fdes;
-	caddr_t	asa;
-	int	*alen;
+	int		fdes;
+	caddr_t		asa;
+	socklen_t	*alen;
 };
 
 
@@ -172,6 +173,7 @@ socket(p, uap, retval)
 	struct file *fp;
 	int fd, error;
 
+	AUDIT_ARG(socket, uap->domain, uap->type, uap->protocol);
 	thread_funnel_switch(NETWORK_FUNNEL, KERNEL_FUNNEL);
 	error = falloc(p, &fp, &fd);
 	thread_funnel_switch(KERNEL_FUNNEL, NETWORK_FUNNEL);
@@ -196,9 +198,9 @@ socket(p, uap, retval)
 }
 
 struct bind_args {
-	int	s;
-	caddr_t	name;
-	int	namelen;
+	int		s;
+	caddr_t		name;
+	socklen_t	namelen;
 };
 
 /* ARGSUSED */
@@ -212,13 +214,18 @@ bind(p, uap, retval)
 	struct sockaddr *sa;
 	int error;
 
+	AUDIT_ARG(fd, uap->s);
 	error = getsock(p->p_fd, uap->s, &fp);
 	if (error)
 		return (error);
 	error = getsockaddr(&sa, uap->name, uap->namelen);
 	if (error)
 		return (error);
-	error = sobind((struct socket *)fp->f_data, sa);
+	AUDIT_ARG(sockaddr, p, sa);
+	if (fp->f_data != NULL)	
+		error = sobind((struct socket *)fp->f_data, sa);
+	else
+		error = EBADF;
 	FREE(sa, M_SONAME);
 	return (error);
 }
@@ -239,10 +246,14 @@ listen(p, uap, retval)
 	struct file *fp;
 	int error;
 
+	AUDIT_ARG(fd, uap->s);
 	error = getsock(p->p_fd, uap->s, &fp);
 	if (error)
 		return (error);
-	return (solisten((struct socket *)fp->f_data, uap->backlog));
+	if (fp->f_data != NULL)
+		return (solisten((struct socket *)fp->f_data, uap->backlog));
+	else
+		return (EBADF);
 }
 
 #ifndef COMPAT_OLDSOCK
@@ -267,6 +278,7 @@ accept1(p, uap, retval, compat)
 	short fflag;		/* type must match fp->f_flag */
 	int tmpfd;
 
+	AUDIT_ARG(fd, uap->s);
 	if (uap->name) {
 		error = copyin((caddr_t)uap->anamelen, (caddr_t)&namelen,
 			sizeof (namelen));
@@ -278,6 +290,10 @@ accept1(p, uap, retval, compat)
 		return (error);
 	s = splnet();
 	head = (struct socket *)fp->f_data;
+	if (head == NULL) {
+		splx(s);
+		return (EBADF);
+	}
 	if ((head->so_options & SO_ACCEPTCONN) == 0) {
 		splx(s);
 		return (EINVAL);
@@ -352,6 +368,7 @@ accept1(p, uap, retval, compat)
 			goto gotnoname;
 		return 0;
 	}
+	AUDIT_ARG(sockaddr, p, sa);
 	if (uap->name) {
 		/* check sa_len before it is destroyed */
 		if (namelen > sa->sa_len)
@@ -395,9 +412,9 @@ oaccept(p, uap, retval)
 #endif /* COMPAT_OLDSOCK */
 
 struct connect_args {
-	int s;
-	caddr_t name;
-	int	namelen;
+	int		s;
+	caddr_t		name;
+	socklen_t	namelen;
 };
 /* ARGSUSED */
 int
@@ -411,15 +428,19 @@ connect(p, uap, retval)
 	struct sockaddr *sa;
 	int error, s;
 
+	AUDIT_ARG(fd, uap->s);
 	error = getsock(p->p_fd, uap->s, &fp);
 	if (error)
 		return (error);
 	so = (struct socket *)fp->f_data;
+	if (so == NULL)
+		return (EBADF);
 	if ((so->so_state & SS_NBIO) && (so->so_state & SS_ISCONNECTING))
 		return (EALREADY);
 	error = getsockaddr(&sa, uap->name, uap->namelen);
 	if (error)
 		return (error);
+	AUDIT_ARG(sockaddr, p, sa);
 	error = soconnect(so, sa);
 	if (error)
 		goto bad;
@@ -464,6 +485,7 @@ socketpair(p, uap, retval)
 	struct socket *so1, *so2;
 	int fd, error, sv[2];
 
+	AUDIT_ARG(socket, uap->domain, uap->type, uap->protocol);
 	error = socreate(uap->domain, &so1, uap->type, uap->protocol);
 	if (error)
 		return (error);
@@ -583,6 +605,7 @@ sendit(p, s, mp, flags, retsize)
 		    KERNEL_DEBUG(DBG_FNC_SENDIT | DBG_FUNC_END, error,0,0,0,0);
 		    return (error);
 		}
+		AUDIT_ARG(sockaddr, p, to);
 	} else
 		to = 0;
 	if (mp->msg_control) {
@@ -628,8 +651,11 @@ sendit(p, s, mp, flags, retsize)
 #endif
 	len = auio.uio_resid;
 	so = (struct socket *)fp->f_data;
-	error = so->so_proto->pr_usrreqs->pru_sosend(so, to, &auio, 0, control,
-						     flags);
+	if (so == NULL)
+		error = EBADF;
+	else
+		error = so->so_proto->pr_usrreqs->pru_sosend(so, to, &auio, 0, control,
+							     flags);
 	if (error) {
 		if (auio.uio_resid != len && (error == ERESTART ||
 		    error == EINTR || error == EWOULDBLOCK))
@@ -686,6 +712,7 @@ sendto(p, uap, retval)
 	int stat;
 
 	KERNEL_DEBUG(DBG_FNC_SENDTO | DBG_FUNC_START, 0,0,0,0,0);
+	AUDIT_ARG(fd, uap->s);
 
 	msg.msg_name = uap->to;
 	msg.msg_namelen = uap->tolen;
@@ -798,6 +825,7 @@ sendmsg(p, uap, retval)
 	int error;
 
 	KERNEL_DEBUG(DBG_FNC_SENDMSG | DBG_FUNC_START, 0,0,0,0,0);
+	AUDIT_ARG(fd, uap->s);
 	if (error = copyin(uap->msg, (caddr_t)&msg, sizeof (msg)))
 	{
 	    KERNEL_DEBUG(DBG_FNC_SENDMSG | DBG_FUNC_END, error,0,0,0,0);
@@ -884,9 +912,13 @@ recvit(p, s, mp, namelenp, retval)
 #endif
 	len = auio.uio_resid;
 	so = (struct socket *)fp->f_data;
-	error = so->so_proto->pr_usrreqs->pru_soreceive(so, &fromsa, &auio,
-	    (struct mbuf **)0, mp->msg_control ? &control : (struct mbuf **)0,
-	    &mp->msg_flags);
+	if (so == NULL)
+		error = EBADF;
+	else
+		error = so->so_proto->pr_usrreqs->pru_soreceive(so, &fromsa, &auio,
+			(struct mbuf **)0, mp->msg_control ? &control : (struct mbuf **)0,
+			&mp->msg_flags);
+	AUDIT_ARG(sockaddr, p, fromsa);
 	if (error) {
 		if (auio.uio_resid != len && (error == ERESTART ||
 		    error == EINTR || error == EWOULDBLOCK))
@@ -1019,6 +1051,7 @@ recvfrom(p, uap, retval)
 	int error;
 
 	KERNEL_DEBUG(DBG_FNC_RECVFROM | DBG_FUNC_START, 0,0,0,0,0);
+	AUDIT_ARG(fd, uap->s);
 
 	if (uap->fromlenaddr) {
 		error = copyin((caddr_t)uap->fromlenaddr,
@@ -1047,7 +1080,7 @@ orecvfrom(p, uap, retval)
 {
 
 	uap->flags |= MSG_COMPAT;
-	return (recvfrom(p, uap));
+	return (recvfrom(p, uap, retval));
 }
 #endif
 
@@ -1148,6 +1181,7 @@ recvmsg(p, uap, retval)
 	register int error;
 
 	KERNEL_DEBUG(DBG_FNC_RECVMSG | DBG_FUNC_START, 0,0,0,0,0);
+	AUDIT_ARG(fd, uap->s);
 	if (error = copyin((caddr_t)uap->msg, (caddr_t)&msg,
 	    sizeof (msg)))
 	{
@@ -1203,9 +1237,12 @@ shutdown(p, uap, retval)
 	struct file *fp;
 	int error;
 
+	AUDIT_ARG(fd, uap->s);
 	error = getsock(p->p_fd, uap->s, &fp);
 	if (error)
 		return (error);
+	if (fp->f_data == NULL)
+		return (EBADF);
 	return (soshutdown((struct socket *)fp->f_data, uap->how));
 }
 
@@ -1215,11 +1252,11 @@ shutdown(p, uap, retval)
 
 /* ARGSUSED */
 struct setsockopt_args  {
-	int	s;
-	int	level;
-	int	name;
-	caddr_t	val;
-	int	valsize;
+	int		s;
+	int		level;
+	int		name;
+	caddr_t		val;
+	socklen_t	valsize;
 };
 
 int
@@ -1232,6 +1269,7 @@ setsockopt(p, uap, retval)
 	struct sockopt sopt;
 	int error;
 
+	AUDIT_ARG(fd, uap->s);
 	if (uap->val == 0 && uap->valsize != 0)
 		return (EFAULT);
 	if (uap->valsize < 0)
@@ -1248,6 +1286,8 @@ setsockopt(p, uap, retval)
 	sopt.sopt_valsize = uap->valsize;
 	sopt.sopt_p = p;
 
+	if (fp->f_data == NULL)
+		return (EBADF);
 	return (sosetopt((struct socket *)fp->f_data, &sopt));
 }
 
@@ -1283,6 +1323,8 @@ getsockopt(p, uap, retval)
 	sopt.sopt_valsize = (size_t)valsize; /* checked non-negative above */
 	sopt.sopt_p = p;
 
+        if (fp->f_data == NULL)
+                return (EBADF);
 	error = sogetopt((struct socket *)fp->f_data, &sopt);
 	if (error == 0) {
 		valsize = sopt.sopt_valsize;
@@ -1382,6 +1424,8 @@ getsockname1(p, uap, retval, compat)
 	if (error)
 		return (error);
 	so = (struct socket *)fp->f_data;
+	if (so == NULL)
+		return (EBADF);
 	sa = 0;
 	error = (*so->so_proto->pr_usrreqs->pru_sockaddr)(so, &sa);
 	if (error)
@@ -1450,6 +1494,8 @@ getpeername1(p, uap, retval, compat)
 	if (error)
 		return (error);
 	so = (struct socket *)fp->f_data;
+	if (so == NULL)
+		return (EBADF);
 	if ((so->so_state & (SS_ISCONNECTED|SS_ISCONFIRMING)) == 0)
 		return (ENOTCONN);
 	error = copyin((caddr_t)uap->alen, (caddr_t)&len, sizeof (len));
@@ -1735,6 +1781,10 @@ sendfile(struct proc *p, struct sendfile_args *uap)
 	if (error)
 		goto done;
 	so = (struct socket *)fp->f_data;
+	if (so == NULL) {
+		error = EBADF;
+		goto done;
+	}
 	if (so->so_type != SOCK_STREAM) {
 		error = EINVAL;
 		goto done;

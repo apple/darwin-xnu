@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2002 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2003 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -121,6 +121,7 @@ static OSErr BlockAllocateAny(
 	UInt32			startingBlock,
 	UInt32			endingBlock,
 	UInt32			maxBlocks,
+	Boolean			useMetaZone,
 	UInt32			*actualStartBlock,
 	UInt32			*actualNumBlocks);
 
@@ -129,6 +130,7 @@ static OSErr BlockAllocateContig(
 	UInt32			startingBlock,
 	UInt32			minBlocks,
 	UInt32			maxBlocks,
+	Boolean			useMetaZone,
 	UInt32			*actualStartBlock,
 	UInt32			*actualNumBlocks);
 
@@ -138,18 +140,9 @@ static OSErr BlockFindContiguous(
 	UInt32			endingBlock,
 	UInt32			minBlocks,
 	UInt32			maxBlocks,
+	Boolean			useMetaZone,
 	UInt32			*actualStartBlock,
 	UInt32			*actualNumBlocks);
-
-static OSErr BlockMarkAllocated(
-	ExtendedVCB		*vcb,
-	UInt32			startingBlock,
-	UInt32			numBlocks);
-
-static OSErr BlockMarkFree(
-	ExtendedVCB		*vcb,
-	UInt32			startingBlock,
-	UInt32			numBlocks);
 
 static OSErr BlockAllocateKnown(
 	ExtendedVCB		*vcb,
@@ -175,19 +168,17 @@ static OSErr BlockAllocateKnown(
 ;			   the volume's allocation block pointer will be used as a starting
 ;			   point.
 ;
-;			   All requests will be rounded up to the next highest clump size, as
-;			   indicated in the file's FCB.
-;
 ; Input Arguments:
 ;	 vcb			 - Pointer to ExtendedVCB for the volume to allocate space on
 ;	 fcb			 - Pointer to FCB for the file for which storage is being allocated
 ;	 startingBlock	 - Preferred starting allocation block, 0 = no preference
 ;	 forceContiguous - Force contiguous flag - if bit 0 set (NE), allocation is contiguous
 ;					   or an error is returned
-;	 bytesRequested	 - Number of bytes requested.	If the allocation is non-contiguous,
+;	 useMetaZone  - 
+;	 minBlocks	 - Number of blocks requested.	If the allocation is non-contiguous,
 ;					   less than this may actually be allocated
-;	 bytesMaximum	 - The maximum number of bytes to allocate.  If there is additional free
-;					   space after bytesRequested, then up to bytesMaximum bytes should really
+;	 maxBlocks	 - The maximum number of blocks to allocate.  If there is additional free
+;					   space after bytesRequested, then up to maxBlocks bytes should really
 ;					   be allocated.  (Used by ExtendFileC to round up allocations to a multiple
 ;					   of the file's clump size.)
 ;
@@ -201,21 +192,22 @@ static OSErr BlockAllocateKnown(
 ;________________________________________________________________________________
 */
 
+__private_extern__
 OSErr BlockAllocate (
 	ExtendedVCB		*vcb,				/* which volume to allocate space on */
 	UInt32			startingBlock,		/* preferred starting block, or 0 for no preference */
-	SInt64			bytesRequested,		/* desired number of BYTES to allocate */
-	SInt64			bytesMaximum,		/* maximum number of bytes to allocate */
+	UInt32			minBlocks,		/* desired number of blocks to allocate */
+	UInt32			maxBlocks,		/* maximum number of blocks to allocate */
 	Boolean			forceContiguous,	/* non-zero to force contiguous allocation and to force */
-										/* bytesRequested bytes to actually be allocated */
+							/* minBlocks bytes to actually be allocated */
+							
+	Boolean	useMetaZone,
 	UInt32			*actualStartBlock,	/* actual first block of allocation */
 	UInt32			*actualNumBlocks)	/* number of blocks actually allocated; if forceContiguous */
-										/* was zero, then this may represent fewer than bytesRequested */
-										/* bytes */
+							/* was zero, then this may represent fewer than minBlocks */
 {
+	UInt32  freeBlocks;
 	OSErr			err;
-	UInt32			minBlocks;					//	minimum number of allocation blocks requested
-	UInt32			maxBlocks;					//	number of allocation blocks requested, rounded to clump size
 	Boolean			updateAllocPtr = false;		//	true if nextAllocation needs to be updated
 
 	//
@@ -223,25 +215,29 @@ OSErr BlockAllocate (
 	//
 	*actualStartBlock = 0;
 	*actualNumBlocks = 0;
-	
-	//
-	//	Compute the number of allocation blocks requested, and maximum
-	//
-	minBlocks = FileBytesToBlocks(bytesRequested, vcb->blockSize);
-	maxBlocks = FileBytesToBlocks(bytesMaximum, vcb->blockSize);
+	freeBlocks = hfs_freeblks(VCBTOHFS(vcb), 0);
 	
 	//
 	//	If the disk is already full, don't bother.
 	//
-	if (hfs_freeblks(VCBTOHFS(vcb), 0) == 0) {
+	if (freeBlocks == 0) {
 		err = dskFulErr;
 		goto Exit;
 	}
-	if (forceContiguous && hfs_freeblks(VCBTOHFS(vcb), 0) < minBlocks) {
+	if (forceContiguous && freeBlocks < minBlocks) {
 		err = dskFulErr;
 		goto Exit;
 	}
-	
+	/*
+	 * Clip if necessary so we don't over-subscribe the free blocks.
+	 */
+	if (minBlocks > freeBlocks) {
+		minBlocks = freeBlocks;
+	}
+	if (maxBlocks > freeBlocks) {
+		maxBlocks = freeBlocks;
+	}
+
 	//
 	//	If caller didn't specify a starting block number, then use the volume's
 	//	next block to allocate from.
@@ -252,19 +248,27 @@ OSErr BlockAllocate (
 		VCB_UNLOCK(vcb);
 		updateAllocPtr = true;
 	}
+	if (startingBlock >= vcb->totalBlocks) {
+		startingBlock = 0; /* overflow so start at beginning */
+	}
 
 	//
 	//	If the request must be contiguous, then find a sequence of free blocks
 	//	that is long enough.  Otherwise, find the first free block.
 	//
 	if (forceContiguous) {
-		err = BlockAllocateContig(vcb, startingBlock, minBlocks, maxBlocks, actualStartBlock, actualNumBlocks);
+		err = BlockAllocateContig(vcb, startingBlock, minBlocks, maxBlocks,
+		                          useMetaZone, actualStartBlock, actualNumBlocks);
 		/*
 		 * If we allocated from a new position then
 		 * also update the roving allocatior.
 		 */
-		if ((err == noErr) && (*actualStartBlock > startingBlock))
-			vcb->nextAllocation = *actualStartBlock;
+		if ((err == noErr) &&
+		    (*actualStartBlock > startingBlock) &&
+		    ((*actualStartBlock < VCBTOHFS(vcb)->hfs_metazone_start) ||
+	    	     (*actualStartBlock > VCBTOHFS(vcb)->hfs_metazone_end))) {
+			vcb->nextAllocation = *actualStartBlock;	/* XXX */
+		}
 	} else {
 		/*
 		 * Scan the bitmap once, gather the N largest free extents, then
@@ -275,9 +279,13 @@ OSErr BlockAllocate (
 		 */
 		err = BlockAllocateKnown(vcb, maxBlocks, actualStartBlock, actualNumBlocks);
 		if (err == dskFulErr)
-			err = BlockAllocateAny(vcb, startingBlock, vcb->totalBlocks, maxBlocks, actualStartBlock, actualNumBlocks);
+			err = BlockAllocateAny(vcb, startingBlock, vcb->totalBlocks,
+			                       maxBlocks, useMetaZone, actualStartBlock,
+			                       actualNumBlocks);
 		if (err == dskFulErr)
-			err = BlockAllocateAny(vcb, 0, startingBlock, maxBlocks, actualStartBlock, actualNumBlocks);
+			err = BlockAllocateAny(vcb, 1, startingBlock, maxBlocks,
+			                       useMetaZone, actualStartBlock,
+			                       actualNumBlocks);
 	}
 
 	if (err == noErr) {
@@ -291,13 +299,16 @@ OSErr BlockAllocate (
 		//
 		VCB_LOCK(vcb);
 
-		if (updateAllocPtr)
+		if (updateAllocPtr &&
+		    ((*actualStartBlock < VCBTOHFS(vcb)->hfs_metazone_start) ||
+	    	     (*actualStartBlock > VCBTOHFS(vcb)->hfs_metazone_end))) {
 			vcb->nextAllocation = *actualStartBlock;
-		
+		}
 		//
 		//	Update the number of free blocks on the volume
 		//
 		vcb->freeBlocks -= *actualNumBlocks;
+		hfs_generate_volume_notifications(VCBTOHFS(vcb));
 		VCB_UNLOCK(vcb);
 
 		MarkVCBDirty(vcb);
@@ -329,6 +340,7 @@ Exit:
 ;________________________________________________________________________________
 */
 
+__private_extern__
 OSErr BlockDeallocate (
 	ExtendedVCB		*vcb,			//	Which volume to deallocate space on
 	UInt32			firstBlock,		//	First block in range to deallocate
@@ -356,43 +368,97 @@ OSErr BlockDeallocate (
 	//
 	VCB_LOCK(vcb);
 	vcb->freeBlocks += numBlocks;
+	hfs_generate_volume_notifications(VCBTOHFS(vcb));
 	if (vcb->nextAllocation == (firstBlock + numBlocks))
 		vcb->nextAllocation -= numBlocks;
 	VCB_UNLOCK(vcb);
 	MarkVCBDirty(vcb);
-
+    
 Exit:
 
 	return err;
 }
 
 
-/*
-;_______________________________________________________________________
-;
-; Routine:	FileBytesToBlocks
-;
-; Function:	Divide numerator by denominator, rounding up the result if there
-;			was a remainder.  This is frequently used for computing the number
-;			of whole and/or partial blocks used by some count of bytes.
-;			Actuall divides a 64 bit by a 32 bit into a 32bit result
-;		
-;			CAREFULL!!! THIS CAN CAUSE OVERFLOW....USER BEWARE!!!
-;_______________________________________________________________________
-*/
-UInt32 FileBytesToBlocks(
-	SInt64 numerator,
-	UInt32 denominator)
+UInt8 freebitcount[16] = {
+	4, 3, 3, 2, 3, 2, 2, 1,  /* 0 1 2 3 4 5 6 7 */
+	3, 2, 2, 1, 2, 1, 1, 0,  /* 8 9 A B C D E F */
+};
+
+__private_extern__
+UInt32
+MetaZoneFreeBlocks(ExtendedVCB *vcb)
 {
-	UInt32	quotient;
+	UInt32 freeblocks;
+	UInt32 *currCache;
+	UInt32 blockRef;
+	UInt32 bit;
+	UInt32 lastbit;
+	int bytesleft;
+	int bytesperblock;
+	UInt8 byte;
+	UInt8 *buffer;
+	blockRef = 0;
+	bytesleft = freeblocks = 0;
+	bit = VCBTOHFS(vcb)->hfs_metazone_start;
+	if (bit == 1)
+		bit = 0;
 	
-	quotient = (UInt32)(numerator / denominator);
-	if (quotient * denominator != numerator)
-		quotient++;
-	
-	return quotient;
+	lastbit = VCBTOHFS(vcb)->hfs_metazone_end;
+	bytesperblock = vcb->vcbVBMIOSize;
+
+	/*
+	 *  Count all the bits from bit to lastbit.
+	 */
+	while (bit < lastbit) {
+		/*
+		 *  Get next bitmap block.
+		 */
+		if (bytesleft == 0) {
+			if (blockRef) {
+				(void) ReleaseBitmapBlock(vcb, blockRef, false);
+				blockRef = 0;
+			}
+			if (ReadBitmapBlock(vcb, bit, &currCache, &blockRef) != 0) {
+				return (0);
+			}
+			buffer = (UInt8 *)currCache;
+			bytesleft = bytesperblock;
+		}
+		byte = *buffer++;
+		freeblocks += freebitcount[byte & 0x0F];
+		freeblocks += freebitcount[(byte >> 4) & 0x0F];
+		bit += kBitsPerByte;
+		--bytesleft;
+	}
+	if (blockRef)
+		(void) ReleaseBitmapBlock(vcb, blockRef, false);
+
+	return (freeblocks);
 }
 
+
+/*
+ * Obtain the next allocation block (bit) that's
+ * outside the metadata allocation zone.
+ */
+static UInt32 NextBitmapBlock(
+	ExtendedVCB		*vcb,
+	UInt32			bit)
+{
+	struct  hfsmount *hfsmp = VCBTOHFS(vcb);
+
+	if ((hfsmp->hfs_flags & HFS_METADATA_ZONE) == 0)
+		return (bit);
+	/*
+	 * Skip over metadata allocation zone.
+	 */
+	if ((bit >= hfsmp->hfs_metazone_start) &&
+	    (bit <= hfsmp->hfs_metazone_end)) {
+		bit = hfsmp->hfs_metazone_end + 1;
+	}
+	return (bit);
+}
 
 
 /*
@@ -476,6 +542,12 @@ static OSErr ReleaseBitmapBlock(
 	Boolean			dirty)
 {
 	struct buf *bp = (struct buf *)blockRef;
+	
+	if (blockRef == 0) {
+		if (dirty)
+			panic("ReleaseBitmapBlock: missing bp");
+		return (0);
+	}
 
 	if (bp) {
 		if (dirty) {
@@ -511,6 +583,7 @@ Inputs:
 	startingBlock	Preferred first block for allocation
 	minBlocks		Minimum number of contiguous blocks to allocate
 	maxBlocks		Maximum number of contiguous blocks to allocate
+	useMetaZone
 
 Outputs:
 	actualStartBlock	First block of range allocated, or 0 if error
@@ -522,6 +595,7 @@ static OSErr BlockAllocateContig(
 	UInt32			startingBlock,
 	UInt32			minBlocks,
 	UInt32			maxBlocks,
+	Boolean			useMetaZone,
 	UInt32			*actualStartBlock,
 	UInt32			*actualNumBlocks)
 {
@@ -541,17 +615,21 @@ static OSErr BlockAllocateContig(
 	 * with the free extent cache, this can lead to duplicate entries
 	 * in the cache, causing the same blocks to be allocated twice.
 	 */
-	err = BlockFindContiguous(vcb, startingBlock, vcb->totalBlocks, minBlocks, maxBlocks,
-								  actualStartBlock, actualNumBlocks);
+	err = BlockFindContiguous(vcb, startingBlock, vcb->totalBlocks, minBlocks,
+	                          maxBlocks, useMetaZone, actualStartBlock, actualNumBlocks);
 	if (err == dskFulErr && startingBlock != 0) {
 		/*
 		 * Constrain the endingBlock so we don't bother looking for ranges
 		 * that would overlap those found in the previous call.
 		 */
-		err = BlockFindContiguous(vcb, 0, startingBlock, minBlocks, maxBlocks,
-									  actualStartBlock, actualNumBlocks);
+		err = BlockFindContiguous(vcb, 1, startingBlock, minBlocks, maxBlocks,
+		                          useMetaZone, actualStartBlock, actualNumBlocks);
 	}
 	if (err != noErr) goto Exit;
+
+	// sanity check
+	if ((*actualStartBlock + *actualNumBlocks) > vcb->totalBlocks)
+		panic("BlockAllocateContig: allocation overflow on \"%s\"", vcb->vcbVN);
 
 	//
 	//	Now mark those blocks allocated.
@@ -582,6 +660,7 @@ Inputs:
 	startingBlock	Preferred first block for allocation
 	endingBlock		Last block to check + 1
 	maxBlocks		Maximum number of contiguous blocks to allocate
+	useMetaZone
 
 Outputs:
 	actualStartBlock	First block of range allocated, or 0 if error
@@ -593,6 +672,7 @@ static OSErr BlockAllocateAny(
 	UInt32			startingBlock,
 	register UInt32	endingBlock,
 	UInt32			maxBlocks,
+	Boolean			useMetaZone,
 	UInt32			*actualStartBlock,
 	UInt32			*actualNumBlocks)
 {
@@ -601,8 +681,8 @@ static OSErr BlockAllocateAny(
 	register UInt32	currentWord;	//	Pointer to current word within bitmap block
 	register UInt32	bitMask;		//	Word with given bits already set (ready to OR in)
 	register UInt32	wordsLeft;		//	Number of words left in this bitmap block
-    UInt32			*buffer = NULL;
-    UInt32			*currCache = NULL;
+	UInt32  *buffer = NULL;
+	UInt32  *currCache = NULL;
 	UInt32  blockRef;
 	UInt32  bitsPerBlock;
 	UInt32  wordsPerBlock;
@@ -614,12 +694,18 @@ static OSErr BlockAllocateAny(
 		maxBlocks = endingBlock - startingBlock;
 	}
 
+	/*
+	 * Skip over metadata blocks.
+	 */
+	if (!useMetaZone)
+		startingBlock = NextBitmapBlock(vcb, startingBlock);
+
 	//
 	//	Pre-read the first bitmap block
 	//
-    err = ReadBitmapBlock(vcb, startingBlock, &currCache, &blockRef);
+	err = ReadBitmapBlock(vcb, startingBlock, &currCache, &blockRef);
 	if (err != noErr) goto Exit;
-    buffer = currCache;
+	buffer = currCache;
 
 	//
 	//	Set up the current position within the block
@@ -644,7 +730,7 @@ static OSErr BlockAllocateAny(
 	while (block < endingBlock) {
 		if ((currentWord & bitMask) == 0)
 			break;
-		
+
 		//	Next bit
 		++block;
 		bitMask >>= 1;
@@ -652,27 +738,36 @@ static OSErr BlockAllocateAny(
 			//	Next word
 			bitMask = kHighBitInWordMask;
 			++buffer;
-			
+
 			if (--wordsLeft == 0) {
 				//	Next block
-                buffer = currCache = NULL;
+				buffer = currCache = NULL;
 				err = ReleaseBitmapBlock(vcb, blockRef, false);
 				if (err != noErr) goto Exit;
 
-                err = ReadBitmapBlock(vcb, block, &currCache, &blockRef);
+				/*
+				 * Skip over metadata blocks.
+				 */
+				if (!useMetaZone) {
+					block = NextBitmapBlock(vcb, block);
+					if (block >= endingBlock) {
+						err = dskFulErr;
+						goto Exit;
+					}
+				}
+				err = ReadBitmapBlock(vcb, block, &currCache, &blockRef);
 				if (err != noErr) goto Exit;
-                buffer = currCache;
+				buffer = currCache;
 
 				wordsLeft = wordsPerBlock;
 			}
-			
 			currentWord = SWAP_BE32 (*buffer);
 		}
 	}
 
 	//	Did we get to the end of the bitmap before finding a free block?
 	//	If so, then couldn't allocate anything.
-	if (block == endingBlock) {
+	if (block >= endingBlock) {
 		err = dskFulErr;
 		goto Exit;
 	}
@@ -717,13 +812,25 @@ static OSErr BlockAllocateAny(
 			
 			if (--wordsLeft == 0) {
 				//	Next block
-                buffer = currCache = NULL;
+				buffer = currCache = NULL;
 				err = ReleaseBitmapBlock(vcb, blockRef, true);
 				if (err != noErr) goto Exit;
 
-                err = ReadBitmapBlock(vcb, block, &currCache, &blockRef);
+				/*
+				 * Skip over metadata blocks.
+				 */
+				if (!useMetaZone) {
+					UInt32 nextBlock;
+
+					nextBlock = NextBitmapBlock(vcb, block);
+					if (nextBlock != block) {
+						goto Exit;  /* allocation gap, so stop */
+					}
+				}
+
+				err = ReadBitmapBlock(vcb, block, &currCache, &blockRef);
 				if (err != noErr) goto Exit;
-                buffer = currCache;
+				buffer = currCache;
 
 				// XXXdbg
 				if (hfsmp->jnl) {
@@ -741,6 +848,10 @@ static OSErr BlockAllocateAny(
 Exit:
 	if (err == noErr) {
 		*actualNumBlocks = block - *actualStartBlock;
+
+	// sanity check
+	if ((*actualStartBlock + *actualNumBlocks) > vcb->totalBlocks)
+		panic("BlockAllocateAny: allocation overflow on \"%s\"", vcb->vcbVN);
 	}
 	else {
 		*actualStartBlock = 0;
@@ -828,6 +939,10 @@ static OSErr BlockAllocateKnown(
 		vcb->vcbFreeExt[i-1].blockCount = newBlockCount;
 	}
 	
+	// sanity check
+	if ((*actualStartBlock + *actualNumBlocks) > vcb->totalBlocks)
+		panic("BlockAllocateKnown: allocation overflow on \"%s\"", vcb->vcbVN);
+
 	//
 	//	Now mark the found extent in the bitmap
 	//
@@ -851,7 +966,8 @@ Inputs:
 	numBlocks		Number of blocks to mark as allocated
 _______________________________________________________________________
 */
-static OSErr BlockMarkAllocated(
+__private_extern__
+OSErr BlockMarkAllocated(
 	ExtendedVCB		*vcb,
 	UInt32			startingBlock,
 	register UInt32	numBlocks)
@@ -868,6 +984,7 @@ static OSErr BlockMarkAllocated(
 	UInt32  wordsPerBlock;
 	// XXXdbg
 	struct hfsmount *hfsmp = VCBTOHFS(vcb);
+
 
 	//
 	//	Pre-read the bitmap block containing the first word of allocation
@@ -1018,7 +1135,8 @@ Inputs:
 	numBlocks		Number of blocks to mark as freed
 _______________________________________________________________________
 */
-static OSErr BlockMarkFree(
+__private_extern__
+OSErr BlockMarkFree(
 	ExtendedVCB		*vcb,
 	UInt32			startingBlock,
 	register UInt32	numBlocks)
@@ -1035,6 +1153,12 @@ static OSErr BlockMarkFree(
 	UInt32  wordsPerBlock;
     // XXXdbg
 	struct hfsmount *hfsmp = VCBTOHFS(vcb);
+
+	if (startingBlock + numBlocks > vcb->totalBlocks) {
+	    panic("hfs: block mark free: trying to free non-existent blocks (%d %d %d)\n",
+		  startingBlock, numBlocks, vcb->totalBlocks);
+	}
+
 
 	//
 	//	Pre-read the bitmap block containing the first word of allocation
@@ -1075,11 +1199,9 @@ static OSErr BlockMarkFree(
 			numBits = numBlocks;					//	entire allocation is inside this one word
 			bitMask &= ~(kAllBitsSetInWord >> (firstBit + numBits));	//	turn off bits after last
 		}
-#if DEBUG_BUILD
 		if ((*currentWord & SWAP_BE32 (bitMask)) != SWAP_BE32 (bitMask)) {
-			panic("BlockMarkFree: blocks not allocated!");
+			goto Corruption;
 		}
-#endif
 		*currentWord &= SWAP_BE32 (~bitMask);		//	clear the bits in the bitmap
 		numBlocks -= numBits;						//	adjust number of blocks left to free
 
@@ -1112,12 +1234,9 @@ static OSErr BlockMarkFree(
 			currentWord = buffer;
 			wordsLeft = wordsPerBlock;
 		}
-
-#if DEBUG_BUILD
 		if (*currentWord != SWAP_BE32 (kAllBitsSetInWord)) {
-			panic("BlockMarkFree: blocks not allocated!");
+			goto Corruption;
 		}
-#endif
 		*currentWord = 0;							//	clear the entire word
 		numBlocks -= kBitsPerWord;
 		
@@ -1151,11 +1270,9 @@ static OSErr BlockMarkFree(
 			currentWord = buffer;
 			wordsLeft = wordsPerBlock;
 		}
-#if DEBUG_BUILD
 		if ((*currentWord & SWAP_BE32 (bitMask)) != SWAP_BE32 (bitMask)) {
-			panic("BlockMarkFree: blocks not allocated!");
+			goto Corruption;
 		}
-#endif
 		*currentWord &= SWAP_BE32 (~bitMask);			//	clear the bits in the bitmap
 
 		//	No need to update currentWord or wordsLeft
@@ -1167,6 +1284,17 @@ Exit:
 		(void)ReleaseBitmapBlock(vcb, blockRef, true);
 
 	return err;
+
+Corruption:
+#if DEBUG_BUILD
+	panic("BlockMarkFree: blocks not allocated!");
+#else
+	printf("hfs: WARNING - blocks on volume %s not allocated!\n", vcb->vcbVN);
+	vcb->vcbAtrb |= kHFSVolumeInconsistentMask;
+	MarkVCBDirty(vcb);
+	err = EIO;
+	goto Exit;
+#endif
 }
 
 
@@ -1185,6 +1313,7 @@ Inputs:
 	endingBlock		Last possible block in range + 1
 	minBlocks		Minimum number of blocks needed.  Must be > 0.
 	maxBlocks		Maximum (ideal) number of blocks desired
+	useMetaZone	OK to dip into metadata allocation zone
 
 Outputs:
 	actualStartBlock	First block of range found, or 0 if error
@@ -1202,6 +1331,7 @@ static OSErr BlockFindContiguous(
 	UInt32			endingBlock,
 	UInt32			minBlocks,
 	UInt32			maxBlocks,
+	Boolean			useMetaZone,
 	UInt32			*actualStartBlock,
 	UInt32			*actualNumBlocks)
 {
@@ -1228,7 +1358,13 @@ static OSErr BlockFindContiguous(
 	stopBlock = endingBlock - minBlocks + 1;
 	currentBlock = startingBlock;
 	firstBlock = 0;
-	
+
+	/*
+	 * Skip over metadata blocks.
+	 */
+	if (!useMetaZone)
+		currentBlock = NextBitmapBlock(vcb, currentBlock);
+
 	//
 	//	Pre-read the first bitmap block.
 	//
@@ -1240,7 +1376,7 @@ static OSErr BlockFindContiguous(
 	//
 	wordsPerBlock = vcb->vcbVBMIOSize / kBytesPerWord;
 
-	wordsLeft = (startingBlock / kBitsPerWord) & (wordsPerBlock-1);	// Current index into buffer
+	wordsLeft = (currentBlock / kBitsPerWord) & (wordsPerBlock-1);	// Current index into buffer
 	currentWord = buffer + wordsLeft;
 	wordsLeft = wordsPerBlock - wordsLeft;
 	
@@ -1286,6 +1422,15 @@ static OSErr BlockFindContiguous(
 				buffer = NULL;
 				err = ReleaseBitmapBlock(vcb, blockRef, false);
 				if (err != noErr) goto ErrorExit;
+
+				/*
+				 * Skip over metadata blocks.
+				 */
+				if (!useMetaZone) {
+					currentBlock = NextBitmapBlock(vcb, currentBlock);
+					if (currentBlock >= stopBlock)
+						break;
+				}
 
 				err = ReadBitmapBlock(vcb, currentBlock, &buffer, &blockRef);
 				if ( err != noErr ) goto ErrorExit;
@@ -1362,6 +1507,18 @@ FoundUnused:
 				buffer = NULL;
 				err = ReleaseBitmapBlock(vcb, blockRef, false);
 				if (err != noErr) goto ErrorExit;
+
+				/*
+				 * Skip over metadata blocks.
+				 */
+				if (!useMetaZone) {
+					UInt32 nextBlock;
+
+					nextBlock = NextBitmapBlock(vcb, currentBlock);
+					if (nextBlock != currentBlock) {
+						break;  /* allocation gap, so stop */
+					}
+				}
 
 				err = ReadBitmapBlock(vcb, currentBlock, &buffer, &blockRef);
 				if ( err != noErr ) goto ErrorExit;

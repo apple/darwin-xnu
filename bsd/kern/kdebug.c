@@ -28,6 +28,7 @@
 #define HZ      100
 #include <mach/clock_types.h>
 #include <mach/mach_types.h>
+#include <mach/mach_time.h>
 #include <machine/machine_routines.h>
 
 #include <sys/kdebug.h>
@@ -46,7 +47,7 @@
 unsigned int kdebug_enable = 0;
 
 /* track timestamps for security server's entropy needs */
-mach_timespec_t * kd_entropy_buffer = 0;
+uint64_t * 		  kd_entropy_buffer = 0;
 unsigned int      kd_entropy_bufsize = 0;
 unsigned int      kd_entropy_count  = 0;
 unsigned int      kd_entropy_indx   = 0;
@@ -97,7 +98,8 @@ struct kdebug_args {
 /* task to string structure */
 struct tts
 {
-  task_t   *task;
+  task_t   *task;            /* from procs task */
+  pid_t     pid;             /* from procs p_pid  */
   char      task_comm[20];   /* from procs p_comm */
 };
 
@@ -159,7 +161,7 @@ unsigned int debugid, arg1, arg2, arg3, arg4, arg5;
 	  {
 	    if (kd_entropy_indx < kd_entropy_count)
 	      {
-		ml_get_timebase((unsigned long long *) &kd_entropy_buffer [ kd_entropy_indx]);
+		kd_entropy_buffer [ kd_entropy_indx] = mach_absolute_time();
 		kd_entropy_indx++;
 	      }
 	    
@@ -231,23 +233,17 @@ unsigned int debugid, arg1, arg2, arg3, arg4, arg5;
 	kd->arg2 = arg2;
 	kd->arg3 = arg3;
 	kd->arg4 = arg4;
-	kd->arg5 = (int)current_thread();
+	kd->arg5 = (int)current_act();
         if (cpu_number())
             kd->arg5 |= KDBG_CPU_MASK;
 	          
-	ml_get_timebase((unsigned long long *)&kd->timestamp);
+	now = kd->timestamp = mach_absolute_time();
 
 	/* Watch for out of order timestamps */	
-	now = (((unsigned long long)kd->timestamp.tv_sec) << 32) |
-	  (unsigned long long)((unsigned int)(kd->timestamp.tv_nsec));
 
 	if (now < kd_prev_timebase)
 	  {
-	    /* timestamps are out of order -- adjust */
-	    kd_prev_timebase++;
-	    tsp = (mach_timespec_t *)&kd_prev_timebase;
-	    kd->timestamp.tv_sec =  tsp->tv_sec;
-	    kd->timestamp.tv_nsec = tsp->tv_nsec;
+	    kd->timestamp = ++kd_prev_timebase;
 	  }
 	else
 	  {
@@ -353,19 +349,14 @@ unsigned int debugid, arg1, arg2, arg3, arg4, arg5;
 	kd->arg3 = arg3;
 	kd->arg4 = arg4;
 	kd->arg5 = arg5;
-	ml_get_timebase((unsigned long long *)&kd->timestamp);
+	now = kd->timestamp = mach_absolute_time();
 
 	/* Watch for out of order timestamps */	
-	now = (((unsigned long long)kd->timestamp.tv_sec) << 32) |
-	  (unsigned long long)((unsigned int)(kd->timestamp.tv_nsec));
 
 	if (now < kd_prev_timebase)
 	  {
 	    /* timestamps are out of order -- adjust */
-	    kd_prev_timebase++;
-	    tsp = (mach_timespec_t *)&kd_prev_timebase;
-	    kd->timestamp.tv_sec =  tsp->tv_sec;
-	    kd->timestamp.tv_nsec = tsp->tv_nsec;
+	    kd->timestamp = ++kd_prev_timebase;
 	  }
 	else
 	  {
@@ -421,11 +412,11 @@ kdbg_reinit()
     kdebug_nolog = 1;
 
     if ((kdebug_flags & KDBG_INIT) && (kdebug_flags & KDBG_BUFINIT) && kd_bufsize && kd_buffer)
-        kmem_free(kernel_map, (char *)kd_buffer, kd_bufsize);
+        kmem_free(kernel_map, (vm_offset_t)kd_buffer, kd_bufsize);
 
     if ((kdebug_flags & KDBG_MAPINIT) && kd_mapsize && kd_mapptr)
       {
-	kmem_free(kernel_map, (char *)kd_mapptr, kd_mapsize);
+	kmem_free(kernel_map, (vm_offset_t)kd_mapptr, kd_mapsize);
 	kdebug_flags &= ~KDBG_MAPINIT;
 	kd_mapsize = 0;
 	kd_mapptr = (kd_threadmap *) 0;
@@ -436,6 +427,17 @@ kdbg_reinit()
 
     return(ret);
 }
+
+void kdbg_trace_data(struct proc *proc, long *arg_pid)
+{
+    if (!proc)
+        *arg_pid = 0;
+    else
+	*arg_pid = proc->p_pid;
+    
+    return;
+}
+
 
 void kdbg_trace_string(struct proc *proc, long *arg1, long *arg2, long *arg3, long *arg4)
 {
@@ -484,11 +486,20 @@ kdbg_resolve_map(thread_act_t th_act, krt_t *t)
   if(t->count < t->maxcount)
     {
       mapptr=&t->map[t->count];
-      mapptr->thread  = (unsigned int)getshuttle_thread(th_act);
-      mapptr->valid = 1;
+      mapptr->thread  = (unsigned int)th_act;
       (void) strncpy (mapptr->command, t->atts->task_comm,
 		      sizeof(t->atts->task_comm)-1);
       mapptr->command[sizeof(t->atts->task_comm)-1] = '\0';
+
+      /*
+	Some kernel threads have no associated pid.
+	We still need to mark the entry as valid.
+      */
+      if (t->atts->pid)
+	  mapptr->valid = t->atts->pid;
+      else
+	  mapptr->valid = 1;
+
       t->count++;
     }
 }
@@ -527,14 +538,20 @@ void kdbg_mapinit()
 	kd_mapsize = kd_mapcount * sizeof(kd_threadmap);
 	if((kmem_alloc(kernel_map, & kd_maptomem,
 		       (vm_size_t)kd_mapsize) == KERN_SUCCESS))
+	{
 	    kd_mapptr = (kd_threadmap *) kd_maptomem;
+	    bzero(kd_mapptr, kd_mapsize);
+	}
 	else
 	    kd_mapptr = (kd_threadmap *) 0;
 
 	tts_mapsize = tts_count * sizeof(struct tts);
 	if((kmem_alloc(kernel_map, & tts_maptomem,
 		       (vm_size_t)tts_mapsize) == KERN_SUCCESS))
+	{
 	    tts_mapptr = (struct tts *) tts_maptomem;
+	    bzero(tts_mapptr, tts_mapsize);
+	}
 	else
 	    tts_mapptr = (struct tts *) 0;
 
@@ -553,6 +570,7 @@ void kdbg_mapinit()
 
 			if (task_reference_try(p->task)) {
 		                tts_mapptr[i].task = p->task;
+				tts_mapptr[i].pid  = p->p_pid;
 			        (void)strncpy(&tts_mapptr[i].task_comm, p->p_comm, sizeof(tts_mapptr[i].task_comm) - 1);
 			        i++;
 			}
@@ -573,9 +591,9 @@ void kdbg_mapinit()
 	      {
 		akrt.atts = &tts_mapptr[i];
 		task_act_iterate_wth_args(tts_mapptr[i].task, kdbg_resolve_map, &akrt);
-		task_deallocate(tts_mapptr[i].task);
+		task_deallocate((task_t) tts_mapptr[i].task);
 	      }
-	    kmem_free(kernel_map, (char *)tts_mapptr, tts_mapsize);
+	    kmem_free(kernel_map, (vm_offset_t)tts_mapptr, tts_mapsize);
 	  }
 }
 
@@ -591,14 +609,14 @@ int x;
 	kdebug_flags &= (unsigned int)~KDBG_CKTYPES;
 	kdebug_flags &= ~(KDBG_NOWRAP | KDBG_RANGECHECK | KDBG_VALCHECK);
 	kdebug_flags &= ~(KDBG_PIDCHECK | KDBG_PIDEXCLUDE);
-	kmem_free(kernel_map, (char *)kd_buffer, kd_bufsize);
+	kmem_free(kernel_map, (vm_offset_t)kd_buffer, kd_bufsize);
 	kd_buffer = (kd_buf *)0;
 	kd_bufsize = 0;
 	kd_prev_timebase = 0LL;
 
 	/* Clean up the thread map buffer */
 	kdebug_flags &= ~KDBG_MAPINIT;
-	kmem_free(kernel_map, (char *)kd_mapptr, kd_mapsize);
+	kmem_free(kernel_map, (vm_offset_t)kd_mapptr, kd_mapsize);
 	kd_mapptr = (kd_threadmap *) 0;
 	kd_mapsize = 0;
 	kd_mapcount = 0;
@@ -819,7 +837,7 @@ kdbg_readmap(kd_threadmap *buffer, size_t *number)
 
   if ((kdebug_flags & KDBG_MAPINIT) && kd_mapsize && kd_mapptr)
     {
-      kmem_free(kernel_map, (char *)kd_mapptr, kd_mapsize);
+      kmem_free(kernel_map, (vm_offset_t)kd_mapptr, kd_mapsize);
       kdebug_flags &= ~KDBG_MAPINIT;
       kd_mapsize = 0;
       kd_mapptr = (kd_threadmap *) 0;
@@ -848,11 +866,11 @@ kdbg_getentropy (mach_timespec_t * buffer, size_t *number, int ms_timeout)
   if (kmem_alloc(kernel_map, &kd_entropy_buftomem,
 		 (vm_size_t)kd_entropy_bufsize) == KERN_SUCCESS)
     {
-      kd_entropy_buffer = (mach_timespec_t *)kd_entropy_buftomem;
+      kd_entropy_buffer = (uint64_t *) kd_entropy_buftomem;
     }
   else
     {
-      kd_entropy_buffer = (mach_timespec_t *) 0;
+      kd_entropy_buffer = (uint64_t *) 0;
       kd_entropy_count = 0;
       kd_entropy_indx = 0;
       return (EINVAL);
@@ -885,8 +903,8 @@ kdbg_getentropy (mach_timespec_t * buffer, size_t *number, int ms_timeout)
   kd_entropy_count = 0;
   kd_entropy_indx = 0;
   kd_entropy_buftomem = 0;
-  kmem_free(kernel_map, (char *)kd_entropy_buffer, kd_entropy_bufsize);
-  kd_entropy_buffer = (mach_timespec_t *) 0;
+  kmem_free(kernel_map, (vm_offset_t)kd_entropy_buffer, kd_entropy_bufsize);
+  kd_entropy_buffer = (uint64_t *) 0;
   return(ret);
 }
 
@@ -1025,9 +1043,9 @@ struct proc *p, *curproc;
 		      kdbg_mapinit();
 		  break;
 		case KERN_KDSETBUF:
-		  /* We allow a maximum buffer size of 25% of memory */
+		  /* We allow a maximum buffer size of 25% of either ram or max mapped address, whichever is smaller */
 		  /* 'value' is the desired number of trace entries */
-		        max_entries = (mem_size/4) / sizeof(kd_buf);
+		        max_entries = (sane_size/4) / sizeof(kd_buf);
 			if (value <= max_entries)
 				nkdbufs = value;
 			else
@@ -1203,4 +1221,11 @@ kd_buf * my_kd_bufptr;
 		} /* end if KDBG_BUFINIT */		
 	} /* end if count */
 	return (EINVAL);
+}
+
+unsigned char *getProcName(struct proc *proc);
+unsigned char *getProcName(struct proc *proc) {
+
+	return (unsigned char *) &proc->p_comm;	/* Return pointer to the proc name */
+
 }

@@ -208,7 +208,7 @@ nfs_boot_init(nd, procp)
 	if (netboot_iaddr(&my_ip) == FALSE) {
 	    printf("nfs_boot: networking is not initialized\n");
 	    error = ENXIO;
-	    goto failed;
+	    goto failed_noswitch;
 	}
 
 	/* get the root path information */
@@ -289,9 +289,10 @@ nfs_boot_init(nd, procp)
 	else {
 		error = 0;
 	}
-#endif NO_MOUNT_PRIVATE
- failed:
+#endif /* NO_MOUNT_PRIVATE */
+failed:
 	thread_funnel_switch(NETWORK_FUNNEL, KERNEL_FUNNEL);
+failed_noswitch:
 	return (error);
 }
 
@@ -328,7 +329,7 @@ nfs_boot_getfh(nd, procp, v3)
 			goto failed;
 		}
 	}
-#endif NO_MOUNT_PRIVATE
+#endif /* NO_MOUNT_PRIVATE */
  failed:
 	thread_funnel_switch(NETWORK_FUNNEL, KERNEL_FUNNEL);
 	return (error);

@@ -45,10 +45,9 @@
 #ifdef __APPLE_API_PRIVATE
 /*
  * Security Policy Index
- * NOTE: Ensure to be same address family and upper layer protocol.
- * NOTE: ul_proto, port number, uid, gid:
- *	ANY: reserved for waldcard.
- *	0 to (~0 - 1): is one of the number of each value.
+ * Ensure that both address families in the "src" and "dst" are same.
+ * When the value of the ul_proto is ICMPv6, the port field in "src"
+ * specifies ICMPv6 type, and the port field in "dst" specifies ICMPv6 code.
  */
 struct secpolicyindex {
 	u_int8_t dir;			/* direction of packet flow, see blow */
@@ -224,7 +223,7 @@ struct ipsecstat {
 #define IPSECCTL_DEF_ESP_NETLEV		4	/* int; ESP tunnel mode */
 #define IPSECCTL_DEF_AH_TRANSLEV	5	/* int; AH transport mode */
 #define IPSECCTL_DEF_AH_NETLEV		6	/* int; AH tunnel mode */
-#if 0	/*obsolete, do not reuse*/
+#if 0	/* obsolete, do not reuse */
 #define IPSECCTL_INBOUND_CALL_IKE	7
 #endif
 #define	IPSECCTL_AH_CLEARTOS		8

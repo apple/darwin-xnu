@@ -265,12 +265,13 @@ struct vm_object {
 						   request queue */
 
 	vm_object_offset_t	last_alloc;	/* last allocation offset */
+	vm_object_offset_t	sequential;	/* sequential access size */
 	vm_size_t		cluster_size;	/* size of paging cluster */
 #if	MACH_PAGEMAP
 	vm_external_map_t	existence_map;	/* bitmap of pages written to
 						 * backing storage */
 #endif	/* MACH_PAGEMAP */
-	int			cow_hint;	/* last page present in     */
+	vm_offset_t		cow_hint;	/* last page present in     */
 						/* shadow but not in object */
 #if	MACH_ASSERT
 	struct vm_object	*paging_object;	/* object which pages to be
@@ -424,7 +425,8 @@ __private_extern__ boolean_t	vm_object_shadow(
 					vm_object_size_t	length);
 
 __private_extern__ void		vm_object_collapse(
-					vm_object_t	object);
+					vm_object_t		object,
+					vm_object_offset_t	offset);
 
 __private_extern__ boolean_t	vm_object_copy_quickly(
 				vm_object_t		*_object,

@@ -1,5 +1,5 @@
-/*	$FreeBSD: src/sys/netinet6/ah_input.c,v 1.1.2.4 2001/07/03 11:01:49 ume Exp $	*/
-/*	$KAME: ah_input.c,v 1.59 2001/05/16 04:01:27 jinmei Exp $	*/
+/*	$FreeBSD: src/sys/netinet6/ah_input.c,v 1.1.2.6 2002/04/28 05:40:26 suz Exp $	*/
+/*	$KAME: ah_input.c,v 1.67 2002/01/07 11:39:56 kjc Exp $	*/
 
 /*
  * Copyright (C) 1995, 1996, 1997, and 1998 WIDE Project.
@@ -417,14 +417,6 @@ ah4_input(struct mbuf *m, int off)
 			goto fail;
 		}
 
-#if 0 /* XXX should we call ipfw rather than ipsec_in_reject? */
-		/* drop it if it does not match the default policy */
-		if (ipsec4_in_reject(m, NULL)) {
-			ipsecstat.in_polvio++;
-			goto fail;
-		}
-#endif
-
 #if 1
 		/*
 		 * Should the inner packet be considered authentic?
@@ -505,9 +497,9 @@ ah4_input(struct mbuf *m, int off)
 				goto fail;
 			}
 			m_adj(n, stripsiz);
-			m_cat(m, n);
 			/* m_cat does not update m_pkthdr.len */
 			m->m_pkthdr.len += n->m_pkthdr.len;
+			m_cat(m, n);
 		}
 #endif
 
@@ -567,9 +559,9 @@ fail:
 
 #if INET6
 int
-ah6_input(mp, offp, proto)
+ah6_input(mp, offp)
 	struct mbuf **mp;
-	int *offp, proto;
+	int *offp;
 {
 	struct mbuf *m = *mp;
 	int off = *offp;
@@ -842,14 +834,6 @@ ah6_input(mp, offp, proto)
 			goto fail;
 		}
 
-#if 0 /* XXX should we call ipfw rather than ipsec_in_reject? */
-		/* drop it if it does not match the default policy */
-		if (ipsec6_in_reject(m, NULL)) {
-			ipsec6stat.in_polvio++;
-			goto fail;
-		}
-#endif
-
 #if 1
 		/*
 		 * should the inner packet be considered authentic?
@@ -874,7 +858,7 @@ ah6_input(mp, offp, proto)
 		}
 		IF_ENQUEUE(&ip6intrq, m);
 		m = NULL;
-		schednetisr(NETISR_IPV6); /*can be skipped but to make sure*/
+		schednetisr(NETISR_IPV6); /* can be skipped but to make sure */
 		splx(s);
 		nxt = IPPROTO_DONE;
 	} else {
@@ -924,9 +908,9 @@ ah6_input(mp, offp, proto)
 				goto fail;
 			}
 			m_adj(n, stripsiz);
-			m_cat(m, n);
 			/* m_cat does not update m_pkthdr.len */
 			m->m_pkthdr.len += n->m_pkthdr.len;
+			m_cat(m, n);
 		}
 #endif
 		ip6 = mtod(m, struct ip6_hdr *);
@@ -975,7 +959,7 @@ ah6_ctlinput(cmd, sa, d)
 	struct mbuf *m;
 	struct ip6ctlparam *ip6cp = NULL;
 	int off;
-	struct sockaddr_in6 sa6_src, sa6_dst;
+	struct sockaddr_in6 *sa6_src, *sa6_dst;
 
 	if (sa->sa_family != AF_INET6 ||
 	    sa->sa_len != sizeof(struct sockaddr_in6))
@@ -1021,9 +1005,11 @@ ah6_ctlinput(cmd, sa, d)
 			 * Check to see if we have a valid SA corresponding to
 			 * the address in the ICMP message payload.
 			 */
+			sa6_src = ip6cp->ip6c_src;
+			sa6_dst = (struct sockaddr_in6 *)sa;
 			sav = key_allocsa(AF_INET6,
-					  (caddr_t)&sa6_src.sin6_addr,
-					  (caddr_t)&sa6_dst.sin6_addr,
+					  (caddr_t)&sa6_src->sin6_addr,
+					  (caddr_t)&sa6_dst->sin6_addr,
 					  IPPROTO_AH, ahp->ah_spi);
 			if (sav) {
 				if (sav->state == SADB_SASTATE_MATURE ||

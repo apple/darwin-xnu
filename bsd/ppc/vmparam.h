@@ -40,7 +40,7 @@
 #define	MAXDSIZ		(RLIM_INFINITY)		/* max data size */
 #endif
 #ifndef	DFLSSIZ
-#define	DFLSSIZ		(512*1024)		/* initial stack size limit */
+#define	DFLSSIZ		(8*1024*1024)		/* initial stack size limit */
 #endif
 #ifndef	MAXSSIZ
 #define	MAXSSIZ		(64*1024*1024)		/* max stack size */

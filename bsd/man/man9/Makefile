@@ -11,6 +11,7 @@ DATAFILES = \
 	fetch.9	\
 	store.9	\
 	style.9	\
+	intro.9
 
 INSTALL_MAN_LIST = ${DATAFILES}
 

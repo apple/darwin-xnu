@@ -345,7 +345,7 @@ kmoutput(
 		}
 	}
         if (tp->t_outq.c_cc > 0) {
-		timeout(kmtimeout, tp, hz);
+		timeout((timeout_fcn_t)kmtimeout, tp, hz);
 	}
 	tp->t_state &= ~TS_BUSY;
 	ttwwakeup(tp);

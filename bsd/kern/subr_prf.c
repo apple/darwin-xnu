@@ -210,14 +210,13 @@ tprintf(tpr_t tpr, const char *fmt, ...)
 		flags |= TOTTY;
 		tp = sess->s_ttyp;
 	}
-	if (tp != NULL) {
-		pca.flags = TOTTY;
-		pca.tty   = tp;
-		
-		va_start(ap, fmt);
-		__doprnt(fmt, &ap, putchar, &pca, 10);
-		va_end(ap);
-	}
+	
+	pca.flags = flags;
+	pca.tty   = tp;
+	va_start(ap, fmt);
+	__doprnt(fmt, &ap, putchar, &pca, 10);
+	va_end(ap);
+
 	logwakeup();
 }
 

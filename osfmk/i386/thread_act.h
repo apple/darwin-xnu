@@ -38,6 +38,7 @@
 
 #include <i386/iopb.h>
 #include <i386/tss.h>
+#include <i386/seg.h>
 #include <i386/eflags.h>
 
 /*
@@ -66,6 +67,8 @@ struct i386_fpsave_state {
 	boolean_t		fp_valid;
 	struct i386_fp_save	fp_save_state;
 	struct i386_fp_regs	fp_regs;
+        struct i386_fx_save 	fx_save_state __attribute__ ((aligned (16)));
+	int			fp_save_flavor;
 };
 
 /*
@@ -91,6 +94,8 @@ struct v86_assist_state {
  */
 
 struct i386_interrupt_state {
+        int     gs;
+        int     fs;
 	int	es;
 	int	ds;
 	int	edx;
@@ -137,6 +142,7 @@ typedef struct pcb {
 	struct i386_machine_state ims;
 #ifdef	MACH_BSD
 	unsigned long	cthread_self;		/* for use of cthread package */
+        struct real_descriptor cthread_desc;
 #endif
 	decl_simple_lock_data(,lock)
 } *pcb_t;
@@ -175,11 +181,8 @@ extern void *act_thread_csave(void);
 extern void act_thread_catt(void *ctx);
 extern void act_thread_cfree(void *ctx);
 
-#define current_act_fast()	(current_thread()->top_act)
-#define current_act_slow()	((current_thread()) ?			\
-								current_act_fast() :		\
-								THR_ACT_NULL)
-
-#define current_act()	current_act_slow()    /* JMM - til we find the culprit */
+extern vm_offset_t active_stacks[NCPUS];
+extern vm_offset_t kernel_stack[NCPUS];
+extern thread_act_t active_kloaded[NCPUS];
 
 #endif	/* _I386_THREAD_ACT_H_ */

@@ -22,13 +22,6 @@
  * 
  * @APPLE_LICENSE_HEADER_END@
  */
-/*
- * Copyright (c) 1998 Apple Computer, Inc.  All rights reserved. 
- *
- * HISTORY
- * 23 Nov 98 sdouglas created.
- * 30 Sep 99 sdouglas, merged IODeviceMemory into IOMemoryDescriptor.
- */
 
 #include <IOKit/IODeviceMemory.h>
 

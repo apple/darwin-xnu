@@ -140,18 +140,4 @@ extern void			db_task_start(void);
  */
 #define MACHINE_FAST_EXCEPTION 1
 
-/*
- * MD Macro to fill up global stack state,
- * keeping the MD structure sizes + games private
- */
-#define MACHINE_STACK_STASH(stack)                                      \
-MACRO_BEGIN								\
-	mp_disable_preemption();					\
-	kernel_stack[cpu_number()] = (stack) +                          \
-	    (KERNEL_STACK_SIZE - sizeof (struct i386_exception_link)    \
-				- sizeof (struct i386_kernel_state)),   \
-		active_stacks[cpu_number()] = (stack);			\
-	mp_enable_preemption();						\
-MACRO_END
-
 #endif	/* _I386_THREAD_H_ */

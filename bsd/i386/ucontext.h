@@ -43,6 +43,13 @@ struct mcontext {
 
 typedef struct mcontext * mcontext_t;
 
+struct mcontext64 {
+	struct sigcontext sc;
+};
+#define I386_MCONTEXT64_SIZE	sizeof(struct mcontext64)	
+
+typedef struct mcontext64 * mcontext64_t;
+
 #endif /* __APPLE_API_UNSTABLE */
 
 #endif /* _I386_UCONTEXT_H_ */

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2002 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2003 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -61,6 +61,7 @@
 #define	_SYS_SELECT_H_
 
 #include <sys/appleapiopts.h>
+#include <sys/cdefs.h>
 
 #ifdef __APPLE_API_UNSTABLE
 
@@ -70,17 +71,24 @@ __BEGIN_DECLS
 #include <kern/wait_queue.h>
 #endif
 
+#include <sys/event.h>
+
 /*
  * Used to maintain information about processes that wish to be
  * notified when I/O becomes possible.
  */
 struct selinfo {
 #ifdef KERNEL
-	struct  wait_queue  wait_queue;	 /* wait_queue for wait/wakeup */
+	union {
+		struct  wait_queue wait_queue;	/* wait_queue for wait/wakeup */
+		struct klist note;		/* JMM - temporary separation */
+	} si_u;
+#define si_wait_queue si_u.wait_queue
+#define si_note si_u.note
 #else
-	char  wait_queue[16];
+	char  si_wait_queue[16];
 #endif
-	u_int	si_flags;	/* see below */
+	u_int	si_flags;		/* see below */
 };
 
 #define	SI_COLL		0x0001		/* collision occurred */
@@ -99,5 +107,21 @@ void	selthreadclear __P((struct selinfo *));
 __END_DECLS
 
 #endif /* __APPLE_API_UNSTABLE */
+
+#ifndef KERNEL
+#include <sys/types.h>
+#ifndef  __MWERKS__
+#include <signal.h>
+#endif /* __MWERKS__ */
+#include <sys/time.h>
+
+__BEGIN_DECLS
+#ifndef  __MWERKS__
+int	 pselect(int, fd_set *, fd_set *, fd_set *,
+	    const struct timespec *, const sigset_t *);
+#endif /* __MWERKS__ */
+int	 select(int, fd_set *, fd_set *, fd_set *, struct timeval *);
+__END_DECLS
+#endif /* ! KERNEL */
 
 #endif /* !_SYS_SELECT_H_ */

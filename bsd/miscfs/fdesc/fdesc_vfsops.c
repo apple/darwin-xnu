@@ -91,7 +91,7 @@ fdesc_mount(mp, path, data, ndp, p)
 	struct proc *p;
 {
 	int error = 0;
-	u_int size;
+	size_t size;
 	struct fdescmount *fmp;
 	struct vnode *rvp;
 
@@ -253,7 +253,7 @@ fdesc_sync(mp, waitfor)
 	    struct proc *)))eopnotsupp)
 #define fdesc_sysctl ((int (*) __P((int *, u_int, void *, size_t *, void *, \
 	    size_t, struct proc *)))eopnotsupp)
-#define fdesc_vget ((int (*) __P((struct mount *, ino_t, struct vnode **))) \
+#define fdesc_vget ((int (*) __P((struct mount *, void *, struct vnode **))) \
 	    eopnotsupp)
 #define fdesc_vptofh ((int (*) __P((struct vnode *, struct fid *)))eopnotsupp)
 

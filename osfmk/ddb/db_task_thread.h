@@ -25,68 +25,6 @@
 /*
  * @OSF_COPYRIGHT@
  */
-/*
- * HISTORY
- * 
- * Revision 1.1.1.1  1998/09/22 21:05:48  wsanchez
- * Import of Mac OS X kernel (~semeria)
- *
- * Revision 1.1.1.1  1998/03/07 02:26:09  wsanchez
- * Import of OSF Mach kernel (~mburg)
- *
- * Revision 1.1.9.1  1994/09/23  01:22:09  ezf
- * 	change marker to not FREE
- * 	[1994/09/22  21:11:13  ezf]
- *
- * Revision 1.1.7.4  1994/03/17  22:35:38  dwm
- * 	The infamous name change:  thread_activation + thread_shuttle = thread.
- * 	[1994/03/17  21:25:53  dwm]
- * 
- * Revision 1.1.7.3  1994/02/03  21:44:27  bolinger
- * 	Change a surviving current_thread() to current_act().
- * 	[1994/02/03  20:48:03  bolinger]
- * 
- * Revision 1.1.7.2  1994/01/12  17:50:56  dwm
- * 	Coloc: initial restructuring to follow Utah model.
- * 	[1994/01/12  17:13:27  dwm]
- * 
- * Revision 1.1.7.1  1994/01/05  19:28:18  bolinger
- * 	Separate notions of "address space" and "task" (i.e., symbol table),
- * 	via new macros db_current_space() and db_is_current_space(); also update
- * 	db_target_space() to treat kernel-loaded tasks correctly.
- * 	[1994/01/04  17:41:47  bolinger]
- * 
- * Revision 1.1.2.4  1993/07/27  18:28:17  elliston
- * 	Add ANSI prototypes.  CR #9523.
- * 	[1993/07/27  18:13:10  elliston]
- * 
- * Revision 1.1.2.3  1993/06/07  22:06:58  jeffc
- * 	CR9176 - ANSI C violations: trailing tokens on CPP
- * 	directives, extra semicolons after decl_ ..., asm keywords
- * 	[1993/06/07  18:57:35  jeffc]
- * 
- * Revision 1.1.2.2  1993/06/02  23:12:46  jeffc
- * 	Added to OSF/1 R1.3 from NMK15.0.
- * 	[1993/06/02  20:57:32  jeffc]
- * 
- * Revision 1.1  1992/09/30  02:24:23  robert
- * 	Initial revision
- * 
- * $EndLog$
- */
-/* CMU_HIST */
-/*
- * Revision 2.2  91/10/09  16:03:18  af
- * 	 Revision 2.1.3.1  91/10/05  13:08:07  jeffreyh
- * 	 	Created for task/thread handling.
- * 	 	[91/08/29            tak]
- * 
- * Revision 2.1.3.1  91/10/05  13:08:07  jeffreyh
- * 	Created for task/thread handling.
- * 	[91/08/29            tak]
- * 
- */
-/* CMU_ENDHIST */
 /* 
  * Mach Operating System
  * Copyright (c) 1991,1990 Carnegie Mellon University
@@ -133,10 +71,10 @@
 #define db_current_task()						\
 		((current_act())? current_act()->task: TASK_NULL)
 #define db_current_space()						\
-		((current_act() && !current_act()->kernel_loaded)?\
+		((current_act())?\
 			current_act()->task: TASK_NULL)
 #define db_target_space(thr_act, user_space)				\
-		((!(user_space) || ((thr_act) && (thr_act)->kernel_loaded))?\
+		((!(user_space) || ((thr_act)))?\
 			TASK_NULL:					\
 			(thr_act)? 					\
 				(thr_act)->task: db_current_space())

@@ -33,8 +33,6 @@
 #ifndef	_PPC_AST_H_
 #define	_PPC_AST_H_
 
-/*
- * Empty file - use the machine-independent versions.
- */
+#define AST_PPC_CHUD     0x80000000
 
 #endif	/* _PPC_AST_H_ */

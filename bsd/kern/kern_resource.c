@@ -65,6 +65,7 @@
 
 #include <sys/param.h>
 #include <sys/systm.h>
+#include <sys/sysctl.h>
 #include <sys/kernel.h>
 #include <sys/file.h>
 #include <sys/resourcevar.h>
@@ -87,6 +88,22 @@ int	dosetrlimit __P((struct proc *p, u_int which, struct rlimit *limp));
 
 rlim_t maxdmap = MAXDSIZ;	/* XXX */ 
 rlim_t maxsmap = MAXSSIZ;	/* XXX */ 
+
+/*
+ * Limits on the number of open files per process, and the number
+ * of child processes per process.
+ *
+ * Note: would be in kern/subr_param.c in FreeBSD.
+ */
+int maxprocperuid = CHILD_MAX;		/* max # of procs per user */
+int maxfilesperproc = OPEN_MAX;		/* per-proc open files limit */
+
+SYSCTL_INT( _kern, KERN_MAXPROCPERUID, maxprocperuid, CTLFLAG_RW,
+    		&maxprocperuid, 0, "Maximum processes allowed per userid" );
+
+SYSCTL_INT( _kern, KERN_MAXFILESPERPROC, maxfilesperproc, CTLFLAG_RW,       
+    		&maxfilesperproc, 0, "Maximum files allowed open per process" );
+
 
 /*
  * Resource controls and accounting.
@@ -353,14 +370,14 @@ dosetrlimit(p, which, limp)
 			
 			if (limp->rlim_cur > alimp->rlim_cur) {
 				/* grow stack */
-				size = round_page(limp->rlim_cur);
-				size -= round_page(alimp->rlim_cur);
+				size = round_page_64(limp->rlim_cur);
+				size -= round_page_64(alimp->rlim_cur);
 
 #if STACK_GROWTH_UP
 				/* go to top of current stack */
-				addr = trunc_page(p->user_stack + alimp->rlim_cur);
+				addr = trunc_page((unsigned int)(p->user_stack + alimp->rlim_cur));
 #else STACK_GROWTH_UP
-				addr = trunc_page(p->user_stack - alimp->rlim_cur);
+				addr = trunc_page_32((unsigned int)(p->user_stack - alimp->rlim_cur));
 				addr -= size;
 #endif /* STACK_GROWTH_UP */
 				if (vm_allocate(current_map(),
@@ -373,39 +390,44 @@ dosetrlimit(p, which, limp)
 		break;
 
 	case RLIMIT_NOFILE:
-	/* 
-	 * Only root can get the maxfiles limits, as it is systemwide resource
-	 */
-		if (is_suser()) {
+		/* 
+		* Only root can set the maxfiles limits, as it is systemwide resource
+		*/
+		if ( is_suser() ) {
 			if (limp->rlim_cur > maxfiles)
 				limp->rlim_cur = maxfiles;
 			if (limp->rlim_max > maxfiles)
 				limp->rlim_max = maxfiles;
-		} else {
-			if (limp->rlim_cur > OPEN_MAX)
-				limp->rlim_cur = OPEN_MAX;
-			if (limp->rlim_max > OPEN_MAX)
-				limp->rlim_max = OPEN_MAX;
+		}
+		else {
+			if (limp->rlim_cur > maxfilesperproc)
+				limp->rlim_cur = maxfilesperproc;
+			if (limp->rlim_max > maxfilesperproc)
+				limp->rlim_max = maxfilesperproc;
 		}
 		break;
 
 	case RLIMIT_NPROC:
-	/* 
-	 * Only root can get the maxproc limits, as it is systemwide resource
-	 */
-		if (is_suser()) {
+		/* 
+		 * Only root can set to the maxproc limits, as it is
+		 * systemwide resource; all others are limited to
+		 * maxprocperuid (presumably less than maxproc).
+		 */
+		if ( is_suser() ) {
 			if (limp->rlim_cur > maxproc)
 				limp->rlim_cur = maxproc;
 			if (limp->rlim_max > maxproc)
 				limp->rlim_max = maxproc;
-		} else {
-			if (limp->rlim_cur > CHILD_MAX)
-				limp->rlim_cur = CHILD_MAX;
-			if (limp->rlim_max > CHILD_MAX)
-				limp->rlim_max = CHILD_MAX;
+		} 
+		else {
+			if (limp->rlim_cur > maxprocperuid)
+				limp->rlim_cur = maxprocperuid;
+			if (limp->rlim_max > maxprocperuid)
+				limp->rlim_max = maxprocperuid;
 		}
 		break;
-	}
+		
+	} /* switch... */
 	*alimp = *limp;
 	return (0);
 }
@@ -460,8 +482,8 @@ calcru(p, up, sp, ip)
 		ut.tv_usec = tinfo.user_time.microseconds;
 		st.tv_sec = tinfo.system_time.seconds;
 		st.tv_usec = tinfo.system_time.microseconds;
-		timeradd(&ut,up,up);
-		timeradd(&st,up,up);
+		timeradd(&ut, up, up);
+		timeradd(&st, sp, sp);
 
 		task_ttimes_stuff = TASK_THREAD_TIMES_INFO_COUNT;
 		task_info(task, TASK_THREAD_TIMES_INFO,
@@ -471,8 +493,8 @@ calcru(p, up, sp, ip)
 		ut.tv_usec = ttimesinfo.user_time.microseconds;
 		st.tv_sec = ttimesinfo.system_time.seconds;
 		st.tv_usec = ttimesinfo.system_time.microseconds;
-		timeradd(&ut,up,up);
-		timeradd(&st,up,up);
+		timeradd(&ut, up, up);
+		timeradd(&st, sp, sp);
 	}
 }
 

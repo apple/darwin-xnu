@@ -236,3 +236,8 @@ routine host_statistics(
 		host_priv	: host_t;
 		flavor		: host_flavor_t;
 	out	host_info_out	: host_info_t, CountInOut);
+
+routine host_request_notification(
+		host		: host_t;
+		notify_type	: host_flavor_t;
+		notify_port	: mach_port_make_send_once_t);

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2002 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2003 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -106,7 +106,7 @@ static struct vfsconf vfsconflist[] = {
 
 	/* ISO9660 (aka CDROM) Filesystem */
 #if CD9660
-	{ &cd9660_vfsops, "cd9660", 14, 0, MNT_LOCAL | MNT_DOVOLFS, cd9660_mountroot, NULL },
+	{ &cd9660_vfsops, "cd9660", 14, 0, MNT_LOCAL, cd9660_mountroot, NULL },
 #endif
 
 	/* Memory-based Filesystem */
@@ -198,6 +198,7 @@ extern struct vnodeopv_desc hfs_specop_opv_desc;
 extern struct vnodeopv_desc hfs_fifoop_opv_desc;
 extern struct vnodeopv_desc volfs_vnodeop_opv_desc;
 extern struct vnodeopv_desc cd9660_vnodeop_opv_desc;
+extern struct vnodeopv_desc cd9660_cdxaop_opv_desc;
 extern struct vnodeopv_desc cd9660_specop_opv_desc;
 extern struct vnodeopv_desc cd9660_fifoop_opv_desc;
 extern struct vnodeopv_desc union_vnodeop_opv_desc;
@@ -240,6 +241,7 @@ struct vnodeopv_desc *vfs_opv_descs[] = {
 #endif
 #if CD9660
 	&cd9660_vnodeop_opv_desc,
+	&cd9660_cdxaop_opv_desc,
 	&cd9660_specop_opv_desc,
 #if FIFO
 	&cd9660_fifoop_opv_desc,

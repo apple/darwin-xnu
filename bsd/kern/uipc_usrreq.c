@@ -663,6 +663,18 @@ unp_connect(so, nam, p)
 		goto bad;
 	}
 	thread_funnel_switch(KERNEL_FUNNEL, NETWORK_FUNNEL);
+	
+	/*
+	 * Check if socket was connected while we were trying to
+	 * acquire the funnel.
+	 * XXX - probably shouldn't return an error for SOCK_DGRAM
+	 */
+	if ((so->so_state & SS_ISCONNECTED) != 0) {
+		error = EISCONN;
+		thread_funnel_switch(NETWORK_FUNNEL, KERNEL_FUNNEL);
+		goto bad;
+	}
+	
 	if (so->so_proto->pr_flags & PR_CONNREQUIRED) {
 		if ((so2->so_options & SO_ACCEPTCONN) == 0 ||
 		    (so3 = sonewconn(so2, 0)) == 0) {

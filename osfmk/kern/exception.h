@@ -50,4 +50,9 @@ extern void exception(
 	exception_data_t	code,
 	mach_msg_type_number_t	codeCnt);
 
+/* Notify system performance monitor */
+extern kern_return_t sys_perf_notify(struct task *task,
+	exception_data_t	code,
+	mach_msg_type_number_t  codeCnt);
+
 #endif	/* _EXCEPTION_H_ */

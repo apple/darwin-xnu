@@ -49,6 +49,7 @@ extern char *strcpy(char *dest, const char *src);
 extern char *strncpy(char *dest, const char *src, unsigned long n);
 extern void interrupt_enable(void);
 extern void interrupt_disable(void);
+extern void bcopy(void * from, void * to, int size);
 #if __ppc__
 extern void bcopy_nc(char *from, char *to, int size); /* uncached-safe */
 #else

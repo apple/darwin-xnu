@@ -300,7 +300,8 @@ cd9660_rrip_defname(isodir,ana)
 	switch (*isodir->name) {
 	default:
 		isofntrans(isodir->name, isonum_711(isodir->name_len),
-			   ana->outbuf, ana->outlen, 1);
+			   ana->outbuf, ana->outlen, 1,
+			   isonum_711(isodir->flags) & associatedBit);
 		break;
 	case 0:
 		*ana->outlen = 1;

@@ -84,6 +84,61 @@ void IOPrintPlane( const IORegistryPlane * plane )
     iter->release();
 }
 
+void dbugprintf(char *fmt, ...);
+void db_dumpiojunk( const IORegistryPlane * plane );
+
+void db_piokjunk(void) {
+
+	dbugprintf("\nDT plane:\n");
+	db_dumpiojunk( gIODTPlane );
+	dbugprintf("\n\nService plane:\n");
+	db_dumpiojunk( gIOServicePlane );
+    dbugprintf("\n\n"
+	    "ivar kalloc()       0x%08x\n"
+	    "malloc()            0x%08x\n"
+            "containers kalloc() 0x%08x\n"
+	    "IOMalloc()          0x%08x\n"
+            "----------------------------------------\n",
+	    debug_ivars_size,
+            debug_malloc_size,
+            debug_container_malloc_size,
+            debug_iomalloc_size
+            );
+
+}
+
+
+void db_dumpiojunk( const IORegistryPlane * plane )
+{
+    IORegistryEntry *		next;
+    IORegistryIterator * 	iter;
+    OSOrderedSet *		all;
+    char			format[] = "%xxxs";
+    IOService *			service;
+
+    iter = IORegistryIterator::iterateOver( plane );
+
+    all = iter->iterateAll();
+    if( all) {
+        dbugprintf("Count %d\n", all->getCount() );
+        all->release();
+    } else dbugprintf("Empty\n");
+
+    iter->reset();
+    while( (next = iter->getNextObjectRecursive())) {
+		sprintf( format + 1, "%ds", 2 * next->getDepth( plane ));
+		dbugprintf( format, "");
+		dbugprintf( "%s", next->getName( plane ));
+		if( (next->getLocation( plane )))
+				dbugprintf("@%s", next->getLocation( plane ));
+		dbugprintf(" <class %s", next->getMetaClass()->getClassName());
+			if( (service = OSDynamicCast(IOService, next)))
+				dbugprintf(", busy %ld", service->getBusyState());
+		dbugprintf( ">\n");
+    }
+    iter->release();
+}
+
 void IOPrintMemory( void )
 {
 
@@ -151,7 +206,7 @@ bool IOKitDiagnostics::serialize(OSSerialize *s) const
     updateOffset( dict, debug_container_malloc_size, "Container allocation" );
     updateOffset( dict, debug_iomalloc_size, "IOMalloc allocation" );
 
-    dict->setObject( "Classes", OSMetaClass::getClassDictionary() );
+    OSMetaClass::serializeClassDictionary(dict);
 
     ok = dict->serialize( s );
 

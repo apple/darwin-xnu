@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2002 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -1153,7 +1153,7 @@ devfs_symlink(struct vop_symlink_args *ap)
                 char *a_target;
         } */
 {
-    	struct componentname * cnp = ap->a_cnp;
+	struct componentname * cnp = ap->a_cnp;
 	struct vnode *vp = NULL;
 	int error = 0;
 	devnode_t * dir_p;
@@ -1186,9 +1186,13 @@ devfs_symlink(struct vop_symlink_args *ap)
 	    goto failure;
 	vp = *vpp;
 	vput(vp);
- failure:
-	if ((cnp->cn_flags & SAVESTART) == 0)
-	    FREE_ZONE(cnp->cn_pnbuf, cnp->cn_pnlen, M_NAMEI);
+failure:
+	if ((cnp->cn_flags & SAVESTART) == 0) {
+		char *tmp = cnp->cn_pnbuf;
+		cnp->cn_pnbuf = NULL;
+		cnp->cn_flags &= ~HASBUF;
+	    FREE_ZONE(tmp, cnp->cn_pnlen, M_NAMEI);
+	}
 	vput(ap->a_dvp);
 	return error;
 }
@@ -1239,13 +1243,17 @@ devfs_mknod(ap)
 	dev_p->dn_uid = cnp->cn_cred->cr_uid;
 	dev_p->dn_gid = dir_p->dn_gid;
 	dev_p->dn_mode = vap->va_mode;
- failure:
+failure:
 	if (*vpp) {
 	    vput(*vpp);
 	    *vpp = 0;
 	}
-	if ((cnp->cn_flags & SAVESTART) == 0)
-	    FREE_ZONE(cnp->cn_pnbuf, cnp->cn_pnlen, M_NAMEI);
+	if ((cnp->cn_flags & SAVESTART) == 0) {
+		char *tmp = cnp->cn_pnbuf;
+		cnp->cn_pnbuf = NULL;
+		cnp->cn_flags &= ~HASBUF;
+	    FREE_ZONE(tmp, cnp->cn_pnlen, M_NAMEI);
+	}
 	vput(dvp);
 	return (error);
 }
@@ -1383,20 +1391,6 @@ devfs_readlink(struct vop_readlink_args *ap)
 }
 
 static int
-devfs_abortop(struct vop_abortop_args *ap)
-        /*struct vop_abortop_args {
-                struct vnode *a_dvp;
-                struct componentname *a_cnp;
-        } */
-{
-	if ((ap->a_cnp->cn_flags & (HASBUF | SAVESTART)) == HASBUF) {
-		FREE_ZONE(ap->a_cnp->cn_pnbuf, ap->a_cnp->cn_pnlen, M_NAMEI);
-	}
-	return 0;
-}
-
-
-static int
 devfs_reclaim(struct vop_reclaim_args *ap)
         /*struct vop_reclaim_args {
 		struct vnode *a_vp;
@@ -1519,7 +1513,7 @@ static struct vnodeopv_entry_desc devfs_vnodeop_entries[] = {
 	{ &vop_symlink_desc, (VOPFUNC)devfs_symlink },		/* symlink */
 	{ &vop_readdir_desc, (VOPFUNC)devfs_readdir },		/* readdir */
 	{ &vop_readlink_desc, (VOPFUNC)devfs_readlink },	/* readlink */
-	{ &vop_abortop_desc, (VOPFUNC)devfs_abortop },		/* abortop */
+	{ &vop_abortop_desc, (VOPFUNC)nop_abortop },		/* abortop */
 	{ &vop_inactive_desc, (VOPFUNC)devfs_inactive },	/* inactive */
 	{ &vop_reclaim_desc, (VOPFUNC)devfs_reclaim },		/* reclaim */
 	{ &vop_lock_desc, (VOPFUNC)nop_lock },			/* lock */

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2002 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2003 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -63,6 +63,7 @@
  *	@(#)kern_fork.c	8.8 (Berkeley) 2/14/95
  */
 
+#include <kern/assert.h>
 #include <sys/param.h>
 #include <sys/systm.h>
 #include <sys/filedesc.h>
@@ -74,6 +75,7 @@
 #include <sys/vnode.h>
 #include <sys/file.h>
 #include <sys/acct.h>
+#include <sys/kern_audit.h>
 #if KTRACE
 #include <sys/ktrace.h>
 #endif
@@ -146,6 +148,7 @@ vfork(p, uap, retval)
 	ut = (struct uthread *)get_bsdthread_info(cur_act);
 	if (ut->uu_flag & P_VFORK) {
 		printf("vfork called recursively by %s\n", p->p_comm);
+		(void)chgproccnt(uid, -1);
 		return (EINVAL);
 	}
 	p->p_flag  |= P_VFORK;
@@ -204,7 +207,6 @@ vfork_return(th_act, p, p2, retval)
 {
 	long flags;
 	register uid_t uid;
-	thread_t newth, self = current_thread();
 	thread_act_t cur_act = (thread_act_t)current_act();
 	int s, count;
 	task_t t;
@@ -245,12 +247,13 @@ procdup(
 	thread_act_t		thread;
 	task_t			task;
  	kern_return_t	result;
+ 	pmap_t			pmap;
 	extern task_t kernel_task;
 
 	if (parent->task == kernel_task)
-		result = task_create_local(TASK_NULL, FALSE, FALSE, &task);
+		result = task_create_internal(TASK_NULL, FALSE, &task);
 	else
-		result = task_create_local(parent->task, TRUE, FALSE, &task);
+		result = task_create_internal(parent->task, TRUE, &task);
 	if (result != KERN_SUCCESS)
 	    printf("fork/procdup: task_create failed. Code: 0x%x\n", result);
 	child->task = task;
@@ -258,6 +261,7 @@ procdup(
 	set_bsdtask_info(task, child);
 	if (child->p_nice != 0)
 		resetpriority(child);
+		
 	result = thread_create(task, &thread);
 	if (result != KERN_SUCCESS)
 	    printf("fork/procdup: thread_create failed. Code: 0x%x\n", result);
@@ -332,6 +336,8 @@ fork1(p1, flags, retval)
                 task_deallocate(t);
         }
         act_deallocate(newth);
+
+	KNOTE(&p1->p_klist, NOTE_FORK | p2->p_pid);
 
 	while (p2->p_flag & P_PPWAIT)
 		tsleep(p1, PWAIT, "ppwait", 0);
@@ -465,17 +471,25 @@ again:
 	p2->vm_shm = (void *)NULL; /* Make sure it is zero */
 
 	/*
+	 * Copy the audit info.
+	 */
+	audit_proc_fork(p1, p2);
+
+	/*
 	 * Duplicate sub-structures as needed.
 	 * Increase reference counts on shared objects.
 	 * The p_stats and p_sigacts substructs are set in vm_fork.
 	 */
 	p2->p_flag = P_INMEM;
+	p2->p_flag |= (p1->p_flag & P_CLASSIC); // copy from parent
+	p2->p_flag |= (p1->p_flag & P_AFFINITY); // copy from parent
 	if (p1->p_flag & P_PROFIL)
 		startprofclock(p2);
 	bcopy(p1->p_cred, p2->p_cred, sizeof(*p2->p_cred));
 	p2->p_cred->p_refcnt = 1;
 	crhold(p1->p_ucred);
 	lockinit(&p2->p_cred->pc_lock, PLOCK, "proc cred", 0, 0);
+	klist_init(&p2->p_klist);
 
 	/* bump references to the text vnode */
 	p2->p_textvp = p1->p_textvp;
@@ -515,6 +529,8 @@ again:
 	if (p1->p_session->s_ttyvp != NULL && p1->p_flag & P_CONTROLT)
 		p2->p_flag |= P_CONTROLT;
 
+	p2->p_argslen = p1->p_argslen;
+	p2->p_argc = p1->p_argc;
 	p2->p_xstat = 0;
 	p2->p_ru = NULL;
 
@@ -527,10 +543,13 @@ again:
 	p2->sigwait_thread = NULL;
 	p2->exit_thread = NULL;
 	p2->user_stack = p1->user_stack;
-	p2->p_xxxsigpending = 0;
 	p2->p_vforkcnt = 0;
 	p2->p_vforkact = 0;
 	TAILQ_INIT(&p2->p_uthlist);
+	TAILQ_INIT(&p2->aio_activeq);
+	TAILQ_INIT(&p2->aio_doneq);
+	p2->aio_active_count = 0;
+	p2->aio_done_count = 0;
 
 #if KTRACE
 	/*
@@ -581,7 +600,7 @@ uthread_alloc(task_t task, thread_act_t thr_act )
 
 	if (task != kernel_task) {
 		uth = (struct uthread *)ut;
-		p = get_bsdtask_info(task);
+		p = (struct proc *) get_bsdtask_info(task);
 
 		funnel_state = thread_funnel_set(kernel_flock, TRUE);
 		uth_parent = (struct uthread *)get_bsdthread_info(current_act());
@@ -612,6 +631,15 @@ uthread_free(task_t task, void *uthread, void * bsd_info)
 	extern task_t kernel_task;
 	int size;
 	boolean_t funnel_state;
+	struct nlminfo *nlmp;
+
+	/*
+	 * Per-thread audit state should never last beyond system
+	 * call return.  Since we don't audit the thread creation/
+	 * removal, the thread state pointer should never be
+	 * non-NULL when we get here.
+	 */
+	assert(uth->uu_ar == NULL);
 
 	sel = &uth->uu_state.ss_select;
 	/* cleanup the select bit space */
@@ -626,6 +654,11 @@ uthread_free(task_t task, void *uthread, void * bsd_info)
 		sel->allocsize = 0;
 		uth->uu_wqsub = 0;
 		sel->wql = 0;
+	}
+
+	if ((nlmp = uth->uu_nlminfo)) {
+		uth->uu_nlminfo = 0;
+		FREE(nlmp, M_LOCKF);
 	}
 
 	if ((task != kernel_task) && p) {

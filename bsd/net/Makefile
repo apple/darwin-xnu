@@ -23,14 +23,14 @@ DATAFILES= \
 	bpf.h bpf_compat.h bpfdesc.h dlil.h dlil_pvt.h \
 	etherdefs.h ethernet.h if.h if_arp.h \
 	if_dl.h if_llc.h if_media.h if_mib.h \
-	if_ppp.h if_slvar.h \
+	if_slvar.h \
 	if_types.h if_var.h iso88025.h \
 	kext_net.h ndrv.h net_osdep.h netisr.h pfkeyv2.h \
-	ppp_defs.h radix.h raw_cb.h route.h slcompress.h slip.h
+	radix.h raw_cb.h route.h slcompress.h slip.h
 
 PRIVATE_DATAFILES = \
 	ndrv_var.h zlib.h if_pppvar.h if_sppp.h ppp_comp.h if_atm.h \
-	if_tun.h if_vlan_var.h
+	if_tun.h if_vlan_var.h if_ppp.h firewire.h ppp_defs.h
 
 INSTALL_MI_LIST	= ${DATAFILES}
 

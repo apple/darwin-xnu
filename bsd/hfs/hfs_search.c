@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1997-2002 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 1997-2003 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -102,7 +102,7 @@ static int CheckCriteria(	ExtendedVCB *vcb,
 							searchinfospec_t *searchInfo2,
 							Boolean lookForDup );
 
-static int CheckAccess(ExtendedVCB *vcb, CatalogKey *key, struct proc *p);
+static int CheckAccess(ExtendedVCB *vcb, u_long searchBits, CatalogKey *key, struct proc *p);
 
 static int InsertMatch(struct vnode *vp, struct uio *a_uio, CatalogRecord *rec,
 			CatalogKey *key, struct attrlist *returnAttrList,
@@ -161,6 +161,7 @@ vop_searchfs {
 };
 */
 
+__private_extern__
 int
 hfs_search( ap )
 	struct vop_searchfs_args *ap; /*
@@ -198,6 +199,7 @@ hfs_search( ap )
 	BTScanState myBTScanState;
 	void *user_start = NULL;
 	int   user_len;
+	int32_t searchTime;
 
 	/* XXX Parameter check a_searchattrs? */
 
@@ -206,10 +208,32 @@ hfs_search( ap )
 	if (ap->a_options & ~SRCHFS_VALIDOPTIONSMASK)
 		return (EINVAL);
 
+	/* SRCHFS_SKIPLINKS requires root access.
+	 * This option cannot be used with either
+	 * the ATTR_CMN_NAME or ATTR_CMN_PAROBJID
+	 * attributes.
+	 */
+	if (ap->a_options & SRCHFS_SKIPLINKS) {
+		attrgroup_t attrs;
+
+		attrs = ap->a_searchattrs->commonattr | ap->a_returnattrs->commonattr;
+		if (attrs & (ATTR_CMN_NAME | ATTR_CMN_PAROBJID))
+			return (EINVAL);
+		if ((err = suser(p->p_ucred, &p->p_acflag)))
+			return (err);
+	}
+
 	if (ap->a_uio->uio_resid <= 0)
 		return (EINVAL);
 
 	isHFSPlus = (vcb->vcbSigWord == kHFSPlusSigWord);
+	
+	searchTime = kMaxMicroSecsInKernel;
+	if (ap->a_timelimit->tv_sec == 0 &&
+	    ap->a_timelimit->tv_usec > 0 &&
+	    ap->a_timelimit->tv_usec < kMaxMicroSecsInKernel) {
+		searchTime = ap->a_timelimit->tv_usec;
+	}
 
 	/* UnPack the search boundries, searchInfo1, searchInfo2 */
 	err = UnpackSearchAttributeBlock(ap->a_vp, ap->a_searchattrs,
@@ -256,6 +280,10 @@ hfs_search( ap )
 		/* Starting a new search. */
 		/* Make sure the on-disk Catalog file is current */
 		(void) VOP_FSYNC(vcb->catalogRefNum, NOCRED, MNT_WAIT, p);
+		if (VTOHFS(ap->a_vp)->jnl) {
+		    journal_flush(VTOHFS(ap->a_vp)->jnl);
+		}
+
 		ap->a_options &= ~SRCHFS_START;
 		bzero( (caddr_t)myCatPositionPtr, sizeof( *myCatPositionPtr ) );
 		err = BTScanInitialize(catalogFCB, 0, 0, 0, kCatSearchBufferSize, &myBTScanState);
@@ -289,7 +317,7 @@ hfs_search( ap )
 			if ( result == E_NONE ) {
 				if (CheckCriteria(vcb, ap->a_options, ap->a_searchattrs, &rec,
 								  keyp, &searchInfo1, &searchInfo2, false) &&
-					CheckAccess(vcb, keyp, ap->a_uio->uio_procp)) {
+					CheckAccess(vcb, ap->a_options, keyp, ap->a_uio->uio_procp)) {
 		
 					result = InsertMatch(ap->a_vp, ap->a_uio, &rec, 
 									  keyp, ap->a_returnattrs,
@@ -340,12 +368,12 @@ hfs_search( ap )
 			break;
 
 		/* Resolve any hardlinks */
-		if (isHFSPlus)
+		if (isHFSPlus && (ap->a_options & SRCHFS_SKIPLINKS) == 0)
 			ResolveHardlink(vcb, (HFSPlusCatalogFile *) myCurrentDataPtr);
 
 		if (CheckCriteria( vcb, ap->a_options, ap->a_searchattrs, myCurrentDataPtr,
 				myCurrentKeyPtr, &searchInfo1, &searchInfo2, true )
-		&&  CheckAccess(vcb, myCurrentKeyPtr, ap->a_uio->uio_procp)) {
+		&&  CheckAccess(vcb, ap->a_options, myCurrentKeyPtr, ap->a_uio->uio_procp)) {
 			err = InsertMatch(ap->a_vp, ap->a_uio, myCurrentDataPtr, 
 					myCurrentKeyPtr, ap->a_returnattrs,
 					attributesBuffer, variableBuffer,
@@ -373,7 +401,7 @@ hfs_search( ap )
 		timersub(&myCurrentTime, &myBTScanState.startTime, &myElapsedTime);
 		/* Note: assumes kMaxMicroSecsInKernel is less than 1,000,000 */
 		if (myElapsedTime.tv_sec > 0
-		||  myElapsedTime.tv_usec >= kMaxMicroSecsInKernel) {
+		||  myElapsedTime.tv_usec >= searchTime) {
 			timerExpired = true;
 		}
 	}
@@ -418,7 +446,12 @@ ResolveHardlink(ExtendedVCB *vcb, HFSPlusCatalogFile *recp)
 	&&  (SWAP_BE32(recp->userInfo.fdCreator) == kHFSPlusCreator)
 	&&  ((to_bsd_time(recp->createDate) == vcb->vcbCrDate) ||
 	     (to_bsd_time(recp->createDate) == VCBTOHFS(vcb)->hfs_metadata_createdate))) {
+		cnid_t saved_cnid;
+
+		/* Export link's cnid (a unique value) instead of inode's cnid */
+		saved_cnid = recp->fileID;
 		(void) resolvelink(VCBTOHFS(vcb), recp->bsdInfo.special.iNodeNum, recp);
+		recp->fileID = saved_cnid;
 	}
 }
 
@@ -484,12 +517,130 @@ ComparePartialPascalName ( register ConstStr31Param str, register ConstStr31Para
 }
 
 
+
+static char *extension_table=NULL;
+static int   nexts;
+static int   max_ext_width;
+
+static int
+extension_cmp(void *a, void *b)
+{
+    return (strlen((char *)a) - strlen((char *)b));
+}
+
+
+//
+// This is the api LaunchServices uses to inform the kernel
+// the list of package extensions to ignore.
+//
+// Internally we keep the list sorted by the length of the
+// the extension (from longest to shortest).  We sort the
+// list of extensions so that we can speed up our searches
+// when comparing file names -- we only compare extensions
+// that could possibly fit into the file name, not all of
+// them (i.e. a short 8 character name can't have an 8
+// character extension).
+//
+__private_extern__ int
+set_package_extensions_table(void *data, int nentries, int maxwidth)
+{
+    char *new_exts, *ptr;
+    int error, i, len;
+    
+    if (nentries <= 0 || nentries > 1024 || maxwidth <= 0 || maxwidth > 255) {
+	return EINVAL;
+    }
+
+    MALLOC(new_exts, char *, nentries * maxwidth, M_TEMP, M_WAITOK);
+    
+    error = copyin(data, new_exts, nentries * maxwidth);
+    if (error) {
+	FREE(new_exts, M_TEMP);
+	return error;
+    }
+
+    if (extension_table) {
+	FREE(extension_table, M_TEMP);
+    }
+    extension_table = new_exts;
+    nexts           = nentries;
+    max_ext_width   = maxwidth;
+
+    qsort(extension_table, nexts, maxwidth, extension_cmp);
+
+    return 0;
+}
+
+
+static int
+is_package_name(char *name, int len)
+{
+    int i, extlen;
+    char *ptr, *name_ext;
+    
+    if (len <= 3) {
+	return 0;
+    }
+
+    name_ext = NULL;
+    for(ptr=name; *ptr != '\0'; ptr++) {
+	if (*ptr == '.') {
+	    name_ext = ptr;
+	}
+    }
+
+    // if there is no "." extension, it can't match
+    if (name_ext == NULL) {
+	return 0;
+    }
+
+    // advance over the "."
+    name_ext++;
+
+    // now iterate over all the extensions to see if any match
+    ptr = &extension_table[0];
+    for(i=0; i < nexts; i++, ptr+=max_ext_width) {
+	extlen = strlen(ptr);
+	if (strncmp(name_ext, ptr, extlen) == 0 && name_ext[extlen] == '\0') {
+	    // aha, a match!
+	    return 1;
+	}
+    }
+
+    // if we get here, no extension matched
+    return 0;
+}
+
+//
+// Determine if a name is "inappropriate" where the definition
+// of "inappropriate" is up to higher level execs.  Currently
+// that's limited to /System.
+//
+static int
+is_inappropriate_name(char *name, int len)
+{
+    char *bad_names[] = { "System" };
+    int   bad_len[]   = {        6 };
+    int  i;
+    
+    for(i=0; i < sizeof(bad_names) / sizeof(bad_names[0]); i++) {
+	if (len == bad_len[i] && strcmp(name, bad_names[i]) == 0) {
+	    return 1;
+	}
+    }
+
+    // if we get here, no name matched
+    return 0;
+}
+
+
+
 /*
  * Check to see if caller has access rights to this item
  */
 
 static int
-CheckAccess(ExtendedVCB *theVCBPtr, CatalogKey *theKeyPtr, struct proc *theProcPtr)
+CheckAccess(ExtendedVCB *theVCBPtr, u_long searchBits, CatalogKey *theKeyPtr, struct proc *theProcPtr)
 {
 	Boolean			isHFSPlus;
 	int			myErr;
@@ -499,6 +650,8 @@ CheckAccess(ExtendedVCB *theVCBPtr, CatalogKey *theKeyPtr, struct proc *theProcP
 	hfsmount_t *		my_hfsmountPtr;
 	struct cat_desc 	my_cat_desc;
 	struct cat_attr 	my_cat_attr;
+	struct FndrDirInfo     *finder_info;
+
 	
 	myResult = 0;	/* default to "no access" */
 	my_cat_desc.cd_nameptr = NULL;
@@ -527,10 +680,34 @@ CheckAccess(ExtendedVCB *theVCBPtr, CatalogKey *theKeyPtr, struct proc *theProcP
 		if ( myErr )
 			goto ExitThisRoutine;	/* no access */
 
+		if (searchBits & SRCHFS_SKIPPACKAGES) {
+		    if (is_package_name(my_cat_desc.cd_nameptr, my_cat_desc.cd_namelen)) {
+			myResult = 0;
+			goto ExitThisRoutine;
+		    }
+		}
+
+		if (searchBits & SRCHFS_SKIPINAPPROPRIATE) {
+		    if (   my_cat_desc.cd_parentcnid == kRootDirID
+			&& is_inappropriate_name(my_cat_desc.cd_nameptr, my_cat_desc.cd_namelen)) {
+			myResult = 0;
+			goto ExitThisRoutine;
+		    }
+		}
+
+		finder_info = (struct FndrDirInfo *)&my_cat_attr.ca_finderinfo[0];
+		if (   (searchBits & SRCHFS_SKIPINVISIBLE)
+		    && (SWAP_BE16(finder_info->frFlags) & kIsInvisible)) {
+		    
+		    myResult = 0;
+		    goto ExitThisRoutine;
+		}
+
 		myNodeID = my_cat_desc.cd_parentcnid;	/* move up the hierarchy */
 		myPerms = DerivePermissionSummary(my_cat_attr.ca_uid, my_cat_attr.ca_gid, 
 						my_cat_attr.ca_mode, my_hfsmountPtr->hfs_mp,
 						theProcPtr->p_ucred, theProcPtr  );
+
 		cat_releasedesc( &my_cat_desc );
 		
 		if ( (myPerms & X_OK) == 0 )
@@ -574,7 +751,29 @@ CheckCriteria(	ExtendedVCB *vcb,
 		break;
 			
 	case kHFSFileRecord:
+		if ( (searchBits & SRCHFS_MATCHFILES) == 0 ) {	/* If we are NOT searching files */
+			matched = false;
+			goto TestDone;
+		}
+		break;
+
 	case kHFSPlusFileRecord:
+		/* Check if hardlink links should be skipped. */
+		if (searchBits & SRCHFS_SKIPLINKS) {
+			cnid_t parid = key->hfsPlus.parentID;
+			HFSPlusCatalogFile *filep = (HFSPlusCatalogFile *)rec;
+
+			if ((SWAP_BE32(filep->userInfo.fdType) == kHardLinkFileType) &&
+			    (SWAP_BE32(filep->userInfo.fdCreator) == kHFSPlusCreator)) {
+				return (false);	/* skip over link records */
+			} else if ((parid == VCBTOHFS(vcb)->hfs_privdir_desc.cd_cnid) &&
+			           (filep->bsdInfo.special.linkCount == 0)) {
+				return (false);	/* skip over unlinked files */
+			}
+		} else if (key->hfsPlus.parentID == VCBTOHFS(vcb)->hfs_privdir_desc.cd_cnid) {
+			return (false);	/* skip over private files */
+		}
+
 		if ( (searchBits & SRCHFS_MATCHFILES) == 0 ) {	/* If we are NOT searching files */
 			matched = false;
 			goto TestDone;
@@ -636,6 +835,42 @@ CheckCriteria(	ExtendedVCB *vcb,
 	/* Convert catalog record into cat_attr format. */
 	cat_convertattr(VCBTOHFS(vcb), rec, &c_attr, &datafork, &rsrcfork);
 	
+	if (searchBits & SRCHFS_SKIPINVISIBLE) {
+	    int flags;
+	    
+	    switch (rec->recordType) {
+		case kHFSFolderRecord:
+		case kHFSPlusFolderRecord: {
+		    struct FndrDirInfo *finder_info;
+		    
+		    finder_info = (struct FndrDirInfo *)&c_attr.ca_finderinfo[0];
+		    flags = SWAP_BE16(finder_info->frFlags);
+		    break;
+		}
+			
+		case kHFSFileRecord:
+		case kHFSPlusFileRecord: {
+		    struct FndrFileInfo *finder_info;
+		    
+		    finder_info = (struct FndrFileInfo *)&c_attr.ca_finderinfo[0];
+		    flags = SWAP_BE16(finder_info->fdFlags);
+		    break;
+		}
+
+		default: {
+		    flags = kIsInvisible;
+		    break;
+		}
+	    }
+		    
+	    if (flags & kIsInvisible) {
+		matched = false;
+		goto TestDone;
+	    }
+	}
+	
+		    
+
 	/* Now that we have a record worth searching, see if it matches the search attributes */
 	if (rec->recordType == kHFSFileRecord ||
 	    rec->recordType == kHFSPlusFileRecord) {
@@ -862,7 +1097,7 @@ InsertMatch( struct vnode *root_vp, struct uio *a_uio, CatalogRecord *rec,
 	u_long packedBufferSize;
 	ExtendedVCB *vcb = VTOVCB(root_vp);
 	Boolean isHFSPlus = vcb->vcbSigWord == kHFSPlusSigWord;
-	u_long privateDir = VTOHFS(root_vp)->hfs_private_metadata_dir;
+	u_long privateDir = VTOHFS(root_vp)->hfs_privdir_desc.cd_cnid;
 	struct attrblock attrblk;
 	struct cat_desc c_desc = {0};
 	struct cat_attr c_attr = {0};
@@ -899,19 +1134,13 @@ InsertMatch( struct vnode *root_vp, struct uio *a_uio, CatalogRecord *rec,
 			c_desc.cd_parentcnid = key->hfs.parentID;
 	}
 
-	/* hide open files that have been deleted */
-	if ((privateDir != 0) && (c_desc.cd_parentcnid == privateDir)) {
-		err = 0;
-		goto exit;
-	}
-
 	attrblk.ab_attrlist = returnAttrList;
 	attrblk.ab_attrbufpp = &rovingAttributesBuffer;
 	attrblk.ab_varbufpp = &rovingVariableBuffer;
 	attrblk.ab_flags = 0;
 	attrblk.ab_blocksize = 0;
 
-	hfs_packattrblk(&attrblk, VTOHFS(root_vp), NULL, &c_desc, &c_attr, &datafork, &rsrcfork);
+	hfs_packattrblk(&attrblk, VTOHFS(root_vp), NULL, &c_desc, &c_attr, &datafork, &rsrcfork, a_uio->uio_procp);
 
 	packedBufferSize = (char*)rovingVariableBuffer - (char*)attributesBuffer;
 
@@ -1014,12 +1243,8 @@ UnpackSearchAttributeBlock( struct vnode *vp, struct attrlist	*alist, searchinfo
 			++((struct timespec *)attributeBuffer);
 		}
 		if ( a & ATTR_CMN_FNDRINFO ) {
-		   bcopy( attributeBuffer, searchInfo->finderInfo, sizeof(u_long) * 8 );
-		   (u_long *)attributeBuffer += 8;
-		}
-		if ( a & ATTR_CMN_BKUPTIME ) {
-			searchInfo->lastBackupDate = *((struct timespec *)attributeBuffer);
-			++((struct timespec *)attributeBuffer);
+			bcopy( attributeBuffer, searchInfo->finderInfo, sizeof(u_long) * 8 );
+			(u_long *)attributeBuffer += 8;
 		}
 		if ( a & ATTR_CMN_OWNERID ) {
 			searchInfo->uid = *((uid_t *)attributeBuffer);

@@ -66,6 +66,7 @@
 #include <i386/mp_desc.h>
 #include <i386/lock.h>
 #include <i386/misc_protos.h>
+#include <i386/mp.h>
 
 #include <kern/misc_protos.h>
 
@@ -131,6 +132,7 @@ struct i386_tss		*mp_dbtss[NCPUS] = { 0 };
  */
 struct fake_descriptor	*mp_gdt[NCPUS] = { 0 };
 struct fake_descriptor	*mp_idt[NCPUS] = { 0 };
+struct fake_descriptor	*mp_ldt[NCPUS] = { 0 };
 
 /*
  * Allocate and initialize the per-processor descriptor tables.
@@ -173,6 +175,7 @@ mp_desc_init(
 #endif	/* MACH_KDB */
 	    mp_gdt[mycpu] = gdt;
 	    mp_idt[mycpu] = idt;
+	    mp_ldt[mycpu] = ldt;
 	    return 0;
 	}
 	else {
@@ -180,6 +183,7 @@ mp_desc_init(
 	    mp_ktss[mycpu] = &mpt->ktss;
 	    mp_gdt[mycpu] = mpt->gdt;
 	    mp_idt[mycpu] = mpt->idt;
+	    mp_ldt[mycpu] = mpt->ldt;
 
 	    /*
 	     * Copy the tables
@@ -195,8 +199,13 @@ mp_desc_init(
 		  sizeof(ldt));
 	    bzero((char *)&mpt->ktss,
 		  sizeof(struct i386_tss));
+#if 0
 	    bzero((char *)&cpu_data[mycpu],
 		  sizeof(cpu_data_t));
+#endif
+	    /* I am myself */
+	    cpu_data[mycpu].cpu_number = mycpu;
+
 #if	MACH_KDB
 	    mp_dbtss[mycpu] = &mpt->dbtss;
 	    bcopy((char *)&dbtss,
@@ -255,12 +264,9 @@ interrupt_stack_alloc(void)
 	struct mp_desc_table 	*mpt;
 
 	/*
-	 * Count the number of CPUs.
+	 * Number of CPUs possible.
 	 */
-	cpu_count = 0;
-	for (i = 0; i < NCPUS; i++)
-	    if (machine_slot[i].is_cpu)
-		cpu_count++;
+	cpu_count = wncpu;
 
 	/*
 	 * Allocate an interrupt stack for each CPU except for
@@ -273,12 +279,12 @@ interrupt_stack_alloc(void)
 	/*
 	 * Set up pointers to the top of the interrupt stack.
 	 */
-	for (i = 0; i < NCPUS; i++) {
+	for (i = 0; i < cpu_count; i++) {
 	    if (i == master_cpu) {
 		interrupt_stack[i] = (vm_offset_t) intstack;
 		int_stack_top[i]   = (vm_offset_t) eintstack;
 	    }
-	    else if (machine_slot[i].is_cpu) {
+	    else {
 		interrupt_stack[i] = stack_start;
 		int_stack_top[i]   = stack_start + INTSTACK_SIZE;
 
@@ -294,7 +300,7 @@ interrupt_stack_alloc(void)
 	mpt = (struct mp_desc_table *) phystokv(avail_start);
 	avail_start = round_page((vm_offset_t)avail_start +
 				 sizeof(struct mp_desc_table)*(cpu_count-1));
-	for (i = 0; i < NCPUS; i++)
+	for (i = 0; i < cpu_count; i++)
 	    if (i != master_cpu)
 		mp_desc_table[i] = mpt++;
 

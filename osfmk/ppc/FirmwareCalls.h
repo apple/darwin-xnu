@@ -63,9 +63,8 @@
 			fwCallEnt(dbgRegsCall, dbgRegsLL)				/* Dumps all registers */
 			fwCallEnt(CreateFakeDECCall, CreateFakeDECLL)	/* Make a fake decrementer interruption */
 			fwCallEnt(CreateShutdownCTXCall, CreateShutdownCTXLL)	/* create a shutdown context */
-#if PERF_HIST
-			fwCallEnt(PerfCtlCall, PerfCtlLL)				/* Control performance monitor */
-#endif
+			fwCallEnt(NullCall, NullLL)						/* Null Firmware call */
+			fwCallEnt(iNullCall, iNullLL)					/* Instrumented null Firmware call */
 
 #endif	/* _FIRMWARECALLS_H_ */
 

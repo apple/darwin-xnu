@@ -396,7 +396,7 @@ bool IORegistryPlane::serialize(OSSerialize *s) const
 
 enum { kIORegCapacityIncrement = 4 };
 
-bool IORegistryEntry::init( OSDictionary * dict = 0 )
+bool IORegistryEntry::init( OSDictionary * dict )
 {
     OSString *	prop;
 
@@ -523,19 +523,6 @@ void IORegistryEntry::setPropertyTable( OSDictionary * dict )
 
 /* Wrappers to synchronize property table */
 
-#define wrap1(func, type, constant)					\
-OSObject *								\
-IORegistryEntry::func ## Property( type * aKey) constant		\
-{									\
-    OSObject *	obj;							\
-									\
-    PLOCK;								\
-    obj = getPropertyTable()->func ## Object( aKey );			\
-    PUNLOCK;								\
-									\
-    return( obj );							\
-}
-
 #define wrap2(type, constant)						\
 OSObject *								\
 IORegistryEntry::copyProperty( type * aKey) constant			\
@@ -549,15 +536,6 @@ IORegistryEntry::copyProperty( type * aKey) constant			\
     PUNLOCK;								\
 									\
     return( obj );							\
-}
-
-#define wrap3(func,type,constant)					\
-void									\
-IORegistryEntry::func ## Property( type * aKey) constant		\
-{									\
-    PLOCK;								\
-    getPropertyTable()->func ## Object( aKey );				\
-    PUNLOCK;								\
 }
 
 #define wrap4(type,constant) \
@@ -638,17 +616,9 @@ IOReturn IORegistryEntry::setProperties( OSObject * properties )
     return( kIOReturnUnsupported );
 }
 
-wrap1(get, const OSSymbol, const)  // getProperty() definition
-wrap1(get, const OSString, const)  // getProperty() definition
-wrap1(get, const char, const)      // getProperty() definition
-
 wrap2(const OSSymbol, const)       // copyProperty() definition
 wrap2(const OSString, const)       // copyProperty() definition
 wrap2(const char, const)      	   // copyProperty() definition
-
-wrap3(remove, const OSSymbol,)     // removeProperty() definition
-wrap3(remove, const OSString,)     // removeProperty() definition
-wrap3(remove, const char,)         // removeProperty() definition
 
 wrap4(const OSSymbol, const)       // getProperty() w/plane definition
 wrap4(const OSString, const)       // getProperty() w/plane definition
@@ -658,6 +628,62 @@ wrap5(const OSSymbol, const)       // copyProperty() w/plane definition
 wrap5(const OSString, const)       // copyProperty() w/plane definition
 wrap5(const char, const)           // copyProperty() w/plane definition
 
+
+OSObject *
+IORegistryEntry::getProperty( const OSSymbol * aKey) const
+{
+    OSObject * obj;
+
+    PLOCK;
+    obj = getPropertyTable()->getObject( aKey );
+    PUNLOCK;
+
+    return( obj );
+}
+
+OSObject *
+IORegistryEntry::getProperty( const OSString * aKey) const
+{
+    const OSSymbol * tmpKey = OSSymbol::withString( aKey );
+    OSObject * obj = getProperty( tmpKey );
+
+    tmpKey->release();
+    return( obj );
+}
+
+OSObject *
+IORegistryEntry::getProperty( const char * aKey) const
+{
+    const OSSymbol * tmpKey = OSSymbol::withCString( aKey );
+    OSObject * obj = getProperty( tmpKey );
+
+    tmpKey->release();
+    return( obj );
+}
+
+void
+IORegistryEntry::removeProperty( const OSSymbol * aKey)
+{
+    PLOCK;
+    getPropertyTable()->removeObject( aKey );
+    PUNLOCK;
+}
+
+void
+IORegistryEntry::removeProperty( const OSString * aKey)
+{
+    const OSSymbol * tmpKey = OSSymbol::withString( aKey );
+    removeProperty( tmpKey );
+    tmpKey->release();
+}
+
+void
+IORegistryEntry::removeProperty( const char * aKey)
+{
+    const OSSymbol * tmpKey = OSSymbol::withCString( aKey );
+    removeProperty( tmpKey );
+    tmpKey->release();
+}
 
 bool
 IORegistryEntry::setProperty( const OSSymbol * aKey, OSObject * anObject)
@@ -673,22 +699,20 @@ IORegistryEntry::setProperty( const OSSymbol * aKey, OSObject * anObject)
 bool
 IORegistryEntry::setProperty( const OSString * aKey, OSObject * anObject)
 {
-    bool ret = false;
-    PLOCK;
-    ret = getPropertyTable()->setObject( aKey, anObject );
-    PUNLOCK;
+    const OSSymbol * tmpKey = OSSymbol::withString( aKey );
+    bool ret = setProperty( tmpKey, anObject );
 
+    tmpKey->release();
     return ret;
 }
 
 bool
 IORegistryEntry::setProperty( const char * aKey,  OSObject * anObject)
 {
-    bool ret = false;
-    PLOCK;
-    ret = getPropertyTable()->setObject( aKey, anObject );
-    PUNLOCK;
-    
+    const OSSymbol * tmpKey = OSSymbol::withCString( aKey );
+    bool ret = setProperty( tmpKey, anObject );
+
+    tmpKey->release();
     return ret;
 }
 
@@ -699,9 +723,10 @@ IORegistryEntry::setProperty(const char * aKey, const char * aString)
     OSSymbol * aSymbol = (OSSymbol *) OSSymbol::withCString( aString );
 
     if( aSymbol) {
-        PLOCK;
-        ret = getPropertyTable()->setObject( aKey, aSymbol );
-        PUNLOCK;
+        const OSSymbol * tmpKey = OSSymbol::withCString( aKey );
+        ret = setProperty( tmpKey, aSymbol );
+
+        tmpKey->release();
         aSymbol->release();
     }
     return( ret );
@@ -714,9 +739,10 @@ IORegistryEntry::setProperty(const char * aKey, bool aBoolean)
     OSBoolean * aBooleanObj = OSBoolean::withBoolean( aBoolean );
 
     if( aBooleanObj) {
-        PLOCK;
-        ret = getPropertyTable()->setObject( aKey, aBooleanObj );
-        PUNLOCK;
+        const OSSymbol * tmpKey = OSSymbol::withCString( aKey );
+        ret = setProperty( tmpKey, aBooleanObj );
+
+        tmpKey->release();
         aBooleanObj->release();
     }
     return( ret );
@@ -731,9 +757,10 @@ IORegistryEntry::setProperty( const char *       aKey,
     OSNumber * anOffset = OSNumber::withNumber( aValue, aNumberOfBits );
 
     if( anOffset) {
-        PLOCK;
-        ret = getPropertyTable()->setObject( aKey, anOffset );
-        PUNLOCK;
+        const OSSymbol * tmpKey = OSSymbol::withCString( aKey );
+        ret = setProperty( tmpKey, anOffset );
+
+        tmpKey->release();
         anOffset->release();
     }
     return( ret );
@@ -748,9 +775,10 @@ IORegistryEntry::setProperty( const char *      aKey,
     OSData * data = OSData::withBytes( bytes, length );
 
     if( data) {
-        PLOCK;
-        ret = getPropertyTable()->setObject( aKey, data );
-        PUNLOCK;
+        const OSSymbol * tmpKey = OSSymbol::withCString( aKey );
+        ret = setProperty( tmpKey, data );
+
+        tmpKey->release();
         data->release();
     }
     return( ret );
@@ -760,7 +788,7 @@ IORegistryEntry::setProperty( const char *      aKey,
 
 /* Name, location, paths */
 
-const char * IORegistryEntry::getName( const IORegistryPlane * plane = 0 ) const
+const char * IORegistryEntry::getName( const IORegistryPlane * plane ) const
 {
     OSSymbol *		sym = 0;
 
@@ -778,7 +806,7 @@ const char * IORegistryEntry::getName( const IORegistryPlane * plane = 0 ) const
 }
 
 const OSSymbol * IORegistryEntry::copyName(
-			const IORegistryPlane * plane = 0 ) const
+			const IORegistryPlane * plane ) const
 {
     OSSymbol *		sym = 0;
 
@@ -798,7 +826,7 @@ const OSSymbol * IORegistryEntry::copyName(
 }
 
 const OSSymbol * IORegistryEntry::copyLocation(
-			const IORegistryPlane * plane = 0 ) const
+			const IORegistryPlane * plane ) const
 {
     OSSymbol *		sym = 0;
 
@@ -814,7 +842,7 @@ const OSSymbol * IORegistryEntry::copyLocation(
     return( sym );
 }
 
-const char * IORegistryEntry::getLocation( const IORegistryPlane * plane = 0 ) const
+const char * IORegistryEntry::getLocation( const IORegistryPlane * plane ) const
 {
     const OSSymbol *	sym = copyLocation( plane );
     const char *	result = 0;
@@ -828,7 +856,7 @@ const char * IORegistryEntry::getLocation( const IORegistryPlane * plane = 0 ) c
 }
 
 void IORegistryEntry::setName( const OSSymbol * name,
-                            const IORegistryPlane * plane = 0 )
+                            const IORegistryPlane * plane )
 {
     const OSSymbol *	key;
 
@@ -845,7 +873,7 @@ void IORegistryEntry::setName( const OSSymbol * name,
 }
 
 void IORegistryEntry::setName( const char * name,
-                            const IORegistryPlane * plane = 0 )
+                            const IORegistryPlane * plane )
 {
     OSSymbol * sym = (OSSymbol *)OSSymbol::withCString( name );
     if ( sym ) {
@@ -855,7 +883,7 @@ void IORegistryEntry::setName( const char * name,
 }
 
 void IORegistryEntry::setLocation( const OSSymbol * location,
-                            const IORegistryPlane * plane = 0 )
+                            const IORegistryPlane * plane )
 {
     const OSSymbol *	key;
 
@@ -872,7 +900,7 @@ void IORegistryEntry::setLocation( const OSSymbol * location,
 }
 
 void IORegistryEntry::setLocation( const char * location,
-                            const IORegistryPlane * plane = 0 )
+                            const IORegistryPlane * plane )
 {
     OSSymbol * sym = (OSSymbol *)OSSymbol::withCString( location );
     if ( sym ) {
@@ -882,7 +910,7 @@ void IORegistryEntry::setLocation( const char * location,
 }
 
 bool
-IORegistryEntry::compareName( OSString * name, OSString ** matched = 0 ) const
+IORegistryEntry::compareName( OSString * name, OSString ** matched ) const
 {
     const OSSymbol *	sym = copyName();
     bool		isEqual;
@@ -901,7 +929,7 @@ IORegistryEntry::compareName( OSString * name, OSString ** matched = 0 ) const
 }
 
 bool
-IORegistryEntry::compareNames( OSObject * names, OSString ** matched = 0 ) const
+IORegistryEntry::compareNames( OSObject * names, OSString ** matched ) const
 {
     OSString *		string;
     OSCollection *	collection;
@@ -1068,39 +1096,38 @@ const char * IORegistryEntry::matchPathLocation( const char * cmp,
     const char	*	str;
     const char	*	result = 0;
     u_quad_t		num1, num2;
-    char		c1, c2;
+    char		lastPathChar, lastLocationChar;
 
     str = getLocation( plane );
     if( str) {
-	c2 = str[0];
+	lastPathChar = cmp[0];
+	lastLocationChar = str[0];
 	do {
-            num1 = strtouq( cmp, (char **) &cmp, 16 );
-            if( c2) {
+            if( lastPathChar) {
+                num1 = strtouq( cmp, (char **) &cmp, 16 );
+                lastPathChar = *cmp++;
+	    } else
+                num1 = 0;
+
+            if( lastLocationChar) {
                 num2 = strtouq( str, (char **) &str, 16 );
-                c2 = str[0];
+                lastLocationChar = *str++;
 	    } else
                 num2 = 0;
 
             if( num1 != num2)
                 break;
 
-            c1 = *cmp++;
-
-            if( (c2 == ':') && (c2 == c1)) {
-                str++;
-                continue;
-            }
-
-            if( ',' != c1) {
+	    if (!lastPathChar && !lastLocationChar) {
                 result = cmp - 1;
                 break;
             }
 
-            if( c2) {
-                if( c2 != ',')
-                    break;
-                str++;
-            }
+            if( (',' != lastPathChar) && (':' != lastPathChar))
+		lastPathChar = 0;
+
+	    if (lastPathChar && lastLocationChar && (lastPathChar != lastLocationChar))
+                break;
 
         } while( true);
     }
@@ -1156,7 +1183,7 @@ IORegistryEntry * IORegistryEntry::getChildFromComponent( const char ** opath,
 }
 
 const OSSymbol * IORegistryEntry::hasAlias( const IORegistryPlane * plane,
-				char * opath = 0, int * length = 0 ) const
+				char * opath, int * length ) const
 {
     IORegistryEntry *	entry;
     IORegistryEntry *	entry2;
@@ -1238,10 +1265,10 @@ const char * IORegistryEntry::dealiasPath(
 
 IORegistryEntry * IORegistryEntry::fromPath(
                         const char * 		path,
-                        const IORegistryPlane * plane = 0,
-                        char *			opath = 0,
-			int * 			length = 0,
-                        IORegistryEntry * 	fromEntry = 0 )
+                        const IORegistryPlane * plane,
+                        char *			opath,
+			int * 			length,
+                        IORegistryEntry * 	fromEntry )
 {
     IORegistryEntry *	where = 0;
     IORegistryEntry *	aliasEntry = 0;
@@ -1334,9 +1361,9 @@ IORegistryEntry * IORegistryEntry::fromPath(
 
 IORegistryEntry * IORegistryEntry::childFromPath(
 			const char *		path,
-                        const IORegistryPlane * plane = 0,
-                        char *			opath = 0,
-                        int *			len = 0 )
+                        const IORegistryPlane * plane,
+                        char *			opath,
+                        int *			len )
 {
     return( IORegistryEntry::fromPath( path, plane, opath, len, this ));
 }
@@ -1350,7 +1377,7 @@ IORegistryEntry * IORegistryEntry::childFromPath(
 
 inline bool IORegistryEntry::arrayMember( OSArray * set,
 					  const IORegistryEntry * member,
-					unsigned int * index = 0 ) const
+					unsigned int * index ) const
 {
     int		i;
     OSObject *	probeObject;
@@ -1381,7 +1408,7 @@ bool IORegistryEntry::makeLink( IORegistryEntry * to,
 
     } else {
 
-	links = OSArray::withObjects( & (const OSObject *) to, 1, 1 );
+	links = OSArray::withObjects( (const OSObject **) &to, 1, 1 );
 	result = (links != 0);
 	if( result) {
 	    result = registryTable()->setObject( plane->keys[ relation ],
@@ -1587,7 +1614,7 @@ void IORegistryEntry::applyToParents( IORegistryEntryApplierFunction applier,
 
 bool IORegistryEntry::isChild( IORegistryEntry * child,
                                 const IORegistryPlane * plane,
-				bool onlyChild = false ) const
+				bool onlyChild ) const
 {
     OSArray *	links;
     bool	ret = false;
@@ -1608,7 +1635,7 @@ bool IORegistryEntry::isChild( IORegistryEntry * child,
 
 bool IORegistryEntry::isParent( IORegistryEntry * parent,
                                 const IORegistryPlane * plane,
-				bool onlyParent = false ) const
+				bool onlyParent ) const
 
 {
     OSArray *	links;
@@ -1839,7 +1866,7 @@ enum { kIORegistryIteratorInvalidFlag = 0x80000000 };
 IORegistryIterator *
 IORegistryIterator::iterateOver( IORegistryEntry * root,
                                  const IORegistryPlane * plane,
-                                 IOOptionBits options = 0 )
+                                 IOOptionBits options )
 {
     IORegistryIterator *	create;
 
@@ -1869,7 +1896,7 @@ IORegistryIterator::iterateOver( IORegistryEntry * root,
 
 IORegistryIterator *
 IORegistryIterator::iterateOver( const IORegistryPlane * plane,
-				 IOOptionBits options = 0 )
+				 IOOptionBits options )
 {
     return( iterateOver( gRegistryRoot, plane, options ));
 }

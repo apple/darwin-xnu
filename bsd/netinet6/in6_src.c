@@ -237,7 +237,10 @@ in6_selectsrc(dstsock, opts, mopts, ro, laddr, errorp)
 	 */
 	if (ro) {
 		if (ro->ro_rt &&
-		    !IN6_ARE_ADDR_EQUAL(&satosin6(&ro->ro_dst)->sin6_addr, dst)) {
+		    (!(ro->ro_rt->rt_flags & RTF_UP) ||
+		     satosin6(&ro->ro_dst)->sin6_family != AF_INET6 || 
+		     !IN6_ARE_ADDR_EQUAL(&satosin6(&ro->ro_dst)->sin6_addr,
+					 dst))) {
 			rtfree(ro->ro_rt);
 			ro->ro_rt = (struct rtentry *)0;
 		}

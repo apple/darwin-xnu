@@ -192,8 +192,8 @@ sysctl_dopanicinfo(name, namelen, oldp, oldlenp, newp, newlen, p)
 			off_t filesize = 0;
 			size_t len;
 			vm_offset_t image;
-			vm_offset_t oimage;
-			vm_size_t osize;
+			vm_offset_t oimage = NULL;
+			vm_size_t osize = 0;	/* covariable: quiet compiler */
 
 			len = strlen(imname);
 			oldstr = image_pathname;

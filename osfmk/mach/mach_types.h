@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2002,2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2003 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -67,6 +67,8 @@
 #include <stdint.h>
 
 #include <mach/host_info.h>
+#include <mach/host_notify.h>
+#include <mach/host_special_ports.h>
 #include <mach/machine.h>
 #include <mach/machine/vm_types.h>
 #include <mach/memory_object_types.h>
@@ -101,8 +103,7 @@
  * the basic mach types.
  */
 typedef struct task			*task_t;
-typedef struct thread_shuttle		*thread_t;
-typedef struct thread_activation	*thread_act_t;
+typedef struct thread		*thread_t, *thread_act_t;
 typedef struct ipc_space		*ipc_space_t;
 typedef struct host			*host_t;
 typedef struct host			*host_priv_t;
@@ -126,8 +127,7 @@ typedef	struct clock			*clock_ctrl_t;
  * structures.
  */
 struct task ;
-struct thread_shuttle ;
-struct thread_activation ;
+struct thread ;
 struct host ;
 struct processor ;
 struct processor_set ;

@@ -178,29 +178,10 @@ int faith_shutdown()
     return 0;
 }
 
-void faith_reg_if_mods()
-{   
-     struct dlil_ifmod_reg_str  faith_ifmod;
-
-     bzero(&faith_ifmod, sizeof(faith_ifmod));
-     faith_ifmod.add_if = faith_add_if;
-     faith_ifmod.del_if = faith_del_if;
-     faith_ifmod.add_proto = faith_add_proto;
-     faith_ifmod.del_proto = faith_del_proto;
-     faith_ifmod.ifmod_ioctl = 0;
-     faith_ifmod.shutdown    = faith_shutdown;
-
-    
-    if (dlil_reg_if_modules(APPLE_IF_FAM_FAITH, &faith_ifmod))
-        panic("Couldn't register faith modules\n");
-    
-}   
-    
-u_long  faith_attach_inet(struct ifnet *ifp)
+int  faith_attach_inet(struct ifnet *ifp, u_long *dl_tag)
 {       
     struct dlil_proto_reg_str   reg;
     struct dlil_demux_desc      desc;
-    u_long                      dl_tag=0;
     short native=0;
     int   stat;
     int i;
@@ -212,7 +193,8 @@ u_long  faith_attach_inet(struct ifnet *ifp)
 	        kprintf("faith_array for %s%d found dl_tag=%d\n",
                        ifp->if_name, ifp->if_unit, faith_array[i]->dl_tag);
 #endif
-                return faith_array[i]->dl_tag;
+                *dl_tag = faith_array[i]->dl_tag;
+		return 0;
        
         }
     }
@@ -234,14 +216,44 @@ u_long  faith_attach_inet(struct ifnet *ifp)
     reg.default_proto    = 0;
     reg.protocol_family  = PF_INET;
 
-    stat = dlil_attach_protocol(&reg, &dl_tag);
+    stat = dlil_attach_protocol(&reg, dl_tag);
     if (stat) {
         panic("faith_attach_inet can't attach interface\n");
     }
 
-    return dl_tag;
+    return stat;
 }
 
+void faith_reg_if_mods()
+{   
+     struct dlil_ifmod_reg_str  faith_ifmod;
+     struct dlil_protomod_reg_str faith_protoreg;
+     int error;
+
+     bzero(&faith_ifmod, sizeof(faith_ifmod));
+     faith_ifmod.add_if = faith_add_if;
+     faith_ifmod.del_if = faith_del_if;
+     faith_ifmod.add_proto = faith_add_proto;
+     faith_ifmod.del_proto = faith_del_proto;
+     faith_ifmod.ifmod_ioctl = 0;
+     faith_ifmod.shutdown    = faith_shutdown;
+
+    
+    if (dlil_reg_if_modules(APPLE_IF_FAM_FAITH, &faith_ifmod))
+        panic("Couldn't register faith modules\n");
+
+	/* Register protocol registration functions */
+
+	bzero(&faith_protoreg, sizeof(faith_protoreg));
+	faith_protoreg.attach_proto = faith_attach_inet;
+	faith_protoreg.detach_proto = 0;
+	
+	if ( error = dlil_reg_proto_module(PF_INET, APPLE_IF_FAM_FAITH, &faith_protoreg) != 0)
+		kprintf("dlil_reg_proto_module failed for AF_INET error=%d\n", error);
+
+    
+}   
+    
 void
 faithattach(void)
 {

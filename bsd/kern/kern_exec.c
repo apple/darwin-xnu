@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2001 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2003 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -89,13 +89,18 @@
 #include <sys/stat.h>
 #include <sys/uio.h>
 #include <sys/acct.h>
+#include <sys/kern_audit.h>
 #include <sys/exec.h>
 #include <sys/kdebug.h>
 #include <sys/signal.h>
+#include <sys/aio_kern.h>
 
 #include <mach/vm_param.h>
 
 #include <vm/vm_map.h>
+
+extern vm_map_t vm_map_switch(vm_map_t    map); /* XXX */
+
 #include <vm/vm_kern.h>
 #include <vm/vm_shared_memory_server.h>
 
@@ -134,6 +139,45 @@ execv(p, args, retval)
 	return (execve(p, args, retval));
 }
 
+extern char classichandler[32];
+extern long classichandler_fsid;
+extern long classichandler_fileid;
+
+/*
+ * Helper routine to get rid of a loop in execve.  Given a pointer to
+ * something for the arg list (which might be in kernel space or in user
+ * space), copy it into the kernel buffer at the currentWritePt.  This code
+ * does the proper thing to get the data transferred.
+ * bytesWritten, currentWritePt, and bytesLeft are kept up-to-date.
+ */
+
+static int copyArgument(char *argument, int pointerInKernel,
+			int *bytesWritten,char **currentWritePt,
+			int *bytesLeft){
+        int error = 0;
+        do {
+                size_t len = 0;
+		if (*bytesLeft <= 0) {
+			error = E2BIG;
+			break;
+		}
+		if (pointerInKernel == UIO_SYSSPACE) {
+			error = copystr(argument, *currentWritePt, (unsigned)*bytesLeft, &len);
+		} else  {
+	       /*
+	        * pointer in kernel == UIO_USERSPACE
+	        * Copy in from user space.
+	        */ 
+		  error = copyinstr((caddr_t)argument, *currentWritePt, (unsigned)*bytesLeft,
+			    &len);
+		}
+		*currentWritePt += len;
+		*bytesWritten += len;
+		*bytesLeft -= len;
+	} while (error == ENAMETOOLONG);
+	return error;
+}
+
 /* ARGSUSED */
 int
 execve(p, uap, retval)
@@ -143,12 +187,14 @@ execve(p, uap, retval)
 {
 	register struct ucred *cred = p->p_ucred;
 	register struct filedesc *fdp = p->p_fd;
-	register nc;
-	register char *cp;
+	int nc;
+	char *cp;
 	int na, ne, ucp, ap, cc;
 	unsigned len;
-	int indir;
-	char *sharg;
+	int executingInterpreter=0;
+
+	int executingClassic=0;
+	char binaryWithClassicName[sizeof(p->p_comm)] = {0};
 	char *execnamep;
 	struct vnode *vp;
 	struct vattr vattr;
@@ -157,6 +203,10 @@ execve(p, uap, retval)
 	struct nameidata nd;
 	struct ps_strings ps;
 #define	SHSIZE	512
+	/* Argument(s) to an interpreter.  If we're executing a shell
+	 * script, the name (#!/bin/csh) is allowed to be followed by
+	 * arguments.  cfarg holds these arguments.
+	 */
 	char cfarg[SHSIZE];
 	boolean_t		is_fat;
 	kern_return_t		ret;
@@ -169,7 +219,10 @@ execve(p, uap, retval)
 	vm_map_t old_map;
 	vm_map_t map;
 	int i;
-	boolean_t		new_shared_regions = FALSE;
+	boolean_t				clean_regions = FALSE;
+	shared_region_mapping_t shared_region = NULL;
+    shared_region_mapping_t initial_region = NULL;
+
 	union {
 		/* #! and name of interpreter */
 		char			ex_shell[SHSIZE];
@@ -193,6 +246,12 @@ execve(p, uap, retval)
 	unsigned long arch_size = 0;
         char		*ws_cache_name = NULL;	/* used for pre-heat */
 
+        /*
+         * XXXAUDIT: Currently, we only audit the pathname of the binary.
+         * There may also be poor interaction with dyld.
+         */
+
+	cfarg[0] = '\0'; /* initialize to null value. */
 	task = current_task();
 	thr_act = current_act();
 	uthread = get_bsdthread_info(thr_act);
@@ -214,7 +273,7 @@ execve(p, uap, retval)
 	if (error)
 		return(error);
 
-	savedpath = execargs;
+	savedpath = (char *)execargs;
 
 	/*
 	 * To support new app package launching for Mac OS X, the dyld
@@ -229,16 +288,26 @@ execve(p, uap, retval)
 	 * absolute pathname. This might be unacceptable for dyld.
 	 */
 	/* XXX We could optimize to avoid copyinstr in the namei() */
+
+	/*
+	 * XXXAUDIT: Note: the double copyin introduces an audit
+	 * race.  To correct this race, we must use a single
+	 * copyin().
+	 */
 	
-	error = copyinstr(uap->fname, savedpath, MAXPATHLEN, &savedpathlen);
-	if (error)
-		return (error);
+	error = copyinstr(uap->fname, savedpath,
+				MAXPATHLEN, (size_t *)&savedpathlen);
+	if (error) {
+		execargs_free(execargs);
+		return(error);
+	}
 	/*
 	 * copyinstr will put in savedpathlen, the count of
 	 * characters (including NULL) in the path.
+	 * No app profiles under chroot
 	 */
 
-	if(app_profile != 0) {
+	if((fdp->fd_rdir == NULLVP) && (app_profile != 0)) {
 
 		/* grab the name of the file out of its path */
 		/* we will need this for lookup within the   */
@@ -253,13 +322,14 @@ execve(p, uap, retval)
                	}
                	ws_cache_name++;
 	}
-	
+
 	/* Save the name aside for future use */
 	execargsp = (vm_offset_t *)((char *)(execargs) + savedpathlen);
 	
-	NDINIT(&nd, LOOKUP, FOLLOW | LOCKLEAF | SAVENAME,
+	NDINIT(&nd, LOOKUP, FOLLOW | LOCKLEAF | SAVENAME | AUDITVNPATH1,
 					UIO_USERSPACE, uap->fname, p);
-	if ((error = namei(&nd)))
+	error = namei(&nd);
+	if (error)
 		goto bad1;
 	vp = nd.ni_vp;
 	VOP_LEASE(vp, p, p->p_ucred, LEASE_READ);
@@ -273,7 +343,6 @@ execve(p, uap, retval)
 		goto bad;
 	}
 
-	indir = 0;
 	if ((vp->v_mount->mnt_flag & MNT_NOSUID) || (p->p_flag & P_TRACED))
 		origvattr.va_mode &= ~(VSUID | VSGID);
 		
@@ -317,27 +386,46 @@ again:
 #endif /* lint */
 	mach_header = &exdata.mach_header;
 	fat_header = &exdata.fat_header;
-	if (mach_header->magic == MH_MAGIC)
+	if ((mach_header->magic == MH_CIGAM) &&
+	    (classichandler[0] == 0)) {
+		error = EBADARCH;
+		goto bad;
+	} else if ((mach_header->magic == MH_MAGIC) || 
+               (mach_header->magic == MH_CIGAM)) {
 	    is_fat = FALSE;
-	else if (fat_header->magic == FAT_MAGIC ||
-		 fat_header->magic == FAT_CIGAM)
+	} else if ((fat_header->magic == FAT_MAGIC) ||
+		       (fat_header->magic == FAT_CIGAM)) {
 	    is_fat = TRUE;
-	else if (mach_header->magic == MH_CIGAM) {
-	    error = EBADARCH;
-	    goto bad;
 	} else {
+	  /* If we've already redirected once from an interpreted file
+	   * to an interpreter, don't permit the second time.
+	   */
 		if (exdata.ex_shell[0] != '#' ||
 		    exdata.ex_shell[1] != '!' ||
-		    indir) {
+		    executingInterpreter) {
 			error = ENOEXEC;
 			goto bad;
 		}
+		if (executingClassic == 1) {
+		  error = EBADARCH;
+		  goto bad;
+		}
 		cp = &exdata.ex_shell[2];		/* skip "#!" */
 		while (cp < &exdata.ex_shell[SHSIZE]) {
-			if (*cp == '\t')
+			if (*cp == '\t')		/* convert all tabs to spaces */
 				*cp = ' ';
-			else if (*cp == '\n') {
-				*cp = '\0';
+			else if (*cp == '\n' || *cp == '#') {
+				*cp = '\0';			/* trunc the line at nl or comment */
+
+ 				/* go back and remove the spaces before the /n or # */
+ 				/* todo: do we have to do this if we fix the passing of args to shells ? */
+				if ( cp != &exdata.ex_shell[2] ) {
+					do {
+						if ( *(cp-1) != ' ')
+							break;
+						*(--cp) = '\0';
+					} while ( cp != &exdata.ex_shell[2] );
+				}
 				break;
 			}
 			cp++;
@@ -369,14 +457,15 @@ again:
 		 * savedpathlen. +1 for NULL.
 		 */
 		savedpathlen = (cpnospace - execnamep + 1);
-		error = copystr(execnamep, savedpath, savedpathlen, &savedpathlen);
+		error = copystr(execnamep, savedpath,
+					savedpathlen, (size_t *)&savedpathlen);
 		if (error)
 			goto bad;
 
 		/* Save the name aside for future use */
 		execargsp = (vm_offset_t *)((char *)(execargs) + savedpathlen);
 
-		indir = 1;
+		executingInterpreter= 1;
 		vput(vp);
 		nd.ni_cnd.cn_nameiop = LOOKUP;
 		nd.ni_cnd.cn_flags = (nd.ni_cnd.cn_flags & HASBUF) |
@@ -413,56 +502,7 @@ again:
 	/*
 	 * Copy arguments into file in argdev area.
 	 */
-	if (uap->argp) for (;;) {
-		ap = NULL;
-		sharg = NULL;
-		if (indir && na == 0) {
-			sharg = nd.ni_cnd.cn_nameptr;
-			ap = (int)sharg;
-			uap->argp++;		/* ignore argv[0] */
-		} else if (indir && (na == 1 && cfarg[0])) {
-			sharg = cfarg;
-			ap = (int)sharg;
-		} else if (indir && (na == 1 || (na == 2 && cfarg[0])))
-			ap = (int)uap->fname;
-		else if (uap->argp) {
-			ap = fuword((caddr_t)uap->argp);
-			uap->argp++;
-		}
-		if (ap == NULL && uap->envp) {
-			uap->argp = NULL;
-			if ((ap = fuword((caddr_t)uap->envp)) != NULL)
-				uap->envp++, ne++;
-		}
-		if (ap == NULL)
-			break;
-		na++;
-		if (ap == -1) {
-			error = EFAULT;
-			break;
-		}
-		do {
-			if (nc >= (NCARGS - savedpathlen - 2*NBPW -1)) {
-				error = E2BIG;
-				break;
-			}
-			if (sharg) {
-				error = copystr(sharg, cp, (unsigned)cc, &len);
-				sharg += len;
-			} else {
-				error = copyinstr((caddr_t)ap, cp, (unsigned)cc,
-				    &len);
-				ap += len;
-			}
-			cp += len;
-			nc += len;
-			cc -= len;
-		} while (error == ENAMETOOLONG);
-		if (error) {
-			goto bad;
-		}
-	}
-	nc = (nc + NBPW-1) & ~(NBPW-1);
+
 
 	/*
 	 * If we have a fat file, find "our" executable.
@@ -471,7 +511,8 @@ again:
 		/*
 		 * Look up our architecture in the fat file.
 		 */
-		lret = fatfile_getarch(vp, (vm_offset_t)fat_header, &fat_arch);
+		lret = fatfile_getarch_affinity(vp,(vm_offset_t)fat_header, &fat_arch,
+						(p->p_flag & P_AFFINITY));
 		if (lret != LOAD_SUCCESS) {
 			error = load_return_to_errno(lret);
 			goto bad;
@@ -493,7 +534,8 @@ again:
 		}
 
 		/* Is what we found a Mach-O executable */
-		if (mach_header->magic != MH_MAGIC) {
+		if ((mach_header->magic != MH_MAGIC) &&
+		    (mach_header->magic != MH_CIGAM)) {
 			error = ENOEXEC;
 			goto bad;
 		}
@@ -508,10 +550,168 @@ again:
 		arch_size = (u_long)vattr.va_size;
 	}
 
+	if ( ! check_cpu_subtype(mach_header->cpusubtype) ) {
+		error = EBADARCH;
+		goto bad;
+	}
+
+	if (mach_header->magic == MH_CIGAM) {
+
+		int classicBinaryLen = nd.ni_cnd.cn_namelen;
+		if (classicBinaryLen > MAXCOMLEN)
+	    	classicBinaryLen = MAXCOMLEN;
+		bcopy((caddr_t)nd.ni_cnd.cn_nameptr,
+				(caddr_t)binaryWithClassicName, 
+				(unsigned)classicBinaryLen);
+		binaryWithClassicName[classicBinaryLen] = '\0';
+		executingClassic = 1;
+
+		vput(vp); /* cleanup? */
+		nd.ni_cnd.cn_nameiop = LOOKUP;
+
+		nd.ni_cnd.cn_flags = (nd.ni_cnd.cn_flags & HASBUF) |
+		/*      (FOLLOW | LOCKLEAF | SAVENAME) */
+            	(LOCKLEAF | SAVENAME);
+	         nd.ni_segflg = UIO_SYSSPACE;
+
+       		nd.ni_dirp = classichandler;
+       		if ((error = namei(&nd)) != 0) {
+			error = EBADARCH;
+       			goto bad1;
+         	}
+		vp = nd.ni_vp;
+
+		VOP_LEASE(vp,p,cred,LEASE_READ);
+		if ((error = VOP_GETATTR(vp,&vattr,p->p_ucred,p))) {
+			goto bad;
+		}
+		goto again;
+	}
+
+	if (uap->argp != NULL) {
+	  /* geez -- why would argp ever be NULL, and why would we proceed? */
+	  
+	  /* First, handle any argument massaging */
+	  if (executingInterpreter && executingClassic) {
+	    error = copyArgument(classichandler,UIO_SYSSPACE,&nc,&cp,&cc);
+	    na++;
+	    if (error) goto bad;
+	    
+	    /* Now name the interpreter. */
+	    error = copyArgument(savedpath,UIO_SYSSPACE,&nc,&cp,&cc);
+	    na++;
+	    if (error) goto bad;
+
+	    /*
+	     * if we're running an interpreter, as we'd be passing the
+	     * command line executable as an argument to the interpreter already.
+	     * Doing "execve("myShellScript","bogusName",arg1,arg2,...)
+	     * probably shouldn't ever let bogusName be seen by the shell
+	     * script.
+	     */
+
+	    if (cfarg[0]) {
+	      error = copyArgument(cfarg,UIO_SYSSPACE,&nc,&cp,&cc);
+	      na++;
+	      if (error) goto bad;
+	    }
+
+	    char* originalExecutable = uap->fname;
+	    error = copyArgument(originalExecutable,UIO_USERSPACE,&nc,&cp,&cc);
+	    na++;
+	    /* remove argv[0] b/c we've already placed it at */
+	    /* this point */
+	    uap->argp++;
+	    if (error) goto bad;
+
+	    /* and continue with rest of the arguments. */
+	  } else if (executingClassic) {
+	    error = copyArgument(classichandler,UIO_SYSSPACE,&nc,&cp,&cc);
+	    na++;
+	    if (error) goto bad;
+	    
+	    char* originalExecutable = uap->fname;
+	    error = copyArgument(originalExecutable,UIO_USERSPACE,&nc,&cp,&cc);
+	    if (error) goto bad;
+	    uap->argp++;
+	    na++;
+
+	    /* and rest of arguments continue as before. */
+	  } else if (executingInterpreter) {
+	    char *actualExecutable = nd.ni_cnd.cn_nameptr;
+	    error = copyArgument(actualExecutable,UIO_SYSSPACE,&nc,&cp,&cc);
+	    na++;
+	    /* remove argv[0] b/c we just placed it in the arg list. */
+	    uap->argp++;
+	    if (error) goto bad;
+	    /* Copy the argument in the interpreter first line if there
+	     * was one. 
+	     */
+	    if (cfarg[0]) {
+	      error = copyArgument(cfarg,UIO_SYSSPACE,&nc,&cp,&cc);
+	      na++;
+	      if (error) goto bad;
+	    }
+	    
+	    /* copy the name of the file being interpreted, gotten from
+	     * the structures passed in to execve.
+	     */
+	    error = copyArgument(uap->fname,UIO_USERSPACE,&nc,&cp,&cc);
+	    na++;
+	  }
+	  /* Now, get rest of arguments */
+	  while (uap->argp != NULL) {
+	    char* userArgument = (char*)fuword((caddr_t) uap->argp);
+	    uap->argp++;
+	    if (userArgument == NULL) {
+	      break;
+	    } else if ((int)userArgument == -1) {
+	      /* Um... why would it be -1? */
+	      error = EFAULT;
+	      goto bad;
+	    }
+	    error = copyArgument(userArgument, UIO_USERSPACE,&nc,&cp,&cc);
+	    if (error) goto bad;
+	    na++;
+	  }	 
+	  /* Now, get the environment */
+	  while (uap->envp != NULL) {
+	    char *userEnv = (char*) fuword((caddr_t) uap->envp);
+	    uap->envp++;
+	    if (userEnv == NULL) {
+	      break;
+	    } else if ((int)userEnv == -1) {
+	      error = EFAULT;
+	      goto bad;
+	    }
+	    error = copyArgument(userEnv,UIO_USERSPACE,&nc,&cp,&cc);
+	    if (error) goto bad;
+	    na++;
+	    ne++;
+	  }
+	}
+
+	/* make sure there are nulls are the end!! */
+	{
+		int	cnt = 3;
+		char *mp = cp;
+
+		while ( cnt-- )
+			*mp++ = '\0';	
+	}
+
+	/* and round up count of bytes written to next word. */
+	nc = (nc + NBPW-1) & ~(NBPW-1);
+
+	if (vattr.va_fsid == classichandler_fsid &&
+		vattr.va_fileid == classichandler_fileid) {
+		executingClassic = 1;
+	}
+
 	if (vfexec) {
  		kern_return_t	result;
 
-		result = task_create_local(task, FALSE, FALSE, &new_task);
+		result = task_create_internal(task, FALSE, &new_task);
 		if (result != KERN_SUCCESS)
 	    	printf("execve: task_create failed. Code: 0x%x\n", result);
 		p->task = new_task;
@@ -526,35 +726,58 @@ again:
 		uthread = get_bsdthread_info(thr_act);
 	} else {
 		map = VM_MAP_NULL;
-
 	}
 
 	/*
 	 *	Load the Mach-O file.
 	 */
-	VOP_UNLOCK(vp, 0, p);
+	VOP_UNLOCK(vp, 0, p);	/* XXX */
 	if(ws_cache_name) {
 		tws_handle_startup_file(task, cred->cr_uid, 
-			ws_cache_name, vp, &new_shared_regions);
+			ws_cache_name, vp, &clean_regions);
 	}
-	if (new_shared_regions) {
-		shared_region_mapping_t	new_shared_region;
-		shared_region_mapping_t	old_shared_region;
+
+	vm_get_shared_region(task, &initial_region);
+    int parentIsClassic = (p->p_flag & P_CLASSIC);
+	struct vnode *rootDir = p->p_fd->fd_rdir;
+
+	if ((parentIsClassic && !executingClassic) ||
+		(!parentIsClassic && executingClassic)) {
+		shared_region = lookup_default_shared_region(
+				(int)rootDir,
+				(executingClassic ?
+				CPU_TYPE_POWERPC :
+				machine_slot[cpu_number()].cpu_type));
+		if (shared_region == NULL) {
+			shared_region_mapping_t old_region;
+			shared_region_mapping_t new_region;
+			vm_get_shared_region(current_task(), &old_region);
+			/* grrrr... this sets current_task(), not task
+			* -- they're different (usually)
+			*/
+			shared_file_boot_time_init(
+				(int)rootDir,
+				(executingClassic ?
+				CPU_TYPE_POWERPC :
+				machine_slot[cpu_number()].cpu_type));
+			if ( current_task() != task ) {
+				vm_get_shared_region(current_task(),&new_region);
+				vm_set_shared_region(task,new_region);
+				vm_set_shared_region(current_task(),old_region);
+			}
+		} else {
+			vm_set_shared_region(task, shared_region);
+		}
+		shared_region_mapping_dealloc(initial_region);
+	}
 	
-		if (shared_file_create_system_region(&new_shared_region))
-			panic("couldn't create system_shared_region\n");
-
-		vm_get_shared_region(task, &old_shared_region);
-		vm_set_shared_region(task, new_shared_region);
-
-		shared_region_mapping_dealloc(old_shared_region);
-	}
-
 	lret = load_machfile(vp, mach_header, arch_offset,
-				arch_size, &load_result, thr_act, map);
+		arch_size, &load_result, thr_act, map, clean_regions);
 
 	if (lret != LOAD_SUCCESS) {
 		error = load_return_to_errno(lret);
+		vrele(vp);
+		vp = NULL;
 		goto badtoolate;
 	}
 
@@ -586,6 +809,14 @@ again:
 			p->p_ucred->cr_uid = origvattr.va_uid;
 		if (origvattr.va_mode & VSGID)
 			p->p_ucred->cr_gid = origvattr.va_gid;
+
+		/*
+		 * Have mach reset the task port.  We don't want
+		 * anyone who had the task port before a setuid
+		 * exec to be able to access/control the task
+		 * after.
+		 */
+		ipc_task_reset(task);
 
 		set_security_token(p);
 		p->p_flag |= P_SUGID;
@@ -626,13 +857,17 @@ again:
 	p->p_cred->p_svuid = p->p_ucred->cr_uid;
 	p->p_cred->p_svgid = p->p_ucred->cr_gid;
 
+	KNOTE(&p->p_klist, NOTE_EXEC);
+
 	if (!vfexec && (p->p_flag & P_TRACED))
 		psignal(p, SIGTRAP);
 
 	if (error) {
+		vrele(vp);
+		vp = NULL;
 		goto badtoolate;
 	}
-	VOP_LOCK(vp,  LK_EXCLUSIVE | LK_RETRY, p);
+	VOP_LOCK(vp,  LK_EXCLUSIVE | LK_RETRY, p); /* XXX */
 	vput(vp);
 	vp = NULL;
 	
@@ -652,7 +887,7 @@ again:
 	 */
 
 
-	ucp = p->user_stack;
+	ucp = (int)p->user_stack;
 	if (vfexec) {
 		old_map = vm_map_switch(get_task_map(task));
 	}
@@ -666,17 +901,26 @@ again:
 		 * the "path" at the begining of the execargs buffer.
 		 * copy it just before the string area.
 		 */
-		savedpathlen = (savedpathlen + NBPW-1) & ~(NBPW-1);
 		len = 0;
-		pathptr = ucp - savedpathlen;
+		pathptr = ucp - ((savedpathlen + NBPW-1) & ~(NBPW-1));
 		error = copyoutstr(savedpath, (caddr_t)pathptr,
-					(unsigned)savedpathlen, &len);
+					(unsigned)savedpathlen, (size_t *)&len);
+		savedpathlen = (savedpathlen + NBPW-1) & ~(NBPW-1);
+
 		if (error) {
 			if (vfexec)
 				vm_map_switch(old_map);
 			goto badtoolate;
 		}
-		
+
+		/*
+		 * Record the size of the arguments area so that
+		 * sysctl_procargs() can return the argument area without having
+		 * to parse the arguments.
+		 */
+		p->p_argslen = (int)p->user_stack - pathptr;
+		p->p_argc = na - ne;	/* save argc for sysctl_procargs() */
+
 		/* Save a NULL pointer below it */
 		(void) suword((caddr_t)(pathptr - NBPW), 0);
 
@@ -717,7 +961,7 @@ again:
 			(void) suword((caddr_t)ap, ucp);
 			do {
 				error = copyoutstr(cp, (caddr_t)ucp,
-						   (unsigned)cc, &len);
+						   (unsigned)cc, (size_t *)&len);
 				ucp += len;
 				cp += len;
 				nc += len;
@@ -762,9 +1006,16 @@ again:
 	 * which specify close-on-exec.
 	 */
 	fdexec(p);
+
+	/*
+	 * need to cancel async IO requests that can be cancelled and wait for those
+	 * already active.  MAY BLOCK!
+	 */
+	_aio_exec( p );
+
 	/* FIXME: Till vmspace inherit is fixed: */
 	if (!vfexec && p->vm_shm)
-		shmexit(p);
+		shmexec(p);
 	/* Clean up the semaphores */
 	semexit(p);
 
@@ -772,11 +1023,20 @@ again:
 	 * Remember file name for accounting.
 	 */
 	p->p_acflag &= ~AFORK;
-	if (nd.ni_cnd.cn_namelen > MAXCOMLEN)
-		nd.ni_cnd.cn_namelen = MAXCOMLEN;
-	bcopy((caddr_t)nd.ni_cnd.cn_nameptr, (caddr_t)p->p_comm,
-	    (unsigned)nd.ni_cnd.cn_namelen);
-	p->p_comm[nd.ni_cnd.cn_namelen] = '\0';
+	/* If the translated name isn't NULL, then we want to use
+	 * that translated name as the name we show as the "real" name.
+	 * Otherwise, use the name passed into exec.
+	 */
+	if (0 != binaryWithClassicName[0]) {
+		bcopy((caddr_t)binaryWithClassicName, (caddr_t)p->p_comm,
+			sizeof(binaryWithClassicName));
+	} else {
+		if (nd.ni_cnd.cn_namelen > MAXCOMLEN)
+			nd.ni_cnd.cn_namelen = MAXCOMLEN;
+		bcopy((caddr_t)nd.ni_cnd.cn_nameptr, (caddr_t)p->p_comm,
+			(unsigned)nd.ni_cnd.cn_namelen);
+		p->p_comm[nd.ni_cnd.cn_namelen] = '\0';
+	}
 
 	{
 	  /* This is for kdebug */
@@ -785,13 +1045,28 @@ again:
 	  /* Collect the pathname for tracing */
 	  kdbg_trace_string(p, &dbg_arg1, &dbg_arg2, &dbg_arg3, &dbg_arg4);
 
+
+
 	  if (vfexec)
+	  {
+		  KERNEL_DEBUG_CONSTANT1((TRACEDBG_CODE(DBG_TRACE_DATA, 2)) | DBG_FUNC_NONE,
+		                        p->p_pid ,0,0,0, (unsigned int)thr_act);
 	          KERNEL_DEBUG_CONSTANT1((TRACEDBG_CODE(DBG_TRACE_STRING, 2)) | DBG_FUNC_NONE,
-					dbg_arg1, dbg_arg2, dbg_arg3, dbg_arg4, getshuttle_thread(thr_act));
+					dbg_arg1, dbg_arg2, dbg_arg3, dbg_arg4, (unsigned int)thr_act);
+	  }
 	  else
+	  {
+		  KERNEL_DEBUG_CONSTANT((TRACEDBG_CODE(DBG_TRACE_DATA, 2)) | DBG_FUNC_NONE,
+		                        p->p_pid ,0,0,0,0);
 	          KERNEL_DEBUG_CONSTANT((TRACEDBG_CODE(DBG_TRACE_STRING, 2)) | DBG_FUNC_NONE,
 					dbg_arg1, dbg_arg2, dbg_arg3, dbg_arg4, 0);
+	  }
 	}
+
+	if (executingClassic)
+		p->p_flag |= P_CLASSIC | P_AFFINITY;
+	else
+		p->p_flag &= ~P_CLASSIC;
 
 	/*
 	 * mark as execed, wakeup the process that vforked (if any) and tell
@@ -842,11 +1117,12 @@ create_unix_stack(map, user_stack, customstack, p)
 	vm_size_t	size;
 	vm_offset_t	addr;
 
-	p->user_stack = user_stack;
+	p->user_stack = (caddr_t)user_stack;
 	if (!customstack) {
-		size = round_page(unix_stack_size(p));
-		addr = trunc_page(user_stack - size);
-		return (vm_allocate(map,&addr, size, FALSE));
+		size = round_page_64(unix_stack_size(p));
+		addr = trunc_page_32(user_stack - size);
+		return (vm_allocate(map, &addr, size,
+					VM_MAKE_TAG(VM_MEMORY_STACK) | FALSE));
 	} else
 		return(KERN_SUCCESS);
 }
@@ -974,7 +1250,7 @@ load_return_to_errno(load_return_t lrtn)
 {
 	switch (lrtn) {
 	    case LOAD_SUCCESS:
-		return 0;
+			return 0;
 	    case LOAD_BADARCH:
 	    	return EBADARCH;
 	    case LOAD_BADMACHO:
@@ -982,10 +1258,14 @@ load_return_to_errno(load_return_t lrtn)
 	    case LOAD_SHLIB:
 	    	return ESHLIBVERS;
 	    case LOAD_NOSPACE:
+	    case LOAD_RESOURCE:
 	    	return ENOMEM;
 	    case LOAD_PROTECT:
 	    	return EACCES;
-	    case LOAD_RESOURCE:
+		case LOAD_ENOENT:
+			return ENOENT;
+		case LOAD_IOERROR:
+			return EIO;
 	    case LOAD_FAILURE:
 	    default:
 	    	return EBADEXEC;
@@ -1046,9 +1326,10 @@ execargs_alloc(addrp)
 		}
 
 	kret = kmem_alloc_pageable(bsd_pageable_map, addrp, NCARGS);
-	if (kret != KERN_SUCCESS)
+	if (kret != KERN_SUCCESS) {
+	        semaphore_signal(execve_semaphore);
 		return (ENOMEM);
-
+	}
 	return (0);
 }
 
@@ -1074,4 +1355,3 @@ execargs_free(addr)
 		return (EINVAL);
 	}
 }
-

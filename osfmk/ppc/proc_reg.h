@@ -34,13 +34,13 @@
 /* Define some useful masks that convert from bit numbers */
 
 #if __PPC__
-#if _BIG_ENDIAN
+#ifdef __BIG_ENDIAN__
 #ifndef ENDIAN_MASK
 #define ENDIAN_MASK(val,size) (1 << ((size-1) - val))
 #endif
 #else
 #error code not ported to little endian targets yet
-#endif /* _BIG_ENDIAN */
+#endif /* __BIG_ENDIAN__ */
 #endif /* __PPC__ */
 
 #define MASK32(PART)	ENDIAN_MASK(PART ## _BIT, 32)
@@ -55,7 +55,8 @@
 
 /* Defines for decoding the MSR bits */
 
-#define MSR_SF_BIT	0
+#define MSR_SF_BIT		0
+#define MSR_HV_BIT		3
 #define MSR_RES1_BIT	1
 #define MSR_RES2_BIT	2
 #define MSR_RES3_BIT	3
@@ -142,17 +143,32 @@
 #define SR_UNUSED_BY_KERN_NUM 13
 #define SR_COPYIN_NAME	sr14
 #define SR_COPYIN_NUM	14
+#define BAT_INVALID 0
 
 
 /* DSISR bits on data access exceptions */
 
 #define DSISR_IO_BIT		0	/* NOT USED on 601 */
 #define DSISR_HASH_BIT		1
+#define DSISR_NOEX_BIT		3
 #define DSISR_PROT_BIT		4
 #define DSISR_IO_SPC_BIT	5
 #define DSISR_WRITE_BIT		6
 #define DSISR_WATCH_BIT		9
 #define DSISR_EIO_BIT		11
+
+#define dsiMiss 			0x40000000
+#define dsiMissb 			1
+#define dsiNoEx				0x10000000
+#define dsiProt				0x08000000
+#define dsiInvMode			0x04000000
+#define dsiStore			0x02000000
+#define dsiAC				0x00400000
+#define dsiSeg				0x00200000
+#define dsiValid			0x5E600000
+#define dsiSpcNest			0x00010000	/* Special nest - software flag */
+#define dsiSpcNestb			15			/* Special nest - software flag */
+#define dsiSoftware			0x0000FFFF
 
 /* SRR1 bits on data/instruction translation exceptions */
 
@@ -168,41 +184,20 @@
 #define SRR1_PRG_PRV_INS_BIT	13
 #define SRR1_PRG_TRAP_BIT	14
 
-/* BAT information */
-
-/* Constants used when setting mask values */
-
-#define BAT_INVALID 0
-
 /*
  * Virtual to physical mapping macros/structures.
  * IMPORTANT NOTE: there is one mapping per HW page, not per MACH page.
  */
-
-#define CACHE_LINE_SIZE	32
-#define CACHE_LINE_POW2 5
-#define cache_align(x)	(((x) + CACHE_LINE_SIZE-1) & ~(CACHE_LINE_SIZE - 1))
 
 #define PTE1_WIMG_GUARD_BIT	28	/* Needed for assembler */
 #define PTE1_REFERENCED_BIT	23	/* ditto */
 #define PTE1_CHANGED_BIT	24
 #define PTE0_HASH_ID_BIT	25
 
-#define PTE_NULL ((pte_t*) NULL) /* No pte found/associated with this */
-#define PTE_EMPTY 0x7fffffbf 	 /* Value in the pte0.word of a free pte */
-
-#define PTE_WIMG_CB_CACHED			0 	/* cached, writeback */
-#define PTE_WIMG_CB_CACHED_GUARDED		1 	/* cached, writeback, guarded */
-#define PTE_WIMG_CB_CACHED_COHERENT		2 	/* cached, writeback, coherent (default) */
-#define PTE_WIMG_CB_CACHED_COHERENT_GUARDED	3 	/* cached, writeback, coherent, guarded */
-#define PTE_WIMG_UNCACHED			4 	/* uncached */
-#define PTE_WIMG_UNCACHED_GUARDED		5	/* uncached, guarded */
-#define PTE_WIMG_UNCACHED_COHERENT		6	/* uncached, coherentt */
-#define PTE_WIMG_UNCACHED_COHERENT_GUARDED	7	/* uncached, coherent, guarded */
-#define PTE_WIMG_WT_CACHED			8 	/* cached, writethru */
-#define PTE_WIMG_WT_CACHED_GUARDED		9 	/* cached, writethru, guarded */
-#define PTE_WIMG_WT_CACHED_COHERENT		10 	/* cached, writethru, coherent */
-#define PTE_WIMG_WT_CACHED_COHERENT_GUARDED	11 	/* cached, writethru, coherent, guarded */
+#define PTE_WIMG_CB_CACHED_COHERENT		0 	/* cached, writeback, coherent (default) */
+#define PTE_WIMG_CB_CACHED_COHERENT_GUARDED	1 	/* cached, writeback, coherent, guarded */
+#define PTE_WIMG_UNCACHED_COHERENT		2	/* uncached, coherentt */
+#define PTE_WIMG_UNCACHED_COHERENT_GUARDED	3	/* uncached, coherent, guarded */
 
 #define PTE_WIMG_DEFAULT 	PTE_WIMG_CB_CACHED_COHERENT
 #define PTE_WIMG_IO		PTE_WIMG_UNCACHED_COHERENT_GUARDED
@@ -212,190 +207,13 @@
 #ifndef ASSEMBLER
 #ifdef __GNUC__
 
-#if _BIG_ENDIAN == 0
-#error - bitfield structures are not checked for bit ordering in words
-#endif /* _BIG_ENDIAN */
-
 /* Structures and types for machine registers */
 
-typedef union {
-	unsigned int word;
-	struct {
-		unsigned int htaborg    : 16;
-		unsigned int reserved   : 7;
-		unsigned int htabmask   : 9;
-	} bits;
-} sdr1_t;
-
-/* Block mapping registers.  These values are model dependent. 
- * Eventually, we will need to up these to 64 bit values.
- */
-
-#define blokValid 0x1FFE0000
-#define batMin 0x00020000
-#define batMax 0x10000000
-#define batICnt 4
-#define batDCnt 4
-
-/* BAT register structures.
- * Not used for standard mappings, but may be used
- * for mapping devices. Note that the 601 has a
- * different BAT layout than the other PowerPC processors
- */
-
-typedef union {
-	unsigned int word;
-	struct {
-		unsigned int blpi	: 15;
-		unsigned int reserved	: 10;
-		unsigned int wim	: 3;
-		unsigned int ks		: 1;
-		unsigned int ku		: 1;
-		unsigned int pp		: 2;
-	} bits;
-} bat601u_t;
-
-typedef union {
-	unsigned int word;
-	struct {
-		unsigned int pbn	: 15;
-		unsigned int reserved	: 10;
-		unsigned int valid	: 1;
-		unsigned int bsm	: 6;
-	} bits;
-} bat601l_t;
-
-typedef struct bat601_t {
-	bat601u_t	upper;
-	bat601l_t	lower;
-} bat601_t;
-
-typedef union {
-	unsigned int word;
-	struct {
-		unsigned int bepi	: 15;
-		unsigned int reserved	: 4;
-		unsigned int bl		: 11;
-		unsigned int vs		: 1;
-		unsigned int vp		: 1;
-	} bits;
-} batu_t;
-
-typedef union {
-	unsigned int word;
-	struct {
-		unsigned int brpn	: 15;
-		unsigned int reserved	: 10;
-		unsigned int wimg	: 4;
-		unsigned int reserved2	: 1;
-		unsigned int pp		: 2;
-	} bits;
-} batl_t;
-
-typedef struct bat_t {
-	batu_t	upper;
-	batl_t	lower;
-} bat_t;
-
-/* PTE entries
- * Used extensively for standard mappings
- */
-
-typedef	union {
-	unsigned int word;
-	struct {
-		unsigned int valid      : 1;
-		unsigned int segment_id : 24;
-		unsigned int hash_id    : 1;
-		unsigned int page_index : 6; /* Abbreviated */
-	} bits;
-	struct {
-		unsigned int valid      : 1;
-		unsigned int not_used   : 5;
-		unsigned int segment_id : 19; /* Least Sig 19 bits */
-		unsigned int hash_id    : 1;
-		unsigned int page_index : 6;
-	} hash_bits;
-} pte0_t;
-
-typedef	union {
-	unsigned int word;
-	struct {
-		unsigned int phys_page  : 20;
-		unsigned int reserved3  : 3;
-		unsigned int referenced : 1;
-		unsigned int changed    : 1;
-		unsigned int wimg       : 4;
-		unsigned int reserved1  : 1;
-		unsigned int protection : 2;
-	} bits;
-} pte1_t;
-
-typedef struct pte_t {
-	pte0_t pte0;
-	pte1_t pte1;
-} pte_t;
-
-/*
- * A virtual address is decoded into various parts when looking for its PTE
- */
-
-typedef struct va_full_t {
-	unsigned int seg_num    : 4;
-	unsigned int page_index : 16;
-	unsigned int byte_ofs   : 12;
-} va_full_t;
-
-typedef struct va_abbrev_t { /* use bits.abbrev for abbreviated page index */
-	unsigned int seg_num    : 4;
-	unsigned int page_index : 6;
-	unsigned int junk       : 10;
-	unsigned int byte_ofs   : 12;
-} va_abbrev_t;
-
-typedef union {
-	unsigned int word;
-	va_full_t    full;
-	va_abbrev_t  abbrev;
-} virtual_addr_t;
-
-/* A physical address can be split up into page and offset */
-
-typedef struct pa_t {
-	unsigned int page_no : 20;
-	unsigned int offset  : 12;
-} pa_t;
-
-typedef union {
-	unsigned int word;
-	pa_t         bits;
-} physical_addr_t;
 
 /*
  * C-helper inline functions for accessing machine registers follow.
  */
 
-
-#ifdef	__ELF__
-#define	__CASMNL__	";"
-#else
-#define	__CASMNL__ "@"
-#endif
-
-/* Return the current GOT pointer */
-
-extern unsigned int get_got(void);
-
-extern __inline__ unsigned int get_got(void)
-{
-        unsigned int result;
-#ifndef __ELF__
-        __asm__ volatile("mr %0,	r2" : "=r" (result));
-#else
-        __asm__ volatile("mr %0,	2" : "=r" (result));
-#endif
-        return result;
-}
 
 /*
  * Various memory/IO synchronisation instructions
@@ -424,25 +242,6 @@ extern __inline__ unsigned int get_got(void)
 
 #define isync() \
         __asm__ volatile("isync")
-
-
-/*
- *		This guy will make sure all tlbs on all processors finish their tlbies
- */
-#define tlbsync() \
-        __asm__ volatile("tlbsync")
-
-
-		/*	Invalidate TLB entry. Caution, requires context synchronization.
-		*/
-extern void tlbie(unsigned int val);
-
-extern __inline__ void tlbie(unsigned int val)
-{
-        __asm__ volatile("tlbie %0" : : "r" (val));
-        return;
-}
-
 
 
 /*
@@ -480,54 +279,6 @@ extern __inline__ unsigned int mfmsr(void)
         return result;
 }
 
-/* mtsr and mfsr must be macros since SR must be hardcoded */
-
-#if __ELF__
-#define mtsr(SR, REG)							     \
-	__asm__ volatile("sync" __CASMNL__ "mtsr %0, %1 " __CASMNL__ "isync" : : "i" (SR), "r" (REG));
-#define mfsr(REG, SR) \
-	__asm__ volatile("mfsr %0, %1" : "=r" (REG) : "i" (SR));
-#else
-#define mtsr(SR, REG)							     \
-	__asm__ volatile("sync" __CASMNL__ "mtsr sr%0, %1 " __CASMNL__ "isync" : : "i" (SR), "r" (REG)); 
-
-#define mfsr(REG, SR) \
-	__asm__ volatile("mfsr %0, sr%1" : "=r" (REG) : "i" (SR));
-#endif
-
-
-extern void mtsrin(unsigned int val, unsigned int reg);
-
-extern __inline__ void mtsrin(unsigned int val, unsigned int reg)
-{
-        __asm__ volatile("sync" __CASMNL__ "mtsrin %0, %1" __CASMNL__ " isync" : : "r" (val), "r" (reg));
-        return;
-}
-
-extern unsigned int mfsrin(unsigned int reg);
-
-extern __inline__ unsigned int mfsrin(unsigned int reg)
-{
-	unsigned int result;
-        __asm__ volatile("mfsrin %0, %1" : "=r" (result) : "r" (reg));
-        return result;
-}
-
-extern void mtsdr1(unsigned int val);
-
-extern __inline__ void mtsdr1(unsigned int val)
-{
-        __asm__ volatile("mtsdr1 %0" : : "r" (val));
-        return;
-}
-
-extern void mtdar(unsigned int val);
-
-extern __inline__ void mtdar(unsigned int val)
-{
-        __asm__ volatile("mtdar %0" : : "r" (val));
-        return;
-}
 
 extern unsigned int mfdar(void);
 
@@ -545,23 +296,6 @@ extern __inline__ void mtdec(unsigned int val)
         __asm__ volatile("mtdec %0" : : "r" (val));
         return;
 }
-
-extern int isync_mfdec(void);
-
-extern __inline__ int isync_mfdec(void)
-{
-        int result;
-        __asm__ volatile("isync" __CASMNL__ "mfdec %0" : "=r" (result));
-        return result;
-}
-
-/* Read and write the value from the real-time clock
- * or time base registers. Note that you have to
- * use the right ones depending upon being on
- * 601 or 603/604. Care about carries between
- * the words and using the right registers must be
- * done by the calling function.
- */
 
 extern void mttb(unsigned int val);
 
@@ -595,48 +329,6 @@ extern __inline__ unsigned int mftbu(void)
         unsigned int result;
         __asm__ volatile("mftbu %0" : "=r" (result));
         return result;
-}
-
-extern void mtrtcl(unsigned int val);
-
-extern __inline__ void mtrtcl(unsigned int val)
-{
-        __asm__ volatile("mtspr  21,%0" : : "r" (val));
-        return;
-}
-
-extern unsigned int mfrtcl(void);
-
-extern __inline__ unsigned int mfrtcl(void)
-{
-        unsigned int result;
-        __asm__ volatile("mfspr %0,5" : "=r" (result));
-        return result;
-}
-
-extern void mtrtcu(unsigned int val);
-
-extern __inline__ void mtrtcu(unsigned int val)
-{
-        __asm__ volatile("mtspr 20,%0" : : "r" (val));
-        return;
-}
-
-extern unsigned int mfrtcu(void);
-
-extern __inline__ unsigned int mfrtcu(void)
-{
-        unsigned int result;
-        __asm__ volatile("mfspr %0,4" : "=r" (result));
-        return result;
-}
-
-extern void mtl2cr(unsigned int val);
-
-extern __inline__ void mtl2cr(unsigned int val)
-{
-  __asm__ volatile("mtspr l2cr, %0" : : "r" (val));
-  return;
 }
 
 extern unsigned int mfl2cr(void);
@@ -695,18 +387,6 @@ extern unsigned long   mfsia(void);
 extern unsigned long   mfsda(void);
 
 /* macros since the argument n is a hard-coded constant */
-
-#define mtibatu(n, reg) __asm__ volatile("mtibatu " # n ", %0" : : "r" (reg))
-#define mtibatl(n, reg) __asm__ volatile("mtibatl " # n ", %0" : : "r" (reg))
-
-#define mtdbatu(n, reg) __asm__ volatile("mtdbatu " # n ", %0" : : "r" (reg))
-#define mtdbatl(n, reg) __asm__ volatile("mtdbatl " # n ", %0" : : "r" (reg))
-
-#define mfibatu(reg, n) __asm__ volatile("mfibatu %0, " # n : "=r" (reg))
-#define mfibatl(reg, n) __asm__ volatile("mfibatl %0, " # n : "=r" (reg))
-
-#define mfdbatu(reg, n) __asm__ volatile("mfdbatu %0, " # n : "=r" (reg))
-#define mfdbatl(reg, n) __asm__ volatile("mfdbatl %0, " # n : "=r" (reg))
 
 #define mtsprg(n, reg)  __asm__ volatile("mtsprg  " # n ", %0" : : "r" (reg))
 #define mfsprg(reg, n)  __asm__ volatile("mfsprg  %0, " # n : "=r" (reg))

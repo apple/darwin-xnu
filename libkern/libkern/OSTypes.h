@@ -84,11 +84,7 @@ typedef unsigned char Boolean;
 #endif /* __MACTYPES__ */
 
 #if !defined(OS_INLINE)
-    #if defined(__GNUC__)
-	#define OS_INLINE static __inline__
-    #elif defined(__MWERKS__) || defined(__cplusplus)
-	#define OS_INLINE static inline
-    #endif
+#	define OS_INLINE static inline
 #endif
 
 #endif /* _OS_OSTYPES_H */

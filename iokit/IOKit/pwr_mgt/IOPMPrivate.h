@@ -35,7 +35,7 @@ enum {
     // don't sleep on clamshell closure on a portable with AC connected
     kIOPMSetDesktopMode		= (1<<17),
     // set state of AC adaptor connected
-    kIOPMSetACAdaptorConnected	= (1<<18),
+    kIOPMSetACAdaptorConnected	= (1<<18)
 };
 
 #endif /* ! _IOKIT_IOPMPRIVATE_H */

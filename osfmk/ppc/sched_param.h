@@ -64,4 +64,4 @@
 #include <ppc/exception.h>
 #include <ppc/savearea.h>
 
-#endif	_PPC_SCHED_PARAM_H_
+#endif	/* _PPC_SCHED_PARAM_H_ */

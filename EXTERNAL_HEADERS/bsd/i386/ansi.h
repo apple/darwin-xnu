@@ -80,6 +80,7 @@
 #define	_BSD_SSIZE_T_	int			/* byte count or error */
 #define	_BSD_TIME_T_	long			/* time() */
 #define	_BSD_VA_LIST_	void *		/* va_list */
+#define _BSD_SOCKLEN_T_ int32_t                 /* socklen_t (duh) */
 
 /*
  * Runes (wchar_t) is declared to be an ``int'' instead of the more natural

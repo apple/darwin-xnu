@@ -75,16 +75,15 @@
 #ifndef KERNEL
 LEAF(_ev_lock, 0)
 LEAF(_IOSpinLock, 0)
-	push 	%eax
-	push	%ecx
-	movl	$1, %ecx
-	movl	12(%esp), %eax	
-_spin:
-	xchgl	%ecx,0(%eax)
-	cmp	$0, %ecx
-	jne	_spin
-	pop	%ecx
-	pop	%eax
+	movl		4(%esp), %ecx
+0:
+	xorl		%eax, %eax
+	rep
+	nop		/* pause for hyperthreaded CPU's */
+	lock
+	cmpxchgl	%ecx, (%ecx)
+	jne		0b
+	ret
 END(_ev_lock)
 #endif
 
@@ -97,11 +96,10 @@ END(_ev_lock)
  */
 LEAF(_ev_unlock, 0)
 LEAF(_IOSpinUnlock, 0)
-	push	%eax
-	movl	8(%esp),%eax
-	movl	$0,0(%eax)
+	movl		4(%esp), %ecx
+	movl		$0, (%ecx)
 	ENABLE_PREEMPTION()
-	pop	%eax
+	ret
 END(_ev_unlock)
 
 
@@ -117,9 +115,11 @@ END(_ev_unlock)
 LEAF(_ev_try_lock, 0)
 LEAF(_IOTrySpinLock, 0)
         DISABLE_PREEMPTION()
-	movl	4(%esp), %eax
-   lock;bts	$0, 0(%eax)
-	jb	1f
+        movl            4(%esp), %ecx 
+	xorl		%eax, %eax
+        lock
+        cmpxchgl        %ecx, (%ecx)
+	jne	1f
 	movl	$1, %eax		/* yes */
 	ret
 1:

@@ -452,6 +452,37 @@ routine io_registry_entry_get_property_recursively(
 	out properties		: io_buf_ptr_t, physicalcopy
 	);
 
+
+routine io_service_get_state(
+	    service		: io_object_t;
+	out state		: uint64_t
+	);
+
+routine io_service_get_matching_services_ool(
+	    master_port		: mach_port_t;
+	in  matching		: io_buf_ptr_t, physicalcopy;
+        out result		: natural_t;
+	out existing		: io_object_t
+	);
+
+routine io_service_match_property_table_ool(
+	    service		: io_object_t;
+	in  matching		: io_buf_ptr_t, physicalcopy;
+        out result		: natural_t;
+	out matches		: boolean_t
+	);
+
+routine io_service_add_notification_ool(
+	    master_port		: mach_port_t;
+	in  notification_type	: io_name_t;
+	in  matching		: io_buf_ptr_t, physicalcopy;
+	in  wake_port		: mach_port_make_send_t;
+	in  reference		: io_async_ref_t;
+        out result		: natural_t;
+	out notification	: io_object_t
+	);
+
+
 #endif
 
 

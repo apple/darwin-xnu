@@ -35,11 +35,14 @@
 
 #include <cpus.h>
 #include <platforms.h>
-#include <mp_v1_1.h>
 #include <mach_kdb.h>
+
+#include <mach/mach_types.h>
+
 #include <kern/cpu_number.h>
 #include <kern/cpu_data.h>
 #include <kern/clock.h>
+#include <kern/host_notify.h>
 #include <kern/macro_help.h>
 #include <kern/misc_protos.h>
 #include <kern/spl.h>
@@ -53,6 +56,13 @@
 #include <i386/misc_protos.h>
 #include <i386/rtclock_entries.h>
 #include <i386/hardclock_entries.h>
+#include <i386/proc_reg.h>
+#include <i386/machine_cpu.h>
+#include <pexpert/pexpert.h>
+
+#define DISPLAYENTER(x) printf("[RTCLOCK] entering " #x "\n");
+#define DISPLAYEXIT(x) printf("[RTCLOCK] leaving " #x "\n");
+#define DISPLAYVALUE(x,y) printf("[RTCLOCK] " #x ":" #y " = 0x%08x \n",y);
 
 int		sysclk_config(void);
 
@@ -77,20 +87,6 @@ void		sysclk_setalarm(
 extern	void (*IOKitRegisterInterruptHook)(void *,  int irq, int isclock);
 
 /*
- * Inlines to get timestamp counter value.
- */
-
-static inline void rdtsc_hilo(uint32_t *hi, uint32_t *lo) {
-        asm volatile("rdtsc": "=a" (*lo), "=d" (*hi));
-}
-
-static inline uint64_t rdtsc_64(void) {
-	uint64_t result;
-        asm volatile("rdtsc": "=A" (result));
-	return result;
-}
-
-/*
  * Lists of clock routines.
  */
 struct clock_ops  sysclk_ops = {
@@ -107,9 +103,6 @@ int		calend_init(void);
 kern_return_t	calend_gettime(
 	mach_timespec_t			*cur_time);
 
-kern_return_t	calend_settime(
-	mach_timespec_t			*cur_time);
-
 kern_return_t	calend_getattr(
 	clock_flavor_t			flavor,
 	clock_attr_t			attr,
@@ -117,7 +110,7 @@ kern_return_t	calend_getattr(
 
 struct clock_ops calend_ops = {
 	calend_config,			calend_init,
-	calend_gettime,			calend_settime,
+	calend_gettime,			0,
 	calend_getattr,			0,
 	0,
 };
@@ -137,12 +130,16 @@ struct	{
 	mach_timespec_t		calend_offset;
 	boolean_t			calend_is_set;
 
+	int64_t				calend_adjtotal;
+	int32_t				calend_adjdelta;
+
 	uint64_t			timer_deadline;
 	boolean_t			timer_is_set;
 	clock_timer_func_t	timer_expire;
 
 	clock_res_t			new_ires;	/* pending new resolution (nano ) */
 	clock_res_t			intr_nsec;	/* interrupt resolution (nano) */
+        mach_timebase_info_data_t	timebase_const;
 
 	decl_simple_lock_data(,lock)	/* real-time clock device lock */
 } rtclock;
@@ -152,14 +149,13 @@ unsigned int		new_clknum;                    /* pending clknum */
 unsigned int		time_per_clk;                  /* time per clk in ZHZ */
 unsigned int		clks_per_int;                  /* clks per interrupt */
 unsigned int		clks_per_int_99;
-int					rtc_intr_count;                /* interrupt counter */
-int					rtc_intr_hertz;                /* interrupts per HZ */
-int					rtc_intr_freq;                 /* interrupt frequency */
-int					rtc_print_lost_tick;           /* print lost tick */
+int			rtc_intr_count;                /* interrupt counter */
+int			rtc_intr_hertz;                /* interrupts per HZ */
+int			rtc_intr_freq;                 /* interrupt frequency */
+int			rtc_print_lost_tick;           /* print lost tick */
 
 uint32_t		rtc_cyc_per_sec;		/* processor cycles per seconds */
-uint32_t		rtc_last_int_tsc_lo;		/* tsc values saved per interupt */
-uint32_t		rtc_last_int_tsc_hi;
+uint32_t		rtc_quant_scale;		/* used internally to convert clocks to nanos */
 
 /*
  *	Macros to lock/unlock real-time clock device.
@@ -209,11 +205,19 @@ MACRO_END
  *
  * This sequence to do all this is in sysclk_gettime.  For efficiency, this
  * sequence also needs the value that the counter will have if it has just
- * overflowed, so we precompute that also.  ALSO, certain platforms
+ * overflowed, so we precompute that also.  
+ *
+ * The fix for certain really old certain platforms has been removed
  * (specifically the DEC XL5100) have been observed to have problem
  * with latching the counter, and they occasionally (say, one out of
  * 100,000 times) return a bogus value.  Hence, the present code reads
  * the counter twice and checks for a consistent pair of values.
+ * the code was:
+ *	do {
+ *	    READ_8254(val);                
+ *	    READ_8254(val2);                
+ *	} while ( val2 > val || val2 < val - 10 );
+ *
  *
  * Some attributes of the rt clock can be changed, including the
  * interrupt resolution.  We default to the minimum resolution (10 ms),
@@ -232,20 +236,287 @@ MACRO_END
 	(val) = inb(PITCTR0_PORT);               \
 	(val) |= inb(PITCTR0_PORT) << 8 ; }
 
-/*
- * Calibration delay counts.
- */
-unsigned int	delaycount = 100;
-unsigned int	microdata = 50;
+#define UI_CPUFREQ_ROUNDING_FACTOR	10000000
+
 
 /*
  * Forward decl.
  */
 
-extern int   measure_delay(int us);
 void         rtc_setvals( unsigned int, clock_res_t );
 
 static void  rtc_set_cyc_per_sec();
+
+/* define assembly routines */
+
+
+/*
+ * Inlines to get timestamp counter value.
+ */
+
+inline static uint64_t
+rdtsc_64(void)
+{
+	uint64_t result;
+        asm volatile("rdtsc": "=A" (result));
+	return result;
+}
+
+// create_mul_quant_GHZ create a constant that can be used to multiply
+// the TSC by to create nanoseconds. This is a 32 bit number
+// and the TSC *MUST* have a frequency higher than 1000Mhz for this routine to work
+//
+// The theory here is that we know how many TSCs-per-sec the processor runs at. Normally to convert this
+// to nanoseconds you would multiply the current time stamp by 1000000000 (a billion) then divide
+// by TSCs-per-sec to get nanoseconds. Unfortunatly the TSC is 64 bits which would leave us with
+// 96 bit intermediate results from the dultiply that must be divided by.
+// usually thats
+// uint96 = tsc * numer
+// nanos = uint96 / denom
+// Instead, we create this quant constant and it becomes the numerator, the denominator
+// can then be 0x100000000 which makes our division as simple as forgetting the lower 32 bits
+// of the result. We can also pass this number to user space as the numer and pass 0xFFFFFFFF
+// as the denom to converting raw counts to nanos. the difference is so small as to be undetectable
+// by anything.
+// unfortunatly we can not do this for sub GHZ processors. In that case, all we do is pass the CPU
+// speed in raw as the denom and we pass in 1000000000 as the numerator. No short cuts allowed
+
+inline static uint32_t
+create_mul_quant_GHZ(uint32_t quant)
+{
+	return (uint32_t)((50000000ULL << 32) / quant);
+}
+
+// this routine takes a value of raw TSC ticks and applies the passed mul_quant
+// generated by create_mul_quant() This is our internal routine for creating
+// nanoseconds
+// since we don't really have uint96_t this routine basically does this....
+// uint96_t intermediate = (*value) * scale
+// return (intermediate >> 32)
+inline static uint64_t
+fast_get_nano_from_abs(uint64_t value, int scale)
+{
+    asm (" 	movl	%%edx,%%esi	\n\t"
+         "      mull	%%ecx		\n\t"
+         "      movl	%%edx,%%edi	\n\t"
+         "      movl	%%esi,%%eax	\n\t"
+         "      mull	%%ecx		\n\t"
+         "      xorl	%%ecx,%%ecx	\n\t"	
+         "      addl	%%edi,%%eax	\n\t"	
+         "      adcl	%%ecx,%%edx	    "
+		: "+A" (value)
+		: "c" (scale)
+		: "%esi", "%edi");
+    return value;
+}
+
+/*
+ * this routine basically does this...
+ * ts.tv_sec = nanos / 1000000000;	create seconds
+ * ts.tv_nsec = nanos % 1000000000;	create remainder nanos
+ */
+inline static mach_timespec_t 
+nanos_to_timespec(uint64_t nanos)
+{
+	union {
+		mach_timespec_t ts;
+		uint64_t u64;
+	} ret;
+        ret.u64 = nanos;
+        asm volatile("divl %1" : "+A" (ret.u64) : "r" (NSEC_PER_SEC));
+        return ret.ts;
+}
+
+// the following two routine perform the 96 bit arithmetic we need to
+// convert generic absolute<->nanoseconds
+// the multiply routine takes a uint64_t and a uint32_t and returns the result in a
+// uint32_t[3] array. the dicide routine takes this uint32_t[3] array and 
+// divides it by a uint32_t returning a uint64_t
+inline static void
+longmul(uint64_t	*abstime, uint32_t multiplicand, uint32_t *result)
+{
+    asm volatile(
+        " pushl	%%ebx			\n\t"	
+        " movl	%%eax,%%ebx		\n\t"
+        " movl	(%%eax),%%eax		\n\t"
+        " mull	%%ecx			\n\t"
+        " xchg	%%eax,%%ebx		\n\t"
+        " pushl	%%edx			\n\t"
+        " movl	4(%%eax),%%eax		\n\t"
+        " mull	%%ecx			\n\t"
+        " movl	%2,%%ecx		\n\t"
+        " movl	%%ebx,(%%ecx)		\n\t"
+        " popl	%%ebx			\n\t"
+        " addl	%%ebx,%%eax		\n\t"
+        " popl	%%ebx			\n\t"
+        " movl	%%eax,4(%%ecx)		\n\t"
+        " adcl	$0,%%edx		\n\t"
+        " movl	%%edx,8(%%ecx)	// and save it"
+         : : "a"(abstime), "c"(multiplicand), "m"(result));
+    
+}
+
+inline static uint64_t
+longdiv(uint32_t *numer, uint32_t denom)
+{
+    uint64_t	result;
+    asm volatile(
+        " pushl	%%ebx			\n\t"
+        " movl	%%eax,%%ebx		\n\t"
+        " movl	8(%%eax),%%edx		\n\t"
+        " movl	4(%%eax),%%eax		\n\t"
+        " divl	%%ecx			\n\t"
+        " xchg	%%ebx,%%eax		\n\t"
+        " movl	(%%eax),%%eax		\n\t"
+        " divl	%%ecx			\n\t"
+        " xchg	%%ebx,%%edx		\n\t"
+        " popl	%%ebx			\n\t"
+        : "=A"(result) : "a"(numer),"c"(denom));
+    return result;
+}
+
+#define PIT_Mode4	0x08		/* turn on mode 4 one shot software trigger */
+
+// Enable or disable timer 2.
+inline static void
+enable_PIT2()
+{
+    asm volatile(
+        " inb   $97,%%al        \n\t"
+        " and   $253,%%al       \n\t"
+        " or    $1,%%al         \n\t"
+        " outb  %%al,$97        \n\t"
+      : : : "%al" );
+}
+
+inline static void
+disable_PIT2()
+{
+    asm volatile(
+        " inb   $97,%%al        \n\t"
+        " and   $253,%%al       \n\t"
+        " outb  %%al,$97        \n\t"
+        : : : "%al" );
+}
+
+// ctimeRDTSC() routine sets up counter 2 to count down 1/20 of a second
+// it pauses until the value is latched in the counter
+// and then reads the time stamp counter to return to the caller
+// utility routine 
+// Code to calculate how many processor cycles are in a second...
+inline static void
+set_PIT2(int value)
+{
+// first, tell the clock we are going to write 16 bytes to the counter and enable one-shot mode
+// then write the two bytes into the clock register.
+// loop until the value is "realized" in the clock, this happens on the next tick
+//
+    asm volatile(
+        " movb  $184,%%al       \n\t"
+        " outb	%%al,$67	\n\t"
+        " movb	%%dl,%%al	\n\t"
+        " outb	%%al,$66	\n\t"
+        " movb	%%dh,%%al	\n\t"
+        " outb	%%al,$66	\n"
+"1:	  inb	$66,%%al	\n\t" 
+        " inb	$66,%%al	\n\t"
+        " cmp	%%al,%%dh	\n\t"
+        " jne	1b"
+         : : "d"(value) : "%al");
+}
+
+inline static uint64_t
+get_PIT2(unsigned int *value)
+{
+// this routine first latches the time, then gets the time stamp so we know 
+// how long the read will take later. Reads
+    register uint64_t	result;
+    asm volatile(
+        " xorl	%%ecx,%%ecx	\n\t"
+        " movb	$128,%%al	\n\t"
+        " outb	%%al,$67	\n\t"
+        " rdtsc			\n\t"
+        " pushl	%%eax		\n\t"
+        " inb	$66,%%al	\n\t"
+        " movb	%%al,%%cl	\n\t"
+        " inb	$66,%%al	\n\t"
+        " movb	%%al,%%ch	\n\t"
+        " popl	%%eax	"
+         : "=A"(result), "=c"(*value));
+        return result;
+}
+
+static uint32_t
+timeRDTSC(void)
+{
+    uint64_t	latchTime;
+    uint64_t	saveTime,intermediate;
+    unsigned int timerValue,x;
+    boolean_t   int_enabled;
+    uint64_t	fact[6] = { 2000011734ll,
+                            2000045259ll,
+                            2000078785ll,
+                            2000112312ll,
+                            2000145841ll,
+                            2000179371ll};
+                            
+    int_enabled = ml_set_interrupts_enabled(FALSE);
+    
+    enable_PIT2();      // turn on PIT2
+    set_PIT2(0);	// reset timer 2 to be zero
+    latchTime = rdtsc_64();	// get the time stamp to time 
+    latchTime = get_PIT2(&timerValue) - latchTime; // time how long this takes
+    set_PIT2(59658);	// set up the timer to count 1/20th a second
+    saveTime = rdtsc_64();	// now time how ling a 20th a second is...
+    get_PIT2(&x);
+    do { get_PIT2(&timerValue); x = timerValue;} while (timerValue > x);
+    do {
+        intermediate = get_PIT2(&timerValue);
+        if (timerValue>x) printf("Hey we are going backwards! %d, %d\n",timerValue,x);
+        x = timerValue;
+    } while ((timerValue != 0) && (timerValue >5));
+    printf("Timer value:%d\n",timerValue);
+    printf("intermediate 0x%08x:0x%08x\n",intermediate);
+    printf("saveTime 0x%08x:0x%08x\n",saveTime);
+    
+    intermediate = intermediate - saveTime;	// raw # of tsc's it takes for about 1/20 second
+    intermediate = intermediate * fact[timerValue]; // actual time spent
+    intermediate = intermediate / 2000000000ll; // rescale so its exactly 1/20 a second
+    intermediate = intermediate + latchTime; // add on our save fudge
+    set_PIT2(0);	// reset timer 2 to be zero
+    disable_PIT2(0);    // turn off PIT 2
+    ml_set_interrupts_enabled(int_enabled);
+    return intermediate;
+}
+
+static uint64_t
+rdtsctime_to_nanoseconds( void )
+{
+        uint32_t	numer;
+        uint32_t	denom;
+        uint64_t	abstime;
+
+        uint32_t	intermediate[3];
+        
+        numer = rtclock.timebase_const.numer;
+        denom = rtclock.timebase_const.denom;
+        abstime = rdtsc_64();
+        if (denom == 0xFFFFFFFF) {
+            abstime = fast_get_nano_from_abs(abstime, numer);
+        } else {
+            longmul(&abstime, numer, intermediate);
+            abstime = longdiv(intermediate, denom);
+        }
+        return abstime;
+}
+
+inline static mach_timespec_t 
+rdtsc_to_timespec(void)
+{
+        uint64_t	currNanos;
+        currNanos = rdtsctime_to_nanoseconds();
+        return nanos_to_timespec(currNanos);
+}
 
 /*
  * Initialize non-zero clock structure values.
@@ -314,17 +585,7 @@ sysclk_config(void)
 	/*
 	 * Setup device.
 	 */
-#if	MP_V1_1
-    {
-	extern boolean_t mp_v1_1_initialized;
-	if (mp_v1_1_initialized)
-	    pic = 2;
-	else
-	    pic = 0;
-    }
-#else
 	pic = 0;	/* FIXME .. interrupt registration moved to AppleIntelClock */
-#endif
 
 
 	/*
@@ -363,6 +624,7 @@ sysclk_init(void)
 	RtcTime = &rtclock.time;
 	rtc_setvals( CLKNUM, RTC_MINRES );  /* compute constants */
 	rtc_set_cyc_per_sec();	/* compute number of tsc beats per second */
+	clock_timebase_init();
 	return (1);
 }
 
@@ -377,10 +639,6 @@ kern_return_t
 sysclk_gettime(
 	mach_timespec_t	*cur_time)	/* OUT */
 {
-        mach_timespec_t	itime = {0, 0};
-	unsigned int	val, val2;
-	int		s;
-
 	if (!RtcTime) {
 		/* Uninitialized */
 		cur_time->tv_nsec = 0;
@@ -388,31 +646,7 @@ sysclk_gettime(
 		return (KERN_SUCCESS);
 	}
 
-	/*
-	 * Inhibit interrupts. Determine the incremental
-	 * time since the last interrupt. (This could be
-	 * done in assembler for a bit more speed).
-	 */
-	LOCK_RTC(s);
-	do {
-	    READ_8254(val);                 /* read clock */
-	    READ_8254(val2);                /* read clock */
-	} while ( val2 > val || val2 < val - 10 );
-	if ( val > clks_per_int_99 ) {
-	    outb( 0x0a, 0x20 );             /* see if interrupt pending */
-	    if ( inb( 0x20 ) & 1 )
-		itime.tv_nsec = rtclock.intr_nsec; /* yes, add a tick */
-	}
-	itime.tv_nsec += ((clks_per_int - val) * time_per_clk) / ZHZ;
-	if ( itime.tv_nsec < last_ival ) {
-	    if (rtc_print_lost_tick)
-		printf( "rtclock: missed clock interrupt.\n" );
-	}
-	last_ival = itime.tv_nsec;
-	cur_time->tv_sec = rtclock.time.tv_sec;
-	cur_time->tv_nsec = rtclock.time.tv_nsec;
-	UNLOCK_RTC(s);
-	ADD_MACH_TIMESPEC(cur_time, ((mach_timespec_t *)&itime));
+        *cur_time = rdtsc_to_timespec();
 	return (KERN_SUCCESS);
 }
 
@@ -420,39 +654,13 @@ kern_return_t
 sysclk_gettime_internal(
 	mach_timespec_t	*cur_time)	/* OUT */
 {
-        mach_timespec_t	itime = {0, 0};
-	unsigned int	val, val2;
-
 	if (!RtcTime) {
 		/* Uninitialized */
 		cur_time->tv_nsec = 0;
 		cur_time->tv_sec = 0;
 		return (KERN_SUCCESS);
 	}
-
-	/*
-	 * Inhibit interrupts. Determine the incremental
-	 * time since the last interrupt. (This could be
-	 * done in assembler for a bit more speed).
-	 */
-	do {
-	    READ_8254(val);                 /* read clock */
-	    READ_8254(val2);                /* read clock */
-	} while ( val2 > val || val2 < val - 10 );
-	if ( val > clks_per_int_99 ) {
-	    outb( 0x0a, 0x20 );             /* see if interrupt pending */
-	    if ( inb( 0x20 ) & 1 )
-		itime.tv_nsec = rtclock.intr_nsec; /* yes, add a tick */
-	}
-	itime.tv_nsec += ((clks_per_int - val) * time_per_clk) / ZHZ;
-	if ( itime.tv_nsec < last_ival ) {
-	    if (rtc_print_lost_tick)
-		printf( "rtclock: missed clock interrupt.\n" );
-	}
-	last_ival = itime.tv_nsec;
-	cur_time->tv_sec = rtclock.time.tv_sec;
-	cur_time->tv_nsec = rtclock.time.tv_nsec;
-	ADD_MACH_TIMESPEC(cur_time, ((mach_timespec_t *)&itime));
+        *cur_time = rdtsc_to_timespec();
 	return (KERN_SUCCESS);
 }
 
@@ -466,39 +674,13 @@ void
 sysclk_gettime_interrupts_disabled(
 	mach_timespec_t	*cur_time)	/* OUT */
 {
-	mach_timespec_t	itime = {0, 0};
-	unsigned int	val;
-
 	if (!RtcTime) {
 		/* Uninitialized */
 		cur_time->tv_nsec = 0;
 		cur_time->tv_sec = 0;
 		return;
 	}
-
-	simple_lock(&rtclock.lock);
-
-	/*
-	 * Copy the current time knowing that we cant be interrupted
-	 * between the two longwords and so dont need to use MTS_TO_TS
-	 */
-	READ_8254(val);                     /* read clock */
-	if ( val > clks_per_int_99 ) {
-	    outb( 0x0a, 0x20 );             /* see if interrupt pending */
-	    if ( inb( 0x20 ) & 1 )
-		itime.tv_nsec = rtclock.intr_nsec; /* yes, add a tick */
-	}
-	itime.tv_nsec += ((clks_per_int - val) * time_per_clk) / ZHZ;
-	if ( itime.tv_nsec < last_ival ) {
-	    if (rtc_print_lost_tick)
-		printf( "rtclock: missed clock interrupt.\n" );
-	}
-	last_ival = itime.tv_nsec;
-	cur_time->tv_sec = rtclock.time.tv_sec;
-	cur_time->tv_nsec = rtclock.time.tv_nsec;
-	ADD_MACH_TIMESPEC(cur_time, ((mach_timespec_t *)&itime));
-
-	simple_unlock(&rtclock.lock);
+        *cur_time = rdtsc_to_timespec();
 }
 
 // utility routine 
@@ -508,59 +690,54 @@ static void
 rtc_set_cyc_per_sec() 
 {
 
-        int     x, y;
-        uint64_t cycles;
-        uint32_t   c[15];          // array for holding sampled cycle counts
-        mach_timespec_t tst[15];  // array for holding time values. NOTE for some reason tv_sec not work
+        uint32_t twen_cycles;
+        uint32_t cycles;
 
-        for (x=0; x<15; x++) {  // quick sample 15 times
-                tst[x].tv_sec = 0;
-                tst[x].tv_nsec = 0;
-                sysclk_gettime_internal(&tst[x]);
-		rdtsc_hilo(&y, &c[x]);
-        }
-        y = 0;
-        cycles = 0;
-        for (x=0; x<14; x++) {
-          // simple formula really. calculate the numerator as the number of elapsed processor
-          // cycles * 1000 to adjust for the resolution we want. The denominator is the
-          // elapsed "real" time in nano-seconds. The result will be the processor speed in  
-          // Mhz. any overflows will be discarded before they are added
-          if ((c[x+1] > c[x]) && (tst[x+1].tv_nsec > tst[x].tv_nsec)) {
-                cycles += ((uint64_t)(c[x+1]-c[x]) * NSEC_PER_SEC ) / (uint64_t)(tst[x+1].tv_nsec - tst[x].tv_nsec);       // elapsed nsecs
-                y +=1;
-          }
-        }
-        if (y>0) { // we got more than 1 valid sample. This also takes care of the case of if the clock isn't running
-          cycles = cycles / y;    // calc our average
-        }
-	rtc_cyc_per_sec = cycles;
-	rdtsc_hilo(&rtc_last_int_tsc_hi, &rtc_last_int_tsc_lo);
-}
-
-static
-natural_t
-get_uptime_cycles(void)
-{
-        // get the time since the last interupt based on the processors TSC ignoring the
-        // RTC for speed
- 
-        uint32_t   a,d,intermediate_lo,intermediate_hi,result;
-        uint64_t   newTime;
+        twen_cycles = timeRDTSC();
+        if (twen_cycles> (1000000000/20)) {
+            // we create this value so that you can use just a "fast" multiply to get nanos
+            rtc_quant_scale = create_mul_quant_GHZ(twen_cycles);
+            rtclock.timebase_const.numer = rtc_quant_scale;	// because ctimeRDTSC gives us 1/20 a seconds worth
+            rtclock.timebase_const.denom = 0xffffffff;	// so that nanoseconds = (TSC * numer) / denom
         
-	rdtsc_hilo(&d, &a);
-        if (d != rtc_last_int_tsc_hi) {
-	  newTime = d-rtc_last_int_tsc_hi;
-          newTime = (newTime<<32) + (a-rtc_last_int_tsc_lo);
-          result = newTime;
         } else {
-          result = a-rtc_last_int_tsc_lo;
+            rtclock.timebase_const.numer = 1000000000/20;	// because ctimeRDTSC gives us 1/20 a seconds worth
+            rtclock.timebase_const.denom = twen_cycles;	// so that nanoseconds = (TSC * numer) / denom
         }
-        __asm__ volatile ( " mul %3 ": "=eax" (intermediate_lo), "=edx" (intermediate_hi): "a"(result), "d"(NSEC_PER_SEC) );
-        __asm__ volatile ( " div %3": "=eax" (result): "eax"(intermediate_lo), "edx" (intermediate_hi), "ecx" (rtc_cyc_per_sec) );
-        return result;
+        cycles = twen_cycles;		// number of cycles in 1/20th a second
+	rtc_cyc_per_sec = cycles*20;	// multiply it by 20 and we are done.. BUT we also want to calculate...
+
+        cycles = ((rtc_cyc_per_sec + UI_CPUFREQ_ROUNDING_FACTOR - 1) / UI_CPUFREQ_ROUNDING_FACTOR) * UI_CPUFREQ_ROUNDING_FACTOR;
+        gPEClockFrequencyInfo.cpu_clock_rate_hz = cycles;
+DISPLAYVALUE(rtc_set_cyc_per_sec,rtc_cyc_per_sec);
+DISPLAYEXIT(rtc_set_cyc_per_sec);
 }
 
+void
+clock_get_system_microtime(
+	uint32_t			*secs,
+	uint32_t			*microsecs)
+{
+	mach_timespec_t		now;
+
+	sysclk_gettime(&now);
+
+	*secs = now.tv_sec;
+	*microsecs = now.tv_nsec / NSEC_PER_USEC;
+}
+
+void
+clock_get_system_nanotime(
+	uint32_t			*secs,
+	uint32_t			*nanosecs)
+{
+	mach_timespec_t		now;
+
+	sysclk_gettime(&now);
+
+	*secs = now.tv_sec;
+	*nanosecs = now.tv_nsec;
+}
 
 /*
  * Get clock device attributes.
@@ -578,12 +755,12 @@ sysclk_getattr(
 	switch (flavor) {
 
 	case CLOCK_GET_TIME_RES:	/* >0 res */
-#if	(NCPUS == 1 || (MP_V1_1 && 0))
+#if	(NCPUS == 1)
 		LOCK_RTC(s);
 		*(clock_res_t *) attr = 1000;
 		UNLOCK_RTC(s);
 		break;
-#endif	/* (NCPUS == 1 || (MP_V1_1 && 0)) && AT386 */
+#endif	/* (NCPUS == 1) */
 	case CLOCK_ALARM_CURRES:	/* =0 no alarm */
 		LOCK_RTC(s);
 		*(clock_res_t *) attr = rtclock.intr_nsec;
@@ -715,26 +892,51 @@ calend_gettime(
 	return (KERN_SUCCESS);
 }
 
-/*
- * Set the current clock time.
- */
-kern_return_t
-calend_settime(
-	mach_timespec_t	*new_time)
+void
+clock_get_calendar_microtime(
+	uint32_t			*secs,
+	uint32_t			*microsecs)
 {
-	mach_timespec_t	curr_time;
+	mach_timespec_t		now;
+
+	calend_gettime(&now);
+
+	*secs = now.tv_sec;
+	*microsecs = now.tv_nsec / NSEC_PER_USEC;
+}
+
+void
+clock_get_calendar_nanotime(
+	uint32_t			*secs,
+	uint32_t			*nanosecs)
+{
+	mach_timespec_t		now;
+
+	calend_gettime(&now);
+
+	*secs = now.tv_sec;
+	*nanosecs = now.tv_nsec;
+}
+
+void
+clock_set_calendar_microtime(
+	uint32_t			secs,
+	uint32_t			microsecs)
+{
+	mach_timespec_t		new_time, curr_time;
 	spl_t		s;
 
 	LOCK_RTC(s);
 	(void) sysclk_gettime_internal(&curr_time);
-	rtclock.calend_offset = *new_time;
+	rtclock.calend_offset.tv_sec = new_time.tv_sec = secs;
+	rtclock.calend_offset.tv_nsec = new_time.tv_nsec = microsecs * NSEC_PER_USEC;
 	SUB_MACH_TIMESPEC(&rtclock.calend_offset, &curr_time);
 	rtclock.calend_is_set = TRUE;
 	UNLOCK_RTC(s);
 
-	(void) bbc_settime(new_time);
+	(void) bbc_settime(&new_time);
 
-	return (KERN_SUCCESS);
+	host_notify_calendar_change();
 }
 
 /*
@@ -753,17 +955,17 @@ calend_getattr(
 	switch (flavor) {
 
 	case CLOCK_GET_TIME_RES:	/* >0 res */
-#if	(NCPUS == 1 || (MP_V1_1 && 0))
+#if	(NCPUS == 1)
 		LOCK_RTC(s);
 		*(clock_res_t *) attr = 1000;
 		UNLOCK_RTC(s);
 		break;
-#else	/* (NCPUS == 1 || (MP_V1_1 && 0)) && AT386 */
+#else	/* (NCPUS == 1) */
 		LOCK_RTC(s);
 		*(clock_res_t *) attr = rtclock.intr_nsec;
 		UNLOCK_RTC(s);
 		break;
-#endif	/* (NCPUS == 1 || (MP_V1_1 && 0)) && AT386 */
+#endif	/* (NCPUS == 1) */
 
 	case CLOCK_ALARM_CURRES:	/* =0 no alarm */
 	case CLOCK_ALARM_MINRES:
@@ -777,16 +979,89 @@ calend_getattr(
 	return (KERN_SUCCESS);
 }
 
-void
-clock_adjust_calendar(
-	clock_res_t	nsec)
+#define tickadj		(40*NSEC_PER_USEC)	/* "standard" skew, ns / tick */
+#define	bigadj		(NSEC_PER_SEC)		/* use 10x skew above bigadj ns */
+
+uint32_t
+clock_set_calendar_adjtime(
+	int32_t				*secs,
+	int32_t				*microsecs)
 {
-	spl_t		s;
+	int64_t			total, ototal;
+	uint32_t		interval = 0;
+	spl_t			s;
+
+	total = (int64_t)*secs * NSEC_PER_SEC + *microsecs * NSEC_PER_USEC;
 
 	LOCK_RTC(s);
-	if (rtclock.calend_is_set)
-		ADD_MACH_TIMESPEC_NSEC(&rtclock.calend_offset, nsec);
+	ototal = rtclock.calend_adjtotal;
+
+	if (total != 0) {
+		int32_t		delta = tickadj;
+
+		if (total > 0) {
+			if (total > bigadj)
+				delta *= 10;
+			if (delta > total)
+				delta = total;
+		}
+		else {
+			if (total < -bigadj)
+				delta *= 10;
+			delta = -delta;
+			if (delta < total)
+				delta = total;
+		}
+
+		rtclock.calend_adjtotal = total;
+		rtclock.calend_adjdelta = delta;
+
+		interval = (NSEC_PER_SEC / HZ);
+	}
+	else
+		rtclock.calend_adjdelta = rtclock.calend_adjtotal = 0;
+
 	UNLOCK_RTC(s);
+
+	if (ototal == 0)
+		*secs = *microsecs = 0;
+	else {
+		*secs = ototal / NSEC_PER_SEC;
+		*microsecs = ototal % NSEC_PER_SEC;
+	}
+
+	return (interval);
+}
+
+uint32_t
+clock_adjust_calendar(void)
+{
+	uint32_t		interval = 0;
+	int32_t			delta;
+	spl_t			s;
+
+	LOCK_RTC(s);
+	delta = rtclock.calend_adjdelta;
+	ADD_MACH_TIMESPEC_NSEC(&rtclock.calend_offset, delta);
+
+	rtclock.calend_adjtotal -= delta;
+
+	if (delta > 0) {
+		if (delta > rtclock.calend_adjtotal)
+			rtclock.calend_adjdelta = rtclock.calend_adjtotal;
+	}
+	else
+	if (delta < 0) {
+		if (delta < rtclock.calend_adjtotal)
+			rtclock.calend_adjdelta = rtclock.calend_adjtotal;
+	}
+
+	if (rtclock.calend_adjdelta != 0)
+		interval = (NSEC_PER_SEC / HZ);
+
+	UNLOCK_RTC(s);
+
+	return (interval);
 }
 
 void
@@ -806,20 +1081,8 @@ clock_initialize_calendar(void)
 		rtclock.calend_is_set = TRUE;
 	}
 	UNLOCK_RTC(s);
-}
 
-mach_timespec_t
-clock_get_calendar_offset(void)
-{
-	mach_timespec_t	result = MACH_TIMESPEC_ZERO;
-	spl_t		s;
-
-	LOCK_RTC(s);
-	if (rtclock.calend_is_set)
-		result = rtclock.calend_offset;
-	UNLOCK_RTC(s);
-
-	return (result);
+	host_notify_calendar_change();
 }
 
 void
@@ -829,7 +1092,11 @@ clock_timebase_info(
 	spl_t	s;
 
 	LOCK_RTC(s);
-	info->numer = info->denom = 1;
+	if (rtclock.timebase_const.denom == 0xFFFFFFFF) {
+		info->numer = info->denom = rtc_quant_scale;
+	} else {
+		info->numer = info->denom = 1;
+	}
 	UNLOCK_RTC(s);
 }	
 
@@ -880,14 +1147,14 @@ rtclock_reset(void)
 {
 	int		s;
 
-#if	NCPUS > 1 && !(MP_V1_1 && 0)
+#if	NCPUS > 1
 	mp_disable_preemption();
 	if (cpu_number() != master_cpu) {
 		mp_enable_preemption();
 		return;
 	}
 	mp_enable_preemption();
-#endif	/* NCPUS > 1 && AT386 && !MP_V1_1 */
+#endif	/* NCPUS > 1 */
  	LOCK_RTC(s);
 	RTCLOCK_RESET();
 	UNLOCK_RTC(s);
@@ -899,12 +1166,13 @@ rtclock_reset(void)
  * into the higher level clock code to deliver alarms.
  */
 int
-rtclock_intr(void)
+rtclock_intr(struct i386_interrupt_state *regs)
 {
-	uint64_t		abstime;
+	uint64_t	abstime;
 	mach_timespec_t	clock_time;
-	int				i;
-	spl_t			s;
+	int		i;
+	spl_t		s;
+	boolean_t	usermode;
 
 	/*
 	 * Update clock time. Do the update so that the macro
@@ -912,19 +1180,33 @@ rtclock_intr(void)
 	 * update in order: mtv_csec, mtv_time.tv_nsec, mtv_time.tv_sec).
 	 */	 
 	LOCK_RTC(s);
-	rdtsc_hilo(&rtc_last_int_tsc_hi, &rtc_last_int_tsc_lo);
-	i = rtclock.time.tv_nsec + rtclock.intr_nsec;
-	if (i < NSEC_PER_SEC)
-	    rtclock.time.tv_nsec = i;
-	else {
-	    rtclock.time.tv_nsec = i - NSEC_PER_SEC;
-	    rtclock.time.tv_sec++;
-	}
+        abstime = rdtsctime_to_nanoseconds();		// get the time as of the TSC
+        clock_time = nanos_to_timespec(abstime);	// turn it into a timespec
+        rtclock.time.tv_nsec = clock_time.tv_nsec;
+        rtclock.time.tv_sec = clock_time.tv_sec;
+        rtclock.abstime = abstime;
+        
 	/* note time now up to date */
 	last_ival = 0;
 
-	rtclock.abstime += rtclock.intr_nsec;
-	abstime = rtclock.abstime;
+	/*
+	 * On a HZ-tick boundary: return 0 and adjust the clock
+	 * alarm resolution (if requested).  Otherwise return a
+	 * non-zero value.
+	 */
+	if ((i = --rtc_intr_count) == 0) {
+	    if (rtclock.new_ires) {
+			rtc_setvals(new_clknum, rtclock.new_ires);
+			RTCLOCK_RESET();            /* lock clock register */
+			rtclock.new_ires = 0;
+	    }
+	    rtc_intr_count = rtc_intr_hertz;
+	    UNLOCK_RTC(s);
+	    usermode = (regs->efl & EFL_VM) || ((regs->cs & 0x03) != 0);
+	    hertz_tick(usermode, regs->eip);
+	    LOCK_RTC(s);
+	}
+
 	if (	rtclock.timer_is_set				&&
 			rtclock.timer_deadline <= abstime		) {
 		rtclock.timer_is_set = FALSE;
@@ -960,19 +1242,6 @@ rtclock_intr(void)
 		LOCK_RTC(s);
 	}
 
-	/*
-	 * On a HZ-tick boundary: return 0 and adjust the clock
-	 * alarm resolution (if requested).  Otherwise return a
-	 * non-zero value.
-	 */
-	if ((i = --rtc_intr_count) == 0) {
-	    if (rtclock.new_ires) {
-			rtc_setvals(new_clknum, rtclock.new_ires);
-			RTCLOCK_RESET();            /* lock clock register */
-			rtclock.new_ires = 0;
-	    }
-	    rtc_intr_count = rtc_intr_hertz;
-	}
 	UNLOCK_RTC(s);
 	return (i);
 }
@@ -981,15 +1250,13 @@ void
 clock_get_uptime(
 	uint64_t		*result)
 {
-	uint32_t		ticks;
-	spl_t			s;
+        *result = rdtsctime_to_nanoseconds();
+}
 
-	LOCK_RTC(s);
- 	ticks = get_uptime_cycles();
-	*result = rtclock.abstime;
-	UNLOCK_RTC(s);
-
-	*result += ticks;
+uint64_t
+mach_absolute_time(void)
+{
+        return rdtsctime_to_nanoseconds();
 }
 
 void
@@ -1043,86 +1310,38 @@ nanoseconds_to_absolutetime(
 }
 
 /*
- * measure_delay(microseconds)
- *
- * Measure elapsed time for delay calls
- * Returns microseconds.
- * 
- * Microseconds must not be too large since the counter (short) 
- * will roll over.  Max is about 13 ms.  Values smaller than 1 ms are ok.
- * This uses the assumed frequency of the rt clock which is emperically
- * accurate to only about 200 ppm.
+ * Spin-loop delay primitives.
  */
-
-int
-measure_delay(
-	int us)
+void
+delay_for_interval(
+	uint32_t		interval,
+	uint32_t		scale_factor)
 {
-	unsigned int	lsb, val;
+	uint64_t		now, end;
 
-	outb(PITCTL_PORT, PIT_C0|PIT_NDIVMODE|PIT_READMODE);
-	outb(PITCTR0_PORT, 0xff);	/* set counter to max value */
-	outb(PITCTR0_PORT, 0xff);
-	delay(us);
-	outb(PITCTL_PORT, PIT_C0);
-	lsb = inb(PITCTR0_PORT);
-	val = (inb(PITCTR0_PORT) << 8) | lsb;
-	val = 0xffff - val;
-	val *= 1000000;
-	val /= CLKNUM;
-	return(val);
+	clock_interval_to_deadline(interval, scale_factor, &end);
+
+	do {
+		cpu_pause();
+		now = mach_absolute_time();
+	} while (now < end);
 }
 
-/*
- * calibrate_delay(void)
- *
- * Adjust delaycount.  Called from startup before clock is started
- * for normal interrupt generation.
- */
-
 void
-calibrate_delay(void)
+clock_delay_until(
+	uint64_t		deadline)
 {
-	unsigned 	val;
-	int 		prev = 0;
-	register int	i;
+	uint64_t		now;
 
-	printf("adjusting delay count: %d", delaycount);
-	for (i=0; i<10; i++) {
-	  	prev = delaycount;
-		/* 
-		 * microdata must not be too large since measure_timer
-		 * will not return accurate values if the counter (short) 
-		 * rolls over
-		 */
- 		val = measure_delay(microdata);
-		if (val == 0) {
-		  delaycount *= 2;
-		} else {
-		delaycount *= microdata;
-		delaycount += val-1; 	/* round up to upper us */
-		delaycount /= val;
-		}
-		if (delaycount <= 0)
-			delaycount = 1;
-		if (delaycount != prev)
-			printf(" %d", delaycount);
-	}
-	printf("\n");
+	do {
+		cpu_pause();
+		now = mach_absolute_time();
+	} while (now < deadline);
 }
 
-#if	MACH_KDB
 void
-test_delay(void);
-
-void
-test_delay(void)
+delay(
+	int		usec)
 {
-  	register i;
-
-	for (i = 0; i < 10; i++)
-		printf("%d, %d\n", i, measure_delay(i));
-	for (i = 10; i <= 100; i+=10)
-		printf("%d, %d\n", i, measure_delay(i));
+	delay_for_interval((usec < 0)? -usec: usec, NSEC_PER_USEC);
 }
-#endif	/* MACH_KDB */

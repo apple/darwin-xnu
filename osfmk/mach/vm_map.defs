@@ -62,7 +62,7 @@
 subsystem
 #if	KERNEL_SERVER
 	  KernelServer
-#endif	KERNEL_SERVER
+#endif	/* KERNEL_SERVER */
 	  vm_map 3800;
 
 #include <mach/std_types.defs>

@@ -184,7 +184,7 @@ int ret=0;
         pcsample_enable = 0;
 
 	if (pc_bufsize && pc_buffer)
-		kmem_free(kernel_map,pc_buffer,pc_bufsize);
+		kmem_free(kernel_map, (vm_offset_t)pc_buffer, pc_bufsize);
 
 	ret= pcsamples_bootstrap();
 	return(ret);
@@ -196,7 +196,7 @@ pcsamples_clear()
         global_state_pid = -1;
 	pcsample_enable = 0;
 	if(pc_bufsize && pc_buffer)
-	  kmem_free(kernel_map,pc_buffer,pc_bufsize);
+	  kmem_free(kernel_map, (vm_offset_t)pc_buffer, pc_bufsize);
 	pc_buffer   = (u_long *)0;
 	pc_bufptr   = (u_long *)0;
 	pc_buflast  = (u_long *)0;

@@ -38,7 +38,6 @@
 
 #include <ppc/asm.h>
 #include <ppc/proc_reg.h>
-#include <ppc/POWERMAC/mp/MPPlugIn.h>
 #include <ppc/exception.h>
 #include <ppc/Performance.h>
 #include <mach/machine/vm_param.h>

@@ -1,6 +1,5 @@
-
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2003 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -80,11 +79,11 @@ extern int	device_pager_workaround;
 #include <kern/host.h>
 #include <kern/xpr.h>
 #include <ppc/proc_reg.h>
-#include <ppc/pmap_internals.h>
 #include <vm/task_working_set.h>
 #include <vm/vm_map.h>
 #include <vm/vm_object.h>
 #include <vm/vm_page.h>
+#include <vm/vm_kern.h>
 #include <vm/pmap.h>
 #include <vm/vm_pageout.h>
 #include <mach/vm_param.h>
@@ -106,8 +105,6 @@ extern int	device_pager_workaround;
 int		vm_object_absent_max = 50;
 
 int		vm_fault_debug = 0;
-boolean_t	vm_page_deactivate_behind = TRUE;
-
 
 #if	!VM_FAULT_STATIC_CONFIG
 boolean_t	vm_fault_dirty_handling = FALSE;
@@ -207,13 +204,107 @@ struct {
 boolean_t vm_allow_clustered_pagein = FALSE;
 int vm_pagein_cluster_used = 0;
 
+#define ALIGNED(x) (((x) & (PAGE_SIZE_64 - 1)) == 0)
+
+
+boolean_t	vm_page_deactivate_behind = TRUE;
 /* 
  * Prepage default sizes given VM_BEHAVIOR_DEFAULT reference behavior 
  */
-int vm_default_ahead = 1;	/* Number of pages to prepage ahead */
-int vm_default_behind = 0;	/* Number of pages to prepage behind */
+int vm_default_ahead = 0;
+int vm_default_behind = MAX_UPL_TRANSFER;
 
-#define ALIGNED(x) (((x) & (PAGE_SIZE_64 - 1)) == 0)
+/*
+ *	vm_page_deactivate_behind
+ *
+ *	Determine if sequential access is in progress
+ *	in accordance with the behavior specified.  If
+ *	so, compute a potential page to deactive and
+ *	deactivate it.
+ *
+ *	The object must be locked.
+ */
+static
+boolean_t
+vm_fault_deactivate_behind(
+	vm_object_t object,
+	vm_offset_t offset,
+	vm_behavior_t behavior)
+{
+	vm_page_t m;
+
+#if TRACEFAULTPAGE
+	dbgTrace(0xBEEF0018, (unsigned int) object, (unsigned int) vm_fault_deactivate_behind);	/* (TEST/DEBUG) */
+#endif
+
+	switch (behavior) {
+	case VM_BEHAVIOR_RANDOM:
+		object->sequential = PAGE_SIZE_64;
+		m = VM_PAGE_NULL;
+		break;
+	case VM_BEHAVIOR_SEQUENTIAL:
+		if (offset &&
+			object->last_alloc == offset - PAGE_SIZE_64) {
+			object->sequential += PAGE_SIZE_64;
+			m = vm_page_lookup(object, offset - PAGE_SIZE_64);
+		} else {
+			object->sequential = PAGE_SIZE_64; /* reset */
+			m = VM_PAGE_NULL;
+		}
+		break;
+	case VM_BEHAVIOR_RSEQNTL:
+		if (object->last_alloc &&
+			object->last_alloc == offset + PAGE_SIZE_64) {
+			object->sequential += PAGE_SIZE_64;
+			m = vm_page_lookup(object, offset + PAGE_SIZE_64);
+		} else {
+			object->sequential = PAGE_SIZE_64; /* reset */
+			m = VM_PAGE_NULL;
+		}
+		break;
+	case VM_BEHAVIOR_DEFAULT:
+	default:
+		if (offset && 
+			object->last_alloc == offset - PAGE_SIZE_64) {
+			vm_object_offset_t behind = vm_default_behind * PAGE_SIZE_64;
+
+			object->sequential += PAGE_SIZE_64;
+			m = (offset >= behind &&
+				object->sequential >= behind) ?
+				vm_page_lookup(object, offset - behind) :
+				VM_PAGE_NULL;
+		} else if (object->last_alloc &&
+			object->last_alloc == offset + PAGE_SIZE_64) {
+			vm_object_offset_t behind = vm_default_behind * PAGE_SIZE_64;
+
+			object->sequential += PAGE_SIZE_64;
+			m = (offset < -behind &&
+				object->sequential >= behind) ?
+				vm_page_lookup(object, offset + behind) :
+				VM_PAGE_NULL;
+		} else {
+			object->sequential = PAGE_SIZE_64;
+			m = VM_PAGE_NULL;
+		}
+		break;
+	}
+
+	object->last_alloc = offset;
+
+	if (m) {
+		if (!m->busy) {
+			vm_page_lock_queues();
+			vm_page_deactivate(m);
+			vm_page_unlock_queues();
+#if TRACEFAULTPAGE
+			dbgTrace(0xBEEF0019, (unsigned int) object, (unsigned int) m);	/* (TEST/DEBUG) */
+#endif
+		}
+		return TRUE;
+	}
+	return FALSE;
+}
+
 
 /*
  *	Routine:	vm_fault_page
@@ -613,11 +704,37 @@ vm_fault_page(
 					 * need to allocate a real page.
 					 */
 					if (VM_PAGE_THROTTLED() ||
-					    (real_m = vm_page_grab()) == VM_PAGE_NULL) {
-						vm_fault_cleanup(object, first_m);
-						thread_interrupt_level(interruptible_state);
-						return(VM_FAULT_MEMORY_SHORTAGE);
+					    (real_m = vm_page_grab()) 
+							== VM_PAGE_NULL) {
+						vm_fault_cleanup(
+							object, first_m);
+						thread_interrupt_level(
+							interruptible_state);
+						return(
+						   VM_FAULT_MEMORY_SHORTAGE);
 					}
+
+					/*
+					 * are we protecting the system from
+					 * backing store exhaustion.  If so
+					 * sleep unless we are privileged.
+					 */
+
+					if(vm_backing_store_low) {
+					   if(!(current_task()->priv_flags 
+						& VM_BACKING_STORE_PRIV)) {
+						assert_wait((event_t) 
+							&vm_backing_store_low, 
+							THREAD_UNINT);
+						vm_fault_cleanup(object, 
+								    first_m);
+						thread_block((void(*)(void)) 0);
+						thread_interrupt_level(
+							interruptible_state);
+						return(VM_FAULT_RETRY);
+					   }
+					}
+
 
 					XPR(XPR_VM_FAULT,
 	      "vm_f_page: zero obj 0x%X, off 0x%X, page 0x%X, first_obj 0x%X\n",
@@ -654,17 +771,19 @@ vm_fault_page(
 					if (!no_zero_fill) {
 						vm_object_unlock(object);
 						vm_page_zero_fill(m);
-						if (type_of_fault)
-						        *type_of_fault = DBG_ZERO_FILL_FAULT;
-						VM_STAT(zero_fill_count++);
-
-						if (bumped_pagein == TRUE) {
-						        VM_STAT(pageins--);
-							current_task()->pageins--;
-    						}
 						vm_object_lock(object);
 					}
-					pmap_clear_modify(m->phys_addr);
+					if (type_of_fault)
+					        *type_of_fault = DBG_ZERO_FILL_FAULT;
+					VM_STAT(zero_fill_count++);
+
+					if (bumped_pagein == TRUE) {
+					        VM_STAT(pageins--);
+						current_task()->pageins--;
+					}
+#if 0
+					pmap_clear_modify(m->phys_page);
+#endif
 					vm_page_lock_queues();
 					VM_PAGE_QUEUES_REMOVE(m);
 					m->page_ticket = vm_page_ticket;
@@ -1248,11 +1367,45 @@ no_clustering:
 			assert(m->object == object);
 			first_m = VM_PAGE_NULL;
 
+			if(m == VM_PAGE_NULL) {
+				m = vm_page_grab();
+				if (m == VM_PAGE_NULL) {
+					vm_fault_cleanup(
+						object, VM_PAGE_NULL);
+					thread_interrupt_level(
+						interruptible_state);
+					return(VM_FAULT_MEMORY_SHORTAGE);
+				}
+				vm_page_insert(
+					m, object, offset);
+			}
+
 			if (object->shadow_severed) {
 				VM_PAGE_FREE(m);
 				vm_fault_cleanup(object, VM_PAGE_NULL);
 				thread_interrupt_level(interruptible_state);
 				return VM_FAULT_MEMORY_ERROR;
+			}
+
+			/*
+			 * are we protecting the system from
+			 * backing store exhaustion.  If so
+			 * sleep unless we are privileged.
+			 */
+
+			if(vm_backing_store_low) {
+				if(!(current_task()->priv_flags 
+						& VM_BACKING_STORE_PRIV)) {
+					assert_wait((event_t) 
+						&vm_backing_store_low, 
+						THREAD_UNINT);
+					VM_PAGE_FREE(m);
+					vm_fault_cleanup(object, VM_PAGE_NULL);
+					thread_block((void (*)(void)) 0);
+					thread_interrupt_level(
+						interruptible_state);
+					return(VM_FAULT_RETRY);
+				}
 			}
 
 			if (VM_PAGE_THROTTLED() ||
@@ -1267,16 +1420,17 @@ no_clustering:
 			if (!no_zero_fill) {
 				vm_object_unlock(object);
 				vm_page_zero_fill(m);
-				if (type_of_fault)
-				        *type_of_fault = DBG_ZERO_FILL_FAULT;
-				VM_STAT(zero_fill_count++);
-
-				if (bumped_pagein == TRUE) {
-				        VM_STAT(pageins--);
-					current_task()->pageins--;
-				}
 				vm_object_lock(object);
 			}
+			if (type_of_fault)
+			        *type_of_fault = DBG_ZERO_FILL_FAULT;
+			VM_STAT(zero_fill_count++);
+
+			if (bumped_pagein == TRUE) {
+			        VM_STAT(pageins--);
+				current_task()->pageins--;
+			}
+
 			vm_page_lock_queues();
 			VM_PAGE_QUEUES_REMOVE(m);
 			if(m->object->size > 0x80000) {
@@ -1303,7 +1457,9 @@ no_clustering:
 			m->inactive = TRUE;
 			vm_page_inactive_count++;
 			vm_page_unlock_queues();
-			pmap_clear_modify(m->phys_addr);
+#if 0
+			pmap_clear_modify(m->phys_page);
+#endif
 			break;
 		}
 		else {
@@ -1376,6 +1532,27 @@ no_clustering:
 			assert(!must_be_resident);
 
 			/*
+			 * are we protecting the system from
+			 * backing store exhaustion.  If so
+			 * sleep unless we are privileged.
+			 */
+
+			if(vm_backing_store_low) {
+				if(!(current_task()->priv_flags 
+						& VM_BACKING_STORE_PRIV)) {
+					assert_wait((event_t) 
+						&vm_backing_store_low, 
+						THREAD_UNINT);
+					RELEASE_PAGE(m);
+					vm_fault_cleanup(object, first_m);
+					thread_block((void (*)(void)) 0);
+					thread_interrupt_level(
+						interruptible_state);
+					return(VM_FAULT_RETRY);
+				}
+			}
+
+			/*
 			 *	If we try to collapse first_object at this
 			 *	point, we may deadlock when we try to get
 			 *	the lock on an intermediate object (since we
@@ -1424,7 +1601,7 @@ no_clustering:
 
 			vm_page_lock_queues();
 			assert(!m->cleaning);
-			pmap_page_protect(m->phys_addr, VM_PROT_NONE);
+			pmap_page_protect(m->phys_page, VM_PROT_NONE);
 			vm_page_deactivate(m);
 			copy_m->dirty = TRUE;
 			/*
@@ -1465,7 +1642,7 @@ no_clustering:
 			 */     
 
 			vm_object_paging_end(object); 
-			vm_object_collapse(object);
+			vm_object_collapse(object, offset);
 			vm_object_paging_begin(object);
 
 		}
@@ -1586,6 +1763,31 @@ no_clustering:
 			 */
 
 			/*
+			 * are we protecting the system from
+			 * backing store exhaustion.  If so
+			 * sleep unless we are privileged.
+			 */
+
+			if(vm_backing_store_low) {
+				if(!(current_task()->priv_flags 
+						& VM_BACKING_STORE_PRIV)) {
+					assert_wait((event_t) 
+						&vm_backing_store_low, 
+						THREAD_UNINT);
+					RELEASE_PAGE(m);
+					VM_OBJ_RES_DECR(copy_object);
+					copy_object->ref_count--;
+					assert(copy_object->ref_count > 0);
+					vm_object_unlock(copy_object);
+					vm_fault_cleanup(object, first_m);
+					thread_block((void (*)(void)) 0);
+					thread_interrupt_level(
+						interruptible_state);
+					return(VM_FAULT_RETRY);
+				}
+			}
+
+			/*
 			 *	Allocate a page for the copy
 			 */
 			copy_m = vm_page_alloc(copy_object, copy_offset);
@@ -1615,7 +1817,7 @@ no_clustering:
 
 			vm_page_lock_queues();
 			assert(!m->cleaning);
-			pmap_page_protect(m->phys_addr, VM_PROT_NONE);
+			pmap_page_protect(m->phys_page, VM_PROT_NONE);
 			copy_m->dirty = TRUE;
 			vm_page_unlock_queues();
 
@@ -1730,37 +1932,22 @@ no_clustering:
 	 *	mark read-only data as dirty.]
 	 */
 
+
+	if(m != VM_PAGE_NULL) {
 #if	!VM_FAULT_STATIC_CONFIG
-	if (vm_fault_dirty_handling && (*protection & VM_PROT_WRITE) && 
-			(m != VM_PAGE_NULL)) {
-		m->dirty = TRUE;
+		if (vm_fault_dirty_handling && (*protection & VM_PROT_WRITE))
+			m->dirty = TRUE;
+#endif
+		if (vm_page_deactivate_behind)
+			vm_fault_deactivate_behind(object, offset, behavior);
+	} else {
+		vm_object_unlock(object);
 	}
-#endif
-#if TRACEFAULTPAGE
-	dbgTrace(0xBEEF0018, (unsigned int) object, (unsigned int) vm_page_deactivate_behind);	/* (TEST/DEBUG) */
-#endif
-	if (vm_page_deactivate_behind) {
-		if (offset && /* don't underflow */
-			(object->last_alloc == (offset - PAGE_SIZE_64))) {
-			m = vm_page_lookup(object, object->last_alloc);
-			if ((m != VM_PAGE_NULL) && !m->busy) {
-				vm_page_lock_queues();
-				vm_page_deactivate(m);
-				vm_page_unlock_queues();
-			}
-#if TRACEFAULTPAGE
-			dbgTrace(0xBEEF0019, (unsigned int) object, (unsigned int) m);	/* (TEST/DEBUG) */
-#endif
-		}
-		object->last_alloc = offset;
-	}
+	thread_interrupt_level(interruptible_state);
+
 #if TRACEFAULTPAGE
 	dbgTrace(0xBEEF001A, (unsigned int) VM_FAULT_SUCCESS, 0);	/* (TEST/DEBUG) */
 #endif
-	thread_interrupt_level(interruptible_state);
-	if(*result_page == VM_PAGE_NULL) {
-		vm_object_unlock(object);
-	}
 	return(VM_FAULT_SUCCESS);
 
 #if 0
@@ -1778,6 +1965,97 @@ no_clustering:
 	return VM_FAULT_RETRY;
 
 #undef	RELEASE_PAGE
+}
+
+/*
+ *	Routine:	vm_fault_tws_insert
+ *	Purpose:
+ *		Add fault information to the task working set.
+ *	Implementation:
+ *		We always insert the base object/offset pair
+ *		rather the actual object/offset.
+ *	Assumptions:
+ *		Map and pmap_map locked.
+ *		Object locked and referenced.
+ *	Returns:
+ *		TRUE if startup file should be written.
+ *		With object locked and still referenced.
+ *		But we may drop the object lock temporarily.
+ */
+static boolean_t
+vm_fault_tws_insert(
+	vm_map_t map,
+	vm_map_t pmap_map,
+	vm_offset_t vaddr,
+	vm_object_t object,
+	vm_object_offset_t offset)
+{
+	tws_hash_line_t	line;
+	task_t		task;
+	kern_return_t	kr;
+	boolean_t	result = FALSE;
+	extern vm_map_t kalloc_map;
+
+	/* Avoid possible map lock deadlock issues */
+	if (map == kernel_map || map == kalloc_map ||
+	    pmap_map == kernel_map || pmap_map == kalloc_map)
+		return result;
+
+	task = current_task();
+	if (task->dynamic_working_set != 0) {
+		vm_object_t	base_object;
+		vm_object_t	base_shadow;
+		vm_object_offset_t base_offset;
+		base_object = object;
+		base_offset = offset;
+		while(base_shadow = base_object->shadow) {
+			vm_object_lock(base_shadow);
+			vm_object_unlock(base_object);
+			base_offset +=
+			 base_object->shadow_offset;
+			base_object = base_shadow;
+		}
+		kr = tws_lookup((tws_hash_t)
+			task->dynamic_working_set,
+			base_offset, base_object, 
+			&line);
+		if (kr == KERN_OPERATION_TIMED_OUT){
+			result = TRUE;
+			if (base_object != object) {
+				vm_object_unlock(base_object);
+				vm_object_lock(object);
+			}
+		} else if (kr != KERN_SUCCESS) {
+			if(base_object != object)
+				vm_object_reference_locked(base_object);
+		   	kr = tws_insert((tws_hash_t)
+				   task->dynamic_working_set,
+				   base_offset, base_object,
+				   vaddr, pmap_map);
+			if(base_object != object) {
+				vm_object_unlock(base_object);
+				vm_object_deallocate(base_object);
+			}
+		   	if(kr == KERN_NO_SPACE) {
+				if (base_object == object)
+					vm_object_unlock(object);
+				tws_expand_working_set(
+			 	   task->dynamic_working_set, 
+				   TWS_HASH_LINE_COUNT,
+				   FALSE);
+				if (base_object == object)
+					vm_object_lock(object);
+			} else if(kr == KERN_OPERATION_TIMED_OUT) {
+				result = TRUE;
+			}
+			if(base_object != object)
+				vm_object_lock(object);
+		} else if (base_object != object) {
+			vm_object_unlock(base_object);
+			vm_object_lock(object);
+		}
+	}
+	return result;
 }
 
 /*
@@ -1836,8 +2114,9 @@ vm_fault(
 	unsigned int		cache_attr;
 	int			write_startup_file = 0;
 	vm_prot_t		full_fault_type;
-	
 
+	if (get_preemption_level() != 0)
+		return (KERN_FAILURE);
 
 	KERNEL_DEBUG_CONSTANT((MACHDBG_CODE(DBG_MACH_VM, 0)) | DBG_FUNC_START,
 			      vaddr,
@@ -1846,7 +2125,6 @@ vm_fault(
 			      0,
 			      0);
 
-	cur_thread = current_thread();
 	/* at present we do not fully check for execute permission */
 	/* we generally treat it is read except in certain device  */
 	/* memory settings */
@@ -1871,6 +2149,8 @@ vm_fault(
 	/*
 	 * drop funnel if it is already held. Then restore while returning
 	 */
+	cur_thread = current_thread();
+
 	if ((cur_thread->funnel_state & TH_FN_OWNED) == TH_FN_OWNED) {
 		funnel_set = TRUE;
 		curflock = cur_thread->funnel_lock;
@@ -1958,7 +2238,7 @@ vm_fault(
 	while (TRUE) {
 		m = vm_page_lookup(cur_object, cur_offset);
 		if (m != VM_PAGE_NULL) {
-		        if (m->busy) {
+			if (m->busy) {
 			        wait_result_t	result;
 
 				if (object != cur_object)
@@ -2008,6 +2288,7 @@ vm_fault(
 				goto FastMapInFault;
 
 			if ((fault_type & VM_PROT_WRITE) == 0) {
+				boolean_t sequential;
 
 				prot &= ~VM_PROT_WRITE;
 
@@ -2047,12 +2328,28 @@ FastPmapEnter:
 					prot &= ~VM_PROT_WRITE;
 #endif	/* MACH_KDB */
 #endif	/* STATIC_CONFIG */
+				cache_attr = ((unsigned int)m->object->wimg_bits) & VM_WIMG_MASK;
+
+				sequential = FALSE;
 				if (m->no_isync == TRUE) {
-				        pmap_sync_caches_phys(m->phys_addr);
 					m->no_isync = FALSE;
+					pmap_sync_caches_phys(m->phys_page);
+					if (type_of_fault == DBG_CACHE_HIT_FAULT) {
+						/*
+						 * found it in the cache, but this
+						 * is the first fault-in of the page (no_isync == TRUE)
+						 * so it must have come in as part of
+						 * a cluster... account 1 pagein against it
+						 */
+						VM_STAT(pageins++);
+						current_task()->pageins++;
+						type_of_fault = DBG_PAGEIN_FAULT;
+						sequential = TRUE;
+					}
+				} else if (cache_attr != VM_WIMG_DEFAULT) {
+					pmap_sync_caches_phys(m->phys_page);
 				}
 
-				cache_attr = ((unsigned int)m->object->wimg_bits) & VM_WIMG_MASK;
 				if(caller_pmap) {
 					PMAP_ENTER(caller_pmap, 
 						caller_pmap_addr, m, 
@@ -2063,7 +2360,7 @@ FastPmapEnter:
 				}
 
 				/*
-				 *	Grab the queues lock to manipulate
+				 *	Hold queues lock to manipulate
 				 *	the page queues.  Change wiring
 				 *	case is obvious.  In soft ref bits
 				 *	case activate page only if it fell
@@ -2075,7 +2372,6 @@ FastPmapEnter:
 				 *	queue.  This code doesn't.
 				 */
 				vm_page_lock_queues();
-
 				if (m->clustered) {
 				        vm_pagein_cluster_used++;
 					m->clustered = FALSE;
@@ -2108,55 +2404,23 @@ FastPmapEnter:
 				 *	That's it, clean up and return.
 				 */
 				PAGE_WAKEUP_DONE(m);
-				vm_object_paging_end(object);
 
-				{
-				   tws_hash_line_t	line;
-				   task_t		task;
+				sequential = (sequential && vm_page_deactivate_behind) ?
+					vm_fault_deactivate_behind(object, cur_offset, behavior) :
+					FALSE;
 
-				   task = current_task();
-				   if((map != NULL) && 
-					(task->dynamic_working_set != 0) &&
-						!(object->private)) {
-					kern_return_t	kr;
-					vm_object_t	base_object;
-					vm_object_offset_t base_offset;
-					base_object = object;
-					base_offset = cur_offset;
-					while(base_object->shadow) {
-						base_offset +=
-						 base_object->shadow_offset;
-						base_object = 
-						 base_object->shadow;
-					}
-					kr = tws_lookup((tws_hash_t)
-						task->dynamic_working_set,
-						base_offset, base_object,
-						&line);
-					if(kr == KERN_OPERATION_TIMED_OUT){
-						write_startup_file = 1;
-					} else if (kr != KERN_SUCCESS) {
-					   	kr = tws_insert((tws_hash_t)
-						   task->dynamic_working_set,
-						   base_offset, base_object,
-						   vaddr, pmap_map);
-					   	if(kr == KERN_NO_SPACE) {
-						  vm_object_unlock(object);
-
-						   tws_expand_working_set(
-						      task->dynamic_working_set,
-						      TWS_HASH_LINE_COUNT,
-						      FALSE);
-
-						   vm_object_lock(object);
-						}
-						if(kr == 
-						   KERN_OPERATION_TIMED_OUT) {
-							write_startup_file = 1;
-						}
-					}
-				   }
+				/* 
+				 * Add non-sequential pages to the working set.
+				 * The sequential pages will be brought in through
+				 * normal clustering behavior.
+				 */
+				if (!sequential && !object->private) {
+					write_startup_file = 
+						vm_fault_tws_insert(map, pmap_map, vaddr, 
+					                        object, cur_offset);
 				}
+
+				vm_object_paging_end(object);
 				vm_object_unlock(object);
 
 				vm_map_unlock_read(map);
@@ -2238,7 +2502,7 @@ FastPmapEnter:
 			vm_page_lock_queues();
 			vm_page_deactivate(cur_m);
 			m->dirty = TRUE;
-			pmap_page_protect(cur_m->phys_addr,
+			pmap_page_protect(cur_m->phys_page,
 						  VM_PROT_NONE);
 			vm_page_unlock_queues();
 
@@ -2253,7 +2517,7 @@ FastPmapEnter:
 			 */     
  
 			vm_object_paging_end(object); 
-			vm_object_collapse(object);
+			vm_object_collapse(object, offset);
 			vm_object_paging_begin(object);
 
 			goto FastPmapEnter;
@@ -2301,9 +2565,18 @@ FastPmapEnter:
 				 *	page, then drop any lower lock.
 				 *	Give up if no page.
 				 */
-				if ((vm_page_free_target - 
-				   ((vm_page_free_target-vm_page_free_min)>>2))
-						> vm_page_free_count) {
+				if (VM_PAGE_THROTTLED()) {
+					break;
+				}
+
+				/*
+			 	 * are we protecting the system from
+			 	 * backing store exhaustion.  If so
+			 	 * sleep unless we are privileged.
+			 	 */
+				if(vm_backing_store_low) {
+					if(!(current_task()->priv_flags 
+						& VM_BACKING_STORE_PRIV))
 					break;
 				}
 				m = vm_page_alloc(object, offset);
@@ -2420,54 +2693,12 @@ FastPmapEnter:
 	vm_object_paging_begin(object);
 
 	XPR(XPR_VM_FAULT,"vm_fault -> vm_fault_page\n",0,0,0,0,0);
-	{
-		tws_hash_line_t	line;
-		task_t		task;
-		kern_return_t	kr;
 
-		   task = current_task();
-		   if((map != NULL) && 
-			(task->dynamic_working_set != 0)
-				&& !(object->private)) {
-			vm_object_t	base_object;
-			vm_object_offset_t base_offset;
-			base_object = object;
-			base_offset = offset;
-			while(base_object->shadow) {
-				base_offset +=
-				 base_object->shadow_offset;
-				base_object =
-				 base_object->shadow;
-			}
-			kr = tws_lookup((tws_hash_t)
-				task->dynamic_working_set,
-				base_offset, base_object, 
-				&line);
-			if(kr == KERN_OPERATION_TIMED_OUT){
-				write_startup_file = 1;
-			} else if (kr != KERN_SUCCESS) {
-			   	tws_insert((tws_hash_t)
-				   task->dynamic_working_set,
-				   base_offset, base_object, 
-				   vaddr, pmap_map);
-			   	kr = tws_insert((tws_hash_t)
-					   task->dynamic_working_set,
-					   base_offset, base_object,
-					   vaddr, pmap_map);
-			   	if(kr == KERN_NO_SPACE) {
-					vm_object_unlock(object);
-					tws_expand_working_set(
-				 	   task->dynamic_working_set, 
-					   TWS_HASH_LINE_COUNT,
-					   FALSE);
-					vm_object_lock(object);
-				}
-				if(kr == KERN_OPERATION_TIMED_OUT) {
-					write_startup_file = 1;
-				}
-			}
-		}
+	if (!object->private) {
+		write_startup_file = 
+			vm_fault_tws_insert(map, pmap_map, vaddr, object, offset);
 	}
+
 	kr = vm_fault_page(object, offset, fault_type,
 			   (change_wiring && !wired),
 			   interruptible,
@@ -2666,11 +2897,22 @@ FastPmapEnter:
 	 */
 	if (m != VM_PAGE_NULL) {
 		if (m->no_isync == TRUE) {
-		        pmap_sync_caches_phys(m->phys_addr);
+		        pmap_sync_caches_phys(m->phys_page);
 
+                        if (type_of_fault == DBG_CACHE_HIT_FAULT) {
+                                /*
+                                 * found it in the cache, but this
+                                 * is the first fault-in of the page (no_isync == TRUE)
+                                 * so it must have come in as part of
+                                 * a cluster... account 1 pagein against it
+                                 */
+                                 VM_STAT(pageins++);
+                                 current_task()->pageins++;
+
+                                 type_of_fault = DBG_PAGEIN_FAULT;
+                        }
 		        m->no_isync = FALSE;
 		}
-
 		cache_attr = ((unsigned int)m->object->wimg_bits) & VM_WIMG_MASK;
 
 		if(caller_pmap) {
@@ -2681,58 +2923,19 @@ FastPmapEnter:
 			PMAP_ENTER(pmap, vaddr, m, 
 					prot, cache_attr, wired);
 		}
-		{
-			tws_hash_line_t	line;
-			task_t		task;
-			kern_return_t	kr;
 
-			   task = current_task();
-			   if((map != NULL) && 
-				(task->dynamic_working_set != 0)
-					&& (object->private)) {
-				vm_object_t	base_object;
-				vm_object_offset_t	base_offset;
-				base_object = m->object;
-				base_offset = m->offset;
-				while(base_object->shadow) {
-				   base_offset +=
-					base_object->shadow_offset;
-				   base_object =
-					base_object->shadow;
-				}
-				kr = tws_lookup((tws_hash_t)
-					task->dynamic_working_set,
-					base_offset, base_object, &line);
-				if(kr == KERN_OPERATION_TIMED_OUT){
-					write_startup_file = 1;
-				} else if (kr != KERN_SUCCESS) {
-				   	tws_insert((tws_hash_t)
-					   task->dynamic_working_set,
-					   base_offset, base_object, 
-					   vaddr, pmap_map);
-				   	kr = tws_insert((tws_hash_t)
-						   task->dynamic_working_set,
-						   base_offset, base_object,
-						   vaddr, pmap_map);
-				   	if(kr == KERN_NO_SPACE) {
-	        				vm_object_unlock(m->object);
-						tws_expand_working_set(
-					 	   task->dynamic_working_set, 
-						   TWS_HASH_LINE_COUNT,
-						   FALSE);
-	        				vm_object_lock(m->object);
-					}
-					if(kr == KERN_OPERATION_TIMED_OUT) {
-						write_startup_file = 1;
-					}
-				}
-			}
+		/*
+		 * Add working set information for private objects here.
+		 */
+		if (m->object->private) {
+			write_startup_file =
+				vm_fault_tws_insert(map, pmap_map, vaddr, 
+		                            m->object, m->offset);
 		}
 	} else {
 
 #ifndef i386
 		int			memattr;
-		struct	phys_entry	*pp;
 		vm_map_entry_t		entry;
 		vm_offset_t		laddr;
 		vm_offset_t		ldelta, hdelta;
@@ -2741,22 +2944,16 @@ FastPmapEnter:
 		 * do a pmap block mapping from the physical address
 		 * in the object 
 		 */
-		if(pp = pmap_find_physentry(
-			(vm_offset_t)object->shadow_offset)) {
-			memattr = ((pp->pte1 & 0x00000078) >> 3); 
-		} else {
-			memattr = VM_WIMG_MASK & (int)object->wimg_bits;
-		}
 
+		/* While we do not worry about execution protection in   */
+		/* general, certian pages may have instruction execution */
+		/* disallowed.  We will check here, and if not allowed   */
+		/* to execute, we return with a protection failure.      */
 
-		/* While we do not worry about execution protection in */
-		/* general, we may be able to read device memory and   */
-		/* still not be able to execute it.  Here we check for */
-		/* the guarded bit.  If its set and we are attempting  */
-		/* to execute, we return with a protection failure.    */
+		if((full_fault_type & VM_PROT_EXECUTE) &&
+			(pmap_canExecute((ppnum_t)
+				(object->shadow_offset >> 12)) < 1)) {
 
-		if((memattr & VM_MEM_GUARDED) &&
-			(full_fault_type & VM_PROT_EXECUTE)) {
 			vm_map_verify_done(map, &version);
 			if(pmap_map != map)
 				vm_map_unlock(pmap_map);
@@ -2765,8 +2962,6 @@ FastPmapEnter:
 			kr = KERN_PROTECTION_FAILURE;
 			goto done;
 		}
-
-
 
 		if(pmap_map != map) {
 			vm_map_unlock(pmap_map);
@@ -2812,32 +3007,36 @@ FastPmapEnter:
 
 
 			if(caller_pmap) {
+				/* Set up a block mapped area */
 				pmap_map_block(caller_pmap, 
-					caller_pmap_addr - ldelta, 
-					((vm_offset_t)
+					(addr64_t)(caller_pmap_addr - ldelta), 
+					(((vm_offset_t)
 				    (entry->object.vm_object->shadow_offset)) 
 					+ entry->offset + 
-					(laddr - entry->vme_start) - ldelta, 
+					(laddr - entry->vme_start) 
+							- ldelta)>>12,
 				ldelta + hdelta, prot, 
-				memattr, 0); /* Set up a block mapped area */
-			} else {
-				pmap_map_block(pmap_map->pmap, vaddr - ldelta, 
-				((vm_offset_t)
+				(VM_WIMG_MASK & (int)object->wimg_bits), 0);
+			} else { 
+				/* Set up a block mapped area */
+				pmap_map_block(pmap_map->pmap, 
+				   (addr64_t)(vaddr - ldelta), 
+				   (((vm_offset_t)
 				    (entry->object.vm_object->shadow_offset)) 
-					+ entry->offset + 
-					(laddr - entry->vme_start) - ldelta, 
-				ldelta + hdelta, prot, 
-				memattr, 0); /* Set up a block mapped area */
+				       + entry->offset + 
+				       (laddr - entry->vme_start) - ldelta)>>12,
+				   ldelta + hdelta, prot, 
+				   (VM_WIMG_MASK & (int)object->wimg_bits), 0);
 			}
 		}
 #else
 #ifdef notyet
 		if(caller_pmap) {
                		pmap_enter(caller_pmap, caller_pmap_addr, 
-				object->shadow_offset, prot, 0, TRUE);
+				object->shadow_offset>>12, prot, 0, TRUE);
 		} else {
                		pmap_enter(pmap, vaddr, 
-				object->shadow_offset, prot, 0, TRUE);
+				object->shadow_offset>>12, prot, 0, TRUE);
 		}
         		/* Map it in */
 #endif
@@ -3052,7 +3251,7 @@ vm_fault_unwire(
 			result_object = result_page->object;
 			if (deallocate) {
 				assert(!result_page->fictitious);
-				pmap_page_protect(result_page->phys_addr,
+				pmap_page_protect(result_page->phys_page,
 						VM_PROT_NONE);
 				VM_PAGE_FREE(result_page);
 			} else {
@@ -3232,7 +3431,7 @@ vm_fault_wire_fast(
 	 *	may cause other faults.   
 	 */
 	if (m->no_isync == TRUE) {
-	        pmap_sync_caches_phys(m->phys_addr);
+	        pmap_sync_caches_phys(m->phys_page);
 
 		m->no_isync = FALSE;
 	}

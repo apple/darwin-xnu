@@ -34,7 +34,7 @@
 union IOPCIAddressSpace {
     UInt32		bits;
     struct {
-#if __BIG_ENDIAN__
+#ifdef __BIG_ENDIAN__
         unsigned int	reloc:1;
         unsigned int	prefetch:1;
         unsigned int	t:1;
@@ -44,7 +44,7 @@ union IOPCIAddressSpace {
         unsigned int	deviceNum:5;
         unsigned int	functionNum:3;
         unsigned int	registerNum:8;
-#elif __LITTLE_ENDIAN__
+#elif defined(__LITTLE_ENDIAN__)
         unsigned int	registerNum:8;
         unsigned int	functionNum:3;
         unsigned int	deviceNum:5;

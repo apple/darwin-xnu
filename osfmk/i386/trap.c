@@ -485,7 +485,7 @@ user_trap(
 	kern_return_t	result;
 	register thread_act_t thr_act = current_act();
 	thread_t thread = (thr_act ? thr_act->thread : THREAD_NULL);
-	boolean_t	kernel_act = thr_act->kernel_loaded;
+	boolean_t	kernel_act = FALSE;
 	etap_data_t	probe_data;
 
 	if (regs->efl & EFL_VM) {
@@ -1111,7 +1111,7 @@ i386_astintr(int preemption)
 			splx(s);
 			return;
 		}
-		else mask = AST_PREEMPT;
+		else mask = AST_PREEMPTION;
 		mp_enable_preemption();
 
 /*

@@ -79,7 +79,7 @@ bool OSDictionary::initWithCapacity(unsigned int inCapacity)
 bool OSDictionary::initWithObjects(const OSObject *objects[],
                                    const OSSymbol *keys[],
                                    unsigned int theCount,
-                                   unsigned int theCapacity = 0)
+                                   unsigned int theCapacity)
 {
     unsigned int capacity = theCount;
 
@@ -109,7 +109,7 @@ bool OSDictionary::initWithObjects(const OSObject *objects[],
 bool OSDictionary::initWithObjects(const OSObject *objects[],
                                    const OSString *keys[],
                                    unsigned int theCount,
-                                   unsigned int theCapacity = 0)
+                                   unsigned int theCapacity)
 {
     unsigned int capacity = theCount;
 
@@ -145,7 +145,7 @@ bool OSDictionary::initWithObjects(const OSObject *objects[],
 }
 
 bool OSDictionary::initWithDictionary(const OSDictionary *dict,
-                                      unsigned int theCapacity = 0)
+                                      unsigned int theCapacity)
 {
     unsigned int capacity;
 
@@ -179,7 +179,7 @@ OSDictionary *OSDictionary::withCapacity(unsigned int capacity)
     OSDictionary *me = new OSDictionary;
 
     if (me && !me->initWithCapacity(capacity)) {
-        me->free();
+        me->release();
         return 0;
     }
 
@@ -189,12 +189,12 @@ OSDictionary *OSDictionary::withCapacity(unsigned int capacity)
 OSDictionary *OSDictionary::withObjects(const OSObject *objects[],
                                         const OSSymbol *keys[],
                                         unsigned int count,
-                                        unsigned int capacity = 0)
+                                        unsigned int capacity)
 {
     OSDictionary *me = new OSDictionary;
 
     if (me && !me->initWithObjects(objects, keys, count, capacity)) {
-        me->free();
+        me->release();
         return 0;
     }
 
@@ -204,12 +204,12 @@ OSDictionary *OSDictionary::withObjects(const OSObject *objects[],
 OSDictionary *OSDictionary::withObjects(const OSObject *objects[],
                                         const OSString *keys[],
                                         unsigned int count,
-                                        unsigned int capacity = 0)
+                                        unsigned int capacity)
 {
     OSDictionary *me = new OSDictionary;
 
     if (me && !me->initWithObjects(objects, keys, count, capacity)) {
-        me->free();
+        me->release();
         return 0;
     }
 
@@ -217,12 +217,12 @@ OSDictionary *OSDictionary::withObjects(const OSObject *objects[],
 }
 
 OSDictionary *OSDictionary::withDictionary(const OSDictionary *dict,
-                                           unsigned int capacity = 0)
+                                           unsigned int capacity)
 {
     OSDictionary *me = new OSDictionary;
 
     if (me && !me->initWithDictionary(dict, capacity)) {
-        me->free();
+        me->release();
         return 0;
     }
 

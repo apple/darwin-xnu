@@ -197,7 +197,7 @@ ipflow_fastforward(
 		dst = &ipf->ipf_ro.ro_dst;
 #ifdef __APPLE__
 	/* Not sure the rt_dlt is valid here !! XXX */
-	if ((error = dlil_output((u_long)rt->rt_dlt, m, (caddr_t) rt, dst, 0)) != 0) {
+	if ((error = dlil_output(ifptodlt(rt->rt_ifp, PF_INET), m, (caddr_t) rt, dst, 0)) != 0) {
 
 #else
 	if ((error = (*rt->rt_ifp->if_output)(rt->rt_ifp, m, dst, rt)) != 0) {

@@ -40,7 +40,7 @@ enum {
     kIOUCScalarIScalarO = 0,
     kIOUCScalarIStructO = 2,
     kIOUCStructIStructO = 3,
-    kIOUCScalarIStructI = 4,
+    kIOUCScalarIStructI = 4
 };
 
 typedef IOReturn (IOService::*IOMethod)(void * p1, void * p2, void * p3,

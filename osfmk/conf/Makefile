@@ -18,7 +18,7 @@ ifndef OSFMK_KERNEL_CONFIG
 export OSFMK_KERNEL_CONFIG = $(KERNEL_CONFIG)
 endif
 
-COMPOBJROOT=$(OBJROOT)/$(KERNEL_CONFIG)_$(ARCH_CONFIG)/$(COMPONENT)
+export COMPOBJROOT=$(OBJROOT)/$(KERNEL_CONFIG)_$(ARCH_CONFIG)/$(COMPONENT)
 
 $(OBJROOT)/$(KERNEL_CONFIG)_$(ARCH_CONFIG)/$(COMPONENT)/doconf:
 	make build_setup 
@@ -58,6 +58,7 @@ do_all: do_setup_conf
 		SOURCE=$${next_source}			\
 		TARGET=$(TARGET)					\
 		INCL_MAKEDEP=FALSE	\
+		KERNEL_CONFIG=$(OSFMK_KERNEL_CONFIG)	\
 		build_all;	\
 	echo "[ $(SOURCE) ] Returning do_all $(COMPONENT) $(OSFMK_KERNEL_CONFIG) $(ARCH_CONFIG) $(TARGET)";
 

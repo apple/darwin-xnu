@@ -83,9 +83,7 @@ swapin_init(void)
 {
 	 queue_init(&swapin_queue);
 	 simple_lock_init(&swapin_lock, ETAP_THREAD_SWAPPER);
-	 kernel_thread_with_priority(
-						kernel_task, BASEPRI_PREEMPT - 2,
-										swapin_thread, TRUE, TRUE);
+	 kernel_thread_with_priority(swapin_thread, MINPRI_KERNEL);
 }
 
 /*
@@ -154,7 +152,7 @@ thread_doswapin(
 	thread_lock(thread);
 	thread->state &= ~(TH_STACK_HANDOFF | TH_STACK_ALLOC);
 	if (thread->state & TH_RUN)
-		thread_setrun(thread, HEAD_Q);
+		thread_setrun(thread, SCHED_PREEMPT | SCHED_TAILQ);
 	thread_unlock(thread);
 	(void) splx(s);
 }
@@ -195,10 +193,6 @@ swapin_thread_continue(void)
 void
 swapin_thread(void)
 {
-	thread_t	self = current_thread();
-
-	stack_privilege(self);
-
 	swapin_thread_continue();
 	/*NOTREACHED*/
 }

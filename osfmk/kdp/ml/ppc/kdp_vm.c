@@ -32,138 +32,151 @@
 #include <ppc/machparam.h>
 #include <ppc/mem.h>
 #include <ppc/pmap.h>
-#include <ppc/pmap_internals.h> 
 #include <ppc/mappings.h> 
+
+#include <mach/thread_status.h>
+#include <mach-o/loader.h>
+#include <mach/vm_region.h>
+#include <mach/vm_statistics.h>
+
+#include <vm/vm_kern.h>
+#include <kdp/kdp_core.h>
+#include <kdp/kdp_udp.h>
+#include <kdp/kdp_internal.h>
+
 
 pmap_t kdp_pmap=0;
 boolean_t kdp_trans_off=0;
+boolean_t kdp_read_io  =0;
 
-unsigned kdp_xlate_off(void);
-void kdp_xlate_restore(unsigned);
-void kdp_flush_cache(vm_offset_t, unsigned);
-vm_offset_t kdp_vtophys(pmap_t pmap, vm_offset_t vaddr);
-void kdp_bcopy( unsigned char *, unsigned char *, unsigned);
-void kdp_pmemcpy( vm_offset_t , vm_offset_t, unsigned);
 unsigned kdp_vm_read( caddr_t, caddr_t, unsigned);
 unsigned kdp_vm_write( caddr_t, caddr_t, unsigned);
 
-extern vm_offset_t kvtophys(vm_offset_t);
-extern vm_offset_t mem_actual;
+
+typedef struct {
+  int	flavor;			/* the number for this flavor */
+  int	count;			/* count of ints in this flavor */
+} mythread_state_flavor_t;
+
+/* These will need to be uncommented and completed
+ *if we support other architectures 
+ */
+
+/*
+#if defined (__ppc__)
+*/
+static mythread_state_flavor_t thread_flavor_array[] = {
+  {PPC_THREAD_STATE , PPC_THREAD_STATE_COUNT},
+};
+/*
+#elif defined (__i386__)
+mythread_state_flavor_t thread_flavor_array [] = { 
+  {i386_THREAD_STATE, i386_THREAD_STATE_COUNT},
+};
+#else
+#error architecture not supported
+#endif
+*/
+static int kdp_mynum_flavors = 1;
+static int MAX_TSTATE_FLAVORS = 1;
+
+typedef struct {
+  vm_offset_t header; 
+  int  hoffset;
+  mythread_state_flavor_t *flavors;
+  int tstate_size;
+} tir_t;
+
+unsigned int not_in_kdp = 1; /* Cleared when we begin to access vm functions in kdp */
+
+char command_buffer[512];
+
+static struct vm_object test_object;
 
 /*
  *
  */
-vm_offset_t kdp_vtophys(
+addr64_t kdp_vtophys(
 	pmap_t pmap,
-	vm_offset_t va)
+	addr64_t va)
 {
-	register mapping                *mp;
-	register vm_offset_t    pa;
+	addr64_t    pa;
+	ppnum_t pp;
 
-	pa = (vm_offset_t)LRA(pmap->space,(void *)va);
-
-	if (pa != 0)            
-		return(pa);     
-
-	mp = hw_lock_phys_vir(pmap->space, va);
-	if((unsigned int)mp&1) {
-		return 0;
-	}
-
-	if(!mp) {								/* If it was not a normal page */
-		pa = hw_cvp_blk(pmap, va);			/* Try to convert odd-sized page (returns 0 if not found) */
-		return pa;							/* Return physical address */
-	}
-
-	mp = hw_cpv(mp);
-
-	if(!mp->physent) {
-		pa = (vm_offset_t)((mp->PTEr & -PAGE_SIZE) | ((unsigned int)va & (PAGE_SIZE-1)));
-	} else {
-		pa = (vm_offset_t)((mp->physent->pte1 & -PAGE_SIZE) | ((unsigned int)va & (PAGE_SIZE-1)));
-		hw_unlock_bit((unsigned int *)&mp->physent->phys_link, PHYS_LOCK);
-	}
-
+	pp = pmap_find_phys(pmap, va);				/* Get the page number */
+	if(!pp) return 0;							/* Just return if no translation */
+	
+	pa = ((addr64_t)pp << 12) | (va & 0x0000000000000FFFULL);	/* Shove in the page offset */
 	return(pa);
 }
 
 /*
- *
- */
-void kdp_bcopy(
-	unsigned char *src, 
-	unsigned char *dst,
-	unsigned cnt)
-{
-        while (cnt--)
-                *dst++ = *src++;
-}
-
-/*
- *
+ * Note that kdp_vm_read() does not translate the destination address.Therefore
+ * there's an implicit assumption that the destination will be a statically
+ * allocated structure, since those map to the same phys. and virt. addresses
  */
 unsigned kdp_vm_read(
 	caddr_t src, 
 	caddr_t dst, 
 	unsigned len)
 {
-	vm_offset_t cur_virt_src, cur_virt_dst;
-	vm_offset_t cur_phys_src;
+	addr64_t cur_virt_src, cur_virt_dst;
+	addr64_t cur_phys_src;
 	unsigned resid, cnt;
-	unsigned msr;
+	unsigned int dummy;
+	pmap_t pmap;
 
 #ifdef KDP_VM_READ_DEBUG
     kprintf("kdp_vm_read1: src %x dst %x len %x - %08X %08X\n", src, dst, len, ((unsigned long *)src)[0], ((unsigned long *)src)[1]);
 #endif
+
+	cur_virt_src = (addr64_t)((unsigned int)src);
+	cur_virt_dst = (addr64_t)((unsigned int)dst);
+	
 	if (kdp_trans_off) {
-		cur_virt_src = (vm_offset_t)src;
-		if((vm_offset_t)src >= mem_actual) return 0;	/* Can't read where there's not any memory */
-		cur_virt_dst = (vm_offset_t)dst;
-		resid = (mem_actual - (vm_offset_t)src) > len ? len : (mem_actual - (vm_offset_t)src);
+		
+		
+		resid = len;								/* Get the length to copy */
 
 		while (resid != 0) {
-			cur_phys_src = cur_virt_src;
-			cnt = ((cur_virt_src + NBPG) & (-NBPG)) - cur_virt_src;	
+
+			if(kdp_read_io == 0)
+				if(!mapping_phys_lookup((ppnum_t)(cur_virt_src >> 12), &dummy)) return 0;	/* Can't read where there's not any memory */
+		
+			cnt = 4096 - (cur_virt_src & 0xFFF);	/* Get length left on page */
+		
 			if (cnt > resid)  cnt = resid;
-			msr = kdp_xlate_off();
-			kdp_bcopy((unsigned char *)cur_phys_src, 
-				(unsigned char *)cur_virt_dst, cnt);
-			kdp_xlate_restore(msr);
-			cur_virt_src +=cnt;
-			cur_virt_dst +=cnt;
+
+			bcopy_phys(cur_virt_src, cur_virt_dst, cnt);		/* Copy stuff over */
+
+			cur_virt_src += cnt;
+			cur_virt_dst += cnt;
 			resid -= cnt;
 		}
+		
 	} else {
-		cur_virt_src = (vm_offset_t)src;
-		cur_virt_dst = (vm_offset_t)dst;
+
 		resid = len;
 
-		while (resid != 0) {   
-			if (kdp_pmap) {
-				if ((cur_phys_src = 
-					kdp_vtophys(kdp_pmap,trunc_page(cur_virt_src))) == 0)
-					goto exit;
-				cur_phys_src += (cur_virt_src & PAGE_MASK);
-			} else {
-				if ((cur_phys_src = kdp_vtophys(kernel_pmap,cur_virt_src)) == 0)
-					goto exit;
-			}
+		if(kdp_pmap) pmap = kdp_pmap;				/* If special pmap, use it */
+		else pmap = kernel_pmap;					/* otherwise, use kernel's */
 
-			cnt = ((cur_virt_src + NBPG) & (-NBPG)) - cur_virt_src;
+		while (resid != 0) {   
+
+			if((cur_phys_src = kdp_vtophys(pmap, cur_virt_src)) == 0) goto exit;
+			if(kdp_read_io == 0)
+				if(!mapping_phys_lookup((ppnum_t)(cur_phys_src >> 12), &dummy)) goto exit;	/* Can't read where there's not any memory */
+
+			cnt = 4096 - (cur_virt_src & 0xFFF);	/* Get length left on page */
 			if (cnt > resid) cnt = resid;
-				if (kdp_pmap) {
+
 #ifdef KDP_VM_READ_DEBUG
-					kprintf("kdp_vm_read2: pmap %x, virt %x, phys %x\n", 
-							kdp_pmap, cur_virt_src, cur_phys_src);
+				kprintf("kdp_vm_read2: pmap %08X, virt %016LLX, phys %016LLX\n", 
+					pmap, cur_virt_src, cur_phys_src);
 #endif
-				msr = kdp_xlate_off();
-				kdp_bcopy((unsigned char *)cur_phys_src, 
-						(unsigned char *)cur_virt_dst, cnt);
-				kdp_xlate_restore(msr);
-			} else {
-				kdp_bcopy((unsigned char *)cur_virt_src, 
-						(unsigned char *)cur_virt_dst, cnt);
-			}
+
+			bcopy_phys(cur_phys_src, cur_virt_dst, cnt);		/* Copy stuff over */
+			
 			cur_virt_src +=cnt;
 			cur_virt_dst +=cnt;
 			resid -= cnt;
@@ -173,7 +186,7 @@ exit:
 #ifdef KDP_VM_READ_DEBUG
 	kprintf("kdp_vm_read: ret %08X\n", len-resid);
 #endif
-        return (len-resid);
+        return (len - resid);
 }
 
 /*
@@ -184,17 +197,17 @@ unsigned kdp_vm_write(
         caddr_t dst,
         unsigned len)
 {       
-	vm_offset_t cur_virt_src, cur_virt_dst;
-	vm_offset_t cur_phys_src, cur_phys_dst;
-        unsigned resid, cnt, cnt_src, cnt_dst;
-	unsigned msr;
+	addr64_t cur_virt_src, cur_virt_dst;
+	addr64_t cur_phys_src, cur_phys_dst;
+	unsigned resid, cnt, cnt_src, cnt_dst;
 
 #ifdef KDP_VM_WRITE_DEBUG
 	printf("kdp_vm_write: src %x dst %x len %x - %08X %08X\n", src, dst, len, ((unsigned long *)src)[0], ((unsigned long *)src)[1]);
 #endif
 
-	cur_virt_src = (vm_offset_t)src;
-	cur_virt_dst = (vm_offset_t)dst;
+	cur_virt_src = (addr64_t)((unsigned int)src);
+	cur_virt_dst = (addr64_t)((unsigned int)dst);
+
 	resid = len;
 
 	while (resid != 0) {
@@ -213,16 +226,341 @@ unsigned kdp_vm_write(
 		if (cnt > resid) 
 			cnt = resid;
 
-		msr = kdp_xlate_off();
-		kdp_bcopy((unsigned char *)cur_virt_src,  (unsigned char *)cur_phys_dst, cnt);
-		kdp_flush_cache(cur_phys_dst, cnt);
-		kdp_xlate_restore(msr);
+		bcopy_phys(cur_phys_src, cur_phys_dst, cnt);		/* Copy stuff over */
+		sync_cache64(cur_phys_dst, cnt);					/* Sync caches */
 
 		cur_virt_src +=cnt;
 		cur_virt_dst +=cnt;
 		resid -= cnt;
 	}
 exit:
-	return (len-resid);
+	return (len - resid);
 }
 
+
+static void
+kern_collectth_state(thread_act_t th_act, tir_t *t)
+{
+  vm_offset_t	header;
+  int  hoffset, i ;
+  mythread_state_flavor_t *flavors;
+  struct thread_command	*tc;
+  /*
+   *	Fill in thread command structure.
+   */
+  header = t->header;
+  hoffset = t->hoffset;
+  flavors = t->flavors;
+	
+  tc = (struct thread_command *) (header + hoffset);
+  tc->cmd = LC_THREAD;
+  tc->cmdsize = sizeof(struct thread_command)
+    + t->tstate_size;
+  hoffset += sizeof(struct thread_command);
+  /*
+   * Follow with a struct thread_state_flavor and
+   * the appropriate thread state struct for each
+   * thread state flavor.
+   */
+  for (i = 0; i < kdp_mynum_flavors; i++) {
+    *(mythread_state_flavor_t *)(header+hoffset) =
+      flavors[i];
+    hoffset += sizeof(mythread_state_flavor_t);
+
+    if (machine_thread_get_kern_state(th_act, flavors[i].flavor,
+			     (thread_state_t) (header+hoffset),
+				      &flavors[i].count) != KERN_SUCCESS)
+      printf ("Failure in machine_thread_get_kern_state()\n");
+    hoffset += flavors[i].count*sizeof(int);
+  }
+
+  t->hoffset = hoffset;
+}
+
+int
+kdp_dump_trap(
+	      int type,
+	      struct savearea *regs)
+{
+  extern int kdp_flag;
+
+  printf ("An unexpected trap (type %d) occurred during the kernel dump, terminating.\n", type);
+  kdp_send_panic_pkt (KDP_EOF, NULL, 0, ((void *) 0));
+  abort_panic_transfer();
+  kdp_flag &= ~KDP_PANIC_DUMP_ENABLED;
+  kdp_flag &= ~PANIC_CORE_ON_NMI;
+  kdp_flag &= ~PANIC_LOG_DUMP;
+
+  kdp_reset();
+
+  kdp_raise_exception(EXC_BAD_ACCESS, 0, 0, kdp.saved_state);
+  return;
+}
+
+int
+kern_dump()
+{
+  int error = 0;
+  vm_map_t	map;
+  unsigned int	thread_count, segment_count;
+  unsigned int	command_size = 0, header_size = 0, tstate_size = 0;
+  unsigned int	hoffset = 0, foffset = 0, nfoffset = 0,  vmoffset = 0;
+  unsigned int  max_header_size = 0;
+  vm_offset_t	header;
+  struct machine_slot	*ms;
+  struct mach_header	*mh;
+  struct segment_command	*sc;
+  struct thread_command	*tc;
+  vm_size_t	size;
+  vm_prot_t	prot = 0;
+  vm_prot_t	maxprot = 0;
+  vm_inherit_t	inherit = 0;
+  vm_offset_t	offset;
+  int		error1;
+  mythread_state_flavor_t flavors[MAX_TSTATE_FLAVORS];
+  vm_size_t	nflavors;
+  int		i;
+  int nesting_depth = 0;
+  kern_return_t	kret;
+  struct vm_region_submap_info_64 vbr;
+  int vbrcount  = 0;
+  tir_t tir1;
+
+  int panic_error = 0;
+  unsigned int txstart = 0;
+  unsigned int mach_section_count = 4;
+  unsigned int num_sects_txed = 0;
+
+
+  extern int SEGSIZE;
+  
+  extern vm_offset_t sectTEXTB, sectDATAB, sectLINKB, sectPRELINKB;
+  extern int sectSizeTEXT, sectSizeDATA, sectSizeLINK, sectSizePRELINK;
+
+  map = kernel_map;
+  not_in_kdp = 0; /* Tell vm functions not to acquire locks */
+
+  thread_count = 1;
+  segment_count = get_vmmap_entries(map); 
+  
+  printf("Kernel map has %d entries\n", segment_count);
+
+  nflavors = kdp_mynum_flavors;
+  bcopy((char *)thread_flavor_array,(char *) flavors,sizeof(thread_flavor_array));
+
+  for (i = 0; i < nflavors; i++)
+    tstate_size += sizeof(mythread_state_flavor_t) +
+      (flavors[i].count * sizeof(int));
+
+  command_size = (segment_count + mach_section_count) *
+    sizeof(struct segment_command) +
+    thread_count*sizeof(struct thread_command) +
+    tstate_size*thread_count;
+
+  header_size = command_size + sizeof(struct mach_header);
+  header = (vm_offset_t) command_buffer;
+	
+  /*
+   *	Set up Mach-O header.
+   */
+  printf ("Generated Mach-O header size was %d\n", header_size);
+
+  mh = (struct mach_header *) header;
+  ms = &machine_slot[cpu_number()];
+  mh->magic = MH_MAGIC;
+  mh->cputype = ms->cpu_type;
+  mh->cpusubtype = ms->cpu_subtype;
+  mh->filetype = MH_CORE;
+  mh->ncmds = segment_count + thread_count + mach_section_count;
+  mh->sizeofcmds = command_size;
+  mh->flags = 0;
+
+  hoffset = sizeof(struct mach_header);	/* offset into header */
+  foffset = round_page_32(header_size); /* offset into file */
+  /* Padding.. */
+  if ((foffset - header_size) < (4*sizeof(struct segment_command))) {
+      /* Hack */
+      foffset += ((4*sizeof(struct segment_command)) - (foffset-header_size)); 
+    }
+
+  max_header_size = foffset;
+
+  vmoffset = VM_MIN_ADDRESS;		/* offset into VM */
+
+  /* Transmit the Mach-O MH_CORE header, and seek forward past the 
+   * area reserved for the segment and thread commands 
+   * to begin data transmission 
+   */
+
+   if ((panic_error = kdp_send_panic_pkt (KDP_SEEK, NULL, sizeof(nfoffset) , &nfoffset)) < 0) { 
+     printf ("kdp_send_panic_pkt failed with error %d\n", panic_error); 
+     return -1; 
+   } 
+
+   if ((panic_error = kdp_send_panic_packets (KDP_DATA, NULL, sizeof(struct mach_header), (caddr_t) mh) < 0)) {
+     printf ("kdp_send_panic_packets failed with error %d\n", panic_error);
+     return -1 ;
+   }
+
+   if ((panic_error = kdp_send_panic_pkt (KDP_SEEK, NULL, sizeof(foffset) , &foffset) < 0)) {
+     printf ("kdp_send_panic_pkt failed with error %d\n", panic_error);
+     return (-1);
+   }
+  printf ("Transmitting kernel state, please wait: ");
+
+  while ((segment_count > 0) || (kret == KERN_SUCCESS)){
+    /* Check if we've transmitted all the kernel sections */
+    if (num_sects_txed == mach_section_count-1) {
+      
+    while (1) {
+
+    /*
+     *	Get region information for next region.
+     */
+
+      vbrcount = VM_REGION_SUBMAP_INFO_COUNT_64;
+      if((kret = vm_region_recurse_64(map, 
+				      &vmoffset, &size, &nesting_depth, 
+				      &vbr, &vbrcount)) != KERN_SUCCESS) {
+	break;
+      }
+
+      if(vbr.is_submap) {
+	nesting_depth++;
+	continue;
+      } else {
+	break;
+      }
+    }
+
+    if(kret != KERN_SUCCESS)
+      break;
+
+    prot = vbr.protection;
+    maxprot = vbr.max_protection;
+    inherit = vbr.inheritance;
+    }
+    else
+      {
+	switch (num_sects_txed) {
+	case 0:
+	  {
+	    /* Transmit the kernel text section */
+	    vmoffset = sectTEXTB;
+	    size = sectSizeTEXT;
+	  }
+	  break;
+        case 1:
+	  {
+	    vmoffset = sectDATAB;
+	    size = sectSizeDATA;
+	  }
+	  break;
+	case 2:
+	  {
+	    vmoffset = sectPRELINKB;
+	    size = sectSizePRELINK;
+	  }
+	  break;
+	case 3:
+	  {
+	    vmoffset = sectLINKB;
+	    size = sectSizeLINK;
+	  }
+	  break;
+	  /* TODO the lowmem vector area may be useful, but its transmission is
+	   * disabled for now. The traceback table area should be transmitted 
+	   * as well - that's indirected from 0x5080.
+	   */
+	}
+	num_sects_txed++;
+      }
+    /*
+     *	Fill in segment command structure.
+     */
+    
+    if (hoffset > max_header_size)
+      break;
+    sc = (struct segment_command *) (header);
+    sc->cmd = LC_SEGMENT;
+    sc->cmdsize = sizeof(struct segment_command);
+    sc->segname[0] = 0;
+    sc->vmaddr = vmoffset;
+    sc->vmsize = size;
+    sc->fileoff = foffset;
+    sc->filesize = size;
+    sc->maxprot = maxprot;
+    sc->initprot = prot;
+    sc->nsects = 0;
+
+    if ((panic_error = kdp_send_panic_pkt (KDP_SEEK, NULL, sizeof(hoffset) , &hoffset)) < 0) { 
+	printf ("kdp_send_panic_pkt failed with error %d\n", panic_error); 
+	return -1; 
+      } 
+    
+    if ((panic_error = kdp_send_panic_packets (KDP_DATA, NULL, sizeof(struct segment_command) , (caddr_t) sc)) < 0) {
+	printf ("kdp_send_panic_packets failed with error %d\n", panic_error);
+	return -1 ;
+      }
+
+    /* Do not transmit memory tagged VM_MEMORY_IOKIT - instead, seek past that
+     * region on the server - this creates a hole in the file  
+     */
+
+    if ((vbr.user_tag != VM_MEMORY_IOKIT)) {
+      
+      if ((panic_error = kdp_send_panic_pkt (KDP_SEEK, NULL, sizeof(foffset) , &foffset)) < 0) {
+	  printf ("kdp_send_panic_pkt failed with error %d\n", panic_error);
+	  return (-1);
+	}
+
+      txstart = vmoffset;
+
+      if ((panic_error = kdp_send_panic_packets (KDP_DATA, NULL, size, (caddr_t) txstart)) < 0)	{
+	  printf ("kdp_send_panic_packets failed with error %d\n", panic_error);
+	  return -1 ;
+	}
+    }
+
+    hoffset += sizeof(struct segment_command);
+    foffset += size;
+    vmoffset += size;
+    segment_count--;
+  }
+  tir1.header = header;
+  tir1.hoffset = 0;
+  tir1.flavors = flavors;
+  tir1.tstate_size = tstate_size;
+
+  /* Now send out the LC_THREAD load command, with the thread information
+   * for the current activation.
+   * Note that the corefile can contain LC_SEGMENT commands with file offsets
+   * that point past the edge of the corefile, in the event that the last N
+   * VM regions were all I/O mapped or otherwise non-transferable memory, 
+   * not followed by a normal VM region; i.e. there will be no hole that 
+   * reaches to the end of the core file.
+   */
+  kern_collectth_state (current_act(), &tir1);
+
+  if ((panic_error = kdp_send_panic_pkt (KDP_SEEK, NULL, sizeof(hoffset) , &hoffset)) < 0) { 
+      printf ("kdp_send_panic_pkt failed with error %d\n", panic_error); 
+      return -1; 
+    } 
+  
+    if ((panic_error = kdp_send_panic_packets (KDP_DATA, NULL, tir1.hoffset , (caddr_t) header)) < 0) {
+	printf ("kdp_send_panic_packets failed with error %d\n", panic_error);
+	return -1 ;
+      }
+    
+    /* last packet */
+    if ((panic_error = kdp_send_panic_pkt (KDP_EOF, NULL, 0, ((void *) 0))) < 0)
+      {
+	printf ("kdp_send_panic_pkt failed with error %d\n", panic_error);
+	return (-1) ;
+      }
+    
+ out:
+    if (error == 0)
+      error = error1;
+    return (error);
+}

@@ -75,6 +75,8 @@
 #include <kern/mach_header.h>
 #include <machine/profile.h>
 
+decl_simple_lock_data(,mcount_lock);
+
 /*
  * Froms is actually a bunch of unsigned shorts indexing tos
  */
@@ -121,6 +123,7 @@ kmstartup()
 	p->kcount = (u_short *)cp;
 	cp += p->kcountsize;
 	p->froms = (u_short *)cp;
+	simple_lock_init(&mcount_lock);
 }
 
 /*
@@ -183,7 +186,6 @@ mcount(
 	register struct tostruct *top, *prevtop;
 	struct gmonparam *p = &_gmonparam;
 	register long toindex;
-	MCOUNT_INIT;
 
     /*
      * check that we are profiling
@@ -192,7 +194,7 @@ mcount(
     if (p->state != GMON_PROF_ON)
         return;
 
-	MCOUNT_ENTER;
+	usimple_lock(&mcount_lock);
 
 	/*
 	 *	check that frompcindex is a reasonable pc value.
@@ -275,25 +277,20 @@ mcount(
 
 	}
 done:
-	MCOUNT_EXIT;
+	usimple_unlock(&mcount_lock);
 	return;
 
 overflow:
     p->state = GMON_PROF_ERROR;
-	MCOUNT_EXIT;
+        usimple_unlock(&mcount_lock);
 	printf("mcount: tos overflow\n");
 	return;
 }
 
 #endif /* GPROF */
 
-#if NCPUS > 1
 #define PROFILE_LOCK(x)		simple_lock(x)
 #define PROFILE_UNLOCK(x)	simple_unlock(x)
-#else
-#define PROFILE_LOCK(x)
-#define PROFILE_UNLOCK(x)
-#endif
 
 struct profil_args {
 	short	*bufbase;
@@ -319,7 +316,7 @@ profil(p, uap, retval)
 	}
 
 	/* Block profile interrupts while changing state. */
-	s = splstatclock();
+        s = ml_set_interrupts_enabled(FALSE);	
 	PROFILE_LOCK(&upp->pr_lock);
 	upp->pr_base = (caddr_t)uap->bufbase;
 	upp->pr_size = uap->bufsize;
@@ -335,7 +332,7 @@ profil(p, uap, retval)
 	upp->pr_next = 0;
 	PROFILE_UNLOCK(&upp->pr_lock);
 	startprofclock(p);
-	splx(s);
+	ml_set_interrupts_enabled(s);
 	return(0);
 }
 
@@ -356,7 +353,7 @@ add_profil(p, uap, retval)
 
 	if (upp->pr_scale == 0)
 		return (0);
-	s = splstatclock();
+        s = ml_set_interrupts_enabled(FALSE);		
 	upc = (struct uprof *) kalloc(sizeof (struct uprof));
 	upc->pr_base = (caddr_t)uap->bufbase;
 	upc->pr_size = uap->bufsize;
@@ -366,7 +363,7 @@ add_profil(p, uap, retval)
 	upc->pr_next = upp->pr_next;
 	upp->pr_next = upc;
 	PROFILE_UNLOCK(&upp->pr_lock);
-	splx(s);
+	ml_set_interrupts_enabled(s);		
 	return(0);
 }
 

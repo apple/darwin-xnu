@@ -61,30 +61,17 @@ extern  char FixedStackStart[], FixedStackEnd[];
 	((((vm_offset_t)(va)) >= (vm_offset_t)&FixedStackStart) &&	\
 	(((vm_offset_t)(va)) < ((vm_offset_t)&FixedStackEnd)))
 
-#if 0
-
-#define	INKERNELSTACK(va, th)					\
-	(th == THR_ACT_NULL ||				\
-	 (((vm_offset_t)(va)) >= th->thread->kernel_stack &&	\
-	  (((vm_offset_t)(va)) < th->thread->kernel_stack +	\
-	                         KERNEL_STACK_SIZE)) ||		\
-         INFIXEDSTACK(va))
-#else
 #define INKERNELSTACK(va, th) 1
 
-#endif
-
-#ifdef __MACHO__
 struct db_ppc_frame {
 	struct db_ppc_frame	*f_frame;
 	int			pad1;
-	db_addr_t		f_retaddr;
+	uint32_t	f_retaddr;
 	int			pad3;
 	int			pad4;
 	int			pad5;
-	db_addr_t		f_arg[DB_NUMARGS_MAX];
+	uint32_t	f_arg[DB_NUMARGS_MAX];
 };
-#endif
 
 #define	TRAP		1
 #define	INTERRUPT	2
@@ -127,45 +114,45 @@ extern int	_setjmp(
  */
 struct db_variable db_regs[] = {
 	/* XXX "pc" is an alias to "srr0"... */
-  { "pc",	(int *)&ddb_regs.save_srr0,	db_ppc_reg_value, 0, 0, 0, 0, TRUE },
-  { "srr0",	(int *)&ddb_regs.save_srr0,	db_ppc_reg_value, 0, 0, 0, 0, TRUE },
-  { "srr1",	(int *)&ddb_regs.save_srr1,	db_ppc_reg_value, 0, 0, 0, 0, TRUE },
-  { "r0",	(int *)&ddb_regs.save_r0,	db_ppc_reg_value, 0, 0, 0, 0, TRUE },
-  { "r1",	(int *)&ddb_regs.save_r1,	db_ppc_reg_value, 0, 0, 0, 0, TRUE },
-  { "r2",	(int *)&ddb_regs.save_r2,	db_ppc_reg_value, 0, 0, 0, 0, TRUE },
-  { "r3",	(int *)&ddb_regs.save_r3,	db_ppc_reg_value, 0, 0, 0, 0, TRUE },
-  { "r4",	(int *)&ddb_regs.save_r4,	db_ppc_reg_value, 0, 0, 0, 0, TRUE },
-  { "r5",	(int *)&ddb_regs.save_r5,	db_ppc_reg_value, 0, 0, 0, 0, TRUE },
-  { "r6",	(int *)&ddb_regs.save_r6,	db_ppc_reg_value, 0, 0, 0, 0, TRUE },
-  { "r7",	(int *)&ddb_regs.save_r7,	db_ppc_reg_value, 0, 0, 0, 0, TRUE },
-  { "r8",	(int *)&ddb_regs.save_r8,	db_ppc_reg_value, 0, 0, 0, 0, TRUE },
-  { "r9",	(int *)&ddb_regs.save_r9,	db_ppc_reg_value, 0, 0, 0, 0, TRUE },
-  { "r10",	(int *)&ddb_regs.save_r10,	db_ppc_reg_value, 0, 0, 0, 0, TRUE },
-  { "r11",	(int *)&ddb_regs.save_r11,	db_ppc_reg_value, 0, 0, 0, 0, TRUE },
-  { "r12",	(int *)&ddb_regs.save_r12,	db_ppc_reg_value, 0, 0, 0, 0, TRUE },
-  { "r13",	(int *)&ddb_regs.save_r13,	db_ppc_reg_value, 0, 0, 0, 0, TRUE },
-  { "r14",	(int *)&ddb_regs.save_r14,	db_ppc_reg_value, 0, 0, 0, 0, TRUE },
-  { "r15",	(int *)&ddb_regs.save_r15,	db_ppc_reg_value, 0, 0, 0, 0, TRUE },
-  { "r16",	(int *)&ddb_regs.save_r16,	db_ppc_reg_value, 0, 0, 0, 0, TRUE },
-  { "r17",	(int *)&ddb_regs.save_r17,	db_ppc_reg_value, 0, 0, 0, 0, TRUE },
-  { "r18",	(int *)&ddb_regs.save_r18,	db_ppc_reg_value, 0, 0, 0, 0, TRUE },
-  { "r19",	(int *)&ddb_regs.save_r19,	db_ppc_reg_value, 0, 0, 0, 0, TRUE },
-  { "r20",	(int *)&ddb_regs.save_r20,	db_ppc_reg_value, 0, 0, 0, 0, TRUE },
-  { "r21",	(int *)&ddb_regs.save_r21,	db_ppc_reg_value, 0, 0, 0, 0, TRUE },
-  { "r22",	(int *)&ddb_regs.save_r22,	db_ppc_reg_value, 0, 0, 0, 0, TRUE },
-  { "r23",	(int *)&ddb_regs.save_r23,	db_ppc_reg_value, 0, 0, 0, 0, TRUE },
-  { "r24",	(int *)&ddb_regs.save_r24,	db_ppc_reg_value, 0, 0, 0, 0, TRUE },
-  { "r25",	(int *)&ddb_regs.save_r25,	db_ppc_reg_value, 0, 0, 0, 0, TRUE },
-  { "r26",	(int *)&ddb_regs.save_r26,	db_ppc_reg_value, 0, 0, 0, 0, TRUE },
-  { "r27",	(int *)&ddb_regs.save_r27,	db_ppc_reg_value, 0, 0, 0, 0, TRUE },
-  { "r28",	(int *)&ddb_regs.save_r28,	db_ppc_reg_value, 0, 0, 0, 0, TRUE },
-  { "r29",	(int *)&ddb_regs.save_r29,	db_ppc_reg_value, 0, 0, 0, 0, TRUE },
-  { "r30",	(int *)&ddb_regs.save_r30,	db_ppc_reg_value, 0, 0, 0, 0, TRUE },
-  { "r31",	(int *)&ddb_regs.save_r31,	db_ppc_reg_value, 0, 0, 0, 0, TRUE },
-  { "cr",	(int *)&ddb_regs.save_cr,	db_ppc_reg_value, 0, 0, 0, 0, TRUE },
-  { "xer",	(int *)&ddb_regs.save_xer,	db_ppc_reg_value, 0, 0, 0, 0, TRUE },
-  { "lr",	(int *)&ddb_regs.save_lr,	db_ppc_reg_value, 0, 0, 0, 0, TRUE },
-  { "ctr",	(int *)&ddb_regs.save_ctr,	db_ppc_reg_value, 0, 0, 0, 0, TRUE },
+  { "pc",	&ddb_regs.save_srr0,	db_ppc_reg_value, 0, 0, 0, 0, TRUE },
+  { "srr0",	&ddb_regs.save_srr0,	db_ppc_reg_value, 0, 0, 0, 0, TRUE },
+  { "srr1",	&ddb_regs.save_srr1,	db_ppc_reg_value, 0, 0, 0, 0, TRUE },
+  { "r0",	&ddb_regs.save_r0,	db_ppc_reg_value, 0, 0, 0, 0, TRUE },
+  { "r1",	&ddb_regs.save_r1,	db_ppc_reg_value, 0, 0, 0, 0, TRUE },
+  { "r2",	&ddb_regs.save_r2,	db_ppc_reg_value, 0, 0, 0, 0, TRUE },
+  { "r3",	&ddb_regs.save_r3,	db_ppc_reg_value, 0, 0, 0, 0, TRUE },
+  { "r4",	&ddb_regs.save_r4,	db_ppc_reg_value, 0, 0, 0, 0, TRUE },
+  { "r5",	&ddb_regs.save_r5,	db_ppc_reg_value, 0, 0, 0, 0, TRUE },
+  { "r6",	&ddb_regs.save_r6,	db_ppc_reg_value, 0, 0, 0, 0, TRUE },
+  { "r7",	&ddb_regs.save_r7,	db_ppc_reg_value, 0, 0, 0, 0, TRUE },
+  { "r8",	&ddb_regs.save_r8,	db_ppc_reg_value, 0, 0, 0, 0, TRUE },
+  { "r9",	&ddb_regs.save_r9,	db_ppc_reg_value, 0, 0, 0, 0, TRUE },
+  { "r10",	&ddb_regs.save_r10,	db_ppc_reg_value, 0, 0, 0, 0, TRUE },
+  { "r11",	&ddb_regs.save_r11,	db_ppc_reg_value, 0, 0, 0, 0, TRUE },
+  { "r12",	&ddb_regs.save_r12,	db_ppc_reg_value, 0, 0, 0, 0, TRUE },
+  { "r13",	&ddb_regs.save_r13,	db_ppc_reg_value, 0, 0, 0, 0, TRUE },
+  { "r14",	&ddb_regs.save_r14,	db_ppc_reg_value, 0, 0, 0, 0, TRUE },
+  { "r15",	&ddb_regs.save_r15,	db_ppc_reg_value, 0, 0, 0, 0, TRUE },
+  { "r16",	&ddb_regs.save_r16,	db_ppc_reg_value, 0, 0, 0, 0, TRUE },
+  { "r17",	&ddb_regs.save_r17,	db_ppc_reg_value, 0, 0, 0, 0, TRUE },
+  { "r18",	&ddb_regs.save_r18,	db_ppc_reg_value, 0, 0, 0, 0, TRUE },
+  { "r19",	&ddb_regs.save_r19,	db_ppc_reg_value, 0, 0, 0, 0, TRUE },
+  { "r20",	&ddb_regs.save_r20,	db_ppc_reg_value, 0, 0, 0, 0, TRUE },
+  { "r21",	&ddb_regs.save_r21,	db_ppc_reg_value, 0, 0, 0, 0, TRUE },
+  { "r22",	&ddb_regs.save_r22,	db_ppc_reg_value, 0, 0, 0, 0, TRUE },
+  { "r23",	&ddb_regs.save_r23,	db_ppc_reg_value, 0, 0, 0, 0, TRUE },
+  { "r24",	&ddb_regs.save_r24,	db_ppc_reg_value, 0, 0, 0, 0, TRUE },
+  { "r25",	&ddb_regs.save_r25,	db_ppc_reg_value, 0, 0, 0, 0, TRUE },
+  { "r26",	&ddb_regs.save_r26,	db_ppc_reg_value, 0, 0, 0, 0, TRUE },
+  { "r27",	&ddb_regs.save_r27,	db_ppc_reg_value, 0, 0, 0, 0, TRUE },
+  { "r28",	&ddb_regs.save_r28,	db_ppc_reg_value, 0, 0, 0, 0, TRUE },
+  { "r29",	&ddb_regs.save_r29,	db_ppc_reg_value, 0, 0, 0, 0, TRUE },
+  { "r30",	&ddb_regs.save_r30,	db_ppc_reg_value, 0, 0, 0, 0, TRUE },
+  { "r31",	&ddb_regs.save_r31,	db_ppc_reg_value, 0, 0, 0, 0, TRUE },
+  { "cr",	&ddb_regs.save_cr,	db_ppc_reg_value, 0, 0, 0, 0, TRUE },
+  { "xer",	&ddb_regs.save_xer,	db_ppc_reg_value, 0, 0, 0, 0, TRUE },
+  { "lr",	&ddb_regs.save_lr,	db_ppc_reg_value, 0, 0, 0, 0, TRUE },
+  { "ctr",	&ddb_regs.save_ctr,	db_ppc_reg_value, 0, 0, 0, 0, TRUE },
 };
 struct db_variable *db_eregs = db_regs + sizeof(db_regs)/sizeof(db_regs[0]);
 
@@ -176,8 +163,10 @@ db_ppc_reg_value(
 	int			flag,
 	db_var_aux_param_t	ap)
 {
-	int			*dp = 0;
-	db_expr_t		null_reg = 0;
+	db_expr_t *dp = 0;
+	db_expr_t null_reg = 0;
+	uint32_t *dp32;
+	
 	register thread_act_t	thr_act = ap->thr_act;
 	int			cpu;
 
@@ -187,70 +176,77 @@ db_ppc_reg_value(
 		    db_error("no user registers\n");
 	    }
 	    if (thr_act == current_act()) {
-		if (IS_USER_TRAP((&ddb_regs)))
-		    dp = vp->valuep;
-		else if (INFIXEDSTACK(ddb_regs.save_r1))
-		    db_error("cannot get/set user registers in nested interrupt\n");
+			if (IS_USER_TRAP((&ddb_regs))) dp = vp->valuep;
+			else if (INFIXEDSTACK(ddb_regs.save_r1))
+				db_error("cannot get/set user registers in nested interrupt\n");
 	    }
-	} else {
-	    if (thr_act == THR_ACT_NULL || thr_act == current_act()) {
-		dp = vp->valuep;
-	    } else {
-	      if (thr_act->thread &&
-		  !(thr_act->thread->state & TH_STACK_HANDOFF) && 
-			thr_act->thread->kernel_stack) {
-		int cpu;
+	} 
+	else {
+		if (thr_act == THR_ACT_NULL || thr_act == current_act()) {
+			dp = vp->valuep;
+		} 
+		else {
+			if (thr_act->thread &&
+				!(thr_act->thread->state & TH_STACK_HANDOFF) && 
+				thr_act->thread->kernel_stack) {
+				
+				int cpu;
 
-		for (cpu = 0; cpu < NCPUS; cpu++) {
-		    if (cpu_to_processor(cpu)->state == PROCESSOR_RUNNING &&
-			cpu_to_processor(cpu)->cpu_data->active_thread == thr_act->thread && saved_state[cpu]) {
-			dp = (int *) (((int)saved_state[cpu]) +
-				      (((int) vp->valuep) -
-				       (int) &ddb_regs));
-			break;
-		    }
-		}
+				for (cpu = 0; cpu < NCPUS; cpu++) {
+					if (cpu_to_processor(cpu)->state == PROCESSOR_RUNNING &&
+						cpu_to_processor(cpu)->active_thread == thr_act->thread && saved_state[cpu]) {
+						
+						dp = (db_expr_t)(((uint32_t)saved_state[cpu]) +
+								  (((uint32_t) vp->valuep) -
+								   (uint32_t) &ddb_regs));
+						break;
+					}
+				}
 
-		if (dp == 0)
-		    dp = &null_reg;
-	      } else if (thr_act->thread &&
-			 (thr_act->thread->state&TH_STACK_HANDOFF)){
-		/* only PC is valid */
-		if (vp->valuep == (int *) &ddb_regs.save_srr0) {
-		    dp = (int *)(&thr_act->thread->continuation);
-		} else {
-		    dp = &null_reg;
-		}
-	      }
+				if (dp == 0) dp = &null_reg;
+			} 
+			else if (thr_act->thread && (thr_act->thread->state & TH_STACK_HANDOFF)){
+				/* only PC is valid */
+				if (vp->valuep == (int *) &ddb_regs.save_srr0) {
+					dp = (int *)(&thr_act->thread->continuation);
+				} 
+				else {
+					dp = &null_reg;
+				}
+			}
 	    }
 	}
 	if (dp == 0) {
-	    int cpu;
 
 	    if (!db_option(ap->modif, 'u')) {
-		for (cpu = 0; cpu < NCPUS; cpu++) {
-		    if (cpu_to_processor(cpu)->state == PROCESSOR_RUNNING &&
-		    	cpu_to_processor(cpu)->cpu_data->active_thread == thr_act->thread && saved_state[cpu]) {
-		    	    dp = (int *) (((int)saved_state[cpu]) +
-					  (((int) vp->valuep) -
-					   (int) &ddb_regs));
-			    break;
-		    }
-		}
+			for (cpu = 0; cpu < NCPUS; cpu++) {
+			    if (cpu_to_processor(cpu)->state == PROCESSOR_RUNNING &&
+			    	cpu_to_processor(cpu)->active_thread == thr_act->thread && saved_state[cpu]) {
+			    	    dp = (int *) (((int)saved_state[cpu]) +
+						  (((int) vp->valuep) - (int) &ddb_regs));
+					break;
+				}
+			}
 	    }
 	    if (dp == 0) {
-		if (!thr_act || thr_act->mact.pcb == 0)
-		    db_error("no pcb\n");
-		dp = (int *)((int)thr_act->mact.pcb + 
-			     ((int)vp->valuep - (int)&ddb_regs));
+			if (!thr_act || thr_act->mact.pcb == 0) db_error("no pcb\n");
+			dp = (int *)((int)thr_act->mact.pcb + ((int)vp->valuep - (int)&ddb_regs));
 	    }
 	}
-	if (flag == DB_VAR_SET)
-	    *dp = *valuep;
-	else
-	    *valuep = *dp;
+
+	if(vp->valuep == (int *) &ddb_regs.save_cr) {	/* Is this the CR we are doing? */
+		dp32 = (uint32_t *)dp;						/* Make this easier */
+		if (flag == DB_VAR_SET) *dp32 = *valuep;
+		else *valuep = *dp32;
+	}
+	else {											/* Normal 64-bit registers */
+		if (flag == DB_VAR_SET) *dp = *valuep;
+		else *valuep = *(unsigned long long *)dp;
+	}
+	
 	return(0);
 }
+
 
 void
 db_find_trace_symbols(void)
@@ -377,6 +373,13 @@ db_nextframe(
 	    /* falling down for unknown case */
 	default:
 	miss_frame:
+		
+		if(!pmap_find_phys(kernel_pmap, (addr64_t)*fp)) {	/* Check if this is valid */
+			db_printf("Frame not mapped %08X\n",*fp);		/* Say not found */
+			*fp = 0;										/* Show not found */
+			break;											/* Out of here */
+		}
+		
 		if ((*fp)->f_frame)
 		    *ip = (db_addr_t)
 			    db_get_task_value((int)&(*fp)->f_frame->f_retaddr,
@@ -439,7 +442,7 @@ db_stack_trace_cmd(
 	    if (!have_addr && !trace_thread) {
 			have_addr = TRUE;
 			trace_thread = TRUE;
-			act_list = &(current_task()->thr_acts);
+			act_list = &(current_task()->threads);
 			addr = (db_expr_t) queue_first(act_list);
 	    } 
 		else if (trace_thread) {
@@ -447,11 +450,11 @@ db_stack_trace_cmd(
 				if (!db_check_act_address_valid((thread_act_t)addr)) {
 					if (db_lookup_task((task_t)addr) == -1)
 						return;
-					act_list = &(((task_t)addr)->thr_acts);
+					act_list = &(((task_t)addr)->threads);
 					addr = (db_expr_t) queue_first(act_list);
 				} 
 				else {
-					act_list = &(((thread_act_t)addr)->task->thr_acts);
+					act_list = &(((thread_act_t)addr)->task->threads);
 					thcount = db_lookup_task_act(((thread_act_t)addr)->task,
 									(thread_act_t)addr);
 				}
@@ -465,7 +468,7 @@ db_stack_trace_cmd(
 					return;
 				}
 				have_addr = TRUE;
-				act_list = &th->task->thr_acts;
+				act_list = &th->task->threads;
 				addr = (db_expr_t) queue_first(act_list);
 			}
 	    }
@@ -504,7 +507,7 @@ next_thread:
 	    }
 	    if (trace_all_threads)
 		db_printf("---------- Thread 0x%x (#%d of %d) ----------\n",
-			  addr, thcount, th->task->thr_act_count);
+			  addr, thcount, th->task->thread_count);
 
 next_activation:
 
@@ -546,7 +549,7 @@ next_activation:
 	
 				for (cpu = 0; cpu < NCPUS; cpu++) {
 					if (cpu_to_processor(cpu)->state == PROCESSOR_RUNNING &&
-						cpu_to_processor(cpu)->cpu_data->active_thread == th->thread &&
+						cpu_to_processor(cpu)->active_thread == th->thread &&
 						saved_state[cpu]) {
 						break;
 					}
@@ -780,7 +783,7 @@ next_activation:
 	if (trace_all_threads) {
 	    if (top_act != THR_ACT_NULL)
 		th = top_act;
-	    th = (thread_act_t) queue_next(&th->thr_acts);
+	    th = (thread_act_t) queue_next(&th->task_threads);
 	    if (! queue_end(act_list, (queue_entry_t) th)) {
 		db_printf("\n");
 		addr = (db_expr_t) th;

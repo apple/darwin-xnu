@@ -102,6 +102,10 @@ static int	icmpmaskrepl = 0;
 SYSCTL_INT(_net_inet_icmp, ICMPCTL_MASKREPL, maskrepl, CTLFLAG_RW,
 	&icmpmaskrepl, 0, "");
 
+static int	icmptimestamp = 0;
+SYSCTL_INT(_net_inet_icmp, ICMPCTL_TIMESTAMP, timestamp, CTLFLAG_RW,
+	&icmptimestamp, 0, "");
+
 static int	drop_redirect = 0;
 SYSCTL_INT(_net_inet_icmp, OID_AUTO, drop_redirect, CTLFLAG_RW, 
 	&drop_redirect, 0, "");
@@ -117,7 +121,7 @@ SYSCTL_INT(_net_inet_icmp, OID_AUTO, log_redirect, CTLFLAG_RW,
  *      variable content is -1 and read-only.
  */     
     
-static int      icmplim = 100;
+static int      icmplim = 250;
 SYSCTL_INT(_net_inet_icmp, ICMPCTL_ICMPLIM, icmplim, CTLFLAG_RW,
 	&icmplim, 0, "");
 #else
@@ -483,6 +487,10 @@ icmp_input(m, hlen)
 			goto reflect;
 
 	case ICMP_TSTAMP:
+
+		if (icmptimestamp == 0)
+			break;
+
 		if (!icmpbmcastecho
 		    && (m->m_flags & (M_MCAST | M_BCAST)) != 0) {
 			icmpstat.icps_bmcasttstamp++;
@@ -1011,6 +1019,7 @@ icmp_dgram_ctloutput(struct socket *so, struct sockopt *sopt)
 		case IP_FAITH:
 #endif
 		case IP_STRIPHDR:
+		case IP_RECVTTL:
 			error = rip_ctloutput(so, sopt);
 			break;
 		

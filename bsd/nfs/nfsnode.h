@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2002 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2003 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -103,6 +103,96 @@ struct nfsdmap {
 };
 
 /*
+ * The nfsbuf is the nfs equivalent to a struct buf.
+ */
+struct nfsbuf {
+	LIST_ENTRY(nfsbuf)	nb_hash;	/* hash chain */
+	LIST_ENTRY(nfsbuf)	nb_vnbufs;	/* vnode's nfsbuf chain */
+	TAILQ_ENTRY(nfsbuf)	nb_free;	/* free list position if not active. */
+	volatile long		nb_flags;	/* NB_* flags. */
+	long			nb_bufsize;	/* buffer size */
+	daddr_t			nb_lblkno;	/* logical block number. */
+	int			nb_error;	/* errno value. */
+	u_int32_t		nb_valid;	/* valid pages in buf */
+	u_int32_t		nb_dirty;	/* dirty pages in buf */
+	int			nb_validoff;	/* offset in buffer of valid region. */
+	int			nb_validend;	/* offset of end of valid region. */
+	int			nb_dirtyoff;	/* offset in buffer of dirty region. */
+	int			nb_dirtyend;	/* offset of end of dirty region. */
+	caddr_t			nb_data;	/* mapped buffer */
+	struct vnode *		nb_vp;		/* device vnode */
+	struct proc *		nb_proc;	/* associated proc; NULL if kernel. */
+	struct ucred *		nb_rcred;	/* read credentials reference */
+	struct ucred *		nb_wcred;	/* write credentials reference */
+	void *			nb_pagelist;	/* upl */
+};
+
+/*
+ * These flags are kept in nb_flags and they're (purposefully)
+ * very similar to the B_* flags for struct buf.
+ */
+#define	NB_NEEDCOMMIT	0x00000002	/* Append-write in progress. */
+#define	NB_ASYNC	0x00000004	/* Start I/O, do not wait. */
+#define	NB_BUSY		0x00000010	/* I/O in progress. */
+#define	NB_CACHE	0x00000020	/* Bread found us in the cache. */
+#define	NB_STABLE	0x00000040	/* write FILESYNC not UNSTABLE. */
+#define	NB_DELWRI	0x00000080	/* Delay I/O until buffer reused. */
+#define	NB_DONE		0x00000200	/* I/O completed. */
+#define	NB_EINTR	0x00000400	/* I/O was interrupted */
+#define	NB_ERROR	0x00000800	/* I/O error occurred. */
+#define	NB_WASDIRTY	0x00001000	/* page was found dirty in the VM cache */
+#define	NB_INVAL	0x00002000	/* Does not contain valid info. */
+#define	NB_NOCACHE	0x00008000	/* Do not cache block after use. */
+#define	NB_READ		0x00100000	/* Read buffer. */
+#define	NB_PAGELIST	0x00400000	/* Buffer describes pagelist I/O. */
+#define	NB_WANTED	0x00800000	/* Process wants this buffer. */
+#define	NB_WRITE	0x00000000	/* Write buffer (pseudo flag). */
+#define	NB_WRITEINPROG	0x01000000	/* Write in progress. */
+#define	NB_META		0x40000000	/* buffer contains meta-data. */
+#define	NB_IOD		0x80000000	/* buffer being handled by nfsiod. */
+
+
+#define NBOFF(BP)			((off_t)(BP)->nb_lblkno * (off_t)(BP)->nb_bufsize)
+#define NBPGVALID(BP,P)			(((BP)->nb_valid >> (P)) & 0x1)
+#define NBPGDIRTY(BP,P)			(((BP)->nb_dirty >> (P)) & 0x1)
+#define NBPGVALID_SET(BP,P)		((BP)->nb_valid |= (1 << (P)))
+#define NBPGDIRTY_SET(BP,P)		((BP)->nb_dirty |= (1 << (P)))
+
+#define NFS_BUF_MAP(BP) \
+	do { \
+		if (!(BP)->nb_data && nfs_buf_map(BP)) \
+			panic("nfs_buf_map failed"); \
+	} while (0)
+
+LIST_HEAD(nfsbuflists, nfsbuf);
+TAILQ_HEAD(nfsbuffreehead, nfsbuf);
+
+#define NFSNOLIST ((struct nfsbuf *)0xdeadbeef)
+
+extern int nfsbufhashlock, nfsbufcnt, nfsbufmin, nfsbufmax;
+extern int nfsbuffreecnt, nfsbufdelwricnt, nfsneedbuffer;
+extern int nfs_nbdwrite;
+extern struct nfsbuffreehead nfsbuffree, nfsbufdelwri;
+
+#define NFSBUFCNTCHK() \
+	do { \
+	if (	(nfsbufcnt < 0) || \
+		(nfsbufcnt > nfsbufmax) || \
+		(nfsbuffreecnt < 0) || \
+		(nfsbuffreecnt > nfsbufmax) || \
+		(nfsbuffreecnt > nfsbufcnt) || \
+		(nfsbufdelwricnt < 0) || \
+		(nfsbufdelwricnt > nfsbufmax) || \
+		(nfsbufdelwricnt > nfsbufcnt) || \
+		(nfs_nbdwrite < 0) || \
+		(nfs_nbdwrite > nfsbufcnt) || \
+		0) \
+		panic("nfsbuf count error: max %d cnt %d free %d delwr %d bdw %d\n", \
+			nfsbufmax, nfsbufcnt, nfsbuffreecnt, \
+			nfsbufdelwricnt, nfs_nbdwrite); \
+	} while (0)
+
+/*
  * The nfsnode is the nfs equivalent to ufs's inode. Any similarity
  * is purely coincidental.
  * There is a unique nfsnode allocated for each active file,
@@ -131,7 +221,10 @@ struct nfsnode {
 	time_t			n_ctime;	/* Prev create time. */
 	time_t			n_expiry;	/* Lease expiry time */
 	nfsfh_t			*n_fhp;		/* NFS File Handle */
-	struct vnode		*n_vnode;	/* associated vnode */
+	union {
+		struct vnode	*n_vp;		/* associated vnode */
+		struct mount	*n_mp;		/* associated mount (NINIT) */
+	} n_un0;
 	struct lockf		*n_lockf;	/* Locking record of file */
 	int			n_error;	/* Save write error value */
 	union {
@@ -150,8 +243,21 @@ struct nfsnode {
 	short			n_flag;		/* Flag for locking.. */
 	nfsfh_t			n_fh;		/* Small File Handle */
 	u_int64_t		n_xid;		/* last xid to loadattr */
+	struct nfsbuflists	n_cleanblkhd;	/* clean blocklist head */
+	struct nfsbuflists	n_dirtyblkhd;	/* dirty blocklist head */
+	int			n_needcommitcnt;/* # bufs that need committing */
 };
 
+#define CHECK_NEEDCOMMITCNT(np) \
+	do { \
+		if ((np)->n_needcommitcnt < 0) { \
+			printf("nfs: n_needcommitcnt negative\n"); \
+			(np)->n_needcommitcnt = 0; \
+		} \
+	} while (0)
+
+#define n_vnode		n_un0.n_vp
+#define n_mount		n_un0.n_mp
 #define n_atim		n_un1.nf_atim
 #define n_mtim		n_un2.nf_mtim
 #define n_sillyrename	n_un3.nf_silly
@@ -172,8 +278,9 @@ struct nfsnode {
 #define	NACC		0x0100	/* Special file accessed */
 #define	NUPD		0x0200	/* Special file updated */
 #define	NCHG		0x0400	/* Special file times changed */
-#define NLOCKED		0x0800  /* node is locked */
-#define NWANTED		0x0100  /* someone wants to lock */
+#define NHASHED		0x1000  /* someone wants to lock */
+#define NINIT		0x2000  /* node is being initialized */
+#define NWINIT		0x4000  /* someone waiting for init to complete */
 
 /*
  * Convert between nfsnode pointers and vnode pointers
@@ -204,7 +311,6 @@ int	nfs_write __P((struct vop_write_args *));
 int	nqnfs_vop_lease_check __P((struct vop_lease_args *));
 #define nfs_revoke vop_revoke
 #define nfs_seek ((int (*) __P((struct  vop_seek_args *)))nullop)
-int	nfs_abortop __P((struct vop_abortop_args *));
 int	nfs_inactive __P((struct vop_inactive_args *));
 int	nfs_reclaim __P((struct vop_reclaim_args *));
 int nfs_lock __P((struct vop_lock_args *));
@@ -221,6 +327,18 @@ nfsuint64 *nfs_getcookie __P((struct nfsnode *, off_t, int));
 void nfs_invaldir __P((struct vnode *));
 
 #define nqnfs_lease_updatetime	lease_updatetime
+
+/* nfsbuf functions */
+void nfs_nbinit(void);
+void nfs_buf_remfree(struct nfsbuf *);
+struct nfsbuf * nfs_buf_incore(struct vnode *, daddr_t);
+struct nfsbuf * nfs_buf_get(struct vnode *, daddr_t, int, struct proc *, int);
+int nfs_buf_upl_setup(struct nfsbuf *bp);
+void nfs_buf_upl_check(struct nfsbuf *bp);
+void nfs_buf_release(struct nfsbuf *);
+int nfs_buf_iowait(struct nfsbuf *);
+void nfs_buf_iodone(struct nfsbuf *);
+void nfs_buf_write_delayed(struct nfsbuf *);
 
 #endif /* KERNEL */
 

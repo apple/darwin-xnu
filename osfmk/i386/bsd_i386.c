@@ -42,6 +42,7 @@
 #include <kern/misc_protos.h>
 #include <kern/assert.h>
 #include <kern/spl.h>
+#include <kern/syscall_sw.h>
 #include <ipc/ipc_port.h>
 #include <vm/vm_kern.h>
 #include <vm/pmap.h>
@@ -83,17 +84,14 @@ struct i386_saved_state *
 get_user_regs(
         thread_act_t);
 
-void
-act_thread_dup(
-    thread_act_t,
-    thread_act_t
-);
-
 unsigned int get_msr_exportmask(void);
 
 unsigned int get_msr_nbits(void);
 
 unsigned int get_msr_rbits(void);
+
+kern_return_t
+thread_compose_cthread_desc(unsigned int addr, pcb_t pcb);
 
 /*
  * thread_userstack:
@@ -208,8 +206,8 @@ get_user_regs(thread_act_t th)
  * Duplicate parent state in child
  * for U**X fork.
  */
-void
-act_thread_dup(
+kern_return_t
+machine_thread_dup(
     thread_act_t		parent,
     thread_act_t		child
 )
@@ -225,12 +223,8 @@ act_thread_dup(
 	}
 #endif
 
-	if (child->mact.pcb == NULL 
-	|| parent->mact.pcb == NULL)  {
-		panic("[thread_dup, child (%x) or parent (%x) is NULL!]",
-			child->mact.pcb, parent->mact.pcb);
-		return;
-	}
+	if (child->mact.pcb == NULL || parent->mact.pcb == NULL)
+		return (KERN_FAILURE);
 
 	/* Copy over the i386_saved_state registers */
 	child->mact.pcb->iss = parent->mact.pcb->iss;
@@ -248,6 +242,8 @@ act_thread_dup(
 	/* FIXME - should a user specified LDT, TSS and V86 info
 	 * be duplicated as well?? - probably not.
 	 */
+
+	return (KERN_SUCCESS);
 }
 
 /* 
@@ -362,10 +358,8 @@ unix_syscall_return(int error)
 	KERNEL_DEBUG_CONSTANT(BSDDBG_CODE(DBG_BSD_EXCP_SC, code) | DBG_FUNC_END,
 		error, rval[0], rval[1], 0, 0);
 
-	if (callp->sy_funnel != NO_FUNNEL) {
-    		assert(thread_funnel_get() == THR_FUNNEL_NULL);
+	if (callp->sy_funnel != NO_FUNNEL)
     		(void) thread_funnel_set(current_thread()->funnel_lock, FALSE);
-	}
 
     thread_exception_return();
     /* NOTREACHED */
@@ -433,7 +427,7 @@ unix_syscall(struct i386_saved_state *regs)
 	      *ip, *(ip+1), *(ip+2), *(ip+3), 0);
 	}
 
-    error = (*(callp->sy_call))(p, (void *) vt, rval);
+    error = (*(callp->sy_call))(p, (void *) vt, (int *) &rval[0]);
 	
 #if 0
 	/* May be needed with vfork changes */
@@ -499,33 +493,54 @@ machdep_syscall( struct i386_saved_state *regs)
 	    /* NOTREACHED */
 	}
 
-	asm volatile("
-	    1:
-	    mov (%2),%%eax;
-	    pushl %%eax;
-	    sub $4,%2;
-	    dec %1;
-	    jne 1b;
-	    mov %3,%%eax;
-	    call *%%eax;
-	    mov %%eax,%0"
-	    
-	    : "=r" (regs->eax)
-	    : "r" (nargs),
-		"r" (&args[nargs - 1]),
-		"g" (entry->routine)
-	    : "ax", "cx", "dx", "sp");
+	switch (nargs) {
+	    case 1:
+		regs->eax = (*entry->routine)(args[0]);
+		break;
+	    case 2:
+		regs->eax = (*entry->routine)(args[0],args[1]);
+		break;
+	    case 3:
+		regs->eax = (*entry->routine)(args[0],args[1],args[2]);
+		break;
+	    case 4:
+		regs->eax = (*entry->routine)(args[0],args[1],args[2],args[3]);
+		break;
+	    default:
+		panic("machdep_syscall(): too many args");
+	}
     }
     else
-	regs->eax = (unsigned int)(*entry->routine)();
+	regs->eax = (*entry->routine)();
 
-	if (current_thread()->funnel_lock)
-    		(void) thread_funnel_set(current_thread()->funnel_lock, FALSE);
+    if (current_thread()->funnel_lock)
+   	(void) thread_funnel_set(current_thread()->funnel_lock, FALSE);
 
     thread_exception_return();
     /* NOTREACHED */
 }
 
+
+kern_return_t
+thread_compose_cthread_desc(unsigned int addr, pcb_t pcb)
+{
+  struct real_descriptor desc;
+  extern struct fake_descriptor *mp_ldt[];
+  struct real_descriptor  *ldtp;
+  int mycpu = cpu_number();
+
+  ldtp = (struct real_descriptor *)mp_ldt[mycpu];
+  desc.limit_low = 1;
+  desc.limit_high = 0;
+  desc.base_low = addr & 0xffff;
+  desc.base_med = (addr >> 16) & 0xff;
+  desc.base_high = (addr >> 24) & 0xff;
+  desc.access = ACC_P|ACC_PL_U|ACC_DATA_W;
+  desc.granularity = SZ_32|SZ_G;
+  pcb->cthread_desc = desc;
+  ldtp[sel_idx(USER_CTHREAD)] = desc;
+  return(KERN_SUCCESS);
+}
 
 kern_return_t
 thread_set_cthread_self(int self)
@@ -541,6 +556,16 @@ thread_get_cthread_self(void)
     return ((kern_return_t)current_act()->mact.pcb->cthread_self);
 }
 
+kern_return_t
+thread_fast_set_cthread_self(int self)
+{
+  pcb_t pcb;
+  pcb = (pcb_t)current_act()->mact.pcb;
+  thread_compose_cthread_desc((unsigned int)self, pcb);
+  pcb->cthread_self = (unsigned int)self; /* preserve old func too */
+  return (USER_CTHREAD);
+}
+
 void
 mach25_syscall(struct i386_saved_state *regs)
 {
@@ -548,12 +573,52 @@ mach25_syscall(struct i386_saved_state *regs)
 			regs->eip, regs->eax, -regs->eax);
 	panic("FIXME!");
 }
-
 #endif	/* MACH_BSD */
 
-#undef current_thread
-thread_t
-current_thread(void)
+
+/* This routine is called from assembly before each and every mach trap.
+ */
+
+extern unsigned int mach_call_start(unsigned int, unsigned int *);
+
+__private_extern__
+unsigned int
+mach_call_start(unsigned int call_number, unsigned int *args)
 {
-  return(current_thread_fast());
+	int i, argc;
+	unsigned int kdarg[3];
+
+/* Always prepare to trace mach system calls */
+
+	kdarg[0]=0;
+	kdarg[1]=0;
+	kdarg[2]=0;
+
+	argc = mach_trap_table[call_number>>4].mach_trap_arg_count;
+	
+	if (argc > 3)
+		argc = 3;
+	
+	for (i=0; i < argc; i++)
+	  kdarg[i] = (int)*(args + i);
+	
+	KERNEL_DEBUG_CONSTANT(MACHDBG_CODE(DBG_MACH_EXCP_SC, (call_number>>4)) | DBG_FUNC_START,
+			      kdarg[0], kdarg[1], kdarg[2], 0, 0);
+
+	return call_number; /* pass this back thru */
 }
+
+/* This routine is called from assembly after each mach system call
+ */
+
+extern unsigned int mach_call_end(unsigned int, unsigned int);
+
+__private_extern__
+unsigned int
+mach_call_end(unsigned int call_number, unsigned int retval)
+{
+  KERNEL_DEBUG_CONSTANT(MACHDBG_CODE(DBG_MACH_EXCP_SC,(call_number>>4)) | DBG_FUNC_END,
+		retval, 0, 0, 0, 0);
+	return retval;  /* pass this back thru */
+}
+

@@ -1,8 +1,8 @@
-/*	$FreeBSD: src/sys/crypto/des/des_locl.h,v 1.2.2.2 2001/07/03 11:01:31 ume Exp $	*/
-/*	$KAME: des_locl.h,v 1.6 2000/11/06 13:58:09 itojun Exp $	*/
+/*	$FreeBSD: src/sys/crypto/des/des_locl.h,v 1.2.2.3 2002/03/26 10:12:25 ume Exp $	*/
+/*	$KAME: des_locl.h,v 1.7 2001/09/10 04:03:58 itojun Exp $	*/
 
-/* lib/des/des_locl.h */
-/* Copyright (C) 1995-1996 Eric Young (eay@mincom.oz.au)
+/* crypto/des/des_locl.h */
+/* Copyright (C) 1995-1997 Eric Young (eay@mincom.oz.au)
  * All rights reserved.
  *
  * This file is part of an SSL implementation written
@@ -46,13 +46,6 @@
  * derivative of this code cannot be changed.  i.e. this code cannot simply be
  * copied and put under another distribution licence
  * [including the GNU Public Licence.]
- */
-/* WARNING WARNING WARNING WARNING WARNING WARNING WARNING WARNING WARNING
- *
- * Always modify des_locl.org since des_locl.h is automatically generated from
- * it during SSLeay configuration.
- *
- * WARNING WARNING WARNING WARNING WARNING WARNING WARNING WARNING WARNING
  */
 
 #ifndef HEADER_DES_LOCL_H
@@ -130,6 +123,11 @@
 
 #define	ROTATE(a,n)	(((a)>>(n))+((a)<<(32-(n))))
 
+#define LOAD_DATA_tmp(a,b,c,d,e,f) LOAD_DATA(a,b,c,d,e,f,g)
+#define LOAD_DATA(R,S,u,t,E0,E1,tmp) \
+	u=R^s[S  ]; \
+	t=R^s[S+1]
+
 /* The changes to this macro may help or hinder, depending on the
  * compiler and the achitecture.  gcc2 always seems to do well :-).
  * Inspired by Dana How <how@isl.stanford.edu>
@@ -138,49 +136,170 @@
  * bytes, probably an issue of accessing non-word aligned objects :-( */
 #ifdef DES_PTR
 
-#define D_ENCRYPT(L,R,S) { \
-	u=((R^s[S  ])<<2);	\
-	t= R^s[S+1]; \
-	t=ROTATE(t,2); \
-	L^= (\
-	*(DES_LONG *)((unsigned char *)des_SP+0x100+((t    )&0xfc))+ \
-	*(DES_LONG *)((unsigned char *)des_SP+0x300+((t>> 8)&0xfc))+ \
-	*(DES_LONG *)((unsigned char *)des_SP+0x500+((t>>16)&0xfc))+ \
-	*(DES_LONG *)((unsigned char *)des_SP+0x700+((t>>24)&0xfc))+ \
-	*(DES_LONG *)((unsigned char *)des_SP      +((u    )&0xfc))+ \
-	*(DES_LONG *)((unsigned char *)des_SP+0x200+((u>> 8)&0xfc))+ \
-	*(DES_LONG *)((unsigned char *)des_SP+0x400+((u>>16)&0xfc))+ \
-	*(DES_LONG *)((unsigned char *)des_SP+0x600+((u>>24)&0xfc))); }
-#else /* original version */
-#ifdef undef
-#define D_ENCRYPT(L,R,S)	\
-	U.l=R^s[S+1]; \
-	T.s[0]=((U.s[0]>>4)|(U.s[1]<<12))&0x3f3f; \
-	T.s[1]=((U.s[1]>>4)|(U.s[0]<<12))&0x3f3f; \
-	U.l=(R^s[S  ])&0x3f3f3f3fL; \
-	L^=	des_SPtrans[1][(T.c[0])]| \
-		des_SPtrans[3][(T.c[1])]| \
-		des_SPtrans[5][(T.c[2])]| \
-		des_SPtrans[7][(T.c[3])]| \
-		des_SPtrans[0][(U.c[0])]| \
-		des_SPtrans[2][(U.c[1])]| \
-		des_SPtrans[4][(U.c[2])]| \
-		des_SPtrans[6][(U.c[3])];
-#else
-#define D_ENCRYPT(Q,R,S) {\
-	u=(R^s[S  ]); \
-	t=R^s[S+1]; \
+/* It recently occurred to me that 0^0^0^0^0^0^0 == 0, so there
+ * is no reason to not xor all the sub items together.  This potentially
+ * saves a register since things can be xored directly into L */
+
+#if defined(DES_RISC1) || defined(DES_RISC2)
+#ifdef DES_RISC1
+#define D_ENCRYPT(LL,R,S) { \
+        unsigned int u1,u2,u3; \
+        LOAD_DATA(R,S,u,t,E0,E1,u1); \
+        u2=(int)u>>8L; \
+        u1=(int)u&0xfc; \
+        u2&=0xfc; \
+        t=ROTATE(t,4); \
+        u>>=16L; \
+        LL^= *(const DES_LONG *)(des_SP      +u1); \
+        LL^= *(const DES_LONG *)(des_SP+0x200+u2); \
+        u3=(int)(u>>8L); \
+        u1=(int)u&0xfc; \
+        u3&=0xfc; \
+        LL^= *(const DES_LONG *)(des_SP+0x400+u1); \
+        LL^= *(const DES_LONG *)(des_SP+0x600+u3); \
+        u2=(int)t>>8L; \
+        u1=(int)t&0xfc; \
+        u2&=0xfc; \
+        t>>=16L; \
+        LL^= *(const DES_LONG *)(des_SP+0x100+u1); \
+        LL^= *(const DES_LONG *)(des_SP+0x300+u2); \
+        u3=(int)t>>8L; \
+        u1=(int)t&0xfc; \
+        u3&=0xfc; \
+        LL^= *(const DES_LONG *)(des_SP+0x500+u1); \
+        LL^= *(const DES_LONG *)(des_SP+0x700+u3); }
+#endif /* DES_RISC1 */
+#ifdef DES_RISC2
+#define D_ENCRYPT(LL,R,S) { \
+        unsigned int u1,u2,s1,s2; \
+        LOAD_DATA(R,S,u,t,E0,E1,u1); \
+        u2=(int)u>>8L; \
+        u1=(int)u&0xfc; \
+        u2&=0xfc; \
+        t=ROTATE(t,4); \
+        LL^= *(const DES_LONG *)(des_SP      +u1); \
+        LL^= *(const DES_LONG *)(des_SP+0x200+u2); \
+        s1=(int)(u>>16L); \
+        s2=(int)(u>>24L); \
+        s1&=0xfc; \
+        s2&=0xfc; \
+        LL^= *(const DES_LONG *)(des_SP+0x400+s1); \
+        LL^= *(const DES_LONG *)(des_SP+0x600+s2); \
+        u2=(int)t>>8L; \
+        u1=(int)t&0xfc; \
+        u2&=0xfc; \
+        LL^= *(const DES_LONG *)(des_SP+0x100+u1); \
+        LL^= *(const DES_LONG *)(des_SP+0x300+u2); \
+        s1=(int)(t>>16L); \
+        s2=(int)(t>>24L); \
+        s1&=0xfc; \
+        s2&=0xfc; \
+        LL^= *(const DES_LONG *)(des_SP+0x400+s1); \
+        LL^= *(const DES_LONG *)(des_SP+0x600+s2); \
+        u2=(int)t>>8L; \
+        u1=(int)t&0xfc; \
+        u2&=0xfc; \
+        LL^= *(const DES_LONG *)(des_SP+0x100+u1); \
+        LL^= *(const DES_LONG *)(des_SP+0x300+u2); \
+        s1=(int)(t>>16L); \
+        s2=(int)(t>>24L); \
+        s1&=0xfc; \
+        s2&=0xfc; \
+        LL^= *(const DES_LONG *)(des_SP+0x500+s1); \
+        LL^= *(const DES_LONG *)(des_SP+0x700+s2); }
+#endif /* DES_RISC2 */
+#else  /* DES_RISC1 || DES_RISC2 */
+#define D_ENCRYPT(LL,R,S) { \
+	LOAD_DATA_tmp(R,S,u,t,E0,E1); \
 	t=ROTATE(t,4); \
-	Q^=	des_SPtrans[1][(t     )&0x3f]| \
-		des_SPtrans[3][(t>> 8L)&0x3f]| \
-		des_SPtrans[5][(t>>16L)&0x3f]| \
-		des_SPtrans[7][(t>>24L)&0x3f]| \
-		des_SPtrans[0][(u     )&0x3f]| \
-		des_SPtrans[2][(u>> 8L)&0x3f]| \
-		des_SPtrans[4][(u>>16L)&0x3f]| \
-		des_SPtrans[6][(u>>24L)&0x3f]; }
-#endif
-#endif
+	LL^= \
+	*(const DES_LONG *)(des_SP      +((u     )&0xfc))^ \
+	*(const DES_LONG *)(des_SP+0x200+((u>> 8L)&0xfc))^ \
+	*(const DES_LONG *)(des_SP+0x400+((u>>16L)&0xfc))^ \
+	*(const DES_LONG *)(des_SP+0x600+((u>>24L)&0xfc))^ \
+	*(const DES_LONG *)(des_SP+0x100+((t     )&0xfc))^ \
+	*(const DES_LONG *)(des_SP+0x300+((t>> 8L)&0xfc))^ \
+	*(const DES_LONG *)(des_SP+0x500+((t>>16L)&0xfc))^ \
+	*(const DES_LONG *)(des_SP+0x700+((t>>24L)&0xfc)); }
+#endif /* DES_RISC1 || DES_RISC2 */
+#else /* original version */
+
+#if defined(DES_RISC1) || defined(DES_RISC2)
+#ifdef DES_RISC1
+#define D_ENCRYPT(LL,R,S) {\
+	unsigned int u1,u2,u3; \
+	LOAD_DATA(R,S,u,t,E0,E1,u1); \
+	u>>=2L; \
+	t=ROTATE(t,6); \
+	u2=(int)u>>8L; \
+	u1=(int)u&0x3f; \
+	u2&=0x3f; \
+	u>>=16L; \
+	LL^=des_SPtrans[0][u1]; \
+	LL^=des_SPtrans[2][u2]; \
+	u3=(int)u>>8L; \
+	u1=(int)u&0x3f; \
+	u3&=0x3f; \
+	LL^=des_SPtrans[4][u1]; \
+	LL^=des_SPtrans[6][u3]; \
+	u2=(int)t>>8L; \
+	u1=(int)t&0x3f; \
+	u2&=0x3f; \
+	t>>=16L; \
+	LL^=des_SPtrans[1][u1]; \
+	LL^=des_SPtrans[3][u2]; \
+	u3=(int)t>>8L; \
+	u1=(int)t&0x3f; \
+	u3&=0x3f; \
+	LL^=des_SPtrans[5][u1]; \
+	LL^=des_SPtrans[7][u3]; }
+#endif /* DES_RISC1 */
+#ifdef DES_RISC2
+#define D_ENCRYPT(LL,R,S) {\
+	unsigned int u1,u2,s1,s2; \
+	LOAD_DATA(R,S,u,t,E0,E1,u1); \
+	u>>=2L; \
+	t=ROTATE(t,6); \
+	u2=(int)u>>8L; \
+	u1=(int)u&0x3f; \
+	u2&=0x3f; \
+	LL^=des_SPtrans[0][u1]; \
+	LL^=des_SPtrans[2][u2]; \
+	s1=(int)u>>16L; \
+	s2=(int)u>>24L; \
+	s1&=0x3f; \
+	s2&=0x3f; \
+	LL^=des_SPtrans[4][s1]; \
+	LL^=des_SPtrans[6][s2]; \
+	u2=(int)t>>8L; \
+	u1=(int)t&0x3f; \
+	u2&=0x3f; \
+	LL^=des_SPtrans[1][u1]; \
+	LL^=des_SPtrans[3][u2]; \
+	s1=(int)t>>16; \
+	s2=(int)t>>24L; \
+	s1&=0x3f; \
+	s2&=0x3f; \
+	LL^=des_SPtrans[5][s1]; \
+	LL^=des_SPtrans[7][s2]; }
+#endif /* DES_RISC2 */
+
+#else /* DES_RISC1 || DES_RISC2 */
+
+#define D_ENCRYPT(LL,R,S) {\
+	LOAD_DATA_tmp(R,S,u,t,E0,E1); \
+	t=ROTATE(t,4); \
+	LL^=\
+        	des_SPtrans[0][(u>> 2L)&0x3f]^ \
+        	des_SPtrans[2][(u>>10L)&0x3f]^ \
+        	des_SPtrans[4][(u>>18L)&0x3f]^ \
+        	des_SPtrans[6][(u>>26L)&0x3f]^ \
+        	des_SPtrans[1][(t>> 2L)&0x3f]^ \
+        	des_SPtrans[3][(t>>10L)&0x3f]^ \
+        	des_SPtrans[5][(t>>18L)&0x3f]^ \
+        	des_SPtrans[7][(t>>26L)&0x3f]; }
+#endif /* DES_RISC1 || DES_RISC2 */
+#endif /* DES_PTR */
 
 	/* IP and FP
 	 * The problem is more of a geometric problem that random bit fiddling.

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2003 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -55,59 +55,36 @@
 /*
  *	File:	mach/norma_special_ports.h
  *
- *	Defines codes for remote access to special ports.  These are NOT
- *	port identifiers - they are only used for the norma_get_special_port
- *	and norma_set_special_port routines.
+ *	Defines codes for remote access to special ports.
  */
 
 #ifndef	_MACH_NORMA_SPECIAL_PORTS_H_
 #define _MACH_NORMA_SPECIAL_PORTS_H_
 
-#define	MAX_SPECIAL_KERNEL_ID	10
-#define	MAX_SPECIAL_ID		40
-
-/*
- * Provided by kernel
- */
-#define NORMA_DEVICE_PORT	1
-#define NORMA_HOST_PORT		2
-#define NORMA_HOST_PRIV_PORT	3
-
-/*
- * Not provided by kernel
- */
-#define NORMA_NAMESERVER_PORT	(1 + MAX_SPECIAL_KERNEL_ID)
-
-/*
- * Definitions for ease of use.
- *
- * In the get call, the host parameter can be any host, but will generally
- * be the local node host port. In the set call, the host must the per-node
- * host port for the node being affected.
- */
-
-#define norma_get_device_port(host, node, port)	\
-	(norma_get_special_port((host), (node), NORMA_DEVICE_PORT, (port)))
-
-#define norma_set_device_port(host, port)	\
-	(norma_set_special_port((host), NORMA_DEVICE_PORT, (port)))
+#include <mach/host_special_ports.h>
 
 #define norma_get_host_port(host, node, port)	\
-	(norma_get_special_port((host), (node), NORMA_HOST_PORT, (port)))
-
-#define norma_set_host_port(host, port)	\
-	(norma_set_special_port((host), NORMA_HOST_PORT, (port)))
+	(host_get_special_port((host), (node), \
+	HOST_PORT, (port)))
 
 #define norma_get_host_priv_port(host, node, port)	\
-	(norma_get_special_port((host), (node), NORMA_HOST_PRIV_PORT, (port)))
+	(host_get_special_port((host), (node), \
+	HOST_PRIV_PORT, (port)))
 
-#define norma_set_host_priv_port(host, port)	\
-	(norma_set_special_port((host), NORMA_HOST_PRIV_PORT, (port)))
+#define norma_get_io_master_port(host, node, port)	\
+	(host_get_special_port((host), (node), \
+	HOST_IO_MASTER_PORT, (port)))
 
-#define norma_get_nameserver_port(host, node, port)	\
-	(norma_get_special_port((host), (node), NORMA_NAMESERVER_PORT, (port)))
+#define norma_get_dynamic_pager_port(host, port) \
+	(host_get_special_port((host), 0, \
+	HOST_DYNAMIC_PAGER_PORT, (port)))
 
-#define norma_set_nameserver_port(host, port)	\
-	(norma_set_special_port((host), NORMA_NAMESERVER_PORT, (port)))
+#define norma_get_audit_control_port(host, node, port)	\
+	(host_get_special_port((host), (node), \
+	HOST_AUDIT_CONTROL_PORT, (port)))
+
+#define norma_get_user_notification_port(host, node, port) \
+	(host_get_special_port((host), (node), \
+	HOST_USER_NOTIFICATION_PORT, (port)))
 
 #endif	/* _MACH_NORMA_SPECIAL_PORTS_H_ */

@@ -421,7 +421,7 @@ COMP_SOBJ_FILES = $(addprefix $(TARGET)$(COMP_OBJ_DIR), $(COMP_SOBJ_LIST))
 $(COMP_SOBJ_FILES): $(TARGET)$(COMP_OBJ_DIR)%.o : %.s
 	${S_KCC} -E -MD ${SFLAGS} -DASSEMBLER $(INCFLAGS) $< > $(patsubst %.o, %.pp, ${@});
 	sed '/^\#/d' $(patsubst %.o, %.pp, ${@}) > $(patsubst %.o, %.s, ${@});
-	${S_KCC} ${SFLAGS} -m${ARCH_CONFIG_LC} ${_HOST_AS_FLAGS}  -c $(patsubst %.o, %.s, ${@});
+	${S_KCC} ${SFLAGS} ${_HOST_AS_FLAGS}  -c $(patsubst %.o, %.s, ${@});
 	${RM} ${_RMFLAGS_} $(patsubst %.o, %.pp, ${@}) $(patsubst %.o,%.s,${@});
 
 S_RULE_1A=@ls /
@@ -429,7 +429,7 @@ S_RULE_1B= ${patsubst %.o,%.s,${@}} > /dev/null
 S_RULE_2= ${S_KCC} -E -MD ${SFLAGS} -DASSEMBLER $(INCFLAGS) $< \
                > $(patsubst %.o, %.pp, ${@}); \
 	sed '/^\#/d' $(patsubst %.o, %.pp, ${@}) > $(patsubst %.o, %.s, ${@});
-S_RULE_3= ${S_KCC} ${SFLAGS} -m${ARCH_CONFIG_LC} ${_HOST_AS_FLAGS}  -c $(patsubst %.o, %.s, ${@});\
+S_RULE_3= ${S_KCC} ${SFLAGS} ${_HOST_AS_FLAGS}  -c $(patsubst %.o, %.s, ${@});\
        ${RM} ${_RMFLAGS_} $(patsubst %.o, %.pp, ${@}) $(patsubst %.o,%.s,${@})
 
 #
@@ -438,12 +438,12 @@ S_RULE_3= ${S_KCC} ${SFLAGS} -m${ARCH_CONFIG_LC} ${_HOST_AS_FLAGS}  -c $(patsubs
 COMP_COBJ_FILES = $(addprefix $(TARGET)$(COMP_OBJ_DIR), $(COMP_COBJ_LIST))
 
 $(COMP_COBJ_FILES): $(TARGET)$(COMP_OBJ_DIR)%.o : %.c
-	${KCC} -c ${CFLAGS} -MD ${${join $@,_CFLAGS}} ${INCFLAGS} ${${join $@,_INCFLAGS}} $<
+	${KCC} -c ${filter-out ${${join $@,_CFLAGS_RM}}, ${CFLAGS}} -MD ${${join $@,_CFLAGS_ADD}} ${INCFLAGS} ${${join $@,_INCFLAGS}} $<
 
 #
 # Compilation rules to generate .o from .c for normal files
 #
-C_RULE_1A=${KCC} -c ${CFLAGS} -MD ${${join $@,_CFLAGS}} ${INCFLAGS} ${${join $@,_INCFLAGS}} 
+C_RULE_1A=${KCC} -c ${filter-out ${${join $@,_CFLAGS_RM}}, ${CFLAGS}} -MD ${${join $@,_CFLAGS_ADD}} ${INCFLAGS} ${${join $@,_INCFLAGS}} 
 C_RULE_1B=$*.c
 C_RULE_2=
 C_RULE_3=
@@ -461,7 +461,7 @@ C_RULE_4_D=${C_RULE_4}
 #
 # Compilation rules to generate .o from .m
 #
-M_RULE_1A=${KCC} -c ${CFLAGS} -MD ${${join $@,_CFLAGS}} ${INCFLAGS} ${${join $@,_INCFLAGS}} 
+M_RULE_1A=${KCC} -c ${filter-out ${${join $@,_CFLAGS_RM}}, ${CFLAGS}} -MD ${${join $@,_CFLAGS_ADD}} ${INCFLAGS} ${${join $@,_INCFLAGS}} 
 M_RULE_1B=$*.m
 M_RULE_2=
 M_RULE_3=
@@ -472,7 +472,7 @@ M_RULE_4=
 #   The config tool slickly changes the last source filename char to 'o'
 #   for the object filename.
 #
-P_RULE_1A=${KC++} -o $@ -c ${CPPFLAGS} ${CFLAGS} -MD ${${join $@,_CFLAGS}} ${INCFLAGS} ${${join $@,_INCFLAGS}} 
+P_RULE_1A=${KC++} -o $@ -c ${CXXFLAGS} ${filter-out ${${join $@,_CFLAGS_RM}}, ${CFLAGS}} -MD ${${join $@,_CFLAGS_ADD}} ${INCFLAGS} ${${join $@,_INCFLAGS}} 
 P_RULE_1B=$(<F)
 P_RULE_2=@sed 's/.c.o: /.cpo: /' $(@:.cpo=.d) > $(@:.cpo=.d~) && mv $(@:.cpo=.d~) $(@:.cpo=.d)
 P_RULE_3=
@@ -503,15 +503,19 @@ endif
 #
 # mach_kernel building rules
 #
-do_build_mach_kernel:
+do_build_mach_kernel: $(OBJROOT)/$(KERNEL_CONFIG)_$(ARCH_CONFIG)/kgmacros
 	@echo "[ building mach_kernel ]";
 	$(OBJROOT)/$(KERNEL_CONFIG)_$(ARCH_CONFIG)/kernel_newvers	\
 	    "`${CAT} $(SRCROOT)/osfmk/conf/kernelversion.major`"	\
 	    "`${CAT} $(SRCROOT)/osfmk/conf/kernelversion.minor`"	\
 	    "`${CAT} $(SRCROOT)/osfmk/conf/kernelversion.variant`";				\
 	${KCC} $(CFLAGS) $(INCLUDES) -c kernel_vers.c;						\
-	$(LD) $(LDFLAGS_KERNEL) $(addprefix $(TARGET)/,$(foreach component,$(COMPONENT_LIST), $(addprefix $(component)/$(firstword $($(addsuffix _KERNEL_CONFIG, $(component))) $(KERNEL_CONFIG))/, $(addsuffix .o, $(component))))) kernel_vers.o -o $(TARGET)/mach_kernel.sys $(LD_KERNEL_LIBS);	\
+	$(LD) $(LDFLAGS_KERNEL) $(addprefix $(TARGET)/,$(foreach component,$(COMPONENT_LIST), $(addprefix $(component)/$(firstword $($(addsuffix _KERNEL_CONFIG, $(shell echo -n $(component) | tr a-z A-Z))) $(KERNEL_CONFIG))/, $(addsuffix .o, $(component))))) kernel_vers.o -o $(TARGET)/mach_kernel.sys $(LD_KERNEL_LIBS);	\
 	$(STRIP) $(STRIP_FLAGS) $(TARGET)/mach_kernel.sys -o $(TARGET)/mach_kernel;
+
+$(OBJROOT)/$(KERNEL_CONFIG)_$(ARCH_CONFIG)/kgmacros: $(SRCROOT)/kgmacros
+	cp $? $@
+
 #
 # Generic Install rules
 #
@@ -521,17 +525,19 @@ force_file_install:
 
 $(INSTALL_FILE_FILES): $(DSTROOT)$(INSTALL_FILE_DIR)% : $(TARGET)/% force_file_install
 	@echo Installing $< in $@;
-	@$(MKDIR) $(DSTROOT)$(INSTALL_FILE_DIR);			\
+	@if [ ! -e $(DSTROOT)$(INSTALL_FILE_DIR) ]; then	\
+		$(MKDIR) $(DSTROOT)$(INSTALL_FILE_DIR);		\
+	fi;							\
 	if [ "`echo $(INSTALL_ARCHS_LC) | wc -w`" -eq 1 ]; then	\
 		$(RM) $(RMFLAGS) $@;				\
 		install $(FILE_INSTALL_FLAGS) $< $(dir $@);		\
 	else							\
 		if [ ! -e $@ ]; then				\
-			echo >empty_file;			\
-			lipo_arg="$(subst _empty_file, empty_file,$(foreach lipo_arch,$(INSTALL_ARCHS_LC), $(addprefix -arch , $(addsuffix _empty_file, $(lipo_arch)))))"; \
+			echo >empty_file_$(notdir $@);			\
+			lipo_arg="$(subst _empty_file, empty_file_$(notdir $@),$(foreach lipo_arch,$(INSTALL_ARCHS_LC), $(addprefix -arch , $(addsuffix _empty_file, $(lipo_arch)))))"; \
 			$(LIPO) $${lipo_arg} -create -output $@;	\
-			$(RM) $(RMFLAGS) empty_file;			\
-		fi;										\
+			$(RM) $(RMFLAGS) empty_file_$(notdir $@);		\
+		fi;							\
 		$(LIPO) $@ -replace $(ARCH_CONFIG_LC)  $< -o $@;	\
 	fi
 
@@ -541,19 +547,22 @@ force_filesys_install:
 
 $(INSTALL_FILESYS_FILES): $(SYMROOT)$(INSTALL_FILE_DIR)% : $(TARGET)/%.sys force_filesys_install
 	@echo Installing $< in $@;
-	@$(MKDIR) $(SYMROOT)$(INSTALL_FILE_DIR);			\
+	@if [ ! -e $(SYMROOT)$(INSTALL_FILE_DIR) ]; then	\
+		$(MKDIR) $(SYMROOT)$(INSTALL_FILE_DIR);		\
+	fi;							\
 	if [ "`echo $(INSTALL_ARCHS_LC) | wc -w`" -eq 1 ]; then	\
 		$(RM) $(RMFLAGS) $@;				\
 		install $(INSTALL_FLAGS) $< $(dir $@);		\
 	else							\
 		if [ ! -e $@ ]; then				\
-			echo >empty_file;			\
-			lipo_arg="$(subst _empty_file, empty_file,$(foreach lipo_arch,$(INSTALL_ARCHS_LC), $(addprefix -arch , $(addsuffix _empty_file, $(lipo_arch)))))"; \
+			echo >empty_filesys_$(notdir $@);			\
+			lipo_arg="$(subst _empty_file, empty_filesys_$(notdir $@),$(foreach lipo_arch,$(INSTALL_ARCHS_LC), $(addprefix -arch , $(addsuffix _empty_file, $(lipo_arch)))))"; \
 			$(LIPO) $${lipo_arg} -create -output $@;	\
-			$(RM) $(RMFLAGS) empty_file;			\
-		fi;										\
+			$(RM) $(RMFLAGS) empty_filesys_$(notdir $@);		\
+		fi;							\
 		$(LIPO) $@ -replace $(ARCH_CONFIG_LC)  $< -o $@;	\
 	fi
+	cp $(SOURCE)kgmacros $(SYMROOT)$(INSTALL_FILE_DIR)
 
 INSTALL_DATA_FILES = $(addprefix $(DSTROOT)$(INSTALL_DATA_DIR), $(INSTALL_DATA_LIST))
 

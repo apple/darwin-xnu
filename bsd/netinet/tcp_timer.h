@@ -155,6 +155,11 @@ static char *tcptimers[] =
 } while(0)
 
 #ifdef KERNEL
+
+#define TCP_KEEPIDLE(tp) \
+	(tp->t_keepidle && (tp->t_inpcb->inp_socket->so_options & SO_KEEPALIVE) ? \
+		tp->t_keepidle : tcp_keepidle)
+
 extern int tcp_keepinit;		/* time to establish connection */
 extern int tcp_keepidle;		/* time before keepalive probes begin */
 extern int tcp_keepintvl;		/* time between keepalive probes */

@@ -121,6 +121,7 @@ bsd_hardclock(usermode, pc, numticks)
 	register struct proc *p;
 	register thread_t	thread;
 	int nusecs = numticks * tick;
+	struct timeval		tv;
 
 	if (!bsd_hardclockinit)
 		return;
@@ -128,13 +129,14 @@ bsd_hardclock(usermode, pc, numticks)
 	/*
 	 * Increment the time-of-day.
 	 */
-	microtime(&time);
+	microtime(&tv);
+	time = tv;
 
 	if (bsd_hardclockinit < 0) {
 	    return;
 	}
 
-	thread = current_thread();
+	thread = current_act();
 	/*
 	 * Charge the time out based on the mode the cpu is in.
 	 * Here again we fudge for the lack of proper interval timers
@@ -160,7 +162,7 @@ bsd_hardclock(usermode, pc, numticks)
 				extern void psignal_vtalarm(struct proc *);
                         
 				/* does psignal(p, SIGVTALRM) in a thread context */
-				thread_call_func(psignal_vtalarm, p, FALSE);
+				thread_call_func((thread_call_func_t)psignal_vtalarm, p, FALSE);
 			}
 		}
 
@@ -183,7 +185,7 @@ bsd_hardclock(usermode, pc, numticks)
 					extern void psignal_xcpu(struct proc *);
                         
 					/* does psignal(p, SIGXCPU) in a thread context */
-					thread_call_func(psignal_xcpu, p, FALSE);
+					thread_call_func((thread_call_func_t)psignal_xcpu, p, FALSE);
 
 					if (p->p_limit->pl_rlimit[RLIMIT_CPU].rlim_cur <
 						p->p_limit->pl_rlimit[RLIMIT_CPU].rlim_max)
@@ -195,7 +197,7 @@ bsd_hardclock(usermode, pc, numticks)
 				extern void psignal_sigprof(struct proc *);
                         
 				/* does psignal(p, SIGPROF) in a thread context */
-				thread_call_func(psignal_sigprof, p, FALSE);
+				thread_call_func((thread_call_func_t)psignal_sigprof, p, FALSE);
 			}
 		}
 	}

@@ -179,6 +179,7 @@ struct bpf_hdr {
 #define DLT_FDDI	10	/* FDDI */
 #define DLT_ATM_RFC1483	11	/* LLC/SNAP encapsulated atm */
 #define DLT_RAW		12	/* raw IP */
+#define DLT_APPLE_IP_OVER_IEEE1394      138
 
 /*
  * These are values from BSD/OS's "bpf.h".

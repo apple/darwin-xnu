@@ -342,7 +342,8 @@ in6_pcbconnect(inp, nam, p)
 	int error;
 
 	/*
-	 *   Call inner routine, to assign local interface address.
+	 * Call inner routine, to assign local interface address.
+	 * in6_pcbladdr() may automatically fill in sin6_scope_id.
 	 */
 	if ((error = in6_pcbladdr(inp, nam, &addr6)) != 0)
 		return(error);
@@ -618,10 +619,54 @@ in6_pcbdetach(inp)
 	/* Check and free IPv4 related resources in case of mapped addr */
 	if (inp->inp_options)
 		(void)m_free(inp->inp_options);
-	ip_freemoptions(inp->inp_moptions);
+ 	ip_freemoptions(inp->inp_moptions);
 
 	inp->inp_vflag = 0;
 	zfree(ipi->ipi_zone, inp);
+}
+
+struct sockaddr *
+in6_sockaddr(port, addr_p)
+	in_port_t port;
+	struct in6_addr *addr_p;
+{
+	struct sockaddr_in6 *sin6;
+
+	MALLOC(sin6, struct sockaddr_in6 *, sizeof *sin6, M_SONAME, M_WAITOK);
+	bzero(sin6, sizeof *sin6);
+	sin6->sin6_family = AF_INET6;
+	sin6->sin6_len = sizeof(*sin6);
+	sin6->sin6_port = port;
+	sin6->sin6_addr = *addr_p;
+	if (IN6_IS_SCOPE_LINKLOCAL(&sin6->sin6_addr))
+		sin6->sin6_scope_id = ntohs(sin6->sin6_addr.s6_addr16[1]);
+	else
+		sin6->sin6_scope_id = 0;	/*XXX*/
+	if (IN6_IS_SCOPE_LINKLOCAL(&sin6->sin6_addr))
+		sin6->sin6_addr.s6_addr16[1] = 0;
+
+	return (struct sockaddr *)sin6;
+}
+
+struct sockaddr *
+in6_v4mapsin6_sockaddr(port, addr_p)
+	in_port_t port;
+	struct in_addr *addr_p;
+{
+	struct sockaddr_in sin;
+	struct sockaddr_in6 *sin6_p;
+
+	bzero(&sin, sizeof sin);
+	sin.sin_family = AF_INET;
+	sin.sin_len = sizeof(sin);
+	sin.sin_port = port;
+	sin.sin_addr = *addr_p;
+
+	MALLOC(sin6_p, struct sockaddr_in6 *, sizeof *sin6_p, M_SONAME,
+		M_WAITOK);
+	in6_sin_2_v4mapsin6(&sin, sin6_p);
+
+	return (struct sockaddr *)sin6_p;
 }
 
 /*
@@ -641,34 +686,20 @@ in6_setsockaddr(so, nam)
 {
 	int s;
 	register struct inpcb *inp;
-	register struct sockaddr_in6 *sin6;
-
-	/*
-	 * Do the malloc first in case it blocks.
-	 */
-	MALLOC(sin6, struct sockaddr_in6 *, sizeof *sin6, M_SONAME, M_WAITOK);
-	bzero(sin6, sizeof *sin6);
-	sin6->sin6_family = AF_INET6;
-	sin6->sin6_len = sizeof(*sin6);
+	struct in6_addr addr;
+	in_port_t port;
 
 	s = splnet();
 	inp = sotoinpcb(so);
 	if (!inp) {
 		splx(s);
-		_FREE(sin6, M_SONAME);
 		return EINVAL;
 	}
-	sin6->sin6_port = inp->inp_lport;
-	sin6->sin6_addr = inp->in6p_laddr;
+	port = inp->inp_lport;
+	addr = inp->in6p_laddr;
 	splx(s);
-	if (IN6_IS_SCOPE_LINKLOCAL(&sin6->sin6_addr))
-		sin6->sin6_scope_id = ntohs(sin6->sin6_addr.s6_addr16[1]);
-	else
-		sin6->sin6_scope_id = 0;	/*XXX*/
-	if (IN6_IS_SCOPE_LINKLOCAL(&sin6->sin6_addr))
-		sin6->sin6_addr.s6_addr16[1] = 0;
 
-	*nam = (struct sockaddr *)sin6;
+	*nam = in6_sockaddr(port, &addr);
 	return 0;
 }
 
@@ -679,34 +710,20 @@ in6_setpeeraddr(so, nam)
 {
 	int s;
 	struct inpcb *inp;
-	register struct sockaddr_in6 *sin6;
-
-	/*
-	 * Do the malloc first in case it blocks.
-	 */
-	MALLOC(sin6, struct sockaddr_in6 *, sizeof(*sin6), M_SONAME, M_WAITOK);
-	bzero((caddr_t)sin6, sizeof (*sin6));
-	sin6->sin6_family = AF_INET6;
-	sin6->sin6_len = sizeof(struct sockaddr_in6);
+	struct in6_addr addr;
+	in_port_t port;
 
 	s = splnet();
 	inp = sotoinpcb(so);
 	if (!inp) {
 		splx(s);
-		_FREE(sin6, M_SONAME);
 		return EINVAL;
 	}
-	sin6->sin6_port = inp->inp_fport;
-	sin6->sin6_addr = inp->in6p_faddr;
+	port = inp->inp_fport;
+	addr = inp->in6p_faddr;
 	splx(s);
-	if (IN6_IS_SCOPE_LINKLOCAL(&sin6->sin6_addr))
-		sin6->sin6_scope_id = ntohs(sin6->sin6_addr.s6_addr16[1]);
-	else
-		sin6->sin6_scope_id = 0;	/*XXX*/
-	if (IN6_IS_SCOPE_LINKLOCAL(&sin6->sin6_addr))
-		sin6->sin6_addr.s6_addr16[1] = 0;
 
-	*nam = (struct sockaddr *)sin6;
+	*nam = in6_sockaddr(port, &addr);
 	return 0;
 }
 
@@ -723,6 +740,7 @@ in6_mapped_sockaddr(struct socket *so, struct sockaddr **nam)
 		if (error == 0)
 			in6_sin_2_v4mapsin6_in_sock(nam);
 	} else
+	/* scope issues will be handled in in6_setsockaddr(). */
 	error = in6_setsockaddr(so, nam);
 
 	return error;
@@ -741,6 +759,7 @@ in6_mapped_peeraddr(struct socket *so, struct sockaddr **nam)
 		if (error == 0)
 			in6_sin_2_v4mapsin6_in_sock(nam);
 	} else
+	/* scope issues will be handled in in6_setpeeraddr(). */
 	error = in6_setpeeraddr(so, nam);
 
 	return error;
@@ -760,9 +779,11 @@ in6_mapped_peeraddr(struct socket *so, struct sockaddr **nam)
 void
 in6_pcbnotify(head, dst, fport_arg, src, lport_arg, cmd, notify)
 	struct inpcbhead *head;
-	struct sockaddr *dst, *src;
+	struct sockaddr *dst;
+	const struct sockaddr *src;
 	u_int fport_arg, lport_arg;
 	int cmd;
+//	struct inpcb *(*notify) __P((struct inpcb *, int));
 	void (*notify) __P((struct inpcb *, int));
 {
 	struct inpcb *inp, *ninp;
@@ -781,7 +802,7 @@ in6_pcbnotify(head, dst, fport_arg, src, lport_arg, cmd, notify)
 	/*
 	 * note that src can be NULL when we get notify by local fragmentation.
 	 */
-	sa6_src = (src == NULL) ? sa6_any : *(struct sockaddr_in6 *)src;
+	sa6_src = (src == NULL) ? sa6_any : *(const struct sockaddr_in6 *)src;
 	flowinfo = sa6_src.sin6_flowinfo;
 
 	/*

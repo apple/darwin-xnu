@@ -240,7 +240,7 @@ mach_port_names(
 		/* upper bound on number of names in the space */
 
 		bound = space->is_table_size + space->is_tree_total;
-		size_needed = round_page(bound * sizeof(mach_port_name_t));
+		size_needed = round_page_32(bound * sizeof(mach_port_name_t));
 
 		if (size_needed <= size)
 			break;
@@ -332,7 +332,7 @@ mach_port_names(
 		vm_size_t vm_size_used;
 
 		size_used = actual * sizeof(mach_port_name_t);
-		vm_size_used = round_page(size_used);
+		vm_size_used = round_page_32(size_used);
 
 		/*
 		 *	Make used memory pageable and get it into
@@ -1128,7 +1128,7 @@ mach_port_get_set_status(
 		/* didn't have enough memory; allocate more */
 
 		kmem_free(ipc_kernel_map, addr, size);
-		size = round_page(actual * sizeof(mach_port_name_t)) + PAGE_SIZE;
+		size = round_page_32(actual * sizeof(mach_port_name_t)) + PAGE_SIZE;
 	}
 
 	if (actual == 0) {
@@ -1140,7 +1140,7 @@ mach_port_get_set_status(
 		vm_size_t vm_size_used;
 
 		size_used = actual * sizeof(mach_port_name_t);
-		vm_size_used = round_page(size_used);
+		vm_size_used = round_page_32(size_used);
 
 		/*
 		 *	Make used memory pageable and get it into

@@ -47,7 +47,7 @@
 #
 #  RELEASE = [ppc mach medium vol pst gdb simple_clock kernstack nfsclient nfsserver quota fifo fdesc union ffs cd9660 compat_43 revfs noprofiling hfs volfs devfs synthfs netat mrouting ipdivert ipfirewall ktrace inet6 ipsec tcpdrop_synfin gif stf]
 #  RELEASE_TRACE = [RELEASE kdebug]
-#  PROFILE = [ppc mach medium vol pst gdb debug simple_clock kernstack nfsclient nfsserver quota fifo fdesc union ffs cd9660 compat_43 revfs profile hfs volfs devfs synthfs netat mrouting ipdivert ipfirewall ktrace inet6 ipsec tcpdrop_synfin gif stf]
+#  PROFILE = [ppc mach medium vol pst gdb simple_clock kernstack nfsclient nfsserver quota fifo fdesc union ffs cd9660 compat_43 revfs profile hfs volfs devfs synthfs netat mrouting ipdivert ipfirewall ktrace inet6 ipsec tcpdrop_synfin gif stf]
 #  DEBUG = [ppc mach medium vol pst gdb debug simple_clock kernstack nfsclient nfsserver quota fifo fdesc union ffs cd9660 compat_43 revfs profiling hfs volfs devfs synthfs netat mrouting mach_assert ipdivert ipfirewall ktrace inet6 ipsec tcpdrop_synfin gif stf]
 #  DEBUG_TRACE = [DEBUG kdebug]
 #

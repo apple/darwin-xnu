@@ -75,6 +75,7 @@
 #include <sys/systm.h>
 #include <sys/protosw.h>
 #include <sys/sysctl.h>
+#include <sys/socket.h>
 
 #include <netinet/in.h>
 #include <netinet/in_systm.h>
@@ -91,7 +92,9 @@
 #include <netinet/tcp_debug.h>
 
 #if TCPDEBUG
-static int	tcpconsdebug = 0;
+__private_extern__ int	tcpconsdebug = 0;
+SYSCTL_INT(_net_inet_tcp, OID_AUTO, tcpconsdebug, CTLFLAG_RW, 
+    &tcpconsdebug, 0, "Turn tcp debugging on or off");
 #endif
 
 static struct tcp_debug tcp_debug[TCP_NDEBUG];
@@ -186,7 +189,7 @@ tcp_trace(act, ostate, tp, ipgen, th, req)
 	if (tcpconsdebug == 0)
 		return;
 	if (tp)
-		printf("%p %s:", tp, tcpstates[ostate]);
+		printf("%x %s:", tp, tcpstates[ostate]);
 	else
 		printf("???????? ");
 	printf("%s ", tanames[act]);

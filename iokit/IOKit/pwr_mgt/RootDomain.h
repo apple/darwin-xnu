@@ -28,6 +28,7 @@
 #include <IOKit/IOService.h>
 #include <IOKit/pwr_mgt/IOPM.h>
 
+class IOPMPowerStateQueue;
 class RootDomainUserClient;
 
 #define kRootDomainSupportedFeatures "Supported Features"
@@ -61,7 +62,6 @@ public:
 
     static IOPMrootDomain * construct( void );
     virtual bool start( IOService * provider );
-    virtual IOReturn newUserClient ( task_t,  void *, UInt32, IOUserClient ** );
     virtual IOReturn setAggressiveness ( unsigned long, unsigned long );
     virtual IOReturn youAreRoot ( void );
     virtual IOReturn sleepSystem ( void );
@@ -77,7 +77,9 @@ public:
     void wakeFromDoze( void );
     void broadcast_it (unsigned long, unsigned long );
     void publishFeature( const char *feature );
-
+    void unIdleDevice( IOService *, unsigned long );
+    void announcePowerSourceChange( void );
+    
     // Override of these methods for logging purposes.
     virtual IOReturn changePowerStateTo ( unsigned long ordinal );
     virtual IOReturn changePowerStateToPriv ( unsigned long ordinal );
@@ -113,7 +115,7 @@ private:
     void adjustPowerState( void );
     void restoreUserSpinDownTimeout ( void );
 
-    
+    IOPMPowerStateQueue     *pmPowerStateQueue;
     unsigned int user_spindown;       // User's selected disk spindown value
 
     unsigned int systemBooting:1;

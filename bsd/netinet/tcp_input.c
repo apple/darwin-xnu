@@ -157,7 +157,7 @@ SYSCTL_INT(_net_inet_tcp, OID_AUTO, tcp_lq_overflow, CTLFLAG_RW,
     "Listen Queue Overflow");
 
 #if TCP_DROP_SYNFIN
-static int drop_synfin = 0;
+static int drop_synfin = 1;
 SYSCTL_INT(_net_inet_tcp, OID_AUTO, drop_synfin, CTLFLAG_RW,
     &drop_synfin, 0, "Drop TCP packets with SYN+FIN set");
 #endif
@@ -365,9 +365,9 @@ present:
  */
 #if INET6
 int
-tcp6_input(mp, offp, proto)
+tcp6_input(mp, offp)
 	struct mbuf **mp;
-	int *offp, proto;
+	int *offp;
 {
 	register struct mbuf *m = *mp;
 	struct in6_ifaddr *ia6;
@@ -800,6 +800,7 @@ findpcb:
 #if INET6
 			struct inpcb *oinp = sotoinpcb(so);
 #endif /* INET6 */
+			int ogencnt = so->so_gencnt;
 
 #if !IPSEC
 			/*
@@ -879,6 +880,12 @@ findpcb:
 				if (!so2)
 					goto drop;
 			}
+			/*
+			 * Make sure listening socket did not get closed during socket allocation,
+                         * not only this is incorrect but it is know to cause panic
+                         */
+			if (so->so_gencnt != ogencnt)
+				goto drop;
 #if IPSEC
 			oso = so;
 #endif
@@ -1000,7 +1007,7 @@ findpcb:
 	 */
 	tp->t_rcvtime = 0;
 	if (TCPS_HAVEESTABLISHED(tp->t_state))
-		tp->t_timer[TCPT_KEEP] = tcp_keepidle;
+		tp->t_timer[TCPT_KEEP] = TCP_KEEPIDLE(tp);
 
 	/*
 	 * Process options if not in LISTEN state,
@@ -1499,7 +1506,7 @@ findpcb:
 				thflags &= ~TH_SYN;
 			} else {
 				tp->t_state = TCPS_ESTABLISHED;
-				tp->t_timer[TCPT_KEEP] = tcp_keepidle;
+				tp->t_timer[TCPT_KEEP] = TCP_KEEPIDLE(tp);
 			}
 		} else {
 		/*
@@ -1527,7 +1534,7 @@ findpcb:
 						tp->t_flags &= ~TF_NEEDFIN;
 					} else {
 						tp->t_state = TCPS_ESTABLISHED;
-						tp->t_timer[TCPT_KEEP] = tcp_keepidle;
+						tp->t_timer[TCPT_KEEP] = TCP_KEEPIDLE(tp);
 					}
 					tp->t_flags |= TF_NEEDSYN;
 				} else
@@ -1598,6 +1605,16 @@ trimthenstep6:
 				goto drop;
 		}
  		break;  /* continue normal processing */
+
+	/* Received a SYN while connection is already established.
+	 * This is a "half open connection and other anomalies" described
+	 * in RFC793 page 34, send an ACK so the remote reset the connection
+	 * or recovers by adjusting its sequence numberering 
+	 */
+	case TCPS_ESTABLISHED:
+		if (thflags & TH_SYN)  
+			goto dropafterack; 
+		break;
 	}
 
 	/*
@@ -1918,7 +1935,7 @@ trimthenstep6:
 			tp->t_flags &= ~TF_NEEDFIN;
 		} else {
 			tp->t_state = TCPS_ESTABLISHED;
-			tp->t_timer[TCPT_KEEP] = tcp_keepidle;
+			tp->t_timer[TCPT_KEEP] = TCP_KEEPIDLE(tp);
 		}
 		/*
 		 * If segment contains data or ACK, will call tcp_reass()
@@ -2992,21 +3009,16 @@ tcp_mss(tp, offer)
 	     (tp->t_flags & TF_RCVD_CC) == TF_RCVD_CC))
 		mss -= TCPOLEN_CC_APPA;
 
-#if	(MCLBYTES & (MCLBYTES - 1)) == 0
-		if (mss > MCLBYTES)
-			mss &= ~(MCLBYTES-1);
-#else
-		if (mss > MCLBYTES)
-			mss = mss / MCLBYTES * MCLBYTES;
-#endif
 	/*
-	 * If there's a pipesize, change the socket buffer
-	 * to that size.  Make the socket buffers an integral
+	 * If there's a pipesize (ie loopback), change the socket
+	 * buffer to that size only if it's bigger than the current
+	 * sockbuf size.  Make the socket buffers an integral
 	 * number of mss units; if the mss is larger than
 	 * the socket buffer, decrease the mss.
 	 */
 #if RTV_SPIPE
-	if ((bufsize = rt->rt_rmx.rmx_sendpipe) == 0)
+	bufsize = rt->rt_rmx.rmx_sendpipe;
+	if (bufsize < so->so_snd.sb_hiwat)
 #endif
 		bufsize = so->so_snd.sb_hiwat;
 	if (bufsize < mss)
@@ -3020,7 +3032,8 @@ tcp_mss(tp, offer)
 	tp->t_maxseg = mss;
 
 #if RTV_RPIPE
-	if ((bufsize = rt->rt_rmx.rmx_recvpipe) == 0)
+	bufsize = rt->rt_rmx.rmx_recvpipe;
+	if (bufsize < so->so_rcv.sb_hiwat)
 #endif
 		bufsize = so->so_rcv.sb_hiwat;
 	if (bufsize > mss) {

@@ -156,12 +156,14 @@
  *************************************************************************
  */
 
+#define BASEPRI_RTQUEUES	(BASEPRI_REALTIME + 1)				/* 97 */
 #define BASEPRI_REALTIME	(MAXPRI - (NRQS / 4) + 1)			/* 96 */
 
 #define MAXPRI_STANDARD		(BASEPRI_REALTIME - 1)				/* 95 */
 
 #define MAXPRI_KERNEL		MAXPRI_STANDARD						/* 95 */
 #define BASEPRI_PREEMPT		(MAXPRI_KERNEL - 2)					/* 93 */
+#define BASEPRI_KERNEL		(MINPRI_KERNEL + 1)					/* 81 */
 #define MINPRI_KERNEL		(MAXPRI_KERNEL - (NRQS / 8) + 1)	/* 80 */
 
 #define MAXPRI_SYSTEM		(MINPRI_KERNEL - 1)					/* 79 */
@@ -182,23 +184,36 @@
 #define invalid_pri(pri) ((pri) < MINPRI || (pri) > MAXPRI)
 
 struct run_queue {
-	queue_head_t		queues[NRQS];		/* one for each priority */
-	decl_simple_lock_data(,lock)			/* one lock for all queues */
-	int					bitmap[NRQBM];		/* run queue bitmap array */
 	int					highq;				/* highest runnable queue */
+	int					bitmap[NRQBM];		/* run queue bitmap array */
+	int					count;				/* # of threads total */
 	int					urgency;			/* level of preemption urgency */
-	int					count;				/* # of threads in queue */
+	queue_head_t		queues[NRQS];		/* one for each priority */
 };
 
 typedef struct run_queue	*run_queue_t;
 #define RUN_QUEUE_NULL		((run_queue_t) 0)
 
-#define first_quantum(processor)	((processor)->slice_quanta > 0)
+#define first_timeslice(processor)		((processor)->timeslice > 0)
+
+#define	processor_timeslice_setup(processor, thread)			\
+MACRO_BEGIN														\
+	(processor)->timeslice =									\
+		((thread)->sched_mode & TH_MODE_TIMESHARE)?				\
+			(processor)->processor_set->timeshare_quanta: 1;	\
+MACRO_END
+
+#define thread_quantum_init(thread)							\
+MACRO_BEGIN													\
+	(thread)->current_quantum = 							\
+		((thread)->sched_mode & TH_MODE_REALTIME)?			\
+			(thread)->realtime.computation: std_quantum;	\
+MACRO_END
 
 /* Invoked at splsched by a thread on itself */
 #define csw_needed(thread, processor) (										\
 	((thread)->state & TH_SUSP)										||		\
-	(first_quantum(processor)?												\
+	(first_timeslice(processor)?											\
 	 ((processor)->runq.highq > (thread)->sched_pri				||			\
 	  (processor)->processor_set->runq.highq > (thread)->sched_pri) :		\
 	 ((processor)->runq.highq >= (thread)->sched_pri			||			\
@@ -209,7 +224,7 @@ typedef struct run_queue	*run_queue_t;
  */
 
 /* Remove thread from its run queue */
-extern run_queue_t	rem_runq(
+extern run_queue_t	run_queue_remove(
 						thread_t	thread);
 
 /* Periodic computation of load factors */

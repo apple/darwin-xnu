@@ -158,5 +158,6 @@ struct tcphdr {
 #define	TCP_MAXSEG	0x02	/* set maximum segment size */
 #define TCP_NOPUSH	0x04	/* don't push last block of write */
 #define TCP_NOOPT	0x08	/* don't use TCP options */
+#define TCP_KEEPALIVE	0x10	/* idle time used when SO_KEEPALIVE is enabled */
 
 #endif

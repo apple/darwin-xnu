@@ -125,7 +125,7 @@ mk_timer_port_destroy(
 }
 
 void
-mk_timer_initialize(void)
+mk_timer_init(void)
 {
 	int			s = sizeof (mk_timer_data_t);
 
@@ -139,11 +139,8 @@ mk_timer_expire(
 	void			*p0,
 	void			*p1)
 {
-	uint64_t			time_of_posting;
 	mk_timer_t			timer = p0;
 	ipc_port_t			port;
-
-	clock_get_uptime(&time_of_posting);
 
 	simple_lock(&timer->lock);
 
@@ -155,23 +152,20 @@ mk_timer_expire(
 
 	port = timer->port;
 	assert(port != IP_NULL);
+	assert(timer->active == 1);
 
-	while (		timer->is_armed										&&
-				!thread_call_is_delayed(&timer->call_entry, NULL)		) {
+	while (timer->is_armed && timer->active == 1) {
 		mk_timer_expire_msg_t		msg;
 
 		timer->is_armed = FALSE;
-
-		msg.time_of_arming = timer->time_of_arming;
-		msg.armed_time = timer->call_entry.deadline;
-		msg.time_of_posting = time_of_posting;
-
 		simple_unlock(&timer->lock);
 
 		msg.header.msgh_bits = MACH_MSGH_BITS(MACH_MSG_TYPE_COPY_SEND, 0);
 		msg.header.msgh_remote_port = port;
 		msg.header.msgh_local_port = MACH_PORT_NULL;
 		msg.header.msgh_reserved = msg.header.msgh_id = 0;
+
+		msg.unused[0] = msg.unused[1] = msg.unused[2] = 0;
 
 		(void) mach_msg_send_from_kernel(&msg.header, sizeof (msg));
 
@@ -237,11 +231,14 @@ mk_timer_arm(
 		assert(timer->port == port);
 		ip_unlock(port);
 
-		timer->time_of_arming = time_of_arming;
-		timer->is_armed = TRUE;
+		if (!timer->is_dead) {
+			timer->time_of_arming = time_of_arming;
+			timer->is_armed = TRUE;
 
-		if (!thread_call_enter_delayed(&timer->call_entry, expire_time))
-			timer->active++;
+			if (!thread_call_enter_delayed(&timer->call_entry, expire_time))
+				timer->active++;
+		}
+
 		simple_unlock(&timer->lock);
 	}
 	else {

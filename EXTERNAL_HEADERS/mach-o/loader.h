@@ -723,4 +723,4 @@ struct fvmfile_command {
 	unsigned long	header_addr;	/* files virtual address */
 };
 
-#endif _MACHO_LOADER_H_
+#endif /* _MACHO_LOADER_H_ */

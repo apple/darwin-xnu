@@ -39,7 +39,7 @@
 #define super OSObject
 OSDefineMetaClassAndStructors(IOConditionLock, OSObject)
 
-bool IOConditionLock::initWithCondition(int inCondition, bool inIntr = true)
+bool IOConditionLock::initWithCondition(int inCondition, bool inIntr)
 {
     if (!super::init())
         return false;
@@ -55,12 +55,12 @@ bool IOConditionLock::initWithCondition(int inCondition, bool inIntr = true)
     return cond_interlock && sleep_interlock;
 }
 
-IOConditionLock *IOConditionLock::withCondition(int condition, bool intr = true)
+IOConditionLock *IOConditionLock::withCondition(int condition, bool intr)
 {
     IOConditionLock *me = new IOConditionLock;
 
     if (me && !me->initWithCondition(condition, intr)) {
-        me->free();
+        me->release();
         return 0;
     }
 

@@ -26,90 +26,59 @@
 
 /* This list is used in IOStartIOKit.cpp to declare fake kmod_info
  * structs for kext dependencies that are built into the kernel.
- * See the SystemKEXT project for fuller information on these
- * fake or pseudo-kexts, including their compatible versions.
  */
 const char * gIOKernelKmods =
-"{
-    'com.apple.kernel'                         = '6.8';
-    'com.apple.kernel.bsd'                     = '6.8';
-    'com.apple.kernel.iokit'                   = '6.8';
-    'com.apple.kernel.libkern'                 = '6.8';
-    'com.apple.kernel.mach'                    = '6.8';
-    'com.apple.iokit.IOADBFamily'              = '6.8';
-    'com.apple.iokit.IONVRAMFamily'            = '6.8';
-    'com.apple.iokit.IOSystemManagementFamily' = '6.8';
-    'com.apple.iokit.ApplePlatformFamily'      = '6.8';
-    'com.apple.driver.AppleNMI'                = '6.8';
-}";
+"{"
+"   'com.apple.kernel'                         = '7.0';"
+"   'com.apple.kpi.bsd'                        = '7.0';"
+"   'com.apple.kpi.iokit'                      = '7.0';"
+"   'com.apple.kpi.libkern'                    = '7.0';"
+"   'com.apple.kpi.mach'                       = '7.0';"
+"   'com.apple.iokit.IONVRAMFamily'            = '7.0';"
+"   'com.apple.driver.AppleNMI'                = '7.0';"
+"   'com.apple.iokit.IOSystemManagementFamily' = '7.0';"
+"   'com.apple.iokit.ApplePlatformFamily'      = '7.0';"
+"   'com.apple.kernel.6.0'                     = '6.9.9';"
+"   'com.apple.kernel.bsd'                     = '6.9.9';"
+"   'com.apple.kernel.iokit'                   = '6.9.9';"
+"   'com.apple.kernel.libkern'                 = '6.9.9';"
+"   'com.apple.kernel.mach'                    = '6.9.9';"
+"}";
 
 
 const char * gIOKernelConfigTables =
-"(
-    {
-      'IOClass'         = IOPanicPlatform;
-      'IOProviderClass' = IOPlatformExpertDevice;
-      'IOProbeScore'    = '-1';
-    }
-"
+"("
+"   {"
+"     'IOClass'         = IOPanicPlatform;"
+"     'IOProviderClass' = IOPlatformExpertDevice;"
+"     'IOProbeScore'    = '-1';"
+"   }"
 #ifdef PPC
-"   ,
-    {
-	'IOClass'		= AppleCPU;
-	'IOProviderClass'	= IOPlatformDevice;
-        'IONameMatch'		= 'cpu';
-	'IOProbeScore'		= 100:32;
-    },
-    {
-        'IOClass'              = AppleNMI;
-        'IOProviderClass'      = AppleMacIODevice;
-        'IONameMatch'          = 'programmer-switch';
-    },
-    {
-        'IOClass'		= AppleNVRAM;
-        'IOProviderClass'	= AppleMacIODevice;
-        'IONameMatch'		= nvram;
-    }, 
-    {   
-        'IOClass'               = IOPMUADBController;
-        'IOProviderClass'       = AppleMacIODevice;
-        'IONameMatch'           = adb;
-    }
-"
+"   ,"
+"   {"
+"       'IOClass'               = AppleCPU;"
+"       'IOProviderClass'       = IOPlatformDevice;"
+"       'IONameMatch'           = 'cpu';"
+"       'IOProbeScore'          = 100:32;"
+"   },"
+"   {"
+"       'IOClass'              = AppleNMI;"
+"       'IOProviderClass'      = AppleMacIODevice;"
+"       'IONameMatch'          = 'programmer-switch';"
+"   },"
+"   {"
+"       'IOClass'               = AppleNVRAM;"
+"       'IOProviderClass'       = AppleMacIODevice;"
+"       'IONameMatch'           = nvram;"
+"   }"
 #endif /* PPC */
 #ifdef i386
-"   ,
-    {
-       'IOClass'           = AppleI386PlatformExpert;
-       'IOProviderClass'   = IOPlatformExpertDevice;
-       'top-level'         = "
-    /* set of dicts to make into nubs */
-    "[
-       { IOName = cpu; },
-       { IOName = intel-pic; },
-       { IOName = intel-clock; }, 
-       { IOName = ps2controller; },
-       { IOName = pci; },
-       { IOName = display; 'AAPL,boot-display' = Yes; }
-    ];
-    },
-    {
-       'IOClass'           = AppleI386CPU;
-       'IOProviderClass'   = IOPlatformDevice;
-       'IONameMatch'       = cpu;
-       'IOProbeScore'      = 100:32;
-    },
-    {
-       'IOClass'           = AppleIntelClassicPIC;
-       'IOProviderClass'   = IOPlatformDevice;
-       'IONameMatch'       = intel-pic;
-    },
-    {
-       'IOClass'           = AppleIntelClock;
-       'IOProviderClass'   = IOPlatformDevice;
-       'IONameMatch'       = intel-clock;
-    }
-"
+"   ,"
+"   {"
+"       'IOClass'           = AppleIntelClock;"
+"       'IOProviderClass'   = IOPlatformDevice;"
+"       'IONameMatch'       = intel-clock;"
+"   }"
 #endif /* i386 */
 ")";
 

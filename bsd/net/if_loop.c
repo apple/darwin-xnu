@@ -353,7 +353,7 @@ lo_pre_output(ifp, m, dst, route, frame_type, dst_addr, dl_tag)
 	    ifq = &atalkintrq;
 	    isr = NETISR_APPLETALK;
 	    break;
-#endif NETAT
+#endif /* NETAT */
 	default:
 	    return (EAFNOSUPPORT);
 	}
@@ -498,37 +498,20 @@ int lo_shutdown()
     return 0;
 }
 
-
-void lo_reg_if_mods()
-{
-     struct dlil_ifmod_reg_str  lo_ifmod;
-
-     bzero(&lo_ifmod, sizeof(lo_ifmod));
-     lo_ifmod.add_if = lo_add_if;
-     lo_ifmod.del_if = lo_del_if;
-     lo_ifmod.add_proto = lo_add_proto;
-     lo_ifmod.del_proto = lo_del_proto;
-     lo_ifmod.ifmod_ioctl = 0;
-     lo_ifmod.shutdown    = lo_shutdown;
-
-    if (dlil_reg_if_modules(APPLE_IF_FAM_LOOPBACK, &lo_ifmod))
-	panic("Couldn't register lo modules\n");
-}
-
-
-u_long  lo_attach_inet(struct ifnet *ifp)
+int  lo_attach_inet(struct ifnet *ifp, u_long *dl_tag)
 {
     struct dlil_proto_reg_str   reg;
     struct dlil_demux_desc      desc;
-    u_long			dl_tag=0;
     short native=0;
-    int   stat;
+    int   stat =0 ;
     int i;
 
     for (i=0; i < lo_count; i++) {
 	if ((lo_array[i]) && (lo_array[i]->ifp == ifp)) {
-	    if (lo_array[i]->protocol_family == PF_INET)
-		return lo_array[i]->dl_tag;
+	    if (lo_array[i]->protocol_family == PF_INET) {
+		*dl_tag = lo_array[i]->dl_tag;
+		return (0);
+	    }
 	}
     }
 
@@ -549,27 +532,28 @@ u_long  lo_attach_inet(struct ifnet *ifp)
     reg.default_proto    = 0;
     reg.protocol_family  = PF_INET;
 
-    stat = dlil_attach_protocol(&reg, &dl_tag);
-    if (stat) {
-	panic("lo_attach_inet can't attach interface\n");
-    }
+    stat = dlil_attach_protocol(&reg, dl_tag);
+
+    if (stat)
+	printf("lo_attach_inet: dlil_attach_protocol returned=%d\n", stat);
     
-    return dl_tag;
+    return stat;
 }
 
-u_long  lo_attach_inet6(struct ifnet *ifp)
+int  lo_attach_inet6(struct ifnet *ifp, u_long *dl_tag)
 {
     struct dlil_proto_reg_str   reg;
     struct dlil_demux_desc      desc;
-    u_long			dl_tag=0;
     short native=0;
     int   stat;
     int i;
 
     for (i=0; i < lo_count; i++) {
 	if ((lo_array[i]) && (lo_array[i]->ifp == ifp)) {
-	    if (lo_array[i]->protocol_family == PF_INET6)
-		return lo_array[i]->dl_tag;
+	    if (lo_array[i]->protocol_family == PF_INET6) {
+		*dl_tag = lo_array[i]->dl_tag;
+		return (0);
+	    }
 	}
     }
 
@@ -590,14 +574,47 @@ u_long  lo_attach_inet6(struct ifnet *ifp)
     reg.default_proto    = 0;
     reg.protocol_family  = PF_INET6;
 
-    stat = dlil_attach_protocol(&reg, &dl_tag);
-    if (stat) {
-	panic("lo_attach_inet6 can't attach interface\n");
-    }
+    stat = dlil_attach_protocol(&reg, dl_tag);
+
+    if (stat)
+	printf("lo_attach_inet6: dlil_attach_protocol returned=%d\n", stat);
     
-    return dl_tag;
+    return stat;
 }
 
+void lo_reg_if_mods()
+{
+     struct dlil_ifmod_reg_str  lo_ifmod;
+     struct dlil_protomod_reg_str lo_protoreg;
+     int error;
+
+     bzero(&lo_ifmod, sizeof(lo_ifmod));
+     lo_ifmod.add_if = lo_add_if;
+     lo_ifmod.del_if = lo_del_if;
+     lo_ifmod.add_proto = lo_add_proto;
+     lo_ifmod.del_proto = lo_del_proto;
+     lo_ifmod.ifmod_ioctl = 0;
+     lo_ifmod.shutdown    = lo_shutdown;
+
+	if (dlil_reg_if_modules(APPLE_IF_FAM_LOOPBACK, &lo_ifmod))
+		panic("Couldn't register lo modules\n");
+
+	/* Register protocol registration functions */
+
+	bzero(&lo_protoreg, sizeof(lo_protoreg));
+	lo_protoreg.attach_proto = lo_attach_inet;
+	lo_protoreg.detach_proto = NULL; /* no detach function for loopback */
+	
+	if ( error = dlil_reg_proto_module(PF_INET, APPLE_IF_FAM_LOOPBACK, &lo_protoreg) != 0)
+		printf("dlil_reg_proto_module failed for AF_INET error=%d\n", error);
+
+	lo_protoreg.attach_proto = lo_attach_inet6;
+	lo_protoreg.detach_proto = NULL;
+	
+	if ( error = dlil_reg_proto_module(PF_INET6, APPLE_IF_FAM_LOOPBACK, &lo_protoreg) != 0)
+		printf("dlil_reg_proto_module failed for AF_INET6 error=%d\n", error);
+
+}
 
 int lo_set_bpf_tap(struct ifnet *ifp, int mode, int (*bpf_callback)(struct ifnet *, struct mbuf *))
 {

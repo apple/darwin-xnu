@@ -107,6 +107,7 @@ typedef quad_t		rlim_t;		/* resource limit */
 typedef	int32_t		segsz_t;	/* segment size */
 typedef	int32_t		swblk_t;	/* swap offset */
 typedef	u_int32_t	uid_t;		/* user id */
+typedef u_int32_t	useconds_t;	/* microseconds (unsigned) */
 
 #ifndef _POSIX_SOURCE
 /* Major, minor numbers, dev_t's. */

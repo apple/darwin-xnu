@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2002 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2003 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -142,6 +142,27 @@ void ModifyBlockStart(FileReference vp, BlockDescPtr blockPtr)
 	blockPtr->isModified = 1;
 }
 
+static int
+btree_journal_modify_block_end(struct hfsmount *hfsmp, struct buf *bp)
+{
+#if BYTE_ORDER == LITTLE_ENDIAN
+    struct vnode *vp = bp->b_vp;
+    BlockDescriptor block;
+				    
+    /* Prepare the block pointer */
+    block.blockHeader = bp;
+    block.buffer = bp->b_data;
+    /* not found in cache ==> came from disk */
+    block.blockReadFromDisk = (bp->b_flags & B_CACHE) == 0;
+    block.blockSize = bp->b_bcount;
+
+    // XXXdbg have to swap the data before it goes in the journal
+    SWAP_BT_NODE (&block, ISHFSPLUS (VTOVCB(vp)), VTOC(vp)->c_fileid, 1);
+#endif
+
+    return journal_modify_block_end(hfsmp->jnl, bp);
+}
+
 
 __private_extern__
 OSStatus ReleaseBTreeBlock(FileReference vp, BlockDescPtr blockPtr, ReleaseBlockOptions options)
@@ -171,7 +192,8 @@ OSStatus ReleaseBTreeBlock(FileReference vp, BlockDescPtr blockPtr, ReleaseBlock
 				if (blockPtr->isModified == 0) {
 					panic("hfs: releaseblock: modified is 0 but forcewrite set! bp 0x%x\n", bp);
 				}
-				retval = journal_modify_block_end(hfsmp->jnl, bp);
+
+				retval = btree_journal_modify_block_end(hfsmp, bp);
 				blockPtr->isModified = 0;
 			} else {
 				retval = VOP_BWRITE(bp);
@@ -206,7 +228,7 @@ OSStatus ReleaseBTreeBlock(FileReference vp, BlockDescPtr blockPtr, ReleaseBlock
 				if (blockPtr->isModified == 0) {
 					panic("hfs: releaseblock: modified is 0 but markdirty set! bp 0x%x\n", bp);
 				}
-				retval = journal_modify_block_end(hfsmp->jnl, bp);
+				retval = btree_journal_modify_block_end(hfsmp, bp);
 				blockPtr->isModified = 0;
 			} else if (bdwrite_internal(bp, 1) != 0) {
                 hfs_btsync(vp, 0);
@@ -226,7 +248,7 @@ OSStatus ReleaseBTreeBlock(FileReference vp, BlockDescPtr blockPtr, ReleaseBlock
 				//   
 				//    journal_modify_block_abort(hfsmp->jnl, bp);
 				//panic("hfs: releaseblock called for 0x%x but mod_block_start previously called.\n", bp);
-				journal_modify_block_end(hfsmp->jnl, bp);
+				btree_journal_modify_block_end(hfsmp, bp);
 				blockPtr->isModified = 0;
 			} else {
 				brelse(bp);	/* note: B-tree code will clear blockPtr->blockHeader and blockPtr->buffer */
@@ -311,7 +333,9 @@ OSStatus ExtendBTreeFile(FileReference vp, FSSize minEOF, FSSize maxEOF)
 	// is at least the node size then we break out of the loop and let
 	// the error propagate back up.
 	do {
-		retval = ExtendFileC(vcb, filePtr, bytesToAdd, 0, kEFContigMask, &actualBytesAdded);
+		retval = ExtendFileC(vcb, filePtr, bytesToAdd, 0,
+		                     kEFContigMask | kEFMetadataMask,
+		                     &actualBytesAdded);
 		if (retval == dskFulErr && actualBytesAdded == 0) {
 
 			if (bytesToAdd == btInfo.nodeSize || bytesToAdd < (minEOF - origSize)) {
@@ -336,6 +360,7 @@ OSStatus ExtendBTreeFile(FileReference vp, FSSize minEOF, FSSize maxEOF)
 	 * there's plenty of room to grow.
 	 */
 	if ((retval == 0) &&
+	    ((VCBTOHFS(vcb)->hfs_flags & HFS_METADATA_ZONE) == 0) &&
 	    (vcb->nextAllocation > startAllocation) &&
 	    ((vcb->nextAllocation + fileblocks) < vcb->totalBlocks)) {
 		vcb->nextAllocation += fileblocks;
@@ -418,6 +443,11 @@ OSStatus ExtendBTreeFile(FileReference vp, FSSize minEOF, FSSize maxEOF)
 	   ) {
 		MarkVCBDirty( vcb );
 		ret = hfs_flushvolumeheader(VCBTOHFS(vcb), MNT_WAIT, HFS_ALTFLUSH);
+	} else {
+		struct timeval tv = time;
+
+		VTOC(vp)->c_flag |= C_CHANGE | C_UPDATE;
+		(void) VOP_UPDATE(vp, &tv, &tv, MNT_WAIT);
 	}
 
 	ret = ClearBTNodes(vp, btInfo.nodeSize, filePtr->fcbEOF - actualBytesAdded, actualBytesAdded);

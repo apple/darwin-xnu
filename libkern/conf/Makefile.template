@@ -86,7 +86,7 @@ LDOBJS = $(OBJS)
 $(COMPONENT).o: $(LDOBJS)
 	@echo "creating $(COMPONENT).o"
 	$(RM) $(RMFLAGS) vers.c
-	$(OBJROOT)/$(KERNEL_CONFIG)_$(ARCH_CONFIG)/$(COMPONENT)/newvers \
+	$(COMPOBJROOT)/newvers \
 	`$(CAT) ${VERSION_FILES}` ${COPYRIGHT_FILES}
 	${KCC} $(CFLAGS) $(INCLUDES) -c vers.c
 	@echo [ updating $(COMPONENT).o ${LIBKERN_KERNEL_CONFIG} ]

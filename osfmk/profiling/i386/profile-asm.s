@@ -666,9 +666,7 @@ ENDDATA(_profile_do_stats)
 
 #if defined (MACH_KERNEL) && NCPUS > 1
 #define ASSEMBLER
-#if AT386
-#include <i386/AT386/mp.h>
-#endif
+#include <i386/mp.h>
 
 #if SQT
 #include <i386/SQT/asm_macros.h>
@@ -798,13 +796,13 @@ LCL(alloc_new):
 
 #if DO_STATS
 	SLOCK addl %esi,V_wasted(%ebx,%edi,4)	/* udpate global counters */
-	SLOCK addl $M_size,V_overhead(%ebx,%edi,4)
+	SLOCK addl $(M_size),V_overhead(%ebx,%edi,4)
 #endif
 
 	popl	%ecx				/* context block */
 	movl	%eax,%edx			/* memory block pointer */
 	movl	%esi,M_nfree(%edx)		/* # free bytes */
-	addl	$M_size,%eax			/* bump past overhead */
+	addl	$(M_size),%eax			/* bump past overhead */
 	movl	A_plist(%ecx),%esi		/* previous memory block or 0 */
 	movl	%eax,M_first(%edx)		/* first space available */
 	movl	%eax,M_ptr(%edx)		/* current address available */
@@ -975,8 +973,8 @@ LCL(pnew):
 
 	SLOCK incl V_prof_records(%ebx)
 	pushl	%edx
-	movl	$P_size,%eax			/* allocation size */
-	movl	$C_prof,%ecx			/* allocation pool */
+	movl	$(P_size),%eax			/* allocation size */
+	movl	$(C_prof),%ecx			/* allocation pool */
 	call	EXT(_profile_alloc_asm)		/* allocate a new record */
 	popl	%edx
 
@@ -1146,8 +1144,8 @@ LCL(gnew):
 	SLOCK incl V_prof_records(%ebx)
 	movl	%edx,%esi			/* save unique function ptr */
 	movl	%ecx,%edi			/* and caller's caller address */
-	movl	$H_size,%eax			/* memory block size */
-	movl	$C_gfunc,%ecx			/* gprof function header memory pool */
+	movl	$(H_size),%eax			/* memory block size */
+	movl	$(C_gfunc),%ecx			/* gprof function header memory pool */
 	call	EXT(_profile_alloc_asm)
 
 	movl	V_hash_ptr(%ebx),%ecx		/* copy hash_ptr to func header */
@@ -1196,8 +1194,8 @@ LCL(gnocache):
 	movl	%ecx,%eax			/* caller's caller address */
 	imull	%edi,%eax			/* multiply to get hash */
 	movl	H_hash_ptr(%esi),%edx		/* hash pointer */
-	shrl	$GPROF_HASH_SHIFT,%eax		/* eliminate low order bits */
-	andl	$GPROF_HASH_MASK,%eax		/* mask to get hash value */
+	shrl	$(GPROF_HASH_SHIFT),%eax	/* eliminate low order bits */
+	andl	$(GPROF_HASH_MASK),%eax		/* mask to get hash value */
 	leal	0(%edx,%eax,4),%eax		/* pointer to hash bucket */
 	movl	%eax,%edx			/* save hash bucket address */
 
@@ -1261,8 +1259,8 @@ LCL(ghashnew):
 	SLOCK incl V_gprof_records(%ebx)
 	pushl	%edx
 	movl	%ecx,%edi			/* save caller's caller */
-	movl	$G_size,%eax			/* arc size */
-	movl	$C_gprof,%ecx			/* gprof memory pool */
+	movl	$(G_size),%eax			/* arc size */
+	movl	$(C_gprof),%ecx			/* gprof memory pool */
 	call	EXT(_profile_alloc_asm)
 	popl	%edx
 

@@ -85,7 +85,9 @@ typedef struct{
 
 static kdp_breakpoint_record_t breakpoint_list[MAX_BREAKPOINTS];
 static unsigned int breakpoints_initialized = 0;
+
 int reattach_wait = 0;
+int noresume_on_disconnect = 0;
 
 boolean_t
 kdp_packet(
@@ -215,6 +217,11 @@ kdp_disconnect(
     kdp.reply_port = kdp.exception_port = 0;
     kdp.is_halted = kdp.is_conn = FALSE;
     kdp.exception_seq = kdp.conn_seq = 0;
+
+    if (noresume_on_disconnect == 1) {
+	reattach_wait = 1;
+	noresume_on_disconnect = 0;
+    }
 
     rp->hdr.is_reply = 1;
     rp->hdr.len = sizeof (*rp);

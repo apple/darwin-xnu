@@ -86,6 +86,8 @@ void panic(const char * msg, ...);
  */
 extern void invalidate_icache(vm_offset_t addr, unsigned cnt, int phys);
 extern void flush_dcache(vm_offset_t addr, unsigned count, int phys);
+extern void invalidate_icache64(addr64_t addr, unsigned cnt, int phys);
+extern void flush_dcache64(addr64_t addr, unsigned count, int phys);
 
 __END_DECLS
 

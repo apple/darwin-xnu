@@ -33,6 +33,9 @@
  * These API's are in libkld.  Both kmodload(8) and /mach_kernel should
  * link with -lkld and then ld(1) will expand -lkld to libkld.dylib or
  * libkld.a depending on if -dynamic or -static is in effect.
+ *
+ * Note: we are using the __DYNAMIC__ flag to indicate user space kernel
+ * linking and __STATIC__ as a synonym of KERNEL.
  */
 
 /*
@@ -42,7 +45,7 @@
 extern void kld_error_vprintf(const char *format, va_list ap);
 
 /*
- * This two are only in libkld.dylib for use by kmodload(8) (user code compiled
+ * These two are only in libkld.dylib for use by kmodload(8) (user code compiled
  * with the default -dynamic).
  */
 #ifdef __DYNAMIC__
@@ -53,6 +56,13 @@ __private_extern__ long kld_load_basefile(
 __private_extern__ long kld_load(
     struct mach_header **header_addr,
     const char *object_filename,
+    const char *output_filename);
+
+__private_extern__ long kld_load_from_memory(
+    struct mach_header **header_addr,
+    const char *object_name,
+    char *object_addr,
+    long object_size,
     const char *output_filename);
 #endif /* __DYNAMIC__ */
 
@@ -69,6 +79,11 @@ __private_extern__ long kld_load_from_memory(
     long object_size);
 #endif /* __STATIC__ */
 
+__private_extern__ long kld_load_basefile_from_memory(
+    const char *base_filename,
+    char *base_addr,
+    long base_size);
+
 __private_extern__ long kld_unload_all(
     long deallocate_sets);
 
@@ -81,5 +96,11 @@ __private_extern__ long kld_forget_symbol(
 
 __private_extern__ void kld_address_func(
     unsigned long (*func)(unsigned long size, unsigned long headers_size));
+
+#define KLD_STRIP_ALL	0x00000000
+#define KLD_STRIP_NONE	0x00000001
+
+__private_extern__ void kld_set_link_options(
+    unsigned long link_options);
 
 #endif /* _MACHO_KLD_H_ */

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2003 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -33,39 +33,43 @@
 #ifndef _OS_OSBYTEORDERMACHINE_H
 #define _OS_OSBYTEORDERMACHINE_H
 
-#include <libkern/OSTypes.h>
+#include <stdint.h>
+
+#if !defined(OS_INLINE)
+#        define OS_INLINE static inline
+#endif
 
 /* Functions for byte reversed loads. */
 
 OS_INLINE
-UInt16
+uint16_t
 OSReadSwapInt16(
     volatile void               * base,
-    UInt                          offset
+    uintptr_t                     offset
 )
 {
     union sconv {
-	UInt16 us;
-	UInt8  uc[2];
+	uint16_t us;
+	uint8_t  uc[2];
     } *inp, outv;
-    inp = (union sconv *)((UInt8 *)base + offset);
+    inp = (union sconv *)((uint8_t *)base + offset);
     outv.uc[0] = inp->uc[1];
     outv.uc[1] = inp->uc[0];
     return (outv.us);
 }
 
 OS_INLINE
-UInt32
+uint32_t
 OSReadSwapInt32(
     volatile void               * base,
-    UInt                          offset
+    uintptr_t                     offset
 )
 {
     union lconv {
-	UInt32 ul;
-	UInt8  uc[4];
+	uint32_t ul;
+	uint8_t  uc[4];
     } *inp, outv;
-    inp = (union lconv *)((UInt8 *)base + offset);
+    inp = (union lconv *)((uint8_t *)base + offset);
     outv.uc[0] = inp->uc[3];
     outv.uc[1] = inp->uc[2];
     outv.uc[2] = inp->uc[1];
@@ -74,17 +78,17 @@ OSReadSwapInt32(
 }
 
 OS_INLINE
-UInt64
+uint64_t
 OSReadSwapInt64(
     volatile void               * base,
-    UInt                          offset
+    uintptr_t                     offset
 )
 {
     union llconv {
-	UInt64 ull;
-	UInt8  uc[8];
+	uint64_t ull;
+	uint8_t  uc[8];
     } *inp, outv;
-    inp = (union llconv *)((UInt8 *)base + offset);
+    inp = (union llconv *)((uint8_t *)base + offset);
     outv.uc[0] = inp->uc[7];
     outv.uc[1] = inp->uc[6];
     outv.uc[2] = inp->uc[5];
@@ -96,31 +100,21 @@ OSReadSwapInt64(
     return (outv.ull);
 }
 
-OS_INLINE
-UInt
-OSReadSwapInt(
-    volatile void               * base,
-    UInt                          offset
-)
-{
-    return (UInt)OSReadSwapInt32(base, offset);
-}
-
 /* Functions for byte reversed stores. */
 
 OS_INLINE
 void
 OSWriteSwapInt16(
     volatile void               * base,
-    UInt                          offset,
-    UInt16                        data
+    uintptr_t                     offset,
+    uint16_t                      data
 )
 {
     union sconv {
-	UInt16 us;
-	UInt8  uc[2];
+	uint16_t us;
+	uint8_t  uc[2];
     } *inp, *outp;
-    inp  = (union sconv *)((UInt8 *)base + offset);
+    inp  = (union sconv *)((uint8_t *)base + offset);
     outp = (union sconv *)&data;
     outp->uc[0] = inp->uc[1];
     outp->uc[1] = inp->uc[0];
@@ -130,15 +124,15 @@ OS_INLINE
 void
 OSWriteSwapInt32(
     volatile void               * base,
-    UInt                          offset,
-    UInt32                        data
+    uintptr_t                     offset,
+    uint32_t                      data
 )
 {
     union lconv {
-	UInt32 ul;
-	UInt8  uc[4];
+	uint32_t ul;
+	uint8_t  uc[4];
     } *inp, *outp;
-    inp  = (union lconv *)((UInt8 *)base + offset);
+    inp  = (union lconv *)((uint8_t *)base + offset);
     outp = (union lconv *)&data;
     outp->uc[0] = inp->uc[3];
     outp->uc[1] = inp->uc[2];
@@ -150,15 +144,15 @@ OS_INLINE
 void
 OSWriteSwapInt64(
     volatile void               * base,
-    UInt                          offset,
-    UInt64                        data
+    uintptr_t                     offset,
+    uint64_t                      data
 )
 {
     union llconv {
-	UInt64 ull;
-	UInt8  uc[8];
+	uint64_t ull;
+	uint8_t  uc[8];
     } *inp, *outp;
-    inp = (union llconv *)((UInt8 *)base + offset);
+    inp = (union llconv *)((uint8_t *)base + offset);
     outp = (union llconv *)&data;
     outp->uc[0] = inp->uc[7];
     outp->uc[1] = inp->uc[6];
@@ -170,57 +164,36 @@ OSWriteSwapInt64(
     outp->uc[7] = inp->uc[0];
 }
 
-OS_INLINE
-void
-OSWriteSwapInt(
-    volatile void               * base,
-    UInt                          offset,
-    UInt                          data
-)
-{
-    OSWriteSwapInt32(base, offset, (UInt32)data);
-}
-
 /* Generic byte swapping functions. */
 
 OS_INLINE
-UInt16
-OSSwapInt16(
-    UInt16                        data
+uint16_t
+_OSSwapInt16(
+    uint16_t                      data
 )
 {
-    UInt16 temp = data;
+    uint16_t temp = data;
     return OSReadSwapInt16(&temp, 0);
 }
 
 OS_INLINE
-UInt32
-OSSwapInt32(
-    UInt32                        data
+uint32_t
+_OSSwapInt32(
+    uint32_t                      data
 )
 {
-    UInt32 temp = data;
+    uint32_t temp = data;
     return OSReadSwapInt32(&temp, 0);
 }
 
 OS_INLINE
-UInt64
-OSSwapInt64(
-    UInt64                        data
+uint64_t
+_OSSwapInt64(
+    uint64_t                        data
 )
 {
-    UInt64 temp = data;
+    uint64_t temp = data;
     return OSReadSwapInt64(&temp, 0);
-}
-
-OS_INLINE
-UInt
-OSSwapInt(
-    UInt                          data
-)
-{
-    UInt temp = data;
-    return OSReadSwapInt(&temp, 0);
 }
 
 #endif /* ! _OS_OSBYTEORDERMACHINE_H */

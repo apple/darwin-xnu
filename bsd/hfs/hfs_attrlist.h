@@ -64,7 +64,7 @@ extern unsigned long DerivePermissionSummary(uid_t obj_uid, gid_t obj_gid,
 
 extern void hfs_packattrblk(struct attrblock *abp, struct hfsmount *hfsmp,
 		struct vnode *vp, struct cat_desc *descp, struct cat_attr *attrp,
-		struct cat_fork *datafork, struct cat_fork *rsrcfork);
+		struct cat_fork *datafork, struct cat_fork *rsrcfork, struct proc *p);
 
 #endif /* __APPLE_API_PRIVATE */
 #endif /* KERNEL */

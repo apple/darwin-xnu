@@ -266,6 +266,7 @@
 	addl	$MEM_BASE,%ebx		/* translate */
 1:
 #else
+        movl	%ebx,PA(EXT(boot_args_start))  /* Save KERNBOOTSTRUCT */
 	cld
 	call	PA(EXT(i386_preinit))
 	movl	%eax,%ebx

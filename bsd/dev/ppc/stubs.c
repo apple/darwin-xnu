@@ -43,38 +43,6 @@
 
 
 /* 
- * copy a null terminated string from the kernel address space into
- * the user address space.
- *   - if the user is denied write access, return EFAULT.
- *   - if the end of string isn't found before
- *     maxlen bytes are copied,  return ENAMETOOLONG,
- *     indicating an incomplete copy.
- *   - otherwise, return 0, indicating success.
- * the number of bytes copied is always returned in lencopied.
- */
-int
-copyoutstr(from, to, maxlen, lencopied)
-    void * from, * to;
-    size_t maxlen, *lencopied;
-{
-	int slen,len,error=0;
-
-	/* XXX Must optimize this */
-
-	slen = strlen(from) + 1;
-	if (slen > maxlen)
-		error = ENAMETOOLONG;
-
-	len = min(maxlen,slen);
-	if (copyout(from, to, len))
-		error = EFAULT;
-	*lencopied = len;
-
-	return error;
-}
-
-
-/* 
  * copy a null terminated string from one point to another in 
  * the kernel address space.
  *   - no access checks are performed.

@@ -82,13 +82,17 @@ extern struct sysctl_oid sysctl__hw_l2cachesize_compat;
 extern struct sysctl_oid sysctl__hw_l3cachesize_compat;
 extern struct sysctl_oid sysctl__hw_tbfrequency_compat;
 
-extern struct sysctl_oid sysctl__hw__cpu_capabilities;
-
 extern struct sysctl_oid sysctl__kern_sysv_shmmax;
 extern struct sysctl_oid sysctl__kern_sysv_shmmin;
 extern struct sysctl_oid sysctl__kern_sysv_shmmni;
 extern struct sysctl_oid sysctl__kern_sysv_shmseg;
 extern struct sysctl_oid sysctl__kern_sysv_shmall;
+
+extern struct sysctl_oid sysctl__kern_sysv_semmni;
+extern struct sysctl_oid sysctl__kern_sysv_semmns;
+extern struct sysctl_oid sysctl__kern_sysv_semmnu;
+extern struct sysctl_oid sysctl__kern_sysv_semmsl;
+extern struct sysctl_oid sysctl__kern_sysv_semume;
 
 extern struct sysctl_oid sysctl__kern_dummy;
 extern struct sysctl_oid sysctl__kern_ipc_maxsockbuf;
@@ -96,9 +100,11 @@ extern struct sysctl_oid sysctl__kern_ipc_nmbclusters;
 extern struct sysctl_oid sysctl__kern_ipc_sockbuf_waste_factor;
 extern struct sysctl_oid sysctl__kern_ipc_somaxconn;
 extern struct sysctl_oid sysctl__kern_ipc_sosendminchain;
+extern struct sysctl_oid sysctl__kern_ipc_sorecvmincopy;
 extern struct sysctl_oid sysctl__kern_ipc_maxsockets;
 extern struct sysctl_oid sysctl__net_inet_icmp_icmplim;
 extern struct sysctl_oid sysctl__net_inet_icmp_maskrepl;
+extern struct sysctl_oid sysctl__net_inet_icmp_timestamp;
 extern struct sysctl_oid sysctl__net_inet_icmp_bmcastecho;
 extern struct sysctl_oid sysctl__net_inet_icmp_log_redirect;
 extern struct sysctl_oid sysctl__net_inet_icmp_drop_redirect;
@@ -123,6 +129,7 @@ extern struct sysctl_oid sysctl__net_inet_ip_keepfaith;
 extern struct sysctl_oid sysctl__net_inet_ip_maxfragpackets;
 extern struct sysctl_oid sysctl__net_inet_ip_check_interface;
 extern struct sysctl_oid sysctl__net_inet_ip_check_route_selfref;
+extern struct sysctl_oid sysctl__net_inet_ip_use_route_genid;
 #if NGIF > 0
 extern struct sysctl_oid sysctl__net_inet_ip_gifttl;
 #endif
@@ -181,6 +188,7 @@ extern struct sysctl_oid sysctl__net_inet_tcp_drop_synfin;
 #if TCPDEBUG
 extern struct sysctl_oid sysctl__net_inet_tcp_tcpconsdebug;
 #endif
+extern struct sysctl_oid sysctl__net_inet_tcp_sockthreshold;
 extern struct sysctl_oid sysctl__net_inet_udp_log_in_vain;
 extern struct sysctl_oid sysctl__net_inet_udp_checksum;
 extern struct sysctl_oid sysctl__net_inet_udp_maxdgram;
@@ -246,6 +254,15 @@ extern struct sysctl_oid sysctl__vfs_nfs_diskless_rootpath;
 extern struct sysctl_oid sysctl__vfs_nfs_diskless_swappath;
 extern struct sysctl_oid sysctl__vfs_nfs_nfsstats;
 #endif
+extern struct sysctl_oid sysctl__vfs_generic_nfs_client_initialdowndelay;
+extern struct sysctl_oid sysctl__vfs_generic_nfs_client_nextdowndelay;
+extern struct sysctl_oid sysctl__vfs_generic_nfs_client;
+extern struct sysctl_oid sysctl__vfs_generic_nfs;
+
+extern struct sysctl_oid sysctl__vfs_generic;
+extern struct sysctl_oid sysctl__vfs_generic_vfsidlist;
+extern struct sysctl_oid sysctl__vfs_generic_ctlbyfsid;
+extern struct sysctl_oid sysctl__vfs_generic_noremotehang;
 
 extern struct sysctl_oid sysctl__kern_ipc;
 extern struct sysctl_oid sysctl__kern_sysv;
@@ -301,6 +318,7 @@ extern struct sysctl_oid sysctl__net_inet_tcp_stats;
 extern struct sysctl_oid sysctl__net_inet_udp_stats;
 extern struct sysctl_oid sysctl__kern;
 extern struct sysctl_oid sysctl__hw;
+extern struct sysctl_oid sysctl__machdep;
 extern struct sysctl_oid sysctl__net;
 extern struct sysctl_oid sysctl__debug;
 extern struct sysctl_oid sysctl__vfs;
@@ -336,7 +354,6 @@ extern struct sysctl_oid sysctl__net_inet6_ip6_rtminexpire;
 extern struct sysctl_oid sysctl__net_inet6_ip6_rtmaxcache;
 extern struct sysctl_oid sysctl__net_inet6_ip6_temppltime;
 extern struct sysctl_oid sysctl__net_inet6_ip6_tempvltime;
-extern struct sysctl_oid sysctl__net_inet6_ip6_auto_on;
 #if IPV6FIREWALL
 extern struct sysctl_oid sysctl__net_inet6_ip6_fw;
 extern struct sysctl_oid sysctl__net_inet6_ip6_fw_debug;
@@ -371,6 +388,7 @@ extern struct sysctl_oid sysctl__net_inet6_ipsec6_esp_randpad;
 #endif
 #if IPSEC
 extern struct sysctl_oid sysctl__net_inet_ipsec;
+extern struct sysctl_oid sysctl__net_inet_ipsec_esp_port;
 extern struct sysctl_oid sysctl__net_inet_ipsec_bypass;
 extern struct sysctl_oid sysctl__net_inet_ipsec_def_policy;
 extern struct sysctl_oid sysctl__net_inet_ipsec_esp_randpad;
@@ -386,6 +404,7 @@ extern struct sysctl_oid sysctl__net_inet_ipsec_debug;
 extern struct sysctl_oid sysctl__net_inet_ipsec_stats;
 extern struct sysctl_oid sysctl__net_key;
 extern struct sysctl_oid sysctl__net_key_debug;
+extern struct sysctl_oid sysctl__net_key_prefered_oldsa;
 extern struct sysctl_oid sysctl__net_key_spi_trycnt;
 extern struct sysctl_oid sysctl__net_key_spi_minval;
 extern struct sysctl_oid sysctl__net_key_spi_maxval;
@@ -394,7 +413,9 @@ extern struct sysctl_oid sysctl__net_key_larval_lifetime;
 extern struct sysctl_oid sysctl__net_key_blockacq_count;
 extern struct sysctl_oid sysctl__net_key_blockacq_lifetime;
 extern struct sysctl_oid sysctl__net_key_esp_keymin;
+extern struct sysctl_oid sysctl__net_key_esp_auth;
 extern struct sysctl_oid sysctl__net_key_ah_keymin;
+extern struct sysctl_oid sysctl__net_key_natt_keepalive_interval;
 #endif
 
 
@@ -402,6 +423,7 @@ struct sysctl_oid *newsysctl_list[] =
 {
     &sysctl__kern,
     &sysctl__hw,
+    &sysctl__machdep,
     &sysctl__net,
     &sysctl__debug,
     &sysctl__vfs,
@@ -423,12 +445,18 @@ struct sysctl_oid *newsysctl_list[] =
     ,&sysctl__kern_sysv_shmmni
     ,&sysctl__kern_sysv_shmseg
     ,&sysctl__kern_sysv_shmall
+    ,&sysctl__kern_sysv_semmni
+    ,&sysctl__kern_sysv_semmns
+    ,&sysctl__kern_sysv_semmnu
+    ,&sysctl__kern_sysv_semmsl
+    ,&sysctl__kern_sysv_semume
     ,&sysctl__kern_dummy
     ,&sysctl__kern_ipc_maxsockbuf
     ,&sysctl__kern_ipc_nmbclusters
     ,&sysctl__kern_ipc_sockbuf_waste_factor
     ,&sysctl__kern_ipc_somaxconn
     ,&sysctl__kern_ipc_sosendminchain
+    ,&sysctl__kern_ipc_sorecvmincopy
     ,&sysctl__kern_ipc_maxsockets
 
     ,&sysctl__hw_machine
@@ -471,10 +499,9 @@ struct sysctl_oid *newsysctl_list[] =
     ,&sysctl__hw_l3cachesize_compat
     ,&sysctl__hw_tbfrequency_compat
 
-    ,&sysctl__hw__cpu_capabilities
-
     ,&sysctl__net_inet_icmp_icmplim
     ,&sysctl__net_inet_icmp_maskrepl
+    ,&sysctl__net_inet_icmp_timestamp
     ,&sysctl__net_inet_icmp_bmcastecho
     ,&sysctl__net_inet_icmp_drop_redirect
     ,&sysctl__net_inet_icmp_log_redirect
@@ -497,6 +524,7 @@ struct sysctl_oid *newsysctl_list[] =
     ,&sysctl__net_inet_ip_maxfragpackets
     ,&sysctl__net_inet_ip_check_interface
     ,&sysctl__net_inet_ip_check_route_selfref
+    ,&sysctl__net_inet_ip_use_route_genid
 #if NGIF > 0
     ,&sysctl__net_inet_ip_gifttl
 #endif
@@ -552,6 +580,7 @@ struct sysctl_oid *newsysctl_list[] =
 #if TCPDEBUG
     ,&sysctl__net_inet_tcp_tcpconsdebug
 #endif
+    ,&sysctl__net_inet_tcp_sockthreshold
     ,&sysctl__net_inet_udp_log_in_vain 
     ,&sysctl__net_inet_udp_checksum
     ,&sysctl__net_inet_udp_maxdgram
@@ -616,6 +645,14 @@ struct sysctl_oid *newsysctl_list[] =
     ,&sysctl__vfs_nfs_diskless_swappath
     ,&sysctl__vfs_nfs_nfsstats
 #endif
+    ,&sysctl__vfs_generic
+    ,&sysctl__vfs_generic_vfsidlist
+    ,&sysctl__vfs_generic_ctlbyfsid
+    ,&sysctl__vfs_generic_noremotehang
+    ,&sysctl__vfs_generic_nfs
+    ,&sysctl__vfs_generic_nfs_client
+    ,&sysctl__vfs_generic_nfs_client_initialdowndelay
+    ,&sysctl__vfs_generic_nfs_client_nextdowndelay
     ,&sysctl__kern_ipc
     ,&sysctl__kern_sysv
     ,&sysctl__net_inet
@@ -689,7 +726,6 @@ struct sysctl_oid *newsysctl_list[] =
     ,&sysctl__net_inet6_ip6_rtmaxcache
     ,&sysctl__net_inet6_ip6_temppltime
     ,&sysctl__net_inet6_ip6_tempvltime
-    ,&sysctl__net_inet6_ip6_auto_on
    ,&sysctl__net_inet6_icmp6_rediraccept
    ,&sysctl__net_inet6_icmp6_redirtimeout
    ,&sysctl__net_inet6_icmp6_nd6_prune
@@ -725,6 +761,7 @@ struct sysctl_oid *newsysctl_list[] =
 #if IPSEC
    ,&sysctl__net_key
    ,&sysctl__net_key_debug
+   ,&sysctl__net_key_prefered_oldsa
    ,&sysctl__net_key_spi_trycnt
    ,&sysctl__net_key_spi_minval
    ,&sysctl__net_key_spi_maxval
@@ -733,7 +770,9 @@ struct sysctl_oid *newsysctl_list[] =
    ,&sysctl__net_key_blockacq_count
    ,&sysctl__net_key_blockacq_lifetime
    ,&sysctl__net_key_esp_keymin
+   ,&sysctl__net_key_esp_auth
    ,&sysctl__net_key_ah_keymin
+   ,&sysctl__net_key_natt_keepalive_interval
    ,&sysctl__net_inet_ipsec
    ,&sysctl__net_inet_ipsec_stats
    ,&sysctl__net_inet_ipsec_def_policy
@@ -748,6 +787,7 @@ struct sysctl_oid *newsysctl_list[] =
    ,&sysctl__net_inet_ipsec_debug
    ,&sysctl__net_inet_ipsec_esp_randpad
    ,&sysctl__net_inet_ipsec_bypass
+   ,&sysctl__net_inet_ipsec_esp_port
 #endif
     ,(struct sysctl_oid *) 0
 };

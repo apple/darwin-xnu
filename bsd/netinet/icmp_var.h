@@ -90,13 +90,15 @@ struct	icmpstat {
 #define	ICMPCTL_MASKREPL	1	/* allow replies to netmask requests */
 #define	ICMPCTL_STATS		2	/* statistics (read-only) */
 #define ICMPCTL_ICMPLIM		3
-#define ICMPCTL_MAXID		4
+#define ICMPCTL_TIMESTAMP	4	/* allow replies to time stamp requests */
+#define ICMPCTL_MAXID		5
 
 #define ICMPCTL_NAMES { \
 	{ 0, 0 }, \
 	{ "maskrepl", CTLTYPE_INT }, \
 	{ "stats", CTLTYPE_STRUCT }, \
 	{ "icmplim", CTLTYPE_INT }, \
+	{ "icmptimestamp", CTLTYPE_INT }, \
 }
 #endif /* __APPLE_API_UNSTABLE */
 

@@ -208,21 +208,21 @@ extern void ipc_table_free(
 #define	it_entries_alloc(its)						\
 	((ipc_entry_t)							\
 	ipc_table_alloc(it_entries_reallocable(its) ?			\
-	    round_page((its)->its_size * sizeof(struct ipc_entry)) :	\
+	    round_page_32((its)->its_size * sizeof(struct ipc_entry)) :	\
 	    (its)->its_size * sizeof(struct ipc_entry)			\
 	))
 
 #define	it_entries_realloc(its, table, nits)				\
 	((ipc_entry_t)							\
 	ipc_table_realloc(						\
-	    round_page((its)->its_size * sizeof(struct ipc_entry)),	\
+	    round_page_32((its)->its_size * sizeof(struct ipc_entry)),	\
 	    (vm_offset_t)(table),					\
-	    round_page((nits)->its_size * sizeof(struct ipc_entry))	\
+	    round_page_32((nits)->its_size * sizeof(struct ipc_entry))	\
 	))
 
 #define	it_entries_free(its, table)					\
 	ipc_table_free(it_entries_reallocable(its) ?			\
-	    round_page((its)->its_size * sizeof(struct ipc_entry)) :	\
+	    round_page_32((its)->its_size * sizeof(struct ipc_entry)) :	\
 	    (its)->its_size * sizeof(struct ipc_entry),			\
 	    (vm_offset_t)(table)					\
 	)

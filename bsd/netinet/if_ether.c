@@ -405,7 +405,7 @@ arprequest(ac, sip, tip, enaddr)
 	(void)memcpy(ea->arp_tpa, tip, sizeof(ea->arp_tpa));
 	sa.sa_family = AF_UNSPEC;
 	sa.sa_len = sizeof(sa);
-        dlil_output(((struct ifnet *)ac)->if_data.default_proto, m, 0, &sa, 0);
+        dlil_output(ifptodlt(((struct ifnet *)ac), PF_INET), m, 0, &sa, 0);
 }
 
 /*

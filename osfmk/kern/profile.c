@@ -464,10 +464,10 @@ task_sample(
 	    profile_thread_id =	/* then start profile thread. */
 		kernel_thread(kernel_task, profile_thread);
 	task->task_profiled = turnon;  
-	actual = task->thr_act_count; 
-	for (i = 0, thr_act = (thread_act_t)queue_first(&task->thr_acts);
+	actual = task->thread_count; 
+	for (i = 0, thr_act = (thread_act_t)queue_first(&task->threads);
 	     i < actual;
-	     i++, thr_act = (thread_act_t)queue_next(&thr_act->thr_acts)) {
+	     i++, thr_act = (thread_act_t)queue_next(&thr_act->task_threads)) {
 		  if (!thr_act->act_profiled_own) {
 		    thr_act->act_profiled = turnon;
 		    if (turnon) {

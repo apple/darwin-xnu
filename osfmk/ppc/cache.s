@@ -26,82 +26,27 @@
  * @OSF_COPYRIGHT@
  */
 
-#include <cpus.h>
-
 #include <ppc/asm.h>
 #include <ppc/proc_reg.h>
-#include <cpus.h>
+#include <ppc/exception.h>
 #include <assym.s>
-#include <mach_debug.h>
-#include <mach/ppc/vm_param.h>
 
-/*
- * extern void sync_cache(vm_offset_t pa, unsigned count);
- *
- * sync_cache takes a physical address and count to sync, thus
- * must not be called for multiple virtual pages.
- *
- * it writes out the data cache and invalidates the instruction
- * cache for the address range in question
+/* These routines run in 32 or 64-bit addressing, and handle
+ * 32 and 128 byte caches.  They do not use compare instructions
+ * on addresses, since compares are 32/64-bit-mode-specific.
  */
 
-ENTRY(sync_cache, TAG_NO_FRAME_USED)
+#define	kDcbf			0x1
+#define	kDcbfb			31
+#define	kDcbi			0x2
+#define	kDcbib			30
+#define	kIcbi			0x4
+#define	kIcbib			29
 
-	/* Switch off data translations */
-	mfmsr	r6
-	rlwinm	r6,r6,0,MSR_FP_BIT+1,MSR_FP_BIT-1	; Force floating point off
-	rlwinm	r6,r6,0,MSR_VEC_BIT+1,MSR_VEC_BIT-1	; Force vectors off
-	rlwinm	r7,	r6,	0,	MSR_DR_BIT+1,	MSR_DR_BIT-1
-	mtmsr	r7
-	isync
-
-	/* Check to see if the address is aligned. */
-	add	r8, r3,r4
-	andi.	r8,r8,(CACHE_LINE_SIZE-1)
-	beq-	.L_sync_check
-	addi	r4,r4,CACHE_LINE_SIZE
-	li	r7,(CACHE_LINE_SIZE-1)	/* Align buffer & count - avoid overflow problems */
-	andc	r4,r4,r7
-	andc	r3,r3,r7
-
-.L_sync_check:
-	cmpwi	r4,	CACHE_LINE_SIZE
-	ble	.L_sync_one_line
-	
-	/* Make ctr hold count of how many times we should loop */
-	addi	r8,	r4,	(CACHE_LINE_SIZE-1)
-	srwi	r8,	r8,	CACHE_LINE_POW2
-	mtctr	r8
-
-	/* loop to flush the data cache */
-.L_sync_data_loop:
-	subic	r4,	r4,	CACHE_LINE_SIZE
-	dcbf	r3,	r4
-	bdnz	.L_sync_data_loop
-	
-	sync
-	mtctr	r8
-
-	/* loop to invalidate the instruction cache */
-.L_sync_inval_loop:
-	icbi	r3,	r4
-	addic	r4,	r4,	CACHE_LINE_SIZE
-	bdnz	.L_sync_inval_loop
-
-.L_sync_cache_done:
-	sync			/* Finish physical writes */
-	mtmsr	r6		/* Restore original translations */
-	isync			/* Ensure data translations are on */
-	blr
-
-.L_sync_one_line:
-	dcbf	0,r3
-	sync
-	icbi	0,r3
-	b	.L_sync_cache_done
 
 /*
  * extern void flush_dcache(vm_offset_t addr, unsigned count, boolean phys);
+ * extern void flush_dcache64(addr64_t addr, unsigned count, boolean phys);
  *
  * flush_dcache takes a virtual or physical address and count to flush
  * and (can be called for multiple virtual pages).
@@ -112,172 +57,222 @@ ENTRY(sync_cache, TAG_NO_FRAME_USED)
  * if 'phys' is non-zero then physical addresses will be used
  */
 
-ENTRY(flush_dcache, TAG_NO_FRAME_USED)
 
-	/* optionally switch off data translations */
+ 
+        .text
+        .align	5
+        .globl	_flush_dcache
+_flush_dcache:
+        li		r0,kDcbf					// use DCBF instruction
+        rlwinm	r3,r3,0,0,31				// truncate address in case this is a 64-bit machine
+        b		cache_op_join				// join common code
 
-	cmpwi	r5,	0
-	mfmsr	r6
-	beq+	0f
-	rlwinm	r6,r6,0,MSR_FP_BIT+1,MSR_FP_BIT-1	; Force floating point off
-	rlwinm	r6,r6,0,MSR_VEC_BIT+1,MSR_VEC_BIT-1	; Force vectors off
-	rlwinm	r7,	r6,	0,	MSR_DR_BIT+1,	MSR_DR_BIT-1
-	mtmsr	r7
-	isync
-0:	
-
-	/* Check to see if the address is aligned. */
-	add	r8, r3,r4
-	andi.	r8,r8,(CACHE_LINE_SIZE-1)
-	beq-	.L_flush_dcache_check
-	addi	r4,r4,CACHE_LINE_SIZE
-	li	r7,(CACHE_LINE_SIZE-1)	/* Align buffer & count - avoid overflow problems */
-	andc	r4,r4,r7
-	andc	r3,r3,r7
-
-.L_flush_dcache_check:
-	cmpwi	r4,	CACHE_LINE_SIZE
-	ble	.L_flush_dcache_one_line
-	
-	/* Make ctr hold count of how many times we should loop */
-	addi	r8,	r4,	(CACHE_LINE_SIZE-1)
-	srwi	r8,	r8,	CACHE_LINE_POW2
-	mtctr	r8
-
-.L_flush_dcache_flush_loop:
-	subic	r4,	r4,	CACHE_LINE_SIZE
-	dcbf	r3,	r4
-	bdnz	.L_flush_dcache_flush_loop
-
-.L_flush_dcache_done:
-	/* Sync restore msr if it was modified */
-	cmpwi	r5,	0
-	sync			/* make sure invalidates have completed */
-	beq+	0f
-	mtmsr	r6		/* Restore original translations */
-	isync			/* Ensure data translations are on */
-0:
-	blr
-
-.L_flush_dcache_one_line:
-	xor	r4,r4,r4
-	dcbf	0,r3
-	b	.L_flush_dcache_done
+        .align	5
+        .globl	_flush_dcache64
+_flush_dcache64:
+		rlwinm	r3,r3,0,1,0					; Duplicate high half of long long paddr into top of reg
+		li		r0,kDcbf					// use DCBF instruction
+		rlwimi	r3,r4,0,0,31				; Combine bottom of long long to full 64-bits
+		mr		r4,r5						; Move count
+		mr		r5,r6						; Move physical flag
+        b		cache_op_join				// join common code
 
 
 /*
  * extern void invalidate_dcache(vm_offset_t va, unsigned count, boolean phys);
+ * extern void invalidate_dcache64(addr64_t va, unsigned count, boolean phys);
  *
  * invalidate_dcache takes a virtual or physical address and count to
  * invalidate and (can be called for multiple virtual pages).
  *
  * it invalidates the data cache for the address range in question
  */
+ 
+        .globl	_invalidate_dcache
+_invalidate_dcache:
+        li		r0,kDcbi					// use DCBI instruction
+        rlwinm	r3,r3,0,0,31				// truncate address in case this is a 64-bit machine
+        b		cache_op_join				// join common code
 
-ENTRY(invalidate_dcache, TAG_NO_FRAME_USED)
 
-	/* optionally switch off data translations */
-
-	cmpwi	r5,	0
-	mfmsr	r6
-	beq+	0f
-	rlwinm	r6,r6,0,MSR_FP_BIT+1,MSR_FP_BIT-1	; Force floating point off
-	rlwinm	r6,r6,0,MSR_VEC_BIT+1,MSR_VEC_BIT-1	; Force vectors off
-	rlwinm	r7,	r6,	0,	MSR_DR_BIT+1,	MSR_DR_BIT-1
-	mtmsr	r7
-	isync
-0:	
-
-	/* Check to see if the address is aligned. */
-	add	r8, r3,r4
-	andi.	r8,r8,(CACHE_LINE_SIZE-1)
-	beq-	.L_invalidate_dcache_check
-	addi	r4,r4,CACHE_LINE_SIZE
-	li	r7,(CACHE_LINE_SIZE-1)	/* Align buffer & count - avoid overflow problems */
-	andc	r4,r4,r7
-	andc	r3,r3,r7
-
-.L_invalidate_dcache_check:
-	cmpwi	r4,	CACHE_LINE_SIZE
-	ble	.L_invalidate_dcache_one_line
-	
-	/* Make ctr hold count of how many times we should loop */
-	addi	r8,	r4,	(CACHE_LINE_SIZE-1)
-	srwi	r8,	r8,	CACHE_LINE_POW2
-	mtctr	r8
-
-.L_invalidate_dcache_invalidate_loop:
-	subic	r4,	r4,	CACHE_LINE_SIZE
-	dcbi	r3,	r4
-	bdnz	.L_invalidate_dcache_invalidate_loop
-
-.L_invalidate_dcache_done:
-	/* Sync restore msr if it was modified */
-	cmpwi	r5,	0
-	sync			/* make sure invalidates have completed */
-	beq+	0f
-	mtmsr	r6		/* Restore original translations */
-	isync			/* Ensure data translations are on */
-0:
-	blr
-
-.L_invalidate_dcache_one_line:
-	xor	r4,r4,r4
-	dcbi	0,r3
-	b	.L_invalidate_dcache_done
+        .align	5
+        .globl	_invalidate_dcache64
+_invalidate_dcache64:
+		rlwinm	r3,r3,0,1,0					; Duplicate high half of long long paddr into top of reg
+        li		r0,kDcbi					// use DCBI instruction
+		rlwimi	r3,r4,0,0,31				; Combine bottom of long long to full 64-bits
+		mr		r4,r5						; Move count
+		mr		r5,r6						; Move physical flag
+        b		cache_op_join				// join common code
 
 /*
  * extern void invalidate_icache(vm_offset_t addr, unsigned cnt, boolean phys);
+ * extern void invalidate_icache64(addr64_t addr, unsigned cnt, boolean phys);
  *
  * invalidate_icache takes a virtual or physical address and
  * count to invalidate, (can be called for multiple virtual pages).
  *
  * it invalidates the instruction cache for the address range in question.
  */
+ 
+        .globl	_invalidate_icache
+_invalidate_icache:
+        li		r0,kIcbi					// use ICBI instruction
+        rlwinm	r3,r3,0,0,31				// truncate address in case this is a 64-bit machine
+        b		cache_op_join				// join common code
+        
 
-ENTRY(invalidate_icache, TAG_NO_FRAME_USED)
+        .align	5
+        .globl	_invalidate_icache64
+_invalidate_icache64:
+		rlwinm	r3,r3,0,1,0					; Duplicate high half of long long paddr into top of reg
+        li		r0,kIcbi					// use ICBI instruction
+		rlwimi	r3,r4,0,0,31				; Combine bottom of long long to full 64-bits
+		mr		r4,r5						; Move count
+		mr		r5,r6						; Move physical flag
+        b		cache_op_join				// join common code
+                        
+/*
+ * extern void sync_ppage(ppnum_t pa);
+ *
+ * sync_ppage takes a physical page number
+ *
+ * it writes out the data cache and invalidates the instruction
+ * cache for the address range in question
+ */
 
-	/* optionally switch off data translations */
-	cmpwi	r5,	0
-	mfmsr	r6
-	beq+	0f
-	rlwinm	r6,r6,0,MSR_FP_BIT+1,MSR_FP_BIT-1	; Force floating point off
-	rlwinm	r6,r6,0,MSR_VEC_BIT+1,MSR_VEC_BIT-1	; Force vectors off
-	rlwinm	r7,	r6,	0,	MSR_DR_BIT+1,	MSR_DR_BIT-1
-	mtmsr	r7
-	isync
-0:	
+        .globl	_sync_ppage
+        .align	5
+_sync_ppage:								// Should be the most commonly called routine, by far 
+		mfsprg	r2,2
+        li		r0,kDcbf+kIcbi				// we need to dcbf and then icbi
+		mtcrf	0x02,r2						; Move pf64Bit to cr6
+        li		r5,1						// set flag for physical addresses
+		li		r4,4096						; Set page size
+		bt++	pf64Bitb,spp64				; Skip if 64-bit (only they take the hint)
+        rlwinm	r3,r3,12,0,19				; Convert to physical address - 32-bit
+        b		cache_op_join				; Join up....
+        
+spp64:	sldi	r3,r3,12					; Convert to physical address - 64-bit        
+        b		cache_op_join				; Join up....
+                        
 
-	/* Check to see if the address is aligned. */
-	add	r8, r3,r4
-	andi.	r8,r8,(CACHE_LINE_SIZE-1)
-	beq-	.L_invalidate_icache_check
-	addi	r4,r4,CACHE_LINE_SIZE
-	li	r7,(CACHE_LINE_SIZE-1)	/* Align buffer & count - avoid overflow problems */
-	andc	r4,r4,r7
-	andc	r3,r3,r7
 
-.L_invalidate_icache_check:
-	cmpwi	r4,	CACHE_LINE_SIZE
-	ble	.L_invalidate_icache_one_line
-	
-	/* Make ctr hold count of how many times we should loop */
-	addi	r8,	r4,	(CACHE_LINE_SIZE-1)
-	srwi	r8,	r8,	CACHE_LINE_POW2
-	mtctr	r8
+/*
+ * extern void sync_cache_virtual(vm_offset_t addr, unsigned count);
+ *
+ * Like "sync_cache", except it takes a virtual address and byte count.
+ * It flushes the data cache, invalidates the I cache, and sync's.
+ */
+ 
+        .globl	_sync_cache_virtual
+        .align	5
+_sync_cache_virtual:
+        li		r0,kDcbf+kIcbi				// we need to dcbf and then icbi
+        li		r5,0						// set flag for virtual addresses
+        b		cache_op_join				// join common code
+        
+                        
+/*
+ * extern void sync_cache(vm_offset_t pa, unsigned count);
+ * extern void sync_cache64(addr64_t pa, unsigned count);
+ *
+ * sync_cache takes a physical address and count to sync, thus
+ * must not be called for multiple virtual pages.
+ *
+ * it writes out the data cache and invalidates the instruction
+ * cache for the address range in question
+ */
 
-.L_invalidate_icache_invalidate_loop:
-	subic	r4,	r4,	CACHE_LINE_SIZE
-	icbi	r3,	r4
-	bdnz	.L_invalidate_icache_invalidate_loop
+        .globl	_sync_cache
+        .align	5
+_sync_cache:
+        li		r0,kDcbf+kIcbi				// we need to dcbf and then icbi
+        li		r5,1						// set flag for physical addresses
+        rlwinm	r3,r3,0,0,31				// truncate address in case this is a 64-bit machine
+        b		cache_op_join				// join common code
 
-.L_invalidate_icache_done:
-	sync			/* make sure invalidates have completed */
-	mtmsr	r6		/* Restore original translations */
-	isync			/* Ensure data translations are on */
-	blr
+        .globl	_sync_cache64
+        .align	5
+_sync_cache64: 
+		rlwinm	r3,r3,0,1,0					; Duplicate high half of long long paddr into top of reg
+        li		r0,kDcbf+kIcbi				// we need to dcbf and then icbi
+		rlwimi	r3,r4,0,0,31				; Combine bottom of long long to full 64-bits
+       	mr		r4,r5						; Copy over the length
+        li		r5,1						// set flag for physical addresses
 
-.L_invalidate_icache_one_line:
-	xor	r4,r4,r4
-	icbi	0,r3
-	b	.L_invalidate_icache_done
+        
+        // Common code to handle the cache operations.
+
+cache_op_join:								// here with r3=addr, r4=count, r5=phys flag, r0=bits
+        mfsprg	r10,2						// r10 <- processor feature flags
+        cmpwi	cr5,r5,0					// using physical addresses?
+        mtcrf	0x01,r0						// move kDcbf, kDcbi, and kIcbi bits to CR7
+        andi.	r9,r10,pf32Byte+pf128Byte	// r9 <- cache line size
+        mtcrf	0x02,r10					// move pf64Bit bit to CR6
+        subi	r8,r9,1						// r8 <- (linesize-1)
+        beq--	cr5,cache_op_2				// skip if using virtual addresses
+        
+        bf--	pf64Bitb,cache_op_not64		// This is not a 64-bit machine
+       
+        srdi	r12,r3,31					// Slide bit 32 to bit 63
+        cmpldi	r12,1						// Are we in the I/O mapped area?
+        beqlr--								// No cache ops allowed here...
+        
+cache_op_not64:
+        mflr	r12							// save return address
+        bl		EXT(ml_set_physical)		// turn on physical addressing
+        mtlr	r12							// restore return address
+
+        // get r3=first cache line, r4=first line not in set, r6=byte count
+        
+cache_op_2:        
+        add		r7,r3,r4					// point to 1st byte not to operate on
+        andc	r3,r3,r8					// r3 <- 1st line to operate on
+        add		r4,r7,r8					// round up
+        andc	r4,r4,r8					// r4 <- 1st line not to operate on
+        sub.	r6,r4,r3					// r6 <- byte count to operate on
+        beq--	cache_op_exit				// nothing to do
+        bf--	kDcbfb,cache_op_6			// no need to dcbf
+        
+        
+        // DCBF loop
+        
+cache_op_5:
+        sub.	r6,r6,r9					// more to go?
+        dcbf	r6,r3						// flush next line to RAM
+        bne		cache_op_5					// loop if more to go
+        sync								// make sure the data reaches RAM
+        sub		r6,r4,r3					// reset count
+
+
+        // ICBI loop
+        
+cache_op_6:
+        bf--	kIcbib,cache_op_8			// no need to icbi
+cache_op_7:
+        sub.	r6,r6,r9					// more to go?
+        icbi	r6,r3						// invalidate next line
+        bne		cache_op_7
+        sub		r6,r4,r3					// reset count
+        isync
+        sync
+        
+        
+        // DCBI loop
+        
+cache_op_8:
+        bf++	kDcbib,cache_op_exit		// no need to dcbi
+cache_op_9:
+        sub.	r6,r6,r9					// more to go?
+        dcbi	r6,r3						// invalidate next line
+        bne		cache_op_9
+        sync
+        
+        
+        // restore MSR iff necessary and done
+        
+cache_op_exit:
+        beqlr--	cr5							// if using virtual addresses, no need to restore MSR
+        b		EXT(ml_restore)				// restore MSR and return
+

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2002 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2003 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -261,6 +261,7 @@ struct iso_mnt {
 	int logical_block_size;
 	int im_bshift;
 	int im_bmask;
+	int im_sector_size;
 	
 	int volume_space_size;
 	struct netexport im_export;
@@ -276,6 +277,10 @@ struct iso_mnt {
 	struct timespec creation_date;				/* needed for getattrlist */
 	struct timespec modification_date;			/* needed for getattrlist */
 	u_char volume_id[32];						/* name of volume */
+	struct vnode *phys_devvp;					/* device for 2352-byte blocks */
+	struct CDTOC *toc;							/* the TOC, or NULL for none */
+	int video_dir_start;						/* start sector of the "MPEGAV" dir */
+	int video_dir_end;							/* sector following end of "MPEGAV" dir */
 };
 
 /* bit settings for iso_mnt.im_flags2 */
@@ -286,12 +291,19 @@ struct iso_mnt {
  */
 #define	IMF2_IS_CDXA	0x00000001
 
+/* CD is Video CD (version < 2.0) */
+#define IMF2_IS_VCD		0x00000002
+
 #define VFSTOISOFS(mp)	((struct iso_mnt *)((mp)->mnt_data))
 
 #define blkoff(imp, loc)	((loc) & (imp)->im_bmask)
 #define lblktosize(imp, blk)	((blk) << (imp)->im_bshift)
 #define lblkno(imp, loc)	((loc) >> (imp)->im_bshift)
 #define blksize(imp, ip, lbn)	((imp)->logical_block_size)
+
+#define SECTOFF(imp, off)	\
+	(off_t)(((off) / (imp)->im_sector_size) * (imp)->im_sector_size)
+
 
 int cd9660_mount __P((struct mount *,
 	    char *, caddr_t, struct nameidata *, struct proc *));
@@ -316,6 +328,7 @@ extern int (**cd9660_specop_p)(void *);
 #if FIFO
 extern int (**cd9660_fifoop_p)(void *);
 #endif
+extern int (**cd9660_cdxaop_p)(void *);
 
 static __inline int
 isonum_711(p)
@@ -389,8 +402,8 @@ isonum_733(p)
 
 int isofncmp __P((u_char *, int, u_char *, int));
 int ucsfncmp __P((u_int16_t *, int, u_int16_t *, int));
-void isofntrans __P((u_char *, int, u_char *, u_short *, int));
-void ucsfntrans __P((u_int16_t *, int, u_char *, u_short *, int));
+void isofntrans __P((u_char *, int, u_char *, u_short *, int, int));
+void ucsfntrans __P((u_int16_t *, int, u_char *, u_short *, int, int));
 ino_t isodirino __P((struct iso_directory_record *, struct iso_mnt *));
 int attrcalcsize __P((struct attrlist *attrlist));
 void packattrblk __P((struct attrlist *alist, struct vnode *vp,
@@ -398,9 +411,68 @@ void packattrblk __P((struct attrlist *alist, struct vnode *vp,
 
 
 /*
- * Associated files have a leading '='.
+ * Associated files have a leading "._".
  */
-#define	ASSOCCHAR	'='
+#define	ASSOCCHAR1	'.'
+#define	ASSOCCHAR2	'_'
+
+/*
+ * This header is prepended on media tracks, such as Video CD MPEG files.
+ */
+struct riff_header {
+	char riff[4];			// "RIFF"
+	u_int32_t fileSize;		// little endian file size, not including this field or sig
+	char cdxa[4];			// "CDXA"
+	char fmt[4];			// "fmt "
+	u_int32_t fmtSize;		// always 16 (XXX this is an assumption)
+	char fmtData[16];		// CDXA extension of ISO directory entry, padded to 16 bytes
+	char data[4];			// "data"
+	u_int32_t dataSize;		// number of sectors * 2352, little endian
+};
+
+#define CDXA_SECTOR_SIZE	2352
+
+
+/*
+ * AppleDouble constants
+ */
+#define APPLEDOUBLE_MAGIC    0x00051607
+#define APPLEDOUBLE_VERSION  0x00020000
+
+#define APPLEDOUBLE_DATAFORK     1
+#define APPLEDOUBLE_RESFORK      2
+#define APPLEDOUBLE_FINDERINFO   9
+
+/*
+ * Note that  68k alignment is needed to make sure that the first
+ * AppleDoubleEntry (after the numEntries below) is *immediately*
+ * after the numEntries, and not padded by 2 bytes.
+ *
+ * Consult RFC 1740 for details on AppleSingle/AppleDouble formats.
+ */
+#pragma options align=mac68k
+
+struct apple_double_entry {
+	u_int32_t  entryID;
+	u_int32_t  offset;
+	u_int32_t  length;
+};
+typedef struct apple_double_entry apple_double_entry_t;
+
+struct apple_double_header {
+	u_int32_t  magic;
+	u_int32_t  version;
+	u_int8_t  filler[16];
+	u_int16_t  count;
+	apple_double_entry_t  entries[2];	/* FinderInfo + ResourceFork */
+	struct finder_info finfo;
+};
+typedef struct apple_double_header apple_double_header_t;
+
+#define ADH_SIZE  4096
+#define ADH_BLKS  2
+
+#pragma options align=reset
 
 #endif /* __APPLE_API_PRIVATE */
 #endif /* ! _ISO_H_ */

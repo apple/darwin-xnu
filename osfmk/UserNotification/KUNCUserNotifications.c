@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2003 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -47,9 +47,6 @@
  * DEFINES AND STRUCTURES
  */
 
-UNDServerRef gUNDServer = UND_SERVER_NULL;
-
-
 struct UNDReply {
 	decl_mutex_data(,lock)				/* UNDReply lock */
 	int				userLandNotificationKey;
@@ -67,8 +64,10 @@ UNDReply_deallocate(
 	UNDReplyRef		reply)
 {
 	ipc_port_t port;
+
 	UNDReply_lock(reply);
 	port = reply->self_port;
+	assert(IP_VALID(port));
 	ipc_kobject_set(port, IKO_NULL, IKOT_NONE);
 	reply->self_port = IP_NULL;
 	UNDReply_unlock(reply);
@@ -76,6 +75,25 @@ UNDReply_deallocate(
 	ipc_port_dealloc_kernel(port);
 	kfree((vm_offset_t)reply, sizeof(struct UNDReply));
 	return;
+}
+
+static UNDServerRef
+UNDServer_reference(void)
+{
+	UNDServerRef UNDServer;
+	kern_return_t kr;
+
+	kr = host_get_user_notification_port(host_priv_self(), &UNDServer);
+	assert(kr == KERN_SUCCESS);
+	return UNDServer;
+}
+
+static void
+UNDServer_deallocate(
+	UNDServerRef	UNDServer)
+{
+	if (IP_VALID(UNDServer))
+		ipc_port_release_send(UNDServer);
 }
 
 /* 
@@ -184,7 +202,17 @@ KUNCGetNotificationID()
 
 kern_return_t KUNCExecute(char executionPath[1024], int uid, int gid)
 {
-    return UNDExecute_rpc(gUNDServer, executionPath, uid, gid);
+
+	UNDServerRef UNDServer;
+
+	UNDServer = UNDServer_reference();
+	if (IP_VALID(UNDServer)) {
+		kern_return_t kr;
+		kr = UNDExecute_rpc(UNDServer, executionPath, uid, gid);
+		UNDServer_deallocate(UNDServer);
+		return kr;
+	}
+	return MACH_SEND_INVALID_DEST;
 }
 
 kern_return_t KUNCUserNotificationCancel(
@@ -205,9 +233,17 @@ kern_return_t KUNCUserNotificationCancel(
 
 	reply->inprogress = FALSE;
 	if (ulkey = reply->userLandNotificationKey) {
+		UNDServerRef UNDServer;
+
 		reply->userLandNotificationKey = 0;
 		UNDReply_unlock(reply);
-		kr = UNDCancelNotification_rpc(gUNDServer,ulkey);
+
+		UNDServer = UNDServer_reference();
+		if (IP_VALID(UNDServer)) {
+			kr = UNDCancelNotification_rpc(UNDServer,ulkey);
+			UNDServer_deallocate(UNDServer);
+		} else
+			kr = MACH_SEND_INVALID_DEST;
 	} else {
 		UNDReply_unlock(reply);
 		kr = KERN_SUCCESS;
@@ -227,8 +263,12 @@ KUNCUserNotificationDisplayNotice(
 	char		*alertMessage,
 	char		*defaultButtonTitle)
 {
-	kern_return_t kr;
-	kr = UNDDisplayNoticeSimple_rpc(gUNDServer,
+	UNDServerRef UNDServer;
+
+	UNDServer = UNDServer_reference();
+	if (IP_VALID(UNDServer)) {
+		kern_return_t kr;
+		kr = UNDDisplayNoticeSimple_rpc(UNDServer,
 					timeout,
 					flags,
 					iconPath,
@@ -237,7 +277,10 @@ KUNCUserNotificationDisplayNotice(
 					alertHeader,
 					alertMessage,
 					defaultButtonTitle);
-	return kr;
+		UNDServer_deallocate(UNDServer);
+		return kr;
+	}
+	return MACH_SEND_INVALID_DEST;
 }
 
 kern_return_t
@@ -254,9 +297,12 @@ KUNCUserNotificationDisplayAlert(
 	char		*otherButtonTitle,
 	unsigned	*responseFlags)
 {
-	kern_return_t	kr;
+	UNDServerRef	UNDServer;
 	
-	kr = UNDDisplayAlertSimple_rpc(gUNDServer,
+	UNDServer = UNDServer_reference();
+	if (IP_VALID(UNDServer)) {
+		kern_return_t	kr;
+		kr = UNDDisplayAlertSimple_rpc(UNDServer,
 				       timeout,
 				       flags,
 				       iconPath,
@@ -268,7 +314,10 @@ KUNCUserNotificationDisplayAlert(
 				       alternateButtonTitle,
 				       otherButtonTitle,
 				       responseFlags);
-	return kr;
+		UNDServer_deallocate(UNDServer);
+		return kr;
+	}
+	return MACH_SEND_INVALID_DEST;
 }
 
 kern_return_t
@@ -283,8 +332,8 @@ KUNCUserNotificationDisplayFromBundle(
 	int			     contextKey)
 {
 	UNDReplyRef reply = (UNDReplyRef)id;
+	UNDServerRef UNDServer;
 	ipc_port_t reply_port;
-	kern_return_t kr;
 
 	if (reply == UND_REPLY_NULL)
 		return KERN_INVALID_ARGUMENT;
@@ -298,14 +347,21 @@ KUNCUserNotificationDisplayFromBundle(
 	reply_port = ipc_port_make_send(reply->self_port);
 	UNDReply_unlock(reply);
 
-	kr = UNDDisplayCustomFromBundle_rpc(gUNDServer,
+	UNDServer = UNDServer_reference();
+	if (IP_VALID(UNDServer)) {
+		kern_return_t kr;
+
+		kr = UNDDisplayCustomFromBundle_rpc(UNDServer,
 					    reply_port,
 					    bundlePath,
 					    fileName,
 					    fileExtension,
 					    messageKey,
 					    tokenString);
-	return kr;
+		UNDServer_deallocate(UNDServer);
+		return kr;
+	}
+	return MACH_SEND_INVALID_DEST;
 }
 
 /*
@@ -332,6 +388,7 @@ convert_port_to_UNDReply(
 		reply = (UNDReplyRef) port->ip_kobject;
 		assert(reply != UND_REPLY_NULL);
 		ip_unlock(port);
+		return reply;
 	}
 	return UND_REPLY_NULL;
 }
@@ -345,13 +402,7 @@ host_set_UNDServer(
         host_priv_t     host_priv,
         UNDServerRef    server)
 {
-
-	if (host_priv == HOST_PRIV_NULL || server == UND_SERVER_NULL)
-		return KERN_INVALID_ARGUMENT;
-	if (gUNDServer != UND_SERVER_NULL)
-		ipc_port_dealloc_kernel(gUNDServer);
-	gUNDServer = server;
-	return KERN_SUCCESS;
+	return (host_set_user_notification_port(host_priv, server));
 }
 
 /*
@@ -361,11 +412,7 @@ host_set_UNDServer(
 kern_return_t
 host_get_UNDServer(
 	host_priv_t     host_priv,
-	UNDServerRef	*server)
+	UNDServerRef	*serverp)
 {
-	if (host_priv == HOST_PRIV_NULL)
-		return KERN_INVALID_ARGUMENT;
-	 *server = gUNDServer;
-	 return KERN_SUCCESS;
+	return (host_get_user_notification_port(host_priv, serverp));
 }
-

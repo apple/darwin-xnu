@@ -104,8 +104,6 @@ extern int ipsec_bypass;
 #define DBG_FNC_UDP_INPUT	NETDBG_CODE(DBG_NETUDP, (5 << 8))
 #define DBG_FNC_UDP_OUTPUT	NETDBG_CODE(DBG_NETUDP, (6 << 8) | 1)
 
-
-#define __STDC__ 1
 /*
  * UDP protocol implementation.
  * Per RFC 768, August, 1980.
@@ -135,6 +133,8 @@ struct	inpcbinfo udbinfo;
 #endif
 
 extern  int apple_hwcksum_rx;
+extern	int	esp_udp_encap_port;
+extern	u_long  route_generation;
 
 struct	udpstat udpstat;	/* from udp_var.h */
 SYSCTL_STRUCT(_net_inet_udp, UDPCTL_STATS, stats, CTLFLAG_RD,
@@ -429,6 +429,53 @@ doudpcksum:
 		udp_append(last, ip, m, iphlen + sizeof(struct udphdr));
 		return;
 	}
+
+	/*
+	 * UDP to port 4500 with a payload where the first four bytes are
+	 * not zero is a UDP encapsulated IPSec packet. Packets where
+	 * the payload is one byte and that byte is 0xFF are NAT keepalive
+	 * packets. Decapsulate the ESP packet and carry on with IPSec input
+	 * or discard the NAT keep-alive.
+	 */
+	if (ipsec_bypass == 0 && (esp_udp_encap_port & 0xFFFF) != 0 &&
+		uh->uh_dport == ntohs((u_short)esp_udp_encap_port)) {
+		int	payload_len = len - sizeof(struct udphdr) > 4 ? 4 : len - sizeof(struct udphdr);
+		if (m->m_len < iphlen + sizeof(struct udphdr) + payload_len) {
+			if ((m = m_pullup(m, iphlen + sizeof(struct udphdr) + payload_len)) == 0) {
+				udpstat.udps_hdrops++;
+				KERNEL_DEBUG(DBG_FNC_UDP_INPUT | DBG_FUNC_END, 0,0,0,0,0);
+				return;
+			}
+			ip = mtod(m, struct ip *);
+			uh = (struct udphdr *)((caddr_t)ip + iphlen);
+		}
+		/* Check for NAT keepalive packet */
+		if (payload_len == 1 && *(u_int8_t*)((caddr_t)uh + sizeof(struct udphdr)) == 0xFF) {
+			m_freem(m);
+			KERNEL_DEBUG(DBG_FNC_UDP_INPUT | DBG_FUNC_END, 0,0,0,0,0);
+			return;
+		}
+		else if (payload_len == 4 && *(u_int32_t*)((caddr_t)uh + sizeof(struct udphdr)) != 0) {
+			/* UDP encapsulated IPSec packet to pass through NAT */
+			size_t stripsiz;
+
+			stripsiz = sizeof(struct udphdr);
+
+			ip = mtod(m, struct ip *);
+			ovbcopy((caddr_t)ip, (caddr_t)(((u_char *)ip) + stripsiz), iphlen);
+			m->m_data += stripsiz;
+			m->m_len -= stripsiz;
+			m->m_pkthdr.len -= stripsiz;
+			ip = mtod(m, struct ip *);
+			ip->ip_len = ip->ip_len - stripsiz;
+			ip->ip_p = IPPROTO_ESP;
+
+			KERNEL_DEBUG(DBG_FNC_UDP_INPUT | DBG_FUNC_END, 0,0,0,0,0);
+			esp4_input(m, iphlen);
+			return;
+		}
+	}
+
 	/*
 	 * Locate pcb for datagram.
 	 */
@@ -757,6 +804,24 @@ udp_output(inp, m, addr, control, p)
 		goto release;
 	}
 
+	/* If there was a routing change, discard cached route and check
+	 * that we have a valid source address. 
+	 * Reacquire a new source address if INADDR_ANY was specified
+	 */
+
+	if (inp->inp_route.ro_rt && inp->inp_route.ro_rt->generation_id != route_generation) {
+		if (ifa_foraddr(inp->inp_laddr.s_addr) == NULL) { /* src address is gone */
+			if (inp->inp_flags & INP_INADDR_ANY)
+				inp->inp_faddr.s_addr = INADDR_ANY; /* new src will be set later */
+			else {
+				error = EADDRNOTAVAIL;
+				goto release;
+			}
+		}
+		rtfree(inp->inp_route.ro_rt);
+		inp->inp_route.ro_rt = (struct rtentry *)0;
+	}
+
 	if (addr) {
 		laddr = inp->inp_laddr;
 		if (inp->inp_faddr.s_addr != INADDR_ANY) {
@@ -778,6 +843,8 @@ udp_output(inp, m, addr, control, p)
 			goto release;
 		}
 	}
+
+
 	/*
 	 * Calculate data length and get a mbuf
 	 * for UDP and IP headers.
@@ -785,9 +852,7 @@ udp_output(inp, m, addr, control, p)
 	M_PREPEND(m, sizeof(struct udpiphdr), M_DONTWAIT);
 	if (m == 0) {
 		error = ENOBUFS;
-		if (addr)
-			splx(s);
-		goto release;
+		goto abort;
 	}
 
 	/*
@@ -825,7 +890,7 @@ udp_output(inp, m, addr, control, p)
 #if IPSEC
 	if (ipsec_bypass == 0 && ipsec_setsocket(m, inp->inp_socket) != 0) {
 		error = ENOBUFS;
-		goto release;
+		goto abort;
 	}
 #endif /*IPSEC*/
 	error = ip_output(m, inp->inp_options, &inp->inp_route,
@@ -839,6 +904,13 @@ udp_output(inp, m, addr, control, p)
 	}
 	KERNEL_DEBUG(DBG_FNC_UDP_OUTPUT | DBG_FUNC_END, error, 0,0,0,0);
 	return (error);
+
+abort:
+        if (addr) {
+                in_pcbdisconnect(inp);
+                inp->inp_laddr = laddr; /* XXX rehash? */
+                splx(s);
+        }
 
 release:
 	m_freem(m);

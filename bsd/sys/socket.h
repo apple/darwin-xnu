@@ -131,6 +131,7 @@ typedef	_BSD_SOCKLEN_T_	socklen_t;
 #define SO_NREAD	0x1020		/* APPLE: get 1st-packet byte count */
 #define SO_NKE		0x1021		/* APPLE: Install socket-level NKE */
 #define SO_NOSIGPIPE	0x1022		/* APPLE: No SIGPIPE on EPIPE */
+#define SO_NOADDRERR	0x1023		/* APPLE: Returns EADDRNOTAVAIL when src is not available anymore */
 #endif
 /*
  * Structure used for manipulating linger option.
@@ -372,13 +373,13 @@ struct sockaddr_storage {
  * Used value-result for recvmsg, value only for sendmsg.
  */
 struct msghdr {
-	caddr_t	msg_name;		/* optional address */
-	u_int	msg_namelen;		/* size of address */
-	struct	iovec *msg_iov;		/* scatter/gather array */
-	u_int	msg_iovlen;		/* # elements in msg_iov */
-	caddr_t	msg_control;		/* ancillary data, see below */
-	u_int	msg_controllen;		/* ancillary data buffer len */
-	int	msg_flags;		/* flags on received message */
+	caddr_t		msg_name;		/* optional address */
+	socklen_t	msg_namelen;		/* size of address */
+	struct		iovec *msg_iov;		/* scatter/gather array */
+	u_int		msg_iovlen;		/* # elements in msg_iov */
+	caddr_t		msg_control;		/* ancillary data, see below */
+	socklen_t	msg_controllen;		/* ancillary data buffer len */
+	int		msg_flags;		/* flags on received message */
 };
 
 #define	MSG_OOB		0x1		/* process out-of-band data */
@@ -391,6 +392,7 @@ struct msghdr {
 #define	MSG_DONTWAIT	0x80		/* this message should be nonblocking */
 #define	MSG_EOF		0x100		/* data completes connection */
 #ifdef __APPLE__
+#define MSG_WAITSTREAM  0x200           /* wait up to full request.. may return partial */
 #define MSG_FLUSH	0x400		/* Start of 'hold' seq; dump so_temp */
 #define MSG_HOLD	0x800		/* Hold frag in so_temp */
 #define MSG_SEND	0x1000		/* Send the packet in so_temp */
@@ -406,9 +408,9 @@ struct msghdr {
  * of message elements headed by cmsghdr structures.
  */
 struct cmsghdr {
-	u_int	cmsg_len;		/* data byte count, including hdr */
-	int	cmsg_level;		/* originating protocol */
-	int	cmsg_type;		/* protocol-specific type */
+	socklen_t	cmsg_len;		/* data byte count, including hdr */
+	int		cmsg_level;		/* originating protocol */
+	int		cmsg_type;		/* protocol-specific type */
 /* followed by	u_char  cmsg_data[]; */
 };
 
@@ -509,24 +511,24 @@ struct sf_hdtr {
 #include <sys/cdefs.h>
 
 __BEGIN_DECLS
-int	accept __P((int, struct sockaddr *, int *));
-int	bind __P((int, const struct sockaddr *, int));
-int	connect __P((int, const struct sockaddr *, int));
-int	getpeername __P((int, struct sockaddr *, int *));
-int	getsockname __P((int, struct sockaddr *, int *));
+int	accept __P((int, struct sockaddr *, socklen_t *));
+int	bind __P((int, const struct sockaddr *, socklen_t));
+int	connect __P((int, const struct sockaddr *, socklen_t));
+int	getpeername __P((int, struct sockaddr *, socklen_t *));
+int	getsockname __P((int, struct sockaddr *, socklen_t *));
 int	getsockopt __P((int, int, int, void *, int *));
 int	listen __P((int, int));
 ssize_t	recv __P((int, void *, size_t, int));
-ssize_t	recvfrom __P((int, void *, size_t, int, struct sockaddr *, int *));
+ssize_t	recvfrom __P((int, void *, size_t, int, struct sockaddr *, socklen_t *));
 ssize_t	recvmsg __P((int, struct msghdr *, int));
 ssize_t	send __P((int, const void *, size_t, int));
 ssize_t	sendto __P((int, const void *,
-	    size_t, int, const struct sockaddr *, int));
+	    size_t, int, const struct sockaddr *, socklen_t));
 ssize_t	sendmsg __P((int, const struct msghdr *, int));
 #if SENDFILE
 int	sendfile __P((int, int, off_t, size_t, struct sf_hdtr *, off_t *, int));
 #endif
-int	setsockopt __P((int, int, int, const void *, int));
+int	setsockopt __P((int, int, int, const void *, socklen_t));
 int	shutdown __P((int, int));
 int	socket __P((int, int, int));
 int	socketpair __P((int, int, int, int *));

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2003 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -77,10 +77,6 @@
 #include <nfs/nfsnode.h>
 #include <nfs/nfsmount.h>
 
-#ifdef MALLOC_DEFINE
-static MALLOC_DEFINE(M_NFSNODE, "NFS node", "NFS vnode private part");
-#endif
-
 LIST_HEAD(nfsnodehashhead, nfsnode) *nfsnodehashtbl;
 u_long nfsnodehash;
 
@@ -137,19 +133,27 @@ nfs_nget(mntp, fhp, fhsize, npp)
 	register struct vnode *vp;
 	struct vnode *nvp;
 	int error;
+	struct mount *mp;
 
 	/* Check for unmount in progress */
-	if (mntp->mnt_kern_flag & MNTK_UNMOUNT) {
+	if (!mntp || (mntp->mnt_kern_flag & MNTK_UNMOUNT)) {
 		*npp = 0;
-		return (EPERM);
+		return (!mntp ? ENXIO : EPERM);
 	}
 
 	nhpp = NFSNOHASH(nfs_hash(fhp, fhsize));
 loop:
 	for (np = nhpp->lh_first; np != 0; np = np->n_hash.le_next) {
-		if (mntp != NFSTOV(np)->v_mount || np->n_fhsize != fhsize ||
+		mp = (np->n_flag & NINIT) ? np->n_mount : NFSTOV(np)->v_mount;
+		if (mntp != mp || np->n_fhsize != fhsize ||
 		    bcmp((caddr_t)fhp, (caddr_t)np->n_fhp, fhsize))
 			continue;
+		/* if the node is still being initialized, sleep on it */
+		if (np->n_flag & NINIT) {
+			np->n_flag |= NWINIT;
+			tsleep(np, PINOD, "nfsngt", 0);
+			goto loop;
+		}
 		vp = NFSTOV(np);
 		if (vget(vp, LK_EXCLUSIVE, p))
 			goto loop;
@@ -170,29 +174,19 @@ loop:
 	nfs_node_hash_lock = 1;
 
 	/*
-	 * Do the MALLOC before the getnewvnode since doing so afterward
-	 * might cause a bogus v_data pointer to get dereferenced
-	 * elsewhere if MALLOC should block.
+	 * allocate and initialize nfsnode and stick it in the hash
+	 * before calling getnewvnode().  Anyone finding it in the
+	 * hash before initialization is complete will wait for it.
 	 */
 	MALLOC_ZONE(np, struct nfsnode *, sizeof *np, M_NFSNODE, M_WAITOK);
-		
-	error = getnewvnode(VT_NFS, mntp, nfsv2_vnodeop_p, &nvp);
-	if (error) {
-		if (nfs_node_hash_lock < 0)
-			wakeup(&nfs_node_hash_lock);
-		nfs_node_hash_lock = 0;
-		*npp = 0;
-		FREE_ZONE(np, sizeof *np, M_NFSNODE);
-		return (error);
-	}
-	vp = nvp;
 	bzero((caddr_t)np, sizeof *np);
-	vp->v_data = np;
-	np->n_vnode = vp;
-	/*
-	 * Insert the nfsnode in the hash queue for its new file handle
-	 */
-	LIST_INSERT_HEAD(nhpp, np, n_hash);
+	np->n_flag |= NINIT;
+	np->n_mount = mntp;
+	lockinit(&np->n_lock, PINOD, "nfsnode", 0, 0);
+	/* lock the new nfsnode */
+	lockmgr(&np->n_lock, LK_EXCLUSIVE, NULL, p);
+
+	/* Insert the nfsnode in the hash queue for its new file handle */
 	if (fhsize > NFS_SMALLFH) {
 		MALLOC_ZONE(np->n_fhp, nfsfh_t *,
 				fhsize, M_NFSBIGFH, M_WAITOK);
@@ -200,16 +194,36 @@ loop:
 		np->n_fhp = &np->n_fh;
 	bcopy((caddr_t)fhp, (caddr_t)np->n_fhp, fhsize);
 	np->n_fhsize = fhsize;
-	*npp = np;
+	LIST_INSERT_HEAD(nhpp, np, n_hash);
+	np->n_flag |= NHASHED;
 
+	/* release lock on hash table */
 	if (nfs_node_hash_lock < 0)
 		wakeup(&nfs_node_hash_lock);
 	nfs_node_hash_lock = 0;
 
-	/*
-	 * Lock the new nfsnode.
-	 */
-	error =	vn_lock(vp, LK_EXCLUSIVE | LK_RETRY, p);
+	/* now, attempt to get a new vnode */
+	error = getnewvnode(VT_NFS, mntp, nfsv2_vnodeop_p, &nvp);
+	if (error) {
+		LIST_REMOVE(np, n_hash);
+		np->n_flag &= ~NHASHED;
+		if (np->n_fhsize > NFS_SMALLFH)
+			FREE_ZONE((caddr_t)np->n_fhp, np->n_fhsize, M_NFSBIGFH);
+		FREE_ZONE(np, sizeof *np, M_NFSNODE);
+		*npp = 0;
+		return (error);
+	}
+	vp = nvp;
+	vp->v_data = np;
+	np->n_vnode = vp;
+	*npp = np;
+
+	/* node is now initialized, check if anyone's waiting for it */
+	np->n_flag &= ~NINIT;
+	if (np->n_flag & NWINIT) {
+		np->n_flag &= ~NWINIT;
+		wakeup((caddr_t)np);
+	}
 
 	return (error);
 }
@@ -243,35 +257,17 @@ nfs_inactive(ap)
 #if DIAGNOSTIC
 		kprintf("nfs_inactive removing %s, dvp=%x, a_vp=%x, ap=%x, np=%x, sp=%x\n", &sp->s_name[0], (unsigned)sp->s_dvp, (unsigned)ap->a_vp, (unsigned)ap, (unsigned)np, (unsigned)sp);
 #endif
-		/*
-		 * We get a reference (vget) to ensure getnewvnode()
-		 * doesn't recycle vp while we're asleep awaiting I/O.
-		 * Note we don't need the reference unless usecount is
-		 * already zero.  In the case of a forcible unmount it
-		 * wont be zero and doing a vget would fail because
-		 * vclean holds VXLOCK.
-		 */
-                if (ap->a_vp->v_usecount > 0) {
-                        VREF(ap->a_vp);
-                } else if (vget(ap->a_vp, 0, ap->a_p))
-			panic("nfs_inactive: vget failed");
 		(void) nfs_vinvalbuf(ap->a_vp, 0, sp->s_cred, p, 1);
 		np->n_size = 0;
 		ubc_setsize(ap->a_vp, (off_t)0);
-
-                /* We have a problem. The dvp could have gone away on us while
-                 * in the unmount path. Thus it appears as VBAD and we cannot
-                 * use it. If we tried locking the parent (future), for silly
-                 * rename files, it is unclear where we would lock. The unmount
-                 * code just pulls unlocked vnodes as it goes thru its list and
-                 * yanks them. Could unmount be smarter to see if a busy reg vnode has
-                 * a parent, and not yank it yet? Put in more passes at unmount
-                 * time? In the meantime, just check if it went away on us.
-                 * Could have gone away during the nfs_vinvalbuf or ubc_setsize
-                 * which block.  Or perhaps even before nfs_inactive got called.
-                 */
-                if ((sp->s_dvp)->v_type != VBAD) 
-                        nfs_removeit(sp); /* uses the dvp */
+		nfs_removeit(sp);
+		/*
+		 * remove nfsnode from hash now so we can't accidentally find it
+		 * again if another object gets created with the same filehandle
+		 * before this vnode gets reclaimed
+		 */
+		LIST_REMOVE(np, n_hash);
+		np->n_flag &= ~NHASHED;
 		cred = sp->s_cred;
 		if (cred != NOCRED) {
 			sp->s_cred = NOCRED;
@@ -279,10 +275,9 @@ nfs_inactive(ap)
 		}
 		vrele(sp->s_dvp);
 		FREE_ZONE((caddr_t)sp, sizeof (struct sillyrename), M_NFSREQ);
-		vrele(ap->a_vp);
 	}
 	np->n_flag &= (NMODIFIED | NFLUSHINPROG | NFLUSHWANT | NQNFSEVICTED |
-		NQNFSNONCACHE | NQNFSWRITE);
+		NQNFSNONCACHE | NQNFSWRITE | NHASHED);
 	VOP_UNLOCK(ap->a_vp, 0, ap->a_p);
 	return (0);
 }
@@ -305,7 +300,10 @@ nfs_reclaim(ap)
 	if (prtactive && vp->v_usecount != 0)
 		vprint("nfs_reclaim: pushing active", vp);
 
-	LIST_REMOVE(np, n_hash);
+	if (np->n_flag & NHASHED) {
+		LIST_REMOVE(np, n_hash);
+		np->n_flag &= ~NHASHED;
+	}
 
         /*
          * In case we block during FREE_ZONEs below, get the entry out
@@ -397,23 +395,4 @@ nfs_islocked(ap)
 {
 	return (lockstatus(&VTONFS(ap->a_vp)->n_lock));
 
-}
-
-
-/*
- * Nfs abort op, called after namei() when a CREATE/DELETE isn't actually
- * done. Currently nothing to do.
- */
-/* ARGSUSED */
-int
-nfs_abortop(ap)
-	struct vop_abortop_args /* {
-		struct vnode *a_dvp;
-		struct componentname *a_cnp;
-	} */ *ap;
-{
-
-	if ((ap->a_cnp->cn_flags & (HASBUF | SAVESTART)) == HASBUF)
-		FREE_ZONE(ap->a_cnp->cn_pnbuf, ap->a_cnp->cn_pnlen, M_NAMEI);
-	return (0);
 }

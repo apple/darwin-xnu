@@ -1,5 +1,5 @@
-/*	$FreeBSD: src/sys/crypto/des/des.h,v 1.1.2.2 2001/07/03 11:01:31 ume Exp $	*/
-/*	$KAME: des.h,v 1.7 2000/09/18 20:59:21 itojun Exp $	*/
+/*	$FreeBSD: src/sys/crypto/des/des.h,v 1.1.2.3 2002/03/26 10:12:24 ume Exp $	*/
+/*	$KAME: des.h,v 1.8 2001/09/10 04:03:57 itojun Exp $	*/
 
 /* lib/des/des.h */
 /* Copyright (C) 1995-1996 Eric Young (eay@mincom.oz.au)
@@ -61,15 +61,14 @@ extern "C" {
 typedef unsigned char des_cblock[8];
 typedef struct des_ks_struct
 	{
-	union	{
-		des_cblock _;
-		/* make sure things are correct size on machines with
-		 * 8 byte longs */
-		DES_LONG pad[2];
-		} ks;
-#undef _
-#define _	ks._
-	} des_key_schedule[16];
+	union   {
+	des_cblock cblock;
+	/* make sure things are correct size on machines with
+	 * 8 byte longs */
+	DES_LONG deslong[2];
+	} ks;
+	int weak_key;
+} des_key_schedule[16];
 
 #define DES_KEY_SZ 	(sizeof(des_cblock))
 #define DES_SCHEDULE_SZ (sizeof(des_key_schedule))
@@ -85,13 +84,32 @@ extern int des_check_key;	/* defaults to false */
 char *des_options __P((void));
 void des_ecb_encrypt __P((des_cblock *, des_cblock *,
 	des_key_schedule, int));
-void des_encrypt __P((DES_LONG *, des_key_schedule, int));
+
+void des_encrypt1 __P((DES_LONG *, des_key_schedule, int));
 void des_encrypt2 __P((DES_LONG *, des_key_schedule, int));
+void des_encrypt3 __P((DES_LONG *, des_key_schedule, des_key_schedule,
+		      des_key_schedule));
+void des_decrypt3 __P((DES_LONG *, des_key_schedule, des_key_schedule,
+		      des_key_schedule));
+
+void des_ecb3_encrypt __P((des_cblock *, des_cblock *, des_key_schedule, 
+			  des_key_schedule, des_key_schedule, int));
+
+void des_ncbc_encrypt __P((const unsigned char *, unsigned char *, long,
+			  des_key_schedule, des_cblock *, int));
+
+void des_ede3_cbc_encrypt(const unsigned char *, unsigned char *, long,
+			  des_key_schedule, des_key_schedule, 
+			  des_key_schedule, des_cblock *, int);
 
 void des_set_odd_parity __P((des_cblock *));
+void des_fixup_key_parity __P((des_cblock *)); 
 int des_is_weak_key __P((des_cblock *));
 int des_set_key __P((des_cblock *, des_key_schedule));
 int des_key_sched __P((des_cblock *, des_key_schedule));
+int des_set_key_checked __P((des_cblock *, des_key_schedule));
+void des_set_key_unchecked __P((des_cblock *, des_key_schedule));
+int des_check_key_parity __P((des_cblock *));
 
 #ifdef  __cplusplus
 }

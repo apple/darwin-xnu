@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2002 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2003 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -76,6 +76,7 @@
  */
 struct	nfsmount {
 	int	nm_flag;		/* Flags for soft/hard... */
+	int	nm_state;		/* Internal state flags */
 	struct	mount *nm_mountp;	/* Vfs structure for this filesystem */
 	int	nm_numgrps;		/* Max. size of groupslist */
 	struct vnode *nm_dvp;		/* root directory vnode pointer */
@@ -110,17 +111,28 @@ struct	nfsmount {
 	int	nm_numuids;		/* Number of nfsuid mappings */
 	TAILQ_HEAD(, nfsuid) nm_uidlruhead; /* Lists of nfsuid mappings */
 	LIST_HEAD(, nfsuid) nm_uidhashtbl[NFS_MUIDHASHSIZ];
-	TAILQ_HEAD(, buf) nm_bufq;	/* async io buffer queue */
+	TAILQ_HEAD(, nfsbuf) nm_bufq;	/* async io buffer queue */
 	short	nm_bufqlen;		/* number of buffers in queue */
 	short	nm_bufqwant;		/* process wants to add to the queue */
 	int	nm_bufqiods;		/* number of iods processing queue */
+	int	nm_tprintf_initial_delay;	/* delay first "server down" */
+	int	nm_tprintf_delay;	/* delay between "server down" */
 };
+
 
 #if defined(KERNEL)
 /*
  * Convert mount ptr to nfsmount ptr.
  */
-#define VFSTONFS(mp)	((struct nfsmount *)((mp)->mnt_data))
+#define VFSTONFS(mp)	((mp) ? ((struct nfsmount *)((mp)->mnt_data)) : NULL)
+
+#ifndef NFS_TPRINTF_INITIAL_DELAY
+#define NFS_TPRINTF_INITIAL_DELAY	12
+#endif
+
+#ifndef NFS_TPRINTF_DELAY
+#define NFS_TPRINTF_DELAY		30
+#endif
 
 #endif /* KERNEL */
 

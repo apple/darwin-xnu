@@ -89,6 +89,7 @@ struct	sigacts {
 	int	ps_code;		/* for core dump/debugger XXX */
 	int	ps_addr;		/* for core dump/debugger XXX */
 	sigset_t ps_usertramp;		/* SunOS compat; libc sigtramp XXX */
+	sigset_t ps_64regset;		/* signals that want SA_EXSIGINFO args */
 };
 
 /* signal flags */

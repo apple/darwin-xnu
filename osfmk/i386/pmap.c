@@ -116,6 +116,8 @@
 #include <i386/misc_protos.h>
 
 #include <i386/cpuid.h>
+#include <i386/cpu_number.h>
+#include <i386/machine_cpu.h>
 
 #if	MACH_KDB
 #include <ddb/db_command.h>
@@ -127,7 +129,7 @@
 #include <kern/xpr.h>
 
 #if NCPUS > 1
-#include <i386/AT386/mp/mp_events.h>
+#include <i386/mp_events.h>
 #endif
 
 /*
@@ -151,7 +153,7 @@ boolean_t phys_attribute_test(
 			vm_offset_t	phys,
 			int		bits);
 
-void pmap_set_modify(vm_offset_t	phys);
+void pmap_set_modify(ppnum_t            pn);
 
 void phys_attribute_set(
 			vm_offset_t	phys,
@@ -169,6 +171,9 @@ pmap_t	real_pmap[NCPUS];
 
 #define	WRITE_PTE(pte_p, pte_entry)		*(pte_p) = (pte_entry);
 #define	WRITE_PTE_FAST(pte_p, pte_entry)	*(pte_p) = (pte_entry);
+
+#define value_64bit(value)  ((value) & 0xFFFFFFFF00000000LL)
+#define low32(x) ((unsigned int)((x) & 0x00000000ffffffffLL))
 
 /*
  *	Private data structures.
@@ -255,6 +260,7 @@ char	*pmap_phys_attributes;
  */
 #define	PHYS_MODIFIED	INTEL_PTE_MOD	/* page modified */
 #define	PHYS_REFERENCED	INTEL_PTE_REF	/* page referenced */
+#define PHYS_NCACHE	INTEL_PTE_NCACHE
 
 /*
  *	Amount of virtual memory mapped by one
@@ -307,7 +313,7 @@ vm_object_t	pmap_object = VM_OBJECT_NULL;
 
 #if	NCPUS > 1
 /*
- *	We raise the interrupt level to splhigh, to block interprocessor
+ *	We raise the interrupt level to splvm, to block interprocessor
  *	interrupts during pmap operations.  We must take the CPU out of
  *	the cpus_active set while interrupts are blocked.
  */
@@ -361,23 +367,53 @@ lock_t	pmap_system_lock;
 
 #define UNLOCK_PVH(index)	unlock_pvh_pai(index)
 
-#define PMAP_FLUSH_TLBS()						\
+#if	USLOCK_DEBUG
+extern int	max_lock_loops;
+#define LOOP_VAR	int	loop_count = 0
+#define LOOP_CHECK(msg, pmap)						\
+	if (loop_count++ > max_lock_loops) {				\
+		mp_disable_preemption();				\
+	    	kprintf("%s: cpu %d pmap %x, cpus_active %d\n",		\
+			  msg, cpu_number(), pmap, cpus_active);	\
+            	Debugger("deadlock detection");				\
+		mp_enable_preemption();					\
+	    	loop_count = 0;						\
+	}
+#else	/* USLOCK_DEBUG */
+#define LOOP_VAR
+#define LOOP_CHECK(msg, pmap)
+#endif	/* USLOCK_DEBUG */
+
+#define PMAP_UPDATE_TLBS(pmap, s, e)					\
 {									\
-	flush_tlb();							\
-	i386_signal_cpus(MP_TLB_FLUSH);					\
-}
-
-#define	PMAP_RELOAD_TLBS()	{ 		\
-	i386_signal_cpus(MP_TLB_RELOAD);	\
-	set_cr3(kernel_pmap->pdirbase);		\
-}
-
-#define PMAP_INVALIDATE_PAGE(map, addr) {	\
-	if (map == kernel_pmap)			\
-		invlpg((vm_offset_t) addr);	\
-	else					\
-		flush_tlb();			\
-	i386_signal_cpus(MP_TLB_FLUSH);		\
+	cpu_set	cpu_mask;						\
+	cpu_set	users;							\
+									\
+	mp_disable_preemption();					\
+	cpu_mask = 1 << cpu_number();					\
+									\
+	/* Since the pmap is locked, other updates are locked */ 	\
+	/* out, and any pmap_activate has finished. */ 			\
+ 									\
+	/* find other cpus using the pmap */ 				\
+	users = (pmap)->cpus_using & ~cpu_mask;        			\
+	if (users) { 							\
+            LOOP_VAR;							\
+	    /* signal them, and wait for them to finish */ 		\
+	    /* using the pmap */ 					\
+	    signal_cpus(users, (pmap), (s), (e));      			\
+	    while (((pmap)->cpus_using & cpus_active & ~cpu_mask)) {	\
+		LOOP_CHECK("PMAP_UPDATE_TLBS", pmap);			\
+		cpu_pause(); 						\
+	    }								\
+	} 								\
+	/* invalidate our own TLB if pmap is in use */ 			\
+ 									\
+	if ((pmap)->cpus_using & cpu_mask) {   				\
+	    INVALIDATE_TLB((pmap), (s), (e));				\
+	} 								\
+									\
+	mp_enable_preemption();						\
 }
 
 #else	/* NCPUS > 1 */
@@ -406,16 +442,20 @@ lock_t	pmap_system_lock;
 
 #define	PMAP_FLUSH_TLBS()	flush_tlb()
 #define	PMAP_RELOAD_TLBS()	set_cr3(kernel_pmap->pdirbase)
-#define	PMAP_INVALIDATE_PAGE(map, addr) {	\
-		if (map == kernel_pmap)		\
-			invlpg((vm_offset_t) addr);	\
-		else				\
-			flush_tlb();		\
+#define	PMAP_INVALIDATE_PAGE(map, saddr, eaddr) {	\
+		if (map == kernel_pmap)			\
+			invlpg((vm_offset_t) saddr);	\
+		else					\
+			flush_tlb();			\
 }
 
 #endif	/* NCPUS > 1 */
 
 #define MAX_TBIS_SIZE	32		/* > this -> TBIA */ /* XXX */
+
+#define INVALIDATE_TLB(m, s, e) {	\
+	flush_tlb(); 			\
+}
 
 #if	NCPUS > 1
 /*
@@ -425,6 +465,34 @@ cpu_set			cpus_active;
 cpu_set			cpus_idle;
 volatile boolean_t	cpu_update_needed[NCPUS];
 
+#define UPDATE_LIST_SIZE	4
+
+struct pmap_update_item {
+	pmap_t		pmap;		/* pmap to invalidate */
+	vm_offset_t	start;		/* start address to invalidate */
+	vm_offset_t	end;		/* end address to invalidate */
+};
+
+typedef	struct pmap_update_item	*pmap_update_item_t;
+
+/*
+ *	List of pmap updates.  If the list overflows,
+ *	the last entry is changed to invalidate all.
+ */
+struct pmap_update_list {
+	decl_simple_lock_data(,lock)
+	int			count;
+	struct pmap_update_item	item[UPDATE_LIST_SIZE];
+} ;
+typedef	struct pmap_update_list	*pmap_update_list_t;
+
+struct pmap_update_list	cpu_update_list[NCPUS];
+
+extern void signal_cpus(
+			cpu_set		use_list,
+			pmap_t		pmap,
+			vm_offset_t	start,
+			vm_offset_t	end);
 
 #endif	/* NCPUS > 1 */
 
@@ -555,7 +623,7 @@ pmap_map(
 
 	ps = PAGE_SIZE;
 	while (start < end) {
-		pmap_enter(kernel_pmap, virt, start, prot, 0, FALSE);
+		pmap_enter(kernel_pmap, virt, (ppnum_t)i386_btop(start), prot, 0, FALSE);
 		virt += ps;
 		start += ps;
 	}
@@ -598,8 +666,7 @@ pmap_map_bd(
 		start += PAGE_SIZE;
 	}
 
-	PMAP_FLUSH_TLBS();
-
+	flush_tlb();
 	return(virt);
 }
 
@@ -632,9 +699,12 @@ pmap_bootstrap(
 	vm_offset_t	load_start)
 {
 	vm_offset_t	va, tva, paddr;
+	ppnum_t         pn;
 	pt_entry_t	template;
 	pt_entry_t	*pde, *pte, *ptend;
 	vm_size_t	morevm;		/* VM space for kernel map */
+
+	vm_last_addr = VM_MAX_KERNEL_ADDRESS;					/* Set the highest address known to VM */
 
 	/*
 	 *	Set ptes_per_vm_page for general use.
@@ -748,11 +818,11 @@ pmap_bootstrap(
 	if (virtual_end + morevm < VM_MAX_KERNEL_LOADED_ADDRESS + 1)
 		morevm = VM_MAX_KERNEL_LOADED_ADDRESS + 1 - virtual_end;
 
-
 	virtual_end += morevm;
 	for (tva = va; tva < virtual_end; tva += INTEL_PGBYTES) {
 	    if (pte >= ptend) {
-		pmap_next_page(&paddr);
+	        pmap_next_page(&pn);
+		paddr = i386_ptob(pn);
 		pte = (pt_entry_t *)phystokv(paddr);
 		ptend = pte + NPTES;
 		*pde = PA_TO_PTE((vm_offset_t) pte)
@@ -794,6 +864,19 @@ pmap_bootstrap(
 
 	kernel_pmap->pdirbase = kvtophys((vm_offset_t)kernel_pmap->dirbase);
 
+	if (cpuid_features() & CPUID_FEATURE_PAT)
+	{
+		uint64_t pat;
+		uint32_t msr;
+	    
+		msr = 0x277;
+		asm volatile("rdmsr" : "=A" (pat) : "c" (msr));
+	    
+		pat &= ~(0xfULL << 48);
+		pat |= 0x01ULL << 48;
+	    
+		asm volatile("wrmsr" :: "A" (pat), "c" (msr));
+	}
 }
 
 void
@@ -854,6 +937,18 @@ pmap_init(void)
 	s = (vm_size_t) sizeof(struct pv_entry);
 	pv_list_zone = zinit(s, 10000*s, 4096, "pv_list"); /* XXX */
 
+#if	NCPUS > 1
+	/*
+	 *	Set up the pmap request lists
+	 */
+	for (i = 0; i < NCPUS; i++) {
+	    pmap_update_list_t	up = &cpu_update_list[i];
+
+	    simple_lock_init(&up->lock, ETAP_VM_PMAP_UPDATE);
+	    up->count = 0;
+	}
+#endif	/* NCPUS > 1 */
+
 	/*
 	 *	Only now, when all of the data structures are allocated,
 	 *	can we set vm_first_phys and vm_last_phys.  If we set them
@@ -881,14 +976,16 @@ pmap_init(void)
 
 boolean_t
 pmap_verify_free(
-	vm_offset_t	phys)
+		 ppnum_t pn)
 {
+        vm_offset_t	phys;
 	pv_entry_t	pv_h;
 	int		pai;
 	spl_t		spl;
 	boolean_t	result;
 
-	assert(phys != vm_page_fictitious_addr);
+	assert(pn != vm_page_fictitious_addr);
+	phys = (vm_offset_t)i386_ptob(pn);
 	if (!pmap_initialized)
 		return(TRUE);
 
@@ -1002,8 +1099,6 @@ pmap_create(
 		simple_lock(&pmap_cache_lock);
 	}
 
-	assert(p->stats.resident_count == 0);
-	assert(p->stats.wired_count == 0);
 	p->stats.resident_count = 0;
 	p->stats.wired_count = 0;
 
@@ -1050,11 +1145,17 @@ pmap_destroy(
 		 * physically on the right pmap:
 		 */
 
+#if	NCPUS > 1
+		/* force pmap/cr3 update */
+		PMAP_UPDATE_TLBS(p,
+				 VM_MIN_ADDRESS,
+				 VM_MAX_KERNEL_ADDRESS);
+#endif	/* NCPUS > 1 */
 
 		if (real_pmap[my_cpu] == p) {
 			PMAP_CPU_CLR(p, my_cpu);
 			real_pmap[my_cpu] = kernel_pmap;
-			PMAP_RELOAD_TLBS();
+			set_cr3(kernel_pmap->pdirbase);
 		}
 		mp_enable_preemption();
 	}
@@ -1097,8 +1198,14 @@ pmap_destroy(
 	    }
 	
 	}
+
+	/*
+	 * XXX These asserts fail on system shutdown.
+	 *
 	assert(p->stats.resident_count == 0);
 	assert(p->stats.wired_count == 0);
+	 *
+	 */
 
 	/*
 	 *	Add to cache if not already full
@@ -1245,7 +1352,7 @@ pmap_remove_range(
 		    do {
 			prev = cur;
 			if ((cur = prev->next) == PV_ENTRY_NULL) {
-			    panic("pmap-remove: mapping not in pv_list!");
+			  panic("pmap-remove: mapping not in pv_list!");
 			}
 		    } while (cur->va != va || cur->pmap != pmap);
 		    prev->next = cur->next;
@@ -1271,7 +1378,7 @@ pmap_remove_range(
 void
 pmap_remove_some_phys(
 	pmap_t		map,
-	vm_offset_t	phys_addr)
+	ppnum_t         pn)
 {
 
 /* Implement to support working set code */
@@ -1287,21 +1394,35 @@ pmap_remove_some_phys(
  *	rounded to the hardware page size.
  */
 
+
 void
 pmap_remove(
 	pmap_t		map,
-	vm_offset_t	s,
-	vm_offset_t	e)
+	addr64_t	s64,
+	addr64_t	e64)
 {
 	spl_t			spl;
 	register pt_entry_t	*pde;
 	register pt_entry_t	*spte, *epte;
 	vm_offset_t		l;
+	vm_offset_t    s, e;
 
 	if (map == PMAP_NULL)
 		return;
 
 	PMAP_READ_LOCK(map, spl);
+
+	if (value_64bit(s64) || value_64bit(e64)) {
+	  panic("pmap_remove addr overflow");
+	}
+
+	s = (vm_offset_t)low32(s64);
+	e = (vm_offset_t)low32(e64);
+
+	/*
+	 *	Invalidate the translation buffer first
+	 */
+	PMAP_UPDATE_TLBS(map, s, e);
 
 	pde = pmap_pde(map, s);
 
@@ -1319,8 +1440,6 @@ pmap_remove(
 	    pde++;
 	}
 
-	PMAP_FLUSH_TLBS();
-
 	PMAP_READ_UNLOCK(map, spl);
 }
 
@@ -1333,7 +1452,7 @@ pmap_remove(
  */
 void
 pmap_page_protect(
-	vm_offset_t	phys,
+        ppnum_t         pn,
 	vm_prot_t	prot)
 {
 	pv_entry_t		pv_h, prev;
@@ -1343,8 +1462,10 @@ pmap_page_protect(
 	register pmap_t		pmap;
 	spl_t			spl;
 	boolean_t		remove;
+	vm_offset_t             phys;
 
-	assert(phys != vm_page_fictitious_addr);
+	assert(pn != vm_page_fictitious_addr);
+	phys = (vm_offset_t)i386_ptob(pn);
 	if (!valid_page(phys)) {
 	    /*
 	     *	Not a managed page.
@@ -1407,7 +1528,7 @@ pmap_page_protect(
 		    /*
 		     * Invalidate TLBs for all CPUs using this mapping.
 		     */
-		    PMAP_INVALIDATE_PAGE(pmap, va);
+		    PMAP_UPDATE_TLBS(pmap, va, va + PAGE_SIZE);
 		}
 
 		/*
@@ -1516,7 +1637,7 @@ pmap_protect(
 	    case VM_PROT_ALL:
 		return;	/* nothing to do */
 	    default:
-		pmap_remove(map, s, e);
+		pmap_remove(map, (addr64_t)s, (addr64_t)e);
 		return;
 	}
 
@@ -1528,15 +1649,19 @@ pmap_protect(
 	 * XXX should be #if'd for i386
 	 */
 
-	if (cpuid_family == CPUID_FAMILY_386)
+	if (cpuid_family() == CPUID_FAMILY_386)
 	    if (map == kernel_pmap) {
-		    pmap_remove(map, s, e);
+		    pmap_remove(map, (addr64_t)s, (addr64_t)e);
 		    return;
 	    }
 
 	SPLVM(spl);
 	simple_lock(&map->lock);
 
+	/*
+	 *	Invalidate the translation buffer first
+	 */
+	PMAP_UPDATE_TLBS(map, s, e);
 
 	pde = pmap_pde(map, s);
 	while (s < e) {
@@ -1557,8 +1682,6 @@ pmap_protect(
 	    s = l;
 	    pde++;
 	}
-
-	PMAP_FLUSH_TLBS();
 
 	simple_unlock(&map->lock);
 	SPLX(spl);
@@ -1582,7 +1705,7 @@ void
 pmap_enter(
 	register pmap_t		pmap,
 	vm_offset_t		v,
-	register vm_offset_t	pa,
+	ppnum_t                 pn,
 	vm_prot_t		prot,
 	unsigned int 		flags,
 	boolean_t		wired)
@@ -1594,19 +1717,20 @@ pmap_enter(
 	pt_entry_t		template;
 	spl_t			spl;
 	vm_offset_t		old_pa;
+	vm_offset_t             pa = (vm_offset_t)i386_ptob(pn);
 
 	XPR(0x80000000, "%x/%x: pmap_enter %x/%x/%x\n",
 	    current_thread()->top_act,
 	    current_thread(), 
-	    pmap, v, pa);
+	    pmap, v, pn);
 
-	assert(pa != vm_page_fictitious_addr);
+	assert(pn != vm_page_fictitious_addr);
 	if (pmap_debug)
-		printf("pmap(%x, %x)\n", v, pa);
+		printf("pmap(%x, %x)\n", v, pn);
 	if (pmap == PMAP_NULL)
 		return;
 
-	if (cpuid_family == CPUID_FAMILY_386)
+	if (cpuid_family() == CPUID_FAMILY_386)
 	if (pmap == kernel_pmap && (prot & VM_PROT_WRITE) == 0
 	    && !wired /* hack for io_wire */ ) {
 	    /*
@@ -1624,7 +1748,7 @@ pmap_enter(
 		 *	Invalidate the translation buffer,
 		 *	then remove the mapping.
 		 */
-		PMAP_INVALIDATE_PAGE(pmap, v);
+		PMAP_UPDATE_TLBS(pmap, v, v + PAGE_SIZE);
 		pmap_remove_range(pmap, v, pte,
 				  pte + ptes_per_vm_page);
 	    }
@@ -1668,8 +1792,15 @@ Retry:
 	    /*
 	     *	May be changing its wired attribute or protection
 	     */
-		
+	
 	    template = pa_to_pte(pa) | INTEL_PTE_VALID;
+
+	    if(flags & VM_MEM_NOT_CACHEABLE) {
+		if(!(flags & VM_MEM_GUARDED))
+			template |= INTEL_PTE_PTA;
+		template |= INTEL_PTE_NCACHE;
+	    }
+
 	    if (pmap != kernel_pmap)
 		template |= INTEL_PTE_USER;
 	    if (prot & VM_PROT_WRITE)
@@ -1686,8 +1817,7 @@ Retry:
 		}
 	    }
 
-	    PMAP_INVALIDATE_PAGE(pmap, v);
-
+	    PMAP_UPDATE_TLBS(pmap, v, v + PAGE_SIZE);
 	    i = ptes_per_vm_page;
 	    do {
 		if (*pte & INTEL_PTE_MOD)
@@ -1720,7 +1850,7 @@ Retry:
 
 	if (old_pa != (vm_offset_t) 0) {
 
-	    PMAP_INVALIDATE_PAGE(pmap, v);
+	    PMAP_UPDATE_TLBS(pmap, v, v + PAGE_SIZE);
 
 #if	DEBUG_PTE_PAGE
 	    if (pmap != kernel_pmap)
@@ -1884,7 +2014,7 @@ RetryPvList:
 			     *	Invalidate the translation buffer,
 			     *	then remove the mapping.
 			     */
-			     PMAP_INVALIDATE_PAGE(pmap, e->va);
+			     PMAP_UPDATE_TLBS(pmap, e->va, e->va + PAGE_SIZE);
                              pmap_remove_range(pmap, e->va, opte,
                                                       opte + ptes_per_vm_page);
 			     /*
@@ -1988,6 +2118,13 @@ RetryPvList:
 	 *	only the pfn changes.
 	 */
 	template = pa_to_pte(pa) | INTEL_PTE_VALID;
+
+	if(flags & VM_MEM_NOT_CACHEABLE) {
+		if(!(flags & VM_MEM_GUARDED))
+			template |= INTEL_PTE_PTA;
+		template |= INTEL_PTE_NCACHE;
+	}
+
 	if (pmap != kernel_pmap)
 		template |= INTEL_PTE_USER;
 	if (prot & VM_PROT_WRITE)
@@ -2027,7 +2164,7 @@ pmap_change_wiring(
 	register int		i;
 	spl_t			spl;
 
-#if 0
+#if 1
 	/*
 	 *	We must grab the pmap system lock because we may
 	 *	change a pte_page queue.
@@ -2065,6 +2202,22 @@ pmap_change_wiring(
 	return;
 #endif
 
+}
+
+ppnum_t 
+pmap_find_phys(pmap_t pmap, addr64_t va)
+{
+  pt_entry_t *ptp;
+  vm_offset_t a32;
+  ppnum_t ppn;
+
+  if (value_64bit(va)) panic("pmap_find_phys 64 bit value");
+  a32 = (vm_offset_t)low32(va);
+  ptp = pmap_pte(pmap, a32);
+  if (PT_ENTRY_NULL == ptp)
+    return 0;
+  ppn = (ppnum_t)i386_btop(pte_to_pa(*ptp));
+  return ppn;
 }
 
 /*
@@ -2121,6 +2274,7 @@ pmap_expand(
 	register vm_offset_t	pa;
 	register int		i;
 	spl_t			spl;
+	ppnum_t                 pn;
 
 	if (map == kernel_pmap)
 	    panic("pmap_expand");
@@ -2143,9 +2297,10 @@ pmap_expand(
 	 *	Map the page to its physical address so that it
 	 *	can be found later.
 	 */
-	pa = m->phys_addr;
+	pn = m->phys_page;
+	pa = i386_ptob(pn);
 	vm_object_lock(pmap_object);
-	vm_page_insert(m, pmap_object, pa);
+	vm_page_insert(m, pmap_object, (vm_object_offset_t)pa);
 	vm_page_lock_queues();
 	vm_page_wire(m);
 	inuse_ptepages_count++;
@@ -2215,6 +2370,22 @@ pmap_copy(
 }
 #endif/* 	0 */
 
+/*
+ * pmap_sync_caches_phys(ppnum_t pa)
+ * 
+ * Invalidates all of the instruction cache on a physical page and
+ * pushes any dirty data from the data cache for the same physical page
+ */
+ 
+void pmap_sync_caches_phys(ppnum_t pa)
+{
+//	if (!(cpuid_features() & CPUID_FEATURE_SS))
+	{
+		__asm__ volatile("wbinvd");	
+	}
+	return;
+}
+
 int	collect_ref;
 int	collect_unref;
 
@@ -2249,7 +2420,7 @@ pmap_collect(
 	 *	Garbage collect map.
 	 */
 	PMAP_READ_LOCK(p, spl);
-	PMAP_FLUSH_TLBS();
+	PMAP_UPDATE_TLBS(p, VM_MIN_ADDRESS, VM_MAX_ADDRESS);
 
 	for (pdp = p->dirbase;
 	     pdp < &p->dirbase[pdenum(p, LINEAR_KERNEL_ADDRESS)];
@@ -2477,7 +2648,7 @@ phys_attribute_clear(
 		    /*
 		     * Invalidate TLBs for all CPUs using this mapping.
 		     */
-		    PMAP_INVALIDATE_PAGE(pmap, va);
+		    PMAP_UPDATE_TLBS(pmap, va, va + PAGE_SIZE);
 		}
 
 		/*
@@ -2623,8 +2794,9 @@ phys_attribute_set(
  */
 
 void pmap_set_modify(
-	register vm_offset_t	phys)
+		     ppnum_t pn)
 {
+        vm_offset_t phys = (vm_offset_t)i386_ptob(pn);
 	phys_attribute_set(phys, PHYS_MODIFIED);
 }
 
@@ -2634,8 +2806,9 @@ void pmap_set_modify(
 
 void
 pmap_clear_modify(
-	register vm_offset_t	phys)
+		  ppnum_t pn)
 {
+        vm_offset_t phys = (vm_offset_t)i386_ptob(pn);
 	phys_attribute_clear(phys, PHYS_MODIFIED);
 }
 
@@ -2648,8 +2821,9 @@ pmap_clear_modify(
 
 boolean_t
 pmap_is_modified(
-	register vm_offset_t	phys)
+		 ppnum_t pn)
 {
+        vm_offset_t phys = (vm_offset_t)i386_ptob(pn);
 	return (phys_attribute_test(phys, PHYS_MODIFIED));
 }
 
@@ -2661,8 +2835,9 @@ pmap_is_modified(
 
 void
 pmap_clear_reference(
-	vm_offset_t	phys)
+		     ppnum_t pn)
 {
+        vm_offset_t phys = (vm_offset_t)i386_ptob(pn);
 	phys_attribute_clear(phys, PHYS_REFERENCED);
 }
 
@@ -2675,8 +2850,9 @@ pmap_clear_reference(
 
 boolean_t
 pmap_is_referenced(
-	vm_offset_t	phys)
+		   ppnum_t pn)
 {
+        vm_offset_t phys = (vm_offset_t)i386_ptob(pn);
 	return (phys_attribute_test(phys, PHYS_REFERENCED));
 }
 
@@ -2703,6 +2879,11 @@ pmap_modify_pages(
 
 	PMAP_READ_LOCK(map, spl);
 
+	/*
+	 *	Invalidate the translation buffer first
+	 */
+	PMAP_UPDATE_TLBS(map, s, e);
+
 	pde = pmap_pde(map, s);
 	while (s && s < e) {
 	    l = (s + PDE_MAPPED_SIZE) & ~(PDE_MAPPED_SIZE-1);
@@ -2727,7 +2908,6 @@ pmap_modify_pages(
 	    s = l;
 	    pde++;
 	}
-	PMAP_FLUSH_TLBS();
 	PMAP_READ_UNLOCK(map, spl);
 }
 
@@ -2744,9 +2924,157 @@ flush_dcache(vm_offset_t addr, unsigned count, int phys)
 }
 
 #if	NCPUS > 1
+/*
+*	    TLB Coherence Code (TLB "shootdown" code)
+* 
+* Threads that belong to the same task share the same address space and
+* hence share a pmap.  However, they  may run on distinct cpus and thus
+* have distinct TLBs that cache page table entries. In order to guarantee
+* the TLBs are consistent, whenever a pmap is changed, all threads that
+* are active in that pmap must have their TLB updated. To keep track of
+* this information, the set of cpus that are currently using a pmap is
+* maintained within each pmap structure (cpus_using). Pmap_activate() and
+* pmap_deactivate add and remove, respectively, a cpu from this set.
+* Since the TLBs are not addressable over the bus, each processor must
+* flush its own TLB; a processor that needs to invalidate another TLB
+* needs to interrupt the processor that owns that TLB to signal the
+* update.
+* 
+* Whenever a pmap is updated, the lock on that pmap is locked, and all
+* cpus using the pmap are signaled to invalidate. All threads that need
+* to activate a pmap must wait for the lock to clear to await any updates
+* in progress before using the pmap. They must ACQUIRE the lock to add
+* their cpu to the cpus_using set. An implicit assumption made
+* throughout the TLB code is that all kernel code that runs at or higher
+* than splvm blocks out update interrupts, and that such code does not
+* touch pageable pages.
+* 
+* A shootdown interrupt serves another function besides signaling a
+* processor to invalidate. The interrupt routine (pmap_update_interrupt)
+* waits for the both the pmap lock (and the kernel pmap lock) to clear,
+* preventing user code from making implicit pmap updates while the
+* sending processor is performing its update. (This could happen via a
+* user data write reference that turns on the modify bit in the page
+* table). It must wait for any kernel updates that may have started
+* concurrently with a user pmap update because the IPC code
+* changes mappings.
+* Spinning on the VALUES of the locks is sufficient (rather than
+* having to acquire the locks) because any updates that occur subsequent
+* to finding the lock unlocked will be signaled via another interrupt.
+* (This assumes the interrupt is cleared before the low level interrupt code 
+* calls pmap_update_interrupt()). 
+* 
+* The signaling processor must wait for any implicit updates in progress
+* to terminate before continuing with its update. Thus it must wait for an
+* acknowledgement of the interrupt from each processor for which such
+* references could be made. For maintaining this information, a set
+* cpus_active is used. A cpu is in this set if and only if it can 
+* use a pmap. When pmap_update_interrupt() is entered, a cpu is removed from
+* this set; when all such cpus are removed, it is safe to update.
+* 
+* Before attempting to acquire the update lock on a pmap, a cpu (A) must
+* be at least at the priority of the interprocessor interrupt
+* (splip<=splvm). Otherwise, A could grab a lock and be interrupted by a
+* kernel update; it would spin forever in pmap_update_interrupt() trying
+* to acquire the user pmap lock it had already acquired. Furthermore A
+* must remove itself from cpus_active.  Otherwise, another cpu holding
+* the lock (B) could be in the process of sending an update signal to A,
+* and thus be waiting for A to remove itself from cpus_active. If A is
+* spinning on the lock at priority this will never happen and a deadlock
+* will result.
+*/
 
-void inline
-pmap_wait_for_clear()
+/*
+ *	Signal another CPU that it must flush its TLB
+ */
+void
+signal_cpus(
+	cpu_set		use_list,
+	pmap_t		pmap,
+	vm_offset_t	start,
+	vm_offset_t	end)
+{
+	register int		which_cpu, j;
+	register pmap_update_list_t	update_list_p;
+
+	while ((which_cpu = ffs((unsigned long)use_list)) != 0) {
+	    which_cpu -= 1;	/* convert to 0 origin */
+
+	    update_list_p = &cpu_update_list[which_cpu];
+	    simple_lock(&update_list_p->lock);
+
+	    j = update_list_p->count;
+	    if (j >= UPDATE_LIST_SIZE) {
+		/*
+		 *	list overflowed.  Change last item to
+		 *	indicate overflow.
+		 */
+		update_list_p->item[UPDATE_LIST_SIZE-1].pmap  = kernel_pmap;
+		update_list_p->item[UPDATE_LIST_SIZE-1].start = VM_MIN_ADDRESS;
+		update_list_p->item[UPDATE_LIST_SIZE-1].end   = VM_MAX_KERNEL_ADDRESS;
+	    }
+	    else {
+		update_list_p->item[j].pmap  = pmap;
+		update_list_p->item[j].start = start;
+		update_list_p->item[j].end   = end;
+		update_list_p->count = j+1;
+	    }
+	    cpu_update_needed[which_cpu] = TRUE;
+	    simple_unlock(&update_list_p->lock);
+
+	    /* if its the kernel pmap, ignore cpus_idle */
+	    if (((cpus_idle & (1 << which_cpu)) == 0) ||
+		(pmap == kernel_pmap) || real_pmap[which_cpu] == pmap)
+	      {
+		i386_signal_cpu(which_cpu, MP_TLB_FLUSH, ASYNC);
+	      }
+	    use_list &= ~(1 << which_cpu);
+	}
+}
+
+void
+process_pmap_updates(
+	register pmap_t		my_pmap)
+{
+	register int		my_cpu;
+	register pmap_update_list_t	update_list_p;
+	register int		j;
+	register pmap_t		pmap;
+
+	mp_disable_preemption();
+	my_cpu = cpu_number();
+	update_list_p = &cpu_update_list[my_cpu];
+	simple_lock(&update_list_p->lock);
+
+	for (j = 0; j < update_list_p->count; j++) {
+	    pmap = update_list_p->item[j].pmap;
+	    if (pmap == my_pmap ||
+		pmap == kernel_pmap) {
+
+	      	if (pmap->ref_count <= 0) {
+			PMAP_CPU_CLR(pmap, my_cpu);
+			real_pmap[my_cpu] = kernel_pmap;
+			set_cr3(kernel_pmap->pdirbase);
+		} else
+			INVALIDATE_TLB(pmap,
+				       update_list_p->item[j].start,
+				       update_list_p->item[j].end);
+	    }
+	} 	
+	update_list_p->count = 0;
+	cpu_update_needed[my_cpu] = FALSE;
+	simple_unlock(&update_list_p->lock);
+	mp_enable_preemption();
+}
+
+/*
+ *	Interrupt routine for TBIA requested from other processor.
+ *	This routine can also be called at all interrupts time if
+ *	the cpu was idle. Some driver interrupt routines might access
+ *	newly allocated vm. (This is the case for hd)
+ */
+void
+pmap_update_interrupt(void)
 {
 	register int		my_cpu;
 	spl_t			s;
@@ -2754,48 +3082,47 @@ pmap_wait_for_clear()
 
 	mp_disable_preemption();
 	my_cpu = cpu_number();
-	
 
+	/*
+	 *	Raise spl to splvm (above splip) to block out pmap_extract
+	 *	from IO code (which would put this cpu back in the active
+	 *	set).
+	 */
+	s = splhigh();
+	
 	my_pmap = real_pmap[my_cpu];
 
 	if (!(my_pmap && pmap_in_use(my_pmap, my_cpu)))
 		my_pmap = kernel_pmap;
 
-	/*
-	 *	Raise spl to splhigh (above splip) to block out pmap_extract
-	 *	from IO code (which would put this cpu back in the active
-	 *	set).
-	 */
-	s = splhigh();
+	do {
+	    LOOP_VAR;
 
-	/*
-	 *	Wait for any pmap updates in progress, on either user
-	 *	or kernel pmap.
-	 */
-	 while (*(volatile hw_lock_t)&my_pmap->lock.interlock ||
-	  *(volatile hw_lock_t)&kernel_pmap->lock.interlock) {
-		continue;
-	}
+	    /*
+	     *	Indicate that we're not using either user or kernel
+	     *	pmap.
+	     */
+	    i_bit_clear(my_cpu, &cpus_active);
 
+	    /*
+	     *	Wait for any pmap updates in progress, on either user
+	     *	or kernel pmap.
+	     */
+	    while (*(volatile hw_lock_t)&my_pmap->lock.interlock ||
+		   *(volatile hw_lock_t)&kernel_pmap->lock.interlock) {
+	    	LOOP_CHECK("pmap_update_interrupt", my_pmap);
+		cpu_pause();
+	    }
+
+	    process_pmap_updates(my_pmap);
+
+	    i_bit_set(my_cpu, &cpus_active);
+
+	} while (cpu_update_needed[my_cpu]);
+	
 	splx(s);
 	mp_enable_preemption();
 }
-
-void
-pmap_flush_tlb_interrupt(void) {
-	pmap_wait_for_clear();
-
-	flush_tlb();
-}
-
-void
-pmap_reload_tlb_interrupt(void) {
-	pmap_wait_for_clear();
-
-	set_cr3(kernel_pmap->pdirbase);
-}
-
-	
 #endif	/* NCPUS > 1 */
 
 #if	MACH_KDB
@@ -2919,21 +3246,22 @@ pmap_movepage(unsigned long from, unsigned long to, vm_size_t size)
 {
 	spl_t	spl;
 	pt_entry_t	*pte, saved_pte;
+
 	/* Lock the kernel map */
+	PMAP_READ_LOCK(kernel_pmap, spl);
 
 
 	while (size > 0) {
-		PMAP_READ_LOCK(kernel_pmap, spl);
 		pte = pmap_pte(kernel_pmap, from);
 		if (pte == NULL)
 			panic("pmap_pagemove from pte NULL");
 		saved_pte = *pte;
 		PMAP_READ_UNLOCK(kernel_pmap, spl);
 
-		pmap_enter(kernel_pmap, to, i386_trunc_page(*pte),
+		pmap_enter(kernel_pmap, to, (ppnum_t)i386_btop(i386_trunc_page(*pte)),
 			VM_PROT_READ|VM_PROT_WRITE, 0, *pte & INTEL_PTE_WIRED);
 
-		pmap_remove(kernel_pmap, from, from+PAGE_SIZE);
+		pmap_remove(kernel_pmap, (addr64_t)from, (addr64_t)(from+PAGE_SIZE));
 
 		PMAP_READ_LOCK(kernel_pmap, spl);
 		pte = pmap_pte(kernel_pmap, to);
@@ -2941,7 +3269,6 @@ pmap_movepage(unsigned long from, unsigned long to, vm_size_t size)
 			panic("pmap_pagemove 'to' pte NULL");
 
 		*pte = saved_pte;
-		PMAP_READ_UNLOCK(kernel_pmap, spl);
 
 		from += PAGE_SIZE;
 		to += PAGE_SIZE;
@@ -2949,7 +3276,10 @@ pmap_movepage(unsigned long from, unsigned long to, vm_size_t size)
 	}
 
 	/* Get the processors to update the TLBs */
-	PMAP_FLUSH_TLBS();
+	PMAP_UPDATE_TLBS(kernel_pmap, from, from+size);
+	PMAP_UPDATE_TLBS(kernel_pmap, to, to+size);
+
+	PMAP_READ_UNLOCK(kernel_pmap, spl);
 
 }
 

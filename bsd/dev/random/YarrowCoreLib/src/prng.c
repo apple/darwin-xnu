@@ -343,8 +343,8 @@ prngForceReseed(PRNG *p, LONGLONG ticks)
 #if	defined(macintosh) || defined(__APPLE__)
 	#if		(defined(TARGET_API_MAC_OSX) || defined(KERNEL_BUILD))
 		struct timeval 	tv;		
-		int32_t			endTime;
-	#else	TARGET_API_MAC_CARBON
+		int64_t			endTime, curTime;
+	#else	/* TARGET_API_MAC_CARBON */
 		UnsignedWide 	uwide;		/* struct needed for Microseconds() */
 		LONGLONG 		start;
 		LONGLONG 		now;
@@ -360,15 +360,11 @@ prngForceReseed(PRNG *p, LONGLONG ticks)
 		#if		(defined(TARGET_API_MAC_OSX) || defined(KERNEL_BUILD))
 			/* note we can't loop for more than a million microseconds */
             #ifdef KERNEL_BUILD
-                microtime (&tv);
+                microuptime (&tv);
             #else
                 gettimeofday(&tv, NULL);
             #endif
-			endTime = tv.tv_usec + ticks;
-			if(endTime > 1000000) {
-				/* handle rollover now */ 
-				endTime -= 1000000;
-			}
+			endTime = (int64_t)tv.tv_sec*1000000LL + (int64_t)tv.tv_usec + ticks;
 		#else	/* TARGET_API_MAC_OSX */
 			Microseconds(&uwide);
 			start = UnsignedWideToUInt64(uwide);
@@ -393,9 +389,10 @@ prngForceReseed(PRNG *p, LONGLONG ticks)
         #ifdef TARGET_API_MAC_OSX
             gettimeofday(&tv, NULL);
         #else
-            microtime (&tv);
+            microuptime (&tv);
+	    curTime = (int64_t)tv.tv_sec*1000000LL + (int64_t)tv.tv_usec;
         #endif
-	} while(tv.tv_usec < endTime);
+	} while(curTime < endTime);
 	#else
 		Microseconds(&uwide);
 		now = UnsignedWideToUInt64(uwide);

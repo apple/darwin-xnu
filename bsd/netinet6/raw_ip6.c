@@ -553,7 +553,9 @@ rip6_attach(struct socket *so, int proto, struct proc *p)
 	inp->in6p_hops = -1;	/* use kernel default */
 	inp->in6p_cksum = -1;
 	MALLOC(inp->in6p_icmp6filt, struct icmp6_filter *,
-	       sizeof(struct icmp6_filter), M_PCB, M_NOWAIT);
+	       sizeof(struct icmp6_filter), M_PCB, M_WAITOK);
+	if (inp->in6p_icmp6filt == NULL)
+		return (ENOMEM);
 	ICMP6_FILTER_SETPASSALL(inp->in6p_icmp6filt);
 	return 0;
 }

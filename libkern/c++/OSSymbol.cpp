@@ -96,7 +96,7 @@ public:
     inline void closeGate() { mutex_lock(poolGate); };
     inline void openGate()  { mutex_unlock(poolGate); };
 
-    OSSymbol *findSymbol(const char *cString, OSSymbol ***replace) const;
+    OSSymbol *findSymbol(const char *cString) const;
     OSSymbol *insertSymbol(OSSymbol *sym);
     void removeSymbol(OSSymbol *sym);
 
@@ -213,7 +213,7 @@ void OSSymbolPool::reconstructSymbols()
         insertSymbol(insert);
 }
 
-OSSymbol *OSSymbolPool::findSymbol(const char *cString, OSSymbol ***replace) const
+OSSymbol *OSSymbolPool::findSymbol(const char *cString) const
 {
     Bucket *thisBucket;
     unsigned int j, inLen, hash;
@@ -223,8 +223,6 @@ OSSymbol *OSSymbolPool::findSymbol(const char *cString, OSSymbol ***replace) con
     thisBucket = &buckets[hash % nBuckets];
     j = thisBucket->count;
 
-    *replace = NULL;
-
     if (!j)
         return 0;
 
@@ -232,28 +230,16 @@ OSSymbol *OSSymbolPool::findSymbol(const char *cString, OSSymbol ***replace) con
         probeSymbol = (OSSymbol *) thisBucket->symbolP;
 
         if (inLen == probeSymbol->length
-        &&  (strcmp(probeSymbol->string, cString) == 0)) {
-	    probeSymbol->retain();
-	    if (probeSymbol->getRetainCount() != 0xffff)
-		return probeSymbol;
-	    else
-		// replace this one
-		*replace = (OSSymbol **) &thisBucket->symbolP;
-        }
+        &&  (strcmp(probeSymbol->string, cString) == 0))
+            return probeSymbol;
 	return 0;
     }
 
     for (list = thisBucket->symbolP; j--; list++) {
         probeSymbol = *list;
         if (inLen == probeSymbol->length
-        &&  (strcmp(probeSymbol->string, cString) == 0)) {
-	    probeSymbol->retain();
-	    if (probeSymbol->getRetainCount() != 0xffff)
-		return probeSymbol;
-	    else
-		// replace this one
-		*replace = list;
-	}
+        &&  (strcmp(probeSymbol->string, cString) == 0))
+            return probeSymbol;
     }
 
     return 0;
@@ -274,7 +260,7 @@ OSSymbol *OSSymbolPool::insertSymbol(OSSymbol *sym)
         thisBucket->symbolP = (OSSymbol **) sym;
         thisBucket->count++;
         count++;
-        return 0;
+        return sym;
     }
 
     if (j == 1) {
@@ -295,7 +281,7 @@ OSSymbol *OSSymbolPool::insertSymbol(OSSymbol *sym)
         if (count > nBuckets)
             reconstructSymbols();
 
-        return 0;
+        return sym;
     }
 
     for (list = thisBucket->symbolP; j--; list++) {
@@ -318,7 +304,7 @@ OSSymbol *OSSymbolPool::insertSymbol(OSSymbol *sym)
     if (count > nBuckets)
         reconstructSymbols();
 
-    return 0;
+    return sym;
 }
 
 void OSSymbolPool::removeSymbol(OSSymbol *sym)
@@ -442,48 +428,62 @@ const OSSymbol *OSSymbol::withString(const OSString *aString)
 
 const OSSymbol *OSSymbol::withCString(const char *cString)
 {
-    OSSymbol **replace;
-
     pool->closeGate();
 
-    OSSymbol *newSymb = pool->findSymbol(cString, &replace);
-    if (!newSymb && (newSymb = new OSSymbol) ) {
-	if (newSymb->OSString::initWithCString(cString)) {
-	    if (replace)
-		*replace = newSymb;
-	    else
-		pool->insertSymbol(newSymb);
-	} else {
-	    newSymb->OSString::free();
-	    newSymb = 0;
-	}
-    }
-    pool->openGate();
+    OSSymbol *oldSymb = pool->findSymbol(cString);
+    if (!oldSymb) {
+        OSSymbol *newSymb = new OSSymbol;
+        if (!newSymb) {
+            pool->openGate();
+            return newSymb;
+        }
 
-    return newSymb;
+	if (newSymb->OSString::initWithCString(cString))
+	    oldSymb = pool->insertSymbol(newSymb);
+        
+        if (newSymb == oldSymb) {
+            pool->openGate();
+            return newSymb;	// return the newly created & inserted symbol.
+        }
+        else
+            // Somebody else inserted the new symbol so free our copy
+	    newSymb->OSString::free();
+    }
+    
+    oldSymb->retain();	// Retain the old symbol before releasing the lock.
+
+    pool->openGate();
+    return oldSymb;
 }
 
 const OSSymbol *OSSymbol::withCStringNoCopy(const char *cString)
 {
-    OSSymbol **replace;
-
     pool->closeGate();
 
-    OSSymbol *newSymb = pool->findSymbol(cString, &replace);
-    if (!newSymb && (newSymb = new OSSymbol) ) {
-	if (newSymb->OSString::initWithCStringNoCopy(cString)) {
-	    if (replace)
-		*replace = newSymb;
-	    else
-		pool->insertSymbol(newSymb);
-	} else {
-	    newSymb->OSString::free();
-	    newSymb = 0;
-	}
-    }
-    pool->openGate();
+    OSSymbol *oldSymb = pool->findSymbol(cString);
+    if (!oldSymb) {
+        OSSymbol *newSymb = new OSSymbol;
+        if (!newSymb) {
+            pool->openGate();
+            return newSymb;
+        }
 
-    return newSymb;
+	if (newSymb->OSString::initWithCStringNoCopy(cString))
+	    oldSymb = pool->insertSymbol(newSymb);
+        
+        if (newSymb == oldSymb) {
+            pool->openGate();
+            return newSymb;	// return the newly created & inserted symbol.
+        }
+        else
+            // Somebody else inserted the new symbol so free our copy
+	    newSymb->OSString::free();
+    }
+    
+    oldSymb->retain();	// Retain the old symbol before releasing the lock.
+
+    pool->openGate();
+    return oldSymb;
 }
 
 void OSSymbol::checkForPageUnload(void *startAddr, void *endAddr)
@@ -506,12 +506,21 @@ void OSSymbol::checkForPageUnload(void *startAddr, void *endAddr)
     pool->openGate();
 }
 
-void OSSymbol::free()
+void OSSymbol::taggedRelease(const void *tag) const
+{
+    super::taggedRelease(tag);
+}
+
+void OSSymbol::taggedRelease(const void *tag, const int when) const
 {
     pool->closeGate();
-    pool->removeSymbol(this);
+    super::taggedRelease(tag, when);
     pool->openGate();
-    
+}
+
+void OSSymbol::free()
+{
+    pool->removeSymbol(this);
     super::free();
 }
 

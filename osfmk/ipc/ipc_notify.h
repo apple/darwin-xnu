@@ -67,9 +67,6 @@
  * Exported interfaces 
  */
 
-/* Initialize the notification subsystem */
-extern void ipc_notify_init(void);
-
 /* Send a port-deleted notification */
 extern void ipc_notify_port_deleted(
 	ipc_port_t		port,

@@ -86,7 +86,7 @@
  *	dependent optimizations for the locking constructs defined
  *	later in kern/lock.h..
  */
-typedef volatile char	hw_lock_data_t;
+typedef volatile int	hw_lock_data_t;
 typedef	hw_lock_data_t	*hw_lock_t;
 #define hw_lock_addr(hwl)	(&(hwl))
 

@@ -205,6 +205,7 @@ public:
      */
     virtual bool serialize(OSSerialize * s) const;
 
+    bool serializeData(IOOptionBits kind, OSSerialize * s) const;
 
     /*!
         @function recordStartupExtensions
@@ -249,8 +250,6 @@ private:
         @param moduleName An OSString containing the name of the module to unload.
      */
     IOReturn unloadModule( OSString * moduleName ) const;
-
-
 };
 
 __BEGIN_DECLS

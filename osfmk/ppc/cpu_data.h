@@ -30,6 +30,12 @@
 #ifndef	PPC_CPU_DATA
 #define PPC_CPU_DATA
 
+typedef struct
+{
+	int		preemption_level;
+	int		simple_lock_count;
+	int		interrupt_level;
+} cpu_data_t;
 
 #define disable_preemption			_disable_preemption
 #define enable_preemption			_enable_preemption
@@ -38,18 +44,25 @@
 #define mp_enable_preemption			_enable_preemption
 #define mp_enable_preemption_no_check		_enable_preemption_no_check
 
-extern	cpu_data_t*				get_cpu_data(void);
-
 extern __inline__ thread_act_t current_act(void) 
 {
 	thread_act_t act;
 	__asm__ volatile("mfsprg %0,1" : "=r" (act));  
 	return act;
-}
+};
+
+/*
+ *	Note that the following function is ONLY guaranteed when preemption or interrupts are disabled
+ */
+extern __inline__ struct per_proc_info *getPerProc(void) 
+{
+	struct per_proc_info *perproc;
+	__asm__ volatile("mfsprg %0,0" : "=r" (perproc));  
+	return perproc;
+};
 
 #define	current_thread()	current_act()->thread
 
-extern void					set_machine_current_thread(thread_t);
 extern void					set_machine_current_act(thread_act_t);
 
 extern int 					get_preemption_level(void);

@@ -26,195 +26,6 @@
  * @OSF_COPYRIGHT@
  */
 /*
- * HISTORY
- * 
- * Revision 1.1.1.1  1998/09/22 21:05:47  wsanchez
- * Import of Mac OS X kernel (~semeria)
- *
- * Revision 1.2  1998/04/29 17:35:26  mburg
- * MK7.3 merger
- *
- * Revision 1.2.47.1  1998/02/03  09:23:57  gdt
- * 	Merge up to MK7.3
- * 	[1998/02/03  09:10:14  gdt]
- *
- * Revision 1.2.45.1  1997/03/27  18:46:16  barbou
- * 	ri-osc CR1557: re-enable thread-specific breakpoints.
- * 	[1995/09/20  15:23:46  bolinger]
- * 	[97/02/25            barbou]
- * 
- * Revision 1.2.21.6  1996/01/09  19:15:21  devrcs
- * 	Changed declarations of 'register foo' to 'register int foo'
- * 	Fixed printfs which print addresses.
- * 	[1995/12/01  21:41:51  jfraser]
- * 
- * 	Merged '64-bit safe' changes from DEC alpha port.
- * 	[1995/11/21  18:02:40  jfraser]
- * 
- * Revision 1.2.21.5  1995/04/07  18:52:54  barbou
- * 	Allow breakpoints on non-resident pages. The breakpoint will
- * 	actually be set when the page is paged in.
- * 	[93/09/23            barbou]
- * 	[95/03/08            barbou]
- * 
- * Revision 1.2.21.4  1995/02/23  21:43:19  alanl
- * 	Merged with DIPC2_SHARED.
- * 	[1995/01/04  20:15:04  alanl]
- * 
- * Revision 1.2.28.1  1994/11/04  09:52:15  dwm
- * 	mk6 CR668 - 1.3b26 merge
- * 	* Revision 1.2.4.5  1994/05/06  18:38:52  tmt
- * 	Merged osc1.3dec/shared with osc1.3b19
- * 	Moved struct db_breakpoint from here to db_break.h.
- * 	Merge Alpha changes into osc1.312b source code.
- * 	64bit cleanup.
- * 	* End1.3merge
- * 	[1994/11/04  08:49:10  dwm]
- * 
- * Revision 1.2.21.2  1994/09/23  01:17:57  ezf
- * 	change marker to not FREE
- * 	[1994/09/22  21:09:19  ezf]
- * 
- * Revision 1.2.21.1  1994/06/11  21:11:24  bolinger
- * 	Merge up to NMK17.2.
- * 	[1994/06/11  20:01:06  bolinger]
- * 
- * Revision 1.2.25.2  1994/10/28  18:56:21  rwd
- * 	Delint.
- * 	[94/10/28            rwd]
- * 
- * Revision 1.2.25.1  1994/08/04  01:42:15  mmp
- * 	23-Jun-94  Stan Smith (stans@ssd.intel.com)
- * 	Let d * delete all breakpoints.
- * 	[1994/06/28  13:54:00  sjs]
- * 
- * Revision 1.2.19.2  1994/04/11  09:34:22  bernadat
- * 	Moved db_breakpoint struct declaration to db_break.h
- * 	[94/03/16            bernadat]
- * 
- * Revision 1.2.19.1  1994/02/08  10:57:22  bernadat
- * 	When setting a breakpoint, force user_space if breakpoint is
- * 	outside kernel_space (like in the case of an emulator).
- * 	[93/09/27            paire]
- * 
- * 	Changed silly decimal display to hex (to match input conventions).
- * 	Change from NORMA_MK14.6 [93/01/09            sjs]
- * 	[93/07/16            bernadat]
- * 	[94/02/07            bernadat]
- * 
- * Revision 1.2.4.3  1993/07/27  18:26:48  elliston
- * 	Add ANSI prototypes.  CR #9523.
- * 	[1993/07/27  18:10:54  elliston]
- * 
- * Revision 1.2.4.2  1993/06/09  02:19:39  gm
- * 	Added to OSF/1 R1.3 from NMK15.0.
- * 	[1993/06/02  20:55:42  jeffc]
- * 
- * Revision 1.2  1993/04/19  16:01:31  devrcs
- * 	Changes from MK78:
- * 	Removed unused variable from db_delete_cmd().
- * 	Added declaration for arg 'count' of db_add_thread_breakpoint().
- * 	[92/05/18            jfriedl]
- * 	Fixed b/tu to b/Tu work if the specified address is valid in the
- * 	 target address space but not the current user space. Explicit
- * 	 user space breakpoints (b/u, b/Tu, etc) will no longer get
- * 	 inserted into the kernel if the specified address is invalid.
- * 	[92/04/18            danner]
- * 	[92/12/18            bruel]
- * 
- * Revision 1.1  1992/09/30  02:00:52  robert
- * 	Initial revision
- * 
- * $EndLog$
- */
-/* CMU_HIST */
-/*
- * Revision 2.11.3.1  92/03/03  16:13:20  jeffreyh
- * 	Pick up changes from TRUNK
- * 	[92/02/26  10:58:37  jeffreyh]
- *
- * Revision 2.12  92/02/19  16:46:24  elf
- * 	Removed one of the many user-unfriendlinesses.
- * 	[92/02/10  17:48:25  af]
- * 
- * Revision 2.11  91/11/12  11:50:24  rvb
- * 	Fixed db_delete_cmd so that just "d" works in user space.
- * 	[91/10/31            rpd]
- * 	Fixed db_delete_thread_breakpoint for zero task_thd.
- * 	[91/10/30            rpd]
- * 
- * Revision 2.10  91/10/09  15:57:41  af
- * 	Supported thread-oriented break points.
- * 	[91/08/29            tak]
- * 
- * Revision 2.9  91/07/09  23:15:39  danner
- *	Conditionalized db_map_addr to work right on the luna. Used a
- *	ifdef luna88k. This is evil, and needs to be fixed.
- *	[91/07/08            danner]
- *
- * Revision 2.2  91/04/10  22:54:50  mbj
- * 	Grabbed 3.0 copyright/disclaimer since ddb comes from 3.0.
- * 	[91/04/09            rvb]
- * 
- * Revision 2.7  91/02/05  17:06:00  mrt
- * 	Changed to new Mach copyright
- * 	[91/01/31  16:17:01  mrt]
- * 
- * Revision 2.6  91/01/08  15:09:03  rpd
- * 	Added db_map_equal, db_map_current, db_map_addr.
- * 	[90/11/10            rpd]
- * 
- * Revision 2.5  90/11/05  14:26:32  rpd
- * 	Initialize db_breakpoints_inserted to TRUE.
- * 	[90/11/04            rpd]
- * 
- * Revision 2.4  90/10/25  14:43:33  rwd
- * 	Added map field to breakpoints.
- * 	Added map argument to db_set_breakpoint, db_delete_breakpoint,
- * 	db_find_breakpoint.  Added db_find_breakpoint_here.
- * 	[90/10/18            rpd]
- * 
- * Revision 2.3  90/09/28  16:57:07  jsb
- * 	Fixed db_breakpoint_free.
- * 	[90/09/18            rpd]
- * 
- * Revision 2.2  90/08/27  21:49:53  dbg
- * 	Reflected changes in db_printsym()'s calling seq.
- * 	[90/08/20            af]
- * 	Clear breakpoints only if inserted.
- * 	Reduce lint.
- * 	[90/08/07            dbg]
- * 	Created.
- * 	[90/07/25            dbg]
- * 
- */
-/* CMU_ENDHIST */
-/* 
- * Mach Operating System
- * Copyright (c) 1991,1990 Carnegie Mellon University
- * All Rights Reserved.
- * 
- * Permission to use, copy, modify and distribute this software and its
- * documentation is hereby granted, provided that both the copyright
- * notice and this permission notice appear in all copies of the
- * software, derivative works or modified versions, and any portions
- * thereof, and that both notices appear in supporting documentation.
- * 
- * CARNEGIE MELLON ALLOWS FREE USE OF THIS SOFTWARE IN ITS "AS IS"
- * CONDITION.  CARNEGIE MELLON DISCLAIMS ANY LIABILITY OF ANY KIND FOR
- * ANY DAMAGES WHATSOEVER RESULTING FROM THE USE OF THIS SOFTWARE.
- * 
- * Carnegie Mellon requests users of this software to return to
- * 
- *  Software Distribution Coordinator  or  Software.Distribution@CS.CMU.EDU
- *  School of Computer Science
- *  Carnegie Mellon University
- *  Pittsburgh PA 15213-3890
- * 
- * any improvements or extensions that they make and grant Carnegie Mellon
- * the rights to redistribute these changes.
- */
-/*
  */
 /*
  *	Author: David B. Golub, Carnegie Mellon University
@@ -388,7 +199,7 @@ db_find_thread_breakpoint(
 {
 	register db_thread_breakpoint_t tp;
 	register task_t task =
-			(thr_act == THR_ACT_NULL || thr_act->kernel_loaded)
+			(thr_act == THR_ACT_NULL)
 					? TASK_NULL : thr_act->task;
 
 	for (tp = bkpt->threads; tp; tp = tp->tb_next) {
@@ -630,7 +441,7 @@ db_set_breakpoints(void)
 	db_expr_t	inst;
 	thread_act_t	cur_act = current_act();
 	task_t		cur_task =
-				(cur_act && !cur_act->kernel_loaded) ?
+				(cur_act) ?
 					cur_act->task : TASK_NULL;
 	boolean_t	inserted = TRUE;
 
@@ -672,7 +483,7 @@ db_clear_breakpoints(void)
 	register task_t	 task;
 	db_expr_t inst;
 	thread_act_t	 cur_act = current_act();
-	task_t	 cur_task = (cur_act && !cur_act->kernel_loaded) ?
+	task_t	 cur_task = (cur_act) ?
 			cur_act->task: TASK_NULL;
 
 	if (db_breakpoints_inserted) {
@@ -969,7 +780,11 @@ db_breakpoint_cmd(
 	      db_error("Invalid user space address\n");
 	    user_space = TRUE;
 	    db_printf("%#X is in user space\n", addr);
+#ifdef ppc
+	    db_printf("kernel is from %#X to %#x\n", VM_MIN_KERNEL_ADDRESS, vm_last_addr);
+#else
 	    db_printf("kernel is from %#X to %#x\n", VM_MIN_KERNEL_ADDRESS, VM_MAX_KERNEL_ADDRESS);
+#endif
 	}
 	if (db_option(modif, 't') || task_bpt) {
 	    for (n = 0; db_get_next_act(&thr_act, n); n++) {

@@ -194,5 +194,8 @@ public:
     virtual OSObject * getNextObject();
 };
 
+extern const OSSymbol * gIOConsoleUsersKey;
+extern const OSSymbol * gIOConsoleSessionUIDKey;
+
 #endif /* ! _IOKIT_IOSERVICEPRIVATE_H */
 

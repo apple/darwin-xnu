@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2001 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2003 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -85,6 +85,8 @@
 #include <sys/resourcevar.h>
 #include <sys/ptrace.h>
 #include <sys/user.h>
+#include <sys/aio_kern.h>
+#include <sys/kern_audit.h>
 
 #include <mach/mach_types.h>
 #include <kern/thread.h>
@@ -97,6 +99,9 @@
 
 extern char init_task_failure_data[];
 int exit1 __P((struct proc *, int, int *));
+void proc_prepareexit(struct proc *p);
+void vfork_exit(struct proc *p, int rv);
+void vproc_exit(struct proc *p);
 
 /*
  * exit --
@@ -134,8 +139,7 @@ exit1(p, rv, retval)
 	int * retval;
 {
 	register struct proc *q, *nq;
-	thread_t self = current_thread();
-	thread_act_t th_act_self = current_act();
+	thread_act_t self = current_act();
 	struct task *task = p->task;
 	register int i,s;
 	struct uthread *ut;
@@ -146,22 +150,23 @@ exit1(p, rv, retval)
 	 * right here.
 	 */
 
-	 ut = get_bsdthread_info(th_act_self);
+	 ut = get_bsdthread_info(self);
 	 if (ut->uu_flag & P_VFORK) {
-			(void)vfork_exit(p, rv);
-			vfork_return(th_act_self, p->p_pptr, p , retval);
+			vfork_exit(p, rv);
+			vfork_return(self, p->p_pptr, p , retval);
 			unix_syscall_return(0);
 			/* NOT REACHED */
 	 }
+	audit_syscall_exit(0, p, ut); /* Exit is always successfull */
         signal_lock(p);
 	while (p->exit_thread != self) {
 		if (sig_try_locked(p) <= 0) {
-			if (get_threadtask(th_act_self) != task) {
+			if (get_threadtask(self) != task) {
                                 signal_unlock(p);
 				return(0);
                         }
 			signal_unlock(p);
-			thread_terminate(th_act_self);
+			thread_terminate(self);
 			thread_funnel_set(kernel_flock, FALSE);
 			thread_exception_return();
 			/* NOTREACHED */
@@ -179,27 +184,12 @@ exit1(p, rv, retval)
 	s = splsched();
 	p->p_flag |= P_WEXIT;
 	splx(s);
-	(void)proc_prepareexit(p);
+	proc_prepareexit(p);
 	p->p_xstat = rv;
 
 	/* task terminate will call proc_terminate and that cleans it up */
 	task_terminate_internal(task);
 
-	/*
-	 * we come back and returns to AST which 
-	 * should cleanup the rest 
-	 */
-#if 0
-	if (task == current_task()) {
-		thread_exception_return();
-		/*NOTREACHED*/
-	}
-
-	while (task == current_task()) {
-		thread_terminate_self();
-		/*NOTREACHED*/
-	}
-#endif
 	return(0);
 }
 
@@ -208,8 +198,12 @@ proc_prepareexit(struct proc *p)
 {
 	int s;
 	struct uthread *ut;
-	thread_t self = current_thread();
-	thread_act_t th_act_self = current_act();
+	exception_data_t	code[EXCEPTION_CODE_MAX];
+	thread_act_t self = current_act();
+
+	code[0] = 0xFF000001;			/* Set terminate code */
+	code[1] = p->p_pid;				/* Pass out the pid	*/
+	(void)sys_perf_notify(p->task, &code, 2);	/* Notify the perf server */
 
 	/*
 	 * Remove proc from allproc queue and from pidhash chain.
@@ -218,6 +212,7 @@ proc_prepareexit(struct proc *p)
 	 * in partially cleaned state.
 	 */
 	LIST_REMOVE(p, p_list);
+	LIST_INSERT_HEAD(&zombproc, p, p_list);	/* Place onto zombproc. */
 	LIST_REMOVE(p, p_hash);
 
 #ifdef PGINPROF
@@ -230,7 +225,7 @@ proc_prepareexit(struct proc *p)
 	p->p_flag &= ~(P_TRACED | P_PPWAIT);
 	p->p_sigignore = ~0;
 	p->p_siglist = 0;
-	ut = get_bsdthread_info(th_act_self);
+	ut = get_bsdthread_info(self);
 	ut->uu_siglist = 0;
 	untimeout(realitexpire, (caddr_t)p->p_pid);
 }
@@ -239,8 +234,6 @@ void
 proc_exit(struct proc *p)
 {
 	register struct proc *q, *nq, *pp;
-	thread_t self = current_thread();
-	thread_act_t th_act_self = current_act();
 	struct task *task = p->task;
 	register int i,s;
 	boolean_t funnel_state;
@@ -259,6 +252,12 @@ proc_exit(struct proc *p)
 
 	MALLOC_ZONE(p->p_ru, struct rusage *,
 			sizeof (*p->p_ru), M_ZOMBIE, M_WAITOK);
+
+	/*
+	 * need to cancel async IO requests that can be cancelled and wait for those
+	 * already active.  MAY BLOCK!
+	 */
+	_aio_exit( p );
 
 	/*
 	 * Close open files and release open-file table.
@@ -337,9 +336,6 @@ proc_exit(struct proc *p)
 		if (q->p_flag & P_TRACED) {
 			q->p_flag &= ~P_TRACED;
 			if (q->sigwait_thread) {
-				thread_t sig_shuttle;
-
-				sig_shuttle = (thread_t)getshuttle_thread((thread_act_t)q->sigwait_thread);
 				/*
 				 * The sigwait_thread could be stopped at a
 				 * breakpoint. Wake it up to kill.
@@ -348,7 +344,7 @@ proc_exit(struct proc *p)
 				 * the process would result into a deadlock on q->sigwait.
 				 */
 				thread_resume((thread_act_t)q->sigwait_thread);
-				clear_wait(sig_shuttle, THREAD_INTERRUPTED);
+				clear_wait(q->sigwait_thread, THREAD_INTERRUPTED);
 				threadsignal((thread_act_t)q->sigwait_thread, SIGKILL, 0);
 			}
 			psignal(q, SIGKILL);
@@ -421,6 +417,9 @@ proc_exit(struct proc *p)
 		FREE_ZONE(p->p_limit, sizeof *p->p_limit, M_SUBPROC);
 	p->p_limit = NULL;
 
+	/* Free the auditing info */
+	audit_proc_free(p);
+
 	/*
 	 * Finish up by terminating the task
 	 * and halt this thread (only if a
@@ -430,11 +429,19 @@ proc_exit(struct proc *p)
 	//task->proc = NULL;
 	set_bsdtask_info(task, NULL);
 
+	KNOTE(&p->p_klist, NOTE_EXIT);
+
 	/*
 	 * Notify parent that we're gone.
 	 */
 	if (p->p_pptr->p_flag & P_NOCLDWAIT) {
 		struct proc * pp = p->p_pptr;
+
+		/*
+		 * Add child resource usage to parent before giving
+		 * zombie to init
+		 */
+		ruadd(&p->p_pptr->p_stats->p_cru, p->p_ru);
 
 		proc_reparent(p, initproc);
 		/* If there are no more children wakeup parent */
@@ -452,8 +459,7 @@ proc_exit(struct proc *p)
 	psignal(pp, SIGCHLD);
 
 
-	/* Place onto zombproc. */
-	LIST_INSERT_HEAD(&zombproc, p, p_list);
+	/* mark as a zombie */
 	p->p_stat = SZOMB;
 
 	/* and now wakeup the parent */
@@ -540,7 +546,7 @@ wait1continue(result)
 	thread = current_act();
 	vt = (void *)get_bsduthreadarg(thread);
 	retval = (int *)get_bsduthreadrval(thread);
-	wait1((struct proc *)p, (struct wait4_args *)vt, retval, 0);
+	return(wait1((struct proc *)p, (struct wait4_args *)vt, retval, 0));
 }
 
 int
@@ -777,11 +783,11 @@ vfork_exit(p, rv)
 	int rv;
 {
 	register struct proc *q, *nq;
-	thread_t self = current_thread();
-	thread_act_t th_act_self = current_act();
+	thread_act_t self = current_act();
 	struct task *task = p->task;
 	register int i,s;
 	struct uthread *ut;
+	exception_data_t	code[EXCEPTION_CODE_MAX];
 
 	/*
 	 * If a thread in this task has already
@@ -789,17 +795,17 @@ vfork_exit(p, rv)
 	 * right here.
 	 */
 
-	 ut = get_bsdthread_info(th_act_self);
+	 ut = get_bsdthread_info(self);
 #ifdef FIXME
         signal_lock(p);
 	while (p->exit_thread != self) {
 		if (sig_try_locked(p) <= 0) {
-			if (get_threadtask(th_act_self) != task) {
+			if (get_threadtask(self) != task) {
                                 signal_unlock(p);
 				return;
                         }
 			signal_unlock(p);
-			thread_terminate(th_act_self);
+			thread_terminate(self);
 			thread_funnel_set(kernel_flock, FALSE);
 			thread_exception_return();
 			/* NOTREACHED */
@@ -817,6 +823,11 @@ panic("init died\nState at Last Exception:\n\n%s", init_task_failure_data);
 	s = splsched();
 	p->p_flag |= P_WEXIT;
 	splx(s);
+
+	code[0] = 0xFF000001;			/* Set terminate code */
+	code[1] = p->p_pid;				/* Pass out the pid	*/
+	(void)sys_perf_notify(p->task, &code, 2);	/* Notify the perf server */
+
 	/*
 	 * Remove proc from allproc queue and from pidhash chain.
 	 * Need to do this before we do anything that can block.
@@ -824,6 +835,7 @@ panic("init died\nState at Last Exception:\n\n%s", init_task_failure_data);
 	 * in partially cleaned state.
 	 */
 	LIST_REMOVE(p, p_list);
+	LIST_INSERT_HEAD(&zombproc, p, p_list);	/* Place onto zombproc. */
 	LIST_REMOVE(p, p_hash);
 	/*
 	 * If parent is waiting for us to exit or exec,
@@ -838,15 +850,13 @@ panic("init died\nState at Last Exception:\n\n%s", init_task_failure_data);
 
 	p->p_xstat = rv;
 
-	(void)vproc_exit(p);
+	vproc_exit(p);
 }
 
 void 
 vproc_exit(struct proc *p)
 {
 	register struct proc *q, *nq, *pp;
-	thread_t self = current_thread();
-	thread_act_t th_act_self = current_act();
 	struct task *task = p->task;
 	register int i,s;
 	boolean_t funnel_state;
@@ -924,9 +934,6 @@ vproc_exit(struct proc *p)
 		if (q->p_flag & P_TRACED) {
 			q->p_flag &= ~P_TRACED;
 			if (q->sigwait_thread) {
-				thread_t sig_shuttle;
-
-				sig_shuttle = (thread_t) getshuttle_thread((thread_act_t)q->sigwait_thread);
 				/*
 				 * The sigwait_thread could be stopped at a
 				 * breakpoint. Wake it up to kill.
@@ -935,7 +942,7 @@ vproc_exit(struct proc *p)
 				 * the process would result into a deadlock on q->sigwait.
 				 */
 				thread_resume((thread_act_t)q->sigwait_thread);
-				clear_wait(sig_shuttle, THREAD_INTERRUPTED);
+				clear_wait(q->sigwait_thread, THREAD_INTERRUPTED);
 				threadsignal((thread_act_t)q->sigwait_thread, SIGKILL, 0);
 			}
 			psignal(q, SIGKILL);
@@ -1029,8 +1036,7 @@ vproc_exit(struct proc *p)
 	}
 	psignal(p->p_pptr, SIGCHLD);
 
-	/* Place onto zombproc. */
-	LIST_INSERT_HEAD(&zombproc, p, p_list);
+	/* mark as a zombie */
 	p->p_stat = SZOMB;
 
 	/* and now wakeup the parent */

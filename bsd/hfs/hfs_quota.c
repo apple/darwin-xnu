@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2002 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2002-2003 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -707,11 +707,9 @@ again:
 	for (vp = mp->mnt_vnodelist.lh_first; vp != NULL; vp = nextvp) {
 		if (vp->v_mount != mp)
 			goto again;
-
 		nextvp = vp->v_mntvnodes.le_next;
 		simple_lock(&vp->v_interlock);
 		simple_unlock(&mntvnode_slock);
-
 		error = vget(vp, LK_EXCLUSIVE | LK_NOWAIT | LK_INTERLOCK, p);
 		if (error) {
 			simple_lock(&mntvnode_slock);
@@ -720,13 +718,11 @@ again:
 			continue;
 		}
 
-		// Make sure that this is really an hfs vnode.
-		//
-		if (   vp->v_mount != mp
-			|| vp->v_type == VNON
-			|| vp->v_tag != VT_HFS
-			|| VTOC(vp) == NULL) {
-			
+		/* Make sure that this is really an hfs vnode. */
+		if (vp->v_mount != mp   ||
+		    vp->v_type == VNON  ||
+		    vp->v_tag != VT_HFS ||
+		    VTOC(vp) == NULL) {
 			vput(vp);
 			simple_lock(&mntvnode_slock);
 			goto again;

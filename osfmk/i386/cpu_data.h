@@ -37,103 +37,99 @@
 
 #include <kern/assert.h>
 #include <kern/kern_types.h>
+#include <pexpert/pexpert.h>
 
-#if 0
-#ifndef	__OPTIMIZE__
-#define extern static
-#endif
-#endif
+typedef struct
+{
+	thread_act_t	*active_thread;
+	int		preemption_level;
+	int		simple_lock_count;
+	int		interrupt_level;
+	int		cpu_number;		/* Logical CPU number */
+	int		cpu_phys_number;	/* Physical CPU Number */
+	cpu_id_t	cpu_id;			/* Platform Expert handle */
+	int		cpu_status;		/* Boot Status */
+	int		cpu_signals;		/* IPI events */
+	int		mcount_off;		/* mcount recursion flag */
+} cpu_data_t;
 
 extern cpu_data_t	cpu_data[NCPUS];  
 
-#define	get_cpu_data()	&cpu_data[cpu_number()]
+/* Macro to generate inline bodies to retrieve per-cpu data fields. */
+#define offsetof(TYPE,MEMBER) ((size_t) &((TYPE *)0)->MEMBER)
+#define CPU_DATA_GET(field,type)					\
+	type ret;							\
+	__asm__ volatile ("movl %%gs:%P1,%0"				\
+		: "=r" (ret)						\
+		: "i" (offsetof(cpu_data_t,field)));			\
+	return ret;
 
 /*
  * Everyone within the osfmk part of the kernel can use the fast
  * inline versions of these routines.  Everyone outside, must call
  * the real thing,
  */
-extern thread_t	__inline__ current_thread_fast(void);
-extern thread_t __inline__ current_thread_fast(void)
+extern thread_act_t __inline__ get_active_thread(void)
 {
-	register thread_t	ct;
-	register int		idx = (int)&((cpu_data_t *)0)->active_thread;
-
-	__asm__ volatile ("	movl %%gs:(%1),%0" : "=r" (ct) : "r" (idx));
-
-	return (ct);
+	CPU_DATA_GET(active_thread,thread_act_t)
 }
+#define current_act_fast()	get_active_thread()
+#define	current_act()		current_act_fast()
+#define current_thread()	current_act_fast()->thread
 
-#define current_thread()	current_thread_fast()
-
-extern int 	__inline__	get_preemption_level(void);
-extern void 	__inline__	disable_preemption(void);
-extern void 	__inline__      enable_preemption(void);
-extern void 	__inline__      enable_preemption_no_check(void);
-extern void 	__inline__	mp_disable_preemption(void);
-extern void 	__inline__      mp_enable_preemption(void);
-extern void 	__inline__      mp_enable_preemption_no_check(void);
-extern int 	__inline__      get_simple_lock_count(void);
-extern int 	__inline__      get_interrupt_level(void);
-
-extern int __inline__		get_preemption_level(void)
+extern int __inline__ get_preemption_level(void)
 {
-	register int	idx = (int)&((cpu_data_t *)0)->preemption_level;
-	register int	pl;
-
-	__asm__ volatile ("	movl %%gs:(%1),%0" : "=r" (pl) : "r" (idx));
-
-	return (pl);
+	CPU_DATA_GET(preemption_level,int)
+}
+extern int __inline__ get_simple_lock_count(void)
+{
+	CPU_DATA_GET(simple_lock_count,int)
+}
+extern int __inline__ get_interrupt_level(void)
+{
+	CPU_DATA_GET(interrupt_level,int)
+}
+extern int __inline__ get_cpu_number(void)
+{
+	CPU_DATA_GET(cpu_number,int)
+}
+extern int __inline__ get_cpu_phys_number(void)
+{
+	CPU_DATA_GET(cpu_phys_number,int)
 }
 
 extern void __inline__		disable_preemption(void)
 {
-#if	MACH_ASSERT
-	extern void _disable_preemption(void);
-
-	_disable_preemption();
-#else	/* MACH_ASSERT */
 	register int	idx = (int)&((cpu_data_t *)0)->preemption_level;
 
 	__asm__ volatile ("	incl %%gs:(%0)" : : "r" (idx));
-#endif	/* MACH_ASSERT */
 }
 
 extern void __inline__		enable_preemption(void)
 {
-#if	MACH_ASSERT
-	extern void _enable_preemption(void);
-
-	assert(get_preemption_level() > 0);
-	_enable_preemption();
-#else	/* MACH_ASSERT */
 	extern void		kernel_preempt_check (void);
 	register int	idx = (int)&((cpu_data_t *)0)->preemption_level;
 	register void (*kpc)(void)=	kernel_preempt_check;
+
+	assert(get_preemption_level() > 0);
 
 	__asm__ volatile ("decl %%gs:(%0); jne 1f; \
 			call %1; 1:"
 			: /* no outputs */
 			: "r" (idx), "r" (kpc)
 			: "%eax", "%ecx", "%edx", "cc", "memory");
-#endif	/* MACH_ASSERT */
 }
 
 extern void __inline__		enable_preemption_no_check(void)
 {
-#if	MACH_ASSERT
-	extern void _enable_preemption_no_check(void);
+	register int	idx = (int)&((cpu_data_t *)0)->preemption_level;
 
 	assert(get_preemption_level() > 0);
-	_enable_preemption_no_check();
-#else	/* MACH_ASSERT */
-	register int	idx = (int)&((cpu_data_t *)0)->preemption_level;
 
 	__asm__ volatile ("decl %%gs:(%0)"
 			: /* no outputs */
 			: "r" (idx)
 			: "cc", "memory");
-#endif	/* MACH_ASSERT */
 }
 
 extern void __inline__		mp_disable_preemption(void)
@@ -155,26 +151,6 @@ extern void __inline__		mp_enable_preemption_no_check(void)
 #if	NCPUS > 1
 	enable_preemption_no_check();
 #endif	/* NCPUS > 1 */
-}
-
-extern int __inline__		get_simple_lock_count(void)
-{
-	register int	idx = (int)&((cpu_data_t *)0)->simple_lock_count;
-	register int	pl;
-
-	__asm__ volatile ("	movl %%gs:(%1),%0" : "=r" (pl) : "r" (idx));
-
-	return (pl);
-}
-
-extern int __inline__		get_interrupt_level(void)
-{
-	register int	idx = (int)&((cpu_data_t *)0)->interrupt_level;
-	register int	pl;
-
-	__asm__ volatile ("	movl %%gs:(%1),%0" : "=r" (pl) : "r" (idx));
-
-	return (pl);
 }
 
 #if 0

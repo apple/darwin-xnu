@@ -89,6 +89,11 @@
 
 #include <net/net_osdep.h>
 
+#include <sys/kdebug.h>
+#define DBG_LAYER_BEG		NETDBG_CODE(DBG_NETIPSEC, 1)
+#define DBG_LAYER_END		NETDBG_CODE(DBG_NETIPSEC, 3)
+#define DBG_FNC_ESPIN		NETDBG_CODE(DBG_NETIPSEC, (6 << 8))
+#define DBG_FNC_DECRYPT		NETDBG_CODE(DBG_NETIPSEC, (7 << 8))
 #define IPLEN_FLIPPED
 
 #if INET
@@ -116,6 +121,7 @@ esp4_input(m, off)
 	size_t esplen;
 	int s;
 
+	KERNEL_DEBUG(DBG_FNC_ESPIN | DBG_FUNC_START, 0,0,0,0,0);
 	/* sanity check for alignment. */
 	if (off % 4 != 0 || m->m_pkthdr.len % 4 != 0) {
 		ipseclog((LOG_ERR, "IPv4 ESP input: packet alignment problem "
@@ -308,14 +314,17 @@ noreplaycheck:
 	 */
 	if (!algo->decrypt)
 		panic("internal error: no decrypt function");
+	KERNEL_DEBUG(DBG_FNC_DECRYPT | DBG_FUNC_START, 0,0,0,0,0);
 	if ((*algo->decrypt)(m, off, sav, algo, ivlen)) {
 		/* m is already freed */
 		m = NULL;
 		ipseclog((LOG_ERR, "decrypt fail in IPv4 ESP input: %s\n",
 		    ipsec_logsastr(sav)));
 		ipsecstat.in_inval++;
+		KERNEL_DEBUG(DBG_FNC_DECRYPT | DBG_FUNC_END, 1,0,0,0,0);
 		goto bad;
 	}
+	KERNEL_DEBUG(DBG_FNC_DECRYPT | DBG_FUNC_END, 2,0,0,0,0);
 	ipsecstat.in_esphist[sav->alg_enc]++;
 
 	m->m_flags |= M_DECRYPTED;
@@ -378,20 +387,15 @@ noreplaycheck:
 			goto bad;
 		}
 
-#if 0 /* XXX should call ipfw rather than ipsec_in_reject, shouldn't it ? */
-		/* drop it if it does not match the default policy */
-		if (ipsec4_in_reject(m, NULL)) {
-			ipsecstat.in_polvio++;
-			goto bad;
-		}
-#endif
-
 		key_sa_recordxfer(sav, m);
 		if (ipsec_addhist(m, IPPROTO_ESP, spi) != 0 ||
 		    ipsec_addhist(m, IPPROTO_IPV4, 0) != 0) {
 			ipsecstat.in_nomem++;
 			goto bad;
 		}
+		
+		/* Clear the csum flags, they can't be valid for the inner headers */
+		m->m_pkthdr.csum_flags = 0;
 
 		s = splimp();
 		if (IF_QFULL(&ipintrq)) {
@@ -404,6 +408,7 @@ noreplaycheck:
 		schednetisr(NETISR_IP); /*can be skipped but to make sure*/
 		splx(s);
 		nxt = IPPROTO_DONE;
+		KERNEL_DEBUG(DBG_FNC_ESPIN | DBG_FUNC_END, 2,0,0,0,0);
 	} else {
 		/*
 		 * strip off ESP header and IV.
@@ -433,6 +438,17 @@ noreplaycheck:
 			ipsecstat.in_nomem++;
 			goto bad;
 		}
+		
+		/*
+		 * Set the csum valid flag, if we authenticated the
+		 * packet, the payload shouldn't be corrupt unless
+		 * it was corrupted before being signed on the other
+		 * side.
+		 */
+		if (nxt == IPPROTO_TCP || nxt == IPPROTO_UDP) {
+			m->m_pkthdr.csum_flags = CSUM_DATA_VALID | CSUM_PSEUDO_HDR;
+			m->m_pkthdr.csum_data = 0xFFFF;
+		}
 
 		if (nxt != IPPROTO_DONE) {
 			if ((ip_protox[nxt]->pr_flags & PR_LASTHDR) != 0 &&
@@ -440,6 +456,7 @@ noreplaycheck:
 				ipsecstat.in_polvio++;
 				goto bad;
 			}
+			KERNEL_DEBUG(DBG_FNC_ESPIN | DBG_FUNC_END, 3,0,0,0,0);
 			(*ip_protox[nxt]->pr_input)(m, off);
 		} else
 			m_freem(m);
@@ -462,15 +479,16 @@ bad:
 	}
 	if (m)
 		m_freem(m);
+	KERNEL_DEBUG(DBG_FNC_ESPIN | DBG_FUNC_END, 4,0,0,0,0);
 	return;
 }
 #endif /* INET */
 
 #if INET6
 int
-esp6_input(mp, offp, proto)
+esp6_input(mp, offp)
 	struct mbuf **mp;
-	int *offp, proto;
+	int *offp;
 {
 	struct mbuf *m = *mp;
 	int off = *offp;
@@ -752,14 +770,6 @@ noreplaycheck:
 			goto bad;
 		}
 
-#if 0 /* XXX should call ipfw rather than ipsec_in_reject, shouldn't it ? */
-		/* drop it if it does not match the default policy */
-		if (ipsec6_in_reject(m, NULL)) {
-			ipsec6stat.in_polvio++;
-			goto bad;
-		}
-#endif
-
 		key_sa_recordxfer(sav, m);
 		if (ipsec_addhist(m, IPPROTO_ESP, spi) != 0 || 
 		    ipsec_addhist(m, IPPROTO_IPV6, 0) != 0) {
@@ -814,9 +824,9 @@ noreplaycheck:
 				goto bad;
 			}
 			m_adj(n, stripsiz);
-			m_cat(m, n);
 			/* m_cat does not update m_pkthdr.len */
 			m->m_pkthdr.len += n->m_pkthdr.len;
+			m_cat(m, n);
 		}
 
 #ifndef PULLDOWN_TEST
@@ -855,10 +865,10 @@ noreplaycheck:
 				m_freem(m);
 			} else {
 				m_copydata(m, 0, maxlen, mtod(n, caddr_t));
-				m_adj(m, maxlen);
 				n->m_len = maxlen;
 				n->m_pkthdr.len = m->m_pkthdr.len;
 				n->m_next = m;
+				m_adj(m, maxlen);
 				m->m_flags &= ~M_PKTHDR;
 			}
 			m = n;
@@ -910,7 +920,7 @@ esp6_ctlinput(cmd, sa, d)
 	struct ip6_hdr *ip6;
 	struct mbuf *m;
 	int off;
-	struct sockaddr_in6 sa6_src, sa6_dst;
+	struct sockaddr_in6 *sa6_src, *sa6_dst;
 
 	if (sa->sa_family != AF_INET6 ||
 	    sa->sa_len != sizeof(struct sockaddr_in6))
@@ -974,10 +984,12 @@ esp6_ctlinput(cmd, sa, d)
 			 * Check to see if we have a valid SA corresponding to
 			 * the address in the ICMP message payload.
 			 */
+			sa6_src = ip6cp->ip6c_src;
+			sa6_dst = (struct sockaddr_in6 *)sa;
 			sav = key_allocsa(AF_INET6,
-					  (caddr_t)&sa6_src.sin6_addr,
-					  (caddr_t)&sa6_dst, IPPROTO_ESP,
-					  espp->esp_spi);
+					  (caddr_t)&sa6_src->sin6_addr,
+					  (caddr_t)&sa6_dst->sin6_addr,
+					  IPPROTO_ESP, espp->esp_spi);
 			if (sav) {
 				if (sav->state == SADB_SASTATE_MATURE ||
 				    sav->state == SADB_SASTATE_DYING)

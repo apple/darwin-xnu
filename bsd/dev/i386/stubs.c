@@ -60,10 +60,12 @@ copyoutstr(from, to, maxlen, lencopied)
 	int slen,len,error=0;
 
 	slen = strlen(from) + 1;
+	if (slen > maxlen)
+		error = ENAMETOOLONG;
 
 	len = min(maxlen,slen);
 	if (copyout(from, to, len))
-		error = EIO;
+		error = EFAULT;
 	*lencopied = len;
 
 	return error;
@@ -110,8 +112,6 @@ size_t count;
 	bcopy(src,dst,count);
 	return 0;
 }
-
-cpu_number() {return(0);}
 
 set_bsduthreadargs(thread_t th, void * pcb, void *ignored_arg)
 {

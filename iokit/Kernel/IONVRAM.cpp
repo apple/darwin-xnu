@@ -261,7 +261,7 @@ OSObject *IODTNVRAM::getProperty(const OSSymbol *aKey) const
   if (_ofDict == 0) return 0;
   
   // Verify permissions.
-  result = IOUserClient::clientHasPrivilege(current_task(), "root");
+  result = IOUserClient::clientHasPrivilege(current_task(), kIOClientPrivilegeAdministrator);
   if (result != kIOReturnSuccess) {
     variablePerm = getOFVariablePerm(aKey);
     if (variablePerm == kOFVariablePermRootOnly) return 0;
@@ -294,7 +294,7 @@ bool IODTNVRAM::setProperty(const OSSymbol *aKey, OSObject *anObject)
   if (_ofDict == 0) return false;
   
   // Verify permissions.
-  result = IOUserClient::clientHasPrivilege(current_task(), "root");
+  result = IOUserClient::clientHasPrivilege(current_task(), kIOClientPrivilegeAdministrator);
   if (result != kIOReturnSuccess) {
     propPerm = getOFVariablePerm(aKey);
     if (propPerm != kOFVariablePermUserWrite) return false;

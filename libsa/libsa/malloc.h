@@ -1,8 +1,10 @@
 #ifndef _LIBSA_MALLOC_H_
 #define _LIBSA_MALLOC_H_
 
+#include <sys/cdefs.h>
 #include "stdlib.h"
 
+__BEGIN_DECLS
 
 /*****
  * These functions are the minimum necessary for use
@@ -12,6 +14,7 @@ void * malloc(size_t size);
 void * realloc(void * address, size_t new_size);
 void   free(void * address);
 
+void   malloc_init(void);
 void   malloc_reset(void); // Destroy all memory regions
 
 
@@ -38,5 +41,7 @@ void malloc_report(void);
 int malloc_sanity_check(void);
 #endif /* DEBUG */
 #endif /* 0 */
+
+__END_DECLS
 
 #endif /* defined _LIBSA_MALLOC_H_ */

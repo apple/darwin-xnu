@@ -868,6 +868,12 @@ extern kern_return_t vm_map_region_replace(
 				vm_offset_t	start,  
 				vm_offset_t	end);
 
+extern boolean_t vm_map_check_protection(
+				vm_map_t	map,
+				vm_offset_t	start,
+				vm_offset_t	end,
+				vm_prot_t	protection);
+
 /*
  *	Macros to invoke vm_map_copyin_common.  vm_map_copyin is the
  *	usual form; it handles a copyin based on the current protection
@@ -893,6 +899,15 @@ extern kern_return_t vm_map_region_replace(
 #define	VM_MAP_REMOVE_KUNWIRE	  	0x1
 #define	VM_MAP_REMOVE_INTERRUPTIBLE  	0x2
 #define	VM_MAP_REMOVE_WAIT_FOR_KWIRE  	0x4
+
+/*
+ * Backing store throttle when BS is exhausted
+ */
+extern unsigned int    vm_backing_store_low;
+
+extern void vm_backing_store_disable(
+			boolean_t	suspend);
+
 
 #endif  /* __APPLE_API_PRIVATE */
  

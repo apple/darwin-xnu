@@ -590,6 +590,10 @@ void classname ::_RESERVED ## classname ## index () 			\
 
     // IOKit debug internal routines.
     static void printInstanceCounts();
+    static void serializeClassDictionary(OSDictionary *dict);
+
+private:
+    // Obsolete APIs
     static OSDictionary *getClassDictionary();
     virtual bool serialize(OSSerialize *s) const;
 

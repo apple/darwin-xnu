@@ -45,9 +45,9 @@ extern unsigned int     current_debugger;
 
 extern unsigned int     active_debugger;
 extern unsigned int 	debug_mode; 
-extern unsigned int		disableDebugOuput;
+extern unsigned int	disableDebugOuput;
 
-extern unsigned int panicDebugging;
+extern unsigned int     panicDebugging;
 extern unsigned int	logPanicDataToScreen;
 
 extern int db_run_mode;
@@ -85,7 +85,12 @@ extern void	debug_putc(char);
 #define DB_ARP          0x40
 #define DB_KDP_BP_DIS   0x80
 #define DB_LOG_PI_SCRN	0x100
+#define DB_KDP_GETC_ENA 0x200
 
+#define DB_KERN_DUMP_ON_PANIC       0x400 /* Trigger core dump on panic*/
+#define DB_KERN_DUMP_ON_NMI         0x800 /* Trigger core dump on NMI */
+#define DB_DBG_POST_CORE            0x1000 /*Wait in debugger after NMI core */
+#define DB_PANICLOG_DUMP            0x2000 /* Send paniclog on panic,not core*/
 #endif	/* __APPLE_API_PRIVATE */
 
 #endif	/* _KERN_DEBUG_H_ */

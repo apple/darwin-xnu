@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2002 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2003 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -142,6 +142,7 @@ struct nameidata {
 #define	NOCACHE		0x0020	/* name must not be left in cache */
 #define	FOLLOW		0x0040	/* follow symbolic links */
 #define	NOFOLLOW	0x0000	/* do not follow symbolic links (pseudo) */
+#define	SHAREDLEAF	0x0080	/* OK to have shared leaf lock */
 #define	MODMASK		0x00fc	/* mask of operational modifiers */
 /*
  * Namei parameter descriptors.
@@ -169,8 +170,11 @@ struct nameidata {
 #define	ISWHITEOUT	0x020000 /* found whiteout */
 #define	DOWHITEOUT	0x040000 /* do whiteouts */
 #define	WILLBEDIR	0x080000 /* new files will be dirs; allow trailing / */
+#define	AUDITVNPATH1	0x100000 /* audit the path/vnode info */
+#define	AUDITVNPATH2	0x200000 /* audit the path/vnode info */
+#define	USEDVP		0x400000 /* start the lookup at ndp.ni_dvp */
 #define	NODELETEBUSY	0x800000 /* donot delete busy files (Carbon semantic) */
-#define	PARAMASK	0x0fff00 /* mask of parameter descriptors */
+#define	PARAMASK	0x3fff00 /* mask of parameter descriptors */
 /*
  * Initialization of an nameidata structure.
  */
@@ -199,8 +203,7 @@ struct	namecache {
 	u_long	nc_dvpid;		/* capability number of nc_dvp */
 	struct	vnode *nc_vp;		/* vnode the name refers to */
 	u_long	nc_vpid;		/* capability number of nc_vp */
-	char	nc_nlen;		/* length of name */
-	char	nc_name[NCHNAMLEN];	/* segment name */
+	char	*nc_name;		/* segment name */
 };
 
 #ifdef KERNEL
@@ -218,6 +221,16 @@ void	cache_enter __P((struct vnode *dvp, struct vnode *vpp,
 		struct componentname *cnp));
 void	cache_purge __P((struct vnode *vp));
 void    cache_purgevfs __P((struct mount *mp));
+
+//
+// Global string-cache routines.  You can pass zero for nc_hash
+// if you don't know it (add_name() will then compute the hash).
+// There are no flags for now but maybe someday.
+// 
+char *add_name(const char *name, size_t len, u_int nc_hash, u_int flags);
+int   remove_name(const char *name);
+
+
 #endif /* KERNEL */
 
 /*

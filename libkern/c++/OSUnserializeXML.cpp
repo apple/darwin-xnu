@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 1999-2002 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -23,18 +23,20 @@
  * @APPLE_LICENSE_HEADER_END@
  */
 
-/*  OSUnserializeXML.y created by rsulack on Tue Oct 12 1999 */
+/*
+ * HISTORY
+ *
+ * OSUnserializeXML.y created by rsulack on Tue Oct 12 1999
+ */
 
-// 		XML parser for unserializing OSContainer objects
+// parser for unserializing OSContainer objects serialized to XML
 //
 // to build :
 //	bison -p OSUnserializeXML OSUnserializeXML.y
 //	head -50 OSUnserializeXML.y > OSUnserializeXML.cpp
-//	sed -e "s/stdio.h/stddef.h/" < OSUnserializeXML.tab.c >> OSUnserializeXML.cpp
+//	sed -e "s/#include <stdio.h>//" < OSUnserializeXML.tab.c >> OSUnserializeXML.cpp
 //
 //	when changing code check in both OSUnserializeXML.y and OSUnserializeXML.cpp
-//
-//
 //
 //
 //
@@ -49,8 +51,6 @@
 //
 //
 //
-//
-
 
 /*  A Bison parser, made from OSUnserializeXML.y
     by GNU Bison version 1.28  */
@@ -75,58 +75,76 @@
 #define	STRING	265
 #define	SYNTAX_ERROR	266
 
-#line 52 "OSUnserializeXML.y"
+#line 55 "OSUnserializeXML.y"
 
 #include <string.h>
 #include <libkern/c++/OSMetaClass.h>
 #include <libkern/c++/OSContainers.h>
 #include <libkern/c++/OSLib.h>
 
+#define YYSTYPE object_t *
+#define YYPARSE_PARAM	state
+#define YYLEX_PARAM	state
+
+// this is the internal struct used to hold objects on parser stack
+// it represents objects both before and after they have been created
 typedef	struct object {
 	struct object	*next;
 	struct object	*free;
 	struct object	*elements;
 	OSObject	*object;
-	const OSSymbol	*key;		// for dictionary
+	OSString	*key;			// for dictionary
 	int		size;
-	void		*data;		// for data
-	char		*string;	// for string & symbol
-	long long 	number;		// for number
+	void		*data;			// for data
+	char		*string;		// for string & symbol
+	long long 	number;			// for number
 	int		idref;
 } object_t;
 
-static int yyparse();
-static int yyerror(char *s);
-static int yylex();
+// this code is reentrant, this structure contains all
+// state information for the parsing of a single buffer
+typedef struct parser_state {
+	const char	*parseBuffer;		// start of text to be parsed
+	int		parseBufferIndex;	// current index into text
+	int		lineNumber;		// current line number
+	object_t	*objects;		// internal objects in use
+	object_t	*freeObjects;		// internal objects that are free
+	OSDictionary	*tags;			// used to remember "ID" tags
+	OSString	**errorString;		// parse error with line
+	OSObject	*parsedObject;		// resultant object of parsed text
+} parser_state_t;
 
-static object_t * newObject();
-static void freeObject(object_t *o);
+#define STATE		((parser_state_t *)state)
 
-static object_t *buildOSDictionary(object_t *);
-static object_t *buildOSArray(object_t *);
-static object_t *buildOSSet(object_t *);
-static object_t *buildOSString(object_t *);
-static object_t *buildKey(object_t *);
-static object_t *buildOSData(object_t *);
-static object_t *buildOSNumber(object_t *);
-static object_t *buildOSBoolean(object_t *o);
+#undef yyerror 	
+#define yyerror(s)	OSUnserializeerror(STATE, (s))
+static int		OSUnserializeerror(parser_state_t *state, char *s);
 
-static void rememberObject(int, OSObject *);
-static object_t *retrieveObject(int);
+static int		yylex(YYSTYPE *lvalp, parser_state_t *state);
+static int		yyparse(void * state);
 
-// resultant object of parsed text
-static OSObject	*parsedObject;
+static object_t 	*newObject(parser_state_t *state);
+static void 		freeObject(parser_state_t *state, object_t *o);
+static void		rememberObject(parser_state_t *state, int tag, OSObject *o);
+static object_t		*retrieveObject(parser_state_t *state, int tag);
+static void		cleanupObjects(parser_state_t *state);
 
-#define YYSTYPE object_t *
+static object_t		*buildDictionary(parser_state_t *state, object_t *o);
+static object_t		*buildArray(parser_state_t *state, object_t *o);
+static object_t		*buildSet(parser_state_t *state, object_t *o);
+static object_t		*buildString(parser_state_t *state, object_t *o);
+static object_t		*buildData(parser_state_t *state, object_t *o);
+static object_t		*buildNumber(parser_state_t *state, object_t *o);
+static object_t		*buildBoolean(parser_state_t *state, object_t *o);
 
 extern "C" {
-extern void *kern_os_malloc(size_t size);
-extern void *kern_os_realloc(void * addr, size_t size);
-extern void kern_os_free(void * addr);
+extern void		*kern_os_malloc(size_t size);
+extern void		*kern_os_realloc(void * addr, size_t size);
+extern void		kern_os_free(void * addr);
 
 //XXX shouldn't have to define these
-extern long strtol(const char *, char **, int);
-extern unsigned long strtoul(const char *, char **, int);
+extern long		strtol(const char *, char **, int);
+extern unsigned long	strtoul(const char *, char **, int);
 
 } /* extern "C" */
 
@@ -137,6 +155,7 @@ extern unsigned long strtoul(const char *, char **, int);
 #ifndef YYSTYPE
 #define YYSTYPE int
 #endif
+
 
 #ifndef __cplusplus
 #ifndef __STDC__
@@ -205,10 +224,10 @@ static const short yyrhs[] = {    -1,
 
 #if YYDEBUG != 0
 static const short yyrline[] = { 0,
-   123,   124,   129,   135,   136,   137,   138,   139,   140,   141,
-   142,   155,   158,   161,   164,   165,   170,   178,   183,   186,
-   189,   192,   195,   198,   201,   204,   211,   214,   217,   220,
-   223
+   144,   147,   152,   157,   158,   159,   160,   161,   162,   163,
+   164,   177,   180,   183,   186,   187,   192,   201,   206,   209,
+   212,   215,   218,   221,   224,   227,   234,   237,   240,   243,
+   246
 };
 #endif
 
@@ -291,6 +310,8 @@ static const short yycheck[] = {     0,
     16,    17,     3,     4,     5,     6,     7,    -1,     9,    10,
     11,    -1,    13,    -1,    15,    -1,    17
 };
+#define YYPURE 1
+
 /* -*-C-*-  Note some compilers choke on comments on `#line' lines.  */
 #line 3 "/usr/share/bison.simple"
 /* This file comes from bison-1.28.  */
@@ -835,127 +856,129 @@ yyreduce:
   switch (yyn) {
 
 case 1:
-#line 123 "OSUnserializeXML.y"
-{ parsedObject = (OSObject *)NULL; YYACCEPT; ;
+#line 144 "OSUnserializeXML.y"
+{ yyerror("unexpected end of buffer");
+				  YYERROR;
+				;
     break;}
 case 2:
-#line 124 "OSUnserializeXML.y"
-{ parsedObject = yyvsp[0]->object;
+#line 147 "OSUnserializeXML.y"
+{ STATE->parsedObject = yyvsp[0]->object;
 				  yyvsp[0]->object = 0;
-				  freeObject(yyvsp[0]);
+				  freeObject(STATE, yyvsp[0]);
 				  YYACCEPT;
 				;
     break;}
 case 3:
-#line 129 "OSUnserializeXML.y"
-{
-				  yyerror("syntax error");
+#line 152 "OSUnserializeXML.y"
+{ yyerror("syntax error");
 				  YYERROR;
 				;
     break;}
 case 4:
-#line 135 "OSUnserializeXML.y"
-{ yyval = buildOSDictionary(yyvsp[0]); ;
+#line 157 "OSUnserializeXML.y"
+{ yyval = buildDictionary(STATE, yyvsp[0]); ;
     break;}
 case 5:
-#line 136 "OSUnserializeXML.y"
-{ yyval = buildOSArray(yyvsp[0]); ;
+#line 158 "OSUnserializeXML.y"
+{ yyval = buildArray(STATE, yyvsp[0]); ;
     break;}
 case 6:
-#line 137 "OSUnserializeXML.y"
-{ yyval = buildOSSet(yyvsp[0]); ;
+#line 159 "OSUnserializeXML.y"
+{ yyval = buildSet(STATE, yyvsp[0]); ;
     break;}
 case 7:
-#line 138 "OSUnserializeXML.y"
-{ yyval = buildOSString(yyvsp[0]); ;
+#line 160 "OSUnserializeXML.y"
+{ yyval = buildString(STATE, yyvsp[0]); ;
     break;}
 case 8:
-#line 139 "OSUnserializeXML.y"
-{ yyval = buildOSData(yyvsp[0]); ;
+#line 161 "OSUnserializeXML.y"
+{ yyval = buildData(STATE, yyvsp[0]); ;
     break;}
 case 9:
-#line 140 "OSUnserializeXML.y"
-{ yyval = buildOSNumber(yyvsp[0]); ;
+#line 162 "OSUnserializeXML.y"
+{ yyval = buildNumber(STATE, yyvsp[0]); ;
     break;}
 case 10:
-#line 141 "OSUnserializeXML.y"
-{ yyval = buildOSBoolean(yyvsp[0]); ;
+#line 163 "OSUnserializeXML.y"
+{ yyval = buildBoolean(STATE, yyvsp[0]); ;
     break;}
 case 11:
-#line 142 "OSUnserializeXML.y"
-{ yyval = retrieveObject(yyvsp[0]->idref);
+#line 164 "OSUnserializeXML.y"
+{ yyval = retrieveObject(STATE, yyvsp[0]->idref);
 				  if (yyval) {
 				    yyval->object->retain();
 				  } else { 
 				    yyerror("forward reference detected");
 				    YYERROR;
 				  }
-				  freeObject(yyvsp[0]);
+				  freeObject(STATE, yyvsp[0]);
 				;
     break;}
 case 12:
-#line 155 "OSUnserializeXML.y"
+#line 177 "OSUnserializeXML.y"
 { yyval = yyvsp[-1];
 				  yyval->elements = NULL;
 				;
     break;}
 case 13:
-#line 158 "OSUnserializeXML.y"
+#line 180 "OSUnserializeXML.y"
 { yyval = yyvsp[-2];
 				  yyval->elements = yyvsp[-1];
 				;
     break;}
 case 16:
-#line 165 "OSUnserializeXML.y"
+#line 187 "OSUnserializeXML.y"
 { yyval = yyvsp[0];
 				  yyval->next = yyvsp[-1];
 				;
     break;}
 case 17:
-#line 170 "OSUnserializeXML.y"
+#line 192 "OSUnserializeXML.y"
 { yyval = yyvsp[-1];
-				  yyval->next = NULL; 
+				  yyval->key = yyval->object;
 				  yyval->object = yyvsp[0]->object;
+				  yyval->next = NULL; 
 				  yyvsp[0]->object = 0;
-				  freeObject(yyvsp[0]);
+				  freeObject(STATE, yyvsp[0]);
 				;
     break;}
 case 18:
-#line 178 "OSUnserializeXML.y"
-{ yyval = buildKey(yyvsp[0]); ;
+#line 201 "OSUnserializeXML.y"
+{ yyval = buildString(STATE, yyvsp[0]); ;
     break;}
 case 19:
-#line 183 "OSUnserializeXML.y"
+#line 206 "OSUnserializeXML.y"
 { yyval = yyvsp[-1];
 				  yyval->elements = NULL;
 				;
     break;}
 case 20:
-#line 186 "OSUnserializeXML.y"
+#line 209 "OSUnserializeXML.y"
 { yyval = yyvsp[-2];
 				  yyval->elements = yyvsp[-1];
 				;
     break;}
 case 22:
-#line 192 "OSUnserializeXML.y"
+#line 215 "OSUnserializeXML.y"
 { yyval = yyvsp[-1];
 				  yyval->elements = NULL;
 				;
     break;}
 case 23:
-#line 195 "OSUnserializeXML.y"
+#line 218 "OSUnserializeXML.y"
 { yyval = yyvsp[-2];
 				  yyval->elements = yyvsp[-1];
 				;
     break;}
 case 25:
-#line 201 "OSUnserializeXML.y"
+#line 224 "OSUnserializeXML.y"
 { yyval = yyvsp[0]; 
 				  yyval->next = NULL; 
 				;
     break;}
 case 26:
-#line 204 "OSUnserializeXML.y"
+#line 227 "OSUnserializeXML.y"
 { yyval = yyvsp[0];
 				  yyval->next = yyvsp[-1];
 				;
@@ -1182,31 +1205,20 @@ yyerrhandle:
     }
   return 1;
 }
-#line 226 "OSUnserializeXML.y"
+#line 249 "OSUnserializeXML.y"
 
-     
-static int		lineNumber = 0;
-static const char	*parseBuffer;
-static int		parseBufferIndex;
-
-#define currentChar()	(parseBuffer[parseBufferIndex])
-#define nextChar()	(parseBuffer[++parseBufferIndex])
-#define prevChar()	(parseBuffer[parseBufferIndex - 1])
-
-#define isSpace(c)	((c) == ' ' || (c) == '\t')
-#define isAlpha(c)	(((c) >= 'A' && (c) <= 'Z') || ((c) >= 'a' && (c) <= 'z'))
-#define isDigit(c)	((c) >= '0' && (c) <= '9')
-#define isAlphaDigit(c)	((c) >= 'a' && (c) <= 'f')
-#define isHexDigit(c)	(isDigit(c) || isAlphaDigit(c))
-#define isAlphaNumeric(c) (isAlpha(c) || isDigit(c) || ((c) == '-')) 
-
-static char yyerror_message[128];
 
 int
-yyerror(char *s)  /* Called by yyparse on error */
+OSUnserializeerror(parser_state_t * state, char *s)  /* Called by yyparse on errors */
 {
-	sprintf(yyerror_message, "OSUnserializeXML: %s near line %d\n", s, lineNumber);
-	return 0;
+    char tempString[128];
+
+    if (state->errorString) {
+	snprintf(tempString, 128, "OSUnserializeXML: %s near line %d\n", s, state->lineNumber);
+	*(state->errorString) = OSString::withCString(tempString);
+    }
+
+    return 0;
 }
 
 #define TAG_MAX_LENGTH		32
@@ -1217,13 +1229,25 @@ yyerror(char *s)  /* Called by yyparse on error */
 #define TAG_EMPTY		3
 #define TAG_COMMENT		4
 
+#define currentChar()	(state->parseBuffer[state->parseBufferIndex])
+#define nextChar()	(state->parseBuffer[++state->parseBufferIndex])
+#define prevChar()	(state->parseBuffer[state->parseBufferIndex - 1])
+
+#define isSpace(c)	((c) == ' ' || (c) == '\t')
+#define isAlpha(c)	(((c) >= 'A' && (c) <= 'Z') || ((c) >= 'a' && (c) <= 'z'))
+#define isDigit(c)	((c) >= '0' && (c) <= '9')
+#define isAlphaDigit(c)	((c) >= 'a' && (c) <= 'f')
+#define isHexDigit(c)	(isDigit(c) || isAlphaDigit(c))
+#define isAlphaNumeric(c) (isAlpha(c) || isDigit(c) || ((c) == '-')) 
+
 static int
-getTag(char tag[TAG_MAX_LENGTH],
+getTag(parser_state_t *state,
+       char tag[TAG_MAX_LENGTH],
        int *attributeCount, 
        char attributes[TAG_MAX_ATTRIBUTES][TAG_MAX_LENGTH],
        char values[TAG_MAX_ATTRIBUTES][TAG_MAX_LENGTH] )
 {
-	int length = 0;;
+	int length = 0;
 	int c = currentChar();
 	int tagType = TAG_START;
 
@@ -1234,7 +1258,7 @@ getTag(char tag[TAG_MAX_LENGTH],
 
         if (c == '?' || c == '!') {
                 while ((c = nextChar()) != 0) {
-                        if (c == '\n') lineNumber++;
+                        if (c == '\n') state->lineNumber++;
                         if (c == '>') {
                                 (void)nextChar();
                                 return TAG_COMMENT;
@@ -1257,7 +1281,7 @@ getTag(char tag[TAG_MAX_LENGTH],
 
 	tag[length] = 0;
 
-//printf("tag %s, type %d\n", tag, tagType);
+//	printf("tag %s, type %d\n", tag, tagType);
 	
 	// look for attributes of the form attribute = "value" ...
 	while ((c != '>') && (c != '/')) {
@@ -1290,7 +1314,8 @@ getTag(char tag[TAG_MAX_LENGTH],
 
 		c = nextChar(); // skip closing quote
 
-//printf("	attribute '%s' = '%s', nextchar = '%c'\n", attributes[*attributeCount], values[*attributeCount], c);
+//		printf("	attribute '%s' = '%s', nextchar = '%c'\n", 
+//		       attributes[*attributeCount], values[*attributeCount], c);
 
 		(*attributeCount)++;
 		if (*attributeCount >= TAG_MAX_ATTRIBUTES) return TAG_BAD;
@@ -1307,18 +1332,17 @@ getTag(char tag[TAG_MAX_LENGTH],
 }
 
 static char *
-getString()
+getString(parser_state_t *state)
 {
 	int c = currentChar();
-
-	int start, length, i, j;;
+	int start, length, i, j;
 	char * tempString;
 
-	start = parseBufferIndex;
+	start = state->parseBufferIndex;
 	/* find end of string */
 
 	while (c != 0) {
-		if (c == '\n') lineNumber++;
+		if (c == '\n') state->lineNumber++;
 		if (c == '<') {
 			break;
 		}
@@ -1327,13 +1351,13 @@ getString()
 
 	if (c != '<') return 0;
 
-	length = parseBufferIndex - start;
+	length = state->parseBufferIndex - start;
 
 	/* copy to null terminated buffer */
 	tempString = (char *)malloc(length + 1);
 	if (tempString == 0) {
 		printf("OSUnserializeXML: can't alloc temp memory\n");
-		return 0;
+		goto error;
 	}
 
 	// copy out string in tempString
@@ -1341,29 +1365,29 @@ getString()
 
 	i = j = 0;
 	while (i < length) {
-		c = parseBuffer[start + i++];
+		c = state->parseBuffer[start + i++];
 		if (c != '&') {
 			tempString[j++] = c;
 		} else {
 			if ((i+3) > length) goto error;
-			c = parseBuffer[start + i++];
+			c = state->parseBuffer[start + i++];
 			if (c == 'l') {
-				if (parseBuffer[start + i++] != 't') goto error;
-				if (parseBuffer[start + i++] != ';') goto error;
+				if (state->parseBuffer[start + i++] != 't') goto error;
+				if (state->parseBuffer[start + i++] != ';') goto error;
 				tempString[j++] = '<';
 				continue;
 			}	
 			if (c == 'g') {
-				if (parseBuffer[start + i++] != 't') goto error;
-				if (parseBuffer[start + i++] != ';') goto error;
+				if (state->parseBuffer[start + i++] != 't') goto error;
+				if (state->parseBuffer[start + i++] != ';') goto error;
 				tempString[j++] = '>';
 				continue;
 			}	
 			if ((i+3) > length) goto error;
 			if (c == 'a') {
-				if (parseBuffer[start + i++] != 'm') goto error;
-				if (parseBuffer[start + i++] != 'p') goto error;
-				if (parseBuffer[start + i++] != ';') goto error;
+				if (state->parseBuffer[start + i++] != 'm') goto error;
+				if (state->parseBuffer[start + i++] != 'p') goto error;
+				if (state->parseBuffer[start + i++] != ';') goto error;
 				tempString[j++] = '&';
 				continue;
 			}
@@ -1372,7 +1396,7 @@ getString()
 	}
 	tempString[j] = 0;
 
-//printf("string %s\n", tempString);
+//	printf("string %s\n", tempString);
 
 	return tempString;
 
@@ -1382,7 +1406,7 @@ error:
 }
 
 static long long
-getNumber()
+getNumber(parser_state_t *state)
 {
 	unsigned long long n = 0;
 	int base = 10;
@@ -1412,7 +1436,7 @@ getNumber()
 			c = nextChar();
 		}
 	}
-//printf("number 0x%x\n", (unsigned long)n);
+//	printf("number 0x%x\n", (unsigned long)n);
 	return n;
 }
 
@@ -1437,14 +1461,14 @@ static const signed char __CFPLDataDecodeTable[128] = {
     /* 'x' */ 49, 50, 51, -1, -1, -1, -1, -1
 };
 
-#define OSDATA_ALLOC_SIZE 4096
+#define DATA_ALLOC_SIZE 4096
 
 static void *
-getCFEncodedData(unsigned int *size)
+getCFEncodedData(parser_state_t *state, unsigned int *size)
 {
     int numeq = 0, acc = 0, cntr = 0;
     int tmpbufpos = 0, tmpbuflen = 0;
-    unsigned char *tmpbuf = (unsigned char *)malloc(OSDATA_ALLOC_SIZE);
+    unsigned char *tmpbuf = (unsigned char *)malloc(DATA_ALLOC_SIZE);
 
     int c = currentChar();
     *size = 0;
@@ -1456,7 +1480,7 @@ getCFEncodedData(unsigned int *size)
 		return 0;
 	}
 	if (c == '=') numeq++; else numeq = 0;
-	if (c == '\n') lineNumber++;
+	if (c == '\n') state->lineNumber++;
         if (__CFPLDataDecodeTable[c] < 0) {
 	    c = nextChar();
             continue;
@@ -1466,7 +1490,7 @@ getCFEncodedData(unsigned int *size)
         acc += __CFPLDataDecodeTable[c];
         if (0 == (cntr & 0x3)) {
             if (tmpbuflen <= tmpbufpos + 2) {
-                tmpbuflen += OSDATA_ALLOC_SIZE;
+                tmpbuflen += DATA_ALLOC_SIZE;
 		tmpbuf = (unsigned char *)realloc(tmpbuf, tmpbuflen);
             }
             tmpbuf[tmpbufpos++] = (acc >> 16) & 0xff;
@@ -1478,23 +1502,27 @@ getCFEncodedData(unsigned int *size)
 	c = nextChar();
     }
     *size = tmpbufpos;
+    if (*size == 0) {
+	free(tmpbuf);
+	return 0;
+    }
     return tmpbuf;
 }
 
 static void *
-getHexData(unsigned int *size)
+getHexData(parser_state_t *state, unsigned int *size)
 {
     int c;
     unsigned char *d, *start, *lastStart;
 
-    start = lastStart = d = (unsigned char *)malloc(OSDATA_ALLOC_SIZE);
+    start = lastStart = d = (unsigned char *)malloc(DATA_ALLOC_SIZE);
     c = currentChar();
 
     while (c != '<') {
 
 	if (isSpace(c)) while ((c = nextChar()) != 0 && isSpace(c)) {};
 	if (c == '\n') {
-	    lineNumber++;
+	    state->lineNumber++;
 	    c = nextChar();
 	    continue;
 	}
@@ -1519,9 +1547,9 @@ getHexData(unsigned int *size)
 	}
 	
 	d++;
-	if ((d - lastStart) >= OSDATA_ALLOC_SIZE) {
+	if ((d - lastStart) >= DATA_ALLOC_SIZE) {
 	    int oldsize = d - start;
-	    start = (unsigned char *)realloc(start, oldsize + OSDATA_ALLOC_SIZE);
+	    start = (unsigned char *)realloc(start, oldsize + DATA_ALLOC_SIZE);
 	    d = lastStart = start + oldsize;
 	}
 	c = nextChar();
@@ -1538,16 +1566,15 @@ getHexData(unsigned int *size)
 }
 
 static int
-yylex()
+yylex(YYSTYPE *lvalp, parser_state_t *state)
 {
-	int c;
+	int c, i;
 	int tagType;
 	char tag[TAG_MAX_LENGTH];
 	int attributeCount;
 	char attributes[TAG_MAX_ATTRIBUTES][TAG_MAX_LENGTH];
 	char values[TAG_MAX_ATTRIBUTES][TAG_MAX_LENGTH];
-
-	if (parseBufferIndex == 0) lineNumber = 1;
+	object_t *object;
 
  top:
 	c = currentChar();
@@ -1557,21 +1584,22 @@ yylex()
 
 	/* keep track of line number, don't return \n's */
 	if (c == '\n') {
-		lineNumber++;
+		STATE->lineNumber++;
 		(void)nextChar();
 		goto top;
 	}
-	
-	if (!c)	return c;
 
-	tagType = getTag(tag, &attributeCount, attributes, values);
+	// end of the buffer?
+	if (!c)	return 0;
+
+	tagType = getTag(STATE, tag, &attributeCount, attributes, values);
 	if (tagType == TAG_BAD) return SYNTAX_ERROR;
 	if (tagType == TAG_COMMENT) goto top;
 
 	// handle allocation and check for "ID" and "IDREF" tags up front
-	yylval = newObject();
-	yylval->idref = -1;
-	for (int i=0; i < attributeCount; i++) {
+	*lvalp = object = newObject(STATE);
+	object->idref = -1;
+	for (i=0; i < attributeCount; i++) {
 	    if (attributes[i][0] == 'I' && attributes[i][1] == 'D') {
 		// check for idref's, note: we ignore the tag, for
 		// this to work correctly, all idrefs must be unique
@@ -1579,12 +1607,12 @@ yylex()
 		if (attributes[i][2] == 'R' && attributes[i][3] == 'E' &&
 		    attributes[i][4] == 'F' && !attributes[i][5]) {
 		    if (tagType != TAG_EMPTY) return SYNTAX_ERROR;
-		    yylval->idref = strtol(values[i], NULL, 0);
+		    object->idref = strtol(values[i], NULL, 0);
 		    return IDREF;
 		}
 		// check for id's
 		if (!attributes[i][2]) {
-		    yylval->idref = strtol(values[i], NULL, 0);
+		    object->idref = strtol(values[i], NULL, 0);
 		} else {
 		    return SYNTAX_ERROR;
 		}
@@ -1595,7 +1623,7 @@ yylex()
 	case 'a':
 		if (!strcmp(tag, "array")) {
 			if (tagType == TAG_EMPTY) {
-				yylval->elements = NULL;
+				object->elements = NULL;
 				return ARRAY;
 			}
 			return (tagType == TAG_START) ? '(' : ')';
@@ -1604,33 +1632,34 @@ yylex()
 	case 'd':
 		if (!strcmp(tag, "dict")) {
 			if (tagType == TAG_EMPTY) {
-				yylval->elements = NULL;
+				object->elements = NULL;
 				return DICTIONARY;
 			}
 			return (tagType == TAG_START) ? '{' : '}';
 		}
 		if (!strcmp(tag, "data")) {
 			unsigned int size;
-			int readable = 0;
 			if (tagType == TAG_EMPTY) {
-				yylval->data = NULL;
-				yylval->size = 0;
+				object->data = NULL;
+				object->size = 0;
 				return DATA;
 			}
+
+			bool isHexFormat = false;
 			for (int i=0; i < attributeCount; i++) {
 				if (!strcmp(attributes[i], "format") && !strcmp(values[i], "hex")) {
-					readable++;
+					isHexFormat = true;
 					break;
 				}
 			}
 			// CF encoded is the default form
-			if (readable) {
-			    yylval->data = getHexData(&size);
+			if (isHexFormat) {
+			    object->data = getHexData(STATE, &size);
 			} else {
-			    yylval->data = getCFEncodedData(&size);
+			    object->data = getCFEncodedData(STATE, &size);
 			}
-			yylval->size = size;
-			if ((getTag(tag, &attributeCount, attributes, values) != TAG_END) || strcmp(tag, "data")) {
+			object->size = size;
+			if ((getTag(STATE, tag, &attributeCount, attributes, values) != TAG_END) || strcmp(tag, "data")) {
 				return SYNTAX_ERROR;
 			}
 			return DATA;
@@ -1639,25 +1668,25 @@ yylex()
 	case 'f':
 		if (!strcmp(tag, "false")) {
 			if (tagType == TAG_EMPTY) {
-				yylval->number = 0;
+				object->number = 0;
 				return BOOLEAN;
 			}
 		}
 		break;
 	case 'i':
 		if (!strcmp(tag, "integer")) {
-			yylval->size = 64;	// default
-			for (int i=0; i < attributeCount; i++) {
+			object->size = 64;	// default
+			for (i=0; i < attributeCount; i++) {
 				if (!strcmp(attributes[i], "size")) {
-					yylval->size = strtoul(values[i], NULL, 0);
+					object->size = strtoul(values[i], NULL, 0);
 				}
 			}
 			if (tagType == TAG_EMPTY) {
-				yylval->number = 0;
+				object->number = 0;
 				return NUMBER;
 			}
-			yylval->number = getNumber();
-			if ((getTag(tag, &attributeCount, attributes, values) != TAG_END) || strcmp(tag, "integer")) {
+			object->number = getNumber(STATE);
+			if ((getTag(STATE, tag, &attributeCount, attributes, values) != TAG_END) || strcmp(tag, "integer")) {
 				return SYNTAX_ERROR;
 			}
 			return NUMBER;
@@ -1666,11 +1695,11 @@ yylex()
 	case 'k':
 		if (!strcmp(tag, "key")) {
 			if (tagType == TAG_EMPTY) return SYNTAX_ERROR;
-			yylval->string = getString();
-			if (!yylval->string) {
+			object->string = getString(STATE);
+			if (!object->string) {
 				return SYNTAX_ERROR;
 			}
-			if ((getTag(tag, &attributeCount, attributes, values) != TAG_END)
+			if ((getTag(STATE, tag, &attributeCount, attributes, values) != TAG_END)
 			   || strcmp(tag, "key")) {
 				return SYNTAX_ERROR;
 			}
@@ -1679,22 +1708,22 @@ yylex()
 		break;
 	case 'p':
 		if (!strcmp(tag, "plist")) {
-			freeObject(yylval);
+			freeObject(STATE, object);
 			goto top;
 		}
 		break;
 	case 's':
 		if (!strcmp(tag, "string")) {
 			if (tagType == TAG_EMPTY) {
-			    	yylval->string = (char *)malloc(1);
-			    	*yylval->string = 0;
+			    	object->string = (char *)malloc(1);
+			    	object->string[0] = 0;
 				return STRING;
 			}
-			yylval->string = getString();
-			if (!yylval->string) {
+			object->string = getString(STATE);
+			if (!object->string) {
 				return SYNTAX_ERROR;
 			}
-			if ((getTag(tag, &attributeCount, attributes, values) != TAG_END)
+			if ((getTag(STATE, tag, &attributeCount, attributes, values) != TAG_END)
 			   || strcmp(tag, "string")) {
 				return SYNTAX_ERROR;
 			}
@@ -1702,7 +1731,7 @@ yylex()
 		}
 		if (!strcmp(tag, "set")) {
 			if (tagType == TAG_EMPTY) {
-				yylval->elements = NULL;
+				object->elements = NULL;
 				return SET;;
 			}
 			if (tagType == TAG_START) {
@@ -1715,19 +1744,14 @@ yylex()
 	case 't':
 		if (!strcmp(tag, "true")) {
 			if (tagType == TAG_EMPTY) {
-				yylval->number = 1;
+				object->number = 1;
 				return BOOLEAN;
 			}
 		}
 		break;
-
-	default:
-		// XXX should we ignore invalid tags?
-		return SYNTAX_ERROR;
-		break;
 	}
 
-	return 0;
+	return SYNTAX_ERROR;
 }
 
 // !@$&)(^Q$&*^!$(*!@$_(^%_(*Q#$(_*&!$_(*&!$_(*&!#$(*!@&^!@#%!_!#
@@ -1736,94 +1760,96 @@ yylex()
 
 // "java" like allocation, if this code hits a syntax error in the
 // the middle of the parsed string we just bail with pointers hanging
-// all over place, so this code helps keeps all together
+// all over place, this code helps keeps it all together
 
-static object_t *objects = 0;
-static object_t *freeObjects = 0;
+//static int object_count = 0;
 
 object_t *
-newObject()
+newObject(parser_state_t *state)
 {
 	object_t *o;
 
-	if (freeObjects) {
-		o = freeObjects;
-		freeObjects = freeObjects->next;
+	if (state->freeObjects) {
+		o = state->freeObjects;
+		state->freeObjects = state->freeObjects->next;
 	} else {
 		o = (object_t *)malloc(sizeof(object_t));
+//		object_count++;
 		bzero(o, sizeof(object_t));
-		o->free = objects;
-		objects = o;
+		o->free = state->objects;
+		state->objects = o;
 	}
 	
 	return o;
 }
 
 void
-freeObject(object_t *o)
+freeObject(parser_state_t * state, object_t *o)
 {
-	o->next = freeObjects;
-	freeObjects = o;	
+	o->next = state->freeObjects;
+	state->freeObjects = o;	
 }
 
 void
-cleanupObjects()
+cleanupObjects(parser_state_t *state)
 {
-	object_t *t, *o = objects;
+	object_t *t, *o = state->objects;
 
 	while (o) {
 		if (o->object) {
-			printf("OSUnserializeXML: releasing object o=%x object=%x\n", (int)o, (int)o->object);
+//			printf("OSUnserializeXML: releasing object o=%x object=%x\n", (int)o, (int)o->object);
 			o->object->release();
 		}
 		if (o->data) {
-			printf("OSUnserializeXML: freeing   object o=%x data=%x\n", (int)o, (int)o->data);
+//			printf("OSUnserializeXML: freeing   object o=%x data=%x\n", (int)o, (int)o->data);
 			free(o->data);
 		}
 		if (o->key) {
-			printf("OSUnserializeXML: releasing object o=%x key=%x\n", (int)o, (int)o->key);
+//			printf("OSUnserializeXML: releasing object o=%x key=%x\n", (int)o, (int)o->key);
 			o->key->release();
 		}
 		if (o->string) {
-			printf("OSUnserializeXML: freeing   object o=%x string=%x\n", (int)o, (int)o->string);
+//			printf("OSUnserializeXML: freeing   object o=%x string=%x\n", (int)o, (int)o->string);
 			free(o->string);
 		}
 
 		t = o;
 		o = o->free;
 		free(t);
+//		object_count--;
 	}
+//	printf("object_count = %d\n", object_count);
 }
 
 // !@$&)(^Q$&*^!$(*!@$_(^%_(*Q#$(_*&!$_(*&!$_(*&!#$(*!@&^!@#%!_!#
 // !@$&)(^Q$&*^!$(*!@$_(^%_(*Q#$(_*&!$_(*&!$_(*&!#$(*!@&^!@#%!_!#
 // !@$&)(^Q$&*^!$(*!@$_(^%_(*Q#$(_*&!$_(*&!$_(*&!#$(*!@&^!@#%!_!#
 
-static OSDictionary *tags;
-
 static void 
-rememberObject(int tag, OSObject *o)
+rememberObject(parser_state_t *state, int tag, OSObject *o)
 {
 	char key[16];
-	sprintf(key, "%u", tag);
+	snprintf(key, 16, "%u", tag);
 
-//printf("remember key %s\n", key);
+//	printf("remember key %s\n", key);
 
-	tags->setObject(key, o);
+	state->tags->setObject(key, o);
 }
 
 static object_t *
-retrieveObject(int tag)
+retrieveObject(parser_state_t *state, int tag)
 {
+	OSObject *ref;
+	object_t *o;
 	char key[16];
-	sprintf(key, "%u", tag);
+	snprintf(key, 16, "%u", tag);
 
-//printf("retrieve key '%s'\n", key);
+//	printf("retrieve key '%s'\n", key);
 
-	OSObject *ref = tags->getObject(key);
+	ref = state->tags->getObject(key);
 	if (!ref) return 0;
 
-	object_t *o = newObject();
+	o = newObject(state);
 	o->object = ref;
 	return o;
 }
@@ -1833,10 +1859,11 @@ retrieveObject(int tag)
 // !@$&)(^Q$&*^!$(*!@$_(^%_(*Q#$(_*&!$_(*&!$_(*&!#$(*!@&^!@#%!_!#
 
 object_t *
-buildOSDictionary(object_t * header)
+buildDictionary(parser_state_t *state, object_t * header)
 {
 	object_t *o, *t;
 	int count = 0;
+	OSDictionary *dict;
 
 	// get count and reverse order
 	o = header->elements;
@@ -1850,31 +1877,33 @@ buildOSDictionary(object_t * header)
 		header->elements = t;
 	}
 
-	OSDictionary *d = OSDictionary::withCapacity(count);
-
-	if (header->idref >= 0) rememberObject(header->idref, d);
+	dict = OSDictionary::withCapacity(count);
+	if (header->idref >= 0) rememberObject(state, header->idref, dict);
 
 	o = header->elements;
 	while (o) {
-		d->setObject(o->key, o->object);
-		o->object->release();
-		o->object = 0;
+		dict->setObject(o->key, o->object);
+
 		o->key->release();
+		o->object->release();
 		o->key = 0;
+		o->object = 0;
+
 		t = o;
 		o = o->next;
-		freeObject(t);
+		freeObject(state, t);
 	}
 	o = header;
-	o->object = d;
+	o->object = dict;
 	return o;
 };
 
 object_t *
-buildOSArray(object_t * header)
+buildArray(parser_state_t *state, object_t * header)
 {
 	object_t *o, *t;
 	int count = 0;
+	OSArray *array;
 
 	// get count and reverse order
 	o = header->elements;
@@ -1888,140 +1917,120 @@ buildOSArray(object_t * header)
 		header->elements = t;
 	}
 
-	OSArray *a = OSArray::withCapacity(count);
-
-	if (header->idref >= 0) rememberObject(header->idref, a);
+	array = OSArray::withCapacity(count);
+	if (header->idref >= 0) rememberObject(state, header->idref, array);
 
 	o = header->elements;
 	while (o) {
-		a->setObject(o->object);
+		array->setObject(o->object);
+
 		o->object->release();
 		o->object = 0;
+
 		t = o;
 		o = o->next;
-		freeObject(t);
+		freeObject(state, t);
 	}
 	o = header;
-	o->object = a;
+	o->object = array;
 	return o;
 };
 
 object_t *
-buildOSSet(object_t *o)
+buildSet(parser_state_t *state, object_t *header)
 {
-	o = buildOSArray(o);
-	OSArray *a = (OSArray *)o->object;
+	object_t *o = buildArray(state, header);
 
-	OSSet *s = OSSet::withArray(a, a->getCapacity());
+	OSArray *array = (OSArray *)o->object;
+	OSSet *set = OSSet::withArray(array, array->getCapacity());
 
-	//write over reference created in array
-	if (o->idref >= 0) rememberObject(o->idref, s);
+	// write over the reference created in buildArray
+	if (header->idref >= 0) rememberObject(state, header->idref, set);
 
-	a->release();
-	o->object = s;
+	array->release();
+	o->object = set;
 	return o;
 };
 
 object_t *
-buildOSString(object_t *o)
+buildString(parser_state_t *state, object_t *o)
 {
-	OSString *s = OSString::withCString(o->string);
+	OSString *string;
 
-	if (o->idref >= 0) rememberObject(o->idref, s);
+	string = OSString::withCString(o->string);
+	if (o->idref >= 0) rememberObject(state, o->idref, string);
 
 	free(o->string);
 	o->string = 0;
-	o->object = s;
+	o->object = string;
 
 	return o;
 };
 
 object_t *
-buildKey(object_t *o)
+buildData(parser_state_t *state, object_t *o)
 {
-	const OSSymbol *s = OSSymbol::withCString(o->string);
-
-	free(o->string);
-	o->string = 0;
-	o->key = s;
-
-	return o;
-};
-
-object_t *
-buildOSData(object_t *o)
-{
-	OSData *d;
+	OSData *data;
 
 	if (o->size) {
-		d = OSData::withBytes(o->data, o->size);
-		free(o->data);
+		data = OSData::withBytes(o->data, o->size);
 	} else {
-		d = OSData::withCapacity(0);
+		data = OSData::withCapacity(0);
 	}
-	if (o->idref >= 0) rememberObject(o->idref, d);
+	if (o->idref >= 0) rememberObject(state, o->idref, data);
 
+	if (o->size) free(o->data);
 	o->data = 0;
-	o->object = d;
+	o->object = data;
 	return o;
 };
 
 object_t *
-buildOSNumber(object_t *o)
+buildNumber(parser_state_t *state, object_t *o)
 {
-	OSNumber *n = OSNumber::withNumber(o->number, o->size);
+	OSNumber *number = OSNumber::withNumber(o->number, o->size);
 
-	if (o->idref >= 0) rememberObject(o->idref, n);
+	if (o->idref >= 0) rememberObject(state, o->idref, number);
 
-	o->object = n;
+	o->object = number;
 	return o;
 };
 
 object_t *
-buildOSBoolean(object_t *o)
+buildBoolean(parser_state_t *state, object_t *o)
 {
-	OSBoolean *b = OSBoolean::withBoolean(o->number != 0);
-	o->object = b;
+	o->object = ((o->number == 0) ? kOSBooleanFalse : kOSBooleanTrue);
+	o->object->retain();
 	return o;
 };
-
-__BEGIN_DECLS
-#include <kern/lock.h>
-__END_DECLS
-
-static mutex_t *lock = 0;
 
 OSObject*
 OSUnserializeXML(const char *buffer, OSString **errorString)
 {
 	OSObject *object;
+	parser_state_t *state = (parser_state_t *)malloc(sizeof(parser_state_t));
 
-	if (!lock) {
-		lock = mutex_alloc(ETAP_IO_AHA);
-		mutex_lock(lock);
-	} else {
-		mutex_lock(lock);
+	if ((!state) || (!buffer)) return 0;
 
-	}
+	// just in case
+	if (errorString) *errorString = NULL;
 
-	objects = 0;
-	freeObjects = 0;
-	yyerror_message[0] = 0;		//just in case
-	parseBuffer = buffer;
-	parseBufferIndex = 0;
-	tags = OSDictionary::withCapacity(128);
-	if (yyparse() == 0) {
-		object = parsedObject;
-		if (errorString) *errorString = 0;
-	} else {
-		object = 0;
-		if (errorString)
-			*errorString = OSString::withCString(yyerror_message);
-	}
+	state->parseBuffer = buffer;
+	state->parseBufferIndex = 0;
+	state->lineNumber = 1;
+	state->objects = 0;
+	state->freeObjects = 0;
+	state->tags = OSDictionary::withCapacity(128);
+	state->errorString = errorString;
+	state->parsedObject = 0;
 
-	cleanupObjects();
-	tags->release();
-	mutex_unlock(lock);
+	(void)yyparse((void *)state);
+
+	object = state->parsedObject;
+
+	cleanupObjects(state);
+	state->tags->release();
+	free(state);
 
 	return object;
 }

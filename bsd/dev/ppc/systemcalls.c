@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2001 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2003 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -27,6 +27,7 @@
 #include <kern/thread.h>
 #include <kern/thread_act.h>
 #include <kern/assert.h>
+#include <kern/clock.h>
 #include <mach/machine/thread_status.h>
 #include <ppc/savearea.h>
 
@@ -39,6 +40,7 @@
 #include <sys/errno.h>
 #include <sys/ktrace.h>
 #include <sys/kdebug.h>
+#include <sys/kern_audit.h>
 
 extern void
 unix_syscall(
@@ -49,8 +51,8 @@ extern struct savearea *
 find_user_regs(
 	thread_act_t act);
 
-extern enter_funnel_section(funnel_t *funnel_lock);
-extern exit_funnel_section(funnel_t *funnel_lock);
+extern void enter_funnel_section(funnel_t *funnel_lock);
+extern void exit_funnel_section(void);
 
 /*
  * Function:	unix_syscall
@@ -73,6 +75,21 @@ unix_syscall(
 	boolean_t			flavor;
 	int funnel_type;
 
+	flavor = (((unsigned int)regs->save_r0) == NULL)? 1: 0;
+
+	if (flavor)
+		code = regs->save_r3;
+	else
+		code = regs->save_r0;
+
+	if (kdebug_enable && (code != 180)) {
+		if (flavor)
+			KERNEL_DEBUG_CONSTANT(BSDDBG_CODE(DBG_BSD_EXCP_SC, code) | DBG_FUNC_START,
+				regs->save_r4, regs->save_r5, regs->save_r6, regs->save_r7, 0);
+		else
+			KERNEL_DEBUG_CONSTANT(BSDDBG_CODE(DBG_BSD_EXCP_SC, code) | DBG_FUNC_START,
+				regs->save_r3, regs->save_r4, regs->save_r5, regs->save_r6, 0);
+	}
 	thread_act = current_act();
 	uthread = get_bsdthread_info(thread_act);
 
@@ -81,14 +98,7 @@ unix_syscall(
 	else
 		proc = current_proc();
 
-	flavor = (regs->save_r0 == NULL)? 1: 0;
-
 	uthread->uu_ar0 = (int *)regs;
-
-	if (flavor)
-		code = regs->save_r3;
-	else
-		code = regs->save_r0;
 
 	callp = (code >= nsysent) ? &sysent[63] : &sysent[code];
 
@@ -118,24 +128,12 @@ unix_syscall(
 		}
 	}
 
-	callp = (code >= nsysent) ? &sysent[63] : &sysent[code];
-
-	if (kdebug_enable && (code != 180)) {
-		if (flavor)
-			KERNEL_DEBUG_CONSTANT(BSDDBG_CODE(DBG_BSD_EXCP_SC, code) | DBG_FUNC_START,
-				regs->save_r4, regs->save_r5, regs->save_r6, regs->save_r7, 0);
-		else
-			KERNEL_DEBUG_CONSTANT(BSDDBG_CODE(DBG_BSD_EXCP_SC, code) | DBG_FUNC_START,
-				regs->save_r3, regs->save_r4, regs->save_r5, regs->save_r6, 0);
-	}
-
 	funnel_type = (int)callp->sy_funnel;
-	if(funnel_type == KERNEL_FUNNEL) 
+	if (funnel_type == KERNEL_FUNNEL) 
 		 enter_funnel_section(kernel_flock);
 	else if (funnel_type == NETWORK_FUNNEL)
 		 enter_funnel_section(network_flock);
 	
-
 	uthread->uu_rval[0] = 0;
 
 	/*
@@ -156,7 +154,9 @@ unix_syscall(
 	if (KTRPOINT(proc, KTR_SYSCALL))
 		ktrsyscall(proc, code, callp->sy_narg, uthread->uu_arg, funnel_type);
 
+	AUDIT_CMD(audit_syscall_enter(code, proc, uthread));
 	error = (*(callp->sy_call))(proc, (void *)uthread->uu_arg, &(uthread->uu_rval[0]));
+	AUDIT_CMD(audit_syscall_exit(error, proc, uthread));
 
 	regs = find_user_regs(thread_act);
 
@@ -164,7 +164,7 @@ unix_syscall(
 		regs->save_srr0 -= 8;
 	} else if (error != EJUSTRETURN) {
 		if (error) {
-			regs->save_r3 = error;
+			regs->save_r3 = (long long)error;
 			/* set the "pc" to execute cerror routine */
 			regs->save_srr0 -= 4;
 		} else { /* (not error) */
@@ -177,10 +177,7 @@ unix_syscall(
 	if (KTRPOINT(proc, KTR_SYSRET))
 		ktrsysret(proc, code, error, uthread->uu_rval[0], funnel_type);
 
-	if(funnel_type == KERNEL_FUNNEL) 
-		 exit_funnel_section(kernel_flock);
-	else if (funnel_type == NETWORK_FUNNEL)
-		 exit_funnel_section(network_flock);
+	 exit_funnel_section();
 
 	if (kdebug_enable && (code != 180)) {
 		KERNEL_DEBUG_CONSTANT(BSDDBG_CODE(DBG_BSD_EXCP_SC, code) | DBG_FUNC_END,
@@ -214,7 +211,7 @@ unix_syscall_return(error)
 		regs->save_srr0 -= 8;
 	} else if (error != EJUSTRETURN) {
 		if (error) {
-			regs->save_r3 = error;
+			regs->save_r3 = (long long)error;
 			/* set the "pc" to execute cerror routine */
 			regs->save_srr0 -= 4;
 		} else { /* (not error) */
@@ -236,10 +233,7 @@ unix_syscall_return(error)
 	if (KTRPOINT(proc, KTR_SYSRET))
 		ktrsysret(proc, code, error, uthread->uu_rval[0], funnel_type);
 
-	if(funnel_type == KERNEL_FUNNEL) 
-		 exit_funnel_section(kernel_flock);
-	else if (funnel_type == NETWORK_FUNNEL)
-		 exit_funnel_section(network_flock);
+	 exit_funnel_section();
 
 	if (kdebug_enable && (code != 180)) {
 		KERNEL_DEBUG_CONSTANT(BSDDBG_CODE(DBG_BSD_EXCP_SC, code) | DBG_FUNC_END,
@@ -263,33 +257,31 @@ struct gettimeofday_args{
 	struct timeval *tp;
 	struct timezone *tzp;
 };
-/*  NOTE THIS implementation is for  ppc architectures only */
+/*  NOTE THIS implementation is for  ppc architectures only.
+ *  It is infrequently called, since the commpage intercepts
+ *  most calls in user mode.
+ */
 int
 ppc_gettimeofday(p, uap, retval)
 	struct proc *p;
 	register struct gettimeofday_args *uap;
 	register_t *retval;
 {
-	struct timeval atv;
 	int error = 0;
-	struct timezone ltz;
-	//struct savearea *child_state;
-	extern simple_lock_data_t tz_slock;
 
-	if (uap->tp) {
-		microtime(&atv);
-		retval[0] = atv.tv_sec;
-		retval[1] = atv.tv_usec;
-	}
+	if (uap->tp)
+		clock_gettimeofday(&retval[0], &retval[1]);
 	
 	if (uap->tzp) {
+		struct timezone ltz;
+		extern simple_lock_data_t tz_slock;
+
 		usimple_lock(&tz_slock);
 		ltz = tz;
 		usimple_unlock(&tz_slock);
-		error = copyout((caddr_t)&ltz, (caddr_t)uap->tzp,
-		    sizeof (tz));
+		error = copyout((caddr_t)&ltz, (caddr_t)uap->tzp, sizeof (tz));
 	}
 
-	return(error);
+	return (error);
 }
 

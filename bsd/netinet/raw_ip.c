@@ -300,6 +300,23 @@ rip_output(m, so, dst)
 			  inp->inp_moptions));
 }
 
+int
+load_ipfw()
+{
+	kern_return_t	err;
+	
+	/* Load the kext by the identifier */
+	err = kmod_load_extension("com.apple.nke.IPFirewall");
+	if (err) return err;
+	
+	if (ip_fw_ctl_ptr == NULL) {
+		/* Wait for the kext to finish loading */
+		err = tsleep(&ip_fw_ctl_ptr, PWAIT | PCATCH, "load_ipfw_kext", 5 * 60 /* 5 seconds */);
+	}
+	
+	return err == 0 && ip_fw_ctl_ptr == NULL ? -1 : err;
+}
+
 /*
  * Raw IP socket option processing.
  */
@@ -334,9 +351,11 @@ rip_ctloutput(so, sopt)
 		case IP_OLD_FW_ADD:
 		case IP_OLD_FW_GET:
 			if (ip_fw_ctl_ptr == 0)
-				error = ENOPROTOOPT;
-			else
+				error = load_ipfw();
+			if (ip_fw_ctl_ptr && error == 0)
 				error = ip_fw_ctl_ptr(sopt);
+			else
+				error = ENOPROTOOPT;
 			break;
 
 #if DUMMYNET
@@ -401,9 +420,11 @@ rip_ctloutput(so, sopt)
 		case IP_OLD_FW_ZERO:
 		case IP_OLD_FW_RESETLOG:
 			if (ip_fw_ctl_ptr == 0)
-				error = ENOPROTOOPT;
-			else
+				error = load_ipfw();
+			if (ip_fw_ctl_ptr && error == 0)
 				error = ip_fw_ctl_ptr(sopt);
+			else
+				error = ENOPROTOOPT;
 			break;
 
 #if DUMMYNET

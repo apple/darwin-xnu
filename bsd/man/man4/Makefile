@@ -29,7 +29,6 @@ DATAFILES = \
 	pty.4	\
 	random.4	\
 	route.4	\
-	scsi.4	\
 	stderr.4	\
 	stdin.4	\
 	stdout.4	\

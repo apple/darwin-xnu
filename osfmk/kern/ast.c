@@ -93,92 +93,89 @@ ast_init(void)
 #endif	/* MACHINE_AST */
 }
 
+/*
+ * Called at splsched.
+ */
 void
 ast_taken(
 	ast_t			reasons,
 	boolean_t		enable
 )
 {
-	register int			mycpu;
-	register processor_t	myprocessor;
 	register thread_t		self = current_thread();
-	boolean_t				preempt_trap = (reasons == AST_PREEMPT);
+	register int			mycpu = cpu_number();
+	boolean_t				preempt_trap = (reasons == AST_PREEMPTION);
 
-	disable_preemption();
-	mycpu = cpu_number();
 	reasons &= need_ast[mycpu];
 	need_ast[mycpu] &= ~reasons;
-	enable_preemption();
 
 	/*
-	 * No ast for an idle thread
+	 * Handle ASTs for all threads
+	 * except idle processor threads.
 	 */
-	if (self->state & TH_IDLE)
-		goto enable_and_return;
+	if (!(self->state & TH_IDLE)) {
+		/*
+		 * Check for urgent preemption.
+		 */
+		if (	(reasons & AST_URGENT)				&&
+				wait_queue_assert_possible(self)		) {
+			if (reasons & AST_PREEMPT) {
+				counter(c_ast_taken_block++);
+				thread_block_reason(THREAD_CONTINUE_NULL,
+										AST_PREEMPT | AST_URGENT);
+			}
 
-	/*
-	 * Check for urgent preemption
-	 */
-	if ((reasons & AST_URGENT) && wait_queue_assert_possible(self)) {
-		if (reasons & AST_BLOCK) {
-			counter(c_ast_taken_block++);
-			thread_block_reason((void (*)(void))0, AST_BLOCK);
+			reasons &= ~AST_PREEMPTION;
 		}
 
-		reasons &= ~AST_PREEMPT;
-		if (reasons == 0)
-			goto enable_and_return;
-	}
-
-	if (preempt_trap)
-		goto enable_and_return;
-
-	ml_set_interrupts_enabled(enable);
+		/*
+		 * The kernel preempt traps
+		 * skip all other ASTs.
+		 */
+		if (!preempt_trap) {
+			ml_set_interrupts_enabled(enable);
 
 #ifdef	MACH_BSD
-	/*
-	 * Check for BSD hook
-	 */
-	if (reasons & AST_BSD) {
-		extern void		bsd_ast(thread_act_t	act);
-		thread_act_t	act = self->top_act;
+			/*
+			 * Handle BSD hook.
+			 */
+			if (reasons & AST_BSD) {
+				extern void		bsd_ast(thread_act_t	act);
+				thread_act_t	act = self->top_act;
 
-		thread_ast_clear(act, AST_BSD);
-		bsd_ast(act);
-	}
+				thread_ast_clear(act, AST_BSD);
+				bsd_ast(act);
+			}
 #endif
 
-	/* 
-	 * migration APC hook 
-	 */
-	if (reasons & AST_APC) {
-		act_execute_returnhandlers();
+			/* 
+			 * Thread APC hook.
+			 */
+			if (reasons & AST_APC)
+				act_execute_returnhandlers();
+
+			ml_set_interrupts_enabled(FALSE);
+
+			/* 
+			 * Check for preemption.
+			 */
+			if (reasons & AST_PREEMPT) {
+				processor_t		myprocessor = current_processor();
+
+				if (csw_needed(self, myprocessor))
+					reasons = AST_PREEMPT;
+				else
+					reasons = AST_NONE;
+			}
+			if (	(reasons & AST_PREEMPT)				&&
+					wait_queue_assert_possible(self)		) {		
+				counter(c_ast_taken_block++);
+				thread_block_reason(thread_exception_return, AST_PREEMPT);
+			}
+		}
 	}
 
-	/* 
-	 * Check for normal preemption
-	 */
-	reasons &= AST_BLOCK;
-    if (reasons == 0) {
-        disable_preemption();
-        myprocessor = current_processor();
-        if (csw_needed(self, myprocessor))
-            reasons = AST_BLOCK;
-        enable_preemption();
-    }
-	if (	(reasons & AST_BLOCK)				&&
-			wait_queue_assert_possible(self)		) {		
-		counter(c_ast_taken_block++);
-		thread_block_reason(thread_exception_return, AST_BLOCK);
-	}
-
-	goto just_return;
-
-enable_and_return:
-    ml_set_interrupts_enabled(enable);
-
-just_return:
-	return;
+	ml_set_interrupts_enabled(enable);
 }
 
 /*
@@ -188,7 +185,7 @@ void
 ast_check(
 	processor_t		processor)
 {
-	register thread_t		self = processor->cpu_data->active_thread;
+	register thread_t		self = processor->active_thread;
 
 	processor->current_pri = self->sched_pri;
 	if (processor->state == PROCESSOR_RUNNING) {
@@ -214,7 +211,4 @@ processor_running:
 	else
 	if (processor->state == PROCESSOR_SHUTDOWN)
 		goto processor_running;
-	else
-	if (processor->state == PROCESSOR_ASSIGN)
-		ast_on(AST_BLOCK);
 }

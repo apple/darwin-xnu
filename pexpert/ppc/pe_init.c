@@ -122,16 +122,11 @@ void PE_init_iokit(void)
     kern_return_t	ret;
     DTEntry		entry;
     int			size;
-    int			i;
     void **		map;
 
     PE_init_kprintf(TRUE);
     PE_init_printf(TRUE);
 
-    // init this now to get mace debugger for iokit startup
-    PE_init_ethernet_debugger();
-
-    
     if( kSuccess == DTLookupEntry(0, "/chosen/memory-map", &entry)) {
 
 	boot_progress_element * bootPict;
@@ -149,12 +144,10 @@ void PE_init_iokit(void)
 	    default_noroot_data   = &bootPict->data[0];
 	}
     }
+    panic_ui_initialize( (unsigned char *) appleClut8 );
     vc_progress_initialize( &default_progress, default_progress_data, (unsigned char *) appleClut8 );
 
-    PE_initialize_console( (PE_Video *) 0, kPEAcquireScreen );
-
-    ret = StartIOKit( PE_state.deviceTreeHead, PE_state.bootArgs,
-			(void *)0, (void *)0);
+    ret = StartIOKit( PE_state.deviceTreeHead, PE_state.bootArgs, (void *)0, (void *)0);
 }
 
 void PE_init_platform(boolean_t vm_initialized, void *_args)
@@ -195,15 +188,16 @@ void PE_init_platform(boolean_t vm_initialized, void *_args)
 
 void PE_create_console( void )
 {
-  if (PE_state.video.v_display)
-    PE_initialize_console( &PE_state.video, kPEGraphicsMode );
-  else
-    PE_initialize_console( &PE_state.video, kPETextMode );
+    if ( PE_state.video.v_display )
+        PE_initialize_console( &PE_state.video, kPEGraphicsMode );
+    else
+        PE_initialize_console( &PE_state.video, kPETextMode );
 }
 
 int PE_current_console( PE_Video * info )
 {
     *info = PE_state.video;
+    info->v_baseAddr = 0;
     return( 0);
 }
 

@@ -887,9 +887,21 @@ static int elap_online1(elapp)
 	/* Get DDP started */
 	if ((errno = ddp_add_if(elapp)))
 		return(errno);
-
+	
+	// check if we still have an interface - can be lost when
+	// ddp_add_if calls malloc
+	// need to make check here after ddp_add_if completes because 
+	// lap_online will call ddp_rem_if if we fail here
+	if (elapp->aa_ifp == 0)
+		return ENOENT;
+		
 	/* set up multicast address for cable-wide broadcasts */
 	(void)at_reg_mcast(elapp, (caddr_t)&elapp->cable_multicast_addr);
+
+        // need to check again if interface is present
+        // can be lost in at_reg_mcast
+	if (elapp->aa_ifp == 0)
+		return ENOENT;
 
 	elapp->startup_inprogress = TRUE;
 	if (! (elapp->startup_error = re_aarp(elapp)))
@@ -1083,8 +1095,6 @@ int ddp_shutdown(count_only)
 	vm_offset_t temp_rcb_data, temp_state_data;
 	int i, s, active_skts = 0;	/* count of active pids for non-socketized
 				   AppleTalk protocols */
-	extern int aarp_sched_probe();
-
 
 	/* Network is shutting down... send error messages up on each open
 	 * socket.
@@ -1235,29 +1245,6 @@ int ddp_shutdown(count_only)
 	}
 	ddp_start();
 	
-	/* free buffers for large arrays used by atp.
-	 * to prevent a race condition if the funnel is dropped
-	 * while calling kmem_free, the fields are grabbed and
-	 * zeroed first.
-	 */
-	if (atp_rcb_data != NULL) {
-		temp_rcb_data = (vm_offset_t)atp_rcb_data; 
-		atp_rcb_data = NULL;
-		atp_rcb_free_list = NULL;
-	} else
-	        temp_rcb_data = NULL;
-	if (atp_state_data != NULL) {
-		temp_state_data = (vm_offset_t)atp_state_data;
-		atp_state_data = NULL;
-		atp_free_list = NULL;
-	} else
-	        temp_state_data = NULL;
-
-	if (temp_rcb_data)
-	  kmem_free(kernel_map, temp_rcb_data, sizeof(struct atp_rcb) * NATP_RCB);
-	if (temp_state_data)
-	  kmem_free(kernel_map, temp_state_data, sizeof(struct atp_state) * NATP_STATE);
-
 	splx(s);
 	return(0);
 } /* ddp_shutdown */
@@ -1364,7 +1351,7 @@ void AARPwakeup(probe_cb)
 
 	ATDISABLE(s, arpinp_lock);
 	elapp = probe_cb->elapp;
-	if ( (elapp != NULL) && elapp->startup_inprogress ) {
+	if ( (elapp != NULL) && elapp->startup_inprogress && elapp->aa_ifp != 0) {
 		ATENABLE(s, arpinp_lock);
 
 		/* was AARPContinue */

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2002 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2003 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -68,9 +68,6 @@ OSErr ExchangeFileIDs( ExtendedVCB *vcb, ConstUTF8Param srcName, ConstUTF8Param 
 	err = BuildCatalogKeyUTF8(vcb, destID, destName, kUndefinedStrLen, &destKey, NULL);
 	ReturnIfError(err);
 
-	err = BTCheckFreeSpace(GetFileControlBlock(vcb->extentsRefNum));
-	ReturnIfError(err);
-	
 	if ( isHFSPlus )
 	{
 		//--	Step 1: Check the catalog nodes for extents

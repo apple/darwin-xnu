@@ -188,6 +188,8 @@ extern OSErr	CreateFileThreadID( FIDParam *filePB, WDCBRecPtr *wdcbPtr );
 extern OSErr	ExchangeFiles( FIDParam *filePB, WDCBRecPtr *wdcbPtr );
 #endif 
 
+extern	void	UpdateCatalogName( ConstStr31Param srcName, Str31 destName );
+
 
 // Catalog Iterator Routines
 

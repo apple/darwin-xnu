@@ -27,7 +27,7 @@ include $(MakeInc_def)
 #
 # XXX: CFLAGS
 #
-CFLAGS+= -DKERNEL -DLIBKERN_KERNEL_PRIVATE \
+CFLAGS+= -DKERNEL -DLIBSA_KERNEL_PRIVATE \
          -Wall -Wno-four-char-constants -fno-common
 
 SFLAGS+= -DKERNEL
@@ -87,10 +87,10 @@ LDOBJS = $(OBJS)
 $(COMPONENT).o: $(LDOBJS)
 	@echo "creating $(COMPONENT).o"
 	$(RM) $(RMFLAGS) vers.c
-	$(OBJROOT)/$(KERNEL_CONFIG)_$(ARCH_CONFIG)/$(COMPONENT)/newvers \
+	$(COMPOBJROOT)/newvers \
 	`$(CAT) ${VERSION_FILES}` ${COPYRIGHT_FILES}
 	${KCC} $(CFLAGS) $(INCLUDES) -c vers.c
-	@echo [ updating $(COMPONENT).o ${LIBKERN_KERNEL_CONFIG} ]
+	@echo [ updating $(COMPONENT).o ${LIBSA_KERNEL_CONFIG} ]
 	$(LD)  $(LDFLAGS_COMPONENT) -o $(COMPONENT).o ${LDOBJS} vers.o /usr/local/lib/libkld.a
 	$(SEG_HACK) __KLD $(COMPONENT).o -o $(COMPONENT)_kld.o
 	mv $(COMPONENT)_kld.o $(COMPONENT).o

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2002 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2003 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -35,6 +35,7 @@
 #include <sys/resourcevar.h>
 #include <sys/kernel.h>
 #include <sys/fcntl.h>
+#include <sys/filedesc.h>
 #include <sys/stat.h>
 #include <sys/buf.h>
 #include <sys/proc.h>
@@ -65,6 +66,10 @@ enum {
 };
 
 extern u_int32_t GetLogicalBlockSize(struct vnode *vp);
+
+static int  hfs_clonelink(struct vnode *, int, struct ucred *, struct proc *);
+static int  hfs_clonefile(struct vnode *, int, int, int,  struct ucred *, struct proc *);
+static int  hfs_clonesysfile(struct vnode *, int, int, int, struct ucred *, struct proc *);
 
 
 /*****************************************************************************
@@ -97,18 +102,16 @@ hfs_read(ap)
 	register struct vnode *vp = ap->a_vp;
 	struct cnode *cp;
 	struct filefork *fp;
-	struct buf *bp;
-	daddr_t logBlockNo;
-	u_long fragSize, moveSize, startOffset, ioxfersize;
 	int devBlockSize = 0;
-	off_t bytesRemaining;
 	int retval = 0;
     	off_t filesize;
     	off_t filebytes;
+	off_t start_resid = uio->uio_resid;
+
 
 	/* Preflight checks */
-	if (vp->v_type != VREG && vp->v_type != VLNK)
-		return (EISDIR);	/* HFS can only read files */
+	if ((vp->v_type != VREG) || !UBCINFOEXISTS(vp))
+		return (EPERM);		/* can only read regular files */
 	if (uio->uio_resid == 0)
 		return (0);		/* Nothing left to do */
 	if (uio->uio_offset < 0)
@@ -130,104 +133,28 @@ hfs_read(ap)
 	KERNEL_DEBUG((FSDBG_CODE(DBG_FSRW, 12)) | DBG_FUNC_START,
 		(int)uio->uio_offset, uio->uio_resid, (int)filesize, (int)filebytes, 0);
 
-	if (UBCISVALID(vp)) {
-		retval = cluster_read(vp, uio, filesize, devBlockSize, 0);
-	} else {
-
-		for (retval = 0, bp = NULL; uio->uio_resid > 0; bp = NULL) {
-
-            if ((bytesRemaining = (filesize - uio->uio_offset)) <= 0)
-                break;
-
-            logBlockNo  = (daddr_t)(uio->uio_offset / PAGE_SIZE_64);
-            startOffset = (u_long) (uio->uio_offset & PAGE_MASK_64);
-            fragSize    = PAGE_SIZE;
-
-            if (((logBlockNo * PAGE_SIZE) + fragSize) < filesize)
-                ioxfersize = fragSize;
-            else {
-                ioxfersize = filesize - (logBlockNo * PAGE_SIZE);
-                ioxfersize = (ioxfersize + (devBlockSize - 1)) & ~(devBlockSize - 1);
-            }
-		moveSize = ioxfersize;
-		moveSize -= startOffset;
-
-            if (bytesRemaining < moveSize)
-                moveSize = bytesRemaining;
-
-            if (uio->uio_resid < moveSize) {
-                moveSize = uio->uio_resid;
-            };
-            if (moveSize == 0) {
-                break;
-            };
-
-            if (( uio->uio_offset + fragSize) >= filesize) {
-                retval = bread(vp, logBlockNo, ioxfersize, NOCRED, &bp);
-
-            } else if (logBlockNo - 1 == vp->v_lastr && !(vp->v_flag & VRAOFF)) {
-                daddr_t nextLogBlockNo = logBlockNo + 1;
-                int nextsize;
-
-                if (((nextLogBlockNo * PAGE_SIZE) +
-                     (daddr_t)fragSize) < filesize)
-                    nextsize = fragSize;
-                else {
-                    nextsize = filesize - (nextLogBlockNo * PAGE_SIZE);
-                    nextsize = (nextsize + (devBlockSize - 1)) & ~(devBlockSize - 1);
-                }
-                retval = breadn(vp, logBlockNo, ioxfersize, &nextLogBlockNo, &nextsize, 1, NOCRED, &bp);
-            } else {
-                retval = bread(vp, logBlockNo, ioxfersize, NOCRED, &bp);
-            };
-
-            if (retval != E_NONE) {
-                if (bp) {
-                    brelse(bp);
-                    bp = NULL;
-                }
-                break;
-            };
-            vp->v_lastr = logBlockNo;
-
-            /*
-             * We should only get non-zero b_resid when an I/O retval
-             * has occurred, which should cause us to break above.
-             * However, if the short read did not cause an retval,
-             * then we want to ensure that we do not uiomove bad
-             * or uninitialized data.
-             */
-            ioxfersize -= bp->b_resid;
-
-            if (ioxfersize < moveSize) {			/* XXX PPD This should take the offset into account, too! */
-                if (ioxfersize == 0)
-                    break;
-                moveSize = ioxfersize;
-            }
-            if ((startOffset + moveSize) > bp->b_bcount)
-                panic("hfs_read: bad startOffset or moveSize\n");
-
-            if ((retval = uiomove((caddr_t)bp->b_data + startOffset, (int)moveSize, uio)))
-                break;
-
-            if (S_ISREG(cp->c_mode) &&
-                (((startOffset + moveSize) == fragSize) || (uio->uio_offset == filesize))) {
-                bp->b_flags |= B_AGE;
-            };
-
-            brelse(bp);
-            /* Start of loop resets bp to NULL before reaching outside this block... */
-        }
-
-		if (bp != NULL) {
-			brelse(bp);
-		}
-	}
+	retval = cluster_read(vp, uio, filesize, devBlockSize, 0);
 
 	cp->c_flag |= C_ACCESS;
 
 	KERNEL_DEBUG((FSDBG_CODE(DBG_FSRW, 12)) | DBG_FUNC_END,
 		(int)uio->uio_offset, uio->uio_resid, (int)filesize,  (int)filebytes, 0);
+
+	/*
+	 * Keep track blocks read
+	 */
+	if (VTOHFS(vp)->hfc_stage == HFC_RECORDING && retval == 0) {
+		/*
+		 * If this file hasn't been seen since the start of
+		 * the current sampling period then start over.
+		 */
+		if (cp->c_atime < VTOHFS(vp)->hfc_timebase) {
+			fp->ff_bytesread = start_resid - uio->uio_resid;
+			cp->c_atime = time.tv_sec;
+		} else {
+			fp->ff_bytesread += start_resid - uio->uio_resid;
+		}
+	}
 
 	return (retval);
 }
@@ -256,37 +183,32 @@ hfs_write(ap)
 	struct uio *uio = ap->a_uio;
 	struct cnode *cp;
 	struct filefork *fp;
-	struct buf *bp;
 	struct proc *p;
 	struct timeval tv;
 	ExtendedVCB *vcb;
-    int					devBlockSize = 0;
-    daddr_t 			logBlockNo;
-    long				fragSize;
-    off_t 				origFileSize, currOffset, writelimit, bytesToAdd;
-    off_t				actualBytesAdded;
-    u_long				blkoffset, resid, xfersize, clearSize;
-    int					eflags, ioflag;
-    int 				retval;
+	int devBlockSize = 0;
+	off_t origFileSize, writelimit, bytesToAdd;
+	off_t actualBytesAdded;
+	u_long resid;
+	int eflags, ioflag;
+	int retval;
 	off_t filebytes;
-	u_long fileblocks;
 	struct hfsmount *hfsmp;
 	int started_tr = 0, grabbed_lock = 0;
 
-	ioflag = ap->a_ioflag;
 
 	if (uio->uio_offset < 0)
 		return (EINVAL);
 	if (uio->uio_resid == 0)
 		return (E_NONE);
-	if (vp->v_type != VREG && vp->v_type != VLNK)
-		return (EISDIR);	/* Can only write files */
+	if ((vp->v_type != VREG) || !UBCINFOEXISTS(vp))
+		return (EPERM);		/* Can only write regular files */
 
+	ioflag = ap->a_ioflag;
 	cp = VTOC(vp);
 	fp = VTOF(vp);
 	vcb = VTOVCB(vp);
-	fileblocks = fp->ff_blocks;
-	filebytes = (off_t)fileblocks * (off_t)vcb->blockSize;
+	filebytes = (off_t)fp->ff_blocks * (off_t)vcb->blockSize;
 
 	if (ioflag & IO_APPEND)
 		uio->uio_offset = fp->ff_size;
@@ -297,7 +219,7 @@ hfs_write(ap)
 	if (VTOHFS(vp)->jnl && cp->c_datafork) {
 		struct HFSPlusExtentDescriptor *extd;
 
-		extd = &cp->c_datafork->ff_data.cf_extents[0];
+		extd = &cp->c_datafork->ff_extents[0];
 		if (extd->startBlock == VTOVCB(vp)->vcbJinfoBlock || extd->startBlock == VTOHFS(vp)->jnl_start) {
 			return EPERM;
 		}
@@ -324,19 +246,6 @@ hfs_write(ap)
 	eflags = kEFDeferMask;	/* defer file block allocations */
 	filebytes = (off_t)fp->ff_blocks * (off_t)vcb->blockSize;
 
-	/*
-	 * NOTE: In the following loop there are two positions tracked:
-	 * currOffset is the current I/O starting offset.  currOffset
-	 * is never >LEOF; the LEOF is nudged along with currOffset as
-	 * data is zeroed or written. uio->uio_offset is the start of
-	 * the current I/O operation.  It may be arbitrarily beyond
-	 * currOffset.
-	 *
-	 * The following is true at all times:
-	 *   currOffset <= LEOF <= uio->uio_offset <= writelimit
-	 */
-	currOffset = MIN(uio->uio_offset, fp->ff_size);
-
 	KERNEL_DEBUG((FSDBG_CODE(DBG_FSRW, 0)) | DBG_FUNC_START,
 		(int)uio->uio_offset, uio->uio_resid, (int)fp->ff_size, (int)filebytes, 0);
 	retval = 0;
@@ -356,6 +265,20 @@ hfs_write(ap)
 #endif /* QUOTA */
 
 	hfsmp = VTOHFS(vp);
+
+#ifdef HFS_SPARSE_DEV
+	/* 
+	 * When the underlying device is sparse and space
+	 * is low (< 8MB), stop doing delayed allocations
+	 * and begin doing synchronous I/O.
+	 */
+	if ((hfsmp->hfs_flags & HFS_HAS_SPARSE_DEVICE) &&
+	    (hfs_freeblks(hfsmp, 0) < 2048)) {
+		eflags &= ~kEFDeferMask;
+		ioflag |= IO_SYNC;
+	}
+#endif /* HFS_SPARSE_DEV */
+
 	if (writelimit > filebytes) {
 		hfs_global_shared_lock_acquire(hfsmp);
 		grabbed_lock = 1;
@@ -369,16 +292,19 @@ hfs_write(ap)
 	}
 
 	while (writelimit > filebytes) {
-	
 		bytesToAdd = writelimit - filebytes;
-		if (suser(ap->a_cred, NULL) != 0)
+		if (ap->a_cred && suser(ap->a_cred, NULL) != 0)
 			eflags |= kEFReserveMask;
 
 		/* lock extents b-tree (also protects volume bitmap) */
 		retval = hfs_metafilelocking(VTOHFS(vp), kHFSExtentsFileID, LK_EXCLUSIVE, current_proc());
 		if (retval != E_NONE)
 			break;
-
+	
+		/* Files that are changing size are not hot file candidates. */
+		if (hfsmp->hfc_stage == HFC_RECORDING) {
+			fp->ff_bytesread = 0;
+		}
 		retval = MacToVFSError(ExtendFileC (vcb, (FCB*)fp, bytesToAdd,
 				0, eflags, &actualBytesAdded));
 
@@ -394,6 +320,9 @@ hfs_write(ap)
 
 	// XXXdbg
 	if (started_tr) {
+		tv = time;
+		VOP_UPDATE(vp, &tv, &tv, 1);
+
 		hfs_flushvolumeheader(hfsmp, MNT_NOWAIT, 0);
 		journal_end_transaction(hfsmp->jnl);
 		started_tr = 0;
@@ -403,7 +332,7 @@ hfs_write(ap)
 		grabbed_lock = 0;
 	}
 
-	if (UBCISVALID(vp) && retval == E_NONE) {
+	if (retval == E_NONE) {
 		off_t filesize;
 		off_t zero_off;
 		off_t tail_off;
@@ -427,8 +356,10 @@ hfs_write(ap)
 			   of the transfer to see whether is invalid and should be zero-filled
 			   as part of the transfer:
 			 */
-			if (rl_scan(&fp->ff_invalidranges, zero_off, uio->uio_offset - 1, &invalid_range) != RL_NOOVERLAP)
-				lflag |= IO_HEADZEROFILL;
+			if (uio->uio_offset > zero_off) {
+			        if (rl_scan(&fp->ff_invalidranges, zero_off, uio->uio_offset - 1, &invalid_range) != RL_NOOVERLAP)
+				        lflag |= IO_HEADZEROFILL;
+			}
 		} else {
 			off_t eof_page_base = fp->ff_size & ~PAGE_MASK_64;
 			
@@ -528,104 +459,9 @@ hfs_write(ap)
 		}
 		if (resid > uio->uio_resid)
 			cp->c_flag |= C_CHANGE | C_UPDATE;
-	} else {
-		while (retval == E_NONE && uio->uio_resid > 0) {
-			logBlockNo = currOffset / PAGE_SIZE;
-			blkoffset  = currOffset & PAGE_MASK;
-
-			if ((filebytes - currOffset) < PAGE_SIZE_64)
-				fragSize = filebytes - ((off_t)logBlockNo * PAGE_SIZE_64);
-			else
-				fragSize = PAGE_SIZE;
-			xfersize = fragSize - blkoffset;
-	
-			/* Make any adjustments for boundary conditions */
-			if (currOffset + (off_t)xfersize > writelimit)
-				xfersize = writelimit - currOffset;
-	 
-			/*
-			 * There is no need to read into bp if:
-			 * We start on a block boundary and will overwrite the whole block
-			 *
-			 *						OR
-			 */
-			if ((blkoffset == 0) && (xfersize >= fragSize)) {
-				bp = getblk(vp, logBlockNo, fragSize, 0, 0, BLK_READ);
-				retval = 0;
-	
-				if (bp->b_blkno == -1) {
-					brelse(bp);
-					retval = EIO;		/* XXX */
-					break;
-				}
-			} else {
-	
-				if (currOffset == fp->ff_size && blkoffset == 0) {
-					bp = getblk(vp, logBlockNo, fragSize, 0, 0, BLK_READ);
-					retval = 0;
-					if (bp->b_blkno == -1) {
-						brelse(bp);
-						retval = EIO;		/* XXX */
-						break;
-					}
-				} else {
-					/*
-					 * This I/O transfer is not sufficiently aligned,
-					 * so read the affected block into a buffer:
-					 */
-					retval = bread(vp, logBlockNo, fragSize, ap->a_cred, &bp);
-					if (retval != E_NONE) {
-						if (bp)
-						brelse(bp);
-						break;
-					}
-				}
-			}
-	
-			/* See if we are starting to write within file boundaries:
-			 * If not, then we need to present a "hole" for the area
-			 * between the current EOF and the start of the current
-			 * I/O operation:
-			 *
-			 * Note that currOffset is only less than uio_offset if
-			 * uio_offset > LEOF...
-			 */
-			if (uio->uio_offset > currOffset) {
-				clearSize = MIN(uio->uio_offset - currOffset, xfersize);
-				bzero(bp->b_data + blkoffset, clearSize);
-				currOffset += clearSize;
-				blkoffset += clearSize;
-				xfersize -= clearSize;
-			}
-	
-			if (xfersize > 0) {
-				retval = uiomove((caddr_t)bp->b_data + blkoffset, (int)xfersize, uio);
-				currOffset += xfersize;
-			}
-	
-			if (ioflag & IO_SYNC) {
-				(void)VOP_BWRITE(bp);
-			} else if ((xfersize + blkoffset) == fragSize) {
-				bp->b_flags |= B_AGE;
-				bawrite(bp);
-			} else {
-				bdwrite(bp);
-			}
-	
-			/* Update the EOF if we just extended the file
-			 * (the PEOF has already been moved out and the
-			 * block mapping table has been updated):
-			 */
-			if (currOffset > fp->ff_size) {
-				fp->ff_size = currOffset;
-				if (UBCISVALID(vp))
-					ubc_setsize(vp, fp->ff_size); /* XXX check errors */
-			}
-			if (retval || (resid == 0))
-				break;
-			cp->c_flag |= C_CHANGE | C_UPDATE;
-		} /* endwhile */
 	}
+
+	HFS_KNOTE(vp, NOTE_WRITE);
 
 ioerr_exit:
 	/*
@@ -648,6 +484,7 @@ ioerr_exit:
 		tv = time;
 		retval = VOP_UPDATE(vp, &tv, &tv, 1);
 	}
+	vcb->vcbWrCnt++;
 
 	KERNEL_DEBUG((FSDBG_CODE(DBG_FSRW, 0)) | DBG_FUNC_END,
 		(int)uio->uio_offset, uio->uio_resid, (int)fp->ff_size, (int)filebytes, 0);
@@ -655,6 +492,22 @@ ioerr_exit:
 	return (retval);
 }
 
+
+#ifdef HFS_SPARSE_DEV
+struct hfs_backingstoreinfo {
+	int  signature;   /* == 3419115 */
+	int  version;     /* version of this struct (1) */
+	int  backingfd;   /* disk image file (on backing fs) */
+	int  bandsize;    /* sparse disk image band size */
+};
+
+#define HFSIOC_SETBACKINGSTOREINFO   _IOW('h', 7, struct hfs_backingstoreinfo)
+#define HFSIOC_CLRBACKINGSTOREINFO   _IO('h', 8)
+
+#define HFS_SETBACKINGSTOREINFO  IOCBASECMD(HFSIOC_SETBACKINGSTOREINFO)
+#define HFS_CLRBACKINGSTOREINFO  IOCBASECMD(HFSIOC_CLRBACKINGSTOREINFO)
+
+#endif /* HFS_SPARSE_DEV */
 
 /*
 
@@ -684,10 +537,127 @@ hfs_ioctl(ap)
 	} */ *ap;
 {
 	switch (ap->a_command) {
-	case 1: {
+
+#ifdef HFS_SPARSE_DEV
+	case HFS_SETBACKINGSTOREINFO: {
+		struct hfsmount * hfsmp;
+		struct vnode * bsfs_rootvp;
+		struct vnode * di_vp;
+		struct file * di_fp;
+		struct hfs_backingstoreinfo *bsdata;
+		int error = 0;
+		
+		hfsmp = VTOHFS(ap->a_vp);
+		if (hfsmp->hfs_flags & HFS_HAS_SPARSE_DEVICE) {
+			return (EALREADY);
+		}
+		if (ap->a_p->p_ucred->cr_uid != 0 &&
+			ap->a_p->p_ucred->cr_uid != (HFSTOVFS(hfsmp))->mnt_stat.f_owner) {
+			return (EACCES); /* must be owner of file system */
+		}
+		bsdata = (struct hfs_backingstoreinfo *)ap->a_data;
+		if (bsdata == NULL) {
+			return (EINVAL);
+		}
+		if (error = fdgetf(ap->a_p, bsdata->backingfd, &di_fp)) {
+			return (error);
+		}
+		if (fref(di_fp) == -1) {
+			return (EBADF);
+		}
+		if (di_fp->f_type != DTYPE_VNODE) {
+			frele(di_fp);
+			return (EINVAL);
+		}
+		di_vp = (struct vnode *)di_fp->f_data;
+		if (ap->a_vp->v_mount == di_vp->v_mount) {
+			frele(di_fp);
+			return (EINVAL);
+		}
+
+		/*
+		 * Obtain the backing fs root vnode and keep a reference
+		 * on it.  This reference will be dropped in hfs_unmount.
+		 */
+		error = VFS_ROOT(di_vp->v_mount, &bsfs_rootvp);
+		if (error) {
+			frele(di_fp);
+			return (error);
+		}
+        	VOP_UNLOCK(bsfs_rootvp, 0, ap->a_p);  /* Hold on to the reference */
+
+		hfsmp->hfs_backingfs_rootvp = bsfs_rootvp;
+		hfsmp->hfs_flags |= HFS_HAS_SPARSE_DEVICE;
+		hfsmp->hfs_sparsebandblks = bsdata->bandsize / HFSTOVCB(hfsmp)->blockSize;
+		hfsmp->hfs_sparsebandblks *= 4;
+
+		frele(di_fp);
+		return (0);
+	}
+	case HFS_CLRBACKINGSTOREINFO: {
+		struct hfsmount * hfsmp;
+		struct vnode * tmpvp;
+
+		hfsmp = VTOHFS(ap->a_vp);
+		if (ap->a_p->p_ucred->cr_uid != 0 &&
+			ap->a_p->p_ucred->cr_uid != (HFSTOVFS(hfsmp))->mnt_stat.f_owner) {
+			return (EACCES); /* must be owner of file system */
+		}
+		if ((hfsmp->hfs_flags & HFS_HAS_SPARSE_DEVICE) &&
+		    hfsmp->hfs_backingfs_rootvp) {
+
+			hfsmp->hfs_flags &= ~HFS_HAS_SPARSE_DEVICE;
+			tmpvp = hfsmp->hfs_backingfs_rootvp;
+			hfsmp->hfs_backingfs_rootvp = NULLVP;
+			hfsmp->hfs_sparsebandblks = 0;
+			vrele(tmpvp);
+		}
+		return (0);
+	}
+#endif /* HFS_SPARSE_DEV */
+
+	case 6: {
+		int error;
+
+		ap->a_vp->v_flag |= VFULLFSYNC;
+		error = VOP_FSYNC(ap->a_vp, ap->a_cred, MNT_NOWAIT, ap->a_p);
+		ap->a_vp->v_flag &= ~VFULLFSYNC;
+
+		return error;
+	}
+	case 5: {
+		register struct vnode *vp;
 		register struct cnode *cp;
+		struct filefork *fp;
+		int error;
+
+		vp = ap->a_vp;
+		cp = VTOC(vp);
+		fp = VTOF(vp);
+
+		if (vp->v_type != VREG)
+			return EINVAL;
+ 
+		VOP_LEASE(vp, ap->a_p, ap->a_cred, LEASE_READ);
+		error = vn_lock(vp, LK_EXCLUSIVE | LK_RETRY, ap->a_p);
+		if (error)
+			return (error);
+
+	        /*
+		 * used by regression test to determine if 
+		 * all the dirty pages (via write) have been cleaned
+		 * after a call to 'fsysnc'.
+		 */
+		error = is_file_clean(vp, fp->ff_size);
+		VOP_UNLOCK(vp, 0, ap->a_p);
+
+		return (error);
+	}
+
+	case 1: {
 		register struct vnode *vp;
 		register struct radvisory *ra;
+		register struct cnode *cp;
 		struct filefork *fp;
 		int devBlockSize = 0;
 		int error;
@@ -992,6 +962,7 @@ hfs_cmap(ap)
     struct rl_entry *invalid_range;
     enum rl_overlaptype overlaptype;
     int started_tr = 0, grabbed_lock = 0;
+	struct timeval tv;
 
 	/*
 	 * Check for underlying vnode requests and ensure that logical
@@ -1001,6 +972,17 @@ hfs_cmap(ap)
 		return (0);
 
 	p = current_proc();
+
+	if (ISSET(VTOC(ap->a_vp)->c_flag, C_NOBLKMAP)) {
+		/*
+		 * File blocks are getting remapped. Wait until its finished.
+		 */
+		SET(VTOC(ap->a_vp)->c_flag, C_WBLKMAP);
+		(void) tsleep((caddr_t)VTOC(ap->a_vp), PINOD, "hfs_cmap", 0);
+		if (ISSET(VTOC(ap->a_vp)->c_flag, C_NOBLKMAP))
+			panic("hfs_cmap: no mappable blocks");
+	}	
+
   retry:
 	if (fp->ff_unallocblocks) {
 		lockExtBtree = 1;
@@ -1040,7 +1022,7 @@ hfs_cmap(ap)
 	if (fp->ff_unallocblocks) {
 		SInt64 reqbytes, actbytes;
 
-		//
+		// 
 		// Make sure we have a transaction.  It's possible
 		// that we came in and fp->ff_unallocblocks was zero
 		// but during the time we blocked acquiring the extents
@@ -1052,7 +1034,7 @@ hfs_cmap(ap)
 			(void) hfs_metafilelocking(hfsmp, kHFSExtentsFileID, LK_RELEASE, p);
 			lockExtBtree = 0;
 		    }
-    
+
 		    goto retry;
 		}
 
@@ -1071,6 +1053,10 @@ hfs_cmap(ap)
 		fp->ff_blocks                 -= fp->ff_unallocblocks;
 		fp->ff_unallocblocks           = 0;
 
+		/* Files that are changing size are not hot file candidates. */
+		if (hfsmp->hfc_stage == HFC_RECORDING) {
+			fp->ff_bytesread = 0;
+		}
 		while (retval == 0 && reqbytes > 0) {
 			retval = MacToVFSError(ExtendFileC(HFSTOVCB(hfsmp),
 					(FCB*)fp, reqbytes, 0,
@@ -1090,7 +1076,11 @@ hfs_cmap(ap)
 
 		if (retval) {
 			(void) hfs_metafilelocking(hfsmp, kHFSExtentsFileID, LK_RELEASE, p);
+			VTOC(ap->a_vp)->c_flag |= C_MODIFIED;
 			if (started_tr) {
+				tv = time;
+				VOP_UPDATE(ap->a_vp, &tv, &tv, 1);
+
 				hfs_flushvolumeheader(hfsmp, MNT_NOWAIT, 0);
 				journal_end_transaction(hfsmp->jnl);
 			}
@@ -1099,7 +1089,6 @@ hfs_cmap(ap)
 			}
 			return (retval);
 		}
-		VTOC(ap->a_vp)->c_flag |= C_MODIFIED;
 	}
 
 	retval = MacToVFSError(
@@ -1115,6 +1104,9 @@ hfs_cmap(ap)
 
 	// XXXdbg
 	if (started_tr) {
+		tv = time;
+		retval = VOP_UPDATE(ap->a_vp, &tv, &tv, 1);
+
 		hfs_flushvolumeheader(hfsmp, MNT_NOWAIT, 0);
 		journal_end_transaction(hfsmp->jnl);
 		started_tr = 0;
@@ -1361,21 +1353,7 @@ hfs_strategy(ap)
 }
 
 
-/*
-#
-#% truncate	vp	L L L
-#
-vop_truncate {
-    IN struct vnode *vp;
-    IN off_t length;
-    IN int flags;	(IO_SYNC)
-    IN struct ucred *cred;
-    IN struct proc *p;
-};
- * Truncate a cnode to at most length size, freeing (or adding) the
- * disk blocks.
- */
-int hfs_truncate(ap)
+static int do_hfs_truncate(ap)
 	struct vop_truncate_args /* {
 		struct vnode *a_vp;
 		off_t a_length;
@@ -1420,6 +1398,11 @@ int hfs_truncate(ap)
 	tv = time;
 	retval = E_NONE;
 
+	/* Files that are changing size are not hot file candidates. */
+	if (hfsmp->hfc_stage == HFC_RECORDING) {
+		fp->ff_bytesread = 0;
+	}
+
 	/* 
 	 * We cannot just check if fp->ff_size == length (as an optimization)
 	 * since there may be extra physical blocks that also need truncation.
@@ -1447,13 +1430,23 @@ int hfs_truncate(ap)
 		 */
 		if (length > filebytes) {
 			int eflags;
+			u_long blockHint = 0;
 
 			/* All or nothing and don't round up to clumpsize. */
 			eflags = kEFAllMask | kEFNoClumpMask;
 
-			if (suser(ap->a_cred, NULL) != 0)
+			if (ap->a_cred && suser(ap->a_cred, NULL) != 0)
 				eflags |= kEFReserveMask;  /* keep a reserve */
 
+			/*
+			 * Allocate Journal and Quota files in metadata zone.
+			 */
+			if (filebytes == 0 &&
+			    hfsmp->hfs_flags & HFS_METADATA_ZONE &&
+			    hfs_virtualmetafile(cp)) {
+				eflags |= kEFMetadataMask;
+				blockHint = hfsmp->hfs_metazone_start;
+			}
 			// XXXdbg
 			hfs_global_shared_lock_acquire(hfsmp);
 			if (hfsmp->jnl) {
@@ -1479,7 +1472,7 @@ int hfs_truncate(ap)
 				retval = MacToVFSError(ExtendFileC(VTOVCB(vp),
                                                     (FCB*)fp,
                                                     bytesToAdd,
-                                                    0,
+                                                    blockHint,
                                                     eflags,
                                                     &actualBytesAdded));
 
@@ -1495,6 +1488,9 @@ int hfs_truncate(ap)
 
 			// XXXdbg
 			if (hfsmp->jnl) {
+				tv = time;
+				VOP_UPDATE(vp, &tv, &tv, 1);
+
 				hfs_flushvolumeheader(hfsmp, MNT_NOWAIT, 0);
 				journal_end_transaction(hfsmp->jnl);
 			} 
@@ -1642,6 +1638,9 @@ int hfs_truncate(ap)
 
 			// XXXdbg
 			if (hfsmp->jnl) {
+				tv = time;
+				VOP_UPDATE(vp, &tv, &tv, 1);
+
 				hfs_flushvolumeheader(hfsmp, MNT_NOWAIT, 0);
 				journal_end_transaction(hfsmp->jnl);
 			}
@@ -1676,6 +1675,83 @@ Err_Exit:
 }
 
 
+/*
+#
+#% truncate	vp	L L L
+#
+vop_truncate {
+    IN struct vnode *vp;
+    IN off_t length;
+    IN int flags;	(IO_SYNC)
+    IN struct ucred *cred;
+    IN struct proc *p;
+};
+ * Truncate a cnode to at most length size, freeing (or adding) the
+ * disk blocks.
+ */
+int hfs_truncate(ap)
+	struct vop_truncate_args /* {
+		struct vnode *a_vp;
+		off_t a_length;
+		int a_flags;
+		struct ucred *a_cred;
+		struct proc *a_p;
+	} */ *ap;
+{
+	register struct vnode *vp = ap->a_vp;
+	register struct cnode *cp = VTOC(vp);
+    	struct filefork *fp = VTOF(vp);
+	off_t length;
+	off_t filebytes;
+	u_long fileblocks;
+	int blksize, error;
+	u_int64_t nsize;
+
+	if (vp->v_type != VREG && vp->v_type != VLNK)
+		return (EISDIR);	/* cannot truncate an HFS directory! */
+
+	length = ap->a_length;
+	blksize = VTOVCB(vp)->blockSize;
+	fileblocks = fp->ff_blocks;
+	filebytes = (off_t)fileblocks * (off_t)blksize;
+
+	// have to loop truncating or growing files that are
+	// really big because otherwise transactions can get
+	// enormous and consume too many kernel resources.
+	if (length < filebytes && (filebytes - length) > HFS_BIGFILE_SIZE) {
+	    while (filebytes > length) {
+		if ((filebytes - length) > HFS_BIGFILE_SIZE) {
+		    filebytes -= HFS_BIGFILE_SIZE;
+		} else {
+		    filebytes = length;
+		}
+
+		ap->a_length = filebytes;
+		error = do_hfs_truncate(ap);
+		if (error)
+		    break;
+	    }
+	} else if (length > filebytes && (length - filebytes) > HFS_BIGFILE_SIZE) {
+	    while (filebytes < length) {
+		if ((length - filebytes) > HFS_BIGFILE_SIZE) {
+		    filebytes += HFS_BIGFILE_SIZE;
+		} else {
+		    filebytes = (length - filebytes);
+		}
+
+		ap->a_length = filebytes;
+		error = do_hfs_truncate(ap);
+		if (error)
+		    break;
+	    }
+	} else {
+	    error = do_hfs_truncate(ap);
+	}
+
+	return error;
+}
+
+
 
 /*
 #
@@ -1706,6 +1782,7 @@ int hfs_allocate(ap)
 	struct vnode *vp = ap->a_vp;
 	struct cnode *cp = VTOC(vp);
 	struct filefork *fp = VTOF(vp);
+	ExtendedVCB *vcb = VTOVCB(vp);
 	off_t length = ap->a_length;
 	off_t startingPEOF;
 	off_t moreBytesRequested;
@@ -1716,31 +1793,30 @@ int hfs_allocate(ap)
 	struct timeval tv;
 	int retval, retval2;
 	UInt32 blockHint;
-	UInt32 extendFlags =0;   /* For call to ExtendFileC */
+	UInt32 extendFlags;   /* For call to ExtendFileC */
 	struct hfsmount *hfsmp;
 
 	hfsmp = VTOHFS(vp);
 
 	*(ap->a_bytesallocated) = 0;
 	fileblocks = fp->ff_blocks;
-	filebytes = (off_t)fileblocks * (off_t)VTOVCB(vp)->blockSize;
+	filebytes = (off_t)fileblocks * (off_t)vcb->blockSize;
 
 	if (length < (off_t)0)
 		return (EINVAL);
-	if (vp->v_type != VREG && vp->v_type != VLNK)
+	if (vp->v_type != VREG)
 		return (EISDIR);
-	if ((ap->a_flags & ALLOCATEFROMVOL) && (length <= filebytes))
+	if ((ap->a_flags & ALLOCATEFROMVOL) && (length < filebytes))
 		return (EINVAL);
 
 	/* Fill in the flags word for the call to Extend the file */
 
+	extendFlags = kEFNoClumpMask;
 	if (ap->a_flags & ALLOCATECONTIG) 
 		extendFlags |= kEFContigMask;
-
 	if (ap->a_flags & ALLOCATEALL)
 		extendFlags |= kEFAllMask;
-
-	if (suser(ap->a_cred, NULL) != 0)
+	if (ap->a_cred && suser(ap->a_cred, NULL) != 0)
 		extendFlags |= kEFReserveMask;
 
 	tv = time;
@@ -1767,12 +1843,31 @@ int hfs_allocate(ap)
 		
 #if QUOTA
 		retval = hfs_chkdq(cp,
-				(int64_t)(roundup(moreBytesRequested, VTOVCB(vp)->blockSize)), 
+				(int64_t)(roundup(moreBytesRequested, vcb->blockSize)), 
 				ap->a_cred, 0);
 		if (retval)
 			return (retval);
 
 #endif /* QUOTA */
+		/*
+		 * Metadata zone checks.
+		 */
+		if (hfsmp->hfs_flags & HFS_METADATA_ZONE) {
+			/*
+			 * Allocate Journal and Quota files in metadata zone.
+			 */
+			if (hfs_virtualmetafile(cp)) {
+				extendFlags |= kEFMetadataMask;
+				blockHint = hfsmp->hfs_metazone_start;
+			} else if ((blockHint >= hfsmp->hfs_metazone_start) &&
+				   (blockHint <= hfsmp->hfs_metazone_end)) {
+				/*
+				 * Move blockHint outside metadata zone.
+				 */
+				blockHint = hfsmp->hfs_metazone_end + 1;
+			}
+		}
+
 		// XXXdbg
 		hfs_global_shared_lock_acquire(hfsmp);
 		if (hfsmp->jnl) {
@@ -1792,7 +1887,7 @@ int hfs_allocate(ap)
 			goto Err_Exit;
 		}
 
-		retval = MacToVFSError(ExtendFileC(VTOVCB(vp),
+		retval = MacToVFSError(ExtendFileC(vcb,
 						(FCB*)fp,
 						moreBytesRequested,
 						blockHint,
@@ -1800,12 +1895,15 @@ int hfs_allocate(ap)
 						&actualBytesAdded));
 
 		*(ap->a_bytesallocated) = actualBytesAdded;
-		filebytes = (off_t)fp->ff_blocks * (off_t)VTOVCB(vp)->blockSize;
+		filebytes = (off_t)fp->ff_blocks * (off_t)vcb->blockSize;
 
 		(void) hfs_metafilelocking(VTOHFS(vp), kHFSExtentsFileID, LK_RELEASE, ap->a_p);
 
 		// XXXdbg
 		if (hfsmp->jnl) {
+			tv = time;
+			VOP_UPDATE(vp, &tv, &tv, 1);
+
 			hfs_flushvolumeheader(hfsmp, MNT_NOWAIT, 0);
 			journal_end_transaction(hfsmp->jnl);
 		}
@@ -1827,7 +1925,7 @@ int hfs_allocate(ap)
 		 */
 		if ((actualBytesAdded != 0) && (moreBytesRequested < actualBytesAdded))
 			*(ap->a_bytesallocated) =
-				roundup(moreBytesRequested, (off_t)VTOVCB(vp)->blockSize);
+				roundup(moreBytesRequested, (off_t)vcb->blockSize);
 
 	} else { /* Shorten the size of the file */
 
@@ -1863,14 +1961,17 @@ int hfs_allocate(ap)
 
 		retval = MacToVFSError(
                             TruncateFileC(
-                                            VTOVCB(vp),
+                                            vcb,
                                             (FCB*)fp,
                                             length,
                                             false));
 		(void) hfs_metafilelocking(VTOHFS(vp), kHFSExtentsFileID, LK_RELEASE, ap->a_p);
-		filebytes = (off_t)fp->ff_blocks * (off_t)VTOVCB(vp)->blockSize;
+		filebytes = (off_t)fp->ff_blocks * (off_t)vcb->blockSize;
 
 		if (hfsmp->jnl) {
+			tv = time;
+			VOP_UPDATE(vp, &tv, &tv, 1);
+
 			hfs_flushvolumeheader(hfsmp, MNT_NOWAIT, 0);
 			journal_end_transaction(hfsmp->jnl);
 		}
@@ -1925,7 +2026,7 @@ hfs_pagein(ap)
 	int devBlockSize = 0;
 	int error;
 
-	if (vp->v_type != VREG && vp->v_type != VLNK)
+	if (vp->v_type != VREG)
 		panic("hfs_pagein: vp not UBC type\n");
 
 	VOP_DEVBLOCKSIZE(VTOC(vp)->c_devvp, &devBlockSize);
@@ -1933,6 +2034,25 @@ hfs_pagein(ap)
 	error = cluster_pagein(vp, ap->a_pl, ap->a_pl_offset, ap->a_f_offset,
 	                        ap->a_size, (off_t)VTOF(vp)->ff_size, devBlockSize,
 	                        ap->a_flags);
+	/*
+	 * Keep track blocks read
+	 */
+	if (VTOHFS(vp)->hfc_stage == HFC_RECORDING && error == 0) {
+		struct cnode *cp;
+		
+		cp = VTOC(vp);		
+		/*
+		 * If this file hasn't been seen since the start of
+		 * the current sampling period then start over.
+		 */
+		if (cp->c_atime < VTOHFS(vp)->hfc_timebase)
+			VTOF(vp)->ff_bytesread = ap->a_size;
+		else
+			VTOF(vp)->ff_bytesread += ap->a_size;
+
+		cp->c_flag |= C_ACCESS;
+	}
+
 	return (error);
 }
 
@@ -1966,10 +2086,18 @@ hfs_pageout(ap)
 	filesize = fp->ff_size;
 	end_of_range = ap->a_f_offset + ap->a_size - 1;
 
+	if (cp->c_flag & C_RELOCATING) {
+		if (end_of_range < (filesize / 2)) {
+			return (EBUSY);
+		}
+	}
+
 	if (end_of_range >= filesize)
 	        end_of_range = (off_t)(filesize - 1);
-	if (ap->a_f_offset < filesize)
+	if (ap->a_f_offset < filesize) {
 	        rl_remove(ap->a_f_offset, end_of_range, &fp->ff_invalidranges);
+	        cp->c_flag |= C_MODIFIED;  /* leof is dirty */
+	}
 
 	retval = cluster_pageout(vp, ap->a_pl, ap->a_pl_offset, ap->a_f_offset, ap->a_size,
 				 filesize, devBlockSize, ap->a_flags);
@@ -2036,3 +2164,459 @@ hfs_bwrite(ap)
 
 	return (retval);
 }
+
+/*
+ * Relocate a file to a new location on disk
+ *  cnode must be locked on entry
+ *
+ * Relocation occurs by cloning the file's data from its
+ * current set of blocks to a new set of blocks. During
+ * the relocation all of the blocks (old and new) are
+ * owned by the file.
+ *
+ * -----------------
+ * |///////////////|
+ * -----------------
+ * 0               N (file offset)
+ *
+ * -----------------     -----------------
+ * |///////////////|     |               |     STEP 1 (aquire new blocks)
+ * -----------------     -----------------
+ * 0               N     N+1             2N
+ *
+ * -----------------     -----------------
+ * |///////////////|     |///////////////|     STEP 2 (clone data)
+ * -----------------     -----------------
+ * 0               N     N+1             2N
+ *
+ *                       -----------------
+ *                       |///////////////|     STEP 3 (head truncate blocks)
+ *                       -----------------
+ *                       0               N
+ *
+ * During steps 2 and 3 page-outs to file offsets less
+ * than or equal to N are suspended.
+ *
+ * During step 3 page-ins to the file get supended.
+ */
+__private_extern__
+int
+hfs_relocate(vp, blockHint, cred, p)
+	struct  vnode *vp;
+	u_int32_t  blockHint;
+	struct  ucred *cred;
+	struct  proc *p;
+{
+	struct  filefork *fp;
+	struct  hfsmount *hfsmp;
+	ExtendedVCB *vcb;
+
+	u_int32_t  headblks;
+	u_int32_t  datablks;
+	u_int32_t  blksize;
+	u_int32_t  realsize;
+	u_int32_t  growsize;
+	u_int32_t  nextallocsave;
+	u_int32_t  sector_a;
+	u_int32_t  sector_b;
+	int eflags;
+	u_int32_t  oldstart;  /* debug only */
+	off_t  newbytes;
+	int  retval;
+
+	if (vp->v_type != VREG && vp->v_type != VLNK) {
+		return (EPERM);
+	}
+	
+	hfsmp = VTOHFS(vp);
+	if (hfsmp->hfs_flags & HFS_FRAGMENTED_FREESPACE) {
+		return (ENOSPC);
+	}
+
+	fp = VTOF(vp);
+	if (fp->ff_unallocblocks)
+		return (EINVAL);
+	vcb = VTOVCB(vp);
+	blksize = vcb->blockSize;
+	if (blockHint == 0)
+		blockHint = vcb->nextAllocation;
+
+	if ((fp->ff_size > (u_int64_t)0x7fffffff) ||
+	    (vp->v_type == VLNK && fp->ff_size > blksize)) {
+		return (EFBIG);
+	}
+
+	headblks = fp->ff_blocks;
+	datablks = howmany(fp->ff_size, blksize);
+	growsize = datablks * blksize;
+	realsize = fp->ff_size;
+	eflags = kEFContigMask | kEFAllMask | kEFNoClumpMask;
+	if (blockHint >= hfsmp->hfs_metazone_start &&
+	    blockHint <= hfsmp->hfs_metazone_end)
+		eflags |= kEFMetadataMask;
+
+	hfs_global_shared_lock_acquire(hfsmp);
+	if (hfsmp->jnl) {
+		if (journal_start_transaction(hfsmp->jnl) != 0) {
+			return (EINVAL);
+		}
+	}
+
+	/* Lock extents b-tree (also protects volume bitmap) */
+	retval = hfs_metafilelocking(hfsmp, kHFSExtentsFileID, LK_EXCLUSIVE, p);
+	if (retval)
+		goto out2;
+
+	retval = MapFileBlockC(vcb, (FCB *)fp, 1, growsize - 1, &sector_a, NULL);
+	if (retval) {
+		retval = MacToVFSError(retval);
+		goto out;
+	}
+
+	/*
+	 * STEP 1 - aquire new allocation blocks.
+	 */
+	nextallocsave = vcb->nextAllocation;
+	retval = ExtendFileC(vcb, (FCB*)fp, growsize, blockHint, eflags, &newbytes);
+	if (eflags & kEFMetadataMask)                   
+		vcb->nextAllocation = nextallocsave;
+
+	retval = MacToVFSError(retval);
+	if (retval == 0) {
+		VTOC(vp)->c_flag |= C_MODIFIED;
+		if (newbytes < growsize) {
+			retval = ENOSPC;
+			goto restore;
+		} else if (fp->ff_blocks < (headblks + datablks)) {
+			printf("hfs_relocate: allocation failed");
+			retval = ENOSPC;
+			goto restore;
+		}
+
+		retval = MapFileBlockC(vcb, (FCB *)fp, 1, growsize, &sector_b, NULL);
+		if (retval) {
+			retval = MacToVFSError(retval);
+		} else if ((sector_a + 1) == sector_b) {
+			retval = ENOSPC;
+			goto restore;
+		} else if ((eflags & kEFMetadataMask) &&
+		           ((((u_int64_t)sector_b * hfsmp->hfs_phys_block_size) / blksize) >
+		              hfsmp->hfs_metazone_end)) {
+			printf("hfs_relocate: didn't move into metadata zone\n");
+			retval = ENOSPC;
+			goto restore;
+		}
+	}
+	if (retval) {
+		/*
+		 * Check to see if failure is due to excessive fragmentation.
+		 */
+		if (retval == ENOSPC &&
+		    hfs_freeblks(hfsmp, 0) > (datablks * 2)) {
+			hfsmp->hfs_flags |= HFS_FRAGMENTED_FREESPACE;
+		}
+		goto out;
+	}
+
+	fp->ff_size = fp->ff_blocks * blksize;
+	if (UBCISVALID(vp))
+		(void) ubc_setsize(vp, fp->ff_size);
+
+	/*
+	 * STEP 2 - clone data into the new allocation blocks.
+	 */
+
+	if (vp->v_type == VLNK)
+		retval = hfs_clonelink(vp, blksize, cred, p);
+	else if (vp->v_flag & VSYSTEM)
+		retval = hfs_clonesysfile(vp, headblks, datablks, blksize, cred, p);
+	else
+		retval = hfs_clonefile(vp, headblks, datablks, blksize, cred, p);
+
+	if (retval)
+		goto restore;
+	
+	oldstart = fp->ff_extents[0].startBlock;
+
+	/*
+	 * STEP 3 - switch to clone and remove old blocks.
+	 */
+	SET(VTOC(vp)->c_flag, C_NOBLKMAP);   /* suspend page-ins */
+
+	retval = HeadTruncateFile(vcb, (FCB*)fp, headblks);
+
+	CLR(VTOC(vp)->c_flag, C_NOBLKMAP);   /* resume page-ins */
+	if (ISSET(VTOC(vp)->c_flag, C_WBLKMAP))
+		wakeup(VTOC(vp));
+	if (retval)
+		goto restore;
+
+	fp->ff_size = realsize;
+	if (UBCISVALID(vp)) {
+		(void) ubc_setsize(vp, realsize);
+		(void) vinvalbuf(vp, V_SAVE, cred, p, 0, 0);
+	}
+
+	CLR(VTOC(vp)->c_flag, C_RELOCATING);  /* Resume page-outs for this file. */
+out:
+	(void) hfs_metafilelocking(VTOHFS(vp), kHFSExtentsFileID, LK_RELEASE, p);
+
+	retval = VOP_FSYNC(vp, cred, MNT_WAIT, p);
+out2:
+	if (hfsmp->jnl) {
+		if (VTOC(vp)->c_cnid < kHFSFirstUserCatalogNodeID)
+			(void) hfs_flushvolumeheader(hfsmp, MNT_WAIT, HFS_ALTFLUSH);
+		else
+			(void) hfs_flushvolumeheader(hfsmp, MNT_NOWAIT, 0);
+		journal_end_transaction(hfsmp->jnl);
+	}
+	hfs_global_shared_lock_release(hfsmp);
+
+	return (retval);
+
+restore:
+	/*
+	 * Give back any newly allocated space.
+	 */
+	if (fp->ff_size != realsize)
+		fp->ff_size = realsize;
+	(void) TruncateFileC(vcb, (FCB*)fp, fp->ff_size, false);
+	if (UBCISVALID(vp))
+		(void) ubc_setsize(vp, fp->ff_size);
+	CLR(VTOC(vp)->c_flag, C_RELOCATING);
+	goto out;
+}
+
+
+/*
+ * Clone a symlink.
+ *
+ */
+static int
+hfs_clonelink(struct vnode *vp, int blksize, struct ucred *cred, struct proc *p)
+{
+	struct buf *head_bp = NULL;
+	struct buf *tail_bp = NULL;
+	int error;
+
+
+	error = meta_bread(vp, 0, blksize, cred, &head_bp);
+	if (error)
+		goto out;
+
+	tail_bp = getblk(vp, 1, blksize, 0, 0, BLK_META);
+	if (tail_bp == NULL) {
+		error = EIO;
+		goto out;
+	}
+	bcopy(head_bp->b_data, tail_bp->b_data, blksize);
+	error = bwrite(tail_bp);
+out:
+	if (head_bp) {
+		head_bp->b_flags |= B_INVAL;
+		brelse(head_bp);
+	}	
+	(void) vinvalbuf(vp, V_SAVE, cred, p, 0, 0);
+
+	return (error);
+}
+
+/*
+ * Clone a file's data within the file.
+ *
+ */
+static int
+hfs_clonefile(struct vnode *vp, int blkstart, int blkcnt, int blksize,
+              struct ucred *cred, struct proc *p)
+{
+	caddr_t  bufp;
+	size_t  writebase;
+	size_t  bufsize;
+	size_t  copysize;
+        size_t  iosize;
+	size_t  filesize;
+	size_t  offset;
+	struct uio auio;
+	struct iovec aiov;
+	int  devblocksize;
+	int  didhold;
+	int  error;
+
+
+	if ((error = vinvalbuf(vp, V_SAVE, cred, p, 0, 0))) {
+		printf("hfs_clonefile: vinvalbuf failed - %d\n", error);
+		return (error);
+	}
+
+	if (!ubc_clean(vp, 1)) {
+		printf("hfs_clonefile: not ubc_clean\n");
+		return (EIO);  /* XXX error code */
+	}
+
+  	/*
+  	 * Suspend page-outs for this file.
+  	 */
+	SET(VTOC(vp)->c_flag, C_RELOCATING);
+
+	filesize = VTOF(vp)->ff_size;
+	writebase = blkstart * blksize;
+	copysize = blkcnt * blksize;
+	iosize = bufsize = MIN(copysize, 4096 * 16);
+	offset = 0;
+
+	if (kmem_alloc(kernel_map, (vm_offset_t *)&bufp, bufsize)) {
+		return (ENOMEM);
+	}	
+
+	VOP_DEVBLOCKSIZE(VTOC(vp)->c_devvp, &devblocksize);
+
+	auio.uio_iov = &aiov;
+	auio.uio_iovcnt = 1;
+	auio.uio_segflg = UIO_SYSSPACE;
+	auio.uio_procp = p;
+
+	while (offset < copysize) {
+		iosize = MIN(copysize - offset, iosize);
+
+		aiov.iov_base = bufp;
+		aiov.iov_len = iosize;
+		auio.uio_resid = iosize;
+		auio.uio_offset = offset;
+		auio.uio_rw = UIO_READ;
+
+		error = cluster_read(vp, &auio, copysize, devblocksize, 0);
+		if (error) {
+			printf("hfs_clonefile: cluster_read failed - %d\n", error);
+			break;
+		}
+		if (auio.uio_resid != 0) {
+			printf("clonedata: cluster_read: uio_resid = %d\n", (int)auio.uio_resid);
+			error = EIO;		
+			break;
+		}
+
+
+		aiov.iov_base = bufp;
+		aiov.iov_len = iosize;
+		auio.uio_resid = iosize;
+		auio.uio_offset = writebase + offset;
+		auio.uio_rw = UIO_WRITE;
+
+		error = cluster_write(vp, &auio, filesize + offset,
+		                      filesize + offset + iosize,
+		                      auio.uio_offset, 0, devblocksize, 0);
+		if (error) {
+			printf("hfs_clonefile: cluster_write failed - %d\n", error);
+			break;
+		}
+		if (auio.uio_resid != 0) {
+			printf("hfs_clonefile: cluster_write failed - uio_resid not zero\n");
+			error = EIO;		
+			break;
+		}	
+		offset += iosize;
+	}
+	if (error == 0) {
+		/* Clean the pages in VM. */
+		didhold = ubc_hold(vp);
+		if (didhold)
+			(void) ubc_clean(vp, 1);
+	
+		/*
+		 * Clean out all associated buffers.
+		 */
+		(void) vinvalbuf(vp, V_SAVE, cred, p, 0, 0);
+	
+		if (didhold)
+			ubc_rele(vp);
+	}
+	kmem_free(kernel_map, (vm_offset_t)bufp, bufsize);
+	
+	return (error);
+}
+
+/*
+ * Clone a system (metadata) file.
+ *
+ */
+static int
+hfs_clonesysfile(struct vnode *vp, int blkstart, int blkcnt, int blksize,
+                 struct ucred *cred, struct proc *p)
+{
+	caddr_t  bufp;
+	char * offset;
+	size_t  bufsize;
+	size_t  iosize;
+	struct buf *bp = NULL;
+	daddr_t  blkno;
+ 	daddr_t  blk;
+	int  breadcnt;
+        int  i;
+	int  error = 0;
+
+
+	iosize = GetLogicalBlockSize(vp);
+	bufsize = MIN(blkcnt * blksize, 1024 * 1024) & ~(iosize - 1);
+	breadcnt = bufsize / iosize;
+
+	if (kmem_alloc(kernel_map, (vm_offset_t *)&bufp, bufsize)) {
+		return (ENOMEM);
+	}	
+	blkstart = (blkstart * blksize) / iosize;
+	blkcnt = (blkcnt * blksize) / iosize;
+	blkno = 0;
+
+	while (blkno < blkcnt) {
+		/*
+		 * Read up to a megabyte
+		 */
+		offset = bufp;
+		for (i = 0, blk = blkno; (i < breadcnt) && (blk < blkcnt); ++i, ++blk) {
+			error = meta_bread(vp, blk, iosize, cred, &bp);
+			if (error) {
+				printf("hfs_clonesysfile: meta_bread error %d\n", error);
+				goto out;
+			}
+			if (bp->b_bcount != iosize) {
+				printf("hfs_clonesysfile: b_bcount is only %d\n", bp->b_bcount);
+				goto out;
+			}
+	
+			bcopy(bp->b_data, offset, iosize);
+			bp->b_flags |= B_INVAL;
+			brelse(bp);
+			bp = NULL;
+			offset += iosize;
+		}
+	
+		/*
+		 * Write up to a megabyte
+		 */
+		offset = bufp;
+		for (i = 0; (i < breadcnt) && (blkno < blkcnt); ++i, ++blkno) {
+			bp = getblk(vp, blkstart + blkno, iosize, 0, 0, BLK_META);
+			if (bp == NULL) {
+				printf("hfs_clonesysfile: getblk failed on blk %d\n", blkstart + blkno);
+				error = EIO;
+				goto out;
+			}
+			bcopy(offset, bp->b_data, iosize);
+			error = bwrite(bp);
+			bp = NULL;
+			if (error)
+				goto out;
+			offset += iosize;
+		}
+	}
+out:
+	if (bp) {
+		brelse(bp);
+	}
+
+	kmem_free(kernel_map, (vm_offset_t)bufp, bufsize);
+
+	error = VOP_FSYNC(vp, cred, MNT_WAIT, p);
+
+	return (error);
+}
+

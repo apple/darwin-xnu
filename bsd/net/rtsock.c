@@ -149,11 +149,12 @@ rts_attach(struct socket *so, int proto, struct proc *p)
 	 */
 	s = splnet();
 	so->so_pcb = (caddr_t)rp;
-	error = raw_usrreqs.pru_attach(so, proto, p);
+	error = raw_attach(so, proto);	/* don't use raw_usrreqs.pru_attach, it checks for SS_PRIV */
 	rp = sotorawcb(so);
 	if (error) {
 		splx(s);
 		FREE(rp, M_PCB);
+		so->so_pcb = 0;
 		return error;
 	}
 	switch(rp->rcb_proto.sp_protocol) {
@@ -311,6 +312,7 @@ route_output(m, so)
 	struct ifnet *ifp = 0;
 	struct ifaddr *ifa = 0;
 	struct proc  *curproc = current_proc();
+	int sendonlytoself = 0;
 
 #define senderr(e) { error = e; goto flush;}
 	if (m == 0 || ((m->m_len < sizeof(long)) &&
@@ -333,6 +335,26 @@ route_output(m, so)
 	if (rtm->rtm_version != RTM_VERSION) {
 		dst = 0;
 		senderr(EPROTONOSUPPORT);
+	}
+	
+	/*
+	 * Silent version of RTM_GET for Reachabiltiy APIs. We may change
+	 * all RTM_GETs to be silent in the future, so this is private for now.
+	 */
+	if (rtm->rtm_type == RTM_GET_SILENT) {
+		if ((so->so_options & SO_USELOOPBACK) == 0)
+			senderr(EINVAL);
+		sendonlytoself = 1;
+		rtm->rtm_type = RTM_GET;
+	}
+	
+	/*
+	 * Perform permission checking, only privileged sockets
+	 * may perform operations other than RTM_GET
+	 */
+	if (rtm->rtm_type != RTM_GET && (so->so_state & SS_PRIV) == 0) {
+		dst = 0;
+		senderr(EPERM);
 	}
 	rtm->rtm_pid = curproc->p_pid;
 	info.rti_addrs = rtm->rtm_addrs;
@@ -566,15 +588,24 @@ flush:
 			m_adj(m, rtm->rtm_msglen - m->m_pkthdr.len);
 		Free(rtm);
 	}
-	if (rp)
-		rp->rcb_proto.sp_family = 0; /* Avoid us */
-	if (dst)
-		route_proto.sp_protocol = dst->sa_family;
-	if (m)
-		raw_input(m, &route_proto, &route_src, &route_dst);
-	if (rp)
-		rp->rcb_proto.sp_family = PF_ROUTE;
-    }
+	if (sendonlytoself && m) {
+		if (sbappendaddr(&so->so_rcv, &route_src, m, (struct mbuf*)0) == 0) {
+			m_freem(m);
+			error = ENOBUFS;
+		} else {
+			sorwakeup(so);
+		}
+	} else {
+		if (rp)
+			rp->rcb_proto.sp_family = 0; /* Avoid us */
+		if (dst)
+			route_proto.sp_protocol = dst->sa_family;
+		if (m)
+			raw_input(m, &route_proto, &route_src, &route_dst);
+		if (rp)
+			rp->rcb_proto.sp_family = PF_ROUTE;
+		}
+	}
 	return (error);
 }
 

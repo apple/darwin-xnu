@@ -334,7 +334,12 @@ struct mbuf *nfsm_rpchead __P((struct ucred *cr, int nmflag, int procid,
 */
 #define	nfsm_request(v, t, p, c, x)	\
                 { \
-                int nfsv3 = (VFSTONFS((v)->v_mount))->nm_flag & NFSMNT_NFSV3; \
+                int nfsv3; \
+		if (!VFSTONFS((v)->v_mount)) { \
+			error = ENXIO; \
+			goto nfsmout; \
+		} \
+                nfsv3 = (VFSTONFS((v)->v_mount))->nm_flag & NFSMNT_NFSV3; \
 		if ((error = nfs_request((v), mreq, (t), (p), \
 		   (c), &mrep, &md, &dpos, (x)))) { \
 			if (error & NFSERR_RETERR) \
@@ -342,11 +347,6 @@ struct mbuf *nfsm_rpchead __P((struct ucred *cr, int nmflag, int procid,
 			else \
 				goto nfsmout; \
 		} \
-                else if ((v)->v_type==VBAD) { \
-                    error = EINVAL; \
-                    if (!nfsv3) \
-                        goto nfsmout; \
-                } \
                 }
 
 #define	nfsm_strtom(a,s,m) \
@@ -446,7 +446,9 @@ struct mbuf *nfsm_rpchead __P((struct ucred *cr, int nmflag, int procid,
 		nfsm_srvpostopattr(nfsd, (r), (a), &mb, &bpos)
 
 #define nfsm_srvsattr(a) \
-		{ nfsm_dissect(tl, u_long *, NFSX_UNSIGNED); \
+		{ \
+		struct timeval now; \
+		nfsm_dissect(tl, u_long *, NFSX_UNSIGNED); \
 		if (*tl == nfs_true) { \
 			nfsm_dissect(tl, u_long *, NFSX_UNSIGNED); \
 			(a)->va_mode = nfstov_mode(*tl); \
@@ -467,14 +469,15 @@ struct mbuf *nfsm_rpchead __P((struct ucred *cr, int nmflag, int procid,
 			fxdr_hyper(tl, &(a)->va_size); \
 		} \
 		nfsm_dissect(tl, u_long *, NFSX_UNSIGNED); \
+		microtime(&now); \
 		switch (fxdr_unsigned(int, *tl)) { \
 		case NFSV3SATTRTIME_TOCLIENT: \
 			nfsm_dissect(tl, u_long *, 2 * NFSX_UNSIGNED); \
 			fxdr_nfsv3time(tl, &(a)->va_atime); \
 			break; \
 		case NFSV3SATTRTIME_TOSERVER: \
-			(a)->va_atime.tv_sec = time.tv_sec; \
-			(a)->va_atime.tv_nsec = time.tv_usec * 1000; \
+			(a)->va_atime.tv_sec = now.tv_sec; \
+			(a)->va_atime.tv_nsec = now.tv_usec * 1000; \
 			break; \
 		}; \
 		nfsm_dissect(tl, u_long *, NFSX_UNSIGNED); \
@@ -484,8 +487,8 @@ struct mbuf *nfsm_rpchead __P((struct ucred *cr, int nmflag, int procid,
 			fxdr_nfsv3time(tl, &(a)->va_mtime); \
 			break; \
 		case NFSV3SATTRTIME_TOSERVER: \
-			(a)->va_mtime.tv_sec = time.tv_sec; \
-			(a)->va_mtime.tv_nsec = time.tv_usec * 1000; \
+			(a)->va_mtime.tv_sec = now.tv_sec; \
+			(a)->va_mtime.tv_nsec = now.tv_usec * 1000; \
 			break; \
 		}; }
 

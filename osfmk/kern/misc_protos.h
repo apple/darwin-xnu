@@ -120,6 +120,8 @@ extern integer_t sprintf(char *buf, const char *fmt, ...);
 
 extern void printf(const char *format, ...);
 
+extern void dbugprintf(const char *format, ...);
+
 extern void kdp_printf(const char *format, ...);
 
 extern void printf_init(void);
@@ -200,5 +202,10 @@ extern void norma_bootstrap(void);
 extern boolean_t	no_bootstrap_task(void);
 extern ipc_port_t	get_root_master_device_port(void);
 #endif	/* DIPC */
+
+extern kern_return_t	kernel_set_special_port(
+		host_priv_t	host_priv,
+		int 		which,
+		ipc_port_t	port);
 
 #endif	/* _MISC_PROTOS_H_ */

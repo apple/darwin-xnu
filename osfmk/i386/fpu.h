@@ -93,7 +93,7 @@ extern __inline__ unsigned short fnstsw(void)
 #define	fnclex() \
 	__asm__ volatile("fnclex")
 
-#define	fnsave(state) \
+#define	fnsave(state)  \
 	__asm__ volatile("fnsave %0" : "=m" (*state))
 
 #define	frstor(state) \
@@ -102,6 +102,10 @@ extern __inline__ unsigned short fnstsw(void)
 #define fwait() \
     	__asm__("fwait");
 
+#define fxrstor(addr)           __asm("fxrstor %0" : : "m" (*(addr)))     
+#define fxsave(addr)            __asm __volatile("fxsave %0" : "=m" (*(addr)))
+
+#define FXSAFE() (fp_kind == FP_FXSR)
 
 #define	fpu_load_context(pcb)
 
@@ -110,6 +114,8 @@ extern __inline__ unsigned short fnstsw(void)
  * If only one CPU, we just set the task-switched bit,
  * to keep the new thread from using the coprocessor.
  * If multiple CPUs, we save the entire state.
+ * NOTE: in order to provide backwards compatible support in the kernel. When saving SSE2 state, we also save the
+ * FP state in it's old location. Otherwise fpu_get_state() and fpu_set_state() will stop working
  */
 #if	NCPUS > 1
 #define	fpu_save_context(thread) \
@@ -119,7 +125,12 @@ extern __inline__ unsigned short fnstsw(void)
 	if (ifps != 0 && !ifps->fp_valid) { \
 	    /* registers are in FPU - save to memory */ \
 	    ifps->fp_valid = TRUE; \
-	    fnsave(&ifps->fp_save_state); \
+            ifps->fp_save_flavor = FP_387; \
+            if (FXSAFE()) { \
+		fxsave(&ifps->fx_save_state); \
+                ifps->fp_save_flavor = FP_FXSR; \
+	    } \
+            fnsave(&ifps->fp_save_state); \
 	} \
 	set_ts(); \
     }
@@ -145,6 +156,12 @@ extern kern_return_t	fpu_set_state(
 extern kern_return_t	fpu_get_state(
 				thread_act_t			thr_act,
 				struct i386_float_state		* st);
+/* extern kern_return_t	fpu_set_fxstate(
+				thread_act_t			thr_act,
+				struct i386_float_state		* st);
+extern kern_return_t	fpu_get_fxstate(
+				thread_act_t			thr_act,
+				struct i386_float_state		* st); */
 extern void		fpnoextflt(void);
 extern void		fpextovrflt(void);
 extern void		fpexterrflt(void);

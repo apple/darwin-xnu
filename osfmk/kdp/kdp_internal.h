@@ -47,8 +47,11 @@ extern int		kdp_flag;
 #define KDP_READY       0x1
 #define KDP_ARP         0x2
 #define KDP_BP_DIS      0x4
-
-
+#define KDP_GETC_ENA    0x8
+#define KDP_PANIC_DUMP_ENABLED 0x10
+#define PANIC_CORE_ON_NMI 0x20 
+#define DBG_POST_CORE     0x40
+#define PANIC_LOG_DUMP    0x80
 typedef boolean_t
 (*kdp_dispatch_t) (
     kdp_pkt_t *,

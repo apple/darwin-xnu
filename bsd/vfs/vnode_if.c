@@ -390,6 +390,38 @@ struct vnodeop_desc vop_exchange_desc = {
 	NULL,
 };
 
+int vop_kqfilt_add_vp_offsets[] = {
+	VOPARG_OFFSETOF(struct vop_kqfilt_add_args,a_vp),
+	VDESC_NO_OFFSET
+};
+struct vnodeop_desc vop_kqfilt_add_desc = {
+	0,
+	"vop_kqfilt_add",
+	0,
+	vop_kqfilt_add_vp_offsets,
+	VDESC_NO_OFFSET,
+	VDESC_NO_OFFSET,
+	VOPARG_OFFSETOF(struct vop_kqfilt_add_args, a_p),
+	VDESC_NO_OFFSET,
+	NULL,
+};
+
+int vop_kqfilt_remove_vp_offsets[] = {
+	VOPARG_OFFSETOF(struct vop_kqfilt_remove_args,a_vp),
+	VDESC_NO_OFFSET
+};
+struct vnodeop_desc vop_kqfilt_remove_desc = {
+	0,
+	"vop_kqfilt_remove",
+	0,
+	vop_kqfilt_remove_vp_offsets,
+	VDESC_NO_OFFSET,
+	VDESC_NO_OFFSET,
+	VOPARG_OFFSETOF(struct vop_kqfilt_remove_args, a_p),
+	VDESC_NO_OFFSET,
+	NULL,
+};
+
 int vop_revoke_vp_offsets[] = {
 	VOPARG_OFFSETOF(struct vop_revoke_args,a_vp),
 	VDESC_NO_OFFSET
@@ -479,7 +511,7 @@ int vop_link_vp_offsets[] = {
 struct vnodeop_desc vop_link_desc = {
 	0,
 	"vop_link",
-	0 | VDESC_VP0_WILLRELE,
+	0 | VDESC_VP1_WILLRELE,
 	vop_link_vp_offsets,
 	VDESC_NO_OFFSET,
 	VDESC_NO_OFFSET,
@@ -1096,6 +1128,8 @@ struct vnodeop_desc *vfs_op_descs[] = {
 	&vop_ioctl_desc,
 	&vop_select_desc,
 	&vop_exchange_desc,
+	&vop_kqfilt_add_desc,
+	&vop_kqfilt_remove_desc,
 	&vop_revoke_desc,
 	&vop_mmap_desc,
 	&vop_fsync_desc,

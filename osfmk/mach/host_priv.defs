@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2003 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -170,7 +170,7 @@ routine host_processors(
 
 
 /*
- *	Get control port for a processor set.
+ *	Get control port for a system-wide clock.
  *	Privileged.
  */
 routine host_get_clock_control(
@@ -201,7 +201,7 @@ routine	kmod_control(
 
 /*
  * 	Get a given special port for a given node.
- * 	Norma special ports are defined in norma_special_ports.h;
+ * 	Special ports are defined in host_special_ports.h;
  * 	examples include the master device port.
  * 	There are a limited number of slots available for system servers.
  */
@@ -212,8 +212,8 @@ routine host_get_special_port(
         out     port            : mach_port_t);
 
 /*
- * 	Set a given special port for a given node.
- * 	See norma_get_special_port.
+ * 	Set a given special port for the local node.
+ * 	See host_get_special_port.
  */
 routine host_set_special_port(
                 host_priv       : host_priv_t;
@@ -301,6 +301,12 @@ routine host_processor_set_priv(
 		host_priv	: host_priv_t;
 		set_name	: processor_set_name_t;
 	out	set		: processor_set_t);
+
+/************************** Warning *************************************/
+/*       The following routines are going away in a future release	*/
+/*	use the appropriate variant of host_set_special_port instead	*/
+/************************************************************************/
+ 
 /*
  *	Set the dynamic_pager control port. Other entities
  *	can request a send right to this port to talk with
@@ -343,4 +349,3 @@ routine host_set_UNDServer(
 routine host_get_UNDServer(    
 		host		: host_priv_t;
 	out	server		: UNDServerRef);
-

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2003 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -79,6 +79,7 @@
 #include <sys/stat.h>
 #include <sys/malloc.h>
 #include <sys/syscall.h>
+#include <sys/sysctl.h>
 #include <sys/ubc.h>
 
 #include <sys/vm.h>
@@ -108,6 +109,9 @@
 #endif
 
 #include <sys/kdebug.h>
+
+SYSCTL_DECL(_vfs_generic);
+SYSCTL_NODE(_vfs_generic, OID_AUTO, nfs, CTLFLAG_RW, 0, "nfs hinge");
 
 #define FSDBG(A, B, C, D, E) \
 	KERNEL_DEBUG((FSDBG_CODE(DBG_FSRW, (A))) | DBG_FUNC_NONE, \
@@ -589,14 +593,8 @@ extern nfstype nfsv3_type[9];
 extern struct nfsnodehashhead *nfsnodehashtbl;
 extern u_long nfsnodehash;
 
-struct getfh_args;
-extern int getfh(struct proc *, struct getfh_args *, int *);
-struct nfssvc_args;
-extern int nfssvc(struct proc *, struct nfssvc_args *, int *);
 
 LIST_HEAD(nfsnodehashhead, nfsnode);
-
-int nfs_webnamei __P((struct nameidata *, struct vnode *, struct proc *));
 
 /*
  * Create the header for an rpc request packet
@@ -628,7 +626,7 @@ nfsm_reqh(vp, procid, hsiz, bposp)
 	 */
 	if (vp) {
 		nmp = VFSTONFS(vp->v_mount);
-		if (nmp->nm_flag & NFSMNT_NQNFS) {
+		if (nmp && (nmp->nm_flag & NFSMNT_NQNFS)) {
 			nqflag = NQNFS_NEEDLEASE(vp, procid);
 			if (nqflag) {
 				nfsm_build(tl, u_long *, 2*NFSX_UNSIGNED);
@@ -696,7 +694,6 @@ nfsm_rpchead(cr, nmflag, procid, auth_type, auth_len, auth_str, verf_len,
 
 	/*
 	 * derive initial xid from system time
-	 * XXX time is invalid if root not yet mounted
 	 */
 	if (!base && (rootvp)) {
 		microtime(&tv);
@@ -1182,6 +1179,7 @@ nfs_init(vfsp)
 		nfs_iodwant[i] = (struct proc *)0;
 		nfs_iodmount[i] = (struct nfsmount *)0;
 	}
+	nfs_nbinit();			/* Init the nfsbuf table */
 	nfs_nhinit();			/* Init the nfsnode table */
 #ifndef NFS_NOSERVER
 	nfsrv_init(0);			/* Init server data structures */
@@ -1219,13 +1217,6 @@ nfs_init(vfsp)
 	lease_updatetime = nfs_lease_updatetime;
 #endif
 	vfsp->vfc_refcount++; /* make us non-unloadable */
-	sysent[SYS_nfssvc].sy_narg = 2;
-	sysent[SYS_nfssvc].sy_call = nfssvc;
-#ifndef NFS_NOSERVER
-	sysent[SYS_getfh].sy_narg = 2;
-	sysent[SYS_getfh].sy_call = getfh;
-#endif
-
 	return (0);
 }
 
@@ -1263,18 +1254,15 @@ nfs_loadattrcache(vpp, mdp, dposp, vaper, dontshrink, xidp)
 	enum vtype vtyp;
 	u_short vmode;
 	struct timespec mtime;
+	struct timeval now;
 	struct vnode *nvp;
 	int v3;
 
 	FSDBG_TOP(527, vp, 0, *xidp >> 32, *xidp);
-	/*
-	 * this routine is a good place to check for VBAD again. We caught
-	 * most of them in nfsm_request, but postprocessing may indirectly get
-	 * here, so check again.
-	 */
-	if (vp->v_type == VBAD) {
-		FSDBG_BOT(527, EINVAL, 1, 0, *xidp);
-		return (EINVAL); 
+
+	if (!VFSTONFS(vp->v_mount)) {
+		FSDBG_BOT(527, ENXIO, 1, 0, *xidp);
+		return (ENXIO); 
 	}
 
 	v3 = NFS_ISV3(vp);
@@ -1333,7 +1321,7 @@ nfs_loadattrcache(vpp, mdp, dposp, vaper, dontshrink, xidp)
 	 * information.
 	 */
 	np = VTONFS(vp);
-if (*xidp < np->n_xid) {
+	if (*xidp < np->n_xid) {
 		/*
 		 * We have already updated attributes with a response from
 		 * a later request.  The attributes we have here are probably
@@ -1351,12 +1339,6 @@ if (*xidp < np->n_xid) {
 	}
 	if (vp->v_type != vtyp) {
 		vp->v_type = vtyp;
-
-		if (UBCINFOMISSING(vp) || UBCINFORECLAIMED(vp))
-			if ((error = ubc_info_init(vp))) { /* VREG */
-				FSDBG_BOT(527, error, 3, 0, *xidp);
-				return(error);
-			}
 
 		if (vp->v_type == VFIFO) {
 			vp->v_op = fifo_nfsv2nodeop_p;
@@ -1399,7 +1381,7 @@ if (*xidp < np->n_xid) {
 		vap->va_uid = fxdr_unsigned(uid_t, fp->fa_uid);
 		vap->va_gid = fxdr_unsigned(gid_t, fp->fa_gid);
 		fxdr_hyper(&fp->fa3_size, &vap->va_size);
-		vap->va_blocksize = NFS_FABLKSIZE;
+		vap->va_blocksize = 16*1024;
 		fxdr_hyper(&fp->fa3_used, &vap->va_bytes);
 		vap->va_fileid = fxdr_unsigned(int, fp->fa3_fileid.nfsuquad[1]);
 		fxdr_nfsv3time(&fp->fa3_atime, &vap->va_atime);
@@ -1422,7 +1404,21 @@ if (*xidp < np->n_xid) {
 		vap->va_filerev = 0;
 	}
 
-	np->n_attrstamp = time.tv_sec;
+	microuptime(&now);
+	np->n_attrstamp = now.tv_sec;
+
+	if (UBCINFOMISSING(vp) || UBCINFORECLAIMED(vp)) {
+		if (UBCINFORECLAIMED(vp) && ISSET(vp->v_flag, (VXLOCK|VORECLAIM))) {
+			// vnode is being vclean'ed, abort
+			FSDBG_BOT(527, ENXIO, 1, 0, *xidp);
+			return (ENXIO);
+		}
+		if ((error = ubc_info_init(vp))) { /* VREG */
+			FSDBG_BOT(527, error, 3, 0, *xidp);
+			return(error);
+		}
+	}
+
 	if (vap->va_size != np->n_size) {
 		FSDBG(527, vp, vap->va_size, np->n_size,
 		      (vap->va_type == VREG) |
@@ -1442,8 +1438,9 @@ if (*xidp < np->n_xid) {
 			    dontshrink && np->n_size < ubc_getsize(vp)) {
 				vap->va_size = np->n_size = orig_size;
 				np->n_attrstamp = 0;
-			} else
+			} else {
 				ubc_setsize(vp, (off_t)np->n_size); /* XXX */
+			}
 		} else
 			np->n_size = vap->va_size;
 	}
@@ -1473,8 +1470,25 @@ nfs_getattrcache(vp, vaper)
 {
 	register struct nfsnode *np = VTONFS(vp);
 	register struct vattr *vap;
+	struct timeval now, nowup;
+	int32_t timeo;
 
-	if ((time.tv_sec - np->n_attrstamp) >= NFS_ATTRTIMEO(np)) {
+	/* Set attribute timeout based on how recently the file has been modified. */
+	if ((np)->n_flag & NMODIFIED)
+		timeo = NFS_MINATTRTIMO;
+	else {
+		/* Note that if the client and server clocks are way out of sync, */
+		/* timeout will probably get clamped to a min or max value */
+		microtime(&now);
+		timeo = (now.tv_sec - (np)->n_mtime) / 10;
+		if (timeo < NFS_MINATTRTIMO)
+			timeo = NFS_MINATTRTIMO;
+		else if (timeo > NFS_MAXATTRTIMO)
+			timeo = NFS_MAXATTRTIMO;
+	}
+
+	microuptime(&nowup);
+	if ((nowup.tv_sec - np->n_attrstamp) >= timeo) {
 		FSDBG(528, vp, 0, 0, 1);
 		nfsstats.attrcache_misses++;
 		return (ENOENT);
@@ -1542,10 +1556,15 @@ nfs_namei(ndp, fhp, len, slp, nam, mdp, dposp, retdirp, p, kerbflag, pubflag)
 	int error, rdonly, linklen;
 	struct componentname *cnp = &ndp->ni_cnd;
 	int olen = len;
+	char *tmppn;
 
 	*retdirp = (struct vnode *)0;
-	MALLOC_ZONE(cnp->cn_pnbuf, char *, len + 1, M_NAMEI, M_WAITOK);
-	cnp->cn_pnlen = len + 1;
+
+	if (len  > MAXPATHLEN - 1)
+		return (ENAMETOOLONG);
+
+	MALLOC_ZONE(cnp->cn_pnbuf, char *, MAXPATHLEN, M_NAMEI, M_WAITOK);
+	cnp->cn_pnlen = MAXPATHLEN;
 
 	/*
 	 * Copy the name from the mbuf list to ndp->ni_pnbuf
@@ -1609,14 +1628,16 @@ nfs_namei(ndp, fhp, len, slp, nam, mdp, dposp, retdirp, p, kerbflag, pubflag)
 	*retdirp = dp;
 
 /* XXX CSM 12/4/97 Revisit when enabling WebNFS */
-/* XXX debo 12/15/97 Need to fix M_NAMEI allocations to use zone protocol */
 #ifdef notyet
 	if (pubflag) {
 		/*
 		 * Oh joy. For WebNFS, handle those pesky '%' escapes,
 		 * and the 'native path' indicator.
 		 */
-		MALLOC(cp, char *, olen + 1, M_NAMEI, M_WAITOK);
+
+		assert(olen <= MAXPATHLEN - 1);
+
+		MALLOC_ZONE(cp, char *, MAXPATHLEN, M_NAMEI, M_WAITOK);
 		fromcp = cnp->cn_pnbuf;
 		tocp = cp;
 		if ((unsigned char)*fromcp >= WEBNFS_SPECCHAR_START) {
@@ -1634,7 +1655,7 @@ nfs_namei(ndp, fhp, len, slp, nam, mdp, dposp, retdirp, p, kerbflag, pubflag)
 			 */
 			default:
 				error = EIO;
-				FREE(cp, M_NAMEI);
+				FREE_ZONE(cp, MAXPATHLEN, M_NAMEI);
 				goto out;
 			}
 		}
@@ -1650,15 +1671,20 @@ nfs_namei(ndp, fhp, len, slp, nam, mdp, dposp, retdirp, p, kerbflag, pubflag)
 					continue;
 				} else {
 					error = ENOENT;
-					FREE(cp, M_NAMEI);
+					FREE_ZONE(cp, MAXPATHLEN, M_NAMEI);
 					goto out;
 				}
 			} else
 				*tocp++ = *fromcp++;
 		}
 		*tocp = '\0';
-		FREE(cnp->cn_pnbuf, M_NAMEI);
+
+		tmppn = cnp->cn_pnbuf;
+		long len = cnp->cn_pnlen; 
 		cnp->cn_pnbuf = cp;
+		cnp->cn_pnlen = MAXPATHLEN;
+		FREE_ZONE(tmppn, len, M_NAMEI);
+
 	}
 #endif
 
@@ -1714,7 +1740,6 @@ nfs_namei(ndp, fhp, len, slp, nam, mdp, dposp, retdirp, p, kerbflag, pubflag)
 			error = EINVAL;
 			break;
 /* XXX CSM 12/4/97 Revisit when enabling WebNFS */
-/* XXX debo 12/15/97 Need to fix M_NAMEI allocations to use zone protocol */
 #ifdef notyet
 		}
 
@@ -1722,8 +1747,9 @@ nfs_namei(ndp, fhp, len, slp, nam, mdp, dposp, retdirp, p, kerbflag, pubflag)
 			error = ELOOP;
 			break;
 		}
+		/* XXX assert(olen <= MAXPATHLEN - 1); */
 		if (ndp->ni_pathlen > 1)
-			MALLOC(cp, char *, olen + 1, M_NAMEI, M_WAITOK);
+			MALLOC_ZONE(cp, char *, MAXPATHLEN, M_NAMEI, M_WAITOK);
 		else
 			cp = cnp->cn_pnbuf;
 		aiov.iov_base = cp;
@@ -1737,9 +1763,9 @@ nfs_namei(ndp, fhp, len, slp, nam, mdp, dposp, retdirp, p, kerbflag, pubflag)
 		auio.uio_resid = MAXPATHLEN;
 		error = VOP_READLINK(ndp->ni_vp, &auio, cnp->cn_cred);
 		if (error) {
-		badlink:
+badlink:
 			if (ndp->ni_pathlen > 1)
-				FREE(cp, M_NAMEI);
+				FREE_ZONE(cp, MAXPATHLEN, M_NAMEI);
 			break;
 		}
 		linklen = MAXPATHLEN - auio.uio_resid;
@@ -1752,9 +1778,12 @@ nfs_namei(ndp, fhp, len, slp, nam, mdp, dposp, retdirp, p, kerbflag, pubflag)
 			goto badlink;
 		}
 		if (ndp->ni_pathlen > 1) {
-			bcopy(ndp->ni_next, cp + linklen, ndp->ni_pathlen);
-			FREE(cnp->cn_pnbuf, M_NAMEI);
+			long len = cnp->cn_pnlen;
+			tmppn = cnp->cn_pnbuf;
 			cnp->cn_pnbuf = cp;
+			cnp->cn_pnlen = olen + 1;
+			bcopy(ndp->ni_next, cp + linklen, ndp->ni_pathlen);
+			FREE_ZONE(tmppn, len, M_NAMEI);
 		} else
 			cnp->cn_pnbuf[linklen] = '\0';
 		ndp->ni_pathlen += linklen;
@@ -1772,7 +1801,11 @@ nfs_namei(ndp, fhp, len, slp, nam, mdp, dposp, retdirp, p, kerbflag, pubflag)
 	}
    }
 out:
-	FREE_ZONE(cnp->cn_pnbuf, cnp->cn_pnlen, M_NAMEI);
+	tmppn = cnp->cn_pnbuf;
+	cnp->cn_pnbuf = NULL;
+	cnp->cn_flags &= ~HASBUF;
+	FREE_ZONE(tmppn, cnp->cn_pnlen, M_NAMEI);
+
 	return (error);
 }
 
@@ -2162,8 +2195,8 @@ nfs_invaldir(vp)
 
 /*
  * The write verifier has changed (probably due to a server reboot), so all
- * B_NEEDCOMMIT blocks will have to be written again. Since they are on the
- * dirty block list as B_DELWRI, all this takes is clearing the B_NEEDCOMMIT
+ * NB_NEEDCOMMIT blocks will have to be written again. Since they are on the
+ * dirty block list as NB_DELWRI, all this takes is clearing the NB_NEEDCOMMIT
  * flag. Once done the new write verifier can be set for the mount point.
  */
 void
@@ -2171,7 +2204,8 @@ nfs_clearcommit(mp)
 	struct mount *mp;
 {
 	register struct vnode *vp, *nvp;
-	register struct buf *bp, *nbp;
+	register struct nfsbuf *bp, *nbp;
+	struct nfsnode *np;
 	int s;
 
 	s = splbio();
@@ -2180,11 +2214,15 @@ loop:
 		if (vp->v_mount != mp)	/* Paranoia */
 			goto loop;
 		nvp = vp->v_mntvnodes.le_next;
-		for (bp = vp->v_dirtyblkhd.lh_first; bp; bp = nbp) {
-			nbp = bp->b_vnbufs.le_next;
-			if ((bp->b_flags & (B_BUSY | B_DELWRI | B_NEEDCOMMIT))
-				== (B_DELWRI | B_NEEDCOMMIT))
-				bp->b_flags &= ~B_NEEDCOMMIT;
+		np = VTONFS(vp);
+		for (bp = np->n_dirtyblkhd.lh_first; bp; bp = nbp) {
+			nbp = bp->nb_vnbufs.le_next;
+			if ((bp->nb_flags & (NB_BUSY | NB_DELWRI | NB_NEEDCOMMIT))
+				== (NB_DELWRI | NB_NEEDCOMMIT)) {
+				bp->nb_flags &= ~NB_NEEDCOMMIT;
+				np->n_needcommitcnt--;
+				CHECK_NEEDCOMMITCNT(np);
+			}
 		}
 	}
 	splx(s);

@@ -38,7 +38,7 @@
 #define	BIG_ENDIAN	4321	/* most-significant byte first (IBM, net) */
 #define	PDP_ENDIAN	3412	/* LSB first in word, MSW first in long (pdp) */
 
-#if _BIG_ENDIAN			/* Predefined by compiler */
+#ifdef __BIG_ENDIAN__			/* Predefined by compiler */
 #define	BYTE_ORDER	BIG_ENDIAN	/* byte order we use on ppc */
 #define ENDIAN		BIG
 #else

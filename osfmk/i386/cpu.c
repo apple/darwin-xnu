@@ -31,10 +31,16 @@
 #include <kern/machine.h>
 #include <kern/misc_protos.h>
 #include <kern/cpu_data.h>
+#include <kern/cpu_number.h>
 #include <kern/processor.h>
 #include <mach/processor_info.h>
+#include <i386/machine_cpu.h>
+#include <i386/machine_routines.h>
+#include <i386/mp_desc.h>
 
 cpu_data_t	cpu_data[NCPUS];
+int		real_ncpus = 0;
+int		wncpu = NCPUS;
 
 /*ARGSUSED*/
 kern_return_t
@@ -74,3 +80,103 @@ cpu_sleep()
 {
 	printf("cpu_sleep not implemented\n");
 }
+
+void
+cpu_init()
+{
+	int	my_cpu = get_cpu_number();
+
+	machine_slot[my_cpu].is_cpu = TRUE;
+	machine_slot[my_cpu].running = TRUE;
+#ifdef	MACH_BSD
+	/* FIXME */
+	machine_slot[my_cpu].cpu_type = CPU_TYPE_I386;
+	machine_slot[my_cpu].cpu_subtype = CPU_SUBTYPE_PENTPRO;
+#else
+	machine_slot[my_cpu].cpu_type = cpuid_cputype(0);
+	machine_slot[my_cpu].cpu_subtype = CPU_SUBTYPE_AT386;
+#endif
+
+#if	NCPUS > 1
+	mp_desc_init(my_cpu);
+#endif	/* NCPUS */
+}
+
+kern_return_t
+cpu_register(
+	int *target_cpu)
+{
+	int cpu;
+
+	if (real_ncpus == 0) {
+		/*
+		 * Special case for the boot processor,
+		 * it has been pre-registered by cpu_init(); 
+		 */
+		*target_cpu = 0;
+		real_ncpus++;
+		return KERN_SUCCESS;
+	}
+
+	/* 
+	 * TODO: 
+	 * - Run cpu_register() in exclusion mode 
+	 */
+
+	*target_cpu = -1;
+	for(cpu=0; cpu < wncpu; cpu++) {
+		if(!machine_slot[cpu].is_cpu) {
+			machine_slot[cpu].is_cpu = TRUE;
+#ifdef	MACH_BSD
+			/* FIXME */
+			machine_slot[cpu].cpu_type = CPU_TYPE_I386;
+			machine_slot[cpu].cpu_subtype = CPU_SUBTYPE_PENTPRO;
+#else
+			machine_slot[cpu].cpu_type = cpuid_cputype(0);
+			machine_slot[cpu].cpu_subtype = CPU_SUBTYPE_AT386;
+#endif
+			*target_cpu = cpu;
+			break;
+		}
+	}
+
+	if (*target_cpu != -1) {
+		real_ncpus++;
+		return KERN_SUCCESS;
+	} else
+		return KERN_FAILURE;
+}
+
+kern_return_t
+cpu_start(
+	int cpu)
+{
+	kern_return_t		ret;
+
+	if (cpu == cpu_number()) {
+		PE_cpu_machine_init(cpu_data[cpu].cpu_id, TRUE);
+		ml_init_interrupt();
+		cpu_data[cpu].cpu_status = 1;
+		return KERN_SUCCESS;
+	} else {
+		/*
+		 * Should call out through PE.
+		 * But take the shortcut here.
+		 */
+		ret = intel_startCPU(cpu);
+		return(ret);
+	}
+}
+
+void
+cpu_machine_init(
+	void)
+{
+	int	cpu;
+
+	cpu = get_cpu_number();
+	PE_cpu_machine_init(cpu_data[cpu].cpu_id, TRUE);
+	ml_init_interrupt();
+	cpu_data[cpu].cpu_status = 1;
+}
+

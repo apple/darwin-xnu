@@ -75,11 +75,13 @@
 #include <sys/unistd.h>
 #include <sys/buf.h>
 #include <sys/ioctl.h>
+#include <sys/namei.h>
 #include <sys/tty.h>
 #include <sys/disklabel.h>
 #include <sys/vm.h>
 #include <sys/sysctl.h>
 #include <sys/user.h>
+#include <sys/aio_kern.h>
 #include <mach/machine.h>
 #include <mach/mach_types.h>
 #include <mach/vm_param.h>
@@ -95,9 +97,7 @@ extern vm_map_t bsd_pageable_map;
 #include <IOKit/IOPlatformExpert.h>
 #include <pexpert/pexpert.h>
 
-#if __ppc__
-#include <ppc/machine_routines.h>
-#endif
+#include <machine/machine_routines.h>
 
 sysctlfn kern_sysctl;
 #ifdef DEBUG
@@ -107,18 +107,35 @@ extern sysctlfn vm_sysctl;
 extern sysctlfn vfs_sysctl;
 extern sysctlfn net_sysctl;
 extern sysctlfn cpu_sysctl;
+extern int aio_max_requests;  				
+extern int aio_max_requests_per_process;	
+extern int aio_worker_threads;				
+extern int maxprocperuid;
+extern int maxfilesperproc;
 
 
 int
 userland_sysctl(struct proc *p, int *name, u_int namelen, void *old, size_t 
 		*oldlenp, int inkernel, void *new, size_t newlen, size_t *retval);
 
-void
-fill_proc(struct proc *p,struct kinfo_proc *kp, int doingzomb);
-
-void
-fill_externproc(struct proc *p, struct extern_proc *exp);
-
+static int
+sysctl_aiomax( void *oldp, size_t *oldlenp, void *newp, size_t newlen );
+static int
+sysctl_aioprocmax( void *oldp, size_t *oldlenp, void *newp, size_t newlen );
+static int
+sysctl_aiothreads( void *oldp, size_t *oldlenp, void *newp, size_t newlen );
+static void
+fill_proc(struct proc *p, struct kinfo_proc *kp);
+static int
+sysctl_maxfilesperproc( void *oldp, size_t *oldlenp, void *newp, size_t newlen );
+static int
+sysctl_maxprocperuid( void *oldp, size_t *oldlenp, void *newp, size_t newlen );
+static int
+sysctl_maxproc( void *oldp, size_t *oldlenp, void *newp, size_t newlen );
+static int
+sysctl_procargs2( int *name, u_int namelen, char *where, size_t *sizep, struct proc *cur_proc);
+static int
+sysctl_procargsx( int *name, u_int namelen, char *where, size_t *sizep, struct proc *cur_proc, int argc_yes);
 
 
 /*
@@ -308,12 +325,134 @@ extern char hostname[MAXHOSTNAMELEN]; /* defined in bsd/kern/init_main.c */
 extern int hostnamelen;
 extern char domainname[MAXHOSTNAMELEN];
 extern int domainnamelen;
+extern char classichandler[32];
+extern long classichandler_fsid;
+extern long classichandler_fileid;
+
 extern long hostid;
 #ifdef INSECURE
 int securelevel = -1;
 #else
 int securelevel;
 #endif
+
+static int
+sysctl_affinity(name, namelen, oldBuf, oldSize, newBuf, newSize, cur_proc)
+	int *name;
+	u_int namelen;
+	char *oldBuf;
+	size_t *oldSize;
+	char *newBuf;
+	size_t newSize;
+	struct proc *cur_proc;
+{
+	if (namelen < 1)
+		return (EOPNOTSUPP);
+
+	if (name[0] == 0 && 1 == namelen) {
+		return sysctl_rdint(oldBuf, oldSize, newBuf,
+			(cur_proc->p_flag & P_AFFINITY) ? 1 : 0);
+	} else if (name[0] == 1 && 2 == namelen) {
+		if (name[1] == 0) {
+			cur_proc->p_flag &= ~P_AFFINITY;
+		} else {
+			cur_proc->p_flag |= P_AFFINITY;
+		}
+		return 0;
+	}
+	return (EOPNOTSUPP);
+}
+
+static int
+sysctl_classic(name, namelen, oldBuf, oldSize, newBuf, newSize, cur_proc)
+	int *name;
+	u_int namelen;
+	char *oldBuf;
+	size_t *oldSize;
+	char *newBuf;
+	size_t newSize;
+	struct proc *cur_proc;
+{
+	int newVal;
+	int err;
+	struct proc *p;
+
+	if (namelen != 1)
+		return (EOPNOTSUPP);
+
+	p = pfind(name[0]);
+	if (p == NULL)
+		return (EINVAL);
+
+	if ((p->p_ucred->cr_uid != cur_proc->p_ucred->cr_uid) 
+		&& suser(cur_proc->p_ucred, &cur_proc->p_acflag))
+		return (EPERM);
+
+	return sysctl_rdint(oldBuf, oldSize, newBuf,
+		(p->p_flag & P_CLASSIC) ? 1 : 0);
+}
+
+static int
+sysctl_classichandler(name, namelen, oldBuf, oldSize, newBuf, newSize, p)
+	int *name;
+	u_int namelen;
+	char *oldBuf;
+	size_t *oldSize;
+	char *newBuf;
+	size_t newSize;
+	struct proc *p;
+{
+	int error;
+	int len;
+	struct nameidata nd;
+	struct vattr vattr;
+	char handler[sizeof(classichandler)];
+
+	if ((error = suser(p->p_ucred, &p->p_acflag)))
+		return (error);
+	len = strlen(classichandler) + 1;
+	if (oldBuf && *oldSize < len)
+		return (ENOMEM);
+	if (newBuf && newSize >= sizeof(classichandler))
+		return (ENAMETOOLONG);
+	*oldSize = len - 1;
+	if (newBuf) {
+		error = copyin(newBuf, handler, newSize);
+		if (error)
+			return (error);
+		handler[newSize] = 0;
+
+		NDINIT(&nd, LOOKUP, FOLLOW | LOCKLEAF, UIO_SYSSPACE,
+				handler, p);
+		error = namei(&nd);
+		if (error)
+			return (error);
+		/* Check mount point */
+		if ((nd.ni_vp->v_mount->mnt_flag & MNT_NOEXEC) ||
+			(nd.ni_vp->v_type != VREG)) {
+			vput(nd.ni_vp);
+			return (EACCES);
+		}
+		error = VOP_GETATTR(nd.ni_vp, &vattr, p->p_ucred, p);
+		if (error) {
+			vput(nd.ni_vp);
+			return (error);
+		}
+		classichandler_fsid = vattr.va_fsid;
+		classichandler_fileid = vattr.va_fileid;
+		vput(nd.ni_vp);
+	}
+	if (oldBuf) {
+		error = copyout(classichandler, oldBuf, len);
+		if (error)
+			return (error);
+	}
+	if (newBuf) {
+		strcpy(classichandler, handler);
+	}
+	return (error);
+}
+
 
 extern int get_kernel_symfile( struct proc *, char **);
 extern int sysctl_dopanicinfo(int *, u_int, void *, size_t *,
@@ -344,9 +483,12 @@ kern_sysctl(name, namelen, oldp, oldlenp, newp, newlen, p)
 			|| name[0] == KERN_PROF 
 			|| name[0] == KERN_KDEBUG
 			|| name[0] == KERN_PROCARGS
+			|| name[0] == KERN_PROCARGS2
 			|| name[0] == KERN_PCSAMPLES
 			|| name[0] == KERN_IPC
 			|| name[0] == KERN_SYSV
+			|| name[0] == KERN_AFFINITY
+			|| name[0] == KERN_CLASSIC
 			|| name[0] == KERN_PANICINFO)
 		)
 		return (ENOTDIR);		/* overloaded */
@@ -365,11 +507,16 @@ kern_sysctl(name, namelen, oldp, oldlenp, newp, newlen, p)
 		error = sysctl_int(oldp, oldlenp, newp, 
 				newlen, &desiredvnodes);
 		reset_vmobjectcache(oldval, desiredvnodes);
+		resize_namecache(desiredvnodes);
 		return(error);
 	case KERN_MAXPROC:
-		return (sysctl_int(oldp, oldlenp, newp, newlen, &maxproc));
+		return (sysctl_maxproc(oldp, oldlenp, newp, newlen));
 	case KERN_MAXFILES:
 		return (sysctl_int(oldp, oldlenp, newp, newlen, &maxfiles));
+	case KERN_MAXPROCPERUID:
+		return( sysctl_maxprocperuid( oldp, oldlenp, newp, newlen ) );
+	case KERN_MAXFILESPERPROC:
+		return( sysctl_maxfilesperproc( oldp, oldlenp, newp, newlen ) );
 	case KERN_ARGMAX:
 		return (sysctl_rdint(oldp, oldlenp, newp, ARG_MAX));
 	case KERN_SECURELVL:
@@ -433,6 +580,9 @@ kern_sysctl(name, namelen, oldp, oldlenp, newp, newlen, p)
 	case KERN_PROCARGS:
 		/* new one as it does not use kinfo_proc */
 		return (sysctl_procargs(name + 1, namelen - 1, oldp, oldlenp, p));
+	case KERN_PROCARGS2:
+		/* new one as it does not use kinfo_proc */
+		return (sysctl_procargs2(name + 1, namelen - 1, oldp, oldlenp, p));
 	case KERN_SYMFILE:
 		error = get_kernel_symfile( p, &str );
 		if ( error )
@@ -443,6 +593,21 @@ kern_sysctl(name, namelen, oldp, oldlenp, newp, newlen, p)
 	case KERN_PANICINFO:
 		return(sysctl_dopanicinfo(name + 1, namelen - 1, oldp, oldlenp,
 			newp, newlen, p));
+	case KERN_AFFINITY:
+		return sysctl_affinity(name+1, namelen-1, oldp, oldlenp,
+									newp, newlen, p);
+	case KERN_CLASSIC:
+		return sysctl_classic(name+1, namelen-1, oldp, oldlenp,
+								newp, newlen, p);
+	case KERN_CLASSICHANDLER:
+		return sysctl_classichandler(name+1, namelen-1, oldp, oldlenp,
+										newp, newlen, p);
+	case KERN_AIOMAX:
+		return( sysctl_aiomax( oldp, oldlenp, newp, newlen ) );
+	case KERN_AIOPROCMAX:
+		return( sysctl_aioprocmax( oldp, oldlenp, newp, newlen ) );
+	case KERN_AIOTHREADS:
+		return( sysctl_aiothreads( oldp, oldlenp, newp, newlen ) );
 	default:
 		return (EOPNOTSUPP);
 	}
@@ -798,25 +963,28 @@ again:
 			break;
 
 		case KERN_PROC_TTY:
-			if ( doingzomb || (p->p_flag & P_CONTROLT) == 0 ||
+			if ((p->p_flag & P_CONTROLT) == 0 ||
+				(p->p_session == NULL) ||
 			    p->p_session->s_ttyp == NULL ||
 			    p->p_session->s_ttyp->t_dev != (dev_t)name[1])
 				continue;
 			break;
 
 		case KERN_PROC_UID:
-			if (doingzomb || (p->p_ucred->cr_uid != (uid_t)name[1]))
+			if ((p->p_ucred == NULL) ||
+				(p->p_ucred->cr_uid != (uid_t)name[1]))
 				continue;
 			break;
 
 		case KERN_PROC_RUID:
-			if ( doingzomb || (p->p_cred->p_ruid != (uid_t)name[1]))
+			if ((p->p_ucred == NULL) ||
+				(p->p_cred->p_ruid != (uid_t)name[1]))
 				continue;
 			break;
 		}
 		if (buflen >= sizeof(struct kinfo_proc)) {
 			bzero(&kproc, sizeof(struct kinfo_proc));
-			fill_proc(p, &kproc, doingzomb);
+			fill_proc(p, &kproc);
 			if (error = copyout((caddr_t)&kproc, &dp->kp_proc,
 			    sizeof(struct kinfo_proc)))
 				return (error);
@@ -841,56 +1009,49 @@ again:
 	return (0);
 }
 
-void
-fill_proc(p,kp, doingzomb)
-	register struct proc *p;
-	register struct kinfo_proc *kp;
-	int doingzomb;
-{
-	fill_externproc(p, &kp->kp_proc);
-	if (!doingzomb)
-		fill_eproc(p, &kp->kp_eproc);
-}
 /*
  * Fill in an eproc structure for the specified process.
  */
-void
+static void
 fill_eproc(p, ep)
 	register struct proc *p;
 	register struct eproc *ep;
 {
 	register struct tty *tp;
 
-	/*
-	 * Skip zombie processes.
-	 */
-	if (p->p_stat == SZOMB)
-		return;
-
 	ep->e_paddr = p;
-	ep->e_sess = p->p_pgrp->pg_session;
-	ep->e_pcred = *p->p_cred;
-	ep->e_ucred = *p->p_ucred;
+	if (p->p_pgrp) {
+		ep->e_sess = p->p_pgrp->pg_session;
+		ep->e_pgid = p->p_pgrp->pg_id;
+		ep->e_jobc = p->p_pgrp->pg_jobc;
+		if (ep->e_sess && ep->e_sess->s_ttyvp)
+			ep->e_flag = EPROC_CTTY;
+	} else {
+		ep->e_sess = (struct session *)0;
+		ep->e_pgid = 0;
+		ep->e_jobc = 0;
+	}
+	ep->e_ppid = (p->p_pptr) ? p->p_pptr->p_pid : 0;
+	if (p->p_cred) {
+		ep->e_pcred = *p->p_cred;
+		if (p->p_ucred)
+			ep->e_ucred = *p->p_ucred;
+	}
 	if (p->p_stat == SIDL || p->p_stat == SZOMB) {
 		ep->e_vm.vm_tsize = 0;
 		ep->e_vm.vm_dsize = 0;
 		ep->e_vm.vm_ssize = 0;
 	}
 	ep->e_vm.vm_rssize = 0;
-	if (p->p_pptr)
-		ep->e_ppid = p->p_pptr->p_pid;
-	else
-		ep->e_ppid = 0;
-	ep->e_pgid = p->p_pgrp->pg_id;
-	ep->e_jobc = p->p_pgrp->pg_jobc;
-	if ((p->p_flag & P_CONTROLT) &&
+
+	if ((p->p_flag & P_CONTROLT) && (ep->e_sess) &&
 	     (tp = ep->e_sess->s_ttyp)) {
 		ep->e_tdev = tp->t_dev;
 		ep->e_tpgid = tp->t_pgrp ? tp->t_pgrp->pg_id : NO_PID;
 		ep->e_tsess = tp->t_session;
 	} else
 		ep->e_tdev = NODEV;
-	ep->e_flag = ep->e_sess->s_ttyvp ? EPROC_CTTY : 0;
+
 	if (SESS_LEADER(p))
 		ep->e_flag |= EPROC_SLEADER;
 	if (p->p_wmesg)
@@ -898,10 +1059,11 @@ fill_eproc(p, ep)
 	ep->e_xsize = ep->e_xrssize = 0;
 	ep->e_xccount = ep->e_xswrss = 0;
 }
+
 /*
  * Fill in an eproc structure for the specified process.
  */
-void
+static void
 fill_externproc(p, exp)
 	register struct proc *p;
 	register struct extern_proc *exp;
@@ -952,6 +1114,15 @@ fill_externproc(p, exp)
 	exp->p_xstat  = p->p_xstat ;
 	exp->p_acflag  = p->p_acflag ;
 	exp->p_ru  = p->p_ru ;
+}
+
+static void
+fill_proc(p, kp)
+	register struct proc *p;
+	register struct kinfo_proc *kp;
+{
+	fill_externproc(p, &kp->kp_proc);
+	fill_eproc(p, &kp->kp_eproc);
 }
 
 int
@@ -1029,10 +1200,8 @@ struct proc *p;
 }
 
 /*
- *	Returns the top N bytes of the user stack, with
- *	everything below the first argument character
- *	zeroed for security reasons.
- *	Odd data structure is for compatibility.
+ * Return the top *sizep bytes of the user stack, or the entire area of the
+ * user stack down through the saved exec_path, whichever is smaller.
  */
 int
 sysctl_procargs(name, namelen, where, sizep, cur_proc)
@@ -1041,6 +1210,29 @@ sysctl_procargs(name, namelen, where, sizep, cur_proc)
 	char *where;
 	size_t *sizep;
 	struct proc *cur_proc;
+{
+	return sysctl_procargsx( name, namelen, where, sizep, cur_proc, 0);
+}
+
+static int
+sysctl_procargs2(name, namelen, where, sizep, cur_proc)
+	int *name;
+	u_int namelen;
+	char *where;
+	size_t *sizep;
+	struct proc *cur_proc;
+{
+	return sysctl_procargsx( name, namelen, where, sizep, cur_proc, 1);
+}
+
+static int
+sysctl_procargsx(name, namelen, where, sizep, cur_proc, argc_yes)
+	int *name;
+	u_int namelen;
+	char *where;
+	size_t *sizep;
+	struct proc *cur_proc;
+	int argc_yes;
 {
 	register struct proc *p;
 	register int needed = 0;
@@ -1054,14 +1246,14 @@ sysctl_procargs(name, namelen, where, sizep, cur_proc)
 	caddr_t data;
 	unsigned size;
 	vm_offset_t	copy_start, copy_end;
-	vm_offset_t	dealloc_start;	/* area to remove from kernel map */
-	vm_offset_t	dealloc_end;
 	int		*ip;
 	kern_return_t ret;
 	int pid;
 
+	if (argc_yes)
+		buflen -= NBPW;		/* reserve first word to return argc */
 
-	if ((buflen <= 0) || (buflen > (PAGE_SIZE << 1))) {
+	if ((buflen <= 0) || (buflen > ARG_MAX)) {
 		return(EINVAL);
 	}
 	arg_size = buflen;
@@ -1116,20 +1308,20 @@ sysctl_procargs(name, namelen, where, sizep, cur_proc)
 		goto restart;
 	}
 
-	ret = kmem_alloc(kernel_map, &copy_start, round_page(arg_size));
+	ret = kmem_alloc(kernel_map, &copy_start, round_page_32(arg_size));
 	if (ret != KERN_SUCCESS) {
 		task_deallocate(task);
 		return(ENOMEM);
 	}
 
 	proc_map = get_task_map(task);
-	copy_end = round_page(copy_start + arg_size);
+	copy_end = round_page_32(copy_start + arg_size);
 
-	if( vm_map_copyin(proc_map, trunc_page(arg_addr), round_page(arg_size), 
+	if( vm_map_copyin(proc_map, trunc_page(arg_addr), round_page_32(arg_size), 
 			FALSE, &tmp) != KERN_SUCCESS) {
 			task_deallocate(task);
 			kmem_free(kernel_map, copy_start,
-					round_page(arg_size));
+					round_page_32(arg_size));
 			return (EIO);
 	}
 
@@ -1142,61 +1334,94 @@ sysctl_procargs(name, namelen, where, sizep, cur_proc)
 	if( vm_map_copy_overwrite(kernel_map, copy_start, 
 		tmp, FALSE) != KERN_SUCCESS) {
 			kmem_free(kernel_map, copy_start,
-					round_page(arg_size));
+					round_page_32(arg_size));
 			return (EIO);
 	}
 
 	data = (caddr_t) (copy_end - arg_size);
-	ip = (int *) copy_end;		
-	size = arg_size;
 
-	/*
-	 *	Now look down the stack for the bottom of the
-	 *	argument list.  Since this call is otherwise
-	 *	unprotected, we can't let the nosy user see
-	 *	anything else on the stack.
-	 *
-	 *	The arguments are pushed on the stack by
-	 *	execve() as:
-	 *
-	 *		.long	0
-	 *		arg 0	(null-terminated)
-	 *		arg 1
-	 *		...
-	 *		arg N
-	 *		.long	0
-	 *
-	 */
+	if (buflen > p->p_argslen) {
+		data = &data[buflen - p->p_argslen];
+		size = p->p_argslen;
+	} else {
+		size = buflen;
+	}
 
-	ip -= 2; /*skip trailing 0 word and assume at least one
-		  argument.  The last word of argN may be just
-		  the trailing 0, in which case we'd stop
-		  there */
-	while (*--ip)
-		if (ip == (int *)data)
-			break;
-        /* 
-         *  To account for saved path name and not having a null after that
-         *  Run the sweep again. If we have already sweeped entire range skip this
-         */
-         if (ip != (int *)data) {
-                while (*--ip)
-                    if (ip == (int *)data)
-                            break;
-        }
-        
-	bzero(data, (unsigned) ((int)ip - (int)data));
+	if (argc_yes) {
+		/* Put processes argc as the first word in the copyout buffer */
+		suword(where, p->p_argc);
+		error = copyout(data, where + NBPW, size);
+	} else {
+		error = copyout(data, where, size);
 
-	dealloc_start = copy_start;
-	dealloc_end = copy_end;
+		/*
+		 * Make the old PROCARGS work to return the executable's path
+		 * But, only if there is enough space in the provided buffer
+		 *
+		 * on entry: data [possibily] points to the beginning of the path 
+		 * 
+		 * Note: we keep all pointers&sizes aligned to word boundries
+		 */
 
+		if ( (! error) && (buflen > p->p_argslen) )
+		{
+			int binPath_sz;
+			int extraSpaceNeeded, addThis;
+			char * placeHere;
+			char * str = (char *) data;
+			unsigned int max_len = size;
 
-	size = MIN(size, buflen);
-	error = copyout(data, where, size);
+			/* Some apps are really bad about messing up their stacks
+			   So, we have to be extra careful about getting the length
+			   of the executing binary.  If we encounter an error, we bail.
+			*/
 
-	if (dealloc_start != (vm_offset_t) 0) {
-		kmem_free(kernel_map, dealloc_start,
-			dealloc_end - dealloc_start);
+			/* Limit ourselves to PATH_MAX paths */
+			if ( max_len > PATH_MAX ) max_len = PATH_MAX;
+
+			binPath_sz = 0;
+
+			while ( (binPath_sz < max_len-1) && (*str++ != 0) )
+				binPath_sz++;
+
+			if (binPath_sz < max_len-1) binPath_sz += 1;
+
+			/* Pre-Flight the space requiremnts */
+
+			/* Account for the padding that fills out binPath to the next word */
+			binPath_sz += (binPath_sz & (NBPW-1)) ? (NBPW-(binPath_sz & (NBPW-1))) : 0;
+
+			placeHere = where + size;
+
+			/* Account for the bytes needed to keep placeHere word aligned */ 
+			addThis = ((unsigned long)placeHere & (NBPW-1)) ? (NBPW-((unsigned long)placeHere & (NBPW-1))) : 0;
+
+			/* Add up all the space that is needed */
+			extraSpaceNeeded = binPath_sz + addThis + (4 * NBPW);
+
+			/* is there is room to tack on argv[0]? */
+			if ( (buflen & ~(NBPW-1)) >= ( p->p_argslen + extraSpaceNeeded ))
+			{
+				placeHere += addThis;
+				suword(placeHere, 0);
+				placeHere += NBPW;
+				suword(placeHere, 0xBFFF0000);
+				placeHere += NBPW;
+				suword(placeHere, 0);
+				placeHere += NBPW;
+				error = copyout(data, placeHere, binPath_sz);
+				if ( ! error )
+				{
+					placeHere += binPath_sz;
+					suword(placeHere, 0);
+					size += extraSpaceNeeded;
+				}
+			}
+		}
+	}
+
+	if (copy_start != (vm_offset_t) 0) {
+		kmem_free(kernel_map, copy_start, copy_end - copy_start);
 	}
 	if (error) {
 		return(error);
@@ -1206,3 +1431,197 @@ sysctl_procargs(name, namelen, where, sizep, cur_proc)
 		*sizep = size;
 	return (0);
 }
+
+
+/*
+ * Validate parameters and get old / set new parameters
+ * for max number of concurrent aio requests.  Makes sure
+ * the system wide limit is greater than the per process
+ * limit.
+ */
+static int
+sysctl_aiomax( void *oldp, size_t *oldlenp, void *newp, size_t newlen )
+{
+	int 	error = 0;
+	int		new_value;
+
+	if ( oldp && *oldlenp < sizeof(int) )
+		return (ENOMEM);
+	if ( newp && newlen != sizeof(int) )
+		return (EINVAL);
+		
+	*oldlenp = sizeof(int);
+	if ( oldp )
+		error = copyout( &aio_max_requests, oldp, sizeof(int) );
+	if ( error == 0 && newp )
+		error = copyin( newp, &new_value, sizeof(int) );
+	if ( error == 0 && newp ) {
+		if ( new_value >= aio_max_requests_per_process )
+			aio_max_requests = new_value;
+		else
+			error = EINVAL;
+	}
+	return( error );
+	
+} /* sysctl_aiomax */
+
+
+/*
+ * Validate parameters and get old / set new parameters
+ * for max number of concurrent aio requests per process.  
+ * Makes sure per process limit is less than the system wide
+ * limit.
+ */
+static int
+sysctl_aioprocmax( void *oldp, size_t *oldlenp, void *newp, size_t newlen )
+{
+	int 	error = 0;
+	int		new_value = 0;
+
+	if ( oldp && *oldlenp < sizeof(int) )
+		return (ENOMEM);
+	if ( newp && newlen != sizeof(int) )
+		return (EINVAL);
+		
+	*oldlenp = sizeof(int);
+	if ( oldp )
+		error = copyout( &aio_max_requests_per_process, oldp, sizeof(int) );
+	if ( error == 0 && newp )
+		error = copyin( newp, &new_value, sizeof(int) );
+	if ( error == 0 && newp ) {
+		if ( new_value <= aio_max_requests && new_value >= AIO_LISTIO_MAX )
+			aio_max_requests_per_process = new_value;
+		else
+			error = EINVAL;
+	}
+	return( error );
+	
+} /* sysctl_aioprocmax */
+
+
+/*
+ * Validate parameters and get old / set new parameters
+ * for max number of async IO worker threads.  
+ * We only allow an increase in the number of worker threads.
+ */
+static int
+sysctl_aiothreads( void *oldp, size_t *oldlenp, void *newp, size_t newlen )
+{
+	int 	error = 0;
+	int		new_value;
+
+	if ( oldp && *oldlenp < sizeof(int) )
+		return (ENOMEM);
+	if ( newp && newlen != sizeof(int) )
+		return (EINVAL);
+		
+	*oldlenp = sizeof(int);
+	if ( oldp )
+		error = copyout( &aio_worker_threads, oldp, sizeof(int) );
+	if ( error == 0 && newp )
+		error = copyin( newp, &new_value, sizeof(int) );
+	if ( error == 0 && newp ) {
+	        if (new_value > aio_worker_threads ) {
+		        _aio_create_worker_threads( (new_value - aio_worker_threads) );
+			aio_worker_threads = new_value;
+		}
+		else
+		        error = EINVAL;
+	}
+	return( error );
+	
+} /* sysctl_aiothreads */
+
+
+/*
+ * Validate parameters and get old / set new parameters
+ * for max number of processes per UID.
+ * Makes sure per UID limit is less than the system wide limit.
+ */
+static int
+sysctl_maxprocperuid( void *oldp, size_t *oldlenp, void *newp, size_t newlen )
+{
+	int 	error = 0;
+	int		new_value;
+
+	if ( oldp != NULL && *oldlenp < sizeof(int) )
+		return (ENOMEM);
+	if ( newp != NULL && newlen != sizeof(int) )
+		return (EINVAL);
+		
+	*oldlenp = sizeof(int);
+	if ( oldp != NULL )
+		error = copyout( &maxprocperuid, oldp, sizeof(int) );
+	if ( error == 0 && newp != NULL ) {
+		error = copyin( newp, &new_value, sizeof(int) );
+		if ( error == 0 && new_value <= maxproc && new_value > 0 )
+			maxprocperuid = new_value;
+		else
+			error = EINVAL;
+	}
+	return( error );
+	
+} /* sysctl_maxprocperuid */
+
+
+/*
+ * Validate parameters and get old / set new parameters
+ * for max number of files per process.
+ * Makes sure per process limit is less than the system-wide limit.
+ */
+static int
+sysctl_maxfilesperproc( void *oldp, size_t *oldlenp, void *newp, size_t newlen )
+{
+	int 	error = 0;
+	int		new_value;
+
+	if ( oldp != NULL && *oldlenp < sizeof(int) )
+		return (ENOMEM);
+	if ( newp != NULL && newlen != sizeof(int) )
+		return (EINVAL);
+		
+	*oldlenp = sizeof(int);
+	if ( oldp != NULL )
+		error = copyout( &maxfilesperproc, oldp, sizeof(int) );
+	if ( error == 0 && newp != NULL ) {
+		error = copyin( newp, &new_value, sizeof(int) );
+		if ( error == 0 && new_value < maxfiles && new_value > 0 )
+			maxfilesperproc = new_value;
+		else
+			error = EINVAL;
+	}
+	return( error );
+	
+} /* sysctl_maxfilesperproc */
+
+
+/*
+ * Validate parameters and get old / set new parameters
+ * for the system-wide limit on the max number of processes.
+ * Makes sure the system-wide limit is less than the configured hard
+ * limit set at kernel compilation.
+ */
+static int
+sysctl_maxproc( void *oldp, size_t *oldlenp, void *newp, size_t newlen )
+{
+	int 	error = 0;
+	int	new_value;
+
+	if ( oldp != NULL && *oldlenp < sizeof(int) )
+		return (ENOMEM);
+	if ( newp != NULL && newlen != sizeof(int) )
+		return (EINVAL);
+		
+	*oldlenp = sizeof(int);
+	if ( oldp != NULL )
+		error = copyout( &maxproc, oldp, sizeof(int) );
+	if ( error == 0 && newp != NULL ) {
+		error = copyin( newp, &new_value, sizeof(int) );
+		if ( error == 0 && new_value <= hard_maxproc && new_value > 0 )
+			maxproc = new_value;
+		else
+			error = EINVAL;
+	}
+	return( error );
+	
+} /* sysctl_maxproc */

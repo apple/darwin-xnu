@@ -75,10 +75,10 @@ type uint64_t = MACH_MSG_TYPE_INTEGER_64;
  * Legacy fixed-length Mach types which should
  * be replaced with the Standard types from above.
  */
-type int32 = MACH_MSG_TYPE_INTEGER_32;
-type unsigned32 = MACH_MSG_TYPE_INTEGER_32;
-type int64 = MACH_MSG_TYPE_INTEGER_64;
-type unsigned64 = MACH_MSG_TYPE_INTEGER_64;
+type int32 = int32_t;
+type unsigned32 = uint32_t;
+type int64 = int64_t;
+type unsigned64 = uint64_t;
 
 /*
  * Other fixed length Mach types.
@@ -142,4 +142,4 @@ type mach_port_poly_t = polymorphic
 import <mach/std_types.h>;
 import <mach/mig.h>;
 
-#endif	_MACH_STD_TYPES_DEFS_
+#endif	/* _MACH_STD_TYPES_DEFS_ */

@@ -134,11 +134,11 @@ nd6_ns_input(m, off, icmp6len)
 	if (IN6_IS_ADDR_UNSPECIFIED(&saddr6)) {
 		/* dst has to be solicited node multicast address. */
 		if (daddr6.s6_addr16[0] == IPV6_ADDR_INT16_MLL
-		    /*don't check ifindex portion*/
+		    /* don't check ifindex portion */
 		    && daddr6.s6_addr32[1] == 0
 		    && daddr6.s6_addr32[2] == IPV6_ADDR_INT32_ONE
 		    && daddr6.s6_addr8[12] == 0xff) {
-			; /*good*/
+			; /* good */
 		} else {
 			nd6log((LOG_INFO, "nd6_ns_input: bad DAD packet "
 				"(wrong ip6 dst)\n"));
@@ -164,7 +164,7 @@ nd6_ns_input(m, off, icmp6len)
 	}
 
 	if (ndopts.nd_opts_src_lladdr) {
-		lladdr = (char *)(ndopts.nd_opts_src_lladdr +1);
+		lladdr = (char *)(ndopts.nd_opts_src_lladdr + 1);
 		lladdrlen = ndopts.nd_opts_src_lladdr->nd_opt_len << 3;
 	}
 	
@@ -253,9 +253,9 @@ nd6_ns_input(m, off, icmp6len)
 	}
 
 	if (IN6_ARE_ADDR_EQUAL(&myaddr6, &saddr6)) {
-		log(LOG_INFO,
-		    "nd6_ns_input: duplicate IP6 address %s\n",
-		    ip6_sprintf(&saddr6));
+		nd6log((LOG_INFO,
+			"nd6_ns_input: duplicate IP6 address %s\n",
+			ip6_sprintf(&saddr6)));
 		goto freeit;
 	}
 
@@ -384,7 +384,7 @@ nd6_ns_output(ifp, daddr6, taddr6, ln, dad)
 
 	icmp6len = sizeof(*nd_ns);
 	m->m_pkthdr.len = m->m_len = sizeof(*ip6) + icmp6len;
-	m->m_data += max_linkhdr;	/*or MH_ALIGN() equivalent?*/
+	m->m_data += max_linkhdr;	/* or MH_ALIGN() equivalent? */
 
 	/* fill neighbor solicitation packet */
 	ip6 = mtod(m, struct ip6_hdr *);
@@ -434,7 +434,7 @@ nd6_ns_output(ifp, daddr6, taddr6, ln, dad)
 		 * - saddr6 belongs to the outgoing interface.
 		 * Otherwise, we perform a scope-wise match.
 		 */
-		struct ip6_hdr *hip6;		/*hold ip6*/
+		struct ip6_hdr *hip6;		/* hold ip6 */
 		struct in6_addr *saddr6;
 
 		if (ln && ln->ln_hold) {
@@ -451,7 +451,10 @@ nd6_ns_output(ifp, daddr6, taddr6, ln, dad)
 		else {
 			ia = in6_ifawithifp(ifp, &ip6->ip6_dst);
 			if (ia == NULL) {
-				m_freem(m);	/*XXX*/
+				if (ln && ln->ln_hold)
+					m_freem(ln->ln_hold);
+				ln->ln_hold = NULL;
+				m_freem(m);
 				return;
 			}
 			ip6->ip6_src = ia->ia_addr.sin6_addr;
@@ -624,7 +627,7 @@ nd6_na_input(m, off, icmp6len)
 		goto freeit;
 	}
 
-	/* Just for safety, maybe unnecessery. */
+	/* Just for safety, maybe unnecessary. */
 	if (ifa) {
 		log(LOG_ERR,
 		    "nd6_na_input: duplicate IP6 address %s\n",
@@ -769,11 +772,18 @@ nd6_na_input(m, off, icmp6len)
 			int s;
 
 			in6 = &((struct sockaddr_in6 *)rt_key(rt))->sin6_addr;
+
+			/*
+			 * Lock to protect the default router list.
+			 * XXX: this might be unnecessary, since this function
+			 * is only called under the network software interrupt
+			 * context.  However, we keep it just for safety.  
+			 */
 			s = splnet();
 			dr = defrouter_lookup(in6, rt->rt_ifp);
 			if (dr)
 				defrtrlist_del(dr);
-			else if (!ip6_forwarding && ip6_accept_rtadv) {
+			else if (!ip6_forwarding && (ip6_accept_rtadv || (rt->rt_ifp->if_eflags & IFEF_ACCEPT_RTADVD))) {
 				/*
 				 * Even if the neighbor is not in the default
 				 * router list, the neighbor may be used
@@ -791,7 +801,7 @@ nd6_na_input(m, off, icmp6len)
 	ln->ln_asked = 0;
 	if (ln->ln_hold) {
 		/*
-		 * we assume ifp is not a p2p here, so just set the 2nd
+		 * we assume ifp is not a loopback here, so just set the 2nd
 		 * argument as the 1st one.
 		 */
 		nd6_output(ifp, ifp, ln->ln_hold,
@@ -832,7 +842,7 @@ nd6_na_output(ifp, daddr6, taddr6, flags, tlladdr, sdl0)
 	struct ip6_moptions im6o;
 	int icmp6len;
 	int maxlen;
-	caddr_t mac;
+	caddr_t mac = NULL;
 	struct ifnet *outif = NULL;
 
 	/* estimate the size of message */
@@ -867,7 +877,7 @@ nd6_na_output(ifp, daddr6, taddr6, flags, tlladdr, sdl0)
 
 	icmp6len = sizeof(*nd_na);
 	m->m_pkthdr.len = m->m_len = sizeof(struct ip6_hdr) + icmp6len;
-	m->m_data += max_linkhdr;	/*or MH_ALIGN() equivalent?*/
+	m->m_data += max_linkhdr;	/* or MH_ALIGN() equivalent? */
 
 	/* fill neighbor advertisement packet */
 	ip6 = mtod(m, struct ip6_hdr *);
@@ -910,7 +920,6 @@ nd6_na_output(ifp, daddr6, taddr6, flags, tlladdr, sdl0)
 	 * target lladdr option SHOULD NOT be included.
 	 */
 	if (tlladdr) {
-		mac = NULL;
 		/*
 		 * sdl0 != NULL indicates proxy NA.  If we do proxy, use
 		 * lladdr in sdl0.  If we are not proxying (sending NA for
@@ -992,9 +1001,6 @@ struct dadq {
 	int dad_ns_ocount;	/* NS sent so far */
 	int dad_ns_icount;
 	int dad_na_icount;
-#if defined(__FreeBSD__) && __FreeBSD__ >= 3
-	struct callout_handle dad_timer;
-#endif
 };
 
 static struct dadq_head dadq;
@@ -1031,6 +1037,7 @@ nd6_dad_starttimer(dp, ticks)
 	callout_reset(&dp->dad_timer_ch, ticks,
 	    (void (*) __P((void *)))nd6_dad_timer, (void *)dp->dad_ifa);
 }
+
 static void
 nd6_dad_stoptimer(dp)
 	struct dadq *dp;
@@ -1096,9 +1103,6 @@ nd6_dad_start(ifa, tick)
 		return;
 	}
 	bzero(dp, sizeof(*dp));
-#if defined(__FreeBSD__) && __FreeBSD__ >= 3
-	callout_init(&dp->dad_timer_ch);
-#endif
 	TAILQ_INSERT_TAIL(&dadq, (struct dadq *)dp, dad_list);
 
 	nd6log((LOG_DEBUG, "%s: starting DAD for %s\n", if_name(ifa->ifa_ifp),
@@ -1115,11 +1119,8 @@ nd6_dad_start(ifa, tick)
 	dp->dad_count = ip6_dad_count;
 	dp->dad_ns_icount = dp->dad_na_icount = 0;
 	dp->dad_ns_ocount = dp->dad_ns_tcount = 0;
-	if (!tick) {
+	if (tick == NULL) {
 		nd6_dad_ns_output(dp, ifa);
-#if defined(__FreeBSD__) && __FreeBSD__ >= 3
-		dp->dad_timer =
-#endif
 		timeout((void (*) __P((void *)))nd6_dad_timer_funnel, (void *)ifa,
 			nd_ifinfo[ifa->ifa_ifp->if_index].retrans * hz / 1000);
 	} else {
@@ -1130,9 +1131,6 @@ nd6_dad_start(ifa, tick)
 		else
 			ntick = *tick + random() % (hz / 2);
 		*tick = ntick;
-#if defined(__FreeBSD__) && __FreeBSD__ >= 3
-		dp->dad_timer =
-#endif
 		timeout((void (*) __P((void *)))nd6_dad_timer_funnel, (void *)ifa,
 			ntick);
 	}
@@ -1188,7 +1186,7 @@ nd6_dad_timer(ifa)
 	struct in6_ifaddr *ia = (struct in6_ifaddr *)ifa;
 	struct dadq *dp;
 
-	s = splnet();		/*XXX*/
+	s = splnet();		/* XXX */
 
 	/* Sanity check */
 	if (ia == NULL) {
@@ -1233,9 +1231,6 @@ nd6_dad_timer(ifa)
 		 * We have more NS to go.  Send NS packet for DAD.
 		 */
 		nd6_dad_ns_output(dp, ifa);
-#if defined(__FreeBSD__) && __FreeBSD__ >= 3
-		dp->dad_timer =
-#endif
 		timeout((void (*) __P((void *)))nd6_dad_timer_funnel, (void *)ifa,
 			nd_ifinfo[ifa->ifa_ifp->if_index].retrans * hz / 1000);
 	} else {
@@ -1256,7 +1251,7 @@ nd6_dad_timer(ifa)
 		}
 
 		if (dp->dad_ns_icount) {
-#if 0 /*heuristics*/
+#if 0 /* heuristics */
 			/*
 			 * if
 			 * - we have sent many(?) DAD NS, and

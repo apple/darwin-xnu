@@ -157,15 +157,9 @@ ux_handler(void)
 void
 ux_handler_init(void)
 {
-	task_t	handler_task;
-
 	simple_lock_init(&ux_handler_init_lock);
 	ux_exception_port = MACH_PORT_NULL;
-	if (kernel_task_create(kernel_task, 
-		0, 0, &handler_task) != MACH_MSG_SUCCESS) {
-		panic("Failed to created ux handler task\n");
-	}
-	(void) kernel_thread(handler_task, ux_handler);
+	(void) kernel_thread(kernel_task, ux_handler);
 	simple_lock(&ux_handler_init_lock);
 	if (ux_exception_port == MACH_PORT_NULL)  {
 		simple_unlock(&ux_handler_init_lock);

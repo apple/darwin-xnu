@@ -41,11 +41,11 @@
 
 ENTRY(kdp_call_with_ctx, TAG_NO_FRAME_USED)
 	
-	mfmsr	r7					/* Get the MSR */
+	lis		r2,hi16(MASK(MSR_VEC))	; Get the vector enable
+	mfmsr	r7					; Get the MSR
+	ori		r2,r2,lo16(MASK(MSR_EE)|MASK(MSR_FP))	; Get FP and EE
 	mflr	r0
-	rlwinm	r7,r7,0,MSR_EE_BIT+1,MSR_EE_BIT-1	/* Turn off interruptions enable bit */
-	rlwinm	r7,r7,0,MSR_FP_BIT+1,MSR_FP_BIT-1	; Force floating point off
-	rlwinm	r7,r7,0,MSR_VEC_BIT+1,MSR_VEC_BIT-1	; Force vectors off
+	andc	r7,r7,r2			; Clear FP, VEC, and EE
 	mtmsr	r7
 	isync										; Need this because we may have ditched fp/vec
 	mfsprg	r8,0				/* Get the per_proc block address */
@@ -72,13 +72,13 @@ ENTRY(kdp_call_with_ctx, TAG_NO_FRAME_USED)
 	
 	bl	EXT(kdp_trap)
 
+	lis		r2,hi16(MASK(MSR_VEC))		; Get the vector enable
 	mfmsr	r0					/* Get the MSR */
+	ori		r2,r2,lo16(MASK(MSR_EE)|MASK(MSR_FP))	; Get FP and EE
 	addi	r1,	r1,	FM_SIZE
-	rlwinm	r0,r0,0,MSR_EE_BIT+1,MSR_EE_BIT-1	/* Turn off interruptions enable bit */
-	rlwinm	r0,r0,0,MSR_FP_BIT+1,MSR_FP_BIT-1	; Force floating point off
-	rlwinm	r0,r0,0,MSR_VEC_BIT+1,MSR_VEC_BIT-1	; Force vectors off
+	andc	r0,r0,r2			; Clear FP, VEC, and EE
 	mtmsr	r0
-	isync										; Need this because we may have ditched fp/vec
+	isync						; Need this because we may have ditched fp/vec
 
 	mfsprg	r8,0				/* Get the per_proc block address */
 	

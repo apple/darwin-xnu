@@ -120,6 +120,7 @@
 /* extended flags definitions:  (all bits are reserved for internal/future use) */
 #define IFEF_AUTOCONFIGURING	0x1
 #define IFEF_DVR_REENTRY_OK	0x20	/* When set, driver may be reentered from its own thread */
+#define IFEF_ACCEPT_RTADVD	0x40	/* set to accept IPv6 router advertisement on the interface */
 #define IFEF_INUSE	0x40000000 /* DLIL ifnet recycler, ifnet in use */
 #define IFEF_REUSE	0x20000000 /* DLIL ifnet recycler, ifnet is not new */
 #endif /* KERNEL_PRIVATE */

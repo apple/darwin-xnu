@@ -174,18 +174,14 @@ hertz_tick(
 #endif
 	}
 	else {
-		switch(processor_ptr[my_cpu]->state) {
+		TICKBUMP(&thread->system_timer);
 
-		case PROCESSOR_IDLE:
-			TICKBUMP(&thread->system_timer);
+		state = processor_ptr[my_cpu]->state;
+		if (	state == PROCESSOR_IDLE			||
+				state == PROCESSOR_DISPATCHING	)
 			state = CPU_STATE_IDLE;
-			break;
-
-		default:
-			TICKBUMP(&thread->system_timer);
+		else
 			state = CPU_STATE_SYSTEM;
-			break;
-		}
 #if GPROF
 		if (pv->active) {
 			if (state == CPU_STATE_SYSTEM)

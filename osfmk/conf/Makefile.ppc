@@ -9,7 +9,7 @@
 makedis: $(SRCROOT)/osfmk/ddb/makedis.c
 	$(CC) -o $@ $<
 
-ppc_disasm.o_CFLAGS = -Dperror=db_printf -Dexit=db_error -Dmalloc=db_disasm_malloc
+ppc_disasm.o_CFLAGS_ADD = -Dperror=db_printf -Dexit=db_error -Dmalloc=db_disasm_malloc
 
 ppc_disasm : $(SRCROOT)/osfmk/ppc/ppc_disasm.i makedis
 	./makedis -w -h ./ppc_disasm.h $(SOURCE_DIR)/osfmk/ppc/ppc_disasm.i > ./ppc_disasm.c

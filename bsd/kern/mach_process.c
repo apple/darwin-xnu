@@ -117,7 +117,7 @@ ptrace(p, uap, retval)
 	int		*locr0;
 	int error = 0;
 #if defined(ppc)
-	struct ppc_thread_state statep;
+	struct ppc_thread_state64 statep;
 #elif	defined(i386)
 	struct i386_saved_state statep;
 #else
@@ -291,8 +291,8 @@ ptrace(p, uap, retval)
 			goto errorLabel;
 		}	
 #elif defined(ppc)
-		state_count = PPC_THREAD_STATE_COUNT;
-		if (thread_getstatus(th_act, PPC_THREAD_STATE, &statep, &state_count)  != KERN_SUCCESS) {
+		state_count = PPC_THREAD_STATE64_COUNT;
+		if (thread_getstatus(th_act, PPC_THREAD_STATE64, &statep, &state_count)  != KERN_SUCCESS) {
 			goto errorLabel;
 		}	
 #else
@@ -306,9 +306,9 @@ ptrace(p, uap, retval)
 		if (!ALIGNED((int)uap->addr, sizeof(int)))
 			return (ERESTART);
 
-		statep.srr0 = (int)uap->addr;
-		state_count = PPC_THREAD_STATE_COUNT;
-		if (thread_setstatus(th_act, PPC_THREAD_STATE, &statep, &state_count)  != KERN_SUCCESS) {
+		statep.srr0 = (uint64_t)((uint32_t)uap->addr);
+		state_count = PPC_THREAD_STATE64_COUNT;
+		if (thread_setstatus(th_act, PPC_THREAD_STATE64, &statep, &state_count)  != KERN_SUCCESS) {
 			goto errorLabel;
 		}	
 #undef 	ALIGNED
@@ -324,8 +324,8 @@ ptrace(p, uap, retval)
 			psignal_lock(t, uap->data, 0);
                 }
 #if defined(ppc)
-		state_count = PPC_THREAD_STATE_COUNT;
-		if (thread_getstatus(th_act, PPC_THREAD_STATE, &statep, &state_count)  != KERN_SUCCESS) {
+		state_count = PPC_THREAD_STATE64_COUNT;
+		if (thread_getstatus(th_act, PPC_THREAD_STATE64, &statep, &state_count)  != KERN_SUCCESS) {
 			goto errorLabel;
 		}	
 #endif
@@ -349,8 +349,8 @@ ptrace(p, uap, retval)
 #endif
 		}
 #if defined (ppc)
-		state_count = PPC_THREAD_STATE_COUNT;
-		if (thread_setstatus(th_act, PPC_THREAD_STATE, &statep, &state_count)  != KERN_SUCCESS) {
+		state_count = PPC_THREAD_STATE64_COUNT;
+		if (thread_setstatus(th_act, PPC_THREAD_STATE64, &statep, &state_count)  != KERN_SUCCESS) {
 			goto errorLabel;
 		}	
 #endif
@@ -359,7 +359,8 @@ ptrace(p, uap, retval)
 		t->p_stat = SRUN;
 		if (t->sigwait) {
 			wakeup((caddr_t)&(t->sigwait));
-			task_release(task);
+			if ((t->p_flag & P_SIGEXC) == 0)
+				task_release(task);
 		}
 		break;
 		

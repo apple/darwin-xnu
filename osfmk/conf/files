@@ -70,7 +70,6 @@ OPTIONS/mach_tr			optional mach_tr
 OPTIONS/mach_vm_debug		optional mach_vm_debug
 OPTIONS/mach_page_hash_stats    optional mach_page_hash_stats
 OPTIONS/mig_debug		optional mig_debug
-OPTIONS/hw_footprint		optional hw_footprint
 OPTIONS/simple_clock		optional simple_clock
 OPTIONS/stat_time		optional stat_time
 OPTIONS/time_stamp		optional time_stamp
@@ -81,7 +80,6 @@ OPTIONS/power_save		optional power_save
 OPTIONS/zone_debug		optional zone_debug
 OPTIONS/vm_cpm			optional vm_cpm
 OPTIONS/task_swapper		optional task_swapper
-OPTIONS/thread_swapper		optional thread_swapper
 OPTIONS/stack_usage		optional stack_usage
 
 # Default pager and system pager files, to be moved to separate component
@@ -147,6 +145,7 @@ osfmk/kern/exception.c		standard
 osfmk/kern/etap.c			standard
 osfmk/kern/etap_pool.c		optional etap
 osfmk/kern/host.c			standard
+osfmk/kern/host_notify.c		standard
 osfmk/kern/ipc_clock.c		standard
 osfmk/kern/ipc_host.c			standard
 osfmk/kern/ipc_kobject.c		standard
@@ -199,6 +198,7 @@ osfmk/kern/bsd_kern.c		optional mach_bsd
 ./mach/ledger_server.c			standard
 ./mach/lock_set_server.c		standard
 ./mach/mach_host_server.c		standard
+./mach/mach_notify_user.c		standard
 ./mach/mach_port_server.c		standard
 ./mach/memory_object_server.c		standard
 ./mach/memory_object_control_server.c	standard
@@ -206,11 +206,8 @@ osfmk/kern/bsd_kern.c		optional mach_bsd
 ./mach/memory_object_name_server.c	standard
 ./mach/upl_server.c			standard
 #
-# JMM- right now we don't use the MIG-generated client interface
-# for notifications, instead we hand create them. We need to switch
-# when we can (i.e. when we can get the send-always behavior covered
-# even with MIG-generated code).
-# ./mach/notify_user.c			standard
+# For now, no external pagers
+#
 # ./mach/memory_object_user.c		standard
 # ./mach/memory_object_default_user.c	standard
 #

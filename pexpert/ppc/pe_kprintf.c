@@ -48,34 +48,28 @@ void (*PE_kputc)(char c) = 0;
 
 unsigned int disableSerialOuput = TRUE;
 
+vm_offset_t	scc = 0;
 
-static struct slock kprintf_lock;
+struct slock kprintf_lock;
 
 void PE_init_kprintf(boolean_t vm_initialized)
 {
-	static vm_offset_t	scc;
 	unsigned int	boot_arg;
 
 	if (PE_state.initialized == FALSE)
 		panic("Platform Expert not initialized");
 
-	if (!vm_initialized)
-	{
-	    if (PE_parse_boot_arg("debug", &boot_arg)) 
-	        if(boot_arg & DB_KPRT) disableSerialOuput = FALSE; 
+	if (PE_parse_boot_arg("debug", &boot_arg)) 
+		if(boot_arg & DB_KPRT) disableSerialOuput = FALSE; 
 
-	    if( (scc = PE_find_scc()))
-            {
-		initialize_serial( (void *) scc );
+	if( (scc = PE_find_scc())) {				/* See if we can find the serial port */
+		scc = io_map_spec(scc, 0x1000);			/* Map it in */
+		initialize_serial((void *)scc);			/* Start up the serial driver */
 		PE_kputc = serial_putc;
 
 		simple_lock_init(&kprintf_lock, 0);
-            } else
-		PE_kputc = cnputc;
-
-	} else if( scc){
-		initialize_serial( (void *) io_map( scc, 0x1000) );
-	}
+	} else
+			PE_kputc = cnputc;
 
 #if 0
 	/*

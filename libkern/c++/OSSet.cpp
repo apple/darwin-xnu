@@ -54,7 +54,7 @@ bool OSSet::initWithCapacity(unsigned int inCapacity)
 
 bool OSSet::initWithObjects(const OSObject *inObjects[],
                               unsigned int inCount,
-                              unsigned int inCapacity = 0)
+                              unsigned int inCapacity)
 {
     unsigned int capacity = inCount;
 
@@ -79,7 +79,7 @@ bool OSSet::initWithObjects(const OSObject *inObjects[],
 }
 
 bool OSSet::initWithArray(const OSArray *inArray,
-                          unsigned int inCapacity = 0)
+                          unsigned int inCapacity)
 {
     if ( !inArray )
         return false;
@@ -89,7 +89,7 @@ bool OSSet::initWithArray(const OSArray *inArray,
 }
 
 bool OSSet::initWithSet(const OSSet *inSet,
-                        unsigned int inCapacity = 0)
+                        unsigned int inCapacity)
 {
     return initWithArray(inSet->members, inCapacity);
 }
@@ -99,7 +99,7 @@ OSSet *OSSet::withCapacity(unsigned int capacity)
     OSSet *me = new OSSet;
 
     if (me && !me->initWithCapacity(capacity)) {
-        me->free();
+        me->release();
         return 0;
     }
 
@@ -108,12 +108,12 @@ OSSet *OSSet::withCapacity(unsigned int capacity)
 
 OSSet *OSSet::withObjects(const OSObject *objects[],
                           unsigned int count,
-                          unsigned int capacity = 0)
+                          unsigned int capacity)
 {
     OSSet *me = new OSSet;
 
     if (me && !me->initWithObjects(objects, count, capacity)) {
-        me->free();
+        me->release();
         return 0;
     }
 
@@ -121,12 +121,12 @@ OSSet *OSSet::withObjects(const OSObject *objects[],
 }
 
 OSSet *OSSet::withArray(const OSArray *array,
-                        unsigned int capacity = 0)
+                        unsigned int capacity)
 {
     OSSet *me = new OSSet;
 
     if (me && !me->initWithArray(array, capacity)) {
-        me->free();
+        me->release();
         return 0;
     }
 
@@ -134,12 +134,12 @@ OSSet *OSSet::withArray(const OSArray *array,
 }
 
 OSSet *OSSet::withSet(const OSSet *set,
-                      unsigned int capacity = 0)
+                      unsigned int capacity)
 {
     OSSet *me = new OSSet;
 
     if (me && !me->initWithSet(set, capacity)) {
-        me->free();
+        me->release();
         return 0;
     }
 

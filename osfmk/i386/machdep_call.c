@@ -40,6 +40,7 @@
 extern kern_return_t	kern_invalid();
 extern kern_return_t	thread_get_cthread_self();
 extern kern_return_t	thread_set_cthread_self();
+extern kern_return_t	thread_fast_set_cthread_self();
 extern kern_return_t	PCcreate(), PCldt(), PCresume();
 extern kern_return_t	PCcopyBIOSData(), PCmapBIOSRom();
 extern kern_return_t	PCsizeBIOSExtData(), PCcopyBIOSExtData();
@@ -56,6 +57,10 @@ machdep_call_t		machdep_call_table[] = {
     {
     	kern_invalid,	/* old th_create() */
 	0
+    },
+    {
+      thread_fast_set_cthread_self,
+	1
     },
 #ifdef	FIXME
     {

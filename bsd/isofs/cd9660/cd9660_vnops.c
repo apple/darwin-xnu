@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2003 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -91,8 +91,8 @@
 #include <sys/attr.h>
 #include <vfs/vfs_support.h>
 #include <sys/ubc.h>
-
 #include <sys/lock.h>
+#include <architecture/byte_order.h>
 
 #include <isofs/cd9660/iso.h>
 #include <isofs/cd9660/cd9660_node.h>
@@ -308,9 +308,52 @@ cd9660_read(ap)
 	imp = ip->i_mnt;
 	VOP_DEVBLOCKSIZE(ip->i_devvp, &devBlockSize);
 
-	if (UBCISVALID(vp))
-                error = cluster_read(vp, uio, (off_t)ip->i_size, devBlockSize, 0);
-	else {
+	if (UBCISVALID(vp)) {
+		/*
+		 * Copy any part of the Apple Double header.
+		 */
+		if ((ip->i_flag & ISO_ASSOCIATED) && (uio->uio_offset < ADH_SIZE)) {
+			apple_double_header_t  header;
+			int bytes;
+
+			if (uio->uio_offset < sizeof(apple_double_header_t)) {
+				header.magic = APPLEDOUBLE_MAGIC;
+				header.version = APPLEDOUBLE_VERSION;
+				header.count = 2;
+				header.entries[0].entryID = APPLEDOUBLE_FINDERINFO;
+				header.entries[0].offset = offsetof(apple_double_header_t, finfo);
+				header.entries[0].length = 32;
+				header.entries[1].entryID = APPLEDOUBLE_RESFORK;
+				header.entries[1].offset = ADH_SIZE;
+				header.entries[1].length = ip->i_size - ADH_SIZE;
+				header.finfo.fdType = ip->i_FileType;
+				header.finfo.fdCreator = ip->i_Creator;
+				header.finfo.fdFlags = ip->i_FinderFlags;
+				header.finfo.fdLocation.v = -1;
+				header.finfo.fdLocation.h = -1;
+				header.finfo.fdReserved = 0;
+
+				bytes = min(uio->uio_resid, sizeof(apple_double_header_t) - uio->uio_offset);
+				error = uiomove(((char *) &header) + uio->uio_offset, bytes, uio);
+				if (error)
+					return error;
+			}
+			if (uio->uio_resid && uio->uio_offset < ADH_SIZE) {
+				caddr_t  buffer;
+
+				if (kmem_alloc(kernel_map, (vm_offset_t *)&buffer, ADH_SIZE)) {
+					return (ENOMEM);
+				}	
+				bytes = min(uio->uio_resid, ADH_SIZE - uio->uio_offset);
+				error = uiomove(((char *) buffer) + uio->uio_offset, bytes, uio);
+				kmem_free(kernel_map, (vm_offset_t)buffer, ADH_SIZE);
+				if (error)
+					return error;
+			}
+		}
+		if (uio->uio_resid > 0)
+			error = cluster_read(vp, uio, (off_t)ip->i_size, devBlockSize, 0);
+	} else {
 
 	do {
 		lbn = lblkno(imp, uio->uio_offset);
@@ -363,7 +406,6 @@ cd9660_ioctl(ap)
 		struct proc *a_p;
 	} */ *ap;
 {
-	printf("You did ioctl for isofs !!\n");
 	return (ENOTTY);
 }
 
@@ -505,6 +547,10 @@ iso_shipdir(idp)
 
 /*
  * Vnode op for readdir
+ *
+ * Note that directories are sector aligned (2K) and
+ * that an entry can cross a logical block but not
+ * a sector.
  */
 int
 cd9660_readdir(ap)
@@ -536,7 +582,7 @@ cd9660_readdir(ap)
 
 	dp = VTOI(vdp);
 	imp = dp->i_mnt;
-	bmask = imp->im_bmask;
+	bmask = imp->im_sector_size - 1;
 
 	MALLOC(idp, struct isoreaddir *, sizeof(*idp), M_TEMP, M_WAITOK);
 	idp->saveent.d_namlen = 0;
@@ -550,7 +596,7 @@ cd9660_readdir(ap)
 	idp->curroff = uio->uio_offset;
 
 	if ((entryoffsetinblock = idp->curroff & bmask) &&
-	    (error = VOP_BLKATOFF(vdp, (off_t)idp->curroff, NULL, &bp))) {
+	    (error = VOP_BLKATOFF(vdp, SECTOFF(imp, idp->curroff), NULL, &bp))) {
 		FREE(idp, M_TEMP);
 		return (error);
 	}
@@ -565,7 +611,7 @@ cd9660_readdir(ap)
 		if ((idp->curroff & bmask) == 0) {
 			if (bp != NULL)
 				brelse(bp);
-			if ( (error = VOP_BLKATOFF(vdp, (off_t)idp->curroff, NULL, &bp)) )
+			if ((error = VOP_BLKATOFF(vdp, SECTOFF(imp, idp->curroff), NULL, &bp)))
 				break;
 			entryoffsetinblock = 0;
 		}
@@ -579,7 +625,7 @@ cd9660_readdir(ap)
 		if (reclen == 0) {
 			/* skip to next block, if any */
 			idp->curroff =
-			    (idp->curroff & ~bmask) + imp->logical_block_size;
+			    (idp->curroff & ~bmask) + imp->im_sector_size;
 			continue;
 		}
 
@@ -589,7 +635,7 @@ cd9660_readdir(ap)
 			break;
 		}
 
-		if (entryoffsetinblock + reclen > imp->logical_block_size) {
+		if (entryoffsetinblock + reclen > imp->im_sector_size) {
 			error = EINVAL;
 			/* illegal directory, so stop looking */
 			break;
@@ -603,17 +649,20 @@ cd9660_readdir(ap)
 			break;
 		}
 
-		/* skip over associated files (Mac OS resource fork) */
-		if (isonum_711(ep->flags) & associatedBit) {
-			idp->curroff += reclen;
-			entryoffsetinblock += reclen;
-			continue;
+		/*
+		 * Some poorly mastered discs have an incorrect directory
+		 * file size.  If the '.' entry has a better size (bigger)
+		 * then use that instead.
+		 */
+		if ((uio->uio_offset == 0) && (isonum_733(ep->size) > endsearch)) {
+			dp->i_size = endsearch = isonum_733(ep->size);
 		}
 
 		if ( isonum_711(ep->flags) & directoryBit )
 			idp->current.d_fileno = isodirino(ep, imp);
 		else {
-			idp->current.d_fileno = (bp->b_blkno << imp->im_bshift) + entryoffsetinblock;
+			idp->current.d_fileno = (bp->b_blkno << imp->im_bshift) +
+			                        entryoffsetinblock;
 		}
 
 		idp->curroff += reclen;
@@ -630,7 +679,8 @@ cd9660_readdir(ap)
 		case ISO_FTYPE_JOLIET:
 			ucsfntrans((u_int16_t *)ep->name, idp->current.d_namlen,
 				   idp->current.d_name, &namelen,
-				   isonum_711(ep->flags) & directoryBit);
+				   isonum_711(ep->flags) & directoryBit,
+				   isonum_711(ep->flags) & associatedBit);
 			idp->current.d_namlen = (u_char)namelen;
 			if (idp->current.d_namlen)
 				error = iso_uiodir(idp,&idp->current,idp->curroff);
@@ -650,7 +700,8 @@ cd9660_readdir(ap)
 			default:
 				isofntrans(ep->name,idp->current.d_namlen,
 					   idp->current.d_name, &namelen,
-					   imp->iso_ftype == ISO_FTYPE_9660);
+					   imp->iso_ftype == ISO_FTYPE_9660,
+					   isonum_711(ep->flags) & associatedBit);
 				idp->current.d_namlen = (u_char)namelen;
 				if (imp->iso_ftype == ISO_FTYPE_DEFAULT)
 					error = iso_shipdir(idp);
@@ -830,22 +881,6 @@ cd9660_readlink(ap)
 }
 
 /*
- * Ufs abort op, called after namei() when a CREATE/DELETE isn't actually
- * done. If a buffer has been saved in anticipation of a CREATE, delete it.
- */
-int
-cd9660_abortop(ap)
-	struct vop_abortop_args /* {
-		struct vnode *a_dvp;
-		struct componentname *a_cnp;
-	} */ *ap;
-{
-	if ((ap->a_cnp->cn_flags & (HASBUF | SAVESTART)) == HASBUF)
-		FREE_ZONE(ap->a_cnp->cn_pnbuf, ap->a_cnp->cn_pnlen, M_NAMEI);
-	return (0);
-}
-
-/*
  * Lock an inode.
  */
  
@@ -1017,22 +1052,65 @@ cd9660_pagein(ap)
 {
 	struct vnode *vp = ap->a_vp;
 	upl_t pl = ap->a_pl;
-	size_t size= ap->a_size;
+	size_t size = ap->a_size;
 	off_t f_offset = ap->a_f_offset;
 	vm_offset_t pl_offset = ap->a_pl_offset;
 	int flags  = ap->a_flags;
 	register struct iso_node *ip = VTOI(vp);
-	int devBlockSize=0, error;
+	int error = 0;
 
-	/* check pageouts are for reg file only  and ubc info is present*/
-	if  (UBCINVALID(vp))
-		panic("cd9660_pagein: Not a  VREG");
-	UBCINFOCHECK("cd9660_pagein", vp);
+	/*
+	 * Copy the Apple Double header.
+	 */
+	if ((ip->i_flag & ISO_ASSOCIATED) && (f_offset == 0) && (size == ADH_SIZE)) {
+		apple_double_header_t  header;
+		kern_return_t  kret;
+		vm_offset_t  ioaddr;
 
-	VOP_DEVBLOCKSIZE(ip->i_devvp, &devBlockSize);
+		kret = ubc_upl_map(pl, &ioaddr);
+		if (kret != KERN_SUCCESS)
+			panic("cd9660_xa_pagein: ubc_upl_map error = %d", kret);
+		ioaddr += pl_offset;
+		bzero((caddr_t)ioaddr, ADH_SIZE);
 
-  	error = cluster_pagein(vp, pl, pl_offset, f_offset, size,
+		header.magic = APPLEDOUBLE_MAGIC;
+		header.version = APPLEDOUBLE_VERSION;
+		header.count = 2;
+		header.entries[0].entryID = APPLEDOUBLE_FINDERINFO;
+		header.entries[0].offset = offsetof(apple_double_header_t, finfo);
+		header.entries[0].length = 32;
+		header.entries[1].entryID = APPLEDOUBLE_RESFORK;
+		header.entries[1].offset = ADH_SIZE;
+		header.entries[1].length = ip->i_size - ADH_SIZE;
+		header.finfo.fdType = ip->i_FileType;
+		header.finfo.fdCreator = ip->i_Creator;
+		header.finfo.fdFlags = ip->i_FinderFlags;
+		header.finfo.fdLocation.v = -1;
+		header.finfo.fdLocation.h = -1;
+		header.finfo.fdReserved = 0;
+
+		bcopy((caddr_t)&header, (caddr_t)ioaddr, sizeof(apple_double_header_t));
+
+		kret = ubc_upl_unmap(pl);
+		if (kret != KERN_SUCCESS)
+			panic("cd9660_xa_pagein: ubc_upl_unmap error = %d", kret);
+
+		if ((flags & UPL_NOCOMMIT) == 0) {
+			ubc_upl_commit_range(pl, pl_offset, size, UPL_COMMIT_FREE_ON_EMPTY);
+		}
+	} else {
+		int devBlockSize = 0;
+
+		/* check pageouts are for reg file only  and ubc info is present*/
+		if  (UBCINVALID(vp))
+			panic("cd9660_pagein: Not a  VREG");
+		UBCINFOCHECK("cd9660_pagein", vp);
+	
+		VOP_DEVBLOCKSIZE(ip->i_devvp, &devBlockSize);
+
+		error = cluster_pagein(vp, pl, pl_offset, f_offset, size,
 			    (off_t)ip->i_size, devBlockSize, flags);
+	}
 	return (error);
 }
 
@@ -1169,6 +1247,277 @@ cd9660_getattrlist(ap)
 }
 
 /*
+ * Make a RIFF file header for a CD-ROM XA media file.
+ */
+__private_extern__ void
+cd9660_xa_init(struct vnode *vp, struct iso_directory_record *isodir)
+{
+	u_long sectors;
+	struct iso_node *ip = VTOI(vp);
+	struct riff_header *header;
+	u_char name_len;
+	char *cdxa;
+	
+	MALLOC(header, struct riff_header *, sizeof(struct riff_header), M_TEMP, M_WAITOK);
+
+	sectors = ip->i_size / 2048;
+
+	strncpy(header->riff, "RIFF", 4);
+	header->fileSize = NXSwapHostLongToLittle(sectors * CDXA_SECTOR_SIZE + sizeof(struct riff_header) - 8);
+	strncpy(header->cdxa, "CDXA", 4);
+	strncpy(header->fmt, "fmt ", 4);
+	header->fmtSize = NXSwapHostLongToLittle(16);
+	strncpy(header->data, "data", 4);
+	header->dataSize = NXSwapHostLongToLittle(sectors * CDXA_SECTOR_SIZE);
+
+	/*
+	 * Copy the CD-ROM XA extended directory information into the header.  As far as
+	 * I can tell, it's always 14 bytes in the directory record, but allocated 16 bytes
+	 * in the header (the last two being zeroed pad bytes).
+	 */
+	name_len = isonum_711(isodir->name_len);
+	cdxa = &isodir->name[name_len];
+	if ((name_len & 0x01) == 0)
+		++cdxa;		/* Skip pad byte */
+	bcopy(cdxa, header->fmtData, 14);
+	header->fmtData[14] = 0;
+	header->fmtData[15] = 0;
+
+	/*
+	 * Point this i-node to the "whole sector" device instead of the normal
+	 * device.  This allows cd9660_strategy to be ignorant of the block
+	 * (sector) size.
+	 */
+	vrele(ip->i_devvp);
+	ip->i_devvp = ip->i_mnt->phys_devvp;
+	VREF(ip->i_devvp);
+
+	ip->i_size = sectors * CDXA_SECTOR_SIZE + sizeof(struct riff_header);
+	ip->i_riff = header;
+	vp->v_op = cd9660_cdxaop_p;
+}
+
+/*
+ * Helper routine for VOP_READ and VOP_PAGEIN of CD-ROM XA multimedia files.
+ * This routine determines the physical location of the file, then reads
+ * sectors directly from the device into a buffer.  It also handles inserting
+ * the RIFF header at the beginning of the file.
+ *
+ * Exactly one of buffer or uio must be non-zero.  It will either bcopy to
+ * buffer, or uiomove via uio.
+ *
+ * XXX Should this code be using breadn and vp->v_lastr to support single-block
+ * read-ahead?  Should we try more aggressive read-ahead like cluster_io does?
+ *
+ * XXX This could be made to do larger I/O to the device (reading all the
+ * whole sectors directly into the buffer).  That would make the code more
+ * complex, and the current code only adds 2.5% overhead compared to reading
+ * from the device directly (at least on my test machine).
+ */
+static int
+cd9660_xa_read_common(
+	struct vnode *vp,
+	off_t offset,
+	size_t amount,
+	caddr_t buffer,
+	struct uio *uio)
+{
+	struct iso_node *ip = VTOI(vp);
+	struct buf *bp;
+	off_t diff;		/* number of bytes from offset to file's EOF */
+	daddr_t block;	/* physical disk block containing offset */
+	off_t sect_off;	/* starting offset into current sector */
+	u_int count;	/* number of bytes to transfer in current block */
+	int error=0;
+
+	/*
+	 * Copy any part of the RIFF header.
+	 */
+	if (offset < sizeof(struct riff_header)) {
+		char *p;
+		
+		p = ((char *) ip->i_riff) + offset;
+		count = min(amount, sizeof(struct riff_header) - offset);
+		if (buffer) {
+			bcopy(p, buffer, count);
+			buffer += count;
+		} else {
+			error = uiomove(p, count, uio);
+		}
+		amount -= count;
+		offset += count;
+	}
+	if (error)
+		return error;
+
+	/*
+	 * Loop over (possibly partial) blocks to transfer.
+	 */
+	while (error == 0 && amount > 0) {
+		/*
+		 * Determine number of bytes until EOF.  If we've hit
+		 * EOF then return.
+		 */
+		diff = ip->i_size - offset;
+		if (diff <= 0)
+			return 0;
+
+		/* Get a block from the underlying device */
+		block = ip->iso_start + (offset - sizeof(struct riff_header))/CDXA_SECTOR_SIZE;
+		error = bread(ip->i_devvp, block, CDXA_SECTOR_SIZE, NOCRED, &bp);
+		if (error) {
+			brelse(bp);
+			return error;
+		}
+		if (bp->b_resid) {
+			printf("isofs: cd9660_xa_read_common: bread didn't read full sector\n");
+			return EIO;
+		}
+		
+		/* Figure out which part of the block to copy, and copy it */
+		sect_off = (offset - sizeof(struct riff_header)) % CDXA_SECTOR_SIZE;
+		count = min(CDXA_SECTOR_SIZE-sect_off, amount);
+		if (diff < count)	/* Pin transfer amount to EOF */
+			count = diff;
+		
+		if (buffer) {
+			bcopy(bp->b_data+sect_off, buffer, count);
+			buffer += count;
+		} else {
+			error = uiomove(bp->b_data+sect_off, count, uio);
+		}
+		amount -= count;
+		offset += count;
+		
+		/*
+		 * If we copied through the end of the block, or the end of file, then
+		 * age the device block.  This is optimized for sequential access.
+		 */
+		if (sect_off+count == CDXA_SECTOR_SIZE || offset == (off_t)ip->i_size)
+			bp->b_flags |= B_AGE;
+		brelse(bp);
+	}
+
+	return error;
+}
+
+/*
+ * Read from a CD-ROM XA multimedia file.
+ *
+ * This uses the same common routine as pagein for doing the actual read
+ * from the device.
+ *
+ * This routine doesn't do any caching beyond what the block device does.
+ * Even then, cd9660_xa_read_common ages the blocks once we read up to
+ * the end.
+ *
+ * We don't even take advantage if the file has been memory mapped and has
+ * valid pages already (in which case we could just uiomove from the page
+ * to the caller).  Since we're a read-only filesystem, there can't be
+ * any cache coherency problems.  Multimedia files are expected to be
+ * large and streamed anyway, so caching file contents probably isn't
+ * important.
+ */
+int
+cd9660_xa_read(ap)
+	struct vop_read_args /* {
+		struct vnode *a_vp;
+		struct uio *a_uio;
+		int a_ioflag;
+		struct ucred *a_cred;
+	} */ *ap;
+{
+	struct vnode *vp = ap->a_vp;
+	register struct uio *uio = ap->a_uio;
+	register struct iso_node *ip = VTOI(vp);
+	off_t offset = uio->uio_offset;
+	size_t size = uio->uio_resid;
+
+	/* Check for some obvious parameter problems */
+	if (offset < 0)
+		return EINVAL;
+	if (size == 0)
+		return 0;
+	if (offset >= ip->i_size)
+		return 0;
+
+	/* Pin the size of the read to the file's EOF */
+	if (offset + size > ip->i_size)
+		size = ip->i_size - offset;
+
+	return cd9660_xa_read_common(vp, offset, size, NULL, uio);
+}
+
+/*
+ * Page in from a CD-ROM XA media file.
+ *
+ * Since our device block size isn't a power of two, we can't use
+ * cluster_pagein.  Instead, we have to map the page and read into it.
+ */
+static int
+cd9660_xa_pagein(ap)
+	struct vop_pagein_args /* {
+	   	struct vnode 	*a_vp,
+	   	upl_t		a_pl,
+		vm_offset_t	a_pl_offset,
+		off_t		a_f_offset,
+		size_t		a_size,
+		struct ucred	*a_cred,
+		int		a_flags
+	} */ *ap;
+{
+	struct vnode *vp = ap->a_vp;
+	upl_t pl = ap->a_pl;
+	size_t size= ap->a_size;
+	off_t f_offset = ap->a_f_offset;
+	vm_offset_t pl_offset = ap->a_pl_offset;
+	int flags  = ap->a_flags;
+	register struct iso_node *ip = VTOI(vp);
+	int error;
+    kern_return_t kret;
+    vm_offset_t ioaddr;
+
+	/* check pageins are for reg file only  and ubc info is present*/
+	if  (UBCINVALID(vp))
+		panic("cd9660_xa_pagein: Not a  VREG");
+	UBCINFOCHECK("cd9660_xa_pagein", vp);
+
+	if (size <= 0)
+		panic("cd9660_xa_pagein: size = %d", size);
+
+	kret = ubc_upl_map(pl, &ioaddr);
+	if (kret != KERN_SUCCESS)
+		panic("cd9660_xa_pagein: ubc_upl_map error = %d", kret);
+
+	ioaddr += pl_offset;
+
+	/* Make sure pagein doesn't extend past EOF */
+	if (f_offset + size > ip->i_size)
+		size = ip->i_size - f_offset;	/* pin size to EOF */
+
+	/* Read the data in using the underlying device */
+	error = cd9660_xa_read_common(vp, f_offset, size, (caddr_t)ioaddr, NULL);
+	
+	/* Zero fill part of page past EOF */
+	if (ap->a_size > size)
+		bzero((caddr_t)ioaddr+size, ap->a_size-size);
+
+	kret = ubc_upl_unmap(pl);
+	if (kret != KERN_SUCCESS)
+		panic("cd9660_xa_pagein: ubc_upl_unmap error = %d", kret);
+
+	if ((flags & UPL_NOCOMMIT) == 0)
+	{
+		if (error)
+			ubc_upl_abort_range(pl, pl_offset, ap->a_size, UPL_ABORT_FREE_ON_EMPTY);
+		else
+			ubc_upl_commit_range(pl, pl_offset, ap->a_size, UPL_COMMIT_FREE_ON_EMPTY);
+	}
+	
+	return error;
+}
+
+/*
  * Global vfs data structures for isofs
  */
 #define cd9660_create \
@@ -1244,7 +1593,7 @@ struct vnodeopv_entry_desc cd9660_vnodeop_entries[] = {
 	{ &vop_symlink_desc, (VOPFUNC)cd9660_symlink },	/* symlink */
 	{ &vop_readdir_desc, (VOPFUNC)cd9660_readdir },	/* readdir */
 	{ &vop_readlink_desc, (VOPFUNC)cd9660_readlink },/* readlink */
-	{ &vop_abortop_desc, (VOPFUNC)cd9660_abortop },	/* abortop */
+	{ &vop_abortop_desc, (VOPFUNC)nop_abortop },	/* abortop */
 	{ &vop_inactive_desc, (VOPFUNC)cd9660_inactive },/* inactive */
 	{ &vop_reclaim_desc, (VOPFUNC)cd9660_reclaim },	/* reclaim */
 	{ &vop_lock_desc, (VOPFUNC)cd9660_lock },	/* lock */
@@ -1271,6 +1620,65 @@ struct vnodeopv_entry_desc cd9660_vnodeop_entries[] = {
 };
 struct vnodeopv_desc cd9660_vnodeop_opv_desc =
 	{ &cd9660_vnodeop_p, cd9660_vnodeop_entries };
+
+/*
+ * The VOP table for CD-ROM XA (media) files is almost the same
+ * as for ordinary files, except for read, and pagein.
+ * Note that cd9660_xa_read doesn't use cluster I/O, so cmap
+ * isn't needed, and isn't implemented.  Similarly, it doesn't
+ * do bread() on CD XA vnodes, so bmap, blktooff, offtoblk
+ * aren't needed.
+ */
+int (**cd9660_cdxaop_p)(void *);
+struct vnodeopv_entry_desc cd9660_cdxaop_entries[] = {
+	{ &vop_default_desc, (VOPFUNC)vn_default_error },
+	{ &vop_lookup_desc, (VOPFUNC)cd9660_lookup },	/* lookup */
+	{ &vop_create_desc, (VOPFUNC)cd9660_create },	/* create */
+	{ &vop_mknod_desc, (VOPFUNC)cd9660_mknod },	/* mknod */
+	{ &vop_open_desc, (VOPFUNC)cd9660_open },	/* open */
+	{ &vop_close_desc, (VOPFUNC)cd9660_close },	/* close */
+	{ &vop_access_desc, (VOPFUNC)cd9660_access },	/* access */
+	{ &vop_getattr_desc, (VOPFUNC)cd9660_getattr },	/* getattr */
+	{ &vop_setattr_desc, (VOPFUNC)cd9660_setattr },	/* setattr */
+	{ &vop_read_desc, (VOPFUNC)cd9660_xa_read },	/* read */
+	{ &vop_write_desc, (VOPFUNC)cd9660_write },	/* write */
+	{ &vop_lease_desc, (VOPFUNC)cd9660_lease_check },/* lease */
+	{ &vop_ioctl_desc, (VOPFUNC)cd9660_ioctl },	/* ioctl */
+	{ &vop_select_desc, (VOPFUNC)cd9660_select },	/* select */
+	{ &vop_mmap_desc, (VOPFUNC)cd9660_mmap },	/* mmap */
+	{ &vop_fsync_desc, (VOPFUNC)cd9660_fsync },	/* fsync */
+	{ &vop_seek_desc, (VOPFUNC)cd9660_seek },	/* seek */
+	{ &vop_remove_desc, (VOPFUNC)cd9660_remove },	/* remove */
+	{ &vop_link_desc, (VOPFUNC)cd9660_link },	/* link */
+	{ &vop_rename_desc, (VOPFUNC)cd9660_rename },	/* rename */
+	{ &vop_copyfile_desc, (VOPFUNC)cd9660_copyfile },/* copyfile */
+	{ &vop_mkdir_desc, (VOPFUNC)cd9660_mkdir },	/* mkdir */
+	{ &vop_rmdir_desc, (VOPFUNC)cd9660_rmdir },	/* rmdir */
+	{ &vop_symlink_desc, (VOPFUNC)cd9660_symlink },	/* symlink */
+	{ &vop_readdir_desc, (VOPFUNC)cd9660_readdir },	/* readdir */
+	{ &vop_readlink_desc, (VOPFUNC)cd9660_readlink },/* readlink */
+	{ &vop_inactive_desc, (VOPFUNC)cd9660_inactive },/* inactive */
+	{ &vop_reclaim_desc, (VOPFUNC)cd9660_reclaim },	/* reclaim */
+	{ &vop_lock_desc, (VOPFUNC)cd9660_lock },	/* lock */
+	{ &vop_unlock_desc, (VOPFUNC)cd9660_unlock },	/* unlock */
+	{ &vop_strategy_desc, (VOPFUNC)cd9660_strategy },/* strategy */
+	{ &vop_print_desc, (VOPFUNC)cd9660_print },	/* print */
+	{ &vop_islocked_desc, (VOPFUNC)cd9660_islocked },/* islocked */
+	{ &vop_pathconf_desc, (VOPFUNC)cd9660_pathconf },/* pathconf */
+	{ &vop_advlock_desc, (VOPFUNC)cd9660_advlock },	/* advlock */
+	{ &vop_blkatoff_desc, (VOPFUNC)cd9660_blkatoff },/* blkatoff */
+	{ &vop_valloc_desc, (VOPFUNC)cd9660_valloc },	/* valloc */
+	{ &vop_vfree_desc, (VOPFUNC)cd9660_vfree },	/* vfree */
+	{ &vop_truncate_desc, (VOPFUNC)cd9660_truncate },/* truncate */
+	{ &vop_update_desc, (VOPFUNC)cd9660_update },	/* update */
+	{ &vop_bwrite_desc, (VOPFUNC)vn_bwrite },
+	{ &vop_pagein_desc, (VOPFUNC)cd9660_xa_pagein },		/* Pagein */
+	{ &vop_pageout_desc, (VOPFUNC)cd9660_pageout },		/* Pageout */
+	{ &vop_getattrlist_desc, (VOPFUNC)cd9660_getattrlist },	/* getattrlist */
+	{ (struct vnodeop_desc*)NULL, (VOPFUNC)NULL }
+};
+struct vnodeopv_desc cd9660_cdxaop_opv_desc =
+	{ &cd9660_cdxaop_p, cd9660_cdxaop_entries };
 
 /*
  * Special device vnode ops

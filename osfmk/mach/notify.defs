@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2003 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -53,30 +53,31 @@
 /*
  */
 
-subsystem notify 64;
+subsystem 
+#if	KERNEL_USER
+	KernelUser
+#endif
+	notify 64;
 
 #include <mach/std_types.defs>
 
 #if	SEQNOS
 serverprefix do_seqnos_;
 serverdemux seqnos_notify_server;
-#else	SEQNOS
+#else	/* !SEQNOS */
 serverprefix do_;
 serverdemux notify_server;
-#endif	SEQNOS
-
-type notify_port_t = MACH_MSG_TYPE_MOVE_SEND_ONCE
-	ctype: mach_port_t;
+#endif	/* SEQNOS */
 
 /* MACH_NOTIFY_FIRST: 0100 */
 skip;
 
 /* MACH_NOTIFY_PORT_DELETED: 0101 */
 simpleroutine mach_notify_port_deleted(
-		notify	: notify_port_t;
+		notify	: mach_port_move_send_once_t;
 #if	SEQNOS
 	msgseqno seqno	: mach_port_seqno_t;
-#endif	SEQNOS
+#endif	/* SEQNOS */
 		name	: mach_port_name_t);
 
 skip;	/* was MACH_NOTIFY_MSG_ACCEPTED: 0102 */
@@ -87,32 +88,32 @@ skip;	/* was NOTIFY_RECEIVE_RIGHTS: 0104 */
 
 /* MACH_NOTIFY_PORT_DESTROYED: 0105 */
 simpleroutine mach_notify_port_destroyed(
-		notify	: notify_port_t;
+		notify	: mach_port_move_send_once_t;
 #if	SEQNOS
 	msgseqno seqno	: mach_port_seqno_t;
-#endif	SEQNOS
-		rights	: mach_port_receive_t);
+#endif	/* SEQNOS */
+		rights	: mach_port_move_receive_t);
 
 /* MACH_NOTIFY_NO_SENDERS: 0106 */
 simpleroutine mach_notify_no_senders(
-		notify	: notify_port_t;
+		notify	: mach_port_move_send_once_t;
 #if	SEQNOS
 	msgseqno seqno	: mach_port_seqno_t;
-#endif	SEQNOS
+#endif	/* SEQNOS */
 		mscount	: mach_port_mscount_t);
 
 /* MACH_NOTIFY_SEND_ONCE: 0107 */
 simpleroutine mach_notify_send_once(
-		notify	: notify_port_t
+		notify	: mach_port_move_send_once_t
 #if	SEQNOS
 ;	msgseqno seqno	: mach_port_seqno_t
-#endif	SEQNOS
+#endif	/* SEQNOS */
 		);
 
 /* MACH_NOTIFY_DEAD_NAME: 0110 */
 simpleroutine mach_notify_dead_name(
-		notify	: notify_port_t;
+		notify	: mach_port_move_send_once_t;
 #if	SEQNOS
 	msgseqno seqno	: mach_port_seqno_t;
-#endif	SEQNOS
+#endif	/* SEQNOS */
 		name	: mach_port_name_t);

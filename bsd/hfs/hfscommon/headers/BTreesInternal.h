@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2003 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -220,6 +220,8 @@ enum BTreeTypes{
 	kReservedBTreeType		= 255		//
 };
 
+#define	kBTreeHeaderUserBytes	128
+
 
 typedef BTreeKey *BTreeKeyPtr;
 
@@ -236,7 +238,8 @@ struct BTreeInfoRec{
 	ItemCount			numRecords;
 	ItemCount			numNodes;
 	ItemCount			numFreeNodes;
-	UInt32				reserved;
+	UInt8				keyCompareType;
+	UInt8				reserved[3];
 };
 typedef struct BTreeInfoRec BTreeInfoRec;
 typedef BTreeInfoRec *BTreeInfoPtr;
@@ -282,12 +285,8 @@ typedef BTreeIterator *BTreeIteratorPtr;
 
 typedef SInt32 (* IterateCallBackProcPtr)(BTreeKeyPtr key, void * record, UInt16 recordLen, void * state);
 
-extern OSStatus	BTOpenPath			(FCB		 				*filePtr,
-									 KeyCompareProcPtr			 keyCompareProc,
-									 GetBlockProcPtr			 getBlockProc,
-									 ReleaseBlockProcPtr		 releaseBlockProc,
-									 SetEndOfForkProcPtr		 setEndOfForkProc,
-									 SetBlockSizeProcPtr		 setBlockSizeProc );
+
+extern OSStatus	BTOpenPath(FCB *filePtr, KeyCompareProcPtr keyCompareProc);
 
 extern OSStatus	BTClosePath			(FCB		 				*filePtr );
 
@@ -342,9 +341,19 @@ extern OSStatus	BTGetLastSync		(FCB		 				*filePtr,
 extern OSStatus	BTSetLastSync		(FCB		 				*filePtr,
 									 UInt32						lastfsync );
 
-extern OSStatus	BTCheckFreeSpace	(FCB		 				*filePtr);
-
 extern OSStatus	BTHasContiguousNodes(FCB		 				*filePtr);
+
+extern OSStatus BTGetUserData(FCB *filePtr, void * dataPtr, int dataSize);
+
+extern OSStatus BTSetUserData(FCB *filePtr, void * dataPtr, int dataSize);
+
+/* B-tree node reserve routines. */
+extern void BTReserveSetup(void);
+
+extern int  BTReserveSpace(FCB *file, int operations, void * data);
+
+extern int  BTReleaseReserve(FCB *file, void * data);
+
 
 #endif /* __APPLE_API_PRIVATE */
 #endif /* KERNEL */

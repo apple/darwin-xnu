@@ -52,7 +52,7 @@
    subject to change. Applications should only use zlib.h.
  */
 
-/* @(#) $Id: zlib.c,v 1.8 2002/03/29 03:16:07 lindak Exp $ */
+/* @(#) $Id: zlib.c,v 1.9 2002/11/28 00:56:55 lindak Exp $ */
 
 #ifndef _Z_UTIL_H
 #define _Z_UTIL_H
@@ -298,7 +298,7 @@ void   zcfree  OF((voidpf opaque, voidpf ptr));
    subject to change. Applications should only use zlib.h.
  */
 
-/* @(#) $Id: zlib.c,v 1.8 2002/03/29 03:16:07 lindak Exp $ */
+/* @(#) $Id: zlib.c,v 1.9 2002/11/28 00:56:55 lindak Exp $ */
 
 #ifndef _DEFLATE_H
 #define _DEFLATE_H
@@ -658,7 +658,7 @@ void _tr_stored_block OF((deflate_state *s, charf *buf, ulg stored_len,
  *
  */
 
-/* @(#) $Id: zlib.c,v 1.8 2002/03/29 03:16:07 lindak Exp $ */
+/* @(#) $Id: zlib.c,v 1.9 2002/11/28 00:56:55 lindak Exp $ */
 
 /* #include "deflate.h" */
 
@@ -2000,7 +2000,7 @@ local block_state deflate_slow(s, flush)
  *          Addison-Wesley, 1983. ISBN 0-201-06672-6.
  */
 
-/* @(#) $Id: zlib.c,v 1.8 2002/03/29 03:16:07 lindak Exp $ */
+/* @(#) $Id: zlib.c,v 1.9 2002/11/28 00:56:55 lindak Exp $ */
 
 /* #define GEN_TREES_H */
 
@@ -2058,31 +2058,31 @@ local const uch bl_order[BL_CODES]
 #if defined(GEN_TREES_H) || !defined(STDC)
 /* non ANSI compilers may not accept trees.h */
 
-local ct_data static_ltree[L_CODES+2];
+local ct_data *static_ltree = Z_NULL;
 /* The static literal tree. Since the bit lengths are imposed, there is no
  * need for the L_CODES extra codes used during heap construction. However
  * The codes 286 and 287 are needed to build a canonical tree (see _tr_init
  * below).
  */
 
-local ct_data static_dtree[D_CODES];
+local ct_data *static_dtree = Z_NULL;
 /* The static distance tree. (Actually a trivial tree since all codes use
  * 5 bits.)
  */
 
-uch _dist_code[DIST_CODE_LEN];
+uch *_dist_code = Z_NULL;
 /* Distance codes. The first 256 values correspond to the distances
  * 3 .. 258, the last 256 values correspond to the top 8 bits of
  * the 15 bit distances.
  */
 
-uch _length_code[MAX_MATCH-MIN_MATCH+1];
+uch *_length_code = Z_NULL;
 /* length code for each normalized match length (0 == MIN_MATCH) */
 
-local int base_length[LENGTH_CODES];
+local int *base_length = Z_NULL;
 /* First normalized length for each code (0 = MIN_MATCH) */
 
-local int base_dist[D_CODES];
+local int *base_dist = Z_NULL;
 /* First normalized distance for each code (0 = distance of 1) */
 
 #else
@@ -2227,10 +2227,10 @@ struct static_tree_desc_s {
 };
 
 local static_tree_desc  static_l_desc =
-{static_ltree, extra_lbits, LITERALS+1, L_CODES, MAX_BITS};
+{NULL, extra_lbits, LITERALS+1, L_CODES, MAX_BITS};
 
 local static_tree_desc  static_d_desc =
-{static_dtree, extra_dbits, 0,          D_CODES, MAX_BITS};
+{NULL, extra_dbits, 0,          D_CODES, MAX_BITS};
 
 local static_tree_desc  static_bl_desc =
 {(const ct_data *)0, extra_blbits, 0,   BL_CODES, MAX_BL_BITS};
@@ -2239,7 +2239,7 @@ local static_tree_desc  static_bl_desc =
  * Local (static) routines in this file.
  */
 
-local void tr_static_init OF((void));
+local int tr_static_init  OF((z_streamp z));
 local void init_block     OF((deflate_state *s));
 local void pqdownheap     OF((deflate_state *s, ct_data *tree, int k));
 local void gen_bitlen     OF((deflate_state *s, tree_desc *desc));
@@ -2335,10 +2335,22 @@ local void send_bits(s, value, length)
 #endif
 /* the arguments must not have side effects */
 
+typedef struct {
+	ct_data	static_ltree[L_CODES+2];
+	ct_data	static_dtree[D_CODES];
+	uch		_dist_code[DIST_CODE_LEN];
+	uch		_length_code[MAX_MATCH-MIN_MATCH+1];
+	int		base_length[LENGTH_CODES];
+	int		base_dist[D_CODES];
+} __used_to_be_static;
+
+static __used_to_be_static	*static_storage = Z_NULL;
+
 /* ===========================================================================
  * Initialize the various 'constant' tables.
  */
-local void tr_static_init()
+local int tr_static_init(
+	z_streamp	z)
 {
 #if defined(GEN_TREES_H) || !defined(STDC)
     static int static_init_done = 0;
@@ -2351,7 +2363,21 @@ local void tr_static_init()
     /* number of codes at each bit length for an optimal tree */
 
     if (static_init_done) return;
-
+    
+    /* allocate storage for static structures */
+    if (static_storage == Z_NULL) {
+    	static_storage = (__used_to_be_static*)ZALLOC(z, 1, sizeof(__used_to_be_static));
+    	if (static_storage == Z_NULL)
+    		return Z_MEM_ERROR;
+    }
+    
+    static_ltree = static_storage->static_ltree;
+    static_dtree = static_storage->static_dtree;
+    _dist_code = static_storage->_dist_code;
+    _length_code = static_storage->_length_code;
+    base_length = static_storage->base_length;
+    base_dist = static_storage->base_dist;
+    
     /* For some embedded targets, global variables are not initialized: */
     static_l_desc.static_tree = static_ltree;
     static_l_desc.extra_bits = extra_lbits;
@@ -2485,7 +2511,7 @@ void gen_trees_header()
 void _tr_init(s)
     deflate_state *s;
 {
-    tr_static_init();
+    tr_static_init(s->strm);
 
     s->l_desc.dyn_tree = s->dyn_ltree;
     s->l_desc.stat_desc = &static_l_desc;
@@ -4731,7 +4757,7 @@ z_streamp z;            /* for messages */
 #ifdef BUILDFIXED
 local int fixed_built = 0;
 #define FIXEDH 544      /* number of hufts used by fixed tables */
-local inflate_huft fixed_mem[FIXEDH];
+local inflate_huft *fixed_mem = NULL;
 local uInt fixed_bl;
 local uInt fixed_bd;
 local inflate_huft *fixed_tl;
@@ -4916,6 +4942,13 @@ z_streamp z;             /* for memory allocation */
     {
       ZFREE(z, c);
       return Z_MEM_ERROR;
+    }
+    
+    if ((fixed_mem = (inflate_huft*)ZALLOC(z, FIXEDH, sizeof(inflate_huft))) == Z_NULL)
+    {
+    	ZFREE(z, c);
+    	ZFREE(z, v);
+    	return Z_MEM_ERROR;
     }
 
     /* literal table */
@@ -5511,7 +5544,7 @@ z_streamp z;
  * For conditions of distribution and use, see copyright notice in zlib.h 
  */
 
-/* @(#) $Id: zlib.c,v 1.8 2002/03/29 03:16:07 lindak Exp $ */
+/* @(#) $Id: zlib.c,v 1.9 2002/11/28 00:56:55 lindak Exp $ */
 
 /* #include "zutil.h" */
 
@@ -5741,7 +5774,7 @@ void  zcfree (opaque, ptr)
  * For conditions of distribution and use, see copyright notice in zlib.h 
  */
 
-/* @(#) $Id: zlib.c,v 1.8 2002/03/29 03:16:07 lindak Exp $ */
+/* @(#) $Id: zlib.c,v 1.9 2002/11/28 00:56:55 lindak Exp $ */
 
 /* #include "zlib.h" */
 

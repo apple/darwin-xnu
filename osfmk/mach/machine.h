@@ -283,5 +283,6 @@ extern struct machine_slot	machine_slot[];
 #define CPU_SUBTYPE_POWERPC_750		((cpu_subtype_t) 9)
 #define CPU_SUBTYPE_POWERPC_7400	((cpu_subtype_t) 10)
 #define CPU_SUBTYPE_POWERPC_7450	((cpu_subtype_t) 11)
+#define CPU_SUBTYPE_POWERPC_970		((cpu_subtype_t) 100)
 
 #endif	/* _MACH_MACHINE_H_ */

@@ -57,7 +57,7 @@
 #define _PATH_VNTAB	"/etc/vntab"	/* default config file */
 
 typedef enum {
-	vncontrol_readwrite_io_e = 0,
+	vncontrol_readwrite_io_e = 0
 } vncontrol_t;
 
 struct vn_ioctl {

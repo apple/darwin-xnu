@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2002 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2003 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -93,9 +93,11 @@ static int vn_write __P((struct file *fp, struct uio *uio,
 		struct ucred *cred, int flags, struct proc *p));
 static int vn_select __P(( struct file *fp, int which, void * wql,
 		struct proc *p));
+static int vn_kqfilt_add __P((struct file *fp, struct knote *kn, struct proc *p));
+static int vn_kqfilt_remove __P((struct vnode *vp, uintptr_t ident, struct proc *p));
 
 struct 	fileops vnops =
-	{ vn_read, vn_write, vn_ioctl, vn_select, vn_closefile };
+	{ vn_read, vn_write, vn_ioctl, vn_select, vn_closefile, vn_kqfilt_add };
 
 /*
  * Common code for vnode open operations.
@@ -106,6 +108,15 @@ vn_open(ndp, fmode, cmode)
 	register struct nameidata *ndp;
 	int fmode, cmode;
 {
+	return vn_open_modflags(ndp,&fmode,cmode);
+}
+
+__private_extern__ int
+vn_open_modflags(ndp, fmodep, cmode)
+	register struct nameidata *ndp;
+	int *fmodep;
+	int cmode;
+{
 	register struct vnode *vp;
 	register struct proc *p = ndp->ni_cnd.cn_proc;
 	register struct ucred *cred = p->p_ucred;
@@ -113,16 +124,22 @@ vn_open(ndp, fmode, cmode)
 	struct vattr *vap = &vat;
 	int error;
 	int didhold = 0;
+	char *nameptr;
+	int fmode = *fmodep;
 
 	if (fmode & O_CREAT) {
 		ndp->ni_cnd.cn_nameiop = CREATE;
-		ndp->ni_cnd.cn_flags = LOCKPARENT | LOCKLEAF;
+		ndp->ni_cnd.cn_flags = LOCKPARENT | LOCKLEAF | AUDITVNPATH1;
 		if ((fmode & O_EXCL) == 0)
 			ndp->ni_cnd.cn_flags |= FOLLOW;
 		bwillwrite();
 		if (error = namei(ndp))
 			return (error);
 		if (ndp->ni_vp == NULL) {
+			nameptr = add_name(ndp->ni_cnd.cn_nameptr,
+					   ndp->ni_cnd.cn_namelen,
+					   ndp->ni_cnd.cn_hash, 0);
+
 			VATTR_NULL(vap);
 			vap->va_type = VREG;
 			vap->va_mode = cmode;
@@ -130,10 +147,17 @@ vn_open(ndp, fmode, cmode)
 				vap->va_vaflags |= VA_EXCLUSIVE;
 			VOP_LEASE(ndp->ni_dvp, p, cred, LEASE_WRITE);
 			if (error = VOP_CREATE(ndp->ni_dvp, &ndp->ni_vp,
-			    &ndp->ni_cnd, vap))
+					       &ndp->ni_cnd, vap)) {
+				remove_name(nameptr);
 				return (error);
+			}
 			fmode &= ~O_TRUNC;
 			vp = ndp->ni_vp;
+			
+			VNAME(vp) = nameptr;
+			if (vget(ndp->ni_dvp, 0, p) == 0) {
+			    VPARENT(vp) = ndp->ni_dvp;
+			}
 		} else {
 			VOP_ABORTOP(ndp->ni_dvp, &ndp->ni_cnd);
 			if (ndp->ni_dvp == ndp->ni_vp)
@@ -150,7 +174,7 @@ vn_open(ndp, fmode, cmode)
 		}
 	} else {
 		ndp->ni_cnd.cn_nameiop = LOOKUP;
-		ndp->ni_cnd.cn_flags = FOLLOW | LOCKLEAF;
+		ndp->ni_cnd.cn_flags = FOLLOW | LOCKLEAF | AUDITVNPATH1;
 		if (error = namei(ndp))
 			return (error);
 		vp = ndp->ni_vp;
@@ -195,15 +219,6 @@ vn_open(ndp, fmode, cmode)
 				goto bad;
 		}
 	}
-	if (fmode & O_TRUNC) {
-		VOP_UNLOCK(vp, 0, p);				/* XXX */
-		VOP_LEASE(vp, p, cred, LEASE_WRITE);
-		(void)vn_lock(vp, LK_EXCLUSIVE | LK_RETRY, p);	/* XXX */
-		VATTR_NULL(vap);
-		vap->va_size = 0;
-		if (error = VOP_SETATTR(vp, vap, cred, p))
-			goto bad;
-	}
 
 	if (error = VOP_OPEN(vp, fmode, cred, p)) {
 		goto bad;
@@ -212,12 +227,14 @@ vn_open(ndp, fmode, cmode)
 	if (fmode & FWRITE)
 		if (++vp->v_writecount <= 0)
 			panic("vn_open: v_writecount");
+	*fmodep = fmode;
 	return (0);
 bad:
 	VOP_UNLOCK(vp, 0, p);
 	if (didhold)
 		ubc_rele(vp);
 	vrele(vp);
+	ndp->ni_vp = NULL;
 	return (error);
 }
 
@@ -255,8 +272,17 @@ vn_close(vp, flags, cred, p)
 {
 	int error;
 
-	if (flags & FWRITE)
+	if (flags & FWRITE) {
+		
 		vp->v_writecount--;
+
+		{
+			extern void notify_filemod_watchers(struct vnode *vp, struct proc *p);
+
+			notify_filemod_watchers(vp, p);
+		}
+	}
+
 	error = VOP_CLOSE(vp, flags, cred, p);
 	ubc_rele(vp);
 	vrele(vp);
@@ -558,7 +584,7 @@ vn_stat(vp, sb, p)
 	sb->st_blksize = vap->va_blocksize;
 	sb->st_flags = vap->va_flags;
 	/* Do not give the generation number out to unpriviledged users */
-	if (suser(p->p_ucred, &p->p_acflag))
+	if (vap->va_gen && suser(p->p_ucred, &p->p_acflag))
 		sb->st_gen = 0; 
 	else
 		sb->st_gen = vap->va_gen;
@@ -690,4 +716,35 @@ vn_closefile(fp, p)
 
 	return (vn_close(((struct vnode *)fp->f_data), fp->f_flag,
 		fp->f_cred, p));
+}
+
+static int
+vn_kqfilt_add(fp, kn, p)
+	struct file *fp;
+	struct knote *kn;
+	struct proc *p;
+{
+	struct vnode *vp = (struct vnode *)fp->f_data;
+	int error;
+	
+	error = vn_lock(vp, LK_EXCLUSIVE | LK_RETRY, p);
+	if (error) return (error);
+	error = VOP_KQFILT_ADD(vp, kn, p);
+	(void)VOP_UNLOCK(vp, 0, p);
+	return (error);
+}
+
+static int
+vn_kqfilt_remove(vp, ident, p)
+	struct vnode *vp;
+	uintptr_t ident;
+	struct proc *p;
+{
+	int error;
+	
+	error = vn_lock(vp, LK_EXCLUSIVE | LK_RETRY, p);
+	if (error) return (error);
+	error = VOP_KQFILT_REMOVE(vp, ident, p);
+	(void)VOP_UNLOCK(vp, 0, p);
+	return (error);
 }

@@ -37,6 +37,26 @@
 #define	kLoopCnt	5					// Iterations of the timing loop
 #define	kDCBA		22					// Bit in cr5 used as a flag in timing loop
 
+
+// commpage_set_timestamp() uses the red zone for temporary storage:
+
+#define	rzSaveF1			-8		// caller's FPR1
+#define	rzSaveF2			-16		// caller's FPR2
+#define	rzSaveF3			-24		// caller's FPR3
+#define	rzSaveF4			-32		// caller's FPR4
+#define	rzSaveF5			-40		// caller's FPR5
+#define	rzNewTimeBase		-48		// used to load 64-bit TBR into a FPR
+
+
+// commpage_set_timestamp() uses the following data.  kkTicksPerSec remembers
+// the number used to compute _COMM_PAGE_SEC_PER_TICK.  Since this constant
+// rarely changes, we use it to avoid needless recomputation.  It is a double
+// value, pre-initialize with an exponent of 2**52.
+
+#define	kkBinary0		0					// offset in data to long long 0 (a constant)
+#define	kkDouble1		8					// offset in data to double 1.0 (a constant)
+#define	kkTicksPerSec	16					// offset in data to double(ticks_per_sec)
+
         .data
         .align	3							// three doubleword fields
 Ldata:
@@ -49,6 +69,102 @@ Ldata:
         .text
         .align	2
         .globl	EXT(commpage_time_dcba)
+        .globl	EXT(commpage_set_timestamp)
+
+
+/*	***********************************************
+ *	* C O M M P A G E _ S E T _ T I M E S T A M P *
+ *	***********************************************
+ *
+ *	Update the gettimeofday() shared data on the commpage, as follows:
+ *		_COMM_PAGE_TIMESTAMP = a BSD-style pair of uint_32's for secs and usecs
+ *		_COMM_PAGE_TIMEBASE = the timebase at which the timestamp was valid
+ *		_COMM_PAGE_SEC_PER_TICK = multiply timebase ticks by this to get seconds (double)
+ *	The convention is that if the timebase is 0, the data is invalid.  Because other
+ *	CPUs are reading the three values asynchronously and must get a consistent set, 
+ *	it is critical that we update them with the following protocol:
+ *		1. set timebase to 0 (atomically), to invalidate all three values
+ *		2. eieio (to create a barrier in stores to cacheable memory)
+ *		3. change timestamp and "secs per tick"
+ *		4. eieio
+ *		5. set timebase nonzero (atomically)
+ *	This works because readers read the timebase, then the timestamp and divisor, sync
+ *	if MP, then read the timebase a second time and check to be sure it is equal to the first.
+ *
+ *	We could save a few cycles on 64-bit machines by special casing them, but it probably
+ *	isn't necessary because this routine shouldn't be called very often.
+ *
+ *	When called:
+ *		r3 = upper half of timebase (timebase is disabled if 0)
+ *		r4 = lower half of timebase
+ *		r5 = seconds part of timestamp
+ *		r6 = useconds part of timestamp
+ *		r7 = divisor (ie, timebase ticks per sec)
+ *	We set up:
+ *		r8 = ptr to our static data (kkBinary0, kkDouble1, kkTicksPerSec)
+ *		r9 = ptr to comm page in kernel map
+ *
+ *	--> Interrupts must be disabled and rtclock locked when called.  <--
+ */
+ 
+        .align	5
+LEXT(commpage_set_timestamp)				// void commpage_set_timestamp(tbr,secs,usecs,divisor)
+        mfmsr	r11							// get MSR
+        ori		r2,r11,MASK(MSR_FP)			// turn FP on
+        mtmsr	r2
+        isync								// wait until MSR changes take effect
+        
+        or.		r0,r3,r4					// is timebase 0? (thus disabled)
+        lis		r8,hi16(Ldata)				// point to our data
+        lis		r9,ha16(EXT(commPagePtr))	// get ptr to address of commpage in kernel map
+        stfd	f1,rzSaveF1(r1)				// save a FPR in the red zone
+        ori		r8,r8,lo16(Ldata)
+        lwz		r9,lo16(EXT(commPagePtr))(r9)	// r9 <- commPagePtr
+        lfd		f1,kkBinary0(r8)			// get fixed 0s
+        li		r0,_COMM_PAGE_BASE_ADDRESS	// get va in user space of commpage
+        cmpwi	cr1,r9,0					// is commpage allocated yet?
+        sub		r9,r9,r0					// r9 <- commpage address, biased by user va
+        beq--	cr1,3f						// skip if not allocated
+        stfd	f1,_COMM_PAGE_TIMEBASE(r9)	// turn off the timestamp (atomically)
+        eieio								// make sure all CPUs see it is off
+        beq		3f							// all we had to do is turn off timestamp
+        
+        lwz		r0,kkTicksPerSec+4(r8)		// get last ticks_per_sec (or 0 if first)
+        stw		r3,rzNewTimeBase(r1)		// store new timebase so we can lfd
+        stw		r4,rzNewTimeBase+4(r1)
+        cmpw	r0,r7						// do we need to recompute _COMM_PAGE_SEC_PER_TICK?
+        stw		r5,_COMM_PAGE_TIMESTAMP(r9)	// store the new timestamp
+        stw		r6,_COMM_PAGE_TIMESTAMP+4(r9)
+        lfd		f1,rzNewTimeBase(r1)		// get timebase in a FPR so we can store atomically
+        beq++	2f							// same ticks_per_sec, no need to recompute
+        
+        stw		r7,kkTicksPerSec+4(r8)		// must recompute SEC_PER_TICK
+        stfd	f2,rzSaveF2(r1)				// we'll need a few more temp FPRs
+        stfd	f3,rzSaveF3(r1)
+        stfd	f4,rzSaveF4(r1)
+        stfd	f5,rzSaveF5(r1)
+        lfd		f2,_COMM_PAGE_2_TO_52(r9)	// f2 <- double(2**52)
+        lfd		f3,kkTicksPerSec(r8)		// float new ticks_per_sec + 2**52
+        lfd		f4,kkDouble1(r8)			// f4 <- double(1.0)
+        mffs	f5							// save caller's FPSCR
+        mtfsfi	7,0							// clear Inexeact Exception bit, set round-to-nearest
+        fsub	f3,f3,f2					// get ticks_per_sec
+        fdiv	f3,f4,f3					// divide 1 by ticks_per_sec to get SEC_PER_TICK
+        stfd	f3,_COMM_PAGE_SEC_PER_TICK(r9)
+        mtfsf	0xFF,f5						// restore FPSCR
+        lfd		f2,rzSaveF2(r1)				// restore FPRs
+        lfd		f3,rzSaveF3(r1)
+        lfd		f4,rzSaveF4(r1)
+        lfd		f5,rzSaveF5(r1)
+2:											// f1 == new timestamp
+        eieio								// wait until the stores take
+        stfd	f1,_COMM_PAGE_TIMEBASE(r9)	// then turn the timestamp back on (atomically)
+3:											// here once all fields updated
+        lfd		f1,rzSaveF1(r1)				// restore last FPR
+        mtmsr	r11							// turn FP back off
+        isync
+        blr
+
 
 /*	***************************************
  *	* C O M M P A G E _ T I M E _ D C B A *

@@ -72,33 +72,6 @@
 
 int db_access_level = DB_ACCESS_LEVEL;
 
-/*
- * This table is for sign-extending things.
- * Therefore its entries are signed, and yes
- * they are in fact negative numbers.
- * So don't put Us in it. Or Ls either.
- * Otherwise there is no point having it, n'est pas ?
- */
-static int db_extend[sizeof(long)+1] = { /* table for sign-extending */
-#if defined(__arch64__)
-	0,
-	0xFFFFFFFFFFFFFF80,
-	0xFFFFFFFFFFFF8000,
-	0xFFFFFFFFFF800000,
-	0xFFFFFFFF80000000,
-	0xFFFFFF8000000000,
-	0xFFFF800000000000,
-	0xFF80000000000000,
-	0x8000000000000000,
-#else /* !defined(__arch64__) */
-	0,
-	0xFFFFFF80,
-	0xFFFF8000,
-	0xFF800000,
-	0x80000000
-#endif /* defined(__arch64__) */
-};
-
 db_expr_t
 db_get_task_value(
 	db_addr_t	addr,
@@ -109,6 +82,9 @@ db_get_task_value(
 	char		data[sizeof(db_expr_t)];
 	register db_expr_t value;
 	register int	i;
+	uint64_t signx;
+
+	if(size == 0) return 0;
 
 	db_read_bytes((vm_offset_t)addr, size, data, task);
 
@@ -121,11 +97,13 @@ db_get_task_value(
 	{
 	    value = (value << 8) + (data[i] & 0xFF);
 	}
-	    
-	if (size <= sizeof(int)) {
-	    if (is_signed && (value & db_extend[size]) != 0)
-		value |= db_extend[size];
-	}
+	
+	if(!is_signed) return value;
+	
+	signx = 0xFFFFFFFFFFFFFFFFULL << ((size << 3) - 1);
+	 
+	if(value & signx) value |= signx;	/* Add 1s to front if sign bit is on */
+
 	return (value);
 }
 

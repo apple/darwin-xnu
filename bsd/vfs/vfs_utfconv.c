@@ -317,8 +317,8 @@ utf8_decodestr(const u_int8_t* utf8p, size_t utf8len, u_int16_t* ucsp,
 {
 	u_int16_t* bufstart;
 	u_int16_t* bufend;
-	u_int16_t ucs_ch;
-	u_int8_t byte;
+	unsigned int ucs_ch;
+	unsigned int byte;
 	int result = 0;
 	int decompose, precompose, swapbytes;
 
@@ -335,7 +335,7 @@ utf8_decodestr(const u_int8_t* utf8p, size_t utf8len, u_int16_t* ucsp,
 
 		/* check for ascii */
 		if (byte < 0x80) {
-			ucs_ch = byte;				/* 1st byte */
+			ucs_ch = byte;                 /* 1st byte */
 		} else {
 			u_int32_t ch;
 			int extrabytes = utf_extrabytes[byte >> 3];
@@ -345,44 +345,66 @@ utf8_decodestr(const u_int8_t* utf8p, size_t utf8len, u_int16_t* ucsp,
 			utf8len -= extrabytes;
 
 			switch (extrabytes) {
-			case 1: ch = byte;			/* 1st byte */
-					ch <<= 6;
-			        ch += *utf8p++;		/* 2nd byte */
-					ch -= 0x00003080UL;
-					if (ch < 0x0080)
-						goto invalid;
-					ucs_ch = ch;
-			        break;
-
-			case 2:	ch = byte;			/* 1st byte */
-					ch <<= 6;
-					ch += *utf8p++;		/* 2nd byte */
-					ch <<= 6;
-					ch += *utf8p++;		/* 3rd byte */
-					ch -= 0x000E2080UL;
-					if (ch < 0x0800)
-						goto invalid;
-					ucs_ch = ch;
-					break;
-
-			case 3:	ch = byte;			/* 1st byte */
-					ch <<= 6;
-					ch += *utf8p++;		/* 2nd byte */
-					ch <<= 6;
-					ch += *utf8p++;		/* 3rd byte */
-					ch <<= 6;
-			        ch += *utf8p++;		/* 4th byte */
-					ch -= 0x03C82080UL + SP_HALF_BASE;
-					ucs_ch = (ch >> SP_HALF_SHIFT) + SP_HIGH_FIRST;
-					*ucsp++ = swapbytes ? NXSwapShort(ucs_ch) : ucs_ch;
-					if (ucsp >= bufend)
-						goto toolong;
-					ucs_ch = (ch & SP_HALF_MASK) + SP_LOW_FIRST;
-					*ucsp++ = swapbytes ? NXSwapShort(ucs_ch) : ucs_ch;
-			        continue;
-
-			default:
+			case 1:
+				ch = byte; ch <<= 6;   /* 1st byte */
+				byte = *utf8p++;       /* 2nd byte */
+				if ((byte >> 6) != 2)
 					goto invalid;
+				ch += byte;
+				ch -= 0x00003080UL;
+				if (ch < 0x0080)
+					goto invalid;
+				ucs_ch = ch;
+			        break;
+			case 2:
+				ch = byte; ch <<= 6;   /* 1st byte */
+				byte = *utf8p++;       /* 2nd byte */
+				if ((byte >> 6) != 2)
+					goto invalid;
+				ch += byte; ch <<= 6;
+				byte = *utf8p++;       /* 3rd byte */
+				if ((byte >> 6) != 2)
+					goto invalid;
+				ch += byte;
+				ch -= 0x000E2080UL;
+				if (ch < 0x0800)
+					goto invalid;
+				if (ch >= 0xD800) {
+					if (ch <= 0xDFFF)
+						goto invalid;
+					if (ch == 0xFFFE || ch == 0xFFFF)
+						goto invalid;
+				}
+				ucs_ch = ch;
+				break;
+			case 3:
+				ch = byte; ch <<= 6;   /* 1st byte */
+				byte = *utf8p++;       /* 2nd byte */
+				if ((byte >> 6) != 2)
+					goto invalid;
+				ch += byte; ch <<= 6;
+				byte = *utf8p++;       /* 3rd byte */
+				if ((byte >> 6) != 2)
+					goto invalid;
+				ch += byte; ch <<= 6;
+				byte = *utf8p++;       /* 4th byte */
+				if ((byte >> 6) != 2)
+					goto invalid;
+			        ch += byte;
+				ch -= 0x03C82080UL + SP_HALF_BASE;
+				ucs_ch = (ch >> SP_HALF_SHIFT) + SP_HIGH_FIRST;
+				if (ucs_ch < SP_HIGH_FIRST || ucs_ch > SP_HIGH_LAST)
+					goto invalid;
+				*ucsp++ = swapbytes ? NXSwapShort(ucs_ch) : ucs_ch;
+				if (ucsp >= bufend)
+					goto toolong;
+				ucs_ch = (ch & SP_HALF_MASK) + SP_LOW_FIRST;
+				if (ucs_ch < SP_LOW_FIRST || ucs_ch > SP_LOW_LAST)
+					goto invalid;
+				*ucsp++ = swapbytes ? NXSwapShort(ucs_ch) : ucs_ch;
+			        continue;
+			default:
+				goto invalid;
 			}
 			if (decompose) {
 				if (unicode_decomposeable(ucs_ch)) {

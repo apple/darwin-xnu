@@ -40,6 +40,7 @@
 #ifndef __ppc__
 #error This file is only useful on PowerPC.
 #endif
+#include <ppc/savearea.h>
 
 int diagCall(struct savearea *save);
 
@@ -55,6 +56,14 @@ int diagCall(struct savearea *save);
 #define dgBootScreen 7
 #define dgFlush 8
 #define dgAlign 9
+#define dgprw 10
+#define dgmck 11
+#define dg64 12
+#define dgProbeRead 13
+#define dgCPNull 14
+#define dgPerfMon 15
+#define dgMapPage 16
+#define dgScom 17
 
 
 typedef struct diagWork {			/* Diagnostic work area */
@@ -73,6 +82,10 @@ typedef struct diagWork {			/* Diagnostic work area */
 #define enaDiagSDMb  27
 #define enaDiagEM  0x00000020
 #define enaDiagEMb  26
+#define enaDiagTrap  0x00000040
+#define enaDiagTrapb  25
+#define enaNotifyEM  0x00000080
+#define enaNotifyEMb  24
 /* Suppress lock checks */
 #define disLkType 0x80000000
 #define disLktypeb 0
@@ -92,7 +105,16 @@ typedef struct diagWork {			/* Diagnostic work area */
 
 } diagWork;
 
+typedef struct scomcomm {
+	uint16_t	scomcpu;	/* CPU number */
+	uint16_t	scomfunc;	/* 0 = read; 1 = write */
+	uint32_t	scomreg;	/* SCOM register */
+	uint64_t	scomstat;	/* returned status */
+	uint64_t	scomdata;	/* input for write,  output for read */
+} scomcomm;
+
 extern diagWork dgWork;
+extern int diagTrap(struct savearea *, unsigned int);
 
 
 #endif /* _DIAGNOSTICS_H_ */

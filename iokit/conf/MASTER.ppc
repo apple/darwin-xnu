@@ -5,7 +5,7 @@
 #  -------- ---- -------- ---------------
 #
 #  RELEASE = [ppc mach iokitcpp]
-#  PROFILE = [ppc mach iokitcpp profile]
+#  PROFILE = [ RELEASE profile ]
 #  DEBUG = [ppc mach iokitcpp debug]
 #  RELEASE_TRACE = [ RELEASE kdebug ]
 #  DEBUG_TRACE   = [ DEBUG kdebug ]

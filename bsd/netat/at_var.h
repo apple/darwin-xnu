@@ -305,4 +305,7 @@ struct kev_atalk_data {
 	} node_data;
 };
 
+void atalk_post_msg(struct ifnet *ifp, u_long event_code, struct at_addr *address, at_nvestr_t *zone);
+void aarp_sched_probe(void *);
+
 #endif /* __APPLE_API_PRIVATE */

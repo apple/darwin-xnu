@@ -68,6 +68,8 @@
 #define sprg1	273
 #define sprg2	274
 #define sprg3	275
+#define scomc	276
+#define scomd	277
 #define pvr		287
 
 #define IBAT0U	528
@@ -105,6 +107,8 @@
 #define dbat3l	543
 
 #define ummcr2	928		/* Performance monitor control */
+#define upmc5   929     /* Performance monitor counter */
+#define upmc6   930     /* Performance monitor counter */
 #define ubamr	935		/* Performance monitor mask */
 #define ummcr0	936		/* Performance monitor control */
 #define upmc1	937		/* Performance monitor counter */
@@ -115,6 +119,8 @@
 #define upmc4	942		/* Performance monitor counter */
 #define usda	943		/* User sampled data address */
 #define mmcr2	944		/* Performance monitor control */
+#define pmc5    945     /* Performance monitor counter */
+#define pmc6    946     /* Performance monitor counter */
 #define bamr	951		/* Performance monitor mask */
 #define mmcr0	952
 #define pmc1	953
@@ -125,8 +131,11 @@
 #define	pmc4	958
 #define	sda		959		/* Sampled data address */
 #define dmiss	976		/* ea that missed */
+#define trig0	976		
 #define dcmp	977		/* compare value for the va that missed */
+#define trig1	977		
 #define hash1	978		/* pointer to first hash pteg */
+#define trig2	978		
 #define	hash2	979		/* pointer to second hash pteg */
 #define imiss	980		/* ea that missed */
 #define tlbmiss	980		/* ea that missed */
@@ -145,8 +154,10 @@
 #define iabr	1010	/* Instruction address breakpoint register */
 #define ictrl	1011	/* Instruction Cache Control */
 #define ldstdb	1012	/* Load/Store Debug */
+#define hid4	1012	/* Misc stuff */
 #define dabr	1013	/* Data address breakpoint register */
 #define msscr0	1014	/* Memory subsystem control */
+#define hid5	1014	/* Misc stuff */
 #define msscr1	1015	/* Memory subsystem debug */
 #define msssr0	1015	/* Memory Subsystem Status */
 #define ldstcr	1016	/* Load/Store Status/Control */
@@ -158,6 +169,59 @@
 #define thrm2	1021	/* Thermal management 2 */
 #define thrm3	1022	/* Thermal management 3 */
 #define pir		1023	/* Processor ID Register */
+
+
+/* SPR registers (64-bit, PPC970 specific) */
+
+#define scomc_gp	276
+#define scomd_gp	277
+
+#define hsprg0		304
+#define hsprg1		305
+#define hdec		310
+#define hior		311
+#define rmor		312
+#define hrmor		313
+#define hsrr0		314
+#define hsrr1		315
+#define lpcr		318
+#define lpidr		319
+
+#define ummcra_gp	770
+#define upmc1_gp	771
+#define upmc2_gp	772
+#define upmc3_gp	773
+#define upmc4_gp	774
+#define upmc5_gp	775
+#define upmc6_gp	776
+#define upmc7_gp	777
+#define upmc8_gp	778
+#define ummcr0_gp	779
+#define usiar_gp	780
+#define usdar_gp	781
+#define ummcr1_gp	782
+#define uimc_gp		783
+
+#define mmcra_gp	786
+#define pmc1_gp		787
+#define pmc2_gp		788
+#define pmc3_gp		789
+#define pmc4_gp		790
+#define pmc5_gp		791
+#define pmc6_gp		792
+#define pmc7_gp		793
+#define pmc8_gp		794
+#define mmcr0_gp	795
+#define siar_gp		796
+#define sdar_gp		797
+#define mmcr1_gp	798
+#define imc_gp		799
+
+#define trig0_gp	976		
+#define trig1_gp	977		
+#define trig2_gp	978		
+
+#define dabrx		1015
 
 ;	hid0 bits
 #define emcp	0
@@ -200,6 +264,7 @@
 #define ilockm	0x00002000
 #define dlock	19
 #define dlockm	0x00001000
+#define exttben	19
 #define icfi	20
 #define icfim	0x00000800
 #define dcfi	21
@@ -230,14 +295,17 @@
 #define hid1prem	0x06000000
 #define hid1pi0		14
 #define hid1pi0m	0x00020000
+#define hid1FCPErr	14
 #define hid1ps		15
+#define hid1FCD0PErr	15
 #define hid1psm		0x00010000
 #define hid1pc0		0x0000F800
 #define hid1pr0		0x00000600
 #define hid1pc1		0x000000F8
 #define hid1pc0		0x0000F800
 #define hid1pr1		0x00000006
-
+#define hid1FCD1PErr	16
+#define hid1FIERATErr	17
 
 ;	hid2 bits
 #define hid2vmin	18
@@ -321,6 +389,80 @@
 #define dpmckm	0x00020000
 #define apmck	15
 #define apmckm	0x00010000
+
+#define mckIFUE	42
+#define mckLDST	43
+#define mckXCs	44
+#define mckXCe	45
+#define mckNoErr	0
+#define mckIFSLBPE	1
+#define mckIFTLBPE	2
+#define mckIFTLBUE	3
+
+;	dsisr bits
+#define mckUEdfr	16
+#define mckUETwDfr	17
+#define mckL1DCPE	18
+#define	mckL1DTPE	19
+#define	mckDEPE		20
+#define mckTLBPE	21
+#define mckSLBPE	23
+
+;	Async MCK source
+#define AsyMCKSrc 0x0226
+#define AsyMCKRSrc 0x0227
+#define AsyMCKext 0
+#define AsyMCKfir 1
+#define AsyMCKhri 2
+#define AsyMCKdbg 3
+#define AsyMCKncstp 4
+
+;	Core FIR
+#define cFIR 0x0300
+#define cFIRrst 0x0310
+#define cFIRICachePE 0
+#define cFIRITagPE0 1
+#define cFIRITagPE1 2
+#define cFIRIEratPE 3
+#define cFIRIFUL2UE 4
+#define cFIRIFUCS 5
+#define cFIRDCachePE 6
+#define cFIRDTagPE 7
+#define cFIRDEratPE 8
+#define cFIRTLBPE 9
+#define cFIRSLBPE 10
+#define cFIRSL2UE 11
+
+;	Core Error Inject
+#define CoreErrI 0x0350
+#define CoreIFU 0
+#define CoreLSU 1
+#define CoreRate0 2
+#define CoreRate1 3
+#define CoreOnce 0
+#define CoreSolid 2
+#define CorePulse 3
+
+;	GUS Mode Register
+#define GUSModeReg 0x0430
+#define GUSMdmapen 0x00008000
+#define GUSMstgtdis 0x00000080
+#define GUSMstgttim 0x00000038
+#define GUSMstgttoff 0x00000004
+
+;	HID4
+#define hid4RMCI 23
+#define hid4FAlgn 24
+#define hid4DisPF 25
+#define hid4ResPF 26
+#define hid4EnSPTW 27
+#define hid4L1DCFI 28
+#define hid4DisDERpg 31
+#define hid4DisDCTpg 36
+#define hid4DisDCpg 41
+#define hid4DisTLBpg 48
+#define hid4DisSLBpg 54
+#define hid4MckEIEna 55
 
 ;	L2 cache control
 #define l2e		0
@@ -486,6 +628,13 @@
 #define cr7_so	31
 #define cr7_un	31
 
+#define slbESID	36
+#define slbKey	52
+#define slbIndex 52
+#define slbV	36
+#define slbVm	0x08000000
+#define slbCnt	64
+
 /*
  * Macros to access high and low word values of an address
  */
@@ -565,9 +714,7 @@
 #define data16	.byte 0x66
 #define addr16	.byte 0x67
 
-#if !GPROF
 #define MCOUNT
-#endif /* GPROF */
 
 #define ELF_FUNC(x)
 #define ELF_DATA(x)

@@ -102,7 +102,7 @@ ptrlist_grow(ptrlist_t * list)
     else if (list->size == list->count) {
 #ifdef DEBUG
 	printf("doubling %d to %d\n", list->size, list->size * 2);
-#endif DEBUG
+#endif /* DEBUG */
 	list->array = my_realloc(list->array, 
 				 sizeof(*list->array) * list->size,
 				 sizeof(*list->array) * list->size * 2);
@@ -540,4 +540,4 @@ main()
     }
     exit(0);
 }
-#endif TEST_DHCP_OPTIONS
+#endif /* TEST_DHCP_OPTIONS */

@@ -101,8 +101,9 @@
 #include <netinet/if_ether.h>
 #include <sys/kernel.h>
 #include <sys/sysctl.h>
+#include <net/firewire.h>
 
-
+#include <machine/ansi.h>
 #include <miscfs/devfs/devfs.h>
 #include <net/dlil.h>
 
@@ -122,6 +123,7 @@ static caddr_t bpf_alloc();
 #define UIOMOVE(cp, len, code, uio) uiomove(cp, len, uio)
 #endif
 
+
 #define PRINET  26			/* interruptible */
 
 /*
@@ -136,7 +138,7 @@ SYSCTL_INT(_debug, OID_AUTO, bpf_maxbufsize, CTLFLAG_RW,
 
 /*
  *  bpf_iflist is the list of interfaces; each corresponds to an ifnet
- *  bpf_dtab holds the descriptors, indexed by minor device #
+ *  bpf_dtab holds pointer to the descriptors, indexed by minor device #
  */
 static struct bpf_if	*bpf_iflist;
 #ifdef __APPLE__
@@ -145,10 +147,19 @@ static struct bpf_if	*bpf_iflist;
  * on their system. Our dev_t is an int, so we still store
  * the bpf_d in a separate table indexed by minor device #.
  */
-static struct bpf_d	bpf_dtab[NBPFILTER];
-static int		bpf_dtab_init;
-static int		nbpfilter = NBPFILTER;
-#endif
+static struct bpf_d	**bpf_dtab = NULL;
+static int 			bpf_dtab_size = 0;
+static int			nbpfilter = 0;
+
+/*
+ * Mark a descriptor free by making it point to itself.
+ * This is probably cheaper than marking with a constant since
+ * the address should be in a register anyway.
+ */
+#define D_ISFREE(d) ((d) == (d)->bd_next)
+#define D_MARKFREE(d) ((d)->bd_next = (d))
+#define D_MARKUSED(d) ((d)->bd_next = 0)
+#endif /* __APPLE__ */
 
 static int	bpf_allocbufs __P((struct bpf_d *));
 static void	bpf_attachd __P((struct bpf_d *d, struct bpf_if *bp));
@@ -164,6 +175,13 @@ static void	catchpacket __P((struct bpf_d *, u_char *, u_int,
 		    u_int, void (*)(const void *, void *, size_t)));
 static void	reset_d __P((struct bpf_d *));
 static int	 bpf_setf __P((struct bpf_d *, struct bpf_program *));
+
+/*static  void *bpf_devfs_token[MAXBPFILTER];*/
+
+static  int bpf_devsw_installed;
+
+void bpf_init __P((void *unused));
+
 
 /*
  * Darwin differs from BSD here, the following are static
@@ -202,6 +220,7 @@ static struct cdevsw bpf_cdevsw = {
 	/* type */	0
 };
 
+#define SOCKADDR_HDR_LEN	   offsetof(struct sockaddr, sa_data)
 
 static int
 bpf_movein(uio, linktype, mp, sockp, datlen)
@@ -270,10 +289,17 @@ bpf_movein(uio, linktype, mp, sockp, datlen)
 		hlen = 4;	/* This should match PPP_HDRLEN */
 		break;
 
+	case DLT_APPLE_IP_OVER_IEEE1394:
+		sockp->sa_family = AF_UNSPEC;
+		hlen = sizeof(struct firewire_header);
+		break;
+
 	default:
 		return (EIO);
 	}
-
+	if ((hlen + SOCKADDR_HDR_LEN) > sockp->sa_len) {
+		return (EIO);
+	}
 	len = uio->uio_resid;
 	*datlen = len - hlen;
 	if ((unsigned)len > MCLBYTES)
@@ -340,6 +366,62 @@ int bpf_tap_callback(struct ifnet *ifp, struct mbuf *m)
     thread_funnel_set(network_flock, funnel_state);
     return 0;
 }
+
+/*
+ * Returns 1 on sucess, 0 on failure
+ */
+static int
+bpf_dtab_grow(int increment)
+{
+	struct bpf_d **new_dtab = NULL;
+	
+	new_dtab = (struct bpf_d **)_MALLOC(sizeof(struct bpf_d *) * (bpf_dtab_size + increment), M_DEVBUF, M_WAIT);
+	if  (new_dtab == NULL)
+		return 0;
+
+	if (bpf_dtab) {
+		struct bpf_d **old_dtab;
+
+		bcopy(bpf_dtab, new_dtab, sizeof(struct bpf_d *) * bpf_dtab_size);
+		/*
+		 * replace must be atomic with respect to free do bpf_dtab
+		 * is always valid.
+		 */
+		old_dtab = bpf_dtab;
+	bpf_dtab = new_dtab;
+		_FREE(old_dtab, M_DEVBUF);
+	} 
+	else	bpf_dtab = new_dtab;
+	
+	bzero(bpf_dtab + bpf_dtab_size, sizeof(struct bpf_d *) * increment);
+	
+	bpf_dtab_size += increment;
+	
+	return 1;
+}
+
+static struct bpf_d *
+bpf_make_dev_t(int maj)
+{
+	struct bpf_d *d;
+	
+	if (nbpfilter >= bpf_dtab_size && bpf_dtab_grow(NBPFILTER) == 0)
+		return NULL;
+
+	d = (struct bpf_d *)_MALLOC(sizeof(struct bpf_d), M_DEVBUF, M_WAIT);
+	if (d != NULL) {
+		int i = nbpfilter++;
+
+		bzero(d, sizeof(struct bpf_d));
+		bpf_dtab[i] = d;
+		D_MARKFREE(bpf_dtab[i]);
+		/*bpf_devfs_token[i]  = */devfs_make_node(makedev(maj, i),
+							DEVFS_CHAR, UID_ROOT, GID_WHEEL, 0600,
+							"bpf%d", i);
+	}
+	return d;
+}
+
 #endif
 
 /*
@@ -420,16 +502,6 @@ bpf_detachd(d)
 }
 
 
-#ifdef __APPLE__
-/*
- * Mark a descriptor free by making it point to itself.
- * This is probably cheaper than marking with a constant since
- * the address should be in a register anyway.
- */
-#define D_ISFREE(d) ((d) == (d)->bd_next)
-#define D_MARKFREE(d) ((d)->bd_next = (d))
-#define D_MARKUSED(d) ((d)->bd_next = 0)
-#endif
 /*
  * Open ethernet device.  Returns ENXIO for illegal minor device number,
  * EBUSY if file is open by another process.
@@ -445,12 +517,16 @@ bpfopen(dev, flags, fmt, p)
 	register struct bpf_d *d;
 
 #ifdef __APPLE__
+        /* new device nodes on demand when opening the last one */
+        if (minor(dev) == nbpfilter - 1)
+                bpf_make_dev_t(major(dev));
+
 	if (minor(dev) >= nbpfilter)
 		return (ENXIO);
+	
+	d = bpf_dtab[minor(dev)];
 
 	thread_funnel_switch(KERNEL_FUNNEL, NETWORK_FUNNEL);
-	
-	d = &bpf_dtab[minor(dev)];
 #else
 	if (p->p_prison)
 		return (EPERM);
@@ -480,7 +556,11 @@ bpfopen(dev, flags, fmt, p)
 	d->bd_bufsize = bpf_bufsize;
 	d->bd_sig = SIGIO;
 	d->bd_seesent = 1;
+
+#ifdef __APPLE__
 	thread_funnel_switch(NETWORK_FUNNEL, KERNEL_FUNNEL);
+#endif
+
 	return (0);
 }
 
@@ -498,16 +578,33 @@ bpfclose(dev, flags, fmt, p)
 {
 	register struct bpf_d *d;
 	register int s;
-
-	thread_funnel_switch(KERNEL_FUNNEL, NETWORK_FUNNEL);
+#ifdef __APPLE__
+	struct bpf_d **bpf_dtab_schk;
+#endif
 
 #ifndef __APPLE__
 	funsetown(d->bd_sigio);
 #endif
 	s = splimp();
 #ifdef __APPLE__
-	d = &bpf_dtab[minor(dev)];
+again:
+	d = bpf_dtab[minor(dev)];
+    	bpf_dtab_schk = bpf_dtab;
 #endif
+	thread_funnel_switch(KERNEL_FUNNEL, NETWORK_FUNNEL);
+
+#ifdef __APPLE__
+	/*
+	 * If someone grows bpf_dtab[] while we were waiting for the
+	 * funnel, then we will be pointing off into freed memory;
+	 * check to see if this is the case.
+	 */
+	if (bpf_dtab_schk != bpf_dtab) {
+		thread_funnel_switch(NETWORK_FUNNEL, KERNEL_FUNNEL);
+		goto again;
+	}
+#endif
+
 	if (d->bd_bif)
 		bpf_detachd(d);
 	splx(s);
@@ -585,8 +682,9 @@ bpfread(dev, uio, ioflag)
 	int error;
 	int s;
 
+	d = bpf_dtab[minor(dev)];
+
 	thread_funnel_switch(KERNEL_FUNNEL, NETWORK_FUNNEL);
-	d = &bpf_dtab[minor(dev)];
 
 	/*
 	 * Restrict application to use a buffer the same size as
@@ -707,6 +805,9 @@ bpf_wakeup(d)
 #endif
 }
 
+/* keep in sync with bpf_movein above: */
+#define MAX_DATALINK_HDR_LEN	(sizeof(struct firewire_header))
+
 	int
 bpfwrite(dev, uio, ioflag)
 	dev_t dev;
@@ -717,11 +818,12 @@ bpfwrite(dev, uio, ioflag)
 	struct ifnet *ifp;
 	struct mbuf *m;
 	int error, s;
-	static struct sockaddr dst;
+	char 		  dst_buf[SOCKADDR_HDR_LEN + MAX_DATALINK_HDR_LEN];
 	int datlen;
 
+	d = bpf_dtab[minor(dev)];
+
 	thread_funnel_switch(KERNEL_FUNNEL, NETWORK_FUNNEL);
-	d = &bpf_dtab[minor(dev)];
 	
 	if (d->bd_bif == 0) {
 	     thread_funnel_switch(NETWORK_FUNNEL, KERNEL_FUNNEL);
@@ -734,8 +836,9 @@ bpfwrite(dev, uio, ioflag)
 	     thread_funnel_switch(NETWORK_FUNNEL, KERNEL_FUNNEL);
 	     return (0);
 	}
-
-	error = bpf_movein(uio, (int)d->bd_bif->bif_dlt, &m, &dst, &datlen);
+	((struct sockaddr *)dst_buf)->sa_len = sizeof(dst_buf);
+	error = bpf_movein(uio, (int)d->bd_bif->bif_dlt, &m, 
+			   (struct sockaddr *)dst_buf, &datlen);
 	if (error) {
 	     thread_funnel_switch(NETWORK_FUNNEL, KERNEL_FUNNEL);
 	     return (error);
@@ -746,13 +849,14 @@ bpfwrite(dev, uio, ioflag)
 	     return (EMSGSIZE);
 	}
 
-	if (d->bd_hdrcmplt)
-		dst.sa_family = pseudo_AF_HDRCMPLT;
+	if (d->bd_hdrcmplt) {
+		((struct sockaddr *)dst_buf)->sa_family = pseudo_AF_HDRCMPLT;
+	}
 
 	s = splnet();
 
-	error = dlil_output(ifp->if_data.default_proto, m, 
-			(caddr_t) 0, &dst, 0);
+	error = dlil_output(ifptodlt(ifp, PF_INET), m, 
+			(caddr_t) 0, (struct sockaddr *)dst_buf, 0);
 
 	splx(s);
 	thread_funnel_switch(NETWORK_FUNNEL, KERNEL_FUNNEL);
@@ -813,9 +917,9 @@ bpfioctl(dev, cmd, addr, flags, p)
 	register struct bpf_d *d;
 	int s, error = 0;
 
+	d = bpf_dtab[minor(dev)];
 
 	thread_funnel_switch(KERNEL_FUNNEL, NETWORK_FUNNEL);
-	d = &bpf_dtab[minor(dev)];
 
 	switch (cmd) {
 
@@ -1204,12 +1308,12 @@ bpfpoll(dev, events, wql, p)
 	register int s;
 	int revents = 0;
 
+	d = bpf_dtab[minor(dev)];
+
 	thread_funnel_switch(KERNEL_FUNNEL, NETWORK_FUNNEL);
 	/*
 	 * An imitation of the FIONREAD ioctl code.
 	 */
-	d = &bpf_dtab[minor(dev)];
-
 	if (d->bd_bif == NULL) {
 		thread_funnel_switch(NETWORK_FUNNEL, KERNEL_FUNNEL);
 		return (ENXIO);
@@ -1284,7 +1388,7 @@ bpf_mcopy(src_arg, dst_arg, len)
 		if (m == 0)
 			panic("bpf_mcopy");
 		count = min(m->m_len, len);
-		bcopy(mtod(m, void *), dst, count);
+		bcopy(mtod((struct mbuf *)m, void *), dst, count);
 		m = m->m_next;
 		dst += count;
 		len -= count;
@@ -1475,16 +1579,7 @@ bpfattach(ifp, dlt, hdrlen)
 	 */
 	bp->bif_hdrlen = BPF_WORDALIGN(hdrlen + SIZEOF_BPF_HDR) - hdrlen;
 
-#ifdef __APPLE__
-	/*
-	 * Mark all the descriptors free if this hasn't been done.
-	 */
-	if (!bpf_dtab_init) {
-		for (i = 0; i < nbpfilter; ++i)
-			D_MARKFREE(&bpf_dtab[i]);
-		bpf_dtab_init = 1;
-	}
-#else
+#ifndef __APPLE__
 	if (bootverbose)
 		printf("bpf: %s%d attached\n", ifp->if_name, ifp->if_unit);
 #endif
@@ -1547,12 +1642,6 @@ bpfdetach(ifp)
 	splx(s);
 }
 
-static	void *bpf_devfs_token[NBPFILTER];
-
-static	int bpf_devsw_installed;
-
-void bpf_init __P((void *unused));
-
 void
 bpf_init(unused)
 	void *unused;
@@ -1569,11 +1658,12 @@ bpf_init(unused)
 			nbpfilter = 0;
 			return;
 		}
-		for (i = 0 ; i < nbpfilter; i++) {
-			bpf_devfs_token[i]  = devfs_make_node(makedev(maj, i), 
-				DEVFS_CHAR, UID_ROOT, GID_WHEEL, 0600, 
-				"bpf%x", i);
+		if (bpf_dtab_grow(NBPFILTER) == 0) {
+			printf("bpf_init: failed to allocate bpf_dtab\n");
+			return;
 		}
+		for (i = 0 ; i < NBPFILTER; i++)
+			bpf_make_dev_t(maj);
 	}
 #else
 	cdevsw_add(&bpf_cdevsw);

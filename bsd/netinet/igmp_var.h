@@ -114,7 +114,7 @@ struct igmpstat {
 
 void	igmp_init __P((void));
 void	igmp_input __P((struct mbuf *, int));
-void	igmp_joingroup __P((struct in_multi *));
+int		igmp_joingroup __P((struct in_multi *));
 void	igmp_leavegroup __P((struct in_multi *));
 void	igmp_fasttimo __P((void));
 void	igmp_slowtimo __P((void));

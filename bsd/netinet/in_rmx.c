@@ -223,6 +223,9 @@ SYSCTL_INT(_net_inet_ip, OID_AUTO, check_route_selfref, CTLFLAG_RW,
     &check_routeselfref , 0, "");
 #endif
 
+__private_extern__ int use_routegenid = 1;
+SYSCTL_INT(_net_inet_ip, OID_AUTO, use_route_genid, CTLFLAG_RW, 
+    &use_routegenid , 0, "");
 
 /*
  * On last reference drop, mark the route as belong to us so that it can be

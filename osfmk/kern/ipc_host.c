@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2003 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -108,24 +108,27 @@ void ipc_host_init(void)
 	if (port == IP_NULL)
 		panic("ipc_host_init");
 
+	ipc_kobject_set(port, (ipc_kobject_t) &realhost, IKOT_HOST_SECURITY);
+	kernel_set_special_port(&realhost, HOST_SECURITY_PORT,
+				ipc_port_make_send(port));
+
+	port = ipc_port_alloc_kernel();
+	if (port == IP_NULL)
+		panic("ipc_host_init");
+
 	ipc_kobject_set(port, (ipc_kobject_t) &realhost, IKOT_HOST);
-	realhost.host_self = port;
+	kernel_set_special_port(&realhost, HOST_PORT,
+				ipc_port_make_send(port));
 
 	port = ipc_port_alloc_kernel();
 	if (port == IP_NULL)
 		panic("ipc_host_init");
 
 	ipc_kobject_set(port, (ipc_kobject_t) &realhost, IKOT_HOST_PRIV);
-	realhost.host_priv_self = port;
+	kernel_set_special_port(&realhost, HOST_PRIV_PORT,
+				ipc_port_make_send(port));
 
-	port = ipc_port_alloc_kernel();
-	if (port == IP_NULL)
-		panic("ipc_host_init");
-
-	ipc_kobject_set(port, (ipc_kobject_t) &realhost, IKOT_HOST_SECURITY);
-	realhost.host_security_self = port;
-
-	realhost.io_master = IP_NULL;
+	/* the rest of the special ports will be set up later */
 
 	for (i = FIRST_EXCEPTION; i < EXC_TYPES_COUNT; i++) {
 			realhost.exc_actions[i].port = IP_NULL;
@@ -504,8 +507,7 @@ convert_host_to_port(
 {
 	ipc_port_t port;
 
-	port = ipc_port_make_send(host->host_self);
-
+	host_get_host_port(host, &port);
 	return port;
 }
 

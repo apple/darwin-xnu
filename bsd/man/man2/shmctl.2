@@ -48,13 +48,11 @@ The
 system call performs some control operations on the shared memory area
 specified by
 .Fa shmid .
-
 Each shared memory segment has a data structure associated with it,
 parts of which may be altered by
 .Fn shmctl
 and parts of which determine the actions of
 .Fn shmctl .
-
 This structure is defined as follows in
 .Aq Pa sys/shm.h :
 .Bd -literal
@@ -92,7 +90,6 @@ struct ipc_perm {
     key_t key;	 /* user specified msg/sem/shm key */
 };
 .Ed
-
 The operation to be performed by
 .Fn shmctl
 is specified in
@@ -120,7 +117,6 @@ has an effective user id equal to either
 or
 .Va shm_perm.uid
 in the data structure associated with the shared memory segment.
-
 .It Dv IPC_RMID
 Remove the shared memory segment specified by
 .Fa shmid
@@ -131,7 +127,6 @@ or
 .Va shm_perm.uid
 values in the data structure associated with the queue can do this.
 .El
-
 The read and write permissions on a shared memory identifier
 are determined by the
 .Va shm_perm.mode
@@ -164,18 +159,16 @@ the effective uid match either the
 or
 .Va shm_perm.cuid
 fields of the data structure associated with the shared memory segment.
-
 An attempt is made to increase the value of
 .Va shm_qbytes
 through IPC_SET
 but the caller is not the super-user.
-.It Bq Er EACCESS
+.It Bq Er EACCES
 The command is IPC_STAT
 and the caller has no read permission for this shared memory segment.
 .It Bq Er EINVAL
 .Fa shmid
 is not a valid shared memory segment identifier.
-
 .Va cmd
 is not a valid command.
 .It Bq Er EFAULT

@@ -107,6 +107,7 @@ MALLOC_DEFINE(M_IFMADDR, "ether_multi", "link-level multicast address");
 
 int	ifqmaxlen = IFQ_MAXLEN;
 struct	ifnethead ifnet;	/* depend on static init XXX */
+struct ifmultihead ifma_lostlist = LIST_HEAD_INITIALIZER(ifma_lostlist);
 
 #if INET6
 /*
@@ -114,7 +115,6 @@ struct	ifnethead ifnet;	/* depend on static init XXX */
  * should be more generalized?
  */
 extern void	nd6_setmtu __P((struct ifnet *));
-extern int ip6_auto_on;
 #endif
 
 /*
@@ -154,7 +154,9 @@ old_if_attach(ifp)
 	}
 
 	TAILQ_INSERT_TAIL(&ifnet, ifp, if_link);
-	ifp->if_index = ++if_index;
+	/* if the interface is recycled, keep the index */
+	if (!((ifp->if_eflags & IFEF_REUSE) && ifp->if_index))
+	  ifp->if_index = ++if_index;
 	/*
 	 * XXX -
 	 * The old code would work if the interface passed a pre-existing
@@ -224,6 +226,28 @@ old_if_attach(ifp)
 			sdl->sdl_data[--namelen] = 0xff;
 		TAILQ_INSERT_HEAD(&ifp->if_addrhead, ifa, ifa_link);
 	}
+}
+
+__private_extern__ int
+ifa_foraddr(addr)
+	unsigned int addr;
+{
+	register struct ifnet *ifp;
+	register struct ifaddr *ifa;
+	register unsigned int addr2;
+	
+
+	for (ifp = ifnet.tqh_first; ifp; ifp = ifp->if_link.tqe_next)
+	    for (ifa = ifp->if_addrhead.tqh_first; ifa;
+		 ifa = ifa->ifa_link.tqe_next) {
+		if (ifa->ifa_addr->sa_family != AF_INET)
+			continue;
+		addr2 = IA_SIN(ifa)->sin_addr.s_addr;
+
+		if (addr == addr2)
+			return (1);
+	}
+	return (0);
 }
 
 /*
@@ -498,10 +522,6 @@ if_route(ifp, flag, fam)
 			pfctlinput(PRC_IFUP, ifa->ifa_addr);
 	rt_ifmsg(ifp);
 
-#if INET6
-	if (ip6_auto_on) /* Only if IPv6 is on on configured on on all ifs */
-		in6_if_up(ifp);
-#endif
 }
 
 /*
@@ -1220,41 +1240,65 @@ if_addmulti(ifp, sa, retifma)
 	return 0;
 }
 
-/*
- * Remove a reference to a multicast address on this interface.  Yell
- * if the request does not match an existing membership.
- */
 int
-if_delmulti(ifp, sa)
-	struct ifnet *ifp;
-	struct sockaddr *sa;
+if_delmultiaddr(struct ifmultiaddr *ifma)
 {
-	struct ifmultiaddr *ifma;
-	int s;
-
-	for (ifma = ifp->if_multiaddrs.lh_first; ifma;
-	     ifma = ifma->ifma_link.le_next)
-		if (equal(sa, ifma->ifma_addr))
-			break;
-	if (ifma == 0)
-		return ENOENT;
-
+	struct sockaddr *sa;
+	struct ifnet *ifp;
+	
+	/* Verify ifma is valid */
+	{
+		struct ifmultiaddr *match = NULL;
+		for (ifp = ifnet.tqh_first; ifp; ifp = ifp->if_link.tqe_next) {
+			for (match = ifp->if_multiaddrs.lh_first; match; match = match->ifma_link.le_next) {
+				if (match->ifma_ifp != ifp) {
+					printf("if_delmultiaddr: ifma (%x) on ifp i(%s) is stale\n",
+							match, if_name(ifp));
+					return (0) ; /* swallow error ? */
+				}
+				if (match == ifma)
+					break;
+			}
+			if (match == ifma)
+				break;
+		}
+		if (match != ifma) {
+			for (match = ifma_lostlist.lh_first; match; match = match->ifma_link.le_next) {
+				if (match->ifma_ifp != NULL) {
+					printf("if_delmultiaddr: item on lost list (%x) contains non-null ifp=%s\n",
+							match, if_name(match->ifma_ifp));
+					return (0) ; /* swallow error ? */
+				}
+				if (match == ifma)
+					break;
+			}
+		}
+		
+		if (match != ifma) {
+			printf("if_delmultiaddr: ifma 0x%X is invalid\n", ifma);
+			return 0;
+		}
+	}
+	
 	if (ifma->ifma_refcount > 1) {
 		ifma->ifma_refcount--;
 		return 0;
 	}
 
-	rt_newmaddrmsg(RTM_DELMADDR, ifma);
 	sa = ifma->ifma_lladdr;
-	s = splimp();
+
+	if (sa) /* send a routing msg for network addresses only */
+		rt_newmaddrmsg(RTM_DELMADDR, ifma);
+
+	ifp = ifma->ifma_ifp;
+	
 	LIST_REMOVE(ifma, ifma_link);
 	/*
 	 * Make sure the interface driver is notified
 	 * in the case of a link layer mcast group being left.
 	 */
-	if (ifma->ifma_addr->sa_family == AF_LINK && sa == 0)
+	if (ifp && ifma->ifma_addr->sa_family == AF_LINK && sa == 0)
 		dlil_ioctl(0, ifp, SIOCDELMULTI, 0);
-	splx(s);
 	FREE(ifma->ifma_addr, M_IFMADDR);
 	FREE(ifma, M_IFMADDR);
 	if (sa == 0)
@@ -1271,27 +1315,41 @@ if_delmulti(ifp, sa)
 	 * in the record for the link-layer address.  (So we don't complain
 	 * in that case.)
 	 */
+	if (ifp)
+		ifma = ifp->if_multiaddrs.lh_first;
+	else
+		ifma = ifma_lostlist.lh_first;
+	for (; ifma; ifma = ifma->ifma_link.le_next)
+		if (equal(sa, ifma->ifma_addr))
+			break;
+	
+	FREE(sa, M_IFMADDR);
+	if (ifma == 0) {
+		return 0;
+	}
+
+	return if_delmultiaddr(ifma);
+}
+
+/*
+ * Remove a reference to a multicast address on this interface.  Yell
+ * if the request does not match an existing membership.
+ */
+int
+if_delmulti(ifp, sa)
+	struct ifnet *ifp;
+	struct sockaddr *sa;
+{
+	struct ifmultiaddr *ifma;
+
 	for (ifma = ifp->if_multiaddrs.lh_first; ifma;
 	     ifma = ifma->ifma_link.le_next)
 		if (equal(sa, ifma->ifma_addr))
 			break;
 	if (ifma == 0)
-		return 0;
-
-	if (ifma->ifma_refcount > 1) {
-		ifma->ifma_refcount--;
-		return 0;
-	}
-
-	s = splimp();
-	LIST_REMOVE(ifma, ifma_link);
-	dlil_ioctl(0, ifp, SIOCDELMULTI, (caddr_t) 0);
-	splx(s);
-	FREE(ifma->ifma_addr, M_IFMADDR);
-	FREE(sa, M_IFMADDR);
-	FREE(ifma, M_IFMADDR);
-
-	return 0;
+		return ENOENT;
+	
+	return if_delmultiaddr(ifma);
 }
 
 

@@ -482,6 +482,42 @@ static __inline int _VOP_EXCHANGE(struct vnode *fvp, struct vnode *tvp, struct u
 	return (VCALL(fvp, VOFFSET(vop_exchange), &a));
 }
 
+struct vop_kqfilt_add_args {
+	struct vnodeop_desc *a_desc;
+	struct vnode *a_vp;
+	struct knote *a_kn;
+	struct proc *a_p;
+};
+extern struct vnodeop_desc vop_kqfilt_add_desc;
+#define VOP_KQFILT_ADD(vp, kn, p) _VOP_KQFILT_ADD(vp, kn, p)
+static __inline int _VOP_KQFILT_ADD(struct vnode *vp, struct knote *kn, struct proc *p)
+{
+	struct vop_kqfilt_add_args a;
+	a.a_desc = VDESC(vop_kqfilt_add);
+	a.a_vp = vp;
+	a.a_kn = kn;
+	a.a_p = p;
+	return (VCALL(vp, VOFFSET(vop_kqfilt_add), &a));
+}
+
+struct vop_kqfilt_remove_args {
+	struct vnodeop_desc *a_desc;
+	struct vnode *a_vp;
+	uintptr_t a_ident;
+	struct proc *a_p;
+};
+extern struct vnodeop_desc vop_kqfilt_remove_desc;
+#define VOP_KQFILT_REMOVE(vp, ident, p) _VOP_KQFILT_REMOVE(vp, ident, p)
+static __inline int _VOP_KQFILT_REMOVE(struct vnode *vp, uintptr_t ident, struct proc *p)
+{
+	struct vop_kqfilt_remove_args a;
+	a.a_desc = VDESC(vop_kqfilt_remove);
+	a.a_vp = vp;
+	a.a_ident = ident;
+	a.a_p = p;
+	return (VCALL(vp, VOFFSET(vop_kqfilt_remove), &a));
+}
+
 struct vop_revoke_args {
 	struct vnodeop_desc *a_desc;
 	struct vnode *a_vp;

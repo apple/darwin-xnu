@@ -70,6 +70,7 @@
 #ifdef __APPLE_API_PRIVATE
 #include <ufs/ufs/dir.h>
 #include <ufs/ufs/dinode.h>
+#include <sys/event.h>
 #include <sys/lock.h>
 #include <sys/quota.h>
 
@@ -95,6 +96,7 @@ struct inode {
 	} inode_u;
 #define	i_fs	inode_u.fs
 
+	struct	 klist i_knotes;	/* knotes attached to this vnode */
 	struct	 dquot *i_dquot[MAXQUOTAS]; /* Dquot structures. */
 	u_quad_t i_modrev;	/* Revision level for NFS lease. */
 	struct	 lockf *i_lockf;/* Head of byte-level lock list. */
@@ -178,6 +180,8 @@ struct indir {
 		(ip)->i_flag &= ~(IN_ACCESS | IN_CHANGE | IN_UPDATE);	\
 	}								\
 }
+
+#define VN_KNOTE(vp, hint) KNOTE(&VTOI(vp)->i_knotes, (hint))
 
 /* This overlays the fid structure (see mount.h). */
 struct ufid {

@@ -82,9 +82,6 @@ suppress default semantics which affect filesystem access.
 .It Dv MNT_RDONLY
 The filesystem should be treated as read-only;
 Even the super-user may not write on it.
-.It Dv MNT_NOATIME
-Do not update the access time on files in the filesystem unless
-the modification or status change times are also being updated.
 .It Dv MNT_NOEXEC
 Do not allow files to be executed from the filesystem.
 .It Dv MNT_NOSUID
@@ -107,58 +104,20 @@ Some filesystems may not allow all flags to be changed.
 For example,
 most filesystems will not allow a change from read-write to read-only.
 .Pp
+The flag
+.Dv MNT_RELOAD
+causes the vfs subsystem to update its data structures pertaining to
+the specified already mounted filesystem.
+.Pp
 The
 .Fa type
 argument defines the type of the filesystem.
-The types of filesystems known to the system are defined in
-.Aq Pa sys/mount.h .
+.Pp
 .Fa Data
 is a pointer to a structure that contains the type
 specific arguments to mount.
-The currently supported types of filesystems and
-their type specific data are:
-.Pp
-.Dv MOUNT_FFS
-.Bd -literal -offset indent -compact
-struct ufs_args {
-      char      *fspec;             /* block special file to mount */
-      struct    export_args export; /* network export information */
-};
-.Ed
-.Pp
-.Dv MOUNT_NFS
-.Bd -literal -offset indent -compact
-struct nfs_args {
-      int             version;      /* args structure version */
-      struct sockaddr *addr;        /* file server address */
-      int             addrlen;      /* length of address */
-      int             sotype;       /* Socket type */
-      int             proto;        /* and Protocol */
-      u_char          *fh;          /* File handle to be mounted */
-      int             fhsize;       /* Size, in bytes, of fh */
-      int             flags;        /* flags */
-      int             wsize;        /* write size in bytes */
-      int             rsize;        /* read size in bytes */
-      int             readdirsize;  /* readdir size in bytes */
-      int             timeo;        /* initial timeout in .1 secs */
-      int             retrans;      /* times to retry send */
-      int             maxgrouplist; /* Max. size of group list */
-      int             readahead;    /* # of blocks to readahead */
-      int             leaseterm;    /* Term (sec) of lease */
-      int             deadthresh;   /* Retrans threshold */
-      char            *hostname;    /* server's name */
-};
-.Ed
-.Pp
-.Dv MOUNT_MFS
-.Bd -literal -offset indent -compact
-struct mfs_args {
-      char	*fspec;             /* name to export for statfs */
-      struct	export_args export; /* if we can export an MFS */
-      caddr_t	base;               /* base of filesystem in mem */
-      u_long	size;               /* size of filesystem */
-};
-.Ed
+The format for these argument structures is described in the
+manual page for each filesystem.
 .Pp
 The
 .Fn umount
@@ -193,7 +152,8 @@ is set to indicate the error.
 will fail when one of the following occurs:
 .Bl -tag -width [ENAMETOOLONG]
 .It Bq Er EPERM
-The caller is not the super-user.
+The caller is not the super-user, and the device-node and the mountpoint
+do not have adequate ownership and permissions.
 .It Bq Er ENAMETOOLONG
 A component of a pathname exceeded
 .Dv {NAME_MAX}
@@ -223,78 +183,13 @@ Another process currently holds a reference to
 points outside the process's allocated address space.
 .El
 .Pp
-The following errors can occur for a
-.Em ufs
-filesystem mount:
-.Bl -tag -width [ENOTBLK]
-.It Bq Er ENODEV
-A component of ufs_args
-.Ar fspec
-does not exist.
-.It Bq Er ENOTBLK
-.Ar Fspec
-is not a block device.
-.It Bq Er ENXIO
-The major device number of
-.Ar fspec
-is out of range (this indicates no device driver exists
-for the associated hardware).
-.It Bq Er EBUSY
-.Ar Fspec
-is already mounted.
-.It Bq Er EMFILE
-No space remains in the mount table.
-.It Bq Er EINVAL
-The super block for the filesystem had a bad magic
-number or an out of range block size.
-.It Bq Er ENOMEM
-Not enough memory was available to read the cylinder
-group information for the filesystem.
-.It Bq Er EIO
-An I/O error occurred while reading the super block or
-cylinder group information.
-.It Bq Er EFAULT
-.Ar Fspec
-points outside the process's allocated address space.
-.El
-.Pp
-The following errors can occur for a
-.Em nfs
-filesystem mount:
-.Bl -tag -width [ETIMEDOUT]
-.It Bq Er ETIMEDOUT
-.Em Nfs
-timed out trying to contact the server.
-.It Bq Er EFAULT
-Some part of the information described by nfs_args
-points outside the process's allocated address space.
-.El
-.Pp
-The following errors can occur for a
-.Em mfs
-filesystem mount:
-.Bl -tag -width [EMFILE]
-.It Bq Er EMFILE
-No space remains in the mount table.
-.It Bq Er EINVAL
-The super block for the filesystem had a bad magic
-number or an out of range block size.
-.It Bq Er ENOMEM
-Not enough memory was available to read the cylinder
-group information for the filesystem.
-.It Bq Er EIO
-A paging error occurred while reading the super block or
-cylinder group information.
-.It Bq Er EFAULT
-.Em Name
-points outside the process's allocated address space.
-.El
-.Pp
 .Nm Umount
 may fail with one of the following errors:
 .Bl -tag -width [ENAMETOOLONG]
 .It Bq Er EPERM
-The caller is not the super-user.
+The caller is not the super-user, and the
+.Nm mount()
+was not done by the user.
 .It Bq Er ENOTDIR
 A component of the path is not a directory.
 .It Bq Er EINVAL
@@ -318,17 +213,9 @@ An I/O error occurred while writing cached filesystem information.
 .Fa Dir
 points outside the process's allocated address space.
 .El
-.Pp
-A
-.Em ufs
-or
-.Em mfs
-mount can also fail if the maximum number of filesystems are currently
-mounted.
 .Sh SEE ALSO
 .Xr mount 8 ,
 .Xr umount 8 ,
-.Xr mfs 8
 .Sh BUGS
 Some of the error codes need translation to more obvious messages.
 .Sh HISTORY

@@ -31,6 +31,7 @@
  *  Created.
  */
 
+#include <kern/processor.h>
 #include <kern/thread.h>
 
 static void
@@ -77,12 +78,23 @@ thread_policy_set(
 		thread_lock(thread);
 
 		if (!(thread->sched_mode & TH_MODE_FAILSAFE)) {
+			integer_t	oldmode = (thread->sched_mode & TH_MODE_TIMESHARE);
+
 			thread->sched_mode &= ~TH_MODE_REALTIME;
 
-			if (timeshare)
+			if (timeshare && !oldmode) {
 				thread->sched_mode |= TH_MODE_TIMESHARE;
+
+				if (thread->state & TH_RUN)
+					pset_share_incr(thread->processor_set);
+			}
 			else
+			if (!timeshare && oldmode) {
 				thread->sched_mode &= ~TH_MODE_TIMESHARE;
+
+				if (thread->state & TH_RUN)
+					pset_share_decr(thread->processor_set);
+			}
 
 			thread_recompute_priority(thread);
 		}
@@ -111,7 +123,8 @@ thread_policy_set(
 		}
 
 		info = (thread_time_constraint_policy_t)policy_info;
-		if (	info->computation > max_rt_quantum	||
+		if (	info->constraint < info->computation	||
+				info->computation > max_rt_quantum		||
 				info->computation < min_rt_quantum		) {
 			result = KERN_INVALID_ARGUMENT;
 			break;
@@ -126,7 +139,12 @@ thread_policy_set(
 		thread->realtime.preemptible = info->preemptible;
 
 		if (!(thread->sched_mode & TH_MODE_FAILSAFE)) {
-			thread->sched_mode &= ~TH_MODE_TIMESHARE;
+			if (thread->sched_mode & TH_MODE_TIMESHARE) {
+				thread->sched_mode &= ~TH_MODE_TIMESHARE;
+
+				if (thread->state & TH_RUN)
+					pset_share_decr(thread->processor_set);
+			}
 			thread->sched_mode |= TH_MODE_REALTIME;
 			thread_recompute_priority(thread);
 		}
@@ -182,7 +200,7 @@ thread_recompute_priority(
 	integer_t		priority;
 
 	if (thread->sched_mode & TH_MODE_REALTIME)
-		priority = BASEPRI_REALTIME;
+		priority = BASEPRI_RTQUEUES;
 	else {
 		if (thread->importance > MAXPRI)
 			priority = MAXPRI;

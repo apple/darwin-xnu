@@ -85,13 +85,13 @@ struct ip {
 		u_long ip_w;
 		struct {
 			unsigned int
-#if _BIG_ENDIAN == __LITTLE_ENDIAN__
+#ifdef __LITTLE_ENDIAN__
         		ip_xhl:4,	/* header length */   
                 	ip_xv:4,		/* version */
         		ip_xtos:8,	/* type of service */
         		ip_xlen:16;	/* total length */
 #endif
-#if _BIG_ENDIAN == __BIG_ENDIAN__
+#ifdef __BIG_ENDIAN__
         		ip_xv:4,                 /* version */
                 	ip_xhl:4,                /* header length */
         		ip_xtos:8,               /* type of service */
@@ -128,8 +128,9 @@ typedef struct ether_header ether_header_t;
 #define ETHERTYPE_IP       0x0800  /* IP protocol */
 
 #define ntohs(x)           OSSwapBigToHostInt16(x)
+#define ntohl(x)           OSSwapBigToHostInt32(x)
 #define htons(x)           OSSwapHostToBigInt16(x)
-
+#define htonl(x)           OSSwapHostToBigInt32(x)
 /*
  * Ethernet Address Resolution Protocol.
  *

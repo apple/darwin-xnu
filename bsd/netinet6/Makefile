@@ -27,7 +27,7 @@ DATAFILES = \
 	esp.h            in6.h            in6_prefix.h     \
         ipcomp.h         mld6_var.h       raw_ip6.h	   esp6.h \
         in6_gif.h        in6_var.h        ip6_mroute.h     ipcomp6.h \
-	nd6.h            scope6_var.h
+	nd6.h            scope6_var.h     ip6_fw.h
 
 
 

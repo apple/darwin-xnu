@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2002 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -160,10 +160,10 @@ ffs_balloc(ip, lbn, size, cred, bpp, flags, blk_alloc)
 			ip->i_flag |= IN_CHANGE | IN_UPDATE;
 			if ((flags & B_SYNC) || (!alloc_buffer)) {
 				if (!alloc_buffer) 
-					SET(bp->b_flags, B_INVAL);
+					SET(bp->b_flags, B_NOCACHE);
 				bwrite(bp);
 			} else
-				bawrite(bp);
+				bdwrite(bp);
 			/* note that bp is already released here */
 		}
 	}
@@ -212,9 +212,12 @@ ffs_balloc(ip, lbn, size, cred, bpp, flags, blk_alloc)
 					return (error);
 				ip->i_db[lbn] = dbtofsb(fs, bp->b_blkno);
 				ip->i_flag |= IN_CHANGE | IN_UPDATE;
-				if(!alloc_buffer)  {
-					SET(bp->b_flags, B_INVAL);
-					bwrite(bp);
+				if(!alloc_buffer) {
+					SET(bp->b_flags, B_NOCACHE);
+					if (flags & B_SYNC)
+						bwrite(bp);
+					else
+						bdwrite(bp);
 				 } else
 					*bpp = bp;
 				return (0);
@@ -254,7 +257,7 @@ ffs_balloc(ip, lbn, size, cred, bpp, flags, blk_alloc)
 		return(error);
 #if DIAGNOSTIC
 	if (num < 1)
-		panic ("ffs_balloc: ufs_bmaparray returned indirect block\n");
+		panic ("ffs_balloc: ufs_bmaparray returned indirect block");
 #endif
 	/*
 	 * Fetch the first indirect block allocating if necessary.
@@ -274,11 +277,14 @@ ffs_balloc(ip, lbn, size, cred, bpp, flags, blk_alloc)
 		bp->b_blkno = fsbtodb(fs, nb);
 		clrbuf(bp);
 		/*
-		 * Write synchronously so that indirect blocks
-		 * never point at garbage.
+		 * Write synchronously conditional on mount flags.
 		 */
-		if (error = bwrite(bp))
+		if ((vp)->v_mount->mnt_flag & MNT_ASYNC) {
+			error = 0;
+			bdwrite(bp);
+		} else if ((error = bwrite(bp)) != 0) {
 			goto fail;
+		}
 		allocib = &ip->i_ib[indirs[0].in_off];
 		*allocib = nb;
 		ip->i_flag |= IN_CHANGE | IN_UPDATE;
@@ -323,10 +329,12 @@ ffs_balloc(ip, lbn, size, cred, bpp, flags, blk_alloc)
 		nbp->b_blkno = fsbtodb(fs, nb);
 		clrbuf(nbp);
 		/*
-		 * Write synchronously so that indirect blocks
-		 * never point at garbage.
+		 * Write synchronously conditional on mount flags.
 		 */
-		if (error = bwrite(nbp)) {
+		if ((vp)->v_mount->mnt_flag & MNT_ASYNC) {
+			error = 0;
+			bdwrite(nbp);
+		} else if (error = bwrite(nbp)) {
 			brelse(bp);
 			goto fail;
 		}
@@ -469,7 +477,7 @@ ffs_blkalloc(ip, lbn, size, cred, flags)
 	fs = ip->i_fs;
 
 	if(size > fs->fs_bsize)
-		panic("ffs_blkalloc: too large for allocation\n");
+		panic("ffs_blkalloc: too large for allocation");
 
 	/*
 	 * If the next write will extend the file into a new block,
@@ -478,7 +486,7 @@ ffs_blkalloc(ip, lbn, size, cred, flags)
 	 */
 	nb = lblkno(fs, ip->i_size);
 	if (nb < NDADDR && nb < lbn) {
-		panic("ffs_blkalloc():cannot extend file: i_size %d, lbn %d\n", ip->i_size, lbn);
+		panic("ffs_blkalloc():cannot extend file: i_size %d, lbn %d", ip->i_size, lbn);
 	}
 	/*
 	 * The first NDADDR blocks are direct blocks
@@ -496,8 +504,7 @@ ffs_blkalloc(ip, lbn, size, cred, flags)
 			osize = fragroundup(fs, blkoff(fs, ip->i_size));
 			nsize = fragroundup(fs, size);
 			if (nsize > osize) {
-				panic("ffs_allocblk: trying to extend 
-					a fragment \n");
+				panic("ffs_allocblk: trying to extend a fragment");
 			}
 			return(0);
 		} else {
@@ -523,7 +530,7 @@ ffs_blkalloc(ip, lbn, size, cred, flags)
 		return(error);
 
 	if(num == 0) {
-		panic("ffs_blkalloc: file with direct blocks only\n"); 
+		panic("ffs_blkalloc: file with direct blocks only"); 
 	}
 
 	/*
@@ -544,11 +551,14 @@ ffs_blkalloc(ip, lbn, size, cred, flags)
 		bp->b_blkno = fsbtodb(fs, nb);
 		clrbuf(bp);
 		/*
-		 * Write synchronously so that indirect blocks
-		 * never point at garbage.
+		 * Write synchronously conditional on mount flags.
 		 */
-		if (error = bwrite(bp))
+		if ((vp)->v_mount->mnt_flag & MNT_ASYNC) {
+			error = 0;
+			bdwrite(bp);
+		} else if (error = bwrite(bp)) {
 			goto fail;
+		}
 		allocib = &ip->i_ib[indirs[0].in_off];
 		*allocib = nb;
 		ip->i_flag |= IN_CHANGE | IN_UPDATE;
@@ -593,10 +603,12 @@ ffs_blkalloc(ip, lbn, size, cred, flags)
 		nbp->b_blkno = fsbtodb(fs, nb);
 		clrbuf(nbp);
 		/*
-		 * Write synchronously so that indirect blocks
-		 * never point at garbage.
+		 * Write synchronously conditional on mount flags.
 		 */
-		if (error = bwrite(nbp)) {
+		if ((vp)->v_mount->mnt_flag & MNT_ASYNC) {
+			error = 0;
+			bdwrite(nbp);
+		} else if (error = bwrite(nbp)) {
 			brelse(bp);
 			goto fail;
 		}

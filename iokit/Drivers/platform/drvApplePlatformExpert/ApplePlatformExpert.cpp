@@ -62,7 +62,7 @@ bool ApplePlatformExpert::start( IOService * provider )
     setBootROMType(kBootROMTypeOldWorld);
     
     // Get the Rom Minor Version from the 68k ROM.
-    romVersion = ml_phys_read(0xffc00010) & 0x0000ffff;
+    romVersion = ml_phys_read_64(0xffc00010ULL) & 0x0000ffff;
     provider->setProperty("rom-version", &romVersion, sizeof(romVersion));
   }
   

@@ -38,27 +38,22 @@
 #undef thread_should_halt
 #undef ipc_port_release
 
-decl_simple_lock_data(extern,reaper_lock)
-extern queue_head_t           reaper_queue;
-
 /* BSD KERN COMPONENT INTERFACE */
 
 task_t	bsd_init_task = TASK_NULL;
 char	init_task_failure_data[1024];
+extern unsigned int not_in_kdp; /* Skip acquiring locks if we're in kdp */
  
 thread_act_t get_firstthread(task_t);
 vm_map_t  get_task_map(task_t);
 ipc_space_t  get_task_ipcspace(task_t);
 boolean_t is_kerneltask(task_t);
 boolean_t is_thread_idle(thread_t);
-boolean_t is_thread_running(thread_act_t);
-thread_shuttle_t getshuttle_thread( thread_act_t);
-thread_act_t getact_thread( thread_shuttle_t);
 vm_offset_t get_map_min( vm_map_t);
 vm_offset_t get_map_max( vm_map_t);
 int get_task_userstop(task_t);
 int get_thread_userstop(thread_act_t);
-boolean_t thread_should_abort(thread_shuttle_t);
+boolean_t thread_should_abort(thread_t);
 boolean_t current_thread_aborted(void);
 void task_act_iterate_wth_args(task_t, void(*)(thread_act_t, void *), void *);
 void ipc_port_release(ipc_port_t);
@@ -68,7 +63,7 @@ vm_size_t get_vmmap_size(vm_map_t);
 int get_vmmap_entries(vm_map_t);
 int  get_task_numacts(task_t);
 thread_act_t get_firstthread(task_t task);
-kern_return_t get_signalact(task_t , thread_act_t *, thread_t *, int);
+kern_return_t get_signalact(task_t , thread_act_t *, int);
 void astbsd_on(void);
 
 /*
@@ -105,15 +100,15 @@ thread_act_t get_firstthread(task_t task)
 {
 	thread_act_t	thr_act;
 
-	thr_act = (thread_act_t)queue_first(&task->thr_acts);
-	if (thr_act == (thread_act_t)&task->thr_acts)
+	thr_act = (thread_act_t)queue_first(&task->threads);
+	if (queue_end(&task->threads, (queue_entry_t)thr_act))
 		thr_act = THR_ACT_NULL;
 	if (!task->active)
 		return(THR_ACT_NULL);
 	return(thr_act);
 }
 
-kern_return_t get_signalact(task_t task,thread_act_t * thact, thread_t * thshut, int setast)
+kern_return_t get_signalact(task_t task,thread_act_t * thact, int setast)
 {
 
         thread_act_t inc;
@@ -128,8 +123,8 @@ kern_return_t get_signalact(task_t task,thread_act_t * thact, thread_t * thshut,
 	}
 
         thr_act = THR_ACT_NULL;
-        for (inc  = (thread_act_t)queue_first(&task->thr_acts);
-             inc != (thread_act_t)&task->thr_acts;
+        for (inc  = (thread_act_t)queue_first(&task->threads);
+			 !queue_end(&task->threads, (queue_entry_t)inc);
              inc  = ninc) {
                 th = act_lock_thread(inc);
                 if ((inc->active)  && 
@@ -138,14 +133,11 @@ kern_return_t get_signalact(task_t task,thread_act_t * thact, thread_t * thshut,
                    break;
                 }
                 act_unlock_thread(inc);
-                ninc = (thread_act_t)queue_next(&inc->thr_acts);
+                ninc = (thread_act_t)queue_next(&inc->task_threads);
         }
 out:
         if (thact) 
                 *thact = thr_act;
-
-        if (thshut)
-                *thshut = thr_act? thr_act->thread: THREAD_NULL ;
         if (thr_act) {
                 if (setast)
                     act_set_astbsd(thr_act);
@@ -161,7 +153,7 @@ out:
 }
 
 
-kern_return_t check_actforsig(task_t task, thread_act_t thact, thread_t * thshut, int setast)
+kern_return_t check_actforsig(task_t task, thread_act_t thact, int setast)
 {
 
         thread_act_t inc;
@@ -177,12 +169,12 @@ kern_return_t check_actforsig(task_t task, thread_act_t thact, thread_t * thshut
 	}
 
         thr_act = THR_ACT_NULL;
-        for (inc  = (thread_act_t)queue_first(&task->thr_acts);
-             inc != (thread_act_t)&task->thr_acts;
+        for (inc  = (thread_act_t)queue_first(&task->threads);
+			 !queue_end(&task->threads, (queue_entry_t)inc);
              inc  = ninc) {
 
 				if (inc != thact) {
-                	ninc = (thread_act_t)queue_next(&inc->thr_acts);
+                	ninc = (thread_act_t)queue_next(&inc->task_threads);
 						continue;
 				}
                 th = act_lock_thread(inc);
@@ -198,8 +190,6 @@ kern_return_t check_actforsig(task_t task, thread_act_t thact, thread_t * thshut
         }
 out:
 		if (found) {
-        	if (thshut)
-                	*thshut = thr_act? thr_act->thread: THREAD_NULL ;
             if (setast)
 				act_set_astbsd(thr_act);
 
@@ -231,41 +221,42 @@ ipc_space_t  get_task_ipcspace(task_t t)
 
 int  get_task_numacts(task_t t)
 {
-	return(t->thr_act_count);
+	return(t->thread_count);
+}
+
+/* does this machine need  64bit register set for signal handler */
+int is_64signalregset(void)
+{
+	task_t t = current_task();
+	if(t->taskFeatures[0] & tf64BitData)
+		return(1);
+	else
+		return(0);
 }
 
 /*
- * Reset the current task's map by taking a reference
- * on the new map.  The old map reference is returned.
+ * The old map reference is returned.
  */
 vm_map_t
 swap_task_map(task_t task,vm_map_t map)
 {
+	thread_act_t act = current_act();
 	vm_map_t old_map;
 
-	vm_map_reference(map);
+	if (task != act->task)
+		panic("swap_task_map");
+
 	task_lock(task);
 	old_map = task->map;
-	task->map = map;
+	act->map = task->map = map;
 	task_unlock(task);
 	return old_map;
 }
 
-/*
- * Reset the current act map.
- * The caller donates us a reference to the new map
- * and we donote our reference to the old map to him.
- */
 vm_map_t
 swap_act_map(thread_act_t thr_act,vm_map_t map)
 {
-	vm_map_t old_map;
-
-	act_lock(thr_act);
-	old_map = thr_act->map;
-	thr_act->map = map;
-	act_unlock(thr_act);
-	return old_map;
+	panic("swap_act_map");
 }
 
 /*
@@ -303,36 +294,29 @@ boolean_t is_thread_idle(thread_t th)
 /*
  *
  */
-boolean_t is_thread_running(thread_act_t thact)
+boolean_t is_thread_running(thread_t th)
 {
-	thread_t th = thact->thread;
 	return((th->state & TH_RUN) == TH_RUN);
 }
 
 /*
  *
  */
-thread_shuttle_t
+thread_t
 getshuttle_thread(
-	thread_act_t	th)
+	thread_t	th)
 {
-#ifdef	DEBUG
-	assert(th->thread);
-#endif
-	return(th->thread);
+	return(th);
 }
 
 /*
  *
  */
-thread_act_t
+thread_t
 getact_thread(
-	thread_shuttle_t	th)
+	thread_t	th)
 {
-#ifdef	DEBUG
-	assert(th->top_act);
-#endif
-	return(th->top_act);
+	return(th);
 }
 
 /*
@@ -370,7 +354,8 @@ get_vmsubmap_entries(
 	int	total_entries = 0;
 	vm_map_entry_t	entry;
 
-	vm_map_lock(map);
+	if (not_in_kdp)
+	  vm_map_lock(map);
 	entry = vm_map_first_entry(map);
 	while((entry != vm_map_to_entry(map)) && (entry->vme_start < start)) {
 		entry = entry->vme_next;
@@ -388,7 +373,8 @@ get_vmsubmap_entries(
 		}
 		entry = entry->vme_next;
 	}
-	vm_map_unlock(map);
+	if (not_in_kdp)
+	  vm_map_unlock(map);
 	return(total_entries);
 }
 
@@ -399,7 +385,8 @@ get_vmmap_entries(
 	int	total_entries = 0;
 	vm_map_entry_t	entry;
 
-	vm_map_lock(map);
+	if (not_in_kdp)
+	  vm_map_lock(map);
 	entry = vm_map_first_entry(map);
 
 	while(entry != vm_map_to_entry(map)) {
@@ -414,7 +401,8 @@ get_vmmap_entries(
 		}
 		entry = entry->vme_next;
 	}
-	vm_map_unlock(map);
+	if (not_in_kdp)
+	  vm_map_unlock(map);
 	return(total_entries);
 }
 
@@ -446,9 +434,9 @@ get_thread_userstop(
  */
 boolean_t
 thread_should_abort(
-	thread_shuttle_t th)
+	thread_t th)
 {
-	return(!th->top_act || !th->top_act->active || 
+	return(!th->top_act || 
 	       (th->state & (TH_ABORT|TH_ABORT_SAFELY)) == TH_ABORT);
 }
 
@@ -494,10 +482,10 @@ task_act_iterate_wth_args(
         thread_act_t inc, ninc;
 
 	task_lock(task);
-        for (inc  = (thread_act_t)queue_first(&task->thr_acts);
-             inc != (thread_act_t)&task->thr_acts;
+        for (inc  = (thread_act_t)queue_first(&task->threads);
+			 !queue_end(&task->threads, (queue_entry_t)inc);
              inc  = ninc) {
-                ninc = (thread_act_t)queue_next(&inc->thr_acts);
+                ninc = (thread_act_t)queue_next(&inc->task_threads);
                 (void) (*func_callback)(inc, func_arg);
         }
 	task_unlock(task);
@@ -512,14 +500,14 @@ ipc_port_release(
 
 boolean_t
 is_thread_active(
-	thread_shuttle_t th)
+	thread_t th)
 {
 	return(th->active);
 }
 
 kern_return_t
 get_thread_waitresult(
-	thread_shuttle_t th)
+	thread_t th)
 {
 	return(th->wait_result);
 }

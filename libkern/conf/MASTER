@@ -52,4 +52,5 @@
 ident		LIBKERN
 
 options		KDEBUG		# kernel tracing		# <kdebug>
+options		GPROF		# kernel profiling		# <profile>
 options		LIBKERNCPP	# C++ implementation		# <libkerncpp>

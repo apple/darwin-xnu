@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2002 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -71,6 +71,9 @@
 #include <netinet/ip.h>
 #include <netinet/in_pcb.h>
 
+#include <sys/event.h>
+#include <sys/eventvar.h>
+
 #include <sys/proc.h>
 #include <sys/mount.h>
 #include <sys/vnode.h>
@@ -86,6 +89,7 @@
 #include <isofs/cd9660/cd9660_node.h>
 
 #include <miscfs/volfs/volfs.h>
+#include <miscfs/specfs/specdev.h>
 
 #include <nfs/rpcv2.h>
 #include <nfs/nfsproto.h>
@@ -210,12 +214,15 @@ struct kmzones {
 	0,		KMZ_MALLOC,		/* 88 M_IP6MISC */
 	0,		KMZ_MALLOC,		/* 89 M_TSEGQ */
 	0,		KMZ_MALLOC,		/* 90 M_IGMP */
-	SOS(journal),     KMZ_CREATEZONE,     /* 91 M_JNL_JNL */
+	SOS(journal), KMZ_CREATEZONE,     /* 91 M_JNL_JNL */
 	SOS(transaction), KMZ_CREATEZONE,     /* 92 M_JNL_TR */
+	SOS(specinfo), KMZ_CREATEZONE,		/* 93 M_SPECINFO */
+	SOS(kqueue), KMZ_CREATEZONE,		/* 94 M_KQUEUE */
 #undef	SOS
 #undef	SOX
 };
 
+extern zone_t kalloc_zone(vm_size_t);	/* XXX */
 
 /*
  * Initialize the kernel memory allocator
@@ -277,7 +284,7 @@ struct _mhead {
 	char	dat[0];
 };
 
-#define ZEROSIZETOKEN 0xFADEDFAD
+#define ZEROSIZETOKEN (void *)0xFADEDFAD
 
 void *_MALLOC(
 	size_t		size,
@@ -306,6 +313,9 @@ void *_MALLOC(
 		return (0);
 
 	mem->hdr.mlen = memsize;
+
+	if (flags & M_ZERO)
+		bzero(mem->hdr.dat, size);
 
 	return  (mem->hdr.dat);
 }

@@ -62,11 +62,9 @@ the system will round the address down to a multiple of SHMLBA bytes
 (SHMLBA is defined in
 .Aq Pa sys/shm.h
 ).
-
 A shared memory segment can be mapped read-only by specifying the
 SHM_RDONLY flag in
 .Fa shmflg .
-
 .Fn shmdt
 unmaps the shared memory segment that is currently mapped at
 .Fa shmaddr
@@ -91,7 +89,7 @@ is set to indicate the error.
 .Fn shmat
 will fail if:
 .Bl -tag -width Er
-.It Bq Er EACCESS
+.It Bq Er EACCES
 The calling process has no permission to access this shared memory segment.
 .It Bq Er ENOMEM
 There is not enough available data space for the calling process to
@@ -99,19 +97,18 @@ map the shared memory segment.
 .It Bq Er EINVAL
 .Fa shmid
 is not a valid shared memory identifier.
-
 .Fa shmaddr
 specifies an illegal address.
 .It Bq Er EMFILE
 The number of shared memory segments has reached the system-wide limit.
 .El
-
 .Fn shmdt
 will fail if:
 .Bl -tag -width Er
 .It Bq Er EINVAL
 .Fa shmaddr
 is not the start address of a mapped shared memory segment.
+.El
 .Sh SEE ALSO
 .Xr shmctl 2 ,
 .Xr shmget 2 ,

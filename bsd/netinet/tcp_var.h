@@ -101,6 +101,7 @@ delack_bitmask[((hash_elem) >> 5)] |= 1 << ((hash_elem) & 0x1F)
  * Tcp control block, one per tcp; fields:
  * Organized for 16 byte cacheline efficiency.
  */
+#if KERNEL
 struct tcpcb {
 	struct	tsegqe_head t_segq;
 	int	t_dupacks;		/* consecutive dup acks recd */
@@ -197,7 +198,118 @@ struct tcpcb {
 	u_long	snd_cwnd_prev;		/* cwnd prior to retransmit */
 	u_long	snd_ssthresh_prev;	/* ssthresh prior to retransmit */
 	u_long	t_badrxtwin;		/* window for retransmit recovery */
+
+	int     t_keepidle;		/* keepalive idle timer (override global if > 0) */
 };
+#else
+
+#define tcpcb otcpcb
+
+#endif
+
+
+/*
+ * Jaguar compatible TCP control block, for xtcpcb
+ * Does not have the old fields
+ */
+struct otcpcb {
+	struct	tsegqe_head t_segq;
+	int	t_dupacks;		/* consecutive dup acks recd */
+	struct	tcptemp	*unused;	/* unused now: was t_template */
+
+	int	t_timer[TCPT_NTIMERS];	/* tcp timers */
+
+	struct	inpcb *t_inpcb;		/* back pointer to internet pcb */
+	int	t_state;		/* state of this connection */
+	u_int	t_flags;
+#define	TF_ACKNOW	0x00001		/* ack peer immediately */
+#define	TF_DELACK	0x00002		/* ack, but try to delay it */
+#define	TF_NODELAY	0x00004		/* don't delay packets to coalesce */
+#define	TF_NOOPT	0x00008		/* don't use tcp options */
+#define	TF_SENTFIN	0x00010		/* have sent FIN */
+#define	TF_REQ_SCALE	0x00020		/* have/will request window scaling */
+#define	TF_RCVD_SCALE	0x00040		/* other side has requested scaling */
+#define	TF_REQ_TSTMP	0x00080		/* have/will request timestamps */
+#define	TF_RCVD_TSTMP	0x00100		/* a timestamp was received in SYN */
+#define	TF_SACK_PERMIT	0x00200		/* other side said I could SACK */
+#define	TF_NEEDSYN	0x00400		/* send SYN (implicit state) */
+#define	TF_NEEDFIN	0x00800		/* send FIN (implicit state) */
+#define	TF_NOPUSH	0x01000		/* don't push */
+#define	TF_REQ_CC	0x02000		/* have/will request CC */
+#define	TF_RCVD_CC	0x04000		/* a CC was received in SYN */
+#define	TF_SENDCCNEW	0x08000		/* send CCnew instead of CC in SYN */
+#define	TF_MORETOCOME	0x10000		/* More data to be appended to sock */
+#define	TF_LQ_OVERFLOW	0x20000		/* listen queue overflow */
+#define	TF_RXWIN0SENT	0x40000		/* sent a receiver win 0 in response */
+#define	TF_SLOWLINK	0x80000		/* route is a on a modem speed link */
+
+	int	t_force;		/* 1 if forcing out a byte */
+
+	tcp_seq	snd_una;		/* send unacknowledged */
+	tcp_seq	snd_max;		/* highest sequence number sent;
+					 * used to recognize retransmits
+					 */
+	tcp_seq	snd_nxt;		/* send next */
+	tcp_seq	snd_up;			/* send urgent pointer */
+
+	tcp_seq	snd_wl1;		/* window update seg seq number */
+	tcp_seq	snd_wl2;		/* window update seg ack number */
+	tcp_seq	iss;			/* initial send sequence number */
+	tcp_seq	irs;			/* initial receive sequence number */
+
+	tcp_seq	rcv_nxt;		/* receive next */
+	tcp_seq	rcv_adv;		/* advertised window */
+	u_long	rcv_wnd;		/* receive window */
+	tcp_seq	rcv_up;			/* receive urgent pointer */
+
+	u_long	snd_wnd;		/* send window */
+	u_long	snd_cwnd;		/* congestion-controlled window */
+	u_long	snd_ssthresh;		/* snd_cwnd size threshold for
+					 * for slow start exponential to
+					 * linear switch
+					 */
+	u_int	t_maxopd;		/* mss plus options */
+
+	u_long	t_rcvtime;		/* inactivity time */
+	u_long	t_starttime;		/* time connection was established */
+	int	t_rtttime;		/* round trip time */
+	tcp_seq	t_rtseq;		/* sequence number being timed */
+
+	int	t_rxtcur;		/* current retransmit value (ticks) */
+	u_int	t_maxseg;		/* maximum segment size */
+	int	t_srtt;			/* smoothed round-trip time */
+	int	t_rttvar;		/* variance in round-trip time */
+
+	int	t_rxtshift;		/* log(2) of rexmt exp. backoff */
+	u_int	t_rttmin;		/* minimum rtt allowed */
+	u_long	t_rttupdated;		/* number of times rtt sampled */
+	u_long	max_sndwnd;		/* largest window peer has offered */
+
+	int	t_softerror;		/* possible error not yet reported */
+/* out-of-band data */
+	char	t_oobflags;		/* have some */
+	char	t_iobc;			/* input character */
+#define	TCPOOB_HAVEDATA	0x01
+#define	TCPOOB_HADDATA	0x02
+/* RFC 1323 variables */
+	u_char	snd_scale;		/* window scaling for send window */
+	u_char	rcv_scale;		/* window scaling for recv window */
+	u_char	request_r_scale;	/* pending window scaling */
+	u_char	requested_s_scale;
+	u_long	ts_recent;		/* timestamp echo data */
+
+	u_long	ts_recent_age;		/* when last updated */
+	tcp_seq	last_ack_sent;
+/* RFC 1644 variables */
+	tcp_cc	cc_send;		/* send connection count */
+	tcp_cc	cc_recv;		/* receive connection count */
+	tcp_seq	snd_recover;		/* for use in fast recovery */
+/* experimental */
+	u_long	snd_cwnd_prev;		/* cwnd prior to retransmit */
+	u_long	snd_ssthresh_prev;	/* ssthresh prior to retransmit */
+	u_long	t_badrxtwin;		/* window for retransmit recovery */
+};
+
 
 /*
  * Structure to hold TCP options that are only used during segment
@@ -356,7 +468,11 @@ struct	tcpstat {
 struct	xtcpcb {
 	size_t	xt_len;
 	struct	inpcb	xt_inp;
-	struct	tcpcb	xt_tp;
+#if KERNEL
+	struct	otcpcb	xt_tp;
+#else
+	struct  tcpcb   xt_tp;
+#endif
 	struct	xsocket	xt_socket;
 	u_quad_t	xt_alignment_hack;
 };

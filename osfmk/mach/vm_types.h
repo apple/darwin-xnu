@@ -39,6 +39,34 @@ typedef vm_offset_t     	pointer_t;
 typedef vm_offset_t     	vm_address_t;
 typedef uint64_t		vm_object_offset_t;
 
+/*
+ * We use addr64_t for 64-bit addresses that are used on both
+ * 32 and 64-bit machines.  On PPC, they are passed and returned as
+ * two adjacent 32-bit GPRs.  We use addr64_t in places where
+ * common code must be useable both on 32 and 64-bit machines.
+ */
+typedef uint64_t addr64_t;		/* Basic effective address */
+
+/*
+ * We use reg64_t for addresses that are 32 bits on a 32-bit
+ * machine, and 64 bits on a 64-bit machine, but are always
+ * passed and returned in a single GPR on PPC.  This type
+ * cannot be used in generic 32-bit c, since on a 64-bit
+ * machine the upper half of the register will be ignored
+ * by the c compiler in 32-bit mode.  In c, we can only use the
+ * type in prototypes of functions that are written in and called
+ * from assembly language.  This type is basically a comment.
+ */
+typedef	uint32_t	reg64_t;
+
+/*
+ * To minimize the use of 64-bit fields, we keep some physical
+ * addresses (that are page aligned) as 32-bit page numbers. 
+ * This limits the physical address space to 16TB of RAM.
+ */
+typedef uint32_t ppnum_t;		/* Physical page number */
+
+
 #ifdef KERNEL_PRIVATE
 
 #if !defined(__APPLE_API_PRIVATE) || !defined(MACH_KERNEL_PRIVATE)

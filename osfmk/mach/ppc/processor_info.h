@@ -107,12 +107,6 @@ typedef struct processor_pm_regs *processor_pm_regs_t;
 #define PROCESSOR_PM_REGS_COUNT \
         (sizeof(processor_pm_regs_data_t) / sizeof (unsigned int))
 
-#define PROCESSOR_PM_REGS_COUNT_POWERPC_604 \
-            (PROCESSOR_PM_REGS_COUNT * 1 )
-
-#define PROCESSOR_PM_REGS_COUNT_POWERPC_604e \
-            (PROCESSOR_PM_REGS_COUNT * 2 )
-
 #define PROCESSOR_PM_REGS_COUNT_POWERPC_750 \
             (PROCESSOR_PM_REGS_COUNT * 2 )
 

@@ -1,7 +1,7 @@
 ######################################################################
 #
 #  RELEASE = [intel mach libkerncpp]
-#  PROFILE = [intel mach libkerncpp profile]
+#  PROFILE = [RELEASE profile]
 #  DEBUG = [intel mach libkerncpp debug]
 #
 ######################################################################

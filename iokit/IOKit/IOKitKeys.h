@@ -124,4 +124,7 @@
 #define kIOBusBadgeKey           "IOBusBadge"           // (OSDictionary)
 #define kIODeviceIconKey         "IODeviceIcon"         // (OSDictionary)
 
+// property of root that describes the machine's serial number as a string
+#define kIOPlatformSerialNumberKey	"IOPlatformSerialNumber"	// (OSString)
+
 #endif /* ! _IOKIT_IOKITKEYS_H */

@@ -79,16 +79,16 @@ unsigned int	active_debugger = 0;
 unsigned int	debug_mode=0;
 unsigned int 	disableDebugOuput = TRUE;
 unsigned int 	systemLogDiags = FALSE;
-unsigned int 	panicDebugging = FALSE;
+unsigned int    logPanicDataToScreen = FALSE;
 #ifdef __ppc__
-	unsigned int	logPanicDataToScreen = FALSE;
+        unsigned int 	panicDebugging = FALSE;
 #else
-	unsigned int	logPanicDataToScreen = TRUE;
+        unsigned int 	panicDebugging = TRUE;
 #endif
 
 int mach_assert = 1;
 
-const char		*panicstr;
+const char		*panicstr = (char *) 0;
 decl_simple_lock_data(,panic_lock)
 int			paniccpu;
 volatile int		panicwait;
@@ -148,6 +148,7 @@ panic(const char *str, ...)
 	thread_t thread;
 
 	s = splhigh();
+	disable_preemption();
 
 #ifdef	__ppc__
 	lastTrace = LLTraceSet(0);		/* Disable low-level tracing */
@@ -157,8 +158,6 @@ panic(const char *str, ...)
 	save_waits[cpu_number()] = thread->wait_queue;	/* Save the old value */
 	thread->wait_queue = 0;			/* Clear the wait so we do not get double panics when we try locks */
 
-	mp_disable_preemption();
-	
 	if( logPanicDataToScreen )
 		disableDebugOuput = FALSE;
 		
@@ -179,8 +178,6 @@ restart:
 			nestedpanic +=1;
 			PANIC_UNLOCK();
 			Debugger("double panic");
-			mp_enable_preemption();
-			splx(s);
 			printf("double panic:  We are hanging here...\n");
 			while(1);
 			/* NOTREACHED */
@@ -208,11 +205,12 @@ restart:
 	PANIC_LOCK();
 	panicstr = (char *)0;
 	PANIC_UNLOCK();
-	mp_enable_preemption();
-	splx(s);
 	thread->wait_queue = save_waits[cpu_number()]; 	/* Restore the wait queue */
-	if (return_on_panic)
+	if (return_on_panic) {
+		enable_preemption();
+		splx(s);
 		return;
+	}
 	kdb_printf("panic: We are hanging here...\n");
 	while(1);
 	/* NOTREACHED */

@@ -240,6 +240,7 @@ krpc_call(sa, prog, vers, func, data, from_p)
 		tv.tv_sec = 1;
 		tv.tv_usec = 0;
 		bzero(&sopt, sizeof sopt);
+		sopt.sopt_dir = SOPT_SET;
 		sopt.sopt_level = SOL_SOCKET;
 		sopt.sopt_name = SO_RCVTIMEO;
 		sopt.sopt_val = &tv;
@@ -357,6 +358,12 @@ krpc_call(sa, prog, vers, func, data, from_p)
             	else
            		printf("RPC timeout for server " IP_FORMAT "\n",
 				IP_LIST(&(sin->sin_addr.s_addr)));
+
+		/*
+		 * soreceive is now conditionally using this pointer
+		 * if present, it updates per-proc stats
+		 */
+		auio.uio_procp = NULL;
 
 		/*
 		 * Wait for up to timo seconds for a reply.

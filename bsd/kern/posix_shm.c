@@ -143,8 +143,10 @@ static int pshm_select  __P((struct file *fp, int which, void *wql,
 		    struct proc *p));
 static int pshm_closefile  __P((struct file *fp, struct proc *p));
 
+static int pshm_kqfilter __P((struct file *fp, struct knote *kn, struct proc *p));
+
 struct 	fileops pshmops =
-	{ pshm_read, pshm_write, pshm_ioctl, pshm_select, pshm_closefile };
+	{ pshm_read, pshm_write, pshm_ioctl, pshm_select, pshm_closefile, pshm_kqfilter };
 
 /*
  * Lookup an entry in the cache 
@@ -210,8 +212,8 @@ pshm_cache_add(pshmp, pnp)
 {
 	register struct pshmcache *pcp;
 	register struct pshmhashhead *pcpp;
-	register struct pshminfo *dpinfo;
-	register struct pshmcache *dpcp;
+	struct pshminfo *dpinfo;
+	struct pshmcache *dpcp;
 
 #if DIAGNOSTIC
 	if (pnp->pshm_namelen > NCHNAMLEN)
@@ -337,7 +339,7 @@ shm_open(p, uap, retval)
 	MALLOC_ZONE(pnbuf, caddr_t,
 			MAXPATHLEN, M_NAMEI, M_WAITOK);
 	pathlen = MAXPATHLEN;
-	error = copyinstr(uap->name, pnbuf,
+	error = copyinstr((void *)uap->name, (void *)pnbuf,
 		MAXPATHLEN, &pathlen);
 	if (error) {
 		goto bad;
@@ -384,11 +386,13 @@ shm_open(p, uap, retval)
 	} else
 		incache = 1;
 	fmode = FFLAGS(uap->oflag);
-	if ((fmode & (FREAD | FWRITE))==0)
-		return(EINVAL);
+	if ((fmode & (FREAD | FWRITE))==0) {
+		error = EINVAL;
+		goto bad;
+	}
 
 	if (error = falloc(p, &nfp, &indx))
-		return (error);
+		goto bad;
 	fp = nfp;
 
 	cmode &=  ALLPERMS;
@@ -462,7 +466,7 @@ shm_open(p, uap, retval)
 	fp->f_data = (caddr_t)pnode;
 	*fdflags(p, indx) &= ~UF_RESERVED;
 	*retval = indx;
-	_FREE_ZONE(pnbuf, MAXPATHLEN, M_NAMEI);
+	FREE_ZONE(pnbuf, MAXPATHLEN, M_NAMEI);
 	return (0);
 bad3:
 	_FREE(pnode, M_SHM);
@@ -474,7 +478,7 @@ bad1:
 	fdrelse(p, indx);
 	ffree(nfp);
 bad:
-	_FREE_ZONE(pnbuf, MAXPATHLEN, M_NAMEI);
+	FREE_ZONE(pnbuf, MAXPATHLEN, M_NAMEI);
 	return (error);
 }
 
@@ -510,7 +514,7 @@ pshm_truncate(p, fp, fd, length, retval)
 		return(EINVAL);
 	}
 
-	size = round_page (length);
+	size = round_page_64(length);
 	kret = vm_allocate(current_map(), &user_addr, size, TRUE);
 	if (kret != KERN_SUCCESS) 
 		goto out;
@@ -616,8 +620,8 @@ struct mmap_args {
 int
 pshm_mmap(struct proc *p, struct mmap_args *uap, register_t *retval, struct file *fp, vm_size_t pageoff) 
 {
-	vm_offset_t	user_addr = uap->addr;
-	vm_size_t	user_size = uap->len ;
+	vm_offset_t	user_addr = (vm_offset_t)uap->addr;
+	vm_size_t	user_size = (vm_size_t)uap->len ;
 	int prot = uap->prot;
 	int flags = uap->flags;
 	vm_object_offset_t file_pos = (vm_object_offset_t)uap->pos;
@@ -664,9 +668,9 @@ pshm_mmap(struct proc *p, struct mmap_args *uap, register_t *retval, struct file
 
 	if ((flags & MAP_FIXED) == 0) {
 		find_space = TRUE;
-		user_addr = round_page(user_addr); 
+		user_addr = round_page_32(user_addr); 
 	} else {
-		if (user_addr != trunc_page(user_addr))
+		if (user_addr != trunc_page_32(user_addr))
 			return (EINVAL);
 		find_space = FALSE;
 		(void) vm_deallocate(user_map, user_addr, user_size);
@@ -738,7 +742,7 @@ shm_unlink(p, uap, retval)
 	MALLOC_ZONE(pnbuf, caddr_t,
 			MAXPATHLEN, M_NAMEI, M_WAITOK);
 	pathlen = MAXPATHLEN;
-	error = copyinstr(uap->name, pnbuf,
+	error = copyinstr((void *)uap->name, (void *)pnbuf,
 		MAXPATHLEN, &pathlen);
 	if (error) {
 		goto bad;
@@ -808,7 +812,7 @@ shm_unlink(p, uap, retval)
 	pinfo->pshm_flags |= PSHM_REMOVED;
 	error = 0;
 bad:
-	_FREE_ZONE(pnbuf, MAXPATHLEN, M_NAMEI);
+	FREE_ZONE(pnbuf, MAXPATHLEN, M_NAMEI);
 	return (error);
 out:
 	switch (kret) {
@@ -897,6 +901,15 @@ pshm_select(fp, which, wql, p)
 	struct file *fp;
 	int which;
 	void *wql;
+	struct proc *p;
+{
+	return(EOPNOTSUPP);
+}
+
+static int
+pshm_kqfilter(fp, kn, p)
+	struct file *fp;
+	struct knote *kn;
 	struct proc *p;
 {
 	return(EOPNOTSUPP);

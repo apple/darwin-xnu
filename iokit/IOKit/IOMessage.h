@@ -44,6 +44,8 @@ typedef UInt32 IOMessage;
 
 #define kIOMessageServiceBusyStateChange   iokit_common_msg(0x120)
 
+#define kIOMessageServicePropertyChange    iokit_common_msg(0x130)
+
 #define kIOMessageCanDevicePowerOff        iokit_common_msg(0x200)
 #define kIOMessageDeviceWillPowerOff       iokit_common_msg(0x210)
 #define kIOMessageDeviceWillNotPowerOff    iokit_common_msg(0x220)
@@ -56,5 +58,6 @@ typedef UInt32 IOMessage;
 #define kIOMessageSystemWillNotSleep       iokit_common_msg(0x290)
 #define kIOMessageSystemHasPoweredOn       iokit_common_msg(0x300)
 #define kIOMessageSystemWillRestart        iokit_common_msg(0x310)
+#define kIOMessageSystemWillPowerOn        iokit_common_msg(0x320)
 
 #endif /* ! __IOKIT_IOMESSAGE_H */

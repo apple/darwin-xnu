@@ -60,14 +60,8 @@ static inline bool ISSETP(void *addr, unsigned int flag)
 
 #define fFlags loopRestart
 
-extern "C" extern void stack_privilege( thread_t thread);
-
 void IOWorkLoop::launchThreadMain(void *self)
 {
-    register thread_t mythread = current_thread();
-
-    // Make sure that this thread always has a kernel stack
-    stack_privilege(mythread);
     thread_set_cont_arg((int) self);
     threadMainContinuation();
 }
@@ -112,7 +106,7 @@ IOWorkLoop::workLoop()
     IOWorkLoop *me = new IOWorkLoop;
 
     if (me && !me->init()) {
-        me->free();
+        me->release();
         return 0;
     }
 
@@ -376,8 +370,8 @@ void IOWorkLoop::wakeupGate(void *event, bool oneThread)
 }
 
 IOReturn IOWorkLoop::runAction(Action inAction, OSObject *target,
-                                  void *arg0 = 0, void *arg1 = 0,
-                                  void *arg2 = 0, void *arg3 = 0)
+                                  void *arg0, void *arg1,
+                                  void *arg2, void *arg3)
 {
     IOReturn res;
 

@@ -1,5 +1,5 @@
-/*	$FreeBSD: src/sys/crypto/des/des_setkey.c,v 1.1.2.3 2001/07/10 09:46:35 ume Exp $	*/
-/*	$KAME: des_setkey.c,v 1.6 2001/07/03 14:27:53 itojun Exp $	*/
+/*	$FreeBSD: src/sys/crypto/des/des_setkey.c,v 1.1.2.4 2002/03/26 10:12:25 ume Exp $	*/
+/*	$KAME: des_setkey.c,v 1.7 2001/09/10 04:03:58 itojun Exp $	*/
 
 /* crypto/des/set_key.c */
 /* Copyright (C) 1995-1996 Eric Young (eay@mincom.oz.au)
@@ -61,22 +61,18 @@
 #include <crypto/des/podd.h>
 #include <crypto/des/sk.h>
 
-static int check_parity __P((des_cblock (*)));
-
 int des_check_key=0;
 
-void des_set_odd_parity(key)
-des_cblock (*key);
-	{
+void des_set_odd_parity(des_cblock *key)
+{
 	int i;
 
 	for (i=0; i<DES_KEY_SZ; i++)
 		(*key)[i]=odd_parity[(*key)[i]];
-	}
+}
 
-static int check_parity(key)
-des_cblock (*key);
-	{
+int des_check_key_parity(des_cblock *key)
+{
 	int i;
 
 	for (i=0; i<DES_KEY_SZ; i++)
@@ -85,7 +81,7 @@ des_cblock (*key);
 			return(0);
 		}
 	return(1);
-	}
+}
 
 /* Weak and semi week keys as take from
  * %A D.W. Davies
@@ -101,8 +97,8 @@ static des_cblock weak_keys[NUM_WEAK_KEY]={
 	/* weak keys */
 	{0x01,0x01,0x01,0x01,0x01,0x01,0x01,0x01},
 	{0xFE,0xFE,0xFE,0xFE,0xFE,0xFE,0xFE,0xFE},
-	{0x1F,0x1F,0x1F,0x1F,0x1F,0x1F,0x1F,0x1F},
-	{0xE0,0xE0,0xE0,0xE0,0xE0,0xE0,0xE0,0xE0},
+	{0x1F,0x1F,0x1F,0x1F,0x0E,0x0E,0x0E,0x0E},
+	{0xE0,0xE0,0xE0,0xE0,0xF1,0xF1,0xF1,0xF1},
 	/* semi-weak keys */
 	{0x01,0xFE,0x01,0xFE,0x01,0xFE,0x01,0xFE},
 	{0xFE,0x01,0xFE,0x01,0xFE,0x01,0xFE,0x01},
@@ -117,22 +113,23 @@ static des_cblock weak_keys[NUM_WEAK_KEY]={
 	{0xE0,0xFE,0xE0,0xFE,0xF1,0xFE,0xF1,0xFE},
 	{0xFE,0xE0,0xFE,0xE0,0xFE,0xF1,0xFE,0xF1}};
 
-int des_is_weak_key(key)
-des_cblock (*key);
-	{
+int des_is_weak_key(des_cblock *key)
+{
 	int i;
 
 	for (i=0; i<NUM_WEAK_KEY; i++)
-		/* Added == 0 to comparision, I obviously don't run
+		/* Added == 0 to comparison, I obviously don't run
 		 * this section very often :-(, thanks to
 		 * engineering@MorningStar.Com for the fix
-		 * eay 93/06/29 */
-		if (bcmp(weak_keys[i],key,sizeof(*key)) == 0) return(1);
+		 * eay 93/06/29
+		 * Another problem, I was comparing only the first 4
+		 * bytes, 97/03/18 */
+		if (memcmp(weak_keys[i],key,sizeof(des_cblock)) == 0) return(1);
 	return(0);
-	}
+}
 
 /* NOW DEFINED IN des_local.h
- * See ecb_encrypt.c for a pseudo description of these macros.
+ * See ecb_encrypt.c for a pseudo description of these macros. 
  * #define PERM_OP(a,b,t,n,m) ((t)=((((a)>>(n))^(b))&(m)),\
  * 	(b)^=(t),\
  * 	(a)=((a)^((t)<<(n))))
@@ -141,49 +138,48 @@ des_cblock (*key);
 #define HPERM_OP(a,t,n,m) ((t)=((((a)<<(16-(n)))^(a))&(m)),\
 	(a)=(a)^(t)^(t>>(16-(n))))
 
+int des_set_key(des_cblock *key, des_key_schedule schedule)
+{
+	if (des_check_key)
+	{
+		return des_set_key_checked(key, schedule);
+	}
+	else
+	{
+		des_set_key_unchecked(key, schedule);
+		return 0;
+	}
+}
+
 /* return 0 if key parity is odd (correct),
  * return -1 if key parity error,
  * return -2 if illegal weak key.
  */
-int des_set_key(key, schedule)
-des_cblock (*key);
-des_key_schedule schedule;
-	{
+int des_set_key_checked(des_cblock *key, des_key_schedule schedule)
+{
+	if (!des_check_key_parity(key))
+		return(-1);
+	if (des_is_weak_key(key))
+		return(-2);
+	des_set_key_unchecked(key, schedule);
+	return 0;
+}
+
+void des_set_key_unchecked(des_cblock *key, des_key_schedule schedule)
+{
 	static int shifts2[16]={0,0,1,1,1,1,1,1,0,1,1,1,1,1,1,0};
-	register DES_LONG c,d,t,s;
-	register unsigned char *in;
+	register DES_LONG c,d,t,s,t2;
+	register const unsigned char *in;
 	register DES_LONG *k;
 	register int i;
 
-	if (des_check_key)
-		{
-		if (!check_parity(key))
-			return(-1);
-
-		if (des_is_weak_key(key))
-			return(-2);
-		}
-
-	k=(DES_LONG *)schedule;
-	in=(unsigned char *)key;
+	k = &schedule->ks.deslong[0];
+	in = &(*key)[0];
 
 	c2l(in,c);
 	c2l(in,d);
 
-	/* do PC1 in 60 simple operations */
-/*	PERM_OP(d,c,t,4,0x0f0f0f0fL);
-	HPERM_OP(c,t,-2, 0xcccc0000L);
-	HPERM_OP(c,t,-1, 0xaaaa0000L);
-	HPERM_OP(c,t, 8, 0x00ff0000L);
-	HPERM_OP(c,t,-1, 0xaaaa0000L);
-	HPERM_OP(d,t,-8, 0xff000000L);
-	HPERM_OP(d,t, 8, 0x00ff0000L);
-	HPERM_OP(d,t, 2, 0x33330000L);
-	d=((d&0x00aa00aaL)<<7L)|((d&0x55005500L)>>7L)|(d&0xaa55aa55L);
-	d=(d>>8)|((c&0xf0000000L)>>4);
-	c&=0x0fffffffL; */
-
-	/* I now do it in 47 simple operations :-)
+	/* do PC1 in 47 simple operations :-)
 	 * Thanks to John Fletcher (john_fletcher@lccmail.ocf.llnl.gov)
 	 * for the inspiration. :-) */
 	PERM_OP (d,c,t,4,0x0f0f0f0fL);
@@ -197,7 +193,7 @@ des_key_schedule schedule;
 	c&=0x0fffffffL;
 
 	for (i=0; i<ITERATIONS; i++)
-		{
+	{
 		if (shifts2[i])
 			{ c=((c>>2L)|(c<<26L)); d=((d>>2L)|(d<<26L)); }
 		else
@@ -205,30 +201,32 @@ des_key_schedule schedule;
 		c&=0x0fffffffL;
 		d&=0x0fffffffL;
 		/* could be a few less shifts but I am to lazy at this
-		 * point in time to investigate */
+	 	* point in time to investigate */
 		s=	des_skb[0][ (c    )&0x3f                ]|
-			des_skb[1][((c>> 6)&0x03)|((c>> 7L)&0x3c)]|
-			des_skb[2][((c>>13)&0x0f)|((c>>14L)&0x30)]|
-			des_skb[3][((c>>20)&0x01)|((c>>21L)&0x06) |
-						  ((c>>22L)&0x38)];
+			des_skb[1][((c>> 6L)&0x03)|((c>> 7L)&0x3c)]|
+			des_skb[2][((c>>13L)&0x0f)|((c>>14L)&0x30)]|
+			des_skb[3][((c>>20L)&0x01)|((c>>21L)&0x06) |
+						  	((c>>22L)&0x38)];
 		t=	des_skb[4][ (d    )&0x3f                ]|
 			des_skb[5][((d>> 7L)&0x03)|((d>> 8L)&0x3c)]|
 			des_skb[6][ (d>>15L)&0x3f                ]|
 			des_skb[7][((d>>21L)&0x0f)|((d>>22L)&0x30)];
 
 		/* table contained 0213 4657 */
-		*(k++)=((t<<16L)|(s&0x0000ffffL))&0xffffffffL;
-		s=     ((s>>16L)|(t&0xffff0000L));
-		
-		s=(s<<4L)|(s>>28L);
-		*(k++)=s&0xffffffffL;
-		}
-	return(0);
-	}
+		t2=((t<<16L)|(s&0x0000ffffL))&0xffffffffL;
+		*(k++)=ROTATE(t2,30)&0xffffffffL;
 
-int des_key_sched(key, schedule)
-des_cblock (*key);
-des_key_schedule schedule;
-	{
-	return(des_set_key(key,schedule));
+		t2=((s>>16L)|(t&0xffff0000L));
+		*(k++)=ROTATE(t2,26)&0xffffffffL;
 	}
+}
+
+int des_key_sched(des_cblock *key, des_key_schedule schedule)
+{
+	return(des_set_key(key,schedule));
+}
+
+void des_fixup_key_parity(des_cblock *key)
+{
+	des_set_odd_parity(key);
+}

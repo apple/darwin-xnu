@@ -70,6 +70,13 @@ COPYRIGHT_FILES = \
 %MACHDEP
 
 #
+# This rule insures that the subr_prof.c does NOT get compiled with
+# profiling. It implements mcount() and profiling it leads to recursion.
+#
+
+subr_prof.o_CFLAGS_RM = -pg
+
+#
 #  OBJSDEPS is the set of files (defined in the machine dependent
 #  template if necessary) which all objects depend on (such as an
 #  in-line assembler expansion filter)
@@ -84,7 +91,7 @@ LDOBJS = $(OBJS)
 $(COMPONENT).o: $(LDOBJS)
 	@echo "[ creating $(COMPONENT).o ]"
 	$(RM) $(RMFLAGS) vers.c
-	$(OBJROOT)/$(KERNEL_CONFIG)_$(ARCH_CONFIG)/$(COMPONENT)/newvers \
+	$(COMPOBJROOT)/newvers \
 	`$(CAT) ${VERSION_FILES}` ${COPYRIGHT_FILES}
 	${KCC} $(CFLAGS) $(INCLUDES) -c vers.c
 	@echo [ updating $(COMPONENT).o ${BSD_KERNEL_CONFIG} ]

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2002 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2003 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -79,6 +79,8 @@
 #include <sys/syslog.h>
 #include <sys/unistd.h>
 #include <sys/resourcevar.h>
+#include <sys/aio_kern.h>
+#include <sys/kern_audit.h>
 
 #include <sys/mount.h>
 
@@ -247,11 +249,14 @@ fcntl(p, uap, retval)
 	daddr_t	lbn, bn;
 	int devBlockSize = 0;
 
+	AUDIT_ARG(fd, uap->fd);
+	AUDIT_ARG(cmd, uap->cmd);
 	if ((u_int)fd >= fdp->fd_nfiles ||
 			(fp = fdp->fd_ofiles[fd]) == NULL ||
 			(fdp->fd_ofileflags[fd] & UF_RESERVED))
 		return (EBADF);
 	pop = &fdp->fd_ofileflags[fd];
+
 	switch (uap->cmd) {
 
 	case F_DUPFD:
@@ -325,6 +330,7 @@ fcntl(p, uap, retval)
 		if (fp->f_type != DTYPE_VNODE)
 			return (EBADF);
 		vp = (struct vnode *)fp->f_data;
+		AUDIT_ARG(vnpath, vp, ARG_VNODE1);
 		/* Copy in the lock structure */
 		error = copyin((caddr_t)uap->arg, (caddr_t)&fl,
 		    sizeof (fl));
@@ -358,6 +364,7 @@ fcntl(p, uap, retval)
 		if (fp->f_type != DTYPE_VNODE)
 			return (EBADF);
 		vp = (struct vnode *)fp->f_data;
+		AUDIT_ARG(vnpath, vp, ARG_VNODE1);
 		/* Copy in the lock structure */
 		error = copyin((caddr_t)uap->arg, (caddr_t)&fl,
 		    sizeof (fl));
@@ -510,6 +517,18 @@ fcntl(p, uap, retval)
 			return(error);
 		return (VOP_IOCTL(vp, 1, (caddr_t)&ra_struct, 0, fp->f_cred, p));
 
+	case F_CHKCLEAN:
+	        /*
+		 * used by regression test to determine if 
+		 * all the dirty pages (via write) have been cleaned
+		 * after a call to 'fsysnc'.
+		 */
+		if (fp->f_type != DTYPE_VNODE)
+			return (EBADF);
+		vp = (struct vnode *)fp->f_data;
+
+		return (VOP_IOCTL(vp, 5, 0, 0, fp->f_cred, p));
+
 	case F_READBOOTSTRAP:
 	case F_WRITEBOOTSTRAP:
 		if (fp->f_type != DTYPE_VNODE)
@@ -550,10 +569,12 @@ fcntl(p, uap, retval)
 		error = vn_lock(vp, LK_EXCLUSIVE|LK_RETRY, p);
 		if (error)
 			return (error);
-		if (VOP_OFFTOBLK(vp, fp->f_offset, &lbn))
-			panic("fcntl LOG2PHYS OFFTOBLK");
-		if (VOP_BLKTOOFF(vp, lbn, &offset))
-			panic("fcntl LOG2PHYS BLKTOOFF1");
+		error = VOP_OFFTOBLK(vp, fp->f_offset, &lbn);
+		if (error)
+			return (error);
+		error = VOP_BLKTOOFF(vp, lbn, &offset);
+		if (error)
+			return (error);
 		error = VOP_BMAP(vp, lbn, &devvp, &bn, 0);
 		VOP_DEVBLOCKSIZE(devvp, &devBlockSize);
 		VOP_UNLOCK(vp, 0, p);
@@ -568,6 +589,32 @@ fcntl(p, uap, retval)
 		}
 		return (error);
 
+	case F_GETPATH: {
+		char *pathbuf;
+		int len;
+		extern int vn_getpath(struct vnode *vp, char *pathbuf, int *len);
+
+		if (fp->f_type != DTYPE_VNODE)
+			return (EBADF);
+		vp = (struct vnode *)fp->f_data;
+
+		len = MAXPATHLEN;
+		MALLOC(pathbuf, char *, len, M_TEMP, M_WAITOK);
+		error = vn_getpath(vp, pathbuf, &len);
+		if (error == 0)
+			error = copyout((caddr_t)pathbuf, (caddr_t)uap->arg, len);
+		FREE(pathbuf, M_TEMP);
+		return error;
+	}
+
+	case F_FULLFSYNC: {
+		if (fp->f_type != DTYPE_VNODE)
+			return (EBADF);
+		vp = (struct vnode *)fp->f_data;
+
+		return (VOP_IOCTL(vp, 6, (caddr_t)NULL, 0, fp->f_cred, p));
+	}
+	    
 	default:
 		return (EINVAL);
 	}
@@ -620,6 +667,16 @@ close(p, uap, retval)
 			(fp = fdp->fd_ofiles[fd]) == NULL ||
 			(fdp->fd_ofileflags[fd] & UF_RESERVED))
 		return (EBADF);
+
+	/* Keep people from using the filedesc while we are closing it */
+	fdp->fd_ofileflags[fd] |= UF_RESERVED;
+		
+	/* cancel all async IO requests that can be cancelled. */
+	_aio_close( p, fd );
+
+        if (fd < fdp->fd_knlistsize)
+		knote_fdclose(p, fd);
+
 	_fdrelse(fdp, fd);
 	return (closef(fp, p));
 }
@@ -644,6 +701,7 @@ fstat(p, uap, retval)
 	struct stat ub;
 	int error;
 
+	AUDIT_ARG(fd, uap->fd);
 	if ((u_int)fd >= fdp->fd_nfiles ||
 			(fp = fdp->fd_ofiles[fd]) == NULL ||
 			(fdp->fd_ofileflags[fd] & UF_RESERVED))
@@ -652,6 +710,9 @@ fstat(p, uap, retval)
 
 	case DTYPE_VNODE:
 		error = vn_stat((struct vnode *)fp->f_data, &ub, p);
+		if (error == 0) {
+			AUDIT_ARG(vnpath, (struct vnode *)fp->f_data, ARG_VNODE1);
+		}
 		break;
 
 	case DTYPE_SOCKET:
@@ -661,6 +722,11 @@ fstat(p, uap, retval)
 	case DTYPE_PSXSHM:
 		error = pshm_stat((void *)fp->f_data, &ub);
 		break;
+
+	case DTYPE_KQUEUE:
+	  error = kqueue_stat(fp, &ub, p);
+	  break;
+
 	default:
 		panic("fstat");
 		/*NOTREACHED*/
@@ -736,6 +802,7 @@ fpathconf(p, uap, retval)
 	struct file *fp;
 	struct vnode *vp;
 
+	AUDIT_ARG(fd, uap->fd);
 	if ((u_int)fd >= fdp->fd_nfiles ||
 			(fp = fdp->fd_ofiles[fd]) == NULL ||
 			(fdp->fd_ofileflags[fd] & UF_RESERVED))
@@ -750,6 +817,8 @@ fpathconf(p, uap, retval)
 
 	case DTYPE_VNODE:
 		vp = (struct vnode *)fp->f_data;
+		AUDIT_ARG(vnpath, vp, ARG_VNODE1);
+
 		return (VOP_PATHCONF(vp, uap->name, retval));
 
 	default:
@@ -923,11 +992,6 @@ falloc(p, resultfp, resultfd)
 	nfiles++;
 	MALLOC_ZONE(fp, struct file *, sizeof(struct file), M_FILE, M_WAITOK);
 	bzero(fp, sizeof(struct file));
-	if (fq = p->p_fd->fd_ofiles[0]) {
-		LIST_INSERT_AFTER(fq, fp, f_list);
-	} else {
-		LIST_INSERT_HEAD(&filehead, fp, f_list);
-	}
 	p->p_fd->fd_ofiles[i] = fp;
 	fp->f_count = 1;
 	fp->f_cred = p->p_ucred;
@@ -936,6 +1000,11 @@ falloc(p, resultfp, resultfd)
 		*resultfp = fp;
 	if (resultfd)
 		*resultfd = i;
+	if (fq = p->p_fd->fd_ofiles[0]) {
+		LIST_INSERT_AFTER(fq, fp, f_list);
+	} else {
+		LIST_INSERT_HEAD(&filehead, fp, f_list);
+	}
 	return (0);
 }
 
@@ -975,6 +1044,9 @@ fdexec(p)
 	while (i >= 0) {
 		if ((*flags & (UF_RESERVED|UF_EXCLOSE)) == UF_EXCLOSE) {
 			register struct file *fp = *fpp;
+
+                        if (i < fdp->fd_knlistsize)
+                                knote_fdclose(p, i);
 
 			*fpp = NULL; *flags = 0;
 			if (i == fdp->fd_lastfile && i > 0)
@@ -1037,6 +1109,26 @@ fdcopy(p)
 		(void) memcpy(newfdp->fd_ofileflags, fdp->fd_ofileflags,
 					i * sizeof *fdp->fd_ofileflags);
 
+		/*
+		 * kq descriptors cannot be copied.
+		 */
+		if (newfdp->fd_knlistsize != -1) {
+			fpp = &newfdp->fd_ofiles[newfdp->fd_lastfile];
+			for (i = newfdp->fd_lastfile; i >= 0; i--, fpp--) {
+				if (*fpp != NULL && (*fpp)->f_type == DTYPE_KQUEUE) {
+					*fpp = NULL;
+					if (i < newfdp->fd_freefile)
+						newfdp->fd_freefile = i;
+				}
+				if (*fpp == NULL && i == newfdp->fd_lastfile && i > 0)
+					newfdp->fd_lastfile--;
+			}
+			newfdp->fd_knlist = NULL;
+			newfdp->fd_knlistsize = -1;
+			newfdp->fd_knhash = NULL;
+			newfdp->fd_knhashmask = 0;
+		}
+
 		fpp = newfdp->fd_ofiles;
 		flags = newfdp->fd_ofileflags;
 		for (i = newfdp->fd_lastfile; i-- >= 0; fpp++, flags++)
@@ -1060,31 +1152,69 @@ fdfree(p)
 	struct proc *p;
 {
 	struct filedesc *fdp;
-	struct file **fpp;
+	struct file *fp;
 	int i;
 	struct vnode *tvp;
 
+	/* Certain daemons might not have file descriptors */
 	if ((fdp = p->p_fd) == NULL)
 		return;
+
 	if (--fdp->fd_refcnt > 0)
 		return;
-	p->p_fd = NULL;
+
+	/* Last reference: the structure can't change out from under us */
 	if (fdp->fd_nfiles > 0) {
-		fpp = fdp->fd_ofiles;
-		for (i = fdp->fd_lastfile; i-- >= 0; fpp++)
-			if (*fpp)
-				(void) closef(*fpp, p);
+		for (i = fdp->fd_lastfile; i >= 0; i--)
+#if 1	/* WORKAROUND */
+			/*
+			 * Merlot: need to remove the bogus f_data check
+			 * from the following "if" statement.  It's there
+			 * because of the network/kernel funnel race on a
+			 * close of a socket vs. fdfree on exit.  See
+			 * Radar rdar://problem/3365650 for details, but
+			 * the sort version is the commment before the "if"
+			 * above is wrong under certain circumstances.
+			 *
+			 * We have to do this twice, in case knote_fdclose()
+			 * results in a block.
+			 *
+			 * This works because an fdfree() will set all fields
+			 * in the struct file to -1.
+			 */
+			if ((fp = fdp->fd_ofiles[i]) != NULL &&
+				fp->f_data != (caddr_t)-1) {
+				if (i < fdp->fd_knlistsize)
+					knote_fdclose(p, i);
+				if (fp->f_data != (caddr_t)-1)
+					(void) closef(fp, p);
+			}
+#else	/* !WORKAROUND */
+			if ((fp = fdp->fd_ofiles[i]) != NULL) {
+				if (i < fdp->fd_knlistsize)
+					knote_fdclose(p, i);
+				(void) closef(fp, p);
+			}
+#endif	/* !WORKAROUND */
 		FREE_ZONE(fdp->fd_ofiles,
 				fdp->fd_nfiles * OFILESIZE, M_OFILETABL);
 	}
+
 	tvp = fdp->fd_cdir;
 	fdp->fd_cdir = NULL;
 	vrele(tvp);
+
 	if (fdp->fd_rdir) {
 		tvp = fdp->fd_rdir;
 		fdp->fd_rdir = NULL;
 		vrele(tvp);
 	}
+
+	if (fdp->fd_knlist)
+		FREE(fdp->fd_knlist, M_KQUEUE);
+	if (fdp->fd_knhash)
+		FREE(fdp->fd_knhash, M_KQUEUE);
+
 	FREE_ZONE(fdp, sizeof *fdp, M_FILEDESC);
 }
 
@@ -1175,6 +1305,7 @@ flock(p, uap, retval)
 	struct vnode *vp;
 	struct flock lf;
 
+	AUDIT_ARG(fd, uap->fd);
 	if ((u_int)fd >= fdp->fd_nfiles ||
 			(fp = fdp->fd_ofiles[fd]) == NULL ||
 			(fdp->fd_ofileflags[fd] & UF_RESERVED))
@@ -1182,6 +1313,7 @@ flock(p, uap, retval)
 	if (fp->f_type != DTYPE_VNODE)
 		return (EOPNOTSUPP);
 	vp = (struct vnode *)fp->f_data;
+	AUDIT_ARG(vnpath, vp, ARG_VNODE1);
 	lf.l_whence = SEEK_SET;
 	lf.l_start = 0;
 	lf.l_len = 0;

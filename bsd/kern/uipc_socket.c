@@ -62,12 +62,15 @@
 
 #include <sys/param.h>
 #include <sys/systm.h>
+#include <sys/filedesc.h>
 #include <sys/proc.h>
+#include <sys/file.h>
 #include <sys/fcntl.h>
 #include <sys/malloc.h>
 #include <sys/mbuf.h>
 #include <sys/domain.h>
 #include <sys/kernel.h>
+#include <sys/event.h>
 #include <sys/poll.h>
 #include <sys/protosw.h>
 #include <sys/socket.h>
@@ -98,6 +101,19 @@ extern int		get_tcp_str_size();
 
 #include <machine/limits.h>
 
+static void     filt_sordetach(struct knote *kn);
+static int      filt_soread(struct knote *kn, long hint);
+static void     filt_sowdetach(struct knote *kn);
+static int      filt_sowrite(struct knote *kn, long hint);
+static int      filt_solisten(struct knote *kn, long hint);
+
+static struct filterops solisten_filtops =
+  { 1, NULL, filt_sordetach, filt_solisten };
+static struct filterops soread_filtops =
+  { 1, NULL, filt_sordetach, filt_soread };
+static struct filterops sowrite_filtops =
+  { 1, NULL, filt_sowdetach, filt_sowrite };
+
 int socket_debug = 0;
 int socket_zone = M_SOCKET;
 so_gen_t	so_gencnt;	/* generation count for sockets */
@@ -123,7 +139,10 @@ SYSCTL_INT(_kern_ipc, KIPC_SOMAXCONN, somaxconn, CTLFLAG_RW, &somaxconn,
 /* Should we get a maximum also ??? */
 static int sosendmaxchain = 65536;
 static int sosendminchain = 16384;
+static int sorecvmincopy  = 16384;
 SYSCTL_INT(_kern_ipc, OID_AUTO, sosendminchain, CTLFLAG_RW, &sosendminchain,
+           0, "");
+SYSCTL_INT(_kern_ipc, OID_AUTO, sorecvmincopy, CTLFLAG_RW, &sorecvmincopy,
            0, "");
 
 void  so_cache_timer();
@@ -366,7 +385,9 @@ socreate(dom, aso, type, proto)
 	register struct protosw *prp;
 	register struct socket *so;
 	register int error = 0;
-
+#if TCPDEBUG
+	extern int tcpconsdebug;
+#endif
 	if (proto)
 		prp = pffindproto(dom, proto, type);
 	else
@@ -414,6 +435,11 @@ socreate(dom, aso, type, proto)
 #endif
 		error = (*prp->pr_usrreqs->pru_attach)(so, proto, p);
 	if (error) {
+		/* 
+		 * Warning: 
+		 * If so_pcb is not zero, the socket will be leaked, 
+		 * so protocol attachment handler must be coded carefuly 
+		 */
 		so->so_state |= SS_NOFDREF;
 		sofree(so);
 		return (error);
@@ -422,7 +448,12 @@ socreate(dom, aso, type, proto)
 	prp->pr_domain->dom_refs++;
 	so->so_rcv.sb_so = so->so_snd.sb_so = so;
 	TAILQ_INIT(&so->so_evlist);
+#if TCPDEBUG
+	if (tcpconsdebug == 2)
+		so->so_options |= SO_DEBUG;
 #endif
+#endif
+
 	*aso = so;
 	return (0);
 }
@@ -968,7 +999,7 @@ restart:
 		if ((atomic && resid > so->so_snd.sb_hiwat) ||
 		    clen > so->so_snd.sb_hiwat)
 			snderr(EMSGSIZE);
-		if (space < resid + clen && uio &&
+		if (space < resid + clen && 
 		    (atomic || space < so->so_snd.sb_lowat || space < clen)) {
 			if (so->so_state & SS_NBIO)
 				snderr(EWOULDBLOCK);
@@ -1209,15 +1240,20 @@ soreceive(so, psa, uio, mp0, controlp, flagsp)
 	struct mbuf **controlp;
 	int *flagsp;
 {
-	register struct mbuf *m, **mp;
-	register struct mbuf *free_list, *ml;
+        register struct mbuf *m, **mp, *ml;
 	register int flags, len, error, s, offset;
 	struct protosw *pr = so->so_proto;
 	struct mbuf *nextrecord;
 	int moff, type = 0;
 	int orig_resid = uio->uio_resid;
 	struct kextcb *kp;
-	
+	volatile struct mbuf *free_list;
+	volatile int delayed_copy_len;
+	int can_delay;
+	int need_event;
+	struct proc *p = current_proc();
+
+
 	KERNEL_DEBUG(DBG_FNC_SORECEIVE | DBG_FUNC_START,
 		     so,
 		     uio->uio_resid,
@@ -1231,8 +1267,10 @@ soreceive(so, psa, uio, mp0, controlp, flagsp)
 			error = (*kp->e_soif->sf_soreceive)(so, psa, &uio,
 							    mp0, controlp,
 							    flagsp, kp);
-			if (error)
+			if (error) {
+				KERNEL_DEBUG(DBG_FNC_SORECEIVE | DBG_FUNC_END, error,0,0,0,0);
 				return((error == EJUSTRETURN) ? 0 : error);
+			}
 		}
 		kp = kp->e_next;
 	}
@@ -1256,8 +1294,10 @@ soreceive(so, psa, uio, mp0, controlp, flagsp)
              (so->so_options & SO_OOBINLINE) == 0 &&
              (so->so_oobmark || (so->so_state & SS_RCVATMARK)))) {
 		m = m_get(M_WAIT, MT_DATA);
-		if (m == NULL)
+		if (m == NULL) {
+			KERNEL_DEBUG(DBG_FNC_SORECEIVE | DBG_FUNC_END, ENOBUFS,0,0,0,0);
 			return (ENOBUFS);
+		}
 		error = (*pr->pr_usrreqs->pru_rcvoob)(so, m, flags & MSG_PEEK);
 		if (error)
 			goto bad;
@@ -1292,6 +1332,9 @@ nooob:
 	if (so->so_state & SS_ISCONFIRMING && uio->uio_resid)
 		(*pr->pr_usrreqs->pru_rcvd)(so, 0);
 
+
+	free_list = (struct mbuf *)0;
+	delayed_copy_len = 0;
 restart:
 	error = sblock(&so->so_rcv, SBLOCKWAIT(flags));
 	if (error) {
@@ -1314,9 +1357,10 @@ restart:
 	 */
 	if (m == 0 || (((flags & MSG_DONTWAIT) == 0 &&
 	    so->so_rcv.sb_cc < uio->uio_resid) &&
-	    (so->so_rcv.sb_cc < so->so_rcv.sb_lowat ||
+           (so->so_rcv.sb_cc < so->so_rcv.sb_lowat ||
 	    ((flags & MSG_WAITALL) && uio->uio_resid <= so->so_rcv.sb_hiwat)) &&
 	    m->m_nextpkt == 0 && (pr->pr_flags & PR_ATOMIC) == 0)) {
+
 		KASSERT(m != 0 || !so->so_rcv.sb_cc, ("receive 1"));
 		if (so->so_error) {
 			if (m)
@@ -1351,6 +1395,7 @@ restart:
 		sbunlock(&so->so_rcv);
 		if (socket_debug)
 		    printf("Waiting for socket data\n");
+
 		error = sbwait(&so->so_rcv);
 		if (socket_debug)
 		    printf("SORECEIVE - sbwait returned %d\n", error);
@@ -1365,7 +1410,16 @@ dontblock:
 #ifndef __APPLE__
 	if (uio->uio_procp)
 		uio->uio_procp->p_stats->p_ru.ru_msgrcv++;
-#endif
+#else	/* __APPLE__ */
+	/*
+	 * 2207985
+	 * This should be uio->uio-procp; however, some callers of this
+	 * function use auto variables with stack garbage, and fail to
+	 * fill out the uio structure properly.
+	 */
+	if (p)
+		p->p_stats->p_ru.ru_msgrcv++;
+#endif	/* __APPLE__ */
 	nextrecord = m->m_nextpkt;
 	if ((pr->pr_flags & PR_ADDR) && m->m_type == MT_SONAME) {
 		KASSERT(m->m_type == MT_SONAME, ("receive 1a"));
@@ -1417,10 +1471,15 @@ dontblock:
 	moff = 0;
 	offset = 0;
 
-	free_list = m;
-	ml = (struct mbuf *)0;
+	if (!(flags & MSG_PEEK) && uio->uio_resid > sorecvmincopy)
+	        can_delay = 1;
+	else
+	        can_delay = 0;
 
-	while (m && uio->uio_resid > 0 && error == 0) {
+	need_event = 0;
+
+
+	while (m && (uio->uio_resid - delayed_copy_len) > 0 && error == 0) {
 		if (m->m_type == MT_OOBDATA) {
 			if (type != MT_OOBDATA)
 				break;
@@ -1447,7 +1506,7 @@ dontblock:
 		}
 #endif
 		so->so_state &= ~SS_RCVATMARK;
-		len = uio->uio_resid;
+		len = uio->uio_resid - delayed_copy_len;
 		if (so->so_oobmark && len > so->so_oobmark - offset)
 			len = so->so_oobmark - offset;
 		if (len > m->m_len - moff)
@@ -1461,13 +1520,48 @@ dontblock:
 		 * block interrupts again.
 		 */
 		if (mp == 0) {
-			splx(s);
-			error = uiomove(mtod(m, caddr_t) + moff, (int)len, uio);
-			s = splnet();
-			if (error)
-				goto release;
+			if (can_delay && len == m->m_len) {
+			        /*
+				 * only delay the copy if we're consuming the
+				 * mbuf and we're NOT in MSG_PEEK mode
+				 * and we have enough data to make it worthwile
+				 * to drop and retake the funnel... can_delay
+				 * reflects the state of the 2 latter constraints
+				 * moff should always be zero in these cases
+				 */
+			        delayed_copy_len += len;
+			} else {
+			        splx(s);
+
+  			        if (delayed_copy_len) {
+				        error = sodelayed_copy(uio, &free_list, &delayed_copy_len);
+
+					if (error) {
+					        s = splnet();
+						goto release;
+					}
+					if (m != so->so_rcv.sb_mb) {
+					        /*
+						 * can only get here if MSG_PEEK is not set
+						 * therefore, m should point at the head of the rcv queue...
+						 * if it doesn't, it means something drastically changed
+						 * while we were out from behind the funnel in sodelayed_copy...
+						 * perhaps a RST on the stream... in any event, the stream has
+						 * been interrupted... it's probably best just to return 
+						 * whatever data we've moved and let the caller sort it out...
+						 */
+					        break;
+					}
+				}
+				error = uiomove(mtod(m, caddr_t) + moff, (int)len, uio);
+
+				s = splnet();
+				if (error)
+				        goto release;
+			}
 		} else
 			uio->uio_resid -= len;
+
 		if (len == m->m_len - moff) {
 			if (m->m_flags & M_EOR)
 				flags |= MSG_EOR;
@@ -1477,6 +1571,7 @@ dontblock:
 			} else {
 				nextrecord = m->m_nextpkt;
 				sbfree(&so->so_rcv, m);
+
 				if (mp) {
 					*mp = m;
 					mp = &m->m_next;
@@ -1484,7 +1579,9 @@ dontblock:
 					*mp = (struct mbuf *)0;
 				} else {
 				        m->m_nextpkt = 0;
-				        if (ml != 0) 
+					if (free_list == NULL)
+					    free_list = m;
+				        else
                                             ml->m_next = m;
                                         ml = m;
 					so->so_rcv.sb_mb = m = m->m_next;
@@ -1509,7 +1606,11 @@ dontblock:
 				so->so_oobmark -= len;
 				if (so->so_oobmark == 0) {
 				    so->so_state |= SS_RCVATMARK;
-			  	    postevent(so, 0, EV_OOB);
+				    /*
+				     * delay posting the actual event until after
+				     * any delayed copy processing has finished
+				     */
+				    need_event = 1;
 				    break;
 				}
 			} else {
@@ -1521,37 +1622,48 @@ dontblock:
 		if (flags & MSG_EOR)
 			break;
 		/*
-		 * If the MSG_WAITALL flag is set (for non-atomic socket),
+		 * If the MSG_WAITALL or MSG_WAITSTREAM flag is set (for non-atomic socket),
 		 * we must not quit until "uio->uio_resid == 0" or an error
 		 * termination.  If a signal/timeout occurs, return
 		 * with a short count but without error.
 		 * Keep sockbuf locked against other readers.
 		 */
-		while (flags & MSG_WAITALL && m == 0 && uio->uio_resid > 0 &&
+		while (flags & (MSG_WAITALL|MSG_WAITSTREAM) && m == 0 && (uio->uio_resid - delayed_copy_len) > 0 &&
 		    !sosendallatonce(so) && !nextrecord) {
 			if (so->so_error || so->so_state & SS_CANTRCVMORE)
-				break;
+			        goto release;
 
-			if (ml) {
-				m_freem_list(free_list);
+		        if (pr->pr_flags & PR_WANTRCVD && so->so_pcb)
+			        (*pr->pr_usrreqs->pru_rcvd)(so, flags);
+			if (sbwait(&so->so_rcv)) {
+			        error = 0;
+				goto release;
 			}
-			error = sbwait(&so->so_rcv);
-			if (error) {
-				sbunlock(&so->so_rcv);
-				splx(s);
-				KERNEL_DEBUG(DBG_FNC_SORECEIVE | DBG_FUNC_END, 0,0,0,0,0);
-				return (0);
+			/*
+			 * have to wait until after we get back from the sbwait to do the copy because
+			 * we will drop the funnel if we have enough data that has been delayed... by dropping
+			 * the funnel we open up a window allowing the netisr thread to process the incoming packets
+			 * and to change the state of this socket... we're issuing the sbwait because
+			 * the socket is empty and we're expecting the netisr thread to wake us up when more
+			 * packets arrive... if we allow that processing to happen and then sbwait, we
+			 * could stall forever with packets sitting in the socket if no further packets
+			 * arrive from the remote side.
+			 *
+			 * we want to copy before we've collected all the data to satisfy this request to 
+			 * allow the copy to overlap the incoming packet processing on an MP system
+			 */
+			if (delayed_copy_len > sorecvmincopy && (delayed_copy_len > (so->so_rcv.sb_hiwat / 2))) {
+
+			        error = sodelayed_copy(uio, &free_list, &delayed_copy_len);
+
+				if (error)
+				        goto release;
 			}
 			m = so->so_rcv.sb_mb;
 			if (m) {
 				nextrecord = m->m_nextpkt;
-				free_list = m;
 			}
-			ml = (struct mbuf *)0;
 		}
-	}
-	if (ml) {
-	        m_freem_list(free_list);
 	}
 
 	if (m && pr->pr_flags & PR_ATOMIC) {
@@ -1576,6 +1688,19 @@ dontblock:
 #ifdef __APPLE__
 	if ((so->so_options & SO_WANTMORE) && so->so_rcv.sb_cc > 0)
 		flags |= MSG_HAVEMORE;
+
+	if (delayed_copy_len) {
+		error = sodelayed_copy(uio, &free_list, &delayed_copy_len);
+
+		if (error)
+		        goto release;
+	}
+	if (free_list) {
+	        m_freem_list((struct mbuf *)free_list);
+		free_list = (struct mbuf *)0;
+	}
+	if (need_event)
+	        postevent(so, 0, EV_OOB);
 #endif
 	if (orig_resid == uio->uio_resid && orig_resid &&
 	    (flags & MSG_EOR) == 0 && (so->so_state & SS_CANTRCVMORE) == 0) {
@@ -1587,6 +1712,12 @@ dontblock:
 	if (flagsp)
 		*flagsp |= flags;
 release:
+	if (delayed_copy_len) {
+	        error = sodelayed_copy(uio, &free_list, &delayed_copy_len);
+	}
+	if (free_list) {
+	        m_freem_list((struct mbuf *)free_list);
+	}
 	sbunlock(&so->so_rcv);
 	splx(s);
 
@@ -1599,6 +1730,38 @@ release:
 
 	return (error);
 }
+
+
+int sodelayed_copy(struct uio *uio, struct mbuf **free_list, int *resid)
+{
+        int         error  = 0;
+        boolean_t   dropped_funnel = FALSE;
+	struct mbuf *m;
+
+	m = *free_list;
+
+	if (*resid >= sorecvmincopy) {
+		dropped_funnel = TRUE;
+
+	        (void)thread_funnel_set(network_flock, FALSE);
+	}
+        while (m && error == 0) {
+
+	        error = uiomove(mtod(m, caddr_t), (int)m->m_len, uio);
+
+		m = m->m_next;
+	}
+	m_freem_list(*free_list);
+
+	*free_list = (struct mbuf *)NULL;
+	*resid = 0;
+
+	if (dropped_funnel == TRUE)
+	        (void)thread_funnel_set(network_flock, TRUE);
+
+	return (error);
+}
+
 
 int
 soshutdown(so, how)
@@ -1615,8 +1778,10 @@ soshutdown(so, how)
 	while (kp) {
 		if (kp->e_soif && kp->e_soif->sf_soshutdown) {
 			ret = (*kp->e_soif->sf_soshutdown)(so, how, kp);
-			if (ret)
+			if (ret) {
+	    			KERNEL_DEBUG(DBG_FNC_SOSHUTDOWN | DBG_FUNC_END, 0,0,0,0,0);
 				return((ret == EJUSTRETURN) ? 0 : ret);
+			}
 		}
 		kp = kp->e_next;
 	}
@@ -1665,12 +1830,10 @@ sorflush(so)
 #endif
 	asb = *sb;
 	bzero((caddr_t)sb, sizeof (*sb));
-#ifndef __APPLE__
 	if (asb.sb_flags & SB_KNOTE) {
 		sb->sb_sel.si_note = asb.sb_sel.si_note;
 		sb->sb_flags = SB_KNOTE;
 	}
-#endif
 	splx(s);
 	if (pr->pr_flags & PR_RIGHTS && pr->pr_domain->dom_dispose)
 		(*pr->pr_domain->dom_dispose)(asb.sb_mb);
@@ -1887,6 +2050,18 @@ sosetopt(so, sopt)
 			
 			break;
 
+		case SO_NOADDRERR:
+                        error = sooptcopyin(sopt, &optval, sizeof optval,
+                                            sizeof optval);
+                        if (error)
+                                goto bad;
+                        if (optval)
+                                so->so_flags |= SOF_NOADDRAVAIL;
+                        else
+                                so->so_flags &= ~SOF_NOADDRAVAIL;
+			
+			break;
+
 		default:
 			error = ENOPROTOOPT;
 			break;
@@ -2058,6 +2233,10 @@ integer:
 
                 case SO_NOSIGPIPE:
                         optval = (so->so_flags & SOF_NOSIGPIPE);
+                        goto integer;
+
+		case SO_NOADDRERR:
+                        optval = (so->so_flags & SOF_NOADDRAVAIL);
                         goto integer;
 
 		default:
@@ -2297,3 +2476,115 @@ sopoll(struct socket *so, int events, struct ucred *cred, void * wql)
 	splx(s);
 	return (revents);
 }
+
+
+int
+soo_kqfilter(struct file *fp, struct knote *kn, struct proc *p)
+{
+	struct socket *so = (struct socket *)kn->kn_fp->f_data;
+	struct sockbuf *sb;
+	int s;
+
+	switch (kn->kn_filter) {
+	case EVFILT_READ:
+		if (so->so_options & SO_ACCEPTCONN)
+			kn->kn_fop = &solisten_filtops;
+		else
+			kn->kn_fop = &soread_filtops;
+		sb = &so->so_rcv;
+		break;
+	case EVFILT_WRITE:
+		kn->kn_fop = &sowrite_filtops;
+		sb = &so->so_snd;
+		break;
+	default:
+		return (1);
+	}
+
+	if (sb->sb_sel.si_flags & SI_INITED) 
+	  return (1);
+
+	s = splnet();
+	if (KNOTE_ATTACH(&sb->sb_sel.si_note, kn))
+		sb->sb_flags |= SB_KNOTE;
+	splx(s);
+	return (0);
+}
+
+static void
+filt_sordetach(struct knote *kn)
+{
+	struct socket *so = (struct socket *)kn->kn_fp->f_data;
+	int s = splnet();
+
+	if (so->so_rcv.sb_flags & SB_KNOTE &&
+		!(so->so_rcv.sb_sel.si_flags & SI_INITED))
+		if (KNOTE_DETACH(&so->so_rcv.sb_sel.si_note, kn))
+			so->so_rcv.sb_flags &= ~SB_KNOTE;
+	splx(s);
+}
+
+/*ARGSUSED*/
+static int
+filt_soread(struct knote *kn, long hint)
+{
+	struct socket *so = (struct socket *)kn->kn_fp->f_data;
+
+	kn->kn_data = so->so_rcv.sb_cc;
+	if (so->so_state & SS_CANTRCVMORE) {
+		kn->kn_flags |= EV_EOF; 
+		kn->kn_fflags = so->so_error;
+		return (1);
+	}
+	if (so->so_error)	/* temporary udp error */
+		return (1);
+	if (kn->kn_sfflags & NOTE_LOWAT)
+		return (kn->kn_data >= kn->kn_sdata);
+	return (kn->kn_data >= so->so_rcv.sb_lowat);
+}
+
+static void
+filt_sowdetach(struct knote *kn)
+{
+	struct socket *so = (struct socket *)kn->kn_fp->f_data;
+	int s = splnet();
+
+	if(so->so_snd.sb_flags & SB_KNOTE &&
+	   !(so->so_snd.sb_sel.si_flags & SI_INITED))
+		if (KNOTE_DETACH(&so->so_snd.sb_sel.si_note, kn))
+			so->so_snd.sb_flags &= ~SB_KNOTE;
+	splx(s);
+}
+
+/*ARGSUSED*/
+static int
+filt_sowrite(struct knote *kn, long hint)
+{
+	struct socket *so = (struct socket *)kn->kn_fp->f_data;
+
+	kn->kn_data = sbspace(&so->so_snd);
+	if (so->so_state & SS_CANTSENDMORE) {
+		kn->kn_flags |= EV_EOF; 
+		kn->kn_fflags = so->so_error;
+		return (1);
+	}
+	if (so->so_error)	/* temporary udp error */
+		return (1);
+	if (((so->so_state & SS_ISCONNECTED) == 0) &&
+	    (so->so_proto->pr_flags & PR_CONNREQUIRED))
+		return (0);
+	if (kn->kn_sfflags & NOTE_LOWAT)
+		return (kn->kn_data >= kn->kn_sdata);
+	return (kn->kn_data >= so->so_snd.sb_lowat);
+}
+
+/*ARGSUSED*/
+static int
+filt_solisten(struct knote *kn, long hint)
+{
+	struct socket *so = (struct socket *)kn->kn_fp->f_data;
+
+	kn->kn_data = so->so_qlen;
+	return (! TAILQ_EMPTY(&so->so_comp));
+}
+

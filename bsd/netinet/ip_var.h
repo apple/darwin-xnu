@@ -172,8 +172,9 @@ struct ip_linklocal_stat {
 /* flags passed to ip_output as last parameter */
 #define	IP_FORWARDING		0x1		/* most of ip header exists */
 #define	IP_RAWOUTPUT		0x2		/* raw ip header exists */
-#define	IP_ROUTETOIF		SO_DONTROUTE	/* bypass routing tables */
-#define	IP_ALLOWBROADCAST	SO_BROADCAST	/* can send broadcast packets */
+#define	IP_NOIPSEC			0x4		/* No IPSec processing */
+#define	IP_ROUTETOIF		SO_DONTROUTE	/* bypass routing tables (0x0010) */
+#define	IP_ALLOWBROADCAST	SO_BROADCAST	/* can send broadcast packets (0x0020) */
 
 struct ip;
 struct inpcb;

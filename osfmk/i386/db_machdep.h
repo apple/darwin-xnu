@@ -119,13 +119,9 @@ int db_inst_store(unsigned long);
 
 /*
  * Given pointer to i386_saved_state, determine if it represents
- * a thread executing a) in user space, b) in the kernel, or c)
- * in a kernel-loaded task.  Return true for cases a) and c).
+ * a thread executing in user space.
  */
-#define IS_USER_TRAP(regs, etext)	((((regs)->cs & 3) != 0) || \
-	(current_act() && 					\
-		current_act()->kernel_loaded && 		\
-		((char *)(regs)->eip > (etext))))
+#define IS_USER_TRAP(regs, etext)	(((regs)->cs & 3) != 0)
 
 extern boolean_t	db_check_access(
 				vm_offset_t	addr,

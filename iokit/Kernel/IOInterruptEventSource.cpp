@@ -75,9 +75,9 @@ OSMetaClassDefineReservedUnused(IOInterruptEventSource, 6);
 OSMetaClassDefineReservedUnused(IOInterruptEventSource, 7);
 
 bool IOInterruptEventSource::init(OSObject *inOwner,
-				  Action inAction = 0,
-				  IOService *inProvider = 0,
-				  int inIntIndex = 0)
+				  Action inAction,
+				  IOService *inProvider,
+				  int inIntIndex)
 {
     bool res = true;
 
@@ -126,7 +126,7 @@ IOInterruptEventSource::interruptEventSource(OSObject *inOwner,
     IOInterruptEventSource *me = new IOInterruptEventSource;
 
     if (me && !me->init(inOwner, inAction, inProvider, inIntIndex)) {
-        me->free();
+        me->release();
         return 0;
     }
 

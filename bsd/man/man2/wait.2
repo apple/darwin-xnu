@@ -158,7 +158,7 @@ One of the first three macros will evaluate to a non-zero (true) value:
 True if the process terminated normally by a call to
 .Xr _exit 2
 or
-.Xr exit 2 .
+.Xr exit 3 .
 .It Fn WIFSIGNALED status
 True if the process terminated due to receipt of a signal.
 .It Fn WIFSTOPPED status
@@ -180,7 +180,7 @@ is true, evaluates to the low-order 8 bits
 of the argument passed to
 .Xr _exit 2
 or
-.Xr exit 2
+.Xr exit 3
 by the child.
 .It Fn WTERMSIG status
 If
@@ -293,7 +293,7 @@ and the ability to restart a pending
 .Fn wait
 call are extensions to the POSIX interface.
 .Sh SEE ALSO
-.Xr exit 2 ,
+.Xr exit 3 ,
 .Xr sigaction 2
 .Sh HISTORY
 A

@@ -208,7 +208,13 @@ __END_DECLS
 #define EBADMACHO	88	/* Malformed Macho file */
 
 #define	ECANCELED	89		/* Operation canceled */
-#define	ELAST		89		/* Must be equal largest errno */
+
+#define EIDRM		90		/* Identifier removed */
+#define ENOMSG		91		/* No message of desired type */   
+#define EILSEQ		92		/* Illegal byte sequence */
+#define ENOATTR		93		/* Attribute not found */
+
+#define	ELAST		93		/* Must be equal largest errno */
 #endif /* _POSIX_SOURCE */
 
 #ifdef KERNEL

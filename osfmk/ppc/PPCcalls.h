@@ -54,12 +54,28 @@ PPCcallEnt	PPCcalls[] = {
 
 	PPCcall(dis),					/* 0x6009 CHUD Interface hook */
 	
-	PPCcall(dis),					/* 0x600A disabled */
-	PPCcall(dis),					/* 0x600B disabled */
-	PPCcall(dis),					/* 0x600C disabled */
+	PPCcall(ppcNull),				/* 0x600A Null PPC syscall */
+	PPCcall(perfmon_control),		/* 0x600B performance monitor */
+	PPCcall(ppcNullinst),			/* 0x600C Instrumented Null PPC syscall */
 	PPCcall(dis),					/* 0x600D disabled */
 	PPCcall(dis),					/* 0x600E disabled */
 	PPCcall(dis),					/* 0x600F disabled */
+	PPCcall(dis),					/* 0x6010 disabled */
+	PPCcall(dis),					/* 0x6011 disabled */
+	PPCcall(dis),					/* 0x6012 disabled */
+	PPCcall(dis),					/* 0x6013 disabled */
+	PPCcall(dis),					/* 0x6014 disabled */
+	PPCcall(dis),					/* 0x6015 disabled */
+	PPCcall(dis),					/* 0x6016 disabled */
+	PPCcall(dis),					/* 0x6017 disabled */
+	PPCcall(dis),					/* 0x6018 disabled */
+	PPCcall(dis),					/* 0x6019 disabled */
+	PPCcall(dis),					/* 0x601A disabled */
+	PPCcall(dis),					/* 0x601B disabled */
+	PPCcall(dis),					/* 0x601C disabled */
+	PPCcall(dis),					/* 0x601D disabled */
+	PPCcall(dis),					/* 0x601E disabled */
+	PPCcall(dis),					/* 0x601F disabled */
 };
 
 #undef dis

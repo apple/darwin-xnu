@@ -71,9 +71,9 @@
 
 #ifdef	BOOTP_DEBUG
 #define	dprintf(x) printf x;
-#else	BOOTP_DEBUG
+#else	/* !BOOTP_DEBUG */
 #define	dprintf(x)
-#endif	BOOTP_DEBUG
+#endif	/* BOOTP_DEBUG */
 
 /* ip address formatting macros */
 #define IP_FORMAT	"%d.%d.%d.%d"
@@ -228,7 +228,7 @@ link_print(struct sockaddr_dl * dl_p)
 	   " slen %d addr ", dl_p->sdl_len, 
 	   dl_p->sdl_index,  dl_p->sdl_family, dl_p->sdl_type,
 	   dl_p->sdl_nlen, dl_p->sdl_alen, dl_p->sdl_slen);
-#endif 0
+#endif
     for (i = 0; i < dl_p->sdl_alen; i++) 
 	printf("%s%x", i ? ":" : "", 
 	       (link_address(dl_p))[i]);
@@ -272,7 +272,7 @@ send_bootp_request(struct ifnet * ifp, struct socket * so,
     sin.sin_addr.s_addr = INADDR_BROADCAST;
     
     m = ip_pkt_to_mbuf((caddr_t)pkt, sizeof(*pkt));
-    return (dlil_output(ifp->if_data.default_proto, m, 0, (struct sockaddr *)&sin, 0));
+    return (dlil_output(ifptodlt(ifp, PF_INET), m, 0, (struct sockaddr *)&sin, 0));
 }
 
 /*
@@ -451,7 +451,7 @@ bootp_loop(struct socket * so, struct ifnet * ifp, int max_try,
 
 #ifdef	BOOTP_DEBUG
 		    print_reply_short(reply, n);
-#endif BOOTP_DEBUG
+#endif /* BOOTP_DEBUG */
 		    (void)dhcpol_parse_packet(&options, (struct dhcp *)reply, 
 					      n, NULL);
 		    rating = rate_packet(reply, n, &options);

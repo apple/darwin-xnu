@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2002,2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2003 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -54,8 +54,8 @@ type double = MACH_MSG_TYPE_REAL_64;
  * a port in user space as an integer and
  * in kernel space as a pointer.
  */
-type uintptr_t = MACH_MSG_TYPE_INTEGER_32;
-type intptr_t = MACH_MSG_TYPE_INTEGER_32;
+type uintptr_t = uint32_t;
+type intptr_t = int32_t;
 
 /*
  * These are the legacy Mach types that are
@@ -72,7 +72,7 @@ type register_t = int32_t;
 /*
  * For the old IPC interface
  */
-#define	MSG_TYPE_PORT_NAME	MACH_MSG_TYPE_INTEGER_32
+#define	MSG_TYPE_PORT_NAME	natural_t
 
 #endif	/* MACH_IPC_COMPAT */
 

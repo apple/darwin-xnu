@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2002 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -226,7 +226,8 @@ union_mount(mp, path, data, ndp, p)
 	mp->mnt_data = (qaddr_t) um;
 	vfs_getnewfsid(mp);
 
-	(void) copyinstr(path, mp->mnt_stat.f_mntonname, MNAMELEN - 1, &size);
+	(void) copyinstr(path, mp->mnt_stat.f_mntonname,
+		MNAMELEN - 1, (size_t *)&size);
 	bzero(mp->mnt_stat.f_mntonname + size, MNAMELEN - size);
 
 	switch (um->um_op) {
@@ -246,7 +247,7 @@ union_mount(mp, path, data, ndp, p)
 	cp = mp->mnt_stat.f_mntfromname + len;
 	len = MNAMELEN - len;
 
-	(void) copyinstr(args.target, cp, len - 1, &size);
+	(void) copyinstr(args.target, cp, len - 1, (size_t *)&size);
 	bzero(cp + size, len - size);
 
 #ifdef UNION_DIAGNOSTIC
@@ -507,7 +508,7 @@ int union_init __P((struct vfsconf *));
 	    struct proc *)))eopnotsupp)
 #define union_sysctl ((int (*) __P((int *, u_int, void *, size_t *, void *, \
 	    size_t, struct proc *)))eopnotsupp)
-#define union_vget ((int (*) __P((struct mount *, ino_t, struct vnode **))) \
+#define union_vget ((int (*) __P((struct mount *, void *, struct vnode **))) \
 	    eopnotsupp)
 #define union_vptofh ((int (*) __P((struct vnode *, struct fid *)))eopnotsupp)
 

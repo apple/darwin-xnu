@@ -118,6 +118,7 @@ enum {
 	kEFReserveMask  = 0x04,   /* keep block reserve */
 	kEFDeferMask    = 0x08,   /* defer file block allocations */
 	kEFNoClumpMask  = 0x10,   /* don't round up to clump size */
+	kEFMetadataMask  = 0x20,  /* metadata allocation */
 
 	kTFTrunExtBit				= 0,							/*	truncate to the extent containing new PEOF*/
 	kTFTrunExtMask				= 1
@@ -289,9 +290,10 @@ ReplaceBTreeRecord				(FileReference 				refNum,
 EXTERN_API_C( OSErr )
 BlockAllocate					(ExtendedVCB *			vcb,
 								 UInt32 				startingBlock,
-								 SInt64 				bytesRequested,
-								 SInt64 				bytesMaximum,
+								 UInt32 				minBlocks,
+								 UInt32 				maxBlocks,
 								 Boolean 				forceContiguous,
+								 Boolean				useMetaZone,
 								 UInt32 *				startBlock,
 								 UInt32 *				actualBlocks);
 
@@ -300,9 +302,18 @@ BlockDeallocate					(ExtendedVCB *			vcb,
 								 UInt32 				firstBlock,
 								 UInt32 				numBlocks);
 
+EXTERN_API_C( OSErr )
+BlockMarkAllocated(ExtendedVCB *vcb, UInt32 startingBlock, UInt32 numBlocks);
+
+EXTERN_API_C( OSErr )
+BlockMarkFree( ExtendedVCB *vcb, UInt32 startingBlock, UInt32 numBlocks);
+
 EXTERN_API_C( UInt32 )
 FileBytesToBlocks				(SInt64 				numerator,
 								 UInt32 				denominator);
+
+EXTERN_API_C( UInt32 )
+MetaZoneFreeBlocks(ExtendedVCB *vcb);
 
 /*	File Extent Mapping routines*/
 EXTERN_API_C( OSErr )
@@ -337,6 +348,9 @@ MapFileBlockC					(ExtendedVCB *			vcb,
 								 off_t 					offset,
 								 daddr_t *				startBlock,
 								 size_t *				availableBytes);
+
+EXTERN_API_C( int )
+AddFileExtent (ExtendedVCB *vcb, FCB *fcb, UInt32 startBlock, UInt32 blockCount);
 
 #if TARGET_API_MACOS_X
 EXTERN_API_C( Boolean )

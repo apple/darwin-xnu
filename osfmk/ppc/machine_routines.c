@@ -33,6 +33,7 @@
 #include <kern/processor.h>
 
 unsigned int max_cpus_initialized = 0;
+extern int forcenap;
 
 #define	MAX_CPUS_SET	0x1
 #define	MAX_CPUS_WAIT	0x2
@@ -61,7 +62,7 @@ ml_static_malloc(
 		return((vm_offset_t)NULL);
 	else {
 		vaddr = static_memory_end;
-		static_memory_end = round_page(vaddr+size);
+		static_memory_end = round_page_32(vaddr+size);
 		return(vaddr);
 	}
 }
@@ -88,14 +89,14 @@ ml_static_mfree(
 {
 	vm_offset_t paddr_cur, vaddr_cur;
 
-	for (vaddr_cur = round_page(vaddr);
-	     vaddr_cur < trunc_page(vaddr+size);
+	for (vaddr_cur = round_page_32(vaddr);
+	     vaddr_cur < trunc_page_32(vaddr+size);
 	     vaddr_cur += PAGE_SIZE) {
 		paddr_cur = pmap_extract(kernel_pmap, vaddr_cur);
 		if (paddr_cur != (vm_offset_t)NULL) {
 			vm_page_wire_count--;
-			pmap_remove(kernel_pmap, vaddr_cur, vaddr_cur+PAGE_SIZE);
-			vm_page_create(paddr_cur,paddr_cur+PAGE_SIZE);
+			pmap_remove(kernel_pmap, (addr64_t)vaddr_cur, (addr64_t)(vaddr_cur+PAGE_SIZE));
+			vm_page_create(paddr_cur>>12,(paddr_cur+PAGE_SIZE)>>12);
 		}
 	}
 }
@@ -146,40 +147,8 @@ void ml_init_interrupt(void)
 	(void) ml_set_interrupts_enabled(current_state);
 }
 
-boolean_t fake_get_interrupts_enabled(void)
-{
-	/*
-	 * The scheduler is not active on this cpu. There is no need to disable 
-	 * preemption. The current thread wont be dispatched on anhother cpu.
-	 */
-	return((per_proc_info[cpu_number()].cpu_flags & turnEEon) != 0);
-}
-
-boolean_t fake_set_interrupts_enabled(boolean_t enable)
-{
-	boolean_t interrupt_state_prev;
-
-	/*
-	 * The scheduler is not active on this cpu. There is no need to disable 
-	 * preemption. The current thread wont be dispatched on anhother cpu.
-	 */
-	interrupt_state_prev = 
-		(per_proc_info[cpu_number()].cpu_flags & turnEEon) != 0;
-	if (interrupt_state_prev != enable)
-		per_proc_info[cpu_number()].cpu_flags ^= turnEEon;
-	return(interrupt_state_prev);
-}
-
 /* Get Interrupts Enabled */
 boolean_t ml_get_interrupts_enabled(void)
-{
-	if (per_proc_info[cpu_number()].interrupts_enabled == TRUE)
-		return(get_interrupts_enabled());
-	else
-		return(fake_get_interrupts_enabled());
-}
-
-boolean_t get_interrupts_enabled(void)
 {
 	return((mfmsr() & MASK(MSR_EE)) != 0);
 }
@@ -207,6 +176,8 @@ void ml_thread_policy(
 	unsigned policy_id,
 	unsigned policy_info)
 {
+        extern int srv;
+
 	if ((policy_id == MACHINE_GROUP) &&
 		((per_proc_info[0].pf.Available) & pfSMPcap))
 			thread_bind(thread, master_processor);
@@ -216,7 +187,8 @@ void ml_thread_policy(
 
 		thread_lock(thread);
 
-		thread->sched_mode |= TH_MODE_FORCEDPREEMPT;
+		if (srv == 0)
+		        thread->sched_mode |= TH_MODE_FORCEDPREEMPT;
 		set_priority(thread, thread->priority + 1);
 
 		thread_unlock(thread);
@@ -251,7 +223,8 @@ void
 machine_signal_idle(
 	processor_t processor)
 {
-	(void)cpu_signal(processor->slot_num, SIGPwake, 0, 0);
+	if (per_proc_info[processor->slot_num].pf.Available & (pfCanDoze|pfWillNap))
+		(void)cpu_signal(processor->slot_num, SIGPwake, 0, 0);
 }
 
 kern_return_t
@@ -261,21 +234,25 @@ ml_processor_register(
 	ipi_handler_t       *ipi_handler)
 {
 	kern_return_t ret;
-	int target_cpu;
+	int target_cpu, cpu;
+	int donap;
 
 	if (processor_info->boot_cpu == FALSE) {
 		 if (cpu_register(&target_cpu) != KERN_SUCCESS)
 			return KERN_FAILURE;
 	} else {
 		/* boot_cpu is always 0 */
-		target_cpu= 0;
+		target_cpu = 0;
 	}
 
 	per_proc_info[target_cpu].cpu_id = processor_info->cpu_id;
 	per_proc_info[target_cpu].start_paddr = processor_info->start_paddr;
 
+	donap = processor_info->supports_nap;		/* Assume we use requested nap */
+	if(forcenap) donap = forcenap - 1;			/* If there was an override, use that */
+	
 	if(per_proc_info[target_cpu].pf.Available & pfCanNap)
-	  if(processor_info->supports_nap) 
+	  if(donap) 
 		per_proc_info[target_cpu].pf.Available |= pfWillNap;
 
 	if(processor_info->time_base_enable !=  (void(*)(cpu_id_t, boolean_t ))NULL)
@@ -297,6 +274,8 @@ ml_enable_nap(int target_cpu, boolean_t nap_enabled)
 {
     boolean_t prev_value = (per_proc_info[target_cpu].pf.Available & pfCanNap) && (per_proc_info[target_cpu].pf.Available & pfWillNap);
     
+ 	if(forcenap) nap_enabled = forcenap - 1;		/* If we are to force nap on or off, do it */
+ 
  	if(per_proc_info[target_cpu].pf.Available & pfCanNap) {				/* Can the processor nap? */
 		if (nap_enabled) per_proc_info[target_cpu].pf.Available |= pfWillNap;	/* Is nap supported on this machine? */
 		else per_proc_info[target_cpu].pf.Available &= ~pfWillNap;		/* Clear if not */
@@ -304,7 +283,7 @@ ml_enable_nap(int target_cpu, boolean_t nap_enabled)
 
 	if(target_cpu == cpu_number()) 
 		__asm__ volatile("mtsprg 2,%0" : : "r" (per_proc_info[target_cpu].pf.Available));	/* Set live value */
-
+ 
     return (prev_value);
 }
 
@@ -337,12 +316,6 @@ ml_get_max_cpus(void)
 	}
 	(void) ml_set_interrupts_enabled(current_state);
 	return(machine_info.max_cpus);
-}
-
-int
-ml_get_current_cpus(void)
-{
-	return machine_info.avail_cpus;
 }
 
 void

@@ -87,12 +87,15 @@ int	ddp_pru_attach(struct socket *so, int proto,
 	at_ddp_t *ddp = NULL;
 	struct atpcb *pcb = (struct atpcb *)((so)->so_pcb);
 
+        error = soreserve(so, ddp_sendspace, ddp_recvspace);
+	if (error != 0)
+		return error;
+
 	s = splnet();
 	error = at_pcballoc(so, &ddp_head);
 	splx(s);
 	if (error)
 		return error;
-	error = soreserve(so, ddp_sendspace, ddp_recvspace);
 	pcb = (struct atpcb *)((so)->so_pcb);
 	pcb->pid = current_proc()->p_pid;
 	pcb->ddptype = (u_char) proto;    /* set in socreate() */

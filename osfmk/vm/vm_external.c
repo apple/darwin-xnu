@@ -235,7 +235,7 @@ _vm_external_state_get(
 
 	assert (map != VM_EXTERNAL_NULL);
 
-	bit = atop(offset);
+	bit = atop_32(offset);
 	byte = bit >> 3;
 	if (map[byte] & (1 << (bit & 07))) {
 		return VM_EXTERNAL_STATE_EXISTS;
@@ -255,7 +255,7 @@ vm_external_state_set(
 	if (map == VM_EXTERNAL_NULL)
 		return;
 
-	bit = atop(offset);
+	bit = atop_32(offset);
 	byte = bit >> 3;
 	map[byte] |= (1 << (bit & 07));
 }
@@ -271,7 +271,7 @@ vm_external_state_clr(
 	if (map == VM_EXTERNAL_NULL)
 		return;
 
-	bit = atop(offset);
+	bit = atop_32(offset);
 	byte = bit >> 3;
 	map[byte] &= ~(1 << (bit & 07));
 }

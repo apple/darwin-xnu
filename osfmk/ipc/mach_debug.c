@@ -170,7 +170,7 @@ host_ipc_hash_info(
 		if (info != *infop)
 			kmem_free(ipc_kernel_map, addr, size);
 
-		size = round_page(actual * sizeof *info);
+		size = round_page_32(actual * sizeof *info);
 		kr = kmem_alloc_pageable(ipc_kernel_map, &addr, size);
 		if (kr != KERN_SUCCESS)
 			return KERN_RESOURCE_SHORTAGE;
@@ -191,7 +191,7 @@ host_ipc_hash_info(
 		vm_map_copy_t copy;
 		vm_size_t used;
 
-		used = round_page(actual * sizeof *info);
+		used = round_page_32(actual * sizeof *info);
 
 		if (used != size)
 			kmem_free(ipc_kernel_map, addr + used, size - used);
@@ -285,7 +285,7 @@ mach_port_space_info(
 				kmem_free(ipc_kernel_map,
 					  table_addr, table_size);
 
-			table_size = round_page(table_actual *
+			table_size = round_page_32(table_actual *
 						sizeof *table_info);
 			kr = kmem_alloc(ipc_kernel_map,
 					&table_addr, table_size);
@@ -306,7 +306,7 @@ mach_port_space_info(
 				kmem_free(ipc_kernel_map,
 					  tree_addr, tree_size);
 
-			tree_size = round_page(tree_actual *
+			tree_size = round_page_32(tree_actual *
 					       sizeof *tree_info);
 			kr = kmem_alloc(ipc_kernel_map,
 					&tree_addr, tree_size);
@@ -396,7 +396,7 @@ mach_port_space_info(
 		/* kmem_alloc doesn't zero memory */
 
 		size_used = table_actual * sizeof *table_info;
-		rsize_used = round_page(size_used);
+		rsize_used = round_page_32(size_used);
 
 		if (rsize_used != table_size)
 			kmem_free(ipc_kernel_map,
@@ -434,7 +434,7 @@ mach_port_space_info(
 		/* kmem_alloc doesn't zero memory */
 
 		size_used = tree_actual * sizeof *tree_info;
-		rsize_used = round_page(size_used);
+		rsize_used = round_page_32(size_used);
 
 		if (rsize_used != tree_size)
 			kmem_free(ipc_kernel_map,

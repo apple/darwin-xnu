@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2002 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2002-2003 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -47,27 +47,30 @@
 struct filefork {
 	struct cnode	*ff_cp;		/* cnode associated with this fork */
 	struct rl_head	ff_invalidranges; /* Areas of disk that should read back as zeroes */
+	long			ff_evtonly_refs;	/* number of vnode references used solely for events (O_EVTONLY) */
 	union {
 	  struct hfslockf *ffu_lockf;	/* Head of byte-level lock list. */
 	  void *ffu_sysdata;		/* private data for system files */
 	  char *ffu_symlinkptr;		/* symbolic link pathname */
 	} ff_un;
 	struct cat_fork	ff_data;
-	u_int32_t	ff_unallocblocks; /* unallocated blocks (until cmap) */
 };
+typedef struct filefork filefork_t;
 
 /* Aliases for common fields */
 #define ff_size		ff_data.cf_size
 #define ff_clumpsize	ff_data.cf_clump
+#define ff_bytesread	ff_data.cf_bytesread
 #define ff_blocks	ff_data.cf_blocks
 #define ff_extents	ff_data.cf_extents
+#define ff_unallocblocks ff_data.cf_vblocks
+
 #define ff_symlinkptr	ff_un.ffu_symlinkptr
 #define	ff_lockf	ff_un.ffu_lockf
 
 
 /* The btree code still needs these... */
 #define fcbEOF		ff_size
-#define fcbClmpSize	ff_clumpsize
 #define fcbExtents	ff_extents
 #define	fcbBTCBPtr	ff_un.ffu_sysdata
 
@@ -97,13 +100,16 @@ struct cnode {
 	struct vnode		*c_devvp;	/* vnode for block I/O */
 	dev_t			c_dev;		/* cnode's device */
         struct dquot		*c_dquot[MAXQUOTAS]; /* cnode's quota info */
+	struct klist		c_knotes;	/* knotes attached to this vnode */
 	cnid_t			c_childhint;	/* catalog hint for children */
 	struct cat_desc		c_desc;		/* cnode's descriptor */
 	struct cat_attr		c_attr;		/* cnode's attributes */
 	SLIST_HEAD(hfs_indexhead, hfs_index) c_indexlist;  /* directory index list */
+	long                c_evtonly_refs;	/* number of vnode references used solely for events (O_EVTONLY) */
  	struct filefork		*c_datafork;	/* cnode's data fork */
 	struct filefork		*c_rsrcfork;	/* cnode's rsrc fork */
 };
+typedef struct cnode cnode_t;
 
 /* Aliases for common cnode fields */
 #define c_cnid		c_desc.cd_cnid
@@ -131,23 +137,28 @@ struct cnode {
 
 
 /* Runtime cnode flags (kept in c_flag) */
-#define C_ACCESS	0x0001	/* Access time update request */
-#define C_CHANGE	0x0002	/* Change time update request */
-#define C_UPDATE	0x0004	/* Modification time update request */
-#define C_MODIFIED 	0x0008	/* CNode has been modified */
-#define C_ATIMEMOD	0x0010	/* Access time has been modified */
+#define C_ACCESS	0x00001	/* Access time update request */
+#define C_CHANGE	0x00002	/* Change time update request */
+#define C_UPDATE	0x00004	/* Modification time update request */
+#define C_MODIFIED 	0x00008	/* CNode has been modified */
 
-#define C_NOEXISTS	0x0020	/* CNode has been deleted, catalog entry is gone */
-#define C_DELETED	0x0040	/* CNode has been marked to be deleted */
-#define C_HARDLINK	0x0080	/* CNode is a hard link */
+#define C_RELOCATING	0x00010	/* CNode's fork is being relocated */
+#define C_NOEXISTS	0x00020	/* CNode has been deleted, catalog entry is gone */
+#define C_DELETED	0x00040	/* CNode has been marked to be deleted */
+#define C_HARDLINK	0x00080	/* CNode is a hard link */
 
-#define C_ALLOC		0x0100	/* CNode is being allocated */
-#define C_WALLOC	0x0200	/* Waiting for allocation to finish */
-#define	C_TRANSIT	0x0400	/* CNode is getting recycled  */
-#define	C_WTRANSIT	0x0800	/* Waiting for cnode getting recycled  */
+#define C_ALLOC		0x00100	/* CNode is being allocated */
+#define C_WALLOC	0x00200	/* Waiting for allocation to finish */
+#define	C_TRANSIT	0x00400	/* CNode is getting recycled  */
+#define	C_WTRANSIT	0x00800	/* Waiting for cnode getting recycled  */
+#define C_NOBLKMAP	0x01000	/* CNode blocks cannot be mapped */
+#define C_WBLKMAP	0x02000	/* Waiting for block map */
 
-#define C_RENAME	0x1000	/* CNode is being renamed */
-#define C_ZFWANTSYNC	0x2000	/* fsync requested and file has holes */
+#define C_ZFWANTSYNC	0x04000	/* fsync requested and file has holes */
+#define C_VPREFHELD     0x08000 /* resource fork has done a vget() on c_vp (for its parent ptr) */
+
+#define C_FROMSYNC      0x10000 /* fsync was called from sync */ 
+#define C_FORCEUPDATE   0x20000 /* force the catalog entry update */
 
 
 #define ZFTIMELIMIT	(5 * 60)
@@ -176,6 +187,8 @@ struct cnode {
 			 FTOC(fp)->c_rsrc_vp :			\
 			 FTOC(fp)->c_vp)
 
+#define EVTONLYREFS(vp) ((vp->v_type == VREG) ? VTOF(vp)->ff_evtonly_refs : VTOC(vp)->c_evtonly_refs)
+
 /*
  * Test for a resource fork
  */
@@ -189,23 +202,18 @@ struct cnode {
  */
 #define C_TIMEMASK	(C_ACCESS | C_CHANGE | C_UPDATE)
 
-#define ATIME_ACCURACY	60
+#define C_CHANGEMASK	(C_ACCESS | C_CHANGE | C_UPDATE | C_MODIFIED)
+
+#define ATIME_ACCURACY	        1
+#define ATIME_ONDISK_ACCURACY	300
 
 #define CTIMES(cp, t1, t2) {							\
 	if ((cp)->c_flag & C_TIMEMASK) {					\
 		/*								\
-		 * If only the access time is changing then defer		\
-		 * updating it on-disk util later (in hfs_inactive).		\
-		 * If it was recently updated then skip the update.		\
+		 * Only do the update if it is more than just			\
+		 * the C_ACCESS field being updated.				\
 		 */								\
-		if (((cp)->c_flag & (C_TIMEMASK | C_MODIFIED)) == C_ACCESS) {	\
-			if (((cp)->c_flag & C_ATIMEMOD) ||			\
-			    (t1)->tv_sec > ((cp)->c_atime + ATIME_ACCURACY)) {	\
-				(cp)->c_atime = (t1)->tv_sec;			\
-				(cp)->c_flag |= C_ATIMEMOD;			\
-			}							\
-			(cp)->c_flag &= ~C_ACCESS;				\
-		} else {							\
+		if (((cp)->c_flag & C_CHANGEMASK) != C_ACCESS) {		\
 			if ((cp)->c_flag & C_ACCESS) {				\
 				(cp)->c_atime = (t1)->tv_sec;			\
 			}							\

@@ -97,6 +97,10 @@ struct secasvar {
 	pid_t pid;			/* message's pid */
 
 	struct secashead *sah;		/* back pointer to the secashead */
+	
+	/* Nat Traversal related bits */
+	u_int32_t	natt_last_activity;
+	u_int16_t	remote_ike_port;
 };
 
 /* replay prevention */

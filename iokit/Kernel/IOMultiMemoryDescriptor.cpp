@@ -90,7 +90,7 @@ IOMultiMemoryDescriptor * IOMultiMemoryDescriptor::withDescriptors(
                                   IOMemoryDescriptor ** descriptors,
                                   UInt32                withCount,
                                   IODirection           withDirection,
-                                  bool                  asReference = false )
+                                  bool                  asReference )
 {
     //
     // Create a new IOMultiMemoryDescriptor.  The "buffer" is made up of several
@@ -121,7 +121,7 @@ bool IOMultiMemoryDescriptor::initWithDescriptors(
                                   IOMemoryDescriptor ** descriptors,
                                   UInt32                withCount,
                                   IODirection           withDirection,
-                                  bool                  asReference = false )
+                                  bool                  asReference )
 {
     //
     // Initialize an IOMultiMemoryDescriptor. The "buffer" is made up of several
@@ -134,10 +134,19 @@ bool IOMultiMemoryDescriptor::initWithDescriptors(
     assert(descriptors);
     assert(withCount);
 
-    // Ask our superclass' opinion.
+    // Release existing descriptors, if any
+    if ( _descriptors )
+    {
+        for ( unsigned index = 0; index < _descriptorsCount; index++ ) 
+            _descriptors[index]->release();
 
-    if ( super::init() == false )  return false;
-
+        if ( _descriptorsIsAllocated )
+            IODelete(_descriptors, IOMemoryDescriptor *, _descriptorsCount);
+    } else {
+        // Ask our superclass' opinion.
+        if ( super::init() == false )  return false;
+    }
+    
     // Initialize our minimal state.
 
     _descriptors            = 0;

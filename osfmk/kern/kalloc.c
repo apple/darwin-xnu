@@ -438,8 +438,8 @@ krealloc(
 	/* if old block was kmem_alloc'd, then use kmem_realloc if necessary */
 
 	if (old_size >= kalloc_max_prerounded) {
-		old_size = round_page(old_size);
-		new_size = round_page(new_size);
+		old_size = round_page_32(old_size);
+		new_size = round_page_32(new_size);
 		if (new_size > old_size) {
 
 			if (kmem_realloc(kalloc_map, *addrp, old_size, &naddr,

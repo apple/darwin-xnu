@@ -131,10 +131,16 @@ kern_return_t		macx_swapoff(
 			char		*name,
 			int		flags);
 
-extern	kern_return_t	macx_triggers(
+kern_return_t		macx_triggers(
 			int		hi_water,
 			int		low_water,
 			int		flags,
 			mach_port_t	alert_port);
+
+kern_return_t		macx_backing_store_suspend(
+			boolean_t	suspend);
+
+kern_return_t		macx_backing_store_recovery(
+                       	int		pid);
 
 #endif	/* _MACH_MACH_TRAPS_H_ */

@@ -296,7 +296,7 @@ next:
 		  m_freem(m);
 		  continue; /* was EAFNOSUPPORT */
 		}
-#endif COMMENT
+#endif /* COMMENT */
 
 		llc_header = (llc_header_t *)(enet_header+1);
 

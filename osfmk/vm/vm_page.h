@@ -180,7 +180,7 @@ struct vm_page {
 					   /* a pageout candidate           */
         /* we've used up all 32 bits */
 
-	vm_offset_t	phys_addr;	/* Physical address of page, passed
+	vm_offset_t	phys_page;	/* Physical address of page, passed
 					 *  to pmap_enter (read-only) */
 };
 
@@ -252,6 +252,10 @@ extern
 int	vm_page_free_reserved;	/* How many pages reserved to do pageout */
 extern
 int	vm_page_laundry_count;	/* How many pages being laundered? */
+extern
+int	vm_page_burst_count;	/* How many pages being laundered to EMM? */
+extern
+int	vm_page_throttled_count;/* Count of zero-fill allocations throttled */
 
 decl_mutex_data(,vm_page_queue_lock)
 				/* lock on active and inactive page queues */
@@ -276,8 +280,8 @@ extern void		vm_page_bootstrap(
 extern void		vm_page_module_init(void);
 
 extern void		vm_page_create(
-					vm_offset_t	start,
-					vm_offset_t	end);
+					ppnum_t		start,
+					ppnum_t		end);
 
 extern vm_page_t	vm_page_lookup(
 					vm_object_t		object,
@@ -316,7 +320,7 @@ extern vm_page_t	vm_page_alloc(
 
 extern void		vm_page_init(
 					vm_page_t	page,
-					vm_offset_t	phys_addr);
+					ppnum_t		phys_page);
 
 extern void		vm_page_free(
 					vm_page_t	page);
@@ -419,8 +423,9 @@ extern void		vm_page_gobble(
 		MACRO_END
 
 #define VM_PAGE_THROTTLED()						\
-		(vm_page_free_count < (vm_page_free_target -		\
-		 ((vm_page_free_target-vm_page_free_min)>>2)))
+		(vm_page_free_count < vm_page_free_min &&		\
+		 !current_thread()->vm_privilege && 			\
+		 ++vm_page_throttled_count)
 
 #define	VM_PAGE_WAIT()		((void)vm_page_wait(THREAD_UNINT))
 

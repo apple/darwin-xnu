@@ -71,6 +71,8 @@
 ddp_brt_t at_ddp_brt[BRTSIZE];
 int ddp_brt_sweep_timer;
 
+void ddp_brt_sweep();
+
 void ddp_glean(mp, ifID, src_addr)
      register gbuf_t	  *mp;
      register at_ifaddr_t  *ifID;

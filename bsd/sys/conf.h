@@ -67,6 +67,7 @@
 #define _SYS_CONF_H_ 1
 
 #include <sys/appleapiopts.h>
+#include <sys/cdefs.h>
 
 /*
  * Definitions of device driver entry switches
@@ -106,6 +107,13 @@ typedef int  d_poll_t		__P((dev_t dev, int events, struct proc *p));
 #define	d_read_t	read_write_fcn_t
 #define	d_write_t	read_write_fcn_t
 #define	d_ioctl_t	ioctl_fcn_t
+#define	d_stop_t	stop_fcn_t
+#define	d_reset_t	reset_fcn_t
+#define	d_select_t	select_fcn_t
+#define	d_mmap_t	mmap_fcn_t
+#define	d_strategy_t	strategy_fcn_t
+#define	d_getc_t	getc_fcn_t
+#define	d_putc_t	putc_fcn_t
 
 __BEGIN_DECLS
 int	enodev ();		/* avoid actual prototype for multiple use */
@@ -201,7 +209,7 @@ extern struct cdevsw cdevsw[];
     {								  	\
 	eno_opcl,	eno_opcl,	eno_rdwrt,	eno_rdwrt,	\
 	eno_ioctl,	eno_stop,	eno_reset,	0,	  	\
-	seltrue,	eno_mmap,	eno_strat,	eno_getc,	\
+	(select_fcn_t *)seltrue,	eno_mmap,	eno_strat,	eno_getc,	\
 	eno_putc,	0 					  	\
     }
 #endif /* KERNEL */

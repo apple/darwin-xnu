@@ -363,6 +363,7 @@ struct ip_opts {
 #ifdef __APPLE__
 #define IP_STRIPHDR      	23   /* bool: drop receive of raw IP header */
 #endif
+#define IP_RECVTTL			24	/* bool; receive reception TTL w/dgram */
 
 
 #define	IP_FW_ADD     		40   /* add a firewall rule to chain */

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2002 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2003 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -71,16 +71,20 @@
 /*
  * Arguments to mount ISO 9660 filesystems.
  */
+struct CDTOC;
 struct iso_args {
 	char	*fspec;			/* block special device to mount */
 	struct	export_args export;	/* network export info */
 	int	flags;			/* mounting flags, see below */
 	int	ssector;		/* starting sector, 0 for 1st session */
+	int	toc_length;		/* Size of *toc, including the toc.length field */
+	struct CDTOC *toc;
 };
 #define	ISOFSMNT_NORRIP   0x00000001	/* disable Rock Ridge Ext.*/
 #define	ISOFSMNT_GENS     0x00000002	/* enable generation numbers */
 #define	ISOFSMNT_EXTATT   0x00000004	/* enable extended attributes */
 #define	ISOFSMNT_NOJOLIET 0x00000008	/* disable Joliet Ext.*/
+#define ISOFSMNT_TOC	  0x00000010	/* iso_args.toc is valid */
 
 #endif /* __APPLE_API_UNSTABLE */
 #endif /* __ISOFS_CD9660_CD9660_MOUNT_H__ */

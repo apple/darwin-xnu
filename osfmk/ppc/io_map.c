@@ -45,6 +45,8 @@ extern vm_offset_t	virtual_avail;
  * outside the usual physical memory. If phys_addr is NULL then
  * steal the appropriate number of physical pages from the vm
  * system and map them.
+ *
+ * Note, this will onl
  */
 vm_offset_t
 io_map(phys_addr, size)
@@ -61,38 +63,68 @@ io_map(phys_addr, size)
 	assert (kernel_map != VM_MAP_NULL);			/* VM must be initialised */
 #endif
 
-	if (phys_addr != 0) {
-		/* make sure we map full contents of all the pages concerned */
-		size = round_page(size + (phys_addr & PAGE_MASK));
+	if (phys_addr != 0) {						/* If they supplied a physical address, use it */
 
-		/* Steal some free virtual addresses */
+		size = round_page_32(size + (phys_addr & PAGE_MASK));	/* Make sure we map all of it */
 
-		(void) kmem_alloc_pageable(kernel_map, &start, size);
+		(void) kmem_alloc_pageable(kernel_map, &start, size);	/* Get some virtual addresses to use */
 		
-		pmap_map_block(kernel_pmap, start, phys_addr, size, 
-		   VM_PROT_READ|VM_PROT_WRITE, PTE_WIMG_IO, 0);	/* Set up a block mapped area */
+		(void)mapping_make(kernel_pmap, (addr64_t)start, (ppnum_t)(phys_addr >> 12), 
+			(mmFlgBlock | mmFlgUseAttr | mmFlgCInhib | mmFlgGuarded),	/* Map as I/O page */
+			size >> 12, VM_PROT_READ|VM_PROT_WRITE);
 
-		return (start + (phys_addr & PAGE_MASK));
+		return (start + (phys_addr & PAGE_MASK));	/* Pass back the physical address */
 	
 	} else {
 	
-		/* Steal some free virtual addresses */
-		(void) kmem_alloc_pageable(kernel_map, &start, size);
+		(void) kmem_alloc_pageable(kernel_map, &start, size);	/* Get some virtual addresses */
 
 		mapping_prealloc(size);					/* Make sure there are enough free mappings */
-		/* Steal some physical pages and map them one by one */
+
 		for (i = 0; i < size ; i += PAGE_SIZE) {
 			m = VM_PAGE_NULL;
-			while ((m = vm_page_grab()) == VM_PAGE_NULL)
-				VM_PAGE_WAIT();
+			while ((m = vm_page_grab()) == VM_PAGE_NULL) {	/* Get a physical page */
+				VM_PAGE_WAIT();					/* Wait if we didn't have one */
+			}
 			vm_page_gobble(m);
-			(void) pmap_map_bd(start + i,
-					   m->phys_addr,
-					   m->phys_addr + PAGE_SIZE,
-					   VM_PROT_READ|VM_PROT_WRITE);
+			
+			(void)mapping_make(kernel_pmap, 
+				(addr64_t)(start + i), m->phys_page, 
+				(mmFlgBlock | mmFlgUseAttr | mmFlgCInhib | mmFlgGuarded),	/* Map as I/O page */
+				1, VM_PROT_READ|VM_PROT_WRITE);	
+			
 		}
 
 		mapping_relpre();						/* Allow mapping release */
 		return start;
 	}
+}
+
+
+/*
+ * Allocate and map memory for devices before the VM system comes alive.
+ */
+
+vm_offset_t io_map_spec(vm_offset_t phys_addr, vm_size_t size)
+{
+	vm_offset_t	start;
+	int		i;
+	unsigned int j;
+	vm_page_t 	m;
+
+
+	if(kernel_map != VM_MAP_NULL) {				/* If VM system is up, redirect to normal routine */
+		
+		return io_map(phys_addr, size);			/* Map the address */
+	
+	}
+	
+	size = round_page_32(size + (phys_addr - (phys_addr & -PAGE_SIZE)));	/* Extend the length to include it all */
+	start = pmap_boot_map(size);				/* Get me some virtual address */
+
+	(void)mapping_make(kernel_pmap, (addr64_t)start, (ppnum_t)(phys_addr >> 12), 
+		(mmFlgBlock | mmFlgUseAttr | mmFlgCInhib | mmFlgGuarded),	/* Map as I/O page */
+		size >> 12, VM_PROT_READ|VM_PROT_WRITE);
+
+	return (start + (phys_addr & PAGE_MASK));
 }

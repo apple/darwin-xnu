@@ -103,16 +103,18 @@
 
 /* Machine type dependent parameters. */
 #include <machine/param.h>
-#include <machine/limits.h>
 
 /* More types and definitions used throughout the kernel. */
 #ifdef KERNEL
+#include <machine/limits.h>
 #include <sys/cdefs.h>
 #include <sys/errno.h>
 #include <sys/time.h>
 #include <sys/resource.h>
 #include <sys/ucred.h>
 #include <sys/uio.h>
+#else
+#include <limits.h>
 #endif
 
 /* Signals. */

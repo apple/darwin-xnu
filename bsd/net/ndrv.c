@@ -241,6 +241,10 @@ ndrv_attach(struct socket *so, int proto, struct proc *p)
 #if NDRV_DEBUG
 	kprintf("NDRV attach: %x, %x, %x\n", so, proto, np);
 #endif
+
+        if ((error = soreserve(so, ndrv_sendspace, ndrv_recvspace)))
+                return(error);
+
 	MALLOC(np, struct ndrv_cb *, sizeof(*np), M_PCB, M_WAITOK);
 	if (np == NULL)
 		return (ENOMEM);
@@ -249,8 +253,6 @@ ndrv_attach(struct socket *so, int proto, struct proc *p)
 #if NDRV_DEBUG
 	kprintf("NDRV attach: %x, %x, %x\n", so, proto, np);
 #endif
-	if ((error = soreserve(so, ndrv_sendspace, ndrv_recvspace)))
-		return(error);
 	TAILQ_INIT(&np->nd_dlist);
 	np->nd_signature = NDRV_SIGNATURE;
 	np->nd_socket = so;
@@ -600,7 +602,7 @@ ndrv_do_detach(register struct ndrv_cb *np)
     struct ndrv_cb*	cur_np = NULL;
     struct socket *so = np->nd_socket;
     struct ndrv_multicast*	next;
-    int error;
+    int error = 0;
 
 #if NDRV_DEBUG
 	kprintf("NDRV detach: %x, %x\n", so, np);

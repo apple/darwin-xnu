@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2002 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -102,6 +102,11 @@
 static int ufs_chmod __P((struct vnode *, int, struct ucred *, struct proc *));
 static int ufs_chown
 	__P((struct vnode *, uid_t, gid_t, struct ucred *, struct proc *));
+static int filt_ufsread __P((struct knote *kn, long hint));
+static int filt_ufswrite __P((struct knote *kn, long hint));
+static int filt_ufsvnode __P((struct knote *kn, long hint));
+static void filt_ufsdetach __P((struct knote *kn));
+static int ufs_kqfilter __P((struct vop_kqfilter_args *ap));
 
 union _qcvt {
 	int64_t qcvt;
@@ -138,6 +143,7 @@ ufs_create(ap)
 	    ufs_makeinode(MAKEIMODE(ap->a_vap->va_type, ap->a_vap->va_mode),
 	    ap->a_dvp, ap->a_vpp, ap->a_cnp))
 		return (error);
+	VN_KNOTE(ap->a_dvp, NOTE_WRITE);
 	return (0);
 }
 
@@ -163,6 +169,7 @@ ufs_mknod(ap)
 	    ufs_makeinode(MAKEIMODE(vap->va_type, vap->va_mode),
 	    ap->a_dvp, vpp, ap->a_cnp))
 		return (error);
+	VN_KNOTE(ap->a_dvp, NOTE_WRITE);
 	ip = VTOI(*vpp);
 	ip->i_flag |= IN_ACCESS | IN_CHANGE | IN_UPDATE;
 	if (vap->va_rdev != VNOVAL) {
@@ -477,6 +484,7 @@ ufs_setattr(ap)
 			return (EROFS);
 		error = ufs_chmod(vp, (int)vap->va_mode, cred, p);
 	}
+	VN_KNOTE(vp, NOTE_ATTRIB);
 	return (error);
 }
 
@@ -754,6 +762,8 @@ ufs_remove(ap)
 	if ((error = ufs_dirremove(dvp, ap->a_cnp)) == 0) {
 		ip->i_nlink--;
 		ip->i_flag |= IN_CHANGE;
+		VN_KNOTE(vp, NOTE_DELETE);
+		VN_KNOTE(dvp, NOTE_WRITE);
 	}
 
 	if (dvp != vp)
@@ -828,7 +838,14 @@ ufs_link(ap)
 		ip->i_nlink--;
 		ip->i_flag |= IN_CHANGE;
 	}
-	FREE_ZONE(cnp->cn_pnbuf, cnp->cn_pnlen, M_NAMEI);
+	{
+		char *tmp = cnp->cn_pnbuf;
+		cnp->cn_pnbuf = NULL;
+		cnp->cn_flags &= ~HASBUF;
+		FREE_ZONE(tmp, cnp->cn_pnlen, M_NAMEI);
+	}
+	VN_KNOTE(vp, NOTE_LINK);
+	VN_KNOTE(tdvp, NOTE_WRITE);
 out1:
 	if (tdvp != vp)
 		VOP_UNLOCK(vp, 0, p);
@@ -863,7 +880,7 @@ ufs_whiteout(ap)
 	case CREATE:
 		/* create a new directory whiteout */
 #if DIAGNOSTIC
-		if ((cnp->cn_flags & SAVENAME) == 0)
+		if ((cnp->cn_flags & HASBUF) == 0)
 			panic("ufs_whiteout: missing name");
 		if (dvp->v_mount->mnt_maxsymlinklen <= 0)
 			panic("ufs_whiteout: old format filesystem");
@@ -888,8 +905,10 @@ ufs_whiteout(ap)
 		break;
 	}
 	if (cnp->cn_flags & HASBUF) {
-		FREE_ZONE(cnp->cn_pnbuf, cnp->cn_pnlen, M_NAMEI);
+		char *tmp = cnp->cn_pnbuf;
+		cnp->cn_pnbuf = NULL;
 		cnp->cn_flags &= ~HASBUF;
+		FREE_ZONE(tmp, cnp->cn_pnlen, M_NAMEI);
 	}
 	return (error);
 }
@@ -941,7 +960,7 @@ ufs_rename(ap)
 	struct dirtemplate dirbuf;
 	struct timeval tv;
 	int doingdirectory = 0, oldparent = 0, newparent = 0;
-	int error = 0;
+	int error = 0, ioflag;
 	u_char namlen;
 
 #if DIAGNOSTIC
@@ -1023,6 +1042,7 @@ abortit:
 		oldparent = dp->i_number;
 		doingdirectory++;
 	}
+	VN_KNOTE(fdvp, NOTE_WRITE);		/* XXX right place? */
 	vrele(fdvp);
 
 	/*
@@ -1111,6 +1131,7 @@ abortit:
 			}
 			goto bad;
 		}
+		VN_KNOTE(tdvp, NOTE_WRITE);
 		vput(tdvp);
 	} else {
 		if (xp->i_dev != dp->i_dev || xp->i_dev != ip->i_dev)
@@ -1164,6 +1185,7 @@ abortit:
 			dp->i_nlink--;
 			dp->i_flag |= IN_CHANGE;
 		}
+		VN_KNOTE(tdvp, NOTE_WRITE);
 		vput(tdvp);
 		/*
 		 * Adjust the link count of the target to
@@ -1179,10 +1201,13 @@ abortit:
 		if (doingdirectory) {
 			if (--xp->i_nlink != 0)
 				panic("rename: linked directory");
-			error = VOP_TRUNCATE(tvp, (off_t)0, IO_SYNC,
+			ioflag = ((tvp)->v_mount->mnt_flag & MNT_ASYNC) ?
+			    0 : IO_SYNC;
+			error = VOP_TRUNCATE(tvp, (off_t)0, ioflag,
 			    tcnp->cn_cred, tcnp->cn_proc);
 		}
 		xp->i_flag |= IN_CHANGE;
+		VN_KNOTE(tvp, NOTE_DELETE);
 		vput(tvp);
 		xp = NULL;
 	}
@@ -1268,6 +1293,7 @@ abortit:
 		}
 		xp->i_flag &= ~IN_RENAME;
 	}
+	VN_KNOTE(fvp, NOTE_RENAME);
 	if (dp)
 		vput(fdvp);
 	if (xp)
@@ -1348,7 +1374,10 @@ ufs_mkdir(ap)
 #if QUOTA
 	if ((error = getinoquota(ip)) ||
 	    (error = chkiq(ip, 1, cnp->cn_cred, 0))) {
-		_FREE_ZONE(cnp->cn_pnbuf, cnp->cn_pnlen, M_NAMEI);
+		char *tmp = cnp->cn_pnbuf;
+		cnp->cn_pnbuf = NULL;
+		cnp->cn_flags &= ~HASBUF;
+		FREE_ZONE(tmp, cnp->cn_pnlen, M_NAMEI);
 		VOP_VFREE(tvp, ip->i_number, dmode);
 		vput(tvp);
 		vput(dvp);
@@ -1412,10 +1441,17 @@ bad:
 		ip->i_nlink = 0;
 		ip->i_flag |= IN_CHANGE;
 		vput(tvp);
-	} else
+	} else {
+		VN_KNOTE(dvp, NOTE_WRITE | NOTE_LINK);
 		*ap->a_vpp = tvp;
+	};
 out:
-	FREE_ZONE(cnp->cn_pnbuf, cnp->cn_pnlen, M_NAMEI);
+	{
+		char *tmp = cnp->cn_pnbuf;
+		cnp->cn_pnbuf = NULL;
+		cnp->cn_flags &= ~HASBUF;
+		FREE_ZONE(tmp, cnp->cn_pnlen, M_NAMEI);
+	}
 	vput(dvp);
 	return (error);
 }
@@ -1435,7 +1471,7 @@ ufs_rmdir(ap)
 	struct vnode *dvp = ap->a_dvp;
 	struct componentname *cnp = ap->a_cnp;
 	struct inode *ip, *dp;
-	int error;
+	int error, ioflag;
 
 	ip = VTOI(vp);
 	dp = VTOI(dvp);
@@ -1471,6 +1507,7 @@ ufs_rmdir(ap)
 	 */
 	if (error = ufs_dirremove(dvp, cnp))
 		goto out;
+	VN_KNOTE(dvp, NOTE_WRITE | NOTE_LINK);
 	dp->i_nlink--;
 	dp->i_flag |= IN_CHANGE;
 	cache_purge(dvp);
@@ -1488,12 +1525,14 @@ ufs_rmdir(ap)
 	 * worry about them later.
 	 */
 	ip->i_nlink -= 2;
-	error = VOP_TRUNCATE(vp, (off_t)0, IO_SYNC, cnp->cn_cred,
+	ioflag = ((vp)->v_mount->mnt_flag & MNT_ASYNC) ? 0 : IO_SYNC;
+	error = VOP_TRUNCATE(vp, (off_t)0, ioflag, cnp->cn_cred,
 	    cnp->cn_proc);
 	cache_purge(ITOV(ip));
 out:
 	if (dvp)
 		vput(dvp);
+	VN_KNOTE(vp, NOTE_DELETE);
 	vput(vp);
 	return (error);
 }
@@ -1518,6 +1557,7 @@ ufs_symlink(ap)
 	if (error = ufs_makeinode(IFLNK | ap->a_vap->va_mode, ap->a_dvp,
 	    vpp, ap->a_cnp))
 		return (error);
+	VN_KNOTE(ap->a_dvp, NOTE_WRITE);
 	vp = *vpp;
 	len = strlen(ap->a_target);
 	if (len < vp->v_mount->mnt_maxsymlinklen) {
@@ -1668,23 +1708,6 @@ ufs_readlink(ap)
 		return (0);
 	}
 	return (VOP_READ(vp, ap->a_uio, 0, ap->a_cred));
-}
-
-/*
- * Ufs abort op, called after namei() when a CREATE/DELETE isn't actually
- * done. If a buffer has been saved in anticipation of a CREATE, delete it.
- */
-/* ARGSUSED */
-int
-ufs_abortop(ap)
-	struct vop_abortop_args /* {
-		struct vnode *a_dvp;
-		struct componentname *a_cnp;
-	} */ *ap;
-{
-	if ((ap->a_cnp->cn_flags & (HASBUF | SAVESTART)) == HASBUF)
-		FREE_ZONE(ap->a_cnp->cn_pnbuf, ap->a_cnp->cn_pnlen, M_NAMEI);
-	return (0);
 }
 
 /*
@@ -1959,7 +1982,164 @@ ufsfifo_close(ap)
 	simple_unlock(&vp->v_interlock);
 	return (VOCALL (fifo_vnodeop_p, VOFFSET(vop_close), ap));
 }
+
+/*
+ * kqfilt_add wrapper for fifos.
+ *
+ * Fall through to ufs kqfilt_add routines if needed 
+ */
+int
+ufsfifo_kqfilt_add(ap)
+	struct vop_kqfilt_add_args *ap;
+{
+	extern int (**fifo_vnodeop_p)(void *);
+	int error;
+
+	error = VOCALL(fifo_vnodeop_p, VOFFSET(vop_kqfilt_add), ap);
+	if (error)
+		error = ufs_kqfilt_add(ap);
+	return (error);
+}
+
+#if 0
+/*
+ * kqfilt_remove wrapper for fifos.
+ *
+ * Fall through to ufs kqfilt_remove routines if needed 
+ */
+int
+ufsfifo_kqfilt_remove(ap)
+	struct vop_kqfilt_remove_args *ap;
+{
+	extern int (**fifo_vnodeop_p)(void *);
+	int error;
+
+	error = VOCALL(fifo_vnodeop_p, VOFFSET(vop_kqfilt_remove), ap);
+	if (error)
+		error = ufs_kqfilt_remove(ap);
+	return (error);
+}
+#endif
+
 #endif /* FIFO */
+
+
+static struct filterops ufsread_filtops = 
+	{ 1, NULL, filt_ufsdetach, filt_ufsread };
+static struct filterops ufswrite_filtops = 
+	{ 1, NULL, filt_ufsdetach, filt_ufswrite };
+static struct filterops ufsvnode_filtops = 
+	{ 1, NULL, filt_ufsdetach, filt_ufsvnode };
+
+/*
+ #
+ #% kqfilt_add	vp	L L L
+ #
+ vop_kqfilt_add
+	IN struct vnode *vp;
+	IN struct knote *kn;
+	IN struct proc *p;
+ */
+int
+ufs_kqfilt_add(ap)
+	struct vop_kqfilt_add_args /* {
+		struct vnode *a_vp;
+		struct knote *a_kn;
+		struct proc *p;
+	} */ *ap;
+{
+	struct vnode *vp = ap->a_vp;
+	struct knote *kn = ap->a_kn;
+
+	switch (kn->kn_filter) {
+	case EVFILT_READ:
+		kn->kn_fop = &ufsread_filtops;
+		break;
+	case EVFILT_WRITE:
+		kn->kn_fop = &ufswrite_filtops;
+		break;
+	case EVFILT_VNODE:
+		kn->kn_fop = &ufsvnode_filtops;
+		break;
+	default:
+		return (1);
+	}
+
+	kn->kn_hook = (caddr_t)vp;
+
+	KNOTE_ATTACH(&VTOI(vp)->i_knotes, kn);
+
+	return (0);
+}
+
+static void
+filt_ufsdetach(struct knote *kn)
+{
+	struct vnode *vp;
+	int result;
+	struct proc *p = current_proc();
+	
+	vp = (struct vnode *)kn->kn_hook;
+	if (1) {	/* ! KNDETACH_VNLOCKED */
+		result = vn_lock(vp, LK_EXCLUSIVE | LK_RETRY, p);
+		if (result) return;
+	};
+
+	result = KNOTE_DETACH(&VTOI(vp)->i_knotes, kn);
+	
+	if (1) {	/* ! KNDETACH_VNLOCKED */
+		VOP_UNLOCK(vp, 0, p);
+	};
+}
+
+/*ARGSUSED*/
+static int
+filt_ufsread(struct knote *kn, long hint)
+{
+	struct vnode *vp = (struct vnode *)kn->kn_hook;
+	struct inode *ip = VTOI(vp);
+
+	/*
+	 * filesystem is gone, so set the EOF flag and schedule 
+	 * the knote for deletion.
+	 */
+	if (hint == NOTE_REVOKE) {
+		kn->kn_flags |= (EV_EOF | EV_ONESHOT);
+		return (1);
+	}
+
+        kn->kn_data = ip->i_size - kn->kn_fp->f_offset;
+        return (kn->kn_data != 0);
+}
+
+/*ARGSUSED*/
+static int
+filt_ufswrite(struct knote *kn, long hint)
+{
+
+	/*
+	 * filesystem is gone, so set the EOF flag and schedule 
+	 * the knote for deletion.
+	 */
+	if (hint == NOTE_REVOKE)
+		kn->kn_flags |= (EV_EOF | EV_ONESHOT);
+
+        kn->kn_data = 0;
+        return (1);
+}
+
+static int
+filt_ufsvnode(struct knote *kn, long hint)
+{
+
+	if (kn->kn_sfflags & hint)
+		kn->kn_fflags |= hint;
+	if (hint == NOTE_REVOKE) {
+		kn->kn_flags |= EV_EOF;
+		return (1);
+	}
+	return (kn->kn_fflags != 0);
+}
 
 /*
  * Return POSIX pathconf information applicable to ufs filesystems.
@@ -2046,12 +2226,16 @@ ufs_advlock(ap)
 	default:
 		return (EINVAL);
 	}
-	if (start < 0)
-		return (EINVAL);
 	if (fl->l_len == 0)
 		end = -1;
-	else
+	else if (fl->l_len > 0)
 		end = start + fl->l_len - 1;
+	else { /* l_len is negative */
+		end = start - 1;
+		start += fl->l_len;
+	}
+	if (start < 0)
+		return (EINVAL);
 	/*
 	 * Create the lockf structure
 	 */
@@ -2178,7 +2362,10 @@ ufs_makeinode(mode, dvp, vpp, cnp)
 		mode |= IFREG;
 
 	if (error = VOP_VALLOC(dvp, mode, cnp->cn_cred, &tvp)) {
-		_FREE_ZONE(cnp->cn_pnbuf, cnp->cn_pnlen, M_NAMEI);
+		char *tmp = cnp->cn_pnbuf;
+		cnp->cn_pnbuf = NULL;
+		cnp->cn_flags &= ~HASBUF;
+		FREE_ZONE(tmp, cnp->cn_pnlen, M_NAMEI);
 		vput(dvp);
 		return (error);
 	}
@@ -2191,7 +2378,10 @@ ufs_makeinode(mode, dvp, vpp, cnp)
 #if QUOTA
 	if ((error = getinoquota(ip)) ||
 	    (error = chkiq(ip, 1, cnp->cn_cred, 0))) {
-		_FREE_ZONE(cnp->cn_pnbuf, cnp->cn_pnlen, M_NAMEI);
+		char *tmp = cnp->cn_pnbuf;
+		cnp->cn_pnbuf = NULL;
+		cnp->cn_flags &= ~HASBUF;
+		FREE_ZONE(tmp, cnp->cn_pnlen, M_NAMEI);
 		VOP_VFREE(tvp, ip->i_number, mode);
 		vput(tvp);
 		vput(dvp);
@@ -2227,8 +2417,12 @@ ufs_makeinode(mode, dvp, vpp, cnp)
 		goto bad;
 	if (error = ufs_direnter(ip, dvp, cnp))
 		goto bad;
-	if ((cnp->cn_flags & SAVESTART) == 0)
-		FREE_ZONE(cnp->cn_pnbuf, cnp->cn_pnlen, M_NAMEI);
+	if ((cnp->cn_flags & SAVESTART) == 0) {
+		char *tmp = cnp->cn_pnbuf;
+		cnp->cn_pnbuf = NULL;
+		cnp->cn_flags &= ~HASBUF;
+		FREE_ZONE(tmp, cnp->cn_pnlen, M_NAMEI);
+	}
 	vput(dvp);
 
 	*vpp = tvp;
@@ -2239,7 +2433,12 @@ bad:
 	 * Write error occurred trying to update the inode
 	 * or the directory so must deallocate the inode.
 	 */
-	_FREE_ZONE(cnp->cn_pnbuf, cnp->cn_pnlen, M_NAMEI);
+	{
+		char *tmp = cnp->cn_pnbuf;
+		cnp->cn_pnbuf = NULL;
+		cnp->cn_flags &= ~HASBUF;
+		FREE_ZONE(tmp, cnp->cn_pnlen, M_NAMEI);
+	}
 	vput(dvp);
 	ip->i_nlink = 0;
 	ip->i_flag |= IN_CHANGE;

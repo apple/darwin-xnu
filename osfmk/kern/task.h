@@ -113,7 +113,6 @@ typedef struct task {
 	decl_mutex_data(,lock)		/* Task's lock */
 	int		ref_count;	/* Number of references to me */
 	boolean_t	active;		/* Task has not been terminated */
-	boolean_t	kernel_loaded;	/* Created with kernel_task_create() */
 
 	/* Miscellaneous */
 	vm_map_t	map;		/* Address space description */
@@ -133,11 +132,11 @@ typedef struct task {
 	queue_chain_t	swapped_tasks;	/* list of non-resident tasks */
 #endif	/* TASK_SWAPPER */
 
-	/* Activations in this task */
-	queue_head_t	thr_acts;	/* list of thread_activations */
-	int		thr_act_count;
-	int		res_act_count;
-	int		active_act_count; /* have not terminate_self yet */
+	/* Threads in this task */
+	queue_head_t	threads;
+	int				thread_count;
+	int				res_thread_count;
+	int				active_thread_count;
 
 	processor_set_t	processor_set;	/* processor set for new threads */
 #if	MACH_HOST
@@ -153,8 +152,9 @@ typedef struct task {
 	integer_t		priority;			/* base priority for threads */
 	integer_t		max_priority;		/* maximum priority for threads */
 
-	/* Task security token */
+	/* Task security and audit tokens */
 	security_token_t sec_token;
+	audit_token_t	audit_token;
         
 	/* Statistics */
 	time_value_t	total_user_time;	/* user time for dead threads */
@@ -190,6 +190,7 @@ typedef struct task {
         /* Ledgers */
 	struct ipc_port	*wired_ledger_port;
 	struct ipc_port *paged_ledger_port;
+	unsigned long	priv_flags;	/* privelege resource flags */
         
 #if	NORMA_TASK
 	long		child_node;	/* if != -1, node for new children */
@@ -212,6 +213,9 @@ typedef struct task {
 #endif  
 	vm_offset_t	system_shared_region;
 	vm_offset_t	dynamic_working_set;
+	uint32_t taskFeatures[2];		/* Special feature for this task */
+#define tf64BitAddr	0x80000000		/* Task has 64-bit addressing */
+#define tf64BitData	0x40000000		/* Task has 64-bit data registers */
 } Task;
 
 #define task_lock(task)		mutex_lock(&(task)->lock)
@@ -226,17 +230,24 @@ typedef struct task {
 #define task_reference_locked(task) ((task)->ref_count++)
 
 /*
+ *   priv_flags definitions
+ */
+#define VM_BACKING_STORE_PRIV	0x1
+
+/*
  *	Internal only routines
  */
+
+extern void task_backing_store_privileged(
+				task_t task);
 
 /* Initialize task module */
 extern void		task_init(void);
 
 /* task create */
-extern kern_return_t	task_create_local(
+extern kern_return_t	task_create_internal(
 				task_t		parent_task,
 				boolean_t	inherit_memory,
-				boolean_t	kernel_loaded,
 				task_t		*child_task);	/* OUT */
 
 extern void		consider_task_collect(void);

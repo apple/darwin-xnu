@@ -1,29 +1,53 @@
-#include <libsa/vers_rsrc.h>
+#ifndef KERNEL
+#include <libc.h>
+#include "vers_rsrc.h"
+#else
 #include <sys/systm.h>
-#include <libkern/OSByteOrder.h>
+#include <libsa/vers_rsrc.h>
+#endif /* not KERNEL */
+
+#ifndef KERNEL
+#define PRIV_EXT
+#else
+#define PRIV_EXT  __private_extern__
+#endif /* not KERNEL */
+
+#define VERS_MAJOR_DIGITS        (4)
+#define VERS_MINOR_DIGITS        (2)
+#define VERS_REVISION_DIGITS     (2)
+#define VERS_STAGE_DIGITS        (1)
+#define VERS_STAGE_LEVEL_DIGITS  (3)
+
+#define VERS_MAJOR_MULT    (100000000)
+#define VERS_MINOR_MULT      (1000000)
+#define VERS_REVISION_MULT     (10000)
+#define VERS_STAGE_MULT         (1000)
+
+typedef enum {
+    VERS_invalid     = 0,
+    VERS_development = 1,
+    VERS_alpha       = 3,
+    VERS_beta        = 5,
+    VERS_candidate   = 7,
+    VERS_release     = 9,
+} VERS_stage;
 
 
-int isdigit(char c) {
+static int __vers_isdigit(char c) {
     return (c == '0' ||
         c == '1' || c == '2' || c == '3' ||
         c == '4' || c == '5' || c == '6' ||
         c == '7' || c == '8' || c == '9');
 }
 
-int isspace(char c) {
+static int __vers_isspace(char c) {
     return (c == ' ' ||
         c == '\t' ||
         c == '\r' ||
         c == '\n');
 }
 
-
-int isreleasestate(char c) {
-    return (c == 'd' || c == 'a' || c == 'b' || c == 'f');
-}
-
-
-UInt8 BCD_digit_for_char(char c) {
+static int __vers_digit_for_char(char c) {
     switch (c) {
       case '0': return 0; break;
       case '1': return 1; break;
@@ -35,32 +59,19 @@ UInt8 BCD_digit_for_char(char c) {
       case '7': return 7; break;
       case '8': return 8; break;
       case '9': return 9; break;
-      default:  return BCD_illegal; break;
+      default:  return -1; break;
     }
-    return BCD_illegal;
+
+    return -1;
+}
+
+static int __VERS_isreleasestate(char c) {
+    return (c == 'd' || c == 'a' || c == 'b' || c == 'f');
 }
 
 
-char BCD_char_for_digit(UInt8 digit) {
-    switch (digit) {
-      case 0:  return '0'; break;
-      case 1:  return '1'; break;
-      case 2:  return '2'; break;
-      case 3:  return '3'; break;
-      case 4:  return '4'; break;
-      case 5:  return '5'; break;
-      case 6:  return '6'; break;
-      case 7:  return '7'; break;
-      case 8:  return '8'; break;
-      case 9:  return '9'; break;
-      default: return '?'; break;
-    }
-    return '?';
-}
-
-
-VERS_revision VERS_revision_for_string(const char ** string_p) {
-    const char * string;
+static VERS_stage __VERS_stage_for_string(char ** string_p) {
+    char * string;
 
     if (!string_p || !*string_p) {
         return VERS_invalid;
@@ -68,33 +79,33 @@ VERS_revision VERS_revision_for_string(const char ** string_p) {
 
     string = *string_p;
 
-    if (isspace(string[0]) || string[0] == '\0') {
+    if (__vers_isspace(string[0]) || string[0] == '\0') {
         return VERS_release;
     } else {
         switch (string[0]) {
           case 'd':
-              if (isdigit(string[1])) {
+              if (__vers_isdigit(string[1])) {
                   *string_p = &string[1];
                   return VERS_development;
               }
               break;
           case 'a':
-              if (isdigit(string[1])) {
+              if (__vers_isdigit(string[1])) {
                   *string_p = &string[1];
                   return VERS_alpha;
               }
               break;
           case 'b':
-              if (isdigit(string[1])) {
+              if (__vers_isdigit(string[1])) {
                   *string_p = &string[1];
                   return VERS_beta;
               }
               break;
           case 'f':
-              if (isdigit(string[1])) {
+              if (__vers_isdigit(string[1])) {
                   *string_p = &string[1];
                   return VERS_candidate;
-              } else if (string[1] == 'c' && isdigit(string[2])) {
+              } else if (string[1] == 'c' && __vers_isdigit(string[2])) {
                   *string_p = &string[2];
                   return VERS_candidate;
               } else {
@@ -110,321 +121,297 @@ VERS_revision VERS_revision_for_string(const char ** string_p) {
     return VERS_invalid;
 }
 
-
-int VERS_parse_string(const char * vers_string, UInt32 * version_num) {
-    int result = 1;
-    VERS_version vers;
-    const char * current_char_p;
-    UInt8  scratch;
-
-    if (!vers_string || *vers_string == '\0') {
-        return 0;
+static char * __VERS_string_for_stage(VERS_stage stage) {
+    switch (stage) {
+      case VERS_invalid:     return "?"; break;
+      case VERS_development: return "d"; break;
+      case VERS_alpha:       return "a"; break;
+      case VERS_beta:        return "b"; break;
+      case VERS_candidate:   return "f"; break;
+      case VERS_release:     return ""; break;
     }
 
-    vers.vnum = 0;
+    return "?";
+}
 
-    current_char_p = &vers_string[0];
+PRIV_EXT
+VERS_version VERS_parse_string(const char * vers_string) {
+    VERS_version result = -1;
+    int vers_digit = -1;
+    int num_digits_scanned = 0;
+    VERS_version vers_major = 0;
+    VERS_version vers_minor = 0;
+    VERS_version vers_revision = 0;
+    VERS_version vers_stage = 0;
+    VERS_version vers_stage_level = 0;
+    char * current_char_p;
 
+    if (!vers_string || *vers_string == '\0') {
+        return -1;
+    }
+
+    current_char_p = (char *)&vers_string[0];
 
    /*****
     * Check for an initial digit of the major release number.
     */
-    vers.bytes[0] = BCD_digit_for_char(*current_char_p);
-    if (vers.bytes[0] == BCD_illegal) {
-        return 0;
+    vers_major = __vers_digit_for_char(*current_char_p);
+    if (vers_major < 0) {
+        return -1;
     }
 
     current_char_p++;
+    num_digits_scanned = 1;
 
-
-   /*****
-    * Check for a second digit of the major release number.
+   /* Complete scan for major version number. Legal characters are
+    * any digit, period, any buildstage letter.
     */
-    if (*current_char_p == '\0') {
-        vers.bytes[2] = VERS_release;
-        vers.bytes[3] = 0xff;
-        goto finish;
-    } else if (isdigit(*current_char_p)) {
-        scratch = BCD_digit_for_char(*current_char_p);
-        if (scratch == BCD_illegal) {
-            return 0;
-        }
-        vers.bytes[0] = BCD_combine(vers.bytes[0], scratch);
-        current_char_p++;
-
-        if (*current_char_p == '\0') {
-            vers.bytes[2] = VERS_release;
-            vers.bytes[3] = 0xff;
+    while (num_digits_scanned < VERS_MAJOR_DIGITS) {
+        if (__vers_isspace(*current_char_p) || *current_char_p == '\0') {
+            vers_stage = VERS_release;
             goto finish;
-        } else if (isreleasestate(*current_char_p)) {
+        } else if (__vers_isdigit(*current_char_p)) {
+            vers_digit = __vers_digit_for_char(*current_char_p);
+            if (vers_digit < 0) {
+                return -1;
+            }
+            vers_major = (vers_major) * 10 + vers_digit;
+            current_char_p++;
+            num_digits_scanned++;
+        } else if (__VERS_isreleasestate(*current_char_p)) {
             goto release_state;
         } else if (*current_char_p == '.') {
             current_char_p++;
+            goto minor_version;
         } else {
-            return 0;
+            return -1;
         }
-    } else if (isreleasestate(*current_char_p)) {
-        goto release_state;
-    } else if (*current_char_p == '.') {
-        current_char_p++;
-    } else {
-        return 0;
     }
 
-
-   /*****
-    * Check for the minor release number.
+   /* Check for too many digits.
     */
-    if (*current_char_p == '\0') {
-        vers.bytes[2] = VERS_release;
-        vers.bytes[3] = 0xff;
-        goto finish;
-    } else if (isdigit(*current_char_p)) {
-        vers.bytes[1] = BCD_digit_for_char(*current_char_p);
-        if (vers.bytes[1] == BCD_illegal) {
-            return 0;
+    if (num_digits_scanned == VERS_MAJOR_DIGITS) {
+         if (*current_char_p == '.') {
+            current_char_p++;
+        } else if (__vers_isdigit(*current_char_p)) {
+            return -1;
         }
+    }
 
-        // Make sure its the first nibble of byte 1!
-        vers.bytes[1] = BCD_combine(vers.bytes[1], 0);
+minor_version:
 
-        current_char_p++;
+    num_digits_scanned = 0;
 
-        if (*current_char_p == '\0') {
-            vers.bytes[2] = VERS_release;
-            vers.bytes[3] = 0xff;
+   /* Scan for minor version number. Legal characters are
+    * any digit, period, any buildstage letter.
+    */
+    while (num_digits_scanned < VERS_MINOR_DIGITS) {
+        if (__vers_isspace(*current_char_p) || *current_char_p == '\0') {
+            vers_stage = VERS_release;
             goto finish;
-        } else if (isreleasestate(*current_char_p)) {
+        } else if (__vers_isdigit(*current_char_p)) {
+            vers_digit = __vers_digit_for_char(*current_char_p);
+            if (vers_digit < 0) {
+                return -1;
+            }
+            vers_minor = (vers_minor) * 10 + vers_digit;
+            current_char_p++;
+            num_digits_scanned++;
+        } else if (__VERS_isreleasestate(*current_char_p)) {
             goto release_state;
         } else if (*current_char_p == '.') {
             current_char_p++;
+            goto revision;
         } else {
-            return 0;
+            return -1;
         }
-    } else {
-        return 0;
     }
 
-
-   /*****
-    * Check for the bugfix number.
+   /* Check for too many digits.
     */
-    if (*current_char_p == '\0') {
-        vers.bytes[2] = VERS_release;
-        vers.bytes[3] = 0xff;
-        goto finish;
-    } else if (isdigit(*current_char_p)) {
-        scratch = BCD_digit_for_char(*current_char_p);
-        if (scratch == BCD_illegal) {
-            return 0;
+    if (num_digits_scanned == VERS_MINOR_DIGITS) {
+         if (*current_char_p == '.') {
+            current_char_p++;
+        } else if (__vers_isdigit(*current_char_p)) {
+            return -1;
         }
+    }
 
-        /* vers.bytes[1] has its left nibble set already */
-        vers.bytes[1] = vers.bytes[1] | scratch;
+revision:
 
-        current_char_p++;
+    num_digits_scanned = 0;
 
-        if (*current_char_p == '\0') {
-            vers.bytes[2] = VERS_release;
-            vers.bytes[3] = 0xff;
+   /* Scan for revision version number. Legal characters are
+    * any digit, any buildstage letter (NOT PERIOD).
+    */
+    while (num_digits_scanned < VERS_REVISION_DIGITS) {
+        if (__vers_isspace(*current_char_p) || *current_char_p == '\0') {
+            vers_stage = VERS_release;
             goto finish;
-        } else if (isreleasestate(*current_char_p)) {
+        } else if (__vers_isdigit(*current_char_p)) {
+            vers_digit = __vers_digit_for_char(*current_char_p);
+            if (vers_digit < 0) {
+                return -1;
+            }
+            vers_revision = (vers_revision) * 10 + vers_digit;
+            current_char_p++;
+            num_digits_scanned++;
+        } else if (__VERS_isreleasestate(*current_char_p)) {
             goto release_state;
         } else {
-            return 0;
+            return -1;
         }
-    } else {
-        return 0;
     }
 
+   /* Check for too many digits.
+    */
+    if (num_digits_scanned == VERS_REVISION_DIGITS) {
+         if (*current_char_p == '.') {
+            current_char_p++;
+        } else if (__vers_isdigit(*current_char_p)) {
+            return -1;
+        }
+    }
 
 release_state:
 
    /*****
     * Check for the release state.
     */
-    if (*current_char_p == '\0') {
-        vers.bytes[2] = VERS_release;
-        vers.bytes[3] = 0xff;
+    if (__vers_isspace(*current_char_p) || *current_char_p == '\0') {
+        vers_stage = VERS_release;
         goto finish;
     } else {
-        vers.bytes[2] = VERS_revision_for_string(&current_char_p);
-        if (vers.bytes[2] == VERS_invalid) {
-            return 0;
+        vers_stage = __VERS_stage_for_string(&current_char_p);
+        if (vers_stage == VERS_invalid) {
+            return -1;
         }
     }
 
 
-   /*****
-    * Get the nonrelease revision number (0..255).
+// stage level
+
+    num_digits_scanned = 0;
+
+   /* Scan for stage level number. Legal characters are
+    * any digit only.
     */
-    if (vers.bytes[2] != VERS_release) {
-        UInt32 revision_num = 0;
-        int    i;
-
-        if (*current_char_p == '\0' || !isdigit(*current_char_p)) {
-            return 0;
-        }
-        for (i = 0; i < 3 && *current_char_p != '\0'; i++, current_char_p++) {
-            UInt8 scratch_digit;
-            scratch_digit = BCD_digit_for_char(*current_char_p);
-            if (scratch_digit == BCD_illegal) {
-                return 0;
+    while (num_digits_scanned < VERS_STAGE_LEVEL_DIGITS) {
+        if (__vers_isspace(*current_char_p) || *current_char_p == '\0') {
+            if (num_digits_scanned) {
+                goto finish;
+            } else {
+                return -1;
             }
-            revision_num *= 10;
-            revision_num += scratch_digit;
+        } else if (__vers_isdigit(*current_char_p)) {
+            vers_digit = __vers_digit_for_char(*current_char_p);
+            if (vers_digit < 0) {
+                return -1;
+            }
+            vers_stage_level = (vers_stage_level) * 10 + vers_digit;
+            current_char_p++;
+            num_digits_scanned++;
+        } else {
+            return -1;
         }
-        if (isdigit(*current_char_p) || revision_num > 255) {
-            return 0;
-        }
-        vers.bytes[3] = (UInt8)revision_num;
     }
 
-    if (vers.bytes[2] == VERS_release) {
-        vers.bytes[3] = 0xff;
-    } else {
-        if (vers.bytes[2] == VERS_candidate) {
-            if (vers.bytes[3] == 0) {
-                return 0;
-            } else {
-                vers.bytes[2] = VERS_release;
-                vers.bytes[3]--;
-            }
-        }
+   /* Check for too many digits.
+    */
+    if ((num_digits_scanned == VERS_STAGE_LEVEL_DIGITS) &&
+        ! (__vers_isspace(*current_char_p) || (*current_char_p == '\0'))) {
+
+        return -1;
+    }
+
+    if (vers_stage_level > 255) {
+        return -1;
     }
 
 finish:
-    *version_num = OSSwapBigToHostInt32(vers.vnum);
+
+    if (vers_stage == VERS_candidate && vers_stage_level == 0) {
+        return -1;
+    }
+
+    result = (vers_major * VERS_MAJOR_MULT) +
+             (vers_minor * VERS_MINOR_MULT) +
+             (vers_revision * VERS_REVISION_MULT) +
+             (vers_stage * VERS_STAGE_MULT) +
+             vers_stage_level; 
+
     return result;
 }
 
+#define VERS_STRING_MAX_LEN  (16)
 
-#define VERS_STRING_MAX_LEN  (12)
-
-int VERS_string(char * buffer, UInt32 length, UInt32 vers) {
-    VERS_version version;
+PRIV_EXT
+int VERS_string(char * buffer, UInt32 length, VERS_version vers) {
     int cpos = 0;
-    int result = 1;
+    VERS_version vers_major = 0;
+    VERS_version vers_minor = 0;
+    VERS_version vers_revision = 0;
+    VERS_version vers_stage = 0;
+    VERS_version vers_stage_level = 0;
+    char * stage_string = NULL;  // don't free
 
-    char major1;
-    char major2;
-    char minor;
-    char bugfix;
-
-    version.vnum = OSSwapHostToBigInt32(vers);
-
-   /* No buffer, length less than longest possible vers string,
+   /* No buffer or length less than longest possible vers string,
     * return 0.
     */
     if (!buffer || length < VERS_STRING_MAX_LEN) {
-        result = -1;
-        goto finish;
+        return 0;
     }
 
     bzero(buffer, length * sizeof(char));
 
-
-   /*****
-    * Major version number.
-    */
-    major1 = BCD_char_for_digit(BCD_get_left(version.bytes[0]));
-    if (major1 == '?') {
-        result = 0;
-    } /* this is not an 'else' situation */
-    if (major1 != '0') {
-        buffer[cpos] = major1;
-        cpos++;
+    if (vers < 0) {
+        strcpy(buffer, "(invalid)");
+        return 1;
     }
 
-    major2 = BCD_char_for_digit(BCD_get_right(version.bytes[0]));
-    if (major2 == '?') {
-        result = 0;
-    }
+    vers_major = vers / VERS_MAJOR_MULT;
 
-    buffer[cpos] = major2;
-    cpos++;
+    vers_minor = vers - (vers_major * VERS_MAJOR_MULT);
+    vers_minor /= VERS_MINOR_MULT;
 
+    vers_revision = vers -
+        ( (vers_major * VERS_MAJOR_MULT) + (vers_minor * VERS_MINOR_MULT) );
+    vers_revision /= VERS_REVISION_MULT;
 
-   /*****
-    * Minor & bug-fix version numbers.
-    */
-    minor = BCD_char_for_digit(BCD_get_left(version.bytes[1]));
-    if (minor == '?') {
-        result = 0;
-    }
-    bugfix = BCD_char_for_digit(BCD_get_right(version.bytes[1]));
-    if (bugfix == '?') {
-        result = 0;
-    }
+    vers_stage = vers -
+        ( (vers_major * VERS_MAJOR_MULT) + (vers_minor * VERS_MINOR_MULT) +
+          (vers_revision * VERS_REVISION_MULT));
+    vers_stage /= VERS_STAGE_MULT;
 
+    vers_stage_level = vers -
+        ( (vers_major * VERS_MAJOR_MULT) + (vers_minor * VERS_MINOR_MULT) +
+          (vers_revision * VERS_REVISION_MULT) + (vers_stage * VERS_STAGE_MULT));
 
-   /* Always display the minor version number.
+    cpos = sprintf(buffer, "%lu", (UInt32)vers_major);
+
+   /* Always include the minor version; it just looks weird without.
     */
     buffer[cpos] = '.';
     cpos++;
-    buffer[cpos] = minor;
-    cpos++;
+    cpos += sprintf(buffer+cpos, "%lu", (UInt32)vers_minor);
 
-
-   /* Only display the bugfix version number if it's nonzero.
+   /* The revision is displayed only if nonzero.
     */
-    if (bugfix != '0') {
+    if (vers_revision) {
         buffer[cpos] = '.';
         cpos++;
-        buffer[cpos] = bugfix;
-        cpos++;
+        cpos += sprintf(buffer+cpos, "%lu", (UInt32)vers_revision);
     }
 
-
-   /* If the release state is final, we're done!
-    */
-    if (version.bytes[2] == VERS_release && version.bytes[3] == 255) {
-        result = 0;
-        goto finish;
+    stage_string = __VERS_string_for_stage(vers_stage);
+    if (stage_string && stage_string[0]) {
+        strcat(buffer, stage_string);
+        cpos += strlen(stage_string);
     }
 
-
-   /*****
-    * Do the release state and update level.
-    */
-    switch (version.bytes[2]) {
-      case VERS_development:
-        buffer[cpos] = 'd';
-        cpos++;
-        break;
-      case VERS_alpha:
-        buffer[cpos] = 'a';
-        cpos++;
-        break;
-      case VERS_beta:
-        buffer[cpos] = 'b';
-        cpos++;
-        break;
-      case VERS_release: 
-        if (version.bytes[3] < 255) {
-            buffer[cpos] = 'f';
-            buffer[cpos+1] = 'c';
-            cpos += 2;
-        } else {
-            result = 1;
-            goto finish;
-        }
-        break;
-      default:
-        result = 0;
-        buffer[cpos] = '?';
-        cpos++;
-        break;
+    if (vers_stage < VERS_release) {
+        sprintf(buffer+cpos, "%lu", (UInt32)vers_stage_level);
     }
 
-    if (version.bytes[2] != VERS_release) {
-        sprintf(&buffer[cpos], "%d", version.bytes[3]);
-    } else {
-        if (version.bytes[3] < 255) {
-            sprintf(&buffer[cpos], "%d", version.bytes[3] + 1);
-        }
-    }
-
-finish:
-    return result;
+    return 1;
 }

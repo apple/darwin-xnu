@@ -40,13 +40,14 @@
 
 extern thread_t        	machine_wake_thread;
 
-extern void		processor_action(void);
-
 extern void		cpu_down(
 					int			cpu);
 
 extern void		cpu_up(
 					int			cpu);
+
+extern void		processor_offline(
+					processor_t		processor);
 
 /*
  * Must be implemented in machine dependent code.

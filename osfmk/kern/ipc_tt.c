@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2003 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -59,6 +59,7 @@
  *	Task and thread related IPC functions.
  */
 
+#include <mach/mach_types.h>
 #include <mach/boolean.h>
 #include <mach_rt.h>
 #include <mach/kern_return.h>
@@ -113,14 +114,21 @@ ipc_task_init(
 	task->itk_self = kport;
 	task->itk_sself = ipc_port_make_send(kport);
 	task->itk_space = space;
-	space->is_fast = task->kernel_loaded;
+	space->is_fast = FALSE;
 
 	if (parent == TASK_NULL) {
+		ipc_port_t port;
+
 		for (i = FIRST_EXCEPTION; i < EXC_TYPES_COUNT; i++) {
 			task->exc_actions[i].port = IP_NULL;
 		}/* for */
-		task->itk_host = ipc_port_make_send(realhost.host_self);
+		
+		kr = host_get_host_port(host_priv_self(), &port);
+		assert(kr == KERN_SUCCESS);
+		task->itk_host = port;
+
 		task->itk_bootstrap = IP_NULL;
+
 		for (i = 0; i < TASK_PORT_REGISTER_MAX; i++)
 			task->itk_registered[i] = IP_NULL;
 	} else {
@@ -248,6 +256,74 @@ ipc_task_terminate(
 
 	/* destroy the kernel port */
 	ipc_port_dealloc_kernel(kport);
+}
+
+/*
+ *	Routine:	ipc_task_reset
+ *	Purpose:
+ *		Reset a task's IPC state to protect it when
+ *		it enters an elevated security context.
+ *	Conditions:
+ *		Nothing locked.  The task must be suspended.
+ *		(Or the current thread must be in the task.)
+ */
+
+void
+ipc_task_reset(
+	task_t		task)
+{
+	ipc_port_t old_kport, new_kport;
+	ipc_port_t old_sself;
+#if 0
+	ipc_port_t old_exc_actions[EXC_TYPES_COUNT];
+	int i;
+#endif
+
+	new_kport = ipc_port_alloc_kernel();
+	if (new_kport == IP_NULL)
+		panic("ipc_task_reset");
+
+	itk_lock(task);
+
+	old_kport = task->itk_self;
+
+	if (old_kport == IP_NULL) {
+		/* the task is already terminated (can this happen?) */
+		itk_unlock(task);
+		ipc_port_dealloc_kernel(new_kport);
+		return;
+	}
+
+	task->itk_self = new_kport;
+	old_sself = task->itk_sself;
+	task->itk_sself = ipc_port_make_send(new_kport);
+	ipc_kobject_set(old_kport, IKO_NULL, IKOT_NONE);
+	ipc_kobject_set(new_kport, (ipc_kobject_t) task, IKOT_TASK);
+
+#if 0
+	for (i = FIRST_EXCEPTION; i < EXC_TYPES_COUNT; i++) {
+		old_exc_actions[i] = task->exc_action[i].port;
+		task->exc_actions[i].port = IP_NULL;
+	}/* for */
+#endif
+
+	itk_unlock(task);
+
+	/* release the naked send rights */
+
+	if (IP_VALID(old_sself))
+		ipc_port_release_send(old_sself);
+
+#if 0
+	for (i = FIRST_EXCEPTION; i < EXC_TYPES_COUNT; i++) {
+		if (IP_VALID(old_exc_actions[i])) {
+			ipc_port_release_send(old_exc_actions[i]);
+		}
+	}/* for */
+#endif
+
+	/* destroy the kernel port */
+	ipc_port_dealloc_kernel(old_kport);
 }
 
 /*
@@ -1091,16 +1167,15 @@ ref_act_port_locked( ipc_port_t port, thread_act_t *pthr_act )
 		assert(thr_act != THR_ACT_NULL);
 
 		/*
-		 * Normal lock ordering is act_lock(), then ip_lock().
-		 * Allow out-of-order locking here, using
-		 * act_reference_act_locked() to accomodate it.
+		 * Out of order locking here, normal
+		 * ordering is act_lock(), then ip_lock().
 		 */
 		if (!act_lock_try(thr_act)) {
 			ip_unlock(port);
 			mutex_pause();
 			return (FALSE);
 		}
-		act_locked_act_reference(thr_act);
+		act_reference_locked(thr_act);
 		act_unlock(thr_act);
 	}
 	*pthr_act = thr_act;

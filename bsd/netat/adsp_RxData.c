@@ -338,7 +338,7 @@ int RXData(sp, mp, f, len)	/* (CCBPtr sp, ADSP_FRAMEPtr f, word len) */
     {
 	sp->rData = 1;		/* Not empty any more */
 
-	if ((sp->rpb)->ioc == mp) {
+	if ((sp->rpb)->ioc == (caddr_t)mp) {
 	   dPrintf(D_M_ADSP, D_L_TRACE, 
 		   ("RXData: (pb->ioc == mp) no stored data\n"));
     	   KERNEL_DEBUG(DBG_ADSP_RCV, 4, sp, sp->rpb, 0, 0);
