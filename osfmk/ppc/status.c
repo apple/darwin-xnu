@@ -1093,13 +1093,16 @@ savearea *find_kern_regs(thread_act_t act) {
 savearea_fpu *find_user_fpu(thread_act_t act) {
 
   	savearea_fpu	*fsv;
+	boolean_t	intr;
 
+	intr = ml_set_interrupts_enabled(FALSE); 
 	fsv = act->mact.curctx->FPUsave;				/* Get the start of the floating point chain */
 	
 	while(fsv) {									/* Look until the end or we find it */
 		if(!(fsv->save_hdr.save_level)) break;		/* Is the the user state stuff? (the level is 0 if so) */	
 		fsv = CAST_DOWN(savearea_fpu *, fsv->save_hdr.save_prev);	/* Try the previous one */ 
 	}
+	(void) ml_set_interrupts_enabled(intr);
 	
 	return fsv;										/* Bye bye... */
 }
@@ -1112,13 +1115,16 @@ savearea_fpu *find_user_fpu(thread_act_t act) {
 savearea_vec *find_user_vec(thread_act_t act) {
 
   	savearea_vec	*vsv;
+	boolean_t	intr;
 
+	intr = ml_set_interrupts_enabled(FALSE); 
 	vsv = act->mact.curctx->VMXsave;				/* Get the start of the vector chain */
 	
 	while(vsv) {									/* Look until the end or we find it */
 		if(!(vsv->save_hdr.save_level)) break;		/* Is the the user state stuff? (the level is 0 if so) */	
 		vsv = CAST_DOWN(savearea_vec *, vsv->save_hdr.save_prev);	/* Try the previous one */ 
 	}
+	(void) ml_set_interrupts_enabled(intr);
 	
 	return vsv;										/* Bye bye... */
 }
@@ -1131,17 +1137,20 @@ savearea_vec *find_user_vec_curr(void) {
 
   	savearea_vec	*vsv;
 	thread_act_t 	act;
-	
+	boolean_t	intr;
+
 	act = current_act();							/* Get the current activation */			
 	
 	vec_save(act->mact.curctx);						/* Force save if live */
 
+	intr = ml_set_interrupts_enabled(FALSE); 
 	vsv = act->mact.curctx->VMXsave;				/* Get the start of the vector chain */
 	
 	while(vsv) {									/* Look until the end or we find it */
 		if(!(vsv->save_hdr.save_level)) break;		/* Is the the user state stuff? (the level is 0 if so) */	
 		vsv = CAST_DOWN(savearea_vec *, vsv->save_hdr.save_prev);	/* Try the previous one */ 
 	}
+	(void) ml_set_interrupts_enabled(intr);
 	
 	return vsv;										/* Bye bye... */
 }

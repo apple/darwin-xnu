@@ -3655,15 +3655,16 @@ hpfTLBIE32:	lwarx	r0,0,r9						; Get the TLBIE lock
 
 			tlbie	r12							; Invalidate it everywhere 
 
-			stw		r0,tlbieLock(0)				; Clear the tlbie lock
-			
 			beq-	hpfNoTS32					; Can not have MP on this machine...
 			
 			eieio								; Make sure that the tlbie happens first 
 			tlbsync								; Wait for everyone to catch up 
 			sync								; Make sure of it all
 			
-hpfNoTS32:	stw		r7,hwSteals(r4)				; Save the steal count
+hpfNoTS32:	
+			stw		r0,tlbieLock(0)				; Clear the tlbie lock
+			
+			stw		r7,hwSteals(r4)				; Save the steal count
 			bgt		cr5,hpfInser32				; We just stole a block mapping...
 			
 			lwz		r4,4(r19)					; Get the RC of the just invalidated PTE
@@ -3839,8 +3840,6 @@ hpfTLBIE64:	lwarx	r0,0,r9						; Get the TLBIE lock
 
 			tlbie	r11							; Invalidate it everywhere 
 
-			stw		r0,tlbieLock(0)				; Clear the tlbie lock
-
 			mr		r7,r8						; Get a copy of the space ID
 			eieio								; Make sure that the tlbie happens first
 			rldimi	r7,r7,14,36					; Copy address space to make hash value
@@ -3850,6 +3849,9 @@ hpfTLBIE64:	lwarx	r0,0,r9						; Get the TLBIE lock
 			srdi	r2,r6,26					; Shift original segment down to bottom
 			
 			ptesync								; Make sure of it all
+
+			stw		r0,tlbieLock(0)				; Clear the tlbie lock
+
 			xor		r7,r7,r2					; Compute original segment
 
 			stw		r10,hwSteals(r4)			; Save the steal count
@@ -5058,15 +5060,16 @@ mITLBIE32:	lwarx	r0,0,r8						; Get the TLBIE lock
 
 			tlbie	r5							; Invalidate it everywhere 
 
-			stw		r0,tlbieLock(0)				; Clear the tlbie lock
-			
 			beq-	mINoTS32					; Can not have MP on this machine...
 			
 			eieio								; Make sure that the tlbie happens first 
 			tlbsync								; Wait for everyone to catch up 
 			sync								; Make sure of it all
 			
-mINoTS32:	lwz		r5,4(r3)					; Get the real part
+mINoTS32:	
+			stw		r0,tlbieLock(0)				; Clear the tlbie lock
+			
+			lwz		r5,4(r3)					; Get the real part
 			srwi	r10,r5,12					; Change physical address to a ppnum
 
 mINmerge:	lbz		r11,mpFlags+1(r31)			; Get the offset to the physical entry table
@@ -5148,14 +5151,15 @@ mITLBIE64:	lwarx	r0,0,r8						; Get the TLBIE lock
 
 			tlbie	r2							; Invalidate it everywhere 
 
-			stw		r0,tlbieLock(0)				; Clear the tlbie lock
-			
 			eieio								; Make sure that the tlbie happens first 
 			tlbsync								; Wait for everyone to catch up 
 			isync								
 			ptesync								; Wait for quiet again
 			
-mINoTS64:	sync								; Make sure of it all
+mINoTS64:	
+			stw		r0,tlbieLock(0)				; Clear the tlbie lock
+			
+			sync								; Make sure of it all
 
 			ld		r5,8(r3)					; Get the real part
 			srdi	r10,r5,12					; Change physical address to a ppnum

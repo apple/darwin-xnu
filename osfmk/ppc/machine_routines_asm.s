@@ -793,8 +793,20 @@ yesnap:		mftbu	r9								; Get the upper timebase
 			mftbu	r8								; Get the upper one again
 			cmplw	r9,r8							; Did the top tick?
 			bne-	yesnap							; Yeah, need to get it again...
+
 			stw		r8,napStamp(r12)				; Set high order time stamp
 			stw		r7,napStamp+4(r12)				; Set low order nap stamp
+
+			rlwinm.	r0,r11,0,pfAltivecb,pfAltivecb	; Do we have altivec?
+			beq-	minovec							; No...
+			dssall									; Stop the streams before we nap/doze
+			sync
+			lwz		r8,napStamp(r12)				; Reload high order time stamp
+clearpipe:
+			cmplw	r8,r8
+			bne-	clearpipe			
+			isync
+minovec:
 
 			rlwinm.	r7,r11,0,pfNoL2PFNapb,pfNoL2PFNapb	; Turn off L2 Prefetch before nap?
 			beq	miL2PFok
@@ -848,11 +860,7 @@ mipNSF1:	andc	r6,r6,r10						; Clean up the old power bits
 			isync									; Make sure it is set
 		
 			mtmsr	r7								; Enable for interrupts
-			rlwinm.	r11,r11,0,pfAltivecb,pfAltivecb	; Do we have altivec?
-			beq-	minovec							; No...
-			dssall									; Stop the streams before we nap/doze
 
-minovec:
 			bf--	pf64Bitb,mipowloop				; skip if 32-bit...
 			
 			li		r3,0x10							; Fancy nap threashold is 0x10 ticks
