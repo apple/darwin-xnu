@@ -3,22 +3,19 @@
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
- * Copyright (c) 1999-2003 Apple Computer, Inc.  All Rights Reserved.
+ * The contents of this file constitute Original Code as defined in and
+ * are subject to the Apple Public Source License Version 1.1 (the
+ * "License").  You may not use this file except in compliance with the
+ * License.  Please obtain a copy of the License at
+ * http://www.apple.com/publicsource and read it before using this file.
  * 
- * This file contains Original Code and/or Modifications of Original Code
- * as defined in and that are subject to the Apple Public Source License
- * Version 2.0 (the 'License'). You may not use this file except in
- * compliance with the License. Please obtain a copy of the License at
- * http://www.opensource.apple.com/apsl/ and read it before using this
- * file.
- * 
- * The Original Code and all software distributed under the License are
- * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * This Original Code and all software distributed under the License are
+ * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
- * Please see the License for the specific language governing rights and
- * limitations under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
+ * License for the specific language governing rights and limitations
+ * under the License.
  * 
  * @APPLE_LICENSE_HEADER_END@
  */
@@ -55,21 +52,12 @@ struct shared_region_task_mappings {
 	vm_offset_t		client_base;
 	vm_offset_t		alternate_base;
 	vm_offset_t		alternate_next;
-	unsigned int		fs_base;
-	unsigned int		system;
 	int			flags;
 	vm_offset_t		self;
 };
 
-#define SHARED_REGION_SYSTEM	0x1 // Default env for system and fs_root
-#define SHARED_REGION_FULL	0x2 // Shared regions are full
-#define SHARED_REGION_STALE 	0x4 // Indicates no longer in default list
-
-
-/* defines for default environment, and co-resident systems */
-
-#define ENV_DEFAULT_SYSTEM	0
-#define ENV_DEFAULT_ROOT	0
+#define SHARED_REGION_SYSTEM	0x1
+#define SHARED_REGION_FULL	0x2
 
 typedef	struct shared_region_task_mappings *shared_region_task_mappings_t;
 typedef struct shared_region_mapping *shared_region_mapping_t;
@@ -102,7 +90,6 @@ struct load_struct {
 	vm_offset_t		base_address;
 	int			mapping_cnt;
 	loaded_mapping_t	*mappings;
-        vm_offset_t             file_offset; // start of file we mapped in
 };
 
 typedef struct load_struct load_struct_t;
@@ -135,8 +122,6 @@ typedef struct shared_region_object_chain *shared_region_object_chain_t;
 struct shared_region_mapping {
         decl_mutex_data(,       Lock)   /* Synchronization */
 	int			ref_count;
-	unsigned int		fs_base;
-	unsigned int		system;
 	mach_port_t		text_region;
 	vm_size_t		text_size;
 	mach_port_t		data_region;
@@ -147,7 +132,6 @@ struct shared_region_mapping {
 	vm_offset_t		alternate_next;
 	int			flags;
 	int			depth;
-	shared_region_mapping_t default_env_list;
 	shared_region_object_chain_t object_chain;
 	shared_region_mapping_t self;
 	shared_region_mapping_t next;
@@ -184,8 +168,6 @@ extern kern_return_t shared_region_mapping_info(
 				vm_offset_t		*client_base,
 				vm_offset_t		*alternate_base,
 				vm_offset_t		*alternate_next,
-				unsigned int		*fs_base,
-				unsigned int		*system,
 				int			*flags,
 				shared_region_mapping_t	*next);
 
@@ -217,16 +199,6 @@ extern kern_return_t vm_get_shared_region(
 extern kern_return_t vm_set_shared_region(
 				task_t	task,
 				shared_region_mapping_t	shared_region);
-
-extern shared_region_mapping_t update_default_shared_region(
-				shared_region_mapping_t new_system_region);
-
-extern shared_region_mapping_t lookup_default_shared_region(
-				unsigned int fs_base,
-				unsigned int system);
-
-extern void remove_default_shared_region(
-				shared_region_mapping_t system_region);
 
 extern unsigned int lsf_mapping_pool_gauge();
 

@@ -115,9 +115,6 @@ bsd/dev/random/YarrowCoreLib/src/comp.c				standard
 bsd/dev/random/YarrowCoreLib/src/prng.c				standard
 bsd/dev/random/YarrowCoreLib/src/sha1mod.c			standard
 bsd/dev/random/YarrowCoreLib/src/yarrowUtils.c		standard
-
-bsd/dev/memdev.c				standard
-
 bsd/dev/vn/vn.c				optional vndevice
 bsd/dev/vn/shadow.c			optional vndevice
 

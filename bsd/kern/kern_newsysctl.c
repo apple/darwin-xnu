@@ -3,22 +3,19 @@
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
- * Copyright (c) 1999-2003 Apple Computer, Inc.  All Rights Reserved.
+ * The contents of this file constitute Original Code as defined in and
+ * are subject to the Apple Public Source License Version 1.1 (the
+ * "License").  You may not use this file except in compliance with the
+ * License.  Please obtain a copy of the License at
+ * http://www.apple.com/publicsource and read it before using this file.
  * 
- * This file contains Original Code and/or Modifications of Original Code
- * as defined in and that are subject to the Apple Public Source License
- * Version 2.0 (the 'License'). You may not use this file except in
- * compliance with the License. Please obtain a copy of the License at
- * http://www.opensource.apple.com/apsl/ and read it before using this
- * file.
- * 
- * The Original Code and all software distributed under the License are
- * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * This Original Code and all software distributed under the License are
+ * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
- * Please see the License for the specific language governing rights and
- * limitations under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
+ * License for the specific language governing rights and limitations
+ * under the License.
  * 
  * @APPLE_LICENSE_HEADER_END@
  */
@@ -96,33 +93,6 @@ static struct sysctl_lock {
 	int	sl_locked;
 } memlock;
 
-/*
- * XXX this does not belong here
- */
-static funnel_t *
-spl_kernel_funnel(void)
-{
-	funnel_t *cfunnel;
-
-	cfunnel = thread_funnel_get();
-	if (cfunnel != kernel_flock) {
-		if (cfunnel != NULL)
-			thread_funnel_set(cfunnel, FALSE);
-		thread_funnel_set(kernel_flock, TRUE);
-	}
-	return(cfunnel);
-}
-
-static void
-splx_kernel_funnel(funnel_t *saved)
-{
-	if (saved != kernel_flock) {
-		thread_funnel_set(kernel_flock, FALSE);
-		if (saved != NULL) 
-			thread_funnel_set(saved, TRUE);
-	}
-}
-
 static int sysctl_root SYSCTL_HANDLER_ARGS;
 
 struct sysctl_oid_list sysctl__children; /* root list */
@@ -139,9 +109,6 @@ void sysctl_register_oid(struct sysctl_oid *oidp)
 	struct sysctl_oid *p;
 	struct sysctl_oid *q;
 	int n;
-	funnel_t *fnl;
-
-	fnl = spl_kernel_funnel();
 
 	/*
 	 * If this oid has a number OID_AUTO, give it a number which
@@ -172,17 +139,11 @@ void sysctl_register_oid(struct sysctl_oid *oidp)
 		SLIST_INSERT_AFTER(q, oidp, oid_link);
 	else
 		SLIST_INSERT_HEAD(parent, oidp, oid_link);
-
-	splx_kernel_funnel(fnl);
 }
 
 void sysctl_unregister_oid(struct sysctl_oid *oidp)
 {
-	funnel_t *fnl;
-
-	fnl = spl_kernel_funnel();
 	SLIST_REMOVE(oidp->oid_parent, oidp, sysctl_oid, oid_link);
-	splx_kernel_funnel(fnl);
 }
 
 /*
@@ -621,64 +582,6 @@ sysctl_handle_long SYSCTL_HANDLER_ARGS
 }
 
 /*
- * Handle a quad, signed or unsigned.  arg1 points to it.
- */
-
-int
-sysctl_handle_quad SYSCTL_HANDLER_ARGS
-{
-	int error = 0;
-
-	if (!arg1)
-		return (EINVAL);
-	error = SYSCTL_OUT(req, arg1, sizeof(long long));
-
-	if (error || !req->newptr)
-		return (error);
-
-	error = SYSCTL_IN(req, arg1, sizeof(long long));
-	return (error);
-}
-
-/*
- * Expose an int value as a quad.
- *
- * This interface allows us to support interfaces defined
- * as using quad values while the implementation is still
- * using ints.
- */
-int
-sysctl_handle_int2quad SYSCTL_HANDLER_ARGS
-{
-	int error = 0;
-	long long val;
-	int newval;
-
-	if (!arg1)
-		return (EINVAL);
-	val = (long long)*(int *)arg1;
-	error = SYSCTL_OUT(req, &val, sizeof(long long));
-
-	if (error || !req->newptr)
-		return (error);
-
-	error = SYSCTL_IN(req, &val, sizeof(long long));
-	if (!error) {
-		/*
-		 * Value must be representable; check by
-		 * casting and then casting back.
-		 */
-		newval = (int)val;
-		if ((long long)newval != val) {
-			error = ERANGE;
-		} else {
-			*(int *)arg1 = newval;
-		}
-	}
-	return (error);
-}
-
-/*
  * Handle our generic '\0' terminated 'C' string.
  * Two cases:
  * 	a variable string:  point arg1 at it, arg2 is max length.
@@ -728,6 +631,7 @@ sysctl_handle_opaque SYSCTL_HANDLER_ARGS
 
 /*
  * Transfer functions to/from kernel space.
+ * XXX: rather untested at this point
  */
 static int
 sysctl_old_kernel(struct sysctl_req *req, const void *p, size_t l)
@@ -739,8 +643,11 @@ sysctl_old_kernel(struct sysctl_req *req, const void *p, size_t l)
 		i = l;
 		if (i > req->oldlen - req->oldidx)
 			i = req->oldlen - req->oldidx;
-		if (i > 0)
-			bcopy((void*)p, (char *)req->oldptr + req->oldidx, i);
+		if (i > 0) {
+			error = copyout((void*)p, (char *)req->oldptr + req->oldidx, i);
+			if (error)
+			    return error;
+		}
 	}
 	req->oldidx += l;
 	if (req->oldptr && i != l)
@@ -755,39 +662,37 @@ sysctl_new_kernel(struct sysctl_req *req, void *p, size_t l)
 		return 0;
 	if (req->newlen - req->newidx < l)
 		return (EINVAL);
-	bcopy((char *)req->newptr + req->newidx, p, l);
+	copyin((char *)req->newptr + req->newidx, p, l);
 	req->newidx += l;
 	return (0);
 }
 
 int
-kernel_sysctl(struct proc *p, int *name, u_int namelen, void *old, size_t *oldlenp, void *new, size_t newlen)
+kernel_sysctl(struct proc *p, int *name, u_int namelen, void *old, size_t *oldlenp, void *new, size_t newlen, size_t *retval)
 {
 	int error = 0;
 	struct sysctl_req req;
-	funnel_t *fnl;
 
-	/*
-	 * Construct request.
-	 */
 	bzero(&req, sizeof req);
+
 	req.p = p;
-	if (oldlenp)
+
+	if (oldlenp) {
 		req.oldlen = *oldlenp;
-	if (old)
+	}
+
+	if (old) {
 		req.oldptr= old;
+	}
+
 	if (newlen) {
 		req.newlen = newlen;
 		req.newptr = new;
 	}
+
 	req.oldfunc = sysctl_old_kernel;
 	req.newfunc = sysctl_new_kernel;
 	req.lock = 1;
-
-	/*
-	 * Locking.  Tree traversal always begins with the kernel funnel held.
-	 */
-	fnl = spl_kernel_funnel();
 
 	/* XXX this should probably be done in a general way */
 	while (memlock.sl_lock) {
@@ -797,10 +702,8 @@ kernel_sysctl(struct proc *p, int *name, u_int namelen, void *old, size_t *oldle
 	}
 	memlock.sl_lock = 1;
 
-	/* make the request */
 	error = sysctl_root(0, name, namelen, &req);
 
-	/* unlock memory if required */
 	if (req.lock == 2)
 		vsunlock(req.oldptr, req.oldlen, B_WRITE);
 
@@ -811,17 +714,15 @@ kernel_sysctl(struct proc *p, int *name, u_int namelen, void *old, size_t *oldle
 		wakeup((caddr_t)&memlock);
 	}
 
-	/*
-	 * Undo locking.
-	 */
-	splx_kernel_funnel(fnl);
-
 	if (error && error != ENOMEM)
 		return (error);
 
-	if (oldlenp)
-		*oldlenp = req.oldidx;
-
+	if (retval) {
+		if (req.oldptr && req.oldidx > req.oldlen)
+			*retval = req.oldlen;
+		else
+			*retval = req.oldidx;
+	}
 	return (error);
 }
 
@@ -912,13 +813,6 @@ found:
 			    ((oid->oid_kind & CTLFLAG_SECURE) && securelevel > 0))) {
 		return (EPERM);
 	}
-
-	/*
-	 * If we're inside the kernel, the OID must be marked as kernel-valid.
-	 * XXX This mechanism for testing is bad.
-	 */
-	if ((req->oldfunc == sysctl_old_kernel) && !(oid->oid_kind & CTLFLAG_KERN))
-		return(EPERM);
 
 	/* Most likely only root can write */
 	if (!(oid->oid_kind & CTLFLAG_ANYBODY) &&
@@ -1052,55 +946,214 @@ userland_sysctl(struct proc *p, int *name, u_int namelen, void *old, size_t *old
 	}
 	return (error);
 }
+#if 0
+
+#if COMPAT_43
+#include <sys/socket.h>
+#include <vm/vm_param.h>
+
+#define	KINFO_PROC		(0<<8)
+#define	KINFO_RT		(1<<8)
+#define	KINFO_VNODE		(2<<8)
+#define	KINFO_FILE		(3<<8)
+#define	KINFO_METER		(4<<8)
+#define	KINFO_LOADAVG		(5<<8)
+#define	KINFO_CLOCKRATE		(6<<8)
+
+/* Non-standard BSDI extension - only present on their 4.3 net-2 releases */
+#define	KINFO_BSDI_SYSINFO	(101<<8)
 
 /*
- * Kernel versions of the userland sysctl helper functions.
- *
- * These allow sysctl to be used in the same fashion in both
- * userland and the kernel.
- *
- * Note that some sysctl handlers use copyin/copyout, which
- * may not work correctly.
+ * XXX this is bloat, but I hope it's better here than on the potentially
+ * limited kernel stack...  -Peter
  */
 
-static int
-sysctl(int *name, u_int namelen, void *oldp, size_t *oldlenp, void *newp, size_t newlen)
-{
+static struct {
+	int	bsdi_machine;		/* "i386" on BSD/386 */
+/*      ^^^ this is an offset to the string, relative to the struct start */
+	char	*pad0;
+	long	pad1;
+	long	pad2;
+	long	pad3;
+	u_long	pad4;
+	u_long	pad5;
+	u_long	pad6;
 
-	return(kernel_sysctl(current_proc(), name, namelen, oldp, oldlenp, newp, newlen));
-}
+	int	bsdi_ostype;		/* "BSD/386" on BSD/386 */
+	int	bsdi_osrelease;		/* "1.1" on BSD/386 */
+	long	pad7;
+	long	pad8;
+	char	*pad9;
 
-static int
-sysctlnametomib(const char *name, int *mibp, size_t *sizep)
-{
-	int oid[2];
-	int error;
+	long	pad10;
+	long	pad11;
+	int	pad12;
+	long	pad13;
+	quad_t	pad14;
+	long	pad15;
 
-	/* magic service node */
-	oid[0] = 0;
-	oid[1] = 3;
+	struct	timeval pad16;
+	/* we dont set this, because BSDI's uname used gethostname() instead */
+	int	bsdi_hostname;		/* hostname on BSD/386 */
 
-	/* look up OID for name */
-	*sizep *= sizeof(int);
-	error = sysctl(oid, 2, mibp, sizep, (void *)name, strlen(name));
-	*sizep /= sizeof(int);
-	return(error);
-}
+	/* the actual string data is appended here */
+
+} bsdi_si;
+/*
+ * this data is appended to the end of the bsdi_si structure during copyout.
+ * The "char *" offsets are relative to the base of the bsdi_si struct.
+ * This contains "FreeBSD\02.0-BUILT-nnnnnn\0i386\0", and these strings
+ * should not exceed the length of the buffer here... (or else!! :-)
+ */
+static char bsdi_strings[80];	/* It had better be less than this! */
+
+#ifndef _SYS_SYSPROTO_H_
+struct getkerninfo_args {
+	int	op;
+	char	*where;
+	size_t	*size;
+	int	arg;
+};
+#endif
 
 int
-sysctlbyname(const char *name, void *oldp, size_t *oldlenp, void *newp, size_t newlen)
+ogetkerninfo(struct proc *p, struct getkerninfo_args *uap)
 {
-	int oid[CTL_MAXNAME + 2];
-	int error;
-	size_t oidlen;
+	int error, name[6];
+	size_t size;
 
-	/* look up the OID */
-	oidlen = CTL_MAXNAME;
-	error = sysctlnametomib(name, oid, &oidlen);
+	switch (uap->op & 0xff00) {
 
-	/* now use the OID */
-	if (error == 0)
-		error = sysctl(oid, oidlen, oldp, oldlenp, newp, newlen);
-	return(error);
+	case KINFO_RT:
+		name[0] = CTL_NET;
+		name[1] = PF_ROUTE;
+		name[2] = 0;
+		name[3] = (uap->op & 0xff0000) >> 16;
+		name[4] = uap->op & 0xff;
+		name[5] = uap->arg;
+		error = userland_sysctl(p, name, 6, uap->where, uap->size,
+			0, 0, 0, &size);
+		break;
+
+	case KINFO_VNODE:
+		name[0] = CTL_KERN;
+		name[1] = KERN_VNODE;
+		error = userland_sysctl(p, name, 2, uap->where, uap->size,
+			0, 0, 0, &size);
+		break;
+
+	case KINFO_PROC:
+		name[0] = CTL_KERN;
+		name[1] = KERN_PROC;
+		name[2] = uap->op & 0xff;
+		name[3] = uap->arg;
+		error = userland_sysctl(p, name, 4, uap->where, uap->size,
+			0, 0, 0, &size);
+		break;
+
+	case KINFO_FILE:
+		name[0] = CTL_KERN;
+		name[1] = KERN_FILE;
+		error = userland_sysctl(p, name, 2, uap->where, uap->size,
+			0, 0, 0, &size);
+		break;
+
+	case KINFO_METER:
+		name[0] = CTL_VM;
+		name[1] = VM_METER;
+		error = userland_sysctl(p, name, 2, uap->where, uap->size,
+			0, 0, 0, &size);
+		break;
+
+	case KINFO_LOADAVG:
+		name[0] = CTL_VM;
+		name[1] = VM_LOADAVG;
+		error = userland_sysctl(p, name, 2, uap->where, uap->size,
+			0, 0, 0, &size);
+		break;
+
+	case KINFO_CLOCKRATE:
+		name[0] = CTL_KERN;
+		name[1] = KERN_CLOCKRATE;
+		error = userland_sysctl(p, name, 2, uap->where, uap->size,
+			0, 0, 0, &size);
+		break;
+
+	case KINFO_BSDI_SYSINFO: {
+		/*
+		 * this is pretty crude, but it's just enough for uname()
+		 * from BSDI's 1.x libc to work.
+		 *
+		 * In particular, it doesn't return the same results when
+		 * the supplied buffer is too small.  BSDI's version apparently
+		 * will return the amount copied, and set the *size to how
+		 * much was needed.  The emulation framework here isn't capable
+		 * of that, so we just set both to the amount copied.
+		 * BSDI's 2.x product apparently fails with ENOMEM in this
+		 * scenario.
+		 */
+
+		u_int needed;
+		u_int left;
+		char *s;
+
+		bzero((char *)&bsdi_si, sizeof(bsdi_si));
+		bzero(bsdi_strings, sizeof(bsdi_strings));
+
+		s = bsdi_strings;
+
+		bsdi_si.bsdi_ostype = (s - bsdi_strings) + sizeof(bsdi_si);
+		strcpy(s, ostype);
+		s += strlen(s) + 1;
+
+		bsdi_si.bsdi_osrelease = (s - bsdi_strings) + sizeof(bsdi_si);
+		strcpy(s, osrelease);
+		s += strlen(s) + 1;
+
+		bsdi_si.bsdi_machine = (s - bsdi_strings) + sizeof(bsdi_si);
+		strcpy(s, machine);
+		s += strlen(s) + 1;
+
+		needed = sizeof(bsdi_si) + (s - bsdi_strings);
+
+		if (uap->where == NULL) {
+			/* process is asking how much buffer to supply.. */
+			size = needed;
+			error = 0;
+			break;
+		}
+
+
+		/* if too much buffer supplied, trim it down */
+		if (size > needed)
+			size = needed;
+
+		/* how much of the buffer is remaining */
+		left = size;
+
+		if ((error = copyout((char *)&bsdi_si, uap->where, left)) != 0)
+			break;
+
+		/* is there any point in continuing? */
+		if (left > sizeof(bsdi_si)) {
+			left -= sizeof(bsdi_si);
+			error = copyout(&bsdi_strings,
+					uap->where + sizeof(bsdi_si), left);
+		}
+		break;
+	}
+
+	default:
+		return (EOPNOTSUPP);
+	}
+	if (error)
+		return (error);
+	p->p_retval[0] = size;
+	if (uap->size)
+		error = copyout((caddr_t)&size, (caddr_t)uap->size,
+		    sizeof(size));
+	return (error);
 }
+#endif /* COMPAT_43 */
 
+#endif

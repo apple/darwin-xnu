@@ -3,22 +3,19 @@
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
- * Copyright (c) 1999-2003 Apple Computer, Inc.  All Rights Reserved.
+ * The contents of this file constitute Original Code as defined in and
+ * are subject to the Apple Public Source License Version 1.1 (the
+ * "License").  You may not use this file except in compliance with the
+ * License.  Please obtain a copy of the License at
+ * http://www.apple.com/publicsource and read it before using this file.
  * 
- * This file contains Original Code and/or Modifications of Original Code
- * as defined in and that are subject to the Apple Public Source License
- * Version 2.0 (the 'License'). You may not use this file except in
- * compliance with the License. Please obtain a copy of the License at
- * http://www.opensource.apple.com/apsl/ and read it before using this
- * file.
- * 
- * The Original Code and all software distributed under the License are
- * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * This Original Code and all software distributed under the License are
+ * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
- * Please see the License for the specific language governing rights and
- * limitations under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
+ * License for the specific language governing rights and limitations
+ * under the License.
  * 
  * @APPLE_LICENSE_HEADER_END@
  */
@@ -32,7 +29,6 @@
 #include <mach/mach_types.h>
 #include <mach/boolean.h>
 #include <kern/kern_types.h>
-#include <kern/sched_prim.h>
 #include <pexpert/pexpert.h>
 
 #include <sys/appleapiopts.h>
@@ -93,65 +89,22 @@ vm_offset_t ml_vtophys(
 boolean_t ml_probe_read(
 	vm_offset_t paddr,
 	unsigned int *val);
-boolean_t ml_probe_read_64(
-	addr64_t paddr,
-	unsigned int *val);
 
 /* Read physical address byte */
 unsigned int ml_phys_read_byte(
 	vm_offset_t paddr);
-unsigned int ml_phys_read_byte_64(
-	addr64_t paddr);
 
-/* Read physical address half word */
-unsigned int ml_phys_read_half(
-	vm_offset_t paddr);
-unsigned int ml_phys_read_half_64(
-	addr64_t paddr);
-
-/* Read physical address word*/
+/* Read physical address */
 unsigned int ml_phys_read(
 	vm_offset_t paddr);
-unsigned int ml_phys_read_64(
-	addr64_t paddr);
-unsigned int ml_phys_read_word(
-	vm_offset_t paddr);
-unsigned int ml_phys_read_word_64(
-	addr64_t paddr);
-
-/* Read physical address double word */
-unsigned long long ml_phys_read_double(
-	vm_offset_t paddr);
-unsigned long long ml_phys_read_double_64(
-	addr64_t paddr);
 
 /* Write physical address byte */
 void ml_phys_write_byte(
 	vm_offset_t paddr, unsigned int data);
-void ml_phys_write_byte_64(
-	addr64_t paddr, unsigned int data);
 
-/* Write physical address half word */
-void ml_phys_write_half(
-	vm_offset_t paddr, unsigned int data);
-void ml_phys_write_half_64(
-	addr64_t paddr, unsigned int data);
-
-/* Write physical address word */
+/* Write physical address */
 void ml_phys_write(
 	vm_offset_t paddr, unsigned int data);
-void ml_phys_write_64(
-	addr64_t paddr, unsigned int data);
-void ml_phys_write_word(
-	vm_offset_t paddr, unsigned int data);
-void ml_phys_write_word_64(
-	addr64_t paddr, unsigned int data);
-
-/* Write physical address double word */
-void ml_phys_write_double(
-	vm_offset_t paddr, unsigned long long data);
-void ml_phys_write_double_64(
-	addr64_t paddr, unsigned long long data);
 
 /* Struct for ml_processor_register */
 struct ml_processor_info_t {
@@ -196,6 +149,9 @@ boolean_t fake_get_interrupts_enabled(void);
 boolean_t fake_set_interrupts_enabled(
 	boolean_t enable);
 
+/* check pending timers */
+void machine_clock_assist(void);
+
 void machine_idle(void);
 
 void machine_signal_idle(
@@ -227,20 +183,8 @@ void ml_thread_policy(
 #define MACHINE_NETWORK_WORKLOOP	0x00000001
 #define MACHINE_NETWORK_NETISR		0x00000002
 
-/* Initialize the maximum number of CPUs */
-void ml_init_max_cpus(
-	unsigned long max_cpus);
-
-/* Return the maximum number of CPUs set by ml_init_max_cpus() */
-int ml_get_max_cpus(
-	void);
-
-/* Return the current number of CPUs */
-int ml_get_current_cpus(
-	void);
-
-/* Struct for ml_cpu_get_info */
-struct ml_cpu_info {
+/* Struct for ml_ppc_get_cpu_info */
+struct ml_ppc_cpu_info_t {
 	unsigned long		vector_unit;
 	unsigned long		cache_line_size;
 	unsigned long		l1_icache_size;
@@ -251,13 +195,12 @@ struct ml_cpu_info {
 	unsigned long		l3_cache_size;
 };
 
-typedef struct ml_cpu_info ml_cpu_info_t;
+typedef struct ml_ppc_cpu_info_t ml_ppc_cpu_info_t;
 
 /* Get processor info */
-void ml_cpu_get_info(ml_cpu_info_t *cpu_info);
+void ml_ppc_get_info(ml_ppc_cpu_info_t *cpu_info);
 
 void ml_set_processor_speed(unsigned long speed);
-void ml_set_processor_voltage(unsigned long voltage);
 
 #endif /* __APPLE_API_PRIVATE */
 

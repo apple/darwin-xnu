@@ -3,22 +3,19 @@
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
- * Copyright (c) 1999-2003 Apple Computer, Inc.  All Rights Reserved.
+ * The contents of this file constitute Original Code as defined in and
+ * are subject to the Apple Public Source License Version 1.1 (the
+ * "License").  You may not use this file except in compliance with the
+ * License.  Please obtain a copy of the License at
+ * http://www.apple.com/publicsource and read it before using this file.
  * 
- * This file contains Original Code and/or Modifications of Original Code
- * as defined in and that are subject to the Apple Public Source License
- * Version 2.0 (the 'License'). You may not use this file except in
- * compliance with the License. Please obtain a copy of the License at
- * http://www.opensource.apple.com/apsl/ and read it before using this
- * file.
- * 
- * The Original Code and all software distributed under the License are
- * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * This Original Code and all software distributed under the License are
+ * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
- * Please see the License for the specific language governing rights and
- * limitations under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
+ * License for the specific language governing rights and limitations
+ * under the License.
  * 
  * @APPLE_LICENSE_HEADER_END@
  */
@@ -86,7 +83,6 @@
 #include <ppc/FirmwareCalls.h>
 #include <ppc/setjmp.h>
 #include <ppc/exception.h>
-#include <ppc/hw_perfmon.h>
 
 #include <kern/clock.h>
 #include <kern/debug.h>
@@ -186,7 +182,6 @@ char *failNames[] = {
 	"No saveareas",				/* failNoSavearea */
 	"Savearea corruption",		/* failSaveareaCorr */
 	"Invalid live context",		/* failBadLiveContext */
-	"Unaligned stack",			/* failUnalignedStk */
 	"Unknown failure code"		/* Unknown failure code - must always be last */
 };
 
@@ -194,6 +189,7 @@ char *invxcption = "Unknown code";
 
 extern const char version[];
 extern char *trap_type[];
+extern vm_offset_t mem_actual;
 
 #if !MACH_KDB
 void kdb_trap(int type, struct savearea *regs);
@@ -303,14 +299,13 @@ machine_conf(void)
 {
 	machine_info.max_cpus = NCPUS;
 	machine_info.avail_cpus = 1;
-	machine_info.memory_size = mem_size;	/* Note that this will be 2 GB for >= 2 GB machines */
+	machine_info.memory_size = mem_size;
 }
 
 void
 machine_init(void)
 {
 	clock_config();
-	perfmon_init();
 }
 
 void slave_machine_init(void)
@@ -365,7 +360,6 @@ print_backtrace(struct savearea *ssp)
 	thread_act_t *act;
 	savearea *sv, *svssp;
 	int cpu;
-	savearea *psv;
 
 /*
  *	We need this lock to make sure we don't hang up when we double panic on an MP.
@@ -383,7 +377,7 @@ print_backtrace(struct savearea *ssp)
 	if(current_thread()) sv = (savearea *)current_act()->mact.pcb;	/* Find most current savearea if system has started */
 
 	fence = 0xFFFFFFFF;						/* Show we go all the way */
-	if(sv) fence = (unsigned int)sv->save_r1;	/* Stop at previous exception point */
+	if(sv) fence = sv->save_r1;				/* Stop at previous exception point */
 	
 	if(!svssp) {							/* Should we start from stack? */
 		kdb_printf("Latest stack backtrace for cpu %d:\n", cpu_number());
@@ -398,9 +392,8 @@ print_backtrace(struct savearea *ssp)
 	else {									/* Were we passed an exception? */
 		fence = 0xFFFFFFFF;					/* Show we go all the way */
 		if(svssp->save_hdr.save_prev) {
-			if((svssp->save_hdr.save_prev <= vm_last_addr) && ((unsigned int)pmap_find_phys(kernel_pmap, (addr64_t)svssp->save_hdr.save_prev))) {	/* Valid address? */	
-				psv = (savearea *)((unsigned int)svssp->save_hdr.save_prev);	/* Get the 64-bit back chain converted to a regualr pointer */
-				fence = (unsigned int)psv->save_r1;	/* Stop at previous exception point */
+			if((svssp->save_hdr.save_prev <= VM_MAX_KERNEL_ADDRESS) && ((unsigned int)LRA(PPC_SID_KERNEL, (void *)svssp->save_hdr.save_prev))) {	/* Valid address? */	
+				fence = svssp->save_hdr.save_prev->save_r1;	/* Stop at previous exception point */
 			}
 		}
 	
@@ -418,7 +411,7 @@ print_backtrace(struct savearea *ssp)
 	kdb_printf("Proceeding back via exception chain:\n");
 
 	while(sv) {								/* Do them all... */
-		if(!((sv <= vm_last_addr) && (unsigned int)pmap_find_phys(kernel_pmap, (addr64_t)sv))) {	/* Valid address? */	
+		if(!((sv <= VM_MAX_KERNEL_ADDRESS) && (unsigned int)LRA(PPC_SID_KERNEL, (void *)sv))) {	/* Valid address? */	
 			kdb_printf("   Exception state (sv=0x%08X) Not mapped or invalid. stopping...\n", sv);
 			break;
 		}
@@ -430,15 +423,14 @@ print_backtrace(struct savearea *ssp)
 		else {
 			fence = 0xFFFFFFFF;				/* Show we go all the way */
 			if(sv->save_hdr.save_prev) {
-				if((sv->save_hdr.save_prev <= vm_last_addr) && ((unsigned int)pmap_find_phys(kernel_pmap, (addr64_t)sv->save_hdr.save_prev))) {	/* Valid address? */	
-					psv = (savearea *)((unsigned int)sv->save_hdr.save_prev);	/* Get the 64-bit back chain converted to a regualr pointer */
-					fence = (unsigned int)psv->save_r1;	/* Stop at previous exception point */
+				if((sv->save_hdr.save_prev <= VM_MAX_KERNEL_ADDRESS) && ((unsigned int)LRA(PPC_SID_KERNEL, (void *)sv->save_hdr.save_prev))) {	/* Valid address? */	
+					fence = sv->save_hdr.save_prev->save_r1;	/* Stop at previous exception point */
 				}
 			}
 			dump_savearea(sv, fence);		/* Dump this savearea */	
 		}	
 		
-		sv = (savearea *)sv->save_hdr.save_prev;	/* Back chain */
+		sv = sv->save_hdr.save_prev;		/* Back chain */
 	}
 	
 	kdb_printf("\nKernel version:\n%s\n",version);	/* Print kernel version */
@@ -460,11 +452,11 @@ void dump_savearea(savearea *sv, unsigned int fence) {
 	else xcode = trap_type[sv->save_exception / 4];		/* Point to the type */
 	
 	kdb_printf("      PC=0x%08X; MSR=0x%08X; DAR=0x%08X; DSISR=0x%08X; LR=0x%08X; R1=0x%08X; XCP=0x%08X (%s)\n",
-		(unsigned int)sv->save_srr0, (unsigned int)sv->save_srr1, (unsigned int)sv->save_dar, sv->save_dsisr,
-		(unsigned int)sv->save_lr, (unsigned int)sv->save_r1, sv->save_exception, xcode);
+		sv->save_srr0, sv->save_srr1, sv->save_dar, sv->save_dsisr,
+		sv->save_lr, sv->save_r1, sv->save_exception, xcode);
 	
 	if(!(sv->save_srr1 & MASK(MSR_PR))) {		/* Are we in the kernel? */
-		dump_backtrace((unsigned int)sv->save_r1, fence);	/* Dump the stack back trace from  here if not user state */
+		dump_backtrace(sv->save_r1, fence);		/* Dump the stack back trace from  here if not user state */
 	}
 	
 	return;
@@ -486,23 +478,23 @@ void dump_backtrace(unsigned int stackptr, unsigned int fence) {
 	
 		if(!stackptr || (stackptr == fence)) break;		/* Hit stop point or end... */
 		
-		if(stackptr & 0x0000000F) {				/* Is stack pointer valid? */
+		if(stackptr & 0x0000000f) {				/* Is stack pointer valid? */
 			kdb_printf("\n         backtrace terminated - unaligned frame address: 0x%08X\n", stackptr);	/* No, tell 'em */
 			break;
 		}
 
-		raddr = (unsigned int)pmap_find_phys(kernel_pmap, (addr64_t)stackptr);	/* Get physical frame address */
-		if(!raddr || (stackptr > vm_last_addr)) {		/* Is it mapped? */
+		raddr = (unsigned int)LRA(PPC_SID_KERNEL, (void *)stackptr);	/* Get physical frame address */
+		if(!raddr || (stackptr > VM_MAX_KERNEL_ADDRESS)) {		/* Is it mapped? */
 			kdb_printf("\n         backtrace terminated - frame not mapped or invalid: 0x%08X\n", stackptr);	/* No, tell 'em */
 			break;
 		}
 	
-		if(!mapping_phys_lookup(raddr, &dumbo)) {	/* Is it within physical RAM? */
+		if(raddr >= mem_actual) {					/* Is it within physical RAM? */
 			kdb_printf("\n         backtrace terminated - frame outside of RAM: v=0x%08X, p=%08X\n", stackptr, raddr);	/* No, tell 'em */
 			break;
 		}
 	
-		ReadReal((addr64_t)((raddr << 12) | (stackptr & 4095)), &sframe[0]);	/* Fetch the stack frame */
+		ReadReal(raddr, &sframe[0]);				/* Fetch the stack frame */
 
 		bframes[i] = sframe[LRindex];				/* Save the link register */
 		
@@ -624,11 +616,11 @@ void SysChoked(int type, savearea *sv) {			/* The system is bad dead */
 	disableDebugOuput = FALSE;
 	debug_mode = TRUE;
 
-	failcode = (unsigned int)sv->save_r3;			/* Get the failure code */
+	failcode = sv->save_r3;							/* Get the failure code */
 	if(failcode > failUnknown) failcode = failUnknown;	/* Set unknown code code */
 	
-	kprintf("System Failure: cpu=%d; code=%08X (%s)\n", cpu_number(), (unsigned int)sv->save_r3, failNames[failcode]);
-	kdb_printf("System Failure: cpu=%d; code=%08X (%s)\n", cpu_number(), (unsigned int)sv->save_r3, failNames[failcode]);
+	kprintf("System Failure: cpu=%d; code=%08X (%s)\n", cpu_number(), sv->save_r3, failNames[failcode]);
+	kdb_printf("System Failure: cpu=%d; code=%08X (%s)\n", cpu_number(), sv->save_r3, failNames[failcode]);
 
 	print_backtrace(sv);							/* Attempt to print backtrace */
 	Call_DebuggerC(type, sv);						/* Attempt to get into debugger */
@@ -649,8 +641,7 @@ int Call_DebuggerC(
         struct savearea *saved_state)
 {
 	int				directcall, wait;
-	addr64_t		instr_ptr;
-	ppnum_t			instr_pp;
+	vm_offset_t		instr_ptr;
 	unsigned int 	instr;
 	int 			my_cpu, tcpu;
 
@@ -682,16 +673,13 @@ int Call_DebuggerC(
 		   my_cpu, debugger_is_slave[my_cpu], debugger_cpu, saved_state->save_srr0);
 	}
 	
-	instr_pp = (vm_offset_t)pmap_find_phys(kernel_pmap, (addr64_t)(saved_state->save_srr0));
-
-	if (instr_pp) {
-		instr_ptr = (addr64_t)(((addr64_t)instr_pp << 12) | (saved_state->save_srr0 & 0xFFF));	/* Make physical address */
-		instr = ml_phys_read_64(instr_ptr);				/* Get the trap that caused entry */
+	if (instr_ptr = (vm_offset_t)LRA(PPC_SID_KERNEL, (void *)(saved_state->save_srr0))) {
+		instr = ml_phys_read(instr_ptr);				/* Get the trap that caused entry */
 	} 
 	else instr = 0;
 
 #if 0
-	if (debugger_debug) kprintf("Call_DebuggerC(%d): instr_pp = %08X, instr_ptr = %016llX, instr = %08X\n", my_cpu, instr_pp, instr_ptr, instr);	/* (TEST/DEBUG) */
+	if (debugger_debug) kprintf("Call_DebuggerC(%d): instr_ptr = %08X, instr = %08X\n", my_cpu, instr_ptr, instr);	/* (TEST/DEBUG) */
 #endif
 
 	if (db_breakpoints_inserted) cpus_holding_bkpts++;	/* Bump up the holding count */

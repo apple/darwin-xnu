@@ -3,22 +3,19 @@
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
- * Copyright (c) 1999-2003 Apple Computer, Inc.  All Rights Reserved.
+ * The contents of this file constitute Original Code as defined in and
+ * are subject to the Apple Public Source License Version 1.1 (the
+ * "License").  You may not use this file except in compliance with the
+ * License.  Please obtain a copy of the License at
+ * http://www.apple.com/publicsource and read it before using this file.
  * 
- * This file contains Original Code and/or Modifications of Original Code
- * as defined in and that are subject to the Apple Public Source License
- * Version 2.0 (the 'License'). You may not use this file except in
- * compliance with the License. Please obtain a copy of the License at
- * http://www.opensource.apple.com/apsl/ and read it before using this
- * file.
- * 
- * The Original Code and all software distributed under the License are
- * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * This Original Code and all software distributed under the License are
+ * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
- * Please see the License for the specific language governing rights and
- * limitations under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
+ * License for the specific language governing rights and limitations
+ * under the License.
  * 
  * @APPLE_LICENSE_HEADER_END@
  */
@@ -27,7 +24,6 @@
 #include <kern/thread.h>
 #include <kern/thread_act.h>
 #include <kern/assert.h>
-#include <kern/clock.h>
 #include <mach/machine/thread_status.h>
 #include <ppc/savearea.h>
 
@@ -50,8 +46,8 @@ extern struct savearea *
 find_user_regs(
 	thread_act_t act);
 
-extern void enter_funnel_section(funnel_t *funnel_lock);
-extern void exit_funnel_section(void);
+extern enter_funnel_section(funnel_t *funnel_lock);
+extern exit_funnel_section(funnel_t *funnel_lock);
 
 /*
  * Function:	unix_syscall
@@ -82,7 +78,7 @@ unix_syscall(
 	else
 		proc = current_proc();
 
-	flavor = (((unsigned int)regs->save_r0) == NULL)? 1: 0;
+	flavor = (regs->save_r0 == NULL)? 1: 0;
 
 	uthread->uu_ar0 = (int *)regs;
 
@@ -165,7 +161,7 @@ unix_syscall(
 		regs->save_srr0 -= 8;
 	} else if (error != EJUSTRETURN) {
 		if (error) {
-			regs->save_r3 = (long long)error;
+			regs->save_r3 = error;
 			/* set the "pc" to execute cerror routine */
 			regs->save_srr0 -= 4;
 		} else { /* (not error) */
@@ -178,7 +174,10 @@ unix_syscall(
 	if (KTRPOINT(proc, KTR_SYSRET))
 		ktrsysret(proc, code, error, uthread->uu_rval[0], funnel_type);
 
-	 exit_funnel_section();
+	if(funnel_type == KERNEL_FUNNEL) 
+		 exit_funnel_section(kernel_flock);
+	else if (funnel_type == NETWORK_FUNNEL)
+		 exit_funnel_section(network_flock);
 
 	if (kdebug_enable && (code != 180)) {
 		KERNEL_DEBUG_CONSTANT(BSDDBG_CODE(DBG_BSD_EXCP_SC, code) | DBG_FUNC_END,
@@ -212,7 +211,7 @@ unix_syscall_return(error)
 		regs->save_srr0 -= 8;
 	} else if (error != EJUSTRETURN) {
 		if (error) {
-			regs->save_r3 = (long long)error;
+			regs->save_r3 = error;
 			/* set the "pc" to execute cerror routine */
 			regs->save_srr0 -= 4;
 		} else { /* (not error) */
@@ -234,7 +233,10 @@ unix_syscall_return(error)
 	if (KTRPOINT(proc, KTR_SYSRET))
 		ktrsysret(proc, code, error, uthread->uu_rval[0], funnel_type);
 
-	 exit_funnel_section();
+	if(funnel_type == KERNEL_FUNNEL) 
+		 exit_funnel_section(kernel_flock);
+	else if (funnel_type == NETWORK_FUNNEL)
+		 exit_funnel_section(network_flock);
 
 	if (kdebug_enable && (code != 180)) {
 		KERNEL_DEBUG_CONSTANT(BSDDBG_CODE(DBG_BSD_EXCP_SC, code) | DBG_FUNC_END,
@@ -258,29 +260,31 @@ struct gettimeofday_args{
 	struct timeval *tp;
 	struct timezone *tzp;
 };
-/*  NOTE THIS implementation is for  ppc architectures only.
- *  It is infrequently called, since the commpage intercepts
- *  most calls in user mode.
- */
+/*  NOTE THIS implementation is for  ppc architectures only */
 int
 ppc_gettimeofday(p, uap, retval)
 	struct proc *p;
 	register struct gettimeofday_args *uap;
 	register_t *retval;
 {
+	struct timeval atv;
 	int error = 0;
+	struct timezone ltz;
+	//struct savearea *child_state;
+	extern simple_lock_data_t tz_slock;
 
-	if (uap->tp)
-		clock_gettimeofday(&retval[0], &retval[1]);
+	if (uap->tp) {
+		microtime(&atv);
+		retval[0] = atv.tv_sec;
+		retval[1] = atv.tv_usec;
+	}
 	
 	if (uap->tzp) {
-        	struct timezone ltz;
-        	extern simple_lock_data_t tz_slock;
-        
-    		usimple_lock(&tz_slock);
+		usimple_lock(&tz_slock);
 		ltz = tz;
 		usimple_unlock(&tz_slock);
-		error = copyout((caddr_t)&ltz, (caddr_t)uap->tzp, sizeof (tz));
+		error = copyout((caddr_t)&ltz, (caddr_t)uap->tzp,
+		    sizeof (tz));
 	}
 
 	return(error);

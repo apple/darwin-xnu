@@ -3,22 +3,19 @@
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
- * Copyright (c) 1999-2003 Apple Computer, Inc.  All Rights Reserved.
+ * The contents of this file constitute Original Code as defined in and
+ * are subject to the Apple Public Source License Version 1.1 (the
+ * "License").  You may not use this file except in compliance with the
+ * License.  Please obtain a copy of the License at
+ * http://www.apple.com/publicsource and read it before using this file.
  * 
- * This file contains Original Code and/or Modifications of Original Code
- * as defined in and that are subject to the Apple Public Source License
- * Version 2.0 (the 'License'). You may not use this file except in
- * compliance with the License. Please obtain a copy of the License at
- * http://www.opensource.apple.com/apsl/ and read it before using this
- * file.
- * 
- * The Original Code and all software distributed under the License are
- * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * This Original Code and all software distributed under the License are
+ * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
- * Please see the License for the specific language governing rights and
- * limitations under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
+ * License for the specific language governing rights and limitations
+ * under the License.
  * 
  * @APPLE_LICENSE_HEADER_END@
  */
@@ -81,6 +78,7 @@
 
 #ifdef __ppc__
 #include <ppc/Firmware.h>
+#include <ppc/POWERMAC/mp/MPPlugIn.h>
 #endif
 
 #include <sys/kdebug.h>
@@ -215,13 +213,9 @@ usimple_lock_init(
 	usimple_lock_t	l,
 	etap_event_t	event)
 {
-#ifndef	MACHINE_SIMPLE_LOCK
 	USLDBG(usld_lock_init(l, event));
 	ETAPCALL(etap_simplelock_init((l),(event)));
 	hw_lock_init(&l->interlock);
-#else
-	simple_lock_init(l,event);
-#endif
 }
 
 
@@ -236,7 +230,6 @@ void
 usimple_lock(
 	usimple_lock_t	l)
 {
-#ifndef	MACHINE_SIMPLE_LOCK
 	int i;
 	pc_t		pc;
 #if	ETAP_LOCK_TRACE
@@ -258,9 +251,6 @@ usimple_lock(
 
 	ETAPCALL(etap_simplelock_hold(l, pc, start_wait_time));
 	USLDBG(usld_lock_post(l, pc));
-#else
-	simple_lock(l);
-#endif
 }
 
 
@@ -275,7 +265,6 @@ void
 usimple_unlock(
 	usimple_lock_t	l)
 {
-#ifndef	MACHINE_SIMPLE_LOCK
 	pc_t	pc;
 
 //	checkNMI();										/* (TEST/DEBUG) */
@@ -283,13 +272,7 @@ usimple_unlock(
 	OBTAIN_PC(pc, l);
 	USLDBG(usld_unlock(l, pc));
 	ETAPCALL(etap_simplelock_unlock(l));
-#ifdef  __ppc__
-	sync();
-#endif
 	hw_lock_unlock(&l->interlock);
-#else
-	simple_unlock_rwmb(l);
-#endif
 }
 
 
@@ -309,7 +292,6 @@ unsigned int
 usimple_lock_try(
 	usimple_lock_t	l)
 {
-#ifndef	MACHINE_SIMPLE_LOCK
 	pc_t		pc;
 	unsigned int	success;
 	etap_time_t	zero_time;
@@ -322,9 +304,6 @@ usimple_lock_try(
 		ETAPCALL(etap_simplelock_hold(l, pc, zero_time));
 	}
 	return success;
-#else
-	return(simple_lock_try(l));
-#endif
 }
 
 #if ETAP_LOCK_TRACE

@@ -3,22 +3,19 @@
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
- * Copyright (c) 1999-2003 Apple Computer, Inc.  All Rights Reserved.
+ * The contents of this file constitute Original Code as defined in and
+ * are subject to the Apple Public Source License Version 1.1 (the
+ * "License").  You may not use this file except in compliance with the
+ * License.  Please obtain a copy of the License at
+ * http://www.apple.com/publicsource and read it before using this file.
  * 
- * This file contains Original Code and/or Modifications of Original Code
- * as defined in and that are subject to the Apple Public Source License
- * Version 2.0 (the 'License'). You may not use this file except in
- * compliance with the License. Please obtain a copy of the License at
- * http://www.opensource.apple.com/apsl/ and read it before using this
- * file.
- * 
- * The Original Code and all software distributed under the License are
- * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * This Original Code and all software distributed under the License are
+ * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
- * Please see the License for the specific language governing rights and
- * limitations under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
+ * License for the specific language governing rights and limitations
+ * under the License.
  * 
  * @APPLE_LICENSE_HEADER_END@
  */
@@ -41,11 +38,11 @@
 
 ENTRY(kdp_call_with_ctx, TAG_NO_FRAME_USED)
 	
-	lis		r2,hi16(MASK(MSR_VEC))	; Get the vector enable
-	mfmsr	r7					; Get the MSR
-	ori		r2,r2,lo16(MASK(MSR_EE)|MASK(MSR_FP))	; Get FP and EE
+	mfmsr	r7					/* Get the MSR */
 	mflr	r0
-	andc	r7,r7,r2			; Clear FP, VEC, and EE
+	rlwinm	r7,r7,0,MSR_EE_BIT+1,MSR_EE_BIT-1	/* Turn off interruptions enable bit */
+	rlwinm	r7,r7,0,MSR_FP_BIT+1,MSR_FP_BIT-1	; Force floating point off
+	rlwinm	r7,r7,0,MSR_VEC_BIT+1,MSR_VEC_BIT-1	; Force vectors off
 	mtmsr	r7
 	isync										; Need this because we may have ditched fp/vec
 	mfsprg	r8,0				/* Get the per_proc block address */
@@ -72,13 +69,13 @@ ENTRY(kdp_call_with_ctx, TAG_NO_FRAME_USED)
 	
 	bl	EXT(kdp_trap)
 
-	lis		r2,hi16(MASK(MSR_VEC))		; Get the vector enable
 	mfmsr	r0					/* Get the MSR */
-	ori		r2,r2,lo16(MASK(MSR_EE)|MASK(MSR_FP))	; Get FP and EE
 	addi	r1,	r1,	FM_SIZE
-	andc	r0,r0,r2			; Clear FP, VEC, and EE
+	rlwinm	r0,r0,0,MSR_EE_BIT+1,MSR_EE_BIT-1	/* Turn off interruptions enable bit */
+	rlwinm	r0,r0,0,MSR_FP_BIT+1,MSR_FP_BIT-1	; Force floating point off
+	rlwinm	r0,r0,0,MSR_VEC_BIT+1,MSR_VEC_BIT-1	; Force vectors off
 	mtmsr	r0
-	isync						; Need this because we may have ditched fp/vec
+	isync										; Need this because we may have ditched fp/vec
 
 	mfsprg	r8,0				/* Get the per_proc block address */
 	

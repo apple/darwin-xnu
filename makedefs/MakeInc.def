@@ -129,7 +129,7 @@ export CFLAGS_I386 	= -arch i386 -Di386 -DI386 -D__I386__ -D_BIG_ENDIAN=__LITTLE
 
 export CFLAGS_RELEASEPPC = -O2 -mcpu=750 -mmultiple -fschedule-insns
 export CFLAGS_RELEASE_TRACEPPC = -O2 -mcpu=750 -mmultiple -fschedule-insns
-export CFLAGS_DEBUGPPC = -O2 -mcpu=750 -mmultiple -fschedule-insns
+export CFLAGS_DEBUGPPC = -O1 -mcpu=750 -mmultiple -fschedule-insns
 export CFLAGS_RELEASEI386 = -O2
 export CFLAGS_DEBUGI386 = -O2
 
@@ -201,7 +201,7 @@ export LDFLAGS_KERNEL_RELEASE 	=
 export LDFLAGS_KERNEL_DEBUG 	= 
 export LDFLAGS_KERNEL_PROFILE 	= 
 
-export LDFLAGS_KERNEL_PPC      = -arch ppc -segaddr __VECTORS 0x0 -segaddr __TEXT 0x7000 -e __start -sectalign __TEXT __text 0x1000 -sectalign __DATA __common 0x1000 -sectalign __DATA __bss 0x1000
+export LDFLAGS_KERNEL_PPC      = -arch ppc -segaddr __VECTORS 0x0 -segaddr __TEXT 0x11000 -e __start -sectalign __DATA __common 0x1000 -sectalign __DATA __bss 0x1000
 export LDFLAGS_KERNEL_I386     = -arch i386 -segaddr __TEXT 0x100000 -e _pstart
 
 export LDFLAGS_KERNEL	= $(LDFLAGS_KERNEL_GEN) \

@@ -3,22 +3,19 @@
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
- * Copyright (c) 1999-2003 Apple Computer, Inc.  All Rights Reserved.
+ * The contents of this file constitute Original Code as defined in and
+ * are subject to the Apple Public Source License Version 1.1 (the
+ * "License").  You may not use this file except in compliance with the
+ * License.  Please obtain a copy of the License at
+ * http://www.apple.com/publicsource and read it before using this file.
  * 
- * This file contains Original Code and/or Modifications of Original Code
- * as defined in and that are subject to the Apple Public Source License
- * Version 2.0 (the 'License'). You may not use this file except in
- * compliance with the License. Please obtain a copy of the License at
- * http://www.opensource.apple.com/apsl/ and read it before using this
- * file.
- * 
- * The Original Code and all software distributed under the License are
- * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * This Original Code and all software distributed under the License are
+ * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
- * Please see the License for the specific language governing rights and
- * limitations under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
+ * License for the specific language governing rights and limitations
+ * under the License.
  * 
  * @APPLE_LICENSE_HEADER_END@
  */
@@ -26,10 +23,38 @@
  * @OSF_COPYRIGHT@
  */
 
+/*
+ * Low-memory exception vector code for PowerPC MACH
+ *
+ * These are the only routines that are ever run with
+ * VM instruction translation switched off.
+ *
+ * The PowerPC is quite strange in that rather than having a set
+ * of exception vectors, the exception handlers are installed
+ * in well-known addresses in low memory. This code must be loaded
+ * at ZERO in physical memory. The simplest way of doing this is
+ * to load the kernel at zero, and specify this as the first file
+ * on the linker command line.
+ *
+ * When this code is loaded into place, it is loaded at virtual
+ * address KERNELBASE, which is mapped to zero (physical).
+ *
+ * This code handles all powerpc exceptions and is always entered
+ * in supervisor mode with translation off. It saves the minimum
+ * processor state before switching back on translation and
+ * jumping to the approprate routine.
+ *
+ * Vectors from 0x100 to 0x3fff occupy 0x100 bytes each (64 instructions)
+ *
+ * We use some of this space to decide which stack to use, and where to
+ * save the context etc, before	jumping to a generic handler.
+ */
+
 #include <assym.s>
 #include <debug.h>
 #include <cpus.h>
 #include <db_machine_commands.h>
+#include <mach_rt.h>
 	
 #include <mach_debug.h>
 #include <ppc/asm.h>
@@ -39,11 +64,21 @@
 #include <ppc/savearea.h>
 #include <mach/ppc/vm_param.h>
 
+#define TRCSAVE 0
+#define CHECKSAVE 0
+#define PERFTIMES 0
 #define ESPDEBUG 0
-#define INSTRUMENT 0
 
-#define featAltivec 29
-#define wasNapping 30
+#if TRCSAVE
+#error The TRCSAVE option is broken.... Fix it
+#endif
+
+#define featL1ena 24
+#define featSMP 25
+#define featAltivec 26
+#define wasNapping 27
+#define featFP 28
+#define specAccess 29
 
 #define	VECTOR_SEGMENT	.section __VECTORS, __interrupts
 
@@ -55,19 +90,9 @@
 EXT(ExceptionVectorsStart):							/* Used if relocating the exception vectors */
 baseR:												/* Used so we have more readable code */
 
-;
-;			Handle system reset.
-;			We do not ever expect a hard reset so we do not actually check.
-;			When we come here, we check for a RESET_HANDLER_START (which means we are
-;			waking up from sleep), a RESET_HANDLER_BUPOR (which is using for bring up
-;			when starting directly from a POR), and RESET_HANDLER_IGNORE (which means
-;			ignore the interrupt).
-;
-;			Some machines (so far, 32-bit guys) will always ignore a non-START interrupt.
-;			The ones who do take it, check if the interrupt is too be ignored.  This is 
-;			always the case until the previous reset is handled (i.e., we have exited
-;			from the debugger).
-;
+/* 
+ * System reset - call debugger
+ */
 			. = 0xf0
 			.globl	EXT(ResetHandler)
 EXT(ResetHandler):
@@ -92,46 +117,8 @@ EXT(ResetHandler):
 			mtlr	r4
 			blr
 
-resetexc:	cmplwi	r13,RESET_HANDLER_BUPOR				; Special bring up POR sequence?
-			bne		resetexc2						; No...
-			lis		r4,hi16(EXT(resetPOR))			; Get POR code
-			ori		r4,r4,lo16(EXT(resetPOR))		; The rest
-			mtlr	r4								; Set it
-			blr										; Jump to it....
-
-resetexc2:	cmplwi	cr1,r13,RESET_HANDLER_IGNORE	; Are we ignoring these? (Software debounce)
-
-			mfsprg	r13,0							; Get per_proc
-			lwz		r13,pfAvailable(r13)			; Get the features
-			rlwinm.	r13,r13,0,pf64Bitb,pf64Bitb		; Is this a 64-bit machine?
-			cror	cr1_eq,cr0_eq,cr1_eq			; See if we want to take this
-			bne--	cr1,rxCont						; Yes, continue...
-			bne--	rxIg64							; 64-bit path...
-
-			mtcr	r11								; Restore the CR
-			mfsprg	r13,2							; Restore R13
-			mfsprg	r11,0							; Get per_proc
-			lwz		r11,pfAvailable(r11)			; Get the features
-			mtsprg	2,r11							; Restore sprg2
-			mfsprg	r11,3							; Restore R11
-			rfi										; Return and ignore the reset
-
-rxIg64:		mtcr	r11								; Restore the CR
-			mfsprg	r11,0							; Get per_proc
-			mtspr	hsprg0,r14						; Save a register
-			lwz		r14,UAW(r11)					; Get the User Assist Word
-			mfsprg	r13,2							; Restore R13
-			lwz		r11,pfAvailable(r11)			; Get the features
-			mtsprg	2,r11							; Restore sprg2
-			mfsprg	r11,3							; Restore R11
-			mtsprg	3,r14							; Set the UAW in sprg3
-			mfspr	r14,hsprg0						; Restore R14
-			rfid									; Return and ignore the reset
-
-rxCont:		mtcr	r11
-			li		r11,RESET_HANDLER_IGNORE		; Get set to ignore
-			stw		r11,lo16(EXT(ResetHandler)-EXT(ExceptionVectorsStart)+RESETHANDLER_TYPE)(br0)	; Start ignoring these
-			mfsprg	r13,1							/* Get the exception save area */
+resetexc:
+			mtcr	r11
 			li		r11,T_RESET						/* Set 'rupt code */
 			b		.L_exception_entry				/* Join common... */
 
@@ -141,81 +128,10 @@ rxCont:		mtcr	r11
 
 			. = 0x200
 .L_handler200:
-			mtsprg	2,r13							; Save R13 
-			mtsprg	3,r11							; Save R11
-
-			.globl	EXT(extPatchMCK)
-LEXT(extPatchMCK)									; This is patched to a nop for 64-bit 
-			b		h200aaa							; Skip 64-bit code... 
-
-;
-;			Fall through here for 970 MCKs.
-;
-
-			li		r11,1							; ?
-			sldi	r11,r11,32+3					; ?
-			mfspr	r13,hid4						; ?
-			or		r11,r11,r13						; ?
-			sync
-			mtspr	hid4,r11						; ?
-			isync
-			li		r11,1							; ?
-			sldi	r11,r11,32+8					; ?
-			andc	r13,r13,r11						; ?
-			lis		r11,0xE000						; Get the unlikeliest ESID possible
-			sync
-			mtspr	hid4,r13						; ?
-			isync									; ?
-			
-			srdi	r11,r11,1						; ?
-			slbie	r11								; ?
-			sync
-			isync
-		
-			li		r11,T_MACHINE_CHECK				; Set rupt code
-			b		.L_exception_entry				; Join common...
-
-;
-;			Preliminary checking of other MCKs
-;
-
-h200aaa:	mfsrr1	r11								; Get the SRR1
-			mfcr	r13								; Save the CR
-			
-			rlwinm.	r11,r11,0,dcmck,dcmck			; ?
-			beq+	notDCache						; ?
-			
-			sync
-			mfspr	r11,msscr0						; ?
-			dssall									; ?
-			sync
-			isync
-
-			oris	r11,r11,hi16(dl1hwfm)			; ?
-			mtspr	msscr0,r11						; ?
-			
-rstbsy:		mfspr	r11,msscr0						; ?
-			
-			rlwinm.	r11,r11,0,dl1hwf,dl1hwf			; ?
-			bne		rstbsy							; ?
-			
-			sync									; ?
-
-			mfsprg	r11,0							; Get the per_proc
-			mtcrf	255,r13							; Restore CRs
-			lwz		r13,hwMachineChecks(r11)		; Get old count
-			addi	r13,r13,1						; Count this one
-			stw		r13,hwMachineChecks(r11)		; Set new count
-			lwz		r11,pfAvailable(r11)			; Get the feature flags
-			mfsprg	r13,2							; Restore R13
-			mtsprg	2,r11							; Set the feature flags
-			mfsprg	r11,3							; Restore R11
-			rfi										; Return
-
-notDCache:	mtcrf	255,r13							; Restore CRs
-			li		r11,T_MACHINE_CHECK				; Set rupt code
-			b		.L_exception_entry				; Join common...
-
+			mtsprg	2,r13							/* Save R13 */
+			mtsprg	3,r11							/* Save R11 */
+			li		r11,T_MACHINE_CHECK				/* Set 'rupt code */
+			b		.L_exception_entry				/* Join common... */
 
 /*
  * 			Data access - page fault, invalid memory rights for operation
@@ -228,39 +144,16 @@ notDCache:	mtcrf	255,r13							; Restore CRs
 			li		r11,T_DATA_ACCESS				/* Set 'rupt code */
 			b		.L_exception_entry				/* Join common... */
 
-
-/*
- * 			Data segment
- */
-
-			. = 0x380
-.L_handler380:
-			mtsprg	2,r13							; Save R13
-			mtsprg	3,r11							; Save R11
-			li		r11,T_DATA_SEGMENT				; Set rupt code
-			b		.L_exception_entry				; Join common...
-
 /*
  * 			Instruction access - as for data access
  */
 
 			. = 0x400
 .L_handler400:
-			mtsprg	2,r13							; Save R13
-			mtsprg	3,r11							; Save R11
-			li		r11,T_INSTRUCTION_ACCESS		; Set rupt code
-			b		.L_exception_entry				; Join common...
-
-/*
- * 			Instruction segment
- */
-
-			. = 0x480
-.L_handler480:
-			mtsprg	2,r13							; Save R13 
-			mtsprg	3,r11							; Save R11 
-			li		r11,T_INSTRUCTION_SEGMENT		; Set rupt code
-			b		.L_exception_entry				; Join common... 
+			mtsprg	2,r13							/* Save R13 */
+			mtsprg	3,r11							/* Save R11 */
+			li		r11,T_INSTRUCTION_ACCESS		/* Set 'rupt code */
+			b		.L_exception_entry				/* Join common... */
 
 /*
  * 			External interrupt
@@ -268,10 +161,10 @@ notDCache:	mtcrf	255,r13							; Restore CRs
 
 			. = 0x500
 .L_handler500:
-			mtsprg	2,r13							; Save R13 
-			mtsprg	3,r11							; Save R11
-			li		r11,T_INTERRUPT					; Set rupt code
-			b		.L_exception_entry				; Join common...
+			mtsprg	2,r13							/* Save R13 */
+			mtsprg	3,r11							/* Save R11 */
+			li		r11,T_INTERRUPT					/* Set 'rupt code */
+			b		.L_exception_entry				/* Join common... */
 
 /*
  * 			Alignment - many reasons
@@ -292,19 +185,6 @@ notDCache:	mtcrf	255,r13							; Restore CRs
 .L_handler700:
 			mtsprg	2,r13							/* Save R13 */
 			mtsprg	3,r11							/* Save R11 */
-			
-#if 0
-			mfsrr1	r13								; (BRINGUP)
-			mfcr	r11								; (BRINGUP)
-			rlwinm.	r13,r13,0,12,12					; (BRINGUP)	
-			crmove	cr1_eq,cr0_eq					; (BRINGUP)
-			mfsrr1	r13								; (BRINGUP)
-			rlwinm.	r13,r13,0,MSR_PR_BIT,MSR_PR_BIT	; (BRINGUP)	
-			crorc	cr0_eq,cr1_eq,cr0_eq			; (BRINGUP)
-			bf--	cr0_eq,.						; (BRINGUP)
-			mtcrf	255,r11							; (BRINGUP)
-#endif
-		
 			li		r11,T_PROGRAM|T_FAM				/* Set 'rupt code */
 			b		.L_exception_entry				/* Join common... */
 
@@ -353,6 +233,29 @@ notDCache:	mtcrf	255,r13							; Restore CRs
 			li		r11,T_RESERVED					/* Set 'rupt code */
 			b		.L_exception_entry				/* Join common... */
 
+#if 0
+hackxxxx1:
+			stmw	r29,4(br0)
+			lwz		r29,0(br0)
+			mr.		r29,r29
+			bne+	xxxx1
+			lis		r29,0x4000
+
+xxxx1:			
+			stw		r0,0(r29)
+			mfsrr0	r30
+			stw		r30,4(r29)
+			mtlr	r30
+			stw		r30,8(r29)
+
+			addi	r29,r29,12
+			stw		r29,0(br0)
+
+			lmw		r29,4(br0)
+			b		hackxxxx2
+#endif			
+
+
 ;
 ; 			System call - generated by the sc instruction
 ;
@@ -362,7 +265,7 @@ notDCache:	mtcrf	255,r13							; Restore CRs
 ;				0xFFFFFFFE - BlueBox only - kcNKIsPreemptiveTaskEnv
 ;				0x00007FF2 - User state only - thread info
 ;				0x00007FF3 - User state only - floating point / vector facility status
-;				0x00007FF4 - Kernel only - loadMSR - not used on 64-bit machines
+;				0x00007FF4 - Kernel only - loadMSR
 ;
 ;			Note: none handled if virtual machine is running
 ;				  Also, it we treat SCs as kernel SCs if the RI bit is set
@@ -370,108 +273,80 @@ notDCache:	mtcrf	255,r13							; Restore CRs
 
 			. = 0xC00
 .L_handlerC00:
-			mtsprg	3,r11							; Save R11
-			mfsprg	r11,2							; Get the feature flags
-
 			mtsprg	2,r13							; Save R13
-			rlwinm	r11,r11,pf64Bitb-4,4,4			; Get the 64-bit flag
 			mfsrr1	r13								; Get SRR1 for loadMSR
-			rlwimi	r11,r13,MSR_PR_BIT-5,5,5		; Move the PR bit to bit 1
-			mfcr	r13								; Save the CR
+			mtsprg	3,r11							; Save R11
+			rlwimi	r13,r13,MSR_PR_BIT,0,0			; Move PR bit to non-volatile CR0 bit 0
+			mfcr	r11								; Save the CR
+			mtcrf	0x81,r13						; Get the moved PR and the RI for testing
+			crnot	0,0								; Get !PR
+			cror	0,0,MSR_RI_BIT					; See if we have !PR or RI
+			mfsprg	r13,0							; Get the per_proc_area
+			bt-		0,uftInKern						; We are in the kernel...
 			
-			mtcrf	0x40,r11						; Get the top 3 CR bits to 64-bit, PR, sign
+			lwz		r13,spcFlags(r13)				; Get the special flags
+			rlwimi	r13,r13,runningVMbit+1,31,31	; Move VM flag after the 3 blue box flags
+			mtcrf	1,r13							; Set BB and VMM flags in CR7
+			bt-		31,ufpVM						; fast paths running VM ...
+			cmplwi	cr5,r0,0x7FF2					; Ultra fast path cthread info call?
+			cmpwi	cr6,r0,0x7FF3					; Ultra fast path facility status?
+			cror	cr1_eq,cr5_lt,cr6_gt			; Set true if not 0x7FF2 and not 0x7FF3 and not negative
+			bt-		cr1_eq,notufp					; Exit if we can not be ultra fast...
 			
-			cmpwi	r0,lo16(-3)						; Eliminate all negatives but -1 and -2
-			mfsprg	r11,0							; Get the per_proc
-			bf--	5,uftInKern						; We came from the kernel...		
-			ble--	notufp							; This is a mach call			
+			not.	r0,r0							; Flip bits and kind of subtract 1			
 
-			lwz		r11,spcFlags(r11)				; Pick up the special flags
-
-			cmpwi	cr7,r0,lo16(-1)					; Is this a BlueBox call?
-			cmplwi	cr2,r0,0x7FF2					; Ultra fast path cthread info call?
-			cmplwi	cr3,r0,0x7FF3					; Ultra fast path facility status?
-			cror	cr4_eq,cr2_eq,cr3_eq			; Is this one of the two ufts we handle here?
+			cmplwi	cr1,r0,1						; Is this a bb fast path?
+			not		r0,r0							; Restore to entry state			
+			bf-		bbNoMachSCbit,ufpUSuft			; We are not running BlueBox...
+			bgt		cr1,notufp						; This can not be a bb ufp...
+#if 0
+			b		hackxxxx1
+hackxxxx2:
+#endif			
 			
-			ble--	cr7,uftBBCall					; We think this is blue box call...
-
-			rlwinm	r11,r11,16,16,31				; Extract spcFlags upper bits
-			andi.	r11,r11,hi16(runningVM|FamVMena|FamVMmode)
-			cmpwi	cr0,r11,hi16(runningVM|FamVMena|FamVMmode)	; Test in VM FAM
-			beq--	cr0,ufpVM						; fast paths running VM ...
+			rlwimi	r11,r13,bbPreemptivebit-cr0_eq,cr0_eq,cr0_eq	; Copy preemptive task flag into user cr0_eq
+			mfsprg	r13,0							; Get back pre_proc
 			
-			bne--	cr4_eq,notufp					; Bail ifthis is not a uft...
+			
+			bne		cr1,ufpIsBBpre					; This is the "isPreemptiveTask" call...
+			
+			lwz		r0,ppbbTaskEnv(r13)				; Get the shadowed taskEnv from per_proc_area
 
+ufpIsBBpre:	
+			mtcrf	0xFF,r11						; Restore CR
+			mfsprg	r11,3							; Restore R11
+			mfsprg	r13,2							; Restore R13
+			rfi										; All done, go back...
+			
 ;
-;			Handle normal user ultra-fast trap
+;			Normal fast path...
 ;
-
-			li		r3,spcFlags						; Assume facility status - 0x7FF3
-
-			beq--	cr3,uftFacStat					; This is a facilities status call...
 	
-			li		r3,UAW							; This is really a thread info call - 0x7FF2		
-			
-uftFacStat:	mfsprg	r11,0							; Get the per_proc
-			lwzx	r3,r11,r3						; Get the UAW or spcFlags field
-			
-uftExit:	bt++	4,uftX64						; Go do the 64-bit exit...
-			
-			lwz		r11,pfAvailable(r11)			; Get the feature flags
-			mtcrf	255,r13							; Restore the CRs
-			mfsprg	r13,2							; Restore R13
-			mtsprg	2,r11							; Set the feature flags
+ufpUSuft:	bge+	notufp							; Bail if negative...  (ARRRGGG -- BRANCH TO A BRANCH!!!!!)
 			mfsprg	r11,3							; Restore R11
-
-			rfi										; Back to our guy...
-			
-uftX64:		mtspr	hsprg0,r14						; Save a register
-			
-			lwz		r14,UAW(r11)					; Get the User Assist Word
-			lwz		r11,pfAvailable(r11)			; Get the feature flags
-			
-			mtcrf	255,r13							; Restore the CRs
-			
+			mfsprg	r3,0							; Get the per_proc_area
 			mfsprg	r13,2							; Restore R13
-			mtsprg	2,r11							; Set the feature flags
-			mfsprg	r11,3							; Restore R11
-			mtsprg	3,r14							; Set the UAW in sprg3
-			mfspr	r14,hsprg0						; Restore R14
-
-			rfid									; Back to our guy...
-			
+			bne-	cr5,isvecfp						; This is the facility stat call
+			lwz		r3,UAW(r3)						; Get the assist word
+			rfi										; All done, scream back... (no need to restore CR or R11, they are volatile)
 ;
-;			Handle BlueBox ultra-fast trap
-;			
-
-uftBBCall:	andi.	r11,r11,bbNoMachSC|bbPreemptive	; Clear what we do not need
-			cmplwi	r11,bbNoMachSC					; See if we are trapping syscalls
-			blt--	notufp							; No...
-			
-			rlwimi	r13,r11,bbPreemptivebit-cr0_eq,cr0_eq,cr0_eq	; Copy preemptive task flag into user cr0_eq
-
-			mfsprg	r11,0							; Get the per proc
-			
-			beq++	cr7,uftExit						; For MKIsPreemptiveTask we are done...
-
-			lwz		r0,ppbbTaskEnv(r11)				; Get the shadowed taskEnv from per_proc_area
-			b		uftExit							; We are really all done now...
-
-;			Kernel ultra-fast trap
-
-uftInKern:	cmplwi	r0,0x7FF4						; Ultra fast path loadMSR?
-			bne-	notufp							; Someone is trying to cheat...
-
-			mtsrr1	r3								; Set new MSR
-			
-			b		uftExit							; Go load the new MSR...
-			
-notufp:		mtcrf	0xFF,r13						; Restore the used CRs
+isvecfp:	lwz		r3,spcFlags(r3)					; Get the facility status
+			rfi										; Bail back...
+;
+notufp:		mtcrf	0xFF,r11						; Restore the used CRs
 			li		r11,T_SYSTEM_CALL|T_FAM			; Set interrupt code
 			b		.L_exception_entry				; Join common...
-
-
 			
+uftInKern:	cmplwi	r0,0x7FF4						; Ultra fast path loadMSR?
+			bne-	notufp							; Someone is trying to cheat...
+			
+			mtcrf	0xFF,r11						; Restore CR
+			lwz		r11,pfAvailable(r13)			; Pick up the feature flags
+			mtsrr1	r3								; Set new MSR
+			mfsprg	r13,2							; Restore R13
+			mtsprg	2,r11							; Set the feature flags into sprg2
+			mfsprg	r11,3							; Restore R11
+			rfi										; Blast back
 			
 
 /*
@@ -492,73 +367,55 @@ notufp:		mtcrf	0xFF,r13						; Restore the used CRs
 
 			. = 0xD00
 .L_handlerD00:
-			mtsprg	3,r11							; Save R11
-			mfsprg	r11,2							; Get the feature flags
 			mtsprg	2,r13							; Save R13
-			rlwinm	r11,r11,pf64Bitb-4,4,4			; Get the 64-bit flag
-			mfcr	r13								; Get the CR
-			mtcrf	0x40,r11						; Set the CR
-			mfsrr1	r11								; Get the old MSR
-			rlwinm.	r11,r11,0,MSR_PR_BIT,MSR_PR_BIT	; Are we in supervisor state?
-			
-			mfsprg	r11,0							; Get the per_proc
-			lhz		r11,PP_CPU_FLAGS(r11)			; Get the flags
-			crmove	cr1_eq,cr0_eq					; Remember if we are in supervisor state
-			rlwinm.	r11,r11,0,traceBEb+16,traceBEb+16	; Special trace enabled?
-			cror	cr0_eq,cr0_eq,cr1_eq			; Is trace off or supervisor state?
-			bf--	cr0_eq,specbrtr					; No, we need to trace...
+			mtsprg	3,r11							; Save R11
+			mfsrr1	r13								; Get the old MSR
+			mfcr	r11								; Get the CR
+			rlwinm.	r13,r13,0,MSR_PR_BIT,MSR_PR_BIT	; Are we in supervisor state?
+			beq-	notspectr						; Yes, not special trace...
+			mfsprg	r13,0							; Get the per_proc area
+			lhz		r13,PP_CPU_FLAGS(r13)			; Get the flags
+			rlwinm.	r13,r13,0,traceBEb+16,traceBEb+16	; Special trace enabled?
+			bne+	specbrtr						; Yeah...
 
-notspectr:	mtcr	r13								; Restore CR
+notspectr:	mtcr	r11								; Restore CR
 			li		r11,T_TRACE|T_FAM				; Set interrupt code
 			b		.L_exception_entry				; Join common...
-
-			.align	5
 
 ;
 ;			We are doing the special branch trace
 ;
 
-specbrtr:	mfsprg	r11,0							; Get the per_proc area
-			bt++	4,sbxx64a						; Jump if 64-bit...
-			
-			stw		r1,tempr0+4(r11)				; Save in a scratch area
-			stw		r2,tempr1+4(r11)				; Save in a scratch area
-			stw		r3,tempr2+4(r11)				; Save in a scratch area
-			b		sbxx64b							; Skip...
-			
-sbxx64a:	std		r1,tempr0(r11)					; Save in a scratch area
-			std		r2,tempr1(r11)					; Save in a scratch area
-			std		r3,tempr2(r11)					; Save in a scratch area
-			
-sbxx64b:	lis		r2,hi16(EXT(pc_trace_buf))		; Get the top of the buffer
-			lwz		r3,spcTRp(r11)					; Pick up buffer position			
+specbrtr:	mfsprg	r13,0							; Get the per_proc area
+			stw		r1,emfp0(r13)					; Save in a scratch area
+			stw		r2,emfp0+4(r13)					; Save in a scratch area
+			stw		r3,emfp0+8(r13)					; Save in a scratch area
+
+			lis		r2,hi16(EXT(pc_trace_buf))		; Get the top of the buffer
+			lwz		r3,spcTRp(r13)					; Pick up buffer position			
+			mr.		r1,r1							; Is it time to count?
 			ori		r2,r2,lo16(EXT(pc_trace_buf))	; Get the bottom of the buffer
-			cmplwi	cr2,r3,4092						; Set cr1_eq if we should take exception			
+			cmplwi	cr1,r3,4092						; Set cr1_eq if we should take exception			
 			mfsrr0	r1								; Get the pc
 			stwx	r1,r2,r3						; Save it in the buffer
 			addi	r3,r3,4							; Point to the next slot
 			rlwinm	r3,r3,0,20,31					; Wrap the slot at one page
-			stw		r3,spcTRp(r11)					; Save the new slot
-
-			bt++	4,sbxx64c						; Jump if 64-bit...
-
-			lwz		r1,tempr0+4(r11)				; Restore work register
-			lwz		r2,tempr1+4(r11)				; Restore work register
-			lwz		r3,tempr2+4(r11)				; Restore work register
-			beq		cr2,notspectr					; Buffer filled, make a rupt...
-			b		uftExit							; Go restore and leave...
-
-sbxx64c:	ld		r1,tempr0(r11)					; Restore work register
-			ld		r2,tempr1(r11)					; Restore work register
-			ld		r3,tempr2(r11)					; Restore work register
-			beq		cr2,notspectr					; Buffer filled, make a rupt...
-			b		uftExit							; Go restore and leave...
+			stw		r3,spcTRp(r13)					; Save the new slot
+			lwz		r1,emfp0(r13)					; Restore work register
+			lwz		r2,emfp0+4(r13)					; Restore work register
+			lwz		r3,emfp0+8(r13)					; Restore work register
+			beq		cr1,notspectr					; Buffer filled, make a rupt...
+			
+			mtcr	r11								; Restore the CR
+			mfsprg	r13,2							; Restore R13
+			mfsprg	r11,3							; Restore R11
+			rfi										; Bail back...
 
 /*
  * 			Floating point assist
  */
 
-			. = 0xE00
+			. = 0xe00
 .L_handlerE00:
 			mtsprg	2,r13							/* Save R13 */
 			mtsprg	3,r11							/* Save R11 */
@@ -591,43 +448,329 @@ VMXhandler:
 
 	
 
-;
-;			Instruction translation miss exception - not supported
-;
+/*
+ * Instruction translation miss - we inline this code.
+ * Upon entry (done for us by the machine):
+ *     srr0 :	 addr of instruction that missed
+ *     srr1 :	 bits 0-3   = saved CR0
+ *                    4     = lru way bit
+ *                    16-31 = saved msr
+ *     msr[tgpr] = 1  (so gpr0-3 become our temporary variables)
+ *     imiss:	 ea that missed
+ *     icmp :	 the compare value for the va that missed
+ *     hash1:	 pointer to first hash pteg
+ *     hash2:	 pointer to 2nd hash pteg
+ *
+ * Register usage:
+ *     tmp0:	 saved counter
+ *     tmp1:	 junk
+ *     tmp2:	 pointer to pteg
+ *     tmp3:	 current compare value
+ *
+ * This code is taken from the 603e User's Manual with
+ * some bugfixes and minor improvements to save bytes and cycles
+ *
+ *	NOTE: Do not touch sprg2 in here
+ */
 
- 			. = 0x1000
+	. = 0x1000
 .L_handler1000:
-			mtsprg	2,r13							; Save R13
-			mtsprg	3,r11							; Save R11
-			li		r11,T_INVALID_EXCP0				; Set rupt code
-			b		.L_exception_entry				; Join common...
+	mfspr	tmp2,	hash1
+	mfctr	tmp0				/* use tmp0 to save ctr */
+	mfspr	tmp3,	icmp
 
+.L_imiss_find_pte_in_pteg:
+	li	tmp1,	8			/* count */
+	subi	tmp2,	tmp2,	8		/* offset for lwzu */
+	mtctr	tmp1				/* count... */
 	
+.L_imiss_pteg_loop:
+	lwz	tmp1,	8(tmp2)			/* check pte0 for match... */
+	addi	tmp2,	tmp2,	8
+	cmpw	cr0,	tmp1,	tmp3
+#if 0	
+	bdnzf+	cr0,	.L_imiss_pteg_loop
+#else	
+	bc	0,2,	.L_imiss_pteg_loop
+#endif	
+	beq+	cr0,	.L_imiss_found_pte
 
-;
-;			Data load translation miss exception - not supported
-;
+	/* Not found in PTEG, we must scan 2nd then give up */
 
- 			. = 0x1100
+	andi.	tmp1,	tmp3,	MASK(PTE0_HASH_ID)
+	bne-	.L_imiss_do_no_hash_exception		/* give up */
+
+	mfspr	tmp2,	hash2
+	ori	tmp3,	tmp3,	MASK(PTE0_HASH_ID)
+	b	.L_imiss_find_pte_in_pteg
+
+.L_imiss_found_pte:
+
+	lwz	tmp1,	4(tmp2)				/* get pte1_t */
+	andi.	tmp3,	tmp1,	MASK(PTE1_WIMG_GUARD)	/* Fault? */
+	bne-	.L_imiss_do_prot_exception		/* Guarded - illegal */
+
+	/* Ok, we've found what we need to, restore and rfi! */
+
+	mtctr	tmp0					/* restore ctr */
+	mfsrr1	tmp3
+	mfspr	tmp0,	imiss
+	mtcrf	0x80,	tmp3				/* Restore CR0 */
+	mtspr	rpa,	tmp1				/* set the pte */
+	ori	tmp1,	tmp1,	MASK(PTE1_REFERENCED)	/* set referenced */
+	tlbli	tmp0
+	sth	tmp1,	6(tmp2)
+	rfi
+	
+.L_imiss_do_prot_exception:
+	/* set up srr1 to indicate protection exception... */
+	mfsrr1	tmp3
+	andi.	tmp2,	tmp3,	0xffff
+	addis	tmp2,	tmp2,	MASK(SRR1_TRANS_PROT) >> 16
+	b	.L_imiss_do_exception
+	
+.L_imiss_do_no_hash_exception:
+	/* clean up registers for protection exception... */
+	mfsrr1	tmp3
+	andi.	tmp2,	tmp3,	0xffff
+	addis	tmp2,	tmp2,	MASK(SRR1_TRANS_HASH) >> 16
+	
+	/* And the entry into the usual instruction fault handler ... */
+.L_imiss_do_exception:
+
+	mtctr	tmp0					/* Restore ctr */
+	mtsrr1	tmp2					/* Set up srr1 */
+	mfmsr	tmp0					
+	xoris	tmp0,	tmp0,	MASK(MSR_TGPR)>>16	/* no TGPR */
+	mtcrf	0x80,	tmp3				/* Restore CR0 */
+	mtmsr	tmp0					/* reset MSR[TGPR] */
+	b	.L_handler400				/* Instr Access */
+	
+/*
+ * Data load translation miss
+ *
+ * Upon entry (done for us by the machine):
+ *     srr0 :	 addr of instruction that missed
+ *     srr1 :	 bits 0-3   = saved CR0
+ *                    4     = lru way bit
+ *                    5     = 1 if store
+ *                    16-31 = saved msr
+ *     msr[tgpr] = 1  (so gpr0-3 become our temporary variables)
+ *     dmiss:	 ea that missed
+ *     dcmp :	 the compare value for the va that missed
+ *     hash1:	 pointer to first hash pteg
+ *     hash2:	 pointer to 2nd hash pteg
+ *
+ * Register usage:
+ *     tmp0:	 saved counter
+ *     tmp1:	 junk
+ *     tmp2:	 pointer to pteg
+ *     tmp3:	 current compare value
+ *
+ * This code is taken from the 603e User's Manual with
+ * some bugfixes and minor improvements to save bytes and cycles
+ *
+ *	NOTE: Do not touch sprg2 in here
+ */
+
+	. = 0x1100
 .L_handler1100:
-			mtsprg	2,r13							; Save R13
-			mtsprg	3,r11							; Save R11
-			li		r11,T_INVALID_EXCP1				; Set rupt code
-			b		.L_exception_entry				; Join common...
+	mfspr	tmp2,	hash1
+	mfctr	tmp0				/* use tmp0 to save ctr */
+	mfspr	tmp3,	dcmp
 
+.L_dlmiss_find_pte_in_pteg:
+	li	tmp1,	8			/* count */
+	subi	tmp2,	tmp2,	8		/* offset for lwzu */
+	mtctr	tmp1				/* count... */
 	
+.L_dlmiss_pteg_loop:
+	lwz	tmp1,	8(tmp2)			/* check pte0 for match... */
+	addi	tmp2,	tmp2,	8
+	cmpw	cr0,	tmp1,	tmp3
+#if 0 /* How to write this correctly? */	
+	bdnzf+	cr0,	.L_dlmiss_pteg_loop
+#else	
+	bc	0,2,	.L_dlmiss_pteg_loop
+#endif	
+	beq+	cr0,	.L_dmiss_found_pte
 
-;
-;			Data store translation miss exception - not supported
-;
+	/* Not found in PTEG, we must scan 2nd then give up */
 
- 			. = 0x1200
+	andi.	tmp1,	tmp3,	MASK(PTE0_HASH_ID)	/* already at 2nd? */
+	bne-	.L_dmiss_do_no_hash_exception		/* give up */
+
+	mfspr	tmp2,	hash2
+	ori	tmp3,	tmp3,	MASK(PTE0_HASH_ID)
+	b	.L_dlmiss_find_pte_in_pteg
+
+.L_dmiss_found_pte:
+
+	lwz	tmp1,	4(tmp2)				/* get pte1_t */
+
+	/* Ok, we've found what we need to, restore and rfi! */
+
+	mtctr	tmp0					/* restore ctr */
+	mfsrr1	tmp3
+	mfspr	tmp0,	dmiss
+	mtcrf	0x80,	tmp3				/* Restore CR0 */
+	mtspr	rpa,	tmp1				/* set the pte */
+	ori	tmp1,	tmp1,	MASK(PTE1_REFERENCED)	/* set referenced */
+	tlbld	tmp0					/* load up tlb */
+	sth	tmp1,	6(tmp2)				/* sth is faster? */
+	rfi
+	
+	/* This code is shared with data store translation miss */
+	
+.L_dmiss_do_no_hash_exception:
+	/* clean up registers for protection exception... */
+	mfsrr1	tmp3
+	/* prepare to set DSISR_WRITE_BIT correctly from srr1 info */
+	rlwinm	tmp1,	tmp3,	9,	6,	6
+	addis	tmp1,	tmp1,	MASK(DSISR_HASH) >> 16
+
+	/* And the entry into the usual data fault handler ... */
+
+	mtctr	tmp0					/* Restore ctr */
+	andi.	tmp2,	tmp3,	0xffff			/* Clean up srr1 */
+	mtsrr1	tmp2					/* Set srr1 */
+	mtdsisr	tmp1
+	mfspr	tmp2,	dmiss
+	mtdar	tmp2
+	mfmsr	tmp0
+	xoris	tmp0,	tmp0,	MASK(MSR_TGPR)>>16	/* no TGPR */
+	mtcrf	0x80,	tmp3				/* Restore CR0 */
+	sync						/* Needed on some */
+	mtmsr	tmp0					/* reset MSR[TGPR] */
+	b	.L_handler300				/* Data Access */
+	
+/*
+ * Data store translation miss (similar to data load)
+ *
+ * Upon entry (done for us by the machine):
+ *     srr0 :	 addr of instruction that missed
+ *     srr1 :	 bits 0-3   = saved CR0
+ *                    4     = lru way bit
+ *                    5     = 1 if store
+ *                    16-31 = saved msr
+ *     msr[tgpr] = 1  (so gpr0-3 become our temporary variables)
+ *     dmiss:	 ea that missed
+ *     dcmp :	 the compare value for the va that missed
+ *     hash1:	 pointer to first hash pteg
+ *     hash2:	 pointer to 2nd hash pteg
+ *
+ * Register usage:
+ *     tmp0:	 saved counter
+ *     tmp1:	 junk
+ *     tmp2:	 pointer to pteg
+ *     tmp3:	 current compare value
+ *
+ * This code is taken from the 603e User's Manual with
+ * some bugfixes and minor improvements to save bytes and cycles
+ *
+ *	NOTE: Do not touch sprg2 in here
+ */
+
+	. = 0x1200
 .L_handler1200:
-			mtsprg	2,r13							; Save R13
-			mtsprg	3,r11							; Save R11
-			li		r11,T_INVALID_EXCP2				; Set rupt code
-			b		.L_exception_entry				; Join common...
+	mfspr	tmp2,	hash1
+	mfctr	tmp0				/* use tmp0 to save ctr */
+	mfspr	tmp3,	dcmp
 
+.L_dsmiss_find_pte_in_pteg:
+	li	tmp1,	8			/* count */
+	subi	tmp2,	tmp2,	8		/* offset for lwzu */
+	mtctr	tmp1				/* count... */
+	
+.L_dsmiss_pteg_loop:
+	lwz	tmp1,	8(tmp2)			/* check pte0 for match... */
+	addi	tmp2,	tmp2,	8
+
+		cmpw	cr0,	tmp1,	tmp3
+#if 0 /* I don't know how to write this properly */	
+	bdnzf+	cr0,	.L_dsmiss_pteg_loop
+#else	
+	bc	0,2,	.L_dsmiss_pteg_loop
+#endif	
+	beq+	cr0,	.L_dsmiss_found_pte
+
+	/* Not found in PTEG, we must scan 2nd then give up */
+
+	andi.	tmp1,	tmp3,	MASK(PTE0_HASH_ID)	/* already at 2nd? */
+	bne-	.L_dmiss_do_no_hash_exception		/* give up */
+
+	mfspr	tmp2,	hash2
+	ori	tmp3,	tmp3,	MASK(PTE0_HASH_ID)
+	b	.L_dsmiss_find_pte_in_pteg
+
+.L_dsmiss_found_pte:
+
+	lwz	tmp1,	4(tmp2)				/* get pte1_t */
+	andi.	tmp3,	tmp1,	MASK(PTE1_CHANGED)	/* unchanged, check? */
+	beq-	.L_dsmiss_check_prot			/* yes, check prot */
+
+.L_dsmiss_resolved:
+	/* Ok, we've found what we need to, restore and rfi! */
+
+	mtctr	tmp0					/* restore ctr */
+	mfsrr1	tmp3
+	mfspr	tmp0,	dmiss
+	mtcrf	0x80,	tmp3				/* Restore CR0 */
+	mtspr	rpa,	tmp1				/* set the pte */
+	tlbld	tmp0					/* load up tlb */
+	rfi
+	
+.L_dsmiss_check_prot:
+	/* PTE is unchanged, we must check that we can write */
+	rlwinm.	tmp3,	tmp1,	30,	0,	1	/* check PP[1] */
+	bge-	.L_dsmiss_check_prot_user_kern
+	andi.	tmp3,	tmp1,	1			/* check PP[0] */
+	beq+	.L_dsmiss_check_prot_ok
+	
+.L_dmiss_do_prot_exception:
+	/* clean up registers for protection exception... */
+	mfsrr1	tmp3
+	/* prepare to set DSISR_WRITE_BIT correctly from srr1 info */
+	rlwinm	tmp1,	tmp3,	9,	6,	6
+	addis	tmp1,	tmp1,	MASK(DSISR_PROT) >> 16
+
+	/* And the entry into the usual data fault handler ... */
+
+	mtctr	tmp0					/* Restore ctr */
+	andi.	tmp2,	tmp3,	0xffff			/* Clean up srr1 */
+	mtsrr1	tmp2					/* Set srr1 */
+	mtdsisr	tmp1
+	mfspr	tmp2,	dmiss
+	mtdar	tmp2
+	mfmsr	tmp0
+	xoris	tmp0,	tmp0,	MASK(MSR_TGPR)>>16	/* no TGPR */
+	mtcrf	0x80,	tmp3				/* Restore CR0 */
+	sync						/* Needed on some */
+	mtmsr	tmp0					/* reset MSR[TGPR] */
+	b	.L_handler300				/* Data Access */
+	
+/* NB - if we knew we were on a 603e we could test just the MSR_KEY bit */
+.L_dsmiss_check_prot_user_kern:
+	mfsrr1	tmp3
+	andi.	tmp3,	tmp3,	MASK(MSR_PR)
+	beq+	.L_dsmiss_check_prot_kern
+	mfspr	tmp3,	dmiss				/* check user privs */
+	mfsrin	tmp3,	tmp3				/* get excepting SR */
+	andis.	tmp3,	tmp3,	0x2000			/* Test SR ku bit */
+	beq+	.L_dsmiss_check_prot_ok
+	b	.L_dmiss_do_prot_exception
+
+.L_dsmiss_check_prot_kern:
+	mfspr	tmp3,	dmiss				/* check kern privs */
+	mfsrin	tmp3,	tmp3
+	andis.	tmp3,	tmp3,	0x4000			/* Test SR Ks bit */
+	bne-	.L_dmiss_do_prot_exception
+
+.L_dsmiss_check_prot_ok:
+	/* Ok, mark as referenced and changed before resolving the fault */
+	ori	tmp1,	tmp1,	(MASK(PTE1_REFERENCED)|MASK(PTE1_CHANGED))
+	sth	tmp1,	6(tmp2)
+	b	.L_dsmiss_resolved
 	
 /*
  * 			Instruction address breakpoint
@@ -651,20 +794,8 @@ VMXhandler:
 			li		r11,T_SYSTEM_MANAGEMENT			/* Set 'rupt code */
 			b		.L_exception_entry				/* Join common... */
 
-
-/*
- * 			Soft Patch
- */
-
-			. = 0x1500
-.L_handler1500:
-			mtsprg	2,r13							/* Save R13 */
-			mtsprg	3,r11							/* Save R11 */
-			li		r11,T_SOFT_PATCH				/* Set 'rupt code */
-			b		.L_exception_entry				/* Join common... */
-
 ;
-; 			Altivec Java Mode Assist interrupt or Maintenace interrupt
+; 			Altivec Java Mode Assist interrupt
 ;
 
 			. = 0x1600
@@ -675,7 +806,7 @@ VMXhandler:
 			b		.L_exception_entry				/* Join common... */
 
 ;
-; 			Altivec Java Mode Assist interrupt or Thermal interruption 
+; 			Thermal interruption
 ;
 
 			. = 0x1700
@@ -685,44 +816,35 @@ VMXhandler:
 			li		r11,T_THERMAL					/* Set 'rupt code */
 			b		.L_exception_entry				/* Join common... */
 
-;
-; 			Thermal interruption - 64-bit
-;
-
-			. = 0x1800
-.L_handler1800:
-			mtsprg	2,r13							/* Save R13 */
-			mtsprg	3,r11							/* Save R11 */
-			li		r11,T_ARCHDEP0					/* Set 'rupt code */
-			b		.L_exception_entry				/* Join common... */
-
 /*
  * There is now a large gap of reserved traps
  */
 
 /*
- * 			Instrumentation interruption
+ * 			Run mode/ trace exception - single stepping on 601 processors
  */
 
 			. = 0x2000
 .L_handler2000:
 			mtsprg	2,r13							/* Save R13 */
 			mtsprg	3,r11							/* Save R11 */
-			li		r11,T_INSTRUMENTATION			/* Set 'rupt code */
+			li		r11,T_RUNMODE_TRACE				/* Set 'rupt code */
 			b		.L_exception_entry				/* Join common... */
 
-			. = 0x2100
 
 /*
  *	Filter Ultra Fast Path syscalls for VMM
  */
 ufpVM:
-			cmpwi	cr2,r0,0x6004					; Is it vmm_dispatch
-			bne		cr2,notufp						; Exit If not
+			cmpwi	cr6,r0,0x6004					; Is it vmm_dispatch
+			bne		cr6,notufp						; Exit If not
 			cmpwi	cr5,r3,kvmmResumeGuest			; Compare r3 with kvmmResumeGuest
-			cmpwi	cr2,r3,kvmmSetGuestRegister		; Compare r3 with kvmmSetGuestRegister
-			cror	cr1_eq,cr5_lt,cr2_gt			; Set true if out of VMM Fast syscall range
+			cmpwi	cr6,r3,kvmmSetGuestRegister		; Compare r3 with kvmmSetGuestRegister
+			cror	cr1_eq,cr5_lt,cr6_gt			; Set true if out of VMM Fast syscall range
 			bt-		cr1_eq,notufp					; Exit if out of range
+			rlwinm	r13,r13,1+FamVMmodebit,30,31	; Extract FamVMenabit and FamVMmodebit
+			cmpwi	cr0,r13,3						; Are FamVMena and FamVMmode set
+			bne+	notufp							; Exit if not in FAM
 			b		EXT(vmm_ufp)					; Ultra Fast Path syscall
 
 /*
@@ -759,28 +881,20 @@ EXT(exception_entry):
  *	Note that if we are attempting to sleep (as opposed to nap or doze) all interruptions
  *	are ignored.
  */
+			mfsprg  r13,0							/* Load per_proc */     
+			lwz		r13,next_savearea(r13)			/* Get the exception save area */
 
-
-			.globl	EXT(extPatch32)						
-			
-
-LEXT(extPatch32)
-			b		extEntry64						; Go do 64-bit (patched out for 32-bit)
-			mfsprg  r13,0							; Load per_proc
-			lwz		r13,next_savearea+4(r13)		; Get the exception save area
-			stw		r0,saver0+4(r13)				; Save register 0
-			stw		r1,saver1+4(r13)				; Save register 1
-
+			stw		r1,saver1(r13)					; Save register 1
+			stw		r0,saver0(r13)					; Save register 0
+			dcbtst	0,r13							; We will need this in a bit
 			mfspr	r1,hid0							; Get HID0
-			mfcr	r0								; Save the whole CR
-			
-			mtcrf	0x20,r1							; Get set to test for sleep
-			cror	doze,doze,nap					; Remember if we are napping
+			mfcr	r0								; Save the CR
+			mtcrf	255,r1							; Get set to test for cache and sleep
 			bf		sleep,notsleep					; Skip if we are not trying to sleep
 			
-			mtcrf	0x20,r0							; Restore the CR
-			lwz		r0,saver0+4(r13)				; Restore R0
-			lwz		r1,saver1+4(r13)				; Restore R1
+			mtcrf	255,r0							; Restore the CR
+			lwz		r0,saver0(r13)					; Restore R0
+			lwz		r1,saver1(r13)					; Restore R1
 			mfsprg	r13,0							; Get the per_proc 
 			lwz		r11,pfAvailable(r13)			; Get back the feature flags
 			mfsprg	r13,2							; Restore R13
@@ -796,42 +910,26 @@ LEXT(extPatch32)
 			.long	0
 			.long	0
 			
-
-;
-;			This is the 32-bit context saving stuff
-;
-
 			.align	5
 						
-notsleep:	stw		r2,saver2+4(r13)				; Save this one
-			bf		doze,notspdo					; Skip the next if we are not napping/dozing...
+notsleep:	stw		r2,saver2(r13)					; Save this one
+			crmove	featL1ena,dce					; Copy the cache enable bit
 			rlwinm	r2,r1,0,nap+1,doze-1			; Clear any possible nap and doze bits
 			mtspr	hid0,r2							; Clear the nap/doze bits
-notspdo:
-
-#if INSTRUMENT
-			mfspr	r2,pmc1							; INSTRUMENT - saveinstr[0] - Take earliest possible stamp
-			stw		r2,0x6100+(0x00*16)+0x0(0)		; INSTRUMENT - Save it
-			mfspr	r2,pmc2							; INSTRUMENT - Get stamp
-			stw		r2,0x6100+(0x00*16)+0x4(0)		; INSTRUMENT - Save it
-			mfspr	r2,pmc3							; INSTRUMENT - Get stamp
-			stw		r2,0x6100+(0x00*16)+0x8(0)		; INSTRUMENT - Save it
-			mfspr	r2,pmc4							; INSTRUMENT - Get stamp
-			stw		r2,0x6100+(0x00*16)+0xC(0)		; INSTRUMENT - Save it
-#endif			
-
-			la		r1,saver4(r13)					; Point to the next line in case we need it
-			crmove	wasNapping,doze					; Remember if we were napping
+			cmplw	r2,r1							; See if we were napping
+			la		r1,saver8(r13)					; Point to the next line in case we need it
+			crnot	wasNapping,cr0_eq				; Remember if we were napping
 			mfsprg	r2,0							; Get the per_proc area
-			dcbz	0,r1							; allocate r4-r7 32-byte line in cache
+			bf-		featL1ena,skipz1				; L1 cache is disabled...
+			dcbz	0,r1							; Reserve our line in cache
 			
 ;
 ;			Remember, we are setting up CR6 with feature flags
 ;
-			andi.	r1,r11,T_FAM					; Check FAM bit
-	
-			stw		r3,saver3+4(r13)					; Save this one
-			stw		r4,saver4+4(r13)					; Save this one
+skipz1:		
+			andi.	r1,r11,T_FAM					; Check FAM bit	
+			stw		r3,saver3(r13)					; Save this one
+			stw		r4,saver4(r13)					; Save this one
 			andc	r11,r11,r1						; Clear FAM bit
 			beq+	noFAM							; Is it FAM intercept
 			mfsrr1	r3								; Load srr1
@@ -847,42 +945,37 @@ notspdo:
 			srw		r1,r3,r1						; Set bit for current exception
 			and.	r1,r1,r4						; And current exception with the intercept mask
 			beq+	noFAM							; Is it FAM intercept
-			b		EXT(vmm_fam_exc)
+			b		EXT(vmm_fam_handler)
 noFAM:
 			lwz		r1,pfAvailable(r2)				; Get the CPU features flags			
-			la		r3,saver8(r13)					; Point to line with r8-r11
-			mtcrf	0xE2,r1							; Put the features flags (that we care about) in the CR
-			dcbz	0,r3							; allocate r8-r11 32-byte line in cache
-            la		r3,saver12(r13)					; point to r12-r15 line
-			lis		r4,hi16(MASK(MSR_VEC)|MASK(MSR_FP)|MASK(MSR_ME))	; Set up the MSR we will use throughout. Note that ME come on here if MCK
-			stw		r6,saver6+4(r13)				; Save this one
-			ori		r4,r4,lo16(MASK(MSR_VEC)|MASK(MSR_FP)|MASK(MSR_ME))	; Rest of MSR
-			stw		r8,saver8+4(r13)				; Save this one
+			la		r3,savesrr0(r13)				; Point to the last line
+			mtcrf	0xE0,r1							; Put the features flags (that we care about) in the CR
+			stw		r6,saver6(r13)					; Save this one
+			crmove	featSMP,pfSMPcapb				; See if we have a PIR
+			stw		r8,saver8(r13)					; Save this one
 			crmove	featAltivec,pfAltivecb			; Set the Altivec flag
-			mtmsr	r4								; Set MSR
-			isync
 			mfsrr0	r6								; Get the interruption SRR0 
-            la		r8,savesrr0(r13)				; point to line with SRR0, SRR1, CR, XER, and LR
-			dcbz	0,r3							; allocate r12-r15 32-byte line in cache
-            la		r3,saver16(r13)					; point to next line
-			dcbz	0,r8							; allocate 32-byte line with SRR0, SRR1, CR, XER, and LR
-			stw		r7,saver7+4(r13)				; Save this one
+			stw		r8,saver8(r13)					; Save this one
+			bf-		featL1ena,skipz1a				; L1 cache is disabled...
+			dcbz	0,r3							; Reserve our line in cache
+skipz1a:	crmove	featFP,pfFloatb					; Remember that we have floating point
+			stw		r7,saver7(r13)					; Save this one
 			lhz		r8,PP_CPU_FLAGS(r2)				; Get the flags
 			mfsrr1	r7								; Get the interrupt SRR1
 			rlwinm	r8,r8,(((31-MSR_BE_BIT)+(traceBEb+16+1))&31),MSR_BE_BIT,MSR_BE_BIT	; Set BE bit if special trace is on
-			stw		r6,savesrr0+4(r13)				; Save the SRR0 
+			stw		r6,savesrr0(r13)				; Save the SRR0 
 			rlwinm	r6,r7,(((31-MSR_BE_BIT)+(MSR_PR_BIT+1))&31),MSR_BE_BIT,MSR_BE_BIT	; Move PR bit to BE bit
-			stw		r5,saver5+4(r13)				; Save this one 
+			stw		r5,saver5(r13)					; Save this one 
 			and		r8,r6,r8						; Remove BE bit only if problem state and special tracing on
 			mfsprg	r6,2							; Get interrupt time R13
 			mtsprg	2,r1							; Set the feature flags
 			andc	r7,r7,r8						; Clear BE bit if special trace is on and PR is set
 			mfsprg	r8,3							; Get rupt time R11
-			stw		r7,savesrr1+4(r13)				; Save SRR1 
-			stw		r8,saver11+4(r13)				; Save rupt time R11
-			stw		r6,saver13+4(r13)				; Save rupt R13
-			dcbz	0,r3							; allocate 32-byte line with r16-r19
-            la		r3,saver20(r13)					; point to next line
+			stw		r7,savesrr1(r13)				; Save SRR1 
+			rlwinm.	r7,r7,MSR_RI_BIT,MSR_RI_BIT		; Is this a special case access fault?
+			stw		r6,saver13(r13)					; Save rupt R1
+			crnot	specAccess,cr0_eq				; Set that we are doing a special access if RI is set
+			stw		r8,saver11(r13)					; Save rupt time R11
 
 getTB:		mftbu	r6								; Get the upper timebase
 			mftb	r7								; Get the lower timebase
@@ -890,26 +983,18 @@ getTB:		mftbu	r6								; Get the upper timebase
 			cmplw	r6,r8							; Did the top tick?
 			bne-	getTB							; Yeah, need to get it again...
 
-#if INSTRUMENT
-			mfspr	r6,pmc1							; INSTRUMENT - saveinstr[1] - Save halfway context save stamp
-			stw		r6,0x6100+(0x01*16)+0x0(0)		; INSTRUMENT - Save it
-			mfspr	r6,pmc2							; INSTRUMENT - Get stamp
-			stw		r6,0x6100+(0x01*16)+0x4(0)		; INSTRUMENT - Save it
-			mfspr	r6,pmc3							; INSTRUMENT - Get stamp
-			stw		r6,0x6100+(0x01*16)+0x8(0)		; INSTRUMENT - Save it
-			mfspr	r6,pmc4							; INSTRUMENT - Get stamp
-			stw		r6,0x6100+(0x01*16)+0xC(0)		; INSTRUMENT - Save it
-#endif			
-
 			stw		r8,ruptStamp(r2)				; Save the top of time stamp
 			stw		r8,SAVtime(r13)					; Save the top of time stamp
+			la		r6,saver16(r13)					; Point to the next cache line
 			stw		r7,ruptStamp+4(r2)				; Save the bottom of time stamp
 			stw		r7,SAVtime+4(r13)				; Save the bottom of time stamp
 
-			dcbz	0,r3							; allocate 32-byte line with r20-r23
-			stw		r9,saver9+4(r13)				; Save this one
+			bf-		featL1ena,skipz2				; L1 cache is disabled...
+			dcbz	0,r6							; Allocate in cache 
+skipz2:			
+			stw		r9,saver9(r13)					; Save this one
 
-			stw		r10,saver10+4(r13)				; Save this one
+			stw		r10,saver10(r13)				; Save this one
 			mflr	r4								; Get the LR
 			mfxer	r10								; Get the XER
 			
@@ -927,151 +1012,175 @@ getTB:		mftbu	r6								; Get the upper timebase
 			adde	r8,r8,r5						; Add high and carry to total
 			stw		r6,napTotal+4(r2)				; Save the low total
 			stw		r8,napTotal(r2)					; Save the high total
-			stw		r3,savesrr0+4(r13)				; Modify to return to nap/doze exit
+			stw		r3,savesrr0(r13)				; Modify to return to nap/doze exit
 			
-			rlwinm.	r3,r1,0,pfSlowNapb,pfSlowNapb	; Should HID1 be restored?
+			rlwinm.		r3,r1,0,pfSlowNapb,pfSlowNapb			; Should HID1 be restored?
 			beq		notInSlowNap
 
 			lwz		r3,pfHID1(r2)					; Get saved HID1 value
-			mtspr	hid1,r3							; Restore HID1
+			mtspr		hid1, r3					; Restore HID1
 
 notInSlowNap:
-			rlwinm.	r3,r1,0,pfNoL2PFNapb,pfNoL2PFNapb	; Should MSSCR0 be restored?
+			rlwinm.		r3,r1,0,pfNoL2PFNapb,pfNoL2PFNapb		; Should MSSCR0 be restored?
 			beq		notNapping
 
 			lwz		r3,pfMSSCR0(r2)					; Get saved MSSCR0 value
-			mtspr	msscr0,r3						; Restore MSSCR0
+			mtspr		msscr0, r3					; Restore MSSCR0
 			sync
 			isync
 
-notNapping:	stw		r12,saver12+4(r13)				; Save this one
+notNapping:	stw		r12,saver12(r13)				; Save this one
 						
-			stw		r14,saver14+4(r13)				; Save this one
-			stw		r15,saver15+4(r13)				; Save this one 
+			stw		r14,saver14(r13)				; Save this one
+			stw		r15,saver15(r13)				; Save this one 
 			la		r14,saver24(r13)				; Point to the next block to save into
-			mfctr	r6								; Get the CTR 
-			stw		r16,saver16+4(r13)				; Save this one
-            la		r15,savectr(r13)				; point to line with CTR, DAR, DSISR, Exception code, and VRSAVE
-			stw		r4,savelr+4(r13)				; Save rupt LR
-		
-			dcbz	0,r14							; allocate 32-byte line with r24-r27
-            la		r16,saver28(r13)				; point to line with r28-r31
-			dcbz	0,r15							; allocate line with CTR, DAR, DSISR, Exception code, and VRSAVE
-			stw		r17,saver17+4(r13)				; Save this one
-			stw		r18,saver18+4(r13)				; Save this one 
-			stw		r6,savectr+4(r13)				; Save rupt CTR
 			stw		r0,savecr(r13)					; Save rupt CR
-			stw		r19,saver19+4(r13)				; Save this one
-			mfdar	r6								; Get the rupt DAR
-			stw		r20,saver20+4(r13)				; Save this one 
-			dcbz	0,r16							; allocate 32-byte line with r28-r31
-
-			stw		r21,saver21+4(r13)				; Save this one
-			lwz		r21,spcFlags(r2)				; Get the special flags from per_proc
-			stw		r10,savexer+4(r13)				; Save the rupt XER
-			stw		r30,saver30+4(r13)				; Save this one 
-			lhz		r30,pfrptdProc(r2)				; Get the reported processor type
-			stw		r31,saver31+4(r13)				; Save this one 
-			stw		r22,saver22+4(r13)				; Save this one 
-			stw		r23,saver23+4(r13)				; Save this one 
-			stw		r24,saver24+4(r13)				; Save this one 
-			stw		r25,saver25+4(r13)				; Save this one 
-			mfdsisr	r7								; Get the rupt DSISR 
-			stw		r26,saver26+4(r13)				; Save this one		
-			stw		r27,saver27+4(r13)				; Save this one 
-			andis.	r21,r21,hi16(perfMonitor)		; Is the performance monitor enabled?
-			stw		r28,saver28+4(r13)				; Save this one
-			cmpwi	cr1, r30,CPU_SUBTYPE_POWERPC_750	; G3?
-            la		r27,savevscr(r13)				; point to 32-byte line with VSCR and FPSCR
-			cmpwi	cr2,r30,CPU_SUBTYPE_POWERPC_7400	; This guy?
-			stw		r29,saver29+4(r13)				; Save R29
-			stw		r6,savedar+4(r13)				; Save the rupt DAR 
-			li		r10,savepmc						; Point to pmc savearea
-
-			beq+	noPerfMonSave32					; No perfmon on here...
-
-			dcbz	r10,r13							; Clear first part of pmc area
-			li		r10,savepmc+0x20				; Point to pmc savearea second part
-			li		r22,0							; r22:	zero
-			dcbz	r10,r13							; Clear second part of pmc area
+			mfctr	r6								; Get the CTR 
+			stw		r16,saver16(r13)				; Save this one
+			stw		r4,savelr(r13)					; Save rupt LR
 		
-			beq		cr1,perfMonSave32_750			; This is a G3...
-
-			beq		cr2,perfMonSave32_7400			; Regular olde G4...
-
-			mfspr	r24,pmc5						; Here for a 7450
-			mfspr	r25,pmc6
-			stw		r24,savepmc+16(r13)				; Save PMC5
-			stw		r25,savepmc+20(r13)				; Save PMC6
-			mtspr	pmc5,r22						; Leave PMC5 clear
-			mtspr	pmc6,r22						; Leave PMC6 clear
-
-perfMonSave32_7400:		
-			mfspr	r25,mmcr2
-			stw		r25,savemmcr2+4(r13)			; Save MMCR2
-			mtspr	mmcr2,r22						; Leave MMCR2 clear
-
-perfMonSave32_750:		
-			mfspr	r23,mmcr0
-			mfspr	r24,mmcr1
-			stw		r23,savemmcr0+4(r13)			; Save MMCR0
-			stw		r24,savemmcr1+4(r13)			; Save MMCR1 
-			mtspr	mmcr0,r22						; Leave MMCR0 clear
-			mtspr	mmcr1,r22						; Leave MMCR1 clear
-			mfspr	r23,pmc1
-			mfspr	r24,pmc2
-			mfspr	r25,pmc3
-			mfspr	r26,pmc4
-			stw		r23,savepmc+0(r13)				; Save PMC1
-			stw		r24,savepmc+4(r13)				; Save PMC2
-			stw		r25,savepmc+8(r13)				; Save PMC3
-			stw		r26,savepmc+12(r13)				; Save PMC4
-			mtspr	pmc1,r22						; Leave PMC1 clear 
-			mtspr	pmc2,r22						; Leave PMC2 clear
-			mtspr	pmc3,r22						; Leave PMC3 clear 		
-			mtspr	pmc4,r22						; Leave PMC4 clear
-
-noPerfMonSave32:		
-			dcbz	0,r27							; allocate line with VSCR and FPSCR 
+			bf-		featL1ena,skipz4				; L1 cache is disabled...
+			dcbz	0,r14							; Allocate next save area line
+skipz4:			
+			stw		r17,saver17(r13)				; Save this one
+			stw		r18,saver18(r13)				; Save this one 
+			stw		r6,savectr(r13)					; Save rupt CTR
+			stw		r19,saver19(r13)				; Save this one
+			lis		r12,hi16(KERNEL_SEG_REG0_VALUE)	; Get the high half of the kernel SR0 value
+			mfdar	r6								; Get the rupt DAR
+			stw		r20,saver20(r13)				; Save this one 
 			
-			stw		r7,savedsisr(r13)				; Save the rupt code DSISR
-			stw		r11,saveexception(r13)			; Save the exception code 
+			bf+		specAccess,noSRsave				; Do not save SRs if this is not a special access...
+			mfsr	r14,sr0							; Get SR0
+			stw		r14,savesr0(r13)				; and save
+			mfsr	r14,sr1							; Get SR1
+			stw		r14,savesr1(r13)				; and save
+			mfsr	r14,sr2							; get SR2
+			stw		r14,savesr2(r13)				; and save
+			mfsr	r14,sr3							; get SR3
+			stw		r14,savesr3(r13)				; and save
 
+noSRsave:	mtsr	sr0,r12							; Set the kernel SR0 
+			stw		r21,saver21(r13)				; Save this one
+			addis	r12,r12,0x0010					; Point to the second segment of kernel
+			stw		r10,savexer(r13)				; Save the rupt XER
+			mtsr	sr1,r12							; Set the kernel SR1 
+			stw		r30,saver30(r13)				; Save this one 
+			addis	r12,r12,0x0010					; Point to the third segment of kernel
+			stw		r31,saver31(r13)				; Save this one 
+			mtsr	sr2,r12							; Set the kernel SR2 
+			stw		r22,saver22(r13)				; Save this one 
+			addis	r12,r12,0x0010					; Point to the third segment of kernel
+			stw		r23,saver23(r13)				; Save this one 
+			mtsr	sr3,r12							; Set the kernel SR3 
+			stw		r24,saver24(r13)				; Save this one 
+			stw		r25,saver25(r13)				; Save this one 
+			mfdsisr	r7								; Get the rupt DSISR 
+			stw		r26,saver26(r13)				; Save this one		
+			stw		r27,saver27(r13)				; Save this one 
+			li		r10,emfp0						; Point to floating point save
+			stw		r28,saver28(r13)				; Save this one
+			stw		r29,saver29(r13)				; Save this one 
+			mfsr	r14,sr14						; Get the copyin/out segment register
+			stw		r6,savedar(r13)					; Save the rupt DAR 
+			bf-		featL1ena,skipz5a				; Do not do this if no L1...
+			dcbz	r10,r2							; Clear and allocate an L1 slot
+			
+skipz5a:	stw		r7,savedsisr(r13)				; Save the rupt code DSISR
+			stw		r11,saveexception(r13)			; Save the exception code 
+			stw		r14,savesr14(r13)				; Save copyin/copyout
+
+
+;
+;			Here we will save some floating point and vector status
+;			and we also set a clean default status for a new interrupt level.
+;			Note that we assume that emfp0 is on an altivec boundary
+;			and that R10 points to it (as a displacemnt from R2).
+;
+
+			lis		r8,hi16(MASK(MSR_VEC))			; Get the vector enable bit
+			mfmsr	r6								; Get the current MSR value
+			ori		r8,r8,lo16(MASK(MSR_FP))		; Add in the float enable
+			li		r19,0							; Assume no Altivec
+			or		r7,r6,r8						; Enable floating point
+			li		r9,0							; Get set to clear VRSAVE
+			mtmsr	r7								; Do it
+			isync
+			
+			bf		featAltivec,noavec				; No Altivec on this CPU...
+			addi	r14,r10,16						; Displacement to second vector register
+			stvxl	v0,r10,r2						; Save a register
+			stvxl	v1,r14,r2						; Save a second register
+			mfvscr	v0								; Get the vector status register
+			la		r28,savevscr(r13)				; Point to the status area
+			vspltish v1,1							; Turn on the non-Java bit and saturate
+			stvxl	v0,0,r28						; Save the vector status
+			vspltisw v0,1							; Turn on the saturate bit
+			mfspr	r19,vrsave						; Get the VRSAVE register
+			vxor	v1,v1,v0						; Turn off saturate	
+			mtspr	vrsave,r9						; Clear VRSAVE for each interrupt level
+			mtvscr	v1								; Set the non-java, no saturate status for new level
+
+			lvxl	v0,r10,r2						; Restore first work register
+			lvxl	v1,r14,r2						; Restore second work register
+
+noavec:		stw		r19,savevrsave(r13)				; Save the vector register usage flags
+
+;
+;			We need to save the FPSCR as if it is normal context.
+;			This is because pending exceptions will cause an exception even if
+;			FP is disabled. We need to clear the FPSCR when we first start running in the
+;			kernel.
+;
+
+			bf-		featFP,nofpexe					; No possible floating point exceptions...
+			
+			stfd	f0,emfp0(r2)					; Save FPR0	
+			stfd	f1,emfp1(r2)					; Save FPR1	
+			mffs	f0								; Get the FPSCR
+			fsub	f1,f1,f1						; Make a 0			
+			stfd	f0,savefpscrpad(r13)			; Save the FPSCR
+			mtfsf	0xFF,f1							; Clear it
+			lfd		f0,emfp0(r2)					; Restore FPR0	
+			lfd		f1,emfp1(r2)					; Restore FPR1	
+
+nofpexe:	mtmsr	r6								; Turn off FP and vector
+			isync
+			
 
 ;
 ;			Everything is saved at this point, except for FPRs, and VMX registers.
 ;			Time for us to get a new savearea and then trace interrupt if it is enabled.
 ;
 
-			lwz		r25,traceMask(0)				; Get the trace mask
 			li		r0,SAVgeneral					; Get the savearea type value
-			lhz		r19,PP_CPU_NUMBER(r2)			; Get the logical processor number											
-			rlwinm	r22,r11,30,0,31					; Divide interrupt code by 2
+			lis		r23,hi16(EXT(trcWork))			; Get the trace work area address
+			mr		r14,r11							; Save the interrupt code across the call
 			stb		r0,SAVflags+2(r13)				; Mark valid context
+			ori		r23,r23,lo16(EXT(trcWork))		; Get the rest
+			rlwinm	r22,r11,30,0,31					; Divide interrupt code by 2
+			lwz		r25,traceMask(r23)				; Get the trace mask
 			addi	r22,r22,10						; Adjust code so we shift into CR5
-			li		r23,trcWork						; Get the trace work area address
+
+			bl		EXT(save_get_phys)				; Grab a savearea
+			
+			mfsprg	r2,0							; Get back the per_proc block
 			rlwnm	r7,r25,r22,22,22				; Set CR5_EQ bit position to 0 if tracing allowed 
+			lhz		r19,PP_CPU_NUMBER(r2)			; Get the logical processor number											
 			li		r26,0x8							; Get start of cpu mask
+			mr		r11,r14							; Get the exception code back
 			srw		r26,r26,r19						; Get bit position of cpu number
 			mtcrf	0x04,r7							; Set CR5 to show trace or not
 			and.	r26,r26,r25						; See if we trace this cpu
+			stw		r3,next_savearea(r2)			; Remember the savearea we just got for the next rupt
 			crandc	cr5_eq,cr5_eq,cr0_eq			; Turn off tracing if cpu is disabled
 ;
 ;			At this point, we can take another exception and lose nothing.
 ;
+			
+			lwz		r0,saver0(r13)					; Get back interrupt time R0 (we need this whether we trace or not)
 
-#if INSTRUMENT
-			mfspr	r26,pmc1						; INSTRUMENT - saveinstr[2] - Take stamp after save is done
-			stw		r26,0x6100+(0x02*16)+0x0(0)		; INSTRUMENT - Save it
-			mfspr	r26,pmc2						; INSTRUMENT - Get stamp
-			stw		r26,0x6100+(0x02*16)+0x4(0)		; INSTRUMENT - Save it
-			mfspr	r26,pmc3						; INSTRUMENT - Get stamp
-			stw		r26,0x6100+(0x02*16)+0x8(0)		; INSTRUMENT - Save it
-			mfspr	r26,pmc4						; INSTRUMENT - Get stamp
-			stw		r26,0x6100+(0x02*16)+0xC(0)		; INSTRUMENT - Save it
-#endif			
-
-			bne+	cr5,xcp32xit					; Skip all of this if no tracing here...
+			bne+	cr5,skipTrace					; Skip all of this if no tracing here...
 
 ;
 ;			We select a trace entry using a compare and swap on the next entry field.
@@ -1079,8 +1188,8 @@ noPerfMonSave32:
 ;			another processor could wrap an trash our entry.  Who cares?
 ;
 
-			lwz		r25,traceStart(0)				; Get the start of trace table
-			lwz		r26,traceEnd(0)					; Get end of trace table
+			lwz		r25,traceStart(r23)				; Get the start of trace table
+			lwz		r26,traceEnd(r23)				; Get end of trace table
 	
 trcsel:		lwarx	r20,0,r23						; Get and reserve the next slot to allocate
 			
@@ -1098,806 +1207,201 @@ gotTrcEnt:	stwcx.	r22,0,r23						; Try to update the current pointer
 			sync
 #endif
 			
+			bf-		featL1ena,skipz6				; L1 cache is disabled...
 			dcbz	0,r20							; Clear and allocate first trace line
+skipz6:
 
 ;
 ;			Let us cut that trace entry now.
 ;
 
-			lwz		r16,ruptStamp(r2)				; Get top of time base
-			lwz		r17,ruptStamp+4(r2)				; Get the bottom of time stamp
 
 			li		r14,32							; Offset to second line
 
-			lwz		r0,saver0+4(r13)				; Get back interrupt time R0
-			lwz		r1,saver1+4(r13)				; Get back interrupt time R1
-			lwz		r8,savecr(r13)					; Get the CR value
-			
-			dcbz	r14,r20							; Zap the second line
-			
-			sth		r19,LTR_cpu(r20)				; Stash the cpu number
-			li		r14,64							; Offset to third line
-			sth		r11,LTR_excpt(r20)				; Save the exception type 
-			lwz		r7,saver2+4(r13)				; Get back interrupt time R2
-			lwz		r3,saver3+4(r13)				; Restore this one
+			lwz		r16,ruptStamp(r2)				; Get top of time base
+			lwz		r17,ruptStamp+4(r2)				; Get the bottom of time stamp
 		
-			dcbz	r14,r20							; Zap the third half
-			
-			mfdsisr	r9								; Get the DSISR
-			li		r14,96							; Offset to forth line
-			stw		r16,LTR_timeHi(r20)				; Set the upper part of TB 
+			bf-		featL1ena,skipz7				; L1 cache is disabled...
+			dcbz	r14,r20							; Zap the second half
+
+skipz7:		stw		r16,LTR_timeHi(r20)				; Set the upper part of TB 
+			lwz		r1,saver1(r13)					; Get back interrupt time R1
 			stw		r17,LTR_timeLo(r20)				; Set the lower part of TB
-			lwz		r10,savelr+4(r13)				; Get the LR
-			mfsrr0	r17								; Get SRR0 back, it is still good
-			
-			dcbz	r14,r20							; Zap the forth half
-			lwz		r4,saver4+4(r13)				; Restore this one
-			lwz		r5,saver5+4(r13)				; Restore this one
-			mfsrr1	r18								; SRR1 is still good in here
-
-			stw		r8,LTR_cr(r20)					; Save the CR
-			lwz		r6,saver6+4(r13)				; Get R6
-			mfdar	r16								; Get this back
-			stw		r9,LTR_dsisr(r20)				; Save the DSISR
-			stw		r17,LTR_srr0+4(r20)				; Save the SSR0 
-			
-			stw		r18,LTR_srr1+4(r20)				; Save the SRR1 
-			stw		r16,LTR_dar+4(r20)				; Save the DAR
-			mfctr	r17								; Get the CTR (still good in register)
-			stw		r13,LTR_save+4(r20)				; Save the savearea 
-			stw		r10,LTR_lr+4(r20)				; Save the LR
-			
-			stw		r17,LTR_ctr+4(r20)				; Save off the CTR
-			stw		r0,LTR_r0+4(r20)				; Save off register 0 			
-			stw		r1,LTR_r1+4(r20)				; Save off register 1			
-			stw		r7,LTR_r2+4(r20)				; Save off register 2 	
-					
-		
-			stw		r3,LTR_r3+4(r20)				; Save off register 3
-			stw		r4,LTR_r4+4(r20)				; Save off register 4 
-			stw		r5,LTR_r5+4(r20)				; Save off register 5	
-			stw		r6,LTR_r6+4(r20)				; Save off register 6	
-
-#if ESPDEBUG
-			addi	r17,r20,32						; Second line
-			addi	r16,r20,64						; Third line
-			dcbst	br0,r20							; Force to memory
-			dcbst	br0,r17							; Force to memory
-			addi	r17,r17,32						; Fourth line
-			dcbst	br0,r16							; Force to memory
-			dcbst	br0,r17							; Force to memory
-			
-			sync									; Make sure it all goes
-#endif
-xcp32xit:	mr		r14,r11							; Save the interrupt code across the call
-			bl		EXT(save_get_phys_32)			; Grab a savearea
-			mfsprg	r2,0							; Get the per_proc info
-			li		r10,emfp0						; Point to floating point save
-			mr		r11,r14							; Get the exception code back
-			dcbz	r10,r2							; Clear for speed
-			stw		r3,next_savearea+4(r2)			; Store the savearea for the next rupt
-
-#if INSTRUMENT
-			mfspr	r4,pmc1							; INSTRUMENT - saveinstr[3] - Take stamp after next savearea
-			stw		r4,0x6100+(0x03*16)+0x0(0)		; INSTRUMENT - Save it
-			mfspr	r4,pmc2							; INSTRUMENT - Get stamp
-			stw		r4,0x6100+(0x03*16)+0x4(0)		; INSTRUMENT - Save it
-			mfspr	r4,pmc3							; INSTRUMENT - Get stamp
-			stw		r4,0x6100+(0x03*16)+0x8(0)		; INSTRUMENT - Save it
-			mfspr	r4,pmc4							; INSTRUMENT - Get stamp
-			stw		r4,0x6100+(0x03*16)+0xC(0)		; INSTRUMENT - Save it
-#endif			
-			b		xcpCommon						; Go join the common interrupt processing...
-
-;
-;
-;			This is the 64-bit context saving stuff
-;
-
-			.align	5
-						
-extEntry64:	mfsprg  r13,0							; Load per_proc
-			ld		r13,next_savearea(r13)			; Get the exception save area
-			std		r0,saver0(r13)					; Save register 0
-			lis		r0,hi16(MASK(MSR_VEC)|MASK(MSR_FP)|MASK(MSR_ME))	; Set up the MSR we will use throughout. Note that ME come on here if MCK
-			std		r1,saver1(r13)					; Save register 1
-			ori		r1,r0,lo16(MASK(MSR_VEC)|MASK(MSR_FP)|MASK(MSR_ME))	; Rest of MSR
-			lis		r0,0x0010						; Get rupt code transform validity mask
-			mtmsr	r1								; Set MSR
-			isync
-		
-			ori		r0,r0,0x0200					; Get rupt code transform validity mask
-			std		r2,saver2(r13)					; Save this one
-			lis		r1,0x00F0						; Top half of xform XOR
-			rlwinm	r2,r11,29,27,31					; Get high 5 bits of rupt code
-			std		r3,saver3(r13)					; Save this one
-			slw		r0,r0,r2						; Move transform validity bit to bit 0
-			std		r4,saver4(r13)					; Save this one
-			std		r5,saver5(r13)					; Save this one 
-			ori		r1,r1,0x04EC					; Bottom half of xform XOR
-			mfxer	r5								; Save the XER because we are about to muck with it
-			rlwinm	r4,r11,1,27,28					; Get bottom of interrupt code * 8
-			lis		r3,hi16(dozem|napm)				; Get the nap and doze bits
-			srawi	r0,r0,31						; Get 0xFFFFFFFF of xform valid, 0 otherwise
-			rlwnm	r4,r1,r4,24,31					; Extract the xform XOR
-			li		r1,saver16						; Point to the next line
-			and		r4,r4,r0						; Only keep transform if we are to use it
-			li		r2,lgKillResv					; Point to the killing field
-			mfcr	r0								; Save the CR
-			stwcx.	r2,0,r2							; Kill any pending reservation
-			dcbz128	r1,r13							; Blow away the line
-			sldi	r3,r3,32						; Position it
-			mfspr	r1,hid0							; Get HID0
-			andc	r3,r1,r3						; Clear nap and doze
-			xor		r11,r11,r4						; Transform 970 rupt code to standard keeping FAM bit
-			cmpld	r3,r1							; See if nap and/or doze was on
-			std		r6,saver6(r13)					; Save this one
-			mfsprg	r2,0							; Get the per_proc area
-			la		r6,savesrr0(r13)				; point to line with SRR0, SRR1, CR, XER, and LR
-			beq++	eE64NoNap						; No nap here,  skip all this...
-		
-			sync									; Make sure we are clean
-			mtspr	hid0,r3							; Set the updated hid0
-			mfspr	r1,hid0							; Yes, this is silly, keep it here
-			mfspr	r1,hid0							; Yes, this is a duplicate, keep it here
-			mfspr	r1,hid0							; Yes, this is a duplicate, keep it here
-			mfspr	r1,hid0							; Yes, this is a duplicate, keep it here
-			mfspr	r1,hid0							; Yes, this is a duplicate, keep it here
-			mfspr	r1,hid0							; Yes, this is a duplicate, keep it here
-			
-eE64NoNap:	crnot	wasNapping,cr0_eq				; Remember if we were napping
-			andi.	r1,r11,T_FAM					; Check FAM bit
-			beq++	eEnoFAM							; Is it FAM intercept
-			mfsrr1	r3								; Load srr1
-			andc	r11,r11,r1						; Clear FAM bit
-			rlwinm.	r3,r3,0,MSR_PR_BIT,MSR_PR_BIT	; Are we trapping from supervisor state?
-			beq+	eEnoFAM							; From supervisor state
-			lwz		r1,spcFlags(r2)					; Load spcFlags 
-			rlwinm	r1,r1,1+FamVMmodebit,30,31		; Extract FamVMenabit and FamVMmodebit
-			cmpwi	cr0,r1,2						; Check FamVMena set without FamVMmode
-			bne++	eEnoFAM							; Can this context be FAM intercept
-			lwz		r4,FAMintercept(r2)				; Load exceptions mask to intercept
-			li		r3,0							; Clear
-			srwi	r1,r11,2						; divide r11 by 4
-			oris	r3,r3,0x8000					; Set r3 to 0x80000000
-			srw		r1,r3,r1						; Set bit for current exception
-			and.	r1,r1,r4						; And current exception with the intercept mask
-			beq++	eEnoFAM							; Is it FAM intercept
-			b		EXT(vmm_fam_exc)
-
-			.align	5
-
-eEnoFAM:	lwz		r1,pfAvailable(r2)				; Get the CPU features flags	
-			dcbz128	0,r6							; allocate 128-byte line with SRR0, SRR1, CR, XER, and LR
-			
-;
-;			Remember, we are setting up CR6 with feature flags
-;
-			std		r7,saver7(r13)					; Save this one
-			mtcrf	0x80,r1							; Put the features flags (that we care about) in the CR
-			std		r8,saver8(r13)					; Save this one
-			mtcrf	0x40,r1							; Put the features flags (that we care about) in the CR
-			mfsrr0	r6								; Get the interruption SRR0 
-			lhz		r8,PP_CPU_FLAGS(r2)				; Get the flags
-			mtcrf	0x20,r1							; Put the features flags (that we care about) in the CR
-			mfsrr1	r7								; Get the interrupt SRR1
-			rlwinm	r8,r8,(((31-MSR_BE_BIT)+(traceBEb+16+1))&31),MSR_BE_BIT,MSR_BE_BIT	; Set BE bit if special trace is on
-			std		r6,savesrr0(r13)				; Save the SRR0 
-			mtcrf	0x02,r1							; Put the features flags (that we care about) in the CR
-			rlwinm	r6,r7,(((31-MSR_BE_BIT)+(MSR_PR_BIT+1))&31),MSR_BE_BIT,MSR_BE_BIT	; Move PR bit to BE bit
-			and		r8,r6,r8						; Remove BE bit only if problem state and special tracing on
-			std		r9,saver9(r13)					; Save this one
-			andc	r7,r7,r8						; Clear BE bit if special trace is on and PR is set
-			crmove	featAltivec,pfAltivecb			; Set the Altivec flag
-			std		r7,savesrr1(r13)				; Save SRR1 
-			mfsprg	r9,3							; Get rupt time R11
-			std		r10,saver10(r13)				; Save this one
-			mfsprg	r6,2							; Get interrupt time R13
-			std		r9,saver11(r13)					; Save rupt time R11
-			mtsprg	2,r1							; Set the feature flags
-			std		r12,saver12(r13)				; Save this one
-			mflr	r4								; Get the LR
- 			mftb	r7								; Get the timebase
-			std		r6,saver13(r13)					; Save rupt R13
-			std		r7,ruptStamp(r2)				; Save the time stamp
-			std		r7,SAVtime(r13)					; Save the time stamp
-			
-			bf++	wasNapping,notNappingSF			; Skip if not waking up from nap...
-
-			ld		r6,napStamp(r2)					; Pick up nap stamp
-			lis		r3,hi16(EXT(machine_idle_ret))	; Get high part of nap/doze return
-			sub		r7,r7,r6						; Subtract stamp from now
-			ld		r6,napTotal(r2)					; Pick up total
-			add		r6,r6,r7						; Add low to total
-			ori		r3,r3,lo16(EXT(machine_idle_ret))	; Get low part of nap/doze return
-			std		r6,napTotal(r2)					; Save the high total
-			std		r3,savesrr0(r13)				; Modify to return to nap/doze exit
-			
-notNappingSF:	
-			std		r14,saver14(r13)				; Save this one
-			std		r15,saver15(r13)				; Save this one 
-			stw		r0,savecr(r13)					; Save rupt CR
-			mfctr	r6								; Get the CTR 
-			std		r16,saver16(r13)				; Save this one
-			std		r4,savelr(r13)					; Save rupt LR
-		
-			std		r17,saver17(r13)				; Save this one
-			li		r7,savepmc						; Point to pmc area
-			std		r18,saver18(r13)				; Save this one 
-			lwz		r17,spcFlags(r2)				; Get the special flags from per_proc
-			std		r6,savectr(r13)					; Save rupt CTR
-			std		r19,saver19(r13)				; Save this one
-			mfdar	r6								; Get the rupt DAR
-			std		r20,saver20(r13)				; Save this one 
-
-			dcbz128	r7,r13							; Clear out the pmc spot
-					
-			std		r21,saver21(r13)				; Save this one
-			std		r5,savexer(r13)					; Save the rupt XER
-			std		r22,saver22(r13)				; Save this one 
-			std		r23,saver23(r13)				; Save this one 
-			std		r24,saver24(r13)				; Save this one 
-			std		r25,saver25(r13)				; Save this one 
-			mfdsisr	r7								; Get the rupt DSISR 
-			std		r26,saver26(r13)				; Save this one		
-			andis.	r17,r17,hi16(perfMonitor)		; Is the performance monitor enabled?
-			std		r27,saver27(r13)				; Save this one 
-			li		r10,emfp0						; Point to floating point save
-			std		r28,saver28(r13)				; Save this one
-            la		r27,savevscr(r13)				; point to 32-byte line with VSCR and FPSCR
-			std		r29,saver29(r13)				; Save R29
-			std		r30,saver30(r13)				; Save this one 
-			std		r31,saver31(r13)				; Save this one 
-			std		r6,savedar(r13)					; Save the rupt DAR 
-			stw		r7,savedsisr(r13)				; Save the rupt code DSISR
-			stw		r11,saveexception(r13)			; Save the exception code 
-
-			beq++	noPerfMonSave64					; Performance monitor not on...
-
-			li		r22,0							; r22:	zero
-		
-			mfspr	r23,mmcr0_gp
-			mfspr	r24,mmcr1_gp
-			mfspr	r25,mmcra_gp
-			std		r23,savemmcr0(r13)				; Save MMCR0
-			std		r24,savemmcr1(r13)				; Save MMCR1 
-			std		r25,savemmcr2(r13)				; Save MMCRA
-			mtspr	mmcr0_gp,r22					; Leave MMCR0 clear
-			mtspr	mmcr1_gp,r22					; Leave MMCR1 clear
-			mtspr	mmcra_gp,r22					; Leave MMCRA clear 
-			mfspr	r23,pmc1_gp
-			mfspr	r24,pmc2_gp
-			mfspr	r25,pmc3_gp
-			mfspr	r26,pmc4_gp
-			stw		r23,savepmc+0(r13)				; Save PMC1
-			stw		r24,savepmc+4(r13)				; Save PMC2
-			stw		r25,savepmc+8(r13)				; Save PMC3
-			stw		r26,savepmc+12(r13)				; Save PMC4
-			mfspr	r23,pmc5_gp
-			mfspr	r24,pmc6_gp
-			mfspr	r25,pmc7_gp
-			mfspr	r26,pmc8_gp
-			stw		r23,savepmc+16(r13)				; Save PMC5
-			stw		r24,savepmc+20(r13)				; Save PMC6
-			stw		r25,savepmc+24(r13)				; Save PMC7
-			stw		r26,savepmc+28(r13)				; Save PMC8
-			mtspr	pmc1_gp,r22						; Leave PMC1 clear 
-			mtspr	pmc2_gp,r22						; Leave PMC2 clear
-			mtspr	pmc3_gp,r22						; Leave PMC3 clear 		
-			mtspr	pmc4_gp,r22						; Leave PMC4 clear 
-			mtspr	pmc5_gp,r22						; Leave PMC5 clear 
-			mtspr	pmc6_gp,r22						; Leave PMC6 clear
-			mtspr	pmc7_gp,r22						; Leave PMC7 clear 		
-			mtspr	pmc8_gp,r22						; Leave PMC8 clear 
-
-noPerfMonSave64:		
-
-;
-;			Everything is saved at this point, except for FPRs, and VMX registers.
-;			Time for us to get a new savearea and then trace interrupt if it is enabled.
-;
-
-			lwz		r25,traceMask(0)				; Get the trace mask
-			li		r0,SAVgeneral					; Get the savearea type value
-			lhz		r19,PP_CPU_NUMBER(r2)			; Get the logical processor number											
-			stb		r0,SAVflags+2(r13)				; Mark valid context
-			ori		r23,r23,lo16(EXT(trcWork))		; Get the rest
-			rlwinm	r22,r11,30,0,31					; Divide interrupt code by 2
-			li		r23,trcWork						; Get the trace work area address
-			addi	r22,r22,10						; Adjust code so we shift into CR5
-			li		r26,0x8							; Get start of cpu mask
-			rlwnm	r7,r25,r22,22,22				; Set CR5_EQ bit position to 0 if tracing allowed 
-			srw		r26,r26,r19						; Get bit position of cpu number
-			mtcrf	0x04,r7							; Set CR5 to show trace or not
-			and.	r26,r26,r25						; See if we trace this cpu
-			crandc	cr5_eq,cr5_eq,cr0_eq			; Turn off tracing if cpu is disabled
-
-			bne++	cr5,xcp64xit					; Skip all of this if no tracing here...
-
-;
-;			We select a trace entry using a compare and swap on the next entry field.
-;			Since we do not lock the actual trace buffer, there is a potential that
-;			another processor could wrap an trash our entry.  Who cares?
-;
-
-			lwz		r25,traceStart(0)				; Get the start of trace table
-			lwz		r26,traceEnd(0)					; Get end of trace table
-
-trcselSF:	lwarx	r20,0,r23						; Get and reserve the next slot to allocate
-			
-			addi	r22,r20,LTR_size				; Point to the next trace entry
-			cmplw	r22,r26							; Do we need to wrap the trace table?
-			bne+	gotTrcEntSF						; No wrap, we got us a trace entry...
-			
-			mr		r22,r25							; Wrap back to start
-
-gotTrcEntSF:	
-			stwcx.	r22,0,r23						; Try to update the current pointer
-			bne-	trcselSF						; Collision, try again...
-			
-#if ESPDEBUG
-			dcbf	0,r23							; Force to memory
-			sync
-#endif
-
-;
-;			Let us cut that trace entry now.
-;
-
-			dcbz128	0,r20							; Zap the trace entry
-
-			ld		r16,ruptStamp(r2)				; Get top of time base
-			ld		r0,saver0(r13)					; Get back interrupt time R0 (we need this whether we trace or not)
-			std		r16,LTR_timeHi(r20)				; Set the upper part of TB 
-			ld		r1,saver1(r13)					; Get back interrupt time R1
-			ld		r18,saver2(r13)					; Get back interrupt time R2
-			std		r0,LTR_r0(r20)					; Save off register 0 			
-			ld		r3,saver3(r13)					; Restore this one
+			lwz		r18,saver2(r13)					; Get back interrupt time R2
+			stw		r0,LTR_r0(r20)					; Save off register 0 			
+			lwz		r3,saver3(r13)					; Restore this one
 			sth		r19,LTR_cpu(r20)				; Stash the cpu number
-			std		r1,LTR_r1(r20)					; Save off register 1			
-			ld		r4,saver4(r13)					; Restore this one
-			std		r18,LTR_r2(r20)					; Save off register 2 			
-			ld		r5,saver5(r13)					; Restore this one
-			ld		r6,saver6(r13)					; Get R6
-			std		r3,LTR_r3(r20)					; Save off register 3
+			stw		r1,LTR_r1(r20)					; Save off register 1			
+			lwz		r4,saver4(r13)					; Restore this one
+			stw		r18,LTR_r2(r20)					; Save off register 2 			
+			lwz		r5,saver5(r13)					; Restore this one
+			stw		r3,LTR_r3(r20)					; Save off register 3
 			lwz		r16,savecr(r13)					; Get the CR value
-			std		r4,LTR_r4(r20)					; Save off register 4 
+			stw		r4,LTR_r4(r20)					; Save off register 4 
 			mfsrr0	r17								; Get SRR0 back, it is still good
-			std		r5,LTR_r5(r20)					; Save off register 5	
-			std		r6,LTR_r6(r20)					; Save off register 6	
+			stw		r5,LTR_r5(r20)					; Save off register 5	
 			mfsrr1	r18								; SRR1 is still good in here
 			stw		r16,LTR_cr(r20)					; Save the CR
-			std		r17,LTR_srr0(r20)				; Save the SSR0 
-			std		r18,LTR_srr1(r20)				; Save the SRR1 
-						
+			stw		r17,LTR_srr0(r20)				; Save the SSR0 
+			stw		r18,LTR_srr1(r20)				; Save the SRR1 
 			mfdar	r17								; Get this back
-			ld		r16,savelr(r13)					; Get the LR
-			std		r17,LTR_dar(r20)				; Save the DAR
+			lwz		r16,savelr(r13)					; Get the LR
+			stw		r17,LTR_dar(r20)				; Save the DAR
 			mfctr	r17								; Get the CTR (still good in register)
-			std		r16,LTR_lr(r20)					; Save the LR
-			std		r17,LTR_ctr(r20)				; Save off the CTR
-			mfdsisr	r17								; Get the DSISR
-			std		r13,LTR_save(r20)				; Save the savearea 
-			stw		r17,LTR_dsisr(r20)				; Save the DSISR
-			sth		r11,LTR_excpt(r20)				; Save the exception type 
-
-#if ESPDEBUG
-			dcbf	0,r20							; Force to memory			
-			sync									; Make sure it all goes
+			stw		r16,LTR_lr(r20)					; Save the LR
+#if 0
+			lwz		r17,emfp1(r2)					; (TEST/DEBUG)
 #endif
-xcp64xit:	mr		r14,r11							; Save the interrupt code across the call
-			bl		EXT(save_get_phys_64)			; Grab a savearea
-			mfsprg	r2,0							; Get the per_proc info
-			li		r10,emfp0						; Point to floating point save
-			mr		r11,r14							; Get the exception code back
-			dcbz128	r10,r2							; Clear for speed
-			std		r3,next_savearea(r2)			; Store the savearea for the next rupt
-			b		xcpCommon						; Go join the common interrupt processing...
+			stw		r17,LTR_ctr(r20)				; Save off the CTR
+			stw		r13,LTR_save(r20)				; Save the savearea 
+			sth		r11,LTR_excpt(r20)				; Save the exception type 
+#if ESPDEBUG
+			addi	r17,r20,32						; (TEST/DEBUG)
+			dcbst	br0,r20							; (TEST/DEBUG)
+			dcbst	br0,r17							; (TEST/DEBUG)
+			sync									; (TEST/DEBUG)
+#endif
 
 ;
-;			All of the context is saved. Now we will get a
-;			fresh savearea.  After this we can take an interrupt.
+;			We are done with the trace, except for maybe modifying the exception
+;			code later on. So, that means that we need to save R20 and CR5.
+;			
+;			So, finish setting up the kernel registers now.
 ;
 
-			.align	5
-
-xcpCommon:
-
-;
-;			Here we will save some floating point and vector status
-;			and we also set a clean default status for a new interrupt level.
-;			Note that we assume that emfp0 is on an altivec boundary
-;			and that R10 points to it (as a displacemnt from R2).
-;
-;			We need to save the FPSCR as if it is normal context.
-;			This is because pending exceptions will cause an exception even if
-;			FP is disabled. We need to clear the FPSCR when we first start running in the
-;			kernel.
-;
-
-			stfd	f0,emfp0(r2)					; Save FPR0	
-			stfd	f1,emfp1(r2)					; Save FPR1	
-			li		r19,0							; Assume no Altivec
-			mffs	f0								; Get the FPSCR
-			lfd		f1,Zero(0)						; Make a 0			
-			stfd	f0,savefpscrpad(r13)			; Save the FPSCR
-			li		r9,0							; Get set to clear VRSAVE
-			mtfsf	0xFF,f1							; Clear it
-			addi	r14,r10,16						; Displacement to second vector register
-			lfd		f0,emfp0(r2)					; Restore FPR0	
-			la		r28,savevscr(r13)				; Point to the status area
-			lfd		f1,emfp1(r2)					; Restore FPR1	
-
-			bf		featAltivec,noavec				; No Altivec on this CPU...
-			
-			stvxl	v0,r10,r2						; Save a register
-			stvxl	v1,r14,r2						; Save a second register
-			mfspr	r19,vrsave						; Get the VRSAVE register
-			mfvscr	v0								; Get the vector status register
-			vspltish v1,1							; Turn on the non-Java bit and saturate
-			stvxl	v0,0,r28						; Save the vector status
-			vspltisw v0,1							; Turn on the saturate bit
-			vxor	v1,v1,v0						; Turn off saturate	
-			mtvscr	v1								; Set the non-java, no saturate status for new level
-			mtspr	vrsave,r9						; Clear VRSAVE for each interrupt level
-
-			lvxl	v0,r10,r2						; Restore first work register
-			lvxl	v1,r14,r2						; Restore second work register
-
-noavec:		stw		r19,savevrsave(r13)				; Save the vector register usage flags
-			
-;
-;			We are now done saving all of the context.  Start filtering the interrupts.
-;			Note that a Redrive will count as an actual interrupt.
-;			Note also that we take a lot of system calls so we will start decode here.
-;
-
-Redrive:	
-
-
-#if INSTRUMENT
-			mfspr	r20,pmc1						; INSTRUMENT - saveinstr[4] - Take stamp before exception filter
-			stw		r20,0x6100+(0x04*16)+0x0(0)		; INSTRUMENT - Save it
-			mfspr	r20,pmc2						; INSTRUMENT - Get stamp
-			stw		r20,0x6100+(0x04*16)+0x4(0)		; INSTRUMENT - Save it
-			mfspr	r20,pmc3						; INSTRUMENT - Get stamp
-			stw		r20,0x6100+(0x04*16)+0x8(0)		; INSTRUMENT - Save it
-			mfspr	r20,pmc4						; INSTRUMENT - Get stamp
-			stw		r20,0x6100+(0x04*16)+0xC(0)		; INSTRUMENT - Save it
-#endif			
-			lwz		r22,SAVflags(r13)				; Pick up the flags
-			lwz		r0,saver0+4(r13)				; Get back interrupt time syscall number
-			mfsprg	r2,0							; Restore per_proc
-		
-			li		r20,lo16(xcpTable)				; Point to the vector table (note: this must be in 1st 64k of physical memory)
-			la		r12,hwCounts(r2)				; Point to the exception count area
-			rlwinm	r22,r22,SAVredriveb+1,31,31		; Get a 1 if we are redriving
-			add		r12,r12,r11						; Point to the count
-			lwzx	r20,r20,r11						; Get the interrupt handler
-			lwz		r25,0(r12)						; Get the old value
-			lwz		r23,hwRedrives(r2)				; Get the redrive count
-			xori	r24,r22,1						; Get the NOT of the redrive
-			mtctr	r20								; Point to the interrupt handler
+skipTrace:	lhz		r21,PP_CPU_NUMBER(r2)			; Get the logical processor number
+			lis		r12,hi16(EXT(hw_counts))		; Get the high part of the interrupt counters
+			lwz		r7,savesrr1(r13)				; Get the entering MSR
+			ori		r12,r12,lo16(EXT(hw_counts))	; Get the low part of the interrupt counters
+			rlwinm	r21,r21,8,20,23					; Get index to processor counts
 			mtcrf	0x80,r0							; Set our CR0 to the high nybble of possible syscall code
-			add		r25,r25,r24						; Count this one if not a redrive
-			add		r23,r23,r24						; Count this one if if is a redrive
-			crandc	cr0_lt,cr0_lt,cr0_gt			; See if we have R0 equal to 0b10xx...x 
-			stw		r25,0(r12)						; Store it back
-			stw		r23,hwRedrives(r2)				; Save the redrive count
-			bctr									; Go process the exception...
-	
-
-;
-;			Exception vector filter table
-;
-
-			.align	7
-			
-xcpTable:
-			.long	EatRupt							; T_IN_VAIN			
-			.long	PassUpTrap						; T_RESET				
-			.long	MachineCheck					; T_MACHINE_CHECK		
-			.long	EXT(handlePF)					; T_DATA_ACCESS		
-			.long	EXT(handlePF)					; T_INSTRUCTION_ACCESS
-			.long	PassUpRupt						; T_INTERRUPT		
-			.long	EXT(AlignAssist)				; T_ALIGNMENT			
-			.long	EXT(Emulate)					; T_PROGRAM			
-			.long	PassUpFPU						; T_FP_UNAVAILABLE		
-			.long	PassUpRupt						; T_DECREMENTER		
-			.long	PassUpTrap						; T_IO_ERROR			
-			.long	PassUpTrap						; T_RESERVED			
-			.long	xcpSyscall						; T_SYSTEM_CALL			
-			.long	PassUpTrap						; T_TRACE				
-			.long	PassUpTrap						; T_FP_ASSIST			
-			.long	PassUpTrap						; T_PERF_MON				
-			.long	PassUpVMX						; T_VMX					
-			.long	PassUpTrap						; T_INVALID_EXCP0		
-			.long	PassUpTrap						; T_INVALID_EXCP1			
-			.long	PassUpTrap						; T_INVALID_EXCP2		
-			.long	PassUpTrap						; T_INSTRUCTION_BKPT		
-			.long	PassUpRupt						; T_SYSTEM_MANAGEMENT		
-			.long	EXT(AltivecAssist)				; T_ALTIVEC_ASSIST		
-			.long	PassUpRupt						; T_THERMAL				
-			.long	PassUpTrap						; T_INVALID_EXCP5		
-			.long	PassUpTrap						; T_INVALID_EXCP6			
-			.long	PassUpTrap						; T_INVALID_EXCP7			
-			.long	PassUpTrap						; T_INVALID_EXCP8			
-			.long	PassUpTrap						; T_INVALID_EXCP9			
-			.long	PassUpTrap						; T_INVALID_EXCP10		
-			.long	PassUpTrap						; T_INVALID_EXCP11		
-			.long	PassUpTrap						; T_INVALID_EXCP12	
-			.long	PassUpTrap						; T_INVALID_EXCP13		
-
-			.long	PassUpTrap						; T_RUNMODE_TRACE			
-
-			.long	PassUpRupt						; T_SIGP					
-			.long	PassUpTrap						; T_PREEMPT				
-			.long	conswtch						; T_CSWITCH				
-			.long	PassUpRupt						; T_SHUTDOWN				
-			.long	PassUpAbend						; T_CHOKE					
-
-			.long	EXT(handleDSeg)					; T_DATA_SEGMENT			
-			.long	EXT(handleISeg)					; T_INSTRUCTION_SEGMENT	
-
-			.long	WhoaBaby						; T_SOFT_PATCH			
-			.long	WhoaBaby						; T_MAINTENANCE			
-			.long	WhoaBaby						; T_INSTRUMENTATION		
-
-;
-;			Just what the heck happened here????
-;
-
-			.align	5
-			
-WhoaBaby:	b		.								; Open the hood and wait for help
-
-													
-;
-;			System call
-;
-		
-			.align	5
-
-xcpSyscall:	lis		r20,hi16(EXT(shandler))			; Assume this is a normal one, get handler address
 			rlwinm	r6,r0,1,0,31					; Move sign bit to the end 
-			ori		r20,r20,lo16(EXT(shandler))		; Assume this is a normal one, get handler address
-			bnl++	cr0,PassUp						; R0 not 0b10xxx...x, can not be any kind of magical system call, just pass it up...
-			lwz		r7,savesrr1+4(r13)				; Get the entering MSR (low half)
-			lwz		r1,dgFlags(0)					; Get the flags
+			cmplwi	cr1,r11,T_SYSTEM_CALL			; Did we get a system call?
+			add		r12,r12,r21						; Point to the processor count area
+			crandc	cr0_lt,cr0_lt,cr0_gt			; See if we have R0 equal to 0b10xx...x 
+			lwzx	r22,r12,r11						; Get the old value
+			cmplwi	cr3,r11,T_IN_VAIN				; Was this all in vain? All for nothing? 
+			addi	r22,r22,1						; Count this one
 			cmplwi	cr2,r6,1						; See if original R0 had the CutTrace request code in it 
+			stwx	r22,r12,r11						; Store it back
 			
+			beq-	cr3,EatRupt						; Interrupt was all for nothing... 
+			cmplwi	cr3,r11,T_MACHINE_CHECK			; Did we get a machine check?
+			bne+	cr1,noCutT						; Not a system call...
+			bnl+	cr0,noCutT						; R0 not 0b10xxx...x, can not be any kind of magical system call...
 			rlwinm.	r7,r7,0,MSR_PR_BIT,MSR_PR_BIT	; Did we come from user state?
-			beq++	FCisok							; From supervisor state...
+			lis		r1,hi16(EXT(dgWork))			; Get the diagnostics flags
+			beq+	FCisok							; From supervisor state...
 
+			ori		r1,r1,lo16(EXT(dgWork))			; Again
+			lwz		r1,dgFlags(r1)					; Get the flags
 			rlwinm.	r1,r1,0,enaUsrFCallb,enaUsrFCallb	; Are they valid?
-			beq++	PassUp							; No, treat as a normal one...
+			beq-	noCutT							; No...
 
-FCisok:		beq++	cr2,EatRupt						; This is a CutTrace system call, we are done with it...
+FCisok:		beq-	cr2,isCutTrace					; This is a CutTrace system call...
 			
 ;
 ;			Here is where we call the firmware.  If it returns T_IN_VAIN, that means
 ;			that it has handled the interruption.  Remember: thou shalt not trash R13
-;			while you are away.  Anything else is ok.
+;			or R20 while you are away.  Anything else is ok.
 ;			
 
-			lwz		r3,saver3+4(r13)				; Restore the first parameter
-			b		EXT(FirmwareCall)				; Go handle the firmware call....
+			lwz		r3,saver3(r13)					; Restore the first parameter
+			bl		EXT(FirmwareCall)				; Go handle the firmware call....
 
-;
-;			Here is where we return from the firmware call
-;
-
-			.align	5
-			.globl	EXT(FCReturn)
-
-LEXT(FCReturn)
 			cmplwi	r3,T_IN_VAIN					; Was it handled? 
+			mfsprg	r2,0							; Restore the per_proc
 			beq+	EatRupt							; Interrupt was handled...
 			mr		r11,r3							; Put the rupt code into the right register
-			b		Redrive							; Go through the filter again...
+			b		filter							; Go to the normal system call handler...
 		
+			.align	5
+			
+isCutTrace:				
+			li		r7,-32768						; Get a 0x8000 for the exception code
+			bne-	cr5,EatRupt						; Tracing is disabled...
+			sth		r7,LTR_excpt(r20)				; Modify the exception type to a CutTrace
+			b		EatRupt							; Time to go home... 
 
-;
-;			Here is where we return from the PTE miss and segment exception handler
-;
+;			We are here because we did not have a CutTrace system call
 
 			.align	5
-			.globl	EXT(PFSExit)
 
-LEXT(PFSExit)
+noCutT:		beq-	cr3,MachineCheck				; Whoa... Machine check...
 
-#if 0
-			mfsprg	r2,0							; (BRINGUP)
-			lwz		r0,savedsisr(r13)				; (BRINGUP)
-			andis.	r0,r0,hi16(dsiAC)				; (BRINGUP)
-			beq++	didnthit						; (BRINGUP)
-			lwz		r0,20(0)						; (BRINGUP)
-			mr.		r0,r0							; (BRINGUP)
-			bne--	didnthit						; (BRINGUP)
-#if 0
-			li		r0,1							; (BRINGUP)
-			stw		r0,20(0)						; (BRINGUP)
-			lis		r0,hi16(Choke)					; (BRINGUP)
-			ori		r0,r0,lo16(Choke)				; (BRINGUP)
-			sc										; (BRINGUP)
-#endif
+;
+;			The following interrupts are the only ones that can be redriven
+;			by the higher level code or emulation routines.
+;
+
+Redrive:	cmplwi	cr0,r11,T_IN_VAIN				; Did the signal handler eat the signal?
+			mfsprg	r2,0							; Get the per_proc block 
+			beq+	cr0,EatRupt						; Bail now if we ate the rupt...
+
+
+;
+;			Here ss where we check for the other fast-path exceptions: translation exceptions,
+;			emulated instructions, etc.
+;
+
+filter:		cmplwi	cr3,r11,T_ALTIVEC_ASSIST		; Check for an Altivec denorm assist
+			cmplwi	cr4,r11,T_ALIGNMENT				; See if we got an alignment exception
+			cmplwi	cr1,r11,T_PROGRAM				; See if we got a program exception
+			cmplwi	cr2,r11,T_INSTRUCTION_ACCESS	; Check on an ISI 
+			bne+	cr3,noAltivecAssist				; It is not an assist...
+			b		EXT(AltivecAssist)				; It is an assist...
+	
+			.align	5
+
+noAltivecAssist:
+			bne+	cr4,noAlignAssist				; No alignment here...
+			b		EXT(AlignAssist)				; Go try to emulate...
+
+			.align	5
+
+noAlignAssist:
+			bne+	cr1,noEmulate					; No emulation here...
+			b		EXT(Emulate)					; Go try to emulate...
+
+			.align	5
+
+noEmulate:	cmplwi	cr3,r11,T_CSWITCH				; Are we context switching 
+			cmplwi	r11,T_DATA_ACCESS				; Check on a DSI 
+			beq-	cr2,DSIorISI					; It is a PTE fault...
+			beq-	cr3,conswtch					; It is a context switch... 
+			bne+	PassUp							; It is not a PTE fault...
+
+;
+;			This call will either handle the fault, in which case it will not
+;			return, or return to pass the fault up the line.
+;
+
+DSIorISI:	mr		r3,r11							; Move the rupt code
 			
-			lwz		r4,savesrr0+4(r13)				; (BRINGUP)
-			lwz		r8,savesrr1+4(r13)				; (BRINGUP)
-			lwz		r6,savedar+4(r13)				; (BRINGUP)
-			rlwinm.	r0,r8,0,MSR_IR_BIT,MSR_IR_BIT	; (BRINGUP)
-			mfmsr	r9								; (BRINGUP)
-			ori		r0,r9,lo16(MASK(MSR_DR))		; (BRINGUP)
-			beq--	hghg							; (BRINGUP)
-			mtmsr	r0								; (BRINGUP)
-			isync									; (BRINGUP)
+			bl		EXT(handlePF)					; See if we can handle this fault
 
-hghg:		lwz		r5,0(r4)						; (BRINGUP)
-			beq--	hghg1							; (BRINGUP)
-			mtmsr	r9								; (BRINGUP)
-			isync									; (BRINGUP)
-
-hghg1:		rlwinm	r7,r5,6,26,31					; (BRINGUP)
-			rlwinm	r27,r5,14,24,28					; (BRINGUP)
-			addi	r3,r13,saver0+4					; (BRINGUP)
-			lwzx	r3,r3,r27						; (BRINGUP)
-			
-#if 0
-			lwz		r27,patcharea+4(r2)				; (BRINGUP)
-			mr.		r3,r3							; (BRINGUP)
-			bne++	nbnbnb							; (BRINGUP)
-			addi	r27,r27,1						; (BRINGUP)
-			stw		r27,patcharea+4(r2)				; (BRINGUP)
-nbnbnb:					
-#endif			
-			
-			rlwinm.	r28,r8,0,MSR_DR_BIT,MSR_DR_BIT	; (BRINGUP)
-			rlwinm	r27,r6,0,0,29					; (BRINGUP)
-			ori		r28,r9,lo16(MASK(MSR_DR))		; (BRINGUP)
-			mfspr	r10,dabr						; (BRINGUP)
-			li		r0,0							; (BRINGUP)
-			mtspr	dabr,r0							; (BRINGUP)
-			cmplwi	cr1,r7,31						; (BRINGUP) 
-			beq--	qqq0							; (BRINGUP)
-			mtmsr	r28								; (BRINGUP)
-qqq0:
-			isync									; (BRINGUP)
-			
-			lwz		r27,0(r27)						; (BRINGUP) - Get original value
-			
-			bne		cr1,qqq1						; (BRINGUP)
-			
-			rlwinm	r5,r5,31,22,31					; (BRINGUP)
-			cmplwi	cr1,r5,151						; (BRINGUP)			
-			beq		cr1,qqq3						; (BRINGUP)
-			cmplwi	cr1,r5,407						; (BRINGUP)			
-			beq		cr1,qqq2						; (BRINGUP)
-			cmplwi	cr1,r5,215						; (BRINGUP)			
-			beq		cr1,qqq0q						; (BRINGUP)
-			cmplwi	cr1,r5,1014						; (BRINGUP)
-			beq		cr1,qqqm1						; (BRINGUP)
-
-			lis		r0,hi16(Choke)					; (BRINGUP)
-			ori		r0,r0,lo16(Choke)				; (BRINGUP)
-			sc										; (BRINGUP)
-			
-qqqm1:		rlwinm	r7,r6,0,0,26					; (BRINGUP)
-			stw		r0,0(r7)						; (BRINGUP)
-			stw		r0,4(r7)						; (BRINGUP)
-			stw		r0,8(r7)						; (BRINGUP)
-			stw		r0,12(r7)						; (BRINGUP)
-			stw		r0,16(r7)						; (BRINGUP)
-			stw		r0,20(r7)						; (BRINGUP)
-			stw		r0,24(r7)						; (BRINGUP)
-			stw		r0,28(r7)						; (BRINGUP)
-			b		qqq9
-		
-qqq1:		cmplwi	r7,38							; (BRINGUP)
-			bgt		qqq2							; (BRINGUP)
-			blt		qqq3							; (BRINGUP)
-
-qqq0q:		stb		r3,0(r6)						; (BRINGUP)
-			b		qqq9							; (BRINGUP)
-			
-qqq2:		sth		r3,0(r6)						; (BRINGUP)
-			b		qqq9							; (BRINGUP)
-			
-qqq3:		stw		r3,0(r6)						; (BRINGUP)
-			
-qqq9:		
-#if 0
-			rlwinm	r7,r6,0,0,29					; (BRINGUP)
-			lwz		r0,0(r7)						; (BRINGUP) - Get newest value
-#else
-			lis		r7,hi16(0x000792B8)				; (BRINGUP)
-			ori		r7,r7,lo16(0x000792B8)			; (BRINGUP)
-			lwz		r0,0(r7)						; (BRINGUP) - Get newest value
-#endif
-			mtmsr	r9								; (BRINGUP)
-			mtspr	dabr,r10						; (BRINGUP)
-			isync									; (BRINGUP)
-
-#if 0
-			lwz		r28,patcharea+12(r2)			; (BRINGUP)
-			mr.		r28,r28							; (BRINGUP)
-			bne++	qqq12							; (BRINGUP)
-			lis		r28,0x4000						; (BRINGUP)
-
-qqq12:		stw		r27,0(r28)						; (BRINGUP)
-			lwz		r6,savedar+4(r13)				; (BRINGUP)
-			stw		r0,4(r28)						; (BRINGUP)
-			stw		r4,8(r28)						; (BRINGUP)
-			stw		r6,12(r28)						; (BRINGUP)
-			addi	r28,r28,16						; (BRINGUP)
-			mr.		r3,r3							; (BRINGUP)
-			stw		r28,patcharea+12(r2)			; (BRINGUP)
-			lwz		r10,patcharea+8(r2)				; (BRINGUP)
-			lwz		r0,patcharea+4(r2)				; (BRINGUP)
-#endif
-
-#if 1
-			stw		r0,patcharea(r2)				; (BRINGUP)
-#endif
-
-#if 0
-			xor		r28,r0,r27						; (BRINGUP) - See how much it changed
-			rlwinm	r28,r28,24,24,31				; (BRINGUP)
-			cmplwi	r28,1							; (BRINGUP)
-
-			ble++	qqq10							; (BRINGUP)
-
-			mr		r7,r0							; (BRINGUP)
-			li		r0,1							; (BRINGUP)
-			stw		r0,20(0)						; (BRINGUP)
-			lis		r0,hi16(Choke)					; (BRINGUP)
-			ori		r0,r0,lo16(Choke)				; (BRINGUP)
-			sc										; (BRINGUP)
-#endif
-
-
-qqq10:		addi	r4,r4,4							; (BRINGUP)
-			stw		r4,savesrr0+4(r13)				; (BRINGUP)
-				
-			li		r11,T_IN_VAIN					; (BRINGUP)
-			b		EatRupt							; (BRINGUP)
-			
-didnthit:											; (BRINGUP)
-#endif
-#if 0
-			lwz		r0,20(0)						; (BRINGUP)
-			mr.		r0,r0							; (BRINGUP)
-			beq++	opopop							; (BRINGUP)
-			li		r0,0							; (BRINGUP)
-			stw		r0,20(0)						; (BRINGUP)
-			lis		r0,hi16(Choke)					; (BRINGUP)
-			ori		r0,r0,lo16(Choke)				; (BRINGUP)
-			sc										; (BRINGUP)
-opopop:
-#endif
-			lwz		r0,savesrr1+4(r13)				; Get the MSR in use at exception time
-			cmplwi	cr1,r11,T_IN_VAIN				; Was it handled?
+			lwz		r0,savesrr1(r13)				; Get the MSR in use at exception time
+			mfsprg	r2,0							; Get back per_proc 
+			cmplwi	cr1,r3,T_IN_VAIN				; Was it handled?
 			rlwinm.	r4,r0,0,MSR_PR_BIT,MSR_PR_BIT	; Are we trapping from supervisor state?
-			beq++	cr1,EatRupt						; Yeah, just blast back to the user... 
-			beq--	NoFamPf
-			mfsprg	r2,0							; Get back per_proc
+			mr		r11,r3							; Put interrupt code back into the right register
+			beq+	cr1,EatRupt						; Yeah, just blast back to the user... 
+			beq-	NoFamPf
 			lwz		r1,spcFlags(r2)					; Load spcFlags
             rlwinm	r1,r1,1+FamVMmodebit,30,31		; Extract FamVMenabit and FamVMmodebit
             cmpi	cr0,r1,2						; Check FamVMena set without FamVMmode
-			bne--	cr0,NoFamPf
+			bne-	cr0,NoFamPf
             lwz		r6,FAMintercept(r2)				; Load exceptions mask to intercept
-			li		r5,0							; Clear
 			srwi	r1,r11,2						; divide r11 by 4
-            oris	r5,r5,0x8000					; Set r5 to 0x80000000
+            lis		r5,0x8000						; Set r5 to 0x80000000
             srw		r1,r5,r1						; Set bit for current exception
             and.	r1,r1,r6						; And current exception with the intercept mask
-            beq++	NoFamPf							; Is it FAM intercept
-			bl		EXT(vmm_fam_pf)
+            beq+	NoFamPf							; Is it FAM intercept
+			bl		EXT(vmm_fam_pf_handler)
 			b		EatRupt
-
-NoFamPf:	andi.	r4,r0,lo16(MASK(MSR_RI))		; See if the recover bit is on
-			lis		r0,0x8000						; Get 0xFFFFFFFF80000000
-			add		r0,r0,r0						; Get 0xFFFFFFFF00000000
-			beq++	PassUpTrap						; Not on, normal case...
+NoFamPf:
+			andi.	r4,r0,lo16(MASK(MSR_RI))		; See if the recover bit is on
+			beq+	PassUp							; Not on, normal case...
 ;
 ;			Here is where we handle the "recovery mode" stuff.
 ;			This is set by an emulation routine to trap any faults when it is fetching data or
@@ -1906,49 +1410,35 @@ NoFamPf:	andi.	r4,r0,lo16(MASK(MSR_RI))		; See if the recover bit is on
 ;			If we get a fault, we turn off RI, set CR0_EQ to false, bump the PC, and set R0
 ;			and R1 to the DAR and DSISR, respectively.
 ;
-			lwz		r3,savesrr0(r13)				; Get the failing instruction address
-			lwz		r4,savesrr0+4(r13)				; Get the failing instruction address
+			lwz		r4,savesrr0(r13)				; Get the failing instruction address
 			lwz		r5,savecr(r13)					; Get the condition register
-			or		r4,r4,r0						; Fill the high part with foxes
-			lwz		r0,savedar(r13)					; Get the DAR
-			addic	r4,r4,4							; Skip failing instruction
-			lwz		r6,savedar+4(r13)				; Get the DAR
-			addze	r3,r3							; Propagate carry
+			addi	r4,r4,4							; Skip failing instruction
+			lwz		r6,savedar(r13)					; Get the DAR
 			rlwinm	r5,r5,0,3,1						; Clear CR0_EQ to let emulation code know we failed
 			lwz		r7,savedsisr(r13)				; Grab the DSISR
-			stw		r3,savesrr0(r13)				; Save resume address
-			stw		r4,savesrr0+4(r13)				; Save resume address
+			stw		r0,savesrr1(r13)				; Save the result MSR
+			stw		r4,savesrr0(r13)				; Save resume address
 			stw		r5,savecr(r13)					; And the resume CR
-			stw		r0,saver0(r13)					; Pass back the DAR
-			stw		r6,saver0+4(r13)				; Pass back the DAR
-			stw		r7,saver1+4(r13)				; Pass back the DSISR
+			stw		r6,saver0(r13)					; Pass back the DAR
+			stw		r7,saver1(r13)					; Pass back the DSISR
 			b		EatRupt							; Resume emulated code
 
 ;
 ;			Here is where we handle the context switch firmware call.  The old 
-;			context has been saved. The new savearea is in kind of hokey, the high order
-;			half is stored in saver7 and the low half is in saver3. We will just
+;			context has been saved, and the new savearea in in saver3.  We will just
 ;			muck around with the savearea pointers, and then join the exit routine 
 ;
 
 			.align	5
 
 conswtch:	
-			li		r0,0xFFF						; Get page boundary
 			mr		r29,r13							; Save the save
-			andc	r30,r13,r0						; Round down to page boundary (64-bit safe)
-			lwz		r5,saver3+4(r13)				; Switch to the new savearea
-			bf--	pf64Bitb,xcswNo64				; Not 64-bit...
-			lwz		r6,saver7+4(r13)				; Get the high order half
-			sldi	r6,r6,32						; Position high half
-			or		r5,r5,r6						; Merge them
-
-xcswNo64:	lwz		r30,SACvrswap+4(r30)			; get real to virtual translation
+			rlwinm	r30,r13,0,0,19					; Get the start of the savearea block
+			lwz		r5,saver3(r13)					; Switch to the new savearea
+			lwz		r30,SACvrswap(r30)				; get real to virtual translation
 			mr		r13,r5							; Switch saveareas
-			li		r0,0							; Clear this
 			xor		r27,r29,r30						; Flip to virtual
-			stw		r0,saver3(r5)					; Push the new virtual savearea to the switch to routine
-			stw		r27,saver3+4(r5)				; Push the new virtual savearea to the switch to routine
+			stw		r27,saver3(r5)					; Push the new savearea to the switch to routine
 			b		EatRupt							; Start it up... 
 
 ;
@@ -1961,24 +1451,49 @@ xcswNo64:	lwz		r30,SACvrswap+4(r30)			; get real to virtual translation
 
 MachineCheck:
 
-			bt++	pf64Bitb,mck64					; ?
+			lwz		r27,savesrr1(r13)				; ?
+			rlwinm.	r11,r27,0,dcmck,dcmck			; ?
+			beq+	notDCache						; ?
 			
-			lwz		r27,savesrr1+4(r13)				; Pick up srr1
+			mfspr	r11,msscr0						; ?
+			dssall									; ?
+			sync
+			
+			lwz		r27,savesrr1(r13)				; ?
 
+hiccup:		cmplw	r27,r27							; ?
+			bne-	hiccup							; ?
+			isync									; ?
+			
+			oris	r11,r11,hi16(dl1hwfm)			; ?
+			mtspr	msscr0,r11						; ?
+			
+rstbsy:		mfspr	r11,msscr0						; ?
+			
+			rlwinm.	r11,r11,0,dl1hwf,dl1hwf			; ?
+			bne		rstbsy							; ?
+			
+			sync									; ?
+
+			b		EatRupt							; ?
+
+			.align	5
+			
+notDCache:
 ;
 ;			Check if the failure was in 
 ;			ml_probe_read.  If so, this is expected, so modify the PC to
 ;			ml_proble_read_mck and then eat the exception.
 ;
-			lwz		r30,savesrr0+4(r13)				; Get the failing PC
+			lwz		r30,savesrr0(r13)				; Get the failing PC
 			lis		r28,hi16(EXT(ml_probe_read_mck))	; High order part
 			lis		r27,hi16(EXT(ml_probe_read))	; High order part
 			ori		r28,r28,lo16(EXT(ml_probe_read_mck))	; Get the low part
 			ori		r27,r27,lo16(EXT(ml_probe_read))	; Get the low part
 			cmplw	r30,r28							; Check highest possible
 			cmplw	cr1,r30,r27						; Check lowest
-			bge-	PassUpTrap						; Outside of range
-			blt-	cr1,PassUpTrap					; Outside of range
+			bge-	PassUp							; Outside of range
+			blt-	cr1,PassUp						; Outside of range
 ;
 ;			We need to fix up the BATs here because the probe
 ;			routine messed them all up... As long as we are at it,
@@ -2002,396 +1517,23 @@ MachineCheck:
 			mtdbatu	3,r11							; Restore DBAT 3 high 
 			sync
 
-			lwz		r28,savelr+4(r13)				; Get return point
-			lwz		r27,saver0+4(r13)				; Get the saved MSR
+			lwz		r27,saver6(r13)					; Get the saved R6 value
+			mtspr		hid0,r27					; Restore HID0
+			isync
+
+			lwz		r28,savelr(r13)					; Get return point
+			lwz		r27,saver0(r13)					; Get the saved MSR
 			li		r30,0							; Get a failure RC
-			stw		r28,savesrr0+4(r13)				; Set the return point
-			stw		r27,savesrr1+4(r13)				; Set the continued MSR
-			stw		r30,saver3+4(r13)				; Set return code
+			stw		r28,savesrr0(r13)				; Set the return point
+			stw		r27,savesrr1(r13)				; Set the continued MSR
+			stw		r30,saver3(r13)					; Set return code
 			b		EatRupt							; Yum, yum, eat it all up...
-
-;
-;			64-bit machine checks
-;
-
-mck64:		
-
-;
-;			NOTE: WE NEED TO RETHINK RECOVERABILITY A BIT - radar 3167190
-;
-
-			ld		r23,savesrr0(r13)				; Grab the SRR0 in case we need bad instruction
-			ld		r20,savesrr1(r13)				; Grab the SRR1 so we can decode the thing
-			lwz		r21,savedsisr(r13)				; We might need this in a bit
-			ld		r22,savedar(r13)				; We might need this in a bit
-
-			lis		r8,AsyMCKSrc					; Get the Async MCK Source register address
-			mfsprg	r19,2							; Get the feature flags
-			ori		r8,r8,0x8000					; Set to read data
-			rlwinm.	r0,r19,0,pfSCOMFixUpb,pfSCOMFixUpb	; Do we need to fix the SCOM data?
-			
-			sync
-
-			mtspr	scomc,r8						; Request the MCK source
-			mfspr	r24,scomd						; Get the source
-			mfspr	r8,scomc						; Get back the status (we just ignore it)
-			sync
-			isync							
-
-			lis		r8,AsyMCKRSrc					; Get the Async MCK Source AND mask address
-			li		r9,0							; Get and AND mask of 0
-			
-			sync
-
-			mtspr	scomd,r9						; Set the AND mask to 0
-			mtspr	scomc,r8						; Write the AND mask and clear conditions
-			mfspr	r8,scomc						; Get back the status (we just ignore it)
-			sync
-			isync							
-
-			lis		r8,cFIR							; Get the Core FIR register address
-			ori		r8,r8,0x8000					; Set to read data
-			
-			sync
-
-			mtspr	scomc,r8						; Request the Core FIR
-			mfspr	r25,scomd						; Get the source
-			mfspr	r8,scomc						; Get back the status (we just ignore it)
-			sync
-			isync							
-			
-			lis		r8,cFIRrst						; Get the Core FIR AND mask address
-			
-			sync
-
-			mtspr	scomd,r9						; Set the AND mask to 0
-			mtspr	scomc,r8						; Write the AND mask and clear conditions
-			mfspr	r8,scomc						; Get back the status (we just ignore it)
-			sync
-			isync							
-			
-;			Note: bug in early chips where scom reads are shifted right by 1. We fix that here.
-;			Also note that we will lose bit 63
-
-			beq++	mckNoFix						; No fix up is needed
-			sldi	r24,r24,1						; Shift left 1
-			sldi	r25,r25,1						; Shift left 1
-			
-mckNoFix:	std		r24,savemisc0(r13)				; Save the MCK source in case we pass the error
-			std		r25,savemisc1(r13)				; Save the Core FIR in case we pass the error
-
-			rlwinm.	r0,r20,0,mckIFUE-32,mckIFUE-32	; Is this some kind of uncorrectable?
-			bne		mckUE							; Yeah...
-			
-			rlwinm.	r0,r20,0,mckLDST-32,mckLDST-32	; Some kind of load/store error?
-			bne		mckHandleLDST					; Yes...
-			
-			rldicl.	r0,r20,46,62					; Get the error cause code
-			beq		mckNotSure						; We need some more checks for this one...
-			
-			cmplwi	r0,2							; Check for TLB parity error
-			blt		mckSLBparity					; This is an SLB parity error...
-			bgt		mckhIFUE						; This is an IFetch tablewalk reload UE...
-			
-;			IFetch TLB parity error
-
-			isync
-			tlbiel	r23								; Locally invalidate TLB entry for iaddr
-			sync									; Wait for it
-			b		EatRupt							; All recovered...
-			
-;			SLB parity error.  This could be software caused.  We get one if there is
-;			more than 1 valid SLBE with a matching ESID. That one we do not want to
-;			try to recover from.  Search for it and if we get it, panic. 
-
-mckSLBparity:
-			crclr	cr0_eq							; Make sure we are not equal so we take correct exit
-
-			la		r3,emvr0(r2)					; Use this to keep track of valid ESIDs we find
-			li		r5,0							; Start with index 0
-
-mckSLBck:	la		r4,emvr0(r2)					; Use this to keep track of valid ESIDs we find
-			slbmfee	r6,r5							; Get the next SLBE
-			andis.	r0,r6,0x0800					; See if valid bit is on
-			beq		mckSLBnx						; Skip invalid and go to next
-			
-mckSLBck2:	cmpld	r4,r3							; Have we reached the end of the table?
-			beq		mckSLBne						; Yes, go enter this one...
-			ld		r7,0(r4)						; Pick up the saved ESID
-			cmpld	r6,r7							; Is this a match?
-			beq		mckSLBrec						; Whoops, I did bad, recover and pass up...
-			addi	r4,r4,8							; Next table entry
-			b		mckSLBck2						; Check the next...
-
-mckSLBnx:	addi	r5,r5,1							; Point to next SLBE
-			cmplwi	r5,64							; Have we checked all of them?
-			bne++	mckSLBck						; Not yet, check again...
-			b		mckSLBrec						; We looked at them all, go recover...
-			
-mckSLBne:	std		r6,0(r3)						; Save this ESID
-			addi	r3,r3,8							; Point to the new slot
-			b		mckSLBnx						; Go do the next SLBE...
-			
-;			Recover an SLB error
-			
-mckSLBrec:	li		r0,0							; Set an SLB slot index of 0
-			slbia									; Trash all SLB entries (except for entry 0 that is)
-			slbmfee	r7,r0							; Get the entry that is in SLB index 0
-			rldicr	r7,r7,0,35						; Clear the valid bit and the rest
-			slbie	r7								; Invalidate it
-			
-			li		r3,0							; Set the first SLBE
-			
-mckSLBclr:	slbmte	r0,r3							; Clear the whole entry to 0s
-			addi	r3,r3,1							; Bump index
-			cmplwi	cr1,r3,64						; Have we done them all?
-			bne++	cr1,mckSLBclr					; Yup....
-			
-			sth		r3,ppInvSeg(r2)					; Store non-zero to trigger SLB reload 
-			bne++	EatRupt							; This was not a programming error, all recovered...
-			b		PassUpTrap						; Pass the software error up...
-
-;
-;			Handle a load/store unit error.  We need to decode the DSISR
-;
-
-mckHandleLDST:
-			rlwinm.	r0,r21,0,mckL1DCPE,mckL1DCPE	; An L1 data cache parity error?
-			bne++	mckL1D							; Yeah, we dealt with this back in the vector...
-		
-			rlwinm.	r0,r21,0,mckL1DTPE,mckL1DTPE	; An L1 tag error?
-			bne++	mckL1T							; Yeah, we dealt with this back in the vector...
-		
-			rlwinm.	r0,r21,0,mckUEdfr,mckUEdfr		; Is the a "deferred" UE?
-			bne		mckDUE							; Yeah, go see if expected...
-		
-			rlwinm.	r0,r21,0,mckUETwDfr,mckUETwDfr	; Is the a "deferred" tablewalk UE?
-			bne		mckDTW							; Yeah, no recovery...
-			
-			rlwinm.	r0,r21,0,mckSLBPE,mckSLBPE		; SLB parity error?
-			bne		mckSLBparity					; Yeah, go attempt recovery....
-			
-;			This is a recoverable D-ERAT or TLB error
-
-			la		r9,hwMckERCPE(r2)				; Get DERAT parity error count
-
-mckInvDAR:	isync
-			tlbiel	r22								; Locally invalidate the TLB entry
-			sync
-			
-			lwz		r21,0(r9)						; Get count
-			addi	r21,r21,1						; Count this one
-			stw		r21,0(r9)						; Stick it back
-			
-			b		EatRupt							; All recovered...
-		
-;
-;			When we come here, we are not quite sure what the error is.  We need to
-;			dig a bit further.
-;
-;			R24 is interrupt source
-;			R25 is Core FIR
-;
-;			Note that both have been cleared already.
-;
-
-mckNotSure:
-			rldicl.	r0,r24,AsyMCKfir+1,63			; Something in the FIR?
-			bne--	mckFIR							; Yup, go check some more...
-			
-			rldicl.	r0,r24,AsyMCKhri+1,63			; Hang recovery?
-			bne--	mckHangRcvr						; Yup...
-			
-			rldicl.	r0,r24,AsyMCKext+1,63			; External signal?
-			bne--	mckExtMck						; Yup...
-
-;
-;			We really do not know what this one is or what to do with it...
-;
-			
-mckUnk:		lwz		r21,hwMckUnk(r2)				; Get unknown error count
-			addi	r21,r21,1						; Count it
-			stw		r21,hwMckUnk(r2)				; Stuff it
-			b		PassUpTrap						; Go south, young man...
-
-;
-;			Hang recovery.  This is just a notification so we only count.
-;
-			
-mckHangRcrvr:
-			lwz		r21,hwMckHang(r2)				; Get hang recovery count
-			addi	r21,r21,1						; Count this one
-			stw		r21,hwMckHang(r2)				; Stick it back
-			b		EatRupt							; All recovered...
-
-;
-;			Externally signaled MCK.  No recovery for the moment, but we this may be
-;			where we handle ml_probe_read problems eventually.
-;			
-mckExtMck:
-			lwz		r21,hwMckHang(r2)				; Get hang recovery count
-			addi	r21,r21,1						; Count this one
-			stw		r21,hwMckHang(r2)				; Stick it back
-			b		EatRupt							; All recovered...
-
-;
-;			Machine check cause is in a FIR.  Suss it out here.
-;			Core FIR is in R25 and has been cleared in HW.
-;			
-
-mckFIR:		rldicl.	r0,r25,cFIRICachePE+1,63		; I-Cache parity error?
-			la		r19,hwMckICachePE(r2)			; Point to counter
-			bne		mckInvICache					; Go invalidate I-Cache...
-
-			rldicl.	r0,r25,cFIRITagPE0+1,63			; I-Cache tag parity error?
-			la		r19,hwMckITagPE(r2)				; Point to counter
-			bne		mckInvICache					; Go invalidate I-Cache...
-
-			rldicl.	r0,r25,cFIRITagPE1+1,63			; I-Cache tag parity error?
-			la		r19,hwMckITagPE(r2)				; Point to counter
-			bne		mckInvICache					; Go invalidate I-Cache...
-
-			rldicl.	r0,r25,cFIRIEratPE+1,63			; IERAT parity error?
-			la		r19,hwMckIEratPE(r2)			; Point to counter
-			bne		mckInvERAT						; Go invalidate ERATs...
-
-			rldicl.	r0,r25,cFIRIFUL2UE+1,63			; IFetch got L2 UE?
-			bne		mckhIFUE						; Go count and pass up...
-
-			rldicl.	r0,r25,cFIRDCachePE+1,63		; D-Cache PE?
-			bne		mckL1D							; Handled, just go count...
-
-			rldicl.	r0,r25,cFIRDTagPE+1,63			; D-Cache tag PE?
-			bne		mckL1T							; Handled, just go count...
-
-			rldicl.	r0,r25,cFIRDEratPE+1,63			; DERAT PE?
-			la		r19,hwMckDEratPE(r2)			; Point to counter
-			bne		mckInvERAT						; Go invalidate ERATs...
-
-			rldicl.	r0,r25,cFIRTLBPE+1,63			; TLB PE?
-			la		r9,hwMckTLBPE(r2)				; Get TLB parity error count
-			bne		mckInvDAR						; Go recover...
-
-			rldicl.	r0,r25,cFIRSLBPE+1,63			; SLB PE?
-			bne		mckSLBparity					; Cope with it...
-			
-			b		mckUnk							; Have not a clue...
-
-;
-;			General recovery for I-Cache errors.  Just flush it completely.
-;
-
-			.align	7								; Force into cache line
-
-mckInvICache:
-			lis		r0,0x0080						; Get a 0x0080 (bit 9 >> 32)
-			mfspr	r21,hid1						; Get the current HID1
-			sldi	r0,r0,32						; Get the "forced ICBI match" bit
-			or		r0,r0,r21						; Set forced match
-			
-			isync
-			mtspr	hid1,r0							; Stick it
-			mtspr	hid1,r0							; Stick it again
-			isync
-		
-			li		r6,0							; Start at 0
-			
-mckIcbi:	icbi	0,r6							; Kill I$
-			addi	r6,r6,128						; Next line
-			andis.	r5,r6,1							; Have we done them all?
-			beq++	mckIcbi							; Not yet...
-
-			isync
-			mtspr	hid1,r21						; Restore original HID1
-			mtspr	hid1,r21						; Stick it again
-			isync
-			
-			lwz		r5,0(r19)						; Get the counter
-			addi	r5,r5,1							; Count it
-			stw		r5,0(r19)						; Stuff it back
-			b		EatRupt							; All recovered...
-			
-		
-;			General recovery for ERAT problems - handled in exception vector already
-
-mckInvERAT:	lwz		r21,0(r19)						; Get the exception count spot
-			addi	r21,r21,1						; Count this one
-			stw		r21,0(r19)						; Save count
-			b		EatRupt							; All recovered...
-			
-;			General hang recovery - this is a notification only, just count.	
-			
-mckHangRcvr:			
-			lwz		r21,hwMckHang(r2)				; Get hang recovery count
-			addi	r21,r21,1						; Count this one
-			stw		r21,hwMckHang(r2)				; Stick it back
-			b		EatRupt							; All recovered...
-
-
-;
-;			These are the uncorrectable errors, just count them then pass it along.
-;
-	
-mckUE:		lwz		r21,hwMckUE(r2)					; Get general uncorrectable error count
-			addi	r21,r21,1						; Count it
-			stw		r21,hwMckUE(r2)					; Stuff it
-			b		PassUpTrap						; Go south, young man...
-	
-mckhIFUE:	lwz		r21,hwMckIUEr(r2)				; Get I-Fetch TLB reload uncorrectable error count
-			addi	r21,r21,1						; Count it
-			stw		r21,hwMckIUEr(r2)				; Stuff it
-			b		PassUpTrap						; Go south, young man...
-
-mckDUE:		lwz		r21,hwMckDUE(r2)				; Get deferred uncorrectable error count
-			addi	r21,r21,1						; Count it
-			stw		r21,hwMckDUE(r2)				; Stuff it
-			
-;
-;			Right here is where we end up after a failure on a ml_probe_read_64.
-;			We will check if that is the case, and if so, fix everything up and
-;			return from it.
-			
-			lis		r8,hi16(EXT(ml_probe_read_64))	; High of start
-			lis		r9,hi16(EXT(ml_probe_read_mck_64))	; High of end
-			ori		r8,r8,lo16(EXT(ml_probe_read_64))	; Low of start
-			ori		r9,r9,lo16(EXT(ml_probe_read_mck_64))	; Low of end
-			cmpld	r23,r8							; Too soon?
-			cmpld	cr1,r23,r9						; Too late?
-			
-			cror	cr0_lt,cr0_lt,cr1_gt			; Too soo or too late?
-			ld		r3,saver12(r13)					; Get the original MSR
-			ld		r5,savelr(r13)					; Get the return address
-			li		r4,0							; Get fail code
-			blt--	PassUpTrap						; This is a normal machine check, just pass up...
-			std		r5,savesrr0(r13)				; Set the return MSR
-			
-			std		r3,savesrr1(r13)				; Set the return address
-			std		r4,saver3(r13)					; Set failure return code
-			b		EatRupt							; Go return from ml_probe_read_64...
-
-mckDTW:		lwz		r21,hwMckDTW(r2)				; Get deferred tablewalk uncorrectable error count
-			addi	r21,r21,1						; Count it
-			stw		r21,hwMckDTW(r2)				; Stuff it
-			b		PassUpTrap						; Go south, young man...
-
-mckL1D:		lwz		r21,hwMckL1DPE(r2)				; Get data cache parity error count
-			addi	r21,r21,1						; Count it
-			stw		r21,hwMckL1DPE(r2)				; Stuff it
-			b		PassUpTrap						; Go south, young man...
-
-mckL1T:		lwz		r21,hwMckL1TPE(r2)				; Get TLB parity error count
-			addi	r21,r21,1						; Count it
-			stw		r21,hwMckL1TPE(r2)				; Stuff it
-			b		PassUpTrap						; Go south, young man...
-			
 
 /*
  *			Here's where we come back from some instruction emulator.  If we come back with
  *			T_IN_VAIN, the emulation is done and we should just reload state and directly
  *			go back to the interrupted code. Otherwise, we'll check to see if
  *			we need to redrive with a different interrupt, i.e., DSI.
- *			Note that this we are actually not redriving the rupt, rather changing it
- *			into a different one.  Thus we clear the redrive bit.
  */
  
 			.align	5
@@ -2399,15 +1541,18 @@ mckL1T:		lwz		r21,hwMckL1TPE(r2)				; Get TLB parity error count
 
 LEXT(EmulExit)
 
-			cmplwi	cr1,r11,T_IN_VAIN				; Was it emulated?
+			cmplwi	r11,T_IN_VAIN					; Was it emulated? 
 			lis		r1,hi16(SAVredrive)				; Get redrive request
-			beq++	cr1,EatRupt						; Yeah, just blast back to the user...
+			mfsprg	r2,0							; Restore the per_proc area
+			beq+	EatRupt							; Yeah, just blast back to the user...
 			lwz		r4,SAVflags(r13)				; Pick up the flags
 
 			and.	r0,r4,r1						; Check if redrive requested
+			andc	r4,r4,r1						; Clear redrive
 
-			beq++	PassUpTrap						; No redrive, just keep on going...
+			beq+	PassUp							; No redrive, just keep on going...
 
+			stw		r4,SAVflags(r13)				; Set the flags
 			b		Redrive							; Redrive the exception...
 		
 ;
@@ -2417,106 +1562,41 @@ LEXT(EmulExit)
 ; 			memory, otherwise we would need to switch on (at least) virtual data.
 ;			SRs are already set up.
 ;
-	
+
 			.align	5
-	
-PassUpTrap:	lis		r20,hi16(EXT(thandler))			; Get thandler address
-			ori		r20,r20,lo16(EXT(thandler))		; Get thandler address
-			b		PassUp							; Go pass it up...
-	
-PassUpRupt:	lis		r20,hi16(EXT(ihandler))			; Get ihandler address
-			ori		r20,r20,lo16(EXT(ihandler))		; Get ihandler address
-			b		PassUp							; Go pass it up...
-	
-			.align	5
-	
-PassUpFPU:	lis		r20,hi16(EXT(fpu_switch))		; Get FPU switcher address
-			ori		r20,r20,lo16(EXT(fpu_switch))	; Get FPU switcher address
-			b		PassUp							; Go pass it up...
-	
-PassUpVMX:	lis		r20,hi16(EXT(vec_switch))		; Get VMX switcher address
-			ori		r20,r20,lo16(EXT(vec_switch))	; Get VMX switcher address
-			bt++	featAltivec,PassUp				; We have VMX on this CPU...
-			li		r11,T_PROGRAM					; Say that it is a program exception
-			li		r20,8							; Set invalid instruction
-			stw		r11,saveexception(r13)			; Set the new the exception code
-			sth		r20,savesrr1+4(r13)				; Set the invalid instruction SRR code
+
+PassUp:		lis		r2,hi16(EXT(exception_handlers))	; Get exception vector address
+			ori		r2,r2,lo16(EXT(exception_handlers))	; And low half
+			lwzx	r6,r2,r11						; Get the actual exception handler address
+
+PassUpDeb:	mtsrr0	r6								; Set up the handler address
+			rlwinm	r5,r13,0,0,19					; Back off to the start of savearea block
 			
-			b		PassUpTrap						; Go pass it up...
-	
-			.align	5
-	
-PassUpAbend:	
-			lis		r20,hi16(EXT(chandler))			; Get choke handler address
-			ori		r20,r20,lo16(EXT(chandler))		; Get choke handler address
-			b		PassUp							; Go pass it up...
-
-			.align	5
-
-PassUp:		
-#if INSTRUMENT
-			mfspr	r29,pmc1						; INSTRUMENT - saveinstr[11] - Take stamp at passup or eatrupt
-			stw		r29,0x6100+(11*16)+0x0(0)		; INSTRUMENT - Save it
-			mfspr	r29,pmc2						; INSTRUMENT - Get stamp
-			stw		r29,0x6100+(11*16)+0x4(0)		; INSTRUMENT - Save it
-			mfspr	r29,pmc3						; INSTRUMENT - Get stamp
-			stw		r29,0x6100+(11*16)+0x8(0)		; INSTRUMENT - Save it
-			mfspr	r29,pmc4						; INSTRUMENT - Get stamp
-			stw		r29,0x6100+(11*16)+0xC(0)		; INSTRUMENT - Save it
-#endif			
-			
-			lwz		r10,SAVflags(r13)				; Pick up the flags
-
-			li		r0,0xFFF						; Get a page mask
-			li		r2,MASK(MSR_BE)|MASK(MSR_SE)	; Get the mask to save trace bits
-			andc	r5,r13,r0						; Back off to the start of savearea block
 			mfmsr	r3								; Get our MSR
-			rlwinm	r10,r10,0,SAVredriveb+1,SAVredriveb-1	; Clear the redrive before we pass it up
-			li		r21,MSR_SUPERVISOR_INT_OFF		; Get our normal MSR value
-			and		r3,r3,r2						; Clear all but trace
-			lwz		r5,SACvrswap+4(r5)				; Get real to virtual conversion			
-			or		r21,r21,r3						; Keep the trace bits if they are on
-			stw		r10,SAVflags(r13)				; Set the flags with the cleared redrive flag
+			rlwinm	r3,r3,0,MSR_BE_BIT+1,MSR_SE_BIT-1	; Clear all but the trace bits
+			li		r2,MSR_SUPERVISOR_INT_OFF		; Get our normal MSR value
+			lwz		r5,SACvrswap(r5)				; Get real to virtual conversion			
+			or		r2,r2,r3						; Keep the trace bits if they are on
 			mr		r3,r11							; Pass the exception code in the paramter reg
+			mtsrr1	r2								; Set up our normal MSR value
 			xor		r4,r13,r5						; Pass up the virtual address of context savearea
-			mfsprg	r29,0							; Get the per_proc block back
-			rlwinm	r4,r4,0,0,31					; Clean top half of virtual savearea if 64-bit
-
-			mr		r3,r21							; Pass in the MSR we will go to
-			bl		EXT(switchSegs)					; Go handle the segment registers/STB
-
-#if INSTRUMENT
-			mfspr	r30,pmc1						; INSTRUMENT - saveinstr[7] - Take stamp afer switchsegs
-			stw		r30,0x6100+(7*16)+0x0(0)			; INSTRUMENT - Save it
-			mfspr	r30,pmc2						; INSTRUMENT - Get stamp
-			stw		r30,0x6100+(7*16)+0x4(0)			; INSTRUMENT - Save it
-			mfspr	r30,pmc3						; INSTRUMENT - Get stamp
-			stw		r30,0x6100+(7*16)+0x8(0)			; INSTRUMENT - Save it
-			mfspr	r30,pmc4						; INSTRUMENT - Get stamp
-			stw		r30,0x6100+(7*16)+0xC(0)			; INSTRUMENT - Save it
-#endif			
-			lwz		r3,saveexception(r13)			; Recall the exception code
-			
-			mtsrr0	r20								; Set up the handler address
-			mtsrr1	r21								; Set up our normal MSR value
-
-			bt++	pf64Bitb,puLaunch				; Handle 64-bit machine...
 
 			rfi										; Launch the exception handler
-			
-puLaunch:	rfid									; Launch the exception handler
+
+			.long	0								; Leave these here gol durn it!
+			.long	0
+			.long	0
+			.long	0
+			.long	0
+			.long	0
+			.long	0
+			.long	0
 
 /*
- *			This routine is the main place where we return from an interruption.
- *
- *			This is also where we release the quickfret list.  These are saveareas
- *			that were released as part of the exception exit path in hw_exceptions.
- *			In order to save an atomic operation (which actually will not work
- *			properly on a 64-bit machine) we use holdQFret to indicate that the list
- *			is in flux and should not be looked at here.  This comes into play only
- *			when we take a PTE miss when we are queuing a savearea onto qfret.
- *			Quite rare but could happen.  If the flag is set, this code does not
- *			release the list and waits until next time.
+ *			This routine is the only place where we return from an interruption.
+ *			Anyplace else is wrong.  Even if I write the code, it's still wrong.
+ *			Feel free to come by and slap me if I do do it--even though I may
+ *			have had a good reason to do it.
  *
  *			All we need to remember here is that R13 must point to the savearea
  *			that has the context we need to load up. Translation and interruptions
@@ -2527,50 +1607,88 @@ puLaunch:	rfid									; Launch the exception handler
  *			is any tomfoolery with savearea stacks, it must be taken care of 
  *			before we get here.
  *
+ *			Speaking of tomfoolery, this is where we synthesize interruptions
+ *			if we need to.
  */
  
  			.align	5
  
 EatRupt:	mfsprg	r29,0							; Get the per_proc block back
 			mr		r31,r13							; Move the savearea pointer to the far end of the register set
-			mfsprg	r27,2							; Get the processor features
 			
-			lwz		r3,holdQFret(r29)				; Get the release hold off flag
+			lwz		r30,quickfret(r29)				; Pick up the quick fret list, if any
 
-			bt++	pf64Bitb,eat64a					; Skip down to the 64-bit version of this
-
-;
-;			This starts the 32-bit version
-;
-
-			mr.		r3,r3							; Should we hold off the quick release?
-			lwz		r30,quickfret+4(r29)			; Pick up the quick fret list, if any
-			la		r21,saver0(r31)					; Point to the first thing we restore
-			bne-	ernoqfret						; Hold off set, do not release just now...
+			mfsprg	r27,2							; Get the processor features
+			lwz		r21,savesrr1(r31)				; Get destination MSR
 			
 erchkfret:	mr.		r3,r30							; Any savearea to quickly release?
 			beq+	ernoqfret						; No quickfrets...
-			lwz		r30,SAVprev+4(r30)				; Chain back now
+			lwz		r30,SAVprev(r30)				; Chain back now
 			
 			bl		EXT(save_ret_phys)				; Put it on the free list			
-			stw		r30,quickfret+4(r29)			; Dequeue previous guy (really, it is ok to wait until after the release)
+			stw		r30,quickfret(r29)				; Dequeue previous guy (really, it is ok to wait until after the release)
 			b		erchkfret						; Try the next one...
+
 
 			.align	5
 			
-ernoqfret:	
-#if INSTRUMENT
-			mfspr	r30,pmc1						; INSTRUMENT - saveinstr[5] - Take stamp at saveareas released
-			stw		r30,0x6100+(5*16)+0x0(0)			; INSTRUMENT - Save it
-			mfspr	r30,pmc2						; INSTRUMENT - Get stamp
-			stw		r30,0x6100+(5*16)+0x4(0)			; INSTRUMENT - Save it
-			mfspr	r30,pmc3						; INSTRUMENT - Get stamp
-			stw		r30,0x6100+(5*16)+0x8(0)			; INSTRUMENT - Save it
-			mfspr	r30,pmc4						; INSTRUMENT - Get stamp
-			stw		r30,0x6100+(5*16)+0xC(0)			; INSTRUMENT - Save it
-#endif			
+ernoqfret:	mtcrf	0x60,r27						; Set CRs with thermal facilities
+			rlwinm.	r0,r21,0,MSR_EE_BIT,MSR_EE_BIT	; Are interruptions going to be enabled?
+			crandc	31,pfThermalb,pfThermIntb		; See if we have both thermometer and not interrupt facility
+			la		r21,saver0(r31)					; Point to the first thing we restore
+			crandc	31,cr0_eq,31					; Factor in enablement
+			bf		31,tempisok						; No thermal checking needed...
 
-			dcbt	0,r21							; Touch in the first thing we need
+;
+;			We get to here if 1) there is a thermal facility, and 2) the hardware
+;			will or cannot interrupt, and 3) the interrupt will be enabled after this point.
+;
+			
+			mfspr	r16,thrm3						; Get thermal 3		
+			mfspr	r14,thrm1						; Get thermal 2		
+			rlwinm.	r16,r16,0,thrme,thrme			; Is the themometer enabled?
+			mfspr	r15,thrm2						; Get thermal 2	
+			beq-	tempisok						; No thermometer...
+			rlwinm	r16,r14,2,28,31					; Cluster THRM1s TIE, V, TIN, and TIV at bottom 4 bits
+			srawi	r0,r15,31						; Make a mask of 1s if temprature over
+			rlwinm	r30,r15,2,28,31					; Cluster THRM2s TIE, V, TIN, and TIV at bottom 4 bits
+;
+;			Note that the following compare check that V, TIN, and TIV are set and that TIE is cleared.
+;			This insures that we only emulate when the hardware is not set to interrupt.
+;
+			cmplwi	cr0,r16,7						; Is there a valid pending interruption for THRM1?
+			cmplwi	cr1,r30,7						; Is there a valid pending interruption for THRM2?
+			and		r15,r15,r0						; Keep high temp if that interrupted, zero if not
+			cror	cr0_eq,cr0_eq,cr1_eq			; Merge both
+			andc	r14,r14,r0						; Keep low if high did not interrupt, zero if it did
+			bne+	tempisok						; Nope, temprature is in range
+			
+			li		r11,T_THERMAL					; Time to emulate a thermal interruption
+			or		r14,r14,r15						; Get contents of interrupting register
+			mr		r13,r31							; Make sure savearea is pointed to correctly
+			stw		r11,saveexception(r31)			; Set the exception code
+			stw		r14,savedar(r31)				; Set the contents of the interrupting register into the dar
+
+;
+;			This code is here to prevent a problem that will probably never happen.  If we are
+;			returning from an emulation routine (alignment, altivec assist, etc.) the SRs may
+;			not be set to the proper kernel values.  Then, if we were to emulate a thermal here,
+;			we would end up running in the kernel with a bogus SR.  So, to prevent
+;			this unfortunate circumstance, we slam the SRs here. (I worry too much...)
+;
+
+			lis		r30,hi16(KERNEL_SEG_REG0_VALUE)	; Get the high half of the kernel SR0 value
+			mtsr	sr0,r30							; Set the kernel SR0 
+			addis	r30,r30,0x0010					; Point to the second segment of kernel
+			mtsr	sr1,r30							; Set the kernel SR1 
+			addis	r30,r30,0x0010					; Point to the third segment of kernel
+			mtsr	sr2,r30							; Set the kernel SR2 
+			addis	r30,r30,0x0010					; Point to the third segment of kernel
+			mtsr	sr3,r30							; Set the kernel SR3
+			b		Redrive							; Go process this new interruption...
+
+
+tempisok:	dcbt	0,r21							; Touch in the first thing we need
 			
 ;
 ;			Here we release the savearea.
@@ -2583,185 +1701,273 @@ ernoqfret:
 ;			savearea to the head of the local list.  Then, if it needs to trim, it will
 ;			start with the SECOND savearea, leaving ours intact.
 ;
+;			Build the SR values depending upon destination.  If we are going to the kernel,
+;			the SRs are almost all the way set up. SR14 (or the currently used copyin/out register)
+;			must be set to whatever it was at the last exception because it varies.  All the rest
+;			have been set up already.
+;
+;			If we are going into user space, we need to check a bit more. SR0, SR1, SR2, and
+;			SR14 (current implementation) must be restored always.  The others must be set if
+;			they are different that what was loaded last time (i.e., tasks have switched).  
+;			We check the last loaded address space ID and if the same, we skip the loads.  
+;			This is a performance gain because SR manipulations are slow.
+;
+;			There is also the special case when MSR_RI is set.  This happens when we are trying to
+;			make a special user state access when we are in the kernel.  If we take an exception when
+;			during that, the SRs may have been modified.  Therefore, we need to restore them to
+;			what they were before the exception because they could be non-standard.  We saved them
+;			during exception entry, so we will just load them here.
 ;
 
 			mr		r3,r31							; Get the exiting savearea in parm register
 			bl		EXT(save_ret_phys)				; Put it on the free list			
-#if INSTRUMENT
-			mfspr	r3,pmc1							; INSTRUMENT - saveinstr[6] - Take stamp afer savearea released
-			stw		r3,0x6100+(6*16)+0x0(0)			; INSTRUMENT - Save it
-			mfspr	r3,pmc2							; INSTRUMENT - Get stamp
-			stw		r3,0x6100+(6*16)+0x4(0)			; INSTRUMENT - Save it
-			mfspr	r3,pmc3							; INSTRUMENT - Get stamp
-			stw		r3,0x6100+(6*16)+0x8(0)			; INSTRUMENT - Save it
-			mfspr	r3,pmc4							; INSTRUMENT - Get stamp
-			stw		r3,0x6100+(6*16)+0xC(0)			; INSTRUMENT - Save it
-#endif			
 
-			lwz		r3,savesrr1+4(r31)				; Pass in the MSR we are going to
-			bl		EXT(switchSegs)					; Go handle the segment registers/STB
-#if INSTRUMENT
-			mfspr	r30,pmc1						; INSTRUMENT - saveinstr[10] - Take stamp afer switchsegs
-			stw		r30,0x6100+(10*16)+0x0(0)		; INSTRUMENT - Save it
-			mfspr	r30,pmc2						; INSTRUMENT - Get stamp
-			stw		r30,0x6100+(10*16)+0x4(0)		; INSTRUMENT - Save it
-			mfspr	r30,pmc3						; INSTRUMENT - Get stamp
-			stw		r30,0x6100+(10*16)+0x8(0)		; INSTRUMENT - Save it
-			mfspr	r30,pmc4						; INSTRUMENT - Get stamp
-			stw		r30,0x6100+(10*16)+0xC(0)		; INSTRUMENT - Save it
-#endif			
-			li		r3,savesrr1+4					; Get offset to the srr1 value
+			li		r3,savesrr1						; Get offset to the srr1 value
 
-			lhz		r9,PP_CPU_FLAGS(r29)			; Get the processor flags
 			lwarx	r26,r3,r31						; Get destination MSR and take reservation along the way (just so we can blow it away)
-			
-			rlwinm	r25,r26,27,22,22				; Move PR bit to BE
-			
+			lwz		r7,PP_USERPMAP(r29)				; Pick up the user pmap we may launch
+			rlwinm.	r17,r26,0,MSR_RI_BIT,MSR_RI_BIT	; See if we are returning from a special fault
 			cmplw	cr3,r14,r14						; Set that we do not need to stop streams
 
+			beq+	nSpecAcc						; Do not reload the kernel SRs if this is not a special access...
+
+			lwz		r14,savesr0(r31)				; Get SR0 at fault time
+			mtsr	sr0,r14							; Set SR0
+			lwz		r14,savesr1(r31)				; Get SR1 at fault time
+			mtsr	sr1,r14							; Set SR1
+			lwz		r14,savesr2(r31)				; Get SR2 at fault time
+			mtsr	sr2,r14							; Set SR2
+			lwz		r14,savesr3(r31)				; Get SR3 at fault timee
+			mtsr	sr3,r14							; Set SR3
+			b		segsdone						; We are all set up now...
+
+			.align	5
+
+nSpecAcc:	rlwinm.	r17,r26,0,MSR_PR_BIT,MSR_PR_BIT	; See if we are going to user or system
+			li		r14,PMAP_SEGS					; Point to segments 
+			bne+	gotouser						; We are going into user state...
+
+			lwz		r14,savesr14(r31)				; Get the copyin/out register at interrupt time
+			mtsr	sr14,r14						; Set SR14
+			b		segsdone						; We are all set up now...
+		
+			.align	5
+
+gotouser:	dcbt	r14,r7							; Touch the segment register contents
+			lwz		r9,spcFlags(r29)				; Pick up the special flags
+			lwz		r16,PP_LASTPMAP(r29)			; Pick up the last loaded pmap
+			addi	r14,r14,32						; Second half of pmap segments
+			rlwinm	r9,r9,userProtKeybit-2,2,2		; Isolate the user state protection key 
+			lwz		r15,PMAP_SPACE(r7)				; Get the primary space
+			lwz		r13,PMAP_VFLAGS(r7)				; Get the flags
+			dcbt	r14,r7							; Touch second page
+			oris	r15,r15,hi16(SEG_REG_PROT)		; Set segment 0 SR value
+			mtcrf	0x0F,r13						; Set CRs to correspond to the subordinate spaces
+			xor		r15,r15,r9						; Flip to proper segment register key
+			lhz		r9,PP_CPU_FLAGS(r29)			; Get the processor flags
+
+			addis	r13,r15,0x0000					; Get SR0 value
+			bf		16,nlsr0						; No alternate here...
+			lwz		r13,PMAP_SEGS+(0*4)(r7)			; Get SR0 value
+			
+nlsr0:		mtsr	sr0,r13							; Load up the SR
 			rlwinm	r9,r9,(((31-MSR_BE_BIT)+(traceBEb+16+1))&31),MSR_BE_BIT,MSR_BE_BIT	; Set BE bit if special trace is on
-			li		r21,emfp0						; Point to the fp savearea
-			and		r9,r9,r25						; Clear BE if supervisor state
+
+			addis	r13,r15,0x0010					; Get SR1 value
+			bf		17,nlsr1						; No alternate here...
+			lwz		r13,PMAP_SEGS+(1*4)(r7)			; Get SR1 value
+			
+nlsr1:		mtsr	sr1,r13							; Load up the SR
 			or		r26,r26,r9						; Flip on the BE bit for special trace if needed
-			stwcx.	r26,r3,r31						; Blow away any reservations we hold (and set BE)
 
-			lwz		r25,savesrr0+4(r31)				; Get the SRR0 to use
+			cmplw	cr3,r7,r16						; Are we running the same segs as last time?
+
+			addis	r13,r15,0x0020					; Get SR2 value
+			bf		18,nlsr2						; No alternate here...
+			lwz		r13,PMAP_SEGS+(2*4)(r7)			; Get SR2 value
 			
-			la		r28,saver4(r31)					; Point to the 32-byte line with r4-r7
-			dcbz	r21,r29							; Clear a work area
-			lwz		r0,saver0+4(r31)				; Restore R0			
-			dcbt	0,r28							; Touch in r4-r7 
-			lwz		r1,saver1+4(r31)				; Restore R1	
-			lwz		r2,saver2+4(r31)				; Restore R2	
-			la		r28,saver8(r31)					; Point to the 32-byte line with r8-r11
-			lwz		r3,saver3+4(r31)				; Restore R3
-            andis.	r6,r27,hi16(pfAltivec)			; Do we have altivec on the machine?
-            dcbt	0,r28							; touch in r8-r11
-			lwz		r4,saver4+4(r31)				; Restore R4
-            la		r28,saver12(r31)				; Point to the 32-byte line with r12-r15
+nlsr2:		mtsr	sr2,r13							; Load up the SR
+
+			addis	r13,r15,0x0030					; Get SR3 value
+			bf		19,nlsr3						; No alternate here...
+			lwz		r13,PMAP_SEGS+(3*4)(r7)			; Get SR3 value
+			
+nlsr3:		mtsr	sr3,r13							; Load up the SR
+
+			addis	r13,r15,0x00E0					; Get SR14 value
+			bf		30,nlsr14						; No alternate here...
+			lwz		r13,PMAP_SEGS+(14*4)(r7)		; Get SR14 value
+			
+nlsr14:		mtsr	sr14,r13						; Load up the SR
+
+			beq+	cr3,segsdone					; All done if same pmap as last time...
+			
+			stw		r7,PP_LASTPMAP(r29)				; Remember what we just loaded			
+			
+			addis	r13,r15,0x0040					; Get SR4 value
+			bf		20,nlsr4						; No alternate here...
+			lwz		r13,PMAP_SEGS+(4*4)(r7)			; Get SR4 value
+			
+nlsr4:		mtsr	sr4,r13							; Load up the SR
+
+			addis	r13,r15,0x0050					; Get SR5 value
+			bf		21,nlsr5						; No alternate here...
+			lwz		r13,PMAP_SEGS+(5*4)(r7)			; Get SR5 value
+			
+nlsr5:		mtsr	sr5,r13							; Load up the SR
+
+			addis	r13,r15,0x0060					; Get SR6 value
+			bf		22,nlsr6						; No alternate here...
+			lwz		r13,PMAP_SEGS+(6*4)(r7)			; Get SR6 value
+			
+nlsr6:		mtsr	sr6,r13							; Load up the SR
+
+			addis	r13,r15,0x0070					; Get SR7 value
+			bf		23,nlsr7						; No alternate here...
+			lwz		r13,PMAP_SEGS+(7*4)(r7)			; Get SR7 value
+			
+nlsr7:		mtsr	sr7,r13							; Load up the SR
+
+			addis	r13,r15,0x0080					; Get SR8 value
+			bf		24,nlsr8						; No alternate here...
+			lwz		r13,PMAP_SEGS+(8*4)(r7)			; Get SR8 value
+			
+nlsr8:		mtsr	sr8,r13							; Load up the SR
+
+			addis	r13,r15,0x0090					; Get SR9 value
+			bf		25,nlsr9						; No alternate here...
+			lwz		r13,PMAP_SEGS+(9*4)(r7)			; Get SR9 value
+			
+nlsr9:		mtsr	sr9,r13							; Load up the SR
+
+			addis	r13,r15,0x00A0					; Get SR10 value
+			bf		26,nlsr10						; No alternate here...
+			lwz		r13,PMAP_SEGS+(10*4)(r7)		; Get SR10 value
+			
+nlsr10:		mtsr	sr10,r13						; Load up the SR
+
+			addis	r13,r15,0x00B0					; Get SR11 value
+			bf		27,nlsr11						; No alternate here...
+			lwz		r13,PMAP_SEGS+(11*4)(r7)		; Get SR11 value
+			
+nlsr11:		mtsr	sr11,r13						; Load up the SR
+
+			addis	r13,r15,0x00C0					; Get SR12 value
+			bf		28,nlsr12						; No alternate here...
+			lwz		r13,PMAP_SEGS+(12*4)(r7)		; Get SR12 value
+			
+nlsr12:		mtsr	sr12,r13						; Load up the SR
+
+			addis	r13,r15,0x00D0					; Get SR13 value
+			bf		29,nlsr13						; No alternate here...
+			lwz		r13,PMAP_SEGS+(13*4)(r7)		; Get SR13 value
+			
+nlsr13:		mtsr	sr13,r13						; Load up the SR
+
+			addis	r13,r15,0x00F0					; Get SR15 value
+			bf		31,nlsr15						; No alternate here...
+			lwz		r13,PMAP_SEGS+(15*4)(r7)		; Get SR15 value
+			
+nlsr15:		mtsr	sr15,r13						; Load up the SR
+			
+segsdone:	stwcx.	r26,r3,r31						; Blow away any reservations we hold
+
+			li		r21,emfp0						; Point to the fp savearea
+			lwz		r25,savesrr0(r31)				; Get the SRR0 to use
+			la		r28,saver8(r31)					; Point to the next line to use
+			dcbt	r21,r29							; Start moving in a work area
+			lwz		r0,saver0(r31)					; Restore R0			
+			dcbt	0,r28							; Touch it in 
+			lwz		r1,saver1(r31)					; Restore R1	
+			lwz		r2,saver2(r31)					; Restore R2	
+			la		r28,saver16(r31)				; Point to the next line to get
+			lwz		r3,saver3(r31)					; Restore R3
+			mtcrf	0x80,r27						; Get facility availability flags (do not touch CR1-7)
+			lwz		r4,saver4(r31)					; Restore R4
 			mtsrr0	r25								; Restore the SRR0 now
-			lwz		r5,saver5+4(r31)				; Restore R5
+			lwz		r5,saver5(r31)					; Restore R5
 			mtsrr1	r26								; Restore the SRR1 now 
-			lwz		r6,saver6+4(r31)				; Restore R6			
+			lwz		r6,saver6(r31)					; Restore R6			
 			
-			dcbt	0,r28							; touch in r12-r15
-			la		r28,saver16(r31)
+			dcbt	0,r28							; Touch that next line on in
+			la		r28,savevscr(r31)				; Point to the saved facility context
 			
-			lwz		r7,saver7+4(r31)				; Restore R7
-			lwz		r8,saver8+4(r31)				; Restore R8	
-			lwz		r9,saver9+4(r31)				; Restore R9
-            
-            dcbt	0,r28							; touch in r16-r19
-            la		r28,saver20(r31)			
-            		
-			lwz		r10,saver10+4(r31)				; Restore R10
-			lwz		r11,saver11+4(r31)				; Restore R11			
+			lwz		r7,saver7(r31)					; Restore R7	
+			lwz		r8,saver8(r31)					; Restore R8	
+			lwz		r9,saver9(r31)					; Restore R9			
+			mfmsr	r26								; Get the current MSR
+			dcbt	0,r28							; Touch saved facility context		
+			lwz		r10,saver10(r31)				; Restore R10
+			lwz		r11,saver11(r31)				; Restore R11			
+			oris	r26,r26,hi16(MASK(MSR_VEC))		; Get the vector enable bit
+			lwz		r12,saver12(r31)				; Restore R12
+			ori		r26,r26,lo16(MASK(MSR_FP))		; Add in the float enable
+			lwz		r13,saver13(r31)				; Restore R13			
+			la		r28,saver24(r31)				; Point to the next line to do 
+
+;
+;			Note that floating point and vector will be enabled from here on until the RFI
+;
+
+			mtmsr	r26								; Turn on vectors and floating point
+			isync
+
+			dcbt	0,r28							; Touch next line to do	
+
+			lwz		r14,saver14(r31)				; Restore R14	
+			lwz		r15,saver15(r31)				; Restore R15			
+
+			bf		pfAltivecb,noavec3				; No Altivec on this CPU...
 			
-			dcbt	0,r28							; touch in r20-r23
 			la		r28,savevscr(r31)				; Point to the status area
-			
-			lwz		r12,saver12+4(r31)				; Restore R12
-			lwz		r13,saver13+4(r31)				; Restore R13			
+			stvxl	v0,r21,r29						; Save a vector register
+			lvxl	v0,0,r28						; Get the vector status
+			lwz		r27,savevrsave(r31)				; Get the vrsave
+			mtvscr	v0								; Set the vector status
 
-            la		r14,savectr+4(r31)
-			dcbt	0,r28							; Touch in VSCR and FPSCR
-            dcbt	0,r14							; touch in CTR, DAR, DSISR, VRSAVE, and Exception code
+			lvxl	v0,r21,r29						; Restore work vector register
+			beq+	cr3,noavec2						; SRs have not changed, no need to stop the streams...
+			dssall									; Kill all data streams
+			sync
+		
+noavec2:	mtspr	vrsave,r27						; Set the vrsave
 
-			lwz		r26,next_savearea+4(r29)		; Get the exception save area
-			la		r28,saver24(r31)
-
-			lwz		r14,saver14+4(r31)				; Restore R14	
-			lwz		r15,saver15+4(r31)				; Restore R15			
-
+noavec3:	bf-		pfFloatb,nofphere				; Skip if no floating point...
 
 			stfd	f0,emfp0(r29)					; Save FP0
-			lwz		r27,savevrsave(r31)				; Get the vrsave
-            dcbt	0,r28							; touch in r24-r27
-			la		r28,savevscr(r31)				; Point to the status area
 			lfd		f0,savefpscrpad(r31)			; Get the fpscr
-            la		r22,saver28(r31)
 			mtfsf	0xFF,f0							; Restore fpscr		
 			lfd		f0,emfp0(r29)					; Restore the used register
 
-			beq		noavec3							; No Altivec on this CPU...
-			
-			stvxl	v0,r21,r29						; Save a vector register
-			lvxl	v0,0,r28						; Get the vector status
-			mtspr	vrsave,r27						; Set the vrsave
-			mtvscr	v0								; Set the vector status
-			lvxl	v0,r21,r29						; Restore work vector register
+nofphere:	lwz		r16,saver16(r31)				; Restore R16
+			lwz		r17,saver17(r31)				; Restore R17
+			lwz		r18,saver18(r31)				; Restore R18	
+			lwz		r19,saver19(r31)				; Restore R19	
+			lwz		r20,saver20(r31)				; Restore R20
+			lwz		r21,saver21(r31)				; Restore R21
+			lwz		r22,saver22(r31)				; Restore R22
 
-noavec3:	dcbt	0,r22							; touch in r28-r31
-           	
- 			lwz		r23,spcFlags(r29)				; Get the special flags from per_proc
-            la		r17,savesrr0(r31)
-			la		r26,saver0(r26)					; Point to the first part of the next savearea
-            dcbt	0,r17							; touch in SRR0, SRR1, CR, XER, LR 
-			lhz		r28,pfrptdProc(r29)				; Get the reported processor type
+			lwz		r23,saver23(r31)				; Restore R23
+			lwz		r24,saver24(r31)				; Restore R24			
+			lwz		r25,saver25(r31)				; Restore R25			
+			lwz		r26,saver26(r31)				; Restore R26		
+			lwz		r27,saver27(r31)				; Restore R27			
 
-			lwz		r16,saver16+4(r31)				; Restore R16
-			lwz		r17,saver17+4(r31)				; Restore R17
-			lwz		r18,saver18+4(r31)				; Restore R18	
-			lwz		r19,saver19+4(r31)				; Restore R19	
-			lwz		r20,saver20+4(r31)				; Restore R20
-			lwz		r21,saver21+4(r31)				; Restore R21
-			lwz		r22,saver22+4(r31)				; Restore R22
-
-			cmpwi	cr1,r28,CPU_SUBTYPE_POWERPC_750	; G3?
-
-			dcbz	0,r26							; Clear and allocate next savearea we use in the off chance it is still in when we next interrupt
-
-			andis.	r23,r23,hi16(perfMonitor)		; Is the performance monitor enabled?
-			lwz		r23,saver23+4(r31)				; Restore R23
-			cmpwi	cr2,r28,CPU_SUBTYPE_POWERPC_7400	; Yer standard G4?
-			lwz		r24,saver24+4(r31)				; Restore R24			
-			lwz		r25,saver25+4(r31)				; Restore R25			
-			lwz		r26,saver26+4(r31)				; Restore R26		
-			lwz		r27,saver27+4(r31)				; Restore R27			
-
-			beq+	noPerfMonRestore32				; No perf monitor... 
-
-			beq-	cr1,perfMonRestore32_750		; This is a G3...
-			beq-	cr2,perfMonRestore32_7400		; Standard G4...
-		
-			lwz		r28,savepmc+16(r31)
-			lwz		r29,savepmc+20(r31)
-			mtspr	pmc5,r28						; Restore PMC5
-			mtspr	pmc6,r29						; Restore PMC6
-
-perfMonRestore32_7400:
-			lwz		r28,savemmcr2+4(r31)
-			mtspr	mmcr2,r28						; Restore MMCR2
-
-perfMonRestore32_750:
-			lwz		r28,savepmc+0(r31)
-			lwz		r29,savepmc+4(r31)
-			mtspr	pmc1,r28						; Restore PMC1 
-			mtspr	pmc2,r29						; Restore PMC2 
-			lwz		r28,savepmc+8(r31)
-			lwz		r29,savepmc+12(r31)
-			mtspr	pmc3,r28						; Restore PMC3
-			mtspr	pmc4,r29						; Restore PMC4
-			lwz		r28,savemmcr1+4(r31)
-			lwz		r29,savemmcr0+4(r31)
-			mtspr	mmcr1,r28						; Restore MMCR1
-			mtspr	mmcr0,r29						; Restore MMCR0
-
-noPerfMonRestore32:		
 			lwz		r28,savecr(r31)					; Get CR to restore
-			lwz		r29,savexer+4(r31)				; Get XER to restore
+
+			lwz		r29,savexer(r31)				; Get XER to restore
 			mtcr	r28								; Restore the CR
-			lwz		r28,savelr+4(r31)				; Get LR to restore
+			lwz		r28,savelr(r31)					; Get LR to restore
 			mtxer	r29								; Restore the XER
-			lwz		r29,savectr+4(r31)				; Get the CTR to restore
+			lwz		r29,savectr(r31)				; Get the CTR to restore
 			mtlr	r28								; Restore the LR 
-			lwz		r28,saver30+4(r31)				; Get R30
+			lwz		r28,saver30(r31)				; Get R30
 			mtctr	r29								; Restore the CTR
-			lwz		r29,saver31+4(r31)				; Get R31
+			lwz		r29,saver31(r31)				; Get R31
 			mtsprg	2,r28							; Save R30 for later
-			lwz		r28,saver28+4(r31)				; Restore R28			
+			lwz		r28,saver28(r31)				; Restore R28			
 			mtsprg	3,r29							; Save R31 for later
-			lwz		r29,saver29+4(r31)				; Restore R29
+			lwz		r29,saver29(r31)				; Restore R29
 
 			mfsprg	r31,0							; Get per_proc
 			mfsprg	r30,2							; Restore R30 
@@ -2781,186 +1987,6 @@ noPerfMonRestore32:
 			.long	0
 
 
-;
-;			This starts the 64-bit version
-;
-
-			.align	7
-
-eat64a:		ld		r30,quickfret(r29)				; Pick up the quick fret list, if any
-
-			mr.		r3,r3							; Should we hold off the quick release?
-			la		r21,saver0(r31)					; Point to the first thing we restore
-			bne--	ernoqfre64						; Hold off set, do not release just now...
-			
-erchkfre64:	mr.		r3,r30							; Any savearea to quickly release?
-			beq+	ernoqfre64						; No quickfrets...
-			ld		r30,SAVprev(r30)				; Chain back now
-			
-			bl		EXT(save_ret_phys)				; Put it on the free list			
-
-			std		r30,quickfret(r29)				; Dequeue previous guy (really, it is ok to wait until after the release)
-			b		erchkfre64						; Try the next one...
-
-			.align	7
-			
-ernoqfre64:	dcbt	0,r21							; Touch in the first thing we need
-			
-;
-;			Here we release the savearea.
-;
-;			Important!!!!  The savearea is released before we are done with it. When the
-;			local free savearea list (anchored at lclfree) gets too long, save_ret_phys
-;			will trim the list, making the extra saveareas allocatable by another processor
-;			The code in there must ALWAYS leave our savearea on the local list, otherwise
-;			we could be very, very unhappy.  The code there always queues the "just released"
-;			savearea to the head of the local list.  Then, if it needs to trim, it will
-;			start with the SECOND savearea, leaving ours intact.
-;
-;
-
-			li		r3,lgKillResv					; Get spot to kill reservation
-			stdcx.	r3,0,r3							; Blow away any reservations we hold
-			
-			mr		r3,r31							; Get the exiting savearea in parm register
-			bl		EXT(save_ret_phys)				; Put it on the free list			
-
-			lwz		r3,savesrr1+4(r31)				; Pass in the MSR we will be going to
-			bl		EXT(switchSegs)					; Go handle the segment registers/STB
-
-			lhz		r9,PP_CPU_FLAGS(r29)			; Get the processor flags
-			ld		r26,savesrr1(r31)				; Get destination MSR
-			cmplw	cr3,r14,r14						; Set that we do not need to stop streams
-			rlwinm	r25,r26,27,22,22				; Move PR bit to BE
-
-			rlwinm	r9,r9,(((31-MSR_BE_BIT)+(traceBEb+16+1))&31),MSR_BE_BIT,MSR_BE_BIT	; Set BE bit if special trace is on
-			li		r21,emfp0						; Point to a workarea
-			and		r9,r9,r25						; Clear BE if supervisor state
-			or		r26,r26,r9						; Flip on the BE bit for special trace if needed
-
-			ld		r25,savesrr0(r31)				; Get the SRR0 to use
-			la		r28,saver16(r31)				; Point to the 128-byte line with r16-r31
-			dcbz128	r21,r29							; Clear a work area
-			ld		r0,saver0(r31)					; Restore R0			
-			dcbt	0,r28							; Touch in r16-r31 
-			ld		r1,saver1(r31)					; Restore R1	
-			ld		r2,saver2(r31)					; Restore R2	
-			ld		r3,saver3(r31)					; Restore R3
-			mtcrf	0x80,r27						; Get facility availability flags (do not touch CR1-7)
-			ld		r4,saver4(r31)					; Restore R4
-			mtsrr0	r25								; Restore the SRR0 now
-			ld		r5,saver5(r31)					; Restore R5
-			mtsrr1	r26								; Restore the SRR1 now 
-			ld		r6,saver6(r31)					; Restore R6			
-						
-			ld		r7,saver7(r31)					; Restore R7
-			ld		r8,saver8(r31)					; Restore R8	
-			ld		r9,saver9(r31)					; Restore R9
-            
-			la		r28,savevscr(r31)				; Point to the status area
-            		
-			ld		r10,saver10(r31)				; Restore R10
-			ld		r11,saver11(r31)				; Restore R11			
-			ld		r12,saver12(r31)				; Restore R12
-			ld		r13,saver13(r31)				; Restore R13			
-
-			ld		r26,next_savearea(r29)			; Get the exception save area
-
-			ld		r14,saver14(r31)				; Restore R14	
-			ld		r15,saver15(r31)				; Restore R15			
-			lwz		r27,savevrsave(r31)				; Get the vrsave
-			
-			bf--	pfAltivecb,noavec2s				; Skip if no VMX...
-			
-			stvxl	v0,r21,r29						; Save a vector register
-			lvxl	v0,0,r28						; Get the vector status
-			mtvscr	v0								; Set the vector status
-
-			lvxl	v0,r21,r29						; Restore work vector register
-		
-noavec2s:	mtspr	vrsave,r27						; Set the vrsave
-
-			lwz		r28,saveexception(r31)			; Get exception type
-			stfd	f0,emfp0(r29)					; Save FP0
-			lfd		f0,savefpscrpad(r31)			; Get the fpscr
-			mtfsf	0xFF,f0							; Restore fpscr		
-			lfd		f0,emfp0(r29)					; Restore the used register
-			ld		r16,saver16(r31)				; Restore R16
-			lwz		r30,spcFlags(r29)				; Get the special flags from per_proc
-			ld		r17,saver17(r31)				; Restore R17
-			ld		r18,saver18(r31)				; Restore R18	
-			cmplwi	cr1,r28,T_RESET					; Are we returning from a reset?
-			ld		r19,saver19(r31)				; Restore R19	
-			ld		r20,saver20(r31)				; Restore R20
-			li		r27,0							; Get a zero
-			ld		r21,saver21(r31)				; Restore R21
-			la		r26,saver0(r26)					; Point to the first part of the next savearea
-			andis.	r30,r30,hi16(perfMonitor)		; Is the performance monitor enabled?
-			ld		r22,saver22(r31)				; Restore R22
-			ld		r23,saver23(r31)				; Restore R23
-			bne++	cr1,er64rrst					; We are not returning from a reset...
-			stw		r27,lo16(EXT(ResetHandler)-EXT(ExceptionVectorsStart)+RESETHANDLER_TYPE)(br0)	; Allow resets again
-
-er64rrst:	ld		r24,saver24(r31)				; Restore R24			
-
-			dcbz128	0,r26							; Clear and allocate next savearea we use in the off chance it is still in when we next interrupt
-
-			ld		r25,saver25(r31)				; Restore R25			
-			ld		r26,saver26(r31)				; Restore R26		
-			ld		r27,saver27(r31)				; Restore R27			
-
-			beq++	noPerfMonRestore64				; Nope... 
-
-			lwz		r28,savepmc+0(r31)
-			lwz		r29,savepmc+4(r31)
-			mtspr	pmc1_gp,r28						; Restore PMC1 
-			mtspr	pmc2_gp,r29						; Restore PMC2 
-			lwz		r28,savepmc+8(r31)
-			lwz		r29,savepmc+12(r31)
-			mtspr	pmc3_gp,r28						; Restore PMC3
-			mtspr	pmc4_gp,r29						; Restore PMC4
-			lwz		r28,savepmc+16(r31)
-			lwz		r29,savepmc+20(r31)
-			mtspr	pmc5_gp,r28						; Restore PMC5 
-			mtspr	pmc6_gp,r29						; Restore PMC6 
-			lwz		r28,savepmc+24(r31)
-			lwz		r29,savepmc+28(r31)
-			mtspr	pmc7_gp,r28						; Restore PMC7
-			mtspr	pmc8_gp,r29						; Restore PMC8
-			ld		r28,savemmcr1(r31)
-			ld		r29,savemmcr2(r31)
-			mtspr	mmcr1_gp,r28					; Restore MMCR1
-			mtspr	mmcra_gp,r29					; Restore MMCRA
-			ld		r28,savemmcr0(r31)
-			
-			mtspr	mmcr0_gp,r28					; Restore MMCR0
-
-noPerfMonRestore64:		
-			mfsprg	r30,0							; Get per_proc
-			lwz		r28,savecr(r31)					; Get CR to restore
-			ld		r29,savexer(r31)				; Get XER to restore
-			mtcr	r28								; Restore the CR
-			ld		r28,savelr(r31)					; Get LR to restore
-			mtxer	r29								; Restore the XER
-			ld		r29,savectr(r31)				; Get the CTR to restore
-			mtlr	r28								; Restore the LR 
-			ld		r28,saver30(r31)				; Get R30
-			mtctr	r29								; Restore the CTR
-			ld		r29,saver31(r31)				; Get R31
-			mtspr	hsprg0,r28						; Save R30 for later
-			ld		r28,saver28(r31)				; Restore R28			
-			mtsprg	3,r29							; Save R31 for later
-			ld		r29,saver29(r31)				; Restore R29
-
-			lwz		r31,pfAvailable(r30)			; Get the feature flags
-			lwz		r30,UAW(r30)					; Get the User Assist Word
-			mtsprg	2,r31							; Set the feature flags
-			mfsprg	r31,3							; Restore R31
-			mtsprg	3,r30							; Set the UAW
-			mfspr	r30,hsprg0						; Restore R30
-
-			rfid									; Click heels three times and think very hard that there is no place like home...
-
 
 	
 /*
@@ -2968,7 +1994,7 @@ noPerfMonRestore64:
  *
  *
  * ENTRY :	IR and/or DR and/or interruptions can be on
- *			R3 points to the virtual address of a savearea
+ *			R3 points to the physical address of a savearea
  */
 	
 			.align	5
@@ -2977,377 +2003,71 @@ noPerfMonRestore64:
 LEXT(exception_exit)
 
 			mfsprg	r29,2							; Get feature flags
-			mr		r31,r3							; Get the savearea in the right register 
+			mfmsr	r30								; Get the current MSR 
 			mtcrf	0x04,r29						; Set the features			
-			li		r0,1							; Get this just in case		
-			mtcrf	0x02,r29						; Set the features			
-			lis		r30,hi16(MASK(MSR_VEC)|MASK(MSR_FP)|MASK(MSR_ME))	; Set up the MSR we will use throughout. Note that ME come on here if MCK
-			rlwinm	r4,r3,0,0,19					; Round down to savearea block base
+			rlwinm	r30,r30,0,MSR_FP_BIT+1,MSR_FP_BIT-1	; Force floating point off
+			mr		r31,r3							; Get the savearea in the right register 
+			rlwinm	r30,r30,0,MSR_VEC_BIT+1,MSR_VEC_BIT-1	; Force vectors off
+			li		r10,savesrr0					; Point to one of the first things we touch in the savearea on exit
+			andi.	r30,r30,0x7FCF					; Turn off externals, IR, and DR 
 			lis		r1,hi16(SAVredrive)				; Get redrive request
-			mfsprg	r2,0							; Get the per_proc block
-			ori		r30,r30,lo16(MASK(MSR_VEC)|MASK(MSR_FP)|MASK(MSR_ME))	; Rest of MSR
-			bt++	pf64Bitb,eeSixtyFour			; We are 64-bit...
-			
-			lwz		r4,SACvrswap+4(r4)				; Get the virtual to real translation
-			
+
 			bt		pfNoMSRirb,eeNoMSR				; No MSR...
 
 			mtmsr	r30								; Translation and all off
 			isync									; Toss prefetch
 			b		eeNoMSRx
 			
-			.align	5
-			
-eeSixtyFour:
-			ld		r4,SACvrswap(r4)				; Get the virtual to real translation
-			rldimi	r30,r0,63,MSR_SF_BIT			; Set SF bit (bit 0)
-			mtmsrd	r30								; Set 64-bit mode, turn off EE, DR, and IR
-			isync									; Toss prefetch
-			b		eeNoMSRx
-			
-			.align	5
-			
 eeNoMSR:	li		r0,loadMSR						; Get the MSR setter SC
 			mr		r3,r30							; Get new MSR
 			sc										; Set it
 
-eeNoMSRx:	xor		r31,r31,r4						; Convert the savearea to physical addressing
+eeNoMSRx:	dcbt	r10,r31							; Touch in the first stuff we restore
+			mfsprg	r2,0							; Get the per_proc block
 			lwz		r4,SAVflags(r31)				; Pick up the flags
 			mr		r13,r31							; Put savearea here also
 
-#if INSTRUMENT
-			mfspr	r5,pmc1							; INSTRUMENT - saveinstr[8] - stamp exception exit
-			stw		r5,0x6100+(8*16)+0x0(0)			; INSTRUMENT - Save it
-			mfspr	r5,pmc2							; INSTRUMENT - Get stamp
-			stw		r5,0x6100+(8*16)+0x4(0)			; INSTRUMENT - Save it
-			mfspr	r5,pmc3							; INSTRUMENT - Get stamp
-			stw		r5,0x6100+(8*16)+0x8(0)			; INSTRUMENT - Save it
-			mfspr	r5,pmc4							; INSTRUMENT - Get stamp
-			stw		r5,0x6100+(8*16)+0xC(0)			; INSTRUMENT - Save it
-#endif
-
-
 			and.	r0,r4,r1						; Check if redrive requested
+			andc	r4,r4,r1						; Clear redrive
 			
 			dcbt	br0,r2							; We will need this in just a sec
 
 			beq+	EatRupt							; No redrive, just exit...
 
 			lwz		r11,saveexception(r13)			; Restore exception code
+			stw		r4,SAVflags(r13)				; Set the flags
 			b		Redrive							; Redrive the exception...
-
-
 		
-			.align	12								; Force page alignment
 
+/*
+ *		Start of the trace table
+ */
+ 
+ 			.align	12								/* Align to 4k boundary */
+	
+			.globl EXT(traceTableBeg)
+EXT(traceTableBeg):									/* Start of trace table */
+/*			.fill	2048,4,0		  			       Make an 8k trace table for now */
+			.fill	13760,4,0						/* Make an .trace table for now */
+/*			.fill	240000,4,0		   				   Make an .trace table for now */
+			.globl EXT(traceTableEnd)
+EXT(traceTableEnd):									/* End of trace table */
+	
 			.globl EXT(ExceptionVectorsEnd)
 EXT(ExceptionVectorsEnd):							/* Used if relocating the exception vectors */
-
-
-
-
-;
-;			Here is where we keep the low memory globals
-;
-
-			. = 0x5000
-			.globl	EXT(lowGlo)
-			
-EXT(lowGlo):
-
-			.ascii	"Hagfish "						; 5000 Unique eyecatcher
-			.long	0								; 5008 Zero
-			.long	0								; 500C Zero cont...
-			.long	EXT(per_proc_info)				; 5010 pointer to per_procs
-			.long	0								; 5014 reserved
-			.long	0								; 5018 reserved
-			.long	0								; 501C reserved
-			.long	0								; 5020 reserved
-			.long	0								; 5024 reserved
-			.long	0								; 5028 reserved
-			.long	0								; 502C reserved
-			.long	0								; 5030 reserved
-			.long	0								; 5034 reserved
-			.long	0								; 5038 reserved
-			.long	0								; 503C reserved
-			.long	0								; 5040 reserved
-			.long	0								; 5044 reserved
-			.long	0								; 5048 reserved
-			.long	0								; 504C reserved
-			.long	0								; 5050 reserved
-			.long	0								; 5054 reserved
-			.long	0								; 5058 reserved
-			.long	0								; 505C reserved
-			.long	0								; 5060 reserved
-			.long	0								; 5064 reserved
-			.long	0								; 5068 reserved
-			.long	0								; 506C reserved
-			.long	0								; 5070 reserved
-			.long	0								; 5074 reserved
-			.long	0								; 5078 reserved
-			.long	0								; 507C reserved
-
-			.globl	EXT(trcWork)
-EXT(trcWork):
-			.long	0								; 5080 The next trace entry to use
-#if DEBUG
-			.long	0xFFFFFFFF 						; 5084 All enabled 
-#else
-			.long	0x00000000						; 5084 All disabled on non-debug systems
+#ifndef HACKALERTHACKALERT
+/* 
+ *		This .long needs to be here because the linker gets confused and tries to 
+ *		include the final label in a section in the next section if there is nothing 
+ *		after it
+ */
+	.long	0						/* (HACK/HACK/HACK) */
 #endif
-			.long	0								; 5088 Start of the trace table
-			.long	0								; 508C End (wrap point) of the trace
-			.long	0								; 5090 Saved mask while in debugger
-			.long	0								; 5094 Size of trace table (1 - 256 pages)
-			.long	0								; 5098 traceGas[0]
-			.long	0								; 509C traceGas[1]
-
-			.long	0								; 50A0 reserved			
-			.long	0								; 50A4 reserved			
-			.long	0								; 50A8 reserved			
-			.long	0								; 50AC reserved			
-			.long	0								; 50B0 reserved			
-			.long	0								; 50B4 reserved			
-			.long	0								; 50B8 reserved			
-			.long	0								; 50BC reserved			
-			.long	0								; 50C0 reserved			
-			.long	0								; 50C4 reserved			
-			.long	0								; 50C8 reserved			
-			.long	0								; 50CC reserved			
-			.long	0								; 50D0 reserved			
-			.long	0								; 50D4 reserved			
-			.long	0								; 50D8 reserved			
-			.long	0								; 50DC reserved			
-			.long	0								; 50E0 reserved			
-			.long	0								; 50E4 reserved			
-			.long	0								; 50E8 reserved			
-			.long	0								; 50EC reserved			
-			.long	0								; 50F0 reserved			
-			.long	0								; 50F4 reserved			
-			.long	0								; 50F8 reserved			
-			.long	0								; 50FC reserved			
-
-			.globl	EXT(saveanchor)
-
-EXT(saveanchor):									; 5100 saveanchor
-			.set	.,.+SVsize
-			
-			.long	0								; 5140 reserved
-			.long	0								; 5144 reserved
-			.long	0								; 5148 reserved
-			.long	0								; 514C reserved
-			.long	0								; 5150 reserved
-			.long	0								; 5154 reserved
-			.long	0								; 5158 reserved
-			.long	0								; 515C reserved
-			.long	0								; 5160 reserved
-			.long	0								; 5164 reserved
-			.long	0								; 5168 reserved
-			.long	0								; 516C reserved
-			.long	0								; 5170 reserved
-			.long	0								; 5174 reserved
-			.long	0								; 5178 reserved
-			.long	0								; 517C reserved
-			
-			.long	0								; 5180 tlbieLock
-
-			.long	0								; 5184 reserved
-			.long	0								; 5188 reserved
-			.long	0								; 518C reserved
-			.long	0								; 5190 reserved
-			.long	0								; 5194 reserved
-			.long	0								; 5198 reserved
-			.long	0								; 519C reserved
-			.long	0								; 51A0 reserved			
-			.long	0								; 51A4 reserved			
-			.long	0								; 51A8 reserved			
-			.long	0								; 51AC reserved			
-			.long	0								; 51B0 reserved			
-			.long	0								; 51B4 reserved			
-			.long	0								; 51B8 reserved			
-			.long	0								; 51BC reserved			
-			.long	0								; 51C0 reserved			
-			.long	0								; 51C4 reserved			
-			.long	0								; 51C8 reserved			
-			.long	0								; 51CC reserved			
-			.long	0								; 51D0 reserved			
-			.long	0								; 51D4 reserved			
-			.long	0								; 51D8 reserved			
-			.long	0								; 51DC reserved			
-			.long	0								; 51E0 reserved			
-			.long	0								; 51E4 reserved			
-			.long	0								; 51E8 reserved			
-			.long	0								; 51EC reserved			
-			.long	0								; 51F0 reserved			
-			.long	0								; 51F4 reserved			
-			.long	0								; 51F8 reserved			
-			.long	0								; 51FC reserved	
-			
-			.globl	EXT(dgWork)
-			
-EXT(dgWork):
-			
-			.long	0								; 5200 dgLock
-			.long	0								; 5204 dgFlags		
-			.long	0								; 5208 dgMisc0		
-			.long	0								; 520C dgMisc1		
-			.long	0								; 5210 dgMisc2		
-			.long	0								; 5214 dgMisc3		
-			.long	0								; 5218 dgMisc4		
-			.long	0								; 521C dgMisc5	
-				
-			.long	0								; 5220 reserved
-			.long	0								; 5224 reserved
-			.long	0								; 5228 reserved
-			.long	0								; 522C reserved
-			.long	0								; 5230 reserved
-			.long	0								; 5234 reserved
-			.long	0								; 5238 reserved
-			.long	0								; 523C reserved
-			.long	0								; 5240 reserved
-			.long	0								; 5244 reserved
-			.long	0								; 5248 reserved
-			.long	0								; 524C reserved
-			.long	0								; 5250 reserved
-			.long	0								; 5254 reserved
-			.long	0								; 5258 reserved
-			.long	0								; 525C reserved
-			.long	0								; 5260 reserved
-			.long	0								; 5264 reserved
-			.long	0								; 5268 reserved
-			.long	0								; 526C reserved
-			.long	0								; 5270 reserved
-			.long	0								; 5274 reserved
-			.long	0								; 5278 reserved
-			.long	0								; 527C reserved
-			
-			.long	0								; 5280 reserved
-			.long	0								; 5284 reserved
-			.long	0								; 5288 reserved
-			.long	0								; 528C reserved
-			.long	0								; 5290 reserved
-			.long	0								; 5294 reserved
-			.long	0								; 5298 reserved
-			.long	0								; 529C reserved
-			.long	0								; 52A0 reserved			
-			.long	0								; 52A4 reserved			
-			.long	0								; 52A8 reserved			
-			.long	0								; 52AC reserved			
-			.long	0								; 52B0 reserved			
-			.long	0								; 52B4 reserved			
-			.long	0								; 52B8 reserved			
-			.long	0								; 52BC reserved			
-			.long	0								; 52C0 reserved			
-			.long	0								; 52C4 reserved			
-			.long	0								; 52C8 reserved			
-			.long	0								; 52CC reserved			
-			.long	0								; 52D0 reserved			
-			.long	0								; 52D4 reserved			
-			.long	0								; 52D8 reserved			
-			.long	0								; 52DC reserved			
-			.long	0								; 52E0 reserved			
-			.long	0								; 52E4 reserved			
-			.long	0								; 52E8 reserved			
-			.long	0								; 52EC reserved			
-			.long	0								; 52F0 reserved			
-			.long	0								; 52F4 reserved			
-			.long	0								; 52F8 reserved			
-			.long	0								; 52FC reserved	
-
-			.globl	EXT(killresv)
-EXT(killresv):
-
-			.long	0								; 5300 Used to kill reservations
-			.long	0								; 5304 Used to kill reservations
-			.long	0								; 5308 Used to kill reservations
-			.long	0								; 530C Used to kill reservations
-			.long	0								; 5310 Used to kill reservations
-			.long	0								; 5314 Used to kill reservations
-			.long	0								; 5318 Used to kill reservations
-			.long	0								; 531C Used to kill reservations
-			.long	0								; 5320 Used to kill reservations
-			.long	0								; 5324 Used to kill reservations
-			.long	0								; 5328 Used to kill reservations
-			.long	0								; 532C Used to kill reservations
-			.long	0								; 5330 Used to kill reservations
-			.long	0								; 5334 Used to kill reservations
-			.long	0								; 5338 Used to kill reservations
-			.long	0								; 533C Used to kill reservations
-			.long	0								; 5340 Used to kill reservations
-			.long	0								; 5344 Used to kill reservations
-			.long	0								; 5348 Used to kill reservations
-			.long	0								; 534C Used to kill reservations
-			.long	0								; 5350 Used to kill reservations
-			.long	0								; 5354 Used to kill reservations
-			.long	0								; 5358 Used to kill reservations
-			.long	0								; 535C Used to kill reservations
-			.long	0								; 5360 Used to kill reservations
-			.long	0								; 5364 Used to kill reservations
-			.long	0								; 5368 Used to kill reservations
-			.long	0								; 536C Used to kill reservations
-			.long	0								; 5370 Used to kill reservations
-			.long	0								; 5374 Used to kill reservations
-			.long	0								; 5378 Used to kill reservations
-			.long	0								; 537C Used to kill reservations
-			
-			.long	0								; 5380 reserved
-			.long	0								; 5384 reserved
-			.long	0								; 5388 reserved
-			.long	0								; 538C reserved
-			.long	0								; 5390 reserved
-			.long	0								; 5394 reserved
-			.long	0								; 5398 reserved
-			.long	0								; 539C reserved
-			.long	0								; 53A0 reserved			
-			.long	0								; 53A4 reserved			
-			.long	0								; 53A8 reserved			
-			.long	0								; 53AC reserved			
-			.long	0								; 53B0 reserved			
-			.long	0								; 53B4 reserved			
-			.long	0								; 53B8 reserved			
-			.long	0								; 53BC reserved			
-			.long	0								; 53C0 reserved			
-			.long	0								; 53C4 reserved			
-			.long	0								; 53C8 reserved			
-			.long	0								; 53CC reserved			
-			.long	0								; 53D0 reserved			
-			.long	0								; 53D4 reserved			
-			.long	0								; 53D8 reserved			
-			.long	0								; 53DC reserved			
-			.long	0								; 53E0 reserved			
-			.long	0								; 53E4 reserved			
-			.long	0								; 53E8 reserved			
-			.long	0								; 53EC reserved			
-			.long	0								; 53F0 reserved			
-			.long	0								; 53F4 reserved			
-			.long	0								; 53F8 reserved			
-			.long	0								; 53FC reserved	
-
-
-;
-;	The "shared page" is used for low-level debugging
-;
-
-			. = 0x6000
-			.globl	EXT(sharedPage)
-
-EXT(sharedPage):									; Per processor data area
-		.long	0xC24BC195							; Comm Area validity value 
-		.long	0x87859393							; Comm Area validity value 
-		.long	0xE681A2C8							; Comm Area validity value 
-		.long	0x8599855A							; Comm Area validity value 
-		.long	0xD74BD296							; Comm Area validity value 
-		.long	0x8388E681							; Comm Area validity value 
-		.long	0xA2C88599							; Comm Area validity value 
-		.short	0x855A								; Comm Area validity value 
-		.short	1									; Comm Area version number
-		.fill	1016*4,1,0							; (filled with 0s)
 
 	.data
 	.align	ALIGN
 	.globl	EXT(exception_end)
 EXT(exception_end):
 	.long	EXT(ExceptionVectorsEnd) -EXT(ExceptionVectorsStart) /* phys fn */
-
 
 

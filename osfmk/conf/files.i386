@@ -64,8 +64,6 @@ osfmk/i386/rtclock.c		standard
 osfmk/i386/trap.c		standard
 osfmk/i386/user_ldt.c		standard
 
-osfmk/i386/commpage/commpage.c	standard
-
 osfmk/i386/AT386/autoconf.c	standard
 osfmk/i386/AT386/bbclock.c	standard
 osfmk/i386/AT386/conf.c		standard

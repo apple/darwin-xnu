@@ -3,22 +3,19 @@
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
- * Copyright (c) 1999-2003 Apple Computer, Inc.  All Rights Reserved.
+ * The contents of this file constitute Original Code as defined in and
+ * are subject to the Apple Public Source License Version 1.1 (the
+ * "License").  You may not use this file except in compliance with the
+ * License.  Please obtain a copy of the License at
+ * http://www.apple.com/publicsource and read it before using this file.
  * 
- * This file contains Original Code and/or Modifications of Original Code
- * as defined in and that are subject to the Apple Public Source License
- * Version 2.0 (the 'License'). You may not use this file except in
- * compliance with the License. Please obtain a copy of the License at
- * http://www.opensource.apple.com/apsl/ and read it before using this
- * file.
- * 
- * The Original Code and all software distributed under the License are
- * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * This Original Code and all software distributed under the License are
+ * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
- * Please see the License for the specific language governing rights and
- * limitations under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
+ * License for the specific language governing rights and limitations
+ * under the License.
  * 
  * @APPLE_LICENSE_HEADER_END@
  */
@@ -589,9 +586,6 @@ ubc_getobject(struct vnode *vp, int flags)
 
 	if (UBCINVALID(vp))
 		return (0);
-
-	if (flags & UBC_FOR_PAGEOUT)
-	        return(vp->v_ubcinfo->ui_control);
 
 	if ((recursed = ubc_busy(vp)) == 0)
 		return (0);
@@ -1169,7 +1163,7 @@ ubc_page_op(
 	struct vnode 	*vp,
 	off_t		f_offset,
 	int		ops,
-	ppnum_t	*phys_entryp,
+	vm_offset_t	*phys_entryp,
 	int		*flagsp)
 {
 	memory_object_control_t		control;
@@ -1195,21 +1189,14 @@ ubc_create_upl(
 	int				uplflags)
 {
 	memory_object_control_t		control;
-	int				count;
-	int                             ubcflags;
-	off_t				file_offset;
-	kern_return_t			kr;
+	int							count;
+	off_t						file_offset;
+	kern_return_t				kr;
 	
 	if (bufsize & 0xfff)
 		return KERN_INVALID_ARGUMENT;
 
-	if (uplflags & UPL_FOR_PAGEOUT) {
-		uplflags &= ~UPL_FOR_PAGEOUT;
-	        ubcflags  =  UBC_FOR_PAGEOUT;
-	} else
-	        ubcflags = UBC_FLAGS_NONE;
-
-	control = ubc_getobject(vp, ubcflags);
+	control = ubc_getobject(vp, UBC_FLAGS_NONE);
 	if (control == MEMORY_OBJECT_CONTROL_NULL)
 		return KERN_INVALID_ARGUMENT;
 

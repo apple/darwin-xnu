@@ -36,8 +36,6 @@ in 010011ddd00sss000000000000000000 mcrf $crf($d),$crf($s)
 in 010011cccccccccc000000000010000l $br($c,0,$l,lr,0)
 in 010011dddddaaaaabbbbb0oooo000010 cr$crop($o) $crb($d),$crb($a),$crb($b)
 in 01001100000000000000000001100100 rfi
-in 01001100000000000000000000100100 rfid
-in 01001100000000000000001000100100 hrfid
 in 01001100000000000000000100101100 isync
 in 010011cccccccccc000001000010000l $br($c,0,$l,ctr,0)
 in 010111dddddaaaaabbbbbffffftttttr rlwnm{|.}[$r] \
@@ -45,7 +43,7 @@ in 010111dddddaaaaabbbbbffffftttttr rlwnm{|.}[$r] \
 in 0101xxdddddaaaaasssssffffftttttr rl{wimi|winm|?|?}[$x]{|.}[$r] \
 				    $reg($a),$reg($d),$dec($s),$dec($f),$dec($t)
 in 011110dddddaaaaasssssffffff0xxSr rld{icl|icr|ic|imi}[$x]{|.}[$r] \
-				    $reg($a),$reg($d),$dec($[Ssssss]),$dec($f)
+				    $reg($a),$reg($d),$dec($[sssssS]),$dec($f)
 in 011110dddddaaaaabbbbbffffff100xr rldc{l|r}[$x]{|.}[$r] \
 				    $reg($a),$reg($d),$reg($b),$dec($f)
 in 011111ddd0laaaaabbbbb0000u000000 cmp{|l}[$u] \
@@ -58,7 +56,6 @@ in 011111dddddaaaaabbbbb000u0010w1r mulh{d|w}[$w]{u|}[$u]{|.}[$r] \
 in 011111dddddaaaaabbbbbott0001010r add{c|e||?}[$t]{|o}[$o]{|.}[$r] \
 				    $reg($d),$reg($a),$reg($b)
 in 011111ddddd0000000000000m0100110 mf{cr|msr}[$m] $reg($d)
-in 011111ddddd0ffffffff000000100110 mfcr $hex($f),$reg($d)
 in 011111dddddaaaaabbbbb000w0101000 l{w|d}[$w]arx $reg($d),$reg0($a),$reg($b)
 in 011111dddddaaaaabbbbb0000u101010 ld{|u}[$u]x $reg($d),$reg0($a),$reg($b)
 in 011111dddddaaaaabbbbb0ooou101110 $ldst($o){|u}[$u]x \
@@ -75,7 +72,6 @@ in 011111dddddaaaaabbbbb0001111100r nor{|.}[$r] $reg($a),$reg($d),$reg($b)
 in 011111dddddaaaaabbbbbo01z001000r subf{|z}[$z]e{|o}[$o]{|.}[$r] \
 				    $reg($d),$reg($a)
 in 011111ddddd0ffffffff000100100m00 mt{crf $hex($f),|msr}[$m] $reg($d)
-in 011111ddddd000000000000101100100 mtmsrd $reg($d)
 in 011111sssssaaaaabbbbb0010u101010 std{|u}[$u]x $reg($s),$reg0($a),$reg($b)
 in 011111sssssaaaaabbbbb001w0101101 st{w|d}[$w]cx. $reg($s),$reg0($a),$reg($b)
 in 011111dddddaaaaa00000o011001010r addze{|o}[$o]{|.}[$r] $reg($d),$reg($a)
@@ -101,9 +97,6 @@ in 011111dddddaaaaabbbbbo111u010w1r div{d|w}[$w]{u|}[$u]{|o}[$o]{|.}[$r] \
 in 01111100000aaaaabbbbb01110101100 dcbi $reg0($a),$reg($b)
 in 011111sssssaaaaabbbbb0111011100r nand{|.}[$r] $reg($a),$reg($s),$reg($b)
 in 01111100000000000000001111100100 slbia
-in 011111ddddd00000bbbbb01100100100 slbmte $reg($d),$reg($b)
-in 011111ddddd00000bbbbb11010100110 slbmfev $reg($d),$reg($b)
-in 011111ddddd00000bbbbb11100100110 slbmfee $reg($d),$reg($b)
 in 011111ddd00000000000010000000000 mcrxr $crf($d)
 in 011111dddddaaaaabbbbb10000101010 lswx $reg($d),$reg0($a),$reg($b)
 in 011111dddddaaaaabbbbb1w000101100 l{w|h}[$w]brx $reg($d),$reg0($a),$reg($b)
@@ -115,17 +108,15 @@ in 011111sssssaaaaabbbbb1000011011r srd{|.}[$r] $reg($a),$reg($s),$reg($b)
 in 01111100000000000000010001101100 tlbsync
 in 011111ddddd0rrrr0000010010101100 mfsr $reg($d),$dec($r)
 in 011111dddddaaaaannnnn10010101010 lswi $reg($d),$reg0($a),$dec($n)
-in 011111000ll000000000010010101100 {sync|?|ptesync|?}[$l]
+in 01111100000000000000010010101100 sync
 in 011111ddddd00000bbbbb10100100110 mfsrin $reg($d),$reg($b)
 in 011111sssssaaaaabbbbb10100101010 stswx $reg($s),$reg0($a),$reg($b)
 in 011111sssssaaaaabbbbb1w100101100 st{w|h}[$w]brx $reg($s),$reg0($a),$reg($b)
 in 011111sssssaaaaabbbbb101du101110 stf{s|d}[$d]{|u}[$u]x \
 				    $fr($s),{$reg0($a)|$reg($a)}[$u],$reg($b)
 in 011111sssssaaaaannnnn10110101010 stswi $reg($s),$reg0($a),$dec($n)
-in 011111dddddaaaaasssss1100111000r srawi{|.}[$r] $reg($a),$reg($d),$dec($s)
-in 011111dddddaaaaasssss110011101Sr sradi{|.}[$r] $reg($a),$reg($d),$dec($[Ssssss])
+in 011111dddddaaaaasssss1100111000r srawi{|.}[$r] $reg($a),$reg($s),$dec($s)
 in 01111100000000000000011010101100 eieio
-in 00000000000000000000001000000000 attn
 in 011111sssssaaaaa00000111xx11010r exts{h|b|w|?}[$x]{|.}[$r] $reg($a),$reg($s)
 in 01111100000aaaaabbbbb11110101100 icbi $reg0($a),$reg($b)
 in 011111sssssaaaaabbbbb11110101110 stfiwx $fr($s),$reg0($a),$reg($b)
@@ -205,11 +196,6 @@ spr 1000n11111 hid$dec($n)
 spr 1001011111 iabr
 spr 1010111111 dabr
 spr 1111111111 pir
-spr 0000110000 hspr0
-spr 0000110001 hspr1
-spr 0000110110 hdec0
-spr 0000111010 hsrr0
-spr 0000111011 hsrr1
 spr xxxxxxxxxx ?
 
 reg0 00000 0

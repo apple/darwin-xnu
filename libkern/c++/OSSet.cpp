@@ -3,22 +3,19 @@
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
- * Copyright (c) 1999-2003 Apple Computer, Inc.  All Rights Reserved.
+ * The contents of this file constitute Original Code as defined in and
+ * are subject to the Apple Public Source License Version 1.1 (the
+ * "License").  You may not use this file except in compliance with the
+ * License.  Please obtain a copy of the License at
+ * http://www.apple.com/publicsource and read it before using this file.
  * 
- * This file contains Original Code and/or Modifications of Original Code
- * as defined in and that are subject to the Apple Public Source License
- * Version 2.0 (the 'License'). You may not use this file except in
- * compliance with the License. Please obtain a copy of the License at
- * http://www.opensource.apple.com/apsl/ and read it before using this
- * file.
- * 
- * The Original Code and all software distributed under the License are
- * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * This Original Code and all software distributed under the License are
+ * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
- * Please see the License for the specific language governing rights and
- * limitations under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
+ * License for the specific language governing rights and limitations
+ * under the License.
  * 
  * @APPLE_LICENSE_HEADER_END@
  */
@@ -54,7 +51,7 @@ bool OSSet::initWithCapacity(unsigned int inCapacity)
 
 bool OSSet::initWithObjects(const OSObject *inObjects[],
                               unsigned int inCount,
-                              unsigned int inCapacity)
+                              unsigned int inCapacity = 0)
 {
     unsigned int capacity = inCount;
 
@@ -79,7 +76,7 @@ bool OSSet::initWithObjects(const OSObject *inObjects[],
 }
 
 bool OSSet::initWithArray(const OSArray *inArray,
-                          unsigned int inCapacity)
+                          unsigned int inCapacity = 0)
 {
     if ( !inArray )
         return false;
@@ -89,7 +86,7 @@ bool OSSet::initWithArray(const OSArray *inArray,
 }
 
 bool OSSet::initWithSet(const OSSet *inSet,
-                        unsigned int inCapacity)
+                        unsigned int inCapacity = 0)
 {
     return initWithArray(inSet->members, inCapacity);
 }
@@ -99,7 +96,7 @@ OSSet *OSSet::withCapacity(unsigned int capacity)
     OSSet *me = new OSSet;
 
     if (me && !me->initWithCapacity(capacity)) {
-        me->release();
+        me->free();
         return 0;
     }
 
@@ -108,12 +105,12 @@ OSSet *OSSet::withCapacity(unsigned int capacity)
 
 OSSet *OSSet::withObjects(const OSObject *objects[],
                           unsigned int count,
-                          unsigned int capacity)
+                          unsigned int capacity = 0)
 {
     OSSet *me = new OSSet;
 
     if (me && !me->initWithObjects(objects, count, capacity)) {
-        me->release();
+        me->free();
         return 0;
     }
 
@@ -121,12 +118,12 @@ OSSet *OSSet::withObjects(const OSObject *objects[],
 }
 
 OSSet *OSSet::withArray(const OSArray *array,
-                        unsigned int capacity)
+                        unsigned int capacity = 0)
 {
     OSSet *me = new OSSet;
 
     if (me && !me->initWithArray(array, capacity)) {
-        me->release();
+        me->free();
         return 0;
     }
 
@@ -134,12 +131,12 @@ OSSet *OSSet::withArray(const OSArray *array,
 }
 
 OSSet *OSSet::withSet(const OSSet *set,
-                      unsigned int capacity)
+                      unsigned int capacity = 0)
 {
     OSSet *me = new OSSet;
 
     if (me && !me->initWithSet(set, capacity)) {
-        me->release();
+        me->free();
         return 0;
     }
 

@@ -3,22 +3,19 @@
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
- * Copyright (c) 1999-2003 Apple Computer, Inc.  All Rights Reserved.
+ * The contents of this file constitute Original Code as defined in and
+ * are subject to the Apple Public Source License Version 1.1 (the
+ * "License").  You may not use this file except in compliance with the
+ * License.  Please obtain a copy of the License at
+ * http://www.apple.com/publicsource and read it before using this file.
  * 
- * This file contains Original Code and/or Modifications of Original Code
- * as defined in and that are subject to the Apple Public Source License
- * Version 2.0 (the 'License'). You may not use this file except in
- * compliance with the License. Please obtain a copy of the License at
- * http://www.opensource.apple.com/apsl/ and read it before using this
- * file.
- * 
- * The Original Code and all software distributed under the License are
- * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * This Original Code and all software distributed under the License are
+ * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
- * Please see the License for the specific language governing rights and
- * limitations under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
+ * License for the specific language governing rights and limitations
+ * under the License.
  * 
  * @APPLE_LICENSE_HEADER_END@
  */
@@ -43,23 +40,20 @@
 
 ENTRY(video_scroll_up, TAG_NO_FRAME_USED)
 
-
-			lis		r8,hi16(MASK(MSR_VEC))			; Get the vector flag
-			mfmsr	r0								; Get the MSR 
-			ori		r8,r8,lo16(MASK(MSR_FP))		; Add the FP flag
-			mflr	r6								; Get the LR
-			andc	r0,r0,r8						; Clear VEC and FP
-			ori		r7,r8,lo16(MASK(MSR_EE))		; Drop EE and DR
-			andc	r7,r0,r7						; Clear VEC, FP, and EE
-			ori		r7,r7,MASK(MSR_FP)				; Turn floating point back on
-			stwu	r1,-(FM_SIZE+16)(r1)			; Get space for a couple of registers on stack
-			stw		r6,(FM_SIZE+16+FM_LR_SAVE)(r1)	; Save the return
+			mfmsr	r0									/* Get the MSR */
+			rlwinm	r0,r0,0,MSR_FP_BIT+1,MSR_FP_BIT-1	; Force floating point off
+			rlwinm	r0,r0,0,MSR_VEC_BIT+1,MSR_VEC_BIT-1	; Force vectors off
+			mflr	r6									/* Get the LR */
+			ori		r7,r0,1<<(31-MSR_FP_BIT)			/* Turn on floating point */
+			stwu	r1,-(FM_SIZE+16)(r1)				/* Get space for a couple of registers on stack */
+			rlwinm	r7,r7,0,MSR_EE_BIT+1,MSR_EE_BIT-1	/* Turn off interrupts */
+			stw		r6,(FM_SIZE+16+FM_LR_SAVE)(r1)		/* Save the return */
 			
-			mtmsr	r7								; Turn on FPU
-			isync									; Wait for it 
+			mtmsr	r7									/* Turn on FPU */
+			isync										/* Wait for it */
 			
-vsufpuon1:	stfd	f0,(FM_SIZE+0)(r1)				; Save one register
-			stfd	f1,(FM_SIZE+8)(r1)				; and the second
+vsufpuon1:	stfd	f0,(FM_SIZE+0)(r1)					/* Save one register */
+			stfd	f1,(FM_SIZE+8)(r1)					/* and the second */
 
 /* ok, now we can use the FPU registers to do some fast copying
  */
@@ -101,23 +95,20 @@ ENTRY(video_scroll_down, TAG_NO_FRAME_USED)
 	 */
 	
 
-			lis		r8,hi16(MASK(MSR_VEC))			; Get the vector flag
-			mfmsr	r0								; Get the MSR 
-			ori		r8,r8,lo16(MASK(MSR_FP))		; Add the FP flag
-			mflr	r6								; Get the LR
-			andc	r0,r0,r8						; Clear VEC and FP
-			ori		r7,r8,lo16(MASK(MSR_EE))		; Drop EE and DR
-			andc	r7,r0,r7						; Clear VEC, FP, DR, and EE
-			ori		r7,r7,MASK(MSR_FP)				; Turn on floating point 
-			stwu	r1,-(FM_SIZE+16)(r1)			; Get space for a couple of registers on stack
-			stw		r6,(FM_SIZE+16+FM_LR_SAVE)(r1)	; Save the return
+			mfmsr	r0									/* Get the MSR */
+			rlwinm	r0,r0,0,MSR_FP_BIT+1,MSR_FP_BIT-1	; Force floating point off
+			rlwinm	r0,r0,0,MSR_VEC_BIT+1,MSR_VEC_BIT-1	; Force vectors off
+			mflr	r6									/* Get the LR */
+			ori		r7,r0,1<<(31-MSR_FP_BIT)			/* Turn on floating point */
+			stwu	r1,-(FM_SIZE+16)(r1)				/* Get space for a couple of registers on stack */
+			rlwinm	r7,r7,0,MSR_EE_BIT+1,MSR_EE_BIT-1	/* Turn off interrupts */
+			stw		r6,(FM_SIZE+16+FM_LR_SAVE)(r1)		/* Save the return */
 			
-			mtmsr	r7								; Turn on FPU
-			isync									; Wait for it 
+			mtmsr	r7									/* Turn on FPU */
+			isync										/* Wait for it */
 			
-vsdfpuon1:	stfd	f0,(FM_SIZE+0)(r1)				; Save one register
-			stfd	f1,(FM_SIZE+8)(r1)				; and the second
-
+vsdfpuon1:	stfd	f0,(FM_SIZE+0)(r1)					/* Save one register */
+			stfd	f1,(FM_SIZE+8)(r1)					/* and the second */
 
 /* ok, now we can use the FPU registers to do some fast copying	 */
 

@@ -3,22 +3,19 @@
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
- * Copyright (c) 1999-2003 Apple Computer, Inc.  All Rights Reserved.
+ * The contents of this file constitute Original Code as defined in and
+ * are subject to the Apple Public Source License Version 1.1 (the
+ * "License").  You may not use this file except in compliance with the
+ * License.  Please obtain a copy of the License at
+ * http://www.apple.com/publicsource and read it before using this file.
  * 
- * This file contains Original Code and/or Modifications of Original Code
- * as defined in and that are subject to the Apple Public Source License
- * Version 2.0 (the 'License'). You may not use this file except in
- * compliance with the License. Please obtain a copy of the License at
- * http://www.opensource.apple.com/apsl/ and read it before using this
- * file.
- * 
- * The Original Code and all software distributed under the License are
- * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * This Original Code and all software distributed under the License are
+ * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
- * Please see the License for the specific language governing rights and
- * limitations under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
+ * License for the specific language governing rights and limitations
+ * under the License.
  * 
  * @APPLE_LICENSE_HEADER_END@
  */
@@ -68,8 +65,8 @@
 #include <ppc/proc_reg.h>
 #include <ppc/savearea.h>
 
-typedef	addr64_t db_addr_t;	/* address - unsigned */
-typedef	uint64_t db_expr_t;	/* expression - signed???  try unsigned */
+typedef	vm_offset_t	db_addr_t;	/* address - unsigned */
+typedef	int		db_expr_t;	/* expression - signed */
 
 typedef struct savearea db_regs_t;
 db_regs_t	ddb_regs;	/* register state */
@@ -104,7 +101,7 @@ int db_inst_store(unsigned long);
 	db_phys_eq(task1,addr1,task2,addr2)
 #define DB_VALID_KERN_ADDR(addr)				\
 	((addr) >= VM_MIN_KERNEL_ADDRESS && 			\
-	 (addr) < vm_last_addr)
+	 (addr) < VM_MAX_KERNEL_ADDRESS)
 #define DB_VALID_ADDRESS(addr,user)				\
 	((!(user) && DB_VALID_KERN_ADDR(addr)) ||		\
 	 ((user) && (addr) < VM_MAX_ADDRESS))
@@ -130,6 +127,10 @@ extern db_addr_t	db_disasm(
 				db_addr_t	loc,
 				boolean_t	altfmt,
 				task_t		task);
+extern vm_offset_t	db_kvtophys( 
+				space_t space,
+				vm_offset_t va);
+
 extern void		db_read_bytes(
 				vm_offset_t	addr,
 				int		size,
@@ -182,6 +183,11 @@ extern void		kdb_on(
 				int			cpu);
 extern void		cnpollc(
 				boolean_t		on);
+				
+extern void		db_phys_copy(
+				vm_offset_t, 
+				vm_offset_t, 
+				vm_size_t);
 
 extern boolean_t	db_phys_cmp(
 				vm_offset_t, 

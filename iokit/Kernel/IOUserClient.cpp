@@ -3,22 +3,19 @@
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
- * Copyright (c) 1999-2003 Apple Computer, Inc.  All Rights Reserved.
+ * The contents of this file constitute Original Code as defined in and
+ * are subject to the Apple Public Source License Version 1.1 (the
+ * "License").  You may not use this file except in compliance with the
+ * License.  Please obtain a copy of the License at
+ * http://www.apple.com/publicsource and read it before using this file.
  * 
- * This file contains Original Code and/or Modifications of Original Code
- * as defined in and that are subject to the Apple Public Source License
- * Version 2.0 (the 'License'). You may not use this file except in
- * compliance with the License. Please obtain a copy of the License at
- * http://www.opensource.apple.com/apsl/ and read it before using this
- * file.
- * 
- * The Original Code and all software distributed under the License are
- * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * This Original Code and all software distributed under the License are
+ * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
- * Please see the License for the specific language governing rights and
- * limitations under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
+ * License for the specific language governing rights and limitations
+ * under the License.
  * 
  * @APPLE_LICENSE_HEADER_END@
  */
@@ -70,8 +67,6 @@ extern ipc_port_t master_device_port;
 
 extern void iokit_retain_port( ipc_port_t port );
 extern void iokit_release_port( ipc_port_t port );
-
-extern kern_return_t iokit_switch_object_port( ipc_port_t port, io_object_t obj, ipc_kobject_type_t type );
 
 #include <vm/vm_map.h>
 
@@ -224,36 +219,7 @@ void IOMachPort::releasePortForObject( OSObject * obj,
 void IOUserClient::destroyUserReferences( OSObject * obj )
 {
     IOMachPort::releasePortForObject( obj, IKOT_IOKIT_OBJECT );
-
-    // panther, 3160200
-    // IOMachPort::releasePortForObject( obj, IKOT_IOKIT_CONNECT );
-
-    OSDictionary * dict;
-
-    IOTakeLock( gIOObjectPortLock);
-    obj->retain();
-
-    if( (dict = IOMachPort::dictForType( IKOT_IOKIT_CONNECT )))
-    {
-	IOMachPort * port;
-	port = (IOMachPort *) dict->getObject( (const OSSymbol *) obj );
-	if (port)
-	{
-	    IOUserClient * uc;
-	    if ((uc = OSDynamicCast(IOUserClient, obj)) && uc->mappings)
-	    {
-		dict->setObject((const OSSymbol *) uc->mappings, port);
-		iokit_switch_object_port(port->port, uc->mappings, IKOT_IOKIT_CONNECT);
-
-		uc->mappings->release();
-		uc->mappings = 0;
-	    }
-	    dict->removeObject( (const OSSymbol *) obj );
-	}
-    }
-    obj->release();
-    IOUnlock( gIOObjectPortLock);
-
+    IOMachPort::releasePortForObject( obj, IKOT_IOKIT_CONNECT );
 }
 
 mach_port_name_t IOMachPort::makeSendRightForTask( task_t task,
@@ -322,7 +288,8 @@ iokit_client_died( io_object_t obj, ipc_port_t /* port */,
     if( (IKOT_IOKIT_CONNECT == type)
      && (client = OSDynamicCast( IOUserClient, obj )))
 	client->clientDied();
-    if( (map = OSDynamicCast( IOMemoryMap, obj )))
+    else if( (IKOT_IOKIT_OBJECT == type)
+     && (map = OSDynamicCast( IOMemoryMap, obj )))
 	map->taskDied();
 
     return( kIOReturnSuccess );
@@ -1675,10 +1642,6 @@ kern_return_t is_io_service_open(
 kern_return_t is_io_service_close(
 	io_object_t connection )
 {
-    OSSet * mappings;
-    if ((mappings = OSDynamicCast(OSSet, connection)))
-	return( kIOReturnSuccess );
-
     CHECK( IOUserClient, connection, client );
 
     client->clientClose();

@@ -3,22 +3,19 @@
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
- * Copyright (c) 1999-2003 Apple Computer, Inc.  All Rights Reserved.
+ * The contents of this file constitute Original Code as defined in and
+ * are subject to the Apple Public Source License Version 1.1 (the
+ * "License").  You may not use this file except in compliance with the
+ * License.  Please obtain a copy of the License at
+ * http://www.apple.com/publicsource and read it before using this file.
  * 
- * This file contains Original Code and/or Modifications of Original Code
- * as defined in and that are subject to the Apple Public Source License
- * Version 2.0 (the 'License'). You may not use this file except in
- * compliance with the License. Please obtain a copy of the License at
- * http://www.opensource.apple.com/apsl/ and read it before using this
- * file.
- * 
- * The Original Code and all software distributed under the License are
- * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * This Original Code and all software distributed under the License are
+ * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
- * Please see the License for the specific language governing rights and
- * limitations under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
+ * License for the specific language governing rights and limitations
+ * under the License.
  * 
  * @APPLE_LICENSE_HEADER_END@
  */
@@ -47,6 +44,7 @@
 #include <ppc/proc_reg.h>
 #include <ppc/mem.h>
 #include <ppc/pmap.h>
+#include <ppc/pmap_internals.h>
 #include <ppc/Firmware.h>
 #include <ppc/mappings.h>
 #include <ppc/exception.h>
@@ -125,26 +123,25 @@ unsigned int	backchain = 0;									/* Debug flag */
  *		Allocate our initial context save areas.  As soon as we do this,
  *		we can take an interrupt. We do the saveareas here, 'cause they're guaranteed
  *		to be at least page aligned.
- *
- *		Note: these initial saveareas are all to be allocated from V=R, less than 4GB
- *		space.
  */
 
 
-void savearea_init(vm_offset_t addr) {
+void savearea_init(vm_offset_t *addrx) {
 
-	savearea_comm	*savec;
-	vm_offset_t	save;
+	savearea_comm	*savec, *savec2, *saveprev;
+	vm_offset_t		save, save2, addr;
 	int i;
 
 	
 	saveanchor.savetarget	= InitialSaveTarget;		/* Initial target value */
 	saveanchor.saveinuse	= 0;						/* Number of areas in use */
 
-	saveanchor.savefree    = 0;							/* Remember the start of the free chain */
+	saveanchor.savefree = 0;							/* Remember the start of the free chain */
 	saveanchor.savefreecnt = 0;							/* Remember the length */
-	saveanchor.savepoolfwd = (addr64_t)&saveanchor;		/* Remember pool forward */
-	saveanchor.savepoolbwd = (addr64_t)&saveanchor;		/* Remember pool backward */
+	saveanchor.savepoolfwd = (unsigned int *)&saveanchor;	/* Remember pool forward */
+	saveanchor.savepoolbwd = (unsigned int *)&saveanchor;	/* Remember pool backward */
+
+	addr = *addrx;										/* Make this easier for ourselves */
 
 	save = 	addr;										/* Point to the whole block of blocks */	
 
@@ -153,7 +150,7 @@ void savearea_init(vm_offset_t addr) {
  */
 
 
-	for(i=0; i < BackPocketSaveBloks; i++) {			/* Initialize the back pocket saveareas */
+	for(i=0; i < 8; i++) {								/* Initialize the back pocket saveareas */
 
 		savec = (savearea_comm *)save;					/* Get the control area for this one */
 
@@ -161,7 +158,7 @@ void savearea_init(vm_offset_t addr) {
 		savec->sac_vrswap = 0;							/* V=R, so the translation factor is 0 */
 		savec->sac_flags = sac_perm;					/* Mark it permanent */
 		savec->sac_flags |= 0x0000EE00;					/* Debug eyecatcher */
-		save_queue((uint32_t)savec >> 12);				/* Add page to savearea lists */
+		save_queue((savearea *)savec);					/* Add page to savearea lists */
 		save += PAGE_SIZE;								/* Jump up to the next one now */
 	
 	}
@@ -178,8 +175,8 @@ void savearea_init(vm_offset_t addr) {
 	saveanchor.savefree = 0;							/* Remember the start of the free chain */
 	saveanchor.savefreecnt = 0;							/* Remember the length */
 	saveanchor.saveadjust = 0;							/* Set none needed yet */
-	saveanchor.savepoolfwd = (addr64_t)&saveanchor;		/* Remember pool forward */
-	saveanchor.savepoolbwd = (addr64_t)&saveanchor;		/* Remember pool backward */
+	saveanchor.savepoolfwd = (unsigned int *)&saveanchor;	/* Remember pool forward */
+	saveanchor.savepoolbwd = (unsigned int *)&saveanchor;	/* Remember pool backward */
 
 	for(i=0; i < InitialSaveBloks; i++) {				/* Initialize the saveareas */
 
@@ -189,37 +186,40 @@ void savearea_init(vm_offset_t addr) {
 		savec->sac_vrswap = 0;							/* V=R, so the translation factor is 0 */
 		savec->sac_flags = sac_perm;					/* Mark it permanent */
 		savec->sac_flags |= 0x0000EE00;					/* Debug eyecatcher */
-		save_queue((uint32_t)savec >> 12);				/* Add page to savearea lists */
+		save_queue((savearea *)savec);					/* Add page to savearea lists */
 		save += PAGE_SIZE;								/* Jump up to the next one now */
 	
 	}
+
+	*addrx = save;										/* Move the free storage lowwater mark */
 
 /*
  *	We now have a free list that has our initial number of entries  
  *	The local qfret lists is empty.  When we call save_get below it will see that
  *	the local list is empty and fill it for us.
  *
- *	It is ok to call save_get here because all initial saveareas are V=R in less
- *  than 4GB space, so 32-bit addressing is ok.
- *
+ *	It is ok to call save_get_phys here because even though if we are translation on, we are still V=R and
+ *	running with BAT registers so no interruptions.  Regular interruptions will be off.  Using save_get
+ *	would be wrong if the tracing was enabled--it would cause an exception.
  */
 
-/*
- * This will populate the local list  and get the first one for the system
- */ 	
-	per_proc_info[0].next_savearea = (vm_offset_t)save_get();
-
+	save2 = (vm_offset_t)save_get_phys();				/* This will populate the local list  
+														   and get the first one for the system */
+	per_proc_info[0].next_savearea = (unsigned int)save2; /* Tell the exception handler about it */
+	
 /*
  *	The system is now able to take interruptions
  */
+	
 	return;
+
 }
 
 
 
 
 /*
- *		Obtains a savearea.  If the free list needs size adjustment it happens here.
+ *		Returns a savearea.  If the free list needs size adjustment it happens here.
  *		Don't actually allocate the savearea until after the adjustment is done.
  */
 
@@ -267,10 +267,8 @@ void save_release(struct savearea *save) {				/* Release a save area */
 
 void save_adjust(void) {
 	
-	savearea_comm	*sctl, *sctlnext, *freepage;
+	savearea_comm	*sctl, *sctlnext, *freepool, *freepage, *realpage;
 	kern_return_t ret;
-	uint64_t vtopmask;
-	ppnum_t physpage;
 
 	if(saveanchor.saveadjust < 0) 					{	/* Do we need to adjust down? */
 			
@@ -293,18 +291,15 @@ void save_adjust(void) {
 				panic("Whoops...  Not a bit of wired memory left for saveareas\n");
 			}
 			
-			physpage = pmap_find_phys(kernel_pmap, (vm_offset_t)freepage);	/* Find physical page */
-			if(!physpage) {								/* See if we actually have this mapped*/
-				panic("save_adjust: wired page not mapped - va = %08X\n", freepage);	/* Die */
-			}
+			realpage = (savearea_comm *)pmap_extract(kernel_pmap, (vm_offset_t)freepage);	/* Get the physical */
 			
 			bzero((void *)freepage, PAGE_SIZE);			/* Clear it all to zeros */
 			freepage->sac_alloc = 0;					/* Mark all entries taken */
-			freepage->sac_vrswap = ((uint64_t)physpage << 12) ^ (uint64_t)freepage;	/* XOR to calculate conversion mask */
+			freepage->sac_vrswap = (unsigned int)freepage ^ (unsigned int)realpage;		/* Form mask to convert V to R and vice versa */
 	
 			freepage->sac_flags |= 0x0000EE00;			/* Set debug eyecatcher */
 						
-			save_queue(physpage);						/* Add all saveareas on page to free list */
+			save_queue((savearea *)realpage);			/* Add all saveareas on page to free list */
 		}
 	}
 }

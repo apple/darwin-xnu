@@ -3,22 +3,19 @@
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
- * Copyright (c) 1999-2003 Apple Computer, Inc.  All Rights Reserved.
+ * The contents of this file constitute Original Code as defined in and
+ * are subject to the Apple Public Source License Version 1.1 (the
+ * "License").  You may not use this file except in compliance with the
+ * License.  Please obtain a copy of the License at
+ * http://www.apple.com/publicsource and read it before using this file.
  * 
- * This file contains Original Code and/or Modifications of Original Code
- * as defined in and that are subject to the Apple Public Source License
- * Version 2.0 (the 'License'). You may not use this file except in
- * compliance with the License. Please obtain a copy of the License at
- * http://www.opensource.apple.com/apsl/ and read it before using this
- * file.
- * 
- * The Original Code and all software distributed under the License are
- * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * This Original Code and all software distributed under the License are
+ * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
- * Please see the License for the specific language governing rights and
- * limitations under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
+ * License for the specific language governing rights and limitations
+ * under the License.
  * 
  * @APPLE_LICENSE_HEADER_END@
  */
@@ -68,7 +65,6 @@
 #include <sys/proc.h>
 #include <sys/malloc.h>
 #include <sys/queue.h>
-#include <vm/pmap.h>
 
 #include <kdebug.h>
 
@@ -76,17 +72,12 @@
 #define DBG_UIO_COPYOUT 16
 #define DBG_UIO_COPYIN  17
 
+
 int
 uiomove(cp, n, uio)
 	register caddr_t cp;
 	register int n;
 	register struct uio *uio;
-{
-	return uiomove64((addr64_t)((unsigned int)cp), n, uio);
-}
-
-int
-uiomove64(addr64_t cp, int n, struct uio *uio)
 {
 	register struct iovec *iov;
 	u_int cnt;
@@ -116,22 +107,22 @@ uiomove64(addr64_t cp, int n, struct uio *uio)
 			if (uio->uio_rw == UIO_READ)
 			  {
 			        KERNEL_DEBUG((FSDBG_CODE(DBG_FSRW, DBG_UIO_COPYOUT)) | DBG_FUNC_START,
-					 (caddr_t)cp, iov->iov_base, cnt, 0,0);
+					 cp, iov->iov_base, cnt, 0,0);
 
-				error = copyout((caddr_t)cp, iov->iov_base, cnt);
+				error = copyout(cp, iov->iov_base, cnt);
 
 			        KERNEL_DEBUG((FSDBG_CODE(DBG_FSRW, DBG_UIO_COPYOUT)) | DBG_FUNC_END,
-					 (caddr_t)cp, iov->iov_base, cnt, 0,0);
+					 cp, iov->iov_base, cnt, 0,0);
 			  }
 			else
 			  {
 			        KERNEL_DEBUG((FSDBG_CODE(DBG_FSRW, DBG_UIO_COPYIN)) | DBG_FUNC_START,
-					 iov->iov_base, (caddr_t)cp, cnt, 0,0);
+					 iov->iov_base, cp, cnt, 0,0);
 
-			        error = copyin(iov->iov_base, (caddr_t)cp, cnt);
+			        error = copyin(iov->iov_base, cp, cnt);
 
 			        KERNEL_DEBUG((FSDBG_CODE(DBG_FSRW, DBG_UIO_COPYIN)) | DBG_FUNC_END,
-					 iov->iov_base, (caddr_t)cp, cnt, 0,0);
+					 iov->iov_base, cp, cnt, 0,0);
 			  }
 			if (error)
 				return (error);
@@ -152,8 +143,8 @@ uiomove64(addr64_t cp, int n, struct uio *uio)
 			        KERNEL_DEBUG((FSDBG_CODE(DBG_FSRW, DBG_UIO_COPYOUT)) | DBG_FUNC_START,
 					 cp, iov->iov_base, cnt, 1,0);
 
-				if (error = copypv((addr64_t)cp, (addr64_t)((unsigned int)iov->iov_base), cnt, cppvPsrc | cppvNoRefSrc)) 	/* Copy physical to virtual */
-				        error = EFAULT;
+				error = copyp2v(cp, iov->iov_base, cnt);
+
 
 			        KERNEL_DEBUG((FSDBG_CODE(DBG_FSRW, DBG_UIO_COPYOUT)) | DBG_FUNC_END,
 					 cp, iov->iov_base, cnt, 1,0);
@@ -163,8 +154,7 @@ uiomove64(addr64_t cp, int n, struct uio *uio)
 			        KERNEL_DEBUG((FSDBG_CODE(DBG_FSRW, DBG_UIO_COPYIN)) | DBG_FUNC_START,
 					 iov->iov_base, cp, cnt, 1,0);
 
-				if (error = copypv((addr64_t)((unsigned int)iov->iov_base), (addr64_t)cp, cnt, cppvPsnk | cppvNoRefSrc | cppvNoModSnk))	/* Copy virtual to physical */
-				        error = EFAULT;
+				panic("copyv2p not implemented yet\n");
 
 			        KERNEL_DEBUG((FSDBG_CODE(DBG_FSRW, DBG_UIO_COPYIN)) | DBG_FUNC_END,
 					 iov->iov_base, cp, cnt, 1,0);

@@ -3,22 +3,19 @@
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
- * Copyright (c) 1999-2003 Apple Computer, Inc.  All Rights Reserved.
+ * The contents of this file constitute Original Code as defined in and
+ * are subject to the Apple Public Source License Version 1.1 (the
+ * "License").  You may not use this file except in compliance with the
+ * License.  Please obtain a copy of the License at
+ * http://www.apple.com/publicsource and read it before using this file.
  * 
- * This file contains Original Code and/or Modifications of Original Code
- * as defined in and that are subject to the Apple Public Source License
- * Version 2.0 (the 'License'). You may not use this file except in
- * compliance with the License. Please obtain a copy of the License at
- * http://www.opensource.apple.com/apsl/ and read it before using this
- * file.
- * 
- * The Original Code and all software distributed under the License are
- * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * This Original Code and all software distributed under the License are
+ * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
- * Please see the License for the specific language governing rights and
- * limitations under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
+ * License for the specific language governing rights and limitations
+ * under the License.
  * 
  * @APPLE_LICENSE_HEADER_END@
  */
@@ -64,6 +61,7 @@
 
 #ifdef __ppc__
 #include <ppc/mappings.h>
+#include <ppc/pmap_internals.h>
 #endif
 #include <IOKit/IOTypes.h>
 
@@ -82,7 +80,7 @@ extern ipc_port_t iokit_port_for_object( io_object_t obj,
 			ipc_kobject_type_t type );
 
 extern kern_return_t iokit_client_died( io_object_t obj,
-                        ipc_port_t port, ipc_kobject_type_t type, mach_port_mscount_t * mscount );
+                        ipc_port_t port, ipc_kobject_type_t type, mach_port_mscount_t mscount );
 
 extern kern_return_t
 iokit_client_memory_for_type(
@@ -281,14 +279,6 @@ iokit_destroy_object_port( ipc_port_t port )
     return( KERN_SUCCESS);
 }
 
-EXTERN kern_return_t
-iokit_switch_object_port( ipc_port_t port, io_object_t obj, ipc_kobject_type_t type )
-{
-    ipc_kobject_set( port, (ipc_kobject_t) obj, type);
-
-    return( KERN_SUCCESS);
-}
-
 EXTERN mach_port_name_t
 iokit_make_send_right( task_t task, io_object_t obj, ipc_kobject_type_t type )
 {
@@ -389,80 +379,67 @@ iokit_notify( mach_msg_header_t * msg )
     }
 }
 
-/* need to create a pmap function to generalize */
-unsigned int IODefaultCacheBits(addr64_t pa)
-{
-    unsigned int	flags;
 #ifndef i386
-    struct phys_entry * pp;
+unsigned int IOTranslateCacheBits(struct phys_entry *pp)
+{
+	unsigned int	flags;
+	unsigned int	memattr;
 
-    // Find physical address
-    if ((pp = pmap_find_physentry(pa >> 12))) {
-	// Use physical attributes as default
-	// NOTE: DEVICE_PAGER_FLAGS are made to line up
-	flags = VM_MEM_COHERENT;						/* We only support coherent memory */
-	if(pp->ppLink & ppG) flags |= VM_MEM_GUARDED;	/* Add in guarded if it is */
-	if(pp->ppLink & ppI) flags |= VM_MEM_NOT_CACHEABLE;	/* Add in cache inhibited if so */
-    } else
-	// If no physical, just hard code attributes
-        flags = VM_WIMG_IO;
-#else
-    extern vm_offset_t	avail_end;
+	/* need to create a pmap function to generalize */
+	memattr = ((pp->pte1 & 0x00000078) >> 3);
 
-    if (pa < avail_end)
-	flags = VM_WIMG_COPYBACK;
-    else
-	flags = VM_WIMG_IO;
-#endif
-
-    return flags;
+	/* NOTE: DEVICE_PAGER_FLAGS are made to line up */
+	flags = memattr & VM_WIMG_MASK;
+	return flags;
 }
+#endif
 
 kern_return_t IOMapPages(vm_map_t map, vm_offset_t va, vm_offset_t pa,
 			vm_size_t length, unsigned int options)
 {
     vm_size_t	off;
     vm_prot_t	prot;
-    unsigned int flags;
-    pmap_t 	 pmap = map->pmap;
+    int			memattr;
+    struct phys_entry *pp;
+    pmap_t 		pmap = map->pmap;
 
     prot = (options & kIOMapReadOnly)
 		? VM_PROT_READ : (VM_PROT_READ|VM_PROT_WRITE);
 
-    switch(options & kIOMapCacheMask ) {			/* What cache mode do we need? */
-
-	case kIOMapDefaultCache:
-	default:
-	    flags = IODefaultCacheBits(pa);
-	    break;
-
-	case kIOMapInhibitCache:
-	    flags = VM_WIMG_IO;
-	    break;
-
-	case kIOMapWriteThruCache:
-	    flags = VM_WIMG_WTHRU;
-	    break;
-
-	case kIOWriteCombineCache:
-	    flags = VM_WIMG_WCOMB;
-	    break;
-
-	case kIOMapCopybackCache:
-	    flags = VM_WIMG_COPYBACK;
-	    break;
-    }
 #if __ppc__
 
-    // Set up a block mapped area
-    pmap_map_block(pmap, (addr64_t)va, (ppnum_t)(pa >> 12), length, prot, flags, 0);
+	switch(options & kIOMapCacheMask ) {			/* What cache mode do we need? */
 
+		case kIOMapDefaultCache:
+		default:
+			if(pp = pmap_find_physentry(pa)) {		/* Find physical address */
+				memattr = ((pp->pte1 & 0x00000078) >> 3);	/* Use physical attributes as default */
+			}
+			else {									/* If no physical, just hard code attributes */
+				memattr = PTE_WIMG_UNCACHED_COHERENT_GUARDED;
+			}
+			break;
+	
+		case kIOMapInhibitCache:
+			memattr = PTE_WIMG_UNCACHED_COHERENT_GUARDED;
+			break;
+	
+		case kIOMapWriteThruCache:
+			memattr = PTE_WIMG_WT_CACHED_COHERENT_GUARDED;
+			break;
+
+		case kIOMapCopybackCache:
+			memattr = PTE_WIMG_CB_CACHED_COHERENT;
+			break;
+	}
+
+	pmap_map_block(pmap, va, pa, length, prot, memattr, 0);	/* Set up a block mapped area */
+	
 #else
-//  enter each page's physical address in the target map
-
-    for (off = 0; off < length; off += page_size)
-	pmap_enter(pmap, va + off, (pa + off) >> 12, prot, flags, TRUE);
-
+// 	enter each page's physical address in the target map
+	for (off = 0; off < length; off += page_size) {		/* Loop for the whole length */
+	 	pmap_enter(pmap, va + off, pa + off, prot, VM_WIMG_USE_DEFAULT, TRUE);	/* Map it in */
+	}
 #endif
 
     return( KERN_SUCCESS );
@@ -472,7 +449,7 @@ kern_return_t IOUnmapPages(vm_map_t map, vm_offset_t va, vm_size_t length)
 {
     pmap_t	pmap = map->pmap;
 
-    pmap_remove(pmap, trunc_page_64(va), round_page_64(va + length));
+    pmap_remove(pmap, trunc_page(va), round_page(va + length));
 
     return( KERN_SUCCESS );
 }

@@ -3,22 +3,19 @@
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
- * Copyright (c) 1999-2003 Apple Computer, Inc.  All Rights Reserved.
+ * The contents of this file constitute Original Code as defined in and
+ * are subject to the Apple Public Source License Version 1.1 (the
+ * "License").  You may not use this file except in compliance with the
+ * License.  Please obtain a copy of the License at
+ * http://www.apple.com/publicsource and read it before using this file.
  * 
- * This file contains Original Code and/or Modifications of Original Code
- * as defined in and that are subject to the Apple Public Source License
- * Version 2.0 (the 'License'). You may not use this file except in
- * compliance with the License. Please obtain a copy of the License at
- * http://www.opensource.apple.com/apsl/ and read it before using this
- * file.
- * 
- * The Original Code and all software distributed under the License are
- * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * This Original Code and all software distributed under the License are
+ * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
- * Please see the License for the specific language governing rights and
- * limitations under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
+ * License for the specific language governing rights and limitations
+ * under the License.
  * 
  * @APPLE_LICENSE_HEADER_END@
  */
@@ -49,8 +46,6 @@
 #include <cpus.h>
 #include <ppc/asm.h>
 #include <ppc/proc_reg.h>
-#include <ppc/spec_reg.h>
-#include <mach/ppc/vm_param.h>
 #include <assym.s>
 
 ;
@@ -61,19 +56,19 @@
 
 			.data
 
-/*		4096-byte aligned areas */
+/*		1024-byte aligned areas */
 
 		.globl	EXT(per_proc_info)
-		.align	12
+		.align	10
 EXT(per_proc_info):									; Per processor data area
-		.space	(ppSize*NCPUS),0				; (filled with 0s)
+		.fill	(ppSize*NCPUS)/4,4,0				; (filled with 0s)
 
 /*		512-byte aligned areas */
 
 		.globl	EXT(kernel_pmap_store)				; This is the kernel_pmap
 		.align	8
 EXT(kernel_pmap_store):
-		.set	.,.+pmapSize
+		.set	.,.+PMAP_SIZE
 
 
 /*		256-byte aligned areas */
@@ -87,6 +82,11 @@ EXT(GratefulDebWork):								; Enough for 2 rows of 8 chars of 16-pixel wide 32-
 		.align	8
 debstash:
 		.set	.,.+256
+
+		.globl	EXT(hw_counts)						; Counter banks per processor
+		.align	8
+EXT(hw_counts):
+		.set	.,.+(NCPUS*256)
 
 #if PREEMPTSTACK
 
@@ -103,11 +103,37 @@ EXT(DBGpreempt):
 
 /*		128-byte aligned areas */
 
+		.globl	EXT(saveanchor)
+		.align	7
+EXT(saveanchor):
+		.set	.,.+SVsize
+
 		.globl	EXT(mapCtl)
 		.align	7
 EXT(mapCtl):
 		.set	.,.+mapcsize
 
+		.globl	EXT(trcWork)
+		.align	7
+EXT(trcWork):
+		.long	EXT(traceTableBeg)					; The next trace entry to use
+#if DEBUG
+/*		.long	0x02000000 	*/						/* Only alignment exceptions enabled */
+		.long	0xFFFFFFFF 							/* All enabled */
+/*		.long	0xFBBFFFFF	*/						/* EXT and DEC disabled */
+/*		.long	0xFFBFFFFF	*/						/* DEC disabled */
+#else
+		.long	0x00000000							; All disabled on non-debug systems
+#endif
+		.long	EXT(traceTableBeg)					; Start of the trace table
+		.long	EXT(traceTableEnd)					; End (wrap point) of the trace
+		.long	0									; Saved mask while in debugger
+
+		.long	0
+		.long	0
+		.long	0
+		
+		
 		.globl	fwdisplock
 		.align	7
 fwdisplock:
@@ -168,6 +194,19 @@ EXT(QNaNbarbarian):
 		.long	0x7FFFDEAD							/* This is a quiet not-a-number which is a "known" debug value */
 		.long	0x7FFFDEAD							/* This is a quiet not-a-number which is a "known" debug value */
 
+		.globl	EXT(dgWork)
+		.align	5
+EXT(dgWork):
+		.long	0
+		.long	0
+		.long	0
+		.long	0
+		.long	0
+		.long	0
+		.long	0
+		.long	0
+
+
 /*		8-byte aligned areas */
 
     	.globl  EXT(FloatInit)
@@ -197,41 +236,3 @@ EXT(dbfloats):
 		.align	3
 EXT(dbspecrs):
 		.set	.,.+(80*4)
-
-/*
- *		Interrupt and debug stacks go here
- */
- 	
-		.align  PPC_PGSHIFT
-     	.globl  EXT(FixedStackStart)
-EXT(FixedStackStart):
-     
-	 	.globl  EXT(intstack)
-EXT(intstack):
-		.set	.,.+INTSTACK_SIZE*NCPUS
-	
-/* Debugger stack - used by the debugger if present */
-/* NOTE!!! Keep the debugger stack right after the interrupt stack */
-
-    	.globl  EXT(debstack)
-EXT(debstack):
-		.set	., .+KERNEL_STACK_SIZE*NCPUS
-     
-		 .globl  EXT(FixedStackEnd)
-EXT(FixedStackEnd):
-
-		.align	ALIGN
-   		.globl  EXT(intstack_top_ss)
-EXT(intstack_top_ss):
-		.long	EXT(intstack)+INTSTACK_SIZE-FM_SIZE			/* intstack_top_ss points to the top of interrupt stack */
-
-		.align	ALIGN
-   	 	.globl  EXT(debstack_top_ss)	
-EXT(debstack_top_ss):
-
-		.long	EXT(debstack)+KERNEL_STACK_SIZE-FM_SIZE		/* debstack_top_ss points to the top of debug stack */
-
-    	.globl  EXT(debstackptr)
-EXT(debstackptr):	
-		.long	EXT(debstack)+KERNEL_STACK_SIZE-FM_SIZE
-

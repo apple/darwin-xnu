@@ -3,28 +3,204 @@
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
- * Copyright (c) 1999-2003 Apple Computer, Inc.  All Rights Reserved.
+ * The contents of this file constitute Original Code as defined in and
+ * are subject to the Apple Public Source License Version 1.1 (the
+ * "License").  You may not use this file except in compliance with the
+ * License.  Please obtain a copy of the License at
+ * http://www.apple.com/publicsource and read it before using this file.
  * 
- * This file contains Original Code and/or Modifications of Original Code
- * as defined in and that are subject to the Apple Public Source License
- * Version 2.0 (the 'License'). You may not use this file except in
- * compliance with the License. Please obtain a copy of the License at
- * http://www.opensource.apple.com/apsl/ and read it before using this
- * file.
- * 
- * The Original Code and all software distributed under the License are
- * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * This Original Code and all software distributed under the License are
+ * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
- * Please see the License for the specific language governing rights and
- * limitations under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
+ * License for the specific language governing rights and limitations
+ * under the License.
  * 
  * @APPLE_LICENSE_HEADER_END@
  */
 /*
  * @OSF_COPYRIGHT@
  */
+/*
+ * HISTORY
+ * 
+ * Revision 1.1.1.1  1998/09/22 21:05:47  wsanchez
+ * Import of Mac OS X kernel (~semeria)
+ *
+ * Revision 1.2  1998/04/24 19:34:23  semeria
+ * KDP and KDB support
+ *
+ * Revision 1.1.1.1  1998/03/07 02:26:09  wsanchez
+ * Import of OSF Mach kernel (~mburg)
+ *
+ * Revision 1.2.42.2  1997/09/12  17:15:15  stephen
+ * 	make x/x do zero fill right justified hex display
+ * 	[1997/09/12  16:31:04  stephen]
+ *
+ * Revision 1.2.42.1  1997/03/27  18:46:31  barbou
+ * 	Add 'p' option to the "examine" command - values in
+ * 	memory treated as addresses and rendered as sym+offset
+ * 	[1995/12/29  21:32:33  mod]
+ * 	ri-osc CR1560: make search command output address of any matching
+ * 	data it finds (so user knows it did something).
+ * 	[1995/09/20  15:24:55  bolinger]
+ * 	[97/02/25            barbou]
+ * 
+ * Revision 1.2.25.5  1996/01/09  19:15:38  devrcs
+ * 	Add db_print_loc() & db_print_inst() functions.
+ * 	Make 'l' display 32 bits and new 'q' to display 64 bits.
+ * 	Allow 'u' to display unsigned decimal values (same as 'U').
+ * 	Changed declarations of 'register foo' to 'register int foo'.
+ * 	[1995/12/01  21:42:03  jfraser]
+ * 
+ * 	Merged '64-bit safe' changes from DEC alpha port.
+ * 	[1995/11/21  18:02:58  jfraser]
+ * 
+ * Revision 1.2.25.4  1995/06/13  18:21:27  sjs
+ * 	Merge with flipc_shared.
+ * 	[95/05/22            sjs]
+ * 
+ * Revision 1.2.30.1  1995/04/03  17:35:17  randys
+ * 	Minor change; allow a repeat count to work properly when multiple
+ * 	modifier flags are given to the ddb 'x' command.  This allows,
+ * 	for instance, examination of multiple words in activations other
+ * 	than the current one.
+ * 	[95/04/03            randys]
+ * 
+ * Revision 1.2.25.3  1995/01/06  19:10:09  devrcs
+ * 	mk6 CR668 - 1.3b26 merge
+ * 	* Revision 1.2.6.7  1994/05/06  18:39:09  tmt
+ * 	Merged osc1.3dec/shared with osc1.3b19
+ * 	Merge Alpha changes into osc1.312b source code.
+ * 	64bit cleanup.
+ * 	* End1.3merge
+ * 	[1994/11/04  08:49:22  dwm]
+ * 
+ * Revision 1.2.25.2  1994/09/23  01:18:44  ezf
+ * 	change marker to not FREE
+ * 	[1994/09/22  21:09:44  ezf]
+ * 
+ * Revision 1.2.25.1  1994/06/11  21:11:43  bolinger
+ * 	Merge up to NMK17.2.
+ * 	[1994/06/11  20:01:31  bolinger]
+ * 
+ * Revision 1.2.23.1  1994/02/08  10:57:47  bernadat
+ * 	Fixed output of an examine command to have a power of 2
+ * 	number of fields.
+ * 	[93/09/29            paire]
+ * 
+ * 	Added dump of hexadecimal address in each line of examine command.
+ * 	Fixed beginning of line to be always located at position 0.
+ * 	[93/08/11            paire]
+ * 	[94/02/07            bernadat]
+ * 
+ * Revision 1.2.21.4  1994/03/17  22:35:27  dwm
+ * 	The infamous name change:  thread_activation + thread_shuttle = thread.
+ * 	[1994/03/17  21:25:43  dwm]
+ * 
+ * Revision 1.2.21.3  1994/01/12  17:50:40  dwm
+ * 	Coloc: initial restructuring to follow Utah model.
+ * 	[1994/01/12  17:13:08  dwm]
+ * 
+ * Revision 1.2.21.2  1993/10/12  16:38:58  dwm
+ * 	Print '\n' in x/s statements. [rwd]
+ * 	[1993/10/12  16:14:41  dwm]
+ * 
+ * Revision 1.2.6.5  1993/08/11  20:37:37  elliston
+ * 	Add ANSI Prototypes.  CR #9523.
+ * 	[1993/08/11  03:33:05  elliston]
+ * 
+ * Revision 1.2.6.4  1993/08/09  19:34:42  dswartz
+ * 	Add ANSI prototypes - CR#9523
+ * 	[1993/08/06  15:47:32  dswartz]
+ * 
+ * Revision 1.2.6.3  1993/07/27  18:27:07  elliston
+ * 	Add ANSI prototypes.  CR #9523.
+ * 	[1993/07/27  18:11:21  elliston]
+ * 
+ * Revision 1.2.6.2  1993/06/09  02:20:00  gm
+ * 	Added to OSF/1 R1.3 from NMK15.0.
+ * 	[1993/06/02  20:56:10  jeffc]
+ * 
+ * Revision 1.2  1993/04/19  16:01:58  devrcs
+ * 	Changes from mk78:
+ * 	Added void type to functions that needed it.
+ * 	Added init to 'size' in db_search_cmd(). Removed unused variables.
+ * 	Other cleanup to quiet gcc warnings.
+ * 	[92/05/16            jfriedl]
+ * 	x/u now examines current user space. x/t still examines user
+ * 	space of the the specified thread. x/tu is redundant.
+ * 	To examine an value as unsigned decimal, use x/U.
+ * 	[92/04/18            danner]
+ * 	[93/02/02            bruel]
+ * 
+ * 	Remember count argument when repeating commands instead of the
+ * 	default command, also apply all the formats to current address
+ * 	instead of incrementing addresses when switching to next format.
+ * 	[barbou@gr.osf.org]
+ * 
+ * 	Support 'A' format for print 'p' command [barbou@gr.osf.org]
+ * 	[92/12/03            bernadat]
+ * 
+ * Revision 1.1  1992/09/30  02:01:01  robert
+ * 	Initial revision
+ * 
+ * $EndLog$
+ */
+/* CMU_HIST */
+/*
+ * Revision 2.7  91/10/09  15:59:28  af
+ * 	 Revision 2.6.1.1  91/10/05  13:05:49  jeffreyh
+ * 	 	Supported non current task space data examination and search.
+ * 	 	Added 'm' format and db_xcdump to print with hex and characters.
+ * 	 	Added db_examine_{forward, backward}.
+ * 	 	Changed db_print_cmd to support variable number of parameters
+ * 	 	including string constant.
+ * 	 	Included "db_access.h".
+ * 	 	[91/08/29            tak]
+ * 
+ * Revision 2.6.1.1  91/10/05  13:05:49  jeffreyh
+ * 	Supported non current task space data examination and search.
+ * 	Added 'm' format and db_xcdump to print with hex and characters.
+ * 	Added db_examine_{forward, backward}.
+ * 	Changed db_print_cmd to support variable number of parameters
+ * 	including string constant.
+ * 	Included "db_access.h".
+ * 	[91/08/29            tak]
+ * 
+ * Revision 2.6  91/08/28  11:11:01  jsb
+ * 	Added 'A' flag to examine: just like 'a' (address), but prints addr
+ * 	as a procedure type, thus printing file/line info if available.
+ * 	Useful when called as 'x/Ai'.
+ * 	[91/08/13  18:14:55  jsb]
+ * 
+ * Revision 2.5  91/05/14  15:33:31  mrt
+ * 	Correcting copyright
+ * 
+ * Revision 2.4  91/02/05  17:06:20  mrt
+ * 	Changed to new Mach copyright
+ * 	[91/01/31  16:17:37  mrt]
+ * 
+ * Revision 2.3  90/11/07  16:49:23  rpd
+ * 	Added db_search_cmd, db_search.
+ * 	[90/11/06            rpd]
+ * 
+ * Revision 2.2  90/08/27  21:50:38  dbg
+ * 	Add 'r', 'z' to print and examine formats.
+ * 	Change calling sequence of db_disasm.
+ * 	db_examine sets db_prev and db_next instead of explicitly
+ * 	advancing dot.
+ * 	[90/08/20            dbg]
+ * 	Reflected changes in db_printsym()'s calling seq.
+ * 	[90/08/20            af]
+ * 	Reduce lint.
+ * 	[90/08/07            dbg]
+ * 	Created.
+ * 	[90/07/25            dbg]
+ * 
+ */
+/* CMU_ENDHIST */
 /* 
  * Mach Operating System
  * Copyright (c) 1991,1990 Carnegie Mellon University
@@ -269,10 +445,10 @@ db_examine(
 					sizeof(db_expr_t), FALSE, task );
 				    db_find_task_sym_and_offset( value,
 					&symName, &offset, task);
-				    db_printf("\n\t*%8llX(%8llX) = %s",
+				    db_printf("\n\t*%8x(%8X) = %s",
 						next_addr, value, symName );
 				    if( offset )  {
-					db_printf("+%llX", offset );
+					db_printf("+%X", offset );
 				    }
 				    next_addr += size;
 				}
@@ -288,7 +464,7 @@ db_examine(
 				    value = db_get_task_value(next_addr,
 							      sizeof (db_expr_t),
 							      TRUE,task);
-				    db_printf("%-*llr", width, value);
+				    db_printf("%-*r", width, value);
 				    next_addr += sizeof (db_expr_t);
 				}
 				if (sz > 0) {
@@ -298,11 +474,13 @@ db_examine(
 				    }
 				    value = db_get_task_value(next_addr, sz,
 							      TRUE, task);
-				    db_printf("%-*llR", width, value);
+				    db_printf("%-*R", width, value);
 				    next_addr += sz;
 				}
 				break;
+#ifdef APPLE
 			    case 'X':	/* unsigned hex */
+#endif
 			    case 'x':	/* unsigned hex */
 				for (sz = size, next_addr = addr;
 				     sz >= sizeof (db_expr_t);
@@ -314,10 +492,14 @@ db_examine(
 				    value = db_get_task_value(next_addr,
 							      sizeof (db_expr_t),
 							      FALSE,task);
+#ifdef APPLE
 			            if ( c == 'X')
-				      db_printf("%0*llX ", 2*size, value);
+				      db_printf("%0*X ", 2*size, value);
 				    else
-				      db_printf("%-*llx", width, value);
+				      db_printf("%-*x", width, value);
+#else
+				    db_printf("%-*x", width, value);
+#endif
 				    next_addr += sizeof (db_expr_t);
 			        }
 				if (sz > 0) {
@@ -327,10 +509,14 @@ db_examine(
 				    }
 				    value = db_get_task_value(next_addr, sz,
 							      FALSE, task);
+#ifdef APPLE
 			            if ( c == 'X')
-				      db_printf("%0*llX ", 2*size, value);
+				      db_printf("%0*X ", 2*size, value);
 				    else
-				      db_printf("%-*llX", width, value);
+				      db_printf("%-*X", width, value);
+#else
+				    db_printf("%-*X", width, value);
+#endif
 				    next_addr += sz;
 				}
 				break;
@@ -345,7 +531,7 @@ db_examine(
 				    value = db_get_task_value(next_addr,
 							      sizeof (db_expr_t),
 							      TRUE, task);
-				    db_printf("%-*llz", width, value);
+				    db_printf("%-*z", width, value);
 				    next_addr += sizeof (db_expr_t);
 				}
 				if (sz > 0) {
@@ -355,7 +541,7 @@ db_examine(
 				    }
 				    value = db_get_task_value(next_addr,sz,
 							      TRUE,task);
-				    db_printf("%-*llZ", width, value);
+				    db_printf("%-*Z", width, value);
 				    next_addr += sz;
 				}
 				break;
@@ -370,7 +556,7 @@ db_examine(
 				    value = db_get_task_value(next_addr,
 							      sizeof (db_expr_t),
 							      TRUE,task);
-				    db_printf("%-*lld", width, value);
+				    db_printf("%-*d", width, value);
 				    next_addr += sizeof (db_expr_t);
 				}
 				if (sz > 0) {
@@ -380,7 +566,7 @@ db_examine(
 				    }
 				    value = db_get_task_value(next_addr, sz,
 							      TRUE, task);
-				    db_printf("%-*llD", width, value);
+				    db_printf("%-*D", width, value);
 				    next_addr += sz;
 				}
 				break;
@@ -396,7 +582,7 @@ db_examine(
 				    value = db_get_task_value(next_addr,
 							      sizeof (db_expr_t),
 							      FALSE,task);
-				    db_printf("%-*llu", width, value);
+				    db_printf("%-*u", width, value);
 				    next_addr += sizeof (db_expr_t);
 				}
 				if (sz > 0) {
@@ -406,7 +592,7 @@ db_examine(
 				    }
 				    value = db_get_task_value(next_addr, sz,
 							      FALSE, task);
-				    db_printf("%-*llU", width, value);
+				    db_printf("%-*U", width, value);
 				    next_addr += sz;
 				}
 				break;
@@ -421,7 +607,7 @@ db_examine(
 				    value = db_get_task_value(next_addr,
 							      sizeof (db_expr_t),
 							      FALSE,task);
-				    db_printf("%-*llo", width, value);
+				    db_printf("%-*o", width, value);
 				    next_addr += sizeof (db_expr_t);
 				}
 				if (sz > 0) {
@@ -431,7 +617,7 @@ db_examine(
 				    }
 				    value = db_get_task_value(next_addr, sz,
 							      FALSE, task);
-				    db_printf("%-*llo", width, value);
+				    db_printf("%-*o", width, value);
 				    next_addr += sz;
 				}
 				break;
@@ -444,9 +630,9 @@ db_examine(
 				    if ((value >= ' ' && value <= '~') ||
 					value == '\n' ||
 					value == '\t')
-					    db_printf("%llc", value);
+					    db_printf("%c", value);
 				    else
-					    db_printf("\\%03llo", value);
+					    db_printf("\\%03o", value);
 				}
 				break;
 			    case 's':	/* null-terminated string */
@@ -459,9 +645,9 @@ db_examine(
 				    if (value == 0)
 					break;
 				    if (value >= ' ' && value <= '~')
-					db_printf("%llc", value);
+					db_printf("%c", value);
 				    else
-					db_printf("\\%03llo", value);
+					db_printf("\\%03o", value);
 				}
 				break;
 			    case 'i':	/* instruction */
@@ -532,32 +718,29 @@ db_print_cmd(void)
 				 task);
 		break;
 	    case 'r':
-		db_printf("%11llr", value);
-		break;
-	    case 'X':
-		db_printf("%016llX", value);
+		db_printf("%11r", value);
 		break;
 	    case 'x':
-		db_printf("%016llx", value);
+		db_printf("%08x", value);
 		break;
 	    case 'z':
-		db_printf("%16llz", value);
+		db_printf("%8z", value);
 		break;
 	    case 'd':
-		db_printf("%11lld", value);
+		db_printf("%11d", value);
 		break;
 	    case 'u':
-		db_printf("%11llu", value);
+		db_printf("%11u", value);
 		break;
 	    case 'o':
-		db_printf("%16llo", value);
+		db_printf("%16o", value);
 		break;
 	    case 'c':
 		value = value & 0xFF;
 		if (value >= ' ' && value <= '~')
-		    db_printf("%llc", value);
+		    db_printf("%c", value);
 		else
-		    db_printf("\\%03llo", value);
+		    db_printf("\\%03o", value);
 		break;
 	    default:
 		db_printf("Unknown format %c\n", db_print_format);
@@ -720,11 +903,11 @@ db_xcdump(
 		db_printf("%s:\n", name);
 		off = -1;
 	    }
-	    db_printf("%0*llX:%s", 2*sizeof(db_addr_t), addr,
+	    db_printf("%0*X:%s", 2*sizeof(db_addr_t), addr,
 					(size != 1) ? " " : "" );
 	    bcount = ((n > DB_XCDUMP_NC)? DB_XCDUMP_NC: n);
-	    if (trunc_page_32(addr) != trunc_page_32(addr+bcount-1)) {
-		db_addr_t next_page_addr = trunc_page_32(addr+bcount-1);
+	    if (trunc_page(addr) != trunc_page(addr+bcount-1)) {
+		db_addr_t next_page_addr = trunc_page(addr+bcount-1);
 		if (!DB_CHECK_ACCESS(next_page_addr, sizeof(int), task))
 		    bcount = next_page_addr - addr;
 	    }
@@ -733,7 +916,7 @@ db_xcdump(
 		if (i % 4 == 0)
 			db_printf(" ");
 		value = db_get_task_value(addr, size, FALSE, task);
-		db_printf("%0*llX ", size*2, value);
+		db_printf("%0*x ", size*2, value);
 		addr += size;
 		db_find_task_sym_and_offset(addr, &name, &off, task);
 	    }
@@ -744,7 +927,7 @@ db_xcdump(
 	    db_printf("%s*", (size != 1)? " ": "");
 	    for (i = 0; i < bcount; i++) {
 		value = data[i];
-		db_printf("%llc", (value >= ' ' && value <= '~')? value: '.');
+		db_printf("%c", (value >= ' ' && value <= '~')? value: '.');
 	    }
 	    db_printf("*\n");
 	}

@@ -3,22 +3,19 @@
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
- * Copyright (c) 1999-2003 Apple Computer, Inc.  All Rights Reserved.
+ * The contents of this file constitute Original Code as defined in and
+ * are subject to the Apple Public Source License Version 1.1 (the
+ * "License").  You may not use this file except in compliance with the
+ * License.  Please obtain a copy of the License at
+ * http://www.apple.com/publicsource and read it before using this file.
  * 
- * This file contains Original Code and/or Modifications of Original Code
- * as defined in and that are subject to the Apple Public Source License
- * Version 2.0 (the 'License'). You may not use this file except in
- * compliance with the License. Please obtain a copy of the License at
- * http://www.opensource.apple.com/apsl/ and read it before using this
- * file.
- * 
- * The Original Code and all software distributed under the License are
- * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * This Original Code and all software distributed under the License are
+ * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
- * Please see the License for the specific language governing rights and
- * limitations under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
+ * License for the specific language governing rights and limitations
+ * under the License.
  * 
  * @APPLE_LICENSE_HEADER_END@
  */
@@ -39,8 +36,6 @@ extern "C" {
 // how long to wait for matching root device, secs
 #define ROOTDEVICETIMEOUT	60
 
-extern dev_t mdevadd(int devid, ppnum_t base, unsigned int size, int phys);
-extern dev_t mdevlookup(int devid);
 
 kern_return_t
 IOKitBSDInit( void )
@@ -329,8 +324,6 @@ OSDictionary * IOOFPathMatching( const char * path, char * buf, int maxLen )
 
 }
 
-static int didRam = 0;
-
 kern_return_t IOFindBSDRoot( char * rootName,
 				dev_t * root, u_int32_t * oflags )
 {
@@ -341,7 +334,6 @@ kern_return_t IOFindBSDRoot( char * rootName,
     OSString *		iostr;
     OSNumber *		off;
     OSData *		data = 0;
-    UInt32		*ramdParms = 0;
 
     UInt32		flags = 0;
     int			minor, major;
@@ -354,9 +346,6 @@ kern_return_t IOFindBSDRoot( char * rootName,
     bool		debugInfoPrintedOnce = false;
 
     static int		mountAttempts = 0;
-				
-	int xchar, dchar;
-				
 
     if( mountAttempts++)
 	IOSleep( 5 * 1000 );
@@ -372,15 +361,17 @@ kern_return_t IOFindBSDRoot( char * rootName,
 
     do {
         if( (regEntry = IORegistryEntry::fromPath( "/chosen", gIODTPlane ))) {
-			data = (OSData *) regEntry->getProperty( "rootpath" );
-			regEntry->release();
-			if( data) continue;
-		}
+	    data = (OSData *) regEntry->getProperty( "rootpath" );
+	    regEntry->release();
+	    if( data)
+	    continue;
+	}
         if( (regEntry = IORegistryEntry::fromPath( "/options", gIODTPlane ))) {
-			data = (OSData *) regEntry->getProperty( "boot-file" );
-			regEntry->release();
-			if( data) continue;
-		}
+	    data = (OSData *) regEntry->getProperty( "boot-file" );
+	    regEntry->release();
+	    if( data)
+	    continue;
+	}
     } while( false );
 
     if( data)
@@ -388,64 +379,13 @@ kern_return_t IOFindBSDRoot( char * rootName,
 
     if( rdBootVar[0] == '*') {
         look = rdBootVar + 1;
-		forceNet = false;
+	forceNet = false;
     } else {
         if( (regEntry = IORegistryEntry::fromPath( "/", gIODTPlane ))) {
             forceNet = (0 != regEntry->getProperty( "net-boot" ));
-	    	regEntry->release();
-		}
+	    regEntry->release();
+	}
     }
-
-
-
-//
-//	See if we have a RAMDisk property in /chosen/memory-map.  If so, make it into a device.
-//	It will become /dev/mdx, where x is 0-f. 
-//
-
-	if(!didRam) {												/* Have we already build this ram disk? */
-		didRam = 1;												/* Remember we did this */
-		if((regEntry = IORegistryEntry::fromPath( "/chosen/memory-map", gIODTPlane ))) {	/* Find the map node */
-			data = (OSData *)regEntry->getProperty("RAMDisk");	/* Find the ram disk, if there */
-			if(data) {											/* We found one */
-
-				ramdParms = (UInt32 *)data->getBytesNoCopy();	/* Point to the ram disk base and size */
-				(void)mdevadd(-1, ramdParms[0] >> 12, ramdParms[1] >> 12, 0);	/* Initialize it and pass back the device number */
-			}
-			regEntry->release();								/* Toss the entry */
-		}
-	}
-	
-//
-//	Now check if we are trying to root on a memory device
-//
-
-	if((rdBootVar[0] == 'm') && (rdBootVar[1] == 'd') && (rdBootVar[3] == 0)) {
-		dchar = xchar = rdBootVar[2];							/* Get the actual device */
-		if((xchar >= '0') && (xchar <= '9')) xchar = xchar - '0';	/* If digit, convert */
-		else {
-			xchar = xchar & ~' ';								/* Fold to upper case */
-			if((xchar >= 'A') && (xchar <= 'F')) {				/* Is this a valid digit? */
-				xchar = (xchar & 0xF) + 9;						/* Convert the hex digit */
-				dchar = dchar | ' ';							/* Fold to lower case */
-			}
-			else xchar = -1;									/* Show bogus */
-		}
-		if(xchar >= 0) {										/* Do we have a valid memory device name? */
-			*root = mdevlookup(xchar);							/* Find the device number */
-			if(*root >= 0) {									/* Did we find one? */
-
-				rootName[0] = 'm';								/* Build root name */
-				rootName[1] = 'd';								/* Build root name */
-				rootName[2] = dchar;							/* Build root name */
-				rootName[3] = 0;								/* Build root name */
-				IOLog("BSD root: %s, major %d, minor %d\n", rootName, major(*root), minor(*root));
-				*oflags = 0;									/* Show that this is not network */
-				goto iofrootx;									/* Join common exit... */
-			}
-			panic("IOFindBSDRoot: specified root memory device, %s, has not been configured\n", rdBootVar);	/* Not there */
-		}
-	}
 
     if( look) {
 	// from OpenFirmware path
@@ -457,8 +397,8 @@ kern_return_t IOFindBSDRoot( char * rootName,
             matching = IODiskMatching( look, str, kMaxPathBuf );
         }
     }
-    
-      if( (!matching) && rdBootVar[0] ) {
+
+    if( (!matching) && rdBootVar[0] ) {
 	// by BSD name
 	look = rdBootVar;
 	if( look[0] == '*')
@@ -570,7 +510,6 @@ kern_return_t IOFindBSDRoot( char * rootName,
 
     IOFree( str,  kMaxPathBuf + kMaxBootVar );
 
-iofrootx:
     if( (gIOKitDebug & (kIOLogDTree | kIOLogServiceTree | kIOLogMemory)) && !debugInfoPrintedOnce) {
 
 	IOService::getPlatform()->waitQuiet();

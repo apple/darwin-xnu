@@ -3,22 +3,19 @@
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
- * Copyright (c) 1999-2003 Apple Computer, Inc.  All Rights Reserved.
+ * The contents of this file constitute Original Code as defined in and
+ * are subject to the Apple Public Source License Version 1.1 (the
+ * "License").  You may not use this file except in compliance with the
+ * License.  Please obtain a copy of the License at
+ * http://www.apple.com/publicsource and read it before using this file.
  * 
- * This file contains Original Code and/or Modifications of Original Code
- * as defined in and that are subject to the Apple Public Source License
- * Version 2.0 (the 'License'). You may not use this file except in
- * compliance with the License. Please obtain a copy of the License at
- * http://www.opensource.apple.com/apsl/ and read it before using this
- * file.
- * 
- * The Original Code and all software distributed under the License are
- * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * This Original Code and all software distributed under the License are
+ * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
- * Please see the License for the specific language governing rights and
- * limitations under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
+ * License for the specific language governing rights and limitations
+ * under the License.
  * 
  * @APPLE_LICENSE_HEADER_END@
  */
@@ -40,47 +37,6 @@ extern struct sysctl_oid sysctl__debug_if_tun_debug;
 extern struct sysctl_oid sysctl__debug_ttydebug;
 #endif
 #endif
-
-extern struct sysctl_oid sysctl__hw_machine;
-extern struct sysctl_oid sysctl__hw_model;
-extern struct sysctl_oid sysctl__hw_ncpu;
-extern struct sysctl_oid sysctl__hw_activecpu;
-extern struct sysctl_oid sysctl__hw_byteorder;
-extern struct sysctl_oid sysctl__hw_cputype;
-extern struct sysctl_oid sysctl__hw_cpusubtype;
-extern struct sysctl_oid sysctl__hw_physmem;
-extern struct sysctl_oid sysctl__hw_usermem;
-extern struct sysctl_oid sysctl__hw_pagesize;
-extern struct sysctl_oid sysctl__hw_epoch;
-extern struct sysctl_oid sysctl__hw_vectorunit;
-extern struct sysctl_oid sysctl__hw_busfrequency;
-extern struct sysctl_oid sysctl__hw_busfrequency_min;
-extern struct sysctl_oid sysctl__hw_busfrequency_max;
-extern struct sysctl_oid sysctl__hw_cpufrequency;
-extern struct sysctl_oid sysctl__hw_cpufrequency_min;
-extern struct sysctl_oid sysctl__hw_cpufrequency_max;
-extern struct sysctl_oid sysctl__hw_cachelinesize;
-extern struct sysctl_oid sysctl__hw_l1icachesize;
-extern struct sysctl_oid sysctl__hw_l1dcachesize;
-extern struct sysctl_oid sysctl__hw_l2settings;
-extern struct sysctl_oid sysctl__hw_l2cachesize;
-extern struct sysctl_oid sysctl__hw_l3settings;
-extern struct sysctl_oid sysctl__hw_l3cachesize;
-extern struct sysctl_oid sysctl__hw_tbfrequency;
-extern struct sysctl_oid sysctl__hw_memsize;
-
-extern struct sysctl_oid sysctl__hw_optional;
-extern struct sysctl_oid sysctl__hw_optional_floatingpoint;
-
-extern struct sysctl_oid sysctl__hw_pagesize_compat;
-extern struct sysctl_oid sysctl__hw_busfrequency_compat;
-extern struct sysctl_oid sysctl__hw_cpufrequency_compat;
-extern struct sysctl_oid sysctl__hw_cachelinesize_compat;
-extern struct sysctl_oid sysctl__hw_l1icachesize_compat;
-extern struct sysctl_oid sysctl__hw_l1dcachesize_compat;
-extern struct sysctl_oid sysctl__hw_l2cachesize_compat;
-extern struct sysctl_oid sysctl__hw_l3cachesize_compat;
-extern struct sysctl_oid sysctl__hw_tbfrequency_compat;
 
 extern struct sysctl_oid sysctl__kern_sysv_shmmax;
 extern struct sysctl_oid sysctl__kern_sysv_shmmin;
@@ -159,7 +115,6 @@ extern struct sysctl_oid sysctl__net_inet_tcp_keepintvl;
 extern struct sysctl_oid sysctl__net_inet_tcp_mssdflt;
 extern struct sysctl_oid sysctl__net_inet_tcp_recvspace;
 extern struct sysctl_oid sysctl__net_inet_tcp_sendspace;
-extern struct sysctl_oid sysctl__net_inet_tcp_slowlink_wsize;
 extern struct sysctl_oid sysctl__net_inet_tcp_blackhole;
 extern struct sysctl_oid sysctl__net_inet_tcp_tcp_lq_overflow;
 extern struct sysctl_oid sysctl__net_inet_tcp_path_mtu_discovery;
@@ -428,47 +383,6 @@ struct sysctl_oid *newsysctl_list[] =
     ,&sysctl__kern_ipc_somaxconn
     ,&sysctl__kern_ipc_sosendminchain
     ,&sysctl__kern_ipc_maxsockets
-
-    ,&sysctl__hw_machine
-    ,&sysctl__hw_model
-    ,&sysctl__hw_ncpu
-    ,&sysctl__hw_activecpu
-    ,&sysctl__hw_byteorder
-    ,&sysctl__hw_cputype
-    ,&sysctl__hw_cpusubtype
-    ,&sysctl__hw_physmem
-    ,&sysctl__hw_usermem
-    ,&sysctl__hw_pagesize
-    ,&sysctl__hw_epoch
-    ,&sysctl__hw_vectorunit
-    ,&sysctl__hw_busfrequency
-    ,&sysctl__hw_busfrequency_min
-    ,&sysctl__hw_busfrequency_max
-    ,&sysctl__hw_cpufrequency
-    ,&sysctl__hw_cpufrequency_min
-    ,&sysctl__hw_cpufrequency_max
-    ,&sysctl__hw_cachelinesize
-    ,&sysctl__hw_l1icachesize
-    ,&sysctl__hw_l1dcachesize
-    ,&sysctl__hw_l2settings
-    ,&sysctl__hw_l2cachesize
-    ,&sysctl__hw_l3settings
-    ,&sysctl__hw_l3cachesize
-    ,&sysctl__hw_tbfrequency
-    ,&sysctl__hw_memsize
-    ,&sysctl__hw_optional
-    ,&sysctl__hw_optional_floatingpoint
-
-    ,&sysctl__hw_pagesize_compat
-    ,&sysctl__hw_busfrequency_compat
-    ,&sysctl__hw_cpufrequency_compat
-    ,&sysctl__hw_cachelinesize_compat
-    ,&sysctl__hw_l1icachesize_compat
-    ,&sysctl__hw_l1dcachesize_compat
-    ,&sysctl__hw_l2cachesize_compat
-    ,&sysctl__hw_l3cachesize_compat
-    ,&sysctl__hw_tbfrequency_compat
-
     ,&sysctl__net_inet_icmp_icmplim
     ,&sysctl__net_inet_icmp_maskrepl
     ,&sysctl__net_inet_icmp_bmcastecho
@@ -528,7 +442,6 @@ struct sysctl_oid *newsysctl_list[] =
     ,&sysctl__net_inet_tcp_mssdflt
     ,&sysctl__net_inet_tcp_recvspace
     ,&sysctl__net_inet_tcp_sendspace
-    ,&sysctl__net_inet_tcp_slowlink_wsize
     ,&sysctl__net_inet_tcp_blackhole
     ,&sysctl__net_inet_tcp_tcp_lq_overflow
     ,&sysctl__net_inet_tcp_path_mtu_discovery

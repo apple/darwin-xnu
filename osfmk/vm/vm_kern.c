@@ -3,22 +3,19 @@
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
- * Copyright (c) 1999-2003 Apple Computer, Inc.  All Rights Reserved.
+ * The contents of this file constitute Original Code as defined in and
+ * are subject to the Apple Public Source License Version 1.1 (the
+ * "License").  You may not use this file except in compliance with the
+ * License.  Please obtain a copy of the License at
+ * http://www.apple.com/publicsource and read it before using this file.
  * 
- * This file contains Original Code and/or Modifications of Original Code
- * as defined in and that are subject to the Apple Public Source License
- * Version 2.0 (the 'License'). You may not use this file except in
- * compliance with the License. Please obtain a copy of the License at
- * http://www.opensource.apple.com/apsl/ and read it before using this
- * file.
- * 
- * The Original Code and all software distributed under the License are
- * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * This Original Code and all software distributed under the License are
+ * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
- * Please see the License for the specific language governing rights and
- * limitations under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
+ * License for the specific language governing rights and limitations
+ * under the License.
  * 
  * @APPLE_LICENSE_HEADER_END@
  */
@@ -120,7 +117,7 @@ kmem_alloc_contig(
 		return KERN_INVALID_ARGUMENT;
 	}
 
-	size = round_page_32(size);
+	size = round_page(size);
 	if ((flags & KMA_KOBJECT) == 0) {
 		object = vm_object_allocate(size);
 		kr = vm_map_find_space(map, &addr, size, mask, &entry);
@@ -213,7 +210,7 @@ kernel_memory_allocate(
 	vm_offset_t		i;
 	kern_return_t 		kr;
 
-	size = round_page_32(size);
+	size = round_page(size);
 	if ((flags & KMA_KOBJECT) == 0) {
 		/*
 		 *	Allocate a new object.  We must do this before locking
@@ -356,10 +353,10 @@ kmem_realloc(
 	vm_page_t	mem;
 	kern_return_t	kr;
 
-	oldmin = trunc_page_32(oldaddr);
-	oldmax = round_page_32(oldaddr + oldsize);
+	oldmin = trunc_page(oldaddr);
+	oldmax = round_page(oldaddr + oldsize);
 	oldsize = oldmax - oldmin;
-	newsize = round_page_32(newsize);
+	newsize = round_page(newsize);
 
 
 	/*
@@ -506,7 +503,7 @@ kmem_alloc_pageable(
 #else
 	addr = vm_map_min(map);
 #endif
-	kr = vm_map_enter(map, &addr, round_page_32(size),
+	kr = vm_map_enter(map, &addr, round_page(size),
 			  (vm_offset_t) 0, TRUE,
 			  VM_OBJECT_NULL, (vm_object_offset_t) 0, FALSE,
 			  VM_PROT_DEFAULT, VM_PROT_ALL, VM_INHERIT_DEFAULT);
@@ -533,9 +530,8 @@ kmem_free(
 {
 	kern_return_t kr;
 
-	kr = vm_map_remove(map, trunc_page_32(addr),
-				round_page_32(addr + size), 
-				VM_MAP_REMOVE_KUNWIRE);
+	kr = vm_map_remove(map, trunc_page(addr),
+			   round_page(addr + size), VM_MAP_REMOVE_KUNWIRE);
 	if (kr != KERN_SUCCESS)
 		panic("kmem_free");
 }
@@ -551,7 +547,7 @@ kmem_alloc_pages(
 	register vm_size_t		size)
 {
 
-	size = round_page_32(size);
+	size = round_page(size);
         vm_object_lock(object);
 	while (size) {
 	    register vm_page_t	mem;
@@ -618,9 +614,7 @@ kmem_remap_pages(
 	     *	but this shouldn't be a problem because it is wired.
 	     */
 	    PMAP_ENTER(kernel_pmap, start, mem, protection, 
-			((unsigned int)(mem->object->wimg_bits))
-					& VM_WIMG_MASK,
-			TRUE);
+				VM_WIMG_USE_DEFAULT, TRUE);
 
 	    start += PAGE_SIZE;
 	    offset += PAGE_SIZE;
@@ -654,7 +648,7 @@ kmem_suballoc(
 	vm_map_t map;
 	kern_return_t kr;
 
-	size = round_page_32(size);
+	size = round_page(size);
 
 	/*
 	 *	Need reference on submap object because it is internal
@@ -726,9 +720,9 @@ kmem_init(
         /*
          * Account for kernel memory (text, data, bss, vm shenanigans).
          * This may include inaccessible "holes" as determined by what
-         * the machine-dependent init code includes in max_mem.
+         * the machine-dependent init code includes in mem_size.
          */
-        vm_page_wire_count = (atop_64(max_mem) - (vm_page_free_count
+        vm_page_wire_count = (atop(mem_size) - (vm_page_free_count
                                                 + vm_page_active_count
                                                 + vm_page_inactive_count));
 }
@@ -753,7 +747,7 @@ kmem_io_object_trunc(copy, new_size)
 
 	old_size = (vm_size_t)round_page_64(copy->size);
 	copy->size = new_size;
-	new_size = round_page_32(new_size);
+	new_size = round_page(new_size);
 
         vm_object_lock(copy->cpy_object);
         vm_object_page_remove(copy->cpy_object,

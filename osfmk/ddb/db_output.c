@@ -3,22 +3,19 @@
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
- * Copyright (c) 1999-2003 Apple Computer, Inc.  All Rights Reserved.
+ * The contents of this file constitute Original Code as defined in and
+ * are subject to the Apple Public Source License Version 1.1 (the
+ * "License").  You may not use this file except in compliance with the
+ * License.  Please obtain a copy of the License at
+ * http://www.apple.com/publicsource and read it before using this file.
  * 
- * This file contains Original Code and/or Modifications of Original Code
- * as defined in and that are subject to the Apple Public Source License
- * Version 2.0 (the 'License'). You may not use this file except in
- * compliance with the License. Please obtain a copy of the License at
- * http://www.opensource.apple.com/apsl/ and read it before using this
- * file.
- * 
- * The Original Code and all software distributed under the License are
- * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * This Original Code and all software distributed under the License are
+ * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
- * Please see the License for the specific language governing rights and
- * limitations under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
+ * License for the specific language governing rights and limitations
+ * under the License.
  * 
  * @APPLE_LICENSE_HEADER_END@
  */
@@ -85,7 +82,7 @@
  */
 
 #ifndef	DB_MAX_LINE
-#define	DB_MAX_LINE		43	/* maximum line */
+#define	DB_MAX_LINE		24	/* maximum line */
 #define DB_MAX_WIDTH		132	/* maximum width */
 #endif	/* DB_MAX_LINE */
 
@@ -147,6 +144,10 @@ db_more(void)
 	register  char *p;
 	boolean_t quit_output = FALSE;
 
+#if defined(__alpha)
+	extern boolean_t kdebug_mode;
+	if (kdebug_mode) return;
+#endif /* defined(__alpha) */
 	for (p = "--db_more--"; *p; p++)
 	    cnputc(*p);
 	switch(cngetc()) {
@@ -288,6 +289,9 @@ db_printf(char *fmt, ...)
 {
 	va_list	listp;
 
+#ifdef	luna88k
+	db_printing();
+#endif
 	va_start(listp, fmt);
 	_doprnt(fmt, &listp, db_putchar, db_radix);
 	va_end(listp);
@@ -336,7 +340,9 @@ void
 db_output_prompt(void)
 {
 	db_printf("db%s", (db_default_act) ? "t": "");
+#if	NCPUS > 1
 	db_printf("{%d}", cpu_number());
+#endif
 	db_printf("> ");
 }
 

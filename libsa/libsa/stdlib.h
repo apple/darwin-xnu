@@ -1,7 +1,6 @@
 #ifndef _LIBSA_STDLIB_H_
 #define _LIBSA_STDLIB_H_
 
-#include <sys/cdefs.h>
 
 #ifndef _BSD_SIZE_T_DEFINED_
 #define _BSD_SIZE_T_DEFINED_
@@ -14,9 +13,6 @@ typedef __SIZE_TYPE__    size_t;
 
 
 __private_extern__ char *kld_basefile_name;
-
-
-__BEGIN_DECLS
 
 
 __private_extern__ void * malloc(size_t size);
@@ -45,7 +41,5 @@ __private_extern__ void * bsearch(
  */
 extern long     strtol(const char *, char **, int);
 extern unsigned long strtoul(const char *, char **, int);
-
-__END_DECLS
 
 #endif /* _LIBSA_STDLIB_H_ */

@@ -3,22 +3,19 @@
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
- * Copyright (c) 1999-2003 Apple Computer, Inc.  All Rights Reserved.
+ * The contents of this file constitute Original Code as defined in and
+ * are subject to the Apple Public Source License Version 1.1 (the
+ * "License").  You may not use this file except in compliance with the
+ * License.  Please obtain a copy of the License at
+ * http://www.apple.com/publicsource and read it before using this file.
  * 
- * This file contains Original Code and/or Modifications of Original Code
- * as defined in and that are subject to the Apple Public Source License
- * Version 2.0 (the 'License'). You may not use this file except in
- * compliance with the License. Please obtain a copy of the License at
- * http://www.opensource.apple.com/apsl/ and read it before using this
- * file.
- * 
- * The Original Code and all software distributed under the License are
- * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * This Original Code and all software distributed under the License are
+ * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
- * Please see the License for the specific language governing rights and
- * limitations under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
+ * License for the specific language governing rights and limitations
+ * under the License.
  * 
  * @APPLE_LICENSE_HEADER_END@
  */
@@ -27,6 +24,9 @@
 **
 ** C routines that we are adding to the MacOS X kernel.
 **
+** Weird Apple PSL stuff goes here...
+**
+** Until then, Copyright 2000, Connectix
 -----------------------------------------------------------------------*/
 
 #include <mach/mach_types.h>
@@ -40,6 +40,7 @@
 #include <ppc/exception.h>
 #include <ppc/mappings.h>
 #include <ppc/thread_act.h>
+#include <ppc/pmap_internals.h>
 #include <vm/vm_kern.h>
 
 #include <ppc/vmachmon.h>
@@ -72,10 +73,8 @@ vmmCntrlEntry *vmm_get_entry(
 	vmmCntrlTable *CTable;
 	vmmCntrlEntry *CEntry;
 
-	index = index & vmmTInum;								/* Clean up the index */
-
 	if (act->mact.vmmControl == 0) return NULL;				/* No control table means no vmm */
-	if ((index - 1) >= kVmmMaxContexts) return NULL;		/* Index not in range */	
+	if ((index - 1) >= kVmmMaxContextsPerThread) return NULL;	/* Index not in range */	
 
 	CTable = act->mact.vmmControl;							/* Make the address a bit more convienient */
 	CEntry = &CTable->vmmc[index - 1];						/* Point to the entry */
@@ -83,39 +82,6 @@ vmmCntrlEntry *vmm_get_entry(
 	if (!(CEntry->vmmFlags & vmmInUse)) return NULL;		/* See if the slot is actually in use */
 	
 	return CEntry;
-}
-
-/*-----------------------------------------------------------------------
-** vmm_get_adsp
-**
-** This function verifies and returns the pmap for an address space.
-** If there is none and the request is valid, a pmap will be created.
-**
-** Inputs:
-**		act - pointer to current thread activation
-**		index - index into vmm control table (this is a "one based" value)
-**
-** Outputs:
-**		address of a pmap or 0 if not found or could no be created
-**		Note that if there is no pmap for the address space it will be created.
------------------------------------------------------------------------*/
-
-pmap_t vmm_get_adsp(thread_act_t act, vmm_thread_index_t index)
-{
-	pmap_t pmap;
-
-	if (act->mact.vmmControl == 0) return NULL;				/* No control table means no vmm */
-	if ((index - 1) >= kVmmMaxContexts) return NULL;		/* Index not in range */	
-
-	pmap = act->mact.vmmControl->vmmAdsp[index - 1];		/* Get the pmap */
-	if(pmap) return pmap;									/* We've got it... */
-
-	pmap = pmap_create(0);									/* Make a fresh one */
-	act->mact.vmmControl->vmmAdsp[index - 1] = pmap;		/* Remember it */
-/*
- *	Note that if the create fails, we will return a null.
- */
-	return pmap;											/* Return it... */
 }
 
 
@@ -171,59 +137,9 @@ int vmm_get_version(struct savearea *save)
 int vmm_get_features(struct savearea *save)
 {
 	save->save_r3 = kVmmCurrentFeatures;		/* Return the features */
-	if(per_proc_info->pf.Available & pf64Bit) {
-		save->save_r3 &= ~kVmmFeature_LittleEndian;	/* No little endian here */
-		save->save_r3 |= kVmmFeature_SixtyFourBit;	/* Set that we can do 64-bit */
-	}
 	return 1;
 }
 
-
-/*-----------------------------------------------------------------------
-** vmm_max_addr
-**
-** This function returns the maximum addressable virtual address sported
-**
-** Outputs:
-**		Returns max address
------------------------------------------------------------------------*/
-
-addr64_t vmm_max_addr(thread_act_t act) 
-{
-	return vm_max_address;							/* Return the maximum address */
-}
-
-/*-----------------------------------------------------------------------
-** vmm_get_XA
-**
-** This function retrieves the eXtended Architecture flags for the specifed VM.
-** 
-** We need to return the result in the return code rather than in the return parameters
-** because we need an architecture independent format so the results are actually 
-** usable by the host. For example, the return parameters for 64-bit are 8 bytes wide vs.
-** 4 for 32-bit. 
-** 
-**
-** Inputs:
-**		act - pointer to current thread activation structure
-**		index - index returned by vmm_init_context
-**
-** Outputs:
-**		Return code is set to the XA flags.  If the index is invalid or the
-**		context has not been created, we return 0.
------------------------------------------------------------------------*/
-
-unsigned int vmm_get_XA(
-	thread_act_t 		act,
-	vmm_thread_index_t 	index)
-{
-	vmmCntrlEntry 		*CEntry;
-
-	CEntry = vmm_get_entry(act, index);				/* Convert index to entry */		
-	if (CEntry == NULL) return 0;					/* Either this isn't a vmm or the index is bogus */
-	
-	return CEntry->vmmXAFlgs;						/* Return the flags */
-}
 
 /*-----------------------------------------------------------------------
 ** vmm_init_context
@@ -254,7 +170,7 @@ int vmm_init_context(struct savearea *save)
 	vmmCntrlTable		*CTable;
 	vm_offset_t			conkern;
 	vmm_state_page_t *	vks;
-	ppnum_t				conphys;
+	vm_offset_t			conphys;
 	kern_return_t 		ret;
 	pmap_t				new_pmap;	
 	int					cvi, i;
@@ -332,11 +248,11 @@ int vmm_init_context(struct savearea *save)
 		act->mact.vmmControl = CTable;			/* Initialize the table anchor */
 	}
 
-	for(cvi = 0; cvi < kVmmMaxContexts; cvi++) {	/* Search to find a free slot */
+	for(cvi = 0; cvi < kVmmMaxContextsPerThread; cvi++) {	/* Search to find a free slot */
 		if(!(CTable->vmmc[cvi].vmmFlags & vmmInUse)) break;	/* Bail if we find an unused slot */
 	}
 	
-	if(cvi >= kVmmMaxContexts) {				/* Did we find one? */
+	if(cvi >= kVmmMaxContextsPerThread) {		/* Did we find one? */
 		ml_set_interrupts_enabled(FALSE);		/* Set back interruptions */
 		save->save_r3 = KERN_RESOURCE_SHORTAGE;	/* No empty slots... */	
 		return 1;
@@ -353,7 +269,7 @@ int vmm_init_context(struct savearea *save)
 		goto return_in_shame;
 
 	/* Map the vmm state into the kernel's address space. */
-	conphys = pmap_find_phys(act->map->pmap, (addr64_t)vmm_user_state);
+	conphys = pmap_extract(act->map->pmap, (vm_offset_t)vmm_user_state);
 
 	/* Find a virtual address to use. */
 	ret = kmem_alloc_pageable(kernel_map, &conkern, PAGE_SIZE);
@@ -366,7 +282,6 @@ int vmm_init_context(struct savearea *save)
 	}
 	
 	/* Map it into the kernel's address space. */
-
 	pmap_enter(kernel_pmap, conkern, conphys, 
 		VM_PROT_READ | VM_PROT_WRITE, 
 		VM_WIMG_USE_DEFAULT, TRUE);
@@ -375,6 +290,17 @@ int vmm_init_context(struct savearea *save)
 	vks = (vmm_state_page_t *)conkern;
 	bzero((char *)vks, PAGE_SIZE);
 	
+	/* Allocate a new pmap for the new vmm context. */
+	new_pmap = pmap_create(0);
+	if (new_pmap == PMAP_NULL) {
+		(void) vm_map_unwire(act->map,			/* Couldn't get a pmap, unwire the user page */
+			(vm_offset_t)vmm_user_state,
+			(vm_offset_t)vmm_user_state + PAGE_SIZE,
+			TRUE);
+		
+		kmem_free(kernel_map, conkern, PAGE_SIZE);	/* Release the kernel address */
+		goto return_in_shame;
+	}
 	
 	/* We're home free now. Simply fill in the necessary info and return. */
 	
@@ -382,6 +308,7 @@ int vmm_init_context(struct savearea *save)
 	vks->thread_index = cvi + 1;				/* Tell the user the index for this virtual machine */
 	
 	CTable->vmmc[cvi].vmmFlags = vmmInUse;		/* Mark the slot in use and make sure the rest are clear */
+	CTable->vmmc[cvi].vmmPmap = new_pmap;		/* Remember the pmap for this guy */
 	CTable->vmmc[cvi].vmmContextKern = vks;		/* Remember the kernel address of comm area */
 	CTable->vmmc[cvi].vmmContextPhys = (vmm_state_page_t *)conphys;	/* Remember the state page physical addr */
 	CTable->vmmc[cvi].vmmContextUser = vmm_user_state;		/* Remember user address of comm area */
@@ -396,9 +323,9 @@ int vmm_init_context(struct savearea *save)
 
 	hw_atomic_add((int *)&saveanchor.savetarget, 2);	/* Account for the number of extra saveareas we think we might "need" */
 
-	if (!(act->map->pmap->pmapFlags & pmapVMhost)) {
+	if (!(act->map->pmap->vflags & pmapVMhost)) {
 		simple_lock(&(act->map->pmap->lock));
-		act->map->pmap->pmapFlags |= pmapVMhost;
+		act->map->pmap->vflags |= pmapVMhost;
 		simple_unlock(&(act->map->pmap->lock));
 	}
 	
@@ -428,12 +355,6 @@ return_in_shame:
 **
 ** Outputs:
 **		kernel return code indicating success or failure
-**
-** Strangeness note:
-**		This call will also trash the address space with the same ID.  While this 
-**		is really not too cool, we have to do it because we need to make
-**		sure that old VMM users (not that we really have any) who depend upon 
-**		the address space going away with the context still work the same.
 -----------------------------------------------------------------------*/
 
 kern_return_t vmm_tear_down_context(
@@ -461,14 +382,11 @@ kern_return_t vmm_tear_down_context(
 		toss_live_vec(&CEntry->vmmFacCtx);			/* Get rid of any live context here */
 		save_release((savearea *)CEntry->vmmFacCtx.VMXsave);	/* Release it */
 	}
-	
-	CEntry->vmmPmap = 0;							/* Remove this trace */
-	if(act->mact.vmmControl->vmmAdsp[index - 1]) {	/* Check if there is an address space assigned here */
-		mapping_remove(act->mact.vmmControl->vmmAdsp[index - 1], 0xFFFFFFFFFFFFF000LL);	/* Remove final page explicitly because we might have mapped it */	
-		pmap_remove(act->mact.vmmControl->vmmAdsp[index - 1], 0, 0xFFFFFFFFFFFFF000LL);	/* Remove all entries from this map */
-		pmap_destroy(act->mact.vmmControl->vmmAdsp[index - 1]);	/* Toss the pmap for this context */
-		act->mact.vmmControl->vmmAdsp[index - 1] = NULL;	/* Clean it up */
-	}
+
+	mapping_remove(CEntry->vmmPmap, 0xFFFFF000);	/* Remove final page explicitly because we might have mapped it */	
+	pmap_remove(CEntry->vmmPmap, 0, 0xFFFFF000);	/* Remove all entries from this map */
+	pmap_destroy(CEntry->vmmPmap);					/* Toss the pmap for this context */
+	CEntry->vmmPmap = NULL;							/* Clean it up */
 	
 	(void) vm_map_unwire(							/* Unwire the user comm page */
 		act->map,
@@ -478,10 +396,8 @@ kern_return_t vmm_tear_down_context(
 	
 	kmem_free(kernel_map, (vm_offset_t)CEntry->vmmContextKern, PAGE_SIZE);	/* Remove kernel's view of the comm page */
 	
-	CTable = act->mact.vmmControl;					/* Get the control table address */
-	CTable->vmmGFlags = CTable->vmmGFlags & ~vmmLastAdSp;	/* Make sure we don't try to automap into this */
-
 	CEntry->vmmFlags = 0;							/* Clear out all of the flags for this entry including in use */
+	CEntry->vmmPmap = 0;							/* Clear pmap pointer */
 	CEntry->vmmContextKern = 0;						/* Clear the kernel address of comm area */
 	CEntry->vmmContextUser = 0;						/* Clear the user address of comm area */
 	
@@ -493,25 +409,13 @@ kern_return_t vmm_tear_down_context(
 	CEntry->vmmFacCtx.VMXcpu = 0;					/* Clear facility context control */
 	CEntry->vmmFacCtx.facAct = 0;					/* Clear facility context control */
 	
-	for(cvi = 0; cvi < kVmmMaxContexts; cvi++) {	/* Search to find a free slot */
+	CTable = act->mact.vmmControl;					/* Get the control table address */
+	for(cvi = 0; cvi < kVmmMaxContextsPerThread; cvi++) {	/* Search to find a free slot */
 		if(CTable->vmmc[cvi].vmmFlags & vmmInUse) {	/* Return if there are still some in use */
 			ml_set_interrupts_enabled(FALSE);		/* No more interruptions */
 			return KERN_SUCCESS;					/* Leave... */
 		}
 	}
-
-/*
- *	When we have tossed the last context, toss any address spaces left over before releasing
- *	the VMM control block 
- */
-
-	for(cvi = 1; cvi <= kVmmMaxContexts; cvi++) {	/* Look at all slots */
-		if(!act->mact.vmmControl->vmmAdsp[index - 1]) continue;	/* Nothing to remove here */
-		mapping_remove(act->mact.vmmControl->vmmAdsp[index - 1], 0xFFFFFFFFFFFFF000LL);	/* Remove final page explicitly because we might have mapped it */	
-		pmap_remove(act->mact.vmmControl->vmmAdsp[index - 1], 0, 0xFFFFFFFFFFFFF000LL);	/* Remove all entries from this map */
-		pmap_destroy(act->mact.vmmControl->vmmAdsp[index - 1]);	/* Toss the pmap for this context */
-		act->mact.vmmControl->vmmAdsp[index - 1] = 0;	/* Clear just in case */
-	}		
 
 	kfree((vm_offset_t)CTable, sizeof(vmmCntrlTable));	/* Toss the table because to tossed the last context */
 	act->mact.vmmControl = 0;						/* Unmark us as vmm */
@@ -520,83 +424,6 @@ kern_return_t vmm_tear_down_context(
 	
 	return KERN_SUCCESS;
 }
-
-
-/*-----------------------------------------------------------------------
-** vmm_set_XA
-**
-** This function sets the eXtended Architecture flags for the specifed VM.
-** 
-** We need to return the result in the return code rather than in the return parameters
-** because we need an architecture independent format so the results are actually 
-** usable by the host. For example, the return parameters for 64-bit are 8 bytes wide vs.
-** 4 for 32-bit. 
-** 
-** Note that this function does a lot of the same stuff as vmm_tear_down_context
-** and vmm_init_context.
-**
-** Inputs:
-**		act - pointer to current thread activation structure
-**		index - index returned by vmm_init_context
-**		flags - the extended architecture flags
-**		
-**
-** Outputs:
-**		KERN_SUCCESS if vm is valid and initialized. KERN_FAILURE if not.
-**		Also, the internal flags are set and, additionally, the VM is completely reset.
------------------------------------------------------------------------*/
-
-kern_return_t vmm_set_XA(
-	thread_act_t 		act,
-	vmm_thread_index_t 	index,
-	unsigned int xaflags)
-{
-	vmmCntrlEntry 		*CEntry;
-	vmmCntrlTable		*CTable;
-	vmm_state_page_t 	*vks;
-	vmm_version_t 		version;
-
-	if(xaflags & ~vmm64Bit) return KERN_FAILURE;	/* We only support this one kind now */
-
-	CEntry = vmm_get_entry(act, index);				/* Convert index to entry */		
-	if (CEntry == NULL) return KERN_FAILURE;		/* Either this isn't a vmm or the index is bogus */
-
-	ml_set_interrupts_enabled(TRUE);				/* This can take a bit of time so pass interruptions */
-	
-	if(CEntry->vmmFacCtx.FPUsave) {					/* Is there any floating point context? */
-		toss_live_fpu(&CEntry->vmmFacCtx);			/* Get rid of any live context here */
-		save_release((savearea *)CEntry->vmmFacCtx.FPUsave);	/* Release it */
-	}
-
-	if(CEntry->vmmFacCtx.VMXsave) {					/* Is there any vector context? */
-		toss_live_vec(&CEntry->vmmFacCtx);			/* Get rid of any live context here */
-		save_release((savearea *)CEntry->vmmFacCtx.VMXsave);	/* Release it */
-	}
-
-	CTable = act->mact.vmmControl;					/* Get the control table address */
-	CTable->vmmGFlags = CTable->vmmGFlags & ~vmmLastAdSp;	/* Make sure we don't try to automap into this */
-	
-	CEntry->vmmFlags &= vmmInUse;					/* Clear out all of the flags for this entry except in use */
-	CEntry->vmmXAFlgs = (xaflags & vmm64Bit) | (CEntry->vmmXAFlgs & ~vmm64Bit);	/* Set the XA flags */
-	CEntry->vmmFacCtx.FPUsave = 0;					/* Clear facility context control */
-	CEntry->vmmFacCtx.FPUlevel = 0;					/* Clear facility context control */
-	CEntry->vmmFacCtx.FPUcpu = 0;					/* Clear facility context control */
-	CEntry->vmmFacCtx.VMXsave = 0;					/* Clear facility context control */
-	CEntry->vmmFacCtx.VMXlevel = 0;					/* Clear facility context control */
-	CEntry->vmmFacCtx.VMXcpu = 0;					/* Clear facility context control */
-	
-	vks = CEntry->vmmContextKern;					/* Get address of the context page */
-	version = vks->interface_version;				/* Save the version code */
-	bzero((char *)vks, 4096);						/* Clear all */
-
-	vks->interface_version = version;				/* Set our version code */
-	vks->thread_index = index % vmmTInum;			/* Tell the user the index for this virtual machine */
-	
-	ml_set_interrupts_enabled(FALSE);				/* No more interruptions */
-	
-	return KERN_SUCCESS;							/* Return the flags */
-}
-
 
 /*-----------------------------------------------------------------------
 ** vmm_tear_down_all
@@ -638,8 +465,7 @@ void vmm_tear_down_all(thread_act_t act) {
 	
 	if(CTable = act->mact.vmmControl) {				/* Do we have a vmm control block? */
 
-
-		for(cvi = 1; cvi <= kVmmMaxContexts; cvi++) {	/* Look at all slots */
+		for(cvi = 1; cvi <= kVmmMaxContextsPerThread; cvi++) {	/* Look at all slots */
 			if(CTable->vmmc[cvi - 1].vmmFlags & vmmInUse) {	/* Is this one in use */
 				ret = vmm_tear_down_context(act, cvi);	/* Take down the found context */
 				if(ret != KERN_SUCCESS) {			/* Did it go away? */
@@ -648,10 +474,6 @@ void vmm_tear_down_all(thread_act_t act) {
 				}
 			}
 		}		
-
-/*
- *		Note that all address apces should be gone here.
- */
 		if(act->mact.vmmControl) {						/* Did we find one? */
 			panic("vmm_tear_down_all: control table did not get deallocated\n");	/* Table did not go away */
 		}
@@ -664,7 +486,8 @@ void vmm_tear_down_all(thread_act_t act) {
 ** vmm_map_page
 **
 ** This function maps a page from within the client's logical
-** address space into the alternate address space.
+** address space into the alternate address space of the
+** Virtual Machine Monitor context. 
 **
 ** The page need not be locked or resident.  If not resident, it will be faulted
 ** in by this code, which may take some time.   Also, if the page is not locked,
@@ -679,7 +502,7 @@ void vmm_tear_down_all(thread_act_t act) {
 **
 ** Inputs:
 **		act   - pointer to current thread activation
-**		index - index of address space to map into
+**		index - index of vmm state for this page
 **		va    - virtual address within the client's address
 **			    space
 **		ava   - virtual address within the alternate address
@@ -699,55 +522,74 @@ void vmm_tear_down_all(thread_act_t act) {
 
 kern_return_t vmm_map_page(
 	thread_act_t 		act,
-	vmm_adsp_id_t	 	index,
-	addr64_t	 		cva,
-	addr64_t	 		ava,
+	vmm_thread_index_t 	index,
+	vm_offset_t 		cva,
+	vm_offset_t 		ava,
 	vm_prot_t 			prot)
 {
 	kern_return_t		ret;
 	vmmCntrlEntry 		*CEntry;
-	register mapping 	*mp;
+	vm_offset_t			phys_addr;
+	register mapping 	*mpv, *mp, *nmpv, *nmp;
 	struct phys_entry 	*pp;
+	pmap_t				mpmap;
 	vm_map_t 			map;
-	addr64_t			ova, nextva;
-	pmap_t				pmap;
 
-	pmap = vmm_get_adsp(act, index);			/* Get the pmap for this address space */
-	if(!pmap) return KERN_FAILURE;				/* Bogus address space, no VMs, or we can't make a pmap, failure... */
-
-	if(ava > vm_max_address) return kVmmInvalidAddress;	/* Does the machine support an address of this size? */
-
+	CEntry = vmm_get_entry(act, index);			/* Get and validate the index */
+	if (CEntry == NULL)return KERN_FAILURE;		/* No good, failure... */
+	
+/*
+ *	Find out if we have already mapped the address and toss it out if so.
+ */
+	mp = hw_lock_phys_vir(CEntry->vmmPmap->space, ava);	/* See if there is already a mapping */
+	if((unsigned int)mp & 1) {					/* Did we timeout? */
+		panic("vmm_map_page: timeout locking physical entry for alternate virtual address (%08X)\n", ava);	/* Yeah, scream about it! */
+		return KERN_FAILURE;					/* Bad hair day, return FALSE... */
+	}
+	if(mp) {									/* If it was there, toss it */
+		mpv = hw_cpv(mp);						/* Convert mapping block to virtual */
+		hw_unlock_bit((unsigned int *)&mpv->physent->phys_link, PHYS_LOCK);	/* We're done, unlock the physical entry */
+		(void)mapping_remove(CEntry->vmmPmap, ava);	/* Throw away the mapping. we're about to replace it */
+	}
 	map = current_act()->map;					/* Get the current map */
 	
 	while(1) {									/* Keep trying until we get it or until we fail */
+		if(hw_cvp_blk(map->pmap, cva)) return KERN_FAILURE;	/* Make sure that there is no block map at this address */
 
-		mp = mapping_find(map->pmap, cva, &nextva, 0);	/* Find the mapping for this address */
+		mp = hw_lock_phys_vir(map->pmap->space, cva);	/* Lock the physical entry for emulator's page */
+		if((unsigned int)mp&1) {				/* Did we timeout? */
+			panic("vmm_map_page: timeout locking physical entry for emulator virtual address (%08X)\n", cva);	/* Yeah, scream about it! */
+			return KERN_FAILURE;				/* Bad hair day, return FALSE... */
+		}
 		
-		if(mp) break;							/* We found it */
+		if(mp) {								/* We found it... */
+			mpv = hw_cpv(mp);					/* Convert mapping block to virtual */
+			
+			if(!mpv->physent) return KERN_FAILURE;	/* If there is no physical entry (e.g., I/O area), we won't map it */
+			
+			if(!(mpv->PTEr & 1)) break;			/* If we are writable go ahead and map it... */
+	
+			hw_unlock_bit((unsigned int *)&mpv->physent->phys_link, PHYS_LOCK);	/* Unlock the map before we try to fault the write bit on */
+		}
 
 		ml_set_interrupts_enabled(TRUE);		/* Enable interruptions */
-		ret = vm_fault(map, trunc_page_32((vm_offset_t)cva), VM_PROT_READ | VM_PROT_WRITE, FALSE);	/* Didn't find it, try to fault it in read/write... */
+		ret = vm_fault(map, trunc_page(cva), VM_PROT_READ | VM_PROT_WRITE, FALSE, NULL, 0);	/* Didn't find it, try to fault it in read/write... */
 		ml_set_interrupts_enabled(FALSE);		/* Disable interruptions */
 		if (ret != KERN_SUCCESS) return KERN_FAILURE;	/* There isn't a page there, return... */
 	}
 
-	if(mp->mpFlags & (mpBlock | mpNest | mpSpecial)) {	/* If this is a block, a nest, or some other special thing, we can't map it */
-		mapping_drop_busy(mp);					/* We have everything we need from the mapping */
-		return KERN_FAILURE;					/* Leave in shame */
-	}
+/*
+ *	Now we make a mapping using all of the attributes of the source page except for protection.
+ *	Also specify that the physical entry is locked.
+ */
+	nmpv = mapping_make(CEntry->vmmPmap, mpv->physent, (ava & -PAGE_SIZE),
+		(mpv->physent->pte1 & -PAGE_SIZE), prot, ((mpv->physent->pte1 >> 3) & 0xF), 1); 
+
+	hw_unlock_bit((unsigned int *)&mpv->physent->phys_link, PHYS_LOCK);	/* Unlock the physical entry now, we're done with it */
 	
-	while(1) {										/* Keep trying the enter until it goes in */
-		ova = mapping_make(pmap, ava, mp->mpPAddr, 0, 1, prot);	/* Enter the mapping into the pmap */
-		if(!ova) break;							/* If there were no collisions, we are done... */
-		mapping_remove(pmap, ova);				/* Remove the mapping that collided */
-	}
-
-	mapping_drop_busy(mp);						/* We have everything we need from the mapping */
-
-	if (!((per_proc_info[cpu_number()].spcFlags) & FamVMmode)) {
-		act->mact.vmmControl->vmmLastMap = ava & 0xFFFFFFFFFFFFF000ULL;	/* Remember the last mapping we made */
-		act->mact.vmmControl->vmmGFlags = (act->mact.vmmControl->vmmGFlags & ~vmmLastAdSp) | index;	/* Remember last address space */
-	}
+	CEntry->vmmLastMap = ava & -PAGE_SIZE;		/* Remember the last mapping we made */
+	if (!((per_proc_info[cpu_number()].spcFlags) & FamVMmode))
+		CEntry->vmmFlags |= vmmMapDone;				/* Set that we did a map operation */
 
 	return KERN_SUCCESS;
 }
@@ -762,11 +604,6 @@ kern_return_t vmm_map_page(
 **
 **	See description of vmm_map_page for details. 
 **
-** Inputs:
-**		Index is used for both the context and the address space ID.
-**		index[24:31] is the context id and index[16:23] is the address space.
-**		if the address space ID is 0, the context ID is used for it.
-**
 ** Outputs:
 **		Normal exit is to run the VM.  Abnormal exit is triggered via a 
 **		non-KERN_SUCCESS return from vmm_map_page or later during the 
@@ -776,100 +613,76 @@ kern_return_t vmm_map_page(
 vmm_return_code_t vmm_map_execute(
 	thread_act_t 		act,
 	vmm_thread_index_t 	index,
-	addr64_t	 		cva,
-	addr64_t	 		ava,
+	vm_offset_t 		cva,
+	vm_offset_t 		ava,
 	vm_prot_t 			prot)
 {
 	kern_return_t		ret;
 	vmmCntrlEntry 		*CEntry;
-	unsigned int		adsp;
-	vmm_thread_index_t	cndx;
 
-	cndx = index & 0xFF;							/* Clean it up */
+	CEntry = vmm_get_entry(act, index);			/* Get and validate the index */
 
-	CEntry = vmm_get_entry(act, cndx);				/* Get and validate the index */
 	if (CEntry == NULL) return kVmmBogusContext;	/* Return bogus context */
 	
 	if (((per_proc_info[cpu_number()].spcFlags) & FamVMmode) && (CEntry != act->mact.vmmCEntry))
 		return kVmmBogusContext;			/* Yes, invalid index in Fam */
 	
-	adsp = (index >> 8) & 0xFF;						/* Get any requested address space */
-	if(!adsp) adsp = (index & 0xFF);				/* If 0, use context ID as address space ID */
-	
-	ret = vmm_map_page(act, adsp, cva, ava, prot);	/* Go try to map the page on in */
-	
+	ret = vmm_map_page(act, index, cva, ava, prot);	/* Go try to map the page on in */
 	
 	if(ret == KERN_SUCCESS) {
-		act->mact.vmmControl->vmmLastMap = ava & 0xFFFFFFFFFFFFF000ULL;	/* Remember the last mapping we made */
-		act->mact.vmmControl->vmmGFlags = (act->mact.vmmControl->vmmGFlags & ~vmmLastAdSp) | cndx;	/* Remember last address space */
-		vmm_execute_vm(act, cndx);				/* Return was ok, launch the VM */
+		CEntry->vmmFlags |= vmmMapDone;			/* Set that we did a map operation */
+		vmm_execute_vm(act, index);				/* Return was ok, launch the VM */
 	}
 	
-	return ret;										/* We had trouble mapping in the page */	
+	return kVmmInvalidAddress;					/* We had trouble mapping in the page */	
 	
 }
 
 /*-----------------------------------------------------------------------
 ** vmm_map_list
 **
-** This function maps a list of pages into various address spaces
+** This function maps a list of pages into the alternate's logical
+** address space.
 **
 ** Inputs:
 **		act   - pointer to current thread activation
-**		index - index of default address space (used if not specifed in list entry
+**		index - index of vmm state for this page
 **		count - number of pages to release
-**		flavor - 0 if 32-bit version, 1 if 64-bit
 **		vmcpComm in the comm page contains up to kVmmMaxMapPages to map
 **
 ** Outputs:
 **		kernel return code indicating success or failure
 **		KERN_FAILURE is returned if kVmmMaxUnmapPages is exceeded
 **		or the vmm_map_page call fails.
-**		We return kVmmInvalidAddress if virtual address size is not supported
 -----------------------------------------------------------------------*/
 
 kern_return_t vmm_map_list(
 	thread_act_t 		act,
-	vmm_adsp_id_t 		index,
-	unsigned int		cnt,
-	unsigned int		flavor)
+	vmm_thread_index_t 	index,
+	unsigned int		cnt)
 {
 	vmmCntrlEntry 		*CEntry;
 	boolean_t			ret;
 	unsigned int 		i;
-	vmmMList			*lst;
-	vmmMList64			*lstx;
-	addr64_t	 		cva;
-	addr64_t	 		ava;
+	vmmMapList			*lst;
+	vm_offset_t 		cva;
+	vm_offset_t 		ava;
 	vm_prot_t 			prot;
-	vmm_adsp_id_t 		adsp;
 
-	CEntry = vmm_get_entry(act, index);				/* Convert index to entry */		
-	if (CEntry == NULL) return KERN_FAILURE;		/* Either this isn't a vmm or the index is bogus */
+	CEntry = vmm_get_entry(act, index);				/* Get and validate the index */
+	if (CEntry == NULL)return -1;					/* No good, failure... */
 	
 	if(cnt > kVmmMaxMapPages) return KERN_FAILURE;	/* They tried to map too many */
 	if(!cnt) return KERN_SUCCESS;					/* If they said none, we're done... */
 	
-	lst = (vmmMList *)&((vmm_comm_page_t *)CEntry->vmmContextKern)->vmcpComm[0];	/* Point to the first entry */
-	lstx = (vmmMList64 *)&((vmm_comm_page_t *)CEntry->vmmContextKern)->vmcpComm[0];	/* Point to the first entry */
+	lst = (vmmMapList *)(&((vmm_comm_page_t *)CEntry->vmmContextKern)->vmcpComm[0]);	/* Point to the first entry */
 	
 	for(i = 0; i < cnt; i++) {						/* Step and release all pages in list */
-		if(flavor) {								/* Check if 32- or 64-bit addresses */
-			cva = lstx[i].vmlva;					/* Get the 64-bit actual address */	
-			ava = lstx[i].vmlava;					/* Get the 64-bit guest address */	
-		}
-		else {
-			cva = lst[i].vmlva;						/* Get the 32-bit actual address */	
-			ava = lst[i].vmlava;					/* Get the 32-bit guest address */	
-		}
-
-		prot = ava & vmmlProt;						/* Extract the protection bits */	
-		adsp = (ava & vmmlAdID) >> 4;				/* Extract an explicit address space request */	
-		if(!adsp) adsp = index - 1;					/* If no explicit, use supplied default */
-		ava = ava &= 0xFFFFFFFFFFFFF000ULL;			/* Clean up the address */
-		
+		cva = lst[i].vmlva;							/* Get the actual address */	
+		ava = lst[i].vmlava & -vmlFlgs;				/* Get the alternate address */	
+		prot = lst[i].vmlava & vmlProt;				/* Get the protection bits */	
 		ret = vmm_map_page(act, index, cva, ava, prot);	/* Go try to map the page on in */
-		if(ret != KERN_SUCCESS) return ret;			/* Bail if any error */
+		if(ret != KERN_SUCCESS) return KERN_FAILURE;	/* Bail if any error */
 	}
 	
 	return KERN_SUCCESS	;							/* Return... */
@@ -895,36 +708,45 @@ kern_return_t vmm_map_list(
 **	    this call could return the wrong one.  Moral of the story: no aliases.
 -----------------------------------------------------------------------*/
 
-addr64_t vmm_get_page_mapping(
+vm_offset_t vmm_get_page_mapping(
 	thread_act_t 		act,
-	vmm_adsp_id_t	 	index,
-	addr64_t	 		va)
+	vmm_thread_index_t 	index,
+	vm_offset_t 		va)
 {
 	vmmCntrlEntry 		*CEntry;
-	register mapping 	*mp;
+	vm_offset_t			ova;
+	register mapping 	*mpv, *mp, *nmpv, *nmp;
 	pmap_t				pmap;
-	addr64_t			nextva, sva;
-	ppnum_t				pa;
 
-	pmap = vmm_get_adsp(act, index);						/* Get and validate the index */
-	if (!pmap)return -1;									/* No good, failure... */
+	CEntry = vmm_get_entry(act, index);						/* Get and validate the index */
+	if (CEntry == NULL)return -1;							/* No good, failure... */
 
-	mp = mapping_find(pmap, va, &nextva, 0);				/* Find our page */
-	
+	mp = hw_lock_phys_vir(CEntry->vmmPmap->space, va);		/* Look up the mapping */
+	if((unsigned int)mp & 1) {								/* Did we timeout? */
+		panic("vmm_get_page_mapping: timeout locking physical entry for alternate virtual address (%08X)\n", va);	/* Yeah, scream about it! */
+		return -1;											/* Bad hair day, return FALSE... */
+	}
 	if(!mp) return -1;										/* Not mapped, return -1 */
 
-	pa = mp->mpPAddr;										/* Remember the page address */
-
-	mapping_drop_busy(mp);									/* Go ahead and relase the mapping now */
-	
+	mpv = hw_cpv(mp);										/* Convert mapping block to virtual */
 	pmap = current_act()->map->pmap;						/* Get the current pmap */
-	sva = mapping_p2v(pmap, pa);							/* Now find the source virtual */
-
-	if(sva != 0) return sva;								/* We found it... */
+	ova = -1;												/* Assume failure for now */
 	
-	panic("vmm_get_page_mapping: could not back-map alternate va (%016llX)\n", va);	/* We are bad wrong if we can't find it */
+	for(nmpv = hw_cpv(mpv->physent->phys_link); nmpv; nmpv = hw_cpv(nmpv->next)) {	/* Scan 'em all */
+		
+		if(nmpv->pmap != pmap) continue;					/* Skip all the rest if this is not the right pmap... */ 
+		
+		ova = ((((unsigned int)nmpv->PTEhash & -64) << 6) ^ (pmap->space  << 12)) & 0x003FF000;	/* Backward hash to the wrapped VADDR */
+		ova = ova | ((nmpv->PTEv << 1) & 0xF0000000);		/* Move in the segment number */
+		ova = ova | ((nmpv->PTEv << 22) & 0x0FC00000);		/* Add in the API for the top of the address */
+		break;												/* We're done now, pass virtual address back */
+	}
 
-	return -1;
+	hw_unlock_bit((unsigned int *)&mpv->physent->phys_link, PHYS_LOCK);	/* We're done, unlock the physical entry */
+	
+	if(ova == -1) panic("vmm_get_page_mapping: could not back-map alternate va (%08X)\n", va);	/* We are bad wrong if we can't find it */
+
+	return ova;
 }
 
 /*-----------------------------------------------------------------------
@@ -945,20 +767,19 @@ addr64_t vmm_get_page_mapping(
 
 kern_return_t vmm_unmap_page(
 	thread_act_t 		act,
-	vmm_adsp_id_t	 	index,
-	addr64_t	 		va)
+	vmm_thread_index_t 	index,
+	vm_offset_t 		va)
 {
 	vmmCntrlEntry 		*CEntry;
-	addr64_t			nadd;
-	pmap_t				pmap;
+	boolean_t			ret;
 	kern_return_t		kern_result = KERN_SUCCESS;
 
-	pmap = vmm_get_adsp(act, index);						/* Get and validate the index */
-	if (!pmap)return -1;									/* No good, failure... */
+	CEntry = vmm_get_entry(act, index);						/* Get and validate the index */
+	if (CEntry == NULL)return -1;							/* No good, failure... */
 	
-	nadd = mapping_remove(pmap, va);						/* Toss the mapping */
+	ret = mapping_remove(CEntry->vmmPmap, va);				/* Toss the mapping */
 	
-	return ((nadd & 1) ? KERN_FAILURE : KERN_SUCCESS);		/* Return... */
+	return (ret ? KERN_SUCCESS : KERN_FAILURE);				/* Return... */
 }
 
 /*-----------------------------------------------------------------------
@@ -971,7 +792,6 @@ kern_return_t vmm_unmap_page(
 **		act   - pointer to current thread activation
 **		index - index of vmm state for this page
 **		count - number of pages to release
-**		flavor - 0 if 32-bit, 1 if 64-bit
 **		vmcpComm in the comm page contains up to kVmmMaxUnmapPages to unmap
 **
 ** Outputs:
@@ -981,46 +801,28 @@ kern_return_t vmm_unmap_page(
 
 kern_return_t vmm_unmap_list(
 	thread_act_t 		act,
-	vmm_adsp_id_t	 	index,
-	unsigned int 		cnt,
-	unsigned int		flavor)
+	vmm_thread_index_t 	index,
+	unsigned int 		cnt)
 {
 	vmmCntrlEntry 		*CEntry;
 	boolean_t			ret;
 	kern_return_t		kern_result = KERN_SUCCESS;
 	unsigned int		*pgaddr, i;
-	addr64_t			gva;
-	vmmUMList			*lst;
-	vmmUMList64			*lstx;
-	pmap_t				pmap;
-	int					adsp;
 
-	CEntry = vmm_get_entry(act, index);				/* Convert index to entry */		
-	if (CEntry == NULL) return KERN_FAILURE;		/* Either this isn't a vmm or the index is bogus */
+	CEntry = vmm_get_entry(act, index);						/* Get and validate the index */
+	if (CEntry == NULL)return -1;							/* No good, failure... */
 	
-	if(cnt > kVmmMaxUnmapPages) return KERN_FAILURE;	/* They tried to unmap too many */
-	if(!cnt) return KERN_SUCCESS;					/* If they said none, we're done... */
+	if(cnt > kVmmMaxUnmapPages) return KERN_FAILURE;		/* They tried to unmap too many */
+	if(!cnt) return KERN_SUCCESS;							/* If they said none, we're done... */
 	
-	lst = lstx = &((vmm_comm_page_t *)CEntry->vmmContextKern)->vmcpComm[0];	/* Point to the first entry */
+	pgaddr = &((vmm_comm_page_t *)CEntry->vmmContextKern)->vmcpComm[0];	/* Point to the first entry */
 	
-	for(i = 0; i < cnt; i++) {						/* Step and release all pages in list */
-		if(flavor) {								/* Check if 32- or 64-bit addresses */
-			gva = lstx[i].vmlava;					/* Get the 64-bit guest address */	
-		}
-		else {
-			gva = lst[i].vmlava;					/* Get the 32-bit guest address */	
-		}
-
-		adsp = (gva & vmmlAdID) >> 4;				/* Extract an explicit address space request */	
-		if(!adsp) adsp = index - 1;					/* If no explicit, use supplied default */
-		pmap = act->mact.vmmControl->vmmAdsp[adsp];	/* Get the pmap for this request */
-		if(!pmap) continue;							/* Ain't nuthin' mapped here, no durn map... */
-
-		gva = gva &= 0xFFFFFFFFFFFFF000ULL;			/* Clean up the address */		
-		(void)mapping_remove(pmap, gva);			/* Toss the mapping */
+	for(i = 0; i < cnt; i++) {								/* Step and release all pages in list */
+	
+		(void)mapping_remove(CEntry->vmmPmap, pgaddr[i]);	/* Toss the mapping */
 	}
 	
-	return KERN_SUCCESS	;							/* Return... */
+	return KERN_SUCCESS	;									/* Return... */
 }
 
 /*-----------------------------------------------------------------------
@@ -1042,19 +844,18 @@ kern_return_t vmm_unmap_list(
 
 void vmm_unmap_all_pages(
 	thread_act_t 		act,
-	vmm_adsp_id_t	 	index)
+	vmm_thread_index_t 	index)
 {
 	vmmCntrlEntry 		*CEntry;
-	pmap_t				pmap;
 
-	pmap = vmm_get_adsp(act, index);						/* Convert index to entry */		
-	if (!pmap) return;										/* Either this isn't vmm thread or the index is bogus */
+	CEntry = vmm_get_entry(act, index);						/* Convert index to entry */		
+	if (CEntry == NULL) return;								/* Either this isn't vmm thread or the index is bogus */
 	
 /*
  *	Note: the pmap code won't deal with the last page in the address space, so handle it explicitly
  */
-	mapping_remove(pmap, 0xFFFFFFFFFFFFF000LL);				/* Remove final page explicitly because we might have mapped it */	
-	pmap_remove(pmap, 0, 0xFFFFFFFFFFFFF000LL);				/* Remove all entries from this map */
+	mapping_remove(CEntry->vmmPmap, 0xFFFFF000);			/* Remove final page explicitly because we might have mapped it */	
+	pmap_remove(CEntry->vmmPmap, 0, 0xFFFFF000);			/* Remove all entries from this map */
 	return;
 }
 
@@ -1082,36 +883,30 @@ void vmm_unmap_all_pages(
 
 boolean_t vmm_get_page_dirty_flag(
 	thread_act_t 				act,
-	vmm_adsp_id_t	 	index,
-	addr64_t	 		va,
+	vmm_thread_index_t 	index,
+	vm_offset_t 		va,
 	unsigned int		reset)
 {
 	vmmCntrlEntry 		*CEntry;
 	register mapping 	*mpv, *mp;
 	unsigned int		RC;
-	pmap_t				pmap;
 
-	pmap = vmm_get_adsp(act, index);						/* Convert index to entry */		
-	if (!pmap) return 1;									/* Either this isn't vmm thread or the index is bogus */
+	CEntry = vmm_get_entry(act, index);						/* Convert index to entry */		
+	if (CEntry == NULL) return 1;							/* Either this isn't vmm thread or the index is bogus */
 	
-	RC = hw_test_rc(pmap, (addr64_t)va, reset);				/* Fetch the RC bits and clear if requested */	
-
-	switch (RC & mapRetCode) {								/* Decode return code */
-	
-		case mapRtOK:										/* Changed */
-			return ((RC & (unsigned int)mpC) == (unsigned int)mpC);	/* Return if dirty or not */
-			break;
-	
-		case mapRtNotFnd:									/* Didn't find it */
-			return 1;										/* Return dirty */
-			break;
-			
-		default:
-			panic("vmm_get_page_dirty_flag: hw_test_rc failed - rc = %d, pmap = %08X, va = %016llX\n", RC, pmap, va);
-		
+	mp = hw_lock_phys_vir(CEntry->vmmPmap->space, va);		/* Look up the mapping */
+	if((unsigned int)mp & 1) {								/* Did we timeout? */
+		panic("vmm_get_page_dirty_flag: timeout locking physical entry for alternate virtual address (%08X)\n", va);	/* Yeah, scream about it! */
+		return 1;											/* Bad hair day, return dirty... */
 	}
+	if(!mp) return 1;										/* Not mapped, return dirty... */
+	
+	RC = hw_test_rc(mp, reset);								/* Fetch the RC bits and clear if requested */	
 
-	return 1;												/* Return the change bit */
+	mpv = hw_cpv(mp);										/* Convert mapping block to virtual */
+	hw_unlock_bit((unsigned int *)&mpv->physent->phys_link, PHYS_LOCK);		/* We're done, unlock the physical entry */
+
+	return (RC & 1);										/* Return the change bit */
 }
 
 
@@ -1135,38 +930,32 @@ boolean_t vmm_get_page_dirty_flag(
 
 kern_return_t vmm_protect_page(
 	thread_act_t 		act,
-	vmm_adsp_id_t	 	index,
-	addr64_t	 		va,
+	vmm_thread_index_t 	index,
+	vm_offset_t 		va,
 	vm_prot_t			prot)
 {
 	vmmCntrlEntry 		*CEntry;
-	addr64_t			nextva;
-	int	ret;
-	pmap_t				pmap;
+	register mapping 	*mpv, *mp;
+	unsigned int		RC;
 
-	pmap = vmm_get_adsp(act, index);						/* Convert index to entry */		
-	if (!pmap) return KERN_FAILURE;							/* Either this isn't vmm thread or the index is bogus */
+	CEntry = vmm_get_entry(act, index);						/* Convert index to entry */		
+	if (CEntry == NULL) return KERN_FAILURE;				/* Either this isn't vmm thread or the index is bogus */
 	
-	ret = hw_protect(pmap, va, prot, &nextva);				/* Try to change the protect here */
-
-	switch (ret) {											/* Decode return code */
+	mp = hw_lock_phys_vir(CEntry->vmmPmap->space, va);		/* Look up the mapping */
+	if((unsigned int)mp & 1) {								/* Did we timeout? */
+		panic("vmm_protect_page: timeout locking physical entry for virtual address (%08X)\n", va);	/* Yeah, scream about it! */
+		return 1;											/* Bad hair day, return dirty... */
+	}
+	if(!mp) return KERN_SUCCESS;							/* Not mapped, just return... */
 	
-		case mapRtOK:										/* All ok... */
-			break;											/* Outta here */
-			
-		case mapRtNotFnd:									/* Didn't find it */
-			return KERN_SUCCESS;							/* Ok, return... */
-			break;
-			
-		default:
-			panic("vmm_protect_page: hw_protect failed - rc = %d, pmap = %08X, va = %016llX\n", ret, pmap, (addr64_t)va);
-		
-	}
+	hw_prot_virt(mp, prot);									/* Set the protection */	
 
-	if (!((per_proc_info[cpu_number()].spcFlags) & FamVMmode)) {
-		act->mact.vmmControl->vmmLastMap = va & 0xFFFFFFFFFFFFF000ULL;	/* Remember the last mapping we made */
-		act->mact.vmmControl->vmmGFlags = (act->mact.vmmControl->vmmGFlags & ~vmmLastAdSp) | index;	/* Remember last address space */
-	}
+	mpv = hw_cpv(mp);										/* Convert mapping block to virtual */
+	hw_unlock_bit((unsigned int *)&mpv->physent->phys_link, PHYS_LOCK);		/* We're done, unlock the physical entry */
+
+	CEntry->vmmLastMap = va & -PAGE_SIZE;					/* Remember the last mapping we changed */
+	if (!((per_proc_info[cpu_number()].spcFlags) & FamVMmode))
+		CEntry->vmmFlags |= vmmMapDone;						/* Set that we did a map operation */
 
 	return KERN_SUCCESS;									/* Return */
 }
@@ -1178,10 +967,7 @@ kern_return_t vmm_protect_page(
 ** This function sets the protection bits of a mapped page
 ** and then directly starts executing.
 **
-**	See description of vmm_protect_page for details
-**
-** Inputs:
-**		See vmm_protect_page and vmm_map_execute
+**	See description of vmm_protect_page for details. 
 **
 ** Outputs:
 **		Normal exit is to run the VM.  Abnormal exit is triggered via a 
@@ -1192,33 +978,27 @@ kern_return_t vmm_protect_page(
 vmm_return_code_t vmm_protect_execute(
 	thread_act_t 		act,
 	vmm_thread_index_t 	index,
-	addr64_t	 		va,
+	vm_offset_t 		va,
 	vm_prot_t			prot)
 {
 	kern_return_t		ret;
 	vmmCntrlEntry 		*CEntry;
-	unsigned int		adsp;
-	vmm_thread_index_t	cndx;
 
-	cndx = index & 0xFF;							/* Clean it up */
-	CEntry = vmm_get_entry(act, cndx);				/* Get and validate the index */
-	if (CEntry == NULL) return kVmmBogusContext;	/* Return bogus context */
-	
-	adsp = (index >> 8) & 0xFF;						/* Get any requested address space */
-	if(!adsp) adsp = (index & 0xFF);				/* If 0, use context ID as address space ID */
+	CEntry = vmm_get_entry(act, index);					/* Get and validate the index */
+
+	if (CEntry == NULL) return kVmmBogusContext;		/* Return bogus context */
 	
 	if (((per_proc_info[cpu_number()].spcFlags) & FamVMmode) && (CEntry != act->mact.vmmCEntry))
 		return kVmmBogusContext;			/* Yes, invalid index in Fam */
 	
-	ret = vmm_protect_page(act, adsp, va, prot);	/* Go try to change access */
+	ret = vmm_protect_page(act, index, va, prot);		/* Go try to change access */
 	
 	if(ret == KERN_SUCCESS) {
-		act->mact.vmmControl->vmmLastMap = va & 0xFFFFFFFFFFFFF000ULL;	/* Remember the last mapping we made */
-		act->mact.vmmControl->vmmGFlags = (act->mact.vmmControl->vmmGFlags & ~vmmLastAdSp) | cndx;	/* Remember last address space */
-		vmm_execute_vm(act, cndx);	/* Return was ok, launch the VM */
+		CEntry->vmmFlags |= vmmMapDone;					/* Set that we did a map operation */
+		vmm_execute_vm(act, index);						/* Return was ok, launch the VM */
 	}
 	
-	return ret;										/* We had trouble of some kind (shouldn't happen) */	
+	return kVmmInvalidAddress;							/* We had trouble of some kind (shouldn't happen) */	
 	
 }
 
@@ -1255,6 +1035,9 @@ kern_return_t vmm_get_float_state(
 
 	fpu_save(&CEntry->vmmFacCtx);					/* Save context if live */
 
+	CEntry->vmmContextKern->vmm_proc_state.ppcFPSCRshadow.i[0] = CEntry->vmmContextKern->vmm_proc_state.ppcFPSCR.i[0];	/* Copy FPSCR */
+	CEntry->vmmContextKern->vmm_proc_state.ppcFPSCRshadow.i[1] = CEntry->vmmContextKern->vmm_proc_state.ppcFPSCR.i[1];	/* Copy FPSCR */
+	
 	if(sv = CEntry->vmmFacCtx.FPUsave) {			/* Is there context yet? */
 		bcopy((char *)&sv->save_fp0, (char *)&(CEntry->vmmContextKern->vmm_proc_state.ppcFPRs), 32 * 8); /* 32 registers */
 		return KERN_SUCCESS;
@@ -1301,6 +1084,10 @@ kern_return_t vmm_get_vector_state(
 	act->mact.specFlags &= ~vectorCng;				/* Clear the special flag */
 	CEntry->vmmContextKern->vmmStat &= ~vmmVectCngd;	/* Clear the change indication */
 	
+	for(j=0; j < 4; j++) {							/* Set value for vscr */
+		CEntry->vmmContextKern->vmm_proc_state.ppcVSCRshadow.i[j] = CEntry->vmmContextKern->vmm_proc_state.ppcVSCR.i[j];
+	}
+
 	if(sv = CEntry->vmmFacCtx.VMXsave) {			/* Is there context yet? */
 
 		vrvalidwrk = sv->save_vrvalid;				/* Get the valid flags */
@@ -1379,10 +1166,6 @@ kern_return_t vmm_set_timer(
 **
 ** This function causes the timer for a specified VM to be
 ** returned in return_params[0] and return_params[1].
-** Note that this is kind of funky for 64-bit VMs because we
-** split the timer into two parts so that we still set parms 0 and 1.
-** Obviously, we don't need to do this because the parms are 8 bytes
-** wide.
 ** 
 **
 ** Inputs:
@@ -1404,16 +1187,12 @@ kern_return_t vmm_get_timer(
 	CEntry = vmm_get_entry(act, index);				/* Convert index to entry */		
 	if (CEntry == NULL) return KERN_FAILURE;		/* Either this isn't vmm thread or the index is bogus */
 
-	if(CEntry->vmmXAFlgs & vmm64Bit) {				/* A 64-bit virtual machine? */
-		CEntry->vmmContextKern->vmmRet.vmmrp64.return_params[0] = (uint32_t)(CEntry->vmmTimer >> 32);	/* Return the last timer value */
-		CEntry->vmmContextKern->vmmRet.vmmrp64.return_params[1] = (uint32_t)CEntry->vmmTimer;	/* Return the last timer value */
-	}
-	else {
-		CEntry->vmmContextKern->vmmRet.vmmrp32.return_params[0] = (CEntry->vmmTimer >> 32);	/* Return the last timer value */
-		CEntry->vmmContextKern->vmmRet.vmmrp32.return_params[1] = (uint32_t)CEntry->vmmTimer;	/* Return the last timer value */
-	}
+	CEntry->vmmContextKern->return_params[0] = (CEntry->vmmTimer >> 32);	/* Return the last timer value */
+	CEntry->vmmContextKern->return_params[1] = (uint32_t)CEntry->vmmTimer;	/* Return the last timer value */
+	
 	return KERN_SUCCESS;
 }
+
 
 
 /*-----------------------------------------------------------------------
@@ -1453,7 +1232,7 @@ void vmm_timer_pop(
 	CTable = act->mact.vmmControl;					/* Make this easier */	
 	any = 0;										/* Haven't found a running unexpired timer yet */
 	
-	for(cvi = 0; cvi < kVmmMaxContexts; cvi++) {	/* Cycle through all and check time now */
+	for(cvi = 0; cvi < kVmmMaxContextsPerThread; cvi++) {	/* Cycle through all and check time now */
 
 		if(!(CTable->vmmc[cvi].vmmFlags & vmmInUse)) continue;	/* Do not check if the entry is empty */
 		
@@ -1571,7 +1350,7 @@ int vmm_stop_vm(struct savearea *save)
 		return 1;								/* Return... */
 	}
 
-	for(cvi = 0; cvi < kVmmMaxContexts; cvi++) {	/* Search slots */
+	for(cvi = 0; cvi < kVmmMaxContextsPerThread; cvi++) {	/* Search slots */
 		if((0x80000000 & vmmask) && (CTable->vmmc[cvi].vmmFlags & vmmInUse)) {	/* See if we need to stop and if it is in use */
 			hw_atomic_or(&CTable->vmmc[cvi].vmmFlags, vmmXStop);	/* Set this one to stop */
 		}

@@ -13,6 +13,7 @@ include $(MakeInc_def)
 INSTINC_SUBDIRS = \
         adb \
 	nvram \
+        pci \
 	platform \
 	power \
 	pwr_mgt \

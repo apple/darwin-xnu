@@ -3,22 +3,19 @@
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
- * Copyright (c) 1999-2003 Apple Computer, Inc.  All Rights Reserved.
+ * The contents of this file constitute Original Code as defined in and
+ * are subject to the Apple Public Source License Version 1.1 (the
+ * "License").  You may not use this file except in compliance with the
+ * License.  Please obtain a copy of the License at
+ * http://www.apple.com/publicsource and read it before using this file.
  * 
- * This file contains Original Code and/or Modifications of Original Code
- * as defined in and that are subject to the Apple Public Source License
- * Version 2.0 (the 'License'). You may not use this file except in
- * compliance with the License. Please obtain a copy of the License at
- * http://www.opensource.apple.com/apsl/ and read it before using this
- * file.
- * 
- * The Original Code and all software distributed under the License are
- * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * This Original Code and all software distributed under the License are
+ * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
- * Please see the License for the specific language governing rights and
- * limitations under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
+ * License for the specific language governing rights and limitations
+ * under the License.
  * 
  * @APPLE_LICENSE_HEADER_END@
  */
@@ -1915,8 +1912,8 @@ asp_putnext(gref, mproto)
 
 int ASPputmsg(gref_t *gref, strbuf_t *ctlptr, strbuf_t *datptr, gbuf_t *mreq, int flags, int *errp)
 {
-    int s, i, err, len, offset, remain, size, copy_len;
-    gbuf_t *mioc, *mdata, *mx, *m0;
+    int s, i, err, len;
+    gbuf_t *mioc, *mdata, *mx;
     ioc_t *iocbp;
     strbuf_t ctlbuf;
     strbuf_t datbuf;
@@ -1930,7 +1927,6 @@ int ASPputmsg(gref_t *gref, strbuf_t *ctlptr, strbuf_t *datptr, gbuf_t *mreq, in
     asp_word_t *awp;
     union asp_primitives *primitives;
     unsigned short tid;
-    caddr_t		dataptr;
     
     if ((scb = (asp_scb_t *)gref->info) == 0) {
 		dPrintf(D_M_ASP, D_L_ERROR,
@@ -1992,77 +1988,46 @@ int ASPputmsg(gref_t *gref, strbuf_t *ctlptr, strbuf_t *datptr, gbuf_t *mreq, in
 		("ASPputmsg: %s\n", aspCmdStr(Primitive)));
 
     /*
-     * copy in the data content into multiple mbuf clusters if
-     * required.  ATP now expects reply data to be placed in
-     * standard clusters, not the large external clusters that
-     * were used previously.
+     * allocate buffer and copy in the data content
      */
-         
-    /* set offset for use by some commands */
-    offset = (Primitive == ASPFUNC_CmdReply) ? 0 : aspCMDsize;
-	size = 0;
-    if (mreq != NULL) {
-        /* The data from the in-kernel call for use by AFP is passed
-         * in as one large external cluster.  This needs to be copied
-         * to a chain of standard clusters.
-         */
-        remain = gbuf_len(mreq);
-        dataptr = mtod(mreq, caddr_t);
-    } else {
-    	/* copyin from user space */
-    	remain = datbuf.len; 
-    	dataptr = (caddr_t)datbuf.buf;  
-    }	
+    len = (Primitive == ASPFUNC_CmdReply) ? 0 : aspCMDsize;
     
-    /* allocate first buffer */
-    if (!(mdata = gbuf_alloc_wait((remain + offset > MCLBYTES ? MCLBYTES : remain + offset), TRUE))) {
+    if (!(mdata = gbuf_alloc_wait(datbuf.len+len, TRUE))) {
         /* error return should not be possible */
         err = ENOBUFS;
         gbuf_freem(mioc);
         goto l_err;
     }
-    gbuf_wset(mdata, 0);		/* init length to zero */
+    gbuf_wset(mdata, (datbuf.len+len));
     gbuf_cont(mioc) = mdata;
+    
+    if (mreq != NULL) {
+        /* being called from kernel space */
+        gbuf_t *tmp = mreq;
+        unsigned long offset = 0;
+        
+        /* copy afp cmd data from the passed in mbufs to mdata.  I cant
+        chain mreq to mdata since the rest of this code assumes
+        just one big mbuf with space in front for the BDS */
+        offset = len;
+        while (tmp != NULL) {
+            bcopy (gbuf_rptr(tmp), (gbuf_rptr(mdata) + offset), gbuf_len(tmp));
+            offset += gbuf_len(tmp);
+            tmp = gbuf_cont(tmp);           /* on to next mbuf in chain */
+        }
+        
+        /* all data copied out of mreq so free it */
+        gbuf_freem(mreq);
+    } else {
+        /* being called from user space */
+        if ((err = copyin((caddr_t)datbuf.buf,
+                  (caddr_t)(gbuf_rptr(mdata)+len), datbuf.len)) != 0) {
+            gbuf_freem(mioc);
+            goto l_err;
+        }
+    }
 
-	while (remain) {
-		if (remain + offset > MCLBYTES)
-			copy_len = MCLBYTES - offset;
-		else
-			copy_len = remain;
-		remain -= copy_len;
-		if (mreq != NULL)
-			bcopy (dataptr, (gbuf_rptr(mdata) + offset), copy_len);
-		else if ((err = copyin(dataptr, (caddr_t)(gbuf_rptr(mdata) + offset), copy_len)) != 0) {
-			gbuf_freem(mioc);
-			goto l_err;
-		}
-		gbuf_wset(mdata, (copy_len + offset));
-		size += copy_len + offset;
-		dataptr += copy_len;
-		offset = 0;
-		if (remain) {
-			/* allocate the next mbuf */
-			if ((gbuf_cont(mdata) = m_get((M_WAIT), MSG_DATA)) == 0) {
-				err = ENOBUFS;
-				gbuf_freem(mioc);
-				goto l_err;
-			}
-			mdata = gbuf_cont(mdata);
-			MCLGET(mdata, M_WAIT);
-			if (!(mdata->m_flags & M_EXT)) {
-				err = ENOBUFS;
-				gbuf_freem(mioc);
-				goto l_err;
-			}
-		}
-	}
-	mdata = gbuf_cont(mioc);			/* code further on down expects this to b e set */
-	mdata->m_pkthdr.len = size;			/* set packet hdr len */
-
-	if (mreq != 0)
-		gbuf_freem(mreq);
-
-   	switch (Primitive) {
+    switch (Primitive) {
 
     case ASPFUNC_Command:
     case ASPFUNC_Write:
@@ -2179,20 +2144,16 @@ int ASPputmsg(gref_t *gref, strbuf_t *ctlptr, strbuf_t *datptr, gbuf_t *mreq, in
             atp->xo = 1;
             atp->xo_relt = 1;
         }
-        /* setup the atpBDS struct - only the length field is used,
-         * except for the first one which contains the bds count in
-         * bdsDataSz.
-         */
         atpBDS = (struct atpBDS *)gbuf_wptr(mioc);
         msize = mdata ? gbuf_msgsize(mdata) : 0;
-       	for (nbds=0; (nbds < ATP_TRESP_MAX) && (msize > 0); nbds++) {
+       for (nbds=0; (nbds < ATP_TRESP_MAX) && (msize > 0); nbds++) {
             len = msize < ATP_DATA_SIZE ? msize : ATP_DATA_SIZE;
             msize -= ATP_DATA_SIZE;
             *(long *)atpBDS[nbds].bdsUserData = 0;
             UAL_ASSIGN(atpBDS[nbds].bdsBuffAddr, 1);
             UAS_ASSIGN(atpBDS[nbds].bdsBuffSz, len);
         }
-       	UAS_ASSIGN(atpBDS[0].bdsDataSz, nbds);
+        UAS_ASSIGN(atpBDS[0].bdsDataSz, nbds);
         *(long *)atpBDS[0].bdsUserData = (long)result;
         *(long *)atp->user_bytes = (long)result;
         gbuf_winc(mioc,atpBDSsize);

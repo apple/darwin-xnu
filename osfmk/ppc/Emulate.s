@@ -3,22 +3,19 @@
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
- * Copyright (c) 1999-2003 Apple Computer, Inc.  All Rights Reserved.
+ * The contents of this file constitute Original Code as defined in and
+ * are subject to the Apple Public Source License Version 1.1 (the
+ * "License").  You may not use this file except in compliance with the
+ * License.  Please obtain a copy of the License at
+ * http://www.apple.com/publicsource and read it before using this file.
  * 
- * This file contains Original Code and/or Modifications of Original Code
- * as defined in and that are subject to the Apple Public Source License
- * Version 2.0 (the 'License'). You may not use this file except in
- * compliance with the License. Please obtain a copy of the License at
- * http://www.opensource.apple.com/apsl/ and read it before using this
- * file.
- * 
- * The Original Code and all software distributed under the License are
- * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * This Original Code and all software distributed under the License are
+ * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
- * Please see the License for the specific language governing rights and
- * limitations under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
+ * License for the specific language governing rights and limitations
+ * under the License.
  * 
  * @APPLE_LICENSE_HEADER_END@
  */
@@ -39,6 +36,7 @@
 #include <mach/machine/vm_param.h>
 #include <assym.s>
 
+#define kernAccess 31
 #define traceInst 30
 #define dssAllDone 29
 
@@ -66,13 +64,13 @@
 
 LEXT(Emulate)
 
-			bf--	pf64Bitb,emn64					; Skip if not 64-bit
-			b		EXT(Emulate64)					; Jump to the 64-bit code...
 			
-emn64:		mfsprg	r31,0							; Get the per_proc
-			lwz		r12,savesrr1+4(r13)				; Get the exception info
+			mfsprg	r31,0							; Get the per_proc
+			lis		r30,hi16(EXT(dgWork))			; Get the high half of diagnostic work area
+			lwz		r12,savesrr1(r13)				; Get the exception info
+			ori		r30,r30,lo16(EXT(dgWork))		; And the low half
 			rlwinm.	r0,r12,0,SRR1_PRG_ILL_INS_BIT,SRR1_PRG_ILL_INS_BIT	; Emulation candidate?
-			lwz		r30,dgFlags(0)					; Get the flags
+			lwz		r30,dgFlags(r30)				; Get the flags
 			beq+	eExit							; Nope, do not try to emulate...
 
 			rlwinm.	r0,r30,0,enaDiagEMb,enaDiagEMb	; Do we want to try to emulate something?
@@ -113,9 +111,9 @@ eNoVect:	bl		eIFetch							; Get the instruction image
 			cror	cr1_eq,cr1_eq,cr0_eq			; Remember
 			bne		cr1_eq,eNotIndex				; Go check non-index forms...
 
-			rlwinm.	r21,r10,19,24,28				; Extract index to rA to build EA
-			rlwinm	r22,r10,24,24,28				; Extract index to rB
-			addi	r24,r13,saver0+4				; Point to the start of registers
+			rlwinm.	r21,r10,18,25,29				; Extract index to rA to build EA
+			rlwinm	r22,r10,23,25,29				; Extract index to rB
+			addi	r24,r13,saver0					; Point to the start of registers
 			li		r19,0							; Assume 0 base
 			beq		eZeroBase						; Yes...
 			lwzx	r19,r24,r21						; Get the base register value
@@ -130,15 +128,15 @@ eNotIndex:	cmplwi	r0,725							; stswi?
 			cror	cr1_eq,cr1_eq,cr0_eq			; Remember
 			bne		cr1,eExit						; Not one we handle...
 	
-			rlwinm.	r21,r10,19,24,28				; Extract index to rA to build EA
-			addi	r24,r13,saver0+4				; Point to the start of registers
+			rlwinm.	r21,r10,18,25,29				; Extract index to rA to build EA
+			addi	r24,r13,saver0					; Point to the start of registers
 			li		r22,0							; Assume 0 base
 			beq		eFinishUp						; Yes, it is...
 			lwzx	r22,r24,r21						; Get the base register value
 			
 eFinishUp:	stw		r20,savedsisr(r13)				; Set the DSISR
 			li		r11,T_ALIGNMENT					; Get the exception code
-			stw		r22,savedar+4(r13)				; Save the DAR
+			stw		r22,savedar(r13)				; Save the DAR
 			stw		r11,saveexception(r13)			; Set the exception code
 			b		EXT(AlignAssist)				; Go emulate the handler...
 
@@ -155,15 +153,20 @@ eExit:		b		EXT(EmulExit)					; Just return for now...
 
 			.align	5
 
-eIFetch:	lwz		r23,savesrr1+4(r13)				; Get old MSR
+eIFetch:	lwz		r23,savesrr1(r13)				; Get old MSR
 			mflr	r28								; Save return
 
 			rlwinm.	r22,r23,0,MSR_PR_BIT,MSR_PR_BIT	; Within kernel?
 
 			mfmsr	r30								; Save the MSR for now
-			lwz		r23,savesrr0+4(r13)				; Get instruction address
+			lwz		r23,savesrr0(r13)				; Get instruction address
+			crmove	kernAccess,cr0_eq				; Remember if fault was in kernel
+			li		r25,4							; Set access length
+			or		r22,r22,r30						; Add PR to access MSR
 			
-			ori		r22,r30,lo16(MASK(MSR_DR)|MASK(MSR_RI))		; Set RI and DR onto access MSR
+			bfl+	kernAccess,aaSetSegs			; Go set SRs if we are in user and need to
+
+			ori		r22,r22,lo16(MASK(MSR_DR)|MASK(MSR_RI))		; Set RI onto access MSR
 
 			crset	cr0_eq							; Set this to see if we failed
 			mtmsr	r22								; Flip DR, RI, and maybe PR on
@@ -171,10 +174,15 @@ eIFetch:	lwz		r23,savesrr1+4(r13)				; Get old MSR
 			
 			lwz		r10,0(r23)						; Fetch the instruction
 			
-			mtmsr	r30								; Trans and RI off
-			isync
+			crmove	28,cr0_eq						; Remember if we failed
+			li		r0,loadMSR						; Set the magic "get back to supervisor" SC
+			mr		r3,r30							; Get MSR to load
+			sc										; Get back to supervisor state
+			
+			bfl+	kernAccess,aaUnSetSegs			; Go set SRs if we are in user and need to
 			
 			mtlr	r28								; Restore the LR
+			crmove	cr0_eq,28						; Set CR0_EQ if the fetch succeeded
 			blr										; Return with instruction image in R10
 
 
@@ -183,14 +191,14 @@ eIFetch:	lwz		r23,savesrr1+4(r13)				; Get old MSR
 ;
 
 eRedriveAsISI:
-			lwz		r6,savesrr1+4(r13)				; Get the srr1 value
+			lwz		r6,savesrr1(r13)				; Get the srr1 value
 			lwz		r4,SAVflags(r13)				; Pick up the flags
 			li		r11,T_INSTRUCTION_ACCESS		; Set failing instruction fetch code
 			rlwimi	r6,r1,0,0,4						; Move the DSISR bits to the SRR1
 			oris	r4,r4,hi16(SAVredrive)			; Set the redrive bit
 			stw		r11,saveexception(r13)			; Set the replacement code
 			stw		r4,SAVflags(r13)				; Set redrive request
-			stw		r6,savesrr1+4(r13)				; Set the srr1 value
+			stw		r6,savesrr1(r13)				; Set the srr1 value
 			b		EXT(EmulExit)					; Bail out to handle ISI...
 
 
@@ -217,40 +225,55 @@ eRedriveAsISI:
 			.globl	EXT(AlignAssist)
 
 LEXT(AlignAssist)
-			bf--	pf64Bitb,aan64					; Skip if not 64-bit
-			b		EXT(AlignAssist64)				; Jump to the 64-bit code...
-			
-aan64:		lwz		r20,savedsisr(r13)				; Get the DSISR
+
+#if 0
+			b		EXT(EmulExit)					; Just return for now...
+#endif
+
+
 			mfsprg	r31,0							; Get the per_proc
-			mtcrf	0x10,r20						; Put instruction ID in CR for later
+			lwz		r20,savedsisr(r13)				; Get the DSISR
 			lwz		r21,spcFlags(r31)				; Grab the special flags
-			mtcrf	0x08,r20						; Put instruction ID in CR for later
+			mtcrf	0x1C,r20						; Put instruction ID in CR for later
 			rlwinm.	r0,r21,0,runningVMbit,runningVMbit	; Are we running a VM?
-			mtcrf	0x04,r20						; Put instruction ID in CR for later
-			lwz		r22,savesrr1+4(r13)				; Get the SRR1
+			lwz		r22,savesrr1(r13)				; Get the SRR1
 			bne-	aaPassAlong						; We are in a VM, no emulation for alignment exceptions...
-			lwz		r19,dgFlags(0)					; Get the diagnostics flags
+			rlwinm.	r0,r21,0,trapUnalignbit,trapUnalignbit	; Should we trap alignment exceptions?
 			crxor	iFloat,iOptype1,iOptype2		; Set this to 0 if both bits are either 0 or 1
 			mr		r26,r20							; Save the DSISR
+			bne-	aaPassAlong						; No alignment exceptions allowed...
 			rlwinm.	r0,r22,0,MSR_SE_BIT,MSR_SE_BIT	; Were we single stepping?
-			lwz		r23,savedar+4(r13)				; Pick up the address that we want to access
+			lwz		r23,savedar(r13)				; Pick up the address that we want to access
 			crnot	traceInst,cr0_eq				; Remember if trace is on
-			
-			rlwinm.	r0,r19,0,enaNotifyEMb,enaNotifyEMb	; Should we notify that an alignment exception happened?
-			mfmsr	r30								; Save the MSR for now
+			rlwinm.	r0,r21,0,notifyUnalignbit,notifyUnalignbit	; Should we notify that an alignment exception happened?
+			mfsprg	r28,2							; Get the processor features
 			crnot	iNotify,cr0_eq					; Remember to tell someone we did this				
+			rlwinm.	r22,r22,0,MSR_PR_BIT,MSR_PR_BIT	; Did we take the exception in the kernel and isolate PR?
+			mfmsr	r30								; Save the MSR for now
 			li		r29,emfp0						; Point to work area
 			crxor	iFloat,iFloat,iOptype3			; Set true if we have a floating point instruction
+			or		r22,r22,r30						; Add PR to access MSR
 			dcbz	r29,r31							; Clear and allocate a cache line for us to work in
-			rlwinm	r24,r20,3,24,28					; Get displacement to register to update if update form
+			rlwinm	r24,r20,2,25,29					; Get displacement to register to update if update form
 			rlwimi	r20,r20,24,28,28				; Move load/store indication to the bottom of index
-			ori		r22,r30,lo16(MASK(MSR_DR)|MASK(MSR_RI))		; Set RI onto access MSR
+			ori		r22,r22,lo16(MASK(MSR_DR)|MASK(MSR_RI))		; Set RI onto access MSR
+			crmove	kernAccess,cr0_eq				; Remember if fault was in kernel
+			rlwinm.	r28,r28,0,pfAltivecb,pfAltivecb	; Do we have Altivec on this machine?
 			rlwimi	r20,r20,26,27,27				; Move single/double indication to just above the bottom
-			lis		r29,hi16(EXT(aaFPopTable))		; High part of FP branch table
-			bf-		iFloat,aaNotFloat				; This is not a floating point instruction...
-			ori		r29,r29,lo16(EXT(aaFPopTable))	; Low part of FP branch table
+			beq		aaNoVect						; Nope, no Altivec...
 			
-			rlwimi	r29,r20,0,22,28					; Index into table based upon register||iDouble||iStore
+			dssall									; We need to kill streams because we are going to flip to problem state
+			sync
+			
+aaNoVect:	lis		r29,hi16(aaFPopTable)			; High part of FP branch table
+			bf-		iFloat,aaNotFloat				; This is not a floating point instruction...
+			li		r25,8							; Assume 8-byte access for now
+			ori		r29,r29,lo16(aaFPopTable)		; Low part of FP branch table
+			bt		iDouble,aaFPis8					; So far, we think we are a double...
+			li		r25,4							; Set word access
+			
+aaFPis8:	rlwimi	r29,r20,0,22,28					; Index into table based upon register||iDouble||iStore
+			ori		r0,r30,lo16(MASK(MSR_FP))		; Turn on floating point
 			mtctr	r29								; Get set to call the function	
 			bt		iStore,aaFPstore				; This is an FP store...
 		
@@ -258,8 +281,11 @@ aan64:		lwz		r20,savedsisr(r13)				; Get the DSISR
 ;			Here we handle floating point loads
 ;			
 
-aaFPload:	crset	cr0_eq							; Set this to see if we failed
-			mtmsr	r22								; Flip DR, RI
+aaFPload:	bfl+	kernAccess,aaSetSegs			; Go set SRs if we are in user and need to
+
+			crset	cr0_eq							; Set this to see if we failed
+			ori		r3,r30,lo16(MASK(MSR_FP))		; We will need FP on in a bit, so turn on when we ditch problem state
+			mtmsr	r22								; Flip DR, RI, and maybe PR on
 			isync
 			
 			lwz		r10,0(r23)						; Get the first word
@@ -268,9 +294,8 @@ aaFPload:	crset	cr0_eq							; Set this to see if we failed
 			lwz		r11,4(r23)						; Get the second half
 			
 aaLdNotDbl:	mr		r4,r0							; Save the DAR if we failed the access
-			
-			mtmsr	r30								; Turn off translation again
-			isync
+			li		r0,loadMSR						; Set the magic "get back to supervisor" SC
+			sc										; Get back to supervisor state and turn on FP
 			
 			bf-		cr0_eq,aaRedriveAsDSI			; Go redrive this as a DSI...	
 			
@@ -287,17 +312,24 @@ aaLdNotDbl:	mr		r4,r0							; Save the DAR if we failed the access
 
 			.align	5
 
-aaFPstore:	bctrl									; Go save the source FP register
+aaFPstore:	mtmsr	r0								; We need floating point on for the first phase
+			isync	
+			
+			bctrl									; Go save the source FP register
 			
 			lwz		r10,emfp0(r31)					; Get first word
 			crandc	iDouble,iDouble,iOptype4		; Change to 4-byte access if stfiwx
 			lwz		r11,emfp0+4(r31)				; and the second
 			bf+		iOptype4,aaNotstfiwx			; This is not a stfiwx...
+			li		r25,4							; Set this is a word
 			mr		r10,r11							; The stfiwx wants to store the second half
 
 aaNotstfiwx:
+			bfl+	kernAccess,aaSetSegs			; Go set SRs if we are in user and need to
+			
 			crset	cr0_eq							; Set this to see if we failed
-			mtmsr	r22								; Flip DR, RI
+			mr		r3,r30							; Set the normal MSR
+			mtmsr	r22								; Flip DR, RI, and maybe PR on
 			isync
 			
 			stw		r10,0(r23)						; Save the first word
@@ -306,26 +338,31 @@ aaNotstfiwx:
 			stw		r11,4(r23)						; Save the second half
 			
 aaStNotDbl:	mr		r4,r0							; Save the DAR if we failed the access
-			mtmsr	r30								; Turn off
-			isync
+			li		r0,loadMSR						; Set the magic "get back to supervisor" SC
+			sc										; Get back to supervisor state
+			
 			
 			bf-		cr0_eq,aaRedriveAsDSI			; Go redrive this as a DSI...
+			
+			
 
 ;
 ;			Common exit routines
 ;
 
-aaComExit:	lwz		r10,savesrr0+4(r13)				; Get the failing instruction address
+aaComExit:	lwz		r10,savesrr0(r13)				; Get the failing instruction address
 			add		r24,r24,r13						; Offset to update register
 			li		r11,T_IN_VAIN					; Assume we are all done
 			addi	r10,r10,4						; Step to the next instruction
 			bf		iUpdate,aaComExNU				; Skip if not an update form...
-			stw		r23,saver0+4(r24)				; Update the target
+			stw		r23,saver0(r24)					; Update the target
 			
 aaComExNU:	lwz		r9,SAVflags(r13)				; Get the flags
-			stw		r10,savesrr0+4(r13)				; Set new PC
+			stw		r10,savesrr0(r13)				; Set new PC
 			bt-		traceInst,aaComExitrd			; We are tracing, go emulate trace...
 			bf+		iNotify,aaComExGo				; Nothing special here, go...
+
+			bfl+	kernAccess,aaUnSetSegs			; Go set SRs if we are in user and need to
 	
 			li		r11,T_ALIGNMENT					; Set the we just did an alignment exception....
 			
@@ -356,7 +393,7 @@ aaNotFloat:
 			ori		r19,r19,lo16(aaEmTable)			; Low part of table address
 			blt-	aaPassAlong						; We do not handle any of these (lwarx, stwcx., eciwx, ecowx)...
 			add		r19,r19,r3						; Point to emulation routine
-			rlwinm	r18,r26,30,24,28				; Get the target/source register displacement
+			rlwinm	r18,r26,29,25,29				; Get the target/source register displacement
 
 			mtctr	r19								; Set the routine address
 			
@@ -398,12 +435,14 @@ aaEmTable:
 			.align	5
 						
 aaLmwStmw:
-			rlwinm	r17,r18,31,1,29					; Convert doublword based index to words
+			subfic	r25,r18,32*4					; Calculate the length of the transfer
 			li		r28,0							; Set no extra bytes to move (used for string instructions)
-			subfic	r17,r17,32*4					; Calculate the length of the transfer
+			mr		r17,r25							; Save the word transfer length here
 
-aaLSComm:	addi	r19,r13,saver0+4				; Offset to registers in savearea
+aaLSComm:	addi	r19,r13,saver0					; Offset to registers in savearea
 			mr		r16,r23							; Make a hunk pointer
+
+			bfl+	kernAccess,aaSetSegs			; Go set SRs if we are in user and need to
 			
 			bt		iUpdate,aaStmw					; This is the stmw...
 			
@@ -416,7 +455,7 @@ aaLmwNxt:	cmplwi	cr1,r17,8*4						; Is there enough to move 8?
 			subi	r17,r17,8*4						; Back off for another hunk
 			
 			crset	cr0_eq							; Set this to see if we failed
-			mtmsr	r22								; Flip DR, RI
+			mtmsr	r22								; Flip DR, RI, and maybe PR on
 			isync
 		
 			lwz		r2,0(r16)						; Load word 0
@@ -436,37 +475,38 @@ aaLmwNxt:	cmplwi	cr1,r17,8*4						; Is there enough to move 8?
 			lwz		r9,28(r16)						; Load word 7
 		
 aaLmwB1:	mr		r4,r0							; Remember DAR, jus in case we failed the access
-			mtmsr	r30								; Turn off DR, RI
-			isync
+			mr		r3,r30							; Set the normal MSR
+			li		r0,loadMSR						; Set the magic "get back to supervisor" SC
+			sc										; Get back to supervisor state
 
 			bf-		cr0_eq,aaRedriveAsDSI			; We failed, go redrive this as a DSI...
 
 			addi	r16,r16,8*4						; Point up to next input aread
 		
 			stwx	r2,r19,r18						; Store register
-			addi	r18,r18,8						; Next register
-			rlwinm	r18,r18,0,24,28					; Wrap back to 0 if needed
+			addi	r18,r18,4						; Next register
+			rlwinm	r18,r18,0,25,29					; Wrap back to 0 if needed
 			stwx	r15,r19,r18						; Store register
-			addi	r18,r18,8						; Next register
-			rlwinm	r18,r18,0,24,28					; Wrap back to 0 if needed
+			addi	r18,r18,4						; Next register
+			rlwinm	r18,r18,0,25,29					; Wrap back to 0 if needed
 			stwx	r14,r19,r18						; Store register
-			addi	r18,r18,8						; Next register
-			rlwinm	r18,r18,0,24,28					; Wrap back to 0 if needed
+			addi	r18,r18,4						; Next register
+			rlwinm	r18,r18,0,25,29					; Wrap back to 0 if needed
 			stwx	r5,r19,r18						; Store register
-			addi	r18,r18,8						; Next register
-			rlwinm	r18,r18,0,24,28					; Wrap back to 0 if needed
+			addi	r18,r18,4						; Next register
+			rlwinm	r18,r18,0,25,29					; Wrap back to 0 if needed
 			stwx	r6,r19,r18						; Store register
-			addi	r18,r18,8						; Next register
-			rlwinm	r18,r18,0,24,28					; Wrap back to 0 if needed
+			addi	r18,r18,4						; Next register
+			rlwinm	r18,r18,0,25,29					; Wrap back to 0 if needed
 			stwx	r7,r19,r18						; Store register
-			addi	r18,r18,8						; Next register
-			rlwinm	r18,r18,0,24,28					; Wrap back to 0 if needed
+			addi	r18,r18,4						; Next register
+			rlwinm	r18,r18,0,25,29					; Wrap back to 0 if needed
 			stwx	r8,r19,r18						; Store register
-			addi	r18,r18,8						; Next register
-			rlwinm	r18,r18,0,24,28					; Wrap back to 0 if needed
+			addi	r18,r18,4						; Next register
+			rlwinm	r18,r18,0,25,29					; Wrap back to 0 if needed
 			stwx	r9,r19,r18						; Store register
-			addi	r18,r18,8						; Next register
-			rlwinm	r18,r18,0,24,28					; Wrap back to 0 if needed
+			addi	r18,r18,4						; Next register
+			rlwinm	r18,r18,0,25,29					; Wrap back to 0 if needed
 
 			b		aaLmwNxt						; Do the next hunk...
 
@@ -490,25 +530,26 @@ aaLmwNxtH:	cmplwi	cr1,r17,4*4						; Do we have 4 left?
 			lwz		r5,12(r16)						; Load word 3
 		
 aaLmwB2:	mr		r4,r0							; Remember DAR, jus in case we failed the access
-			mtmsr	r30								; Turn off DR, RI
-			isync
+			mr		r3,r30							; Set the normal MSR
+			li		r0,loadMSR						; Set the magic "get back to supervisor" SC
+			sc										; Get back to supervisor state
 
 			bf-		cr0_eq,aaRedriveAsDSI			; We failed, go redrive this as a DSI...
 		
 			addi	r16,r16,4*4						; Point up to next input aread
 			
 			stwx	r2,r19,r18						; Store register
-			addi	r18,r18,8						; Next register
-			rlwinm	r18,r18,0,24,28					; Wrap back to 0 if needed
+			addi	r18,r18,4						; Next register
+			rlwinm	r18,r18,0,25,29					; Wrap back to 0 if needed
 			stwx	r15,r19,r18						; Store register
-			addi	r18,r18,8						; Next register
-			rlwinm	r18,r18,0,24,28					; Wrap back to 0 if needed
+			addi	r18,r18,4						; Next register
+			rlwinm	r18,r18,0,25,29					; Wrap back to 0 if needed
 			stwx	r14,r19,r18						; Store register
-			addi	r18,r18,8						; Next register
-			rlwinm	r18,r18,0,24,28					; Wrap back to 0 if needed
+			addi	r18,r18,4						; Next register
+			rlwinm	r18,r18,0,25,29					; Wrap back to 0 if needed
 			stwx	r5,r19,r18						; Store register
-			addi	r18,r18,8						; Next register
-			rlwinm	r18,r18,0,24,28					; Wrap back to 0 if needed
+			addi	r18,r18,4						; Next register
+			rlwinm	r18,r18,0,25,29					; Wrap back to 0 if needed
 
 aaLmwL4:	or.		r5,r17,r28						; Do we have anything left?
 			cmplwi	cr1,r17,(2*4)					; Do we have one, two, or three full words left?
@@ -558,27 +599,26 @@ aaLmwDn:	rlwinm	r5,r5,24,0,7					; Move first byte to top
 			cmplwi	cr1,r17,(2*4)					; Do we have one, two, or three full words left?
 			mr		r3,r30							; Set the normal MSR
 			rlwimi	r5,r9,8,8,23					; Move bytes 1 and 2 after 0
-
-			mtmsr	r30								; Turn off DR, RI
-			isync
+			li		r0,loadMSR						; Set the magic "get back to supervisor" SC
+			sc										; Get back to supervisor state
 
 			bf-		cr0_eq,aaRedriveAsDSI			; We failed, go redrive this as a DSI...
 
 			beq-	cr2,aaLmwCb						; No full words, copy bytes...
 
 			stwx	r2,r19,r18						; Store register
-			addi	r18,r18,8						; Next register
-			rlwinm	r18,r18,0,24,28					; Wrap back to 0 if needed
+			addi	r18,r18,4						; Next register
+			rlwinm	r18,r18,0,25,29					; Wrap back to 0 if needed
 			blt		cr1,aaLmwCb						; We only had one, we are done...
 			
 			stwx	r15,r19,r18						; Store register
-			addi	r18,r18,8						; Next register
-			rlwinm	r18,r18,0,24,28					; Wrap back to 0 if needed
+			addi	r18,r18,4						; Next register
+			rlwinm	r18,r18,0,25,29					; Wrap back to 0 if needed
 			beq		cr1,aaLmwCb						; We had two, we are done...
 
 			stwx	r14,r19,r18						; Store register
-			addi	r18,r18,8						; Next register
-			rlwinm	r18,r18,0,24,28					; Wrap back to 0 if needed
+			addi	r18,r18,4						; Next register
+			rlwinm	r18,r18,0,25,29					; Wrap back to 0 if needed
 
 aaLmwCb:	mr.		r28,r28							; Any trailing bytes to do?
 			beq+	aaComExit						; Nope, leave...
@@ -601,29 +641,29 @@ aaStmwNxt:	cmplwi	cr1,r17,8*4						; Is there enough to move 8?
 			subi	r17,r17,8*4						; Back off for another hunk
 		
 			lwzx	r2,r19,r18						; Store register
-			addi	r18,r18,8						; Next register
-			rlwinm	r18,r18,0,24,28					; Wrap back to 0 if needed
+			addi	r18,r18,4						; Next register
+			rlwinm	r18,r18,0,25,29					; Wrap back to 0 if needed
 			lwzx	r15,r19,r18						; Store register
-			addi	r18,r18,8						; Next register
-			rlwinm	r18,r18,0,24,28					; Wrap back to 0 if needed
+			addi	r18,r18,4						; Next register
+			rlwinm	r18,r18,0,25,29					; Wrap back to 0 if needed
 			lwzx	r14,r19,r18						; Store register
-			addi	r18,r18,8						; Next register
-			rlwinm	r18,r18,0,24,28					; Wrap back to 0 if needed
+			addi	r18,r18,4						; Next register
+			rlwinm	r18,r18,0,25,29					; Wrap back to 0 if needed
 			lwzx	r5,r19,r18						; Store register
-			addi	r18,r18,8						; Next register
-			rlwinm	r18,r18,0,24,28					; Wrap back to 0 if needed
+			addi	r18,r18,4						; Next register
+			rlwinm	r18,r18,0,25,29					; Wrap back to 0 if needed
 			lwzx	r6,r19,r18						; Store register
-			addi	r18,r18,8						; Next register
-			rlwinm	r18,r18,0,24,28					; Wrap back to 0 if needed
+			addi	r18,r18,4						; Next register
+			rlwinm	r18,r18,0,25,29					; Wrap back to 0 if needed
 			lwzx	r7,r19,r18						; Store register
-			addi	r18,r18,8						; Next register
-			rlwinm	r18,r18,0,24,28					; Wrap back to 0 if needed
+			addi	r18,r18,4						; Next register
+			rlwinm	r18,r18,0,25,29					; Wrap back to 0 if needed
 			lwzx	r8,r19,r18						; Store register
-			addi	r18,r18,8						; Next register
-			rlwinm	r18,r18,0,24,28					; Wrap back to 0 if needed
+			addi	r18,r18,4						; Next register
+			rlwinm	r18,r18,0,25,29					; Wrap back to 0 if needed
 			lwzx	r9,r19,r18						; Store register
-			addi	r18,r18,8						; Next register
-			rlwinm	r18,r18,0,24,28					; Wrap back to 0 if needed
+			addi	r18,r18,4						; Next register
+			rlwinm	r18,r18,0,25,29					; Wrap back to 0 if needed
 			
 			crset	cr0_eq							; Set this to see if we failed
 			mtmsr	r22								; Flip DR, RI, and maybe PR on
@@ -649,8 +689,9 @@ aaStmwNxt:	cmplwi	cr1,r17,8*4						; Is there enough to move 8?
 		
 		
 aaStmwB1:	mr		r4,r0							; Remember DAR, jus in case we failed the access
-			mtmsr	r30								; Normal MSR
-			isync
+			mr		r3,r30							; Set the normal MSR
+			li		r0,loadMSR						; Set the magic "get back to supervisor" SC
+			sc										; Get back to supervisor state
 
 			bt-		cr0_eq,aaStmwNxt				; We have more to do and no failed access...
 			b		aaRedriveAsDSI					; We failed, go redrive this as a DSI...
@@ -662,20 +703,20 @@ aaStmwNxtH:	cmplwi	cr1,r17,(4*4)					; Do we have at least 4 left?
 			subi	r17,r17,4*4						; Set count properly
 
 			lwzx	r2,r19,r18						; Store register
-			addi	r18,r18,8						; Next register
-			rlwinm	r18,r18,0,24,28					; Wrap back to 0 if needed
+			addi	r18,r18,4						; Next register
+			rlwinm	r18,r18,0,25,29					; Wrap back to 0 if needed
 			lwzx	r15,r19,r18						; Store register
-			addi	r18,r18,8						; Next register
-			rlwinm	r18,r18,0,24,28					; Wrap back to 0 if needed
+			addi	r18,r18,4						; Next register
+			rlwinm	r18,r18,0,25,29					; Wrap back to 0 if needed
 			lwzx	r14,r19,r18						; Store register
-			addi	r18,r18,8						; Next register
-			rlwinm	r18,r18,0,24,28					; Wrap back to 0 if needed
+			addi	r18,r18,4						; Next register
+			rlwinm	r18,r18,0,25,29					; Wrap back to 0 if needed
 			lwzx	r5,r19,r18						; Store register
-			addi	r18,r18,8						; Next register
-			rlwinm	r18,r18,0,24,28					; Wrap back to 0 if needed
+			addi	r18,r18,4						; Next register
+			rlwinm	r18,r18,0,25,29					; Wrap back to 0 if needed
 			
 			crset	cr0_eq							; Set this to see if we failed
-			mtmsr	r22								; Flip DR, RI
+			mtmsr	r22								; Flip DR, RI, and maybe PR on
 			isync
 		
 			stw		r2,0(r16)						; Store word 0
@@ -689,8 +730,9 @@ aaStmwNxtH:	cmplwi	cr1,r17,(4*4)					; Do we have at least 4 left?
 			addi	r16,r16,4*4						; Point up to next input aread
 		
 aaStmwB2:	mr		r4,r0							; Remember DAR, jus in case we failed the access
-			mtmsr	r30								; Normal MSR
-			isync
+			mr		r3,r30							; Set the normal MSR
+			li		r0,loadMSR						; Set the magic "get back to supervisor" SC
+			sc										; Get back to supervisor state
 
 			bf-		cr0_eq,aaRedriveAsDSI			; We failed, go redrive this as a DSI...
 
@@ -702,18 +744,18 @@ aaStmwL4:	or.		r5,r17,r28						; Do we have anything left to do?
 			beq-	cr2,aaStmwBy1					; No full words, check out bytes
 
 			lwzx	r2,r19,r18						; Store register
-			addi	r18,r18,8						; Next register
-			rlwinm	r18,r18,0,24,28					; Wrap back to 0 if needed
+			addi	r18,r18,4						; Next register
+			rlwinm	r18,r18,0,25,29					; Wrap back to 0 if needed
 			blt		cr1,aaStmwBy1					; We only had one, go save it...
 			
 			lwzx	r15,r19,r18						; Store register
-			addi	r18,r18,8						; Next register
-			rlwinm	r18,r18,0,24,28					; Wrap back to 0 if needed
+			addi	r18,r18,4						; Next register
+			rlwinm	r18,r18,0,25,29					; Wrap back to 0 if needed
 			beq		cr1,aaStmwBy1					; We had two, go save it...
 			
 			lwzx	r14,r19,r18						; Store register
-			addi	r18,r18,8						; Next register
-			rlwinm	r18,r18,0,24,28					; Wrap back to 0 if needed
+			addi	r18,r18,4						; Next register
+			rlwinm	r18,r18,0,25,29					; Wrap back to 0 if needed
 			
 aaStmwBy1:	mr.		r28,r28							; Do we have any trailing bytes?
 			beq+	aaStmwSt						; Nope...
@@ -721,23 +763,22 @@ aaStmwBy1:	mr.		r28,r28							; Do we have any trailing bytes?
 			lwzx	r5,r19,r18						; Yes, pick up one extra register
 			
 aaStmwSt:	crset	cr0_eq							; Set this to see if we failed
-			mtmsr	r22								; Flip DR, RI
+			mtmsr	r22								; Flip DR, RI, and maybe PR on
 			isync
 
 			beq-	cr2,aaStmwBy2					; No words, check trailing bytes...					
 
 			stw		r2,0(r16)						; Save first word
-			bf-		cr0_eq,aaStmwDn					; Store failed, escape...
+			bf-		cr0_eq,aaStmwDn					; Read failed, escape...
 			addi	r16,r16,4						; Bump sink
 			blt		cr1,aaStmwBy2					; We only had one, we are done...
 
 			stw		r15,0(r16)						; Save second word
-			bf-		cr0_eq,aaStmwDn					; Store failed, escape...
+			bf-		cr0_eq,aaStmwDn					; Read failed, escape...
 			addi	r16,r16,4						; Bump sink
 			beq		cr1,aaStmwBy2					; We had two, we are done...
 
 			stw		r14,0(r16)						; Save third word
-			bf-		cr0_eq,aaStmwDn					; Store failed, escape...
 			addi	r16,r16,4						; Bump sink
 				
 aaStmwBy2:	rlwinm	r2,r5,8,24,31					; Get byte 0
@@ -760,8 +801,9 @@ aaStmwBy2:	rlwinm	r2,r5,8,24,31					; Get byte 0
 			stb		r14,2(r16)						; Save third byte
 
 aaStmwDn:	mr		r4,r0							; Remember DAR, jus in case we failed the access
-			mtmsr	r30								; Normal MSR
-			isync
+			mr		r3,r30							; Set the normal MSR
+			li		r0,loadMSR						; Set the magic "get back to supervisor" SC
+			sc										; Get back to supervisor state
 
 			bf-		cr0_eq,aaRedriveAsDSI			; We failed, go redrive this as a DSI...
 
@@ -774,7 +816,7 @@ aaStmwDn:	mr		r4,r0							; Remember DAR, jus in case we failed the access
 
 			.align	5
 			
-aaLswx:		lwz		r17,savexer+4(r13)				; Pick up the XER
+aaLswx:		lwz		r17,savexer(r13)				; Pick up the XER
 			crclr	iUpdate							; Make sure we think this the load form
 			rlwinm.	r25,r17,0,25,31					; Get the number of bytes to load
 			rlwinm	r28,r17,0,30,31					; Get the number of bytes past an even word
@@ -808,7 +850,7 @@ aaLswi:		mr		r9,r23							; Save the DAR
 
 			.align	5
 
-aaStswx:	lwz		r17,savexer+4(r13)				; Pick up the XER
+aaStswx:	lwz		r17,savexer(r13)				; Pick up the XER
 			crclr	iUpdate							; Make sure this is clear in case we have 0 length
 			rlwinm.	r25,r17,0,25,31					; Get the number of bytes to load
 			rlwinm	r28,r17,0,30,31					; Get the number of bytes past an even word
@@ -846,24 +888,28 @@ aaStswi:	mr		r9,r23							; Save the DAR
 
 aaLwbrx:
 			add		r18,r18,r13						; Index to source register
+			li		r25,4							; Set the length
+
+			bfl+	kernAccess,aaSetSegs			; Go set SRs if we are in user and need to
 
 			crset	cr0_eq							; Set this to see if we failed
+			mr		r3,r30							; Set the normal MSR
 			mtmsr	r22								; Flip DR, RI, and maybe PR on
 			isync
 		
 			lwz		r11,0(r23)						; Load the word
 		
 			mr		r4,r0							; Save the DAR if we failed the access
-			mtmsr	r30								; Restore normal MSR
-			isync
-			
+			li		r0,loadMSR						; Set the magic "get back to supervisor" SC
+			sc										; Get back to supervisor state
+
 			bf-		cr0_eq,aaRedriveAsDSI			; We failed, go redrive this as a DSI...
 			
 			rlwinm	r10,r11,8,0,31					; Get byte 0 to 3 and byte 2 to 1
 			rlwimi	r10,r11,24,16,23				; Move byte 1 to byte 2
 			rlwimi	r10,r11,24,0,7					; Move byte 3 to byte 0
 		
-			stw		r10,saver0+4(r18)				; Set the register
+			stw		r10,saver0(r18)					; Set the register
 
 			b		aaComExit						; All done, go exit...
 
@@ -877,22 +923,26 @@ aaLwbrx:
 
 aaStwbrx:
 			add		r18,r18,r13						; Index to source register
-			lwz		r11,saver0+4(r18)				; Get the register to store
+			li		r25,4							; Set the length
+			lwz		r11,saver0(r18)					; Get the register to store
 
 			rlwinm	r10,r11,8,0,31					; Get byte 0 to 3 and byte 2 to 1
 			rlwimi	r10,r11,24,16,23				; Move byte 1 to byte 2
 			rlwimi	r10,r11,24,0,7					; Move byte 3 to byte 0
 			
+			bfl+	kernAccess,aaSetSegs			; Go set SRs if we are in user and need to
+			
 			crset	cr0_eq							; Set this to see if we failed
+			mr		r3,r30							; Set the normal MSR
 			mtmsr	r22								; Flip DR, RI, and maybe PR on
 			isync
 		
 			stw		r10,0(r23)						; Store the reversed halfword
 		
 			mr		r4,r0							; Save the DAR if we failed the access
-			mtmsr	r30								; Restore normal MSR
-			isync
-			
+			li		r0,loadMSR						; Set the magic "get back to supervisor" SC
+			sc										; Get back to supervisor state
+
 			bt+		cr0_eq,aaComExit				; All done, go exit...
 			b		aaRedriveAsDSI					; We failed, go redrive this as a DSI...	
 
@@ -906,23 +956,27 @@ aaStwbrx:
 
 aaLhbrx:
 			add		r18,r18,r13						; Index to source register
+			li		r25,2							; Set the length
+
+			bfl+	kernAccess,aaSetSegs			; Go set SRs if we are in user and need to
 
 			crset	cr0_eq							; Set this to see if we failed
+			mr		r3,r30							; Set the normal MSR
 			mtmsr	r22								; Flip DR, RI, and maybe PR on
 			isync
 		
 			lhz		r11,0(r23)						; Load the halfword
 		
 			mr		r4,r0							; Save the DAR if we failed the access
-			mtmsr	r30								; Restore normal MSR
-			isync
+			li		r0,loadMSR						; Set the magic "get back to supervisor" SC
+			sc										; Get back to supervisor state
 
 			bf-		cr0_eq,aaRedriveAsDSI			; We failed, go redrive this as a DSI...
 			
 			rlwinm	r10,r11,8,16,23					; Rotate bottom byte up one and clear everything else
 			rlwimi	r10,r11,24,24,31				; Put old second from bottom into bottom
 		
-			stw		r10,saver0+4(r18)				; Set the register
+			stw		r10,saver0(r18)					; Set the register
 
 			b		aaComExit						; All done, go exit...
 
@@ -935,19 +989,23 @@ aaLhbrx:
 
 aaSthbrx:
 			add		r18,r18,r13						; Index to source register
-			lwz		r10,saver0+4(r18)				; Get the register to store
+			li		r25,2							; Set the length
+			lwz		r10,saver0(r18)					; Get the register to store
 			rlwinm	r10,r10,8,0,31					; Rotate bottom byte up one
 			rlwimi	r10,r10,16,24,31				; Put old second from bottom into bottom
 			
+			bfl+	kernAccess,aaSetSegs			; Go set SRs if we are in user and need to
+			
 			crset	cr0_eq							; Set this to see if we failed
+			mr		r3,r30							; Set the normal MSR
 			mtmsr	r22								; Flip DR, RI, and maybe PR on
 			isync
 		
 			sth		r10,0(r23)						; Store the reversed halfword
 		
 			mr		r4,r0							; Save the DAR if we failed the access
-			mtmsr	r30								; Restore normal MSR
-			isync
+			li		r0,loadMSR						; Set the magic "get back to supervisor" SC
+			sc										; Get back to supervisor state
 
 			bt+		cr0_eq,aaComExit				; All done, go exit...
 			b		aaRedriveAsDSI					; We failed, go redrive this as a DSI...	
@@ -959,9 +1017,13 @@ aaSthbrx:
 			.align	5
 
 aaDcbz:
+			li		r25,32							; Set the length
 			rlwinm	r23,r23,0,0,26					; Round back to a 32-byte boundary
 			
+			bfl+	kernAccess,aaSetSegs			; Go set SRs if we are in user and need to
+			
 			crset	cr0_eq							; Set this to see if we failed
+			mr		r3,r30							; Set the normal MSR
 			li		r0,0							; Clear this out
 			mtmsr	r22								; Flip DR, RI, and maybe PR on
 			isync
@@ -983,8 +1045,8 @@ aaDcbz:
 			stw		r0,28(r23)						; Clear word		
 			
 aaDcbzXit:	mr		r4,r0							; Save the DAR if we failed the access
-			mtmsr	r30								; Restore normal MSR
-			isync
+			li		r0,loadMSR						; Set the magic "get back to supervisor" SC
+			sc										; Get back to supervisor state
 
 			crclr	iUpdate							; Make sure we do not think this is an update form
 			
@@ -995,6 +1057,10 @@ aaDcbzXit:	mr		r4,r0							; Save the DAR if we failed the access
 ;
 ;			Unhandled alignment exception, pass it along
 ;
+
+aaPassAlongUnMap:
+			bfl+	kernAccess,aaUnSetSegs			; Go set SRs if we are in user and need to
+
 
 aaPassAlong:
 			b		EXT(EmulExit)					
@@ -1009,6 +1075,7 @@ aaPassAlong:
 			.align	5
 			
 aaComExitrd:
+			bfl+	kernAccess,aaUnSetSegs			; Go set SRs back if we need to because we are not going back to user yet
 			oris	r9,r9,hi16(SAVredrive)			; Set the redrive bit
 			li		r11,T_TRACE						; Set trace interrupt
 			rlwinm	r12,r12,0,16,31					; Clear top half of SRR1
@@ -1024,14 +1091,91 @@ aaComExitrd:
 aaRedriveAsDSI:
 			mr		r20,r1							; Save the DSISR
 			mr		r21,r4
+			bfl+	kernAccess,aaUnSetSegs			; Go set SRs back if we need to because we are not going back to user yet
 			lwz		r4,SAVflags(r13)				; Pick up the flags
 			li		r11,T_DATA_ACCESS				; Set failing data access code
 			oris	r4,r4,hi16(SAVredrive)			; Set the redrive bit
 			stw		r20,savedsisr(r13)				; Set the DSISR of failed access
-			stw		r21,savedar+4(r13)				; Set the address of the failed access
+			stw		r21,savedar(r13)				; Set the address of the failed access
 			stw		r11,saveexception(r13)			; Set the replacement code
 			stw		r4,SAVflags(r13)				; Set redrive request
 			b		EXT(EmulExit)					; Bail out to handle ISI...
+
+;
+;			Set segment registers for user access.  Do not call this if we are trying to get
+;			supervisor state memory.  We do not need this.
+;
+;			Performance-wise, we will usually be setting one SR here. Most memory will be
+;			allocated before the 1GB mark.  Since the kernel maps the first GB, the exception
+;			handler always sets the SRs before we get here.  Therefore, we will usually 
+;			have to remap it.
+;
+;			Also, we need to un-do these mapping ONLY if we take a non-standard 
+;			exit, e.g., emulate DSI, emulate trace exception, etc.  This is because
+;			translation will never be turned on until we return and at that point,
+;			normal exception exit code will restore the first 4 SRs if needed.
+;
+	
+			.align	5
+
+			.globl	EXT(aaSetSegsX)
+
+LEXT(aaSetSegsX)
+			
+aaSetSegs:	addi	r3,r25,-1						; Point at last accessed offset in range
+			lwz		r7,PP_USERPMAP(r31)				; Get the current user pmap
+			lis		r0,0x4000						; This is the address of the first segment outside of the kernel
+			rlwinm	r5,r23,6,26,29					; Get index into pmap table
+			add		r4,r23,r3						; Point to the last byte accessed
+			addi	r5,r5,PMAP_SEGS					; Point to the segment slot
+			cmplw	r23,r0							; See if first segment register needs to be reloaded
+			cmplw	cr2,r4,r0						; Do we need to set the second (if any) SR?
+			xor		r0,r4,r23						; See if we are in the same segment as first
+			bge		aaSetS1ok						; Nope, we are in a pure user range
+			
+			lwzx	r6,r5,r7						; Get the user address space SR value
+			mtsrin	r6,r23							; Load the corresponding SR register
+			
+aaSetS1ok:	rlwinm.	r0,r0,0,0,3						; Any change in segment?
+			bgelr-	cr2								; We are in user only space, we do not need to mess with SR
+			rlwinm	r5,r4,6,26,29					; Get index into pmap table
+			beqlr+									; No change in segment, we are done...
+
+			lwzx	r6,r5,r7						; Get the user address space SR value
+			mtsrin	r6,r4							; Load the corresponding SR register
+			blr										; Leave...
+
+;
+;			Unset segment registers for user access. Do not call unless we had a user access. 
+;
+	
+			.align	5
+			
+			.globl	EXT(aaUnSetSegsX)
+			
+LEXT(aaUnSetSegsX)
+			
+aaUnSetSegs:	
+			addi	r3,r25,-1						; Point at last accessed offset in range
+			lis		r0,0x4000						; This is the address of the first segment outside of the kernel
+			lis		r5,hi16(KERNEL_SEG_REG0_VALUE)	; Get the high half of the kernel SR0 value 
+			add		r4,r23,r3						; Point to the last byte accessed
+			cmplw	r23,r0							; See if first segment register needs to be reloaded
+			rlwimi	r5,r23,24,8,11					; Make the correct kernel segment
+			cmplw	cr2,r4,r0						; Do we need to set the second (if any) SR?
+			xor		r0,r4,r23						; See if we are in the same segment as first
+			bge		aaUnSetS1ok						; Nope, we are in a pure user range
+			
+			mtsrin	r5,r23							; Load the corresponding SR register
+			
+aaUnSetS1ok:	
+			rlwinm.	r0,r0,0,0,3						; Any change in segment?
+			bgelr	cr2								; We are in user only space, we do not need to mess with SR
+			rlwimi	r5,r4,24,8,11					; Make the correct kernel segment
+			beqlr+									; No change in segment, we are done...
+
+			mtsrin	r5,r4							; Load the corresponding SR register
+			blr										; Leave...
 
 
 
@@ -1045,9 +1189,8 @@ aaRedriveAsDSI:
 ;
 
 			.align	10								; Make sure we are on a 1k boundary
-			.globl	EXT(aaFPopTable)
 			
-LEXT(aaFPopTable)
+aaFPopTable:
 			lfs		f0,emfp0(r31)					; Load single variant
 			blr
 

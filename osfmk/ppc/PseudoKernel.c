@@ -3,22 +3,19 @@
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
- * Copyright (c) 1999-2003 Apple Computer, Inc.  All Rights Reserved.
+ * The contents of this file constitute Original Code as defined in and
+ * are subject to the Apple Public Source License Version 1.1 (the
+ * "License").  You may not use this file except in compliance with the
+ * License.  Please obtain a copy of the License at
+ * http://www.apple.com/publicsource and read it before using this file.
  * 
- * This file contains Original Code and/or Modifications of Original Code
- * as defined in and that are subject to the Apple Public Source License
- * Version 2.0 (the 'License'). You may not use this file except in
- * compliance with the License. Please obtain a copy of the License at
- * http://www.opensource.apple.com/apsl/ and read it before using this
- * file.
- * 
- * The Original Code and all software distributed under the License are
- * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * This Original Code and all software distributed under the License are
+ * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
- * Please see the License for the specific language governing rights and
- * limitations under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
+ * License for the specific language governing rights and limitations
+ * under the License.
  * 
  * @APPLE_LICENSE_HEADER_END@
  */
@@ -170,11 +167,11 @@ void bbSetRupt(ReturnHandler *rh, thread_act_t act) {
 			bttd->InterruptControlWord = (bttd->InterruptControlWord & ~kInterruptStateMask) | 
 				(kInPseudoKernel << kInterruptStateShift);
 				
-			bttd->exceptionInfo.srr0 = (unsigned int)sv->save_srr0;		/* Save the current PC */
-			sv->save_srr0 = (uint64_t)bttd->InterruptVector;	/* Set the new PC */
-			bttd->exceptionInfo.sprg1 = (unsigned int)sv->save_r1;		/* Save the original R1 */
-			sv->save_r1 = (uint64_t)bttd->exceptionInfo.sprg0;	/* Set the new R1 */
-			bttd->exceptionInfo.srr1 = (unsigned int)sv->save_srr1;		/* Save the original MSR */
+			bttd->exceptionInfo.srr0 = sv->save_srr0;		/* Save the current PC */
+			sv->save_srr0 = bttd->InterruptVector;			/* Set the new PC */
+			bttd->exceptionInfo.sprg1 = sv->save_r1;		/* Save the original R1 */
+			sv->save_r1 = bttd->exceptionInfo.sprg0;		/* Set the new R1 */
+			bttd->exceptionInfo.srr1 = sv->save_srr1;		/* Save the original MSR */
 			sv->save_srr1 &= ~(MASK(MSR_BE)|MASK(MSR_SE));	/* Clear SE|BE bits in MSR */
 			act->mact.specFlags &= ~bbNoMachSC;				/* reactivate Mach SCs */ 
 			disable_preemption();							/* Don't move us around */
@@ -215,9 +212,8 @@ kern_return_t enable_bluebox(
 	 ) {
 	
 	thread_t 		th;
-	vm_offset_t		kerndescaddr, origdescoffset;
+	vm_offset_t		kerndescaddr, physdescaddr, origdescoffset;
 	kern_return_t 	ret;
-	ppnum_t			physdescpage;
 	
 	th = current_thread();									/* Get our thread */					
 
@@ -243,8 +239,8 @@ kern_return_t enable_bluebox(
 		return KERN_FAILURE;	
 	}
 		
-	physdescpage = 											/* Get the physical page number of the page */
-		pmap_find_phys(th->top_act->map->pmap, (addr64_t)Desc_TableStart);
+	physdescaddr = 											/* Get the physical address of the page */
+		pmap_extract(th->top_act->map->pmap, (vm_offset_t) Desc_TableStart);
 
 	ret =  kmem_alloc_pageable(kernel_map, &kerndescaddr, PAGE_SIZE);	/* Find a virtual address to use */
 	if(ret != KERN_SUCCESS) {								/* Could we get an address? */
@@ -256,7 +252,7 @@ kern_return_t enable_bluebox(
 	}
 	
 	(void) pmap_enter(kernel_pmap, 							/* Map this into the kernel */
-		kerndescaddr, physdescpage, VM_PROT_READ|VM_PROT_WRITE, 
+		kerndescaddr, physdescaddr, VM_PROT_READ|VM_PROT_WRITE, 
 		VM_WIMG_USE_DEFAULT, TRUE);
 	
 	th->top_act->mact.bbDescAddr = (unsigned int)kerndescaddr+origdescoffset;	/* Set kernel address of the table */
@@ -396,7 +392,7 @@ int bb_settaskenv( struct savearea *save )
 	act->mact.bbTaskEnv = save->save_r4;
 	if(act == current_act()) {						/* Are we setting our own? */
 		disable_preemption();						/* Don't move us around */
-		per_proc_info[cpu_number()].ppbbTaskEnv = act->mact.bbTaskEnv;	/* Remember the environment */
+		per_proc_info[cpu_number()].spcFlags = act->mact.specFlags;	/* Copy the flags */
 		enable_preemption();						/* Ok to move us around */
 	}
 

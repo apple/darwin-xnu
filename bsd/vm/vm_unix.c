@@ -3,22 +3,19 @@
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
- * Copyright (c) 1999-2003 Apple Computer, Inc.  All Rights Reserved.
+ * The contents of this file constitute Original Code as defined in and
+ * are subject to the Apple Public Source License Version 1.1 (the
+ * "License").  You may not use this file except in compliance with the
+ * License.  Please obtain a copy of the License at
+ * http://www.apple.com/publicsource and read it before using this file.
  * 
- * This file contains Original Code and/or Modifications of Original Code
- * as defined in and that are subject to the Apple Public Source License
- * Version 2.0 (the 'License'). You may not use this file except in
- * compliance with the License. Please obtain a copy of the License at
- * http://www.opensource.apple.com/apsl/ and read it before using this
- * file.
- * 
- * The Original Code and all software distributed under the License are
- * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * This Original Code and all software distributed under the License are
+ * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
- * Please see the License for the specific language governing rights and
- * limitations under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
+ * License for the specific language governing rights and limitations
+ * under the License.
  * 
  * @APPLE_LICENSE_HEADER_END@
  */
@@ -69,6 +66,7 @@
 #include <vm/vm_shared_memory_server.h>
 
 
+extern shared_region_mapping_t	system_shared_region;
 extern zone_t lsf_zone;
 
 useracc(addr, len, prot)
@@ -78,7 +76,7 @@ useracc(addr, len, prot)
 {
 	return (vm_map_check_protection(
 			current_map(),
-			trunc_page_32((unsigned int)addr), round_page_32((unsigned int)(addr+len)),
+			trunc_page(addr), round_page(addr+len),
 			prot == B_READ ? VM_PROT_READ : VM_PROT_WRITE));
 }
 
@@ -87,8 +85,8 @@ vslock(addr, len)
 	int	len;
 {
 kern_return_t kret;
-	kret = vm_map_wire(current_map(), trunc_page_32((unsigned int)addr),
-			round_page_32((unsigned int)(addr+len)), 
+	kret = vm_map_wire(current_map(), trunc_page(addr),
+			round_page(addr+len), 
 			VM_PROT_READ | VM_PROT_WRITE ,FALSE);
 
 	switch (kret) {
@@ -119,7 +117,7 @@ vsunlock(addr, len, dirtied)
 #if FIXME  /* [ */
 	if (dirtied) {
 		pmap = get_task_pmap(current_task());
-		for (vaddr = trunc_page((unsigned int)(addr)); vaddr < round_page((unsigned int)(addr+len));
+		for (vaddr = trunc_page(addr); vaddr < round_page(addr+len);
 				vaddr += PAGE_SIZE) {
 			paddr = pmap_extract(pmap, vaddr);
 			pg = PHYS_TO_VM_PAGE(paddr);
@@ -130,8 +128,8 @@ vsunlock(addr, len, dirtied)
 #ifdef	lint
 	dirtied++;
 #endif	/* lint */
-	kret = vm_map_unwire(current_map(), trunc_page_32((unsigned int)(addr)),
-				round_page_32((unsigned int)(addr+len)), FALSE);
+	kret = vm_map_unwire(current_map(), trunc_page(addr),
+				round_page(addr+len), FALSE);
 	switch (kret) {
 	case KERN_SUCCESS:
 		return (0);
@@ -391,33 +389,12 @@ load_shared_file(
         }
 
 	if(local_flags & QUERY_IS_SYSTEM_REGION) {
-			shared_region_mapping_t	default_shared_region;
 			vm_get_shared_region(current_task(), &shared_region);
-			task_mapping_info.self = (vm_offset_t)shared_region;
-
-			shared_region_mapping_info(shared_region, 
-					&(task_mapping_info.text_region), 
-					&(task_mapping_info.text_size),
-					&(task_mapping_info.data_region), 
-					&(task_mapping_info.data_size), 
-					&(task_mapping_info.region_mappings),
-					&(task_mapping_info.client_base), 
-					&(task_mapping_info.alternate_base),
-					&(task_mapping_info.alternate_next), 
-					&(task_mapping_info.fs_base),
-					&(task_mapping_info.system),
-					&(task_mapping_info.flags), &next);
-
-			default_shared_region =
-				lookup_default_shared_region(
-					ENV_DEFAULT_ROOT, 
-					task_mapping_info.system);
-			if (shared_region == default_shared_region) {
+			if (shared_region == system_shared_region) {
 				local_flags = SYSTEM_REGION_BACKED;
 			} else {
 				local_flags = 0;
 			}
-			shared_region_mapping_dealloc(default_shared_region);
 			error = 0;
 			error = copyout(&local_flags, flags, sizeof (int));
 			goto lsf_bailout;
@@ -478,6 +455,28 @@ load_shared_file(
 		goto lsf_bailout_free_vput;
 	}
 
+	vm_get_shared_region(current_task(), &shared_region);
+	if(shared_region == system_shared_region) {
+		default_regions = 1;
+	}
+	if(((vp->v_mount != rootvnode->v_mount)
+			&& (shared_region == system_shared_region)) 
+		&& (lsf_mapping_pool_gauge() < 75)) {
+				/* We don't want to run out of shared memory */
+				/* map entries by starting too many private versions */
+				/* of the shared library structures */
+		int	error;
+       		if(p->p_flag & P_NOSHLIB) {
+				error = clone_system_shared_regions(FALSE);
+        		} else {
+				error = clone_system_shared_regions(TRUE);
+        		}
+		if (error) {
+			goto lsf_bailout_free_vput;
+		}
+		local_flags = local_flags & ~NEW_LOCAL_SHARED_REGIONS;
+		vm_get_shared_region(current_task(), &shared_region);
+	}
 #ifdef notdef
 	if(vattr.va_size != mapped_file_size) {
 		error = EINVAL;
@@ -491,13 +490,13 @@ load_shared_file(
 	/* load alternate regions if the caller has requested.  */
 	/* Note: the new regions are "clean slates" */
 	if (local_flags & NEW_LOCAL_SHARED_REGIONS) {
-		error = clone_system_shared_regions(FALSE, ENV_DEFAULT_ROOT);
+		error = clone_system_shared_regions(FALSE);
 		if (error) {
 			goto lsf_bailout_free_vput;
 		}
+		vm_get_shared_region(current_task(), &shared_region);
 	}
 
-	vm_get_shared_region(current_task(), &shared_region);
 	task_mapping_info.self = (vm_offset_t)shared_region;
 
 	shared_region_mapping_info(shared_region, 
@@ -509,53 +508,7 @@ load_shared_file(
 			&(task_mapping_info.client_base), 
 			&(task_mapping_info.alternate_base),
 			&(task_mapping_info.alternate_next), 
-			&(task_mapping_info.fs_base),
-			&(task_mapping_info.system),
 			&(task_mapping_info.flags), &next);
-
-	{
-		shared_region_mapping_t	default_shared_region;
-		default_shared_region =
-			lookup_default_shared_region(
-				ENV_DEFAULT_ROOT, 
-				task_mapping_info.system);
-		if(shared_region == default_shared_region) {
-			default_regions = 1;
-		}
-		shared_region_mapping_dealloc(default_shared_region);
-	}
-	/* If we are running on a removable file system we must not */
-	/* be in a set of shared regions or the file system will not */
-	/* be removable. */
-	if(((vp->v_mount != rootvnode->v_mount) && (default_regions)) 
-		&& (lsf_mapping_pool_gauge() < 75)) {
-				/* We don't want to run out of shared memory */
-				/* map entries by starting too many private versions */
-				/* of the shared library structures */
-		int	error;
-       		if(p->p_flag & P_NOSHLIB) {
-				error = clone_system_shared_regions(FALSE, ENV_DEFAULT_ROOT);
-       		} else {
-				error = clone_system_shared_regions(TRUE, ENV_DEFAULT_ROOT);
-       		}
-		if (error) {
-			goto lsf_bailout_free_vput;
-		}
-		local_flags = local_flags & ~NEW_LOCAL_SHARED_REGIONS;
-		vm_get_shared_region(current_task(), &shared_region);
-		shared_region_mapping_info(shared_region, 
-			&(task_mapping_info.text_region), 
-			&(task_mapping_info.text_size),
-			&(task_mapping_info.data_region), 
-			&(task_mapping_info.data_size), 
-			&(task_mapping_info.region_mappings),
-			&(task_mapping_info.client_base), 
-			&(task_mapping_info.alternate_base),
-			&(task_mapping_info.alternate_next), 
-			&(task_mapping_info.fs_base),
-			&(task_mapping_info.system),
-			&(task_mapping_info.flags), &next);
-	}
 
 	/*  This is a work-around to allow executables which have been */
 	/*  built without knowledge of the proper shared segment to    */
@@ -736,8 +689,24 @@ new_system_shared_regions(
 		return EINVAL;
 	}
 
-	/* clear all of our existing defaults */
-	remove_all_shared_regions();
+	/* get current shared region info for  */
+	/* restoration after new system shared */
+	/* regions are in place */
+	vm_get_shared_region(current_task(), &regions);
+
+	/* usually only called at boot time    */
+	/* shared_file_boot_time_init creates  */
+	/* a new set of system shared regions  */
+	/* and places them as the system       */
+	/* shared regions.                     */
+	shared_file_boot_time_init();
+
+	/* set current task back to its        */
+	/* original regions.                   */
+	vm_get_shared_region(current_task(), &new_regions);
+	shared_region_mapping_dealloc(new_regions);
+
+	vm_set_shared_region(current_task(), regions);
 
 	*retval = 0;
 	return 0;
@@ -746,7 +715,7 @@ new_system_shared_regions(
 
 
 int
-clone_system_shared_regions(shared_regions_active, base_vnode)
+clone_system_shared_regions(shared_regions_active)
 {
 	shared_region_mapping_t	new_shared_region;
 	shared_region_mapping_t	next;
@@ -756,6 +725,8 @@ clone_system_shared_regions(shared_regions_active, base_vnode)
 
 	struct proc	*p;
 
+	if (shared_file_create_system_region(&new_shared_region))
+		return (ENOMEM);
 	vm_get_shared_region(current_task(), &old_shared_region);
 	old_info.self = (vm_offset_t)old_shared_region;
 	shared_region_mapping_info(old_shared_region,
@@ -767,27 +738,7 @@ clone_system_shared_regions(shared_regions_active, base_vnode)
 		&(old_info.client_base),
 		&(old_info.alternate_base),
 		&(old_info.alternate_next), 
-		&(old_info.fs_base),
-		&(old_info.system),
 		&(old_info.flags), &next);
-	if ((shared_regions_active) ||
-		(base_vnode == ENV_DEFAULT_ROOT)) {
-	   if (shared_file_create_system_region(&new_shared_region))
-		return (ENOMEM);
-	} else {
-	   new_shared_region = 
-		lookup_default_shared_region(
-			base_vnode, old_info.system);
-	   if(new_shared_region == NULL) {
-		shared_file_boot_time_init(
-			base_vnode, old_info.system);
-		vm_get_shared_region(current_task(), &new_shared_region);
-	   } else {
-		vm_set_shared_region(current_task(), new_shared_region);
-	   }
-	   if(old_shared_region)
-		shared_region_mapping_dealloc(old_shared_region);
-	}
 	new_info.self = (vm_offset_t)new_shared_region;
 	shared_region_mapping_info(new_shared_region,
 		&(new_info.text_region),   
@@ -798,8 +749,6 @@ clone_system_shared_regions(shared_regions_active, base_vnode)
 		&(new_info.client_base),
 		&(new_info.alternate_base),
 		&(new_info.alternate_next), 
-		&(new_info.fs_base),
-		&(new_info.system),
 		&(new_info.flags), &next);
 	if(shared_regions_active) {
 	   if(vm_region_clone(old_info.text_region, new_info.text_region)) {

@@ -3,22 +3,19 @@
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
- * Copyright (c) 1999-2003 Apple Computer, Inc.  All Rights Reserved.
+ * The contents of this file constitute Original Code as defined in and
+ * are subject to the Apple Public Source License Version 1.1 (the
+ * "License").  You may not use this file except in compliance with the
+ * License.  Please obtain a copy of the License at
+ * http://www.apple.com/publicsource and read it before using this file.
  * 
- * This file contains Original Code and/or Modifications of Original Code
- * as defined in and that are subject to the Apple Public Source License
- * Version 2.0 (the 'License'). You may not use this file except in
- * compliance with the License. Please obtain a copy of the License at
- * http://www.opensource.apple.com/apsl/ and read it before using this
- * file.
- * 
- * The Original Code and all software distributed under the License are
- * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * This Original Code and all software distributed under the License are
+ * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
- * Please see the License for the specific language governing rights and
- * limitations under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
+ * License for the specific language governing rights and limitations
+ * under the License.
  * 
  * @APPLE_LICENSE_HEADER_END@
  */
@@ -47,50 +44,42 @@
 #include <ppc/boot.h>
 #include <ppc/misc_protos.h>
 #include <ppc/pmap.h>
+#include <ppc/pmap_internals.h>
 #include <ppc/mem.h>
 #include <ppc/mappings.h>
 #include <ppc/exception.h>
 #include <ppc/mp.h>
-#include <ppc/lowglobals.h>
 
+#ifdef	__MACHO__
 #include <mach-o/mach_header.h>
+#endif
 
-extern const char version[];
-extern const char version_variant[];
+extern unsigned int intstack[];	/* declared in start.s */
+extern unsigned int intstack_top_ss;	/* declared in start.s */
 
-extern unsigned int intstack[];			/* declared in aligned_data.s */
-extern unsigned int intstack_top_ss;	/* declared in aligned_data.s */
-
-addr64_t hash_table_base;				/* Hash table base */
-unsigned int hash_table_size;			/* Hash table size */
-vm_offset_t taproot_addr;				/* (BRINGUP) */
-unsigned int taproot_size;				/* (BRINGUP) */
-unsigned int serialmode;				/* Serial mode keyboard and console control */
-extern int disableConsoleOutput;
-
-struct shadowBAT shadow_BAT;
-
-/*
- *	NOTE: mem_size is bogus on large memory machines.  We will pin it to 0x80000000 if there is more than 2 GB
- *	This is left only for compatibility and max_mem should be used.
- */
-vm_offset_t mem_size;					/* Size of actual physical memory present
-										   minus any performance buffer and possibly limited
-										   by mem_limit in bytes */
-uint64_t	mem_actual;					/* The "One True" physical memory size 
-						  				   actually, it's the highest physical address + 1 */
-uint64_t	max_mem;					/* Size of physical memory (bytes), adjusted by maxmem */
-uint64_t	sane_size;					/* Memory size to use for defaults calculations */
+vm_offset_t mem_size;	/* Size of actual physical memory present
+						   minus any performance buffer and possibly limited
+						   by mem_limit in bytes */
+vm_offset_t mem_actual;	/* The "One True" physical memory size 
+						   actually, it's the highest physical address + 1 */
 						  
 
-mem_region_t pmap_mem_regions[PMAP_MEM_REGION_MAX + 1];
-int	 pmap_mem_regions_count = 0;		/* Assume no non-contiguous memory regions */
+mem_region_t pmap_mem_regions[PMAP_MEM_REGION_MAX];
+int	 pmap_mem_regions_count = 0;	/* No non-contiguous memory regions */
+
+mem_region_t free_regions[FREE_REGION_MAX];
+int	     free_regions_count;
+
+#ifndef __MACHO__  
+extern unsigned long etext;
+#endif
 
 unsigned int avail_remaining = 0;
 vm_offset_t first_avail;
 vm_offset_t static_memory_end;
-addr64_t vm_last_addr = VM_MAX_KERNEL_ADDRESS;	/* Highest kernel virtual address known to the VM system */
+extern vm_offset_t avail_next;
 
+#ifdef __MACHO__
 extern struct mach_header _mh_execute_header;
 vm_offset_t sectTEXTB;
 int sectSizeTEXT;
@@ -102,113 +91,26 @@ vm_offset_t sectKLDB;
 int sectSizeKLD;
 
 vm_offset_t end, etext, edata;
+#endif
 
 extern unsigned long exception_entry;
 extern unsigned long exception_end;
 
 
-void ppc_vm_init(uint64_t mem_limit, boot_args *args)
+void ppc_vm_init(unsigned int mem_limit, boot_args *args)
 {
 	unsigned int htabmask;
-	unsigned int i, j, batsize, kmapsize, pvr;
-	vm_offset_t  addr, ioAddr, videoAddr;
+	unsigned int i, j, batsize, kmapsize;
+	vm_offset_t  addr;
 	int boot_task_end_offset;
 	const char *cpus;
 	mapping		*mp;
+	vm_offset_t first_phys_avail;
 	vm_offset_t		sizeadj, oldstart;
-	unsigned int *xtaproot, bank_shift;
-	uint64_t	cbsize, xhid0;
 
-
-/*
- *	Invalidate all shadow BATs
- */
-
-	/* Initialize shadow IBATs */
-	shadow_BAT.IBATs[0].upper=BAT_INVALID;
-	shadow_BAT.IBATs[0].lower=BAT_INVALID;
-	shadow_BAT.IBATs[1].upper=BAT_INVALID;
-	shadow_BAT.IBATs[1].lower=BAT_INVALID;
-	shadow_BAT.IBATs[2].upper=BAT_INVALID;
-	shadow_BAT.IBATs[2].lower=BAT_INVALID;
-	shadow_BAT.IBATs[3].upper=BAT_INVALID;
-	shadow_BAT.IBATs[3].lower=BAT_INVALID;
-
-	/* Initialize shadow DBATs */
-	shadow_BAT.DBATs[0].upper=BAT_INVALID;
-	shadow_BAT.DBATs[0].lower=BAT_INVALID;
-	shadow_BAT.DBATs[1].upper=BAT_INVALID;
-	shadow_BAT.DBATs[1].lower=BAT_INVALID;
-	shadow_BAT.DBATs[2].upper=BAT_INVALID;
-	shadow_BAT.DBATs[2].lower=BAT_INVALID;
-	shadow_BAT.DBATs[3].upper=BAT_INVALID;
-	shadow_BAT.DBATs[3].lower=BAT_INVALID;
-
-
-	/*
-	 * Go through the list of memory regions passed in via the boot_args
-	 * and copy valid entries into the pmap_mem_regions table, adding
-	 * further calculated entries.
-	 *
-	 * boot_args version 1 has address instead of page numbers
-	 * in the PhysicalDRAM banks, set bank_shift accordingly.
+	/* Now retrieve addresses for end, edata, and etext 
+	 * from MACH-O headers.
 	 */
-	
-	bank_shift = 0;
-	if (args->Version == kBootArgsVersion1) bank_shift = 12;
-	
-	pmap_mem_regions_count = 0;
-	max_mem = 0;   															/* Will use to total memory found so far */
-	mem_actual = 0;															/* Actual size of memory */
-	
-	if (mem_limit == 0) mem_limit = 0xFFFFFFFFFFFFFFFFULL;					/* If there is no set limit, use all */
-	
-	for (i = 0; i < kMaxDRAMBanks; i++) {									/* Look at all of the banks */
-		
-		cbsize = (uint64_t)args->PhysicalDRAM[i].size << (12 - bank_shift);	/* Remember current size */
-		
-		if (!cbsize) continue;												/* Skip if the bank is empty */
-		
-		mem_actual = mem_actual + cbsize;									/* Get true memory size */
-
-		if(mem_limit == 0) continue;										/* If we hit restriction, just keep counting */
-
-		if (cbsize > mem_limit) cbsize = mem_limit;							/* Trim to max allowed */
-		max_mem += cbsize;													/* Total up what we have so far */
-		mem_limit = mem_limit - cbsize;										/* Calculate amount left to do */
-		
-		pmap_mem_regions[pmap_mem_regions_count].mrStart  = args->PhysicalDRAM[i].base >> bank_shift;	/* Set the start of the bank */
-		pmap_mem_regions[pmap_mem_regions_count].mrAStart = pmap_mem_regions[pmap_mem_regions_count].mrStart;		/* Set the start of allocatable area */
-		pmap_mem_regions[pmap_mem_regions_count].mrEnd    = ((uint64_t)args->PhysicalDRAM[i].base >> bank_shift) + (cbsize >> 12) - 1;	/* Set the end address of bank */
-		pmap_mem_regions[pmap_mem_regions_count].mrAEnd   = pmap_mem_regions[pmap_mem_regions_count].mrEnd;	/* Set the end address of allocatable area */
-
-		/* Regions must be provided in ascending order */
-		assert ((pmap_mem_regions_count == 0) ||
-			pmap_mem_regions[pmap_mem_regions_count].mrStart >
-			pmap_mem_regions[pmap_mem_regions_count-1].mrStart);
-
-		pmap_mem_regions_count++;											/* Count this region */
-	}
-	
-	mem_size = (unsigned int)max_mem;										/* Get size of memory */
-	if(max_mem > 0x0000000080000000ULL) mem_size = 0x80000000;				/* Pin at 2 GB */
-
-	sane_size = max_mem;													/* Calculate a sane value to use for init */
-	if(sane_size > (addr64_t)(VM_MAX_KERNEL_ADDRESS + 1)) 
-		sane_size = (addr64_t)(VM_MAX_KERNEL_ADDRESS + 1);					/* If flush with ram, use addressible portion */
-
-
-/* 
- * Initialize the pmap system, using space above `first_avail'
- * for the necessary data structures.
- * NOTE : assume that we'll have enough space mapped in already
- */
-
-	first_avail = static_memory_end;
-
-/* Now retrieve addresses for end, edata, and etext 
- * from MACH-O headers.
- */
 	sectTEXTB = (vm_offset_t)getsegdatafromheader(
 		&_mh_execute_header, "__TEXT", &sectSizeTEXT);
 	sectDATAB = (vm_offset_t)getsegdatafromheader(
@@ -220,175 +122,199 @@ void ppc_vm_init(uint64_t mem_limit, boot_args *args)
 
 	etext = (vm_offset_t) sectTEXTB + sectSizeTEXT;
 	edata = (vm_offset_t) sectDATAB + sectSizeDATA;
-	end = round_page_32(getlastaddr());					/* Force end to next page */
-	
-	kmapsize = (round_page_32(exception_end) - trunc_page_32(exception_entry)) +	/* Get size we will map later */
-		(round_page_32(sectTEXTB+sectSizeTEXT) - trunc_page_32(sectTEXTB)) +
-		(round_page_32(sectDATAB+sectSizeDATA) - trunc_page_32(sectDATAB)) +
-		(round_page_32(sectLINKB+sectSizeLINK) - trunc_page_32(sectLINKB)) +
-		(round_page_32(sectKLDB+sectSizeKLD) - trunc_page_32(sectKLDB)) +
-		(round_page_32(static_memory_end) - trunc_page_32(end));
+	end = round_page(getlastaddr());					/* Force end to next page */
+#if DEBUG
+	kprintf("sectTEXT: %x, size: %x\n", sectTEXTB, sectSizeTEXT);
+	kprintf("sectDATA: %x, size: %x\n", sectDATAB, sectSizeDATA);
+	kprintf("sectLINK: %x, size: %x\n", sectLINKB, sectSizeLINK);
+	kprintf("sectKLD:  %x, size: %x\n", sectKLDB, sectSizeKLD);
+	kprintf("end: %x\n", end);
+#endif
 
-	pmap_bootstrap(max_mem, &first_avail, kmapsize);
-
-	pmap_map(trunc_page_32(exception_entry), trunc_page_32(exception_entry), 
-		round_page_32(exception_end), VM_PROT_READ|VM_PROT_EXECUTE);
-
-	pmap_map(trunc_page_32(sectTEXTB), trunc_page_32(sectTEXTB), 
-		round_page_32(sectTEXTB+sectSizeTEXT), VM_PROT_READ|VM_PROT_EXECUTE);
-
-	pmap_map(trunc_page_32(sectDATAB), trunc_page_32(sectDATAB), 
-		round_page_32(sectDATAB+sectSizeDATA), VM_PROT_READ|VM_PROT_WRITE);
-
-/* The KLD and LINKEDIT segments are unloaded in toto after boot completes,
-* but via ml_static_mfree(), through IODTFreeLoaderInfo(). Hence, we have
-* to map both segments page-by-page.
-*/
-	
-	for (addr = trunc_page_32(sectKLDB);
-             addr < round_page_32(sectKLDB+sectSizeKLD);
-             addr += PAGE_SIZE) {
-
-            pmap_enter(kernel_pmap, addr, addr>>12, 
-			VM_PROT_READ|VM_PROT_WRITE, 
-			VM_WIMG_USE_DEFAULT, TRUE);
-
-	}
-
-	for (addr = trunc_page_32(sectLINKB);
-             addr < round_page_32(sectLINKB+sectSizeLINK);
-             addr += PAGE_SIZE) {
-
-           pmap_enter(kernel_pmap, addr, addr>>12, 
-			VM_PROT_READ|VM_PROT_WRITE, 
-			VM_WIMG_USE_DEFAULT, TRUE);
-
-	}
-
-	pmap_enter(kernel_pmap, &sharedPage, (unsigned int)&sharedPage >> 12,	/* Make sure the sharedPage is mapped */
-		VM_PROT_READ|VM_PROT_WRITE, 
-		VM_WIMG_USE_DEFAULT, TRUE);
-
-	pmap_enter(kernel_pmap, &lowGlo, (unsigned int)&lowGlo >> 12,			/* Make sure the low memory globals are mapped */
-		VM_PROT_READ|VM_PROT_WRITE, 
-		VM_WIMG_USE_DEFAULT, TRUE);
+/* Stitch valid memory regions together - they may be contiguous
+ * even though they're not already glued together
+ */
+	mem_actual = args->PhysicalDRAM[0].base + args->PhysicalDRAM[0].size;	/* Initialize to the first region size */
+	addr = 0;											/* temp use as pointer to previous memory region... */
+	for (i = 1; i < kMaxDRAMBanks; i++) {
+	  	
+		if (args->PhysicalDRAM[i].size == 0) continue;	/* If region is empty, skip it */
 		
+	  	if((args->PhysicalDRAM[i].base + args->PhysicalDRAM[i].size) > mem_actual) {	/* New high? */
+			mem_actual = args->PhysicalDRAM[i].base + args->PhysicalDRAM[i].size;	/* Take the high bid */
+		}
+		
+		if (args->PhysicalDRAM[i].base ==				/* Does the end of the last hit the start of the next? */
+		  args->PhysicalDRAM[addr].base +
+		  args->PhysicalDRAM[addr].size) {
+			kprintf("region 0x%08x size 0x%08x joining region 0x%08x size 0x%08x\n",
+			  args->PhysicalDRAM[addr].base, args->PhysicalDRAM[addr].size,
+			  args->PhysicalDRAM[i].base, args->PhysicalDRAM[i].size);
+			
+			args->PhysicalDRAM[addr].size += args->PhysicalDRAM[i].size;	/* Join them */
+			args->PhysicalDRAM[i].size = 0;
+			continue;
+		}
+		/* This is now last non-zero region to compare against */
+		addr = i;
+	}
+
+	/* Go through the list of memory regions passed in via the args
+	 * and copy valid entries into the pmap_mem_regions table, adding
+	 * further calculated entries.
+	 */
+	
+	pmap_mem_regions_count = 0;
+	mem_size = 0;   /* Will use to total memory found so far */
+
+	for (i = 0; i < kMaxDRAMBanks; i++) {
+		if (args->PhysicalDRAM[i].size == 0)
+			continue;
+
+		/* The following should only happen if memory size has
+		   been artificially reduced with -m */
+		if (mem_limit > 0 &&
+		    mem_size + args->PhysicalDRAM[i].size > mem_limit)
+			args->PhysicalDRAM[i].size = mem_limit - mem_size;
+
+		/* We've found a region, tally memory */
+
+		pmap_mem_regions[pmap_mem_regions_count].start =
+			args->PhysicalDRAM[i].base;
+		pmap_mem_regions[pmap_mem_regions_count].end =
+			args->PhysicalDRAM[i].base +
+			args->PhysicalDRAM[i].size;
+
+		/* Regions must be provided in ascending order */
+		assert ((pmap_mem_regions_count == 0) ||
+			pmap_mem_regions[pmap_mem_regions_count].start >
+			pmap_mem_regions[pmap_mem_regions_count-1].start);
+
+		if (pmap_mem_regions_count > 0) {		
+			/* we add on any pages not in the first memory
+			 * region to the avail_remaining count. The first
+			 * memory region is used for mapping everything for
+			 * bootup and is taken care of specially.
+			 */
+			avail_remaining +=
+				args->PhysicalDRAM[i].size / PPC_PGBYTES;
+		}
+		
+		/* Keep track of how much memory we've found */
+
+		mem_size += args->PhysicalDRAM[i].size;
+
+		/* incremement number of regions found */
+		pmap_mem_regions_count++;
+	}
+
+	kprintf("mem_size: %d M\n",mem_size / (1024 * 1024));
+
+	/* 
+	 * Initialize the pmap system, using space above `first_avail'
+	 * for the necessary data structures.
+	 * NOTE : assume that we'll have enough space mapped in already
+	 */
+
+	first_phys_avail = static_memory_end;
+	first_avail = adjust_bat_limit(first_phys_avail, 0, FALSE, FALSE);
+	
+	kmapsize = (round_page(exception_end) - trunc_page(exception_entry)) +	/* Get size we will map later */
+		(round_page(sectTEXTB+sectSizeTEXT) - trunc_page(sectTEXTB)) +
+		(round_page(sectDATAB+sectSizeDATA) - trunc_page(sectDATAB)) +
+		(round_page(sectLINKB+sectSizeLINK) - trunc_page(sectLINKB)) +
+		(round_page(sectKLDB+sectSizeKLD) - trunc_page(sectKLDB)) +
+		(round_page(static_memory_end) - trunc_page(end));
+
+	pmap_bootstrap(mem_size,&first_avail,&first_phys_avail, kmapsize);
+
+#ifdef	__MACHO__
+#if DEBUG
+	kprintf("Mapping memory:\n");
+	kprintf("   exception vector: %08X, %08X - %08X\n", trunc_page(exception_entry), 
+		trunc_page(exception_entry), round_page(exception_end));
+	kprintf("          sectTEXTB: %08X, %08X - %08X\n", trunc_page(sectTEXTB), 
+		trunc_page(sectTEXTB), round_page(sectTEXTB+sectSizeTEXT));
+	kprintf("          sectDATAB: %08X, %08X - %08X\n", trunc_page(sectDATAB), 
+		trunc_page(sectDATAB), round_page(sectDATAB+sectSizeDATA));
+	kprintf("          sectLINKB: %08X, %08X - %08X\n", trunc_page(sectLINKB), 
+		trunc_page(sectLINKB), round_page(sectLINKB+sectSizeLINK));
+	kprintf("           sectKLDB: %08X, %08X - %08X\n", trunc_page(sectKLDB), 
+		trunc_page(sectKLDB), round_page(sectKLDB+sectSizeKLD));
+	kprintf("                end: %08X, %08X - %08X\n", trunc_page(end), 
+		trunc_page(end), static_memory_end);
+#endif /* DEBUG */
+	pmap_map(trunc_page(exception_entry), trunc_page(exception_entry), 
+		round_page(exception_end), VM_PROT_READ|VM_PROT_EXECUTE);
+	pmap_map(trunc_page(sectTEXTB), trunc_page(sectTEXTB), 
+		round_page(sectTEXTB+sectSizeTEXT), VM_PROT_READ|VM_PROT_EXECUTE);
+	pmap_map(trunc_page(sectDATAB), trunc_page(sectDATAB), 
+		round_page(sectDATAB+sectSizeDATA), VM_PROT_READ|VM_PROT_WRITE);
+
+
+       /* The KLD and LINKEDIT segments are unloaded in toto after boot completes,
+        * but via ml_static_mfree(), through IODTFreeLoaderInfo(). Hence, we have
+        * to map both segments page-by-page.
+        */
+	for (addr = trunc_page(sectKLDB);
+             addr < round_page(sectKLDB+sectSizeKLD);
+             addr += PAGE_SIZE) {
+
+            pmap_enter(kernel_pmap, addr, addr, 
+			VM_PROT_READ|VM_PROT_WRITE, 
+			VM_WIMG_USE_DEFAULT, TRUE);
+	}
+
+	for (addr = trunc_page(sectLINKB);
+             addr < round_page(sectLINKB+sectSizeLINK);
+             addr += PAGE_SIZE) {
+
+            pmap_enter(kernel_pmap, addr, addr, 
+			VM_PROT_READ|VM_PROT_WRITE, 
+			VM_WIMG_USE_DEFAULT, TRUE);
+	}
+
 /*
  *	We need to map the remainder page-by-page because some of this will
  *	be released later, but not all.  Ergo, no block mapping here 
  */
-
-	for(addr = trunc_page_32(end); addr < round_page_32(static_memory_end); addr += PAGE_SIZE) {
-
-		pmap_enter(kernel_pmap, addr, addr>>12, 
+	for(addr = trunc_page(end); addr < round_page(static_memory_end); addr += PAGE_SIZE) {
+		pmap_enter(kernel_pmap, addr, addr, 
 			VM_PROT_READ|VM_PROT_WRITE, 
 			VM_WIMG_USE_DEFAULT, TRUE);
-
 	}
+#endif /* __MACHO__ */
 
-	MapUserAddressSpaceInit();			/* Go initialize copy in/out */
+#if DEBUG
+	for (i=0 ; i < free_regions_count; i++) {
+		kprintf("Free region start 0x%08x end 0x%08x\n",
+		       free_regions[i].start,free_regions[i].end);
+	}
+#endif
 
 /*
- *	At this point, there is enough mapped memory and all hw mapping structures are
- *	allocated and initialized.  Here is where we turn on translation for the
- *	VERY first time....
- *
- *	NOTE: Here is where our very first interruption will happen.
- *
+ *	Note: the shadow BAT registers were already loaded in ppc_init.c
  */
 
-	hw_start_trans();					/* Start translating */
 
-#if 0
-	GratefulDebInit((bootBumbleC *)&(args->Video));	/* Initialize the GratefulDeb debugger */
-#endif
-
-
-	printf_init();						/* Init this in case we need debugger */
-	panic_init();						/* Init this in case we need debugger */
-	PE_init_kprintf(TRUE);				/* Note on PPC we only call this after VM is set up */
-
-	kprintf("kprintf initialized\n");
-
-	serialmode = 0;						/* Assume normal keyboard and console */
-	if(PE_parse_boot_arg("serial", &serialmode)) {		/* Do we want a serial keyboard and/or console? */
-		kprintf("Serial mode specified: %08X\n", serialmode);
-	}
-	if(serialmode & 1) {				/* Start serial if requested */
-		(void)switch_to_serial_console();	/* Switch into serial mode */
-		disableConsoleOutput = FALSE;	/* Allow printfs to happen */
-	}
-	
-	kprintf("max_mem: %ld M\n", (unsigned long)(max_mem >> 20));
-	kprintf("version_variant = %s\n", version_variant);
-	kprintf("version         = %s\n\n", version);
-	__asm__ ("mfpvr %0" : "=r" (pvr));
-	kprintf("proc version    = %08x\n", pvr);
-	if(per_proc_info[0].pf.Available & pf64Bit) {	/* 64-bit processor? */
-		xhid0 = hid0get64();			/* Get the hid0 */
-		if(xhid0 & (1ULL << (63 - 19))) kprintf("Time base is externally clocked\n");
-		else kprintf("Time base is internally clocked\n");
-	}
-
-
-	taproot_size = PE_init_taproot(&taproot_addr);	/* (BRINGUP) See if there is a taproot */
-	if(taproot_size) {					/* (BRINGUP) */
-		kprintf("TapRoot card configured to use vaddr = %08X, size = %08X\n", taproot_addr, taproot_size);
-		bcopy_nc((void *)version, (void *)(taproot_addr + 16), strlen(version));	/* (BRINGUP) Pass it our kernel version */
-		__asm__ volatile("eieio");		/* (BRINGUP) */
-		xtaproot = (unsigned int *)taproot_addr;	/* (BRINGUP) */
-		xtaproot[0] = 1;				/* (BRINGUP) */
-		__asm__ volatile("eieio");		/* (BRINGUP) */
-	}
-
-	PE_create_console();				/* create the console for verbose or pretty mode */
-
-	/* setup console output */
-	PE_init_printf(FALSE);
+	LoadIBATs((unsigned int *)&shadow_BAT.IBATs[0]);		/* Load up real IBATs from shadows */
+	LoadDBATs((unsigned int *)&shadow_BAT.DBATs[0]);		/* Load up real DBATs from shadows */
 
 #if DEBUG
-	printf("\n\n\nThis program was compiled using gcc %d.%d for powerpc\n",
-	       __GNUC__,__GNUC_MINOR__);
-
-
-	/* Processor version information */
-	{       
-		unsigned int pvr;
-		__asm__ ("mfpvr %0" : "=r" (pvr));
-		printf("processor version register : %08X\n", pvr);
-	}
-
-	kprintf("Args at %08X\n", args);
-	for (i = 0; i < pmap_mem_regions_count; i++) {
-			printf("DRAM at %08X size %08X\n",
-			       args->PhysicalDRAM[i].base,
-			       args->PhysicalDRAM[i].size);
-	}
-#endif /* DEBUG */
-
-#if DEBUG
-	kprintf("Mapped memory:\n");
-	kprintf("   exception vector: %08X, %08X - %08X\n", trunc_page_32(exception_entry), 
-		trunc_page_32(exception_entry), round_page_32(exception_end));
-	kprintf("          sectTEXTB: %08X, %08X - %08X\n", trunc_page_32(sectTEXTB), 
-		trunc_page_32(sectTEXTB), round_page_32(sectTEXTB+sectSizeTEXT));
-	kprintf("          sectDATAB: %08X, %08X - %08X\n", trunc_page_32(sectDATAB), 
-		trunc_page_32(sectDATAB), round_page_32(sectDATAB+sectSizeDATA));
-	kprintf("          sectLINKB: %08X, %08X - %08X\n", trunc_page_32(sectLINKB), 
-		trunc_page_32(sectLINKB), round_page_32(sectLINKB+sectSizeLINK));
-	kprintf("           sectKLDB: %08X, %08X - %08X\n", trunc_page_32(sectKLDB), 
-		trunc_page_32(sectKLDB), round_page_32(sectKLDB+sectSizeKLD));
-	kprintf("                end: %08X, %08X - %08X\n", trunc_page_32(end), 
-		trunc_page_32(end), static_memory_end);
-
+	for(i=0; i<4; i++) kprintf("DBAT%1d: %08X %08X\n", 
+		i, shadow_BAT.DBATs[i].upper, shadow_BAT.DBATs[i].lower);
+	for(i=0; i<4; i++) kprintf("IBAT%1d: %08X %08X\n", 
+		i, shadow_BAT.IBATs[i].upper, shadow_BAT.IBATs[i].lower);
 #endif
-
-	return;
 }
 
 void ppc_vm_cpu_init(
 	struct per_proc_info *proc_info)
 {
-	hw_setup_trans();									/* Set up hardware needed for translation */
-	hw_start_trans();									/* Start translating */
+	hash_table_init(hash_table_base, hash_table_size);
+
+	LoadIBATs((unsigned int *)&shadow_BAT.IBATs[0]);
+	LoadDBATs((unsigned int *)&shadow_BAT.DBATs[0]);
+
+	sync();isync();
 }

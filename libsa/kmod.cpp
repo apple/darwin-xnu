@@ -3,22 +3,19 @@
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
- * Copyright (c) 1999-2003 Apple Computer, Inc.  All Rights Reserved.
+ * The contents of this file constitute Original Code as defined in and
+ * are subject to the Apple Public Source License Version 1.1 (the
+ * "License").  You may not use this file except in compliance with the
+ * License.  Please obtain a copy of the License at
+ * http://www.apple.com/publicsource and read it before using this file.
  * 
- * This file contains Original Code and/or Modifications of Original Code
- * as defined in and that are subject to the Apple Public Source License
- * Version 2.0 (the 'License'). You may not use this file except in
- * compliance with the License. Please obtain a copy of the License at
- * http://www.opensource.apple.com/apsl/ and read it before using this
- * file.
- * 
- * The Original Code and all software distributed under the License are
- * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * This Original Code and all software distributed under the License are
+ * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
- * Please see the License for the specific language governing rights and
- * limitations under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
+ * License for the specific language governing rights and limitations
+ * under the License.
  * 
  * @APPLE_LICENSE_HEADER_END@
  */
@@ -62,8 +59,8 @@ kmod_start_or_stop(
 extern kern_return_t kmod_retain(kmod_t id);
 extern kern_return_t kmod_release(kmod_t id);
 
-extern void flush_dcache64(addr64_t addr, unsigned cnt, int phys);
-extern void invalidate_icache64(addr64_t addr, unsigned cnt, int phys);
+extern void flush_dcache(vm_offset_t addr, unsigned cnt, int phys);
+extern void invalidate_icache(vm_offset_t addr, unsigned cnt, int phys);
 };
 
 
@@ -525,7 +522,7 @@ unsigned long address_for_loaded_kmod(
         return 0;
     }
 
-    round_headers_size = round_page_32(headers_size);
+    round_headers_size = round_page(headers_size);
     headers_pad = round_headers_size - headers_size;
 
     link_load_address = (unsigned long)g_current_kmod_info->address +
@@ -561,8 +558,8 @@ unsigned long alloc_for_kmod(
     unsigned long round_size;
     unsigned long headers_pad;
 
-    round_headers_size  = round_page_32(headers_size);
-    round_segments_size = round_page_32(size - headers_size);
+    round_headers_size  = round_page(headers_size);
+    round_segments_size = round_page(size - headers_size);
     round_size  = round_headers_size + round_segments_size;
     headers_pad = round_headers_size - headers_size;
 
@@ -996,7 +993,7 @@ kern_return_t load_kmod(OSArray * dependencyList) {
     // bcopy() is (from, to, length)
     bcopy((char *)kmod_header, (char *)link_buffer_address, link_header_size);
     bcopy((char *)kmod_header + link_header_size,
-        (char *)link_buffer_address + round_page_32(link_header_size),
+        (char *)link_buffer_address + round_page(link_header_size),
         link_load_size - link_header_size);
 
 
@@ -1024,13 +1021,13 @@ kern_return_t load_kmod(OSArray * dependencyList) {
     */
     kmod_info->address = link_buffer_address;
     kmod_info->size = link_buffer_size;
-    kmod_info->hdr_size = round_page_32(link_header_size);
+    kmod_info->hdr_size = round_page(link_header_size);
 
    /* We've written data and instructions, so *flush* the data cache
     * and *invalidate* the instruction cache.
     */
-    flush_dcache64((addr64_t)link_buffer_address, link_buffer_size, false);
-    invalidate_icache64((addr64_t)link_buffer_address, link_buffer_size, false);
+    flush_dcache(link_buffer_address, link_buffer_size, false);
+    invalidate_icache(link_buffer_address, link_buffer_size, false);
 
 
    /* Register the new kmod with the kernel proper.

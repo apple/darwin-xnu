@@ -3,22 +3,19 @@
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
- * Copyright (c) 1999-2003 Apple Computer, Inc.  All Rights Reserved.
+ * The contents of this file constitute Original Code as defined in and
+ * are subject to the Apple Public Source License Version 1.1 (the
+ * "License").  You may not use this file except in compliance with the
+ * License.  Please obtain a copy of the License at
+ * http://www.apple.com/publicsource and read it before using this file.
  * 
- * This file contains Original Code and/or Modifications of Original Code
- * as defined in and that are subject to the Apple Public Source License
- * Version 2.0 (the 'License'). You may not use this file except in
- * compliance with the License. Please obtain a copy of the License at
- * http://www.opensource.apple.com/apsl/ and read it before using this
- * file.
- * 
- * The Original Code and all software distributed under the License are
- * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * This Original Code and all software distributed under the License are
+ * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
- * Please see the License for the specific language governing rights and
- * limitations under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
+ * License for the specific language governing rights and limitations
+ * under the License.
  * 
  * @APPLE_LICENSE_HEADER_END@
  */
@@ -50,13 +47,13 @@ ENTRY(getrpc, TAG_NO_FRAME_USED)
 
 /* Mask and unmask interrupts at the processor level */	
 ENTRY(interrupt_disable, TAG_NO_FRAME_USED)
-			lis		r8,hi16(MASK(MSR_VEC))			; Get the vector flag
-			mfmsr	r0								; Save the MSR 
-			ori		r8,r8,lo16(MASK(MSR_EE)|MASK(MSR_FP))	; Add the FP flag
-			andc	r0,r0,r8						; Clear VEC, FP, DR, and EE
-			mtmsr	r0
-			isync
-			blr
+	mfmsr	r0
+	rlwinm	r0,r0,0,MSR_FP_BIT+1,MSR_FP_BIT-1	; Force floating point off
+	rlwinm	r0,r0,0,MSR_VEC_BIT+1,MSR_VEC_BIT-1	; Force vectors off
+	rlwinm	r0,	r0,	0,	MSR_EE_BIT+1,	MSR_EE_BIT-1
+	mtmsr	r0
+	isync
+	blr
 
 ENTRY(interrupt_enable, TAG_NO_FRAME_USED)
 
@@ -73,13 +70,13 @@ ENTRY(interrupt_enable, TAG_NO_FRAME_USED)
 
 /* Mask and unmask interrupts at the processor level */	
 ENTRY(db_interrupt_disable, TAG_NO_FRAME_USED)
-			lis		r8,hi16(MASK(MSR_VEC))			; Get the vector flag
-			mfmsr	r0								; Save the MSR 
-			ori		r8,r8,lo16(MASK(MSR_EE)|MASK(MSR_FP))	; Add the FP flag
-			andc	r0,r0,r8						; Clear VEC, FP, DR, and EE
-			mtmsr	r0
-			isync
-			blr
+	mfmsr	r0
+	rlwinm	r0,r0,0,MSR_FP_BIT+1,MSR_FP_BIT-1	; Force floating point off
+	rlwinm	r0,r0,0,MSR_VEC_BIT+1,MSR_VEC_BIT-1	; Force vectors off
+	rlwinm	r0,	r0,	0,	MSR_EE_BIT+1,	MSR_EE_BIT-1
+	mtmsr	r0
+	isync
+	blr
 
 ENTRY(db_interrupt_enable, TAG_NO_FRAME_USED)
 	mfmsr	r0
@@ -95,12 +92,11 @@ ENTRY(db_interrupt_enable, TAG_NO_FRAME_USED)
  
 ENTRY(Call_Debugger, TAG_NO_FRAME_USED)
 
-
-			lis		r8,hi16(MASK(MSR_VEC))			; Get the vector flag
 			mfmsr	r7				; Get the current MSR
-			ori		r8,r8,lo16(MASK(MSR_EE)|MASK(MSR_FP))	; Add the FP flag
+			rlwinm	r7,r7,0,MSR_FP_BIT+1,MSR_FP_BIT-1	; Force floating point off
+			rlwinm	r7,r7,0,MSR_VEC_BIT+1,MSR_VEC_BIT-1	; Force vectors off
 			mflr	r0				; Save the return
-			andc	r7,r7,r8						; Clear VEC and FP
+			rlwinm	r7,r7,0,MSR_EE_BIT+1,MSR_EE_BIT-1	; Turn off interruptions
 			mtmsr	r7				; Do it 
 			isync
 			mfsprg	r8,0			; Get the per_proc block
@@ -123,11 +119,9 @@ cdNewDeb:	li		r0,0			; Clear this out
 			
 			bl		EXT(Call_DebuggerC)	; Call the "C" phase of this
 		
-			lis		r8,hi16(MASK(MSR_VEC))			; Get the vector flag
-			mfmsr	r0				; Get the current MSR
-			ori		r8,r8,lo16(MASK(MSR_EE)|MASK(MSR_FP))	; Add the FP flag
+			mfmsr	r0				; Get the MSR just in case it was enabled
 			addi	r1,r1,FM_SIZE	; Pop off first stack frame
-			andc	r0,r0,r8		; Turn off all the interesting stuff
+			rlwinm	r0,r0,0,MSR_EE_BIT+1,MSR_EE_BIT-1	; Turn off interruptions enable bit
 			mtmsr	r0
 		
 			mfsprg	r8,0			; Get the per_proc block address
@@ -193,10 +187,6 @@ ENTRY(mfdar, TAG_NO_FRAME_USED)
 
 ENTRY(mtdec, TAG_NO_FRAME_USED)
 	mtdec	ARG0
-	blr
-
-ENTRY(cntlzw, TAG_NO_FRAME_USED)
-	cntlzw	r3,r3
 	blr
 
 /* Decrementer frequency and realtime|timebase processor registers
@@ -298,11 +288,3 @@ ENTRY(mfsda, TAG_NO_FRAME_USED)
 	mfspr	r3,sda
 	blr
 
-	.globl	EXT(hid0get64)
-	
-LEXT(hid0get64)
-
-	mfspr	r4,hid0					; Get the HID0
-	srdi	r3,r4,32				; Move top down
-	rlwinm	r4,r4,0,0,31			; Clean top
-	blr

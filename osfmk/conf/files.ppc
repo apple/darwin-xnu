@@ -13,28 +13,29 @@ OPTIONS/mp			optional mp
 # that the file is placed at the front of the line
 
 
-osfmk/ddb/db_aout.c			optional mach_kdb
-./ppc_disasm.c				optional mach_kdb
-osfmk/ppc/db_disasm.c		optional mach_kdb
+osfmk/ddb/db_aout.c		optional mach_kdb
+./ppc_disasm.c		optional mach_kdb
+osfmk/ppc/db_disasm.c	optional mach_kdb
+osfmk/ppc/db_asm.s	optional mach_kdb
 osfmk/ppc/db_interface.c	optional mach_kdb
 osfmk/ppc/db_trace.c		optional mach_kdb
 osfmk/ppc/db_low_trace.c	optional mach_kdb
-osfmk/ppc/bcopytest.c		optional mach_kdb
 
 osfmk/ppc/lowmem_vectors.s	standard
 osfmk/ppc/start.s			standard
 osfmk/ppc/_setjmp.s			standard
 
-osfmk/ppc/cpu.c 			standard
+osfmk/ppc/cpu.c 		standard
 osfmk/ppc/ppc_init.c		standard
 osfmk/ppc/ppc_vm_init.c		standard
+osfmk/ppc/bat_init.c		standard
 osfmk/ppc/model_dep.c		standard
+osfmk/ppc/mem.c				standard
 osfmk/ppc/pmap.c			standard
 osfmk/ppc/mappings.c		standard
 osfmk/ppc/savearea.c		standard
 osfmk/ppc/savearea_asm.s	standard
 osfmk/ppc/hw_vm.s			standard
-osfmk/ppc/skiplists.s		standard
 osfmk/ppc/hw_lock.s			standard
 osfmk/ppc/misc_asm.s		standard
 osfmk/ppc/status.c			standard
@@ -54,41 +55,31 @@ osfmk/ppc/misc.c			standard
 osfmk/ppc/interrupt.c		standard
 osfmk/ppc/machine_routines.c		standard
 osfmk/ppc/machine_routines_asm.s		standard
+#osfmk/ppc/Performance.s	standard
 osfmk/ppc/Emulate.s			standard
-osfmk/ppc/Emulate64.s		standard
 osfmk/ppc/AltiAssist.s		standard
 osfmk/ppc/conf.c			standard
 osfmk/ppc/rtclock.c			standard
 osfmk/ppc/Diagnostics.c		standard
 osfmk/ppc/PPCcalls.c		standard
 osfmk/ppc/vmachmon.c		standard
-osfmk/ppc/vmachmon_asm.s	standard
+osfmk/ppc/vmachmon_asm.s		standard
 
-osfmk/ppc/Firmware.s		standard
-osfmk/ppc/FirmwareC.c		standard
+#osfmk/ppc/POWERMAC/ser16550.c		standard
+osfmk/ppc/POWERMAC/autoconf.c		optional xxx
+osfmk/ppc/POWERMAC/pci.c		optional xxx
+osfmk/ppc/POWERMAC/pci_probe.c		optional xxx
+osfmk/ppc/POWERMAC/pci_compat.c		optional xxx
 
-osfmk/ppc/aligned_data.s	standard
+osfmk/ppc/Firmware.s			standard
+osfmk/ppc/FirmwareC.c			standard
 
-osfmk/ppc/hw_perfmon.c		standard
-
-osfmk/ppc/commpage/commpage.c	standard
-osfmk/ppc/commpage/commpage_asm.s	standard
-osfmk/ppc/commpage/bcopy_g3.s	standard
-osfmk/ppc/commpage/bcopy_g4.s	standard
-osfmk/ppc/commpage/bcopy_970.s	standard
-osfmk/ppc/commpage/bcopy_64.s	standard
-osfmk/ppc/commpage/bzero_32.s	standard
-osfmk/ppc/commpage/bzero_128.s	standard
-osfmk/ppc/commpage/cacheflush.s	standard
-osfmk/ppc/commpage/gettimeofday.s	standard
-osfmk/ppc/commpage/mach_absolute_time.s	standard
-osfmk/ppc/commpage/pthread.s	standard
-osfmk/ppc/commpage/spinlocks.s	standard
-osfmk/ppc/commpage/bigcopy_970.s	standard
+osfmk/ppc/aligned_data.s		standard
 
 osfmk/kdp/ml/ppc/kdp_machdep.c        optional mach_kdp
 osfmk/kdp/ml/ppc/kdp_vm.c             optional mach_kdp
 osfmk/kdp/ml/ppc/kdp_misc.s           optional mach_kdp
+#osfmk/kdp/pe/POWERMAC/kdp_mace.c      optional mach_kdp
 
 osfmk/ppc/serial_console.c		optional	scc device-driver
 osfmk/ppc/POWERMAC/serial_io.c	optional	scc device-driver

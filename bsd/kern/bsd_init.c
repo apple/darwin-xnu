@@ -3,22 +3,19 @@
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
- * Copyright (c) 1999-2003 Apple Computer, Inc.  All Rights Reserved.
+ * The contents of this file constitute Original Code as defined in and
+ * are subject to the Apple Public Source License Version 1.1 (the
+ * "License").  You may not use this file except in compliance with the
+ * License.  Please obtain a copy of the License at
+ * http://www.apple.com/publicsource and read it before using this file.
  * 
- * This file contains Original Code and/or Modifications of Original Code
- * as defined in and that are subject to the Apple Public Source License
- * Version 2.0 (the 'License'). You may not use this file except in
- * compliance with the License. Please obtain a copy of the License at
- * http://www.opensource.apple.com/apsl/ and read it before using this
- * file.
- * 
- * The Original Code and all software distributed under the License are
- * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * This Original Code and all software distributed under the License are
+ * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
- * Please see the License for the specific language governing rights and
- * limitations under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
+ * License for the specific language governing rights and limitations
+ * under the License.
  * 
  * @APPLE_LICENSE_HEADER_END@
  */
@@ -120,6 +117,7 @@
 #include <mach/shared_memory_server.h>
 #include <vm/vm_shared_memory_server.h>
 
+extern shared_region_mapping_t       system_shared_region;
 extern int app_profile;		/* on/off switch for pre-heat cache */
 
 char    copyright[] =
@@ -414,7 +412,6 @@ bsd_init()
 	 */
 	s = splimp();
 	sysctl_register_fixed(); 
-	sysctl_mib_init();
 	dlil_init();
 	socketinit();
 	domaininit();
@@ -530,7 +527,6 @@ bsdinit_task(void)
 	struct uthread *ut;
 	kern_return_t	kr;
 	thread_act_t th_act;
-	shared_region_mapping_t system_region;
 
 	proc_name("init", p);
 
@@ -560,14 +556,8 @@ bsdinit_task(void)
 	bsd_hardclockinit = 1;	/* Start bsd hardclock */
 	bsd_init_task = get_threadtask(th_act);
 	init_task_failure_data[0] = 0;
-	system_region = lookup_default_shared_region(
-			ENV_DEFAULT_ROOT, ENV_DEFAULT_SYSTEM);
-        if (system_region == NULL) {
-		shared_file_boot_time_init(
-			ENV_DEFAULT_ROOT, ENV_DEFAULT_SYSTEM);
-	} else {
-		vm_set_shared_region(get_threadtask(th_act), system_region);
-	}
+	shared_region_mapping_ref(system_shared_region);
+	vm_set_shared_region(get_threadtask(th_act), system_shared_region);
 	load_init_program(p);
 	/* turn on app-profiling i.e. pre-heating */
 	app_profile = 1;

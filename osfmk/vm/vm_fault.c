@@ -1,24 +1,22 @@
+
 /*
  * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
- * Copyright (c) 1999-2003 Apple Computer, Inc.  All Rights Reserved.
+ * The contents of this file constitute Original Code as defined in and
+ * are subject to the Apple Public Source License Version 1.1 (the
+ * "License").  You may not use this file except in compliance with the
+ * License.  Please obtain a copy of the License at
+ * http://www.apple.com/publicsource and read it before using this file.
  * 
- * This file contains Original Code and/or Modifications of Original Code
- * as defined in and that are subject to the Apple Public Source License
- * Version 2.0 (the 'License'). You may not use this file except in
- * compliance with the License. Please obtain a copy of the License at
- * http://www.opensource.apple.com/apsl/ and read it before using this
- * file.
- * 
- * The Original Code and all software distributed under the License are
- * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * This Original Code and all software distributed under the License are
+ * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
- * Please see the License for the specific language governing rights and
- * limitations under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
+ * License for the specific language governing rights and limitations
+ * under the License.
  * 
  * @APPLE_LICENSE_HEADER_END@
  */
@@ -79,6 +77,7 @@ extern int	device_pager_workaround;
 #include <kern/host.h>
 #include <kern/xpr.h>
 #include <ppc/proc_reg.h>
+#include <ppc/pmap_internals.h>
 #include <vm/task_working_set.h>
 #include <vm/vm_map.h>
 #include <vm/vm_object.h>
@@ -617,7 +616,6 @@ vm_fault_page(
 						return(VM_FAULT_MEMORY_SHORTAGE);
 					}
 
-
 					XPR(XPR_VM_FAULT,
 	      "vm_f_page: zero obj 0x%X, off 0x%X, page 0x%X, first_obj 0x%X\n",
 						(integer_t)object, offset,
@@ -663,7 +661,7 @@ vm_fault_page(
     						}
 						vm_object_lock(object);
 					}
-					pmap_clear_modify(m->phys_page);
+					pmap_clear_modify(m->phys_addr);
 					vm_page_lock_queues();
 					VM_PAGE_QUEUES_REMOVE(m);
 					m->page_ticket = vm_page_ticket;
@@ -1302,7 +1300,7 @@ no_clustering:
 			m->inactive = TRUE;
 			vm_page_inactive_count++;
 			vm_page_unlock_queues();
-			pmap_clear_modify(m->phys_page);
+			pmap_clear_modify(m->phys_addr);
 			break;
 		}
 		else {
@@ -1423,7 +1421,7 @@ no_clustering:
 
 			vm_page_lock_queues();
 			assert(!m->cleaning);
-			pmap_page_protect(m->phys_page, VM_PROT_NONE);
+			pmap_page_protect(m->phys_addr, VM_PROT_NONE);
 			vm_page_deactivate(m);
 			copy_m->dirty = TRUE;
 			/*
@@ -1614,7 +1612,7 @@ no_clustering:
 
 			vm_page_lock_queues();
 			assert(!m->cleaning);
-			pmap_page_protect(m->phys_page, VM_PROT_NONE);
+			pmap_page_protect(m->phys_addr, VM_PROT_NONE);
 			copy_m->dirty = TRUE;
 			vm_page_unlock_queues();
 
@@ -1837,6 +1835,7 @@ vm_fault(
 	vm_prot_t		full_fault_type;
 	
 
+
 	KERNEL_DEBUG_CONSTANT((MACHDBG_CODE(DBG_MACH_VM, 0)) | DBG_FUNC_START,
 			      vaddr,
 			      0,
@@ -1844,6 +1843,7 @@ vm_fault(
 			      0,
 			      0);
 
+	cur_thread = current_thread();
 	/* at present we do not fully check for execute permission */
 	/* we generally treat it is read except in certain device  */
 	/* memory settings */
@@ -1868,8 +1868,6 @@ vm_fault(
 	/*
 	 * drop funnel if it is already held. Then restore while returning
 	 */
-	cur_thread = current_thread();
-
 	if ((cur_thread->funnel_state & TH_FN_OWNED) == TH_FN_OWNED) {
 		funnel_set = TRUE;
 		curflock = cur_thread->funnel_lock;
@@ -2046,13 +2044,12 @@ FastPmapEnter:
 					prot &= ~VM_PROT_WRITE;
 #endif	/* MACH_KDB */
 #endif	/* STATIC_CONFIG */
-				cache_attr = ((unsigned int)m->object->wimg_bits) & VM_WIMG_MASK;
-				if ((m->no_isync == TRUE) || 
-					   (cache_attr != VM_WIMG_DEFAULT)) {
-				        pmap_sync_caches_phys(m->phys_page);
+				if (m->no_isync == TRUE) {
+				        pmap_sync_caches_phys(m->phys_addr);
 					m->no_isync = FALSE;
 				}
 
+				cache_attr = ((unsigned int)m->object->wimg_bits) & VM_WIMG_MASK;
 				if(caller_pmap) {
 					PMAP_ENTER(caller_pmap, 
 						caller_pmap_addr, m, 
@@ -2238,7 +2235,7 @@ FastPmapEnter:
 			vm_page_lock_queues();
 			vm_page_deactivate(cur_m);
 			m->dirty = TRUE;
-			pmap_page_protect(cur_m->phys_page,
+			pmap_page_protect(cur_m->phys_addr,
 						  VM_PROT_NONE);
 			vm_page_unlock_queues();
 
@@ -2666,7 +2663,7 @@ FastPmapEnter:
 	 */
 	if (m != VM_PAGE_NULL) {
 		if (m->no_isync == TRUE) {
-		        pmap_sync_caches_phys(m->phys_page);
+		        pmap_sync_caches_phys(m->phys_addr);
 
 		        m->no_isync = FALSE;
 		}
@@ -2732,6 +2729,7 @@ FastPmapEnter:
 
 #ifndef i386
 		int			memattr;
+		struct	phys_entry	*pp;
 		vm_map_entry_t		entry;
 		vm_offset_t		laddr;
 		vm_offset_t		ldelta, hdelta;
@@ -2740,16 +2738,22 @@ FastPmapEnter:
 		 * do a pmap block mapping from the physical address
 		 * in the object 
 		 */
+		if(pp = pmap_find_physentry(
+			(vm_offset_t)object->shadow_offset)) {
+			memattr = ((pp->pte1 & 0x00000078) >> 3); 
+		} else {
+			memattr = VM_WIMG_MASK & (int)object->wimg_bits;
+		}
 
-		/* While we do not worry about execution protection in   */
-		/* general, certian pages may have instruction execution */
-		/* disallowed.  We will check here, and if not allowed   */
-		/* to execute, we return with a protection failure.      */
 
-		if((full_fault_type & VM_PROT_EXECUTE) &&
-			(pmap_canExecute((ppnum_t)
-				(object->shadow_offset >> 12)) < 1)) {
+		/* While we do not worry about execution protection in */
+		/* general, we may be able to read device memory and   */
+		/* still not be able to execute it.  Here we check for */
+		/* the guarded bit.  If its set and we are attempting  */
+		/* to execute, we return with a protection failure.    */
 
+		if((memattr & VM_MEM_GUARDED) &&
+			(full_fault_type & VM_PROT_EXECUTE)) {
 			vm_map_verify_done(map, &version);
 			if(pmap_map != map)
 				vm_map_unlock(pmap_map);
@@ -2758,6 +2762,8 @@ FastPmapEnter:
 			kr = KERN_PROTECTION_FAILURE;
 			goto done;
 		}
+
+
 
 		if(pmap_map != map) {
 			vm_map_unlock(pmap_map);
@@ -2803,36 +2809,32 @@ FastPmapEnter:
 
 
 			if(caller_pmap) {
-				/* Set up a block mapped area */
 				pmap_map_block(caller_pmap, 
-					(addr64_t)(caller_pmap_addr - ldelta), 
-					(((vm_offset_t)
+					caller_pmap_addr - ldelta, 
+					((vm_offset_t)
 				    (entry->object.vm_object->shadow_offset)) 
 					+ entry->offset + 
-					(laddr - entry->vme_start) 
-							- ldelta)>>12,
+					(laddr - entry->vme_start) - ldelta, 
 				ldelta + hdelta, prot, 
-				(VM_WIMG_MASK & (int)object->wimg_bits), 0);
-			} else { 
-				/* Set up a block mapped area */
-				pmap_map_block(pmap_map->pmap, 
-				   (addr64_t)(vaddr - ldelta), 
-				   (((vm_offset_t)
+				memattr, 0); /* Set up a block mapped area */
+			} else {
+				pmap_map_block(pmap_map->pmap, vaddr - ldelta, 
+				((vm_offset_t)
 				    (entry->object.vm_object->shadow_offset)) 
-				       + entry->offset + 
-				       (laddr - entry->vme_start) - ldelta)>>12,
-				   ldelta + hdelta, prot, 
-				   (VM_WIMG_MASK & (int)object->wimg_bits), 0);
+					+ entry->offset + 
+					(laddr - entry->vme_start) - ldelta, 
+				ldelta + hdelta, prot, 
+				memattr, 0); /* Set up a block mapped area */
 			}
 		}
 #else
 #ifdef notyet
 		if(caller_pmap) {
                		pmap_enter(caller_pmap, caller_pmap_addr, 
-				object->shadow_offset>>12, prot, 0, TRUE);
+				object->shadow_offset, prot, 0, TRUE);
 		} else {
                		pmap_enter(pmap, vaddr, 
-				object->shadow_offset>>12, prot, 0, TRUE);
+				object->shadow_offset, prot, 0, TRUE);
 		}
         		/* Map it in */
 #endif
@@ -3047,7 +3049,7 @@ vm_fault_unwire(
 			result_object = result_page->object;
 			if (deallocate) {
 				assert(!result_page->fictitious);
-				pmap_page_protect(result_page->phys_page,
+				pmap_page_protect(result_page->phys_addr,
 						VM_PROT_NONE);
 				VM_PAGE_FREE(result_page);
 			} else {
@@ -3227,7 +3229,7 @@ vm_fault_wire_fast(
 	 *	may cause other faults.   
 	 */
 	if (m->no_isync == TRUE) {
-	        pmap_sync_caches_phys(m->phys_page);
+	        pmap_sync_caches_phys(m->phys_addr);
 
 		m->no_isync = FALSE;
 	}

@@ -3,22 +3,19 @@
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
- * Copyright (c) 1999-2003 Apple Computer, Inc.  All Rights Reserved.
+ * The contents of this file constitute Original Code as defined in and
+ * are subject to the Apple Public Source License Version 1.1 (the
+ * "License").  You may not use this file except in compliance with the
+ * License.  Please obtain a copy of the License at
+ * http://www.apple.com/publicsource and read it before using this file.
  * 
- * This file contains Original Code and/or Modifications of Original Code
- * as defined in and that are subject to the Apple Public Source License
- * Version 2.0 (the 'License'). You may not use this file except in
- * compliance with the License. Please obtain a copy of the License at
- * http://www.opensource.apple.com/apsl/ and read it before using this
- * file.
- * 
- * The Original Code and all software distributed under the License are
- * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * This Original Code and all software distributed under the License are
+ * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
- * Please see the License for the specific language governing rights and
- * limitations under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
+ * License for the specific language governing rights and limitations
+ * under the License.
  * 
  * @APPLE_LICENSE_HEADER_END@
  */
@@ -465,6 +462,7 @@ struct db_command db_show_cmds[] = {
 	{ "simple_lock", db_show_one_simple_lock,	0,	0 },
 	{ "thread_log", (db_func)db_show_thread_log,	0,	0 },
 	{ "shuttle",	db_show_shuttle,		0,	0 },
+	{ "etap_log",	db_show_etap_log,		0,	0 },
 	{ (char *)0, }
 };
 
@@ -518,19 +516,14 @@ struct db_command db_command_table[] = {
 #if defined(__ppc__)
 	{ "lt",		db_low_trace,			CS_MORE|CS_SET_DOT,	0 },
 	{ "dl",		db_display_long,		CS_MORE|CS_SET_DOT,	0 },
-	{ "dc",		db_display_char,		CS_MORE|CS_SET_DOT,	0 },
 	{ "dr",		db_display_real,		CS_MORE|CS_SET_DOT,	0 },
 	{ "dv",		db_display_virtual,		CS_MORE|CS_SET_DOT,	0 },
 	{ "dm",		db_display_mappings,	CS_MORE|CS_SET_DOT,	0 },
-	{ "dh",		db_display_hash,		CS_MORE|CS_SET_DOT,	0 },
 	{ "dp",		db_display_pmap,		CS_MORE,			0 },
-	{ "di",		db_display_iokit,		CS_MORE,			0 },
 	{ "ds",		db_display_save,		CS_MORE|CS_SET_DOT,	0 },
 	{ "dx",		db_display_xregs,		CS_MORE|CS_SET_DOT,	0 },
 	{ "dk",		db_display_kmod,		CS_MORE,			0 },
 	{ "gs",		db_gsnoop,				CS_MORE,			0 },
-	{ "cm",		db_check_mappings,		CS_MORE,			0 },
-	{ "cp",		db_check_pmaps,			CS_MORE,			0 },
 #endif
 	{ (char *)0, }
 };
@@ -623,6 +616,16 @@ db_error(char *s)
 {
 	extern int db_macro_level;
 
+#if defined(__alpha)
+#  if KDEBUG
+	extern boolean_t kdebug_mode;
+	if (kdebug_mode) {
+		if (s) kprintf(DBG_DEBUG, s);
+		return;
+	}
+#  endif /* KDEBUG */
+#endif /* defined(__alpha) */
+
 	db_macro_level = 0;
 	if (db_recover) {
 	    if (s > (char *)1)
@@ -648,11 +651,10 @@ db_fncall(void)
 {
 	db_expr_t	fn_addr;
 #define	MAXARGS		11
-	uint32_t	args[MAXARGS];
-	db_expr_t argwork;
+	db_expr_t	args[MAXARGS];
 	int		nargs = 0;
-	uint32_t	retval;
-	uint32_t	(*func)(uint32_t, ...);
+	db_expr_t	retval;
+	db_expr_t	(*func)(db_expr_t, ...);
 	int		t;
 
 	if (!db_expression(&fn_addr)) {
@@ -660,33 +662,31 @@ db_fncall(void)
 	    db_flush_lex();
 	    return;
 	}
-	func = (uint32_t (*) (uint32_t, ...)) fn_addr;
+	func = (db_expr_t (*) (db_expr_t, ...)) fn_addr;
 
 	t = db_read_token();
 	if (t == tLPAREN) {
-	    if (db_expression(&argwork)) {
-			args[nargs] = (uint32_t)argwork;
-			nargs++;
-			while ((t = db_read_token()) == tCOMMA) {
-				if (nargs == MAXARGS) {
-					db_printf("Too many arguments\n");
-					db_flush_lex();
-					return;
-				}
-				if (!db_expression(&argwork)) {
-					db_printf("Argument missing\n");
-					db_flush_lex();
-					return;
-				}
-				args[nargs] = (uint32_t)argwork;
-				nargs++;
-			}
-			db_unread_token(t);
-	    }
-	    if (db_read_token() != tRPAREN) {
-			db_printf("?\n");
+	    if (db_expression(&args[0])) {
+		nargs++;
+		while ((t = db_read_token()) == tCOMMA) {
+		    if (nargs == MAXARGS) {
+			db_printf("Too many arguments\n");
 			db_flush_lex();
 			return;
+		    }
+		    if (!db_expression(&args[nargs])) {
+			db_printf("Argument missing\n");
+			db_flush_lex();
+			return;
+		    }
+		    nargs++;
+		}
+		db_unread_token(t);
+	    }
+	    if (db_read_token() != tRPAREN) {
+		db_printf("?\n");
+		db_flush_lex();
+		return;
 	    }
 	}
 	while (nargs < MAXARGS) {

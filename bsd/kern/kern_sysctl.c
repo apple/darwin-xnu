@@ -3,22 +3,19 @@
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
- * Copyright (c) 1999-2003 Apple Computer, Inc.  All Rights Reserved.
+ * The contents of this file constitute Original Code as defined in and
+ * are subject to the Apple Public Source License Version 1.1 (the
+ * "License").  You may not use this file except in compliance with the
+ * License.  Please obtain a copy of the License at
+ * http://www.apple.com/publicsource and read it before using this file.
  * 
- * This file contains Original Code and/or Modifications of Original Code
- * as defined in and that are subject to the Apple Public Source License
- * Version 2.0 (the 'License'). You may not use this file except in
- * compliance with the License. Please obtain a copy of the License at
- * http://www.opensource.apple.com/apsl/ and read it before using this
- * file.
- * 
- * The Original Code and all software distributed under the License are
- * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * This Original Code and all software distributed under the License are
+ * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
- * Please see the License for the specific language governing rights and
- * limitations under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
+ * License for the specific language governing rights and limitations
+ * under the License.
  * 
  * @APPLE_LICENSE_HEADER_END@
  */
@@ -100,6 +97,7 @@ extern vm_map_t bsd_pageable_map;
 #endif
 
 sysctlfn kern_sysctl;
+sysctlfn hw_sysctl;
 #ifdef DEBUG
 sysctlfn debug_sysctl;
 #endif
@@ -214,6 +212,9 @@ __sysctl(p, uap, retval)
 		if ((name[1] != KERN_VNODE) && (name[1] != KERN_FILE) 
 			&& (name[1] != KERN_PROC))
 			dolock = 0;
+		break;
+	case CTL_HW:
+		fn = hw_sysctl;
 		break;
 	case CTL_VM:
 		fn = vm_sysctl;
@@ -447,6 +448,100 @@ kern_sysctl(name, namelen, oldp, oldlenp, newp, newlen, p)
 		return (EOPNOTSUPP);
 	}
 	/* NOTREACHED */
+}
+
+/*
+ * hardware related system variables.
+ */
+hw_sysctl(name, namelen, oldp, oldlenp, newp, newlen, p)
+	int *name;
+	u_int namelen;
+	void *oldp;
+	size_t *oldlenp;
+	void *newp;
+	size_t newlen;
+	struct proc *p;
+{
+	char dummy[65];
+	int  epochTemp;
+	extern int vm_page_wire_count;
+#if __ppc__
+	ml_ppc_cpu_info_t cpu_info;
+
+	ml_ppc_get_info(&cpu_info);
+#endif
+
+	/* all sysctl names at this level are terminal */
+	if (namelen != 1)
+		return (ENOTDIR);		/* overloaded */
+
+	switch (name[0]) {
+	case HW_MACHINE:
+		if(!PEGetMachineName(dummy,64))
+			return(EINVAL);
+		return (sysctl_rdstring(oldp, oldlenp, newp, dummy));
+	case HW_MODEL:
+		if(!PEGetModelName(dummy,64))
+			return(EINVAL);
+		return (sysctl_rdstring(oldp, oldlenp, newp, dummy));
+	case HW_NCPU:
+		{
+		int numcpus=1;
+		host_basic_info_data_t hinfo;
+		kern_return_t kret;
+		int count= HOST_BASIC_INFO_COUNT;
+#define BSD_HOST 1
+
+			kret = host_info(BSD_HOST, HOST_BASIC_INFO, &hinfo, &count);
+			if (kret == KERN_SUCCESS) {
+				numcpus = hinfo.avail_cpus;
+				return (sysctl_rdint(oldp, oldlenp, newp, numcpus));
+			} else {
+				return(EINVAL);
+			}
+		}
+	case HW_BYTEORDER:
+		return (sysctl_rdint(oldp, oldlenp, newp, BYTE_ORDER));
+	case HW_PHYSMEM:
+		return (sysctl_rdint(oldp, oldlenp, newp, mem_size));
+	case HW_USERMEM:
+		return (sysctl_rdint(oldp, oldlenp, newp,
+		    (mem_size - vm_page_wire_count * page_size)));
+	case HW_PAGESIZE:
+		return (sysctl_rdint(oldp, oldlenp, newp, page_size));
+	case HW_EPOCH:
+	        epochTemp = PEGetPlatformEpoch();
+		if (epochTemp == -1) return(EINVAL);
+		return (sysctl_rdint(oldp, oldlenp, newp, epochTemp));
+	case HW_BUS_FREQ:
+		return (sysctl_rdint(oldp, oldlenp, newp, gPEClockFrequencyInfo.bus_clock_rate_hz));
+	case HW_CPU_FREQ:
+		return (sysctl_rdint(oldp, oldlenp, newp, gPEClockFrequencyInfo.cpu_clock_rate_hz));
+#if __ppc__
+	case HW_VECTORUNIT:
+		return (sysctl_rdint(oldp, oldlenp, newp, cpu_info.vector_unit));
+	case HW_CACHELINE:
+		return (sysctl_rdint(oldp, oldlenp, newp, cpu_info.cache_line_size));
+	case HW_L1ICACHESIZE:
+		return (sysctl_rdint(oldp, oldlenp, newp, cpu_info.l1_icache_size));
+	case HW_L1DCACHESIZE:
+		return (sysctl_rdint(oldp, oldlenp, newp, cpu_info.l1_dcache_size));
+	case HW_L2SETTINGS:
+		if (cpu_info.l2_cache_size == 0xFFFFFFFF) return(EINVAL);
+		return (sysctl_rdint(oldp, oldlenp, newp, cpu_info.l2_settings));
+	case HW_L2CACHESIZE:
+		if (cpu_info.l2_cache_size == 0xFFFFFFFF) return(EINVAL);
+		return (sysctl_rdint(oldp, oldlenp, newp, cpu_info.l2_cache_size));
+	case HW_L3SETTINGS:
+		if (cpu_info.l3_cache_size == 0xFFFFFFFF) return(EINVAL);
+		return (sysctl_rdint(oldp, oldlenp, newp, cpu_info.l3_settings));
+	case HW_L3CACHESIZE:
+		if (cpu_info.l3_cache_size == 0xFFFFFFFF) return(EINVAL);
+		return (sysctl_rdint(oldp, oldlenp, newp, cpu_info.l3_cache_size));
+#endif
+	default:
+		return (EOPNOTSUPP);
+	}
 }
 
 #ifdef DEBUG
@@ -1116,20 +1211,20 @@ sysctl_procargs(name, namelen, where, sizep, cur_proc)
 		goto restart;
 	}
 
-	ret = kmem_alloc(kernel_map, &copy_start, round_page_32(arg_size));
+	ret = kmem_alloc(kernel_map, &copy_start, round_page(arg_size));
 	if (ret != KERN_SUCCESS) {
 		task_deallocate(task);
 		return(ENOMEM);
 	}
 
 	proc_map = get_task_map(task);
-	copy_end = round_page_32(copy_start + arg_size);
+	copy_end = round_page(copy_start + arg_size);
 
-	if( vm_map_copyin(proc_map, trunc_page(arg_addr), round_page_32(arg_size), 
+	if( vm_map_copyin(proc_map, trunc_page(arg_addr), round_page(arg_size), 
 			FALSE, &tmp) != KERN_SUCCESS) {
 			task_deallocate(task);
 			kmem_free(kernel_map, copy_start,
-					round_page_32(arg_size));
+					round_page(arg_size));
 			return (EIO);
 	}
 
@@ -1142,7 +1237,7 @@ sysctl_procargs(name, namelen, where, sizep, cur_proc)
 	if( vm_map_copy_overwrite(kernel_map, copy_start, 
 		tmp, FALSE) != KERN_SUCCESS) {
 			kmem_free(kernel_map, copy_start,
-					round_page_32(arg_size));
+					round_page(arg_size));
 			return (EIO);
 	}
 

@@ -3,22 +3,19 @@
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
- * Copyright (c) 1999-2003 Apple Computer, Inc.  All Rights Reserved.
+ * The contents of this file constitute Original Code as defined in and
+ * are subject to the Apple Public Source License Version 1.1 (the
+ * "License").  You may not use this file except in compliance with the
+ * License.  Please obtain a copy of the License at
+ * http://www.apple.com/publicsource and read it before using this file.
  * 
- * This file contains Original Code and/or Modifications of Original Code
- * as defined in and that are subject to the Apple Public Source License
- * Version 2.0 (the 'License'). You may not use this file except in
- * compliance with the License. Please obtain a copy of the License at
- * http://www.opensource.apple.com/apsl/ and read it before using this
- * file.
- * 
- * The Original Code and all software distributed under the License are
- * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * This Original Code and all software distributed under the License are
+ * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
- * Please see the License for the specific language governing rights and
- * limitations under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
+ * License for the specific language governing rights and limitations
+ * under the License.
  * 
  * @APPLE_LICENSE_HEADER_END@
  */
@@ -2775,6 +2772,79 @@ ENTRY(dr_addr)
 	.long	0,0,0,0
 	.long	0,0,0,0
 	.text
+
+/*
+ * Determine cpu model and set global cpuid_xxx variables
+ *
+ * Relies on 386 eflags bit 18 (AC) always being zero & 486 preserving it.
+ * Relies on 486 eflags bit 21 (ID) always being zero & 586 preserving it.
+ * Relies on CPUID instruction for next x86 generations
+ * (assumes cpuid-family-homogenous MPs; else convert to per-cpu array)
+ */
+
+ENTRY(set_cpu_model)
+	FRAME
+	pushl	%ebx			/* save ebx */
+	andl	$~0x3,%esp		/* Align stack to avoid AC fault */
+	pushfl				/* push EFLAGS */
+	popl	%eax			/* pop into eax */
+	movl	%eax,%ecx		/* Save original EFLAGS */
+	xorl	$(EFL_AC+EFL_ID),%eax	/* toggle ID,AC bits */
+	pushl	%eax			/* push new value */
+	popfl				/* through the EFLAGS register */
+	pushfl				/* and back */
+	popl	%eax			/* into eax */
+	movb	$(CPUID_FAMILY_386),EXT(cpuid_family)
+	pushl	%ecx			/* push original EFLAGS */
+	popfl				/* restore EFLAGS */
+	xorl	%ecx,%eax		/* see what changed */
+	testl	$ EFL_AC,%eax		/* test AC bit */
+	jz	0f			/* if AC toggled (486 or higher) */
+	
+	movb	$(CPUID_FAMILY_486),EXT(cpuid_family)
+	testl	$ EFL_ID,%eax		/* test ID bit */
+	jz	0f			/* if ID toggled use cpuid instruction */
+	
+	xorl	%eax,%eax		/* get vendor identification string */
+	.word	0xA20F			/* cpuid instruction */
+	movl	%eax,EXT(cpuid_value)	/* Store high value */ 
+	movl	%ebx,EXT(cpuid_vid)	/* Store byte 0-3 of Vendor ID */
+	movl	%edx,EXT(cpuid_vid)+4	/* Store byte 4-7 of Vendor ID */
+	movl	%ecx,EXT(cpuid_vid)+8	/* Store byte 8-B of Vendor ID */
+	movl	$1,%eax			/* get processor signature */
+	.word	0xA20F			/* cpuid instruction */
+	movl	%edx,EXT(cpuid_feature)	/* Store feature flags */
+	movl	%eax,%ecx		/* Save original signature */
+	andb	$0xF,%al		/* Get Stepping ID */
+	movb	%al,EXT(cpuid_stepping)	/* Save Stepping ID */
+	movl	%ecx,%eax		/* Get original signature */
+	shrl	$4,%eax			/* Shift Stepping ID */
+	movl	%eax,%ecx		/* Save original signature */
+	andb	$0xF,%al		/* Get Model */
+	movb	%al,EXT(cpuid_model)	/* Save Model */
+	movl	%ecx,%eax		/* Get original signature */
+	shrl	$4,%eax			/* Shift Stepping ID */
+	movl	%eax,%ecx		/* Save original signature */
+	andb	$0xF,%al		/* Get Family */
+	movb	%al,EXT(cpuid_family)	/* Save Family */
+	movl	%ecx,%eax		/* Get original signature */
+	shrl	$4,%eax			/* Shift Stepping ID */
+	andb	$0x3,%al		/* Get Type */
+	movb	%al,EXT(cpuid_type)	/* Save Type */
+
+	movl	EXT(cpuid_value),%eax	/* Get high value */
+	cmpl	$2,%eax			/* Test if processor configuration */
+	jle	0f			/* is present */
+	movl	$2,%eax			/* get processor configuration */
+	.word	0xA20F			/* cpuid instruction */
+	movl	%eax,EXT(cpuid_cache)	/* Store byte 0-3 of configuration */
+	movl	%ebx,EXT(cpuid_cache)+4	/* Store byte 4-7 of configuration */
+	movl	%ecx,EXT(cpuid_cache)+8	/* Store byte 8-B of configuration */
+	movl	%edx,EXT(cpuid_cache)+12 /* Store byte C-F of configuration */
+0:
+	popl	%ebx			/* restore ebx */
+	EMARF
+	ret				/* return */
 
 ENTRY(get_cr0)
 	movl	%cr0, %eax
