@@ -54,10 +54,13 @@
  * SUCH DAMAGE.
  *
  *	@(#)domain.h	8.1 (Berkeley) 6/2/93
+ * $FreeBSD: src/sys/sys/domain.h,v 1.14 1999/12/29 04:24:40 peter Exp $
  */
 
-#ifndef	_SYS_DOMAIN_H_
+#ifndef _SYS_DOMAIN_H_
 #define _SYS_DOMAIN_H_
+
+#include <sys/appleapiopts.h>
 
 /*
  * Structure per communications domain.
@@ -66,6 +69,7 @@
 /*
  * Forward structure declarations for function prototypes [sic].
  */
+#ifdef __APPLE_API_UNSTABLE
 struct	mbuf;
 
 struct	domain {
@@ -102,4 +106,5 @@ extern int	net_del_domain(struct domain *);
 */
 
 #endif
+#endif /* __APPLE_API_UNSTABLE */
 #endif	/* _SYS_DOMAIN_H_ */

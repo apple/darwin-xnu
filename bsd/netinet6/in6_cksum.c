@@ -1,4 +1,5 @@
-/*	$KAME: in6_cksum.c,v 1.5 2000/02/22 14:04:17 itojun Exp $	*/
+/*	$FreeBSD: src/sys/netinet6/in6_cksum.c,v 1.1.2.3 2001/07/03 11:01:52 ume Exp $	*/
+/*	$KAME: in6_cksum.c,v 1.10 2000/12/03 00:53:59 itojun Exp $	*/
 
 /*
  * Copyright (C) 1995, 1996, 1997, and 1998 WIDE Project.
@@ -82,15 +83,6 @@
 #define ADDCARRY(x)  (x > 65535 ? x -= 65535 : x)
 #define REDUCE {l_util.l = sum; sum = l_util.s[0] + l_util.s[1]; ADDCARRY(sum);}
 
-static union {
-	u_int16_t phs[4];
-	struct {
-		u_int32_t	ph_len;
-		u_int8_t	ph_zero[3];
-		u_int8_t	ph_nxt;
-	} ph;
-} uph;
-
 /*
  * m MUST contain a continuous IP6 header.
  * off is a offset where TCP/UDP/ICMP6 header starts.
@@ -100,19 +92,26 @@ static union {
 
 int
 in6_cksum(m, nxt, off, len)
-	register struct mbuf *m;
+	struct mbuf *m;
 	u_int8_t nxt;
 	u_int32_t off, len;
 {
-	register u_int16_t *w;
-	register int sum = 0;
-	register int mlen = 0;
+	u_int16_t *w;
+	int sum = 0;
+	int mlen = 0;
 	int byte_swapped = 0;
 #if 0
 	int srcifid = 0, dstifid = 0;
 #endif
 	struct ip6_hdr *ip6;	
-	
+	union {
+		u_int16_t phs[4];
+		struct {
+			u_int32_t	ph_len;
+			u_int8_t	ph_zero[3];
+			u_int8_t	ph_nxt;
+		} ph __attribute__((__packed__));
+	} uph;
 	union {
 		u_int8_t	c[2];
 		u_int16_t	s;
@@ -127,6 +126,8 @@ in6_cksum(m, nxt, off, len)
 		panic("in6_cksum: mbuf len (%d) < off+len (%d+%d)\n",
 			m->m_pkthdr.len, off, len);
 	}
+
+	bzero(&uph, sizeof(uph));
 
 	/*
 	 * First create IP6 pseudo header and calculate a summary.

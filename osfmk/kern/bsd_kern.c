@@ -34,15 +34,13 @@
 
 #undef thread_should_halt
 #undef ipc_port_release
-#undef thread_ast_set
-#undef thread_ast_clear
 
 decl_simple_lock_data(extern,reaper_lock)
 extern queue_head_t           reaper_queue;
 
 /* BSD KERN COMPONENT INTERFACE */
 
-vm_address_t bsd_init_task = 0;
+task_t	bsd_init_task = TASK_NULL;
 char	init_task_failure_data[1024];
  
 thread_act_t get_firstthread(task_t);
@@ -50,28 +48,25 @@ vm_map_t  get_task_map(task_t);
 ipc_space_t  get_task_ipcspace(task_t);
 boolean_t is_kerneltask(task_t);
 boolean_t is_thread_idle(thread_t);
-boolean_t is_thread_running(thread_t);
+boolean_t is_thread_running(thread_act_t);
 thread_shuttle_t getshuttle_thread( thread_act_t);
 thread_act_t getact_thread( thread_shuttle_t);
 vm_offset_t get_map_min( vm_map_t);
 vm_offset_t get_map_max( vm_map_t);
 int get_task_userstop(task_t);
 int get_thread_userstop(thread_act_t);
-int inc_task_userstop(task_t);
 boolean_t thread_should_abort(thread_shuttle_t);
 boolean_t current_thread_aborted(void);
 void task_act_iterate_wth_args(task_t, void(*)(thread_act_t, void *), void *);
 void ipc_port_release(ipc_port_t);
-void thread_ast_set(thread_act_t, ast_t);
-void thread_ast_clear(thread_act_t, ast_t);
 boolean_t is_thread_active(thread_t);
-event_t get_thread_waitevent(thread_t);
 kern_return_t get_thread_waitresult(thread_t);
 vm_size_t get_vmmap_size(vm_map_t);
 int get_vmmap_entries(vm_map_t);
 int  get_task_numacts(task_t);
 thread_act_t get_firstthread(task_t task);
 kern_return_t get_signalact(task_t , thread_act_t *, thread_t *, int);
+void astbsd_on(void);
 
 /*
  *
@@ -134,7 +129,8 @@ kern_return_t get_signalact(task_t task,thread_act_t * thact, thread_t * thshut,
              inc != (thread_act_t)&task->thr_acts;
              inc  = ninc) {
                 th = act_lock_thread(inc);
-                if ((inc->active)  && ((th->state & TH_ABORT) != TH_ABORT)) {
+                if ((inc->active)  && 
+                    ((th->state & (TH_ABORT|TH_ABORT_SAFELY)) != TH_ABORT)) {
                     thr_act = inc;
                    break;
                 }
@@ -148,11 +144,9 @@ out:
         if (thshut)
                 *thshut = thr_act? thr_act->thread: THREAD_NULL ;
         if (thr_act) {
-                if (setast) {
-                    thread_ast_set(thr_act, AST_BSD);
-			if (current_act() == thr_act)
-				ast_on(AST_BSD);
-		}
+                if (setast)
+                    act_set_astbsd(thr_act);
+
                 act_unlock_thread(thr_act);
         }
 	task_unlock(task);
@@ -164,7 +158,7 @@ out:
 }
 
 
-kern_return_t check_actforsig(task_t task, thread_act_t * thact, thread_t * thshut, int setast)
+kern_return_t check_actforsig(task_t task, thread_act_t thact, thread_t * thshut, int setast)
 {
 
         thread_act_t inc;
@@ -189,7 +183,8 @@ kern_return_t check_actforsig(task_t task, thread_act_t * thact, thread_t * thsh
 						continue;
 				}
                 th = act_lock_thread(inc);
-                if ((inc->active)  && ((th->state & TH_ABORT) != TH_ABORT)) {
+                if ((inc->active)  && 
+                    ((th->state & (TH_ABORT|TH_ABORT_SAFELY)) != TH_ABORT)) {
 					found = 1;
                     thr_act = inc;
                    break;
@@ -202,11 +197,9 @@ out:
 		if (found) {
         	if (thshut)
                 	*thshut = thr_act? thr_act->thread: THREAD_NULL ;
-            if (setast) {
-                 thread_ast_set(thr_act, AST_BSD);
-				if (current_act() == thr_act)
-						ast_on(AST_BSD);
-				}
+            if (setast)
+				act_set_astbsd(thr_act);
+
            act_unlock_thread(thr_act);
         }
 		task_unlock(task);
@@ -307,8 +300,9 @@ boolean_t is_thread_idle(thread_t th)
 /*
  *
  */
-boolean_t is_thread_running(thread_t th)
+boolean_t is_thread_running(thread_act_t thact)
 {
+	thread_t th = thact->thread;
 	return((th->state & TH_RUN) == TH_RUN);
 }
 
@@ -447,39 +441,42 @@ get_thread_userstop(
 /*
  *
  */
-int
-inc_task_userstop(
-	task_t	task)
-{
-	int i=0;
-	i = task->user_stop_count;
-	task->user_stop_count++;
-	return(i);
-}
-
-
-/*
- *
- */
 boolean_t
 thread_should_abort(
 	thread_shuttle_t th)
 {
-	return( (!th->top_act || !th->top_act->active || 
-        th->state & TH_ABORT)); 
+	return(!th->top_act || !th->top_act->active || 
+	       (th->state & (TH_ABORT|TH_ABORT_SAFELY)) == TH_ABORT);
 }
 
 /*
- *
+ * This routine is like thread_should_abort() above.  It checks to
+ * see if the current thread is aborted.  But unlike above, it also
+ * checks to see if thread is safely aborted.  If so, it returns
+ * that fact, and clears the condition (safe aborts only should
+ * have a single effect, and a poll of the abort status
+ * qualifies.
  */
 boolean_t
 current_thread_aborted (
 		void)
 {
 	thread_t th = current_thread();
+	spl_t s;
 
-	return(!th->top_act ||
-	       ((th->state & TH_ABORT) && (th->interruptible))); 
+	if (!th->top_act || 
+		((th->state & (TH_ABORT|TH_ABORT_SAFELY)) == TH_ABORT &&
+		 th->interrupt_level != THREAD_UNINT))
+		return (TRUE);
+	if (th->state & TH_ABORT_SAFELY) {
+		s = splsched();
+		thread_lock(th);
+		if (th->state & TH_ABORT_SAFELY)
+			th->state &= ~(TH_ABORT|TH_ABORT_SAFELY);
+		thread_unlock(th);
+		splx(s);
+	}
+	return FALSE;
 }
 
 /*
@@ -510,33 +507,11 @@ ipc_port_release(
 	ipc_object_release(&(port)->ip_object);
 }
 
-void
-thread_ast_set(
-	thread_act_t act, 
-	ast_t reason) 
-{
-          act->ast |= reason;
-}
-void
-thread_ast_clear(
-	thread_act_t act, 
-	ast_t reason) 
-{
-          act->ast &= ~(reason);
-}
-
 boolean_t
 is_thread_active(
 	thread_shuttle_t th)
 {
 	return(th->active);
-}
-
-event_t
-get_thread_waitevent(
-	thread_shuttle_t th)
-{
-	return(th->wait_event);
 }
 
 kern_return_t
@@ -546,4 +521,12 @@ get_thread_waitresult(
 	return(th->wait_result);
 }
 
+void
+astbsd_on(void)
+{
+	boolean_t	reenable;
 
+	reenable = ml_set_interrupts_enabled(FALSE);
+	ast_on_fast(AST_BSD);
+	(void)ml_set_interrupts_enabled(reenable);
+}

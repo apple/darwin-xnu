@@ -23,7 +23,16 @@
  * @OSF_COPYRIGHT@
  */
 
+#ifndef _I386_IO_MAP_ENTRIES
+#define _I386_IO_MAP_ENTRIES
+
+#include <sys/appleapiopts.h>
+
+#ifdef	__APPLE_API_PRIVATE
 extern vm_offset_t	io_map(
 				vm_offset_t		phys_addr,
 				vm_size_t		size);
+#endif	/* __APPLE_API_PRIVATE */
+
+#endif  /* _I386_IO_MAP_ENTRIES */
 

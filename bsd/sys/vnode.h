@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2002 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -58,6 +58,7 @@
 #ifndef _VNODE_H_
 #define _VNODE_H_
 
+#include <sys/appleapiopts.h>
 #include <sys/cdefs.h>
 #include <sys/queue.h>
 #include <sys/lock.h>
@@ -69,8 +70,9 @@
 #ifdef KERNEL
 #include <sys/systm.h>
 #include <vm/vm_pageout.h>
-#endif
+#endif /* KERNEL */
 
+#ifdef __APPLE_API_PRIVATE
 /*
  * The vnode is the focus of all file activity in UNIX.  There is a
  * unique vnode allocated for each active file, each current directory,
@@ -100,12 +102,24 @@ enum vtagtype	{
  */
 LIST_HEAD(buflists, buf);
 
+#define MAX_CLUSTERS 4	/* maximum number of vfs clusters per vnode */
+
+struct v_cluster {
+	unsigned int	start_pg;
+	unsigned int	last_pg;
+};
+
+struct v_padded_clusters {
+	long	v_pad;
+	struct v_cluster	v_c[MAX_CLUSTERS];
+};
+
 /*
  * Reading or writing any of these items requires holding the appropriate lock.
  * v_freelist is locked by the global vnode_free_list simple lock.
  * v_mntvnodes is locked by the global mntvnodes simple lock.
  * v_flag, v_usecount, v_holdcount and v_writecount are
- *    locked by the v_interlock simple lock.
+ * locked by the v_interlock simple lock.
  */
 struct vnode {
 	u_long	v_flag;				/* vnode flags (see below) */
@@ -135,7 +149,13 @@ struct vnode {
 	int	v_clen;				/* length of current cluster */
 	int	v_ralen;			/* Read-ahead length */
 	daddr_t	v_maxra;			/* last readahead block */
-	simple_lock_data_t v_interlock;		/* lock on usecount and flag */
+	union {
+		simple_lock_data_t v_ilk;	/* lock on usecount and flag */
+		struct v_padded_clusters v_cl;	/* vfs cluster IO */
+	} v_un1;
+#define	v_clusters v_un1.v_cl.v_c
+#define	v_interlock v_un1.v_ilk
+
 	struct	lock__bsd__ *v_vnlock;		/* used for non-locking fs's */
 	long	v_writecount;			/* reference count of writers */
 	enum	vtagtype v_tag;			/* type of underlying data */
@@ -172,8 +192,10 @@ struct vnode {
 #define	VHASDIRTY	0x100000	/* UBC vnode may have 1 or more */
 		/* delayed dirty pages that need to be flushed at the next 'sync' */
 #define	VSWAP		0x200000	/* vnode is being used as swapfile */
-#define VTHROTTLED      0x400000        /* writes or pageouts have been throttled */
-                /* wakeup tasks waiting when count falls below threshold */
+#define	VTHROTTLED	0x400000	/* writes or pageouts have been throttled */
+		/* wakeup tasks waiting when count falls below threshold */
+#define	VNOFLUSH	0x800000	/* don't vflush() if SKIPSYSTEM */
+
 
 /*
  * Vnode attributes.  A field value of VNOVAL represents a field whose value
@@ -215,10 +237,11 @@ struct vattr {
 #define	IO_SYNC		0x04		/* do I/O synchronously */
 #define	IO_NODELOCKED	0x08		/* underlying node already locked */
 #define	IO_NDELAY	0x10		/* FNDELAY flag set in file table */
-#define IO_NOZEROFILL   0x20		/* F_SETSIZE fcntl uses to prevent zero filling */
-#define IO_TAILZEROFILL 0x40		/* zero fills at the tail of write */
-#define IO_HEADZEROFILL	0x80		/* zero fills at the head of write */
-#define IO_NOZEROVALID	0x100		/* do not zero fill if valid page */
+#define	IO_NOZEROFILL	0x20		/* F_SETSIZE fcntl uses to prevent zero filling */
+#define	IO_TAILZEROFILL	0x40		/* zero fills at the tail of write */
+#define	IO_HEADZEROFILL	0x80		/* zero fills at the head of write */
+#define	IO_NOZEROVALID	0x100		/* do not zero fill if valid page */
+#define	IO_NOZERODIRTY	0x200		/* do not zero fill if page is dirty */
 
 /*
  *  Modes.  Some values same as Ixxx entries from inode.h for now.
@@ -314,7 +337,6 @@ extern	struct vattr va_null;		/* predefined null vattr structure */
  */
 #define	LEASE_READ	0x1		/* Check lease for readers */
 #define	LEASE_WRITE	0x2		/* Check lease for modifiers */
-
 #endif /* KERNEL */
 
 /*
@@ -366,7 +388,11 @@ struct vnodeop_desc {
 	caddr_t	*vdesc_transports;
 };
 
+#endif /* __APPLE_API_PRIVATE */
+
 #ifdef KERNEL
+
+#ifdef __APPLE_API_PRIVATE
 /*
  * A list of all the operation descs.
  */
@@ -433,13 +459,15 @@ struct vop_generic_args {
 #define VDESC(OP) (& __CONCAT(OP,_desc))
 #define VOFFSET(OP) (VDESC(OP)->vdesc_offset)
 
+#endif /* __APPLE_API_PRIVATE */
+
 /*
  * Finally, include the default set of vnode operations.
  */
 #include <sys/vnode_if.h>
 
 /*
- * Public vnode manipulation functions.
+ * vnode manipulation functions.
  */
 struct file;
 struct mount;
@@ -453,6 +481,7 @@ struct vattr;
 struct vnode;
 struct vop_bwrite_args;
 
+#ifdef __APPLE_API_EVOLVING
 int 	bdevvp __P((dev_t dev, struct vnode **vpp));
 void	cvtstat __P((struct stat *st, struct ostat *ost));
 int 	getnewvnode __P((enum vtagtype tag,
@@ -471,18 +500,12 @@ int	vrecycle __P((struct vnode *vp, struct slock *inter_lkp,
 int	vn_bwrite __P((struct vop_bwrite_args *ap));
 int 	vn_close __P((struct vnode *vp,
 	    int flags, struct ucred *cred, struct proc *p));
-int 	vn_closefile __P((struct file *fp, struct proc *p));
-int	vn_ioctl __P((struct file *fp, u_long com, caddr_t data,
-	    struct proc *p));
 int	vn_lock __P((struct vnode *vp, int flags, struct proc *p));
 int 	vn_open __P((struct nameidata *ndp, int fmode, int cmode));
 int 	vn_rdwr __P((enum uio_rw rw, struct vnode *vp, caddr_t base,
 	    int len, off_t offset, enum uio_seg segflg, int ioflg,
 	    struct ucred *cred, int *aresid, struct proc *p));
-int	vn_read __P((struct file *fp, struct uio *uio, struct ucred *cred));
-int	vn_select __P((struct file *fp, int which, void * wql, struct proc *p));
 int	vn_stat __P((struct vnode *vp, struct stat *sb, struct proc *p));
-int	vn_write __P((struct file *fp, struct uio *uio, struct ucred *cred));
 int	vop_noislocked __P((struct vop_islocked_args *));
 int	vop_nolock __P((struct vop_lock_args *));
 int	vop_nounlock __P((struct vop_unlock_args *));
@@ -494,6 +517,7 @@ void 	vrele __P((struct vnode *vp));
 int	vaccess __P((mode_t file_mode, uid_t uid, gid_t gid,
 	    mode_t acc_mode, struct ucred *cred));
 int	getvnode __P((struct proc *p, int fd, struct file **fpp));
+#endif __APPLE_API_EVOLVING
 
 #endif /* KERNEL */
 

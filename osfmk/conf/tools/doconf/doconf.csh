@@ -287,7 +287,7 @@ part != 0 {\
 # kernel binaries are put).
 #
     echo 'builddir	"."'			>> $SYSCONF.new
-    set OBJRELDIR=`relpath $OBJROOT $OBJDIR`
+    set OBJRELDIR=`$RELPATH $OBJROOT $OBJDIR`
     echo 'objectdir	"'$OBJROOT'/'$OBJRELDIR'"'		>> $SYSCONF.new
     set SRCDIR=`dirname $SOURCE`
     echo 'sourcedir	"'$SRCROOT'"'		>> $SYSCONF.new

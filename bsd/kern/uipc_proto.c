@@ -87,7 +87,7 @@ static struct protosw localsw[] = {
   0,		&uipc_usrreqs
 },
 { 0,		0,		0,		0,
-  raw_input,	0,		raw_ctlinput,	0,
+  0,		0,		raw_ctlinput,	0,
   0,
   raw_init,	0,		0,		0,
   0, &raw_usrreqs

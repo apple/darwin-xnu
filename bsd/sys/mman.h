@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2002 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -58,6 +58,7 @@
 #ifndef	_SYS_MMAN_H_
 #define _SYS_MMAN_H_
 
+#include <sys/appleapiopts.h>
 #include <mach/shared_memory_server.h>
 
 /*
@@ -127,6 +128,11 @@
 #define	MADV_WILLNEED	3	/* will need these pages */
 #define	MADV_DONTNEED	4	/* dont need these pages */
 #define	MADV_FREE	5	/* dont need these pages, and junk contents */
+#define	POSIX_MADV_NORMAL	MADV_NORMAL
+#define	POSIX_MADV_RANDOM	MADV_RANDOM
+#define	POSIX_MADV_SEQUENTIAL	MADV_SEQUENTIAL
+#define	POSIX_MADV_WILLNEED	MADV_WILLNEED
+#define	POSIX_MADV_DONTNEED	MADV_DONTNEED
 
 /*
  * Return bits from mincore
@@ -157,9 +163,14 @@ int	munlock __P((const void *, size_t));
 int	munmap __P((void *, size_t));
 int	shm_open __P((const char *, int, ...));
 int	shm_unlink __P((const char *));
+int	posix_madvise __P((void *, size_t, int));
 #ifndef _POSIX_SOURCE
-int	load_shared_file __P((char *, caddr_t, u_long, caddr_t *, int, sf_mapping_t *, int *));
+#ifdef __APPLE_API_PRIVATE
+int	load_shared_file __P((char *, caddr_t, u_long,
+		caddr_t *, int, sf_mapping_t *, int *));
 int	reset_shared_file __P((caddr_t *, int, sf_mapping_t *));
+int	new_system_shared_regions __P((void));
+#endif /* __APPLE_API_PRIVATE */
 int	madvise __P((void *, size_t, int));
 int	mincore __P((const void *, size_t, char *));
 int	minherit __P((void *, size_t, int));

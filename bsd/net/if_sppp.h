@@ -41,6 +41,11 @@
 
 #ifndef _NET_IF_SPPP_H_
 #define _NET_IF_SPPP_H_ 1
+#include <sys/appleapiopts.h>
+
+#ifndef DONT_WARN_OBSOLETE
+#warning if_sppp.h is not used by the darwin kernel
+#endif
 
 #define IDX_LCP 0		/* idx into state table */
 
@@ -97,6 +102,7 @@ enum ppp_phase {
 	PHASE_AUTHENTICATE, PHASE_NETWORK
 };
 
+#ifdef __APPLE_API_PRIVATE
 struct sppp {
 	/* NB: pp_if _must_ be first */
 	struct  ifnet pp_if;    /* network interface data */
@@ -151,6 +157,8 @@ struct sppp {
 	int     pp_loweri;
 };
 
+#endif /* __APPLE_API_PRIVATE */
+
 #define PP_KEEPALIVE    0x01    /* use keepalive protocol */
 #define PP_CISCO        0x02    /* use Cisco protocol instead of PPP */
 				/* 0x04 was PP_TIMO */
@@ -182,6 +190,7 @@ struct spppreq {
 };
 
 #ifdef KERNEL
+#ifdef __APPLE_API_PRIVATE
 void sppp_attach (struct ifnet *ifp);
 void sppp_detach (struct ifnet *ifp);
 void sppp_input (struct ifnet *ifp, struct mbuf *m);
@@ -190,6 +199,7 @@ struct mbuf *sppp_dequeue (struct ifnet *ifp);
 struct mbuf *sppp_pick(struct ifnet *ifp);
 int sppp_isempty (struct ifnet *ifp);
 void sppp_flush (struct ifnet *ifp);
+#endif /* __APPLE_API_PRIVATE */
 #endif
 
 #endif /* _NET_IF_SPPP_H_ */

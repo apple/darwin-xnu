@@ -48,6 +48,8 @@
 
 #ifndef _NET_IF_TUNVAR_H_
 #define _NET_IF_TUNVAR_H_
+#include <sys/appleapiopts.h>
+#ifdef __APPLE_API_PRIVATE
 
 struct tun_softc {
 	u_short	tun_flags;		/* misc flags */
@@ -67,4 +69,5 @@ struct tun_softc {
 	struct	selinfo	tun_wsel;	/* write select (not used) */
 };
 
+#endif /* __APPLE_API_PRIVATE */
 #endif /* !_NET_IF_TUNVAR_H_ */

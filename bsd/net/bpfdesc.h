@@ -58,10 +58,16 @@
  *
  *      @(#)bpfdesc.h	8.1 (Berkeley) 6/10/93
  *
+ * $FreeBSD: src/sys/net/bpfdesc.h,v 1.14.2.1 2000/03/19 05:55:36 rwatson Exp $
  */
 
 #ifndef _NET_BPFDESC_H_
 #define _NET_BPFDESC_H_
+#include <sys/appleapiopts.h>
+#ifdef __APPLE_API_PRIVATE
+/*
+ * The items in this header file should be wrapped in #ifdef KERNEL.
+ */
 
 #include <sys/select.h>
 
@@ -98,10 +104,10 @@ struct bpf_d {
 	u_char		bd_immediate;	/* true to return on packet arrival */
 	int		bd_async;	/* non-zero if packet reception should generate signal */
 	int		bd_sig;		/* signal to send upon packet reception */
-#if ISFB31
-	struct sigio *	bd_sigio;	/* information for async I/O */
-#else
+#ifdef __APPLE__
 	pid_t		bd_sigio;
+#else
+	struct sigio *	bd_sigio;	/* information for async I/O */
 #endif
 
 #if BSD < 199103
@@ -112,6 +118,9 @@ struct bpf_d {
 	u_char		bd_pad;		/* explicit alignment */
 	struct selinfo	bd_sel;		/* bsd select info */
 #endif
+	int		bd_hdrcmplt;	/* false to fill in src lladdr automatically */
+	int		bd_seesent;	/* true if bpf should see sent packets */
+
 };
 
 /*
@@ -125,4 +134,5 @@ struct bpf_if {
 	struct ifnet *bif_ifp;		/* corresponding interface */
 };
 
+#endif /* __APPLE_API_PRIVATE */
 #endif

@@ -56,6 +56,7 @@
  *	Resident memory management module.
  */
 
+#include <mach/clock_types.h>
 #include <mach/vm_prot.h>
 #include <mach/vm_statistics.h>
 #include <kern/counters.h>
@@ -203,6 +204,8 @@ unsigned int	vm_page_free_count_minimum;	/* debugging */
  */
 zone_t	vm_page_zone;
 decl_mutex_data(,vm_page_alloc_lock)
+unsigned int io_throttle_zero_fill;
+decl_mutex_data(,vm_page_zero_fill_lock)
 
 /*
  *	Fictitious pages don't have a physical address,
@@ -217,10 +220,14 @@ vm_offset_t vm_page_fictitious_addr = (vm_offset_t) -1;
  *	queues that are used by the page replacement
  *	system (pageout daemon).  These queues are
  *	defined here, but are shared by the pageout
- *	module.
+ *	module.  The inactive queue is broken into 
+ *	inactive and zf for convenience as the 
+ *	pageout daemon often assignes a higher 
+ *	affinity to zf pages
  */
 queue_head_t	vm_page_queue_active;
 queue_head_t	vm_page_queue_inactive;
+queue_head_t	vm_page_queue_zf;
 decl_mutex_data(,vm_page_queue_lock)
 int		vm_page_active_count;
 int		vm_page_inactive_count;
@@ -338,6 +345,7 @@ vm_page_bootstrap(
 	m->lock_supplied = FALSE;
 	m->unusual = FALSE;
 	m->restart = FALSE;
+	m->zero_fill = FALSE;
 
 	m->phys_addr = 0;		/* reset later */
 
@@ -357,6 +365,7 @@ vm_page_bootstrap(
 	vm_page_queue_fictitious = VM_PAGE_NULL;
 	queue_init(&vm_page_queue_active);
 	queue_init(&vm_page_queue_inactive);
+	queue_init(&vm_page_queue_zf);
 	queue_init(&vm_page_queue_limbo);
 
 	vm_page_free_wanted = 0;
@@ -510,7 +519,8 @@ pmap_steal_memory(
 		 */
 
 		pmap_enter(kernel_pmap, vaddr, paddr,
-			   VM_PROT_READ|VM_PROT_WRITE, FALSE);
+			   VM_PROT_READ|VM_PROT_WRITE, 
+				VM_WIMG_USE_DEFAULT, FALSE);
 		/*
 		 * Account for newly stolen memory
 		 */
@@ -605,6 +615,7 @@ vm_page_module_init(void)
         vm_page_zone->cur_size += vm_page_pages * vm_page_zone->elem_size;
 
 	mutex_init(&vm_page_alloc_lock, ETAP_VM_PAGE_ALLOC);
+	mutex_init(&vm_page_zero_fill_lock, ETAP_VM_PAGE_ALLOC);
 }
 
 /*
@@ -1276,6 +1287,8 @@ vm_page_release(
 	mutex_unlock(&vm_page_queue_free_lock);
 }
 
+#define VM_PAGEOUT_DEADLOCK_TIMEOUT 3
+
 /*
  *	vm_page_wait:
  *
@@ -1298,20 +1311,39 @@ vm_page_wait(
 	 *	succeeds, the second fails.  After the first page is freed,
 	 *	a call to vm_page_wait must really block.
 	 */
-	kern_return_t wait_result;
-	int           need_wakeup = 0;
+	uint64_t	abstime;
+	kern_return_t	wait_result;
+	kern_return_t	kr;
+	int          	need_wakeup = 0;
 
 	mutex_lock(&vm_page_queue_free_lock);
 	if (vm_page_free_count < vm_page_free_target) {
 		if (vm_page_free_wanted++ == 0)
 		        need_wakeup = 1;
-		assert_wait((event_t)&vm_page_free_count, interruptible);
+		wait_result = assert_wait((event_t)&vm_page_free_count,
+					  interruptible);
 		mutex_unlock(&vm_page_queue_free_lock);
 		counter(c_vm_page_wait_block++);
 
 		if (need_wakeup)
 			thread_wakeup((event_t)&vm_page_free_wanted);
-		wait_result = thread_block((void (*)(void))0);
+
+		if (wait_result == THREAD_WAITING) {
+			clock_interval_to_absolutetime_interval(
+				VM_PAGEOUT_DEADLOCK_TIMEOUT, 
+				NSEC_PER_SEC, &abstime);
+			clock_absolutetime_interval_to_deadline(
+				abstime, &abstime);
+			thread_set_timer_deadline(abstime);
+			wait_result = thread_block(THREAD_CONTINUE_NULL);
+
+			if(wait_result == THREAD_TIMED_OUT) {
+			   kr = vm_pageout_emergency_availability_request();
+			   return TRUE;
+			} else {
+				thread_cancel_timer();
+			}
+		}
 
 		return(wait_result == THREAD_AWAKENED);
 	} else {
@@ -1427,6 +1459,11 @@ vm_page_free(
 	if (mem->fictitious) {
 		vm_page_release_fictitious(mem);
 	} else {
+		/* depends on the queues lock */
+		if(mem->zero_fill) {
+			vm_zf_count-=1;
+			mem->zero_fill = FALSE;
+		}
 		vm_page_init(mem, mem->phys_addr);
 		vm_page_release(mem);
 	}
@@ -1457,6 +1494,11 @@ vm_page_wire(
 		if (mem->gobbled)
 			vm_page_gobble_count--;
 		mem->gobbled = FALSE;
+		if(mem->zero_fill) {
+			/* depends on the queues lock */
+			vm_zf_count-=1;
+			mem->zero_fill = FALSE;
+		}
 	}
 	assert(!mem->gobbled);
 	mem->wire_count++;
@@ -1567,7 +1609,13 @@ vm_page_deactivate(
 				vm_page_ticket++;
 		}
 		
-		queue_enter(&vm_page_queue_inactive, m, vm_page_t, pageq);
+		if(m->zero_fill) {
+			queue_enter(&vm_page_queue_zf, m, vm_page_t, pageq);
+		} else {
+			queue_enter(&vm_page_queue_inactive,
+							m, vm_page_t, pageq);
+		}
+
 		m->inactive = TRUE;
 		if (!m->fictitious)
 			vm_page_inactive_count++;
@@ -1599,7 +1647,12 @@ vm_page_activate(
 		return;
 
 	if (m->inactive) {
-		queue_remove(&vm_page_queue_inactive, m, vm_page_t, pageq);
+		if (m->zero_fill) {
+			queue_remove(&vm_page_queue_zf, m, vm_page_t, pageq);
+		} else {
+			queue_remove(&vm_page_queue_inactive, 
+						m, vm_page_t, pageq);
+		}
 		if (!m->fictitious)
 			vm_page_inactive_count--;
 		m->inactive = FALSE;

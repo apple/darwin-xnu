@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2001 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -19,150 +19,274 @@
  * 
  * @APPLE_LICENSE_HEADER_END@
  */
+
+#include <kern/task.h>
+#include <kern/thread.h>
+#include <kern/thread_act.h>
+#include <kern/assert.h>
+#include <mach/machine/thread_status.h>
+#include <ppc/savearea.h>
+
+#include <sys/kernel.h>
+#include <sys/vm.h>
+#include <sys/proc.h>
+#include <sys/syscall.h>
+#include <sys/systm.h>
+#include <sys/user.h>
+#include <sys/errno.h>
+#include <sys/ktrace.h>
+#include <sys/kdebug.h>
+
+extern void
+unix_syscall(
+	struct savearea *regs
+);
+
+extern struct savearea * 
+find_user_regs(
+	thread_act_t act);
+
+extern enter_funnel_section(funnel_t *funnel_lock);
+extern exit_funnel_section(funnel_t *funnel_lock);
+
 /*
- * Copyright (c) 1997 Apple Computer, Inc.
+ * Function:	unix_syscall
  *
- * PowerPC Family:	System Call handlers.
+ * Inputs:	regs	- pointer to Process Control Block
  *
- * HISTORY
- * 27-July-97  A. Ramesh  
- *	Adopted for Common Core.
+ * Outputs:	none
  */
- 
-#include <mach/mach_types.h>
-#include <mach/error.h>
-
-#include <kern/syscall_sw.h>
-#include <kern/kdp.h>
-
-#include <machdep/ppc/frame.h>
-#include <machdep/ppc/thread.h>
-#include <machdep/ppc/asm.h>
-#include <machdep/ppc/proc_reg.h>
-#include <machdep/ppc/trap.h>
-#include <machdep/ppc/exception.h>
-
-
-#define	ERESTART	-1		/* restart syscall */
-#define	EJUSTRETURN	-2		/* don't modify regs, just return */
-
-
-struct unix_syscallargs {
-	int flavor;
-	int r3;
-	int arg1, arg2,arg3,arg4,arg5,arg6,arg7,arg8,arg9;
-};
-extern struct sysent {		/* system call table */
-	int16_t		sy_narg;	/* number of args */
-	int16_t		sy_parallel;/* can execute in parallel */
-	int32_t		(*sy_call)();	/* implementing function */
-} sysent[];
-
-/*
-** Function:	unix_syscall
-**
-** Inputs:	pcb	- pointer to Process Control Block
-**		arg1	- arguments to mach system calls
-**		arg2
-**		arg3
-**		arg4
-**		arg5
-**		arg6
-**		arg7
-**
-** Outputs:	none
-*/
 void
 unix_syscall(
-    struct pcb * pcb,
-    int arg1,
-    int arg2,
-    int arg3,
-    int arg4,
-    int arg5,
-    int arg6,
-    int arg7 
-    )
+	struct savearea	*regs
+)
 {
-    struct ppc_saved_state	*regs;
-    thread_t			thread;
-    struct proc			*p;
-   struct sysent		*callp;
-    int				nargs, error;
-    unsigned short		code;
-    int				rval[2];
-	struct unix_syscallargs sarg;
+	thread_act_t		thread_act;
+	struct uthread		*uthread;
+	struct proc			*proc;
+	struct sysent		*callp;
+	int					error;
+	unsigned short		code;
+	boolean_t			flavor;
+	int funnel_type;
 
-    if (!USERMODE(pcb->ss.srr1))
-	panic("unix_syscall");
+	thread_act = current_act();
+	uthread = get_bsdthread_info(thread_act);
 
-    regs = &pcb->ss;
-    thread = current_thread();
+	if (!(uthread->uu_flag & P_VFORK))
+		proc = (struct proc *)get_bsdtask_info(current_task());
+	else
+		proc = current_proc();
 
+	flavor = (regs->save_r0 == NULL)? 1: 0;
 
-    /*
-    ** Get index into sysent table
-    */   
-    code = regs->r0;
+	uthread->uu_ar0 = (int *)regs;
 
-    
-	/*
-	** Set up call pointer
-	*/
+	if (flavor)
+		code = regs->save_r3;
+	else
+		code = regs->save_r0;
+
 	callp = (code >= nsysent) ? &sysent[63] : &sysent[code];
 
-	sarg. flavor = (callp == sysent): 1: 0;
-	sarg. r3 = regs->r3;
-	sarg. arg1 = arg1;
-	sarg. arg2 = arg2;
-	sarg. arg3 = arg3;
-	sarg. arg4 = arg4;
-	sarg. arg5 = arg5;
-	sarg. arg6 = arg6;
-	sarg. arg7 = arg7;
-
-    set_bsduthreadargs(thread,pcb,&sarg);
-
-
+#ifdef	DEBUG
 	if (callp->sy_narg > 8)
-	panic("unix_syscall: max arg count exceeded");
+		panic("unix_syscall: max arg count exceeded");
+#endif
 
-	rval[0] = 0;
+	if (callp->sy_narg != 0) {
+		if ( !flavor) {
+			uthread->uu_arg[0] = regs->save_r3;
+			uthread->uu_arg[1] = regs->save_r4;
+			uthread->uu_arg[2] = regs->save_r5;
+			uthread->uu_arg[3] = regs->save_r6;
+			uthread->uu_arg[4] = regs->save_r7;
+			uthread->uu_arg[5] = regs->save_r8;
+			uthread->uu_arg[6] = regs->save_r9;
+			uthread->uu_arg[7] = regs->save_r10;
+		} else {
+			uthread->uu_arg[0] = regs->save_r4;
+			uthread->uu_arg[1] = regs->save_r5;
+			uthread->uu_arg[2] = regs->save_r6;
+			uthread->uu_arg[3] = regs->save_r7;
+			uthread->uu_arg[4] = regs->save_r8;
+			uthread->uu_arg[5] = regs->save_r9;
+			uthread->uu_arg[7] = regs->save_r10;
+		}
+	}
 
-	/* r4 is volatile, if we set it to regs->r4 here the child
-	 * will have parents r4 after execve */
-	rval[1] = 0;
+	callp = (code >= nsysent) ? &sysent[63] : &sysent[code];
 
-	error = 0; /* Start with a good value */
+	if (kdebug_enable && (code != 180)) {
+		if (flavor)
+			KERNEL_DEBUG_CONSTANT(BSDDBG_CODE(DBG_BSD_EXCP_SC, code) | DBG_FUNC_START,
+				regs->save_r4, regs->save_r5, regs->save_r6, regs->save_r7, 0);
+		else
+			KERNEL_DEBUG_CONSTANT(BSDDBG_CODE(DBG_BSD_EXCP_SC, code) | DBG_FUNC_START,
+				regs->save_r3, regs->save_r4, regs->save_r5, regs->save_r6, 0);
+	}
+
+	funnel_type = (int)callp->sy_funnel;
+	if(funnel_type == KERNEL_FUNNEL) 
+		 enter_funnel_section(kernel_flock);
+	else if (funnel_type == NETWORK_FUNNEL)
+		 enter_funnel_section(network_flock);
+	
+
+	uthread->uu_rval[0] = 0;
 
 	/*
-	** the PPC runtime calls cerror after every unix system call, so
-	** assume no error and adjust the "pc" to skip this call.
-	** It will be set back to the cerror call if an error is detected.
-	*/
-	regs->srr0 += 4;
-	vt = get_bsduthreadarg(thread);
-	p = ((struct proc *)get_bsdtask_info(current_task()));
-	error = (*(callp->sy_call))(p, (caddr_t)vt, rval);
+	 * r4 is volatile, if we set it to regs->save_r4 here the child
+	 * will have parents r4 after execve
+	 */
+	uthread->uu_rval[1] = 0;
 
-    if (error == ERESTART) {
-	regs->srr0 -= 8;
-    }
-    else if (error != EJUSTRETURN) {
-	if (error)
-	{
-	    regs->r3 = error;
-	    /* set the "pc" to execute cerror routine */
-	    regs->srr0 -= 4;
-	} else { /* (not error) */
-	    regs->r3 = rval[0];
-	    regs->r4 = rval[1];
-	} 
-    }
-    /* else  (error == EJUSTRETURN) { nothing } */
+	error = 0;
 
-    thread_exception_return();
-    /* NOTREACHED */
+	/*
+	 * PPC runtime calls cerror after every unix system call, so
+	 * assume no error and adjust the "pc" to skip this call.
+	 * It will be set back to the cerror call if an error is detected.
+	 */
+	regs->save_srr0 += 4;
+
+	if (KTRPOINT(proc, KTR_SYSCALL))
+		ktrsyscall(proc, code, callp->sy_narg, uthread->uu_arg, funnel_type);
+
+	error = (*(callp->sy_call))(proc, (void *)uthread->uu_arg, &(uthread->uu_rval[0]));
+
+	regs = find_user_regs(thread_act);
+
+	if (error == ERESTART) {
+		regs->save_srr0 -= 8;
+	} else if (error != EJUSTRETURN) {
+		if (error) {
+			regs->save_r3 = error;
+			/* set the "pc" to execute cerror routine */
+			regs->save_srr0 -= 4;
+		} else { /* (not error) */
+			regs->save_r3 = uthread->uu_rval[0];
+			regs->save_r4 = uthread->uu_rval[1];
+		} 
+	}
+	/* else  (error == EJUSTRETURN) { nothing } */
+
+	if (KTRPOINT(proc, KTR_SYSRET))
+		ktrsysret(proc, code, error, uthread->uu_rval[0], funnel_type);
+
+	if(funnel_type == KERNEL_FUNNEL) 
+		 exit_funnel_section(kernel_flock);
+	else if (funnel_type == NETWORK_FUNNEL)
+		 exit_funnel_section(network_flock);
+
+	if (kdebug_enable && (code != 180)) {
+		KERNEL_DEBUG_CONSTANT(BSDDBG_CODE(DBG_BSD_EXCP_SC, code) | DBG_FUNC_END,
+			error, uthread->uu_rval[0], uthread->uu_rval[1], 0, 0);
+	}
+
+	thread_exception_return();
+	/* NOTREACHED */
+}
+
+unix_syscall_return(error)
+{
+	thread_act_t				thread_act;
+	struct uthread				*uthread;
+	struct proc					*proc;
+	struct savearea				*regs;
+	unsigned short				code;
+	struct sysent				*callp;
+	int funnel_type;
+
+	thread_act = current_act();
+	proc = current_proc();
+	uthread = get_bsdthread_info(thread_act);
+
+	regs = find_user_regs(thread_act);
+
+	/*
+	 * Get index into sysent table
+	 */   
+	if (error == ERESTART) {
+		regs->save_srr0 -= 8;
+	} else if (error != EJUSTRETURN) {
+		if (error) {
+			regs->save_r3 = error;
+			/* set the "pc" to execute cerror routine */
+			regs->save_srr0 -= 4;
+		} else { /* (not error) */
+			regs->save_r3 = uthread->uu_rval[0];
+			regs->save_r4 = uthread->uu_rval[1];
+		} 
+	}
+	/* else  (error == EJUSTRETURN) { nothing } */
+
+	if (regs->save_r0 != NULL)
+		code = regs->save_r0;
+	else
+		code = regs->save_r3;
+
+	callp = (code >= nsysent) ? &sysent[63] : &sysent[code];
+
+	funnel_type = (int)callp->sy_funnel;
+
+	if (KTRPOINT(proc, KTR_SYSRET))
+		ktrsysret(proc, code, error, uthread->uu_rval[0], funnel_type);
+
+	if(funnel_type == KERNEL_FUNNEL) 
+		 exit_funnel_section(kernel_flock);
+	else if (funnel_type == NETWORK_FUNNEL)
+		 exit_funnel_section(network_flock);
+
+	if (kdebug_enable && (code != 180)) {
+		KERNEL_DEBUG_CONSTANT(BSDDBG_CODE(DBG_BSD_EXCP_SC, code) | DBG_FUNC_END,
+			error, uthread->uu_rval[0], uthread->uu_rval[1], 0, 0);
+	}
+
+	thread_exception_return();
+	/* NOTREACHED */
+}
+
+/* 
+ * Time of day and interval timer support.
+ *
+ * These routines provide the kernel entry points to get and set
+ * the time-of-day and per-process interval timers.  Subroutines
+ * here provide support for adding and subtracting timeval structures
+ * and decrementing interval timers, optionally reloading the interval
+ * timers when they expire.
+ */
+struct gettimeofday_args{
+	struct timeval *tp;
+	struct timezone *tzp;
+};
+/*  NOTE THIS implementation is for  ppc architectures only */
+int
+ppc_gettimeofday(p, uap, retval)
+	struct proc *p;
+	register struct gettimeofday_args *uap;
+	register_t *retval;
+{
+	struct timeval atv;
+	int error = 0;
+	struct timezone ltz;
+	//struct savearea *child_state;
+	extern simple_lock_data_t tz_slock;
+
+	if (uap->tp) {
+		microtime(&atv);
+		retval[0] = atv.tv_sec;
+		retval[1] = atv.tv_usec;
+	}
 	
+	if (uap->tzp) {
+		usimple_lock(&tz_slock);
+		ltz = tz;
+		usimple_unlock(&tz_slock);
+		error = copyout((caddr_t)&ltz, (caddr_t)uap->tzp,
+		    sizeof (tz));
+	}
+
+	return(error);
 }
 

@@ -114,7 +114,11 @@
 #include <kern/clock.h>
 #include <mach/kern_return.h>
 
+#include <mach/shared_memory_server.h>
+#include <vm/vm_shared_memory_server.h>
+
 extern shared_region_mapping_t       system_shared_region;
+extern int app_profile;		/* on/off switch for pre-heat cache */
 
 char    copyright[] =
 "Copyright (c) 1982, 1986, 1989, 1991, 1993\n\tThe Regents of the University of California.  All rights reserved.\n\n";
@@ -131,18 +135,6 @@ struct	plimit limit0;
 struct	pstats pstats0;
 struct	sigacts sigacts0;
 struct	proc *kernproc, *initproc;
-
-
-long cp_time[CPUSTATES];
-long dk_seek[DK_NDRIVE];
-long dk_time[DK_NDRIVE];
-long dk_wds[DK_NDRIVE];
-long dk_wpms[DK_NDRIVE];
-long dk_xfer[DK_NDRIVE];
-long dk_bps[DK_NDRIVE];
-
-int dk_busy;
-int dk_ndrive;
 
 long tk_cancc;
 long tk_nin;
@@ -166,9 +158,6 @@ int	domainnamelen;
 
 char rootdevice[16]; 	/* hfs device names have at least 9 chars */
 struct	timeval boottime;		/* GRODY!  This has to go... */
-#if FIXME  /* [ */
-struct	timeval time;
-#endif  /* FIXME ] */
 
 #ifdef  KMEMSTATS
 struct	kmemstats kmemstats[M_LAST];
@@ -187,8 +176,9 @@ int	cmask = CMASK;
 
 int parse_bsd_args(void);
 extern int bsd_hardclockinit;
-extern vm_address_t bsd_init_task;
+extern task_t bsd_init_task;
 extern char    init_task_failure_data[];
+extern void time_zone_slock_init(void);
 
 funnel_t * kernel_flock;
 funnel_t * network_flock;
@@ -225,7 +215,6 @@ proc_name(s, p)
 			length + 1);
 }
 
-
 /* To allow these values to be patched, they're globals here */
 #include <machine/vmparam.h>
 struct rlimit vm_initial_limit_stack = { DFLSSIZ, MAXSSIZ };
@@ -233,15 +222,13 @@ struct rlimit vm_initial_limit_data = { DFLDSIZ, MAXDSIZ };
 struct rlimit vm_initial_limit_core = { DFLCSIZ, MAXCSIZ };
 
 extern thread_t first_thread;
+extern thread_act_t	cloneproc(struct proc *, int);
+extern int 	(*mountroot) __P((void));
+extern int 	netboot_mountroot(); 	/* netboot.c */
+extern int	netboot_setup(struct proc * p);
 
-#define SPL_DEBUG	0
-#if	SPL_DEBUG
-#define	dprintf(x)	printf x
-#else	SPL_DEBUG
-#define dprintf(x)
-#endif	/* SPL_DEBUG */
-
-extern thread_t	cloneproc(struct proc *, int);
+/* hook called after root is mounted XXX temporary hack */
+void (*mountroot_post_hook)(void);
 
 void
 bsd_init()
@@ -251,13 +238,11 @@ bsd_init()
 	register int i;
 	int s;
 	thread_t	th;
-	extern void	bsdinit_task();
 	void		lightning_bolt(void );
 	kern_return_t	ret;
 	boolean_t funnel_state;
 	extern void uthread_zone_init();
 
-	extern int (*mountroot) __P((void));
 
 
 #if 1
@@ -275,22 +260,20 @@ bsd_init()
 
 	kernel_flock = funnel_alloc(KERNEL_FUNNEL);
 	if (kernel_flock == (funnel_t *)0 ) {
-		panic("bsd_init: Fail to allocate kernel mutex lock");
+		panic("bsd_init: Failed to allocate kernel funnel");
 	}
-        
         
 	funnel_state = thread_funnel_set(kernel_flock, TRUE);
 
 	if (!disable_funnel) {
 		network_flock = funnel_alloc(NETWORK_FUNNEL);
 		if (network_flock == (funnel_t *)0 ) {
-			panic("bds_init: Fail to allocate network mutex lock");
+			panic("bsd_init: Failed to allocate network funnel");
 		}
 	} else {
 		network_flock = kernel_flock;
 	}
 
-        
 	printf(copyright);
 
 	kmeminit();
@@ -312,14 +295,15 @@ bsd_init()
 	p = kernproc;
 
 	/* kernel_task->proc = kernproc; */
-	set_bsdtask_info(kernel_task,(void *)kernproc);
+	set_bsdtask_info(kernel_task,(void *)p);
 	p->p_pid = 0;
 
 	/* give kernproc a name */
 	proc_name("kernel_task", p);
 
 	if (current_task() != kernel_task)
-		printf("We are in for problem, current task in not kernel task\n");
+		printf("bsd_init: We have a problem, "
+				"current task is not kernel task\n");
 	
 	/*
 	 * Create process 0.
@@ -341,6 +325,7 @@ bsd_init()
 	p->p_nice = NZERO;
 	p->p_pptr = p;
 	lockinit(&p->signal_lock, PVM, "signal", 0, 0);
+	TAILQ_INIT(&p->p_uthlist);
 	p->sigwait = FALSE;
 	p->sigwait_thread = THREAD_NULL;
 	p->exit_thread = THREAD_NULL;
@@ -377,7 +362,6 @@ bsd_init()
 	 */
 	(void)chgproccnt(0, 1);
 
-	
 	/*
 	 *	Allocate a kernel submap for pageable memory
 	 *	for temporary copying (execve()).
@@ -391,22 +375,15 @@ bsd_init()
 				TRUE,
 				TRUE,
 				&bsd_pageable_map);
-	if (ret != KERN_SUCCESS) 
-		panic("bsd_init: Failed to allocare bsd pageable map");
+		if (ret != KERN_SUCCESS) 
+			panic("bsd_init: Failed to allocate bsd pageable map");
 	}
 
 	/* Initialize the execve() semaphore */
-	{
-		kern_return_t kret;
-		int value;
-
-		value = BSD_PAGABLE_MAP_SIZE / NCARGS;
-
-		kret = semaphore_create(kernel_task, &execve_semaphore,
-				SYNC_POLICY_FIFO, value);
-		if (kret != KERN_SUCCESS)
-			panic("bsd_init: Failed to create execve semaphore");
-	}
+	ret = semaphore_create(kernel_task, &execve_semaphore,
+			SYNC_POLICY_FIFO, (BSD_PAGABLE_MAP_SIZE / NCARGS));
+	if (ret != KERN_SUCCESS)
+		panic("bsd_init: Failed to create execve semaphore");
 
 	/*
 	 * Initialize the calendar.
@@ -424,13 +401,11 @@ bsd_init()
 	/* Initialize syslog */
 	log_init();
 
-	/* Initialize SysV shm */
-	shminit();
+	/* POSIX Shm and Sem */
+	pshm_cache_init();
+	psem_cache_init();
+	time_zone_slock_init();
 
-        /* POSIX Shm and Sem */
-        pshm_cache_init();
-        psem_cache_init();
-        
 	/*
 	 * Initialize protocols.  Block reception of incoming packets
 	 * until everything is ready.
@@ -442,14 +417,8 @@ bsd_init()
 	domaininit();
 	splx(s);
 
-	/*
-	 *	Create kernel idle cpu processes.  This must be done
- 	 *	before a context switch can occur (and hence I/O can
-	 *	happen in the binit() call).
-	 */
 	p->p_fd->fd_cdir = NULL;
 	p->p_fd->fd_rdir = NULL;
-
 
 #ifdef GPROF
 	/* Initialize kernel profiling. */
@@ -471,6 +440,9 @@ bsd_init()
 #if NLOOP > 0
 	loopattach();			/* XXX */
 #endif
+        
+        /* Register the built-in dlil ethernet interface family */
+	ether_family_init();
 
 	vnode_pager_bootstrap();
 
@@ -485,8 +457,16 @@ bsd_init()
 		 */
 		microtime(&time);
 
+		bsd_hardclockinit = -1;	/* start ticking */
+
 		if (0 == (err = vfs_mountroot()))
 			break;
+		if (mountroot == netboot_mountroot) {
+			printf("cannot mount network root, errno = %d\n", err);
+			mountroot = NULL;
+			if (0 == (err = vfs_mountroot()))
+				break;
+		}
 		printf("cannot mount root, errno = %d\n", err);
 		boothowto |= RB_ASKNAME;
 	}
@@ -499,6 +479,14 @@ bsd_init()
 	VREF(rootvnode);
 	filedesc0.fd_cdir = rootvnode;
 	VOP_UNLOCK(rootvnode, 0, p);
+
+	if (mountroot == netboot_mountroot) {
+		int err;
+		/* post mount setup */
+		if (err = netboot_setup(p)) {
+			panic("bsd_init: NetBoot could not find root, %d", err);
+		}
+	}
 	
 
 	/*
@@ -509,7 +497,7 @@ bsd_init()
 	p->p_stats->p_start = boottime = time;
 	p->p_rtime.tv_sec = p->p_rtime.tv_usec = 0;
 
-#ifdef DEVFS
+#if DEVFS
 	{
 	    extern void devfs_kernel_mount(char * str);
 	    
@@ -524,48 +512,25 @@ bsd_init()
 
 	bsd_utaskbootstrap();
 
-	(void) thread_funnel_set(kernel_flock, FALSE);
+	/* invoke post-root-mount hook */
+	if (mountroot_post_hook != NULL)
+		mountroot_post_hook();
+	
+	(void) thread_funnel_set(kernel_flock, funnel_state);
 }
 
+/* Called with kernel funnel held */
 void
-bsdinit_task()
+bsdinit_task(void)
 {
 	struct proc *p = current_proc();
 	struct uthread *ut;
 	kern_return_t	kr;
 	thread_act_t th_act;
-	boolean_t funnel_state;
 
-	funnel_state = thread_funnel_set(kernel_flock, TRUE);
-
-#if FIXME  /* [ */
-
-	ipc_port_t	master_bootstrap_port;
-	task_t		bootstrap_task;
-	thread_act_t	bootstrap_thr_act;
-	ipc_port_t	root_device_port;
-
-	master_bootstrap_port = ipc_port_alloc_kernel();
-	if (master_bootstrap_port == IP_NULL)
-		panic("can't allocate master bootstrap port");
-	printf("setting bootstrap port \n");
-	task_set_special_port(bootstrap_task,
-			      TASK_BOOTSTRAP_PORT,
-			      ipc_port_make_send(master_bootstrap_port));
-	
-	printf("Setting exception port for the init task\n");
-	(void) task_set_exception_ports(get_threadtask(th),
-					EXC_MASK_ALL &
-					~(EXC_MASK_SYSCALL |
-			  EXC_MASK_MACH_SYSCALL | EXC_MASK_RPC_ALERT),
-					ux_exception_port,
-					EXCEPTION_DEFAULT, 0);
-
-#endif /* FIXME  ] */
 	proc_name("init", p);
 
 	ux_handler_init();
-	/* port_reference(ux_exception_port);*/
 
 	th_act = current_act();
 	(void) host_set_exception_ports(host_priv_self(),
@@ -591,11 +556,11 @@ bsdinit_task()
 	bsd_hardclockinit = 1;	/* Start bsd hardclock */
 	bsd_init_task = get_threadtask(th_act);
 	init_task_failure_data[0] = 0;
+	shared_region_mapping_ref(system_shared_region);
 	vm_set_shared_region(get_threadtask(th_act), system_shared_region);
 	load_init_program(p);
-
-	(void) thread_funnel_set(kernel_flock, FALSE);
-	
+	/* turn on app-profiling i.e. pre-heating */
+	app_profile = 1;
 }
 
 void
@@ -613,8 +578,9 @@ lightning_bolt()
 	(void) thread_funnel_set(kernel_flock, FALSE);
 }
 
-bsd_autoconf(){
-        extern kern_return_t IOKitBSDInit( void );
+bsd_autoconf()
+{
+	extern kern_return_t IOKitBSDInit( void );
 
 	kminit();
 
@@ -628,7 +594,7 @@ bsd_autoconf(){
 		(*pi->ps_func) (pi->ps_count);
 	}
 
-        return( IOKitBSDInit());
+	return( IOKitBSDInit());
 }
 
 
@@ -638,10 +604,6 @@ setconf()
 {	
 	extern kern_return_t IOFindBSDRoot( char * rootName,
 				dev_t * root, u_int32_t * flags );
-
-	extern int 	(*mountroot) __P((void));
-	extern int 	nfs_mountroot(); 	/* nfs_vfsops.c */
-
 	u_int32_t	flags;
 	kern_return_t	err;
 
@@ -661,10 +623,9 @@ setconf()
 		flags = 0;
 	}
 
-	/* if network device then force nfs root */
 	if( flags & 1 ) {
-		printf("mounting nfs root\n");
-		mountroot = nfs_mountroot;
+		/* network device */
+		mountroot = netboot_mountroot;
 	} else {
 		/* otherwise have vfs determine root filesystem */
 		mountroot = NULL;
@@ -675,12 +636,18 @@ setconf()
 bsd_utaskbootstrap()
 {
 	thread_act_t th_act;
+	struct uthread *ut;
 
-	th_act = (thread_act_t)cloneproc(kernproc, 0);
+	th_act = cloneproc(kernproc, 0);
 	initproc = pfind(1);				
+	/* Set the launch time for init */
+	initproc->p_stats->p_start = time;
+
+	ut = (struct uthread *)get_bsdthread_info(th_act);
+	ut->uu_sigmask = 0;
 	thread_hold(th_act);
-	(void) thread_stop_wait(getshuttle_thread(th_act));
-	thread_ast_set(th_act,AST_BSD_INIT);
+	(void)thread_stop(getshuttle_thread(th_act));
+	act_set_astbsd(th_act);
 	thread_release(th_act);
 	thread_unstop(getshuttle_thread(th_act));
 	(void) thread_resume(th_act);
@@ -766,13 +733,11 @@ thread_funnel_switch(
             panic("thread_funnel_switch: can't switch to same funnel");
         }
         
-        if ((oldfnl != NETWORK_FUNNEL) && (oldfnl != KERNEL_FUNNEL))
-        {
+        if ((oldfnl != NETWORK_FUNNEL) && (oldfnl != KERNEL_FUNNEL)) {
             panic("thread_funnel_switch: invalid oldfunnel");
         }
-        if ((newfnl != NETWORK_FUNNEL) && (newfnl != KERNEL_FUNNEL))
-        {
-            panic("thread_funnel_switch: invalid oldfunnel");
+        if ((newfnl != NETWORK_FUNNEL) && (newfnl != KERNEL_FUNNEL)) {
+            panic("thread_funnel_switch: invalid newfunnel");
         }
         
 	if((curflock = thread_funnel_get()) == THR_FUNNEL_NULL) {
@@ -785,7 +750,7 @@ thread_funnel_switch(
             panic("thread_funnel_switch: network funnel not held");
             
         if ((oldfnl == KERNEL_FUNNEL) && (curflock != kernel_flock))
-            panic("thread_funnel_switch: network funnel not held");
+            panic("thread_funnel_switch: kernel funnel not held");
 
         if(oldfnl == NETWORK_FUNNEL) {
             oldflock = network_flock;

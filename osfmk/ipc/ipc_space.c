@@ -233,12 +233,8 @@ ipc_space_clean(
 	 *	out the space died.
 	 */
 	is_write_lock(space);
-	while (space->is_growing) {
-		assert_wait((event_t) space, THREAD_UNINT);
-		is_write_unlock(space);
-		thread_block((void (*)(void)) 0);
-		is_write_lock(space);
-	}
+	while (space->is_growing)
+		is_write_sleep(space);
 
 	/*
 	 *	Now we can futz with it	since we have the write lock.
@@ -328,12 +324,8 @@ ipc_space_destroy(
 	 *	out the space died.
 	 */
 	is_read_lock(space);
-	while (space->is_growing) {
-		assert_wait((event_t) space, THREAD_UNINT);
-		is_read_unlock(space);
-		thread_block((void (*)(void)) 0);
-		is_read_lock(space);
-	}
+	while (space->is_growing)
+		is_read_sleep(space);
 
 	is_read_unlock(space);
 	/*

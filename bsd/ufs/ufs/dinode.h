@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2002 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -62,7 +62,10 @@
 #ifndef _UFS_DINODE_H_
 #define _UFS_DINODE_H_
 
+#include <sys/appleapiopts.h>
 
+
+#ifdef __APPLE_API_UNSTABLE
 /*
  * The root inode is the root of the file system.  Inode 0 can't be used for
  * normal purposes and historically bad blocks were linked to inode 1, thus
@@ -148,4 +151,5 @@ struct dinode {
 #define	IFSOCK		0140000		/* UNIX domain socket. */
 #define	IFWHT		0160000		/* Whiteout. */
 
+#endif /* __APPLE_API_UNSTABLE */
 #endif /* ! _UFS_DINODE_H_ */

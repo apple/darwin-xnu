@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2002 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -63,6 +63,9 @@
 #ifndef _NFS_NFSNODE_H_
 #define _NFS_NFSNODE_H_
 
+#include <sys/appleapiopts.h>
+
+#ifdef __APPLE_API_PRIVATE
 #ifndef _NFS_NFS_H_
 #include <nfs/nfs.h>
 #endif
@@ -218,4 +221,5 @@ void nfs_invaldir __P((struct vnode *));
 
 #endif /* KERNEL */
 
-#endif
+#endif /* __APPLE_API_PRIVATE */
+#endif /* _NFS_NFSNODE_H_ */

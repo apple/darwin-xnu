@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2001 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -63,6 +63,8 @@
 #ifndef _SYS_TYPES_H_
 #define	_SYS_TYPES_H_
 
+#include <sys/appleapiopts.h>
+
 #ifndef __ASSEMBLER__
 #include <sys/cdefs.h>
 
@@ -90,6 +92,8 @@ typedef	int32_t		daddr_t;	/* disk address */
 typedef	int32_t		dev_t;		/* device number */
 typedef	u_int32_t	fixpt_t;	/* fixed point number */
 typedef	u_int32_t	gid_t;		/* group id */
+typedef	u_int32_t	in_addr_t;	/* base type for internet address */
+typedef	u_int16_t	in_port_t;
 typedef	u_int32_t	ino_t;		/* inode number */
 typedef	long		key_t;		/* IPC key (for Sys V IPC) */
 typedef	u_int16_t	mode_t;		/* permissions */
@@ -100,7 +104,6 @@ typedef quad_t		rlim_t;		/* resource limit */
 typedef	int32_t		segsz_t;	/* segment size */
 typedef	int32_t		swblk_t;	/* swap offset */
 typedef	u_int32_t	uid_t;		/* user id */
-
 
 #ifndef _POSIX_SOURCE
 /* Major, minor numbers, dev_t's. */
@@ -192,6 +195,8 @@ struct _pthread_handler_rec
 #define __PTHREAD_CONDATTR_SIZE__  4
 #define __PTHREAD_COND_SIZE__      24
 #define __PTHREAD_ONCE_SIZE__      4
+#define __PTHREAD_RWLOCK_SIZE__    124
+#define __PTHREAD_RWLOCKATTR_SIZE__ 12
 
 
 typedef struct _opaque_pthread_t { long sig; struct _pthread_handler_rec  *cleanup_stack; char opaque[__PTHREAD_SIZE__];} *pthread_t;
@@ -205,6 +210,10 @@ typedef struct _opaque_pthread_mutex_t { long sig; char opaque[__PTHREAD_MUTEX_S
 typedef struct _opaque_pthread_condattr_t { long sig; char opaque[__PTHREAD_CONDATTR_SIZE__]; } pthread_condattr_t;
 
 typedef struct _opaque_pthread_cond_t { long sig;  char opaque[__PTHREAD_COND_SIZE__]; } pthread_cond_t;
+
+typedef struct _opaque_pthread_rwlockattr_t { long sig; char opaque[__PTHREAD_RWLOCKATTR_SIZE__]; } pthread_rwlockattr_t;
+
+typedef struct _opaque_pthread_rwlock_t { long sig;  char opaque[__PTHREAD_RWLOCK_SIZE__]; } pthread_rwlock_t;
 
 typedef struct { long sig; char opaque[__PTHREAD_ONCE_SIZE__]; } pthread_once_t;
 

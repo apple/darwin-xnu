@@ -113,6 +113,8 @@
 #include <i386/AT386/mp/mp_v1_1.h>
 #endif	/* MP_V1_1 */
 
+#include <IOKit/IOPlatformExpert.h>
+
 vm_size_t	mem_size = 0; 
 vm_offset_t	first_addr = 0;	/* set by start.s - keep out of bss */
 vm_offset_t	first_avail = 0;/* first after page tables */
@@ -137,9 +139,6 @@ extern char	edata, end;
 #endif
 
 extern char	version[];
-
-int		rebootflag = 0;	/* exported to kdintr */
-
 
 void		parse_arguments(void);
 const char	*getenv(const char *);
@@ -208,8 +207,6 @@ machine_startup(void)
 {
 
 #ifdef	__MACHO__
-
-
 	/* Now copy over various bits.. */
 	cnvmem = kernBootStruct->convmem;
 	extmem = kernBootStruct->extmem;
@@ -234,20 +231,24 @@ machine_startup(void)
 	edata = (vm_offset_t) sectDATAB + sectSizeDATA;
 #endif
 
-	/*
-	 * Parse startup arguments
-	 */
-	parse_arguments();
-
-	disableDebugOuput = FALSE;
-	debug_mode = TRUE;
-	
 	printf_init();						/* Init this in case we need debugger */
 	panic_init();						/* Init this in case we need debugger */
 
 	PE_init_platform(FALSE, kernBootStruct);
 	PE_init_kprintf(FALSE);
 	PE_init_printf(FALSE);
+
+	/*
+	 * Parse startup arguments
+	 */
+	parse_arguments();
+
+	/*
+	 * Set up initial thread so current_thread() works early on
+	 */
+	pageout_thread.top_act = &pageout_act;
+	pageout_act.thread = &pageout_thread;
+	thread_machine_set_current(&pageout_thread);
 
 	/*
 	 * Do basic VM initialization
@@ -259,7 +260,6 @@ machine_startup(void)
 	PE_init_printf(TRUE);
 
 #if	MACH_KDB
-
 	/*
 	 * Initialize the kernel debugger.
 	 */
@@ -269,9 +269,6 @@ machine_startup(void)
 	 * Cause a breakpoint trap to the debugger before proceeding
 	 * any further if the proper option bit was specified in
 	 * the boot flags.
-	 *
-	 * XXX use -a switch to invoke kdb, since there's no
-	 *     boot-program switch to turn on RB_HALT!
 	 */
 
 	if (halt_in_debugger) {
@@ -279,6 +276,7 @@ machine_startup(void)
 	        Debugger("inline call");
 	}
 #endif	/* MACH_KDB */
+
 	TR_INIT();
 
 	printf(version);
@@ -314,34 +312,18 @@ vm_size_t	env_size = 0;		/* size of environment */
 void
 parse_arguments(void)
 {
-	char *p = (char *) kern_args_start;
-	char *endp = (char *) kern_args_start + kern_args_size - 1;
-	char ch;
+    unsigned int boot_arg;
 
-	if (kern_args_start == 0)
-	    return;
+    if (PE_parse_boot_arg("maxmem", &boot_arg))
+    {
+        mem_size = boot_arg * (1024 * 1024);
+    }
 
-	/*
-	 * handle switches in exact format of  -h  or -m64
-	 */
-	while ( (p < endp) && (*p != '\0')) {
-	  if (*p++ != '-') 
-	    continue;
-	  switch (*p++) {
-	  case 'h':
-	    halt_in_debugger = 1;
-	    break;
-	  case 'm':
-	    mem_size = atoi_term(p,&p)*1024*1024;
-	    break;
-	  case 'k':
-	    mem_size = atoi_term(p,&p)*1024;
-	    break;
-	  default:
-	    break;
-	  }
-	}
-
+    if (PE_parse_boot_arg("debug", &boot_arg))
+    {
+        if (boot_arg & DB_HALT) halt_in_debugger  = 1;
+        if (boot_arg & DB_PRT)  disableDebugOuput = FALSE;
+    }
 }
 
 const char *
@@ -423,25 +405,25 @@ int reset_mem_on_reboot = 1;
  * Halt the system or reboot.
  */
 void
-halt_all_cpus(
-	boolean_t	reboot)
+halt_all_cpus(boolean_t reboot)
 {
-	if (reboot) {
-	    /*
-	     * Tell the BIOS not to clear and test memory.
-	     */
-	    if (! reset_mem_on_reboot)
-		*(unsigned short *)phystokv(0x472) = 0x1234;
+	if (reboot)
+    {
+        /*
+         * Tell the BIOS not to clear and test memory.
+         */
+        if (!reset_mem_on_reboot)
+            *(unsigned short *)phystokv(0x472) = 0x1234;
 
-	    kdreboot();
-	}
-	else {
-	    rebootflag = 1;
-	    printf("In tight loop: hit ctl-alt-del to reboot\n");
-	    (void) spllo();
-	}
-	for (;;)
-	    continue;
+        printf("MACH Reboot\n");
+        PEHaltRestart( kPERestartCPU );
+    }
+    else
+    {
+        printf("CPU halted\n");
+        PEHaltRestart( kPEHaltCPU );
+    }
+    while(1);
 }
 
 /*
@@ -499,8 +481,9 @@ i386_init(void)
 #endif
 #endif
 
-		/* BIOS leaves data in low memory */
+	/* BIOS leaves data in low memory */
 	last_addr = 1024*1024 + extmem*1024;
+
 	/* extended memory starts at 1MB */
        
 	bios_hole_size = 1024*1024 - trunc_page((vm_offset_t)(1024 * cnvmem));

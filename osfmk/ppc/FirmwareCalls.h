@@ -47,12 +47,6 @@
  *
  */
  
-			fwCallEnt(MPgetProcCountCall, MPgetProcCountLL)	/* Call the MPgetProcCount routine */
-			fwCallEnt(MPstartCall, MPstartLL)				/* Call the MPstart routine */
-			fwCallEnt(MPexternalHookCall, MPexternalHookLL)	/* Get the address of the external interrupt handler */
-			fwCallEnt(MPsignalCall, MPsignalLL)				/* Call the MPsignal routine */
-			fwCallEnt(MPstopCall, MPstopLL)					/* Call the MPstop routine */
-
 			fwCallEnt(dbgDispCall, dbgDispLL)				/* Write stuff to printer or modem port */
 			fwCallEnt(dbgCkptCall, dbgCkptLL)				/* Save 128 bytes from r3 to 0x380 V=R mapping */
 			fwCallEnt(StoreRealCall, StoreRealLL)			/* Save one word in real storage */
@@ -70,17 +64,6 @@
 			fwCallEnt(PerfCtlCall, PerfCtlLL)				/* Control performance monitor */
 #endif
 
-#if 0
-			fwCallEnt(MPCPUAddressCall, 0)					/* Call the MPCPUAddress routine */
-			fwCallEnt(MPresumeCall, 0)						/* Call the MPresume routine */
-			fwCallEnt(MPresetCall, 0)						/* Call the MPreset routine */
-			fwCallEnt(MPSenseCall, 0)						/* Call the MPSense routine */
-			fwCallEnt(MPstoreStatusCall, 0)					/* Call the MPstoreStatus routine */
-			fwCallEnt(MPSetStatusCall, 0)					/* Call the MPSetStatus routine */
-			fwCallEnt(MPgetSignalCall, 0)					/* Call the MPgetSignal routine */
-			fwCallEnt(MPsyncTBCall, 0)						/* Call the MPsyncTB routine */
-			fwCallEnt(MPcheckPendingCall, 0)				/* Call the MPcheckPending routine */
-#endif	
 #endif	/* _FIRMWARECALLS_H_ */
 
 #else /* ASSEMBLER */

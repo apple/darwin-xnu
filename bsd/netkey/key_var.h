@@ -31,12 +31,8 @@
 
 #ifndef _NETKEY_KEY_VAR_H_
 #define _NETKEY_KEY_VAR_H_
-
-#ifdef __NetBSD__
-#if defined(_KERNEL) && !defined(_LKM)
-#include "opt_inet.h"
-#endif
-#endif
+#include <sys/appleapiopts.h>
+#ifdef __APPLE_API_PRIVATE
 
 /* sysctl */
 #define KEYCTL_DEBUG_LEVEL		1
@@ -47,7 +43,10 @@
 #define KEYCTL_LARVAL_LIFETIME		6
 #define KEYCTL_BLOCKACQ_COUNT		7
 #define KEYCTL_BLOCKACQ_LIFETIME	8
-#define KEYCTL_MAXID			9
+#define KEYCTL_ESP_KEYMIN		9
+#define KEYCTL_ESP_AUTH			10
+#define KEYCTL_AH_KEYMIN		11
+#define KEYCTL_MAXID			12
 
 #define KEYCTL_NAMES { \
 	{ 0, 0 }, \
@@ -72,6 +71,8 @@
 	&key_larval_lifetime, \
 	&key_blockacq_count, \
 	&key_blockacq_lifetime, \
+	&ipsec_esp_keymin, \
+	&ipsec_ah_keymin, \
 }
 //#else
 //#define KEYCTL_VARS { \
@@ -84,50 +85,17 @@
 //	&key_larval_lifetime, \
 //	&key_blockacq_count, \
 //	&key_blockacq_lifetime, \
+//	&ipsec_esp_keymin, \
+//	&ipsec_ah_keymin, \
 //}
 //#endif
 
+#ifdef KERNEL
 #define _ARRAYLEN(p) (sizeof(p)/sizeof(p[0]))
 #define _KEYLEN(key) ((u_int)((key)->sadb_key_bits >> 3))
 #define _KEYBITS(key) ((u_int)((key)->sadb_key_bits))
 #define _KEYBUF(key) ((caddr_t)((caddr_t)(key) + sizeof(struct sadb_key)))
+#endif /*KERNEL*/
 
-#define _INADDR(in) ((struct sockaddr_in *)(in))
-
-#if defined(INET6)
-#define _IN6ADDR(in6) ((struct sockaddr_in6 *)(in6))
-#define _SALENBYAF(family) \
-	(((family) == AF_INET) ? \
-		(u_int)sizeof(struct sockaddr_in) : \
-		(u_int)sizeof(struct sockaddr_in6))
-#define _INALENBYAF(family) \
-	(((family) == AF_INET) ? \
-		(u_int)sizeof(struct in_addr) : \
-		(u_int)sizeof(struct in6_addr))
-#define _INADDRBYSA(saddr) \
-	((((struct sockaddr *)(saddr))->sa_family == AF_INET) ? \
-		(caddr_t)&((struct sockaddr_in *)(saddr))->sin_addr : \
-		(caddr_t)&((struct sockaddr_in6 *)(saddr))->sin6_addr)
-#define _INPORTBYSA(saddr) \
-	((((struct sockaddr *)(saddr))->sa_family == AF_INET) ? \
-		((struct sockaddr_in *)(saddr))->sin_port : \
-		((struct sockaddr_in6 *)(saddr))->sin6_port)
-#if 0
-#define _SADDRBYSA(saddr) \
-	((((struct sockaddr *)(saddr))->sa_family == AF_INET) ? \
-		(caddr_t)&((struct sockaddr_in *)(saddr))->sin_addr.s_addr : \
-		(caddr_t)&((struct sockaddr_in6 *)(saddr))->sin6_addr.s6_addr)
-#endif
-#else
-#define _IN6ADDR(in6) "#error"
-#define _SALENBYAF(family) sizeof(struct sockaddr_in)
-#define _INALENBYAF(family) sizeof(struct in_addr)
-#define _INADDRBYSA(saddr) ((caddr_t)&((struct sockaddr_in *)(saddr))->sin_addr)
-#define _INPORTBYSA(saddr) (((struct sockaddr_in *)(saddr))->sin_port)
-#if 0
-#define _SADDRBYSA(saddr) \
-	((caddr_t)&((struct sockaddr_in *)(saddr))->sin_addr.s_addr)
-#endif
-#endif /* defined(INET6) */
-
+#endif /* __APPLE_API_PRIVATE */
 #endif /* _NETKEY_KEY_VAR_H_ */

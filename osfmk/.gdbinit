@@ -8,6 +8,9 @@
 
 set $kgm_vers = 2
 
+set $kgm_dummy = &proc0
+set $kgm_dummy = &kmod
+
 echo Loading Kernel GDB Macros package.  Type "help kgm" for more info.\n
 
 define kgm
@@ -57,6 +60,11 @@ document kgm
 |     showkmodaddr   Given an address, display the kernel module and offset
 |
 |     zprint         Display zone information
+|     paniclog       Display the panic log information
+|
+|     switchtoact    Switch thread context
+|     switchtoctx    Switch context
+|     resetctx       Reset context
 |
 | Type "help <macro>" for more specific help on a particular macro.
 | Type "show user <macro>" to see what the macro is really doing.
@@ -158,7 +166,7 @@ end
 
 define showactint
    printf "            0x%08x  ", $arg0
-   set $kgm_actp = *(Thread_Activation *)$arg0
+   set $kgm_actp = *(struct thread_activation *)$arg0
    if $kgm_actp.thread
 	set $kgm_thread = *$kgm_actp.thread
 	printf "0x%08x  ", $kgm_actp.thread
@@ -196,7 +204,7 @@ define showactint
 			printf "\n\t\tstack_privilege=0x%08x", $kgm_thread.stack_privilege
 		end
 		printf "\n\t\tkernel_stack=0x%08x", $kgm_thread.kernel_stack
-		set $mysp = $kgm_actp->mact.pcb.ss.r1
+		set $mysp = $kgm_actp->mact.pcb->save_r1
 		set $prevsp = 0
 		printf "\n\t\tstacktop=0x%08x", $mysp
 	    	while ($mysp != 0) && (($mysp & 0xf) == 0) && ($mysp < 0xb0000000) && ($mysp > $prevsp)
@@ -246,19 +254,19 @@ end
 
 define showallacts
     set $kgm_head_taskp = &default_pset.tasks
-    set $kgm_taskp = (Task *)($kgm_head_taskp->next)
+    set $kgm_taskp = (struct task *)($kgm_head_taskp->next)
     while $kgm_taskp != $kgm_head_taskp
         showtaskheader
 	showtaskint $kgm_taskp
 	showactheader
 	set $kgm_head_actp = &($kgm_taskp->thr_acts)
-        set $kgm_actp = (Thread_Activation *)($kgm_taskp->thr_acts.next)
+        set $kgm_actp = (struct thread_activation *)($kgm_taskp->thr_acts.next)
 	while $kgm_actp != $kgm_head_actp
 	    showactint $kgm_actp 0
-  	    set $kgm_actp = (Thread_Activation *)($kgm_actp->thr_acts.next)
+  	    set $kgm_actp = (struct thread_activation *)($kgm_actp->thr_acts.next)
         end
 	printf "\n"
-    	set $kgm_taskp = (Task *)($kgm_taskp->pset_tasks.next)
+    	set $kgm_taskp = (struct task *)($kgm_taskp->pset_tasks.next)
     end
 end
 document showallacts
@@ -270,19 +278,19 @@ end
 
 define showallstacks
     set $kgm_head_taskp = &default_pset.tasks
-    set $kgm_taskp = (Task *)($kgm_head_taskp->next)
+    set $kgm_taskp = (struct task *)($kgm_head_taskp->next)
     while $kgm_taskp != $kgm_head_taskp
         showtaskheader
 	showtaskint $kgm_taskp
 	set $kgm_head_actp = &($kgm_taskp->thr_acts)
-        set $kgm_actp = (Thread_Activation *)($kgm_taskp->thr_acts.next)
+        set $kgm_actp = (struct thread_activation *)($kgm_taskp->thr_acts.next)
 	while $kgm_actp != $kgm_head_actp
 	    showactheader
 	    showactint $kgm_actp 1
-  	    set $kgm_actp = (Thread_Activation *)($kgm_actp->thr_acts.next)
+  	    set $kgm_actp = (struct thread_activation *)($kgm_actp->thr_acts.next)
         end
 	printf "\n"
-    	set $kgm_taskp = (Task *)($kgm_taskp->pset_tasks.next)
+    	set $kgm_taskp = (struct task *)($kgm_taskp->pset_tasks.next)
     end
 end
 document showallstacks
@@ -291,65 +299,160 @@ document showallstacks
 |     (gdb) showallstacks
 end
 
-define showwaitqmembercount
-    set $kgm_waitqsubp = (wait_queue_sub_t)$arg0
-    set $kgm_sublinksp = &($kgm_waitqsubp->wqs_sublinks)
-    set $kgm_wql = (wait_queue_link_t)$kgm_sublinksp->next
-    set $kgm_count = 0
-    while ( (queue_entry_t)$kgm_wql != (queue_entry_t)$kgm_sublinksp)
-        set $kgm_waitqp = $kgm_wql->wql_element->wqe_queue
-        if !$kgm_found  
-	    showwaitqmemberheader
-	    set $kgm_found = 1
-        end
-        showwaitqmemberint $kgm_waitqp
+define showwaiterheader
+    printf "waiters     activation  "
+    printf "thread      pri  state  wait_queue  wait_event\n"
+end
+
+define showwaitqwaiters
+    set $kgm_w_waitqp = (struct wait_queue *)$arg0
+    set $kgm_w_linksp = &($kgm_w_waitqp->wq_queue)
+    set $kgm_w_wqe = (struct wait_queue_element *)$kgm_w_linksp->next
+    set $kgm_w_found = 0
+    while ( (queue_entry_t)$kgm_w_wqe != (queue_entry_t)$kgm_w_linksp)
+	if ($kgm_w_wqe->wqe_type != &_wait_queue_link)
+		if !$kgm_w_found
+			set $kgm_w_found = 1
+			showwaiterheader
+		end
+		set $kgm_w_shuttle = (struct thread_shuttle *)$kgm_w_wqe
+		showactint $kgm_w_shuttle->top_act 0
+	end	
+	set $kgm_w_wqe = (struct wait_queue_element *)$kgm_w_wqe->wqe_links.next
     end
 end
 
+define showwaitqwaitercount
+    set $kgm_wc_waitqp = (struct wait_queue *)$arg0
+    set $kgm_wc_linksp = &($kgm_wc_waitqp->wq_queue)
+    set $kgm_wc_wqe = (struct wait_queue_element *)$kgm_wc_linksp->next
+    set $kgm_wc_count = 0
+    while ( (queue_entry_t)$kgm_wc_wqe != (queue_entry_t)$kgm_wc_linksp)
+	if ($kgm_wc_wqe->wqe_type != &_wait_queue_link)
+        	set $kgm_wc_count = $kgm_wc_count + 1
+	end
+        set $kgm_wc_wqe = (struct wait_queue_element *)$kgm_wc_wqe->wqe_links.next
+    end
+    printf "0x%08x  ", $kgm_wc_count
+end
+
+define showwaitqmembercount
+    set $kgm_mc_waitqsetp = (struct wait_queue_set *)$arg0
+    set $kgm_mc_setlinksp = &($kgm_mc_waitqsetp->wqs_setlinks)
+    set $kgm_mc_wql = (struct wait_queue_link *)$kgm_mc_setlinksp->next
+    set $kgm_mc_count = 0
+    while ( (queue_entry_t)$kgm_mc_wql != (queue_entry_t)$kgm_mc_setlinksp)
+        set $kgm_mc_count = $kgm_mc_count + 1
+        set $kgm_mc_wql = (struct wait_queue_link *)$kgm_mc_wql->wql_setlinks.next
+    end
+    printf "0x%08x  ", $kgm_mc_count
+end
+
     
+define showwaitqmemberheader
+    printf "set-members wait_queue  interlock   "
+    printf "pol  type   member_cnt  waiter_cnt\n"
+end
+
 define showwaitqmemberint
-    set $kgm_waitqp = (wait_queue_t)$arg0
-    printf "            0x%08x  ", $kgm_waitqp
-    printf "0x%08x  ", $kgm_waitqp->wq_interlock
-    if ($kgm_waitqp->wq_fifo)
-        printf "Fifo"
+    set $kgm_m_waitqp = (struct wait_queue *)$arg0
+    printf "            0x%08x  ", $kgm_m_waitqp
+    printf "0x%08x  ", $kgm_m_waitqp->wq_interlock.lock_data
+    if ($kgm_m_waitqp->wq_fifo)
+        printf "Fifo "
     else
-	printf "Prio"
+	printf "Prio "
     end
-    if ($kgm_waitqp->wq_issub)
-	printf "S"
+    if ($kgm_m_waitqp->wq_type == 0xf1d1)
+	printf "Set    "
+	showwaitqmembercount $kgm_m_waitqp
     else
-	printf " "
+	printf "Que    0x00000000  "
     end
-    printf "       "
-    showwaitqwaitercount $kgm_waitqp
-    showwaitqmembercount $kgm_waitqp
+    showwaitqwaitercount $kgm_m_waitqp
     printf "\n"
 end
 
 
-define showwaitqmembers
-    set $kgm_waitqsubp = (wait_queue_sub_t)$arg0
-    set $kgm_sublinksp = &($kgm_waitqsubp->wqs_sublinks)
-    set $kgm_wql = (wait_queue_link_t)$kgm_sublinksp->next
-    set $kgm_found = 0
-    while ( (queue_entry_t)$kgm_wql != (queue_entry_t)$kgm_sublinksp)
-        set $kgm_waitqp = $kgm_wql->wql_element->wqe_queue
-        if !$kgm_found  
-	    showwaitqmemberheader
-	    set $kgm_found = 1
-        end
-        showwaitqmemberint $kgm_waitqp
+define showwaitqmemberofheader
+    printf "member-of   wait_queue  interlock   "
+    printf "pol  type   member_cnt  waiter_cnt\n"
+end
+
+define showwaitqmemberof
+    set $kgm_mo_waitqp = (struct wait_queue *)$arg0
+    set $kgm_mo_linksp = &($kgm_mo_waitqp->wq_queue)
+    set $kgm_mo_wqe = (struct wait_queue_element *)$kgm_mo_linksp->next
+    set $kgm_mo_found = 0
+    while ( (queue_entry_t)$kgm_mo_wqe != (queue_entry_t)$kgm_mo_linksp)
+	if ($kgm_mo_wqe->wqe_type == &_wait_queue_link)
+		if !$kgm_mo_found
+			set $kgm_mo_found = 1
+			showwaitqmemberofheader
+		end
+		set $kgm_mo_wqlp = (struct wait_queue_link *)$kgm_mo_wqe
+		set $kgm_mo_wqsetp = (struct wait_queue *)($kgm_mo_wqlp->wql_setqueue)
+		showwaitqmemberint $kgm_mo_wqsetp
+	end	
+	set $kgm_mo_wqe = (struct wait_queue_element *)$kgm_mo_wqe->wqe_links.next
     end
 end
 
-define showwaitq
-    set $kgm_waitq = (wait_queue_t)$arg0
-    showwaitqheader
-    showwaitqwaiters
-    if ($kgm_waitq->wq_issub)
-	showwaitqmembers
+define showwaitqmembers
+    set $kgm_ms_waitqsetp = (struct wait_queue_set *)$arg0
+    set $kgm_ms_setlinksp = &($kgm_ms_waitqsetp->wqs_setlinks)
+    set $kgm_ms_wql = (struct wait_queue_link *)$kgm_ms_setlinksp->next
+    set $kgm_ms_found = 0
+    while ( (queue_entry_t)$kgm_ms_wql != (queue_entry_t)$kgm_ms_setlinksp)
+        set $kgm_ms_waitqp = $kgm_ms_wql->wql_element.wqe_queue
+        if !$kgm_ms_found  
+	    showwaitqmemberheader
+	    set $kgm_ms_found = 1
+        end
+        showwaitqmemberint $kgm_ms_waitqp
+	set $kgm_ms_wql = (struct wait_queue_link *)$kgm_ms_wql->wql_setlinks.next
     end
+end
+
+define showwaitqheader
+    printf "wait_queue  ref_count   interlock   "
+    printf "pol  type   member_cnt  waiter_cnt\n"
+end
+
+define showwaitqint
+    set $kgm_waitqp = (struct wait_queue *)$arg0
+    printf "0x%08x  ", $kgm_waitqp
+    if ($kgm_waitqp->wq_type == 0xf1d1)
+	printf "0x%08x  ", ((struct wait_queue_set *)$kgm_waitqp)->wqs_refcount
+    else
+	printf "0x00000000  "
+    end
+    printf "0x%08x  ", $kgm_waitqp->wq_interlock.lock_data
+    if ($kgm_waitqp->wq_fifo)
+        printf "Fifo "
+    else
+	printf "Prio "
+    end
+    if ($kgm_waitqp->wq_type == 0xf1d1)
+	printf "Set    "
+	showwaitqmembercount $kgm_waitqp
+    else
+	printf "Que    0x00000000  "
+    end
+    showwaitqwaitercount $kgm_waitqp
+    printf "\n"
+end
+
+define showwaitq
+    set $kgm_waitq1p = (wait_queue_t)$arg0
+    showwaitqheader
+    showwaitqint $kgm_waitq1p	
+    if ($kgm_waitq1p->wq_type == 0xf1d1)
+	showwaitqmembers $kgm_waitq1p
+    else
+    	showwaitqmemberof $kgm_waitq1p
+    end
+    showwaitqwaiters $kgm_waitq1p
 end
 
 define showmapheader
@@ -436,13 +539,13 @@ end
 
 define showallvm
     set $kgm_head_taskp = &default_pset.tasks
-    set $kgm_taskp = (Task *)($kgm_head_taskp->next)
+    set $kgm_taskp = (struct task *)($kgm_head_taskp->next)
     while $kgm_taskp != $kgm_head_taskp
         showtaskheader
 	showmapheader
 	showtaskint $kgm_taskp
 	showvmint $kgm_taskp->map 0
-    	set $kgm_taskp = (Task *)($kgm_taskp->pset_tasks.next)
+    	set $kgm_taskp = (struct task *)($kgm_taskp->pset_tasks.next)
     end
 end
 document showallvm
@@ -454,13 +557,13 @@ end
 
 define showallvme
     set $kgm_head_taskp = &default_pset.tasks
-    set $kgm_taskp = (Task *)($kgm_head_taskp->next)
+    set $kgm_taskp = (struct task *)($kgm_head_taskp->next)
     while $kgm_taskp != $kgm_head_taskp
         showtaskheader
 	showmapheader
 	showtaskint $kgm_taskp
 	showvmint $kgm_taskp->map 1
-    	set $kgm_taskp = (Task *)($kgm_taskp->pset_tasks.next)
+    	set $kgm_taskp = (struct task *)($kgm_taskp->pset_tasks.next)
     end
 end
 document showallvme
@@ -620,13 +723,13 @@ end
 
 define showallipc
     set $kgm_head_taskp = &default_pset.tasks
-    set $kgm_taskp = (Task *)($kgm_head_taskp->next)
+    set $kgm_taskp = (struct task *)($kgm_head_taskp->next)
     while $kgm_taskp != $kgm_head_taskp
         showtaskheader
         showipcheader
 	showtaskint $kgm_taskp
 	showipcint $kgm_taskp->itk_space 0
-    	set $kgm_taskp = (Task *)($kgm_taskp->pset_tasks.next)
+    	set $kgm_taskp = (struct task *)($kgm_taskp->pset_tasks.next)
     end
 end
 document showallipc
@@ -638,13 +741,13 @@ end
 
 define showallrights
     set $kgm_head_taskp = &default_pset.tasks
-    set $kgm_taskp = (Task *)($kgm_head_taskp->next)
+    set $kgm_taskp = (struct task *)($kgm_head_taskp->next)
     while $kgm_taskp != $kgm_head_taskp
         showtaskheader
         showipcheader
 	showtaskint $kgm_taskp
 	showipcint $kgm_taskp->itk_space 1
-    	set $kgm_taskp = (Task *)($kgm_taskp->pset_tasks.next)
+    	set $kgm_taskp = (struct task *)($kgm_taskp->pset_tasks.next)
     end
 end
 document showallrights
@@ -688,7 +791,7 @@ end
 
 
 define showtaskint
-    set $kgm_task = *(Task *)$arg0
+    set $kgm_task = *(struct task *)$arg0
     printf "0x%08x  ", $arg0
     printf "0x%08x  ", $kgm_task.map
     printf "0x%08x  ", $kgm_task.itk_space
@@ -709,14 +812,14 @@ end
 
 define showtaskacts
     showtaskheader
-    set $kgm_taskp = (Task *)$arg0
+    set $kgm_taskp = (struct task *)$arg0
     showtaskint $kgm_taskp
     showactheader
     set $kgm_head_actp = &($kgm_taskp->thr_acts)
-    set $kgm_actp = (Thread_Activation *)($kgm_taskp->thr_acts.next)
+    set $kgm_actp = (struct thread_activation *)($kgm_taskp->thr_acts.next)
     while $kgm_actp != $kgm_head_actp
 	showactint $kgm_actp 0
-    	set $kgm_actp = (Thread_Activation *)($kgm_actp->thr_acts.next)
+    	set $kgm_actp = (struct thread_activation *)($kgm_actp->thr_acts.next)
     end
 end
 document showtaskacts
@@ -728,14 +831,14 @@ end
 
 define showtaskstacks
     showtaskheader
-    set $kgm_taskp = (Task *)$arg0
+    set $kgm_taskp = (struct task *)$arg0
     showtaskint $kgm_taskp
     set $kgm_head_actp = &($kgm_taskp->thr_acts)
-    set $kgm_actp = (Thread_Activation *)($kgm_taskp->thr_acts.next)
+    set $kgm_actp = (struct thread_activation *)($kgm_taskp->thr_acts.next)
     while $kgm_actp != $kgm_head_actp
         showactheader
 	showactint $kgm_actp 1
-    	set $kgm_actp = (Thread_Activation *)($kgm_actp->thr_acts.next)
+    	set $kgm_actp = (struct thread_activation *)($kgm_actp->thr_acts.next)
     end
 end
 document showtaskstacks
@@ -748,10 +851,10 @@ end
 define showalltasks
     showtaskheader
     set $kgm_head_taskp = &default_pset.tasks
-    set $kgm_taskp = (Task *)($kgm_head_taskp->next)
+    set $kgm_taskp = (struct task *)($kgm_head_taskp->next)
     while $kgm_taskp != $kgm_head_taskp
 	showtaskint $kgm_taskp
-    	set $kgm_taskp = (Task *)($kgm_taskp->pset_tasks.next)
+    	set $kgm_taskp = (struct task *)($kgm_taskp->pset_tasks.next)
     end
 end
 document showalltasks
@@ -779,14 +882,14 @@ end
 define showpid
     showtaskheader
     set $kgm_head_taskp = &default_pset.tasks
-    set $kgm_taskp = (Task *)($kgm_head_taskp->next)
+    set $kgm_taskp = (struct task *)($kgm_head_taskp->next)
     while $kgm_taskp != $kgm_head_taskp
 	set $kgm_procp = (struct proc *)$kgm_taskp->bsd_info
 	if (($kgm_procp != 0) && ($kgm_procp->p_pid == $arg0))
 	    showtaskint $kgm_taskp
 	    set $kgm_taskp = $kgm_head_taskp
 	else
-    	    set $kgm_taskp = (Task *)($kgm_taskp->pset_tasks.next)
+    	    set $kgm_taskp = (struct task *)($kgm_taskp->pset_tasks.next)
 	end
     end
 end
@@ -826,12 +929,12 @@ define showportheader
 end
 
 define showportmemberheader
-    printf "            port        recvname    "
+    printf "members     port        recvname    "
     printf "flags refs  mqueue      msgcount\n"
 end
 
 define showkmsgheader
-    printf "            kmsg        size        "
+    printf "messages    kmsg        size        "
     printf "disp msgid  remote-port local-port\n"
 end
 
@@ -854,7 +957,7 @@ define showkmsgint
     else
 	printf "s"
     end
-    printf "%5d  ", $kgm_kmsgh.msgh_msgid
+    printf "%5d  ", $kgm_kmsgh.msgh_id
     printf "0x%08x  ", $kgm_kmsgh.msgh_remote_port
     printf "0x%08x\n", $kgm_kmsgh.msgh_local_port
 end
@@ -862,7 +965,7 @@ end
 
 
 define showkobject
-    set $kgm_portp = (ipc_port_t)$arg0
+    set $kgm_portp = (struct ipc_port *)$arg0
     printf "0x%08x  kobject(", $kgm_portp->ip_kobject
     set $kgm_kotype = ($kgm_portp->ip_object.io_bits & 0x00000fff)
     if ($kgm_kotype == 1)
@@ -962,19 +1065,19 @@ define showkobject
 end
 
 define showportdestproc
-    set $kgm_portp = (ipc_port_t)$arg0
+    set $kgm_portp = (struct ipc_port *)$arg0
     set $kgm_spacep = $kgm_portp->data.receiver
 #   check against the previous cached value - this is slow
     if ($kgm_spacep != $kgm_destspacep)
 	set $kgm_destprocp = (struct proc *)0
         set $kgm_head_taskp = &default_pset.tasks
-        set $kgm_taskp = (Task *)($kgm_head_taskp->next)
+        set $kgm_taskp = (struct task *)($kgm_head_taskp->next)
         while (($kgm_destprocp == 0) && ($kgm_taskp != $kgm_head_taskp))
 	    set $kgm_destspacep = $kgm_taskp->itk_space
 	    if ($kgm_destspacep == $kgm_spacep)
 	       set $kgm_destprocp = (struct proc *)$kgm_taskp->bsd_info
 	    else
-    	       set $kgm_taskp = (Task *)($kgm_taskp->pset_tasks.next)
+    	       set $kgm_taskp = (struct task *)($kgm_taskp->pset_tasks.next)
             end
         end
     end
@@ -986,7 +1089,7 @@ define showportdestproc
 end
 
 define showportdest
-    set $kgm_portp = (ipc_port_t)$arg0
+    set $kgm_portp = (struct ipc_port *)$arg0
     set $kgm_spacep = $kgm_portp->data.receiver
     if ($kgm_spacep == ipc_space_kernel)
 	showkobject $kgm_portp
@@ -1002,7 +1105,7 @@ end
 
 define showportmember
     printf "            0x%08x  ", $arg0
-    set $kgm_portp = (ipc_port_t)$arg0
+    set $kgm_portp = (struct ipc_port *)$arg0
     printf "0x%08x  ", $kgm_portp->ip_object.io_receiver_name
     if ($kgm_portp->ip_object.io_bits & 0x80000000)
 	printf "A"
@@ -1021,7 +1124,7 @@ end
 
 define showportint
     printf "0x%08x  ", $arg0
-    set $kgm_portp = (ipc_port_t)$arg0
+    set $kgm_portp = (struct ipc_port *)$arg0
     printf "0x%08x  ", &($kgm_portp->ip_messages)
     printf "0x%08x  ", $kgm_portp->ip_object.io_receiver_name
     if ($kgm_portp->ip_object.io_bits & 0x80000000)
@@ -1031,7 +1134,7 @@ define showportint
     end
     printf "Port"
     printf "%5d  ", $kgm_portp->ip_object.io_references
-    set $kgm_destspacep = (ipc_space_t)0
+    set $kgm_destspacep = (struct ipc_space *)0
     showportdest $kgm_portp
     set $kgm_kmsgp = (ipc_kmsg_t)$kgm_portp->ip_messages.data.port.messages.ikmq_base
     if $arg1 && $kgm_kmsgp
@@ -1048,7 +1151,7 @@ end
 
 define showpsetint
     printf "0x%08x  ", $arg0
-    set $kgm_psetp = (ipc_pset_t)$arg0
+    set $kgm_psetp = (struct ipc_pset *)$arg0
     printf "0x%08x  ", &($kgm_psetp->ips_messages)
     printf "0x%08x  ", $kgm_psetp->ips_object.io_receiver_name
     if ($kgm_psetp->ips_object.io_bits & 0x80000000)
@@ -1058,22 +1161,23 @@ define showpsetint
     end
     printf "Set "
     printf "%5d  ", $kgm_psetp->ips_object.io_references
-    set $kgm_sublinksp = &($kgm_psetp->ips_messages.data.set_queue.wqs_sublinks)
-    set $kgm_wql = (wait_queue_link_t)$kgm_sublinksp->next
+    printf "0x%08x  ", $kgm_psetp->ips_object.io_receiver_name
+    set $kgm_setlinksp = &($kgm_psetp->ips_messages.data.set_queue.wqs_setlinks)
+    set $kgm_wql = (struct wait_queue_link *)$kgm_setlinksp->next
     set $kgm_found = 0
-    while ( (queue_entry_t)$kgm_wql != (queue_entry_t)$kgm_sublinksp)
-        set $kgm_portp = (ipc_port_t)((int)($kgm_wql->wql_element->wqe_queue) - ((int)$kgm_portoff))
+    while ( (queue_entry_t)$kgm_wql != (queue_entry_t)$kgm_setlinksp)
+        set $kgm_portp = (struct ipc_port *)((int)($kgm_wql->wql_element->wqe_queue) - ((int)$kgm_portoff))
 	if !$kgm_found  
-	    set $kgm_destspacep = (ipc_space_t)0
-	    showportdest $kgm_portp
+	    set $kgm_destspacep = (struct ipc_space *)0
+	    showportdestproc $kgm_portp
 	    showportmemberheader
 	    set $kgm_found = 1
 	end
 	showportmember $kgm_portp 0
-	set $kgm_wql = (wait_queue_link_t)$kgm_wql->wql_sublinks.next
+	set $kgm_wql = (struct wait_queue_link *)$kgm_wql->wql_setlinks.next
     end
-    if !$kgm_found   
-	printf "--n/e--     --n/e--\n"
+    if !$kgm_found
+	printf "--n/e--\n"
     end
 end
 
@@ -1097,14 +1201,15 @@ define showipcobject
 end
 
 define showmqueue
-    set $kgm_mqueue = *(ipc_mqueue_t)$arg0
-    set $kgm_psetoff = &(((ipc_pset_t)0)->ips_messages)
-    set $kgm_portoff = &(((ipc_port_t)0)->ip_messages)
-    if ($kgm_mqueue.data.set_queue.wqs_wait_queue.wq_issub)
+    set $kgm_mqueue = *(struct ipc_mqueue *)$arg0
+    set $kgm_psetoff = &(((struct ipc_pset *)0)->ips_messages)
+    set $kgm_portoff = &(((struct ipc_port *)0)->ip_messages)
+    if ($kgm_mqueue.data.set_queue.wqs_wait_queue.wq_type == 0xf1d1)
 	set $kgm_pset = (((int)$arg0) - ((int)$kgm_psetoff))
         showpsetheader
 	showpsetint $kgm_pset 1
-    else
+    end
+    if ($kgm_mqueue.data.set_queue.wqs_wait_queue.wq_type == 0xf1d0)
 	showportheader
 	set $kgm_port = (((int)$arg0) - ((int)$kgm_portoff))
 	showportint $kgm_port 1
@@ -1150,3 +1255,96 @@ document zprint
 |     (gdb) zprint
 end
 
+set $kdp_act_counter = 0
+
+define switchtoact
+	if (machine_slot[0].cpu_type == 18)
+		if ($kdp_act_counter == 0)
+		set $kdpstate = (struct savearea *) kdp.saved_state
+		end
+		set $kdp_act_counter = $kdp_act_counter + 1
+		set $newact = (struct thread_activation *) $arg0
+		if (($newact.thread)->kernel_stack == 0)
+		echo This activation does not have a stack.\n
+		echo continuation:
+		output/a $newact.thread.continuation
+		echo \n
+		end
+		set (struct savearea *) kdp.saved_state=$newact->mact->pcb
+		flush
+		set $pc=$newact->mact->pcb.save_srr0
+		update
+	else
+		echo switchtoact not implemented for this architecture.\n
+	end
+end
+
+document switchtoact  
+Syntax: switchtoact <address of activation>
+| This command allows gdb to examine the execution context and call
+| stack for the specified activation. For example, to view the backtrace
+| for an activation issue "switchtoact <address>", followed by "bt".
+| Before resuming execution, issue a "resetctx" command, to
+| return to the original execution context.
+end     
+
+define switchtoctx
+	if (machine_slot[0].cpu_type == 18)
+		if ($kdp_act_counter == 0)
+		set $kdpstate = (struct savearea *) kdp.saved_state
+		end
+		set $kdp_act_counter = $kdp_act_counter + 1
+		set (struct savearea *) kdp.saved_state=(struct savearea *) $arg0
+		flush
+		set $pc=((struct savearea *) $arg0)->save_srr0
+		update
+	else
+		echo switchtoctx not implemented for this architecture.\n
+	end
+end
+
+document switchtoctx  
+Syntax: switchtoctx <address of pcb>
+| This command allows gdb to examine an execution context and dump the
+| backtrace for this execution context.
+| Before resuming execution, issue a "resetctx" command, to
+| return to the original execution context.
+end     
+
+define resetctx
+	if (machine_slot[0].cpu_type == 18)
+		set (struct savearea *)kdp.saved_state=$kdpstate
+		flush
+		set $pc=((struct savearea *) kdp.saved_state)->save_srr0
+		update
+		set $kdp_act_counter = 0
+	else
+		echo resetctx not implemented for this architecture.\n
+	end
+end     
+        
+document resetctx
+| Syntax: resetctx
+| Returns to the original execution context. This command should be
+| issued if you wish to resume execution after using the "switchtoact"
+| or "switchtoctx" commands.
+end     
+
+define paniclog
+	set $kgm_panic_bufptr = debug_buf
+	set $kgm_panic_bufptr_max = debug_buf+debug_buf_size
+	while *$kgm_panic_bufptr && $kgm_panic_bufptr < $kgm_panic_bufptr_max
+		if *(char *)$kgm_panic_bufptr == 10
+			printf "\n"
+		else
+			printf "%c", *$kgm_panic_bufptr
+		end
+		set $kgm_panic_bufptr= (char *)$kgm_panic_bufptr + 1
+	end
+end
+
+document paniclog
+| Syntax: paniclog
+| Display the panic log information
+|
+end

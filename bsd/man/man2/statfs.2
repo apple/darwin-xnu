@@ -1,0 +1,146 @@
+.\"	$NetBSD: statfs.2,v 1.10 1995/06/29 11:40:48 cgd Exp $
+.\"
+.\" Copyright (c) 1989, 1991, 1993
+.\"	The Regents of the University of California.  All rights reserved.
+.\"
+.\" Redistribution and use in source and binary forms, with or without
+.\" modification, are permitted provided that the following conditions
+.\" are met:
+.\" 1. Redistributions of source code must retain the above copyright
+.\"    notice, this list of conditions and the following disclaimer.
+.\" 2. Redistributions in binary form must reproduce the above copyright
+.\"    notice, this list of conditions and the following disclaimer in the
+.\"    documentation and/or other materials provided with the distribution.
+.\" 3. All advertising materials mentioning features or use of this software
+.\"    must display the following acknowledgement:
+.\"	This product includes software developed by the University of
+.\"	California, Berkeley and its contributors.
+.\" 4. Neither the name of the University nor the names of its contributors
+.\"    may be used to endorse or promote products derived from this software
+.\"    without specific prior written permission.
+.\"
+.\" THIS SOFTWARE IS PROVIDED BY THE REGENTS AND CONTRIBUTORS ``AS IS'' AND
+.\" ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+.\" IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
+.\" ARE DISCLAIMED.  IN NO EVENT SHALL THE REGENTS OR CONTRIBUTORS BE LIABLE
+.\" FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
+.\" DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS
+.\" OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION)
+.\" HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT
+.\" LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
+.\" OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
+.\" SUCH DAMAGE.
+.\"
+.\"	@(#)statfs.2	8.3 (Berkeley) 2/11/94
+.\"
+.Dd February 11, 1994
+.Dt STATFS 2
+.Os
+.Sh NAME
+.Nm statfs
+.Nd get file system statistics
+.Sh SYNOPSIS
+.Fd #include <sys/param.h>
+.Fd #include <sys/mount.h>
+.Ft int
+.Fn statfs "const char *path" "struct statfs *buf"
+.Ft int
+.Fn fstatfs "int fd" "struct statfs *buf"
+.Sh DESCRIPTION
+.Fn Statfs
+returns information about a mounted file system.
+.Fa Path
+is the path name of any file within the mounted file system.
+.Fa Buf
+is a pointer to a statfs structure defined as follows:
+.Bd -literal
+typedef struct { int32_t val[2]; } fsid_t;
+
+#define MFSNAMELEN   16 /* length of fs type name, including nul */
+#define MNAMELEN     32	/* length of buffer for returned name */
+
+struct statfs {
+    short   f_type;	/* type of file system (unused; zero) */
+    short   f_flags;	/* copy of mount flags */
+    long    f_bsize;	/* fundamental file system block size */
+    long    f_iosize;	/* optimal transfer block size */
+    long    f_blocks;	/* total data blocks in file system */
+    long    f_bfree;	/* free blocks in fs */
+    long    f_bavail;	/* free blocks avail to non-superuser */
+    long    f_files;	/* total file nodes in file system */
+    long    f_ffree;	/* free file nodes in fs */
+    fsid_t  f_fsid;	/* file system id (super-user only) */
+    uid_t   f_owner;	/* user that mounted the file system */
+    long    f_spare[4];	/* spare for later */
+    char    f_fstypename[MFSNAMELEN]; /* fs type name */
+    char    f_mntonname[MNAMELEN];    /* directory on which mounted */
+    char    f_mntfromname[MNAMELEN];  /* mounted file system */
+};
+.Ed
+.Pp
+Fields that are undefined for a particular file system are set to -1.
+.Fn Fstatfs
+returns the same information about an open file referenced by descriptor
+.Fa fd .
+.Sh RETURN VALUES
+Upon successful completion, a value of 0 is returned.
+Otherwise, -1 is returned and the global variable
+.Va errno
+is set to indicate the error.
+.Sh ERRORS
+.Fn Statfs
+fails if one or more of the following are true:
+.Bl -tag -width Er
+.It Bq Er ENOTDIR
+A component of the path prefix of
+.Fa Path
+is not a directory.
+.It Bq Er ENAMETOOLONG
+The length of a component of
+.Fa path
+exceeds 
+.Dv {NAME_MAX}
+characters, or the length of
+.Fa path
+exceeds 
+.Dv {PATH_MAX}
+characters.
+.It Bq Er ENOENT
+The file referred to by
+.Fa path
+does not exist.
+.It Bq Er EACCES
+Search permission is denied for a component of the path prefix of
+.Fa path .
+.It Bq Er ELOOP
+Too many symbolic links were encountered in translating
+.Fa path .
+.It Bq Er EFAULT
+.Fa Buf
+or
+.Fa path
+points to an invalid address.
+.It Bq Er EIO
+An
+.Tn I/O
+error occurred while reading from or writing to the file system.
+.El
+.Pp
+.Fn Fstatfs
+fails if one or more of the following are true:
+.Bl -tag -width Er
+.It Bq Er EBADF
+.Fa fd
+is not a valid open file descriptor.
+.It Bq Er EFAULT
+.Fa Buf
+points to an invalid address.
+.It Bq Er EIO
+An
+.Tn I/O
+error occurred while reading from or writing to the file system.
+.El
+.Sh HISTORY
+The
+.Fn statfs
+function first appeared in 4.4BSD.

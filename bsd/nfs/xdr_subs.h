@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2002 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -66,6 +66,9 @@
 #ifndef _NFS_XDR_SUBS_H_
 #define _NFS_XDR_SUBS_H_
 
+#include <sys/appleapiopts.h>
+
+#ifdef __APPLE_API_PRIVATE
 /*
  * Macros used for conversion to/from xdr representation by nfs...
  * These use the MACHINE DEPENDENT routines ntohl, htonl
@@ -113,4 +116,5 @@
 	((long *)(t))[1] = htonl(((long *)(f))[_QUAD_LOWWORD]); \
 }
 
-#endif
+#endif /* __APPLE_API_PRIVATE */
+#endif /* _NFS_XDR_SUBS_H_ */

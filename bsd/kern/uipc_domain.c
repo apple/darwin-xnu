@@ -398,13 +398,24 @@ pfctlinput(cmd, sa)
 	int cmd;
 	struct sockaddr *sa;
 {
-	register struct domain *dp;
-	register struct protosw *pr;
+	pfctlinput2(cmd, sa, (void*)0);
+}
 
+void
+pfctlinput2(cmd, sa, ctlparam)
+	int cmd;
+	struct sockaddr *sa;
+	void *ctlparam;
+{
+	struct domain *dp;
+	struct protosw *pr;
+
+	if (!sa)
+		return;
 	for (dp = domains; dp; dp = dp->dom_next)
 		for (pr = dp->dom_protosw; pr; pr = pr->pr_next)
 			if (pr->pr_ctlinput)
-				(*pr->pr_ctlinput)(cmd, sa, (caddr_t)0);
+				(*pr->pr_ctlinput)(cmd, sa, ctlparam);
 }
 
 void

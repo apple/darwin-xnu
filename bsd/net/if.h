@@ -52,12 +52,14 @@
  * SUCH DAMAGE.
  *
  *	@(#)if.h	8.1 (Berkeley) 6/10/93
+ * $FreeBSD: src/sys/net/if.h,v 1.58.2.2 2001/07/24 19:10:18 brooks Exp $
  */
 
 #ifndef _NET_IF_H_
 #define	_NET_IF_H_
+#include <sys/appleapiopts.h>
 
-
+#ifdef __APPLE__
 /*
  * Define Data-Link event subclass, and associated
  * events.
@@ -80,14 +82,17 @@
 #define KEV_DL_LINK_ON	    13
 #define KEV_DL_PROTO_ATTACHED	14
 #define KEV_DL_PROTO_DETACHED	15
+#endif
 
 /*
  * <net/if.h> does not depend on <sys/time.h> on most other systems.  This
  * helps userland compatability.  (struct timeval ifi_lastchange)
  */
-
 #include <sys/time.h>
+
+#ifdef __APPLE__
 #include <net/if_var.h>
+#endif
 
 
 #define	IFF_UP		0x1		/* interface is up */
@@ -107,13 +112,13 @@
 #define	IFF_LINK2	0x4000		/* per link layer defined bit */
 #define	IFF_ALTPHYS	IFF_LINK2	/* use alternate physical connection */
 #define	IFF_MULTICAST	0x8000		/* supports multicast */
-#define IFF_SPLITTER	IFF_LINK2	/* Y splitter in force */
 
-#ifdef KERNEL_PRIVATE
+#if KERNEL_PRIVATE
 /* extended flags definitions:  (all bits are reserved for internal/future use) */
 #define IFEF_AUTOCONFIGURING	0x1
 #define IFEF_DVR_REENTRY_OK	0x20	/* When set, driver may be reentered from its own thread */
-#define IFEF_DETACH_DISABLED	0x80000000
+#define IFEF_INUSE	0x40000000 /* DLIL ifnet recycler, ifnet in use */
+#define IFEF_REUSE	0x20000000 /* DLIL ifnet recycler, ifnet is not new */
 #endif KERNEL_PRIVATE
 
 
@@ -190,7 +195,12 @@ struct	ifreq {
 #define	ifr_addr	ifr_ifru.ifru_addr	/* address */
 #define	ifr_dstaddr	ifr_ifru.ifru_dstaddr	/* other end of p-to-p link */
 #define	ifr_broadaddr	ifr_ifru.ifru_broadaddr	/* broadcast address */
+#ifdef __APPLE__
 #define	ifr_flags	ifr_ifru.ifru_flags	/* flags */
+#else
+#define	ifr_flags	ifr_ifru.ifru_flags[0]	/* flags */
+#define	ifr_prevflags	ifr_ifru.ifru_flags[1]	/* flags */
+#endif /* __APPLE__ */
 #define	ifr_metric	ifr_ifru.ifru_metric	/* metric */
 #define	ifr_mtu		ifr_ifru.ifru_mtu	/* mtu */
 #define ifr_phys	ifr_ifru.ifru_phys	/* physical wire */
@@ -224,6 +234,20 @@ struct ifmediareq {
 	int	ifm_count;		/* # entries in ifm_ulist array */
 	int	*ifm_ulist;		/* media words */
 };
+
+/* 
+ * Structure used to retrieve aux status data from interfaces.
+ * Kernel suppliers to this interface should respect the formatting
+ * needed by ifconfig(8): each line starts with a TAB and ends with
+ * a newline.  The canonical example to copy and paste is in if_tun.c.
+ */
+
+#define	IFSTATMAX	800		/* 10 lines of text */
+struct ifstat {
+	char	ifs_name[IFNAMSIZ];	/* if name, e.g. "en0" */
+	char	ascii[IFSTATMAX + 1];
+};
+
 /*
  * Structure used in SIOCGIFCONF request.
  * Used to retrieve interface configuration
@@ -240,6 +264,8 @@ struct	ifconf {
 #define	ifc_req	ifc_ifcu.ifcu_req	/* array of structures returned */
 };
 
+#ifdef __APPLE__
+#ifdef __APPLE_API_UNSTABLE
 /*
  * DLIL KEV_DL_PROTO_ATTACHED/DETACHED structure
  */
@@ -248,20 +274,21 @@ struct kev_dl_proto_data {
      u_long			proto_family;
      u_long			proto_remaining_count;
 };
+#endif /* __APPLE_API_UNSTABLE */
+#endif
 
 
 /*
  * Structure for SIOC[AGD]LIFADDR
  */
 struct if_laddrreq {
-	char iflr_name[IFNAMSIZ];
-	unsigned int flags;
-#define IFLR_PREFIX    0x8000  /* in: prefix given  out: kernel fills id */
-	unsigned int prefixlen;         /* in/out */
-	struct sockaddr_storage addr;   /* in/out */
-	struct sockaddr_storage dstaddr; /* out */
+	char	iflr_name[IFNAMSIZ];
+	u_int	flags;
+#define	IFLR_PREFIX	0x8000  /* in: prefix given  out: kernel fills id */
+	u_int	prefixlen;         /* in/out */
+	struct	sockaddr_storage addr;   /* in/out */
+	struct	sockaddr_storage dstaddr; /* out */
 };
-
 
 #ifdef KERNEL
 #ifdef MALLOC_DECLARE
@@ -271,22 +298,26 @@ MALLOC_DECLARE(M_IFMADDR);
 #endif
 
 #ifndef KERNEL
-struct if_nameindex { 
-        unsigned int    if_index;       /* 1, 2, ... */
-        char            *if_name;       /* null terminated name: "le0", ... */
-};      
- 
+struct if_nameindex {
+	u_int	if_index;	/* 1, 2, ... */
+	char	*if_name;	/* null terminated name: "le0", ... */
+};
+
 __BEGIN_DECLS
-unsigned int if_nametoindex __P((const char *));
-char *if_indextoname __P((unsigned int, char *));
-struct if_nameindex *if_nameindex __P((void));
-void if_freenameindex __P((struct if_nameindex *));
+u_int	 if_nametoindex __P((const char *));
+char	*if_indextoname __P((u_int, char *));
+struct	 if_nameindex *if_nameindex __P((void));
+void	 if_freenameindex __P((struct if_nameindex *));
 __END_DECLS
 #endif
 
-/* XXX - this should go away soon */
 #ifdef KERNEL
-#include <net/if_var.h>
+#ifndef __APPLE__
+struct proc;
+
+int	prison_if __P((struct proc *p, struct sockaddr *sa));
+#endif
+
 #endif
 
 #endif /* !_NET_IF_H_ */

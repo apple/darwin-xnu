@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2002 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -32,20 +32,14 @@
 /* 
  * loadable_fs.h - message struct for loading and initializing loadable
  *		   file systems.
- *
- * HISTORY
- * 26-Jun-90	Doug Mitchell at NeXT
- *	Created.
- * 5-Nov-91	Lee Boynton at NeXT
- *	Added support for initialization, labels, and WSM options
- * 29-Mar-99	A.Ramesh at Apple
- *	Added to Mac OS X, removed mach message related defns
  */
 
-#ifndef	_LOADABLE_FS_
-#define _LOADABLE_FS_
+#ifndef	_SYS_LOADABLE_FS_
+#define _SYS_LOADABLE_FS_
 
+#include <sys/appleapiopts.h>
 
+#ifdef __APPLE_API_UNSTABLE
 /*
  * Constants for Loadabls FS Utilities (in "/System/Library/Filesystems")
  *
@@ -122,4 +116,5 @@
 #define	MNTOPT_FS		"filesystem=" /* e.g. "filesystem=DOS" */
 #define	MNTOPT_REMOVABLE	"removable"
 
-#endif	/* _LOADABLE_FS_ */
+#endif /* __APPLE_API_UNSTABLE */
+#endif	/* _SYS_LOADABLE_FS_ */

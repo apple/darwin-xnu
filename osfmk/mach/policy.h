@@ -64,6 +64,18 @@
 #include <mach/boolean.h>
 #include <mach/vm_types.h>
 
+#include <sys/appleapiopts.h>
+
+/*
+ *	Old scheduling control interface
+ */
+typedef int 				policy_t;
+typedef integer_t			*policy_info_t;
+typedef integer_t			*policy_base_t;
+typedef integer_t			*policy_limit_t;
+
+#ifdef	__APPLE_API_UNSTABLE
+
 /*
  *	Policy definitions.  Policies should be powers of 2,
  *	but cannot be or'd together other than to test for a
@@ -88,15 +100,6 @@
 	((policy) != POLICY_TIMESHARE &&	\
 	 (policy) != POLICY_RR &&		\
 	 (policy) != POLICY_FIFO)
-
-
-/*
- *	New scheduling control interface
- */
-typedef int 				policy_t;
-typedef integer_t			*policy_info_t;
-typedef integer_t			*policy_base_t;
-typedef integer_t			*policy_limit_t;
 
 
 /*
@@ -223,5 +226,7 @@ struct policy_infos {
 typedef struct policy_bases		policy_base_data_t;
 typedef struct policy_limits		policy_limit_data_t;
 typedef struct policy_infos		policy_info_data_t;
+
+#endif	/* __APPLE_API_UNSTABLE */
 
 #endif /* _MACH_POLICY_H_ */

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2002 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -58,6 +58,9 @@
 #ifndef _SYS_TTYCHARS_H_
 #define _SYS_TTYCHARS_H_
 
+#include <sys/appleapiopts.h>
+
+#ifdef __APPLE_API_UNSTABLE
 /*
  * 4.3 COMPATIBILITY FILE
  *
@@ -83,4 +86,8 @@ struct ttychars {
 #ifdef USE_OLD_TTY
 #include <sys/ttydefaults.h>	/* to pick up character defaults */
 #endif
+
+#endif /* __APPLE_API_UNSTABLE */
+
 #endif /* !_SYS_TTYCHARS_H_ */
+

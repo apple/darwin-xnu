@@ -66,10 +66,12 @@
 #include <sys/socketvar.h>
 #include <sys/domain.h>
 #include <sys/protosw.h>
+#include <sys/syslog.h>
 
 #include <net/if.h>
 #include <net/route.h>
 #include <net/raw_cb.h>
+#include <netinet/in.h>
 
 MALLOC_DEFINE(M_RTABLE, "routetbl", "routing tables");
 
@@ -77,8 +79,6 @@ static struct	sockaddr route_dst = { 2, PF_ROUTE, };
 static struct	sockaddr route_src = { 2, PF_ROUTE, };
 static struct	sockaddr sa_zero   = { sizeof(sa_zero), AF_INET, };
 static struct	sockproto route_proto = { PF_ROUTE, };
-
-
 
 struct walkarg {
 	int	w_tmemsize;
@@ -166,9 +166,6 @@ rts_attach(struct socket *so, int proto, struct proc *p)
 	case AF_NS:
 		route_cb.ns_count++;
 		break;
-	case AF_ISO:
-		route_cb.iso_count++;
-		break;
 	}
 	rp->rcb_faddr = &route_src;
 	route_cb.any_count++;
@@ -221,9 +218,6 @@ rts_detach(struct socket *so)
 			break;
 		case AF_NS:
 			route_cb.ns_count--;
-			break;
-		case AF_ISO:
-			route_cb.iso_count--;
 			break;
 		}
 		route_cb.any_count--;
@@ -359,9 +353,40 @@ route_output(m, so)
 	case RTM_ADD:
 		if (gate == 0)
 			senderr(EINVAL);
+
+#ifdef __APPLE__
+/* XXX LD11JUL02 Special case for AOL 5.1.2 connectivity issue to AirPort BS (Radar 2969954)
+ * AOL is adding a circular route ("10.0.1.1/32 10.0.1.1") when establishing its ppp tunnel
+ * to the AP BaseStation by removing the default gateway and replacing it with their tunnel entry point.
+ * There is no apparent reason to add this route as there is a valid 10.0.1.1/24 route to the BS.
+ * That circular route was ignored on previous version of MacOS X because of a routing bug
+ * corrected with the merge to FreeBSD4.4 (a route generated from an RTF_CLONING route had the RTF_WASCLONED
+ * flag set but did not have a reference to the parent route) and that entry was left in the RT. This workaround is
+ * made in order to provide binary compatibility with AOL. 
+ * If we catch a process adding a circular route with a /32 from the routing socket, we error it out instead of
+ * confusing the routing table with a wrong route to the previous default gateway
+ */
+{
+		extern int check_routeselfref;
+#define satosinaddr(sa) (((struct sockaddr_in *)sa)->sin_addr.s_addr)
+
+		if (check_routeselfref && (dst && dst->sa_family == AF_INET) && 
+			(netmask && satosinaddr(netmask) == INADDR_BROADCAST) &&
+			(gate && satosinaddr(dst) == satosinaddr(gate))) {
+				log(LOG_WARNING, "route_output: circular route %ld.%ld.%ld.%ld/32 ignored\n",
+					(ntohl(satosinaddr(gate)>>24))&0xff,
+					(ntohl(satosinaddr(gate)>>16))&0xff,
+					(ntohl(satosinaddr(gate)>>8))&0xff,
+					(ntohl(satosinaddr(gate)))&0xff);
+					
+				senderr(EINVAL);
+		}
+}
+#endif	
 		error = rtrequest(RTM_ADD, dst, gate, netmask,
 					rtm->rtm_flags, &saved_nrt);
 		if (error == 0 && saved_nrt) {
+#ifdef __APPLE__
 		    /* 
 		     * If the route request specified an interface with
 		     * IFA and/or IFP, we set the requested interface on
@@ -391,12 +416,13 @@ route_output(m, so)
 		     */
 
 			rt_setif(saved_nrt, ifpaddr, ifaaddr, gate);
+#endif
 			rt_setmetrics(rtm->rtm_inits,
 				&rtm->rtm_rmx, &saved_nrt->rt_rmx);
 			saved_nrt->rt_rmx.rmx_locks &= ~(rtm->rtm_inits);
 			saved_nrt->rt_rmx.rmx_locks |=
 				(rtm->rtm_inits & rtm->rtm_rmx.rmx_locks);
-			saved_nrt->rt_refcnt--;
+			rtunref(saved_nrt);
 			saved_nrt->rt_genmask = genmask;
 		}
 		break;
@@ -406,7 +432,7 @@ route_output(m, so)
 				rtm->rtm_flags, &saved_nrt);
 		if (error == 0) {
 			if ((rt = saved_nrt))
-				rt->rt_refcnt++;
+				rtref(rt);
 			goto report;
 		}
 		break;
@@ -416,9 +442,9 @@ route_output(m, so)
 	case RTM_LOCK:
 		if ((rnh = rt_tables[dst->sa_family]) == 0) {
 			senderr(EAFNOSUPPORT);
-		} else if (rt = (struct rtentry *)
-				rnh->rnh_lookup(dst, netmask, rnh))
-			rt->rt_refcnt++;
+		} else if ((rt = (struct rtentry *)
+				rnh->rnh_lookup(dst, netmask, rnh)) != NULL)
+			rtref(rt);
 		else
 			senderr(ESRCH);
 		switch(rtm->rtm_type) {
@@ -471,10 +497,22 @@ route_output(m, so)
 			if ((rt->rt_flags & RTF_GATEWAY) && !gate)
 				gate = rt->rt_gateway;
 
+#ifdef __APPLE__
+			/*
+			 * On Darwin, we call rt_setif which contains the
+			 * equivalent to the code found at this very spot
+			 * in BSD.
+			 */
 			rt_setif(rt, ifpaddr, ifaaddr, gate);
+#endif
 
 			rt_setmetrics(rtm->rtm_inits, &rtm->rtm_rmx,
 					&rt->rt_rmx);
+#ifndef __APPLE__
+			/* rt_setif, called above does this for us on darwin */
+			if (rt->rt_ifa && rt->rt_ifa->ifa_rtrequest)
+			       rt->rt_ifa->ifa_rtrequest(RTM_ADD, rt, gate);
+#endif
 			if (genmask)
 				rt->rt_genmask = genmask;
 			/*
@@ -518,13 +556,19 @@ flush:
 	}
 	if (rtm) {
 		m_copyback(m, 0, rtm->rtm_msglen, (caddr_t)rtm);
+		if (m->m_pkthdr.len < rtm->rtm_msglen) {
+			m_freem(m);
+			m = NULL;
+		} else if (m->m_pkthdr.len > rtm->rtm_msglen)
+			m_adj(m, rtm->rtm_msglen - m->m_pkthdr.len);
 		Free(rtm);
 	}
 	if (rp)
 		rp->rcb_proto.sp_family = 0; /* Avoid us */
 	if (dst)
 		route_proto.sp_protocol = dst->sa_family;
-	raw_input(m, &route_proto, &route_src, &route_dst);
+	if (m)
+		raw_input(m, &route_proto, &route_src, &route_dst);
 	if (rp)
 		rp->rcb_proto.sp_family = PF_ROUTE;
     }
@@ -580,13 +624,11 @@ rt_setif(rt, Ifpaddr, Ifaaddr, Gate)
 		    if (oifa && oifa->ifa_rtrequest)
 			oifa->ifa_rtrequest(RTM_DELETE,
 						rt, Gate);
-		    IFAFREE(rt->rt_ifa);
-		    rt->rt_ifa = ifa;
-		    ifa->ifa_refcnt++;
+			rtsetifa(rt, ifa);
 		    rt->rt_ifp = ifp;
 		    rt->rt_rmx.rmx_mtu = ifp->if_mtu;
 		    if (rt->rt_ifa && rt->rt_ifa->ifa_rtrequest)
-			rt->rt_ifa->ifa_rtrequest(RTM_ADD, rt, Gate);
+				rt->rt_ifa->ifa_rtrequest(RTM_ADD, rt, Gate);
 		} else
 			goto call_ifareq;
 		return;
@@ -658,9 +700,6 @@ rt_msg1(type, rtinfo)
 	register struct sockaddr *sa;
 	int len, dlen;
 
-	m = m_gethdr(M_DONTWAIT, MT_DATA);
-	if (m == 0)
-		return (m);
 	switch (type) {
 
 	case RTM_DELADDR:
@@ -680,8 +719,18 @@ rt_msg1(type, rtinfo)
 	default:
 		len = sizeof(struct rt_msghdr);
 	}
-	if (len > MHLEN)
+	if (len > MCLBYTES)
 		panic("rt_msg1");
+	m = m_gethdr(M_DONTWAIT, MT_DATA);
+	if (m && len > MHLEN) {
+		MCLGET(m, M_DONTWAIT);
+		if ((m->m_flags & M_EXT) == 0) {
+			m_free(m);
+			m = NULL;
+		}
+	}
+	if (m == 0)
+		return (m);
 	m->m_pkthdr.len = m->m_len = len;
 	m->m_pkthdr.rcvif = 0;
 	rtm = mtod(m, struct rt_msghdr *);
@@ -914,7 +963,10 @@ rt_newmaddrmsg(cmd, ifma)
 
 	bzero((caddr_t)&info, sizeof(info));
 	ifaaddr = ifma->ifma_addr;
-	ifpaddr = ifp->if_addrhead.tqh_first->ifa_addr;
+	if (ifp && ifp->if_addrhead.tqh_first)
+		ifpaddr = ifp->if_addrhead.tqh_first->ifa_addr;
+	else
+		ifpaddr = NULL;
 	/*
 	 * If a link-layer address is present, present it as a ``gateway''
 	 * (similarly to how ARP entries, e.g., are presented).
@@ -998,6 +1050,10 @@ sysctl_iflist(af, w)
 		while ((ifa = ifa->ifa_link.tqe_next) != 0) {
 			if (af && af != ifa->ifa_addr->sa_family)
 				continue;
+#ifndef __APPLE__
+			if (curproc->p_prison && prison_if(curproc, ifa->ifa_addr))
+				continue;
+#endif
 			ifaaddr = ifa->ifa_addr;
 			netmask = ifa->ifa_netmask;
 			brdaddr = ifa->ifa_dstaddr;
@@ -1019,7 +1075,6 @@ sysctl_iflist(af, w)
 	}
 	return (0);
 }
-
 
 static int
 sysctl_rtsock SYSCTL_HANDLER_ARGS
@@ -1066,18 +1121,15 @@ sysctl_rtsock SYSCTL_HANDLER_ARGS
 
 SYSCTL_NODE(_net, PF_ROUTE, routetable, CTLFLAG_RD, sysctl_rtsock, "");
 
-
-
 /*
  * Definitions of protocols supported in the ROUTE domain.
  */
 
 struct domain routedomain;		/* or at least forward */
 
-
 static struct protosw routesw[] = {
 { SOCK_RAW,	&routedomain,	0,		PR_ATOMIC|PR_ADDR,
-  0,	route_output,	raw_ctlinput,	0,
+  0,		route_output,	raw_ctlinput,	0,
   0,
   raw_init,	0,		0,		0,
   0, &route_usrreqs, 0, 0
@@ -1090,6 +1142,3 @@ struct domain routedomain =
 
 DOMAIN_SET(route);
 
-#if MIP6
-#include <net/rtsock_mip.c>
-#endif

@@ -205,27 +205,20 @@ nullfs_unmount(mp, mntflags, p)
 	struct vnode *nullm_rootvp = MOUNTTONULLMOUNT(mp)->nullm_rootvp;
 	int error;
 	int flags = 0;
+	int force = 0;
 
 #ifdef NULLFS_DIAGNOSTIC
 	printf("nullfs_unmount(mp = %x)\n", mp);
 #endif
 
-	if (mntflags & MNT_FORCE)
+	if (mntflags & MNT_FORCE) {
 		flags |= FORCECLOSE;
+		force = 1;
+	}
 
-	/*
-	 * Clear out buffer cache.  I don't think we
-	 * ever get anything cached at this level at the
-	 * moment, but who knows...
-	 */
-#if 0
-	mntflushbuf(mp, 0); 
-	if (mntinvalbuf(mp, 1))
+	if ( (nullm_rootvp->v_usecount > 1) && !force )
 		return (EBUSY);
-#endif
-	if (nullm_rootvp->v_usecount > 1)
-		return (EBUSY);
-	if (error = vflush(mp, nullm_rootvp, flags))
+	if ( (error = vflush(mp, nullm_rootvp, flags)) && !force )
 		return (error);
 
 #ifdef NULLFS_DIAGNOSTIC

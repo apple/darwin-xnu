@@ -48,8 +48,11 @@ ENTRY(getrpc, TAG_NO_FRAME_USED)
 /* Mask and unmask interrupts at the processor level */	
 ENTRY(interrupt_disable, TAG_NO_FRAME_USED)
 	mfmsr	r0
+	rlwinm	r0,r0,0,MSR_FP_BIT+1,MSR_FP_BIT-1	; Force floating point off
+	rlwinm	r0,r0,0,MSR_VEC_BIT+1,MSR_VEC_BIT-1	; Force vectors off
 	rlwinm	r0,	r0,	0,	MSR_EE_BIT+1,	MSR_EE_BIT-1
 	mtmsr	r0
+	isync
 	blr
 
 ENTRY(interrupt_enable, TAG_NO_FRAME_USED)
@@ -68,8 +71,11 @@ ENTRY(interrupt_enable, TAG_NO_FRAME_USED)
 /* Mask and unmask interrupts at the processor level */	
 ENTRY(db_interrupt_disable, TAG_NO_FRAME_USED)
 	mfmsr	r0
+	rlwinm	r0,r0,0,MSR_FP_BIT+1,MSR_FP_BIT-1	; Force floating point off
+	rlwinm	r0,r0,0,MSR_VEC_BIT+1,MSR_VEC_BIT-1	; Force vectors off
 	rlwinm	r0,	r0,	0,	MSR_EE_BIT+1,	MSR_EE_BIT-1
 	mtmsr	r0
+	isync
 	blr
 
 ENTRY(db_interrupt_enable, TAG_NO_FRAME_USED)
@@ -87,9 +93,12 @@ ENTRY(db_interrupt_enable, TAG_NO_FRAME_USED)
 ENTRY(Call_Debugger, TAG_NO_FRAME_USED)
 
 			mfmsr	r7				; Get the current MSR
+			rlwinm	r7,r7,0,MSR_FP_BIT+1,MSR_FP_BIT-1	; Force floating point off
+			rlwinm	r7,r7,0,MSR_VEC_BIT+1,MSR_VEC_BIT-1	; Force vectors off
 			mflr	r0				; Save the return
 			rlwinm	r7,r7,0,MSR_EE_BIT+1,MSR_EE_BIT-1	; Turn off interruptions
 			mtmsr	r7				; Do it 
+			isync
 			mfsprg	r8,0			; Get the per_proc block
 			stw		r0,FM_LR_SAVE(r1)	; Save return on current stack
 			

@@ -26,6 +26,7 @@
 
 #ifndef _NET_ETHERNET_H_
 #define _NET_ETHERNET_H_
+#include <sys/appleapiopts.h>
 
 /*
  * The number of bytes in an ethernet (MAC) address.
@@ -101,11 +102,13 @@ struct	ether_addr {
 #define	ETHERMTU	(ETHER_MAX_LEN-ETHER_HDR_LEN-ETHER_CRC_LEN)
 #define	ETHERMIN	(ETHER_MIN_LEN-ETHER_HDR_LEN-ETHER_CRC_LEN)
 
-#if KERNEL
+#ifdef KERNEL
+#ifdef __APPLE_API_PRIVATE
 struct	ether_addr *ether_aton __P((char *));
+#endif /* __APPLE_API_PRIVATE */
 #endif
 
-#if !KERNEL
+#ifndef KERNEL
 #include <sys/cdefs.h>
 
 /*

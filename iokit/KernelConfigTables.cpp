@@ -28,11 +28,11 @@
  */
 const char * gIOKernelKmods =
 "{
-    'com.apple.kernel'                         = '5.5';
-    'com.apple.kernel.bsd'                     = '5.5';
-    'com.apple.kernel.iokit'                   = '5.5';
-    'com.apple.kernel.libkern'                 = '5.5';
-    'com.apple.kernel.mach'                    = '5.5';
+    'com.apple.kernel'                         = '6.0';
+    'com.apple.kernel.bsd'                     = '6.0';
+    'com.apple.kernel.iokit'                   = '6.0';
+    'com.apple.kernel.libkern'                 = '6.0';
+    'com.apple.kernel.mach'                    = '6.0';
     'com.apple.iokit.IOADBFamily'              = '1.1';
     'com.apple.iokit.IONVRAMFamily'            = '1.1';
     'com.apple.iokit.IOSystemManagementFamily' = '1.1';
@@ -57,105 +57,20 @@ const char * gIOKernelConfigTables =
         'IONameMatch'		= 'cpu';
 	'IOProbeScore'		= 100:32;
     },
-"
-#if 0
-"
-    {
-        'IOClass'		= PowerSurgePE;
-        'IOProviderClass'	= IOPlatformExpertDevice;
-        'IONameMatch'		= ('AAPL,7300', 'AAPL,7500', 'AAPL,8500', 'AAPL,9500');
-        'IOProbeScore'		= 10000:32;
-    },
-"
-#endif
-"
-"
-#if 0
-"
-    {
-        'IOClass'		= PowerStarPE;
-        'IOProviderClass'	= IOPlatformExpertDevice;
-        'IONameMatch'		= ('AAPL,3400/2400', 'AAPL,3500');
-        'IOProbeScore'		= 10000:32;
-    },
-"
-#endif
-"
-    {
-        'IOClass'		= GossamerPE;
-        'IOProviderClass'	= IOPlatformExpertDevice;
-	'IONameMatch'		= ('AAPL,Gossamer', 'AAPL,PowerMac G3', 'AAPL,PowerBook1998', 'iMac,1', 'PowerMac1,1', 'PowerMac1,2', 'PowerBook1,1');
-	'IOProbeScore'		= 10000:32;
-    },
-    {
-	'IOClass'		= GossamerCPU;
-	'IOProviderClass'	= IOPlatformDevice;
-        'IONameMatch'		= 'cpu';
-	'IOProbeScore'		= 1000:32;
-    },
-"
-#if 0
-"
-    {
-        'IOClass'         	= PowerExpressPE;
-        'IOProviderClass'	= IOPlatformExpertDevice;
-	'IONameMatch'		= 'AAPL,9700';
-	'IOProbeScore'		= 10000:32;
-	'senses'		= <00000000 00000000 00000000 00000000 "
-                                  "00000000 00000000 00000000 00000000 "
-                                  "00000000 00000000 00000000 00000000 "
-                                  "00000000 00000000 00000000 00000000 "
-                                  "00000000 00000000 00000000 00000000 "
-                                  "00000000 00000000 00000000 00000000 "
-                                  "00000000 00000000 00000001 00000001 "
-                                  "00000001 00000001 00000001 00000001 "
-                                  "00000001 00000001 00000001 00000001 "
-                                  "00000001 00000001>;
-    },
-"
-#endif
-#if 0
-"
-    {
-        'IOClass'		= GrandCentral;
-        'IOProviderClass'	= IOPCIDevice;
-        'IONameMatch'		= gc;
-	'IOProbeScore'		= 2000:32;
-    },
-"
-#endif
-"
-    {
-        'IOClass'		= OHare;
-        'IOProviderClass'	= IOPCIDevice;
-        'IONameMatch'		= ('ohare', 'pci106b,7');
-    },
     {
         'IOClass'              = AppleNMI;
         'IOProviderClass'      = AppleMacIODevice;
         'IONameMatch'          = 'programmer-switch';
     },
     {
-        'IOClass'		= AppleCuda;
-        'IOProviderClass'	= AppleVIADevice;
-        'IONameMatch'		= cuda;
-    },"
-#if 0
-" {
-        'IOClass'		= ApplePMU;
-        'IOProviderClass'	= AppleVIADevice;
-        'IONameMatch'		= pmu;
-    },"
-#endif
-    "{   
-        'IOClass'               = IOPMUADBController;
-        'IOProviderClass'       = AppleMacIODevice;
-        'IONameMatch'           = adb;
-    }, 
-    {
         'IOClass'		= AppleNVRAM;
         'IOProviderClass'	= AppleMacIODevice;
         'IONameMatch'		= nvram;
+    }, 
+    {   
+        'IOClass'               = IOPMUADBController;
+        'IOProviderClass'       = AppleMacIODevice;
+        'IONameMatch'           = adb;
     }
 "
 #endif /* PPC */
@@ -190,18 +105,6 @@ const char * gIOKernelConfigTables =
        'IOClass'           = AppleIntelClock;
        'IOProviderClass'   = IOPlatformDevice;
        'IONameMatch'       = intel-clock;
-    },
-    {
-       'IOClass'           = AppleATAPIIX;
-       'IOProviderClass'   = IOPCIDevice;
-       'IOPCIMatch'        = '0x12308086 0x70108086 0x71118086 0x24118086 0x24218086 0x244a8086 0x244b8086';
-       'IOMatchCategory'   = AppleATAPIIXChannel0;
-    },
-    {
-       'IOClass'           = AppleATAPIIX;
-       'IOProviderClass'   = IOPCIDevice;
-       'IOPCIMatch'        = '0x12308086 0x70108086 0x71118086 0x24118086 0x24218086 0x244a8086 0x244b8086';
-       'IOMatchCategory'   = AppleATAPIIXChannel1;
     }
 "
 #endif /* i386 */

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2002 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -28,19 +28,15 @@
  *
  */
 
-/*
- * mach_swapon.h
- *
- * Definitions for the mach_swapon system call.
- *
- * HISTORY
- * 28-Feb-88  Peter King (king) at NeXT, Inc.
- *	Created
- */
-
 #ifndef	_MACH_SWAPON_H
 #define	_MACH_SWAPON_H
 
+#include <sys/appleapiopts.h>
+
+#warning obsolete header file! Please delete the include from your sources.
+
+#ifdef __APPLE_API_OBSOLETE
 #define	MS_PREFER	0x1	/* This device/file is preferred */
+#endif /* __APPLE_API_OBSOLETE */
 
 #endif	/* _MACH_SWAPON_H */

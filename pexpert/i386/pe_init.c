@@ -30,10 +30,11 @@
 #include <pexpert/boot.h>
 #include <pexpert/device_tree.h>
 #include <pexpert/pe_images.h>
-#include <kern/debug.h>
+#include <kern/sched_prim.h>
 
 #include "fakePPCStructs.h"
 #include "fakePPCDeviceTree.h"
+#include "boot_images.h"
 
 /* extern references */
 extern void pe_identify_machine(void * args);
@@ -105,11 +106,9 @@ int PE_initialize_console( PE_Video * info, int op )
 
 void PE_init_iokit(void)
 {
-    long *          dt;
-    void *          desc;
-    unsigned char * data;
-    unsigned char * clut;
-
+    long * dt;
+    int    i;
+        
     typedef struct {
         char            name[32];
         unsigned long   length;
@@ -130,7 +129,6 @@ void PE_init_iokit(void)
     if ( dt )
     {
         DriversPackageProp * prop = (DriversPackageProp *) gDriversProp.address;
-        int i;
 
         /* Copy driver info in kernBootStruct to fake device tree */
 
@@ -171,13 +169,21 @@ void PE_init_iokit(void)
     DTInit(dt);
 
     /*
+     * Fetch the CLUT and the noroot image.
+     */
+    bcopy( bootClut, appleClut8, sizeof(appleClut8) );
+
+    default_noroot.width  = kFailedBootWidth;
+    default_noroot.height = kFailedBootHeight;
+    default_noroot.dx     = 0;
+    default_noroot.dy     = kFailedBootOffset;
+    default_noroot_data   = failedBootPict;
+
+    /*
      * Initialize the spinning wheel (progress indicator).
      */
-    clut = appleClut8;
-    desc = &default_progress;
-    data = default_progress_data;
-
-    vc_progress_initialize( desc, data, clut );
+    vc_progress_initialize( &default_progress, default_progress_data,
+                            (unsigned char *) appleClut8 );
 
     PE_initialize_console( (PE_Video *) 0, kPEAcquireScreen );
 
@@ -188,9 +194,6 @@ void PE_init_platform(boolean_t vm_initialized, void * args)
 {
 	if (PE_state.initialized == FALSE)
 	{
-        extern unsigned int halt_in_debugger, disableDebugOuput;
-        unsigned int        debug_arg;
-
         PE_kbp = (KERNBOOTSTRUCT *) args;
 
 	    PE_state.initialized        = TRUE;
@@ -211,19 +214,6 @@ void PE_init_platform(boolean_t vm_initialized, void * args)
              * VESA frame buffer.
              */
             PE_state.video.v_display = 0;
-        }
-
-        /*
-         * If DB_HALT flag is set, then cause a breakpoint to the debugger
-         * immediately after the kernel debugger has been initialized.
-         *
-         * If DB_PRT flag is set, then enable debugger printf.
-         */
-        disableDebugOuput = TRUE; /* FIXME: override osfmk/i386/AT386/model_dep.c */
-
-        if (PE_parse_boot_arg("debug", &debug_arg)) {
-            if (debug_arg & DB_HALT) halt_in_debugger = 1;
-            if (debug_arg & DB_PRT)  disableDebugOuput = FALSE; 
         }
     }
 
@@ -283,9 +273,10 @@ int PE_current_console( PE_Video * info )
     return (0);
 }
 
-void PE_display_icon( unsigned int flags,
-                      const char * name )
+void PE_display_icon( unsigned int flags, const char * name )
 {
+    if ( default_noroot_data )
+        vc_display_icon( &default_noroot, default_noroot_data );
 }
 
 extern boolean_t PE_get_hotkey( unsigned char key )

@@ -389,13 +389,13 @@ fifo_select(ap)
 	struct file filetmp;
 	int ready;
 
-	if (ap->a_fflags & FREAD) {
+	if (ap->a_which & FREAD) {
 		filetmp.f_data = (caddr_t)ap->a_vp->v_fifoinfo->fi_readsock;
 		ready = soo_select(&filetmp, ap->a_which, ap->a_wql, ap->a_p);
 		if (ready)
 			return (ready);
 	}
-	if (ap->a_fflags & FWRITE) {
+	if (ap->a_which & FWRITE) {
 		filetmp.f_data = (caddr_t)ap->a_vp->v_fifoinfo->fi_writesock;
 		ready = soo_select(&filetmp, ap->a_which, ap->a_wql, ap->a_p);
 		if (ready)

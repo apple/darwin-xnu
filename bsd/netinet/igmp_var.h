@@ -60,6 +60,9 @@
 
 #ifndef _NETINET_IGMP_VAR_H_
 #define _NETINET_IGMP_VAR_H_
+#include <sys/appleapiopts.h>
+
+#ifdef __APPLE_API_UNSTABLE
 
 /*
  * Internet Group Management Protocol (IGMP),
@@ -83,6 +86,7 @@ struct igmpstat {
 };
 
 #ifdef KERNEL
+#ifdef __APPLE_API_PRIVATE
 #define IGMP_RANDOM_DELAY(X) (random() % (X) + 1)
 
 /*
@@ -114,6 +118,7 @@ void	igmp_slowtimo __P((void));
 
 SYSCTL_DECL(_net_inet_igmp);
 
+#endif /* __APPLE_API_PRIVATE */
 #endif
 
 /*
@@ -127,6 +132,6 @@ SYSCTL_DECL(_net_inet_igmp);
 	{ "stats", CTLTYPE_STRUCT }, \
 }
 
+#endif /* __APPLE_API_UNSTABLE */
 #endif
-
 

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2002 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -28,9 +28,29 @@
 
 typedef int sync_policy_t;
 
-#define SYNC_POLICY_FIFO		0
-#define SYNC_POLICY_FIXED_PRIORITY	1
-#define SYNC_POLICY_PREPOST		2
-#define SYNC_POLICY_MAX			2
+/*
+ *	These options define the wait ordering of the synchronizers
+ */
+#define SYNC_POLICY_FIFO		0x0
+#define SYNC_POLICY_FIXED_PRIORITY	0x1
+#define SYNC_POLICY_REVERSED		0x2
+#define SYNC_POLICY_ORDER_MASK		0x3
+#define SYNC_POLICY_LIFO		(SYNC_POLICY_FIFO|SYNC_POLICY_REVERSED)
+
+/*
+ *	These options provide addition (kernel-private) behaviors
+ */
+#ifdef	KERNEL_PRIVATE
+#include <sys/appleapiopts.h>
+
+#ifdef  __APPLE_API_EVOLVING
+
+#define SYNC_POLICY_PREPOST		0x4
+
+#endif  /* __APPLE_API_EVOLVING */
+
+#endif 	/* KERNEL_PRIVATE */
+
+#define SYNC_POLICY_MAX			0x7
 
 #endif 	/*_SYNC_POLICY_H_*/

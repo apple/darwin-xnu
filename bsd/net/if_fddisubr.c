@@ -88,30 +88,8 @@
 #include <netipx/ipx_if.h>
 #endif
 
-#if NS
-#include <netns/ns.h>
-#include <netns/ns_if.h>
-#endif
-
 #if DECNET
 #include <netdnet/dn.h>
-#endif
-
-#if ISO
-#include <netiso/argo_debug.h>
-#include <netiso/iso.h>
-#include <netiso/iso_var.h>
-#include <netiso/iso_snpac.h>
-#endif
-
-#if LLC
-#include <netccitt/dll.h>
-#include <netccitt/llc_var.h>
-#endif
-
-
-#if LLC && CCITT
-extern struct ifqueue pkintrq;
 #endif
 
 #include "bpfilter.h"
@@ -161,7 +139,7 @@ fddi_output(ifp, m0, dst, rt0)
 	if (rt = rt0) {
 		if ((rt->rt_flags & RTF_UP) == 0) {
 			if (rt0 = rt = RTALLOC1(dst, 1))
-				rt->rt_refcnt--;
+				rtunref(rt);
 			else 
 				senderr(EHOSTUNREACH);
 		}

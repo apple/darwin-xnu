@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2002 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -27,6 +27,10 @@
 #ifndef	_BSD_I386_CPU_H_
 #define	_BSD_I386_CPU_H_
  
+#include <sys/appleapiopts.h>
+
+#ifdef __APPLE_API_OBSOLETE
 #define	cpu_number()	(0)
+#endif /* __APPLE_API_OBSOLETE */
 
 #endif	/* _BSD_I386_CPU_H_ */

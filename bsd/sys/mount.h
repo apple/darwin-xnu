@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2002 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -58,6 +58,7 @@
 #ifndef _SYS_MOUNT_H_
 #define	_SYS_MOUNT_H_
 
+#include <sys/appleapiopts.h>
 #ifndef KERNEL
 #include <sys/ucred.h>
 #endif
@@ -115,6 +116,7 @@ struct statfs {
 #endif
 };
 
+#ifdef __APPLE_API_PRIVATE
 /*
  * Structure per mounted file system.  Each mounted file system has an
  * array of operations and an instance record.  The file systems are
@@ -140,6 +142,7 @@ struct mount {
 	u_int16_t	mnt_segreadcnt;	/* Max. segment count for read */
 	u_int16_t	mnt_segwritecnt;	/* Max. segment count for write */
 };
+#endif /* __APPLE_API_PRIVATE */
 
 /*
  * User specifiable flags.
@@ -257,6 +260,7 @@ struct export_args {
 	int	ex_masklen;		/* and the smask length */
 };
 
+#ifdef __APPLE_API_UNSTABLE
 /*
  * Filesystem configuration information. One of these exists for each
  * type of filesystem supported by the kernel. These are searched at
@@ -272,8 +276,10 @@ struct vfsconf {
 	struct	vfsconf *vfc_next;	/* next in list */
 };
 
-#ifdef KERNEL
+#endif /*__APPLE_API_UNSTABLE */
 
+#ifdef KERNEL
+#ifdef __APPLE_API_UNSTABLE
 extern int maxvfsconf;		/* highest defined filesystem type */
 extern struct vfsconf *vfsconf;	/* head of list of filesystem types */
 extern int maxvfsslots;		/* Maximum slots available to be used */
@@ -356,13 +362,16 @@ struct	netcred *vfs_export_lookup __P((struct mount *, struct netexport *,
 void	vfs_getnewfsid __P((struct mount *));
 struct	mount *vfs_getvfs __P((fsid_t *));
 int	vfs_mountedon __P((struct vnode *));
+void	vfs_unbusy __P((struct mount *, struct proc *));
+#ifdef __APPLE_API_PRIVATE
 int	vfs_mountroot __P((void));
 int	vfs_rootmountalloc __P((char *, char *, struct mount **));
-void	vfs_unbusy __P((struct mount *, struct proc *));
 void	vfs_unmountall __P((void));
+#endif /* __APPLE_API_PRIVATE */
 extern	CIRCLEQ_HEAD(mntlist, mount) mountlist;
 extern	struct slock mountlist_slock;
 
+#endif /* __APPLE_API_UNSTABLE */
 #else /* !KERNEL */
 
 #include <sys/cdefs.h>
@@ -375,6 +384,7 @@ int	getmntinfo __P((struct statfs **, int));
 int	mount __P((const char *, const char *, int, void *));
 int	statfs __P((const char *, struct statfs *));
 int	unmount __P((const char *, int));
+int	getvfsbyname __P((const char *, struct vfsconf *));
 __END_DECLS
 
 #endif /* KERNEL */

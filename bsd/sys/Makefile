@@ -20,19 +20,20 @@ EXPINC_SUBDIRS_PPC = \
 EXPINC_SUBDIRS_I386 = \
 
 DATAFILES = \
-	acct.h attr.h buf.h callout.h cdefs.h cdio.h chio.h clist.h conf.h \
-	dir.h dirent.h disklabel.h disktab.h dkbad.h dkstat.h dmap.h domain.h \
+	appleapiopts.h \
+	acct.h attr.h buf.h callout.h cdefs.h clist.h conf.h \
+	dir.h dirent.h disk.h disklabel.h disktab.h dkstat.h dmap.h domain.h \
 	errno.h ev.h exec.h fcntl.h file.h filedesc.h filio.h gmon.h ioccom.h ioctl.h \
 	ioctl_compat.h ipc.h kernel.h kern_event.h ktrace.h loadable_fs.h lock.h lockf.h mach_swapon.h malloc.h \
-	kdebug.h linker_set.h md5.h\
+	kdebug.h linker_set.h md5.h kern_control.h \
 	mbuf.h mman.h mount.h msgbuf.h mtio.h namei.h netport.h param.h paths.h \
-	proc.h protosw.h ptrace.h queue.h random.h reboot.h resource.h resourcevar.h \
-	select.h semaphore.h shm.h signal.h signalvar.h socket.h socketvar.h sockio.h stat.h \
-	syscall.h sysctl.h syslimits.h syslog.h systm.h termios.h  time.h \
+	proc.h protosw.h ptrace.h queue.h quota.h random.h reboot.h resource.h resourcevar.h \
+	select.h sem.h semaphore.h shm.h signal.h signalvar.h socket.h socketvar.h sockio.h stat.h \
+	syscall.h sysctl.h syslimits.h syslog.h systm.h sys_domain.h termios.h  time.h \
 	timeb.h times.h tprintf.h trace.h tty.h  ttychars.h ttycom.h \
-	ttydefaults.h ttydev.h  types.h ubc.h ucred.h uio.h un.h unistd.h unpcb.h \
+	ttydefaults.h ttydev.h  types.h ubc.h ucontext.h ucred.h uio.h un.h unistd.h unpcb.h \
 	user.h utfconv.h utsname.h ux_exception.h vadvise.h vcmd.h  version.h vlimit.h \
-	vm.h vmmeter.h vmparam.h vnode.h vnode_if.h vstat.h wait.h 
+	vm.h vmmeter.h vmparam.h vnioctl.h vnode.h vnode_if.h vstat.h wait.h 
 
 INSTALL_MI_LIST	= ${DATAFILES}
 

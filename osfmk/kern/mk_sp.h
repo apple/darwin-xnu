@@ -35,13 +35,16 @@ void		_mk_sp_thread_unblock(
 				thread_t		thread);
 
 void		_mk_sp_thread_done(
-				thread_t		old_thread);
+				thread_t		old_thread,
+				thread_t		new_thread,
+				processor_t		processor);
 
 void		_mk_sp_thread_begin(
-				thread_t		new_thread);
+				thread_t		new_thread,
+				processor_t		processor);
 
 void		_mk_sp_thread_dispatch(
-				thread_t		old_thread);
+				thread_t		thread);
 
 kern_return_t	_mk_sp_thread_switch(
 					thread_act_t		hint_act,

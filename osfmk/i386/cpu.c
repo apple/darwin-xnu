@@ -27,8 +27,11 @@
 
 #include <kern/machine.h>
 #include <kern/misc_protos.h>
+#include <kern/cpu_data.h>
 #include <kern/processor.h>
 #include <mach/processor_info.h>
+
+cpu_data_t	cpu_data[NCPUS];
 
 /*ARGSUSED*/
 kern_return_t

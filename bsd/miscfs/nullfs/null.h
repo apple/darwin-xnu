@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2002 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -59,7 +59,12 @@
  *
  *	null.h	8.2 (Berkeley) 1/21/94
  */
+#ifdef __NULLFS_NULL_H__
+#define __NULLFS_NULL_H__
 
+#include  <sys/appleapiopts.h>
+
+#ifdef __APPLE_API_PRIVATE
 struct null_args {
 	char		*target;	/* Target of loopback  */
 };
@@ -94,3 +99,6 @@ extern struct vnode *null_checkvp __P((struct vnode *vp, char *fil, int lno));
 extern int (**null_vnodeop_p)(void *);
 extern struct vfsops null_vfsops;
 #endif /* KERNEL */
+
+#endif /* __APPLE_API_PRIVATE */
+#endif /* __NULLFS_NULL_H__ */

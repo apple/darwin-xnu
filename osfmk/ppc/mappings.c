@@ -199,14 +199,16 @@ boolean_t mapping_remove(pmap_t pmap, vm_offset_t va) {			/* Remove a single map
 	mp = hw_lock_phys_vir(pmap->space, va);						/* Lock the physical entry for this mapping */
 
 	if(!mp) {													/* Did we find one? */
+		splx(s);											/* Allow 'rupts now */
 		if(mp = (mapping *)hw_rem_blk(pmap, va, va)) {			/* No normal pages, try to remove an odd-sized one */
-			splx(s);											/* Allow 'rupts now */
 			
 			if((unsigned int)mp & 1) {							/* Make sure we don't unmap a permanent one */
-				blm = (blokmap *)hw_cpv((mapping *)((unsigned int)mp & 0xFFFFFFFE));		/* Get virtual address */
+				blm = (blokmap *)hw_cpv((mapping *)((unsigned int)mp & 0xFFFFFFFC));		/* Get virtual address */
 				panic("mapping_remove: attempt to unmap a permanent mapping - pmap = %08X, va = %08X, mapping = %08X\n",
 					pmap, va, blm);
 			}
+			while ((unsigned int)mp & 2)
+				mp = (mapping *)hw_rem_blk(pmap, va, va);
 #if 0
 			blm = (blokmap *)hw_cpv(mp);						/* (TEST/DEBUG) */
 			kprintf("mapping_remove: removed block map - bm=%08X; start=%08X; end=%08X; PTEr=%08X\n",	/* (TEST/DEBUG) */
@@ -216,7 +218,6 @@ boolean_t mapping_remove(pmap_t pmap, vm_offset_t va) {			/* Remove a single map
 			debugLog2(2, 1, 0);									/* End mapping_remove */
 			return TRUE;										/* Tell them we did it */
 		}
-		splx(s);												/* Restore the interrupt level */
 		debugLog2(2, 0, 0);										/* end mapping_remove */
 		return FALSE;											/* Didn't find any, return FALSE... */
 	}
@@ -290,7 +291,7 @@ void mapping_purge_pmap(struct phys_entry *pp, pmap_t pmap) {		/* Remove all map
 
 		mpv = hw_cpv(mp);					/* Get the virtual address */
 		if(mpv->pmap != pmap) {
-			mp = ((unsigned int)mpv->next & ~PHYS_FLAGS);
+			mp = (mapping *)((unsigned int)mpv->next & ~PHYS_FLAGS);
 			continue;
 		}
 #if DEBUG
@@ -566,7 +567,7 @@ void mapping_block_map_opt(pmap_t pmap, vm_offset_t va, vm_offset_t pa, vm_offse
  
 void pmap_map_block(pmap_t pmap, vm_offset_t va, vm_offset_t pa, vm_size_t size, vm_prot_t prot, int attr, unsigned int flags) {	/* Map an autogenned block */
 
-	register blokmap *blm, *oblm;
+	register blokmap *blm, *oblm, *oblm_virt;;
 	unsigned int pg;
 
 #if 0
@@ -589,6 +590,7 @@ void pmap_map_block(pmap_t pmap, vm_offset_t va, vm_offset_t pa, vm_size_t size,
 	
 	blm->start = (unsigned int)va & -PAGE_SIZE;				/* Get virtual block start */
 	blm->end = (blm->start + size - 1) | (PAGE_SIZE - 1);	/* Get virtual block end */
+	blm->current = 0;
 	blm->PTEr = ((unsigned int)pa & -PAGE_SIZE) | attr<<3 | ppc_prot(prot);	/* Build the real portion of the base PTE */
 	blm->space = pmap->space;								/* Set the space (only needed for remove) */
 	blm->blkFlags = flags;									/* Set the block's flags */
@@ -605,8 +607,22 @@ void pmap_map_block(pmap_t pmap, vm_offset_t va, vm_offset_t pa, vm_size_t size,
 	 blm, pmap->bmaps);
 #endif
 
-	if(oblm = hw_add_blk(pmap, blm)) {						/* Add to list and make sure we don't overlap anything */
-		panic("pmap_map_block: block map overlap - blm = %08X\n", oblm);	/* Squeak loudly and carry a big stick */
+	do {
+		oblm = hw_add_blk(pmap, blm); 
+		if ((unsigned int)oblm & 2) {
+			oblm_virt = (blokmap *)hw_cpv((mapping *)((unsigned int)oblm & 0xFFFFFFFC));
+			mapping_remove(pmap, oblm_virt->start);
+		};
+	} while ((unsigned int)oblm & 2);
+
+	if (oblm) {
+		oblm = (blokmap *)hw_cpv((mapping *) oblm);				/* Get the old block virtual address */
+		blm = (blokmap *)hw_cpv((mapping *)blm);				/* Back to the virtual address of this */
+		if((oblm->start != blm->start) ||					/* If we have a match, then this is a fault race and */
+				(oblm->end != blm->end) ||				/* is acceptable */
+				(oblm->PTEr != blm->PTEr))
+			panic("pmap_map_block: block map overlap - blm = %08X\n", oblm);/* Otherwise, Squeak loudly and carry a big stick */
+		mapping_free((struct mapping *)blm);
 	}
 
 #if 0
@@ -1057,7 +1073,9 @@ void mapping_adjust(void) {										/* Adjust free mappings */
 	}
 	
 	if (mapping_adjust_call == NULL) {
-		thread_call_setup(&mapping_adjust_call_data, mapping_adjust, NULL);
+		thread_call_setup(&mapping_adjust_call_data, 
+		                  (thread_call_func_t)mapping_adjust, 
+		                  (thread_call_param_t)NULL);
 		mapping_adjust_call = &mapping_adjust_call_data;
 	}
 
@@ -1074,25 +1092,25 @@ void mapping_adjust(void) {										/* Adjust free mappings */
 		else {													/* No free ones, try to get it */
 			
 			allocsize = (allocsize + MAPPERBLOK - 1) / MAPPERBLOK;	/* Get the number of pages we need */
-			if(allocsize > (mapCtl.mapcfree / 2)) allocsize = (mapCtl.mapcfree / 2);	/* Don't try for anything that we can't comfortably map */
-			
+
 			hw_lock_unlock((hw_lock_t)&mapCtl.mapclock);		/* Unlock our stuff */
 			splx(s);											/* Restore 'rupts */
 
 			for(; allocsize > 0; allocsize >>= 1) {				/* Try allocating in descending halves */ 
 				retr = kmem_alloc_wired(mapping_map, (vm_offset_t *)&mbn, PAGE_SIZE * allocsize);	/* Find a virtual address to use */
 				if((retr != KERN_SUCCESS) && (allocsize == 1)) {	/* Did we find any memory at all? */
-					panic("Whoops...  Not a bit of wired memory left for anyone\n");
+					break;
 				}
 				if(retr == KERN_SUCCESS) break;					/* We got some memory, bail out... */
 			}
-		
 			allocsize = allocsize * MAPPERBLOK;					/* Convert pages to number of maps allocated */
 			s = splhigh();										/* Don't bother from now on */
 			if(!hw_lock_to((hw_lock_t)&mapCtl.mapclock, LockTimeOut)) {	/* Lock the control header */ 
 				panic("mapping_adjust - timeout getting control lock (2)\n");	/* Tell all and die */
 			}
 		}
+		if (retr != KERN_SUCCESS)
+			break;												/* Fail to alocate, bail out... */
 		for(; allocsize > 0; allocsize -= MAPPERBLOK) {			/* Release one block at a time */
 			mapping_free_init((vm_offset_t)mbn, 0, 1);			/* Initialize a non-permanent block */
 			mbn = (mappingblok *)((unsigned int)mbn + PAGE_SIZE);	/* Point to the next slot */
@@ -1156,6 +1174,8 @@ void mapping_free(struct mapping *mp) {							/* Release a mapping */
 	if(full) {													/* If it was full before this: */
 		mb->nextblok = mapCtl.mapcnext;							/* Move head of list to us */
 		mapCtl.mapcnext = mb;									/* Chain us to the head of the list */
+		if(!((unsigned int)mapCtl.mapclast))
+			mapCtl.mapclast = mb;
 	}
 
 	mapCtl.mapcfree++;											/* Bump free count */
@@ -1232,7 +1252,40 @@ mapping *mapping_alloc(void) {									/* Obtain a mapping */
 	}
 
 	if(!(mb = mapCtl.mapcnext)) {								/* Get the first block entry */
-		panic("mapping_alloc - free mappings exhausted\n");		/* Whine and moan */
+		unsigned int			i;
+		struct mappingflush		mappingflush;
+		PCA						*pca_min, *pca_max;
+		PCA						*pca_base;
+
+		pca_min = (PCA *)(hash_table_base+hash_table_size);
+		pca_max = (PCA *)(hash_table_base+hash_table_size+hash_table_size);
+
+		while (mapCtl.mapcfree <= (MAPPERBLOK*2)) {
+			mapCtl.mapcflush.mappingcnt = 0;
+			pca_base = mapCtl.mapcflush.pcaptr;
+			do {
+				hw_select_mappings(&mapCtl.mapcflush);
+				mapCtl.mapcflush.pcaptr++;
+				if (mapCtl.mapcflush.pcaptr >= pca_max)
+					mapCtl.mapcflush.pcaptr = pca_min;
+			} while ((mapCtl.mapcflush.mappingcnt == 0) && (mapCtl.mapcflush.pcaptr != pca_base));
+
+			if ((mapCtl.mapcflush.mappingcnt == 0) && (mapCtl.mapcflush.pcaptr == pca_base)) {
+				hw_lock_unlock((hw_lock_t)&mapCtl.mapclock);
+				panic("mapping_alloc - all mappings are wired\n");
+			}
+			mappingflush = mapCtl.mapcflush;
+			hw_lock_unlock((hw_lock_t)&mapCtl.mapclock);
+			splx(s);
+			for (i=0;i<mappingflush.mappingcnt;i++)
+				mapping_remove(mappingflush.mapping[i].pmap, 
+				               mappingflush.mapping[i].offset);
+			s = splhigh();
+			if(!hw_lock_to((hw_lock_t)&mapCtl.mapclock, LockTimeOut)) {
+				panic("mapping_alloc - timeout getting control lock\n");
+			}
+		}
+		mb = mapCtl.mapcnext;
 	}
 	
 	if(!(mindx = mapalc(mb))) {									/* Allocate a slot */
@@ -1555,6 +1608,7 @@ vm_offset_t	mapping_p2v(pmap_t pmap, struct phys_entry *pp) {		/* Finds first vi
 
 	if(pmap->vflags & pmapAltSeg) return 0;					/* If there are nested pmaps, fail immediately */
 
+	s = splhigh();
 	if(!hw_lock_bit((unsigned int *)&pp->phys_link, PHYS_LOCK, LockTimeOut)) {	/* Try to get the lock on the physical entry */
 		splx(s);											/* Restore 'rupts */
 		panic("mapping_p2v: timeout getting lock on physent\n");			/* Arrrgghhhh! */
@@ -1782,7 +1836,7 @@ kern_return_t copyp2v(vm_offset_t source, vm_offset_t sink, unsigned int size) {
 		mp = hw_lock_phys_vir(spaceid, sink);		/* Lock the physical entry for the sink */
 		if(!mp) {									/* Was it there? */
 			splx(s);								/* Restore the interrupt level */
-			ret = vm_fault(map, trunc_page(sink), VM_PROT_READ | VM_PROT_WRITE, FALSE);	/* Didn't find it, try to fault it in... */
+			ret = vm_fault(map, trunc_page(sink), VM_PROT_READ | VM_PROT_WRITE, FALSE, NULL, 0);	/* Didn't find it, try to fault it in... */
 			if (ret == KERN_SUCCESS) continue;		/* We got it in, try again to find it... */
 
 			return KERN_FAILURE;					/* Didn't find any, return no good... */
@@ -1798,7 +1852,7 @@ kern_return_t copyp2v(vm_offset_t source, vm_offset_t sink, unsigned int size) {
 		if(mpv->PTEr & 1) {							/* Are we write protected? yes, could indicate COW */
 			hw_unlock_bit((unsigned int *)&mpv->physent->phys_link, PHYS_LOCK);	/* Unlock the sink */
 			splx(s);								/* Restore the interrupt level */
-			ret = vm_fault(map, trunc_page(sink), VM_PROT_READ | VM_PROT_WRITE, FALSE);	/* check for a COW area */
+			ret = vm_fault(map, trunc_page(sink), VM_PROT_READ | VM_PROT_WRITE, FALSE, NULL, 0);	/* check for a COW area */
 			if (ret == KERN_SUCCESS) continue;		/* We got it in, try again to find it... */
 			return KERN_FAILURE;					/* Didn't find any, return no good... */
 		}
@@ -1808,7 +1862,7 @@ kern_return_t copyp2v(vm_offset_t source, vm_offset_t sink, unsigned int size) {
 
 		pa = (vm_offset_t)((mpv->physent->pte1 & ~PAGE_MASK) | ((unsigned int)sink & PAGE_MASK));	/* Get physical address of sink */
 
-	 	bcopy_phys((char *)source, (char *)pa, csize);			/* Do a physical copy */
+	 	bcopy_physvir((char *)source, (char *)pa, csize);	/* Do a physical copy, virtually */
 
 		hw_set_mod(mpv->physent);					/* Go set the change of the sink */
 

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2002 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -58,6 +58,7 @@
 #ifndef	_SYS_USER_H_
 #define	_SYS_USER_H_
 
+#include <sys/appleapiopts.h>
 #ifndef KERNEL
 /* stuff that *used* to be included by user.h, or is now needed */
 #include <errno.h>
@@ -72,14 +73,10 @@
 #include <sys/sysctl.h>
  
 #ifdef KERNEL
+
+#ifdef __APPLE_API_PRIVATE
 /*
  *	Per-thread U area.
- *
- *	It is likely that this structure contains no fields that must be
- *	saved between system calls.
- *
- * WARNING:  IF THE SIZE OF THIS STRUCT CHANGES YOU MUST CHANGE THE
- *           CONSTANT IN struct thread_act.bsd_space
  */
 struct uthread {
 	int	*uu_ar0;		/* address of users saved R0 */
@@ -92,15 +89,14 @@ struct uthread {
 	/* thread exception handling */
 	int	uu_code;			/* ``code'' to trap */
 	char uu_cursig;				/* p_cursig for exc. */
-	int  uu_sig;				/* p_sig for exc. */
-
+	int  XXX_dummy;				/* NOT USED LEFT FOR COMPATIBILITY. */
 	/* support for syscalls which use continuations */
 	union {
 		struct _select {
 			u_int32_t	*ibits, *obits; /* bits to select on */
 			uint	nbytes;	/* number of bytes in ibits and obits */
-			struct	timeval atv;
-			int	poll;
+			u_int64_t abstime;
+			int poll;
 			int error;
 			int count;
 			int nfcount;
@@ -127,9 +123,26 @@ struct uthread {
 	struct proc * uu_proc;
 	void * uu_userstate;
 	wait_queue_sub_t uu_wqsub;
+	sigset_t uu_siglist;				/* signals pending for the thread */
+	sigset_t  uu_sigwait;				/*  sigwait on this thread*/
+	sigset_t  uu_sigmask;				/* signal mask for the thread */
+	sigset_t  uu_oldmask;				/* signal mask saved before sigpause */
+	thread_act_t uu_act;
+	sigset_t  uu_vforkmask;				/* saved signal mask during vfork */
+
+	TAILQ_ENTRY(uthread) uu_list;		/* List of uthreads in proc */
 };
 
 typedef struct uthread * uthread_t;
+
+/* Definition of uu_flag */
+#define	USAS_OLDMASK	0x1		/* need to restore mask before pause */
+#define UNO_SIGMASK		0x2		/* exited thread; invalid sigmask */
+/* Kept same as in proc */
+#define P_VFORK     0x2000000   /* process has vfork children */
+
+#endif /* __APPLE_API_PRIVATE */
+
 #endif	/* KERNEL */
 
 /*

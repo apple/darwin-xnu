@@ -72,6 +72,7 @@
 #include <sys/mount.h>
 #include <sys/resourcevar.h>
 #include <sys/trace.h>
+#include <sys/quota.h>
 
 #include <miscfs/specfs/specdev.h>
 

@@ -38,8 +38,6 @@
 #include <net/if.h>
 #include <net/if_dl.h>
 #include <net/if_types.h>
-#include <net/etherdefs.h>
-#include <net/tokendefs.h>
 #include <net/dlil.h>
 
 #include <netat/appletalk.h>
@@ -50,6 +48,8 @@
 #include <netat/nbp.h>
 #include <netat/routing_tables.h>
 #include <netat/debug.h>
+
+#include <sys/kern_event.h>
 
 extern int at_ioctl(struct atpcb *, u_long, caddr_t, int fromKernel);
 extern int routerStart(at_kern_err_t *);
@@ -246,13 +246,13 @@ int at_control(so, cmd, data, ifp)
 					/* check the zone name */
 					if (MULTIPORT_MODE) {
 					  short zno;
-					  char ifs_in_zone[IF_TOTAL_MAX];
+					  at_ifnames_t ifs_in_zone;
 
 					  if (!(zno = zt_find_zname(&defzonep->zonename)))
 					    return(EINVAL);
 
-					  getIfUsage(zno-1, ifs_in_zone);
-					  if (!ifs_in_zone[ifID->ifPort]) 
+					  getIfUsage(zno-1, &ifs_in_zone);
+					  if (!ifs_in_zone.at_if[ifID->ifPort]) 
 					    return(EINVAL);
 					  ifID->ifDefZone = zno+1;
 					} else {
@@ -271,6 +271,10 @@ int at_control(so, cmd, data, ifp)
 					}
 					ifID->ifZoneName = defzonep->zonename;
 					(void)regDefaultZone(ifID);
+
+					/* AppleTalk zone was changed. Send event with zone info. */
+					atalk_post_msg(ifID->aa_ifp, KEV_ATALK_ZONEUPDATED, 0, &(ifID->ifZoneName));
+
 					return(0);
 				}
 			} else
@@ -346,18 +350,20 @@ int at_control(so, cmd, data, ifp)
 			   this zone */
 			int finished = FALSE;
 			int zno;
-			char ifs_in_zone[IF_TOTAL_MAX];
+			at_ifnames_t ifs_in_zone;
 			if (!(zno = zt_find_zname(&nve.zone))) {
 				return(EINVAL);
 			}
-			getIfUsage(zno-1, ifs_in_zone);
+			getIfUsage(zno-1, &ifs_in_zone);
 
 			TAILQ_FOREACH(ifID, &at_ifQueueHd, aa_link) {
-				if (!ifs_in_zone[ifID->ifPort]) 
+				if (!ifs_in_zone.at_if[ifID->ifPort]) 
 						/* zone doesn't match */
 					continue;
-				else
+				else {
 					finished = TRUE;
+					break;
+				}
 			}
 			if (!finished)
 				return(EINVAL);
@@ -523,8 +529,8 @@ int at_control(so, cmd, data, ifp)
 		break;
 	  }
 	case AIOCSTOPATALK:
-	  {
-	  	int *count_only = (int *)data,
+	{
+		int *count_only = (int *)data,
 		    ret;
 
 		/* check for root access */
@@ -532,13 +538,26 @@ int at_control(so, cmd, data, ifp)
 			return(EACCES);
 
 		ret = ddp_shutdown(*count_only);
-		if (*count_only) {
+		
+		if (*count_only != 0) 
+		{
 			*count_only = ret;
 			return(0);
-		} else 
-		  	return((ret == 0)? 0 : EBUSY);
+		}
+		else
+		{
+			if (ret == 0)
+			{
+				/* AppleTalk was successfully shut down. Send event. */
+				atalk_post_msg(0, KEV_ATALK_DISABLED, 0, 0);
+				return 0;
+			}
+			else
+				return EBUSY;
+		}
+
 		break;
-	  }
+	}
 
 	case SIOCSIFADDR:
 		/* check for root access */
@@ -549,7 +568,7 @@ int at_control(so, cmd, data, ifp)
 		else {
 			int s;
 			if (xpatcnt == 0) {
-				at_state.flags |= AT_ST_STARTED;
+				at_state.flags |= AT_ST_STARTING;
 				ddp_brt_init();
 			}
 
@@ -612,18 +631,18 @@ int at_control(so, cmd, data, ifp)
 
 	/* complete the initialization started in SIOCSIFADDR */
 	case AIOCSIFADDR:
-	  {
+	{
 		at_if_cfg_t *cfgp = (at_if_cfg_t *)data;
 
-		if (!(at_state.flags & AT_ST_STARTED))
+		if (!(at_state.flags & AT_ST_STARTING))
 			return(ENOTREADY);
  
 		if (!(ifID = find_ifID(cfgp->ifr_name)))
 			return(EINVAL);
-
+		
 		return(lap_online(ifID, cfgp));
 		break;
-	  }
+	}
 
 #ifdef NOT_YET
 	/* *** this can't be added until AT can handle dynamic addition and
@@ -678,4 +697,37 @@ int at_control(so, cmd, data, ifp)
 	}
 
 	return(error);
+}
+
+/* From dlil_post_msg() */
+void atalk_post_msg(struct ifnet *ifp, u_long event_code, struct at_addr *address, at_nvestr_t *zone) 
+{
+	struct kev_atalk_data  	at_event_data;
+	struct kev_msg  		ev_msg;
+
+	ev_msg.vendor_code    = KEV_VENDOR_APPLE;
+	ev_msg.kev_class      = KEV_NETWORK_CLASS;
+	ev_msg.kev_subclass   = KEV_ATALK_SUBCLASS;
+	ev_msg.event_code 	  = event_code;
+	
+	bzero(&at_event_data, sizeof(struct kev_atalk_data));
+    
+	if (ifp != 0) {
+		strncpy(&at_event_data.link_data.if_name[0], ifp->if_name, IFNAMSIZ);
+		at_event_data.link_data.if_family = ifp->if_family;
+		at_event_data.link_data.if_unit   = (unsigned long) ifp->if_unit;
+	}
+	
+	if (address != 0) {
+		at_event_data.node_data.address = *address;
+	}
+	else if (zone != 0) {
+		at_event_data.node_data.zone = *zone;
+	}
+    
+	ev_msg.dv[0].data_length = sizeof(struct kev_atalk_data);
+	ev_msg.dv[0].data_ptr    = &at_event_data;	
+	ev_msg.dv[1].data_length = 0;
+	
+	kev_post_msg(&ev_msg);
 }

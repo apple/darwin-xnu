@@ -65,7 +65,6 @@
 #include <kern/ipc_kobject.h>
 #include <ipc/ipc_object.h>
 #include <ipc/ipc_mqueue.h>
-#include <kern/thread_pool.h>
 
 #include <mach_kdb.h>
 
@@ -75,19 +74,11 @@ typedef struct ipc_pset {
 	 * Initial sub-structure in common with all ipc_objects.
 	 */
 	struct ipc_object	ips_object;
-
 	struct ipc_mqueue	ips_messages;
-	struct ipc_pset		*ips_pset_self;   /* self (used from ipsm) */
 } *ipc_pset_t;
-
-typedef struct ipc_pset_mqueue {
-	struct ipc_mqueue	ipsm_messages;
-	struct ipc_pset		*ipsm_pset;
-} *ipc_pset_mqueue_t;
 
 #define	ips_references		ips_object.io_references
 #define ips_local_name		ips_object.io_receiver_name
-#define ips_thread_pool		ips_object.io_thread_pool
 
 #define	IPS_NULL		((ipc_pset_t) IO_NULL)
 
@@ -122,7 +113,7 @@ extern kern_return_t ipc_pset_remove(
 	ipc_port_t	port);
 
 /* Remove a port from all its current port sets */
-extern kern_return_t ipc_pset_remove_all(
+extern kern_return_t ipc_pset_remove_from_all(
 	ipc_port_t	port);
 
 /* Destroy a port_set */

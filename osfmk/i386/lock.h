@@ -62,11 +62,15 @@
 #ifndef	_I386_LOCK_H_
 #define	_I386_LOCK_H_
 
+#include <sys/appleapiopts.h>
+
+#ifdef __APPLE_API_PRIVATE
+
+#ifdef MACH_KERNEL_PRIVATE
+
 #include <kern/macro_help.h>
 #include <kern/assert.h>
 #include <i386/hw_lock_types.h>
-
-#ifdef MACH_KERNEL_PRIVATE
 
 #include <mach_rt.h>
 #include <mach_ldebug.h>
@@ -300,8 +304,10 @@ extern void bit_unlock(
 #define	USIMPLE_LOCK_CALLS
 #endif	/* !(USLOCK_DEBUG || USLOCK_STATS) */
 
+extern void		kernel_preempt_check (void);
+
 #endif /* MACH_KERNEL_PRIVATE */
 
-extern void		kernel_preempt_check (void);
+#endif /* __APLE_API_PRIVATE */
 
 #endif	/* _I386_LOCK_H_ */

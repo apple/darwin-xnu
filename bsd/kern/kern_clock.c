@@ -68,7 +68,6 @@
 #include <sys/param.h>
 #include <sys/systm.h>
 #include <sys/time.h>
-#include <sys/dkstat.h>
 #include <sys/resourcevar.h>
 #include <sys/kernel.h>
 #include <sys/resource.h>
@@ -117,18 +116,22 @@ bsd_hardclock(usermode, pc, numticks)
 	int numticks;
 {
 	register struct proc *p;
-	register int s;
-	int ticks = numticks;
-	extern int tickdelta;
-	extern long timedelta;
 	register thread_t	thread;
 	int nusecs = numticks * tick;
 
 	if (!bsd_hardclockinit)
 		return;
 
-	thread = current_thread();
+	/*
+	 * Increment the time-of-day.
+	 */
+	microtime(&time);
 
+	if (bsd_hardclockinit < 0) {
+	    return;
+	}
+
+	thread = current_thread();
 	/*
 	 * Charge the time out based on the mode the cpu is in.
 	 * Here again we fudge for the lack of proper interval timers
@@ -137,159 +140,95 @@ bsd_hardclock(usermode, pc, numticks)
 	 */
 	p = (struct proc *)current_proc();
 	if (p && ((p->p_flag & P_WEXIT) == NULL)) {
-	if (usermode) {		
-		if (p) {
+		if (usermode) {		
 			if (p->p_stats && p->p_stats->p_prof.pr_scale) {
 				p->p_flag |= P_OWEUPC;
-                                ast_on(AST_BSD);
+				astbsd_on();
+			}
+
+			/*
+			 * CPU was in user state.  Increment
+			 * user time counter, and process process-virtual time
+			 * interval timer. 
+			 */
+			if (p->p_stats && 
+				timerisset(&p->p_stats->p_timer[ITIMER_VIRTUAL].it_value) &&
+				!itimerdecr(&p->p_stats->p_timer[ITIMER_VIRTUAL], nusecs)) {
+				extern void psignal_vtalarm(struct proc *);
+                        
+				/* does psignal(p, SIGVTALRM) in a thread context */
+				thread_call_func(psignal_vtalarm, p, FALSE);
 			}
 		}
 
 		/*
-		 * CPU was in user state.  Increment
-		 * user time counter, and process process-virtual time
-		 * interval timer. 
+		 * If the cpu is currently scheduled to a process, then
+		 * charge it with resource utilization for a tick, updating
+		 * statistics which run in (user+system) virtual time,
+		 * such as the cpu time limit and profiling timers.
+		 * This assumes that the current process has been running
+		 * the entire last tick.
 		 */
-		if (p->p_stats && 
-		timerisset(&p->p_stats->p_timer[ITIMER_VIRTUAL].it_value) &&
-		itimerdecr(&p->p_stats->p_timer[ITIMER_VIRTUAL],  nusecs) == 0) {
-                        extern void psignal_vtalarm(struct proc *);
+		if (!is_thread_idle(thread)) {		
+			if (p->p_limit &&
+				p->p_limit->pl_rlimit[RLIMIT_CPU].rlim_cur != RLIM_INFINITY) {
+				time_value_t	sys_time, user_time;
+
+				thread_read_times(thread, &user_time, &sys_time);
+				if ((sys_time.seconds + user_time.seconds + 1) >
+					p->p_limit->pl_rlimit[RLIMIT_CPU].rlim_cur) {
+					extern void psignal_xcpu(struct proc *);
                         
-			/* does psignal(p, SIGVTALRM) in a thread context */
-                        thread_call_func((thread_call_func_t)psignal_vtalarm, p, FALSE);
-                }
-	}
+					/* does psignal(p, SIGXCPU) in a thread context */
+					thread_call_func(psignal_xcpu, p, FALSE);
 
-	/*
-	 * If the cpu is currently scheduled to a process, then
-	 * charge it with resource utilization for a tick, updating
-	 * statistics which run in (user+system) virtual time,
-	 * such as the cpu time limit and profiling timers.
-	 * This assumes that the current process has been running
-	 * the entire last tick.
-	 */
-	if (p && !(is_thread_idle(thread)))
-	{		
-		if (p->p_limit && (p->p_limit->pl_rlimit[RLIMIT_CPU].rlim_cur != RLIM_INFINITY)) {
-		    time_value_t	sys_time, user_time;
-
-		    thread_read_times(thread, &user_time, &sys_time);
-		    if ((sys_time.seconds + user_time.seconds + 1) >
-		        p->p_limit->pl_rlimit[RLIMIT_CPU].rlim_cur) {
-                            extern void psignal_xcpu(struct proc *);
+					if (p->p_limit->pl_rlimit[RLIMIT_CPU].rlim_cur <
+						p->p_limit->pl_rlimit[RLIMIT_CPU].rlim_max)
+						p->p_limit->pl_rlimit[RLIMIT_CPU].rlim_cur += 5;
+				}
+			}
+			if (timerisset(&p->p_stats->p_timer[ITIMER_PROF].it_value) &&
+				!itimerdecr(&p->p_stats->p_timer[ITIMER_PROF], nusecs)) {
+				extern void psignal_sigprof(struct proc *);
                         
-                            /* does psignal(p, SIGXCPU) in a thread context */
-                            thread_call_func((thread_call_func_t)psignal_xcpu, p, FALSE);
-
-                            if (p->p_limit->pl_rlimit[RLIMIT_CPU].rlim_cur <
-                                p->p_limit->pl_rlimit[RLIMIT_CPU].rlim_max)
-                                    p->p_limit->pl_rlimit[RLIMIT_CPU].rlim_cur += 5;
+				/* does psignal(p, SIGPROF) in a thread context */
+				thread_call_func(psignal_sigprof, p, FALSE);
 			}
 		}
-		if (timerisset(&p->p_stats->p_timer[ITIMER_PROF].it_value) &&
-		    itimerdecr(&p->p_stats->p_timer[ITIMER_PROF], nusecs) == 0) {
-                            extern void psignal_sigprof(struct proc *);
-                        
-                            /* does psignal(p, SIGPROF) in a thread context */
-                            thread_call_func((thread_call_func_t)psignal_sigprof, p, FALSE);
-                }
 	}
 
+#ifdef GPROF
 	/*
-	 * Increment the time-of-day, and schedule
-	 * processing of the callouts at a very low cpu priority,
-	 * so we don't keep the relatively high clock interrupt
-	 * priority any longer than necessary.
-	 */
-
-	/*
-	 * Gather the statistics.
+	 * Gather some statistics.
 	 */
 	gatherstats(usermode, pc);
-
-	}
-	if (timedelta != 0) {
-		register delta;
-		clock_res_t nsdelta = tickdelta * NSEC_PER_USEC;
-
-		if (timedelta < 0) {
-			delta = ticks - tickdelta;
-			timedelta += tickdelta;
-			nsdelta = -nsdelta;
-		} else {
-			delta = ticks + tickdelta;
-			timedelta -= tickdelta;
-		}
-		clock_adjust_calendar(nsdelta);
-	}
-	microtime(&time);
+#endif
 }
 
 /*
- * Gather statistics on resource utilization.
- *
- * We make a gross assumption: that the system has been in the
- * state it is in (user state, kernel state, interrupt state,
- * or idle state) for the entire last time interval, and
- * update statistics accordingly.
+ * Gather some statistics.
  */
 /*ARGSUSED*/
 void
-gatherstats(usermode, pc)
-	boolean_t usermode;
-	caddr_t pc;
+gatherstats(
+	boolean_t	usermode,
+	caddr_t		pc)
 {
-	register int cpstate, s;
-	struct proc *proc =current_proc();
 #ifdef GPROF
-    struct gmonparam *p = &_gmonparam;
-#endif
+	if (!usermode) {
+		struct gmonparam *p = &_gmonparam;
 
-	/*
-	 * Determine what state the cpu is in.
-	 */
-	if (usermode) {
-		/*
-		 * CPU was in user state.
-		 */
-		if (proc->p_nice > NZERO)
-			cpstate = CP_NICE;
-		else
-			cpstate = CP_USER;
-	} else {
-		/*
-		 * CPU was in system state.  If profiling kernel
-		 * increment a counter.  If no process is running
-		 * then this is a system tick if we were running
-		 * at a non-zero IPL (in a driver).  If a process is running,
-		 * then we charge it with system time even if we were
-		 * at a non-zero IPL, since the system often runs
-		 * this way during processing of system calls.
-		 * This is approximate, but the lack of true interval
-		 * timers makes doing anything else difficult.
-		 */
-		cpstate = CP_SYS;
-		if (is_thread_idle(current_thread()))
-			cpstate = CP_IDLE;
-#ifdef GPROF
 		if (p->state == GMON_PROF_ON) {
+			register int s;
+
 			s = pc - p->lowpc;
 			if (s < p->textsize) {
 				s /= (HISTFRACTION * sizeof(*p->kcount));
 				p->kcount[s]++;
 			}
 		}
-#endif
 	}
-	/*
-	 * We maintain statistics shown by user-level statistics
-	 * programs:  the amount of time in each cpu state, and
-	 * the amount of time each of DK_NDRIVE ``drives'' is busy.
-	 */
-	cp_time[cpstate]++;
-	for (s = 0; s < DK_NDRIVE; s++)
-		if (dk_busy & (1 << s))
-			dk_time[s]++;
+#endif
 }
 
 
@@ -337,10 +276,11 @@ untimeout(
 hzto(tv)
 	struct timeval *tv;
 {
+	struct timeval now;
 	register long ticks;
 	register long sec;
-	int s = splhigh();
-	
+
+	microtime(&now);
 	/*
 	 * If number of milliseconds will fit in 32 bit arithmetic,
 	 * then compute number of milliseconds to time and scale to
@@ -350,32 +290,18 @@ hzto(tv)
 	 * Delta times less than 25 days can be computed ``exactly''.
 	 * Maximum value for any timeout in 10ms ticks is 250 days.
 	 */
-	sec = tv->tv_sec - time.tv_sec;
+	sec = tv->tv_sec - now.tv_sec;
 	if (sec <= 0x7fffffff / 1000 - 1000)
-		ticks = ((tv->tv_sec - time.tv_sec) * 1000 +
-			(tv->tv_usec - time.tv_usec) / 1000)
+		ticks = ((tv->tv_sec - now.tv_sec) * 1000 +
+			(tv->tv_usec - now.tv_usec) / 1000)
 				/ (tick / 1000);
 	else if (sec <= 0x7fffffff / hz)
 		ticks = sec * hz;
 	else
 		ticks = 0x7fffffff;
-	splx(s);
+
 	return (ticks);
 }
-
-#if 0 /* [ */
-/*
- * Convert ticks to a timeval
- */
-ticks_to_timeval(ticks, tvp)
-	register long ticks;
-	struct timeval *tvp;
-{
-	tvp->tv_sec = ticks/hz;
-	tvp->tv_usec = (ticks%hz) * tick;
-	asert(tvp->tv_usec < 1000000);
-}
-#endif /* ] */
 
 /*
  * Return information about system clocks.

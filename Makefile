@@ -1,6 +1,18 @@
 ifndef VERSDIR
 export VERSDIR=$(shell /bin/pwd)
 endif
+ifndef SRCROOT
+export SRCROOT=$(shell /bin/pwd)
+endif
+ifndef OBJROOT
+export OBJROOT=$(SRCROOT)/BUILD/obj
+endif
+ifndef DSTROOT
+export DSTROOT=$(SRCROOT)/BUILD/dst
+endif
+ifndef SYMROOT
+export SYMROOT=$(SRCROOT)/BUILD/sym
+endif
 
 export MakeInc_cmd=${VERSDIR}/makedefs/MakeInc.cmd
 export MakeInc_def=${VERSDIR}/makedefs/MakeInc.def
@@ -45,6 +57,9 @@ INSTALL_FILE_LIST= \
 
 INSTALL_FILE_DIR= \
 	/
+
+INSTMAN_SUBDIRS = \
+	bsd
 
 include $(MakeInc_rule)
 include $(MakeInc_dir)

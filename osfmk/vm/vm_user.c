@@ -67,7 +67,9 @@
 #include <mach/vm_statistics.h>
 #include <mach/vm_map_server.h>
 #include <mach/mach_syscalls.h>
+
 #include <mach/shared_memory_server.h>
+#include <vm/vm_shared_memory_server.h>
 
 #include <kern/host.h>
 #include <kern/task.h>
@@ -542,6 +544,11 @@ vm_map_64(
 
 		/* wait for object (if any) to be ready */
 		if (object != VM_OBJECT_NULL) {
+			if(object == kernel_object) {
+				printf("Warning: Attempt to map kernel object"
+					" by a non-private kernel entity\n");
+				return(KERN_INVALID_OBJECT);
+			}
 			vm_object_lock(object);
 			while (!object->pager_ready) {
 				vm_object_wait(object,
@@ -1167,7 +1174,8 @@ vm_allocate_cpm(
 		m = vm_page_lookup(cpm_obj, (vm_object_offset_t)offset);
 		vm_object_unlock(cpm_obj);
 		assert(m != VM_PAGE_NULL);
-		PMAP_ENTER(pmap, va, m, VM_PROT_ALL, TRUE);
+		PMAP_ENTER(pmap, va, m, VM_PROT_ALL, 	
+						VM_WIMG_USE_DEFAULT, TRUE);
 	}
 
 #if	MACH_ASSERT
@@ -1323,18 +1331,26 @@ mach_make_memory_entry_64(
 	vm_map_t		pmap_map;
 
 	/* needed for call to vm_map_lookup_locked */
-	boolean_t		wired;
+	boolean_t			wired;
 	vm_object_offset_t	obj_off;
-	vm_prot_t		prot;
+	vm_prot_t			prot;
 	vm_object_offset_t	lo_offset, hi_offset;
 	vm_behavior_t		behavior;
-	vm_object_t		object;
+	vm_object_t			object;
+	vm_object_t			shadow_object;
 
 	/* needed for direct map entry manipulation */
 	vm_map_entry_t		map_entry;
-	vm_map_t		local_map;
+	vm_map_entry_t		next_entry;
+	vm_map_t			local_map;
+	vm_map_t			original_map = target_map;
+	vm_offset_t			local_offset;
 	vm_object_size_t	mappable_size;
+	vm_object_size_t	total_size;
 
+
+	offset = trunc_page_64(offset);
+	*size = round_page_64(*size);
 	
 	user_object = (vm_named_entry_t) 
 			kalloc(sizeof (struct vm_named_entry));
@@ -1382,22 +1398,37 @@ mach_make_memory_entry_64(
 			vm_map_unlock_read(target_map);
 			goto make_mem_done;
 		}
-		if ((prot & permission) != permission) {
+		if (((prot & permission) != permission) 
+					|| (object == kernel_object)) {
 			kr = KERN_INVALID_RIGHT;
 			vm_object_unlock(object);
 			vm_map_unlock_read(target_map);
 			if(pmap_map != target_map)
 				vm_map_unlock_read(pmap_map);
+			if(object == kernel_object) {
+				printf("Warning: Attempt to create a named"
+					" entry from the kernel_object\n");
+			}
 			goto make_mem_done;
 		}
 
 		/* We have an object, now check to see if this object */
 		/* is suitable.  If not, create a shadow and share that */
 		
-		local_map = target_map;
 redo_lookup:
+		local_map = original_map;
+		local_offset = offset;
+		if(target_map != local_map) {
+			vm_map_unlock_read(target_map);
+			if(pmap_map != target_map)
+				vm_map_unlock_read(pmap_map);
+			vm_map_lock_read(local_map);
+			target_map = local_map;
+			pmap_map = local_map;
+		}
 		while(TRUE) {
-		   if(!vm_map_lookup_entry(local_map, offset, &map_entry)) {
+		   if(!vm_map_lookup_entry(local_map, 
+						local_offset, &map_entry)) {
 			kr = KERN_INVALID_ARGUMENT;
                         vm_object_unlock(object);
                         vm_map_unlock_read(target_map);
@@ -1414,14 +1445,21 @@ redo_lookup:
 				vm_map_unlock_read(pmap_map);
                          goto make_mem_done;
 	              }
+		      if(map_entry->wired_count) {
+			 object->true_share = TRUE;
+		      }
 		      break;
 		   } else {
+			vm_map_t	tmap;
+			tmap = local_map;
 			local_map = map_entry->object.sub_map;
+			
 			vm_map_lock_read(local_map);
-			vm_map_unlock_read(target_map);
-			if(pmap_map != target_map)
-				vm_map_unlock_read(pmap_map);
+			vm_map_unlock_read(tmap);
 			target_map = local_map;
+			pmap_map = local_map;
+			local_offset = local_offset - map_entry->vme_start;
+			local_offset += map_entry->offset;
 		   }
 		}
 		if(((map_entry->max_protection) & permission) != permission) {
@@ -1432,6 +1470,40 @@ redo_lookup:
 				vm_map_unlock_read(pmap_map);
                          goto make_mem_done;
 		}
+
+		mappable_size  =  hi_offset - obj_off;
+		total_size = map_entry->vme_end - map_entry->vme_start;
+		if(*size > mappable_size) {
+			/* try to extend mappable size if the entries */
+			/* following are from the same object and are */
+			/* compatible */
+			next_entry = map_entry->vme_next;
+			/* lets see if the next map entry is still   */
+			/* pointing at this object and is contiguous */
+			while(*size > mappable_size) {
+				if((next_entry->object.vm_object == object) &&
+					(next_entry->vme_start == 
+						next_entry->vme_prev->vme_end) &&
+					(next_entry->offset == 
+					   next_entry->vme_prev->offset + 
+					   (next_entry->vme_prev->vme_end - 
+				 	   next_entry->vme_prev->vme_start))) {
+					if(((next_entry->max_protection) 
+						& permission) != permission) {
+			 			break;
+					}
+					mappable_size += next_entry->vme_end
+						- next_entry->vme_start;
+					total_size += next_entry->vme_end
+						- next_entry->vme_start;
+					next_entry = next_entry->vme_next;
+				} else {
+					break;
+				}
+			
+			}
+		}
+
 		if(object->internal) {
 	   		/* vm_map_lookup_locked will create a shadow if   */
 		 	/* needs_copy is set but does not check for the   */
@@ -1440,10 +1512,8 @@ redo_lookup:
 			/* under us.  */
 
 	      		if ((map_entry->needs_copy  || object->shadowed ||
-			     (object->size > 
-			 	       ((vm_object_size_t)map_entry->vme_end -
-			     	                      map_entry->vme_start)))
-				&& !object->true_share) {
+			     (object->size > total_size))
+					&& !object->true_share) {
 		   		if (vm_map_lock_read_to_write(target_map)) {
 		            		vm_map_lock_read(target_map);
 		            		goto redo_lookup;
@@ -1451,25 +1521,48 @@ redo_lookup:
 
 
 		   		/* create a shadow object */
+				vm_object_shadow(&map_entry->object.vm_object,
+						&map_entry->offset, total_size);
+				shadow_object = map_entry->object.vm_object;
+				vm_object_unlock(object);
+				vm_object_pmap_protect(
+					object, map_entry->offset,
+					total_size,
+					((map_entry->is_shared 
+						|| target_map->mapped)
+							? PMAP_NULL :
+							target_map->pmap),
+					map_entry->vme_start,
+					map_entry->protection & ~VM_PROT_WRITE);
+				total_size -= (map_entry->vme_end 
+						- map_entry->vme_start);
+				next_entry = map_entry->vme_next;
+				map_entry->needs_copy = FALSE;
+				while (total_size) {
+				   if(next_entry->object.vm_object == object) {
+					next_entry->object.vm_object 
+							= shadow_object;
+					next_entry->offset 
+						= next_entry->vme_prev->offset +
+						(next_entry->vme_prev->vme_end 
+						- next_entry->vme_prev->vme_start);
+						next_entry->needs_copy = FALSE;
+					} else {
+						panic("mach_make_memory_entry_64:"
+						  " map entries out of sync\n");
+					}
+					total_size -= 
+						next_entry->vme_end 
+							- next_entry->vme_start;
+					next_entry = next_entry->vme_next;
+				}
 
-		   		vm_object_shadow(&map_entry->object.vm_object, 
-					&map_entry->offset, 
-					(map_entry->vme_end
-					 - map_entry->vme_start));
-		   		map_entry->needs_copy = FALSE;
-		   		vm_object_unlock(object);
-				object = map_entry->object.vm_object;
-		   		vm_object_lock(object);
-				object->size = map_entry->vme_end 
-						- map_entry->vme_start;
-		   		obj_off = (offset - map_entry->vme_start) + 
-							map_entry->offset;
-		   		lo_offset = map_entry->offset;
-		   		hi_offset = (map_entry->vme_end -
-		         		map_entry->vme_start) +
-		         		map_entry->offset;
+				object = shadow_object;
+				vm_object_lock(object);
+				obj_off = (local_offset - map_entry->vme_start)
+							 + map_entry->offset;
+				vm_map_lock_write_to_read(target_map);
 
-		   		vm_map_lock_write_to_read(target_map);
 
 	        	}
 	   	}
@@ -1499,7 +1592,6 @@ redo_lookup:
 		/*                   offset of our beg addr within entry  */
 		/* it corresponds to this:                                */
 
-		mappable_size  =  hi_offset - obj_off;
 		if(*size > mappable_size)
 			*size = mappable_size;
 
@@ -1513,7 +1605,6 @@ redo_lookup:
 		vm_object_unlock(object);
 		ipc_kobject_set(user_handle, (ipc_kobject_t) user_object,
 							IKOT_NAMED_ENTRY);
-		*size = user_object->size;
 		*object_handle = user_handle;
 		vm_map_unlock_read(target_map);
 		if(pmap_map != target_map)
@@ -1715,16 +1806,17 @@ kern_return_t vm_map_region_replace(
 					(entry->vme_start < end)) {
 		if((entry->is_sub_map) && 
 			(entry->object.sub_map == old_submap)) {
-			entry->object.sub_map = new_submap;
 			if(entry->use_pmap) {
 				if((start & 0xfffffff) || 
 					((end - start) != 0x10000000)) {
 					vm_map_unlock(old_submap);
+					vm_map_deallocate(old_submap);
 					vm_map_unlock(target_map);
 					return  KERN_INVALID_ARGUMENT;
 				}
 				nested_pmap = 1;
 			}
+			entry->object.sub_map = new_submap;
 			vm_map_reference(new_submap);
 			vm_map_deallocate(old_submap);
 		}
@@ -1734,13 +1826,19 @@ kern_return_t vm_map_region_replace(
 	if(nested_pmap) {
 #ifndef i386
 		pmap_unnest(target_map->pmap, start, end - start);
+		if(target_map->mapped) {
+			vm_map_submap_pmap_clean(target_map,
+				start, end, old_submap, 0);
+		}
 		pmap_nest(target_map->pmap, new_submap->pmap, 
 						start, end - start);
 #endif i386
 	} else {
-		pmap_remove(target_map->pmap, start, end);
+		vm_map_submap_pmap_clean(target_map,
+				start, end, old_submap, 0);
 	}
 	vm_map_unlock(old_submap);
+	vm_map_deallocate(old_submap);
 	vm_map_unlock(target_map);
 	return KERN_SUCCESS;
 }
@@ -2336,9 +2434,7 @@ shared_region_mapping_ref(
 {
 	if(shared_region == NULL)
 		return KERN_SUCCESS;
-	shared_region_mapping_lock(shared_region);
-	shared_region->ref_count++;
-	shared_region_mapping_unlock(shared_region);
+	hw_atomic_add(&shared_region->ref_count, 1);
 	return KERN_SUCCESS;
 }
 
@@ -2347,44 +2443,46 @@ shared_region_mapping_dealloc(
 	shared_region_mapping_t	shared_region)
 {
 	struct shared_region_task_mappings sm_info;
-	shared_region_mapping_t		next;
+	shared_region_mapping_t next = NULL;
 
-	if(shared_region == NULL)
-		return KERN_SUCCESS;
-	shared_region_mapping_lock(shared_region);
+	while (shared_region) {
+		if (hw_atomic_sub(&shared_region->ref_count, 1) == 0) {
+			shared_region_mapping_lock(shared_region);
 
-	if((--shared_region->ref_count) == 0) {
+			sm_info.text_region = shared_region->text_region;
+			sm_info.text_size = shared_region->text_size;
+			sm_info.data_region = shared_region->data_region;
+			sm_info.data_size = shared_region->data_size;
+			sm_info.region_mappings = shared_region->region_mappings;
+			sm_info.client_base = shared_region->client_base;
+			sm_info.alternate_base = shared_region->alternate_base;
+			sm_info.alternate_next = shared_region->alternate_next;
+			sm_info.flags = shared_region->flags;
+			sm_info.self = (vm_offset_t)shared_region;
 
-		sm_info.text_region = shared_region->text_region;
-		sm_info.text_size = shared_region->text_size;
-		sm_info.data_region = shared_region->data_region;
-		sm_info.data_size = shared_region->data_size;
-		sm_info.region_mappings = shared_region->region_mappings;
-		sm_info.client_base = shared_region->client_base;
-		sm_info.alternate_base = shared_region->alternate_base;
-		sm_info.alternate_next = shared_region->alternate_next;
-		sm_info.flags = shared_region->flags;
-		sm_info.self = (vm_offset_t)shared_region;
-
-		lsf_remove_regions_mappings(shared_region, &sm_info);
-		pmap_remove(((vm_named_entry_t)
-			(shared_region->text_region->ip_kobject))
-						->backing.map->pmap, 
-			sm_info.client_base, 
-			sm_info.client_base + sm_info.text_size);
-		ipc_port_release_send(shared_region->text_region);
-		ipc_port_release_send(shared_region->data_region);
-		if(shared_region->object_chain) {
-			shared_region_mapping_dealloc(
-			     shared_region->object_chain->object_chain_region);
-			kfree((vm_offset_t)shared_region->object_chain,
-				sizeof (struct shared_region_object_chain));
-		}
-		kfree((vm_offset_t)shared_region,
+			lsf_remove_regions_mappings(shared_region, &sm_info);
+			pmap_remove(((vm_named_entry_t)
+				(shared_region->text_region->ip_kobject))
+							->backing.map->pmap, 
+				sm_info.client_base, 
+				sm_info.client_base + sm_info.text_size);
+			ipc_port_release_send(shared_region->text_region);
+			ipc_port_release_send(shared_region->data_region);
+			if (shared_region->object_chain) {
+				next = shared_region->object_chain->object_chain_region;
+				kfree((vm_offset_t)shared_region->object_chain,
+					sizeof (struct shared_region_object_chain));
+			} else {
+				next = NULL;
+			}
+			shared_region_mapping_unlock(shared_region);
+			kfree((vm_offset_t)shared_region,
 				sizeof (struct shared_region_mapping));
-		return KERN_SUCCESS;
+			shared_region = next;
+		} else {
+			break;
+		}
 	}
-	shared_region_mapping_unlock(shared_region);
 	return KERN_SUCCESS;
 }
 
@@ -2414,6 +2512,24 @@ vm_map_get_phys_page(
 			offset = entry->offset + (offset - entry->vme_start);
 			vm_map_unlock(old_map);
 			continue;
+		}
+		if (entry->object.vm_object->phys_contiguous) {
+			/* These are  not standard pageable memory mappings */
+			/* If they are not present in the object they will  */
+			/* have to be picked up from the pager through the  */
+			/* fault mechanism.  */
+			if(entry->object.vm_object->shadow_offset == 0) {
+				/* need to call vm_fault */
+				vm_map_unlock(map);
+				vm_fault(map, offset, VM_PROT_NONE, 
+					FALSE, THREAD_UNINT, NULL, 0);
+				vm_map_lock(map);
+				continue;
+			}
+			offset = entry->offset + (offset - entry->vme_start);
+			phys_addr = entry->object.vm_object->shadow_offset + offset;
+			break;
+			
 		}
 		offset = entry->offset + (offset - entry->vme_start);
 		object = entry->object.vm_object;

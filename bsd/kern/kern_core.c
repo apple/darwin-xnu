@@ -168,7 +168,7 @@ coredump(p)
 	int vbrcount=0;
 	tir_t tir1;
 	struct vnode * vp;
-
+	extern boolean_t coredumpok(vm_map_t map, vm_offset_t va);  /* temp fix */
 
 	if (pcred->p_svuid != pcred->p_ruid || pcred->p_svgid != pcred->p_rgid)
 		return (EFAULT);
@@ -181,14 +181,6 @@ coredump(p)
 		return (EFAULT);
 	(void) task_suspend(task);
 
-	/*
-	 *	Make sure all registers, etc. are in pcb so they get
-	 *	into core file.
-	 */
-#if defined (__ppc__)
-	fpu_save(current_act());
-	vec_save(current_act());
-#endif
 	sprintf(core_name, "/cores/core.%d", p->p_pid);
 	NDINIT(&nd, LOOKUP, FOLLOW, UIO_SYSSPACE, core_name, p);
 	if(error = vn_open(&nd, O_CREAT | FWRITE, S_IRUSR ))
@@ -297,6 +289,7 @@ coredump(p)
 		sc->cmd = LC_SEGMENT;
 		sc->cmdsize = sizeof(struct segment_command);
 		/* segment name is zerod by kmem_alloc */
+		sc->segname[0] = 0;
 		sc->vmaddr = vmoffset;
 		sc->vmsize = size;
 		sc->fileoff = foffset;
@@ -318,7 +311,7 @@ coredump(p)
 		 *	Note: if we can't read, then we end up with
 		 *	a hole in the file.
 		 */
-		if ((maxprot & VM_PROT_READ) == VM_PROT_READ && vbr.user_tag != VM_MEMORY_IOKIT) {
+		if ((maxprot & VM_PROT_READ) == VM_PROT_READ && vbr.user_tag != VM_MEMORY_IOKIT && coredumpok(map,vmoffset)) {
 			error = vn_rdwr(UIO_WRITE, vp, (caddr_t)vmoffset, size, foffset,
 				UIO_USERSPACE, IO_NODELOCKED|IO_UNIT, cred, (int *) 0, p);
 		}

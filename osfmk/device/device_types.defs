@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2002,2000 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -66,9 +66,9 @@
 #include <mach/std_types.defs>
 #include <mach/mach_types.defs>
 
-type recnum_t		= unsigned32;
-type dev_mode_t		= unsigned32;
-type dev_flavor_t	= unsigned32;
+type recnum_t		= uint32_t;
+type dev_mode_t		= uint32_t;
+type dev_flavor_t	= uint32_t;
 type dev_name_t         = c_string[*:128];
 type dev_status_t	= array[*:1024] of int;
 type io_buf_len_t	= integer_t;

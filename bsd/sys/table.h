@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2002 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -25,22 +25,17 @@
  * All rights reserved.  The CMU software License Agreement specifies
  * the terms and conditions for use and redistribution.
  */
-/*
- * HISTORY
- * 27-Apr-97  A.Ramesh
- *  added limited set to MacOSX
- *
- * 05-Sep-91  Doug Mitchell at NeXT
- *	Made entire contents PRIVATE.
- *
- *
- */
-
-#ifdef	KERNEL_PRIVATE
 
 #ifndef	_SYS_TABLE_
 #define _SYS_TABLE_
 
+#include <sys/appleapiopts.h>
+
+#warning obsolete header! Please delete the include from your sources.
+
+#ifdef	KERNEL_PRIVATE
+
+#ifdef __APPLE_API_OBSOLETE
 #include <sys/dkstat.h>
 #include <machine/table.h>
 
@@ -119,6 +114,8 @@ int machine_table(int id, int index, caddr_t addr, int nel, u_int lel, int set);
 int machine_table_setokay(int id);
 #endif /* KERNEL */
 
-#endif	/* _SYS_TABLE_ */
+#endif /* __APPLE_API_OBSOLETE */
 
 #endif	/* KERNEL_PRIVATE */
+#endif	/* _SYS_TABLE_ */
+

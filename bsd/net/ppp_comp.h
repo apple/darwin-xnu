@@ -49,7 +49,8 @@
 
 #ifndef _NET_PPP_COMP_H
 #define _NET_PPP_COMP_H
-
+#include <sys/appleapiopts.h>
+#ifdef __APPLE_API_UNSTABLE
 /*
  * The following symbols control whether we include code for
  * various compression methods.
@@ -182,4 +183,5 @@ struct compressor {
 #define CI_PREDICTOR_2		2	/* config option for Predictor-2 */
 #define CILEN_PREDICTOR_2	2	/* length of its config option */
 
+#endif /* __APPLE_API_UNSTABLE */
 #endif /* _NET_PPP_COMP_H */

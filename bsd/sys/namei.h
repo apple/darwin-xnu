@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2002 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -57,6 +57,10 @@
 
 #ifndef _SYS_NAMEI_H_
 #define	_SYS_NAMEI_H_
+
+#include <sys/appleapiopts.h>
+
+#ifdef __APPLE_API_UNSTABLE
 
 #include <sys/queue.h>
 #include <sys/uio.h>
@@ -161,7 +165,8 @@ struct nameidata {
 #define	ISSYMLINK	0x010000 /* symlink needs interpretation */
 #define	ISWHITEOUT	0x020000 /* found whiteout */
 #define	DOWHITEOUT	0x040000 /* do whiteouts */
-#define	NODELETEBUSY	0x800000 /* do not delete busy files (HFS semantic) */
+#define	WILLBEDIR	0x080000 /* new files will be dirs; allow trailing / */
+#define	NODELETEBUSY	0x800000 /* donot delete busy files (Carbon semantic) */
 #define	PARAMASK	0x0fff00 /* mask of parameter descriptors */
 /*
  * Initialization of an nameidata structure.
@@ -196,6 +201,7 @@ struct	namecache {
 };
 
 #ifdef KERNEL
+struct mount;
 extern u_long	nextvnodeid;
 int	namei __P((struct nameidata *ndp));
 int	lookup __P((struct nameidata *ndp));
@@ -224,4 +230,6 @@ struct	nchstats {
 	long	ncs_pass2;		/* names found with passes == 2 */
 	long	ncs_2passes;		/* number of times we attempt it */
 };
+#endif /* __APPLE_API_UNSTABLE */
+
 #endif /* !_SYS_NAMEI_H_ */

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2001 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -62,7 +62,6 @@
 
 #define	SIGPROP		/* include signal properties table */
 #include <sys/param.h>
-#include <sys/signalvar.h>
 #include <sys/resourcevar.h>
 #include <sys/namei.h>
 #include <sys/vnode.h>
@@ -75,10 +74,14 @@
 #include <sys/file.h>
 #include <sys/kernel.h>
 #include <sys/wait.h>
+#include <sys/signalvar.h>
+#if KTRACE
 #include <sys/ktrace.h>
+#endif
 #include <sys/syslog.h>
 #include <sys/stat.h>
 #include <sys/lock.h>
+#include <sys/kdebug.h>
 
 #include <sys/mount.h>
 
@@ -88,19 +91,24 @@
 #include <sys/user.h>		/* for coredump */
 #include <kern/ast.h>		/* for APC support */
 #include <kern/thread.h>
+#include <kern/sched_prim.h>
 #include <kern/thread_call.h>
+#include <mach/exception.h>
+
+extern void doexception(int exc, int code, int sub);
 
 void stop __P((struct proc *p));
 int cansignal __P((struct proc *, struct pcred *, struct proc *, int));
 int killpg1 __P((struct proc *, int, int, int));
 void sigexit_locked __P((struct proc *, int));
-void setsigvec __P((struct proc *, int, struct sigaction *));
+int setsigvec __P((struct proc *, int, struct __sigaction *));
 void exit1 __P((struct proc *, int, int *));
 int signal_lock __P((struct proc *));
 int signal_unlock __P((struct proc *));
-void signal_setast __P((thread_act_t *));
-void signal_clearast __P((thread_act_t *));
-void psignal_lock __P((struct proc *, int, int, int));
+void signal_setast __P((thread_act_t));
+void psignal_lock __P((struct proc *, int, int));
+void psignal_uthread __P((thread_act_t, int));
+kern_return_t do_bsdexception(int, int, int);
 
 #if SIGNAL_DEBUG
 void ram_printf __P((int));
@@ -112,12 +120,13 @@ ram_printf(int x)
     printf("x is %d",x);
 
 }
-
 #endif /* SIGNAL_DEBUG */
+
 int
 signal_lock(struct proc *p)
 {
 int error = 0;
+#if DIAGNOSTIC
 #if SIGNAL_DEBUG
 #ifdef __ppc__
         {
@@ -135,9 +144,11 @@ int error = 0;
         }
 #endif /* __ppc__ */       
 #endif /* SIGNAL_DEBUG */
+#endif /* DIAGNOSTIC */
 
 siglock_retry:
-	error = lockmgr(&p->signal_lock, LK_EXCLUSIVE, 0, (struct proc *)0);
+	/* TBD:  check p last arg */
+	error = lockmgr(&p->signal_lock, LK_EXCLUSIVE, 0, (struct proc *)p);
 	if (error == EINTR)
 		goto siglock_retry;
 	return(error);
@@ -146,6 +157,7 @@ siglock_retry:
 int
 signal_unlock(struct proc *p)
 {
+#if DIAGNOSTIC
 #if SIGNAL_DEBUG
 #ifdef __ppc__
         {
@@ -163,26 +175,17 @@ signal_unlock(struct proc *p)
         }
 #endif /* __ppc__ */       
 #endif /* SIGNAL_DEBUG */
+#endif /* DIAGNOSTIC */
 
-	return(lockmgr(&p->signal_lock, LK_RELEASE, (simple_lock_t)0, (struct proc *)0));
+	/* TBD:  check p last arg */
+	return(lockmgr(&p->signal_lock, LK_RELEASE, (simple_lock_t)0, (struct proc *)p));
 }
 
 void
 signal_setast(sig_actthread)
-thread_act_t *sig_actthread;
+thread_act_t sig_actthread;
 {
-	thread_ast_set(sig_actthread, AST_BSD);
-	if ((thread_act_t *)current_act() == sig_actthread)
-            ast_on(AST_BSD);
-}
-
-void
-signal_clearast(sig_actthread)
-thread_act_t *sig_actthread;
-{
-	thread_ast_clear(sig_actthread, AST_BSD);
-	if ((thread_act_t *)current_act() == sig_actthread)
-            ast_off(AST_BSD);
+	act_set_astbsd(sig_actthread);
 }
 
 /*
@@ -195,6 +198,10 @@ cansignal(p, pc, q, signum)
 	struct proc *q;
 	int signum;
 {
+	/* you can signal yourself */
+	if (p == q)
+		return(1);
+
 	if (pc->pc_ucred->cr_uid == 0)
 		return (1);		/* root can always signal */
 
@@ -243,7 +250,7 @@ cansignal(p, pc, q, signum)
 
 struct sigaction_args {
 	int	signum;
-	struct sigaction *nsa;
+	struct __sigaction *nsa;
 	struct sigaction *osa;
 };
 
@@ -255,10 +262,12 @@ sigaction(p, uap, retval)
 	register_t *retval;
 {
 	struct sigaction vec;
+	struct __sigaction __vec;
+
 	register struct sigaction *sa;
 	register struct sigacts *ps = p->p_sigacts;
 	register int signum;
-	int bit, error;
+	int bit, error=0;
 
 	signum = uap->signum;
 	if (signum <= 0 || signum >= NSIG ||
@@ -274,57 +283,153 @@ sigaction(p, uap, retval)
 			sa->sa_flags |= SA_ONSTACK;
 		if ((ps->ps_sigintr & bit) == 0)
 			sa->sa_flags |= SA_RESTART;
-		if (p->p_flag & P_NOCLDSTOP)
+		if (ps->ps_siginfo & bit)
+			sa->sa_flags |= SA_SIGINFO;
+		if (ps->ps_signodefer & bit)
+			sa->sa_flags |= SA_NODEFER;
+		if ((signum == SIGCHLD) && (p->p_flag & P_NOCLDSTOP))
 			sa->sa_flags |= SA_NOCLDSTOP;
+		if ((signum == SIGCHLD) && (p->p_flag & P_NOCLDWAIT))
+			sa->sa_flags |= SA_NOCLDWAIT;
 		if (error = copyout((caddr_t)sa, (caddr_t)uap->osa,
 		    sizeof (vec)))
 			return (error);
 	}
 	if (uap->nsa) {
-		if (error = copyin((caddr_t)uap->nsa, (caddr_t)sa,
-		    sizeof (vec)))
+		if (error = copyin((caddr_t)uap->nsa, (caddr_t)&__vec,
+		    sizeof (__vec)))
 			return (error);
-		setsigvec(p, signum, sa);
+		error = setsigvec(p, signum, &__vec);
 	}
-	return (0);
+	return (error);
 }
 
-static int
-reset_sigbits(thread_act_t th_act, int bit) 
+/* Routines to manipulate bits on all threads */
+int
+clear_procsiglist(struct proc *p,  int bit)
 {
-struct uthread *ut;
-	ut = get_bsdthread_info(th_act);
-	if (ut) {
-		ut->uu_sig &= ~bit;
+	struct uthread * uth;
+	thread_act_t thact;
+
+	signal_lock(p);
+
+	if ((p->p_flag & P_INVFORK) && p->p_vforkact) {
+		thact = p->p_vforkact;	
+		uth = (struct uthread *)get_bsdthread_info(thact);
+		if (uth) {
+			uth->uu_siglist &= ~bit;
+		}
+		p->p_siglist &= ~bit;
+		signal_unlock(p);
+		return(0);
+	} 
+
+	TAILQ_FOREACH(uth, &p->p_uthlist, uu_list) {
+		uth->uu_siglist &= ~bit;
 	}
+	p->p_siglist &= ~bit;
+	signal_unlock(p);
+	return(0);
 }
 
 int
-clear_sigbits (struct proc *p,  int bit)
+unblock_procsigmask(struct proc *p,  int bit)
 {
-task_t task = p->task;
+	struct uthread * uth;
+	thread_act_t thact;
 
-	p->p_siglist &= ~(bit);
-	task_act_iterate_wth_args(task, reset_sigbits, bit);
+	signal_lock(p);
+	if ((p->p_flag & P_INVFORK) && p->p_vforkact) {
+		thact = p->p_vforkact;	
+		uth = (struct uthread *)get_bsdthread_info(thact);
+		if (uth) {
+			uth->uu_sigmask &= ~bit;
+		}
+		p->p_sigmask &= ~bit;
+		signal_unlock(p);
+		return(0);
+	} 
+	TAILQ_FOREACH(uth, &p->p_uthlist, uu_list) {
+		uth->uu_sigmask &= ~bit;
+	}
+	p->p_sigmask &= ~bit;
+	signal_unlock(p);
 	return(0);
 }
 
 
-void
+int
+block_procsigmask(struct proc *p,  int bit)
+{
+	struct uthread * uth;
+	thread_act_t thact;
+
+	signal_lock(p);
+	if ((p->p_flag & P_INVFORK) && p->p_vforkact) {
+		thact = p->p_vforkact;	
+		uth = (struct uthread *)get_bsdthread_info(thact);
+		if (uth) {
+			uth->uu_sigmask |= bit;
+		}
+		p->p_sigmask |=  bit;
+		signal_unlock(p);
+		return(0);
+	} 
+	TAILQ_FOREACH(uth, &p->p_uthlist, uu_list) {
+		uth->uu_sigmask |= bit;
+	}
+	p->p_sigmask |=  bit;
+	signal_unlock(p);
+	return(0);
+}
+int
+set_procsigmask(struct proc *p,  int bit)
+{
+	struct uthread * uth;
+	thread_act_t thact;
+
+	signal_lock(p);
+	if ((p->p_flag & P_INVFORK) && p->p_vforkact) {
+		thact = p->p_vforkact;	
+		uth = (struct uthread *)get_bsdthread_info(thact);
+		if (uth) {
+			uth->uu_sigmask = bit;
+		}
+		p->p_sigmask =  bit;
+		signal_unlock(p);
+		return(0);
+	} 
+	TAILQ_FOREACH(uth, &p->p_uthlist, uu_list) {
+		uth->uu_sigmask = bit;
+	}
+	p->p_sigmask =  bit;
+	signal_unlock(p);
+	return(0);
+}
+
+int
 setsigvec(p, signum, sa)
 	register struct proc *p;
 	int signum;
-	register struct sigaction *sa;
+	register struct __sigaction *sa;
 {
 	register struct sigacts *ps = p->p_sigacts;
 	register int bit;
 
+	if ((signum == SIGKILL || signum == SIGSTOP) &&
+		sa->sa_handler != SIG_DFL)
+		return(EINVAL);
 	bit = sigmask(signum);
 	/*
 	 * Change setting atomically.
 	 */
 	ps->ps_sigact[signum] = sa->sa_handler;
+	ps->ps_trampact[signum] = sa->sa_tramp;
 	ps->ps_catchmask[signum] = sa->sa_mask &~ sigcantmask;
+	if (sa->sa_flags & SA_SIGINFO)
+		ps->ps_siginfo |= bit;
+	else
+		ps->ps_siginfo &= ~bit;
 	if ((sa->sa_flags & SA_RESTART) == 0)
 		ps->ps_sigintr |= bit;
 	else
@@ -337,12 +442,33 @@ setsigvec(p, signum, sa)
 		ps->ps_usertramp |= bit;
 	else
 		ps->ps_usertramp &= ~bit;
+	if (sa->sa_flags & SA_RESETHAND)
+		ps->ps_sigreset |= bit;
+	else
+		ps->ps_sigreset &= ~bit;
+	if (sa->sa_flags & SA_NODEFER)
+		ps->ps_signodefer |= bit;
+	else
+		ps->ps_signodefer &= ~bit;
 	if (signum == SIGCHLD) {
 		if (sa->sa_flags & SA_NOCLDSTOP)
 			p->p_flag |= P_NOCLDSTOP;
 		else
 			p->p_flag &= ~P_NOCLDSTOP;
+		if ((sa->sa_flags & SA_NOCLDWAIT) || (sa->sa_handler == SIG_IGN))
+			p->p_flag |= P_NOCLDWAIT;
+		else
+			p->p_flag &= ~P_NOCLDWAIT;
 	}
+
+#ifdef __ppc__ 
+	if (signum == SIGFPE) {
+		if (sa->sa_handler == SIG_DFL || sa->sa_handler == SIG_IGN) 
+			thread_enable_fpe(current_act(), 0);
+		else
+			thread_enable_fpe(current_act(), 1);
+	}
+#endif  /* __ppc__ */
 	/*
 	 * Set bit in p_sigignore for signals that are set to SIG_IGN,
 	 * and for signals set to SIG_DFL where the default is to ignore.
@@ -351,16 +477,8 @@ setsigvec(p, signum, sa)
 	 */
 	if (sa->sa_handler == SIG_IGN ||
 	    (sigprop[signum] & SA_IGNORE && sa->sa_handler == SIG_DFL)) {
-		p->p_siglist &= ~bit;		/* never to be seen again */
-		/*
-		 *	If this is a thread signal, clean out the
-		 *	threads as well.
-		 */
-		if (bit & threadmask) {
-			register	task_t		task = p->task;
 
-			task_act_iterate_wth_args(task, reset_sigbits, bit);
-		}
+		clear_procsiglist(p, bit);
 		if (signum != SIGCONT)
 			p->p_sigignore |= bit;	/* easier in psignal */
 		p->p_sigcatch &= ~bit;
@@ -371,6 +489,7 @@ setsigvec(p, signum, sa)
 		else
 			p->p_sigcatch |= bit;
 	}
+	return(0);
 }
 
 /*
@@ -392,11 +511,13 @@ siginit(p)
  * Reset signals for an exec of the specified process.
  */
 void
-execsigs(p)
+execsigs(p, thr_act)
 	register struct proc *p;
+	register thread_act_t thr_act;
 {
 	register struct sigacts *ps = p->p_sigacts;
 	register int nc, mask;
+	struct uthread *ut;
 
 	/*
 	 * Reset caught signals.  Held signals remain held
@@ -410,7 +531,12 @@ execsigs(p)
 		if (sigprop[nc] & SA_IGNORE) {
 			if (nc != SIGCONT)
 				p->p_sigignore |= mask;
-			p->p_siglist &= ~mask;
+			if (thr_act){
+			 	ut = (struct uthread *)get_bsdthread_info(thr_act);
+				ut->uu_siglist &= ~mask;
+				p->p_siglist &= ~mask;
+			} else
+				clear_procsiglist(p, mask);
 		}
 		ps->ps_sigact[nc] = SIG_DFL;
 	}
@@ -432,7 +558,8 @@ execsigs(p)
  */
 struct sigprocmask_args {
 	int	how;
-	sigset_t mask;
+	sigset_t *mask;
+	sigset_t * omask;
 };
 int
 sigprocmask(p, uap, retval)
@@ -441,21 +568,34 @@ sigprocmask(p, uap, retval)
 	register_t *retval;
 {
 	int error = 0;
+	sigset_t oldmask, nmask;
+	sigset_t * omask = uap->omask;
+	struct uthread *ut;
 
-	*retval = p->p_sigmask;
+	ut = (struct uthread *)get_bsdthread_info(current_act());
+	oldmask  = ut->uu_sigmask;
+
+	if (uap->mask == (sigset_t *)0) {
+		/* just want old mask */
+		goto out;
+	}
+	error = copyin((caddr_t)uap->mask, &nmask, sizeof(sigset_t));
+	if (error)
+		goto out;
 
 	switch (uap->how) {
 	case SIG_BLOCK:
-		p->p_sigmask |= uap->mask &~ sigcantmask;
+		block_procsigmask(p, (nmask & ~sigcantmask));
+		signal_setast(current_act());
 		break;
 
 	case SIG_UNBLOCK:
-		p->p_sigmask &= ~(uap->mask);
+		unblock_procsigmask(p, (nmask & ~sigcantmask));
 		signal_setast(current_act());
 		break;
 
 	case SIG_SETMASK:
-		p->p_sigmask = uap->mask &~ sigcantmask;
+		set_procsigmask(p, (nmask & ~sigcantmask));
 		signal_setast(current_act());
 		break;
 	
@@ -463,19 +603,30 @@ sigprocmask(p, uap, retval)
 		error = EINVAL;
 		break;
 	}
+out:
+	if (!error && omask)
+		copyout(&oldmask, omask, sizeof(sigset_t));
 	return (error);
 }
 
-/* ARGSUSED */
+struct sigpending_args {
+	struct sigvec *osv;
+};
 int
 sigpending(p, uap, retval)
 	struct proc *p;
-	void *uap;
+	register struct sigpending_args *uap;
 	register_t *retval;
 {
+	struct uthread *ut;
+	sigset_t pendlist;
 
-	*retval = p->p_siglist;
-	return (0);
+	ut = (struct uthread *)get_bsdthread_info(current_act());
+	pendlist = ut->uu_siglist;
+
+	if (uap->osv)
+		copyout(&pendlist, uap->osv, sizeof(sigset_t));
+	return(0);
 }
 
 #if COMPAT_43
@@ -494,12 +645,15 @@ osigvec(p, uap, retval)
 	register struct osigvec_args *uap;
 	register_t *retval;
 {
+	struct sigvec __vec;
 	struct sigvec vec;
 	register struct sigacts *ps = p->p_sigacts;
 	register struct sigvec *sv;
 	register int signum;
-	int bit, error;
+	int bit, error=0;
 
+	panic("osigvec: notsupp");
+#if 0
 	signum = uap->signum;
 	if (signum <= 0 || signum >= NSIG ||
 	    signum == SIGKILL || signum == SIGSTOP)
@@ -525,9 +679,10 @@ osigvec(p, uap, retval)
 		    sizeof (vec)))
 			return (error);
 		sv->sv_flags ^= SA_RESTART;	/* opposite of SV_INTERRUPT */
-		setsigvec(p, signum, (struct sigaction *)sv);
+		error = setsigvec(p, signum, (struct sigaction *)sv);
 	}
-	return (0);
+#endif
+	return (error);
 }
 
 struct osigblock_args {
@@ -539,9 +694,10 @@ osigblock(p, uap, retval)
 	struct osigblock_args *uap;
 	register_t *retval;
 {
+	struct uthread * uth = get_bsdthread_info(current_act());
 
-	*retval = p->p_sigmask;
-	p->p_sigmask |= uap->mask &~ sigcantmask;
+	*retval = uth->uu_sigmask;
+	uth->uu_sigmask |= (uap->mask & ~sigcantmask);
 	return (0);
 }
 
@@ -554,9 +710,10 @@ osigsetmask(p, uap, retval)
 	struct osigsetmask_args *uap;
 	register_t *retval;
 {
+	struct uthread * uth = get_bsdthread_info(current_act());
 
-	*retval = p->p_sigmask;
-	p->p_sigmask = uap->mask &~ sigcantmask;
+	*retval = uth->uu_sigmask;
+	uth->uu_sigmask = (uap->mask & ~sigcantmask);
 	return (0);
 }
 #endif /* COMPAT_43 */
@@ -570,11 +727,12 @@ osigsetmask(p, uap, retval)
 int
 sigcontinue(error)
 {
+	struct uthread *ut = get_bsdthread_info(current_act());
   unix_syscall_return(EINTR);
 }
 
 struct sigsuspend_args {
-	int mask;
+	sigset_t mask;
 };
 
 /* ARGSUSED */
@@ -585,6 +743,9 @@ sigsuspend(p, uap, retval)
 	register_t *retval;
 {
 	register struct sigacts *ps = p->p_sigacts;
+	struct uthread *ut;
+
+	ut = (struct uthread *)get_bsdthread_info(current_act());
 
 	/*
 	 * When returning from sigpause, we want
@@ -593,12 +754,224 @@ sigsuspend(p, uap, retval)
 	 * save it here and mark the sigacts structure
 	 * to indicate this.
 	 */
-	ps->ps_oldmask = p->p_sigmask;
-	ps->ps_flags |= SAS_OLDMASK;
-	p->p_sigmask = uap->mask &~ sigcantmask;
+	ut->uu_oldmask = ut->uu_sigmask;
+	ut->uu_flag |= USAS_OLDMASK;
+	ut->uu_sigmask = (uap->mask & ~sigcantmask);
 	(void) tsleep0((caddr_t) p, PPAUSE|PCATCH, "pause", 0, sigcontinue);
 	/* always return EINTR rather than ERESTART... */
 	return (EINTR);
+}
+
+struct __disable_thsignal_args {
+	int value;
+};
+
+int
+__disable_threadsignal(p, uap, retval)
+	struct proc *p;
+	register struct __disable_thsignal_args *uap;
+	register_t *retval;
+{
+	struct uthread *uth;
+
+	uth = (struct uthread *)get_bsdthread_info(current_act());
+
+	/* No longer valid to have any signal delivered */
+	signal_lock(p);
+	uth->uu_flag |= UNO_SIGMASK;
+	signal_unlock(p);
+
+	return(0);
+
+}
+
+struct pthread_kill_args {
+	void * thread_port;
+	int sig;
+};
+
+int 
+__pthread_kill(p, uap, retval) 
+	struct proc *p;
+	register struct pthread_kill_args *uap;
+	register_t *retval;
+{
+	thread_act_t target_act;
+	int error = 0;
+	int signum = uap->sig;
+	struct uthread *uth;
+
+	target_act = (thread_act_t)port_name_to_act(uap->thread_port);
+
+	if (target_act == THR_ACT_NULL)
+		return (ESRCH);
+	if ((u_int)signum >= NSIG) {
+		error = EINVAL;
+		goto out;
+	}
+
+	uth = (struct uthread *)get_bsdthread_info(target_act);
+	{ void *tht = getshuttle_thread(target_act);
+}
+	if (uth->uu_flag & UNO_SIGMASK) {
+		error = ESRCH;
+		goto out;
+	}
+
+	if (signum)
+		psignal_uthread(target_act, signum);
+out:
+	act_deallocate(target_act);
+	return (error);
+}
+
+
+struct pthread_sigmask_args {
+	int how;
+	const sigset_t  *set;
+	sigset_t * oset;
+};
+int 
+pthread_sigmask(p, uap, retval)
+	register struct proc *p;
+	register struct pthread_sigmask_args *uap;
+	register_t *retval;
+{
+	int how = uap->how;
+	const sigset_t  *set = uap->set;
+	sigset_t  * oset = uap->oset;
+	const sigset_t nset;
+	int error = 0;
+	struct uthread *ut;
+	sigset_t  oldset;
+
+	ut = (struct uthread *)get_bsdthread_info(current_act());
+	oldset = ut->uu_sigmask;
+
+	if (set == (sigset_t *) 0) {
+		/* need only old mask */
+		goto out;
+	}
+
+	error = copyin((caddr_t)set, (caddr_t)&nset, sizeof(sigset_t));
+	if (error)
+		goto out;
+
+	switch (uap->how) {
+	case SIG_BLOCK:
+		ut->uu_sigmask |= (nset & ~sigcantmask);
+		break;
+
+	case SIG_UNBLOCK:
+		ut->uu_sigmask &= ~(nset);
+		signal_setast(current_act());
+		break;
+
+	case SIG_SETMASK:
+		ut->uu_sigmask = (nset & ~sigcantmask);
+		signal_setast(current_act());
+		break;
+	
+	default:
+		error = EINVAL;
+
+	}
+out:
+	if (!error && oset)
+		copyout((caddr_t)&oldset, (caddr_t)oset, sizeof(sigset_t));
+
+	return(error);
+}
+
+
+struct sigwait_args {
+	const sigset_t  *set;
+	int *sig;
+};
+
+int 
+sigwait(p, uap, retval)
+	register struct proc *p;
+	register struct sigwait_args *uap;
+	register_t *retval;
+{
+	register struct sigacts *ps = p->p_sigacts;
+	struct uthread *ut;
+	struct uthread *uth;
+	thread_act_t thact;
+	int error = 0;
+	sigset_t mask;
+	sigset_t siglist;
+	sigset_t sigw=0;
+	int signum;
+
+	ut = (struct uthread *)get_bsdthread_info(current_act());
+
+	if (uap->set == (const sigset_t *)0)
+		return(EINVAL);
+
+	error = copyin((caddr_t)uap->set, (caddr_t)&mask, sizeof(sigset_t));
+	if (error)
+		return(error);
+
+	siglist = (mask & ~sigcantmask);
+
+	if (siglist == 0)
+		return(EINVAL);
+
+	signal_lock(p);
+	if ((p->p_flag & P_INVFORK) && p->p_vforkact) {
+		signal_unlock(p);
+		return(EINVAL);
+	} else {
+		TAILQ_FOREACH(uth, &p->p_uthlist, uu_list) {
+			if (sigw = uth->uu_siglist & siglist) {
+				break;
+			}
+		}
+	}
+	signal_unlock(p);
+	if (sigw) {
+		/* The signal was pending on a thread */
+		goto sigwait1;
+	}
+	/*
+	 * When returning from sigwait, we want
+	 * the old mask to be restored after the
+	 * signal handler has finished.  Thus, we
+	 * save it here and mark the sigacts structure
+	 * to indicate this.
+	 */
+	ut->uu_oldmask = ut->uu_sigmask;
+	ut->uu_flag |= USAS_OLDMASK;
+	if (siglist == (sigset_t)0)
+		return(EINVAL);
+	/* SIGKILL and SIGSTOP are not maskable as well */
+	ut->uu_sigmask = ~(siglist|sigcantmask);
+	ut->uu_sigwait = siglist; 
+	/* No Continuations for now */
+	error =  tsleep((caddr_t)&ut->uu_sigwait, PPAUSE|PCATCH, "pause", 0);
+
+	if ((error == EINTR) || (error == ERESTART))
+		error = 0;
+
+	sigw = (ut->uu_sigwait & siglist);
+	ut->uu_sigmask = ut->uu_oldmask;
+	ut->uu_oldmask = 0;
+	ut->uu_flag &= ~USAS_OLDMASK;
+sigwait1:
+	ut->uu_sigwait = 0;
+	if (!error) {
+		signum = ffs((unsigned int)sigw);
+		if (!signum)
+			panic("sigwait with no signal wakeup");
+		ut->uu_siglist &= ~(sigmask(signum));
+		if (uap->sig)
+				error = copyout(&signum, uap->sig, sizeof(int));
+	}
+
+	return(error);
+
 }
 
 #if COMPAT_43
@@ -606,6 +979,7 @@ struct osigstack_args {
 	struct sigstack *nss;
 	struct sigstack *oss;
 };
+
 /* ARGSUSED */
 int
 osigstack(p, uap, retval)
@@ -660,6 +1034,10 @@ sigaltstack(p, uap, retval)
 	if (error = copyin((caddr_t)uap->nss, (caddr_t)&ss,
 	    sizeof (ss)))
 		return (error);
+	if ((ss.ss_flags & ~SA_DISABLE) != 0)  {
+		return(EINVAL);
+	}
+
 	if (ss.ss_flags & SA_DISABLE) {
 		if (psp->ps_sigstk.ss_flags & SA_ONSTACK)
 			return (EINVAL);
@@ -813,11 +1191,32 @@ pgsignal(pgrp, signum, checkctty)
 }
 
 /*
+ * Send signal to a backgrounded process blocked due to tty access
+ * In FreeBSD, the backgrounded process wakes up every second and
+ * discovers whether it is foregounded or not. In our case, we block 
+ * the thread in tsleep as we want to avoid storm of processes as well 
+ * as the suspend is only at AST level
+ */
+void
+tty_pgsignal(pgrp, signum)
+	struct pgrp *pgrp;
+	int signum;
+{
+	register struct proc *p;
+
+	if (pgrp)
+		for (p = pgrp->pg_members.lh_first; p != 0;
+		     p = p->p_pglist.le_next)
+			if ((p->p_flag & P_TTYSLEEP) && (p->p_flag & P_CONTROLT))
+				psignal(p, signum);
+}
+
+/*
  * Send a signal caused by a trap to a specific thread.
  */
 void
 threadsignal(sig_actthread, signum, code)
-	register thread_act_t *sig_actthread;
+	register thread_act_t sig_actthread;
 	register int signum;
 	u_long code;
 {
@@ -842,54 +1241,21 @@ threadsignal(sig_actthread, signum, code)
 	if (!(p->p_flag & P_TRACED) && (p->p_sigignore & mask))
 		return;
 
-	uth->uu_sig |= mask;
+	uth->uu_siglist |= mask;
+	p->p_siglist |= mask;	/* just for lame ones looking here */
 	uth->uu_code = code;
 	/* mark on process as well */
-	p->p_siglist |= mask;
 	signal_setast(sig_actthread);
 }
 
  
 void
-psignal_pend(p) 
-	register struct proc *p;
-{
-	boolean_t funnel_state;
-	register int sigbits, mask, signum;
-
-	thread_funnel_set(kernel_flock, TRUE);
-
-	if (p->p_sigpending == 0)
-			return;
-	
-
-	signal_lock(p);
-
-	for (;;) {
-		sigbits = p->p_sigpending;
-		if (sigbits == 0)
-			goto out;
-		signum = ffs((long)sigbits);
-		mask = sigmask(signum);
-		p->p_sigpending &= ~mask;
-
-		psignal_lock(p, signum, 0, 0);
-
-	}
-out:
-	p->p_flag &= ~P_SIGTHR;
-	signal_unlock(p);
-	thread_funnel_set(kernel_flock, FALSE);
-}
-
-void
 psignal(p, signum)
 	register struct proc *p;
 	register int signum;
 {
-	psignal_lock(p, signum, 1, 1);
+	psignal_lock(p, signum, 1);
 }
-
 
 void
 psignal_vfork(p, new_task, thr_act, signum)
@@ -904,6 +1270,7 @@ psignal_vfork(p, new_task, thr_act, signum)
 	register sig_t action;
 	int mask;
 	kern_return_t kret;
+	struct uthread *uth;
 
 	if ((u_int)signum >= NSIG || signum == 0)
 		panic("psignal signal number");
@@ -920,6 +1287,7 @@ psignal_vfork(p, new_task, thr_act, signum)
 		return;
 
 
+	uth = get_bsdthread_info(thr_act);
 	signal_lock(p);
 
 	/*
@@ -931,8 +1299,10 @@ psignal_vfork(p, new_task, thr_act, signum)
 		(p->p_flag & P_TRACED) == 0)
 		p->p_nice = NZERO;
 
-	if (prop & SA_CONT)
+	if (prop & SA_CONT) {
 		p->p_siglist &= ~stopsigmask;
+		uth->uu_siglist &= ~stopsigmask;
+	}
 
 	if (prop & SA_STOP) {
 		/*
@@ -944,12 +1314,14 @@ psignal_vfork(p, new_task, thr_act, signum)
 		if (prop & SA_TTYSTOP && p->p_pgrp->pg_jobc == 0 &&
 			action == SIG_DFL)
 			goto psigout;
+		uth->uu_siglist &= ~contsigmask;
 		p->p_siglist &= ~contsigmask;
 	}
-	p->p_siglist |= mask;
+	uth->uu_siglist |= mask;
+	p->p_siglist |= mask;   /* just for lame ones looking here */
 	
-        /* Deliver signal to the activation passed in */
-	thread_ast_set(thr_act, AST_BSD);
+	/* Deliver signal to the activation passed in */
+	act_set_astbsd(thr_act);
 
 	/*
 	 *	SIGKILL priority twiddling moved here from above because
@@ -959,12 +1331,6 @@ psignal_vfork(p, new_task, thr_act, signum)
 	 */
 	if ((signum == SIGKILL) && (p->p_nice > NZERO)) {
 		p->p_nice = NZERO;
-#if XXX
-		/*
-		 * we need to make changes here to get nice to work 
-		 * reset priority to BASEPRI_USER
-		 */
-#endif
 	}
 
 	/*
@@ -984,8 +1350,10 @@ run:
 	 * while we were stopped), check for a signal from the debugger.
 	 */
 	if (p->p_stat == SSTOP) {
-		if ((p->p_flag & P_TRACED) != 0 && p->p_xstat != 0)
-			p->p_siglist |= sigmask(p->p_xstat); 
+		if ((p->p_flag & P_TRACED) != 0 && p->p_xstat != 0) {
+			uth->uu_siglist |= sigmask(p->p_xstat); 
+			p->p_siglist |= mask;   /* just for lame ones looking here */
+		}
 	}
 
 	/*
@@ -995,6 +1363,40 @@ run:
 
 psigout:
 	signal_unlock(p);
+}
+
+thread_act_t
+get_signalthread(struct proc *p, int signum)
+{
+	struct uthread *uth;
+	thread_act_t thr_act;
+	sigset_t mask = sigmask(signum);
+	thread_act_t sig_thread_act;
+	struct task * sig_task = p->task;
+	thread_t sig_thread;
+	kern_return_t kret;
+	
+	if ((p->p_flag & P_INVFORK) && p->p_vforkact) {
+		sig_thread_act = p->p_vforkact;	
+		kret = check_actforsig(sig_task, sig_thread_act, &sig_thread, 1);
+		if (kret == KERN_SUCCESS) 
+			return(sig_thread_act);
+		else
+			return(THR_ACT_NULL);
+	} 
+
+	TAILQ_FOREACH(uth, &p->p_uthlist, uu_list) {
+		if(((uth->uu_flag & UNO_SIGMASK)== 0) && 
+			(((uth->uu_sigmask & mask) == 0) || (uth->uu_sigwait & mask))) {
+			if (check_actforsig(p->task, uth->uu_act, NULL, 1) == KERN_SUCCESS)
+				return(uth->uu_act);
+		}
+	}
+	if (get_signalact(p->task, &thr_act, NULL, 1) == KERN_SUCCESS) {
+		return(thr_act);
+	}
+
+	return(THR_ACT_NULL);
 }
 
 /*
@@ -1011,11 +1413,10 @@ psigout:
  * Other ignored signals are discarded immediately.
  */
 void
-psignal_lock(p, signum, withlock, pend)
+psignal_lock(p, signum, withlock)
 	register struct proc *p;
 	register int signum;
 	register int withlock;
-	register int pend;
 {
 	register int s, prop;
 	register sig_t action;
@@ -1023,8 +1424,9 @@ psignal_lock(p, signum, withlock, pend)
 	thread_t	sig_thread;
 	register task_t		sig_task;
 	register thread_t	cur_thread;
-	thread_act_t	*cur_act;
+	thread_act_t	cur_act;
 	int mask;
+	struct uthread *uth;
 	kern_return_t kret;
 	int sw_funnel = 0;
 
@@ -1065,26 +1467,40 @@ psignal_lock(p, signum, withlock, pend)
 		return;
 	}
 
-	/* 
-	 * if the traced process is blocked waiting for
-	 * gdb then do not block the caller just pend 
-	 * the signal. Setup a callout  to process the
-	 * pended signal if not alreadu set
-	 */
-	if (pend && (p->p_flag & P_TRACED) && p->sigwait) {
-		p->p_sigpending |= mask;
-		if (!(p->p_flag & P_SIGTHR)) {
-			p->p_flag |= P_SIGTHR;
-			thread_call_func((thread_call_func_t)psignal_pend, p,
-			 FALSE);
-		}
-		if (sw_funnel)
-			thread_funnel_switch(KERNEL_FUNNEL, NETWORK_FUNNEL);
-		return;
-	}
-
 	if (withlock)
 		signal_lock(p);
+
+	/*
+	 *	Deliver the signal to the first thread in the task. This
+	 *	allows single threaded applications which use signals to
+	 *	be able to be linked with multithreaded libraries.  We have
+	 *	an implicit reference to the current_thread, but need
+	 *	an explicit one otherwise.  The thread reference keeps
+	 *	the corresponding task data structures around too.  This
+	 *	reference is released by thread_deallocate.
+	 */
+	
+	if (((p->p_flag & P_TRACED) == 0) && (p->p_sigignore & mask))
+		goto psigout;
+
+	cur_thread = current_thread();	 /* this is a shuttle */
+	cur_act = current_act();
+        
+	/* If successful return with ast set */
+	sig_thread_act = get_signalthread(p, signum);
+
+	if (sig_thread_act == THR_ACT_NULL) {
+		/* XXXX FIXME
+		/* if it is sigkill, may be we should
+	 	* inject a thread to terminate
+	 	*/
+#if SIGNAL_DEBUG
+       		ram_printf(1);
+#endif /* SIGNAL_DEBUG */
+		goto psigout;
+	}
+
+	uth = get_bsdthread_info(sig_thread_act);
 
 	/*
 	 * If proc is traced, always give parent a chance.
@@ -1101,7 +1517,9 @@ psignal_lock(p, signum, withlock, pend)
 		 */
 		if (p->p_sigignore & mask)
 			goto psigout;
-		if (p->p_sigmask & mask)
+		if (uth->uu_sigwait & mask)
+			action = SIG_WAIT;
+		if (uth->uu_sigmask & mask)
 			action = SIG_HOLD;
 		else if (p->p_sigcatch & mask)
 			action = SIG_CATCH;
@@ -1113,8 +1531,10 @@ psignal_lock(p, signum, withlock, pend)
 		(p->p_flag & P_TRACED) == 0)
 		p->p_nice = NZERO;
 
-	if (prop & SA_CONT)
+	if (prop & SA_CONT) {
+		uth->uu_siglist &= ~stopsigmask;
 		p->p_siglist &= ~stopsigmask;
+	}
 
 	if (prop & SA_STOP) {
 		/*
@@ -1126,68 +1546,20 @@ psignal_lock(p, signum, withlock, pend)
 		if (prop & SA_TTYSTOP && p->p_pgrp->pg_jobc == 0 &&
 			action == SIG_DFL)
 			goto psigout;
+		uth->uu_siglist &= ~contsigmask;
 		p->p_siglist &= ~contsigmask;
 	}
-	p->p_siglist |= mask;
+	uth->uu_siglist |= mask;
+	p->p_siglist |= mask;   /* just for lame ones looking here */
 
+	
 	/*
 	 * Defer further processing for signals which are held,
 	 * except that stopped processes must be continued by SIGCONT.
 	 */
-	if (action == SIG_HOLD && ((prop & SA_CONT) == 0 || p->p_stat != SSTOP))
+	if (action == SIG_HOLD && ((prop & SA_CONT) == 0 || p->p_stat != SSTOP)) {
 		goto psigout;
-		
-	/*
-	 *	Deliver the signal to the first thread in the task. This
-	 *	allows single threaded applications which use signals to
-	 *	be able to be linked with multithreaded libraries.  We have
-	 *	an implicit reference to the current_thread, but need
-	 *	an explicit one otherwise.  The thread reference keeps
-	 *	the corresponding task data structures around too.  This
-	 *	reference is released by thread_deallocate.
-	 */
-	
-	cur_thread = current_thread();	 /* this is a shuttle */
-	cur_act = current_act();
-        
-	if ((p->p_flag & P_INVFORK) && p->p_vforkact) {
-			sig_thread_act = p->p_vforkact;	
-
-			kret = check_actforsig(sig_task, sig_thread_act, &sig_thread, 1);
-			if (kret == KERN_SUCCESS) {
-				goto psig_foundthread;
-			}
-	} 
-
-	/* If successful return with ast set */
-	kret = (kern_return_t)get_signalact(sig_task, 
-				&sig_thread_act, &sig_thread, 1);
-
-	if ((kret != KERN_SUCCESS) || (sig_thread_act == THREAD_NULL)) {
-		/* XXXX FIXME
-		/* if it is sigkill, may be we should
-	 	* inject a thread to terminate
-	 	*/
-#if DIAGNOSTIC
-		printf("WARNING: no activation in psignal\n"); 
-#endif
-#if SIGNAL_DEBUG
-       	ram_printf(1);
-#endif /* SIGNAL_DEBUG */
-			goto psigout;
-		}
-
-psig_foundthread:
-	if (sig_thread == THREAD_NULL) {
-#if DIAGNOSTIC
-		printf("WARNING: valid act; but no shutte in psignal\n");
-#endif
-#if 0
-		/* FIXME : NO VALID SHUTTLE */
-		goto psigout;
-#endif
 	}
-
 	/*
 	 *	SIGKILL priority twiddling moved here from above because
 	 *	it needs sig_thread.  Could merge it into large switch
@@ -1196,12 +1568,6 @@ psig_foundthread:
 	 */
 	if ((signum == SIGKILL) && (p->p_nice > NZERO)) {
 		p->p_nice = NZERO;
-#if XXX
-		/*
-		 * we need to make changes here to get nice to work 
-		 * reset priority to BASEPRI_USER
-		 */
-#endif
 	}
 
 	/*
@@ -1214,6 +1580,17 @@ psig_foundthread:
 			goto run;
 		else
 			goto psigout;
+	}
+
+	if (action == SIG_WAIT) {
+		uth->uu_sigwait = mask;
+		uth->uu_siglist &= ~mask;
+		p->p_siglist &= ~mask;
+		wakeup(&uth->uu_sigwait);
+		/* if it is SIGCONT resume whole process */
+		if (prop & SA_CONT)
+			(void) task_resume(sig_task);
+		goto psigout;
 	}
 
 	if (action != SIG_DFL) {
@@ -1236,44 +1613,33 @@ psig_foundthread:
 			 * stopped from the keyboard.
 			 */
 			if (!(prop & SA_STOP) && p->p_pptr == initproc) {
-				psignal_lock(p, SIGKILL, 0, 1);
+				psignal_lock(p, SIGKILL, 0);
+				uth->uu_siglist &= ~mask;
 				p->p_siglist &= ~mask;
 				goto psigout;
 			}
                         
 			/*
-			 *	Stop the task.
+			 *	Stop the task
+			 *	if task hasn't already been stopped by
+			 *	a signal.
 			 */
-			if (!is_thread_running(sig_thread)) {
-				/*  Thread is not running 
-				 *	If task hasn't already been stopped by
-				 *	a signal, stop it.
-				 */
-				p->p_siglist &= ~mask;
-				if (get_task_userstop(sig_task) == 0) {
-					/*
-					 * p_cursig must not be set, because
-					 * it will be psig()'d if it is not
-					 * zero, and the signal is being
-					 * handled here.  But save the signal
-					 * in p_stopsig so WUNTRACED
-					 * option to wait can find it.
-					 */
-					p->p_xstat = signum;
-					if ((p->p_pptr->p_flag & P_NOCLDSTOP) == 0)
-						psignal(p->p_pptr, SIGCHLD);
-					stop(p);
+			uth->uu_siglist &= ~mask;
+			p->p_siglist &= ~mask;
+			if (p->p_stat != SSTOP) {
+				p->p_xstat = signum;
+				stop(p);
+				if ((p->p_pptr->p_flag & P_NOCLDSTOP) == 0) {
+					struct proc *pp = p->p_pptr;
+
+					pp->si_pid = p->p_pid;
+					pp->si_status = p->p_xstat;
+					pp->si_code = CLD_STOPPED;
+					pp->si_uid = p->p_cred->p_ruid;
+					psignal(pp, SIGCHLD);
 				}
-#if 0
-				/* unconditional check is bad */
-				signal_clearast(sig_thread_act);
-#endif
-				goto psigout;
-			} else {
-				if (p->p_stat != SZOMB) 
-					signal_setast(cur_act);
-				goto psigout;
 			}
+			goto psigout;
 		}
 
 		switch (signum) {
@@ -1308,15 +1674,10 @@ psig_foundthread:
 			} else {
 				(void) task_resume(sig_task);
 			}
+			uth->uu_siglist &= ~mask;
 			p->p_siglist &= ~mask;
 			p->p_stat = SRUN;
-#if 0
-			/* do not clear AST as tcsh is sendig SIGTERM followed by 
-			 * SIGCONT and the ast was getting cleared unconditinally
-			 * This is not right.
-			 */
-			signal_clearast(sig_thread_act);
-#endif
+
 			goto psigout;
 
 		default:
@@ -1335,24 +1696,309 @@ run:
 	 */
 	if (p->p_stat == SSTOP) {
 		if ((p->p_flag & P_TRACED) != 0 && p->p_xstat != 0)
-			p->p_siglist |= sigmask(p->p_xstat); 
+			uth->uu_siglist |= sigmask(p->p_xstat); 
+	} else {
+		/*
+	 	 * setrunnable(p) in BSD and
+	 	 * Wake up the thread if it is interruptible.
+	 	 */
+		p->p_stat = SRUN;
+		thread_abort_safely(sig_thread_act);
 	}
-
-	/*
-	 * setrunnable(p) in BSD
-	 */
-	p->p_stat = SRUN;
-
-	/*
-	 *	Wake up the thread if it is interruptible.
-	 */
-	thread_abort_safely(sig_thread_act);
 psigout:
 	if (withlock) 
 		signal_unlock(p);
 	if (sw_funnel)
 		thread_funnel_switch(KERNEL_FUNNEL, NETWORK_FUNNEL);
 }
+
+
+/* psignal_lock(p, signum, withlock ) */
+void
+psignal_uthread(thr_act, signum)
+	thread_act_t thr_act;
+	int signum;
+{
+	struct proc *p;
+	register int s, prop;
+	register sig_t action;
+	thread_act_t	sig_thread_act;
+	thread_t	sig_thread;
+	register task_t		sig_task;
+	register thread_t	cur_thread;
+	thread_act_t	cur_act;
+	int mask;
+	struct uthread *uth;
+	kern_return_t kret;
+	int error = 0;
+
+	p = (struct proc *)get_bsdtask_info(get_threadtask(thr_act));
+	if ((u_int)signum >= NSIG || signum == 0)
+		panic("Invalid signal number in psignal_uthread"); 
+	mask = sigmask(signum);
+	prop = sigprop[signum];
+
+#if SIGNAL_DEBUG
+        if(rdebug_proc && (p == rdebug_proc)) {
+                ram_printf(3);
+        }
+#endif /* SIGNAL_DEBUG */
+
+	/*
+	 *	We will need the task pointer later.  Grab it now to
+	 *	check for a zombie process.  Also don't send signals
+	 *	to kernel internal tasks.
+	 */
+	if (((sig_task = p->task) == TASK_NULL)  || is_kerneltask(sig_task)) {
+		return;
+	}
+
+	sig_thread_act = thr_act;
+	/*
+	 * do not send signals to the process that has the thread
+	 * doing a reboot(). Not doing so will mark that thread aborted
+	 * and can cause IO failures wich will cause data loss.
+	 */
+	if (ISSET(p->p_flag, P_REBOOT)) {
+		return;
+	}
+
+	signal_lock(p);
+
+	/*
+	 *	Deliver the signal to the first thread in the task. This
+	 *	allows single threaded applications which use signals to
+	 *	be able to be linked with multithreaded libraries.  We have
+	 *	an implicit reference to the current_thread, but need
+	 *	an explicit one otherwise.  The thread reference keeps
+	 *	the corresponding task data structures around too.  This
+	 *	reference is released by thread_deallocate.
+	 */
+	
+	if (((p->p_flag & P_TRACED) == 0) && (p->p_sigignore & mask))
+		goto puthout;
+
+	cur_thread = current_thread();	 /* this is a shuttle */
+	cur_act = current_act();
+        
+	kret = check_actforsig(sig_task, sig_thread_act, &sig_thread, 1);
+
+	if (kret != KERN_SUCCESS) {
+		error = EINVAL;
+		goto puthout;
+	}
+
+
+	uth = get_bsdthread_info(sig_thread_act);
+
+	/*
+	 * If proc is traced, always give parent a chance.
+	 */
+	if (p->p_flag & P_TRACED)
+		action = SIG_DFL;
+	else {
+		/*
+		 * If the signal is being ignored,
+		 * then we forget about it immediately.
+		 * (Note: we don't set SIGCONT in p_sigignore,
+		 * and if it is set to SIG_IGN,
+		 * action will be SIG_DFL here.)
+		 */
+		if (p->p_sigignore & mask)
+			goto puthout;
+		if (uth->uu_sigwait & mask)
+			action = SIG_WAIT;
+		if (uth->uu_sigmask & mask)
+			action = SIG_HOLD;
+		else if (p->p_sigcatch & mask)
+			action = SIG_CATCH;
+		else
+			action = SIG_DFL;
+	}
+
+	if (p->p_nice > NZERO && action == SIG_DFL && (prop & SA_KILL) &&
+		(p->p_flag & P_TRACED) == 0)
+		p->p_nice = NZERO;
+
+	if (prop & SA_CONT) {
+		uth->uu_siglist &= ~stopsigmask;
+		p->p_siglist &= ~stopsigmask;
+	}
+
+	if (prop & SA_STOP) {
+		/*
+		 * If sending a tty stop signal to a member of an orphaned
+		 * process group, discard the signal here if the action
+		 * is default; don't stop the process below if sleeping,
+		 * and don't clear any pending SIGCONT.
+		 */
+		if (prop & SA_TTYSTOP && p->p_pgrp->pg_jobc == 0 &&
+			action == SIG_DFL)
+			goto puthout;
+		uth->uu_siglist &= ~contsigmask;
+		p->p_siglist &= ~contsigmask;
+	}
+	uth->uu_siglist |= mask;
+	p->p_siglist |= mask;   /* just for lame ones looking here */
+
+	/*
+	 * Defer further processing for signals which are held,
+	 * except that stopped processes must be continued by SIGCONT.
+	 */
+	if (action == SIG_HOLD && ((prop & SA_CONT) == 0 || p->p_stat != SSTOP))
+		goto puthout;
+		
+	/*
+	 *	SIGKILL priority twiddling moved here from above because
+	 *	it needs sig_thread.  Could merge it into large switch
+	 *	below if we didn't care about priority for tracing
+	 *	as SIGKILL's action is always SIG_DFL.
+	 */
+	if ((signum == SIGKILL) && (p->p_nice > NZERO)) {
+		p->p_nice = NZERO;
+	}
+
+	/*
+	 *	Process is traced - wake it up (if not already
+	 *	stopped) so that it can discover the signal in
+	 *	issig() and stop for the parent.
+	 */
+	if (p->p_flag & P_TRACED) {
+	   	if (p->p_stat != SSTOP)
+			goto psurun;
+		else
+			goto puthout;
+	}
+
+	if (action == SIG_WAIT) {
+		uth->uu_sigwait = mask;
+		uth->uu_siglist &= ~mask;
+		p->p_siglist &= ~mask;
+		wakeup(&uth->uu_sigwait);
+		/* if it is SIGCONT resume whole process */
+		if (prop & SA_CONT)
+			(void) task_resume(sig_task);
+		goto puthout;
+	}
+
+	if (action != SIG_DFL) {
+		/*
+		 *	User wants to catch the signal.
+		 *	Wake up the thread, but don't un-suspend it
+		 *	(except for SIGCONT).
+		 */
+		if (prop & SA_CONT)
+			(void) task_resume(sig_task);
+		goto psurun;
+	} else {
+		/*	Default action - varies */
+		if (mask & stopsigmask) {
+			/*
+			 * These are the signals which by default
+			 * stop a process.
+			 *
+			 * Don't clog system with children of init
+			 * stopped from the keyboard.
+			 */
+			if (!(prop & SA_STOP) && p->p_pptr == initproc) {
+				psignal_lock(p, SIGKILL, 0);
+				uth->uu_siglist &= ~mask;
+				p->p_siglist &= ~mask;
+				goto puthout;
+			}
+                        
+			/*
+			 *	Stop the task
+			 *	if task hasn't already been stopped by
+			 *	a signal.
+			 */
+			uth->uu_siglist &= ~mask;
+			p->p_siglist &= ~mask;
+			if (p->p_stat != SSTOP) {
+				p->p_xstat = signum;
+				if ((p->p_pptr->p_flag & P_NOCLDSTOP) == 0) {
+					struct proc *pp = p->p_pptr;
+
+					pp->si_pid = p->p_pid;
+					pp->si_status = p->p_xstat;
+					pp->si_code = CLD_STOPPED;
+					pp->si_uid = p->p_cred->p_ruid;
+					psignal(pp, SIGCHLD);
+				}
+				stop(p);
+			}
+			goto puthout;
+		}
+
+		switch (signum) {
+			/*
+			 * Signals ignored by default have been dealt
+			 * with already, since their bits are on in
+			 * p_sigignore.
+			 */
+
+		case SIGKILL:
+			/*
+			 * Kill signal always sets process running and
+			 * unsuspends it.
+			 */
+			/*
+			 *	Process will be running after 'run'
+			 */
+			p->p_stat = SRUN;
+
+			thread_abort(sig_thread_act);
+
+			goto puthout;
+
+		case SIGCONT:
+			/*
+			 * Let the process run.  If it's sleeping on an
+			 * event, it remains so.
+			 */
+			if (p->p_flag & P_TTYSLEEP) {
+				p->p_flag &= ~P_TTYSLEEP;
+				wakeup(&p->p_siglist);
+			} else {
+				(void) task_resume(sig_task);
+			}
+			uth->uu_siglist &= ~mask;
+			p->p_siglist &= ~mask;
+			p->p_stat = SRUN;
+			goto puthout;
+
+		default:
+			/*
+			 * All other signals wake up the process, but don't
+			 * resume it.
+			 */
+			goto psurun;
+		}
+	}
+	/*NOTREACHED*/
+psurun:
+	/*
+	 * If we're being traced (possibly because someone attached us
+	 * while we were stopped), check for a signal from the debugger.
+	 */
+	if (p->p_stat == SSTOP) {
+		if ((p->p_flag & P_TRACED) != 0 && p->p_xstat != 0) {
+			uth->uu_siglist |= sigmask(p->p_xstat); 
+			p->p_siglist |= sigmask(p->p_xstat); 
+		}
+	} else {
+		/*
+	 	 * setrunnable(p) in BSD and
+	 	 * Wake up the thread if it is interruptible.
+	 	 */
+		p->p_stat = SRUN;
+		thread_abort_safely(sig_thread_act);
+	}
+
+puthout:
+		signal_unlock(p);
+}
+
 
 __inline__ void
 sig_lock_to_exit(
@@ -1385,7 +2031,7 @@ sig_try_locked(
 					(THREAD_INTERRUPTIBLE));
 		}
 		signal_unlock(p);
-		thread_block(0);
+		thread_block(THREAD_CONTINUE_NULL);
 		signal_lock(p);
 		if (thread_should_abort(self)) {
 			/*
@@ -1420,12 +2066,17 @@ issignal(p)
 	int	s;
 	struct uthread * ut;
 	kern_return_t kret;
+	struct proc *pp;
 
 	cur_thread = current_thread();
 	cur_act = current_act();
 
+#if SIGNAL_DEBUG
+        if(rdebug_proc && (p == rdebug_proc)) {
+                ram_printf(3);
+        }
+#endif /* SIGNAL_DEBUG */
 	signal_lock(p);
-
 
 	/*
 	 * Try to grab the signal lock.
@@ -1437,7 +2088,7 @@ issignal(p)
 
 	ut = get_bsdthread_info(cur_act);
 	for(;;) {
-		sigbits = (ut->uu_sig |p->p_siglist) & ~p->p_sigmask;
+		sigbits = ut->uu_siglist  & ~ut->uu_sigmask;
 
 		if (p->p_flag & P_PPWAIT)
 			sigbits &= ~stopsigmask;
@@ -1449,20 +2100,16 @@ issignal(p)
 		mask = sigmask(signum);
 		prop = sigprop[signum];
 
-		if (mask & threadmask) {
-			/* we can take this signal */
-			ut->uu_sig &= ~mask;
-		} 
-
 		/*
 		 * We should see pending but ignored signals
 		 * only if P_TRACED was on when they were posted.
 		 */
 		if (mask & p->p_sigignore && (p->p_flag & P_TRACED) == 0) {
+			ut->uu_siglist &= ~mask;		/* take the signal! */
 			p->p_siglist &= ~mask;		/* take the signal! */
 			continue;
 		}
-		if (p->p_flag & P_TRACED && (p->p_flag & P_PPWAIT) == 0) {
+		if (p->p_flag & P_TRACED && (p->p_flag & P_PPWAIT) == 0)  {
 			register int	hold;
 			register task_t	task;
 			/*
@@ -1471,25 +2118,46 @@ issignal(p)
 			 */
 			/* ptrace debugging */
 			p->p_xstat = signum;
-			psignal(p->p_pptr, SIGCHLD);
-			/*
-			 *	XXX Have to really stop for debuggers;
-			 *	XXX stop() doesn't do the right thing.
-			 *	XXX Inline the task_suspend because we
-			 *	XXX have to diddle Unix state in the
-			 *	XXX middle of it.
-			 */
-			task = p->task;
-			task_hold(task);
-			p->sigwait = TRUE;
-			p->sigwait_thread = cur_act;
-			p->p_stat = SSTOP;
-			p->p_flag &= ~P_WAITED;
-			p->p_siglist &= ~mask;	/* clear the old signal */
+			pp = p->p_pptr;
+			if (p->p_flag & P_SIGEXC) {
+				p->sigwait = TRUE;
+				p->sigwait_thread = cur_act;
+				p->p_stat = SSTOP;
+				p->p_flag &= ~P_WAITED;
+				ut->uu_siglist &= ~mask;	/* clear the old signal */
+				p->p_siglist &= ~mask;	/* clear the old signal */
+				signal_unlock(p);
+				do_bsdexception(EXC_SOFTWARE, EXC_SOFT_SIGNAL, signum);
+				signal_lock(p);
+			} else {
+				pp->si_pid = p->p_pid;
+				pp->si_status = p->p_xstat;
+				pp->si_code = CLD_TRAPPED;
+				pp->si_uid = p->p_cred->p_ruid;
+				psignal(pp, SIGCHLD);
+				/*
+			 	*	XXX Have to really stop for debuggers;
+			 	*	XXX stop() doesn't do the right thing.
+			 	*	XXX Inline the task_suspend because we
+			 	*	XXX have to diddle Unix state in the
+			 	*	XXX middle of it.
+			 	*/
+				task = p->task;
+				task_hold(task);
+				p->sigwait = TRUE;
+				p->sigwait_thread = cur_act;
+				p->p_stat = SSTOP;
+				p->p_flag &= ~P_WAITED;
+				ut->uu_siglist &= ~mask;	/* clear the old signal */
+				p->p_siglist &= ~mask;	/* clear the old signal */
 
-			wakeup((caddr_t)p->p_pptr);
-			assert_wait((caddr_t)&p->sigwait, (THREAD_INTERRUPTIBLE));
-			thread_block(0);
+				wakeup((caddr_t)p->p_pptr);
+				signal_unlock(p);
+				assert_wait((caddr_t)&p->sigwait, (THREAD_INTERRUPTIBLE));
+				thread_block(THREAD_CONTINUE_NULL);
+				signal_lock(p);
+			}
+
 			p->sigwait = FALSE;
 			p->sigwait_thread = NULL;
 			wakeup((caddr_t)&p->sigwait_thread);
@@ -1500,7 +2168,7 @@ issignal(p)
 			 * pgsignal would get the SIGKILL to traced program
 			 * That's what we are trying to see (I hope)
 			 */
-			if (p->p_siglist & sigmask(SIGKILL)) {
+			if (ut->uu_siglist & sigmask(SIGKILL)) {
 				/*
 				 * Wait event may still be outstanding;
 				 * clear it, since sig_lock_to_exit will
@@ -1540,11 +2208,9 @@ issignal(p)
 			 * signal is being masked, look for other signals.
 			 */
 			mask = sigmask(signum);
-			if (mask & threadmask)
-				ut->uu_sig |= mask;
-			else
-				p->p_siglist |= mask;
-			if (p->p_sigmask & mask)
+			ut->uu_siglist |= mask;
+			p->p_siglist |= mask;   /* just for lame ones looking here */
+			if (ut->uu_sigmask & mask)
 				continue;
 		}
 
@@ -1584,17 +2250,17 @@ issignal(p)
 					(p->p_pgrp->pg_jobc == 0 &&
 					prop & SA_TTYSTOP))
 					break;	/* == ignore */
-				p->p_xstat = signum;
-				stop(p);
-				if ((p->p_pptr->p_flag & P_NOCLDSTOP) == 0)
-					psignal(p->p_pptr, SIGCHLD);
-				thread_block(0);
-				/*
-				 *	We may have to quit
-				 */
-				if (thread_should_abort(current_thread())) {
-					signal_unlock(p);
-					return(0);
+				if (p->p_stat != SSTOP) {
+					p->p_xstat = signum;
+					stop(p);
+					if ((p->p_pptr->p_flag & P_NOCLDSTOP) == 0) {
+						pp = p->p_pptr;
+						pp->si_pid = p->p_pid;
+						pp->si_status = p->p_xstat;
+						pp->si_code = CLD_STOPPED;
+						pp->si_uid = p->p_cred->p_ruid;
+						psignal(pp, SIGCHLD);
+					}
 				}
 				break;
 			} else if (prop & SA_IGNORE) {
@@ -1604,8 +2270,8 @@ issignal(p)
 				 */
 				break;		/* == ignore */
 			} else {
-				p->p_siglist &= ~mask;		/* take the signal! */
-				p->p_sigpending &= ~mask;	/* take the pending signal */
+				ut->uu_siglist &= ~mask;	/* take the signal! */
+				p->p_siglist &= ~mask;	/* take the signal! */
 				signal_unlock(p);
 				return (signum);
 			}
@@ -1627,13 +2293,13 @@ issignal(p)
 			 * This signal has an action, let
 			 * postsig() process it.
 			 */
+			ut->uu_siglist &= ~mask;		/* take the signal! */
 			p->p_siglist &= ~mask;		/* take the signal! */
-			p->p_sigpending &= ~mask;	/* take the pending signal */
 			signal_unlock(p);
 			return (signum);
 		}
+		ut->uu_siglist &= ~mask;		/* take the signal! */
 		p->p_siglist &= ~mask;		/* take the signal! */
-		p->p_sigpending &= ~mask;	/* take the pending signal */
 		}
 	/* NOTREACHED */
 }
@@ -1651,18 +2317,19 @@ CURSIG(p)
 	struct uthread * ut;
 	int retnum = 0;
            
-	if (p->p_siglist == 0)
-		return (0);
-
-	if (((p->p_siglist & ~p->p_sigmask) == 0) && ((p->p_flag & P_TRACED) == 0))
-		return (0);
 
 	cur_thread = current_thread();
 	cur_act = current_act();
 
 	ut = get_bsdthread_info(cur_act);
 
-	sigbits = (ut->uu_sig | p->p_siglist) & ~p->p_sigmask;
+	if (ut->uu_siglist == 0)
+		return (0);
+
+	if (((ut->uu_siglist & ~ut->uu_sigmask) == 0) && ((p->p_flag & P_TRACED) == 0))
+		return (0);
+
+	sigbits = ut->uu_siglist & ~ut->uu_sigmask;
 
 	for(;;) {
 		if (p->p_flag & P_PPWAIT)
@@ -1688,7 +2355,7 @@ CURSIG(p)
 			 * signal is being masked, look for other signals.
 			 */
 			mask = sigmask(signum);
-			if (p->p_sigmask & mask)
+			if (ut->uu_sigmask & mask)
 				continue;
 			return(signum);
 		}
@@ -1793,6 +2460,7 @@ postsig(signum)
 	register sig_t action;
 	u_long code;
 	int mask, returnmask;
+	struct uthread * ut;
 
 #if DIAGNOSTIC
 	if (signum == 0)
@@ -1809,18 +2477,20 @@ postsig(signum)
 	 * Try to grab the signal lock.
 	 */
 	if (sig_try_locked(p) <= 0) {
-                signal_unlock(p);
+		signal_unlock(p);
 		return;
 	}
 
+	ut = (struct uthread *)get_bsdthread_info(current_act());
 	mask = sigmask(signum);
+	ut->uu_siglist &= ~mask;
 	p->p_siglist &= ~mask;
 	action = ps->ps_sigact[signum];
 #if KTRACE
 	if (KTRPOINT(p, KTR_PSIG))
 		ktrpsig(p->p_tracep,
-		    signum, action, ps->ps_flags & SAS_OLDMASK ?
-		    ps->ps_oldmask : p->p_sigmask, 0);
+		    signum, action, ut->uu_flag & USAS_OLDMASK ?
+		    &ut->uu_oldmask : &ut->uu_sigmask, 0, -1);
 #endif
 	if (action == SIG_DFL) {
 		/*
@@ -1836,7 +2506,7 @@ postsig(signum)
 		 * If we get here, the signal must be caught.
 		 */
 #if DIAGNOSTIC
-		if (action == SIG_IGN || (p->p_sigmask & mask))
+		if (action == SIG_IGN || (ut->uu_sigmask & mask))
 			log(LOG_WARNING,
 				"postsig: processing masked or ignored signal\n");
 #endif
@@ -1849,12 +2519,29 @@ postsig(signum)
 		 * mask from before the sigpause is what we want
 		 * restored after the signal processing is completed.
 		 */
-		if (ps->ps_flags & SAS_OLDMASK) {
-			returnmask = ps->ps_oldmask;
-			ps->ps_flags &= ~SAS_OLDMASK;
+		if (ut->uu_flag & USAS_OLDMASK) {
+			returnmask = ut->uu_oldmask;
+			ut->uu_flag &= ~USAS_OLDMASK;
+			ut->uu_oldmask = 0;
 		} else
-			returnmask = p->p_sigmask;
-		p->p_sigmask |= ps->ps_catchmask[signum] | mask;
+			returnmask = ut->uu_sigmask;
+		ut->uu_sigmask |= ps->ps_catchmask[signum];
+		if ((ps->ps_signodefer & mask) == 0)
+			ut->uu_sigmask |= mask;
+		if ((signum != SIGILL) && (signum != SIGTRAP) && (ps->ps_sigreset & mask)) {
+			if ((signum != SIGCONT) && (sigprop[signum] & SA_IGNORE))
+				p->p_sigignore |= mask;
+			ps->ps_sigact[signum] = SIG_DFL;
+			ps->ps_siginfo &= ~mask;
+			ps->ps_signodefer &= ~mask;
+		}
+#ifdef __ppc__
+		/* Needs to disable to run in user mode */
+		if (signum == SIGFPE) {
+			thread_enable_fpe(current_act(), 0);
+		}
+#endif  /* __ppc__ */
+
 		if (ps->ps_sig != signum) {
 			code = 0;
 		} else {
@@ -1902,6 +2589,7 @@ bsd_ast(thread_act_t thr_act)
 	int	signum;
 	unsigned int pc;
 	boolean_t funnel_state;
+	static bsd_init_done = 0;
 
 	if (p == NULL)
 		return;
@@ -1918,7 +2606,12 @@ bsd_ast(thread_act_t thr_act)
 		while (signum = issignal(p))
 			postsig(signum);
 	}
-	ast_off(AST_BSD);
+	if (!bsd_init_done) {
+		extern void	bsdinit_task(void);
+
+		bsd_init_done = 1;
+		bsdinit_task();
+	}
 
 	(void) thread_funnel_set(kernel_flock, FALSE);
 }
@@ -1935,7 +2628,7 @@ psignal_vtalarm(struct proc *p)
 	if (p == NULL)
 		return;
 	funnel_state = thread_funnel_set(kernel_flock, TRUE);
-	psignal_lock(p, SIGVTALRM, 1, 1);
+	psignal_lock(p, SIGVTALRM, 1);
 	(void) thread_funnel_set(kernel_flock, FALSE);
 }
 
@@ -1947,7 +2640,7 @@ psignal_xcpu(struct proc *p)
 	if (p == NULL)
 		return;
 	funnel_state = thread_funnel_set(kernel_flock, TRUE);
-	psignal_lock(p, SIGXCPU, 1, 1);
+	psignal_lock(p, SIGXCPU, 1);
 	(void) thread_funnel_set(kernel_flock, FALSE);
 }
 
@@ -1959,7 +2652,7 @@ psignal_sigprof(struct proc *p)
 	if (p == NULL)
 		return;
 	funnel_state = thread_funnel_set(kernel_flock, TRUE);
-	psignal_lock(p, SIGPROF, 1, 1);
+	psignal_lock(p, SIGPROF, 1);
 	(void) thread_funnel_set(kernel_flock, FALSE);
 }
 
@@ -1979,3 +2672,18 @@ task_t task;
 		}
 	}
 }
+
+kern_return_t
+do_bsdexception(
+	    int exc,
+	    int code,
+	    int sub)
+{
+	exception_data_type_t   codes[EXCEPTION_CODE_MAX];
+	extern kern_return_t bsd_exception(int, exception_data_type_t codes[], int);
+
+	codes[0] = code;	
+	codes[1] = sub;
+	return(bsd_exception(exc, codes, 2));
+}
+

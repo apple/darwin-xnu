@@ -1,4 +1,5 @@
-/*	$KAME: mld6.c,v 1.17 2000/03/01 12:37:25 itojun Exp $	*/
+/*	$FreeBSD: src/sys/netinet6/mld6.c,v 1.4.2.2 2001/07/03 11:01:54 ume Exp $	*/
+/*	$KAME: mld6.c,v 1.27 2001/04/04 05:17:30 itojun Exp $	*/
 
 /*
  * Copyright (C) 1998 WIDE Project.
@@ -68,9 +69,6 @@
  *	@(#)igmp.c	8.1 (Berkeley) 7/19/93
  */
 
-#if (defined(__FreeBSD__) && __FreeBSD__ >= 3) || defined(__NetBSD__)
-#include "opt_inet.h"
-#endif
 
 #include <sys/param.h>
 #include <sys/systm.h>
@@ -129,20 +127,15 @@ mld6_init()
 	hbh_buf[5] = IP6OPT_RTALERT_LEN - 2;
 	bcopy((caddr_t)&rtalert_code, &hbh_buf[6], sizeof(u_int16_t));
 
+	init_ip6pktopts(&ip6_opts);
 	ip6_opts.ip6po_hbh = hbh;
-	/* We will specify the hoplimit by a multicast option. */
-	ip6_opts.ip6po_hlim = -1;
 }
 
 void
 mld6_start_listening(in6m)
 	struct in6_multi *in6m;
 {
-#ifdef __NetBSD__
-	int s = splsoftnet();
-#else
 	int s = splnet();
-#endif
 
 	/*
 	 * RFC2710 page 10:
@@ -193,24 +186,8 @@ mld6_input(m, off)
 	struct ifnet *ifp = m->m_pkthdr.rcvif;
 	struct in6_multi *in6m;
 	struct in6_ifaddr *ia;
-#if defined(__FreeBSD__) && __FreeBSD__ >= 3 || defined (__APPLE__)
 	struct ifmultiaddr *ifma;
-#endif
 	int timer;		/* timer value in the MLD query header */
-
-	/* source address validation */
-	if (!IN6_IS_ADDR_LINKLOCAL(&ip6->ip6_src)) {
-		log(LOG_ERR,
-		    "mld6_input: src %s is not link-local\n",
-		    ip6_sprintf(&ip6->ip6_src));
-		/*
-		 * spec (RFC2710) does not explicitly
-		 * specify to discard the packet from a non link-local
-		 * source address. But we believe it's expected to do so.
-		 */
-		m_freem(m);
-		return;
-	}
 
 #ifndef PULLDOWN_TEST
 	IP6_EXTHDR_CHECK(m, off, sizeof(*mldh),);
@@ -222,6 +199,23 @@ mld6_input(m, off)
 		return;
 	}
 #endif
+
+	/* source address validation */
+	ip6 = mtod(m, struct ip6_hdr *);/* in case mpullup */
+	if (!IN6_IS_ADDR_LINKLOCAL(&ip6->ip6_src)) {
+		log(LOG_ERR,
+		    "mld6_input: src %s is not link-local (grp=%s)\n",
+		    ip6_sprintf(&ip6->ip6_src),
+		    ip6_sprintf(&mldh->mld6_addr));
+		/*
+		 * spec (RFC2710) does not explicitly
+		 * specify to discard the packet from a non link-local
+		 * source address. But we believe it's expected to do so.
+		 * XXX: do we have to allow :: as source?
+		 */
+		m_freem(m);
+		return;
+	}
 
 	/*
 	 * In the MLD6 specification, there are 3 states and a flag.
@@ -240,7 +234,7 @@ mld6_input(m, off)
 			break;
 
 		if (!IN6_IS_ADDR_UNSPECIFIED(&mldh->mld6_addr) &&
-		!IN6_IS_ADDR_MULTICAST(&mldh->mld6_addr))
+		    !IN6_IS_ADDR_MULTICAST(&mldh->mld6_addr))
 			break;	/* print error or log stat? */
 		if (IN6_IS_ADDR_MC_LINKLOCAL(&mldh->mld6_addr))
 			mldh->mld6_addr.s6_addr16[1] =
@@ -272,15 +266,8 @@ mld6_input(m, off)
 		mld6_all_nodes_linklocal.s6_addr16[1] =
 			htons(ifp->if_index); /* XXX */
 		
-#if defined(__FreeBSD__) && __FreeBSD__ >= 3 || defined (__APPLE__)
 		LIST_FOREACH(ifma, &ifp->if_multiaddrs, ifma_link)
-#else
-		for (in6m = ia->ia6_multiaddrs.lh_first;
-		     in6m;
-		     in6m = in6m->in6m_entry.le_next)
-#endif
 		{
-#if defined(__FreeBSD__) && __FreeBSD__ >= 3 || defined (__APPLE__)
 			if (ifma->ifma_addr->sa_family != AF_INET6)
 				continue;
 			in6m = (struct in6_multi *)ifma->ifma_protospec;
@@ -289,13 +276,6 @@ mld6_input(m, off)
 			    IPV6_ADDR_MC_SCOPE(&in6m->in6m_addr) <
 			    IPV6_ADDR_SCOPE_LINKLOCAL)
 				continue;
-#else
-			if (IN6_ARE_ADDR_EQUAL(&in6m->in6m_addr,
-						&mld6_all_nodes_linklocal) ||
-			    IPV6_ADDR_MC_SCOPE(&in6m->in6m_addr) <
-			    IPV6_ADDR_SCOPE_LINKLOCAL)
-				continue;
-#endif
 
 			if (IN6_IS_ADDR_UNSPECIFIED(&mldh->mld6_addr) ||
 			    IN6_ARE_ADDR_EQUAL(&mldh->mld6_addr,
@@ -363,7 +343,7 @@ mld6_input(m, off)
 void
 mld6_fasttimeo()
 {
-	register struct in6_multi *in6m;
+	struct in6_multi *in6m;
 	struct in6_multistep step;
 	int s;
 
@@ -374,11 +354,7 @@ mld6_fasttimeo()
 	if (!mld6_timers_are_running)
 		return;
 
-#ifdef __NetBSD__
-	s = splsoftnet();
-#else
 	s = splnet();
-#endif
 	mld6_timers_are_running = 0;
 	IN6_FIRST_MULTI(step, in6m);
 	while (in6m != NULL) {
@@ -432,6 +408,7 @@ mld6_sendpkt(in6m, type, dst)
 	}
 	mh->m_next = md;
 
+	mh->m_pkthdr.rcvif = NULL;
 	mh->m_pkthdr.len = sizeof(struct ip6_hdr) + sizeof(struct mld6_hdr);
 	mh->m_len = sizeof(struct ip6_hdr);
 	MH_ALIGN(mh, sizeof(struct ip6_hdr));
@@ -479,16 +456,16 @@ mld6_sendpkt(in6m, type, dst)
 	ip6_output(mh, &ip6_opts, NULL, 0, &im6o, &outif);
 	if (outif) {
 		icmp6_ifstat_inc(outif, ifs6_out_msg);
-		switch(type) {
-		 case MLD6_LISTENER_QUERY:
-			 icmp6_ifstat_inc(outif, ifs6_out_mldquery);
-			 break;
-		 case MLD6_LISTENER_REPORT:
-			 icmp6_ifstat_inc(outif, ifs6_out_mldreport);
-			 break;
-		 case MLD6_LISTENER_DONE:
-			 icmp6_ifstat_inc(outif, ifs6_out_mlddone);
-			 break;
+		switch (type) {
+		case MLD6_LISTENER_QUERY:
+			icmp6_ifstat_inc(outif, ifs6_out_mldquery);
+			break;
+		case MLD6_LISTENER_REPORT:
+			icmp6_ifstat_inc(outif, ifs6_out_mldreport);
+			break;
+		case MLD6_LISTENER_DONE:
+			icmp6_ifstat_inc(outif, ifs6_out_mlddone);
+			break;
 		}
 	}
 }

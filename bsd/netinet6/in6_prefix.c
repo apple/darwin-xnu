@@ -65,9 +65,6 @@
  */
 
 #include <sys/param.h>
-#if !(defined(__FreeBSD__) && __FreeBSD__ >= 3)
-#include <sys/ioctl.h>
-#endif
 #include <sys/malloc.h>
 #include <sys/kernel.h>
 #include <sys/socket.h>
@@ -75,9 +72,7 @@
 #include <sys/sockio.h>
 #include <sys/systm.h>
 #include <sys/syslog.h>
-#if !defined(__bsdi__) && !(defined(__FreeBSD__) && __FreeBSD__ < 3)
 #include <sys/proc.h>
-#endif
 
 #include <net/if.h>
 
@@ -87,9 +82,12 @@
 #include <netinet6/in6_prefix.h>
 #include <netinet6/ip6_var.h>
 
-#if defined(__FreeBSD__) && __FreeBSD__ >= 3
-static MALLOC_DEFINE(M_IPFW, "ip6rr", "IPv6 Router Renumbering Prefix");
-static MALLOC_DEFINE(M_IPFW, "rp_addr", "IPv6 Router Renumbering Ifid");
+#ifdef __APPLE__
+#define M_IP6RR 	M_IP6MISC
+#define M_RR_ADDR 	M_IP6MISC
+#else
+static MALLOC_DEFINE(M_IP6RR, "ip6rr", "IPv6 Router Renumbering Prefix");
+static MALLOC_DEFINE(M_RR_ADDR, "rp_addr", "IPv6 Router Renumbering Ifid");
 #endif
 
 struct rr_prhead rr_prefix;
@@ -160,7 +158,9 @@ in6_prefixwithifp(struct ifnet *ifp, int plen, struct in6_addr *dst)
 	struct ifprefix *ifpr;
 
 	/* search matched prefix */
-	for (ifpr = ifp->if_prefixlist; ifpr; ifpr = ifpr->ifpr_next) {
+	for (ifpr = TAILQ_FIRST(&ifp->if_prefixhead); ifpr;
+	     ifpr = TAILQ_NEXT(ifpr, ifpr_list))
+	{
 		if (ifpr->ifpr_prefix->sa_family != AF_INET6 ||
 		    ifpr->ifpr_type != IN6_PREFIX_RR)
  			continue;
@@ -192,11 +192,7 @@ search_matched_prefix(struct ifnet *ifp, struct in6_prefixreq *ipr)
 	 * which matches the addr
 	 */
 
-#if defined(__bsdi__) || (defined(__FreeBSD__) && __FreeBSD__ < 3)
-	for (ifa = ifp->if_addrlist; ifa; ifa = ifa->ifa_next)
-#else
-	for (ifa = ifp->if_addrlist.tqh_first; ifa; ifa = ifa->ifa_list.tqe_next)
-#endif
+	TAILQ_FOREACH(ifa, &ifp->if_addrlist, ifa_list)
 	{
 		if (ifa->ifa_addr->sa_family != AF_INET6)
 			continue;
@@ -211,7 +207,9 @@ search_matched_prefix(struct ifnet *ifp, struct in6_prefixreq *ipr)
 	if (rpp != 0)
 		return rpp;
 
-	for (ifpr = ifp->if_prefixlist; ifpr; ifpr = ifpr->ifpr_next) {
+	for (ifpr = TAILQ_FIRST(&ifp->if_prefixhead); ifpr;
+	     ifpr = TAILQ_NEXT(ifpr, ifpr_list))
+	{
 		if (ifpr->ifpr_prefix->sa_family != AF_INET6 ||
 		    ifpr->ifpr_type != IN6_PREFIX_RR)
 			continue;
@@ -239,7 +237,9 @@ mark_matched_prefixes(u_long cmd, struct ifnet *ifp, struct in6_rrenumreq *irr)
 	int matchlen, matched = 0;
 
 	/* search matched prefixes */
-	for (ifpr = ifp->if_prefixlist; ifpr; ifpr = ifpr->ifpr_next) {
+	for (ifpr = TAILQ_FIRST(&ifp->if_prefixhead); ifpr;
+	     ifpr = TAILQ_NEXT(ifpr, ifpr_list))
+	{
 		if (ifpr->ifpr_prefix->sa_family != AF_INET6 ||
 		    ifpr->ifpr_type != IN6_PREFIX_RR)
 			continue;
@@ -259,11 +259,7 @@ mark_matched_prefixes(u_long cmd, struct ifnet *ifp, struct in6_rrenumreq *irr)
 	 * search matched addr, and then search prefixes
 	 * which matche the addr
 	 */
-#if defined(__bsdi__) || (defined(__FreeBSD__) && __FreeBSD__ < 3)
-	for (ifa = ifp->if_addrlist; ifa; ifa = ifa->ifa_next)
-#else
-	for (ifa = ifp->if_addrlist.tqh_first; ifa; ifa = ifa->ifa_list.tqe_next)
-#endif
+	TAILQ_FOREACH(ifa, &ifp->if_addrlist, ifa_list)
 	{
 		struct rr_prefix *rpp;
 
@@ -298,7 +294,9 @@ delmark_global_prefixes(struct ifnet *ifp, struct in6_rrenumreq *irr)
 	struct ifprefix *ifpr;
 
 	/* search matched prefixes */
-	for (ifpr = ifp->if_prefixlist; ifpr; ifpr = ifpr->ifpr_next) {
+	for (ifpr = TAILQ_FIRST(&ifp->if_prefixhead); ifpr;
+	     ifpr = TAILQ_NEXT(ifpr, ifpr_list))
+	{
 		if (ifpr->ifpr_prefix->sa_family != AF_INET6 ||
 		    ifpr->ifpr_type != IN6_PREFIX_RR)
 			continue;
@@ -316,7 +314,9 @@ unmark_prefixes(struct ifnet *ifp)
 	struct ifprefix *ifpr;
 
 	/* unmark all prefix */
-	for (ifpr = ifp->if_prefixlist; ifpr; ifpr = ifpr->ifpr_next) {
+	for (ifpr = TAILQ_FIRST(&ifp->if_prefixhead); ifpr;
+	     ifpr = TAILQ_NEXT(ifpr, ifpr_list))
+	{
 		if (ifpr->ifpr_prefix->sa_family != AF_INET6 ||
 		    ifpr->ifpr_type != IN6_PREFIX_RR)
  			continue;
@@ -329,9 +329,6 @@ unmark_prefixes(struct ifnet *ifp)
 static void
 init_prefix_ltimes(struct rr_prefix *rpp)
 {
-#if !(defined(__FreeBSD__) && __FreeBSD__ >= 3) && !defined (__APPLE__)
-	long time_second = time.tv_sec;
-#endif
 
 	if (rpp->rp_pltime == RR_INFINITE_LIFETIME ||
 	    rpp->rp_rrf_decrprefd == 0)
@@ -380,17 +377,18 @@ search_ifidwithprefix(struct rr_prefix *rpp, struct in6_addr *ifid)
 {
 	struct rp_addr *rap;
 
-	for (rap = rpp->rp_addrhead.lh_first; rap != NULL;
-	     rap = rap->ra_entry.le_next)
+	LIST_FOREACH(rap, &rpp->rp_addrhead, ra_entry)
+	{
 		if (rr_are_ifid_equal(ifid, &rap->ra_ifid,
 				      (sizeof(struct in6_addr) << 3) -
 				      rpp->rp_plen))
 			break;
+	}
 	return rap;
 }
 
 static int
-assigne_ra_entry(struct rr_prefix *rpp, int iilen, struct in6_ifaddr *ia)
+assign_ra_entry(struct rr_prefix *rpp, int iilen, struct in6_ifaddr *ia)
 {
 	int error = 0;
 	struct rp_addr *rap;
@@ -405,7 +403,7 @@ assigne_ra_entry(struct rr_prefix *rpp, int iilen, struct in6_ifaddr *ia)
 		 sizeof(*IA6_IN6(ia)) << 3, rpp->rp_plen, iilen);
 	/* link to ia, and put into list */
 	rap->ra_addr = ia;
-	rap->ra_addr->ia_ifa.ifa_refcnt++;
+	ifaref(&rap->ra_addr->ia_ifa);
 #if 0 /* Can't do this now, because rpp may be on th stack. should fix it? */
 	ia->ia6_ifpr = rp2ifpr(rpp);
 #endif
@@ -416,6 +414,10 @@ assigne_ra_entry(struct rr_prefix *rpp, int iilen, struct in6_ifaddr *ia)
 	return 0;
 }
 
+/*
+ * add a link-local address to an interface.  we will add new interface address
+ * (prefix database + new interface id).
+ */
 static int
 in6_prefix_add_llifid(int iilen, struct in6_ifaddr *ia)
 {
@@ -433,12 +435,14 @@ in6_prefix_add_llifid(int iilen, struct in6_ifaddr *ia)
 	/* XXX: init dummy so */
 	bzero(&so, sizeof(so));
 	/* insert into list */
-#if defined(__FreeBSD__) && __FreeBSD__ >= 3 || defined (__APPLE__)
 	LIST_FOREACH(rpp, &rr_prefix, rp_entry)
-#else
-	for (rpp = LIST_FIRST(&rr_prefix); rpp; rpp = LIST_NEXT(rpp, rp_entry))
-#endif
 	{
+		/*
+		 * do not attempt to add an address, if ifp does not match
+		 */
+		if (rpp->rp_ifp != ia->ia_ifp)
+			continue;
+
 		s = splnet();
 		LIST_INSERT_HEAD(&rpp->rp_addrhead, rap, ra_entry);
 		splx(s);
@@ -447,7 +451,10 @@ in6_prefix_add_llifid(int iilen, struct in6_ifaddr *ia)
 	return 0;
 }
 
-
+/*
+ * add an address to an interface.  if the interface id portion is new,
+ * we will add new interface address (prefix database + new interface id).
+ */
 int
 in6_prefix_add_ifid(int iilen, struct in6_ifaddr *ia)
 {
@@ -462,7 +469,7 @@ in6_prefix_add_ifid(int iilen, struct in6_ifaddr *ia)
 	if (ifpr == NULL) {
 		struct rr_prefix rp;
 		struct socket so;
-		int pplen = (plen == 128) ? 64 : plen;
+		int pplen = (plen == 128) ? 64 : plen; /* XXX hardcoded 64 is bad */
 
 		/* allocate a prefix for ia, with default properties */
 
@@ -493,9 +500,6 @@ in6_prefix_add_ifid(int iilen, struct in6_ifaddr *ia)
 
 		/* XXX: init dummy so */
 		bzero(&so, sizeof(so));
-#if !(defined(__FreeBSD__) && __FreeBSD__ >= 3) && !defined(__NetBSD__)
-		so.so_state |= SS_PRIV;
-#endif
 
 		error = add_each_prefix(&so, &rp);
 
@@ -514,11 +518,11 @@ in6_prefix_add_ifid(int iilen, struct in6_ifaddr *ia)
 	if (rap != NULL) {
 		if (rap->ra_addr == NULL) {
 			rap->ra_addr = ia;
-			rap->ra_addr->ia_ifa.ifa_refcnt++;
+			ifaref(&rap->ra_addr->ia_ifa);
 		} else if (rap->ra_addr != ia) {
 			/* There may be some inconsistencies between addrs. */
 			log(LOG_ERR, "ip6_prefix.c: addr %s/%d matched prefix"
-			    "has already another ia %x(%s) on its ifid list\n",
+			    " already has another ia %p(%s) on its ifid list\n",
 			    ip6_sprintf(IA6_IN6(ia)), plen,
 			    rap->ra_addr,
 			    ip6_sprintf(IA6_IN6(rap->ra_addr)));
@@ -527,7 +531,7 @@ in6_prefix_add_ifid(int iilen, struct in6_ifaddr *ia)
 		ia->ia6_ifpr = ifpr;
 		return 0;
 	}
-	error = assigne_ra_entry(ifpr2rp(ifpr), iilen, ia);
+	error = assign_ra_entry(ifpr2rp(ifpr), iilen, ia);
 	if (error == 0)
 		ia->ia6_ifpr = ifpr;
 	return (error);
@@ -546,15 +550,11 @@ in6_prefix_remove_ifid(int iilen, struct in6_ifaddr *ia)
 		LIST_REMOVE(rap, ra_entry);
 		splx(s);
 		if (rap->ra_addr)
-			IFAFREE(&rap->ra_addr->ia_ifa);
-		_FREE(rap, M_IPFW);
+			ifafree(&rap->ra_addr->ia_ifa);
+		FREE(rap, M_RR_ADDR);
 	}
 
-#if defined(__FreeBSD__) && __FreeBSD__ >= 3 || defined (__APPLE__)
 	if (LIST_EMPTY(&ifpr2rp(ia->ia6_ifpr)->rp_addrhead))
-#else
-	if (LIST_FIRST(&ifpr2rp(ia->ia6_ifpr)->rp_addrhead) == NULL)
-#endif
 		rp_remove(ifpr2rp(ia->ia6_ifpr));
 }
 
@@ -565,18 +565,10 @@ in6_purgeprefix(ifp)
 	struct ifprefix *ifpr, *nextifpr;
 
 	/* delete prefixes before ifnet goes away */
-#if defined(__FreeBSD__) && __FreeBSD__ >= 4
 	for (ifpr = TAILQ_FIRST(&ifp->if_prefixhead); ifpr;
 	     ifpr = nextifpr)
-#else
-	for (ifpr = ifp->if_prefixlist; ifpr; ifpr = nextifpr)
-#endif
 	{
-#if defined(__FreeBSD__) && __FreeBSD__ >= 4
 		nextifpr = TAILQ_NEXT(ifpr, ifpr_list);
-#else
-		nextifpr = ifpr->ifpr_next;
-#endif
 		if (ifpr->ifpr_prefix->sa_family != AF_INET6 ||
 		    ifpr->ifpr_type != IN6_PREFIX_RR)
  			continue;
@@ -611,20 +603,30 @@ add_each_addr(struct socket *so, struct rr_prefix *rpp, struct rp_addr *rap)
 	in6_prefixlen2mask(&ifra.ifra_prefixmask.sin6_addr, rpp->rp_plen);
 	/* don't care ifra_flags for now */
 
+	/*
+	 * XXX: if we did this with finite lifetime values, the lifetimes would
+	 *      decrese in time and never incremented.
+	 *      we should need more clarifications on the prefix mechanism...
+	 */
+	ifra.ifra_lifetime.ia6t_vltime = rpp->rp_vltime;
+	ifra.ifra_lifetime.ia6t_pltime = rpp->rp_pltime;
+
 	ia6 = in6ifa_ifpwithaddr(rpp->rp_ifp, &ifra.ifra_addr.sin6_addr);
 	if (ia6 != NULL) {
 		if (ia6->ia6_ifpr == NULL) {
 			/* link this addr and the prefix each other */
-			IFAFREE(&rap->ra_addr->ia_ifa);
+			if (rap->ra_addr)
+				ifafree(&rap->ra_addr->ia_ifa);
 			rap->ra_addr = ia6;
-			rap->ra_addr->ia_ifa.ifa_refcnt++;
+			ifaref(&rap->ra_addr->ia_ifa);
 			ia6->ia6_ifpr = rp2ifpr(rpp);
 			return;
 		}
 		if (ia6->ia6_ifpr == rp2ifpr(rpp)) {
-			IFAFREE(&rap->ra_addr->ia_ifa);
+			if (rap->ra_addr)
+				ifafree(&rap->ra_addr->ia_ifa);
 			rap->ra_addr = ia6;
-			rap->ra_addr->ia_ifa.ifa_refcnt++;
+			ifaref(&rap->ra_addr->ia_ifa);
 			return;
 		}
 		/*
@@ -637,27 +639,26 @@ add_each_addr(struct socket *so, struct rr_prefix *rpp, struct rp_addr *rap)
 		 *      Or, completely duplicated prefixes?
 		 * log it and return.
 		 */
-		log(LOG_ERR, "in6_prefix.c: add_each_addr: addition of an addr"
-		    "%s/%d failed because there is already another addr %s/%d\n",
+		log(LOG_ERR,
+		    "in6_prefix.c: add_each_addr: addition of an addr %s/%d "
+		    "failed because there is already another addr %s/%d\n",
 		    ip6_sprintf(&ifra.ifra_addr.sin6_addr), rpp->rp_plen,
 		    ip6_sprintf(IA6_IN6(ia6)),
-		    in6_mask2len(&ia6->ia_prefixmask.sin6_addr));
+		    in6_mask2len(&ia6->ia_prefixmask.sin6_addr, NULL));
 		return;
 	}
 	/* propagate ANYCAST flag if it is set for ancestor addr */
 	if (rap->ra_flags.anycast != 0)
 		ifra.ifra_flags |= IN6_IFF_ANYCAST;
-	error = in6_control(so, SIOCAIFADDR_IN6, (caddr_t)&ifra, rpp->rp_ifp
-#if !defined(__bsdi__) && !(defined(__FreeBSD__) && __FreeBSD__ < 3) && !defined(__APPLE__)
-			    , current_proc()
-#endif
-			    );
-	if (error != 0)
+	error = in6_control(so, SIOCAIFADDR_IN6, (caddr_t)&ifra, rpp->rp_ifp,
+			    current_proc());
+	if (error != 0) {
 		log(LOG_ERR, "in6_prefix.c: add_each_addr: addition of an addr"
 		    "%s/%d failed because in6_control failed for error %d\n",
 		    ip6_sprintf(&ifra.ifra_addr.sin6_addr), rpp->rp_plen,
 		    error);
 		return;
+	}
 
 	/*
 	 * link beween this addr and the prefix will be done
@@ -674,7 +675,9 @@ rrpr_update(struct socket *so, struct rr_prefix *new)
 	int s;
 
 	/* search existing prefix */
-	for (ifpr = new->rp_ifp->if_prefixlist; ifpr; ifpr = ifpr->ifpr_next) {
+	for (ifpr = TAILQ_FIRST(&new->rp_ifp->if_prefixhead); ifpr;
+	     ifpr = TAILQ_NEXT(ifpr, ifpr_list))
+	{
 		if (ifpr->ifpr_prefix->sa_family != AF_INET6 ||
 		    ifpr->ifpr_type != IN6_PREFIX_RR)
  			continue;
@@ -709,19 +712,15 @@ rrpr_update(struct socket *so, struct rr_prefix *new)
 		 *  add rp_addr entries in new into rpp, if they have not
 		 *  been already included in rpp.
 		 */
-#if defined(__FreeBSD__) && __FreeBSD__ >= 3 || defined(__APPLE__)
 		while (!LIST_EMPTY(&new->rp_addrhead))
-#else
-		while (new->rp_addrhead.lh_first != NULL)
-#endif
 		{
 			rap = LIST_FIRST(&new->rp_addrhead);
 			LIST_REMOVE(rap, ra_entry);
 			if (search_ifidwithprefix(rpp, &rap->ra_ifid)
 			    != NULL) {
 				if (rap->ra_addr)
-					IFAFREE(&rap->ra_addr->ia_ifa);
-				_FREE(rap, M_IPFW);
+					ifafree(&rap->ra_addr->ia_ifa);
+				FREE(rap, M_RR_ADDR);
 				continue;
 			}
 			s = splnet();
@@ -733,7 +732,7 @@ rrpr_update(struct socket *so, struct rr_prefix *new)
 		 * We got a fresh prefix.
 		 */
 		/* create new prefix */
-		rpp = (struct rr_prefix *)_MALLOC(sizeof(*rpp), M_IPFW,
+		rpp = (struct rr_prefix *)_MALLOC(sizeof(*rpp), M_IP6RR,
 						 M_NOWAIT);
 		if (rpp == NULL) {
 			log(LOG_ERR, "in6_prefix.c: rrpr_update:%d"
@@ -744,11 +743,7 @@ rrpr_update(struct socket *so, struct rr_prefix *new)
 		*rpp = *new;
 		LIST_INIT(&rpp->rp_addrhead);
 		/*  move rp_addr entries of new to rpp */
-#if defined(__FreeBSD__) && __FreeBSD__ >= 3 || defined(__APPLE__)
 		while (!LIST_EMPTY(&new->rp_addrhead))
-#else
-		while (new->rp_addrhead.lh_first != NULL)
-#endif
 		{
 			rap = LIST_FIRST(&new->rp_addrhead);
 			LIST_REMOVE(rap, ra_entry);
@@ -762,13 +757,15 @@ rrpr_update(struct socket *so, struct rr_prefix *new)
 			struct ifnet *ifp = rpp->rp_ifp;
 			struct ifprefix *ifpr;
 
-			if ((ifpr = ifp->if_prefixlist) != NULL) {
-				for ( ; ifpr->ifpr_next;
-				      ifpr = ifpr->ifpr_next)
+			if ((ifpr = TAILQ_FIRST(&ifp->if_prefixhead))
+			    != NULL) {
+				for ( ; TAILQ_NEXT(ifpr, ifpr_list);
+				      ifpr = TAILQ_NEXT(ifpr, ifpr_list))
 					continue;
-				ifpr->ifpr_next = rp2ifpr(rpp);
+				TAILQ_NEXT(ifpr, ifpr_list) = rp2ifpr(rpp);
 			} else
-				ifp->if_prefixlist = rp2ifpr(rpp);
+				TAILQ_FIRST(&ifp->if_prefixhead) =
+					rp2ifpr(rpp);
 			rp2ifpr(rpp)->ifpr_type = IN6_PREFIX_RR;
 		}
 		/* link rr_prefix entry to rr_prefix list */
@@ -785,8 +782,8 @@ rrpr_update(struct socket *so, struct rr_prefix *new)
 	 * If it existed but not pointing to the prefix yet,
 	 * init the prefix pointer.
 	 */
-	for (rap = rpp->rp_addrhead.lh_first; rap != NULL;
-	     rap = rap->ra_entry.le_next) {
+	LIST_FOREACH(rap, &rpp->rp_addrhead, ra_entry)
+	{
 		if (rap->ra_addr != NULL) {
 			if (rap->ra_addr->ia6_ifpr == NULL)
 				rap->ra_addr->ia6_ifpr = rp2ifpr(rpp);
@@ -815,28 +812,30 @@ rp_remove(struct rr_prefix *rpp)
 		struct ifnet *ifp = rpp->rp_ifp;
 		struct ifprefix *ifpr;
 
-		if ((ifpr = ifp->if_prefixlist) == rp2ifpr(rpp))
-			ifp->if_prefixlist = ifpr->ifpr_next;
+		if ((ifpr = TAILQ_FIRST(&ifp->if_prefixhead)) == rp2ifpr(rpp))
+			TAILQ_FIRST(&ifp->if_prefixhead) =
+				TAILQ_NEXT(ifpr, ifpr_list);
 		else {
-			while (ifpr->ifpr_next &&
-			       (ifpr->ifpr_next != rp2ifpr(rpp)))
-				ifpr = ifpr->ifpr_next;
-			if (ifpr->ifpr_next)
-				ifpr->ifpr_next = rp2ifpr(rpp)->ifpr_next;
-			else
-				printf("Couldn't unlink rr_prefix from ifp\n");
+			while (TAILQ_NEXT(ifpr, ifpr_list) != NULL &&
+			       (TAILQ_NEXT(ifpr, ifpr_list) != rp2ifpr(rpp)))
+				ifpr = TAILQ_NEXT(ifpr, ifpr_list);
+			if (TAILQ_NEXT(ifpr, ifpr_list))
+				TAILQ_NEXT(ifpr, ifpr_list) =
+					TAILQ_NEXT(rp2ifpr(rpp), ifpr_list);
+ 			else
+ 				printf("Couldn't unlink rr_prefix from ifp\n");
 		}
 	}
 	/* unlink rp_entry from rr_prefix list */
 	LIST_REMOVE(rpp, rp_entry);
 	splx(s);
-	_FREE(rpp, M_IPFW);
+	FREE(rpp, M_IP6RR);
 }
 
 static int
 create_ra_entry(struct rp_addr **rapp)
 {
-	*rapp = (struct rp_addr *)_MALLOC(sizeof(struct rp_addr), M_IPFW,
+	*rapp = (struct rp_addr *)_MALLOC(sizeof(struct rp_addr), M_RR_ADDR,
 					 M_NOWAIT);
 	if (*rapp == NULL) {
 		log(LOG_ERR, "in6_prefix.c: init_newprefix:%d: ENOBUFS"
@@ -872,8 +871,8 @@ init_newprefix(struct in6_rrenumreq *irr, struct ifprefix *ifpr,
 			 irr->irr_u_uselen,
 			 min(ifpr->ifpr_plen - irr->irr_u_uselen,
 			     irr->irr_u_keeplen));
-	for (orap = (ifpr2rp(ifpr)->rp_addrhead).lh_first; orap != NULL;
-	     orap = orap->ra_entry.le_next) {
+	LIST_FOREACH(orap, &(ifpr2rp(ifpr)->rp_addrhead), ra_entry)
+	{
 		struct rp_addr *rap;
 		int error = 0;
 
@@ -905,19 +904,15 @@ free_rp_entries(struct rr_prefix *rpp)
 	 * This func is only called with rpp on stack(not on list).
 	 * So no splnet() here
 	 */
-#if defined(__FreeBSD__) && __FreeBSD__ >= 3 || defined(__APPLE__)
 	while (!LIST_EMPTY(&rpp->rp_addrhead))
-#else
-	while (rpp->rp_addrhead.lh_first != NULL)
-#endif
 	{
 		struct rp_addr *rap;
 
 		rap = LIST_FIRST(&rpp->rp_addrhead);
 		LIST_REMOVE(rap, ra_entry);
 		if (rap->ra_addr)
-			IFAFREE(&rap->ra_addr->ia_ifa);
-		_FREE(rap, M_IPFW);
+			ifafree(&rap->ra_addr->ia_ifa);
+		FREE(rap, M_RR_ADDR);
 	}
 }
 
@@ -930,8 +925,9 @@ add_useprefixes(struct socket *so, struct ifnet *ifp,
 	int error = 0;
 
 	/* add prefixes to each of marked prefix */
-	for (ifpr = ifp->if_prefixlist; ifpr; ifpr = nextifpr) {
-		nextifpr = ifpr->ifpr_next;
+	for (ifpr = TAILQ_FIRST(&ifp->if_prefixhead); ifpr; ifpr = nextifpr)
+	{
+		nextifpr = TAILQ_NEXT(ifpr, ifpr_list);
 		if (ifpr->ifpr_prefix->sa_family != AF_INET6 ||
 		    ifpr->ifpr_type != IN6_PREFIX_RR)
  			continue;
@@ -951,9 +947,6 @@ static void
 unprefer_prefix(struct rr_prefix *rpp)
 {
 	struct rp_addr *rap;
-#if !(defined(__FreeBSD__) && __FreeBSD__ >= 3) && !defined(__APPLE__)
-	long time_second = time.tv_sec;
-#endif
 
 	for (rap = rpp->rp_addrhead.lh_first; rap != NULL;
 	     rap = rap->ra_entry.le_next) {
@@ -978,19 +971,21 @@ delete_each_prefix(struct rr_prefix *rpp, u_char origin)
 
 		s = splnet();
 		rap = LIST_FIRST(&rpp->rp_addrhead);
-		if (rap == NULL)
+		if (rap == NULL) {
+			splx(s);
 			break;
+		}
 		LIST_REMOVE(rap, ra_entry);
 		splx(s);
 		if (rap->ra_addr == NULL) {
-			_FREE(rap, M_IPFW);
+			FREE(rap, M_RR_ADDR);
 			continue;
 		}
 		rap->ra_addr->ia6_ifpr = NULL;
 
-		in6_purgeaddr(&rap->ra_addr->ia_ifa, rpp->rp_ifp);
-		IFAFREE(&rap->ra_addr->ia_ifa);
-		_FREE(rap, M_IPFW);
+		in6_purgeaddr(&rap->ra_addr->ia_ifa);
+		ifafree(&rap->ra_addr->ia_ifa);
+		FREE(rap, M_RR_ADDR);
 	}
 	rp_remove(rpp);
 
@@ -1003,8 +998,9 @@ delete_prefixes(struct ifnet *ifp, u_char origin)
 	struct ifprefix *ifpr, *nextifpr;
 
 	/* delete prefixes marked as tobe deleted */
-	for (ifpr = ifp->if_prefixlist; ifpr; ifpr = nextifpr) {
-		nextifpr = ifpr->ifpr_next;
+	for (ifpr = TAILQ_FIRST(&ifp->if_prefixhead); ifpr; ifpr = nextifpr)
+	{
+		nextifpr = TAILQ_NEXT(ifpr, ifpr_list);
 		if (ifpr->ifpr_prefix->sa_family != AF_INET6 ||
 		    ifpr->ifpr_type != IN6_PREFIX_RR)
  			continue;
@@ -1018,12 +1014,8 @@ link_stray_ia6s(struct rr_prefix *rpp)
 {
 	struct ifaddr *ifa;
 
-#if (defined(__FreeBSD__) && __FreeBSD__ < 3) || defined(__bsdi__)
-	for (ifa = rpp->rp_ifp->if_addrlist; ifa; ifa = ifa->ifa_next)
-#else
 	for (ifa = rpp->rp_ifp->if_addrlist.tqh_first; ifa;
 	     ifa = ifa->ifa_list.tqe_next)
-#endif
 	{
 		struct rp_addr *rap;
 		struct rr_prefix *orpp;
@@ -1046,7 +1038,7 @@ link_stray_ia6s(struct rr_prefix *rpp)
 				    rpp->rp_plen);
 			continue;
 		}
-		if ((error = assigne_ra_entry(rpp,
+		if ((error = assign_ra_entry(rpp,
 					      (sizeof(rap->ra_ifid) << 3) -
 					      rpp->rp_plen,
 					      (struct in6_ifaddr *)ifa)) != 0)
@@ -1140,13 +1132,9 @@ in6_prefix_ioctl(struct socket *so, u_long cmd, caddr_t data,
 			free_rp_entries(&rp_tmp);
 			break;
 		}
-#if defined(__bsdi__) || (defined(__FreeBSD__) && __FreeBSD__ < 3)
-		for (ifa = ifp->if_addrlist; ifa; ifa = ifa->ifa_next)
-#else
 		for (ifa = ifp->if_addrlist.tqh_first;
 		     ifa;
 		     ifa = ifa->ifa_list.tqe_next)
-#endif
 		{
 			if (ifa->ifa_addr == NULL)
 				continue;	/* just for safety */
@@ -1206,9 +1194,6 @@ in6_rr_timer(void *ignored_arg)
 {
 	int s;
 	struct rr_prefix *rpp;
-#if !(defined(__FreeBSD__) && __FreeBSD__ >= 3) && !defined(__APPLE__)
-	long time_second = time.tv_sec;
-#endif
 
 	timeout(in6_rr_timer_funneled, (caddr_t)0, ip6_rr_prune * hz);
 

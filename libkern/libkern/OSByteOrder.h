@@ -29,7 +29,7 @@
 #ifndef _OS_OSBYTEORDER_H
 #define _OS_OSBYTEORDER_H
 
-#include <libkern/OSBase.h>
+#include <libkern/OSTypes.h>
 
 #if		defined(__ppc__)
 #include <libkern/ppc/OSByteOrder.h>

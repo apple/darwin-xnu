@@ -21,17 +21,17 @@
  */
 /*
  *
- *	File: kern/shared_memory_server.h
+ *	File: mach/shared_memory_server.h
  *
  * 	protos and struct definitions for shared library
  *	server and interface
  */
-#ifndef _SHARED_MEMORY_SERVER_H_
-#define _SHARED_MEMORY_SERVER_H_
+#ifndef _MACH_SHARED_MEMORY_SERVER_H_
+#define _MACH_SHARED_MEMORY_SERVER_H_
 
 #define	SHARED_LIBRARY_SERVER_SUPPORTED
-#define GLOBAL_SHARED_TEXT_SEGMENT 0x70000000
-#define GLOBAL_SHARED_DATA_SEGMENT 0x80000000
+#define GLOBAL_SHARED_TEXT_SEGMENT 0x90000000
+#define GLOBAL_SHARED_DATA_SEGMENT 0xA0000000
 #define GLOBAL_SHARED_SEGMENT_MASK 0xF0000000
 
 #define		SHARED_TEXT_REGION_SIZE 0x10000000
@@ -49,52 +49,7 @@
 
 
 #include <mach/vm_prot.h>
-#ifndef MACH_KERNEL
-#include <mach/mach.h>
-#else
-#include <vm/vm_map.h>
-#endif
-
-#ifdef MACH_KERNEL_PRIVATE
-
-#include <kern/queue.h>
-#include <vm/vm_object.h>
-#include <vm/memory_object.h>
-
-extern ipc_port_t      shared_text_region_handle;
-extern ipc_port_t      shared_data_region_handle;
-#else /* MACH_KERNEL_PRIVATE */
-
-#ifdef KERNEL_PRIVATE
-extern mach_port_t      shared_text_region_handle;
-extern mach_port_t      shared_data_region_handle;
-#endif
-#endif /* MACH_KERNEL_PRIVATE*/
-
-#ifdef KERNEL_PRIVATE
-
-extern vm_offset_t     shared_file_mapping_array;
-
-
-struct shared_region_task_mappings {
-	ipc_port_t		text_region;
-	vm_size_t		text_size;
-	ipc_port_t		data_region;
-	vm_size_t		data_size;
-	vm_offset_t		region_mappings;
-	vm_offset_t		client_base;
-	vm_offset_t		alternate_base;
-	vm_offset_t		alternate_next;
-	int			flags;
-	vm_offset_t		self;
-};
-
-#define SHARED_REGION_SYSTEM	0x1
-#define SHARED_REGION_FULL	0x2
-
-typedef	struct shared_region_task_mappings *shared_region_task_mappings_t;
-#endif /* KERNEL_PRIVATE */
-
+#include <mach/mach_types.h>
 
 #define SHARED_LIB_ALIAS  0x10
 
@@ -104,9 +59,11 @@ typedef	struct shared_region_task_mappings *shared_region_task_mappings_t;
 /* IN */
 #define ALTERNATE_LOAD_SITE 0x1
 #define NEW_LOCAL_SHARED_REGIONS 0x2
+#define	QUERY_IS_SYSTEM_REGION 0x4
 
 /* OUT */
 #define SF_PREV_LOADED    0x1
+#define SYSTEM_REGION_BACKED 0x2
 
 
 #define load_file_hash(file_object, size) \
@@ -125,107 +82,4 @@ struct sf_mapping {
 
 typedef struct sf_mapping sf_mapping_t;
 
-
-#ifdef MACH_KERNEL_PRIVATE
-
-struct loaded_mapping {
-	vm_offset_t	mapping_offset;
-	vm_size_t	size;
-	vm_offset_t	file_offset;
-	vm_prot_t	protection;  /* read/write/execute/COW/ZF */
-	
-	struct loaded_mapping *next;
-};
-
-typedef struct loaded_mapping loaded_mapping_t;
-
-struct load_struct {
-	queue_chain_t   	links;  
-	shared_region_mapping_t	regions_instance;
-	int			depth;
-	int			file_object;
-	vm_offset_t		base_address;
-	int			mapping_cnt;
-	loaded_mapping_t	*mappings;
-};
-
-#endif /* MACH_KERNEL_PRIVATE */
-
-typedef struct load_struct load_struct_t;
-typedef struct load_struct *load_struct_ptr_t;
-
-#ifdef MACH_KERNEL_PRIVATE
-
-struct load_file_ele {
-	union {
-		sf_mapping_t	mapping;
-		load_struct_t	element;
-	} u;
-};
-
-struct shared_file_info {
-	mutex_t	    	lock;   /* lock for the structure */
-	queue_head_t	*hash;  /* for later perf enhance */
-	int		hash_size;
-	boolean_t	hash_init;
-};
-
-typedef struct shared_file_info shared_file_info_t;
-
-extern kern_return_t                                   
-copyin_shared_file(
-        vm_offset_t     mapped_file,
-        vm_size_t       mapped_file_size,
-        vm_offset_t     *base_address,
-        int             map_cnt,
-        sf_mapping_t    *mappings,
-        memory_object_control_t		file_control,
-	shared_region_task_mappings_t	shared_region,
-        int             *flags);
-
-extern kern_return_t           
-shared_file_init(               
-        ipc_port_t      *shared_text_region_handle,
-        vm_size_t       text_region_size,
-        ipc_port_t      *shared_data_region_handle,
-        vm_size_t       data_region_size, 
-        vm_offset_t     *shared_file_mapping_array);
-
-extern load_struct_t  *
-lsf_hash_lookup(   
-        queue_head_t    		*hash_table,
-        void    			*file_object,  
-        int     			size,
-	boolean_t			alternate,
-	shared_region_task_mappings_t	sm_info);
-
-extern load_struct_t *
-lsf_hash_delete(
-        void            		*file_object,
-	vm_offset_t			base_offset,
-	shared_region_task_mappings_t	sm_info);
-
-extern void    
-lsf_hash_insert(
-        load_struct_t   *entry,
-	shared_region_task_mappings_t	sm_info);
-
-extern kern_return_t                   
-lsf_load(
-        vm_offset_t		 	mapped_file,
-        vm_size_t      			mapped_file_size,
-        vm_offset_t    			*base_address,
-        sf_mapping_t   			*mappings,
-        int            			map_cnt,
-        void           			*file_object,
-        int           			flags,
-	shared_region_task_mappings_t	sm_info);
-
-extern void
-lsf_unload(
-        void     			*file_object,
-	vm_offset_t			base_offset,
-	shared_region_task_mappings_t	sm_info);
-
-#endif /* MACH_KERNEL_PRIVATE */
-#endif /* _SHARED_MEMORY_SERVER_H_ */
+#endif /* _MACH_SHARED_MEMORY_SERVER_H_ */

@@ -63,6 +63,8 @@
 #include <sys/file.h>
 #include <sys/vnode.h>
 #include <sys/ubc.h>
+#include <sys/quota.h>
+
 #if REV_ENDIAN_FS
 #include <sys/mount.h>
 #endif /* REV_ENDIAN_FS */
@@ -421,7 +423,7 @@ fail:
 		/*
 		 * Restore user's disk quota because allocation failed.
 		 */
-		(void) chkdq(ip, (long)-btodb(deallocated, devBlockSize), cred, FORCE);
+		(void) chkdq(ip, (int64_t)-deallocated, cred, FORCE);
 #endif /* QUOTA */
 		ip->i_blocks -= btodb(deallocated, devBlockSize);
 		ip->i_flag |= IN_CHANGE | IN_UPDATE;
@@ -666,7 +668,7 @@ fail:
 		/*
 		 * Restore user's disk quota because allocation failed.
 		 */
-		(void) chkdq(ip, (long)-btodb(deallocated, devBlockSize), cred, FORCE);
+		(void) chkdq(ip, (int64_t)-deallocated, cred, FORCE);
 #endif /* QUOTA */
 		ip->i_blocks -= btodb(deallocated, devBlockSize);
 		ip->i_flag |= IN_CHANGE | IN_UPDATE;

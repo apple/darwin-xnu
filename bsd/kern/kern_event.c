@@ -31,10 +31,8 @@
 #include <sys/mbuf.h>
 #include <sys/kern_event.h>
 #include <sys/malloc.h>
-
-
-extern struct domain systemdomain;
-
+#include <sys/sys_domain.h>
+#include <sys/syslog.h>
 
 
 int	raw_usrreq();
@@ -54,6 +52,22 @@ static
 struct kern_event_head kern_event_head;
 
 static u_long static_event_id = 0;
+
+/*
+ * Install the protosw's for the NKE manager.  Invoked at
+ *  extension load time
+ */
+int
+kern_event_init(void)
+{
+    int retval;
+
+    if ((retval = net_add_proto(eventsw, &systemdomain)) == 0)
+            return(KERN_SUCCESS);
+    
+    log(LOG_WARNING, "Can't install kernel events protocol (%d)\n", retval);
+    return(retval);
+}
 
 int kev_attach(struct socket *so, int proto, struct proc *p)
 {
@@ -126,7 +140,6 @@ int  kev_post_msg(struct kev_msg *event_msg)
      ev->event_code   = event_msg->event_code;
 
      m->m_len = total_size;
-     ev_pcb = LIST_FIRST(&kern_event_head);
      for (ev_pcb = LIST_FIRST(&kern_event_head); 
 	  ev_pcb; 
 	  ev_pcb = LIST_NEXT(ev_pcb, ev_link)) {

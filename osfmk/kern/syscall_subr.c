@@ -120,7 +120,7 @@ swtch(void)
 
 	counter(c_swtch_block++);
 
-	thread_block(swtch_continue);
+	thread_block_reason(swtch_continue, AST_YIELD);
 
 	mp_disable_preemption();
 	myprocessor = current_processor();
@@ -170,7 +170,7 @@ swtch_pri(
 
 	_mk_sp_thread_depress_abstime(std_quantum);
 
-	thread_block(swtch_pri_continue);
+	thread_block_reason(swtch_pri_continue, AST_YIELD);
 
 	_mk_sp_thread_depress_abort(current_thread(), FALSE);
 

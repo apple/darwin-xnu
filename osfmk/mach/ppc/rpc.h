@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2002,2000 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -25,27 +25,6 @@
  */
 #ifndef _MACH_PPC_RPC_H_
 #define _MACH_PPC_RPC_H_
-
-#include <mach/ppc/thread_status.h>
-
-/*
- * Just temporary until all vestiges of short-curcuiting can be removed.
- */
-#define CAN_SHCIRCUIT(name)	(0)
-
-/*
- * Note, these don't quite work for PowerPC, because there are different
- * ABIs that lay the parameters out some in registers and some in memory
- * with slightly different results.  We need to change MIG to assure a
- * consistent layout regardless of ABI.
- */
-#define MACH_RPC_ARGV(act)	(char*)(USER_REGS(act)->r3)  
-#define MACH_RPC_RET(act)	( USER_REGS(act)->lr ) 
-#define MACH_RPC_UIP(act)	( USER_REGS(act)->srr0 )
-#define MACH_RPC_USP(act)	( USER_REGS(act)->r1 )
-/* FIXME!! */
-#define MACH_RPC_FUNC(act)	( USER_REGS(act)->r2 )
-#define MACH_RPC_SIG(act)	( USER_REGS(act)->r2 )
 
 #endif	/* _MACH_PPC_RPC_H_ */
 

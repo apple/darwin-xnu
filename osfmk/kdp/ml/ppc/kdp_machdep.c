@@ -19,17 +19,6 @@
  * 
  * @APPLE_LICENSE_HEADER_END@
  */
-/*
- * Copyright (c) 1997 Apple Computer, Inc.  All rights reserved.
- * Copyright (c) 1994 NeXT Computer, Inc.  All rights reserved.
- *
- * machdep/ppc/kdp_machdep.c
- *
- * Machine-dependent code for Remote Debugging Protocol
- *
- * March, 1997	Created.	Umesh Vaishampayan [umeshv@NeXT.com]
- *
- */
  
 #include <mach/mach_types.h>
 #include <mach/exception_types.h>
@@ -48,7 +37,7 @@
 
 void print_saved_state(void *);
 void kdp_call(void);
-void kdp_trap( unsigned int, struct ppc_thread_state *);
+void kdp_trap( unsigned int, struct savearea	*saved_state);
 int kdp_getc(void);
 boolean_t kdp_call_kdb(void);
 
@@ -122,51 +111,50 @@ kdp_getintegerstate(
     struct ppc_thread_state		*state
 )
 {
-    struct ppc_thread_state	*saved_state;
+    struct savearea	*saved_state;
    
     saved_state = kdp.saved_state;
    
     bzero((char *)state,sizeof (struct ppc_thread_state)) ;
 
-    state->srr0	= saved_state->srr0;
-    state->srr1	= saved_state->srr1;
-    state->r0	= saved_state->r0;
-    state->r1	= saved_state->r1;
-    state->r2	= saved_state->r2;
-    state->r3	= saved_state->r3;
-    state->r4	= saved_state->r4;
-    state->r5	= saved_state->r5;
-    state->r6	= saved_state->r6;
-    state->r7	= saved_state->r7;
-    state->r8	= saved_state->r8;
-    state->r9	= saved_state->r9;
-    state->r10	= saved_state->r10;
-    state->r11	= saved_state->r11;
-    state->r12	= saved_state->r12;
-    state->r13	= saved_state->r13;
-    state->r14	= saved_state->r14;
-    state->r15	= saved_state->r15;
-    state->r16	= saved_state->r16;
-    state->r17	= saved_state->r17;
-    state->r18	= saved_state->r18;
-    state->r19	= saved_state->r19;
-    state->r20	= saved_state->r20;
-    state->r21	= saved_state->r21;
-    state->r22	= saved_state->r22;
-    state->r23	= saved_state->r23;
-    state->r24	= saved_state->r24;
-    state->r25	= saved_state->r25;
-    state->r26	= saved_state->r26;
-    state->r27	= saved_state->r27;
-    state->r28	= saved_state->r28;
-    state->r29	= saved_state->r29;
-    state->r30	= saved_state->r30;
-    state->r31	= saved_state->r31;
-    state->cr	= saved_state->cr;
-    state->xer	= saved_state->xer;
-    state->lr	= saved_state->lr;
-    state->ctr	= saved_state->ctr;
-    state->mq	= saved_state->mq; /* This is BOGUS ! (601) ONLY */
+    state->srr0	= saved_state->save_srr0;
+    state->srr1	= saved_state->save_srr1;
+    state->r0	= saved_state->save_r0;
+    state->r1	= saved_state->save_r1;
+    state->r2	= saved_state->save_r2;
+    state->r3	= saved_state->save_r3;
+    state->r4	= saved_state->save_r4;
+    state->r5	= saved_state->save_r5;
+    state->r6	= saved_state->save_r6;
+    state->r7	= saved_state->save_r7;
+    state->r8	= saved_state->save_r8;
+    state->r9	= saved_state->save_r9;
+    state->r10	= saved_state->save_r10;
+    state->r11	= saved_state->save_r11;
+    state->r12	= saved_state->save_r12;
+    state->r13	= saved_state->save_r13;
+    state->r14	= saved_state->save_r14;
+    state->r15	= saved_state->save_r15;
+    state->r16	= saved_state->save_r16;
+    state->r17	= saved_state->save_r17;
+    state->r18	= saved_state->save_r18;
+    state->r19	= saved_state->save_r19;
+    state->r20	= saved_state->save_r20;
+    state->r21	= saved_state->save_r21;
+    state->r22	= saved_state->save_r22;
+    state->r23	= saved_state->save_r23;
+    state->r24	= saved_state->save_r24;
+    state->r25	= saved_state->save_r25;
+    state->r26	= saved_state->save_r26;
+    state->r27	= saved_state->save_r27;
+    state->r28	= saved_state->save_r28;
+    state->r29	= saved_state->save_r29;
+    state->r30	= saved_state->save_r30;
+    state->r31	= saved_state->save_r31;
+    state->cr	= saved_state->save_cr;
+    state->xer	= saved_state->save_xer;
+    state->lr	= saved_state->save_lr;
+    state->ctr	= saved_state->save_ctr;
 }
 
 kdp_error_t
@@ -202,49 +190,48 @@ kdp_setintegerstate(
     struct ppc_thread_state		*state
 )
 {
-    struct ppc_thread_state	*saved_state;
+    struct savearea	*saved_state;
    
     saved_state = kdp.saved_state;
 
-    saved_state->srr0	= state->srr0;
-    saved_state->srr1	= state->srr1;
-    saved_state->r0	= state->r0;
-    saved_state->r1	= state->r1;
-    saved_state->r2	= state->r2;
-    saved_state->r3	= state->r3;
-    saved_state->r4	= state->r4;
-    saved_state->r5	= state->r5;
-    saved_state->r6	= state->r6;
-    saved_state->r7	= state->r7;
-    saved_state->r8	= state->r8;
-    saved_state->r9	= state->r9;
-    saved_state->r10	= state->r10;
-    saved_state->r11	= state->r11;
-    saved_state->r12	= state->r12;
-    saved_state->r13	= state->r13;
-    saved_state->r14	= state->r14;
-    saved_state->r15	= state->r15;
-    saved_state->r16	= state->r16;
-    saved_state->r17	= state->r17;
-    saved_state->r18	= state->r18;
-    saved_state->r19	= state->r19;
-    saved_state->r20	= state->r20;
-    saved_state->r21	= state->r21;
-    saved_state->r22	= state->r22;
-    saved_state->r23	= state->r23;
-    saved_state->r24	= state->r24;
-    saved_state->r25	= state->r25;
-    saved_state->r26	= state->r26;
-    saved_state->r27	= state->r27;
-    saved_state->r28	= state->r28;
-    saved_state->r29	= state->r29;
-    saved_state->r30	= state->r30;
-    saved_state->r31	= state->r31;
-    saved_state->cr	= state->cr;
-    saved_state->xer	= state->xer;
-    saved_state->lr	= state->lr;
-    saved_state->ctr	= state->ctr;
-    saved_state->mq	= state->mq; /* BOGUS! (601)ONLY */
+    saved_state->save_srr0	= state->srr0;
+    saved_state->save_srr1	= state->srr1;
+    saved_state->save_r0	= state->r0;
+    saved_state->save_r1	= state->r1;
+    saved_state->save_r2	= state->r2;
+    saved_state->save_r3	= state->r3;
+    saved_state->save_r4	= state->r4;
+    saved_state->save_r5	= state->r5;
+    saved_state->save_r6	= state->r6;
+    saved_state->save_r7	= state->r7;
+    saved_state->save_r8	= state->r8;
+    saved_state->save_r9	= state->r9;
+    saved_state->save_r10	= state->r10;
+    saved_state->save_r11	= state->r11;
+    saved_state->save_r12	= state->r12;
+    saved_state->save_r13	= state->r13;
+    saved_state->save_r14	= state->r14;
+    saved_state->save_r15	= state->r15;
+    saved_state->save_r16	= state->r16;
+    saved_state->save_r17	= state->r17;
+    saved_state->save_r18	= state->r18;
+    saved_state->save_r19	= state->r19;
+    saved_state->save_r20	= state->r20;
+    saved_state->save_r21	= state->r21;
+    saved_state->save_r22	= state->r22;
+    saved_state->save_r23	= state->r23;
+    saved_state->save_r24	= state->r24;
+    saved_state->save_r25	= state->r25;
+    saved_state->save_r26	= state->r26;
+    saved_state->save_r27	= state->r27;
+    saved_state->save_r28	= state->r28;
+    saved_state->save_r29	= state->r29;
+    saved_state->save_r30	= state->r30;
+    saved_state->save_r31	= state->r31;
+    saved_state->save_cr	= state->cr;
+    saved_state->save_xer	= state->xer;
+    saved_state->save_lr	= state->lr;
+    saved_state->save_ctr	= state->ctr;
 }
 
 kdp_error_t
@@ -427,20 +414,17 @@ int kdp_noisy;
 void
 kdp_trap(
     unsigned int		exception,
-    struct ppc_thread_state	*saved_state
+    struct savearea	*saved_state
 )
 {
 	unsigned int *fp;
-        unsigned int register sp;
-	struct ppc_thread_state *state;
+	unsigned int register sp;
+	struct savearea *state;
 
 	if (kdp_noisy) {
 		if (kdp_backtrace) {
 			printf("\nvector=%x, \n", exception/4);
-#ifdef XXX
-			regDump(saved_state);
-#endif
-			sp = saved_state->r1;
+			sp = saved_state->save_r1;
 			printf("stack backtrace - sp(%x)  ", sp);
 			fp = (unsigned int *) *((unsigned int *)sp);
 			while (fp) {
@@ -455,23 +439,21 @@ kdp_trap(
 		}
 #endif
 	
-	printf("vector=%d  ", exception/4);
+		printf("vector=%d  ", exception/4);
 	}
-
 	kdp_raise_exception(kdp_code(exception), 0, 0, saved_state);
 
 	if (kdp_noisy)
 		printf("kdp_trap: kdp_raise_exception() ret\n");
 
-	if (*((int *)saved_state->srr0) == 0x7c800008)
-		saved_state->srr0 += 4; /* BKPT_SIZE */
-		
-	if(saved_state->srr1 & (MASK(MSR_SE) | MASK(MSR_BE))) {	/* Are we just stepping or continuing */
+	if (*((int *)saved_state->save_srr0) == 0x7c800008)
+		saved_state->save_srr0 += 4;			/* BKPT_SIZE */
+
+	if(saved_state->save_srr1 & (MASK(MSR_SE) | MASK(MSR_BE))) {	/* Are we just stepping or continuing */
 		db_run_mode = STEP_ONCE;				/* We are stepping */
 	}
 	else db_run_mode = STEP_CONTINUE;			/* Otherwise we are continuing */
-
-
+	
 #ifdef XXX
 	mtspr(dabr, kdp_dabr);
 #endif
@@ -485,35 +467,33 @@ kdp_call_kdb(
 	return(TRUE);
 }
 
-void kdp_print_registers(struct ppc_saved_state *state)
+void kdp_print_registers(struct savearea *state)
 {
 	int i;
 	for (i=0; i<32; i++) {
 		if ((i % 8) == 0)
 			printf("\n%4d :",i);
-			printf(" %08x",*(&state->r0+i));
+			printf(" %08x",*(&state->save_r0+i));
 	}
 	printf("\n");
-	printf("cr        = 0x%08x\t\t",state->cr);
-	printf("xer       = 0x%08x\n",state->xer);
-	printf("lr        = 0x%08x\t\t",state->lr);
-	printf("ctr       = 0x%08x\n",state->ctr);
-	printf("srr0(iar) = 0x%08x\t\t",state->srr0);
-	printf("srr1(msr) = 0x%08B\n",state->srr1,
+	printf("cr        = 0x%08x\t\t",state->save_cr);
+	printf("xer       = 0x%08x\n",state->save_xer);
+	printf("lr        = 0x%08x\t\t",state->save_lr);
+	printf("ctr       = 0x%08x\n",state->save_ctr);
+	printf("srr0(iar) = 0x%08x\t\t",state->save_srr0);
+	printf("srr1(msr) = 0x%08B\n",state->save_srr1,
 		"\x10\x11""EE\x12PR\x13""FP\x14ME\x15""FE0\x16SE\x18"
 		"FE1\x19""AL\x1a""EP\x1bIT\x1c""DT");
-	printf("mq        = 0x%08x\t\t",state->mq);
-	printf("sr_copyin = 0x%08x\n",state->sr_copyin);
 	printf("\n");
 }
 
 void
 kdp_print_backtrace(
     unsigned int                exception,
-    struct ppc_saved_state     *saved_state)
+    struct savearea     *saved_state)
 {
-	extern void kdp_print_registers(struct ppc_saved_state *);
-	extern void print_backtrace(struct ppc_saved_state *);
+	extern void kdp_print_registers(struct savearea *);
+	extern void print_backtrace(struct savearea *);
 	extern unsigned int debug_mode, disableDebugOuput;
 
 	disableDebugOuput = FALSE;
@@ -524,4 +504,9 @@ kdp_print_backtrace(
 	print_backtrace(saved_state);
 	printf("panic: We are hanging here...\n");
 	while(1);
+}
+
+unsigned int kdp_ml_get_breakinsn()
+{
+  return 0x7fe00008;
 }

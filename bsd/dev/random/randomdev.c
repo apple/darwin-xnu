@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1999, 2000-2001 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 1999, 2000-2002 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -29,8 +29,6 @@
 #include <sys/fcntl.h>
 #include <miscfs/devfs/devfs.h>
 #include <kern/lock.h>
-#include <kern/task.h>
-#include <kern/thread.h>
 #include <sys/time.h>
 #include <sys/malloc.h>
 

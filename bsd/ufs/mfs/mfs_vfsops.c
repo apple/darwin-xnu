@@ -151,6 +151,7 @@ mfs_mountroot()
 	mfsp->mfs_pid = p->p_pid;
 	mfsp->mfs_buflist = (struct buf *)0;
 	if (error = ffs_mountfs(rootvp, mp, p)) {
+		vrele(rootvp); /* release the reference from bdevvp() */
 		_FREE_ZONE(mp, sizeof (struct mount), M_MOUNT);
 		_FREE(mfsp, M_MFSNODE);
 		return (error);

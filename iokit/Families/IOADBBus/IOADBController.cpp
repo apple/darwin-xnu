@@ -521,12 +521,12 @@ bool IOADBController::matchNubWithPropertyTable( IOService * device, OSDictionar
             keys++;
         }
         else {
-            if( deviceInfo->defaultAddress != strtol(keys, &keys, 16)) {
+            if( deviceInfo->defaultAddress != strtol(keys, (char **) &keys, 16)) {
                 break;
             }
         }
         if( *keys++ == '-' ) {
-            if( deviceInfo->defaultHandlerID != strtol(keys, &keys, 16)) {
+            if( deviceInfo->defaultHandlerID != strtol(keys, (char **) &keys, 16)) {
                 break;
             }
         }

@@ -52,33 +52,33 @@
  * SUCH DAMAGE.
  *
  *	@(#)in_pcb.c	8.4 (Berkeley) 5/24/95
+ * $FreeBSD: src/sys/netinet/in_pcb.c,v 1.59.2.17 2001/08/13 16:26:17 ume Exp $
  */
 
 #include <sys/param.h>
 #include <sys/systm.h>
 #include <sys/malloc.h>
 #include <sys/mbuf.h>
-#if INET6 
 #include <sys/domain.h>
-#endif 
 #include <sys/protosw.h>
 #include <sys/socket.h>
 #include <sys/socketvar.h>
 #include <sys/proc.h>
+#ifndef __APPLE__
+#include <sys/jail.h>
+#endif
 #include <sys/kernel.h>
 #include <sys/sysctl.h>
 
 #include <machine/limits.h>
 
-#if ISFB31
-#include <vm/vm_zone.h>
-#else
+#ifdef __APPLE__
 #include <kern/zalloc.h>
 #endif
 
 #include <net/if.h>
-#include <net/route.h>
 #include <net/if_types.h>
+#include <net/route.h>
 
 #include <netinet/in.h>
 #include <netinet/in_pcb.h>
@@ -94,36 +94,38 @@
 #if IPSEC
 #include <netinet6/ipsec.h>
 #include <netkey/key.h>
-#include <netkey/key_debug.h>
 #endif /* IPSEC */
 
 #include <sys/kdebug.h>
 
+#if IPSEC
+extern int ipsec_bypass;
+#endif
 
 #define DBG_FNC_PCB_LOOKUP	NETDBG_CODE(DBG_NETTCP, (6 << 8))
 #define DBG_FNC_PCB_HLOOKUP	NETDBG_CODE(DBG_NETTCP, ((6 << 8) | 1))
 
 struct	in_addr zeroin_addr;
 
-void	in_pcbremlists __P((struct inpcb *));
-static void	in_rtchange __P((struct inpcb *, int));
-
-
 /*
  * These configure the range of local port addresses assigned to
  * "unspecified" outgoing connections/packets/whatever.
  */
-int ipport_lowfirstauto  = IPPORT_RESERVED - 1;	/* 1023 */
-int ipport_lowlastauto = IPPORT_RESERVEDSTART;	/* 600 */
-int ipport_firstauto = IPPORT_HIFIRSTAUTO;	/* 49152 */
-int ipport_lastauto  = IPPORT_HILASTAUTO;	/* 65535 */
-int ipport_hifirstauto = IPPORT_HIFIRSTAUTO;	/* 49152 */
-int ipport_hilastauto  = IPPORT_HILASTAUTO;	/* 65535 */
+int	ipport_lowfirstauto  = IPPORT_RESERVED - 1;	/* 1023 */
+int	ipport_lowlastauto = IPPORT_RESERVEDSTART;	/* 600 */
+#ifndef __APPLE__
+int	ipport_firstauto = IPPORT_RESERVED;		/* 1024 */
+int	ipport_lastauto  = IPPORT_USERRESERVED;		/* 5000 */
+#else
+int 	ipport_firstauto = IPPORT_HIFIRSTAUTO;      	/* 49152 */
+int 	ipport_lastauto  = IPPORT_HILASTAUTO;       	/* 65535 */
+#endif
+int	ipport_hifirstauto = IPPORT_HIFIRSTAUTO;	/* 49152 */
+int	ipport_hilastauto  = IPPORT_HILASTAUTO;		/* 65535 */
 
 #define RANGECHK(var, min, max) \
 	if ((var) < (min)) { (var) = (min); } \
 	else if ((var) > (max)) { (var) = (max); }
-
 
 static int
 sysctl_net_ipport_check SYSCTL_HANDLER_ARGS
@@ -177,6 +179,9 @@ in_pcballoc(so, pcbinfo, p)
 {
 	register struct inpcb *inp;
 	caddr_t		      temp;
+#if IPSEC
+	int error;
+#endif
 
 	if (so->cached_in_sock_layer == 0) {
 #if TEMPDEBUG
@@ -200,9 +205,28 @@ in_pcballoc(so, pcbinfo, p)
 	inp->inp_gencnt = ++pcbinfo->ipi_gencnt;
 	inp->inp_pcbinfo = pcbinfo;
 	inp->inp_socket = so;
+#if IPSEC
+#ifndef __APPLE__
+	if (ipsec_bypass == 0) {
+		error = ipsec_init_policy(so, &inp->inp_sp);
+		if (error != 0) {
+			zfree(pcbinfo->ipi_zone, (vm_offset_t)inp);
+			return error;
+		}
+	}
+#endif
+#endif /*IPSEC*/
+#if defined(INET6)
+	if (INP_SOCKAF(so) == AF_INET6 && !ip6_mapped_addr_on)
+		inp->inp_flags |= IN6P_IPV6_V6ONLY;
+#endif
 	LIST_INSERT_HEAD(pcbinfo->listhead, inp, inp_list);
 	pcbinfo->ipi_count++;
 	so->so_pcb = (caddr_t)inp;
+#if INET6
+	if (ip6_auto_flowlabel)
+		inp->inp_flags |= IN6P_AUTOFLOWLABEL;
+#endif
 	return (0);
 }
 
@@ -213,7 +237,7 @@ in_pcbbind(inp, nam, p)
 	struct proc *p;
 {
 	register struct socket *so = inp->inp_socket;
-	u_short *lastport;
+	unsigned short *lastport;
 	struct sockaddr_in *sin;
 	struct inpcbinfo *pcbinfo = inp->inp_pcbinfo;
 	u_short lport = 0;
@@ -272,14 +296,13 @@ in_pcbbind(inp, nam, p)
 					 SO_REUSEPORT) == 0) &&
 				     (so->so_uid != t->inp_socket->so_uid)) {
 #if INET6
-					if (ip6_mapped_addr_on == 0 ||
-					    ntohl(sin->sin_addr.s_addr) !=
+					if (ntohl(sin->sin_addr.s_addr) !=
 					    INADDR_ANY ||
 					    ntohl(t->inp_laddr.s_addr) !=
 					    INADDR_ANY ||
 					    INP_SOCKAF(so) ==
 					    INP_SOCKAF(t->inp_socket))
-#endif
+#endif /* defined(INET6) */
 					return (EADDRINUSE);
 				}
 			}
@@ -295,7 +318,7 @@ in_pcbbind(inp, nam, p)
 				    INADDR_ANY ||
 				    INP_SOCKAF(so) ==
 				    INP_SOCKAF(t->inp_socket))
-#endif
+#endif /* defined(INET6) */
 				return (EADDRINUSE);
 			}
 		}
@@ -337,12 +360,8 @@ in_pcbbind(inp, nam, p)
 
 			do {
 				if (count-- < 0) {	/* completely used? */
-					/*
-					 * Undo any address bind that may have
-					 * occurred above.
-					 */
 					inp->inp_laddr.s_addr = INADDR_ANY;
-					return (EAGAIN);
+					return (EADDRNOTAVAIL);
 				}
 				--*lastport;
 				if (*lastport > first || *lastport < last)
@@ -358,12 +377,8 @@ in_pcbbind(inp, nam, p)
 
 			do {
 				if (count-- < 0) {	/* completely used? */
-					/*
-					 * Undo any address bind that may have
-					 * occurred above.
-					 */
 					inp->inp_laddr.s_addr = INADDR_ANY;
-					return (EAGAIN);
+					return (EADDRNOTAVAIL);
 				}
 				++*lastport;
 				if (*lastport < first || *lastport > last)
@@ -421,10 +436,10 @@ in_pcbladdr(inp, nam, plocal_sin)
 #define sintosa(sin)	((struct sockaddr *)(sin))
 #define ifatoia(ifa)	((struct in_ifaddr *)(ifa))
 		if (sin->sin_addr.s_addr == INADDR_ANY)
-		    sin->sin_addr = IA_SIN(in_ifaddrhead.tqh_first)->sin_addr;
+		    sin->sin_addr = IA_SIN(TAILQ_FIRST(&in_ifaddrhead))->sin_addr;
 		else if (sin->sin_addr.s_addr == (u_long)INADDR_BROADCAST &&
-		  (in_ifaddrhead.tqh_first->ia_ifp->if_flags & IFF_BROADCAST))
-		    sin->sin_addr = satosin(&in_ifaddrhead.tqh_first->ia_broadaddr)->sin_addr;
+		  (TAILQ_FIRST(&in_ifaddrhead)->ia_ifp->if_flags & IFF_BROADCAST))
+		    sin->sin_addr = satosin(&TAILQ_FIRST(&in_ifaddrhead)->ia_broadaddr)->sin_addr;
 	}
 	if (inp->inp_laddr.s_addr == INADDR_ANY) {
 		register struct route *ro;
@@ -439,7 +454,7 @@ in_pcbladdr(inp, nam, plocal_sin)
 		    (satosin(&ro->ro_dst)->sin_addr.s_addr !=
 			sin->sin_addr.s_addr ||
 		    inp->inp_socket->so_options & SO_DONTROUTE)) {
-			RTFREE(ro->ro_rt);
+			rtfree(ro->ro_rt);
 			ro->ro_rt = (struct rtentry *)0;
 		}
 		if ((inp->inp_socket->so_options & SO_DONTROUTE) == 0 && /*XXX*/
@@ -469,7 +484,7 @@ in_pcbladdr(inp, nam, plocal_sin)
 				ia = ifatoia(ifa_ifwithnet(sintosa(sin)));
 			sin->sin_port = fport;
 			if (ia == 0)
-				ia = in_ifaddrhead.tqh_first;
+				ia = TAILQ_FIRST(&in_ifaddrhead);
 			if (ia == 0)
 				return (EADDRNOTAVAIL);
 		}
@@ -486,8 +501,7 @@ in_pcbladdr(inp, nam, plocal_sin)
 			imo = inp->inp_moptions;
 			if (imo->imo_multicast_ifp != NULL) {
 				ifp = imo->imo_multicast_ifp;
-				for (ia = in_ifaddrhead.tqh_first; ia; 
-				     ia = ia->ia_link.tqe_next)
+				TAILQ_FOREACH(ia, &in_ifaddrhead, ia_link)
 					if (ia->ia_ifp == ifp)
 						break;
 				if (ia == 0)
@@ -518,7 +532,8 @@ in_pcbconnect(inp, nam, p)
 	struct proc *p;
 {
 	struct sockaddr_in *ifaddr;
-	register struct sockaddr_in *sin = (struct sockaddr_in *)nam;
+	struct sockaddr_in *sin = (struct sockaddr_in *)nam;
+	struct sockaddr_in sa;
 	int error;
 
 	/*
@@ -533,8 +548,11 @@ in_pcbconnect(inp, nam, p)
 		return (EADDRINUSE);
 	}
 	if (inp->inp_laddr.s_addr == INADDR_ANY) {
-		if (inp->inp_lport == 0)
-			(void)in_pcbbind(inp, (struct sockaddr *)0, p);
+		if (inp->inp_lport == 0) {
+			error = in_pcbbind(inp, (struct sockaddr *)0, p);
+			if (error)
+			    return (error);
+		}
 		inp->inp_laddr = ifaddr->sin_addr;
 	}
 	inp->inp_faddr = sin->sin_addr;
@@ -561,6 +579,7 @@ in_pcbdetach(inp)
 {
 	struct socket *so = inp->inp_socket;
 	struct inpcbinfo *ipi = inp->inp_pcbinfo;
+	struct rtentry *rt  = inp->inp_route.ro_rt;
 
 #if IPSEC
 	ipsec4_delete_pcbpolicy(inp);
@@ -579,9 +598,24 @@ in_pcbdetach(inp)
 
 	if (inp->inp_options)
 		(void)m_free(inp->inp_options);
-	if (inp->inp_route.ro_rt)
-		rtfree(inp->inp_route.ro_rt);
+	if (rt) {
+		/* 
+		 * route deletion requires reference count to be <= zero 
+		 */
+		if ((rt->rt_flags & RTF_DELCLONE) &&
+		    (rt->rt_flags & RTF_WASCLONED) &&
+		    (rt->rt_refcnt <= 1)) {
+			rtunref(rt);
+			rt->rt_flags &= ~RTF_UP;
+			rtrequest(RTM_DELETE, rt_key(rt),
+				  rt->rt_gateway, rt_mask(rt),
+				  rt->rt_flags, (struct rtentry **)0);
+		}
+		else
+			rtfree(rt);
+	}
 	ip_freemoptions(inp->inp_moptions);
+	inp->inp_vflag = 0;
 	if (so->cached_in_sock_layer)
 	     so->so_saved_pcb = (caddr_t) inp;
 	else
@@ -624,7 +658,7 @@ in_setsockaddr(so, nam)
 	if (!inp) {
 		splx(s);
 		FREE(sin, M_SONAME);
-		return EINVAL;
+		return ECONNRESET;
 	}
 	sin->sin_port = inp->inp_lport;
 	sin->sin_addr = inp->inp_laddr;
@@ -658,7 +692,7 @@ in_setpeeraddr(so, nam)
 	if (!inp) {
 		splx(s);
 		FREE(sin, M_SONAME);
-		return EINVAL;
+		return ECONNRESET;
 	}
 	sin->sin_port = inp->inp_fport;
 	sin->sin_addr = inp->inp_faddr;
@@ -668,70 +702,66 @@ in_setpeeraddr(so, nam)
 	return 0;
 }
 
-/*
- * Pass some notification to all connections of a protocol
- * associated with address dst.  The local address and/or port numbers
- * may be specified to limit the search.  The "usual action" will be
- * taken, depending on the ctlinput cmd.  The caller must filter any
- * cmds that are uninteresting (e.g., no error in the map).
- * Call the protocol specific routine (if any) to report
- * any errors for each matching socket.
- */
 void
-in_pcbnotify(head, dst, fport_arg, laddr, lport_arg, cmd, notify)
+in_pcbnotifyall(head, faddr, errno, notify)
 	struct inpcbhead *head;
-	struct sockaddr *dst;
-	u_int fport_arg, lport_arg;
-	struct in_addr laddr;
-	int cmd;
+	struct in_addr faddr;
 	void (*notify) __P((struct inpcb *, int));
 {
-	register struct inpcb *inp, *oinp;
-	struct in_addr faddr;
-	u_short fport = fport_arg, lport = lport_arg;
-	int errno, s;
+	struct inpcb *inp, *ninp;
+	int s;
 
-	if ((unsigned)cmd > PRC_NCMDS || dst->sa_family != AF_INET)
-		return;
-	faddr = ((struct sockaddr_in *)dst)->sin_addr;
-	if (faddr.s_addr == INADDR_ANY)
-		return;
-
-	/*
-	 * Redirects go to all references to the destination,
-	 * and use in_rtchange to invalidate the route cache.
-	 * Dead host indications: notify all references to the destination.
-	 * Otherwise, if we have knowledge of the local port and address,
-	 * deliver only to that socket.
-	 */
-	if (PRC_IS_REDIRECT(cmd) || cmd == PRC_HOSTDEAD) {
-		fport = 0;
-		lport = 0;
-		laddr.s_addr = 0;
-		if (cmd != PRC_HOSTDEAD)
-			notify = in_rtchange;
-	}
-	errno = inetctlerrmap[cmd];
 	s = splnet();
-	for (inp = head->lh_first; inp != NULL;) {
-		if ((inp->inp_vflag & INP_IPV4) == NULL) {
-			inp = LIST_NEXT(inp, inp_list);
+	for (inp = LIST_FIRST(head); inp != NULL; inp = ninp) {
+		ninp = LIST_NEXT(inp, inp_list);
+#if INET6
+		if ((inp->inp_vflag & INP_IPV4) == 0)
 			continue;
-		}
+#endif
 		if (inp->inp_faddr.s_addr != faddr.s_addr ||
-		    inp->inp_socket == 0 ||
-		    (lport && inp->inp_lport != lport) ||
-		    (laddr.s_addr && inp->inp_laddr.s_addr != laddr.s_addr) ||
-		    (fport && inp->inp_fport != fport)) {
-			inp = LIST_NEXT(inp, inp_list);
-			continue;
-		}
-		oinp = inp;
-		inp = LIST_NEXT(inp, inp_list);
-		if (notify)
-			(*notify)(oinp, errno);
+		    inp->inp_socket == NULL)
+				continue;
+		(*notify)(inp, errno);
 	}
 	splx(s);
+}
+
+void
+in_pcbpurgeif0(head, ifp)
+	struct inpcb *head;
+	struct ifnet *ifp;
+{
+	struct inpcb *inp;
+	struct ip_moptions *imo;
+	int i, gap;
+
+	for (inp = head; inp != NULL; inp = LIST_NEXT(inp, inp_list)) {
+		imo = inp->inp_moptions;
+		if ((inp->inp_vflag & INP_IPV4) &&
+		    imo != NULL) {
+			/*
+			 * Unselect the outgoing interface if it is being
+			 * detached.
+			 */
+			if (imo->imo_multicast_ifp == ifp)
+				imo->imo_multicast_ifp = NULL;
+
+			/*
+			 * Drop multicast group membership if we joined
+			 * through the interface being detached.
+			 */
+			for (i = 0, gap = 0; i < imo->imo_num_memberships;
+			    i++) {
+				if (imo->imo_membership[i]->inm_ifp == ifp) {
+					in_delmulti(imo->imo_membership[i]);
+					gap++;
+				} else if (gap != 0)
+					imo->imo_membership[i - gap] =
+					    imo->imo_membership[i];
+			}
+			imo->imo_num_memberships -= gap;
+		}
+	}
 }
 
 /*
@@ -748,7 +778,6 @@ in_losing(inp)
 	struct rt_addrinfo info;
 
 	if ((rt = inp->inp_route.ro_rt)) {
-		inp->inp_route.ro_rt = 0;
 		bzero((caddr_t)&info, sizeof(info));
 		info.rti_info[RTAX_DST] =
 			(struct sockaddr *)&inp->inp_route.ro_dst;
@@ -759,12 +788,12 @@ in_losing(inp)
 			(void) rtrequest(RTM_DELETE, rt_key(rt),
 				rt->rt_gateway, rt_mask(rt), rt->rt_flags,
 				(struct rtentry **)0);
-		else
+		inp->inp_route.ro_rt = 0;
+		rtfree(rt);
 		/*
 		 * A new route can be allocated
 		 * the next time output is attempted.
 		 */
-			rtfree(rt);
 	}
 }
 
@@ -772,7 +801,7 @@ in_losing(inp)
  * After a routing change, flush old routing
  * and allocate a (hopefully) better one.
  */
-static void
+void
 in_rtchange(inp, errno)
 	register struct inpcb *inp;
 	int errno;
@@ -810,9 +839,11 @@ in_pcblookup_local(pcbinfo, laddr, lport_arg, wild_okay)
 		 * matches the local address and port we're looking for.
 		 */
 		head = &pcbinfo->hashbase[INP_PCBHASH(INADDR_ANY, lport, 0, pcbinfo->hashmask)];
-		for (inp = head->lh_first; inp != NULL; inp = inp->inp_hash.le_next) {
-			if ((inp->inp_vflag & INP_IPV4) == NULL)
+		LIST_FOREACH(inp, head, inp_hash) {
+#if INET6
+			if ((inp->inp_vflag & INP_IPV4) == 0)
 				continue;
+#endif
 			if (inp->inp_faddr.s_addr == INADDR_ANY &&
 			    inp->inp_laddr.s_addr == laddr.s_addr &&
 			    inp->inp_lport == lport) {
@@ -839,7 +870,7 @@ in_pcblookup_local(pcbinfo, laddr, lport_arg, wild_okay)
 		 */
 		porthash = &pcbinfo->porthashbase[INP_PCBPORTHASH(lport,
 		    pcbinfo->porthashmask)];
-		for (phd = porthash->lh_first; phd != NULL; phd = phd->phd_hash.le_next) {
+		LIST_FOREACH(phd, porthash, phd_hash) {
 			if (phd->phd_port == lport)
 				break;
 		}
@@ -848,11 +879,12 @@ in_pcblookup_local(pcbinfo, laddr, lport_arg, wild_okay)
 			 * Port is in use by one or more PCBs. Look for best
 			 * fit.
 			 */
-			for (inp = phd->phd_pcblist.lh_first; inp != NULL;
-			    inp = inp->inp_portlist.le_next) {
+			LIST_FOREACH(inp, &phd->phd_pcblist, inp_portlist) {
 				wildcard = 0;
-				if ((inp->inp_vflag & INP_IPV4) == NULL)
+#if INET6
+				if ((inp->inp_vflag & INP_IPV4) == 0)
 					continue;
+#endif
 				if (inp->inp_faddr.s_addr != INADDR_ANY)
 					wildcard++;
 				if (inp->inp_laddr.s_addr != INADDR_ANY) {
@@ -882,7 +914,8 @@ in_pcblookup_local(pcbinfo, laddr, lport_arg, wild_okay)
  * Lookup PCB in hash list.
  */
 struct inpcb *
-in_pcblookup_hash(pcbinfo, faddr, fport_arg, laddr, lport_arg, wildcard, ifp)
+in_pcblookup_hash(pcbinfo, faddr, fport_arg, laddr, lport_arg, wildcard,
+		  ifp)
 	struct inpcbinfo *pcbinfo;
 	struct in_addr faddr, laddr;
 	u_int fport_arg, lport_arg;
@@ -915,9 +948,11 @@ in_pcblookup_hash(pcbinfo, faddr, fport_arg, laddr, lport_arg, wildcard, ifp)
 	 * First look for an exact match.
 	 */
 	head = &pcbinfo->hashbase[INP_PCBHASH(faddr.s_addr, lport, fport, pcbinfo->hashmask)];
-	for (inp = head->lh_first; inp != NULL; inp = inp->inp_hash.le_next) {
-		if ((inp->inp_vflag & INP_IPV4) == NULL)
+	LIST_FOREACH(inp, head, inp_hash) {
+#if INET6
+		if ((inp->inp_vflag & INP_IPV4) == 0)
 			continue;
+#endif
 		if (inp->inp_faddr.s_addr == faddr.s_addr &&
 		    inp->inp_laddr.s_addr == laddr.s_addr &&
 		    inp->inp_fport == fport &&
@@ -935,9 +970,11 @@ in_pcblookup_hash(pcbinfo, faddr, fport_arg, laddr, lport_arg, wildcard, ifp)
 #endif
 
 		head = &pcbinfo->hashbase[INP_PCBHASH(INADDR_ANY, lport, 0, pcbinfo->hashmask)];
-		for (inp = head->lh_first; inp != NULL; inp = inp->inp_hash.le_next) {
-			if ((inp->inp_vflag & INP_IPV4) == NULL)
+		LIST_FOREACH(inp, head, inp_hash) {
+#if INET6
+			if ((inp->inp_vflag & INP_IPV4) == 0)
 				continue;
+#endif
 			if (inp->inp_faddr.s_addr == INADDR_ANY &&
 			    inp->inp_lport == lport) {
 #if defined(NFAITH) && NFAITH > 0
@@ -948,20 +985,20 @@ in_pcblookup_hash(pcbinfo, faddr, fport_arg, laddr, lport_arg, wildcard, ifp)
 				if (inp->inp_laddr.s_addr == laddr.s_addr)
 					return (inp);
 				else if (inp->inp_laddr.s_addr == INADDR_ANY) {
-#if INET6
+#if defined(INET6)
 					if (INP_CHECK_SOCKAF(inp->inp_socket,
 							     AF_INET6))
 						local_wild_mapped = inp;
 					else
-#endif
+#endif /* defined(INET6) */
 					local_wild = inp;
 				}
 			}
 		}
-#if INET6
+#if defined(INET6)
 		if (local_wild == NULL)
 			return (local_wild_mapped);
-#endif
+#endif /* defined(INET6) */
 		return (local_wild);
 	}
 
@@ -1000,7 +1037,7 @@ in_pcbinshash(inp)
 	/*
 	 * Go through port list and look for a head for this lport.
 	 */
-	for (phd = pcbporthash->lh_first; phd != NULL; phd = phd->phd_hash.le_next) {
+	LIST_FOREACH(phd, pcbporthash, phd_hash) {
 		if (phd->phd_port == inp->inp_lport)
 			break;
 	}
@@ -1019,8 +1056,10 @@ in_pcbinshash(inp)
 	inp->inp_phd = phd;
 	LIST_INSERT_HEAD(&phd->phd_pcblist, inp, inp_portlist);
 	LIST_INSERT_HEAD(pcbhash, inp, inp_hash);
+#ifdef __APPLE__
 	inp->hash_element = INP_PCBHASH(inp->inp_faddr.s_addr, inp->inp_lport, 
 					inp->inp_fport, pcbinfo->hashmask);
+#endif
 	return (0);
 }
 
@@ -1049,8 +1088,10 @@ in_pcbrehash(inp)
 
 	LIST_REMOVE(inp, inp_hash);
 	LIST_INSERT_HEAD(head, inp, inp_hash);
+#ifdef __APPLE__
 	inp->hash_element = INP_PCBHASH(inp->inp_faddr.s_addr, inp->inp_lport, 
 					inp->inp_fport, inp->inp_pcbinfo->hashmask);
+#endif
 }
 
 /*
@@ -1061,20 +1102,21 @@ in_pcbremlists(inp)
 	struct inpcb *inp;
 {
 	inp->inp_gencnt = ++inp->inp_pcbinfo->ipi_gencnt;
+#ifdef __APPLE__
 	if (inp == inp->inp_pcbinfo->last_pcb)
 	    inp->inp_pcbinfo->last_pcb = 0;
+#endif
 
 	if (inp->inp_lport) {
 		struct inpcbport *phd = inp->inp_phd;
 
 		LIST_REMOVE(inp, inp_hash);
 		LIST_REMOVE(inp, inp_portlist);
-		if (phd->phd_pcblist.lh_first == NULL) {
+		if (LIST_FIRST(&phd->phd_pcblist) == NULL) {
 			LIST_REMOVE(phd, phd_hash);
 			FREE(phd, M_PCB);
 		}
 	}
-
 	LIST_REMOVE(inp, inp_list);
 	inp->inp_pcbinfo->ipi_count--;
 }
@@ -1364,6 +1406,8 @@ in_pcb_rem_share_client(struct inpcbinfo *pcbinfo, u_char owner_id)
     return 0;
 }
 
+
+
 void  in_pcb_nat_init(struct inpcbinfo *pcbinfo, int afamily, 
 		      int pfamily, int protocol)
 {
@@ -1371,3 +1415,15 @@ void  in_pcb_nat_init(struct inpcbinfo *pcbinfo, int afamily,
     pcbinfo->nat_dummy_socket.so_proto = pffindproto(afamily, pfamily, protocol);
     pcbinfo->all_owners = 0;
 }
+
+
+#ifndef __APPLE__
+prison_xinpcb(struct proc *p, struct inpcb *inp)
+{
+	if (!p->p_prison)
+		return (0);
+	if (ntohl(inp->inp_laddr.s_addr) == p->p_prison->pr_ip)
+		return (0);
+	return (1);
+}
+#endif

@@ -21,8 +21,12 @@
  */
 #ifndef _NETAT_ADSP_INTERNAL_H_
 #define _NETAT_ADSP_INTERNAL_H_
+#include <sys/appleapiopts.h>
+
+#include <sys/types.h>
 
 #ifdef KERNEL
+#ifdef __APPLE_API_PRIVATE
 
 /* from h/adsp_portab.h */
 
@@ -50,7 +54,6 @@ typedef unsigned int 		dword;
 #define low(x)			((byte)(x))
 #define hlword(h, l)		(((byte)(l)) | (((byte)(h)) << 8))
 
-#define offsetof(typ,id)	(size_t)&(((typ*)0)->id)
 
 /* 
  * On a Mac, there is no need to byte-swap data on the network, so 
@@ -352,6 +355,7 @@ extern GLOBAL adspGlobal;
 /* Address of ptr to list of ccb's */
 #define AT_ADSP_STREAMS ((CCB **)&(adspGlobal.ccbList))
 
+#endif /* __APPLE_API_PRIVATE */
 #endif /* KERNEL */
 
 #endif /* _NETAT_ADSP_INTERNAL_H_ */

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2002 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -60,7 +60,12 @@
  *
  *	@(#)cd9660_rrip.h	8.2 (Berkeley) 12/5/94
  */
+#ifndef __ISOFS_CD9660_CD9660_RRIP_H__
+#define __ISOFS_CD9660_CD9660_RRIP_H__
 
+#include <sys/appleapiopts.h>
+
+#ifdef __APPLE_API_PRIVATE
 typedef struct {
 	char   type			[ISODCL (  0,    1)];
 	u_char length			[ISODCL (  2,    2)]; /* 711 */
@@ -161,3 +166,6 @@ typedef struct {
 	char offset			[ISODCL ( 12,	19)];
 	char length			[ISODCL ( 20,	27)];
 } ISO_RRIP_CONT;
+
+#endif /* __APPLE_API_PRIVATE */
+#endif /* __ISOFS_CD9660_CD9660_RRIP_H__ */

@@ -75,11 +75,11 @@
 #include <sys/file.h>
 #include <sys/filedesc.h>
 #include <sys/tty.h>
+#include <sys/quota.h>
 
-#include <ufs/ufs/quota.h>
 #include <ufs/ufs/inode.h>
 
-#include <hfs/hfs.h>
+#include <hfs/hfs_cnode.h>
 #include <isofs/cd9660/cd9660_node.h>
 
 #include <miscfs/volfs/volfs.h>
@@ -190,8 +190,8 @@ struct kmzones {
 			KMZ_CREATEZONE,		/* 73 M_OFILETABL */
 	MCLBYTES,	KMZ_CREATEZONE,		/* 74 M_MCLUST */
 	SOX(hfsmount),	KMZ_LOOKUPZONE,		/* 75 M_HFSMNT */
-	SOS(hfsnode),	KMZ_CREATEZONE,		/* 76 M_HFSNODE */
-	SOS(hfsfilemeta),	KMZ_CREATEZONE,	/* 77 M_HFSFMETA */
+	SOS(cnode),	KMZ_CREATEZONE,		/* 76 M_HFSNODE */
+	SOS(filefork),	KMZ_CREATEZONE,		/* 77 M_HFSFORK */
 	SOX(volfs_mntdata),	KMZ_LOOKUPZONE,		/* 78 M_VOLFSMNT */
 	SOS(volfs_vndata),	KMZ_CREATEZONE,		/* 79 M_VOLFSNODE */
 	0,		KMZ_MALLOC,		/* 80 M_TEMP */
@@ -202,7 +202,9 @@ struct kmzones {
 	0,		KMZ_MALLOC,		/* 85 M_UDFMOUNT */
 	0,		KMZ_MALLOC,		/* 86 M_IP6NDP */
 	0,		KMZ_MALLOC,		/* 87 M_IP6OPT */
-	0,		KMZ_MALLOC,		/* 88 M_NATPT */
+	0,		KMZ_MALLOC,		/* 88 M_IP6MISC */
+	0,		KMZ_MALLOC,		/* 89 M_TSEGQ */
+	0,		KMZ_MALLOC,		/* 90 M_IGMP */
 
 #undef	SOS
 #undef	SOX
@@ -264,6 +266,8 @@ struct _mhead {
 	char	dat[0];
 };
 
+#define ZEROSIZETOKEN 0xFADEDFAD
+
 void *_MALLOC(
 	size_t		size,
 	int		type,
@@ -275,8 +279,12 @@ void *_MALLOC(
 	if (type >= M_LAST)
 		panic("_malloc TYPE");
 
+	/*
+	 * On zero request we do not return zero as that
+	 * could be mistaken for ENOMEM.
+	 */
 	if (size == 0)
-		return (0);
+		return (ZEROSIZETOKEN);
 
 	if (flags & M_NOWAIT) {
 		mem = (void *)kalloc_noblock(memsize);
@@ -300,8 +308,10 @@ void _FREE(
 	if (type >= M_LAST)
 		panic("_free TYPE");
 
-	if (!addr)
+	if (addr == (void *)ZEROSIZETOKEN)
 		return;
+	if (!addr)
+		return; /* correct (convenient bsd kernel legacy) */
 
 	hdr = addr; hdr--;
 	kfree((vm_offset_t)hdr, hdr->mlen);

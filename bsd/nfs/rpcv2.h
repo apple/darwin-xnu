@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2002 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -63,6 +63,9 @@
 #ifndef _NFS_RPCV2_H_
 #define _NFS_RPCV2_H_
 
+#include <sys/appleapiopts.h>
+
+#ifdef __APPLE_API_PRIVATE
 /*
  * Definitions for Sun RPC Version 2, from
  * "RPC: Remote Procedure Call Protocol Specification" RFC1057
@@ -162,4 +165,6 @@ typedef u_char			NFSKERBKEYSCHED_T[2];
 #define NFS_KERBTTL	(30 * 60)	/* Credential ttl (sec) */
 #define NFS_KERBCLOCKSKEW (5 * 60)	/* Clock skew (sec) */
 #define NFS_KERBW1(t)	(*((u_long *)(&((t).dat[((t).length + 3) & ~0x3]))))
-#endif
+
+#endif /* __APPLE_API_PRIVATE */
+#endif /* _NFS_RPCV2_H_ */

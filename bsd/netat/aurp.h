@@ -29,6 +29,7 @@
 
 #ifndef _NETAT_AURP_H_
 #define	_NETAT_AURP_H_
+#include <sys/appleapiopts.h>
 
 /*
  * AURP device ioctl (I_STR) 'subcommands'
@@ -49,6 +50,7 @@
 #define AURP_MAXNETACCESS 64
 
 #ifdef KERNEL
+#ifdef __APPLE_API_PRIVATE
 
 #define AURPCODE_REG                   0
 #define AURPCODE_RTMPPKT               1
@@ -163,8 +165,6 @@ typedef struct {
 	unsigned short flags;
 } aurp_hdr_t;
 
-#ifdef KERNEL
-
 #ifdef AURP_SUPPORT
 
 extern atlock_t aurpgen_lock;
@@ -254,8 +254,6 @@ int AURPgetri __P((short next_entry, unsigned char *buf, short *len));
 int AURPsetri __P((unsigned char node, gbuf_t *m));
 int AURPupdateri __P((unsigned char node, gbuf_t *m));
 
-#endif	/* KERNEL */
-
 /* AURP header for IP tunneling */
 typedef struct aurp_domain
 {	char  dst_length;
@@ -285,5 +283,6 @@ typedef struct aurp_domain
 
 /****### LD 9/26/97*/
 extern struct aurp_global_t aurp_global;
+#endif /* __APPLE_API_PRIVATE */
 #endif /* KERNEL */
 #endif /* _NETAT_AURP_H_ */

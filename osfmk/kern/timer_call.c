@@ -32,6 +32,7 @@
 #include <mach/mach_types.h>
 
 #include <kern/clock.h>
+#include <kern/processor.h>
 
 #include <kern/timer_call.h>
 #include <kern/call_entry.h>
@@ -43,8 +44,6 @@ queue_head_t
 	delayed_call_queues[NCPUS];
 
 static struct {
-	int		pending_num,
-			pending_hiwat;
 	int		delayed_num,
 			delayed_hiwat;
 } timer_calls;
@@ -133,30 +132,6 @@ _delayed_call_dequeue(
 
 static __inline__
 void
-_pending_call_enqueue(
-	queue_t					queue,
-	timer_call_t			call)
-{
-	enqueue_tail(queue, qe(call));
-	if (++timer_calls.pending_num > timer_calls.pending_hiwat)
-		timer_calls.pending_hiwat = timer_calls.pending_num;
-
-	call->state = PENDING;
-}
-
-static __inline__
-void
-_pending_call_dequeue(
-	timer_call_t			call)
-{
-	(void)remque(qe(call));
-	timer_calls.pending_num--;
-
-	call->state = IDLE;
-}
-
-static __inline__
-void
 _set_delayed_call_timer(
 	timer_call_t			call)
 {
@@ -175,11 +150,9 @@ timer_call_enter(
 	s = splclock();
 	simple_lock(&timer_call_lock);
 
-	if (call->state == PENDING)
-		_pending_call_dequeue(call);
-	else if (call->state == DELAYED)
+	if (call->state == DELAYED)
 		_delayed_call_dequeue(call);
-	else if (call->state == IDLE)
+	else
 		result = FALSE;
 
 	call->param1	= 0;
@@ -211,11 +184,9 @@ timer_call_enter1(
 	s = splclock();
 	simple_lock(&timer_call_lock);
 
-	if (call->state == PENDING)
-		_pending_call_dequeue(call);
-	else if (call->state == DELAYED)
+	if (call->state == DELAYED)
 		_delayed_call_dequeue(call);
-	else if (call->state == IDLE)
+	else
 		result = FALSE;
 
 	call->param1	= param1;
@@ -244,9 +215,7 @@ timer_call_cancel(
 	s = splclock();
 	simple_lock(&timer_call_lock);
 
-	if (call->state == PENDING)
-		_pending_call_dequeue(call);
-	else if (call->state == DELAYED)
+	if (call->state == DELAYED)
 		_delayed_call_dequeue(call);
 	else
 		result = FALSE;
@@ -278,6 +247,42 @@ timer_call_is_delayed(
 	splx(s);
 
 	return (result);
+}
+
+/*
+ * Called at splclock.
+ */
+
+void
+timer_call_shutdown(
+	processor_t			processor)
+{
+	timer_call_t		call;
+	queue_t				delayed, delayed1;
+
+	assert(processor != current_processor());
+
+	delayed = &delayed_call_queues[processor->slot_num];
+	delayed1 = &delayed_call_queues[cpu_number()];
+
+	simple_lock(&timer_call_lock);
+
+	call = TC(queue_first(delayed));
+
+	while (!queue_end(delayed, qe(call))) {
+		_delayed_call_dequeue(call);
+
+		_delayed_call_enqueue(delayed1, call);
+
+		call = TC(queue_first(delayed));
+	}
+
+	call = TC(queue_first(delayed1));
+
+	if (!queue_end(delayed1, qe(call)))
+		_set_delayed_call_timer(call);
+
+	simple_unlock(&timer_call_lock);
 }
 
 static

@@ -251,8 +251,6 @@ public:
     virtual bool attach( IOService * provider );
     virtual void detach( IOService * provider );
     virtual IOReturn setPowerState( unsigned long, IOService * );
-    virtual IOReturn addPowerChild ( IOService * theChild );
-    virtual void joinPMtree( IOService * driver );
     virtual bool compareName( OSString * name, OSString ** matched = 0 ) const;
     virtual bool matchPropertyTable( OSDictionary *	table,
                                      SInt32       *	score );
@@ -400,7 +398,8 @@ public:
 /*! @function mapDeviceMemoryWithRegister
     @abstract Maps a physical range of the device.
     @discussion This method will create a mapping for the IODeviceMemory for the physical memory range that was assigned to the configuration space base address register passed in, with IODeviceMemory::map(options). The mapping is represented by the returned instance of IOMemoryMap, which should not be released until the mapping is no longer required. This method is analogous to IOService::mapDeviceMemoryWithIndex.
-    @param index An index into the array of ranges assigned to the device.
+    @param reg The 8-bit configuration space register that is the base address register for the desired range.
+    @param options Options to be passed to the IOMemoryDescriptor::map() method.
     @result An instance of IOMemoryMap, or zero if the index is beyond the count available. The mapping should be released only when access to it is no longer required. */
 
     virtual IOMemoryMap * mapDeviceMemoryWithRegister( UInt8 reg,

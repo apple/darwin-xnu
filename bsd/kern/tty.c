@@ -106,6 +106,8 @@
 #include <sys/kernel.h>
 #include <sys/vnode.h>
 #include <sys/syslog.h>
+#include <sys/user.h>
+#include <sys/signalvar.h>
 #include <sys/signalvar.h>
 #ifndef NeXT
 #include <sys/resourcevar.h>
@@ -794,7 +796,9 @@ ttioctl(tp, cmd, data, flag, p)
 	register struct proc *p = curproc;	/* XXX */
 #endif
 	int s, error;
+	struct uthread *ut;
 
+	ut = (struct uthread *)get_bsdthread_info(current_act());
 	/* If the ioctl involves modification, hang if in the background. */
 	switch (cmd) {
 	case  TIOCFLUSH:
@@ -821,7 +825,7 @@ ttioctl(tp, cmd, data, flag, p)
 		while (isbackground(p, tp) &&
 		    (p->p_flag & P_PPWAIT) == 0 &&
 		    (p->p_sigignore & sigmask(SIGTTOU)) == 0 &&
-		    (p->p_sigmask & sigmask(SIGTTOU)) == 0) {
+		    (ut->uu_sigmask & sigmask(SIGTTOU)) == 0) {
 			if (p->p_pgrp->pg_jobc == 0)
 				return (EIO);
 			pgsignal(p->p_pgrp, SIGTTOU, 1);
@@ -1096,6 +1100,10 @@ ttioctl(tp, cmd, data, flag, p)
 		tp->t_pgrp = p->p_pgrp;
 		p->p_session->s_ttyp = tp;
 		p->p_flag |= P_CONTROLT;
+		/* The backgrounded process blocking on tty now 
+		 * could be foregound process. Wake such processes
+		 */
+		tty_pgsignal(tp->t_pgrp, SIGCONT);
 		break;
 	case TIOCSPGRP: {		/* set pgrp of tty */
 		register struct pgrp *pgrp = pgfind(*(int *)data);
@@ -1105,6 +1113,10 @@ ttioctl(tp, cmd, data, flag, p)
 		else if (pgrp == NULL || pgrp->pg_session != p->p_session)
 			return (EPERM);
 		tp->t_pgrp = pgrp;
+		/* The backgrounded process blocking on tty now 
+		 * could be foregound process. Wake such processes
+		 */
+		tty_pgsignal(tp->t_pgrp, SIGCONT);
 		break;
 	}
 	case TIOCSTAT:			/* simulate control-T */
@@ -1573,8 +1585,12 @@ ttread(tp, uio, flag)
 	int has_etime = 0, last_cc = 0;
 	long slp = 0;		/* XXX this should be renamed `timo'. */
 	boolean_t funnel_state;
+	struct uthread *ut;
 
 	funnel_state = thread_funnel_set(kernel_flock, TRUE);
+
+	ut = (struct uthread *)get_bsdthread_info(current_act());
+
 loop:
 	s = spltty();
 	lflag = tp->t_lflag;
@@ -1594,7 +1610,7 @@ loop:
 	if (isbackground(p, tp)) {
 		splx(s);
 		if ((p->p_sigignore & sigmask(SIGTTIN)) ||
-		   (p->p_sigmask & sigmask(SIGTTIN)) ||
+		   (ut->uu_sigmask & sigmask(SIGTTIN)) ||
 		    p->p_flag & P_PPWAIT || p->p_pgrp->pg_jobc == 0) {
 			thread_funnel_set(kernel_flock, funnel_state);
 			return (EIO);
@@ -1880,16 +1896,19 @@ ttycheckoutq(tp, wait)
 	int wait;
 {
 	int hiwat, s, oldsig;
+	struct uthread *ut;
+
+	ut = (struct uthread *)get_bsdthread_info(current_act());
 
 	hiwat = tp->t_hiwat;
 	s = spltty();
-	oldsig = wait ? current_proc()->p_siglist : 0;
+	oldsig = wait ? ut->uu_siglist : 0;
 	if (tp->t_outq.c_cc > hiwat + OBUFSIZ + 100)
 		while (tp->t_outq.c_cc > hiwat) {
 			ttstart(tp);
 			if (tp->t_outq.c_cc <= hiwat)
 				break;
-			if (wait == 0 || current_proc()->p_siglist != oldsig) {
+			if (wait == 0 || ut->uu_siglist != oldsig) {
 				splx(s);
 				return (0);
 			}
@@ -1915,9 +1934,11 @@ ttwrite(tp, uio, flag)
 	int i, hiwat, cnt, error, s;
 	char obuf[OBUFSIZ];
 	boolean_t funnel_state;
+	struct uthread *ut;
 
 	funnel_state = thread_funnel_set(kernel_flock, TRUE);
 
+	ut = (struct uthread *)get_bsdthread_info(current_act());
 	hiwat = tp->t_hiwat;
 	cnt = uio->uio_resid;
 	error = 0;
@@ -1951,7 +1972,7 @@ loop:
 	if (isbackground(p, tp) &&
 	    ISSET(tp->t_lflag, TOSTOP) && (p->p_flag & P_PPWAIT) == 0 &&
 	    (p->p_sigignore & sigmask(SIGTTOU)) == 0 &&
-	    (p->p_sigmask & sigmask(SIGTTOU)) == 0) {
+	    (ut->uu_sigmask & sigmask(SIGTTOU)) == 0) {
 		if (p->p_pgrp->pg_jobc == 0) {
 			error = EIO;
 			goto out;

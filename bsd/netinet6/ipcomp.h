@@ -1,3 +1,6 @@
+/*	$FreeBSD: src/sys/netinet6/ipcomp.h,v 1.1.2.2 2001/07/03 11:01:54 ume Exp $	*/
+/*	$KAME: ipcomp.h,v 1.8 2000/09/26 07:55:14 itojun Exp $	*/
+
 /*
  * Copyright (C) 1999 WIDE Project.
  * All rights reserved.
@@ -33,6 +36,7 @@
 
 #ifndef _NETINET6_IPCOMP_H_
 #define _NETINET6_IPCOMP_H_
+#include <sys/appleapiopts.h>
 
 struct ipcomp {
 	u_int8_t comp_nxt;	/* Next Header */
@@ -48,7 +52,8 @@ struct ipcomp {
 
 #define IPCOMP_CPI_NEGOTIATE_MIN	256
 
-#if defined(KERNEL) || defined(_KERNEL)
+#ifdef KERNEL
+#ifdef __APPLE_API_PRIVATE
 struct ipcomp_algorithm {
 	int (*compress) __P((struct mbuf *, struct mbuf *, size_t *));
 	int (*decompress) __P((struct mbuf *, struct mbuf *, size_t *));
@@ -56,14 +61,10 @@ struct ipcomp_algorithm {
 };
 
 struct ipsecrequest;
-extern struct ipcomp_algorithm ipcomp_algorithms[];
+extern const struct ipcomp_algorithm *ipcomp_algorithm_lookup __P((int));
 extern void ipcomp4_input __P((struct mbuf *, int));
 extern int ipcomp4_output __P((struct mbuf *, struct ipsecrequest *));
-#if INET6
-extern int ipcomp6_input __P((struct mbuf **, int *));
-extern int ipcomp6_output __P((struct mbuf *, u_char *, struct mbuf *,
-	struct ipsecrequest *));
-#endif
+#endif /* __APPLE_API_PRIVATE */
 #endif /*KERNEL*/
 
 #endif /*_NETINET6_IPCOMP_H_*/

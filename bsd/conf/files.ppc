@@ -14,6 +14,7 @@ bsd/dev/ppc/memmove.c		standard
 bsd/dev/ppc/machdep.c		standard
 bsd/dev/ppc/kern_machdep.c	standard
 bsd/dev/ppc/stubs.c		standard
+bsd/dev/ppc/systemcalls.c	standard
 bsd/dev/ppc/km.c		standard
 bsd/dev/ppc/xsumas.s		standard	
 

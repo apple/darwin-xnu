@@ -461,7 +461,6 @@ struct db_command db_show_cmds[] = {
 	{ "zone",	db_show_one_zone,		0,	0 },
 	{ "simple_lock", db_show_one_simple_lock,	0,	0 },
 	{ "thread_log", (db_func)db_show_thread_log,	0,	0 },
-	{ "subsystem",	db_show_subsystem,		0,	0 },
 	{ "shuttle",	db_show_shuttle,		0,	0 },
 	{ "etap_log",	db_show_etap_log,		0,	0 },
 	{ (char *)0, }

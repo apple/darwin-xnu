@@ -84,6 +84,8 @@
 struct processor_set default_pset;
 struct processor processor_array[NCPUS];
 
+int 		master_cpu = 0;
+
 processor_t	master_processor;
 processor_t	processor_ptr[NCPUS];
 
@@ -135,6 +137,7 @@ pset_sys_bootstrap(void)
 		processor_init(processor_ptr[i], i);
 	}
 	master_processor = cpu_to_processor(master_cpu);
+	master_processor->cpu_data = get_cpu_data();
 	default_pset.active = TRUE;
 }
 
@@ -145,23 +148,23 @@ pset_sys_bootstrap(void)
 void pset_init(
 	register processor_set_t	pset)
 {
-	int	i;
+	register int	i;
 
-	/* setup run-queues */
+	/* setup run queue */
 	simple_lock_init(&pset->runq.lock, ETAP_THREAD_PSET_RUNQ);
-	pset->runq.count = 0;
-	for (i = 0; i < NRQBM; i++) {
+	for (i = 0; i < NRQBM; i++)
 	    pset->runq.bitmap[i] = 0;
-	}
 	setbit(MAXPRI - IDLEPRI, pset->runq.bitmap); 
 	pset->runq.highq = IDLEPRI;
-	for (i = 0; i < NRQS; i++) {
-	    queue_init(&(pset->runq.queues[i]));
-	}
+	pset->runq.urgency = pset->runq.count = 0;
+	for (i = 0; i < NRQS; i++)
+	    queue_init(&pset->runq.queues[i]);
 
 	queue_init(&pset->idle_queue);
 	pset->idle_count = 0;
-	simple_lock_init(&pset->idle_lock, ETAP_THREAD_PSET_IDLE);
+	queue_init(&pset->active_queue);
+	simple_lock_init(&pset->sched_lock, ETAP_THREAD_PSET_IDLE);
+	pset->run_count = 0;
 	pset->mach_factor = pset->load_average = 0;
 	pset->sched_load = 0;
 	queue_init(&pset->processors);
@@ -188,36 +191,64 @@ void pset_init(
  */
 void
 processor_init(
-	register processor_t	pr,
-	int			slot_num)
+	register processor_t	p,
+	int						slot_num)
 {
-	int	i;
+	register int	i;
 
-	/* setup run-queues */
-	simple_lock_init(&pr->runq.lock, ETAP_THREAD_PROC_RUNQ);
-	pr->runq.count = 0;
-	for (i = 0; i < NRQBM; i++) {
-	    pr->runq.bitmap[i] = 0;
-	}
-	setbit(MAXPRI - IDLEPRI, pr->runq.bitmap); 
-	pr->runq.highq = IDLEPRI;
-	for (i = 0; i < NRQS; i++) {
-	    queue_init(&(pr->runq.queues[i]));
-	}
+	/* setup run queue */
+	simple_lock_init(&p->runq.lock, ETAP_THREAD_PROC_RUNQ);
+	for (i = 0; i < NRQBM; i++)
+	    p->runq.bitmap[i] = 0;
+	setbit(MAXPRI - IDLEPRI, p->runq.bitmap); 
+	p->runq.highq = IDLEPRI;
+	p->runq.urgency = p->runq.count = 0;
+	for (i = 0; i < NRQS; i++)
+	    queue_init(&p->runq.queues[i]);
 
-	queue_init(&pr->processor_queue);
-	pr->state = PROCESSOR_OFF_LINE;
-	pr->next_thread = THREAD_NULL;
-	pr->idle_thread = THREAD_NULL;
-	timer_call_setup(&pr->quantum_timer, thread_quantum_expire, pr);
-	pr->slice_quanta = 0;
-	pr->processor_set = PROCESSOR_SET_NULL;
-	pr->processor_set_next = PROCESSOR_SET_NULL;
-	queue_init(&pr->processors);
-	simple_lock_init(&pr->lock, ETAP_THREAD_PROC);
-	pr->processor_self = IP_NULL;
-	pr->slot_num = slot_num;
+	p->state = PROCESSOR_OFF_LINE;
+	p->current_pri = MINPRI;
+	p->next_thread = THREAD_NULL;
+	p->idle_thread = THREAD_NULL;
+	timer_call_setup(&p->quantum_timer, thread_quantum_expire, p);
+	p->slice_quanta = 0;
+	p->processor_set = PROCESSOR_SET_NULL;
+	p->processor_set_next = PROCESSOR_SET_NULL;
+	simple_lock_init(&p->lock, ETAP_THREAD_PROC);
+	p->processor_self = IP_NULL;
+	p->slot_num = slot_num;
 }
+
+/*
+ *	pset_deallocate:
+ *
+ *	Remove one reference to the processor set.  Destroy processor_set
+ *	if this was the last reference.
+ */
+void
+pset_deallocate(
+	processor_set_t	pset)
+{
+	if (pset == PROCESSOR_SET_NULL)
+		return;
+
+	assert(pset == &default_pset);
+	return;
+}
+
+/*
+ *	pset_reference:
+ *
+ *	Add one reference to the processor set.
+ */
+void
+pset_reference(
+	processor_set_t	pset)
+{
+	assert(pset == &default_pset);
+}
+
+#define pset_reference_locked(pset) assert(pset == &default_pset)
 
 /*
  *	pset_remove_processor() removes a processor from a processor_set.
@@ -257,8 +288,10 @@ pset_add_processor(
 
 /*
  *	pset_remove_task() removes a task from a processor_set.
- *	Caller must hold locks on pset and task.  Pset reference count
- *	is not decremented; caller must explicitly pset_deallocate.
+ *	Caller must hold locks on pset and task (unless task has
+ *	no references left, in which case just the pset lock is
+ *	needed).  Pset reference count is not decremented;
+ *	caller must explicitly pset_deallocate.
  */
 void
 pset_remove_task(
@@ -286,13 +319,15 @@ pset_add_task(
 	queue_enter(&pset->tasks, task, task_t, pset_tasks);
 	task->processor_set = pset;
 	pset->task_count++;
-	pset->ref_count++;
+	pset_reference_locked(pset);
 }
 
 /*
  *	pset_remove_thread() removes a thread from a processor_set.
- *	Caller must hold locks on pset and thread.  Pset reference count
- *	is not decremented; caller must explicitly pset_deallocate.
+ *	Caller must hold locks on pset and thread (but only if thread
+ *  has outstanding references that could be used to lookup the pset).
+ *  The pset reference count is not decremented; caller must explicitly
+ *  pset_deallocate.
  */
 void
 pset_remove_thread(
@@ -317,7 +352,7 @@ pset_add_thread(
 	queue_enter(&pset->threads, thread, thread_t, pset_threads);
 	thread->processor_set = pset;
 	pset->thread_count++;
-	pset->ref_count++;
+	pset_reference_locked(pset);
 }
 
 /*
@@ -336,44 +371,8 @@ thread_change_psets(
 	queue_enter(&new_pset->threads, thread, thread_t, pset_threads);
 	thread->processor_set = new_pset;
 	new_pset->thread_count++;
-	new_pset->ref_count++;
+	pset_reference_locked(new_pset);
 }	
-
-/*
- *	pset_deallocate:
- *
- *	Remove one reference to the processor set.  Destroy processor_set
- *	if this was the last reference.
- */
-void
-pset_deallocate(
-	processor_set_t	pset)
-{
-	if (pset == PROCESSOR_SET_NULL)
-		return;
-
-	pset_lock(pset);
-	if (--pset->ref_count > 0) {
-		pset_unlock(pset);
-		return;
-	}
-
-	panic("pset_deallocate: default_pset destroyed");
-}
-
-/*
- *	pset_reference:
- *
- *	Add one reference to the processor set.
- */
-void
-pset_reference(
-	processor_set_t	pset)
-{
-	pset_lock(pset);
-	pset->ref_count++;
-	pset_unlock(pset);
-}
 
 
 kern_return_t
@@ -476,7 +475,7 @@ processor_start(
 
 	if (processor == master_processor) {
 		thread_bind(current_thread(), processor);
-		thread_block((void (*)(void)) 0);
+		thread_block(THREAD_CONTINUE_NULL);
 		kr = cpu_start(processor->slot_num);
 		thread_bind(current_thread(), PROCESSOR_NULL);
 
@@ -560,17 +559,14 @@ void
 pset_quanta_set(
 	processor_set_t		pset)
 {
-	register int    i, ncpus;
+	register int	i, count = pset->processor_count;
 
-	ncpus = pset->processor_count;
-
-	for (i=1; i <= ncpus; i++)
-		pset->machine_quanta[i] = (ncpus + (i / 2)) / i;
+	for (i = 1; i <= count; i++)
+		pset->machine_quanta[i] = (count + (i / 2)) / i;
 
 	pset->machine_quanta[0] = pset->machine_quanta[1];
 
-	i = (pset->runq.count > ncpus)? ncpus: pset->runq.count;
-	pset->set_quanta = pset->machine_quanta[i];
+	pset_quanta_update(pset);
 }
 	    
 kern_return_t
@@ -760,10 +756,8 @@ processor_set_statistics(
                 pset_lock(pset);
                 load_info->task_count = pset->task_count;
                 load_info->thread_count = pset->thread_count;
-				simple_lock(&pset->processors_lock);
                 load_info->mach_factor = pset->mach_factor;
                 load_info->load_average = pset->load_average;
-				simple_unlock(&pset->processors_lock);
                 pset_unlock(pset);
 
                 *count = PROCESSOR_SET_LOAD_INFO_COUNT;
@@ -884,13 +878,17 @@ processor_set_things(
 		task_t task;
 
 		for (i = 0, task = (task_t) queue_first(&pset->tasks);
-		     i < actual;
-		     i++, task = (task_t) queue_next(&task->pset_tasks)) {
-			/* take ref for convert_task_to_port */
-			task_reference(task);
-			tasks[i] = task;
+		     !queue_end(&pset->tasks, (queue_entry_t) task);
+			 task = (task_t) queue_next(&task->pset_tasks)) {
+			
+			task_lock(task);
+			if (task->ref_count > 0) {
+				/* take ref for convert_task_to_port */
+				task_reference_locked(task);
+				tasks[i++] = task;
+			}
+			task_unlock(task);
 		}
-		assert(queue_end(&pset->tasks, (queue_entry_t) task));
 		break;
 	    }
 
@@ -898,32 +896,31 @@ processor_set_things(
 		thread_act_t *thr_acts = (thread_act_t *) addr;
 		thread_t thread;
 		thread_act_t thr_act;
-	    	queue_head_t *list;
 
-		list = &pset->threads;
-	    	thread = (thread_t) queue_first(list);
-		i = 0;
-	    	while (i < actual && !queue_end(list, (queue_entry_t)thread)) {
+		for (i = 0, thread = (thread_t) queue_first(&pset->threads);
+			 !queue_end(&pset->threads, (queue_entry_t)thread);
+	    	 thread = (thread_t) queue_next(&thread->pset_threads)) {
+
 		  	thr_act = thread_lock_act(thread);
 			if (thr_act && thr_act->ref_count > 0) {
 				/* take ref for convert_act_to_port */
 				act_locked_act_reference(thr_act);
-				thr_acts[i] = thr_act;
-				i++;
+				thr_acts[i++] = thr_act;
 			}
 			thread_unlock_act(thread);
-			thread = (thread_t) queue_next(&thread->pset_threads);
-		}
-		if (i < actual) {
-		  	actual = i;
-			size_needed = actual * sizeof(mach_port_t);
 		}
 		break;
-	    }
+		}
 	}
-
+		
 	/* can unlock processor set now that we have the task/thread refs */
 	pset_unlock(pset);
+
+	if (i < actual) {
+		  	actual = i;
+			size_needed = actual * sizeof(mach_port_t);
+	}
+	assert(i == actual);
 
 	if (actual == 0) {
 		/* no things, so return null pointer and deallocate memory */
@@ -950,10 +947,10 @@ processor_set_things(
 				    }
 
 				    case THING_THREAD: {
-					thread_t *threads = (thread_t *) addr;
+					thread_act_t *acts = (thread_act_t *) addr;
 
 					for (i = 0; i < actual; i++)
-						thread_deallocate(threads[i]);
+						act_deallocate(acts[i]);
 					break;
 				    }
 				}

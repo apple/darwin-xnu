@@ -880,6 +880,14 @@ void routing_needed(mp, ifID, bypass)
 
 		/* somehow, come to that point... */
 
+		/* if multihomed - need to set source address to the interface
+		 * the packet is being sent from.
+		 */
+		if (MULTIHOME_MODE) {
+			NET_ASSIGN(ddp->src_net, ifID_table[Entry->NetPort]->ifThisNode.s_net);
+			ddp->src_node = ifID_table[Entry->NetPort]->ifThisNode.s_node;
+		}
+
 		ifID->ifStatistics.fwdPkts++;
 		ifID->ifStatistics.fwdBytes += msgsize;
 
@@ -1108,8 +1116,8 @@ void getIfUsage(zone, ifs_in_zone)
      int zone;
      at_ifnames_t *ifs_in_zone;
 
-/* sets a "1" in each element of the char array for each I/F in the
-   requested zone. The char array has a 1:1 correspondence with the
+/* sets the interface name in each element of the array for each I/F in the
+   requested zone. The array has a 1:1 correspondence with the
    ifID_table. Zone is assumed to be valid and local, so if we're in
    single port mode, we'll set the home port and thats it.
 */

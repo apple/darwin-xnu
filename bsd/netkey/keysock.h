@@ -31,6 +31,7 @@
 
 #ifndef _NETKEY_KEYSOCK_H_
 #define _NETKEY_KEYSOCK_H_
+#include <sys/appleapiopts.h>
 
 /* statistics for pfkey socket */
 struct pfkeystat {
@@ -62,6 +63,7 @@ struct pfkeystat {
 #define KEY_SENDUP_REGISTERED	2
 
 #ifdef KERNEL
+#ifdef __APPLE_API_PRIVATE
 struct keycb {
 	struct rawcb kp_raw;	/* rawcb */
 	int kp_promisc;		/* promiscuous mode */
@@ -70,17 +72,17 @@ struct keycb {
 
 extern struct pfkeystat pfkeystat;
 
-extern int key_output __P((struct mbuf *, struct socket *));
-#ifndef __NetBSD__
+#ifdef __APPLE__
+extern int key_output __P((struct mbuf *, struct socket* so));
+#else
+extern int key_output __P((struct mbuf *, ...));
+#endif
 extern int key_usrreq __P((struct socket *,
 	int, struct mbuf *, struct mbuf *, struct mbuf *));
-#else
-extern int key_usrreq __P((struct socket *,
-	int, struct mbuf *, struct mbuf *, struct mbuf *, struct proc *));
-#endif
 
 extern int key_sendup __P((struct socket *, struct sadb_msg *, u_int, int));
 extern int key_sendup_mbuf __P((struct socket *, struct mbuf *, int));
+#endif /* __APPLE_API_PRIVATE */
 #endif /* KERNEL */
 
 #endif /*_NETKEY_KEYSOCK_H_*/

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2002,2000 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -57,13 +57,10 @@
 #ifndef	STD_TYPES_H_
 #define	STD_TYPES_H_
 
+#include <stdint.h>
 #include <mach/boolean.h>
 #include <mach/kern_return.h>
 #include <mach/port.h>
 #include <mach/vm_types.h>
-
-#ifdef	MACH_KERNEL_PRIVATE
-#include <ipc/ipc_types.h>
-#endif	/* MACH_KERNEL_PRIVATE */
 
 #endif	/* STD_TYPES_H_ */

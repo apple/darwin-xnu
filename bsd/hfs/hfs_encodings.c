@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2002 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -52,7 +52,7 @@ extern struct host realhost;
 
 #define MAX_HFS_UNICODE_CHARS	(15*5)
 
-static int mac_roman_to_unicode(Str31 hfs_str, UniChar *uni_str, UInt32 maxCharLen, UInt32 *usedCharLen);
+int mac_roman_to_unicode(Str31 hfs_str, UniChar *uni_str, UInt32 maxCharLen, UInt32 *usedCharLen);
 
 static int unicode_to_mac_roman(UniChar *uni_str, UInt32 unicodeChars, Str31 hfs_str);
 
@@ -273,22 +273,40 @@ mac_roman_to_utf8(Str31 hfs_str, ByteCount maxDstLen, ByteCount *actualDstLen, u
 
 
 /*
+ * Convert Unicode string into HFS encoding
+ *
+ * ':' chars are converted to '/'
+ * Assumes input represents fully decomposed Unicode
+ */
+int
+unicode_to_hfs(ExtendedVCB *vcb, ByteCount srcLen, u_int16_t* srcStr, Str31 dstStr, int retry)
+{
+	int error;
+	unicode_to_hfs_func_t hfs_get_hfsname = VCBTOHFS(vcb)->hfs_get_hfsname;
+
+	error = hfs_get_hfsname(srcStr, srcLen/sizeof(UniChar), dstStr);
+	if (error && retry) {
+		error = unicode_to_mac_roman(srcStr, srcLen/sizeof(UniChar), dstStr);
+	}
+	return error;
+}
+
+/*
  * Convert UTF-8 string into HFS encoding
  *
  * ':' chars are converted to '/'
  * Assumes input represents fully decomposed Unicode
  */
 int
-utf8_to_hfs(ExtendedVCB *vcb, ByteCount srcLen, const unsigned char* srcStr, Str31 dstStr)
+utf8_to_hfs(ExtendedVCB *vcb, ByteCount srcLen, const unsigned char* srcStr, Str31 dstStr/*, int retry*/)
 {
 	int error;
 	UniChar uniStr[MAX_HFS_UNICODE_CHARS];
 	size_t ucslen;
-	unicode_to_hfs_func_t hfs_get_hfsname = VCBTOHFS(vcb)->hfs_get_hfsname;
 
 	error = utf8_decodestr(srcStr, srcLen, uniStr, &ucslen, sizeof(uniStr), ':', 0);
 	if (error == 0)
-		error = hfs_get_hfsname(uniStr, ucslen/sizeof(UniChar), dstStr);
+		error = unicode_to_hfs(vcb, ucslen, uniStr, dstStr, 1);
 
 	return error;
 }
@@ -592,7 +610,8 @@ static UniChar gHiBitCombUnicode[128] = {
  *
  * Unicode output is fully decomposed
  */
-static int mac_roman_to_unicode(Str31 hfs_str, UniChar *uni_str,
+int
+mac_roman_to_unicode(Str31 hfs_str, UniChar *uni_str,
 				UInt32 maxCharLen, UInt32 *unicodeChars)
 {
 	const UInt8  *p;

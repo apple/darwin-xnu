@@ -93,11 +93,11 @@ extern void ofw_init(void *);
 extern void initialize_screen(void *, unsigned int);
 
 extern boolean_t vc_progress_initialize( void * desc,
-					 unsigned char * data,
-					 unsigned char * clut );
+					 const unsigned char * data,
+					 const unsigned char * clut );
 
 extern void vc_display_icon( void * desc,
-			     unsigned char * data );
+			     const unsigned char * data );
 
 // from osfmk/ppc/serial_console.c
 extern int  switch_to_serial_console(void);

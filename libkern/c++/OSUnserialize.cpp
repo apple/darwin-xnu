@@ -124,7 +124,6 @@ extern void kern_os_free(void * addr);
 #ifndef YYSTYPE
 #define YYSTYPE int
 #endif
-#include <stddef.h>
 
 #ifndef __cplusplus
 #ifndef __STDC__

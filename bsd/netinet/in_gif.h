@@ -52,6 +52,8 @@
 
 #ifndef _NETINET_IN_GIF_H_
 #define _NETINET_IN_GIF_H_
+#include <sys/appleapiopts.h>
+#ifdef __APPLE_API_PRIVATE
 
 #define GIF_TTL		30
 
@@ -59,10 +61,7 @@ extern int ip_gif_ttl;
 
 void in_gif_input __P((struct mbuf *, int));
 int in_gif_output __P((struct ifnet *, int, struct mbuf *, struct rtentry *));
-#if defined(__FreeBSD__) && __FreeBSD__ < 3
-int in_gif_ioctl __P((struct ifnet *, int, caddr_t));
-#else
-int in_gif_ioctl __P((struct ifnet *, u_long, caddr_t));
-#endif
+int gif_encapcheck4 __P((const struct mbuf *, int, int, void *));
 
+#endif /* __APPLE_API_PRIVATE */
 #endif /*_NETINET_IN_GIF_H_*/

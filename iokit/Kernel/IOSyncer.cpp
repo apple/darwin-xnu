@@ -83,7 +83,7 @@ IOReturn IOSyncer::wait(bool autoRelease = true)
     if (threadMustStop) {
 	assert_wait((void *) &threadMustStop, false);
     	IOSimpleLockUnlockEnableInterrupt(guardLock, is);
-        thread_block(0);
+        thread_block(THREAD_CONTINUE_NULL);
     }
     else
         IOSimpleLockUnlockEnableInterrupt(guardLock, is);

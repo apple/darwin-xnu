@@ -56,9 +56,11 @@
 
 #ifndef _NET_RAW_CB_H_
 #define _NET_RAW_CB_H_
+#include <sys/appleapiopts.h>
 
 #include <sys/queue.h>
 
+#ifdef __APPLE_API_PRIVATE
 /*
  * Raw protocol interface control block.  Used
  * to tie a socket to the generic raw interface.
@@ -71,6 +73,7 @@ struct rawcb {
 	struct	sockproto rcb_proto;	/* protocol family, protocol */
 	u_long	reserved[4];		/* for future use */
 };
+#endif /* __APPLE_API_PRIVATE */
 
 #define	sotorawcb(so)		((struct rawcb *)(so)->so_pcb)
 
@@ -81,6 +84,7 @@ struct rawcb {
 #define	RAWRCVQ		8192
 
 #ifdef KERNEL
+#ifdef __APPLE_API_PRIVATE
 extern LIST_HEAD(rawcb_list_head, rawcb) rawcb_list;
 
 int	 raw_attach __P((struct socket *, int));
@@ -92,6 +96,7 @@ void	 raw_input __P((struct mbuf *,
 	    struct sockproto *, struct sockaddr *, struct sockaddr *));
 
 extern	struct pr_usrreqs raw_usrreqs;
+#endif /* __APPLE_API_PRIVATE */
 #endif
 
 #endif

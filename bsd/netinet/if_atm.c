@@ -51,14 +51,13 @@
  * THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
  * (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF
  * THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ *
+ * $FreeBSD: src/sys/netinet/if_atm.c,v 1.8 1999/12/07 17:39:06 shin Exp $
  */
 
 /*
  * IP <=> ATM address resolution.
  */
-
-#include "opt_inet.h"
-#include "opt_natm.h"
 
 #if defined(INET) || defined(INET6)
 
@@ -258,7 +257,7 @@ register struct atm_pseudohdr *desten;	/* OUT */
 	if (rt == NULL) {
 		rt = RTALLOC1(dst, 0);
 		if (rt == NULL) goto bad; /* failed */
-		rt->rt_refcnt--;	/* don't keep LL references */
+		rtunref(rt);	/* don't keep LL references */
 		if ((rt->rt_flags & RTF_GATEWAY) != 0 || 
 			(rt->rt_flags & RTF_LLINFO) == 0 ||
 			/* XXX: are we using LLINFO? */

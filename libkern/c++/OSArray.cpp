@@ -93,7 +93,7 @@ bool OSArray::initWithObjects(const OSObject *objects[],
             return false;
 
         array[count++] = newObject;
-        newObject->retain();
+        newObject->taggedRetain(OSTypeID(OSCollection));
     }
 
     return true;	
@@ -206,7 +206,7 @@ void OSArray::flushCollection()
 
     haveUpdated();
     for (i = 0; i < count; i++)
-        array[i]->release();
+        array[i]->taggedRelease(OSTypeID(OSCollection));
     count = 0;
 }
 
@@ -233,7 +233,7 @@ bool OSArray::setObject(unsigned int index, const OSMetaClassBase *anObject)
             array[i] = array[i-1];
     }
     array[index] = anObject;
-    anObject->retain();
+    anObject->taggedRetain(OSTypeID(OSCollection));
     count++;
 
     return true;
@@ -256,7 +256,7 @@ bool OSArray::merge(const OSArray * otherArray)
         const OSMetaClassBase *newObject = otherArray->getObject(i);
 
         array[count++] = newObject;
-        newObject->retain();
+        newObject->taggedRetain(OSTypeID(OSCollection));
     }
 
     return true;
@@ -273,9 +273,9 @@ replaceObject(unsigned int index, const OSMetaClassBase *anObject)
     haveUpdated();
     oldObject = array[index];
     array[index] = anObject;
-    anObject->retain();
+    anObject->taggedRetain(OSTypeID(OSCollection));
 
-    oldObject->release();
+    oldObject->taggedRelease(OSTypeID(OSCollection));
 }
 
 void OSArray::removeObject(unsigned int index)
@@ -293,7 +293,7 @@ void OSArray::removeObject(unsigned int index)
     for (i = index; i < count; i++)
         array[i] = array[i+1];
 
-    oldObject->release();
+    oldObject->taggedRelease(OSTypeID(OSCollection));
 }
 
 bool OSArray::isEqualTo(const OSArray *anArray) const

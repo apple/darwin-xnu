@@ -19,17 +19,6 @@
  * 
  * @APPLE_LICENSE_HEADER_END@
  */
-/*
- * Copyright (c) 1997 Apple Computer, Inc.  All rights reserved.
- * Copyright (c) 1994 NeXT Computer, Inc.  All rights reserved.
- *
- * machdep/ppc/kdp_machdep.c
- *
- * Machine-dependent code for Remote Debugging Protocol
- *
- * March, 1997	Created.	Umesh Vaishampayan [umeshv@NeXT.com]
- *
- */
  
 #include <mach/mach_types.h>
 #include <mach/machine.h>
@@ -427,7 +416,7 @@ kdp_i386_trap(
 	break;
     }
 
-//  kdp_i386_backtrace((void *) saved_state->ebp, 10);
+    kdp_i386_backtrace((void *) saved_state->ebp, 10);
 
     kdp_raise_exception(exception, code, subcode, saved_state);
 }
@@ -437,4 +426,9 @@ kdp_call_kdb(
         void) 
 {       
         return(FALSE);
+}
+
+unsigned int kdp_ml_get_breakinsn()
+{
+  return 0xcc;
 }

@@ -31,6 +31,7 @@ EXPINC_SUBDIRS = \
 	profiling \
 	ddb \
 	kern \
+	kdp \
 	ipc \
 	machine \
 	UserNotification \

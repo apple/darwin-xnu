@@ -33,9 +33,7 @@
 #error IOLib.h is for kernel use only
 #endif
 
-#ifndef IOKIT_DEPRECATED
-#define IOKIT_DEPRECATED	1
-#endif
+#include <sys/appleapiopts.h>
 
 #include <IOKit/system.h>
 
@@ -272,7 +270,7 @@ static inline IOFixed IOFixedDivide(IOFixed a, IOFixed b)
         (((value) / (multiple)) * (multiple));
 
 
-#if IOKIT_DEPRECATED
+#ifdef __APPLE_API_OBSOLETE
 
 /* The following API is deprecated */
 
@@ -289,7 +287,7 @@ void IOGetTime( mach_timespec_t * clock_time);
 
 extern mach_timespec_t IOZeroTvalspec;
 
-#endif /* IOKIT_DEPRECATED */
+#endif /* __APPLE_API_OBSOLETE */
 
 #ifdef __cplusplus
 } /* extern "C" */

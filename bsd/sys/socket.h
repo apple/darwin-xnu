@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2002 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -54,16 +54,32 @@
  * SUCH DAMAGE.
  *
  *	@(#)socket.h	8.4 (Berkeley) 2/21/94
+ * $FreeBSD: src/sys/sys/socket.h,v 1.39.2.7 2001/07/03 11:02:01 ume Exp $
  */
 
 #ifndef _SYS_SOCKET_H_
 #define	_SYS_SOCKET_H_
 
+#ifndef __APPLE__
+#include <machine/ansi.h>
+#endif
+#define _NO_NAMESPACE_POLLUTION
+#include <machine/param.h>
+#undef _NO_NAMESPACE_POLLUTION
 
 /*
  * Definitions related to sockets: types, address families, options.
  */
 
+/*
+ * Data types.
+ */
+typedef u_char		sa_family_t;
+#ifdef	_BSD_SOCKLEN_T_
+typedef	_BSD_SOCKLEN_T_	socklen_t;
+#undef	_BSD_SOCKLEN_T_
+#endif
+ 
 /*
  * Types
  */
@@ -87,11 +103,14 @@
 #define	SO_OOBINLINE	0x0100		/* leave received OOB data in line */
 #define	SO_REUSEPORT	0x0200		/* allow local address & port reuse */
 #define	SO_TIMESTAMP	0x0400		/* timestamp received dgram traffic */
-
+#ifndef __APPLE__
+#define	SO_ACCEPTFILTER	0x1000		/* there is an accept filter */
+#else
 #define SO_DONTTRUNC	0x2000		/* APPLE: Retain unread data */
 					/*  (ATOMIC proto) */
-#define SO_WANTMORE	0x4000		/* APPLE: Give hint when more data ready */
-#define SO_WANTOOBFLAG  0x8000          /* APPLE: Want OOB in MSG_FLAG on receive */
+#define SO_WANTMORE		0x4000		/* APPLE: Give hint when more data ready */
+#define SO_WANTOOBFLAG	0x8000		/* APPLE: Want OOB in MSG_FLAG on receive */
+#endif
 
 /*
  * Additional options, not kept in so_options.
@@ -104,10 +123,12 @@
 #define SO_RCVTIMEO	0x1006		/* receive timeout */
 #define	SO_ERROR	0x1007		/* get error status and clear */
 #define	SO_TYPE		0x1008		/* get socket type */
-#define	SO_PRIVSTATE	0x1009		/* get/deny privileged state */
+/*efine	SO_PRIVSTATE	0x1009		   get/deny privileged state */
+#ifdef __APPLE__
 #define SO_NREAD	0x1020		/* APPLE: get 1st-packet byte count */
 #define SO_NKE		0x1021		/* APPLE: Install socket-level NKE */
-
+#define SO_NOSIGPIPE	0x1022		/* APPLE: No SIGPIPE on EPIPE */
+#endif
 /*
  * Structure used for manipulating linger option.
  */
@@ -115,6 +136,13 @@ struct	linger {
 	int	l_onoff;		/* option on/off */
 	int	l_linger;		/* linger time */
 };
+
+#ifndef __APPLE__
+struct	accept_filter_arg {
+	char	af_name[16];
+	char	af_arg[256-16];
+};
+#endif
 
 /*
  * Level number for (get/set)sockopt() to apply to socket itself.
@@ -125,7 +153,7 @@ struct	linger {
  * Address families.
  */
 #define	AF_UNSPEC	0		/* unspecified */
-#define	AF_LOCAL	1		/* local to host (pipes, portals) */
+#define	AF_LOCAL	1		/* local to host (pipes) */
 #define	AF_UNIX		AF_LOCAL	/* backward compatibility */
 #define	AF_INET		2		/* internetwork: UDP, TCP, etc. */
 #define	AF_IMPLINK	3		/* arpanet imp addresses */
@@ -134,7 +162,7 @@ struct	linger {
 #define	AF_NS		6		/* XEROX NS protocols */
 #define	AF_ISO		7		/* ISO protocols */
 #define	AF_OSI		AF_ISO
-#define	AF_ECMA		8		/* european computer manufacturers */
+#define	AF_ECMA		8		/* European computer manufacturers */
 #define	AF_DATAKIT	9		/* datakit protocols */
 #define	AF_CCITT	10		/* CCITT protocols, X.25 etc */
 #define	AF_SNA		11		/* IBM SNA */
@@ -152,21 +180,29 @@ struct	linger {
 #define	AF_IPX		23		/* Novell Internet Protocol */
 #define	AF_SIP		24		/* Simple Internet Protocol */
 #define pseudo_AF_PIP	25		/* Help Identify PIP packets */
-					/* Sigh - The following 2 should */
-					/*  be maintained for MacOSX */
-					/*  binary compatibility */
-#define pseudo_AF_BLUE	26		/* Identify packets for Blue Box */
+#ifdef __APPLE__
+/*define pseudo_AF_BLUE	26	   Identify packets for Blue Box - Not used */
 #define AF_NDRV		27		/* Network Driver 'raw' access */
+#endif
 #define	AF_ISDN		28		/* Integrated Services Digital Network*/
 #define	AF_E164		AF_ISDN		/* CCITT E.164 recommendation */
 #define	pseudo_AF_KEY	29		/* Internal key-management function */
 #define	AF_INET6	30		/* IPv6 */
 #define	AF_NATM		31		/* native ATM access */
-#define AF_SYSTEM	32              /* Kernel event messages */
+#ifdef __APPLE__
+#define AF_SYSTEM	32		/* Kernel event messages */
 #define AF_NETBIOS	33		/* NetBIOS */
 #define AF_PPP		34		/* PPP communication protocol */
-
-#define	AF_MAX		35
+#else
+#define	AF_ATM		30		/* ATM */
+#endif
+#define pseudo_AF_HDRCMPLT 35		/* Used by BPF to not rewrite headers
+					 * in interface output routine
+					 */
+#ifndef __APPLE__
+#define	AF_NETGRAPH	32		/* Netgraph sockets */
+#endif
+#define	AF_MAX		36
 
 /*
  * Structure used by kernel to store most
@@ -175,7 +211,7 @@ struct	linger {
 struct sockaddr {
 	u_char	sa_len;			/* total length */
 	u_char	sa_family;		/* address family */
-	char	sa_data[14];		/* actually longer; address value */
+	char		sa_data[14];		/* actually longer; address value */
 };
 #define	SOCK_MAXADDRLEN	255		/* longest possible addresses */
 
@@ -188,24 +224,22 @@ struct sockproto {
 	u_short	sp_protocol;		/* protocol */
 };
 
-#if 1
 /*
- * bsd-api-new-02a: protocol-independent placeholder for socket addresses
+ * RFC 2553: protocol-independent placeholder for socket addresses
  */
-#define _SS_MAXSIZE	128
-#define _SS_ALIGNSIZE	(sizeof(int64_t))
-#define _SS_PAD1SIZE	(_SS_ALIGNSIZE - sizeof(u_char) * 2)
-#define _SS_PAD2SIZE	(_SS_MAXSIZE - sizeof(u_char) * 2 - \
+#define	_SS_MAXSIZE	128
+#define	_SS_ALIGNSIZE	(sizeof(int64_t))
+#define	_SS_PAD1SIZE	(_SS_ALIGNSIZE - sizeof(u_char) - sizeof(sa_family_t))
+#define	_SS_PAD2SIZE	(_SS_MAXSIZE - sizeof(u_char) - sizeof(sa_family_t) - \
 				_SS_PAD1SIZE - _SS_ALIGNSIZE)
 
 struct sockaddr_storage {
-	u_char ss_len;		/* address length */
-	u_char ss_family;	/* address family */
-	char _ss_pad1[_SS_PAD1SIZE];
-	int64_t _ss_align;	/* force desired structure storage alignment */
-	char _ss_pad2[_SS_PAD2SIZE];
+	u_char		ss_len;		/* address length */
+	sa_family_t	ss_family;	/* address family */
+	char			__ss_pad1[_SS_PAD1SIZE];
+	int64_t		__ss_align;	/* force desired structure storage alignment */
+	char			__ss_pad2[_SS_PAD2SIZE];
 };
-#endif
 
 /*
  * Protocol families, same as address families for now.
@@ -214,7 +248,6 @@ struct sockaddr_storage {
 #define	PF_LOCAL	AF_LOCAL
 #define	PF_UNIX		PF_LOCAL	/* backward compatibility */
 #define	PF_INET		AF_INET
-#define	PF_INET6	AF_INET6
 #define	PF_IMPLINK	AF_IMPLINK
 #define	PF_PUP		AF_PUP
 #define	PF_CHAOS	AF_CHAOS
@@ -239,16 +272,21 @@ struct sockaddr_storage {
 #define	PF_IPX		AF_IPX		/* same format as AF_NS */
 #define PF_RTIP		pseudo_AF_RTIP	/* same format as AF_INET */
 #define PF_PIP		pseudo_AF_PIP
-
+#ifdef __APPLE__
 #define PF_NDRV		AF_NDRV
+#endif
 #define	PF_ISDN		AF_ISDN
 #define	PF_KEY		pseudo_AF_KEY
 #define	PF_INET6	AF_INET6
 #define	PF_NATM		AF_NATM
-#define	PF_ATM		AF_ATM
+#ifdef __APPLE__
 #define PF_SYSTEM	AF_SYSTEM
 #define PF_NETBIOS	AF_NETBIOS
 #define PF_PPP		AF_PPP
+#else
+#define	PF_ATM		AF_ATM
+#define	PF_NETGRAPH	AF_NETGRAPH
+#endif
 
 #define	PF_MAX		AF_MAX
 
@@ -289,10 +327,16 @@ struct sockaddr_storage {
 	{ "ipx", CTLTYPE_NODE }, \
 	{ "sip", CTLTYPE_NODE }, \
 	{ "pip", CTLTYPE_NODE }, \
+	{ 0, 0 }, \
+	{ "ndrv", CTLTYPE_NODE }, \
 	{ "isdn", CTLTYPE_NODE }, \
 	{ "key", CTLTYPE_NODE }, \
 	{ "inet6", CTLTYPE_NODE }, \
 	{ "natm", CTLTYPE_NODE }, \
+	{ "sys", CTLTYPE_NODE }, \
+	{ "netbios", CTLTYPE_NODE }, \
+	{ "ppp", CTLTYPE_NODE }, \
+	{ "hdrcomplete", CTLTYPE_NODE }, \
 }
 
 /*
@@ -343,11 +387,13 @@ struct msghdr {
 #define	MSG_WAITALL	0x40		/* wait for full request or error */
 #define	MSG_DONTWAIT	0x80		/* this message should be nonblocking */
 #define	MSG_EOF		0x100		/* data completes connection */
+#ifdef __APPLE__
 #define MSG_FLUSH	0x400		/* Start of 'hold' seq; dump so_temp */
 #define MSG_HOLD	0x800		/* Hold frag in so_temp */
 #define MSG_SEND	0x1000		/* Send the packet in so_temp */
 #define MSG_HAVEMORE	0x2000		/* Data ready to be read */
 #define MSG_RCVMORE	0x4000		/* Data remains in current pkt */
+#endif
 #define MSG_COMPAT      0x8000		/* used in sendit() */
 
 /*
@@ -363,26 +409,53 @@ struct cmsghdr {
 /* followed by	u_char  cmsg_data[]; */
 };
 
-/* given pointer to struct cmsghdr, return pointer to data */
-#define	CMSG_DATA(cmsg)		((u_char *)((cmsg) + 1))
+#ifndef __APPLE__
+/*
+ * While we may have more groups than this, the cmsgcred struct must
+ * be able to fit in an mbuf, and NGROUPS_MAX is too large to allow
+ * this.
+*/
+#define CMGROUP_MAX 16
 
-/* Alignment requirement for CMSG struct manipulation.
- * This is different from ALIGN() defined in ARCH/include/param.h.
- * XXX think again carefully about architecture dependencies.
+/*
+ * Credentials structure, used to verify the identity of a peer
+ * process that has sent us a message. This is allocated by the
+ * peer process but filled in by the kernel. This prevents the
+ * peer from lying about its identity. (Note that cmcred_groups[0]
+ * is the effective GID.)
  */
-#define CMSG_ALIGN(n)		(((n) + 3) & ~3)
+struct cmsgcred {
+	pid_t	cmcred_pid;		/* PID of sending process */
+	uid_t	cmcred_uid;		/* real UID of sending process */
+	uid_t	cmcred_euid;		/* effective UID of sending process */
+	gid_t	cmcred_gid;		/* real GID of sending process */
+	short	cmcred_ngroups;		/* number or groups */
+	gid_t	cmcred_groups[CMGROUP_MAX];	/* groups */
+};
+#endif
+
+/* given pointer to struct cmsghdr, return pointer to data */
+#define	CMSG_DATA(cmsg)		((u_char *)(cmsg) + \
+				 ALIGN(sizeof(struct cmsghdr)))
 
 /* given pointer to struct cmsghdr, return pointer to next cmsghdr */
 #define	CMSG_NXTHDR(mhdr, cmsg)	\
-	(((caddr_t)(cmsg) + (cmsg)->cmsg_len + sizeof(struct cmsghdr) > \
-	    (mhdr)->msg_control + (mhdr)->msg_controllen) ? \
+	(((caddr_t)(cmsg) + ALIGN((cmsg)->cmsg_len) + \
+	  ALIGN(sizeof(struct cmsghdr)) > \
+	    (caddr_t)(mhdr)->msg_control + (mhdr)->msg_controllen) ? \
 	    (struct cmsghdr *)NULL : \
-	    (struct cmsghdr *)((caddr_t)(cmsg) + CMSG_ALIGN((cmsg)->cmsg_len)))
+	    (struct cmsghdr *)((caddr_t)(cmsg) + ALIGN((cmsg)->cmsg_len)))
 
 #define	CMSG_FIRSTHDR(mhdr)	((struct cmsghdr *)(mhdr)->msg_control)
 
-#define CMSG_SPACE(l)	(CMSG_ALIGN(sizeof(struct cmsghdr)) + CMSG_ALIGN(l))
-#define CMSG_LEN(l)	(CMSG_ALIGN(sizeof(struct cmsghdr)) + (l))
+/* RFC 2292 additions */
+	
+#define	CMSG_SPACE(l)		(ALIGN(sizeof(struct cmsghdr)) + ALIGN(l))
+#define	CMSG_LEN(l)		(ALIGN(sizeof(struct cmsghdr)) + (l))
+
+#ifdef KERNEL
+#define	CMSG_ALIGN(n)	ALIGN(n)
+#endif
 
 /* "Socket"-level control message types: */
 #define	SCM_RIGHTS	0x01		/* access rights (array of int) */
@@ -454,7 +527,10 @@ int	setsockopt __P((int, int, int, const void *, int));
 int	shutdown __P((int, int));
 int	socket __P((int, int, int));
 int	socketpair __P((int, int, int, int *));
+
+void	pfctlinput __P((int, struct sockaddr *));
 __END_DECLS
 
 #endif /* !KERNEL */
+
 #endif /* !_SYS_SOCKET_H_ */

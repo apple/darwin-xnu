@@ -29,7 +29,6 @@
 #ifndef	_MACHINE_ANSI_H_
 #define	_MACHINE_ANSI_H_
 
-
 #if defined (__ppc__)
 #include "ppc/ansi.h"
 #elif defined (__i386__)
@@ -38,5 +37,10 @@
 #error architecture not supported
 #endif
 
+#ifdef KERNEL
+#ifndef offsetof
+#define offsetof(type, member)  ((size_t)(&((type *)0)->member))
+#endif /* offsetof */
+#endif /* KERNEL */
 
 #endif	/* _MACHINE_ANSI_H_ */

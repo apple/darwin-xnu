@@ -58,6 +58,9 @@
 #ifndef	_I386_CPU_NUMBER_H_
 #define	_I386_CPU_NUMBER_H_
 
+#include <sys/appleapiopts.h>
+
+#ifdef __APPLE_API_UNSTABLE
 extern int	cpu_number(void);
 
 #ifdef MACH_KERNEL_PRIVATE
@@ -117,5 +120,7 @@ extern __inline__ int cpu_number(void)
 #endif	/* MP_V1_1 */
 
 #endif	/* MACH_KERNEL_PRIVATE */
+
+#endif  /* __APPLE_API_UNSTABLE */
 
 #endif	/* _I386_CPU_NUMBER_H_ */

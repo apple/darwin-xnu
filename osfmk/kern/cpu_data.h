@@ -26,7 +26,12 @@
 #ifndef	_CPU_DATA_H_
 #define	_CPU_DATA_H_
 
-#ifdef MACH_KERNEL_PRIVATE
+#include <sys/appleapiopts.h>
+
+#ifdef	__APPLE_API_PRIVATE
+
+#ifdef	MACH_KERNEL_PRIVATE
+
 #include <cpus.h>
 #include <mach/mach_types.h>
 
@@ -42,22 +47,26 @@ typedef struct
 #endif
 } cpu_data_t;
 
-extern cpu_data_t	cpu_data[NCPUS];
-
 #include <machine/cpu_data.h>
 
-#else /* !MACH_KERNEL_PRIVATE */
+#else	/* MACH_KERNEL_PRIVATE */
 
-extern thread_t					current_thread(void);
-#define get_preemption_level()			_get_preeption_level()
-#define get_simple_lock_count()			_get_simple_lock_count()
 #define disable_preemption()			_disable_preemption()
 #define enable_preemption()			_enable_preemption()
 #define enable_preemption_no_check()		_enable_preemption_no_check()
-#define mp_disable_preemption()			_mp_disable_preemption()
-#define mp_enable_preemption()			_mp_enable_preemption()
-#define mp_enable_preemption_no_check()		_mp_enable_preemption_no_check()
 
-#endif /* !MACH_KERNEL_PRIVATE */
+#endif	/* MACH_KERNEL_PRIVATE */
+
+#endif	/* __APPLE_API_PRIVATE */
+
+#ifdef	__APPLE_API_UNSTABLE
+
+#if		!defined(MACH_KERNEL_PRIVATE)
+
+extern thread_t			current_thread(void);
+
+#endif	/* MACH_KERNEL_PRIVATE */
+
+#endif	/* __APPLE_API_UNSTABLE */
 
 #endif	/* _CPU_DATA_H_ */

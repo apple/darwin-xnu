@@ -152,45 +152,32 @@ int nfs_boot_init(nd, procp)
  * (This happens to be the way Sun does it too.)
  */
 
-extern int bootp(struct ifnet * ifp, struct in_addr * iaddr_p, int max_retry,
-		 struct in_addr * netmask_p, struct in_addr * router_p,
-		 struct proc * procp);
-
 /* bootparam RPC */
 static int bp_whoami __P((struct sockaddr_in *bpsin,
 	struct in_addr *my_ip, struct in_addr *gw_ip));
 static int bp_getfile __P((struct sockaddr_in *bpsin, char *key,
 	struct sockaddr_in *mdsin, char *servname, char *path));
 
-static boolean_t path_getfile __P((char * image_path, 
-				   struct sockaddr_in * sin_p, 
-				   char * serv_name, char * pathname));
-
-static __inline__
-u_long iptohl(struct in_addr ip)
-{
-    return (ntohl(ip.s_addr));
-}
-
-static __inline__ boolean_t
-same_subnet(struct in_addr addr1, struct in_addr addr2, struct in_addr mask)
-{
-    u_long m = iptohl(mask);
-    if ((iptohl(addr1) & m) != (iptohl(addr2) & m))
-	return (FALSE);
-    return (TRUE);
-}
-
 /* mountd RPC */
 static int md_mount __P((struct sockaddr_in *mdsin, char *path,
 	u_char *fh));
 
 /* other helpers */
-static void get_file_handle __P((char *pathname, struct nfs_dlmount *ndmntp));
+static int get_file_handle __P((char *pathname, struct nfs_dlmount *ndmntp));
+
 
 #define IP_FORMAT	"%d.%d.%d.%d"
 #define IP_CH(ip)	((u_char *)ip)
 #define IP_LIST(ip)	IP_CH(ip)[0],IP_CH(ip)[1],IP_CH(ip)[2],IP_CH(ip)[3]
+
+extern boolean_t
+netboot_iaddr(struct in_addr * iaddr_p);
+
+extern boolean_t
+netboot_rootpath(struct in_addr * server_ip,
+		 char * name, int name_len, 
+		 char * path, int path_len);
+
 /*
  * Called with an empty nfs_diskless struct to be filled in.
  */
@@ -199,388 +186,123 @@ nfs_boot_init(nd, procp)
 	struct nfs_diskless *nd;
 	struct proc *procp;
 {
-	char *		booter_path = NULL;
-	boolean_t	do_bpwhoami = TRUE;
-	boolean_t	do_bpgetfile = TRUE;
-	struct ifreq ireq;
-	struct in_addr my_ip;
-	struct sockaddr_in bp_sin;
-	struct sockaddr_in *sin;
-	struct ifnet *ifp;
-	struct in_addr gw_ip;
-	struct socket *so;
-	struct in_addr my_netmask;
-	int error;
-	char * 		root_path = NULL;
+	struct sockaddr_in 	bp_sin;
+	boolean_t		do_bpwhoami = TRUE;
+	boolean_t		do_bpgetfile = TRUE;
+	int 			error = 0;
+	struct in_addr 		my_ip;
+	char * 			root_path = NULL;
+	struct sockaddr_in *	sin_p;
 
-	MALLOC(booter_path, char *, MAXPATHLEN, M_TEMP, M_WAITOK);
-	MALLOC(root_path, char *, MAXPATHLEN, M_TEMP, M_WAITOK);
-
-	/* booter-supplied path */
-	if (!PE_parse_boot_arg("rp", booter_path)
-	    && !PE_parse_boot_arg("rootpath", booter_path)) {
-	    booter_path[0] = 0;
+	/* by this point, networking must already have been configured */
+	if (netboot_iaddr(&my_ip) == FALSE) {
+	    printf("nfs_boot: networking is not initialized\n");
+	    error = ENXIO;
+	    goto failed;
 	}
 
-	root_path[0] = 0;
-
-	gw_ip.s_addr = 0;
-
-	/* clear out the request structure */
-	bzero(&ireq, sizeof(ireq));
-
-	/*
-	 * Find an interface, rarp for its ip address, stuff it, the
-	 * implied broadcast addr, and netmask into a nfs_diskless struct.
-	 *
-	 * This was moved here from nfs_vfsops.c because this procedure
-	 * would be quite different if someone decides to write (i.e.) a
-	 * BOOTP version of this file (might not use RARP, etc.)
-	 */
+	/* get the root path information */
+	MALLOC(root_path, char *, MAXPATHLEN, M_TEMP, M_WAITOK);
+	sin_p = &nd->nd_root.ndm_saddr;
+	bzero((caddr_t)sin_p, sizeof(*sin_p));
+	sin_p->sin_len = sizeof(*sin_p);
+	sin_p->sin_family = AF_INET;
+	if (netboot_rootpath(&sin_p->sin_addr, nd->nd_root.ndm_host, 
+			     sizeof(nd->nd_root.ndm_host),
+			     root_path, MAXPATHLEN) == TRUE) {
+	    do_bpgetfile = FALSE;
+	    do_bpwhoami = FALSE;
+	}
+	nd->nd_private.ndm_saddr.sin_addr.s_addr = 0;
 
 	thread_funnel_switch(KERNEL_FUNNEL, NETWORK_FUNNEL);
 
-	/*
-	 * Find a network interface.
-	 */
-	ifp = NULL;
-	{ /* if the root device is set, use it */
-	    extern char rootdevice[];
-	    if (rootdevice[0])
-		ifp = ifunit(rootdevice);
-	}
-	if (ifp == NULL) { /* search for network device */
-		/* for (ifp = ifnet; ifp; ifp = ifp->if_next)*/
-		TAILQ_FOREACH(ifp, &ifnet, if_link)
-			if ((ifp->if_flags &
-			     (IFF_LOOPBACK|IFF_POINTOPOINT)) == 0)
-				break;
-	}
-	if (ifp == NULL)
-		panic("nfs_boot: no suitable interface");
-	sprintf(ireq.ifr_name, "%s%d", ifp->if_name, ifp->if_unit);
-	printf("nfs_boot: using network interface '%s'\n", ireq.ifr_name);
-
-	/*
-	 * Bring up the interface.
-	 */
-	if ((error = socreate(AF_INET, &so, SOCK_DGRAM, 0)) != 0)
-		panic("nfs_boot: socreate, error=%d", error);
-	ireq.ifr_flags = ifp->if_flags | IFF_UP;
-	error = ifioctl(so, SIOCSIFFLAGS, (caddr_t)&ireq, procp);
-	if (error)
-		panic("nfs_boot: SIFFLAGS, error=%d", error);
-
-#define DO_BOOTP
-#ifdef DO_BOOTP
-	{ /* use BOOTP to retrieve IP address, netmask and router */
-	    struct sockaddr_in 		sockin;
-	    struct in_addr		router;
-	    struct in_addr		netmask;
-	    
-	    my_ip.s_addr = 0;
-	    netmask.s_addr = 0;
-	    router.s_addr = 0;
-	    sockin.sin_family = AF_INET;
-	    sockin.sin_len = sizeof(sockin);
-	    sockin.sin_addr.s_addr = 0;
-#define RETRY_COUNT	32
-	    while ((error = bootp(ifp, &my_ip, RETRY_COUNT,
-				  &netmask, &router, procp))) {
-		if (error == ETIMEDOUT)
-		    printf("nfs_boot: BOOTP timed out, retrying...\n");
-
-		else {
-		    printf("nfs_boot: bootp() failed, error = %d\n", error);
-		    panic("nfs_boot");
-		}
-	    }
-	    /* clear the netmask */
-	    ((struct sockaddr_in *)&ireq.ifr_addr)->sin_addr.s_addr = 0;
-	    error = ifioctl(so, SIOCSIFNETMASK, (caddr_t)&ireq, procp);
-	    if (error)
-		printf("nfs_boot: SIOCSIFNETMASK failed: %d\n", error);
-
-	    if (netmask.s_addr) { 
-		/* set our new subnet mask */
-		sockin.sin_addr = netmask;
-		*((struct sockaddr_in *)&ireq.ifr_addr) = sockin;
-		error = ifioctl(so, SIOCSIFNETMASK, (caddr_t)&ireq, procp);
-		if (error)
-		    printf("nfs_boot: SIOCSIFNETMASK failed: %d\n", error);
-	    }
-
-	    /* set our address */
-	    sockin.sin_addr = my_ip;
-	    *((struct sockaddr_in *)&ireq.ifr_addr) = sockin;
-	    error = ifioctl(so, SIOCSIFADDR, (caddr_t)&ireq, procp);
-	    if (error) {
-		printf("SIOCSIFADDR failed: %d\n", error);
-		panic("nfs_boot.c");
-	    }
-	    printf("nfs_boot: IP address " IP_FORMAT, IP_LIST(&my_ip));
-	    if (netmask.s_addr)
-		printf(" netmask " IP_FORMAT, IP_LIST(&netmask));
-	    if (router.s_addr) {
-		gw_ip = router;
-		printf(" router " IP_FORMAT, IP_LIST(&router));
-	    }
-	    printf("\n");
-	}
-#else
-	/*
-	 * Do RARP for the interface address.
-	 */
-	if ((error = revarpwhoami(&my_ip, ifp)) != 0)
-		panic("revarp failed, error=%d", error);
-	printf("nfs_boot: client_addr=0x%x\n", ntohl(my_ip.s_addr));
-
-	/*
-	 * Do enough of ifconfig(8) so that the chosen interface
-	 * can talk to the servers.  (just set the address)
-	 */
-	sin = (struct sockaddr_in *)&ireq.ifr_addr;
-	bzero((caddr_t)sin, sizeof(*sin));
-	sin->sin_len = sizeof(*sin);
-	sin->sin_family = AF_INET;
-	sin->sin_addr.s_addr = my_ip.s_addr;
-	error = ifioctl(so, SIOCSIFADDR, (caddr_t)&ireq, procp);
-	if (error)
-		panic("nfs_boot: set if addr, error=%d", error);
-#endif DO_BOOTP
-
-	/* need netmask to determine whether NFS server local */
-	sin = (struct sockaddr_in *)&ireq.ifr_addr;
-	bzero((caddr_t)sin, sizeof(*sin));
-	sin->sin_len = sizeof(*sin);
-	sin->sin_family = AF_INET;
-	error = ifioctl(so, SIOCGIFNETMASK, (caddr_t)&ireq, procp);
-	if (error)
-	    panic("nfs_boot: SIOCGIFNETMASK error=%d", error);
-	my_netmask = sin->sin_addr;
-
-	soclose(so);
-
-	/* check for a booter-specified path */
-	if (booter_path[0]) {
-	    nd->nd_root.ndm_saddr.sin_addr.s_addr = 0;
-	    nd->nd_private.ndm_saddr.sin_addr.s_addr = 0;
-	    if (path_getfile(booter_path, &nd->nd_root.ndm_saddr,
-			     nd->nd_root.ndm_host, root_path)) {
-		do_bpgetfile = FALSE;
-		printf("nfs_boot: using booter-supplied path '%s'\n",
-		       booter_path);
-		if (same_subnet(nd->nd_root.ndm_saddr.sin_addr,
-				my_ip, my_netmask)
-		    || gw_ip.s_addr) {
-		    do_bpwhoami = FALSE;
-		}
-		else {
-		    /* do bpwhoami to attempt to get the router */
-		}
-	    }
-	    else {
-		printf("nfs_boot: ignoring badly formed bootpath '%s'\n",
-		       booter_path);
-	    }
-	}
-
 	if (do_bpwhoami) {
-	    /*
-	     * Get client name and gateway address.
-	     * RPC: bootparam/whoami
-	     * Use the old broadcast address for the WHOAMI
-	     * call because we do not yet know our netmask.
-	     * The server address returned by the WHOAMI call
-	     * is used for all subsequent booptaram RPCs.
-	     */
-	    bzero((caddr_t)&bp_sin, sizeof(bp_sin));
-	    bp_sin.sin_len = sizeof(bp_sin);
-	    bp_sin.sin_family = AF_INET;
-	    bp_sin.sin_addr.s_addr = INADDR_BROADCAST;
-	    hostnamelen = MAXHOSTNAMELEN;
-	    
-	    { /* bpwhoami also returns gateway IP address */
-		
 		struct in_addr router;
-		
+		/*
+		 * Get client name and gateway address.
+		 * RPC: bootparam/whoami
+		 * Use the old broadcast address for the WHOAMI
+		 * call because we do not yet know our netmask.
+		 * The server address returned by the WHOAMI call
+		 * is used for all subsequent booptaram RPCs.
+		 */
+		bzero((caddr_t)&bp_sin, sizeof(bp_sin));
+		bp_sin.sin_len = sizeof(bp_sin);
+		bp_sin.sin_family = AF_INET;
+		bp_sin.sin_addr.s_addr = INADDR_BROADCAST;
+		hostnamelen = MAXHOSTNAMELEN;
 		router.s_addr = 0;
 		error = bp_whoami(&bp_sin, &my_ip, &router);
 		if (error) {
-		    printf("nfs_boot: bootparam whoami, error=%d", error);
-		    panic("nfs_boot: bootparam whoami\n");
+			printf("nfs_boot: bootparam whoami, error=%d", error);
+			goto failed;
 		}
-		/* if not already set by BOOTP, use the one from BPWHOAMI */
-		if (gw_ip.s_addr == 0)
-		    gw_ip = router;
-	    }
-	    printf("nfs_boot: BOOTPARAMS server " IP_FORMAT "\n", 
-		   IP_LIST(&bp_sin.sin_addr));
-	    printf("nfs_boot: hostname %s\n", hostname);
+		printf("nfs_boot: BOOTPARAMS server " IP_FORMAT "\n", 
+		       IP_LIST(&bp_sin.sin_addr));
+		printf("nfs_boot: hostname %s\n", hostname);
 	}
-#define NFS_BOOT_GATEWAY 	1
-#ifdef	NFS_BOOT_GATEWAY
-	/*
-	 * DWS 2/18/1999
-	 * The comment below does not apply to gw_ip discovered
-	 * via BOOTP (see DO_BOOTP loop above) since BOOTP servers
-	 * are supposed to be more trustworthy.
-	 */
-	/*
-	 * XXX - This code is conditionally compiled only because
-	 * many bootparam servers (in particular, SunOS 4.1.3)
-	 * always set the gateway address to their own address.
-	 * The bootparam server is not necessarily the gateway.
-	 * We could just believe the server, and at worst you would
-	 * need to delete the incorrect default route before adding
-	 * the correct one, but for simplicity, ignore the gateway.
-	 * If your server is OK, you can turn on this option.
-	 *
-	 * If the gateway address is set, add a default route.
-	 * (The mountd RPCs may go across a gateway.)
-	 */
-	if (gw_ip.s_addr) {
-		struct sockaddr dst, gw, mask;
-		/* Destination: (default) */
-		bzero((caddr_t)&dst, sizeof(dst));
-		dst.sa_len = sizeof(dst);
-		dst.sa_family = AF_INET;
-		/* Gateway: */
-		bzero((caddr_t)&gw, sizeof(gw));
-		sin = (struct sockaddr_in *)&gw;
-		sin->sin_len = sizeof(gw);
-		sin->sin_family = AF_INET;
-		sin->sin_addr.s_addr = gw_ip.s_addr;
-		/* Mask: (zero length) */
-		bzero(&mask, sizeof(mask));
-		printf("nfs_boot: adding default route " IP_FORMAT "\n", 
-		       IP_LIST(&gw_ip));
-		/* add, dest, gw, mask, flags, 0 */
-		error = rtrequest(RTM_ADD, &dst, (struct sockaddr *)&gw,
-		    &mask, (RTF_UP | RTF_GATEWAY | RTF_STATIC), NULL);
-		if (error)
-			printf("nfs_boot: add route, error=%d\n", error);
-	}
-#endif
 	if (do_bpgetfile) {
-	    error = bp_getfile(&bp_sin, "root", &nd->nd_root.ndm_saddr,
-			       nd->nd_root.ndm_host, root_path);
-	    if (error) {
-		printf("nfs_boot: bootparam get root: %d\n", error);
-		panic("nfs_boot: bootparam get root");
-	    }
+		error = bp_getfile(&bp_sin, "root", &nd->nd_root.ndm_saddr,
+				   nd->nd_root.ndm_host, root_path);
+		if (error) {
+			printf("nfs_boot: bootparam get root: %d\n", error);
+			goto failed;
+		}
 	}
-
-	get_file_handle(root_path, &nd->nd_root);
+	
+	error = get_file_handle(root_path, &nd->nd_root);
+	if (error) {
+		printf("nfs_boot: get_file_handle() root failed, %d\n", error);
+		goto failed;
+	}
 
 #if !defined(NO_MOUNT_PRIVATE) 
 	if (do_bpgetfile) { /* get private path */
-	    char * private_path = NULL;
-
-	    MALLOC(private_path, char *, MAXPATHLEN, M_TEMP, M_WAITOK);
-	    error = bp_getfile(&bp_sin, "private", 
-			       &nd->nd_private.ndm_saddr,
-			       nd->nd_private.ndm_host, private_path);
-	    if (!error) {
-		char * check_path = NULL;
-
-		MALLOC(check_path, char *, MAXPATHLEN, M_TEMP, M_WAITOK);
-		sprintf(check_path, "%s/private", root_path);
-		if ((nd->nd_root.ndm_saddr.sin_addr.s_addr 
-		     == nd->nd_private.ndm_saddr.sin_addr.s_addr)
-		    && (strcmp(check_path, private_path) == 0)) {
-		    /* private path is prefix of root path, don't mount */
-		    nd->nd_private.ndm_saddr.sin_addr.s_addr = 0;
+		char * private_path = NULL;
+		
+		MALLOC(private_path, char *, MAXPATHLEN, M_TEMP, M_WAITOK);
+		error = bp_getfile(&bp_sin, "private", 
+				   &nd->nd_private.ndm_saddr,
+				   nd->nd_private.ndm_host, private_path);
+		if (!error) {
+			char * check_path = NULL;
+			
+			MALLOC(check_path, char *, MAXPATHLEN, M_TEMP, M_WAITOK);
+			sprintf(check_path, "%s/private", root_path);
+			if ((nd->nd_root.ndm_saddr.sin_addr.s_addr 
+			     == nd->nd_private.ndm_saddr.sin_addr.s_addr)
+			    && (strcmp(check_path, private_path) == 0)) {
+				/* private path is prefix of root path, don't mount */
+				nd->nd_private.ndm_saddr.sin_addr.s_addr = 0;
+			}
+			else {
+				error = get_file_handle(private_path, 
+							&nd->nd_private);
+				if (error) {
+					printf("nfs_boot: get_file_handle() private failed, %d\n", error);
+					goto failed;
+				}
+			}
+			_FREE(check_path, M_TEMP);
 		}
-		else {
-		    get_file_handle(private_path, &nd->nd_private);
+		else { 
+			/* private key not defined, don't mount */
+			nd->nd_private.ndm_saddr.sin_addr.s_addr = 0;
 		}
-		_FREE(check_path, M_TEMP);
-	    }
-	    else { 
-		/* private key not defined, don't mount */
-		nd->nd_private.ndm_saddr.sin_addr.s_addr = 0;
-	    }
-	    _FREE(private_path, M_TEMP);
+		_FREE(private_path, M_TEMP);
+	}
+	else {
+		error = 0;
 	}
 #endif NO_MOUNT_PRIVATE
+ failed:
 	thread_funnel_switch(NETWORK_FUNNEL, KERNEL_FUNNEL);
-	_FREE(booter_path, M_TEMP);
 	_FREE(root_path, M_TEMP);
-	return (0);
+	return (error);
 }
 
-int
-inet_aton(char * cp, struct in_addr * pin)
-{
-    u_char * b = (char *)pin;
-    int	   i;
-    char * p;
-
-    for (p = cp, i = 0; i < 4; i++) {
-	u_long l = strtoul(p, 0, 0);
-	if (l > 255)
-	    return (FALSE);
-	b[i] = l;
-	p = strchr(p, '.');
-	if (i < 3 && p == NULL)
-	    return (FALSE);
-	p++;
-    }
-    return (TRUE);
-}
-
-/*
- * Function: parse_image_path
- * Purpose:
- *   Parse a string of the form "<IP>:<host>:<path>" into
- *   the given ip address and host and pathnames.
- * Example: 
- *   "17.202.16.17:seaport:/release/.images/Image9/CurrentHera"
- */
-static __inline__ boolean_t
-parse_image_path(char * c, struct in_addr * iaddr_p, char * hostname,
-		 char * pathname)
-{
-    char *		d;
-    char * 		p;
-#define TMP_SIZE	128
-    char 		tmp[TMP_SIZE];
-
-    p = strchr(c, ':');
-    if (p == NULL)
-	return (FALSE);
-    if ((p - c) >= TMP_SIZE)
-	return (FALSE);
-    strncpy(tmp, c, p - c);
-    tmp[p - c] = 0;
-    if (inet_aton(tmp, iaddr_p) != 1)
-	return (FALSE);
-    p++;
-    d = strchr(p, ':');
-    if (d == NULL)
-	return (FALSE);
-    strncpy(hostname, p, d - p);
-    hostname[d - p] = 0;
-    d++;
-    strcpy(pathname, d);
-    return (TRUE);
-}
-
-static boolean_t
-path_getfile(char * image_path, struct sockaddr_in * sin_p, 
-	     char * serv_name, char * pathname)
-{
-    bzero((caddr_t)sin_p, sizeof(*sin_p));
-    sin_p->sin_len = sizeof(*sin_p);
-    sin_p->sin_family = AF_INET;
-    if (parse_image_path(image_path, &sin_p->sin_addr, serv_name, pathname)
-	== FALSE)
-	return (FALSE);
-    return (TRUE);
-}
-
-static void
+static int
 get_file_handle(pathname, ndmntp)
  	char 		   *pathname;	/* path on server */
 	struct nfs_dlmount *ndmntp;	/* output */
@@ -594,7 +316,7 @@ get_file_handle(pathname, ndmntp)
 	 */
 	error = md_mount(&ndmntp->ndm_saddr, pathname, ndmntp->ndm_fh);
 	if (error)
-		panic("nfs_boot: mountd, error=%d", error);
+		return (error);
 
 	/* Construct remote path (for getmntinfo(3)) */
 	dp = ndmntp->ndm_host;
@@ -604,6 +326,7 @@ get_file_handle(pathname, ndmntp)
 	for (sp = pathname; *sp && dp < endp;)
 		*dp++ = *sp++;
 	*dp = '\0';
+	return (0);
 
 }
 

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2002 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -24,7 +24,7 @@
  *	All Rights Reserved.
  */
 /*
- * posix_shm.c : Support for POSIX shared memory apis
+ * posix_shm.c : Support for POSIX shared memory APIs
  *
  *	File:	posix_shm.c
  *	Author:	Ananthakrishna Ramesh
@@ -130,20 +130,18 @@ u_long	pshmhash;				/* size of hash table - 1 */
 long	pshmnument;			/* number of cache entries allocated */
 struct pshmstats pshmstats;		/* cache effectiveness statistics */
 
-int pshm_read  __P((struct file *fp, struct uio *uio,
-					    struct ucred *cred));
-int pshm_write  __P((struct file *fp, struct uio *uio,
-					    struct ucred *cred));
-int pshm_ioctl  __P((struct file *fp, u_long com,
-					    caddr_t data, struct proc *p));
-int pshm_select  __P((struct file *fp, int which,
-					    struct proc *p));
-int pshm_closefile  __P((struct file *fp, struct proc *p));
+static int pshm_read  __P((struct file *fp, struct uio *uio,
+		    struct ucred *cred, int flags, struct proc *p));
+static int pshm_write  __P((struct file *fp, struct uio *uio,
+		    struct ucred *cred, int flags, struct proc *p));
+static int pshm_ioctl  __P((struct file *fp, u_long com,
+		    caddr_t data, struct proc *p));
+static int pshm_select  __P((struct file *fp, int which, void *wql,
+		    struct proc *p));
+static int pshm_closefile  __P((struct file *fp, struct proc *p));
 
 struct 	fileops pshmops =
 	{ pshm_read, pshm_write, pshm_ioctl, pshm_select, pshm_closefile };
-
-
 
 /*
  * Lookup an entry in the cache 
@@ -299,16 +297,16 @@ pshm_cache_delete(pcp)
 
 
 struct shm_open_args {
-const char *name;
-int oflag;
-int mode;
+	const char *name;
+	int oflag;
+	int mode;
 };
 
 int
 shm_open(p, uap, retval)
-struct proc *p;
-register struct shm_open_args *uap;
-register_t *retval;
+	struct proc *p;
+	register struct shm_open_args *uap;
+	register_t *retval;
 {
 	register struct filedesc *fdp = p->p_fd;
 	register struct file *fp;
@@ -328,6 +326,7 @@ register_t *retval;
 	int incache = 0;
 	struct pshmnode * pnode = PSHMNODE_NULL;
 	struct pshmcache * pcache = PSHMCACHE_NULL;
+	int pinfo_alloc=0;
 
 
 	pinfo = PSHMINFO_NULL;
@@ -399,12 +398,13 @@ register_t *retval;
                         }
 #endif 
                         error = EEXIST;
-                        goto bad;
+                        goto bad1;
                 } 
                 if (!incache) {
                     /*  create a new one */
                     pinfo = (struct pshminfo *)_MALLOC(sizeof(struct pshminfo), M_SHM, M_WAITOK);
                     bzero(pinfo, sizeof(struct pshminfo));
+			pinfo_alloc = 1;
                     pinfo->pshm_flags = PSHM_DEFINED | PSHM_INCREATE;
                     pinfo->pshm_usecount = 1;
                     pinfo->pshm_mode = cmode;
@@ -414,27 +414,27 @@ register_t *retval;
                     /*  already exists */
                         if( pinfo->pshm_flags & PSHM_INDELETE) {
                             error = ENOENT;
-                            goto bad;
+                            goto bad1;
                         }	
                         if (error = pshm_access(pinfo, fmode, p->p_ucred, p))
-                            goto bad;
+                            goto bad1;
                 }
 	} else {
 		if (!incache) {
 			/* O_CREAT  is not set and the shm obecj does not exist */
 			error = ENOENT;
-			goto bad;
+			goto bad1;
 		}
 		if( pinfo->pshm_flags & PSHM_INDELETE) {
 			error = ENOENT;
-			goto bad;
+			goto bad1;
 		}	
 		if (error = pshm_access(pinfo, fmode, p->p_ucred, p))
-			goto bad;
+			goto bad1;
 	}
 	if (fmode & O_TRUNC) {
 		error = EINVAL;
-		goto bad1;
+		goto bad2;
 	}
 #if DIAGNOSTIC 
 	if (fmode & FWRITE)
@@ -447,7 +447,7 @@ register_t *retval;
 
 	if (!incache) {
 		if (error = pshm_cache_add(pinfo, &nd)) {
-		goto bad2;
+		goto bad3;
 		}
 	}
 	pinfo->pshm_flags &= ~PSHM_INCREATE;
@@ -461,12 +461,15 @@ register_t *retval;
 	*retval = indx;
 	_FREE_ZONE(pnbuf, MAXPATHLEN, M_NAMEI);
 	return (0);
-bad2:
+bad3:
 	_FREE(pnode, M_SHM);
 		
+bad2:
+	if (pinfo_alloc)
+		_FREE(pinfo, M_SHM);
 bad1:
-	_FREE(pinfo, M_SHM);
-		
+	fdrelse(p, indx);
+	ffree(nfp);
 bad:
 	_FREE_ZONE(pnbuf, MAXPATHLEN, M_NAMEI);
 	return (error);
@@ -594,6 +597,7 @@ pshm_access(struct pshminfo *pinfo, int mode, struct ucred *cred, struct proc *p
 		mask |= S_IWOTH;
 	return ((pinfo->pshm_mode & mask) == mask ? 0 : EACCES);
 }
+
 struct mmap_args {
 		caddr_t addr;
 		size_t len;
@@ -700,14 +704,14 @@ out:
 }
 
 struct shm_unlink_args {
-const char *name;
+	const char *name;
 };
 
 int
 shm_unlink(p, uap, retval)
-struct proc *p;
-register struct shm_unlink_args *uap;
-register_t *retval;
+	struct proc *p;
+	register struct shm_unlink_args *uap;
+	register_t *retval;
 {
 	register struct filedesc *fdp = p->p_fd;
 	register struct file *fp;
@@ -812,15 +816,6 @@ out:
 		return (EINVAL);
 	}
 }
-int
-pshm_closefile(fp, p)
-	struct file *fp;
-	struct proc *p;
-{
-
-	return (pshm_close(((struct pshmnode *)fp->f_data), fp->f_flag,
-		fp->f_cred, p));
-}
 
 int
 pshm_close(pnode, flags, cred, p)
@@ -852,23 +847,54 @@ pshm_close(pnode, flags, cred, p)
 	_FREE(pnode, M_SHM);
 	return (error);
 }
-int
-pshm_read(struct file *fp, struct uio *uio, struct ucred *cred) 
+
+static int
+pshm_closefile(fp, p)
+	struct file *fp;
+	struct proc *p;
+{
+	return (pshm_close(((struct pshmnode *)fp->f_data), fp->f_flag,
+		fp->f_cred, p));
+}
+
+static int
+pshm_read(fp, uio, cred, flags, p)
+	struct file *fp;
+	struct uio *uio;
+	struct ucred *cred;
+	int flags;
+	struct proc *p;
 {
 	return(EOPNOTSUPP);
 }
-int
-pshm_write(struct file *fp, struct uio *uio, struct ucred *cred)
+
+static int
+pshm_write(fp, uio, cred, flags, p)
+	struct file *fp;
+	struct uio *uio;
+	struct ucred *cred;
+	int flags;
+	struct proc *p;
 {
 	return(EOPNOTSUPP);
 }
-int
-pshm_ioctl(struct file *fp, u_long com, caddr_t data, struct proc *p)
+
+static int
+pshm_ioctl(fp, com, data, p)
+	struct file *fp;
+	u_long com;
+	caddr_t data;
+	struct proc *p;
 {
 	return(EOPNOTSUPP);
 }
-int
-pshm_select(struct file *fp, int which, struct proc *p)
+
+static int
+pshm_select(fp, which, wql, p)
+	struct file *fp;
+	int which;
+	void *wql;
+	struct proc *p;
 {
 	return(EOPNOTSUPP);
 }

@@ -25,6 +25,7 @@
 
 #ifndef _NETAT_AT_CONFIG_H_
 #define	_NETAT_AT_CONFIG_H_
+#include <sys/appleapiopts.h>
 
 /* originally from if_cnt.h
  *

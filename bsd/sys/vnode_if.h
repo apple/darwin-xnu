@@ -1,6 +1,6 @@
 
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2002 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -64,9 +64,12 @@
  */
 
 
-#ifndef _VNODE_IF_H_
-#define _VNODE_IF_H_
+#ifndef _SYS_VNODE_IF_H_
+#define _SYS_VNODE_IF_H_
 
+#include <sys/appleapiopts.h>
+
+#ifdef __APPLE_API_UNSTABLE
 extern struct vnodeop_desc vop_default_desc;
 
 
@@ -349,8 +352,8 @@ static __inline int _VOP_READ(struct vnode *vp, struct uio *uio, int ioflag, str
 	a.a_cred = cred;
 	{
 		int _err;
-		extern int ubc_hold();
-		extern void ubc_rele();
+		extern int ubc_hold(struct vnode *vp);
+		extern void ubc_rele(struct vnode *vp);
 		int _didhold = ubc_hold(vp);
 		_err = VCALL(vp, VOFFSET(vop_read), &a);
 		if (_didhold)
@@ -378,8 +381,8 @@ static __inline int _VOP_WRITE(struct vnode *vp, struct uio *uio, int ioflag, st
 	a.a_cred = cred;
 	{
 		int _err;
-		extern int ubc_hold();
-		extern void ubc_rele();
+		extern int ubc_hold(struct vnode *vp);
+		extern void ubc_rele(struct vnode *vp);
 		int _didhold = ubc_hold(vp);
 		_err = VCALL(vp, VOFFSET(vop_write), &a);
 		if (_didhold)
@@ -438,12 +441,12 @@ struct vop_select_args {
 	int a_which;
 	int a_fflags;
 	struct ucred *a_cred;
-	void * a_wql;
+	void *a_wql;
 	struct proc *a_p;
 };
 extern struct vnodeop_desc vop_select_desc;
 #define VOP_SELECT(vp, which, fflags, cred, wql, p) _VOP_SELECT(vp, which, fflags, cred, wql, p)
-static __inline int _VOP_SELECT(struct vnode *vp, int which, int fflags, struct ucred *cred, void * wql, struct proc *p)
+static __inline int _VOP_SELECT(struct vnode *vp, int which, int fflags, struct ucred *cred, void *wql, struct proc *p)
 {
 	struct vop_select_args a;
 	a.a_desc = VDESC(vop_select);
@@ -531,8 +534,8 @@ static __inline int _VOP_FSYNC(struct vnode *vp, struct ucred *cred, int waitfor
 	a.a_p = p;
 	{
 		int _err;
-		extern int ubc_hold();
-		extern void ubc_rele();
+		extern int ubc_hold(struct vnode *vp);
+		extern void ubc_rele(struct vnode *vp);
 		int _didhold = ubc_hold(vp);
 		_err = VCALL(vp, VOFFSET(vop_fsync), &a);
 		if (_didhold)
@@ -1024,8 +1027,8 @@ static __inline int _VOP_TRUNCATE(struct vnode *vp, off_t length, int flags, str
 	a.a_p = p;
 	{
 		int _err;
-		extern int ubc_hold();
-		extern void ubc_rele();
+		extern int ubc_hold(struct vnode *vp);
+		extern void ubc_rele(struct vnode *vp);
 		int _didhold = ubc_hold(vp);
 		_err = VCALL(vp, VOFFSET(vop_truncate), &a);
 		if (_didhold)
@@ -1340,4 +1343,5 @@ static __inline int _VOP_BWRITE(struct buf *bp)
 
 /* End of special cases. */
 
-#endif /* !_VNODE_IF_H_ */
+#endif /* __APPLE_API_UNSTABLE */
+#endif /* !_SYS_VNODE_IF_H_ */

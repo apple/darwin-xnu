@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2002 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -58,6 +58,8 @@
 #ifndef	_SYS_PTRACE_H_
 #define	_SYS_PTRACE_H_
 
+#include <sys/appleapiopts.h>
+
 #define	PT_TRACE_ME	0	/* child declares it's being traced */
 #define	PT_READ_I	1	/* read word in child's I space */
 #define	PT_READ_D	2	/* read word in child's D space */
@@ -70,14 +72,21 @@
 #define	PT_STEP		9	/* single step the child */
 #define	PT_ATTACH	10	/* trace some running process */
 #define	PT_DETACH	11	/* stop tracing a process */
-#define PT_DENY_ATTACH  31
+#define	PT_SIGEXC	12	/* signals as exceptions for current_proc */
+#define PT_THUPDATE	13	/* signal for thread# */
+#define PT_ATTACHEXC	14	/* attach to running process with signal exception */
+
+#define	PT_FORCEQUOTA	30	/* Enforce quota for root */
+#define	PT_DENY_ATTACH	31
 
 #define	PT_FIRSTMACH	32	/* for machine-specific requests */
 #include <machine/ptrace.h>	/* machine-specific requests, if any */
 
 #ifdef KERNEL
+#ifdef __APPLE_API_PRIVATE
 void	proc_reparent __P((struct proc *child, struct proc *newparent));
 
+#endif /* __APPLE_API_PRIVATE */
 #else /* !KERNEL */
 
 #include <sys/cdefs.h>

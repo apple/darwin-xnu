@@ -58,6 +58,7 @@
  *
  *      @(#)bpf_filter.c	8.1 (Berkeley) 6/10/93
  *
+ * $FreeBSD: src/sys/net/bpf_filter.c,v 1.17 1999/12/29 04:38:31 peter Exp $
  */
 
 #include <sys/param.h>
@@ -203,7 +204,7 @@ m_xhalf(m, k, err)
  */
 u_int
 bpf_filter(pc, p, wirelen, buflen)
-	register struct bpf_insn *pc;
+	register const struct bpf_insn *pc;
 	register u_char *p;
 	u_int wirelen;
 	register u_int buflen;
@@ -305,7 +306,8 @@ bpf_filter(pc, p, wirelen, buflen)
 
 		case BPF_LD|BPF_W|BPF_IND:
 			k = X + pc->k;
-			if (pc->k > buflen || X > buflen - pc->k || sizeof(int32_t) > buflen - k) {
+			if (pc->k > buflen || X > buflen - pc->k ||
+			    sizeof(int32_t) > buflen - k) {
 #ifdef KERNEL
 				int merr;
 
@@ -329,7 +331,8 @@ bpf_filter(pc, p, wirelen, buflen)
 
 		case BPF_LD|BPF_H|BPF_IND:
 			k = X + pc->k;
-			if (X > buflen || pc->k > buflen - X || sizeof(int16_t) > buflen - pc->k) {
+			if (X > buflen || pc->k > buflen - X ||
+			    sizeof(int16_t) > buflen - k) {
 #ifdef KERNEL
 				int merr;
 
@@ -538,11 +541,11 @@ bpf_filter(pc, p, wirelen, buflen)
  */
 int
 bpf_validate(f, len)
-	struct bpf_insn *f;
+	const struct bpf_insn *f;
 	int len;
 {
 	register int i;
-	register struct bpf_insn *p;
+	const struct bpf_insn *p;
 
 	for (i = 0; i < len; ++i) {
 		/*
@@ -557,7 +560,8 @@ bpf_validate(f, len)
 				if (from >= len || p->k >= len - from)
 					return 0;
 			}
-			else if (from >= len || p->jt >= len - from || p->jf >= len - from)
+			else if (from >= len || p->jt >= len - from ||
+				 p->jf >= len - from)
 				return 0;
 		}
 		/*

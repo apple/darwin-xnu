@@ -69,6 +69,7 @@
 
 
 extern unsigned int	vm_pageout_scan_event_counter;
+extern unsigned int	vm_zf_count;
 
 /*
  *	The following ifdef only exists because XMM must (currently)

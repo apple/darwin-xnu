@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2002 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -24,7 +24,7 @@
  *	All Rights Reserved.
  */
 /*
- * posix_shm.c : Support for POSIX semaphore apis
+ * posix_shm.c : Support for POSIX semaphore APIs
  *
  *	File:	posix_sem.c
  *	Author:	Ananthakrishna Ramesh
@@ -58,7 +58,6 @@
 #include <kern/task.h>
 #include <kern/clock.h>
 #include <mach/kern_return.h>
-
 
 #define	PSEMNAMLEN	31	/* maximum name segment length we bother with */
 
@@ -123,17 +122,18 @@ u_long	psemhash;				/* size of hash table - 1 */
 long	psemnument;			/* number of cache entries allocated */
 struct psemstats psemstats;		/* cache effectiveness statistics */
 
-int psem_cache_search __P((struct pseminfo **, struct psemname *, struct psemcache **));
+static int psem_cache_search __P((struct pseminfo **,
+				struct psemname *, struct psemcache **));
 
-int psem_read  __P((struct file *fp, struct uio *uio,
-					    struct ucred *cred));
-int psem_write  __P((struct file *fp, struct uio *uio,
-					    struct ucred *cred));
-int psem_ioctl  __P((struct file *fp, u_long com,
-					    caddr_t data, struct proc *p));
-int psem_select  __P((struct file *fp, int which,
-					    struct proc *p));
-int psem_closefile  __P((struct file *fp, struct proc *p));
+static int psem_read  __P((struct file *fp, struct uio *uio,
+			    struct ucred *cred, int flags, struct proc *p));
+static int psem_write  __P((struct file *fp, struct uio *uio,
+			    struct ucred *cred, int flags, struct proc *p));
+static int psem_ioctl  __P((struct file *fp, u_long com,
+			    caddr_t data, struct proc *p));
+static int psem_select  __P((struct file *fp, int which, void *wql,
+			    struct proc *p));
+static int psem_closefile  __P((struct file *fp, struct proc *p));
 
 struct 	fileops psemops =
 	{ psem_read, psem_write, psem_ioctl, psem_select, psem_closefile };
@@ -148,7 +148,7 @@ struct 	fileops psemops =
  * fails, a status of zero is returned.
  */
 
-int
+static int
 psem_cache_search(psemp, pnp, pcache)
 	struct pseminfo **psemp;
 	struct psemname *pnp;
@@ -195,7 +195,7 @@ psem_cache_search(psemp, pnp, pcache)
 /*
  * Add an entry to the cache.
  */
-int
+static int
 psem_cache_add(psemp, pnp)
 	struct pseminfo *psemp;
 	struct psemname *pnp;
@@ -256,6 +256,21 @@ psem_cache_init()
 	psemhashtbl = hashinit(desiredvnodes, M_SHM, &psemhash);
 }
 
+static void
+psem_cache_delete(pcp)
+	struct psemcache *pcp;
+{
+#if DIAGNOSTIC
+	if (pcp->psem_hash.le_prev == 0)
+		panic("psem namecache purge le_prev");
+	if (pcp->psem_hash.le_next == pcp)
+		panic("namecache purge le_next");
+#endif /* DIAGNOSTIC */
+	LIST_REMOVE(pcp, psem_hash);
+	pcp->psem_hash.le_prev = 0;	
+	psemnument--;
+}
+
 /*
  * Invalidate a all entries to particular vnode.
  * 
@@ -276,33 +291,18 @@ psem_cache_purge(void)
 	}
 }
 
-psem_cache_delete(pcp)
-	struct psemcache *pcp;
-{
-#if DIAGNOSTIC
-	if (pcp->psem_hash.le_prev == 0)
-		panic("psem namecache purge le_prev");
-	if (pcp->psem_hash.le_next == pcp)
-		panic("namecache purge le_next");
-#endif /* DIAGNOSTIC */
-	LIST_REMOVE(pcp, psem_hash);
-	pcp->psem_hash.le_prev = 0;	
-	psemnument--;
-}
-
-
 struct sem_open_args {
-const char *name;
-int oflag;
-int mode;
-int value;
+	const char *name;
+	int oflag;
+	int mode;
+	int value;
 };
 
 int
 sem_open(p, uap, retval)
-struct proc *p;
-register struct sem_open_args *uap;
-register_t *retval;
+	struct proc *p;
+	register struct sem_open_args *uap;
+	register_t *retval;
 {
 	register struct filedesc *fdp = p->p_fd;
 	register struct file *fp;
@@ -340,7 +340,6 @@ register_t *retval;
 		error = ENAMETOOLONG;
 		goto bad;
 	}
-
 
 #ifdef PSXSEM_NAME_RESTRICT
 	nameptr = pnbuf;
@@ -475,10 +474,12 @@ bad:
 	return (error);
 }
 
-
-
 int
-psem_access(struct pseminfo *pinfo, int mode, struct ucred *cred, struct proc *p)
+psem_access(pinfo, mode, cred, p)
+	struct pseminfo *pinfo;
+	int mode;
+	struct ucred *cred;
+	struct proc *p;
 {
 	mode_t mask;
 	register gid_t *gp;
@@ -517,18 +518,15 @@ psem_access(struct pseminfo *pinfo, int mode, struct ucred *cred, struct proc *p
 	return ((pinfo->psem_mode & mask) == mask ? 0 : EACCES);
 }
 
-
-
-
 struct sem_unlink_args {
-const char *name;
+	const char *name;
 };
 
 int
 sem_unlink(p, uap, retval)
-struct proc *p;
-register struct sem_unlink_args *uap;
-register_t *retval;
+	struct proc *p;
+	register struct sem_unlink_args *uap;
+	register_t *retval;
 {
 	register struct filedesc *fdp = p->p_fd;
 	register struct file *fp;
@@ -628,7 +626,7 @@ bad:
 }
 
 struct sem_close_args {
-sem_t *sem;
+	sem_t *sem;
 };
 
 int
@@ -651,12 +649,10 @@ sem_close(p, uap, retval)
 	if( error = closef(fp, p))
 		return(error);
 	return(0);
-	
-	
 }
 
 struct sem_wait_args {
-sem_t *sem;
+	sem_t *sem;
 };
 
 int
@@ -699,17 +695,16 @@ sem_wait(p, uap, retval)
 	default:
 		return (EINVAL);
 	}
-
 }
 
 struct sem_trywait_args {
-sem_t *sem;
+	sem_t *sem;
 };
 
 int
 sem_trywait(p, uap, retval)
 	struct proc *p;
-	struct sem_wait_args *uap;
+	struct sem_trywait_args *uap;
 	register_t *retval;
 {
 	int fd = (int)uap->sem;
@@ -751,17 +746,16 @@ sem_trywait(p, uap, retval)
 	default:
 		return (EINVAL);
 	}
-
 }
 
 struct sem_post_args {
-sem_t *sem;
+	sem_t *sem;
 };
 
 int
 sem_post(p, uap, retval)
 	struct proc *p;
-	struct sem_wait_args *uap;
+	struct sem_post_args *uap;
 	register_t *retval;
 {
 	int fd = (int)uap->sem;
@@ -798,13 +792,12 @@ sem_post(p, uap, retval)
 	default:
 		return (EINVAL);
 	}
-
 }
 
 struct sem_init_args {
-sem_t *sem;
-int phsared;
-unsigned int value;
+	sem_t *sem;
+	int phsared;
+	unsigned int value;
 };
 
 int
@@ -817,7 +810,7 @@ sem_init(p, uap, retval)
 }
 
 struct sem_destroy_args {
-sem_t *sem;
+	sem_t *sem;
 };
 
 int
@@ -830,8 +823,8 @@ sem_destroy(p, uap, retval)
 }
 
 struct sem_getvalue_args {
-sem_t *sem;
-int * sval;
+	sem_t *sem;
+	int * sval;
 };
 
 int
@@ -843,18 +836,7 @@ sem_getvalue(p, uap, retval)
 	return(ENOSYS);
 }
 
-int
-psem_closefile(fp, p)
-	struct file *fp;
-	struct proc *p;
-{
-
-	return (psem_close(((struct psemnode *)fp->f_data), fp->f_flag,
-		fp->f_cred, p));
-}
-
-
-int
+static int
 psem_close(pnode, flags, cred, p)
 	register struct psemnode *pnode;
 	int flags;
@@ -886,6 +868,16 @@ psem_close(pnode, flags, cred, p)
 	return (error);
 }
 
+static int
+psem_closefile(fp, p)
+	struct file *fp;
+	struct proc *p;
+{
+
+	return (psem_close(((struct psemnode *)fp->f_data), fp->f_flag,
+		fp->f_cred, p));
+}
+
 int 
 psem_delete(struct pseminfo * pinfo)
 {
@@ -905,27 +897,46 @@ psem_delete(struct pseminfo * pinfo)
 	default:
 		return (EINVAL);
 	}
-	
 }
 
+static int
+psem_read(fp, uio, cred, flags, p)
+	struct file *fp;
+	struct uio *uio;
+	struct ucred *cred;
+	int flags;
+	struct proc *p;
+{
+	return(EOPNOTSUPP);
+}
 
-int
-psem_read(struct file *fp, struct uio *uio, struct ucred *cred) 
+static int
+psem_write(fp, uio, cred, flags, p)
+	struct file *fp;
+	struct uio *uio;
+	struct ucred *cred;
+	int flags;
+	struct proc *p;
 {
 	return(EOPNOTSUPP);
 }
-int
-psem_write(struct file *fp, struct uio *uio, struct ucred *cred)
+
+static int
+psem_ioctl(fp, com, data, p)
+	struct file *fp;
+	u_long com;
+	caddr_t data;
+	struct proc *p;
 {
 	return(EOPNOTSUPP);
 }
-int
-psem_ioctl(struct file *fp, u_long com, caddr_t data, struct proc *p)
-{
-	return(EOPNOTSUPP);
-}
-int
-psem_select(struct file *fp, int which, struct proc *p)
+
+static int
+psem_select(fp, which, wql, p)
+	struct file *fp;
+	int which;
+	void *wql;
+	struct proc *p;
 {
 	return(EOPNOTSUPP);
 }

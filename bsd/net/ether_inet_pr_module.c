@@ -237,7 +237,7 @@ inet_ether_pre_output(ifp, m0, dst_netaddr, route, type, edst, dl_tag )
 	if ((rt->rt_flags & RTF_UP) == 0) {
 	    rt0 = rt = rtalloc1(dst_netaddr, 1, 0UL);
 	    if (rt0)
-		rt->rt_refcnt--;
+		rtunref(rt);
 	    else
 		return EHOSTUNREACH;
 	}
@@ -377,6 +377,13 @@ ether_inet_prmod_ioctl(dl_tag, ifp, command, data)
 
 	    arp_ifinit(IFP2AC(ifp), ifa);
 
+	    /*
+	     * Register new IP and MAC addresses with the kernel debugger
+	     * for the en0 interface.
+	     */
+	    if (ifp->if_unit == 0)
+		kdp_set_ip_and_mac_addresses(&(IA_SIN(ifa)->sin_addr), &(IFP2AC(ifp)->ac_enaddr));
+
 	    break;
 
 	default:
@@ -397,14 +404,10 @@ ether_inet_prmod_ioctl(dl_tag, ifp, command, data)
 
     case SIOCSIFMTU:
 	/*
-	 * Set the interface MTU.
+	 * IOKit IONetworkFamily will set the right MTU according to the driver
 	 */
-	if (ifr->ifr_mtu > ETHERMTU) {
-	    error = EINVAL;
-	} else {
-	    ifp->if_mtu = ifr->ifr_mtu;
-	}
-	break;
+
+	 return (0);
 
     default:
 	 return EOPNOTSUPP;
@@ -462,8 +465,6 @@ ether_attach_inet(struct ifnet *ifp)
 	printf("WARNING: ether_attach_inet can't attach ip to interface\n");
 	return stat;
     }
-    /* XXX avoid free'ing the interface */
-    ifp->if_eflags |= IFEF_DETACH_DISABLED;
     return ip_dl_tag;
 }
 

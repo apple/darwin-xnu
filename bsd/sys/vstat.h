@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2002 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -23,13 +23,15 @@
 /*-
  *	@(#)vstat.h	
  */
-/* HISTORY
- * 01-27-98 chw at Apple Computer, Inc.
- *		Created.
- */
 
 #ifndef _SYS_VSTAT_H_
 #define	_SYS_VSTAT_H_
+
+#include <sys/appleapiopts.h>
+
+#warning obsolete header! delete the include from your sources
+
+#ifdef __APPLE_API_OBSOLETE
 
 #include <sys/time.h>
 #include <sys/attr.h>
@@ -39,7 +41,7 @@
 struct vstat {
 	fsid_t			vst_volid;		/* volume identifier */
 	fsobj_id_t		vst_nodeid;		/* object's id */
-	fsobj_type_t		vst_vnodetype;	/* vnode type (VREG, VCPLX, VDIR, etc.) */
+	fsobj_type_t		vst_vnodetype;	/* vnode type (VREG, VDIR, etc.) */
 	fsobj_tag_t		vst_vnodetag;	/* vnode tag (HFS, UFS, etc.) */
 	mode_t	  		vst_mode;		/* inode protection mode */
 	nlink_t	  		vst_nlink;		/* number of hard links */
@@ -66,5 +68,6 @@ struct vstat {
 };
 
 #endif /* ! _POSIX_SOURCE */
+#endif /* __APPLE_API_OBSOLETE */
 
 #endif /* !_SYS_VSTAT_H_ */

@@ -36,9 +36,6 @@
 #include <device/device_port.h>
 #include <vm/vm_pageout.h>
 
-#include <libkern/OSAtomic.h>
-
-
 /* Device VM COMPONENT INTERFACES */
 
 
@@ -190,13 +187,7 @@ device_pager_setup(
 
 	device_object->device_handle = device_handle;
 	device_object->size = size;
-	device_object->flags = 0;
-	if(flags & DEVICE_PAGER_CONTIGUOUS) {
-		device_object->flags |= DEVICE_PAGER_CONTIGUOUS;
-	}
-	if(flags & DEVICE_PAGER_NOPHYSCACHE) {
-		device_object->flags |= DEVICE_PAGER_NOPHYSCACHE;
-	}
+	device_object->flags = flags;
 
 	return((memory_object_t)device_object);
 }
@@ -296,6 +287,8 @@ device_pager_init(memory_object_t mem_obj,
 		vm_object->phys_contiguous = TRUE;
 	if(device_object->flags & DEVICE_PAGER_NOPHYSCACHE)
 		vm_object->nophyscache = TRUE;
+
+	vm_object->wimg_bits = device_object->flags & VM_WIMG_MASK;
 	vm_object_unlock(vm_object);
 
 
@@ -367,11 +360,11 @@ device_pager_reference(
 	memory_object_t		mem_obj)
 {	
 	device_pager_t		device_object;
-	unsigned int		prev_ref_count;
+	unsigned int		new_ref_count;
 
 	device_object = device_pager_lookup(mem_obj);
-	prev_ref_count = OSIncrementAtomic((UInt32 *)&device_object->ref_count);
-	assert(prev_ref_count > 0);
+	new_ref_count = hw_atomic_add(&device_object->ref_count, 1);
+	assert(new_ref_count > 1);
 }
 
 /*
@@ -385,7 +378,7 @@ device_pager_deallocate(
 
 	device_object = device_pager_lookup(mem_obj);
 
-	if (OSDecrementAtomic((UInt32 *)&device_object->ref_count) == 1) {
+	if (hw_atomic_sub(&device_object->ref_count, 1) == 0) {
 		if (device_object->device_handle != (device_port_t) NULL) {
 			device_close(device_object->device_handle);
 		}

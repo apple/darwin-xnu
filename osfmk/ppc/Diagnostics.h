@@ -50,7 +50,8 @@ int diagCall(struct savearea *save);
 #define dgBMphys 5
 #define dgUnMap 6
 #define dgBootScreen 7
-#define dgflush 8
+#define dgFlush 8
+#define dgAlign 9
 
 
 typedef struct diagWork {			/* Diagnostic work area */
@@ -67,6 +68,8 @@ typedef struct diagWork {			/* Diagnostic work area */
 #define enaDiagSCsb  28
 #define enaDiagDM  0x00000010
 #define enaDiagSDMb  27
+#define enaDiagEM  0x00000020
+#define enaDiagEMb  26
 /* Suppress lock checks */
 #define disLkType 0x80000000
 #define disLktypeb 0

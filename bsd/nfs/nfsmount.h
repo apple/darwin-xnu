@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2002 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -63,6 +63,9 @@
 #ifndef _NFS_NFSMOUNT_H_
 #define _NFS_NFSMOUNT_H_
 
+#include <sys/appleapiopts.h>
+
+#ifdef __APPLE_API_PRIVATE
 /*
  * Mount structure.
  * One allocated on every NFS mount.
@@ -118,4 +121,5 @@ struct	nfsmount {
 
 #endif /* KERNEL */
 
-#endif
+#endif /* __APPLE_API_PRIVATE */
+#endif /* _NFS_NFSMOUNT_H_ */

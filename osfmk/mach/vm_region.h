@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2002,2000 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -21,28 +21,6 @@
  */
 /*
  * @OSF_COPYRIGHT@
- */
-/*
- * HISTORY
- * 
- * Revision 1.1.1.1  1998/09/22 21:05:31  wsanchez
- * Import of Mac OS X kernel (~semeria)
- *
- * Revision 1.1.1.1  1998/03/07 02:25:46  wsanchez
- * Import of OSF Mach kernel (~mburg)
- *
- * Revision 1.1.5.1  1995/01/16  17:22:27  bolinger
- * 	Import files unchanged from osc1.3b11 into cnmk_shared.
- * 	[1995/01/16  17:20:37  bolinger]
- *
- * Revision 1.1.3.2  1993/10/05  22:23:22  watkins
- * 	Merge forward.
- * 	[1993/10/05  22:05:05  watkins]
- * 
- * Revision 1.1.1.2  1993/09/28  19:42:50  watkins
- * 	Created to comply with spec.
- * 
- * $EndLog$
  */
 /*
  *	File:	mach/vm_region.h

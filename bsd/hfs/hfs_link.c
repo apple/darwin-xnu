@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1999-2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 1999-2002 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -20,11 +20,11 @@
  * @APPLE_LICENSE_HEADER_END@
  */
 
-#if HFS_HARDLINKS
 
 #include <sys/systm.h>
 #include <sys/kernel.h>
 #include <sys/malloc.h>
+#include <sys/mount.h>
 #include <sys/namei.h>
 #include <sys/stat.h>
 #include <sys/vnode.h>
@@ -32,157 +32,155 @@
 #include <libkern/libkern.h>
 
 #include "hfs.h"
-#include "hfscommon/headers/FileMgrInternal.h"
+#include "hfs_catalog.h"
+#include "hfs_format.h"
+#include "hfs_endian.h"
 
 
 /*
  * Create a new indirect link
  *
- * An indirect link is a reference to a data node.  The only useable fields in the
- * link are the parentID, name and text encoding.  All other catalog fields
- * are ignored.
+ * An indirect link is a reference to a data node.  The only useable
+ * fields in the link are the link number, parentID, name and text
+ * encoding.  All other catalog fields are ignored.
  */
 static int
-createindirectlink(struct hfsnode *dnhp, UInt32 linkPID, char *linkName)
+createindirectlink(struct hfsmount *hfsmp, u_int32_t linknum,
+			u_int32_t linkparid, char *linkName, cnid_t *linkcnid)
 {
-	struct hfsCatalogInfo catInfo;
-	struct FInfo *fip;
-	ExtendedVCB *vcb;
+	struct FndrFileInfo *fip;
+	struct cat_desc desc;
+	struct cat_attr attr;
 	int result;
 
-	vcb = HTOVCB(dnhp);
+	/* Setup the descriptor */
+	bzero(&desc, sizeof(desc));
+	desc.cd_nameptr = linkName;
+	desc.cd_namelen = strlen(linkName);
+	desc.cd_parentcnid = linkparid;
+
+	/* Setup the default attributes */
+	bzero(&attr, sizeof(attr));
+	
+	/* links are matched to data nodes by link ID and to volumes by create date */
+	attr.ca_rdev = linknum;  /* note: cat backend overloads ca_rdev to be the linknum when nlink = 0 */
+	attr.ca_itime = HFSTOVCB(hfsmp)->vcbCrDate;
+	attr.ca_mode = S_IFREG;
+
+	fip = (struct FndrFileInfo *)&attr.ca_finderinfo;
+	fip->fdType    = SWAP_BE32 (kHardLinkFileType);	/* 'hlnk' */
+	fip->fdCreator = SWAP_BE32 (kHFSPlusCreator);	/* 'hfs+' */
+	fip->fdFlags   = SWAP_BE16 (kHasBeenInited);
 
 	/* Create the indirect link directly in the catalog */
-	result = hfsCreate(vcb, linkPID, linkName, IFREG, 0);
-	if (result) return (result);
+	result = cat_create(hfsmp, &desc, &attr, NULL);
 
-	/* 
-	 * XXX SER Here is a good example where hfsCreate should pass in a catinfo and return
-	 * things like the hint and file ID there should be no reason to call lookup here 
-	 */
-	catInfo.hint = 0;
-	INIT_CATALOGDATA(&catInfo.nodeData, kCatNameNoCopyName);
-
-	result = hfs_getcatalog(vcb, linkPID, linkName, -1, &catInfo);
-	if (result) goto errExit;
-
-	fip = (struct FInfo *)&catInfo.nodeData.cnd_finderInfo;
-	fip->fdType = kHardLinkFileType;	/* 'hlnk' */
-	fip->fdCreator = kHFSPlusCreator;	/* 'hfs+' */
-	fip->fdFlags |= kHasBeenInited;
-
-	/* links are matched to data nodes by nodeID and to volumes by create date */
-	catInfo.nodeData.cnd_iNodeNum = dnhp->h_meta->h_indnodeno;
-	catInfo.nodeData.cnd_createDate = vcb->vcbCrDate;
-
-	result = UpdateCatalogNode(vcb, linkPID, linkName, catInfo.hint, &catInfo.nodeData);
-	if (result) goto errExit;
-
-	CLEAN_CATALOGDATA(&catInfo.nodeData);
-	return (0);
-
-errExit:
-	CLEAN_CATALOGDATA(&catInfo.nodeData);
-
-	/* get rid of link node */
-	(void) hfsDelete(vcb, linkPID, linkName, TRUE, 0);
+	if (linkcnid != NULL)
+		*linkcnid = attr.ca_fileid;
 
 	return (result);
 }
 
 
 /*
- * 2 locks are needed (dvp and hp)
+ * 2 locks are needed (dvp and vp)
  * also need catalog lock
  *
  * caller's responsibility:
  *		componentname cleanup
- *		unlocking dvp and hp
+ *		unlocking dvp and vp
  */
 static int
-hfs_makelink(hp, dvp, cnp)
-	struct hfsnode *hp;
-	struct vnode *dvp;
-	register struct componentname *cnp;
+hfs_makelink(struct hfsmount *hfsmp, struct cnode *cp, struct cnode *dcp,
+		struct componentname *cnp)
 {
 	struct proc *p = cnp->cn_proc;
-	struct hfsnode *dhp = VTOH(dvp);
-	u_int32_t ldirID;	/* directory ID of linked nodes directory */
-	ExtendedVCB *vcb = VTOVCB(dvp);
-	u_int32_t hint;
 	u_int32_t indnodeno = 0;
 	char inodename[32];
+	struct cat_desc to_desc;
+	int newlink = 0;
 	int retval;
 
-	ldirID = VTOHFS(dvp)->hfs_private_metadata_dir;
 
 	/* We don't allow link nodes in our Private Meta Data folder! */
-	if ( H_FILEID(dhp) == ldirID)
+	if (dcp->c_fileid == hfsmp->hfs_privdir_desc.cd_cnid)
 		return (EPERM);
 
-	if (vcb->freeBlocks == 0)
+	if (hfs_freeblks(hfsmp, 0) == 0)
 		return (ENOSPC);
 
-	/* lock catalog b-tree */
-	retval = hfs_metafilelocking(VTOHFS(dvp), kHFSCatalogFileID, LK_EXCLUSIVE, p);
-	if (retval != E_NONE)
+	/* Lock catalog b-tree */
+	retval = hfs_metafilelocking(hfsmp, kHFSCatalogFileID, LK_EXCLUSIVE, p);
+	if (retval)
 		return retval;
 
 	/*
 	 * If this is a new hardlink then we need to create the data
 	 * node (inode) and replace the original file with a link node.
 	 */
-	if (hp->h_meta->h_nlink == 1) {
+	if (cp->c_nlink == 2 && (cp->c_flag & C_HARDLINK) == 0) {
+		newlink = 1;
+		bzero(&to_desc, sizeof(to_desc));
+		to_desc.cd_parentcnid = hfsmp->hfs_privdir_desc.cd_cnid;
+		to_desc.cd_cnid = cp->c_fileid;
 		do {
 			/* get a unique indirect node number */
 			indnodeno = ((random() & 0x3fffffff) + 100);
 			MAKE_INODE_NAME(inodename, indnodeno);
 
 			/* move source file to data node directory */
-			hint = 0;
-			retval = hfsMoveRename(vcb, H_DIRID(hp), H_NAME(hp), ldirID, inodename, &hint);
-		} while (retval == cmExists);
-
-		if (retval) goto out;
-
-		hp->h_meta->h_indnodeno = indnodeno;
+			to_desc.cd_nameptr = inodename;
+			to_desc.cd_namelen = strlen(inodename);
 		
-		/* replace source file with link node */
-		retval = createindirectlink(hp, H_DIRID(hp), H_NAME(hp));
+			retval = cat_rename(hfsmp, &cp->c_desc, &hfsmp->hfs_privdir_desc,
+					&to_desc, NULL);
+
+		} while (retval == EEXIST);
+		if (retval)
+			goto out;
+
+		/* Replace source file with link node */
+		retval = createindirectlink(hfsmp, indnodeno, cp->c_parentcnid,
+				cp->c_desc.cd_nameptr, &cp->c_desc.cd_cnid);
 		if (retval) {
 			/* put it source file back */
-			hint = 0;
-			(void) hfsMoveRename(vcb, ldirID, inodename, H_DIRID(hp), H_NAME(hp), &hint);
+			(void) cat_rename(hfsmp, &to_desc, &dcp->c_desc, &cp->c_desc, NULL);
 			goto out;
 		}
-  	}
+		cp->c_rdev = indnodeno;
+	} else {
+		indnodeno = cp->c_rdev;
+	}
 
 	/*
 	 * Create a catalog entry for the new link (parentID + name).
 	 */
-	retval = createindirectlink(hp, H_FILEID(dhp), cnp->cn_nameptr);
-	if (retval && hp->h_meta->h_nlink == 1) {
-		/* get rid of new link */
-		(void) hfsDelete(vcb, H_DIRID(hp), H_NAME(hp), TRUE, 0);
+	retval = createindirectlink(hfsmp, indnodeno, dcp->c_fileid, cnp->cn_nameptr, NULL);
+	if (retval && newlink) {
+		/* Get rid of new link */
+		(void) cat_delete(hfsmp, &cp->c_desc, &cp->c_attr);
 
-		/* put it source file back */
-		hint = 0;
-		(void) hfsMoveRename(vcb, ldirID, inodename, H_DIRID(hp), H_NAME(hp), &hint);
+		/* Put the source file back */
+		(void) cat_rename(hfsmp, &to_desc, &dcp->c_desc, &cp->c_desc, NULL);
 		goto out;
 	}
 
 	/*
-	 * Finally, if this is a new hardlink then we need to mark the hfs node
+	 * Finally, if this is a new hardlink then:
+	 *  - update HFS Private Data dir
+	 *  - mark the cnode as a hard link
 	 */
-	if (hp->h_meta->h_nlink == 1) {
-		hp->h_meta->h_nlink++;
-		hp->h_nodeflags |= IN_CHANGE;
-		hp->h_meta->h_metaflags |= IN_DATANODE;
+	if (newlink) {
+		hfsmp->hfs_privdir_attr.ca_entries++;
+		(void)cat_update(hfsmp, &hfsmp->hfs_privdir_desc,
+			&hfsmp->hfs_privdir_attr, NULL, NULL);
+		hfs_volupdate(hfsmp, VOL_MKFILE, 0);
+		cp->c_flag |= (C_CHANGE | C_HARDLINK);
 	}
 
 out:
-	/* unlock catalog b-tree */
-	(void) hfs_metafilelocking(VTOHFS(dvp), kHFSCatalogFileID, LK_RELEASE, p);
+	/* Unlock catalog b-tree */
+	(void) hfs_metafilelocking(hfsmp, kHFSCatalogFileID, LK_RELEASE, p);
 
 	return (retval);
 }
@@ -201,17 +199,18 @@ out:
      */
 int
 hfs_link(ap)
-struct vop_link_args /* {
-	struct vnode *a_vp;
-	struct vnode *a_tdvp;
-	struct componentname *a_cnp;
-} */ *ap;
+	struct vop_link_args /* {
+		struct vnode *a_vp;
+		struct vnode *a_tdvp;
+		struct componentname *a_cnp;
+	} */ *ap;
 {
 	struct vnode *vp = ap->a_vp;
 	struct vnode *tdvp = ap->a_tdvp;
 	struct componentname *cnp = ap->a_cnp;
 	struct proc *p = cnp->cn_proc;
-	struct hfsnode *hp;
+	struct cnode *cp;
+	struct cnode *tdcp;
 	struct timeval tv;
 	int error;
 
@@ -234,13 +233,15 @@ struct vop_link_args /* {
 		VOP_ABORTOP(tdvp, cnp);
 		goto out2;
 	}
-	hp = VTOH(vp);
-	if (hp->h_meta->h_nlink >= HFS_LINK_MAX) {
+	cp = VTOC(vp);
+	tdcp = VTOC(tdvp);
+
+	if (cp->c_nlink >= HFS_LINK_MAX) {
 		VOP_ABORTOP(tdvp, cnp);
 		error = EMLINK;
 		goto out1;
 	}
-	if (hp->h_meta->h_pflags & (IMMUTABLE | APPEND)) {
+	if (cp->c_flags & (IMMUTABLE | APPEND)) {
 		VOP_ABORTOP(tdvp, cnp);
 		error = EPERM;
 		goto out1;
@@ -251,15 +252,24 @@ struct vop_link_args /* {
 		goto out1;
 	}
 
-	hp->h_meta->h_nlink++;
-	hp->h_nodeflags |= IN_CHANGE;
+	cp->c_nlink++;
+	cp->c_flag |= C_CHANGE;
 	tv = time;
 	error = VOP_UPDATE(vp, &tv, &tv, 1);
 	if (!error)
-		error = hfs_makelink(hp, tdvp, cnp);
+		error = hfs_makelink(VTOHFS(vp), cp, tdcp, cnp);
 	if (error) {
-		hp->h_meta->h_nlink--;
-		hp->h_nodeflags |= IN_CHANGE;
+		cp->c_nlink--;
+		cp->c_flag |= C_CHANGE;
+	} else {
+		/* Update the target directory and volume stats */
+		tdcp->c_nlink++;
+		tdcp->c_entries++;
+		tdcp->c_flag |= C_CHANGE | C_UPDATE;
+		tv = time;
+		(void) VOP_UPDATE(tdvp, &tv, &tv, 0);
+		hfs_volupdate(VTOHFS(vp), VOL_MKFILE,
+			(tdcp->c_cnid == kHFSRootFolderID));
 	}
 	FREE_ZONE(cnp->cn_pnbuf, cnp->cn_pnlen, M_NAMEI);
 out1:
@@ -269,5 +279,3 @@ out2:
 	vput(tdvp);
 	return (error);
 }
-
-#endif

@@ -53,6 +53,7 @@
 
 
 extern struct	Saveanchor saveanchor;							/* Aliged savearea anchor */
+struct Saveanchor backpocket;									/* Emergency saveareas */
 unsigned int	debsave0 = 0;									/* Debug flag */
 unsigned int	backchain = 0;									/* Debug flag */
 
@@ -67,58 +68,167 @@ unsigned int	backchain = 0;									/* Debug flag */
  *		processors.  This represents the minimum number required to process a total system failure without
  *		destroying valuable and ever-so-handy system debugging information.
  *
+ *		We keep two global free lists (the savearea free pool and the savearea free list) and one local
+ *		list per processor.
  *
+ *		The local lists are small and require no locked access.  They are chained using physical addresses
+ *		and no interruptions are allowed when adding to or removing from the list. Also known as the 
+ *		qfret list. This list is local to a processor and is intended for use only by very low level
+ *		context handling code. 
+ *
+ *		The savearea free list is a medium size list that is globally accessible.  It is updated
+ *		while holding a simple lock. The length of time that the lock is held is kept short.  The
+ *		longest period of time is when the list is trimmed. Like the qfret lists, this is chained physically
+ *		and must be accessed with translation and interruptions disabled. This is where the bulk
+ *		of the free entries are located.
+ *
+ *		The saveareas are allocated from full pages.  A pool element is marked
+ *		with an allocation map that shows which "slots" are free.  These pages are allocated via the
+ *		normal kernel memory allocation functions. Queueing is with physical addresses.  The enqueue,
+ *		dequeue, and search for free blocks is done under free list lock.  
+ *		only if there are empty slots in it.
+ *
+ *		Saveareas that are counted as "in use" once they are removed from the savearea free list.
+ *		This means that all areas on the local qfret list are considered in use.
+ *
+ *		There are two methods of obtaining a savearea.  The save_get function (which is also inlined
+ *		in the low-level exception handler) attempts to get an area from the local qfret list.  This is
+ *		done completely without locks.  If qfret is exahusted (or maybe just too low) an area is allocated
+ *		from the savearea free list. If the free list is empty, we install the back pocket areas and
+ *		panic.
+ *
+ *		The save_alloc function is designed to be called by high level routines, e.g., thread creation,
+ *		etc.  It will allocate from the free list.  After allocation, it will compare the free count
+ *		to the target value.  If outside of the range, it will adjust the size either upwards or
+ *		downwards.
+ *
+ *		If we need to shrink the list, it will be trimmed to the target size and unlocked.  The code
+ *		will walk the chain and return each savearea to its pool page.  If a pool page becomes
+ *		completely empty, it is dequeued from the free pool list and enqueued (atomic queue
+ *		function) to be released.
+ *
+ *		Once the trim list is finished, the pool release queue is checked to see if there are pages
+ *		waiting to be released. If so, they are released one at a time.
+ *
+ *		If the free list needed to be grown rather than shrunken, we will first attempt to recover
+ *		a page from the pending release queue (built when we trim the free list).  If we find one,
+ *		it is allocated, otherwise, a page of kernel memory is allocated.  This loops until there are
+ *		enough free saveareas.
+ *		
  */
+
+
 
 /*
- *		This routine allocates a save area.  It checks if enough are available.
- *		If not, it allocates upward to the target free count.
- *		Then, it allocates one and returns it.
+ *		Allocate our initial context save areas.  As soon as we do this,
+ *		we can take an interrupt. We do the saveareas here, 'cause they're guaranteed
+ *		to be at least page aligned.
  */
 
 
+void savearea_init(vm_offset_t *addrx) {
+
+	savearea_comm	*savec, *savec2, *saveprev;
+	vm_offset_t		save, save2, addr;
+	int i;
+
+	
+	saveanchor.savetarget	= InitialSaveTarget;		/* Initial target value */
+	saveanchor.saveinuse	= 0;						/* Number of areas in use */
+
+	saveanchor.savefree = 0;							/* Remember the start of the free chain */
+	saveanchor.savefreecnt = 0;							/* Remember the length */
+	saveanchor.savepoolfwd = (unsigned int *)&saveanchor;	/* Remember pool forward */
+	saveanchor.savepoolbwd = (unsigned int *)&saveanchor;	/* Remember pool backward */
+
+	addr = *addrx;										/* Make this easier for ourselves */
+
+	save = 	addr;										/* Point to the whole block of blocks */	
+
+/*
+ *	First we allocate the back pocket in case of emergencies
+ */
+
+
+	for(i=0; i < 8; i++) {								/* Initialize the back pocket saveareas */
+
+		savec = (savearea_comm *)save;					/* Get the control area for this one */
+
+		savec->sac_alloc = 0;							/* Mark it allocated */
+		savec->sac_vrswap = 0;							/* V=R, so the translation factor is 0 */
+		savec->sac_flags = sac_perm;					/* Mark it permanent */
+		savec->sac_flags |= 0x0000EE00;					/* Debug eyecatcher */
+		save_queue((savearea *)savec);					/* Add page to savearea lists */
+		save += PAGE_SIZE;								/* Jump up to the next one now */
+	
+	}
+
+	backpocket = saveanchor;							/* Save this for emergencies */
+
+
+/*
+ *	We've saved away the back pocket savearea info, so reset it all and
+ *	now allocate for real
+ */
+
+
+	saveanchor.savefree = 0;							/* Remember the start of the free chain */
+	saveanchor.savefreecnt = 0;							/* Remember the length */
+	saveanchor.saveadjust = 0;							/* Set none needed yet */
+	saveanchor.savepoolfwd = (unsigned int *)&saveanchor;	/* Remember pool forward */
+	saveanchor.savepoolbwd = (unsigned int *)&saveanchor;	/* Remember pool backward */
+
+	for(i=0; i < InitialSaveBloks; i++) {				/* Initialize the saveareas */
+
+		savec = (savearea_comm *)save;					/* Get the control area for this one */
+
+		savec->sac_alloc = 0;							/* Mark it allocated */
+		savec->sac_vrswap = 0;							/* V=R, so the translation factor is 0 */
+		savec->sac_flags = sac_perm;					/* Mark it permanent */
+		savec->sac_flags |= 0x0000EE00;					/* Debug eyecatcher */
+		save_queue((savearea *)savec);					/* Add page to savearea lists */
+		save += PAGE_SIZE;								/* Jump up to the next one now */
+	
+	}
+
+	*addrx = save;										/* Move the free storage lowwater mark */
+
+/*
+ *	We now have a free list that has our initial number of entries  
+ *	The local qfret lists is empty.  When we call save_get below it will see that
+ *	the local list is empty and fill it for us.
+ *
+ *	It is ok to call save_get_phys here because even though if we are translation on, we are still V=R and
+ *	running with BAT registers so no interruptions.  Regular interruptions will be off.  Using save_get
+ *	would be wrong if the tracing was enabled--it would cause an exception.
+ */
+
+	save2 = (vm_offset_t)save_get_phys();				/* This will populate the local list  
+														   and get the first one for the system */
+	per_proc_info[0].next_savearea = (unsigned int)save2; /* Tell the exception handler about it */
+	
+/*
+ *	The system is now able to take interruptions
+ */
+	
+	return;
+
+}
+
+
+
+
+/*
+ *		Returns a savearea.  If the free list needs size adjustment it happens here.
+ *		Don't actually allocate the savearea until after the adjustment is done.
+ */
 
 struct savearea	*save_alloc(void) {						/* Reserve a save area */
 	
-	kern_return_t	retr;
-	savectl			*sctl;								/* Previous and current save pages */
-	vm_offset_t		vaddr, paddr;
-	struct savearea	*newbaby;
 	
-	if(saveanchor.savecount <= (saveanchor.saveneed - saveanchor.saveneghyst)) {	/* Start allocating if we drop too far */
-		while(saveanchor.savecount < saveanchor.saveneed) {	/* Keep adding until the adjustment is done */		
-			
-			
-			retr = kmem_alloc_wired(kernel_map, &vaddr, PAGE_SIZE);	/* Find a virtual address to use */
-			
-			if(retr != KERN_SUCCESS) {					/* Did we get some memory? */
-				panic("Whoops...  Not a bit of wired memory left for saveareas\n");
-			}
-			
-			paddr = pmap_extract(kernel_pmap, vaddr);	/* Get the physical */
-			
-			bzero((void *)vaddr, PAGE_SIZE);			/* Clear it all to zeros */
-			sctl = (savectl *)(vaddr+PAGE_SIZE-sizeof(savectl));	/* Point to the control area of the new page */
-			sctl->sac_alloc = sac_empty;				/* Mark all entries free */
-			sctl->sac_vrswap = (unsigned int)vaddr ^ (unsigned int)paddr;		/* Form mask to convert V to R and vice versa */
-
-			sctl->sac_flags |= 0x0000EE00;				/* (TEST/DEBUG) */
-				
-			if(!save_queue(paddr)) {					/* Add the new ones to the free savearea list */
-				panic("Arrgghhhh, time out trying to lock the savearea anchor during upward adjustment\n");
-			}
-		}
-	}
-	if (saveanchor.savecount > saveanchor.savemaxcount)
-	        saveanchor.savemaxcount = saveanchor.savecount;
-
-	newbaby = save_get();								/* Get a savearea and return it */
-	if(!((unsigned int)newbaby & 0xFFFFF000)) {			/* Whoa... None left??? No, way, no can do... */
-		panic("No saveareas?!?!?! No way! Can't happen! Nuh-uh... I'm dead, done for, kaput...\n");
-	}
-
-	return newbaby;										/* Bye-bye baby... */
+	if(saveanchor.saveadjust) save_adjust();			/* If size need adjustment, do it now */
 	
+	return save_get();									/* Pass the baby... */
 }
 
 
@@ -130,127 +240,84 @@ struct savearea	*save_alloc(void) {						/* Reserve a save area */
 
 
 void save_release(struct savearea *save) {				/* Release a save area */
-
-	savectl	*csave;										/* The just released savearea block */
-
+	
 	save_ret(save);										/* Return a savearea to the free list */
 	
-	if(saveanchor.savecount > (saveanchor.saveneed + saveanchor.saveposhyst)) {	/* Start releasing if we have to many */
-		csave = (savectl *)42;							/* Start with some nonzero garbage */
-		while((unsigned int)csave && (saveanchor.savecount > saveanchor.saveneed)) {	/* Keep removing until the adjustment is done */
+	if(saveanchor.saveadjust) save_adjust();			/* Adjust the savearea free list and pool size if needed */
 	
-			csave = save_dequeue();						/* Find and dequeue one that is all empty */
-				
-			if((unsigned int)csave & 1) {				/* Did we timeout trying to get the lock? */
-				panic("Arrgghhhh, time out trying to lock the savearea anchor during downward adjustment\n");
-				return;
-			}
-			
-			if((unsigned int)csave) kmem_free(kernel_map, (vm_offset_t) csave, PAGE_SIZE);	/* Release the page if we found one */
-		}
-	}
 	return;
 	
 }
 
+
+/*
+ *		Adjusts the size of the free list.  Can either release or allocate full pages
+ *		of kernel memory.  This can block.
+ *
+ *		Note that we will only run one adjustment and the amount needed may change
+ *		while we are executing.
+ *
+ *		Calling this routine is triggered by saveanchor.saveadjust.  This value is always calculated just before
+ *		we unlock the saveanchor lock (this keeps it pretty accurate).  If the total of savefreecnt and saveinuse
+ *		is within the hysteresis range, it is set to 0.  If outside, it is set to the number needed to bring
+ *		the total to the target value.  Note that there is a minimum size to the free list (FreeListMin) and if
+ *		savefreecnt falls below that, saveadjust is set to the number needed to bring it to that.
+ */
+
+
+void save_adjust(void) {
+	
+	savearea_comm	*sctl, *sctlnext, *freepool, *freepage, *realpage;
+	kern_return_t ret;
+
+	if(saveanchor.saveadjust < 0) 					{	/* Do we need to adjust down? */
+			
+		sctl = (savearea_comm *)save_trim_free();		/* Trim list to the need count, return start of trim list */
+				
+		while(sctl) {									/* Release the free pages back to the kernel */
+			sctlnext = (savearea_comm *)sctl->save_prev;	/* Get next in list */
+			kmem_free(kernel_map, (vm_offset_t) sctl, PAGE_SIZE);	/* Release the page */
+			sctl = sctlnext;							/* Chain onwards */
+		}
+	}
+	else {												/* We need more... */
+
+		if(save_recover()) return;						/* If we can recover enough from the pool, return */
+		
+		while(saveanchor.saveadjust > 0) {				/* Keep going until we have enough */
+
+			ret = kmem_alloc_wired(kernel_map, (vm_offset_t *)&freepage, PAGE_SIZE);	/* Get a page for free pool */
+			if(ret != KERN_SUCCESS) {					/* Did we get some memory? */
+				panic("Whoops...  Not a bit of wired memory left for saveareas\n");
+			}
+			
+			realpage = (savearea_comm *)pmap_extract(kernel_pmap, (vm_offset_t)freepage);	/* Get the physical */
+			
+			bzero((void *)freepage, PAGE_SIZE);			/* Clear it all to zeros */
+			freepage->sac_alloc = 0;					/* Mark all entries taken */
+			freepage->sac_vrswap = (unsigned int)freepage ^ (unsigned int)realpage;		/* Form mask to convert V to R and vice versa */
+	
+			freepage->sac_flags |= 0x0000EE00;			/* Set debug eyecatcher */
+						
+			save_queue((savearea *)realpage);			/* Add all saveareas on page to free list */
+		}
+	}
+}
+
+/*
+ *		Fake up information to make the saveareas look like a zone
+ */
 
 save_fake_zone_info(int *count, vm_size_t *cur_size, vm_size_t *max_size, vm_size_t *elem_size,
 		    vm_size_t *alloc_size, int *collectable, int *exhaustable)
 {
-        *count      = saveanchor.saveinuse;
-	*cur_size   = saveanchor.savecount * (PAGE_SIZE / 2);
-	*max_size   = saveanchor.savemaxcount * (PAGE_SIZE / 2);
-	*elem_size  = PAGE_SIZE / 2;
+	*count      = saveanchor.saveinuse;
+	*cur_size   = (saveanchor.savefreecnt + saveanchor.saveinuse) * (PAGE_SIZE / sac_cnt);
+	*max_size   = saveanchor.savemaxcount * (PAGE_SIZE / sac_cnt);
+	*elem_size  = sizeof(savearea);
 	*alloc_size = PAGE_SIZE;
 	*collectable = 1;
 	*exhaustable = 0;
 }
-
-
-
-/*
- *		This routine prints the free savearea block chain for debugging.
- */
-
-
-
-void save_free_dump(void) {						/* Dump the free chain */
-
-	unsigned int 			*dsv, omsr;
-	savectl					*dsc;				
-	
-	dsv = save_deb(&omsr);						/* Get the virtual of the first and disable interrupts */
-
-	while(dsv) {								/* Do 'em all */
-		dsc=(savectl *)((unsigned int)dsv+4096-sizeof(savectl));	/* Point to the control area */
-//		printf("%08X %08X: nxt=%08X; alloc=%08X; flags=%08X\n", dsv,	/* Print it all out */
-//			((unsigned int)dsv)^(dsc->sac_vrswap), dsc->sac_next, dsc->sac_alloc, dsc->sac_flags);
-		dsv=(unsigned int *)(((unsigned int) dsc->sac_next)^(dsc->sac_vrswap));	/* On to the next, virtually */
-	
-	}
-	__asm__ volatile ("mtmsr %0" : : "r" (omsr));	/* Restore the interruption mask */	
-	return;
-}
-
-/*
- *		This routine prints the free savearea block chain for debugging.
- */
-
-
-
-void DumpTheSave(struct savearea *save) {						/* Dump the free chain */
-
-	unsigned int 	*r;
-	
-	printf("savearea at %08X\n", save);
-	printf("           srrs: %08X %08X\n", save->save_srr0, save->save_srr1);
-	printf("    cr, xer, lr: %08X %08X %08X\n", save->save_cr, save->save_xer, save->save_lr); 
-	printf("ctr, dar, dsisr: %08X %08X %08X\n", save->save_ctr, save->save_dar, save->save_dsisr); 
-	printf("  space, copyin: %08X %08X\n", save->save_space, save->save_sr_copyin); 
-	r=&save->save_r0;
-	printf("           regs: %08X %08X %08X %08X %08X %08X %08X %08X\n", r[0], r[1], r[2], r[3], r[4], r[5], r[6], r[7]);
-	printf("                 %08X %08X %08X %08X %08X %08X %08X %08X\n", r[8], r[9], r[10], r[11], r[12], r[13], r[14], r[15]);
-	printf("                 %08X %08X %08X %08X %08X %08X %08X %08X\n", r[16], r[17], r[18], r[19], r[20], r[21], r[22], r[23]);
-	printf("                 %08X %08X %08X %08X %08X %08X %08X %08X\n", r[24], r[25], r[29], r[27], r[28], r[29], r[30], r[31]);
-	r=(unsigned int *)&save->save_fp0;
-	printf("         floats: %08X%08X %08X%08X %08X%08X %08X%08X\n", r[0], r[1], r[2], r[3], r[4], r[5], r[6], r[7]);
-	printf("                 %08X%08X %08X%08X %08X%08X %08X%08X\n", r[8], r[9], r[10], r[11], r[12], r[13], r[14], r[15]);
-	printf("                 %08X%08X %08X%08X %08X%08X %08X%08X\n", r[16], r[17], r[18], r[19], r[20], r[21], r[22], r[23]);
-	printf("                 %08X%08X %08X%08X %08X%08X %08X%08X\n", r[24], r[25], r[29], r[27], r[28], r[29], r[30], r[31]);
-	printf("                 %08X%08X %08X%08X %08X%08X %08X%08X\n", r[32], r[33], r[34], r[35], r[36], r[37], r[38], r[39]);
-	printf("                 %08X%08X %08X%08X %08X%08X %08X%08X\n", r[40], r[41], r[42], r[43], r[44], r[45], r[46], r[47]);
-	printf("                 %08X%08X %08X%08X %08X%08X %08X%08X\n", r[48], r[49], r[50], r[51], r[52], r[53], r[54], r[55]);
-	printf("                 %08X%08X %08X%08X %08X%08X %08X%08X\n", r[56], r[57], r[58], r[59], r[60], r[61], r[62], r[63]);
-	r=&save->save_sr0;
-	printf("            srs: %08X %08X %08X %08X %08X %08X %08X %08X\n", r[0], r[1], r[2], r[3], r[4], r[5], r[6], r[7]);
-	printf("                 %08X %08X %08X %08X %08X %08X %08X %08X\n", r[8], r[9], r[10], r[11], r[12], r[13], r[14], r[15]);
-	printf("prev, phys, act: %08X %08X %08X\n", save->save_prev, save->save_phys, save->save_act); 
-	printf("          flags: %08X\n", save->save_flags); 
-	return;
-}
-
-
-
-
-/*
- *		Dumps out savearea and stack backchains
- */
- 
-void DumpBackChain(struct savearea *save) {			/* Prints out back chains */
-
-	unsigned int 	*r;
-	savearea		*sv;
-	
-	if(!backchain) return;
-	printf("Proceeding back from savearea at %08X:\n", save);
-	sv=save;
-	while(sv) {
-		printf("   curr=%08X; prev=%08X; stack=%08X\n", sv, sv->save_prev, sv->save_r1);
-		sv=sv->save_prev;
-	}
-	return;
-}
-
-
 
 

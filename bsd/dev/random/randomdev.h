@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1999, 2000-2001 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 1999, 2000-2002 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -23,13 +23,19 @@
 #ifndef __DEV_RANDOMDEV_H__
 #define __DEV_RANDOMDEV_H__
 
+#include <sys/appleapiopts.h>
+
+#ifdef __APPLE_API_PRIVATE
+
+#include <sys/random.h>
+
 int random_open(dev_t dev, int flags, int devtype, struct proc *pp);
 int random_close(dev_t dev, int flags, int mode, struct proc *pp);
 int random_read(dev_t dev, struct uio *uio, int ioflag);
 int random_write(dev_t dev, struct uio *uio, int ioflag);
 
 u_long RandomULong();
-void read_random(void* buffer, u_int numBytes);
 
+#endif /* __APPLE_API_PRIVATE */
 #endif /* __DEV_RANDOMDEV_H__ */
 

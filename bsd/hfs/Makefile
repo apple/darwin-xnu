@@ -8,14 +8,12 @@ include $(MakeInc_cmd)
 include $(MakeInc_def)
 
 INSTINC_SUBDIRS = \
-	hfscommon
 
 INSTINC_SUBDIRS_PPC = \
 
 INSTINC_SUBDIRS_I386 = \
 
 EXPINC_SUBDIRS = \
-	hfscommon
 
 EXPINC_SUBDIRS_PPC = \
 
@@ -25,7 +23,8 @@ DATAFILES = \
 	 hfs_encodings.h hfs_format.h hfs_mount.h
 
 PRIVATE_DATAFILES = \
-	hfs.h hfs_macos_defs.h rangelist.h
+	hfs.h hfs_attrlist.h hfs_catalog.h hfs_cnode.h hfs_endian.h \
+	hfs_lockf.h hfs_macos_defs.h hfs_quota.h rangelist.h
 
 INSTALL_MI_LIST	= ${DATAFILES}
 

@@ -69,6 +69,7 @@ enum {
     kIOLogPower 	= 0x00000080ULL,
     kIOLogMapping 	= 0x00000100ULL,
     kIOLogCatalogue 	= 0x00000200ULL,
+    kIOLogTracePower 	= 0x00000400ULL,
 
     kIOLogServiceTree 	= 0x00001000ULL,
     kIOLogDTree 	= 0x00002000ULL,

@@ -54,6 +54,7 @@
  * ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
  * POSSIBILITY OF SUCH DAMAGE.
  *
+ * $FreeBSD: src/sys/netinet/ip_flow.c,v 1.9.2.1 2001/08/08 08:20:35 ru Exp $
  */
 
 #include <sys/param.h>
@@ -84,16 +85,17 @@ static LIST_HEAD(ipflowhead, ipflow) ipflows[IPFLOW_HASHSIZE];
 static int ipflow_inuse;
 #define	IPFLOW_MAX		256
 
-#if ISFB31
-#else
+#ifdef __APPLE__
 #define M_IPFLOW M_TEMP
 #endif
 
 static int ipflow_active = 0;
 SYSCTL_INT(_net_inet_ip, IPCTL_FASTFORWARDING, fastforwarding, CTLFLAG_RW,
-	   &ipflow_active, 0, "");
+    &ipflow_active, 0, "Enable flow-based IP forwarding");
 
-MALLOC_DEFINE(M_IPFLOW, "ip_flow", "IP flow");
+#ifndef __APPLE__
+static MALLOC_DEFINE(M_IPFLOW, "ip_flow", "IP flow");
+#endif
 
 static unsigned
 ipflow_hash(
@@ -135,6 +137,7 @@ ipflow_fastforward(
 	struct ip *ip;
 	struct ipflow *ipf;
 	struct rtentry *rt;
+	struct sockaddr *dst;
 	int error;
 
 	/*
@@ -185,8 +188,17 @@ ipflow_fastforward(
 	ipf->ipf_uses++;
 	ipf->ipf_timer = IPFLOW_TIMER;
 
+	if (rt->rt_flags & RTF_GATEWAY)
+		dst = rt->rt_gateway;
+	else
+		dst = &ipf->ipf_ro.ro_dst;
+#ifdef __APPLE__
 	/* Not sure the rt_dlt is valid here !! XXX */
-	if ((error = dlil_output((u_long)rt->rt_dlt, m, (caddr_t) rt, &ipf->ipf_ro.ro_dst, 0)) != 0) {
+	if ((error = dlil_output((u_long)rt->rt_dlt, m, (caddr_t) rt, dst, 0)) != 0) {
+
+#else
+	if ((error = (*rt->rt_ifp->if_output)(rt->rt_ifp, m, dst, rt)) != 0) {
+#endif
 		if (error == ENOBUFS)
 			ipf->ipf_dropped++;
 		else
@@ -219,7 +231,7 @@ ipflow_free(
 	LIST_REMOVE(ipf, ipf_next);
 	splx(s);
 	ipflow_addstats(ipf);
-	RTFREE(ipf->ipf_ro.ro_rt);
+	rtfree(ipf->ipf_ro.ro_rt);
 	ipflow_inuse--;
 	FREE(ipf, M_IPFLOW);
 }
@@ -265,7 +277,7 @@ ipflow_reap(
 	LIST_REMOVE(ipf, ipf_next);
 	splx(s);
 	ipflow_addstats(ipf);
-	RTFREE(ipf->ipf_ro.ro_rt);
+	rtfree(ipf->ipf_ro.ro_rt);
 	return ipf;
 }
 
@@ -331,7 +343,7 @@ ipflow_create(
 		LIST_REMOVE(ipf, ipf_next);
 		splx(s);
 		ipflow_addstats(ipf);
-		RTFREE(ipf->ipf_ro.ro_rt);
+		rtfree(ipf->ipf_ro.ro_rt);
 		ipf->ipf_uses = ipf->ipf_last_uses = 0;
 		ipf->ipf_errors = ipf->ipf_dropped = 0;
 	}
@@ -340,7 +352,7 @@ ipflow_create(
 	 * Fill in the updated information.
 	 */
 	ipf->ipf_ro = *ro;
-	ro->ro_rt->rt_refcnt++;
+	rtref(ro->ro_rt);
 	ipf->ipf_dst = ip->ip_dst;
 	ipf->ipf_src = ip->ip_src;
 	ipf->ipf_tos = ip->ip_tos;

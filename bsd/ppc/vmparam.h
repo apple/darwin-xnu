@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2002 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -19,14 +19,6 @@
  * 
  * @APPLE_LICENSE_HEADER_END@
  */
-/* 
- * HISTORY
- * 05-Mar-89  Avadis Tevanian, Jr. (avie) at NeXT
- *	Make MAXDSIZ infinity.
- *
- * 12-Aug-87  John Seamons (jks) at NeXT
- *	Ported to NeXT.
- */ 
 
 #ifndef	_BSD_PPC_VMPARAM_H_
 #define	_BSD_PPC_VMPARAM_H_ 1

@@ -22,62 +22,6 @@
 /*
  * @OSF_COPYRIGHT@
  */
-/*
- * HISTORY
- * 
- * Revision 1.1.1.1  1998/09/22 21:05:34  wsanchez
- * Import of Mac OS X kernel (~semeria)
- *
- * Revision 1.1.1.1  1998/03/07 02:25:55  wsanchez
- * Import of OSF Mach kernel (~mburg)
- *
- * Revision 1.1.9.1  1994/09/23  02:22:28  ezf
- * 	change marker to not FREE
- * 	[1994/09/22  21:34:35  ezf]
- *
- * Revision 1.1.7.1  1994/01/12  17:54:33  dwm
- * 	Coloc: initial restructuring to follow Utah model.
- * 	added various maxima for act/thread_pool zones
- * 	[1994/01/12  17:29:08  dwm]
- * 
- * Revision 1.1.3.3  1993/06/07  22:13:58  jeffc
- * 	CR9176 - ANSI C violations: trailing tokens on CPP
- * 	directives, extra semicolons after decl_ ..., asm keywords
- * 	[1993/06/07  19:06:04  jeffc]
- * 
- * Revision 1.1.3.2  1993/06/02  23:38:46  jeffc
- * 	Added to OSF/1 R1.3 from NMK15.0.
- * 	[1993/06/02  21:13:30  jeffc]
- * 
- * Revision 1.1  1992/09/30  02:29:52  robert
- * 	Initial revision
- * 
- * $EndLog$
- */
-/* CMU_HIST */
-/*
- * Revision 2.5.2.1  92/03/03  16:20:11  jeffreyh
- * 	19-Feb-92 David L. Black (dlb) at Open Software Foundation
- * 		Double object slop in PORT_MAX, allow for extra (non-task)
- * 	ipc spaces (e.g. ipc_space_remote) in SPACE_MAX
- * 	[92/02/26  11:54:50  jeffreyh]
- * 
- * Revision 2.5  91/05/14  16:44:25  mrt
- * 	Correcting copyright
- * 
- * Revision 2.4  91/02/05  17:27:56  mrt
- * 	Changed to new Mach copyright
- * 	[91/02/01  16:15:07  mrt]
- * 
- * Revision 2.3  90/06/02  14:55:13  rpd
- * 	Added new IPC parameters.
- * 	[90/03/26  22:11:55  rpd]
- * 
- *
- * Condensed history:
- *	Moved TASK_MAX, PORT_MAX, etc. here from mach/mach_param.h (rpd).
- */
-/* CMU_ENDHIST */
 /* 
  * Mach Operating System
  * Copyright (c) 1991,1990,1989,1988,1987 Carnegie Mellon University
@@ -117,6 +61,11 @@
 #ifndef	_KERN_MACH_PARAM_H_
 #define _KERN_MACH_PARAM_H_
 
+#include <sys/appleapiopts.h>
+
+#ifdef	__APPLE_API_PRIVATE
+#ifdef	__APPLE_API_EVOLVING
+
 #define THREAD_MAX	1024		/* Max number of threads */
 #define THREAD_CHUNK	64		/* Allocation chunk */
 
@@ -142,5 +91,8 @@
 #define	SPACE_MAX	(TASK_MAX + 5)	/* Max number of IPC spaces */
 
 #define SEMAPHORE_MAX   (PORT_MAX >> 1)	/* Maximum number of semaphores */
+
+#endif	/* __APPLE_API_EVOLVING */
+#endif	/* __APPLE_API_PRIVATE */
 
 #endif	/* _KERN_MACH_PARAM_H_ */

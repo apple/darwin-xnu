@@ -22,6 +22,7 @@
 #include <mach/mach_types.h>
 #include <mach/vm_attributes.h>
 #include <mach/vm_param.h>
+#include <libsa/types.h>
  
 unsigned kdp_vm_read( caddr_t, caddr_t, unsigned);
 unsigned kdp_vm_write( caddr_t, caddr_t, unsigned);

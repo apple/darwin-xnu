@@ -39,6 +39,16 @@
 #include <vm/vm_kern.h>
 #include <sys/lock.h>
 
+/* trace enable status */
+unsigned int kdebug_enable = 0;
+
+/* track timestamps for security server's entropy needs */
+mach_timespec_t * kd_entropy_buffer = 0;
+unsigned int      kd_entropy_bufsize = 0;
+unsigned int      kd_entropy_count  = 0;
+unsigned int      kd_entropy_indx   = 0;
+unsigned int      kd_entropy_buftomem = 0;
+
 /* kd_buf kd_buffer[kd_bufsize/sizeof(kd_buf)]; */
 kd_buf * kd_bufptr;
 unsigned int kd_buftomem=0;
@@ -48,7 +58,6 @@ kd_buf * kd_readlast;
 unsigned int nkdbufs = 8192;
 unsigned int kd_bufsize = 0;
 unsigned int kdebug_flags = 0;
-unsigned int kdebug_enable=0;
 unsigned int kdebug_nolog=1;
 unsigned int kdlog_beg=0;
 unsigned int kdlog_end=0;
@@ -82,15 +91,31 @@ struct kdebug_args {
   int arg5;
 };
 
+/* task to string structure */
+struct tts
+{
+  task_t   *task;
+  char      task_comm[20];   /* from procs p_comm */
+};
+
+typedef struct tts tts_t;
+
 struct krt
 {
   kd_threadmap *map;    /* pointer to the map buffer */
   int count;
   int maxcount;
-  struct proc *p;
+  struct tts *atts;
 };
 
 typedef struct krt krt_t;
+
+/* This is for the CHUD toolkit call */
+typedef void (*kd_chudhook_fn) (unsigned int debugid, unsigned int arg1,
+				unsigned int arg2, unsigned int arg3,
+				unsigned int arg4, unsigned int arg5);
+
+kd_chudhook_fn kdebug_chudhook = 0;   /* pointer to CHUD toolkit function */
 
 /* Support syscall SYS_kdebug_trace */
 kdebug_trace(p, uap, retval)
@@ -116,7 +141,31 @@ unsigned int debugid, arg1, arg2, arg3, arg4, arg5;
 	unsigned long long now;
 	mach_timespec_t *tsp;
 
+	if (kdebug_enable & KDEBUG_ENABLE_CHUD) {
+	      if (kdebug_chudhook)
+		    kdebug_chudhook(debugid, arg1, arg2, arg3, arg4, arg5);
+
+	      if (!((kdebug_enable & KDEBUG_ENABLE_ENTROPY) ||
+		    (kdebug_enable & KDEBUG_ENABLE_TRACE)))
+		return;
+	}
+
 	s = ml_set_interrupts_enabled(FALSE);
+
+	if (kdebug_enable & KDEBUG_ENABLE_ENTROPY)
+	  {
+	    if (kd_entropy_indx < kd_entropy_count)
+	      {
+		ml_get_timebase((unsigned long long *) &kd_entropy_buffer [ kd_entropy_indx]);
+		kd_entropy_indx++;
+	      }
+	    
+	    if (kd_entropy_indx == kd_entropy_count)
+	      {
+		/* Disable entropy collection */
+		kdebug_enable &= ~KDEBUG_ENABLE_ENTROPY;
+	      }
+	  }
 
 	if (kdebug_nolog)
 	  {
@@ -226,6 +275,15 @@ unsigned int debugid, arg1, arg2, arg3, arg4, arg5;
 	int      s;
 	unsigned long long now;
 	mach_timespec_t *tsp;
+
+	if (kdebug_enable & KDEBUG_ENABLE_CHUD) {
+	      if (kdebug_chudhook)
+		    (void)kdebug_chudhook(debugid, arg1, arg2, arg3, arg4, arg5);
+
+	      if (!((kdebug_enable & KDEBUG_ENABLE_ENTROPY) ||
+		    (kdebug_enable & KDEBUG_ENABLE_TRACE)))
+		return;
+	}
 
 	s = ml_set_interrupts_enabled(FALSE);
 
@@ -355,7 +413,8 @@ kdbg_reinit()
     int x;
     int ret=0;
 
-    kdebug_enable = 0;
+    /* Disable trace collecting */
+    kdebug_enable &= ~KDEBUG_ENABLE_TRACE;
     kdebug_nolog = 1;
 
     if ((kdebug_flags & KDBG_INIT) && (kdebug_flags & KDBG_BUFINIT) && kd_bufsize && kd_buffer)
@@ -424,9 +483,9 @@ kdbg_resolve_map(thread_act_t th_act, krt_t *t)
       mapptr=&t->map[t->count];
       mapptr->thread  = (unsigned int)getshuttle_thread(th_act);
       mapptr->valid = 1;
-      (void) strncpy (mapptr->command, t->p->p_comm,
-		      sizeof(t->p->p_comm)-1);
-      mapptr->command[sizeof(t->p->p_comm)-1] = '\0';
+      (void) strncpy (mapptr->command, t->atts->task_comm,
+		      sizeof(t->atts->task_comm)-1);
+      mapptr->command[sizeof(t->atts->task_comm)-1] = '\0';
       t->count++;
     }
 }
@@ -435,16 +494,32 @@ void kdbg_mapinit()
 {
 	struct proc *p;
 	struct krt akrt;
+	int tts_count;    /* number of task-to-string structures */
+	struct tts *tts_mapptr;
+	unsigned int tts_mapsize = 0;
+	unsigned int tts_maptomem=0;
+	int i;
+
 
         if (kdebug_flags & KDBG_MAPINIT)
 	  return;
 
-	/* Calculate size of thread map buffer */
-	for (p = allproc.lh_first, kd_mapcount=0; p; 
+	/* Calculate the sizes of map buffers*/
+	for (p = allproc.lh_first, kd_mapcount=0, tts_count=0; p; 
 	     p = p->p_list.le_next)
 	  {
 	    kd_mapcount += get_task_numacts((task_t)p->task);
+	    tts_count++;
 	  }
+
+	/*
+	 * The proc count could change during buffer allocation,
+	 * so introduce a small fudge factor to bump up the
+	 * buffer sizes. This gives new tasks some chance of 
+	 * making into the tables.  Bump up by 10%.
+	 */
+	kd_mapcount += kd_mapcount/10;
+	tts_count += tts_count/10;
 
 	kd_mapsize = kd_mapcount * sizeof(kd_threadmap);
 	if((kmem_alloc(kernel_map, & kd_maptomem,
@@ -453,7 +528,37 @@ void kdbg_mapinit()
 	else
 	    kd_mapptr = (kd_threadmap *) 0;
 
-	if (kd_mapptr)
+	tts_mapsize = tts_count * sizeof(struct tts);
+	if((kmem_alloc(kernel_map, & tts_maptomem,
+		       (vm_size_t)tts_mapsize) == KERN_SUCCESS))
+	    tts_mapptr = (struct tts *) tts_maptomem;
+	else
+	    tts_mapptr = (struct tts *) 0;
+
+
+	/* 
+	 * We need to save the procs command string
+	 * and take a reference for each task associated
+	 * with a valid process
+	 */
+
+	if (tts_mapptr) {
+	        for (p = allproc.lh_first, i=0; p && i < tts_count; 
+		     p = p->p_list.le_next) {
+	                if (p->p_flag & P_WEXIT)
+		                continue;
+
+			if (task_reference_try(p->task)) {
+		                tts_mapptr[i].task = p->task;
+			        (void)strncpy(&tts_mapptr[i].task_comm, p->p_comm, sizeof(tts_mapptr[i].task_comm) - 1);
+			        i++;
+			}
+		}
+		tts_count = i;
+	}
+
+
+	if (kd_mapptr && tts_mapptr)
 	  {
 	    kdebug_flags |= KDBG_MAPINIT;
 	    /* Initialize thread map data */
@@ -461,11 +566,13 @@ void kdbg_mapinit()
 	    akrt.count = 0;
 	    akrt.maxcount = kd_mapcount;
 	    
-	    for (p = allproc.lh_first; p; p = p->p_list.le_next)
+	    for (i=0; i < tts_count; i++)
 	      {
-		akrt.p = p;
-		task_act_iterate_wth_args((task_t)p->task, kdbg_resolve_map, &akrt);
-	      }	    
+		akrt.atts = &tts_mapptr[i];
+		task_act_iterate_wth_args(tts_mapptr[i].task, kdbg_resolve_map, &akrt);
+		task_deallocate(tts_mapptr[i].task);
+	      }
+	    kmem_free(kernel_map, (char *)tts_mapptr, tts_mapsize);
 	  }
 }
 
@@ -475,7 +582,7 @@ int x;
 
         /* Clean up the trace buffer */ 
         global_state_pid = -1;
-	kdebug_enable = 0;
+	kdebug_enable &= ~KDEBUG_ENABLE_TRACE;
 	kdebug_nolog = 1;
 	kdebug_flags &= ~KDBG_BUFINIT;
 	kdebug_flags &= (unsigned int)~KDBG_CKTYPES;
@@ -719,7 +826,92 @@ kdbg_readmap(kd_threadmap *buffer, size_t *number)
   return(ret);
 }
 
+kdbg_getentropy (mach_timespec_t * buffer, size_t *number, int ms_timeout)
+{
+  int avail = *number;
+  int ret = 0;
+  int count = 0;     /* The number of timestamp entries that will fill buffer */
 
+  if (kd_entropy_buffer)
+    return(EBUSY);
+
+  kd_entropy_count = avail/sizeof(mach_timespec_t);
+  kd_entropy_bufsize = kd_entropy_count * sizeof(mach_timespec_t);
+  kd_entropy_indx = 0;
+
+  /* Enforce maximum entropy entries here if needed */
+
+  /* allocate entropy buffer */
+  if (kmem_alloc(kernel_map, &kd_entropy_buftomem,
+		 (vm_size_t)kd_entropy_bufsize) == KERN_SUCCESS)
+    {
+      kd_entropy_buffer = (mach_timespec_t *)kd_entropy_buftomem;
+    }
+  else
+    {
+      kd_entropy_buffer = (mach_timespec_t *) 0;
+      kd_entropy_count = 0;
+      kd_entropy_indx = 0;
+      return (EINVAL);
+    }
+
+  if (ms_timeout < 10)
+    ms_timeout = 10;
+
+  /* Enable entropy sampling */
+  kdebug_enable |= KDEBUG_ENABLE_ENTROPY;
+
+  ret = tsleep (kdbg_getentropy, PRIBIO | PCATCH, "kd_entropy", (ms_timeout/(1000/HZ)));
+
+  /* Disable entropy sampling */
+  kdebug_enable &= ~KDEBUG_ENABLE_ENTROPY;
+
+  *number = 0;
+  ret = 0;
+
+  if (kd_entropy_indx > 0)
+    {
+      /* copyout the buffer */
+      if (copyout(kd_entropy_buffer, buffer, kd_entropy_indx * sizeof(mach_timespec_t)))
+	  ret = EINVAL;
+      else
+	  *number = kd_entropy_indx;
+    }
+
+  /* Always cleanup */
+  kd_entropy_count = 0;
+  kd_entropy_indx = 0;
+  kd_entropy_buftomem = 0;
+  kmem_free(kernel_map, (char *)kd_entropy_buffer, kd_entropy_bufsize);
+  kd_entropy_buffer = (mach_timespec_t *) 0;
+  return(ret);
+}
+
+
+/*
+ * This function is provided for the CHUD toolkit only.
+ *    int val:
+ *        zero disables kdebug_chudhook function call
+ *        non-zero enables kdebug_chudhook function call
+ *    char *fn:
+ *        address of the enabled kdebug_chudhook function
+*/
+
+void kdbg_control_chud(int val, void *fn)
+{
+        if (val) {
+                /* enable chudhook */
+	        kdebug_enable |= KDEBUG_ENABLE_CHUD;
+		kdebug_chudhook = fn;
+	}
+	else {
+	        /* disable chudhook */
+                kdebug_enable &= ~KDEBUG_ENABLE_CHUD;
+		kdebug_chudhook = 0;
+	}
+}
+
+	
 kdbg_control(name, namelen, where, sizep)
 int *name;
 u_int namelen;
@@ -735,6 +927,48 @@ kbufinfo_t kd_bufinfo;
 
 pid_t curpid;
 struct proc *p, *curproc;
+
+       if (name[0] == KERN_KDGETBUF) {
+	   /* 
+	      Does not alter the global_state_pid
+	      This is a passive request.
+	   */
+	   if (size < sizeof(kd_bufinfo.nkdbufs)) {
+	     /* 
+		There is not enough room to return even
+		the first element of the info structure.
+	     */
+	     return(EINVAL);
+	   }
+
+	   kd_bufinfo.nkdbufs = nkdbufs;
+	   kd_bufinfo.nkdthreads = kd_mapsize / sizeof(kd_threadmap);
+	   kd_bufinfo.nolog = kdebug_nolog;
+	   kd_bufinfo.flags = kdebug_flags;
+	   kd_bufinfo.bufid = global_state_pid;
+	   
+	   if(size >= sizeof(kbufinfo_t)) {
+	     /* Provide all the info we have */
+	     if(copyout (&kd_bufinfo, where, sizeof(kbufinfo_t)))
+	       return(EINVAL);
+	   }
+	   else {
+	     /* 
+		For backwards compatibility, only provide
+		as much info as there is room for.
+	     */
+	     if(copyout (&kd_bufinfo, where, size))
+	       return(EINVAL);
+	   }
+	   return(0);
+       }
+       else if (name[0] == KERN_KDGETENTROPY) {
+	 if (kd_entropy_buffer)
+	   return(EBUSY);
+	 else
+	   ret = kdbg_getentropy((mach_timespec_t *)where, sizep, value);
+	 return (ret);
+       }
 
         if(curproc = current_proc())
 	  curpid = curproc->p_pid;
@@ -776,9 +1010,15 @@ struct proc *p, *curproc;
 			  break;
 			}
 		    }
-		  kdebug_enable=(value)?1:0;
+
+		  if (value)
+		    kdebug_enable |= KDEBUG_ENABLE_TRACE;
+		  else
+		    kdebug_enable &= ~KDEBUG_ENABLE_TRACE;
+
 		  kdebug_nolog = (value)?0:1;
-		  if (kdebug_enable)
+
+		  if (kdebug_enable & KDEBUG_ENABLE_TRACE)
 		      kdbg_mapinit();
 		  break;
 		case KERN_KDSETBUF:
@@ -789,19 +1029,6 @@ struct proc *p, *curproc;
 				nkdbufs = value;
 			else
 			  nkdbufs = max_entries;
-			break;
-		case KERN_KDGETBUF:
-		        if(size < sizeof(kbufinfo_t)) {
-		            ret=EINVAL;
-			    break;
-			}
-			kd_bufinfo.nkdbufs = nkdbufs;
-			kd_bufinfo.nkdthreads = kd_mapsize / sizeof(kd_threadmap);
-			kd_bufinfo.nolog = kdebug_nolog;
-			kd_bufinfo.flags = kdebug_flags;
-			if(copyout (&kd_bufinfo, where, sizeof(kbufinfo_t))) {
-			  ret=EINVAL;
-			}
 			break;
 		case KERN_KDSETUP:
 			ret=kdbg_reinit();

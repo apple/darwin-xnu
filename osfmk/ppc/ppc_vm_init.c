@@ -260,14 +260,18 @@ void ppc_vm_init(unsigned int mem_limit, boot_args *args)
              addr < round_page(sectKLDB+sectSizeKLD);
              addr += PAGE_SIZE) {
 
-            pmap_enter(kernel_pmap, addr, addr, VM_PROT_READ|VM_PROT_WRITE, TRUE);
+            pmap_enter(kernel_pmap, addr, addr, 
+			VM_PROT_READ|VM_PROT_WRITE, 
+			VM_WIMG_USE_DEFAULT, TRUE);
 	}
 
 	for (addr = trunc_page(sectLINKB);
              addr < round_page(sectLINKB+sectSizeLINK);
              addr += PAGE_SIZE) {
 
-            pmap_enter(kernel_pmap, addr, addr, VM_PROT_READ|VM_PROT_WRITE, TRUE);
+            pmap_enter(kernel_pmap, addr, addr, 
+			VM_PROT_READ|VM_PROT_WRITE, 
+			VM_WIMG_USE_DEFAULT, TRUE);
 	}
 
 /*
@@ -275,7 +279,9 @@ void ppc_vm_init(unsigned int mem_limit, boot_args *args)
  *	be released later, but not all.  Ergo, no block mapping here 
  */
 	for(addr = trunc_page(end); addr < round_page(static_memory_end); addr += PAGE_SIZE) {
-		pmap_enter(kernel_pmap, addr, addr, VM_PROT_READ|VM_PROT_WRITE, TRUE);
+		pmap_enter(kernel_pmap, addr, addr, 
+			VM_PROT_READ|VM_PROT_WRITE, 
+			VM_WIMG_USE_DEFAULT, TRUE);
 	}
 #endif /* __MACHO__ */
 

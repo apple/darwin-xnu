@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2002 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -63,7 +63,9 @@
 #ifndef _NFS_NFSM_SUBS_H_
 #define _NFS_NFSM_SUBS_H_
 
+#include <sys/appleapiopts.h>
 
+#ifdef __APPLE_API_PRIVATE
 /*
  * These macros do strange and peculiar things to mbuf chains for
  * the assistance of the nfs code. To attempt to use them for any
@@ -484,4 +486,5 @@ struct mbuf *nfsm_rpchead __P((struct ucred *cr, int nmflag, int procid,
 			break; \
 		}; }
 
-#endif
+#endif /* __APPLE_API_PRIVATE */
+#endif /* _NFS_NFSM_SUBS_H_ */

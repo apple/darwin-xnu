@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2002 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -167,6 +167,23 @@ inferior(p)
 			return (0);
 	return (1);
 }
+/*
+ * Is p an inferior of t ?
+ */
+int
+isinferior(p, t)
+	register struct proc *p;
+	register struct proc *t;
+{
+
+	/* if p==t they are not inferior */
+	if (p == t)
+		return(0);
+	for (; p != t; p = p->p_pptr)
+		if (p->p_pid == 0)
+			return (0);
+	return (1);
+}
 
 /*
  * Locate a process by number
@@ -231,8 +248,10 @@ enterpgrp(p, pgid, mksess)
 #endif
 		MALLOC_ZONE(pgrp, struct pgrp *, sizeof(struct pgrp), M_PGRP,
 		    M_WAITOK);
-		if ((np = pfind(savepid)) == NULL || np != p)
+		if ((np = pfind(savepid)) == NULL || np != p) {
+			FREE_ZONE(pgrp, sizeof(struct pgrp), M_PGRP);
 			return (ESRCH);
+		}
 		if (mksess) {
 			register struct session *sess;
 
@@ -242,6 +261,7 @@ enterpgrp(p, pgid, mksess)
 			MALLOC_ZONE(sess, struct session *,
 				sizeof(struct session), M_SESSION, M_WAITOK);
 			sess->s_leader = p;
+			sess->s_sid = p->p_pid;
 			sess->s_count = 1;
 			sess->s_ttyvp = NULL;
 			sess->s_ttyp = NULL;

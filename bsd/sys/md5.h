@@ -1,5 +1,4 @@
 /* MD5.H - header file for MD5C.C
- * $Id: md5.h,v 1.2 2000/09/14 20:35:28 lindak Exp $
  */
 
 /* Copyright (C) 1991-2, RSA Data Security, Inc. Created 1991. All
@@ -26,6 +25,10 @@ documentation and/or software.
 
 #ifndef _SYS_MD5_H_
 #define _SYS_MD5_H_
+
+#include <sys/appleapiopts.h>
+
+#if !defined(KERNEL) || defined(__APPLE_API_PRIVATE)
 /* MD5 context. */
 typedef struct MD5Context {
   u_int32_t state[4];	/* state (ABCD) */
@@ -47,4 +50,5 @@ char * MD5Data(const unsigned char *, unsigned int, char *);
 void MD5Transform __P((u_int32_t [4], const unsigned char [64]));
 #endif
 __END_DECLS
+#endif /* !KERNEL || __APPLE_API_PRIVATE */
 #endif /* _SYS_MD5_H_ */

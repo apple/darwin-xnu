@@ -11,12 +11,6 @@
 #  configuration file for a description of the file format).
 #
 ######################################################################
-# HISTORY
-# 5-Jun-1998	Umesh Vaishampayan	(umeshv@apple.com)
-#	Deleted obsolete history. Created tagets like RELEASEX, PROFILEX,
-#	DEBUGX for MacOS X. These in short term will facilitate development
-#	concurrent to MacOSX.
-######################################################################
 #
 #  NeXT (PSEUDO-)DEVICES (select any combination)
 #	ex   = Excelan EXOS 202 Ethernet interface
@@ -52,16 +46,10 @@
 #  Standard Apple MacOS X Configurations:
 #  -------- ---- -------- ---------------
 #
-#  MOSTX = [intel pc mach medium event vol pst gdb kernobjc fixpri simple_clock mdebug kernserv driverkit uxpr kernstack ipc_compat ipc_debug nfsclient nfsserver quota fifo fdesc union portal ffs cd9660 compat_43 revfs]
-#  RELEASEX = [MOSTX libdriver]
-#  PROFILEX = [RELEASE profile]
-#  DEBUGX = [MOSTX libdriver_g debug xpr_debug uxpr diagnostic]
-#  DEBUG-PROFILEX = [DEBUGX profile]
-#  osfmk = [intel pc mach small event vol pst gdb kernobjc fixpri simple_clock mkernserv driverkit uxpr kernstack ipc_compat ipc_debug nfsclient nfsserver quota fifo fdesc union portal ffs cd9660 compat_43 revfs mk30 mk30_i386]
-#  RELEASE = [intel pc iokit mach_pe mach mach_kdp small event vol hd pst gdb kernobjc fixpri simple_clock mkernserv driverkit uxpr kernstack ipc_compat ipc_debug nfsclient nfsserver quota fifo fdesc union portal ffs fb cd9660 compat_43 revfs mk30 mk30_i386]
-#  DEBUG_KDP = [intel pc iokit mach_pe mach mach_kdp small event vol hd pst gdb kernobjc fixpri simple_clock mkernserv driverkit uxpr kernstack ipc_compat ipc_debug nfsclient nfsserver quota fifo fdesc union portal ffs fb cd9660 compat_43 revfs mk30 mk30_i386 osf_debug debug]
-#  DEBUG= [intel pc iokit mach_pe mach mach_kdp small event vol hd pst gdb kernobjc fixpri simple_clock mkernserv driverkit uxpr kernstack ipc_compat ipc_debug nfsclient nfsserver quota fifo fdesc union portal ffs fb cd9660 compat_43 revfs mk30 mk30_i386 osf_debug debug]
-#  RELEASEX = [MOSTX libdriver]
+#  osfmk = [intel pc mach small event vol pst gdb fixpri simple_clock mkernserv uxpr kernstack ipc_compat ipc_debug mk30 mk30_i386]
+#  RELEASE = [intel pc iokit mach_pe mach mach_kdp small event vol hd pst gdb fixpri simple_clock mkernserv uxpr kernstack ipc_compat ipc_debug fb mk30 mk30_i386]
+#  DEBUG_KDP = [intel pc iokit mach_pe mach mach_kdp small event vol hd pst gdb fixpri simple_clock mkernserv uxpr kernstack ipc_compat ipc_debug fb mk30 mk30_i386 osf_debug debug]
+#  DEBUG= [intel pc iokit mach_pe mach mach_kdp small event vol hd pst gdb fixpri simple_clock mkernserv uxpr kernstack ipc_compat ipc_debug fb mk30 mk30_i386 osf_debug debug]
 #
 ######################################################################
 #

@@ -254,17 +254,19 @@ isdisk(dev, type)
 	dev_t dev;
 	int type;
 {
-	switch (major(dev)) {
-	case 1:	/* fd: floppy */
-	case 6:	/* sd: scsi disk */
-	case 3:	/* ide:  */
-		if (type == VBLK)
-			return(1);
-		break;
-	case 14:	 /* sd: scsi disk */
-	case 41: /* fd: floppy */
-		if (type == VCHR)
-			return(1);
+	dev_t	maj = major(dev);
+
+	switch (type) {
+	case VCHR:
+		maj = chrtoblk(maj);
+		if (maj == NODEV) {
+			break;
+		}
+		/* FALL THROUGH */
+	case VBLK:
+		if (bdevsw[maj].d_type == D_DISK) {
+			return (1);
+		}
 		break;
 	}
 	return(0);
@@ -312,6 +314,17 @@ chrtoblk(dev)
 	if (blkmaj == NODEV)
 		return(NODEV);
 	return(makedev(blkmaj, minor(dev)));
+}
+
+int
+chrtoblk_set(int cdev, int bdev)
+{
+	if (cdev >= nchrdev)
+		return (-1);
+	if (bdev != NODEV && bdev >= nblkdev)
+		return (-1);
+	chrtoblktab[cdev] = bdev;
+	return 0;
 }
 
 /*

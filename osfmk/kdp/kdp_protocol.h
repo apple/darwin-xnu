@@ -19,15 +19,9 @@
  * 
  * @APPLE_LICENSE_HEADER_END@
  */
-/* Copyright (c) 1991 by NeXT Computer, Inc.
- *
- *	File:	services/kdp.h
- *
- *	Definition of remote debugger protocol.
- *
- * HISTORY
- * 27-Oct-91  Mike DeMoney (mike@next.com)
- *	Created
+
+/*
+ * Definition of remote debugger protocol.
  */
 
 #include	<mach/vm_prot.h>
@@ -71,7 +65,7 @@ typedef enum {
 	KDP_CONNECT,	KDP_DISCONNECT,
 
 	/* obtaining client info */
-	KDP_HOSTINFO,	KDP_REGIONS,	KDP_MAXBYTES,
+	KDP_HOSTINFO,	KDP_VERSION,	KDP_MAXBYTES,
 	
 	/* memory access */
 	KDP_READMEM,	KDP_WRITEMEM,
@@ -87,6 +81,15 @@ typedef enum {
 	
 	/* exception and termination notification, NOT true requests */
 	KDP_EXCEPTION,	KDP_TERMINATION,
+
+	/* breakpoint control */
+	KDP_BREAKPOINT_SET, KDP_BREAKPOINT_REMOVE,
+	
+	/* vm regions */
+	KDP_REGIONS,
+
+	/* reattach to a connected host */
+	KDP_REATTACH,
 
 	/* remote reboot request */
 	KDP_HOSTREBOOT
@@ -144,6 +147,14 @@ typedef struct {			/* KDP_DISCONNECT reply */
 } kdp_disconnect_reply_t;
 
 /*
+ * KDP_REATTACH
+ */
+typedef struct {
+  kdp_hdr_t hdr;
+  unsigned short req_reply_port; /* udp port which to send replies */
+} kdp_reattach_req_t;
+
+/*
  * KDP_HOSTINFO
  */
 typedef struct {			/* KDP_HOSTINFO request */
@@ -160,6 +171,23 @@ typedef struct {			/* KDP_HOSTINFO reply */
 	kdp_hdr_t	hdr;
 	kdp_hostinfo_t	hostinfo;
 } kdp_hostinfo_reply_t;
+
+/*
+ * KDP_VERSION
+ */
+typedef struct {			/* KDP_VERSION request */
+	kdp_hdr_t	hdr;
+} kdp_version_req_t;
+
+#define	KDP_FEATURE_BP	0x1	/* local breakpoint support */
+
+typedef struct {			/* KDP_REGIONS reply */
+	kdp_hdr_t	hdr;
+	unsigned	version;
+	unsigned	feature;
+	unsigned	pad0;
+	unsigned	pad1;
+} kdp_version_reply_t;
 
 /*
  * KDP_REGIONS
@@ -303,6 +331,16 @@ typedef struct {			/* KDP_RESUMECPUS reply */
 	kdp_hdr_t	hdr;
 } kdp_resumecpus_reply_t;
 
+typedef struct {
+  kdp_hdr_t hdr;
+  unsigned long address;
+} kdp_breakpoint_req_t;
+
+typedef struct {
+  kdp_hdr_t hdr;
+  kdp_error_t error;
+} kdp_breakpoint_reply_t;
+
 /*
  * Exception notifications
  * (Exception notifications are not requests, and in fact travel from
@@ -358,8 +396,8 @@ typedef union {
 	kdp_disconnect_reply_t	disconnect_reply;
 	kdp_hostinfo_req_t	hostinfo_req;
 	kdp_hostinfo_reply_t	hostinfo_reply;
-	kdp_regions_req_t	regions_req;
-	kdp_regions_reply_t	regions_reply;
+	kdp_version_req_t	version_req;
+	kdp_version_reply_t	version_reply;
 	kdp_maxbytes_req_t	maxbytes_req;
 	kdp_maxbytes_reply_t	maxbytes_reply;
 	kdp_readmem_req_t	readmem_req;
@@ -382,6 +420,11 @@ typedef union {
 	kdp_exception_ack_t	exception_ack;
 	kdp_termination_t	termination;
 	kdp_termination_ack_t	termination_ack;
+	kdp_breakpoint_req_t	breakpoint_req;
+	kdp_breakpoint_reply_t	breakpoint_reply;
+	kdp_reattach_req_t	reattach_req;
+	kdp_regions_req_t	regions_req;
+	kdp_regions_reply_t	regions_reply;
 } kdp_pkt_t;
 
 #define MAX_KDP_PKT_SIZE	1200	/* max packet size */

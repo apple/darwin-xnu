@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 1995-1999, 2000-2002 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -19,22 +19,8 @@
  * 
  * @APPLE_LICENSE_HEADER_END@
  */
-/* Copyright (c) 1995-1999 Apple Computer, Inc. All Rights Reserved */
-/* 
- * HISTORY
- *  12-Feb-00 Clark Warner (warner_c) at Apple
- *  	Added copyfile system call
- *  26-Jul-99 Earsh Nandkeshwar (earsh) at Apple
- *	Changed getdirentryattr to getdirentriesattr
- *  22-Jan-98 Clark Warner (warner_c) at Apple
- *	Created new system calls for supporting HFS/HFS Plus file system semantics
- *
- *  04-Jun-95  Mac Gillon (mgillon) at NeXT
- *	Created new version based on NS3.3 and 4.4BSD
- *
- */
 
-
+#include <sys/appleapiopts.h>
 #include <sys/param.h>
 #include <sys/systm.h>
 #include <sys/signal.h>
@@ -45,6 +31,8 @@
 #define sysp(fn,no) {no, 1, KERNEL_FUNNEL, fn}
 #define sysnets(fn,no) {no, 0, NETWORK_FUNNEL, fn}
 #define sysnetp(fn,no) {no, 1, NETWORK_FUNNEL, fn}
+#define sysnofnl(fn,no) {no, 0, NO_FUNNEL, fn}
+
 /*
  * definitions
  */
@@ -93,10 +81,8 @@ int	getegid();
 int	profil();
 int	load_shared_file();
 int	reset_shared_file();
-#if KTRACE
+int	new_system_shared_regions();
 int	ktrace();
-#else
-#endif
 int	sigaction();
 int	getgid();
 int	sigprocmask();
@@ -148,6 +134,9 @@ int	vtrace();
 #else
 #endif
 int	gettimeofday();
+#ifdef __ppc__
+int	ppc_gettimeofday();
+#endif
 int	getrusage();
 int	getsockopt();
 int	readv();
@@ -164,6 +153,7 @@ int	socketpair();
 int	mkdir();
 int	rmdir();
 int	utimes();
+int	futimes();
 int	adjtime();
 int	setsid();
 int	quotactl();
@@ -174,13 +164,6 @@ int	getfh();
 int	setgid();
 int	setegid();
 int	seteuid();
-#if LFS
-int	lfs_bmapv();
-int	lfs_markv();
-int	lfs_segclean();
-int	lfs_segwait();
-#else
-#endif
 int	stat();
 int	fstat();
 int	lstat();
@@ -198,9 +181,6 @@ int	__sysctl();
 int	undelete();
 int setprivexec();
 int add_profil();
-#ifdef  NOTEVER
-int table();
-#endif /* NOTEVER */
 
 int	kdebug_trace();
 
@@ -219,9 +199,6 @@ int	ocreat();
 int	olseek();
 int	ostat();
 int	olstat();
-#if KTRACE
-#else
-#endif
 int	ofstat();
 int	ogetkerninfo();
 int	osmmap();
@@ -239,9 +216,6 @@ int	osigsetmask();
 int	osigstack();
 int	orecvmsg();
 int	osendmsg();
-#if TRACE
-#else
-#endif
 int	orecvfrom();
 int	osetreuid();
 int	osetregid();
@@ -258,16 +232,7 @@ int	ogetsockname();
 int ogetdomainname();
 int osetdomainname();
 int	owait3();
-#if NFS
-#else
-#endif
 int	ogetdirentries();
-#if NFS
-#else
-#endif
-#if LFS
-#else
-#endif
 
 #if NETAT
 int ATsocket();
@@ -293,7 +258,7 @@ int checkuseraccess();
 int searchfs();
 int delete();
 int copyfile();
-	
+
 /* end of HFS calls */
 
 #else /* COMPAT_43 */
@@ -334,11 +299,21 @@ int sem_getvalue();
 int sem_init();
 int sem_destroy();
 
-int issetugid();
+int	issetugid();
+int	utrace();
+int	pread();
+int	pwrite();
+int	getsid();
+int	getpgid();
+
+int __pthread_kill();
+int sigwait();
+int pthread_sigmask();
+int __disable_threadsignal();
+
 /*
  * System call switch table.
  */
- 
 
 struct sysent sysent[] = {
 	syss(nosys,0),			/*   0 = indir */
@@ -386,22 +361,18 @@ struct sysent sysent[] = {
 	compat(stat,2),	/*  38 = old stat */
 	sysp(getppid,0),		/*  39 = getppid */
 	compat(lstat,2),	/*  40 = old lstat */
-	syss(dup,2),			/*  41 = dup */
+	syss(dup,1),			/*  41 = dup */
 	syss(pipe,0),			/*  42 = pipe */
 	sysp(getegid,0),		/*  43 = getegid */
 	syss(profil,4),			/*  44 = profil */
-#if KTRACE
 	syss(ktrace,4),			/*  45 = ktrace */
-#else
-	syss(nosys,0),			/*  45 = nosys */
-#endif
 	syss(sigaction,3),		/*  46 = sigaction */
 	sysp(getgid,0),			/*  47 = getgid */
-	syss(sigprocmask,2),	/*  48 = sigprocmask */
+	syss(sigprocmask,3),	/*  48 = sigprocmask */
 	syss(getlogin,2),		/*  49 = getlogin */
 	syss(setlogin,1),		/*  50 = setlogin */
 	syss(acct,1),			/*  51 = turn acct off/on */
-	syss(sigpending,0),		/*  52 = sigpending */
+	syss(sigpending,1),		/*  52 = sigpending */
 	syss(sigaltstack,2),	/*  53 = sigaltstack */
 	syss(ioctl,3),			/*  54 = ioctl */
 	syss(reboot,2),			/*  55 = reboot */
@@ -446,28 +417,32 @@ struct sysent sysent[] = {
 	syss(nosys,0),			/*  94 was obsolete setdopt */
 	syss(fsync,1),			/*  95 = fsync */
 	sysp(setpriority,3),	/*  96 = setpriority */
-	sysnets(socket,3),			/*  97 = socket */
+	sysnets(socket,3),		/*  97 = socket */
 	sysnets(connect,3),		/*  98 = connect */
 	comaptnet(accept,3),	/*  99 = accept */
 	sysp(getpriority,2),	/* 100 = getpriority */
 	comaptnet(send,4),		/* 101 = old send */
 	comaptnet(recv,4),		/* 102 = old recv */
 	syss(sigreturn,1),		/* 103 = sigreturn */
-	sysnets(bind,3),			/* 104 = bind */
-	sysnets(setsockopt,5),		/* 105 = setsockopt */
-	sysnets(listen,2),			/* 106 = listen */
+	sysnets(bind,3),		/* 104 = bind */
+	sysnets(setsockopt,5),	/* 105 = setsockopt */
+	sysnets(listen,2),		/* 106 = listen */
 	syss(nosys,0),			/* 107 was vtimes */
 	compat(sigvec,3),		/* 108 = sigvec */
 	compat(sigblock,1),		/* 109 = sigblock */
 	compat(sigsetmask,1),	/* 110 = sigsetmask */
 	syss(sigsuspend,1),		/* 111 = sigpause */
-	compat(sigstack,2),	/* 112 = sigstack */
+	compat(sigstack,2),		/* 112 = sigstack */
 	comaptnet(recvmsg,3),	/* 113 = recvmsg */
 	comaptnet(sendmsg,3),	/* 114 = sendmsg */
 	syss(nosys,0),			/* 115 = old vtrace */
-	syss(gettimeofday,2),		/* 116 = gettimeofday */
+#ifdef __ppc__
+	sysnofnl(ppc_gettimeofday,2),	/* 116 = gettimeofday */
+#else
+	sysnofnl(gettimeofday,2),	/* 116 = gettimeofday */
+#endif
 	sysp(getrusage,2),		/* 117 = getrusage */
-	sysnets(getsockopt,5),		/* 118 = getsockopt */
+	sysnets(getsockopt,5),	/* 118 = getsockopt */
 	syss(nosys,0),			/* 119 = old resuba */
 	sysp(readv,3),			/* 120 = readv */
 	sysp(writev,3),			/* 121 = writev */
@@ -475,20 +450,20 @@ struct sysent sysent[] = {
 	syss(fchown,3),			/* 123 = fchown */
 	syss(fchmod,2),			/* 124 = fchmod */
 	comaptnet(recvfrom,6),	/* 125 = recvfrom */
-	compat(setreuid,2),	/* 126 = setreuid */
-	compat(setregid,2),	/* 127 = setregid */
+	compat(setreuid,2),		/* 126 = setreuid */
+	compat(setregid,2),		/* 127 = setregid */
 	syss(rename,2),			/* 128 = rename */
-	compat(truncate,2),	/* 129 = old truncate */
+	compat(truncate,2),		/* 129 = old truncate */
 	compat(ftruncate,2),	/* 130 = ftruncate */
 	syss(flock,2),			/* 131 = flock */
-	syss(mkfifo,2),			/* 132 = nosys */
+	syss(mkfifo,2),			/* 132 = mkfifo */
 	sysnets(sendto,6),		/* 133 = sendto */
-	sysnets(shutdown,2),		/* 134 = shutdown */
-	sysnets(socketpair,5),		/* 135 = socketpair */
+	sysnets(shutdown,2),	/* 134 = shutdown */
+	sysnets(socketpair,4),	/* 135 = socketpair */
 	syss(mkdir,2),			/* 136 = mkdir */
 	syss(rmdir,1),			/* 137 = rmdir */
 	syss(utimes,2),			/* 138 = utimes */
-	syss(nosys,0),			/* 139 = used internally */
+	syss(futimes,2),		/* 139 = futimes */
 	syss(adjtime,2),		/* 140 = adjtime */
 	comaptnet(getpeername,3),/* 141 = getpeername */
 	compat(gethostid,0),	/* 142 = old gethostid */
@@ -500,15 +475,15 @@ struct sysent sysent[] = {
 	syss(nosys,0),			/* 148 was setquota */
 	syss(nosys,0),			/* 149 was qquota */
 	comaptnet(getsockname,3),/* 150 = getsockname */
-	/*
-	 * Syscalls 151-183 inclusive are reserved for vendor-specific
-	 * system calls.  (This includes various calls added for compatibity
-	 * with other Unix variants.)
-	 */
-	syss(nosys,0),		/* 151 was m68k specific machparam */
+	syss(getpgid,1),		/* 151 = getpgid */
 	sysp(setprivexec,1),/* 152 = setprivexec */
-	syss(nosys,0),		/* 153 */
-	syss(nosys,0),		/* 154 */
+#ifdef DOUBLE_ALIGN_PARAMS
+	syss(pread,5),		/* 153 = pread */
+	syss(pwrite,5),		/* 154 = pwrite */
+#else
+	syss(pread,4),		/* 153 = pread */
+	syss(pwrite,4),		/* 154 = pwrite */
+#endif
 	syss(nfssvc,2),			/* 155 = nfs_svc */
 	compat(getdirentries,4),	/* 156 = old getdirentries */
 	syss(statfs, 2),		/* 157 = statfs */
@@ -516,7 +491,6 @@ struct sysent sysent[] = {
 	syss(unmount, 2),		/* 159 = unmount */
 	syss(nosys,0),			/* 160 was async_daemon */
 	syss(getfh,2),			/* 161 = get file handle */
-        /*?????*/
 	compat(getdomainname,2),	/* 162 = getdomainname */
 	compat(setdomainname,2),	/* 163 = setdomainname */
 	syss(nosys,0),			/* 164 */
@@ -539,28 +513,21 @@ struct sysent sysent[] = {
 	syss(nosys,0),			/* 177 */
 	syss(nosys,0),			/* 178 */
 	syss(nosys,0),			/* 179 */
-	syss(kdebug_trace,0),		/* 180 */
+	syss(kdebug_trace,6),           /* 180 */
 	syss(setgid,1),			/* 181 */
 	syss(setegid,1),		/* 182 */
-	syss(seteuid,1),			/* 183 */
-#if LFS
-	syss(lfs_bmapv,3),		/* 184 = lfs_bmapv */
-	syss(lfs_markv,3),		/* 185 = lfs_markv */
-	syss(lfs_segclean,2),	/* 186 = lfs_segclean */
-	syss(lfs_segwait,2),	/* 187 = lfs_segwait */
-#else
+	syss(seteuid,1),		/* 183 */
 	syss(nosys,0),			/* 184 = nosys */
 	syss(nosys,0),			/* 185 = nosys */
 	syss(nosys,0),			/* 186 = nosys */
 	syss(nosys,0),			/* 187 = nosys */
-#endif
 	syss(stat,2),			/* 188 = stat */
 	syss(fstat,2),			/* 189 = fstat */
 	syss(lstat,2),			/* 190 = lstat */
 	syss(pathconf,2),		/* 191 = pathconf */
 	syss(fpathconf,2),		/* 192 = fpathconf */
 #if COMPAT_GETFSSTAT
-	syss(getfsstat,0),		/* 193 = getfsstat */
+	syss(getfsstat,3),		/* 193 = getfsstat */
 #else
 	syss(nosys,0),			/* 193 is unused */ 
 #endif
@@ -573,30 +540,34 @@ struct sysent sysent[] = {
 	syss(mmap,7),			/* 197 = mmap */
 #endif
 	syss(nosys,0),			/* 198 = __syscall */
+#ifdef DOUBLE_ALIGN_PARAMS
 	syss(lseek,5),			/* 199 = lseek */
+#else
+	syss(lseek,4),			/* 199 = lseek */
+#endif
+#ifdef DOUBLE_ALIGN_PARAMS
 	syss(truncate,4),		/* 200 = truncate */
 	syss(ftruncate,4),		/* 201 = ftruncate */
+#else
+	syss(truncate,3),		/* 200 = truncate */
+	syss(ftruncate,3),		/* 201 = ftruncate */
+#endif
 	syss(__sysctl,6),		/* 202 = __sysctl */
 	sysp(mlock, 2),			/* 203 = mlock */
 	syss(munlock, 2),		/* 204 = munlock */
+	syss(undelete,1),		/* 205 = undelete */
 #if NETAT
-	syss(undelete,1),		/* 205 = undelete */
-	sysnets(ATsocket,1),		/* 206 = AppleTalk ATsocket */
-	sysnets(ATgetmsg,4),		/* 207 = AppleTalk ATgetmsg*/
-	sysnets(ATputmsg,4),		/* 208 = AppleTalk ATputmsg*/
-	sysnets(ATPsndreq,4),		/* 209 = AppleTalk ATPsndreq*/
-	sysnets(ATPsndrsp,4),		/* 210 = AppleTalk ATPsndrsp*/
-	sysnets(ATPgetreq,3),		/* 211 = AppleTalk ATPgetreq*/
-	sysnets(ATPgetrsp,2),		/* 212 = AppleTalk ATPgetrsp*/
-	syss(nosys,0),			/* 213 = Reserved for AT expansion */
-	syss(nosys,0),			/* 214 = Reserved for AT expansion */
-	syss(nosys,0),			/* 215 = Reserved for AT expansion */
+	sysnets(ATsocket,1),		/* 206 = ATsocket */
+	sysnets(ATgetmsg,4),		/* 207 = ATgetmsg*/
+	sysnets(ATputmsg,4),		/* 208 = ATputmsg*/
+	sysnets(ATPsndreq,4),		/* 209 = ATPsndreq*/
+	sysnets(ATPsndrsp,4),		/* 210 = ATPsndrsp*/
+	sysnets(ATPgetreq,3),		/* 211 = ATPgetreq*/
+	sysnets(ATPgetrsp,2),		/* 212 = ATPgetrsp*/
+	syss(nosys,0),			/* 213 = Reserved for AppleTalk */
+	syss(nosys,0),			/* 214 = Reserved for AppleTalk */
+	syss(nosys,0),			/* 215 = Reserved for AppleTalk */
 #else
-	syss(undelete,1),		/* 205 = undelete */
-
-/*  System calls 205 - 215 are reserved to allow HFS and AT to coexist */
-/*  CHW 1/22/98							       */
-
 	syss(nosys,0),			/* 206 = Reserved for AppleTalk */
 	syss(nosys,0),			/* 207 = Reserved for AppleTalk */
 	syss(nosys,0),			/* 208 = Reserved for AppleTalk */
@@ -626,10 +597,14 @@ struct sysent sysent[] = {
 	syss(setattrlist,5),	/* 221 = HFS setattrlist set attribute list */
 	syss(getdirentriesattr,8),	/* 222 = HFS getdirentriesattr get directory attributes */
 	syss(exchangedata,3),	/* 223 = HFS exchangedata exchange file contents */
+#ifdef __APPLE_API_OBSOLETE
 	syss(checkuseraccess,6),/* 224 = HFS checkuseraccess check access to a file */
+#else
+	syss(nosys,6),/* 224 = HFS checkuseraccess check access to a file */
+#endif /* __APPLE_API_OBSOLETE */
 	syss(searchfs,6),	/* 225 = HFS searchfs to implement catalog searching */
-	syss(delete,1),		/* 226 = private HFS delete (with Mac OS semantics) */
-	syss(copyfile,4),	/* 227 = Copyfile for orignally for AFP */
+	syss(delete,1),		/* 226 = private delete (Carbon semantics) */
+	syss(copyfile,4),	/* 227 = copyfile - orignally for AFP */
 	syss(nosys,0),		/* 228 */
 	syss(nosys,0),		/* 229 */
 	syss(nosys,0),		/* 230 */
@@ -644,7 +619,7 @@ struct sysent sysent[] = {
 	syss(nosys,0),		/* 239 */
 	syss(nosys,0),		/* 240 */
 	syss(nosys,0),		/* 241 */
-	syss(fsctl,0),		/* 242 */
+	syss(fsctl,4),		/* 242 = fsctl */
 	syss(nosys,0),		/* 243 */
 	syss(nosys,0),		/* 244 */
 	syss(nosys,0),		/* 245 */
@@ -652,7 +627,7 @@ struct sysent sysent[] = {
 	syss(nosys,0),		/* 247 */
 	syss(nosys,0),		/* 248 */
 	syss(nosys,0),		/* 249 */
-	syss(minherit,3),	/* 250 */
+	syss(minherit,3),	/* 250 = minherit */
 	syss(semsys,5),		/* 251 = semsys */
 	syss(msgsys,6),		/* 252 = msgsys */
 	syss(shmsys,4),		/* 253 = shmsys */
@@ -698,9 +673,9 @@ struct sysent sysent[] = {
 	syss(nosys,0),		/* 293 */
 	syss(nosys,0),		/* 294 */
 	syss(nosys,0),		/* 295 */
-	syss(load_shared_file,7), /* 296 */
-	syss(reset_shared_file,3), /* 297 */
-	syss(nosys,0),		/* 298 */
+	syss(load_shared_file,7), /* 296 = load_shared_file */
+	syss(reset_shared_file,3), /* 297 = reset_shared_file */
+	syss(new_system_shared_regions,0), /* 298 = new_system_shared_regions */
 	syss(nosys,0),		/* 299 */
 	syss(nosys,0),		/* 300 */
 	syss(nosys,0),		/* 301 */
@@ -712,7 +687,7 @@ struct sysent sysent[] = {
 	syss(nosys,0),		/* 307 */
 	syss(nosys,0),		/* 308 */
 	syss(nosys,0),		/* 309 */
-	syss(nosys,0),		/* 310 */
+	syss(getsid,1),		/* 310 = getsid */
 	syss(nosys,0),		/* 311 */
 	syss(nosys,0),		/* 312 */
 	syss(nosys,0),		/* 313 */
@@ -726,18 +701,18 @@ struct sysent sysent[] = {
 	syss(nosys,0),		/* 321 */
 	syss(nosys,0),		/* 322 */
 	syss(nosys,0),		/* 323 */
-	syss(mlockall,1),	/* 324 */
-	syss(munlockall,1),	/* 325 */
+	syss(mlockall,1),	/* 324 = mlockall*/
+	syss(munlockall,1),	/* 325 = munlockall*/
 	syss(nosys,0),		/* 326 */
 	sysp(issetugid,0),	/* 327 = issetugid */
-	syss(nosys,0),		/* 328 */
-	syss(nosys,0),		/* 329 */
-	syss(nosys,0),		/* 330 */
-	syss(nosys,0),		/* 331 */
+	syss(__pthread_kill,2),		/* 328 */
+	syss(pthread_sigmask,3),		/* 329 */
+	syss(sigwait,2),		/* 330 */
+	syss(__disable_threadsignal,1),		/* 331 */
 	syss(nosys,0),		/* 332 */
 	syss(nosys,0),		/* 333 */
 	syss(nosys,0),		/* 334 */
-	syss(nosys,0),		/* 335 */
+	syss(utrace,2),		/* 335 = utrace */
 	syss(nosys,0),		/* 336 */
 	syss(nosys,0),		/* 337 */
 	syss(nosys,0),		/* 338 */

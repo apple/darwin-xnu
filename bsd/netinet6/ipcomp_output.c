@@ -1,4 +1,5 @@
-/*	$KAME: ipcomp_output.c,v 1.11 2000/02/22 14:04:23 itojun Exp $	*/
+/*	$FreeBSD: src/sys/netinet6/ipcomp_output.c,v 1.1.2.2 2001/07/03 11:01:54 ume Exp $	*/
+/*	$KAME: ipcomp_output.c,v 1.23 2001/01/23 08:59:37 itojun Exp $	*/
 
 /*
  * Copyright (C) 1999 WIDE Project.
@@ -33,10 +34,6 @@
  * RFC2393 IP payload compression protocol (IPComp).
  */
 
-#define _IP_VHL
-#if (defined(__FreeBSD__) && __FreeBSD__ >= 3) || defined(__NetBSD__)
-#include "opt_inet.h"
-#endif
 
 #include <sys/param.h>
 #include <sys/systm.h>
@@ -68,11 +65,16 @@
 #include <netinet6/ip6_var.h>
 #endif
 #include <netinet6/ipcomp.h>
+#if INET6
+#include <netinet6/ipcomp6.h>
+#endif
 
 #include <netinet6/ipsec.h>
+#if INET6
+#include <netinet6/ipsec6.h>
+#endif
 #include <netkey/key.h>
 #include <netkey/keydb.h>
-#include <netkey/key_debug.h>
 
 #include <net/net_osdep.h>
 
@@ -82,7 +84,7 @@ static int ipcomp_output __P((struct mbuf *, u_char *, struct mbuf *,
 /*
  * Modify the packet so that the payload is compressed.
  * The mbuf (m) must start with IPv4 or IPv6 header.
- * On failure, free the given mbuf and return NULL.
+ * On failure, free the given mbuf and return non-zero.
  *
  * on invocation:
  *	m   nexthdrp md
@@ -107,25 +109,29 @@ ipcomp_output(m, nexthdrp, md, isr, af)
 {
 	struct mbuf *n;
 	struct mbuf *md0;
+	struct mbuf *mcopy;
 	struct mbuf *mprev;
 	struct ipcomp *ipcomp;
 	struct secasvar *sav = isr->sav;
-	struct ipcomp_algorithm *algo;
+	const struct ipcomp_algorithm *algo;
 	u_int16_t cpi;		/* host order */
 	size_t plen0, plen;	/*payload length to be compressed*/
 	size_t compoff;
 	int afnumber;
 	int error = 0;
+	struct ipsecstat *stat;
 
 	switch (af) {
 #if INET
 	case AF_INET:
 		afnumber = 4;
+		stat = &ipsecstat;
 		break;
 #endif
 #if INET6
 	case AF_INET6:
 		afnumber = 6;
+		stat = &ipsec6stat;
 		break;
 #endif
 	default:
@@ -134,9 +140,9 @@ ipcomp_output(m, nexthdrp, md, isr, af)
 	}
 
 	/* grab parameters */
-	if ((ntohl(sav->spi) & ~0xffff) != 0 || sav->alg_enc >= IPCOMP_MAX
-	 || ipcomp_algorithms[sav->alg_enc].compress == NULL) {
-		ipsecstat.out_inval++;
+	algo = ipcomp_algorithm_lookup(sav->alg_enc);
+	if ((ntohl(sav->spi) & ~0xffff) != 0 || !algo) {
+		stat->out_inval++;
 		m_freem(m);
 		return EINVAL;
 	}
@@ -144,7 +150,6 @@ ipcomp_output(m, nexthdrp, md, isr, af)
 		cpi = sav->alg_enc;
 	else
 		cpi = ntohl(sav->spi) & 0xffff;
-	algo = &ipcomp_algorithms[sav->alg_enc];	/*XXX*/
 
 	/* compute original payload length */
 	plen = 0;
@@ -156,11 +161,21 @@ ipcomp_output(m, nexthdrp, md, isr, af)
 		return 0;
 
 	/*
-	 * keep the original data packet, so that we can backout
-	 * our changes when compression is not necessary.
+	 * retain the original packet for two purposes:
+	 * (1) we need to backout our changes when compression is not necessary.
+	 * (2) byte lifetime computation should use the original packet.
+	 *     see RFC2401 page 23.
+	 * compromise two m_copym().  we will be going through every byte of
+	 * the payload during compression process anyways.
 	 */
+	mcopy = m_copym(m, 0, M_COPYALL, M_NOWAIT);
+	if (mcopy == NULL) {
+		error = ENOBUFS;
+		return 0;
+	}
 	md0 = m_copym(md, 0, M_COPYALL, M_NOWAIT);
 	if (md0 == NULL) {
+		m_freem(mcopy);
 		error = ENOBUFS;
 		return 0;
 	}
@@ -172,26 +187,17 @@ ipcomp_output(m, nexthdrp, md, isr, af)
 	if (mprev == NULL || mprev->m_next != md) {
 		ipseclog((LOG_DEBUG, "ipcomp%d_output: md is not in chain\n",
 		    afnumber));
-		switch (af) {
-#if INET
-		case AF_INET:
-			ipsecstat.out_inval++;
-			break;
-#endif
-#if INET6
-		case AF_INET6:
-			ipsec6stat.out_inval++;
-			break;
-#endif
-		}
+		stat->out_inval++;
 		m_freem(m);
 		m_freem(md0);
+		m_freem(mcopy);
 		return EINVAL;
 	}
 	mprev->m_next = NULL;
 	if ((md = ipsec_copypkt(md)) == NULL) {
 		m_freem(m);
 		m_freem(md0);
+		m_freem(mcopy);
 		error = ENOBUFS;
 		goto fail;
 	}
@@ -202,33 +208,12 @@ ipcomp_output(m, nexthdrp, md, isr, af)
 		ipseclog((LOG_ERR, "packet compression failure\n"));
 		m = NULL;
 		m_freem(md0);
-		switch (af) {
-#if INET
-		case AF_INET:
-			ipsecstat.out_inval++;
-			break;
-#endif
-#if INET6
-		case AF_INET6:
-			ipsec6stat.out_inval++;
-			break;
-#endif
-		}
+		m_freem(mcopy);
+		stat->out_inval++;
 		error = EINVAL;
 		goto fail;
 	}
-	switch (af) {
-#if INET
-	case AF_INET:
-		ipsecstat.out_comphist[sav->alg_enc]++;
-		break;
-#endif
-#if INET6
-	case AF_INET6:
-		ipsec6stat.out_comphist[sav->alg_enc]++;
-		break;
-#endif
-	}
+	stat->out_comphist[sav->alg_enc]++;
 	md = mprev->m_next;
 
 	/*
@@ -237,13 +222,17 @@ ipcomp_output(m, nexthdrp, md, isr, af)
 	 */
 	if (plen0 < plen) {
 		m_freem(md);
+		m_freem(mcopy);
 		mprev->m_next = md0;
 		return 0;
 	}
 
-	/* no need to backout change beyond here */
+	/*
+	 * no need to backout change beyond here.
+	 */
 	m_freem(md0);
 	md0 = NULL;
+
 	m->m_pkthdr.len -= plen0;
 	m->m_pkthdr.len += plen;
 
@@ -336,47 +325,14 @@ ipcomp_output(m, nexthdrp, md, isr, af)
 		ipseclog((LOG_DEBUG,
 		    "NULL mbuf after compression in ipcomp%d_output",
 		    afnumber));
-		switch (af) {
-#if INET
-		case AF_INET:
-			ipsecstat.out_inval++;
-			break;
-#endif
-#if INET6
-		case AF_INET6:
-			ipsec6stat.out_inval++;
-			break;
-#endif
-		}
-	} else {
-		switch (af) {
-#if INET
-		case AF_INET:
-			ipsecstat.out_success++;
-			break;
-#endif
-#if INET6
-		case AF_INET6:
-			ipsec6stat.out_success++;
-			break;
-#endif
-		}
+		stat->out_inval++;
 	}
-#if 0
-	switch (af) {
-#if INET
-	case AF_INET:
-		ipsecstat.out_esphist[sav->alg_enc]++;
-		break;
-#endif
-#if INET6
-	case AF_INET6:
-		ipsec6stat.out_esphist[sav->alg_enc]++;
-		break;
-#endif
-	}
-#endif
-	key_sa_recordxfer(sav, m);
+		stat->out_success++;
+
+	/* compute byte lifetime against original packet */
+	key_sa_recordxfer(sav, mcopy);
+	m_freem(mcopy);
+
 	return 0;
 
 fail:
@@ -398,7 +354,7 @@ ipcomp4_output(m, isr)
 		ipseclog((LOG_DEBUG, "ipcomp4_output: first mbuf too short\n"));
 		ipsecstat.out_inval++;
 		m_freem(m);
-		return NULL;
+		return 0;
 	}
 	ip = mtod(m, struct ip *);
 	/* XXX assumes that m->m_next points to payload */
@@ -406,7 +362,7 @@ ipcomp4_output(m, isr)
 }
 #endif /*INET*/
 
-#if INET6
+#ifdef INET6
 int
 ipcomp6_output(m, nexthdrp, md, isr)
 	struct mbuf *m;
@@ -418,7 +374,7 @@ ipcomp6_output(m, nexthdrp, md, isr)
 		ipseclog((LOG_DEBUG, "ipcomp6_output: first mbuf too short\n"));
 		ipsec6stat.out_inval++;
 		m_freem(m);
-		return NULL;
+		return 0;
 	}
 	return ipcomp_output(m, nexthdrp, md, isr, AF_INET6);
 }

@@ -64,7 +64,7 @@
 #include <netinet/bootp.h>
 #include <sys/systm.h>
 #include <sys/malloc.h>
-
+#include <netinet/dhcp_options.h>
 
 #ifdef	BOOTP_DEBUG
 #define	dprintf(x) printf x;
@@ -77,17 +77,12 @@
 #define IP_CH(ip)	((u_char *)ip)
 #define IP_LIST(ip)	IP_CH(ip)[0],IP_CH(ip)[1],IP_CH(ip)[2],IP_CH(ip)[3]
 
-/* tag values (from RFC 2132) */
-#define TAG_PAD			0
-#define TAG_END			255
-#define TAG_SUBNET_MASK		1
-#define TAG_ROUTER		3
-#define RFC_OPTIONS_MAGIC	{ 99, 130, 83, 99 }
-static unsigned char		rfc_magic[4] = RFC_OPTIONS_MAGIC;
-
-
-static struct sockaddr_in	blank_sin = { sizeof(struct sockaddr_in),
-					      AF_INET };
+static __inline__ struct sockaddr_in
+blank_sin()
+{
+    struct sockaddr_in	blank = { sizeof(struct sockaddr_in), AF_INET };
+    return (blank);
+}
 
 static __inline__ void
 print_reply(struct bootp *bp, int bp_len)
@@ -159,10 +154,16 @@ static void
 make_bootp_request(struct bootp_packet * pkt, 
 		   u_char * hwaddr, u_char hwtype, u_char hwlen)
 {
+    char		rfc_magic[4] = RFC_OPTIONS_MAGIC;
+
     bzero(pkt, sizeof (*pkt));
     pkt->bp_ip.ip_v = IPVERSION;
     pkt->bp_ip.ip_hl = sizeof (struct ip) >> 2;
+#ifdef RANDOM_IP_ID
+    pkt->bp_ip.ip_id = ip_randomid();
+#else
     pkt->bp_ip.ip_id = htons(ip_id++);
+#endif
     pkt->bp_ip.ip_ttl = MAXTTL;
     pkt->bp_ip.ip_p = IPPROTO_UDP;
     pkt->bp_ip.ip_src.s_addr = 0;
@@ -176,7 +177,7 @@ make_bootp_request(struct bootp_packet * pkt,
     pkt->bp_bootp.bp_ciaddr.s_addr = 0;
     bcopy(hwaddr, pkt->bp_bootp.bp_chaddr, hwlen);
     bcopy(rfc_magic, pkt->bp_bootp.bp_vend, sizeof(rfc_magic));
-    pkt->bp_bootp.bp_vend[4] = TAG_END;
+    pkt->bp_bootp.bp_vend[4] = dhcptag_end_e;
     pkt->bp_udp.uh_ulen = htons(sizeof(pkt->bp_udp) + sizeof(pkt->bp_bootp));
     pkt->bp_ip.ip_len = htons(sizeof(struct ip) + ntohs(pkt->bp_udp.uh_ulen));
     pkt->bp_ip.ip_sum = 0;
@@ -263,12 +264,12 @@ send_bootp_request(struct ifnet * ifp, struct socket * so,
     struct sockaddr_in	sin;
     
     /* Address to send to */
-    sin = blank_sin;
+    sin = blank_sin();
     sin.sin_port = htons(IPPORT_BOOTPS);
     sin.sin_addr.s_addr = INADDR_BROADCAST;
     
     m = ip_pkt_to_mbuf((caddr_t)pkt, sizeof(*pkt));
-    return (dlil_output((u_long) ifp, m, 0, (struct sockaddr *)&sin, 0));
+    return (dlil_output(ifp->if_data.default_proto, m, 0, (struct sockaddr *)&sin, 0));
 }
 
 /*
@@ -277,7 +278,7 @@ send_bootp_request(struct ifnet * ifp, struct socket * so,
  *   Return a received packet or an error if none available.
  */
 int
-receive_packet(struct socket * so, caddr_t pp, int psize)
+receive_packet(struct socket * so, caddr_t pp, int psize, int * actual_size)
 {
     struct iovec	aiov;
     struct uio		auio;
@@ -295,6 +296,7 @@ receive_packet(struct socket * so, caddr_t pp, int psize)
     rcvflg = MSG_WAITALL;
     
     error = soreceive(so, (struct sockaddr **) 0, &auio, 0, 0, &rcvflg);
+    *actual_size = psize - auio.uio_resid;
     return (error);
 }
 
@@ -304,8 +306,9 @@ receive_packet(struct socket * so, caddr_t pp, int psize)
  *   Wakeup the process waiting for something on a socket.
  */
 static void
-bootp_timeout(struct socket * * socketflag)
+bootp_timeout(void * arg)
 {
+    struct socket * * socketflag = (struct socket * *)arg;
     struct socket * so = *socketflag;
     boolean_t 	funnel_state;
     
@@ -318,49 +321,6 @@ bootp_timeout(struct socket * * socketflag)
     return;
 }
 
-#define TAG_OFFSET	0
-#define LEN_OFFSET	1
-#define OPTION_OFFSET	2
-
-void *
-packet_option(struct bootp * pkt, u_char t) 
-{
-    void *		buffer = pkt->bp_vend + sizeof(rfc_magic);
-    int			len;
-    unsigned char	option_len;
-    void *		ret = NULL;
-    unsigned char *	scan;
-    unsigned char	tag = TAG_PAD;
-
-    len = sizeof(pkt->bp_vend) - sizeof(rfc_magic);
-    for (scan = buffer; len > 0; ) {
-	tag = scan[TAG_OFFSET];
-	if (tag == TAG_END) /* we hit the end of the options */
-	    break;
-	if (tag == TAG_PAD) { /* discard pad characters */
-	    scan++;
-	    len--;
-	}
-	else {
-	    if (t == tag && ret == NULL)
-		ret = scan + OPTION_OFFSET;
-	    option_len = scan[LEN_OFFSET];
-	    len -= (option_len + 2);
-	    scan += (option_len + 2);
-	}
-    }
-    if (len < 0 || tag != TAG_END) { /* we ran off the end */
-	if (len < 0) {
-	    dprintf(("bootp: error parsing options\n"));
-	}
-	else {
-	    dprintf(("bootp: end tag missing\n"));
-	}
-	ret = NULL;
-    }
-    return (ret);
-}
-
 /*
  * Function: rate_packet
  * Purpose:
@@ -371,20 +331,16 @@ packet_option(struct bootp * pkt, u_char t)
  */
 #define GOOD_RATING	3
 static __inline__ int 
-rate_packet(struct bootp * pkt)
+rate_packet(struct bootp * pkt, int pkt_size, dhcpol_t * options_p)
 {
-    int rating = 0;
+    int		len;
+    int 	rating = 1;
 
-    if (pkt->bp_yiaddr.s_addr) {
-	struct in_addr * ip;
-
+    if (dhcpol_find(options_p, dhcptag_subnet_mask_e, &len, NULL) != NULL) {
 	rating++;
-	ip = (struct in_addr *)packet_option(pkt, TAG_SUBNET_MASK);
-	if (ip)
-	    rating++;
-	ip = (struct in_addr *)packet_option(pkt, TAG_ROUTER);
-	if (ip)
-	    rating++;
+    }
+    if (dhcpol_find(options_p, dhcptag_router_e, &len, NULL) != NULL) {
+	rating++;
     }
     return (rating);
 }
@@ -419,7 +375,7 @@ bootp_loop(struct socket * so, struct ifnet * ifp, int max_try,
     char			hwtype = 0;
     struct bootp_packet * 	request = NULL;
     struct bootp *		reply = NULL;
-    struct bootp *		saved_reply = NULL;
+    int				reply_size = DHCP_PACKET_MIN;
     struct timeval		start_time;
     u_long			xid;
     int				retry;
@@ -457,8 +413,7 @@ bootp_loop(struct socket * so, struct ifnet * ifp, int max_try,
     /* make a request/reply packet */
     request = (struct bootp_packet *)kalloc(sizeof(*request));
     make_bootp_request(request, hwaddr, hwtype, hwlen);
-    reply = (struct bootp *)kalloc(sizeof(*reply));
-    saved_reply = (struct bootp *)kalloc(sizeof(*saved_reply));
+    reply = (struct bootp *)kalloc(reply_size);
     iaddr_p->s_addr = 0;
     printf("bootp: sending request");
     for (retry = 0; retry < max_try; retry++) {
@@ -477,30 +432,57 @@ bootp_loop(struct socket * so, struct ifnet * ifp, int max_try,
 	timeflag = so;
 	wait_ticks += random_range(-RAND_TICKS, RAND_TICKS);
 	dprintf(("bootp: waiting %d ticks\n", wait_ticks));
-	timeout(bootp_timeout, &timeflag, wait_ticks);
+	timeout((timeout_fcn_t)bootp_timeout, &timeflag, wait_ticks);
 
 	while (TRUE) {
-	    error = receive_packet(so, (caddr_t)reply, sizeof(*reply));
+	    int 	n = 0;
+
+	    error = receive_packet(so, (caddr_t)reply, reply_size, &n);
 	    if (error == 0) {
 		dprintf(("\nbootp: received packet\n"));
 		if (ntohl(reply->bp_xid) == xid
 		    && reply->bp_yiaddr.s_addr
 		    && bcmp(reply->bp_chaddr, hwaddr, hwlen) == 0) {
-		    int rating;
+		    int 		rating;
+		    dhcpol_t		options;
+
 #ifdef	BOOTP_DEBUG
-		    print_reply_short(reply, sizeof(*reply));
+		    print_reply_short(reply, n);
 #endif BOOTP_DEBUG
-		    rating = rate_packet(reply);
-		    if (rating > last_rating)
-			*saved_reply = *reply;
+		    (void)dhcpol_parse_packet(&options, (struct dhcp *)reply, 
+					      n, NULL);
+		    rating = rate_packet(reply, n, &options);
+		    if (rating > last_rating) {
+			struct in_addr * 	ip;
+			int			len;
+
+			*iaddr_p = reply->bp_yiaddr;
+			ip = (struct in_addr *)
+			    dhcpol_find(&options, 
+					dhcptag_subnet_mask_e, &len, NULL);
+			if (ip) {
+			    *netmask_p = *ip;
+			}
+			ip = (struct in_addr *)
+			    dhcpol_find(&options, dhcptag_router_e, &len, NULL);
+			if (ip) {
+			    *router_p = *ip;
+			}
+			printf("%sbootp: got "
+			       "response from %s (" IP_FORMAT ")\n",
+			       last_rating == 0 ? "\n" : "",
+			       reply->bp_sname, 
+			       IP_LIST(&reply->bp_siaddr));
+		    }
+		    dhcpol_free(&options);
 		    if (rating >= GOOD_RATING) {
-			untimeout(bootp_timeout, &timeflag);
-			goto save_values;
+			untimeout((timeout_fcn_t)bootp_timeout, &timeflag);
+			goto done;
 		    }
 		    if (gather_count == 0) {
-			untimeout(bootp_timeout, &timeflag);
+			untimeout((timeout_fcn_t)bootp_timeout, &timeflag);
 			timeflag = so;
-			timeout(bootp_timeout, &timeflag, 
+			timeout((timeout_fcn_t)bootp_timeout, &timeflag, 
 				hz * GATHER_TIME_SECS);
 		    }
 		    gather_count++;
@@ -515,7 +497,7 @@ bootp_loop(struct socket * so, struct ifnet * ifp, int max_try,
 	    else if (timeflag == NULL) { /* timed out */
 		if (gather_count) {
 		    dprintf(("bootp: gathering time has expired"));
-		    goto save_values; /* we have a packet */
+		    goto done; /* we have a packet */
 		}
 		break; /* retry */
 	    }
@@ -524,7 +506,7 @@ bootp_loop(struct socket * so, struct ifnet * ifp, int max_try,
 	}
 	if (error && (error != EWOULDBLOCK)) {
 	    dprintf(("bootp: failed to receive packets: %d\n", error));
-	    untimeout(bootp_timeout, &timeflag);
+	    untimeout((timeout_fcn_t)bootp_timeout, &timeflag);
 	    goto cleanup;
 	}
 	wait_ticks *= 2;
@@ -536,29 +518,14 @@ bootp_loop(struct socket * so, struct ifnet * ifp, int max_try,
     error = ETIMEDOUT;
     goto cleanup;
 
- save_values:
+ done:
     error = 0;
-    printf("\nbootp: got response from %s (" IP_FORMAT ")\n", 
-	   saved_reply->bp_sname, IP_LIST(&saved_reply->bp_siaddr));
-    /* return the ip address */
-    *iaddr_p = saved_reply->bp_yiaddr;
-    {
-	struct in_addr * ip;
-	ip = (struct in_addr *)packet_option(saved_reply, TAG_SUBNET_MASK);
-	if (ip)
-	    *netmask_p = *ip;
-	ip = (struct in_addr *)packet_option(saved_reply, TAG_ROUTER);
-	if (ip)
-	    *router_p = *ip;
-    }
 
  cleanup:
     if (request)
 	kfree((caddr_t)request, sizeof (*request));
     if (reply)
-	kfree((caddr_t)reply, sizeof(*reply));
-    if (saved_reply)
-	kfree((caddr_t)saved_reply, sizeof(*saved_reply));
+	kfree((caddr_t)reply, reply_size);
     return (error);
 }
 
@@ -587,7 +554,7 @@ int bootp(struct ifnet * ifp, struct in_addr * iaddr_p, int max_try,
     /* assign the all-zeroes address */
     bzero(&ifr, sizeof(ifr));
     sprintf(ifr.ifr_name, "%s%d", ifp->if_name, ifp->if_unit);
-    *((struct sockaddr_in *)&ifr.ifr_addr) = blank_sin;
+    *((struct sockaddr_in *)&ifr.ifr_addr) = blank_sin();
     error = ifioctl(so, SIOCSIFADDR, (caddr_t)&ifr, procp);
     if (error) {
 	dprintf(("bootp: SIOCSIFADDR all-zeroes IP failed: %d\n",
@@ -630,4 +597,3 @@ int bootp(struct ifnet * ifp, struct in_addr * iaddr_p, int max_try,
     }
     return (error);
 }
-

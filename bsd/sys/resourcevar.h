@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2002 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -58,6 +58,9 @@
 #ifndef	_SYS_RESOURCEVAR_H_
 #define	_SYS_RESOURCEVAR_H_
 
+#include <sys/appleapiopts.h>
+
+#ifdef __APPLE_API_PRIVATE
 /*
  * Kernel per-process accounting / statistics
  * (not necessarily resident except when running).
@@ -109,9 +112,10 @@ void	 addupc_intr __P((struct proc *p, u_long pc, u_int ticks));
 void	 addupc_task __P((struct proc *p, u_long pc, u_int ticks));
 void	 calcru __P((struct proc *p, struct timeval *up, struct timeval *sp,
 	    struct timeval *ip));
-struct plimit
-	*limcopy __P((struct plimit *lim));
 void	 ruadd __P((struct rusage *ru, struct rusage *ru2));
-#endif
+struct plimit *limcopy __P((struct plimit *lim));
+#endif /* KERNEL */
+
+#endif /* __APPLE_API_PRIVATE */
 
 #endif	/* !_SYS_RESOURCEVAR_H_ */

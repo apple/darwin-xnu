@@ -78,8 +78,7 @@
 #include <kern/host.h>
 #include <kern/misc_protos.h>
 #include <string.h>
-#include <mach/exc.h>            /* JMM - will become exception.h */
-#include <machine/machine_rpc.h>
+#include <mach/exc.h>
 
 #if	MACH_KDB
 #include <ddb/db_trap.h>
@@ -315,3 +314,138 @@ exception(
 	thread_exception_return();
 	/*NOTREACHED*/
 }
+
+kern_return_t
+bsd_exception(
+	exception_type_t	exception,
+	exception_data_t	code,
+	mach_msg_type_number_t  codeCnt)
+{
+	task_t			task;
+	host_priv_t		host_priv;
+	struct exception_action *excp;
+	mutex_t			*mutex;
+	thread_act_t		a_self = current_act();
+	ipc_port_t		exc_port;
+	int			behavior;
+	int			flavor;
+	kern_return_t		kr;
+
+	/*
+	 * Maybe the task level will handle it.
+	 */
+	task = current_task();
+	mutex = mutex_addr(task->lock);
+	excp = &task->exc_actions[exception];
+
+	/*
+	 *  Save work if we are terminating.
+	 *  Just go back to our AST handler.
+	 */
+	if (!a_self->active) {
+		return(KERN_FAILURE);
+	}
+
+	/*
+	 * Snapshot the exception action data under lock for consistency.
+	 * Hold a reference to the port over the exception_raise_* calls
+	 * so it can't be destroyed.  This seems like overkill, but keeps
+	 * the port from disappearing between now and when
+	 * ipc_object_copyin_from_kernel is finally called.
+	 */
+	mutex_lock(mutex);
+	exc_port = excp->port;
+	if (!IP_VALID(exc_port)) {
+		mutex_unlock(mutex);
+		return(KERN_FAILURE);
+	}
+	ip_lock(exc_port);
+	if (!ip_active(exc_port)) {
+		ip_unlock(exc_port);
+		mutex_unlock(mutex);
+		return(KERN_FAILURE);
+	}
+	ip_reference(exc_port);	
+	exc_port->ip_srights++;
+	ip_unlock(exc_port);
+
+	flavor = excp->flavor;
+	behavior = excp->behavior;
+	mutex_unlock(mutex);
+
+	switch (behavior) {
+	case EXCEPTION_STATE: {
+		mach_msg_type_number_t state_cnt;
+		natural_t state[ THREAD_MACHINE_STATE_MAX ];
+
+		c_thr_exc_raise_state++;
+		state_cnt = state_count[flavor];
+		kr = thread_getstatus(a_self, flavor, 
+				      (thread_state_t)state,
+				      &state_cnt);
+		if (kr == KERN_SUCCESS) {
+			kr = exception_raise_state(exc_port, exception,
+						   code, codeCnt,
+						   &flavor,
+						   state, state_cnt,
+						   state, &state_cnt);
+			if (kr == MACH_MSG_SUCCESS)
+				kr = thread_setstatus(a_self, flavor, 
+						      (thread_state_t)state,
+						      state_cnt);
+		}
+
+		if (kr == KERN_SUCCESS || kr == MACH_RCV_PORT_DIED)
+			return(KERN_SUCCESS);
+
+		return(KERN_FAILURE);
+	}
+
+	case EXCEPTION_DEFAULT:
+		c_thr_exc_raise++;
+		kr = exception_raise(exc_port,
+				retrieve_act_self_fast(a_self),
+				retrieve_task_self_fast(a_self->task),
+				exception,
+				code, codeCnt);
+
+		if (kr == KERN_SUCCESS || kr == MACH_RCV_PORT_DIED)
+			return(KERN_SUCCESS);
+		return(KERN_FAILURE);
+
+	case EXCEPTION_STATE_IDENTITY: {
+		mach_msg_type_number_t state_cnt;
+		natural_t state[ THREAD_MACHINE_STATE_MAX ];
+
+		c_thr_exc_raise_state_id++;
+		state_cnt = state_count[flavor];
+		kr = thread_getstatus(a_self, flavor,
+				      (thread_state_t)state,
+				      &state_cnt);
+		if (kr == KERN_SUCCESS) {
+		    kr = exception_raise_state_identity(exc_port,
+				retrieve_act_self_fast(a_self),
+				retrieve_task_self_fast(a_self->task),
+				exception,
+				code, codeCnt,
+				&flavor,
+				state, state_cnt,
+				state, &state_cnt);
+		    if (kr == MACH_MSG_SUCCESS)
+			kr = thread_setstatus(a_self, flavor,
+					      (thread_state_t)state,
+					      state_cnt);
+		}
+
+		if (kr == KERN_SUCCESS || kr == MACH_RCV_PORT_DIED)
+			return(KERN_SUCCESS);
+		return(KERN_FAILURE);
+	}
+	
+	default:
+		
+		return(KERN_FAILURE);
+	}/* switch */
+	return(KERN_FAILURE);
+}
+

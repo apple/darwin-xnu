@@ -71,7 +71,7 @@ ipcperm(cred, perm, mode)
 	int mode;
 {
 
-	if (suser(cred, (u_short *)NULL))
+	if (!suser(cred, (u_short *)NULL))
 		return (0);
 
 	/* Check for user match. */
@@ -90,82 +90,6 @@ ipcperm(cred, perm, mode)
 		return (0);
 	return ((mode & perm->mode) == mode ? 0 : EACCES);
 }
-
-
-
-
-/*
- * SYSVSEM stubs
- */
-
-int
-semsys(p, uap)
-	struct proc *p;
-#if 0
-	struct semsys_args *uap;
-#else
-	void *uap;
-#endif
-{
-	return(EOPNOTSUPP);
-};
-
-int
-semconfig(p, uap)
-	struct proc *p;
-#if 0
-	struct semconfig_args *uap;
-#else
-	void *uap;
-#endif
-{
-	return(EOPNOTSUPP);
-};
-
-int
-semctl(p, uap)
-	struct proc *p;
-#if 0
-	register struct semctl_args *uap;
-#else
-	void *uap;
-#endif
-{
-	return(EOPNOTSUPP);
-};
-
-int
-semget(p, uap)
-	struct proc *p;
-#if 0
-	register struct semget_args *uap;
-#else
-	void *uap;
-#endif
-{
-	return(EOPNOTSUPP);
-};
-
-int
-semop(p, uap)
-	struct proc *p;
-#if 0
-	register struct semop_args *uap;
-#else
-	void *uap;
-#endif
-{
-	return(EOPNOTSUPP);
-};
-
-/* called from kern_exit.c */
-void
-semexit(p)
-	struct proc *p;
-{
-	return;
-}
-
 
 
 

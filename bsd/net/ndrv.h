@@ -28,6 +28,7 @@
 
 #ifndef _NET_NDRV_H
 #define _NET_NDRV_H
+#include <sys/appleapiopts.h>
 
 
 struct sockaddr_ndrv
@@ -118,10 +119,37 @@ struct ndrv_protocol_desc
 #define NDRV_DELDMXSPEC		0x02			/* Delete the registered protocol */
 /*		NDRV_DMXSPECCNT		0x03			   Obsolete */
 #define NDRV_SETDMXSPEC		0x04			/* Set the protocol spec */
+#define	NDRV_ADDMULTICAST	0x05			/* Add a physical multicast address */
+#define NDRV_DELMULTICAST	0x06			/* Delete a phyiscal multicast */
 
-#if KERNEL
+/*
+ * SOL_NDRVPROTO - use this for the socket level when calling setsocketopt
+ * NDRV_DELDMXSPEC - removes the registered protocol and all related demuxes
+ * NDRV_SETDMXSPEC - set the protocol to receive, use struct ndrv_protocol_desc
+ *					 as the parameter.
+ * NDRV_ADDMULTICAST - Enable reception of a phyiscal multicast address, use
+ *                     a sockaddr of the appropriate type for the media in use.
+ * NDRV_DELMULTICAST - Disable reception of a phyiscal multicast address, use
+ *					   a sockaddr of the appropriate type for the media in use.
+ *
+ * When adding multicasts, the multicasts are ref counted. If the multicast is
+ * already registered in the kernel, the count will be bumped. When deleting
+ * the multicast, the count is decremented. If the count reaches zero the
+ * multicast is removed. If your process is killed, PF_NDRV will unregister
+ * the mulitcasts you've added. You can only delete multicasts you've added
+ * on the same socket.
+ *
+ * If the interface goes away while your socket is open, your protocol is
+ * immediately detached and sending/receiving is disabled on the socket.
+ * If you need a chance to do something, please file a bug and we can give
+ * you a second or two.
+ */
+
+#ifdef KERNEL
+#ifdef __APPLE_API_UNSTABLE
 /* Additional Kernel APIs */
 struct ifnet*	ndrv_get_ifp(caddr_t ndrv_pcb);
+#endif /* __APPLE_API_UNSTABLE */
 #endif
 
 #endif	/* _NET_NDRV_H */

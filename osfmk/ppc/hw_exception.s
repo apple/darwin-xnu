@@ -44,6 +44,7 @@
 #include <ppc/proc_reg.h>
 #include <ppc/trap.h>
 #include <ppc/exception.h>
+#include <ppc/savearea.h>
 #include <ppc/spl.h>
 
 
@@ -62,12 +63,12 @@
 
 /*
  * If pcb.ksp == 0 then the kernel stack is already busy,
- *                 we save ppc_saved state below the current stack pointer,
+ *         we make a stack frame
  *		   leaving enough space for the 'red zone' in case the
  *		   trapped thread was in the middle of saving state below
  *		   its stack pointer.
  *
- * otherwise       we save a ppc_saved_state in the pcb, and switch to
+ * otherwise       we make a stack frame and
  * 		   the kernel stack (setting pcb.ksp to 0)
  *
  * on return, we do the reverse, the last state is popped from the pcb
@@ -87,92 +88,66 @@
 
 			.align	5
 			.globl EXT(thandler)
-LEXT(thandler)									/* Trap handler */
+LEXT(thandler)										; Trap handler
 
-#if 0
-;
-;			NOTE:	This trap will hang VPC running Windows98 (and probably others)...
-;
-			lwz		r25,savedar(r4)				; (TEST/DEBUG)
-			cmplwi	r25,0x298					; (TEST/DEBUG)
-			
-deadloop:	addi	r25,r25,1					; (TEST/DEBUG)
-			addi	r25,r25,1					; (TEST/DEBUG)
-			addi	r25,r25,1					; (TEST/DEBUG)
-			addi	r25,r25,1					; (TEST/DEBUG)
-			addi	r25,r25,1					; (TEST/DEBUG)
-			addi	r25,r25,1					; (TEST/DEBUG)
-			addi	r25,r25,1					; (TEST/DEBUG)
-			addi	r25,r25,1					; (TEST/DEBUG)
-			addi	r25,r25,1					; (TEST/DEBUG)
-			addi	r25,r25,1					; (TEST/DEBUG)
-			addi	r25,r25,1					; (TEST/DEBUG)
-			beq-	deadloop					; (TEST/DEBUG)
-#endif
-
-			mfsprg	r25,0						/* Get the per_proc */
+			mfsprg	r25,0							; Get the per_proc 
 		
-			lwz		r1,PP_ISTACKPTR(r25)		; Get interrupt stack pointer
+			lwz		r1,PP_ISTACKPTR(r25)			; Get interrupt stack pointer
 	
-			lwz		r6,PP_CPU_DATA(r25)			/* Get point to cpu specific data */
-			cmpwi	cr0,r1,0					; Are we on interrupt stack?					
-			lwz		r6,CPU_ACTIVE_THREAD(r6)	/* Get the pointer to the currently active thread */
-			beq-	cr0,EXT(ihandler)			; If on interrupt stack, treat this as interrupt...
-			lwz		r13,THREAD_TOP_ACT(r6)		/* Point to the active activation */
-			lwz		r26,ACT_MACT_SPF(r13)		; Get special flags
-			lwz		r8,ACT_MACT_PCB(r13)		/* Get the last savearea used */
+			cmpwi	cr0,r1,0						; Are we on interrupt stack?					
+			lwz		r6,PP_ACTIVE_THREAD(r25)		; Get the pointer to the currently active thread
+			beq-	cr0,EXT(ihandler)				; If on interrupt stack, treat this as interrupt...
+			lwz		r13,THREAD_TOP_ACT(r6)			; Point to the active activation
+			lwz		r26,ACT_MACT_SPF(r13)			; Get special flags
+			lwz		r8,ACT_MACT_PCB(r13)			; Get the last savearea used
 			rlwinm.	r26,r26,0,bbThreadbit,bbThreadbit	; Do we have Blue Box Assist active? 
-			lwz		r1,ACT_MACT_KSP(r13)		; Get the top of kernel stack
-			bnel-	checkassist					/* See if we should assist this */
-			stw		r4,ACT_MACT_PCB(r13)		/* Point to our savearea */
-			stw		r8,SAVprev(r4)				/* Queue the new save area in the front */
+			lwz		r1,ACT_MACT_KSP(r13)			; Get the top of kernel stack
+			bnel-	checkassist						; See if we should assist this
+			stw		r4,ACT_MACT_PCB(r13)			; Point to our savearea
+			stw		r8,SAVprev(r4)					; Queue the new save area in the front 
 			
 #if VERIFYSAVE
-			bl		versave						; (TEST/DEBUG)
+			bl		versave							; (TEST/DEBUG)
 #endif
 			
-			lwz		r9,THREAD_KERNEL_STACK(r6)	; Get our kernel stack start
-			cmpwi	cr1,r1,0					; Are we already on kernel stack?
-			stw		r13,SAVact(r4)				; Mark the savearea as belonging to this activation
-			lwz		r26,saver1(r4)				; Get the stack at interrupt time
+			lwz		r9,THREAD_KERNEL_STACK(r6)		; Get our kernel stack start
+			cmpwi	cr1,r1,0						; Are we already on kernel stack?
+			stw		r13,SAVact(r4)					; Mark the savearea as belonging to this activation
+			lwz		r26,saver1(r4)					; Get the stack at interrupt time
 
-			bne+	cr1,.L_kstackfree			; We are not on kernel stack yet...		
+			bne+	cr1,.L_kstackfree				; We are not on kernel stack yet...		
 
-			subi	r1,r26,FM_REDZONE			; Make a red zone on interrupt time kernel stack
+			subi	r1,r26,FM_REDZONE				; Make a red zone on interrupt time kernel stack
 
 .L_kstackfree:
-			lwz		r7,savesrr1(r4)				/* Pick up the entry MSR */
-			sub		r9,r1,r9					; Get displacment into the kernel stack
-			li		r0,0						/* Make this 0 */
-			cmplwi	cr2,r9,KERNEL_STACK_SIZE	; Do we still have room on the stack?
-			beq		cr1,.L_state_on_kstack		/* using above test for pcb/stack */
+			lwz		r7,savesrr1(r4)					; Pick up the entry MSR 
+			sub		r9,r1,r9						; Get displacment into the kernel stack
+			li		r0,0							; Make this 0
+			cmplwi	cr2,r9,KERNEL_STACK_SIZE		; Do we still have room on the stack?
+			beq		cr1,.L_state_on_kstack			; using above test for pcb/stack
 
-			stw		r0,ACT_MACT_KSP(r13)		/* Show that we have taken the stack */
+			stw		r0,ACT_MACT_KSP(r13)			; Show that we have taken the stack
 
 .L_state_on_kstack:	
+			lwz		r9,savevrsave(r4)				; Get the VRSAVE register
 			rlwinm.	r6,r7,0,MSR_VEC_BIT,MSR_VEC_BIT	; Was vector on?
-			bgt-	cr2,kernelStackBad			; Kernel stack is bogus...
-kernelStackNotBad:								; Not really
-			beq+	tvecoff						; Vector off, do not save vrsave...
-			lwz		r3,savevrsave(r4)			; Get the VRSAVE register
-			stw		r3,liveVRS(r25)				; Set the live value
+			subi	r1,r1,FM_SIZE					; Push a header onto the current stack 
+			bgt-	cr2,kernelStackBad				; Kernel stack is bogus...
 
-tvecoff:	rlwinm.	r3,r7,0,MSR_FP_BIT,MSR_FP_BIT	; Was floating point on?
-			subi	r1,r1,FM_SIZE				/* Push a header onto the current stack */
-			beq+	tfpoff						/* Floating point was off... */
-			lwz		r3,savexfpscr(r4)			; Grab the just saved FPSCR
-			stw		r3,liveFPSCR(r25)			; Make it the live copy
-	
-tfpoff:		stw		r26,FM_BACKPTR(r1)			; Link back to the previous frame
+kernelStackNotBad:									; Vector was off
+			beq+	tvecoff							; Vector off, do not save vrsave...
+			stw		r9,liveVRS(r25)					; Set the live value
+
+tvecoff:	stw		r26,FM_BACKPTR(r1)				; Link back to the previous frame
 
 #if	DEBUG
 /* If debugging, we need two frames, the first being a dummy
  * which links back to the trapped routine. The second is
  * that which the C routine below will need
  */
-			lwz		r3,savesrr0(r4)				/* Get the point of interruption */
-			stw		r3,FM_LR_SAVE(r1)			/* save old instr ptr as LR value */
-			stwu	r1,	-FM_SIZE(r1)			/* and make new frame */
+			lwz		r3,savesrr0(r4)					; Get the point of interruption
+			stw		r3,FM_LR_SAVE(r1)				; save old instr ptr as LR value 
+			stwu	r1,	-FM_SIZE(r1)				; and make new frame 
 #endif /* DEBUG */
 
 
@@ -184,80 +159,65 @@ tfpoff:		stw		r26,FM_BACKPTR(r1)			; Link back to the previous frame
  */
 
 
-			lwz		r3,saveexception(r4)		/* Get the exception code */
-			lwz		r0,ACT_MACT_SPF(r13)		; Get the special flags
+			lwz		r3,saveexception(r4)			; Get the exception code 
+			lwz		r0,ACT_MACT_SPF(r13)			; Get the special flags
 			
-			addi	r5,r3,-T_DATA_ACCESS		; Adjust to start of range
+			addi	r5,r3,-T_DATA_ACCESS			; Adjust to start of range
 			rlwinm.	r0,r0,0,runningVMbit,runningVMbit	; Are we in VM state? (cr0_eq == 0 if yes)
-			cmplwi	cr2,r5,T_RUNMODE_TRACE-T_DATA_ACCESS	; Are we still in range? (cr_gt if not)
+			cmplwi	cr2,r5,T_TRACE-T_DATA_ACCESS	; Are we still in range? (cr_gt if not)
 			
-			lwz		r5,savedsisr(r4)			/* Get the saved DSISR */
+			lwz		r5,savedsisr(r4)				; Get the saved DSISR
 			
-			crnor	cr7_eq,cr0_eq,cr2_gt		; We should intercept if in VM and is a true trap (cr7_eq == 1 if yes)
+			crnor	cr7_eq,cr0_eq,cr2_gt			; We should intercept if in VM and is a true trap (cr7_eq == 1 if yes)
 			rlwinm.	r0,r7,0,MSR_PR_BIT,MSR_PR_BIT	; Are we trapping from supervisor state? (cr0_eq == 1 if yes)
 
-			cmpi	cr2,r3,T_PREEMPT			; Is this a preemption?
+			cmpi	cr2,r3,T_PREEMPT				; Is this a preemption?
 			
-			crandc	cr0_eq,cr7_eq,cr0_eq		; Do not intercept if we are in the kernel (cr0_eq == 1 if yes)
+			crandc	cr0_eq,cr7_eq,cr0_eq			; Do not intercept if we are in the kernel (cr0_eq == 1 if yes)
 			
-			lwz		r6,savedar(r4)				/* Get the DAR */
+			lwz		r6,savedar(r4)					; Get the DAR 
 	
-			beq-	cr2, .L_call_trap			/* Don't turn on interrupts for T_PREEMPT */
-			beq-	exitFromVM					; Any true trap but T_MACHINE_CHECK exits us from the VM...
+			beq-	cr2, .L_call_trap				; Do not turn on interrupts for T_PREEMPT
+			beq-	exitFromVM						; Any true trap but T_MACHINE_CHECK exits us from the VM...
 
 /* syscall exception might warp here if there's nothing left
  * to do except generate a trap
  */
 
 .L_call_trap:	
-#if 0
-			lis		r0,HIGH_ADDR(CutTrace)		/* (TEST/DEBUG) */
-			oris	r0,r0,LOW_ADDR(CutTrace)	/* (TEST/DEBUG) */
-			sc									/* (TEST/DEBUG) */
-#endif
 
 			bl	EXT(trap)
 
+			mfmsr	r7								; Get the MSR
+			rlwinm	r7,r7,0,MSR_FP_BIT+1,MSR_FP_BIT-1	; Force floating point off
+			rlwinm	r7,r7,0,MSR_VEC_BIT+1,MSR_VEC_BIT-1	; Force vectors off
+			rlwinm	r7,r7,0,MSR_EE_BIT+1,MSR_EE_BIT-1	; Clear the interrupt enable mask
+			mtmsr	r7								; Disable for interrupts
+			mfsprg	r10,0							; Restore the per_proc info
 /*
- * Ok, return from C function
- *
  * This is also the point where new threads come when they are created.
  * The new thread is setup to look like a thread that took an 
  * interrupt and went immediatly into trap.
- *
  */
 
 thread_return:
-
-			mfmsr	r7							/* Get the MSR */
-			lwz		r4,SAVprev(r3)				/* Pick up the previous savearea */
-			rlwinm	r7,r7,0,MSR_EE_BIT+1,MSR_EE_BIT-1	/* Clear the interrupt enable mask */
-			lwz		r11,SAVflags(r3)			/* Get the flags of the current savearea */
-			mtmsr	r7							/* Disable for interrupts */
-		
-			mfsprg	r10,0						/* Restore the per_proc info */
-			
-			lwz		r8,savesrr1(r3)				; Get the MSR we are going to
-			lwz		r1,PP_CPU_DATA(r10)			/* Get the CPU data area */
-			rlwinm	r11,r11,0,15,13				/* Clear the syscall flag */
-			lwz		r1,CPU_ACTIVE_THREAD(r1)	/* and the active thread */
+			lwz		r4,SAVprev(r3)					; Pick up the previous savearea 
+			lwz		r11,SAVflags(r3)				; Get the flags of the current savearea
+			lwz		r8,savesrr1(r3)					; Get the MSR we are going to
+			rlwinm	r11,r11,0,15,13					; Clear the syscall flag
+			lwz		r1,PP_ACTIVE_THREAD(r10)		; Get the active thread 
 			rlwinm.	r8,r8,0,MSR_PR_BIT,MSR_PR_BIT	; Are we going to the user?
-			lwz		r8,THREAD_TOP_ACT(r1)		/* Now find the current activation */
-			stw		r11,SAVflags(r3)			/* Save back the flags (with reset stack cleared) */
+			mfsprg	r8,1							; Get the current activation
+			stw		r11,SAVflags(r3)				; Save back the flags (with reset stack cleared) 
 
-#if 0
-			lis		r0,HIGH_ADDR(CutTrace)		/* (TEST/DEBUG) */
-			oris	r0,r0,LOW_ADDR(CutTrace)	/* (TEST/DEBUG) */
-			sc									/* (TEST/DEBUG) */
-#endif
-			stw		r4,ACT_MACT_PCB(r8)			/* Point to the previous savearea (or 0 if none) */
+			stw		r4,ACT_MACT_PCB(r8)				; Point to the previous savearea (or 0 if none)
 
-			beq-	chkfac						; We are not leaving the kernel yet...
+			beq-	chkfac							; We are not leaving the kernel yet...
 
-			lwz		r5,THREAD_KERNEL_STACK(r1)	/* Get the base pointer to the stack */
-			addi	r5,r5,KERNEL_STACK_SIZE-FM_SIZE	/* Reset to empty */
-			stw		r5,ACT_MACT_KSP(r8)			/* Save the empty stack pointer */
-			b		chkfac						/* Go end it all... */
+			lwz		r5,THREAD_KERNEL_STACK(r1)		; Get the base pointer to the stack 
+			addi	r5,r5,KERNEL_STACK_SIZE-FM_SIZE	; Reset to empty 
+			stw		r5,ACT_MACT_KSP(r8)				; Save the empty stack pointer 
+			b		chkfac							; Go end it all...
 
 
 ;
@@ -267,16 +227,16 @@ thread_return:
 
 kernelStackBad:
 
-			lwz		r3,PP_DEBSTACK_TOP_SS(r25)	; Pick up debug stack top
+			lwz		r3,PP_DEBSTACK_TOP_SS(r25)		; Pick up debug stack top
 			subi	r3,r3,KERNEL_STACK_SIZE-FM_SIZE	; Adjust to start of stack
-			sub		r3,r1,r3					; Get displacement into debug stack
+			sub		r3,r1,r3						; Get displacement into debug stack
 			cmplwi	cr2,r3,KERNEL_STACK_SIZE-FM_SIZE	; Check if we are on debug stack
-			blt+	cr2,kernelStackNotBad		; Yeah, that is ok too...
+			blt+	cr2,kernelStackNotBad			; Yeah, that is ok too...
 
-			lis		r0,hi16(Choke)				; Choke code
-			ori		r0,r0,lo16(Choke)			; and the rest
-			li		r3,failStack				; Bad stack code
-			sc									; System ABEND
+			lis		r0,hi16(Choke)					; Choke code
+			ori		r0,r0,lo16(Choke)				; and the rest
+			li		r3,failStack					; Bad stack code
+			sc										; System ABEND
 
 
 /*
@@ -311,127 +271,113 @@ kernelStackBad:
  
 			.align	5
 			.globl EXT(shandler)
-LEXT(shandler)									/* System call handler */
+LEXT(shandler)										; System call handler
 
-			mfsprg	r25,0						/* Get the per proc area */
-			lwz		r0,saver0(r4)				/* Get the original syscall number */
-			lwz		r17,PP_ISTACKPTR(r25)		; Get interrupt stack pointer
-			rlwinm	r15,r0,0,0,19				; Clear the bottom of call number for fast check
-			lwz		r16,PP_CPU_DATA(r25)		/* Assume we need this */
-			mr.		r17,r17						; Are we on interrupt stack?
-			lwz		r7,savesrr1(r4)				; Get the SRR1 value
-			beq-	EXT(ihandler)				; On interrupt stack, not allowed...
+			mfsprg	r25,0							; Get the per proc area 
+			lwz		r0,saver0(r4)					; Get the original syscall number
+			lwz		r17,PP_ISTACKPTR(r25)			; Get interrupt stack pointer
+			rlwinm	r15,r0,0,0,19					; Clear the bottom of call number for fast check
+			mr.		r17,r17							; Are we on interrupt stack?
+			lwz		r7,savesrr1(r4)					; Get the SRR1 value
+			beq-	EXT(ihandler)					; On interrupt stack, not allowed...
+			lwz		r9,savevrsave(r4)				; Get the VRsave register
 			rlwinm.	r6,r7,0,MSR_VEC_BIT,MSR_VEC_BIT	; Was vector on?
-			lwz		r16,CPU_ACTIVE_THREAD(r16)	/* Get the thread pointer */
+			lwz		r16,PP_ACTIVE_THREAD(r25)		; Get the thread pointer 
+			mfsprg	r13,1							; Pick up the active thread 
 
-			beq+	svecoff						; Vector off, do not save vrsave...
-			lwz		r6,savevrsave(r4)			; Get the VRSAVE register
-			stw		r6,liveVRS(r25)				; Set the live value
-
-svecoff:	rlwinm.	r6,r7,0,MSR_FP_BIT,MSR_FP_BIT	; Was floating point on?
-			lwz		r13,THREAD_TOP_ACT(r16)		/* Pick up the active thread */
-			beq+	sfpoff						; Skip if floating point is off...
-			lwz		r9,savexfpscr(r4)			; Grab the just saved FPSCR
-			stw		r9,liveFPSCR(r25)			; Make it the live copy
-
+			beq+	svecoff							; Vector off, do not save vrsave...
+			stw		r9,liveVRS(r25)					; Set the live value
+;
 ; 			Check if SCs are being redirected for the BlueBox or to VMM
+;
 
-sfpoff:		lwz		r6,ACT_MACT_SPF(r13)		; Pick up activation special flags
-			mtcrf	0x41,r6						; Check special flags
-			crmove	cr6_eq,runningVMbit			; Remember if we are in VMM
-			bf+		bbNoMachSCbit,noassist		; Take branch if SCs are not redirected
-			lwz		r26,ACT_MACT_BEDA(r13)		; Pick up the pointer to the blue box exception area
-			b		EXT(atomic_switch_syscall)	; Go to the assist...
+svecoff:	lwz		r6,ACT_MACT_SPF(r13)			; Pick up activation special flags
+			mtcrf	0x41,r6							; Check special flags
+			crmove	cr6_eq,runningVMbit				; Remember if we are in VMM
+			bf+		bbNoMachSCbit,noassist			; Take branch if SCs are not redirected
+			lwz		r26,ACT_MACT_BEDA(r13)			; Pick up the pointer to the blue box exception area
+			b		EXT(atomic_switch_syscall)		; Go to the assist...
 
-noassist:	cmplwi	r15,0x7000					/* Do we have a fast path trap? */
-			lwz		r14,ACT_MACT_PCB(r13)		/* Now point to the PCB */
-			beql+	fastpath					/* We think it's a fastpath... */
+noassist:	cmplwi	r15,0x7000						; Do we have a fast path trap? 
+			lwz		r14,ACT_MACT_PCB(r13)			; Now point to the PCB 
+			beql+	fastpath						; We think it is a fastpath... 
 
-			lwz		r1,ACT_MACT_KSP(r13)		/* Get the kernel stack pointer */
+			lwz		r1,ACT_MACT_KSP(r13)			; Get the kernel stack pointer 
 #if DEBUG
-			mr.		r1,r1						/* Are we already on the kernel stack? */
-			li		r3,T_SYSTEM_CALL			/* Yup, pretend we had an interrupt... */
-			beq-	EXT(ihandler)				/* Bad boy, bad boy... What'cha gonna do when they come for you? */
+			mr.		r1,r1							; Are we already on the kernel stack? 
+			li		r3,T_SYSTEM_CALL				; Yup, pretend we had an interrupt... 
+			beq-	EXT(ihandler)					; Bad boy, bad boy... What cha gonna do when they come for you?
 #endif /* DEBUG */
 
-			stw		r4,ACT_MACT_PCB(r13)		/* Point to our savearea */
-			li		r0,0						/* Clear this out */
-			stw		r14,SAVprev(r4)				/* Queue the new save area in the front */
-			stw		r13,SAVact(r4)				/* Point the savearea at its activation */
+			stw		r4,ACT_MACT_PCB(r13)			; Point to our savearea
+			li		r0,0							; Clear this out 
+			stw		r14,SAVprev(r4)					; Queue the new save area in the front 
+			stw		r13,SAVact(r4)					; Point the savearea at its activation
 			
 #if VERIFYSAVE
-			bl		versave						; (TEST/DEBUG)
+			bl		versave							; (TEST/DEBUG)
 #endif			
 			
-			mr		r30,r4						/* Save pointer to the new context savearea */
-			lwz		r15,saver1(r4)				/* Grab interrupt time stack */
-			stw		r0,ACT_MACT_KSP(r13)		/* Mark stack as busy with 0 val */
-			stw		r15,FM_BACKPTR(r1)			/* Link backwards */
+			mr		r30,r4							; Save pointer to the new context savearea
+			lwz		r15,saver1(r4)					; Grab interrupt time stack 
+			stw		r0,ACT_MACT_KSP(r13)			; Mark stack as busy with 0 val 
+			stw		r15,FM_BACKPTR(r1)				; Link stack frame backwards
 		
 #if	DEBUG
-	/* If debugging, we need two frames, the first being a dummy
-	 * which links back to the trapped routine. The second is
-	 * that which the C routine below will need
-	 */
-			lwz		r8,savesrr0(r30)			/* Get the point of interruption */
-			stw		r8,FM_LR_SAVE(r1)			/* save old instr ptr as LR value */
-			stwu	r1,	-FM_SIZE(r1)			/* and make new frame */
+/* If debugging, we need two frames, the first being a dummy
+ * which links back to the trapped routine. The second is
+ * that which the C routine below will need
+ */
+			lwz		r8,savesrr0(r30)				; Get the point of interruption
+			stw		r8,FM_LR_SAVE(r1)				; Save old instr ptr as LR value
+			stwu	r1,	-FM_SIZE(r1)				; and make new frame
 #endif /* DEBUG */
 
-			mfmsr	r11							/* Get the MSR */
-			lwz		r15,SAVflags(r4)			/* Get the savearea flags */
-			ori		r11,r11,lo16(MASK(MSR_EE))	/* Turn on interruption enabled bit */
-			lwz		r0,saver0(r30)				; Get R0 back
-			oris	r15,r15,SAVsyscall >> 16 	/* Mark that it this is a syscall */
-			rlwinm	r10,r0,0,0,19				; Keep only the top part 
-			stwu	r1,-(FM_SIZE+ARG_SIZE)(r1)	/* Make a stack frame */
-			cmplwi	r10,0x6000					; Is it the special ppc-only guy?
-			stw		r15,SAVflags(r30)			/* Save syscall marker */
-			beq-	cr6,exitFromVM				; It is time to exit from alternate context...
+			mfmsr	r11								; Get the MSR
+			lwz		r15,SAVflags(r30)				; Get the savearea flags
+			ori		r11,r11,lo16(MASK(MSR_EE))		; Turn on interruption enabled bit
+			lwz		r0,saver0(r30)					; Get R0 back
+			oris	r15,r15,SAVsyscall >> 16 		; Mark that it this is a syscall
+			rlwinm	r10,r0,0,0,19					; Keep only the top part 
+			stwu	r1,-(FM_SIZE+ARG_SIZE)(r1)		; Make a stack frame
+			cmplwi	r10,0x6000						; Is it the special ppc-only guy?
+			stw		r15,SAVflags(r30)				; Save syscall marker
+			beq-	cr6,exitFromVM					; It is time to exit from alternate context...
 			
-			beq-	ppcscall					; Call the ppc-only system call handler...
+			beq-	ppcscall						; Call the ppc-only system call handler...
 
-			mtmsr	r11							/* Enable interruptions */
+			mtmsr	r11								; Enable interruptions
 
-			/* Call a function that can print out our syscall info */
-			/* Note that we don't care about any volatiles yet */
-			mr		r4,r30
-			bl		EXT(syscall_trace)	
-	
-			lwz		r0,saver0(r30)				/* Get the system call selector */
-			mr.		r0,r0						/* What kind is it? */
-			blt-	.L_kernel_syscall			/* -ve syscall - go to kernel */
-												/* +ve syscall - go to server */
-			cmpwi	cr0,r0,0x7FFA
-			beq-	.L_notify_interrupt_syscall
+			lwz		r0,saver0(r30)					; Get the system call selector
+			mr.		r0,r0							; What kind is it?
+			blt-	.L_kernel_syscall				; System call number if negative, this is a mach call...
+											
+			cmpwi	cr0,r0,0x7FFA					; Special blue box call?
+			beq-	.L_notify_interrupt_syscall		; Yeah, call it...
 			
-#ifdef MACH_BSD
-			mr		r3,r30						/* Get PCB/savearea */
-			lwz		r4,saver4(r30)  			/* Restore r4 */
-			lwz		r5,saver5(r30)  			/* Restore r5 */
-			lwz		r6,saver6(r30)  			/* Restore r6 */
-			lwz		r7,saver7(r30)  			/* Restore r7 */
-			lwz		r8,saver8(r30)  			/* Restore r8 */
-			lwz		r9,saver9(r30)  			/* Restore r9 */
-			lwz		r10,saver10(r30)  			/* Restore r10 */
-			bl		EXT(unix_syscall)			/* Check out unix... */
-#endif
+			lwz     r8,ACT_TASK(r13)				; Get our task
+			lis     r10,hi16(EXT(c_syscalls_unix))	; Get top half of counter address 
+			lwz     r7,TASK_SYSCALLS_UNIX(r8)		; Get the current count
+			ori     r10,r10,lo16(EXT(c_syscalls_unix))	; Get low half of counter address
+			addi    r7,r7,1							; Bump it
+			lwz     r9,0(r10)						; Get counter
+			stw     r7,TASK_SYSCALLS_UNIX(r8)		; Save it
+			mr      r3,r30							; Get PCB/savearea
+			mr      r4,r13							; current activation
+			addi    r9,r9,1							; Add 1 
+			stw     r9,0(r10)						; Save it back 
+			bl      EXT(unix_syscall)				; Check out unix...
 
 .L_call_server_syscall_exception:		
-			li		r3,EXC_SYSCALL				/* doexception(EXC_SYSCALL, num, 1) */
+			li		r3,EXC_SYSCALL					; doexception(EXC_SYSCALL, num, 1)
 
 .L_call_server_exception:
-			mr		r4,r0						/* Set syscall selector */
+			mr		r4,r0							; Set syscall selector
 			li		r5,1
-			b		EXT(doexception)			/* Go away, never to return... */
-
-/* The above, but with EXC_MACH_SYSCALL */
-.L_call_server_mach_syscall:
-			li		r3,EXC_MACH_SYSCALL
-			b		.L_call_server_exception	/* Join the common above... */
+			b		EXT(doexception)				; Go away, never to return...
 
 .L_notify_interrupt_syscall:
-			lwz		r3,saver3(r30)				; Get the new PC address to pass in
+			lwz		r3,saver3(r30)					; Get the new PC address to pass in
 			bl		EXT(syscall_notify_interrupt)
 			b		.L_syscall_return
 	
@@ -456,13 +402,17 @@ noassist:	cmplwi	r15,0x7000					/* Do we have a fast path trap? */
 ;			Note: the last option is intended for special diagnostics calls that 
 ;			want the thread to return and execute before checking for preemption.
 ;
+;			NOTE: Both R16 (thread) and R30 (savearea) need to be preserved over this call!!!!
+;
 
-ppcscall:	rlwinm	r11,r0,2,18,29				; Make an index into the table
-			lis		r10,hi16(EXT(PPCcalls))		; Get PPC-only system call table
-			cmplwi	r11,PPCcallmax				; See if we are too big
-			ori		r10,r10,lo16(EXT(PPCcalls))	; Merge in low half
+			.align	5
+
+ppcscall:	rlwinm	r11,r0,2,18,29					; Make an index into the table
+			lis		r10,hi16(EXT(PPCcalls))			; Get PPC-only system call table
+			cmplwi	r11,PPCcallmax					; See if we are too big
+			ori		r10,r10,lo16(EXT(PPCcalls))		; Merge in low half
 			bgt-	.L_call_server_syscall_exception	; Bogus call...
-			lwzx	r11,r10,r11					; Get function address
+			lwzx	r11,r10,r11						; Get function address
 			
 ;
 ;			Note: make sure we do not change the savearea in R30 to
@@ -470,22 +420,22 @@ ppcscall:	rlwinm	r11,r0,2,18,29				; Make an index into the table
 ;			depend upon it being there.
 ;
 	
-			mr		r3,r30						; Pass the savearea
-			mr		r4,r13						; Pass the activation
-			mr.		r11,r11						; See if there is a function here
-			mtlr	r11							; Set the function address
+			mr		r3,r30							; Pass the savearea
+			mr		r4,r13							; Pass the activation
+			mr.		r11,r11							; See if there is a function here
+			mtlr	r11								; Set the function address
 			beq-	.L_call_server_syscall_exception	; Disabled call...
-			blrl								; Call it
-
-		
+			blrl									; Call it
+	
 			.globl	EXT(ppcscret)
+
 LEXT(ppcscret)
-			mr.		r3,r3						; See what we should do
-			mr		r31,r16						; Restore the current thread pointer
+			mr.		r3,r3							; See what we should do
+			mr		r31,r16							; Restore the current thread pointer
 			bgt+	.L_thread_syscall_ret_check_ast	; Take normal AST checking return....
-			mfsprg	r10,0						; Get the per_proc
-			blt+	.L_thread_syscall_return	; Return, but no ASTs....
-			lwz		r0,saver0(r30)				; Restore the system call number
+			mfsprg	r10,0							; Get the per_proc
+			blt+	.L_thread_syscall_return		; Return, but no ASTs....
+			lwz		r0,saver0(r30)					; Restore the system call number
 			b		.L_call_server_syscall_exception	; Go to common exit...
 
 
@@ -496,73 +446,74 @@ LEXT(ppcscret)
  * r0		= syscall number
  * r30		= pointer to saved state (in pcb)
  */
+
+			.align	5
+
 .L_kernel_syscall:	
-			neg	r31,	r0		/* Make number +ve and put in r31*/
+;
+; Call a function that can print out our syscall info 
+; Note that we don t care about any volatiles yet
+;
+			mr		r4,r30 
+			bl      EXT(syscall_trace)
+			lwz		r0,saver0(r30)					; Get the system call selector */
+			neg		r31,r0							; Make system call number positive and put in r31
+			lis		r29,hi16(EXT(mach_trap_count))	; High part of valid trap number
+			ori		r29,r29,lo16(EXT(mach_trap_count))	; Low part of valid trap number
+			lis		r28,hi16(EXT(mach_trap_table))	; High part of trap table
+			lwz		r29,0(r29)						; Get the first invalid system call number
+			ori		r28,r28,lo16(EXT(mach_trap_table))	; Low part of trap table
 
-	/* If out of range, call server with syscall exception */
-	addis	r29,	0,	HIGH_CADDR(EXT(mach_trap_count))
-	addi	r29,	r29,	LOW_ADDR(EXT(mach_trap_count))
-	lwz	r29,	0(r29)
+			cmplw	r31,r29							; See if we have a valid system call number
+			slwi	r31,r31,MACH_TRAP_OFFSET_POW2	; Get offset into table
+		
+			bge-	.L_call_server_syscall_exception	; System call number of bogus
 
-	cmp	cr0,	r31,	r29
-	bge-	cr0,	.L_call_server_syscall_exception
-
-	addis	r29,	0,	HIGH_CADDR(EXT(mach_trap_table))
-	addi	r29,	r29,	LOW_ADDR(EXT(mach_trap_table))
-	
-	/* multiply the trap number to get offset into table */
-	slwi	r31,	r31,	MACH_TRAP_OFFSET_POW2
-
-	/* r31 now holds offset into table of our trap entry,
-	 * add on the table base, and it then holds pointer to entry
-	 */
-	add	r31,	r31,	r29
-
-	/* If the function is kern_invalid, prepare to send an exception.
-	   This is messy, but parallels the x86.  We need it for task_by_pid,
-	   at least.  */
-	lis	r29,	HIGH_CADDR(EXT(kern_invalid))
-	addi	r29,	r29,	LOW_ADDR(EXT(kern_invalid))
-	lwz	r0,	MACH_TRAP_FUNCTION(r31)
-	cmp	cr0,	r0,	r29
-	beq-	.L_call_server_syscall_exception
-
-	/* get arg count. If argc > 8 then not all args were in regs,
-	 * so we must perform copyin.
-	 */
-	lwz	r29,	MACH_TRAP_ARGC(r31)
-	cmpwi	cr0,	r29,	8
-	ble+	.L_syscall_got_args
+			add		r31,r31,r28						; Point to the system call entry
+			lis		r28,hi16(EXT(kern_invalid))		; Get the high invalid routine address
+			lwz		r0,MACH_TRAP_FUNCTION(r31)		; Grab the system call routine address
+			ori		r28,r28,lo16(EXT(kern_invalid))	; Get the low part of the invalid routine address
+			lwz		r29,MACH_TRAP_ARGC(r31)			; Get the number of arguments in the call
+			cmplw	r0,r28							; Is this an invalid entry?
+			beq-	.L_call_server_syscall_exception	; Yes, it is invalid...
+		
+/* get arg count. If argc > 8 then not all args were in regs,
+ * so we must perform copyin.
+ */
+			cmpwi	cr0,r29,8						; Do we have more than 8 arguments?
+			ble+	.L_syscall_got_args				; Nope, no copy in needed...
 
 /* argc > 8  - perform a copyin */
 /* if the syscall came from kernel space, we can just copy */
 
-			lwz		r0,savesrr1(r30)				/* Pick up exception time MSR */
-			andi.	r0,r0,MASK(MSR_PR)				/* Check the priv bit */
-			bne+	.L_syscall_arg_copyin			/* We're not priviliged... */
+			lwz		r0,savesrr1(r30)				; Pick up exception time MSR
+			andi.	r0,r0,MASK(MSR_PR)				; Check the priv bit
+			bne+	.L_syscall_arg_copyin			; We are not priviliged...
 
 /* we came from a privilaged task, just do a copy */
 /* get user's stack pointer */
 
-			lwz		r28,saver1(r30)					/* Get the stack pointer */
+			lwz		r28,saver1(r30)					; Get the stack pointer
 
-			subi	r29,r29,8						/* Get the number of arguments to copy */
+			subi	r29,r29,8						; Get the number of arguments to copy 
 
-			addi	r28,r28,COPYIN_ARG0_OFFSET-4	/* Point to source - 4 */
-			addi	r27,r1,FM_ARG0-4				/* Point to sink - 4 */
+			addi	r28,r28,COPYIN_ARG0_OFFSET-4	; Point to source - 4 
+			addi	r27,r1,FM_ARG0-4			; Point to sink - 4
 
 .L_syscall_copy_word_loop:
-			addic.	r29,r29,-1						/* Count down the number of arguments left */
-			lwz		r0,4(r28)						/* Pick up the argument from the stack */
-			addi	r28,r28,4						/* Point to the next source */
-			stw		r0,4(r27)						/* Store the argument */
-			addi	r27,r27,4						/* Point to the next sink */
-			bne+	.L_syscall_copy_word_loop		/* Move all arguments... */
-			b		.L_syscall_got_args				/* Go call it now... */
+			addic.	r29,r29,-1						; Count down the number of arguments left
+			lwz		r0,4(r28)						; Pick up the argument from the stack 
+			addi	r28,r28,4						; Point to the next source 
+			stw		r0,4(r27)						; Store the argument 
+			addi	r27,r27,4						; Point to the next sink 
+			bne+	.L_syscall_copy_word_loop		; Move all arguments... 
+			b		.L_syscall_got_args				; Go call it now... 
 
 
 /* we came from a user task, pay the price of a real copyin */	
 /* set recovery point */
+
+			.align	5
 
 .L_syscall_arg_copyin:
 			lwz		r8,ACT_VMMAP(r13)				; Get the vm_map for this activation
@@ -570,7 +521,7 @@ LEXT(ppcscret)
 			lwz		r8,VMMAP_PMAP(r8)				; Get the pmap
 			ori		r28,r28,lo16(.L_syscall_copyin_recover)
 			addi	r8,r8,PMAP_SEGS					; Point to the pmap SR slots
-			stw		r28,THREAD_RECOVER(r16) 		/* R16 still holds thread ptr */
+			stw		r28,THREAD_RECOVER(r16) 		; R16 still holds thread ptr 
 
 /* We can manipulate the COPYIN segment register quite easily
  * here, but we've also got to make sure we don't go over a
@@ -579,9 +530,9 @@ LEXT(ppcscret)
  */
 	
 
-			lwz		r28,saver1(r30)					/* Get the stack pointer */
-			subi	r29,r29,8						/* Get the number of arguments to copy */
-			addi	r28,r28,COPYIN_ARG0_OFFSET	/* Set source in user land */
+			lwz		r28,saver1(r30)					; Get the stack pointer 
+			subi	r29,r29,8						; Get the number of arguments to copy
+			addi	r28,r28,COPYIN_ARG0_OFFSET		; Set source in user land 
 
 /* set up SR_COPYIN to allow us to copy, we may need to loop
  * around if we change segments. We know that this previously
@@ -590,9 +541,7 @@ LEXT(ppcscret)
 
 			rlwinm	r7,r28,6,26,29					; Get index to the segment slot
 
-.L_syscall_copyin_seg_loop:
-			
-			
+.L_syscall_copyin_seg_loop:			
 			lwzx	r10,r8,r7						; Get the source SR value
 			rlwinm	r26,r28,0,4,31					; Clear the segment number from source address
 			mtsr	SR_COPYIN,r10					; Set the copyin SR
@@ -600,12 +549,10 @@ LEXT(ppcscret)
 
 			oris	r26,r26,(SR_COPYIN_NUM << (28-16))	; Insert the copyin segment number into source address
 	
-/* Make r27 point to address-4 of where we will store copied args */
-			addi	r27,r1,FM_ARG0-4
+			addi	r27,r1,FM_ARG0-4				; Point to area - 4 where we will store the arguments
 	
-.L_syscall_copyin_word_loop:
-			
-			lwz		r0,0(r26)						/* MAY CAUSE PAGE FAULT! */
+.L_syscall_copyin_word_loop:			
+			lwz		r0,0(r26)						; MAY CAUSE PAGE FAULT!
 			subi	r29,r29,1						; Decrement count
 			addi	r26,r26,4						; Bump input
 			stw		r0,4(r27)						; Save the copied in word
@@ -618,43 +565,44 @@ LEXT(ppcscret)
 			bne+	.L_syscall_copyin_word_loop		; We are still on the same segment...
 
 			addi	r7,r7,4							; Bump to next slot
-			b		.L_syscall_copyin_seg_loop		/* On new segment! remap */
+			b		.L_syscall_copyin_seg_loop		; On new segment! remap 
 
 /* Don't bother restoring SR_COPYIN, we can leave it trashed */
 /* clear thread recovery as we're done touching user data */
 
+			.align	5
+
 .L_syscall_copyin_done:	
 			li		r0,0
-			stw		r0,THREAD_RECOVER(r16) /* R16 still holds thread ptr */
+			stw		r0,THREAD_RECOVER(r16) 			; R16 still holds thread ptr 
 
 .L_syscall_got_args:
-			lwz		r8,ACT_TASK(r13)		/* Get our task */
-			lis		r10,hi16(EXT(c_syscalls_mach))	/* Get top half of counter address */
+			lwz		r0,MACH_TRAP_FUNCTION(r31)		; Get function address
+			lwz		r8,ACT_TASK(r13)				; Get our task 
+			lis		r10,hi16(EXT(c_syscalls_mach))	; Get top half of counter address
 			lwz		r7,TASK_SYSCALLS_MACH(r8)		; Get the current count
-			lwz		r3,saver3(r30)  		/* Restore r3 */
-			addi	r7,r7,1					; Bump it
-			ori		r10,r10,lo16(EXT(c_syscalls_mach)) /* Get low half of counter address */
+			lwz		r3,saver3(r30)  				; Restore r3
+			addi	r7,r7,1							; Bump it
+			ori		r10,r10,lo16(EXT(c_syscalls_mach)) ; Get low half of counter address 
 			stw		r7,TASK_SYSCALLS_MACH(r8)		; Save it
-			lwz		r4,saver4(r30)  		/* Restore r4 */
-			lwz		r9,0(r10)				/* Get counter */	
-			lwz		r5,saver5(r30)  		/* Restore r5 */
-			lwz		r6,saver6(r30)  		/* Restore r6 */
-			addi	r9,r9,1					/* Add 1 */
-			lwz		r7,saver7(r30)  		/* Restore r7 */
-			lwz		r8,saver8(r30)  		/* Restore r8 */
-			stw		r9,0(r10)				/* Save it back	*/
-			lwz		r9,saver9(r30)  		/* Restore r9 */
-			lwz		r10,saver10(r30)  		/* Restore r10 */
+			lwz		r4,saver4(r30)  				; Restore r4 
+			lwz		r9,0(r10)						; Get counter	
+			mtctr	r0								; Set function address
+			lwz		r5,saver5(r30)  				; Restore r5 
+			lwz		r6,saver6(r30)  				; Restore r6
+			addi	r9,r9,1							; Add 1 
+			lwz		r7,saver7(r30)  				; Restore r7 
+			lwz		r8,saver8(r30)  				; Restore r8 
+			stw		r9,0(r10)						; Save it back	
+			lwz		r9,saver9(r30)  				; Restore r9 
+			lwz		r10,saver10(r30)  				; Restore r10
 
-			lwz		r0,MACH_TRAP_FUNCTION(r31)
 
-/* calling this function, all the callee-saved registers are
- * still valid except for r30 and r31 which are in the PCB
- * r30 holds pointer to saved state (ie. pcb)
- * r31 is scrap
- */
-			mtctr	r0
-			bctrl							/* perform the actual syscall */
+;
+;			Note that all arguments from the system call are passed into the function
+;
+
+			bctrl									; Perform the actual syscall
 
 /* 'standard' syscall returns here - INTERRUPTS ARE STILL ON */
 
@@ -662,7 +610,7 @@ LEXT(ppcscret)
  */
 
 /*
- * Ok, return from C function, ARG0 = return value
+ * Ok, return from C function, R3 = return value
  *
  * get the active thread's PCB pointer and thus pointer to user state
  * saved state is still in R30 and the active thread is in R16	.	
@@ -682,38 +630,30 @@ LEXT(ppcscret)
 
 /* save off return value, we must load it
  * back anyway for thread_exception_return
- * TODO NMGS put in register?
  */
-.L_syscall_return:	
-			mr		r31,r16								/* Move the current thread pointer */
-			stw		r3,saver3(r30)						/* Stash the return code */
-	
-			/* Call a function that records the end of */
-			/* the mach system call */
-			mr		r4,r30
-			bl		EXT(syscall_trace_end)	
-	
-#if 0
-			lis		r0,HIGH_ADDR(CutTrace)				/* (TEST/DEBUG) */
-			mr		r4,r31								/* (TEST/DEBUG) */
-			oris	r0,r0,LOW_ADDR(CutTrace)			/* (TEST/DEBUG) */
-			mr		r5,r30								/* (TEST/DEBUG) */
-			sc											/* (TEST/DEBUG) */
-#endif
 
+.L_syscall_return:	
+			mr		r31,r16							; Move the current thread pointer
+			stw		r3,saver3(r30)					; Stash the return code
+	
+			mr		r4,r30							; Pass in the savearea
+			bl		EXT(syscall_trace_end)			; Trace the exit of the system call	
+	
 .L_thread_syscall_ret_check_ast:	
-			mfmsr	r12									/* Get the current MSR */
-			rlwinm	r12,r12,0,MSR_EE_BIT+1,MSR_EE_BIT-1	/* Turn off interruptions enable bit */
-			mtmsr	r12									/* Turn interruptions off */
+			mfmsr	r12								; Get the current MSR 
+			rlwinm	r12,r12,0,MSR_FP_BIT+1,MSR_FP_BIT-1	; Force floating point off
+			rlwinm	r12,r12,0,MSR_VEC_BIT+1,MSR_VEC_BIT-1	; Force vectors off
+			rlwinm	r12,r12,0,MSR_EE_BIT+1,MSR_EE_BIT-1	; Turn off interruptions enable bit
+			mtmsr	r12								; Turn interruptions off
 			
-			mfsprg	r10,0								/* Get the per_processor block */
+			mfsprg	r10,0							; Get the per_processor block
 
 /* Check to see if there's an outstanding AST */
 		
-			lwz		r4,PP_NEED_AST(r10)
-			lwz		r4,0(r4)
-			cmpi	cr0,r4,	0
-			beq		cr0,.L_syscall_no_ast
+			lwz		r4,PP_NEED_AST(r10)				; Get the pointer to the ast requests
+			lwz		r4,0(r4)						; Get the flags
+			cmpi	cr0,r4,	0						; Any pending asts?
+			beq+	cr0,.L_syscall_no_ast			; Nope...
 
 /* Yes there is, call ast_taken 
  * pretending that the user thread took an AST exception here,
@@ -724,22 +664,20 @@ LEXT(ppcscret)
 /* debug assert - make sure that we're not returning to kernel */
 			lwz		r3,savesrr1(r30)
 			andi.	r3,r3,MASK(MSR_PR)
-			bne+	0f									/* returning to user level, check */
+			bne+	scrnotkern						; returning to user level, check 
 			
-			lis		r0,hi16(Choke)						; Choke code
-			ori		r0,r0,lo16(Choke)					; and the rest
-			li		r3,failContext						; Bad state code
-			sc											; System ABEND
+			lis		r0,hi16(Choke)					; Choke code
+			ori		r0,r0,lo16(Choke)				; and the rest
+			li		r3,failContext					; Bad state code
+			sc										; System ABEND
 
-
-0:		
+scrnotkern:		
 #endif	/* DEBUG */
 	
-			li	r3,	AST_ALL
-			li	r4,	1
-			bl	EXT(ast_taken)
-			
-			b	.L_thread_syscall_ret_check_ast
+			li		r3,AST_ALL						; Set ast flags
+			li		r4,1							; Set interrupt allowed
+			bl		EXT(ast_taken)					; Process the pending ast
+			b		.L_thread_syscall_ret_check_ast	; Go see if there was another...
 
 /* thread_exception_return returns to here, almost all
  * registers intact. It expects a full context restore
@@ -750,42 +688,44 @@ LEXT(ppcscret)
  *                   r30 points to the current pcb
  */
  
+ 			.align	5
+ 
 .L_syscall_no_ast:
 .L_thread_syscall_return:
 
-			mr		r3,r30						; Get savearea to the correct register for common exit
-			lwz		r8,THREAD_TOP_ACT(r31)		/* Now find the current activation */
+			mr		r3,r30							; Get savearea to the correct register for common exit
+			mfsprg	r8,1				 			; Now find the current activation 
 
-			lwz		r11,SAVflags(r30)			/* Get the flags */
-			lwz		r5,THREAD_KERNEL_STACK(r31)	/* Get the base pointer to the stack */
-			rlwinm	r11,r11,0,15,13				/* Clear the syscall flag */
-			lwz		r4,SAVprev(r30)				; Get the previous save area
-			stw		r11,SAVflags(r30)			/* Stick back the flags */
-			addi	r5,r5,KERNEL_STACK_SIZE-FM_SIZE	/* Reset to empty */
-			stw		r4,ACT_MACT_PCB(r8)			; Save previous save area
-			stw		r5,ACT_MACT_KSP(r8)			/* Save the empty stack pointer */
-		
-			b		chkfac						; Go end it all...
+			lwz		r11,SAVflags(r30)				; Get the flags 
+			lwz		r5,THREAD_KERNEL_STACK(r31)		; Get the base pointer to the stack 
+			rlwinm	r11,r11,0,15,13					; Clear the syscall flag
+			lwz		r4,SAVprev(r30)					; Get the previous save area
+			stw		r11,SAVflags(r30)				; Stick back the flags
+			addi	r5,r5,KERNEL_STACK_SIZE-FM_SIZE	; Reset to empty
+			stw		r4,ACT_MACT_PCB(r8)				; Save previous save area
+			stw		r5,ACT_MACT_KSP(r8)				; Save the empty stack pointer
+			b		chkfac							; Go end it all...
 
+			.align	5
 
 .L_syscall_copyin_recover:
 
-	/* This is the catcher for any data faults in the copyin
-	 * of arguments from the user's stack.
-	 * r30 still holds a pointer to the PCB
-	 *
-	 * call syscall_error(EXC_BAD_ACCESS, EXC_PPC_VM_PROT_READ, sp, ssp),
-	 *
-	 * we already had a frame so we can do this
-	 */	
+/* This is the catcher for any data faults in the copyin
+ * of arguments from the user's stack.
+ * r30 still holds a pointer to the PCB
+ *
+ * call syscall_error(EXC_BAD_ACCESS, EXC_PPC_VM_PROT_READ, sp, ssp),
+ *
+ * we already had a frame so we can do this
+ */	
 	
-			li		r3,EXC_BAD_ACCESS
-			li		r4,EXC_PPC_VM_PROT_READ
-			lwz		r5,saver1(r30)
-			mr		r6,r30
+			li		r3,EXC_BAD_ACCESS				; Set bad access code
+			li		r4,EXC_PPC_VM_PROT_READ			; Set protection exception
+			lwz		r5,saver1(r30)					; Point to the stack
+			mr		r6,r30							; Pass savearea
 		
-			bl		EXT(syscall_error)
-			b		.L_syscall_return
+			bl		EXT(syscall_error)				; Generate error...
+			b		.L_syscall_return				; Continue out...
 
 		
 /*
@@ -802,10 +742,11 @@ LEXT(thread_bootstrap_return)						; NOTE: THIS IS GOING AWAY IN A FEW DAYS....
 LEXT(thread_exception_return)						; Directly return to user mode
 
 .L_thread_exc_ret_check_ast:	
-
-			mfmsr	r3							/* Get the MSR */
-			rlwinm	r3,r3,0,MSR_EE_BIT+1,MSR_EE_BIT-1	/* Clear EE */
-			mtmsr	r3							/* Disable interrupts */
+			mfmsr	r3								; Get the MSR 
+			rlwinm	r3,r3,0,MSR_FP_BIT+1,MSR_FP_BIT-1	; Force floating point off
+			rlwinm	r3,r3,0,MSR_VEC_BIT+1,MSR_VEC_BIT-1	; Force vectors off
+			rlwinm	r3,r3,0,MSR_EE_BIT+1,MSR_EE_BIT-1	; Clear EE 
+			mtmsr	r3								; Disable interrupts
 
 /* Check to see if there's an outstanding AST */
 /* We don't bother establishing a call frame even though CHECK_AST
@@ -813,35 +754,34 @@ LEXT(thread_exception_return)						; Directly return to user mode
    frame, given that we're not going to return.  
 */
 		
-			mfsprg	r10,0						/* Get the per_processor block */
+			mfsprg	r10,0							; Get the per_processor block 
 			lwz		r4,PP_NEED_AST(r10)
 			lwz		r4,0(r4)
 			cmpi	cr0,r4,	0
 			beq		cr0,.L_exc_ret_no_ast
 		
-	/* Yes there is, call ast_taken 
-	 * pretending that the user thread took an AST exception here,
-	 * ast_taken will save all state and bring us back here
-	 */
+/* Yes there is, call ast_taken 
+ * pretending that the user thread took an AST exception here,
+ * ast_taken will save all state and bring us back here
+ */
 	
-
 			li		r3,AST_ALL
 			li		r4,1
 			
 			bl		EXT(ast_taken)
-			b		.L_thread_exc_ret_check_ast	/* check for a second AST (rare)*/
+			b		.L_thread_exc_ret_check_ast		; check for a second AST (rare)
 	
 /* arriving here, interrupts should be disabled */
 /* Get the active thread's PCB pointer to restore regs
  */
 .L_exc_ret_no_ast:
 			
-			lwz		r31,PP_CPU_DATA(r10)
-			lwz		r31,CPU_ACTIVE_THREAD(r31)
-			lwz		r30,THREAD_TOP_ACT(r31)
+			mfsprg  r30,1							; Get the currrent activation
+			lwz		r31,ACT_THREAD(r30)				; Get the current thread
+
 			lwz		r30,ACT_MACT_PCB(r30)
-			mr.		r30,r30								; Is there any context yet?
-			beq-	makeDummyCtx						; No, hack one up...
+			mr.		r30,r30							; Is there any context yet?
+			beq-	makeDummyCtx					; No, hack one up...
 #if	DEBUG
 /* 
  * debug assert - make sure that we're not returning to kernel
@@ -850,47 +790,52 @@ LEXT(thread_exception_return)						; Directly return to user mode
 		
 			lwz		r3,savesrr1(r30)
 			andi.	r3,r3,MASK(MSR_PR)
-			bne+	ret_user2							; We are ok...
+			bne+	ret_user2						; We are ok...
 
-			lis		r0,hi16(Choke)						; Choke code
-			ori		r0,r0,lo16(Choke)					; and the rest
-			li		r3,failContext						; Bad state code
-			sc											; System ABEND
+			lis		r0,hi16(Choke)					; Choke code
+			ori		r0,r0,lo16(Choke)				; and the rest
+			li		r3,failContext					; Bad state code
+			sc										; System ABEND
 			
 ret_user2:		
 #endif	/* DEBUG */
 		
-/* If the MSR_SYSCALL_MASK isn't set, then we came from a trap,
+/* If the system call flag isn't set, then we came from a trap,
  * so warp into the return_from_trap (thread_return) routine,
  * which takes PCB pointer in R3, not in r30!
  */
-			lwz		r0,SAVflags(r30)
-			mr		r3,r30								/* Copy pcb pointer into r3 in case */
-			andis.	r0,r0,SAVsyscall>>16				/* Are we returning from a syscall? */
-			beq-	cr0,thread_return					/* Nope, must be a thread return... */
-			b		.L_thread_syscall_return
+			lwz		r0,SAVflags(r30)				; Grab the savearea flags
+			mr		r3,r30							; Copy pcb pointer into r3 in case we need it
+			andis.	r0,r0,SAVsyscall>>16			; Are we returning from a syscall?
+			beq-	cr0,thread_return				; Nope, must be a thread return...
+			b		.L_thread_syscall_return		; Join up with the system call return...
 
 ;
 ;			This is where we handle someone trying who did a thread_create followed
 ;			by a thread_resume with no intervening thread_set_state.  Just make an
 ;			empty context, initialize it to trash and let em execute at 0...
+;
+
+			.align	5
 
 makeDummyCtx:
-			bl		EXT(save_get)				; Get a save_area
-			li		r0,0						; Get a 0
-			addi	r2,r3,savefp0				; Point past what we are clearing
-			mr		r4,r3						; Save the start
+			bl		EXT(save_get)					; Get a save_area
+			li		r4,SAVgeneral					; Get the general context type
+			li		r0,0							; Get a 0
+			stb		r4,SAVflags+2(r3)				; Set type
+			addi	r2,r3,savevscr					; Point past what we are clearing
+			mr		r4,r3							; Save the start
 			
-cleardummy:	stw		r0,0(r4)					; Clear stuff
-			addi	r4,r4,4						; Next word
-			cmplw	r4,r2						; Still some more?
-			blt+	cleardummy					; Yeah...
+cleardummy:	stw		r0,0(r4)						; Clear stuff
+			addi	r4,r4,4							; Next word
+			cmplw	r4,r2							; Still some more?
+			blt+	cleardummy						; Yeah...
 			
 			lis		r2,hi16(MSR_EXPORT_MASK_SET)	; Set the high part of the user MSR
 			ori		r2,r2,lo16(MSR_EXPORT_MASK_SET)	; And the low part
-			stw		r2,savesrr1(r3)				; Set the default user MSR
+			stw		r2,savesrr1(r3)					; Set the default user MSR
 	
-			b		thread_return				; Go let em try to execute, hah!
+			b		thread_return					; Go let em try to execute, hah!
 	
 /*
  * ihandler(type)
@@ -905,91 +850,86 @@ cleardummy:	stw		r0,0(r4)					; Clear stuff
 
 			.align	5
 			.globl EXT(ihandler)
-LEXT(ihandler)									/* Interrupt handler */
+LEXT(ihandler)										; Interrupt handler */
 
 /*
  * get the value of istackptr, if it's zero then we're already on the
- * interrupt stack, otherwise it points to a saved_state structure
- * at the top of the interrupt stack.
+ * interrupt stack.
  */
 
-			lwz		r10,savesrr1(r4)			/* Get SRR1 */
-			mfsprg	r25,0						/* Get the per_proc block */
-			li		r14,0						/* Zero this for now */
+			lwz		r10,savesrr1(r4)				; Get SRR1 
+			lwz		r7,savevrsave(r4)				; Get the VRSAVE register
+			mfsprg	r25,0							; Get the per_proc block
+			li		r14,0							; Zero this for now
 			rlwinm.	r13,r10,0,MSR_VEC_BIT,MSR_VEC_BIT	; Was vector on?
-			lwz		r16,PP_CPU_DATA(r25)		/* Assume we need this */
-			crmove	cr1_eq,cr0_eq				; Remember vector enablement
-			lwz		r1,PP_ISTACKPTR(r25)		/* Get the interrupt stack */
-			rlwinm.	r10,r10,0,MSR_FP_BIT,MSR_FP_BIT	; Was floating point on?
-			li		r13,0						/* Zero this for now */
-			lwz		r16,CPU_ACTIVE_THREAD(r16)	/* Get the thread pointer */
+			lwz		r1,PP_ISTACKPTR(r25)			; Get the interrupt stack
+			li		r13,0							; Zero this for now
+			lwz		r16,PP_ACTIVE_THREAD(r25)		; Get the thread pointer
 
-			beq+	cr1,ivecoff					; Vector off, do not save vrsave...
-			lwz		r7,savevrsave(r4)			; Get the VRSAVE register
-			stw		r7,liveVRS(r25)				; Set the live value
+			beq+	ivecoff							; Vector off, do not save vrsave...
+			stw		r7,liveVRS(r25)					; Set the live value
 
-ivecoff:	li		r0,0						/* Get a constant 0 */
-			cmplwi	cr1,r16,0					/* Are we still booting? */
-			beq+	ifpoff						; Skip if floating point is off...
-			lwz		r9,savexfpscr(r4)			; Grab the just saved FPSCR
-			stw		r9,liveFPSCR(r25)			; Make it the live copy
+ivecoff:	li		r0,0							; Get a constant 0
+			cmplwi	cr1,r16,0						; Are we still booting? 
 
-ifpoff:		mr.		r1,r1						/* Is it active? */
-			beq-	cr1,ihboot1					/* We're still coming up... */
-			lwz		r13,THREAD_TOP_ACT(r16)		/* Pick up the active thread */
-			lwz		r14,ACT_MACT_PCB(r13)		/* Now point to the PCB */
+ifpoff:		mr.		r1,r1							; Is it active?
+			beq-	cr1,ihboot1						; We are still coming up...
+			lwz		r13,THREAD_TOP_ACT(r16)			; Pick up the active thread
+			lwz		r14,ACT_MACT_PCB(r13)			; Now point to the PCB 
 
-ihboot1:	lwz		r9,saver1(r4)				/* Pick up the 'rupt time stack */
-			stw		r14,SAVprev(r4)				/* Queue the new save area in the front */
-			stw		r13,SAVact(r4)				/* Point the savearea at its activation */
-			beq-	cr1,ihboot4					/* We're still coming up... */
-			stw		r4,ACT_MACT_PCB(r13)		/* Point to our savearea */
+ihboot1:	lwz		r9,saver1(r4)					; Pick up the rupt time stack
+			stw		r14,SAVprev(r4)					; Queue the new save area in the front
+			stw		r13,SAVact(r4)					; Point the savearea at its activation
+			beq-	cr1,ihboot4						; We are still coming up...
+			stw		r4,ACT_MACT_PCB(r13)			; Point to our savearea 
 
-ihboot4:	bne		.L_istackfree				/* Nope... */
+ihboot4:	bne		.L_istackfree					; Nope... 
 
 /* We're already on the interrupt stack, get back the old
  * stack pointer and make room for a frame
  */
 
-			lwz		r10,PP_INTSTACK_TOP_SS(r25)	; Get the top of the interrupt stack
-			addi	r5,r9,INTSTACK_SIZE-FM_SIZE	; Shift stack for bounds check
-			subi	r1,r9,FM_REDZONE			; Back up beyond the red zone
-			sub		r5,r5,r10					; Get displacement into stack
-			cmplwi	r5,INTSTACK_SIZE-FM_SIZE	; Is the stack actually invalid?
-			blt+	ihsetback					; The stack is ok...
+			lwz		r10,PP_INTSTACK_TOP_SS(r25)		; Get the top of the interrupt stack
+			addi	r5,r9,INTSTACK_SIZE-FM_SIZE		; Shift stack for bounds check
+			subi	r1,r9,FM_REDZONE				; Back up beyond the red zone
+			sub		r5,r5,r10						; Get displacement into stack
+			cmplwi	r5,INTSTACK_SIZE-FM_SIZE		; Is the stack actually invalid?
+			blt+	ihsetback						; The stack is ok...
 
-			lwz		r5,PP_DEBSTACK_TOP_SS(r25)	; Pick up debug stack top
+			lwz		r5,PP_DEBSTACK_TOP_SS(r25)		; Pick up debug stack top
 			subi	r5,r5,KERNEL_STACK_SIZE-FM_SIZE	; Adjust to start of stack
-			sub		r5,r1,r5					; Get displacement into debug stack
+			sub		r5,r1,r5						; Get displacement into debug stack
 			cmplwi	cr2,r5,KERNEL_STACK_SIZE-FM_SIZE	; Check if we are on debug stack
-			blt+	ihsetback					; Yeah, that is ok too...
+			blt+	ihsetback						; Yeah, that is ok too...
 
-			lis		r0,hi16(Choke)				; Choke code
-			ori		r0,r0,lo16(Choke)			; and the rest
-			li		r3,failStack				; Bad stack code
-			sc									; System ABEND
+			lis		r0,hi16(Choke)					; Choke code
+			ori		r0,r0,lo16(Choke)				; and the rest
+			li		r3,failStack					; Bad stack code
+			sc										; System ABEND
 
 			.align	5
 			
 .L_istackfree:
 			lwz		r10,SAVflags(r4)			
-			stw		r0,PP_ISTACKPTR(r25)		/* Mark the stack in use */
-			oris	r10,r10,HIGH_ADDR(SAVrststk)	/* Indicate we reset stack when we return from this one */
-			stw		r10,SAVflags(r4)			/* Stick it back */		
+			stw		r0,PP_ISTACKPTR(r25)			; Mark the stack in use 
+			oris	r10,r10,HIGH_ADDR(SAVrststk)	; Indicate we reset stack when we return from this one 
+			stw		r10,SAVflags(r4)				; Stick it back		
 	
-	/*
-	 * To summarize, when we reach here, the state has been saved and
-	 * the stack is marked as busy. We now generate a small
-	 * stack frame with backpointers to follow the calling
-	 * conventions. We set up the backpointers to the trapped
-	 * routine allowing us to backtrace.
-	 */
+/*
+ * To summarize, when we reach here, the state has been saved and
+ * the stack is marked as busy. We now generate a small
+ * stack frame with backpointers to follow the calling
+ * conventions. We set up the backpointers to the trapped
+ * routine allowing us to backtrace.
+ */
 	
-ihsetback:	subi	r1,r1,FM_SIZE				/* Make a new frame */
-			stw		r9,FM_BACKPTR(r1)			/* point back to previous stackptr */
+ihsetback:	subi	r1,r1,FM_SIZE					; Make a new frame 
+			stw		r9,FM_BACKPTR(r1)				; Point back to previous stackptr
 		
 #if VERIFYSAVE
-			bl		versave						; (TEST/DEBUG)
+			beq-	cr1,ihbootnover					; (TEST/DEBUG)
+			bl		versave							; (TEST/DEBUG)
+ihbootnover:										; (TEST/DEBUG)
 #endif
 
 #if	DEBUG
@@ -997,13 +937,13 @@ ihsetback:	subi	r1,r1,FM_SIZE				/* Make a new frame */
  * which links back to the trapped routine. The second is
  * that which the C routine below will need
  */
-			lwz		r5,savesrr0(r4)				/* Get interrupt address */
-			stw		r5,FM_LR_SAVE(r1)			/* save old instr ptr as LR value */
-			stwu	r1,-FM_SIZE(r1)				/* Make another new frame for C routine */
+			lwz		r5,savesrr0(r4)					; Get interrupt address 
+			stw		r5,FM_LR_SAVE(r1)				; save old instr ptr as LR value 
+			stwu	r1,-FM_SIZE(r1)					; Make another new frame for C routine
 #endif /* DEBUG */
 
-			lwz		r5,savedsisr(r4)			/* Get the DSISR */
-			lwz		r6,savedar(r4)				/* Get the DAR */
+			lwz		r5,savedsisr(r4)				; Get the DSISR
+			lwz		r6,savedar(r4)					; Get the DAR 
 			
 			bl	EXT(interrupt)
 
@@ -1014,28 +954,29 @@ ihsetback:	subi	r1,r1,FM_SIZE				/* Make a new frame */
  */
 			.globl EXT(ihandler_ret)
 
-LEXT(ihandler_ret)								/* Marks our return point from debugger entry */
+LEXT(ihandler_ret)									; Marks our return point from debugger entry
 
-			mfmsr	r0							/* Get our MSR */
-			rlwinm	r0,r0,0,MSR_EE_BIT+1,MSR_EE_BIT-1	/* Flip off the interrupt enabled bit */
-			mtmsr	r0							/* Make sure interrupts are disabled */
-			mfsprg	r10,0						/* Get the per_proc block */
+			mfmsr	r0								; Get our MSR
+			rlwinm	r0,r0,0,MSR_FP_BIT+1,MSR_FP_BIT-1	; Force floating point off
+			rlwinm	r0,r0,0,MSR_VEC_BIT+1,MSR_VEC_BIT-1	; Force vectors off
+			rlwinm	r0,r0,0,MSR_EE_BIT+1,MSR_EE_BIT-1	; Flip off the interrupt enabled bit
+			mtmsr	r0								; Make sure interrupts are disabled
+			mfsprg	r10,0							; Get the per_proc block
 		
-			lwz		r8,PP_CPU_DATA(r10)			/* Get the CPU data area */
-			lwz		r7,SAVflags(r3)				/* Pick up the flags */
-			lwz		r8,CPU_ACTIVE_THREAD(r8)	/* and the active thread */
-			lwz		r9,SAVprev(r3)				/* Get previous save area */
-			cmplwi	cr1,r8,0					/* Are we still initializing? */
-			lwz		r12,savesrr1(r3)			/* Get the MSR we will load on return */
-			beq-	cr1,ihboot2					/* Skip if we are still in init... */
-			lwz		r8,THREAD_TOP_ACT(r8)		/* Pick up the active thread */
+			lwz		r7,SAVflags(r3)					; Pick up the flags
+			lwz		r8,PP_ACTIVE_THREAD(r10)		; and the active thread 
+			lwz		r9,SAVprev(r3)					; Get previous save area
+			cmplwi	cr1,r8,0						; Are we still initializing?
+			lwz		r12,savesrr1(r3)				; Get the MSR we will load on return 
+			beq-	cr1,ihboot2						; Skip if we are still in init... 
+			lwz		r8,THREAD_TOP_ACT(r8)			; Pick up the active thread 
 
-ihboot2:	andis.	r11,r7,HIGH_ADDR(SAVrststk)	/* Is this the first on the stack? */
-			beq-	cr1,ihboot3					/* Skip if we are still in init... */
-			stw		r9,ACT_MACT_PCB(r8)			/* Point to previous context savearea */
+ihboot2:	andis.	r11,r7,hi16(SAVrststk)			; Is this the first on the stack?
+			beq-	cr1,ihboot3						; Skip if we are still in init... 
+			stw		r9,ACT_MACT_PCB(r8)				; Point to previous context savearea 
 
-ihboot3:	mr		r4,r3						/* Move the savearea pointer */
-			beq		.L_no_int_ast2				/* Get going if not the top o' stack... */
+ihboot3:	mr		r4,r3							; Move the savearea pointer
+			beq		.L_no_int_ast2					; Get going if not the top-o-stack...
 
 
 /* We're the last frame on the stack. Restore istackptr to empty state.
@@ -1044,29 +985,26 @@ ihboot3:	mr		r4,r3						/* Move the savearea pointer */
  *    returning to user mode
  *    returning to a kloaded server
  */
-			lwz		r9,PP_INTSTACK_TOP_SS(r10)	/* Get the empty stack value */
-			lwz		r5,PP_CPU_DATA(r10)			/* Get cpu_data ptr */
-			andc	r7,r7,r11					/* Remove the stack reset bit in case we pass this one */
-			stw		r9,PP_ISTACKPTR(r10)		/* Save that saved state ptr */
-			lwz		r3,CPU_PREEMPTION_LEVEL(r5)	/* Get preemption level */
-			stw		r7,SAVflags(r4)				/* Save the flags */
-			cmplwi	r3, 0						/* Check for preemption */
-			bne		.L_no_int_ast				/* Don't preempt if level is not zero */
-			andi.	r6,r12,MASK(MSR_PR)			/* privilege mode  */
-			lwz		r11,PP_NEED_AST(r10)		/* Get the AST request address */
-			lwz		r11,0(r11)					/* Get the request */
-			beq-	.L_kernel_int_ast			/* In kernel space, AST_URGENT check */
-			li		r3,T_AST					/* Assume the worst */
-			mr.		r11,r11						/* Are there any pending? */
-			beq		.L_no_int_ast				/* Nope... */
+			lwz		r9,PP_INTSTACK_TOP_SS(r10)		; Get the empty stack value 
+			andc	r7,r7,r11						; Remove the stack reset bit in case we pass this one
+			stw		r9,PP_ISTACKPTR(r10)			; Save that saved state ptr 
+			lwz		r3,PP_PREEMPT_CNT(r10)		; Get preemption level 
+			stw		r7,SAVflags(r4)					; Save the flags
+			cmplwi	r3, 0							; Check for preemption
+			bne		.L_no_int_ast					; Do not preempt if level is not zero
+			andi.	r6,r12,MASK(MSR_PR)				; privilege mode
+			lwz		r11,PP_NEED_AST(r10)			; Get the AST request address
+			lwz		r11,0(r11)						; Get the request
+			beq-	.L_kernel_int_ast				; In kernel space, AST_URGENT check
+			li		r3,T_AST						; Assume the worst
+			mr.		r11,r11							; Are there any pending? 
+			beq		.L_no_int_ast					; Nope... 
 			b		.L_call_thandler
 
 .L_kernel_int_ast:
-			andi.	r11,r11,AST_URGENT			/* AST_URGENT */
-			li		r3,T_PREEMPT				/* Assume the worst */
-			beq		.L_no_int_ast				/* Nope... */
-
-.L_call_thandler:
+			andi.	r11,r11,AST_URGENT				; Do we have AST_URGENT?
+			li		r3,T_PREEMPT					; Assume the worst
+			beq		.L_no_int_ast					; Nope... 
 
 /*
  * There is a pending AST. Massage things to make it look like
@@ -1076,17 +1014,20 @@ ihboot3:	mr		r4,r3						/* Move the savearea pointer */
  * trap instead of performing an rfi.
  */
 
-			stw		r3,saveexception(r4)		/* Set the exception code to T_AST/T_PREEMPT */
-			b		EXT(thandler)				/* hyperspace into AST trap */
+.L_call_thandler:
+			stw		r3,saveexception(r4)			; Set the exception code to T_AST/T_PREEMPT
+			b		EXT(thandler)					; We need to preempt so treat like a trap...
 
 .L_no_int_ast:	
-			mr		r3,r4						; Get into the right register for common code
+			mr		r3,r4							; Get into the right register for common code
+			
 .L_no_int_ast2:	
-			rlwinm	r7,r7,0,15,13				/* Clear the syscall bit */
-			li		r4,0						; Assume for a moment that we are in init
-			stw		r7,SAVflags(r3)				/* Set the flags */
-			beq-	cr1,chkfac					; Jump away if we are in init...
-			lwz		r4,ACT_MACT_PCB(r8)			; Get the new level marker
+			rlwinm	r7,r7,0,15,13					; Clear the syscall flag
+			li		r4,0							; Assume for a moment that we are in init
+			stw		r7,SAVflags(r3)					; Set the flags with cleared syscall flag
+			beq-	cr1,chkfac						; Jump away if we are in init...
+
+			lwz		r4,ACT_MACT_PCB(r8)				; Get the new level marker
 
 
 ;
@@ -1101,385 +1042,364 @@ ihboot3:	mr		r4,r3						/* Move the savearea pointer */
 ;				R8  = pointer to activation
 ;				R10 = per_proc block
 ;
-chkfac:		mr.		r8,r8						; Are we still in boot?
-			beq-	chkenax						; Yeah, skip it all...
+;			Note that barring unforseen crashes, there is no escape from this point
+;			on. We WILL call exception_exit and launch this context. No worries
+;			about preemption or interruptions here.
+;
+;			Note that we will set up R26 with whatever context we will be launching,
+;			so it will indicate the current, or the deferred it it is set and we
+;			are going to user state.  CR2_eq will be set to indicate deferred.
+;
+
+chkfac:		mr		r31,r10							; Move per_proc address
+			mr		r30,r4							; Preserve new level
+			lwz		r29,savesrr1(r3)				; Get the current MSR
+			mr.		r28,r8							; Are we still in boot?
+			mr		r27,r3							; Save the old level
+			beq-	chkenax							; Yeah, skip it all...
 			
-			lwz		r20,ACT_MACT_FPUlvl(r8)		; Get the FPU level
-			lwz		r12,savesrr1(r3)			; Get the current MSR
-			cmplw	cr1,r20,r3					; Are we returning from the active level?
-			lwz		r23,PP_FPU_THREAD(r10)		; Get floating point owner
-			rlwinm	r12,r12,0,MSR_FP_BIT+1,MSR_FP_BIT-1	; Turn off floating point for now
-			cmplw	cr2,r23,r8					; Are we the facility owner?
-			lhz		r26,PP_CPU_NUMBER(r10)		; Get the current CPU number
-			cror	cr0_eq,cr1_eq,cr2_eq		; Check if returning from active or we own facility
-			bne-	cr0,chkvecnr				; Nothing to do if not returning from active or not us...
+			rlwinm.	r0,r29,0,MSR_PR_BIT,MSR_PR_BIT	; Are we going into user state?
 
-#if FPVECDBG
-			lis		r0,HIGH_ADDR(CutTrace)		; (TEST/DEBUG)
-			li		r2,0x3301					; (TEST/DEBUG)
-			oris	r0,r0,LOW_ADDR(CutTrace)	; (TEST/DEBUG)
-			sc									; (TEST/DEBUG)
-#endif	
-
-			li		r22,ACT_MACT_FPUcpu			; Point to the CPU indication/lock word
-			
-cfSpin2:	lwarx	r27,r22,r8					; Get and reserve the last used CPU
-			mr.		r27,r27						; Is it changing now?
-			oris	r0,r27,hi16(fvChk)			; Set the "changing" flag
-			blt-	cfSpin2						; Spin if changing
-			stwcx.	r0,r22,r8					; Lock it up
-			bne-	cfSpin2						; Someone is messing right now
-
-			isync								; Make sure we see everything
-
-			cmplw	r4,r20						; Are we going to be in the right level?
-			beq-	cr1,chkfpfree				; Leaving active level, can not possibly enable...
-			cmplw	cr1,r27,r26					; Are we on the right CPU?
-			li		r0,0						; Get a constant 0
-			beq+	cr1,chkfpnlvl				; Right CPU...
-			
-			stw		r0,PP_FPU_THREAD(r10)		; Show facility unowned so we do not get back here
-			b		chkvec						; Go check out the vector facility...
-			
-chkfpnlvl:	bne-	chkvec						; Different level, can not enable...
-			lwz		r24,ACT_MACT_FPU(r8)		; Get the floating point save area
-			ori		r12,r12,lo16(MASK(MSR_FP))	; Enable facility
-			mr.		r24,r24						; Does the savearea exist?
-			li		r0,1						; Get set to invalidate
-			beq-	chkvec						; Nothing to invalidate...
-			lwz		r25,SAVlvlfp(r24)			; Get the level of top savearea
-			cmplw	r4,r25						; Is the top one ours?
-			bne+	chkvec						; Not ours...
-			stw		r0,SAVlvlfp(r24)			; Invalidate the first one
-			b		chkvec						; Go check out the vector facility...
-
-chkfpfree:	li		r0,0						; Clear a register
-			lwz		r24,ACT_MACT_FPU(r8)		; Get the floating point save area
-			
-			bne-	cr2,chkfpnfr				; Not our facility, do not clear...
-			stw		r0,PP_FPU_THREAD(r10)		; Clear floating point owner
-chkfpnfr:
-
-#if FPVECDBG
-			lis		r0,HIGH_ADDR(CutTrace)		; (TEST/DEBUG)
-			li		r2,0x3302					; (TEST/DEBUG)
-			oris	r0,r0,LOW_ADDR(CutTrace)	; (TEST/DEBUG)
-			sc									; (TEST/DEBUG)
-#endif	
-
-			mr.		r24,r24						; Do we even have a savearea?
-			beq+	chkvec						; Nope...
-			
-#if FPVECDBG
-			rlwinm.	r0,r24,0,0,15				; (TEST/DEBUG)
-			bne+	notbadxxx1					; (TEST/DEBUG)
-			BREAKPOINT_TRAP						; (TEST/DEBUG)
-notbadxxx1:										; (TEST/DEBUG)			
-			lis		r0,HIGH_ADDR(CutTrace)		; (TEST/DEBUG)
-			li		r2,0x3303					; (TEST/DEBUG)
-			oris	r0,r0,LOW_ADDR(CutTrace)	; (TEST/DEBUG)
-			sc									; (TEST/DEBUG)
-#endif	
-
-			lwz		r25,SAVlvlfp(r24)			; Get the level of top savearea
-			cmplwi	r25,1						; Is the top area invalid?
-			cmplw	cr1,r25,r3					; Is it for the returned from context?
-			beq		fptoss						; It is invalid...
-			bne		cr1,chkvec					; Not for the returned context...
-			
-fptoss:		lwz		r25,SAVprefp(r24)			; Get previous savearea
-#if FPVECDBG
-			lis		r0,HIGH_ADDR(CutTrace)		; (TEST/DEBUG)
-			li		r2,0x3304					; (TEST/DEBUG)
-			oris	r0,r0,LOW_ADDR(CutTrace)	; (TEST/DEBUG)
-			mr		r5,r25						; (TEST/DEBUG)
-			sc									; (TEST/DEBUG)
-#endif	
-			mr.		r25,r25						; Is there one?
-			stw		r25,ACT_MACT_FPU(r8)		; Set the new pointer
-			beq		fptoplvl					; Nope, we are at the top...
-#if FPVECDBG		
-			rlwinm.	r0,r25,0,0,15				; (TEST/DEBUG)
-			bne+	notbadxxx2					; (TEST/DEBUG)
-			BREAKPOINT_TRAP						; (TEST/DEBUG)
-notbadxxx2:										; (TEST/DEBUG)			
-#endif		
-			lwz		r25,SAVlvlfp(r25)			; Get the new level
-
-fptoplvl:	lwz		r19,SAVflags(r24)			; Get the savearea flags
-#if FPVECDBG
-			rlwinm.	r0,r19,0,1,1				; (TEST/DEBUG)
-			bne+	donotdie3					; (TEST/DEBUG)
-			BREAKPOINT_TRAP						; (TEST/DEBUG)
-donotdie3:										; (TEST/DEBUG)
+#if 0
+			beq+	lllll							; (TEST/DEBUG)
+			BREAKPOINT_TRAP							; (TEST/DEBUG)
+lllll:
 #endif
-
-#if FPVECDBG
-			lis		r0,HIGH_ADDR(CutTrace)		; (TEST/DEBUG)
-			li		r2,0x3305					; (TEST/DEBUG)
-			oris	r0,r0,LOW_ADDR(CutTrace)	; (TEST/DEBUG)
-			sc									; (TEST/DEBUG)
-#endif	
-			rlwinm	r22,r24,0,0,19				; Round down to the base savearea block
-			rlwinm	r19,r19,0,2,0				; Remove the floating point in use flag
-			stw		r25,ACT_MACT_FPUlvl(r8)		; Set the new top level
-			andis.	r0,r19,hi16(SAVinuse)		; Still in use?
-			stw		r19,SAVflags(r24)			; Set the savearea flags
-			bne-	invlivefp					; Go invalidate live FP
-#if FPVECDBG
-			lis		r0,HIGH_ADDR(CutTrace)		; (TEST/DEBUG)
-			li		r2,0x3306					; (TEST/DEBUG)
-			oris	r0,r0,LOW_ADDR(CutTrace)	; (TEST/DEBUG)
-			sc									; (TEST/DEBUG)
-#endif	
-#if FPVECDBG		
-			rlwinm.	r0,r24,0,0,15				; (TEST/DEBUG)
-			bne+	notbadxxx3					; (TEST/DEBUG)
-			BREAKPOINT_TRAP						; (TEST/DEBUG)
-notbadxxx3:										; (TEST/DEBUG)			
-#endif		
-			lwz		r23,SACvrswap(r22)			; Get the conversion from virtual to real
-			lwz		r20,PP_QUICKFRET(r10)		; Get the old quick fret head
-			xor		r23,r24,r23					; Convert to physical
-			stw		r20,SAVqfret(r24)			; Back chain the quick release queue
-			stw		r23,PP_QUICKFRET(r10)		; Anchor it
-
-invlivefp:	lis		r20,hi16(EXT(real_ncpus))	; Get number of CPUs
-			lis		r23,hi16(EXT(per_proc_info))	; Set base per_proc
-			ori		r20,r20,lo16(EXT(real_ncpus))	; Other half of number of CPUs
-			li		r25,PP_FPU_THREAD			; Point to the FP owner address
-			lwz		r20,0(r20)					; Get number of processors active
-			ori		r23,r23,lo16(EXT(per_proc_info))	; Set base per_proc
-			li		r2,0						; Get something clear
 			
-invlivefl:	cmplw	r23,r10						; We can skip our processor
-			addi	r20,r20,-1					; Count remaining processors
-			beq		invlivefn					; Skip ourselves...
-
-invlivefa:	lwarx	r0,r25,r23					; Get FP owner for this processor
-			cmplw	r0,r8						; Do we own it?
-			bne		invlivefn					; Nope...
-			stwcx.	r2,r25,r23					; Show not live
-			bne-	invlivefa					; Someone else did this, try again...
-		
-invlivefn:	mr.		r20,r20						; Have we finished?
-			addi	r23,r23,ppSize				; Bump to next
-			bgt		invlivefl					; Make sure we do all processors...
-
+			lwz		r20,curctx(r28)					; Get our current context
+			lwz		r26,deferctx(r28)				; Get any deferred context switch
+			rlwinm	r29,r29,0,MSR_FP_BIT+1,MSR_FP_BIT-1	; Turn off floating point for now
+			lwz		r21,FPUlevel(r20)				; Get the facility level
+			cmplwi	cr2,r26,0						; Are we going into a deferred context later?
+			rlwinm	r29,r29,0,MSR_VEC_BIT+1,MSR_VEC_BIT-1	; Turn off vector for now
+			crnor	cr2_eq,cr0_eq,cr2_eq			; Set cr2_eq if going to user state and there is deferred
+			cmplw	r27,r21							; Are we returning from the active level?
+			lhz		r19,PP_CPU_NUMBER(r31)			; Get our CPU number
+			bne+	fpuchkena						; Nope...
 
 ;
-;			Check out vector stuff (and translate savearea to physical for exit)
+;			First clean up any live context we are returning from
 ;
-chkvec:		sync								; Make sure all is saved
-			stw		r27,ACT_MACT_FPUcpu(r8)		; Set the active CPU and release
+
+			lwz		r22,FPUcpu(r20)					; Get CPU this context was last dispatched on
 			
-chkvecnr:	lwz		r20,ACT_MACT_VMXlvl(r8)		; Get the vector level
-			lwz		r23,PP_VMX_THREAD(r10)		; Get vector owner
-			cmplw	cr1,r20,r3					; Are we returning from the active level?
-			cmplw	cr2,r23,r8					; Are we the facility owner?
-			rlwinm	r12,r12,0,MSR_VEC_BIT+1,MSR_VEC_BIT-1	; Turn off vector for now
-			cror	cr0_eq,cr1_eq,cr2_eq		; Check if returning from active or we own facility
-			bne-	cr0,setenanr				; Not our facility, nothing to do here...
-
-#if FPVECDBG
-			lis		r0,HIGH_ADDR(CutTrace)		; (TEST/DEBUG)
-			li		r2,0x3401					; (TEST/DEBUG)
-			oris	r0,r0,LOW_ADDR(CutTrace)	; (TEST/DEBUG)
-			sc									; (TEST/DEBUG)
-#endif	
-
-			li		r22,ACT_MACT_VMXcpu			; Point to the CPU indication/lock word
+			stw		r19,FPUcpu(r20)					; Claim context for us
 			
-cvSpin2:	lwarx	r27,r22,r8					; Get and reserve the last used CPU
-			mr.		r27,r27						; Is it changing now?
-			oris	r0,r27,hi16(fvChk)			; Set the "changing" flag
-			blt-	cvSpin2						; Spin if changing
-			stwcx.	r0,r22,r8					; Lock it up
-			bne-	cvSpin2						; Someone is messing right now
-
-			isync								; Make sure we see everything
-
-			cmplw	r4,r20						; Are we going to be in the right level?
-			beq-	cr1,chkvecfree				; Leaving active level, can not possibly enable...
-			cmplw	cr1,r27,r26					; Are we on the right CPU?
-			li		r0,0						; Get a constant 0
-			beq+	cr1,chkvecnlvl				; Right CPU...
+			eieio									; Make sure this gets out before owner clear
 			
-			stw		r0,PP_VMX_THREAD(r10)		; Show facility unowned so we do not get back here
-			b		setena						; Go actually exit...
-			
-chkvecnlvl:	bne-	setena						; Different level, can not enable...
-			lwz		r24,ACT_MACT_VMX(r8)		; Get the vector save area
-			oris	r12,r12,hi16(MASK(MSR_VEC))	; Enable facility
-			mr.		r24,r24						; Does the savearea exist?
-			li		r0,1						; Get set to invalidate
-			beq-	setena						; Nothing to invalidate...
-			lwz		r25,SAVlvlvec(r24)			; Get the level of top savearea
-			cmplw	r4,r25						; Is the top one ours?
-			bne+	setena						; Not ours...
-			stw		r0,SAVlvlvec(r24)			; Invalidate the first one
-			b		setena						; Actually exit...
-
-chkvecfree:	li		r0,0						; Clear a register
-			lwz		r24,ACT_MACT_VMX(r8)		; Get the vector save area
-
-			bne-	cr2,chkvecnfr				; Not our facility, do not clear...
-			stw		r0,PP_VMX_THREAD(r10)		; Clear vector owner
-chkvecnfr:
-			
-#if FPVECDBG
-			lis		r0,HIGH_ADDR(CutTrace)		; (TEST/DEBUG)
-			li		r2,0x3402					; (TEST/DEBUG)
-			oris	r0,r0,LOW_ADDR(CutTrace)	; (TEST/DEBUG)
-			sc									; (TEST/DEBUG)
-#endif	
-
-			mr.		r24,r24						; Do we even have a savearea?
-			beq+	setena						; Nope...
-			
-#if FPVECDBG
-			lis		r0,HIGH_ADDR(CutTrace)		; (TEST/DEBUG)
-			li		r2,0x3403					; (TEST/DEBUG)
-			oris	r0,r0,LOW_ADDR(CutTrace)	; (TEST/DEBUG)
-			sc									; (TEST/DEBUG)
-#endif	
-			lwz		r25,SAVlvlvec(r24)			; Get the level
-			cmplwi	r25,1						; Is the top area invalid?
-			cmplw	cr1,r25,r3					; Is it for the returned from context?
-			beq		vectoss						; It is invalid...
-			bne		cr1,setena					; Not for the returned context...
-			
-vectoss:	lwz		r25,SAVprevec(r24)			; Get previous savearea
-#if FPVECDBG
-			lis		r0,HIGH_ADDR(CutTrace)		; (TEST/DEBUG)
-			li		r2,0x3504					; (TEST/DEBUG)
-			oris	r0,r0,LOW_ADDR(CutTrace)	; (TEST/DEBUG)
-			mr		r5,r25						; (TEST/DEBUG)
-			sc									; (TEST/DEBUG)
-#endif	
-			mr.		r25,r25						; Is there one?
-			stw		r25,ACT_MACT_VMX(r8)		; Set the new pointer
-			beq		vectoplvl					; Nope, we are at the top...
-			lwz		r25,SAVlvlvec(r25)			; Get the new level
-
-vectoplvl:	lwz		r19,SAVflags(r24)			; Get the savearea flags
-
-#if FPVECDBG
-			lis		r0,HIGH_ADDR(CutTrace)		; (TEST/DEBUG)
-			li		r2,0x3405					; (TEST/DEBUG)
-			oris	r0,r0,LOW_ADDR(CutTrace)	; (TEST/DEBUG)
-			sc									; (TEST/DEBUG)
-#endif	
-			rlwinm	r22,r24,0,0,19				; Round down to the base savearea block
-			rlwinm	r19,r19,0,3,1				; Remove the vector in use flag
-			stw		r25,ACT_MACT_VMXlvl(r8)		; Set the new top level
-			andis.	r0,r19,hi16(SAVinuse)		; Still in use?
-			stw		r19,SAVflags(r24)			; Set the savearea flags
-			bne-	invliveve					; Go invalidate live vec...
-#if FPVECDBG
-			lis		r0,HIGH_ADDR(CutTrace)		; (TEST/DEBUG)
-			li		r2,0x3406					; (TEST/DEBUG)
-			oris	r0,r0,LOW_ADDR(CutTrace)	; (TEST/DEBUG)
-			sc									; (TEST/DEBUG)
-#endif			
-			lwz		r23,SACvrswap(r22)			; Get the conversion from virtual to real
-			lwz		r20,PP_QUICKFRET(r10)		; Get the old quick fret head
-			xor		r23,r24,r23					; Convert to physical
-			stw		r20,SAVqfret(r24)			; Back chain the quick release queue
-			stw		r23,PP_QUICKFRET(r10)		; Anchor it
-
-invliveve:	lis		r20,hi16(EXT(real_ncpus))	; Get number of CPUs
 			lis		r23,hi16(EXT(per_proc_info))	; Set base per_proc
-			ori		r20,r20,lo16(EXT(real_ncpus))	; Other half of number of CPUs
-			li		r25,PP_VMX_THREAD			; Point to the vector owner address
-			lwz		r20,0(r20)					; Get number of processors active
+			mulli	r22,r22,ppSize					; Find offset to the owner per_proc			
 			ori		r23,r23,lo16(EXT(per_proc_info))	; Set base per_proc
-			li		r2,0						; Get something clear
+			li		r24,FPUowner					; Displacement to FPU owner
+			add		r22,r23,r22						; Point to the owner per_proc	
+			li		r0,0							; We need this in a bit
 			
-invlivevl:	cmplw	r23,r10						; We can skip our processor
-			addi	r20,r20,-1					; Count remaining processors
-			beq		invlivevn					; Skip ourselves...
+fpuinvothr:	lwarx	r23,r24,r22						; Get the owner
+			cmplw	r23,r20							; Does he still have this context?
+			bne		fpuinvoths						; Nope...		
+			stwcx.	r0,r24,r22						; Try to invalidate it
+			bne-	fpuinvothr						; Try again if there was a collision...
+			
+fpuinvoths:	isync
 
-invliveva:	lwarx	r0,r25,r23					; Get vector owner for this processor
-			cmplw	r0,r8						; Do we own it?
-			bne		invlivevn					; Nope...
-			stwcx.	r2,r25,r23					; Show not live
-			bne-	invliveva					; Someone else did this, try again...
+;
+;			Now if there is a savearea associated with the popped context, release it.
+;			Either way, pop the level to the top stacked context.
+;
+
+			lwz		r22,FPUsave(r20)				; Get pointer to the first savearea
+			li		r21,0							; Assume we popped all the way out
+			mr.		r22,r22							; Is there anything there?
+			beq+	fpusetlvl						; No, see if we need to enable...
+			
+			lwz		r21,SAVlevel(r22)				; Get the level of that savearea
+			cmplw	r21,r27							; Is this the saved copy of the live stuff?
+			bne		fpusetlvl						; No, leave as is...
+			
+			lwz		r24,SAVprev(r22)				; Pick up the previous area
+			li		r21,0							; Assume we popped all the way out
+			mr.		r24,r24							; Any more context stacked?
+			beq-	fpuonlyone						; Nope...
+			lwz		r21,SAVlevel(r24)				; Get the level associated with save
+
+fpuonlyone:	stw		r24,FPUsave(r20)				; Dequeue this savearea
+
+			rlwinm	r3,r22,0,0,19					; Find main savearea header
+			lwz		r3,SACvrswap(r3)				; Get the virtual to real conversion
+			la		r9,quickfret(r31)				; Point to the quickfret chain header					
+			xor		r3,r22,r3						; Convert to physical
+			
+#if FPVECDBG
+			lis		r0,HIGH_ADDR(CutTrace)			; (TEST/DEBUG)
+			li		r2,0x3301						; (TEST/DEBUG)
+			oris	r0,r0,LOW_ADDR(CutTrace)		; (TEST/DEBUG)
+			sc										; (TEST/DEBUG)
+#endif				
+
+fpufpucdq:	lwarx	r0,0,r9							; Pick up the old chain head
+			stw		r0,SAVprev(r22)					; Move it to the current guy
+			stwcx.	r3,0,r9							; Save it
+			bne-	fpufpucdq						; Someone chaged the list...
+
+fpusetlvl:	stw		r21,FPUlevel(r20)				; Save the level
 		
-invlivevn:	mr.		r20,r20						; Have we finished?
-			addi	r23,r23,ppSize				; Bump to next
-			bgt		invlivevl					; Make sure we do all processors...
-
-setena:		sync								; Make sure all is saved
-			stw		r27,ACT_MACT_VMXcpu(r8)		; Set the active CPU and release
-
-setenanr:	rlwinm	r20,r12,(((31-vectorCngbit)+(MSR_VEC_BIT+1))&31),vectorCngbit,vectorCngbit	; Set flag if we enabled vector
-			rlwimi.	r20,r12,(((31-floatCngbit)+(MSR_FP_BIT+1))&31),floatCngbit,floatCngbit	; Set flag if we enabled floats
-			beq		setenaa						; Neither float nor vector turned on....
+;
+;			Here we check if we are at the right level
+;			We need to check the level we are entering, not the one we are exiting.
+;			Therefore, we will use the defer level if it is non-zero and we are
+;			going into user state.
+;
 			
-			lwz		r5,ACT_MACT_SPF(r8)			; Get activation copy
-			lwz		r6,spcFlags(r10)			; Get per_proc copy
-			or		r5,r5,r20					; Set vector/float changed bits in activation
-			or		r6,r6,r20					; Set vector/float changed bits in per_proc
-			stw		r5,ACT_MACT_SPF(r8)			; Set activation copy
-			stw		r6,spcFlags(r10)			; Set per_proc copy
+fpuchkena:	bt-		cr2_eq,fpuhasdfrd				; Skip if deferred, R26 already set up...
+			mr		r26,r20							; Use the non-deferred value
+			
+fpuhasdfrd:	lwz		r21,FPUowner(r31)				; Get the ID of the live context
+			lwz		r23,FPUlevel(r26)				; Get the level ID
+			cmplw	cr3,r26,r21						; Do we have the live context?
+			lwz		r24,FPUcpu(r26)					; Get the CPU that the context was last dispatched on
+			bne-	cr3,chkvec						; No, can not possibly enable...
+			cmplw	r30,r23							; Are we about to launch the live level?
+			cmplw	cr1,r19,r24						; Was facility used on this processor last?
+			bne-	chkvec							; No, not live...
+			bne-	cr1,chkvec						; No, wrong cpu, have to enable later....
+			
+			lwz		r24,FPUsave(r26)				; Get the first savearea
+			mr.		r24,r24							; Any savearea?
+			beq+	fpuena							; Nope...
+			lwz		r25,SAVlevel(r24)				; Get the level of savearea
+			lwz		r0,SAVprev(r24)					; Get the previous
+			cmplw	r30,r25							; Is savearea for the level we are launching?
+			bne+	fpuena							; No, just go enable...
+			
+			stw		r0,FPUsave(r26)					; Pop the chain
 
-setenaa:	stw		r12,savesrr1(r3)			; Turn facility on or off
-	
-			mfdec	r24							; Get decrementer
-			lwz		r22,qactTimer(r8)			; Get high order quick activation timer
-			mr.		r24,r24						; See if it has popped already...
-			lwz		r23,qactTimer+4(r8)			; Get low order qact timer
-			ble-	chkenax						; We have popped or are just about to...
-			
-segtb:		mftbu	r20							; Get the upper time base
-			mftb	r21							; Get the low
-			mftbu	r19							; Get upper again
-			or.		r0,r22,r23					; Any time set?
-			cmplw	cr1,r20,r19					; Did they change?
-			beq+	chkenax						; No time set....
-			bne-	cr1,segtb					; Timebase ticked, get them again...
-			
-			subfc	r6,r21,r23					; Subtract current from qact time
-			li		r0,0						; Make a 0
-			subfe	r5,r20,r22					; Finish subtract
-			subfze	r0,r0						; Get a 0 if qact was bigger than current, -1 otherwise
-			andc.	r12,r5,r0					; Set 0 if qact has passed
-			andc	r13,r6,r0					; Set 0 if qact has passed
-			bne		chkenax						; If high order is non-zero, this is too big for a decrementer
-			cmplw	r13,r24						; Is this earlier than the decrementer? (logical compare takes care of high bit on)
-			bge+	chkenax						; No, do not reset decrementer...
-			
-			mtdec	r13							; Set our value
+			rlwinm	r3,r24,0,0,19					; Find main savearea header
+			lwz		r3,SACvrswap(r3)				; Get the virtual to real conversion
+			la		r9,quickfret(r31)				; Point to the quickfret chain header					
+			xor		r3,r24,r3						; Convert to physical
 
-chkenax:	lwz		r6,SAVflags(r3)				; Pick up the flags of the old savearea
+#if FPVECDBG
+			lis		r0,HIGH_ADDR(CutTrace)			; (TEST/DEBUG)
+			li		r2,0x3302						; (TEST/DEBUG)
+			oris	r0,r0,LOW_ADDR(CutTrace)		; (TEST/DEBUG)
+			sc										; (TEST/DEBUG)
+#endif				
+			
+fpuhascdq:	lwarx	r0,0,r9							; Pick up the old chain head
+			stw		r0,SAVprev(r24)					; Move it to the current guy
+			stwcx.	r3,0,r9							; Save it
+			bne-	fpuhascdq						; Someone chaged the list...
+
+fpuena:		ori		r29,r29,lo16(MASK(MSR_FP))		; Enable facility			
+			
+chkvec:		
+
+#if 0
+			rlwinm.	r21,r29,0,MSR_PR_BIT,MSR_PR_BIT	; (TEST/DEBUG)
+			beq+	ppppp							; (TEST/DEBUG)
+			lwz		r21,FPUlevel(r26)				; (TEST/DEBUG)
+			mr.		r21,r21							; (TEST/DEBUG)
+			bne-	qqqqq							; (TEST/DEBUG)
+			lwz		r21,FPUsave(r26)				; (TEST/DEBUG)
+			mr.		r21,r21							; (TEST/DEBUG)
+			beq+	ppppp							; (TEST/DEBUG)
+			lwz		r22,SAVlevel(r21)				; (TEST/DEBUG)
+			mr.		r22,r22							; (TEST/DEBUG)
+			beq+	ppppp							; (TEST/DEBUG)
+qqqqq:
+			BREAKPOINT_TRAP							; (TEST/DEBUG)
+
+ppppp:												; (TEST/DEBUG)
+#endif
+			
+			lwz		r21,VMXlevel(r20)				; Get the facility level
+		
+			cmplw	r27,r21							; Are we returning from the active level?
+			bne+	vmxchkena						; Nope...
+			
+
+;
+;			First clean up any live context we are returning from
+;
+
+			lwz		r22,VMXcpu(r20)					; Get CPU this context was last dispatched on
+			
+			stw		r19,VMXcpu(r20)					; Claim context for us
+			
+			eieio									; Make sure this gets out before owner clear
+			
+			lis		r23,hi16(EXT(per_proc_info))	; Set base per_proc
+			mulli	r22,r22,ppSize					; Find offset to the owner per_proc			
+			ori		r23,r23,lo16(EXT(per_proc_info))	; Set base per_proc
+			li		r24,VMXowner					; Displacement to VMX owner
+			add		r22,r23,r22						; Point to the owner per_proc	
+			li		r0,0							; We need this in a bit
+			
+vmxinvothr:	lwarx	r23,r24,r22						; Get the owner
+			cmplw	r23,r20							; Does he still have this context?
+			bne		vmxinvoths						; Nope...		
+			stwcx.	r0,r24,r22						; Try to invalidate it
+			bne-	vmxinvothr						; Try again if there was a collision...
+			
+vmxinvoths:	isync
+
+;
+;			Now if there is a savearea associated with the popped context, release it.
+;			Either way, pop the level to the top stacked context.
+;
+
+			lwz		r22,VMXsave(r20)				; Get pointer to the first savearea
+			li		r21,0							; Assume we popped all the way out
+			mr.		r22,r22							; Is there anything there?
+			beq+	vmxsetlvl						; No, see if we need to enable...
+			
+			lwz		r21,SAVlevel(r22)				; Get the level of that savearea
+			cmplw	r21,r27							; Is this the saved copy of the live stuff?
+			bne		vmxsetlvl						; No, leave as is...
+			
+			lwz		r24,SAVprev(r22)				; Pick up the previous area
+			li		r21,0							; Assume we popped all the way out
+			mr.		r24,r24							; Any more context?
+			beq-	vmxonlyone						; Nope...
+			lwz		r21,SAVlevel(r24)				; Get the level associated with save
+
+vmxonlyone:	stw		r24,VMXsave(r20)				; Dequeue this savearea
+			
+			rlwinm	r3,r22,0,0,19					; Find main savearea header
+			lwz		r3,SACvrswap(r3)				; Get the virtual to real conversion
+			la		r9,quickfret(r31)				; Point to the quickfret chain header					
+			xor		r3,r22,r3						; Convert to physical
+
+#if FPVECDBG
+			lis		r0,HIGH_ADDR(CutTrace)			; (TEST/DEBUG)
+			li		r2,0x3401						; (TEST/DEBUG)
+			oris	r0,r0,LOW_ADDR(CutTrace)		; (TEST/DEBUG)
+			sc										; (TEST/DEBUG)
+#endif				
+			
+vmxhscdq:	lwarx	r0,0,r9							; Pick up the old chain head
+			stw		r0,SAVprev(r22)					; Move it to the current guy
+			stwcx.	r3,0,r9							; Save it
+			bne-	vmxhscdq						; Someone chaged the list...
+
+vmxsetlvl:	stw		r21,VMXlevel(r20)				; Save the level
+		
+;
+;			Here we check if we are at the right level
+;
+			
+vmxchkena:	lwz		r21,VMXowner(r31)				; Get the ID of the live context
+			lwz		r23,VMXlevel(r26)				; Get the level ID
+			cmplw	r26,r21							; Do we have the live context?
+			lwz		r24,VMXcpu(r26)					; Get the CPU that the context was last dispatched on
+			bne-	setena							; No, can not possibly enable...
+			cmplw	r30,r23							; Are we about to launch the live level?
+			cmplw	cr1,r19,r24						; Was facility used on this processor last?
+			bne-	setena							; No, not live...
+			bne-	cr1,setena						; No, wrong cpu, have to enable later....
+			
+			lwz		r24,VMXsave(r26)				; Get the first savearea
+			mr.		r24,r24							; Any savearea?
+			beq+	vmxena							; Nope...
+			lwz		r25,SAVlevel(r24)				; Get the level of savearea
+			lwz		r0,SAVprev(r24)					; Get the previous
+			cmplw	r30,r25							; Is savearea for the level we are launching?
+			bne+	vmxena							; No, just go enable...
+
+			stw		r0,VMXsave(r26)					; Pop the chain
+			
+			rlwinm	r3,r24,0,0,19					; Find main savearea header
+			lwz		r3,SACvrswap(r3)				; Get the virtual to real conversion
+			la		r9,quickfret(r31)				; Point to the quickfret chain header					
+			xor		r3,r24,r3						; Convert to physical
+
+#if FPVECDBG
+			lis		r0,HIGH_ADDR(CutTrace)			; (TEST/DEBUG)
+			li		r2,0x3402						; (TEST/DEBUG)
+			oris	r0,r0,LOW_ADDR(CutTrace)		; (TEST/DEBUG)
+			sc										; (TEST/DEBUG)
+#endif				
+			
+vmxckcdq:	lwarx	r0,0,r9							; Pick up the old chain head
+			stw		r0,SAVprev(r24)					; Move it to the current guy
+			stwcx.	r3,0,r9							; Save it
+			bne-	vmxckcdq						; Someone chaged the list...
+			
+vmxena:		oris	r29,r29,hi16(MASK(MSR_VEC))		; Enable facility
+
+
+setena:		rlwinm.	r0,r29,0,MSR_PR_BIT,MSR_PR_BIT	; Are we about to launch user state?
+			rlwinm	r20,r29,(((31-vectorCngbit)+(MSR_VEC_BIT+1))&31),vectorCngbit,vectorCngbit	; Set flag if we enabled vector
+			stw		r29,savesrr1(r27)				; Turn facility on or off
+			crmove	cr7_eq,cr0_eq					; Remember if we are going to user state
+			lwz		r19,deferctx(r28)				; Get any deferred facility context switch
+			rlwimi.	r20,r29,(((31-floatCngbit)+(MSR_FP_BIT+1))&31),floatCngbit,floatCngbit	; Set flag if we enabled floats
+			beq		setenaa							; Neither float nor vector turned on....
+			
+			lwz		r5,ACT_MACT_SPF(r28)			; Get activation copy
+			lwz		r6,spcFlags(r31)				; Get per_proc copy
+			or		r5,r5,r20						; Set vector/float changed bits in activation
+			or		r6,r6,r20						; Set vector/float changed bits in per_proc
+			stw		r5,ACT_MACT_SPF(r28)			; Set activation copy
+			stw		r6,spcFlags(r31)				; Set per_proc copy
+
+setenaa:	mfdec	r24								; Get decrementer
+			bf+		cr2_eq,nodefer					; No deferred to switch to...
+						
+			li		r20,0							; Clear this
+			stw		r26,curctx(r28)					; Make the facility context current
+			stw		r20,deferctx(r28)				; Clear deferred context
+
+nodefer:	lwz		r22,qactTimer(r28)				; Get high order quick activation timer
+			mr.		r24,r24							; See if it has popped already...
+			lwz		r23,qactTimer+4(r28)			; Get low order qact timer
+			ble-	chkenax							; We have popped or are just about to...
+			
+segtb:		mftbu	r20								; Get the upper time base
+			mftb	r21								; Get the low
+			mftbu	r19								; Get upper again
+			or.		r0,r22,r23						; Any time set?
+			cmplw	cr1,r20,r19						; Did they change?
+			beq+	chkenax							; No time set....
+			bne-	cr1,segtb						; Timebase ticked, get them again...
+			
+			subfc	r6,r21,r23						; Subtract current from qact time
+			li		r0,0							; Make a 0
+			subfe	r5,r20,r22						; Finish subtract
+			subfze	r0,r0							; Get a 0 if qact was bigger than current, -1 otherwise
+			andc.	r12,r5,r0						; Set 0 if qact has passed
+			andc	r13,r6,r0						; Set 0 if qact has passed
+			bne		chkenax							; If high order is non-zero, this is too big for a decrementer
+			cmplw	r13,r24							; Is this earlier than the decrementer? (logical compare takes care of high bit on)
+			bge+	chkenax							; No, do not reset decrementer...
+			
+			mtdec	r13								; Set our value
+
+chkenax:	
 
 	
 #if DEBUG
-			lwz		r20,SAVact(r3)				; (TEST/DEBUG) Make sure our restore
-			lwz		r21,PP_CPU_DATA(r10)		; (TEST/DEBUG) context is associated
-			lwz		r21,CPU_ACTIVE_THREAD(r21)	; (TEST/DEBUG) with the current act.
-			cmpwi	r21,0						; (TEST/DEBUG)
-			beq-	yeswereok					; (TEST/DEBUG)
-			lwz		r21,THREAD_TOP_ACT(r21)		; (TEST/DEBUG)
-			cmplw	r21,r20						; (TEST/DEBUG)
-			beq+	yeswereok					; (TEST/DEBUG)
+			lwz		r20,SAVact(r27)					; (TEST/DEBUG) Make sure our restore
+			lwz		r21,PP_ACTIVE_THREAD(r31)		; (TEST/DEBUG) with the current act.
+			cmpwi	r21,0							; (TEST/DEBUG)
+			beq-	yeswereok						; (TEST/DEBUG)
+			lwz		r21,THREAD_TOP_ACT(r21)			; (TEST/DEBUG)
+			cmplw	r21,r20							; (TEST/DEBUG)
+			beq+	yeswereok						; (TEST/DEBUG)
 
-			lis		r0,hi16(Choke)				; (TEST/DEBUG) Choke code
-			ori		r0,r0,lo16(Choke)			; (TEST/DEBUG) and the rest
-			mr		r21,r3						; (TEST/DEBUG) Save the savearea address
-			li		r3,failContext				; (TEST/DEBUG) Bad state code
-			sc									; (TEST/DEBUG) System ABEND
+			lis		r0,hi16(Choke)					; (TEST/DEBUG) Choke code
+			ori		r0,r0,lo16(Choke)				; (TEST/DEBUG) and the rest
+			mr		r21,r27							; (TEST/DEBUG) Save the savearea address
+			li		r3,failContext					; (TEST/DEBUG) Bad state code
+			sc										; (TEST/DEBUG) System ABEND
 
 yeswereok:
 #endif
 	
-			rlwinm	r5,r3,0,0,19				; Round savearea down to page bndry
-			rlwinm	r6,r6,0,1,31				; Mark savearea free
-			lwz		r5,SACvrswap(r5)			; Get the conversion from virtual to real
-			stw		r6,SAVflags(r3)				; Set savearea flags
-			xor		r3,r3,r5					; Flip to physical address
-			b		EXT(exception_exit)			; We are all done now...
+			rlwinm	r5,r27,0,0,19					; Round savearea down to page bndry
+			lwz		r5,SACvrswap(r5)				; Get the conversion from virtual to real
+			xor		r3,r27,r5						; Flip to physical address
+			b		EXT(exception_exit)				; We are all done now...
 
 
 
@@ -1525,11 +1445,8 @@ CthreadSetSelfNumber:
 
 			.globl	EXT(fastexit)
 EXT(fastexit):
-			lwz		r8,SAVflags(r4)				/* Pick up the flags */
 			rlwinm	r9,r4,0,0,19				/* Round down to the base savearea block */
-			rlwinm	r8,r8,0,1,31				/* Clear the attached bit */
 			lwz		r9,SACvrswap(r9)			/* Get the conversion from virtual to real */
-			stw		r8,SAVflags(r4)				/* Set the flags */
 			xor		r3,r4,r9					/* Switch savearea to physical addressing */
 			b		EXT(exception_exit)			/* Go back to the caller... */
 
@@ -1663,10 +1580,9 @@ chokestart:	li		r0,0						; Get a zero
 ;
 		
 versave:	
-
-#if 0
+#if 1
 ;
-;			Make sure that only the top FPU savearea is marked invalid
+;			Make sure that all savearea chains have the right type on them
 ;
 
 			lis		r28,hi16(EXT(default_pset))		; (TEST/DEBUG)
@@ -1676,45 +1592,78 @@ versave:
 			li		r20,0							; (TEST/DEBUG)
 			lwz		r26,0(r27)						; (TEST/DEBUG)
 			lwz		r27,psthreadcnt(r28)			; (TEST/DEBUG)
-			mr.		r26,r26							; (TEST/DEBUG)
+			mr.		r26,r26							; (TEST/DEBUG) Have we locked the test out?
 			lwz		r28,psthreads(r28)				; (TEST/DEBUG)
-			bnelr-									; (TEST/DEBUG)
+			mflr	r31								; (TEST/DEBUG) Save return
+			bnelr-									; (TEST/DEBUG) Test already triggered, skip...
+			b		fckgo							; (TEST/DEBUG) Join up...
 			
-fcknxtth:	mr.		r27,r27							; (TEST/DEBUG)
-			beqlr-									; (TEST/DEBUG)
-			
-			lwz		r26,THREAD_TOP_ACT(r28)			; (TEST/DEBUG)
+fcknext:	mr.		r27,r27							; (TEST/DEBUG) Any more threads?
+			bne+	fckxxx							; (TEST/DEBUG) Yes...
 
-fckact:		mr.		r26,r26							; (TEST/DEBUG)
-			bne+	fckact2							; (TEST/DEBUG)
+			mtlr	r31								; (TEST/DEBUG) Restore return
+			blr										; (TEST/DEBUG) Leave...
 			
-			lwz		r28,THREAD_PSTHRN(r28)			; (TEST/DEBUG) Next in line
-			subi	r27,r27,1						; (TEST/DEBUG)
-			b		fcknxtth						; (TEST/DEBUG) 
-	
-fckact2:	lwz		r20,ACT_MACT_FPU(r26)			; (TEST/DEBUG) Get FPU chain
-			mr.		r20,r20							; (TEST/DEBUG) Are there any?
-			beq+	fcknact							; (TEST/DEBUG) No...
-			
-fckact3:	lwz		r20,SAVprefp(r20)				; (TEST/DEBUG) Get next in list
-			mr.		r20,r20							; (TEST/DEBUG) Check next savearea
-			beq+	fcknact							; (TEST/DEBUG) No...
-			
-			lwz		r29,SAVlvlfp(r20)				; (TEST/DEBUG) Get the level
+fckxxx:		lwz		r28,THREAD_PSTHRN(r28)			; (TEST/DEBUG) Get next thread
 
-			cmplwi	r29,1							; (TEST/DEBUG) Is it invalid??
-			bne+	fckact3							; (TEST/DEBUG) Nope...
+fckgo:		subi	r27,r27,1						; (TEST/DEBUG) Decrement thread count
+			lwz		r24,THREAD_TOP_ACT(r28)			; (TEST/DEBUG) Get activation for the thread
+			lwz		r20,ACT_MACT_PCB(r24)			; (TEST/DEBUG) Get the normal context
+			li		r21,SAVgeneral					; (TEST/DEBUG) Make sure this is all general context
+			bl		versavetype						; (TEST/DEBUG) Check the chain
 			
-			lis		r27,hi16(EXT(DebugWork))		; (TEST/DEBUG)
-			ori		r27,r27,lo16(EXT(DebugWork))	; (TEST/DEBUG)
-			stw		r27,0(r27)						; (TEST/DEBUG)
-			BREAKPOINT_TRAP							; (TEST/DEBUG)
-
-fcknact:	lwz		r26,ACT_LOWER(r26)				; (TEST/DEBUG) Next activation
-			b		fckact							; (TEST/DEBUG)
+			lwz		r20,facctx+FPUsave(r24)			; (TEST/DEBUG) Get regular floating point
+			li		r21,SAVfloat					; (TEST/DEBUG) Make sure this is all floating point
+			bl		versavetype						; (TEST/DEBUG) Check the chain			
+			
+			lwz		r20,facctx+VMXsave(r24)			; (TEST/DEBUG) Get regular vector point
+			li		r21,SAVvector					; (TEST/DEBUG) Make sure this is all vector
+			bl		versavetype						; (TEST/DEBUG) Check the chain			
+			
+			lwz		r29,vmmControl(r24)				; (TEST/DEBUG) Get the virtual machine control blocks
+			mr.		r29,r29							; (TEST/DEBUG) Are there any?
+			beq+	fcknext							; (TEST/DEBUG) Nope, next thread...
+			
+			li		r22,kVmmMaxContextsPerThread	; (TEST/DEBUG) Get the number of control blocks	
+			subi	r29,r29,vmmCEntrySize			; (TEST/DEBUG) Get running start	
+			
+fcknvmm:	subi	r22,r22,1						; (TEST/DEBUG) Do all of them
+			mr.		r22,r22							; (TEST/DEBUG) Are we all done?
+			addi	r29,r29,vmmCEntrySize			; (TEST/DEBUG) Get the next entry
+			blt-	fcknext							; (TEST/DEBUG) Yes, check next thread...
+			
+			lwz		r23,vmmFlags(r29)				; (TEST/DEBUG) Get entry flags
+			rlwinm.	r23,r23,0,0,0					; (TEST/DEBUG) Is this in use?
+			beq+	fcknvmm							; (TEST/DEBUG) Not in use...
+			
+			lwz		r20,vmmFacCtx+FPUsave(r29)		; (TEST/DEBUG) Get regular floating point
+			li		r21,SAVfloat					; (TEST/DEBUG) Make sure this is all floating point
+			bl		versavetype						; (TEST/DEBUG) Check the chain			
+			
+			lwz		r20,vmmFacCtx+VMXsave(r29)		; (TEST/DEBUG) Get regular vector point
+			li		r21,SAVvector					; (TEST/DEBUG) Make sure this is all vector
+			bl		versavetype						; (TEST/DEBUG) Check the chain			
+			b		fcknvmm							; (TEST/DEBUG) Get then vmm block...
+			
+versavetype:
+			mr.		r20,r20							; (TEST/DEBUG) Chain done?
+			beqlr-									; (TEST/DEBUG) Yes...
+			
+			lwz		r23,SAVflags(r20)				; (TEST/DEBUG) Get the flags
+			rlwinm	r23,r23,24,24,31				; (TEST/DEBUG) Position it
+			cmplw	r23,r21							; (TEST/DEBUG) Are we the correct type?
+			beq+	versvok							; (TEST/DEBUG) This one is ok...
+			
+			lis		r22,hi16(EXT(DebugWork))		; (TEST/DEBUG)
+			ori		r22,r22,lo16(EXT(DebugWork))	; (TEST/DEBUG)
+			stw		r22,0(r22)						; (TEST/DEBUG) Lock out more checks
+			BREAKPOINT_TRAP							; (TEST/DEBUG) Get into debugger
+			
+versvok:	lwz		r20,SAVprev(r20)				; (TEST/DEBUG) Get the previous one
+			b		versavetype						; (TEST/DEBUG) Go check its type...
 #endif
 
-#if 1
+#if 0
 ;
 ;			Make sure there are no circular links in the float chain
 ;			And that FP is marked busy in it.

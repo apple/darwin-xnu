@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2002 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -61,31 +61,19 @@
  */
 
 #ifndef	_SYS_DKSTAT_H_
-#define _SYS_DKSTAT_H_
+#define	_SYS_DKSTAT_H_
 
-#define	CP_USER		0
-#define	CP_NICE		1
-#define	CP_SYS		2
-#define	CP_INTR		3
-#define	CP_IDLE		4
-#define	CPUSTATES	5
+#include <sys/appleapiopts.h>
 
-#define	DK_NDRIVE	8
+#ifdef	__APPLE_API_PRIVATE
 
 #ifdef KERNEL
-extern long cp_time[CPUSTATES];
-extern long dk_seek[DK_NDRIVE];
-extern long dk_time[DK_NDRIVE];
-extern long dk_wds[DK_NDRIVE];
-extern long dk_wpms[DK_NDRIVE];
-extern long dk_xfer[DK_NDRIVE];
-
-extern int dk_busy;
-extern int dk_ndrive;
-
 extern long tk_cancc;
 extern long tk_nin;
 extern long tk_nout;
 extern long tk_rawcc;
 #endif
+
+#endif	/* __APPLE_API_PRIVATE */
+
 #endif	/* _SYS_DKSTAT_H_ */

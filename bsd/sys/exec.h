@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2002 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -63,6 +63,9 @@
 #ifndef	_SYS_EXEC_H_
 #define	_SYS_EXEC_H_
 
+#include <sys/appleapiopts.h>
+
+#ifdef  __APPLE_API_OBSOLETE
 /*
  * The following structure is found at the top of the user stack of each
  * user process. The ps program uses it to locate argv and environment
@@ -78,9 +81,12 @@ struct ps_strings {
 	int	ps_nenvstr;	/* the number of environment strings */
 };
 
+#endif /* __APPLE_API_OBSOLETE */
+
 #include <machine/exec.h>
 
 #ifdef KERNEL
+#ifdef __APPLE_API_PRIVATE
 /*
  * Arguments to the exec system call.
  */
@@ -89,6 +95,8 @@ struct execve_args {
 	char	**argp;
 	char	**envp;
 };
+#endif /*__APPLE_API_PRIVATE */
 #endif /* KERNEL */
+
 #endif /* !_SYS_EXEC_H_ */
 

@@ -850,7 +850,7 @@ nfssvc_iod(p)
 	/* stuff myiod into uthread to get off local stack for
        continuation */
 
-	ut = get_bsdthread_info(current_act());
+	ut = (struct uthread *)get_bsdthread_info(current_act());
 	ut->uu_state.uu_nfs_myiod = myiod;  /* squirrel away for continuation */
 
 	nfssvc_iod_continue(0);
@@ -873,7 +873,7 @@ nfssvc_iod_continue(error)
 	/*
 	 * real myiod is stored in uthread, recover it
 	 */
-	ut = get_bsdthread_info(current_act());
+	ut = (struct uthread *)get_bsdthread_info(current_act());
 	myiod = ut->uu_state.uu_nfs_myiod;
 	p = current_proc();
 
@@ -901,11 +901,7 @@ nfssvc_iod_continue(error)
 		nfs_numasync--;
 		if (error == EINTR || error == ERESTART)
 		  error = 0;
-#if defined (__i386__)
-		return(error);
-#else
 		unix_syscall_return(error);
-#endif
 	    }
 	    while ((bp = nmp->nm_bufq.tqh_first) != NULL) {
 		/* Take one off the front of the list */

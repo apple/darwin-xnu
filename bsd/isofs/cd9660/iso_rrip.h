@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2002 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -60,8 +60,13 @@
  *
  *	@(#)iso_rrip.h	8.2 (Berkeley) 1/23/94
  */
+#ifndef __ISOFS_CD9660_ISO_RRIP_H__
+#define __ISOFS_CD9660_ISO_RRIP_H__
+
+#include <sys/appleapiopts.h>
 
 
+#ifdef __APPLE_API_PRIVATE
 /*
  *	Analyze function flag (similar to RR field bits)
  */
@@ -104,3 +109,5 @@ int cd9660_rrip_getsymname __P((struct iso_directory_record *isodir,
 			       struct iso_mnt *imp));
 int cd9660_rrip_offset __P((struct iso_directory_record *isodir,
 			   struct iso_mnt *imp));
+#endif /* __APPLE_API_PRIVATE */
+#endif /* __ISOFS_CD9660_ISO_RRIP_H__ */

@@ -83,23 +83,13 @@ thread_quantum_expire(
 {
 	register processor_t		myprocessor = p0;
 	register thread_t			thread = p1;
-	register processor_set_t	pset;
 	spl_t						s;
-
-	pset = myprocessor->processor_set;
-
-	/*
-	 *	Update set_quanta for timesharing.
-	 */
-	pset->set_quanta = pset->machine_quanta[
-							(pset->runq.count > pset->processor_count) ?
-								  pset->processor_count : pset->runq.count];
 
 	s = splsched();
 	thread_lock(thread);
 
 	/*
-	 * Check for failsafe trip.
+	 *	Check for fail-safe trip.
 	 */
 	if (!(thread->sched_mode & TH_MODE_TIMESHARE)) {
 		extern uint64_t		max_unsafe_computation;
@@ -107,15 +97,12 @@ thread_quantum_expire(
 
 		new_computation = myprocessor->quantum_end;
 		new_computation -= thread->computation_epoch;
-		if (new_computation + thread->metered_computation >
+		if (new_computation + thread->computation_metered >
 											max_unsafe_computation) {
 			extern uint32_t		sched_safe_duration;
 
 			if (thread->sched_mode & TH_MODE_REALTIME) {
-				if (thread->depress_priority < 0)
-					thread->priority = MINPRI;
-				else
-					thread->depress_priority = MINPRI;
+				thread->priority = DEPRESSPRI;
 
 				thread->safe_mode |= TH_MODE_REALTIME;
 				thread->sched_mode &= ~TH_MODE_REALTIME;
@@ -123,21 +110,29 @@ thread_quantum_expire(
 
 			thread->safe_release = sched_tick + sched_safe_duration;
 			thread->sched_mode |= (TH_MODE_FAILSAFE|TH_MODE_TIMESHARE);
+			thread->sched_mode &= ~TH_MODE_PREEMPT;
 		}
 	}
 		
 	/*
-	 *	Now recompute the priority of the thread if appropriate.
+	 *	Recompute scheduled priority if appropriate.
 	 */
 	if (thread->sched_stamp != sched_tick)
 		update_priority(thread);
 	else
-	if (	(thread->sched_mode & TH_MODE_TIMESHARE)	&&
-				thread->depress_priority < 0				) {
+	if (thread->sched_mode & TH_MODE_TIMESHARE) {
 		thread_timer_delta(thread);
 		thread->sched_usage += thread->sched_delta;
 		thread->sched_delta = 0;
-		compute_my_priority(thread);
+
+		/*
+		 * Adjust the scheduled priority if
+		 * the thread has not been promoted
+		 * and is not depressed.
+		 */
+		if (	!(thread->sched_mode & TH_MODE_PROMOTED)	&&
+				!(thread->sched_mode & TH_MODE_ISDEPRESSED)		)
+			compute_my_priority(thread);
 	}
 
 	/*
@@ -153,10 +148,11 @@ thread_quantum_expire(
 							thread, myprocessor->quantum_end);
 
 	thread_unlock(thread);
-	splx(s);
 
 	/*
 	 * Check for and schedule ast if needed.
 	 */
-	ast_check();
+	ast_check(myprocessor);
+
+	splx(s);
 }

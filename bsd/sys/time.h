@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2002 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -58,10 +58,9 @@
 #ifndef _SYS_TIME_H_
 #define _SYS_TIME_H_
 
+#include <sys/appleapiopts.h>
 #include <sys/types.h>
 
-#define getmicrouptime(a) microtime(a)
-#define getmicrotime(a)   microtime(a)
 /*
  * Structure returned by gettimeofday(2) system call,
  * and used in other calls.
@@ -74,10 +73,13 @@ struct timeval {
 /*
  * Structure defined by POSIX.4 to be like a timeval.
  */
+#ifndef _TIMESPEC_DECLARED
+#define _TIMESPEC_DECLARED
 struct timespec {
 	time_t	tv_sec;		/* seconds */
 	int32_t	tv_nsec;	/* and nanoseconds */
 };
+#endif
 
 #define	TIMEVAL_TO_TIMESPEC(tv, ts) {					\
 	(ts)->tv_sec = (tv)->tv_sec;					\
@@ -155,9 +157,19 @@ struct clockinfo {
 #include <sys/cdefs.h>
 
 #ifdef KERNEL
+void	microtime __P((struct timeval *tv));
+void	microuptime __P((struct timeval *tv));
+#define getmicrotime(a)		microtime(a)
+#define getmicrouptime(a)	microuptime(a)
+void	nanotime __P((struct timespec *ts));
+void	nanouptime __P((struct timespec *ts));
+#define getnanotime(a)		nanotime(a)
+#define getnanouptime(a)	nanouptime(a)
+#ifdef __APPLE_API_PRIVATE
 int	itimerfix __P((struct timeval *tv));
 int	itimerdecr __P((struct itimerval *itp, int usec));
-void	microtime __P((struct timeval *tv));
+#endif /* __APPLE_API_PRIVATE */
+
 #else /* !KERNEL */
 #include <time.h>
 
@@ -166,6 +178,7 @@ void	microtime __P((struct timeval *tv));
 
 __BEGIN_DECLS
 int	adjtime __P((const struct timeval *, struct timeval *));
+int	futimes __P((int, const struct timeval *));
 int	getitimer __P((int, struct itimerval *));
 int	gettimeofday __P((struct timeval *, struct timezone *));
 int	setitimer __P((int, const struct itimerval *, struct itimerval *));

@@ -7,6 +7,7 @@
 
 libsa/bootstrap.cpp                                           standard
 libsa/catalogue.cpp                                           standard
+libsa/c++rem3.c                                               standard
 libsa/kld_patch.c                                             standard
 libsa/kmod.cpp                                                standard
 libsa/mach.c                                                  standard
@@ -19,3 +20,4 @@ libsa/bsearch.c                                               standard
 libsa/malloc.c                                                standard
 libsa/sort.c                                                  standard
 libsa/strrchr.c                                               standard
+libsa/strstr.c                                                standard

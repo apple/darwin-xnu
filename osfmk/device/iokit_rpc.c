@@ -57,8 +57,6 @@
 #include <device/device_port.h>
 #include <device/device_server.h>
 
-#include <sys/ioctl.h>
-
 #include <machine/machparam.h>
 
 #ifdef __ppc__
@@ -82,7 +80,7 @@ extern ipc_port_t iokit_port_for_object( io_object_t obj,
 			ipc_kobject_type_t type );
 
 extern kern_return_t iokit_client_died( io_object_t obj,
-                        ipc_port_t port, ipc_kobject_type_t type );
+                        ipc_port_t port, ipc_kobject_type_t type, mach_port_mscount_t mscount );
 
 extern kern_return_t
 iokit_client_memory_for_type(
@@ -172,6 +170,18 @@ iokit_lookup_connect_ref_current_task(io_object_t connectRef)
 	return iokit_lookup_connect_ref(connectRef, current_space());
 }
 
+EXTERN void
+iokit_retain_port( ipc_port_t port )
+{
+    ipc_port_reference( port );
+}
+
+EXTERN void
+iokit_release_port( ipc_port_t port )
+{
+    ipc_port_release( port );
+}
+
 /*
  * Get the port for a device.
  * Consumes a device reference; produces a naked send right.
@@ -181,17 +191,21 @@ iokit_make_object_port(
 	io_object_t	obj )
 {
     register ipc_port_t	port;
+    register ipc_port_t	sendPort;
 
     if( obj == NULL)
         return IP_NULL;
 
     port = iokit_port_for_object( obj, IKOT_IOKIT_OBJECT );
-    if( port)
-	port = ipc_port_make_send( port);
+    if( port) {
+	sendPort = ipc_port_make_send( port);
+	iokit_release_port( port );
+    } else
+	sendPort = IP_NULL;
 
     iokit_remove_reference( obj );
 
-    return( port);
+    return( sendPort);
 }
 
 MIGEXTERN ipc_port_t
@@ -199,17 +213,21 @@ iokit_make_connect_port(
 	io_object_t	obj )
 {
     register ipc_port_t	port;
+    register ipc_port_t	sendPort;
 
     if( obj == NULL)
         return IP_NULL;
 
     port = iokit_port_for_object( obj, IKOT_IOKIT_CONNECT );
-    if( port)
-        port = ipc_port_make_send( port);
+    if( port) {
+	sendPort = ipc_port_make_send( port);
+	iokit_release_port( port );
+    } else
+	sendPort = IP_NULL;
 
     iokit_remove_reference( obj );
 
-    return( port);
+    return( sendPort);
 }
 
 
@@ -264,24 +282,30 @@ iokit_destroy_object_port( ipc_port_t port )
 EXTERN mach_port_name_t
 iokit_make_send_right( task_t task, io_object_t obj, ipc_kobject_type_t type )
 {
-    kern_return_t	kr;
     ipc_port_t		port;
+    ipc_port_t		sendPort;
     mach_port_name_t	name;
 
     if( obj == NULL)
         return MACH_PORT_NULL;
 
     port = iokit_port_for_object( obj, type );
-    if( port)
-        port = ipc_port_make_send( port);
-    if( port == IP_NULL)
-        return MACH_PORT_NULL;
+    if( port) {
+	sendPort = ipc_port_make_send( port);
+	iokit_release_port( port );
+    } else
+	sendPort = IP_NULL;
 
-    kr = ipc_object_copyout( task->itk_space, (ipc_object_t) port,
+    if (IP_VALID( sendPort )) {
+    	kern_return_t	kr;
+    	kr = ipc_object_copyout( task->itk_space, (ipc_object_t) sendPort,
 				MACH_MSG_TYPE_PORT_SEND, TRUE, &name);
-
-    if( kr != KERN_SUCCESS)
-	name = MACH_PORT_NULL;
+	if ( kr != KERN_SUCCESS)
+		name = MACH_PORT_NULL;
+    } else if ( sendPort == IP_NULL)
+        name = MACH_PORT_NULL;
+    else if ( sendPort == IP_DEAD)
+    	name = MACH_PORT_DEAD;
 
     iokit_remove_reference( obj );
 
@@ -300,6 +324,7 @@ iokit_no_senders( mach_no_senders_notification_t * notification )
     ipc_port_t		port;
     io_object_t		obj = NULL;
     ipc_kobject_type_t	type;
+    ipc_port_t		notify;
 
     port = (ipc_port_t) notification->not_header.msgh_remote_port;
 
@@ -318,7 +343,17 @@ iokit_no_senders( mach_no_senders_notification_t * notification )
         ip_unlock(port);
 
         if( obj ) {
-            (void) iokit_client_died( obj, port, type );
+
+	    mach_port_mscount_t mscount = notification->not_count;
+
+            if( KERN_SUCCESS != iokit_client_died( obj, port, type, &mscount ))
+	    {
+		/* Re-request no-senders notifications on the port. */
+		notify = ipc_port_make_sonce( port);
+		ip_lock( port);
+		ipc_port_nsrequest( port, mscount + 1, notify, &notify);
+		assert( notify == IP_NULL);
+	    }
             iokit_remove_reference( obj );
         }
     }
@@ -343,6 +378,21 @@ iokit_notify( mach_msg_header_t * msg )
             return FALSE;
     }
 }
+
+#ifndef i386
+unsigned int IOTranslateCacheBits(struct phys_entry *pp)
+{
+	unsigned int	flags;
+	unsigned int	memattr;
+
+	/* need to create a pmap function to generalize */
+	memattr = ((pp->pte1 & 0x00000078) >> 3);
+
+	/* NOTE: DEVICE_PAGER_FLAGS are made to line up */
+	flags = memattr & VM_WIMG_MASK;
+	return flags;
+}
+#endif
 
 kern_return_t IOMapPages(vm_map_t map, vm_offset_t va, vm_offset_t pa,
 			vm_size_t length, unsigned int options)
@@ -388,7 +438,7 @@ kern_return_t IOMapPages(vm_map_t map, vm_offset_t va, vm_offset_t pa,
 #else
 // 	enter each page's physical address in the target map
 	for (off = 0; off < length; off += page_size) {		/* Loop for the whole length */
-	 	pmap_enter(pmap, va + off, pa + off, prot, TRUE);			/* Map it in */
+	 	pmap_enter(pmap, va + off, pa + off, prot, VM_WIMG_USE_DEFAULT, TRUE);	/* Map it in */
 	}
 #endif
 
@@ -398,17 +448,10 @@ kern_return_t IOMapPages(vm_map_t map, vm_offset_t va, vm_offset_t pa,
 kern_return_t IOUnmapPages(vm_map_t map, vm_offset_t va, vm_size_t length)
 {
     pmap_t	pmap = map->pmap;
-    vm_size_t	off;
-    boolean_t	b;
 
-#if __ppc__
-    b = mapping_remove(pmap, va);
-#else
-    pmap_remove(pmap, va, va + length);
-    b = TRUE;
-#endif
+    pmap_remove(pmap, trunc_page(va), round_page(va + length));
 
-    return( b ? KERN_SUCCESS : KERN_INVALID_ADDRESS );
+    return( KERN_SUCCESS );
 }
 
 void IOGetTime( mach_timespec_t * clock_time);

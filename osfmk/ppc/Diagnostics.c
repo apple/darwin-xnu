@@ -60,8 +60,12 @@
 #include <ppc/machine_cpu.h>
 #include <pexpert/pexpert.h>
 #include <ppc/POWERMAC/video_console.h>
+#include <ppc/trap.h>
 
 extern struct vc_info vinfo;
+
+kern_return_t testPerfTrap(int trapno, struct savearea *ss, 
+	unsigned int dsisr, unsigned int dar);
 
 int diagCall(struct savearea *save) {
 
@@ -72,7 +76,7 @@ int diagCall(struct savearea *save) {
 	natural_t tbu, tbu2, tbl;
 	struct per_proc_info *per_proc;					/* Area for my per_proc address */
 	int cpu;
-	unsigned int tstrt, tend;
+	unsigned int tstrt, tend, temp, temp2;
 
 	if(!(dgWork.dgFlags & enaDiagSCs)) return 0;	/* If not enabled, cause an exception */
 
@@ -153,7 +157,7 @@ int diagCall(struct savearea *save) {
 /*
  *		Force cache flush
  */
-		case dgflush:
+		case dgFlush:
 		
 #if 1
 			cacheInit();							/* Blow cache */
@@ -172,7 +176,8 @@ int diagCall(struct savearea *save) {
  */
 		case dgtest:
 		
-			pmap_remove(kernel_pmap, save->save_r4, save->save_r4 + 4096);
+			if(save->save_r4) perfTrapHook = testPerfTrap;
+			else perfTrapHook = 0;
 
 			return 1;								/* Return and check for ASTs... */
 			
@@ -200,6 +205,35 @@ int diagCall(struct savearea *save) {
 		
 			(void)mapping_remove(current_act()->map->pmap, save->save_r4);	/* Remove mapping */
 			return 1;								/* Return and check for ASTs... */
+	
+			
+/*
+ *		Allows direct control of alignment handling.
+ *
+ *		The bottom two bits of the parameter are used to set the two control bits:
+ *		0b00 - !trapUnalignbit - !notifyUnalignbit - default - instruction is emulated
+ *		0b01 - !trapUnalignbit -  notifyUnalignbit - emulation is done, but traps afterwards
+ *		0b10 -  trapUnalignbit - !notifyUnalignbit - no emulation - causes exception
+ *		0b11 -  trapUnalignbit -  notifyUnalignbit - no emulation - causes exception
+ */
+		case dgAlign:
+		
+			temp = current_act()->mact.specFlags;	/* Save the old values */
+			
+			temp = ((current_act()->mact.specFlags >> (31 - trapUnalignbit - 1)) 	/* Reformat them to pass back */
+				| (current_act()->mact.specFlags >> (31 - notifyUnalignbit))) & 3;
+				
+			temp2 = ((save->save_r4 << (31 - trapUnalignbit - 1)) & trapUnalign)	/* Move parms into flag format */
+				| ((save->save_r4 << (31 - notifyUnalignbit)) & notifyUnalign);
+
+			current_act()->mact.specFlags &= ~(trapUnalign | notifyUnalign);		/* Clean the old ones */
+			current_act()->mact.specFlags |= temp2;									/* Set the new ones */
+			
+			per_proc_info[cpu_number()].spcFlags = current_act()->mact.specFlags;
+			
+			save->save_r3 = temp;
+			
+			return 1;								/* Return and check for ASTs... */
 			
 /*
  *		Return info for boot screen
@@ -217,6 +251,18 @@ int diagCall(struct savearea *save) {
 		default:									/* Handle invalid ones */
 			return 0;								/* Return an exception */
 		
-	};
+	}
+
+};
+
+kern_return_t testPerfTrap(int trapno, struct savearea *ss, 
+	unsigned int dsisr, unsigned int dar) {
+
+	if(trapno != T_ALIGNMENT) return KERN_FAILURE;
+
+	kprintf("alignment exception at %08X, srr1 = %08X, dsisr = %08X, dar = %08X\n", ss->save_srr0,
+		ss->save_srr1, dsisr, dar);
+		
+	return KERN_SUCCESS;
 
 }

@@ -23,6 +23,10 @@
 #ifndef __USERNOTIFICATION_UNDTYPES_H
 #define __USERNOTIFICATION_UNDTYPES_H
 
+#include <sys/appleapiopts.h>
+
+#ifdef __APPLE_API_PRIVATE
+
 #include <mach/mach_types.h>
 
 typedef char *UNDMessage;
@@ -61,6 +65,8 @@ typedef mach_port_t UNDReplyRef;
 
 #define UND_REPLY_NULL ((UNDReplyRef)0)
 #define XML_DATA_NULL	((xmlData_t)0)
+
+#endif  /* __APPLE_API_PRIVATE */
 
 #endif	/* __USERNOTIFICATION_UNDTPES_H */
 

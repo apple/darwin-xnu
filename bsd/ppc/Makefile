@@ -10,7 +10,7 @@ include $(MakeInc_def)
 DATAFILES = \
 	cpu.h disklabel.h endian.h exec.h label_t.h param.h profile.h \
 	psl.h ptrace.h   reboot.h   reg.h   setjmp.h signal.h spl.h \
-	table.h types.h user.h vmparam.h
+	table.h types.h ucontext.h user.h vmparam.h
 
 INSTALL_MD_LIST = ${DATAFILES}
 

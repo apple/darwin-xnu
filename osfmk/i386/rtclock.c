@@ -74,6 +74,20 @@ void		sysclk_setalarm(
 extern	void (*IOKitRegisterInterruptHook)(void *,  int irq, int isclock);
 
 /*
+ * Inlines to get timestamp counter value.
+ */
+
+static inline void rdtsc_hilo(uint32_t *hi, uint32_t *lo) {
+        asm volatile("rdtsc": "=a" (*lo), "=d" (*hi));
+}
+
+static inline uint64_t rdtsc_64(void) {
+	uint64_t result;
+        asm volatile("rdtsc": "=A" (result));
+	return result;
+}
+
+/*
  * Lists of clock routines.
  */
 struct clock_ops  sysclk_ops = {
@@ -139,6 +153,10 @@ int					rtc_intr_count;                /* interrupt counter */
 int					rtc_intr_hertz;                /* interrupts per HZ */
 int					rtc_intr_freq;                 /* interrupt frequency */
 int					rtc_print_lost_tick;           /* print lost tick */
+
+uint32_t		rtc_cyc_per_sec;		/* processor cycles per seconds */
+uint32_t		rtc_last_int_tsc_lo;		/* tsc values saved per interupt */
+uint32_t		rtc_last_int_tsc_hi;
 
 /*
  *	Macros to lock/unlock real-time clock device.
@@ -223,6 +241,8 @@ unsigned int	microdata = 50;
 
 extern int   measure_delay(int us);
 void         rtc_setvals( unsigned int, clock_res_t );
+
+static void  rtc_set_cyc_per_sec();
 
 /*
  * Initialize non-zero clock structure values.
@@ -339,6 +359,7 @@ sysclk_init(void)
 
 	RtcTime = &rtclock.time;
 	rtc_setvals( CLKNUM, RTC_MINRES );  /* compute constants */
+	rtc_set_cyc_per_sec();	/* compute number of tsc beats per second */
 	return (1);
 }
 
@@ -477,38 +498,66 @@ sysclk_gettime_interrupts_disabled(
 	simple_unlock(&rtclock.lock);
 }
 
+// utility routine 
+// Code to calculate how many processor cycles are in a second...
+
+static void
+rtc_set_cyc_per_sec() 
+{
+
+        int     x, y;
+        uint64_t cycles;
+        uint32_t   c[15];          // array for holding sampled cycle counts
+        mach_timespec_t tst[15];  // array for holding time values. NOTE for some reason tv_sec not work
+
+        for (x=0; x<15; x++) {  // quick sample 15 times
+                tst[x].tv_sec = 0;
+                tst[x].tv_nsec = 0;
+                sysclk_gettime_internal(&tst[x]);
+		rdtsc_hilo(&y, &c[x]);
+        }
+        y = 0;
+        cycles = 0;
+        for (x=0; x<14; x++) {
+          // simple formula really. calculate the numerator as the number of elapsed processor
+          // cycles * 1000 to adjust for the resolution we want. The denominator is the
+          // elapsed "real" time in nano-seconds. The result will be the processor speed in  
+          // Mhz. any overflows will be discarded before they are added
+          if ((c[x+1] > c[x]) && (tst[x+1].tv_nsec > tst[x].tv_nsec)) {
+                cycles += ((uint64_t)(c[x+1]-c[x]) * NSEC_PER_SEC ) / (uint64_t)(tst[x+1].tv_nsec - tst[x].tv_nsec);       // elapsed nsecs
+                y +=1;
+          }
+        }
+        if (y>0) { // we got more than 1 valid sample. This also takes care of the case of if the clock isn't running
+          cycles = cycles / y;    // calc our average
+        }
+	rtc_cyc_per_sec = cycles;
+	rdtsc_hilo(&rtc_last_int_tsc_hi, &rtc_last_int_tsc_lo);
+}
+
 static
 natural_t
-get_uptime_ticks(void)
+get_uptime_cycles(void)
 {
-	natural_t		result = 0;
-	unsigned int	val, val2;
-
-	if (!RtcTime)
-		return (result);
-
-	/*
-	 * Inhibit interrupts. Determine the incremental
-	 * time since the last interrupt. (This could be
-	 * done in assembler for a bit more speed).
-	 */
-	do {
-	    READ_8254(val);                 /* read clock */
-	    READ_8254(val2);                /* read clock */
-	} while (val2 > val || val2 < val - 10);
-	if (val > clks_per_int_99) {
-	    outb(0x0a, 0x20);				/* see if interrupt pending */
-	    if (inb(0x20) & 1)
-			result = rtclock.intr_nsec;	/* yes, add a tick */
-	}
-	result += ((clks_per_int - val) * time_per_clk) / ZHZ;
-	if (result < last_ival) {
-	    if (rtc_print_lost_tick)
-			printf( "rtclock: missed clock interrupt.\n" );
-	}
-
-	return (result);
+        // get the time since the last interupt based on the processors TSC ignoring the
+        // RTC for speed
+ 
+        uint32_t   a,d,intermediate_lo,intermediate_hi,result;
+        uint64_t   newTime;
+        
+	rdtsc_hilo(&d, &a);
+        if (d != rtc_last_int_tsc_hi) {
+	  newTime = d-rtc_last_int_tsc_hi;
+          newTime = (newTime<<32) + (a-rtc_last_int_tsc_lo);
+          result = newTime;
+        } else {
+          result = a-rtc_last_int_tsc_lo;
+        }
+        __asm__ volatile ( " mul %3 ": "=eax" (intermediate_lo), "=edx" (intermediate_hi): "a"(result), "d"(NSEC_PER_SEC) );
+        __asm__ volatile ( " div %3": "=eax" (result): "eax"(intermediate_lo), "edx" (intermediate_hi), "ecx" (rtc_cyc_per_sec) );
+        return result;
 }
+
 
 /*
  * Get clock device attributes.
@@ -860,6 +909,7 @@ rtclock_intr(void)
 	 * update in order: mtv_csec, mtv_time.tv_nsec, mtv_time.tv_sec).
 	 */	 
 	LOCK_RTC(s);
+	rdtsc_hilo(&rtc_last_int_tsc_hi, &rtc_last_int_tsc_lo);
 	i = rtclock.time.tv_nsec + rtclock.intr_nsec;
 	if (i < NSEC_PER_SEC)
 	    rtclock.time.tv_nsec = i;
@@ -870,7 +920,7 @@ rtclock_intr(void)
 	/* note time now up to date */
 	last_ival = 0;
 
-	rtclock.abstime += (NSEC_PER_SEC/HZ);
+	rtclock.abstime += rtclock.intr_nsec;
 	abstime = rtclock.abstime;
 	if (	rtclock.timer_is_set				&&
 			rtclock.timer_deadline <= abstime		) {
@@ -932,7 +982,7 @@ clock_get_uptime(
 	spl_t			s;
 
 	LOCK_RTC(s);
-	ticks = get_uptime_ticks();
+ 	ticks = get_uptime_cycles();
 	*result = rtclock.abstime;
 	UNLOCK_RTC(s);
 

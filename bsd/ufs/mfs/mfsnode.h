@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2002 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -55,6 +55,12 @@
  *	@(#)mfsnode.h	8.2 (Berkeley) 8/11/93
  */
 
+#ifndef __UFS_MFS_MFSNODE_H__
+#define __UFS_MFS_MFSNODE_H__
+
+#include <sys/appleapiopts.h>
+
+#ifdef __APPLE_API_OBSOLETE
 /*
  * This structure defines the control data for the memory based file system.
  */
@@ -106,3 +112,5 @@ struct mfsnode {
 #define mfs_truncate ((int (*) __P((struct  vop_truncate_args *)))mfs_badop)
 #define mfs_update ((int (*) __P((struct  vop_update_args *)))mfs_badop)
 #define mfs_bwrite ((int (*) __P((struct  vop_bwrite_args *)))vn_bwrite)
+#endif /* __APPLE_API_OBSOLETE */
+#endif /* __UFS_MFS_MFSNODE_H__ */

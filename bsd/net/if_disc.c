@@ -52,6 +52,7 @@
  * SUCH DAMAGE.
  *
  *	From: @(#)if_loop.c	8.1 (Berkeley) 6/10/93
+ * $FreeBSD: src/sys/net/if_disc.c,v 1.26.2.1 2001/03/06 00:32:09 obrien Exp $
  */
 
 /*
@@ -71,17 +72,13 @@
 #include <net/route.h>
 #include <net/bpf.h>
 
-#include "bpfilter.h"
-#include "opt_inet.h"
-
-#if TINY_DSMTU
+#ifdef TINY_DSMTU
 #define	DSMTU	(1024+512)
 #else
 #define DSMTU	65532
 #endif
 
-static void discattach __P((void *dummy));
-PSEUDO_SET(discattach, if_disc);
+static void discattach __P((void));
 
 static struct	ifnet discif;
 static int discoutput(struct ifnet *, struct mbuf *, struct sockaddr *,
@@ -91,8 +88,7 @@ static int discioctl(struct ifnet *, u_long, caddr_t);
 
 /* ARGSUSED */
 static void
-discattach(dummy)
-	void *dummy;
+discattach()
 {
 	register struct ifnet *ifp = &discif;
 
@@ -106,10 +102,32 @@ discattach(dummy)
 	ifp->if_hdrlen = 0;
 	ifp->if_addrlen = 0;
 	if_attach(ifp);
-#if NBPFILTER > 0
 	bpfattach(ifp, DLT_NULL, sizeof(u_int));
-#endif
 }
+
+#ifndef __APPLE__
+static int
+disc_modevent(module_t mod, int type, void *data) 
+{ 
+	switch (type) { 
+	case MOD_LOAD: 
+		discattach();
+		break; 
+	case MOD_UNLOAD: 
+		printf("if_disc module unload - not possible for this module type\n"); 
+		return EINVAL; 
+	} 
+	return 0; 
+} 
+
+static moduledata_t disc_mod = { 
+	"if_disc", 
+	disc_modevent, 
+	NULL
+}; 
+
+DECLARE_MODULE(if_disc, disc_mod, SI_SUB_PSEUDO, SI_ORDER_ANY);
+#endif
 
 static int
 discoutput(ifp, m, dst, rt)
@@ -120,7 +138,6 @@ discoutput(ifp, m, dst, rt)
 {
 	if ((m->m_flags & M_PKTHDR) == 0)
 		panic("discoutput no HDR");
-#if NBPFILTER > 0
 	/* BPF write needs to be handled specially */
 	if (dst->sa_family == AF_UNSPEC) {
 		dst->sa_family = *(mtod(m, int *));
@@ -146,7 +163,6 @@ discoutput(ifp, m, dst, rt)
 
 		bpf_mtap(&discif, &m0);
 	}
-#endif
 	m->m_pkthdr.rcvif = ifp;
 
 	ifp->if_opackets++;
@@ -203,6 +219,10 @@ discioctl(ifp, cmd, data)
 
 #if INET
 		case AF_INET:
+			break;
+#endif
+#if INET6
+		case AF_INET6:
 			break;
 #endif
 

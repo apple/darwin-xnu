@@ -78,6 +78,8 @@
  *	%u	unsigned conversion
  *	%x	hexadecimal conversion
  *	%X	hexadecimal conversion with capital letters
+ *      %D      hexdump, ptr & separator string ("%6D", ptr, ":") -> XX:XX:XX:XX:XX:XX
+ *              if you use, "%*D" then there's a length, the data ptr and then the separator
  *	%o	octal conversion
  *	%c	character
  *	%s	string
@@ -89,8 +91,6 @@
  *  This version does not implement %f, %e, or %g.  It accepts, but
  *  ignores, an `l' as in %ld, %lo, %lx, and %lu, and therefore will not
  *  work correctly on machines for which sizeof(long) != sizeof(int).
- *  It does not even parse %D, %O, or %U; you should be using %ld, %o and
- *  %lu if you mean long conversion.
  *
  *  As mentioned, this version does not return any reasonable value.
  *
@@ -98,6 +98,9 @@
  *  long as this notice is incorporated.
  *
  *  Steve Summit 3/25/87
+ *
+ *  Tweaked for long long support and extended to support the hexdump %D
+ *  specifier by dbg 05/02/02.
  */
 
 /*
@@ -141,6 +144,11 @@
  *	D,U,O,Z	same as corresponding lower-case versions
  *		(compatibility)
  */
+/*
+ * Added support for print long long (64-bit) integers.
+ * Use %lld, %Ld or %qd to print a 64-bit int.  Other
+ * output bases such as x, X, u, U, o, and O also work.
+ */
 
 #include <platforms.h>
 #include <mach/boolean.h>
@@ -161,72 +169,73 @@
 #include <ppc/Firmware.h>
 #endif
 
-/*
- * Forward declarations
- */
-void printnum(
-	register unsigned int	u,
-	register int		base,
-	void			(*putc)(char));
-
-
 #define isdigit(d) ((d) >= '0' && (d) <= '9')
 #define Ctod(c) ((c) - '0')
 
-#define MAXBUF (sizeof(long int) * 8)		 /* enough for binary */
+#define MAXBUF (sizeof(long long int) * 8)	/* enough for binary */
+static char digs[] = "0123456789abcdef";
 
-void
+static int
 printnum(
-	register unsigned int	u,		/* number to print */
+	register unsigned long long int	u,	/* number to print */
 	register int		base,
-	void			(*putc)(char))
+	void			(*putc)(int, void *),
+	void                    *arg)
 {
 	char	buf[MAXBUF];	/* build number here */
 	register char *	p = &buf[MAXBUF-1];
-	static char digs[] = "0123456789abcdef";
+	int nprinted = 0;
 
 	do {
 	    *p-- = digs[u % base];
 	    u /= base;
 	} while (u != 0);
 
-	while (++p != &buf[MAXBUF])
-	    (*putc)(*p);
+	while (++p != &buf[MAXBUF]) {
+	    (*putc)(*p, arg);
+	    nprinted++;
+	}
 
+	return nprinted;
 }
 
 boolean_t	_doprnt_truncates = FALSE;
 
-void 
-_doprnt(
+int
+__doprnt(
 	register const char	*fmt,
 	va_list			*argp,
 						/* character output routine */
-	void			(*putc)(char),
+	void			(*putc)(int, void *arg),
+	void                    *arg,
 	int			radix)		/* default radix - for '%r' */
 {
 	int		length;
 	int		prec;
 	boolean_t	ladjust;
 	char		padc;
-	long		n;
-	unsigned long	u;
+	long long		n;
+	unsigned long long	u;
 	int		plus_sign;
 	int		sign_char;
 	boolean_t	altfmt, truncate;
 	int		base;
 	register char	c;
 	int		capitals;
+	int		long_long;
+	int             nprinted = 0;
 
 	while ((c = *fmt) != '\0') {
 	    if (c != '%') {
-		(*putc)(c);
+		(*putc)(c, arg);
+		nprinted++;
 		fmt++;
 		continue;
 	    }
 
 	    fmt++;
 
+	    long_long = 0;
 	    length = 0;
 	    prec = -1;
 	    ladjust = FALSE;
@@ -290,8 +299,16 @@ _doprnt(
 		}
 	    }
 
-	    if (c == 'l')
+	    if (c == 'l') {
 		c = *++fmt;	/* need it if sizeof(int) < sizeof(long) */
+		if (c == 'l') {
+		    long_long = 1;
+		    c = *++fmt;
+		}	
+	    } else if (c == 'q' || c == 'L') {
+	    	long_long = 1;
+		c = *++fmt;
+	    } 
 
 	    truncate = FALSE;
 	    capitals=0;		/* Assume lower case printing */
@@ -304,10 +321,14 @@ _doprnt(
 		    boolean_t	  any;
 		    register int  i;
 
-		    u = va_arg(*argp, unsigned long);
+		    if (long_long) {
+			u = va_arg(*argp, unsigned long long);
+		    } else {
+			u = va_arg(*argp, unsigned long);
+		    }
 		    p = va_arg(*argp, char *);
 		    base = *p++;
-		    printnum(u, base, putc);
+		    nprinted += printnum(u, base, putc, arg);
 
 		    if (u == 0)
 			break;
@@ -322,42 +343,51 @@ _doprnt(
 			     */
 			    register int j;
 			    if (any)
-				(*putc)(',');
+				(*putc)(',', arg);
 			    else {
-				(*putc)('<');
+				(*putc)('<', arg);
 				any = TRUE;
 			    }
+			    nprinted++;
 			    j = *p++;
 			    if (*fmt == 'B')
 				j = 32 - j;
-			    for (; (c = *p) > 32; p++)
-				(*putc)(c);
-			    printnum((unsigned)( (u>>(j-1)) & ((2<<(i-j))-1)),
-					base, putc);
+			    for (; (c = *p) > 32; p++) {
+				(*putc)(c, arg);
+				nprinted++;
+			    }
+			    nprinted += printnum((unsigned)( (u>>(j-1)) & ((2<<(i-j))-1)),
+						 base, putc, arg);
 			}
 			else if (u & (1<<(i-1))) {
 			    if (any)
-				(*putc)(',');
+				(*putc)(',', arg);
 			    else {
-				(*putc)('<');
+				(*putc)('<', arg);
 				any = TRUE;
 			    }
-			    for (; (c = *p) > 32; p++)
-				(*putc)(c);
+			    nprinted++;
+			    for (; (c = *p) > 32; p++) {
+				(*putc)(c, arg);
+				nprinted++;
+			    }
 			}
 			else {
 			    for (; *p > 32; p++)
 				continue;
 			}
 		    }
-		    if (any)
-			(*putc)('>');
+		    if (any) {
+			(*putc)('>', arg);
+			nprinted++;
+		    }
 		    break;
 		}
 
 		case 'c':
 		    c = va_arg(*argp, int);
-		    (*putc)(c);
+		    (*putc)(c, arg);
+		    nprinted++;
 		    break;
 
 		case 's':
@@ -383,8 +413,9 @@ _doprnt(
 			p = p2;
 
 			while (n < length) {
-			    (*putc)(' ');
+			    (*putc)(' ', arg);
 			    n++;
+			    nprinted++;
 			}
 		    }
 
@@ -394,13 +425,15 @@ _doprnt(
 			if (++n > prec || (length > 0 && n > length))
 			    break;
 
-			(*putc)(*p++);
+			(*putc)(*p++, arg);
+			nprinted++;
 		    }
 
 		    if (n < length && ladjust) {
 			while (n < length) {
-			    (*putc)(' ');
+			    (*putc)(' ', arg);
 			    n++;
+			    nprinted++;
 			}
 		    }
 
@@ -413,9 +446,31 @@ _doprnt(
 		    base = 8;
 		    goto print_unsigned;
 
+		case 'D': {
+		    unsigned char *up;
+		    char *q, *p;
+		    
+			up = (unsigned char *)va_arg(*argp, unsigned char *);
+			p = (char *)va_arg(*argp, char *);
+			if (length == -1)
+				length = 16;
+			while(length--) {
+				(*putc)(digs[(*up >> 4)], arg);
+				(*putc)(digs[(*up & 0x0f)], arg);
+				nprinted += 2;
+				up++;
+				if (length) {
+				    for (q=p;*q;q++) {
+						(*putc)(*q, arg);
+						nprinted++;
+				    }
+				}
+			}
+			break;
+		}
+
 		case 'd':
 		    truncate = _doprnt_truncates;
-		case 'D':
 		    base = 10;
 		    goto print_signed;
 
@@ -460,7 +515,11 @@ _doprnt(
 		    goto print_unsigned;
 
 		print_signed:
-		    n = va_arg(*argp, long);
+		    if (long_long) {
+			n = va_arg(*argp, long long);
+		    } else {
+			n = va_arg(*argp, long);
+		    }
 		    if (n >= 0) {
 			u = n;
 			sign_char = plus_sign;
@@ -472,7 +531,11 @@ _doprnt(
 		    goto print_num;
 
 		print_unsigned:
-		    u = va_arg(*argp, unsigned long);
+		    if (long_long) {
+			u = va_arg(*argp, unsigned long long);
+		    } else { 
+			u = va_arg(*argp, unsigned long);
+		    }
 		    goto print_num;
 
 		print_num:
@@ -482,7 +545,7 @@ _doprnt(
 		    static char digits[] = "0123456789abcdef0123456789ABCDEF";
 		    char *prefix = 0;
 
-		    if (truncate) u = (long)((int)(u));
+		    if (truncate) u = (long long)((int)(u));
 
 		    if (u != 0 && altfmt) {
 			if (base == 8)
@@ -505,25 +568,38 @@ _doprnt(
 
 		    if (padc == ' ' && !ladjust) {
 			/* blank padding goes before prefix */
-			while (--length >= 0)
-			    (*putc)(' ');
+			while (--length >= 0) {
+			    (*putc)(' ', arg);
+			    nprinted++;
+			}			    
 		    }
-		    if (sign_char)
-			(*putc)(sign_char);
-		    if (prefix)
-			while (*prefix)
-			    (*putc)(*prefix++);
+		    if (sign_char) {
+			(*putc)(sign_char, arg);
+			nprinted++;
+		    }
+		    if (prefix) {
+			while (*prefix) {
+			    (*putc)(*prefix++, arg);
+			    nprinted++;
+			}
+		    }
 		    if (padc == '0') {
 			/* zero padding goes after sign and prefix */
-			while (--length >= 0)
-			    (*putc)('0');
+			while (--length >= 0) {
+			    (*putc)('0', arg);
+			    nprinted++;
+			}			    
 		    }
-		    while (++p != &buf[MAXBUF])
-			(*putc)(*p);
-
+		    while (++p != &buf[MAXBUF]) {
+			(*putc)(*p, arg);
+			nprinted++;
+		    }
+		    
 		    if (ladjust) {
-			while (--length >= 0)
-			    (*putc)(' ');
+			while (--length >= 0) {
+			    (*putc)(' ', arg);
+			    nprinted++;
+			}
 		    }
 		    break;
 		}
@@ -533,10 +609,32 @@ _doprnt(
 		    break;
 
 		default:
-		    (*putc)(c);
+		    (*putc)(c, arg);
+		    nprinted++;
 	    }
 	fmt++;
 	}
+
+	return nprinted;
+}
+
+static void
+dummy_putc(int ch, void *arg)
+{
+    void (*real_putc)(char) = arg;
+    
+    real_putc(ch);
+}
+
+void 
+_doprnt(
+	register const char	*fmt,
+	va_list			*argp,
+						/* character output routine */
+	void			(*putc)(char),
+	int			radix)		/* default radix - for '%r' */
+{
+    __doprnt(fmt, argp, dummy_putc, putc, radix);
 }
 
 #if	MP_PRINTF 
@@ -630,6 +728,28 @@ printf(const char *fmt, ...)
 	_doprnt(fmt, &listp, conslog_putc, 16);
 	va_end(listp);
 	enable_preemption();
+}
+
+void
+consdebug_putc(
+	char c)
+{
+	extern unsigned int debug_mode, disableDebugOuput, disableConsoleOutput;
+
+	if ((debug_mode && !disableDebugOuput) || !disableConsoleOutput)
+		cnputc(c);
+
+	debug_putc(c);
+}
+
+void
+kdb_printf(const char *fmt, ...)
+{
+	va_list	listp;
+
+	va_start(listp, fmt);
+	_doprnt(fmt, &listp, consdebug_putc, 16);
+	va_end(listp);
 }
 
 static char *copybyte_str;

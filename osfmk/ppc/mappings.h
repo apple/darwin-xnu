@@ -80,13 +80,16 @@ typedef struct blokmap {
 	unsigned int		PTEr;			/* Real half of HW PTE at base address */
 	unsigned int		space;			/* Cached VSID */
 	unsigned int		blkFlags;		/* Flags for this block */
-#define blkPerm 0x80000000
-#define blkPermbit 0
-	unsigned int		gas3;			/* Reserved */
+#define blkPerm	0x80000000
+#define blkRem 	0x40000000
+#define blkPermbit	0
+#define blkRembit	1
+	unsigned int		current;		/* Partial block remove current start */
 	unsigned int		gas4;			/* Reserved */
 } blokmap;
 
 #define ODDBLKMIN (8 * PAGE_SIZE)
+#define	BLKREMMAX 128
 
 #define MAPPING_NULL	((struct mapping *) 0)
 
@@ -96,6 +99,17 @@ typedef struct blokmap {
 #define mapRWRW   0x00000002
 #define mapRORO   0x00000003
 
+
+typedef struct mfmapping {
+	struct pmap			*pmap;
+	vm_offset_t			offset;
+} mfmapping;
+
+typedef struct mappingflush {
+	PCA 				*pcaptr;
+	unsigned int		mappingcnt;
+	struct mfmapping	mapping[8];
+} mappingflush;
 
 typedef struct mappingctl {
 	unsigned int		mapclock;		/* Mapping allocation lock */
@@ -111,7 +125,8 @@ typedef struct mappingctl {
 	unsigned int		mapcallocc;		/* Total calls to mapping alloc */
 	unsigned int		mapcmin;		/* Minimum free mappings to keep */
 	unsigned int		mapcmaxalloc;	/* Maximum number of mappings allocated at one time */
-	unsigned int		mapcgas[3];		/* Pad to 64 bytes */
+	struct mappingflush	mapcflush;
+	unsigned int		mapcgas[1];		/* Pad to 64 bytes */
 } mappingctl;
 
 #define MAPPERBLOK 127
@@ -135,6 +150,7 @@ extern void 		mapping_free_prime(void);					/* Primes the mapping block release 
 extern void 		mapping_prealloc(unsigned int);				/* Preallocate mappings for large use */
 extern void 		mapping_relpre(void);						/* Releases preallocate request */
 extern void 		mapping_init(void);							/* Do initial stuff */
+extern void 		mapping_flush(void);
 extern mapping 		*mapping_alloc(void);						/* Obtain a mapping */
 extern void 		mapping_free(struct mapping *mp);			/* Release a mapping */
 extern boolean_t 	mapping_tst_ref(struct phys_entry *pp);		/* Tests the reference bit of a physical page */
@@ -161,6 +177,7 @@ extern mapping 		*hw_cpv(struct mapping *mapping);			/* Converts a physical mapp
 extern mapping 		*hw_cvp(struct mapping *mapping);			/* Converts a virtual mapping control block address to physical */
 extern void 		hw_rem_map(struct mapping *mapping);		/* Remove a mapping from the system */
 extern void			hw_add_map(struct mapping *mp, space_t space, vm_offset_t va);	/* Add a mapping to the PTEG hash list */
+extern void			hw_select_mappings(struct mappingflush *mappingflush); /* Select user mappings in a PTEG */
 extern blokmap 		*hw_rem_blk(pmap_t pmap, vm_offset_t sva, vm_offset_t eva);	/* Remove a block that falls within a range */
 extern vm_offset_t	hw_cvp_blk(pmap_t pmap, vm_offset_t va);	/* Convert mapped block virtual to physical */
 extern blokmap 		*hw_add_blk(pmap_t pmap, struct blokmap *bmr);	/* Add a block to the pmap */

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1998-2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 1998-2002 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -20,8 +20,6 @@
  * @APPLE_LICENSE_HEADER_END@
  */
 /*
- * Copyright (c) 1998 Apple Computer, Inc.  All rights reserved. 
- *
  * HISTORY
  *
  * 17-Apr-91   Portions from libIO.m, Doug Mitchell at NeXT.
@@ -41,6 +39,19 @@
 #include <IOKit/IOKitDebug.h> 
 
 mach_timespec_t IOZeroTvalspec = { 0, 0 };
+
+
+/*
+ * Global variables for use by iLogger
+ * These symbols are for use only by Apple diagnostic code.
+ * Binary compatibility is not guaranteed for kexts that reference these symbols.
+ */
+
+void *_giDebugLogInternal	= NULL;
+void *_giDebugLogDataInternal	= NULL;
+void *_giDebugReserved1		= NULL;
+void *_giDebugReserved2		= NULL;
+
 
 /*
  * Static variables for this module.
@@ -186,16 +197,23 @@ void * IOMallocAligned(vm_size_t size, vm_size_t alignment)
     if (adjustedSize >= page_size) {
 
         kr = kernel_memory_allocate(kernel_map, &address,
-					size, alignMask, KMA_KOBJECT);
-	if (KERN_SUCCESS != kr) {
-            IOLog("Failed %08x, %08x\n", size, alignment);
+					size, alignMask, 0);
+	if (KERN_SUCCESS != kr)
 	    address = 0;
-	}
 
     } else {
 
 	adjustedSize += alignMask;
-        allocationAddress = (vm_address_t) kalloc(adjustedSize);
+
+	if (adjustedSize >= page_size) {
+
+	    kr = kernel_memory_allocate(kernel_map, &allocationAddress,
+					    adjustedSize, 0, 0);
+	    if (KERN_SUCCESS != kr)
+		allocationAddress = 0;
+
+	} else
+	    allocationAddress = (vm_address_t) kalloc(adjustedSize);
 
         if (allocationAddress) {
             address = (allocationAddress + alignMask
@@ -241,7 +259,10 @@ void IOFreeAligned(void * address, vm_size_t size)
         allocationAddress = *((vm_address_t *)( (vm_address_t) address
 				- sizeof(vm_address_t) ));
 
-        kfree((vm_offset_t) allocationAddress, adjustedSize);
+	if (adjustedSize >= page_size)
+	    kmem_free( kernel_map, (vm_address_t) allocationAddress, adjustedSize);
+	else
+	    kfree((vm_offset_t) allocationAddress, adjustedSize);
     }
 
 #if IOALLOCDEBUG
@@ -271,15 +292,15 @@ void * IOMallocContiguous(vm_size_t size, vm_size_t alignment,
     if (adjustedSize >= page_size) {
 
         kr = kmem_alloc_contig(kernel_map, &address, size,
-				alignMask, KMA_KOBJECT);
+				alignMask, 0);
 	if (KERN_SUCCESS != kr)
 	    address = 0;
 
     } else {
 
 	adjustedSize += alignMask;
-        allocationAddress = (vm_address_t)
-				kalloc(adjustedSize);
+        allocationAddress = (vm_address_t) kalloc(adjustedSize);
+
         if (allocationAddress) {
 
             address = (allocationAddress + alignMask
@@ -545,12 +566,13 @@ SInt32 OSKernelStackRemaining( void )
 
 void IOSleep(unsigned milliseconds)
 {
-	int wait_result;
+    wait_result_t wait_result;
 
-	assert_wait_timeout(milliseconds, THREAD_INTERRUPTIBLE);
-  	wait_result = thread_block((void (*)(void))0);
-	if (wait_result != THREAD_TIMED_OUT)
-		thread_cancel_timer();
+    wait_result = assert_wait_timeout(milliseconds, THREAD_UNINT);
+    assert(wait_result == THREAD_WAITING);
+
+    wait_result = thread_block(THREAD_CONTINUE_NULL);
+    assert(wait_result == THREAD_TIMED_OUT);
 }
 
 /*

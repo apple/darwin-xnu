@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2002 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -62,6 +62,8 @@
 
 #ifndef	_SYS_SIGNAL_H_
 #define	_SYS_SIGNAL_H_
+
+#include <sys/appleapiopts.h>
 
 #if !defined(_ANSI_SOURCE) && !defined(_POSIX_SOURCE)
 #define NSIG	32		/* counting 0; could be 33 (mask is 1-32) */
@@ -131,22 +133,113 @@
 #ifndef _ANSI_SOURCE
 typedef unsigned int sigset_t;
 
+union sigval {
+	/* Members as suggested by Annex C of POSIX 1003.1b. */
+	int	sigval_int;
+	void	*sigval_ptr;
+};
+
+#define	SIGEV_NONE	0		/* No async notification */
+#ifdef __APPLE_API_PRIVATE
+#define	SIGEV_SIGNAL	1		/* Generate a queued signal */
+#define SIGEV_THREAD	3		/* A notification function will be called to perfrom notification */
+#endif /*__APPLE_API_PRIVATE */
+
+typedef struct __siginfo {
+	int	si_signo;		/* signal number */
+	int	si_errno;		/* errno association */
+	int	si_code;		/* signal code */
+	int	si_pid;			/* sending process */
+	unsigned int si_uid;		/* sender's ruid */
+	int	si_status;		/* exit value */
+	void	*si_addr;		/* faulting instruction */
+	union sigval si_value;		/* signal value */
+	long	si_band;		/* band event for SIGPOLL */
+	int	pad[7];			/* RFU */
+} siginfo_t;
+
+/* 
+ * Incase of SIGILL and SIGFPE, si_addr contains the address of 
+ *  faulting instruction.
+ * Incase of SIGSEGV and SIGBUS, si_addr contains address of 
+ *  faulting memory reference.
+ * Incase of SIGCHLD, si_pid willhave child process ID,
+ *  si_status will contain exit value or signal.
+ *  si_uid contains real user ID of the process that sent the signal
+ */
+
+/* Values for si_code */
+
+/* Codes for SIGILL */
+#define	ILL_NOOP	0	/* if only I knew... */
+#define	ILL_ILLOPC	1	/* illegal opcode */
+#define	ILL_ILLTRP	2	/* illegal trap */
+#define	ILL_PRVOPC	3	/* privileged opcode */
+
+/* Codes for SIGFPE */
+#define	FPE_NOOP	0	/* if only I knew... */
+#define FPE_FLTDIV	1	/* floating point divide by zero */
+#define FPE_FLTOVF	2	/* floating point overflow */
+#define FPE_FLTUND	3	/* floating point underflow */
+#define FPE_FLTRES	4	/* floating point inexact result */
+#define FPE_FLTINV	5	/* invalid floating point operation */
+
+/* Codes for SIGSEGV */
+#define	SEGV_NOOP	0	/* if only I knew... */
+#define	SEGV_MAPERR	1	/* address not mapped to object */
+#define	SEGV_ACCERR	2	/* invalid permissions for mapped to object */
+
+/* Codes for SIGBUS */
+#define	BUS_NOOP	0	/* if only I knew... */
+#define	BUS_ADRALN	1	/* invalid address alignment */
+
+/* Codes for SIGCHLD */
+#define	CLD_NOOP	0	/* if only I knew... */
+#define	CLD_EXITED	1	/* child has exited */
+#define	CLD_KILLED	2	
+	/* child has terminated abnormally and did not create a core file */
+#define	CLD_DUMPED	3	
+	/* child has terminated abnormally and create a core file */
+#define	CLD_TRAPPED	4	/* traced child has trapped */
+#define	CLD_STOPPED	5	/* child has stopped */
+#define	CLD_CONTINUED	6	/* stopped child has continued */
+
+/* union for signal handlers */
+union __sigaction_u {
+	void    (*__sa_handler)(int);
+	void    (*__sa_sigaction)(int, struct __siginfo *,
+		       void *);
+};
+
+/* Signal vector template for Kernel user boundary */
+struct	__sigaction {
+	union __sigaction_u __sigaction_u;  /* signal handler */
+	void    (*sa_tramp)(void *, int, int, siginfo_t *, void *);
+	sigset_t sa_mask;		/* signal mask to apply */
+	int	sa_flags;		/* see signal options below */
+};
+
 /*
  * Signal vector "template" used in sigaction call.
  */
 struct	sigaction {
-#if defined(__cplusplus)
-	void	(*sa_handler)(int);	/* signal handler */
-#else
-	void	(*sa_handler)();	/* signal handler */
-#endif /* __cplusplus */
+	union __sigaction_u __sigaction_u;  /* signal handler */
 	sigset_t sa_mask;		/* signal mask to apply */
 	int	sa_flags;		/* see signal options below */
 };
+/* if SA_SIGINFO is set, sa_sigaction is to be used instead of sa_handler. */
+#define	sa_handler	__sigaction_u.__sa_handler
+#define	sa_sigaction	__sigaction_u.__sa_sigaction
+
+
 #if  !defined(_POSIX_SOURCE)
 #define SA_ONSTACK	0x0001	/* take signal on signal stack */
 #define SA_RESTART	0x0002	/* restart system on signal return */
 #define	SA_DISABLE	0x0004	/* disable taking signals on alternate stack */
+#define	SA_RESETHAND	0x0004	/* reset to SIG_DFL when taking signal */
+#define	SA_NODEFER	0x0010	/* don't mask the signal we're delivering */
+#define	SA_NOCLDWAIT	0x0020	/* don't keep zombies around */
+#define	SA_SIGINFO	0x0040	/* signal handler with SA_SIGINFO args */
 #define	SA_USERTRAMP	0x0100	/* do not bounce off kernel's sigtramp */
 #endif
 #define SA_NOCLDSTOP	0x0008	/* do not generate SIGCHLD on child stop */
@@ -157,6 +250,13 @@ struct	sigaction {
 #define	SIG_BLOCK	1	/* block specified signal set */
 #define	SIG_UNBLOCK	2	/* unblock specified signal set */
 #define	SIG_SETMASK	3	/* set specified signal set */
+
+/* POSIX 1003.1b required values. */
+#define SI_USER		0x10001
+#define SI_QUEUE	0x10002
+#define SI_TIMER	0x10003
+#define SI_ASYNCIO	0x10004
+#define SI_MESGQ	0x10005
 
 #if !defined(_POSIX_SOURCE)
 #include <sys/cdefs.h>
@@ -170,6 +270,11 @@ struct	sigaltstack {
 	int	ss_size;		/* signal stack length */
 	int	ss_flags;		/* SA_DISABLE and/or SA_ONSTACK */
 };
+
+typedef struct  sigaltstack stack_t;
+
+#define SS_ONSTACK	0x0001	/* take signal on signal stack */
+#define	SS_DISABLE	0x0004	/* disable taking signals on alternate stack */
 #define	MINSIGSTKSZ	8192			/* minimum allowable stack */
 #define	SIGSTKSZ	(MINSIGSTKSZ + 32768)	/* recommended stack size */
 
@@ -178,13 +283,18 @@ struct	sigaltstack {
  * Signal vector "template" used in sigvec call.
  */
 struct	sigvec {
-	void	(*sv_handler)();	/* signal handler */
+	void	(*sv_handler)(int);	/* signal handler */
 	int	sv_mask;		/* signal mask to apply */
 	int	sv_flags;		/* see signal options below */
 };
 
 #define SV_ONSTACK	SA_ONSTACK
 #define SV_INTERRUPT	SA_RESTART	/* same bit, opposite sense */
+#define SV_RESETHAND	SA_RESETHAND
+#define SV_NODEFER	SA_NODEFER
+#define SV_NOCLDSTOP	SA_NOCLDSTOP
+#define SV_SIGINFO	SA_SIGINFO
+
 #define sv_onstack sv_flags	/* isn't compatibility wonderful! */
 
 /*
@@ -202,14 +312,16 @@ struct	sigstack {
 #define sigmask(m)	(1 << ((m)-1))
 
 #ifdef	KERNEL
-		/*
-		 *	signals delivered on a per-thread basis.
-		 */
-		#define threadmask (sigmask(SIGILL)|sigmask(SIGTRAP)|\
-				    sigmask(SIGIOT)|sigmask(SIGEMT)|\
-				    sigmask(SIGFPE)|sigmask(SIGBUS)|\
-				    sigmask(SIGSEGV)|sigmask(SIGSYS)|\
-				    sigmask(SIGPIPE))
+#ifdef __APPLE_API_PRIVATE
+/*
+ *	signals delivered on a per-thread basis.
+ */
+#define threadmask (sigmask(SIGILL)|sigmask(SIGTRAP)|\
+		    sigmask(SIGIOT)|sigmask(SIGEMT)|\
+		    sigmask(SIGFPE)|sigmask(SIGBUS)|\
+		    sigmask(SIGSEGV)|sigmask(SIGSYS)|\
+		    sigmask(SIGPIPE))
+#endif /* __APPLE_API_PRIVATE */
 #endif	/* KERNEL */
 
 #define	BADSIG		SIG_ERR

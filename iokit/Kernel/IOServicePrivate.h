@@ -69,7 +69,7 @@ struct _IOServiceNotifierInvocation
 
 class _IOServiceNotifier : public IONotifier
 {
-    friend IOService;
+    friend class IOService;
 
     OSDeclareDefaultStructors(_IOServiceNotifier)
 
@@ -93,7 +93,7 @@ public:
 
 class _IOServiceInterestNotifier : public IONotifier
 {
-    friend IOService;
+    friend class IOService;
 
     OSDeclareDefaultStructors(_IOServiceInterestNotifier)
 
@@ -115,7 +115,7 @@ public:
 
 class _IOConfigThread : public OSObject
 {
-    friend IOService;
+    friend class IOService;
 
     OSDeclareDefaultStructors(_IOConfigThread)
 
@@ -142,7 +142,7 @@ enum {
 
 class _IOServiceJob : public OSObject
 {
-    friend IOService;
+    friend class IOService;
 
     OSDeclareDefaultStructors(_IOServiceJob)
 
@@ -159,7 +159,7 @@ public:
 
 class IOResources : public IOService
 {
-    friend IOService;
+    friend class IOService;
 
     OSDeclareDefaultStructors(IOResources)
 
@@ -167,11 +167,12 @@ public:
     static IOService * resources( void );
     virtual IOWorkLoop * getWorkLoop( ) const;
     virtual bool matchPropertyTable( OSDictionary * table );
+    virtual IOReturn setProperties( OSObject * properties );
 };
 
 class _IOOpenServiceIterator : public OSIterator
 {
-    friend IOService;
+    friend class IOService;
 
     OSDeclareDefaultStructors(_IOOpenServiceIterator)
 

@@ -153,7 +153,6 @@ setup_main(void)
 	task_init();
 	act_init();
 	thread_init();
-	subsystem_init();
 
 	/*
 	 *	Initialize the Event Trace Analysis Package.
@@ -163,24 +162,20 @@ setup_main(void)
 	
 	/*
 	 *	Create a kernel thread to start the other kernel
-	 *	threads.  Thread_resume (from kernel_thread) calls
-	 *	thread_setrun, which may look at current thread;
-	 *	we must avoid this, since there is no current thread.
+	 *	threads.
 	 */
 	startup_thread = kernel_thread_with_priority(
 										kernel_task, MAXPRI_KERNEL,
 											start_kernel_threads, TRUE, FALSE);
-							
 	/*
-	 * Pretend it is already running, and resume it.
-	 * Since it looks as if it is running, thread_resume
-	 * will not try to put it on the run queues.
+	 * Pretend it is already running.
 	 *
-	 * We can do all of this without locking, because nothing
+	 * We can do this without locking, because nothing
 	 * else is running yet.
 	 */
 	startup_thread->state = TH_RUN;
-	(void) thread_resume(startup_thread->top_act);
+	hw_atomic_add(&startup_thread->processor_set->run_count, 1);
+
 	/*
 	 * Start the thread.
 	 */
@@ -224,6 +219,11 @@ start_kernel_threads(void)
 	}
 
 	/*
+	 * Initialize the thread reaper mechanism.
+	 */
+	thread_reaper_init();
+
+	/*
 	 * Initialize the stack swapin mechanism.
 	 */
 	swapin_init();
@@ -244,11 +244,6 @@ start_kernel_threads(void)
 #if __ppc__
 	mapping_adjust();
 #endif
-
-	/*
-	 * Initialize the thread reaper mechanism.
-	 */
-	thread_reaper();
 
 	/*
 	 *	Create the clock service.
@@ -297,13 +292,17 @@ slave_main(void)
 	processor_t		myprocessor = current_processor();
 	thread_t		thread;
 
+	myprocessor->cpu_data = get_cpu_data();
 	thread = myprocessor->next_thread;
 	myprocessor->next_thread = THREAD_NULL;
 	if (thread == THREAD_NULL) {
 		thread = machine_wake_thread;
 		machine_wake_thread = THREAD_NULL;
-		thread_bind(thread, myprocessor);
 	}
+        thread_machine_set_current(thread);
+	if (thread == machine_wake_thread)
+		thread_bind(thread, myprocessor);
+
 	cpu_launch_first_thread(thread);
 	/*NOTREACHED*/
 	panic("slave_main");
@@ -337,19 +336,16 @@ cpu_launch_first_thread(
 	thread_t		thread)
 {
 	register int	mycpu = cpu_number();
+	processor_t		processor = cpu_to_processor(mycpu);
 
-	/* initialize preemption disabled */
-	cpu_data[mycpu].preemption_level = 1;
+	processor->cpu_data->preemption_level = 0;
 
 	cpu_up(mycpu);
 	start_timer(&kernel_timer[mycpu]);
-	clock_get_uptime(&cpu_to_processor(mycpu)->last_dispatch);
+	clock_get_uptime(&processor->last_dispatch);
 
-	if (thread == THREAD_NULL) {
-	    thread = cpu_to_processor(mycpu)->idle_thread;
-		if (thread == THREAD_NULL)
-		    panic("cpu_launch_first_thread");
-	}
+	if (thread == THREAD_NULL || thread == processor->idle_thread)
+		panic("cpu_launch_first_thread");
 
 	rtclock_reset();		/* start realtime clock ticking */
 	PMAP_ACTIVATE_KERNEL(mycpu);
@@ -357,7 +353,9 @@ cpu_launch_first_thread(
 	thread_machine_set_current(thread);
 	thread_lock(thread);
 	thread->state &= ~TH_UNINT;
-	_mk_sp_thread_begin(thread);
+	thread->last_processor = processor;
+	processor->current_pri = thread->sched_pri;
+	_mk_sp_thread_begin(thread, processor);
 	thread_unlock(thread);
 	timer_switch(&thread->system_timer);
 

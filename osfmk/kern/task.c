@@ -87,7 +87,6 @@
 #include <mach/task_info.h>
 #include <mach/task_special_ports.h>
 #include <mach/mach_types.h>
-#include <mach/machine/rpc.h>
 #include <ipc/ipc_space.h>
 #include <ipc/ipc_entry.h>
 #include <kern/mach_param.h>
@@ -138,8 +137,6 @@ void		task_free(
 			task_t		task );
 void		task_synchronizer_destroy_all(
 			task_t		task);
-void		task_subsystem_destroy_all(
-			task_t		task);
 
 kern_return_t	task_set_ledger(
 			task_t		task,
@@ -176,7 +173,9 @@ task_init(void)
 }
 
 #if	MACH_HOST
-void
+
+#if 0
+static void
 task_freeze(
 	task_t task)
 {
@@ -186,18 +185,23 @@ task_freeze(
 	 *	wait for that to finish.
 	 */
 	while (task->may_assign == FALSE) {
+		wait_result_t res;
+
 		task->assign_active = TRUE;
-		thread_sleep_mutex((event_t) &task->assign_active,
-					&task->lock, THREAD_INTERRUPTIBLE);
-		task_lock(task);
+		res = thread_sleep_mutex((event_t) &task->assign_active,
+					 &task->lock, THREAD_UNINT);
+		assert(res == THREAD_AWAKENED);
 	}
 	task->may_assign = FALSE;
 	task_unlock(task);
-
 	return;
 }
+#else
+#define thread_freeze(thread)	assert(task->processor_set == &default_pset)
+#endif
 
-void
+#if 0
+static void
 task_unfreeze(
 	task_t task)
 {
@@ -209,9 +213,12 @@ task_unfreeze(
 		thread_wakeup((event_t)&task->assign_active);
 	}
 	task_unlock(task);
-
 	return;
 }
+#else
+#define thread_unfreeze(thread)	assert(task->processor_set == &default_pset)
+#endif
+
 #endif	/* MACH_HOST */
 
 /*
@@ -346,7 +353,6 @@ task_create_local(
 					trunc_page(VM_MAX_ADDRESS), TRUE);
 
 	mutex_init(&new_task->lock, ETAP_THREAD_TASK_NEW);
-	queue_init(&new_task->subsystem_list);
 	queue_init(&new_task->thr_acts);
 	new_task->suspend_count = 0;
 	new_task->thr_act_count = 0;
@@ -477,23 +483,27 @@ task_create_local(
 }
 
 /*
- *	task_free:
+ *	task_deallocate
  *
- *	Called by task_deallocate when the task's reference count drops to zero.
+ *	Drop a reference on a task
  *	Task is locked.
  */
 void
-task_free(
+task_deallocate(
 	task_t		task)
 {
 	processor_set_t	pset;
+	int refs;
 
-#if	MACH_ASSERT
-	assert(task != 0);
-	if (watchacts & (WA_EXIT|WA_TASK))
-	    printf("task_free(%x(%d)) map ref %d\n", task, task->ref_count,
-			task->map->ref_count);
-#endif	/* MACH_ASSERT */
+	if (task == TASK_NULL)
+	    return;
+
+	task_lock(task);
+	refs = --task->ref_count;
+	task_unlock(task);
+
+	if (refs > 0)
+		return;
 
 #if	TASK_SWAPPER
 	/* task_terminate guarantees that this task is off the list */
@@ -502,46 +512,21 @@ task_free(
 
 	eml_task_deallocate(task);
 
-	/*
-	 * Temporarily restore the reference we dropped above, then
-	 * freeze the task so that the task->processor_set field
-	 * cannot change. In the !MACH_HOST case, the logic can be
-	 * simplified, since the default_pset is the only pset.
-	 */
-	++task->ref_count;
-	task_unlock(task);
-#if	MACH_HOST
+	ipc_task_terminate(task);
+
+#if MACH_HOST
 	task_freeze(task);
-#endif	/* MACH_HOST */
-	
+#endif
+
 	pset = task->processor_set;
 	pset_lock(pset);
-	task_lock(task);
-	if (--task->ref_count > 0) {
-		/*
-		 * A new reference appeared (probably from the pset).
-		 * Back out. Must unfreeze inline since we'already
-		 * dropped our reference.
-		 */
-#if	MACH_HOST
-		assert(task->may_assign == FALSE);
-		task->may_assign = TRUE;
-		if (task->assign_active == TRUE) {
-			task->assign_active = FALSE;
-			thread_wakeup((event_t)&task->assign_active);
-		}
-#endif	/* MACH_HOST */
-		task_unlock(task);
-		pset_unlock(pset);
-		return;
-	}
 	pset_remove_task(pset,task);
-	task_unlock(task);
 	pset_unlock(pset);
 	pset_deallocate(pset);
 
-	ipc_task_terminate(task);
-	shared_region_mapping_dealloc(task->system_shared_region);
+#if MACH_HOST
+	task_unfreeze(task);
+#endif
 
 	if (task->kernel_loaded)
 	    vm_map_remove(kernel_map, task->map->min_offset,
@@ -549,27 +534,9 @@ task_free(
 	vm_map_deallocate(task->map);
 	is_release(task->itk_space);
 	task_prof_deallocate(task);
-	if(task->dynamic_working_set)
-		tws_hash_destroy((tws_hash_t)
-			task->dynamic_working_set);
 	zfree(task_zone, (vm_offset_t) task);
 }
 
-void
-task_deallocate(
-	task_t		task)
-{
-	if (task != TASK_NULL) {
-		int	c;
-
-		task_lock(task);
-		c = --task->ref_count;
-		if (c == 0)
-		    task_free(task);	/* unlocks task */
-		else
-		    task_unlock(task);
-	}
-}
 
 void
 task_reference(
@@ -620,7 +587,6 @@ task_terminate_internal(
 {
 	thread_act_t	thr_act, cur_thr_act;
 	task_t		cur_task;
-	thread_t	cur_thread;
 	boolean_t	interrupt_save;
 
 	assert(task != kernel_task);
@@ -679,9 +645,7 @@ task_terminate_internal(
 	 * Make sure the current thread does not get aborted out of
 	 * the waits inside these operations.
 	 */
-	cur_thread = current_thread();
-	interrupt_save = cur_thread->interruptible;
-	cur_thread->interruptible = FALSE;
+	interrupt_save = thread_interrupt_level(THREAD_UNINT);
 
 	/*
 	 *	Indicate that we want all the threads to stop executing
@@ -725,11 +689,6 @@ task_terminate_internal(
 	task_synchronizer_destroy_all(task);
 
 	/*
-	 *	Deallocate all subsystems owned by the task.
-	 */
-	task_subsystem_destroy_all(task);
-
-	/*
 	 *	Destroy the IPC space, leaving just a reference for it.
 	 */
 	if (!task->kernel_loaded)
@@ -747,11 +706,16 @@ task_terminate_internal(
 			     task->map->min_offset,
 			     task->map->max_offset, VM_MAP_NO_FLAGS);
 
+	shared_region_mapping_dealloc(task->system_shared_region);
+
+	if(task->dynamic_working_set)
+		tws_hash_destroy((tws_hash_t)task->dynamic_working_set);
+
 	/*
 	 * We no longer need to guard against being aborted, so restore
 	 * the previous interruptible state.
 	 */
-	cur_thread->interruptible = interrupt_save;
+	thread_interrupt_level(interrupt_save);
 
 	/*
 	 * Get rid of the task active reference on itself.
@@ -847,25 +811,11 @@ task_halt(
 	task_synchronizer_destroy_all(task);
 
 	/*
-	 *	Deallocate all subsystems owned by the task.
-	 */
-	task_subsystem_destroy_all(task);
-
-#if 0
-	/*
-	 *	Destroy the IPC space, leaving just a reference for it.
-	 */
-	/*
-	 * Lookupd will break if we enable this cleaning, because it
-	 * uses a slimey trick that depends upon the portspace not
-	 * being cleaned up across exec (it passes the lookupd server
-	 * port to the child after a restart using knowledge of this
-	 * bug in past implementations).  We need to fix lookupd to
-	 * keep from leaking ports across exec.
+	 *	Destroy the contents of the IPC space, leaving just
+	 *	a reference for it.
 	 */
 	if (!task->kernel_loaded)
 		ipc_space_clean(task->itk_space);
-#endif
 
 	/*
 	 * Clean out the address space, as we are going to be
@@ -895,7 +845,8 @@ task_hold_locked(
 
 	assert(task->active);
 
-	task->suspend_count++;
+	if (task->suspend_count++ > 0)
+		return;
 
 	/*
 	 *	Iterate through all the thread_act's and hold them.
@@ -983,9 +934,10 @@ task_release_locked(
 	register thread_act_t	thr_act;
 
 	assert(task->active);
+	assert(task->suspend_count > 0);
 
-	task->suspend_count--;
-	assert(task->suspend_count >= 0);
+	if (--task->suspend_count > 0)
+		return;
 
 	/*
 	 *	Iterate through all the thread_act's and hold them.
@@ -1374,14 +1326,11 @@ task_info(
 
 		    thread = act_lock_thread(thr_act);
 
-		    /* Skip empty threads and threads that have migrated
-		     * into this task:
+		    /* JMM - add logic to skip threads that have migrated
+		     * into this task?
 		     */
-		    if (!thread || thr_act->pool_port) {
-			act_unlock_thread(thr_act);
-			continue;
-		    }
-		    assert(thread);  /* Must have thread, if no thread_pool*/
+
+		    assert(thread);  /* Must have thread */
 		    s = splsched();
 		    thread_lock(thread);
 
@@ -1610,30 +1559,48 @@ task_collect_scan(void)
 	register task_t		task, prev_task;
 	processor_set_t		pset = &default_pset;
 
-	prev_task = TASK_NULL;
-
 	pset_lock(pset);
 	pset->ref_count++;
 	task = (task_t) queue_first(&pset->tasks);
 	while (!queue_end(&pset->tasks, (queue_entry_t) task)) {
-		task_reference(task);
-		pset_unlock(pset);
+		task_lock(task);
+		if (task->ref_count > 0) {
 
-		pmap_collect(task->map->pmap);
+			task_reference_locked(task);
+			task_unlock(task);
 
-		if (prev_task != TASK_NULL)
+#if MACH_HOST
+			/*
+			 *	While we still have the pset locked, freeze the task in
+			 *	this pset.  That way, when we get back from collecting
+			 *	it, we can dereference the pset_tasks chain for the task
+			 *	and be assured that we are still in this chain.
+			 */
+			task_freeze(task);
+#endif
+
+			pset_unlock(pset);
+
+			pmap_collect(task->map->pmap);
+
+			pset_lock(pset);
+			prev_task = task;
+			task = (task_t) queue_next(&task->pset_tasks);
+
+#if MACH_HOST
+			task_unfreeze(prev_task);
+#endif
+
 			task_deallocate(prev_task);
-		prev_task = task;
-
-		pset_lock(pset);
-		task = (task_t) queue_next(&task->pset_tasks);
+		} else {
+			task_unlock(task);
+			task = (task_t) queue_next(&task->pset_tasks);
+		}
 	}
+
 	pset_unlock(pset);
 
 	pset_deallocate(pset);
-
-	if (prev_task != TASK_NULL)
-		task_deallocate(prev_task);
 }
 
 /* Also disabled in vm/vm_pageout.c */
@@ -1718,21 +1685,6 @@ task_synchronizer_destroy_all(task_t task)
 	while (!queue_empty(&task->lock_set_list)) {
 		lock_set = (lock_set_t) queue_first(&task->lock_set_list);
 		(void) lock_set_destroy(task, lock_set);
-	}
-}
-
-void
-task_subsystem_destroy_all(task_t task)
-{
-	subsystem_t	subsystem;
-
-	/*
-	 *  Destroy owned subsystems
-	 */
-
-	while (!queue_empty(&task->subsystem_list)) {
-		subsystem = (subsystem_t) queue_first(&task->subsystem_list);
-		subsystem_deallocate(subsystem);
 	}
 }
 

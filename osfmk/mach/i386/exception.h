@@ -159,6 +159,7 @@
 
 /*
  *	EXC_SOFTWARE
+ *	Note: 0x10000-0x10003 in use for unix signal
  */
 
 /*

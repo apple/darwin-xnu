@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2002 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -58,6 +58,7 @@
 #ifndef _SYS_FILE_H_
 #define	_SYS_FILE_H_
 
+#include <sys/appleapiopts.h>
 #include <sys/fcntl.h>
 #include <sys/unistd.h>
 
@@ -67,6 +68,7 @@
 
 struct proc;
 struct uio;
+#ifdef __APPLE_API_UNSTABLE
 
 /*
  * Kernel descriptor table.
@@ -85,29 +87,95 @@ struct file {
 	struct	ucred *f_cred;	/* credentials associated with descriptor */
 	struct	fileops {
 		int	(*fo_read)	__P((struct file *fp, struct uio *uio,
-					    struct ucred *cred));
+					    struct ucred *cred, int flags,
+					    struct proc *p));
 		int	(*fo_write)	__P((struct file *fp, struct uio *uio,
-					    struct ucred *cred));
+					    struct ucred *cred, int flags,
+					    struct proc *p));
+#define	FOF_OFFSET	1
 		int	(*fo_ioctl)	__P((struct file *fp, u_long com,
 					    caddr_t data, struct proc *p));
 		int	(*fo_select)	__P((struct file *fp, int which,
-						void * wql, struct proc *p));
+						void *wql, struct proc *p));
 		int	(*fo_close)	__P((struct file *fp, struct proc *p));
 	} *f_ops;
 	off_t	f_offset;
 	caddr_t	f_data;		/* vnode or socket */
 };
 
+#ifdef __APPLE_API_PRIVATE
 LIST_HEAD(filelist, file);
 extern struct filelist filehead;	/* head of list of open files */
 extern int maxfiles;			/* kernel limit on number of open files */
 extern int nfiles;			/* actual number of open files */
+#endif /* __APPLE_API_PRIVATE */
 
 __BEGIN_DECLS
 int fref __P((struct file *));	/* take a reference on file pointer */
 int frele __P((struct file *));	/* release a reference on file pointer */
 int fcount __P((struct file *));	/* returns the reference count */
+
+static __inline int fo_read __P((struct file *fp, struct uio *uio,
+	struct ucred *cred, int flags, struct proc *p));
+static __inline int fo_write __P((struct file *fp, struct uio *uio,
+	struct ucred *cred, int flags, struct proc *p));
+static __inline int fo_ioctl __P((struct file *fp, u_long com, caddr_t data,
+	struct proc *p));
+static __inline int fo_select __P((struct file *fp, int which, void *wql,
+	struct proc *p));
+static __inline int fo_close __P((struct file *fp, struct proc *p));
+
+static __inline int
+fo_read(struct file *fp, struct uio *uio, struct ucred *cred, int flags, struct proc *p)
+{
+	int error;
+
+	fref(fp);
+	error = (*fp->f_ops->fo_read)(fp, uio, cred, flags, p);
+	frele(fp);
+	return (error);
+}
+
+static __inline int
+fo_write(struct file *fp, struct uio *uio, struct ucred *cred, int flags, struct proc *p)
+{
+	int error;
+
+	fref(fp);
+	error = (*fp->f_ops->fo_write)(fp, uio, cred, flags, p);
+	frele(fp);
+	return (error);
+}
+
+static __inline int 
+fo_ioctl(struct file *fp, u_long com, caddr_t data, struct proc *p)
+{
+	int error;   
+
+	fref(fp);
+	error = (*fp->f_ops->fo_ioctl)(fp, com, data, p);
+	frele(fp);
+	return (error);
+}       
+
+static __inline int
+fo_select(struct file *fp, int which, void *wql, struct proc *p)
+{       
+	int error;
+
+	error = (*fp->f_ops->fo_select)(fp, which, wql, p);
+	return (error);
+}
+
+static __inline int
+fo_close(struct file *fp, struct proc *p)
+{       
+
+	return ((*fp->f_ops->fo_close)(fp, p));
+}
 __END_DECLS
+
+#endif /* __APPLE_API_UNSTABLE */
 
 #endif /* KERNEL */
 

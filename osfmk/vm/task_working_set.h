@@ -51,34 +51,72 @@
 #define TWS_SMALL_HASH_LINE_COUNT 4 
 
 /*
-#define do_tws_hash(object,offset, rows, lines) \
-		((((natural_t)(object)) +  \
-		(((natural_t)(offset)) >> 11) + \
-					(((natural_t)(offset)) >> 12)) & \
-			((2 * rows * lines) -1))
-*/
-/*
  * do not think of changing this hash unless you understand the implications
  * for the hash element page_cache field 
  */
 #define do_tws_hash(object,offset, rows, lines) \
-		(((((natural_t)(object)) >> 2) +  \
-			((natural_t)(object) >> 12) + \
-			((natural_t)(((vm_object_offset_t)(offset)) >> 12) \
-						& 0xFFFFFFFFFFFFFFE0)) & \
-			((2 * rows * lines) -1))
-/*
-#define do_tws_hash(object,offset, rows, lines) \
-		(((((natural_t)(object)) >> 2) +  \
-			((natural_t)(object) << 5) + \
+		((((((natural_t)(object)) +  \
+			(((natural_t)(object)) >> 6) +  \
+			(((natural_t)(object)) >> 12) +  \
+			(((natural_t)(object)) >> 18) +  \
+			(((natural_t)(object)) >> 24)) << 5) +  \
 			((natural_t)(((vm_object_offset_t)(offset)) >> 17))) & \
-			((2 * rows * lines) -1))
-*/
+			((rows * lines) -1))
 
 
 #define alt_tws_hash(addr, rows, lines) \
-		((((natural_t)(addr)) >> 12) & \
-		((2 * rows * lines) -1))
+		((((natural_t)(addr)) >> 17) & \
+		((rows * lines) -1))
+
+
+/* Long term startup data structures for initial cache filling */
+
+#define	TWS_STARTUP_MAX_HASH_RETRY	3
+
+/* 87 is the wrap skew, its based on  RETRY times the RETRY offset of 29 */
+/*
+#define do_startup_hash(addr, hash_size) \
+		((((((natural_t)(addr)) >> 17) & \
+		((2 * (hash_size)) -1)) + \
+		(87 * (((addr) & TWS_ADDR_OFF_MASK)/(2 * (hash_size))))) & \
+		((2 * (hash_size)) -1))
+*/
+#define do_startup_hash(addr, hash_size) \
+		(((((natural_t)(addr)) >> 17) * 3) & \
+		(hash_size -1))
+
+
+
+struct tws_startup_ele {
+	unsigned int		page_cache;
+	vm_offset_t		page_addr;
+};
+
+typedef struct tws_startup_ele *tws_startup_ele_t;
+
+
+struct tws_startup_ptr {
+	tws_startup_ele_t	element;
+	struct tws_startup_ptr	*next;
+};
+
+typedef struct tws_startup_ptr	*tws_startup_ptr_t;
+
+struct tws_startup {
+	unsigned int	tws_hash_size;	/* total size of struct in bytes */
+	unsigned int	ele_count;
+	unsigned int	array_size;	/* lines * rows * expansion_count */
+	unsigned int	hash_count;
+	
+	tws_startup_ptr_t	*table; /* hash table */
+	struct tws_startup_ptr	*ele;   /* hash elements */
+	struct	tws_startup_ele	*array;
+};
+
+typedef struct tws_startup	*tws_startup_t;
+
+
+/* Dynamic cache data structures for working set */
 
 struct tws_hash_ele {
 	vm_object_t		object;
@@ -91,7 +129,14 @@ struct tws_hash_ele {
 typedef struct tws_hash_ele *tws_hash_ele_t;
 
 #define TWS_HASH_OFF_MASK ((vm_object_offset_t)0xFFFFFFFFFFFE0000)
+#define TWS_ADDR_OFF_MASK ((vm_offset_t)0xFFFE0000)
 #define TWS_INDEX_MASK ((vm_object_offset_t)0x000000000001F000)
+
+struct tws_hash_ptr {
+	tws_hash_ele_t		element;
+	struct tws_hash_ptr	*next;
+};
+typedef struct tws_hash_ptr *tws_hash_ptr_t;
 
 struct tws_hash_line {
 	int		ele_count;
@@ -104,8 +149,9 @@ typedef struct tws_hash_line *tws_hash_line_t;
 #define TWS_HASH_STYLE_SIGNAL	0x2
 
 
+#define TWS_ADDR_HASH 1
 #define TWS_HASH_EXPANSION_MAX	5
-#define TWS_MAX_REHASH 2
+#define TWS_MAX_REHASH 3
 
 
 struct tws_hash {
@@ -124,8 +170,19 @@ struct tws_hash {
 	int		lookup_count;
 	int		insert_count;
 
-	tws_hash_ele_t	*table[TWS_HASH_EXPANSION_MAX];
-	tws_hash_ele_t	*alt_table[TWS_HASH_EXPANSION_MAX];
+	tws_startup_t	startup_cache;
+	char		*startup_name;
+	int		startup_name_length;
+	unsigned int	uid;
+	int		mod;
+	int		fid;
+
+	unsigned int    obj_free_count[TWS_HASH_EXPANSION_MAX];
+	unsigned int    addr_free_count[TWS_HASH_EXPANSION_MAX];
+	tws_hash_ptr_t	free_hash_ele[TWS_HASH_EXPANSION_MAX];
+	tws_hash_ptr_t	*table[TWS_HASH_EXPANSION_MAX];
+	tws_hash_ptr_t	table_ele[TWS_HASH_EXPANSION_MAX];
+	tws_hash_ptr_t	alt_ele[TWS_HASH_EXPANSION_MAX];
 	struct tws_hash_line	*cache[TWS_HASH_EXPANSION_MAX];
 }; 
 
@@ -179,7 +236,28 @@ kern_return_t	task_working_set_create(
 
 kern_return_t	tws_expand_working_set(
 		vm_offset_t	old_tws,
-		int		line_count);
+		int		line_count,
+		boolean_t	dump_data);
+
+kern_return_t	tws_handle_startup_file(
+		task_t		task,
+		unsigned int	uid,
+		char		*app_name,
+		vm_offset_t	app_vp,
+		boolean_t	*new_info);
+
+kern_return_t	tws_write_startup_file(
+		task_t		task,
+		int		fid,
+		int		mod,
+		char		*name,
+		unsigned int	string_length);
+
+kern_return_t	tws_read_startup_file(
+		task_t			task,
+		tws_startup_t		startup,
+		vm_offset_t		cache_size);
+
 
 
 #endif  /* _VM_TASK_WORKING_SET_H_ */

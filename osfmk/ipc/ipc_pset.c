@@ -67,7 +67,6 @@
 #include <ipc/ipc_space.h>
 #include <ipc/ipc_port.h>
 #include <ipc/ipc_print.h>
-#include <kern/thread_pool.h>
 
 /*
  *	Routine:	ipc_pset_alloc
@@ -101,9 +100,7 @@ ipc_pset_alloc(
 	/* pset is locked */
 
 	pset->ips_local_name = name;
-	pset->ips_pset_self = pset;
 	ipc_mqueue_init(&pset->ips_messages, TRUE /* set */);
-	thread_pool_init(&pset->ips_thread_pool);
 
 	*namep = name;
 	*psetp = pset;
@@ -142,9 +139,7 @@ ipc_pset_alloc_name(
 	/* pset is locked */
 
 	pset->ips_local_name = name;
-	pset->ips_pset_self = pset;
 	ipc_mqueue_init(&pset->ips_messages, TRUE /* set */);
-	thread_pool_init(&pset->ips_thread_pool);
 
 	*psetp = pset;
 	return KERN_SUCCESS;
@@ -173,7 +168,6 @@ ipc_pset_member(
  *	Routine:	ipc_pset_add
  *	Purpose:
  *		Puts a port into a port set.
- *		The port set gains a reference.
  *	Conditions:
  *		Both port and port set are locked and active.
  *		The owner of the port set is also receiver for the port.
@@ -184,18 +178,17 @@ ipc_pset_add(
 	ipc_pset_t	pset,
 	ipc_port_t	port)
 {
+	kern_return_t kr;
+
 	assert(ips_active(pset));
 	assert(ip_active(port));
 	
-	if (ipc_pset_member(pset, port))
-		return KERN_ALREADY_IN_SET;
+	kr = ipc_mqueue_add(&port->ip_messages, &pset->ips_messages);
 
-	ips_reference(pset);
-	port->ip_pset_count++;
+	if (kr == KERN_SUCCESS)
+		port->ip_pset_count++;
 
-	ipc_mqueue_add(&port->ip_messages, &pset->ips_messages);
-
-	return KERN_SUCCESS;
+	return kr;
 }
 
 
@@ -215,36 +208,33 @@ ipc_pset_remove(
 	ipc_pset_t	pset,
 	ipc_port_t	port)
 {
-	mach_msg_return_t mr;
+	kern_return_t kr;
 
 	assert(ip_active(port));
 	
 	if (port->ip_pset_count == 0)
 		return KERN_NOT_IN_SET;
 
-	mr = ipc_mqueue_remove(&port->ip_messages, &pset->ips_messages);
+	kr = ipc_mqueue_remove(&port->ip_messages, &pset->ips_messages);
 
-	if (mr == MACH_MSG_SUCCESS) {
+	if (kr == KERN_SUCCESS)
 		port->ip_pset_count--;
-		ips_release(pset);
-	}
-	return mr;
+
+	return kr;
 }
 
 /*
- *	Routine:	ipc_pset_remove_all
+ *	Routine:	ipc_pset_remove_from_all
  *	Purpose:
  *		Removes a port from all it's port sets.
- *		Each port set loses a reference.
  *	Conditions:
  *		port is locked and active.
  */
 
 kern_return_t
-ipc_pset_remove_all(
+ipc_pset_remove_from_all(
 	ipc_port_t	port)
 {
-	ipc_pset_mqueue_t pset_mqueue;
 	ipc_pset_t pset;
 
 	assert(ip_active(port));
@@ -253,20 +243,10 @@ ipc_pset_remove_all(
 		return KERN_NOT_IN_SET;
 
 	/* 
-	 * Remove each port set's mqueue from the port's (one at a time).
+	 * Remove the port's mqueue from all sets
 	 */
-	while (port->ip_pset_count > 0) {
-		ipc_mqueue_remove_one(&port->ip_messages,
-				      (ipc_mqueue_t)&pset_mqueue);
-		assert(pset_mqueue != (ipc_pset_mqueue_t)0);
-		port->ip_pset_count--;
-
-		pset = pset_mqueue->ipsm_pset;
-		ipc_pset_release(pset); /* locks and unlocks pset */
-
-	}
-
-	assert(port->ip_pset_count == 0);
+	ipc_mqueue_remove_from_all(&port->ip_messages);
+	port->ip_pset_count = 0;
 	return KERN_SUCCESS;
 }
 
@@ -275,9 +255,6 @@ ipc_pset_remove_all(
  *	Routine:	ipc_pset_destroy
  *	Purpose:
  *		Destroys a port_set.
- *
- *		Doesn't remove members from the port set;
- *		that happens lazily.
  *	Conditions:
  *		The port_set is locked and alive.
  *		The caller has a reference, which is consumed.
@@ -294,6 +271,11 @@ ipc_pset_destroy(
 
 	pset->ips_object.io_bits &= ~IO_BITS_ACTIVE;
 
+	/*
+	 * remove all the member message queues
+	 */
+	ipc_mqueue_remove_all(&pset->ips_messages);
+	
 	s = splsched();
 	imq_lock(&pset->ips_messages);
 	ipc_mqueue_changed(&pset->ips_messages);

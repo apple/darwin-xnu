@@ -13,7 +13,7 @@ MIG_DEFS = mach_i386.defs
 MIGINCLUDES = mach_i386_server.h
 
 DATAFILES = \
-	boolean.h exception.h fp_reg.h flipc_dep.h \
+	boolean.h exception.h fp_reg.h \
 	processor_info.h kern_return.h mach_i386_types.h ndr_def.h syscall_sw.h \
 	thread_status.h thread_state.h vm_param.h \
 	vm_types.h rpc.h \

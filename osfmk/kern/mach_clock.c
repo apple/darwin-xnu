@@ -161,11 +161,9 @@ hertz_tick(
 
 	if (usermode) {
 		TICKBUMP(&thread->user_timer);
-#if 0
 		if (thread->priority < BASEPRI_DEFAULT)
 			state = CPU_STATE_NICE;
 		else
-#endif
 			state = CPU_STATE_USER;
 #if GPROF
 			if (pv->active)

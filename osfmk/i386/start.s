@@ -327,7 +327,7 @@ fix_ldt_ret:
 	movl	KERNELBASEPDE(%eax),%ecx
 	movl	%ecx,(%eax)
 
-	movl	$EXT(pag_start),%ebx	/* first paged code address */
+	movl	$ EXT(pag_start),%ebx	/* first paged code address */
 
 	movl	%cr0,%eax
 	orl	$(CR0_PG),%eax		/* set PG bit in CR0 */
@@ -370,7 +370,7 @@ LEXT(vstart)
 	movw	$(KERNEL_TSS),%ax
 	ltr	%ax			/* set up KTSS */
 
-	mov	$CPU_DATA,%ax
+	mov	$ CPU_DATA,%ax
 	mov	%ax,%gs
 
 	lea	EXT(eintstack),%esp	/* switch to the bootup stack */
@@ -419,7 +419,7 @@ LEXT(slave_start)
 					/* paged mode is enabled */
 	movl	%edx,%cr3		/* use bootstrap PDE to enable paging */
 
-	movl	$EXT(spag_start),%edx	/* first paged code address */
+	movl	$ EXT(spag_start),%edx	/* first paged code address */
 
 	movl	%cr0,%eax
 	orl	$(CR0_PG),%eax		/* set PG bit in CR0 */
@@ -469,13 +469,13 @@ LEXT(svstart)
 	CPU_NUMBER(%eax)
 	movw	$(GDTSZ*8-1),0(%esp)	/* set GDT size in GDT descriptor */
 	movl	CX(EXT(mp_gdt),%eax),%edx
-	addl	$KVTOLINEAR,%edx
+	addl	$ KVTOLINEAR,%edx
 	movl	%edx,2(%esp)		/* point to local GDT (linear address) */
 	lgdt	0(%esp)			/* load new GDT */
 	
 	movw	$(IDTSZ*8-1),0(%esp)	/* set IDT size in IDT descriptor */
 	movl	CX(EXT(mp_idt),%eax),%edx
-	addl	$KVTOLINEAR,%edx
+	addl	$ KVTOLINEAR,%edx
 	movl	%edx,2(%esp)		/* point to local IDT (linear address) */
 	lidt	0(%esp)			/* load new IDT */
 	
@@ -485,7 +485,7 @@ LEXT(svstart)
 	movw	$(KERNEL_TSS),%ax
 	ltr	%ax			/* load new KTSS */
 
-	mov	$CPU_DATA,%ax
+	mov	$ CPU_DATA,%ax
 	mov	%ax,%gs
 
 	call	EXT(slave_main)		/* start MACH */

@@ -37,10 +37,12 @@
  * IMPLIED WARRANTIES, INCLUDING, WITHOUT LIMITATION, THE IMPLIED
  * WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE.
  *
+ * $FreeBSD: src/sys/net/if_ppp.h,v 1.14 1999/08/28 00:48:20 peter Exp $
  */
 
 #ifndef _IF_PPP_H_
 #define _IF_PPP_H_
+#include <sys/appleapiopts.h>
 
 /* XXX this used to be self-contained. */
 #include <net/ppp_defs.h>

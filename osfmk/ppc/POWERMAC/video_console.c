@@ -112,6 +112,12 @@
 #include <kern/lock.h>
 #include <kern/debug.h>
 
+#include <kdp/kdp_udp.h>
+
+#include "panic_image.c"
+#include "rendered_numbers.c"
+
+
 #define FAST_JUMP_SCROLL
 
 #define	CHARWIDTH	8
@@ -161,6 +167,50 @@ static void	vc_store_char(unsigned char);
 static void 	vc_putchar(char ch);
 
 void	vcattach(void);
+
+/* panic dialog and info saving */
+int mac_addr_digit_x;
+int mac_addr_digit_y;
+static void blit_digit( int digit );
+boolean_t panicDialogDrawn = FALSE;
+
+static void 
+panic_blit_rect(	unsigned int x, unsigned int y,
+			unsigned int width, unsigned int height,
+			int transparent, unsigned char * dataPtr );
+			
+static void 
+panic_blit_rect_8(	unsigned int x, unsigned int y,
+			unsigned int width, unsigned int height,
+			int transparent, unsigned char * dataPtr );
+			
+static void 
+panic_blit_rect_16(	unsigned int x, unsigned int y,
+			unsigned int width, unsigned int height,
+			int transparent, unsigned char * dataPtr );
+			
+static void 
+panic_blit_rect_32(	unsigned int x, unsigned int y,
+			unsigned int width, unsigned int height,
+			int transparent, unsigned char * dataPtr );
+
+static void 
+blit_rect_of_size_and_color(	unsigned int x, unsigned int y,
+			unsigned int width, unsigned int height,
+			unsigned int dataPtr );
+
+static void 
+dim_screen(void);
+
+/*static void 
+dim_screen8(void);
+*/
+
+static void 
+dim_screen16(void);
+
+static void 
+dim_screen32(void);
 
 
 /*
@@ -1893,32 +1943,41 @@ struct vc_progress_element {
 typedef struct vc_progress_element vc_progress_element;
 
 static vc_progress_element *	vc_progress;
-static unsigned char *		vc_progress_data;
+static const unsigned char *    vc_progress_data;
+static const unsigned char *    vc_progress_alpha;
 static boolean_t		vc_progress_enable;
-static unsigned char *		vc_clut;
+static const unsigned char *    vc_clut;
+static const unsigned char *    vc_clut8;
+static unsigned char            vc_revclut8[256];
 static unsigned int		vc_progress_tick;
 static boolean_t		vc_graphics_mode;
 static boolean_t		vc_acquired;
 static boolean_t		vc_need_clear;
+static boolean_t		vc_needsave;
+static vm_address_t		vc_saveunder;
+static vm_size_t		vc_saveunder_len;
 
 static void vc_blit_rect_8c(	int x, int y,
-			int width, int height, 
-			int transparent, unsigned char * dataPtr )
+                                int width, int height, 
+                                const unsigned char * dataPtr,
+				const unsigned char * alphaPtr,
+                                unsigned char * backPtr,
+				boolean_t save, boolean_t static_alpha )
 {
     volatile unsigned char * dst;
     int line, col;
-    unsigned char data;
+    unsigned int data;
+    unsigned char alpha;
 
     dst = (unsigned char *)(vinfo.v_baseaddr +
-                                    (y * vinfo.v_rowbytes) +
-                                    (x));
+                            (y * vinfo.v_rowbytes) +
+                            (x));
 
     for( line = 0; line < height; line++) {
         for( col = 0; col < width; col++) {
-	    data = *dataPtr++;
-	    if( data == transparent)
-		continue;
-
+	    data = 0;
+	    if( dataPtr != 0) data = *dataPtr++;
+	    else if( alphaPtr != 0) data = vc_revclut8[*alphaPtr++];
             *(dst + col) = data;
 	}
         dst = (volatile unsigned char *) (((int)dst) + vinfo.v_rowbytes);
@@ -1926,42 +1985,16 @@ static void vc_blit_rect_8c(	int x, int y,
 
 }
 
-static void vc_blit_rect_8m(	int x, int y,
-			int width, int height,
-			int transparent, unsigned char * dataPtr )
-{
-    volatile unsigned char * dst;
-    int line, col;
-    unsigned int data;
-
-    dst = (unsigned char *)(vinfo.v_baseaddr +
-                                    (y * vinfo.v_rowbytes) +
-                                    (x));
-
-    for( line = 0; line < height; line++) {
-        for( col = 0; col < width; col++) {
-	    data = *dataPtr++;
-	    if( data == transparent)
-		continue;
-
-            data *= 3;
-            *(dst + col) = ((19595 * vc_clut[data + 0] +
-                             38470 * vc_clut[data + 1] +
-                             7471  * vc_clut[data + 2] ) / 65536);
-	}
-        dst = (volatile unsigned char *) (((int)dst) + vinfo.v_rowbytes);
-    }
-}
-
-
-
 static void vc_blit_rect_16(	int x, int y,
-			int width, int height,
-			int transparent, unsigned char * dataPtr )
+                                int width, int height,
+                                const unsigned char * dataPtr,
+                                const unsigned char * alphaPtr,
+                                unsigned short *  backPtr,
+                                boolean_t save, boolean_t static_alpha )
 {
     volatile unsigned short * dst;
     int line, col;
-    unsigned int data;
+    unsigned int data, index, alpha, back;
 
     dst = (volatile unsigned short *)(vinfo.v_baseaddr +
                                     (y * vinfo.v_rowbytes) +
@@ -1969,26 +2002,67 @@ static void vc_blit_rect_16(	int x, int y,
 
     for( line = 0; line < height; line++) {
         for( col = 0; col < width; col++) {
-	    data = *dataPtr++;
-	    if( data == transparent)
-		continue;
+	    if( dataPtr != 0) {
+	        index = *dataPtr++;
+                index *= 3;
+	    }
 
-            data *= 3;
-            *(dst + col) =	( (0xf8 & (vc_clut[data + 0])) << 7)
-                              | ( (0xf8 & (vc_clut[data + 1])) << 2)
-                              | ( (0xf8 & (vc_clut[data + 2])) >> 3);
+            if( alphaPtr && backPtr) {
+
+		alpha = *alphaPtr++;
+                data = 0;
+		if( dataPtr != 0) {
+                    if( vc_clut[index + 0] > alpha)
+                        data |= (((vc_clut[index + 0] - alpha) & 0xf8) << 7);
+                    if( vc_clut[index + 1] > alpha)
+                        data |= (((vc_clut[index + 1] - alpha) & 0xf8) << 2);
+                    if( vc_clut[index + 2] > alpha)
+                        data |= (((vc_clut[index + 2] - alpha) & 0xf8) >> 3);
+		}
+
+                if( save) {
+                    back = *(dst + col);
+                    if ( !static_alpha)
+                        *backPtr++ = back;
+                        back = (((((back & 0x7c00) * alpha) + 0x3fc00) >> 8) & 0x7c00)
+                             | (((((back & 0x03e0) * alpha) + 0x01fe0) >> 8) & 0x03e0)
+                             | (((((back & 0x001f) * alpha) + 0x000ff) >> 8) & 0x001f);
+                    if ( static_alpha)
+                        *backPtr++ = back;
+                } else {
+                    back = *backPtr++;
+                    if ( !static_alpha) {
+                        back = (((((back & 0x7c00) * alpha) + 0x3fc00) >> 8) & 0x7c00)
+                             | (((((back & 0x03e0) * alpha) + 0x01fe0) >> 8) & 0x03e0)
+                             | (((((back & 0x001f) * alpha) + 0x000ff) >> 8) & 0x001f);
+                    }
+                }
+
+                data += back;
+
+            } else
+                if( dataPtr != 0) {
+            	    data = ( (0xf8 & (vc_clut[index + 0])) << 7)
+                           | ( (0xf8 & (vc_clut[index + 1])) << 2)
+                           | ( (0xf8 & (vc_clut[index + 2])) >> 3);
+		}
+
+            *(dst + col) = data;
 	}
         dst = (volatile unsigned short *) (((int)dst) + vinfo.v_rowbytes);
     }
 }
 
 static void vc_blit_rect_32(	unsigned int x, unsigned int y,
-			unsigned int width, unsigned int height,
-			int transparent, unsigned char * dataPtr )
+                                unsigned int width, unsigned int height,
+                                const unsigned char * dataPtr,
+                                const unsigned char * alphaPtr,
+                                unsigned int *  backPtr,
+                                boolean_t save, boolean_t static_alpha )
 {
     volatile unsigned int * dst;
     int line, col;
-    unsigned int data;
+    unsigned int data, index, alpha, back;
 
     dst = (volatile unsigned int *) (vinfo.v_baseaddr +
                                     (y * vinfo.v_rowbytes) +
@@ -1996,35 +2070,558 @@ static void vc_blit_rect_32(	unsigned int x, unsigned int y,
 
     for( line = 0; line < height; line++) {
         for( col = 0; col < width; col++) {
-	    data = *dataPtr++;
-	    if( data == transparent)
-		continue;
+            if( dataPtr != 0) {
+	        index = *dataPtr++;
+                index *= 3;
+	    }
 
-            data *= 3;
-            *(dst + col) = 	(vc_clut[data + 0] << 16)
-                              | (vc_clut[data + 1] << 8)
-                              | (vc_clut[data + 2]);
+            if( alphaPtr && backPtr) {
+
+		alpha = *alphaPtr++;
+                data = 0;
+                if( dataPtr != 0) {
+                    if( vc_clut[index + 0] > alpha)
+                        data |= ((vc_clut[index + 0] - alpha) << 16);
+                    if( vc_clut[index + 1] > alpha)
+                        data |= ((vc_clut[index + 1] - alpha) << 8);
+                    if( vc_clut[index + 2] > alpha)
+                        data |= ((vc_clut[index + 2] - alpha));
+		}
+
+                if( save) {
+                    back = *(dst + col);
+                    if ( !static_alpha)
+                        *backPtr++ = back;
+                    back = (((((back & 0x00ff00ff) * alpha) + 0x00ff00ff) >> 8) & 0x00ff00ff)
+                         | (((((back & 0x0000ff00) * alpha) + 0x0000ff00) >> 8) & 0x0000ff00);
+                    if ( static_alpha)
+                        *backPtr++ = back;
+                } else {
+                    back = *backPtr++;
+                    if ( !static_alpha) {
+                        back = (((((back & 0x00ff00ff) * alpha) + 0x00ff00ff) >> 8) & 0x00ff00ff)
+                             | (((((back & 0x0000ff00) * alpha) + 0x0000ff00) >> 8) & 0x0000ff00);
+                    }
+		}
+
+                data += back;
+
+            } else
+                if( dataPtr != 0) {
+                    data =    (vc_clut[index + 0] << 16)
+                            | (vc_clut[index + 1] << 8)
+                            | (vc_clut[index + 2]);
+		}
+
+            *(dst + col) = data;
 	}
         dst = (volatile unsigned int *) (((int)dst) + vinfo.v_rowbytes);
     }
 }
 
-static void vc_blit_rect(	int x, int y,
-			int width, int height,
+void 
+draw_panic_dialog( void )
+{
+	int pd_x,pd_y, iconx, icony, tx_line, tx_col;
+	int line_width = 1;
+	int f1, f2, d1, d2, d3, rem;
+	char *pair = "ff";
+	int count = 0;
+	char digit;
+	int nibble;
+	char colon = ':';
+	char dot = '.';
+	struct ether_addr kdp_mac_addr  = kdp_get_mac_addr();
+	unsigned int ip_addr = kdp_get_ip_address();	
+	
+	
+	if (!panicDialogDrawn)
+	{
+		if ( !logPanicDataToScreen )
+		{
+
+			/* dim the screen 50% before putting up panic dialog */
+			dim_screen();
+
+			/* set up to draw background box */
+			pd_x = (vinfo.v_width/2) - panic_dialog.pd_width/2;
+			pd_y = (vinfo.v_height/2) - panic_dialog.pd_height/2;
+		
+			/*  draw image	*/
+			panic_blit_rect( pd_x, pd_y, panic_dialog.pd_width, panic_dialog.pd_height, 0, (unsigned char*) panic_dialog.image_pixel_data);
+		
+			/* offset for mac address text */
+			mac_addr_digit_x = (vinfo.v_width/2) - 130; /* use 62 if no ip */
+			mac_addr_digit_y = (vinfo.v_height/2) + panic_dialog.pd_height/2 - 20;
+		
+			if(kdp_mac_addr.ether_addr_octet[0] || kdp_mac_addr.ether_addr_octet[1]|| kdp_mac_addr.ether_addr_octet[2]
+				|| kdp_mac_addr.ether_addr_octet[3] || kdp_mac_addr.ether_addr_octet[4] || kdp_mac_addr.ether_addr_octet[5])
+			{
+				/* blit the digits for mac address */
+				for (count = 0; count < 6; count++ )
+				{
+					nibble =  (kdp_mac_addr.ether_addr_octet[count] & 0xf0) >> 4;
+					digit = nibble < 10 ? nibble + '0':nibble - 10 + 'a';
+					blit_digit(digit);
+				
+					nibble =  kdp_mac_addr.ether_addr_octet[count] & 0xf;
+					digit = nibble < 10 ? nibble + '0':nibble - 10 + 'a';
+					blit_digit(digit);
+					if( count < 5 )
+						blit_digit( colon );
+				}
+			}
+			else	/* blit the ff's */
+			{
+				for( count = 0; count < 6; count++ )
+				{
+					digit = pair[0];
+					blit_digit(digit);
+					digit = pair[1];
+					blit_digit(digit);
+					if( count < 5 )
+						blit_digit( colon );
+				}
+			}
+			/* now print the ip address */
+			mac_addr_digit_x = (vinfo.v_width/2) + 10;
+			if(ip_addr != 0)
+			{
+				/* blit the digits for ip address */
+				for (count = 0; count < 4; count++ )
+				{
+					nibble = (ip_addr & 0xff000000 ) >> 24;
+				
+					d3 = (nibble % 0xa) + '0';
+					nibble = nibble/0xa;
+					d2 = (nibble % 0xa) + '0';
+					nibble = nibble /0xa;
+					d1 = (nibble % 0xa) + '0';
+					
+					if( d1 ) blit_digit(d1);
+					blit_digit(d2);
+					blit_digit(d3);
+					if( count < 3 )
+						blit_digit(dot);
+					
+					d1= d2 = d3 = 0;
+					ip_addr = ip_addr << 8;
+				}
+			}
+		}
+	}
+	panicDialogDrawn = TRUE;
+
+}
+
+
+static void 
+blit_digit( int digit )
+{
+	switch( digit )
+	{
+		case '0':  {
+			panic_blit_rect( mac_addr_digit_x, mac_addr_digit_y, num_0.num_w, num_0.num_h, 255, (unsigned char*) num_0.num_pixel_data);
+			mac_addr_digit_x = mac_addr_digit_x + num_0.num_w - 1;
+			break;
+		}
+		case '1':  {
+			panic_blit_rect( mac_addr_digit_x, mac_addr_digit_y, num_1.num_w, num_1.num_h, 255, (unsigned char*) num_1.num_pixel_data);
+			mac_addr_digit_x = mac_addr_digit_x + num_1.num_w ;
+			break;
+		}
+		case '2':  {
+			panic_blit_rect( mac_addr_digit_x, mac_addr_digit_y, num_2.num_w, num_2.num_h, 255, (unsigned char*) num_2.num_pixel_data);
+			mac_addr_digit_x = mac_addr_digit_x + num_2.num_w ;
+			break;
+		}
+		case '3':  {
+			panic_blit_rect( mac_addr_digit_x, mac_addr_digit_y, num_3.num_w, num_3.num_h, 255, (unsigned char*) num_3.num_pixel_data);
+			mac_addr_digit_x = mac_addr_digit_x + num_3.num_w ;
+			break;
+		}
+		case '4':  {
+			panic_blit_rect( mac_addr_digit_x, mac_addr_digit_y, num_4.num_w, num_4.num_h, 255, (unsigned char*) num_4.num_pixel_data);
+			mac_addr_digit_x = mac_addr_digit_x + num_4.num_w ;
+			break;
+		}
+		case '5':  {
+			panic_blit_rect( mac_addr_digit_x, mac_addr_digit_y, num_5.num_w, num_5.num_h, 255, (unsigned char*) num_5.num_pixel_data);
+			mac_addr_digit_x = mac_addr_digit_x + num_5.num_w ;
+			break;
+		}
+		case '6':  {
+			panic_blit_rect( mac_addr_digit_x, mac_addr_digit_y, num_6.num_w, num_6.num_h, 255, (unsigned char*) num_6.num_pixel_data);
+			mac_addr_digit_x = mac_addr_digit_x + num_6.num_w ;
+			break;
+		}
+		case '7':  {
+			panic_blit_rect( mac_addr_digit_x, mac_addr_digit_y, num_7.num_w, num_7.num_h, 255, (unsigned char*) num_7.num_pixel_data);
+			mac_addr_digit_x = mac_addr_digit_x + num_7.num_w ;
+			break;
+		}
+		case '8':  {
+			panic_blit_rect( mac_addr_digit_x, mac_addr_digit_y, num_8.num_w, num_8.num_h, 255, (unsigned char*) num_8.num_pixel_data);
+			mac_addr_digit_x = mac_addr_digit_x + num_8.num_w ;
+			break;
+		}
+		case '9':  {
+			panic_blit_rect( mac_addr_digit_x, mac_addr_digit_y, num_9.num_w, num_9.num_h, 255, (unsigned char*) num_9.num_pixel_data);
+			mac_addr_digit_x = mac_addr_digit_x + num_9.num_w ;
+			break;
+		}
+		case 'a':  {
+			panic_blit_rect( mac_addr_digit_x, mac_addr_digit_y, num_a.num_w, num_a.num_h, 255, (unsigned char*) num_a.num_pixel_data);
+			mac_addr_digit_x = mac_addr_digit_x + num_a.num_w ;
+			break;
+		}
+		case 'b':  {
+			panic_blit_rect( mac_addr_digit_x, mac_addr_digit_y, num_b.num_w, num_b.num_h, 255, (unsigned char*) num_b.num_pixel_data);
+			mac_addr_digit_x = mac_addr_digit_x + num_b.num_w ;
+			break;
+		}
+		case 'c':  {
+			panic_blit_rect( mac_addr_digit_x, mac_addr_digit_y, num_c.num_w, num_c.num_h, 255, (unsigned char*) num_c.num_pixel_data);
+			mac_addr_digit_x = mac_addr_digit_x + num_c.num_w ;
+			break;
+		}
+		case 'd':  {
+			panic_blit_rect( mac_addr_digit_x, mac_addr_digit_y, num_d.num_w, num_d.num_h, 255, (unsigned char*) num_d.num_pixel_data);
+			mac_addr_digit_x = mac_addr_digit_x + num_d.num_w ;
+			break;
+		}
+		case 'e':  {
+			panic_blit_rect( mac_addr_digit_x, mac_addr_digit_y, num_e.num_w, num_e.num_h, 255, (unsigned char*) num_e.num_pixel_data);
+			mac_addr_digit_x = mac_addr_digit_x + num_e.num_w ;
+			break;
+		}
+		case 'f':  {
+			panic_blit_rect( mac_addr_digit_x, mac_addr_digit_y, num_f.num_w, num_f.num_h, 255, (unsigned char*) num_f.num_pixel_data);
+			mac_addr_digit_x = mac_addr_digit_x + num_f.num_w ;
+			break;
+		}
+		case ':':  {
+			panic_blit_rect( mac_addr_digit_x, mac_addr_digit_y, num_colon.num_w, num_colon.num_h, 255, (unsigned char*) num_colon.num_pixel_data);
+			mac_addr_digit_x = mac_addr_digit_x + num_colon.num_w;
+			break;
+		}
+		case '.':  {
+			panic_blit_rect( mac_addr_digit_x, mac_addr_digit_y + (num_colon.num_h/2), num_colon.num_w, num_colon.num_h/2, 255, (unsigned char*) num_colon.num_pixel_data);
+			mac_addr_digit_x = mac_addr_digit_x + num_colon.num_w;
+			break;
+		}
+		default:
+			break;
+	
+	}
+}
+
+static void 
+panic_blit_rect(	unsigned int x, unsigned int y,
+			unsigned int width, unsigned int height,
 			int transparent, unsigned char * dataPtr )
+{
+	if(!vinfo.v_depth)
+		return;
+		
+    switch( vinfo.v_depth) {
+	case 8:
+	    panic_blit_rect_8( x, y, width, height, transparent, dataPtr);
+	    break;
+	case 16:
+	    panic_blit_rect_16( x, y, width, height, transparent, dataPtr);
+	    break;
+	case 32:
+	    panic_blit_rect_32( x, y, width, height, transparent, dataPtr);
+	    break;
+    }
+}
+
+/* panic_blit_rect_8 is not tested and probably doesn't draw correctly. 
+	it really needs a clut to use
+*/
+static void 
+panic_blit_rect_8(	unsigned int x, unsigned int y,
+			unsigned int width, unsigned int height,
+			int transparent, unsigned char * dataPtr )
+{
+    volatile unsigned int * dst;
+    int line, col;
+    unsigned int pixelR, pixelG, pixelB;
+
+    dst = (volatile unsigned int *) (vinfo.v_baseaddr +
+                                    (y * vinfo.v_rowbytes) +
+                                    x);
+
+    for( line = 0; line < height; line++) {
+        for( col = 0; col < width; col++) {
+			pixelR = *dataPtr++;
+			pixelG = *dataPtr++;
+			pixelB = *dataPtr++;
+			if(( pixelR != transparent) || (pixelG != transparent) || (pixelB != transparent))
+			{
+				*(dst + col) = ((19595 * pixelR +
+								 38470 * pixelG +
+								 7471  * pixelB ) / 65536);
+			}
+	
+		}
+        dst = (volatile unsigned int *) (((int)dst) + vinfo.v_rowbytes);
+    }
+}
+
+/* panic_blit_rect_16 draws adequately. It would be better if it had a clut
+	to use instead of scaling the 32bpp color values.
+	
+	panic_blit_rect_16 decodes the RLE encoded image data on the fly, scales it down
+	to 16bpp,  and fills in each of the three pixel values (RGB) for each pixel
+	and writes it to the screen.
+	
+*/
+static void 
+panic_blit_rect_16(	unsigned int x, unsigned int y,
+			unsigned int width, unsigned int height,
+			int transparent, unsigned char * dataPtr )
+{
+    volatile unsigned int * dst;
+    int line, value, total = 0;
+    unsigned int  quantity, tmp, pixel;
+    int pix_pos = 2;
+    int w = width / 2;
+    boolean_t secondTime = 0;
+    int pix_incr = 0;
+    
+
+    dst = (volatile unsigned int *) (vinfo.v_baseaddr +
+                                    (y * vinfo.v_rowbytes) +
+                                    (x * 2));
+
+/*
+            *(dst + col) =	( (0xf8 & (vc_clut[data + 0])) << 7)
+                              | ( (0xf8 & (vc_clut[data + 1])) << 2)
+                              | ( (0xf8 & (vc_clut[data + 2])) >> 3);
+
+*/
+    for( line = 0; line < height; line++) 
+    {
+    	while ( total < width )
+    	{
+    		quantity = *dataPtr++;
+        	value = *dataPtr++;
+        	value = (0x1f * value)/255;
+			while( quantity > 0 )
+			{
+				switch( pix_pos )
+				{
+					case 2:		/* red */
+					{
+						tmp |= (value << 10) & 0x7c00;
+		//				tmp |= (value & 0xf8) << 7;
+						quantity--;
+						pix_pos--;
+						break;
+					}
+					case 1:		/* green */
+					{
+						tmp |= (value << 5) & 0x3e0;
+		//				tmp |= (value & 0xf8) << 2;
+						quantity--;
+						pix_pos--;
+						break;
+					}
+					default:	/* blue */
+					{
+						tmp |= value & 0x1f;
+		//				tmp |= (value & 0xf8) >> 3;
+						total++;
+						quantity--;
+						pix_pos = 2;
+						if( secondTime )
+						{
+							pixel |= tmp;
+							secondTime = 0;
+							*(dst + pix_incr++) = pixel;
+							tmp = 0;
+							pixel = 0;
+						}
+						else
+						{
+							pixel = tmp << 16;
+							secondTime = 1;
+						}
+						break;
+					}
+				}
+			}
+		}
+        dst = (volatile unsigned int *) (((int)dst) + vinfo.v_rowbytes);
+        total = 0;
+        pix_incr = 0;
+    }
+}
+
+/*
+	panic_blit_rect_32 decodes the RLE encoded image data on the fly, and fills
+	in each of the three pixel values (RGB) for each pixel and writes it to the 
+	screen.
+*/	
+static void 
+panic_blit_rect_32(	unsigned int x, unsigned int y,
+			unsigned int width, unsigned int height,
+			int transparent, unsigned char * dataPtr )
+{
+    volatile unsigned int * dst;
+    int line, total = 0;
+    unsigned int value, quantity, tmp;
+    int pix_pos = 2;
+
+    dst = (volatile unsigned int *) (vinfo.v_baseaddr +
+                                    (y * vinfo.v_rowbytes) +
+                                    (x * 4));
+
+    for( line = 0; line < height; line++) 
+    {
+    	while ( total < width )
+    	{
+    		quantity = *dataPtr++;
+        	value = *dataPtr++;
+			while( quantity > 0 )
+			{
+				switch( pix_pos )
+				{
+					case 2:
+					{
+						tmp = value << 16;
+						quantity--;
+						pix_pos--;
+						break;
+					}
+					case 1:
+					{
+						tmp |= value << 8;
+						quantity--;
+						pix_pos--;
+						break;
+					}
+					default:
+					{
+						tmp |= value;
+						*(dst + total) = tmp;
+						total++;
+						quantity--;
+						pix_pos = 2;
+						break;
+					}
+				
+				}
+			}
+	
+		}
+        dst = (volatile unsigned int *) (((int)dst) + vinfo.v_rowbytes);
+        total = 0;
+    }
+}
+
+static void 
+dim_screen(void)
+{
+	if(!vinfo.v_depth)
+		return;
+		
+    switch( vinfo.v_depth) {
+	/*case 8:
+	    dim_screen8();
+	    break;
+        */
+	case 16:
+	    dim_screen16();
+	    break;
+	case 32:
+	    dim_screen32();
+	    break;
+    }
+}
+
+static void 
+dim_screen16(void)
+{
+	unsigned long *p, *endp, *row;
+	int      linelongs, col;
+	int      rowline, rowlongs;
+        unsigned long value, tmp;
+
+	rowline = vinfo.v_rowscanbytes / 4;
+	rowlongs = vinfo.v_rowbytes / 4;
+
+	p = (unsigned long*) vinfo.v_baseaddr;;
+	endp = (unsigned long*) vinfo.v_baseaddr;
+
+	linelongs = vinfo.v_rowbytes * CHARHEIGHT / 4;
+        endp += rowlongs * vinfo.v_height;
+
+	for (row = p ; row < endp ; row += rowlongs) {
+		for (col = 0; col < rowline; col++) {
+                        value = *(row+col);
+                        tmp =  ((value & 0x7C007C00) >> 1) & 0x3C003C00;
+                        tmp |= ((value & 0x03E003E0) >> 1) & 0x01E001E0;
+                        tmp |= ((value & 0x001F001F) >> 1) & 0x000F000F;
+                        *(row+col) = tmp;		//half (dimmed)?
+                }
+
+	}
+
+}
+
+static void 
+dim_screen32(void)
+{
+	unsigned long *p, *endp, *row;
+	int      linelongs, col;
+	int      rowline, rowlongs;
+        unsigned long value, tmp;
+
+	rowline = vinfo.v_rowscanbytes / 4;
+	rowlongs = vinfo.v_rowbytes / 4;
+
+	p = (unsigned long*) vinfo.v_baseaddr;;
+	endp = (unsigned long*) vinfo.v_baseaddr;
+
+	linelongs = vinfo.v_rowbytes * CHARHEIGHT / 4;
+        endp += rowlongs * vinfo.v_height;
+
+	for (row = p ; row < endp ; row += rowlongs) {
+		for (col = 0; col < rowline; col++) {
+                        value = *(row+col);
+                        tmp =  ((value & 0x00FF0000) >> 1) & 0x007F0000;
+                        tmp |= ((value & 0x0000FF00) >> 1) & 0x00007F00;
+                        tmp |= (value & 0x000000FF) >> 1;
+                        *(row+col) = tmp;		//half (dimmed)?
+                }
+
+	}
+
+}
+
+static void vc_blit_rect(	unsigned int x, unsigned int y,
+                                unsigned int width, unsigned int height,
+                                const unsigned char * dataPtr,
+                                const unsigned char * alphaPtr,
+                                vm_address_t backBuffer,
+                                boolean_t save, boolean_t static_alpha )
 {
     if(!vinfo.v_baseaddr)
         return;
 
     switch( vinfo.v_depth) {
 	case 8:
-	    vc_blit_rect_8c( x, y, width, height, transparent, dataPtr);
+            if( vc_clut8 == vc_clut)
+                vc_blit_rect_8c( x, y, width, height, dataPtr, alphaPtr, (unsigned char *) backBuffer, save, static_alpha );
 	    break;
 	case 16:
-	    vc_blit_rect_16( x, y, width, height, transparent, dataPtr);
+	    vc_blit_rect_16( x, y, width, height, dataPtr, alphaPtr, (unsigned short *) backBuffer, save, static_alpha );
 	    break;
 	case 32:
-	    vc_blit_rect_32( x, y, width, height, transparent, dataPtr);
+	    vc_blit_rect_32( x, y, width, height, dataPtr, alphaPtr, (unsigned int *) backBuffer, save, static_alpha );
 	    break;
     }
 }
@@ -2034,12 +2631,13 @@ static void vc_progress_task( void * arg )
     spl_t		s;
     int			count = (int) arg;
     int			x, y, width, height;
-    unsigned char * 	data;
+    const unsigned char * data;
 
     s = splhigh();
     simple_lock(&vc_forward_lock);
 
     if( vc_progress_enable) {
+
         count++;
         if( count >= vc_progress->count)
             count = 0;
@@ -2051,11 +2649,13 @@ static void vc_progress_task( void * arg )
 	data = vc_progress_data;
 	data += count * width * height;
 	if( 1 & vc_progress->flags) {
-	    x += (vinfo.v_width / 2);
-	    x += (vinfo.v_height / 2);
+	    x += ((vinfo.v_width - width) / 2);
+	    y += ((vinfo.v_height - height) / 2);
 	}
 	vc_blit_rect( x, y, width, height,
-			vc_progress->transparent,data );
+			NULL, data, vc_saveunder,
+			vc_needsave, (0 == (4 & vc_progress->flags)) );
+        vc_needsave = FALSE;
 
         timeout( vc_progress_task, (void *) count,
                  vc_progress_tick );
@@ -2065,7 +2665,7 @@ static void vc_progress_task( void * arg )
 }
 
 void vc_display_icon( vc_progress_element * desc,
-			unsigned char * data )
+			const unsigned char * data )
 {
     int			x, y, width, height;
 
@@ -2076,35 +2676,122 @@ void vc_display_icon( vc_progress_element * desc,
 	x = desc->dx;
 	y = desc->dy;
 	if( 1 & desc->flags) {
-	    x += (vinfo.v_width / 2);
-	    y += (vinfo.v_height / 2);
+	    x += ((vinfo.v_width - width) / 2);
+	    y += ((vinfo.v_height - height) / 2);
 	}
-	vc_blit_rect( x, y, width, height, desc->transparent, data );
+	vc_blit_rect( x, y, width, height, data, NULL, (vm_address_t) NULL, FALSE, TRUE );
     }
 }
 
+static boolean_t ignore_first_enable = TRUE;
+
 static boolean_t
-vc_progress_set( boolean_t enable )
+vc_progress_set( boolean_t enable, unsigned int initial_tick )
 {
-    spl_t		s;
+    spl_t	     s;
+    vm_address_t     saveBuf = 0;
+    vm_size_t        saveLen = 0;
+    unsigned int     count;
+    unsigned int     index;
+    unsigned char    data8;
+    unsigned short   data16;
+    unsigned short * buf16;
+    unsigned int     data32;
+    unsigned int *   buf32;
 
     if( !vc_progress)
 	return( FALSE );
+
+    if( enable & ignore_first_enable) {
+	enable = FALSE;
+	ignore_first_enable = FALSE;
+    }
+
+    if( enable) {
+        saveLen = vc_progress->width * vc_progress->height * vinfo.v_depth / 8;
+        saveBuf = kalloc( saveLen );
+
+	if( !vc_need_clear) switch( vinfo.v_depth) {
+	    case 8 :
+		for( count = 0; count < 256; count++) {
+		    vc_revclut8[count] = vc_clut[0x01 * 3];
+		    data8 = (vc_clut[0x01 * 3] * count + 0x0ff) >> 8;
+		    for( index = 0; index < 256; index++) {
+			if( (data8 == vc_clut[index * 3 + 0]) &&
+			    (data8 == vc_clut[index * 3 + 1]) &&
+			    (data8 == vc_clut[index * 3 + 2])) {
+			    vc_revclut8[count] = index;
+			    break;
+			}
+		    }
+		}
+		memset( (void *) saveBuf, 0x01, saveLen );
+		break;
+
+	    case 16 :
+		buf16 = (unsigned short *) saveBuf;
+		data16 = ((vc_clut[0x01 * 3 + 0] & 0xf8) << 7)
+		       | ((vc_clut[0x01 * 3 + 0] & 0xf8) << 2)
+		       | ((vc_clut[0x01 * 3 + 0] & 0xf8) >> 3);
+		for( count = 0; count < saveLen / 2; count++)
+		    buf16[count] = data16;
+		break;
+
+	    case 32 :
+		buf32 = (unsigned int *) saveBuf;
+		data32 = ((vc_clut[0x01 * 3 + 0] & 0xff) << 16)
+		       | ((vc_clut[0x01 * 3 + 1] & 0xff) << 8)
+		       | ((vc_clut[0x01 * 3 + 2] & 0xff) << 0);
+		for( count = 0; count < saveLen / 4; count++)
+		    buf32[count] = data32;
+		break;
+	}
+    }
 
     s = splhigh();
     simple_lock(&vc_forward_lock);
 
     if( vc_progress_enable != enable) {
         vc_progress_enable = enable;
-        if( enable)
+        if( enable) {
+            vc_needsave      = vc_need_clear;
+            vc_saveunder     = saveBuf;
+            vc_saveunder_len = saveLen;
+            saveBuf	     = 0;
+            saveLen 	     = 0;
             timeout(vc_progress_task, (void *) 0,
-                    vc_progress_tick );
-        else
+                    initial_tick );
+        } else {
+            if( vc_saveunder) {
+                saveBuf      = vc_saveunder;
+                saveLen      = vc_saveunder_len;
+                vc_saveunder = 0;
+                vc_saveunder_len = 0;
+            }
             untimeout( vc_progress_task, (void *) 0 );
+        }
+    }
+
+    if( !enable) {
+        vc_forward_buffer_size = 0;
+        untimeout((timeout_fcn_t)vc_flush_forward_buffer, (void *)0);
+
+        /* Spin if the flush is in progress */
+        while (vc_forward_buffer_busy) {
+            simple_unlock(&vc_forward_lock);
+            splx(s);
+            /* wait */
+            s = splhigh();
+            simple_lock(&vc_forward_lock);
+            vc_forward_buffer_size = 0;
+        }
     }
 
     simple_unlock(&vc_forward_lock);
     splx(s);
+
+    if( saveBuf)
+        kfree( saveBuf, saveLen );
 
     return( TRUE );
 }
@@ -2112,15 +2799,21 @@ vc_progress_set( boolean_t enable )
 
 boolean_t
 vc_progress_initialize( vc_progress_element * desc,
-			unsigned char * data,
-			unsigned char * clut )
+			const unsigned char * data,
+			const unsigned char * clut )
 {
     if( (!clut) || (!desc) || (!data))
 	return( FALSE );
     vc_clut = clut;
+    vc_clut8 = clut;
 
     vc_progress = desc;
     vc_progress_data = data;
+    if( 2 & vc_progress->flags)
+        vc_progress_alpha = vc_progress_data
+                            + vc_progress->count * vc_progress->width * vc_progress->height;
+    else
+        vc_progress_alpha = NULL;
     vc_progress_tick = vc_progress->time * hz / 1000;
 
     return( TRUE );
@@ -2179,7 +2872,7 @@ initialize_screen(Boot_Video * boot_vinfo, unsigned int op)
 		break;
 
 	    case kPETextScreen:
-		vc_progress_set( FALSE );
+		vc_progress_set( FALSE, 0 );
 		disableConsoleOutput = FALSE;
 		if( vc_need_clear) {
 		    vc_need_clear = FALSE;
@@ -2190,20 +2883,20 @@ initialize_screen(Boot_Video * boot_vinfo, unsigned int op)
             case kPEEnableScreen:
 		if( vc_acquired) {
                     if( vc_graphics_mode)
-                        vc_progress_set( TRUE );
+                        vc_progress_set( TRUE, vc_progress_tick );
                     else
                         vc_clear_screen();
 		}
 		break;
 
             case kPEDisableScreen:
-		vc_progress_set( FALSE );
+		vc_progress_set( FALSE, 0 );
 		break;
 
 	    case kPEAcquireScreen:
 		vc_need_clear = (FALSE == vc_acquired);
 		vc_acquired = TRUE;
-		vc_progress_set( vc_graphics_mode );
+		vc_progress_set( vc_graphics_mode, vc_need_clear ? 2 * hz : 0 );
 		disableConsoleOutput = vc_graphics_mode;
 		if( vc_need_clear && !vc_graphics_mode) {
 		    vc_need_clear = FALSE;
@@ -2213,7 +2906,8 @@ initialize_screen(Boot_Video * boot_vinfo, unsigned int op)
 
 	    case kPEReleaseScreen:
 		vc_acquired = FALSE;
-		vc_progress_set( FALSE );
+		vc_progress_set( FALSE, 0 );
+                vc_clut8 = NULL;
 		disableConsoleOutput = TRUE;
 #if 0
 		GratefulDebInit(0);						/* Stop grateful debugger */

@@ -62,6 +62,7 @@ private:
 
     enum {			          // when kPMUADBint is set
         kPMUADBint          = 0x10,
+        kPMUenvironmentInt  = 0x40,	  // Environment changed (clamshell)
         kPMUwaitinglsc	    = 0x01,       // waiting to listen to charger
         kPMUautoSRQpolling  = 0x02,	  // auto/SRQ polling is enabled
         kPMUautopoll	    = 0x04	  // input is autopoll data
@@ -81,6 +82,7 @@ private:
     IOService	 	*PMUdriver;
     UInt32		pollList;		// ADB autopoll device bitmap
     bool		autopollOn;		// TRUE: PMU is autopolling
+    bool		clamshellOpen;		// Normally TRUE
 
     UInt32		dataLen;		// data len as result of an interrupt
     UInt8		dataBuffer[256];	// data as result of an interrupt

@@ -52,61 +52,56 @@
  * SUCH DAMAGE.
  *
  *	@(#)tcp_var.h	8.4 (Berkeley) 5/24/95
+ * $FreeBSD: src/sys/netinet/tcp_var.h,v 1.56.2.8 2001/08/22 00:59:13 silby Exp $
  */
 
 #ifndef _NETINET_TCP_VAR_H_
 #define _NETINET_TCP_VAR_H_
+#include <sys/appleapiopts.h>
+#include <netinet/tcp_timer.h>
+#ifdef __APPLE_API_PRIVATE
+
 #define N_TIME_WAIT_SLOTS   128                /* must be power of 2 */
 
 /*
- * Ip (reassembly or sequence) queue structures.
- *
- * XXX -- The following explains why the ipqe_m field is here, for TCP's use:
- * We want to avoid doing m_pullup on incoming packets but that
- * means avoiding dtom on the tcp reassembly code.  That in turn means
- * keeping an mbuf pointer in the reassembly queue (since we might
- * have a cluster).  As a quick hack, the source & destination
- * port numbers (which are no longer needed once we've located the
- * tcpcb) are overlayed with an mbuf pointer.
+ * Kernel variables for tcp.
  */
-LIST_HEAD(ipqehead, ipqent);
-struct ipqent {
-	LIST_ENTRY(ipqent) ipqe_q;
-	union {
-		struct ip	*_ip;
-#if INET6
-		struct ipv6	*_ip6;
-#endif
-		struct tcpiphdr *_tcp;
-	} _ipqe_u1;
-	struct mbuf	*ipqe_m;	/* mbuf contains packet */
-	u_int8_t	ipqe_mff;	/* for IP fragmentation */
+
+/* TCP segment queue entry */
+struct tseg_qent {
+	LIST_ENTRY(tseg_qent) tqe_q;
+	int	tqe_len;		/* TCP segment data length */
+	struct	tcphdr *tqe_th;		/* a pointer to tcp header */
+	struct	mbuf	*tqe_m;		/* mbuf contains packet */
 };
-#define	ipqe_ip		_ipqe_u1._ip
-#if INET6
-#define	ipqe_ip6	_ipqe_u1._ip6
+LIST_HEAD(tsegqe_head, tseg_qent);
+#ifdef MALLOC_DECLARE
+MALLOC_DECLARE(M_TSEGQ);
 #endif
-#define	ipqe_tcp	_ipqe_u1._tcp
+
+struct tcptemp {
+	u_char	tt_ipgen[40]; /* the size must be of max ip header, now IPv6 */
+	struct	tcphdr tt_t;
+};
+
 #define tcp6cb		tcpcb  /* for KAME src sync over BSD*'s */
 
+#ifdef __APPLE__
 #define TCP_DELACK_BITSET(hash_elem)\
 delack_bitmask[((hash_elem) >> 5)] |= 1 << ((hash_elem) & 0x1F)
 
 #define DELACK_BITMASK_ON     1
 #define DELACK_BITMASK_THRESH 300
-
-/*
- * Kernel variables for tcp.
- */
+#endif
 
 /*
  * Tcp control block, one per tcp; fields:
  * Organized for 16 byte cacheline efficiency.
  */
 struct tcpcb {
-	struct ipqehead segq;		/* sequencing queue */
+	struct	tsegqe_head t_segq;
 	int	t_dupacks;		/* consecutive dup acks recd */
-	struct tcptemp	*t_template;	/* skeletal packet for transmit */
+	struct	tcptemp	*unused;	/* unused now: was t_template */
 
 	int	t_timer[TCPT_NTIMERS];	/* tcp timers */
 
@@ -130,6 +125,9 @@ struct tcpcb {
 #define	TF_RCVD_CC	0x04000		/* a CC was received in SYN */
 #define	TF_SENDCCNEW	0x08000		/* send CCnew instead of CC in SYN */
 #define	TF_MORETOCOME	0x10000		/* More data to be appended to sock */
+#define	TF_LQ_OVERFLOW	0x20000		/* listen queue overflow */
+#define	TF_RXWIN0SENT	0x40000		/* sent a receiver win 0 in response */
+
 	int	t_force;		/* 1 if forcing out a byte */
 
 	tcp_seq	snd_una;		/* send unacknowledged */
@@ -157,12 +155,12 @@ struct tcpcb {
 					 */
 	u_int	t_maxopd;		/* mss plus options */
 
-	u_int	t_idle;			/* inactivity time */
-	u_long	t_duration;		/* connection duration */
-	int	t_rtt;			/* round trip time */
+	u_long	t_rcvtime;		/* inactivity time */
+	u_long	t_starttime;		/* time connection was established */
+	int	t_rtttime;		/* round trip time */
 	tcp_seq	t_rtseq;		/* sequence number being timed */
 
-	int	t_rxtcur;		/* current retransmit value */
+	int	t_rxtcur;		/* current retransmit value (ticks) */
 	u_int	t_maxseg;		/* maximum segment size */
 	int	t_srtt;			/* smoothed round-trip time */
 	int	t_rttvar;		/* variance in round-trip time */
@@ -190,7 +188,11 @@ struct tcpcb {
 /* RFC 1644 variables */
 	tcp_cc	cc_send;		/* send connection count */
 	tcp_cc	cc_recv;		/* receive connection count */
-	u_long	reserved[4];
+	tcp_seq	snd_recover;		/* for use in fast recovery */
+/* experimental */
+	u_long	snd_cwnd_prev;		/* cwnd prior to retransmit */
+	u_long	snd_ssthresh_prev;	/* ssthresh prior to retransmit */
+	u_long	t_badrxtwin;		/* window for retransmit recovery */
 };
 
 /*
@@ -209,7 +211,7 @@ struct tcpopt {
 	u_long	to_tsecr;
 	tcp_cc	to_cc;		/* holds CC or CCnew */
 	tcp_cc	to_ccecho;
-	u_short to_maxseg;
+	u_short 	reserved;		/* unused now: was to_maxseg */
 };
 
 /*
@@ -266,7 +268,9 @@ struct rmxp_tao {
 #define	TCP_REXMTVAL(tp) \
 	max((tp)->t_rttmin, (((tp)->t_srtt >> (TCP_RTT_SHIFT - TCP_DELTA_SHIFT))  \
 	  + (tp)->t_rttvar) >> TCP_DELTA_SHIFT)
+#endif /* __APPLE_API_PRIVATE */
 
+#ifdef __APPLE_API_UNSTABLE
 /*
  * TCP statistics.
  * Many of these should be kept per connection,
@@ -337,6 +341,7 @@ struct	tcpstat {
 	u_long	tcps_mturesent;		/* resends due to MTU discovery */
 	u_long	tcps_listendrop;	/* listen queue overflows */
 };
+#endif /* __APPLE_API_UNSTABLE */
 
 /*
  * TCB structure exported to user-land via sysctl(3).
@@ -365,10 +370,11 @@ struct	xtcpcb {
 #define	TCPCTL_KEEPINTVL	7	/* interval to send keepalives */
 #define	TCPCTL_SENDSPACE	8	/* send buffer space */
 #define	TCPCTL_RECVSPACE	9	/* receive buffer space */
-#define	TCPCTL_KEEPINIT		10	/* receive buffer space */
+#define	TCPCTL_KEEPINIT		10	/* timeout for establishing syn */
 #define	TCPCTL_PCBLIST		11	/* list of all outstanding PCBs */
-#define	TCPCTL_V6MSSDFLT	12	/* MSS default for IPv6 */
-#define TCPCTL_MAXID		13
+#define	TCPCTL_DELACKTIME	12	/* time before sending delayed ACK */
+#define	TCPCTL_V6MSSDFLT	13	/* MSS default for IPv6 */
+#define	TCPCTL_MAXID		14
 
 #define TCPCTL_NAMES { \
 	{ 0, 0 }, \
@@ -383,9 +389,11 @@ struct	xtcpcb {
 	{ "recvspace", CTLTYPE_INT }, \
 	{ "keepinit", CTLTYPE_INT }, \
 	{ "pcblist", CTLTYPE_STRUCT }, \
+	{ "delacktime", CTLTYPE_INT }, \
 	{ "v6mssdflt", CTLTYPE_INT }, \
 }
 
+#ifdef __APPLE_API_PRIVATE
 #ifdef KERNEL
 #ifdef SYSCTL_DECL
 SYSCTL_DECL(_net_inet_tcp);
@@ -395,18 +403,20 @@ extern	struct inpcbhead tcb;		/* head of queue of active tcpcb's */
 extern	struct inpcbinfo tcbinfo;
 extern	struct tcpstat tcpstat;	/* tcp statistics */
 extern	int tcp_mssdflt;	/* XXX */
-extern	int tcp_v6mssdflt;	/* XXX */
-extern	u_long tcp_now;		/* for RFC 1323 timestamps */
 extern	int tcp_delack_enabled;
+extern	int tcp_do_newreno;
+extern	int ss_fltsz;
+extern	int ss_fltsz_local;
+#ifdef __APPLE__
+extern	u_long tcp_now;		/* for RFC 1323 timestamps */ 
+extern	int tcp_delack_enabled;
+#endif
+
 
 void	 tcp_canceltimers __P((struct tcpcb *));
 struct tcpcb *
 	 tcp_close __P((struct tcpcb *));
 void	 tcp_ctlinput __P((int, struct sockaddr *, void *));
-#if INET6
-struct ip6_hdr;
-void	 tcp6_ctlinput __P((int, struct sockaddr *,void *));
-#endif
 int	 tcp_ctloutput __P((struct socket *, struct sockopt *));
 struct tcpcb *
 	 tcp_drop __P((struct tcpcb *, int));
@@ -414,79 +424,36 @@ void	 tcp_drain __P((void));
 void	 tcp_fasttimo __P((void));
 struct rmxp_tao *
 	 tcp_gettaocache __P((struct inpcb *));
-void     tcp_init __P((void));
-#if INET6
-void     tcp6_init __P((void));
-int	 tcp6_input __P((struct mbuf **, int *, int));
-#endif /* INET6 */
+void	 tcp_init __P((void));
 void	 tcp_input __P((struct mbuf *, int));
-#if INET6
-void	 tcp_mss __P((struct tcpcb *, int, int));
-int	 tcp_mssopt __P((struct tcpcb *, int));
-#else /* INET6 */
 void	 tcp_mss __P((struct tcpcb *, int));
 int	 tcp_mssopt __P((struct tcpcb *));
-#endif /* INET6 */
-
+void	 tcp_drop_syn_sent __P((struct inpcb *, int));
 void	 tcp_mtudisc __P((struct inpcb *, int));
 struct tcpcb *
 	 tcp_newtcpcb __P((struct inpcb *));
 int	 tcp_output __P((struct tcpcb *));
 void	 tcp_quench __P((struct inpcb *, int));
-#if INET6
-void	 tcp_respond __P((struct tcpcb *, void *, struct tcphdr *,
-			  struct mbuf *, tcp_seq, tcp_seq, int, int));
-#else /* INET6 */
-void	 tcp_respond __P((struct tcpcb *, void *, struct tcphdr *,
-			  struct mbuf *, tcp_seq, tcp_seq, int));
-#endif /* INET6 */
-
+void	 tcp_respond __P((struct tcpcb *, void *,
+	    struct tcphdr *, struct mbuf *, tcp_seq, tcp_seq, int));
 struct rtentry *
 	 tcp_rtlookup __P((struct inpcb *));
-#if INET6
-struct rtentry *
-	 tcp_rtlookup6 __P((struct inpcb *));
-#endif /* INET6 */
 void	 tcp_setpersist __P((struct tcpcb *));
 void	 tcp_slowtimo __P((void));
 struct tcptemp *
-	 tcp_template __P((struct tcpcb *));
+	 tcp_maketemplate __P((struct tcpcb *));
+void	 tcp_fillheaders __P((struct tcpcb *, void *, void *));
 struct tcpcb *
 	 tcp_timers __P((struct tcpcb *, int));
-#if INET6
-void	 tcp_trace __P((int, int, struct tcpcb *, void *, struct tcphdr *, 
+void	 tcp_trace __P((int, int, struct tcpcb *, void *, struct tcphdr *,
 			int));
-#else
-void	 tcp_trace __P((int, int, struct tcpcb *, struct ip *,
-			struct tcphdr *, int));
-#endif
-
-#if INET6
-int	 tcp_reass __P((struct tcpcb *, struct tcphdr *, int,
-	    struct mbuf *, int));
-#else /* INET6 */
-int	 tcp_reass __P((struct tcpcb *, struct tcphdr *, int, struct mbuf *));
-/* suppress INET6 only args */
-#define tcp_reass(x, y, z, t, i)		tcp_reass(x, y, z, t)
-#define tcp_mss(x, y, i)			tcp_mss(x, y)
-#define tcp_mssopt(x, i)			tcp_mssopt(x)
-#define tcp_respond(x, y, z, m, s1, s2, f, i)	tcp_respond(x, y, z, m, s1, \
-							    s2, f)
-
-#endif /* INET6 */
 
 extern	struct pr_usrreqs tcp_usrreqs;
-#if INET6
-extern	struct pr_usrreqs tcp6_usrreqs;
-#endif /* INET6 */
 extern	u_long tcp_sendspace;
 extern	u_long tcp_recvspace;
-void		tcp_rndiss_init __P((void));
-tcp_seq		tcp_rndiss_next __P((void));
-u_int16_t	tcp_rndiss_encrypt __P((u_int16_t));
- 
-
+tcp_seq tcp_new_isn __P((struct tcpcb *));
 
 #endif /* KERNEL */
+#endif /* __APPLE_API_PRIVATE */
 
 #endif /* _NETINET_TCP_VAR_H_ */

@@ -1,3 +1,6 @@
+/*	$FreeBSD: src/sys/crypto/cast128/cast128.h,v 1.1.2.3 2001/12/05 05:54:57 ume Exp $	*/
+/*	$KAME: cast128.h,v 1.7 2001/11/27 09:47:32 sakane Exp $	*/
+
 /*
  * heavily modified by Tomomi Suzuki <suzuki@grelot.elec.ryukoku.ac.jp>
  */
@@ -37,14 +40,13 @@
 #define RFC2144_CAST_128_H
 
 #include <sys/param.h>
-#include <sys/mbuf.h>
 
 
 #define	CAST128_ENCRYPT	1
 #define	CAST128_DECRYPT	0
 
 
-extern void set_cast128_subkey __P((u_int32_t *, u_int8_t *));
+extern void set_cast128_subkey __P((u_int32_t *, u_int8_t *, int));
 extern void cast128_encrypt_round16 __P((u_int8_t *, const u_int8_t *,
 					u_int32_t *));
 extern void cast128_decrypt_round16 __P((u_int8_t *, const u_int8_t *,
@@ -53,8 +55,5 @@ extern void cast128_encrypt_round12 __P((u_int8_t *, const u_int8_t *,
 					u_int32_t *));
 extern void cast128_decrypt_round12 __P((u_int8_t *, const u_int8_t *,
 					u_int32_t *));
-extern void cast128_cbc_process __P((struct mbuf *, size_t, size_t,
-				u_int32_t *, u_int8_t *, size_t, int));
-
 #endif
 

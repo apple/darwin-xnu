@@ -26,6 +26,11 @@
 #ifndef	_MACH_PPC_THREAD_STATUS_H_
 #define _MACH_PPC_THREAD_STATUS_H_
 
+#include <sys/appleapiopts.h>
+
+#ifdef MACH_KERNEL_PRIVATE
+#include <ppc/savearea.h>
+#endif
 /*
  * ppc_thread_state is the structure that is exported to user threads for 
  * use in status/mutate calls.  This structure should never change.
@@ -117,61 +122,15 @@ typedef struct ppc_vector_state {
 /*
  * saved state structure
  *
- * This structure corresponds to the state of the user registers as saved
- * on the stack upon kernel entry (saved in pcb). On interrupts and exceptions
- * we save all registers. On system calls we only save the registers not
- * saved by the caller.
+ * This structure corresponds to the saved state. 
  *
  */
 
-typedef struct ppc_saved_state {
-	unsigned int srr0;      /* Instruction address register (PC) */
-	unsigned int srr1;	/* Machine state register (supervisor) */
-	unsigned int r0;
-	unsigned int r1;
-	unsigned int r2;
-	unsigned int r3;
-	unsigned int r4;
-	unsigned int r5;
-	unsigned int r6;
-	unsigned int r7;
-	unsigned int r8;
-	unsigned int r9;
-	unsigned int r10;
-	unsigned int r11;
-	unsigned int r12;
-	unsigned int r13;
-	unsigned int r14;
-	unsigned int r15;
-	unsigned int r16;
-	unsigned int r17;
-	unsigned int r18;
-	unsigned int r19;
-	unsigned int r20;
-	unsigned int r21;
-	unsigned int r22;
-	unsigned int r23;
-	unsigned int r24;
-	unsigned int r25;
-	unsigned int r26;
-	unsigned int r27;
-	unsigned int r28;
-	unsigned int r29;
-	unsigned int r30;
-	unsigned int r31;
-
-	unsigned int cr;        /* Condition register */
-	unsigned int xer;		/* User's integer exception register */
-	unsigned int lr;		/* Link register */
-	unsigned int ctr;		/* Count register */
-	unsigned int mq;		/* MQ register (601 only) */
-	unsigned int vrsave;	/* Vector Register Save */
-
-/*	These are extra.  Remove them from the count */
-
-	unsigned int sr_copyin; /* SR_COPYIN is used for remapping */
-	unsigned int pad2[7];	/* struct alignment */
-} ppc_saved_state_t;
+#if defined(__APPLE_API_PRIVATE) && defined(MACH_KERNEL_PRIVATE)
+typedef struct savearea ppc_saved_state_t;
+#else
+typedef struct ppc_thread_state ppc_saved_state_t;
+#endif /* __APPLE_API_PRIVATE && MACH_KERNEL_PRIVATE */
 
 /*
  * ppc_exception_state

@@ -81,8 +81,8 @@
 #include <vm/vm_kern.h>
 #include <mach/vm_param.h>
 
-#include <osfmk/ppc/Diagnostics.h>
-#include <osfmk/ppc/mappings.h>
+#include <ppc/Diagnostics.h>
+#include <ppc/mappings.h>
 
 static caddr_t devzerobuf;
 

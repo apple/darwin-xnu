@@ -1,3 +1,6 @@
+/*	$FreeBSD: src/sys/crypto/des/des_setkey.c,v 1.1.2.3 2001/07/10 09:46:35 ume Exp $	*/
+/*	$KAME: des_setkey.c,v 1.6 2001/07/03 14:27:53 itojun Exp $	*/
+
 /* crypto/des/set_key.c */
 /* Copyright (C) 1995-1996 Eric Young (eay@mincom.oz.au)
  * All rights reserved.
@@ -52,15 +55,13 @@
  * 1.1 added norm_expand_bits
  * 1.0 First working version
  */
+#include <sys/param.h>
+#include <sys/systm.h>
 #include <crypto/des/des_locl.h>
 #include <crypto/des/podd.h>
 #include <crypto/des/sk.h>
 
-#ifndef NOPROTO
-static int check_parity(des_cblock (*key));
-#else
-static int check_parity();
-#endif
+static int check_parity __P((des_cblock (*)));
 
 int des_check_key=0;
 
@@ -126,10 +127,7 @@ des_cblock (*key);
 		 * this section very often :-(, thanks to
 		 * engineering@MorningStar.Com for the fix
 		 * eay 93/06/29 */
-/*
-		if (memcmp(weak_keys[i],key,sizeof(key)) == 0) return(1);
-*/
-		if (bcmp(weak_keys[i],key,sizeof(key)) == 0) return(1);
+		if (bcmp(weak_keys[i],key,sizeof(*key)) == 0) return(1);
 	return(0);
 	}
 

@@ -131,8 +131,3 @@ ${MIG_KSSRC}: \
 
 include $(MakeInc_rule)
 include $(MakeInc_dir)
-
-include $(MakeInc_rule)
-include $(MakeInc_dir)
-
-

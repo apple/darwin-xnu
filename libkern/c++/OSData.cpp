@@ -21,11 +21,13 @@
  */
 /* IOData.m created by rsulack on Thu 25-Sep-1997 */
 
+#include <string.h>
 
 #include <libkern/c++/OSData.h>
 #include <libkern/c++/OSSerialize.h>
 #include <libkern/c++/OSLib.h>
 #include <libkern/c++/OSString.h>
+#include <string.h>
 
 #define super OSObject
 

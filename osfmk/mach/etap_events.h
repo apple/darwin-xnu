@@ -36,6 +36,9 @@
 #ifndef _MACH_ETAP_EVENTS_H_
 #define _MACH_ETAP_EVENTS_H_
 
+#include <sys/appleapiopts.h>
+
+#ifdef __APPLE_API_UNSTABLE
 
 /* ============================
  *  ETAP Subsystem Definitions 
@@ -318,6 +321,9 @@
 #define ETAP_P_MISC			(ETAP_SUBS_PROBE + ETAP_SYS_BASE +  10)
 #define ETAP_P_DETAP			(ETAP_SUBS_PROBE + ETAP_SYS_BASE +  11)
 
+#endif  /* __APPLE_API_UNSTABLE */
+
+#ifdef  __APPLE_API_OBSOLETE
 /* ===========================
  *  ETAP Thread block reasons
  * ===========================
@@ -335,5 +341,7 @@
 #define BLOCKED_ON_REAPER_DONE		7
 #define BLOCKED_ON_IDLE_DONE		8
 #define BLOCKED_ON_TERMINATION		9
- 
+
+#endif  /* __APPLE_API_OBSOLETE */
+
 #endif  /* _MACH_ETAP_EVENTS_H_ */

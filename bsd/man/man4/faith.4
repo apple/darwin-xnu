@@ -1,0 +1,124 @@
+.\"	$KAME: faith.4,v 1.9 2001/04/27 17:26:35 itojun Exp $
+.\"
+.\" Copyright (C) 1995, 1996, 1997, and 1998 WIDE Project.
+.\" All rights reserved.
+.\"
+.\" Redistribution and use in source and binary forms, with or without
+.\" modification, are permitted provided that the following conditions
+.\" are met:
+.\" 1. Redistributions of source code must retain the above copyright
+.\"    notice, this list of conditions and the following disclaimer.
+.\" 2. Redistributions in binary form must reproduce the above copyright
+.\"    notice, this list of conditions and the following disclaimer in the
+.\"    documentation and/or other materials provided with the distribution.
+.\" 3. Neither the name of the project nor the names of its contributors
+.\"    may be used to endorse or promote products derived from this software
+.\"    without specific prior written permission.
+.\"
+.\" THIS SOFTWARE IS PROVIDED BY THE PROJECT AND CONTRIBUTORS ``AS IS'' AND
+.\" ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+.\" IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
+.\" ARE DISCLAIMED.  IN NO EVENT SHALL THE PROJECT OR CONTRIBUTORS BE LIABLE
+.\" FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
+.\" DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS
+.\" OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION)
+.\" HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT
+.\" LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
+.\" OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
+.\" SUCH DAMAGE.
+.\"
+.\"     $FreeBSD: src/share/man/man4/faith.4,v 1.6.2.3 2001/07/03 11:01:24 ume Exp $
+.\"
+.Dd April 10, 1999
+.Dt FAITH 4
+.Os
+.Sh NAME
+.Nm faith
+.Nd IPv6-to-IPv4 TCP relay capturing interface
+.Sh SYNOPSIS
+.Cd "pseudo-device faith" Op Ar count
+.Sh DESCRIPTION
+The
+.Nm
+interface captures IPv6 TCP traffic,
+for implementing userland IPv6-to-IPv4 TCP relay
+like
+.Xr faithd 8 .
+.Pp
+Special action will be taken when IPv6 TCP traffic is seen on a router,
+and routing table suggests to route it to
+.Nm
+interface.
+In this case, the packet will be accepted by the router,
+regardless of list of IPv6 interface addresses assigned to the router.
+The packet will be captured by an IPv6 TCP socket, if it has
+.Dv IN6P_FAITH
+flag turned on and it has matching address/port pairs.
+In result,
+.Nm
+will let you capture IPv6 TCP traffic to some specific destination addresses.
+Userland programs, such as
+.Xr faithd 8
+can use this behavior to relay IPv6 TCP traffic to IPv4 TCP traffic.
+The program can accept some specific IPv6 TCP traffic, perform
+.Xr getsockname 2
+to get the IPv6 destination address specified by the client,
+and perform application-specific address mapping to relay IPv6 TCP to IPv4 TCP.
+.Pp
+The
+.Dv IN6P_FAITH
+flag on IPv6 TCP socket can be set by using
+.Xr setsockopt 2 ,
+with level equals to
+.Dv IPPROTO_IPV6
+and optname equals to
+.Dv IPv6_FAITH .
+.Pp
+To handle error reports by ICMPv6, some of ICMPv6 packets routed to
+.Nm
+interface will be delivered to IPv6 TCP, as well.
+.Pp
+To understand how
+.Nm
+can be used, take a look at source code of
+.Xr faithd 8 .
+.Pp
+As
+.Nm
+interface implements potentially dangerous operation,
+great care must be taken when configuring
+.Nm
+interface.
+To avoid possible misuse,
+.Xr sysctl 8
+variable
+.Li net.inet6.ip6.keepfaith
+must be set to
+.Li 1
+prior to the use of the interface.
+When
+.Li net.inet6.ip6.keepfaith
+is
+.Li 0 ,
+no packet will be captured by
+.Nm
+interface.
+.Pp
+.Nm
+interface is intended to be used on routers, not on hosts.
+.\"
+.Sh SEE ALSO
+.Xr inet 4 ,
+.Xr inet6 4 ,
+.Xr faithd 8
+.Rs
+.%A Jun-ichiro itojun Hagino
+.%A Kazu Yamamoto
+.%T "An IPv6-to-IPv4 transport relay translator"
+.%R internet draft
+.%N draft-ietf-ngtrans-tcpudp-relay-04.txt
+.%O work in progress material
+.Re
+.Sh HISTORY
+The FAITH IPv6-to-IPv4 TCP relay translator was first appeared in
+WIDE hydrangea IPv6 stack.

@@ -28,6 +28,7 @@
  *
  * @(#)ip_compat.h	1.8 1/14/96
  */
+#include <sys/appleapiopts.h>
 
 #if 0
 
@@ -202,7 +203,7 @@ typedef unsigned long   u_32_t;
  * Build some macros and #defines to enable the same code to compile anywhere
  * Well, that's the idea, anyway :-)
  */
-#if KERNEL
+#ifdef KERNEL
 # if SOLARIS
 #  define	MUTEX_ENTER(x)	mutex_enter(x)
 #  define	MUTEX_EXIT(x)	mutex_exit(x)

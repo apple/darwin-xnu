@@ -69,6 +69,7 @@
 #include <sys/vnode.h>
 #include <sys/malloc.h>
 #include <sys/ubc.h>
+#include <sys/quota.h>
 
 #include <sys/vm.h>
 #include <vfs/vfs_support.h>
@@ -295,6 +296,7 @@ ffs_fsync(ap)
 	struct buf *nbp;
 	int s;
 	struct inode *ip = VTOI(vp);
+	int retry = 0;
 
 	/*
 	 * Write out any clusters.
@@ -325,8 +327,6 @@ loop:
 			(void) bwrite(bp);
 		goto loop;
 	}
-	if (vp->v_flag & VHASDIRTY)
-		ubc_pushdirty(vp);
 
 	if (ap->a_waitfor == MNT_WAIT) {
 		while (vp->v_numoutput) {
@@ -334,12 +334,25 @@ loop:
 			tsleep((caddr_t)&vp->v_numoutput, PRIBIO + 1, "ffs_fsync", 0);
 		}
 
-		/* I have seen this happen for swapfile. So it is safer to
-		 * check for dirty buffers again.  --Umesh
-		 */
-		if (vp->v_dirtyblkhd.lh_first || (vp->v_flag & VHASDIRTY)) {
-			vprint("ffs_fsync: dirty", vp);
-			splx(s);
+		if (vp->v_dirtyblkhd.lh_first) {
+			/* still have some dirty buffers */
+			if (retry++ > 10) {
+				vprint("ffs_fsync: dirty", vp);
+				splx(s);
+				/*
+				 * Looks like the requests are not
+				 * getting queued to the driver.
+				 * Retrying here causes a cpu bound loop.
+				 * Yield to the other threads and hope
+				 * for the best.
+				 */
+				(void)tsleep((caddr_t)&vp->v_numoutput,
+						PRIBIO + 1, "ffs_fsync", hz/10);
+				retry = 0;
+			} else {
+				splx(s);
+			}
+			/* try again */
 			goto loop;
 		}
 	}

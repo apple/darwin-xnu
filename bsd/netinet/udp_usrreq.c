@@ -52,6 +52,7 @@
  * SUCH DAMAGE.
  *
  *	@(#)udp_usrreq.c	8.6 (Berkeley) 5/23/95
+ * $FreeBSD: src/sys/netinet/udp_usrreq.c,v 1.64.2.13 2001/08/08 18:59:54 ghelmer Exp $
  */
 
 #include <sys/param.h>
@@ -59,19 +60,12 @@
 #include <sys/kernel.h>
 #include <sys/malloc.h>
 #include <sys/mbuf.h>
-#if INET6
 #include <sys/domain.h>
-#endif
 #include <sys/protosw.h>
 #include <sys/socket.h>
 #include <sys/socketvar.h>
 #include <sys/sysctl.h>
 #include <sys/syslog.h>
-
-#if ISFB31
-#include <vm/vm_zone.h>
-#endif
-
 
 #include <net/if.h>
 #include <net/route.h>
@@ -79,21 +73,24 @@
 #include <netinet/in.h>
 #include <netinet/in_systm.h>
 #include <netinet/ip.h>
+#if INET6
+#include <netinet/ip6.h>
+#endif
 #include <netinet/in_pcb.h>
 #include <netinet/in_var.h>
 #include <netinet/ip_var.h>
-#include <netinet/ip_icmp.h>
-#include <netinet/icmp_var.h>
 #if INET6
-#include <netinet/ip6.h>
 #include <netinet6/ip6_var.h>
 #endif
+#include <netinet/ip_icmp.h>
+#include <netinet/icmp_var.h>
 #include <netinet/udp.h>
 #include <netinet/udp_var.h>
 #include <sys/kdebug.h>
 
 #if IPSEC
 #include <netinet6/ipsec.h>
+extern int ipsec_bypass;
 #endif /*IPSEC*/
 
 
@@ -104,10 +101,6 @@
 #define DBG_FNC_UDP_INPUT	NETDBG_CODE(DBG_NETUDP, (5 << 8))
 #define DBG_FNC_UDP_OUTPUT	NETDBG_CODE(DBG_NETUDP, (6 << 8) | 1)
 
-
-#ifndef offsetof               /* XXX */
-#define        offsetof(type, member)  ((size_t)(&((type *)0)->member))
-#endif
 
 #define __STDC__ 1
 /*
@@ -122,9 +115,13 @@ static int	udpcksum = 0;		/* XXX */
 SYSCTL_INT(_net_inet_udp, UDPCTL_CHECKSUM, checksum, CTLFLAG_RW,
 		&udpcksum, 0, "");
 
-int log_in_vain;
+int	log_in_vain = 0;
 SYSCTL_INT(_net_inet_udp, OID_AUTO, log_in_vain, CTLFLAG_RW, 
-	&log_in_vain, 0, "");
+    &log_in_vain, 0, "Log all incoming UDP packets");
+
+static int	blackhole = 0;
+SYSCTL_INT(_net_inet_udp, OID_AUTO, blackhole, CTLFLAG_RW,
+	&blackhole, 0, "Do not send port unreachables for refused connects");
 
 struct	inpcbhead udb;		/* from udp_var.h */
 #define	udb6	udb  /* for KAME src sync over BSD*'s */
@@ -138,7 +135,7 @@ extern  int apple_hwcksum_rx;
 
 struct	udpstat udpstat;	/* from udp_var.h */
 SYSCTL_STRUCT(_net_inet_udp, UDPCTL_STATS, stats, CTLFLAG_RD,
-	&udpstat, udpstat, "");
+    &udpstat, udpstat, "UDP statistics (struct udpstat, netinet/udp_var.h)");
 
 static struct	sockaddr_in udp_in = { sizeof(udp_in), AF_INET };
 #if INET6
@@ -162,8 +159,8 @@ static void ip_2_ip6_hdr __P((struct ip6_hdr *ip6, struct ip *ip));
 #endif
 
 static int udp_detach __P((struct socket *so));
-static int udp_output __P((struct inpcb *, struct mbuf *, struct sockaddr *,
-			   struct mbuf *, struct proc *));
+static	int udp_output __P((struct inpcb *, struct mbuf *, struct sockaddr *,
+			    struct mbuf *, struct proc *));
 
 void
 udp_init()
@@ -180,18 +177,19 @@ udp_init()
 	udbinfo.hashbase = hashinit(UDBHASHSIZE, M_PCB, &udbinfo.hashmask);
 	udbinfo.porthashbase = hashinit(UDBHASHSIZE, M_PCB,
 					&udbinfo.porthashmask);
-#if ISFB31
-	udbinfo.ipi_zone = zinit("udpcb", sizeof(struct inpcb), maxsockets,
-				 ZONE_INTERRUPT, 0);
-#else
+#ifdef __APPLE__
 	str_size = (vm_size_t) sizeof(struct inpcb);
-	udbinfo.ipi_zone = (void *) zinit(str_size, 80000*str_size, 8192, "inpcb_zone");
-#endif
+	udbinfo.ipi_zone = (void *) zinit(str_size, 80000*str_size, 8192, "udpcb");
 
 	udbinfo.last_pcb = 0;
 	in_pcb_nat_init(&udbinfo, AF_INET, IPPROTO_UDP, SOCK_DGRAM);
+#else
+	udbinfo.ipi_zone = zinit("udpcb", sizeof(struct inpcb), maxsockets,
+				 ZONE_INTERRUPT, 0);
+#endif
 
 #if 0
+	/* for pcb sharing testing only */
 	stat = in_pcb_new_share_client(&udbinfo, &fake_owner);
 	kprintf("udp_init in_pcb_new_share_client - stat = %d\n", stat);
 
@@ -226,20 +224,15 @@ udp_input(m, iphlen)
 	register struct udphdr *uh;
 	register struct inpcb *inp;
 	struct mbuf *opts = 0;
-#if INET6
-	struct ip6_recvpktopts opts6;
-#endif 
 	int len;
 	struct ip save_ip;
 	struct sockaddr *append_sa;
 
 	udpstat.udps_ipackets++;
-#if INET6
-	bzero(&opts6, sizeof(opts6));
-#endif
-
 
 	KERNEL_DEBUG(DBG_FNC_UDP_INPUT | DBG_FUNC_START, 0,0,0,0,0);
+	if (m->m_pkthdr.csum_flags & CSUM_TCP_SUM16)
+		m->m_pkthdr.csum_flags = 0; /* invalidate hwcksum for UDP */
 
 	/*
 	 * Strip IP options, if any; should skip this,
@@ -250,8 +243,6 @@ udp_input(m, iphlen)
 	if (iphlen > sizeof (struct ip)) {
 		ip_stripoptions(m, (struct mbuf *)0);
 		iphlen = sizeof(struct ip);
-		if (m->m_pkthdr.csum_flags & CSUM_TCP_SUM16)
-			m->m_pkthdr.csum_flags = 0; /* invalidate hwcksum */
 	}
 
 	/*
@@ -267,6 +258,10 @@ udp_input(m, iphlen)
 		ip = mtod(m, struct ip *);
 	}
 	uh = (struct udphdr *)((caddr_t)ip + iphlen);
+
+	/* destination port of 0 is illegal, based on RFC768. */
+	if (uh->uh_dport == 0)
+		goto bad;
 
 	KERNEL_DEBUG(DBG_LAYER_IN_BEG, uh->uh_dport, uh->uh_sport,
 		     ip->ip_src.s_addr, ip->ip_dst.s_addr, uh->uh_ulen);
@@ -297,17 +292,8 @@ udp_input(m, iphlen)
                if (m->m_pkthdr.csum_flags & CSUM_DATA_VALID) {
                         if (m->m_pkthdr.csum_flags & CSUM_PSEUDO_HDR)
                                 uh->uh_sum = m->m_pkthdr.csum_data;
-                        else {
-                        	if (apple_hwcksum_rx && (m->m_pkthdr.csum_flags & CSUM_TCP_SUM16)) {
-					bzero(((struct ipovly *)ip)->ih_x1, 9);
-					((struct ipovly *)ip)->ih_len = uh->uh_ulen;
-					uh->uh_sum = in_addword(in_cksum(m, sizeof(struct ip)),
-						 m->m_pkthdr.csum_data & 0xFFFF);
-				}
-				else  {
-			           goto doudpcksum;
-				}
-			}
+                        else
+			    goto doudpcksum;
                       uh->uh_sum ^= 0xffff;
                 } else {
 doudpcksum:
@@ -322,6 +308,10 @@ doudpcksum:
 			return;
 		}
 	}
+#ifndef __APPLE__
+	 else
+		udpstat.udps_nosum++;
+#endif
 
 	if (IN_MULTICAST(ntohl(ip->ip_dst.s_addr)) ||
 	    in_broadcast(ip->ip_dst, m->m_pkthdr.rcvif)) {
@@ -356,6 +346,11 @@ doudpcksum:
 		udp_in6.uin6_init_done = udp_ip6.uip6_init_done = 0;
 #endif
 		LIST_FOREACH(inp, &udb, inp_list) {
+#ifdef __APPLE__
+			/* Ignore nat/SharedIP dummy pcbs */
+			if (inp->inp_socket == &udbinfo.nat_dummy_socket)
+				continue;
+#endif
 #if INET6
 			if ((inp->inp_vflag & INP_IPV4) == 0)
 				continue;
@@ -379,14 +374,15 @@ doudpcksum:
 
 #if IPSEC
 				/* check AH/ESP integrity. */
-				if (ipsec4_in_reject_so(m, last->inp_socket)) {
+				if (ipsec_bypass == 0 && ipsec4_in_reject_so(m, last->inp_socket)) {
 					ipsecstat.in_polvio++;
 					/* do not inject data to pcb */
 				} else
 #endif /*IPSEC*/
 				if ((n = m_copy(m, 0, M_COPYALL)) != NULL) {
-					udp_append(last, ip, n, iphlen +
-						sizeof (struct udphdr));
+					udp_append(last, ip, n,
+						   iphlen +
+						   sizeof(struct udphdr));
 				}
 			}
 			last = inp;
@@ -412,14 +408,13 @@ doudpcksum:
 			goto bad;
 		}
 #if IPSEC
-		else
 		/* check AH/ESP integrity. */
-		if (m && ipsec4_in_reject_so(m, last->inp_socket)) {
+		if (ipsec_bypass == 0 && m && ipsec4_in_reject_so(m, last->inp_socket)) {
 			ipsecstat.in_polvio++;
 			goto bad;
 		}
 #endif /*IPSEC*/
-		udp_append(last, ip, m, iphlen + sizeof (struct udphdr));
+		udp_append(last, ip, m, iphlen + sizeof(struct udphdr));
 		return;
 	}
 	/*
@@ -442,17 +437,20 @@ doudpcksum:
 			udpstat.udps_noportbcast++;
 			goto bad;
 		}
-		*ip = save_ip;
 #if ICMP_BANDLIM
-		if (badport_bandlim(0) < 0)
+		if (badport_bandlim(BANDLIM_ICMP_UNREACH) < 0)
 			goto bad;
 #endif
+		if (blackhole)
+			goto bad;
+		*ip = save_ip;
+		ip->ip_len += iphlen;
 		icmp_error(m, ICMP_UNREACH, ICMP_UNREACH_PORT, 0, 0);
 		KERNEL_DEBUG(DBG_FNC_UDP_INPUT | DBG_FUNC_END, 0,0,0,0,0);
 		return;
 	}
 #if IPSEC
-	if (inp != NULL && ipsec4_in_reject_so(m, inp->inp_socket)) {
+	if (ipsec_bypass == 0 && inp != NULL && ipsec4_in_reject_so(m, inp->inp_socket)) {
 		ipsecstat.in_polvio++;
 		goto bad;
 	}
@@ -473,15 +471,13 @@ doudpcksum:
 			ip_2_ip6_hdr(&udp_ip6.uip6_ip6, ip);
 			savedflags = inp->inp_flags;
 			inp->inp_flags &= ~INP_UNMAPPABLEOPTS;
-			ip6_savecontrol(inp, &udp_ip6.uip6_ip6, m,
-					&opts6, NULL);
-
+			ip6_savecontrol(inp, &opts, &udp_ip6.uip6_ip6, m);
 			inp->inp_flags = savedflags;
 		} else
 #endif
 		ip_savecontrol(inp, &opts, ip, m);
 	}
-	m_adj(m, iphlen + sizeof(struct udphdr));
+ 	m_adj(m, iphlen + sizeof(struct udphdr));
 
 	KERNEL_DEBUG(DBG_LAYER_IN_END, uh->uh_dport, uh->uh_sport,
 		     save_ip.ip_src.s_addr, save_ip.ip_dst.s_addr, uh->uh_ulen);
@@ -490,7 +486,6 @@ doudpcksum:
 	if (inp->inp_vflag & INP_IPV6) {
 		in6_sin_2_v4mapsin6(&udp_in, &udp_in6.uin6_sin);
 		append_sa = (struct sockaddr *)&udp_in6;
-		opts = opts6.head;
 	} else
 #endif
 	append_sa = (struct sockaddr *)&udp_in;
@@ -506,6 +501,7 @@ bad:
 	if (opts)
 		m_freem(opts);
 	KERNEL_DEBUG(DBG_FNC_UDP_INPUT | DBG_FUNC_END, 0,0,0,0,0);
+	return;
 }
 
 #if INET6
@@ -536,14 +532,10 @@ udp_append(last, ip, n, off)
 	struct inpcb *last;
 	struct ip *ip;
 	struct mbuf *n;
+	int off;
 {
 	struct sockaddr *append_sa;
 	struct mbuf *opts = 0;
-#if INET6
-	struct ip6_recvpktopts opts6;
-	bzero(&opts6, sizeof(opts6));
-#endif
-
 
 	if (last->inp_flags & INP_CONTROLOPTS ||
 	    last->inp_socket->so_options & SO_TIMESTAMP) {
@@ -557,8 +549,7 @@ udp_append(last, ip, n, off)
 			}
 			savedflags = last->inp_flags;
 			last->inp_flags &= ~INP_UNMAPPABLEOPTS;
-			ip6_savecontrol(last, &udp_ip6.uip6_ip6, n,
-					&opts6, NULL);
+			ip6_savecontrol(last, &opts, &udp_ip6.uip6_ip6, n);
 			last->inp_flags = savedflags;
 		} else
 #endif
@@ -571,12 +562,10 @@ udp_append(last, ip, n, off)
 			udp_in6.uin6_init_done = 1;
 		}
 		append_sa = (struct sockaddr *)&udp_in6.uin6_sin;
-		opts = opts6.head;
 	} else
 #endif
 	append_sa = (struct sockaddr *)&udp_in;
 	m_adj(n, off);
-
 	if (sbappendaddr(&last->inp_socket->so_rcv, append_sa, n, opts) == 0) {
 		m_freem(n);
 		if (opts)
@@ -585,8 +574,6 @@ udp_append(last, ip, n, off)
 	} else
 		sorwakeup(last->inp_socket);
 }
-
-
 
 /*
  * Notify a udp user of an asynchronous error;
@@ -608,20 +595,35 @@ udp_ctlinput(cmd, sa, vip)
 	struct sockaddr *sa;
 	void *vip;
 {
-	register struct ip *ip = vip;
-	register struct udphdr *uh;
+	struct ip *ip = vip;
+	struct udphdr *uh;
+	void (*notify) __P((struct inpcb *, int)) = udp_notify;
+        struct in_addr faddr;
+	struct inpcb *inp;
+	int s;
 
-	if (!PRC_IS_REDIRECT(cmd) &&
-	    ((unsigned)cmd >= PRC_NCMDS || inetctlerrmap[cmd] == 0))
+	faddr = ((struct sockaddr_in *)sa)->sin_addr;
+	if (sa->sa_family != AF_INET || faddr.s_addr == INADDR_ANY)
+        	return;
+
+	if (PRC_IS_REDIRECT(cmd)) {
+		ip = 0;
+		notify = in_rtchange;
+	} else if (cmd == PRC_HOSTDEAD)
+		ip = 0;
+	else if ((unsigned)cmd >= PRC_NCMDS || inetctlerrmap[cmd] == 0)
 		return;
 	if (ip) {
+		s = splnet();
 		uh = (struct udphdr *)((caddr_t)ip + (ip->ip_hl << 2));
-		in_pcbnotify(&udb, sa, uh->uh_dport, ip->ip_src, uh->uh_sport,
-			cmd, udp_notify);
+		inp = in_pcblookup_hash(&udbinfo, faddr, uh->uh_dport,
+                    ip->ip_src, uh->uh_sport, 0, NULL);
+		if (inp != NULL && inp->inp_socket != NULL)
+			(*notify)(inp, inetctlerrmap[cmd]);
+		splx(s);
 	} else
-		in_pcbnotify(&udb, sa, 0, zeroin_addr, 0, cmd, udp_notify);
+		in_pcbnotifyall(&udb, faddr, inetctlerrmap[cmd], notify);
 }
-
 
 static int
 udp_pcblist SYSCTL_HANDLER_ARGS
@@ -660,19 +662,19 @@ udp_pcblist SYSCTL_HANDLER_ARGS
 	error = SYSCTL_OUT(req, &xig, sizeof xig);
 	if (error)
 		return error;
-        /*
-         * We are done if there is no pcb
-         */
-        if (n == 0)  
-            return 0; 
+    /*
+     * We are done if there is no pcb
+     */
+    if (n == 0)  
+        return 0; 
 
 	inp_list = _MALLOC(n * sizeof *inp_list, M_TEMP, M_WAITOK);
 	if (inp_list == 0) {
 		return ENOMEM;
 	}
-	s = splnet();
-	for (inp = udbinfo.listhead->lh_first, i = 0; inp && i < n;
-	     inp = inp->inp_list.le_next) {
+	
+	for (inp = LIST_FIRST(udbinfo.listhead), i = 0; inp && i < n;
+	     inp = LIST_NEXT(inp, inp_list)) {
 		if (inp->inp_gencnt <= gencnt)
 			inp_list[i++] = inp;
 	}
@@ -719,7 +721,7 @@ SYSCTL_PROC(_net_inet_udp, UDPCTL_PCBLIST, pcblist, CTLFLAG_RD, 0, 0,
 static int
 udp_output(inp, m, addr, control, p)
 	register struct inpcb *inp;
-	register struct mbuf *m;
+	struct mbuf *m;
 	struct sockaddr *addr;
 	struct mbuf *control;
 	struct proc *p;
@@ -781,26 +783,25 @@ udp_output(inp, m, addr, control, p)
 	 * and addresses and length put into network format.
 	 */
 	ui = mtod(m, struct udpiphdr *);
-	bzero(ui->ui_x1, sizeof(ui->ui_x1));
+	bzero(ui->ui_x1, sizeof(ui->ui_x1));	/* XXX still needed? */
 	ui->ui_pr = IPPROTO_UDP;
-	ui->ui_len = htons((u_short)len + sizeof (struct udphdr));
 	ui->ui_src = inp->inp_laddr;
 	ui->ui_dst = inp->inp_faddr;
 	ui->ui_sport = inp->inp_lport;
 	ui->ui_dport = inp->inp_fport;
-	ui->ui_ulen = ui->ui_len;
+	ui->ui_ulen = htons((u_short)len + sizeof(struct udphdr));
 
 	/*
-	 * Stuff checksum and output datagram.
+	 * Set up checksum and output datagram.
 	 */
 	if (udpcksum) {
-                ui->ui_sum = in_pseudo(ui->ui_src.s_addr, ui->ui_dst.s_addr,
-                    htons((u_short)len + sizeof(struct udphdr) + IPPROTO_UDP));
-                m->m_pkthdr.csum_flags = CSUM_UDP; 
-                m->m_pkthdr.csum_data = offsetof(struct udphdr, uh_sum);
-        } 
-	else
+        	ui->ui_sum = in_pseudo(ui->ui_src.s_addr, ui->ui_dst.s_addr,
+		    htons((u_short)len + sizeof(struct udphdr) + IPPROTO_UDP));
+		m->m_pkthdr.csum_flags = CSUM_UDP;
+		m->m_pkthdr.csum_data = offsetof(struct udphdr, uh_sum);
+	} else {
 		ui->ui_sum = 0;
+	}
 	((struct ip *)ui)->ip_len = sizeof (struct udpiphdr) + len;
 	((struct ip *)ui)->ip_ttl = inp->inp_ip_ttl;	/* XXX */
 	((struct ip *)ui)->ip_tos = inp->inp_ip_tos;	/* XXX */
@@ -809,13 +810,14 @@ udp_output(inp, m, addr, control, p)
 	KERNEL_DEBUG(DBG_LAYER_OUT_END, ui->ui_dport, ui->ui_sport,
 		     ui->ui_src.s_addr, ui->ui_dst.s_addr, ui->ui_ulen);
 
-
 #if IPSEC
-	ipsec_setsocket(m, inp->inp_socket);
+	if (ipsec_bypass == 0 && ipsec_setsocket(m, inp->inp_socket) != 0) {
+		error = ENOBUFS;
+		goto release;
+	}
 #endif /*IPSEC*/
-		
 	error = ip_output(m, inp->inp_options, &inp->inp_route,
-	    inp->inp_socket->so_options & (SO_DONTROUTE | SO_BROADCAST),
+	    (inp->inp_socket->so_options & (SO_DONTROUTE | SO_BROADCAST)),
 	    inp->inp_moptions);
 
 	if (addr) {
@@ -835,18 +837,17 @@ release:
 u_long	udp_sendspace = 9216;		/* really max datagram size */
 					/* 40 1K datagrams */
 SYSCTL_INT(_net_inet_udp, UDPCTL_MAXDGRAM, maxdgram, CTLFLAG_RW,
-	&udp_sendspace, 0, "");
+    &udp_sendspace, 0, "Maximum outgoing UDP datagram size");
 
-
-u_long	udp_recvspace = 40 * (1024 + /* 40 1K datagrams */
+u_long	udp_recvspace = 40 * (1024 +
 #if INET6
 				      sizeof(struct sockaddr_in6)
-#else /* INET6 */
+#else
 				      sizeof(struct sockaddr_in)
-#endif /* INET6 */
+#endif
 				      );
 SYSCTL_INT(_net_inet_udp, UDPCTL_RECVSPACE, recvspace, CTLFLAG_RW,
-	&udp_recvspace, 0, "");
+    &udp_recvspace, 0, "Maximum incoming UDP datagram size");
 
 static int
 udp_abort(struct socket *so)
@@ -870,29 +871,21 @@ udp_attach(struct socket *so, int proto, struct proc *p)
 	struct inpcb *inp;
 	int error; long s;
 
-	if (so->so_snd.sb_hiwat == 0 || so->so_rcv.sb_hiwat == 0) {
-		error = soreserve(so, udp_sendspace, udp_recvspace);
-		if (error)
-			return error;
-	}
+	inp = sotoinpcb(so);
+	if (inp != 0)
+		return EINVAL;
+
+	error = soreserve(so, udp_sendspace, udp_recvspace);
+	if (error)
+		return error;
 	s = splnet();
 	error = in_pcballoc(so, &udbinfo, p);
 	splx(s);
 	if (error)
 		return error;
-	error = soreserve(so, udp_sendspace, udp_recvspace);
-	if (error)
-		return error;
 	inp = (struct inpcb *)so->so_pcb;
 	inp->inp_vflag |= INP_IPV4;
 	inp->inp_ip_ttl = ip_defttl;
-#if IPSEC
-	error = ipsec_init_policy(so, &inp->inp_sp);
-	if (error != 0) {
-		in_pcbdetach(inp);
-		return error;
-	}
-#endif /*IPSEC*/
 	return 0;
 }
 

@@ -106,7 +106,7 @@ static struct rtclock {
 
 	clock_timer_func_t	timer_expire;
 
-	timer_call_data_t	alarm[NCPUS];
+	timer_call_data_t	alarm_timer;
 
 	/* debugging */
 	uint64_t			last_abstime[NCPUS];
@@ -190,13 +190,10 @@ timebase_callback(
 int
 sysclk_config(void)
 {
-	int			i;
-
 	if (cpu_number() != master_cpu)
 		return(1);
 
-	for (i = 0; i < NCPUS; i++)
-		timer_call_setup(&rtclock.alarm[i], rtclock_alarm_timer, NULL);
+	timer_call_setup(&rtclock.alarm_timer, rtclock_alarm_timer, NULL);
 
 	simple_lock_init(&rtclock.lock, ETAP_MISC_RT_CLOCK);
 
@@ -537,7 +534,7 @@ sysclk_setalarm(
 	uint64_t			abstime;
 
 	timespec_to_absolutetime(*deadline, &abstime);
-	timer_call_enter(&rtclock.alarm[cpu_number()], abstime);
+	timer_call_enter(&rtclock.alarm_timer, abstime);
 }
 
 /*
@@ -753,7 +750,7 @@ rtclock_reset(void)
 void
 rtclock_intr(
 	int						device,
-	struct ppc_saved_state	*ssp,
+	struct savearea			*ssp,
 	spl_t					old_spl)
 {
 	uint64_t				abstime;
@@ -775,7 +772,7 @@ rtclock_intr(
 	if (	rtclock_tick_deadline[mycpu] <= abstime		) {
 		clock_deadline_for_periodic_event(rtclock_tick_interval, abstime,
 										  		&rtclock_tick_deadline[mycpu]);
-		hertz_tick(USER_MODE(ssp->srr1), ssp->srr0);
+		hertz_tick(USER_MODE(ssp->save_srr1), ssp->save_srr0);
 	}
 
 	clock_get_uptime(&abstime);

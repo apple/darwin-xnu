@@ -83,19 +83,16 @@
 #include <miscfs/fdesc/fdesc.h>
 #include <vfs/vfs_support.h>
 
-#define cttyvp(p) ((p)->p_flag & P_CONTROLT ? (p)->p_session->s_ttyvp : NULL)
-
 #define FDL_WANT	0x01
 #define FDL_LOCKED	0x02
 static int fdcache_lock;
 
-dev_t devctty;
 
 #if (FD_STDIN != FD_STDOUT-1) || (FD_STDOUT != FD_STDERR-1)
 FD_STDIN, FD_STDOUT, FD_STDERR must be a sequence n, n+1, n+2
 #endif
 
-#define	NFDCACHE 4
+#define	NFDCACHE 3
 
 #define FD_NHASH(ix) \
 	(&fdhashtbl[(ix) & fdhash])
@@ -109,7 +106,6 @@ fdesc_init(vfsp)
 	struct vfsconf *vfsp;
 {
 
-	devctty = makedev(nchrdev, 0);
 	fdhashtbl = hashinit(NFDCACHE, M_CACHE, &fdhash);
 }
 
@@ -207,7 +203,6 @@ fdesc_lookup(ap)
 	default:
 	case Flink:
 	case Fdesc:
-	case Fctty:
 		error = ENOTDIR;
 		goto bad;
 
@@ -218,21 +213,6 @@ fdesc_lookup(ap)
 				goto bad;
 			*vpp = fvp;
 			fvp->v_type = VDIR;
-			vn_lock(fvp, LK_SHARED | LK_RETRY, p);
-			return (0);
-		}
-
-		if (cnp->cn_namelen == 3 && bcmp(pname, "tty", 3) == 0) {
-			struct vnode *ttyvp = cttyvp(p);
-			if (ttyvp == NULL) {
-				error = ENXIO;
-				goto bad;
-			}
-			error = fdesc_allocvp(Fctty, FD_CTTY, dvp->v_mount, &fvp);
-			if (error)
-				goto bad;
-			*vpp = fvp;
-			fvp->v_type = VCHR;
 			vn_lock(fvp, LK_SHARED | LK_RETRY, p);
 			return (0);
 		}
@@ -340,9 +320,6 @@ fdesc_open(ap)
 		error = ENODEV;
 		break;
 
-	case Fctty:
-		error = cttyopen(devctty, ap->a_mode, 0, ap->a_p);
-		break;
 	}
 
 	return (error);
@@ -397,7 +374,7 @@ fdesc_attr(fd, vap, cred, p)
 		break;
 
 	default:
-		panic("fdesc attr");
+		return (EBADF);
 		break;
 	}
 
@@ -422,7 +399,6 @@ fdesc_getattr(ap)
 	case Froot:
 	case Fdevfd:
 	case Flink:
-	case Fctty:
 		bzero((caddr_t) vap, sizeof(*vap));
 		vattr_null(vap);
 		vap->va_fileid = VTOFDESC(vp)->fd_ix;
@@ -448,14 +424,6 @@ fdesc_getattr(ap)
 			vap->va_size = strlen(VTOFDESC(vp)->fd_link);
 			break;
 
-		case Fctty:
-			vap->va_mode = S_IRUSR|S_IWUSR|S_IRGRP|S_IWGRP|S_IROTH|S_IWOTH;
-			vap->va_type = VCHR;
-			vap->va_nlink = 1;
-			vap->va_size = 0;
-			vap->va_rdev = devctty;
-			break;
-
 		default:
 			vap->va_mode = S_IRUSR|S_IXUSR|S_IRGRP|S_IXGRP|S_IROTH|S_IXOTH;
 			vap->va_type = VDIR;
@@ -471,7 +439,7 @@ fdesc_getattr(ap)
 		break;
 
 	default:
-		panic("fdesc_getattr");
+		return (EBADF);
 		break;	
 	}
 
@@ -501,9 +469,6 @@ fdesc_setattr(ap)
 	switch (VTOFDESC(ap->a_vp)->fd_type) {
 	case Fdesc:
 		break;
-
-	case Fctty:
-		return (0);
 
 	default:
 		return (EACCES);
@@ -546,7 +511,6 @@ static struct dirtmp {
 	{ FD_STDIN, UIO_MX, 5, "stdin" },
 	{ FD_STDOUT, UIO_MX, 6, "stdout" },
 	{ FD_STDERR, UIO_MX, 6, "stderr" },
-	{ FD_CTTY, UIO_MX, 3, "tty" },
 	{ 0 }
 };
 
@@ -570,12 +534,9 @@ fdesc_readdir(ap)
 	 * requests do not need cookies.
 	 */
 	if (ap->a_ncookies)
-		panic("fdesc_readdir: not hungry");
+		return (EINVAL);
 
 	switch (VTOFDESC(ap->a_vp)->fd_type) {
-	case Fctty:
-		return (0);
-
 	case Fdesc:
 		return (ENOTDIR);
 
@@ -601,11 +562,6 @@ fdesc_readdir(ap)
 			i++;
 			
 			switch (dt->d_fileno) {
-			case FD_CTTY:
-				if (cttyvp(uio->uio_procp) == NULL)
-					continue;
-				break;
-
 			case FD_STDIN:
 			case FD_STDOUT:
 			case FD_STDERR:
@@ -695,19 +651,8 @@ fdesc_read(ap)
 		struct ucred *a_cred;
 	} */ *ap;
 {
-	int error = EOPNOTSUPP;
 
-	switch (VTOFDESC(ap->a_vp)->fd_type) {
-	case Fctty:
-		error = cttyread(devctty, ap->a_uio, ap->a_ioflag);
-		break;
-
-	default:
-		error = EOPNOTSUPP;
-		break;
-	}
-	
-	return (error);
+	return (EOPNOTSUPP);
 }
 
 int
@@ -719,19 +664,7 @@ fdesc_write(ap)
 		struct ucred *a_cred;
 	} */ *ap;
 {
-	int error = EOPNOTSUPP;
-
-	switch (VTOFDESC(ap->a_vp)->fd_type) {
-	case Fctty:
-		error = cttywrite(devctty, ap->a_uio, ap->a_ioflag);
-		break;
-
-	default:
-		error = EOPNOTSUPP;
-		break;
-	}
-	
-	return (error);
+	return (EOPNOTSUPP);
 }
 
 int
@@ -745,20 +678,7 @@ fdesc_ioctl(ap)
 		struct proc *a_p;
 	} */ *ap;
 {
-	int error = EOPNOTSUPP;
-
-	switch (VTOFDESC(ap->a_vp)->fd_type) {
-	case Fctty:
-		error = cttyioctl(devctty, ap->a_command, ap->a_data,
-					ap->a_fflag, ap->a_p);
-		break;
-
-	default:
-		error = EOPNOTSUPP;
-		break;
-	}
-	
-	return (error);
+	return (EOPNOTSUPP);
 }
 
 int
@@ -772,19 +692,7 @@ fdesc_select(ap)
 		struct proc *a_p;
 	} */ *ap;
 {
-	int error = EOPNOTSUPP;
-
-	switch (VTOFDESC(ap->a_vp)->fd_type) {
-	case Fctty:
-		error = cttyselect(devctty, ap->a_fflags, ap->a_wql, ap->a_p);
-		break;
-
-	default:
-		error = EOPNOTSUPP;
-		break;
-	}
-	
-	return (error);
+	return (EOPNOTSUPP);
 }
 
 int
@@ -892,7 +800,7 @@ int
 fdesc_badop()
 {
 
-	panic("fdesc: bad op");
+	return (ENOTSUP);
 	/* NOTREACHED */
 }
 

@@ -116,7 +116,7 @@ vs_async_wait(
 		vs->vs_waiting_async = TRUE;
 		assert_wait(&vs->vs_async_pending, THREAD_UNINT);
 		VS_UNLOCK(vs);
-		thread_block((void (*)(void))0);
+		thread_block(THREAD_CONTINUE_NULL);
 		VS_LOCK(vs);
 	}
 	ASSERT(vs->vs_async_pending == 0);
@@ -153,7 +153,7 @@ vs_lock(
 		vs->vs_waiting_seqno = TRUE;
 		assert_wait(&vs->vs_seqno, THREAD_UNINT);
 		VS_UNLOCK(vs);
-		thread_block((void (*)(void))0);
+		thread_block(THREAD_CONTINUE_NULL);
 		VS_LOCK(vs);
 	}
 }
@@ -196,7 +196,7 @@ vs_wait_for_readers(
 		vs->vs_waiting_read = TRUE;
 		assert_wait(&vs->vs_readers, THREAD_UNINT);
 		VS_UNLOCK(vs);
-		thread_block((void (*)(void))0);
+		thread_block(THREAD_CONTINUE_NULL);
 		VS_LOCK(vs);
 	}
 }
@@ -240,7 +240,7 @@ vs_wait_for_writers(
 		vs->vs_waiting_write = TRUE;
 		assert_wait(&vs->vs_writers, THREAD_UNINT);
 		VS_UNLOCK(vs);
-		thread_block((void (*)(void))0);
+		thread_block(THREAD_CONTINUE_NULL);
 		VS_LOCK(vs);
 	}
 	vs_async_wait(vs);
@@ -261,7 +261,7 @@ vs_wait_for_sync_writers(
 		vs->vs_waiting_write = TRUE;
                 assert_wait(&vs->vs_writers, THREAD_UNINT);
                 VS_UNLOCK(vs);
-                thread_block((void (*)(void))0);
+                thread_block(THREAD_CONTINUE_NULL);
                 VS_LOCK(vs);
         }
 }       
@@ -495,7 +495,7 @@ dp_memory_object_deallocate(
 		vs->vs_waiting_seqno = TRUE;
 		assert_wait(&vs->vs_seqno, THREAD_UNINT);
 		VS_UNLOCK(vs);
-		thread_block((void (*)(void))0);
+		thread_block(THREAD_CONTINUE_NULL);
 		VS_LOCK(vs);
 	}
 
@@ -549,7 +549,7 @@ dp_memory_object_deallocate(
 	VSL_LOCK();
 	backing_store_release_trigger_disable -= 1;
 	if(backing_store_release_trigger_disable == 0) {
-		thread_wakeup((event_t)&vm_page_laundry_count);
+		thread_wakeup((event_t)&backing_store_release_trigger_disable);
 	}
 	VSL_UNLOCK();
 
@@ -605,7 +605,7 @@ dp_memory_object_data_request(
 			vs->vs_waiting_write = TRUE;
 			assert_wait(&vs->vs_writers, THREAD_UNINT);
 			VS_UNLOCK(vs);
-			thread_block((void (*)(void))0);
+			thread_block(THREAD_CONTINUE_NULL);
 			VS_LOCK(vs);
 			vs_async_wait(vs);
 		}
@@ -1158,14 +1158,13 @@ default_pager_object_pages(
 
 		if (!VS_MAP_TRY_LOCK(entry)) {
 			/* oh well bad luck */
-			int wait_result;
+			int wresult;
 
 			VS_UNLOCK(entry);
 
-			assert_wait_timeout( 1, THREAD_INTERRUPTIBLE);
-			wait_result = thread_block((void (*)(void)) 0);
-			if (wait_result != THREAD_TIMED_OUT)
-				thread_cancel_timer();
+			assert_wait_timeout( 1, THREAD_UNINT );
+			wresult = thread_block(THREAD_CONTINUE_NULL);
+			assert(wresult == THREAD_TIMED_OUT);
 			continue;
 		}
 

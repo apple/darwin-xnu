@@ -47,6 +47,7 @@
  * OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
  * SUCH DAMAGE.
  *
+ * $FreeBSD: src/sys/netinet/in_rmx.c,v 1.37.2.1 2001/05/14 08:23:49 ru Exp $
  */
 
 /*
@@ -76,6 +77,10 @@
 #include <netinet/in_var.h>
 
 extern int	in_inithead __P((void **head, int off));
+
+#ifdef __APPLE__
+static void in_rtqtimo(void *rock);
+#endif
 
 #define RTPRF_OURS		RTF_PROTO3	/* set on routes we manage */
 
@@ -154,7 +159,7 @@ in_addroute(void *v_arg, void *n_arg, struct radix_node_head *head,
 				ret = rn_addroute(v_arg, n_arg, head,
 					treenodes);
 			}
-			RTFREE(rt2);
+			rtfree(rt2);
 		}
 	}
 	return ret;
@@ -180,21 +185,41 @@ in_matroute(void *v_arg, struct radix_node_head *head)
 	return rn;
 }
 
-int rtq_reallyold = 60*60;
+static int rtq_reallyold = 60*60;
 	/* one hour is ``really old'' */
-SYSCTL_INT(_net_inet_ip, IPCTL_RTEXPIRE, rtexpire,
-	CTLFLAG_RW, &rtq_reallyold , 0, "");
+SYSCTL_INT(_net_inet_ip, IPCTL_RTEXPIRE, rtexpire, CTLFLAG_RW, 
+    &rtq_reallyold , 0, 
+    "Default expiration time on dynamically learned routes");
 				   
-int rtq_minreallyold = 10;
+static int rtq_minreallyold = 10;
 	/* never automatically crank down to less */
-SYSCTL_INT(_net_inet_ip, IPCTL_RTMINEXPIRE, rtminexpire,
-	CTLFLAG_RW, &rtq_minreallyold , 0, "");
+SYSCTL_INT(_net_inet_ip, IPCTL_RTMINEXPIRE, rtminexpire, CTLFLAG_RW, 
+    &rtq_minreallyold , 0, 
+    "Minimum time to attempt to hold onto dynamically learned routes");
 				   
-int rtq_toomany = 128;
+static int rtq_toomany = 128;
 	/* 128 cached routes is ``too many'' */
-SYSCTL_INT(_net_inet_ip, IPCTL_RTMAXCACHE, rtmaxcache,
-	CTLFLAG_RW, &rtq_toomany , 0, "");
-				   
+SYSCTL_INT(_net_inet_ip, IPCTL_RTMAXCACHE, rtmaxcache, CTLFLAG_RW, 
+    &rtq_toomany , 0, "Upper limit on dynamically learned routes");
+
+#ifdef __APPLE__
+/* XXX LD11JUL02 Special case for AOL 5.1.2 connectivity issue to AirPort BS (Radar 2969954)
+ * AOL is adding a circular route ("10.0.1.1/32 10.0.1.1") when establishing its ppp tunnel
+ * to the AP BaseStation by removing the default gateway and replacing it with their tunnel entry point.
+ * There is no apparent reason to add this route as there is a valid 10.0.1.1/24 route to the BS.
+ * That circular route was ignored on previous version of MacOS X because of a routing bug
+ * corrected with the merge to FreeBSD4.4 (a route generated from an RTF_CLONING route had the RTF_WASCLONED
+ * flag set but did not have a reference to the parent route) and that entry was left in the RT. This workaround is
+ * made in order to provide binary compatibility with AOL. 
+ * If we catch a process adding a circular route with a /32 from the routing socket, we error it out instead of
+ * confusing the routing table with a wrong route to the previous default gateway
+ * If for some reason a circular route is needed, turn this sysctl (net.inet.ip.check_route_selfref) to zero.
+ */
+int check_routeselfref = 1;
+SYSCTL_INT(_net_inet_ip, OID_AUTO, check_route_selfref, CTLFLAG_RW, 
+    &check_routeselfref , 0, "");
+#endif
+
 
 /*
  * On last reference drop, mark the route as belong to us so that it can be
@@ -304,7 +329,7 @@ in_rtqtimo(void *rock)
 	struct timeval atv;
 	static time_t last_adjusted_timeout = 0;
 	int s;
-        
+
 	arg.found = arg.killed = 0;
 	arg.rnh = rnh;
 	arg.nextstop = time_second + rtq_timeout;
@@ -344,7 +369,6 @@ in_rtqtimo(void *rock)
 	atv.tv_usec = 0;
 	atv.tv_sec = arg.nextstop - time_second;
 	timeout(in_rtqtimo_funnel, rock, tvtohz(&atv));
-        
 }
 
 void
@@ -370,9 +394,11 @@ int
 in_inithead(void **head, int off)
 {
 	struct radix_node_head *rnh;
-	
+
+#ifdef __APPLE__
 	if (*head)
-	    return 1;
+		return 1;
+#endif
 
 	if(!rn_inithead(head, off))
 		return 0;
@@ -390,18 +416,18 @@ in_inithead(void **head, int off)
 
 
 /*
- * This zaps old routes when the interface goes down.
- * Currently it doesn't delete static routes; there are
- * arguments one could make for both behaviors.  For the moment,
- * we will adopt the Principle of Least Surprise and leave them
- * alone (with the knowledge that this will not be enough for some
- * people).  The ones we really want to get rid of are things like ARP
- * entries, since the user might down the interface, walk over to a completely
- * different network, and plug back in.
+ * This zaps old routes when the interface goes down or interface
+ * address is deleted.  In the latter case, it deletes static routes
+ * that point to this address.  If we don't do this, we may end up
+ * using the old address in the future.  The ones we always want to
+ * get rid of are things like ARP entries, since the user might down
+ * the interface, walk over to a completely different network, and
+ * plug back in.
  */
 struct in_ifadown_arg {
 	struct radix_node_head *rnh;
 	struct ifaddr *ifa;
+	int del;
 };
 
 static int
@@ -411,7 +437,8 @@ in_ifadownkill(struct radix_node *rn, void *xap)
 	struct rtentry *rt = (struct rtentry *)rn;
 	int err;
 
-	if (rt->rt_ifa == ap->ifa && !(rt->rt_flags & RTF_STATIC)) {
+	if (rt->rt_ifa == ap->ifa &&
+	    (ap->del || !(rt->rt_flags & RTF_STATIC))) {
 		/*
 		 * We need to disable the automatic prune that happens
 		 * in this case in rtrequest() because it will blow
@@ -420,7 +447,7 @@ in_ifadownkill(struct radix_node *rn, void *xap)
 		 * the routes that rtrequest() would have in any case,
 		 * so that behavior is not needed there.
 		 */
-		rt->rt_flags &= ~RTF_PRCLONING;
+		rt->rt_flags &= ~(RTF_CLONING | RTF_PRCLONING);
 		err = rtrequest(RTM_DELETE, (struct sockaddr *)rt_key(rt),
 				rt->rt_gateway, rt_mask(rt), rt->rt_flags, 0);
 		if (err) {
@@ -431,7 +458,7 @@ in_ifadownkill(struct radix_node *rn, void *xap)
 }
 
 int
-in_ifadown(struct ifaddr *ifa)
+in_ifadown(struct ifaddr *ifa, int delete)
 {
 	struct in_ifadown_arg arg;
 	struct radix_node_head *rnh;
@@ -441,6 +468,7 @@ in_ifadown(struct ifaddr *ifa)
 
 	arg.rnh = rnh = rt_tables[AF_INET];
 	arg.ifa = ifa;
+	arg.del = delete;
 	rnh->rnh_walktree(rnh, in_ifadownkill, &arg);
 	ifa->ifa_flags &= ~IFA_ROUTE;
 	return 0;

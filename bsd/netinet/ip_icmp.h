@@ -52,10 +52,12 @@
  * SUCH DAMAGE.
  *
  *	@(#)ip_icmp.h	8.1 (Berkeley) 6/10/93
+ * $FreeBSD: src/sys/netinet/ip_icmp.h,v 1.16 1999/12/29 04:41:01 peter Exp $
  */
 
 #ifndef _NETINET_IP_ICMP_H_
 #define _NETINET_IP_ICMP_H_
+#include <sys/appleapiopts.h>
 
 /*
  * Interface Control Message Protocol Definitions.
@@ -205,8 +207,10 @@ struct icmp {
 	(type) == ICMP_MASKREQ || (type) == ICMP_MASKREPLY)
 
 #ifdef KERNEL
+#ifdef __APPLE_API_PRIVATE
 void	icmp_error __P((struct mbuf *, int, int, n_long, struct ifnet *));
 void	icmp_input __P((struct mbuf *, int));
+#endif /* __APPLE_API_PRIVATE */
 #endif
 
 #endif

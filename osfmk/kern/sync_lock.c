@@ -97,10 +97,10 @@
 	MACRO_END
 
 unsigned int lock_set_event;
-#define LOCK_SET_EVENT ((event_t)&lock_set_event)
+#define LOCK_SET_EVENT ((event64_t)&lock_set_event)
 
 unsigned int lock_set_handoff;
-#define LOCK_SET_HANDOFF ((event_t)&lock_set_handoff)
+#define LOCK_SET_HANDOFF ((event64_t)&lock_set_handoff)
 
 /*
  *	ROUTINE:	lock_set_init		[private]
@@ -240,7 +240,7 @@ lock_set_destroy (task_t task, lock_set_t lock_set)
 
 		if (ulock->accept_wait) {
 			ulock->accept_wait = FALSE;
-			wait_queue_wakeup_one(&ulock->wait_queue,
+			wait_queue_wakeup64_one(&ulock->wait_queue,
 					      LOCK_SET_HANDOFF,
 					      THREAD_RESTART);
 		}
@@ -248,13 +248,13 @@ lock_set_destroy (task_t task, lock_set_t lock_set)
 		if (ulock->holder) {
 			if (ulock->blocked) {
 				ulock->blocked = FALSE;
-				wait_queue_wakeup_all(&ulock->wait_queue,
+				wait_queue_wakeup64_all(&ulock->wait_queue,
 						      LOCK_SET_EVENT,
 						      THREAD_RESTART);
 			}
 			if (ulock->ho_wait) {
 				ulock->ho_wait = FALSE;
-				wait_queue_wakeup_one(&ulock->wait_queue,
+				wait_queue_wakeup64_one(&ulock->wait_queue,
 						      LOCK_SET_HANDOFF,
 						      THREAD_RESTART);
 			}
@@ -309,15 +309,13 @@ lock_acquire (lock_set_t lock_set, int lock_id)
 	if (ulock->holder != THR_ACT_NULL) {
 		int wait_result;
 
-		lock_set_unlock(lock_set);
-
 		if (ulock->holder == current_act()) {
 			ulock_unlock(ulock);
 			return KERN_LOCK_OWNED_SELF;
 		}
 
 		ulock->blocked = TRUE;
-		(void)wait_queue_assert_wait(&ulock->wait_queue,
+		wait_result = wait_queue_assert_wait64(&ulock->wait_queue,
 				       LOCK_SET_EVENT,
 				       THREAD_ABORTSAFE);
 		ulock_unlock(ulock);
@@ -325,8 +323,8 @@ lock_acquire (lock_set_t lock_set, int lock_id)
 		/*
 		 *  Block - Wait for lock to become available.
 		 */
-
-		wait_result = thread_block((void (*)(void))0);
+		if (wait_result == THREAD_WAITING)
+			wait_result = thread_block(THREAD_CONTINUE_NULL);
 
 		/*
 		 *  Check the result status:
@@ -526,7 +524,6 @@ lock_release_internal (ulock_t ulock, thread_act_t thr_act)
 
 	if (ulock->holder != thr_act) {
 		ulock_unlock(ulock);
-		lock_set_unlock(lock_set);
 		return KERN_INVALID_RIGHT;
 	}
 
@@ -542,7 +539,7 @@ lock_release_internal (ulock_t ulock, thread_act_t thr_act)
 
 		s = splsched();
 		wait_queue_lock(wq);
-		thread = wait_queue_wakeup_identity_locked(wq,
+		thread = wait_queue_wakeup64_identity_locked(wq,
 							   LOCK_SET_EVENT,
 							   THREAD_AWAKENED,
 							   TRUE);
@@ -613,7 +610,6 @@ lock_handoff (lock_set_t lock_set, int lock_id)
 
 	if (ulock->holder != current_act()) {
 		ulock_unlock(ulock);
-		lock_set_unlock(lock_set);
 		return KERN_INVALID_RIGHT;
 	}
 	
@@ -633,7 +629,7 @@ lock_handoff (lock_set_t lock_set, int lock_id)
 		 */
 		s = splsched();
 		wait_queue_lock(wq);
-		thread = wait_queue_wakeup_identity_locked(
+		thread = wait_queue_wakeup64_identity_locked(
 					   wq,
 					   LOCK_SET_HANDOFF,
 					   THREAD_AWAKENED,
@@ -681,13 +677,13 @@ lock_handoff (lock_set_t lock_set, int lock_id)
 	 * for an accepting thread.
 	 */
 	ulock->ho_wait = TRUE;
-	(void)wait_queue_assert_wait(&ulock->wait_queue,
+	wait_result = wait_queue_assert_wait64(&ulock->wait_queue,
 			       LOCK_SET_HANDOFF,
 			       THREAD_ABORTSAFE);
 	ulock_unlock(ulock);
 
- 	ETAP_SET_REASON(current_thread(), BLOCKED_ON_LOCK_HANDOFF);
-	wait_result = thread_block((void (*)(void))0);
+	if (wait_result == THREAD_WAITING)
+		wait_result = thread_block(THREAD_CONTINUE_NULL);
 
 	/*
 	 *  If the thread was woken-up via some action other than
@@ -767,7 +763,7 @@ lock_handoff_accept (lock_set_t lock_set, int lock_id)
 		assert(ulock->holder != THR_ACT_NULL);
 		thread = ulock->holder->thread;
 
-		if (wait_queue_wakeup_thread(wq,
+		if (wait_queue_wakeup64_thread(wq,
 					    LOCK_SET_HANDOFF,
 					    thread,
 					    THREAD_AWAKENED) == KERN_SUCCESS) {
@@ -792,13 +788,13 @@ lock_handoff_accept (lock_set_t lock_set, int lock_id)
 	}		
 
 	ulock->accept_wait = TRUE;
-	(void)wait_queue_assert_wait(&ulock->wait_queue,
+	wait_result = wait_queue_assert_wait64(&ulock->wait_queue,
 			       LOCK_SET_HANDOFF,
 			       THREAD_ABORTSAFE);
 	ulock_unlock(ulock);
 
- 	ETAP_SET_REASON(current_thread(), BLOCKED_ON_LOCK_HANDOFF);
-	wait_result = thread_block((void (*)(void))0);
+	if (wait_result == THREAD_WAITING)
+		wait_result = thread_block(THREAD_CONTINUE_NULL);
 
 	/*
 	 *  If the thread was woken-up via some action other than

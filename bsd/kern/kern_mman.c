@@ -733,12 +733,12 @@ madvise(p, uap, retval)
 	 */
 	if (VM_MAX_ADDRESS > 0 &&
 		((vm_offset_t) uap->addr + uap->len) > VM_MAX_ADDRESS)
-		return (EINVAL);
+		return (ENOMEM);
 	if (VM_MIN_ADDRESS > 0 && uap->addr < VM_MIN_ADDRESS)
-		return (EINVAL);
+		return (ENOMEM);
 
 	if (((vm_offset_t) uap->addr + uap->len) < (vm_offset_t) uap->addr)
-		return (EINVAL);
+		return (ENOMEM);
 
 	/*
 	 * Since this routine is only advisory, we default to conservative
@@ -752,14 +752,24 @@ madvise(p, uap, retval)
 	switch (uap->behav) {
 		case MADV_RANDOM:
 			new_behavior = VM_BEHAVIOR_RANDOM;
+			break;
 		case MADV_SEQUENTIAL: 
 			new_behavior = VM_BEHAVIOR_SEQUENTIAL;
+			break;
 		case MADV_NORMAL:
-		default:
 			new_behavior = VM_BEHAVIOR_DEFAULT;
+			break;
+		case MADV_WILLNEED:
+			new_behavior = VM_BEHAVIOR_WILLNEED;
+			break;
+		case MADV_DONTNEED:
+			new_behavior = VM_BEHAVIOR_DONTNEED;
+			break;
+		default:
+			return(EINVAL);
 	}
 
-	result = vm_behavior_set(user_map, start, end, uap->behav);
+	result = vm_behavior_set(user_map, start, end, new_behavior);
 	switch (result) {
 		case KERN_SUCCESS:
 			return (0);
@@ -923,7 +933,7 @@ mlock(p, uap, retval)
 	user_map = current_map();
 
 	/* vm_wire */
-	result = vm_wire(host_priv_self(), user_map, addr, size, VM_PROT_ALL);
+	result = vm_map_wire(user_map, addr, (vm_offset_t)(addr+size), VM_PROT_NONE, TRUE);
 	return (result == KERN_SUCCESS ? 0 : ENOMEM);
 }
 
@@ -1082,7 +1092,7 @@ kern_return_t map_fd_funneled(
 		return (KERN_INVALID_ARGUMENT);
 
 	if (offset & PAGE_MASK_64) {
-		printf("map_fd: file offset not page aligned(%d : %s\)n",p->p_pid, p->p_comm);
+		printf("map_fd: file offset not page aligned(%d : %s)\n",p->p_pid, p->p_comm);
 		return (KERN_INVALID_ARGUMENT);
 	}
 	map_size = round_page(size);

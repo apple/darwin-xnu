@@ -21,6 +21,12 @@
  */
 /* IOOffset.m created by rsulack on Wed 17-Sep-1997 */
 
+#include <sys/cdefs.h>
+
+__BEGIN_DECLS
+extern int sscanf(const char *input, const char *fmt, ...);
+__END_DECLS
+
 #include <libkern/c++/OSNumber.h>
 #include <libkern/c++/OSString.h>
 #include <libkern/c++/OSSerialize.h>
@@ -31,6 +37,7 @@
 #define super OSObject
 
 OSDefineMetaClassAndStructors(OSNumber, OSObject)
+
 OSMetaClassDefineReservedUnused(OSNumber, 0);
 OSMetaClassDefineReservedUnused(OSNumber, 1);
 OSMetaClassDefineReservedUnused(OSNumber, 2);

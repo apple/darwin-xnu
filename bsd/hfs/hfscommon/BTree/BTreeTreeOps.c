@@ -194,23 +194,25 @@ OSStatus	SearchTree	(BTreeControlBlockPtr	 btreePtr,
 						 UInt16					*returnIndex )
 {
 	OSStatus	err;
-	SInt16		level;
-	UInt32		curNodeNum;
+	SInt16		level;					//	Expected depth of current node
+	UInt32		curNodeNum;				//	Current node we're searching
 	NodeRec		nodeRec;
 	UInt16		index;
 	Boolean		keyFound;
+	SInt8		nodeKind;				//	Kind of current node (index/leaf)
 	KeyPtr		keyPtr;
 	UInt8 *		dataPtr;
 	UInt16		dataSize;
 	
 	
-	if (btreePtr->treeDepth == 0)						// is the tree empty?
+	curNodeNum		= btreePtr->rootNode;
+	level			= btreePtr->treeDepth;
+	
+	if (level == 0)						// is the tree empty?
 	{
 		err = fsBTEmptyErr;
 		goto ErrorExit;
 	}
-	
-	curNodeNum		= btreePtr->rootNode;
 	
 	//€€ for debugging...
 	treePathTable [0].node		= 0;
@@ -218,39 +220,97 @@ OSStatus	SearchTree	(BTreeControlBlockPtr	 btreePtr,
 
 	while (true)
 	{
-		PanicIf(curNodeNum == 0, "\pSearchTree: curNodeNum is zero!");
-
-		err = GetNode (btreePtr, curNodeNum, &nodeRec);
-		if (err != noErr)
-		{
-			goto ErrorExit;
-		}
+        //
+        //	[2550929] Node number 0 is the header node.  It is never a valid
+        //	index or leaf node.  If we're ever asked to search through node 0,
+        //	something has gone wrong (typically a bad child node number, or
+        //	we found a node full of zeroes that we thought was an index node).
+        //
+        if (curNodeNum == 0)
+        {
+//          Panic("\pSearchTree: curNodeNum is zero!");
+            err = btBadNode;
+            goto ErrorExit;
+        }
+        
+        err = GetNode (btreePtr, curNodeNum, &nodeRec);
+        if (err != noErr)
+        {
+                goto ErrorExit;
+        }
 		
-		keyFound = SearchNode (btreePtr, nodeRec.buffer, searchKey, &index);
+        //
+        //	[2550929] Sanity check the node height and node type.  We expect
+        //	particular values at each iteration in the search.  This checking
+        //	quickly finds bad pointers, loops, and other damage to the
+        //	hierarchy of the B-tree.
+        //
+        if (((BTNodeDescriptor*)nodeRec.buffer)->height != level)
+        {
+//		Panic("\pIncorrect node height");
+                err = btBadNode;
+                goto ReleaseAndExit;
+        }
+        nodeKind = ((BTNodeDescriptor*)nodeRec.buffer)->kind;
+        if (level == 1)
+        {
+            //	Nodes at level 1 must be leaves, by definition
+            if (nodeKind != kBTLeafNode)
+            {
+ //		Panic("\pIncorrect node type: expected leaf");
+                err = btBadNode;
+                goto ReleaseAndExit;           
+            }
+        }
+        else
+        {
+            //	A node at any other depth must be an index node
+            if (nodeKind != kBTIndexNode)
+            {
+//		Panic("\pIncorrect node type: expected index");
+                err = btBadNode;
+                goto ReleaseAndExit;
+            }
+        }
+        
+        keyFound = SearchNode (btreePtr, nodeRec.buffer, searchKey, &index);
 
-		level = ((BTNodeDescriptor*)nodeRec.buffer)->height;	//€€ or --level;
-		
+        treePathTable [level].node		= curNodeNum;
 
-		treePathTable [level].node		= curNodeNum;
+        if (nodeKind == kBTLeafNode)
+        {
+                treePathTable [level].index = index;
+                break;			// were done...
+        }
+        
+        if ( (keyFound != true) && (index != 0))
+                --index;
 
-		if ( ((BTNodeDescriptor*)nodeRec.buffer)->kind == kBTLeafNode)
-		{
-			treePathTable [level].index = index;
-			break;			// were done...
-		}
-		
-		if ( (keyFound != true) && (index != 0))
-			--index;
-
-		treePathTable [level].index = index;
-		
-		GetRecordByIndex (btreePtr, nodeRec.buffer, index, &keyPtr, &dataPtr, &dataSize);
-		curNodeNum = *(UInt32 *)dataPtr;
-		err = ReleaseNode (btreePtr, &nodeRec);
-		if (err != noErr)
-		{
-			goto ErrorExit;
-		}
+        treePathTable [level].index = index;
+        
+        err = GetRecordByIndex (btreePtr, nodeRec.buffer, index, &keyPtr, &dataPtr, &dataSize);
+        if (err != noErr)
+        {
+            //	[2550929] If we got an error, it is probably because the index was bad
+            //	(typically a corrupt node that confused SearchNode).  Invalidate the node
+            //	so we won't accidentally use the corrupted contents.  NOTE: the Mac OS 9
+            //	sources call this InvalidateNode.
+            
+                (void) TrashNode(btreePtr, &nodeRec);
+                goto ErrorExit;
+        }
+        
+        //	Get the child pointer out of this index node.  We're now done with the current
+        //	node and can continue the search with the child node.
+        curNodeNum = *(UInt32 *)dataPtr;
+        err = ReleaseNode (btreePtr, &nodeRec);
+        if (err != noErr)
+        {
+                goto ErrorExit;
+        }
+        
+        //	The child node should be at a level one less than the parent.
+        --level;
 	}
 	
 	*nodeNum			= curNodeNum;
@@ -261,6 +321,10 @@ OSStatus	SearchTree	(BTreeControlBlockPtr	 btreePtr,
 		return	noErr;			// searchKey found, index identifies record in node
 	else
 		return	fsBTRecordNotFoundErr;	// searchKey not found, index identifies insert point
+
+ReleaseAndExit:
+    (void) ReleaseNode(btreePtr, &nodeRec);
+    //	fall into ErrorExit
 
 ErrorExit:
 	
@@ -325,6 +389,7 @@ OSStatus	InsertLevel (BTreeControlBlockPtr		 btreePtr,
 	Boolean				 insertParent;
 	Boolean				 updateParent;
 	Boolean				 newRoot;
+	InsertKey			insertKey;
 
 #if defined(applec) && !defined(__SC__)
 	PanicIf ((level == 1) && (((NodeDescPtr)targetNode->buffer)->kind != kBTLeafNode), "\P InsertLevel: non-leaf at level 1! ");
@@ -425,7 +490,6 @@ OSStatus	InsertLevel (BTreeControlBlockPtr		 btreePtr,
 		if ( insertParent )
 		{
 			InsertKey	*insertKeyPtr;
-			InsertKey	insertKey;
 			
 			if ( updateParent )
 			{

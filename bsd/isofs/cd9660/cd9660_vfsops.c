@@ -160,6 +160,7 @@ cd9660_mountroot()
 	args.flags = ISOFSMNT_ROOT;
 	args.ssector = 0;
 	if ((error = iso_mountfs(rootvp, mp, p, &args))) {
+		vrele(rootvp); /* release the reference from bdevvp() */
 		FREE_ZONE(mp, sizeof (struct mount), M_MOUNT);
 		return (error);
 	}
@@ -603,11 +604,14 @@ cd9660_unmount(mp, mntflags, p)
 {
 	register struct iso_mnt *isomp;
 	int error, flags = 0;
+	int force = 0;
 	
-	if ( (mntflags & MNT_FORCE) )
+	if ( (mntflags & MNT_FORCE) ) {
 		flags |= FORCECLOSE;
+		force = 1;
+	}
 
-	if ( (error = vflush(mp, NULLVP, flags)) )
+	if ( (error = vflush(mp, NULLVP, flags)) && !force )
 		return (error);
 
 	isomp = VFSTOISOFS(mp);
@@ -619,12 +623,14 @@ cd9660_unmount(mp, mntflags, p)
 	
 	isomp->im_devvp->v_specflags &= ~SI_MOUNTEDON;
 	error = VOP_CLOSE(isomp->im_devvp, FREAD, NOCRED, p);
+	if (error && !force )
+		return(error);
+
 	vrele(isomp->im_devvp);
 	FREE((caddr_t)isomp, M_ISOFSMNT);
 	mp->mnt_data = (qaddr_t)0;
 	mp->mnt_flag &= ~MNT_LOCAL;
-
-	return (error);
+	return (0);
 }
 
 /*

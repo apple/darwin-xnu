@@ -70,6 +70,8 @@ LEXT(vmm_dispatch_table)
 			.long	EXT(vmm_protect_page)							; Sets protection values for a page
 			.long	EXT(vmm_map_execute)							; Maps a page an launches VM
 			.long	EXT(vmm_protect_execute)						; Sets protection values for a page and launches VM
+			.long	EXT(vmm_map_list)								; Maps a list of pages
+			.long	EXT(vmm_unmap_list)								; Unmaps a list of pages
 
 			.set	vmm_count,(.-EXT(vmm_dispatch_table))/4			; Get the top number
 
@@ -236,7 +238,7 @@ swvmChkStop:
 			b		EXT(ppcscret)				; Go back to handler...
 			
 swvmNoStop:			
-			rlwinm.	r26,r4,0,vmmTimerPopb,vmmTimerPopb	; Did the timer pop?
+			rlwinm.	r26,r4,0,vmmTimerPopb,vmmTimerPopb	; Did the timer go pop?
 			beq+	swvmDoSwitch				; No...
 		
 			li		r2,kVmmReturnNull			; Set null return
@@ -261,11 +263,10 @@ swvmDoSwitch:
 ;			handling here is pretty funky anyway, so we just pick the ones that are ok.
 ;			
 			mr		r26,r3						; Save the activation pointer
-			mr		r28,r5						; Save the context pointer
-			mr		r27,r2						; Save the context entry
 			
-			bl		vmmxcng						; Exchange the vector and floating point contexts
-			mr		r5,r28						; Restore this register
+			la		r11,vmmFacCtx(r2)			; Point to the virtual machine facility context
+			mr		r27,r2						; Save the context entry
+			stw		r11,deferctx(r3)			; Start using the virtual machine facility context when we exit
 
 			lwz		r11,ACT_MACT_SPF(r26)		; Get the special flags
 			lwz		r3,vmmPmap(r27)				; Get the pointer to the PMAP
@@ -312,35 +313,67 @@ swvmNoMap:	lwz		r20,vmmContextKern(r27)		; Get the comm area
 			bl		swapCtxt					; First, swap the general register state
 
 			lwz		r17,vmmContextKern(r27)		; Get the comm area back
-			
+			la		r25,vmmFacCtx(r27)			; Point to the facility context
 			lwz		r15,vmmCntrl(r17)			; Get the control flags again
+			mfsprg	r29,0						; Get the per_proc
 			
+;
+;			Check if there is new floating point context to load
+;			
+						
 			rlwinm.	r0,r15,0,vmmFloatLoadb,vmmFloatLoadb	; Are there new floating point values?
+			lhz		r29,PP_CPU_NUMBER(r29)		; Get our cpu number
 			li		r14,vmmppcFPRs				; Get displacement to the new values
 			andc	r15,r15,r0					; Clear the bit
 			beq+	swvmNoNewFloats				; Nope, good...
 			
-			lwz		r3,ACT_MACT_FPU(r26)		; Get the FPU savearea
-			dcbt	r14,r18						; Touch in first line of new stuff
+			lwz		r19,FPUcpu(r25)				; Get the last CPU we ran on
+			
+			stw		r29,FPUcpu(r25)				; Claim the context for ourselves
+			
+			eieio								; Make sure this stays in order
+			
+			lis		r18,hi16(EXT(per_proc_info))	; Set base per_proc
+			mulli	r19,r19,ppSize				; Find offset to the owner per_proc			
+			ori		r18,r18,lo16(EXT(per_proc_info))	; Set base per_proc
+			li		r16,FPUowner				; Displacement to float owner
+			add		r19,r18,r19					; Point to the owner per_proc
+			li		r0,0						; Clear this out	
+			
+swvminvfpu:	lwarx	r18,r16,r19					; Get the owner
+			cmplw	r18,r25						; Does he still have this context?
+			bne		swvminvfpv					; Nope...		
+			stwcx.	r0,r16,r19					; Try to invalidate it
+			bne-	swvminvfpu					; Try again if there was a collision...
+			
+swvminvfpv:	lwz		r3,FPUsave(r25)				; Get the FPU savearea
+			dcbt	r14,r17						; Touch in first line of new stuff
 			mr.		r3,r3						; Is there one?
 			bne+	swvmGotFloat				; Yes...
 			
 			bl		EXT(save_get)				; Get a savearea
 
-			li		r11,0						; Get a 0
-			lis		r7,hi16(SAVfpuvalid)		; Set the allocated bit			
-			stw		r3,ACT_MACT_FPU(r26)		; Set the floating point savearea
-			stw		r7,SAVflags(r3)				; Set the validity flags
-			stw		r11,SAVlvlfp(r3)			; Set the context level
+			li		r7,SAVfloat					; Get floating point flag
+			stw		r26,SAVact(r3)				; Save our activation
+			li		r0,0						; Get a zero
+			stb		r7,SAVflags+2(r3)			; Set that this is floating point
+			stw		r0,SAVprev(r3)				; Clear the back chain
+			stw		r0,SAVlevel(r3)				; We are always at level 0 (user state)
+			
+			stw		r3,FPUsave(r25)				; Chain us to context
 
 swvmGotFloat:
-			dcbt	r14,r17						; Touch in first line of new stuff
 			la		r4,savefp0(r3)				; Point to the destination
 			mr		r21,r3						; Save the save area
 			la		r3,vmmppcFPRs(r17)			; Point to the source
-			li		r5,33*8						; Get the size (32 FP + FPSCR at 8 bytes each)
+			li		r5,32*8						; Get the size (32 FPRs at 8 bytes each)
 			
 			bl		EXT(bcopy)					; Copy the new values
+			
+			lwz		r14,vmmppcFPSCRshadow(r17)	; Get the fpscr pad
+			lwz		r10,vmmppcFPSCRshadow+4(r17)	; Get the fpscr
+			stw		r14,savefpscrpad(r30)		; Save the new fpscr pad
+			stw		r10,savefpscr(r30)			; Save the new fpscr
 
 			lwz		r11,ACT_MACT_SPF(r26)		; Get the special flags
 			stw		r15,vmmCntrl(r17)			; Save the control flags sans vmmFloatLoad
@@ -351,39 +384,72 @@ swvmGotFloat:
 			rlwinm	r14,r14,0,vmmFloatCngdb+1,vmmFloatCngdb-1	; Clear the changed flag
 			stw		r11,spcFlags(r10)			; Set per_proc copy of the special flags
 			stw		r14,vmmStat(r17)			; Set the status flags sans vmmFloatCngd
-			lwz		r11,savefpscrpad(r21)		; Get the new fpscr pad
-			lwz		r14,savefpscr(r21)			; Get the new fpscr
-			stw		r11,savexfpscrpad(r30)		; Save the new fpscr pad
-			stw		r14,savexfpscr(r30)			; Save the new fpscr
 			
+;
+;			Check if there is new vector context to load
+;			
+									
 swvmNoNewFloats:
 			rlwinm.	r0,r15,0,vmmVectLoadb,vmmVectLoadb	; Are there new vector values?
 			li		r14,vmmppcVRs				; Get displacement to the new values
 			andc	r15,r15,r0					; Clear the bit
 			beq+	swvmNoNewVects				; Nope, good...
 			
-			lwz		r3,ACT_MACT_VMX(r26)		; Get the vector savearea
-			dcbt	r14,r27						; Touch in first line of new stuff
+			lwz		r19,VMXcpu(r25)				; Get the last CPU we ran on
+			
+			stw		r29,VMXcpu(r25)				; Claim the context for ourselves
+			
+			eieio								; Make sure this stays in order
+			
+			lis		r18,hi16(EXT(per_proc_info))	; Set base per_proc
+			mulli	r19,r19,ppSize				; Find offset to the owner per_proc			
+			ori		r18,r18,lo16(EXT(per_proc_info))	; Set base per_proc
+			li		r16,VMXowner				; Displacement to vector owner
+			add		r19,r18,r19					; Point to the owner per_proc	
+			li		r0,0						; Clear this out	
+			
+swvminvvec:	lwarx	r18,r16,r19					; Get the owner
+			cmplw	r18,r25						; Does he still have this context?
+			bne		swvminvved					; Nope...		
+			stwcx.	r0,r16,r19					; Try to invalidate it
+			bne-	swvminvvec					; Try again if there was a collision...
+			
+swvminvved:	lwz		r3,VMXsave(r25)				; Get the vector savearea
+			dcbt	r14,r17						; Touch in first line of new stuff
 			mr.		r3,r3						; Is there one?
 			bne+	swvmGotVect					; Yes...
 			
 			bl		EXT(save_get)				; Get a savearea
 
-			li		r21,0						; Get a 0
-			lis		r7,hi16(SAVvmxvalid)		; Set the allocated bit			
-			stw		r3,ACT_MACT_VMX(r26)		; Set the vector savearea indication
-			stw		r7,SAVflags(r3)				; Set the validity flags
-			stw		r21,SAVlvlvec(r3)			; Set the context level
+			li		r7,SAVvector				; Get the vector type flag
+			stw		r26,SAVact(r3)				; Save our activation
+			li		r0,0						; Get a zero
+			stb		r7,SAVflags+2(r3)			; Set that this is vector
+			stw		r0,SAVprev(r3)				; Clear the back chain
+			stw		r0,SAVlevel(r3)				; We are always at level 0 (user state)
+			
+			stw		r3,VMXsave(r25)				; Chain us to context
 
 swvmGotVect:
-			dcbt	r14,r17						; Touch in first line of new stuff
 			mr		r21,r3						; Save the pointer to the savearea
 			la		r4,savevr0(r3)				; Point to the destination
 			la		r3,vmmppcVRs(r17)			; Point to the source
-			li		r5,33*16					; Get the size (32 vectors + VSCR at 16 bytes each)
+			li		r5,32*16					; Get the size (32 vectors at 16 bytes each)
 			
 			bl		EXT(bcopy)					; Copy the new values
 
+			lwz		r11,vmmppcVSCRshadow+0(r17)	; Get the VSCR
+			lwz		r14,vmmppcVSCRshadow+4(r17)	; Get the VSCR
+			lwz		r10,vmmppcVSCRshadow+8(r17)	; Get the VSCR
+			lwz		r9,vmmppcVSCRshadow+12(r17)	; Get the VSCR
+			lwz		r8,savevrsave(r30)			; Get the current VRSave
+			
+			stw		r11,savevscr+0(r30)			; Set the VSCR
+			stw		r14,savevscr+4(r30)			; Set the VSCR
+			stw		r10,savevscr+8(r30)			; Set the VSCR
+			stw		r9,savevscr+12(r30)			; Set the VSCR
+			stw		r8,savevrvalid(r21)			; Set the current VRSave as valid saved
+			
 			lwz		r11,ACT_MACT_SPF(r26)		; Get the special flags
 			stw		r15,vmmCntrl(r17)			; Save the control flags sans vmmVectLoad
 			rlwinm	r11,r11,0,vectorCngbit+1,vectorCngbit-1	; Clear the changed bit here
@@ -391,96 +457,14 @@ swvmGotVect:
 			mfsprg	r10,0						; Get the per_proc
 			stw		r11,ACT_MACT_SPF(r26)		; Get the special flags
 			rlwinm	r14,r14,0,vmmVectCngdb+1,vmmVectCngdb-1	; Clear the changed flag
-			eqv		r15,r15,r15					; Get all foxes
 			stw		r11,spcFlags(r10)			; Set per_proc copy of the special flags
 			stw		r14,vmmStat(r17)			; Set the status flags sans vmmVectCngd
-			stw		r15,savevrvalid(r21)		; Set the valid bits to all foxes
 			
 swvmNoNewVects:			
 			li		r3,1						; Show normal exit with check for AST
-			mr		r9,r26						; Move the activation pointer
+			lwz		r16,ACT_THREAD(r26)			; Restore the thread pointer
 			b		EXT(ppcscret)				; Go back to handler...
 
-
-;
-;			Here is where we exchange the emulator floating and vector contexts
-;			for the virtual machines.  Remember, this is not so efficient and needs
-;			a rewrite.  Also remember the funky register conventions (i.e.,
-;			we need to know what our callers need saved and what our callees trash.
-;
-;			Note: we expect R26 to contain the activation and R27 to contain the context
-;			entry pointer.
-;
-
-vmmxcng:	mflr	r21							; Save the return point
-			mr		r3,r26						; Pass in the activation
-			bl		EXT(fpu_save)				; Save any floating point context
-			mr		r3,r26						; Pass in the activation
-			bl		EXT(vec_save)				; Save any vector point context
-
-			lis		r10,hi16(EXT(per_proc_info))	; Get top of first per_proc
-			li		r8,PP_FPU_THREAD			; Index to FPU owner
-			ori		r10,r10,lo16(EXT(per_proc_info))	; Get bottom of first per_proc
-			lis		r6,hi16(EXT(real_ncpus))	; Get number of CPUs
-			li		r7,0						; Get set to clear
-			ori		r6,r6,lo16(EXT(real_ncpus))	; Get number of CPUs
-			li		r9,PP_VMX_THREAD			; Index to vector owner
-			lwz		r6,0(r6)					; Get the actual CPU count
-
-vmmrt1:		lwarx	r3,r8,r10					; Get FPU owner
-			cmplw	r3,r26						; Do we own it?
-			bne		vmmrt2						; Nope...
-			stwcx.	r7,r8,r10					; Clear it
-			bne-	vmmrt1						; Someone else diddled, try again....
-
-vmmrt2:		lwarx	r3,r9,r10					; Get vector owner
-			cmplw	r3,r26						; Do we own it?
-			bne		vmmxnvec					; Nope...
-			stwcx.	r7,r9,r10					; Clear it
-			bne-	vmmrt2						; Someone else diddled, try again....
-
-vmmxnvec:	addic.	r6,r6,-1					; Done with all CPUs?
-			addi	r10,r10,ppSize				; On to the next
-			bgt		vmmrt1						; Do all processors...
-			
-;
-;			At this point, the FP and Vector states for the current activation
-;			are saved and not live on any processor.  Also, they should be the
-;			only contexts on the activation. Note that because we are currently
-;			taking the cowardly way out and insuring that no contexts are live,
-;			we do not need to worry about the CPU fields.
-;		
-			
-			lwz		r8,ACT_MACT_FPU(r26)		; Get the FPU savearea
-			lwz		r9,ACT_MACT_VMX(r26)		; Get the vector savearea
-			lwz		r10,vmmFPU_pcb(r27)			; Get the FPU savearea
-			lwz		r11,vmmVMX_pcb(r27)			; Get the vector savearea
-			li		r7,0						; Clear this
-			mtlr	r21							; Restore the return
-			stw		r10,ACT_MACT_FPU(r26)		; Set the FPU savearea
-			stw		r11,ACT_MACT_VMX(r26)		; Set the vector savearea
-			stw		r8,vmmFPU_pcb(r27)			; Set the FPU savearea
-			stw		r9,vmmVMX_pcb(r27)			; Set the vector savearea
-			stw		r7,ACT_MACT_FPUlvl(r26)		; Make sure the level is clear
-			stw		r7,ACT_MACT_VMXlvl(r26)		; Make sure the level is clear
-
-			mr.		r8,r8						; Do we have any old floating point context?
-			lwz		r7,savexfpscrpad(r30)		; Get first part of latest fpscr
-			lwz		r9,savexfpscr(r30)			; Get second part of the latest fpscr
-			beq-	xcngnold					; Nope...
-			stw		r7,savefpscrpad(r8)			; Set first part of fpscr
-			stw		r9,savefpscr(r8)			; Set fpscr
-
-xcngnold:	mr.		r10,r10						; Any new context?
-			li		r7,0						; Assume no FP
-			li		r9,0						; Assume no FP
-			beq-	xcngnnew					; Nope...
-			lwz		r7,savefpscrpad(r10)		; Get first part of latest fpscr
-			lwz		r9,savefpscr(r10)			; Get second part of the latest fpscr
-			
-xcngnnew:	stw		r7,savexfpscrpad(r30)		; Set the fpsc
-			stw		r9,savexfpscr(r30)			; Set the fpscr	
-			blr									; Return...
 
 ;
 ;			Here is where we exit from vmm mode.  We do this on any kind of exception.
@@ -521,10 +505,10 @@ LEXT(vmm_exit)
 			
 			bl		EXT(hw_set_user_space_dis)	; Swap the address spaces back to the emulator
 			
-			bl		vmmxcng						; Exchange the vector and floating point contexts
-			
+			la		r5,facctx(r16)				; Point to the main facility context
 			mr		r2,r27						; Restore
-			lwz		r5,vmmContextKern(r2)		; Get the context area address
+			stw		r5,deferctx(r16)			; Start using the main facility context on the way out
+			lwz		r5,vmmContextKern(r27)		; Get the context area address
 			mr		r3,r16						; Restore activation address
 			stw		r19,vmmStat(r5)				; Save the changed and popped flags
 			bl		swapCtxt					; Exchange the VM context for the emulator one
@@ -578,15 +562,21 @@ LEXT(vmm_force_exit)
 			
 			bl		EXT(hw_set_user_space_dis)	; Swap the address spaces back to the emulator
 			
-			bl		vmmxcng						; Exchange the vector and floating point contexts
+			la		r7,facctx(r26)				; Point to the main facility context
 			
 			lwz		r5,vmmContextKern(r27)		; Get the context area address
 			stw		r19,vmmStat(r5)				; Save the changed and popped flags
+			stw		r7,deferctx(r26)			; Tell context launcher to switch facility context
+	
 			bl		swapCtxt					; Exchange the VM context for the emulator one
 			
 			lwz		r8,saveexception(r30)		; Pick up the exception code
+			lwz		r7,SAVflags(r30)			; Pick up the savearea flags
+			lis		r9,hi16(SAVredrive)			; Get exception redrive bit
 			rlwinm	r8,r8,30,24,31				; Convert exception to return code
+			andc	r7,r7,r9					; Make sure redrive is off because we are intercepting
 			stw		r8,saver3(r30)				; Set the return code as the return value also
+			stw		r7,SAVflags(r30)			; Set the savearea flags
 			
 
 vfeNotRun:	lmw		r13,FM_ARG0(r1)				; Restore all non-volatile registers
@@ -597,59 +587,53 @@ vfeNotRun:	lmw		r13,FM_ARG0(r1)				; Restore all non-volatile registers
 
 ;
 ;			Note: we will not do any DCBTs to the savearea.  It was just stored to a few cycles ago and should 
-;			still be in the cache. Note also that the context area registers map identically to the savearea.
+;			still be in the cache.
 ;
-;			NOTE: we do not save any of the non-volatile registers through this swap code
 ;			NOTE NOTE:  R16 is important to save!!!!
-;			NOTE: I am too dumb to figure out a faster way to swap 5 lines of memory.  So I go for
-;			      the simple way
-
+;
 			.align	5
 
-swapCtxt:	addi	r6,r5,vmm_proc_state		; Point to the state
-			li		r25,32						; Get a cache size increment
-			addi	r4,r30,savesrr0				; Point to the start of the savearea	
-			dcbt	0,r6						; Touch in the first line of the context area
+swapCtxt:	la		r6,vmmppcpc(r5)				; Point to the first line
 			
 			lwz		r14,saveexception(r30)		; Get the exception code
-			lwz		r7,savesrr0(r4)				; First line of savearea	
-			lwz		r8,savesrr1(r4)				
-			lwz		r9,saver0(r4)				
+			dcbt	0,r6						; Touch in the first line of the context area
+			lwz		r7,savesrr0(r30)			; Start moving context	
+			lwz		r8,savesrr1(r30)				
+			lwz		r9,saver0(r30)				
 			cmplwi	cr1,r14,T_SYSTEM_CALL		; Are we switching because of a system call?
-			lwz		r10,saver1(r4)				
-			lwz		r11,saver2(r4)				
-			lwz		r12,saver3(r4)				
-			lwz		r13,saver4(r4)				
-			lwz		r14,saver5(r4)				
+			lwz		r10,saver1(r30)				
+			lwz		r11,saver2(r30)				
+			lwz		r12,saver3(r30)				
+			lwz		r13,saver4(r30)	
+			la		r6,vmmppcr6(r5)				; Point to second line		
+			lwz		r14,saver5(r30)				
 			
-			dcbt	r25,r6						; Touch second line of context area
-			addi	r25,r25,32					; Bump
+			dcbt	0,r6						; Touch second line of context area
 			
-			lwz		r15,savesrr0(r6)			; First line of context	
+			lwz		r15,vmmppcpc(r5)			; First line of context	
 			lis		r22,hi16(MSR_IMPORT_BITS)	; Get the MSR bits that are controllable by user
-			lwz		r23,savesrr1(r6)				
+			lwz		r23,vmmppcmsr(r5)				
 			ori		r22,r25,lo16(MSR_IMPORT_BITS)	; Get the rest of the MSR bits that are controllable by user
-			lwz		r17,saver0(r6)				
-			lwz		r18,saver1(r6)		
+			lwz		r17,vmmppcr0(r5)				
+			lwz		r18,vmmppcr1(r5)		
 			and		r23,r23,r22					; Keep only the controllable bits		
-			lwz		r19,saver2(r6)		
+			lwz		r19,vmmppcr2(r5)		
 			oris	r23,r23,hi16(MSR_EXPORT_MASK_SET)	; Force on the required bits
-			lwz		r20,saver3(r6)				
+			lwz		r20,vmmppcr3(r5)				
 			ori		r23,r23,lo16(MSR_EXPORT_MASK_SET)	; Force on the other required bits
-			lwz		r21,saver4(r6)				
-			lwz		r22,saver5(r6)				
+			lwz		r21,vmmppcr4(r5)				
+			lwz		r22,vmmppcr5(r5)				
 
-			dcbt	r25,r6						; Touch third line of context area
-			addi	r25,r25,32					; Bump (r25 is 64 now)
+			dcbt	0,r6						; Touch third line of context area
 		
-			stw		r7,savesrr0(r6)				; Save emulator context into the context area	
-			stw		r8,savesrr1(r6)				
-			stw		r9,saver0(r6)				
-			stw		r10,saver1(r6)				
-			stw		r11,saver2(r6)				
-			stw		r12,saver3(r6)				
-			stw		r13,saver4(r6)				
-			stw		r14,saver5(r6)			
+			stw		r7,vmmppcpc(r5)				; Save emulator context into the context area	
+			stw		r8,vmmppcmsr(r5)				
+			stw		r9,vmmppcr0(r5)				
+			stw		r10,vmmppcr1(r5)				
+			stw		r11,vmmppcr2(r5)				
+			stw		r12,vmmppcr3(r5)				
+			stw		r13,vmmppcr4(r5)				
+			stw		r14,vmmppcr5(r5)			
 
 ;			
 ;			Save the first 3 parameters if we are an SC (we will take care of the last later)
@@ -659,63 +643,205 @@ swapCtxt:	addi	r6,r5,vmm_proc_state		; Point to the state
 			stw		r13,return_params+4(r5)		; Save the second return
 			stw		r14,return_params+8(r5)		; Save the third return
 
-swapnotsc:	stw		r15,savesrr0(r4)			; Save vm context into the savearea	
-			stw		r23,savesrr1(r4)				
-			stw		r17,saver0(r4)				
-			stw		r18,saver1(r4)		
-			stw		r19,saver2(r4)		
-			stw		r20,saver3(r4)				
-			stw		r21,saver4(r4)				
-			stw		r22,saver5(r4)				
+swapnotsc:	stw		r15,savesrr0(r30)			; Save vm context into the savearea	
+			stw		r23,savesrr1(r30)				
+			stw		r17,saver0(r30)				
+			stw		r18,saver1(r30)		
+			stw		r19,saver2(r30)		
+			stw		r20,saver3(r30)				
+			stw		r21,saver4(r30)		
+			la		r6,vmmppcr14(r5)			; Point to fourth line		
+			stw		r22,saver5(r30)				
 			
-;
-;			The first hunk is swapped, do the rest in a loop
-;
-			li		r23,4						; Four more hunks to swap
-					
+			dcbt	0,r6						; Touch fourth line
 
-swaploop:	addi	r4,r4,32					; Bump savearea pointer
-			addi	r6,r6,32					; Bump context area pointer
-			addic.	r23,r23,-1					; Count down
-			dcbt	r25,r6						; Touch 4th, 5th, and 6th and 7th which are extra
+;			Swap 8 registers
 			
-			lwz		r7,0(r4)					; Read savearea	
-			lwz		r8,4(r4)				
-			lwz		r9,8(r4)				
-			lwz		r10,12(r4)				
-			lwz		r11,16(r4)				
-			lwz		r12,20(r4)				
-			lwz		r13,24(r4)				
-			lwz		r14,28(r4)				
+			lwz		r7,saver6(r30)				; Read savearea	
+			lwz		r8,saver7(r30)				
+			lwz		r9,saver8(r30)				
+			lwz		r10,saver9(r30)				
+			lwz		r11,saver10(r30)				
+			lwz		r12,saver11(r30)				
+			lwz		r13,saver12(r30)				
+			lwz		r14,saver13(r30)				
 
-			lwz		r15,0(r6)					; Read vm context 
-			lwz		r24,4(r6)				
-			lwz		r17,8(r6)				
-			lwz		r18,12(r6)		
-			lwz		r19,16(r6)		
-			lwz		r20,20(r6)				
-			lwz		r21,24(r6)				
-			lwz		r22,28(r6)				
+			lwz		r15,vmmppcr6(r5)			; Read vm context 
+			lwz		r24,vmmppcr7(r5)				
+			lwz		r17,vmmppcr8(r5)				
+			lwz		r18,vmmppcr9(r5)		
+			lwz		r19,vmmppcr10(r5)		
+			lwz		r20,vmmppcr11(r5)				
+			lwz		r21,vmmppcr12(r5)				
+			lwz		r22,vmmppcr13(r5)				
 
-			stw		r7,0(r6)					; Write context	
-			stw		r8,4(r6)				
-			stw		r9,8(r6)				
-			stw		r10,12(r6)				
-			stw		r11,16(r6)				
-			stw		r12,20(r6)				
-			stw		r13,24(r6)				
-			stw		r14,28(r6)				
+			stw		r7,vmmppcr6(r5)				; Write context	
+			stw		r8,vmmppcr7(r5)				
+			stw		r9,vmmppcr8(r5)				
+			stw		r10,vmmppcr9(r5)				
+			stw		r11,vmmppcr10(r5)				
+			stw		r12,vmmppcr11(r5)				
+			stw		r13,vmmppcr12(r5)	
+			la		r6,vmmppcr22(r5)			; Point to fifth line			
+			stw		r14,vmmppcr13(r5)				
 
-			stw		r15,0(r4)					; Write vm context 
-			stw		r24,4(r4)				
-			stw		r17,8(r4)				
-			stw		r18,12(r4)		
-			stw		r19,16(r4)		
-			stw		r20,20(r4)				
-			stw		r21,24(r4)				
-			stw		r22,28(r4)				
+			dcbt	0,r6						; Touch fifth line
 
-			bgt+	swaploop					; Do it all...
+			stw		r15,saver6(r30)				; Write vm context 
+			stw		r24,saver7(r30)				
+			stw		r17,saver8(r30)				
+			stw		r18,saver9(r30)		
+			stw		r19,saver10(r30)		
+			stw		r20,saver11(r30)				
+			stw		r21,saver12(r30)				
+			stw		r22,saver13(r30)				
+
+;			Swap 8 registers
+			
+			lwz		r7,saver14(r30)				; Read savearea	
+			lwz		r8,saver15(r30)				
+			lwz		r9,saver16(r30)				
+			lwz		r10,saver17(r30)				
+			lwz		r11,saver18(r30)				
+			lwz		r12,saver19(r30)				
+			lwz		r13,saver20(r30)				
+			lwz		r14,saver21(r30)				
+
+			lwz		r15,vmmppcr14(r5)			; Read vm context 
+			lwz		r24,vmmppcr15(r5)				
+			lwz		r17,vmmppcr16(r5)				
+			lwz		r18,vmmppcr17(r5)		
+			lwz		r19,vmmppcr18(r5)		
+			lwz		r20,vmmppcr19(r5)				
+			lwz		r21,vmmppcr20(r5)				
+			lwz		r22,vmmppcr21(r5)				
+
+			stw		r7,vmmppcr14(r5)			; Write context	
+			stw		r8,vmmppcr15(r5)				
+			stw		r9,vmmppcr16(r5)				
+			stw		r10,vmmppcr17(r5)				
+			stw		r11,vmmppcr18(r5)				
+			stw		r12,vmmppcr19(r5)				
+			stw		r13,vmmppcr20(r5)
+			la		r6,vmmppcr30(r5)			; Point to sixth line				
+			stw		r14,vmmppcr21(r5)				
+			
+			dcbt	0,r6						; Touch sixth line
+
+			stw		r15,saver14(r30)			; Write vm context 
+			stw		r24,saver15(r30)				
+			stw		r17,saver16(r30)				
+			stw		r18,saver17(r30)		
+			stw		r19,saver18(r30)		
+			stw		r20,saver19(r30)				
+			stw		r21,saver20(r30)				
+			stw		r22,saver21(r30)				
+
+;			Swap 8 registers
+			
+			lwz		r7,saver22(r30)				; Read savearea	
+			lwz		r8,saver23(r30)				
+			lwz		r9,saver24(r30)				
+			lwz		r10,saver25(r30)				
+			lwz		r11,saver26(r30)				
+			lwz		r12,saver27(r30)				
+			lwz		r13,saver28(r30)				
+			lwz		r14,saver29(r30)				
+
+			lwz		r15,vmmppcr22(r5)			; Read vm context 
+			lwz		r24,vmmppcr23(r5)				
+			lwz		r17,vmmppcr24(r5)				
+			lwz		r18,vmmppcr25(r5)		
+			lwz		r19,vmmppcr26(r5)		
+			lwz		r20,vmmppcr27(r5)				
+			lwz		r21,vmmppcr28(r5)				
+			lwz		r22,vmmppcr29(r5)				
+
+			stw		r7,vmmppcr22(r5)			; Write context	
+			stw		r8,vmmppcr23(r5)				
+			stw		r9,vmmppcr24(r5)				
+			stw		r10,vmmppcr25(r5)				
+			stw		r11,vmmppcr26(r5)				
+			stw		r12,vmmppcr27(r5)				
+			stw		r13,vmmppcr28(r5)	
+			la		r6,vmmppcvscr(r5)			; Point to seventh line			
+			stw		r14,vmmppcr29(r5)				
+
+			dcbt	0,r6						; Touch seventh line
+
+			stw		r15,saver22(r30)			; Write vm context 
+			stw		r24,saver23(r30)				
+			stw		r17,saver24(r30)				
+			stw		r18,saver25(r30)		
+			stw		r19,saver26(r30)		
+			stw		r20,saver27(r30)				
+			stw		r21,saver28(r30)				
+			stw		r22,saver29(r30)				
+
+;			Swap 8 registers
+			
+			lwz		r7,saver30(r30)				; Read savearea	
+			lwz		r8,saver31(r30)				
+			lwz		r9,savecr(r30)				
+			lwz		r10,savexer(r30)				
+			lwz		r11,savelr(r30)				
+			lwz		r12,savectr(r30)				
+			lwz		r14,savevrsave(r30)				
+
+			lwz		r15,vmmppcr30(r5)			; Read vm context 
+			lwz		r24,vmmppcr31(r5)				
+			lwz		r17,vmmppccr(r5)				
+			lwz		r18,vmmppcxer(r5)		
+			lwz		r19,vmmppclr(r5)		
+			lwz		r20,vmmppcctr(r5)				
+			lwz		r22,vmmppcvrsave(r5)				
+
+			stw		r7,vmmppcr30(r5)			; Write context	
+			stw		r8,vmmppcr31(r5)				
+			stw		r9,vmmppccr(r5)				
+			stw		r10,vmmppcxer(r5)				
+			stw		r11,vmmppclr(r5)				
+			stw		r12,vmmppcctr(r5)				
+			stw		r14,vmmppcvrsave(r5)				
+
+			stw		r15,saver30(r30)			; Write vm context 
+			stw		r24,saver31(r30)				
+			stw		r17,savecr(r30)				
+			stw		r18,savexer(r30)		
+			stw		r19,savelr(r30)		
+			stw		r20,savectr(r30)				
+			stw		r22,savevrsave(r30)				
+
+;			Swap 8 registers
+			
+			lwz		r7,savevscr+0(r30)			; Read savearea	
+			lwz		r8,savevscr+4(r30)				
+			lwz		r9,savevscr+8(r30)				
+			lwz		r10,savevscr+12(r30)				
+			lwz		r11,savefpscrpad(r30)				
+			lwz		r12,savefpscr(r30)				
+
+			lwz		r15,vmmppcvscr+0(r5)		; Read vm context 
+			lwz		r24,vmmppcvscr+4(r5)				
+			lwz		r17,vmmppcvscr+8(r5)				
+			lwz		r18,vmmppcvscr+12(r5)		
+			lwz		r19,vmmppcfpscrpad(r5)		
+			lwz		r20,vmmppcfpscr(r5)				
+
+			stw		r7,vmmppcvscr+0(r5)			; Write context	
+			stw		r8,vmmppcvscr+4(r5)				
+			stw		r9,vmmppcvscr+8(r5)				
+			stw		r10,vmmppcvscr+12(r5)				
+			stw		r11,vmmppcfpscrpad(r5)				
+			stw		r12,vmmppcfpscr(r5)				
+
+			stw		r15,savevscr+0(r30)			; Write vm context 
+			stw		r24,savevscr+4(r30)				
+			stw		r17,savevscr+8(r30)				
+			stw		r18,savevscr+12(r30)		
+			stw		r19,savefpscrpad(r30)		
+			stw		r20,savefpscr(r30)				
+
 			
 ;
 ;			Cobble up the exception return code and save any specific return values
@@ -749,8 +875,8 @@ swapDSI:	lwz		r10,savedar(r30)			; Get the DAR
 ;			Set exit returns for a ISI
 ;
 
-swapISI:	lwz		r7,savesrr1+vmm_proc_state(r5)	; Get the SRR1 value
-			lwz		r10,savesrr0+vmm_proc_state(r5)	; Get the PC as failing address
+swapISI:	lwz		r7,vmmppcmsr(r5)			; Get the SRR1 value
+			lwz		r10,vmmppcpc(r5)			; Get the PC as failing address
 			rlwinm	r7,r7,0,1,4					; Save the bits that match the DSISR
 			stw		r10,return_params+0(r5)		; Save PC as first return parm
 			stw		r7,return_params+4(r5)		; Save the pseudo-DSISR as second return parm
@@ -761,7 +887,7 @@ swapISI:	lwz		r7,savesrr1+vmm_proc_state(r5)	; Get the SRR1 value
 ;			Do we really need to pass parameters back here????
 ;
 
-swapSC:		lwz		r10,saver6+vmm_proc_state(r5)	; Get the fourth paramter
+swapSC:		lwz		r10,vmmppcr6(r5)			; Get the fourth paramter
 			stw		r10,return_params+12(r5)	; Save it
 			blr									; Return...
 

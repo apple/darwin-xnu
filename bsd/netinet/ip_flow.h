@@ -54,11 +54,14 @@
  * ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
  * POSSIBILITY OF SUCH DAMAGE.
  *
+ * $FreeBSD: src/sys/netinet/ip_flow.h,v 1.2 1999/08/28 00:49:22 peter Exp $
  */
 
 #ifndef _NETINET_IP_FLOW_H
 #define _NETINET_IP_FLOW_H
+#include <sys/appleapiopts.h>
 
+#ifdef __APPLE_API_PRIVATE
 struct ipflow {
 	LIST_ENTRY(ipflow) ipf_next;	/* next ipflow in bucket */
 	struct in_addr ipf_dst;		/* destination address */
@@ -73,5 +76,6 @@ struct ipflow {
 	u_long ipf_errors;		/* other errors returned by if_output */
 	u_long ipf_last_uses;		/* number of uses in last period */
 };
+#endif /* __APPLE_API_PRIVATE */
 
 #endif

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2002 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -21,50 +21,24 @@
  */
 /*	@(#)disk.h	1.0	08/29/87	(c) 1987 NeXT	*/
 
-/* 
- * HISTORY
- * 28-Mar-92  Doug Mitchell
- *  	Moved disk_label struct to <bsd/dev/disk_label.h>.
- *
- * 22-May-91  Gregg Kellogg (gk) at NeXT
- *	Split out public interface.
- *
- * 20-Jul-90  Doug Mitchell
- *	Added DKIOCSFORMAT, DKIOCGFORMAT
- *
- * 16-Apr-90  Doug Mitchell at NeXT
- *	Added DKIOCPANELPRT.
- *
- * 25-Mar-90  John Seamons (jks) at NeXT
- *	Removed obsolete DKIOCNOTIFY and DKIOCINSERT.
- *
- * 23-Mar-90  Doug Mitchell
- *	Added DKIOCEJECT.
- * 
- * 14-Feb-90  Doug Mitchell at NeXT
- *	Added DKIOCMNOTIFY.
- *
- * 16-Mar-88  John Seamons (jks) at NeXT
- *	Cleaned up to support standard disk label definitions.
- *
- * 24-Feb-88  Mike DeMoney (mike) at NeXT
- *	Added defines for dl_bootfile and dl_boot0_blkno.
- *	Reduced NBAD to allow for these entries in disktab.
- *
- * 29-Aug-87  John Seamons (jks) at NeXT
- *	Created.
- *
- */
-
 #ifndef	_BSD_DEV_DISK_
 #define	_BSD_DEV_DISK_
+#ifndef	_SYS_DISK_H_
+#define	_SYS_DISK_H_
 
+#include <sys/appleapiopts.h>
 #include <mach/machine/vm_types.h>
 #include <mach/machine/boolean.h>
 #include <sys/types.h>
 #include <sys/ioctl.h>
 #include <sys/time.h>
 #include <dev/disk_label.h>
+
+/*
+ * USE <sys/disk.h> INSTEAD (NOTE: DKIOCGETBLOCKCOUNT -> DKIOCGETBLOCKCOUNT32)
+ */
+
+#ifdef	__APPLE_API_OBSOLETE
 
 #define	DR_CMDSIZE	32
 #define	DR_ERRSIZE	32
@@ -156,7 +130,8 @@ struct drive_location {
 #define DKIOCGLOCATION	_IOR('d',28, struct drive_location)	/* arch dependent location descrip */
 #define DKIOCSETBLOCKSIZE   _IOW('d', 24, int)  /* set media's preferred sector size */
 #define DKIOCGETBLOCKSIZE   DKIOCBLKSIZE        /* get media's preferred sector size */
-#define DKIOCGETBLOCKCOUNT  DKIOCNUMBLKS        /* get media's sector count */
+#define DKIOCGETBLOCKCOUNT32	DKIOCNUMBLKS    /* get media's sector count */
+#define DKIOCGETBLOCKCOUNT64	_IOR('d', 25, u_int64_t) /* get media's sector count */
 #define DKIOCGETLOCATION    DKIOCGLOCATION      /* get media's location description */
 #define DKIOCISFORMATTED    DKIOCGFORMAT        /* is media formatted? */
 #define DKIOCISWRITABLE     _IOR('d', 29, int)  /* is media writable? */
@@ -166,4 +141,7 @@ struct drive_location {
 #define DKIOCGETMAXSEGMENTCOUNTREAD  _IOR('d', 66, u_int64_t) /* get device's maximum physical segment count for read buffers */
 #define DKIOCGETMAXSEGMENTCOUNTWRITE _IOR('d', 67, u_int64_t) /* get device's maximum physical segment count for write buffers */
 
+#endif	/* __APPLE_API_OBSOLETE */
+
+#endif	/* _SYS_DISK_H_ */
 #endif	/* _BSD_DEV_DISK_ */

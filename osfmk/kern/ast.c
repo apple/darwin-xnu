@@ -134,7 +134,7 @@ ast_taken(
 
 #ifdef	MACH_BSD
 	/*
-	 * Check for BSD hardcoded hooks 
+	 * Check for BSD hook
 	 */
 	if (reasons & AST_BSD) {
 		extern void		bsd_ast(thread_act_t	act);
@@ -142,12 +142,6 @@ ast_taken(
 
 		thread_ast_clear(act, AST_BSD);
 		bsd_ast(act);
-	}
-	if (reasons & AST_BSD_INIT) {
-		extern void		bsdinit_task(void);
-
-		thread_ast_clear(self->top_act, AST_BSD_INIT);
-		bsdinit_task();
 	}
 #endif
 
@@ -184,40 +178,20 @@ just_return:
 	return;
 }
 
+/*
+ * Called at splsched.
+ */
 void
-ast_check(void)
+ast_check(
+	processor_t		processor)
 {
-	register int			mycpu;
-	register processor_t	myprocessor;
-	register thread_t		self = current_thread();
-	spl_t					s;
+	register thread_t		self = processor->cpu_data->active_thread;
 
-	s = splsched();
-	mycpu = cpu_number();
+	processor->current_pri = self->sched_pri;
+	if (processor->state == PROCESSOR_RUNNING) {
+		register ast_t		preempt;
+processor_running:
 
-	/*
-	 *	Check processor state for ast conditions.
-	 */
-	myprocessor = cpu_to_processor(mycpu);
-	switch (myprocessor->state) {
-
-	case PROCESSOR_OFF_LINE:
-	case PROCESSOR_IDLE:
-	case PROCESSOR_DISPATCHING:
-		/*
-		 *	No ast.
-		 */
-		break;
-
-	case PROCESSOR_ASSIGN:
-        /*
-		 * 	Need ast to force action thread onto processor.
-		 */
-		ast_on(AST_BLOCK);
-		break;
-
-	case PROCESSOR_RUNNING:
-	case PROCESSOR_SHUTDOWN:
 		/*
 		 *	Propagate thread ast to processor.
 		 */
@@ -226,35 +200,18 @@ ast_check(void)
 		/*
 		 *	Context switch check.
 		 */
-		if (csw_needed(self, myprocessor))
-			ast_on(AST_BLOCK);
-		break;
-
-	default:
-        panic("ast_check: Bad processor state");
+		if ((preempt = csw_check(self, processor)) != AST_NONE)
+			ast_on(preempt);
 	}
-
-	splx(s);
-}
-
-/*
- * JMM - Temporary exports to other components
- */
-#undef ast_on
-#undef ast_off
-
-void
-ast_on(ast_t reason)
-{
-	boolean_t		enable;
-
-	enable = ml_set_interrupts_enabled(FALSE);
-	ast_on_fast(reason);
-	(void)ml_set_interrupts_enabled(enable);
-}
-
-void
-ast_off(ast_t reason)
-{
-	ast_off_fast(reason);
+	else
+	if (	processor->state == PROCESSOR_DISPATCHING	||
+			processor->state == PROCESSOR_IDLE			) {
+		return;
+	}
+	else
+	if (processor->state == PROCESSOR_SHUTDOWN)
+		goto processor_running;
+	else
+	if (processor->state == PROCESSOR_ASSIGN)
+		ast_on(AST_BLOCK);
 }

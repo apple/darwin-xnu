@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2002 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -63,12 +63,14 @@
 #ifndef _SYS_PROC_H_
 #define	_SYS_PROC_H_
 
+#include <sys/appleapiopts.h>
 #include <sys/cdefs.h>
-
 #include <sys/select.h>			/* For struct selinfo. */
 #include <sys/queue.h>
 #include <sys/lock.h>
 #include <sys/param.h>
+
+#ifdef __APPLE_API_PRIVATE
 
 /*
  * One structure allocated per session.
@@ -78,6 +80,7 @@ struct	session {
 	struct	proc *s_leader;		/* Session leader. */
 	struct	vnode *s_ttyvp;		/* Vnode of controlling terminal. */
 	struct	tty *s_ttyp;		/* Controlling terminal. */
+	pid_t	s_sid;		/* Session ID */
 	char	s_login[MAXLOGNAME];	/* Setlogin() name. */
 };
 
@@ -150,7 +153,7 @@ struct	proc {
 	int	p_traceflag;		/* Kernel trace points. */
 	struct	vnode *p_tracep;	/* Trace to vnode. */
 
-	sigset_t p_siglist;		/* Signals arrived but not delivered. */
+	sigset_t p_siglist;		/* DEPRECATED. */
 
 	struct	vnode *p_textvp;	/* Vnode of executable. */
 
@@ -167,7 +170,7 @@ struct	proc {
 /* The following fields are all copied upon creation in fork. */
 #define	p_startcopy	p_sigmask
 
-	sigset_t p_sigmask;	/* Current signal mask. */
+	sigset_t p_sigmask;		/* DEPRECATED */
 	sigset_t p_sigignore;	/* Signals being ignored. */
 	sigset_t p_sigcatch;	/* Signals being caught by user. */
 
@@ -195,9 +198,15 @@ struct	proc {
 	caddr_t	user_stack;		/* where user stack was allocated */
 	void * exitarg;			/* exit arg for proc terminate */
 	void * vm_shm;			/* for sysV shared memory */
-	sigset_t p_sigpending;	/* pended Signals as traced process is blocked. */
+	sigset_t p_xxxsigpending;	/* DEPRECATED . */
 	int		p_vforkcnt;		/* number of outstanding vforks */
     void *  p_vforkact;     /* activation running this vfork proc */
+	TAILQ_HEAD( , uthread) p_uthlist; /* List of uthreads  */
+	/* Following fields are info from SIGCHLD */
+	pid_t	si_pid;
+	u_short si_status;
+	u_short	si_code;
+	uid_t	si_uid;
 #if DIAGNOSTIC
 #if SIGNAL_DEBUG
 	unsigned int lockpc[8];
@@ -206,10 +215,25 @@ struct	proc {
 #endif /* DIAGNOSTIC */
 };
 
+#else /* __APPLE_API_PRIVATE */
+struct session;
+struct pgrp;
+struct proc;
+#endif /* __APPLE_API_PRIVATE */
+
+#ifdef __APPLE_API_UNSTABLE
 /* Exported fields for kern sysctls */
 struct extern_proc {
-	struct	proc *p_forw;		/* Doubly-linked run/sleep queue. */
-	struct	proc *p_back;
+	union {
+		struct {
+			struct	proc *__p_forw;	/* Doubly-linked run/sleep queue. */
+			struct	proc *__p_back;
+		} p_st1;
+		struct timeval __p_starttime; 	/* process start time */
+	} p_un;
+#define p_forw p_un.p_st1.__p_forw
+#define p_back p_un.p_st1.__p_back
+#define p_starttime p_un.__p_starttime
 	struct	vmspace *p_vmspace;	/* Address space. */
 	struct	sigacts *p_sigacts;	/* Signal actions, state (PROC ONLY). */
 	int	p_flag;			/* P_* flags. */
@@ -237,10 +261,10 @@ struct extern_proc {
 	u_quad_t p_iticks;		/* Statclock hits processing intr. */
 	int	p_traceflag;		/* Kernel trace points. */
 	struct	vnode *p_tracep;	/* Trace to vnode. */
-	int	p_siglist;		/* Signals arrived but not delivered. */
+	int	p_siglist;		/* DEPRECATED */
 	struct	vnode *p_textvp;	/* Vnode of executable. */
 	int	p_holdcnt;		/* If non-zero, don't swap. */
-	sigset_t p_sigmask;	/* Current signal mask. */
+	sigset_t p_sigmask;	/* DEPRECATED. */
 	sigset_t p_sigignore;	/* Signals being ignored. */
 	sigset_t p_sigcatch;	/* Signals being caught by user. */
 	u_char	p_priority;	/* Process priority. */
@@ -281,10 +305,6 @@ struct extern_proc {
 #define	P_WEXIT		0x02000	/* Working on exiting. */
 #define	P_EXEC		0x04000	/* Process called exec. */
 
-/* Should probably be changed into a hold count. */
-#define	P_NOSWAP	0x08000	/* Another flag to prevent swap out. */
-#define	P_PHYSIO	0x10000	/* Doing physical I/O. */
-
 /* Should be moved to machine-dependent areas. */
 #define	P_OWEUPC	0x08000	/* Owe process an addupc() call at next ast. */
 
@@ -297,12 +317,18 @@ struct extern_proc {
 #define	P_TTYSLEEP	0x0100000	/* blocked due to SIGTTOU or SIGTTIN */
 #define	P_REBOOT	0x0200000	/* Process called reboot() */
 #define	P_TBE		0x0400000	/* Process is TBE */
-#define	P_SIGTHR	0x0800000	/* signal pending handling thread scheduled */
+#define	P_SIGEXC	0x0800000	/* signal exceptions */
 #define	P_BTRACE	0x1000000	/* process is being branch traced */
 #define	P_VFORK		0x2000000	/* process has vfork children */
-#define P_NOATTACH	0x4000000
+#define	P_NOATTACH	0x4000000
 #define	P_INVFORK	0x8000000	/* proc in vfork */
+#define	P_NOSHLIB	0x10000000	/* no shared libs are in use for proc */
+					/* flag set on exec */
+#define	P_FORCEQUOTA	0x20000000	/* Force quota for root */
+#define	P_NOCLDWAIT	0x40000000	/* No zombies when chil procs exit */
 
+#define	P_NOSWAP	0		/* Obsolete: retained so that nothing breaks */
+#define	P_PHYSIO	0		/*  Obsolete: retained so that nothing breaks */
 
 /*
  * Shareable process credentials (always resident).  This includes a reference
@@ -325,14 +351,18 @@ struct	pcred {
 						LK_EXCLUSIVE, 0, (p))
 #define pcred_unlock(p)		lockmgr(&(p)->p_cred->pc_lock,		\
 						LK_RELEASE, 0, (p))
+#endif /* __APPLE_API_UNSTABLE */
 
 #ifdef KERNEL
 
 __BEGIN_DECLS
+#ifdef __APPLE_API_PRIVATE
 /*
  * We use process IDs <= PID_MAX; PID_MAX + 1 must also fit in a pid_t,
  * as it is used to represent "no process group".
  */
+extern int nprocs, maxproc;		/* Current and max number of procs. */
+
 #define	PID_MAX		30000
 #define	NO_PID		30001
 
@@ -348,12 +378,16 @@ extern u_long pidhash;
 extern LIST_HEAD(pgrphashhead, pgrp) *pgrphashtbl;
 extern u_long pgrphash;
 
-extern int nprocs, maxproc;		/* Current and max number of procs. */
-
 LIST_HEAD(proclist, proc);
 extern struct proclist allproc;		/* List of all processes. */
 extern struct proclist zombproc;	/* List of zombie processes. */
 extern struct proc *initproc, *kernproc;
+extern void	pgdelete __P((struct pgrp *pgrp));
+extern void	sessrele __P((struct session *sess));
+extern void	procinit __P((void));
+#endif /* __APPLE_API_PRIVATE */
+
+#ifdef __APPLE_API_UNSTABLE
 
 extern struct	proc *pfind __P((pid_t));	/* Find process by id. */
 extern struct	pgrp *pgfind __P((pid_t));	/* Find process group by id. */
@@ -363,19 +397,26 @@ extern int	enterpgrp __P((struct proc *p, pid_t pgid, int mksess));
 extern void	fixjobc __P((struct proc *p, struct pgrp *pgrp, int entering));
 extern int	inferior __P((struct proc *p));
 extern int	leavepgrp __P((struct proc *p));
+#ifdef __APPLE_API_OBSOLETE
 extern void	mi_switch __P((void));
-extern void	pgdelete __P((struct pgrp *pgrp));
-extern void	sessrele __P((struct session *sess));
-extern void	procinit __P((void));
+#endif /* __APPLE_API_OBSOLETE */
 extern void	resetpriority __P((struct proc *));
 extern void	setrunnable __P((struct proc *));
 extern void	setrunqueue __P((struct proc *));
 extern int	sleep __P((void *chan, int pri));
 extern int	tsleep __P((void *chan, int pri, char *wmesg, int timo));
-extern int	tsleep0 __P((void *chan, int pri, char *wmesg, int timo, int (*continuation)(int) ));
+extern int	tsleep0 __P((void *chan, int pri, char *wmesg, int timo, int (*continuation)(int)));
+extern int	tsleep1 __P((void *chan, int pri, char *wmesg, u_int64_t abstime, int (*continuation)(int)));
 extern void	unsleep __P((struct proc *));
 extern void	wakeup __P((void *chan));
+#endif /* __APPLE_API_UNSTABLE */
+
 __END_DECLS
+
+#ifdef __APPLE_API_OBSOLETE
+/* FreeBSD source compatibility macro */ 
+#define PRISON_CHECK(p1, p2)	(1)
+#endif /* __APPLE_API_OBSOLETE */
 
 #endif	/* KERNEL */
 

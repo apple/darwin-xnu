@@ -52,10 +52,12 @@
  * SUCH DAMAGE.
  *
  *	@(#)in.h	8.3 (Berkeley) 1/3/94
+ * $FreeBSD: src/sys/netinet/in.h,v 1.48.2.2 2001/04/21 14:53:06 ume Exp $
  */
 
 #ifndef _NETINET_IN_H_
 #define _NETINET_IN_H_
+#include <sys/appleapiopts.h>
 
 /*
  * Constants and structures defined by the internet system,
@@ -66,12 +68,12 @@
  * Protocols (RFC 1700)
  */
 #define	IPPROTO_IP		0		/* dummy for IP */
-#define 	IPPROTO_HOPOPTS	0		/* IP6 hop-by-hop options */
+#define	IPPROTO_HOPOPTS	0		/* IP6 hop-by-hop options */
 #define	IPPROTO_ICMP		1		/* control message protocol */
 #define	IPPROTO_IGMP		2		/* group mgmt protocol */
 #define	IPPROTO_GGP		3		/* gateway^2 (deprecated) */
-#define 	IPPROTO_IPIP		4 		/* IP encapsulation in IP */
-#define 	IPPROTO_IPV4		4 		/* IP header */
+#define IPPROTO_IPV4		4 		/* IPv4 encapsulation */
+#define IPPROTO_IPIP		IPPROTO_IPV4	/* for compatibility */
 #define	IPPROTO_TCP		6		/* tcp */
 #define	IPPROTO_ST		7		/* Stream protocol II */
 #define	IPPROTO_EGP		8		/* exterior gateway protocol */
@@ -116,8 +118,8 @@
 #define	IPPROTO_GRE		47		/* General Routing Encap. */
 #define	IPPROTO_MHRP		48		/* Mobile Host Routing */
 #define	IPPROTO_BHA		49		/* BHA */
-#define	IPPROTO_ESP		50		/* SIPP Encap Sec. Payload */
-#define	IPPROTO_AH		51		/* SIPP Auth Header */
+#define	IPPROTO_ESP		50		/* IP6 Encap Sec. Payload */
+#define	IPPROTO_AH		51		/* IP6 Auth Header */
 #define	IPPROTO_INLSP		52		/* Integ. Net Layer Security */
 #define	IPPROTO_SWIPE		53		/* IP with encryption */
 #define	IPPROTO_NHRP		54		/* Next Hop Resolution */
@@ -167,10 +169,7 @@
 #define	IPPROTO_GMTP		100		/* GMTP*/
 #define	IPPROTO_IPCOMP	108		/* payload compression (IPComp) */
 /* 101-254: Partly Unassigned */
-#if defined(PM)
-#define	IPPROTO_PM		101		/* PM - Packet Management by SuMiRe */
-#endif
-#define 	IPPROTO_PIM		103		/* Protocol Independent Mcast */
+#define	IPPROTO_PIM		103		/* Protocol Independent Mcast */
 #define	IPPROTO_PGM		113		/* PGM */
 /* 255: Reserved */
 /* BSD Private, local use, namespace incursion */
@@ -253,7 +252,7 @@
  * Internet address (a structure for historical reasons)
  */
 struct in_addr {
-	u_int32_t s_addr;
+	in_addr_t s_addr;
 };
 
 /*
@@ -299,8 +298,10 @@ struct in_addr {
 #define	INADDR_ALLRTRS_GROUP	(u_int32_t)0xe0000002	/* 224.0.0.2 */
 #define	INADDR_MAX_LOCAL_GROUP	(u_int32_t)0xe00000ff	/* 224.0.0.255 */
 
+#ifdef __APPLE__
 #define IN_LINKLOCALNETNUM	(u_int32_t)0xA9FE0000 /* 169.254.0.0 */
 #define IN_LINKLOCAL(i)		(((u_int32_t)(i) & IN_CLASSB_NET) == IN_LINKLOCALNETNUM)
+#endif
 
 #define	IN_LOOPBACKNET		127			/* official! */
 
@@ -352,19 +353,30 @@ struct ip_opts {
 #define IP_RSVP_VIF_ON		17   /* set RSVP per-vif socket */
 #define IP_RSVP_VIF_OFF		18   /* unset RSVP per-vif socket */
 #define IP_PORTRANGE		19   /* int; range to choose for unspec port */
-#define IP_RECVIF		20   /* bool; receive reception if w/dgram */
-#define IP_IPSEC_POLICY		21   /* int; set/get security policy */
-#define IP_FAITH		22   /* bool; accept FAITH'ed connections */
+#define	IP_RECVIF		20   /* bool; receive reception if w/dgram */
+/* for IPSEC */
+#define	IP_IPSEC_POLICY		21   /* int; set/get security policy */
+#define	IP_FAITH		22   /* bool; accept FAITH'ed connections */
+#ifdef __APPLE__
 #define IP_STRIPHDR      	23   /* bool: drop receive of raw IP header */
+#endif
 
 
-#define IP_FW_ADD     		50   /* add a firewall rule to chain */
-#define IP_FW_DEL    		51   /* delete a firewall rule from chain */
-#define IP_FW_FLUSH   		52   /* flush firewall rule chain */
-#define IP_FW_ZERO    		53   /* clear single/all firewall counter(s) */
-#define IP_FW_GET     		54   /* get entire firewall rule chain */
-#define IP_NAT			55   /* set/get NAT opts */
-#define IP_FW_RESETLOG		56   /* reset logging counters */
+#define	IP_FW_ADD     		40   /* add a firewall rule to chain */
+#define	IP_FW_DEL    		41   /* delete a firewall rule from chain */
+#define	IP_FW_FLUSH   		42   /* flush firewall rule chain */
+#define	IP_FW_ZERO    		43   /* clear single/all firewall counter(s) */
+#define	IP_FW_GET     		44   /* get entire firewall rule chain */
+#define	IP_FW_RESETLOG		45   /* reset logging counters */
+
+/* These older firewall socket option codes are maintained for backward compatibility. */
+#define	IP_OLD_FW_ADD     	50   /* add a firewall rule to chain */
+#define	IP_OLD_FW_DEL    	51   /* delete a firewall rule from chain */
+#define	IP_OLD_FW_FLUSH   	52   /* flush firewall rule chain */
+#define	IP_OLD_FW_ZERO    	53   /* clear single/all firewall counter(s) */
+#define	IP_OLD_FW_GET     	54   /* get entire firewall rule chain */
+#define IP_NAT__XXX			55   /* set/get NAT opts XXX Deprecated, do not use */
+#define	IP_OLD_FW_RESETLOG	56   /* reset logging counters */
 
 #define	IP_DUMMYNET_CONFIGURE	60   /* add/configure a dummynet pipe */
 #define	IP_DUMMYNET_DEL		61   /* delete a dummynet pipe from chain */
@@ -400,7 +412,7 @@ struct ip_mreq {
  * Third level is protocol number.
  * Fourth level is desired variable within that protocol.
  */
-#define	IPPROTO_MAXID	(IPPROTO_ESP + 1)	/* don't list to IPPROTO_MAX */
+#define	IPPROTO_MAXID	(IPPROTO_AH + 1)	/* don't list to IPPROTO_MAX */
 
 #define	CTL_IPPROTO_NAMES { \
 	{ "ip", CTLTYPE_NODE }, \
@@ -472,12 +484,12 @@ struct ip_mreq {
 #define	IPCTL_SOURCEROUTE	8	/* may perform source routes */
 #define	IPCTL_DIRECTEDBROADCAST	9	/* may re-broadcast received packets */
 #define IPCTL_INTRQMAXLEN	10	/* max length of netisr queue */
-#define IPCTL_INTRQDROPS	11	/* number of netisr q drops */
+#define	IPCTL_INTRQDROPS	11	/* number of netisr q drops */
 #define	IPCTL_STATS		12	/* ipstat structure */
 #define	IPCTL_ACCEPTSOURCEROUTE	13	/* may accept source routed packets */
-#define IPCTL_FASTFORWARDING	14	/* use fast IP forwarding code */
-#define IPCTL_KEEPFAITH		15
-#define IPCTL_GIF_TTL		16	/* default TTL for gif encap packet */
+#define	IPCTL_FASTFORWARDING	14	/* use fast IP forwarding code */
+#define	IPCTL_KEEPFAITH		15	/* FAITH IPv4->IPv6 translater ctl */
+#define	IPCTL_GIF_TTL		16	/* default TTL for gif encap packet */
 #define	IPCTL_MAXID		17
 
 #define	IPCTL_NAMES { \
@@ -506,6 +518,7 @@ struct ip_mreq {
 #undef __KAME_NETINET_IN_H_INCLUDED_
 
 #ifdef KERNEL
+#ifdef __APPLE_API_PRIVATE
 struct ifnet; struct mbuf;	/* forward declarations for Standard C */
 
 int	 in_broadcast __P((struct in_addr, struct ifnet *));
@@ -517,6 +530,7 @@ u_short  in_pseudo __P((u_int, u_int, u_int));
 int	 in_localaddr __P((struct in_addr));
 char 	*inet_ntoa __P((struct in_addr)); /* in libkern */
 u_long	in_netof __P((struct in_addr));
+#endif /* __APPLE_API_PRIVATE */
 #endif /* KERNEL */
 
 #endif

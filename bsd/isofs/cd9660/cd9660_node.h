@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2002 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -63,6 +63,9 @@
 #ifndef _CD9660_NODE_H_
 #define _CD9660_NODE_H_
 
+#include <sys/appleapiopts.h>
+
+#ifdef __APPLE_API_PRIVATE
 /*
  * Theoretically, directories can be more than 2Gb in length,
  * however, in practice this seems unlikely. So, we define
@@ -189,4 +192,5 @@ struct iso_dnode *iso_dmap __P((dev_t, ino_t, int));
 void iso_dunmap __P((dev_t));
 #endif
 
+#endif /* __APPLE_API_PRIVATE */
 #endif /* ! _CD9660_NODE_H_ */

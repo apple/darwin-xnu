@@ -31,6 +31,7 @@
 #include <pexpert/device_tree.h>
 #include <pexpert/pe_images.h>
 #include <kern/debug.h>
+#include <kern/sched_prim.h>
 
 /* extern references */
 void pe_identify_machine(void);
@@ -113,42 +114,13 @@ int PE_initialize_console( PE_Video * info, int op )
     return 0;
 }
 
-static boolean_t find_image( const char * name,
-				void ** desc,
-				unsigned char ** data,
-				unsigned char ** clut )
-{
-    boolean_t	ok;
-#if 0
-    DTEntry	entry;
-    int		size;
-
-    // This is a little flawed now the device tree data
-    // is freed.
-    if( (kSuccess == DTLookupEntry(0, "/AAPL,images", &entry))
-     && (kSuccess == DTLookupEntry(entry, name, &entry)) ) {
-
-	ok = ( (kSuccess == DTGetProperty(entry, "desc",
-				desc, &size))
-            && (kSuccess == DTGetProperty(entry, "data",
-				(void **)data, &size)));
-
-        if( clut && (kSuccess != DTGetProperty(entry, "clut",
-				(void **)clut, &size)))
-	    *clut = appleClut8;
-    } else
-#endif
-	ok = FALSE;
-
-    return( ok );
-}
-
 void PE_init_iokit(void)
 {
     kern_return_t	ret;
-    void * 		desc;
-    unsigned char *	data;
-    unsigned char *	clut;
+    DTEntry		entry;
+    int			size;
+    int			i;
+    void **		map;
 
     PE_init_kprintf(TRUE);
     PE_init_printf(TRUE);
@@ -156,12 +128,25 @@ void PE_init_iokit(void)
     // init this now to get mace debugger for iokit startup
     PE_init_ethernet_debugger();
 
-    if( !find_image( "progress", &desc, &data, &clut)) {
-        clut = appleClut8;
-        desc = &default_progress;
-        data = default_progress_data;
+    
+    if( kSuccess == DTLookupEntry(0, "/chosen/memory-map", &entry)) {
+
+	boot_progress_element * bootPict;
+
+	if( kSuccess == DTGetProperty(entry, "BootCLUT", (void **) &map, &size))
+	    bcopy( map[0], appleClut8, sizeof(appleClut8) );
+
+	if( kSuccess == DTGetProperty(entry, "Pict-FailedBoot", (void **) &map, &size)) {
+
+	    bootPict = (boot_progress_element *) map[0];
+	    default_noroot.width  = bootPict->width;
+	    default_noroot.height = bootPict->height;
+	    default_noroot.dx     = 0;
+	    default_noroot.dy     = bootPict->yOffset;
+	    default_noroot_data   = &bootPict->data[0];
+	}
     }
-    vc_progress_initialize( desc, data, clut );
+    vc_progress_initialize( &default_progress, default_progress_data, (unsigned char *) appleClut8 );
 
     PE_initialize_console( (PE_Video *) 0, kPEAcquireScreen );
 
@@ -222,14 +207,8 @@ int PE_current_console( PE_Video * info )
 void PE_display_icon(	unsigned int flags,
 			const char * name )
 {
-    void * 		desc;
-    unsigned char *	data;
-
-    if( !find_image( name, &desc, &data, 0)) {
-        desc = &default_roroot;
-        data = default_noroot_data;
-    }
-    vc_display_icon( desc, data );
+    if( default_noroot_data)
+	vc_display_icon( &default_noroot, default_noroot_data );
 }
 
 extern boolean_t PE_get_hotkey(

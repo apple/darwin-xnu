@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2002,2000 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -26,19 +26,6 @@
 
 #ifndef _MACHINE_RPC_H_
 #define _MACHINE_RPC_H_
-
-#if     ETAP_EVENT_MONITOR
-#define ETAP_EXCEPTION_PROBE(_f, _th, _ex, _sysnum)             \
-        if (_ex == EXC_SYSCALL) {                               \
-                ETAP_PROBE_DATA(ETAP_P_SYSCALL_UNIX,            \
-                                _f,                             \
-                                _th,                            \
-                                _sysnum,                        \
-                                sizeof(int));                   \
-        }
-#else   /* ETAP_EVENT_MONITOR */
-#define ETAP_EXCEPTION_PROBE(_f, _th, _ex, _sysnum)
-#endif  /* ETAP_EVENT_MONITOR */
 
 #endif /* _MACHINE_RPC_H_ */
 

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2001 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2002 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -84,6 +84,8 @@
  */
 struct filelist filehead;	/* head of list of open files */
 int nfiles;			/* actual number of open files */
+
+static int frele_internal(struct file *);
 
 /*
  * System calls on descriptors.
@@ -232,13 +234,13 @@ fcntl(p, uap, retval)
 	struct vnode *vp, *devvp;
 	int i, tmp, error, error2, flg = F_POSIX;
 	struct flock fl;
-        fstore_t alloc_struct;    /* structure for allocate command */
+	fstore_t alloc_struct;    /* structure for allocate command */
 	u_int32_t alloc_flags = 0;
 	off_t offset;       	  /* used for F_SETSIZE */
 	int newmin;
 	struct radvisory ra_struct;
 	fbootstraptransfer_t fbt_struct; /* for F_READBOOTSTRAP and F_WRITEBOOTSTRAP */
-        struct log2phys l2p_struct;    /* structure for allocate command */
+	struct log2phys l2p_struct;    /* structure for allocate command */
 	daddr_t	lbn, bn;
 	int devBlockSize = 0;
 
@@ -275,16 +277,16 @@ fcntl(p, uap, retval)
 		fp->f_flag &= ~FCNTLFLAGS;
 		fp->f_flag |= FFLAGS((long)uap->arg) & FCNTLFLAGS;
 		tmp = fp->f_flag & FNONBLOCK;
-		error = (*fp->f_ops->fo_ioctl)(fp, FIONBIO, (caddr_t)&tmp, p);
+		error = fo_ioctl(fp, FIONBIO, (caddr_t)&tmp, p);
 		if (error)
 			return (error);
 		tmp = fp->f_flag & FASYNC;
-		error = (*fp->f_ops->fo_ioctl)(fp, FIOASYNC, (caddr_t)&tmp, p);
+		error = fo_ioctl(fp, FIOASYNC, (caddr_t)&tmp, p);
 		if (!error)
 			return (0);
 		fp->f_flag &= ~FNONBLOCK;
 		tmp = 0;
-		(void) (*fp->f_ops->fo_ioctl)(fp, FIONBIO, (caddr_t)&tmp, p);
+		(void)fo_ioctl(fp, FIONBIO, (caddr_t)&tmp, p);
 		return (error);
 
 	case F_GETOWN:
@@ -292,8 +294,7 @@ fcntl(p, uap, retval)
 			*retval = ((struct socket *)fp->f_data)->so_pgid;
 			return (0);
 		}
-		error = (*fp->f_ops->fo_ioctl)
-			(fp, (int)TIOCGPGRP, (caddr_t)retval, p);
+		error = fo_ioctl(fp, (int)TIOCGPGRP, (caddr_t)retval, p);
 		*retval = -*retval;
 		return (error);
 
@@ -311,8 +312,7 @@ fcntl(p, uap, retval)
 				return (ESRCH);
 			uap->arg = (void *)(long)p1->p_pgrp->pg_id;
 		}
-		return ((*fp->f_ops->fo_ioctl)
-			(fp, (int)TIOCSPGRP, (caddr_t)&uap->arg, p));
+		return (fo_ioctl(fp, (int)TIOCSPGRP, (caddr_t)&uap->arg, p));
 
 	case F_SETLKW:
 		flg |= F_WAIT;
@@ -367,55 +367,44 @@ fcntl(p, uap, retval)
 		return (copyout((caddr_t)&fl, (caddr_t)uap->arg,
 		    sizeof (fl)));
 
-        case F_PREALLOCATE:
-		
-		/* Copy in the structure */
+	case F_PREALLOCATE:
+		if (fp->f_type != DTYPE_VNODE)
+			return (EBADF);
 
-		error = copyin((caddr_t)uap->arg, (caddr_t)&alloc_struct,
-		    sizeof (alloc_struct));
-
-		if (error)
-			return (error);
-
-		/* now set the space allocated to 0 and pass it out in
-		   case we get a parameter checking error */
-		
-		alloc_struct.fst_bytesalloc = 0;
-		
-		error = copyout((caddr_t)&alloc_struct, (caddr_t)uap->arg,
-		    sizeof (alloc_struct));
-
-			if (error)
-				return(error);
-
-		/* First make sure that we have write permission */
-
+		/* make sure that we have write permission */
 		if ((fp->f_flag & FWRITE) == 0)
 			return (EBADF);
 
+		error = copyin((caddr_t)uap->arg, (caddr_t)&alloc_struct,
+		    sizeof (alloc_struct));
+		if (error)
+			return (error);
 
-		/* Do some simple parameter checking */
-
+		/* now set the space allocated to 0 */
+		alloc_struct.fst_bytesalloc = 0;
+		
+		/*
+		 * Do some simple parameter checking
+		 */
 
 		/* set up the flags */
 
 		alloc_flags |= PREALLOCATE;
 		
-		if (alloc_struct.fst_flags & F_ALLOCATECONTIG) {
+		if (alloc_struct.fst_flags & F_ALLOCATECONTIG)
 			alloc_flags |= ALLOCATECONTIG;
-		}
 
-                if (alloc_struct.fst_flags & F_ALLOCATEALL) {
-                	alloc_flags |= ALLOCATEALL;
-               	}
+		if (alloc_struct.fst_flags & F_ALLOCATEALL)
+			alloc_flags |= ALLOCATEALL;
 
-		/* Do any position mode specific stuff.  The only   */
-		/* position mode  supported now is PEOFPOSMODE      */
+		/*
+		 * Do any position mode specific stuff.  The only
+		 * position mode  supported now is PEOFPOSMODE
+		 */
 
 		switch (alloc_struct.fst_posmode) {
 	
 		case F_PEOFPOSMODE:
-
 			if (alloc_struct.fst_offset != 0)
 				return (EINVAL);
 
@@ -423,7 +412,6 @@ fcntl(p, uap, retval)
 			break;
 
 		case F_VOLPOSMODE:
-
 			if (alloc_struct.fst_offset <= 0)
 				return (EINVAL);
 
@@ -431,131 +419,134 @@ fcntl(p, uap, retval)
 			break;
 
 		default:
-
 			return(EINVAL);
-
 		}
 
-		/* Now lock the vnode and call allocate to get the space */
+		vp = (struct vnode *)fp->f_data;
 
-        	vp = (struct vnode *)fp->f_data;
-
-		VOP_LOCK(vp,LK_EXCLUSIVE,p);
+		/* lock the vnode and call allocate to get the space */
+		error = vn_lock(vp, LK_EXCLUSIVE|LK_RETRY, p);
+		if (error)
+			return (error);
 		error = VOP_ALLOCATE(vp,alloc_struct.fst_length,alloc_flags,
 				     &alloc_struct.fst_bytesalloc, alloc_struct.fst_offset,
 				     fp->f_cred, p);
-		VOP_UNLOCK(vp,0,p);
+		VOP_UNLOCK(vp, 0, p);
 
-		if (error2 = (copyout((caddr_t)&alloc_struct, (caddr_t)uap->arg,
-		    sizeof (alloc_struct)))) {
-			if (error) {
+		if (error2 = copyout((caddr_t)&alloc_struct,
+						(caddr_t)uap->arg,
+						sizeof (alloc_struct))) {
+			if (error)
 				return(error);
-			} else {
+			else
 				return(error2);
-			}
 		}
-
 		return(error);
 		
-        case F_SETSIZE:
+	case F_SETSIZE:
+		if (fp->f_type != DTYPE_VNODE)
+			return (EBADF);
 		
-		/* Copy in the structure */
-
 		error = copyin((caddr_t)uap->arg, (caddr_t)&offset,
-		    sizeof (off_t));
-
+					sizeof (off_t));
 		if (error)
 			return (error);
 
+		/*
+		 * Make sure that we are root.  Growing a file
+		 * without zero filling the data is a security hole 
+		 * root would have access anyway so we'll allow it
+		 */
 
-		/* First make sure that we are root.  Growing a file */
-		/* without zero filling the data is a security hole  */
-		/* root would have access anyway so we'll allow it   */
-
-		if (!is_suser()) {
+		if (!is_suser())
 			return (EACCES);
-			}
 
-		/* Now lock the vnode and call allocate to get the space */
+		vp = (struct vnode *)fp->f_data;
 
-        	vp = (struct vnode *)fp->f_data;
-
-		VOP_LOCK(vp,LK_EXCLUSIVE,p);
+		/* lock the vnode and call allocate to get the space */
+		error = vn_lock(vp, LK_EXCLUSIVE|LK_RETRY, p);
+		if (error)
+			return (error);
 		error = VOP_TRUNCATE(vp,offset,IO_NOZEROFILL,fp->f_cred,p);
 		VOP_UNLOCK(vp,0,p);
-
 		return(error);
-		
-        case F_RDAHEAD:
-        	vp = (struct vnode *)fp->f_data;
-	  
-		simple_lock(&vp->v_interlock);
-		if (uap->arg)
-		      vp->v_flag &= ~VRAOFF;
-		else
-		      vp->v_flag |= VRAOFF;
-		simple_unlock(&vp->v_interlock);
 
-		return (0);
-
-        case F_NOCACHE:
-        	vp = (struct vnode *)fp->f_data;
-	  
-		simple_lock(&vp->v_interlock);
-		if (uap->arg)
-		        vp->v_flag |= VNOCACHE_DATA;
-		else
-		        vp->v_flag &= ~VNOCACHE_DATA;
-		simple_unlock(&vp->v_interlock);
-
-		return (0);
-
-	case F_RDADVISE:
-        	vp = (struct vnode *)fp->f_data;
-
-		if (error = copyin((caddr_t)uap->arg, (caddr_t)&ra_struct, sizeof (ra_struct)))
-		        return(error);
-		return (VOP_IOCTL(vp, 1, &ra_struct, 0, fp->f_cred, p));
-		
-	case F_READBOOTSTRAP:
-	case F_WRITEBOOTSTRAP:
-		
-		/* Copy in the structure */
-
-		error = copyin((caddr_t)uap->arg, (caddr_t)&fbt_struct,
-		    sizeof (fbt_struct));
-
-		if (error)
-			return (error);
-
-
-		if (uap->cmd == F_WRITEBOOTSTRAP) {
-		  /* First make sure that we are root.  Updating the */
-		  /* bootstrap on a disk could be a security hole */
-
-		  if (!is_suser()) {
-		    return (EACCES);
-		  }
-		};
-
-		/* Now lock the vnode and call VOP_IOCTL to handle the I/O: */
-
-        	vp = (struct vnode *)fp->f_data;
-		if (vp->v_tag != VT_HFS) {
-		  error = EINVAL;
-		} else {
-		  VOP_LOCK(vp,LK_EXCLUSIVE,p);
-		  error = VOP_IOCTL(vp, (uap->cmd == F_WRITEBOOTSTRAP) ? 3 : 2, &fbt_struct, 0, fp->f_cred, p);
-		  VOP_UNLOCK(vp,0,p);
-		};
-
-		return(error);
-		
-        case F_LOG2PHYS:
+	case F_RDAHEAD:
 		if (fp->f_type != DTYPE_VNODE)
 			return (EBADF);
 		vp = (struct vnode *)fp->f_data;
-		VOP_LOCK(vp, LK_EXCLUSIVE, p);
+
+		simple_lock(&vp->v_interlock);
+		if (uap->arg)
+			vp->v_flag &= ~VRAOFF;
+		else
+			vp->v_flag |= VRAOFF;
+		simple_unlock(&vp->v_interlock);
+		return (0);
+
+	case F_NOCACHE:
+		if (fp->f_type != DTYPE_VNODE)
+			return (EBADF);
+		vp = (struct vnode *)fp->f_data;
+
+		simple_lock(&vp->v_interlock);
+		if (uap->arg)
+			vp->v_flag |= VNOCACHE_DATA;
+		else
+			vp->v_flag &= ~VNOCACHE_DATA;
+		simple_unlock(&vp->v_interlock);
+		return (0);
+
+	case F_RDADVISE:
+		if (fp->f_type != DTYPE_VNODE)
+			return (EBADF);
+		vp = (struct vnode *)fp->f_data;
+
+		if (error = copyin((caddr_t)uap->arg,
+					(caddr_t)&ra_struct, sizeof (ra_struct)))
+			return(error);
+		return (VOP_IOCTL(vp, 1, &ra_struct, 0, fp->f_cred, p));
+
+	case F_READBOOTSTRAP:
+	case F_WRITEBOOTSTRAP:
+		if (fp->f_type != DTYPE_VNODE)
+			return (EBADF);
+
+		error = copyin((caddr_t)uap->arg, (caddr_t)&fbt_struct,
+				sizeof (fbt_struct));
+		if (error)
+			return (error);
+
+		if (uap->cmd == F_WRITEBOOTSTRAP) {
+		  /*
+		   * Make sure that we are root.  Updating the
+		   * bootstrap on a disk could be a security hole
+		   */
+			if (!is_suser())
+				return (EACCES);
+		}
+
+		vp = (struct vnode *)fp->f_data;
+		if (vp->v_tag != VT_HFS)	/* XXX */
+			error = EINVAL;
+		else {
+			/* lock the vnode and call VOP_IOCTL to handle the I/O */
+			error = vn_lock(vp, LK_EXCLUSIVE|LK_RETRY, p);
+			if (error)
+				return (error);
+			error = VOP_IOCTL(vp, (uap->cmd == F_WRITEBOOTSTRAP) ? 3 : 2,
+					&fbt_struct, 0, fp->f_cred, p);
+			VOP_UNLOCK(vp,0,p);
+		}
+		return(error);
+
+	case F_LOG2PHYS:
+		if (fp->f_type != DTYPE_VNODE)
+			return (EBADF);
+		vp = (struct vnode *)fp->f_data;
+		error = vn_lock(vp, LK_EXCLUSIVE|LK_RETRY, p);
+		if (error)
+			return (error);
 		if (VOP_OFFTOBLK(vp, fp->f_offset, &lbn))
 			panic("fcntl LOG2PHYS OFFTOBLK");
 		if (VOP_BLKTOOFF(vp, lbn, &offset))
@@ -573,7 +564,6 @@ fcntl(p, uap, retval)
 					sizeof (l2p_struct));
 		}
 		return (error);
-
 
 	default:
 		return (EINVAL);
@@ -1094,6 +1084,31 @@ fdfree(p)
 	FREE_ZONE(fdp, sizeof *fdp, M_FILEDESC);
 }
 
+static int
+closef_finish(fp, p)
+	register struct file *fp;
+	register struct proc *p;
+{
+	struct vnode *vp;
+	struct flock lf;
+	int error;
+
+	if ((fp->f_flag & FHASLOCK) && fp->f_type == DTYPE_VNODE) {
+		lf.l_whence = SEEK_SET;
+		lf.l_start = 0;
+		lf.l_len = 0;
+		lf.l_type = F_UNLCK;
+		vp = (struct vnode *)fp->f_data;
+		(void) VOP_ADVLOCK(vp, (caddr_t)fp, F_UNLCK, &lf, F_FLOCK);
+	}
+	if (fp->f_ops)
+		error = fo_close(fp, p);
+	else
+		error = 0;
+	ffree(fp);
+	return (error);
+}
+
 /*
  * Internal form of close.
  * Decrement reference count on file structure.
@@ -1127,22 +1142,9 @@ closef(fp, p)
 		vp = (struct vnode *)fp->f_data;
 		(void) VOP_ADVLOCK(vp, (caddr_t)p, F_UNLCK, &lf, F_POSIX);
 	}
-	if (frele(fp) > 0)
+	if (frele_internal(fp) > 0)
 		return (0);
-	if ((fp->f_flag & FHASLOCK) && fp->f_type == DTYPE_VNODE) {
-		lf.l_whence = SEEK_SET;
-		lf.l_start = 0;
-		lf.l_len = 0;
-		lf.l_type = F_UNLCK;
-		vp = (struct vnode *)fp->f_data;
-		(void) VOP_ADVLOCK(vp, (caddr_t)fp, F_UNLCK, &lf, F_FLOCK);
-	}
-	if (fp->f_ops)
-		error = (*fp->f_ops->fo_close)(fp, p);
-	else
-		error = 0;
-	ffree(fp);
-	return (error);
+	return(closef_finish(fp, p));
 }
 
 /*
@@ -1304,12 +1306,39 @@ fref(struct file *fp)
 	return ((int)fp->f_count);
 }
 
-int
-frele(struct file *fp)
+static int 
+frele_internal(struct file *fp)
 {
 	if (--fp->f_count < 0)
 		panic("frele: count < 0");
 	return ((int)fp->f_count);
+}
+
+
+int
+frele(struct file *fp)
+{
+	int count;
+	funnel_t * fnl;
+	extern int disable_funnel;
+
+	fnl = thread_funnel_get();
+	/*
+	 * If the funnels are merged then atleast a funnel should be held
+	 * else frele should come in with kernel funnel only
+	 */
+	if (!disable_funnel && (fnl != kernel_flock)) {
+		panic("frele: kernel funnel not held");
+
+	} else if  (fnl == THR_FUNNEL_NULL) {
+		panic("frele: no funnel held");
+	}
+
+	if ((count = frele_internal(fp)) == 0) {
+		/* some one closed the fd while we were blocked */
+		(void)closef_finish(fp, current_proc());
+	}
+	return(count);
 }
 
 int

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2002 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -58,6 +58,9 @@
 #ifndef _SYS_DMAP_H_
 #define	_SYS_DMAP_H_
 
+#include <sys/appleapiopts.h>
+
+#ifdef __APPLE_API_OBSOLETE
 /*
  * Definitions for the mapping of vitual swap space to the physical swap
  * area - the disk map.
@@ -79,4 +82,7 @@ struct dblock {
 	swblk_t db_base;	/* base of physical contig drum block */
 	swblk_t db_size;	/* size of block */
 };
+
+#endif /* __APPLE_API_OBSOLETE */
+
 #endif	/* !_SYS_DMAP_H_ */

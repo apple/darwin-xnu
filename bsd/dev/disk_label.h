@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2002 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -23,15 +23,15 @@
  *
  *	File:	bsd/dev/disk_label.h - NeXT disk label definition.
  *
- * HISTORY
- * 28-Mar-92  Doug Mitchell at NeXT
- *	Split out from <bsd/dev/disk.h>.
  */
 
 #ifndef	_BSD_DEV_DISK_LABEL_
 #define	_BSD_DEV_DISK_LABEL_
 
+#include <sys/appleapiopts.h>
 #include <sys/disktab.h>
+
+#ifdef	__APPLE_API_OBSOLETE
 
 #define	NLABELS		4		/* # of labels on a disk */
 #define	MAXLBLLEN	24		/* dl_label[] size */
@@ -102,6 +102,8 @@ typedef struct disk_label {
  */
 #define	dl_v3_checksum	dl_un.DL_v3_checksum
 #define	dl_bad		dl_un.DL_bad
+
+#endif	/* __APPLE_API_OBSOLETE */
 
 #endif	/* _BSD_DEV_DISK_LABEL_ */
 

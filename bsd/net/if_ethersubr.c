@@ -52,14 +52,8 @@
  * SUCH DAMAGE.
  *
  *	@(#)if_ethersubr.c	8.1 (Berkeley) 6/10/93
+ * $FreeBSD: src/sys/net/if_ethersubr.c,v 1.70.2.17 2001/08/01 00:47:49 fenner Exp $
  */
-
-#if NOTFB31
-#include "opt_atalk.h"
-#include "opt_inet.h"
-#include "opt_ipx.h"
-#include "opt_bdg.h"
-#endif
 
 #include <sys/param.h>
 #include <sys/systm.h>
@@ -77,7 +71,7 @@
 #include <net/if_dl.h>
 #include <net/if_types.h>
 
-#if INET
+#if INET || INET6
 #include <netinet/in.h>
 #include <netinet/in_var.h>
 #include <netinet/if_ether.h>
@@ -89,26 +83,6 @@
 #include <netipx/ipx.h>
 #include <netipx/ipx_if.h>
 #endif
-
-#if NS
-#include <netns/ns.h>
-#include <netns/ns_if.h>
-ushort ns_nettype;
-int ether_outputdebug = 0;
-int ether_inputdebug = 0;
-#endif
-
-#if ISO
-#include <netiso/argo_debug.h>
-#include <netiso/iso.h>
-#include <netiso/iso_var.h>
-#include <netiso/iso_snpac.h>
-#endif
-
-/*#if LLC
-#include <netccitt/dll.h>
-#include <netccitt/llc_var.h>
-#endif*/
 
 #include <sys/socketvar.h>
 
@@ -136,17 +110,18 @@ extern u_char	etherbroadcastaddr[];
  */
 
 
+/* 
+    IONetworkingFamily should call dlil_if_attach
+    ether_ifattach becomes obsolete, but remains for
+    temporary compatibility with third parties extensions
+*/
 void
 ether_ifattach(ifp)
 	register struct ifnet *ifp;
 {
-	register struct ifaddr *ifa;
-	register struct sockaddr_dl *sdl;
 	boolean_t funnel_state;
 
 	funnel_state = thread_funnel_set(network_flock, TRUE);
-	printf("ether_ifattach called for %s\n", ifp->if_name);
-	ether_family_init();
 
 	ifp->if_name = "en";
 	ifp->if_family = APPLE_IF_FAM_ETHERNET;
@@ -159,19 +134,6 @@ ether_ifattach(ifp)
 	    ifp->if_baudrate = 10000000;
 
 	dlil_if_attach(ifp);
-	ifa = ifnet_addrs[ifp->if_index - 1];
-	if (ifa == 0) {
-		printf("ether_ifattach: no lladdr!\n");
-		(void) thread_funnel_set(network_flock, funnel_state);
-		return;
-	}
-	sdl = (struct sockaddr_dl *)ifa->ifa_addr;
-	sdl->sdl_type = IFT_ETHER;
-	sdl->sdl_alen = ifp->if_addrlen;
-	bcopy((IFP2AC(ifp))->ac_enaddr, LLADDR(sdl), ifp->if_addrlen);
-#ifdef INET6 
-        in6_ifattach_getifid(ifp);
-#endif      
 	(void) thread_funnel_set(network_flock, funnel_state);
 }
 

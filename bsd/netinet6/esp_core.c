@@ -1,4 +1,5 @@
-/*	$KAME: esp_core.c,v 1.11 2000/02/22 14:04:15 itojun Exp $	*/
+/*	$FreeBSD: src/sys/netinet6/esp_core.c,v 1.1.2.2 2001/07/03 11:01:49 ume Exp $	*/
+/*	$KAME: esp_core.c,v 1.50 2000/11/02 12:27:38 itojun Exp $	*/
 
 /*
  * Copyright (C) 1995, 1996, 1997, and 1998 WIDE Project.
@@ -30,9 +31,6 @@
  */
 
 #define _IP_VHL
-#if (defined(__FreeBSD__) && __FreeBSD__ >= 3) || defined(__NetBSD__)
-#include "opt_inet.h"
-#endif
 
 #include <sys/param.h>
 #include <sys/systm.h>
@@ -58,89 +56,192 @@
 #endif
 
 #include <netinet6/ipsec.h>
+#if INET6
+#include <netinet6/ipsec6.h>
+#endif
 #include <netinet6/ah.h>
+#if INET6
+#include <netinet6/ah6.h>
+#endif
 #include <netinet6/esp.h>
+#if INET6
+#include <netinet6/esp6.h>
+#endif
+#include <netinet6/esp_rijndael.h>
 #include <net/pfkeyv2.h>
 #include <netkey/keydb.h>
+#include <netkey/key.h>
 #include <crypto/des/des.h>
 #include <crypto/blowfish/blowfish.h>
 #include <crypto/cast128/cast128.h>
-#include <crypto/rc5/rc5.h>
 
 #include <net/net_osdep.h>
 
 static int esp_null_mature __P((struct secasvar *));
-static int esp_null_ivlen __P((struct secasvar *));
 static int esp_null_decrypt __P((struct mbuf *, size_t,
-	struct secasvar *, struct esp_algorithm *, int));
+	struct secasvar *, const struct esp_algorithm *, int));
 static int esp_null_encrypt __P((struct mbuf *, size_t, size_t,
-	struct secasvar *, struct esp_algorithm *, int));
+	struct secasvar *, const struct esp_algorithm *, int));
 static int esp_descbc_mature __P((struct secasvar *));
-static int esp_descbc_ivlen __P((struct secasvar *));
-static int esp_descbc_decrypt __P((struct mbuf *, size_t,
-	struct secasvar *, struct esp_algorithm *, int));
-static int esp_descbc_encrypt __P((struct mbuf *, size_t, size_t,
-	struct secasvar *, struct esp_algorithm *, int));
+static int esp_descbc_ivlen __P((const struct esp_algorithm *,
+	struct secasvar *));
+static int esp_des_schedule __P((const struct esp_algorithm *,
+	struct secasvar *));
+static int esp_des_schedlen __P((const struct esp_algorithm *));
+static int esp_des_blockdecrypt __P((const struct esp_algorithm *,
+	struct secasvar *, u_int8_t *, u_int8_t *));
+static int esp_des_blockencrypt __P((const struct esp_algorithm *,
+	struct secasvar *, u_int8_t *, u_int8_t *));
 static int esp_cbc_mature __P((struct secasvar *));
-static int esp_blowfish_cbc_decrypt __P((struct mbuf *, size_t,
-	struct secasvar *, struct esp_algorithm *, int));
-static int esp_blowfish_cbc_encrypt __P((struct mbuf *, size_t,
-	size_t, struct secasvar *, struct esp_algorithm *, int));
-static int esp_blowfish_cbc_ivlen __P((struct secasvar *));
-static int esp_cast128cbc_ivlen __P((struct secasvar *));
-static int esp_cast128cbc_decrypt __P((struct mbuf *, size_t,
-	struct secasvar *, struct esp_algorithm *, int));
-static int esp_cast128cbc_encrypt __P((struct mbuf *, size_t, size_t,
-	struct secasvar *, struct esp_algorithm *, int));
-static int esp_3descbc_ivlen __P((struct secasvar *));
-static int esp_3descbc_decrypt __P((struct mbuf *, size_t,
-	struct secasvar *, struct esp_algorithm *, int));
-static int esp_3descbc_encrypt __P((struct mbuf *, size_t, size_t,
-	struct secasvar *, struct esp_algorithm *, int));
-static int esp_rc5cbc_ivlen __P((struct secasvar *));
-static int esp_rc5cbc_decrypt __P((struct mbuf *, size_t,
-	struct secasvar *, struct esp_algorithm *, int));
-static int esp_rc5cbc_encrypt __P((struct mbuf *, size_t, size_t,
-	struct secasvar *, struct esp_algorithm *, int));
-static void esp_increment_iv __P((struct secasvar *));
-static caddr_t mbuf_find_offset __P((struct mbuf *, size_t, size_t));
+static int esp_blowfish_schedule __P((const struct esp_algorithm *,
+	struct secasvar *));
+static int esp_blowfish_schedlen __P((const struct esp_algorithm *));
+static int esp_blowfish_blockdecrypt __P((const struct esp_algorithm *,
+	struct secasvar *, u_int8_t *, u_int8_t *));
+static int esp_blowfish_blockencrypt __P((const struct esp_algorithm *,
+	struct secasvar *, u_int8_t *, u_int8_t *));
+static int esp_cast128_schedule __P((const struct esp_algorithm *,
+	struct secasvar *));
+static int esp_cast128_schedlen __P((const struct esp_algorithm *));
+static int esp_cast128_blockdecrypt __P((const struct esp_algorithm *,
+	struct secasvar *, u_int8_t *, u_int8_t *));
+static int esp_cast128_blockencrypt __P((const struct esp_algorithm *,
+	struct secasvar *, u_int8_t *, u_int8_t *));
+static int esp_3des_schedule __P((const struct esp_algorithm *,
+	struct secasvar *));
+static int esp_3des_schedlen __P((const struct esp_algorithm *));
+static int esp_3des_blockdecrypt __P((const struct esp_algorithm *,
+	struct secasvar *, u_int8_t *, u_int8_t *));
+static int esp_3des_blockencrypt __P((const struct esp_algorithm *,
+	struct secasvar *, u_int8_t *, u_int8_t *));
+static int esp_common_ivlen __P((const struct esp_algorithm *,
+	struct secasvar *));
+static int esp_cbc_decrypt __P((struct mbuf *, size_t,
+	struct secasvar *, const struct esp_algorithm *, int));
+static int esp_cbc_encrypt __P((struct mbuf *, size_t, size_t,
+	struct secasvar *, const struct esp_algorithm *, int));
 
-/* NOTE: The order depends on SADB_EALG_x in netkey/keyv2.h */
-struct esp_algorithm esp_algorithms[] = {
-	{ 0, 0, 0, 0, 0, 0, 0, },
-	{ 8, esp_descbc_mature, 64, 64,
-		esp_descbc_ivlen, esp_descbc_decrypt, esp_descbc_encrypt, },
-	{ 8, esp_cbc_mature, 192, 192,
-		esp_3descbc_ivlen, esp_3descbc_decrypt, esp_3descbc_encrypt, },
-	{ 1, esp_null_mature, 0, 2048,
-		esp_null_ivlen, esp_null_decrypt, esp_null_encrypt, },
-	{ 8, esp_cbc_mature, 40, 448,
-		esp_blowfish_cbc_ivlen, esp_blowfish_cbc_decrypt,
-		esp_blowfish_cbc_encrypt, },
-	{ 8, esp_cbc_mature, 40, 128,
-		esp_cast128cbc_ivlen, esp_cast128cbc_decrypt,
-		esp_cast128cbc_encrypt, },
-	{ 8, esp_cbc_mature, 40, 2040,
-		esp_rc5cbc_ivlen, esp_rc5cbc_decrypt, esp_rc5cbc_encrypt, },
+#define MAXIVLEN	16
+
+static const struct esp_algorithm esp_algorithms[] = {
+	{ 8, -1, esp_descbc_mature, 64, 64, esp_des_schedlen,
+		"des-cbc",
+		esp_descbc_ivlen, esp_cbc_decrypt,
+		esp_cbc_encrypt, esp_des_schedule,
+		esp_des_blockdecrypt, esp_des_blockencrypt, },
+	{ 8, 8, esp_cbc_mature, 192, 192, esp_3des_schedlen,
+		"3des-cbc",
+		esp_common_ivlen, esp_cbc_decrypt,
+		esp_cbc_encrypt, esp_3des_schedule,
+		esp_3des_blockdecrypt, esp_3des_blockencrypt, },
+	{ 1, 0, esp_null_mature, 0, 2048, 0, "null",
+		esp_common_ivlen, esp_null_decrypt,
+		esp_null_encrypt, NULL, },
+	{ 8, 8, esp_cbc_mature, 40, 448, esp_blowfish_schedlen, "blowfish-cbc",
+		esp_common_ivlen, esp_cbc_decrypt,
+		esp_cbc_encrypt, esp_blowfish_schedule,
+		esp_blowfish_blockdecrypt, esp_blowfish_blockencrypt, },
+	{ 8, 8, esp_cbc_mature, 40, 128, esp_cast128_schedlen,
+		"cast128-cbc",
+		esp_common_ivlen, esp_cbc_decrypt,
+		esp_cbc_encrypt, esp_cast128_schedule,
+		esp_cast128_blockdecrypt, esp_cast128_blockencrypt, },
+	{ 16, 16, esp_cbc_mature, 128, 256, esp_rijndael_schedlen,
+		"rijndael-cbc",
+		esp_common_ivlen, esp_cbc_decrypt,
+		esp_cbc_encrypt, esp_rijndael_schedule,
+		esp_rijndael_blockdecrypt, esp_rijndael_blockencrypt },
 };
 
-/*
- * mbuf assumption: foo_encrypt() assumes that IV part is placed in a single
- * mbuf, not across multiple mbufs.
- */
+const struct esp_algorithm *
+esp_algorithm_lookup(idx)
+	int idx;
+{
+
+	switch (idx) {
+	case SADB_EALG_DESCBC:
+		return &esp_algorithms[0];
+	case SADB_EALG_3DESCBC:
+		return &esp_algorithms[1];
+	case SADB_EALG_NULL:
+		return &esp_algorithms[2];
+	case SADB_X_EALG_BLOWFISHCBC:
+		return &esp_algorithms[3];
+	case SADB_X_EALG_CAST128CBC:
+		return &esp_algorithms[4];
+	case SADB_X_EALG_RIJNDAELCBC:
+		return &esp_algorithms[5];
+	default:
+		return NULL;
+	}
+}
+
+int
+esp_max_ivlen()
+{
+	int idx;
+	int ivlen;
+
+	ivlen = 0;
+	for (idx = 0; idx < sizeof(esp_algorithms)/sizeof(esp_algorithms[0]);
+	     idx++) {
+		if (esp_algorithms[idx].ivlenval > ivlen)
+			ivlen = esp_algorithms[idx].ivlenval;
+	}
+
+	return ivlen;
+}
+
+int
+esp_schedule(algo, sav)
+	const struct esp_algorithm *algo;
+	struct secasvar *sav;
+{
+	int error;
+
+	/* check for key length */
+	if (_KEYBITS(sav->key_enc) < algo->keymin ||
+	    _KEYBITS(sav->key_enc) > algo->keymax) {
+		ipseclog((LOG_ERR,
+		    "esp_schedule %s: unsupported key length %d: "
+		    "needs %d to %d bits\n", algo->name, _KEYBITS(sav->key_enc),
+		    algo->keymin, algo->keymax));
+		return EINVAL;
+	}
+
+	/* already allocated */
+	if (sav->sched && sav->schedlen != 0)
+		return 0;
+	/* no schedule necessary */
+	if (!algo->schedule || !algo->schedlen)
+		return 0;
+
+	sav->schedlen = (*algo->schedlen)(algo);
+	if (sav->schedlen < 0)
+		return EINVAL;
+	sav->sched = _MALLOC(sav->schedlen, M_SECA, M_DONTWAIT);
+	if (!sav->sched) {
+		sav->schedlen = 0;
+		return ENOBUFS;
+	}
+
+	error = (*algo->schedule)(algo, sav);
+	if (error) {
+		ipseclog((LOG_ERR, "esp_schedule %s: error %d\n",
+		    algo->name, error));
+		FREE(sav->sched, M_SECA);
+		sav->sched = NULL;
+		sav->schedlen = 0;
+	}
+	return error;
+}
 
 static int
 esp_null_mature(sav)
 	struct secasvar *sav;
 {
-	/* anything is okay */
-	return 0;
-}
 
-static int
-esp_null_ivlen(sav)
-	struct secasvar *sav;
-{
+	/* anything is okay */
 	return 0;
 }
 
@@ -149,9 +250,10 @@ esp_null_decrypt(m, off, sav, algo, ivlen)
 	struct mbuf *m;
 	size_t off;		/* offset to ESP header */
 	struct secasvar *sav;
-	struct esp_algorithm *algo;
+	const struct esp_algorithm *algo;
 	int ivlen;
 {
+
 	return 0; /* do nothing */
 }
 
@@ -161,9 +263,10 @@ esp_null_encrypt(m, off, plen, sav, algo, ivlen)
 	size_t off;	/* offset to ESP header */
 	size_t plen;	/* payload length (to be encrypted) */
 	struct secasvar *sav;
-	struct esp_algorithm *algo;
+	const struct esp_algorithm *algo;
 	int ivlen;
 {
+
 	return 0; /* do nothing */
 }
 
@@ -171,7 +274,7 @@ static int
 esp_descbc_mature(sav)
 	struct secasvar *sav;
 {
-	struct esp_algorithm *algo;
+	const struct esp_algorithm *algo;
 
 	if (!(sav->flags & SADB_X_EXT_OLD) && (sav->flags & SADB_X_EXT_IV4B)) {
 		ipseclog((LOG_ERR, "esp_cbc_mature: "
@@ -183,9 +286,16 @@ esp_descbc_mature(sav)
 		ipseclog((LOG_ERR, "esp_descbc_mature: no key is given.\n"));
 		return 1;
 	}
-	algo = &esp_algorithms[sav->alg_enc];
-	if (_KEYBITS(sav->key_enc) < algo->keymin
-	 || algo->keymax < _KEYBITS(sav->key_enc)) {
+
+	algo = esp_algorithm_lookup(sav->alg_enc);
+	if (!algo) {
+		ipseclog((LOG_ERR,
+		    "esp_descbc_mature: unsupported algorithm.\n"));
+		return 1;
+	}
+
+	if (_KEYBITS(sav->key_enc) < algo->keymin ||
+	    _KEYBITS(sav->key_enc) > algo->keymax) {
 		ipseclog((LOG_ERR,
 		    "esp_descbc_mature: invalid key length %d.\n",
 		    _KEYBITS(sav->key_enc)));
@@ -193,7 +303,7 @@ esp_descbc_mature(sav)
 	}
 
 	/* weak key check */
-	if (des_is_weak_key((C_Block *)_KEYBUF(sav->key_enc))) {
+	if (des_is_weak_key((des_cblock *)_KEYBUF(sav->key_enc))) {
 		ipseclog((LOG_ERR,
 		    "esp_descbc_mature: weak key was passed.\n"));
 		return 1;
@@ -203,241 +313,68 @@ esp_descbc_mature(sav)
 }
 
 static int
-esp_descbc_ivlen(sav)
+esp_descbc_ivlen(algo, sav)
+	const struct esp_algorithm *algo;
 	struct secasvar *sav;
 {
-	if (sav && (sav->flags & SADB_X_EXT_OLD) && (sav->flags & SADB_X_EXT_IV4B))
-		return 4;
 
-	if (sav && !(sav->flags & SADB_X_EXT_OLD) && (sav->flags & SADB_X_EXT_DERIV))
-		return 4;
-	else
+	if (!sav)
 		return 8;
+	if ((sav->flags & SADB_X_EXT_OLD) && (sav->flags & SADB_X_EXT_IV4B))
+		return 4;
+	if (!(sav->flags & SADB_X_EXT_OLD) && (sav->flags & SADB_X_EXT_DERIV))
+		return 4;
+	return 8;
 }
 
 static int
-esp_descbc_decrypt(m, off, sav, algo, ivlen)
-	struct mbuf *m;
-	size_t off;		/* offset to ESP header */
-	struct secasvar *sav;
-	struct esp_algorithm *algo;
-	int ivlen;
+esp_des_schedlen(algo)
+	const struct esp_algorithm *algo;
 {
-	size_t ivoff = 0;
-	size_t bodyoff = 0;
-	u_int8_t *iv;
-	size_t plen;
-	u_int8_t tiv[8];
-	int derived;
 
-	derived = 0;
-	/* sanity check */
-	if (ivlen != sav->ivlen) {
-		ipseclog((LOG_ERR, "esp_descbc_decrypt: bad ivlen %d/%d\n",
-		    ivlen, sav->ivlen));
+	return sizeof(des_key_schedule);
+}
+
+static int
+esp_des_schedule(algo, sav)
+	const struct esp_algorithm *algo;
+	struct secasvar *sav;
+{
+
+	if (des_key_sched((des_cblock *)_KEYBUF(sav->key_enc),
+	    *(des_key_schedule *)sav->sched))
 		return EINVAL;
-	}
-	if (_KEYBITS(sav->key_enc) < algo->keymin
-	 || algo->keymax < _KEYBITS(sav->key_enc)) {
-		ipseclog((LOG_ERR, "esp_descbc_decrypt: bad keylen %d\n",
-		    _KEYBITS(sav->key_enc)));
-		return EINVAL;
-	}
+	else
+		return 0;
+}
 
-	if (sav->flags & SADB_X_EXT_OLD) {
-		/* RFC 1827 */
-		ivoff = off + sizeof(struct esp);
-		bodyoff = off + sizeof(struct esp) + ivlen;
-		derived = 0;
-	} else {
-		/* RFC 2406 */
-		if (sav->flags & SADB_X_EXT_DERIV) {
-			/*
-			 * draft-ietf-ipsec-ciph-des-derived-00.txt
-			 * uses sequence number field as IV field.
-			 * This draft has been deleted, but you can get from
-			 * ftp://ftp.kame.net/pub/internet-drafts/.
-			 */
-			ivoff = off + sizeof(struct esp);
-			bodyoff = off + sizeof(struct esp) + sizeof(u_int32_t);
-			ivlen = sizeof(u_int32_t);
-			derived = 1;
-		} else {
-			ivoff = off + sizeof(struct newesp);
-			bodyoff = off + sizeof(struct newesp) + ivlen;
-			derived = 0;
-		}
-	}
-	if (ivlen == 4) {
-		iv = &tiv[0];
-		m_copydata(m, ivoff, 4, &tiv[0]);
-		m_copydata(m, ivoff, 4, &tiv[4]);
-		tiv[4] ^= 0xff;
-		tiv[5] ^= 0xff;
-		tiv[6] ^= 0xff;
-		tiv[7] ^= 0xff;
-	} else if (ivlen == 8) {
-		iv = &tiv[0];
-		m_copydata(m, ivoff, 8, &tiv[0]);
-	} else {
-		ipseclog((LOG_ERR, "esp_descbc_decrypt: unsupported ivlen %d\n",
-		    ivlen));
-		return EINVAL;
-	}
+static int
+esp_des_blockdecrypt(algo, sav, s, d)
+	const struct esp_algorithm *algo;
+	struct secasvar *sav;
+	u_int8_t *s;
+	u_int8_t *d;
+{
 
-	plen = m->m_pkthdr.len;
-	if (plen < bodyoff)
-		panic("esp_descbc_decrypt: too short packet: len=%lu",
-		    (u_long)plen);
-	plen -= bodyoff;
-
-	if (plen % 8) {
-		ipseclog((LOG_ERR, "esp_descbc_decrypt: "
-		    "payload length must be multiple of 8\n"));
-		return EINVAL;
-	}
-
-    {
-	int deserr;
-	des_key_schedule ks;
-
-	deserr = des_key_sched((C_Block *)_KEYBUF(sav->key_enc), ks);
-	if (deserr != 0) {
-		ipseclog((LOG_ERR,
-		    "esp_descbc_decrypt: key error %d\n", deserr));
-		return EINVAL;
-	}
-
-	des_cbc_encrypt(m, bodyoff, plen, ks, (C_Block *)iv, DES_DECRYPT);
-
-	/* for safety */
-	bzero(&ks, sizeof(des_key_schedule));
-    }
-
-	/* for safety */
-	bzero(&tiv[0], sizeof(tiv));
-
+	/* assumption: d has a good alignment */
+	bcopy(s, d, sizeof(DES_LONG) * 2);
+	des_ecb_encrypt((des_cblock *)d, (des_cblock *)d,
+	    *(des_key_schedule *)sav->sched, DES_DECRYPT);
 	return 0;
 }
 
 static int
-esp_descbc_encrypt(m, off, plen, sav, algo, ivlen)
-	struct mbuf *m;
-	size_t off;	/* offset to ESP header */
-	size_t plen;	/* payload length (to be decrypted) */
+esp_des_blockencrypt(algo, sav, s, d)
+	const struct esp_algorithm *algo;
 	struct secasvar *sav;
-	struct esp_algorithm *algo;
-	int ivlen;
+	u_int8_t *s;
+	u_int8_t *d;
 {
-	size_t ivoff = 0;
-	size_t bodyoff = 0;
-	u_int8_t *iv;
-	u_int8_t tiv[8];
-	int derived;
 
-	derived = 0;
-
-	/* sanity check */
-	if (plen % 8) {
-		ipseclog((LOG_ERR, "esp_descbc_encrypt: "
-		    "payload length must be multiple of 8\n"));
-		return EINVAL;
-	}
-	if (sav->ivlen != ivlen) {
-		ipseclog((LOG_ERR, "esp_descbc_encrypt: bad ivlen %d/%d\n",
-		    ivlen, sav->ivlen));
-		return EINVAL;
-	}
-	if (_KEYBITS(sav->key_enc) < algo->keymin
-	 || algo->keymax < _KEYBITS(sav->key_enc)) {
-		ipseclog((LOG_ERR, "esp_descbc_encrypt: bad keylen %d\n",
-		    _KEYBITS(sav->key_enc)));
-		return EINVAL;
-	}
-
-	if (sav->flags & SADB_X_EXT_OLD) {
-		/* RFC 1827 */
-		/*
-		 * draft-ietf-ipsec-ciph-des-derived-00.txt
-		 * uses sequence number field as IV field.
-		 * This draft has been deleted, see above.
-		 */
-		ivoff = off + sizeof(struct esp);
-		bodyoff = off + sizeof(struct esp) + ivlen;
-		derived = 0;
-	} else {
-		/* RFC 2406 */
-		if (sav->flags & SADB_X_EXT_DERIV) {
-			/*
-			 * draft-ietf-ipsec-ciph-des-derived-00.txt
-			 * uses sequence number field as IV field.
-			 * This draft has been deleted, see above.
-			 */
-			ivoff = off + sizeof(struct esp);
-			bodyoff = off + sizeof(struct esp) + sizeof(u_int32_t);
-			ivlen = sizeof(u_int32_t);
-			derived = 1;
-		} else {
-			ivoff = off + sizeof(struct newesp);
-			bodyoff = off + sizeof(struct newesp) + ivlen;
-			derived = 0;
-		}
-	}
-
-	if (m->m_pkthdr.len < bodyoff)
-		panic("assumption failed: mbuf too short");
-	iv = mbuf_find_offset(m, ivoff, ivlen);
-	if (!iv)
-		panic("assumption failed: bad mbuf chain");
-	if (ivlen == 4) {
-		if (!derived) {
-			bcopy(sav->iv, &tiv[0], 4);
-			bcopy(sav->iv, &tiv[4], 4);
-			tiv[4] ^= 0xff;
-			tiv[5] ^= 0xff;
-			tiv[6] ^= 0xff;
-			tiv[7] ^= 0xff;
-			bcopy(&tiv[0], iv, 4);
-			iv = &tiv[0];
-		} else {
-			bcopy(iv, &tiv[0], 4);
-			bcopy(iv, &tiv[4], 4);
-			tiv[4] ^= 0xff;
-			tiv[5] ^= 0xff;
-			tiv[6] ^= 0xff;
-			tiv[7] ^= 0xff;
-			iv = &tiv[0];
-		}
-	} else if (ivlen == 8)
-		bcopy((caddr_t)sav->iv, (caddr_t)iv, ivlen);
-	else {
-		ipseclog((LOG_ERR,
-		    "esp_descbc_encrypt: unsupported ivlen %d\n", ivlen));
-		return EINVAL;
-	}
-
-    {
-	int deserr;
-	des_key_schedule ks;
-
-	deserr = des_key_sched((C_Block *)_KEYBUF(sav->key_enc), ks);
-	if (deserr != 0) {
-		ipseclog((LOG_ERR,
-		    "esp_descbc_encrypt: key error %d\n", deserr));
-		return EINVAL;
-	}
-
-	des_cbc_encrypt(m, bodyoff, plen, ks, (C_Block *)iv, DES_ENCRYPT);
-
-	/* for safety */
-	bzero(&ks, sizeof(des_key_schedule));
-    }
-
-	esp_increment_iv(sav);
-
-	/* for safety */
-	bzero(&tiv[0], sizeof(tiv));
-
+	/* assumption: d has a good alignment */
+	bcopy(s, d, sizeof(DES_LONG) * 2);
+	des_ecb_encrypt((des_cblock *)d, (des_cblock *)d,
+	    *(des_key_schedule *)sav->sched, DES_ENCRYPT);
 	return 0;
 }
 
@@ -446,7 +383,7 @@ esp_cbc_mature(sav)
 	struct secasvar *sav;
 {
 	int keylen;
-	struct esp_algorithm *algo;
+	const struct esp_algorithm *algo;
 
 	if (sav->flags & SADB_X_EXT_OLD) {
 		ipseclog((LOG_ERR,
@@ -460,31 +397,47 @@ esp_cbc_mature(sav)
 	}
 
 	if (!sav->key_enc) {
-		ipseclog((LOG_ERR,
-		    "esp_cbc_mature: no key is given.\n"));
+		ipseclog((LOG_ERR, "esp_cbc_mature: no key is given.\n"));
 		return 1;
 	}
-	algo = &esp_algorithms[sav->alg_enc];
+
+	algo = esp_algorithm_lookup(sav->alg_enc);
+	if (!algo) {
+		ipseclog((LOG_ERR,
+		    "esp_cbc_mature %s: unsupported algorithm.\n", algo->name));
+		return 1;
+	}
+
 	keylen = sav->key_enc->sadb_key_bits;
 	if (keylen < algo->keymin || algo->keymax < keylen) {
-		ipseclog((LOG_ERR, "esp_cbc_mature: invalid key length %d.\n",
-		    sav->key_enc->sadb_key_bits));
+		ipseclog((LOG_ERR,
+		    "esp_cbc_mature %s: invalid key length %d.\n",
+		    algo->name, sav->key_enc->sadb_key_bits));
 		return 1;
 	}
 	switch (sav->alg_enc) {
 	case SADB_EALG_3DESCBC:
 		/* weak key check */
-		if (des_is_weak_key((C_Block *)_KEYBUF(sav->key_enc))
-		 || des_is_weak_key((C_Block *)(_KEYBUF(sav->key_enc) + 8))
-		 || des_is_weak_key((C_Block *)(_KEYBUF(sav->key_enc) + 16))) {
+		if (des_is_weak_key((des_cblock *)_KEYBUF(sav->key_enc)) ||
+		    des_is_weak_key((des_cblock *)(_KEYBUF(sav->key_enc) + 8)) ||
+		    des_is_weak_key((des_cblock *)(_KEYBUF(sav->key_enc) + 16))) {
 			ipseclog((LOG_ERR,
-			    "esp_cbc_mature: weak key was passed.\n"));
+			    "esp_cbc_mature %s: weak key was passed.\n",
+			    algo->name));
 			return 1;
 		}
 		break;
-	case SADB_EALG_BLOWFISHCBC:
-	case SADB_EALG_CAST128CBC:
-	case SADB_EALG_RC5CBC:
+	case SADB_X_EALG_BLOWFISHCBC:
+	case SADB_X_EALG_CAST128CBC:
+		break;
+	case SADB_X_EALG_RIJNDAELCBC:
+		/* allows specific key sizes only */
+		if (!(keylen == 128 || keylen == 192 || keylen == 256)) {
+			ipseclog((LOG_ERR,
+			    "esp_cbc_mature %s: invalid key length %d.\n",
+			    algo->name, keylen));
+			return 1;
+		}
 		break;
 	}
 
@@ -492,692 +445,602 @@ esp_cbc_mature(sav)
 }
 
 static int
-esp_blowfish_cbc_decrypt(m, off, sav, algo, ivlen)
-	struct mbuf *m;
-	size_t off;		/* offset to ESP header */
-	struct secasvar *sav;
-	struct esp_algorithm *algo;
-	int ivlen;
+esp_blowfish_schedlen(algo)
+	const struct esp_algorithm *algo;
 {
-	size_t ivoff;
-	size_t bodyoff;
-	u_int8_t *iv;
-	u_int8_t tiv[8];
-	size_t plen;
-	static BF_KEY key;	/* made static to avoid kernel stack overflow */
-	int s;
 
-	/* sanity check */
-	if (sav->ivlen != ivlen) {
-		ipseclog((LOG_ERR,
-		    "esp_blowfish_cbc_decrypt: bad ivlen %d/%d\n",
-		    ivlen, sav->ivlen));
-		return EINVAL;
-	}
-	if (_KEYBITS(sav->key_enc) < algo->keymin
-	 || algo->keymax < _KEYBITS(sav->key_enc)) {
-		ipseclog((LOG_ERR,
-		    "esp_blowfish_cbc_decrypt: unsupported key length %d: "
-		    "need %d to %d bits\n", _KEYBITS(sav->key_enc),
-		    algo->keymin, algo->keymax));
-		return EINVAL;
-	}
-	if (sav->flags & SADB_X_EXT_OLD) {
-		ipseclog((LOG_ERR,
-		    "esp_blowfish_cbc_decrypt: unsupported ESP version\n"));
-		return EINVAL;
-	}
-	if (ivlen != 8) {
-		ipseclog((LOG_ERR,
-		    "esp_blowfish_cbc_decrypt: unsupported ivlen %d\n", ivlen));
-		return EINVAL;
-	}
+	return sizeof(BF_KEY);
+}
 
-	ivoff = off + sizeof(struct newesp);
-	bodyoff = off + sizeof(struct newesp) + ivlen;
-	iv = &tiv[0];
-	m_copydata(m, ivoff, 8, &tiv[0]);
+static int
+esp_blowfish_schedule(algo, sav)
+	const struct esp_algorithm *algo;
+	struct secasvar *sav;
+{
 
-	plen = m->m_pkthdr.len;
-	if (plen < bodyoff)
-		panic("esp_blowfish_cbc_decrypt: too short packet: len=%lu",
-		    (u_long)plen);
-	plen -= bodyoff;
-
-	if (plen % 8) {
-		ipseclog((LOG_ERR, "esp_blowfish_cbc_decrypt: "
-			"payload length must be multiple of 8\n"));
-		return EINVAL;
-	}
-
-#if __NetBSD__
-	s = splsoftnet();	/* XXX correct? */
-#else
-	s = splnet();	/* XXX correct? */
-#endif
-
-	BF_set_key(&key, _KEYBITS(sav->key_enc) / 8, _KEYBUF(sav->key_enc));
-	BF_cbc_encrypt_m(m, bodyoff, plen, &key, iv, BF_DECRYPT);
-
-	/* for safety */
-	bzero(&key, sizeof(BF_KEY));
-
-	splx(s);
-
-	/* for safety */
-	bzero(&tiv[0], sizeof(tiv));
-
+	BF_set_key((BF_KEY *)sav->sched, _KEYLEN(sav->key_enc),
+	    _KEYBUF(sav->key_enc));
 	return 0;
 }
 
 static int
-esp_blowfish_cbc_encrypt(m, off, plen, sav, algo, ivlen)
-	struct mbuf *m;
-	size_t off;	/* offset to ESP header */
-	size_t plen;	/* payload length (to be decrypted) */
+esp_blowfish_blockdecrypt(algo, sav, s, d)
+	const struct esp_algorithm *algo;
 	struct secasvar *sav;
-	struct esp_algorithm *algo;
-	int ivlen;
+	u_int8_t *s;
+	u_int8_t *d;
 {
-	size_t ivoff;
-	size_t bodyoff;
-	u_int8_t *iv;
-	static BF_KEY key;	/* made static to avoid kernel stack overflow */
-	int s;
+	/* HOLY COW!  BF_encrypt() takes values in host byteorder */
+	BF_LONG t[2];
 
-	/* sanity check */
-	if (plen % 8) {
-		ipseclog((LOG_ERR, "esp_blowfish_cbc_encrypt: "
-		    "payload length must be multiple of 8\n"));
-		return EINVAL;
-	}
-	if (sav->ivlen != ivlen) {
-		ipseclog((LOG_ERR,
-		    "esp_blowfish_cbc_encrypt: bad ivlen %d/%d\n",
-		    ivlen, sav->ivlen));
-		return EINVAL;
-	}
-	if (_KEYBITS(sav->key_enc) < algo->keymin
-	 || algo->keymax < _KEYBITS(sav->key_enc)) {
-		ipseclog((LOG_ERR,
-		    "esp_blowfish_cbc_encrypt: unsupported key length %d: "
-		    "need %d to %d bits\n", _KEYBITS(sav->key_enc),
-		    algo->keymin, algo->keymax));
-		return EINVAL;
-	}
-	if (sav->flags & SADB_X_EXT_OLD) {
-		ipseclog((LOG_ERR,
-		    "esp_blowfish_cbc_encrypt: unsupported ESP version\n"));
-		return EINVAL;
-	}
-	if (ivlen != 8) {
-		ipseclog((LOG_ERR,
-		    "esp_blowfish_cbc_encrypt: unsupported ivlen %d\n", ivlen));
-		return EINVAL;
-	}
-
-	ivoff = off + sizeof(struct newesp);
-	bodyoff = off + sizeof(struct newesp) + ivlen;
-
-	if (m->m_pkthdr.len < bodyoff)
-		panic("assumption failed: mbuf too short");
-	iv = mbuf_find_offset(m, ivoff, ivlen);
-	if (!iv)
-		panic("assumption failed: bad mbuf chain");
-
-	bcopy((caddr_t)sav->iv, (caddr_t)iv, ivlen);
-
-#if __NetBSD__
-	s = splsoftnet();	/* XXX correct? */
-#else
-	s = splnet();	/* XXX correct? */
-#endif
-
-	BF_set_key(&key, _KEYBITS(sav->key_enc) / 8, _KEYBUF(sav->key_enc));
-	BF_cbc_encrypt_m(m, bodyoff, plen, &key, iv, BF_ENCRYPT);
-
-	/* for safety */
-	bzero(&key, sizeof(BF_KEY));
-
-	splx(s);
-
-	esp_increment_iv(sav);
-
+	bcopy(s, t, sizeof(t));
+	t[0] = ntohl(t[0]);
+	t[1] = ntohl(t[1]);
+	BF_encrypt(t, (BF_KEY *)sav->sched, BF_DECRYPT);
+	t[0] = htonl(t[0]);
+	t[1] = htonl(t[1]);
+	bcopy(t, d, sizeof(t));
 	return 0;
 }
 
 static int
-esp_blowfish_cbc_ivlen(sav)
+esp_blowfish_blockencrypt(algo, sav, s, d)
+	const struct esp_algorithm *algo;
 	struct secasvar *sav;
+	u_int8_t *s;
+	u_int8_t *d;
 {
-	return 8;
-}
+	/* HOLY COW!  BF_encrypt() takes values in host byteorder */
+	BF_LONG t[2];
 
-static int
-esp_cast128cbc_ivlen(sav)
-	struct secasvar *sav;
-{
-	return 8;
-}
-
-static int
-esp_cast128cbc_decrypt(m, off, sav, algo, ivlen)
-	struct mbuf *m;
-	size_t off;
-	struct secasvar *sav;
-	struct esp_algorithm *algo;
-	int ivlen;
-{
-	size_t ivoff;
-	size_t bodyoff;
-	u_int8_t iv[8];
-	size_t plen;
-
-	/* sanity check */
-	if (ivlen != sav->ivlen) {
-		ipseclog((LOG_ERR, "esp_cast128cbc_decrypt: bad ivlen %d/%d\n",
-		    ivlen, sav->ivlen));
-		return EINVAL;
-	}
-	if (_KEYBITS(sav->key_enc) < algo->keymin
-	 || _KEYBITS(sav->key_enc) > algo->keymax) {
-		ipseclog((LOG_ERR,
-		    "esp_cast128cbc_decrypt: unsupported key length %d: "
-		    "need %d to %d bits\n", _KEYBITS(sav->key_enc),
-		    algo->keymin, algo->keymax));
-		return EINVAL;
-	}
-	if (sav->flags & SADB_X_EXT_OLD) {
-		ipseclog((LOG_ERR,
-		    "esp_cast128cbc_decrypt: unsupported ESP version\n"));
-		return EINVAL;
-	}
-	if (ivlen != 8) {
-		ipseclog((LOG_ERR,
-		    "esp_cast128cbc_decrypt: unsupported ivlen %d\n", ivlen));
-		return EINVAL;
-	}
-
-	ivoff = off + sizeof(struct newesp);
-	bodyoff = off + sizeof(struct newesp) + ivlen;
-
-	/* copy mbuf's IV into iv */
-	m_copydata(m, ivoff, 8, iv);
-
-	plen = m->m_pkthdr.len;
-	if (plen < bodyoff) {
-		panic("esp_cast128cbc_decrypt: too short packet: len=%lu\n",
-		    (u_long)plen);
-	}
-	plen -= bodyoff;
-
-	if (plen % 8) {
-		ipseclog((LOG_ERR, "esp_cast128cbc_decrypt: "
-		    "payload length must be multiple of 8\n"));
-		return EINVAL;
-	}
-
-	/* decrypt */
-    {
-	u_int8_t key[16];
-	u_int32_t subkey[32];
-
-	bzero(key, sizeof(key));
-	bcopy(_KEYBUF(sav->key_enc), key, _KEYLEN(sav->key_enc));
-
-	set_cast128_subkey(subkey, key);
-	cast128_cbc_process(m, bodyoff, plen, subkey, iv,
-				_KEYBITS(sav->key_enc) / 8, CAST128_DECRYPT);
-
-	/* for safety */
-	bzero(subkey, sizeof(subkey));
-	bzero(key, sizeof(key));
-    }
-
+	bcopy(s, t, sizeof(t));
+	t[0] = ntohl(t[0]);
+	t[1] = ntohl(t[1]);
+	BF_encrypt(t, (BF_KEY *)sav->sched, BF_ENCRYPT);
+	t[0] = htonl(t[0]);
+	t[1] = htonl(t[1]);
+	bcopy(t, d, sizeof(t));
 	return 0;
 }
 
 static int
-esp_cast128cbc_encrypt(m, off, plen, sav, algo, ivlen)
-	struct mbuf *m;
-	size_t off;
-	size_t plen;
-	struct secasvar *sav;
-	struct esp_algorithm *algo;
-	int ivlen;
+esp_cast128_schedlen(algo)
+	const struct esp_algorithm *algo;
 {
-	size_t ivoff;
-	size_t bodyoff;
-	u_int8_t *iv;
 
-	/* sanity check */
-	if (plen % 8) {
-		ipseclog((LOG_ERR, "esp_cast128cbc_encrypt: "
-		    "payload length must be multiple of 8\n"));
-		return EINVAL;
-	}
-	if (sav->ivlen != ivlen) {
-		ipseclog((LOG_ERR, "esp_cast128cbc_encrypt: bad ivlen %d/%d\n",
-		    ivlen, sav->ivlen));
-		return EINVAL;
-	}
-	if (_KEYBITS(sav->key_enc) < algo->keymin
-	 || _KEYBITS(sav->key_enc) > algo->keymax) {
-		ipseclog((LOG_ERR,
-		    "esp_cast128cbc_encrypt: unsupported key length %d: "
-		    "needs %d to %d bits\n", _KEYBITS(sav->key_enc),
-		    algo->keymin, algo->keymax));
-		return EINVAL;
-	}
-	if (sav->flags & SADB_X_EXT_OLD) {
-		ipseclog((LOG_ERR,
-		    "esp_cast128cbc_encrypt: unsupported ESP version\n"));
-		return EINVAL;
-	}
-	if (ivlen != 8) {
-		ipseclog((LOG_ERR,
-		    "esp_cast128cbc_encrypt: unsupported ivlen %d\n", ivlen));
-		return EINVAL;
-	}
+	return sizeof(u_int32_t) * 32;
+}
 
-	ivoff = off + sizeof(struct newesp);
-	bodyoff = off + sizeof(struct newesp) + ivlen;
+static int
+esp_cast128_schedule(algo, sav)
+	const struct esp_algorithm *algo;
+	struct secasvar *sav;
+{
 
-	if (m->m_pkthdr.len < bodyoff)
-		panic("assumption failed: mbuf too short");
-	iv = mbuf_find_offset(m, ivoff, ivlen);
-	if (!iv)
-		panic("assumption failed: bad mbuf chain");
-
-	bcopy(sav->iv, iv, ivlen);
-
-	/* encrypt */
-    {
-	u_int8_t key[16];
-	u_int32_t subkey[32];
-
-	bzero(key, sizeof(key));
-	bcopy(_KEYBUF(sav->key_enc), key, _KEYLEN(sav->key_enc));
-
-	set_cast128_subkey(subkey, key);
-	cast128_cbc_process(m, bodyoff, plen, subkey, iv,
-				_KEYBITS(sav->key_enc) / 8, CAST128_ENCRYPT);
-
-	/* for safety */
-	bzero(subkey, sizeof(subkey));
-	bzero(key, sizeof(key));
-    }
-
-	esp_increment_iv(sav);
-
+	set_cast128_subkey((u_int32_t *)sav->sched, _KEYBUF(sav->key_enc),
+		_KEYLEN(sav->key_enc));
 	return 0;
 }
 
 static int
-esp_3descbc_ivlen(sav)
+esp_cast128_blockdecrypt(algo, sav, s, d)
+	const struct esp_algorithm *algo;
 	struct secasvar *sav;
+	u_int8_t *s;
+	u_int8_t *d;
 {
-	return 8;
-}
 
-static int
-esp_3descbc_decrypt(m, off, sav, algo, ivlen)
-	struct mbuf *m;
-	size_t off;
-	struct secasvar *sav;
-	struct esp_algorithm *algo;
-	int ivlen;
-{
-	size_t ivoff;
-	size_t bodyoff;
-	u_int8_t *iv;
-	size_t plen;
-	u_int8_t tiv[8];
-
-	/* sanity check */
-	if (ivlen != sav->ivlen) {
-		ipseclog((LOG_ERR, "esp_3descbc_decrypt: bad ivlen %d/%d\n",
-		    ivlen, sav->ivlen));
-		return EINVAL;
-	}
-	if (_KEYBITS(sav->key_enc) < algo->keymin
-	 || algo->keymax < _KEYBITS(sav->key_enc)) {
-		ipseclog((LOG_ERR, "esp_3descbc_decrypt: bad keylen %d\n",
-		    _KEYBITS(sav->key_enc)));
-		return EINVAL;
-	}
-	if (sav->flags & SADB_X_EXT_OLD) {
-		ipseclog((LOG_ERR,
-		    "esp_3descbc_decrypt: unsupported ESP version\n"));
-		return EINVAL;
-	}
-	if (ivlen != 8) {
-		ipseclog((LOG_ERR,
-		    "esp_3descbc_decrypt: unsupported ivlen %d\n", ivlen));
-		return EINVAL;
-	}
-
-	ivoff = off + sizeof(struct newesp);
-	bodyoff = off + sizeof(struct newesp) + ivlen;
-	iv = &tiv[0];
-	m_copydata(m, ivoff, 8, &tiv[0]);
-
-	plen = m->m_pkthdr.len;
-	if (plen < bodyoff)
-		panic("esp_3descbc_decrypt: too short packet: len=%lu",
-		   (u_long)plen);
-
-	plen -= bodyoff;
-
-	if (plen % 8) {
-		ipseclog((LOG_ERR, "esp_3descbc_decrypt: "
-		    "payload length must be multiple of 8\n"));
-		return EINVAL;
-	}
-
-	/* decrypt packet */
-    {
-	int deserr[3];
-	des_key_schedule ks[3];
-
-	deserr[0] = des_key_sched((C_Block *)_KEYBUF(sav->key_enc),ks[0]);
-	deserr[1] = des_key_sched((C_Block *)(_KEYBUF(sav->key_enc) + 8), ks[1]);
-	deserr[2] = des_key_sched((C_Block *)(_KEYBUF(sav->key_enc) + 16), ks[2]);
-	if ((deserr[0] != 0) || (deserr[1] != 0) || (deserr[2] != 0)) {
-		ipseclog((LOG_ERR, "esp_3descbc_decrypt: key error %d/%d/%d\n",
-		    deserr[0], deserr[1], deserr[2]));
-		return EINVAL;
-	}
-
-	des_3cbc_process(m, bodyoff, plen, ks, (C_Block *)iv, DES_DECRYPT);
-
-	/* for safety */
-	bzero(ks[0], sizeof(des_key_schedule)*3);
-    }
-
-	/* for safety */
-	bzero(&tiv[0], sizeof(tiv));
-
+	if (_KEYLEN(sav->key_enc) <= 80 / 8)
+		cast128_decrypt_round12(d, s, (u_int32_t *)sav->sched);
+	else
+		cast128_decrypt_round16(d, s, (u_int32_t *)sav->sched);
 	return 0;
 }
 
 static int
-esp_3descbc_encrypt(m, off, plen, sav, algo, ivlen)
-	struct mbuf *m;
-	size_t off;
-	size_t plen;
+esp_cast128_blockencrypt(algo, sav, s, d)
+	const struct esp_algorithm *algo;
 	struct secasvar *sav;
-	struct esp_algorithm *algo;
-	int ivlen;
+	u_int8_t *s;
+	u_int8_t *d;
 {
-	size_t ivoff;
-	size_t bodyoff;
-	u_int8_t *iv;
 
-	/* sanity check */
-	if (plen % 8) {
-		ipseclog((LOG_ERR, "esp_3descbc_encrypt: "
-		    "payload length must be multiple of 8\n"));
-		return EINVAL;
-	}
-	if (sav->ivlen != ivlen) {
-		ipseclog((LOG_ERR, "esp_3descbc_encrypt: bad ivlen %d/%d\n",
-		    ivlen, sav->ivlen));
-		return EINVAL;
-	}
-	if (_KEYBITS(sav->key_enc) < algo->keymin
-	 || algo->keymax < _KEYBITS(sav->key_enc)) {
-		ipseclog((LOG_ERR, "esp_3descbc_encrypt: bad keylen %d\n",
-		    _KEYBITS(sav->key_enc)));
-		return EINVAL;
-	}
-	if (sav->flags & SADB_X_EXT_OLD) {
-		ipseclog((LOG_ERR,
-		    "esp_3descbc_encrypt: unsupported ESP version\n"));
-		return EINVAL;
-	}
-	if (ivlen != 8) {
-		ipseclog((LOG_ERR,
-		    "esp_3descbc_encrypt: unsupported ivlen %d\n", ivlen));
-		return EINVAL;
-	}
-
-	ivoff = off + sizeof(struct newesp);
-	bodyoff = off + sizeof(struct newesp) + ivlen;
-
-	if (m->m_pkthdr.len < bodyoff)
-		panic("assumption failed: mbuf too short");
-	iv = mbuf_find_offset(m, ivoff, ivlen);
-	if (!iv)
-		panic("assumption failed: bad mbuf chain");
-
-	bcopy((caddr_t)sav->iv, (caddr_t)iv, ivlen);
-
-	/* encrypt packet */
-    {
-	int deserr[3];
-	des_key_schedule ks[3];
-
-	deserr[0] = des_key_sched((C_Block *)_KEYBUF(sav->key_enc),     ks[0]);
-	deserr[1] = des_key_sched((C_Block *)(_KEYBUF(sav->key_enc) + 8), ks[1]);
-	deserr[2] = des_key_sched((C_Block *)(_KEYBUF(sav->key_enc) + 16), ks[2]);
-	if ((deserr[0] != 0) || (deserr[1] != 0) || (deserr[2] != 0)) {
-		ipseclog((LOG_ERR, "esp_3descbc_encrypt: key error %d/%d/%d\n",
-		    deserr[0], deserr[1], deserr[2]));
-		return EINVAL;
-	}
-
-	des_3cbc_process(m, bodyoff, plen, ks, (C_Block *)iv, DES_ENCRYPT);
-
-	/* for safety */
-	bzero(ks[0], sizeof(des_key_schedule)*3);
-    }
-
-	esp_increment_iv(sav);
-
+	if (_KEYLEN(sav->key_enc) <= 80 / 8)
+		cast128_encrypt_round12(d, s, (u_int32_t *)sav->sched);
+	else
+		cast128_encrypt_round16(d, s, (u_int32_t *)sav->sched);
 	return 0;
 }
 
 static int
-esp_rc5cbc_ivlen(sav)
-	struct secasvar *sav;
+esp_3des_schedlen(algo)
+	const struct esp_algorithm *algo;
 {
-	return 8;
+
+	return sizeof(des_key_schedule) * 3;
 }
 
 static int
-esp_rc5cbc_decrypt(m, off, sav, algo, ivlen)
-	struct mbuf *m;
-	size_t off;
-	struct secasvar *sav;
-	struct esp_algorithm *algo;
-	int ivlen;
-{
-	size_t ivoff;
-	size_t bodyoff;
-	u_int8_t iv[8];
-	size_t plen;
-
-	/* sanity check */
-	if (sav->ivlen != ivlen) {
-		ipseclog((LOG_ERR, "esp_rc5cbc_decrypt: bad ivlen %d/%d\n",
-		    ivlen, sav->ivlen));
-		return EINVAL;
-	}
-	if ((_KEYBITS(sav->key_enc) < 40) || (_KEYBITS(sav->key_enc) > 2040)) {
-		ipseclog((LOG_ERR,
-		    "esp_rc5cbc_decrypt: unsupported key length %d: "
-		    "need 40 to 2040 bit\n", _KEYBITS(sav->key_enc)));
-		return EINVAL;
-	}
-	if (sav->flags & SADB_X_EXT_OLD) {
-		ipseclog((LOG_ERR,
-		    "esp_rc5cbc_decrypt: unsupported ESP version\n"));
-		return EINVAL;
-	}
-	if (ivlen != 8) {
-		ipseclog((LOG_ERR, "esp_rc5cbc_decrypt: unsupported ivlen %d\n",
-		    ivlen));
-		return EINVAL;
-	}
-
-	ivoff = off + sizeof(struct newesp);
-	bodyoff = off + sizeof(struct newesp) + ivlen;
-
-	/* copy mbuf's IV into iv */
-	m_copydata(m, ivoff, 8, iv);
-
-	plen = m->m_pkthdr.len;
-	if (plen < bodyoff) {
-		panic("esp_rc5cbc_decrypt: too short packet: len=%lu",
-			(u_long)plen);
-	}
-	plen -= bodyoff;
-
-	if (plen % 8) {
-		ipseclog((LOG_ERR, "esp_rc5cbc_decrypt: "
-		    "payload length must be multiple of 8\n"));
-		return EINVAL;
-	}
-
-	/* decrypt */
-    {
-	RC5_WORD e_key[34];
-
-	set_rc5_expandkey(e_key, _KEYBUF(sav->key_enc),
-			_KEYBITS(sav->key_enc) / 8, 16);
-	rc5_cbc_process(m, bodyoff, plen, e_key, iv, RC5_DECRYPT);
-
-	/* for safety */
-	bzero(e_key, sizeof(e_key));
-    }
-
-	return 0;
-}
-
-static int
-esp_rc5cbc_encrypt(m, off, plen, sav, algo, ivlen)
-	struct mbuf *m;
-	size_t off;
-	size_t plen;
-	struct secasvar *sav;
-	struct esp_algorithm *algo;
-	int ivlen;
-{
-	size_t ivoff;
-	size_t bodyoff;
-	u_int8_t *iv;
-
-	/* sanity check */
-	if (plen % 8) {
-		ipseclog((LOG_ERR, "esp_rc5cbc_encrypt: "
-		    "payload length must be multiple of 8\n"));
-		return EINVAL;
-	}
-	if (sav->ivlen != ivlen) {
-		ipseclog((LOG_ERR, "esp_rc5cbc_encrypt: bad ivlen %d/%d\n",
-		    ivlen, sav->ivlen));
-		return EINVAL;
-	}
-	if (_KEYBITS(sav->key_enc) < algo->keymin
-	 || _KEYBITS(sav->key_enc) > algo->keymax) {
-		ipseclog((LOG_ERR,
-		    "esp_rc5cbc_encrypt: unsupported key length %d: "
-		    "need %d to %d bits\n", _KEYBITS(sav->key_enc),
-		    algo->keymin, algo->keymax));
-		return EINVAL;
-	}
-	if (sav->flags & SADB_X_EXT_OLD) {
-		ipseclog((LOG_ERR,
-		    "esp_rc5cbc_encrypt: unsupported ESP version\n"));
-		return EINVAL;
-	}
-	if (ivlen != 8) {
-		ipseclog((LOG_ERR, "esp_rc5cbc_encrypt: unsupported ivlen %d\n",
-		    ivlen));
-		return EINVAL;
-	}
-
-	ivoff = off + sizeof(struct newesp);
-	bodyoff = off + sizeof(struct newesp) + ivlen;
-
-	if (m->m_pkthdr.len < bodyoff)
-		panic("assumption failed: mbuf too short");
-	iv = mbuf_find_offset(m, ivoff, ivlen);
-	if (!iv)
-		panic("assumption failed: bad mbuf chain");
-
-	bcopy(sav->iv, iv, ivlen);
-
-	/* encrypt */
-    {
-	RC5_WORD e_key[34];
-
-	set_rc5_expandkey(e_key, _KEYBUF(sav->key_enc),
-			_KEYBITS(sav->key_enc) / 8, 16);
-	rc5_cbc_process(m, bodyoff, plen, e_key, iv, RC5_ENCRYPT);
-
-	/* for safety */
-	bzero(e_key, sizeof(e_key));
-    }
-
-	esp_increment_iv(sav);
-
-	return 0;
-}
-
-/*
- * increment iv.
- */
-static void
-esp_increment_iv(sav)
+esp_3des_schedule(algo, sav)
+	const struct esp_algorithm *algo;
 	struct secasvar *sav;
 {
-	u_int8_t *x;
-	u_int8_t y;
+	int error;
+	des_key_schedule *p;
 	int i;
+	char *k;
 
-#if !(defined(__FreeBSD__) && __FreeBSD__ >= 3)
-	y = time.tv_sec & 0xff;
-#else
-	y = time_second & 0xff;
-#endif
-	if (!y) y++;
-	x = (u_int8_t *)sav->iv;
-	for (i = 0; i < sav->ivlen; i++) {
-		*x = (*x + y) & 0xff;
-		x++;
+	p = (des_key_schedule *)sav->sched;
+	k = _KEYBUF(sav->key_enc);
+	for (i = 0; i < 3; i++) {
+		error = des_key_sched((des_cblock *)(k + 8 * i), p[i]);
+		if (error)
+			return EINVAL;
 	}
+	return 0;
 }
 
-static caddr_t
-mbuf_find_offset(m, off, len)
+static int
+esp_3des_blockdecrypt(algo, sav, s, d)
+	const struct esp_algorithm *algo;
+	struct secasvar *sav;
+	u_int8_t *s;
+	u_int8_t *d;
+{
+	des_key_schedule *p;
+
+	/* assumption: d has a good alignment */
+	p = (des_key_schedule *)sav->sched;
+	bcopy(s, d, sizeof(DES_LONG) * 2);
+	des_ecb_encrypt((des_cblock *)d, (des_cblock *)d, p[2], DES_DECRYPT);
+	des_ecb_encrypt((des_cblock *)d, (des_cblock *)d, p[1], DES_ENCRYPT);
+	des_ecb_encrypt((des_cblock *)d, (des_cblock *)d, p[0], DES_DECRYPT);
+	return 0;
+}
+
+static int
+esp_3des_blockencrypt(algo, sav, s, d)
+	const struct esp_algorithm *algo;
+	struct secasvar *sav;
+	u_int8_t *s;
+	u_int8_t *d;
+{
+	des_key_schedule *p;
+
+	/* assumption: d has a good alignment */
+	p = (des_key_schedule *)sav->sched;
+	bcopy(s, d, sizeof(DES_LONG) * 2);
+	des_ecb_encrypt((des_cblock *)d, (des_cblock *)d, p[0], DES_ENCRYPT);
+	des_ecb_encrypt((des_cblock *)d, (des_cblock *)d, p[1], DES_DECRYPT);
+	des_ecb_encrypt((des_cblock *)d, (des_cblock *)d, p[2], DES_ENCRYPT);
+	return 0;
+}
+
+static int
+esp_common_ivlen(algo, sav)
+	const struct esp_algorithm *algo;
+	struct secasvar *sav;
+{
+
+	if (!algo)
+		panic("esp_common_ivlen: unknown algorithm");
+	return algo->ivlenval;
+}
+
+static int
+esp_cbc_decrypt(m, off, sav, algo, ivlen)
 	struct mbuf *m;
 	size_t off;
-	size_t len;
+	struct secasvar *sav;
+	const struct esp_algorithm *algo;
+	int ivlen;
 {
-	struct mbuf *n;
-	size_t cnt;
+	struct mbuf *s;
+	struct mbuf *d, *d0, *dp;
+	int soff, doff;	/*offset from the head of chain, to head of this mbuf */
+	int sn, dn;	/*offset from the head of the mbuf, to meat */
+	size_t ivoff, bodyoff;
+	u_int8_t iv[MAXIVLEN], *ivp;
+	u_int8_t sbuf[MAXIVLEN], *sp;
+	u_int8_t *p, *q;
+	struct mbuf *scut;
+	int scutoff;
+	int i;
+	int blocklen;
+	int derived;
 
-	if (m->m_pkthdr.len < off || m->m_pkthdr.len < off + len)
-		return (caddr_t)NULL;
-	cnt = 0;
-	for (n = m; n; n = n->m_next) {
-		if (cnt + n->m_len <= off) {
-			cnt += n->m_len;
-			continue;
-		}
-		if (cnt <= off && off < cnt + n->m_len
-		 && cnt <= off + len && off + len <= cnt + n->m_len) {
-			return mtod(n, caddr_t) + off - cnt;
-		} else
-			return (caddr_t)NULL;
+	if (ivlen != sav->ivlen || ivlen > sizeof(iv)) {
+		ipseclog((LOG_ERR, "esp_cbc_decrypt %s: "
+		    "unsupported ivlen %d\n", algo->name, ivlen));
+		m_freem(m);
+		return EINVAL;
 	}
-	return (caddr_t)NULL;
+
+	/* assumes blocklen == padbound */
+	blocklen = algo->padbound;
+
+#if DIAGNOSTIC
+	if (blocklen > sizeof(iv)) {
+		ipseclog((LOG_ERR, "esp_cbc_decrypt %s: "
+		    "unsupported blocklen %d\n", algo->name, blocklen));
+		m_freem(m);
+		return EINVAL;
+	}
+#endif
+
+	if (sav->flags & SADB_X_EXT_OLD) {
+		/* RFC 1827 */
+		ivoff = off + sizeof(struct esp);
+		bodyoff = off + sizeof(struct esp) + ivlen;
+		derived = 0;
+	} else {
+		/* RFC 2406 */
+		if (sav->flags & SADB_X_EXT_DERIV) {
+			/*
+			 * draft-ietf-ipsec-ciph-des-derived-00.txt
+			 * uses sequence number field as IV field.
+			 */
+			ivoff = off + sizeof(struct esp);
+			bodyoff = off + sizeof(struct esp) + sizeof(u_int32_t);
+			ivlen = sizeof(u_int32_t);
+			derived = 1;
+		} else {
+			ivoff = off + sizeof(struct newesp);
+			bodyoff = off + sizeof(struct newesp) + ivlen;
+			derived = 0;
+		}
+	}
+
+	/* grab iv */
+	m_copydata(m, ivoff, ivlen, iv);
+
+	/* extend iv */
+	if (ivlen == blocklen)
+		;
+	else if (ivlen == 4 && blocklen == 8) {
+		bcopy(&iv[0], &iv[4], 4);
+		iv[4] ^= 0xff;
+		iv[5] ^= 0xff;
+		iv[6] ^= 0xff;
+		iv[7] ^= 0xff;
+	} else {
+		ipseclog((LOG_ERR, "esp_cbc_encrypt %s: "
+		    "unsupported ivlen/blocklen: %d %d\n",
+		    algo->name, ivlen, blocklen));
+		m_freem(m);
+		return EINVAL;
+	}
+
+	if (m->m_pkthdr.len < bodyoff) {
+		ipseclog((LOG_ERR, "esp_cbc_decrypt %s: bad len %d/%lu\n",
+		    algo->name, m->m_pkthdr.len, (unsigned long)bodyoff));
+		m_freem(m);
+		return EINVAL;
+	}
+	if ((m->m_pkthdr.len - bodyoff) % blocklen) {
+		ipseclog((LOG_ERR, "esp_cbc_decrypt %s: "
+		    "payload length must be multiple of %d\n",
+		    algo->name, blocklen));
+		m_freem(m);
+		return EINVAL;
+	}
+
+	s = m;
+	d = d0 = dp = NULL;
+	soff = doff = sn = dn = 0;
+	ivp = sp = NULL;
+
+	/* skip bodyoff */
+	while (soff < bodyoff) {
+		if (soff + s->m_len > bodyoff) {
+			sn = bodyoff - soff;
+			break;
+		}
+
+		soff += s->m_len;
+		s = s->m_next;
+	}
+	scut = s;
+	scutoff = sn;
+
+	/* skip over empty mbuf */
+	while (s && s->m_len == 0)
+		s = s->m_next;
+
+	while (soff < m->m_pkthdr.len) {
+		/* source */
+		if (sn + blocklen <= s->m_len) {
+			/* body is continuous */
+			sp = mtod(s, u_int8_t *) + sn;
+		} else {
+			/* body is non-continuous */
+			m_copydata(s, sn, blocklen, sbuf);
+			sp = sbuf;
+		}
+
+		/* destination */
+		if (!d || dn + blocklen > d->m_len) {
+			if (d)
+				dp = d;
+			MGET(d, M_DONTWAIT, MT_DATA);
+			i = m->m_pkthdr.len - (soff + sn);
+			if (d && i > MLEN) {
+				MCLGET(d, M_DONTWAIT);
+				if ((d->m_flags & M_EXT) == 0) {
+					m_free(d);
+					d = NULL;
+				}
+			}
+			if (!d) {
+				m_freem(m);
+				if (d0)
+					m_freem(d0);
+				return ENOBUFS;
+			}
+			if (!d0)
+				d0 = d;
+			if (dp)
+				dp->m_next = d;
+			d->m_len = 0;
+			d->m_len = (M_TRAILINGSPACE(d) / blocklen) * blocklen;
+			if (d->m_len > i)
+				d->m_len = i;
+			dn = 0;
+		}
+
+		/* decrypt */
+		(*algo->blockdecrypt)(algo, sav, sp, mtod(d, u_int8_t *) + dn);
+
+		/* xor */
+		p = ivp ? ivp : iv;
+		q = mtod(d, u_int8_t *) + dn;
+		for (i = 0; i < blocklen; i++)
+			q[i] ^= p[i];
+
+		/* next iv */
+		if (sp == sbuf) {
+			bcopy(sbuf, iv, blocklen);
+			ivp = NULL;
+		} else
+			ivp = sp;
+
+		sn += blocklen;
+		dn += blocklen;
+
+		/* find the next source block */
+		while (s && sn >= s->m_len) {
+			sn -= s->m_len;
+			soff += s->m_len;
+			s = s->m_next;
+		}
+
+		/* skip over empty mbuf */
+		while (s && s->m_len == 0)
+			s = s->m_next;
+	}
+
+	m_freem(scut->m_next);
+	scut->m_len = scutoff;
+	scut->m_next = d0;
+
+	/* just in case */
+	bzero(iv, sizeof(iv));
+	bzero(sbuf, sizeof(sbuf));
+
+	return 0;
+}
+
+static int
+esp_cbc_encrypt(m, off, plen, sav, algo, ivlen)
+	struct mbuf *m;
+	size_t off;
+	size_t plen;
+	struct secasvar *sav;
+	const struct esp_algorithm *algo;
+	int ivlen;
+{
+	struct mbuf *s;
+	struct mbuf *d, *d0, *dp;
+	int soff, doff;	/*offset from the head of chain, to head of this mbuf */
+	int sn, dn;	/*offset from the head of the mbuf, to meat */
+	size_t ivoff, bodyoff;
+	u_int8_t iv[MAXIVLEN], *ivp;
+	u_int8_t sbuf[MAXIVLEN], *sp;
+	u_int8_t *p, *q;
+	struct mbuf *scut;
+	int scutoff;
+	int i;
+	int blocklen;
+	int derived;
+
+	if (ivlen != sav->ivlen || ivlen > sizeof(iv)) {
+		ipseclog((LOG_ERR, "esp_cbc_encrypt %s: "
+		    "unsupported ivlen %d\n", algo->name, ivlen));
+		m_freem(m);
+		return EINVAL;
+	}
+
+	/* assumes blocklen == padbound */
+	blocklen = algo->padbound;
+
+#if DIAGNOSTIC
+	if (blocklen > sizeof(iv)) {
+		ipseclog((LOG_ERR, "esp_cbc_encrypt %s: "
+		    "unsupported blocklen %d\n", algo->name, blocklen));
+		m_freem(m);
+		return EINVAL;
+	}
+#endif
+
+	if (sav->flags & SADB_X_EXT_OLD) {
+		/* RFC 1827 */
+		ivoff = off + sizeof(struct esp);
+		bodyoff = off + sizeof(struct esp) + ivlen;
+		derived = 0;
+	} else {
+		/* RFC 2406 */
+		if (sav->flags & SADB_X_EXT_DERIV) {
+			/*
+			 * draft-ietf-ipsec-ciph-des-derived-00.txt
+			 * uses sequence number field as IV field.
+			 */
+			ivoff = off + sizeof(struct esp);
+			bodyoff = off + sizeof(struct esp) + sizeof(u_int32_t);
+			ivlen = sizeof(u_int32_t);
+			derived = 1;
+		} else {
+			ivoff = off + sizeof(struct newesp);
+			bodyoff = off + sizeof(struct newesp) + ivlen;
+			derived = 0;
+		}
+	}
+
+	/* put iv into the packet.  if we are in derived mode, use seqno. */
+	if (derived)
+		m_copydata(m, ivoff, ivlen, iv);
+	else {
+		bcopy(sav->iv, iv, ivlen);
+		/* maybe it is better to overwrite dest, not source */
+		m_copyback(m, ivoff, ivlen, iv);
+	}
+
+	/* extend iv */
+	if (ivlen == blocklen)
+		;
+	else if (ivlen == 4 && blocklen == 8) {
+		bcopy(&iv[0], &iv[4], 4);
+		iv[4] ^= 0xff;
+		iv[5] ^= 0xff;
+		iv[6] ^= 0xff;
+		iv[7] ^= 0xff;
+	} else {
+		ipseclog((LOG_ERR, "esp_cbc_encrypt %s: "
+		    "unsupported ivlen/blocklen: %d %d\n",
+		    algo->name, ivlen, blocklen));
+		m_freem(m);
+		return EINVAL;
+	}
+
+	if (m->m_pkthdr.len < bodyoff) {
+		ipseclog((LOG_ERR, "esp_cbc_encrypt %s: bad len %d/%lu\n",
+		    algo->name, m->m_pkthdr.len, (unsigned long)bodyoff));
+		m_freem(m);
+		return EINVAL;
+	}
+	if ((m->m_pkthdr.len - bodyoff) % blocklen) {
+		ipseclog((LOG_ERR, "esp_cbc_encrypt %s: "
+		    "payload length must be multiple of %lu\n",
+		    algo->name, (unsigned long)algo->padbound));
+		m_freem(m);
+		return EINVAL;
+	}
+
+	s = m;
+	d = d0 = dp = NULL;
+	soff = doff = sn = dn = 0;
+	ivp = sp = NULL;
+
+	/* skip bodyoff */
+	while (soff < bodyoff) {
+		if (soff + s->m_len > bodyoff) {
+			sn = bodyoff - soff;
+			break;
+		}
+
+		soff += s->m_len;
+		s = s->m_next;
+	}
+	scut = s;
+	scutoff = sn;
+
+	/* skip over empty mbuf */
+	while (s && s->m_len == 0)
+		s = s->m_next;
+
+	while (soff < m->m_pkthdr.len) {
+		/* source */
+		if (sn + blocklen <= s->m_len) {
+			/* body is continuous */
+			sp = mtod(s, u_int8_t *) + sn;
+		} else {
+			/* body is non-continuous */
+			m_copydata(s, sn, blocklen, sbuf);
+			sp = sbuf;
+		}
+
+		/* destination */
+		if (!d || dn + blocklen > d->m_len) {
+			if (d)
+				dp = d;
+			MGET(d, M_DONTWAIT, MT_DATA);
+			i = m->m_pkthdr.len - (soff + sn);
+			if (d && i > MLEN) {
+				MCLGET(d, M_DONTWAIT);
+				if ((d->m_flags & M_EXT) == 0) {
+					m_free(d);
+					d = NULL;
+				}
+			}
+			if (!d) {
+				m_freem(m);
+				if (d0)
+					m_freem(d0);
+				return ENOBUFS;
+			}
+			if (!d0)
+				d0 = d;
+			if (dp)
+				dp->m_next = d;
+			d->m_len = 0;
+			d->m_len = (M_TRAILINGSPACE(d) / blocklen) * blocklen;
+			if (d->m_len > i)
+				d->m_len = i;
+			dn = 0;
+		}
+
+		/* xor */
+		p = ivp ? ivp : iv;
+		q = sp;
+		for (i = 0; i < blocklen; i++)
+			q[i] ^= p[i];
+
+		/* encrypt */
+		(*algo->blockencrypt)(algo, sav, sp, mtod(d, u_int8_t *) + dn);
+
+		/* next iv */
+		ivp = mtod(d, u_int8_t *) + dn;
+
+		sn += blocklen;
+		dn += blocklen;
+
+		/* find the next source block */
+		while (s && sn >= s->m_len) {
+			sn -= s->m_len;
+			soff += s->m_len;
+			s = s->m_next;
+		}
+
+		/* skip over empty mbuf */
+		while (s && s->m_len == 0)
+			s = s->m_next;
+	}
+
+	m_freem(scut->m_next);
+	scut->m_len = scutoff;
+	scut->m_next = d0;
+
+	/* just in case */
+	bzero(iv, sizeof(iv));
+	bzero(sbuf, sizeof(sbuf));
+
+	key_sa_stir_iv(sav);
+
+	return 0;
 }
 
 /*------------------------------------------------------------*/
 
+/* does not free m0 on error */
 int
 esp_auth(m0, skip, length, sav, sum)
 	struct mbuf *m0;
@@ -1190,8 +1053,9 @@ esp_auth(m0, skip, length, sav, sum)
 	size_t off;
 	struct ah_algorithm_state s;
 	u_char sumbuf[AH_MAXSUMSIZE];
-	struct ah_algorithm *algo;
+	const struct ah_algorithm *algo;
 	size_t siz;
+	int error;
 
 	/* sanity checks */
 	if (m0->m_pkthdr.len < skip) {
@@ -1215,7 +1079,8 @@ esp_auth(m0, skip, length, sav, sum)
 		ipseclog((LOG_DEBUG, "esp_auth: NULL SA passed\n"));
 		return EINVAL;
 	}
-	if (!sav->alg_auth) {
+	algo = ah_algorithm_lookup(sav->alg_auth);
+	if (!algo) {
 		ipseclog((LOG_ERR,
 		    "esp_auth: bad ESP auth algorithm passed: %d\n",
 		    sav->alg_auth));
@@ -1225,7 +1090,6 @@ esp_auth(m0, skip, length, sav, sum)
 	m = m0;
 	off = 0;
 
-	algo = &ah_algorithms[sav->alg_auth];
 	siz = (((*algo->sumsiz)(sav) + 3) & ~(4 - 1));
 	if (sizeof(sumbuf) < siz) {
 		ipseclog((LOG_DEBUG,
@@ -1248,7 +1112,10 @@ esp_auth(m0, skip, length, sav, sum)
 		}
 	}
 
-	(*algo->init)(&s, sav);
+	error = (*algo->init)(&s, sav);
+	if (error)
+		return error;
+
 	while (0 < length) {
 		if (!m)
 			panic("mbuf chain?");

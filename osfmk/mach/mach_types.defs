@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2002,2000 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -62,8 +62,8 @@
 type upl_page_info_t		= struct[2] of integer_t;
 type upl_page_info_array_t	= array[*:20] of upl_page_info_t;
 
-type memory_object_offset_t 	= struct[2] of integer_t;
-type memory_object_size_t 	= struct[2] of integer_t;
+type memory_object_offset_t 	= uint64_t;
+type memory_object_size_t 	= uint64_t;
 
 
 
@@ -331,15 +331,6 @@ type kernel_boot_info_t         = c_string[*:4096];
 
 type time_value_t = struct[2] of integer_t;
 
-type user_subsystem_t		= array[*:16384] of char;
-
-type subsystem_t = mach_port_t
-#if	KERNEL_SERVER
-		intran: subsystem_t convert_port_to_subsystem(mach_port_t)
-		outtran: mach_port_t convert_subsystem_to_port(subsystem_t)
-#endif	/* KERNEL_SERVER */
-		;
-
 type mach_port_qos_t = struct[2] of integer_t;
 
 type emulation_vector_t		= ^array[] of vm_offset_t;
@@ -444,13 +435,13 @@ type kmod_args_t = ^array[] of MACH_MSG_TYPE_BYTE
 type io_master_t = mach_port_t;
 type UNDServerRef = mach_port_t;
 
-#ifdef  KERNEL_SERVER
+#if KERNEL_SERVER
 #ifdef	MACH_KERNEL_PRIVATE
 simport <kern/ipc_kobject.h>;	/* for null conversion */
 simport <kern/ipc_tt.h>;	/* for task/thread conversion */
 simport <kern/ipc_host.h>;	/* for host/processor/pset conversions */
-simport <kern/ipc_subsystem.h>;	/* for subsystem conversions */
 simport <kern/ipc_sync.h>;      /* for lock_set and semaphore conversions */
+simport <kern/ledger.h>;	/* for ledger conversions */
 simport <vm/memory_object.h>; /* for memory object type conversions */
 #endif	/* MACH_KERNEL_PRIVATE */
 
@@ -458,6 +449,7 @@ simport <kern/ipc_mig.h>;	/* pick up kernel-specific MIG things */
 
 #endif /* KERNEL_SERVER */
 
+import <mach/mig.h>;
 import <mach/mach_types.h>;
 
 #endif	/* _MACH_MACH_TYPES_DEFS_ */

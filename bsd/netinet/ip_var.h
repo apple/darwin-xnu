@@ -56,7 +56,9 @@
 
 #ifndef _NETINET_IP_VAR_H_
 #define	_NETINET_IP_VAR_H_
+#include <sys/appleapiopts.h>
 
+#ifdef __APPLE_API_PRIVATE
 /*
  * Overlay for ip header used by other protocols (tcp, udp).
  */
@@ -83,8 +85,12 @@ struct ipq {
 	struct	in_addr ipq_src,ipq_dst;
 	u_long	reserved[4];		/* for future use */
 #if IPDIVERT
-	u_short ipq_divert;		/* divert protocol port */
-	u_short ipq_div_cookie;		/* divert protocol cookie */
+#ifdef IPDIVERT_44
+	u_int32_t ipq_div_info;		/* ipfw divert port & flags */
+#else
+	u_int16_t ipq_divert;		/* ipfw divert port (Maintain backward compat.) */
+#endif
+	u_int16_t ipq_div_cookie;	/* ipfw divert cookie */
 #endif
 };
 
@@ -112,8 +118,11 @@ struct ip_moptions {
 	u_short	imo_num_memberships;	/* no. memberships this socket */
 	struct	in_multi *imo_membership[IP_MAX_MEMBERSHIPS];
 	u_long	imo_multicast_vif;	/* vif num outgoing multicasts */
+	struct	in_addr imo_multicast_addr; /* ifindex/addr on MULTICAST_IF */
 };
+#endif /* __APPLE_API_PRIVATE */
 
+#ifdef __APPLE_API_UNSTABLE
 struct	ipstat {
 	u_long	ips_total;		/* total packets received */
 	u_long	ips_badsum;		/* checksum bad */
@@ -143,9 +152,19 @@ struct	ipstat {
 	u_long	ips_toolong;		/* ip length > max ip packet size */
 	u_long	ips_notmember;		/* multicasts for unregistered grps */
 	u_long	ips_nogif;		/* no match gif found */
+	u_long	ips_badaddr;		/* invalid address on header */
 };
+#endif /* __APPLE_API_UNSTABLE */
 
-#if KERNEL
+#ifdef __APPLE_API_PRIVATE
+#ifdef KERNEL
+
+struct ip_linklocal_stat {
+	u_long iplls_in_total;
+	u_long iplls_in_badttl;
+	u_long iplls_out_total;
+	u_long iplls_out_badttl;
+};
 
 /* flags passed to ip_output as last parameter */
 #define	IP_FORWARDING		0x1		/* most of ip header exists */
@@ -159,7 +178,9 @@ struct route;
 struct sockopt;
 
 extern struct	ipstat	ipstat;
+#if !defined(RANDOM_IP_ID) || RANDOM_IP_ID == 0
 extern u_short	ip_id;				/* ip packet ctr, for ids */
+#endif
 extern int	ip_defttl;			/* default IP ttl */
 extern int	ipforwarding;			/* ip forwarding */
 extern struct protosw *ip_protox[];
@@ -184,6 +205,10 @@ void	 ip_slowtimo __P((void));
 struct mbuf *
 	 ip_srcroute __P((void));
 void	 ip_stripoptions __P((struct mbuf *, struct mbuf *));
+#if RANDOM_IP_ID
+u_int16_t	
+	 ip_randomid __P((void));
+#endif
 int	 rip_ctloutput __P((struct socket *, struct sockopt *));
 void	 rip_ctlinput __P((int, struct sockaddr *, void *));
 void	 rip_init __P((void));
@@ -200,13 +225,16 @@ void	ip_rsvp_force_done __P((struct socket *));
 #if IPDIVERT
 void	div_init __P((void));
 void	div_input __P((struct mbuf *, int));
+void	divert_packet __P((struct mbuf *, int, int));
 extern struct pr_usrreqs div_usrreqs;
-extern u_short ip_divert_port;
-extern u_short ip_divert_cookie;
+extern u_int16_t ip_divert_cookie;
 #endif
 
 extern struct sockaddr_in *ip_fw_fwd_addr;
 
-#endif /* KERNEL */
+void	in_delayed_cksum(struct mbuf *m);
+
+#endif /* _KERNEL */
+#endif /* __APPLE_API_PRIVATE */
 
 #endif /* !_NETINET_IP_VAR_H_ */

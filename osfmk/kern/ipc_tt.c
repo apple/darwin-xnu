@@ -116,8 +116,6 @@ ipc_task_init(
 		for (i = FIRST_EXCEPTION; i < EXC_TYPES_COUNT; i++) {
 			task->exc_actions[i].port = IP_NULL;
 		}/* for */
-		task->exc_actions[EXC_MACH_SYSCALL].port = 
-			ipc_port_make_send(realhost.host_self);
 		task->itk_host = ipc_port_make_send(realhost.host_self);
 		task->itk_bootstrap = IP_NULL;
 		for (i = 0; i < TASK_PORT_REGISTER_MAX; i++)
@@ -308,9 +306,6 @@ ipc_thr_act_init(task_t task, thread_act_t thr_act)
 
 	for (i = FIRST_EXCEPTION; i < EXC_TYPES_COUNT; i++)
 		thr_act->exc_actions[i].port = IP_NULL;
-
-	thr_act->exc_actions[EXC_MACH_SYSCALL].port =
-					ipc_port_make_send(realhost.host_self);
 
 	ipc_kobject_set(kport, (ipc_kobject_t) thr_act, IKOT_ACT);
 }

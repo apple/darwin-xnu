@@ -55,6 +55,8 @@
 #include <netat/debug.h>
 #include <netat/at_pcb.h>
 
+#include <sys/kern_event.h>
+
 extern void rtmp_router_input();
 
 /****************************************************************/
@@ -141,16 +143,24 @@ void trackrouter(ifID, net, node)
 			unused = router;
 	}
 	if (unused) {
-	        router_added++;
+		router_added++;
 
+		if (ifID->ifARouter.s_net == 0) {
+			/* Send event that this interface just got a router. This does not
+				discriminate on whether this router is valid or not. If it is not
+				valid rtmp_input will send a KEV_ATALK_ROUTERUP_INVALID event. */
+			atalk_post_msg(ifID->aa_ifp, KEV_ATALK_ROUTERUP, 0, 0);
+		}
+		
 		unused->ifID = ifID;
 		NET(unused) =  net;
 		NODE(unused) = node;
+		ifID->ifRouterState = ROUTER_AROUND;
 		timeout(ddp_age_router, (caddr_t) unused, 50*SYS_HZ);
+		
 		if (NET(ifID) == 0 && NODE(ifID) == 0) {
 			NET(ifID) = net;
 			NODE(ifID) = node;
-			ifID->ifRouterState = ROUTER_AROUND;
 		}
 	}
 }
@@ -189,24 +199,30 @@ void ddp_age_router(deadrouter)
 				newrouter = NULL;
 		}
 		if (newrouter) {
+			/* Set our router to another on the list and go on with life */
 			NET(ourrouter) = NET(newrouter);
 			NODE(ourrouter) = NODE(newrouter);
 		}
 		else {
 			/* from gorouterless() */
+			/* We have no other routers. */
 			ATTRACE(AT_MID_DDP, AT_SID_TIMERS, AT_LV_WARNING, FALSE,
 				"ddp_age_router entry : ARouter = 0x%x, RouterState = 0x%x",
 				ATALK_VALUE(ourrouter->ifARouter), ourrouter->ifRouterState, 0);
 
 			switch (ourrouter->ifRouterState) {
 			case ROUTER_AROUND :
+				/* This is where we lose our cable.
+					Reset router fields and state accordingly. */
 				ourrouter->ifARouter.s_net = 0;
 				ourrouter->ifARouter.s_node = 0;
-				dPrintf(D_M_RTMP,D_L_INFO,
-					("rtmp.c Gorouterless!!!!!!!!\n"));
 				ourrouter->ifThisCableStart = DDP_MIN_NETWORK;
 				ourrouter->ifThisCableEnd = DDP_MAX_NETWORK;
 				ourrouter->ifRouterState = NO_ROUTER;
+
+				/* Send event to indicate that we've lost our seed router. */
+				atalk_post_msg(ourrouter->aa_ifp, KEV_ATALK_ROUTERDOWN, 0, 0);
+
 				zip_control(ourrouter, ZIP_NO_ROUTER);
 				break;
 			case ROUTER_WARNING :
@@ -285,13 +301,18 @@ void rtmp_input (mp, ifID)
 				 * ignore the presence of router
 				 */
 				if (ifID->ifRouterState == NO_ROUTER) {
-					dPrintf(D_M_RTMP, D_L_STARTUP,
-						("Warning: new router came up: invalid startup net/node\n"));
+					dPrintf(D_M_RTMP, D_L_INFO, ("rtmp_input: new router came up, INVALID: net \
+						in startup range.\n"));
+					/* trackrouter sends a KEV_ATALK_ROUTERUP event to note that
+						a new router has come up when we had none before. */
 					trackrouter(ifID,
 						    NET_VALUE(rtmp->at_rtmp_this_net),
 						    rtmp->at_rtmp_id[0]
 						    );
 					ifID->ifRouterState = ROUTER_WARNING;
+					
+					/* This router is invalid. Send event. */
+					atalk_post_msg(ifID->aa_ifp, KEV_ATALK_ROUTERUP_INVALID, 0, 0);
 				}
 			} else {
 				/* our address
@@ -308,6 +329,11 @@ void rtmp_input (mp, ifID)
 					 */
 					ifID->ifThisCableStart = range_start;
 					ifID->ifThisCableEnd = range_end;
+
+					/* A seed router that gives us back our cable range came up.
+						It's a valid router and gives us our network back. */
+					atalk_post_msg(ifID->aa_ifp, KEV_ATALK_ROUTERUP, 0, 0);
+
 					trackrouter(ifID,
 						    NET_VALUE(rtmp->at_rtmp_this_net),
 						    rtmp->at_rtmp_id[0]
@@ -320,13 +346,17 @@ void rtmp_input (mp, ifID)
 					 * router
 					 */
 					if (ifID->ifRouterState == NO_ROUTER) {
-						dPrintf(D_M_RTMP,D_L_ERROR, 
-							("Warning: new router came up: invalid net/node\n"));
+						/* trackrouter sends a KEV_ATALK_ROUTERUP event to note that
+							a new router has come up when we had none before. */
 						trackrouter(ifID,
 							    NET_VALUE(rtmp->at_rtmp_this_net),
 							    rtmp->at_rtmp_id[0]
 							    );
 						ifID->ifRouterState = ROUTER_WARNING;
+
+						/* A new seed router came up, but the cable range is different
+							than what we had before. */
+						atalk_post_msg(ifID->aa_ifp, KEV_ATALK_ROUTERUP_INVALID, 0, 0);
 					}
 				}
 			}

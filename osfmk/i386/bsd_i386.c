@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2002 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -28,7 +28,6 @@
 #include <mach/kern_return.h>
 #include <mach/thread_status.h>
 #include <mach/vm_param.h>
-#include <mach/rpc.h>
 
 #include <kern/counters.h>
 #include <kern/cpu_data.h>
@@ -54,7 +53,9 @@
 #include <i386/iopb_entries.h>
 #include <i386/machdep_call.h>
 
-#define       USRSTACK        0xc0000000
+#include <sys/syscall.h>
+#include <sys/ktrace.h>
+struct proc;
 
 kern_return_t
 thread_userstack(
@@ -111,22 +112,18 @@ thread_userstack(
 	i386_thread_state_t *state25;
 	vm_offset_t	uesp;
 
-        /*
-         * Set a default.
-         */
-        if (*user_stack == 0)
-                *user_stack = USRSTACK;
-
         if (customstack)
 			*customstack = 0;
+
         switch (flavor) {
 	case i386_THREAD_STATE:	/* FIXME */
                 state25 = (i386_thread_state_t *) tstate;
-                *user_stack = state25->esp ? state25->esp : USRSTACK;
-				if (customstack && state25->esp)
-						*customstack = 1;
-				else
-						*customstack = 0;
+		if (state25->esp)
+			*user_stack = state25->esp;
+		if (customstack && state25->esp)
+			*customstack = 1;
+		else
+			*customstack = 0;
 		break;
 
         case i386_NEW_THREAD_STATE:
@@ -137,14 +134,13 @@ thread_userstack(
 			uesp = state->uesp;
     		}
 
-                /*
-                 * If a valid user stack is specified, use it.
-                 */
-                *user_stack = uesp ? uesp : USRSTACK;
-				if (customstack && uesp)
-						*customstack = 1;
-				else
-						*customstack = 0;
+                /* If a valid user stack is specified, use it. */
+		if (uesp)
+			*user_stack = uesp;
+		if (customstack && uesp)
+			*customstack = 1;
+		else
+			*customstack = 0;
                 break;
         default :
                 return (KERN_INVALID_ARGUMENT);
@@ -302,6 +298,7 @@ struct sysent {		/* system call table */
 	unsigned long		(*sy_call)(void *, void *, int *);	/* implementing function */
 };
 
+#define NO_FUNNEL 0
 #define KERNEL_FUNNEL 1
 #define NETWORK_FUNNEL 2
 
@@ -310,25 +307,38 @@ extern funnel_t * network_flock;
 
 extern struct sysent sysent[];
 
-
 int set_bsduthreadargs (thread_act_t, struct i386_saved_state *, void *);
 
 void * get_bsduthreadarg(thread_act_t);
 
 void unix_syscall(struct i386_saved_state *);
 
-/* USED ONLY FROM VFORK/EXIT */
 void
 unix_syscall_return(int error)
 {
     thread_act_t		thread;
 	volatile int *rval;
 	struct i386_saved_state *regs;
+	struct proc *p;
+	struct proc *current_proc();
+	unsigned short code;
+	vm_offset_t params;
+	struct sysent *callp;
+	extern int nsysent;
 
     thread = current_act();
     rval = (int *)get_bsduthreadrval(thread);
+	p = current_proc();
 
 	regs = USER_REGS(thread);
+
+	/* reconstruct code for tracing before blasting eax */
+	code = regs->eax;
+	params = (vm_offset_t) ((caddr_t)regs->uesp + sizeof (int));
+	callp = (code >= nsysent) ? &sysent[63] : &sysent[code];
+	if (callp == sysent) {
+	  code = fuword(params);
+	}
 
 	if (error == ERESTART) {
 		regs->eip -= 7;
@@ -344,7 +354,15 @@ unix_syscall_return(int error)
 		} 
 	}
 
-    (void) thread_funnel_set(current_thread()->funnel_lock, FALSE);
+	ktrsysret(p, code, error, rval[0], callp->sy_funnel);
+
+	KERNEL_DEBUG_CONSTANT(BSDDBG_CODE(DBG_BSD_EXCP_SC, code) | DBG_FUNC_END,
+		error, rval[0], rval[1], 0, 0);
+
+	if (callp->sy_funnel != NO_FUNNEL) {
+    		assert(thread_funnel_get() == THR_FUNNEL_NULL);
+    		(void) thread_funnel_set(current_thread()->funnel_lock, FALSE);
+	}
 
     thread_exception_return();
     /* NOTREACHED */
@@ -355,14 +373,16 @@ void
 unix_syscall(struct i386_saved_state *regs)
 {
     thread_act_t		thread;
-    void	*p, *vt; 
+    void	*vt; 
     unsigned short	code;
     struct sysent		*callp;
 	int	nargs, error;
 	volatile int *rval;
-        int funnel_type;
+	int funnel_type;
     vm_offset_t		params;
     extern int nsysent;
+	struct proc *p;
+	struct proc *current_proc();
 
     thread = current_act();
     p = current_proc();
@@ -391,17 +411,24 @@ unix_syscall(struct i386_saved_state *regs)
     rval[0] = 0;
     rval[1] = regs->edx;
 
-         if(callp->sy_funnel == NETWORK_FUNNEL) {
-            (void) thread_funnel_set(network_flock, TRUE);
-	   }
-        else {
-            (void) thread_funnel_set(kernel_flock, TRUE);
-	  }
+	funnel_type = callp->sy_funnel;
+	if(funnel_type == KERNEL_FUNNEL)
+		(void) thread_funnel_set(kernel_flock, TRUE);
+	else if (funnel_type == NETWORK_FUNNEL)
+		(void) thread_funnel_set(network_flock, TRUE);
+	
    set_bsduthreadargs(thread, regs, NULL);
 
     if (callp->sy_narg > 8)
 	panic("unix_syscall max arg count exceeded (%d)", callp->sy_narg);
 
+	ktrsyscall(p, code, callp->sy_narg, vt, funnel_type);
+
+	{ 
+	  int *ip = (int *)vt;
+	  KERNEL_DEBUG_CONSTANT(BSDDBG_CODE(DBG_BSD_EXCP_SC, code) | DBG_FUNC_START,
+	      *ip, *(ip+1), *(ip+2), *(ip+3), 0);
+	}
 
     error = (*(callp->sy_call))(p, (void *) vt, rval);
 	
@@ -423,7 +450,13 @@ unix_syscall(struct i386_saved_state *regs)
 		} 
 	}
 
-    (void) thread_funnel_set(current_thread()->funnel_lock, FALSE);
+	ktrsysret(p, code, error, rval[0], funnel_type);
+
+	KERNEL_DEBUG_CONSTANT(BSDDBG_CODE(DBG_BSD_EXCP_SC, code) | DBG_FUNC_END,
+		error, rval[0], rval[1], 0, 0);
+
+	if(funnel_type != NO_FUNNEL)
+    		(void) thread_funnel_set(current_thread()->funnel_lock, FALSE);
 
     thread_exception_return();
     /* NOTREACHED */
@@ -436,6 +469,8 @@ machdep_syscall( struct i386_saved_state *regs)
     int				trapno, nargs;
     machdep_call_t		*entry;
     thread_t			thread;
+	struct proc *p;
+	struct proc *current_proc();
     
     trapno = regs->eax;
     if (trapno < 0 || trapno >= machdep_call_count) {
@@ -481,7 +516,8 @@ machdep_syscall( struct i386_saved_state *regs)
     else
 	regs->eax = (unsigned int)(*entry->routine)();
 
-    (void) thread_funnel_set(current_thread()->funnel_lock, FALSE);
+	if (current_thread()->funnel_lock)
+    		(void) thread_funnel_set(current_thread()->funnel_lock, FALSE);
 
     thread_exception_return();
     /* NOTREACHED */
@@ -513,7 +549,7 @@ mach25_syscall(struct i386_saved_state *regs)
 #endif	/* MACH_BSD */
 
 #undef current_thread
-thread_act_t
+thread_t
 current_thread(void)
 {
   return(current_thread_fast());

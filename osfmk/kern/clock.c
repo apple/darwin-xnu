@@ -70,6 +70,13 @@ static struct	alarm		*alrmdone;		/* alarm done list pointer */
 static long					alrm_seqno;		/* uniquely identifies alarms */
 static thread_call_data_t	alarm_deliver;
 
+decl_simple_lock_data(static,calend_adjlock)
+static int64_t				calend_adjtotal;
+static uint32_t				calend_adjdelta;
+
+static timer_call_data_t	calend_adjcall;
+static uint64_t				calend_adjinterval, calend_adjdeadline;
+
 /* backwards compatibility */
 int             hz = HZ;                /* GET RID OF THIS !!! */
 int             tick = (1000000 / HZ);  /* GET RID OF THIS !!! */
@@ -99,6 +106,11 @@ void	clock_alarm_deliver(
 			thread_call_param_t		p0,
 			thread_call_param_t		p1);
 
+static
+void	clock_calend_adjust(
+			timer_call_param_t	p0,
+			timer_call_param_t	p1);
+
 /*
  *	Macros to lock/unlock clock system.
  */
@@ -126,6 +138,7 @@ clock_config(void)
 	/*
 	 * Configure clock devices.
 	 */
+	simple_lock_init(&calend_adjlock, ETAP_MISC_CLOCK);
 	simple_lock_init(&ClockLock, ETAP_MISC_CLOCK);
 	for (i = 0; i < clock_count; i++) {
 		clock = &clock_list[i];
@@ -180,15 +193,14 @@ clock_service_create(void)
 		}
 	}
 
+	timer_call_setup(&calend_adjcall, clock_calend_adjust, NULL);
+
 	/*
 	 * Initialize clock service alarms.
 	 */
 	i = sizeof(struct alarm);
 	alarm_zone = zinit(i, (4096/i)*i, 10*i, "alarms");
 
-	/*
-	 * Initialize the clock alarm delivery mechanism.
-	 */
 	thread_call_setup(&alarm_deliver, clock_alarm_deliver, NULL);
 }
 
@@ -279,10 +291,15 @@ clock_set_time(
 	mach_timespec_t	*clock_time;
 	kern_return_t	(*settime)(
 						mach_timespec_t		*clock_time);
+	extern kern_return_t
+					calend_settime(
+						mach_timespec_t		*clock_time);
 
 	if (clock == CLOCK_NULL)
 		return (KERN_INVALID_ARGUMENT);
 	if ((settime = clock->cl_ops->c_settime) == 0)
+		return (KERN_FAILURE);
+	if (settime == calend_settime)
 		return (KERN_FAILURE);
 	clock_time = &new_time;
 	if (BAD_MACH_TIMESPEC(clock_time))
@@ -463,6 +480,8 @@ clock_sleep_internal(
 		return (KERN_INVALID_VALUE);
 	rvalue = KERN_SUCCESS;
 	if (chkstat > 0) {
+		wait_result_t wait_result;
+
 		/*
 		 * Get alarm and add to clock alarm list.
 		 */
@@ -478,34 +497,37 @@ clock_sleep_internal(
 		else
 			alrmfree = alarm->al_next;
 
-		alarm->al_time = *sleep_time;
-		alarm->al_status = ALARM_SLEEP;
-		post_alarm(clock, alarm);
-
 		/*
 		 * Wait for alarm to occur.
 		 */
-		assert_wait((event_t)alarm, THREAD_ABORTSAFE);
-		UNLOCK_CLOCK(s);
-		/* should we force spl(0) at this point? */
-		thread_block((void (*)(void)) 0);
-		/* we should return here at ipl0 */
+		wait_result = assert_wait((event_t)alarm, THREAD_ABORTSAFE);
+		if (wait_result == THREAD_WAITING) {
+			alarm->al_time = *sleep_time;
+			alarm->al_status = ALARM_SLEEP;
+			post_alarm(clock, alarm);
+			UNLOCK_CLOCK(s);
 
-		/*
-		 * Note if alarm expired normally or whether it
-		 * was aborted. If aborted, delete alarm from
-		 * clock alarm list. Return alarm to free list.
-		 */
-		LOCK_CLOCK(s);
-		if (alarm->al_status != ALARM_DONE) {
-			/* This means we were interrupted and that
-			   thread->wait_result != THREAD_AWAKENED. */
-			if ((alarm->al_prev)->al_next = alarm->al_next)
-				(alarm->al_next)->al_prev = alarm->al_prev;
+			wait_result = thread_block(THREAD_CONTINUE_NULL);
+
+			/*
+			 * Note if alarm expired normally or whether it
+			 * was aborted. If aborted, delete alarm from
+			 * clock alarm list. Return alarm to free list.
+			 */
+			LOCK_CLOCK(s);
+			if (alarm->al_status != ALARM_DONE) {
+				assert(wait_result != THREAD_AWAKENED);
+				if ((alarm->al_prev)->al_next = alarm->al_next)
+					(alarm->al_next)->al_prev = alarm->al_prev;
+				rvalue = KERN_ABORTED;
+			}
+			*sleep_time = alarm->al_time;
+			alarm->al_status = ALARM_FREE;
+		} else {
+			assert(wait_result == THREAD_INTERRUPTED);
+			assert(alarm->al_status == ALARM_FREE);
 			rvalue = KERN_ABORTED;
 		}
-		*sleep_time = alarm->al_time;
-		alarm->al_status = ALARM_FREE;
 		alarm->al_next = alrmfree;
 		alrmfree = alarm;
 		UNLOCK_CLOCK(s);
@@ -852,11 +874,105 @@ mach_wait_until(
 {
 	int				wait_result;
 
-	assert_wait((event_t)&mach_wait_until, THREAD_ABORTSAFE);
-	thread_set_timer_deadline(deadline);
-	wait_result = thread_block((void (*)) 0);
-	if (wait_result != THREAD_TIMED_OUT)
-		thread_cancel_timer();
+	wait_result = assert_wait((event_t)&mach_wait_until, THREAD_ABORTSAFE);
+	if (wait_result == THREAD_WAITING) {
+		thread_set_timer_deadline(deadline);
+		wait_result = thread_block(THREAD_CONTINUE_NULL);
+		if (wait_result != THREAD_TIMED_OUT)
+			thread_cancel_timer();
+	}
 
 	return ((wait_result == THREAD_INTERRUPTED)? KERN_ABORTED: KERN_SUCCESS);
+}
+
+int64_t
+clock_set_calendar_adjtime(
+	int64_t					total,
+	uint32_t				delta)
+{
+	int64_t			ototal;
+	spl_t			s;
+
+	s = splclock();
+	simple_lock(&calend_adjlock);
+
+	if (calend_adjinterval == 0)
+		clock_interval_to_absolutetime_interval(10000, NSEC_PER_USEC,
+														&calend_adjinterval);
+
+	ototal = calend_adjtotal;
+
+	if (total != 0) {
+		uint64_t		abstime;
+
+		if (total > 0) {
+			if (delta > total)
+				delta = total;
+		}
+		else {
+			if (delta > -total)
+				delta = -total;
+		}
+
+		calend_adjtotal = total;
+		calend_adjdelta = delta;
+
+		if (calend_adjdeadline >= calend_adjinterval)
+			calend_adjdeadline -= calend_adjinterval;
+		clock_get_uptime(&abstime);
+		clock_deadline_for_periodic_event(calend_adjinterval, abstime,
+														&calend_adjdeadline);
+
+		timer_call_enter(&calend_adjcall, calend_adjdeadline);
+	}
+	else {
+		calend_adjtotal = 0;
+
+		timer_call_cancel(&calend_adjcall);
+	}
+
+	simple_unlock(&calend_adjlock);
+	splx(s);
+
+	return (ototal);
+}
+
+static void
+clock_calend_adjust(
+	timer_call_param_t		p0,
+	timer_call_param_t		p1)
+{
+	spl_t		s;
+
+	s = splclock();
+	simple_lock(&calend_adjlock);
+
+	if (calend_adjtotal > 0) {
+		clock_adjust_calendar((clock_res_t)calend_adjdelta);
+		calend_adjtotal -= calend_adjdelta;
+
+		if (calend_adjdelta > calend_adjtotal)
+			calend_adjdelta = calend_adjtotal;
+	}
+	else
+	if (calend_adjtotal < 0) {
+		clock_adjust_calendar(-(clock_res_t)calend_adjdelta);
+		calend_adjtotal += calend_adjdelta;
+
+		if (calend_adjdelta > -calend_adjtotal)
+			calend_adjdelta = -calend_adjtotal;
+	}
+
+	if (calend_adjtotal != 0) {
+		uint64_t	abstime;
+
+		clock_get_uptime(&abstime);
+		clock_deadline_for_periodic_event(calend_adjinterval, abstime,
+														&calend_adjdeadline);
+
+		timer_call_enter(&calend_adjcall, calend_adjdeadline);
+	}
+
+	simple_unlock(&calend_adjlock);
+	splx(s);
 }

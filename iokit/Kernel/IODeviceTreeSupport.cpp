@@ -39,11 +39,11 @@
 
 #include <DeviceTree.h>
 extern "C" {
-	#include <machine/machine_routines.h>
-	void DTInit( void * data );
+    #include <machine/machine_routines.h>
+    void DTInit( void * data );
 
-	int IODTGetLoaderInfo( char *key, void **infoAddr, int *infosize );
-	void IODTFreeLoaderInfo( char *key, void *infoAddr, int infoSize );
+    int IODTGetLoaderInfo( char *key, void **infoAddr, int *infosize );
+    void IODTFreeLoaderInfo( char *key, void *infoAddr, int infoSize );
 }
 
 #include <IOKit/assert.h>
@@ -153,7 +153,7 @@ IODeviceTreeAlloc( void * dtTop )
 
     do {
         parent = (IORegistryEntry *)stack->getObject( stack->getCount() - 1);
-		//parent->release();
+        //parent->release();
         stack->removeObject( stack->getCount() - 1);
 
         while( kSuccess == DTIterateEntries( iter, &dtChild) ) {
@@ -161,14 +161,14 @@ IODeviceTreeAlloc( void * dtTop )
             child = MakeReferenceTable( dtChild, freeDT );
             child->attachToParent( parent, gIODTPlane);
 
-			AddPHandle( child );
+            AddPHandle( child );
 
             if( kSuccess == DTEnterEntry( iter, dtChild)) {
                 stack->setObject( parent);
                 parent = child;
             }
-	    	// only registry holds retain
-	    	child->release();
+            // only registry holds retain
+            child->release();
         }
 
     } while( stack->getCount()
@@ -181,8 +181,8 @@ IODeviceTreeAlloc( void * dtTop )
 
     // make root name first compatible entry (purely cosmetic)
     if( (prop = (OSData *) parent->getProperty( gIODTCompatibleKey))) {
-		parent->setName( parent->getName(), gIODTPlane );
-		parent->setName( (const char *) prop->getBytesNoCopy() );
+        parent->setName( parent->getName(), gIODTPlane );
+        parent->setName( (const char *) prop->getBytesNoCopy() );
     }
 
     // attach tree to meta root
@@ -190,7 +190,7 @@ IODeviceTreeAlloc( void * dtTop )
     parent->release();
 
     if( freeDT ) {
-		// free original device tree
+        // free original device tree
         DTInit(0);
         IODTFreeLoaderInfo( "DeviceTree",
 			(void *)dtMap[0], round_page(dtMap[1]) );
@@ -202,36 +202,35 @@ IODeviceTreeAlloc( void * dtTop )
 						kIORegistryIterateRecursively );
     assert( regIter );
     if( regIter) {
-		while( (child = regIter->getNextObject())) {
-			IODTMapInterrupts( child );
-			if( !intMap && child->getProperty( gIODTInterruptParentKey))
-				intMap = true;
-	
-			// Look for a "driver,AAPL,MacOSX,PowerPC" property.
-			if( (obj = child->getProperty( "driver,AAPL,MacOSX,PowerPC"))) {
-				gIOCatalogue->addExtensionsFromArchive((OSData *)obj);
-	
-				child->removeProperty( "driver,AAPL,MacOSX,PowerPC");
-			}
-	
-			// some gross pruning
-			child->removeProperty( "lanLib,AAPL,MacOS,PowerPC");
-	
-			if( (obj = child->getProperty( "driver,AAPL,MacOS,PowerPC"))) {
-	
-				if( (0 == (prop = (OSData *)child->getProperty( gIODTTypeKey )))
-					|| (strcmp( "display", (char *) prop->getBytesNoCopy())) ) {
-					child->removeProperty( "driver,AAPL,MacOS,PowerPC");
-				}
-			}
-		}
-		regIter->release();
+        while( (child = regIter->getNextObject())) {
+            IODTMapInterrupts( child );
+            if( !intMap && child->getProperty( gIODTInterruptParentKey))
+                intMap = true;
+
+            // Look for a "driver,AAPL,MacOSX,PowerPC" property.
+            if( (obj = child->getProperty( "driver,AAPL,MacOSX,PowerPC"))) {
+                gIOCatalogue->addExtensionsFromArchive((OSData *)obj);
+                child->removeProperty( "driver,AAPL,MacOSX,PowerPC");
+            }
+
+            // some gross pruning
+            child->removeProperty( "lanLib,AAPL,MacOS,PowerPC");
+
+            if( (obj = child->getProperty( "driver,AAPL,MacOS,PowerPC"))) {
+
+                if( (0 == (prop = (OSData *)child->getProperty( gIODTTypeKey )))
+                  || (strcmp( "display", (char *) prop->getBytesNoCopy())) ) {
+                    child->removeProperty( "driver,AAPL,MacOS,PowerPC");
+                }
+            }
+        }
+        regIter->release();
     }
 
     if( intMap)
-		// set a key in the root to indicate we found NW interrupt mapping
-		parent->setProperty( gIODTNWInterruptMappingKey,
-			(OSObject *) gIODTNWInterruptMappingKey );
+        // set a key in the root to indicate we found NW interrupt mapping
+        parent->setProperty( gIODTNWInterruptMappingKey,
+                (OSObject *) gIODTNWInterruptMappingKey );
 
     IOLog("done\n");
 
@@ -308,57 +307,58 @@ MakeReferenceTable( DTEntry dtEntry, bool copy )
     regEntry = new IOService;
 
     if( regEntry && (false == regEntry->init())) {
-		regEntry->release();
-		regEntry = 0;
+        regEntry->release();
+        regEntry = 0;
     }
 
     if( regEntry &&
-		(kSuccess == DTCreatePropertyIterator( dtEntry, &dtIter))) {
+      (kSuccess == DTCreatePropertyIterator( dtEntry, &dtIter))) {
 
         propTable = regEntry->getPropertyTable();
 
-		while( kSuccess == DTIterateProperties( dtIter, &name)) {
-	
-			if(  kSuccess != DTGetProperty( dtEntry, name, &prop, &propSize ))
-				continue;
-	
-			if( copy) {
-				nameKey = OSSymbol::withCString(name);
-				data = OSData::withBytes(prop, propSize);
-			} else {
-				nameKey = OSSymbol::withCStringNoCopy(name);
-				data = OSData::withBytesNoCopy(prop, propSize);
-			}
-			assert( nameKey && data );
-	
-			propTable->setObject( nameKey, data);
-			data->release();
-			nameKey->release();
-	
-			if( nameKey == gIODTNameKey ) {
-				if( copy)
-					sym = OSSymbol::withCString( (const char *) prop);
-				else
-					sym = OSSymbol::withCStringNoCopy( (const char *) prop);
-				regEntry->setName( sym );
-				sym->release();
-			} else if( nameKey == gIODTUnitKey ) {
-				// all OF strings are null terminated... except this one
-				if( propSize >= (int) sizeof( location))
-					propSize = sizeof( location) - 1;
-				strncpy( location, (const char *) prop, propSize );
-				location[ propSize ] = 0;
-				regEntry->setLocation( location );
-				propTable->removeObject( gIODTUnitKey );
-				noLocation = false;
-		
-			} else if( noLocation && (0 == strcmp( name, "reg"))) {
-				// default location - override later
-				sprintf( location, "%lX", *((UInt32 *) prop) );
-				regEntry->setLocation( location );
-			}
-		}
-		DTDisposePropertyIterator( dtIter);
+        while( kSuccess == DTIterateProperties( dtIter, &name)) {
+
+            if(  kSuccess != DTGetProperty( dtEntry, name, &prop, &propSize ))
+                continue;
+
+            if( copy) {
+                nameKey = OSSymbol::withCString(name);
+                data = OSData::withBytes(prop, propSize);
+            } else {
+                nameKey = OSSymbol::withCStringNoCopy(name);
+                data = OSData::withBytesNoCopy(prop, propSize);
+            }
+            assert( nameKey && data );
+
+            propTable->setObject( nameKey, data);
+            data->release();
+            nameKey->release();
+
+            if( nameKey == gIODTNameKey ) {
+                if( copy)
+                    sym = OSSymbol::withCString( (const char *) prop);
+                else
+                    sym = OSSymbol::withCStringNoCopy( (const char *) prop);
+                regEntry->setName( sym );
+                sym->release();
+
+            } else if( nameKey == gIODTUnitKey ) {
+                // all OF strings are null terminated... except this one
+                if( propSize >= (int) sizeof( location))
+                    propSize = sizeof( location) - 1;
+                strncpy( location, (const char *) prop, propSize );
+                location[ propSize ] = 0;
+                regEntry->setLocation( location );
+                propTable->removeObject( gIODTUnitKey );
+                noLocation = false;
+    
+            } else if( noLocation && (0 == strcmp( name, "reg"))) {
+                // default location - override later
+                sprintf( location, "%lX", *((UInt32 *) prop) );
+                regEntry->setLocation( location );
+            }
+        }
+        DTDisposePropertyIterator( dtIter);
     }
 
     return( regEntry);
@@ -369,10 +369,10 @@ static void AddPHandle( IORegistryEntry * regEntry )
     OSData *	data;
 
     if( regEntry->getProperty( gIODTInterruptCellKey)
-     	&& (data = OSDynamicCast( OSData, regEntry->getProperty( gIODTPHandleKey )))) {
-		// a possible interrupt-parent
-		gIODTPHandles->setObject( data );
-		gIODTPHandleMap->setObject( regEntry );
+      && (data = OSDynamicCast( OSData, regEntry->getProperty( gIODTPHandleKey )))) {
+        // a possible interrupt-parent
+        gIODTPHandles->setObject( data );
+        gIODTPHandleMap->setObject( regEntry );
     }
 }
 
@@ -383,10 +383,10 @@ static IORegistryEntry * FindPHandle( UInt32 phandle )
     int				i;
 
     for( i = 0; (data = (OSData *)gIODTPHandles->getObject( i )); i++ ) {
-		if( phandle == *((UInt32 *)data->getBytesNoCopy())) {
-			regEntry = (IORegistryEntry *)
-			gIODTPHandleMap->getObject( i );
-			break;
+        if( phandle == *((UInt32 *)data->getBytesNoCopy())) {
+            regEntry = (IORegistryEntry *)
+            gIODTPHandleMap->getObject( i );
+            break;
         }
     }
 
@@ -399,11 +399,11 @@ static bool GetUInt32( IORegistryEntry * regEntry, const OSSymbol * name,
     OSData	*data;
 
     if( (data = OSDynamicCast( OSData, regEntry->getProperty( name )))
-		&& (4 == data->getLength())) {
+      && (4 == data->getLength())) {
         *value = *((UInt32 *) data->getBytesNoCopy());
-		return( true );
+        return( true );
     } else
-		return( false );
+        return( false );
 }
 
 IORegistryEntry * IODTFindInterruptParent( IORegistryEntry * regEntry )
@@ -412,12 +412,12 @@ IORegistryEntry * IODTFindInterruptParent( IORegistryEntry * regEntry )
     UInt32		phandle;
 
     if( GetUInt32( regEntry, gIODTInterruptParentKey, &phandle))
-		parent = FindPHandle( phandle );
+        parent = FindPHandle( phandle );
 
     else if( 0 == regEntry->getProperty( "interrupt-controller"))
-		parent = regEntry->getParentEntry( gIODTPlane);
+        parent = regEntry->getParentEntry( gIODTPlane);
     else
-		parent = 0;
+        parent = 0;
 
     return( parent );
 }
@@ -425,9 +425,9 @@ IORegistryEntry * IODTFindInterruptParent( IORegistryEntry * regEntry )
 const OSSymbol * IODTInterruptControllerName( IORegistryEntry * regEntry )
 {
     const OSSymbol	*sym;
-    UInt32			phandle;
-    bool			ok;
-    char 			buf[48];
+    UInt32		phandle;
+    bool		ok;
+    char 		buf[48];
 
     ok = GetUInt32( regEntry, gIODTPHandleKey, &phandle);
     assert( ok );
@@ -436,7 +436,7 @@ const OSSymbol * IODTInterruptControllerName( IORegistryEntry * regEntry )
         sprintf( buf, "IOInterruptController%08lX", phandle);
         sym = OSSymbol::withCString( buf );
     } else
-		sym = 0;
+        sym = 0;
 
     return( sym );
 }
@@ -465,77 +465,76 @@ UInt32 IODTMapOneInterrupt( IORegistryEntry * regEntry, UInt32 * intSpec,
     UInt32			i, original_icells;
     bool			cmp, ok = false;
 
-
     parent = IODTFindInterruptParent( regEntry );    
     IODTGetICellCounts( parent, &icells, &acells );
     addrCmp = 0;
     if( acells) {
-		data = OSDynamicCast( OSData, regEntry->getProperty( "reg" ));
-		if( data && (data->getLength() >= (acells * sizeof( UInt32))))
-	    	addrCmp = (UInt32 *) data->getBytesNoCopy();
+        data = OSDynamicCast( OSData, regEntry->getProperty( "reg" ));
+        if( data && (data->getLength() >= (acells * sizeof( UInt32))))
+            addrCmp = (UInt32 *) data->getBytesNoCopy();
     }
     original_icells = icells;
     regEntry = parent;
     
-	do {
+    do {
 #if IODTSUPPORTDEBUG
-		kprintf ("IODTMapOneInterrupt: current regEntry name %s\n", regEntry->getName());
-		kprintf ("acells - icells: ");
-		for (i = 0; i < acells; i++) kprintf ("0x%08X ", addrCmp[i]);
-		kprintf ("- ");
-		for (i = 0; i < icells; i++) kprintf ("0x%08X ", intSpec[i]);
- 		kprintf ("\n");
+        kprintf ("IODTMapOneInterrupt: current regEntry name %s\n", regEntry->getName());
+        kprintf ("acells - icells: ");
+        for (i = 0; i < acells; i++) kprintf ("0x%08X ", addrCmp[i]);
+        kprintf ("- ");
+        for (i = 0; i < icells; i++) kprintf ("0x%08X ", intSpec[i]);
+        kprintf ("\n");
 #endif
 
-		if( parent && (data = OSDynamicCast( OSData,
-			regEntry->getProperty( "interrupt-controller")))) {
-	    	// found a controller - don't want to follow cascaded controllers
+        if( parent && (data = OSDynamicCast( OSData,
+            regEntry->getProperty( "interrupt-controller")))) {
+            // found a controller - don't want to follow cascaded controllers
             parent = 0;
             *spec = OSData::withBytesNoCopy( (void *) intSpec,
                                             icells * sizeof( UInt32));
             *controller = IODTInterruptControllerName( regEntry );
-	    	ok = (*spec && *controller);
-		} else if( parent && (data = OSDynamicCast( OSData,
-			regEntry->getProperty( "interrupt-map")))) {
+            ok = (*spec && *controller);
+        } else if( parent && (data = OSDynamicCast( OSData,
+                    regEntry->getProperty( "interrupt-map")))) {
             // interrupt-map
             map = (UInt32 *) data->getBytesNoCopy();
             endMap = map + (data->getLength() / sizeof(UInt32));
             data = OSDynamicCast( OSData, regEntry->getProperty( "interrupt-map-mask" ));
             if( data && (data->getLength() >= ((acells + icells) * sizeof( UInt32))))
                 maskCmp = (UInt32 *) data->getBytesNoCopy();
-	   		else
-				maskCmp = 0;
+            else
+                maskCmp = 0;
 
 #if IODTSUPPORTDEBUG
- 			if (maskCmp) {
-				kprintf ("        maskCmp: ");
-				for (i = 0; i < acells + icells; i++) {
-					if (i == acells)
-						kprintf ("- ");
-					kprintf ("0x%08X ", maskCmp[i]);
-				}
- 				kprintf ("\n");
-				kprintf ("         masked: ");
-				for (i = 0; i < acells + icells; i++) {
-					if (i == acells)
-						kprintf ("- ");
-					kprintf ("0x%08X ", ((i < acells) ? addrCmp[i] : intSpec[i-acells]) & maskCmp[i]);
-				}
- 				kprintf ("\n");
- 			} else
- 				kprintf ("no maskCmp\n");
+            if (maskCmp) {
+                kprintf ("        maskCmp: ");
+                for (i = 0; i < acells + icells; i++) {
+                    if (i == acells)
+                        kprintf ("- ");
+                    kprintf ("0x%08X ", maskCmp[i]);
+                }
+                kprintf ("\n");
+                kprintf ("         masked: ");
+                for (i = 0; i < acells + icells; i++) {
+                    if (i == acells)
+                        kprintf ("- ");
+                    kprintf ("0x%08X ", ((i < acells) ? addrCmp[i] : intSpec[i-acells]) & maskCmp[i]);
+                }
+                kprintf ("\n");
+            } else
+                kprintf ("no maskCmp\n");
 #endif
-			do {
+            do {
 #if IODTSUPPORTDEBUG
-				kprintf ("            map: ");
-				for (i = 0; i < acells + icells; i++) {
-					if (i == acells)
-						kprintf ("- ");
-					kprintf ("0x%08X ", map[i]);
-				}
- 				kprintf ("\n");
+                kprintf ("            map: ");
+                for (i = 0; i < acells + icells; i++) {
+                    if (i == acells)
+                        kprintf ("- ");
+                    kprintf ("0x%08X ", map[i]);
+                }
+                kprintf ("\n");
 #endif
-				for( i = 0, cmp = true; cmp && (i < (acells + icells)); i++) {
+                for( i = 0, cmp = true; cmp && (i < (acells + icells)); i++) {
                     cell = (i < acells) ? addrCmp[i] : intSpec[ i - acells ];
                     if( maskCmp)
                         cell &= maskCmp[i];
@@ -546,24 +545,25 @@ UInt32 IODTMapOneInterrupt( IORegistryEntry * regEntry, UInt32 * intSpec,
                 if( 0 == (parent = FindPHandle( *(map++) )))
                     unexpected(break);
 
-				IODTGetICellCounts( parent, &picells, &pacells );
+                IODTGetICellCounts( parent, &picells, &pacells );
                 if( cmp) {
                     addrCmp = map;
                     intSpec = map + pacells;
                     regEntry = parent;
-				} else {
+                } else {
                     map += pacells + picells;
-				}
+                }
             } while( !cmp && (map < endMap) );
             if (!cmp)
-            	parent = 0;
-		} 
+                parent = 0;
+        } 
 
-		if( parent) {
+        if( parent) {
             IODTGetICellCounts( parent, &icells, &acells );
-	    	regEntry = parent;
-		}
-	} while( parent);
+            regEntry = parent;
+        }
+
+    } while( parent);
 
     return( ok ? original_icells : 0 );
 }
@@ -583,18 +583,18 @@ bool IODTMapInterrupts( IORegistryEntry * regEntry )
     bool			ok, nw;
 
     nw = (0 == (local = OSDynamicCast( OSData,
-		regEntry->getProperty( gIODTAAPLInterruptsKey))));
+        regEntry->getProperty( gIODTAAPLInterruptsKey))));
     if( nw && (0 == (local = OSDynamicCast( OSData,
-		regEntry->getProperty( "interrupts")))))
-		return( true );		// nothing to see here
+        regEntry->getProperty( "interrupts")))))
+        return( true );		// nothing to see here
 
     if( nw && (parent = regEntry->getParentEntry( gIODTPlane))) {
-		// check for bridges on old world
-		if( (local2 = OSDynamicCast( OSData,
- 			parent->getProperty( gIODTAAPLInterruptsKey)))) {
-	    	local = local2;
-	    	nw = false;
-		}
+        // check for bridges on old world
+        if( (local2 = OSDynamicCast( OSData,
+                parent->getProperty( gIODTAAPLInterruptsKey)))) {
+            local = local2;
+            nw = false;
+        }
     }
 
     localBits = (UInt32 *) local->getBytesNoCopy();
@@ -609,7 +609,7 @@ bool IODTMapInterrupts( IORegistryEntry * regEntry )
             skip = IODTMapOneInterrupt( regEntry, localBits, &map, &controller );
             if( 0 == skip) {
                 IOLog("%s: error mapping interrupt[%d]\n",
-					regEntry->getName(), mapped->getCount());
+                        regEntry->getName(), mapped->getCount());
                 break;
             }
         } else {
@@ -630,7 +630,7 @@ bool IODTMapInterrupts( IORegistryEntry * regEntry )
     ok &= (localBits == localEnd);
 
     if( ok ) {
-		// store results
+        // store results
         ok  = regEntry->setProperty( gIOInterruptControllersKey, controllers);
         ok &= regEntry->setProperty( gIOInterruptSpecifiersKey, mapped);
     }
@@ -726,7 +726,7 @@ bool IODTMatchNubWithKeys( IORegistryEntry * regEntry,
 		obj->release();
     }
 #ifdef DEBUG
-    	else IOLog("Couldn't unserialize %s\n", keys );
+    else IOLog("Couldn't unserialize %s\n", keys );
 #endif
 
     return( result );
@@ -746,6 +746,7 @@ OSCollectionIterator * IODTFindMatchingEntries( IORegistryEntry * from,
     iter = IORegistryIterator::iterateOver( from, gIODTPlane,
 		(options & kIODTRecursive) ? kIORegistryIterateRecursively : 0 );
     if( iter) {
+
         do {
 
             if( result)
@@ -759,17 +760,18 @@ OSCollectionIterator * IODTFindMatchingEntries( IORegistryEntry * from,
     
                 // Look for existence of a debug property to skip
                 if( next->getProperty("AAPL,ignore"))
-                                    continue;
+                    continue;
     
-                    if( keys) {
+                if( keys) {
                     cmp = IODTMatchNubWithKeys( next, keys );
                     if( (minus && (false == cmp))
                             || ((false == minus) && (false != cmp)) )
                         result->setObject( next);
-                    } else
+                } else
                     result->setObject( next);
             }
         } while( !iter->isValid());
+
         iter->release();
     }
 
@@ -796,7 +798,7 @@ void IODTSetResolving( IORegistryEntry * 	regEntry,
     persist.locationFunc = locationFunc;
     prop = OSData::withBytes( &persist, sizeof( persist));
     if( !prop)
-		return;
+        return;
 
     regEntry->setProperty( gIODTPersistKey, prop);
     prop->release();
@@ -817,7 +819,7 @@ void IODTGetCellCounts( IORegistryEntry * regEntry,
         *sizeCount = 1;
     if( !GetUInt32( regEntry, gIODTAddressCellKey, addressCount))
         *addressCount = 2;
-	return;
+    return;
 }
 
 // Given addr & len cells from our child, find it in our ranges property, then
@@ -830,20 +832,20 @@ bool IODTResolveAddressCell( IORegistryEntry * regEntry,
                              UInt32 cellsIn[],
                              IOPhysicalAddress * phys, IOPhysicalLength * len )
 {
-    IORegistryEntry		*parent;
-    OSData				*prop;
+    IORegistryEntry	*parent;
+    OSData		*prop;
     // cells in addresses at regEntry
-    UInt32				sizeCells, addressCells;
+    UInt32		sizeCells, addressCells;
     // cells in addresses below regEntry
-    UInt32				childSizeCells, childAddressCells;
-    UInt32				childCells;
-    UInt32				cell[ 5 ], offset = 0, length;
-    UInt32				*range;
-    UInt32				*endRanges;
-    bool				ok = true;
-    SInt32				diff;
+    UInt32		childSizeCells, childAddressCells;
+    UInt32		childCells;
+    UInt32		cell[ 5 ], offset = 0, length;
+    UInt32		*range;
+    UInt32		*endRanges;
+    bool		ok = true;
+    SInt32		diff;
 
-    IODTPersistent				*persist;
+    IODTPersistent	*persist;
     IODTCompareAddressCellFunc	compare;
 
     IODTGetCellCounts( regEntry, &childSizeCells, &childAddressCells );
@@ -852,20 +854,20 @@ bool IODTResolveAddressCell( IORegistryEntry * regEntry,
     bcopy( cellsIn, cell, 4 * childCells );
     if( childSizeCells > 1)
         *len = IOPhysical32( cellsIn[ childAddressCells ],
-			cellsIn[ childAddressCells + 1 ] );
+                             cellsIn[ childAddressCells + 1 ] );
     else
         *len = IOPhysical32( 0, cellsIn[ childAddressCells ] );
 
     do {
         prop = OSDynamicCast( OSData, regEntry->getProperty( gIODTRangeKey ));
         if( 0 == prop) {
-	    	/* end of the road */
+            /* end of the road */
             *phys = IOPhysical32( 0,  cell[ childAddressCells - 1 ] + offset);
             break;
         }
 
         parent = regEntry->getParentEntry( gIODTPlane );
-		IODTGetCellCounts( parent, &sizeCells, &addressCells );
+        IODTGetCellCounts( parent, &sizeCells, &addressCells );
 
         if( (length = prop->getLength())) {
             // search
@@ -904,10 +906,10 @@ bool IODTResolveAddressCell( IORegistryEntry * regEntry,
 
         } /* else zero length range => pass thru to parent */
 
-	regEntry			= parent;
+	regEntry		= parent;
 	childSizeCells		= sizeCells;
 	childAddressCells	= addressCells;
-	childCells			= childAddressCells + childSizeCells;
+	childCells		= childAddressCells + childSizeCells;
 
     } while( ok && regEntry);
 
@@ -932,11 +934,11 @@ OSArray * IODTResolveAddressing( IORegistryEntry * regEntry,
     parentEntry = regEntry->getParentEntry( gIODTPlane );
     addressProperty = (OSData *) regEntry->getProperty( addressPropertyName );
     if( (0 == addressProperty) || (0 == parentEntry))
-		return( 0);
+        return( 0);
 
     IODTGetCellCounts( parentEntry, &sizeCells, &addressCells );
     if( 0 == sizeCells)
-		return( 0);
+        return( 0);
 
     cells = sizeCells + addressCells;
     reg = (UInt32 *) addressProperty->getBytesNoCopy();
@@ -944,20 +946,20 @@ OSArray * IODTResolveAddressing( IORegistryEntry * regEntry,
 
     array = OSArray::withCapacity( 1 );
     if( 0 == array)
-		return( 0);
+        return( 0);
 
     for( i = 0; i < num; i++) {
-		if( IODTResolveAddressCell( parentEntry, reg, &phys, &len )) {
-			range = 0;
-			if( parent)
-				range = IODeviceMemory::withSubRange( parent,
-					phys - parent->getPhysicalAddress(), len );
-			if( 0 == range)
-				range = IODeviceMemory::withRange( phys, len );
-			if( range)
-				array->setObject( range );
-		}
-		reg += cells;
+        if( IODTResolveAddressCell( parentEntry, reg, &phys, &len )) {
+            range = 0;
+            if( parent)
+                range = IODeviceMemory::withSubRange( parent,
+                        phys - parent->getPhysicalAddress(), len );
+            if( 0 == range)
+                range = IODeviceMemory::withRange( phys, len );
+            if( range)
+                array->setObject( range );
+        }
+        reg += cells;
     }
 
     regEntry->setProperty( gIODeviceMemoryKey, array);
@@ -979,7 +981,7 @@ static void IODTGetNVLocation(
     prop = (OSData *) parent->getProperty( gIODTPersistKey );
     if( prop) {
         persist = (IODTPersistent *) prop->getBytesNoCopy();
-		(*persist->locationFunc)( regEntry, busNum, deviceNum, functionNum );
+        (*persist->locationFunc)( regEntry, busNum, deviceNum, functionNum );
     } else {
         prop = (OSData *) regEntry->getProperty( "reg" );
         *functionNum	= 0;
@@ -990,7 +992,7 @@ static void IODTGetNVLocation(
         } else {
             *busNum 	= 0;
             *deviceNum 	= 0;
-		}
+        }
     }
     return;
 }
@@ -1017,14 +1019,14 @@ IOReturn IODTMakeNVDescriptor( IORegistryEntry * regEntry,
 
         IODTGetNVLocation( parent, regEntry,
 			&busNum, &deviceNum, &functionNum );
-		if( level)
-			bridgeDevices |= ((deviceNum & 0x1f) << ((level - 1) * 5));
-		else {
+        if( level)
+            bridgeDevices |= ((deviceNum & 0x1f) << ((level - 1) * 5));
+        else {
             hdr->busNum 	= busNum;
             hdr->deviceNum 	= deviceNum;
             hdr->functionNum 	= functionNum;
-		}
-		regEntry = parent;
+        }
+        regEntry = parent;
     }
     hdr->bridgeCount 	= level - 2;
     hdr->bridgeDevices 	= bridgeDevices;
@@ -1045,36 +1047,36 @@ OSData * IODTFindSlotName( IORegistryEntry * regEntry, UInt32 deviceNumber )
 
     data = (OSData *) regEntry->getProperty("AAPL,slot-name");
     if( data)
-		return( data);
+        return( data);
     parent = regEntry->getParentEntry( gIODTPlane );
     if( !parent)
-		return( 0 );
+        return( 0 );
     data = OSDynamicCast( OSData, parent->getProperty("slot-names"));
     if( !data)
-		return( 0 );
+        return( 0 );
     if( data->getLength() <= 4)
-		return( 0 );
+        return( 0 );
 
     bits = (UInt32 *) data->getBytesNoCopy();
     mask = *bits;
     if( (0 == (mask & (1 << deviceNumber))))
-		return( 0 );
+        return( 0 );
 
     names = (char *)(bits + 1);
     lastName = names + (data->getLength() - 4);
 
     for( i = 0; (i <= deviceNumber) && (names < lastName); i++ ) {
 
-		if( mask & (1 << i)) {
+        if( mask & (1 << i)) {
             if( i == deviceNumber) {
-				data = OSData::withBytesNoCopy( names, 1 + strlen( names));
-				if( data) {
-					regEntry->setProperty("AAPL,slot-name", data);
-					ret = data;
-					data->release();
-				}
+                data = OSData::withBytesNoCopy( names, 1 + strlen( names));
+                if( data) {
+                    regEntry->setProperty("AAPL,slot-name", data);
+                    ret = data;
+                    data->release();
+                }
             } else
-				names += 1 + strlen( names);
+                names += 1 + strlen( names);
         }
     }
 

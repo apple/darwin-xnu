@@ -63,6 +63,7 @@
 #include <kern/etap_macros.h>
 #include <kern/misc_protos.h>
 #include <kern/thread.h>
+#include <kern/processor.h>
 #include <kern/sched_prim.h>
 #include <kern/xpr.h>
 #include <kern/debug.h>
@@ -79,6 +80,8 @@
 #include <ppc/Firmware.h>
 #include <ppc/POWERMAC/mp/MPPlugIn.h>
 #endif
+
+#include <sys/kdebug.h>
 
 #define	ANY_LOCK_DEBUG	(USLOCK_DEBUG || LOCK_DEBUG || MUTEX_DEBUG)
 
@@ -243,43 +246,9 @@ usimple_lock(
 	ETAP_TIME_CLEAR(start_wait_time);
 #endif	/* ETAP_LOCK_TRACE */
 
-#ifdef __ppc__
-	if(!hw_lock_to(&l->interlock, LockTimeOut)) {	/* Try to get the lock with a timeout */ 
-	
+	if(!hw_lock_to(&l->interlock, LockTimeOut))	/* Try to get the lock with a timeout */ 
 		panic("simple lock deadlock detection - l=%08X, cpu=%d, ret=%08X", l, cpu_number(), pc);
 
-#else /* __ppc__ */
-	while (!hw_lock_try(&l->interlock)) {
-		ETAPCALL(if (no_miss_info++ == 0)
-			start_wait_time = etap_simplelock_miss(l));
-		while (hw_lock_held(&l->interlock)) {
-			/*
-			 *	Spin watching the lock value in cache,
-			 *	without consuming external bus cycles.
-			 *	On most SMP architectures, the atomic
-			 *	instruction(s) used by hw_lock_try
-			 *	cost much, much more than an ordinary
-			 *	memory read.
-			 */
-#if	USLOCK_DEBUG
-			if (count++ > max_lock_loops
-#if	MACH_KDB && NCPUS > 1
-			    && l != &kdb_lock
-#endif	/* MACH_KDB && NCPUS > 1 */
-			    ) {
-				if (l == &printf_lock) {
-					return;
-				}
-				mp_disable_preemption();
-				panic("simple lock deadlock detection - l=%08X (=%08X), cpu=%d, ret=%08X", 
-				   l, *hw_lock_addr(l->interlock), cpu_number(), pc);
-				count = 0;
-				mp_enable_preemption();
-			}
-#endif 	/* USLOCK_DEBUG */
-		}
-#endif /* 0 */
-	}
 	ETAPCALL(etap_simplelock_hold(l, pc, start_wait_time));
 	USLDBG(usld_lock_post(l, pc));
 }
@@ -1084,8 +1053,9 @@ lock_write(
 			ETAP_SET_REASON(current_thread(),
 					BLOCKED_ON_COMPLEX_LOCK);
 			thread_sleep_simple_lock((event_t) l,
-					simple_lock_addr(l->interlock), FALSE);
-			simple_lock(&l->interlock);
+					simple_lock_addr(l->interlock),
+					THREAD_UNINT);
+			/* interlock relocked */
 		}
 	}
 	l->want_write = TRUE;
@@ -1119,8 +1089,9 @@ lock_write(
                         ETAP_SET_REASON(current_thread(),
                                         BLOCKED_ON_COMPLEX_LOCK);
 			thread_sleep_simple_lock((event_t) l,
-				simple_lock_addr(l->interlock), FALSE);
-			simple_lock(&l->interlock);
+				simple_lock_addr(l->interlock),
+				THREAD_UNINT);
+			/* interlock relocked */
 		}
 	}
 
@@ -1303,8 +1274,9 @@ lock_read(
 		if (l->can_sleep && (l->want_write || l->want_upgrade)) {
 			l->waiting = TRUE;
 			thread_sleep_simple_lock((event_t) l,
-					simple_lock_addr(l->interlock), FALSE);
-			simple_lock(&l->interlock);
+					simple_lock_addr(l->interlock),
+					THREAD_UNINT);
+			/* interlock relocked */
 		}
 	}
 
@@ -1454,8 +1426,9 @@ lock_read_to_write(
 		if (l->can_sleep && l->read_count != 0) {
 			l->waiting = TRUE;
 			thread_sleep_simple_lock((event_t) l,
-					simple_lock_addr(l->interlock), FALSE);
-			simple_lock(&l->interlock);
+					simple_lock_addr(l->interlock),
+					THREAD_UNINT);
+			/* interlock relocked */
 		}
 	}
 
@@ -1715,35 +1688,173 @@ mutex_free(
 	kfree((vm_offset_t)m, sizeof(mutex_t));
 }
 
-
 /*
- * mutex_lock_wait: Invoked if the assembler routine mutex_lock () fails
- * because the mutex is already held by another thread.  Called with the
- * interlock locked and returns with the interlock unlocked.
+ * mutex_lock_wait
+ *
+ * Invoked in order to wait on contention.
+ *
+ * Called with the interlock locked and
+ * returns it unlocked.
  */
-
 void
 mutex_lock_wait (
-	mutex_t		* m)
+	mutex_t			*mutex,
+	thread_act_t	holder)
 {
-	m->waiters++;
-	ETAP_SET_REASON(current_thread(), BLOCKED_ON_MUTEX_LOCK);
-	thread_sleep_interlock ((event_t) m, &m->interlock, THREAD_UNINT);
+	thread_t		thread, self = current_thread();
+#if		!defined(i386)
+	integer_t		priority;
+	spl_t			s = splsched();
+
+	priority = self->last_processor->current_pri;
+	if (priority < self->priority)
+		priority = self->priority;
+	if (priority > MINPRI_KERNEL)
+		priority = MINPRI_KERNEL;
+	else
+	if (priority < BASEPRI_DEFAULT)
+		priority = BASEPRI_DEFAULT;
+
+	thread = holder->thread;
+	assert(thread->top_act == holder);	/* XXX */
+	thread_lock(thread);
+	if (mutex->promoted_pri == 0)
+		thread->promotions++;
+	if (thread->priority < MINPRI_KERNEL) {
+		thread->sched_mode |= TH_MODE_PROMOTED;
+		if (	mutex->promoted_pri < priority	&&
+				thread->sched_pri < priority		) {
+			KERNEL_DEBUG_CONSTANT(
+				MACHDBG_CODE(DBG_MACH_SCHED,MACH_PROMOTE) | DBG_FUNC_NONE,
+					thread->sched_pri, priority, (int)thread, (int)mutex, 0);
+
+			set_sched_pri(thread, priority);
+		}
+	}
+	thread_unlock(thread);
+	splx(s);
+
+	if (mutex->promoted_pri < priority)
+		mutex->promoted_pri = priority;
+#endif
+
+	if (self->pending_promoter[self->pending_promoter_index] == NULL) {
+		self->pending_promoter[self->pending_promoter_index] = mutex;
+		mutex->waiters++;
+	}
+	else
+	if (self->pending_promoter[self->pending_promoter_index] != mutex) {
+		self->pending_promoter[++self->pending_promoter_index] = mutex;
+		mutex->waiters++;
+	}
+
+	assert_wait(mutex, THREAD_UNINT);
+	interlock_unlock(&mutex->interlock);
+
+	thread_block(THREAD_CONTINUE_NULL);
 }
 
 /*
- * mutex_unlock_wakeup: Invoked if the assembler routine mutex_unlock ()
- * fails because there are thread(s) waiting for this mutex.  Called and
- * returns with the interlock locked.
+ * mutex_lock_acquire
+ *
+ * Invoked on acquiring the mutex when there is
+ * contention.
+ *
+ * Returns the current number of waiters.
+ *
+ * Called with the interlock locked.
  */
+int
+mutex_lock_acquire(
+	mutex_t			*mutex)
+{
+	thread_t		thread = current_thread();
 
+	if (thread->pending_promoter[thread->pending_promoter_index] == mutex) {
+		thread->pending_promoter[thread->pending_promoter_index] = NULL;
+		if (thread->pending_promoter_index > 0)
+			thread->pending_promoter_index--;
+		mutex->waiters--;
+	}
+
+#if		!defined(i386)
+	if (mutex->waiters > 0) {
+		integer_t		priority = mutex->promoted_pri;
+		spl_t			s = splsched();
+
+		thread_lock(thread);
+		thread->promotions++;
+		if (thread->priority < MINPRI_KERNEL) {
+			thread->sched_mode |= TH_MODE_PROMOTED;
+			if (thread->sched_pri < priority) {
+				KERNEL_DEBUG_CONSTANT(
+					MACHDBG_CODE(DBG_MACH_SCHED,MACH_PROMOTE) | DBG_FUNC_NONE,
+						thread->sched_pri, priority, 0, (int)mutex, 0);
+
+				set_sched_pri(thread, priority);
+			}
+		}
+		thread_unlock(thread);
+		splx(s);
+	}
+	else
+		mutex->promoted_pri = 0;
+#endif
+
+	return (mutex->waiters);
+}
+
+/*
+ * mutex_unlock_wakeup
+ *
+ * Invoked on unlock when there is contention.
+ *
+ * Called with the interlock locked.
+ */
 void
 mutex_unlock_wakeup (
-	mutex_t		* m)
+	mutex_t			*mutex,
+	thread_act_t	holder)
 {
-	assert(m->waiters);
-	m->waiters--;
-	thread_wakeup_one ((event_t) m);
+#if		!defined(i386)
+	thread_t		thread = current_thread();
+
+	if (thread->top_act != holder)
+		panic("mutex_unlock_wakeup: mutex %x holder %x\n", mutex, holder);
+
+	if (thread->promotions > 0) {
+		spl_t		s = splsched();
+
+		thread_lock(thread);
+		if (	--thread->promotions == 0				&&
+				(thread->sched_mode & TH_MODE_PROMOTED)		) {
+			thread->sched_mode &= ~TH_MODE_PROMOTED;
+			if (thread->sched_mode & TH_MODE_ISDEPRESSED) {
+				KERNEL_DEBUG_CONSTANT(
+					MACHDBG_CODE(DBG_MACH_SCHED,MACH_DEMOTE) | DBG_FUNC_NONE,
+						  thread->sched_pri, DEPRESSPRI, 0, (int)mutex, 0);
+
+				set_sched_pri(thread, DEPRESSPRI);
+			}
+			else {
+				if (thread->priority < thread->sched_pri) {
+					KERNEL_DEBUG_CONSTANT(
+						MACHDBG_CODE(DBG_MACH_SCHED,MACH_DEMOTE) |
+															DBG_FUNC_NONE,
+							thread->sched_pri, thread->priority,
+									0, (int)mutex, 0);
+				}
+
+				compute_priority(thread, FALSE);
+			}
+		}
+		thread_unlock(thread);
+		splx(s);
+	}
+#endif
+
+	assert(mutex->waiters > 0);
+	thread_wakeup_one(mutex);
 }
 
 /*
@@ -1753,13 +1864,15 @@ mutex_unlock_wakeup (
 void
 mutex_pause(void)
 {
-	int wait_result;
+	wait_result_t wait_result;
 
-	assert_wait_timeout( 1, THREAD_INTERRUPTIBLE);
+	wait_result = assert_wait_timeout( 1, THREAD_UNINT);
+	assert(wait_result == THREAD_WAITING);
+
 	ETAP_SET_REASON(current_thread(), BLOCKED_ON_MUTEX_LOCK);
-	wait_result = thread_block((void (*)(void))0);
-	if (wait_result != THREAD_TIMED_OUT)
-		thread_cancel_timer();
+
+	wait_result = thread_block(THREAD_CONTINUE_NULL);
+	assert(wait_result == THREAD_TIMED_OUT);
 }
 
 #if	MACH_KDB

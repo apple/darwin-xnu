@@ -1,0 +1,207 @@
+.\"	$NetBSD: icmp.4,v 1.3 1994/11/30 16:22:14 jtc Exp $
+.\"
+.\" Copyright (c) 1986, 1991, 1993
+.\"	The Regents of the University of California.  All rights reserved.
+.\"
+.\" Redistribution and use in source and binary forms, with or without
+.\" modification, are permitted provided that the following conditions
+.\" are met:
+.\" 1. Redistributions of source code must retain the above copyright
+.\"    notice, this list of conditions and the following disclaimer.
+.\" 2. Redistributions in binary form must reproduce the above copyright
+.\"    notice, this list of conditions and the following disclaimer in the
+.\"    documentation and/or other materials provided with the distribution.
+.\" 3. All advertising materials mentioning features or use of this software
+.\"    must display the following acknowledgement:
+.\"	This product includes software developed by the University of
+.\"	California, Berkeley and its contributors.
+.\" 4. Neither the name of the University nor the names of its contributors
+.\"    may be used to endorse or promote products derived from this software
+.\"    without specific prior written permission.
+.\"
+.\" THIS SOFTWARE IS PROVIDED BY THE REGENTS AND CONTRIBUTORS ``AS IS'' AND
+.\" ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+.\" IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
+.\" ARE DISCLAIMED.  IN NO EVENT SHALL THE REGENTS OR CONTRIBUTORS BE LIABLE
+.\" FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
+.\" DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS
+.\" OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION)
+.\" HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT
+.\" LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
+.\" OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
+.\" SUCH DAMAGE.
+.\"
+.\"     @(#)icmp.4	8.1 (Berkeley) 6/5/93
+.\"
+.Dd June 19, 2002
+.Dt ICMP 4
+.Os BSD 4.3
+.Sh NAME
+.Nm icmp
+.Nd Internet Control Message Protocol
+.Sh SYNOPSIS
+.Fd #include <sys/socket.h>
+.Fd #include <netinet/in.h>
+.Ft int
+.Fn socket AF_INET SOCK_RAW proto
+.Sh DESCRIPTION
+.Tn ICMP
+is the error and control message protocol used
+by
+.Tn IP
+and the Internet protocol family.  It may be accessed
+through a
+.Dq raw socket
+for network monitoring
+and diagnostic functions.
+The
+.Fa proto
+parameter to the socket call to create an
+.Tn ICMP
+socket
+is obtained from
+.Xr getprotobyname 3 .
+.Tn ICMP
+sockets are connectionless,
+and are normally used with the
+.Xr sendto
+and
+.Xr recvfrom
+calls, though the
+.Xr connect 2
+call may also be used to fix the destination for future
+packets (in which case the 
+.Xr read 2
+or
+.Xr recv 2
+and 
+.Xr write 2
+or
+.Xr send 2
+system calls may be used).
+.Pp
+Outgoing packets automatically have an
+.Tn IP
+header prepended to
+them (based on the destination address).
+Incoming packets are received with the
+.Tn IP
+header and options intact.
+.Ss "Non-privileged ICMP"
+.Pp
+.Tn ICMP
+sockets can be opened with the 
+.Dv SOCK_DGRAM
+socket type without requiring root privileges. The synopsis is the following:
+.Pp
+.Fn socket AF_INET SOCK_DGRAM IPPROTO_IP
+.Pp
+This can be used by non root privileged processes to send 
+.Tn ICMP
+echo requests to gauge the quality of the connectivity to a host, to receive 
+.Tn ICMP
+destination unreachable message for path MTU discovery, or to receveive 
+time exceeded message for traceroute.
+.Pp
+Datagram oriented
+.Tn ICMP
+sockets offer a subset of the functionality available to raw 
+.Tn ICMP
+sockets. Only
+.Tn IMCP
+request messages of the following types can be sent: 
+ICMP_ECHO, ICMP_TSTAMP or ICMP_MASKREQ. 
+The code field must be the value zero (0). 
+The minimal length of an 
+.Tn ICMP 
+message request is eight (8) octets.
+.Pp
+The following 
+.Tn IP
+level option can be used with datagram oriented 
+.Tn ICMP
+sockets:
+.Bl -column ip_opts -offset 4n
+.It IP_OPTIONS
+.It IP_HDRINCL
+.It IP_TOS
+.It IP_TTL
+.It IP_RECVOPTS
+.It IP_RECVRETOPTS
+.It IP_RECVDSTADDR
+.It IP_RETOPTS
+.It IP_MULTICAST_IF
+.It IP_MULTICAST_TTL
+.It IP_MULTICAST_LOOP
+.It IP_ADD_MEMBERSHIP
+.It IP_DROP_MEMBERSHIP
+.It IP_MULTICAST_VIF
+.It IP_PORTRANGE
+.It IP_RECVIF
+.It IP_IPSEC_POLICY
+.It IP_STRIPHDR
+.El
+.Pp
+When the  
+.Tn IP
+option IP_HDRINCL is used, the provided 
+.Tn IP 
+header must obey the following rules:
+.Bl -column ip_opts -offset 4n
+.It ip_v Ta Must be IPVERSION (4);
+.It ip_hl Ta Between 5 and 10 (inclusive);
+.It ip_tos Ta Any value;
+.It ip_len Ta Must be the total length of IP datagram (IP header + ICMP message);
+.It ip_id Ta Must be zero, will be automatically set;
+.It ip_off Ta Must be zero, will be automatically set;
+.It ip_ttl Ta Any value;
+.It ip_p Ta Must be IPPROTO_IP;
+.It ip_sum Ta Value ignored, will be automatically set;
+.It ip_src Ta Must be an 
+.Tn IP
+address currently assigned to one of the local interface or INADDR_ANY;
+.It ip_dst Ta Any address;
+.It ip_opts Ta Any option.
+.El
+.Pp
+The maximum length of a IMCP message that can be sent is controlled 
+by the sysctl 
+variable net.inet.raw.maxdgram.
+.Sh DIAGNOSTICS
+A socket operation may fail with one of the following errors returned:
+.Bl -tag -width [EADDRNOTAVAIL]
+.It Bq Er EISCONN
+when trying to establish a connection on a socket which
+already has one, or when trying to send a datagram with the destination
+address specified and the socket is already connected;
+.It Bq Er ENOTCONN
+when trying to send a datagram, but
+no destination address is specified, and the socket hasn't been
+connected;
+.It Bq Er ENOBUFS
+when the system runs out of memory for
+an internal data structure;
+.It Bq Er EADDRNOTAVAIL
+when an attempt is made to create a 
+socket with a network address for which no network interface
+exists;
+.It Bq Er EINVAL
+when an invalid value is used with
+.Tn IMCP
+datagram socket for a field of the  
+.Tn IP
+or
+.Tn ICMP
+header.
+.El
+.Sh SEE ALSO
+.Xr send 2 ,
+.Xr recv 2 ,
+.Xr intro 4 ,
+.Xr inet 4 ,
+.Xr ip 4
+.Sh HISTORY
+The
+.Nm
+protocol appeared in
+.Bx 4.3 .

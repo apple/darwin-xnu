@@ -56,8 +56,10 @@
 
 #ifndef _NETINET_UDP_VAR_H_
 #define _NETINET_UDP_VAR_H_
+#include <sys/appleapiopts.h>
 
 #include <sys/sysctl.h>
+#ifdef __APPLE_API_PRIVATE
 
 /*
  * UDP kernel structures and variables.
@@ -77,17 +79,9 @@ struct	udpiphdr {
 #define	ui_sum		ui_u.uh_sum
 #define ui_next		ui_i.ih_next
 #define ui_prev		ui_i.ih_prev
+#endif /* __APPLE_API_PRIVATE */
 
-struct	udpcb {
-	/* XXX - these should be by reference so we can do options quickly */
-	struct	ip udb_ip;
-	struct	udphdr udb_uh;
-	struct	sockaddr_in udb_conn;
-	struct	in_hostcache *udb_hc;
-	struct	mbuf *udb_queue;
-};
-#define	inptoudpcb(inp)	((struct udpdb *)(inp)->inp_ppcb)
-
+#ifdef __APPLE_API_UNSTABLE
 struct	udpstat {
 				/* input statistics: */
 	u_long	udps_ipackets;		/* total input packets */
@@ -102,7 +96,13 @@ struct	udpstat {
 				/* output statistics: */
 	u_long	udps_opackets;		/* total output packets */
 	u_long	udps_fastout;		/* output packets on fast path */
+#ifndef __APPLE__
+	u_long	udps_nosum;		/* no checksum */
+	/* of no socket on port, arrived as multicast */
+	u_long	udps_noportmcast;
+#endif
 };
+#endif /* __APPLE_API_UNSTABLE */
 
 /*
  * Names for UDP sysctl objects
@@ -123,6 +123,7 @@ struct	udpstat {
 	{ "pcblist", CTLTYPE_STRUCT }, \
 }
 
+#ifdef __APPLE_API_PRIVATE
 #ifdef KERNEL
 SYSCTL_DECL(_net_inet_udp);
 
@@ -131,7 +132,7 @@ extern struct	inpcbhead udb;
 extern struct	inpcbinfo udbinfo;
 extern u_long	udp_sendspace;
 extern u_long	udp_recvspace;
-extern struct udpstat udpstat;
+extern struct	udpstat udpstat;
 extern int	log_in_vain;
 
 void	udp_ctlinput __P((int, struct sockaddr *, void *));
@@ -141,5 +142,6 @@ void	udp_input __P((struct mbuf *, int));
 void	udp_notify __P((struct inpcb *inp, int errno));
 int	udp_shutdown __P((struct socket *so));
 #endif
+#endif /* __APPLE_API_PRIVATE */
 
 #endif

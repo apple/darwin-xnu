@@ -61,7 +61,13 @@
 #include <kern/assert.h>
 #include <kern/sched_prim.h>
 #include <kern/misc_protos.h>
+#include <vm/vm_kern.h>
 #include <stdarg.h>
+
+#ifdef	__ppc__
+#include <ppc/Firmware.h>
+#include <ppc/low_trace.h>
+#endif
 
 unsigned int	halt_in_debugger = 0;
 unsigned int	switch_debugger = 0;
@@ -70,6 +76,12 @@ unsigned int	active_debugger = 0;
 unsigned int	debug_mode=0;
 unsigned int 	disableDebugOuput = TRUE;
 unsigned int 	systemLogDiags = FALSE;
+unsigned int 	panicDebugging = FALSE;
+#ifdef __ppc__
+	unsigned int	logPanicDataToScreen = FALSE;
+#else
+	unsigned int	logPanicDataToScreen = TRUE;
+#endif
 
 int mach_assert = 1;
 
@@ -81,6 +93,10 @@ volatile int		nestedpanic= 0;
 unsigned int		panic_is_inited = 0;
 unsigned int		return_on_panic = 0;
 wait_queue_t		save_waits[NCPUS];
+
+char *debug_buf;
+char *debug_buf_ptr;
+unsigned int debug_buf_size = 0;
 
 void
 Assert(
@@ -130,12 +146,19 @@ panic(const char *str, ...)
 
 	s = splhigh();
 
+#ifdef	__ppc__
+	lastTrace = LLTraceSet(0);		/* Disable low-level tracing */
+#endif
+
 	thread = current_thread();		/* Get failing thread */
 	save_waits[cpu_number()] = thread->wait_queue;	/* Save the old value */
 	thread->wait_queue = 0;			/* Clear the wait so we do not get double panics when we try locks */
 
 	mp_disable_preemption();
-	disableDebugOuput = FALSE;
+	
+	if( logPanicDataToScreen )
+		disableDebugOuput = FALSE;
+		
 	debug_mode = TRUE;
 restart:
 	PANIC_LOCK();
@@ -165,11 +188,11 @@ restart:
 	panicwait = 1;
 
 	PANIC_UNLOCK();
-	printf("panic(cpu %d): ", (unsigned) paniccpu);
+	kdb_printf("panic(cpu %d): ", (unsigned) paniccpu);
 	va_start(listp, str);
-	_doprnt(str, &listp, cnputc, 0);
+	_doprnt(str, &listp, consdebug_putc, 0);
 	va_end(listp);
-	printf("\n");
+	kdb_printf("\n");
 
 	/*
 	 * Release panicwait indicator so that other cpus may call Debugger().
@@ -187,7 +210,7 @@ restart:
 	thread->wait_queue = save_waits[cpu_number()]; 	/* Restore the wait queue */
 	if (return_on_panic)
 		return;
-	printf("panic: We are hanging here...\n");
+	kdb_printf("panic: We are hanging here...\n");
 	while(1);
 	/* NOTREACHED */
 }
@@ -196,7 +219,6 @@ void
 log(int level, char *fmt, ...)
 {
 	va_list	listp;
-	extern void conslog_putc(char);
 
 #ifdef lint
 	level++;
@@ -208,4 +230,24 @@ log(int level, char *fmt, ...)
 	va_end(listp);
 	enable_preemption();
 #endif
+}
+
+void
+debug_log_init(void)
+{
+	if (debug_buf_size != 0)
+		return;
+	if (kmem_alloc(kernel_map, (vm_offset_t *) &debug_buf, PAGE_SIZE) != KERN_SUCCESS)
+		panic("cannot allocate debug_buf \n");
+	debug_buf_ptr = debug_buf;
+	debug_buf_size = PAGE_SIZE;
+}
+
+void
+debug_putc(char c)
+{
+	if ((debug_buf_size != 0) && ((debug_buf_ptr-debug_buf) < debug_buf_size)) {
+		*debug_buf_ptr=c;
+		debug_buf_ptr++;
+	}
 }

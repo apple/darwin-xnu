@@ -72,7 +72,7 @@ bsd_startupearly()
 		nbuf = 256;
 
 	if (niobuf == 0)
-		niobuf = nbuf / 2;
+		niobuf = nbuf;
 	if (niobuf > 4096)
 		niobuf = 4096;
 	if (niobuf < 128)
@@ -109,8 +109,8 @@ bsd_startupearly()
 		extern u_long tcp_recvspace;
 
 		if ((nmbclusters = ncl) == 0) {
-			if ((nmbclusters = ((mem_size / 16) / MCLBYTES)) > 8192)
-				nmbclusters = 8192;
+			if ((nmbclusters = ((mem_size / 16) / MCLBYTES)) > 16384)
+				nmbclusters = 16384;
 		}
 		if ((scale = nmbclusters / NMBCLUSTERS) > 1) {
 			tcp_sendspace *= scale;

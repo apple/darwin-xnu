@@ -1,3 +1,6 @@
+/*	$FreeBSD: src/sys/netinet6/mld6_var.h,v 1.1.2.1 2000/07/15 07:14:36 kris Exp $	*/
+/*	$KAME: mld6_var.h,v 1.4 2000/03/25 07:23:54 sumikawa Exp $	*/
+
 /*
  * Copyright (C) 1998 WIDE Project.
  * All rights reserved.
@@ -29,8 +32,10 @@
 
 #ifndef _NETINET6_MLD6_VAR_H_
 #define _NETINET6_MLD6_VAR_H_
+#include <sys/appleapiopts.h>
 
-#if KERNEL
+#ifdef KERNEL
+#ifdef __APPLE_API_PRIVATE
 
 #define MLD6_RANDOM_DELAY(X) (random() % (X) + 1)
 
@@ -45,6 +50,7 @@ void	mld6_input __P((struct mbuf *, int));
 void	mld6_start_listening __P((struct in6_multi *));
 void	mld6_stop_listening __P((struct in6_multi *));
 void	mld6_fasttimeo __P((void));
+#endif /* __APPLE_API_PRIVATE */
 #endif /* KERNEL */
 
 #endif /* _NETINET6_MLD6_VAR_H_ */

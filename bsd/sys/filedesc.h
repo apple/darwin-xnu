@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2002 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -58,6 +58,9 @@
 #ifndef _SYS_FILEDESC_H_
 #define	_SYS_FILEDESC_H_
 
+#include <sys/appleapiopts.h>
+
+#ifdef __APPLE_API_UNSTABLE
 /*
  * This structure is used for the management of descriptors.  It may be
  * shared by multiple processes.
@@ -116,10 +119,15 @@ extern int	fdgetf __P((struct proc *p, int fd, struct file **resultfp));
 extern int	falloc __P((struct proc *p,
 				struct file **resultfp, int *resultfd));
 extern void	ffree __P((struct file *fp));
+
+#ifdef __APPLE_API_PRIVATE
 extern struct	filedesc *fdcopy __P((struct proc *p));
 extern void	fdfree __P((struct proc *p));
 extern void	fdexec __P((struct proc *p));
+#endif /* __APPLE_API_PRIVATE */
 
 #endif /* KERNEL */
+
+#endif /* __APPLE_API_UNSTABLE */
 
 #endif /* !_SYS_FILEDESC_H_ */

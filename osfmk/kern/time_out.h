@@ -60,10 +60,14 @@
 #include <mach/boolean.h>
 #include <kern/kern_types.h>
 
+#include <sys/appleapiopts.h>
+
+#ifdef	__APPLE_API_PRIVATE
+
 extern int				hz;				/* num of ticks per second */
 extern int				tick;			/* num of usec per tick */
 
-#ifdef MACH_KERNEL_PRIVATE
+#ifdef	MACH_KERNEL_PRIVATE
 
 extern void		hertz_tick(
 					boolean_t		usermode,	/* executing user code */
@@ -83,5 +87,7 @@ extern void		untimeout(
 					void			*param);
 
 #endif	/* MACH_KERNEL_PRIVATE */
+
+#endif	/* __APPLE_API_PRIVATE */
 
 #endif	/* _KERN_TIME_OUT_H_ */

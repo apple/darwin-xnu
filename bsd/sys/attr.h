@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2002 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -29,6 +29,9 @@
 #ifndef _SYS_ATTR_H_
 #define _SYS_ATTR_H_
 
+#include <sys/appleapiopts.h>
+
+#ifdef __APPLE_API_UNSTABLE
 #ifndef _SYS_TYPES_H_
 #include <sys/types.h>
 #endif
@@ -234,13 +237,7 @@ struct searchstate {
 };
 
 
-
 #define FST_EOF (-1)				/* end-of-file offset */
 
-__BEGIN_DECLS
-/* XXX PPD This should be moved to dirent.h to be with getdirentries(2) et al. */
-//int getdirentriesattr(int fd, const struct attrlist *attrspec, void *attrbuf, size_t bufsize, long //*cookie);
-
-__END_DECLS
-
+#endif /* __APPLE_API_UNSTABLE */
 #endif /* !_SYS_ATTR_H_ */

@@ -70,22 +70,8 @@ iokit/KernelConfigTables.cpp				optional iokitcpp
 
 iokit/bsddev/IOKitBSDInit.cpp				optional iokitcpp
 
-# SCSI support
-iokit/Families/IOSCSIParallel/IOSCSIParallelController.cpp	optional iokitcpp
-iokit/Families/IOSCSIParallel/IOSCSIParallelDevice.cpp		optional iokitcpp
-iokit/Families/IOSCSIParallel/IOSCSIParallelCommand.cpp		optional iokitcpp
-iokit/Families/IOSCSIParallel/queueHelpers.cpp			optional iokitcpp
-
-# ATA support
-#iokit/Families/IOATAStandard/IOATAStandardController.cpp	optional iokitcpp
-#iokit/Families/IOATAStandard/IOATAStandardDevice.cpp		optional iokitcpp
-#iokit/Families/IOATAStandard/IOATAStandardCommand.cpp		optional iokitcpp
-#iokit/Families/IOATAStandard/IOATAStandardData.cpp		optional iokitcpp
-#iokit/Families/IOATAStandard/ATAQueueHelpers.cpp		optional iokitcpp
-
-#iokit/Families/IOATAStandard/IOATAStandardDriver.cpp            optional iokitcpp
-#iokit/Families/IOATAStandard/IOATAStandardDriverPio.cpp         optional iokitcpp
-#iokit/Families/IOATAStandard/IOATAStandardDriverDma.cpp         optional iokitcpp
+# Disk Image
+iokit/bsddev/DINetBootHook.cpp				optional iokitcpp
 
 # Power Management
 iokit/Drivers/platform/drvAppleRootDomain/RootDomainUserClient.cpp	optional iokitcpp

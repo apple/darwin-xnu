@@ -29,7 +29,6 @@
 
 #include <ipc/ipc_port.h>
 #include <kern/thread.h>
-#include <mach/shared_memory_server.h>
 #include <kern/zalloc.h>
 #include <mach/kern_return.h>
 #include <mach/vm_inherit.h>
@@ -37,14 +36,66 @@
 #include <vm/vm_map.h>
 #include <vm/vm_page.h>
 
+#include <mach/shared_memory_server.h>
+#include <vm/vm_shared_memory_server.h>
 
+/* forward declarations */
+static kern_return_t           
+shared_file_init(               
+        ipc_port_t      *shared_text_region_handle,
+        vm_size_t       text_region_size,
+        ipc_port_t      *shared_data_region_handle,
+        vm_size_t       data_region_size, 
+        vm_offset_t     *shared_file_mapping_array);
+
+static load_struct_t  *
+lsf_hash_lookup(   
+        queue_head_t    		*hash_table,
+        void    			*file_object,  
+        int     			size,
+	boolean_t			alternate,
+	shared_region_task_mappings_t	sm_info);
+
+static load_struct_t *
+lsf_hash_delete(
+        void            		*file_object,
+	vm_offset_t			base_offset,
+	shared_region_task_mappings_t	sm_info);
+
+static void    
+lsf_hash_insert(
+        load_struct_t   *entry,
+	shared_region_task_mappings_t	sm_info);
+
+static kern_return_t                   
+lsf_load(
+        vm_offset_t		 	mapped_file,
+        vm_size_t      			mapped_file_size,
+        vm_offset_t    			*base_address,
+        sf_mapping_t   			*mappings,
+        int            			map_cnt,
+        void           			*file_object,
+        int           			flags,
+	shared_region_task_mappings_t	sm_info);
+
+static void
+lsf_unload(
+        void     			*file_object,
+	vm_offset_t			base_offset,
+	shared_region_task_mappings_t	sm_info);
+
+
+#define load_file_hash(file_object, size) \
+		((((natural_t)file_object) & 0xffffff) % size)
+
+/* Implementation */
 vm_offset_t		shared_file_text_region;
 vm_offset_t		shared_file_data_region;
 
 ipc_port_t		shared_text_region_handle;
 ipc_port_t		shared_data_region_handle;
 vm_offset_t		shared_file_mapping_array = 0;
-shared_region_mapping_t	system_shared_region;
+shared_region_mapping_t	system_shared_region = NULL;
 
 ipc_port_t		sfma_handle = NULL;
 zone_t          	lsf_zone;
@@ -84,18 +135,31 @@ shared_file_boot_time_init(
 {
 	long			shared_text_region_size;
 	long			shared_data_region_size;
+	shared_region_mapping_t	new_system_region;
+	shared_region_mapping_t	old_system_region;
 
 	shared_text_region_size = 0x10000000;
 	shared_data_region_size = 0x10000000;
 	shared_file_init(&shared_text_region_handle,
 		shared_text_region_size, &shared_data_region_handle,
 		shared_data_region_size, &shared_file_mapping_array);
+	
 	shared_region_mapping_create(shared_text_region_handle,
 		shared_text_region_size, shared_data_region_handle,
 		shared_data_region_size, shared_file_mapping_array,
-		GLOBAL_SHARED_TEXT_SEGMENT, &system_shared_region,
+		GLOBAL_SHARED_TEXT_SEGMENT, &new_system_region,
 		0x9000000, 0x9000000);
+	old_system_region = system_shared_region;
+	system_shared_region = new_system_region;
 	system_shared_region->flags = SHARED_REGION_SYSTEM;
+        /* consume the reference held because this is the  */
+        /* system shared region */
+	if(old_system_region) {
+                shared_region_mapping_dealloc(old_system_region);
+	}
+	/* hold an extra reference because these are the system */
+	/* shared regions. */
+	shared_region_mapping_ref(system_shared_region);
 	vm_set_shared_region(current_task(), system_shared_region);
 
 }
@@ -108,7 +172,7 @@ shared_file_boot_time_init(
 /* but also coordinates requests for space.  */
 
 
-kern_return_t
+static kern_return_t
 shared_file_init(
 	ipc_port_t	*shared_text_region_handle,
 	vm_size_t 	text_region_size, 
@@ -172,7 +236,8 @@ shared_file_init(
 			p->busy = FALSE;
 			vm_object_unlock(buf_object);
 			pmap_enter(kernel_pmap, b, p->phys_addr,
-				VM_PROT_READ | VM_PROT_WRITE, TRUE);
+				VM_PROT_READ | VM_PROT_WRITE, 
+				VM_WIMG_USE_DEFAULT, TRUE);
 		}
 
 
@@ -387,9 +452,13 @@ copyin_shared_file(
 			regions = (shared_region_mapping_t)sm_info->self;
 			regions->flags |= SHARED_REGION_FULL;
 			if(regions == system_shared_region) {
+				shared_region_mapping_t	new_system_shared_regions;
 				shared_file_boot_time_init();
-				/* current task must stay wit its current */
-				/* regions */
+				/* current task must stay with its current */
+				/* regions, drop count on system_shared_region */
+				/* and put back our original set */
+				vm_get_shared_region(current_task(), &new_system_shared_regions);
+                		shared_region_mapping_dealloc(new_system_shared_regions);
 				vm_set_shared_region(current_task(), regions);
 			}
 		}
@@ -401,7 +470,7 @@ copyin_shared_file(
 /* A hash lookup function for the list of loaded files in      */
 /* shared_memory_server space.  */
 
-load_struct_t  *
+static load_struct_t  *
 lsf_hash_lookup(
 	queue_head_t			*hash_table,
 	void				*file_object,
@@ -486,7 +555,7 @@ lsf_remove_regions_mappings(
 /* Removes a map_list, (list of loaded extents) for a file from     */
 /* the loaded file hash table.  */
 
-load_struct_t *
+static load_struct_t *
 lsf_hash_delete(
 	void		*file_object,
 	vm_offset_t	base_offset,
@@ -522,7 +591,7 @@ lsf_hash_delete(
 /* Inserts a new map_list, (list of loaded file extents), into the */
 /* server loaded file hash table. */
 
-void
+static void
 lsf_hash_insert(
 	load_struct_t			*entry,
 	shared_region_task_mappings_t	sm_info)
@@ -542,7 +611,7 @@ lsf_hash_insert(
 /* if any extent fails to load or if the file was already loaded */
 /* in a different configuration, lsf_load fails.                 */
 
-kern_return_t
+static kern_return_t
 lsf_load(
 	vm_offset_t	mapped_file,
 	vm_size_t	mapped_file_size,
@@ -708,7 +777,7 @@ lsf_load(
 /* If one is found the associated extents in shared memory are deallocated */
 /* and the extent list is freed */
 
-void
+static void
 lsf_unload(
 	void			*file_object,
 	vm_offset_t	        base_offset,
@@ -740,4 +809,11 @@ lsf_unload(
 		zfree(lsf_zone, (vm_offset_t)entry);
 	        shared_file_available_hash_ele++;
 	}
+}
+
+/* integer is from 1 to 100 and represents percent full */
+unsigned int
+lsf_mapping_pool_gauge()
+{
+	return ((lsf_zone->count * lsf_zone->elem_size) * 100)/lsf_zone->max_size;
 }

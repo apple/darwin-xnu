@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2002 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -50,6 +50,9 @@
 #ifndef _MISCFS_DEVFS_DEVFS_H_
 #define	_MISCFS_DEVFS_DEVFS_H_
 
+#include <sys/appleapiopts.h>
+
+#ifdef __APPLE_API_UNSTABLE
 #define DEVFS_CHAR 	0
 #define DEVFS_BLOCK 	1
 
@@ -94,7 +97,9 @@ int	devfs_link __P((void * handle, char *fmt, ...));
 void	devfs_remove __P((void * handle));
 
 __END_DECLS
+#endif /* __APPLE_API_UNSTABLE */
 
+#ifdef __APPLE_API_PRIVATE
 /* XXX */
 #define	UID_ROOT	0
 #define	UID_BIN		3
@@ -107,5 +112,6 @@ __END_DECLS
 #define	GID_BIN		7
 #define	GID_GAMES	13
 #define	GID_DIALER	68
+#endif /* __APPLE_API_PRIVATE */
 
 #endif /* !_MISCFS_DEVFS_DEVFS_H_ */

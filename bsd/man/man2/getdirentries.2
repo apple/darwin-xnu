@@ -1,0 +1,154 @@
+.\"	$NetBSD: getdirentries.2,v 1.7 1995/10/12 15:40:50 jtc Exp $
+.\"
+.\" Copyright (c) 1989, 1991, 1993
+.\"	The Regents of the University of California.  All rights reserved.
+.\"
+.\" Redistribution and use in source and binary forms, with or without
+.\" modification, are permitted provided that the following conditions
+.\" are met:
+.\" 1. Redistributions of source code must retain the above copyright
+.\"    notice, this list of conditions and the following disclaimer.
+.\" 2. Redistributions in binary form must reproduce the above copyright
+.\"    notice, this list of conditions and the following disclaimer in the
+.\"    documentation and/or other materials provided with the distribution.
+.\" 3. All advertising materials mentioning features or use of this software
+.\"    must display the following acknowledgement:
+.\"	This product includes software developed by the University of
+.\"	California, Berkeley and its contributors.
+.\" 4. Neither the name of the University nor the names of its contributors
+.\"    may be used to endorse or promote products derived from this software
+.\"    without specific prior written permission.
+.\"
+.\" THIS SOFTWARE IS PROVIDED BY THE REGENTS AND CONTRIBUTORS ``AS IS'' AND
+.\" ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+.\" IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
+.\" ARE DISCLAIMED.  IN NO EVENT SHALL THE REGENTS OR CONTRIBUTORS BE LIABLE
+.\" FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
+.\" DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS
+.\" OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION)
+.\" HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT
+.\" LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
+.\" OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
+.\" SUCH DAMAGE.
+.\"
+.\"	@(#)getdirentries.2	8.1 (Berkeley) 6/9/93
+.\"
+.Dd June 9, 1993
+.Dt GETDIRENTRIES 2
+.Os
+.Sh NAME
+.Nm getdirentries
+.Nd "get directory entries in a filesystem independent format"
+.Sh SYNOPSIS
+.Fd #include <dirent.h>
+.Ft int
+.Fn getdirentries "int fd" "char *buf" "int nbytes" "long *basep"
+.Sh DESCRIPTION
+.Fn Getdirentries
+reads directory entries from the directory
+referenced by the file descriptor
+.Fa fd
+into the buffer pointed to by
+.Fa buf ,
+in a filesystem independent format.
+Up to
+.Fa nbytes
+of data will be transferred.
+.Fa Nbytes
+must be greater than or equal to the
+block size associated with the file,
+see
+.Xr stat 2 .
+Some filesystems may not support
+.Fn getdirentries
+with buffers smaller than this size.
+.Pp
+The data in the buffer is a series of
+.Em dirent
+structures each containing the following entries:
+.Bd -literal -offset indent
+unsigned long	d_fileno;
+unsigned short	d_reclen;
+unsigned short	d_namlen;
+char    	d_name[MAXNAMELEN + 1]; /* see below */
+.Ed
+.Pp
+The
+.Fa d_fileno
+entry is a number which is unique for each
+distinct file in the filesystem.
+Files that are linked by hard links (see
+.Xr link 2 )
+have the same
+.Fa d_fileno .
+The
+.Fa d_reclen
+entry is the length, in bytes, of the directory record.
+The
+.Fa d_name
+entry contains a null terminated file name.
+The
+.Fa d_namlen
+entry specifies the length of the file name excluding the null byte.
+Thus the actual size of
+.Fa d_name
+may vary from 1 to
+.Dv MAXNAMELEN
+\&+ 1.
+.Pp
+Entries may be separated by extra space.
+The
+.Fa d_reclen
+entry may be used as an offset from the start of a
+.Fa dirent
+structure to the next structure, if any.
+.Pp
+The actual number of bytes transferred is returned.
+The current position pointer associated with
+.Fa fd
+is set to point to the next block of entries.
+The pointer may not advance by the number of bytes returned by
+.Fn getdirentries .
+A value of zero is returned when
+the end of the directory has been reached.
+.Pp
+.Fn Getdirentries
+writes the position of the block read into the location pointed to by
+.Fa basep .
+Alternatively, the current position pointer may be set and retrieved by
+.Xr lseek 2 .
+The current position pointer should only be set to a value returned by
+.Xr lseek 2 ,
+a value returned in the location pointed to by
+.Fa basep ,
+or zero.
+.Sh RETURN VALUES
+If successful, the number of bytes actually transferred is returned.
+Otherwise, -1 is returned and the global variable
+.Va errno
+is set to indicate the error.
+.Sh ERRORS
+.Fn Getdirentries
+will fail if:
+.Bl -tag -width Er
+.It Bq Er EBADF
+.Fa fd
+is not a valid file descriptor open for reading.
+.It Bq Er EFAULT
+Either
+.Fa buf
+or
+.Fa basep
+point outside the allocated address space.
+.It Bq Er EIO
+An
+.Tn I/O
+error occurred while reading from or writing to the file system.
+.El
+.Sh SEE ALSO
+.Xr open 2 ,
+.Xr lseek 2
+.Sh HISTORY
+The
+.Fn getdirentries
+function first appeared in 4.4BSD.

@@ -35,6 +35,8 @@
 #ifndef _KERN_THREAD_CALL_H_
 #define _KERN_THREAD_CALL_H_
 
+#include <sys/appleapiopts.h>
+
 #include <mach/mach_types.h>
 
 #include <kern/clock.h>
@@ -85,11 +87,16 @@ thread_call_free(
 	thread_call_t		call
 );
 
+#ifdef	__APPLE_API_PRIVATE
+
+#ifdef	__APPLE_API_OBSOLETE
+
 /*
  * This portion of the interface
  * is OBSOLETE and DEPRECATED.  It
  * will disappear shortly.
  */
+
 void
 thread_call_func(
 	thread_call_func_t		func,
@@ -109,7 +116,10 @@ thread_call_func_cancel(
 	thread_call_param_t		param,
 	boolean_t				cancel_all
 );
+
 /* End OBSOLETE and DEPRECATED */
+
+#endif	/* __APPLE_API_OBSOLETE */
 
 #ifdef MACH_KERNEL_PRIVATE
 #include <kern/call_entry.h>
@@ -126,7 +136,13 @@ thread_call_setup(
 	thread_call_param_t		param0
 );
 
+void
+call_thread_block(void),
+call_thread_unblock(void);
+
 #endif /* MACH_KERNEL_PRIVATE */
+
+#endif	/* __APPLE_API_PRIVATE */
 
 #if		!defined(MACH_KERNEL_PRIVATE) && !defined(ABSOLUTETIME_SCALAR_TYPE)
 

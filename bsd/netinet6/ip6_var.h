@@ -1,4 +1,5 @@
-/*	$KAME: ip6_var.h,v 1.31 2000/04/04 08:48:26 itojun Exp $	*/
+/*	$FreeBSD: src/sys/netinet6/ip6_var.h,v 1.2.2.2 2001/07/03 11:01:54 ume Exp $	*/
+/*	$KAME: ip6_var.h,v 1.62 2001/05/03 14:51:48 itojun Exp $	*/
 
 /*
  * Copyright (C) 1995, 1996, 1997, and 1998 WIDE Project.
@@ -66,7 +67,9 @@
 
 #ifndef _NETINET6_IP6_VAR_H_
 #define _NETINET6_IP6_VAR_H_
+#include <sys/appleapiopts.h>
 
+#ifdef __APPLE_API_PRIVATE
 /*
  * IP6 reassembly queue structure.  Each fragment
  * being reassembled is attached to one of these structures.
@@ -127,6 +130,7 @@ struct	ip6po_rhinfo {
 #define ip6po_route	ip6po_rhinfo.ip6po_rhi_route
 
 struct	ip6_pktopts {
+	struct	mbuf *ip6po_m;	/* Pointer to mbuf storing the data */
 	int	ip6po_hlim;	/* Hoplimit for outgoing packets */
 
 	/* Outgoing IF/address information */
@@ -144,29 +148,11 @@ struct	ip6_pktopts {
 
 	/* Destination options header (after a routing header) */
 	struct	ip6_dest *ip6po_dest2;
-
-	int ip6po_flags;
-#define IP6PO_REACHCONF	0x01	/* upper-layer reachability confirmation */
-#define IP6PO_MINMTU	0x02	/* use minimum MTU (IPV6_USE_MIN_MTU) */
 };
 
 /*
  * Control options for incoming packets
  */
-
-struct ip6_recvpktopts {
-	struct mbuf *head;	/* mbuf chain of data passed to a user */
-
-#ifdef SO_TIMESTAMP
-	struct mbuf *timestamp;	/* timestamp */
-#endif
-	struct mbuf *hlim;	/* received hop limit */
-	struct mbuf *pktinfo;	/* packet information of rcv packet */
-	struct mbuf *hbh;	/* HbH options header of rcv packet */
-	struct mbuf *dest1;	/* Dest opt header of rcv packet */
-	struct mbuf *dest2; /* Dest opt header (after rthdr) of rcv packet */
-	struct mbuf *rthdr;	/* Routing header of rcv packet */
-};
 
 struct	ip6stat {
 	u_quad_t ip6s_total;		/* total packets received */
@@ -200,20 +186,6 @@ struct	ip6stat {
 	u_quad_t ip6s_exthdrtoolong;	/* ext hdr are not continuous */
 	u_quad_t ip6s_nogif;		/* no match gif found */
 	u_quad_t ip6s_toomanyhdr;	/* discarded due to too many headers */
-	/* XXX the following two items are not really AF_INET6 thing */
-	u_quad_t ip6s_exthdrget;	/* # of calls to IP6_EXTHDR_GET */
-	u_quad_t ip6s_exthdrget0;	/* # of calls to IP6_EXTHDR_GET0 */
-	u_quad_t ip6s_pulldown;		/* # of calls to m_pulldown */
-	u_quad_t ip6s_pulldown_copy;	/* # of mbuf copies in m_pulldown */
-	u_quad_t ip6s_pulldown_alloc;	/* # of mbuf allocs in m_pulldown */
-	u_quad_t ip6s_pullup;		/* # of calls to m_pullup */
-	u_quad_t ip6s_pullup_copy;	/* # of possible m_pullup copies */
-	u_quad_t ip6s_pullup_alloc;	/* # of possible m_pullup mallocs */
-	u_quad_t ip6s_pullup_fail;	/* # of possible m_pullup failures */
-	u_quad_t ip6s_pullup2;		/* # of calls to m_pullup2 */
-	u_quad_t ip6s_pullup2_copy;	/* # of possible m_pullup2 copies */
-	u_quad_t ip6s_pullup2_alloc;	/* # of possible m_pullup2 mallocs */
-	u_quad_t ip6s_pullup2_fail;	/* # of possible m_pullup2 failures */
 
 	/*
 	 * statistics for improvement of the source address selection
@@ -238,9 +210,43 @@ struct	ip6stat {
 	u_quad_t ip6s_sources_otherscope[16];
 	/* number of times that an deprecated address is chosen */
 	u_quad_t ip6s_sources_deprecated[16];
+
+	u_quad_t ip6s_forward_cachehit;
+	u_quad_t ip6s_forward_cachemiss;
 };
 
-#if KERNEL
+#ifdef KERNEL
+/*
+ * IPv6 onion peeling state.
+ * it will be initialized when we come into ip6_input().
+ * XXX do not make it a kitchen sink!
+ */
+struct ip6aux {
+	u_int32_t ip6a_flags;
+#define IP6A_SWAP	0x01		/* swapped home/care-of on packet */
+#define IP6A_HASEEN	0x02		/* HA was present */
+#define IP6A_BRUID	0x04		/* BR Unique Identifier was present */
+#define IP6A_RTALERTSEEN 0x08		/* rtalert present */
+
+	/* ip6.ip6_src */
+	struct in6_addr ip6a_careof;	/* care-of address of the peer */
+	struct in6_addr ip6a_home;	/* home address of the peer */
+	u_int16_t	ip6a_bruid;	/* BR unique identifier */
+
+	/* ip6.ip6_dst */
+	struct in6_ifaddr *ip6a_dstia6;	/* my ifaddr that matches ip6_dst */
+
+	/* rtalert */
+	u_int16_t ip6a_rtalert;		/* rtalert option value */
+
+	/*
+	 * decapsulation history will be here.
+	 * with IPsec it may not be accurate.
+	 */
+};
+#endif
+
+#ifdef KERNEL
 /* flags passed to ip6_output as last parameter */
 #define	IPV6_DADOUTPUT		0x01	/* DAD */
 #define	IPV6_FORWARDING		0x02	/* most of IPv6 header exists */
@@ -256,12 +262,8 @@ extern int	ip6_gif_hlim;		/* Hop limit for gif encap packet */
 extern int	ip6_use_deprecated;	/* allow deprecated addr as source */
 extern int	ip6_rr_prune;		/* router renumbering prefix
 					 * walk list every 5 sec.    */
-#if INET6
-extern int	ip6_mapped_addr_on;
-#endif
-#if defined(__NetBSD__) && !defined(INET6_BINDV6ONLY)
-extern int	ip6_bindv6only;
-#endif
+#define ip6_mapped_addr_on	(!ip6_v6only)
+extern int	ip6_v6only;
 
 extern struct socket *ip6_mrouter; 	/* multicast routing daemon */
 extern int	ip6_sendredirects;	/* send IP redirects when forwarding? */
@@ -277,69 +279,60 @@ extern int	ip6_dad_count;		/* DupAddrDetectionTransmits */
 
 extern u_int32_t ip6_flow_seq;
 extern int ip6_auto_flowlabel;
+extern int ip6_auto_linklocal;
 
-#if !defined(__APPLE__)
-//#if !defined(__FreeBSD__) || __FreeBSD__ < 3
-struct in6pcb;
-#endif
-#if defined(__FreeBSD__) && __FreeBSD__ >= 3 || defined (__APPLE__)
+extern int   ip6_anonportmin;		/* minimum ephemeral port */
+extern int   ip6_anonportmax;		/* maximum ephemeral port */
+extern int   ip6_lowportmin;		/* minimum reserved port */
+extern int   ip6_lowportmax;		/* maximum reserved port */
+
+extern int	ip6_use_tempaddr; /* whether to use temporary addresses. */
+
 extern struct	pr_usrreqs rip6_usrreqs;
+struct sockopt;
 
 struct inpcb;
-struct sockopt;
-#endif
 
-#if (defined(__FreeBSD__) && __FreeBSD__ >= 3) || defined (__APPLE__)
 int	icmp6_ctloutput __P((struct socket *, struct sockopt *sopt));
-#else
-int	icmp6_ctloutput __P((int, struct socket *, int, int, struct mbuf **));
-#endif
 
+struct in6_ifaddr;
 void	ip6_init __P((void));
 void	ip6intr __P((void));
 void	ip6_input __P((struct mbuf *));
+struct in6_ifaddr *ip6_getdstifaddr __P((struct mbuf *));
 void	ip6_freepcbopts __P((struct ip6_pktopts *));
 void	ip6_freemoptions __P((struct ip6_moptions *));
 int	ip6_unknown_opt __P((u_int8_t *, struct mbuf *, int));
 char *	ip6_get_prevhdr __P((struct mbuf *, int));
 int	ip6_nexthdr __P((struct mbuf *, int, int, int *));
 int	ip6_lasthdr __P((struct mbuf *, int, int, int *));
+
+struct mbuf *ip6_addaux __P((struct mbuf *));
+struct mbuf *ip6_findaux __P((struct mbuf *));
+void	ip6_delaux __P((struct mbuf *));
+
 int	ip6_mforward __P((struct ip6_hdr *, struct ifnet *, struct mbuf *));
 int	ip6_process_hopopts __P((struct mbuf *, u_int8_t *, int, u_int32_t *,
 				 u_int32_t *));
-#if defined(__FreeBSD__) && __FreeBSD__ >= 3 || defined (__APPLE__)
-void	ip6_savecontrol __P((struct inpcb *, struct ip6_hdr *, struct mbuf *,
-			     struct ip6_recvpktopts *,
-			     struct ip6_recvpktopts **));
-#else
-void	ip6_savecontrol __P((struct in6pcb *, struct ip6_hdr *, struct mbuf *,
-			     struct ip6_recvpktopts *,
-			     struct ip6_recvpktopts **));
-#endif
-void	ip6_update_recvpcbopt __P((struct ip6_recvpktopts *,
-				   struct ip6_recvpktopts *));
-void	ip6_reset_rcvopt __P((struct ip6_recvpktopts *, int));
+void	ip6_savecontrol __P((struct inpcb *, struct mbuf **, struct ip6_hdr *,
+			     struct mbuf *));
+void	ip6_notify_pmtu __P((struct inpcb *, struct sockaddr_in6 *,
+			     u_int32_t *));
 int	ip6_sysctl __P((int *, u_int, void *, size_t *, void *, size_t));
 
 void	ip6_forward __P((struct mbuf *, int));
 
 void	ip6_mloopback __P((struct ifnet *, struct mbuf *, struct sockaddr_in6 *));
 int	ip6_output __P((struct mbuf *, struct ip6_pktopts *,
-			struct route_in6 *, int,
+			struct route_in6 *,
+			int,
 			struct ip6_moptions *, struct ifnet **));
-#if defined(__FreeBSD__) && __FreeBSD__ >= 3 || defined (__APPLE__)
 int	ip6_ctloutput __P((struct socket *, struct sockopt *sopt));
-#else
-int	ip6_ctloutput __P((int, struct socket *, int, int, struct mbuf **));
-#endif
+void	init_ip6pktopts __P((struct ip6_pktopts *));
 int	ip6_setpktoptions __P((struct mbuf *, struct ip6_pktopts *, int, int));
 void	ip6_clearpktopts __P((struct ip6_pktopts *, int, int));
 struct ip6_pktopts *ip6_copypktopts __P((struct ip6_pktopts *, int));
-#if defined(__FreeBSD__) && __FreeBSD__ >= 3 || defined (__APPLE__)
 int	ip6_optlen __P((struct inpcb *));
-#else
-int	ip6_optlen __P((struct in6pcb *));
-#endif
 
 int	route6_input __P((struct mbuf **, int *, int));
 
@@ -349,20 +342,16 @@ void	frag6_slowtimo __P((void));
 void	frag6_drain __P((void));
 
 void	rip6_init __P((void));
-int	rip6_input __P((struct mbuf **mp, int *offp, int proto));
+int	rip6_input __P((struct mbuf **mp, int *offset));
 void	rip6_ctlinput __P((int, struct sockaddr *, void *));
-#if defined(__FreeBSD__) && __FreeBSD__ >= 3 || defined (__APPLE__)
 int	rip6_ctloutput __P((struct socket *so, struct sockopt *sopt));
-#else
-int	rip6_ctloutput __P((int, struct socket *, int, int, struct mbuf **));
-#endif
-int	rip6_output __P((struct mbuf *, struct socket *, struct sockaddr_in6 *,
-			struct mbuf *));
+int	rip6_output __P((struct mbuf *, struct socket *, struct sockaddr_in6 *, struct mbuf *));
 int	rip6_usrreq __P((struct socket *,
 	    int, struct mbuf *, struct mbuf *, struct mbuf *, struct proc *));
 
 int	dest6_input __P((struct mbuf **, int *, int));
 int	none_input __P((struct mbuf **, int *, int));
-#endif /* _KERNEL */
+#endif /* KERNEL */
+#endif /* __APPLE_API_PRIVATE */
 
 #endif /* !_NETINET6_IP6_VAR_H_ */

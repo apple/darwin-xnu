@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2002 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -26,7 +26,9 @@
  * and conditions for redistribution.
  *
  */
+#include <sys/appleapiopts.h>
 
+#ifdef __APPLE_API_PRIVATE
 
 #define	SYS_syscall	0
 #define	SYS_exit	1
@@ -170,7 +172,7 @@
 #define	SYS_mkdir	136
 #define	SYS_rmdir	137
 #define	SYS_utimes	138
-				/* 139 is unused */
+#define	SYS_futimes	139
 #define	SYS_adjtime	140
 				/* 141 is old getpeername */
 				/* 142 is old gethostid */
@@ -182,10 +184,10 @@
 				/* 148 is obsolete setquota */
 				/* 149 is obsolete quota */
 				/* 150 is old getsockname */
-				/* 151 is reserved */
+#define	SYS_getpgid	151
 #define SYS_setprivexec 152
-				/* 153 is reserved */
-				/* 154 is reserved */
+#define	SYS_pread	153
+#define	SYS_pwrite	154
 #define	SYS_nfssvc	155
 				/* 156 is old getdirentries */
 #define	SYS_statfs	157
@@ -215,10 +217,10 @@
 #define	SYS_setgid	181
 #define	SYS_setegid	182
 #define	SYS_seteuid	183
-#define	SYS_lfs_bmapv	184
-#define	SYS_lfs_markv	185
-#define	SYS_lfs_segclean	186
-#define	SYS_lfs_segwait	187
+				/* 184 is unused */
+				/* 185 is unused */
+				/* 186 is unused */
+				/* 187 is unused */
 #define	SYS_stat	188
 #define	SYS_fstat	189
 #define	SYS_lstat	190
@@ -258,8 +260,8 @@
 #define SYS_checkuseraccess	224 
 #define SYS_searchfs	 225
 
-       				/* 226 - 230 are reserved for HFS expansion */
-       				/* 231 - 249 are reserved  */
+				/* 226 - 230 are reserved for HFS expansion */
+				/* 231 - 249 are reserved  */
 #define SYS_minherit	 250
 #define	SYS_semsys	251
 #define	SYS_msgsys	252
@@ -287,11 +289,19 @@
 #define	SYS_sem_getvalue 274
 #define	SYS_sem_init	275
 #define	SYS_sem_destroy	276
-       				/* 277 - 295 are reserved  */
+				/* 277 - 295 are reserved  */
 #define SYS_load_shared_file 296
 #define SYS_reset_shared_file 297
-       				/* 298 - 323 are reserved  */
+#define SYS_new_system_shared_regions 298
+				/* 299 - 309 are reserved  */
+#define	SYS_getsid	310
+				/* 311 - 323 are reserved */
 #define SYS_mlockall	 324
 #define SYS_munlockall	 325
 				/* 326 is reserved */
 #define SYS_issetugid    327
+#define SYS___pthread_kill    328
+#define SYS_pthread_sigmask    329
+#define SYS_sigwait    330
+#endif /* __APPLE_API_PRIVATE */
+

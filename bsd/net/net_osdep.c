@@ -22,7 +22,7 @@
 /*
  * Copyright (C) 1995, 1996, 1997, and 1998 WIDE Project.
  * All rights reserved.
- * 
+ *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
  * are met:
@@ -34,7 +34,7 @@
  * 3. Neither the name of the project nor the names of its contributors
  *    may be used to endorse or promote products derived from this software
  *    without specific prior written permission.
- * 
+ *
  * THIS SOFTWARE IS PROVIDED BY THE PROJECT AND CONTRIBUTORS ``AS IS'' AND
  * ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
  * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
@@ -55,9 +55,6 @@
 #include <sys/socket.h>
 #include <sys/sockio.h>
 #include <sys/errno.h>
-#if !defined(__FreeBSD__) || __FreeBSD__ < 3
-#include <sys/ioctl.h>
-#endif
 #include <sys/time.h>
 #include <sys/syslog.h>
 #include <kern/cpu_number.h>
@@ -68,39 +65,21 @@
 #include <net/route.h>
 #include <net/bpf.h>
 
-#if 0
-#ifdef	INET
-#include <netinet/in.h>
-#include <netinet/in_systm.h>
-#include <netinet/in_var.h>
-#include <netinet/ip.h>
-#include <netinet/in_gif.h>
-#endif	/* INET */
+#include <net/net_osdep.h>
 
-#if INET6
-#ifndef INET
-#include <netinet/in.h>
-#endif
-#include <netinet6/in6_var.h>
-#include <netinet/ip6.h>
-#include <netinet6/ip6_var.h>
-#include <netinet6/in6_gif.h>
-#include <netinet6/in6_ifattach.h>
-#endif /* INET6 */
-#endif
-
-#if !(defined(__NetBSD__) || defined(__OpenBSD__)) || defined(__APPLE__)
 const char *
 if_name(ifp)
 	struct ifnet *ifp;
 {
-	static char nam[IFNAMSIZ + 10];	/*enough?*/
+#define MAXNUMBUF	8
+	static char nam[MAXNUMBUF][IFNAMSIZ + 10];	/*enough?*/
+	static int ifbufround = 0;
+	char *cp;
 
-#ifdef __bsdi__
-	sprintf(nam, "%s%d", ifp->if_name, ifp->if_unit);
-#else
-	snprintf(nam, sizeof(nam), "%s%d", ifp->if_name, ifp->if_unit);
-#endif 
-	return nam;
+	ifbufround = (ifbufround + 1) % MAXNUMBUF;
+	cp = nam[ifbufround];
+
+	snprintf(cp, IFNAMSIZ + 10, "%s%d", ifp->if_name, ifp->if_unit);
+	return((const char *)cp);
+#undef MAXNUMBUF
 }
-#endif

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2002 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -32,6 +32,9 @@
 #ifndef __SYNTHFS_H__
 #define __SYNTHFS_H__
 
+#include  <sys/appleapiopts.h>
+
+#ifdef __APPLE_API_PRIVATE
 #include <sys/param.h>
 #include <sys/lock.h>
 #include <sys/queue.h>
@@ -228,4 +231,5 @@ int synthfs_remove_symlink __P((struct vnode *vp));
 int synthfs_move_rename_entry __P((struct vnode *source_vp, struct vnode *newparent_vp, char *newname));
 int synthfs_derive_vnode_path __P((struct vnode *vp, char *vnpath, size_t pathbuffersize));
 
+#endif /* __APPLE_API_PRIVATE */
 #endif /* __SYNTHFS_H__ */

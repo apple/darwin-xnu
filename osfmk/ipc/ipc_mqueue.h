@@ -82,7 +82,7 @@ typedef struct ipc_mqueue {
 		 	mach_port_seqno_t 	seqno;
 			boolean_t		fullwaiters;
 		} port;
-		struct wait_queue_sub		set_queue;
+		struct wait_queue_set		set_queue;
 	} data;
 } *ipc_mqueue_t;
 
@@ -96,8 +96,8 @@ typedef struct ipc_mqueue {
 #define imq_fullwaiters		data.port.fullwaiters
 
 #define imq_set_queue		data.set_queue
-#define imq_setlinks		data.set_queue.wqs_sublinks
-#define imq_is_set(mq)		wait_queue_is_sub(&(mq)->imq_set_queue)
+#define imq_setlinks		data.set_queue.wqs_setlinks
+#define imq_is_set(mq)		wait_queue_is_set(&(mq)->imq_set_queue)
 
 #define	imq_lock(mq)		wait_queue_lock(&(mq)->imq_wait_queue)
 #define	imq_lock_try(mq)	wait_queue_lock_try(&(mq)->imq_wait_queue)
@@ -109,8 +109,8 @@ typedef struct ipc_mqueue {
 extern int ipc_mqueue_full;
 extern int ipc_mqueue_rcv;
 
-#define IPC_MQUEUE_FULL		(event_t)&ipc_mqueue_full
-#define IPC_MQUEUE_RECEIVE	(event_t)&ipc_mqueue_rcv
+#define IPC_MQUEUE_FULL		(event64_t)&ipc_mqueue_full
+#define IPC_MQUEUE_RECEIVE	(event64_t)&ipc_mqueue_rcv
 
 /*
  * Exported interfaces
@@ -120,12 +120,6 @@ extern int ipc_mqueue_rcv;
 extern void ipc_mqueue_init(
 	ipc_mqueue_t	mqueue,
 	boolean_t	is_set);
-
-/* Move messages from one queue to another */
-extern void ipc_mqueue_move(
-	ipc_mqueue_t	dest,
-	ipc_mqueue_t	source,
-	ipc_port_t	port);
 
 /* Wake up receivers waiting in a message queue */
 extern void ipc_mqueue_changed(

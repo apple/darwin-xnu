@@ -51,30 +51,25 @@
  * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
  * SUCH DAMAGE.
  *
+ * $FreeBSD: src/sys/netinet/ip_divert.c,v 1.42.2.4 2001/07/29 19:32:40 ume Exp $
  */
 
-#if ISFB31
-#include "opt_inet.h"
-#include "opt_ipfw.h"
-#include "opt_ipdivert.h"
-#endif
 
 #ifndef INET
 #error "IPDIVERT requires INET."
 #endif
 
 #include <sys/param.h>
+#include <sys/kernel.h>
 #include <sys/malloc.h>
 #include <sys/mbuf.h>
 #include <sys/socket.h>
 #include <sys/protosw.h>
 #include <sys/socketvar.h>
+#include <sys/sysctl.h>
 #include <sys/systm.h>
 #include <sys/proc.h>
 
-#if ISFB31
-#include <vm/vm_zone.h>
-#endif
 
 #include <net/if.h>
 #include <net/route.h>
@@ -96,31 +91,23 @@
 #define	DIVSNDQ		(65536 + 100)
 #define	DIVRCVQ		(65536 + 100)
 
-/* Global variables */
-
 /*
- * ip_input() and ip_output() set this secret value before calling us to
- * let us know which divert port to divert a packet to; this is done so
- * we can use the existing prototype for struct protosw's pr_input().
- * This is stored in host order.
- */
-u_short ip_divert_port;
-
-/*
- * A 16 bit cookie is passed to the user process.
- * The user process can send it back to help the caller know something
- * about where the packet came from.
+ * A 16 bit cookie is passed to and from the user process.
+ * The user process can send it back to help the caller know
+ * something about where the packet originally came from.
  *
- * If IPFW is the caller then the cookie is the rule that sent
+ * In the case of ipfw, then the cookie is the rule that sent
  * us here. On reinjection is is the rule after which processing
  * should continue. Leaving it the same will make processing start
  * at the rule number after that which sent it here. Setting it to
  * 0 will restart processing at the beginning. 
+ *
+ * For divert_packet(), ip_divert_cookie is an input value only.
+ * For div_output(), ip_divert_cookie is an output value only.
  */
 u_int16_t ip_divert_cookie;
 
 /* Internal variables */
-
 static struct inpcbhead divcb;
 static struct inpcbinfo divcbinfo;
 
@@ -131,7 +118,6 @@ static u_long	div_recvspace = DIVRCVQ;	/* XXX sysctl ? */
 static struct sockaddr_in divsrc = { sizeof(divsrc), AF_INET };
 
 /* Internal functions */
-
 static int div_output(struct socket *so,
 		struct mbuf *m, struct sockaddr *addr, struct mbuf *control);
 
@@ -162,23 +148,36 @@ div_init(void)
 }
 
 /*
- * Setup generic address and protocol structures
- * for div_input routine, then pass them along with
- * mbuf chain. ip->ip_len is assumed to have had
- * the header length (hlen) subtracted out already.
- * We tell whether the packet was incoming or outgoing
- * by seeing if hlen == 0, which is a hack.
+ * IPPROTO_DIVERT is not a real IP protocol; don't allow any packets
+ * with that protocol number to enter the system from the outside.
  */
 void
-div_input(struct mbuf *m, int hlen)
+div_input(struct mbuf *m, int off)
+{
+	ipstat.ips_noproto++;
+	m_freem(m);
+}
+
+/*
+ * Divert a packet by passing it up to the divert socket at port 'port'.
+ *
+ * Setup generic address and protocol structures for div_input routine,
+ * then pass them along with mbuf chain.
+ */
+void
+divert_packet(struct mbuf *m, int incoming, int port)
 {
 	struct ip *ip;
 	struct inpcb *inp;
 	struct socket *sa;
+	u_int16_t nport;
 
 	/* Sanity check */
-	if (ip_divert_port == 0)
-		panic("div_input: port is 0");
+	KASSERT(port != 0, ("%s: port=0", __FUNCTION__));
+
+	/* Record and reset divert cookie */
+	divsrc.sin_port = ip_divert_cookie;
+	ip_divert_cookie = 0;
 
 	/* Assure header */
 	if (m->m_len < sizeof(struct ip) &&
@@ -187,35 +186,19 @@ div_input(struct mbuf *m, int hlen)
 	}
 	ip = mtod(m, struct ip *);
 
-	/* Record divert cookie */
-	divsrc.sin_port = ip_divert_cookie;
-	ip_divert_cookie = 0;
-
-	/* Restore packet header fields */
-	ip->ip_len += hlen;
-	HTONS(ip->ip_len);
-	HTONS(ip->ip_off);
-
 	/*
-	 * Record receive interface address, if any
+	 * Record receive interface address, if any.
 	 * But only for incoming packets.
 	 */
 	divsrc.sin_addr.s_addr = 0;
-	if (hlen) {
+	if (incoming) {
 		struct ifaddr *ifa;
 
-#if DIAGNOSTIC
 		/* Sanity check */
-		if (!(m->m_flags & M_PKTHDR))
-			panic("div_input: no pkt hdr");
-#endif
-
-		/* More fields affected by ip_input() */
-		HTONS(ip->ip_id);
+		KASSERT((m->m_flags & M_PKTHDR), ("%s: !PKTHDR", __FUNCTION__));
 
 		/* Find IP address for receive interface */
-		for (ifa = m->m_pkthdr.rcvif->if_addrhead.tqh_first;
-		    ifa != NULL; ifa = ifa->ifa_link.tqe_next) {
+		TAILQ_FOREACH(ifa, &m->m_pkthdr.rcvif->if_addrhead, ifa_link) {
 			if (ifa->ifa_addr == NULL)
 				continue;
 			if (ifa->ifa_addr->sa_family != AF_INET)
@@ -255,11 +238,11 @@ div_input(struct mbuf *m, int hlen)
 
 	/* Put packet on socket queue, if any */
 	sa = NULL;
-	for (inp = divcb.lh_first; inp != NULL; inp = inp->inp_list.le_next) {
-		if (inp->inp_lport == htons(ip_divert_port))
+	nport = htons((u_int16_t)port);
+	LIST_FOREACH(inp, &divcb, inp_list) {
+		if (inp->inp_lport == nport)
 			sa = inp->inp_socket;
 	}
-	ip_divert_port = 0;
 	if (sa) {
 		if (sbappendaddr(&sa->so_rcv, (struct sockaddr *)&divsrc,
 				m, (struct mbuf *)0) == 0)
@@ -338,7 +321,8 @@ div_output(so, m, addr, control)
 		ipstat.ips_rawout++;			/* XXX */
 		error = ip_output(m, inp->inp_options, &inp->inp_route,
 			(so->so_options & SO_DONTROUTE) |
-			IP_ALLOWBROADCAST | IP_RAWOUTPUT, inp->inp_moptions);
+			IP_ALLOWBROADCAST | IP_RAWOUTPUT,
+			inp->inp_moptions);
 	} else {
 		struct	ifaddr *ifa;
 
@@ -369,8 +353,8 @@ div_output(so, m, addr, control)
 	return error;
 
 cantsend:
-	ip_divert_cookie = 0;
 	m_freem(m);
+	ip_divert_cookie = 0;
 	return error;
 }
 
@@ -386,27 +370,21 @@ div_attach(struct socket *so, int proto, struct proc *p)
 	if (p && (error = suser(p->p_ucred, &p->p_acflag)) != 0)
 		return error;
 
+	error = soreserve(so, div_sendspace, div_recvspace);
+	if (error)
+		return error;
 	s = splnet();
 	error = in_pcballoc(so, &divcbinfo, p);
 	splx(s);
 	if (error)
 		return error;
-	error = soreserve(so, div_sendspace, div_recvspace);
-	if (error)
-		return error;
 	inp = (struct inpcb *)so->so_pcb;
 	inp->inp_ip_p = proto;
-	inp->inp_flags |= INP_HDRINCL | INP_IPV4;
+	inp->inp_vflag |= INP_IPV4;
+	inp->inp_flags |= INP_HDRINCL;
 	/* The socket is always "connected" because
 	   we always know "where" to send the packet */
 	so->so_state |= SS_ISCONNECTED;
-#if IPSEC
-	error = ipsec_init_policy(so, &inp->inp_sp);
-	if (error != 0) {
-		in_pcbdetach(inp);
-		return error;
-	}
-#endif /*IPSEC*/
 	return 0;
 }
 
@@ -446,9 +424,21 @@ div_bind(struct socket *so, struct sockaddr *nam, struct proc *p)
 
 	s = splnet();
 	inp = sotoinpcb(so);
-	error = in_pcbbind(inp, nam, p);
+	/* in_pcbbind assumes that the socket is a sockaddr_in
+	* and in_pcbbind requires a valid address. Since divert
+	* sockets don't we need to make sure the address is
+	* filled in properly.
+	* XXX -- divert should not be abusing in_pcbind
+	* and should probably have its own family.
+	*/
+	if (nam->sa_family != AF_INET) {
+		error = EAFNOSUPPORT;
+	} else {
+               ((struct sockaddr_in *)nam)->sin_addr.s_addr = INADDR_ANY;
+		error = in_pcbbind(inp, nam, p);
+	}
 	splx(s);
-	return 0;
+	return error;
 }
 
 static int
@@ -463,7 +453,7 @@ div_send(struct socket *so, int flags, struct mbuf *m, struct sockaddr *nam,
 	 struct mbuf *control, struct proc *p)
 {
 	/* Packet must have a header (but that's about it) */
-	if (m->m_len < sizeof (struct ip) ||
+	if (m->m_len < sizeof (struct ip) &&
 	    (m = m_pullup(m, sizeof (struct ip))) == 0) {
 		ipstat.ips_toosmall++;
 		m_freem(m);
@@ -473,6 +463,100 @@ div_send(struct socket *so, int flags, struct mbuf *m, struct sockaddr *nam,
 	/* Send packet */
 	return div_output(so, m, nam, control);
 }
+
+static int
+div_pcblist SYSCTL_HANDLER_ARGS
+{
+	int error, i, n, s;
+	struct inpcb *inp, **inp_list;
+	inp_gen_t gencnt;
+	struct xinpgen xig;
+
+	/*
+	 * The process of preparing the TCB list is too time-consuming and
+	 * resource-intensive to repeat twice on every request.
+	 */
+	if (req->oldptr == 0) {
+		n = divcbinfo.ipi_count;
+		req->oldidx = 2 * (sizeof xig)
+			+ (n + n/8) * sizeof(struct xinpcb);
+		return 0;
+	}
+
+	if (req->newptr != 0)
+		return EPERM;
+
+	/*
+	 * OK, now we're committed to doing something.
+	 */
+	s = splnet();
+	gencnt = divcbinfo.ipi_gencnt;
+	n = divcbinfo.ipi_count;
+	splx(s);
+
+	xig.xig_len = sizeof xig;
+	xig.xig_count = n;
+	xig.xig_gen = gencnt;
+	xig.xig_sogen = so_gencnt;
+	error = SYSCTL_OUT(req, &xig, sizeof xig);
+	if (error)
+		return error;
+
+	inp_list = _MALLOC(n * sizeof *inp_list, M_TEMP, M_WAITOK);
+	if (inp_list == 0)
+		return ENOMEM;
+	
+	s = splnet();
+	for (inp = LIST_FIRST(divcbinfo.listhead), i = 0; inp && i < n;
+	     inp = LIST_NEXT(inp, inp_list)) {
+#ifdef __APPLE__
+		if (inp->inp_gencnt <= gencnt)
+#else
+		if (inp->inp_gencnt <= gencnt && !prison_xinpcb(req->p, inp))
+#endif
+			inp_list[i++] = inp;
+	}
+	splx(s);
+	n = i;
+
+	error = 0;
+	for (i = 0; i < n; i++) {
+		inp = inp_list[i];
+		if (inp->inp_gencnt <= gencnt) {
+			struct xinpcb xi;
+			xi.xi_len = sizeof xi;
+			/* XXX should avoid extra copy */
+			bcopy(inp, &xi.xi_inp, sizeof *inp);
+			if (inp->inp_socket)
+				sotoxsocket(inp->inp_socket, &xi.xi_socket);
+			error = SYSCTL_OUT(req, &xi, sizeof xi);
+		}
+	}
+	if (!error) {
+		/*
+		 * Give the user an updated idea of our state.
+		 * If the generation differs from what we told
+		 * her before, she knows that something happened
+		 * while we were processing this request, and it
+		 * might be necessary to retry.
+		 */
+		s = splnet();
+		xig.xig_gen = divcbinfo.ipi_gencnt;
+		xig.xig_sogen = so_gencnt;
+		xig.xig_count = divcbinfo.ipi_count;
+		splx(s);
+		error = SYSCTL_OUT(req, &xig, sizeof xig);
+	}
+	FREE(inp_list, M_TEMP);
+	return error;
+}
+
+#warning Fix SYSCTL net_inet_divert
+#if 0
+SYSCTL_DECL(_net_inet_divert);
+SYSCTL_PROC(_net_inet_divert, OID_AUTO, pcblist, CTLFLAG_RD, 0, 0,
+	    div_pcblist, "S,xinpcb", "List of active divert sockets");
+#endif
 
 struct pr_usrreqs div_usrreqs = {
 	div_abort, pru_accept_notsupp, div_attach, div_bind,

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2002,2000 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -23,68 +23,46 @@
  * @OSF_COPYRIGHT@
  */
 /*
- * HISTORY
- * 
- * Revision 1.1.1.1  1998/09/22 21:05:31  wsanchez
- * Import of Mac OS X kernel (~semeria)
- *
- * Revision 1.1.1.1  1998/03/07 02:25:46  wsanchez
- * Import of OSF Mach kernel (~mburg)
- *
- * Revision 1.1.8.1  1996/12/09  16:50:08  stephen
- * 	nmklinux_1.0b3_shared into pmk1.1
- * 	[1996/12/09  10:51:04  stephen]
- *
- * Revision 1.1.6.1  1996/04/11  11:19:58  emcmanus
- * 	Copied from mainline.ppc.
- * 	[1996/04/10  16:56:50  emcmanus]
- * 
- * 	mk6 CR668 - 1.3b26 merge
- * 	new file for mk6
- * 	[1994/11/02  18:18:29  dwm]
- * 
- * Revision 1.1.4.1  1995/11/23  17:36:53  stephen
- * 	first powerpc checkin to mainline.ppc
- * 	[1995/11/23  16:45:00  stephen]
- * 
- * Revision 1.1.2.1  1995/08/25  06:49:44  stephen
- * 	Initial checkin of files for PowerPC port
- * 	[1995/08/23  15:04:13  stephen]
- * 
- * Revision 1.1.2.1  1994/05/06  18:54:50  tmt
- * 	New Mig definition file to describe required machine types.
- * 	[1994/05/05  21:08:57  tmt]
- * 
- * $EndLog$
- */
-/*
  *	Header file for basic, machine-dependent data types.  i386 version.
  */
 
 #ifndef	_MACHINE_VM_TYPES_DEFS_
 #define	_MACHINE_VM_TYPES_DEFS_	1
 
+type short = int16_t;
+type int = int32_t;
+type unsigned = uint32_t;
+
+type float = MACH_MSG_TYPE_REAL_32;
+type double = MACH_MSG_TYPE_REAL_64;
+
+
+/* from ISO/IEC 988:1999 spec */
+/* 7.18.1.4 Integer types capable of hgolding object pointers */
 /*
- * A natural_t is the type for the native
+ * The [u]intptr_t types for the native
  * integer type, e.g. 32 or 64 or.. whatever
- * register size the machine has.  Unsigned, it is
+ * register size the machine has.  They are
  * used for entities that might be either
- * unsigned integers or pointers, and for
+ * [unsigned] integers or pointers, and for
  * type-casting between the two.
+ *
  * For instance, the IPC system represents
  * a port in user space as an integer and
  * in kernel space as a pointer.
  */
-type natural_t = unsigned32;
+type uintptr_t = MACH_MSG_TYPE_INTEGER_32;
+type intptr_t = MACH_MSG_TYPE_INTEGER_32;
 
 /*
- * An integer_t is the signed counterpart
- * of the natural_t type. Both types are
- * only supposed to be used to define
- * other types in a machine-independent
- * way.
+ * These are the legacy Mach types that are
+ * the [rough] equivalents of the standards above.
+ * They were defined in terms of int, not
+ * long int, so they remain separate.
  */
-type integer_t = int32;
+type integer_t = int32_t;
+type natural_t = uint32_t;
+type register_t = int32_t;
 
 
 #if	MACH_IPC_COMPAT

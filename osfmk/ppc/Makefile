@@ -20,6 +20,7 @@ EXPORT_ONLY_FILES = 		\
 	proc_reg.h		\
 	machine_routines.h		\
 	Diagnostics.h		\
+	savearea.h		\
 	mappings.h
 
 INSTALL_MD_LIST = ${DATAFILES}

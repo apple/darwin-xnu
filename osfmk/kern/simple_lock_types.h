@@ -89,7 +89,6 @@
  *	and use the portable lock package for everything else.
  */
 
-
 /*
  *	All of the remaining locking constructs may have two versions.
  *	One version is machine-independent, built in C on top of the
@@ -241,9 +240,13 @@ typedef struct slock {
  *			decl_simple_lock_data(static,foo)	static
  *			decl_simple_lock_data(,foo)		ordinary
  */
-typedef	usimple_lock_data_t	*simple_lock_t;
 
-#ifdef MACH_KERNEL_PRIVATE
+#include <sys/appleapiopts.h>
+
+#ifdef	__APPLE_API_PRIVATE
+
+#ifdef	MACH_KERNEL_PRIVATE
+
 #include <mach_ldebug.h>
 #include <cpus.h>
 
@@ -258,18 +261,25 @@ typedef	usimple_lock_data_t	*simple_lock_t;
 #endif
 
 #if     (defined(LOCK_SIMPLE_DATA) || ((NCPUS == 1) && !USLOCK_DEBUG ))
+typedef	usimple_lock_data_t	*simple_lock_t;
 #define	decl_simple_lock_data(class,name)
 #endif
-#endif /* MACH_KERNEL_PRIVATE */
+
+#endif	/* MACH_KERNEL_PRIVATE */
+
+#endif	/* __APPLE_API_PRIVATE */
 
 /*
  *  Outside the mach kernel component, and even within it on SMP or
  *  debug systems, simple locks are the same as usimple locks.
  */
 #if !defined(decl_simple_lock_data)
+typedef usimple_lock_data_t	*simple_lock_t;
 typedef usimple_lock_data_t	simple_lock_data_t;
+
 #define	decl_simple_lock_data(class,name) \
-class	simple_lock_data_t	name;
+	class	simple_lock_data_t	name;
+
 #endif	/* !defined(decl_simple_lock_data) */
 
 #endif /* !_SIMPLE_LOCK_TYPES_H_ */

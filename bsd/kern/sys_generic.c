@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2002 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -72,10 +72,6 @@
 #include <sys/stat.h>
 #include <sys/malloc.h>
 
-#if KTRACE
-#include <sys/ktrace.h>
-#endif
-
 #include <sys/mount.h>
 #include <sys/protosw.h>
 #include <sys/ev.h>
@@ -107,37 +103,167 @@
 #include <netinet/tcp_debug.h>
 /* for wait queue based select */
 #include <kern/wait_queue.h>
+#if KTRACE 
+#include <sys/ktrace.h>
+#endif
+
+static int	dofileread __P((struct proc *, struct file *, int, void *,
+		size_t, off_t, int, int*));
+static int	dofilewrite __P((struct proc *, struct file *, int,
+		const void *, size_t, off_t, int, int*));
+
+static struct file*
+holdfp(fdp, fd, flag) 
+	struct filedesc* fdp;
+	int fd, flag;
+{
+	struct file* fp;
+
+	if (((u_int)fd) >= fdp->fd_nfiles ||
+		(fp = fdp->fd_ofiles[fd]) == NULL ||
+		(fp->f_flag & flag) == 0) {
+			return (NULL);
+	}
+	fref(fp);
+	return (fp);   
+}
 
 /*
  * Read system call.
  */
+#ifndef _SYS_SYSPROTO_H_
 struct read_args {
 	int fd;
 	char *cbuf;
 	u_int nbyte;
 };
-/* ARGSUSED */
+#endif
+int
 read(p, uap, retval)
 	struct proc *p;
 	register struct read_args *uap;
 	register_t *retval;
 {
-	struct uio auio;
-	struct iovec aiov;
+	register struct file *fp;
+	int error;
 
-	aiov.iov_base = (caddr_t)uap->cbuf;
-	aiov.iov_len = uap->nbyte;
-	auio.uio_iov = &aiov;
-	auio.uio_iovcnt = 1;
-	auio.uio_rw = UIO_READ;
-	return (rwuio(p, uap->fd, &auio, UIO_READ, retval));	
+	if ((fp = holdfp(p->p_fd, uap->fd, FREAD)) == NULL)
+		return (EBADF);
+	error = dofileread(p, fp, uap->fd, uap->cbuf, uap->nbyte,
+			(off_t)-1, 0, retval);
+	frele(fp);
+	return(error);
 }
 
+/* 
+ * Pread system call
+ */
+#ifndef _SYS_SYSPROTO_H_
+struct pread_args {
+	int     fd;
+	void    *buf;
+	size_t  nbyte;
+#ifdef DOUBLE_ALIGN_PARAMS
+	int     pad;
+#endif
+	off_t   offset;
+};
+#endif
+int
+pread(p, uap, retval)
+	struct proc *p;
+	register struct pread_args *uap;
+	int *retval;
+{
+	register struct file *fp;
+	int error;
+
+	if ((fp = holdfp(p->p_fd, uap->fd, FREAD)) == NULL)
+		return (EBADF);
+	if (fp->f_type != DTYPE_VNODE) {
+		error = ESPIPE;
+	} else {
+		error = dofileread(p, fp, uap->fd, uap->buf, uap->nbyte,
+				uap->offset, FOF_OFFSET, retval);
+	}
+	frele(fp);
+	return(error);
+}
+
+/*
+ * Code common for read and pread
+ */
+int
+dofileread(p, fp, fd, buf, nbyte, offset, flags, retval)
+	struct proc *p;
+	struct file *fp;
+	int fd, flags;
+	void *buf;
+	size_t nbyte;
+	off_t offset;
+	int *retval;
+{
+	struct uio auio;
+	struct iovec aiov;
+	long cnt, error = 0;
+#if KTRACE
+	struct iovec ktriov;
+	struct uio ktruio;
+	int didktr = 0;
+#endif
+
+	aiov.iov_base = (caddr_t)buf;
+	aiov.iov_len = nbyte;
+	auio.uio_iov = &aiov;
+	auio.uio_iovcnt = 1;
+	auio.uio_offset = offset;
+	if (nbyte > INT_MAX)
+		return (EINVAL);
+	auio.uio_resid = nbyte;
+	auio.uio_rw = UIO_READ;
+	auio.uio_segflg = UIO_USERSPACE;
+	auio.uio_procp = p;
+#if KTRACE
+	/*
+	* if tracing, save a copy of iovec
+	*/
+	if (KTRPOINT(p, KTR_GENIO)) {
+		ktriov = aiov;
+		ktruio = auio;
+		didktr = 1;
+	}
+#endif
+	cnt = nbyte;
+
+	if ((error = fo_read(fp, &auio, fp->f_cred, flags, p))) {
+		if (auio.uio_resid != cnt && (error == ERESTART ||
+			error == EINTR || error == EWOULDBLOCK))
+			error = 0;
+	}
+	cnt -= auio.uio_resid;
+#if KTRACE
+	if (didktr && error == 0) {
+		ktruio.uio_iov = &ktriov;
+		ktruio.uio_resid = cnt;
+		ktrgenio(p->p_tracep, fd, UIO_READ, &ktruio, error,
+		    KERNEL_FUNNEL);
+	}
+#endif  
+	*retval = cnt;
+	return (error);
+}
+
+/*      
+ * Scatter read system call.
+ */
+#ifndef _SYS_SYSPROTO_H_
 struct readv_args {
 	int fd;
 	struct iovec *iovp;
 	u_int iovcnt;
 };
+#endif
+int
 readv(p, uap, retval)
 	struct proc *p;
 	register struct readv_args *uap;
@@ -171,32 +297,139 @@ readv(p, uap, retval)
 /*
  * Write system call
  */
+#ifndef _SYS_SYSPROTO_H_
 struct write_args {
 	int fd;
 	char *cbuf;
 	u_int nbyte;
 };
+#endif
+int
 write(p, uap, retval)
 	struct proc *p;
 	register struct write_args *uap;
 	int *retval;
 {
-	struct uio auio;
-	struct iovec aiov;
+	register struct file *fp;
+	int error;      
 
-	aiov.iov_base = uap->cbuf;
-	aiov.iov_len = uap->nbyte;
-	auio.uio_iov = &aiov;
-	auio.uio_iovcnt = 1;
-	auio.uio_rw = UIO_WRITE;
-	return (rwuio(p, uap->fd, &auio, UIO_WRITE, retval));
+	if ((fp = holdfp(p->p_fd, uap->fd, FWRITE)) == NULL)
+		return (EBADF);
+	error = dofilewrite(p, fp, uap->fd, uap->cbuf, uap->nbyte,
+			(off_t)-1, 0, retval);
+	frele(fp);
+	return(error);  
 }
 
+/*                          
+ * Pwrite system call
+ */
+#ifndef _SYS_SYSPROTO_H_
+struct pwrite_args {
+	int     fd;
+	const void *buf;
+	size_t  nbyte;
+#ifdef DOUBLE_ALIGN_PARAMS
+	int     pad;
+#endif
+	off_t   offset;
+};      
+#endif
+int
+pwrite(p, uap, retval)
+	struct proc *p;
+	register struct pwrite_args *uap;
+	int *retval;	
+{
+        register struct file *fp;
+        int error; 
+
+        if ((fp = holdfp(p->p_fd, uap->fd, FWRITE)) == NULL)
+                return (EBADF);
+        if (fp->f_type != DTYPE_VNODE) {
+                error = ESPIPE;
+        } else {
+            error = dofilewrite(p, fp, uap->fd, uap->buf, uap->nbyte,
+                uap->offset, FOF_OFFSET, retval);
+        }
+        frele(fp);
+        return(error);
+}
+
+static int                  
+dofilewrite(p, fp, fd, buf, nbyte, offset, flags, retval)
+	struct proc *p;
+	struct file *fp; 
+	int fd, flags;
+	const void *buf;
+	size_t nbyte;   
+	off_t offset; 
+	int *retval;
+{       
+	struct uio auio;
+	struct iovec aiov;
+	long cnt, error = 0;
+#if KTRACE
+	struct iovec ktriov;
+	struct uio ktruio;
+	int didktr = 0; 
+#endif
+        
+	aiov.iov_base = (void *)(uintptr_t)buf;
+	aiov.iov_len = nbyte;
+	auio.uio_iov = &aiov;
+	auio.uio_iovcnt = 1;   
+	auio.uio_offset = offset;
+	if (nbyte > INT_MAX)   
+		return (EINVAL);
+	auio.uio_resid = nbyte;
+	auio.uio_rw = UIO_WRITE;
+	auio.uio_segflg = UIO_USERSPACE;
+	auio.uio_procp = p;
+#if KTRACE
+	/*
+	* if tracing, save a copy of iovec and uio
+	*/
+	if (KTRPOINT(p, KTR_GENIO)) {
+		ktriov = aiov;
+		ktruio = auio;
+		didktr = 1;
+	}
+#endif  
+	cnt = nbyte; 
+	if (fp->f_type == DTYPE_VNODE)
+		bwillwrite();
+	if ((error = fo_write(fp, &auio, fp->f_cred, flags, p))) {
+		if (auio.uio_resid != cnt && (error == ERESTART ||
+			error == EINTR || error == EWOULDBLOCK))
+			error = 0;
+	if (error == EPIPE)
+		psignal(p, SIGPIPE);
+	}
+	cnt -= auio.uio_resid;
+#if KTRACE 
+	if (didktr && error == 0) {
+		ktruio.uio_iov = &ktriov;
+		ktruio.uio_resid = cnt;
+		ktrgenio(p->p_tracep, fd, UIO_WRITE, &ktruio, error,
+		    KERNEL_FUNNEL);
+	}
+#endif  
+	*retval = cnt;
+	return (error); 
+}
+        
+/*      
+ * Gather write system call  
+ */     
+#ifndef _SYS_SYSPROTO_H_
 struct writev_args {
 	int fd;
 	struct iovec *iovp;
 	u_int iovcnt;
 };
+#endif
+int
 writev(p, uap, retval)
 	struct proc *p;
 	register struct writev_args *uap;
@@ -227,6 +460,7 @@ writev(p, uap, retval)
 	return (error);
 }
 
+int
 rwuio(p, fdes, uio, rw, retval)
 	struct proc *p;
 	int fdes;
@@ -237,6 +471,12 @@ rwuio(p, fdes, uio, rw, retval)
 	struct file *fp;
 	register struct iovec *iov;
 	int i, count, flag, error;
+#if KTRACE
+	struct iovec *ktriov;
+	struct uio ktruio;
+	int didktr = 0;
+	u_int iovlen;
+#endif
 
 	if (error = fdgetf(p, fdes, &fp))
 		return (error);
@@ -259,33 +499,65 @@ rwuio(p, fdes, uio, rw, retval)
 		iov++;
 	}
 	count = uio->uio_resid;
+#if KTRACE
+	/*
+	 * if tracing, save a copy of iovec
+	 */
+	if (KTRPOINT(p, KTR_GENIO)) {
+		iovlen = uio->uio_iovcnt * sizeof (struct iovec);
+		MALLOC(ktriov, struct iovec *, iovlen, M_TEMP, M_WAITOK);
+		bcopy((caddr_t)uio->uio_iov, (caddr_t)ktriov, iovlen);
+		ktruio = *uio;
+		didktr = 1;
+	} 
+#endif  
+
 	if (rw == UIO_READ) {
-		if (error = (*fp->f_ops->fo_read)(fp, uio, fp->f_cred))
-				if (uio->uio_resid != count && (error == ERESTART ||
-		    			error == EINTR || error == EWOULDBLOCK))
-						error = 0;
-	} else {
-		if (error = (*fp->f_ops->fo_write)(fp, uio, fp->f_cred)) {
+		if (error = fo_read(fp, uio, fp->f_cred, 0, p))
 			if (uio->uio_resid != count && (error == ERESTART ||
-		    	error == EINTR || error == EWOULDBLOCK))
+				error == EINTR || error == EWOULDBLOCK))
 				error = 0;
-			if (error == EPIPE)
+	} else {
+		if (fp->f_type == DTYPE_VNODE)
+			bwillwrite();
+		if (error = fo_write(fp, uio, fp->f_cred, 0, p)) {
+			if (uio->uio_resid != count && (error == ERESTART ||
+				error == EINTR || error == EWOULDBLOCK))
+				error = 0;
+                        /* The socket layer handles SIGPIPE */
+			if (error == EPIPE && fp->f_type != DTYPE_SOCKET)
 				psignal(p, SIGPIPE);
 		}
 	}
+
 	*retval = count - uio->uio_resid;
+
+#if KTRACE
+	if (didktr) {
+		if (error == 0) {
+			ktruio.uio_iov = ktriov; 
+			ktruio.uio_resid = *retval;
+			ktrgenio(p->p_tracep, fdes, rw, &ktruio, error,
+			    KERNEL_FUNNEL);
+		}
+		FREE(ktriov, M_TEMP);
+	}
+#endif
+
 	return(error);
 }
 
 /*
  * Ioctl system call
  */
+#ifndef _SYS_SYSPROTO_H_
 struct ioctl_args {
 	int fd;
 	u_long com;
 	caddr_t data;
 };
-/* ARGSUSED */
+#endif
+int
 ioctl(p, uap, retval)
 	struct proc *p;
 	register struct ioctl_args *uap;
@@ -306,10 +578,11 @@ ioctl(p, uap, retval)
 	if ((fp->f_flag & (FREAD | FWRITE)) == 0)
 		return (EBADF);
 		
-	/*### LD 6/11/97 Hack Alert: this is to get AppleTalk to work
+#if NETAT
+	/*
+	 * ### LD 6/11/97 Hack Alert: this is to get AppleTalk to work
 	 * while implementing an ATioctl system call
 	 */
-#if NETAT
 	{
 		extern int appletalk_inited;
 
@@ -317,7 +590,7 @@ ioctl(p, uap, retval)
 #ifdef APPLETALK_DEBUG
 			kprintf("ioctl: special AppleTalk \n");
 #endif
-			error = (*fp->f_ops->fo_ioctl)(fp, uap->com, uap->data, p);
+			error = fo_ioctl(fp, uap->com, uap->data, p);
 			return(error);
 		}
 	}
@@ -374,7 +647,7 @@ ioctl(p, uap, retval)
 			fp->f_flag |= FNONBLOCK;
 		else
 			fp->f_flag &= ~FNONBLOCK;
-		error = (*fp->f_ops->fo_ioctl)(fp, FIONBIO, (caddr_t)&tmp, p);
+		error = fo_ioctl(fp, FIONBIO, (caddr_t)&tmp, p);
 		break;
 
 	case FIOASYNC:
@@ -382,7 +655,7 @@ ioctl(p, uap, retval)
 			fp->f_flag |= FASYNC;
 		else
 			fp->f_flag &= ~FASYNC;
-		error = (*fp->f_ops->fo_ioctl)(fp, FIOASYNC, (caddr_t)&tmp, p);
+		error = fo_ioctl(fp, FIOASYNC, (caddr_t)&tmp, p);
 		break;
 
 	case FIOSETOWN:
@@ -402,8 +675,7 @@ ioctl(p, uap, retval)
 			}
 			tmp = p1->p_pgrp->pg_id;
 		}
-		error = (*fp->f_ops->fo_ioctl)
-			(fp, (int)TIOCSPGRP, (caddr_t)&tmp, p);
+		error = fo_ioctl(fp, (int)TIOCSPGRP, (caddr_t)&tmp, p);
 		break;
 
 	case FIOGETOWN:
@@ -412,12 +684,12 @@ ioctl(p, uap, retval)
 			*(int *)data = ((struct socket *)fp->f_data)->so_pgid;
 			break;
 		}
-		error = (*fp->f_ops->fo_ioctl)(fp, TIOCGPGRP, data, p);
+		error = fo_ioctl(fp, TIOCGPGRP, data, p);
 		*(int *)data = -*(int *)data;
 		break;
 
 	default:
-		error = (*fp->f_ops->fo_ioctl)(fp, com, data, p);
+		error = fo_ioctl(fp, com, data, p);
 		/*
 		 * Copy any data to user, size was
 		 * already set and checked above.
@@ -431,14 +703,21 @@ ioctl(p, uap, retval)
 	return (error);
 }
 
-
 int	selwait, nselcoll;
 #define SEL_FIRSTPASS 1
 #define SEL_SECONDPASS 2
+extern int selcontinue(int error);
+extern int selprocess(int error, int sel_pass);
+static int selscan(struct proc *p, struct _select * sel,
+			int nfd, register_t *retval, int sel_pass);
+static int selcount(struct proc *p, u_int32_t *ibits, u_int32_t *obits,
+			int nfd, int * count, int * nfcount);
+extern uint64_t	tvtoabstime(struct timeval	*tvp);
 
 /*
  * Select system call.
  */
+#ifndef _SYS_SYSPROTO_H_
 struct select_args {
 	int nd;
 	u_int32_t *in;
@@ -446,20 +725,14 @@ struct select_args {
 	u_int32_t *ex;
 	struct timeval *tv;
 };
-
-extern int selcontinue(int error);
-extern int selprocess(int error, int sel_pass);
-static int selscan(	struct proc *p, struct _select * sel,
-					int nfd, register_t *retval, int sel_pass);
-static int selcount(struct proc *p, u_int32_t *ibits, u_int32_t *obits,
-					int nfd, int * count, int * nfcount);
-
+#endif
+int
 select(p, uap, retval)
 	register struct proc *p;
 	register struct select_args *uap;
 	register_t *retval;
 {
-	int s, error = 0, timo;
+	int error = 0;
 	u_int ni, nw, size;
 	thread_act_t th_act;
 	struct uthread	*uth;
@@ -534,20 +807,22 @@ select(p, uap, retval)
 #undef	getbits
 
 	if (uap->tv) {
-		error = copyin((caddr_t)uap->tv, (caddr_t)&sel->atv,
-			sizeof (sel->atv));
+		struct timeval atv;
+
+		error = copyin((caddr_t)uap->tv, (caddr_t)&atv, sizeof (atv));
 		if (error)
 			goto continuation;
-		if (itimerfix(&sel->atv)) {
+		if (itimerfix(&atv)) {
 			error = EINVAL;
 			goto continuation;
 		}
 
-		timeradd(&sel->atv, &time, &sel->atv);
-		timo = hzto(&sel->atv);
-	} else
-		timo = 0;
-	sel->poll = timo;
+		clock_absolutetime_interval_to_deadline(
+										tvtoabstime(&atv), &sel->abstime);
+	}
+	else
+		sel->abstime = 0;
+
 	sel->nfcount = 0;
 	if (error = selcount(p, sel->ibits, sel->obits, uap->nd, &count, &nfcount)) {
 			goto continuation;
@@ -580,19 +855,19 @@ select(p, uap, retval)
 	wait_queue_sub_init(uth->uu_wqsub, (SYNC_POLICY_FIFO | SYNC_POLICY_PREPOST));
 
 continuation:
-	selprocess(error, SEL_FIRSTPASS);
+	return selprocess(error, SEL_FIRSTPASS);
 }
 
 int
 selcontinue(int error)
 {
-	selprocess(error, SEL_SECONDPASS);
+	return selprocess(error, SEL_SECONDPASS);
 }
 
 int
 selprocess(error, sel_pass)
 {
-	int s, ncoll, timo;
+	int ncoll;
 	u_int ni, nw;
 	thread_act_t th_act;
 	struct uthread	*uth;
@@ -601,9 +876,10 @@ selprocess(error, sel_pass)
 	int *retval;
 	struct _select *sel;
 	int unwind = 1;
-	int prepost =0;
+	int prepost = 0;
 	int somewakeup = 0;
 	int doretry = 0;
+	wait_result_t wait_result;
 
 	p = current_proc();
 	th_act = current_act();
@@ -646,10 +922,12 @@ retry:
 		}
 	}
 
-	/* this should be timercmp(&time, &atv, >=) */
-	if (uap->tv && (time.tv_sec > sel->atv.tv_sec ||
-	    time.tv_sec == sel->atv.tv_sec && time.tv_usec >= sel->atv.tv_usec)) {
-		goto done;
+	if (uap->tv) {
+		uint64_t	now;
+
+		clock_get_uptime(&now);
+		if (now >= sel->abstime)
+			goto done;
 	}
 
 	if (doretry) {
@@ -663,9 +941,7 @@ retry:
 	 * To effect a poll, the timeout argument should be
 	 * non-nil, pointing to a zero-valued timeval structure.
 	 */
-	timo = sel->poll;
-
-	if (uap->tv && (timo == 0)) {
+	if (uap->tv && sel->abstime == 0) {
 		goto done;
 	}
 
@@ -682,9 +958,12 @@ retry:
 		panic("selprocess: 2nd pass assertwaiting");
 
 	/* Wait Queue Subordinate has waitqueue as first element */
-	if (wait_queue_assert_wait(uth->uu_wqsub, &selwait, THREAD_ABORTSAFE)) {
-		/* If it is true then there are no preposted events */
-        error = tsleep1((caddr_t)&selwait, PSOCK | PCATCH, "select", timo, selcontinue);
+	wait_result = wait_queue_assert_wait((wait_queue_t)uth->uu_wqsub,
+										 &selwait, THREAD_ABORTSAFE);
+	if (wait_result != THREAD_AWAKENED) {
+		/* there are no preposted events */
+        error = tsleep1(NULL, PSOCK | PCATCH,
+									"select", sel->abstime, selcontinue);
 	} else  {
 		prepost = 1;
 		error = 0;
@@ -723,12 +1002,7 @@ done:
 		putbits(ex, 2);
 #undef putbits
 	}
-
-#if defined (__i386__)
 	return(error);
-#else
-	unix_syscall_return(error);
-#endif
 }
 
 static int
@@ -795,7 +1069,7 @@ selscan(p, sel, nfd, retval, sel_pass)
 					else
 						wql_ptr = (wql+ nc * SIZEOF_WAITQUEUE_LINK);
 					if (fp->f_ops && (fp->f_type != DTYPE_SOCKET) 
-						&& (*fp->f_ops->fo_select)(fp, flag[msk], wql_ptr, p)) {
+						&& fo_select(fp, flag[msk], wql_ptr, p)) {
 						optr[fd/NFDBITS] |= (1 << (fd % NFDBITS));
 						n++;
 					}
@@ -820,6 +1094,7 @@ selscan(p, sel, nfd, retval, sel_pass)
 					fp = fdp->fd_ofiles[fd];
 					if (fp == NULL ||
 						(fdp->fd_ofileflags[fd] & UF_RESERVED)) {
+						thread_funnel_switch(NETWORK_FUNNEL, KERNEL_FUNNEL);
 						return(EBADF);
 					}
 					if (sel_pass == SEL_SECONDPASS)
@@ -827,7 +1102,7 @@ selscan(p, sel, nfd, retval, sel_pass)
 					else
 						wql_ptr = (wql+ nc * SIZEOF_WAITQUEUE_LINK);
 					if (fp->f_ops && (fp->f_type == DTYPE_SOCKET) &&
-						(*fp->f_ops->fo_select)(fp, flag[msk], wql_ptr, p)) {
+						fo_select(fp, flag[msk], wql_ptr, p)) {
 						optr[fd/NFDBITS] |= (1 << (fd % NFDBITS));
 						n++;
 					}
@@ -843,6 +1118,7 @@ selscan(p, sel, nfd, retval, sel_pass)
 }
 
 /*ARGSUSED*/
+int
 seltrue(dev, flag, p)
 	dev_t dev;
 	int flag;
@@ -997,6 +1273,7 @@ extern struct eventqelt *evprocdeque(struct proc *p, struct eventqelt *eqp);
  * called upon socket close. deque and free all events for
  * the socket
  */
+void
 evsofree(struct socket *sp)
 {
   struct eventqelt *eqp, *next;
@@ -1035,6 +1312,7 @@ evsofree(struct socket *sp)
  * enque this event if it's not already queued. wakeup
    the proc if we do queue this event to it.
  */
+void
 evprocenque(struct eventqelt *eqp)
 {
   struct proc *p;
@@ -1058,6 +1336,7 @@ evprocenque(struct eventqelt *eqp)
  * given either a sockbuf or a socket run down the
  * event list and queue ready events found
  */
+void
 postevent(struct socket *sp, struct sockbuf *sb, int event)
 {
   int mask;
@@ -1317,66 +1596,69 @@ struct evwait_args {
  */
 int
 waitevent(p, uap, retval)
-     struct proc *p;
-     struct evwait_args *uap;
-     register_t *retval;
+	struct proc *p;
+	struct evwait_args *uap;
+	register_t *retval;
 {
-  int error = 0;
-  struct eventqelt *eqp;
-  int timo;
-  struct timeval atv;
-  int s;
+	int error = 0;
+	struct eventqelt *eqp;
+	uint64_t abstime, interval;
 
 	if (uap->tv) {
-		error = copyin((caddr_t)uap->tv, (caddr_t)&atv,
-			sizeof (atv));
+		struct timeval atv;
+
+		error = copyin((caddr_t)uap->tv, (caddr_t)&atv, sizeof (atv));
 		if (error)
-		        return(error);
+			return(error);
 		if (itimerfix(&atv)) {
 			error = EINVAL;
 			return(error);
 		}
-		s = splhigh();
-		timeradd(&atv, &time, &atv);
-		timo = hzto(&atv);
-		splx(s);
-	} else
-		timo = 0;
 
-  KERNEL_DEBUG(DBG_MISC_WAIT|DBG_FUNC_START, 0,0,0,0,0);
+		interval = tvtoabstime(&atv);
+	}
+	else
+		abstime = interval = 0;
+
+	KERNEL_DEBUG(DBG_MISC_WAIT|DBG_FUNC_START, 0,0,0,0,0);
 
 retry:
-  s = splhigh();
-  if ((eqp = evprocdeque(p,NULL)) != NULL) {
-    splx(s);
-    error = copyout((caddr_t)&eqp->ee_req, (caddr_t)uap->u_req,
-		    sizeof(struct eventreq));
-    KERNEL_DEBUG(DBG_MISC_WAIT|DBG_FUNC_END, error,
-		 eqp->ee_req.er_handle,eqp->ee_req.er_eventbits,eqp,0);
-    return(error);
-  } else {
-    if (uap->tv && (timo == 0)) {
-        splx(s);
-        *retval = 1;  // poll failed
-		KERNEL_DEBUG(DBG_MISC_WAIT|DBG_FUNC_END, error,0,0,0,0);
-	return(error);
-    }
+	if ((eqp = evprocdeque(p,NULL)) != NULL) {
+		error = copyout((caddr_t)&eqp->ee_req,
+								(caddr_t)uap->u_req, sizeof(struct eventreq));
+		KERNEL_DEBUG(DBG_MISC_WAIT|DBG_FUNC_END, error,
+						eqp->ee_req.er_handle,eqp->ee_req.er_eventbits,eqp,0);
 
-    KERNEL_DEBUG(DBG_MISC_WAIT, 1,&p->p_evlist,0,0,0);
-    error = tsleep(&p->p_evlist, PSOCK | PCATCH, "waitevent", timo);
-    KERNEL_DEBUG(DBG_MISC_WAIT, 2,&p->p_evlist,0,0,0);
-    splx(s);
-    if (error == 0)
-      goto retry;
-    if (error == ERESTART)
-      error = EINTR;
-    if (error == EWOULDBLOCK) {
-      *retval = 1;
-      error = 0;
-    }
-  }
-  KERNEL_DEBUG(DBG_MISC_WAIT|DBG_FUNC_END, 0,0,0,0,0);
-  return(error);
+		return (error);
+	}
+	else {
+		if (uap->tv && interval == 0) {
+			*retval = 1;  // poll failed
+			KERNEL_DEBUG(DBG_MISC_WAIT|DBG_FUNC_END, error,0,0,0,0);
+
+			return (error);
+		}
+
+		if (interval != 0)
+			clock_absolutetime_interval_to_deadline(interval, &abstime)
+
+		KERNEL_DEBUG(DBG_MISC_WAIT, 1,&p->p_evlist,0,0,0);
+		error = tsleep1(&p->p_evlist, PSOCK | PCATCH,
+									"waitevent", abstime, (int (*)(int))0);
+		KERNEL_DEBUG(DBG_MISC_WAIT, 2,&p->p_evlist,0,0,0);
+		if (error == 0)
+			goto retry;
+		if (error == ERESTART)
+			error = EINTR;
+		if (error == EWOULDBLOCK) {
+			*retval = 1;
+			error = 0;
+		}
+	}
+
+	KERNEL_DEBUG(DBG_MISC_WAIT|DBG_FUNC_END, 0,0,0,0,0);
+
+	return (error);
 }
 
 struct modwatch_args {

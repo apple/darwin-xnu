@@ -50,7 +50,8 @@ static void getCStringForObject (OSObject * inObj, char * outStr);
 
 OSDefineMetaClassAndStructors(IOPlatformExpert, IOService)
 
-OSMetaClassDefineReservedUnused(IOPlatformExpert,  0);
+OSMetaClassDefineReservedUsed(IOPlatformExpert,  0);
+
 OSMetaClassDefineReservedUnused(IOPlatformExpert,  1);
 OSMetaClassDefineReservedUnused(IOPlatformExpert,  2);
 OSMetaClassDefineReservedUnused(IOPlatformExpert,  3);
@@ -211,6 +212,8 @@ int (*PE_halt_restart)(unsigned int type) = 0;
 
 int IOPlatformExpert::haltRestart(unsigned int type)
 {
+  if (type == kPEHangCPU) while (1);
+  
   if (PE_halt_restart) return (*PE_halt_restart)(type);
   else return -1;
 }
@@ -264,8 +267,9 @@ IOReturn IOPlatformExpert::registerInterruptController(OSSymbol *name, IOInterru
   
   gIOInterruptControllers->setObject(name, interruptController);
   
-  thread_wakeup(gIOInterruptControllers);
-  
+  IOLockWakeup(gIOInterruptControllersLock,
+		gIOInterruptControllers, /* one-thread */ false);
+
   IOLockUnlock(gIOInterruptControllersLock);
   
   return kIOReturnSuccess;
@@ -275,20 +279,19 @@ IOInterruptController *IOPlatformExpert::lookUpInterruptController(OSSymbol *nam
 {
   OSObject              *object;
   
+  IOLockLock(gIOInterruptControllersLock);
   while (1) {
-    IOLockLock(gIOInterruptControllersLock);
     
     object = gIOInterruptControllers->getObject(name);
     
-    if (object == 0) assert_wait(gIOInterruptControllers, THREAD_UNINT);
+    if (object != 0)
+	break;
     
-    IOLockUnlock(gIOInterruptControllersLock);
-    
-    if (object != 0) break;
-    
-    thread_block(0);
+    IOLockSleep(gIOInterruptControllersLock,
+		gIOInterruptControllers, THREAD_UNINT);
   }
   
+  IOLockUnlock(gIOInterruptControllersLock);
   return OSDynamicCast(IOInterruptController, object);
 }
 
@@ -697,32 +700,41 @@ int PEHaltRestart(unsigned int type)
   AbsoluteTime      deadline;
   thread_call_t     shutdown_hang;
   
-  /* Notify IOKit PM clients of shutdown/restart
-     Clients subscribe to this message with a call to
-     IOService::registerInterest()
-  */
-  
-  /* Spawn a thread that will panic in 30 seconds. 
-     If all goes well the machine will be off by the time
-     the timer expires.
-   */
-  shutdown_hang = thread_call_allocate( &IOPMPanicOnShutdownHang, (thread_call_param_t) type);
-  clock_interval_to_deadline( 30, kSecondScale, &deadline );
-  thread_call_enter1_delayed( shutdown_hang, 0, deadline );
-  
-  noWaitForResponses = pmRootDomain->tellChangeDown2(type); 
-  /* This notification should have few clients who all do 
-     their work synchronously.
-           
-     In this "shutdown notification" context we don't give
-     drivers the option of working asynchronously and responding 
-     later. PM internals make it very hard to wait for asynchronous
-     replies. In fact, it's a bad idea to even be calling
-     tellChangeDown2 from here at all.
-   */ 
+  if(type == kPEHaltCPU || type == kPERestartCPU)
+  {
+    /* Notify IOKit PM clients of shutdown/restart
+       Clients subscribe to this message with a call to
+       IOService::registerInterest()
+    */
+    
+    /* Spawn a thread that will panic in 30 seconds. 
+       If all goes well the machine will be off by the time
+       the timer expires.
+     */
+    shutdown_hang = thread_call_allocate( &IOPMPanicOnShutdownHang, (thread_call_param_t) type);
+    clock_interval_to_deadline( 30, kSecondScale, &deadline );
+    thread_call_enter1_delayed( shutdown_hang, 0, deadline );
+    
+    noWaitForResponses = pmRootDomain->tellChangeDown2(type); 
+    /* This notification should have few clients who all do 
+       their work synchronously.
+             
+       In this "shutdown notification" context we don't give
+       drivers the option of working asynchronously and responding 
+       later. PM internals make it very hard to wait for asynchronous
+       replies. In fact, it's a bad idea to even be calling
+       tellChangeDown2 from here at all.
+     */
+   }
 
   if (gIOPlatform) return gIOPlatform->haltRestart(type);
   else return -1;
+}
+
+UInt32 PESavePanicInfo(UInt8 *buffer, UInt32 length)
+{
+  if (gIOPlatform != 0) return gIOPlatform->savePanicInfo(buffer, length);
+  else return 0;
 }
 
 long PEGetGMTTimeOfDay(void)
@@ -767,6 +779,10 @@ IOReturn IOPlatformExpert::callPlatformFunction(const OSSymbol *functionName,
 				       param1, param2, param3, param4);
 }
 
+IOByteCount IOPlatformExpert::savePanicInfo(UInt8 *buffer, IOByteCount length)
+{
+  return 0;
+}
 
 /* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
 
@@ -1019,6 +1035,16 @@ IOReturn IODTPlatformExpert::writeNVRAMPartition(const OSSymbol * partitionID,
   else return kIOReturnNotReady;
 }
 
+IOByteCount IODTPlatformExpert::savePanicInfo(UInt8 *buffer, IOByteCount length)
+{
+  IOByteCount lengthSaved = 0;
+  
+  if (dtNVRAM) lengthSaved = dtNVRAM->savePanicInfo(buffer, length);
+  
+  if (lengthSaved == 0) lengthSaved = super::savePanicInfo(buffer, length);
+  
+  return lengthSaved;
+}
 
 /* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
 

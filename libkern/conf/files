@@ -20,6 +20,7 @@ libkern/c++/OSIterator.cpp				optional libkerncpp
 libkern/c++/OSNumber.cpp				optional libkerncpp
 libkern/c++/OSOrderedSet.cpp				optional libkerncpp
 libkern/c++/OSRuntime.cpp				optional libkerncpp
+libkern/c++/OSRuntimeSupport.c				optional libkerncpp
 libkern/c++/OSSerialize.cpp				optional libkerncpp
 libkern/c++/OSSet.cpp					optional libkerncpp
 libkern/c++/OSString.cpp				optional libkerncpp

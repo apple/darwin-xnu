@@ -19,7 +19,7 @@
  * 
  * @APPLE_LICENSE_HEADER_END@
  */
-/*	$KAME: if_faith.c,v 1.11 2000/02/22 14:01:46 itojun Exp $	*/
+/*	$KAME: if_faith.c,v 1.21 2001/02/20 07:59:26 itojun Exp $	*/
 
 /*
  * Copyright (c) 1982, 1986, 1993
@@ -52,6 +52,8 @@
  * LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
  * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
  * SUCH DAMAGE.
+ *
+ * $FreeBSD: src/sys/net/if_faith.c,v 1.3.2.2 2001/07/05 14:46:25 ume Exp $
  */
 /*
  * derived from
@@ -62,9 +64,6 @@
 /*
  * Loopback interface driver for protocol testing and timing.
  */
-#if defined(__FreeBSD__) && __FreeBSD__ >= 3
-#include "opt_inet.h"
-#endif
 
 #include "faith.h"
 #if NFAITH > 0
@@ -75,21 +74,16 @@
 #include <sys/mbuf.h>
 #include <sys/socket.h>
 #include <sys/errno.h>
-#if defined(__FreeBSD__) && __FreeBSD__ >= 3 || defined(__APPLE__)
 #include <sys/sockio.h>
-#else
-#include <sys/ioctl.h>
-#endif
 #include <sys/time.h>
-#if defined(__bsdi__) || defined(__NetBSD__)
-#include <machine/cpu.h>
-#endif
+#include <sys/queue.h>
 
 #include <net/if.h>
 #include <net/if_types.h>
 #include <net/netisr.h>
 #include <net/route.h>
 #include <net/bpf.h>
+#include <net/if_faith.h>
 
 #if	INET
 #include <netinet/in.h>
@@ -104,30 +98,23 @@
 #endif
 #include <netinet6/in6_var.h>
 #include <netinet/ip6.h>
+#include <netinet6/ip6_var.h>
 #endif
 
 #include <net/dlil.h>
-#include "faith.h"
-#include "bpfilter.h"
+#include "bpf.h"
 
 #include <net/net_osdep.h>
 
-#if defined(__FreeBSD__) && __FreeBSD__ < 3
-static int faithioctl __P((struct ifnet *, int, caddr_t));
-#else
-static int faithioctl __P((struct ifnet *, u_long, caddr_t));
-#endif
+static int faithioctl __P((struct ifnet *, u_long, void*));
 int faith_pre_output __P((struct ifnet *, register struct mbuf **, struct sockaddr *,
-	register struct rtentry *, char *, char *, u_long));
+	caddr_t, char *, char *, u_long));
 static void faithrtrequest __P((int, struct rtentry *, struct sockaddr *));
 
-#if defined(__FreeBSD__) || defined (__APPLE__)
-void faithattach __P((void *));
-#else
-void faithattach __P((int));
+void faithattach __P((void));
+#ifndef __APPLE__
+PSEUDO_SET(faithattach, if_faith);
 #endif
-
-#define HAVE_OLD_BPF 1
 
 static struct ifnet faithif[NFAITH];
 static struct if_proto *faith_array[NFAITH];
@@ -192,6 +179,7 @@ void faith_reg_if_mods()
 {   
      struct dlil_ifmod_reg_str  faith_ifmod;
 
+     bzero(&faith_ifmod, sizeof(faith_ifmod));
      faith_ifmod.add_if = faith_add_if;
      faith_ifmod.del_if = faith_del_if;
      faith_ifmod.add_proto = faith_add_proto;
@@ -239,7 +227,7 @@ u_long  faith_attach_inet(struct ifnet *ifp)
     reg.pre_output       = faith_pre_output;
     reg.event            = 0;
     reg.offer            = 0;
-    reg.ioctl            = faithioctl;
+    reg.ioctl            = 0;
     reg.default_proto    = 0;
     reg.protocol_family  = PF_INET;
 
@@ -252,8 +240,7 @@ u_long  faith_attach_inet(struct ifnet *ifp)
 }
 
 void
-faithattach(faith)
-	void *faith;
+faithattach(void)
 {
 	struct ifnet *ifp;
 	int i;
@@ -267,8 +254,8 @@ faithattach(faith)
 		ifp->if_unit = i;
 		ifp->if_family = APPLE_IF_FAM_FAITH;
 		ifp->if_mtu = FAITHMTU;
-		/* Change to BROADCAST experimentaly to announce its prefix. */
-		ifp->if_flags = /* IFF_LOOPBACK */ IFF_BROADCAST | IFF_MULTICAST;
+		/* LOOPBACK commented out to announce IPv6 routes to faith */
+		ifp->if_flags = /* IFF_LOOPBACK | */ IFF_MULTICAST;
 		ifp->if_ioctl = faithioctl;
 		ifp->if_output = NULL;
 		ifp->if_type = IFT_FAITH;
@@ -286,11 +273,11 @@ faithattach(faith)
 }
 
 int
-faith_pre_output(ifp, m0, dst, rt, frame_type, dst_addr, dl_tag)
+faith_pre_output(ifp, m0, dst, route_entry, frame_type, dst_addr, dl_tag)
 	struct ifnet *ifp;
 	register struct mbuf **m0;
 	struct sockaddr *dst;
-	register struct rtentry *rt;
+	caddr_t			 route_entry;
 	char		     *frame_type;
 	char		     *dst_addr;
 	u_long		     dl_tag;
@@ -298,6 +285,7 @@ faith_pre_output(ifp, m0, dst, rt, frame_type, dst_addr, dl_tag)
 	int s, isr;
 	register struct ifqueue *ifq = 0;
 	register struct mbuf *m = *m0;
+	struct rtentry *rt = (struct rtentry*)route_entry;
 
 	if ((m->m_flags & M_PKTHDR) == 0)
 		panic("faithoutput no HDR");
@@ -319,13 +307,13 @@ faith_pre_output(ifp, m0, dst, rt, frame_type, dst_addr, dl_tag)
 		 * try to free it or keep a pointer a to it).
 		 */
 		struct mbuf m0;
-		u_int af = dst->sa_family;
+		u_int32_t af = dst->sa_family;
 
 		m0.m_next = m;
 		m0.m_len = 4;
 		m0.m_data = (char *)&af;
 
-#if HAVE_OLD_BPF
+#ifdef HAVE_OLD_BPF
 		bpf_mtap(ifp, &m0);
 #else
 		bpf_mtap(ifp->if_bpf, &m0);
@@ -334,10 +322,8 @@ faith_pre_output(ifp, m0, dst, rt, frame_type, dst_addr, dl_tag)
 #endif
 
 	if (rt && rt->rt_flags & (RTF_REJECT|RTF_BLACKHOLE)) {
-		m_freem(m);
-		return (EJUSTRETURN);
-//		return (rt->rt_flags & RTF_BLACKHOLE ? 0 :
-//		        rt->rt_flags & RTF_HOST ? EHOSTUNREACH : ENETUNREACH);
+		return (rt->rt_flags & RTF_BLACKHOLE ? 0 :
+		        rt->rt_flags & RTF_HOST ? EHOSTUNREACH : ENETUNREACH);
 	}
 	ifp->if_opackets++;
 	ifp->if_obytes += m->m_pkthdr.len;
@@ -355,8 +341,6 @@ faith_pre_output(ifp, m0, dst, rt, frame_type, dst_addr, dl_tag)
 		break;
 #endif
 	default:
-		kprintf("faith_pre_output: m=%x family is unknown...(0x%x\n", m, dst->sa_family);
-		m_freem(m);
 		return EAFNOSUPPORT;
 	}
 
@@ -366,9 +350,8 @@ faith_pre_output(ifp, m0, dst, rt, frame_type, dst_addr, dl_tag)
 	s = splimp();
 	if (IF_QFULL(ifq)) {
 		IF_DROP(ifq);
-		m_freem(m);
 		splx(s);
-		return (EJUSTRETURN);
+		return (ENOBUFS);
 	}
 	IF_ENQUEUE(ifq, m);
 	schednetisr(isr);
@@ -403,17 +386,13 @@ faithrtrequest(cmd, rt, sa)
 /* ARGSUSED */
 static int
 faithioctl(ifp, cmd, data)
-	register struct ifnet *ifp;
-#if defined(__FreeBSD__) && __FreeBSD__ < 3
-	int cmd;
-#else
+	struct ifnet *ifp;
 	u_long cmd;
-#endif
-	caddr_t data;
+	void* data;
 {
-	register struct ifaddr *ifa;
-	register struct ifreq *ifr = (struct ifreq *)data;
-	register int error = 0;
+	struct ifaddr *ifa;
+	struct ifreq *ifr = (struct ifreq *)data;
+	int error = 0;
 
 	switch (cmd) {
 
@@ -449,11 +428,9 @@ faithioctl(ifp, cmd, data)
 		break;
 
 #ifdef SIOCSIFMTU
-#ifndef __OpenBSD__
 	case SIOCSIFMTU:
 		ifp->if_mtu = ifr->ifr_mtu;
 		break;
-#endif
 #endif
 
 	case SIOCSIFFLAGS:
@@ -464,4 +441,36 @@ faithioctl(ifp, cmd, data)
 	}
 	return (error);
 }
+
+#if INET6
+/*
+ * XXX could be slow
+ * XXX could be layer violation to call sys/net from sys/netinet6
+ */
+int
+faithprefix(in6)
+	struct in6_addr *in6;
+{
+	struct rtentry *rt;
+	struct sockaddr_in6 sin6;
+	int ret;
+
+	if (ip6_keepfaith == 0)
+		return 0;
+
+	bzero(&sin6, sizeof(sin6));
+	sin6.sin6_family = AF_INET6;
+	sin6.sin6_len = sizeof(struct sockaddr_in6);
+	sin6.sin6_addr = *in6;
+	rt = rtalloc1((struct sockaddr *)&sin6, 0, 0UL);
+	if (rt && rt->rt_ifp && rt->rt_ifp->if_type == IFT_FAITH &&
+	    (rt->rt_ifp->if_flags & IFF_UP) != 0)
+		ret = 1;
+	else
+		ret = 0;
+	if (rt)
+		rtfree(rt);
+	return ret;
+}
+#endif
 #endif /* NFAITH > 0 */

@@ -52,8 +52,10 @@
 
 #ifndef _NETINET_IP_ENCAP_H_
 #define _NETINET_IP_ENCAP_H_
+#include <sys/appleapiopts.h>
 
-#if KERNEL
+#ifdef KERNEL
+#ifdef __APPLE_API_PRIVATE
 
 struct encaptab {
 	LIST_ENTRY(encaptab) chain;
@@ -69,8 +71,8 @@ struct encaptab {
 };
 
 void	encap_init __P((void));
-void	encap4_input __P((struct mbuf *, int, int));
-int	encap6_input __P((struct mbuf **, int *, int));
+void	encap4_input __P((struct mbuf *, int));
+int	encap6_input __P((struct mbuf **, int *));
 const struct encaptab *encap_attach __P((int, int, const struct sockaddr *,
 	const struct sockaddr *, const struct sockaddr *,
 	const struct sockaddr *, const struct protosw *, void *));
@@ -79,6 +81,7 @@ const struct encaptab *encap_attach_func __P((int, int,
 	const struct protosw *, void *));
 int	encap_detach __P((const struct encaptab *));
 void	*encap_getarg __P((struct mbuf *));
+#endif /* __APPLE_API_PRIVATE */
 #endif
 
 #endif /*_NETINET_IP_ENCAP_H_*/

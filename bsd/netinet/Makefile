@@ -20,14 +20,17 @@ EXPINC_SUBDIRS_PPC = \
 EXPINC_SUBDIRS_I386 = \
 
 DATAFILES = \
-	bootp.h icmp6.h icmp_var.h if_atm.h if_ether.h if_fddi.h \
-	igmp.h igmp_var.h in.h in_gif.h in_hostcache.h in_pcb.h \
+	bootp.h icmp6.h icmp_var.h if_ether.h \
+	igmp.h igmp_var.h in.h in_gif.h in_pcb.h \
 	in_systm.h in_var.h ip.h ip6.h ip_compat.h \
-	ip_dummynet.h ip_ecn.h ip_encap.h ip_flow.h \
+	ip_dummynet.h ip_ecn.h ip_encap.h \
 	ip_fw.h ip_icmp.h ip_mroute.h \
-	ip_var.h ipl.h tcp.h \
+	ip_var.h tcp.h \
 	tcp_debug.h tcp_fsm.h tcp_seq.h tcp_timer.h tcp_var.h \
 	tcpip.h udp.h udp_var.h
+
+PRIVATE_DATAFILES = \
+	if_fddi.h if_atm.h ip_flow.h
 
 INSTALL_MI_LIST	= ${DATAFILES}
 
@@ -37,6 +40,9 @@ EXPORT_MI_LIST	= ${DATAFILES}
 
 EXPORT_MI_DIR = netinet
 
+INSTALL_MI_LCL_LIST = ${DATAFILES} ${PRIVATE_DATAFILES}
+
+INSTALL_MI_LCL_KERN_LIST = ${PRIVATE_DATAFILES}
 
 include $(MakeInc_rule)
 include $(MakeInc_dir)

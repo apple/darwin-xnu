@@ -115,9 +115,20 @@
 #define	SIOCGIFGENERIC	_IOWR('i', 58, struct ifreq)	/* generic IF get op */
 #define SIOCRSLVMULTI   _IOWR('i', 59, struct rslvmulti_req)
 
-#define SIOCSIFPHYADDR   _IOW('i', 70, struct ifaliasreq) /* set gif addres */
-#define	SIOCGIFPSRCADDR	_IOWR('i', 71, struct ifreq)	/* get gif psrc addr */
-#define	SIOCGIFPDSTADDR	_IOWR('i', 72, struct ifreq)	/* get gif pdst addr */
+#define	SIOCSIFLLADDR	_IOW('i', 60, struct ifreq)	/* set link level addr */
+#define	SIOCGIFSTATUS	_IOWR('i', 61, struct ifstat)	/* get IF status */
+#define	SIOCSIFPHYADDR   _IOW('i', 62, struct ifaliasreq) /* set gif addres */
+#define	SIOCGIFPSRCADDR	_IOWR('i', 63, struct ifreq)	/* get gif psrc addr */
+#define	SIOCGIFPDSTADDR	_IOWR('i', 64, struct ifreq)	/* get gif pdst addr */
+#define	SIOCDIFPHYADDR	 _IOW('i', 65, struct ifreq)	/* delete gif addrs */
+#define	SIOCSLIFPHYADDR	 _IOW('i', 66, struct if_laddrreq) /* set gif addrs */
+#define	SIOCGLIFPHYADDR	_IOWR('i', 67, struct if_laddrreq) /* get gif addrs */
+
+
+
+
+
+
 
 #ifdef KERNEL_PRIVATE
 /* 

@@ -52,16 +52,13 @@
  * SUCH DAMAGE.
  *
  *	@(#)icmp_var.h	8.1 (Berkeley) 6/10/93
+ * $FreeBSD: src/sys/netinet/icmp_var.h,v 1.15.2.1 2001/02/24 21:35:18 bmilekic Exp $
  */
 
 #ifndef _NETINET_ICMP_VAR_H_
 #define _NETINET_ICMP_VAR_H_
-
-#ifdef KERNEL
-#if ISFB31
-#include "opt_icmp_bandlim.h"		/* for ICMP_BANDLIM     */
-#endif
-#endif
+#include <sys/appleapiopts.h>
+#ifdef __APPLE_API_UNSTABLE
 
 /*
  * Variables related to this implementation
@@ -98,12 +95,21 @@ struct	icmpstat {
 	{ "stats", CTLTYPE_STRUCT }, \
 	{ "icmplim", CTLTYPE_INT }, \
 }
+#endif /* __APPLE_API_UNSTABLE */
 
 #ifdef KERNEL
+#ifdef __APPLE_API_PRIVATE
 SYSCTL_DECL(_net_inet_icmp);
 #ifdef ICMP_BANDLIM
 extern int badport_bandlim __P((int));
 #endif
+#define BANDLIM_UNLIMITED -1
+#define BANDLIM_ICMP_UNREACH 0
+#define BANDLIM_ICMP_ECHO 1
+#define BANDLIM_ICMP_TSTAMP 2
+#define BANDLIM_RST_CLOSEDPORT 3 /* No connection, and no listeners */
+#define BANDLIM_RST_OPENPORT 4   /* No connection, listener */
+#define BANDLIM_MAX 4
+#endif /* __APPLE_API_PRIVATE */
 #endif
-
 #endif

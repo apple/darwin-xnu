@@ -73,23 +73,6 @@
 #endif
 #include <netinet/if_ether.h>
 
-#if NS
-#include <netns/ns.h>
-#include <netns/ns_if.h>
-#endif
-
-#if ISO
-#include <netiso/argo_debug.h>
-#include <netiso/iso.h>
-#include <netiso/iso_var.h>
-#include <netiso/iso_snpac.h>
-#endif
-
-#if LLC
-#include <netccitt/dll.h>
-#include <netccitt/llc_var.h>
-#endif
-
 #include <machine/spl.h>
 
 int ndrv_do_detach(struct ndrv_cb *);
@@ -100,6 +83,10 @@ int ndrv_setspec(struct ndrv_cb *np, struct sockopt *sopt);
 int ndrv_delspec(struct ndrv_cb *);
 int ndrv_to_dlil_demux(struct ndrv_demux_desc* ndrv, struct dlil_demux_desc* dlil);
 void ndrv_handle_ifp_detach(u_long family, short unit);
+static int ndrv_do_add_multicast(struct ndrv_cb *np, struct sockopt *sopt);
+static int ndrv_do_remove_multicast(struct ndrv_cb *np, struct sockopt *sopt);
+static struct ndrv_multiaddr* ndrv_have_multicast(struct ndrv_cb *np, struct sockaddr* addr);
+static void ndrv_remove_all_multicast(struct ndrv_cb *np);
 
 unsigned long  ndrv_sendspace = NDRVSNDQ;
 unsigned long  ndrv_recvspace = NDRVRCVQ;
@@ -380,8 +367,7 @@ ndrv_bind(struct socket *so, struct sockaddr *nam, struct proc *p)
     
     if ((dlil_find_dltag(ifp->if_family, ifp->if_unit,
                          PF_NDRV, &np->nd_send_tag) != 0) &&
-        (ifp->if_family != APPLE_IF_FAM_PPP))
-    {
+        (ifp->if_family != APPLE_IF_FAM_PPP)) {
         /* NDRV isn't registered on this interface, lets change that */
         struct dlil_proto_reg_str	ndrv_proto;
         int	result = 0;
@@ -576,6 +562,12 @@ ndrv_ctloutput(struct socket *so, struct sockopt *sopt)
         case NDRV_SETDMXSPEC: /* Set protocol spec */
             error = ndrv_setspec(np, sopt);
             break;
+        case NDRV_ADDMULTICAST:
+            error = ndrv_do_add_multicast(np, sopt);
+            break;
+        case NDRV_DELMULTICAST:
+            error = ndrv_do_remove_multicast(np, sopt);
+            break;
         default:
             error = ENOTSUP;
     }
@@ -610,6 +602,8 @@ ndrv_do_detach(register struct ndrv_cb *np)
 #if NDRV_DEBUG
 	kprintf("NDRV detach: %x, %x\n", so, np);
 #endif
+    ndrv_remove_all_multicast(np);
+    
     if (np->nd_tag != 0)
     {
         error = dlil_detach_protocol(np->nd_tag);
@@ -934,6 +928,9 @@ ndrv_handle_ifp_detach(u_long family, short unit)
             if (np->nd_tag != 0)
                 ndrv_delspec(np);
             
+            /* Delete the multicasts first */
+            ndrv_remove_all_multicast(np);
+            
             /* Disavow all knowledge of the ifp */
             np->nd_if = NULL;
             np->nd_unit = 0;
@@ -950,6 +947,161 @@ ndrv_handle_ifp_detach(u_long family, short unit)
     /* Unregister our protocol */
     if (dlil_find_dltag(family, unit, PF_NDRV, &dl_tag) == 0) {
         dlil_detach_protocol(dl_tag);
+    }
+}
+
+static int
+ndrv_do_add_multicast(struct ndrv_cb *np, struct sockopt *sopt)
+{
+    struct ndrv_multiaddr*	ndrv_multi;
+    int						result;
+    
+    if (sopt->sopt_val == NULL || sopt->sopt_valsize < 2 ||
+        sopt->sopt_level != SOL_NDRVPROTO)
+        return EINVAL;
+    if (np->nd_if == NULL)
+        return ENXIO;
+    
+    // Allocate storage
+    MALLOC(ndrv_multi, struct ndrv_multiaddr*, sizeof(struct ndrv_multiaddr) -
+        sizeof(struct sockaddr) + sopt->sopt_valsize, M_IFADDR, M_WAITOK);
+    if (ndrv_multi == NULL)
+        return ENOMEM;
+    
+    // Copy in the address
+    result = copyin(sopt->sopt_val, &ndrv_multi->addr, sopt->sopt_valsize);
+    
+    // Validate the sockaddr
+    if (result == 0 && sopt->sopt_valsize != ndrv_multi->addr.sa_len)
+        result = EINVAL;
+    
+    if (result == 0 && ndrv_have_multicast(np, &ndrv_multi->addr))
+        result = EEXIST;
+    
+    if (result == 0)
+    {
+        // Try adding the multicast
+        result = if_addmulti(np->nd_if, &ndrv_multi->addr, NULL);
+    }
+    
+    if (result == 0)
+    {
+        // Add to our linked list
+        ndrv_multi->next = np->nd_multiaddrs;
+        np->nd_multiaddrs = ndrv_multi;
+    }
+    else
+    {
+        // Free up the memory, something went wrong
+        FREE(ndrv_multi, M_IFADDR);
+    }
+    
+    return result;
+}
+
+static int
+ndrv_do_remove_multicast(struct ndrv_cb *np, struct sockopt *sopt)
+{
+    struct sockaddr*		multi_addr;
+    struct ndrv_multiaddr*	ndrv_entry = NULL;
+    int					result;
+    
+    if (sopt->sopt_val == NULL || sopt->sopt_valsize < 2 ||
+        sopt->sopt_level != SOL_NDRVPROTO)
+        return EINVAL;
+    if (np->nd_if == NULL)
+        return ENXIO;
+    
+    // Allocate storage
+    MALLOC(multi_addr, struct sockaddr*, sopt->sopt_valsize,
+            M_TEMP, M_WAITOK);
+    if (multi_addr == NULL)
+        return ENOMEM;
+    
+    // Copy in the address
+    result = copyin(sopt->sopt_val, multi_addr, sopt->sopt_valsize);
+    
+    // Validate the sockaddr
+    if (result == 0 && sopt->sopt_valsize != multi_addr->sa_len)
+        result = EINVAL;
+    
+    if (result == 0)
+    {
+        /* Find the old entry */
+        ndrv_entry = ndrv_have_multicast(np, multi_addr);
+        
+        if (ndrv_entry == NULL)
+            result = ENOENT;
+    }
+    
+    if (result == 0)
+    {
+        // Try deleting the multicast
+        result = if_delmulti(np->nd_if, &ndrv_entry->addr);
+    }
+    
+    if (result == 0)
+    {
+        // Remove from our linked list
+        struct ndrv_multiaddr*	cur = np->nd_multiaddrs;
+        
+        if (cur == ndrv_entry)
+        {
+            np->nd_multiaddrs = cur->next;
+        }
+        else
+        {
+            for (cur = cur->next; cur != NULL; cur = cur->next)
+            {
+                if (cur->next == ndrv_entry)
+                {
+                    cur->next = cur->next->next;
+                    break;
+                }
+            }
+        }
+        
+        // Free the memory
+        FREE(ndrv_entry, M_IFADDR);
+    }
+    FREE(multi_addr, M_TEMP);
+    
+    return result;
+}
+
+static struct ndrv_multiaddr*
+ndrv_have_multicast(struct ndrv_cb *np, struct sockaddr* inAddr)
+{
+    struct ndrv_multiaddr*	cur;
+    for (cur = np->nd_multiaddrs; cur != NULL; cur = cur->next)
+    {
+        
+        if ((inAddr->sa_len == cur->addr.sa_len) &&
+            (bcmp(&cur->addr, inAddr, inAddr->sa_len) == 0))
+        {
+            // Found a match
+            return cur;
+        }
+    }
+    
+    return NULL;
+}
+
+static void
+ndrv_remove_all_multicast(struct ndrv_cb* np)
+{
+    struct ndrv_multiaddr*	cur;
+    
+    if (np->nd_if != NULL)
+    {
+        while (np->nd_multiaddrs != NULL)
+        {
+            cur = np->nd_multiaddrs;
+            np->nd_multiaddrs = cur->next;
+            
+            if_delmulti(np->nd_if, &cur->addr);
+            FREE(cur, M_IFADDR);
+        }
     }
 }
 

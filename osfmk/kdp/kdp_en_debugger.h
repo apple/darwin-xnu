@@ -19,15 +19,9 @@
  * 
  * @APPLE_LICENSE_HEADER_END@
  */
+
 /*
- * Copyright (c) 1997 Apple Computer, Inc.
- *
  * Ethernet debugger header file
- *
- * HISTORY
- *
- * 29 May 97	Dieter Siegmund at Apple.
- *	Created.
  */
 
 typedef void (*kdp_send_t)(void * pkt, unsigned int pkt_len);
@@ -35,3 +29,7 @@ typedef void (*kdp_receive_t)(void * pkt, unsigned int * pkt_len,
 	      unsigned int timeout);
 void 
 kdp_register_send_receive(kdp_send_t send, kdp_receive_t receive);
+
+void
+kdp_unregister_send_receive(kdp_send_t send, kdp_receive_t receive);
+

@@ -29,6 +29,7 @@
 
 #ifndef DLIL_H
 #define DLIL_H
+#include <sys/appleapiopts.h>
 
 #if __STDC__
 
@@ -39,7 +40,7 @@ struct ether_header;
 #endif
 
 
-
+#ifdef __APPLE_API_UNSTABLE
 #define DLIL_LAST_FILTER   -1
 #define DLIL_NULL_FILTER   -2
 
@@ -153,6 +154,7 @@ typedef int (*dl_ioctl_func)(u_long	dl_tag,
 
 
 
+#ifdef __APPLE_API_PRIVATE
 struct dlil_filterq_entry {
     TAILQ_ENTRY(dlil_filterq_entry) que;
     u_long	 filter_id;
@@ -162,7 +164,9 @@ struct dlil_filterq_entry {
 	struct dlil_pr_flt_str pr_filter;
     } variants;
 };
-
+#else
+struct dlil_filterq_entry;
+#endif /* __APPLE_API_PRIVATE */
 
 TAILQ_HEAD(dlil_filterq_head, dlil_filterq_entry);
 
@@ -182,6 +186,7 @@ struct if_proto {
 
 };
 
+#ifdef __APPLE_API_PRIVATE
 TAILQ_HEAD(dlil_proto_head, if_proto);
 
 struct dlil_tag_list_entry {
@@ -189,8 +194,10 @@ struct dlil_tag_list_entry {
     struct ifnet		   *ifp;
     u_long			   dl_tag;
 };
+#endif /* __APPLE_API_PRIVATE */
 
 
+#ifdef __APPLE_API_OBSOLETE
 /* Obsolete types */
 #define DLIL_DESC_RAW		1
 #define DLIL_DESC_802_2		2
@@ -203,6 +210,7 @@ struct dlil_tag_list_entry {
  * DLIL_DESC_802_2_SNAP - obsolete, data in variants.desc_802_2_SNAP
  *						  protocol field in host byte order
  */
+#endif /* __APPLE_API_OBSOLETE */
 
 /* Ehernet specific types */
 #define DLIL_DESC_ETYPE2	4
@@ -325,7 +333,8 @@ struct dlil_ifmod_reg_str {
     int (*del_proto)(struct if_proto  *proto, u_long dl_tag);
     int (*ifmod_ioctl)(struct ifnet *ifp, u_long ioctl_cmd, caddr_t data);
     int	(*shutdown)();
-    u_long	reserved[4];
+    int (*init_if)(struct ifnet *ifp);
+    u_long	reserved[3];
 };
 
 
@@ -361,4 +370,111 @@ int dlil_dereg_if_modules(u_long interface_family);
 int
 dlil_if_detach(struct ifnet *ifp);
 
+
+/* 
+
+Function : dlil_if_acquire
+
+    DLIL manages the list of ifnet interfaces allocated using the dlil_if_acquire
+    function. This list if not the same as the list of attached interfaces, 
+    visible with ifconfig.
+    This list contains attached as well as detached interfaces.
+	Detached interfaces are kept in the list to prevent the kernel from crashing
+	by using an old ifp.
+
+    if it succeeds, dlil_if_acquire returns an ifnet data structure.
+    This ifnet can either be a new allocated block of memory, or an ifnet
+    that already existed and that DLIL has found in its list of unused
+    interface and that matches the family/uniqueid tuple.
+
+    dlil_if_acquire can fail if the requested interface is already in use, 
+    or if no memory is available to create a new interface.
+
+    The typical sequence of call for a driver will be :
+    dlil_if_acquire(... &ifp)
+    ... Fill in the ifnet ...
+    dlil_if_attach(ifp)
+    ... Driver work ...
+    dlil_if_detach(ifp)
+    dlil_if_release(ifp)
+
+    Important : ifnet allocated by DLIL are managed by DLIL. DLIL takes care
+    of them, and keeps them until a driver wants to reuse them, but DLIL may
+    also decide to free them when not in use by a driver.
+
+    Note : the structure returned will actually be large enough to contain
+    an arpcom structure (ifnet + ethernet) structure.
+    Drivers cannot extend the structure and must to store their private 
+    information in if_sofc and if_private.
+
+Parameters :
+    'family' uniquely identifies DLIL interface family.
+    'uniqueid' is a unique identifier for that interface, managed by the
+        driver (for example MAC address for ethernet).
+    'uniqueid_len' is the length of the unique id.
+    'ifp' contains on output the allocated ifnet.
+
+Return code :    
+
+0 :
+
+    If an ifnet matching the uniqueid is found, the matching ifnet is returned
+    in ifp and the flags IFEF_REUSE and IF_INUSE are set in the if_eflags.
+    The fields in the ifnet are NOT zeroed and may contain old values that
+    the driver can reuse. [They are not necessarily the values that were
+    there when the driver released the ifnet, as protocol might have
+    continued to update them].
+
+    If no matching ifnet is found, a new structure is allocated and returned
+    in ifp with all fields initialized to 0.
+    The flag IF_INUSE is set in the if_eflags. IFEF_REUSE is NOT set.
+    dlil_if_acquire will copy the uniqueid and keep it for matching purpose.
+
+    If 'uniqueid' is NULL, then dlil_if_acquire will return the first
+    ifnet that contains a null uniqueid for that family, with the flags
+    IFEF_REUSE and IF_INUSE set.
+    If no ifnet is available, a new one will be created.
+
+ENOMEM:
+
+    If no matching interface is found, and no memory can be allocated,
+    dlil_if_acquire will return ENOMEM.
+
+
+EBUSY:
+
+    If the unique id matches the id of an interface currently in use,
+    dlil_if_acquire will return EBUSY.
+    An interface 'in use' is an allocated interface, not necessarily attached.
+
+*/
+
+int dlil_if_acquire(u_long family, void *uniqueid, size_t uniqueid_len, 
+			struct ifnet **ifp);
+			
+
+/* 
+
+Function : dlil_if_release
+
+	dlil_if_release will transfer control of the ifnet to DLIL.
+	DLIL will keep the interface in its list, marking it unused.
+	The fields will be left in their current state, so the driver can reuse
+	the ifnet later, by calling dlil_if_acquire.
+	The if_eflags IF_INUSE will be cleared.
+	The fields if_output, if_ioctl, if_free and if_set_bpf_tap will be changed 
+	to point to DLIL private functions.
+	After calling dlil_if_acquire, the driver can safely terminate and
+	unload if necessary.
+	Note : if the call to dlil_if_detach returns DLIL_WAIT_FOR_FREE, the
+	driver can safely ignore it and call dlil_if_release.
+
+Parameters :
+	ifp is the pointer to the ifnet to release.
+
+*/
+
+void dlil_if_release(struct ifnet *ifp);
+
+#endif /* __APPLE_API_UNSTABLE */
 #endif /* DLIL_H */

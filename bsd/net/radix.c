@@ -52,6 +52,7 @@
  * SUCH DAMAGE.
  *
  *	@(#)radix.c	8.4 (Berkeley) 11/2/94
+ * $FreeBSD: src/sys/net/radix.c,v 1.20.2.2 2001/03/06 00:56:50 obrien Exp $
  */
 
 /*
@@ -90,7 +91,8 @@ static char *rn_zeros, *rn_ones;
 
 #define rn_masktop (mask_rnhead->rnh_treetop)
 #undef Bcmp
-#define Bcmp(a, b, l) (l == 0 ? 0 : bcmp((caddr_t)(a), (caddr_t)(b), (u_long)l))
+#define Bcmp(a, b, l) \
+	(l == 0 ? 0 : bcmp((caddr_t)(a), (caddr_t)(b), (u_long)l))
 
 static int	rn_lexobetter __P((void *m_arg, void *n_arg));
 static struct radix_mask *
@@ -101,12 +103,12 @@ static int	rn_satsifies_leaf __P((char *trial, struct radix_node *leaf,
 
 /*
  * The data structure for the keys is a radix tree with one way
- * branching removed.  The index rn_b at an internal node n represents a bit
+ * branching removed.  The index rn_bit at an internal node n represents a bit
  * position to be tested.  The tree is arranged so that all descendants
- * of a node n have keys whose bits all agree up to position rn_b - 1.
- * (We say the index of n is rn_b.)
+ * of a node n have keys whose bits all agree up to position rn_bit - 1.
+ * (We say the index of n is rn_bit.)
  *
- * There is at least one descendant which has a one bit at position rn_b,
+ * There is at least one descendant which has a one bit at position rn_bit,
  * and at least one with a zero there.
  *
  * A route is determined by a pair of key and mask.  We require that the
@@ -116,9 +118,9 @@ static int	rn_satsifies_leaf __P((char *trial, struct radix_node *leaf,
  * representing the highest order bit).
  *
  * We say a mask is normal if every bit is 0, past the index of the mask.
- * If a node n has a descendant (k, m) with index(m) == index(n) == rn_b,
+ * If a node n has a descendant (k, m) with index(m) == index(n) == rn_bit,
  * and m is a normal mask, then the route applies to every descendant of n.
- * If the index(m) < rn_b, this implies the trailing last few bits of k
+ * If the index(m) < rn_bit, this implies the trailing last few bits of k
  * before bit b are all 0, (and hence consequently true of every descendant
  * of n), so the route applies to all descendants of the node as well.
  *
@@ -141,11 +143,11 @@ rn_search(v_arg, head)
 	register struct radix_node *x;
 	register caddr_t v;
 
-	for (x = head, v = v_arg; x->rn_b >= 0;) {
-		if (x->rn_bmask & v[x->rn_off])
-			x = x->rn_r;
+	for (x = head, v = v_arg; x->rn_bit >= 0;) {
+		if (x->rn_bmask & v[x->rn_offset])
+			x = x->rn_right;
 		else
-			x = x->rn_l;
+			x = x->rn_left;
 	}
 	return (x);
 }
@@ -158,12 +160,12 @@ rn_search_m(v_arg, head, m_arg)
 	register struct radix_node *x;
 	register caddr_t v = v_arg, m = m_arg;
 
-	for (x = head; x->rn_b >= 0;) {
-		if ((x->rn_bmask & m[x->rn_off]) &&
-		    (x->rn_bmask & v[x->rn_off]))
-			x = x->rn_r;
+	for (x = head; x->rn_bit >= 0;) {
+		if ((x->rn_bmask & m[x->rn_offset]) &&
+		    (x->rn_bmask & v[x->rn_offset]))
+			x = x->rn_right;
 		else
-			x = x->rn_l;
+			x = x->rn_left;
 	}
 	return x;
 }
@@ -204,7 +206,8 @@ rn_lookup(v_arg, m_arg, head)
 	caddr_t netmask = 0;
 
 	if (m_arg) {
-		if ((x = rn_addmask(m_arg, 1, head->rnh_treetop->rn_off)) == 0)
+		x = rn_addmask(m_arg, 1, head->rnh_treetop->rn_offset);
+		if (x == 0)
 			return (0);
 		netmask = x->rn_key;
 	}
@@ -247,18 +250,18 @@ rn_match(v_arg, head)
 	register caddr_t cp = v, cp2;
 	caddr_t cplim;
 	struct radix_node *saved_t, *top = t;
-	int off = t->rn_off, vlen = *(u_char *)cp, matched_off;
-	register int test, b, rn_b;
+	int off = t->rn_offset, vlen = *(u_char *)cp, matched_off;
+	register int test, b, rn_bit;
 
 	/*
 	 * Open code rn_search(v, top) to avoid overhead of extra
 	 * subroutine call.
 	 */
-	for (; t->rn_b >= 0; ) {
-		if (t->rn_bmask & cp[t->rn_off])
-			t = t->rn_r;
+	for (; t->rn_bit >= 0; ) {
+		if (t->rn_bmask & cp[t->rn_offset])
+			t = t->rn_right;
 		else
-			t = t->rn_l;
+			t = t->rn_left;
 	}
 	/*
 	 * See if we match exactly as a host destination
@@ -280,8 +283,11 @@ rn_match(v_arg, head)
 	/*
 	 * This extra grot is in case we are explicitly asked
 	 * to look up the default.  Ugh!
+	 *
+	 * Never return the root node itself, it seems to cause a
+	 * lot of confusion.
 	 */
-	if ((t->rn_flags & RNF_ROOT) && t->rn_dupedkey)
+	if (t->rn_flags & RNF_ROOT)
 		t = t->rn_dupedkey;
 	return t;
 on1:
@@ -290,7 +296,7 @@ on1:
 		b--;
 	matched_off = cp - v;
 	b += matched_off << 3;
-	rn_b = -1 - b;
+	rn_bit = -1 - b;
 	/*
 	 * If there is a host route in a duped-key chain, it will be first.
 	 */
@@ -303,7 +309,7 @@ on1:
 		 * a route to a net.
 		 */
 		if (t->rn_flags & RNF_NORMAL) {
-			if (rn_b <= t->rn_b)
+			if (rn_bit <= t->rn_bit)
 				return t;
 		} else if (rn_satsifies_leaf(v, t, matched_off))
 				return t;
@@ -311,29 +317,27 @@ on1:
 	/* start searching up the tree */
 	do {
 		register struct radix_mask *m;
-		t = t->rn_p;
+		t = t->rn_parent;
 		m = t->rn_mklist;
-		if (m) {
-			/*
-			 * If non-contiguous masks ever become important
-			 * we can restore the masking and open coding of
-			 * the search and satisfaction test and put the
-			 * calculation of "off" back before the "do".
-			 */
-			do {
-				if (m->rm_flags & RNF_NORMAL) {
-					if (rn_b <= m->rm_b)
-						return (m->rm_leaf);
-				} else {
-					off = min(t->rn_off, matched_off);
-					x = rn_search_m(v, t, m->rm_mask);
-					while (x && x->rn_mask != m->rm_mask)
-						x = x->rn_dupedkey;
-					if (x && rn_satsifies_leaf(v, x, off))
-						    return x;
-				}
-				m = m->rm_mklist;
-			} while (m);
+		/*
+		 * If non-contiguous masks ever become important
+		 * we can restore the masking and open coding of
+		 * the search and satisfaction test and put the
+		 * calculation of "off" back before the "do".
+		 */
+		while (m) {
+			if (m->rm_flags & RNF_NORMAL) {
+				if (rn_bit <= m->rm_bit)
+					return (m->rm_leaf);
+			} else {
+				off = min(t->rn_offset, matched_off);
+				x = rn_search_m(v, t, m->rm_mask);
+				while (x && x->rn_mask != m->rm_mask)
+					x = x->rn_dupedkey;
+				if (x && rn_satsifies_leaf(v, x, off))
+					return x;
+			}
+			m = m->rm_mklist;
 		}
 	} while (t != top);
 	return 0;
@@ -353,13 +357,20 @@ rn_newpair(v, b, nodes)
 	struct radix_node nodes[2];
 {
 	register struct radix_node *tt = nodes, *t = tt + 1;
-	t->rn_b = b; t->rn_bmask = 0x80 >> (b & 7);
-	t->rn_l = tt; t->rn_off = b >> 3;
-	tt->rn_b = -1; tt->rn_key = (caddr_t)v; tt->rn_p = t;
+	t->rn_bit = b;
+	t->rn_bmask = 0x80 >> (b & 7);
+	t->rn_left = tt;
+	t->rn_offset = b >> 3;
+	tt->rn_bit = -1;
+	tt->rn_key = (caddr_t)v;
+	tt->rn_parent = t;
 	tt->rn_flags = t->rn_flags = RNF_ACTIVE;
+	tt->rn_mklist = t->rn_mklist = 0;
 #ifdef RN_DEBUG
 	tt->rn_info = rn_nodenum++; t->rn_info = rn_nodenum++;
-	tt->rn_twin = t; tt->rn_ybro = rn_clist; rn_clist = tt;
+	tt->rn_twin = t;
+	tt->rn_ybro = rn_clist;
+	rn_clist = tt;
 #endif
 	return t;
 }
@@ -373,7 +384,7 @@ rn_insert(v_arg, head, dupentry, nodes)
 {
 	caddr_t v = v_arg;
 	struct radix_node *top = head->rnh_treetop;
-	int head_off = top->rn_off, vlen = (int)*((u_char *)v);
+	int head_off = top->rn_offset, vlen = (int)*((u_char *)v);
 	register struct radix_node *t = rn_search(v_arg, top);
 	register caddr_t cp = v + head_off;
 	register int b;
@@ -402,24 +413,29 @@ on1:
 	cp = v;
 	do {
 		p = x;
-		if (cp[x->rn_off] & x->rn_bmask)
-			x = x->rn_r;
-		else x = x->rn_l;
-	} while (b > (unsigned) x->rn_b); /* x->rn_b < b && x->rn_b >= 0 */
+		if (cp[x->rn_offset] & x->rn_bmask)
+			x = x->rn_right;
+		else
+			x = x->rn_left;
+	} while (b > (unsigned) x->rn_bit);
+				/* x->rn_bit < b && x->rn_bit >= 0 */
 #ifdef RN_DEBUG
 	if (rn_debug)
 		log(LOG_DEBUG, "rn_insert: Going In:\n"), traverse(p);
 #endif
-	t = rn_newpair(v_arg, b, nodes); tt = t->rn_l;
-	if ((cp[p->rn_off] & p->rn_bmask) == 0)
-		p->rn_l = t;
+	t = rn_newpair(v_arg, b, nodes); 
+	tt = t->rn_left;
+	if ((cp[p->rn_offset] & p->rn_bmask) == 0)
+		p->rn_left = t;
 	else
-		p->rn_r = t;
-	x->rn_p = t; t->rn_p = p; /* frees x, p as temp vars below */
-	if ((cp[t->rn_off] & t->rn_bmask) == 0) {
-		t->rn_r = x;
+		p->rn_right = t;
+	x->rn_parent = t;
+	t->rn_parent = p; /* frees x, p as temp vars below */
+	if ((cp[t->rn_offset] & t->rn_bmask) == 0) {
+		t->rn_right = x;
 	} else {
-		t->rn_r = tt; t->rn_l = x;
+		t->rn_right = tt;
+		t->rn_left = x;
 	}
 #ifdef RN_DEBUG
 	if (rn_debug)
@@ -496,7 +512,7 @@ rn_addmask(n_arg, search, skip)
 			isnormal = 0;
 	}
 	b += (cp - netmask) << 3;
-	x->rn_b = -1 - b;
+	x->rn_bit = -1 - b;
 	if (isnormal)
 		x->rn_flags |= RNF_NORMAL;
 	return (x);
@@ -530,7 +546,7 @@ rn_new_radix_mask(tt, next)
 		return (0);
 	}
 	Bzero(m, sizeof *m);
-	m->rm_b = tt->rn_b;
+	m->rm_bit = tt->rn_bit;
 	m->rm_flags = tt->rn_flags;
 	if (tt->rn_flags & RNF_NORMAL)
 		m->rm_leaf = tt;
@@ -563,10 +579,10 @@ rn_addroute(v_arg, n_arg, head, treenodes)
 	 * nodes and possibly save time in calculating indices.
 	 */
 	if (netmask)  {
-		if ((x = rn_addmask(netmask, 0, top->rn_off)) == 0)
+		if ((x = rn_addmask(netmask, 0, top->rn_offset)) == 0)
 			return (0);
-		b_leaf = x->rn_b;
-		b = -1 - x->rn_b;
+		b_leaf = x->rn_bit;
+		b = -1 - x->rn_bit;
 		netmask = x->rn_key;
 	}
 	/*
@@ -579,9 +595,9 @@ rn_addroute(v_arg, n_arg, head, treenodes)
 				return (0);
 			if (netmask == 0 ||
 			    (tt->rn_mask &&
-			     ((b_leaf < tt->rn_b) || /* index(netmask) > node */
-			       rn_refines(netmask, tt->rn_mask) ||
-			       rn_lexobetter(netmask, tt->rn_mask))))
+			     ((b_leaf < tt->rn_bit) /* index(netmask) > node */
+			      || rn_refines(netmask, tt->rn_mask)
+			      || rn_lexobetter(netmask, tt->rn_mask))))
 				break;
 		}
 		/*
@@ -599,23 +615,26 @@ rn_addroute(v_arg, n_arg, head, treenodes)
 			/* link in at head of list */
 			(tt = treenodes)->rn_dupedkey = t;
 			tt->rn_flags = t->rn_flags;
-			tt->rn_p = x = t->rn_p;
-			t->rn_p = tt;				/* parent */
-			if (x->rn_l == t) x->rn_l = tt; else x->rn_r = tt;
+			tt->rn_parent = x = t->rn_parent;
+			t->rn_parent = tt;	 		/* parent */
+			if (x->rn_left == t)
+				x->rn_left = tt;
+			else
+				x->rn_right = tt;
 			saved_tt = tt; x = xx;
 		} else {
 			(tt = treenodes)->rn_dupedkey = t->rn_dupedkey;
 			t->rn_dupedkey = tt;
-			tt->rn_p = t;				/* parent */
+			tt->rn_parent = t;			/* parent */
 			if (tt->rn_dupedkey)			/* parent */
-				tt->rn_dupedkey->rn_p = tt;	/* parent */
+				tt->rn_dupedkey->rn_parent = tt; /* parent */
 		}
 #ifdef RN_DEBUG
 		t=tt+1; tt->rn_info = rn_nodenum++; t->rn_info = rn_nodenum++;
 		tt->rn_twin = t; tt->rn_ybro = rn_clist; rn_clist = tt;
 #endif
 		tt->rn_key = (caddr_t) v;
-		tt->rn_b = -1;
+		tt->rn_bit = -1;
 		tt->rn_flags = RNF_ACTIVE;
 	}
 	/*
@@ -623,18 +642,21 @@ rn_addroute(v_arg, n_arg, head, treenodes)
 	 */
 	if (netmask) {
 		tt->rn_mask = netmask;
-		tt->rn_b = x->rn_b;
+		tt->rn_bit = x->rn_bit;
 		tt->rn_flags |= x->rn_flags & RNF_NORMAL;
 	}
-	t = saved_tt->rn_p;
+	t = saved_tt->rn_parent;
 	if (keyduplicated)
 		goto on2;
-	b_leaf = -1 - t->rn_b;
-	if (t->rn_r == saved_tt) x = t->rn_l; else x = t->rn_r;
+	b_leaf = -1 - t->rn_bit;
+	if (t->rn_right == saved_tt)
+		x = t->rn_left;
+	else
+		x = t->rn_right;
 	/* Promote general routes from below */
-	if (x->rn_b < 0) {
+	if (x->rn_bit < 0) {
 	    for (mp = &t->rn_mklist; x; x = x->rn_dupedkey)
-		if (x->rn_mask && (x->rn_b >= b_leaf) && x->rn_mklist == 0) {
+		if (x->rn_mask && (x->rn_bit >= b_leaf) && x->rn_mklist == 0) {
 			*mp = m = rn_new_radix_mask(x, 0);
 			if (m)
 				mp = &m->rm_mklist;
@@ -644,19 +666,19 @@ rn_addroute(v_arg, n_arg, head, treenodes)
 		 * Skip over masks whose index is > that of new node
 		 */
 		for (mp = &x->rn_mklist; (m = *mp); mp = &m->rm_mklist)
-			if (m->rm_b >= b_leaf)
+			if (m->rm_bit >= b_leaf)
 				break;
 		t->rn_mklist = m; *mp = 0;
 	}
 on2:
 	/* Add new route to highest possible ancestor's list */
-	if ((netmask == 0) || (b > t->rn_b ))
+	if ((netmask == 0) || (b > t->rn_bit ))
 		return tt; /* can't lift at all */
-	b_leaf = tt->rn_b;
+	b_leaf = tt->rn_bit;
 	do {
 		x = t;
-		t = t->rn_p;
-	} while (b <= t->rn_b && x != top);
+		t = t->rn_parent;
+	} while (b <= t->rn_bit && x != top);
 	/*
 	 * Search through routes associated with node to
 	 * insert new route according to index.
@@ -664,15 +686,15 @@ on2:
 	 * double loop on deletion.
 	 */
 	for (mp = &x->rn_mklist; (m = *mp); mp = &m->rm_mklist) {
-		if (m->rm_b < b_leaf)
+		if (m->rm_bit < b_leaf)
 			continue;
-		if (m->rm_b > b_leaf)
+		if (m->rm_bit > b_leaf)
 			break;
 		if (m->rm_flags & RNF_NORMAL) {
 			mmask = m->rm_leaf->rn_mask;
 			if (tt->rn_flags & RNF_NORMAL) {
-				log(LOG_ERR,
-				   "Non-unique normal route, mask not entered");
+			    log(LOG_ERR,
+			        "Non-unique normal route, mask not entered");
 				return tt;
 			}
 		} else
@@ -682,7 +704,8 @@ on2:
 			tt->rn_mklist = m;
 			return tt;
 		}
-		if (rn_refines(netmask, mmask) || rn_lexobetter(netmask, mmask))
+		if (rn_refines(netmask, mmask)
+		    || rn_lexobetter(netmask, mmask))
 			break;
 	}
 	*mp = rn_new_radix_mask(tt, *mp);
@@ -704,7 +727,7 @@ rn_delete(v_arg, netmask_arg, head)
 	netmask = netmask_arg;
 	x = head->rnh_treetop;
 	tt = rn_search(v, x);
-	head_off = x->rn_off;
+	head_off = x->rn_offset;
 	vlen =  *(u_char *)v;
 	saved_tt = tt;
 	top = x;
@@ -737,14 +760,14 @@ rn_delete(v_arg, netmask_arg, head)
 		if (--m->rm_refs >= 0)
 			goto on1;
 	}
-	b = -1 - tt->rn_b;
-	t = saved_tt->rn_p;
-	if (b > t->rn_b)
+	b = -1 - tt->rn_bit;
+	t = saved_tt->rn_parent;
+	if (b > t->rn_bit)
 		goto on1; /* Wasn't lifted at all */
 	do {
 		x = t;
-		t = t->rn_p;
-	} while (b <= t->rn_b && x != top);
+		t = t->rn_parent;
+	} while (b <= t->rn_bit && x != top);
 	for (mp = &x->rn_mklist; (m = *mp); mp = &m->rm_mklist)
 		if (m == saved_m) {
 			*mp = m->rm_mklist;
@@ -767,7 +790,7 @@ on1:
 	for (t = rn_clist; t && t->rn_ybro != tt; t = t->rn_ybro) {}
 	if (t) t->rn_ybro = tt->rn_ybro;
 #endif
-	t = tt->rn_p;
+	t = tt->rn_parent;
 	dupedkey = saved_tt->rn_dupedkey;
 	if (dupedkey) {
 		/*
@@ -776,39 +799,57 @@ on1:
 		 */
 		if (tt == saved_tt) {
 			/* remove from head of chain */
-			x = dupedkey; x->rn_p = t;
-			if (t->rn_l == tt) t->rn_l = x; else t->rn_r = x;
+			x = dupedkey; x->rn_parent = t;
+			if (t->rn_left == tt)
+				t->rn_left = x;
+			else
+				t->rn_right = x;
 		} else {
 			/* find node in front of tt on the chain */
 			for (x = p = saved_tt; p && p->rn_dupedkey != tt;)
 				p = p->rn_dupedkey;
 			if (p) {
 				p->rn_dupedkey = tt->rn_dupedkey;
-				if (tt->rn_dupedkey)		   /* parent */
-					tt->rn_dupedkey->rn_p = p; /* parent */
+				if (tt->rn_dupedkey)		/* parent */
+					tt->rn_dupedkey->rn_parent = p;
+								/* parent */
 			} else log(LOG_ERR, "rn_delete: couldn't find us\n");
 		}
 		t = tt + 1;
 		if  (t->rn_flags & RNF_ACTIVE) {
 #ifndef RN_DEBUG
-			*++x = *t; p = t->rn_p;
+			*++x = *t;
+			p = t->rn_parent;
 #else
-			b = t->rn_info; *++x = *t; t->rn_info = b; p = t->rn_p;
+			b = t->rn_info;
+			*++x = *t;
+			t->rn_info = b;
+			p = t->rn_parent;
 #endif
-			if (p->rn_l == t) p->rn_l = x; else p->rn_r = x;
-			x->rn_l->rn_p = x; x->rn_r->rn_p = x;
+			if (p->rn_left == t)
+				p->rn_left = x;
+			else
+				p->rn_right = x;
+			x->rn_left->rn_parent = x;
+			x->rn_right->rn_parent = x;
 		}
 		goto out;
 	}
-	if (t->rn_l == tt) x = t->rn_r; else x = t->rn_l;
-	p = t->rn_p;
-	if (p->rn_r == t) p->rn_r = x; else p->rn_l = x;
-	x->rn_p = p;
+	if (t->rn_left == tt)
+		x = t->rn_right;
+	else
+		x = t->rn_left;
+	p = t->rn_parent;
+	if (p->rn_right == t)
+		p->rn_right = x;
+	else
+		p->rn_left = x;
+	x->rn_parent = p;
 	/*
 	 * Demote routes attached to us.
 	 */
 	if (t->rn_mklist) {
-		if (x->rn_b >= 0) {
+		if (x->rn_bit >= 0) {
 			for (mp = &x->rn_mklist; (m = *mp);)
 				mp = &m->rm_mklist;
 			*mp = t->rn_mklist;
@@ -838,11 +879,17 @@ on1:
 #ifndef RN_DEBUG
 		*t = *x;
 #else
-		b = t->rn_info; *t = *x; t->rn_info = b;
+		b = t->rn_info;
+		*t = *x;
+		t->rn_info = b;
 #endif
-		t->rn_l->rn_p = t; t->rn_r->rn_p = t;
-		p = x->rn_p;
-		if (p->rn_l == x) p->rn_l = t; else p->rn_r = t;
+		t->rn_left->rn_parent = t;
+		t->rn_right->rn_parent = t;
+		p = x->rn_parent;
+		if (p->rn_left == x)
+			p->rn_left = t;
+		else
+			p->rn_right = t;
 	}
 out:
 	tt->rn_flags &= ~RNF_ACTIVE;
@@ -873,17 +920,17 @@ rn_walktree_from(h, a, m, f, w)
 	 * rn_search_m is sort-of-open-coded here.
 	 */
 	/* printf("about to search\n"); */
-	for (rn = h->rnh_treetop; rn->rn_b >= 0; ) {
+	for (rn = h->rnh_treetop; rn->rn_bit >= 0; ) {
 		last = rn;
-		/* printf("rn_b %d, rn_bmask %x, xm[rn_off] %x\n",
-		       rn->rn_b, rn->rn_bmask, xm[rn->rn_off]); */
-		if (!(rn->rn_bmask & xm[rn->rn_off])) {
+		/* printf("rn_bit %d, rn_bmask %x, xm[rn_offset] %x\n",
+		       rn->rn_bit, rn->rn_bmask, xm[rn->rn_offset]); */
+		if (!(rn->rn_bmask & xm[rn->rn_offset])) {
 			break;
 		}
-		if (rn->rn_bmask & xa[rn->rn_off]) {
-			rn = rn->rn_r;
+		if (rn->rn_bmask & xa[rn->rn_offset]) {
+			rn = rn->rn_right;
 		} else {
-			rn = rn->rn_l;
+			rn = rn->rn_left;
 		}
 	}
 	/* printf("done searching\n"); */
@@ -895,7 +942,7 @@ rn_walktree_from(h, a, m, f, w)
 	 * Either way, last is the node we want to start from.
 	 */
 	rn = last;
-	lastb = rn->rn_b;
+	lastb = rn->rn_bit;
 
 	/* printf("rn %p, lastb %d\n", rn, lastb);*/
 
@@ -904,26 +951,27 @@ rn_walktree_from(h, a, m, f, w)
 	 * while applying the function f to it, so we need to calculate
 	 * the successor node in advance.
 	 */
-	while (rn->rn_b >= 0)
-		rn = rn->rn_l;
+	while (rn->rn_bit >= 0)
+		rn = rn->rn_left;
 
 	while (!stopping) {
-		/* printf("node %p (%d)\n", rn, rn->rn_b); */
+		/* printf("node %p (%d)\n", rn, rn->rn_bit); */
 		base = rn;
 		/* If at right child go back up, otherwise, go right */
-		while (rn->rn_p->rn_r == rn && !(rn->rn_flags & RNF_ROOT)) {
-			rn = rn->rn_p;
+		while (rn->rn_parent->rn_right == rn
+		       && !(rn->rn_flags & RNF_ROOT)) {
+			rn = rn->rn_parent;
 
 			/* if went up beyond last, stop */
-			if (rn->rn_b < lastb) {
+			if (rn->rn_bit < lastb) {
 				stopping = 1;
 				/* printf("up too far\n"); */
 			}
 		}
 
 		/* Find the next *leaf* since next node might vanish, too */
-		for (rn = rn->rn_p->rn_r; rn->rn_b >= 0;)
-			rn = rn->rn_l;
+		for (rn = rn->rn_parent->rn_right; rn->rn_bit >= 0;)
+			rn = rn->rn_left;
 		next = rn;
 		/* Process leaves */
 		while ((rn = base) != 0) {
@@ -959,24 +1007,37 @@ rn_walktree(h, f, w)
 	 * the successor node in advance.
 	 */
 	/* First time through node, go left */
-	while (rn->rn_b >= 0)
-		rn = rn->rn_l;
+	while (rn->rn_bit >= 0) 
+		if (rn)
+			rn = rn->rn_left;
+		else return(0);
 	for (;;) {
 		base = rn;
 		/* If at right child go back up, otherwise, go right */
-		while (rn->rn_p->rn_r == rn && (rn->rn_flags & RNF_ROOT) == 0)
-			rn = rn->rn_p;
+		while (rn != NULL && rn->rn_parent != NULL && rn->rn_parent->rn_right == rn
+		       && (rn->rn_flags & RNF_ROOT) == 0)
+			rn = rn->rn_parent;
 		/* Find the next *leaf* since next node might vanish, too */
-		for (rn = rn->rn_p->rn_r; rn->rn_b >= 0;)
-			rn = rn->rn_l;
+		if (rn == NULL || rn->rn_parent == NULL || rn->rn_parent->rn_right == NULL)
+			return (0);
+		for (rn = rn->rn_parent->rn_right; rn->rn_bit >= 0;) {
+			if (rn == NULL || rn->rn_parent == NULL || rn->rn_parent->rn_right == NULL || rn->rn_left == NULL)
+				return(0);
+			rn = rn->rn_left;
+		}
 		next = rn;
 		/* Process leaves */
 		while ((rn = base)) {
+			if (rn == NULL)
+				return(0);
 			base = rn->rn_dupedkey;
-			if (!(rn->rn_flags & RNF_ROOT) && (error = (*f)(rn, w)))
+			if (!(rn->rn_flags & RNF_ROOT)
+			    && (error = (*f)(rn, w)))
 				return (error);
 		}
 		rn = next;
+		if (rn == NULL)
+			return (0);
 		if (rn->rn_flags & RNF_ROOT)
 			return (0);
 	}
@@ -999,11 +1060,11 @@ rn_inithead(head, off)
 	*head = rnh;
 	t = rn_newpair(rn_zeros, off, rnh->rnh_nodes);
 	ttt = rnh->rnh_nodes + 2;
-	t->rn_r = ttt;
-	t->rn_p = t;
-	tt = t->rn_l;
+	t->rn_right = ttt;
+	t->rn_parent = t;
+	tt = t->rn_left;
 	tt->rn_flags = t->rn_flags = RNF_ROOT | RNF_ACTIVE;
-	tt->rn_b = -1 - off;
+	tt->rn_bit = -1 - off;
 	*ttt = *tt;
 	ttt->rn_key = rn_ones;
 	rnh->rnh_addaddr = rn_addroute;

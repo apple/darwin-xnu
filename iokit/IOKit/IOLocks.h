@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1998-2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 1998-2002 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -30,9 +30,7 @@
 #error IOLocks.h is for kernel use only
 #endif
 
-#ifndef IOKIT_DEPRECATED
-#define IOKIT_DEPRECATED	1
-#endif
+#include <sys/appleapiopts.h>
 
 #include <IOKit/system.h>
 
@@ -45,6 +43,7 @@ extern "C" {
 
 #include <kern/lock.h>
 #include <kern/simple_lock.h>
+#include <kern/sched_prim.h>
 #include <machine/machine_routines.h>
 
 /*
@@ -101,7 +100,34 @@ void	IOLockUnlock( IOLock * lock)
     mutex_unlock(lock);
 }
 
-#if IOKIT_DEPRECATED
+/*! @function IOLockSleep
+    @abstract Sleep with mutex unlock and relock
+@discussion Prepare to sleep,unlock the mutex, and re-acquire it on wakeup.Results are undefined if the caller has not locked the mutex. This function may block and so should not be called from interrupt level or while a simple lock is held. 
+    @param lock Pointer to the locked lock. 
+    @param event The event to sleep on.
+    @param interType How can the sleep be interrupted.
+	@result The wait-result value indicating how the thread was awakened.*/
+static __inline__
+int	IOLockSleep( IOLock * lock, void *event, UInt32 interType)
+{
+    return thread_sleep_mutex((event_t) event, lock, (int) interType);
+}
+
+static __inline__
+int	IOLockSleepDeadline( IOLock * lock, void *event,
+				AbsoluteTime deadline, UInt32 interType)
+{
+    return thread_sleep_mutex_deadline((event_t) event, lock, 
+				__OSAbsoluteTime(deadline), (int) interType);
+}
+
+static __inline__
+void	IOLockWakeup(IOLock * lock, void *event, bool oneThread)
+{
+    thread_wakeup_prim((event_t) event, oneThread, THREAD_AWAKENED);
+}
+
+#ifdef __APPLE_API_OBSOLETE
 
 /* The following API is deprecated */
 
@@ -117,7 +143,7 @@ static __inline__ void IOTakeLock( IOLock * lock) { IOLockLock(lock); 	     }
 static __inline__ boolean_t IOTryLock(  IOLock * lock) { return(IOLockTryLock(lock)); }
 static __inline__ void IOUnlock(   IOLock * lock) { IOLockUnlock(lock);	     }
 
-#endif /* IOKIT_DEPRECATED */
+#endif /* __APPLE_API_OBSOLETE */
 
 /*
  * Recursive lock operations
@@ -227,7 +253,7 @@ void	IORWLockUnlock( IORWLock * lock)
     lock_done( lock);
 }
 
-#if IOKIT_DEPRECATED
+#ifdef __APPLE_API_OBSOLETE
 
 /* The following API is deprecated */
 
@@ -235,7 +261,7 @@ static __inline__ void IOReadLock( IORWLock * lock)   { IORWLockRead(lock);   }
 static __inline__ void IOWriteLock(  IORWLock * lock) { IORWLockWrite(lock);  }
 static __inline__ void IORWUnlock(   IORWLock * lock) { IORWLockUnlock(lock); }
 
-#endif /* IOKIT_DEPRECATED */
+#endif /* __APPLE_API_OBSOLETE */
 
 
 /*

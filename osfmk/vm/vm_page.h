@@ -84,6 +84,7 @@
 extern int	vm_page_ticket_roll;
 extern int	vm_page_ticket;
 
+
 #define VM_PAGE_TICKETS_IN_ROLL  512
 #define VM_PAGE_TICKET_ROLL_IDS  16
 
@@ -134,6 +135,7 @@ struct vm_page {
 			gobbled:1,      /* page used internally (P) */
 			private:1,	/* Page should not be returned to
 					 *  the free list (O) */
+			zero_fill:1,
 			:0;
 
 	unsigned int
@@ -220,6 +222,7 @@ extern
 queue_head_t	vm_page_queue_active;	/* active memory queue */
 extern
 queue_head_t	vm_page_queue_inactive;	/* inactive memory queue */
+queue_head_t	vm_page_queue_zf;	/* inactive memory queue for zero fill */
 
 extern
 vm_offset_t	first_phys_addr;	/* physical address for first_page */
@@ -252,6 +255,7 @@ decl_mutex_data(,vm_page_queue_lock)
 decl_mutex_data(,vm_page_queue_free_lock)
 				/* lock on free page queue */
 decl_simple_lock_data(extern,vm_page_preppin_lock)	/* lock for prep/pin */
+decl_mutex_data(,vm_page_zero_fill_lock)
 
 extern unsigned int	vm_page_free_wanted;
 				/* how many threads are waiting for memory */
@@ -374,10 +378,12 @@ extern void		vm_page_gobble(
  */
 
 #define PAGE_ASSERT_WAIT(m, interruptible)			\
-		MACRO_BEGIN					\
-		(m)->wanted = TRUE;				\
-		assert_wait((event_t) (m), (interruptible));	\
-		MACRO_END
+		(((m)->wanted = TRUE),				\
+		 assert_wait((event_t) (m), (interruptible)))
+
+#define PAGE_SLEEP(o, m, interruptible)				\
+		(((m)->wanted = TRUE),				\
+		 thread_sleep_vm_object((o), (m), (interruptible)))
 
 #define PAGE_WAKEUP_DONE(m)					\
 		MACRO_BEGIN					\
@@ -433,8 +439,13 @@ extern void		vm_page_gobble(
 								\
 	if (mem->inactive) {					\
 		assert(!mem->active);				\
-		queue_remove(&vm_page_queue_inactive,		\
+		if (mem->zero_fill) {				\
+			queue_remove(&vm_page_queue_zf,		\
 			mem, vm_page_t, pageq);			\
+		} else {					\
+			queue_remove(&vm_page_queue_inactive,	\
+			mem, vm_page_t, pageq);			\
+		}						\
 		mem->inactive = FALSE;				\
 		if (!mem->fictitious)				\
 			vm_page_inactive_count--;		\

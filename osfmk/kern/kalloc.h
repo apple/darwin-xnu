@@ -47,42 +47,44 @@
  * any improvements or extensions that they make and grant Carnegie Mellon
  * the rights to redistribute these changes.
  */
-/*
- */
 
 #ifndef	_KERN_KALLOC_H_
 #define _KERN_KALLOC_H_
-
 
 #include <mach/machine/vm_types.h>
 
 #define KALLOC_MINSIZE		16
 
 extern vm_offset_t	kalloc(
-			       vm_size_t	size);
+						vm_size_t	size);
 
-extern vm_offset_t      kalloc_noblock(
-				       vm_size_t       size);
+extern vm_offset_t	kalloc_noblock(
+				       vm_size_t	size);
 
 extern vm_offset_t	kget(
-				vm_size_t	size);
+						vm_size_t	size);
 
-extern void		kfree(
-				vm_offset_t	data,
-				vm_size_t	size);
+extern void			kfree(
+						vm_offset_t	data,
+						vm_size_t	size);
+
+#include <sys/appleapiopts.h>
+
+#ifdef	__APPLE_API_PRIVATE
 
 #ifdef MACH_KERNEL_PRIVATE
 #include <kern/lock.h>
 
-extern void		kalloc_init(
-				void);
+extern void		kalloc_init(void);
 
 extern void		krealloc(
-				vm_offset_t	*addrp,
-				vm_size_t	old_size,
-				vm_size_t	new_size,
-				simple_lock_t	lock);
+					vm_offset_t	*addrp,
+					vm_size_t	old_size,
+					vm_size_t	new_size,
+					simple_lock_t	lock);
 
 #endif /* MACH_KERNEL_PRIVATE */
+
+#endif	/* __APPLE_APPI_PRIVATE */
 
 #endif	/* _KERN_KALLOC_H_ */

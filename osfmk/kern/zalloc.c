@@ -224,13 +224,19 @@ vm_size_t	zdata_size;
 
 #define lock_zone(zone)					\
 MACRO_BEGIN						\
-	simple_lock(&zone->lock);			\
+	simple_lock(&(zone)->lock);			\
 MACRO_END
 
 #define unlock_zone(zone)				\
 MACRO_BEGIN						\
-	simple_unlock(&zone->lock);			\
+	simple_unlock(&(zone)->lock);			\
 MACRO_END
+
+#define zone_wakeup(zone) thread_wakeup((event_t)(zone))
+#define zone_sleep(zone)				\
+	thread_sleep_simple_lock((event_t)(zone),	\
+				&(zone)->lock,		\
+				THREAD_UNINT)
 
 #define lock_zone_init(zone)				\
 MACRO_BEGIN						\
@@ -624,11 +630,8 @@ zalloc_canblock(
 			 *	Someone is allocating memory for this zone.
 			 *	Wait for it to show up, then try again.
 			 */
-			assert_wait((event_t)zone, THREAD_UNINT);
 			zone->waiting = TRUE;
-			unlock_zone(zone);
-			thread_block((void (*)(void)) 0);
-			lock_zone(zone);
+			zone_sleep(zone);
 		}
 		else {
 			if ((zone->cur_size + zone->elem_size) >
@@ -682,7 +685,7 @@ zalloc_canblock(
 				zone->doing_alloc = FALSE; 
 				if (zone->waiting) {
 					zone->waiting = FALSE;
-					thread_wakeup((event_t)zone);
+					zone_wakeup(zone);
 				}
 				REMOVE_FROM_ZONE(zone, addr, vm_offset_t);
 				if (addr == 0 &&

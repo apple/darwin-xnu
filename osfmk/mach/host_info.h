@@ -89,7 +89,8 @@ typedef	integer_t	host_flavor_t;
 #define HOST_SCHED_INFO		3	/* scheduling info */
 #define HOST_RESOURCE_SIZES	4	/* kernel struct sizes */
 #define HOST_PRIORITY_INFO	5	/* priority information */
-#define HOST_SEMAPHORE_TRAPS	7	/* Has semaphore traps - temporary */
+#define HOST_SEMAPHORE_TRAPS	7	/* Has semaphore traps */
+#define HOST_MACH_MSG_TRAP	8	/* Has mach_msg_trap */
 
 struct host_basic_info {
 	integer_t	max_cpus;	/* max number of cpus possible */

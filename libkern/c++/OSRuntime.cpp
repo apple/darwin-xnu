@@ -44,13 +44,6 @@ struct mach_header;
 extern int debug_iomalloc_size;
 #endif
 
-#define	MDECL(reqlen)					\
-typedef union {						\
-	struct	_mhead hdr;				\
-	char	_m[(reqlen) + sizeof (struct _mhead)];	\
-} hdr_t;						\
-hdr_t
-
 struct _mhead {
 	size_t	mlen;
 	char	dat[0];
@@ -59,13 +52,13 @@ struct _mhead {
 void *kern_os_malloc(
 	size_t		size)
 {
-	MDECL(size)	*mem;
-	size_t		memsize = sizeof (*mem);
+	struct _mhead	*mem;
+	size_t		memsize = sizeof (*mem) + size ;
 
 	if (size == 0)
 		return (0);
 
-	mem = (hdr_t *)kalloc(memsize);
+	mem = (struct _mhead *)kalloc(memsize);
 	if (!mem)
 		return (0);
 
@@ -73,10 +66,10 @@ void *kern_os_malloc(
 	debug_iomalloc_size += memsize;
 #endif
 
-	mem->hdr.mlen = memsize;
-	(void) memset(mem->hdr.dat, 0, size);
+	mem->mlen = memsize;
+	(void) memset(mem->dat, 0, size);
 
-	return  (mem->hdr.dat);
+	return  (mem->dat);
 }
 
 void kern_os_free(
@@ -105,7 +98,7 @@ void *kern_os_realloc(
 	size_t		nsize)
 {
 	struct _mhead	*ohdr;
-	MDECL(nsize)	*nmem;
+	struct _mhead	*nmem;
 	size_t		nmemsize, osize;
 
 	if (!addr)
@@ -121,8 +114,8 @@ void *kern_os_realloc(
 		return (0);
 	}
 
-	nmemsize = sizeof (*nmem);
-	nmem = (hdr_t *) kalloc(nmemsize);
+	nmemsize = sizeof (*nmem) + nsize ;
+	nmem = (struct _mhead *) kalloc(nmemsize);
 	if (!nmem){
 		kern_os_free(addr);
 		return (0);
@@ -132,14 +125,14 @@ void *kern_os_realloc(
 	debug_iomalloc_size += (nmemsize - ohdr->mlen);
 #endif
 
-	nmem->hdr.mlen = nmemsize;
+	nmem->mlen = nmemsize;
 	if (nsize > osize)
-		(void) memset(&nmem->hdr.dat[osize], 0, nsize - osize);
-	(void) memcpy(nmem->hdr.dat, ohdr->dat,
+		(void) memset(&nmem->dat[osize], 0, nsize - osize);
+	(void) memcpy(nmem->dat, ohdr->dat,
 					(nsize > osize) ? osize : nsize);
 	kfree((vm_offset_t)ohdr, ohdr->mlen);
 
-	return (nmem->hdr.dat);
+	return (nmem->dat);
 }
 
 size_t kern_os_malloc_size(
@@ -154,7 +147,11 @@ size_t kern_os_malloc_size(
 	return( hdr->mlen - sizeof (struct _mhead));
 }
 
+#if __GNUC__ >= 3
+void __cxa_pure_virtual( void )	{ panic(__FUNCTION__); }
+#else
 void __pure_virtual( void )	{ panic(__FUNCTION__); }
+#endif
 
 typedef void (*structor_t)(void);
 

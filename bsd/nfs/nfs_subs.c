@@ -1330,7 +1330,7 @@ nfs_loadattrcache(vpp, mdp, dposp, vaper, dontshrink, xidp)
 	 * information.
 	 */
 	np = VTONFS(vp);
-	if (*xidp < np->n_xid) {
+if (*xidp < np->n_xid) {
 		/*
 		 * We have already updated attributes with a response from
 		 * a later request.  The attributes we have here are probably

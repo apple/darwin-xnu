@@ -1,3 +1,6 @@
+/*	$FreeBSD: src/sys/crypto/des/sk.h,v 1.1.2.1 2000/07/15 07:14:21 kris Exp $	*/
+/*	$KAME: sk.h,v 1.3 2000/03/27 04:36:34 sumikawa Exp $	*/
+
 /* crypto/des/sk.h */
 /* Copyright (C) 1995-1996 Eric Young (eay@mincom.oz.au)
  * All rights reserved.

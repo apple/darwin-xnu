@@ -38,6 +38,8 @@
 
 #ifndef _NET_IF_TUN_H_
 #define _NET_IF_TUN_H_
+#include <sys/appleapiopts.h>
+#ifdef __APPLE_API_PRIVATE
 
 /* Refer to if_tunvar.h for the softc stuff */
 
@@ -60,4 +62,5 @@ struct tuninfo {
 #define	TUNSIFINFO	_IOW('t', 91, struct tuninfo)
 #define	TUNGIFINFO	_IOR('t', 92, struct tuninfo)
 
+#endif /* __APPLE_API_PRIVATE */
 #endif /* !_NET_IF_TUN_H_ */

@@ -58,7 +58,6 @@
 #include <mach/kern_return.h>
 #include <mach/thread_status.h>
 #include <mach/vm_param.h>
-#include <mach/rpc.h>
 
 #include <kern/counters.h>
 #include <kern/mach_param.h>
@@ -360,6 +359,8 @@ switch_context(
 	 *	Load the rest of the user state for the new thread
 	 */
 	act_machine_switch_pcb(new_act);
+	KERNEL_DEBUG_CONSTANT(MACHDBG_CODE(DBG_MACH_SCHED,MACH_SCHED) | DBG_FUNC_NONE,
+		     (int)old, (int)new, old->sched_pri, new->sched_pri, 0);
 	return(Switch_context(old, continuation, new));
 }
 
@@ -1067,7 +1068,7 @@ thread_machine_create(thread_t thread, thread_act_t thr_act, void (*start_pos)(t
 	 *      Allocate a kernel stack per shuttle
 	 */
 	thread->kernel_stack = (int)stack_alloc(thread,start_pos);
-	thread->stack_privilege = thread->kernel_stack;
+	thread->state &= ~TH_STACK_HANDOFF;
 	assert(thread->kernel_stack != 0);
 
 	/*
@@ -1129,12 +1130,6 @@ void act_machine_init()
 
 	/* Good to verify this once */
 	assert( THREAD_MACHINE_STATE_MAX <= THREAD_STATE_MAX );
-
-	/*
-	 * If we start using kernel activations,
-	 * would normally create kernel_thread_pool here,
-	 * populating it from the act_zone
-	 */
 }
 
 kern_return_t
@@ -1203,67 +1198,6 @@ act_machine_return(int code)
 	 */
 	assert( code == KERN_TERMINATED );
 	assert( thr_act );
-
-#ifdef CALLOUT_RPC_MODEL
-	/*
-	 * JMM - RPC is not going to be done with a callout/direct-
-	 * stack manipulation mechanism.  Instead we will return/
-	 * unwind normally as if from a continuation.
-	 */
-	act_lock_thread(thr_act);
-
-	if (thr_act->thread->top_act != thr_act) {
-		/*
-		 * this is not the top activation;
-		 * if possible, we should clone the shuttle so that
-		 * both the root RPC-chain and the soon-to-be-orphaned
-		 * RPC-chain have shuttles
-		 *
-		 * JMM - Cloning shuttles isn't the right approach.  We
-		 * need to alert the higher up activations to return our
-		 * shuttle (because scheduling attributes may TRUELY be
-		 * unique and not cloneable.
-		 */
-		act_unlock_thread(thr_act);
-		panic("act_machine_return: ORPHAN CASE NOT YET IMPLEMENTED");
-	}
-
-	if (thr_act->lower != THR_ACT_NULL) {
-		thread_t	cur_thread = current_thread();
-		thread_act_t	cur_act;
-		struct ipc_port	*iplock;
-
-		/* send it an appropriate return code */
-		thr_act->lower->alerts |= SERVER_TERMINATED;
-		install_special_handler(thr_act->lower);
-
-		/* Return to previous act with error code */
-		act_locked_act_reference(thr_act);	/* keep it around */
-		act_switch_swapcheck(cur_thread, (ipc_port_t)0);
-		(void) switch_act(THR_ACT_NULL);
-		/* assert(thr_act->ref_count == 0); */		/* XXX */
-		cur_act = cur_thread->top_act;
-		MACH_RPC_RET(cur_act) = KERN_RPC_SERVER_TERMINATED;	    
-	     
-		machine_kernel_stack_init(cur_thread, mach_rpc_return_error);
-		/*
-		 * The following unlocks must be done separately since fields 
-		 * used by `act_unlock_thread()' have been cleared, meaning
-		 * that it would not release all of the appropriate locks.
-		 */
-		iplock = thr_act->pool_port;	/* remember for unlock call */
-		rpc_unlock(cur_thread);
-		if (iplock) ip_unlock(iplock);	/* must be done separately */
-		act_unlock(thr_act);
-		act_deallocate(thr_act);		/* free it */
-		Load_context(cur_thread);
-		/*NOTREACHED*/
-
-		panic("act_machine_return: TALKING ZOMBIE! (2)");
-	}
-	act_unlock_thread(thr_act);
-
-#endif /* CALLOUT_RPC_MODEL */
 
 	/* This is the only activation attached to the shuttle... */
 	/* terminate the entire thread (shuttle plus activation) */
@@ -1340,13 +1274,6 @@ dump_act(thread_act_t thr_act)
 	       thr_act, thr_act->ref_count,
 	       thr_act->thread, thr_act->thread ? thr_act->thread->ref_count:0,
 	       thr_act->task,   thr_act->task   ? thr_act->task->ref_count : 0);
-
-	if (thr_act->pool_port) {
-	    thread_pool_t actpp = &thr_act->pool_port->ip_thread_pool;
-	    printf("\tpool(acts_p=%x, waiting=%d) pool_next %x\n",
-		actpp->thr_acts, actpp->waiting, thr_act->thread_pool_next);
-	}else
-	    printf("\tno thread_pool\n");
 
 	printf("\talerts=%x mask=%x susp=%d user_stop=%d active=%x ast=%x\n",
 		       thr_act->alerts, thr_act->alert_mask,
@@ -1461,6 +1388,9 @@ stack_handoff(thread_t old,
   new_pmap = new->top_act->task->map->pmap;
   if (old->top_act->task->map->pmap != new_pmap)
   	PMAP_ACTIVATE_MAP(new->top_act->task->map, cpu_number());
+
+  KERNEL_DEBUG_CONSTANT(MACHDBG_CODE(DBG_MACH_SCHED,MACH_STACK_HANDOFF) | DBG_FUNC_NONE,
+		     (int)old, (int)new, old->sched_pri, new->sched_pri, 0);
 
   thread_machine_set_current(new);
 

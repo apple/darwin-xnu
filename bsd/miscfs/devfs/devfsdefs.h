@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2002 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -55,7 +55,12 @@
  *	Renamed structures/elements to clarify usage in code.
  */
 
+#ifndef __DEVFS_DEVFSDEFS_H__
+#define __DEVFS_DEVFSDEFS_H__
 
+#include  <sys/appleapiopts.h>
+
+#ifdef __APPLE_API_PRIVATE
 #define DEVMAXNAMESIZE 	32 		/* XXX */
 #define DEVMAXPATHSIZE 	128		/* XXX */
 
@@ -280,3 +285,5 @@ dn_copy_times(devnode_t * target, devnode_t * source)
     target->dn_ctime = source->dn_ctime;
     return;
 }
+#endif /* __APPLE_API_PRIVATE */
+#endif /* __DEVFS_DEVFSDEFS_H__ */

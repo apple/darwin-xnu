@@ -24,6 +24,8 @@
 #ifndef _SYS_EV_H_
 #define _SYS_EV_H_
 
+#include <sys/appleapiopts.h>
+
 #include <sys/queue.h>
 
 struct eventreq {
@@ -58,6 +60,7 @@ typedef struct eventreq *er_t;
 #define EV_DMASK   0xffffff00
 
 #ifdef KERNEL
+#ifdef __APPLE_API_PRIVATE
 
 struct eventqelt {
   TAILQ_ENTRY(eventqelt)  ee_slist;
@@ -70,6 +73,7 @@ struct eventqelt {
   struct socket   *ee_sp;
 };
 
+#endif /* __APPLE_API_PRIVATE */
 #endif /* KERNEL */
 
 #endif /* _SYS_EV_H_ */

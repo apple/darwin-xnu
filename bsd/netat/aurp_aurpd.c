@@ -310,7 +310,7 @@ void aurp_wakeup(struct socket *so, register caddr_t p, int state)
 		("aurp_wakeup: bit 0x%x, aurp_global.event now 0x%x\n",
 		bit, aurp_global.event));
 
-	thread_wakeup(&aurp_global.event_anchor);
+	wakeup(&aurp_global.event_anchor);
 }
 
 /*

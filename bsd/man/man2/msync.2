@@ -1,0 +1,104 @@
+.\" Copyright (c) 1991, 1993
+.\"	The Regents of the University of California.  All rights reserved.
+.\"
+.\" Redistribution and use in source and binary forms, with or without
+.\" modification, are permitted provided that the following conditions
+.\" are met:
+.\" 1. Redistributions of source code must retain the above copyright
+.\"    notice, this list of conditions and the following disclaimer.
+.\" 2. Redistributions in binary form must reproduce the above copyright
+.\"    notice, this list of conditions and the following disclaimer in the
+.\"    documentation and/or other materials provided with the distribution.
+.\" 3. All advertising materials mentioning features or use of this software
+.\"    must display the following acknowledgement:
+.\"	This product includes software developed by the University of
+.\"	California, Berkeley and its contributors.
+.\" 4. Neither the name of the University nor the names of its contributors
+.\"    may be used to endorse or promote products derived from this software
+.\"    without specific prior written permission.
+.\"
+.\" THIS SOFTWARE IS PROVIDED BY THE REGENTS AND CONTRIBUTORS ``AS IS'' AND
+.\" ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+.\" IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
+.\" ARE DISCLAIMED.  IN NO EVENT SHALL THE REGENTS OR CONTRIBUTORS BE LIABLE
+.\" FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
+.\" DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS
+.\" OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION)
+.\" HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT
+.\" LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
+.\" OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
+.\" SUCH DAMAGE.
+.\"
+.\"	@(#)msync.2	8.2 (Berkeley) 6/21/94
+.\" $FreeBSD: src/lib/libc/sys/msync.2,v 1.17 2000/04/21 09:41:53 phantom Exp $
+.\"
+.Dd June 21, 1994
+.Dt MSYNC 2
+.Os
+.Sh NAME
+.Nm msync
+.Nd synchronize a mapped region
+.Sh LIBRARY
+.Lb libc
+.Sh SYNOPSIS
+.Fd #include <sys/types.h>
+.Fd #include <sys/mman.h>
+.Ft int
+.Fn msync "void *addr" "size_t len" "int flags"
+.Sh DESCRIPTION
+The
+.Fn msync
+system call
+writes any modified pages back to the filesystem and updates
+the file modification time.
+If
+.Fa len
+is 0, all modified pages within the region containing
+.Fa addr
+will be flushed;
+if
+.Fa len
+is non-zero, only those pages containing 
+.Fa addr
+and
+.Fa len-1
+succeeding locations will be examined.
+The
+.Fa flags
+argument may be specified as follows:
+.Bd -literal
+MS_ASYNC	Return immediately
+MS_SYNC		Perform synchronous writes
+MS_INVALIDATE	Invalidate all cached data
+.Ed
+.Sh RETURN VALUES
+If any errors occur, -1 is returned and errno is set to indicate the
+error.
+Otherwise, a 0 value is returned.
+.Sh ERRORS
+.Fn msync
+will fail if:
+.Bl -tag -width Er
+.It Bq Er EINVAL
+.Fa addr
+is not a multiple of the hardware page size.
+.It Bq Er EINVAL
+.Fa len
+is too large or negative.
+.It Bq Er EINVAL
+.Fa flags
+was both MS_ASYNC and MS_INVALIDATE.
+Only one of these flags is allowed.
+.It Bq Er EIO
+An I/O error occurred while writing to the file system.
+.El
+.Sh SEE ALSO
+.Xr madvise 2 ,
+.Xr mincore 2 ,
+.Xr mprotect 2 ,
+.Xr munmap 2
+.Sh HISTORY
+The
+.Fn msync
+function first appeared in
+.Bx 4.4 .

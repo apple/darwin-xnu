@@ -314,7 +314,7 @@ kmtimeout( struct tty *tp)
 
 	funnel_state = thread_funnel_set(kernel_flock, TRUE);
 	kmoutput(tp);
-	(void) thread_funnel_set(kernel_flock, FALSE);
+	(void) thread_funnel_set(kernel_flock, funnel_state);
 
 
 }

@@ -30,6 +30,8 @@
 #ifndef _PPC_EXCEPTION_H_
 #define _PPC_EXCEPTION_H_
 
+#include <ppc/savearea.h>
+
 #ifndef ASSEMBLER
 
 #include <cpus.h>
@@ -38,6 +40,7 @@
 
 #include <mach/machine/vm_types.h>
 #include <mach/boolean.h>
+#include <kern/cpu_data.h>
 #include <pexpert/pexpert.h>
 #include <IOKit/IOInterrupts.h>
 #include <ppc/machine_routines.h>
@@ -63,6 +66,8 @@ struct procFeatures {
 #define pfThermalb	7
 #define pfThermInt	0x00800000
 #define pfThermIntb	8
+#define pfNoL2PFNap	0x00008000
+#define pfNoL2PFNapb	16
 #define pfSlowNap	0x00004000
 #define pfSlowNapb	17
 #define pfNoMuMMCK	0x00002000
@@ -147,43 +152,44 @@ struct per_proc_info {
 	/* PPC cache line boundary here - 020 */
 
 	unsigned int	active_kloaded;		/* pointer to active_kloaded[CPU_NO] */
-	unsigned int	cpu_data;			/* pointer to cpu_data[CPU_NO] */
+	unsigned int	active_stacks;		/* pointer to active_stacks[CPU_NO] */
 	unsigned int	need_ast;			/* pointer to need_ast[CPU_NO] */
 /*
  *	Note: the following two pairs of words need to stay in order and each pair must
  *	be in the same reservation (line) granule 
  */
-	unsigned int	FPU_thread;			/* Thread owning the FPU on this cpu.*/
-	unsigned int	FPU_vmmCtx;			/* Owing virtual machine context */
-	unsigned int 	VMX_thread;			/* Thread owning the VMX on this cpu */
-	unsigned int 	VMX_vmmCtx;			/* Owing virtual machine context */
-	unsigned int	active_stacks;		/* pointer to active_stacks[CPU_NO] */
+	struct facility_context	*FPU_owner;		/* Owner of the FPU on this cpu */
+	unsigned int	pprsv1;
+	struct facility_context	*VMX_owner;		/* Owner of the VMX on this cpu */
+	unsigned int 	pprsv2;
+	unsigned int	next_savearea;			/* pointer to the next savearea */
 
 	/* PPC cache line boundary here - 040 */
-	unsigned int 	quickfret;			/* Pointer to savearea for exception exit to free */
+	unsigned int 	quickfret;			/* List of saveareas to release */
+	unsigned int 	lclfree;			/* Pointer to local savearea list */
+	unsigned int	lclfreecnt;			/* Entries in local savearea list */
 	unsigned int 	Lastpmap;			/* Last user pmap loaded  */
 	unsigned int	userspace;			/* Last loaded user memory space ID  */
 	unsigned int	userpmap;			/* User pmap - real address */
 	unsigned int 	liveVRSave;			/* VRSave assiciated with live vector registers */
 	unsigned int 	spcFlags;			/* Special thread flags */
-	unsigned int	liveFPSCR;			/* FPSCR which is for the live context */
-	unsigned int	ppbbTaskEnv;		/* BlueBox Task Environment */
 
 	/* PPC cache line boundary here - 060 */
 	boolean_t		interrupts_enabled;
-	unsigned int	rsrvd064;
+	unsigned int	ppbbTaskEnv;		/* BlueBox Task Environment */
 	IOInterruptHandler	interrupt_handler;
 	void *			interrupt_nub;
 	unsigned int	interrupt_source;
 	void *			interrupt_target;
 	void *			interrupt_refCon;
-	unsigned int	savedSave;			/* Savearea saved across sleep - must be 0 at boot */
+	time_base_enable_t	time_base_enable;
 
 	/* PPC cache line boundary here - 080 */
 	unsigned int	MPsigpStat;			/* Signal Processor status (interlocked update for this one) */
-#define MPsigpMsgp		0xC0000000		/* Message pending (busy + pass) */
+#define MPsigpMsgp		0xC0000000		/* Message pending (busy + pass ) */
 #define MPsigpBusy		0x80000000		/* Processor area busy, i.e., locked */
 #define MPsigpPass		0x40000000		/* Busy lock passed to receiving processor */
+#define MPsigpAck		0x20000000		/* Ack Busy lock passed to receiving processor */
 #define MPsigpSrc		0x000000FF		/* Processor that owns busy, i.e., the ID of */
 										/*   whomever set busy. When a busy is passed, */
 										/*   this is the requestor of the function. */
@@ -218,14 +224,17 @@ struct per_proc_info {
 	unsigned int	numSIGPwake;		/* Number of SIGP wakes recieved */
 	
 	/* PPC cache line boundary here - 140 */
+	unsigned int	numSIGPtimo;		/* Number of SIGP send timeouts */
+	unsigned int	numSIGPmast;		/* Number of SIGPast messages merged */
+	unsigned int	numSIGPmwake;		/* Number of SIGPwake messages merged */
 	unsigned int	spcTRc;				/* Special trace count */
 	unsigned int	spcTRp;				/* Special trace buffer pointer */
 	unsigned int 	Uassist;			/* User Assist Word */
-	unsigned int	rsrvd14C[5];		/* Reserved slots */
+	unsigned int	rsrvd158[2];		/* Reserved slots */
 	
 	/* PPC cache line boundary here - 160 */
-	time_base_enable_t	time_base_enable;
-	unsigned int	rsrvd164[7];		/* Reserved slots */
+	cpu_data_t		pp_cpu_data;		/* cpu data info */
+	unsigned int	rsrvd170[4];		/* Reserved slots */
 	
 	/* PPC cache line boundary here - 180 */
 	unsigned int	rsrvd180[8];		/* Reserved slots */
@@ -324,242 +333,18 @@ struct per_proc_info {
 
 };
 
+#define	pp_active_thread	pp_cpu_data.active_thread
+#define	pp_preemption_count	pp_cpu_data.preemption_level
+#define	pp_simple_lock_count	pp_cpu_data.simple_lock_count
+#define	pp_interrupt_level	pp_cpu_data.interrupt_level
+
 
 extern struct per_proc_info per_proc_info[NCPUS];
-
-typedef struct savearea {
-
-/*	The following area corresponds to ppc_saved_state and ppc_thread_state */
-
-/*										offset 0x0000 */
-	unsigned int 	save_srr0;
-	unsigned int 	save_srr1;
-	unsigned int 	save_r0;
-	unsigned int 	save_r1;
-	unsigned int 	save_r2;
-	unsigned int 	save_r3;
-	unsigned int 	save_r4;
-	unsigned int 	save_r5;
-
-	unsigned int 	save_r6;
-	unsigned int 	save_r7;
-	unsigned int 	save_r8;
-	unsigned int 	save_r9;
-	unsigned int 	save_r10;
-	unsigned int 	save_r11;
-	unsigned int 	save_r12;
-	unsigned int 	save_r13;
-
-	unsigned int 	save_r14;
-	unsigned int 	save_r15;
-	unsigned int 	save_r16;
-	unsigned int 	save_r17;
-	unsigned int 	save_r18;
-	unsigned int 	save_r19;
-	unsigned int 	save_r20;
-	unsigned int 	save_r21;
-
-	unsigned int 	save_r22;
-	unsigned int 	save_r23;
-	unsigned int 	save_r24;
-	unsigned int 	save_r25;
-	unsigned int 	save_r26;	
-	unsigned int 	save_r27;
-	unsigned int 	save_r28;
-	unsigned int 	save_r29;
-
-	unsigned int 	save_r30;
-	unsigned int 	save_r31;
-	unsigned int 	save_cr;		
-	unsigned int 	save_xer;
-	unsigned int 	save_lr;
-	unsigned int 	save_ctr;
-	unsigned int	save_mq;				
-	unsigned int	save_vrsave;
-	
-	unsigned int	save_sr_copyin;
-	unsigned int	save_space;
-	unsigned int	save_xfpscrpad;
-	unsigned int	save_xfpscr;
-	unsigned int	save_pad2[4];
-
-
-/*	The following corresponds to ppc_exception_state */
-
-/*										offset 0x00C0 */
-	unsigned int 	save_dar;
-	unsigned int 	save_dsisr;
-	unsigned int	save_exception;
-	unsigned int	save_pad3[5];
-
-/*	The following corresponds to ppc_float_state */
-
-/*										offset 0x00E0 */
-	double			save_fp0;
-	double			save_fp1;
-	double			save_fp2;
-	double			save_fp3;
-
-	double			save_fp4;
-	double			save_fp5;
-	double			save_fp6;
-	double			save_fp7;
-
-	double			save_fp8;
-	double			save_fp9;
-	double			save_fp10;
-	double			save_fp11;
-	
-	double			save_fp12;
-	double			save_fp13;
-	double			save_fp14;
-	double			save_fp15;
-	
-	double			save_fp16;
-	double			save_fp17;
-	double			save_fp18;
-	double			save_fp19;
-
-	double			save_fp20;
-	double			save_fp21;
-	double			save_fp22;
-	double			save_fp23;
-	
-	double			save_fp24;
-	double			save_fp25;
-	double			save_fp26;
-	double			save_fp27;
-	
-	double			save_fp28;
-	double			save_fp29;
-	double			save_fp30;
-	double			save_fp31;
-
-	unsigned int 	save_fpscr_pad;
-	unsigned int 	save_fpscr;
-	unsigned int	save_pad4[6];
-	
-/*	The following is the save area for the VMX registers */
-
-/*										offset 0x0200 */
-	unsigned int	save_vr0[4];
-	unsigned int	save_vr1[4];
-	unsigned int	save_vr2[4];
-	unsigned int	save_vr3[4];
-	unsigned int	save_vr4[4];
-	unsigned int	save_vr5[4];
-	unsigned int	save_vr6[4];
-	unsigned int	save_vr7[4];
-	unsigned int	save_vr8[4];
-	unsigned int	save_vr9[4];
-	unsigned int	save_vr10[4];
-	unsigned int	save_vr11[4];
-	unsigned int	save_vr12[4];
-	unsigned int	save_vr13[4];
-	unsigned int	save_vr14[4];
-	unsigned int	save_vr15[4];
-	unsigned int	save_vr16[4];
-	unsigned int	save_vr17[4];
-	unsigned int	save_vr18[4];
-	unsigned int	save_vr19[4];
-	unsigned int	save_vr20[4];
-	unsigned int	save_vr21[4];
-	unsigned int	save_vr22[4];
-	unsigned int	save_vr23[4];
-	unsigned int	save_vr24[4];
-	unsigned int	save_vr25[4];
-	unsigned int	save_vr26[4];
-	unsigned int	save_vr27[4];
-	unsigned int	save_vr28[4];
-	unsigned int	save_vr29[4];
-	unsigned int	save_vr30[4];
-	unsigned int	save_vr31[4];
-	unsigned int	save_vscr[4];			/* Note that this is always valid if VMX has been used */
-	unsigned int	save_pad5[4];			/* Insures that vrvalid is on a cache line */
-	unsigned int	save_vrvalid;			/* VRs that have been saved */
-	unsigned int	save_pad6[7];
-	
-/*	The following is the save area for the segment registers */
-
-/*										offset 0x0440 */
-
-	unsigned int 	save_sr0;
-	unsigned int 	save_sr1;
-	unsigned int 	save_sr2;
-	unsigned int 	save_sr3;
-	unsigned int 	save_sr4;
-	unsigned int 	save_sr5;
-	unsigned int 	save_sr6;
-	unsigned int 	save_sr7;
-
-	unsigned int 	save_sr8;
-	unsigned int 	save_sr9;
-	unsigned int 	save_sr10;
-	unsigned int 	save_sr11;
-	unsigned int 	save_sr12;
-	unsigned int 	save_sr13;
-	unsigned int 	save_sr14;
-	unsigned int 	save_sr15;
-
-/* The following are the control area for this save area */
-
-/*										offset 0x0480 */
-
-	struct savearea	*save_prev;				/* The address of the previous normal savearea */
-	struct savearea	*save_prev_float;		/* The address of the previous floating point savearea */
-	struct savearea	*save_prev_vector;		/* The address of the previous vector savearea */
-	struct savearea	*save_qfret;			/* The "quick release" chain */
-	struct savearea	*save_phys;				/* The physical address of this savearea */
-	struct thread_activation	*save_act;	/* Pointer to the associated activation */
-	unsigned int	save_flags;				/* Various flags */
-#define save_perm	0x80000000				/* Permanent area, cannot be released */
-	unsigned int	save_level_fp;			/* Level that floating point state belongs to */
-	unsigned int	save_level_vec;			/* Level that vector state belongs to */
-
-} savearea;
-
-typedef struct savectl {					/* Savearea control */
-	
-	unsigned int	*sac_next;				/* Points to next savearea page that has a free slot  - real */
-	unsigned int	sac_vrswap;				/* XOR mask to swap V to R or vice versa */
-	unsigned int	sac_alloc;				/* Bitmap of allocated slots */
-	unsigned int	sac_flags;				/* Various flags */
-} savectl;
-
-struct Saveanchor {
-	unsigned int	savelock;				/* Lock word for savearea manipulation */
-	int				savecount;				/* The total number of save areas allocated */
-	int				saveinuse;				/* Number of areas in use */
-	int				savemin;				/* We abend if lower than this */
-	int				saveneghyst;			/* The negative hysteresis value */
-	int				savetarget;				/* The target point for free save areas */
-	int				saveposhyst;			/* The positive hysteresis value */
-	unsigned int	savefree;				/* Anchor for the freelist queue */
-											/* Cache line (32-byte) boundary */
-	int				savextnd;				/* Free list extention count */
-	int				saveneed;				/* Number of savearea's needed.  So far, we assume we need 3 per activation */
-	int				savemaxcount;
-	int				savespare[5];			/* Spare */
-};
-
 
 extern char *trap_type[];
 
 #endif /* ndef ASSEMBLER */
-
-#define sac_empty	0xC0000000				/* Mask with all entries empty */
-#define sac_cnt		2						/* Number of entries per page */
-#define sac_busy	0x80000000				/* This page is busy - used during initial allocation */
-#define sac_perm	0x40000000				/* Page permanently assigned */
-
-#define SAVattach	0x80000000				/* Savearea is attached to a thread */
-#define SAVfpuvalid	0x40000000				/* Savearea contains FPU context */
-#define SAVvmxvalid	0x20000000				/* Savearea contains VMX context */
-#define SAVinuse	0xE0000000				/* Save area is inuse */
-#define SAVrststk	0x00010000				/* Indicates that the current stack should be reset to empty */
-#define SAVsyscall	0x00020000				/* Indicates that the savearea is associated with a syscall */
-#define SAVredrive	0x00040000				/* Indicates that the low-level fault handler associated */
-											/* with this savearea should be redriven */
+/* with this savearea should be redriven */
 
 /* cpu_flags defs */
 #define SIGPactive	0x8000
@@ -572,12 +357,6 @@ extern char *trap_type[];
 #define loadMSR		0x7FF4
 
 #define T_VECTOR_SIZE	4					/* function pointer size */
-#define InitialSaveMin		4				/* The initial value for the minimum number of saveareas */
-#define InitialNegHysteresis	5			/* The number off from target before we adjust upwards */
-#define InitialPosHysteresis	10			/* The number off from target before we adjust downwards */
-#define InitialSaveTarget	20				/* The number of saveareas for an initial target */
-#define	InitialSaveAreas	20				/* The number of saveareas to allocate at boot */
-#define	InitialSaveBloks	(InitialSaveAreas+sac_cnt-1)/sac_cnt	/* The number of savearea blocks to allocate at boot */
 
 /* Hardware exceptions */
 
@@ -636,9 +415,12 @@ extern char *trap_type[];
 #define failStack 1
 #define failMapping 2
 #define failContext 3
+#define failNoSavearea 4
+#define failSaveareaCorr 5
+#define failBadLiveContext 6
 
 /* Always must be last - update failNames table in model_dep.c as well */
-#define failUnknown 4
+#define failUnknown 7
 
 #ifndef ASSEMBLER
 

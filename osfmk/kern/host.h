@@ -47,8 +47,6 @@
  * any improvements or extensions that they make and grant Carnegie Mellon
  * the rights to redistribute these changes.
  */
-/*
- */
 
 /*
  *	kern/host.h
@@ -61,12 +59,17 @@
 #define _KERN_HOST_H_
 
 #include <mach/mach_types.h>
-#include <mach/exception_types.h>
-#include <kern/kern_types.h>
+
+#include <sys/appleapiopts.h>
+
+#ifdef	__APPLE_API_PRIVATE
 
 #ifdef MACH_KERNEL_PRIVATE
 #include <kern/lock.h>
 #include <kern/exception.h>
+#include <mach/exception_types.h>
+#include <kern/kern_types.h>
+
 
 struct	host {
 	decl_mutex_data(,lock)		/* lock to protect exceptions */
@@ -85,6 +88,8 @@ extern host_data_t	realhost;
 #define host_unlock(host)	mutex_unlock(&(host)->lock)
 
 #endif /* MACH_KERNEL_PRIVATE */
+
+#endif	/* __APPLE_API_PRIVATE */
 
 /*
  * Access routines for inside the kernel.

@@ -52,6 +52,7 @@
  * SUCH DAMAGE.
  *
  *	@(#)bpf_compat.h	8.1 (Berkeley) 6/10/93
+ * $FreeBSD: src/sys/net/bpf_compat.h,v 1.6 1999/08/28 00:48:13 peter Exp $
  */
 
 #ifndef _NET_BPF_COMPAT_H_

@@ -1,4 +1,5 @@
-/*	$KAME: ipsec.h,v 1.28 2000/03/15 13:07:57 sakane Exp $	*/
+/*	$FreeBSD: src/sys/netinet6/ipsec.h,v 1.4.2.2 2001/07/03 11:01:54 ume Exp $	*/
+/*	$KAME: ipsec.h,v 1.44 2001/03/23 08:08:47 itojun Exp $	*/
 
 /*
  * Copyright (C) 1995, 1996, 1997, and 1998 WIDE Project.
@@ -35,14 +36,16 @@
 
 #ifndef _NETINET6_IPSEC_H_
 #define _NETINET6_IPSEC_H_
+#include <sys/appleapiopts.h>
 
 #include <net/pfkeyv2.h>
 #include <netkey/keydb.h>
 
-#if KERNEL
+#ifdef KERNEL
+#ifdef __APPLE_API_PRIVATE
 /*
  * Security Policy Index
- * NOTE: Encure to be same address family and upper layer protocol.
+ * NOTE: Ensure to be same address family and upper layer protocol.
  * NOTE: ul_proto, port number, uid, gid:
  *	ANY: reserved for waldcard.
  *	0 to (~0 - 1): is one of the number of each value.
@@ -77,6 +80,18 @@ struct secpolicy {
 	struct ipsecrequest *req;
 				/* pointer to the ipsec request tree, */
 				/* if policy == IPSEC else this value == NULL.*/
+
+	/*
+	 * lifetime handler.
+	 * the policy can be used without limitiation if both lifetime and
+	 * validtime are zero.
+	 * "lifetime" is passed by sadb_lifetime.sadb_lifetime_addtime.
+	 * "validtime" is passed by sadb_lifetime.sadb_lifetime_usetime.
+	 */
+	long created;		/* time created the policy */
+	long lastused;		/* updated every when kernel sends a packet */
+	long lifetime;		/* duration of the lifetime of this policy */
+	long validtime;		/* duration this policy is valid without use */
 };
 
 /* Request for IPsec */
@@ -105,10 +120,11 @@ struct secspacq {
 
 	struct secpolicyindex spidx;
 
-	u_int32_t tick;		/* for lifetime */
+	long created;		/* for lifetime */
 	int count;		/* for lifetime */
 	/* XXX: here is mbuf place holder to be sent ? */
 };
+#endif /* __APPLE_API_PRIVATE */
 #endif /*KERNEL*/
 
 /* according to IANA assignment, port 0x0000 and proto 0xff are reserved. */
@@ -135,9 +151,9 @@ struct secspacq {
 
 /* Policy level */
 /*
- * IPSEC, ENTRUST and BYPASS are allowd for setsockopt() in PCB,
- * DISCARD, IPSEC and NONE are allowd for setkey() in SPD.
- * DISCARD and NONE are allowd for system default.
+ * IPSEC, ENTRUST and BYPASS are allowed for setsockopt() in PCB,
+ * DISCARD, IPSEC and NONE are allowed for setkey() in SPD.
+ * DISCARD and NONE are allowed for system default.
  */
 #define IPSEC_POLICY_DISCARD	0	/* discarding packet */
 #define IPSEC_POLICY_NONE	1	/* through IPsec engine */
@@ -164,6 +180,7 @@ struct secspacq {
 				 */
 #define IPSEC_REPLAYWSIZE  32
 
+#ifdef __APPLE_API_UNSTABLE
 /* statistics for ipsec processing */
 struct ipsecstat {
 	u_quad_t in_success;  /* succeeded inbound process */
@@ -193,6 +210,7 @@ struct ipsecstat {
 	u_quad_t out_ahhist[256];
 	u_quad_t out_comphist[256];
 };
+#endif /* __APPLE_API_UNSTABLE */
 
 /*
  * Definitions for IPsec & Key sysctl operations.
@@ -206,13 +224,16 @@ struct ipsecstat {
 #define IPSECCTL_DEF_ESP_NETLEV		4	/* int; ESP tunnel mode */
 #define IPSECCTL_DEF_AH_TRANSLEV	5	/* int; AH transport mode */
 #define IPSECCTL_DEF_AH_NETLEV		6	/* int; AH tunnel mode */
+#if 0	/*obsolete, do not reuse*/
 #define IPSECCTL_INBOUND_CALL_IKE	7
+#endif
 #define	IPSECCTL_AH_CLEARTOS		8
 #define	IPSECCTL_AH_OFFSETMASK		9
 #define	IPSECCTL_DFBIT			10
 #define	IPSECCTL_ECN			11
 #define	IPSECCTL_DEBUG			12
-#define IPSECCTL_MAXID			13
+#define	IPSECCTL_ESP_RANDPAD		13
+#define IPSECCTL_MAXID			14
 
 #define IPSECCTL_NAMES { \
 	{ 0, 0 }, \
@@ -222,12 +243,13 @@ struct ipsecstat {
 	{ "esp_net_deflev", CTLTYPE_INT }, \
 	{ "ah_trans_deflev", CTLTYPE_INT }, \
 	{ "ah_net_deflev", CTLTYPE_INT }, \
-	{ "inbound_call_ike", CTLTYPE_INT }, \
+	{ 0, 0 }, \
 	{ "ah_cleartos", CTLTYPE_INT }, \
 	{ "ah_offsetmask", CTLTYPE_INT }, \
 	{ "dfbit", CTLTYPE_INT }, \
 	{ "ecn", CTLTYPE_INT }, \
 	{ "debug", CTLTYPE_INT }, \
+	{ "esp_randpad", CTLTYPE_INT }, \
 }
 
 #define IPSEC6CTL_NAMES { \
@@ -238,81 +260,41 @@ struct ipsecstat {
 	{ "esp_net_deflev", CTLTYPE_INT }, \
 	{ "ah_trans_deflev", CTLTYPE_INT }, \
 	{ "ah_net_deflev", CTLTYPE_INT }, \
-	{ "inbound_call_ike", CTLTYPE_INT }, \
+	{ 0, 0 }, \
 	{ 0, 0 }, \
 	{ 0, 0 }, \
 	{ 0, 0 }, \
 	{ "ecn", CTLTYPE_INT }, \
 	{ "debug", CTLTYPE_INT }, \
+	{ "esp_randpad", CTLTYPE_INT }, \
 }
 
-#ifdef __bsdi__
-#define IPSECCTL_VARS { \
-	0, \
-	0, \
-	&ip4_def_policy.policy, \
-	&ip4_esp_trans_deflev, \
-	&ip4_esp_net_deflev, \
-	&ip4_ah_trans_deflev, \
-	&ip4_ah_net_deflev, \
-	&ip4_inbound_call_ike, \
-	&ip4_ah_cleartos, \
-	&ip4_ah_offsetmask, \
-	&ip4_ipsec_dfbit, \
-	&ip4_ipsec_ecn, \
-	&ipsec_debug, \
-}
-
-#define IPSEC6CTL_VARS { \
-	0, \
-	0, \
-	&ip6_def_policy.policy, \
-	&ip6_esp_trans_deflev, \
-	&ip6_esp_net_deflev, \
-	&ip6_ah_trans_deflev, \
-	&ip6_ah_net_deflev, \
-	&ip6_inbound_call_ike, \
-	0, \
-	0, \
-	0, \
-	&ip6_ipsec_ecn, \
-	&ipsec_debug, \
-}
-#endif
-
-#if KERNEL
+#ifdef KERNEL
+#ifdef __APPLE_API_PRIVATE
 struct ipsec_output_state {
 	struct mbuf *m;
 	struct route *ro;
 	struct sockaddr *dst;
 };
 
+struct ipsec_history {
+	int ih_proto;
+	u_int32_t ih_spi;
+};
+
 extern int ipsec_debug;
 
-#if INET
 extern struct ipsecstat ipsecstat;
 extern struct secpolicy ip4_def_policy;
 extern int ip4_esp_trans_deflev;
 extern int ip4_esp_net_deflev;
 extern int ip4_ah_trans_deflev;
 extern int ip4_ah_net_deflev;
-extern int ip4_inbound_call_ike;
 extern int ip4_ah_cleartos;
 extern int ip4_ah_offsetmask;
 extern int ip4_ipsec_dfbit;
 extern int ip4_ipsec_ecn;
-#endif
-
-#if INET6
-extern struct ipsecstat ipsec6stat;
-extern struct secpolicy ip6_def_policy;
-extern int ip6_esp_trans_deflev;
-extern int ip6_esp_net_deflev;
-extern int ip6_ah_trans_deflev;
-extern int ip6_ah_net_deflev;
-extern int ip6_inbound_call_ike;
-extern int ip6_ipsec_ecn;
-#endif
+extern int ip4_esp_randpad;
 
 #define ipseclog(x)	do { if (ipsec_debug) log x; } while (0)
 
@@ -321,17 +303,7 @@ extern struct secpolicy *ipsec4_getpolicybysock
 extern struct secpolicy *ipsec4_getpolicybyaddr
 	__P((struct mbuf *, u_int, int, int *));
 
-#if INET6
-extern struct secpolicy *ipsec6_getpolicybysock
-	__P((struct mbuf *, u_int, struct socket *, int *));
-extern struct secpolicy *ipsec6_getpolicybyaddr
-	__P((struct mbuf *, u_int, int, int *));
-#endif /*INET6*/
-
 struct inpcb;
-#if INET6
-struct in6pcb;
-#endif
 extern int ipsec_init_policy __P((struct socket *so, struct inpcbpolicy **));
 extern int ipsec_copy_policy
 	__P((struct inpcbpolicy *, struct inpcbpolicy *));
@@ -345,92 +317,40 @@ extern int ipsec4_delete_pcbpolicy __P((struct inpcb *));
 extern int ipsec4_in_reject_so __P((struct mbuf *, struct socket *));
 extern int ipsec4_in_reject __P((struct mbuf *, struct inpcb *));
 
-#if INET6
-extern int ipsec6_in_reject_so __P((struct mbuf *, struct socket *));
-#if defined(__FreeBSD__) && __FreeBSD__ >= 3 || defined (__APPLE__)
-extern int ipsec6_delete_pcbpolicy __P((struct inpcb *));
-extern int ipsec6_set_policy __P((struct inpcb *inp, int optname,
-	caddr_t request, size_t len, int priv));
-extern int ipsec6_get_policy
-	__P((struct inpcb *inp, caddr_t request, size_t len, struct mbuf **mp));
-extern int ipsec6_in_reject __P((struct mbuf *, struct inpcb *));
-#else
-extern int ipsec6_delete_pcbpolicy __P((struct in6pcb *));
-extern int ipsec6_set_policy __P((struct in6pcb *in6p, int optname,
-	caddr_t request, size_t len, int priv));
-extern int ipsec6_get_policy __P((struct in6pcb *in6p, caddr_t request,
-	size_t len, struct mbuf **mp));
-extern int ipsec6_in_reject __P((struct mbuf *, struct in6pcb *));
-#endif
-#endif /*INET6*/
-
 struct secas;
 struct tcpcb;
-struct tcp6cb;
 extern int ipsec_chkreplay __P((u_int32_t, struct secasvar *));
 extern int ipsec_updatereplay __P((u_int32_t, struct secasvar *));
 
 extern size_t ipsec4_hdrsiz __P((struct mbuf *, u_int, struct inpcb *));
-#if defined(__FreeBSD__) && __FreeBSD__ >= 3 || defined (__APPLE__)
-extern size_t ipsec_hdrsiz_tcp __P((struct tcpcb *, int));
-#else
-extern size_t ipsec4_hdrsiz_tcp __P((struct tcpcb *));
-#endif
-#if INET6
-#if defined(__FreeBSD__) && __FreeBSD__ >= 3 || defined (__APPLE__)
-extern size_t ipsec6_hdrsiz __P((struct mbuf *, u_int, struct inpcb *));
-#else
-extern size_t ipsec6_hdrsiz __P((struct mbuf *, u_int, struct in6pcb *));
-#if defined(__NetBSD__) && !defined(TCP6)
-extern size_t ipsec6_hdrsiz_tcp __P((struct tcpcb *));
-#else
-extern size_t ipsec6_hdrsiz_tcp __P((struct tcp6cb *));
-#endif
-#endif
-#endif
+extern size_t ipsec_hdrsiz_tcp __P((struct tcpcb *));
 
 struct ip;
-#if INET6
-struct ip6_hdr;
-#endif
 extern const char *ipsec4_logpacketstr __P((struct ip *, u_int32_t));
-#if INET6
-extern const char *ipsec6_logpacketstr __P((struct ip6_hdr *, u_int32_t));
-#endif
 extern const char *ipsec_logsastr __P((struct secasvar *));
 
 extern void ipsec_dumpmbuf __P((struct mbuf *));
 
 extern int ipsec4_output __P((struct ipsec_output_state *, struct secpolicy *,
 	int));
-#if INET6
-extern int ipsec6_output_trans __P((struct ipsec_output_state *, u_char *,
-	struct mbuf *, struct secpolicy *, int, int *));
-extern int ipsec6_output_tunnel __P((struct ipsec_output_state *,
-	struct secpolicy *, int));
-#endif
-extern int ipsec4_tunnel_validate __P((struct ip *, u_int, struct secasvar *));
-#if INET6
-extern int ipsec6_tunnel_validate __P((struct ip6_hdr *, u_int,
+extern int ipsec4_tunnel_validate __P((struct mbuf *, int, u_int,
 	struct secasvar *));
-#endif
 extern struct mbuf *ipsec_copypkt __P((struct mbuf *));
-extern void ipsec_setsocket __P((struct mbuf *, struct socket *));
+extern void ipsec_delaux __P((struct mbuf *));
+extern int ipsec_setsocket __P((struct mbuf *, struct socket *));
 extern struct socket *ipsec_getsocket __P((struct mbuf *));
-
-#if defined(__bsdi__) || defined(__NetBSD__)
-extern int ipsec_sysctl __P((int *, u_int, void *, size_t *, void *, size_t));
-extern int ipsec6_sysctl __P((int *, u_int, void *, size_t *, void *, size_t));
-#endif /* __bsdi__ || __NetBSD__ */
-
+extern int ipsec_addhist __P((struct mbuf *, int, u_int32_t)); 
+extern struct ipsec_history *ipsec_gethist __P((struct mbuf *, int *));
+extern void ipsec_clearhist __P((struct mbuf *));
+#endif /* __APPLE_API_PRIVATE */
 #endif /*KERNEL*/
 
 #ifndef KERNEL
-extern caddr_t ipsec_set_policy __P((char *policy, int buflen));
-extern int ipsec_get_policylen __P((caddr_t buf));
-extern char *ipsec_dump_policy __P((caddr_t buf, char *delimiter));
+extern caddr_t ipsec_set_policy __P((char *, int));
+extern int ipsec_get_policylen __P((caddr_t));
+extern char *ipsec_dump_policy __P((caddr_t, char *));
 
-extern char *ipsec_strerror __P((void));
+extern const char *ipsec_strerror __P((void));
 #endif /*!KERNEL*/
 
 #endif /*_NETINET6_IPSEC_H_*/

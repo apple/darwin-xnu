@@ -31,48 +31,7 @@
 #include <kern/kern_types.h>
 #include <pexpert/pexpert.h>
 
-
-#if	defined(PEXPERT_KERNEL_PRIVATE) || defined(MACH_KERNEL_PRIVATE)
-/* IO memory map services */
-
-/* Map memory map IO space */
-vm_offset_t ml_io_map(
-	vm_offset_t phys_addr, 
-	vm_size_t size);
-
-/* boot memory allocation */
-vm_offset_t ml_static_malloc(
-	vm_size_t size);
-#endif
-
-vm_offset_t
-ml_static_ptovirt(
-	vm_offset_t);
-
-void ml_static_mfree(
-	vm_offset_t,
-	vm_size_t);
-        
-/* virtual to physical on wired pages */
-vm_offset_t ml_vtophys(
-	vm_offset_t vaddr);
-
-/* Init Interrupts */
-void ml_install_interrupt_handler(
-	void *nub,
-	int source,
-	void *target,
-	IOInterruptHandler handler,
-	void *refCon);
-               
-#ifdef	MACH_KERNEL_PRIVATE
-void	ml_init_interrupt(void);
-
-boolean_t fake_get_interrupts_enabled(void);
-
-boolean_t fake_set_interrupts_enabled(
-	boolean_t enable);
-#endif
+#include <sys/appleapiopts.h>
 
 /* Get Interrupts Enabled */
 boolean_t ml_get_interrupts_enabled(void);
@@ -86,25 +45,45 @@ boolean_t ml_at_interrupt_context(void);
 /* Generate a fake interrupt */
 void ml_cause_interrupt(void);
 
-void ml_thread_policy(
-	thread_t thread,
-	unsigned policy_id,
-	unsigned policy_info);   
+/* Type for the IPI Hander */
+typedef void (*ipi_handler_t)(void);
 
-#define	MACHINE_GROUP				0x00000001
-#define MACHINE_NETWORK_GROUP		0x10000000
-#define	MACHINE_NETWORK_WORKLOOP	0x00000001
-#define	MACHINE_NETWORK_NETISR		0x00000002
+/* Type for the Time Base Enable function */
+typedef void (*time_base_enable_t)(cpu_id_t cpu_id, boolean_t enable);
 
-#ifdef	MACH_KERNEL_PRIVATE
-/* check pending timers */
-void machine_clock_assist(void);
+/* enables (or disables) the processor nap mode the function returns the previous value*/
+boolean_t ml_enable_nap(
+        int target_cpu,
+        boolean_t nap_enabled);
 
-void machine_idle(void);
+/* Put the processor to sleep */
+void ml_ppc_sleep(void);
+void ml_get_timebase(unsigned long long *timstamp);
+void ml_sense__nmi(void);
 
-void machine_signal_idle(
-	processor_t processor);
-#endif
+int ml_enable_cache_level(int cache_level, int enable);
+
+void ml_static_mfree(
+	vm_offset_t,
+	vm_size_t);
+        
+/* Init Interrupts */
+void ml_install_interrupt_handler(
+	void *nub,
+	int source,
+	void *target,
+	IOInterruptHandler handler,
+	void *refCon);
+               
+#ifdef __APPLE_API_UNSTABLE
+
+vm_offset_t
+ml_static_ptovirt(
+	vm_offset_t);
+
+/* virtual to physical on wired pages */
+vm_offset_t ml_vtophys(
+	vm_offset_t vaddr);
 
 /* PCI config cycle probing */
 boolean_t ml_probe_read(
@@ -127,12 +106,6 @@ void ml_phys_write_byte(
 void ml_phys_write(
 	vm_offset_t paddr, unsigned int data);
 
-/* Type for the IPI Hander */
-typedef void (*ipi_handler_t)(void);
-
-/* Type for the Time Base Enable function */
-typedef void (*time_base_enable_t)(cpu_id_t cpu_id, boolean_t enable);
-
 /* Struct for ml_processor_register */
 struct ml_processor_info_t {
 	cpu_id_t			cpu_id;
@@ -151,13 +124,64 @@ kern_return_t ml_processor_register(
 	processor_t *processor,
 	ipi_handler_t *ipi_handler);
 
-/* enables (or disables) the processor nap mode the function returns the previous value*/
-boolean_t ml_enable_nap(
-        int target_cpu,
-        boolean_t nap_enabled);
+#endif /* __APPLE_API_UNSTABLE */
 
-/* Put the processor to sleep */
-void ml_ppc_sleep(void);
+#ifdef  __APPLE_API_PRIVATE
+#if	defined(PEXPERT_KERNEL_PRIVATE) || defined(MACH_KERNEL_PRIVATE)
+/* IO memory map services */
+
+/* Map memory map IO space */
+vm_offset_t ml_io_map(
+	vm_offset_t phys_addr, 
+	vm_size_t size);
+
+/* boot memory allocation */
+vm_offset_t ml_static_malloc(
+	vm_size_t size);
+
+#endif /* PEXPERT_KERNEL_PRIVATE || MACH_KERNEL_PRIVATE */
+
+#ifdef	MACH_KERNEL_PRIVATE
+void	ml_init_interrupt(void);
+
+boolean_t fake_get_interrupts_enabled(void);
+
+boolean_t fake_set_interrupts_enabled(
+	boolean_t enable);
+
+/* check pending timers */
+void machine_clock_assist(void);
+
+void machine_idle(void);
+
+void machine_signal_idle(
+	processor_t processor);
+
+void cacheInit(void);
+
+void cacheDisable(void);
+
+void ml_thrm_init(void);
+unsigned int ml_read_temp(void);
+
+void ml_thrm_set(	
+	unsigned int low, 
+	unsigned int high);
+
+unsigned int ml_throttle(
+	unsigned int);
+
+#endif /* MACH_KERNEL_PRIVATE */
+
+void ml_thread_policy(
+	thread_t thread,
+	unsigned policy_id,
+	unsigned policy_info);
+
+#define MACHINE_GROUP				0x00000001
+#define MACHINE_NETWORK_GROUP		0x10000000 
+#define MACHINE_NETWORK_WORKLOOP	0x00000001
+#define MACHINE_NETWORK_NETISR		0x00000002
 
 /* Struct for ml_ppc_get_cpu_info */
 struct ml_ppc_cpu_info_t {
@@ -176,26 +200,8 @@ typedef struct ml_ppc_cpu_info_t ml_ppc_cpu_info_t;
 /* Get processor info */
 void ml_ppc_get_info(ml_ppc_cpu_info_t *cpu_info);
 
-#ifdef	MACH_KERNEL_PRIVATE
-void cacheInit(void);
-
-void cacheDisable(void);
-
-void ml_thrm_init(void);
-unsigned int ml_read_temp(void);
-
-void ml_thrm_set(	
-	unsigned int low, 
-	unsigned int high);
-
-unsigned int ml_throttle(
-	unsigned int);
-#endif
-
-void ml_get_timebase(unsigned long long *timstamp);
-void ml_sense__nmi(void);
-
-int ml_enable_cache_level(int cache_level, int enable);
 void ml_set_processor_speed(unsigned long speed);
+
+#endif /* __APPLE_API_PRIVATE */
 
 #endif /* _PPC_MACHINE_ROUTINES_H_ */

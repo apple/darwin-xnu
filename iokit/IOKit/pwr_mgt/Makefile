@@ -5,7 +5,7 @@ export MakeInc_dir=${SRCROOT}/makedefs/MakeInc.dir
 
 IOKIT_FRAMEDIR = $(FRAMEDIR)/IOKit.framework/Versions/A
 export INCDIR = $(IOKIT_FRAMEDIR)/Headers
-export LCLDIR = $(FRAMEDIR)/Kernel.framework/Versions/A/PrivateHeaders/IOKit
+export LCLDIR = $(KPINCDIR)/IOKit
 
 include $(MakeInc_cmd)
 include $(MakeInc_def)

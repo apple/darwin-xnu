@@ -49,6 +49,9 @@
 #ifndef _SYS_LINKER_SET_H_
 #define _SYS_LINKER_SET_H_
 
+#include <sys/appleapiopts.h>
+
+#if !defined(KERNEL) || defined(__APPLE_API_PRIVATE)
 /*
  * The following macros are used to declare global sets of objects, which
  * are collected by the linker into a `struct linker_set' as defined below.
@@ -95,6 +98,7 @@ struct linker_set {
 	const void	*ls_items[1];		/* really ls_length of them,
 						 * trailing NULL */
 };
+#endif /* !KERNEL || __APPLE_API_PRIVATE */
 
 #endif /* _SYS_LINKER_SET_H_ */
 

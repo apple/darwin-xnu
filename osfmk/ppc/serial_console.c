@@ -109,8 +109,7 @@ void cnputcusr(char c) {										/* Echo input character directly */
 
 	unsigned int cpu;
 	
-	if (cpu_data[master_cpu].active_thread) cpu = cpu_number();	/* If we're started up, use the current CPU */
-	else cpu = master_cpu;										/* Otherwise use the master_cpu */
+	cpu = cpu_number();
 	
 	hw_atomic_add(&debugger_holdoff[cpu], 1);					/* Don't allow debugger entry just now (this is a HACK) */
 	
@@ -140,8 +139,7 @@ cnputc(char c)
 		return;													/* If printing is disabled, bail... */
 	}	
 	
-	if (cpu_data[master_cpu].active_thread) cpu = cpu_number();	/* If we're started up, use the current CPU */
-	else cpu = master_cpu;										/* Otherwise use the master_cpu */
+	cpu = cpu_number();
 
 	hw_atomic_add(&debugger_holdoff[cpu], 1);					/* Don't allow debugger entry just now (this is a HACK) */
 

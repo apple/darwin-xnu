@@ -70,7 +70,6 @@
 #include <kern/task.h>
 #include <kern/counters.h>
 #include <kern/thread_act.h>
-#include <kern/thread_pool.h>
 #include <mach/mach_port_server.h>
 #include <vm/vm_map.h>
 #include <vm/vm_kern.h>
@@ -265,11 +264,20 @@ mach_port_names(
 
 		kr = vm_map_wire(ipc_kernel_map, addr1, addr1 + size,
 				     VM_PROT_READ|VM_PROT_WRITE, FALSE);
-		assert(kr == KERN_SUCCESS);
+		if (kr != KERN_SUCCESS) {
+			kmem_free(ipc_kernel_map, addr1, size);
+			kmem_free(ipc_kernel_map, addr2, size);
+			return KERN_RESOURCE_SHORTAGE;
+		}
 
 		kr = vm_map_wire(ipc_kernel_map, addr2, addr2 + size,
 				     VM_PROT_READ|VM_PROT_WRITE, FALSE);
-		assert(kr == KERN_SUCCESS);
+		if (kr != KERN_SUCCESS) {
+			kmem_free(ipc_kernel_map, addr1, size);
+			kmem_free(ipc_kernel_map, addr2, size);
+			return KERN_RESOURCE_SHORTAGE;
+		}
+
 	}
 	/* space is read-locked and active */
 
@@ -499,7 +507,7 @@ mach_port_allocate_name(
 	if (!MACH_PORT_VALID(name))
 		return KERN_INVALID_VALUE;
 
-	kr = mach_port_allocate_full (space, right, SUBSYSTEM_NULL,
+	kr = mach_port_allocate_full (space, right, MACH_PORT_NULL,
 					&qos, &name);
 	return (kr);
 }
@@ -531,7 +539,7 @@ mach_port_allocate(
 	kern_return_t		kr;
 	mach_port_qos_t		qos = qos_template;
 
-	kr = mach_port_allocate_full (space, right, SUBSYSTEM_NULL,
+	kr = mach_port_allocate_full (space, right, MACH_PORT_NULL,
 					&qos, namep);
 	return (kr);
 }
@@ -564,47 +572,10 @@ mach_port_allocate_qos(
 {
 	kern_return_t		kr;
 
-	if (qosp->name == TRUE)
+	if (qosp->name)
 		return KERN_INVALID_ARGUMENT;
-	kr = mach_port_allocate_full (space, right, SUBSYSTEM_NULL,
+	kr = mach_port_allocate_full (space, right, MACH_PORT_NULL,
 					qosp, namep);
-	return (kr);
-}
-
-/*
- *	Routine:	mach_port_allocate_subsystem [kernel call]
- *	Purpose:
- *		Allocates a receive right in a space.  Like
- *		mach_port_allocate, except that the caller specifies an
- *		RPC subsystem that is to be used to implement RPC's to the
- *		port. When possible, allocate rpc subsystem ports without
- *		nms, since within RPC ports are intended to be used for
- *		identity only (i.e. nms is painful in the distributed case
- *		and we don't need or want it for RPC anyway).
- *	Conditions:
- *		Nothing locked.
- *	Returns:
- *		KERN_SUCCESS		The right is allocated.
- *		KERN_INVALID_TASK	The space is null.
- *		KERN_INVALID_TASK	The space is dead.
- *		KERN_RESOURCE_SHORTAGE	Couldn't allocate memory.
- *		KERN_NO_SPACE		No room in space for another right.
- *		KERN_INVALID_ARGUMENT	bogus subsystem
- */
-
-kern_return_t
-mach_port_allocate_subsystem(
-	ipc_space_t		space,
-	subsystem_t		subsystem,
-	mach_port_name_t	*namep)
-{
-	kern_return_t		kr;
-	ipc_port_t		port;
-	mach_port_qos_t		qos = qos_template;
-
-	kr = mach_port_allocate_full (space, 
-					MACH_PORT_RIGHT_RECEIVE,
-					subsystem, &qos, namep);
 	return (kr);
 }
 
@@ -631,7 +602,7 @@ kern_return_t
 mach_port_allocate_full(
 	ipc_space_t		space,
 	mach_port_right_t	right,
-	subsystem_t		subsystem,
+	mach_port_t		proto,
 	mach_port_qos_t		*qosp,
 	mach_port_name_t	*namep)
 {
@@ -641,16 +612,14 @@ mach_port_allocate_full(
 	if (space == IS_NULL)
 		return (KERN_INVALID_TASK);
 
+	if (proto != MACH_PORT_NULL)
+		return (KERN_INVALID_VALUE);
+
 	if (qosp->name) {
 		if (!MACH_PORT_VALID (*namep))
 			return (KERN_INVALID_VALUE);
 		if (is_fast_space (space))
 			return (KERN_FAILURE);
-	}
-
-	if (subsystem != SUBSYSTEM_NULL) {
-		if (right != MACH_PORT_RIGHT_RECEIVE)
-			return (KERN_INVALID_VALUE);
 	}
 
 	if (qosp->prealloc) {
@@ -676,10 +645,6 @@ mach_port_allocate_full(
 			if (qosp->prealloc) 
 				ipc_kmsg_set_prealloc(kmsg, port);
 
-			if (subsystem != SUBSYSTEM_NULL) {
-				port->ip_subsystem = &subsystem->user;
-				subsystem_reference (subsystem);
-			}
 			ip_unlock(port);
 
 		} else if (qosp->prealloc)
@@ -1269,7 +1234,7 @@ mach_port_move_member(
 		assert(nset != IPS_NULL);
 	}
 	ip_lock(port);
-	ipc_pset_remove_all(port);
+	ipc_pset_remove_from_all(port);
 
 	if (nset != IPS_NULL) {
 		ips_lock(nset);

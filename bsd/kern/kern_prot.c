@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2002 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -75,6 +75,8 @@
 
 #include <sys/mount.h>
 #include <mach/message.h>
+#include <mach/host_security.h>
+
 #include <kern/host.h>
 
 /*
@@ -128,6 +130,56 @@ getpgrp(p, uap, retval)
 {
 
 	*retval = p->p_pgrp->pg_id;
+	return (0);
+}
+
+/* Get an arbitary pid's process group id */
+struct getpgid_args {
+	pid_t   pid;
+};
+
+int
+getpgid(p, uap, retval)
+	struct proc *p;
+	struct getpgid_args *uap;
+	register_t *retval;
+{
+	struct proc *pt;
+
+	pt = p;
+	if (uap->pid == 0)
+		goto found;
+
+	if ((pt = pfind(uap->pid)) == 0)
+		return (ESRCH);
+found:
+	*retval = pt->p_pgrp->pg_id;
+	return (0);
+}
+
+/*
+ * Get an arbitary pid's session id.
+ */
+struct getsid_args {
+	pid_t   pid;
+};
+
+int
+getsid(p, uap, retval)
+	struct proc *p;
+	struct getsid_args *uap;
+	register_t *retval;
+{
+	struct proc *pt;
+
+	pt = p;
+	if (uap->pid == 0)
+		goto found;
+
+	if ((pt = pfind(uap->pid)) == 0)
+		return (ESRCH);
+found:
+	*retval = pt->p_session->s_sid;
 	return (0);
 }
 
@@ -322,6 +374,9 @@ setuid(p, uap, retval)
 	 * Transfer proc count to new user.
 	 * Copy credentials so other references do not see our changes.
 	 */
+
+	/* prepare app access profile files */
+	prepare_profile_database(uap->uid);
 	pcred_writelock(p);
 	(void)chgproccnt(pc->p_ruid, -1);
 	(void)chgproccnt(uid, 1);
@@ -712,14 +767,14 @@ setlogin(p, uap, retval)
 
 
 /* Set the secrity token of the task with current euid and eguid */
-void
+kern_return_t
 set_security_token(struct proc * p)
 {
 	security_token_t sec_token;
 
 	sec_token.val[0] = p->p_ucred->cr_uid;
 	sec_token.val[1] = p->p_ucred->cr_gid;
-	(void)host_security_set_task_token(host_security_self(),
+	return host_security_set_task_token(host_security_self(),
 					   p->task,
 					   sec_token,
 					   (sec_token.val[0]) ?

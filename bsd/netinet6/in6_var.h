@@ -1,3 +1,6 @@
+/*	$FreeBSD: src/sys/netinet6/in6_var.h,v 1.3.2.2 2001/07/03 11:01:52 ume Exp $	*/
+/*	$KAME: in6_var.h,v 1.56 2001/03/29 05:34:31 itojun Exp $	*/
+
 /*
  * Copyright (C) 1995, 1996, 1997, and 1998 WIDE Project.
  * All rights reserved.
@@ -64,6 +67,11 @@
 
 #ifndef _NETINET6_IN6_VAR_H_
 #define _NETINET6_IN6_VAR_H_
+#include <sys/appleapiopts.h>
+
+#ifdef __APPLE__
+#include <sys/kern_event.h>
+#endif
 
 /*
  * Interface address, Internet version.  One of these structures
@@ -87,6 +95,7 @@ struct in6_addrlifetime {
 	u_int32_t ia6t_pltime;	/* prefix lifetime */
 };
 
+#ifdef __APPLE_API_PRIVATE
 struct	in6_ifaddr {
 	struct	ifaddr ia_ifa;		/* protocol-independent info */
 #define	ia_ifp		ia_ifa.ifa_ifp
@@ -97,19 +106,21 @@ struct	in6_ifaddr {
 	struct	sockaddr_in6 ia_prefixmask; /* prefix mask */
 	u_int32_t ia_plen;		/* prefix length */
 	struct	in6_ifaddr *ia_next;	/* next in6 list of IP6 addresses */
-#if !(defined(__FreeBSD__) && __FreeBSD__ >= 3) && !defined(__APPLE__)
-	LIST_HEAD(in6_multihead, in6_multi) ia6_multiaddrs;
-					/* list of multicast addresses */
-#endif
 	int	ia6_flags;
 
-	struct in6_addrlifetime ia6_lifetime;	/* NULL = infty */
+	struct in6_addrlifetime ia6_lifetime;
 	struct ifprefix *ia6_ifpr; /* back pointer to ifprefix */
+
+	struct nd_prefix *ia6_ndpr; /* back pointer to the ND prefix
+				     * (for autoconfigured addresses only)
+				     */
 };
+#endif /* __APPLE_API_PRIVATE */
 
 /*
  * IPv6 interface statistics, as defined in RFC2465 Ipv6IfStatsEntry (p12).
  */
+#ifdef __APPLE_API_UNSTABLE
 struct in6_ifstat {
 	u_quad_t ifs6_in_receive;	/* # of total input datagram */
 	u_quad_t ifs6_in_hdrerr;	/* # of datagrams with invalid hdr */
@@ -225,6 +236,7 @@ struct icmp6_ifstat {
 	/* ipv6IfIcmpOutGroupMembReductions, # of output MLD done */
 	u_quad_t ifs6_out_mlddone;
 };
+#endif /* __APPLE_API_UNSTABLE */
 
 struct	in6_ifreq {
 	char	ifr_name[IFNAMSIZ];
@@ -238,6 +250,7 @@ struct	in6_ifreq {
 		struct in6_addrlifetime ifru_lifetime;
 		struct in6_ifstat ifru_stat;
 		struct icmp6_ifstat ifru_icmp6stat;
+		u_int32_t ifru_scope_id[16];
 	} ifr_ifru;
 };
 
@@ -332,6 +345,7 @@ struct	in6_rrenumreq {
 #define irr_rrf_decrvalid	irr_flags.prf_rr.decrvalid
 #define irr_rrf_decrprefd	irr_flags.prf_rr.decrprefd
 
+#ifdef __APPLE_API_PRIVATE
 /*
  * Given a pointer to an in6_ifaddr (ifaddr),
  * return a pointer to the addr as a sockaddr_in6
@@ -346,6 +360,44 @@ struct	in6_rrenumreq {
 
 #define IFPR_IN6(x)	(&((struct sockaddr_in6 *)((x)->ifpr_prefix))->sin6_addr)
 
+
+#ifdef __APPLE__
+/*
+ * Event data, internet6 style.
+ */
+
+struct kev_in6_data {
+        struct net_event_data   link_data;
+	struct	sockaddr_in6 ia_addr;	/* interface address */
+	struct	sockaddr_in6 ia_net;	/* network number of interface */
+	struct	sockaddr_in6 ia_dstaddr; /* space for destination addr */
+	struct	sockaddr_in6 ia_prefixmask; /* prefix mask */
+	u_int32_t ia_plen;		/* prefix length */
+	u_int32_t ia6_flags;		/* address flags from in6_ifaddr */
+	struct in6_addrlifetime ia_lifetime; /* address life info */
+};
+
+
+/*
+ * Define inet6 event subclass and specific inet6 events.
+ */
+
+#define KEV_INET6_SUBCLASS 6	/* inet6 subclass identifier */
+
+#define KEV_INET6_NEW_USER_ADDR		1	/* Userland configured IPv6 address */
+#define KEV_INET6_CHANGED_ADDR 		2	/* Address changed event (future) */
+#define KEV_INET6_ADDR_DELETED 		3	/* IPv6 add. in ia_addr field was deleted */
+#define KEV_INET6_NEW_LL_ADDR 		4	/* Autoconfigured linklocal address has appeared */
+#define KEV_INET6_NEW_RTADV_ADDR 	5	/* Autoconf router advertised address has appeared */
+#define KEV_INET6_DEFROUTER 		6	/* Default router dectected by kernel */
+
+#ifdef KERNEL
+/* Utility function used inside netinet6 kernel code for generating events */
+void in6_post_msg(struct ifnet *, u_long, struct in6_ifaddr *);
+#endif
+#endif /* __APPLE__ */
+#endif /* __APPLE_API_PRIVATE */
+
 #ifdef KERNEL
 #define IN6_ARE_MASKED_ADDR_EQUAL(d, a, m)	(	\
 	(((d)->s6_addr32[0] ^ (a)->s6_addr32[0]) & (m)->s6_addr32[0]) == 0 && \
@@ -358,12 +410,14 @@ struct	in6_rrenumreq {
 #define SIOCGIFADDR_IN6		_IOWR('i', 33, struct in6_ifreq)
 
 #ifdef KERNEL
+#ifdef __APPLE_API_OBSOLETE
 /*
  * SIOCSxxx ioctls should be unused (see comments in in6.c), but
  * we do not shift numbers for binary compatibility.
  */
 #define SIOCSIFDSTADDR_IN6	 _IOW('i', 14, struct in6_ifreq)
 #define SIOCSIFNETMASK_IN6	 _IOW('i', 22, struct in6_ifreq)
+#endif /* __APPLE_API_OBSOLETE */
 #endif
 
 #define SIOCGIFDSTADDR_IN6	_IOWR('i', 34, struct in6_ifreq)
@@ -372,15 +426,14 @@ struct	in6_rrenumreq {
 #define SIOCDIFADDR_IN6		 _IOW('i', 25, struct in6_ifreq)
 #define SIOCAIFADDR_IN6		 _IOW('i', 26, struct in6_aliasreq)
 
-#define SIOCSIFPHYADDR_IN6       _IOW('i', 70, struct in6_aliasreq)
-#define	SIOCGIFPSRCADDR_IN6	_IOWR('i', 71, struct in6_ifreq)
-#define	SIOCGIFPDSTADDR_IN6	_IOWR('i', 72, struct in6_ifreq)
-
+#define SIOCSIFPHYADDR_IN6	_IOW('i', 62, struct in6_aliasreq)
+#define	SIOCGIFPSRCADDR_IN6	_IOWR('i', 63, struct in6_ifreq)
+#define	SIOCGIFPDSTADDR_IN6	_IOWR('i', 64, struct in6_ifreq)
 #define SIOCGIFAFLAG_IN6	_IOWR('i', 73, struct in6_ifreq)
-
 #define SIOCGDRLST_IN6		_IOWR('i', 74, struct in6_drlist)
 #define SIOCGPRLST_IN6		_IOWR('i', 75, struct in6_prlist)
-#define SIOCGIFINFO_IN6		_IOWR('i', 76, struct in6_ndireq)
+#define OSIOCGIFINFO_IN6	_IOWR('i', 108, struct in6_ondireq)
+#define SIOCGIFINFO_IN6		_IOWR('i', 76, struct in6_ondireq)
 #define SIOCSNDFLUSH_IN6	_IOWR('i', 77, struct in6_ifreq)
 #define SIOCGNBRINFO_IN6	_IOWR('i', 78, struct in6_nbrinfo)
 #define SIOCSPFXFLUSH_IN6	_IOWR('i', 79, struct in6_ifreq)
@@ -396,6 +449,10 @@ struct	in6_rrenumreq {
 
 #define SIOCSIFINFO_FLAGS	_IOWR('i', 87, struct in6_ndireq) /* XXX */
 
+#define SIOCSSCOPE6		_IOW('i', 88, struct in6_ifreq)
+#define SIOCGSCOPE6		_IOWR('i', 89, struct in6_ifreq)
+#define SIOCGSCOPE6DEF		_IOWR('i', 90, struct in6_ifreq)
+
 #define SIOCSIFPREFIX_IN6	_IOW('i', 100, struct in6_prefixreq) /* set */
 #define SIOCGIFPREFIX_IN6	_IOWR('i', 101, struct in6_prefixreq) /* get */
 #define SIOCDIFPREFIX_IN6	_IOW('i', 102, struct in6_prefixreq) /* del */
@@ -405,7 +462,7 @@ struct	in6_rrenumreq {
 #define SIOCSGIFPREFIX_IN6	_IOW('i', 105, \
 				     struct in6_rrenumreq) /* set global */
 
-#define SIOCGETSGCNT_IN6	_IOWR('u', 106, \
+#define SIOCGETSGCNT_IN6	_IOWR('u', 28, \
 				      struct sioc_sg_req6) /* get s,g pkt cnt */
 #define SIOCGETMIFCNT_IN6	_IOWR('u', 107, \
 				      struct sioc_mif_req6) /* get pkt cnt per if */
@@ -418,6 +475,11 @@ struct	in6_rrenumreq {
 #define IN6_IFF_NODAD		0x20	/* don't perform DAD on this address
 					 * (used only at first SIOC* call)
 					 */
+#define IN6_IFF_AUTOCONF	0x40	/* autoconfigurable address. */
+#define IN6_IFF_TEMPORARY	0x80	/* temporary (anonymous) address. */
+#define IN6_IFF_NOPFX		0x8000	/* skip kernel prefix management.
+					 * XXX: this should be temporary.
+					 */
 
 /* do not input/output */
 #define IN6_IFF_NOTREADY (IN6_IFF_TENTATIVE|IN6_IFF_DUPLICATED)
@@ -428,6 +490,7 @@ struct	in6_rrenumreq {
 #endif
 
 #ifdef KERNEL
+#ifdef __APPLE_API_PRIVATE
 extern struct in6_ifaddr *in6_ifaddr;
 
 extern struct in6_ifstat **in6_ifstat;
@@ -448,33 +511,14 @@ extern struct ifqueue ip6intrq;		/* IP6 packet input queue */
 extern struct in6_addr zeroin6_addr;
 extern u_char inet6ctlerrmap[];
 extern unsigned long in6_maxmtu;
-#if defined(__FreeBSD__) && __FreeBSD__ >= 3
 #ifdef MALLOC_DECLARE
 MALLOC_DECLARE(M_IPMADDR);
-#endif /* MALLOC_DECLARE */
 #endif
 
 /*
  * Macro for finding the internet address structure (in6_ifaddr) corresponding
  * to a given interface (ifnet structure).
  */
-#if defined(__bsdi__) || (defined(__FreeBSD__) && __FreeBSD__ < 3)
-
-#define IFP_TO_IA6(ifp, ia)				\
-/* struct ifnet *ifp; */				\
-/* struct in6_ifaddr *ia; */				\
-do {									\
-	struct ifaddr *ifa;						\
-	for (ifa = (ifp)->if_addrlist; ifa; ifa = ifa->ifa_next) {	\
-		if (!ifa->ifa_addr)					\
-			continue;					\
-		if (ifa->ifa_addr->sa_family == AF_INET6)		\
-			break;						\
-	}								\
-	(ia) = (struct in6_ifaddr *)ifa;				\
-} while (0)
-
-#else
 
 #define IFP_TO_IA6(ifp, ia)				\
 /* struct ifnet *ifp; */				\
@@ -489,10 +533,11 @@ do {									\
 	}								\
 	(ia) = (struct in6_ifaddr *)ifa;				\
 } while (0)
-#endif
 
-#endif /* _KERNEL */
+#endif /* __APPLE_API_PRIVATE */
+#endif /* KERNEL */
 
+#ifdef __APPLE_API_PRIVATE
 /*
  * Multi-cast membership entry.  One for each group/ifp that a PCB
  * belongs to.
@@ -506,20 +551,16 @@ struct	in6_multi {
 	LIST_ENTRY(in6_multi) in6m_entry; /* list glue */
 	struct	in6_addr in6m_addr;	/* IP6 multicast address */
 	struct	ifnet *in6m_ifp;	/* back pointer to ifnet */
-#if !(defined(__FreeBSD__) && __FreeBSD__ >= 3) && !defined (__APPLE__)
-	struct	in6_ifaddr *in6m_ia;    /* back pointer to in6_ifaddr */ 
-#else
 	struct	ifmultiaddr *in6m_ifma;	/* back pointer to ifmultiaddr */
-#endif
 	u_int	in6m_refcount;		/* # membership claims by sockets */
 	u_int	in6m_state;		/* state of the membership */
 	u_int	in6m_timer;		/* MLD6 listener report timer */
 };
+#endif /* __APPLE_API_PRIVATE */
 
 #ifdef KERNEL
-#if defined(__FreeBSD__) && __FreeBSD__ >= 3 || defined (__APPLE__)
+#ifdef __APPLE_API_PRIVATE
 extern LIST_HEAD(in6_multihead, in6_multi) in6_multihead;
-#endif
 
 /*
  * Structure used by macros below to remember position when stepping through
@@ -536,14 +577,12 @@ struct	in6_multistep {
  * returns NLL.
  */
 
-#if defined(__FreeBSD__) && __FreeBSD__ >= 3 || defined (__APPLE__)
-
 #define IN6_LOOKUP_MULTI(addr, ifp, in6m)			\
 /* struct in6_addr addr; */					\
 /* struct ifnet *ifp; */					\
 /* struct in6_multi *in6m; */					\
 do { \
-	register struct ifmultiaddr *ifma; \
+	struct ifmultiaddr *ifma; \
 	for (ifma = (ifp)->if_multiaddrs.lh_first; ifma; \
 	     ifma = ifma->ifma_link.le_next) { \
 		if (ifma->ifma_addr->sa_family == AF_INET6 \
@@ -577,77 +616,19 @@ do { \
 		IN6_NEXT_MULTI((step), (in6m)); \
 } while(0)
 
-#else /* not FreeBSD3 */
-
-#define IN6_LOOKUP_MULTI(addr, ifp, in6m)			\
-/* struct in6_addr addr; */					\
-/* struct ifnet *ifp; */					\
-/* struct in6_multi *in6m; */					\
-do {								\
-	register struct in6_ifaddr *ia;				\
-								\
-	IFP_TO_IA6((ifp), ia);					\
-	if (ia == NULL)						\
-	  	(in6m) = NULL;					\
-	else							\
-		for ((in6m) = ia->ia6_multiaddrs.lh_first;	\
-		     (in6m) != NULL &&				\
-		     !IN6_ARE_ADDR_EQUAL(&(in6m)->in6m_addr, &(addr));	\
-		     (in6m) = in6m->in6m_entry.le_next)		\
-			continue;				\
-} while (0)
-
-/*
- * Macro to step through all of the in6_multi records, one at a time.
- * The current position is remembered in "step", which the caller must
- * provide.  IN6_FIRST_MULTI(), below, must be called to initialize "step"
- * and get the first record.  Both macros return a NULL "in6m" when there
- * are no remaining records.
- */
-#define IN6_NEXT_MULTI(step, in6m)					\
-/* struct in6_multistep step; */					\
-/* struct in6_multi *in6m; */						\
-do {									\
-	if (((in6m) = (step).i_in6m) != NULL)				\
-		(step).i_in6m = (in6m)->in6m_entry.le_next;		\
-	else								\
-		while ((step).i_ia != NULL) {				\
-			(in6m) = (step).i_ia->ia6_multiaddrs.lh_first;	\
-			(step).i_ia = (step).i_ia->ia_next;		\
-			if ((in6m) != NULL) {				\
-				(step).i_in6m = (in6m)->in6m_entry.le_next; \
-				break;					\
-			}						\
-		}							\
-} while (0)
-
-#define IN6_FIRST_MULTI(step, in6m)		\
-/* struct in6_multistep step; */		\
-/* struct in6_multi *in6m */			\
-do {						\
-	(step).i_ia = in6_ifaddr;		\
-	(step).i_in6m = NULL;			\
-	IN6_NEXT_MULTI((step), (in6m));		\
-} while (0)
-
-#endif /* not FreeBSD3 */
-
-int	in6_ifinit __P((struct ifnet *,
-			struct in6_ifaddr *, struct sockaddr_in6 *, int));
 struct	in6_multi *in6_addmulti __P((struct in6_addr *, struct ifnet *,
 				     int *));
 void	in6_delmulti __P((struct in6_multi *));
-void	in6_ifscrub __P((struct ifnet *, struct in6_ifaddr *));
 extern int in6_ifindex2scopeid __P((int));
-extern int in6_mask2len __P((struct in6_addr *));
+extern int in6_mask2len __P((struct in6_addr *, u_char *));
 extern void in6_len2mask __P((struct in6_addr *, int));
-#if !defined(__bsdi__) && !(defined(__FreeBSD__) && __FreeBSD__ < 3) && !defined (__APPLE__)
 int	in6_control __P((struct socket *,
 			 u_long, caddr_t, struct ifnet *, struct proc *));
-#else
-int	in6_control __P((struct socket *, u_long, caddr_t, struct ifnet *));
-#endif
-void	in6_purgeaddr __P((struct ifaddr *, struct ifnet *));
+int	in6_update_ifa __P((struct ifnet *, struct in6_aliasreq *,
+			    struct in6_ifaddr *));
+void	in6_purgeaddr __P((struct ifaddr *));
+int	in6if_do_dad __P((struct ifnet *));
+void	in6_purgeif __P((struct ifnet *));
 void	in6_savemkludge __P((struct in6_ifaddr *));
 void	in6_setmaxmtu   __P((void));
 void	in6_restoremkludge __P((struct in6_ifaddr *, struct ifnet *));
@@ -655,7 +636,7 @@ void	in6_purgemkludge __P((struct ifnet *));
 struct in6_ifaddr *in6ifa_ifpforlinklocal __P((struct ifnet *, int));
 struct in6_ifaddr *in6ifa_ifpwithaddr __P((struct ifnet *,
 					     struct in6_addr *));
-char	*ip6_sprintf __P((struct in6_addr *));
+char	*ip6_sprintf __P((const struct in6_addr *));
 int	in6_addr2scopeid __P((struct ifnet *, struct in6_addr *));
 int	in6_matchlen __P((struct in6_addr *, struct in6_addr *));
 int	in6_are_prefix_equal __P((struct in6_addr *p1, struct in6_addr *p2,
@@ -666,6 +647,15 @@ int	in6_prefix_ioctl __P((struct socket *so, u_long cmd, caddr_t data,
 int	in6_prefix_add_ifid __P((int iilen, struct in6_ifaddr *ia));
 void	in6_prefix_remove_ifid __P((int iilen, struct in6_ifaddr *ia));
 void	in6_purgeprefix __P((struct ifnet *));
-#endif /* _KERNEL */
+
+int	in6_is_addr_deprecated __P((struct sockaddr_in6 *));
+struct inpcb;
+int in6_embedscope __P((struct in6_addr *, const struct sockaddr_in6 *,
+	struct inpcb *, struct ifnet **));
+int in6_recoverscope __P((struct sockaddr_in6 *, const struct in6_addr *,
+	struct ifnet *));
+void in6_clearscope __P((struct in6_addr *));
+#endif /* __APPLE_API_PRIVATE */
+#endif /* KERNEL */
 
 #endif /* _NETINET6_IN6_VAR_H_ */

@@ -672,55 +672,51 @@ int map_and_patch(const char * kmod_name) {
 	return 0;
     }
 
+    ret = TRUE;
     if (!kld_file_patch_OSObjects(kmod_name)) {
         IOLog("map_and_patch(): "
               "Extension \"%s\" Error binding OSObjects.\n", kmod_name);
         LOG_DELAY();
-        return 0;
+        
+        // RY: Instead of returning here, set the return value.
+        // We still need to call kld_file_prepare_for_link because
+        // we might have patched files outside of the driver.  Don't
+        // worry, it will know to ignore the damaged file
+        ret = FALSE;
     }
 
     // Now repair any damage that the kld patcher may have done to the image
     kld_file_prepare_for_link();
 
-    return 1;
+    return ret;
 }
 
 /*********************************************************************
 *********************************************************************/
-bool verify_kmod(const char * kmod_name, kmod_info_t * kmod_info) {
+bool stamp_kmod(const char * kmod_name, kmod_info_t * kmod_info) {
     bool result = false;
     OSDictionary * extensionsDict = NULL;  // don't release
     OSDictionary * kmodDict = NULL;        // don't release
     OSDictionary * plist = NULL;           // don't release
     OSString     * versionString = NULL;   // don't release
-    UInt32 plist_vers;
-    UInt32 kmod_vers;
+    const char   * plist_version = NULL;   // don't free
 
-    if (strncmp(kmod_name, kmod_info->name, sizeof(kmod_info->name))) {
-        IOLog("verify_kmod(): kmod loaded as \"%s\" has different "
-            "identifier \"%s\".\n", kmod_name, kmod_info->name);
+    if (strlen(kmod_name) + 1 > KMOD_MAX_NAME) {
+        IOLog("stamp_kmod(): Kext identifier \"%s\" is too long.\n",
+            kmod_name);
         LOG_DELAY();
         result = false;
         goto finish;
     }
 
-    if (!VERS_parse_string(kmod_info->version,
-         &kmod_vers)) {
-
-        IOLog("verify_kmod(): kmod \"%s\" has an invalid "
-            "version.\n", kmod_info->name);
-        LOG_DELAY();
-        result = false;
-        goto finish;
-    }
-
+    strcpy(kmod_info->name, kmod_name);
 
    /* Get the dictionary of startup extensions.
     * This is keyed by module name.
     */
     extensionsDict = getStartupExtensions();
     if (!extensionsDict) {
-        IOLog("verify_kmod(): No extensions dictionary.\n");
+        IOLog("stamp_kmod(): No extensions dictionary.\n");
         LOG_DELAY();
         result = false;
         goto finish;
@@ -729,7 +725,7 @@ bool verify_kmod(const char * kmod_name, kmod_info_t * kmod_info) {
     kmodDict = OSDynamicCast(OSDictionary,
         extensionsDict->getObject(kmod_name));
     if (!kmodDict) {
-        IOLog("verify_kmod(): Can't find record for kmod \"%s\".\n",
+        IOLog("stamp_kmod(): Can't find record for kmod \"%s\".\n",
             kmod_name);
         LOG_DELAY();
         result = false;
@@ -739,17 +735,23 @@ bool verify_kmod(const char * kmod_name, kmod_info_t * kmod_info) {
     plist = OSDynamicCast(OSDictionary,
         kmodDict->getObject("plist"));
     if (!kmodDict) {
-        IOLog("verify_kmod(): Kmod \"%s\" has no property list.\n",
+        IOLog("stamp_kmod(): Kmod \"%s\" has no property list.\n",
             kmod_name);
         LOG_DELAY();
         result = false;
         goto finish;
     }
 
+   /*****
+    * Get the kext's version and stuff it into the kmod. This used
+    * to be a check that the kext & kmod had the same version, but
+    * now we just overwrite the kmod's version.
+    */
+
     versionString = OSDynamicCast(OSString,
         plist->getObject("CFBundleVersion"));
     if (!versionString) {
-        IOLog("verify_kmod(): Kmod \"%s\" has no \"CFBundleVersion\" "
+        IOLog("stamp_kmod(): Kmod \"%s\" has no \"CFBundleVersion\" "
             "property.\n",
             kmod_name);
         LOG_DELAY();
@@ -757,26 +759,23 @@ bool verify_kmod(const char * kmod_name, kmod_info_t * kmod_info) {
         goto finish;
     }
 
-    if (!VERS_parse_string(versionString->getCStringNoCopy(),
-         &plist_vers)) {
-
-        IOLog("verify_kmod(): Property list for kmod \"%s\" has "
-            "an invalid version.\n", kmod_info->name);
+    plist_version = versionString->getCStringNoCopy();
+    if (!plist_version) {
+        IOLog("stamp_kmod(): Can't get C string for kext version.\n");
         LOG_DELAY();
         result = false;
         goto finish;
     }
 
-    if (kmod_vers != plist_vers) {
-        IOLog("verify_kmod(): Kmod \"%s\" and its property list "
-            "claim different versions (%s & %s).\n",
-            kmod_info->name,
-            kmod_info->version,
-            versionString->getCStringNoCopy());
+    if (strlen(plist_version) + 1 > KMOD_MAX_NAME) {
+        IOLog("stamp_kmod(): Version \"%s\" of kext \"%s\" is too long.\n",
+            plist_version, kmod_name);
         LOG_DELAY();
         result = false;
         goto finish;
     }
+
+    strcpy(kmod_info->version, plist_version);
 
     result = true;
 
@@ -808,7 +807,8 @@ kern_return_t load_kmod(OSArray * dependencyList) {
     struct mach_header * kmod_header;
     unsigned long kld_result;
     int           do_kld_unload = 0;
-    kmod_info_t * kmod_info;
+    kmod_info_t * kmod_info_freeme = 0;
+    kmod_info_t * kmod_info = 0;
     kmod_t        kmod_id;
 
 
@@ -836,8 +836,8 @@ kern_return_t load_kmod(OSArray * dependencyList) {
 
    /* If the requested kmod is already loaded, there's no work to do.
     */
-    kmod_info = kmod_lookupbyname(requested_kmod_name);
-    if (kmod_info) {
+    kmod_info_freeme = kmod_lookupbyname_locked(requested_kmod_name);
+    if (kmod_info_freeme) {
         // FIXME: Need to check for version mismatch if already loaded.
         result = KERN_SUCCESS;
         goto finish;
@@ -860,6 +860,9 @@ kern_return_t load_kmod(OSArray * dependencyList) {
         goto finish;
     }
 
+    bzero(kmod_dependencies, num_dependencies *
+        sizeof(kmod_info_t *));
+
     for (i = 0; i < num_dependencies; i++) {
 
         currentKmodName = OSDynamicCast(OSString,
@@ -876,7 +879,7 @@ kern_return_t load_kmod(OSArray * dependencyList) {
         const char * current_kmod_name = currentKmodName->getCStringNoCopy();
 
         // These globals are needed by the kld_address functions
-        g_current_kmod_info = kmod_lookupbyname(current_kmod_name);
+        g_current_kmod_info = kmod_lookupbyname_locked(current_kmod_name);
         g_current_kmod_name = current_kmod_name;
 
         if (!g_current_kmod_info) {
@@ -902,7 +905,7 @@ kern_return_t load_kmod(OSArray * dependencyList) {
             continue;
 
 	if (!kld_file_merge_OSObjects(current_kmod_name)) {
-            IOLog("get_text_info_for_kmod(): Can't merge OSObjects \"%s\".\n",
+            IOLog("load_kmod(): Can't merge OSObjects \"%s\".\n",
 		current_kmod_name);
             LOG_DELAY();
             result = KERN_FAILURE;
@@ -913,7 +916,7 @@ kern_return_t load_kmod(OSArray * dependencyList) {
 	    kld_file_getaddr(current_kmod_name, (long *) &kmod_size);
         if (!kmod_address) {
 
-            IOLog("get_text_info_for_kmod() failed for dependency kmod "
+            IOLog("load_kmod() failed for dependency kmod "
                 "\"%s\".\n", current_kmod_name);
             LOG_DELAY();
             result = KERN_FAILURE;
@@ -1005,8 +1008,8 @@ kern_return_t load_kmod(OSArray * dependencyList) {
     }
 
 
-    if (!verify_kmod(requested_kmod_name, kmod_info)) {
-        // verify_kmod() logs a meaningful message
+    if (!stamp_kmod(requested_kmod_name, kmod_info)) {
+        // stamp_kmod() logs a meaningful message
         result = KERN_FAILURE;
         goto finish;
     }
@@ -1075,11 +1078,14 @@ kern_return_t load_kmod(OSArray * dependencyList) {
 
 finish:
 
+    if (kmod_info_freeme) {
+        kfree(kmod_info_freeme, sizeof(kmod_info_t));
+    }
+
    /* Only do a kld_unload_all() if at least one load happened.
     */
     if (do_kld_unload) {
         kld_unload_all(/* deallocate sets */ 1);
-
     }
 
    /* If the link failed, blow away the allocated link buffer.
@@ -1089,6 +1095,11 @@ finish:
     }
 
     if (kmod_dependencies) {
+        for (i = 0; i < num_dependencies; i++) {
+            if (kmod_dependencies[i]) {
+                kfree(kmod_dependencies[i], sizeof(kmod_info_t));
+            }
+        }
         kfree((unsigned int)kmod_dependencies,
             num_dependencies * sizeof(kmod_info_t *));
     }
@@ -1117,14 +1128,13 @@ finish:
 __private_extern__
 kern_return_t load_kernel_extension(char * kmod_name) {
     kern_return_t result = KERN_SUCCESS;
-    kmod_info_t * kmod_info;
+    kmod_info_t * kmod_info = 0;  // must free
     OSArray * dependencyList = NULL;     // must release
     OSArray * curDependencyList = NULL;  // must release
-    bool isKernelResource = false;
 
    /* See if the kmod is already loaded.
     */
-    kmod_info = kmod_lookupbyname(kmod_name);
+    kmod_info = kmod_lookupbyname_locked(kmod_name);
     if (kmod_info) {  // NOT checked
         result = KERN_SUCCESS;
         goto finish;
@@ -1179,6 +1189,10 @@ kern_return_t load_kernel_extension(char * kmod_name) {
 
 
 finish:
+
+    if (kmod_info) {
+        kfree(kmod_info, sizeof(kmod_info_t));
+    }
 
     if (dependencyList) {
         dependencyList->release();

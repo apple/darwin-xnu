@@ -52,25 +52,34 @@
  * SUCH DAMAGE.
  *
  *	@(#)tcp_debug.h	8.1 (Berkeley) 6/10/93
+ * $FreeBSD: src/sys/netinet/tcp_debug.h,v 1.11 2000/01/29 11:49:05 shin Exp $
  */
 
 #ifndef _NETINET_TCP_DEBUG_H_
 #define	_NETINET_TCP_DEBUG_H_
+#include <sys/appleapiopts.h>
+#ifdef __APPLE_API_PRIVATE
 
 struct	tcp_debug {
 	n_time	td_time;
 	short	td_act;
 	short	td_ostate;
 	caddr_t	td_tcb;
-	union {
-		struct	ip _td_ip4;
-#define td_ip	_td_ipx._td_ip4
-#if INET6
-		struct  ip6_hdr _td_ip6;
-#define td_ip6	_td_ipx._td_ip6
+	int	td_family;
+	/*
+	 * Co-existense of td_ti and td_ti6 below is ugly, but it is necessary
+	 * to achieve backword compatibility to some extent.
+	 */
+	struct	tcpiphdr td_ti;
+	struct {
+#if !defined(KERNEL) && defined(INET6)
+		struct	ip6_hdr ip6;
+#else
+		u_char	ip6buf[40]; /* sizeof(struct ip6_hdr) */
 #endif
-	} _td_ipx;
-	struct tcphdr td_th;
+		struct	tcphdr th;
+	} td_ti6;
+#define	td_ip6buf	td_ti6.ip6buf
 	short	td_req;
 	struct	tcpcb td_cb;
 };
@@ -93,5 +102,6 @@ static char	*tanames[] =
 struct	tcp_debug tcp_debug[TCP_NDEBUG];
 int	tcp_debx;
 #endif
+#endif /* __APPLE_API_PRIVATE */
 
 #endif /* !_NETINET_TCP_DEBUG_H_ */

@@ -1,7 +1,7 @@
 #!/bin/sh -
 copyright='
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2002 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -170,9 +170,12 @@ exec > $out_h
 echo "$copyright"
 echo "$warning"
 echo '
-#ifndef _VNODE_IF_H_
-#define _VNODE_IF_H_
+#ifndef _SYS_VNODE_IF_H_
+#define _SYS_VNODE_IF_H_
 
+#include <sys/appleapiopts.h>
+
+#ifdef __APPLE_API_UNSTABLE
 extern struct vnodeop_desc vop_default_desc;
 '
 
@@ -214,7 +217,8 @@ function doit() {
 	}
 	if (toupper(ubc) == "UBC") {
 		printf("\t{\n\t\tint _err;\n\t\t"   \
-			"extern int ubc_hold();\n\t\textern void ubc_rele();\n\t\t"	\
+			"extern int ubc_hold(struct vnode *vp);\n\t\t"	\
+			"extern void ubc_rele(struct vnode *vp);\n\t\t"	\
 			"int _didhold = ubc_hold(%s);\n\t\t"  \
 			"_err = VCALL(%s%s, VOFFSET(%s), &a);\n\t\t"    \
 			"if (_didhold)\n\t\t\tubc_rele(%s);\n\t\t"	\
@@ -245,7 +249,8 @@ END	{
 echo '
 /* End of special cases. */
 
-#endif /* !_VNODE_IF_H_ */'
+#endif /* __APPLE_API_UNSTABLE */
+#endif /* !_SYS_VNODE_IF_H_ */'
 
 #
 # Redirect stdout to the C file.

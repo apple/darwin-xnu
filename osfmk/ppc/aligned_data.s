@@ -101,17 +101,98 @@ EXT(DBGpreempt):
 #endif
 
 
-/*		32-byte aligned areas */
+/*		128-byte aligned areas */
 
 		.globl	EXT(saveanchor)
-		.align	5
+		.align	7
 EXT(saveanchor):
 		.set	.,.+SVsize
 
 		.globl	EXT(mapCtl)
-		.align	5
+		.align	7
 EXT(mapCtl):
 		.set	.,.+mapcsize
+
+		.globl	EXT(trcWork)
+		.align	7
+EXT(trcWork):
+		.long	EXT(traceTableBeg)					; The next trace entry to use
+#if DEBUG
+/*		.long	0x02000000 	*/						/* Only alignment exceptions enabled */
+		.long	0xFFFFFFFF 							/* All enabled */
+/*		.long	0xFBBFFFFF	*/						/* EXT and DEC disabled */
+/*		.long	0xFFBFFFFF	*/						/* DEC disabled */
+#else
+		.long	0x00000000							; All disabled on non-debug systems
+#endif
+		.long	EXT(traceTableBeg)					; Start of the trace table
+		.long	EXT(traceTableEnd)					; End (wrap point) of the trace
+		.long	0									; Saved mask while in debugger
+
+		.long	0
+		.long	0
+		.long	0
+		
+		
+		.globl	fwdisplock
+		.align	7
+fwdisplock:
+		.set	.,.+128
+
+		.globl	EXT(free_mappings)
+		.align	7
+	
+EXT(free_mappings):
+		.long	0
+
+		.globl	EXT(syncClkSpot)
+		.align	7
+EXT(syncClkSpot):
+		.long	0
+		.long	0
+		.long	0
+		.long	0
+		.long	0
+		.long	0
+		.long	0
+		.long	0
+	
+		.globl	EXT(NMIss)
+		.align	7
+EXT(NMIss):
+		.long	0
+		.long	0
+		.long	0
+		.long	0
+		.long	0
+		.long	0
+		.long	0
+		.long	0
+
+/*		32-byte aligned areas */
+
+		.globl	EXT(dbvecs)
+		.align	5
+EXT(dbvecs):
+		.set	.,.+(33*16)
+
+		.globl	hexfont
+		.align	5
+#include <ppc/hexfont.h>
+
+    	.globl  EXT(QNaNbarbarian)
+		.align	5
+
+EXT(QNaNbarbarian):
+		.long	0x7FFFDEAD							/* This is a quiet not-a-number which is a "known" debug value */
+		.long	0x7FFFDEAD							/* This is a quiet not-a-number which is a "known" debug value */
+		.long	0x7FFFDEAD							/* This is a quiet not-a-number which is a "known" debug value */
+		.long	0x7FFFDEAD							/* This is a quiet not-a-number which is a "known" debug value */
+	
+		.long	0x7FFFDEAD							/* This is a quiet not-a-number which is a "known" debug value */
+		.long	0x7FFFDEAD							/* This is a quiet not-a-number which is a "known" debug value */
+		.long	0x7FFFDEAD							/* This is a quiet not-a-number which is a "known" debug value */
+		.long	0x7FFFDEAD							/* This is a quiet not-a-number which is a "known" debug value */
 
 		.globl	EXT(dgWork)
 		.align	5
@@ -125,113 +206,33 @@ EXT(dgWork):
 		.long	0
 		.long	0
 
-		.globl	EXT(trcWork)
-		.align	5
-EXT(trcWork):
-#if DEBUG
-/*		.long	0x02000000 	*/			/* Only alignment exceptions enabled */
-		.long	0xFFFFFFFF 				/* All enabled */
-/*		.long	0xFBBFFFFF	*/			/* EXT and DEC disabled */
-/*		.long	0xFFBFFFFF	*/			/* DEC disabled */
-#else
-		.long	0x00000000				; All disabled on non-debug systems
-#endif
-		.long	EXT(traceTableBeg)		; The next trace entry to use
-		.long	EXT(traceTableBeg)		; Start of the trace table
-		.long	EXT(traceTableEnd)		; End (wrap point) of the trace
-		.long	0						; Saved mask while in debugger
-
-		.long	0
-		.long	0
-		.long	0
-		
-		
-		.globl	fwdisplock
-		.align	5
-fwdisplock:
-		.set	.,.+32
-
-		.globl	hexfont
-		.align	5
-#include <ppc/hexfont.h>
-
-    .globl  EXT(QNaNbarbarian)
-	.align	5
-
-EXT(QNaNbarbarian):
-	.long	0x7FFFDEAD		/* This is a quiet not-a-number which is a "known" debug value */
-	.long	0x7FFFDEAD		/* This is a quiet not-a-number which is a "known" debug value */
-	.long	0x7FFFDEAD		/* This is a quiet not-a-number which is a "known" debug value */
-	.long	0x7FFFDEAD		/* This is a quiet not-a-number which is a "known" debug value */
-
-	.long	0x7FFFDEAD		/* This is a quiet not-a-number which is a "known" debug value */
-	.long	0x7FFFDEAD		/* This is a quiet not-a-number which is a "known" debug value */
-	.long	0x7FFFDEAD		/* This is a quiet not-a-number which is a "known" debug value */
-	.long	0x7FFFDEAD		/* This is a quiet not-a-number which is a "known" debug value */
-
-	.globl	EXT(free_mappings)
-	.align	5
-	
-EXT(free_mappings):
-	.long	0
-
-	.globl	EXT(syncClkSpot)
-	.align	5
-EXT(syncClkSpot):
-	.long	0
-	.long	0
-	.long	0
-	.long	0
-	.long	0
-	.long	0
-	.long	0
-	.long	0
-
-	.globl	EXT(NMIss)
-	.align	5
-EXT(NMIss):
-	.long	0
-	.long	0
-	.long	0
-	.long	0
-	.long	0
-	.long	0
-	.long	0
-	.long	0
-
-	.globl	EXT(dbvecs)
-	.align	5
-EXT(dbvecs):
-	.set	.,.+(33*16)
-
-
 
 /*		8-byte aligned areas */
 
-    .globl  EXT(FloatInit)
-	.align	3
+    	.globl  EXT(FloatInit)
+		.align	3
 
 EXT(FloatInit):
-	.long	0xC24BC195		/* Initial value */
-	.long	0x87859393		/* of floating point registers */
-	.long	0xE681A2C8		/* and others */
-	.long	0x8599855A
+		.long	0xC24BC195							/* Initial value */
+		.long	0x87859393							/* of floating point registers */
+		.long	0xE681A2C8							/* and others */
+		.long	0x8599855A
 
-    .globl  EXT(DebugWork)
-	.align	3
+		.globl  EXT(DebugWork)
+		.align	3
 
 EXT(DebugWork):
-	.long	0
-	.long	0
-	.long	0
-	.long	0
+		.long	0
+		.long	0
+		.long	0
+		.long	0
 
-    .globl  EXT(dbfloats)
-	.align	3
+    	.globl  EXT(dbfloats)
+		.align	3
 EXT(dbfloats):
 		.set	.,.+(33*8)
 
-    .globl  EXT(dbspecrs)
-	.align	3
+		.globl  EXT(dbspecrs)
+		.align	3
 EXT(dbspecrs):
 		.set	.,.+(80*4)

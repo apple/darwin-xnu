@@ -65,7 +65,7 @@
 #include <sys/socketvar.h>
 #include <sys/sysctl.h>
 
-#if ISFB31
+#if __FreeBSD__
 #include <vm/vm_zone.h>
 #endif
 
@@ -76,8 +76,6 @@
 #include <netinet/in.h>
 #include <netinet/in_systm.h>
 #include <netinet/ip.h>
-#include <netinet/ip6.h>
-#include <netinet6/ip6_var.h>
 #include <netinet/in_pcb.h>
 #include <netinet/in_var.h>
 #include <netinet/ip_var.h>
@@ -89,22 +87,16 @@
 #include <netinet6/ipsec.h>
 #endif /*IPSEC*/
 
-#if ISFB31
-#include "opt_ipdn.h"
-#endif
-
 #if DUMMYNET
 #include <netinet/ip_dummynet.h>
 #endif
-#if !defined(COMPAT_IPFW) || COMPAT_IPFW == 1
-#undef COMPAT_IPFW
-#define COMPAT_IPFW 1
-#else
-#undef COMPAT_IPFW
+
+#if IPSEC
+extern int ipsec_bypass;
 #endif
 
-struct inpcbhead ripcb;
-struct inpcbinfo ripcbinfo;
+struct	inpcbhead ripcb;
+struct	inpcbinfo ripcbinfo;
 
 /*
  * Nominal space allocated to a raw ip socket.
@@ -156,10 +148,11 @@ rip_input(m, iphlen)
 
 	ripsrc.sin_addr = ip->ip_src;
 	LIST_FOREACH(inp, &ripcb, inp_list) {
-		if ((inp->inp_vflag & INP_IPV4) == NULL)
+#if INET6
+		if ((inp->inp_vflag & INP_IPV4) == 0)
 			continue;
-#warning do something about this
-		if (inp->inp_ip_p && inp->inp_ip_p != ip->ip_p)
+#endif
+		if (inp->inp_ip_p && (inp->inp_ip_p != ip->ip_p))
 			continue;
 		if (inp->inp_laddr.s_addr &&
                   inp->inp_laddr.s_addr != ip->ip_dst.s_addr)
@@ -169,15 +162,24 @@ rip_input(m, iphlen)
 			continue;
 		if (last) {
 			struct mbuf *n = m_copy(m, 0, (int)M_COPYALL);
+
+#if IPSEC
+			/* check AH/ESP integrity. */
+			if (ipsec_bypass == 0 && n && ipsec4_in_reject_so(n, last->inp_socket)) {
+				m_freem(n);
+				ipsecstat.in_polvio++;
+				/* do not inject data to pcb */
+			} else
+#endif /*IPSEC*/
 			if (n) {
 				if (last->inp_flags & INP_CONTROLOPTS ||
 				    last->inp_socket->so_options & SO_TIMESTAMP)
 				    ip_savecontrol(last, &opts, ip, n);
-                if (last->inp_flags & INP_STRIPHDR) {
-                    n->m_len -= iphlen;
-                    n->m_pkthdr.len -= iphlen;
-                    n->m_data += iphlen;
-                }
+				if (last->inp_flags & INP_STRIPHDR) {
+					n->m_len -= iphlen;
+					n->m_pkthdr.len -= iphlen;
+					n->m_data += iphlen;
+				}
 				if (sbappendaddr(&last->inp_socket->so_rcv,
 				    (struct sockaddr *)&ripsrc, n,
 				    opts) == 0) {
@@ -186,15 +188,22 @@ rip_input(m, iphlen)
 					m_freem(n);
 					if (opts)
 					    m_freem(opts);
-				} else {
-				    /* kprintf("rip_input calling sorwakeup\n"); */
-				    sorwakeup(last->inp_socket);
-				}
+				} else
+					sorwakeup(last->inp_socket);
 				opts = 0;
 			}
 		}
 		last = inp;
 	}
+#if IPSEC
+	/* check AH/ESP integrity. */
+	if (ipsec_bypass == 0 && last && ipsec4_in_reject_so(m, last->inp_socket)) {
+		m_freem(m);
+		ipsecstat.in_polvio++;
+		ipstat.ips_delivered--;
+		/* do not inject data to pcb */
+	} else
+#endif /*IPSEC*/
 	if (last) {
 		if (last->inp_flags & INP_CONTROLOPTS ||
 		    last->inp_socket->so_options & SO_TIMESTAMP)
@@ -210,15 +219,13 @@ rip_input(m, iphlen)
 			m_freem(m);
 			if (opts)
 			    m_freem(opts);
-		} else {
-		    /* kprintf("rip_input calling sorwakeup\n"); */
-		    sorwakeup(last->inp_socket);
-		}
+		} else
+			sorwakeup(last->inp_socket);
 	} else {
 		m_freem(m);
-              ipstat.ips_noproto++;
-              ipstat.ips_delivered--;
-      }
+		ipstat.ips_noproto++;
+		ipstat.ips_delivered--;
+	}
 }
 
 /*
@@ -246,13 +253,13 @@ rip_output(m, so, dst)
 		}
 		M_PREPEND(m, sizeof(struct ip), M_WAIT);
 		ip = mtod(m, struct ip *);
-		ip->ip_tos = 0;
+		ip->ip_tos = inp->inp_ip_tos;
 		ip->ip_off = 0;
 		ip->ip_p = inp->inp_ip_p;
 		ip->ip_len = m->m_pkthdr.len;
 		ip->ip_src = inp->inp_laddr;
 		ip->ip_dst.s_addr = dst;
-		ip->ip_ttl = MAXTTL;
+		ip->ip_ttl = inp->inp_ip_ttl;
 	} else {
 		if (m->m_pkthdr.len > IP_MAXPACKET) {
 			m_freem(m);
@@ -261,7 +268,7 @@ rip_output(m, so, dst)
 		ip = mtod(m, struct ip *);
 		/* don't allow both user specified and setsockopt options,
 		   and don't allow packet length sizes that will crash */
-		if (((IP_VHL_HL(ip->ip_vhl) != (sizeof (*ip) >> 2)) 
+		if (((IP_VHL_HL(ip->ip_vhl) != (sizeof (*ip) >> 2))
 		     && inp->inp_options)
 		    || (ip->ip_len > m->m_pkthdr.len)
 		    || (ip->ip_len < (IP_VHL_HL(ip->ip_vhl) << 2))) {
@@ -269,14 +276,21 @@ rip_output(m, so, dst)
 			return EINVAL;
 		}
 		if (ip->ip_id == 0)
+#if RANDOM_IP_ID
+			ip->ip_id = ip_randomid();
+#else
 			ip->ip_id = htons(ip_id++);
+#endif
 		/* XXX prevent ip_output from overwriting header fields */
 		flags |= IP_RAWOUTPUT;
 		ipstat.ips_rawout++;
 	}
 
 #if IPSEC
-	m->m_pkthdr.rcvif = (struct ifnet *)so;	/*XXX*/
+	if (ipsec_bypass == 0 && ipsec_setsocket(m, so) != 0) {
+		m_freem(m);
+		return ENOBUFS;
+	}
 #endif /*IPSEC*/
 
 	return (ip_output(m, inp->inp_options, &inp->inp_route, flags,
@@ -312,20 +326,16 @@ rip_ctloutput(so, sopt)
             error = sooptcopyout(sopt, &optval, sizeof optval);
             break;
 
-#if COMPAT_IPFW
+		case IP_FW_ADD:
 		case IP_FW_GET:
+		case IP_OLD_FW_ADD:
+		case IP_OLD_FW_GET:
 			if (ip_fw_ctl_ptr == 0)
 				error = ENOPROTOOPT;
 			else
 				error = ip_fw_ctl_ptr(sopt);
 			break;
 
-		case IP_NAT:
-			if (ip_nat_ctl_ptr == 0)
-				error = ENOPROTOOPT;
-			else
-				error = ip_nat_ctl_ptr(sopt);
-			break;
 #if DUMMYNET
 		case IP_DUMMYNET_GET:
 			if (ip_dn_ctl_ptr == NULL)
@@ -334,7 +344,6 @@ rip_ctloutput(so, sopt)
 				error = ip_dn_ctl_ptr(sopt);
 			break ;
 #endif /* DUMMYNET */
-#endif /* COMPAT_IPFW */
 
 		case MRT_INIT:
 		case MRT_DONE:
@@ -378,23 +387,22 @@ rip_ctloutput(so, sopt)
             break;
 
 
-#if COMPAT_IPFW
 		case IP_FW_ADD:
 		case IP_FW_DEL:
 		case IP_FW_FLUSH:
 		case IP_FW_ZERO:
+		case IP_FW_RESETLOG:
+		case IP_OLD_FW_ADD:
+		case IP_OLD_FW_DEL:
+		case IP_OLD_FW_FLUSH:
+		case IP_OLD_FW_ZERO:
+		case IP_OLD_FW_RESETLOG:
 			if (ip_fw_ctl_ptr == 0)
 				error = ENOPROTOOPT;
 			else
 				error = ip_fw_ctl_ptr(sopt);
 			break;
 
-		case IP_NAT:
-			if (ip_nat_ctl_ptr == 0)
-				error = ENOPROTOOPT;
-			else
-				error = ip_nat_ctl_ptr(sopt);
-			break;
 #if DUMMYNET
 		case IP_DUMMYNET_CONFIGURE:
 		case IP_DUMMYNET_DEL:
@@ -405,7 +413,6 @@ rip_ctloutput(so, sopt)
 				error = ip_dn_ctl_ptr(sopt);
 			break ;
 #endif
-#endif /* COMPAT_IPFW */
 
 		case IP_RSVP_ON:
 			error = ip_rsvp_init(so);
@@ -479,7 +486,7 @@ rip_ctlinput(cmd, sa, vip)
 				 * thing to do, but at least if we are running
 				 * a routing process they will come back.
 				 */
-				in_ifadown(&ia->ia_ifa);
+				in_ifadown(&ia->ia_ifa, 1);
 				break;
 			}
 		}
@@ -510,10 +517,10 @@ rip_ctlinput(cmd, sa, vip)
 u_long	rip_sendspace = RIPSNDQ;
 u_long	rip_recvspace = RIPRCVQ;
 
-SYSCTL_INT(_net_inet_raw, OID_AUTO, maxdgram, CTLFLAG_RW, &rip_sendspace,
-	   0, "");
-SYSCTL_INT(_net_inet_raw, OID_AUTO, recvspace, CTLFLAG_RW, &rip_recvspace,
-	   0, "");
+SYSCTL_INT(_net_inet_raw, OID_AUTO, maxdgram, CTLFLAG_RW,
+    &rip_sendspace, 0, "Maximum outgoing raw IP datagram size");
+SYSCTL_INT(_net_inet_raw, OID_AUTO, recvspace, CTLFLAG_RW,
+    &rip_recvspace, 0, "Maximum incoming raw IP datagram size");
 
 static int
 rip_attach(struct socket *so, int proto, struct proc *p)
@@ -524,39 +531,30 @@ rip_attach(struct socket *so, int proto, struct proc *p)
 	inp = sotoinpcb(so);
 	if (inp)
 		panic("rip_attach");
-
-
-#if ISFB31
-		if (p && (error = suser(p->p_ucred, &p->p_acflag)) != 0)
-			return error;
+#if __APPLE__
+	if ((so->so_state & SS_PRIV) == 0)
+		return (EPERM);
 #else
-		if ((so->so_state & SS_PRIV) == 0)
-			return (EPERM);
+	if (p && (error = suser(p)) != 0)
+		return error;
 #endif
 
+	error = soreserve(so, rip_sendspace, rip_recvspace);
+	if (error)
+		return error;
 	s = splnet();
 	error = in_pcballoc(so, &ripcbinfo, p);
 	splx(s);
 	if (error)
 		return error;
-	error = soreserve(so, rip_sendspace, rip_recvspace);
-	if (error)
-		return error;
 	inp = (struct inpcb *)so->so_pcb;
 	inp->inp_vflag |= INP_IPV4;
 	inp->inp_ip_p = proto;
-#if IPSEC
-	error = ipsec_init_policy(so, &inp->inp_sp);
-	if (error != 0) {
-		in_pcbdetach(inp);
-		return error;
-	}
-#endif /*IPSEC*/
-
+	inp->inp_ip_ttl = ip_defttl;
 	return 0;
 }
 
-static int
+__private_extern__ int
 rip_detach(struct socket *so)
 {
 	struct inpcb *inp;
@@ -573,14 +571,14 @@ rip_detach(struct socket *so)
 	return 0;
 }
 
-static int
+__private_extern__ int
 rip_abort(struct socket *so)
 {
 	soisdisconnected(so);
 	return rip_detach(so);
 }
 
-static int
+__private_extern__ int
 rip_disconnect(struct socket *so)
 {
 	if ((so->so_state & SS_ISCONNECTED) == 0)
@@ -588,7 +586,7 @@ rip_disconnect(struct socket *so)
 	return rip_abort(so);
 }
 
-static int
+__private_extern__ int
 rip_bind(struct socket *so, struct sockaddr *nam, struct proc *p)
 {
 	struct inpcb *inp = sotoinpcb(so);
@@ -606,7 +604,7 @@ rip_bind(struct socket *so, struct sockaddr *nam, struct proc *p)
 	return 0;
 }
 
-static int
+__private_extern__ int
 rip_connect(struct socket *so, struct sockaddr *nam, struct proc *p)
 {
 	struct inpcb *inp = sotoinpcb(so);
@@ -624,14 +622,14 @@ rip_connect(struct socket *so, struct sockaddr *nam, struct proc *p)
 	return 0;
 }
 
-static int
+__private_extern__ int
 rip_shutdown(struct socket *so)
 {
 	socantsendmore(so);
 	return 0;
 }
 
-static int
+__private_extern__ int
 rip_send(struct socket *so, int flags, struct mbuf *m, struct sockaddr *nam,
 	 struct mbuf *control, struct proc *p)
 {
@@ -653,7 +651,6 @@ rip_send(struct socket *so, int flags, struct mbuf *m, struct sockaddr *nam,
 	}
 	return rip_output(m, so, dst);
 }
-
 
 static int
 rip_pcblist SYSCTL_HANDLER_ARGS
@@ -692,11 +689,11 @@ rip_pcblist SYSCTL_HANDLER_ARGS
 	error = SYSCTL_OUT(req, &xig, sizeof xig);
 	if (error)
 		return error;
-        /*
-         * We are done if there is no pcb
-         */
-        if (n == 0)  
-            return 0; 
+    /*
+     * We are done if there is no pcb
+     */
+    if (n == 0)  
+        return 0; 
 
 	inp_list = _MALLOC(n * sizeof *inp_list, M_TEMP, M_WAITOK);
 	if (inp_list == 0)
@@ -743,7 +740,6 @@ rip_pcblist SYSCTL_HANDLER_ARGS
 	return error;
 }
 
-
 SYSCTL_PROC(_net_inet_raw, OID_AUTO/*XXX*/, pcblist, CTLFLAG_RD, 0, 0,
 	    rip_pcblist, "S,xinpcb", "List of active raw IP sockets");
 
@@ -751,6 +747,6 @@ struct pr_usrreqs rip_usrreqs = {
 	rip_abort, pru_accept_notsupp, rip_attach, rip_bind, rip_connect,
 	pru_connect2_notsupp, in_control, rip_detach, rip_disconnect,
 	pru_listen_notsupp, in_setpeeraddr, pru_rcvd_notsupp,
-	pru_rcvoob_notsupp, rip_send, pru_sense_null, rip_shutdown, 
+	pru_rcvoob_notsupp, rip_send, pru_sense_null, rip_shutdown,
 	in_setsockaddr, sosend, soreceive, sopoll
 };

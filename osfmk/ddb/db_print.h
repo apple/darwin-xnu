@@ -192,12 +192,6 @@ void db_show_one_mutex(
 	db_expr_t	count,
 	char *		modif);
 
-void db_show_subsystem(
-	db_expr_t	addr,
-	boolean_t	have_addr,
-	db_expr_t	count,
-	char *		modif);
-
 void db_show_runq(
 	db_expr_t	addr,
 	boolean_t	have_addr,

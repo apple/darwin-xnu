@@ -60,6 +60,7 @@
 #include <ppc/mem.h>
 #include <ppc/pmap_internals.h>
 #include <ppc/savearea.h>
+#include <ppc/vmachmon.h>
 
 void db_dumpphys(struct phys_entry *pp); 					/* Dump from physent */
 void db_dumppca(struct mapping *mp); 						/* PCA */
@@ -467,11 +468,12 @@ void db_display_virtual(db_expr_t addr, int have_addr, db_expr_t count, char * m
 
 void db_display_save(db_expr_t addr, int have_addr, db_expr_t count, char * modif) {
 
-	int				i, j, totsaves, tottasks, taskact, chainsize;
+	int				i, j, totsaves, tottasks, taskact, chainsize, vmid, didvmhead;
 	processor_set_t	pset = &default_pset;
 	task_t			task;
 	thread_act_t	act;
 	savearea		*save;
+	vmmCntrlTable	*CTable;
 	
 	tottasks = 0;
 	totsaves = 0;
@@ -480,44 +482,86 @@ void db_display_save(db_expr_t addr, int have_addr, db_expr_t count, char * modi
 		taskact = 0;								/* Reset activation count */
 		db_printf("\nTask %4d @%08X:\n", tottasks, task);	/* Show where we're at */
 		for(act = (thread_act_t)task->thr_acts.next; act != (thread_act_t)&task->thr_acts; act = (thread_act_t)act->thr_acts.next) {	/* Go through activations */
-			db_printf("   Act %4d @%08X - p: %08X  fp: %08X  fl: %08X  fc: %d  vp: %08X  vl: %08X  vp: %d\n",
-					  taskact, act, act->mact.pcb, act->mact.FPU_pcb, act->mact.FPU_lvl, act->mact.FPU_cpu, 		
-					  act->mact.VMX_pcb, act->mact.VMX_lvl, act->mact.VMX_cpu);
-					
+			db_printf("   Act %4d @%08X - p: %08X  current context: %08X\n",
+					  taskact, act, act->mact.pcb, act->mact.curctx);					
 					
 			save = (savearea *)act->mact.pcb; 		/* Set the start of the normal chain */
 			chainsize = 0;
+			
+			db_printf("      General context - fp: %08X  fl: %08X  fc: %d  vp: %08X  vl: %08X  vp: %d\n",
+				act->mact.facctx.FPUsave, act->mact.facctx.FPUlevel, act->mact.facctx.FPUcpu, 		
+				act->mact.facctx.VMXsave, act->mact.facctx.VMXlevel, act->mact.facctx.VMXcpu);
+			
 			while(save) {							/* Do them all */
 				totsaves++;							/* Count savearea */
-				db_printf("      Norm %08X: %08X %08X - tot = %d\n", save, save->save_srr0, save->save_srr1, totsaves);
-				save = save->save_prev;				/* Next one */
+				db_printf("         Norm %08X: %08X %08X - tot = %d\n", save, save->save_srr0, save->save_srr1, totsaves);
+				save = save->save_hdr.save_prev;	/* Next one */
 				if(chainsize++ > chainmax) {		/* See if we might be in a loop */
-					db_printf("      Chain terminated by count (%d) before %08X\n", chainmax, save);
+					db_printf("         Chain terminated by count (%d) before %08X\n", chainmax, save);
 					break;
 				}
 			}
 			
-			save = (savearea *)act->mact.FPU_pcb; 	/* Set the start of the floating point chain */
+			save = (savearea *)act->mact.facctx.FPUsave; 	/* Set the start of the floating point chain */
 			chainsize = 0;
 			while(save) {							/* Do them all */
-				if(!(save->save_flags & SAVattach)) totsaves++;	/* Count savearea only if not a normal one also */
-				db_printf("      FPU  %08X: %08X - tot = %d\n", save, save->save_level_fp, totsaves);
-				save = save->save_prev_float;		/* Next one */
+				totsaves++;							/* Count savearea */
+				db_printf("         FPU  %08X: %08X - tot = %d\n", save, save->save_hdr.save_level, totsaves);
+				save = save->save_hdr.save_prev;	/* Next one */
 				if(chainsize++ > chainmax) {		/* See if we might be in a loop */
-					db_printf("      Chain terminated by count (%d) before %08X\n", chainmax, save);
+					db_printf("         Chain terminated by count (%d) before %08X\n", chainmax, save);
 					break;
 				}
 			}
 			
-			save = (savearea *)act->mact.VMX_pcb; 	/* Set the start of the floating point chain */
+			save = (savearea *)act->mact.facctx.VMXsave; 	/* Set the start of the floating point chain */
 			chainsize = 0;
 			while(save) {							/* Do them all */
-				if(!(save->save_flags & (SAVattach | SAVfpuvalid))) totsaves++;	/* Count savearea only if not a normal one also */
-				db_printf("      Vec  %08X: %08X - tot = %d\n", save, save->save_level_vec, totsaves);
-				save = save->save_prev_vector;		/* Next one */
+				totsaves++;							/* Count savearea */
+				db_printf("         Vec  %08X: %08X - tot = %d\n", save, save->save_hdr.save_level, totsaves);
+				save = save->save_hdr.save_prev;	/* Next one */
 				if(chainsize++ > chainmax) {		/* See if we might be in a loop */
-					db_printf("      Chain terminated by count (%d) before %08X\n", chainmax, save);
+					db_printf("         Chain terminated by count (%d) before %08X\n", chainmax, save);
 					break;
+				}
+			}
+			
+			if(CTable = act->mact.vmmControl) {		/* Are there virtual machines? */
+				
+				for(vmid = 0; vmid < kVmmMaxContextsPerThread; vmid++) {
+					
+					if(!(CTable->vmmc[vmid].vmmFlags & vmmInUse)) continue;	/* Skip if vm is not in use */
+					
+					if(!CTable->vmmc[vmid].vmmFacCtx.FPUsave && !CTable->vmmc[vmid].vmmFacCtx.VMXsave) continue;	/* If neither types, skip this vm */
+					
+					db_printf("      VMachine ID %3d - fp: %08X  fl: %08X  fc: %d  vp: %08X  vl: %08X  vp: %d\n", vmid,	/* Title it */
+						CTable->vmmc[vmid].vmmFacCtx.FPUsave, CTable->vmmc[vmid].vmmFacCtx.FPUlevel, CTable->vmmc[vmid].vmmFacCtx.FPUcpu, 		
+						CTable->vmmc[vmid].vmmFacCtx.VMXsave, CTable->vmmc[vmid].vmmFacCtx.VMXlevel, CTable->vmmc[vmid].vmmFacCtx.VMXcpu
+					);
+					
+					save = (savearea *)CTable->vmmc[vmid].vmmFacCtx.FPUsave; 	/* Set the start of the floating point chain */
+					chainsize = 0;
+					while(save) {						/* Do them all */
+						totsaves++;						/* Count savearea */
+						db_printf("         FPU  %08X: %08X - tot = %d\n", save, save->save_hdr.save_level, totsaves);
+						save = save->save_hdr.save_prev;	/* Next one */
+						if(chainsize++ > chainmax) {	/* See if we might be in a loop */
+							db_printf("         Chain terminated by count (%d) before %08X\n", chainmax, save);
+							break;
+						}
+					}
+					
+					save = (savearea *)CTable->vmmc[vmid].vmmFacCtx.VMXsave; 	/* Set the start of the floating point chain */
+					chainsize = 0;
+					while(save) {						/* Do them all */
+						totsaves++;						/* Count savearea */
+						db_printf("         Vec  %08X: %08X - tot = %d\n", save, save->save_hdr.save_level, totsaves);
+						save = save->save_hdr.save_prev;	/* Next one */
+						if(chainsize++ > chainmax) {	/* See if we might be in a loop */
+							db_printf("         Chain terminated by count (%d) before %08X\n", chainmax, save);
+							break;
+						}
+					}
 				}
 			}
 			taskact++;

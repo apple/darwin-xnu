@@ -66,9 +66,13 @@
 #include <mach/kern_return.h>
 #include <mach/vm_types.h>
 
+#include <sys/appleapiopts.h>
+
+#ifdef __APPLE_API_PRIVATE
 #ifdef MACH_KERNEL_PRIVATE
 #include <mach_kdb.h>
 #include <kern/macro_help.h>
+#include <kern/kern_types.h>
 #include <kern/lock.h>
 #include <kern/task.h>
 #include <kern/zalloc.h>
@@ -157,10 +161,16 @@ MACRO_END
 
 #define	is_read_lock(is)	mutex_lock(&(is)->is_lock_data)
 #define is_read_unlock(is)	mutex_unlock(&(is)->is_lock_data)
+#define is_read_sleep(is)	thread_sleep_mutex((event_t)(is),	\
+						   &(is)->is_lock_data,	\
+						   THREAD_UNINT)
 
 #define	is_write_lock(is)	mutex_lock(&(is)->is_lock_data)
 #define	is_write_lock_try(is)	mutex_try(&(is)->is_lock_data)
 #define is_write_unlock(is)	mutex_unlock(&(is)->is_lock_data)
+#define is_write_sleep(is)	thread_sleep_mutex((event_t)(is),	\
+						   &(is)->is_lock_data,	\
+						   THREAD_UNINT)
 
 #define	is_reference(is)	ipc_space_reference(is)
 #define	is_release(is)		ipc_space_release(is)
@@ -170,11 +180,29 @@ MACRO_END
 #define	current_space_fast()	(current_task_fast()->itk_space)
 #define current_space()		(current_space_fast())
 
-#else /* !MACH_KERNEL_PRIVATE */
+/* Create a special IPC space */
+extern kern_return_t ipc_space_create_special(
+	ipc_space_t	*spacep);
+
+/* Create  new IPC space */
+extern kern_return_t ipc_space_create(
+	ipc_table_size_t	initial,
+	ipc_space_t		*spacep);
+
+/* Mark a space as dead and cleans up the entries*/
+extern void ipc_space_destroy(
+	ipc_space_t	space);
+
+#endif /* MACH_KERNEL_PRIVATE */
+#endif /* __APPLE_API_PRIVATE */
+
+#ifdef  __APPLE_API_UNSTABLE
+#ifndef MACH_KERNEL_PRIVATE
 
 extern ipc_space_t		current_space(void);
 
-#endif /* MACH_KERNEL_PRIVATE */
+#endif /* !MACH_KERNEL_PRIVATE */
+#endif /* __APPLE_API_UNSTABLE */
 
 /* Take a reference on a space */
 extern void ipc_space_reference(
@@ -182,20 +210,6 @@ extern void ipc_space_reference(
 
 /* Realase a reference on a space */
 extern void ipc_space_release(
-	ipc_space_t	space);
-
-
-/* Create  new IPC space */
-extern kern_return_t ipc_space_create(
-	ipc_table_size_t	initial,
-	ipc_space_t		*spacep);
-
-/* Create a special IPC space */
-extern kern_return_t ipc_space_create_special(
-	ipc_space_t	*spacep);
-
-/* Mark a space as dead and cleans up the entries*/
-extern void ipc_space_destroy(
 	ipc_space_t	space);
 
 #endif	/* _IPC_IPC_SPACE_H_ */

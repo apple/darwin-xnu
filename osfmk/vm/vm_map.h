@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2002 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -73,13 +73,15 @@
 #include <mach/vm_behavior.h>
 #include <vm/pmap.h>
 
-typedef struct vm_map_entry	*vm_map_entry_t;
+#include <sys/appleapiopts.h>
 
-extern void	kernel_vm_map_reference(vm_map_t	map);
+#ifdef __APPLE_API_PRIVATE
 
 #ifndef MACH_KERNEL_PRIVATE
 
-struct vm_map_entry {};
+#ifdef __APPLE_API_OBSOLETE
+extern void     kernel_vm_map_reference(vm_map_t map);
+#endif /* __APPLE_API_OBSOLETE */
 
 extern void	vm_map_reference(vm_map_t	map);
 extern vm_map_t current_map(void);
@@ -96,10 +98,6 @@ extern vm_map_t current_map(void);
 #include <kern/zalloc.h>
 #include <kern/macro_help.h>
 
-#define shared_region_mapping_lock_init(object)   \
-			mutex_init(&(object)->Lock, ETAP_VM_OBJ)
-#define shared_region_mapping_lock(object)        mutex_lock(&(object)->Lock)
-#define shared_region_mapping_unlock(object)      mutex_unlock(&(object)->Lock)
 #include <kern/thread_act.h>
 
 #define current_map_fast()	(current_act_fast()->map)
@@ -114,6 +112,8 @@ extern vm_map_t current_map(void);
  *	vm_map_copy_t		represents memory copied from an address map,
  *				 used for inter-map copy operations
  */
+typedef struct vm_map_entry	*vm_map_entry_t;
+
 
 /*
  *	Type:		vm_map_object_t [internal use only]
@@ -266,6 +266,7 @@ struct vm_map {
 						   for space? */
 	boolean_t		wiring_required;/* All memory wired? */
 	boolean_t		no_zero_fill;	/* No zero fill absent pages */
+	boolean_t		mapped;		/* has this map been mapped */
 	unsigned int		timestamp;	/* Version number */
 } ;
 
@@ -423,23 +424,17 @@ struct vm_map_copy {
  */
 
 #define vm_map_lock_init(map)						\
-MACRO_BEGIN								\
-	lock_init(&(map)->lock, TRUE, ETAP_VM_MAP, ETAP_VM_MAP_I);	\
-	(map)->timestamp = 0;						\
-MACRO_END
-#define vm_map_lock(map)			\
-MACRO_BEGIN					\
-	lock_write(&(map)->lock);		\
-	(map)->timestamp++;			\
-MACRO_END
+	((map)->timestamp = 0 ,						\
+	lock_init(&(map)->lock, TRUE, ETAP_VM_MAP, ETAP_VM_MAP_I))
 
-#define vm_map_unlock(map)	lock_write_done(&(map)->lock)
-#define vm_map_lock_read(map)	lock_read(&(map)->lock)
-#define vm_map_unlock_read(map)	lock_read_done(&(map)->lock)
+#define vm_map_lock(map)		lock_write(&(map)->lock)
+#define vm_map_unlock(map)						\
+		((map)->timestamp++ ,	lock_write_done(&(map)->lock))
+#define vm_map_lock_read(map)		lock_read(&(map)->lock)
+#define vm_map_unlock_read(map)		lock_read_done(&(map)->lock)
 #define vm_map_lock_write_to_read(map)					\
-		lock_write_to_read(&(map)->lock)
-#define vm_map_lock_read_to_write(map)					\
-		(lock_read_to_write(&(map)->lock) || (((map)->timestamp++), 0))
+		((map)->timestamp++ ,	lock_write_to_read(&(map)->lock))
+#define vm_map_lock_read_to_write(map)	lock_read_to_write(&(map)->lock)
 
 extern zone_t		vm_map_copy_zone; /* zone for vm_map_copy structures */
 
@@ -667,14 +662,12 @@ extern vm_object_t	vm_submap_object;
  *	Wait and wakeup macros for in_transition map entries.
  */
 #define vm_map_entry_wait(map, interruptible)    	\
-        MACRO_BEGIN                                     \
-        assert_wait((event_t)&(map)->hdr, interruptible);	\
-        vm_map_unlock(map);                             \
-	thread_block((void (*)(void))0);		\
-        MACRO_END
+	((map)->timestamp++ ,				\
+	 thread_sleep_lock_write((event_t)&(map)->hdr,  \
+			 &(map)->lock, interruptible))
+
 
 #define vm_map_entry_wakeup(map)        thread_wakeup((event_t)(&(map)->hdr))
-
 
 
 #define	vm_map_ref_fast(map)				\
@@ -737,22 +730,7 @@ extern int		vm_map_copy_cont_is_valid(
 				vm_map_copy_t	copy);
 
 
-
-#endif /* !MACH_KERNEL_PRIVATE */
-
-/* Get rid of a map */
-extern void		vm_map_destroy(
-				vm_map_t	map);
-/* Lose a reference */
-extern void		vm_map_deallocate(
-				vm_map_t	map);
-
-/* Create an empty map */
-extern vm_map_t		vm_map_create(
-				pmap_t		pmap,
-				vm_offset_t	min,
-				vm_offset_t	max,
-				boolean_t	pageable);
+#define VM_MAP_ENTRY_NULL	((vm_map_entry_t) 0)
 
 
 /* Enter a mapping */
@@ -785,6 +763,52 @@ extern	kern_return_t	vm_map_read_user(
 extern vm_map_t		vm_map_fork(
 				vm_map_t	old_map);
 
+/* Change inheritance */
+extern kern_return_t	vm_map_inherit(
+				vm_map_t	map,
+				vm_offset_t	start,
+				vm_offset_t	end,
+				vm_inherit_t	new_inheritance);
+
+/* Add or remove machine-dependent attributes from map regions */
+extern kern_return_t	vm_map_machine_attribute(
+				vm_map_t	map,
+				vm_offset_t	address,
+				vm_size_t	size,
+				vm_machine_attribute_t	attribute,
+				vm_machine_attribute_val_t* value); /* IN/OUT */
+/* Set paging behavior */
+extern kern_return_t	vm_map_behavior_set(
+				vm_map_t	map,
+				vm_offset_t	start,
+				vm_offset_t	end,
+				vm_behavior_t	new_behavior);
+
+extern kern_return_t	vm_map_submap(
+				vm_map_t	map,
+				vm_offset_t	start,
+				vm_offset_t	end,
+				vm_map_t	submap,
+				vm_offset_t	offset,
+				boolean_t	use_pmap);
+
+
+#endif /* MACH_KERNEL_PRIVATE */
+
+/* Create an empty map */
+extern vm_map_t		vm_map_create(
+				pmap_t		pmap,
+				vm_offset_t	min,
+				vm_offset_t	max,
+				boolean_t	pageable);
+
+/* Get rid of a map */
+extern void		vm_map_destroy(
+				vm_map_t	map);
+/* Lose a reference */
+extern void		vm_map_deallocate(
+				vm_map_t	map);
+
 /* Change protection */
 extern kern_return_t	vm_map_protect(
 				vm_map_t	map,
@@ -792,13 +816,6 @@ extern kern_return_t	vm_map_protect(
 				vm_offset_t	end,
 				vm_prot_t	new_prot,
 				boolean_t	set_max);
-
-/* Change inheritance */
-extern kern_return_t	vm_map_inherit(
-				vm_map_t	map,
-				vm_offset_t	start,
-				vm_offset_t	end,
-				vm_inherit_t	new_inheritance);
 
 /* wire down a region */
 extern kern_return_t	vm_map_wire(
@@ -828,21 +845,6 @@ extern kern_return_t	vm_map_copyout(
 				vm_offset_t	*dst_addr,	/* OUT */
 				vm_map_copy_t	copy);
 
-
-/* Add or remove machine-dependent attributes from map regions */
-extern kern_return_t	vm_map_machine_attribute(
-				vm_map_t	map,
-				vm_offset_t	address,
-				vm_size_t	size,
-				vm_machine_attribute_t	attribute,
-				vm_machine_attribute_val_t* value); /* IN/OUT */
-/* Set paging behavior */
-extern kern_return_t	vm_map_behavior_set(
-				vm_map_t	map,
-				vm_offset_t	start,
-				vm_offset_t	end,
-				vm_behavior_t	new_behavior);
-
 extern kern_return_t	vm_map_copyin_common(
 				vm_map_t	src_map,
 				vm_offset_t	src_addr,
@@ -851,14 +853,6 @@ extern kern_return_t	vm_map_copyin_common(
 				boolean_t	src_volatile,
 				vm_map_copy_t	*copy_result,	/* OUT */
 				boolean_t	use_maxprot);
-
-extern kern_return_t	vm_map_submap(
-				vm_map_t	map,
-				vm_offset_t	start,
-				vm_offset_t	end,
-				vm_map_t	submap,
-				vm_offset_t	offset,
-				boolean_t	use_pmap);
 
 extern kern_return_t vm_region_clone(
 				ipc_port_t	src_region,
@@ -889,8 +883,6 @@ extern kern_return_t vm_map_region_replace(
 		vm_map_copyin_common(src_map, src_addr, len, src_destroy, \
 					FALSE, copy_result, TRUE)
 
-#define VM_MAP_ENTRY_NULL	((vm_map_entry_t) 0)
-
 /*
  * Flags for vm_map_remove() and vm_map_delete()
  */
@@ -899,91 +891,7 @@ extern kern_return_t vm_map_region_replace(
 #define	VM_MAP_REMOVE_INTERRUPTIBLE  	0x2
 #define	VM_MAP_REMOVE_WAIT_FOR_KWIRE  	0x4
 
+#endif  /* __APPLE_API_PRIVATE */
  
-#ifdef MACH_KERNEL_PRIVATE 
-
-/* address space shared region descriptor */
-
-struct shared_region_mapping {
-        decl_mutex_data(,       Lock)   /* Synchronization */
-	int			ref_count;
-	ipc_port_t		text_region;
-	vm_size_t		text_size;
-	ipc_port_t		data_region;
-	vm_size_t		data_size;
-	vm_offset_t		region_mappings;
-	vm_offset_t		client_base;
-	vm_offset_t		alternate_base;
-	vm_offset_t		alternate_next;
-	int			flags;
-	int			depth;
-	struct shared_region_object_chain *object_chain;
-	struct shared_region_mapping *self;
-	struct shared_region_mapping *next;
-};
-
-typedef struct shared_region_mapping *shared_region_mapping_t;
-
-struct shared_region_object_chain {
-	shared_region_mapping_t	object_chain_region;
-	int			depth;
-	struct shared_region_object_chain *next;
-};
-
-typedef struct shared_region_object_chain *shared_region_object_chain_t;
-
-#else  /* !MACH_KERNEL_PRIVATE */
-
-typedef void *shared_region_mapping_t;
-
-#endif /* MACH_KERNEL_PRIVATE */
-
-/* address space shared region descriptor */
-
-extern kern_return_t shared_region_mapping_info(
-				shared_region_mapping_t	shared_region,
-				ipc_port_t		*text_region,
-				vm_size_t		*text_size,
-				ipc_port_t		*data_region,
-				vm_size_t		*data_size,
-				vm_offset_t		*region_mappings,
-				vm_offset_t		*client_base,
-				vm_offset_t		*alternate_base,
-				vm_offset_t		*alternate_next,
-				int			*flags,
-				shared_region_mapping_t	*next);
-
-extern kern_return_t shared_region_mapping_create(
-				ipc_port_t		text_region,
-				vm_size_t		text_size,
-				ipc_port_t		data_region,
-				vm_size_t		data_size,
-				vm_offset_t		region_mappings,
-				vm_offset_t		client_base,
-				shared_region_mapping_t	*shared_region,
-				vm_offset_t		alt_base,
-				vm_offset_t		alt_next);
-
-extern kern_return_t shared_region_mapping_ref(
-				shared_region_mapping_t	shared_region);
-
-extern kern_return_t shared_region_mapping_dealloc(
-				shared_region_mapping_t	shared_region);
-
-extern kern_return_t
-shared_region_object_chain_attach(
-				shared_region_mapping_t	target_region,
-				shared_region_mapping_t	object_chain);
-
-/*
-extern kern_return_t vm_get_shared_region(
-				task_t	task,
-				shared_region_mapping_t	*shared_region);
-
-extern kern_return_t vm_set_shared_region(
-				task_t	task,
-				shared_region_mapping_t	shared_region);
-*/
-
 #endif	/* _VM_VM_MAP_H_ */
 

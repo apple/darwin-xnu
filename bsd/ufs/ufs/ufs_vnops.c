@@ -77,6 +77,7 @@
 #include <sys/dirent.h>
 #include <sys/fcntl.h>
 #include <sys/ubc.h>
+#include <sys/quota.h>
 
 #include <kern/thread.h>
 #include <sys/vm.h>
@@ -224,7 +225,8 @@ ufs_close(ap)
 	register struct inode *ip = VTOI(vp);
 
 	simple_lock(&vp->v_interlock);
-	if (vp->v_usecount > (UBCINFOEXISTS(vp) ? 2 : 1))
+	if ((!UBCISVALID(vp) && vp->v_usecount > 1)
+	    || (UBCISVALID(vp) && ubc_isinuse(vp, 1)))
 		ITIMES(ip, &time, &time);
 	simple_unlock(&vp->v_interlock);
 
@@ -522,8 +524,9 @@ ufs_chown(vp, uid, gid, cred, p)
 	int error = 0;
 #if QUOTA
 	register int i;
-	long change;
-#endif
+	int64_t change;   /* in bytes */
+	int devBlockSize=0;
+#endif /* QUOTA */
 
 	if (uid == (uid_t)VNOVAL)
 		uid = ip->i_uid;
@@ -551,7 +554,8 @@ ufs_chown(vp, uid, gid, cred, p)
 		dqrele(vp, ip->i_dquot[GRPQUOTA]);
 		ip->i_dquot[GRPQUOTA] = NODQUOT;
 	}
-	change = ip->i_blocks;
+	VOP_DEVBLOCKSIZE(ip->i_devvp, &devBlockSize);
+	change = dbtob((int64_t)ip->i_blocks, devBlockSize);
 	(void) chkdq(ip, -change, cred, CHOWN);
 	(void) chkiq(ip, -1, cred, CHOWN);
 	for (i = 0; i < MAXQUOTAS; i++) {
@@ -734,12 +738,16 @@ ufs_remove(ap)
 		error = EPERM;
 		goto out;
 	}
-	if ((vp->v_usecount > (UBCINFOEXISTS(vp) ? 2 : 1)) &&
-	    (ap->a_cnp->cn_flags & NODELETEBUSY)) {
-		/* Carbon and Classic clients can't delete busy files */
-		error = EBUSY;
-		goto out;
+
+	if (ap->a_cnp->cn_flags & NODELETEBUSY) {
+		/* Caller requested Carbon delete semantics */
+		if ((!UBCISVALID(vp) && vp->v_usecount > 1)
+		    || (UBCISVALID(vp) && ubc_isinuse(vp, 1))) {
+			error = EBUSY;
+			goto out;
+		}
 	}
+
 	if ((error = ufs_dirremove(dvp, ap->a_cnp)) == 0) {
 		ip->i_nlink--;
 		ip->i_flag |= IN_CHANGE;

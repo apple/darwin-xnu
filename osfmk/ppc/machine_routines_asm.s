@@ -45,6 +45,8 @@ LEXT(ml_probe_read)
 
 			mfsprg	r9,2							; Get feature flags
 			mfmsr	r0								; Save the current MSR
+			rlwinm	r0,r0,0,MSR_FP_BIT+1,MSR_FP_BIT-1	; Force floating point off
+			rlwinm	r0,r0,0,MSR_VEC_BIT+1,MSR_VEC_BIT-1	; Force vectors off
 			neg		r10,r3							; Number of bytes to end of page
 			rlwinm	r2,r0,0,MSR_EE_BIT+1,MSR_EE_BIT-1	; Clear interruptions
 			rlwinm.	r10,r10,0,20,31					; Clear excess junk and test for page bndry
@@ -75,6 +77,15 @@ mprNoMSRx:
 
 			mfspr		r6, hid0					; Get a copy of hid0
 			
+			rlwinm.		r5, r9, 0, pfNoMuMMCKb, pfNoMuMMCKb		; Check for NoMuMMCK
+			bne		mprNoMuM
+			
+			rlwinm		r5, r6, 0, ice+1, ice-1				; Turn off L1 I-Cache
+			mtspr		hid0, r5
+			isync								; Wait for I-Cache off
+			rlwinm		r5, r6, 0, mum+1, mum-1				; Turn off MuM w/ I-Cache on
+			mtspr		hid0, r5
+mprNoMuM:
 
 ;
 ;			We need to insure that there is no more than 1 BAT register that
@@ -164,7 +175,9 @@ LEXT(ml_probe_read_mck)
 LEXT(ml_phys_read_byte)
 
 			mfmsr	r10								; Save the current MSR
-			rlwinm	r4,r0,0,MSR_EE_BIT+1,MSR_EE_BIT-1	; Clear interruptions
+			rlwinm	r10,r10,0,MSR_FP_BIT+1,MSR_FP_BIT-1	; Force floating point off
+			rlwinm	r10,r10,0,MSR_VEC_BIT+1,MSR_VEC_BIT-1	; Force vectors off
+			rlwinm	r4,r10,0,MSR_EE_BIT+1,MSR_EE_BIT-1	; Clear interruptions
 			rlwinm	r4,r4,0,MSR_DR_BIT+1,MSR_DR_BIT-1	; Clear translation	
 
 			mtmsr	r4								; Translation and all off
@@ -191,6 +204,8 @@ LEXT(ml_phys_read_byte)
 LEXT(ml_phys_read)
 
 			mfmsr	r0								; Save the current MSR
+			rlwinm	r0,r0,0,MSR_FP_BIT+1,MSR_FP_BIT-1	; Force floating point off
+			rlwinm	r0,r0,0,MSR_VEC_BIT+1,MSR_VEC_BIT-1	; Force vectors off
 			rlwinm	r4,r0,0,MSR_EE_BIT+1,MSR_EE_BIT-1	; Clear interruptions
 			rlwinm	r4,r4,0,MSR_DR_BIT+1,MSR_DR_BIT-1	; Clear translation	
 
@@ -218,6 +233,8 @@ LEXT(ml_phys_read)
 LEXT(ml_phys_write_byte)
 
 			mfmsr	r0								; Save the current MSR
+			rlwinm	r0,r0,0,MSR_FP_BIT+1,MSR_FP_BIT-1	; Force floating point off
+			rlwinm	r0,r0,0,MSR_VEC_BIT+1,MSR_VEC_BIT-1	; Force vectors off
 			rlwinm	r5,r0,0,MSR_EE_BIT+1,MSR_EE_BIT-1	; Clear interruptions
 			rlwinm	r5,r5,0,MSR_DR_BIT+1,MSR_DR_BIT-1	; Clear translation	
 
@@ -245,6 +262,8 @@ LEXT(ml_phys_write_byte)
 LEXT(ml_phys_write)
 
 			mfmsr	r0								; Save the current MSR
+			rlwinm	r0,r0,0,MSR_FP_BIT+1,MSR_FP_BIT-1	; Force floating point off
+			rlwinm	r0,r0,0,MSR_VEC_BIT+1,MSR_VEC_BIT-1	; Force vectors off
 			rlwinm	r5,r0,0,MSR_EE_BIT+1,MSR_EE_BIT-1	; Clear interruptions
 			rlwinm	r5,r5,0,MSR_DR_BIT+1,MSR_DR_BIT-1	; Clear translation	
 
@@ -277,7 +296,9 @@ LEXT(ml_set_interrupts_enabled)
 			mr.		r4,r4
 			beq-	EXT(fake_set_interrupts_enabled)
 			mfmsr	r5								; Get the current MSR
+			rlwinm	r5,r5,0,MSR_FP_BIT+1,MSR_FP_BIT-1	; Force floating point off
 			mr		r4,r3							; Save the old value
+			rlwinm	r5,r5,0,MSR_VEC_BIT+1,MSR_VEC_BIT-1	; Force vectors off
 			rlwinm	r3,r5,17,31,31					; Set return value
 			rlwimi	r5,r4,15,16,16					; Insert new EE bit
 			andi.   r8,r5,lo16(MASK(MSR_EE))			; Interruptions
@@ -288,18 +309,17 @@ NoPreemption:
 
 CheckPreemption:
 			lwz		r8,PP_NEED_AST(r7)
-			lwz		r7,PP_CPU_DATA(r7)
 			li		r6,AST_URGENT
 			lwz		r8,0(r8)
-			lwz		r7,CPU_PREEMPTION_LEVEL(r7)
+			lwz		r7,PP_PREEMPT_CNT(r7)
 			lis		r0,HIGH_ADDR(DoPreemptCall)
 			and.	r8,r8,r6
 			ori		r0,r0,LOW_ADDR(DoPreemptCall)   
-			beq+		NoPreemption
+			beq+	NoPreemption
 			cmpi	cr0, r7, 0
-			bne+		NoPreemption
-			sc
-			mtmsr	r5
+			mtmsr	r5								; Restore the MSR now, before we can preempt
+			bnelr+									; Return if no premption
+			sc										; Preempt
 			blr
 
 
@@ -339,8 +359,11 @@ LEXT(machine_clock_assist)
 LEXT(machine_idle_ppc)
 
 			mfmsr	r3								; Get the current MSR
+			rlwinm	r3,r3,0,MSR_FP_BIT+1,MSR_FP_BIT-1	; Force floating point off
+			rlwinm	r3,r3,0,MSR_VEC_BIT+1,MSR_VEC_BIT-1	; Force vectors off
 			rlwinm	r5,r3,0,MSR_EE_BIT+1,MSR_EE_BIT-1	; Turn off interruptions
 			mtmsr	r5								; Hold up interruptions for now
+			isync									; May have messed with fp/vec
 			mfsprg	r12,0							; Get the per_proc_info
 			mfspr	r6,hid0							; Get the current power-saving mode
 			mfsprg	r11,2							; Get CPU specific features
@@ -365,6 +388,24 @@ yesnap:		mftbu	r9								; Get the upper timebase
 			stw		r8,napStamp(r12)				; Set high order time stamp
 			stw		r7,napStamp+4(r12)				; Set low order nap stamp
 
+			rlwinm.	r7,r11,0,pfNoL2PFNapb,pfNoL2PFNapb			; Turn off L2 Prefetch before nap?
+			beq	miL2PFok
+
+			mfspr	r7,msscr0						; Get currect MSSCR0 value
+			rlwinm	r7,r7,0,0,l2pfes-1					; Dissable L2 Prefetch
+			mtspr	msscr0,r7						; Updates MSSCR0 value
+			sync
+			isync
+
+miL2PFok:
+			rlwinm.	r7,r11,0,pfSlowNapb,pfSlowNapb				; Should nap at slow speed?
+			beq	minoslownap
+
+			mfspr	r7,hid1							; Get current HID1 value
+			oris	r7,r7,hi16(hid1psm)					; Select PLL1
+			mtspr	hid1,r7							; Update HID1 value
+
+minoslownap:
 
 ;
 ;			We have to open up interruptions here because book 4 says that we should
@@ -428,22 +469,26 @@ LEXT(ml_ppc_sleep)
 			mtmsr	r5								; No talking
 			isync
 			
-;			No interrupts allowed after we get the savearea
-
-			mfsprg	r6,0							; Get the per_proc
-			mfsprg	r7,1							; Get the pending savearea
-			stw		r7,savedSave(r6)				; Save the savearea for when we wake up
-
 deadsleep:	addi	r3,r3,1							; Make analyzer happy
 			addi	r3,r3,1
 			addi	r3,r3,1
 			b		deadsleep						; Die the death of 1000 joys...
 #endif	
 			
-			mfsprg	r12,0							; Get the per_proc_info
 			mfspr	r4,hid0							; Get the current power-saving mode
 			eqv		r10,r10,r10						; Get all foxes
 			mfsprg	r11,2							; Get CPU specific features
+
+			rlwinm.	r5,r11,0,pfNoL2PFNapb,pfNoL2PFNapb			; Turn off L2 Prefetch before sleep?
+			beq	mpsL2PFok
+
+			mfspr	r5,msscr0						; Get currect MSSCR0 value
+			rlwinm	r5,r5,0,0,l2pfes-1					; Dissable L2 Prefetch
+			mtspr	msscr0,r5						; Updates MSSCR0 value
+			sync
+			isync
+
+mpsL2PFok:
 			mfmsr	r5								; Get the current MSR
 			rlwinm	r10,r10,0,1,31					; Make 0x7FFFFFFF
 			rlwinm	r4,r4,0,sleep+1,doze-1			; Clear all possible power-saving modes (not DPM though)	
@@ -484,9 +529,6 @@ mpsNoMSRx:
 			mtmsr	r5								; Interruptions back off
 			isync									; Toss prefetch
 
-			mfsprg	r7,1							; Get the pending savearea
-			stw		r7,savedSave(r12)				; Save the savearea for when we wake up
-			
 ;
 ;			We are here with translation off, interrupts off, all possible
 ;			interruptions drained off, and a decrimenter that will not pop.
@@ -532,6 +574,8 @@ LEXT(cacheInit)
 			mfsprg	r11,2							; Get CPU specific features
 			mfmsr	r7								; Get the current MSR
 			rlwinm	r4,r9,0,dpm+1,doze-1			; Clear all possible power-saving modes (also disable DPM)	
+			rlwinm	r7,r7,0,MSR_FP_BIT+1,MSR_FP_BIT-1	; Force floating point off
+			rlwinm	r7,r7,0,MSR_VEC_BIT+1,MSR_VEC_BIT-1	; Force vectors off
 			rlwimi	r11,r11,pfLClckb+1,31,31		; Move pfLClck to another position (to keep from using non-volatile CRs)
 			rlwinm	r5,r7,0,MSR_DR_BIT+1,MSR_IR_BIT-1	; Turn off translation		
 			rlwinm	r5,r5,0,MSR_EE_BIT+1,MSR_EE_BIT-1	; Turn off interruptions
@@ -1073,8 +1117,11 @@ smallenuf:	rlwinm	r3,r3,31-thrmsitve,thrmsitvs,thrmsitve	; Position
 LEXT(ml_thrm_set)
 
 			mfmsr	r0								; Get the MSR
+			rlwinm	r0,r0,0,MSR_FP_BIT+1,MSR_FP_BIT-1	; Force floating point off
+			rlwinm	r0,r0,0,MSR_VEC_BIT+1,MSR_VEC_BIT-1	; Force vectors off
 			rlwinm	r6,r0,0,MSR_EE_BIT+1,MSR_EE_BIT-1	; Clear EE bit
 			mtmsr	r6
+			isync
 
 			mfsprg	r12,0							; Get the per_proc blok
 
@@ -1113,8 +1160,10 @@ tsetcant:	mtmsr	r0								; Reenable interruptions
 LEXT(ml_read_temp)
 
 			mfmsr	r9								; Save the MSR
-			rlwinm	r8,r9,0,MSR_EE_BIT+1,MSR_EE_BIT-1	; Turn off interruptions
 			li		r5,15							; Starting point for ranging (start at 15 so we do not overflow)
+			rlwinm	r9,r9,0,MSR_FP_BIT+1,MSR_FP_BIT-1	; Force floating point off
+			rlwinm	r9,r9,0,MSR_VEC_BIT+1,MSR_VEC_BIT-1	; Force vectors off
+			rlwinm	r8,r9,0,MSR_EE_BIT+1,MSR_EE_BIT-1	; Turn off interruptions
 			mfsprg	r7,2							; Get CPU specific features
 			mtmsr	r8								; Do not allow interruptions
 			mtcrf	0x40,r7							; See if we can thermal this machine
@@ -1176,9 +1225,12 @@ thrmcant:	eqv		r3,r3,r3						; Return bogus temprature because we can not read i
 LEXT(ml_throttle)
 
 			mfmsr	r9								; Save the MSR
+			rlwinm	r9,r9,0,MSR_FP_BIT+1,MSR_FP_BIT-1	; Force floating point off
+			rlwinm	r9,r9,0,MSR_VEC_BIT+1,MSR_VEC_BIT-1	; Force vectors off
 			rlwinm	r8,r9,0,MSR_EE_BIT+1,MSR_EE_BIT-1	; Turn off interruptions
 			cmplwi	r3,lo16(ictcfim>>1)				; See if we are going too far					
-			mtmsr	r8								; Do not allow interruptions			
+			mtmsr	r8								; Do not allow interruptions	
+			isync		
 			ble+	throtok							; Throttle value is ok...
 			li		r3,lo16(ictcfim>>1)				; Set max
 
@@ -1219,6 +1271,26 @@ loop:
         blr
 
 /*
+ *		The routine that implements cpu_number.
+ */
+
+		.align  5
+		.globl  EXT(cpu_number)
+ 
+LEXT(cpu_number)
+ 
+		mfmsr	r9						/* Save the old MSR */
+		rlwinm	r9,r9,0,MSR_FP_BIT+1,MSR_FP_BIT-1	; Force floating point off
+		rlwinm	r9,r9,0,MSR_VEC_BIT+1,MSR_VEC_BIT-1	; Force vectors off
+		rlwinm	r8,r9,0,17,15			/* Clear interruptions */
+		mtmsr	r8						/* Interrupts off */
+		isync
+		mfsprg	r7,0					/* Get per-proc block */
+		lhz		r3,PP_CPU_NUMBER(r7)	/* Get CPU number */
+		mtmsr	r9						/* Restore interruptions to entry */
+		blr								/* Return... */
+
+/*
 **      ml_sense_nmi()
 **
 */
@@ -1239,4 +1311,30 @@ LEXT(ml_sense_nmi)
 			.globl	EXT(ml_set_processor_speed)
 
 LEXT(ml_set_processor_speed)
+			mfsprg	r5, 0								; Get the per_proc_info
+
+			cmpli	cr0, r3, 0							; Turn off BTIC before low speed
+			beq	sps1
+			mfspr	r4, hid0							; Get the current hid0 value
+			rlwinm	r4, r4, 0, btic+1, btic-1					; Clear the BTIC bit
+			sync
+			mtspr	hid0, r4							; Set the new hid0 value
+			isync
+			sync
+
+sps1:
+			mfspr	r4, hid1							; Get the current PLL settings
+			rlwimi  r4, r3, 31-hid1ps, hid1ps, hid1ps				; Copy the PLL Select bit
+			stw	r4, pfHID1(r5)							; Save the new hid1 value
+			mtspr	hid1, r4							; Select desired PLL
+
+			cmpli	cr0, r3, 0							; Restore BTIC after high speed
+			bne	sps2
+			lwz	r4, pfHID0(r5)							; Load the hid0 value
+			sync
+			mtspr	hid0, r4							; Set the hid0 value
+			isync
+			sync
+
+sps2:
 			blr

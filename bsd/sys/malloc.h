@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2002 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -58,6 +58,8 @@
 
 #ifndef _SYS_MALLOC_H_
 #define	_SYS_MALLOC_H_
+
+#include <sys/appleapiopts.h>
 
 #define KMEMSTATS
 
@@ -146,21 +148,24 @@
 #define	M_OFILETABL	73	/* Open file descriptor table */
 #define	M_MCLUST	74	/* mbuf cluster buffers */
 #define	M_HFSMNT	75	/* HFS mount structure */
-#define	M_HFSNODE	76	/* HFS private node structre */
-#define	M_HFSFMETA	77	/* HFS file meta data */
+#define	M_HFSNODE	76	/* HFS catalog node */
+#define	M_HFSFORK	77	/* HFS file fork */
 #define M_VOLFSMNT	78  /* VOLFS mount structure */
 #define	M_VOLFSNODE	79	/* VOLFS private node part */
 #define	M_TEMP		80	/* misc temporary data buffers */
+#define	M_KTRACE	M_TEMP	/* ktrace buffers */
 #define	M_SECA		81	/* security associations, key management */
 #define M_DEVFS		82
 #define M_IPFW		83	/* IP Forwarding/NAT */
-#define M_UDFNODE		84	/* UDF inodes */
-#define M_UDFMNT		85	/* UDF mount structures */
-#define M_IP6NDP		86	/* IPv6 Neighbour Discovery*/
-#define M_IP6OPT		87	/* IPv6 options management */
-#define M_NATPT		88	/* KAME NAT feature */
+#define M_UDFNODE	84	/* UDF inodes */
+#define M_UDFMNT	85	/* UDF mount structures */
+#define M_IP6NDP	86	/* IPv6 Neighbour Discovery*/
+#define M_IP6OPT	87	/* IPv6 options management */
+#define M_IP6MISC	88	/* IPv6 misc. memory */
+#define M_TSEGQ		89	/* TCP segment queue entry */
+#define M_IGMP		90
 
-#define	M_LAST		89	/* Must be last type + 1 */
+#define	M_LAST		91	/* Must be last type + 1 */
 
 /* Strings corresponding to types of memory */
 /* Must be in synch with the #defines above */
@@ -241,8 +246,8 @@
 	"ofile tabl",	/* 73 M_OFILETABL */ \
 	"mbuf clust",	/* 74 M_MCLUST */ \
 	"HFS mount",	/* 75 M_HFSMNT */ \
-	"HFS node",		/* 76 M_HFSNODE */ \
-	"HFS fmeta",	/* 77 M_HFSFMETA */ \
+	"HFS node",	/* 76 M_HFSNODE */ \
+	"HFS fork",	/* 77 M_HFSFORK */ \
 	"VOLFS mount", 	/* 78 M_VOLFSMNT */ \
 	"VOLFS node", 	/* 79 M_VOLFSNODE */ \
 	"temp",		/* 80 M_TEMP */ \
@@ -253,7 +258,9 @@
 	"UDF mount"	/* 85 M_UDFMNT */ \
 	"IPv6 NDP",	/* 86 M_IP6NDP */ \
 	"IPv6 options",	/* 87 M_IP6OPT */ \
-	"NATPT",	/* 88 M_NATPT */ \
+	"IPv6 Misc"	/* 88 M_IP6MISC */\
+	"TCP Segment Q"	/* 89 M_TSEGQ */\
+	"IGMP state"	/* 90 M_IGMP */\
 }
 
 struct kmemstats {
@@ -270,7 +277,9 @@ struct kmemstats {
 };
 
 #ifdef	KERNEL
+#ifdef __APPLE_API_PRIVATE
 extern struct kmemstats kmemstats[];
+#endif /* __APPLE_API_PRIVATE */
 
 /*
  * The malloc/free primatives used

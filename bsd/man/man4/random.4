@@ -1,0 +1,75 @@
+.Dd September 6, 2001
+.Dt RANDOM 4
+.Os Darwin
+.Sh NAME
+.Nm random
+,
+.Nm urandom
+.Nd random data source devices.
+.Sh SYNOPSIS
+.Cd "pseudo-device random"
+.Sh DESCRIPTION
+The
+.Nm
+device produces uniformly distributed random byte values
+of potentially high quality.
+.Pp
+To obtain random bytes, open
+.Nm /dev/random
+for reading and read from it.
+.Pp
+To add entropy to the random generation system, open
+.Nm /dev/random
+for writing and write data that you believe to be somehow random.
+.Pp
+.Nm /dev/urandom
+is a compatibility nod to Linux. On Linux,
+.Nm /dev/urandom
+will produce lower quality output if the entropy pool drains, while
+.Nm /dev/random
+will prefer to block and wait for additional entropy to be collected.
+With Yarrow, this choice and distinction is not necessary, and
+the two devices behave identically. You may use either.
+.Sh OPERATION
+The
+.Nm
+device implements the
+.Nm Yarrow
+pseudo random number generator algorithm and maintains its entropy pool.
+Addditional entropy is fed to the generator regularly by the
+.Nm SecurityServer
+daemon from random jitter measurements of the kernel.
+.Nm SecurityServer
+is also responsible for periodically saving some entropy to disk
+and reloading it during startup to provide entropy in early system
+operation.
+.Pp
+You may feed additional entropy to the generator by writing it to the
+.Nm
+device, though this is not required in a normal operating environment.
+.Sh LIMITATIONS AND WARNINGS
+.Nm Yarrow
+is a fairly resilient algorithm, and is believed
+to be resistant to non-root.
+The quality of its output is however dependent on regular addition
+of appropriate entropy. If the
+.Nm SecurityServer
+system daemon fails for any reason, output quality will suffer
+over time without any explicit indication from the
+.Nm
+device itself.
+.Pp
+Paranoid programmers can counter-act this risk somewhat by collecting
+entropy of their choice (e.g. from keystroke or mouse timings)
+and seeding it into
+.Nm
+directly before obtaining important random numbers.
+.Sh FILES
+.Bl -tag -width /dev/urandom -compact
+.It Pa /dev/random
+.It Pa /dev/urandom
+.El
+.Sh HISTORY
+A
+.Nm
+device appeared in Linux operating system.

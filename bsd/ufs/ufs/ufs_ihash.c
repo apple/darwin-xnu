@@ -60,6 +60,7 @@
 #include <sys/vnode.h>
 #include <sys/malloc.h>
 #include <sys/proc.h>
+#include <sys/quota.h>
 
 #include <ufs/ufs/quota.h>
 #include <ufs/ufs/inode.h>

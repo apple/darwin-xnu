@@ -54,8 +54,20 @@
  * SUCH DAMAGE.
  *
  *	@(#)protosw.h	8.1 (Berkeley) 6/2/93
+ * $FreeBSD: src/sys/sys/protosw.h,v 1.28.2.2 2001/07/03 11:02:01 ume Exp $
  */
 
+#ifndef _SYS_PROTOSW_H_
+#define _SYS_PROTOSW_H_
+
+/* Forward declare these structures referenced from prototypes below. */
+struct mbuf;
+struct proc;
+struct sockaddr;
+struct socket;
+struct sockopt;
+
+/*#ifdef _KERNEL*/
 /*
  * Protocol switch table.
  *
@@ -70,7 +82,7 @@
  *
  * Protocols pass data between themselves as chains of mbufs using
  * the pr_input and pr_output hooks.  Pr_input passes data up (towards
- * UNIX) and pr_output passes it down (towards the imps); control
+ * the users) and pr_output passes it down (towards the interfaces); control
  * information passes up and down on pr_ctlinput and pr_ctloutput.
  * The protocol is responsible for the space occupied by any the
  * arguments to these entries and must dispose it.
@@ -79,12 +91,11 @@
  * described below.
  */
  
-#ifndef	_SYS_PROTOSW_H_
-#define _SYS_PROTOSW_H_
-
+#include <sys/appleapiopts.h>
 #include <sys/socketvar.h>
 #include <sys/queue.h>
 
+#ifdef __APPLE_API_UNSTABLE
 struct protosw {
 	short	pr_type;		/* socket type used for */
 	struct	domain *pr_domain;	/* domain protocol a member of */
@@ -109,14 +120,16 @@ struct protosw {
 					/* slow timeout (500ms) */
 	void	(*pr_drain) __P((void));
 					/* flush any excess space possible */
-
+#if __APPLE__
 	int	(*pr_sysctl)();		/* sysctl for protocol */
-
+#endif
 	struct	pr_usrreqs *pr_usrreqs;	/* supersedes pr_usrreq() */
+#if __APPLE__
 /* Implant hooks */
 	TAILQ_HEAD(pr_sfilter, NFDescriptor) pr_sfilter;
 	struct protosw *pr_next;	/* Chain for domain */
 	u_long	reserved[4];		/* Padding for future use */
+#endif
 };
 
 #define	PR_SLOWHZ	2		/* 2 slow timeouts per second */
@@ -126,6 +139,10 @@ struct protosw {
  * Values for pr_flags.
  * PR_ADDR requires PR_ATOMIC;
  * PR_ADDR and PR_CONNREQUIRED are mutually exclusive.
+ * PR_IMPLOPCL means that the protocol allows sendto without prior connect,
+ *	and the protocol understands the MSG_EOF flag.  The first property is
+ *	is only relevant if PR_CONNREQUIRED is set (otherwise sendto is allowed
+ *	anyhow).
  */
 #define	PR_ATOMIC	0x01		/* exchange atomic messages only */
 #define	PR_ADDR		0x02		/* addresses given with messages */
@@ -133,6 +150,7 @@ struct protosw {
 #define	PR_WANTRCVD	0x08		/* want PRU_RCVD calls */
 #define	PR_RIGHTS	0x10		/* passes capabilities */
 #define PR_IMPLOPCL	0x20		/* implied open/close */
+#define	PR_LASTHDR	0x40		/* enforce ipsec policy; last header */
 
 /*
  * The arguments to usrreq are:
@@ -248,7 +266,6 @@ struct pr_usrreqs {
 				   struct ucred *cred, void *));
 };
 
-
 extern int	pru_abort_notsupp(struct socket *so);
 extern int	pru_accept_notsupp(struct socket *so, struct sockaddr **nam);
 extern int	pru_attach_notsupp(struct socket *so, int proto,
@@ -315,8 +332,9 @@ extern int	pru_sopoll_notsupp(struct socket *so, int events,
 #define	PRC_TIMXCEED_INTRANS	18	/* packet lifetime expired in transit */
 #define	PRC_TIMXCEED_REASS	19	/* lifetime expired on reass q */
 #define	PRC_PARAMPROB		20	/* header incorrect */
+#define	PRC_UNREACH_ADMIN_PROHIB	21	/* packet administrativly prohibited */
 
-#define	PRC_NCMDS		21
+#define	PRC_NCMDS		22
 
 #define	PRC_IS_REDIRECT(cmd)	\
 	((cmd) >= PRC_REDIRECT_NET && (cmd) <= PRC_REDIRECT_TOSHOST)
@@ -328,7 +346,7 @@ char	*prcrequests[] = {
 	"NET-UNREACH", "HOST-UNREACH", "PROTO-UNREACH", "PORT-UNREACH",
 	"#12", "SRCFAIL-UNREACH", "NET-REDIRECT", "HOST-REDIRECT",
 	"TOSNET-REDIRECT", "TOSHOST-REDIRECT", "TX-INTRANS", "TX-REASS",
-	"PARAMPROB"
+	"PARAMPROB", "ADMIN-UNREACH"
 };
 #endif
 
@@ -358,6 +376,7 @@ char	*prcorequests[] = {
 
 #ifdef KERNEL
 void	pfctlinput __P((int, struct sockaddr *));
+void	pfctlinput2 __P((int, struct sockaddr *, void *));
 struct protosw *pffindproto __P((int family, int protocol, int type));
 struct protosw *pffindtype __P((int family, int type));
 
@@ -376,4 +395,5 @@ static void link_ ## psw ## _protos() \
 } 
 
 #endif
+#endif /* __APPLE_API_UNSTABLE */
 #endif	/* !_SYS_PROTOSW_H_ */

@@ -89,7 +89,9 @@
 #include <netinet/igmp.h>
 #include <netinet/igmp_var.h>
 
+#ifndef __APPLE__
 static MALLOC_DEFINE(M_IGMP, "igmp", "igmp state");
+#endif
 
 static struct router_info *
 		find_rti __P((struct ifnet *ifp));
@@ -154,11 +156,7 @@ find_rti(ifp)
                 rti = rti->rti_next;
         }
 
-#if ISFB31
 	MALLOC(rti, struct router_info *, sizeof *rti, M_IGMP, M_NOWAIT);
-#else
-	MALLOC(rti, struct router_info *, sizeof *rti, M_TEMP, M_WAITOK);
-#endif
         rti->rti_ifp = ifp;
         rti->rti_type = IGMP_V2_ROUTER;
         rti->rti_time = 0;
@@ -505,9 +503,6 @@ igmp_sendpkt(inm, type, addr)
 	 * XXX
 	 * Do we have to worry about reentrancy here?  Don't think so.
 	 */
-#if IPSEC
-	m->m_pkthdr.rcvif = NULL;
-#endif /*IPSEC*/
         ip_output(m, router_alert, &igmprt, 0, &imo);
 
         ++igmpstat.igps_snd_reports;

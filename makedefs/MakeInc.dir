@@ -1,7 +1,7 @@
 #
 # Install kernel header files
 #
-installhdrs: SRCROOT DSTROOT OBJROOT exporthdrs installhdrs_mi installhdrs_md 
+installhdrs: exporthdrs installhdrs_mi installhdrs_md 
 	@echo "[ $(SRCROOT) ] make installhdrs installing Kernel.framework"; \
 	kincpath=$(DSTROOT)/$(KINCDIR);					\
 	kframepath=$(DSTROOT)/$(KINCFRAME);				\
@@ -39,14 +39,13 @@ installhdrs_mi:
 	arch_config=$(INSTALL_ARCH_DEFAULT);					\
 	installinc_dir=${OBJROOT}/$${kernel_config}_$${arch_config}/$${rel_path};	\
 	$(MKDIR) $${installinc_dir};					\
-	(cd $${installinc_dir};						\
-	${MAKE} KERNEL_CONFIG=$${kernel_config}				\
+	${MAKE} -C $${installinc_dir}					\
+		KERNEL_CONFIG=$${kernel_config}				\
 		ARCH_CONFIG=$${arch_config}				\
 		MAKEFILES=${SOURCE}/Makefile				\
 		SOURCE=${SOURCE}/					\
 		TARGET=${OBJROOT}/$${kernel_config}_$${arch_config}/$${rel_path}/	\
-		build_installhdrs_mi					\
-	);
+		build_installhdrs_mi;					\
 
 #
 # Install machine dependent kernel header files 
@@ -58,14 +57,13 @@ installhdrs_md:
 	for arch_config in $(INSTALL_ARCHS);				\
 	do								\
 	$(MKDIR) ${OBJROOT}/$${kernel_config}_$${arch_config}/$${rel_path};	\
-	(cd ${OBJROOT}/$${kernel_config}_$${arch_config}/$${rel_path};	\
-	${MAKE} KERNEL_CONFIG=$${kernel_config}				\
+	${MAKE} -C ${OBJROOT}/$${kernel_config}_$${arch_config}/$${rel_path}	\
+		KERNEL_CONFIG=$${kernel_config}				\
 		ARCH_CONFIG=$${arch_config}				\
 		MAKEFILES=${SOURCE}/Makefile				\
 		SOURCE=${SOURCE}/					\
 		TARGET=${OBJROOT}/$${kernel_config}_$${arch_config}/$${rel_path}/	\
-		build_installhdrs_md					\
-	);								\
+		build_installhdrs_md;					\
 	done;
 
 #
@@ -78,14 +76,13 @@ build_installhdrs_mi::
 	for installinc_subdir in $(INSTINC_SUBDIRS);			\
 	do								\
 		$(MKDIR) $${installinc_subdir};			\
-		(cd $${installinc_subdir};				\
-		${MAKE} MAKEFILES=$(SOURCE)$${installinc_subdir}/Makefile	\
+		${MAKE} -C $${installinc_subdir}			\
+			MAKEFILES=$(SOURCE)$${installinc_subdir}/Makefile	\
 			SOURCE=$(SOURCE)$${installinc_subdir}/		\
 			TARGET=$(TARGET)$${installinc_subdir}/		\
-		build_installhdrs_mi					\
-		);							\
+		build_installhdrs_mi;					\
 	done;								\
-	${MAKE} do_installhdrs_mi;
+	${MAKE} ${MAKEJOBS} do_installhdrs_mi;
 
 #
 # Install machine dependent kernel header files 
@@ -97,19 +94,18 @@ build_installhdrs_md::
 	for installinc_subdir in $($(addprefix INSTINC_SUBDIRS_, $(ARCH_CONFIG)));		\
 	do								\
 		$(MKDIR) $${installinc_subdir};			\
-		(cd $${installinc_subdir};				\
-		${MAKE} MAKEFILES=$(SOURCE)$${installinc_subdir}/Makefile	\
+		${MAKE} -C $${installinc_subdir}			\
+			MAKEFILES=$(SOURCE)$${installinc_subdir}/Makefile	\
 			SOURCE=$(SOURCE)$${installinc_subdir}/		\
 			TARGET=$(TARGET)$${installinc_subdir}/		\
-		build_installhdrs_md					\
-		);							\
+		build_installhdrs_md;					\
 	done;								\
-	${MAKE} do_installhdrs_md;
+	${MAKE} ${MAKEJOBS} do_installhdrs_md;
 
 #
 # Install kernel header files
 #
-exporthdrs: SRCROOT DSTROOT OBJROOT exporthdrs_mi exporthdrs_md 
+exporthdrs: exporthdrs_mi exporthdrs_md 
 
 #
 # Install header files order
@@ -128,14 +124,13 @@ exporthdrs_mi:
 	arch_config=$(INSTALL_ARCH_DEFAULT);					\
 	exportinc_dir=${OBJROOT}/$${kernel_config}_$${arch_config}/$${rel_path};	\
 	$(MKDIR) $${exportinc_dir};					\
-	(cd $${exportinc_dir};						\
-	${MAKE} KERNEL_CONFIG=$${kernel_config}				\
+	${MAKE} -C $${exportinc_dir}					\
+		KERNEL_CONFIG=$${kernel_config}				\
 		ARCH_CONFIG=$${arch_config}				\
 		MAKEFILES=${SOURCE}/Makefile				\
 		SOURCE=${SOURCE}/					\
 		TARGET=$${exportinc_dir}/				\
-		build_exporthdrs_mi					\
-	);
+		build_exporthdrs_mi;					\
 
 #
 # Install machine dependent kernel header files 
@@ -148,14 +143,13 @@ exporthdrs_md:
 	do								\
 	exportinc_dir=${OBJROOT}/$${kernel_config}_$${arch_config}/$${rel_path};	\
 	$(MKDIR) $${exportinc_dir};					\
-	(cd $${exportinc_dir};						\
-	${MAKE} KERNEL_CONFIG=$${kernel_config}				\
+	${MAKE} -C $${exportinc_dir}					\
+		KERNEL_CONFIG=$${kernel_config}				\
 		ARCH_CONFIG=$${arch_config}				\
 		MAKEFILES=${SOURCE}/Makefile				\
 		SOURCE=${SOURCE}/					\
 		TARGET=$${exportinc_dir}/				\
-		build_exporthdrs_md					\
-	);								\
+		build_exporthdrs_md;					\
 	done;
 
 #
@@ -165,17 +159,17 @@ do_exporthdrs_mi:
 
 build_exporthdrs_mi:
 	@echo "[ $(SOURCE) ] make build_exporthdrs_mi $(KERNEL_CONFIG) $(ARCH_CONFIG) $(TARGET)";	\
-	for exportinc_subdir in $(EXPINC_SUBDIRS);			\
+	_TMP_EXPINC_SUBDIRS="$(EXPINC_SUBDIRS)";			\
+	for exportinc_subdir in $${_TMP_EXPINC_SUBDIRS};		\
 	do								\
 		$(MKDIR) $${exportinc_subdir};				\
-		(cd $${exportinc_subdir};				\
-		${MAKE} MAKEFILES=$(SOURCE)$${exportinc_subdir}/Makefile	\
+		${MAKE} -C $${exportinc_subdir}				\
+			MAKEFILES=$(SOURCE)$${exportinc_subdir}/Makefile	\
 			SOURCE=$(SOURCE)$${exportinc_subdir}/		\
 			TARGET=$(TARGET)$${exportinc_subdir}/		\
-		build_exporthdrs_mi					\
-		);							\
+		build_exporthdrs_mi;					\
 	done;								\
-	${MAKE} do_exporthdrs_mi;
+	${MAKE} ${MAKEJOBS} do_exporthdrs_mi;
 
 #
 # Install machine dependent kernel header files 
@@ -184,22 +178,22 @@ do_exporthdrs_md:
 
 build_exporthdrs_md:
 	@echo "[ $(SOURCE) ] make exporthdrs_md $(KERNEL_CONFIG) $(ARCH_CONFIG) $(TARGET)";	\
-	for exportinc_subdir in $($(addprefix EXPINC_SUBDIRS_, $(ARCH_CONFIG)));			\
+	_TMP_exportinc_subdir="$($(addprefix EXPINC_SUBDIRS_, $(ARCH_CONFIG)))";	\
+	for exportinc_subdir in $${_TMP_exportinc_subdir};			\
 	do								\
 		$(MKDIR) $${exportinc_subdir};				\
-		(cd $${exportinc_subdir};				\
-		${MAKE} MAKEFILES=$(SOURCE)$${exportinc_subdir}/Makefile	\
+		${MAKE} -C $${exportinc_subdir}				\
+			MAKEFILES=$(SOURCE)$${exportinc_subdir}/Makefile	\
 			SOURCE=$(SOURCE)$${exportinc_subdir}/		\
 			TARGET=$(TARGET)$${exportinc_subdir}/		\
-		build_exporthdrs_md					\
-		);							\
+		build_exporthdrs_md;					\
 	done;								\
-	${MAKE} do_exporthdrs_md;
+	${MAKE} ${MAKEJOBS} do_exporthdrs_md;
 
 #
 # Setup pass for  all architectures for all Configuration/Architecture options
 #
-setup: SRCROOT DSTROOT OBJROOT
+setup:
 	@echo "[ $(SOURCE) ] make setup";					\
 	rel_path=$(shell $(RELPATH) $(SRCROOT) $(SOURCE));			\
 	for kernel_config in $(KERNEL_CONFIGS);				\
@@ -208,14 +202,13 @@ setup: SRCROOT DSTROOT OBJROOT
 	do								\
 	setup_subdir=${OBJROOT}/$${kernel_config}_$${arch_config}/$${rel_path}; \
 	$(MKDIR) $${setup_subdir};					\
-	(cd $${setup_subdir};						\
-	${MAKE} KERNEL_CONFIG=$${kernel_config}				\
+	${MAKE} -C $${setup_subdir}					\
+		KERNEL_CONFIG=$${kernel_config}				\
 		ARCH_CONFIG=$${arch_config}				\
 		MAKEFILES=${SOURCE}/Makefile				\
 		SOURCE=${SOURCE}/					\
 		TARGET=$${setup_subdir}/				\
-	build_setup							\
-	);								\
+	build_setup;							\
 	done;								\
 	done;
 
@@ -223,15 +216,15 @@ do_build_setup:
 
 build_setup:
 	@echo "[ $(SOURCE) ] make build_setup $(COMPONENT) $(KERNEL_CONFIG) $(ARCH_CONFIG) $(TARGET)";	\
-	for setup_subdir in $(SETUP_SUBDIRS) $($(addprefix SETUP_SUBDIRS_, $(ARCH_CONFIG)));	\
+	_TMP_setup_subdir="$(SETUP_SUBDIRS) $($(addprefix SETUP_SUBDIRS_, $(ARCH_CONFIG)))";	\
+	for setup_subdir in $${_TMP_setup_subdir};		\
 	do							\
 	$(MKDIR) $${setup_subdir};				\
-	(cd $${setup_subdir};					\
-	${MAKE} MAKEFILES=${SOURCE}/$${setup_subdir}/Makefile	\
+	${MAKE} -C $${setup_subdir}				\
+		MAKEFILES=${SOURCE}/$${setup_subdir}/Makefile	\
 		SOURCE=${SOURCE}/$${setup_subdir}/		\
 		TARGET=${TARGET}/$${setup_subdir}/		\
-		build_setup					\
-	);							\
+		build_setup;					\
 	done;							\
 	${MAKE} do_build_setup;
 
@@ -239,7 +232,11 @@ build_setup:
 #
 # Build all architectures for all Configuration/Architecture options
 #
-all: SRCROOT DSTROOT OBJROOT
+ifeq ($(COMPONENT), .)
+all: exporthdrs
+else
+all:
+endif
 	@echo "[ $(SOURCE) ] make all";					\
 	rel_path=$(shell $(RELPATH) $(SRCROOT) $(SOURCE));			\
 	for kernel_config in $(KERNEL_CONFIGS);				\
@@ -248,13 +245,12 @@ all: SRCROOT DSTROOT OBJROOT
 	do								\
 	build_subdir=${OBJROOT}/$${kernel_config}_$${arch_config}/$${rel_path}; \
 	$(MKDIR) $${build_subdir};					\
-	(cd $${build_subdir};						\
-	${MAKE} KERNEL_CONFIG=$${kernel_config}				\
+	${MAKE} -C $${build_subdir}					\
+		KERNEL_CONFIG=$${kernel_config}				\
 		ARCH_CONFIG=$${arch_config}				\
 		MAKEFILES=${SOURCE}/Makefile 				\
 		SOURCE=${SOURCE}/					\
-		build_all						\
-	);								\
+		build_all;						\
 	done;								\
 	done;
 
@@ -266,22 +262,22 @@ do_build_all:
 build_all: 
 	@TARGET=${OBJROOT}/$(KERNEL_CONFIG)_$(ARCH_CONFIG)/$(COMPONENT);	\
 	echo "[ $(SOURCE) ] make build_all $(COMPONENT) $(KERNEL_CONFIG) $(ARCH_CONFIG) $${TARGET}";	\
-	for comp_subdir in $(COMP_SUBDIRS) $($(addprefix COMP_SUBDIRS_, $(ARCH_CONFIG)));				\
+	_TMP_comp_subdir="$(COMP_SUBDIRS) $($(addprefix COMP_SUBDIRS_, $(ARCH_CONFIG)))";	\
+	for comp_subdir in $${_TMP_comp_subdir};			\
 	do								\
 		$(MKDIR) $${comp_subdir};				\
-		(cd $${comp_subdir};					\
-		${MAKE} MAKEFILES=${SOURCE}/$${comp_subdir}/Makefile	\
+		${MAKE} -C $${comp_subdir}				\
+			MAKEFILES=${SOURCE}/$${comp_subdir}/Makefile	\
 			SOURCE=${SOURCE}$${comp_subdir}/		\
 			TARGET=$${TARGET}				\
-		build_all						\
-		);							\
+		build_all;						\
 	done;								\
-	${MAKE} INCL_MAKEDEP=TRUE TARGET=$${TARGET} do_build_all;
+	${MAKE} ${MAKEJOBS} INCL_MAKEDEP=TRUE TARGET=$${TARGET} do_build_all;
 
 #
 # Build all architectures for all Configuration/Architecture options
 #
-mach_kernel: SRCROOT DSTROOT OBJROOT
+mach_kernel:
 	@echo "[ $(SOURCE) ] make mach_kernel";				\
 	for kernel_config in $(KERNEL_CONFIGS);				\
 	do								\
@@ -289,14 +285,13 @@ mach_kernel: SRCROOT DSTROOT OBJROOT
 	do								\
 	build_subdir=${OBJROOT}/$${kernel_config}_$${arch_config};	\
 	$(MKDIR) $${build_subdir};					\
-	(cd $${build_subdir};						\
-	${MAKE} KERNEL_CONFIG=$${kernel_config}				\
+	${MAKE} -C $${build_subdir}					\
+		KERNEL_CONFIG=$${kernel_config}				\
 		ARCH_CONFIG=$${arch_config}				\
 		MAKEFILES=${SOURCE}/Makefile 				\
 		SOURCE=${SOURCE}/					\
 		TARGET=$${build_subdir}/				\
-		build_mach_kernel					\
-	);								\
+		build_mach_kernel;					\
 	done;								\
 	done;
 
@@ -307,19 +302,19 @@ do_build_mach_kernel:
 
 build_mach_kernel: 
 	@echo "[ $(SOURCE) ] make build_mach_kernel $(COMPONENT) $(KERNEL_CONFIG) $(ARCH_CONFIG) $(TARGET)";	\
-	${MAKE} do_build_mach_kernel;
+	${MAKE} ${MAKEJOBS} do_build_mach_kernel;
 
 #
 #
 # Install dependencies order
 #
-.ORDER: SRCROOT DSTROOT OBJROOT SYMROOT installhdrs exporthdrs all
+.ORDER: installhdrs exporthdrs all
 
 #
 # Install kernel based on RC_ARCHS for all INSTALL_TYPES
 # Install kernel header files based on RC_ARCHS
 #
-install: SRCROOT DSTROOT OBJROOT SYMROOT installhdrs all
+install: installhdrs all installman
 	@echo "[ $(SOURCE) ] make install";				\
 	rel_path=$(shell $(RELPATH) $(SRCROOT) $(SOURCE));			\
 	for kernel_config in $(INSTALL_TYPE);				\
@@ -328,13 +323,12 @@ install: SRCROOT DSTROOT OBJROOT SYMROOT installhdrs all
 	do								\
 	install_subdir=${OBJROOT}/$${kernel_config}_$${arch_config}/$${rel_path};	\
 	$(MKDIR) $${install_subdir};					\
-	(cd $${install_subdir};						\
-	${MAKE} KERNEL_CONFIG=$${kernel_config}				\
+	${MAKE} -C $${install_subdir}					\
+		KERNEL_CONFIG=$${kernel_config}				\
 		ARCH_CONFIG=$${arch_config}				\
 		MAKEFILES=${SOURCE}/Makefile 				\
 		SOURCE=${SOURCE}/					\
-		build_install						\
-	);								\
+		build_install;						\
 	done;								\
 	done;
 
@@ -353,21 +347,20 @@ build_install:
 	for install_subdir in $(INST_SUBDIRS);				\
 	do								\
 		$(MKDIR) $${install_subdir};				\
-		(cd $${install_subdir};					\
-		${MAKE} KERNEL_CONFIG=$${kernel_config}			\
+		${MAKE} -C $${install_subdir}				\
+			KERNEL_CONFIG=$${kernel_config}			\
 			MAKEFILES=${SOURCE}/$${install_subdir}/Makefile	\
 			SOURCE=${SOURCE}$${install_subdir}/		\
 			TARGET=$${TARGET}				\
-		build_install						\
-		);							\
+		build_install;						\
 	done;								\
-	${MAKE} TARGET=$${TARGET} do_build_install;
+	${MAKE} ${MAKEJOBS} TARGET=$${TARGET} do_build_install;
 
 
 #
 # Install source tree
 #
-installsrc: SRCROOT
+installsrc:
 	pax -rw . ${SRCROOT}
 
 
@@ -375,7 +368,7 @@ installsrc: SRCROOT
 #
 # Clean up source tree
 #
-clean: SRCROOT
+clean:
 
 #
 # Build source file list for cscope database and tags
@@ -412,15 +405,31 @@ tags: cscope.files
 	@echo "Building etags"
 	@-cat cscope.files | etags -l auto -S - 2> /dev/null
 
-	
-SRCROOT DSTROOT OBJROOT SYMROOT: ALWAYS
-	@if [ -n "${$@}" ];						\
-	then								\
-		exit 0;							\
-	else								\
-		echo Must define $@;					\
-		exit 1;							\
+#
+# Install Man Pages
+#
+installman:
+	@echo "[ $(SRCROOT) ] Installing man pages"; \
+	manpath=$(DSTROOT)/$(MANDIR);   \
+	$(MKDIR) $$manpath;             \
+	${MAKE} MAKEFILES=${SOURCE}/Makefile \
+		SOURCE=${SOURCE}/ \
+		TARGET=${DSTROOT}/ \
+		build_installman
+
+do_installman:
+
+build_installman:
+	@echo "[ $(SOURCE) ] make build_installman";    \
+	if [ -n "$(strip $(INSTMAN_SUBDIRS))" ]; then \
+		for installman_subdir in $(INSTMAN_SUBDIRS); do \
+			${MAKE} -C $${installman_subdir} -r \
+				MAKEFILES=$(SOURCE)$${installman_subdir}/Makefile \
+				SOURCE=$(SOURCE)$${installman_subdir}/ \
+				TARGET=$(TARGET)$${installman_subdir}/ \
+				build_installman; \
+		done; \
+	fi; \
+	if [ -n "$(strip $(INSTALL_MAN_LIST))" ]; then \
+		${MAKE} ${MAKEJOBS} do_installman; \
 	fi
-
-ALWAYS:
-

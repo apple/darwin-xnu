@@ -544,8 +544,8 @@ kmem_alloc_pages(
 	    /*
 	     *	Enter it in the kernel pmap
 	     */
-	    PMAP_ENTER(kernel_pmap, start, mem,
-		       protection, TRUE);
+	    PMAP_ENTER(kernel_pmap, start, mem, protection, 
+				VM_WIMG_USE_DEFAULT, TRUE);
 
 	    vm_object_lock(object);
 	    PAGE_WAKEUP_DONE(mem);
@@ -598,8 +598,8 @@ kmem_remap_pages(
 	     *	Enter it in the kernel pmap.  The page isn't busy,
 	     *	but this shouldn't be a problem because it is wired.
 	     */
-	    PMAP_ENTER(kernel_pmap, start, mem,
-		       protection, TRUE);
+	    PMAP_ENTER(kernel_pmap, start, mem, protection, 
+				VM_WIMG_USE_DEFAULT, TRUE);
 
 	    start += PAGE_SIZE;
 	    offset += PAGE_SIZE;
@@ -834,4 +834,94 @@ copyoutmap(
 		return copyout((char *)fromaddr, (char *)toaddr, length);
 
 	return TRUE;
+}
+
+
+kern_return_t
+vm_conflict_check(
+	vm_map_t		map,
+	vm_offset_t		off,
+	vm_size_t		len,
+	memory_object_t		pager,
+	vm_object_offset_t	file_off)
+{
+	vm_map_entry_t		entry;
+	vm_object_t		obj;
+	vm_object_offset_t	obj_off;
+	vm_map_t		base_map;
+	vm_offset_t		base_offset;
+	vm_offset_t		original_offset;
+	kern_return_t		kr;
+	vm_size_t		local_len;
+
+	base_map = map;
+	base_offset = off;
+	original_offset = off;
+	kr = KERN_SUCCESS;
+	vm_map_lock(map);
+	while(vm_map_lookup_entry(map, off, &entry)) {
+		local_len = len;
+
+		if (entry->object.vm_object == VM_OBJECT_NULL) {
+			vm_map_unlock(map);
+			return KERN_SUCCESS;
+		}
+		if (entry->is_sub_map) {
+			vm_map_t	old_map;
+			old_map = map;
+			vm_map_lock(entry->object.sub_map);
+			map = entry->object.sub_map;
+			off = entry->offset + (off - entry->vme_start);
+			vm_map_unlock(old_map);
+			continue;
+		}
+		obj = entry->object.vm_object;
+		obj_off = (off - entry->vme_start) + entry->offset;
+		while(obj->shadow) {
+			obj_off += obj->shadow_offset;
+			obj = obj->shadow;
+		}
+		if((obj->pager_created) && (obj->pager == pager)) {
+			if(((obj->paging_offset) + obj_off) == file_off) {
+				if(off != base_offset) {
+					vm_map_unlock(map);
+					return KERN_FAILURE;
+				}
+				kr = KERN_ALREADY_WAITING;
+			} else if(
+				((file_off < ((obj->paging_offset) + obj_off)) &&
+				((file_off + len) > 
+					((obj->paging_offset) + obj_off))) ||
+				((file_off > ((obj->paging_offset) + obj_off)) &&
+				(((((obj->paging_offset) + obj_off)) + len) 
+					> file_off))) { 
+				vm_map_unlock(map);
+				return KERN_FAILURE;
+			}
+		} else if(kr != KERN_SUCCESS) {
+			return KERN_FAILURE;
+		}
+
+		if(len < ((entry->vme_end - entry->vme_start) -
+						(off - entry->vme_start))) {
+			vm_map_unlock(map);
+			return kr;
+		} else {
+			len -= (entry->vme_end - entry->vme_start) -
+						(off - entry->vme_start);
+		}
+		base_offset = base_offset + (local_len - len);
+		file_off = file_off + (local_len - len);
+		off = base_offset;
+		if(map != base_map) {
+			vm_map_unlock(map);
+			vm_map_lock(base_map);
+			map = base_map;
+		}
+	}
+
+	vm_map_unlock(map);
+	return kr;
+
+
 }

@@ -69,6 +69,7 @@
 #include <sys/systm.h>
 #include <sys/vnode.h>
 #include <sys/buf.h>
+#include <sys/quota.h>
 #include <ufs/ufs/quota.h>
 #include <ufs/ufs/inode.h>
 #include <ufs/ffs/fs.h>

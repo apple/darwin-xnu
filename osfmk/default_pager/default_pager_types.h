@@ -27,6 +27,10 @@
 #ifndef	_MACH_DEFAULT_PAGER_TYPES_H_
 #define _MACH_DEFAULT_PAGER_TYPES_H_
 
+#include <sys/appleapiopts.h>
+
+#ifdef __APPLE_API_UNSTABLE
+
 #include <mach/mach_types.h>
 #include <mach/machine/vm_types.h>
 #include <mach/memory_object_types.h>
@@ -82,7 +86,6 @@ typedef struct default_pager_object {
 
 typedef default_pager_object_t *default_pager_object_array_t;
 
-
 typedef struct default_pager_page {
 	vm_offset_t dpp_offset;		/* offset of the page in its object */
 } default_pager_page_t;
@@ -95,5 +98,7 @@ typedef default_pager_page_t *default_pager_page_array_t;
 
 #define HI_WAT_ALERT	1
 #define LO_WAT_ALERT	2
+
+#endif /* __APPLE_API_UNSTABLE */
 
 #endif	/* _MACH_DEFAULT_PAGER_TYPES_H_ */

@@ -108,7 +108,7 @@ void ddp_putmsg(gref, mp)
 				if (gbuf_cont(mp))
 					gbuf_freem(gbuf_cont(mp));
 				if ((gbuf_cont(mp) = 
-				     gbuf_alloc(sizeof(at_inet_t),
+				     gbuf_alloc(sizeof(ddp_addr_t),
 						PRI_MED)) == NULL) {
 					ioc_ack(ENOBUFS, mp, gref);
 					break;

@@ -27,7 +27,6 @@
 #ifndef	PPC_CPU_DATA
 #define PPC_CPU_DATA
 
-#if	defined(__GNUC__)
 
 #define disable_preemption			_disable_preemption
 #define enable_preemption			_enable_preemption
@@ -36,7 +35,20 @@
 #define mp_enable_preemption			_enable_preemption
 #define mp_enable_preemption_no_check		_enable_preemption_no_check
 
-extern thread_t					current_thread(void);
+extern	cpu_data_t*				get_cpu_data(void);
+
+extern __inline__ thread_act_t current_act(void) 
+{
+	thread_act_t act;
+	__asm__ volatile("mfsprg %0,1" : "=r" (act));  
+	return act;
+}
+
+#define	current_thread()	current_act()->thread
+
+extern void					set_machine_current_thread(thread_t);
+extern void					set_machine_current_act(thread_act_t);
+
 extern int 					get_preemption_level(void);
 extern void 					disable_preemption(void);
 extern void 					enable_preemption(void);
@@ -45,6 +57,5 @@ extern void 					mp_disable_preemption(void);
 extern void 					mp_enable_preemption(void);
 extern void 					mp_enable_preemption_no_check(void);
 extern int 					get_simple_lock_count(void);
-#endif	/* defined(__GNUC__) */
 
 #endif	/* PPC_CPU_DATA */

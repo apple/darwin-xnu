@@ -24,6 +24,8 @@
 #ifndef _OS_OSUNSERIALIZE_H
 #define _OS_OSUNSERIALIZE_H
 
+#include <sys/appleapiopts.h>
+
 class OSObject;
 class OSString;
 
@@ -35,7 +37,8 @@ class OSString;
 
 extern OSObject* OSUnserializeXML(const char *buffer, OSString **errorString = 0);
 
-/* this should no longer be used */
+#ifdef __APPLE_API_OBSOLETE
 extern OSObject* OSUnserialize(const char *buffer, OSString **errorString = 0);
+#endif /* __APPLE_API_OBSOLETE */
 
 #endif /* _OS_OSUNSERIALIZE_H */

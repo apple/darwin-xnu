@@ -58,7 +58,9 @@
  */
 
 /* at_pcb.h */
+#include <sys/appleapiopts.h>
 
+#ifdef __APPLE_API_PRIVATE
 /*
  * Common structure pcb for internet protocol implementation.
  * Here are stored pointers to local and foreign host table
@@ -101,6 +103,7 @@ struct atpcb {
 };
 
 #define sotoatpcb(so)((struct atpcb *)(so)->so_pcb)
+#endif /* __APPLE_API_PRIVATE */
 
 /* ddp_flags */
 #define DDPFLG_CHKSUM	 0x01	/* DDP checksums to be used on this connection */
@@ -109,10 +112,12 @@ struct atpcb {
 #define DDPFLG_HDRINCL 	 0x08	/* user supplies entire DDP header */
 #define DDPFLG_STRIPHDR	0x200	/* drop DDP header on receive (raw) */
 
+#ifdef __APPLE_API_PRIVATE
 #ifdef KERNEL
 typedef struct atpcb gref_t;
 
 int	at_pcballoc __P((struct socket *, struct atpcb *));
 int	at_pcbdetach __P((struct atpcb *));
 int	at_pcbbind __P((struct atpcb *, struct sockaddr *));
-#endif 
+#endif /* KERNEL */
+#endif /* __APPLE_API_PRIVATE */

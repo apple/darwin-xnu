@@ -118,12 +118,6 @@ mach_msg_return_t msg_receive_error(
 	mach_port_seqno_t	seqno,
 	ipc_space_t		space);
 
-/* the size of each trailer has to be listed here for copyout purposes */
-mach_msg_trailer_size_t trailer_size[] = {
-          sizeof(mach_msg_trailer_t), 
-	  sizeof(mach_msg_seqno_trailer_t),
-	  sizeof(mach_msg_security_trailer_t) };
-
 security_token_t KERNEL_SECURITY_TOKEN = KERNEL_SECURITY_TOKEN_VALUE;
 
 mach_msg_format_0_trailer_t trailer_template = {
@@ -1070,7 +1064,7 @@ mach_msg_overwrite_trap(
 		  waitq = &dest_mqueue->imq_wait_queue;
 		  imq_lock(dest_mqueue);
 
-		  wait_queue_peek_locked(waitq, IPC_MQUEUE_RECEIVE, &receiver, &waitq);
+		  wait_queue_peek64_locked(waitq, IPC_MQUEUE_RECEIVE, &receiver, &waitq);
 		  /* queue still locked, thread locked - but still on q */
 
 		  if (receiver == THREAD_NULL) {
@@ -1097,7 +1091,7 @@ mach_msg_overwrite_trap(
 		   * slow receive for ourselves.  Only his RECEIVE_TOO_LARGE handling
 		   * runs afoul of that.  Clean this up!
 		   */
-		  if ((receiver->state & TH_RUN|TH_WAIT) != TH_WAIT) {
+		  if ((receiver->state & (TH_RUN|TH_WAIT)) != TH_WAIT) {
 			assert(NCPUS > 1);
 			HOT(c_mmot_cold_033++);
 		fall_off:
@@ -1123,11 +1117,9 @@ mach_msg_overwrite_trap(
 		  /*
 		   * Receiver looks okay -- is it swapped in?
 		   */
-		  rpc_lock(receiver);
 		  rcv_act = receiver->top_act;
 		  if (rcv_act->swap_state != TH_SW_IN &&
 			  rcv_act->swap_state != TH_SW_UNSWAPPABLE) {
-			rpc_unlock(receiver);
 			HOT(c_mmot_rcvr_swapped++);
 			goto fall_off;
 		  }
@@ -1136,7 +1128,6 @@ mach_msg_overwrite_trap(
 		   * Make sure receiver stays swapped in (if we can).
 		   */
 		  if (!act_lock_try(rcv_act)) {	/* out of order! */
-			rpc_unlock(receiver);
 			HOT(c_mmot_rcvr_locked++);
 			goto fall_off;
 		  }
@@ -1151,7 +1142,6 @@ mach_msg_overwrite_trap(
 			rcv_act->swap_state != TH_SW_UNSWAPPABLE) ||
 		 	rcv_act->ast & AST_SWAPOUT) {
 			act_unlock(rcv_act);
-			rpc_unlock(receiver);
 			HOT(c_mmot_rcvr_tswapped++);
 			goto fall_off;
 		  }
@@ -1164,7 +1154,6 @@ mach_msg_overwrite_trap(
 		   * is consistent.  Its task may then be marked for swapout,
 		   * but that's life.
 		   */
-		  rpc_unlock(receiver);
 		  /*
 		   * NB:  act_lock(rcv_act) still held
 		   */
@@ -1218,10 +1207,12 @@ mach_msg_overwrite_trap(
 		   */
 		  {
 			  receiver->state &= ~(TH_WAIT|TH_UNINT);
+			  hw_atomic_add(&receiver->processor_set->run_count, 1);
 			  receiver->state |= TH_RUN;
 			  receiver->wait_result = THREAD_AWAKENED;
 
-			  receiver->metered_computation = 0;
+			  receiver->computation_metered = 0;
+			  receiver->reason = AST_NONE;
 		  }
 		  
 		  thread_unlock(receiver);
@@ -1248,58 +1239,17 @@ mach_msg_overwrite_trap(
 		  self->ith_continuation = thread_syscall_return;
 
 		  waitq = &rcv_mqueue->imq_wait_queue;
-		  (void)wait_queue_assert_wait_locked(waitq,
+		  (void)wait_queue_assert_wait64_locked(waitq,
 										IPC_MQUEUE_RECEIVE,
 										THREAD_ABORTSAFE,
 										TRUE); /* unlock? */
 		  /* rcv_mqueue is unlocked */
 
-		  /* Inline thread_block_reason (except don't select a new
-		   * new thread (we already have one), and don't turn off ASTs
-		   * (we don't want two threads to hog all the CPU by handing
-		   * off to each other).
+		  /*
+		   * Switch directly to receiving thread, and block
+		   * this thread as though it had called ipc_mqueue_receive.
 		   */
-		  {
-			if (self->funnel_state & TH_FN_OWNED) {
-			  self->funnel_state = TH_FN_REFUNNEL;
-			  KERNEL_DEBUG(0x603242c | DBG_FUNC_NONE, self->funnel_lock, 3, 0, 0, 0);  
-			  funnel_unlock(self->funnel_lock);
-		
-           }
-
-			machine_clock_assist();
-
-			thread_lock(self);
-			if (self->state & TH_ABORT)
-			  clear_wait_internal(self, THREAD_INTERRUPTED);
-			thread_unlock(self);
-
-			/*
-			 * Switch directly to receiving thread, and block
-			 * this thread as though it had called ipc_mqueue_receive.
-			 */
-#if defined (__i386__)
-			thread_run(self, (void (*)(void))0, receiver);
-#else
-			thread_run(self, ipc_mqueue_receive_continue, receiver);
-#endif
-
-			/* if we fell thru */
-			if (self->funnel_state & TH_FN_REFUNNEL) {
-			  kern_return_t	wait_result2;
-
-			  wait_result2 = self->wait_result;
-			  self->funnel_state = 0;
-			  KERNEL_DEBUG(0x6032428 | DBG_FUNC_NONE, self->funnel_lock, 6, 0, 0, 0);
-			  funnel_lock(self->funnel_lock);
-			  KERNEL_DEBUG(0x6032430 | DBG_FUNC_NONE, self->funnel_lock, 6, 0, 0, 0);
-			  self->funnel_state = TH_FN_OWNED;
-			  self->wait_result = wait_result2;
-			}
-			splx(s);
-		  }
-
-		  ipc_mqueue_receive_continue();
+		  thread_run(self, ipc_mqueue_receive_continue, receiver);
 		  /* NOTREACHED */
 		}
 
@@ -1879,6 +1829,38 @@ mach_msg_overwrite_trap(
 
 	return MACH_MSG_SUCCESS;
 }
+
+/*
+ *	Routine:	mach_msg_trap [mach trap]
+ *	Purpose:
+ *		Possibly send a message; possibly receive a message.
+ *	Conditions:
+ *		Nothing locked.
+ *	Returns:
+ *		All of mach_msg_send and mach_msg_receive error codes.
+ */
+
+mach_msg_return_t
+mach_msg_trap(
+	mach_msg_header_t	*msg,
+	mach_msg_option_t	option,
+	mach_msg_size_t		send_size,
+	mach_msg_size_t		rcv_size,
+	mach_port_name_t	rcv_name,
+	mach_msg_timeout_t	timeout,
+	mach_port_name_t	notify)
+{
+  return mach_msg_overwrite_trap(msg,
+				 option,
+				 send_size,
+				 rcv_size,
+				 rcv_name,
+				 timeout,
+				 notify,
+				 (mach_msg_header_t *)0,
+				 (mach_msg_size_t)0);
+}
+ 
 
 /*
  *	Routine:	msg_receive_error	[internal]

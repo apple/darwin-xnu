@@ -99,6 +99,14 @@ static int	icmpmaskrepl = 0;
 SYSCTL_INT(_net_inet_icmp, ICMPCTL_MASKREPL, maskrepl, CTLFLAG_RW,
 	&icmpmaskrepl, 0, "");
 
+static int	drop_redirect = 0;
+SYSCTL_INT(_net_inet_icmp, OID_AUTO, drop_redirect, CTLFLAG_RW, 
+	&drop_redirect, 0, "");
+
+static int	log_redirect = 0;
+SYSCTL_INT(_net_inet_icmp, OID_AUTO, log_redirect, CTLFLAG_RW, 
+	&log_redirect, 0, "");
+
 #if ICMP_BANDLIM 
  
 /*    
@@ -121,9 +129,9 @@ SYSCTL_INT(_net_inet_icmp, ICMPCTL_ICMPLIM, icmplim, CTLFLAG_RD,
  * ICMP broadcast echo sysctl
  */
 
-static int	icmpbmcastecho = 0;
-SYSCTL_INT(_net_inet_icmp, OID_AUTO, bmcastecho, CTLFLAG_RW, &icmpbmcastecho,
-	   0, "");
+static int	icmpbmcastecho = 1;
+SYSCTL_INT(_net_inet_icmp, OID_AUTO, bmcastecho, CTLFLAG_RW,
+	&icmpbmcastecho, 0, "");
 
 
 #if ICMPPRINTFS
@@ -132,7 +140,7 @@ int	icmpprintfs = 0;
 
 static void	icmp_reflect __P((struct mbuf *));
 static void	icmp_send __P((struct mbuf *, struct mbuf *));
-int	ip_next_mtu __P((int, int));
+static int	ip_next_mtu __P((int, int));
 
 extern	struct protosw inetsw[];
 
@@ -160,13 +168,10 @@ icmp_error(n, type, code, dest, destifp)
 	if (type != ICMP_REDIRECT)
 		icmpstat.icps_error++;
 	/*
-	 * Don't send error if the original packet was encrypted.
 	 * Don't send error if not the first fragment of message.
 	 * Don't error if the old packet protocol was ICMP
 	 * error message, only known informational types.
 	 */
-	if (n->m_flags & M_DECRYPTED)
-		goto freeit;
 	if (oip->ip_off &~ (IP_MF|IP_DF))
 		goto freeit;
 	if (oip->ip_p == IPPROTO_ICMP && type != ICMP_REDIRECT &&
@@ -184,7 +189,12 @@ icmp_error(n, type, code, dest, destifp)
 	m = m_gethdr(M_DONTWAIT, MT_HEADER);
 	if (m == NULL)
 		goto freeit;
-	icmplen = oiplen + min(8, oip->ip_len);
+	icmplen = min(oiplen + 8, oip->ip_len);
+	if (icmplen < sizeof(struct ip)) {
+		printf("icmp_error: bad length\n");
+		m_free(m);
+		goto freeit;
+	}
 	m->m_len = icmplen + ICMP_MINLEN;
 	MH_ALIGN(m, m->m_len);
 	icp = mtod(m, struct icmp *);
@@ -210,9 +220,14 @@ icmp_error(n, type, code, dest, destifp)
 	}
 
 	icp->icmp_code = code;
-	bcopy((caddr_t)oip, (caddr_t)&icp->icmp_ip, icmplen);
+	m_copydata(n, 0, icmplen, (caddr_t)&icp->icmp_ip);
 	nip = &icp->icmp_ip;
-	nip->ip_len = htons((u_short)(nip->ip_len + oiplen));
+
+	/*
+	 * Convert fields to network representation.
+	 */
+	HTONS(nip->ip_len);
+	HTONS(nip->ip_off);
 
 	/*
 	 * Now, copy old ip header (without options)
@@ -310,15 +325,6 @@ icmp_input(m, hlen)
 		    icp->icmp_code);
 #endif
 
-#if IPSEC
-	/* drop it if it does not match the policy */
-	/* XXX Is there meaning of check in here ? */
-	if (ipsec4_in_reject(m, NULL)) {
-		ipsecstat.in_polvio++;
-		goto freeit;
-	}
-#endif
-
 	/*
 	 * Message type specific processing.
 	 */
@@ -332,33 +338,34 @@ icmp_input(m, hlen)
 		switch (code) {
 			case ICMP_UNREACH_NET:
 			case ICMP_UNREACH_HOST:
-			case ICMP_UNREACH_PROTOCOL:
-			case ICMP_UNREACH_PORT:
 			case ICMP_UNREACH_SRCFAIL:
-				code += PRC_UNREACH_NET;
+			case ICMP_UNREACH_NET_UNKNOWN:
+			case ICMP_UNREACH_HOST_UNKNOWN:
+			case ICMP_UNREACH_ISOLATED:
+			case ICMP_UNREACH_TOSNET:
+			case ICMP_UNREACH_TOSHOST:
+			case ICMP_UNREACH_HOST_PRECEDENCE:
+			case ICMP_UNREACH_PRECEDENCE_CUTOFF:
+				code = PRC_UNREACH_NET;
 				break;
 
 			case ICMP_UNREACH_NEEDFRAG:
 				code = PRC_MSGSIZE;
 				break;
 
-			case ICMP_UNREACH_NET_UNKNOWN:
-			case ICMP_UNREACH_NET_PROHIB:
-			case ICMP_UNREACH_TOSNET:
-				code = PRC_UNREACH_NET;
-				break;
-
-			case ICMP_UNREACH_HOST_UNKNOWN:
-			case ICMP_UNREACH_ISOLATED:
-			case ICMP_UNREACH_HOST_PROHIB:
-			case ICMP_UNREACH_TOSHOST:
-				code = PRC_UNREACH_HOST;
-				break;
-
-			case ICMP_UNREACH_FILTER_PROHIB:
-			case ICMP_UNREACH_HOST_PRECEDENCE:
-			case ICMP_UNREACH_PRECEDENCE_CUTOFF:
+			/*
+			 * RFC 1122, Sections 3.2.2.1 and 4.2.3.9.
+			 * Treat subcodes 2,3 as immediate RST
+			 */
+			case ICMP_UNREACH_PROTOCOL:
+			case ICMP_UNREACH_PORT:
 				code = PRC_UNREACH_PORT;
+				break;
+
+			case ICMP_UNREACH_NET_PROHIB:
+			case ICMP_UNREACH_HOST_PROHIB:
+			case ICMP_UNREACH_FILTER_PROHIB:
+				code = PRC_UNREACH_ADMIN_PROHIB;
 				break;
 
 			default:
@@ -440,7 +447,7 @@ icmp_input(m, hlen)
 				}
 			}
 			if (rt)
-				RTFREE(rt);
+				rtfree(rt);
 		}
 
 #endif
@@ -465,7 +472,12 @@ icmp_input(m, hlen)
 			break;
 		}
 		icp->icmp_type = ICMP_ECHOREPLY;
-		goto reflect;
+#if ICMP_BANDLIM
+		if (badport_bandlim(BANDLIM_ICMP_ECHO) < 0)
+			goto freeit;
+		else
+#endif
+			goto reflect;
 
 	case ICMP_TSTAMP:
 		if (!icmpbmcastecho
@@ -480,7 +492,12 @@ icmp_input(m, hlen)
 		icp->icmp_type = ICMP_TSTAMPREPLY;
 		icp->icmp_rtime = iptime();
 		icp->icmp_ttime = icp->icmp_rtime;	/* bogus, do later! */
-		goto reflect;
+#if ICMP_BANDLIM
+		if (badport_bandlim(BANDLIM_ICMP_TSTAMP) < 0)
+			goto freeit;
+		else
+#endif
+			goto reflect;
 
 	case ICMP_MASKREQ:
 #define	satosin(sa)	((struct sockaddr_in *)(sa))
@@ -524,6 +541,23 @@ reflect:
 		return;
 
 	case ICMP_REDIRECT:
+		if (log_redirect) {
+			u_long src, dst, gw;
+
+			src = ntohl(ip->ip_src.s_addr);
+			dst = ntohl(icp->icmp_ip.ip_dst.s_addr);
+			gw = ntohl(icp->icmp_gwaddr.s_addr);
+			printf("icmp redirect from %d.%d.%d.%d: "
+			       "%d.%d.%d.%d => %d.%d.%d.%d\n",
+			       (int)(src >> 24), (int)((src >> 16) & 0xff),
+			       (int)((src >> 8) & 0xff), (int)(src & 0xff),
+			       (int)(dst >> 24), (int)((dst >> 16) & 0xff),
+			       (int)((dst >> 8) & 0xff), (int)(dst & 0xff),
+			       (int)(gw >> 24), (int)((gw >> 16) & 0xff),
+			       (int)((gw >> 8) & 0xff), (int)(gw & 0xff));
+		}
+		if (drop_redirect)
+			break;
 		if (code > 3)
 			goto badcode;
 		if (icmplen < ICMP_ADVLENMIN || icmplen < ICMP_ADVLEN(icp) ||
@@ -628,7 +662,7 @@ icmp_reflect(m)
 		ia = in_ifaddrhead.tqh_first;
 	t = IA_SIN(ia)->sin_addr;
 	ip->ip_src = t;
-	ip->ip_ttl = MAXTTL;
+	ip->ip_ttl = ip_defttl;
 
 	if (optlen > 0) {
 		register u_char *cp;
@@ -662,7 +696,7 @@ icmp_reflect(m)
 					    break;
 				    len = cp[IPOPT_OLEN];
 				    if (len < IPOPT_OLEN + sizeof(*cp) ||
-					len > cnt)
+				        len > cnt)
 					    break;
 			    }
 			    /*
@@ -744,13 +778,9 @@ icmp_send(m, opts)
 	}
 #endif
 	bzero(&ro, sizeof ro);
-
-#ifdef IPSEC
-	ipsec_setsocket(m, NULL);
-#endif /*IPSEC*/
 	(void) ip_output(m, opts, &ro, 0, NULL);
 	if (ro.ro_rt)
-		RTFREE(ro.ro_rt);
+		rtfree(ro.ro_rt);
 }
 
 n_time
@@ -770,7 +800,7 @@ iptime()
  * given current value MTU.  If DIR is less than zero, a larger plateau
  * is returned; otherwise, a smaller value is returned.
  */
-/* static */ int
+static int
 ip_next_mtu(mtu, dir)
 	int mtu;
 	int dir;
@@ -828,31 +858,45 @@ ip_next_mtu(mtu, dir)
 int
 badport_bandlim(int which)
 {
-	static int lticks[2];
-	static int lpackets[2];
-	int dticks;
+	static struct timeval lticks[BANDLIM_MAX + 1];
+	static int lpackets[BANDLIM_MAX + 1];
+	struct timeval time;
+	int secs;
+
+	const char *bandlimittype[] = {
+		"Limiting icmp unreach response",
+		"Limiting icmp ping response",
+		"Limiting icmp tstamp response",
+		"Limiting closed port RST response",
+		"Limiting open port RST response"
+		};
 
 	/*
 	 * Return ok status if feature disabled or argument out of
 	 * ranage.
 	 */
 
-	if (icmplim <= 0 || which >= 2 || which < 0)
+	if (icmplim <= 0 || which > BANDLIM_MAX || which < 0)
 		return(0);
-	dticks = ticks - lticks[which];
 
+	getmicrotime(&time);
+
+ 	secs = time.tv_sec - lticks[which].tv_sec ;
+			
 	/*
-	 * reset stats when cumulative dt exceeds one second.
+	 * reset stats when cumulative delta exceeds one second.
 	 */
 
-	if ((unsigned int)dticks > hz) {
+	if ((secs > 1) || (secs == 1 && (lticks[which].tv_usec > time.tv_usec))) { 
 		if (lpackets[which] > icmplim) {
-			printf("icmp-response bandwidth limit %d/%d pps\n",
+			printf("%s from %d to %d packets per second\n",
+				bandlimittype[which],
 				lpackets[which],
 				icmplim
 			);
 		}
-		lticks[which] = ticks;
+		lticks[which].tv_sec = time.tv_sec;
+		lticks[which].tv_usec = time.tv_usec;
 		lpackets[which] = 0;
 	}
 
@@ -868,4 +912,193 @@ badport_bandlim(int which)
 
 #endif
 
+#if __APPLE__
+
+/*
+ * Non-privileged ICMP socket operations
+ * - send ICMP echo request
+ * - all ICMP
+ * - limited socket options
+ */
+
+#include <netinet/ip_icmp.h>
+#include <netinet/in_pcb.h>
+
+extern struct domain inetdomain;
+extern u_long rip_sendspace;
+extern u_long rip_recvspace;
+extern struct inpcbinfo ripcbinfo;
+
+int rip_abort(struct socket *);
+int rip_bind(struct socket *, struct sockaddr *, struct proc *);
+int rip_connect(struct socket *, struct sockaddr *, struct proc *);
+int rip_detach(struct socket *);
+int rip_disconnect(struct socket *);
+int rip_shutdown(struct socket *);
+
+__private_extern__ int icmp_dgram_send(struct socket *so, int flags, struct mbuf *m, struct sockaddr *nam, struct mbuf *control, struct proc *p);
+__private_extern__ int icmp_dgram_attach(struct socket *so, int proto, struct proc *p);
+__private_extern__ int icmp_dgram_ctloutput(struct socket *so, struct sockopt *sopt);
+
+__private_extern__ struct pr_usrreqs icmp_dgram_usrreqs = {
+        rip_abort, pru_accept_notsupp, icmp_dgram_attach, rip_bind, rip_connect,
+        pru_connect2_notsupp, in_control, rip_detach, rip_disconnect,
+        pru_listen_notsupp, in_setpeeraddr, pru_rcvd_notsupp,
+        pru_rcvoob_notsupp, icmp_dgram_send, pru_sense_null, rip_shutdown,
+        in_setsockaddr, sosend, soreceive, sopoll
+};
+
+/* Like rip_attach but without root privilege enforcement */
+__private_extern__ int
+icmp_dgram_attach(struct socket *so, int proto, struct proc *p)
+{
+        struct inpcb *inp;
+        int error, s;
+
+        inp = sotoinpcb(so);
+        if (inp)
+                panic("icmp_dgram_attach");
+
+        error = soreserve(so, rip_sendspace, rip_recvspace);
+        if (error)
+                return error;
+        s = splnet();
+        error = in_pcballoc(so, &ripcbinfo, p);
+        splx(s);
+        if (error)
+                return error;
+        inp = (struct inpcb *)so->so_pcb;       
+        inp->inp_vflag |= INP_IPV4;
+        inp->inp_ip_p = IPPROTO_ICMP;
+        inp->inp_ip_ttl = ip_defttl;
+        return 0;
+}
+
+/*
+ * Raw IP socket option processing.
+ */
+__private_extern__ int
+icmp_dgram_ctloutput(struct socket *so, struct sockopt *sopt)
+{
+	struct	inpcb *inp = sotoinpcb(so);
+	int	error, optval;
+
+	if (sopt->sopt_level != IPPROTO_IP)
+		return (EINVAL);
+
+	switch (sopt->sopt_name) {
+		case IP_OPTIONS:
+		case IP_HDRINCL:
+		case IP_TOS:
+		case IP_TTL:
+		case IP_RECVOPTS:
+		case IP_RECVRETOPTS:
+		case IP_RECVDSTADDR:
+		case IP_RETOPTS:
+		case IP_MULTICAST_IF:
+		case IP_MULTICAST_TTL:
+		case IP_MULTICAST_LOOP:
+		case IP_ADD_MEMBERSHIP:
+		case IP_DROP_MEMBERSHIP:
+		case IP_MULTICAST_VIF:
+		case IP_PORTRANGE:
+		case IP_RECVIF:
+		case IP_IPSEC_POLICY:
+#if defined(NFAITH) && NFAITH > 0
+		case IP_FAITH:
+#endif
+		case IP_STRIPHDR:
+			error = rip_ctloutput(so, sopt);
+			break;
+		
+		default:
+			error = EINVAL;
+			break;
+	}
+
+	return (error);
+}
+
+__private_extern__ int
+icmp_dgram_send(struct socket *so, int flags, struct mbuf *m, struct sockaddr *nam,
+         struct mbuf *control, struct proc *p)
+{
+	struct ip *ip;
+	struct inpcb *inp = sotoinpcb(so);
+	int hlen;
+	struct icmp *icp;
+        struct in_ifaddr *ia = NULL;
+	int icmplen;
+
+	if ((inp->inp_flags & INP_HDRINCL) != 0) {
+		/*
+		 * This is not raw IP, we liberal only for fields TOS, id and TTL 
+		 */
+		ip = mtod(m, struct ip *);
+
+		hlen = IP_VHL_HL(ip->ip_vhl) << 2;
+		/* Some sanity checks */
+		if (m->m_pkthdr.len < hlen + ICMP_MINLEN) {
+			goto bad;
+		}
+		/* Only IPv4 */
+		if (IP_VHL_V(ip->ip_vhl) != 4)
+			goto bad;
+		if (hlen < 20 || hlen > 40 || ip->ip_len != m->m_pkthdr.len ||
+			ip->ip_len > 65535)
+			goto bad;
+		/* Bogus fragments can tie up peer resources */ 
+		if (ip->ip_off != 0)
+			goto bad;
+		/* Allow only ICMP even for user provided IP header */
+		if (ip->ip_p != IPPROTO_ICMP)
+			goto bad;
+		/* To prevent spoofing, specified source address must be one of ours */
+		if (ip->ip_src.s_addr != INADDR_ANY) {
+			if (TAILQ_EMPTY(&in_ifaddrhead))
+				goto bad;
+			TAILQ_FOREACH(ia, &in_ifaddrhead, ia_link) {
+				if (IA_SIN(ia)->sin_addr.s_addr == ip->ip_src.s_addr)
+					goto ours;
+			}
+			goto bad;
+		}
+ours:
+		/* Do not trust we got a valid checksum */
+		ip->ip_sum = 0;
+		
+		icp = (struct icmp *)(((char *)m->m_data) + hlen);
+		icmplen = m->m_pkthdr.len - hlen;
+	} else {
+		if ((icmplen = m->m_pkthdr.len) < ICMP_MINLEN) {
+			goto bad;
+		}
+		icp = mtod(m, struct icmp *);
+	}
+	/*
+	 * Allow only to send request types with code 0
+	 */
+	if (icp->icmp_code != 0)
+		goto bad;
+	switch (icp->icmp_type) {
+		case ICMP_ECHO:
+			break;
+		case ICMP_TSTAMP:
+			if (icmplen != 20)
+				goto bad;
+			break;
+		case ICMP_MASKREQ:
+			if (icmplen != 12)
+				goto bad;
+			break;
+		default:
+			goto bad;
+	}
+	return rip_send(so, flags, m, nam, control, p);
+bad:
+	m_freem(m);
+	return EINVAL;
+}
+
+#endif /* __APPLE__ */
 

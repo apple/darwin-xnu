@@ -1,4 +1,5 @@
-/*	$KAME: ip6_mroute.h,v 1.7 2000/02/22 14:04:22 itojun Exp $	*/
+/*	$FreeBSD: src/sys/netinet6/ip6_mroute.h,v 1.2.2.2 2001/07/03 11:01:53 ume Exp $	*/
+/*	$KAME: ip6_mroute.h,v 1.17 2001/02/10 02:05:52 itojun Exp $	*/
 
 /*
  * Copyright (C) 1998 WIDE Project.
@@ -45,17 +46,21 @@
 
 #ifndef _NETINET6_IP6_MROUTE_H_
 #define _NETINET6_IP6_MROUTE_H_
+#include <sys/appleapiopts.h>
 
 /*
  * Multicast Routing set/getsockopt commands.
  */
-#define MRT6_INIT		100	/* initialize forwarder */
+#ifdef KERNEL
+#define MRT6_OINIT		100	/* initialize forwarder (omrt6msg) */
+#endif
 #define MRT6_DONE		101	/* shut down forwarder */
 #define MRT6_ADD_MIF		102	/* add multicast interface */
 #define MRT6_DEL_MIF		103	/* delete multicast interface */
 #define MRT6_ADD_MFC		104	/* insert forwarding cache entry */
 #define MRT6_DEL_MFC		105	/* delete forwarding cache entry */
 #define MRT6_PIM                107     /* enable pim code */
+#define MRT6_INIT		108	/* initialize forwarder (mrt6msg) */
 
 #if BSD >= 199103
 #define GET_TIME(t)	microtime(&t)
@@ -75,7 +80,7 @@ typedef u_short mifi_t;		/* type of a mif index */
 #define	IF_SETSIZE	256
 #endif
 
-typedef	long	if_mask;
+typedef	u_int32_t	if_mask;
 #define	NIFBITS	(sizeof(if_mask) * NBBY)	/* bits per mask */
 
 #ifndef howmany
@@ -83,7 +88,7 @@ typedef	long	if_mask;
 #endif
 
 typedef	struct if_set {
-	fd_mask	ifs_bits[howmany(IF_SETSIZE, NIFBITS)];
+	if_mask	ifs_bits[howmany(IF_SETSIZE, NIFBITS)];
 } if_set;
 
 #define	IF_SET(n, p)	((p)->ifs_bits[(n)/NIFBITS] |= (1 << ((n) % NIFBITS)))
@@ -135,19 +140,43 @@ struct mrt6stat {
 	u_quad_t mrt6s_upq_sockfull;	/* upcalls dropped - socket full   */
 };
 
+#if MRT6_OINIT
 /*
  * Struct used to communicate from kernel to multicast router
  * note the convenient similarity to an IPv6 header.
+ * XXX old version, superseded by mrt6msg.
  */
-struct mrt6msg {
+struct omrt6msg {
 	u_long	    unused1;
 	u_char	    im6_msgtype;		/* what type of message	    */
+#if 0
+#define MRT6MSG_NOCACHE	1
+#define MRT6MSG_WRONGMIF	2
+#define MRT6MSG_WHOLEPKT	3		/* used for user level encap*/
+#endif
+	u_char	    im6_mbz;			/* must be zero		    */
+	u_char	    im6_mif;			/* mif rec'd on		    */
+	u_char	    unused2;
+	struct in6_addr  im6_src, im6_dst;
+};
+#endif
+
+/*
+ * Structure used to communicate from kernel to multicast router.
+ * We'll overlay the structure onto an MLD header (not an IPv6 header
+ * like igmpmsg{} used for IPv4 implementation). This is because this
+ * structure will be passed via an IPv6 raw socket, on which an application
+ * will only receive the payload i.e. the data after the IPv6 header and all
+ * the extension headers. (see Section 3 of draft-ietf-ipngwg-2292bis-01)
+ */
+struct mrt6msg {
 #define MRT6MSG_NOCACHE		1
 #define MRT6MSG_WRONGMIF	2
 #define MRT6MSG_WHOLEPKT	3		/* used for user level encap*/
 	u_char	    im6_mbz;			/* must be zero		    */
-	u_char	    im6_mif;			/* mif rec'd on		    */
-	u_char	    unused2;
+	u_char	    im6_msgtype;		/* what type of message	    */
+	u_int16_t   im6_mif;			/* mif rec'd on		    */
+	u_int32_t   im6_pad;			/* padding for 64bit arch   */
 	struct in6_addr  im6_src, im6_dst;
 };
 
@@ -174,7 +203,8 @@ struct sioc_mif_req6 {
 	u_quad_t obytes;	/* Output byte count on mif		*/
 };
 
-#if KERNEL
+#ifdef KERNEL
+#ifdef __APPLE_API_PRIVATE
 /*
  * The kernel's multicast-interface structure.
  */
@@ -244,6 +274,7 @@ int	ip6_mrouter_set __P((struct socket *so, struct sockopt *sopt));
 int	ip6_mrouter_get __P((struct socket *so, struct sockopt *sopt));
 int	ip6_mrouter_done __P((void));
 int	mrt6_ioctl __P((int, caddr_t));
+#endif /* __APPLE_API_PRIVATE */
 #endif /* KERNEL */
 
 #endif /* !_NETINET6_IP6_MROUTE_H_ */

@@ -64,27 +64,21 @@
 #include <mach_rt.h>
 #include <platforms.h>
 
-#include <kern/ast.h>
+#include <mach/mig.h>
 #include <mach/port.h>
 #include <mach/kern_return.h>
 #include <mach/message.h>
 #include <mach/mig_errors.h>
 #include <mach/notify.h>
+
 #include <kern/etap_macros.h>
 #include <kern/ipc_mig.h>
 #include <kern/ipc_kobject.h>
 #include <kern/misc_protos.h>
 #include <kern/mk_timer.h>
-#include <ipc/ipc_object.h>
 #include <ipc/ipc_kmsg.h>
 #include <ipc/ipc_port.h>
 #include <kern/counters.h>
-
-
-void             pager_mux_hash_delete(
-                                ipc_port_t              port);
-rpc_subsystem_t  pager_mux_hash_lookup(
-                                ipc_port_t              port);
 
 
 /*
@@ -150,40 +144,40 @@ mach_msg_size_t mig_reply_size;
 #endif	/* XK_PROXY */
 
 
-rpc_subsystem_t mig_e[] = {
-        (rpc_subsystem_t)&mach_port_subsystem,
-        (rpc_subsystem_t)&mach_host_subsystem,
-        (rpc_subsystem_t)&host_priv_subsystem,
-        (rpc_subsystem_t)&host_security_subsystem,
-        (rpc_subsystem_t)&clock_subsystem,
-        (rpc_subsystem_t)&clock_priv_subsystem,
-        (rpc_subsystem_t)&processor_subsystem,
-        (rpc_subsystem_t)&processor_set_subsystem,
-        (rpc_subsystem_t)&is_iokit_subsystem,
-        (rpc_subsystem_t)&memory_object_name_subsystem,
-	(rpc_subsystem_t)&lock_set_subsystem,
-	(rpc_subsystem_t)&ledger_subsystem,
-	(rpc_subsystem_t)&semaphore_subsystem,
-	(rpc_subsystem_t)&task_subsystem,
-	(rpc_subsystem_t)&thread_act_subsystem,
-	(rpc_subsystem_t)&vm_map_subsystem,
-	(rpc_subsystem_t)&UNDReply_subsystem,
+mig_subsystem_t mig_e[] = {
+        (mig_subsystem_t)&mach_port_subsystem,
+        (mig_subsystem_t)&mach_host_subsystem,
+        (mig_subsystem_t)&host_priv_subsystem,
+        (mig_subsystem_t)&host_security_subsystem,
+        (mig_subsystem_t)&clock_subsystem,
+        (mig_subsystem_t)&clock_priv_subsystem,
+        (mig_subsystem_t)&processor_subsystem,
+        (mig_subsystem_t)&processor_set_subsystem,
+        (mig_subsystem_t)&is_iokit_subsystem,
+        (mig_subsystem_t)&memory_object_name_subsystem,
+	(mig_subsystem_t)&lock_set_subsystem,
+	(mig_subsystem_t)&ledger_subsystem,
+	(mig_subsystem_t)&semaphore_subsystem,
+	(mig_subsystem_t)&task_subsystem,
+	(mig_subsystem_t)&thread_act_subsystem,
+	(mig_subsystem_t)&vm_map_subsystem,
+	(mig_subsystem_t)&UNDReply_subsystem,
 
 #if     XK_PROXY
-        (rpc_subsystem_t)&do_uproxy_xk_uproxy_subsystem,
+        (mig_subsystem_t)&do_uproxy_xk_uproxy_subsystem,
 #endif /* XK_PROXY */
 #if     MACH_MACHINE_ROUTINES
-        (rpc_subsystem_t)&MACHINE_SUBSYSTEM,
+        (mig_subsystem_t)&MACHINE_SUBSYSTEM,
 #endif  /* MACH_MACHINE_ROUTINES */
 #if     MCMSG && iPSC860
-	(rpc_subsystem_t)&mcmsg_info_subsystem,
+	(mig_subsystem_t)&mcmsg_info_subsystem,
 #endif  /* MCMSG && iPSC860 */
 };
 
 void
 mig_init(void)
 {
-    register unsigned int i, n = sizeof(mig_e)/sizeof(rpc_subsystem_t);
+    register unsigned int i, n = sizeof(mig_e)/sizeof(mig_subsystem_t);
     register unsigned int howmany;
     register mach_msg_id_t j, pos, nentry, range;
 	
@@ -354,7 +348,7 @@ ipc_kobject_server(
 		    break;
 		
 		default:
-		    panic("ipc_object_destroy: strange destination rights");
+		    panic("ipc_kobject_server: strange destination rights");
 	}
 	*destp = IP_NULL;
 
@@ -509,7 +503,7 @@ ipc_kobject_notify(
 	mach_msg_header_t *reply_header)
 {
 	ipc_port_t port = (ipc_port_t) request_header->msgh_remote_port;
-	rpc_subsystem_t		paging_subsystem_object;
+	mig_subsystem_t		paging_subsystem_object;
 	mach_port_seqno_t	seqno;
 
 	((mig_reply_error_t *) reply_header)->RetCode = MIG_NO_REPLY;
@@ -594,7 +588,7 @@ kobjserver_stats_clear(void)
 void
 kobjserver_stats(void)
 {
-    register unsigned int i, n = sizeof(mig_e)/sizeof(rpc_subsystem_t);
+    register unsigned int i, n = sizeof(mig_e)/sizeof(mig_subsystem_t);
     register unsigned int howmany;
     register mach_msg_id_t j, pos, nentry, range;
 	

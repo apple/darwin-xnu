@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2002 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -19,19 +19,6 @@
  * 
  * @APPLE_LICENSE_HEADER_END@
  */
-/*
- *	File:	next/reboot.h
- *	Author:	Avadis Tevanian, Jr.
- *
- *	NeXT specific reboot flags.
- *
- * HISTORY
- * 28-Feb-90  John Seamons (jks) at NeXT
- *	Added RB_COMMAND flag that allows a specific reboot command to be used.
- *
- * 06-Jul-88  Avadis Tevanian (avie) at NeXT, Inc.
- *	Created.
- */
  
 #ifndef	_BSD_I386_REBOOT_H_
 #define _BSD_I386_REBOOT_H_
@@ -40,7 +27,10 @@
  * Empty file (publicly)
  */
  
+#include <sys/appleapiopts.h>
+
 #ifdef	KERNEL_PRIVATE
+#ifdef __APPLE_API_PRIVATE
 
 /*
  *	Use most significant 16 bits to avoid collisions with
@@ -56,6 +46,7 @@
 #define RB_BOOTDOS	0x00800000	/* reboot into DOS */
 #define RB_PRETTY	0x01000000	/* shutdown with pretty graphics */
 
+#endif /* __APPLE_API_PRIVATE */
 #endif	/* KERNEL_PRIVATE */
 
 #endif	/* _BSD_I386_REBOOT_H_ */

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2002 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -57,10 +57,14 @@
 #ifndef _SYS_SELECT_H_
 #define	_SYS_SELECT_H_
 
-#ifdef KERNEL
+#include <sys/appleapiopts.h>
+
+#ifdef __APPLE_API_UNSTABLE
+
 __BEGIN_DECLS
+
+#ifdef KERNEL
 #include <kern/wait_queue.h>
-__END_DECLS
 #endif
 
 /*
@@ -87,6 +91,10 @@ struct proc;
 void	selrecord __P((struct proc *selector, struct selinfo *, void *));
 void	selwakeup __P((struct selinfo *));
 void	selthreadclear __P((struct selinfo *));
-#endif
+#endif /* KERNEL */
+
+__END_DECLS
+
+#endif /* __APPLE_API_UNSTABLE */
 
 #endif /* !_SYS_SELECT_H_ */

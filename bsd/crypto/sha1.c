@@ -1,3 +1,6 @@
+/*	$FreeBSD: src/sys/crypto/sha1.c,v 1.2.2.4 2001/07/03 11:01:27 ume Exp $	*/
+/*	$KAME: sha1.c,v 1.5 2000/11/08 06:13:08 itojun Exp $	*/
+
 /*
  * Copyright (C) 1995, 1996, 1997, and 1998 WIDE Project.
  * All rights reserved.
@@ -216,18 +219,16 @@ sha1_pad(ctxt)
 }
 
 void
-sha1_loop(ctxt, input0, len)
+sha1_loop(ctxt, input, len)
 	struct sha1_ctxt *ctxt;
-	const caddr_t input0;
+	const u_int8_t *input;
 	size_t len;
 {
-	const u_int8_t *input;
 	size_t gaplen;
 	size_t gapstart;
 	size_t off;
 	size_t copysiz;
 
-	input = (const u_int8_t *)input0;
 	off = 0;
 
 	while (off < len) {

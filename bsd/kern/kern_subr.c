@@ -136,7 +136,7 @@ uiomove(cp, n, uio)
 				error = copywithin(iov->iov_base, (caddr_t)cp,
 						   cnt);
 			break;
-#ifdef ppc
+
 		case UIO_PHYS_USERSPACE:
 			if (uio->uio_rw == UIO_READ)
 			  {
@@ -162,7 +162,6 @@ uiomove(cp, n, uio)
 			if (error)
 				return (error);
 			break;
-#endif
 		}
 		iov->iov_base += cnt;
 		iov->iov_len -= cnt;

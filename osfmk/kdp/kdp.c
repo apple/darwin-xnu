@@ -19,18 +19,14 @@
  * 
  * @APPLE_LICENSE_HEADER_END@
  */
-/*
- * Copyright (c) 1993 NeXT Computer, Inc.  All rights reserved.
- *
- * kdp.c -- Kernel Debugging Protocol.
- *
- */
 
 #include <mach/mach_types.h>
 #include <kern/debug.h>
 
 #include <kdp/kdp_internal.h>
 #include <kdp/kdp_private.h>
+
+#include <libsa/types.h>
 
 int kdp_vm_read( caddr_t, caddr_t, unsigned int);
 int kdp_vm_write( caddr_t, caddr_t, unsigned int);
@@ -45,27 +41,48 @@ int kdp_vm_write( caddr_t, caddr_t, unsigned int);
 #endif
 
 static kdp_dispatch_t
-    dispatch_table[KDP_TERMINATION - KDP_CONNECT + 1] =
+    dispatch_table[KDP_REATTACH - KDP_CONNECT +1] =
     {
 /* 0 */	kdp_connect,
 /* 1 */	kdp_disconnect,
 /* 2 */	kdp_hostinfo,
-/* 3 */	kdp_regions,
+/* 3 */	kdp_version,
 /* 4 */	kdp_maxbytes,
 /* 5 */	kdp_readmem,
 /* 6 */	kdp_writemem,
 /* 7 */	kdp_readregs,
 /* 8 */	kdp_writeregs,
-/* 9 */	kdp_unknown,
-/* A */	kdp_unknown,
+/* 9 */ kdp_unknown,
+/* A */ kdp_unknown,
 /* B */	kdp_suspend,
 /* C */	kdp_resumecpus,
 /* D */	kdp_unknown,
-/* E */	kdp_unknown,
+/* E */ kdp_unknown,
+/* F */ kdp_breakpoint_set,
+/*10 */ kdp_breakpoint_remove,
+/*11 */	kdp_regions,
+/*12 */ kdp_reattach
     };
     
 kdp_glob_t	kdp;
-int kdp_flag=0;
+
+
+#define MAX_BREAKPOINTS 100
+#define KDP_MAX_BREAKPOINTS 100
+
+#define BREAKPOINT_NOT_FOUND 101
+#define BREAKPOINT_ALREADY_SET 102
+
+#define KDP_VERSION 10
+
+typedef struct{
+  unsigned int address;
+  unsigned int old_instruction;
+} kdp_breakpoint_record_t;
+
+static kdp_breakpoint_record_t breakpoint_list[MAX_BREAKPOINTS];
+static unsigned int breakpoints_initialized = 0;
+int reattach_wait = 0;
 
 boolean_t
 kdp_packet(
@@ -99,7 +116,7 @@ kdp_packet(
     }
     
     req = rd->hdr.request;
-    if (req < KDP_CONNECT || req > KDP_TERMINATION) {
+    if ((req < KDP_CONNECT) || (req > KDP_REATTACH)) {
 	printf("kdp_packet bad request %x len %d seq %x key %x\n",
 	    rd->hdr.request, rd->hdr.len, rd->hdr.seq, rd->hdr.key);
 
@@ -208,6 +225,23 @@ kdp_disconnect(
 }
 
 static boolean_t
+kdp_reattach(
+    kdp_pkt_t		*pkt,
+    int			*len,
+    unsigned short	*reply_port
+)
+{
+  kdp_reattach_req_t            *rq = &pkt->reattach_req;
+  kdp_disconnect_reply_t	*rp = &pkt->disconnect_reply;
+
+  kdp.is_conn = TRUE;
+  kdp_disconnect(pkt, len, reply_port);
+  *reply_port = rq->req_reply_port;
+  reattach_wait = 1;
+  return (TRUE);
+}
+
+static boolean_t
 kdp_hostinfo(
     kdp_pkt_t		*pkt,
     int			*len,
@@ -225,7 +259,7 @@ kdp_hostinfo(
     rp->hdr.len = sizeof (*rp);
 
     kdp_machine_hostinfo(&rp->hostinfo);
-    
+
     *reply_port = kdp.reply_port;
     *len = rp->hdr.len;
     
@@ -277,7 +311,7 @@ kdp_resumecpus(
     rp->hdr.len = sizeof (*rp);
 
     dprintf(("kdp_resumecpus %x\n", rq->cpu_mask));
-
+    
     kdp.is_halted = FALSE;
     
     *reply_port = kdp.reply_port;
@@ -384,6 +418,42 @@ kdp_maxbytes(
 }
 
 static boolean_t
+kdp_version(
+    kdp_pkt_t		*pkt,
+    int			*len,
+    unsigned short	*reply_port
+)
+{
+    kdp_version_req_t	*rq = &pkt->version_req;
+    int			plen = *len;
+    kdp_version_reply_t *rp = &pkt->version_reply;
+    kdp_region_t	*r;	
+
+    if (plen < sizeof (*rq))
+	return (FALSE);
+
+    rp->hdr.is_reply = 1;
+    rp->hdr.len = sizeof (*rp);
+
+    dprintf(("kdp_version\n"));
+
+    rp->version = KDP_VERSION;
+#ifdef	__ppc__
+    if (!(kdp_flag & KDP_BP_DIS))
+      rp->feature = KDP_FEATURE_BP;
+    else
+      rp->feature = 0;
+#else
+    rp->feature = 0;
+#endif
+
+    *reply_port = kdp.reply_port;
+    *len = rp->hdr.len;
+    
+    return (TRUE);
+}
+
+static boolean_t
 kdp_regions(
     kdp_pkt_t		*pkt,
     int			*len,
@@ -471,4 +541,128 @@ kdp_readregs(
     *len = rp->hdr.len;
     
     return (TRUE);
+}
+
+static boolean_t 
+kdp_breakpoint_set(
+    kdp_pkt_t		*pkt,
+    int			*len,
+    unsigned short	*reply_port
+)
+{
+  kdp_breakpoint_req_t	*rq = &pkt->breakpoint_req;
+  kdp_breakpoint_reply_t *rp = &pkt->breakpoint_reply;
+  int			plen = *len;
+  int                   cnt, i;
+  unsigned int          old_instruction = 0;
+  unsigned int breakinstr = kdp_ml_get_breakinsn();
+
+  if(breakpoints_initialized == 0)
+    {
+      for(i=0;(i < MAX_BREAKPOINTS); breakpoint_list[i].address=0, i++);
+      breakpoints_initialized++;
+    }
+  if (plen < sizeof (*rq))
+    return (FALSE);
+  cnt = kdp_vm_read((caddr_t)rq->address, (caddr_t)(&old_instruction), sizeof(int));
+
+  if (old_instruction==breakinstr)
+    {
+      printf("A trap was already set at that address, not setting new breakpoint\n");
+      rp->error = BREAKPOINT_ALREADY_SET;
+      
+      rp->hdr.is_reply = 1;
+      rp->hdr.len = sizeof (*rp);
+      *reply_port = kdp.reply_port;
+      *len = rp->hdr.len;
+
+      return (TRUE);
+    }
+
+  for(i=0;(i < MAX_BREAKPOINTS) && (breakpoint_list[i].address != 0); i++);
+
+  if (i == MAX_BREAKPOINTS)
+    {
+      rp->error = KDP_MAX_BREAKPOINTS; 
+      
+      rp->hdr.is_reply = 1;
+      rp->hdr.len = sizeof (*rp);
+      *reply_port = kdp.reply_port;
+      *len = rp->hdr.len;
+
+      return (TRUE);
+    }
+  breakpoint_list[i].address =  rq->address;
+  breakpoint_list[i].old_instruction = old_instruction;
+
+  cnt = kdp_vm_write((caddr_t)&breakinstr, (caddr_t)rq->address, sizeof(&breakinstr));
+
+  rp->error = KDPERR_NO_ERROR;
+  rp->hdr.is_reply = 1;
+  rp->hdr.len = sizeof (*rp);
+  *reply_port = kdp.reply_port;
+  *len = rp->hdr.len;
+
+  return (TRUE);
+}
+
+static boolean_t
+kdp_breakpoint_remove(
+    kdp_pkt_t		*pkt,
+    int			*len,
+    unsigned short	*reply_port
+)
+{
+  kdp_breakpoint_req_t	*rq = &pkt->breakpoint_req;
+  kdp_breakpoint_reply_t *rp = &pkt->breakpoint_reply;
+  int			plen = *len;
+  int                   cnt,i;
+
+  if (plen < sizeof (*rq))
+    return (FALSE);
+
+  for(i=0;(i < MAX_BREAKPOINTS) && (breakpoint_list[i].address != rq->address); i++);
+  if (i == MAX_BREAKPOINTS)
+    {
+      rp->error = BREAKPOINT_NOT_FOUND; 
+      rp->hdr.is_reply = 1;
+      rp->hdr.len = sizeof (*rp);
+      *reply_port = kdp.reply_port;
+      *len = rp->hdr.len;
+
+      return (TRUE); /* Check if it needs to be FALSE in case of error */
+    }
+
+  breakpoint_list[i].address = 0;
+  cnt = kdp_vm_write((caddr_t)&(breakpoint_list[i].old_instruction), (caddr_t)rq->address, sizeof(int));
+  rp->error = KDPERR_NO_ERROR;
+  rp->hdr.is_reply = 1;
+  rp->hdr.len = sizeof (*rp);
+  *reply_port = kdp.reply_port;
+  *len = rp->hdr.len;
+
+  return (TRUE);
+}
+
+boolean_t
+kdp_remove_all_breakpoints()
+{
+  int i;
+  boolean_t breakpoint_found = FALSE;
+  
+  if (breakpoints_initialized)
+    {
+      for(i=0;i < MAX_BREAKPOINTS; i++)
+	{
+	  if (breakpoint_list[i].address)
+	    {
+	      kdp_vm_write((caddr_t)&(breakpoint_list[i].old_instruction), (caddr_t)breakpoint_list[i].address, sizeof(int));
+	      breakpoint_found = TRUE;
+	      breakpoint_list[i].address = 0;
+	    }
+	}
+      if (breakpoint_found)
+       printf("kdp_remove_all_breakpoints: found extant breakpoints, removing them.\n");
+    }
+  return breakpoint_found;
 }

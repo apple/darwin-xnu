@@ -34,6 +34,7 @@
 
 #ifndef _NETAT_SYSGLUE_H_
 #define _NETAT_SYSGLUE_H_
+#include <sys/appleapiopts.h>
 
 /* 
    The following is originally from netat/h/localglue.h, which was 
@@ -88,6 +89,7 @@ typedef struct {
 #endif
 
 #ifdef KERNEL
+#ifdef __APPLE_API_PRIVATE
 
 #define SYS_HZ HZ 	/* Number of clock (SYS_SETTIMER) ticks per second */
 #define HZ hz		/* HZ ticks definition used throughout AppleTalk */
@@ -186,5 +188,6 @@ int gbuf_msgsize(gbuf_t *m);
 #undef timeout
 #undef untimeout
 
+#endif /* __APPLE_API_PRIVATE */
 #endif /* KERNEL */
 #endif /* _NETAT_SYSGLUE_H_ */

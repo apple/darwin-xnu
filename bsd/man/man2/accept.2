@@ -1,0 +1,172 @@
+.\"	$NetBSD: accept.2,v 1.7 1996/01/31 20:14:42 mycroft Exp $
+.\"
+.\" Copyright (c) 1983, 1990, 1991, 1993
+.\"	The Regents of the University of California.  All rights reserved.
+.\"
+.\" Redistribution and use in source and binary forms, with or without
+.\" modification, are permitted provided that the following conditions
+.\" are met:
+.\" 1. Redistributions of source code must retain the above copyright
+.\"    notice, this list of conditions and the following disclaimer.
+.\" 2. Redistributions in binary form must reproduce the above copyright
+.\"    notice, this list of conditions and the following disclaimer in the
+.\"    documentation and/or other materials provided with the distribution.
+.\" 3. All advertising materials mentioning features or use of this software
+.\"    must display the following acknowledgement:
+.\"	This product includes software developed by the University of
+.\"	California, Berkeley and its contributors.
+.\" 4. Neither the name of the University nor the names of its contributors
+.\"    may be used to endorse or promote products derived from this software
+.\"    without specific prior written permission.
+.\"
+.\" THIS SOFTWARE IS PROVIDED BY THE REGENTS AND CONTRIBUTORS ``AS IS'' AND
+.\" ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+.\" IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
+.\" ARE DISCLAIMED.  IN NO EVENT SHALL THE REGENTS OR CONTRIBUTORS BE LIABLE
+.\" FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
+.\" DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS
+.\" OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION)
+.\" HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT
+.\" LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
+.\" OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
+.\" SUCH DAMAGE.
+.\"
+.\"     @(#)accept.2	8.2 (Berkeley) 12/11/93
+.\"
+.Dd December 11, 1993
+.Dt ACCEPT 2
+.Os BSD 4.2
+.Sh NAME
+.Nm accept
+.Nd accept a connection on a socket
+.Sh SYNOPSIS
+.Fd #include <sys/types.h>
+.Fd #include <sys/socket.h>
+.Ft int
+.Fn accept "int s" "struct sockaddr *addr" "int *addrlen"
+.Sh DESCRIPTION
+The argument
+.Fa s
+is a socket that has been created with
+.Xr socket 2 ,
+bound to an address with
+.Xr bind 2 ,
+and is listening for connections after a
+.Xr listen 2 .
+The
+.Fn accept
+argument
+extracts the first connection request
+on the queue of pending connections, creates
+a new socket with the same properties of 
+.Fa s
+and allocates a new file descriptor
+for the socket.  If no pending connections are
+present on the queue, and the socket is not marked
+as non-blocking,
+.Fn accept
+blocks the caller until a connection is present.
+If the socket is marked non-blocking and no pending
+connections are present on the queue, 
+.Fn accept
+returns an error as described below.
+The accepted socket
+may not be used
+to accept more connections.  The original socket
+.Fa s
+remains open.
+.Pp
+The argument
+.Fa addr
+is a result parameter that is filled in with
+the address of the connecting entity,
+as known to the communications layer.
+The exact format of the
+.Fa addr
+parameter is determined by the domain in which the communication
+is occurring.
+The 
+.Fa addrlen
+is a value-result parameter; it should initially contain the
+amount of space pointed to by
+.Fa addr ;
+on return it will contain the actual length (in bytes) of the
+address returned.
+This call
+is used with connection-based socket types, currently with
+.Dv SOCK_STREAM . 
+.Pp
+It is possible to
+.Xr select 2
+a socket for the purposes of doing an
+.Fn accept
+by selecting it for read.
+.Pp
+For certain protocols which require an explicit confirmation,
+such as
+.Tn ISO
+or
+.Tn DATAKIT ,
+.Fn accept
+can be thought of
+as merely dequeuing the next connection
+request and not implying confirmation.
+Confirmation can be implied by a normal read or write on the new
+file descriptor, and rejection can be implied by closing the
+new socket.
+.Pp
+One can obtain user connection request data without confirming
+the connection by issuing a 
+.Xr recvmsg 2
+call with an
+.Fa msg_iovlen
+of 0 and a non-zero
+.Fa msg_controllen ,
+or by issuing a
+.Xr getsockopt 2
+request.
+Similarly, one can provide user connection rejection information
+by issuing a
+.Xr sendmsg 2
+call with providing only the control information,
+or by calling
+.Xr setsockopt 2 .
+.Sh RETURN VALUES
+The call returns \-1 on error.  If it succeeds, it returns a non-negative
+integer that is a descriptor for the accepted socket.
+.Sh ERRORS
+The
+.Fn accept
+will fail if:
+.Bl -tag -width Er
+.It Bq Er EBADF
+The descriptor is invalid.
+.It Bq Er ENOTSOCK
+The descriptor references a file, not a socket.
+.It Bq Er EOPNOTSUPP
+The referenced socket is not of type
+.Dv SOCK_STREAM . 
+.It Bq Er EFAULT
+The
+.Fa addr
+parameter is not in a writable part of the
+user address space.
+.It Bq Er EWOULDBLOCK
+The socket is marked non-blocking and no connections
+are present to be accepted.
+.It Bq Er EMFILE
+The per-process descriptor table is full.
+.It Bq Er ENFILE
+The system file table is full.
+.El
+.Sh SEE ALSO
+.Xr bind 2 ,
+.Xr connect 2 ,
+.Xr listen 2 ,
+.Xr select 2 ,
+.Xr socket 2
+.Sh HISTORY
+The
+.Fn accept
+function appeared in 
+.Bx 4.2 .

@@ -56,6 +56,8 @@
 #include <sys/socketvar.h>
 #include <sys/malloc.h>
 #include <sys/sockio.h>
+#include <vm/vm_kern.h>         /* for kernel_map */
+
 
 #include <net/if.h>
 #include <net/if_types.h>
@@ -76,6 +78,8 @@
 #include <netat/debug.h>
 #include <netat/adsp.h>
 #include <netat/adsp_internal.h>
+
+#include <sys/kern_event.h>
 
 /* globals */
 
@@ -948,7 +952,7 @@ static void elap_online2(elapp)
 
 		elapp->ifState = LAP_ONLINE_ZONELESS;
 		elapp->startup_inprogress = FALSE;
-		thread_wakeup(&elapp->startup_inprogress);
+		wakeup(&elapp->startup_inprogress);
 		dPrintf(D_M_ELAP, D_L_STARTUP_INFO, ("elap_online: ack 3\n"));
 		return;
 	}
@@ -1073,8 +1077,8 @@ int ddp_shutdown(count_only)
 	struct atp_state *atp, *atp_next;
 	CCB *sp, *sp_next;
 	gref_t *gref;
-	int i, s,
-	  active_skts = 0;	/* count of active pids for non-socketized
+	vm_offset_t temp_rcb_data, temp_state_data;
+	int i, s, active_skts = 0;	/* count of active pids for non-socketized
 				   AppleTalk protocols */
 	extern int aarp_sched_probe();
 
@@ -1196,6 +1200,8 @@ int ddp_shutdown(count_only)
 	}          
 
 	at_state.flags = 0;     /* make sure inits are done on restart */
+	
+	wakeup(&ifID_home->startup_inprogress);	/* if rtmp_router_start still starting up */
 
 	/* from original ddp_shutdown() */
 	routershutdown();
@@ -1205,6 +1211,8 @@ int ddp_shutdown(count_only)
 		CleanupGlobals();
 		adspInited = 0;
 	}
+	
+	 
 	dPrintf(D_M_DDP, D_L_VERBOSE, ("DDP shutdown completed"));
 
 	/*
@@ -1223,6 +1231,29 @@ int ddp_shutdown(count_only)
 		elap_offline(ifID);
 	}
 	ddp_start();
+	
+	/* free buffers for large arrays used by atp.
+	 * to prevent a race condition if the funnel is dropped
+	 * while calling kmem_free, the fields are grabbed and
+	 * zeroed first.
+	 */
+	if (atp_rcb_data != NULL) {
+		temp_rcb_data = (vm_offset_t)atp_rcb_data; 
+		atp_rcb_data = NULL;
+		atp_rcb_free_list = NULL;
+	} else
+	        temp_rcb_data = NULL;
+	if (atp_state_data != NULL) {
+		temp_state_data = (vm_offset_t)atp_state_data;
+		atp_state_data = NULL;
+		atp_free_list = NULL;
+	} else
+	        temp_state_data = NULL;
+
+	if (temp_rcb_data)
+	  kmem_free(kernel_map, temp_rcb_data, sizeof(struct atp_rcb) * NATP_RCB);
+	if (temp_state_data)
+	  kmem_free(kernel_map, temp_state_data, sizeof(struct atp_state) * NATP_STATE);
 
 	splx(s);
 	return(0);
@@ -1291,6 +1322,10 @@ void ZIPwakeup(elapp, ZipError)
 		switch (ZipError) {
 			case 0 : /* success */
 			    elapp->ifState = LAP_ONLINE;
+
+				/* Send event with zone info. */
+				atalk_post_msg(elapp->aa_ifp, KEV_ATALK_ZONEUPDATED, 0, &(elapp->ifZoneName));
+				
 			    break;
 			case ZIP_RE_AARP :
 			    /* instead of goto re_aarp; */
@@ -1298,7 +1333,7 @@ void ZIPwakeup(elapp, ZipError)
 			       appletalk node addr */
 			    if ((elapp->startup_error = re_aarp(elapp))) {
 				elapp->startup_inprogress = FALSE;
-				thread_wakeup(&elapp->startup_inprogress);
+				wakeup(&elapp->startup_inprogress);
 				dPrintf(D_M_ELAP, D_L_STARTUP_INFO, 
 					("elap_online: ack 2\n"));
 			    }
@@ -1309,7 +1344,7 @@ void ZIPwakeup(elapp, ZipError)
 		if (ZipError != ZIP_RE_AARP) {
 			elapp->startup_error = error;
 			elapp->startup_inprogress = FALSE;
-			thread_wakeup(&elapp->startup_inprogress);
+			wakeup(&elapp->startup_inprogress);
 			dPrintf(D_M_ELAP, D_L_STARTUP_INFO,
 				("elap_online: ifZipError=%d\n", error));
 		}
@@ -1342,7 +1377,7 @@ void AARPwakeup(probe_cb)
 			ddp_rem_if(elapp);
 			elapp->startup_error = EADDRNOTAVAIL;
 			elapp->startup_inprogress = FALSE;
-			thread_wakeup(&elapp->startup_inprogress);
+			wakeup(&elapp->startup_inprogress);
 			dPrintf(D_M_ELAP, D_L_STARTUP_INFO, ("elap_online: ack 2\n"));
 		} else {
 			dPrintf(D_M_ELAP,D_L_STARTUP_INFO,

@@ -52,6 +52,7 @@
  * SUCH DAMAGE.
  *
  *	@(#)in.c	8.4 (Berkeley) 1/9/95
+ * $FreeBSD: src/sys/netinet/in.c,v 1.44.2.5 2001/08/13 16:26:17 ume Exp $
  */
 
 #include <sys/param.h>
@@ -66,12 +67,8 @@
 #include <sys/kern_event.h>
 
 #include <net/if.h>
-#include <net/route.h>
-#if NGIF > 0
-#include "gif.h"
 #include <net/if_types.h>
-#include <net/if_gif.h>
-#endif
+#include <net/route.h>
 
 #include <netinet/in.h>
 #include <netinet/in_var.h>
@@ -107,6 +104,9 @@ struct in_multihead in_multihead; /* XXX BSS initialization */
 extern void arp_rtrequest();
 extern int  ether_detach_inet(struct ifnet *ifp);
 
+#if INET6
+extern int ip6_auto_on;
+#endif
 
 /*
  * Return 1 if an internet address is for a ``local'' host
@@ -239,43 +239,12 @@ in_control(so, cmd, data, ifp, p)
 	struct kev_msg        ev_msg;
 	struct kev_in_data    in_event_data;
 
-#if NGIF > 0
-        if (ifp && ifp->if_type == IFT_GIF) {
-                switch (cmd) {
-                case SIOCSIFPHYADDR:
-#if 1
-			if (p &&
-			    (error = suser(p->p_ucred, &p->p_acflag)) != 0)
-        			return(error);
-#else
-		if ((so->so_state & SS_PRIV) == 0)
-			return (EPERM);
-#endif
-                case SIOCGIFPSRCADDR:
-                case SIOCGIFPDSTADDR:
-#if NGIF > 0
-			if (strcmp(ifp->if_name, "gif") == 0)
-			    dl_tag = gif_attach_inet(ifp);
-                        return gif_ioctl(ifp, cmd, data);
-#endif
-                }
-        }
-#endif
-#if NFAITH > 0
-        if (ifp && ifp->if_type == IFT_FAITH) 
-		dl_tag = faith_attach_inet(ifp);
-#endif
 
 	switch (cmd) {
 	case SIOCALIFADDR:
 	case SIOCDLIFADDR:
-#if 1
 		if (p && (error = suser(p->p_ucred, &p->p_acflag)) != 0)
 			return error;
-#else
-		if ((so->so_state & SS_PRIV) == 0)
-			return (EPERM);
-#endif
 		/*fall through*/
 	case SIOCGLIFADDR:
 		if (!ifp)
@@ -306,13 +275,8 @@ in_control(so, cmd, data, ifp, p)
 
 	switch (cmd) {
 	case SIOCAUTOADDR:
-#if 1
 		if (p && (error = suser(p->p_ucred, &p->p_acflag)) != 0)
 			return error;
-#else
-		if ((so->so_state & SS_PRIV) == 0)
-			return (EPERM);
-#endif
 		break;
 
 	case SIOCAIFADDR:
@@ -341,13 +305,12 @@ in_control(so, cmd, data, ifp, p)
 	case SIOCSIFADDR:
 	case SIOCSIFNETMASK:
 	case SIOCSIFDSTADDR:
-
-#if ISFB31
-		if (p && (error = suser(p->p_ucred, &p->p_acflag)) != 0)
-			return error;
-#else
+#ifdef __APPLE__
 		if ((so->so_state & SS_PRIV) == 0)
 			return (EPERM);
+#else
+		if (p && (error = suser(p)) != 0)
+			return error;
 #endif
 
 		if (ifp == 0)
@@ -374,11 +337,21 @@ in_control(so, cmd, data, ifp, p)
  * Temorary code for protocol attachment XXX
  */
 			
-			if (strcmp(ifp->if_name, "en") == 0)
+			if (ifp->if_type == IFT_ETHER)
 			    dl_tag = ether_attach_inet(ifp);
 			
-			if (strcmp(ifp->if_name, "lo") == 0)
+			if (ifp->if_type == IFT_LOOP)
 			    dl_tag = lo_attach_inet(ifp);
+#if NFAITH
+			/* Is this right? */
+			if (ifp && ifp->if_type == IFT_FAITH)
+			    dl_tag = faith_attach_inet(ifp);
+#endif
+#if NGIF
+			/* Is this right? */
+			if (ifp && ifp->if_type == IFT_GIF)
+			   dl_tag = gif_attach_proto_family(ifp, PF_INET);
+#endif
 /* End of temp code */
 
 			ifa->ifa_dlt = dl_tag;
@@ -400,20 +373,20 @@ in_control(so, cmd, data, ifp, p)
 	case SIOCPROTOATTACH:
 	case SIOCPROTODETACH:
 		if (p && (error = suser(p->p_ucred, &p->p_acflag)) != 0)
-                    return error;
+			return error;
 		if (ifp == 0)
 			return (EADDRNOTAVAIL);
-                if (strcmp(ifp->if_name, "en"))
-                    return ENODEV;
-                break;
+		if (strcmp(ifp->if_name, "en"))
+			return ENODEV;
+		break;
                 
 	case SIOCSIFBRDADDR:
-#if ISFB31
-		if (p && (error = suser(p->p_ucred, &p->p_acflag)) != 0)
-			return error;
-#else
+#ifdef __APPLE__
 		if ((so->so_state & SS_PRIV) == 0)
 			return (EPERM);
+#else
+		if (p && (error = suser(p)) != 0)
+			return error;
 #endif
 		/* FALLTHROUGH */
 
@@ -548,14 +521,30 @@ in_control(so, cmd, data, ifp, p)
 
 	case SIOCPROTOATTACH:
                 ether_attach_inet(ifp);
+#if INET6
+		if (ip6_auto_on) /* FreeBSD compat mode: Acquire linklocal addresses for IPv6 for if */
+			in6_if_up(ifp);  
+#endif
                 break;
                 
 	case SIOCPROTODETACH:
                 // if an ip address is still present, refuse to detach
-                TAILQ_FOREACH(ifa, &ifp->if_addrhead, ifa_link) 
-                    if (ifa->ifa_addr->sa_family == AF_INET)
-                        return EBUSY;
-                return ether_detach_inet(ifp);
+         	TAILQ_FOREACH(ifa, &ifp->if_addrhead, ifa_link) 
+                if (ifa->ifa_addr->sa_family == AF_INET)
+                   return EBUSY;
+		error = ether_detach_inet(ifp);
+		if (error)
+			return(error);
+#if INET6
+		if (ip6_auto_on) { /* if we linked ipv6 addresses to v4, remove them now */
+			in6_purgeif(ifp);
+			error = ether_detach_inet6(ifp);
+			if (error)
+				return(error);
+		}
+#endif
+		break;
+		
 
 	case SIOCSIFNETMASK:
 		i = ifra->ifra_addr.sin_addr.s_addr;
@@ -627,7 +616,7 @@ in_control(so, cmd, data, ifp, p)
 		 * Report event.
 		 */
 
-		if (error == 0) {
+		if ((error == 0) || (error == EEXIST)) {
 		     ev_msg.vendor_code    = KEV_VENDOR_APPLE;
 		     ev_msg.kev_class      = KEV_NETWORK_CLASS;
 		     ev_msg.kev_subclass   = KEV_INET_SUBCLASS;
@@ -663,6 +652,12 @@ in_control(so, cmd, data, ifp, p)
 		return (error);
 
 	case SIOCDIFADDR:
+                error = dlil_ioctl(PF_INET, ifp, SIOCDIFADDR, (caddr_t)ia);
+                if (error == EOPNOTSUPP)
+		    error = 0;
+		if (error)
+		    return error;
+
 		ev_msg.vendor_code    = KEV_VENDOR_APPLE;
 		ev_msg.kev_class      = KEV_NETWORK_CLASS;
 		ev_msg.kev_subclass   = KEV_INET_SUBCLASS;
@@ -691,7 +686,28 @@ in_control(so, cmd, data, ifp, p)
 
 		kev_post_msg(&ev_msg);
 
+		/*
+		 * in_ifscrub kills the interface route.
+		 */
 		in_ifscrub(ifp, ia);
+#ifndef __APPLE__
+		/*
+		 * in_ifadown gets rid of all the rest of
+		 * the routes.  This is not quite the right
+		 * thing to do, but at least if we are running
+		 * a routing process they will come back.
+		 */
+		in_ifadown(&ia->ia_ifa, 1);
+		/*
+		 * XXX horrible hack to detect that we are being called
+		 * from if_detach()
+		 */
+		if (!ifnet_addrs[ifp->if_index - 1]) {
+			in_pcbpurgeif0(LIST_FIRST(ripcbinfo.listhead), ifp);
+			in_pcbpurgeif0(LIST_FIRST(udbinfo.listhead), ifp);
+		}
+#endif
+
 		/*
 		 * Protect from ipintr() traversing address list
 		 * while we're modifying it.
@@ -702,33 +718,37 @@ in_control(so, cmd, data, ifp, p)
 		TAILQ_REMOVE(&ifp->if_addrhead, ifa, ifa_link);
 		oia = ia;
 		TAILQ_REMOVE(&in_ifaddrhead, oia, ia_link);
-		IFAFREE(&oia->ia_ifa);
-                
-                /*
-                * If the interface supports multicast, and no address is left,
-                * remove the "all hosts" multicast group from that interface.
-                */
-                if (ifp->if_flags & IFF_MULTICAST) {
-                    struct in_addr addr;
-                    struct in_multi *inm;
+		ifafree(&oia->ia_ifa);
+        
+#ifdef __APPLE__
+        /*
+        * If the interface supports multicast, and no address is left,
+        * remove the "all hosts" multicast group from that interface.
+        */
+		if (ifp->if_flags & IFF_MULTICAST) {
+			struct in_addr addr;
+			struct in_multi *inm;
 
-                    TAILQ_FOREACH(ifa, &ifp->if_addrhead, ifa_link) 
-                        if (ifa->ifa_addr->sa_family == AF_INET)
-                            break;
+			TAILQ_FOREACH(ifa, &ifp->if_addrhead, ifa_link) 
+				if (ifa->ifa_addr->sa_family == AF_INET)
+					break;
 
-                    if (ifa == 0) {
-                        addr.s_addr = htonl(INADDR_ALLHOSTS_GROUP);
-                        IN_LOOKUP_MULTI(addr, ifp, inm);
-                        if (inm)
-                            in_delmulti(inm);
-                    }
-                }
+			if (ifa == 0) {
+				addr.s_addr = htonl(INADDR_ALLHOSTS_GROUP);
+				IN_LOOKUP_MULTI(addr, ifp, inm);
+				if (inm)
+					in_delmulti(inm);
+			}
+		}
+#endif
 		splx(s);
 		break;
 
+#ifdef __APPLE__
     case SIOCSETOT: {
         /*
          * Inspiration from tcp_ctloutput() and ip_ctloutput()
+         * Special ioctl for OpenTransport sockets
          */
         struct	inpcb	*inp, *cloned_inp;
         int 			error = 0;
@@ -801,23 +821,37 @@ in_control(so, cmd, data, ifp, p)
                     imo->imo_membership[i] =
                     in_addmulti(&cloned_imo->imo_membership[i]->inm_addr,
                                 cloned_imo->imo_membership[i]->inm_ifp);
+					if (imo->imo_membership[i] == NULL) {
+						error = ENOBUFS;
+						break;
+					}
+                }
+                if (i < cloned_imo->imo_num_memberships) {
+                	/* Failed, perform cleanup */
+                	for (i--; i >= 0; i--)
+                		in_delmulti(imo->imo_membership[i]);
+                	break;
                 }
             }
         }
         splx(s);
         break;
     }
+#endif /* __APPLE__ */
 
 	default:
-	     return EOPNOTSUPP;
-
+		return EOPNOTSUPP;
+	/* Darwin: dlil_ioctl called from ifioctl */
+#ifndef __APPLE__
+                return ((*ifp->if_ioctl)(ifp, cmd, data));
+#endif
 	}
 	return (0);
 }
 
 /*
  * SIOC[GAD]LIFADDR.
- *	SIOCGLIFADDR: get first address. (???)
+ *	SIOCGLIFADDR: get first address. (?!?)
  *	SIOCGLIFADDR with IFLR_PREFIX:
  *		get first address that matches the specified prefix.
  *	SIOCALIFADDR: add the specified address.
@@ -870,12 +904,7 @@ in_lifaddr_ioctl(so, cmd, data, ifp, p)
 			return EINVAL;
 		break;
 	default: /*shouldn't happen*/
-#if 0
-		panic("invalid cmd to in_lifaddr_ioctl");
-		/*NOTREACHED*/
-#else
 		return EOPNOTSUPP;
-#endif
 	}
 	if (sizeof(struct in_addr) * 8 < iflr->prefixlen)
 		return EINVAL;
@@ -1032,22 +1061,22 @@ in_ifinit(ifp, ia, sin, scrub)
 	int s = splimp(), flags = RTF_UP, error;
 	u_long      dl_tag;
 
-
-
 	oldaddr = ia->ia_addr;
 	ia->ia_addr = *sin;
 
-
+	/*
+	 * Give the interface a chance to initialize
+	 * if this is its first address,
+	 * and to validate the address if necessary.
+	 */
 	error = dlil_ioctl(PF_INET, ifp, SIOCSIFADDR, (caddr_t)ia);
 	if (error == EOPNOTSUPP)
 	     error = 0;
-
 	if (error) {
 		splx(s);
 		ia->ia_addr = oldaddr;
 		return (error);
 	}
-
 	splx(s);
 	if (scrub) {
 		ia->ia_ifa.ifa_addr = (struct sockaddr *)&oldaddr;
@@ -1092,19 +1121,22 @@ in_ifinit(ifp, ia, sin, scrub)
 	}
 	if ((error = rtinit(&(ia->ia_ifa), (int)RTM_ADD, flags)) == 0)
 		ia->ia_flags |= IFA_ROUTE;
+	/* XXX check if the subnet route points to the same interface */
+	if (error == EEXIST)
+		error = 0;
 
 	/*
 	 * If the interface supports multicast, join the "all hosts"
 	 * multicast group on that interface.
 	 */
 	if (ifp->if_flags & IFF_MULTICAST) {
-                struct in_multi *inm;
+		struct in_multi *inm;
 		struct in_addr addr;
 
 		addr.s_addr = htonl(INADDR_ALLHOSTS_GROUP);
-                IN_LOOKUP_MULTI(addr, ifp, inm);
-                if (inm == 0)
-                    in_addmulti(&addr, ifp);
+		IN_LOOKUP_MULTI(addr, ifp, inm);
+		if (inm == 0)
+			in_addmulti(&addr, ifp);
 	}
 	return (error);
 }
@@ -1133,7 +1165,7 @@ in_broadcast(in, ifp)
 	 */
 #define ia ((struct in_ifaddr *)ifa)
 	for (ifa = ifp->if_addrhead.tqh_first; ifa; 
-	     ifa = ifa->ifa_link.tqe_next) {
+		 ifa = ifa->ifa_link.tqe_next) {
 		if (ifa->ifa_addr == NULL)
 			return (0);
 		if (ifa->ifa_addr->sa_family == AF_INET &&
@@ -1187,8 +1219,10 @@ in_addmulti(ap, ifp)
 	 * If ifma->ifma_protospec is null, then if_addmulti() created
 	 * a new record.  Otherwise, we are done.
 	 */
-	if (ifma->ifma_protospec != 0)
+	if (ifma->ifma_protospec != 0) {
+		splx(s);
 		return ifma->ifma_protospec;
+	}
 
 	inm = (struct in_multi *) _MALLOC(sizeof(*inm), M_IPMADDR, M_WAITOK);
 	if (inm == NULL) {
@@ -1220,6 +1254,8 @@ in_delmulti(inm)
 {
 	struct ifmultiaddr *ifma = inm->inm_ifma;
 	int s = splnet();
+	
+	/* We intentionally do this a bit differently than BSD */
 
 	if (ifma->ifma_refcount == 1) {
 		/*
@@ -1234,6 +1270,4 @@ in_delmulti(inm)
 	/* XXX - should be separate API for when we have an ifma? */
 	if_delmulti(ifma->ifma_ifp, ifma->ifma_addr);
 	splx(s);
-
-
 }

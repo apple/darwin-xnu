@@ -35,6 +35,7 @@ extern "C" {
 #include <machine/machine_routines.h>
 #include <mach/kmod.h>
 #include <mach-o/mach_header.h>
+#include <kern/host.h>
 };
 
 #include <IOKit/IOLib.h>
@@ -283,6 +284,10 @@ OSOrderedSet * IOCatalogue::findDrivers( OSDictionary * matching,
     IOTakeLock( lock );
     kernelTables->reset();
     while ( (dict = (OSDictionary *) kernelTables->getNextObject()) ) {
+
+       /* This comparison must be done with only the keys in the
+        * "matching" dict to enable general searches.
+        */
         if ( dict->isEqualTo(matching, matching) )
             set->setObject(dict);
     }
@@ -340,7 +345,14 @@ bool IOCatalogue::addDrivers(OSArray * drivers,
 
             // Be sure not to double up on personalities.
             driver = (OSDictionary *)array->getObject(count);
-            if ( dict->isEqualTo(driver, driver) ) {
+
+           /* Unlike in other functions, this comparison must be exact!
+            * The catalogue must be able to contain personalities that
+            * are proper supersets of others.
+            * Do not compare just the properties present in one driver
+            * pesonality or the other.
+            */
+            if ( dict->isEqualTo(driver) ) {
                 array->removeObject(count);
                 break;
             }
@@ -405,6 +417,10 @@ bool IOCatalogue::removeDrivers( OSDictionary * matching,
     array->flushCollection();
     tables->reset();
     while ( (dict = (OSDictionary *)tables->getNextObject()) ) {
+
+       /* This comparison must be done with only the keys in the
+        * "matching" dict to enable general searches.
+        */
         if ( dict->isEqualTo(matching, matching) ) {
             AddNewImports( set, dict );
             continue;
@@ -444,7 +460,7 @@ bool IOCatalogue::isModuleLoaded( const char * moduleName ) const
         return false;
 
     // Is the module already loaded?
-    k_info = kmod_lookupbyname((char *)moduleName);
+    k_info = kmod_lookupbyname_locked((char *)moduleName);
     if ( !k_info ) {
         kern_return_t            ret;
 
@@ -493,6 +509,10 @@ bool IOCatalogue::isModuleLoaded( const char * moduleName ) const
         return false;
     }
 
+    if (k_info) {
+        kfree(k_info, sizeof(kmod_info_t));
+    }
+
     /* Lock wasn't taken if we get here. */
     return true;
 }
@@ -537,21 +557,28 @@ void IOCatalogue::moduleHasLoaded( const char * moduleName )
 
 IOReturn IOCatalogue::unloadModule( OSString * moduleName ) const
 {
-    kmod_info_t          * k_info;
+    kmod_info_t          * k_info = 0;
     kern_return_t          ret;
     const char           * name;
 
     ret = kIOReturnBadArgument;
     if ( moduleName ) {
         name = moduleName->getCStringNoCopy();
-        k_info = kmod_lookupbyname((char *)name);
+        k_info = kmod_lookupbyname_locked((char *)name);
         if ( k_info && (k_info->reference_count < 1) ) {
             if ( k_info->stop &&
-                 !((ret = k_info->stop(k_info, 0)) == kIOReturnSuccess) )
+                 !((ret = k_info->stop(k_info, 0)) == kIOReturnSuccess) ) {
+
+                kfree(k_info, sizeof(kmod_info_t));
                 return ret;
+           }
             
            ret = kmod_destroy(host_priv_self(), k_info->id);
         }
+    }
+ 
+    if (k_info) {
+        kfree(k_info, sizeof(kmod_info_t));
     }
 
     return ret;
@@ -560,7 +587,6 @@ IOReturn IOCatalogue::unloadModule( OSString * moduleName ) const
 static IOReturn _terminateDrivers( OSArray * array, OSDictionary * matching )
 {
     OSCollectionIterator * tables;
-    OSCollectionIterator * props;
     OSDictionary         * dict;
     OSIterator           * iter;
     OSArray              * arrayCopy;
@@ -579,12 +605,6 @@ static IOReturn _terminateDrivers( OSArray * array, OSDictionary * matching )
 
     UniqueProperties( matching );
 
-    props = OSCollectionIterator::withCollection(matching);
-    if ( !props ) {
-        iter->release();
-        return kIOReturnNoMemory;
-    }
-
     // terminate instances.
     do {
         iter->reset();
@@ -593,6 +613,10 @@ static IOReturn _terminateDrivers( OSArray * array, OSDictionary * matching )
             if ( !dict )
                 continue;
 
+           /* Terminate only for personalities that match the matching dictionary.
+            * This comparison must be done with only the keys in the
+            * "matching" dict to enable general matching.
+            */
             if ( !dict->isEqualTo(matching, matching) )
                  continue;
 
@@ -621,6 +645,12 @@ static IOReturn _terminateDrivers( OSArray * array, OSDictionary * matching )
     array->flushCollection();
     tables->reset();
     while ( (dict = (OSDictionary *)tables->getNextObject()) ) {
+
+       /* Remove from the catalogue's array any personalities
+        * that match the matching dictionary.
+        * This comparison must be done with only the keys in the
+        * "matching" dict to enable general matching.
+        */
         if ( dict->isEqualTo(matching, matching) )
             continue;
 
@@ -657,7 +687,7 @@ IOReturn IOCatalogue::terminateDriversForModule(
         return kIOReturnNoMemory;
 
     dict->setObject(kModuleKey, moduleName);
-    
+
     IOTakeLock( lock );
 
     ret = _terminateDrivers(array, dict);
@@ -689,7 +719,7 @@ IOReturn IOCatalogue::terminateDriversForModule(
 
     ret = terminateDriversForModule(name, unload);
     name->release();
-    
+
     return ret;
 }
 
@@ -710,6 +740,10 @@ bool IOCatalogue::startMatching( OSDictionary * matching )
     kernelTables->reset();
 
     while ( (dict = (OSDictionary *)kernelTables->getNextObject()) ) {
+
+       /* This comparison must be done with only the keys in the
+        * "matching" dict to enable general matching.
+        */
         if ( dict->isEqualTo(matching, matching) )
             AddNewImports(set, dict);
     }
@@ -851,6 +885,7 @@ kern_return_t IOCatalogue::removeKernelLinker(void) {
     segment = getsegbynamefromheader(
         &_mh_execute_header, "__KLD");
     if (!segment) {
+        IOLog("error removing kernel linker: can't find __KLD segment\n");
         result = KERN_FAILURE;
         goto finish;
     }
@@ -859,6 +894,7 @@ kern_return_t IOCatalogue::removeKernelLinker(void) {
     segment = getsegbynamefromheader(
         &_mh_execute_header, "__LINKEDIT");
     if (!segment) {
+        IOLog("error removing kernel linker: can't find __LINKEDIT segment\n");
         result = KERN_FAILURE;
         goto finish;
     }

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2002,2000 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -24,28 +24,5 @@
  */
 #ifndef _MACH_I386_RPC_H_
 #define _MACH_I386_RPC_H_
-
-/*
- * Just temporary until all vestiges of short-circuit can be
- * removed.
- */
-#define CAN_SHCIRCUIT(name)	(0)
-
-/*
- * Kernel machine dependent macros for mach rpc
- *
- * User args (argv) begin two words above the frame pointer (past saved ebp 
- * and return address) on the user stack. Return code is stored in register
- * ecx, by convention (must be a caller-saves register, to survive return
- * from server work function). The user space instruction pointer is eip,
- * and the user stack pointer is uesp.
- */
-#define MACH_RPC_ARGV(act)	( (char *)(USER_REGS(act)->ebp + 8) )
-#define MACH_RPC_RET(act)	( USER_REGS(act)->ecx )
-#define MACH_RPC_FUNC(act)	( USER_REGS(act)->edx )
-#define MACH_RPC_SIG(act)       ( USER_REGS(act)->edi ) 
-#define MACH_RPC_UIP(act)	( USER_REGS(act)->eip )
-#define MACH_RPC_USP(act)	( USER_REGS(act)->uesp )
-#define MACH_RPC_RETADDR(sp)    ( *((int *)sp - 1) )
 
 #endif	/* _MACH_I386_RPC_H_ */

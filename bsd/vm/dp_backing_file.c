@@ -35,7 +35,6 @@
 #include <vm/vm_map.h>
 #include <vm/vm_kern.h>
 #include <kern/host.h>
-#include <kern/parallel.h>
 #include <kern/zalloc.h>
 #include <kern/kalloc.h>
 #include <libkern/libkern.h>
@@ -96,8 +95,6 @@ macx_swapon(
 
 	if ((error = suser(p->p_ucred, &p->p_acflag)))
 		goto swapon_bailout;
-
-	unix_master();
 
 	if(default_pager_init_flag == 0) {
 		start_def_pager(NULL);
@@ -218,7 +215,6 @@ swapon_bailout:
 	if (vp) {
 		vrele(vp);
 	}
-	unix_release();
 	(void) thread_funnel_set(kernel_flock, FALSE);
 	return(error);
 }
@@ -249,8 +245,6 @@ macx_swapoff(
 
 	if ((error = suser(p->p_ucred, &p->p_acflag)))
 		goto swapoff_bailout;
-
-	unix_master();
 
 	/*
 	 * Get the vnode for the paging area.
@@ -310,7 +304,6 @@ swapoff_bailout:
 	if (vp)
 		vrele(vp);
 
-	unix_release();
 	(void) thread_funnel_set(kernel_flock, FALSE);
 	return(error);
 }

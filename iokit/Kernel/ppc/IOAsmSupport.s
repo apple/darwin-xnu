@@ -79,7 +79,7 @@ OSStatus CallTVector_NoRecover(
 
 #if 1
 	stw	r2,	FM_TOC_SAVE(r1)
-	lwz	r0,	0(r9)
+    	lwz	r0,	0(r9)
 	lwz	r2,	4(r9)
 	mtspr	ctr,	r0
 	bctr

@@ -81,6 +81,7 @@
 
 #include <sys/time.h>
 #include <kern/clock.h>
+#include <sys/user.h>
 
 #include <netinet/in.h>
 #include <netinet/tcp.h>
@@ -984,7 +985,7 @@ nfs_reply(myrep)
 		/*
 		 * Bailout asap if nfsmount struct gone (unmounted). 
 		 */
-		if (!myrep->r_nmp) {
+		if (!myrep->r_nmp || !nmp->nm_so) {
 			FSDBG(530, myrep->r_xid, myrep, nmp, -2);
 			return (ECONNABORTED);
 		}
@@ -1256,7 +1257,7 @@ kerbauth:
 	m = nfsm_rpchead(cred, nmp->nm_flag, procnum, auth_type, auth_len,
 	     auth_str, verf_len, verf_str, mrest, mrest_len, &mheadend, &xid);
 	if (xidp)
-		*xidp = xid + ((u_int64_t)nfs_xidwrap << 32);
+		*xidp = ntohl(xid) + ((u_int64_t)nfs_xidwrap << 32);
 	if (auth_str)
 		_FREE(auth_str, M_TEMP);
 
@@ -1918,12 +1919,16 @@ nfs_sigintr(nmp, rep, p)
 	register struct proc *p;
 {
 
+	struct uthread *ut;
+
+	ut = (struct uthread *)get_bsdthread_info(current_act());
+
 	if (rep && (rep->r_flags & R_SOFTTERM))
 		return (EINTR);
 	if (!(nmp->nm_flag & NFSMNT_INT))
 		return (0);
-	if (p && p->p_siglist &&
-	    (((p->p_siglist & ~p->p_sigmask) & ~p->p_sigignore) &
+	if (p && ut &&  ut->uu_siglist &&
+	    (((ut->uu_siglist & ~ut->uu_sigmask) & ~p->p_sigignore) &
 	    NFSINT_SIGMASK))
 		return (EINTR);
 	return (0);

@@ -46,6 +46,8 @@ ENTRY(sync_cache, TAG_NO_FRAME_USED)
 
 	/* Switch off data translations */
 	mfmsr	r6
+	rlwinm	r6,r6,0,MSR_FP_BIT+1,MSR_FP_BIT-1	; Force floating point off
+	rlwinm	r6,r6,0,MSR_VEC_BIT+1,MSR_VEC_BIT-1	; Force vectors off
 	rlwinm	r7,	r6,	0,	MSR_DR_BIT+1,	MSR_DR_BIT-1
 	mtmsr	r7
 	isync
@@ -114,6 +116,8 @@ ENTRY(flush_dcache, TAG_NO_FRAME_USED)
 	cmpwi	r5,	0
 	mfmsr	r6
 	beq+	0f
+	rlwinm	r6,r6,0,MSR_FP_BIT+1,MSR_FP_BIT-1	; Force floating point off
+	rlwinm	r6,r6,0,MSR_VEC_BIT+1,MSR_VEC_BIT-1	; Force vectors off
 	rlwinm	r7,	r6,	0,	MSR_DR_BIT+1,	MSR_DR_BIT-1
 	mtmsr	r7
 	isync
@@ -174,6 +178,8 @@ ENTRY(invalidate_dcache, TAG_NO_FRAME_USED)
 	cmpwi	r5,	0
 	mfmsr	r6
 	beq+	0f
+	rlwinm	r6,r6,0,MSR_FP_BIT+1,MSR_FP_BIT-1	; Force floating point off
+	rlwinm	r6,r6,0,MSR_VEC_BIT+1,MSR_VEC_BIT-1	; Force vectors off
 	rlwinm	r7,	r6,	0,	MSR_DR_BIT+1,	MSR_DR_BIT-1
 	mtmsr	r7
 	isync
@@ -232,6 +238,8 @@ ENTRY(invalidate_icache, TAG_NO_FRAME_USED)
 	cmpwi	r5,	0
 	mfmsr	r6
 	beq+	0f
+	rlwinm	r6,r6,0,MSR_FP_BIT+1,MSR_FP_BIT-1	; Force floating point off
+	rlwinm	r6,r6,0,MSR_VEC_BIT+1,MSR_VEC_BIT-1	; Force vectors off
 	rlwinm	r7,	r6,	0,	MSR_DR_BIT+1,	MSR_DR_BIT-1
 	mtmsr	r7
 	isync

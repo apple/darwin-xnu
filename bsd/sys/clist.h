@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2002 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -58,16 +58,21 @@
 #ifndef	_SYS_CLIST_H_
 #define _SYS_CLIST_H_
 
+#include <sys/appleapiopts.h>
+
+#ifdef __APPLE_API_PRIVATE
+#ifdef KERNEL
+
 struct cblock {
 	struct cblock *c_next;		/* next cblock in queue */
 	char c_quote[CBQSIZE];		/* quoted characters */
 	char c_info[CBSIZE];		/* characters */
 };
 
-#ifdef KERNEL
 extern	struct cblock *cfree, *cfreelist;
 extern	int cfreecount, nclist;
-#endif
+#endif /* KERNEL */
+#endif /* __APPLE_API_PRIVATE */
 
 #endif	/* _SYS_CLIST_H_ */
 

@@ -19,11 +19,9 @@
  * 
  * @APPLE_LICENSE_HEADER_END@
  */
+
 /*
- * Copyright (c) 1993 NeXT Computer, Inc.  All rights reserved.
- *
- * kdp_private.h -- private functions for kdp.c
- *
+ * Private functions for kdp.c
  */
 
 static boolean_t
@@ -42,6 +40,13 @@ kdp_connect(
 
 static boolean_t
 kdp_disconnect(
+    kdp_pkt_t *,
+    int *,
+    unsigned short *
+);
+
+static boolean_t
+kdp_reattach(
     kdp_pkt_t *,
     int *,
     unsigned short *
@@ -70,6 +75,13 @@ kdp_readregs(
 
 static boolean_t
 kdp_writeregs(
+    kdp_pkt_t *,
+    int *,
+    unsigned short *
+);
+
+static boolean_t
+kdp_version(
     kdp_pkt_t *,
     int *,
     unsigned short *
@@ -107,6 +119,20 @@ static boolean_t
 kdp_resumecpus(
     kdp_pkt_t *,
     int *,
+    unsigned short *
+);
+
+static boolean_t 
+kdp_breakpoint_set(
+    kdp_pkt_t *,
+    int	*,
+    unsigned short *t
+);
+
+static boolean_t
+kdp_breakpoint_remove(
+    kdp_pkt_t *,
+    int	*,
     unsigned short *
 );
 

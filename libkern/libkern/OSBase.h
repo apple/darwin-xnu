@@ -33,14 +33,6 @@
 
 #include <libkern/OSTypes.h>
 
-#if !defined(OS_INLINE)
-    #if defined(__GNUC__)
-	#define OS_INLINE static __inline__
-    #elif defined(__MWERKS__) || defined(__cplusplus)
-	#define OS_INLINE static inline
-    #endif
-#endif
-
 #include <stdint.h>
 
 __BEGIN_DECLS

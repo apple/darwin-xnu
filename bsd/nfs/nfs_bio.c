@@ -100,6 +100,7 @@ static struct buf *nfs_getcacheblk __P((struct vnode *vp, daddr_t bn, int size,
 
 extern int nfs_numasync;
 extern struct nfsstats nfsstats;
+extern int nbdwrite;
 
 /*
  * Vnode op for read using bio
@@ -848,6 +849,22 @@ nfs_getcacheblk(vp, bn, size, p, operation)
 	/*due to getblk/vm interractions, use vm page size or less values */
 	int biosize = min(vp->v_mount->mnt_stat.f_iosize, PAGE_SIZE);
 
+	if (nbdwrite > ((nbuf/4)*3) && operation == BLK_WRITE) {
+#define __BUFFERS_RECLAIMED 2
+		struct buf *tbp[__BUFFERS_RECLAIMED];
+		int i;
+
+		/* too many delayed writes, try to free up some buffers */
+		for (i = 0; i < __BUFFERS_RECLAIMED; i++)
+			tbp[i] = geteblk(512);
+
+		/* Yield to IO thread */
+		(void)tsleep((caddr_t)&nbdwrite, PCATCH, "nbdwrite", 1);
+
+		for (i = (__BUFFERS_RECLAIMED - 1); i >= 0; i--)
+			 brelse(tbp[i]);
+	}
+
 	if (nmp->nm_flag & NFSMNT_INT) {
 		bp = getblk(vp, bn, size, PCATCH, 0, operation);
 		while (bp == (struct buf *)0) {
@@ -1169,7 +1186,7 @@ nfs_doio(bp, cr, p)
 				bp->b_validend = diff;
 		    } else
 				bp->b_validend = bp->b_bcount;
-#if 1 /* USV + JOE [ */
+
 		    if (bp->b_validend < bp->b_bufsize) {
 			    /*
 			     * we're about to release a partial buffer after a
@@ -1185,7 +1202,6 @@ nfs_doio(bp, cr, p)
 			    FSDBG(258, bp->b_validend,
 			          bp->b_bufsize - bp->b_validend, 0, 2);
 		    }
-#endif /* ] USV + JOE */
 		}
 		if (p && (vp->v_flag & VTEXT) &&
 			(((nmp->nm_flag & NFSMNT_NQNFS) &&
@@ -1279,7 +1295,6 @@ nfs_doio(bp, cr, p)
 
 			CLR(bp->b_flags, B_INVAL | B_NOCACHE);
 			if (!ISSET(bp->b_flags, B_DELWRI)) {
-				extern int nbdwrite;
 				SET(bp->b_flags, B_DELWRI);
 				nbdwrite++;
 			}
@@ -1304,7 +1319,7 @@ nfs_doio(bp, cr, p)
 				np->n_flag |= NWRITEERR;
 			}
 			bp->b_dirtyoff = bp->b_dirtyend = 0;
-#if 1  /* JOE */
+
 			/*
 			 * validoff and validend represent the real data present
 			 * in this buffer if validoff is non-zero, than we have
@@ -1331,11 +1346,9 @@ nfs_doio(bp, cr, p)
 				} else
 					SET(bp->b_flags, B_INVAL);
 			}
-#endif
 		}
 
 	    } else {
-#if 1  /* JOE */
 		if (bp->b_validoff ||
 		    (bp->b_validend < bp->b_bufsize &&
 		     (off_t)bp->b_blkno * DEV_BSIZE + bp->b_validend !=
@@ -1346,7 +1359,6 @@ nfs_doio(bp, cr, p)
 			FSDBG(260, bp->b_validoff, bp->b_validend,
 			      bp->b_bufsize, bp->b_bcount);
 		}
-#endif
 		bp->b_resid = 0;
 		biodone(bp);
 		FSDBG_BOT(256, bp->b_validoff, bp->b_validend, bp->b_bufsize,

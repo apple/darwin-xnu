@@ -115,7 +115,7 @@ profile_thread(void)
 
 	if ((buf_entry = (buffer_t) prof_queue_entry) == NULLPBUF) { 
 	    assert_wait((event_t) profile_thread, THREAD_UNINT);
-	    thread_block((void (*)(void)) 0);
+	    thread_block(THREAD_CONTINUE_NULL);
 	    if (current_thread()->wait_result != THREAD_AWAKENED)
 		break;
 	} else 
@@ -201,7 +201,7 @@ send_last_sample_buf(prof_data_t pbuf)
 	thread_wakeup((event_t) profile_thread);
 	assert_wait((event_t) &buf_entry->p_wakeme, THREAD_ABORTSAFE);
 	splx(s); 
-	thread_block((void (*)(void)) 0);
+	thread_block(THREAD_CONTINUE_NULL);
     }
 }
 

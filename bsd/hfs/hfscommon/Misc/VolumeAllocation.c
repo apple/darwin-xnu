@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2001 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2002 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -230,11 +230,11 @@ OSErr BlockAllocate (
 	//
 	//	If the disk is already full, don't bother.
 	//
-	if (vcb->freeBlocks == 0) {
+	if (hfs_freeblks(VCBTOHFS(vcb), 0) == 0) {
 		err = dskFulErr;
 		goto Exit;
 	}
-	if (forceContiguous && vcb->freeBlocks < minBlocks) {
+	if (forceContiguous && hfs_freeblks(VCBTOHFS(vcb), 0) < minBlocks) {
 		err = dskFulErr;
 		goto Exit;
 	}
@@ -256,6 +256,12 @@ OSErr BlockAllocate (
 	//
 	if (forceContiguous) {
 		err = BlockAllocateContig(vcb, startingBlock, minBlocks, maxBlocks, actualStartBlock, actualNumBlocks);
+		/*
+		 * If we allocated from a new position then
+		 * also update the roving allocatior.
+		 */
+		if ((err == noErr) && (*actualStartBlock > startingBlock))
+			vcb->nextAllocation = *actualStartBlock;
 	} else {
 		/*
 		 * Scan the bitmap once, gather the N largest free extents, then
@@ -347,6 +353,8 @@ OSErr BlockDeallocate (
 	//
 	VCB_LOCK(vcb);
 	vcb->freeBlocks += numBlocks;
+	if (vcb->nextAllocation == (firstBlock + numBlocks))
+		vcb->nextAllocation -= numBlocks;
 	VCB_UNLOCK(vcb);
 	MarkVCBDirty(vcb);
 
@@ -468,7 +476,6 @@ static OSErr ReleaseBitmapBlock(
 
 	if (bp) {
 		if (dirty) {
-			bp->b_flags |= B_DIRTY;
 			bdwrite(bp);
 		} else {
 			brelse(bp);
@@ -1165,6 +1172,7 @@ static OSErr BlockFindContiguous(
 
 	stopBlock = endingBlock - minBlocks + 1;
 	currentBlock = startingBlock;
+	firstBlock = 0;
 	
 	//
 	//	Pre-read the first bitmap block.
@@ -1195,7 +1203,7 @@ static OSErr BlockFindContiguous(
 		bitMask = currentBlock & kBitsWithinWordMask;
 		if (bitMask)
 		{			
-			tempWord = *currentWord;			//	Fetch the current word only once
+			tempWord = SWAP_BE32(*currentWord);			//	Fetch the current word only once
 			bitMask = kHighBitInWordMask >> bitMask;
 			while (tempWord & bitMask)
 			{
@@ -1232,7 +1240,7 @@ static OSErr BlockFindContiguous(
 			}
 			
 			//	See if any of the bits are clear
-			if ((tempWord=*currentWord) + 1)	//	non-zero if any bits were clear
+			if ((tempWord = SWAP_BE32(*currentWord)) + 1)	//	non-zero if any bits were clear
 			{
 				//	Figure out which bit is clear
 				bitMask = kHighBitInWordMask;
@@ -1271,7 +1279,7 @@ FoundUnused:
 		bitMask = currentBlock & kBitsWithinWordMask;
 		if (bitMask)
 		{
-			tempWord = *currentWord;			//	Fetch the current word only once
+			tempWord = SWAP_BE32(*currentWord);			//	Fetch the current word only once
 			bitMask = kHighBitInWordMask >> bitMask;
 			while (bitMask && !(tempWord & bitMask))
 			{
@@ -1308,7 +1316,7 @@ FoundUnused:
 			}
 			
 			//	See if any of the bits are set
-			if ((tempWord=*currentWord) != 0)
+			if ((tempWord = SWAP_BE32(*currentWord)) != 0)
 			{
 				//	Figure out which bit is set
 				bitMask = kHighBitInWordMask;

@@ -54,6 +54,7 @@
  * SUCH DAMAGE.
  *
  *	@(#)uipc_socket2.c	8.1 (Berkeley) 6/10/93
+ * $FreeBSD: src/sys/kern/uipc_socket2.c,v 1.55.2.9 2001/07/26 18:53:02 peter Exp $
  */
 
 #include <sys/param.h>
@@ -85,8 +86,6 @@ u_long	sb_max = SB_MAX;		/* XXX should be static */
 
 static	u_long sb_efficiency = 8;	/* parameter for sbreserve() */
 
-char netcon[] = "netcon";
-
 /*
  * Procedures to manipulate state flags of socket
  * and do appropriate wakeups.  Normal sequence from the
@@ -94,7 +93,7 @@ char netcon[] = "netcon";
  * called during processing of connect() call,
  * resulting in an eventual call to soisconnected() if/when the
  * connection is established.  When the connection is torn down
- * soisdisconnecting() is called during processing of disconnect() call,   
+ * soisdisconnecting() is called during processing of disconnect() call,
  * and soisdisconnected() is called when the connection to the peer
  * is totally severed.  The semantics of these routines are such that
  * connectionless protocols can call soisconnected() and soisdisconnected()
@@ -104,14 +103,14 @@ char netcon[] = "netcon";
  * From the passive side, a socket is created with
  * two queues of sockets: so_incomp for connections in progress
  * and so_comp for connections already made and awaiting user acceptance.
- * As a protocol is preparing incoming connections, it creates a socket      
+ * As a protocol is preparing incoming connections, it creates a socket
  * structure queued on so_incomp by calling sonewconn().  When the connection
  * is established, soisconnected() is called, and transfers the
  * socket structure to so_comp, making it available to accept().
  *
- * If a socket is closed with sockets on either       
+ * If a socket is closed with sockets on either
  * so_incomp or so_comp, these sockets are dropped.
- * 
+ *
  * If higher level protocols are implemented in
  * the kernel, the wakeups done here will sometimes
  * cause software-interrupt process scheduling.
@@ -128,14 +127,15 @@ soisconnecting(so)
 
 void
 soisconnected(so)
-	register struct socket *so;
-{	register struct kextcb *kp;
-	register struct socket *head = so->so_head;
+	struct socket *so;
+{
+	struct socket *head = so->so_head;
+	struct kextcb *kp;
 
 	kp = sotokextcb(so);
-	while (kp)
-	{	if (kp->e_soif && kp->e_soif->sf_soisconnected)
-		{	if ((*kp->e_soif->sf_soisconnected)(so, kp))
+	while (kp) {
+		if (kp->e_soif && kp->e_soif->sf_soisconnected) {
+			if ((*kp->e_soif->sf_soisconnected)(so, kp))
 				return;
 		}
 		kp = kp->e_next;
@@ -151,7 +151,7 @@ soisconnected(so)
 		TAILQ_INSERT_TAIL(&head->so_comp, so, so_list);
 		so->so_state |= SS_COMP;
 		sorwakeup(head);
-		wakeup((caddr_t)&head->so_timeo);
+		wakeup_one(&head->so_timeo);
 	} else {
 		postevent(so,0,EV_WCONN);
 		wakeup((caddr_t)&so->so_timeo);
@@ -163,12 +163,13 @@ soisconnected(so)
 void
 soisdisconnecting(so)
 	register struct socket *so;
-{	register struct kextcb *kp;
+{
+	register struct kextcb *kp;
 
 	kp = sotokextcb(so);
-	while (kp)
-	{	if (kp->e_soif && kp->e_soif->sf_soisdisconnecting)
-		{	if ((*kp->e_soif->sf_soisdisconnecting)(so, kp))
+	while (kp) {
+		if (kp->e_soif && kp->e_soif->sf_soisdisconnecting) {
+			if ((*kp->e_soif->sf_soisdisconnecting)(so, kp))
 				return;
 		}
 		kp = kp->e_next;
@@ -184,19 +185,20 @@ soisdisconnecting(so)
 void
 soisdisconnected(so)
 	register struct socket *so;
-{	register struct kextcb *kp;
+{
+	register struct kextcb *kp;
 
 	kp = sotokextcb(so);
-	while (kp)
-	{	if (kp->e_soif && kp->e_soif->sf_soisdisconnected)
-		{	if ((*kp->e_soif->sf_soisdisconnected)(so, kp))
+	while (kp) {
+		if (kp->e_soif && kp->e_soif->sf_soisdisconnected) {
+			if ((*kp->e_soif->sf_soisdisconnected)(so, kp))
 				return;
 		}
 		kp = kp->e_next;
 	}
 
 	so->so_state &= ~(SS_ISCONNECTING|SS_ISCONNECTED|SS_ISDISCONNECTING);
-	so->so_state |= (SS_CANTRCVMORE|SS_CANTSENDMORE);
+	so->so_state |= (SS_CANTRCVMORE|SS_CANTSENDMORE|SS_ISDISCONNECTED);
 	wakeup((caddr_t)&so->so_timeo);
 	sowwakeup(so);
 	sorwakeup(so);
@@ -258,7 +260,8 @@ struct socket *
 sonewconn(head, connstatus)
 	register struct socket *head;
 	int connstatus;
-{	int error = 0;
+{
+	int error = 0;
 	register struct socket *so;
 	register struct kextcb *kp;
 
@@ -267,14 +270,10 @@ sonewconn(head, connstatus)
 	so = soalloc(1, head->so_proto->pr_domain->dom_family, head->so_type);
 	if (so == NULL)
 		return ((struct socket *)0);
-        
-	kp = sotokextcb(so);
-	while (kp)
-	{	if (kp->e_soif && kp->e_soif->sf_sonewconn1)
-		{	if ((*kp->e_soif->sf_sonewconn1)(so, connstatus, kp))
-				return;
-		}
-		kp = kp->e_next;
+	/* check if head was closed during the soalloc */
+	if (head->so_proto == NULL) {
+	  sodealloc(so);
+	  return ((struct socket *)0);
 	}
 
 	so->so_head = head;
@@ -286,18 +285,39 @@ sonewconn(head, connstatus)
 	so->so_timeo = head->so_timeo;
 	so->so_pgid  = head->so_pgid;
 	so->so_uid = head->so_uid;
-	so->so_rcv.sb_flags |= SB_RECV;	/* XXX */
 
-	(void) soreserve(so, head->so_snd.sb_hiwat, head->so_rcv.sb_hiwat);
-
+	/* Attach socket filters for this protocol */
 	if (so->so_proto->pr_sfilter.tqh_first)
 		error = sfilter_init(so);
-	if (error == 0 && (*so->so_proto->pr_usrreqs->pru_attach)(so, 0, NULL)) {
+	if (error != 0) {
+		sodealloc(so);
+		return ((struct socket *)0);
+	}
+
+	/* Call socket filters' sonewconn1 function if set */
+	kp = sotokextcb(so);
+	while (kp) {
+		if (kp->e_soif && kp->e_soif->sf_sonewconn) {
+			error = (int)(*kp->e_soif->sf_sonewconn)(so, connstatus, kp);
+			if (error == EJUSTRETURN) {
+				return so;
+			} else if (error != 0) {
+				sodealloc(so);
+				return NULL;
+			}
+		}
+		kp = kp->e_next;
+	}
+
+	if (soreserve(so, head->so_snd.sb_hiwat, head->so_rcv.sb_hiwat) ||
+	    (*so->so_proto->pr_usrreqs->pru_attach)(so, 0, NULL)) {
 		sfilter_term(so);
 		sodealloc(so);
 		return ((struct socket *)0);
 	}
+#ifdef __APPLE__
 	so->so_proto->pr_domain->dom_refs++;
+#endif
 
 	if (connstatus) {
 		TAILQ_INSERT_TAIL(&head->so_comp, so, so_list);
@@ -313,8 +333,10 @@ sonewconn(head, connstatus)
 		wakeup((caddr_t)&head->so_timeo);
 		so->so_state |= connstatus;
 	}
+#ifdef __APPLE__
 	so->so_rcv.sb_so = so->so_snd.sb_so = so;
 	TAILQ_INIT(&so->so_evlist);
+#endif
 	return (so);
 }
 
@@ -331,12 +353,13 @@ sonewconn(head, connstatus)
 void
 socantsendmore(so)
 	struct socket *so;
-{	register struct kextcb *kp;
-
+{
+	register struct kextcb *kp;
+	
 	kp = sotokextcb(so);
-	while (kp)
-	{	if (kp->e_soif && kp->e_soif->sf_socantsendmore)
-		{	if ((*kp->e_soif->sf_socantsendmore)(so, kp))
+	while (kp) {
+		if (kp->e_soif && kp->e_soif->sf_socantsendmore) {
+			if ((*kp->e_soif->sf_socantsendmore)(so, kp))
 				return;
 		}
 		kp = kp->e_next;
@@ -350,12 +373,13 @@ socantsendmore(so)
 void
 socantrcvmore(so)
 	struct socket *so;
-{	register struct kextcb *kp;
+{
+	register struct kextcb *kp;
 
 	kp = sotokextcb(so);
-	while (kp)
-	{	if (kp->e_soif && kp->e_soif->sf_socantrcvmore)
-		{	if ((*kp->e_soif->sf_socantrcvmore)(so, kp))
+	while (kp) {
+		if (kp->e_soif && kp->e_soif->sf_socantrcvmore) {
+			if ((*kp->e_soif->sf_socantrcvmore)(so, kp))
 				return;
 		}
 		kp = kp->e_next;
@@ -413,13 +437,10 @@ sowakeup(so, sb)
 	register struct sockbuf *sb;
 {
 	struct proc *p = current_proc();
-
-
-
-
+	/* We clear the flag before calling selwakeup. */
+	/* BSD calls selwakeup then sets the flag */
 	sb->sb_flags &= ~SB_SEL;
 	selwakeup(&sb->sb_sel);
-
 	if (sb->sb_flags & SB_WAIT) {
 		sb->sb_flags &= ~SB_WAIT;
 		wakeup((caddr_t)&sb->sb_cc);
@@ -430,7 +451,6 @@ sowakeup(so, sb)
 		else if (so->so_pgid > 0 && (p = pfind(so->so_pgid)) != 0)
 			psignal(p, SIGIO);
 	}
-
 	if (sb->sb_flags & SB_UPCALL)
 		(*so->so_upcall)(so, so->so_upcallarg, M_DONTWAIT);
 }
@@ -475,9 +495,9 @@ soreserve(so, sndcc, rcvcc)
 	register struct kextcb *kp;
 
 	kp = sotokextcb(so);
-	while (kp)
-	{	if (kp->e_soif && kp->e_soif->sf_soreserve)
-		{	if ((*kp->e_soif->sf_soreserve)(so, sndcc, rcvcc, kp))
+	while (kp) {
+		if (kp->e_soif && kp->e_soif->sf_soreserve) {
+			if ((*kp->e_soif->sf_soreserve)(so, sndcc, rcvcc, kp))
 				return;
 		}
 		kp = kp->e_next;
@@ -495,7 +515,9 @@ soreserve(so, sndcc, rcvcc)
 		so->so_snd.sb_lowat = so->so_snd.sb_hiwat;
 	return (0);
 bad2:
+#ifdef __APPLE__
 	selthreadclear(&so->so_snd.sb_sel);
+#endif
 	sbrelease(&so->so_snd);
 bad:
 	return (ENOBUFS);
@@ -530,15 +552,9 @@ sbrelease(sb)
 {
 
 	sbflush(sb);
-	sb->sb_hiwat = sb->sb_mbmax = 0;
-#if 0
-	/* this is getting called with bzeroed sb in sorflush */
-	{
-		int oldpri = splimp();
-		selthreadclear(&sb->sb_sel);
-		splx(oldpri);
-	}
-#endif
+	sb->sb_hiwat = 0;
+	sb->sb_mbmax = 0;
+	
 }
 
 /*
@@ -576,7 +592,8 @@ void
 sbappend(sb, m)
 	struct sockbuf *sb;
 	struct mbuf *m;
-{	register struct kextcb *kp;
+{
+	struct kextcb *kp;
 	register struct mbuf *n;
 
 
@@ -585,15 +602,15 @@ sbappend(sb, m)
 	if (m == 0)
 		return;
 	kp = sotokextcb(sbtoso(sb));
-	while (kp)
-	{	if (kp->e_sout && kp->e_sout->su_sbappend)
-		{	if ((*kp->e_sout->su_sbappend)(sb, m, kp))
+	while (kp) {
+		if (kp->e_sout && kp->e_sout->su_sbappend) {
+			if ((*kp->e_sout->su_sbappend)(sb, m, kp))
 				return;
 		}
 		kp = kp->e_next;
 	}
-
-	if (n = sb->sb_mb) {
+	n = sb->sb_mb;
+	if (n) {
 		while (n->m_nextpkt)
 			n = n->m_nextpkt;
 		do {
@@ -620,18 +637,24 @@ sbcheck(sb)
 	for (m = sb->sb_mb; m; m = n) {
 	    n = m->m_nextpkt;
 	    for (; m; m = m->m_next) {
-		len += m->m_len;
-		mbcnt += MSIZE;
-		if (m->m_flags & M_EXT) /*XXX*/ /* pretty sure this is bogus */
-			mbcnt += m->m_ext.ext_size;
-		if (m->m_nextpkt)
-			panic("sbcheck nextpkt");
+                len += m->m_len;
+                mbcnt += MSIZE;
+                if (m->m_flags & M_EXT) /*XXX*/ /* pretty sure this is bogus */
+                    mbcnt += m->m_ext.ext_size;
+            }
 	}
-	if (len != sb->sb_cc || mbcnt != sb->sb_mbcnt) {
-		printf("cc %ld != %ld || mbcnt %ld != %ld\n", len, sb->sb_cc,
-		    mbcnt, sb->sb_mbcnt);
-		panic("sbcheck");
-	}
+#ifndef __APPLE__
+        if (len != sb->sb_cc || mbcnt != sb->sb_mbcnt) {
+                printf("cc %ld != %ld || mbcnt %ld != %ld\n", len, sb->sb_cc,
+                    mbcnt, sb->sb_mbcnt);
+                panic("sbcheck");
+        }
+#else
+	if (len != sb->sb_cc)
+	    printf("sbcheck len %ld != sb_cc %ld\n", len, sb->sb_cc);
+	if (mbcnt != sb->sb_mbcnt)
+	    printf("sbcheck mbcnt %ld != sb_mbcnt %ld\n", mbcnt, sb->sb_mbcnt);
+#endif
 }
 #endif
 
@@ -646,7 +669,7 @@ sbappendrecord(sb, m0)
 {
 	register struct mbuf *m;
 	register struct kextcb *kp;
-    
+
 	if (m0 == 0)
 		return;
         
@@ -867,8 +890,12 @@ sbcompress(sb, m, n)
 			m = m_free(m);
 			continue;
 		}
-		if (n && (n->m_flags & (M_EXT | M_EOR)) == 0 &&
-		    (n->m_data + n->m_len + m->m_len) < &n->m_dat[MLEN] &&
+		if (n && (n->m_flags & M_EOR) == 0 &&
+#ifndef __APPLE__
+		    M_WRITABLE(n) &&
+#endif
+		    m->m_len <= MCLBYTES / 4 && /* XXX: Don't copy too much */
+		    m->m_len <= M_TRAILINGSPACE(n) &&
 		    n->m_type == m->m_type) {
 			bcopy(mtod(m, caddr_t), mtod(n, caddr_t) + n->m_len,
 			    (unsigned)m->m_len);
@@ -907,18 +934,25 @@ sbflush(sb)
 	register struct kextcb *kp;
 
 	kp = sotokextcb(sbtoso(sb));
-	while (kp)
-	{	if (kp->e_sout && kp->e_sout->su_sbflush)
-		{	if ((*kp->e_sout->su_sbflush)(sb, kp))
+	while (kp) {
+		if (kp->e_sout && kp->e_sout->su_sbflush) {
+			if ((*kp->e_sout->su_sbflush)(sb, kp))
 				return;
 		}
 		kp = kp->e_next;
 	}
 
 	if (sb->sb_flags & SB_LOCK)
-		panic("sbflush: locked");
-	while (sb->sb_mbcnt && sb->sb_cc)
+		sb_lock(sb);
+	while (sb->sb_mbcnt) {
+		/*
+		 * Don't call sbdrop(sb, 0) if the leading mbuf is non-empty:
+		 * we would loop forever. Panic instead.
+		 */
+		if (!sb->sb_cc && (sb->sb_mb == NULL || sb->sb_mb->m_len))
+			break;
 		sbdrop(sb, (int)sb->sb_cc);
+	}
 	if (sb->sb_cc || sb->sb_mb || sb->sb_mbcnt)
 		panic("sbflush: cc %ld || mb %p || mbcnt %ld", sb->sb_cc, (void *)sb->sb_mb, sb->sb_mbcnt);
 	postevent(0, sb, EV_RWBYTES);
@@ -926,6 +960,14 @@ sbflush(sb)
 
 /*
  * Drop data from (the front of) a sockbuf.
+ * use m_freem_list to free the mbuf structures
+ * under a single lock... this is done by pruning
+ * the top of the tree from the body by keeping track
+ * of where we get to in the tree and then zeroing the
+ * two pertinent pointers m_nextpkt and m_next
+ * the socket buffer is then updated to point at the new
+ * top of the tree and the pruned area is released via
+ * m_freem_list.
  */
 void
 sbdrop(sb, len)
@@ -939,9 +981,9 @@ sbdrop(sb, len)
 	KERNEL_DEBUG((DBG_FNC_SBDROP | DBG_FUNC_START), sb, len, 0, 0, 0);
 
 	kp = sotokextcb(sbtoso(sb));
-	while (kp)
-	{	if (kp->e_sout && kp->e_sout->su_sbdrop)
-		{	if ((*kp->e_sout->su_sbdrop)(sb, len, kp))
+	while (kp) {
+		if (kp->e_sout && kp->e_sout->su_sbdrop) {
+			if ((*kp->e_sout->su_sbdrop)(sb, len, kp))
 				return;
 		}
 		kp = kp->e_next;
@@ -952,11 +994,23 @@ sbdrop(sb, len)
 
 	while (len > 0) {
 		if (m == 0) {
-			if (next == 0)
-				panic("sbdrop");
-			m = last = next;
-			next = m->m_nextpkt;
-			continue;
+		  if (next == 0) {
+		    /* temporarily replacing this panic with printf because
+		     * it occurs occasionally when closing a socket when there
+		     * is no harm in ignoring it.  This problem will be investigated
+		     * further.
+		     */
+		    /* panic("sbdrop"); */
+		    printf("sbdrop - count not zero\n");
+		    len = 0;
+		    /* zero the counts. if we have no mbufs, we have no data (PR-2986815) */
+		    sb->sb_cc = 0;
+		    sb->sb_mbcnt = 0;
+		    break;
+		  }
+		  m = last = next;
+		  next = m->m_nextpkt;
+		  continue;
 		}
 		if (m->m_len > len) {
 			m->m_len -= len;
@@ -1004,9 +1058,9 @@ sbdroprecord(sb)
 	register struct kextcb *kp;
 
 	kp = sotokextcb(sbtoso(sb));
-	while (kp)
-	{	if (kp->e_sout && kp->e_sout->su_sbdroprecord)
-		{	if ((*kp->e_sout->su_sbdroprecord)(sb, kp))
+	while (kp) {
+		if (kp->e_sout && kp->e_sout->su_sbdroprecord) {
+			if ((*kp->e_sout->su_sbdroprecord)(sb, kp))
 				return;
 		}
 		kp = kp->e_next;
@@ -1018,7 +1072,8 @@ sbdroprecord(sb)
 		do {
 			sbfree(sb, m);
 			MFREE(m, mn);
-		} while (m = mn);
+			m = mn;
+		} while (m);
 	}
 	postevent(0, sb, EV_RWBYTES);
 }
@@ -1036,14 +1091,15 @@ sbcreatecontrol(p, size, type, level)
 	register struct cmsghdr *cp;
 	struct mbuf *m;
 
+	if (CMSG_SPACE((u_int)size) > MLEN)
+		return ((struct mbuf *) NULL);
 	if ((m = m_get(M_DONTWAIT, MT_CONTROL)) == NULL)
 		return ((struct mbuf *) NULL);
 	cp = mtod(m, struct cmsghdr *);
 	/* XXX check size? */
 	(void)memcpy(CMSG_DATA(cp), p, size);
-	size += sizeof(*cp);
-	m->m_len = size;
-	cp->cmsg_len = size;
+	m->m_len = CMSG_SPACE(size);
+	cp->cmsg_len = CMSG_LEN(size);
 	cp->cmsg_level = level;
 	cp->cmsg_type = type;
 	return (m);
@@ -1207,6 +1263,10 @@ int	pru_sopoll_notsupp(struct socket *so, int events,
 }
 
 
+#ifdef __APPLE__
+/*
+ * The following are macros on BSD and functions on Darwin
+ */
 
 /*
  * Do we need to notify the other side when I/O is possible?
@@ -1317,6 +1377,7 @@ sowwakeup(struct socket * so)
   if (sb_notify(&so->so_snd)) 
 	sowakeup(so, &so->so_snd); 
 }
+#endif __APPLE__
 
 /*
  * Make a copy of a sockaddr in a malloced buffer of type M_SONAME.
@@ -1389,16 +1450,16 @@ sbtoxsockbuf(struct sockbuf *sb, struct xsockbuf *xsb)
  * Here is the definition of some of the basic objects in the kern.ipc
  * branch of the MIB.
  */
-
-
 SYSCTL_NODE(_kern, KERN_IPC, ipc, CTLFLAG_RW, 0, "IPC");
 
 /* This takes the place of kern.maxsockbuf, which moved to kern.ipc. */
 static int dummy;
 SYSCTL_INT(_kern, KERN_DUMMY, dummy, CTLFLAG_RW, &dummy, 0, "");
 
-SYSCTL_INT(_kern_ipc, KIPC_MAXSOCKBUF, maxsockbuf, CTLFLAG_RW, &sb_max, 0, "");
-SYSCTL_INT(_kern_ipc, OID_AUTO, maxsockets, CTLFLAG_RD, &maxsockets, 0, "");
+SYSCTL_INT(_kern_ipc, KIPC_MAXSOCKBUF, maxsockbuf, CTLFLAG_RW, 
+    &sb_max, 0, "Maximum socket buffer size");
+SYSCTL_INT(_kern_ipc, OID_AUTO, maxsockets, CTLFLAG_RD, 
+    &maxsockets, 0, "Maximum number of sockets avaliable");
 SYSCTL_INT(_kern_ipc, KIPC_SOCKBUF_WASTE, sockbuf_waste_factor, CTLFLAG_RW,
 	   &sb_efficiency, 0, "");
 SYSCTL_INT(_kern_ipc, KIPC_NMBCLUSTERS, nmbclusters, CTLFLAG_RD, &nmbclusters, 0, "");

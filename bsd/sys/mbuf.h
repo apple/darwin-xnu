@@ -72,6 +72,7 @@
 #ifndef	_SYS_MBUF_H_
 #define	_SYS_MBUF_H_
 
+#include <sys/appleapiopts.h>
 #include <sys/lock.h>
 
 /*
@@ -82,6 +83,7 @@
  * at least MINCLSIZE of data must be stored.
  */
 
+#ifdef __APPLE_API_UNSTABLE
 #define	MLEN		(MSIZE - sizeof(struct m_hdr))	/* normal data len */
 #define	MHLEN		(MLEN - sizeof(struct pkthdr))	/* data len w/pkthdr */
 
@@ -90,7 +92,6 @@
 
 #define NMBPCL		(sizeof(union mcluster) / sizeof(struct mbuf))
 
-
 /*
  * Macros for type conversion
  * mtod(m,t) -	convert mbuf pointer to data pointer of correct type
@@ -98,13 +99,13 @@
  * mtocl(x) -	convert pointer within cluster to cluster index #
  * cltom(x) -	convert cluster # to ptr to beginning of cluster
  */
-#define mtod(m,t)	((t)((m)->m_data))
-#define	dtom(x)		((struct mbuf *)((u_long)(x) & ~(MSIZE-1)))
-#define	mtocl(x)	((union mcluster *)(x) - (union mcluster *)mbutl)
-#define	cltom(x)	((union mcluster *)(mbutl + (x)))
+#define mtod(m,t)       ((t)m_mtod(m))
+#define dtom(x)         m_dtom(x)
+#define mtocl(x)        m_mtocl(x)
+#define cltom(x)        m_cltom(x)
 
-#define MCLREF(p)	(++mclrefcnt[mtocl(p)])
-#define MCLUNREF(p)	(--mclrefcnt[mtocl(p)] == 0)
+#define MCLREF(p)       m_mclref(p)
+#define MCLUNREF(p)     m_mclunref(p)
 
 /* header at beginning of each mbuf: */
 struct m_hdr {
@@ -174,23 +175,21 @@ struct mbuf {
 #define	M_PKTHDR	0x0002	/* start of record */
 #define	M_EOR		0x0004	/* end of record */
 #define	M_PROTO1	0x0008	/* protocol-specific */
-
-#define	M_MIP6TUNNEL	0x0010	/* MIP6 temporary use */
+#define	M_PROTO2	0x0010	/* protocol-specific */
+#define	M_PROTO3	0x0020	/* protocol-specific */
+#define	M_PROTO4	0x0040	/* protocol-specific */
+#define	M_PROTO5	0x0080	/* protocol-specific */
 
 /* mbuf pkthdr flags, also in m_flags */
 #define	M_BCAST		0x0100	/* send/received as link-level broadcast */
 #define	M_MCAST		0x0200	/* send/received as link-level multicast */
-#define M_FRAG		0x0400	/* packet is a fragment of a larger packet */
-#define M_ANYCAST6	0x0800  /* received as IPv6 anycast */
-
-/* mbuf pkthdr flags, also in m_flags */
-#define M_AUTHIPHDR	0x1000	/* data origin authentication for IP header */
-#define M_DECRYPTED	0x2000	/* confidentiality */
-#define M_LOOP		0x4000	/* for Mbuf statistics */
-#define M_AUTHIPDGM	0x8000	/* data origin authentication */
+#define	M_FRAG		0x0400	/* packet is a fragment of a larger packet */
+#define	M_FIRSTFRAG	0x0800	/* packet is first fragment */
+#define	M_LASTFRAG	0x1000	/* packet is last fragment */
 
 /* flags copied when copying m_pkthdr */
-#define	M_COPYFLAGS	(M_PKTHDR|M_EOR|M_BCAST|M_MCAST|M_FRAG|M_ANYCAST6|M_AUTHIPHDR|M_DECRYPTED|M_LOOP|M_AUTHIPDGM)
+#define	M_COPYFLAGS	(M_PKTHDR|M_EOR|M_PROTO1|M_PROTO1|M_PROTO2|M_PROTO3 | \
+			    M_PROTO4|M_PROTO5|M_BCAST|M_MCAST|M_FRAG)
 
 /* flags indicating hw checksum support and sw checksum requirements [freebsd4.1]*/
 #define CSUM_IP                 0x0001          /* will csum IP */
@@ -234,6 +233,8 @@ struct mbuf {
 #define	M_DONTWAIT	M_NOWAIT
 #define	M_WAIT		M_WAITOK
 
+#ifdef __APPLE_API_PRIVATE 
+
 /*
  * mbuf utility macros:
  *
@@ -249,6 +250,7 @@ decl_simple_lock_data(, mbuf_slock);
 #define MBUF_UNLOCK() usimple_unlock(&mbuf_slock);
 #define MBUF_LOCKINIT() simple_lock_init(&mbuf_slock);
 
+#endif /* __APPLE_API_PRIVATE */
 
 /*
  * mbuf allocation/deallocation macros:
@@ -262,56 +264,20 @@ decl_simple_lock_data(, mbuf_slock);
  */
 
 #if 1
-#define MCHECK(m) if ((m)->m_type != MT_FREE) panic("mget MCHECK: m_type=%x m=%x", m->m_type, m)
+#define MCHECK(m) m_mcheck(m)
 #else
 #define MCHECK(m)
 #endif
 
+#ifdef __APPLE_API_PRIVATE
 extern struct mbuf *mfree;				/* mbuf free list */
 extern simple_lock_data_t   mbuf_slock;
+#endif /* __APPLE_API_PRIVATE */
 
-#define _MINTGET(m, type) { 						\
-	MBUF_LOCK();							\
-	if (((m) = mfree) != 0) {					\
-		MCHECK(m);								\
-		++mclrefcnt[mtocl(m)]; 					\
-		mbstat.m_mtypes[MT_FREE]--;				\
-		mbstat.m_mtypes[type]++;				\
-		mfree = (m)->m_next;					\
-	}								\
-	MBUF_UNLOCK();							\
-}
-	
-#define	MGET(m, how, type) {						\
-	_MINTGET(m, type);						\
-	if (m) { 							\
-		(m)->m_next = (m)->m_nextpkt = 0; 			\
-		(m)->m_len = 0;						\
-		(m)->m_type = (type); 					\
-		(m)->m_data = (m)->m_dat; 				\
-		(m)->m_flags = 0; 					\
-	} else 								\
-		(m) = m_retry((how), (type)); 				\
-}
 
-#define	MGETHDR(m, how, type) { 					\
-	_MINTGET(m, type);						\
-	if (m) { 							\
-		(m)->m_next = (m)->m_nextpkt = 0; 			\
-		(m)->m_type = (type); 					\
-		(m)->m_data = (m)->m_pktdat; 				\
-		(m)->m_flags = M_PKTHDR; 				\
-		(m)->m_pkthdr.len = 0;					\
-		(m)->m_pkthdr.rcvif = NULL; 				\
-		(m)->m_pkthdr.header = NULL; 				\
-		(m)->m_pkthdr.csum_flags = 0; 				\
-		(m)->m_pkthdr.csum_data = 0; 				\
-		(m)->m_pkthdr.aux = (struct mbuf *)NULL; 		\
-		(m)->m_pkthdr.reserved1 = NULL; 			\
-		(m)->m_pkthdr.reserved2 = NULL; 			\
-	} else 								\
-		(m) = m_retryhdr((how), (type)); 			\
-}
+#define	MGET(m, how, type) ((m) = m_get((how), (type)))
+
+#define	MGETHDR(m, how, type)	((m) = m_gethdr((how), (type)))
 
 /*
  * Mbuf cluster macros.
@@ -330,40 +296,13 @@ union mcluster {
 	char	mcl_buf[MCLBYTES];
 };
 
-#define	MCLALLOC(p, how) {							\
-	(void)m_clalloc(1, (how)); 						\
-	if (((p) = (caddr_t)mclfree)) { 					\
-		++mclrefcnt[mtocl(p)]; 						\
-		mbstat.m_clfree--; 							\
-		mclfree = ((union mcluster *)(p))->mcl_next; 		\
-	} 								\
-	MBUF_UNLOCK(); 							\
-}
+#define	MCLALLOC(p, how)	((p) = m_mclalloc(how))
 
-#define	MCLGET(m, how) { 						\
-	MCLALLOC((m)->m_ext.ext_buf, (how)); 				\
-	if ((m)->m_ext.ext_buf) { 					\
-		(m)->m_data = (m)->m_ext.ext_buf; 			\
-		(m)->m_flags |= M_EXT; 					\
-		(m)->m_ext.ext_size = MCLBYTES; 			\
-		(m)->m_ext.ext_free = 0; 				\
-		(m)->m_ext.ext_refs.forward = (m)->m_ext.ext_refs.backward = \
-			&(m)->m_ext.ext_refs; \
-	} 								\
-}
+#define	MCLFREE(p)	m_mclfree(p)
 
-#define	MCLFREE(p) {							\
-	MBUF_LOCK(); 							\
-	if (--mclrefcnt[mtocl(p)] == 0) { 				\
-		((union mcluster *)(p))->mcl_next = mclfree; 		\
-		mclfree = (union mcluster *)(p); 			\
-		mbstat.m_clfree++; 					\
-	} 								\
-	MBUF_UNLOCK(); 							\
-}
+#define	MCLGET(m, how) 	((m) = m_mclget(m, how))
 
-#define MCLHASREFERENCE(m) \
-	((m)->m_ext.ext_refs.forward != &((m)->m_ext.ext_refs))
+#define MCLHASREFERENCE(m) m_mclhasreference(m)
 
 /*
  * MFREE(struct mbuf *m, struct mbuf *n)
@@ -371,25 +310,20 @@ union mcluster {
  * Place the successor, if any, in n.
  */
 
-#define	MFREE(m, n) (n) = m_free(m)
+#define	MFREE(m, n) ((n) = m_free(m))
 
 /*
  * Copy mbuf pkthdr from from to to.
  * from must have M_PKTHDR set, and to must be empty.
  * aux pointer will be moved to `to'.
  */
-#define	M_COPY_PKTHDR(to, from) { \
-	(to)->m_pkthdr = (from)->m_pkthdr; \
-	(from)->m_pkthdr.aux = (struct mbuf *)NULL; \
-	(to)->m_flags = (from)->m_flags & M_COPYFLAGS; \
-	(to)->m_data = (to)->m_pktdat; \
-}
+#define	M_COPY_PKTHDR(to, from)		m_copy_pkthdr(to, from)
 
 /*
  * Set the m_data pointer of a newly-allocated mbuf (m_get/MGET) to place
  * an object of the specified size at the end of the mbuf, longword aligned.
  */
-#define	M_ALIGN(m, len) 						\
+#define	M_ALIGN(m, len)				\
 	{ (m)->m_data += (MLEN - (len)) &~ (sizeof(long) - 1); }
 /*
  * As above, for mbufs allocated with m_gethdr/MGETHDR
@@ -403,7 +337,6 @@ union mcluster {
  * before the current start of data in an mbuf.
  * Subroutine - data not available if certain references.
  */
-int m_leadingspace(struct mbuf *);
 #define	M_LEADINGSPACE(m)	m_leadingspace(m)
 
 /*
@@ -411,7 +344,6 @@ int m_leadingspace(struct mbuf *);
  * after the end of data in an mbuf.
  * Subroutine - data not available if certain references.
  */
-int m_trailingspace(struct mbuf *);
 #define	M_TRAILINGSPACE(m)	m_trailingspace(m)
 
 /*
@@ -420,24 +352,10 @@ int m_trailingspace(struct mbuf *);
  * If how is M_DONTWAIT and allocation fails, the original mbuf chain
  * is freed and m is set to NULL.
  */
-#define	M_PREPEND(m, plen, how) { 					\
-	if (M_LEADINGSPACE(m) >= (plen)) { 				\
-		(m)->m_data -= (plen); 					\
-		(m)->m_len += (plen); 					\
-	} else 								\
-		(m) = m_prepend((m), (plen), (how)); 			\
-	if ((m) && (m)->m_flags & M_PKTHDR) 				\
-		(m)->m_pkthdr.len += (plen); 				\
-}
+#define	M_PREPEND(m, plen, how) 	((m) = m_prepend_2((m), (plen), (how)))
 
 /* change mbuf to new type */
-#define MCHTYPE(m, t) { 						\
-	MBUF_LOCK();							\
-	mbstat.m_mtypes[(m)->m_type]--;					\
-	mbstat.m_mtypes[t]++; 						\
-	(m)->m_type = t;						\
-	MBUF_UNLOCK();							\
-}
+#define MCHTYPE(m, t) 		m_mchtype(m, t)
 
 /* length to m_copy to copy all */
 #define	M_COPYALL	1000000000
@@ -488,12 +406,14 @@ extern int	max_hdr;		/* largest link+protocol header */
 extern int	max_datalen;		/* MHLEN - max_hdr */
 
 struct	mbuf *m_copym __P((struct mbuf *, int, int, int));
+struct	mbuf *m_split __P((struct mbuf *, int, int));
 struct	mbuf *m_free __P((struct mbuf *));
 struct	mbuf *m_get __P((int, int));
 struct	mbuf *m_getpacket __P((void));
 struct	mbuf *m_getclr __P((int, int));
 struct	mbuf *m_gethdr __P((int, int));
 struct	mbuf *m_prepend __P((struct mbuf *, int, int));
+struct  mbuf *m_prepend_2 __P((struct mbuf *, int, int));
 struct	mbuf *m_pullup __P((struct mbuf *, int));
 struct	mbuf *m_retry __P((int, int));
 struct	mbuf *m_retryhdr __P((int, int));
@@ -503,8 +423,32 @@ void m_freem __P((struct mbuf *));
 int m_freem_list __P((struct mbuf *));
 struct	mbuf *m_devget __P((char *, int, int, struct ifnet *, void (*)()));
 char   *mcl_to_paddr __P((char *));
+struct mbuf *m_pulldown __P((struct mbuf*, int, int, int*));
 struct mbuf *m_aux_add __P((struct mbuf *, int, int));
 struct mbuf *m_aux_find __P((struct mbuf *, int, int));
 void m_aux_delete __P((struct mbuf *, struct mbuf *));
+
+struct mbuf *m_mclget __P((struct mbuf *, int));
+caddr_t m_mclalloc __P((int));
+void m_mclfree __P((caddr_t p));
+int m_mclhasreference __P((struct mbuf *));
+void m_copy_pkthdr __P((struct mbuf *, struct mbuf*));
+
+int m_mclref __P((struct mbuf *));
+int m_mclunref __P((struct mbuf *));
+
+void *          m_mtod __P((struct mbuf *));
+struct mbuf *   m_dtom __P((void *));
+int             m_mtocl __P((void *));
+union mcluster *m_cltom __P((int ));
+
+int m_trailingspace __P((struct mbuf *));
+int m_leadingspace __P((struct mbuf *));
+
+void m_mchtype __P((struct mbuf *m, int t));
+
+void m_mcheck __P((struct mbuf*));
+
 #endif
+#endif /* __APPLE_API_UNSTABLE */
 #endif	/* !_SYS_MBUF_H_ */

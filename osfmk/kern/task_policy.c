@@ -66,8 +66,9 @@ task_policy_set(
 			case TASK_FOREGROUND_APPLICATION:
 			case TASK_BACKGROUND_APPLICATION:
 			case TASK_UNSPECIFIED:
-				task_priority(task, BASEPRI_DEFAULT +
-					((info->role == TASK_FOREGROUND_APPLICATION)? +16: +15),
+				task_priority(task,
+								((info->role == TASK_FOREGROUND_APPLICATION)?
+									BASEPRI_FOREGROUND: BASEPRI_BACKGROUND),
 							  task->max_priority);
 				task->role = info->role;
 				break;
@@ -88,7 +89,7 @@ task_policy_set(
 					task->sec_token.val[0] != 0			)
 				result = KERN_INVALID_ARGUMENT;
 			else {
-				task_priority(task, BASEPRI_DEFAULT + 17, task->max_priority);
+				task_priority(task, BASEPRI_CONTROL, task->max_priority);
 				task->role = info->role;
 			}
 		}

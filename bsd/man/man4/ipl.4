@@ -1,0 +1,63 @@
+.TH IPL 4
+.SH NAME
+ipl - IP packet log device
+.SH DESCRIPTION
+The \fBipl\fP pseudo device's purpose is to provide an easy way to gather
+packet headers of packets you wish to log.  If a packet header is to be
+logged, the entire header is logged (including any IP options - TCP/UDP
+options are not included when it calculates header size) or not at all.
+The packet contents is also logged after the header.
+.LP
+.PP
+Prepending every packet header logged is a structure containing information
+relevant to the packet following and why it was logged.  The structure's
+format is as follows:
+.LP
+.nf
+struct ipl_ci   {
+        u_long  sec;      /* time when the packet was logged */
+        u_long  usec;
+        u_long  plen;     /* length of packet data logged */
+        u_short hlen;     /* length of headers logged */
+        u_short rule;     /* rule number (for log ...) or 0 if result = log */
+        u_long  flags:24; /* XXX FIXME do we care about the extra bytes? */
+#if (defined(OpenBSD) && (OpenBSD <= 1991011) && (OpenBSD >= 199606))
+        u_long  filler:8; /* XXX FIXME do we care? */
+        u_char  ifname[IFNAMSIZ];
+#else
+        u_long  unit:8;
+        u_char  ifname[4];
+#endif
+};
+.nf
+.PP
+In the case of the header causing the buffer to finish on a non-32bit
+boundary, padding will be `appended' to ensure that the next log entry
+is aligned to a 32bit boundary.
+.LP
+.PP
+If the packet contents is more then 128 bytes, then only 128 bytes of the
+packet contents is logged. Should the packet contents finish on a non-32bit
+boundary, then the last few bytes are not logged to ensure the log entry
+is aligned to a 32bit boundary.
+
+\fBipl\fP is a read-only (sequential) character pseudo-device.
+
+The ioctls which are loaded with this device can be found under \fBipf(4)\fP.
+The only ioctl which is used for logging and doesn't affect the filter is:
+.LP
+.nf
+        ioctl(fd, SIOCIPFFB, int *)
+.fi
+.PP
+This ioctl flushes the log buffer and returns the number of bytes flushed.
+.PP
+There is currently no support for non-blocking IO with this device, meaning
+all read operations should be considered blocking in nature (if there is no
+data to read, it will sleep until some is made available).
+.SH SEE ALSO
+ipf(4)
+.SH BUGS
+Packet headers are dropped when the internal buffer (static size) fills.
+.SH FILES
+/dev/ipl0

@@ -67,6 +67,11 @@ mutex_t		task_swapper_lock;	/* protects above queue */
 
 #define task_swapper_lock()	mutex_lock(&task_swapper_lock)
 #define task_swapper_unlock()	mutex_unlock(&task_swapper_lock)
+#define task_swapper_wakeup()	thread_wakeup((event_t)&swapout_thread_q)
+#define task_swapper_sleep()	thread_sleep_mutex((event_t)&swapout_thread_q, \
+							&task_swapper_lock,    \
+						   	THREAD_UNINT)
+
 
 queue_head_t	eligible_tasks;		/* tasks eligible for swapout */
 mutex_t		task_swapout_list_lock;	/* protects above queue */
@@ -450,7 +455,7 @@ thread_swapout_enqueue(thread_act_t thr_act)
 	} else {
 		queue_enter(&swapout_thread_q, thr_act,
 			    thread_act_t, swap_queue);
-		thread_wakeup((event_t)&swapout_thread_q);
+		task_swapper_wakeup();
 	}
 	act_unlock(thr_act);
 	task_swapper_unlock();
@@ -475,8 +480,8 @@ task_swap_swapout_thread(void)
 
 	spllo();
 
+	task_swapper_lock();
 	while (TRUE) {
-		task_swapper_lock();
 		while (! queue_empty(&swapout_thread_q)) {
 
 			queue_remove_first(&swapout_thread_q, thr_act,
@@ -584,9 +589,7 @@ task_swap_swapout_thread(void)
 			act_deallocate(thr_act);
 			task_swapper_lock();
 		}
-		assert_wait((event_t)&swapout_thread_q, THREAD_UNINT);
-		task_swapper_unlock();
-		thread_block((void (*)(void)) 0);
+		task_swapper_sleep();
 	}
 }
 
@@ -685,7 +688,7 @@ task_swapin(task_t task, boolean_t make_unswappable)
 			task->swap_flags |= TASK_SW_WANT_IN;
 			assert_wait((event_t)&task->swap_state, THREAD_UNINT);
 			task_unlock(task);
-			thread_block((void (*)(void)) 0);
+			thread_block(THREAD_CONTINUE_NULL);
 			TASK_STATS_INCR(task_sw_race_coming_in);
 			return(KERN_SUCCESS);
 	    case TASK_SW_UNSWAPPABLE:
@@ -1213,7 +1216,7 @@ task_swapper(void)
 		}
 		if (task_swap_debug)
 			printf("task_swapper: blocking\n");
-		thread_block((void (*)(void)) 0);
+		thread_block(THREAD_CONTINUE_NULL);
 		if (timeout) {
 			thread_cancel_timeout(current_thread());
 		}

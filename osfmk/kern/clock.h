@@ -36,7 +36,12 @@
 #include <mach/clock_types.h>
 #include <mach/mach_time.h>
 
-#ifdef MACH_KERNEL_PRIVATE
+#include <sys/appleapiopts.h>
+
+#ifdef	__APPLE_API_PRIVATE
+
+#ifdef	MACH_KERNEL_PRIVATE
+
 #include <ipc/ipc_port.h>
 
 /*
@@ -164,7 +169,26 @@ extern void			mk_timebase_info(
 						uint32_t			*proc_to_abs_numer,
 						uint32_t			*proc_to_abs_denom);
 
+extern void			clock_adjust_calendar(
+						clock_res_t			nsec);
+
+extern mach_timespec_t
+					clock_get_calendar_offset(void);
+
 #endif /* MACH_KERNEL_PRIVATE */
+
+extern void			clock_set_calendar_value(
+						mach_timespec_t		value);
+
+extern int64_t		clock_set_calendar_adjtime(
+						int64_t				total,
+						uint32_t			delta);
+
+extern void			clock_initialize_calendar(void);
+
+#endif	/* __APPLE_API_PRIVATE */
+
+#ifdef	__APPLE_API_UNSTABLE
 
 #define MACH_TIMESPEC_SEC_MAX		(0 - 1)
 #define MACH_TIMESPEC_NSEC_MAX		(NSEC_PER_SEC - 1)
@@ -189,19 +213,11 @@ extern void			mk_timebase_info(
 	}											\
   } while (0)
 
+#endif	/* __APPLE_API_UNSTABLE */
+
 extern mach_timespec_t	clock_get_system_value(void);
 
 extern mach_timespec_t	clock_get_calendar_value(void);
-
-extern void				clock_set_calendar_value(
-							mach_timespec_t		value);
-
-extern void				clock_adjust_calendar(
-							clock_res_t			nsec);
-
-extern void				clock_initialize_calendar(void);
-
-extern mach_timespec_t	clock_get_calendar_offset(void);
 
 extern void				clock_timebase_info(
 							mach_timebase_info_t	info);

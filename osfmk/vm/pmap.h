@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2002 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -61,6 +61,10 @@
 #ifndef	_VM_PMAP_H_
 #define _VM_PMAP_H_
 
+#include <sys/appleapiopts.h>
+
+#ifdef __APPLE_API_PRIVATE
+
 #include <mach/kern_return.h>
 #include <mach/vm_param.h>
 #include <mach/vm_types.h>
@@ -80,7 +84,7 @@
  *	many address spaces.
  */
 
-#ifndef MACH_KERNEL_PRIVATE
+#if !defined(MACH_KERNEL_PRIVATE)
 
 typedef void *pmap_t;
 
@@ -163,6 +167,7 @@ extern void		pmap_enter(	/* Enter a mapping */
 				vm_offset_t	v,
 				vm_offset_t	pa,
 				vm_prot_t	prot,
+				unsigned int	flags,
 				boolean_t	wired);
 
 extern void		pmap_remove_some_phys(
@@ -259,6 +264,14 @@ extern kern_return_t	(pmap_attribute)(	/* Get/Set special memory
 				vm_machine_attribute_t  attribute,
 				vm_machine_attribute_val_t* value);
 
+extern kern_return_t	(pmap_attribute_cache_sync)(  /* Flush appropriate 
+						       * cache based on
+						       * phys addr sent */
+				vm_offset_t	addr, 
+				vm_size_t	size, 
+				vm_machine_attribute_t attribute, 
+				vm_machine_attribute_val_t* value);
+
 /*
  * Routines defined as macros.
  */
@@ -296,30 +309,18 @@ extern kern_return_t	(pmap_attribute)(	/* Get/Set special memory
 /*
  *	Macro to be used in place of pmap_enter()
  */
-#define PMAP_ENTER(pmap, virtual_address, page, protection, wired) \
+#define PMAP_ENTER(pmap, virtual_address, page, protection, flags, wired) \
 		MACRO_BEGIN					\
 		pmap_enter(					\
 			(pmap),					\
 			(virtual_address),			\
 			(page)->phys_addr,			\
 			(protection) & ~(page)->page_lock,	\
+			flags,					\
 			(wired)					\
 		 );						\
 		MACRO_END
 #endif	/* !PMAP_ENTER */
-
-#endif /* MACH_KERNEL_PRIVATE */
-
-/*
- * JMM - This portion is exported to other kernel components right now,
- * but will be pulled back in the future when the needed functionality
- * is provided in a cleaner manner.
- */
-
-#define PMAP_NULL  ((pmap_t) 0)
-
-extern pmap_t	kernel_pmap;			/* The kernel's map */
-#define		pmap_kernel()	(kernel_pmap)
 
 /*
  *	Routines to manage reference/modify bits based on
@@ -340,11 +341,6 @@ extern boolean_t	pmap_is_modified(vm_offset_t paddr);
 /*
  *	Routines that operate on ranges of virtual addresses.
  */
-extern void		pmap_remove(	/* Remove mappings. */
-				pmap_t		map,
-				vm_offset_t	s,
-				vm_offset_t	e);
-
 extern void		pmap_protect(	/* Change protections. */
 				pmap_t		map,
 				vm_offset_t	s,
@@ -356,6 +352,29 @@ extern void		(pmap_pageable)(
 				vm_offset_t	start,
 				vm_offset_t	end,
 				boolean_t	pageable);
+
+#endif /* MACH_KERNEL_PRIVATE */
+
+/*
+ * JMM - This portion is exported to other kernel components right now,
+ * but will be pulled back in the future when the needed functionality
+ * is provided in a cleaner manner.
+ */
+
+#define PMAP_NULL  ((pmap_t) 0)
+
+extern pmap_t	kernel_pmap;			/* The kernel's map */
+#define		pmap_kernel()	(kernel_pmap)
+
+/* machine independent WIMG bits */
+
+#define VM_MEM_GUARDED 		0x1
+#define VM_MEM_COHERENT		0x2
+#define VM_MEM_NOT_CACHEABLE	0x4
+#define VM_MEM_WRITE_THROUGH	0x8
+
+#define VM_WIMG_MASK		0xFF
+#define VM_WIMG_USE_DEFAULT	0x80000000
 
 extern void		pmap_modify_pages(	/* Set modify bit for pages */
 				pmap_t		map,
@@ -369,4 +388,12 @@ extern void		pmap_change_wiring(	/* Specify pageability */
 				pmap_t		pmap,
 				vm_offset_t	va,
 				boolean_t	wired);
+
+extern void		pmap_remove(	/* Remove mappings. */
+				pmap_t		map,
+				vm_offset_t	s,
+				vm_offset_t	e);
+
+#endif  /* __APPLE_API_PRIVATE */
+
 #endif	/* _VM_PMAP_H_ */

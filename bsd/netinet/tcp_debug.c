@@ -52,12 +52,9 @@
  * SUCH DAMAGE.
  *
  *	@(#)tcp_debug.c	8.1 (Berkeley) 6/10/93
+ * $FreeBSD: src/sys/netinet/tcp_debug.c,v 1.16.2.1 2000/07/15 07:14:31 kris Exp $
  */
 
-#if ISFB31
-#include "opt_inet.h"
-#include "opt_tcpdebug.h"
-#endif
 
 #ifndef INET
 #error The option TCPDEBUG requires option INET.
@@ -74,11 +71,14 @@
 #include <sys/param.h>
 #include <sys/systm.h>
 #include <sys/protosw.h>
+#include <sys/sysctl.h>
 
 #include <netinet/in.h>
 #include <netinet/in_systm.h>
 #include <netinet/ip.h>
+#if INET6
 #include <netinet/ip6.h>
+#endif
 #include <netinet/ip_var.h>
 #include <netinet/tcp.h>
 #include <netinet/tcp_fsm.h>
@@ -98,24 +98,28 @@ static int	tcp_debx;
  * Tcp debug routines
  */
 void
-tcp_trace(act, ostate, tp, ip, th, req)
+tcp_trace(act, ostate, tp, ipgen, th, req)
 	short act, ostate;
 	struct tcpcb *tp;
-#if INET6
-	void *ip;
-#else
-	struct ip *ip;
-#endif
+	void *ipgen;
 	struct tcphdr *th;
 	int req;
 {
 #if INET6
-	int isipv6 = (ip != NULL && ((struct ip *)ip)->ip_v == 6) ? 1 : 0;
+	int isipv6;
 #endif /* INET6 */
 	tcp_seq seq, ack;
 	int len, flags;
 	struct tcp_debug *td = &tcp_debug[tcp_debx++];
 
+#if INET6
+	isipv6 = (ipgen != NULL && ((struct ip *)ipgen)->ip_v == 6) ? 1 : 0;
+#endif /* INET6 */
+	td->td_family =
+#if INET6
+		(isipv6 != 0) ? AF_INET6 :
+#endif
+		AF_INET;
 	if (tcp_debx == TCP_NDEBUG)
 		tcp_debx = 0;
 	td->td_time = iptime();
@@ -126,24 +130,54 @@ tcp_trace(act, ostate, tp, ip, th, req)
 		td->td_cb = *tp;
 	else
 		bzero((caddr_t)&td->td_cb, sizeof (*tp));
-	if (ip) {
+	if (ipgen) {
+		switch (td->td_family) {
+		case AF_INET:
+			bcopy((caddr_t)ipgen, (caddr_t)&td->td_ti.ti_i,
+			      sizeof(td->td_ti.ti_i));
+			bzero((caddr_t)td->td_ip6buf, sizeof(td->td_ip6buf));
+			break;
 #if INET6
-		if (isipv6)
-			td->td_ip6 = *(struct ip6_hdr *)ip;
-		else
-			td->td_ip = *(struct ip *)ip;
-#else /* INET6 */
-		td->td_ip = *ip;
-#endif /* INET6 */
-	} else
+		case AF_INET6:
+			bcopy((caddr_t)ipgen, (caddr_t)td->td_ip6buf,
+			      sizeof(td->td_ip6buf));
+			bzero((caddr_t)&td->td_ti.ti_i,
+			      sizeof(td->td_ti.ti_i));
+			break;
+#endif
+		default:
+			bzero((caddr_t)td->td_ip6buf, sizeof(td->td_ip6buf));
+			bzero((caddr_t)&td->td_ti.ti_i,
+			      sizeof(td->td_ti.ti_i));
+			break;
+		}
+	} else {
+		bzero((caddr_t)&td->td_ti.ti_i, sizeof(td->td_ti.ti_i));
+		bzero((caddr_t)td->td_ip6buf, sizeof(td->td_ip6buf));
+	}
+	if (th) {
+		switch (td->td_family) {
+		case AF_INET:
+			td->td_ti.ti_t = *th;
+			bzero((caddr_t)&td->td_ti6.th, sizeof(td->td_ti6.th));
+			break;
 #if INET6
-		bzero((caddr_t)&td->_td_ipx, sizeof (td->_td_ipx));
-#else /* INET6 */
-		bzero((caddr_t)&td->td_ip, sizeof (*ip));
-#endif /* INET6 */
-	if (th)
-		td->td_th = *th;
-
+		case AF_INET6:
+			td->td_ti6.th = *th;
+			bzero((caddr_t)&td->td_ti.ti_t,
+			      sizeof(td->td_ti.ti_t));
+			break;
+#endif
+		default:
+			bzero((caddr_t)&td->td_ti.ti_t,
+			      sizeof(td->td_ti.ti_t));
+			bzero((caddr_t)&td->td_ti6.th, sizeof(td->td_ti6.th));
+			break;
+		}
+	} else {
+		bzero((caddr_t)&td->td_ti.ti_t, sizeof(td->td_ti.ti_t));
+		bzero((caddr_t)&td->td_ti6.th, sizeof(td->td_ti6.th));
+	}
 	td->td_req = req;
 #if TCPDEBUG
 	if (tcpconsdebug == 0)
@@ -158,19 +192,15 @@ tcp_trace(act, ostate, tp, ip, th, req)
 	case TA_INPUT:
 	case TA_OUTPUT:
 	case TA_DROP:
-		if (ip == 0)
+		if (ipgen == NULL || th == NULL)
 			break;
-#if INET6
-		if (isipv6) {
-			len = ((struct ip6_hdr *)ip)->ip6_plen;
-		} else {
-			len = ((struct ip *)ip)->ip_len;
-		}
-#else /* INET6 */
-		len = ip->ip_len;
-#endif /* INET6 */
 		seq = th->th_seq;
 		ack = th->th_ack;
+		len =
+#if INET6
+			isipv6 ? ((struct ip6_hdr *)ipgen)->ip6_plen :
+#endif
+			((struct ip *)ipgen)->ip_len;
 		if (act == TA_OUTPUT) {
 			seq = ntohl(seq);
 			ack = ntohl(ack);

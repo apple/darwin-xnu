@@ -53,9 +53,7 @@ typedef union vmm_fp_register_t {
 } vmm_fp_register_t;
 
 typedef struct vmm_processor_state_t {
-/*
- *	NOTE: The general context needs to correspond to the order of the savearea for quick swaps
- */
+
 	unsigned long			ppcPC;
 	unsigned long			ppcMSR;
 
@@ -67,17 +65,21 @@ typedef struct vmm_processor_state_t {
 	unsigned long			ppcCTR;
 	unsigned long			ppcMQ;						/* Obsolete */
 	unsigned long			ppcVRSave;
-	unsigned long			ppcReserved1[40];			/* Future processor state can go here */
+														/* 32-byte bndry */
+	vmm_vector_register_t	ppcVSCR;
+	vmm_fp_register_t		ppcFPSCR;
+	
+	unsigned long			ppcReserved1[34];			/* Future processor state can go here */
 	
 /*	We must be 16-byte aligned here */
 
 	vmm_vector_register_t	ppcVRs[32];
-	vmm_vector_register_t	ppcVSCR;
+	vmm_vector_register_t	ppcVSCRshadow;
 	
 /*	We must be 8-byte aligned here */
 
 	vmm_fp_register_t		ppcFPRs[32];
-	vmm_fp_register_t		ppcFPSCR;
+	vmm_fp_register_t		ppcFPSCRshadow;
 	unsigned long			ppcReserved2[2];			/* Pad out to multiple of 16 bytes */
 } vmm_processor_state_t;
 
@@ -87,7 +89,7 @@ typedef unsigned long vmm_thread_index_t;
 
 enum {
 	kVmmCurMajorVersion					= 0x0001,
-	kVmmCurMinorVersion					= 0x0002,
+	kVmmCurMinorVersion					= 0x0004,
 	kVmmMinMajorVersion					= 0x0001,
 };
 #define kVmmCurrentVersion ((kVmmCurMajorVersion << 16) | kVmmCurMinorVersion)
@@ -97,8 +99,9 @@ enum {
 	kVmmFeature_LittleEndian			= 0x00000001,
 	kVmmFeature_Stop					= 0x00000002,
 	kVmmFeature_ExtendedMapping			= 0x00000004,
+	kVmmFeature_ListMapping				= 0x00000008,
 };
-#define kVmmCurrentFeatures (kVmmFeature_LittleEndian | kVmmFeature_Stop | kVmmFeature_ExtendedMapping)
+#define kVmmCurrentFeatures (kVmmFeature_LittleEndian | kVmmFeature_Stop | kVmmFeature_ExtendedMapping | kVmmFeature_ListMapping)
 
 typedef unsigned long vmm_version_t;
 
@@ -129,6 +132,14 @@ typedef struct vmm_state_page_t {
 
 } vmm_state_page_t;
 
+typedef struct vmm_comm_page_t {
+	union {
+		vmm_state_page_t	vmcpState;					/* Reserve area for state */
+		unsigned int		vmcpPad[768];				/* Reserve space for 3/4 page state area */
+	} vmcpfirst;
+	unsigned int			vmcpComm[256];				/* Define last 1024 bytes as a communications area - function specific */
+} vmm_comm_page_t;
+
 enum {
 	/* Function Indices (passed in r3) */
 	kVmmGetVersion				= 0,
@@ -149,6 +160,8 @@ enum {
 	kVmmProtectPage,
 	kVmmMapExecute,
 	kVmmProtectExecute,
+	kVmmMapList,
+	kVmmUnmapList,
 };
 
 #define kVmmReturnNull					0
@@ -185,11 +198,25 @@ enum {
 #define kVmmProtRWRW (kVmmProtXtnd | 0x00000002)
 #define kVmmProtRORO (kVmmProtXtnd | 0x00000003)
 
+/*
+ *	Map list format
+ */
+
+typedef struct vmmMapList {
+	unsigned int	vmlva;			/* Virtual address in emulator address space */
+	unsigned int	vmlava;			/* Virtual address in alternate address space */
+#define vmlFlgs 0x00000FFF			/* Flags passed in in vmlava low order 12 bits */
+#define vmlProt 0x00000003			/* Protection flags for the page */
+} vmmMapList;
+
+
 /*************************************************************************************
 	Internal Emulation Types
 **************************************************************************************/
 
 #define kVmmMaxContextsPerThread		32
+#define kVmmMaxUnmapPages				64
+#define kVmmMaxMapPages					64
 
 typedef struct vmmCntrlEntry {						/* Virtual Machine Monitor control table entry */
 	unsigned int	vmmFlags;						/* Assorted control flags */
@@ -210,10 +237,7 @@ typedef struct vmmCntrlEntry {						/* Virtual Machine Monitor control table ent
 	pmap_t			vmmPmap;						/* pmap for alternate context's view of task memory */
 	vmm_state_page_t *vmmContextKern;				/* Kernel address of context communications area */
 	vmm_state_page_t *vmmContextUser;				/* User address of context communications area */
-	pcb_t			vmmFPU_pcb;						/* Saved floating point context */
-	unsigned int	vmmFPU_cpu;						/* CPU saved fp context is valid on */
-	pcb_t 			vmmVMX_pcb;						/* Saved vector context */
-	unsigned int	vmmVMX_cpu;						/* CPU saved vector context is valid on */
+	facility_context vmmFacCtx;						/* Header for vector and floating point contexts */
 	uint64_t		vmmTimer;						/* Last set timer value. Zero means unset */
 	vm_offset_t		vmmLastMap;						/* Last vaddr mapping into virtual machine */
 } vmmCntrlEntry;
@@ -254,6 +278,8 @@ extern void vmm_force_exit(thread_act_t act, struct savearea *);
 extern int vmm_stop_vm(struct savearea *save);
 extern void vmm_timer_pop(thread_act_t act);
 extern void vmm_interrupt(ReturnHandler *rh, thread_act_t act);
+extern kern_return_t vmm_map_list(thread_act_t act, vmm_thread_index_t index, unsigned int cnt);
+extern kern_return_t vmm_unmap_list(thread_act_t act, vmm_thread_index_t index, unsigned int cnt);
 
 #endif
 

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2002 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -46,36 +46,6 @@
  * 
  * any improvements or extensions that they make and grant Carnegie Mellon
  * the rights to redistribute these changes.
- */
-/*
- * HISTORY
- * 
- * Revision 1.1.1.1  1998/09/22 21:05:31  wsanchez
- * Import of Mac OS X kernel (~semeria)
- *
- * Revision 1.1.1.1  1998/03/07 02:25:46  wsanchez
- * Import of OSF Mach kernel (~mburg)
- *
- * Revision 1.2.7.1  1994/09/23  02:44:50  ezf
- * 	change marker to not FREE
- * 	[1994/09/22  21:43:54  ezf]
- *
- * Revision 1.2.3.3  1993/06/22  15:18:34  sp
- * 	Add definition of VM_SYNC_SYNCHRONOUS [david@gr.osf.org]
- * 	[1993/06/21  13:00:18  sp]
- * 
- * Revision 1.2.3.2  1993/06/09  02:44:33  gm
- * 	Added to OSF/1 R1.3 from NMK15.0.
- * 	[1993/06/02  21:18:58  jeffc]
- * 
- * Revision 1.2  1993/04/19  16:41:03  devrcs
- * 	Made compatible with other mach .h files.
- * 	[1993/03/15  17:34:44  david]
- * 
- * 	New for vm_sync definitions.
- * 	[1993/03/03  12:39:16  david]
- * 
- * $EndLog$
  */
 /*
  *	File:	mach/vm_sync.h

@@ -1,4 +1,5 @@
-/*	$KAME: dest6.c,v 1.10 2000/02/28 16:18:11 itojun Exp $	*/
+/*	$FreeBSD: src/sys/netinet6/dest6.c,v 1.1.2.3 2001/07/03 11:01:49 ume Exp $	*/
+/*	$KAME: dest6.c,v 1.27 2001/03/29 05:34:30 itojun Exp $	*/
 
 /*
  * Copyright (C) 1995, 1996, 1997, and 1998 WIDE Project.
@@ -47,16 +48,7 @@
 #include <netinet/in_var.h>
 #include <netinet/ip6.h>
 #include <netinet6/ip6_var.h>
-#if !(defined(__APPLE__))
-#include <netinet6/in6_pcb.h>
-#endif
 #include <netinet/icmp6.h>
-
-#if MIP6
-int (*mip6_store_dstopt_pre_hook)(struct mbuf *m, u_int8_t *opt,
-				  u_int8_t off, u_int8_t dstlen) = NULL;
-int (*mip6_rec_ctrl_sig_hook)(struct mbuf *m, int off) = NULL;
-#endif /* MIP6 */
 
 /*
  * Destination options header processing.
@@ -66,10 +58,13 @@ dest6_input(mp, offp, proto)
 	struct mbuf **mp;
 	int *offp, proto;
 {
-	register struct mbuf *m = *mp;
+	struct mbuf *m = *mp;
 	int off = *offp, dstoptlen, optlen;
 	struct ip6_dest *dstopts;
 	u_int8_t *opt;
+	struct ip6_hdr *ip6;
+
+	ip6 = mtod(m, struct ip6_hdr *);
 
 	/* validation of the length of the header */
 #ifndef PULLDOWN_TEST
@@ -96,59 +91,34 @@ dest6_input(mp, offp, proto)
 
 	/* search header for all options. */
 	for (optlen = 0; dstoptlen > 0; dstoptlen -= optlen, opt += optlen) {
-		switch(*opt) {
-		 case IP6OPT_PAD1:
-			 optlen = 1;
-			 break;
-		 case IP6OPT_PADN:
-			 if (dstoptlen < IP6OPT_MINLEN) {
-				 ip6stat.ip6s_toosmall++;
-				 goto bad;
-			 }
-			 optlen = *(opt + 1) + 2;
-			 break;
+		if (*opt != IP6OPT_PAD1 &&
+		    (dstoptlen < IP6OPT_MINLEN || *(opt + 1) + 2 > dstoptlen)) {
+			ip6stat.ip6s_toosmall++;
+			goto bad;
+		}
 
-#if MIP6
-		 case IP6OPT_BINDING_UPDATE:
-		 case IP6OPT_BINDING_ACK:
-		 case IP6OPT_BINDING_REQ:
-		 case IP6OPT_HOME_ADDRESS:
-			if (mip6_store_dstopt_pre_hook) {
-				if ((*mip6_store_dstopt_pre_hook)(m, opt, off, dstoptlen) != 0)
-					goto bad;
-			}
+		switch (*opt) {
+		case IP6OPT_PAD1:
+			optlen = 1;
+			break;
+		case IP6OPT_PADN:
 			optlen = *(opt + 1) + 2;
 			break;
-#endif /* MIP6 */
 
-		 default:		/* unknown option */
-			 if (dstoptlen < IP6OPT_MINLEN) {
-				 ip6stat.ip6s_toosmall++;
-				 goto bad;
-			 }
-			 if ((optlen = ip6_unknown_opt(opt, m,
-						       opt-mtod(m, u_int8_t *))) == -1)
-				 return(IPPROTO_DONE);
-			 optlen += 2;
-			 break;
+		default:		/* unknown option */
+			optlen = ip6_unknown_opt(opt, m,
+			    opt - mtod(m, u_int8_t *));
+			if (optlen == -1)
+				return (IPPROTO_DONE);
+			optlen += 2;
+			break;
 		}
 	}
 
-#if MIP6
-	if (mip6_rec_ctrl_sig_hook) {
-		/*
-		 * All Destinations options have been processed. Call MIPv6 to
-		 * process stored options.
-		 */
-		if ((*mip6_rec_ctrl_sig_hook)(m, *offp) != 0)
-			return(IPPROTO_DONE);
-	}
-#endif /* MIP6 */
-
 	*offp = off;
-	return(dstopts->ip6d_nxt);
+	return (dstopts->ip6d_nxt);
 
   bad:
 	m_freem(m);
-	return(IPPROTO_DONE);
+	return (IPPROTO_DONE);
 }

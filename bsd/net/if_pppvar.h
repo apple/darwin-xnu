@@ -60,7 +60,15 @@
  * IMPLIED WARRANTIES, INCLUDING, WITHOUT LIMITATION, THE IMPLIED
  * WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE.
  *
+ * $FreeBSD: src/sys/net/if_pppvar.h,v 1.15 2000/01/29 16:56:23 peter Exp $
  */
+
+#include <sys/appleapiopts.h>
+#ifndef DONT_WARN_OBSOLETE
+#warning if_pppvar.h is not used by the darwin kernel
+#endif
+
+#ifdef __APPLE_API_PRIVATE
 
 /*
  * Supported network protocols.  These values are used for
@@ -118,7 +126,7 @@ struct ppp_softc {
 	int	sc_rawin_count;		/* # in sc_rawin */
 };
 
-extern struct ppp_softc ppp_softc[NPPP];
+extern struct ppp_softc ppp_softc[];
 
 struct	ppp_softc *pppalloc __P((pid_t pid));
 void	pppdealloc __P((struct ppp_softc *sc));
@@ -129,3 +137,4 @@ int	pppoutput __P((struct ifnet *ifp, struct mbuf *m0,
 void	ppp_restart __P((struct ppp_softc *sc));
 void	ppppktin __P((struct ppp_softc *sc, struct mbuf *m, int lost));
 struct	mbuf *ppp_dequeue __P((struct ppp_softc *sc));
+#endif /* __APPLE_API_PRIVATE */

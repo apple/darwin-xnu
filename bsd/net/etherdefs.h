@@ -46,12 +46,18 @@
  */
 #ifndef _ETHERDEFS_
 #define _ETHERDEFS_
+#include <sys/appleapiopts.h>
+#if !defined(KERNEL) || defined(__APPLE_API_OBSOLETE)
+
+#include <net/ethernet.h>
+#warning net/etherdefs.h is obsolete! Use net/ethernet.h
 
 #include	<netinet/if_ether.h>
+
 /*
  * Ethernet address - 6 octets
  */
-#define NUM_EN_ADDR_BYTES	6
+#define NUM_EN_ADDR_BYTES	ETHER_ADDR_LEN
 
 
 typedef struct ether_addr enet_addr_t;
@@ -60,10 +66,10 @@ typedef struct ether_header ether_header_t;
 
 #define IFTYPE_ETHERNET "10MB Ethernet"
 
-#define ETHERHDRSIZE	14
-#define ETHERMAXPACKET	(ETHERHDRSIZE + ETHERMTU)
-#define ETHERMINPACKET	64
-#define ETHERCRC	4
+#define ETHERHDRSIZE	ETHER_HDR_LEN
+#define ETHERMAXPACKET	ETHER_MAX_LEN
+#define ETHERMINPACKET	ETHER_MIN_LEN
+#define ETHERCRC	ETHER_CRC_LEN
 
 /*
  * Byte and bit in an enet_addr_t defining individual/group destination.
@@ -72,4 +78,5 @@ typedef struct ether_header ether_header_t;
 #define EA_GROUP_BIT	0x01
 
 
+#endif /* KERNEL && !__APPLE_API_OBSOLETE */
 #endif /* _ETHERDEFS_ */

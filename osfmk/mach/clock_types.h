@@ -38,6 +38,28 @@
 #define	_MACH_CLOCK_TYPES_H_
 
 #include <mach/time_value.h>
+#include <sys/appleapiopts.h>
+
+/*
+ * Type definitions.
+ */
+typedef	int	alarm_type_t;		/* alarm time type */
+typedef int	sleep_type_t;		/* sleep time type */
+typedef	int	clock_id_t;			/* clock identification type */
+typedef int	clock_flavor_t;		/* clock flavor type */
+typedef int	*clock_attr_t;		/* clock attribute type */
+typedef int	clock_res_t;		/* clock resolution type */
+
+/*
+ * Normal time specification used by the kernel clock facility.
+ */
+struct mach_timespec {
+	unsigned int	tv_sec;			/* seconds */
+	clock_res_t		tv_nsec;		/* nanoseconds */
+};
+typedef struct mach_timespec	mach_timespec_t;
+
+#ifdef	__APPLE_API_UNSTABLE
 
 /*
  * Reserved clock id values for default clocks.
@@ -52,16 +74,6 @@
 								 * requirements */
 
 /*
- * Type definitions.
- */
-typedef	int	alarm_type_t;		/* alarm time type */
-typedef int	sleep_type_t;		/* sleep time type */
-typedef	int	clock_id_t;			/* clock identification type */
-typedef int	clock_flavor_t;		/* clock flavor type */
-typedef int	*clock_attr_t;		/* clock attribute type */
-typedef int	clock_res_t;		/* clock resolution type */
-
-/*
  * Attribute names.
  */
 #define	CLOCK_GET_TIME_RES	1	/* get_time call resolution */
@@ -69,15 +81,6 @@ typedef int	clock_res_t;		/* clock resolution type */
 #define CLOCK_ALARM_CURRES	3	/* current alarm resolution */
 #define CLOCK_ALARM_MINRES	4	/* minimum alarm resolution */
 #define CLOCK_ALARM_MAXRES	5	/* maximum alarm resolution */
-
-/*
- * Normal time specification used by the kernel clock facility.
- */
-struct mach_timespec {
-	unsigned int	tv_sec;			/* seconds */
-	clock_res_t		tv_nsec;		/* nanoseconds */
-};
-typedef struct mach_timespec	mach_timespec_t;
 
 #define NSEC_PER_USEC	1000		/* nanoseconds per microsecond */
 #define USEC_PER_SEC	1000000		/* microseconds per second */
@@ -120,5 +123,7 @@ typedef struct mach_timespec	mach_timespec_t;
 #define	TIME_RELATIVE		0x01		/* relative time */
 
 #define BAD_ALRMTYPE(t)		(((t) &~ TIME_RELATIVE) != 0)
+
+#endif	/* __APPLE_API_UNSTABLE */
 
 #endif /* _MACH_CLOCK_TYPES_H_ */

@@ -1,0 +1,221 @@
+.\" Copyright (c) 1980, 1991, 1993
+.\"	The Regents of the University of California.  All rights reserved.
+.\"
+.\" Redistribution and use in source and binary forms, with or without
+.\" modification, are permitted provided that the following conditions
+.\" are met:
+.\" 1. Redistributions of source code must retain the above copyright
+.\"    notice, this list of conditions and the following disclaimer.
+.\" 2. Redistributions in binary form must reproduce the above copyright
+.\"    notice, this list of conditions and the following disclaimer in the
+.\"    documentation and/or other materials provided with the distribution.
+.\" 3. All advertising materials mentioning features or use of this software
+.\"    must display the following acknowledgement:
+.\"	This product includes software developed by the University of
+.\"	California, Berkeley and its contributors.
+.\" 4. Neither the name of the University nor the names of its contributors
+.\"    may be used to endorse or promote products derived from this software
+.\"    without specific prior written permission.
+.\"
+.\" THIS SOFTWARE IS PROVIDED BY THE REGENTS AND CONTRIBUTORS ``AS IS'' AND
+.\" ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+.\" IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
+.\" ARE DISCLAIMED.  IN NO EVENT SHALL THE REGENTS OR CONTRIBUTORS BE LIABLE
+.\" FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
+.\" DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS
+.\" OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION)
+.\" HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT
+.\" LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
+.\" OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
+.\" SUCH DAMAGE.
+.\"
+.\"     @(#)read.2	8.4 (Berkeley) 2/26/94
+.\" $FreeBSD: src/lib/libc/sys/read.2,v 1.9.2.6 2001/12/14 18:34:01 ru Exp $
+.\"
+.Dd February 26, 1994
+.Dt READ 2
+.Os
+.Sh NAME
+.Nm read ,
+.Nm readv ,
+.Nm pread
+.Nd read input
+.Sh LIBRARY
+.Lb libc
+.Sh SYNOPSIS
+.In sys/types.h
+.In sys/uio.h
+.In unistd.h
+.Ft ssize_t
+.Fn read "int d" "void *buf" "size_t nbytes"
+.Ft ssize_t
+.Fn readv "int d" "const struct iovec *iov" "int iovcnt"
+.Ft ssize_t
+.Fn pread "int d" "void *buf" "size_t nbytes" "off_t offset"
+.Sh DESCRIPTION
+.Fn Read
+attempts to read
+.Fa nbytes
+of data from the object referenced by the descriptor
+.Fa d
+into the buffer pointed to by
+.Fa buf .
+.Fn Readv
+performs the same action, but scatters the input data
+into the
+.Fa iovcnt
+buffers specified by the members of the
+.Fa iov
+array: iov[0], iov[1], ..., iov[iovcnt\|\-\|1].
+.Fn Pread
+performs the same function, but reads from the specified position in
+the file without modifying the file pointer.
+.Pp
+For
+.Fn readv ,
+the
+.Fa iovec
+structure is defined as:
+.Pp
+.Bd -literal -offset indent -compact
+struct iovec {
+	char   *iov_base;  /* Base address. */
+	size_t iov_len;    /* Length. */
+};
+.Ed
+.Pp
+Each
+.Fa iovec
+entry specifies the base address and length of an area
+in memory where data should be placed.
+.Fn Readv
+will always fill an area completely before proceeding
+to the next.
+.Pp
+On objects capable of seeking, the
+.Fn read
+starts at a position
+given by the pointer associated with
+.Fa d
+(see
+.Xr lseek 2 ) .
+Upon return from
+.Fn read ,
+the pointer is incremented by the number of bytes actually read.
+.Pp
+Objects that are not capable of seeking always read from the current
+position.  The value of the pointer associated with such an
+object is undefined.
+.Pp
+Upon successful completion,
+.Fn read ,
+.Fn readv ,
+and
+.Fn pread
+return the number of bytes actually read and placed in the buffer.
+The system guarantees to read the number of bytes requested if
+the descriptor references a normal file that has that many bytes left
+before the end-of-file, but in no other case.
+.Sh RETURN VALUES
+If successful, the
+number of bytes actually read is returned.
+Upon reading end-of-file,
+zero is returned.
+Otherwise, a -1 is returned and the global variable
+.Va errno
+is set to indicate the error.
+.Sh ERRORS
+.Fn Read ,
+.Fn readv ,
+and
+.Fn pread
+will succeed unless:
+.Bl -tag -width Er
+.It Bq Er EBADF
+.Fa D
+is not a valid file or socket descriptor open for reading.
+.It Bq Er EFAULT
+.Fa Buf
+points outside the allocated address space.
+.It Bq Er EIO
+An I/O error occurred while reading from the file system.
+.It Bq Er EINTR
+A read from a slow device was interrupted before
+any data arrived by the delivery of a signal.
+.It Bq Er EINVAL
+The pointer associated with
+.Fa d
+was negative.
+.It Bq Er EAGAIN
+The file was marked for non-blocking I/O,
+and no data were ready to be read.
+.El
+.Pp
+In addition,
+.Fn readv
+may return one of the following errors:
+.Bl -tag -width Er
+.It Bq Er EINVAL
+.Fa Iovcnt
+was less than or equal to 0, or greater than 16.
+.It Bq Er EINVAL
+One of the
+.Fa iov_len
+values in the
+.Fa iov
+array was negative.
+.It Bq Er EINVAL
+The sum of the
+.Fa iov_len
+values in the
+.Fa iov
+array overflowed a 32-bit integer.
+.It Bq Er EFAULT
+Part of the
+.Fa iov
+points outside the process's allocated address space.
+.El
+.Pp
+The
+.Fn pread
+call may also return the following errors:
+.Bl -tag -width Er
+.It Bq Er EINVAL
+The specified file offset is invalid.
+.It Bq Er ESPIPE
+The file descriptor is associated with a pipe, socket, or FIFO.
+.El
+.Sh SEE ALSO
+.Xr dup 2 ,
+.Xr fcntl 2 ,
+.Xr open 2 ,
+.Xr pipe 2 ,
+.Xr select 2 ,
+.Xr socket 2 ,
+.Xr socketpair 2
+.Sh STANDARDS
+The
+.Fn read
+function call is expected to conform to
+.St -p1003.1-90 .
+The
+.Fn readv
+and
+.Fn pread
+functions are expected to conform to
+.St -xpg4.2 .
+.Sh HISTORY
+The
+.Fn pread
+function call
+appeared in
+.At V.4 .
+The
+.Fn readv
+function call
+appeared in
+.Bx 4.2 .
+A
+.Fn read
+function call appeared in
+.At v6 .

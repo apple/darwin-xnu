@@ -323,8 +323,6 @@ OSStatus	ExtendBTree	(BTreeControlBlockPtr	btreePtr,
 
 	mapNodeRecSize	= nodeSize - sizeof(BTNodeDescriptor) - 6;	// 2 bytes of free space (see note)
 
-	// update for proper 64 bit arithmetic!!
-
 
 	//////////////////////// Count Bits In Node Map /////////////////////////////
 	
@@ -344,13 +342,10 @@ OSStatus	ExtendBTree	(BTreeControlBlockPtr	btreePtr,
 		
 	/////////////////////// Extend LEOF If Necessary ////////////////////////////
 
-	minEOF = newTotalNodes * nodeSize;
+	minEOF = (UInt64)newTotalNodes * (UInt64)nodeSize;
 	if ( filePtr->fcbEOF < minEOF )
 	{
-		//
-		//	???? Does this B*Tree pack stop working when LEOF > 2^32-1?
-		//
-		maxEOF = ((UInt32)0xFFFFFFFFL);
+		maxEOF = (UInt64)0x7fffffffLL * (UInt64)nodeSize;
 
 		err = btreePtr->setEndOfForkProc (btreePtr->fileRefNum, minEOF, maxEOF);
 		M_ExitOnError (err);
@@ -471,6 +466,9 @@ Success:
 	btreePtr->freeNodes		+= (newTotalNodes - oldTotalNodes) - newMapNodes;
 
 	btreePtr->flags			|= kBTHeaderDirty;		//€€ how about a macro for this
+
+	/* Force the b-tree header changes to disk */
+	(void) UpdateHeader (btreePtr, true);
 	
 	return	noErr;
 

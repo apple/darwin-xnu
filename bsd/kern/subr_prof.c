@@ -123,7 +123,8 @@ kmstartup()
 /*
  * Return kernel profiling information.
  */
-sysctl_doprof(name, namelen, oldp, oldlenp, newp, newlen, p)
+int
+sysctl_doprof(name, namelen, oldp, oldlenp, newp, newlen)
 	int *name;
 	u_int namelen;
 	void *oldp;

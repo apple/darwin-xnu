@@ -237,8 +237,9 @@ himem_convert(
 	while (!(h = hil_head)) { 
 		printf("WARNING: out of HIMEM pages\n");
 		thread_sleep_simple_lock((event_t)&hil_head,
-					simple_lock_addr(hil_lock), FALSE);
-		simple_lock (&hil_lock);
+					 simple_lock_addr(hil_lock),
+					 THREAD_UNINT);
+		/* hil_lock relocked */
 	}
 	hil_head = hil_head->next;
 	simple_unlock(&hil_lock);

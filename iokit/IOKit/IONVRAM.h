@@ -30,7 +30,10 @@
 
 #define kIODTNVRAMOFPartitionName       "common"
 #define kIODTNVRAMXPRAMPartitionName    "APL,MacOS75"
+#define kIODTNVRAMPanicInfoPartitonName "APL,OSXPanic"
 #define kIODTNVRAMFreePartitionName     "wwwwwwwwwwww"
+
+#define kIODTNVRAMPanicInfoKey "aapl,panic-info"
 
 enum {
   kIODTNVRAMImageSize        = 0x2000,
@@ -73,7 +76,12 @@ private:
   UInt32            _nrPartitionOffset;
   UInt32            _nrPartitionSize;
   UInt8             *_nrImage;
+  UInt32            _piPartitionOffset;
+  UInt32            _piPartitionSize;
+  UInt8             *_piImage;
+  bool              _systemPaniced;
   
+  virtual UInt8 calculatePartitionChecksum(UInt8 *partitionHeader);
   virtual IOReturn initOFVariables(void);
   virtual IOReturn syncOFVariables(void);
   virtual UInt32 getOFVariableType(const OSSymbol *propSymbol) const;
@@ -143,6 +151,8 @@ public:
   virtual IOReturn writeNVRAMPartition(const OSSymbol *partitionID,
 				       IOByteCount offset, UInt8 *buffer,
 				       IOByteCount length);  
+  
+  virtual IOByteCount savePanicInfo(UInt8 *buffer, IOByteCount length);
 };
 
 #endif /* !_IOKIT_IONVRAM_H */

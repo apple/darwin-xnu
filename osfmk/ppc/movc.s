@@ -43,6 +43,8 @@ ENTRY(pmap_zero_page, TAG_NO_FRAME_USED)
 #endif /* DEBUG */
 
 		mfmsr	r6								/* Get the MSR */
+		rlwinm	r6,r6,0,MSR_FP_BIT+1,MSR_FP_BIT-1	; Force floating point off
+		rlwinm	r6,r6,0,MSR_VEC_BIT+1,MSR_VEC_BIT-1	; Force vectors off
 		rlwinm	r7,	r6,	0,	MSR_DR_BIT+1,	MSR_DR_BIT-1	/* Turn off DR */
 		rlwinm	r7,r7,0,MSR_EE_BIT+1,MSR_EE_BIT-1	; Disable interruptions
 		li		r4,PPC_PGBYTES-CACHE_LINE_SIZE	/* Point to the end of the page */
@@ -88,6 +90,8 @@ ENTRY(phys_copy, TAG_NO_FRAME_USED)
 
 	/* Switch off data translations */
 	mfmsr	r6
+	rlwinm	r6,r6,0,MSR_FP_BIT+1,MSR_FP_BIT-1	; Force floating point off
+	rlwinm	r6,r6,0,MSR_VEC_BIT+1,MSR_VEC_BIT-1	; Force vectors off
 	rlwinm	r7,	r6,	0,	MSR_DR_BIT+1,	MSR_DR_BIT-1
 	rlwinm  r7,     r7,     0,      MSR_EE_BIT+1,   MSR_EE_BIT-1
 	mtmsr	r7
@@ -161,6 +165,8 @@ ENTRY(pmap_copy_page, TAG_NO_FRAME_USED)
 #endif
 		
 			mfmsr	r9							; Get the MSR
+			rlwinm	r9,r9,0,MSR_FP_BIT+1,MSR_FP_BIT-1	; Force floating point off
+			rlwinm	r9,r9,0,MSR_VEC_BIT+1,MSR_VEC_BIT-1	; Force vectors off
 			stwu	r1,-(FM_SIZE+32)(r1)		; Make a frame for us
 			rlwinm	r7,r9,0,MSR_EE_BIT+1,MSR_EE_BIT-1	; Disable interruptions
 			ori		r7,r7,lo16(MASK(MSR_FP))	; Turn on the FPU
@@ -283,21 +289,14 @@ ENTRY2(copyin, copyinmsg, TAG_NO_FRAME_USED)
 		stw		r0,FM_LR_SAVE(r1)
 		stwu	r1,-(FM_SIZE+16)(r1)
 		
-		mfmsr	r0								/* Get the MSR */
-		rlwinm	r6,r0,0,MSR_EE_BIT+1,MSR_EE_BIT-1	/* Clear 'rupts */
-		mtmsr	r6								/* Disable 'rupts */
-
-		mfsprg	r6,0							/* Get the per_proc */
-		lwz		r6,PP_CPU_DATA(r6)
 		cmpli	cr0,r5,0
-		lwz		r10,CPU_ACTIVE_THREAD(r6)
-		mtmsr	r0								/* Set 'rupts back */
 		ble-	cr0,.L_copyinout_trivial
 
 /* we know we have a valid copyin to do now */
 /* Set up thread_recover in case we hit an illegal address */
 		
-		lwz		r8,THREAD_TOP_ACT(r10)
+		mfsprg  r8,1							/* Get the current act */ 
+		lwz		r10,ACT_THREAD(r8)
 		lis		r11,hi16(.L_copyinout_error)
 		lwz		r8,ACT_VMMAP(r8)
 		ori		r11,r11,lo16(.L_copyinout_error)
@@ -331,16 +330,10 @@ ENTRY2(copyin, copyinmsg, TAG_NO_FRAME_USED)
 		bl		EXT(bcopy)
 		
 /* Now that copyin is done, we don't need a recovery point */
-		mfmsr	r7								/* Get the MSR */
-		rlwinm	r6,r7,0,MSR_EE_BIT+1,MSR_EE_BIT-1	/* Clear 'rupts */
-		mtmsr	r6								/* Disable 'rupts */
 
-		mfsprg	r6,0							/* Get the per_proc */
-		
-		lwz		r6,PP_CPU_DATA(r6)
 		addi	r1,r1,FM_SIZE+16
-		lwz		r10,CPU_ACTIVE_THREAD(r6)
-		mtmsr	r7								; Restore interrupts
+		mfsprg  r6,1							/* Get the current act */ 
+		lwz		r10,ACT_THREAD(r6)
 		li		r3,0
 		lwz		r0,FM_LR_SAVE(r1)
 		stw		r3,THREAD_RECOVER(r10)			/* Clear recovery */
@@ -354,16 +347,9 @@ ENTRY2(copyin, copyinmsg, TAG_NO_FRAME_USED)
 
 /* Now that copyin is done, we don't need a recovery point */
 	
-		mfmsr	r7								/* Get the MSR */
-		rlwinm	r6,r7,0,MSR_EE_BIT+1,MSR_EE_BIT-1	/* Clear 'rupts */
-		mtmsr	r6								/* Disable 'rupts */
-
-		mfsprg	r6,0							/* Get the per_proc */
-		
-		lwz		r6,PP_CPU_DATA(r6)
+		mfsprg  r6,1							/* Get the current act */ 
 		addi	r1,r1,FM_SIZE+16
-		lwz		r10,CPU_ACTIVE_THREAD(r6)
-		mtmsr	r7								; Restore interrupts
+		lwz		r10,ACT_THREAD(r6)
 		li		r4,0
 		lwz		r0,FM_LR_SAVE(r1)
 		stw		r4,THREAD_RECOVER(r10)			/* Clear recovery */
@@ -427,22 +413,14 @@ ENTRY2(copyout, copyoutmsg, TAG_NO_FRAME_USED)
 		lwz		r5,FM_SIZE+8(r1)				/* (TEST/DEBUG) */
 #endif
 	
-		mfmsr	r7								/* Get the MSR */
-		rlwinm	r6,r7,0,MSR_EE_BIT+1,MSR_EE_BIT-1	/* Clear 'rupts */
-		mtmsr	r6								/* Disable 'rupts */
-
-		mfsprg	r6,0							/* Get the per_proc */
-		
-		lwz		r6,PP_CPU_DATA(r6)
 		cmpli	cr0,r5,0
-		lwz		r10,CPU_ACTIVE_THREAD(r6)
-		mtmsr	r7								/* Restore 'rupts */
 		ble-	cr0,.L_copyinout_trivial
 /* we know we have a valid copyout to do now */
 /* Set up thread_recover in case we hit an illegal address */
 		
 
-		lwz		r8,THREAD_TOP_ACT(r10)
+		mfsprg  r8,1							/* Get the current act */
+		lwz		r10,ACT_THREAD(r8)
 		lis		r11,HIGH_ADDR(.L_copyinout_error)
 		lwz		r8,ACT_VMMAP(r8)
 		rlwinm	r12,r4,6,26,29					; Get index to the segment slot
@@ -472,16 +450,9 @@ ENTRY2(copyout, copyoutmsg, TAG_NO_FRAME_USED)
 		bl	EXT(bcopy)
 		
 /* Now that copyout is done, we don't need a recovery point */
-		mfmsr	r7								/* Get the MSR */
-		rlwinm	r6,r7,0,MSR_EE_BIT+1,MSR_EE_BIT-1	/* Clear 'rupts */
-		mtmsr	r6								/* Disable 'rupts */
-
-		mfsprg	r6,0							/* Get the per_proc */
-		
-		lwz		r6,PP_CPU_DATA(r6)
+		mfsprg  r6,1							/* Get the current act */
 		addi	r1,r1,FM_SIZE+16
-		lwz		r10,CPU_ACTIVE_THREAD(r6)
-		mtmsr	r7								; Restore interrupts
+		lwz		r10,ACT_THREAD(r6)
 		li		r3,0
 		lwz		r0,FM_LR_SAVE(r1)
 		stw		r3,THREAD_RECOVER(r10)			/* Clear recovery */
@@ -532,22 +503,15 @@ ENTRY(copyinstr, TAG_NO_FRAME_USED)
 		stw		r6,FM_SIZE+12(r1)				/* (TEST/DEBUG) */
 #endif
 				
-		mfmsr	r0								/* Get the MSR */
-		rlwinm	r7,r0,0,MSR_EE_BIT+1,MSR_EE_BIT-1	/* Clear 'rupts */
-		mtmsr	r7								/* Disable 'rupts */
-
-		mfsprg	r7,0							/* Get the per_proc */
-		lwz		r7,PP_CPU_DATA(r7)
 		cmpli	cr0,r5,0
-		lwz		r10,CPU_ACTIVE_THREAD(r7)
-		mtmsr	r0								/* Restore 'rupts */
 		ble-	cr0,.L_copyinout_trivial
 
 /* we know we have a valid copyin to do now */
 /* Set up thread_recover in case we hit an illegal address */
 		
 		li		r0,0							
-		lwz		r8,THREAD_TOP_ACT(r10)
+		mfsprg  r8,1							/* Get the current act */
+		lwz		r10,ACT_THREAD(r8)
 		stw		r0,0(r6)						/* Clear result length */
 		lis		r11,HIGH_ADDR(.L_copyinout_error)
 		lwz		r8,ACT_VMMAP(r8)				; Get the map for this activation

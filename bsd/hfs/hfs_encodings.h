@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2002 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -26,6 +26,19 @@
 #ifndef _HFS_ENCODINGS_H_
 #define _HFS_ENCODINGS_H_
 
+#include <sys/appleapiopts.h>
+
+#ifdef __APPLE_API_UNSTABLE
+/*
+ * Sysctl value for HFS Unicode encoding matching.
+ */
+#define HFS_ENCODINGBIAS	1	/* encoding matching CJK bias */
+
+#define CTL_HFS_NAMES { \
+	{ 0, 0 }, \
+	{ "encodingbias", CTLTYPE_INT }, \
+}
+
 /*
  * HFS Filename Encoding Converters Interface
  *
@@ -46,10 +59,12 @@ typedef int (* unicode_to_hfs_func_t)(UniChar *uni_str, UInt32 unicodeChars,
 		Str31 hfs_str);
 
 
-int hfs_addconverter(int kmod_id, UInt32 encoding, hfs_to_unicode_func_t get_unicode,
-			unicode_to_hfs_func_t get_hfsname);
+int hfs_addconverter(int kmod_id, UInt32 encoding,
+		hfs_to_unicode_func_t get_unicode,
+		unicode_to_hfs_func_t get_hfsname);
 
 int hfs_remconverter(int kmod_id, UInt32 encoding);
 
+#endif /* __APPLE_API_UNSTABLE */
 
 #endif /* ! _HFS_ENCODINGS_H_ */

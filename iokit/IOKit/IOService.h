@@ -99,6 +99,7 @@ extern const OSSymbol * 	gIONameMatchKey;
 extern const OSSymbol *		gIONameMatchedKey;
 extern const OSSymbol *		gIOPropertyMatchKey;
 extern const OSSymbol *		gIOLocationMatchKey;
+extern const OSSymbol *		gIOParentMatchKey;
 extern const OSSymbol *		gIOPathMatchKey;
 extern const OSSymbol *		gIOMatchCategoryKey;
 extern const OSSymbol *		gIODefaultMatchCategoryKey;
@@ -392,8 +393,7 @@ public:
     @discussion When an IOService is successfully terminated, it is immediately made inactive, which blocks further attach()es, matching or notifications occuring on the object. It remains inactive until the last client closes, and is then finalized and destroyed.
     @result Returns true if the IOService has been terminated. */
 
-    inline bool isInactive( void ) const
-	{ return( 0 != (kIOServiceInactiveState & getState())); }
+    bool isInactive( void ) const;
 
     /* Stack creation */
 

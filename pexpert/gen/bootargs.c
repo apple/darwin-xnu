@@ -41,6 +41,8 @@ PE_parse_boot_arg(
 	boolean_t arg_found;
 
 	args = PE_boot_args();
+	if (*args == '\0') return FALSE;
+
 	arg_found = FALSE;
 
 	while(isargsep(*args)) args++;

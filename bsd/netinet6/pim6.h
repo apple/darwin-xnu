@@ -1,4 +1,5 @@
-/*	$KAME: pim6.h,v 1.2 2000/02/22 14:04:33 itojun Exp $	*/
+/*	$FreeBSD: src/sys/netinet6/pim6.h,v 1.1.2.1 2000/07/15 07:14:36 kris Exp $	*/
+/*	$KAME: pim6.h,v 1.3 2000/03/25 07:23:58 sumikawa Exp $	*/
 
 /*
  * Copyright (C) 1998 WIDE Project.
@@ -35,6 +36,7 @@
  *
  * MULTICAST
  */
+#include <sys/appleapiopts.h>
 
 /*
  * PIM packet header

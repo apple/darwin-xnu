@@ -92,6 +92,19 @@ intel_read_fault(
 	register vm_page_t	m;
 	vm_map_t		pmap_map;
 	vm_map_t                original_map = map;
+	thread_t                cur_thread;
+	boolean_t               funnel_set;
+	funnel_t                *curflock;
+
+	cur_thread = current_thread();
+
+	if ((cur_thread->funnel_state & TH_FN_OWNED) == TH_FN_OWNED) {
+		funnel_set = TRUE;
+		curflock = cur_thread->funnel_lock;
+		thread_funnel_set( curflock , FALSE);
+	} else {
+		funnel_set = FALSE;
+	}
 
     RetryFault:
 
@@ -110,7 +123,9 @@ intel_read_fault(
 	vm_map_unlock_read(map);
 
 	if (result != KERN_SUCCESS) {
-	    return (result);
+		if (funnel_set)
+			thread_funnel_set( curflock, TRUE);
+		return (result);
 	}
 
 	if(pmap_map != map) {
@@ -143,6 +158,8 @@ intel_read_fault(
 		case VM_FAULT_RETRY:
 		    goto RetryFault;
 		case VM_FAULT_INTERRUPTED:
+			if (funnel_set)
+				thread_funnel_set( curflock, TRUE);
 		    return (KERN_SUCCESS);
 		case VM_FAULT_MEMORY_SHORTAGE:
 		    VM_PAGE_WAIT();
@@ -209,6 +226,8 @@ intel_read_fault(
 			vm_object_lock(m->object);
 			RELEASE_PAGE(m);
 			UNLOCK_AND_DEALLOCATE;
+			if (funnel_set)
+				thread_funnel_set( curflock, TRUE);
 			return (result);
 	    }
 
@@ -235,7 +254,7 @@ intel_read_fault(
 	 *	Put the page in the physical map.
 	 */
 
-	PMAP_ENTER(pmap_map->pmap, vaddr, m, VM_PROT_READ, wired);
+	PMAP_ENTER(pmap_map->pmap, vaddr, m, VM_PROT_READ, PMAP_DEFAULT_CACHE, wired);
 
 	if(pmap_map != map) {
 		vm_map_unlock_read(pmap_map);
@@ -256,6 +275,8 @@ intel_read_fault(
 
 #undef	UNLOCK_AND_DEALLOCATE
 #undef	RELEASE_PAGE
+	if (funnel_set)
+		thread_funnel_set( curflock, TRUE);
 	return (KERN_SUCCESS);
 }
 

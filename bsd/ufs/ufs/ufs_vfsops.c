@@ -67,6 +67,7 @@
 #include <sys/buf.h>
 #include <sys/vnode.h>
 #include <sys/malloc.h>
+#include <sys/quota.h>
 
 #include <miscfs/specfs/specdev.h>
 
@@ -129,6 +130,7 @@ ufs_quotactl(mp, cmds, uid, arg, p)
 
 	switch (cmd) {
 	case Q_SYNC:
+	case Q_QUOTASTAT:
 		break;
 	case Q_GETQUOTA:
 		if (uid == p->p_cred->p_ruid)
@@ -148,7 +150,7 @@ ufs_quotactl(mp, cmds, uid, arg, p)
 	switch (cmd) {
 
 	case Q_QUOTAON:
-		error = quotaon(p, mp, type, arg);
+		error = quotaon(p, mp, type, arg, UIO_USERSPACE);
 		break;
 
 	case Q_QUOTAOFF:
@@ -169,6 +171,10 @@ ufs_quotactl(mp, cmds, uid, arg, p)
 
 	case Q_SYNC:
 		error = qsync(mp);
+		break;
+
+        case Q_QUOTASTAT:
+	        error = quotastat(mp, type, arg);
 		break;
 
 	default:

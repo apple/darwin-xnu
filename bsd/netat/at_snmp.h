@@ -21,6 +21,7 @@
  */
 #ifndef _NETAT_AT_SNMP_H_
 #define _NETAT_AT_SNMP_H_
+#include <sys/appleapiopts.h>
 
 #define MAX_PHYS_ADDR_SIZE	6	/* maximum physical addr size */
 #define	MAX_IFS			25	/* max # interfaces */

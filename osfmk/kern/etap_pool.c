@@ -173,7 +173,7 @@ get_start_data_node(void)
 		pool_unlock(s);
 
 		printf ("DEBUG-KERNEL: empty start_data_pool\n");
-		thread_block((void (*)(void)) 0);
+		thread_block(THREAD_CONTINUE_NULL);
 
 		pool_lock(s);
 		sd_sleepers--;

@@ -120,7 +120,7 @@ mach_trap_t	mach_trap_table[] = {
 	MACH_TRAP(task_self_trap, 0),			/* 28 */
 	MACH_TRAP(host_self_trap, 0),			/* 29 */
 	MACH_TRAP(kern_invalid, 0),			/* 30 */
-	MACH_TRAP(kern_invalid, 0),			/* 31 */
+	MACH_TRAP(mach_msg_trap, 7),			/* 31 */
 	MACH_TRAP(mach_msg_overwrite_trap, 9),		/* 32 */
 	MACH_TRAP(semaphore_signal_trap, 1),		/* 33 */
 	MACH_TRAP(semaphore_signal_all_trap, 1),	/* 34 */

@@ -55,15 +55,17 @@
  *
  *	Van Jacobson (van@helios.ee.lbl.gov), Dec 31, 1989:
  *	- Initial distribution.
+ * $FreeBSD: src/sys/net/slcompress.h,v 1.14.2.1 2000/05/05 13:37:06 jlemon Exp $
  */
 
 #ifndef _NET_SLCOMPRESS_H_
 #define _NET_SLCOMPRESS_H_
+#include <sys/appleapiopts.h>
 
 #include <netinet/ip.h>
 
 #define MAX_STATES 16		/* must be > 2 and < 256 */
-#define MAX_HDR MLEN		/* XXX 4bsd-ism: should really be 128 */
+#define MAX_HDR 128
 
 /*
  * Compressed packet format:
@@ -174,6 +176,7 @@ struct slcompress {
 /* flag values */
 #define SLF_TOSS 1		/* tossing rcvd frames because of input err */
 
+#if !defined(KERNEL) || defined(__APPLE_API_PRIVATE)
 void	 sl_compress_init __P((struct slcompress *, int));
 u_int	 sl_compress_tcp __P((struct mbuf *,
 	    struct ip *, struct slcompress *, int));
@@ -181,4 +184,5 @@ int	 sl_uncompress_tcp __P((u_char **, int, u_int, struct slcompress *));
 int	 sl_uncompress_tcp_core __P((u_char *, int, int, u_int,
 	    struct slcompress *, u_char **, u_int *));
 
+#endif /* !KERNEL || __APPLE_API_PRIVATE */
 #endif /* !_NET_SLCOMPRESS_H_ */

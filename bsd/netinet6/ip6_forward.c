@@ -1,4 +1,5 @@
-/*	$KAME: ip6_forward.c,v 1.29 2000/02/26 18:08:38 itojun Exp $	*/
+/*	$FreeBSD: src/sys/netinet6/ip6_forward.c,v 1.4.2.4 2001/07/03 11:01:53 ume Exp $	*/
+/*	$KAME: ip6_forward.c,v 1.69 2001/05/17 03:48:30 itojun Exp $	*/
 
 /*
  * Copyright (C) 1995, 1996, 1997, and 1998 WIDE Project.
@@ -29,10 +30,6 @@
  * SUCH DAMAGE.
  */
 
-#if (defined(__FreeBSD__) && __FreeBSD__ >= 3)
-#include "opt_ip6fw.h"
-#include "opt_inet.h"
-#endif
 
 #include <sys/param.h>
 #include <sys/systm.h>
@@ -51,25 +48,27 @@
 
 #include <netinet/in.h>
 #include <netinet/in_var.h>
+#include <netinet/in_systm.h>
+#include <netinet/ip.h>
 #include <netinet/ip_var.h>
+#include <netinet6/in6_var.h>
 #include <netinet/ip6.h>
 #include <netinet6/ip6_var.h>
 #include <netinet/icmp6.h>
 #include <netinet6/nd6.h>
 
-#if IPSEC_IPV6FWD
+#include <netinet/in_pcb.h>
+
+#if IPSEC
 #include <netinet6/ipsec.h>
+#if INET6
+#include <netinet6/ipsec6.h>
+#endif
 #include <netkey/key.h>
-#include <netkey/key_debug.h>
-#endif /* IPSEC_IPV6FWD */
+extern int ipsec_bypass;
+#endif /* IPSEC */
 
-#if IPV6FIREWALL
 #include <netinet6/ip6_fw.h>
-#endif
-
-#if MIP6
-#include <netinet6/mip6.h>
-#endif
 
 #include <net/net_osdep.h>
 
@@ -94,18 +93,16 @@ ip6_forward(m, srcrt)
 	int srcrt;
 {
 	struct ip6_hdr *ip6 = mtod(m, struct ip6_hdr *);
-	register struct sockaddr_in6 *dst;
-	register struct rtentry *rt;
+	struct sockaddr_in6 *dst;
+	struct rtentry *rt;
 	int error, type = 0, code = 0;
 	struct mbuf *mcopy = NULL;
-#if IPSEC_IPV6FWD
+	struct ifnet *origifp;	/* maybe unnecessary */
+#if IPSEC
 	struct secpolicy *sp = NULL;
 #endif
-#if !(defined(__FreeBSD__) && __FreeBSD__ >= 3) && !defined(__APPLE__)
-	long time_second = time.tv_sec;
-#endif
 
-#if IPSEC_IPV6FWD
+#if IPSEC
 	/*
 	 * Check AH/ESP integrity.
 	 */
@@ -113,15 +110,22 @@ ip6_forward(m, srcrt)
 	 * Don't increment ip6s_cantforward because this is the check
 	 * before forwarding packet actually.
 	 */
-	if (ipsec6_in_reject(m, NULL)) {
+	if (ipsec_bypass == 0 && ipsec6_in_reject(m, NULL)) {
 		ipsec6stat.in_polvio++;
 		m_freem(m);
 		return;
 	}
-#endif /*IPSEC_IPV6FWD*/
+#endif /*IPSEC*/
 
+	/*
+	 * Do not forward packets to multicast destination (should be handled
+	 * by ip6_mforward().
+	 * Do not forward packets with unspecified source.  It was discussed
+	 * in July 2000, on ipngwg mailing list.
+	 */
 	if ((m->m_flags & (M_BCAST|M_MCAST)) != 0 ||
-	    IN6_IS_ADDR_MULTICAST(&ip6->ip6_dst)) {
+	    IN6_IS_ADDR_MULTICAST(&ip6->ip6_dst) ||
+	    IN6_IS_ADDR_UNSPECIFIED(&ip6->ip6_src)) {
 		ip6stat.ip6s_cantforward++;
 		/* XXX in6_ifstat_inc(rt->rt_ifp, ifs6_in_discard) */
 		if (ip6_log_time + ip6_log_interval < time_second) {
@@ -157,10 +161,13 @@ ip6_forward(m, srcrt)
 	 */
 	mcopy = m_copy(m, 0, imin(m->m_pkthdr.len, ICMPV6_PLD_MAXLEN));
 
+#if IPSEC
+	if (ipsec_bypass != 0)
+		goto skip_ipsec;
 
-#if IPSEC_IPV6FWD
 	/* get a security policy for this packet */
-	sp = ipsec6_getpolicybyaddr(m, IPSEC_DIR_OUTBOUND, 0, &error);
+	sp = ipsec6_getpolicybyaddr(m, IPSEC_DIR_OUTBOUND, IP_FORWARDING,
+	    &error);
 	if (sp == NULL) {
 		ipsec6stat.out_inval++;
 		ip6stat.ip6s_cantforward++;
@@ -201,7 +208,7 @@ ip6_forward(m, srcrt)
 		/* no need to do IPsec. */
 		key_freesp(sp);
 		goto skip_ipsec;
-	
+
 	case IPSEC_POLICY_IPSEC:
 		if (sp->req == NULL) {
 			/* XXX should be panic ? */
@@ -248,10 +255,6 @@ ip6_forward(m, srcrt)
 	error = ipsec6_output_tunnel(&state, sp, 0);
 
 	m = state.m;
-#if 0	/* XXX allocate a route (ro, dst) again later */
-	ro = (struct route_in6 *)state.ro;
-	dst = (struct sockaddr_in6 *)state.dst;
-#endif
 	key_freesp(sp);
 
 	if (error) {
@@ -283,27 +286,9 @@ ip6_forward(m, srcrt)
 	}
     }
     skip_ipsec:
-#endif /* IPSEC_IPV6FWD */
-	
-#if MIP6
-	{
-		struct   mip6_bc   *bc;
+#endif /* IPSEC */
 
-		bc = mip6_bc_find(&ip6->ip6_dst);
-		if ((bc != NULL) && (bc->hr_flag)) {
-			if (mip6_tunnel_output(&m, bc) != 0) {
-				ip6stat.ip6s_cantforward++;
-				if (mcopy)
-					m_freem(mcopy);
-				m_freem(m);
-				return;
-			}
-		}
-		ip6 = mtod(m, struct ip6_hdr *);	/* m has changed */
-	}
-#endif
-	
-	dst = &ip6_forward_rt.ro_dst;
+	dst = (struct sockaddr_in6 *)&ip6_forward_rt.ro_dst;
 	if (!srcrt) {
 		/*
 		 * ip6_forward_rt.ro_dst.sin6_addr is equal to ip6->ip6_dst
@@ -311,21 +296,17 @@ ip6_forward(m, srcrt)
 		if (ip6_forward_rt.ro_rt == 0 ||
 		    (ip6_forward_rt.ro_rt->rt_flags & RTF_UP) == 0) {
 			if (ip6_forward_rt.ro_rt) {
-				RTFREE(ip6_forward_rt.ro_rt);
+				rtfree(ip6_forward_rt.ro_rt);
 				ip6_forward_rt.ro_rt = 0;
 			}
 			/* this probably fails but give it a try again */
-#if __FreeBSD__ || defined(__APPLE__)
 			rtalloc_ign((struct route *)&ip6_forward_rt,
 				    RTF_PRCLONING);
-#else
-			rtalloc((struct route *)&ip6_forward_rt);
-#endif
 		}
-		
+
 		if (ip6_forward_rt.ro_rt == 0) {
 			ip6stat.ip6s_noroute++;
-			/* XXX in6_ifstat_inc(rt->rt_ifp, ifs6_in_noroute) */
+			in6_ifstat_inc(m->m_pkthdr.rcvif, ifs6_in_noroute);
 			if (mcopy) {
 				icmp6_error(mcopy, ICMP6_DST_UNREACH,
 					    ICMP6_DST_UNREACH_NOROUTE, 0);
@@ -336,7 +317,7 @@ ip6_forward(m, srcrt)
 	} else if ((rt = ip6_forward_rt.ro_rt) == 0 ||
 		 !IN6_ARE_ADDR_EQUAL(&ip6->ip6_dst, &dst->sin6_addr)) {
 		if (ip6_forward_rt.ro_rt) {
-			RTFREE(ip6_forward_rt.ro_rt);
+			rtfree(ip6_forward_rt.ro_rt);
 			ip6_forward_rt.ro_rt = 0;
 		}
 		bzero(dst, sizeof(*dst));
@@ -344,14 +325,10 @@ ip6_forward(m, srcrt)
 		dst->sin6_family = AF_INET6;
 		dst->sin6_addr = ip6->ip6_dst;
 
-#if __FreeBSD__ || defined(__APPLE__)
   		rtalloc_ign((struct route *)&ip6_forward_rt, RTF_PRCLONING);
-#else
-		rtalloc((struct route *)&ip6_forward_rt);
-#endif
 		if (ip6_forward_rt.ro_rt == 0) {
 			ip6stat.ip6s_noroute++;
-			/* XXX in6_ifstat_inc(rt->rt_ifp, ifs6_in_noroute) */
+			in6_ifstat_inc(m->m_pkthdr.rcvif, ifs6_in_noroute);
 			if (mcopy) {
 				icmp6_error(mcopy, ICMP6_DST_UNREACH,
 					    ICMP6_DST_UNREACH_NOROUTE, 0);
@@ -396,7 +373,7 @@ ip6_forward(m, srcrt)
 		in6_ifstat_inc(rt->rt_ifp, ifs6_in_toobig);
 		if (mcopy) {
 			u_long mtu;
-#if IPSEC_IPV6FWD
+#if IPSEC
 			struct secpolicy *sp;
 			int ipsecerror;
 			size_t ipsechdrsiz;
@@ -446,14 +423,30 @@ ip6_forward(m, srcrt)
 	 * modified by a redirect.
 	 */
 	if (rt->rt_ifp == m->m_pkthdr.rcvif && !srcrt &&
-	    (rt->rt_flags & (RTF_DYNAMIC|RTF_MODIFIED)) == 0)
+	    (rt->rt_flags & (RTF_DYNAMIC|RTF_MODIFIED)) == 0) {
+		if ((rt->rt_ifp->if_flags & IFF_POINTOPOINT) != 0) {
+			/*
+			 * If the incoming interface is equal to the outgoing
+			 * one, and the link attached to the interface is
+			 * point-to-point, then it will be highly probable
+			 * that a routing loop occurs. Thus, we immediately
+			 * drop the packet and send an ICMPv6 error message.
+			 *
+			 * type/code is based on suggestion by Rich Draves.
+			 * not sure if it is the best pick.
+			 */
+			icmp6_error(mcopy, ICMP6_DST_UNREACH,
+				    ICMP6_DST_UNREACH_ADDR, 0);
+			m_freem(m);
+			return;
+		}
 		type = ND_REDIRECT;
+	}
 
-#if IPV6FIREWALL
 	/*
 	 * Check with the firewall...
 	 */
-	if (ip6_fw_chk_ptr) {
+	if (ip6_fw_enable && ip6_fw_chk_ptr) {
 		u_short port = 0;
 		/* If ipfw says divert, we have to just drop packet */
 		if ((*ip6_fw_chk_ptr)(&ip6, rt->rt_ifp, &port, &m)) {
@@ -463,15 +456,54 @@ ip6_forward(m, srcrt)
 		if (!m)
 			goto freecopy;
 	}
+
+	/*
+	 * Fake scoped addresses. Note that even link-local source or
+	 * destinaion can appear, if the originating node just sends the
+	 * packet to us (without address resolution for the destination).
+	 * Since both icmp6_error and icmp6_redirect_output fill the embedded
+	 * link identifiers, we can do this stuff after making a copy for
+	 * returning an error.
+	 */
+	if ((rt->rt_ifp->if_flags & IFF_LOOPBACK) != 0) {
+		/*
+		 * See corresponding comments in ip6_output.
+		 * XXX: but is it possible that ip6_forward() sends a packet
+		 *      to a loopback interface? I don't think so, and thus
+		 *      I bark here. (jinmei@kame.net)
+		 * XXX: it is common to route invalid packets to loopback.
+		 *	also, the codepath will be visited on use of ::1 in
+		 *	rthdr. (itojun)
+		 */
+#if 1
+		if (0)
+#else
+		if ((rt->rt_flags & (RTF_BLACKHOLE|RTF_REJECT)) == 0)
+#endif
+		{
+			printf("ip6_forward: outgoing interface is loopback. "
+			       "src %s, dst %s, nxt %d, rcvif %s, outif %s\n",
+			       ip6_sprintf(&ip6->ip6_src),
+			       ip6_sprintf(&ip6->ip6_dst),
+			       ip6->ip6_nxt, if_name(m->m_pkthdr.rcvif),
+			       if_name(rt->rt_ifp));
+		}
+
+		/* we can just use rcvif in forwarding. */
+		origifp = m->m_pkthdr.rcvif;
+	}
+	else
+		origifp = rt->rt_ifp;
+#ifndef SCOPEDROUTING
+	/*
+	 * clear embedded scope identifiers if necessary.
+	 * in6_clearscope will touch the addresses only when necessary.
+	 */
+	in6_clearscope(&ip6->ip6_src);
+	in6_clearscope(&ip6->ip6_dst);
 #endif
 
-#if OLDIP6OUTPUT
-	error = (*rt->rt_ifp->if_output)(rt->rt_ifp, m,
-					 (struct sockaddr *)dst,
-					 ip6_forward_rt.ro_rt);
-#else
-	error = nd6_output(rt->rt_ifp, m, dst, rt);
-#endif 
+	error = nd6_output(rt->rt_ifp, origifp, m, dst, rt);
 	if (error) {
 		in6_ifstat_inc(rt->rt_ifp, ifs6_out_discard);
 		ip6stat.ip6s_cantforward++;

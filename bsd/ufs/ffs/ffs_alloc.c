@@ -65,6 +65,7 @@
 #include <sys/mount.h>
 #include <sys/kernel.h>
 #include <sys/syslog.h>
+#include <sys/quota.h>
 
 #include <sys/vm.h>
 
@@ -141,7 +142,7 @@ ffs_alloc(ip, lbn, bpref, size, cred, bnp)
 		goto nospace;
 	VOP_DEVBLOCKSIZE(ip->i_devvp,&devBlockSize);
 #if QUOTA
-	if (error = chkdq(ip, (long)btodb(size, devBlockSize), cred, 0))
+	if (error = chkdq(ip, (int64_t)size, cred, 0))
 		return (error);
 #endif /* QUOTA */
 	if (bpref >= fs->fs_size)
@@ -162,7 +163,7 @@ ffs_alloc(ip, lbn, bpref, size, cred, bnp)
 	/*
 	 * Restore user's disk quota because allocation failed.
 	 */
-	(void) chkdq(ip, (long)-btodb(size, devBlockSize), cred, FORCE);
+	(void) chkdq(ip, (int64_t)-size, cred, FORCE);
 #endif /* QUOTA */
 nospace:
 	ffs_fserr(fs, cred->cr_uid, "file system full");
@@ -222,7 +223,7 @@ ffs_realloccg(ip, lbprev, bpref, osize, nsize, cred, bpp)
 	VOP_DEVBLOCKSIZE(ip->i_devvp,&devBlockSize);
 
 #if QUOTA
-	if (error = chkdq(ip, (long)btodb(nsize - osize, devBlockSize), cred, 0))
+	if (error = chkdq(ip, (int64_t)(nsize - osize), cred, 0))
 	{
 		brelse(bp);
 		return (error);
@@ -311,7 +312,7 @@ ffs_realloccg(ip, lbprev, bpref, osize, nsize, cred, bpp)
 	/*
 	 * Restore user's disk quota because allocation failed.
 	 */
-	(void) chkdq(ip, (long)-btodb(nsize - osize, devBlockSize), cred, FORCE);
+	(void) chkdq(ip, (int64_t)-(nsize - osize), cred, FORCE);
 #endif /* QUOTA */
 	brelse(bp);
 nospace:

@@ -20,10 +20,6 @@
  * @APPLE_LICENSE_HEADER_END@
  */
 /*
- * Copyright (C) 1998 Apple Computer
- * All Rights Reserved
- */
-/*
  * @OSF_COPYRIGHT@
  */
 /* 
@@ -108,13 +104,19 @@
  *
  */
 
+#include <sys/appleapiopts.h>
+
+#ifdef	__APPLE_API_PRIVATE
+
+#ifdef	MACH_KERNEL_PRIVATE
+
 /*
  *	A simple mutex lock.
  *	Do not change the order of the fields in this structure without
  *	changing the machine-dependent assembler routines which depend
  *	on them.
  */
-#ifdef MACH_KERNEL_PRIVATE
+
 #include <mach_ldebug.h>
 #include <kern/etap_options.h>
 #include <kern/etap_pool.h>
@@ -122,7 +124,8 @@
 typedef struct {
 	hw_lock_data_t	interlock;
 	hw_lock_data_t	locked;
-	short		waiters;
+	uint16_t		waiters;
+	uint16_t		promoted_pri;
 #if	MACH_LDEBUG
 	int		type;
 #define	MUTEX_TAG	0x4d4d
@@ -151,19 +154,22 @@ typedef struct {
 #define mutex_addr(m)			(&(m))
 
 extern void	mutex_init		(mutex_t*, etap_event_t);
-extern void	mutex_lock_wait		(mutex_t*);
-extern void	mutex_unlock_wakeup	(mutex_t*);
+extern void	mutex_lock_wait		(mutex_t *, thread_act_t);
+extern int	mutex_lock_acquire	(mutex_t *);
+extern void	mutex_unlock_wakeup	(mutex_t*, thread_act_t);
 extern void	interlock_unlock	(hw_lock_t);
 
-#else /* MACH_KERNEL_PRIVATE */
+#endif	/* MACH_KERNEL_PRIVATE */
+
+extern void	mutex_pause		(void);
+
+#endif	/* __APPLE_API_PRIVATE */
+
+#if		!defined(MACH_KERNEL_PRIVATE)
 
 typedef struct __mutex__ mutex_t;
 
-/* going away */
-extern void	_mutex_lock		(mutex_t*);
-extern boolean_t  _mutex_try		(mutex_t*);
-
-#endif /* !MACH_KERNEL_PRIVATE */
+#endif	/* MACH_KERNEL_PRIVATE */
 
 extern mutex_t *mutex_alloc		(etap_event_t);
 extern void	mutex_free		(mutex_t*);
@@ -171,7 +177,9 @@ extern void	mutex_lock		(mutex_t*);
 extern void	mutex_unlock		(mutex_t*);
 extern boolean_t mutex_try		(mutex_t*);
 
-extern void	mutex_pause		(void);
+#ifdef	__APPLE_API_PRIVATE
+
+#ifdef MACH_KERNEL_PRIVATE
 
 /*
  *	The general lock structure.  Provides for multiple readers,
@@ -186,7 +194,7 @@ extern void	mutex_pause		(void);
  *	other fields are modified with normal instructions after
  *	acquiring the interlock bit.
  */
-#ifdef MACH_KERNEL_PRIVATE
+
 typedef struct {
 	decl_simple_lock_data(,interlock) /* "hardware" interlock field */
 	volatile unsigned int
@@ -249,13 +257,19 @@ extern void	lock_init		(lock_t*,
 					 etap_event_t,
 					 etap_event_t);
 
-#else /* MACH_KERNEL_PRIVATE */
+#endif	/* MACH_KERNEL_PRIVATE */
+
+extern unsigned int LockTimeOut;	/* Standard lock timeout value */
+
+#endif	/* __APPLE_API_PRIVATE */
+
+#if		!defined(MACH_KERNEL_PRIVATE)
 
 typedef struct __lock__ lock_t;
 extern lock_t *lock_alloc(boolean_t, etap_event_t, etap_event_t);
 void lock_free(lock_t *);
 
-#endif /* !MACH_KERNEL_PRIVATE */
+#endif	/* MACH_KERNEL_PRIVATE */
 
 extern void	lock_write		(lock_t*);
 extern void	lock_read		(lock_t*);
@@ -266,6 +280,5 @@ extern void	lock_write_to_read	(lock_t*);
 #define	lock_write_done(l)		lock_done(l)
 
 extern boolean_t lock_read_to_write	(lock_t*);  /* vm_map is only user */
-extern unsigned int LockTimeOut;				/* Standard lock timeout value */
 
 #endif	/* _KERN_LOCK_H_ */

@@ -552,7 +552,7 @@ pmap_map(
 
 	ps = PAGE_SIZE;
 	while (start < end) {
-		pmap_enter(kernel_pmap, virt, start, prot, FALSE);
+		pmap_enter(kernel_pmap, virt, start, prot, 0, FALSE);
 		virt += ps;
 		start += ps;
 	}
@@ -1415,9 +1415,6 @@ pmap_page_protect(
 		    /*
 		     * Remove the mapping, collecting any modify bits.
 		     */
-		    if (iswired(*pte))
-			panic("pmap_remove_all removing a wired page");
-
 		    {
 			register int	i = ptes_per_vm_page;
 
@@ -1584,6 +1581,7 @@ pmap_enter(
 	vm_offset_t		v,
 	register vm_offset_t	pa,
 	vm_prot_t		prot,
+	unsigned int 		flags,
 	boolean_t		wired)
 {
 	register pt_entry_t	*pte;
@@ -2026,6 +2024,7 @@ pmap_change_wiring(
 	register int		i;
 	spl_t			spl;
 
+#if 0
 	/*
 	 *	We must grab the pmap system lock because we may
 	 *	change a pte_page queue.
@@ -2058,6 +2057,11 @@ pmap_change_wiring(
 	}
 
 	PMAP_READ_UNLOCK(map, spl);
+
+#else
+	return;
+#endif
+
 }
 
 /*
@@ -2924,7 +2928,7 @@ pmap_movepage(unsigned long from, unsigned long to, vm_size_t size)
 		PMAP_READ_UNLOCK(kernel_pmap, spl);
 
 		pmap_enter(kernel_pmap, to, i386_trunc_page(*pte),
-			VM_PROT_READ|VM_PROT_WRITE, *pte & INTEL_PTE_WIRED);
+			VM_PROT_READ|VM_PROT_WRITE, 0, *pte & INTEL_PTE_WIRED);
 
 		pmap_remove(kernel_pmap, from, from+PAGE_SIZE);
 
@@ -2975,5 +2979,12 @@ kern_return_t bmapmapr(vm_offset_t va) {
 }
 #endif
 
-
-
+/* temporary workaround */
+boolean_t
+coredumpok(vm_map_t map, vm_offset_t va)
+{
+  pt_entry_t *ptep;
+  ptep = pmap_pte(map->pmap, va);
+  if (0 == ptep) return FALSE;
+  return ((*ptep & (INTEL_PTE_NCACHE|INTEL_PTE_WIRED)) != (INTEL_PTE_NCACHE|INTEL_PTE_WIRED));
+}

@@ -424,7 +424,7 @@ int adsp_wput(gref, mp)
 		case DDP_IOC_GET_CFG:
 			/* respond to an DDP_IOC_GET_CFG sent on an adsp fd */
 			if (((xm = gbuf_cont(mp)) == NULL) &&
-			    (xm = gbuf_alloc(sizeof(at_inet_t), PRI_MED)) == NULL) {
+			    (xm = gbuf_alloc(sizeof(ddp_addr_t), PRI_MED)) == NULL) {
 			    iocbp->ioc_rval = -1;
 			    adsp_iocnak(gref, mp, ENOBUFS);
 			    return 0;

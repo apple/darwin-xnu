@@ -26,9 +26,10 @@
 #ifndef _MACH_MACH_SYSCALLS_H_
 #define	_MACH_MACH_SYSCALLS_H_
 
-#include <mach/kern_return.h>
 #include <mach/std_types.h>
-#include <mach/mach_types.h>
+#include <mach/kern_return.h>
+#include <mach/port.h>
+#include <mach/message.h>
 #include <mach/clock_types.h>
 
 extern kern_return_t	clock_sleep_trap(

@@ -35,7 +35,6 @@
 
 #include <IOKit/IOTypes.h>
 #include <libkern/OSByteOrder.h>
-#include <stddef.h> 
 
 
 /* DBDMA definitions */

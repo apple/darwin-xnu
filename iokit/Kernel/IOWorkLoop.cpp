@@ -57,6 +57,8 @@ static inline bool ISSETP(void *addr, unsigned int flag)
 
 #define fFlags loopRestart
 
+extern "C" extern void stack_privilege( thread_t thread);
+
 void IOWorkLoop::launchThreadMain(void *self)
 {
     register thread_t mythread = current_thread();
@@ -298,13 +300,8 @@ void IOWorkLoop::threadMain()
 	    assert_wait((void *) &workToDo, false);
 	    IOSimpleLockUnlockEnableInterrupt(workToDoLock, is);
 
-#if defined (__i386__)
-	    thread_block(0);
-	    continue;
-#else
 	    thread_set_cont_arg((int) this);
 	    thread_block(&threadMainContinuation);
-#endif
 	    /* NOTREACHED */
 	}
 
@@ -321,7 +318,7 @@ void IOWorkLoop::threadMain()
 exitThread:
     workThread = 0;	// Say we don't have a loop and free ourselves
     free();
-    IOExitThread(0);
+    IOExitThread();
 }
 
 IOThread IOWorkLoop::getThread() const
@@ -398,43 +395,48 @@ IOReturn IOWorkLoop::_maintRequest(void *inC, void *inD, void *, void *)
     switch (command)
     {
     case mAddEvent:
-	SETP(&fFlags, kLoopRestart);
-        inEvent->retain();
-        inEvent->setWorkLoop(this);
-        inEvent->setNext(0);
+        if (!inEvent->getWorkLoop()) {
+            SETP(&fFlags, kLoopRestart);
 
-        if (!eventChain)
-            eventChain = inEvent;
-        else {
-            IOEventSource *event, *next;
-
-            for (event = eventChain; (next = event->getNext()); event = next)
-                ;
-            event->setNext(inEvent);
+            inEvent->retain();
+            inEvent->setWorkLoop(this);
+            inEvent->setNext(0);
+    
+            if (!eventChain)
+                eventChain = inEvent;
+            else {
+                IOEventSource *event, *next;
+    
+                for (event = eventChain; (next = event->getNext()); event = next)
+                    ;
+                event->setNext(inEvent);
+            }
         }
         break;
 
     case mRemoveEvent:
-        if (eventChain == inEvent)
-            eventChain = inEvent->getNext();
-        else {
-            IOEventSource *event, *next;
-
-            event = eventChain;
-            while ((next = event->getNext()) && next != inEvent)
-                event = next;
-
-            if (!next) {
-                res = kIOReturnBadArgument;
-                break;
+        if (inEvent->getWorkLoop()) {
+            if (eventChain == inEvent)
+                eventChain = inEvent->getNext();
+            else {
+                IOEventSource *event, *next;
+    
+                event = eventChain;
+                while ((next = event->getNext()) && next != inEvent)
+                    event = next;
+    
+                if (!next) {
+                    res = kIOReturnBadArgument;
+                    break;
+                }
+                event->setNext(inEvent->getNext());
             }
-            event->setNext(inEvent->getNext());
+    
+            inEvent->setWorkLoop(0);
+            inEvent->setNext(0);
+            inEvent->release();
+            SETP(&fFlags, kLoopRestart);
         }
-
-        inEvent->setWorkLoop(0);
-        inEvent->setNext(0);
-        inEvent->release();
-	SETP(&fFlags, kLoopRestart);
         break;
 
     default:

@@ -52,11 +52,8 @@
  * SUCH DAMAGE.
  *
  *	@(#)if.c	8.3 (Berkeley) 1/4/94
+ * $FreeBSD: src/sys/net/if.c,v 1.85.2.9 2001/07/24 19:10:17 brooks Exp $
  */
-
-/*
-#include "opt_compat.h"
-*/
 
 #include <sys/param.h>
 #include <sys/malloc.h>
@@ -70,13 +67,30 @@
 #include <sys/sockio.h>
 #include <sys/syslog.h>
 #include <sys/sysctl.h>
+
 #include <net/if.h>
+#include <net/if_arp.h>
 #include <net/if_dl.h>
+#include <net/if_types.h>
+#include <net/if_var.h>
 #include <net/radix.h>
-#include <netinet/in.h>
+#include <net/route.h>
+#ifdef __APPLE__
 #include <net/dlil.h>
-#include <string.h>
+//#include <string.h>
 #include <sys/domain.h>
+#endif
+
+#if defined(INET) || defined(INET6)
+/*XXX*/
+#include <netinet/in.h>
+#include <netinet/in_var.h>
+#if INET6
+#include <netinet6/in6_var.h>
+#include <netinet6/in6_ifattach.h>
+#endif
+#endif
+
 /*
  * System initialization
  */
@@ -96,19 +110,16 @@ struct	ifnethead ifnet;	/* depend on static init XXX */
  * XXX: declare here to avoid to include many inet6 related files..
  * should be more generalized?
  */
-extern void nd6_setmtu __P((struct ifnet *));
-#endif 
+extern void	nd6_setmtu __P((struct ifnet *));
+extern int ip6_auto_on;
+#endif
 
 /*
  * Network interface utility routines.
  *
  * Routines with ifa_ifwith* names take sockaddr *'s as
  * parameters.
- *
- * This routine assumes that it will be called at splimp() or higher.
  */
-/* ARGSUSED*/
-
 
 int if_index = 0;
 struct ifaddr **ifnet_addrs;
@@ -129,10 +140,15 @@ old_if_attach(ifp)
 	register struct sockaddr_dl *sdl;
 	register struct ifaddr *ifa;
 	static int if_indexlim = 8;
-
+	static int inited;
 
 	if (ifp->if_snd.ifq_maxlen == 0)
 	    ifp->if_snd.ifq_maxlen = ifqmaxlen;
+
+	if (!inited) {
+		TAILQ_INIT(&ifnet);
+		inited = 1;
+	}
 
 	TAILQ_INSERT_TAIL(&ifnet, ifp, if_link);
 	ifp->if_index = ++if_index;
@@ -144,6 +160,7 @@ old_if_attach(ifp)
 	 * this unlikely case.
 	 */
 	TAILQ_INIT(&ifp->if_addrhead);
+	TAILQ_INIT(&ifp->if_prefixhead);
 	LIST_INIT(&ifp->if_multiaddrs);
 	getmicrotime(&ifp->if_lastchange);
 	if (ifnet_addrs == 0 || if_index >= if_indexlim) {
@@ -158,8 +175,8 @@ old_if_attach(ifp)
 		ifnet_addrs = (struct ifaddr **)q;
 
 		/* grow ifindex2ifnet */
-		n = if_indexlim * sizeof(struct ifnet *);
-		q = (caddr_t)_MALLOC(n, M_IFADDR, M_WAITOK);
+		n = if_indexlim * sizeof(struct ifaddr *);
+		q = (struct ifaddr **)_MALLOC(n, M_IFADDR, M_WAITOK);
 		bzero(q, n);
 		if (ifindex2ifnet) {
 			bcopy((caddr_t)ifindex2ifnet, q, n/2);
@@ -205,6 +222,7 @@ old_if_attach(ifp)
 		TAILQ_INSERT_HEAD(&ifp->if_addrhead, ifa, ifa_link);
 	}
 }
+
 /*
  * Locate an interface based on a complete address.
  */
@@ -219,7 +237,7 @@ ifa_ifwithaddr(addr)
 #define	equal(a1, a2) \
   (bcmp((caddr_t)(a1), (caddr_t)(a2), ((struct sockaddr *)(a1))->sa_len) == 0)
 	for (ifp = ifnet.tqh_first; ifp; ifp = ifp->if_link.tqe_next)
-	    for (ifa = ifp->if_addrhead.tqh_first; ifa; 
+	    for (ifa = ifp->if_addrhead.tqh_first; ifa;
 		 ifa = ifa->ifa_link.tqe_next) {
 		if (ifa->ifa_addr->sa_family != addr->sa_family)
 			continue;
@@ -246,7 +264,7 @@ ifa_ifwithdstaddr(addr)
 
 	for (ifp = ifnet.tqh_first; ifp; ifp = ifp->if_link.tqe_next)
 	    if (ifp->if_flags & IFF_POINTOPOINT)
-		for (ifa = ifp->if_addrhead.tqh_first; ifa; 
+		for (ifa = ifp->if_addrhead.tqh_first; ifa;
 		     ifa = ifa->ifa_link.tqe_next) {
 			if (ifa->ifa_addr->sa_family != addr->sa_family)
 				continue;
@@ -280,7 +298,7 @@ ifa_ifwithnet(addr)
 		return (ifnet_addrs[sdl->sdl_index - 1]);
 	}
 
-	/* 
+	/*
 	 * Scan though each interface, looking for ones that have
 	 * addresses in this address family.
 	 */
@@ -291,21 +309,30 @@ ifa_ifwithnet(addr)
 
 			if (ifa->ifa_addr->sa_family != af)
 next:				continue;
-#if 0 /* for maching gif tunnel dst as routing entry gateway */
-			if (ifp->if_flags & IFF_POINTOPOINT) {
+#ifndef __APPLE__
+/* This breaks tunneling application trying to install a route with
+ * a specific subnet and the local address as the destination
+ * It's breaks binary compatibility with previous version of MacOS X
+ */
+			if (
+ 
+#if INET6 /* XXX: for maching gif tunnel dst as routing entry gateway */
+			    addr->sa_family != AF_INET6 &&
+#endif
+			    ifp->if_flags & IFF_POINTOPOINT) {
 				/*
-				 * This is a bit broken as it doesn't 
-				 * take into account that the remote end may 
+				 * This is a bit broken as it doesn't
+				 * take into account that the remote end may
 				 * be a single node in the network we are
 				 * looking for.
-				 * The trouble is that we don't know the 
+				 * The trouble is that we don't know the
 				 * netmask for the remote end.
 				 */
 				if (ifa->ifa_dstaddr != 0
 				    && equal(addr, ifa->ifa_dstaddr))
  					return (ifa);
 			} else
-#endif
+#endif /* __APPLE__*/
 			{
 				/*
 				 * if we have a special address handler,
@@ -370,7 +397,7 @@ ifaof_ifpforaddr(addr, ifp)
 
 	if (af >= AF_MAX)
 		return (0);
-	for (ifa = ifp->if_addrhead.tqh_first; ifa; 
+	for (ifa = ifp->if_addrhead.tqh_first; ifa;
 	     ifa = ifa->ifa_link.tqe_next) {
 		if (ifa->ifa_addr->sa_family != af)
 			continue;
@@ -422,9 +449,7 @@ link_rtrequest(cmd, rt, sa)
 		return;
 	ifa = ifaof_ifpforaddr(dst, ifp);
 	if (ifa) {
-		IFAFREE(rt->rt_ifa);
-		rt->rt_ifa = ifa;
-		ifa->ifa_refcnt++;
+		rtsetifa(rt, ifa);
 		if (ifa->ifa_rtrequest && ifa->ifa_rtrequest != link_rtrequest)
 			ifa->ifa_rtrequest(cmd, rt, sa);
 	}
@@ -469,8 +494,10 @@ if_route(ifp, flag, fam)
 		if (fam == PF_UNSPEC || (fam == ifa->ifa_addr->sa_family))
 			pfctlinput(PRC_IFUP, ifa->ifa_addr);
 	rt_ifmsg(ifp);
+
 #if INET6
-	in6_if_up(ifp);
+	if (ip6_auto_on) /* Only if IPv6 is on on configured on on all ifs */
+		in6_if_up(ifp);
 #endif
 }
 
@@ -519,52 +546,46 @@ if_qflush(ifq)
 	ifq->ifq_len = 0;
 }
 
-
 /*
  * Map interface name to
  * interface structure pointer.
  */
 struct ifnet *
-ifunit(name)
-	register char *name;
+ifunit(const char *name)
 {
 	char namebuf[IFNAMSIZ + 1];
-	register char *cp, *cp2;
-	char *end;
-	register struct ifnet *ifp;
+	const char *cp;
+	struct ifnet *ifp;
 	int unit;
-	unsigned len;
-	register char c = '\0';
+	unsigned len, m;
+	char c;
 
-	/*
-	 * Look for a non numeric part
-	 */
-	end = name + IFNAMSIZ; 
-	cp2 = namebuf;
-	cp = name; 
-	while ((cp < end) && (c = *cp)) {
-		if (c >= '0' && c <= '9')
-			break;
-		*cp2++ = c;
-		cp++;
-	}
-	if ((cp == end) || (c == '\0') || (cp == name))
-		return ((struct ifnet *)0);
-	*cp2 = '\0';
-	/*
-	 * check we have a legal number (limit to 7 digits?)
-	 */
+	len = strlen(name);
+	if (len < 2 || len > IFNAMSIZ)
+		return NULL;
+	cp = name + len - 1;
+	c = *cp;
+	if (c < '0' || c > '9')
+		return NULL;		/* trailing garbage */
+	unit = 0;
+	m = 1;
+	do {
+		if (cp == name)
+			return NULL;	/* no interface name */
+		unit += (c - '0') * m;
+		if (unit > 1000000)
+			return NULL;	/* number is unreasonable */
+		m *= 10;
+		c = *--cp;
+	} while (c >= '0' && c <= '9');
 	len = cp - name + 1;
-	for (unit = 0;
-	    ((c = *cp) >= '0') && (c <= '9') && (unit < 1000000); cp++ ) 
-		unit = (unit * 10) + (c - '0');
-	if (*cp != '\0')
-		return 0;	/* no trailing garbage allowed */
+	bcopy(name, namebuf, len);
+	namebuf[len] = '\0';
 	/*
 	 * Now search all the interfaces for this name/number
 	 */
 	for (ifp = ifnet.tqh_first; ifp; ifp = ifp->if_link.tqe_next) {
-		if (bcmp(ifp->if_name, namebuf, len))
+		if (strcmp(ifp->if_name, namebuf))
 			continue;
 		if (unit == ifp->if_unit)
 			break;
@@ -613,9 +634,10 @@ ifioctl(so, cmd, data, p)
 {
 	register struct ifnet *ifp;
 	register struct ifreq *ifr;
+	struct ifstat *ifs;
 	int error = 0;
-	struct kev_msg        ev_msg;
 	short oif_flags;
+	struct kev_msg        ev_msg;
 	struct net_event_data ev_data;
 
 	switch (cmd) {
@@ -650,36 +672,41 @@ ifioctl(so, cmd, data, p)
 		error = suser(p->p_ucred, &p->p_acflag);
 		if (error)
 			return (error);
-		if (ifp->if_flags & IFF_UP && (ifr->ifr_flags & IFF_UP) == 0) {
+#ifndef __APPLE__
+		if (ifp->if_flags & IFF_SMART) {
+			/* Smart drivers twiddle their own routes */
+		} else
+#endif
+		if (ifp->if_flags & IFF_UP &&
+		    (ifr->ifr_flags & IFF_UP) == 0) {
 			int s = splimp();
 			if_down(ifp);
 			splx(s);
-		}
-		if (ifr->ifr_flags & IFF_UP && (ifp->if_flags & IFF_UP) == 0) {
+		} else if (ifr->ifr_flags & IFF_UP &&
+		    (ifp->if_flags & IFF_UP) == 0) {
 			int s = splimp();
 			if_up(ifp);
 			splx(s);
 		}
 		ifp->if_flags = (ifp->if_flags & IFF_CANTCHANGE) |
-		     (ifr->ifr_flags &~ IFF_CANTCHANGE);
+			(ifr->ifr_flags &~ IFF_CANTCHANGE);
 
 		error = dlil_ioctl(so->so_proto->pr_domain->dom_family, 
 				   ifp, cmd, (caddr_t) data);
 
 		if (error == 0) {
-		     ev_msg.vendor_code    = KEV_VENDOR_APPLE;
-		     ev_msg.kev_class      = KEV_NETWORK_CLASS;
-		     ev_msg.kev_subclass   = KEV_DL_SUBCLASS;
-	
-		     ev_msg.event_code = KEV_DL_SIFFLAGS;
-		     strncpy(&ev_data.if_name[0], ifp->if_name, IFNAMSIZ);
-		     ev_data.if_family = ifp->if_family;
-		     ev_data.if_unit   = (unsigned long) ifp->if_unit;
-		     ev_msg.dv[0].data_length = sizeof(struct net_event_data);
-		     ev_msg.dv[0].data_ptr    = &ev_data;
-		     ev_msg.dv[1].data_length = 0;
-		     kev_post_msg(&ev_msg);
+			 ev_msg.vendor_code    = KEV_VENDOR_APPLE;
+			 ev_msg.kev_class      = KEV_NETWORK_CLASS;
+			 ev_msg.kev_subclass   = KEV_DL_SUBCLASS;
 
+			 ev_msg.event_code = KEV_DL_SIFFLAGS;
+			 strncpy(&ev_data.if_name[0], ifp->if_name, IFNAMSIZ);
+			 ev_data.if_family = ifp->if_family;
+			 ev_data.if_unit   = (unsigned long) ifp->if_unit;
+			 ev_msg.dv[0].data_length = sizeof(struct net_event_data);
+			 ev_msg.dv[0].data_ptr    = &ev_data;
+			 ev_msg.dv[1].data_length = 0;
+			 kev_post_msg(&ev_msg);
 		}
 		getmicrotime(&ifp->if_lastchange);
 		break;
@@ -714,24 +741,23 @@ ifioctl(so, cmd, data, p)
 			return error;
 
 		error = dlil_ioctl(so->so_proto->pr_domain->dom_family, 
-				   ifp, cmd, (caddr_t) data);
+					ifp, cmd, (caddr_t) data);
 
 		if (error == 0) {
+			ev_msg.vendor_code    = KEV_VENDOR_APPLE;
+			ev_msg.kev_class      = KEV_NETWORK_CLASS;
+			ev_msg.kev_subclass   = KEV_DL_SUBCLASS;
 
-		     ev_msg.vendor_code    = KEV_VENDOR_APPLE;
-		     ev_msg.kev_class      = KEV_NETWORK_CLASS;
-		     ev_msg.kev_subclass   = KEV_DL_SUBCLASS;
-	
-		     ev_msg.event_code = KEV_DL_SIFPHYS;
-		     strncpy(&ev_data.if_name[0], ifp->if_name, IFNAMSIZ);
-		     ev_data.if_family = ifp->if_family;
-		     ev_data.if_unit   = (unsigned long) ifp->if_unit;
-		     ev_msg.dv[0].data_length = sizeof(struct net_event_data);
-		     ev_msg.dv[0].data_ptr    = &ev_data;
-		     ev_msg.dv[1].data_length = 0;
-		     kev_post_msg(&ev_msg);
+			ev_msg.event_code = KEV_DL_SIFPHYS;
+			strncpy(&ev_data.if_name[0], ifp->if_name, IFNAMSIZ);
+			ev_data.if_family = ifp->if_family;
+			ev_data.if_unit   = (unsigned long) ifp->if_unit;
+			ev_msg.dv[0].data_length = sizeof(struct net_event_data);
+			ev_msg.dv[0].data_ptr    = &ev_data;
+			ev_msg.dv[1].data_length = 0;
+			kev_post_msg(&ev_msg);
 
-		     getmicrotime(&ifp->if_lastchange);
+			getmicrotime(&ifp->if_lastchange);
 		}
 		return(error);
 
@@ -744,11 +770,7 @@ ifioctl(so, cmd, data, p)
 			return (error);
 		if (ifp->if_ioctl == NULL)
 			return (EOPNOTSUPP);
-		/*
-		 * 72 was chosen below because it is the size of a TCP/IP
-		 * header (40) + the minimum mss (32).
-		 */
-		if (ifr->ifr_mtu < 72 || ifr->ifr_mtu > 65535)
+		if (ifr->ifr_mtu < IF_MINMTU || ifr->ifr_mtu > IF_MAXMTU)
 			return (EINVAL);
 
 		error = dlil_ioctl(so->so_proto->pr_domain->dom_family, 
@@ -769,17 +791,18 @@ ifioctl(so, cmd, data, p)
 		     kev_post_msg(&ev_msg);
 
 			getmicrotime(&ifp->if_lastchange);
+			rt_ifmsg(ifp);
 		}
 		/*
 		 * If the link MTU changed, do network layer specific procedure.
 		 */
-#ifdef INET6
-			if (ifp->if_mtu != oldmtu) {
-				nd6_setmtu(ifp);
-			}
-#endif 
+		if (ifp->if_mtu != oldmtu) {
+#if INET6
+			nd6_setmtu(ifp);
+#endif
 		}
-		return(error);
+		return (error);
+	}
 
 	case SIOCADDMULTI:
 	case SIOCDELMULTI:
@@ -791,13 +814,12 @@ ifioctl(so, cmd, data, p)
 		if ((ifp->if_flags & IFF_MULTICAST) == 0)
 			return EOPNOTSUPP;
 
-#if 0
-		/*
-		 * Don't let users change protocols' entries.
-		 */
+#ifndef __APPLE__
+		/* Don't let users screw up protocols' entries. */
 		if (ifr->ifr_addr.sa_family != AF_LINK)
 			return EINVAL;
 #endif
+
 		if (cmd == SIOCADDMULTI) {
 			struct ifmultiaddr *ifma;
 			error = if_addmulti(ifp, &ifr->ifr_addr, &ifma);
@@ -823,8 +845,15 @@ ifioctl(so, cmd, data, p)
 		}
 		return error;
 
-        case SIOCSIFMEDIA:
+	case SIOCSIFPHYADDR:
+	case SIOCDIFPHYADDR:
+#ifdef INET6
+	case SIOCSIFPHYADDR_IN6:
+#endif
+	case SIOCSLIFPHYADDR:
+	case SIOCSIFMEDIA:
 	case SIOCSIFGENERIC:
+	case SIOCSIFLLADDR:
 		error = suser(p->p_ucred, &p->p_acflag);
 		if (error)
 			return (error);
@@ -836,6 +865,13 @@ ifioctl(so, cmd, data, p)
 			getmicrotime(&ifp->if_lastchange);
 		return error;
 
+	case SIOCGIFSTATUS:
+		ifs = (struct ifstat *)data;
+		ifs->ascii[0] = '\0';
+		
+	case SIOCGIFPSRCADDR:
+	case SIOCGIFPDSTADDR:
+	case SIOCGLIFPHYADDR:
 	case SIOCGIFMEDIA:
 	case SIOCGIFGENERIC:
 
@@ -870,7 +906,6 @@ ifioctl(so, cmd, data, p)
 			if (ifr->ifr_addr.sa_len == 0)
 				ifr->ifr_addr.sa_len = 16;
 #endif
-			/* Fall through! */
 			break;
 
 		case OSIOCGIFADDR:
@@ -888,7 +923,6 @@ ifioctl(so, cmd, data, p)
 		case OSIOCGIFNETMASK:
 			cmd = SIOCGIFNETMASK;
 		}
-
 		error =  ((*so->so_proto->pr_usrreqs->pru_control)(so,
 								   cmd,
 								   data,
@@ -899,29 +933,19 @@ ifioctl(so, cmd, data, p)
 		case OSIOCGIFDSTADDR:
 		case OSIOCGIFBRDADDR:
 		case OSIOCGIFNETMASK:
-		     *(u_short *)&ifr->ifr_addr = ifr->ifr_addr.sa_family;
-		}
+			*(u_short *)&ifr->ifr_addr = ifr->ifr_addr.sa_family;
 
-
-	    }
-
-	    if (error == EOPNOTSUPP) 
-		 error = dlil_ioctl(so->so_proto->pr_domain->dom_family, 
-				    ifp, cmd, (caddr_t) data);
-	  
-#if INET6
-	    if ((oif_flags ^ ifp->if_flags) & IFF_UP) {
-		if (ifp->if_flags & IFF_UP) {
-			int s = splimp();
-			in6_if_up(ifp);
-			splx(s);
 		}
 	    }
-#endif
-#endif
+#endif /* COMPAT_43 */
 
+		if (error == EOPNOTSUPP)
+			error = dlil_ioctl(so->so_proto->pr_domain->dom_family,
+								ifp, cmd, (caddr_t) data);
+
+		return (error);
 	}
-	return (error);
+	return (0);
 }
 
 /*
@@ -937,7 +961,9 @@ ifpromisc(ifp, pswitch)
 {
 	struct ifreq ifr;
 	int error;
+	int oldflags;
 
+	oldflags = ifp->if_flags;
 	if (pswitch) {
 		/*
 		 * If the device is not configured up, we cannot put it in
@@ -954,11 +980,15 @@ ifpromisc(ifp, pswitch)
 		if (--ifp->if_pcount > 0)
 			return (0);
 		ifp->if_flags &= ~IFF_PROMISC;
+		log(LOG_INFO, "%s%d: promiscuous mode disabled\n",
+		    ifp->if_name, ifp->if_unit);
 	}
 	ifr.ifr_flags = ifp->if_flags;
 	error = dlil_ioctl(0, ifp, SIOCSIFFLAGS, (caddr_t)&ifr);
 	if (error == 0)
 		rt_ifmsg(ifp);
+	else
+		ifp->if_flags = oldflags;
 	return error;
 }
 
@@ -983,28 +1013,28 @@ ifconf(cmd, data)
 	ifrp = ifc->ifc_req;
 	for (; space > sizeof (ifr) && ifp; ifp = ifp->if_link.tqe_next) {
 		char workbuf[64];
-		int ifnlen;
+		int ifnlen, addrs;
 
 		ifnlen = snprintf(workbuf, sizeof(workbuf),
 		    "%s%d", ifp->if_name, ifp->if_unit);
 		if(ifnlen + 1 > sizeof ifr.ifr_name) {
 			error = ENAMETOOLONG;
+			break;
 		} else {
 			strcpy(ifr.ifr_name, workbuf);
 		}
 
-		if ((ifa = ifp->if_addrhead.tqh_first) == 0) {
-			bzero((caddr_t)&ifr.ifr_addr, sizeof(ifr.ifr_addr));
-			error = copyout((caddr_t)&ifr, (caddr_t)ifrp,
-			    sizeof (ifr));
-			if (error)
-				break;
-			space -= sizeof (ifr), ifrp++;
-		} else
-		    for ( ; space > sizeof (ifr) && ifa; 
-			 ifa = ifa->ifa_link.tqe_next) {
+		addrs = 0;
+		ifa = ifp->if_addrhead.tqh_first;
+		for ( ; space > sizeof (ifr) && ifa;
+		    ifa = ifa->ifa_link.tqe_next) {
 			register struct sockaddr *sa = ifa->ifa_addr;
-#if COMPAT_43
+#ifndef __APPLE__
+			if (curproc->p_prison && prison_if(curproc, sa))
+				continue;
+#endif
+			addrs++;
+#ifdef COMPAT_43
 			if (cmd == OSIOCGIFCONF) {
 				struct osockaddr *osa =
 					 (struct osockaddr *)&ifr.ifr_addr;
@@ -1021,9 +1051,10 @@ ifconf(cmd, data)
 						sizeof (ifr));
 				ifrp++;
 			} else {
-				space -= sa->sa_len - sizeof(*sa);
-				if (space < sizeof (ifr))
+				if (space < sizeof (ifr) + sa->sa_len -
+					    sizeof(*sa))
 					break;
+				space -= sa->sa_len - sizeof(*sa);
 				error = copyout((caddr_t)&ifr, (caddr_t)ifrp,
 						sizeof (ifr.ifr_name));
 				if (error == 0)
@@ -1035,6 +1066,17 @@ ifconf(cmd, data)
 			if (error)
 				break;
 			space -= sizeof (ifr);
+		}
+		if (error)
+			break;
+		if (!addrs) {
+			bzero((caddr_t)&ifr.ifr_addr, sizeof(ifr.ifr_addr));
+			error = copyout((caddr_t)&ifr, (caddr_t)ifrp,
+			    sizeof (ifr));
+			if (error)
+				break;
+			space -= sizeof (ifr);
+			ifrp++;
 		}
 	}
 	ifc->ifc_len -= space;
@@ -1075,7 +1117,7 @@ if_allmulti(ifp, onswitch)
 
 /*
  * Add a multicast listenership to the interface in question.
- * The link layer provides a routine which converts 
+ * The link layer provides a routine which converts
  */
 int
 if_addmulti(ifp, sa, retifma)
@@ -1093,7 +1135,7 @@ if_addmulti(ifp, sa, retifma)
 	 * If the matching multicast address already exists
 	 * then don't add a new one, just add a reference
 	 */
-	for (ifma = ifp->if_multiaddrs.lh_first; ifma; 
+	for (ifma = ifp->if_multiaddrs.lh_first; ifma;
 	     ifma = ifma->ifma_link.le_next) {
 		if (equal(sa, ifma->ifma_addr)) {
 			ifma->ifma_refcount++;
@@ -1108,15 +1150,17 @@ if_addmulti(ifp, sa, retifma)
 	 * find out which AF_LINK address this maps to, if it isn't one
 	 * already.
 	 */
-
 	rsreq.sa = sa;
 	rsreq.llsa = &llsa;
 
 	error = dlil_ioctl(sa->sa_family, ifp, SIOCRSLVMULTI, (caddr_t) &rsreq);
+	
+	/* to be similar to FreeBSD */
+	if (error == EOPNOTSUPP)
+		error = 0;
 
 	if (error) 
 	     return error;
-
 
 	MALLOC(ifma, struct ifmultiaddr *, sizeof *ifma, M_IFMADDR, M_WAITOK);
 	MALLOC(dupsa, struct sockaddr *, sa->sa_len, M_IFMADDR, M_WAITOK);
@@ -1167,7 +1211,6 @@ if_addmulti(ifp, sa, retifma)
 	 * interface to let them know about it.
 	 */
 	s = splimp();
-
 	dlil_ioctl(0, ifp, SIOCADDMULTI, (caddr_t) 0);
 	splx(s);
 
@@ -1186,7 +1229,7 @@ if_delmulti(ifp, sa)
 	struct ifmultiaddr *ifma;
 	int s;
 
-	for (ifma = ifp->if_multiaddrs.lh_first; ifma; 
+	for (ifma = ifp->if_multiaddrs.lh_first; ifma;
 	     ifma = ifma->ifma_link.le_next)
 		if (equal(sa, ifma->ifma_addr))
 			break;
@@ -1202,19 +1245,13 @@ if_delmulti(ifp, sa)
 	sa = ifma->ifma_lladdr;
 	s = splimp();
 	LIST_REMOVE(ifma, ifma_link);
+	/*
+	 * Make sure the interface driver is notified
+	 * in the case of a link layer mcast group being left.
+	 */
+	if (ifma->ifma_addr->sa_family == AF_LINK && sa == 0)
+		dlil_ioctl(0, ifp, SIOCDELMULTI, 0);
 	splx(s);
-#if INET6 /* XXX: for IPv6 multicast routers */
-	if (ifma->ifma_addr->sa_family == AF_INET6 ) {
-		struct sockaddr_in6 *sin6;
-		/*
-		 * An IP6 address of all 0 means stop listening
-		 * to all of Ethernet multicast addresses.
-		 */
-		sin6 = (struct sockaddr_in6 *)ifma->ifma_addr;
-		if (IN6_IS_ADDR_UNSPECIFIED(&sin6->sin6_addr))
-			ifp->if_flags &= ~IFF_ALLMULTI;
-	}
-#endif /* INET6 */
 	FREE(ifma->ifma_addr, M_IFMADDR);
 	FREE(ifma, M_IFMADDR);
 	if (sa == 0)
@@ -1231,7 +1268,7 @@ if_delmulti(ifp, sa)
 	 * in the record for the link-layer address.  (So we don't complain
 	 * in that case.)
 	 */
-	for (ifma = ifp->if_multiaddrs.lh_first; ifma; 
+	for (ifma = ifp->if_multiaddrs.lh_first; ifma;
 	     ifma = ifma->ifma_link.le_next)
 		if (equal(sa, ifma->ifma_addr))
 			break;
@@ -1253,6 +1290,19 @@ if_delmulti(ifp, sa)
 
 	return 0;
 }
+
+
+/*
+ * We don't use if_setlladdr, our interfaces are responsible for
+ * handling the SIOCSIFLLADDR ioctl.
+ */
+#ifndef __APPLE__
+int
+if_setlladdr(struct ifnet *ifp, const u_char *lladdr, int len)
+{
+	...
+}
+#endif
 
 struct ifmultiaddr *
 ifmaof_ifpforaddr(sa, ifp)
@@ -1288,4 +1338,62 @@ int if_down_all(void)
 
 	splx(s);
 	return(0);		/* Sheesh */
+}
+
+/*
+ * Delete Routes for a Network Interface
+ * 
+ * Called for each routing entry via the rnh->rnh_walktree() call above
+ * to delete all route entries referencing a detaching network interface.
+ *
+ * Arguments:
+ *	rn	pointer to node in the routing table
+ *	arg	argument passed to rnh->rnh_walktree() - detaching interface
+ *
+ * Returns:
+ *	0	successful
+ *	errno	failed - reason indicated
+ *
+ */
+static int
+if_rtdel(rn, arg)
+	struct radix_node	*rn;
+	void			*arg;
+{
+	struct rtentry	*rt = (struct rtentry *)rn;
+	struct ifnet	*ifp = arg;
+	int		err;
+
+	if (rt != NULL && rt->rt_ifp == ifp) {
+		
+		/*
+		 * Protect (sorta) against walktree recursion problems
+		 * with cloned routes
+		 */
+		if ((rt->rt_flags & RTF_UP) == 0)
+			return (0);
+
+		err = rtrequest(RTM_DELETE, rt_key(rt), rt->rt_gateway,
+				rt_mask(rt), rt->rt_flags,
+				(struct rtentry **) NULL);
+		if (err) {
+			log(LOG_WARNING, "if_rtdel: error %d\n", err);
+		}
+	}
+
+	return (0);
+}
+
+/*
+ * Removes routing table reference to a given interfacei
+ * for a given protocol family
+ */
+
+void if_rtproto_del(struct ifnet *ifp, int protocol)
+{
+	
+        struct radix_node_head  *rnh;
+
+	if (((rnh = rt_tables[protocol]) != NULL) && (ifp != NULL)) 
+		(void) rnh->rnh_walktree(rnh, if_rtdel, ifp);
 }

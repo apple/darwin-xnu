@@ -34,6 +34,7 @@
 
 #ifndef _NETAT_APPLETALK_H_
 #define _NETAT_APPLETALK_H_
+#include <sys/appleapiopts.h>
 
 #include <sys/types.h>
 #include <sys/uio.h>
@@ -270,7 +271,8 @@ typedef struct at_state {
 } at_state_t;
 
 /*  at_state_t 'flags' defines */
-#define AT_ST_STARTED		0x0001
+#define AT_ST_STARTED		0x0001	/* set if protocol is fully enabled */
+#define AT_ST_STARTING		0x0002	/* set if interfaces are configured */
 #define AT_ST_MULTIHOME		0x0080	/* set if multihome mode */
 #define AT_ST_ROUTER		0x0100	/* set if we are a router */
 #define AT_ST_IF_CHANGED	0x0200	/* set when state of any I/F 
@@ -280,11 +282,13 @@ typedef struct at_state {
 #define AT_ST_NBP_CHANGED	0x1000  /* if nbp table changed (for SNMP)*/
 
 #ifdef KERNEL
+#ifdef __APPLE_API_PRIVATE
 extern at_state_t at_state;		/* global state of AT network */
 
 #define ROUTING_MODE	(at_state.flags & AT_ST_ROUTER)
 #define MULTIHOME_MODE	(at_state.flags & AT_ST_MULTIHOME)
 #define MULTIPORT_MODE (ROUTING_MODE || MULTIHOME_MODE)
+#endif /* __APPLE_API_PRIVATE */
 #endif /* KERNEL */
 
 /* defines originally from h/at_elap.h */

@@ -136,19 +136,17 @@ fdesc_unmount(mp, mntflags, p)
 {
 	int error;
 	int flags = 0;
+	int force = 0;
 	struct vnode *rootvp = VFSTOFDESC(mp)->f_root;
 
-	if (mntflags & MNT_FORCE)
+	if (mntflags & MNT_FORCE) {
 		flags |= FORCECLOSE;
+		force = 1;
+	}
 
-	/*
-	 * Clear out buffer cache.  I don't think we
-	 * ever get anything cached at this level at the
-	 * moment, but who knows...
-	 */
-	if (rootvp->v_usecount > 1)
+	if ( (rootvp->v_usecount > 1) && !force )
 		return (EBUSY);
-	if (error = vflush(mp, rootvp, flags))
+	if ( (error = vflush(mp, rootvp, flags)) && !force )
 		return (error);
 
 	/*

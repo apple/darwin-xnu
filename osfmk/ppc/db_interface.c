@@ -65,8 +65,8 @@
 #include <ddb/db_break.h>
 #include <ddb/db_watch.h>
 
-struct	 ppc_saved_state *ppc_last_saved_statep;
-struct	 ppc_saved_state ppc_nested_saved_state;
+struct	 savearea *ppc_last_saved_statep;
+struct	 savearea ppc_nested_saved_state;
 unsigned ppc_last_kdb_sp;
 
 extern int debugger_active[NCPUS];		/* Debugger active on CPU */
@@ -149,7 +149,7 @@ void kdp_register_send_receive(void) {}
 
 extern jmp_buf_t *db_recover;
 spl_t	saved_ipl[NCPUS];	/* just to know what IPL was before trap */
-struct ppc_saved_state *saved_state[NCPUS];
+struct savearea *saved_state[NCPUS];
 
 /*
  *  kdb_trap - field a TRACE or BPT trap
@@ -157,7 +157,7 @@ struct ppc_saved_state *saved_state[NCPUS];
 void
 kdb_trap(
 	int			type,
-	struct ppc_saved_state *regs)
+	struct savearea *regs)
 {
 	boolean_t	trap_from_user;
 	int			previous_console_device;
@@ -183,11 +183,11 @@ kdb_trap(
 		    else
 			db_printf("%s", trap_type[type]);
 		    db_printf(" trap, pc = %x\n",
-			      regs->srr0);
+			      regs->save_srr0);
 		    db_error("");
 		    /*NOTREACHED*/
 		}
-		kdbprinttrap(type, code, (int *)&regs->srr0, regs->r1);
+		kdbprinttrap(type, code, (int *)&regs->save_srr0, regs->save_r1);
 	}
 
 	saved_state[cpu_number()] = regs;
@@ -211,13 +211,13 @@ kdb_trap(
 	*regs = ddb_regs;
 
 	if ((type == T_PROGRAM) &&
-	    (db_get_task_value(regs->srr0,
+	    (db_get_task_value(regs->save_srr0,
 			       BKPT_SIZE,
 			       FALSE,
 			       db_target_space(current_act(),
 					       trap_from_user))
 	                      == BKPT_INST))
-	    regs->srr0 += BKPT_SIZE;
+	    regs->save_srr0 += BKPT_SIZE;
 
 kdb_exit:
 	saved_state[cpu_number()] = 0;

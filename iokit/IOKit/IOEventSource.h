@@ -176,14 +176,18 @@ IOWorkLoop that at least reacts to signalWorkAvailable() and onThread functions.
 
 protected:
     // Methods to access the IOWorkLoop exported fields
-    inline void signalWorkAvailable()	{ workLoop->signalWorkAvailable(); };
-    inline void openGate()		{ workLoop->openGate(); };
-    inline void closeGate()		{ workLoop->closeGate(); };
-    inline bool tryCloseGate()		{ return workLoop->tryCloseGate(); };
-    inline int sleepGate(void *event, UInt32 type)
-        { return workLoop->sleepGate(event, type); };
-    inline void wakeupGate(void *event, bool oneThread)
-        { workLoop->wakeupGate(event, oneThread); };
+    /* inline */ void signalWorkAvailable();
+        /* { workLoop->signalWorkAvailable(); }; */
+    /* inline */ void openGate();
+        /* { workLoop->openGate(); }; */
+    /* inline */ void closeGate();
+        /* { workLoop->closeGate(); }; */
+    /* inline */ bool tryCloseGate();
+        /* { return workLoop->tryCloseGate(); }; */
+    /* inline */ int sleepGate(void *event, UInt32 type);
+        /* { return workLoop->sleepGate(event, type); }; */
+    /* inline */ void wakeupGate(void *event, bool oneThread);
+        /* { workLoop->wakeupGate(event, oneThread); }; */
 
 public:
 /*! @function setAction

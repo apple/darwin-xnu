@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2002 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -19,106 +19,6 @@
  * 
  * @APPLE_LICENSE_HEADER_END@
  */
-/*
-	File:		FileIDServices.c
-
-	Contains:	File ID manipulating routines.
-
-	Version:	HFS Plus 1.0
-
-	Written by:	Deric Horn
-
-	Copyright:	© 1996-1999 by Apple Computer, Inc., all rights reserved.
-
-	File Ownership:
-
-		DRI:				Deric Horn
-
-		Other Contact:		xxx put other contact here xxx
-
-		Technology:			xxx put technology here xxx
-
-	Writers:
-
-		(JL)	Jim Luther
-		(msd)	Mark Day
-		(djb)	Don Brady
-		(DSH)	Deric Horn
-
-	Change History (most recent first):
-	  <MacOSX>	 3/2/98		djb		Fix extents corruption bug in MoveExtents (radar #2309434).
-	  <MacOSX>	11/20/98	djb		Add support for UTF-8 names.
-	  <MacOSX>	  4/2/98	djb		Switch over to real BTree interface in MoveExtents and DeleteExtents.
-	  <MacOSX>	 3/31/98	djb		Sync up with final HFSVolumes.h header file.
-
-	  <CS21>	11/17/97	djb		PrepareInputName routine now returns an error.
-	  <CS20>	11/13/97	djb		Radar #2001699 ResolveFileID needs to use CMNotFound error.
-	  <CS19>	10/31/97	JL		#2000184 - CreateFileThreadID and ExchangeFiles now return the
-									WDCBRecPtr or NULL for external file systems. ExchangeFiles no
-									longer returns length of FCB table to caller since that wasn't
-									ever needed.
-		<18>	10/23/97	DSH		1685058, Fix ExchangeFiles by invalidating the node cache before
-									switching the files.
-	  <CS17>	10/19/97	msd		Bug 1684586. GetCatInfo and SetCatInfo use only contentModDate.
-	  <CS16>	10/16/97	DSH		Return badFidErr in ResolveFileID if LocateCatalogThread fails
-	  <CS15>	10/15/97	DSH		CreateFileThreadID(), remap btExists to fidExists.
-	  <CS14>	  9/7/97	djb		Turn off some DebugStr calls.
-	  <CS13>	  9/4/97	msd		Remove call to PropertyExchangeObjects.
-	  <CS12>	 8/14/97	djb		Remove hard link support.
-	  <CS11>	 7/18/97	msd		Include LowMemPriv.h.
-	  <CS10>	 7/16/97	DSH		FilesInternal.i renamed FileMgrInternal.i to avoid name
-									collision
-	   <CS9>	  7/8/97	DSH		Loading PrecompiledHeaders from define passed in on C line
-	   <CS8>	 6/24/97	djb		Add hard link support to ResolveFileID and CreateFileIDRef.
-	   <CS7>	 6/20/97	msd		Use contentModDate and attributeModDate fields instead of
-									modifyDate.
-	   <CS6>	 6/13/97	djb		Switch over from PrepareOutputName to ConvertUnicodeToHFSName.
-									PrepareInputName now takes an encoding.
-	   <CS5>	 5/28/97	msd		Move the declaration of FindFileName to FilesInternal.i.
-	   <CS4>	 5/19/97	djb		No longer need to invalidate vcbDirIDM field.
-	   <CS3>	 5/16/97	msd		In ExchangeFiles, change srcNamePtr from char * to StringPtr
-									(fixes warnings).
-	   <CS2>	 4/28/97	djb		(DSH) Added VolumeWritable check back into CreateFileIDThread.
-	   <CS1>	 4/24/97	djb		first checked in
-	 <HFS23>	 4/11/97	DSH		Use extended VCB fields catalogRefNum, and extentsRefNum.
-	 <HFS22>	  4/9/97	msd		Rewrite CreateFileThreadID so that it properly handles
-									pathnames, and doesn't overwrite the ioNamePtr. The data field
-									of FindFileNameGlueRec points to a CatalogNodeData, not
-									CatalogRecord.
-	 <HFS21>	  4/4/97	djb		Get in sync with volume format changes.
-	 <HFS20>	 3/31/97	djb		Change ClearMem to ClearMemory.
-	 <HFS19>	 3/17/97	DSH		C_FlushCache prototype to FilesInternal.h
-	 <HFS18>	  3/5/97	msd		ExchangeFiles needs to call PropertyExchangeObjects.
-	 <HFS17>	 2/13/97	msd		Fix MoveExtents and DeleteExtents to work with HFS+ extent
-									records.
-	 <HFS16>	 1/31/97	msd		In MoveExtents, when a record isn't found and you want the next
-									record in order, use the "next record" offset = 1 instead of
-									"current record" offset = 0. DeleteExtents would always exit
-									without doing anything because it was searching for an invalid
-									key. Removed several DebugStrs that were used as cheap code
-									coverage.
-	 <HFS15>	 1/15/97	DSH		Resolve wasn't passing the name back for HFS
-	 <HFS14>	 1/13/97	djb		LocateCatalogThread now passes back the thread record size.
-	 <HFS13>	 1/11/97	DSH		HFS+, fixed some Unicode/Pascal strings related bugs for use on
-									HFS+ volumes.
-	 <HFS12>	  1/9/97	DSH		Fix ExchangeFiles extents
-	 <HFS11>	  1/6/97	DSH		pass VCB in CloseFile() routine.
-	 <HFS10>	  1/6/97	djb		Fixed ResolveFileID - it was not returning a directory ID!
-	  <HFS9>	  1/3/97	msd		Fix prototype for C_FlushCache. Fix prototype for
-									TrashFileBlocks.
-	  <HFS8>	  1/3/97	djb		Integrate latest HFSVolumesPriv.h changes.
-	  <HFS7>	  1/2/97	DSH		C port of ExchangeFileIDs
-	  <HFS6>	12/20/96	djb		Fixed bug in CreateFileID.
-	  <HFS5>	12/19/96	DSH		All refs to VCB are now refs to ExtendedVCB
-	  <HFS4>	12/19/96	msd		Use kFileThreadExistsMask (from HFSVolumesPriv.h) instead of
-									kFileThreadMask (from FilesInternal.h) since the latter was
-									incorrectly defined and has now been removed.
-	  <HFS3>	12/19/96	djb		Updated for new B-tree Manager interface.
-	  <HFS2>	12/18/96	msd		GetFileThreadID was using a bitwise-OR (|) instead of
-									bitwise-AND (&) to test for a bit being set.
-	  <HFS1>	12/12/96	DSH		first checked in
-
-*/
 
 #include "../../hfs_macos_defs.h"
 #include "../../hfs_format.h"
@@ -129,37 +29,32 @@
 
 
 struct ExtentsRecBuffer {
-	ExtentKey		extentKey;
+	ExtentKey	extentKey;
 	ExtentRecord	extentData;
 };
 typedef struct ExtentsRecBuffer ExtentsRecBuffer;
 
-
-OSErr	CreateFileID( ExtendedVCB *vcb, HFSCatalogNodeID fileID, CatalogName *name, HFSCatalogNodeID *threadID );
-OSErr	GetFileThreadID( ExtendedVCB *vcb, HFSCatalogNodeID id, const CatalogName *name, Boolean isHFSPlus, UInt32 *threadID );
 
 UInt32	CheckExtents( void *extents, UInt32 blocks, Boolean isHFSPlus );
 OSErr	DeleteExtents( ExtendedVCB *vcb, UInt32 fileNumber, Boolean isHFSPlus );
 OSErr	MoveExtents( ExtendedVCB *vcb, UInt32 srcFileID, UInt32 destFileID, Boolean isHFSPlus );
 void	CopyCatalogNodeInfo( CatalogRecord *src, CatalogRecord *dest );
 void	CopyBigCatalogNodeInfo( CatalogRecord *src, CatalogRecord *dest );
-
 void	CopyExtentInfo( ExtentKey *key, ExtentRecord *data, ExtentsRecBuffer *buffer, UInt16 bufferCount );
-extern	void	TrashFileBlocks( ExtendedVCB *vcb, UInt32 fileNumber );
 
 
 
 OSErr ExchangeFileIDs( ExtendedVCB *vcb, ConstUTF8Param srcName, ConstUTF8Param destName, HFSCatalogNodeID srcID, HFSCatalogNodeID destID, UInt32 srcHint, UInt32 destHint )
 {
-	CatalogKey		srcKey;		// 518 bytes
+	CatalogKey	srcKey;		// 518 bytes
+	CatalogKey	destKey;	// 518 bytes
 	CatalogRecord	srcData;	// 520 bytes
-	CatalogKey		destKey;	// 518 bytes
 	CatalogRecord	destData;	// 520 bytes
 	CatalogRecord	swapData;	// 520 bytes
-	SInt16			numSrcExtentBlocks;
-	SInt16			numDestExtentBlocks;
-	OSErr			err;
-	Boolean			isHFSPlus = ( vcb->vcbSigWord == kHFSPlusSigWord );
+	SInt16		numSrcExtentBlocks;
+	SInt16		numDestExtentBlocks;
+	OSErr		err;
+	Boolean		isHFSPlus = ( vcb->vcbSigWord == kHFSPlusSigWord );
 
 	TrashCatalogIterator(vcb, srcID);	//	invalidate any iterators for this parentID
 	TrashCatalogIterator(vcb, destID);	//	invalidate any iterators for this parentID
@@ -458,10 +353,8 @@ FlushAndReturn:
 
 void	CopyCatalogNodeInfo( CatalogRecord *src, CatalogRecord *dest )
 {
-//	dest->hfsFile.filStBlk = src->hfsFile.filStBlk;
 	dest->hfsFile.dataLogicalSize	= src->hfsFile.dataLogicalSize;
 	dest->hfsFile.dataPhysicalSize = src->hfsFile.dataPhysicalSize;
-//	dest->hfsFile.filRStBlk = src->hfsFile.filRStBlk;
 	dest->hfsFile.rsrcLogicalSize	= src->hfsFile.rsrcLogicalSize;
 	dest->hfsFile.rsrcPhysicalSize = src->hfsFile.rsrcPhysicalSize;
 	dest->hfsFile.modifyDate = src->hfsFile.modifyDate;
@@ -545,7 +438,7 @@ OSErr	MoveExtents( ExtendedVCB *vcb, UInt32 srcFileID, UInt32 destFileID, Boolea
 	//	we found, so that BTIterateRecord would get the next one (the first we haven't processed).
 	//
 
-	err = BTSearchRecord(fcb, &btIterator, kInvalidMRUCacheKey, &btRecord, &btRecordSize, &btIterator);
+	err = BTSearchRecord(fcb, &btIterator, &btRecord, &btRecordSize, &btIterator);
 	
 	//	We expect a btNotFound here, since there shouldn't be an extent record with FABN = 0.
 	if (err != btNotFound)
@@ -682,7 +575,7 @@ OSErr	DeleteExtents( ExtendedVCB *vcb, UInt32 fileID, Boolean isHFSPlus )
 		extentKeyPtr->hfs.startBlock = 0;
 	}
 
-	err = BTSearchRecord(fcb, &btIterator, kInvalidMRUCacheKey, &btRecord, &btRecordSize, &btIterator);
+	err = BTSearchRecord(fcb, &btIterator, &btRecord, &btRecordSize, &btIterator);
 	if ( err != btNotFound )
 	{
 		if (err == noErr) {		//	Did we find a bogus extent record?

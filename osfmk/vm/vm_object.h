@@ -275,6 +275,10 @@ struct vm_object {
 						 * put in current object
 						 */
 #endif
+					/* hold object lock when altering */
+	unsigned	int			/* cache WIMG bits         */		
+			wimg_bits:8,		/* wimg plus some expansion*/
+			not_in_use:24;
 #ifdef	UBC_DEBUG
 	queue_head_t		uplq;		/* List of outstanding upls */
 #endif /* UBC_DEBUG */
@@ -519,17 +523,21 @@ __private_extern__ vm_object_t	vm_object_enter(
 #define	VM_OBJECT_EVENT_CACHING			7
 
 #define	vm_object_assert_wait(object, event, interruptible)		\
-	MACRO_BEGIN							\
-	(object)->all_wanted |= 1 << (event);				\
-	assert_wait((event_t)((vm_offset_t)(object)+(event)),(interruptible)); \
-	MACRO_END
+	(((object)->all_wanted |= 1 << (event)),			\
+	 assert_wait((event_t)((vm_offset_t)(object)+(event)),(interruptible)))
 
 #define	vm_object_wait(object, event, interruptible)			\
-	MACRO_BEGIN							\
-	vm_object_assert_wait((object),(event),(interruptible));	\
-	vm_object_unlock(object);					\
-	thread_block((void (*)(void)) 0);				\
-	MACRO_END
+	(vm_object_assert_wait((object),(event),(interruptible)),	\
+	vm_object_unlock(object),					\
+	thread_block(THREAD_CONTINUE_NULL))				\
+
+#define thread_sleep_vm_object(object, event, interruptible)		\
+	thread_sleep_mutex((event_t)(event), &(object)->Lock, (interruptible))
+
+#define vm_object_sleep(object, event, interruptible)			\
+	(((object)->all_wanted |= 1 << (event)),			\
+	 thread_sleep_vm_object((object), 				\
+		((vm_offset_t)(object)+(event)), (interruptible)))
 
 #define	vm_object_wakeup(object, event)					\
 	MACRO_BEGIN							\
@@ -567,13 +575,13 @@ __private_extern__ vm_object_t	vm_object_enter(
 #define		vm_object_paging_wait(object, interruptible)		\
 	MACRO_BEGIN							\
 	while ((object)->paging_in_progress != 0) {			\
-		vm_object_wait(	(object),				\
+		wait_result_t  _wr;					\
+									\
+		_wr = vm_object_sleep((object),				\
 				VM_OBJECT_EVENT_PAGING_IN_PROGRESS,	\
 				(interruptible));			\
-		vm_object_lock(object);					\
 									\
-		/*XXX if ((interruptible) &&	*/			\
-		    /*XXX (current_thread()->wait_result != THREAD_AWAKENED))*/ \
+		/*XXX if ((interruptible) && (_wr != THREAD_AWAKENED))*/\
 			/*XXX break; */					\
 	}								\
 	MACRO_END

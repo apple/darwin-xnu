@@ -52,10 +52,12 @@
  * SUCH DAMAGE.
  *
  *	@(#)tcp.h	8.1 (Berkeley) 6/10/93
+ * $FreeBSD: src/sys/netinet/tcp.h,v 1.13.2.3 2001/03/01 22:08:42 jlemon Exp $
  */
 
 #ifndef _NETINET_TCP_H_
 #define _NETINET_TCP_H_
+#include <sys/appleapiopts.h>
 
 typedef	u_int32_t tcp_seq;
 typedef u_int32_t tcp_cc;		/* connection count per rfc1644 */
@@ -87,7 +89,9 @@ struct tcphdr {
 #define	TH_PUSH	0x08
 #define	TH_ACK	0x10
 #define	TH_URG	0x20
-#define TH_FLAGS (TH_FIN|TH_SYN|TH_RST|TH_ACK|TH_URG)
+#define	TH_ECE	0x40
+#define	TH_CWR	0x80
+#define	TH_FLAGS	(TH_FIN|TH_SYN|TH_RST|TH_ACK|TH_URG|TH_ECE|TH_CWR)
 
 	u_short	th_win;			/* window */
 	u_short	th_sum;			/* checksum */
@@ -137,6 +141,8 @@ struct tcphdr {
 #define	TTCP_CLIENT_SND_WND	4096	/* dflt send window for T/TCP client */
 
 #define TCP_MAX_WINSHIFT	14	/* maximum window shift */
+
+#define TCP_MAXBURST		4 	/* maximum segments in a burst */
 
 #define TCP_MAXHLEN	(0xf<<2)	/* max length of header in bytes */
 #define TCP_MAXOLEN	(TCP_MAXHLEN - sizeof(struct tcphdr))

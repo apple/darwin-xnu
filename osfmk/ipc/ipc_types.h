@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2002,2000 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -31,7 +31,9 @@
 #ifndef	_IPC_TYPES_H_
 #define	_IPC_TYPES_H_
 
-#ifdef KERNEL_PRIVATE
+#include <mach/port.h>
+#include <mach/message.h>
+#include <mach/mach_types.h>
 
 #if !defined(MACH_KERNEL_PRIVATE)
 
@@ -42,27 +44,16 @@
  * implementation details.
  */
 struct ipc_object ;
-struct ipc_space ;
-struct ipc_port ;
 
 #endif /* !MACH_KERNEL_PRIVATE */
 
 typedef struct ipc_object	*ipc_object_t;
-typedef struct ipc_space	*ipc_space_t;
-typedef struct ipc_port	        *ipc_port_t;
 
 #define IPC_OBJECT_NULL		((ipc_object_t) 0)
 #define IPC_OBJECT_DEAD		((ipc_object_t)~0)
 #define IPC_OBJECT_VALID(io)	(((io) != IPC_OBJECT_NULL) && \
 				 ((io) != IPC_OBJECT_DEAD))
 
-#define	IPC_PORT_NULL		((ipc_port_t) 0)
-#define	IPC_PORT_DEAD		((ipc_port_t)~0)
-#define IPC_PORT_VALID(port)	(((port) != IPC_PORT_NULL) && \
-				 ((port) != IPC_PORT_DEAD))
-
-#define IPC_SPACE_NULL		((ipc_space_t) 0)
-
-#endif /* KERNEL_PRIVATE */
+typedef	void (*mach_msg_continue_t)(mach_msg_return_t);	/* after wakeup */
 
 #endif	/* _IPC_TYPES_H_ */

@@ -195,14 +195,7 @@ routine mach_port_mod_refs(
 		right		: mach_port_right_t;
 		delta		: mach_port_delta_t);
 
-/*
- *      Allocates a new receive right, and associates it with the
- *	specified RPC subsystem attributes.
- */
-routine mach_port_allocate_subsystem(
-		task		: ipc_space_t;
-		subsys		: subsystem_t;
-	out	name		: mach_port_name_t);
+skip;
 
 /*
  *	Only valid for receive rights.
@@ -343,6 +336,7 @@ routine mach_port_allocate_qos(
 	inout	qos		: mach_port_qos_t;
 	out	name		: mach_port_name_t);
 
+
 /*
  *	Generic interface to allocation various kinds of ports.
  *	Should never be called directly by users (at least not
@@ -352,7 +346,7 @@ routine mach_port_allocate_qos(
 routine mach_port_allocate_full(
 		task		: ipc_space_t;
 		right		: mach_port_right_t;
-		subs		: subsystem_t;
+		proto		: mach_port_t;
 	inout	qos		: mach_port_qos_t;
 	inout	name		: mach_port_name_t);
 

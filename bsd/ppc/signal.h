@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2002 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -21,30 +21,14 @@
  */
 /*
  * Copyright (c) 1992, 1993 NeXT Computer, Inc.
- *
- * HISTORY
- *
- *	Machine specific signal information.
- *
- * HISTORY
- * 25-MAR-97  Umesh Vaishampayan (umeshv@NeXT.com)
- *	Ported from m98k and hppa.
- *
- * 13-Jan-92  Peter King (king) at NeXT Computer, Inc.
- *	Filled out struct sigcontext to hold all registers.
- *	Added regs_saved_t to specify which regs stored in the
- *	sigcontext are valid.
- *
- * 09-Nov-92  Ben Fathi (benf) at NeXT, Inc.
- *	Ported to m98k.
- *
- * 09-May-91  Mike DeMoney (mike) at NeXT, Inc.
- *	Ported to m88k.
  */
 
 #ifndef	_PPC_SIGNAL_
 #define	_PPC_SIGNAL_ 1
 
+#include <sys/appleapiopts.h>
+
+#ifdef __APPLE_API_OBSOLETE
 typedef int sig_atomic_t; 
 
 /*
@@ -87,6 +71,8 @@ struct sigcontext {
     int		sc_sp;      	/* stack pointer if sc_regs == NULL */
 	void	*sc_regs;		/* (kernel private) saved state */
 };
+
+#endif /* __APPLE_API_OBSOLETE */
 
 #endif /* _PPC_SIGNAL_ */
 

@@ -34,10 +34,14 @@
 #include <IOKit/IOLib.h>
 #include <libkern/c++/OSUnserialize.h>
 
+#include <IOKit/platform/ApplePlatformExpert.h>
 #include "AppleI386PlatformExpert.h"
 
 #include <IOKit/assert.h>
 
+__BEGIN_DECLS
+extern void kdreboot(void);
+__END_DECLS
 /* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
 
 #define super IOPlatformExpert
@@ -58,10 +62,16 @@ bool  AppleI386PlatformExpert::start(IOService * provider)
 {
     gIntelPICName = (OSSymbol *) OSSymbol::withCStringNoCopy("intel-pic");
 
+    setBootROMType(kBootROMTypeNewWorld); /* hammer to new world for i386 */
+
 //  setupPIC(provider);
 
     if (!super::start(provider))
         return false;
+
+    // Install halt/restart handler.
+
+    PE_halt_restart = handlePEHaltRestart;
 
     return true;
 }
@@ -167,4 +177,25 @@ bool AppleI386PlatformExpert::getModelName( char * name, int maxLength )
     strncpy( name, "x86", maxLength );
 
     return (true);
+}
+
+int AppleI386PlatformExpert::handlePEHaltRestart( unsigned int type )
+{
+    int ret = 1;
+	
+    switch ( type )
+    {
+        case kPERestartCPU:
+            // Use the pexpert service to reset the system through
+            // the keyboard controller.
+            kdreboot();
+            break;
+
+        case kPEHaltCPU:
+        default:
+            ret = -1;
+            break;
+    }
+
+    return ret;
 }

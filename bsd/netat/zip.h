@@ -30,6 +30,7 @@
 
 #ifndef _NETAT_ZIP_H_
 #define	_NETAT_ZIP_H_
+#include <sys/appleapiopts.h>
 
 /* Definitions for ZIP, per AppleTalk Zone Information Protocol
  * documentation from `Inside AppleTalk', July 14, 1986.

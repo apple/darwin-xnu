@@ -1051,8 +1051,6 @@ dev_add_entry(char *name, devnode_t * parent, int type, devnode_type_t * typeinf
 	return error;
 }
 
-#include <sys/subr_prf.h>
-
 /*
  * Function: devfs_make_node
  *
@@ -1077,7 +1075,6 @@ devfs_make_node(dev_t dev, int chrblk, uid_t uid,
 	devnode_type_t	typeinfo;
 
 	char *name, *path, buf[256]; /* XXX */
-	char * b_ptr = buf;
 	boolean_t   funnel_state;
 	int i;
 	va_list ap;
@@ -1093,9 +1090,8 @@ devfs_make_node(dev_t dev, int chrblk, uid_t uid,
 		goto out;
 
 	va_start(ap, fmt);
-	prf(fmt, ap, TOSTR, (struct tty *)&b_ptr);
+	vsnprintf(buf, sizeof(buf), fmt, ap);
 	va_end(ap);
-	*b_ptr = 0;
 
 	name = NULL;
 
@@ -1152,7 +1148,6 @@ devfs_make_link(void *original, char *fmt, ...)
 
 	va_list ap;
 	char *p, buf[256]; /* XXX */
-	char * b_ptr = buf;
 	int i;
 	boolean_t   funnel_state;
 
@@ -1164,9 +1159,8 @@ devfs_make_link(void *original, char *fmt, ...)
 	}
 
 	va_start(ap, fmt);
-	prf(fmt, ap, TOSTR, (struct tty *)&b_ptr);
+	vsnprintf(buf, sizeof(buf), fmt, ap);
 	va_end(ap);
-	*b_ptr = 0;
 
 	p = NULL;
 

@@ -36,8 +36,6 @@
 #include <vm/memory_object.h>
 #include <vm/vm_pageout.h>
 
-#include <libkern/OSAtomic.h>
-
 #include <default_pager/default_pager_types.h>
 
 /* BSD VM COMPONENT INTERFACES */
@@ -475,11 +473,11 @@ vnode_pager_reference(
 	memory_object_t		mem_obj)
 {	
 	register vnode_pager_t	vnode_object;
-	unsigned int		prev_ref_count;
+	unsigned int		new_ref_count;
 
 	vnode_object = vnode_pager_lookup(mem_obj);
-	prev_ref_count = OSIncrementAtomic((UInt32 *)&vnode_object->ref_count);
-	assert(prev_ref_count > 0);
+	new_ref_count = hw_atomic_add(&vnode_object->ref_count, 1);
+	assert(new_ref_count > 1);
 }
 
 /*
@@ -495,7 +493,7 @@ vnode_pager_deallocate(
 
 	vnode_object = vnode_pager_lookup(mem_obj);
 
-	if (OSDecrementAtomic((UInt32 *)&vnode_object->ref_count) == 1) {
+	if (hw_atomic_sub(&vnode_object->ref_count, 1) == 0) {
 		if (vnode_object->vnode_handle != (vnode_port_t) NULL) {
 			vnode_pager_vrele(vnode_object->vnode_handle);
 		}
@@ -642,7 +640,7 @@ vnode_pager_cluster_read(
 		panic("vs_cluster_read: cnt not a multiple of PAGE_SIZE");
 	}
 
-	kret = vnode_pagein(vnode_object->vnode_handle, (upl_t)NULL, (vm_offset_t)NULL, offset, cnt, 2, &local_error);
+	kret = vnode_pagein(vnode_object->vnode_handle, (upl_t)NULL, (vm_offset_t)NULL, offset, cnt, 0, &local_error);
 /*
 	if(kret == PAGER_ABSENT) {
 	Need to work out the defs here, 1 corresponds to PAGER_ABSENT 

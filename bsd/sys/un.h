@@ -57,6 +57,8 @@
 #ifndef _SYS_UN_H_
 #define _SYS_UN_H_
 
+#include <sys/appleapiopts.h>
+
 /*
  * Definitions for UNIX IPC domain.
  */
@@ -67,6 +69,7 @@ struct	sockaddr_un {
 };
 
 #ifdef KERNEL
+#ifdef __APPLE_API_PRIVATE
 struct mbuf;
 struct socket;
 
@@ -77,6 +80,7 @@ void	unp_dispose __P((struct mbuf *m));
 int	unp_externalize __P((struct mbuf *rights));
 void	unp_init __P((void));
 extern	struct pr_usrreqs uipc_usrreqs;
+#endif /* __APPLE_API_PRIVATE */
 #else /* !KERNEL */
 
 /* actual length of an initialized sockaddr_un */

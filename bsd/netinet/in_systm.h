@@ -52,10 +52,12 @@
  * SUCH DAMAGE.
  *
  *	@(#)in_systm.h	8.1 (Berkeley) 6/10/93
+ * $FreeBSD: src/sys/netinet/in_systm.h,v 1.9 1999/12/29 04:41:00 peter Exp $
  */
 
 #ifndef _NETINET_IN_SYSTM_H_
 #define _NETINET_IN_SYSTM_H_
+#include <sys/appleapiopts.h>
 
 /*
  * Miscellaneous internetwork
@@ -76,7 +78,9 @@ typedef u_int32_t n_long;		/* long as received from the net */
 typedef	u_int32_t n_time;		/* ms since 00:00 GMT, byte rev */
 
 #ifdef KERNEL
+#ifdef __APPLE_API_PRIVATE
 n_time	 iptime __P((void));
+#endif /* __APPLE_API_PRIVATE */
 #endif
 
 #endif

@@ -22,97 +22,6 @@
 /*
  * @OSF_COPYRIGHT@
  */
-/*
- * HISTORY
- * 
- * Revision 1.1.1.1  1998/09/22 21:05:30  wsanchez
- * Import of Mac OS X kernel (~semeria)
- *
- * Revision 1.1.1.1  1998/03/07 02:25:46  wsanchez
- * Import of OSF Mach kernel (~mburg)
- *
- * Revision 1.2.17.3  1995/01/06  19:52:05  devrcs
- * 	mk6 CR668 - 1.3b26 merge
- * 	64bit cleanup, flavor typedefs
- * 	[1994/10/14  03:43:17  dwm]
- *
- * Revision 1.2.17.2  1994/09/23  02:43:16  ezf
- * 	change marker to not FREE
- * 	[1994/09/22  21:43:12  ezf]
- * 
- * Revision 1.2.17.1  1994/08/07  20:50:11  bolinger
- * 	Merge up to colo_b7.
- * 	[1994/08/01  21:02:09  bolinger]
- * 
- * Revision 1.2.13.3  1994/06/25  03:47:23  dwm
- * 	mk6 CR98 - add flavor interface typedefs.
- * 	[1994/06/24  21:55:01  dwm]
- * 
- * Revision 1.2.13.2  1994/05/02  21:36:08  dwm
- * 	Remove nmk15_compat support.
- * 	[1994/05/02  21:09:13  dwm]
- * 
- * Revision 1.2.13.1  1994/01/12  17:57:31  dwm
- * 	Fix "ifdef" NMK15_COMPAT to "if"
- * 	[1994/01/12  17:31:16  dwm]
- * 
- * Revision 1.2.3.5  1993/08/03  18:29:54  gm
- * 	CR9596: Change KERNEL to MACH_KERNEL.
- * 	[1993/08/02  18:56:17  gm]
- * 
- * Revision 1.2.3.4  1993/07/08  19:04:54  watkins
- * 	New version of thread_basic_info structure; old version
- * 	is now under nmk15_compat.
- * 	[1993/07/07  21:04:15  watkins]
- * 
- * Revision 1.2.3.3  1993/06/29  21:55:52  watkins
- * 	New definitions for scheduling control interfaces.
- * 	[1993/06/29  20:51:04  watkins]
- * 
- * Revision 1.2.3.2  1993/06/09  02:43:43  gm
- * 	Added to OSF/1 R1.3 from NMK15.0.
- * 	[1993/06/02  21:18:25  jeffc]
- * 
- * Revision 1.2  1993/04/19  16:39:43  devrcs
- * 	ansi C conformance changes
- * 	[1993/02/02  18:55:07  david]
- * 
- * Revision 1.1  1992/09/30  02:32:13  robert
- * 	Initial revision
- * 
- * $EndLog$
- */
-/* CMU_HIST */
-/*
- * Revision 2.4  91/05/14  17:01:06  mrt
- * 	Correcting copyright
- * 
- * Revision 2.3  91/02/05  17:36:34  mrt
- * 	Changed to new Mach copyright
- * 	[91/02/01  17:21:39  mrt]
- * 
- * Revision 2.2  90/06/02  15:00:08  rpd
- * 	Updated for new scheduling info.
- * 	[90/03/26  22:40:55  rpd]
- * 
- * Revision 2.1  89/08/03  16:06:07  rwd
- * Created.
- * 
- * Revision 2.4  89/02/25  18:41:18  gm0w
- * 	Changes for cleanup.
- * 
- *  4-Mar-88  David Black (dlb) at Carnegie-Mellon University
- *	Added TH_USAGE_SCALE for cpu_usage field.
- *
- * 15-Jan-88  David Golub (dbg) at Carnegie-Mellon University
- *	Changed to generic interface (variable-length array) to allow
- *	for expansion.  Renamed to thread_info.
- *
- *  1-Jun-87  Avadis Tevanian (avie) at Carnegie-Mellon University
- *	Created.
- *
- */
-/* CMU_ENDHIST */
 /* 
  * Mach Operating System
  * Copyright (c) 1991,1990,1989,1988,1987 Carnegie Mellon University
@@ -153,6 +62,8 @@
 
 #ifndef	_MACH_THREAD_INFO_H_
 #define _MACH_THREAD_INFO_H_
+
+#include <sys/appleapiopts.h>
 
 #include <mach/boolean.h>
 #include <mach/policy.h>
@@ -214,8 +125,12 @@ typedef struct thread_basic_info  *thread_basic_info_t;
 #define TH_FLAGS_SWAPPED	0x1	/* thread is swapped out */
 #define TH_FLAGS_IDLE		0x2	/* thread is an idle thread */
 
+#ifdef	__APPLE_API_UNSTABLE
+
 #define THREAD_SCHED_TIMESHARE_INFO	10
 #define THREAD_SCHED_RR_INFO		11
 #define THREAD_SCHED_FIFO_INFO		12
+
+#endif	/* __APPLE_API_UNSTABLE */
 
 #endif	/* _MACH_THREAD_INFO_H_ */

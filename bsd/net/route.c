@@ -52,19 +52,16 @@
  * SUCH DAMAGE.
  *
  *	@(#)route.c	8.2 (Berkeley) 11/15/93
+ * $FreeBSD: src/sys/net/route.c,v 1.59.2.3 2001/07/29 19:18:02 ume Exp $
  */
-
-#if NOTFB31
-#include "opt_inet.h"
-#include "opt_mrouting.h"
-#endif
-
+ 
 #include <sys/param.h>
 #include <sys/systm.h>
 #include <sys/malloc.h>
 #include <sys/mbuf.h>
 #include <sys/socket.h>
 #include <sys/domain.h>
+#include <sys/syslog.h>
 
 #include <net/if.h>
 #include <net/route.h>
@@ -109,9 +106,7 @@ void
 rtalloc(ro)
 	register struct route *ro;
 {
-	if (ro->ro_rt && ro->ro_rt->rt_ifp && (ro->ro_rt->rt_flags & RTF_UP))
-		return;				 /* XXX */
-	ro->ro_rt = rtalloc1(&ro->ro_dst, 1, 0UL);
+	rtalloc_ign(ro, 0UL);
 }
 
 void
@@ -119,8 +114,18 @@ rtalloc_ign(ro, ignore)
 	register struct route *ro;
 	u_long ignore;
 {
-	if (ro->ro_rt && ro->ro_rt->rt_ifp && (ro->ro_rt->rt_flags & RTF_UP))
-		return;				 /* XXX */
+	struct rtentry *rt;
+	int s;
+
+	if ((rt = ro->ro_rt) != NULL) {
+		if (rt->rt_ifp != NULL && rt->rt_flags & RTF_UP)
+			return;
+		/* XXX - We are probably always at splnet here already. */
+		s = splnet();
+		rtfree(rt);
+		ro->ro_rt = NULL;
+		splx(s);
+	}
 	ro->ro_rt = rtalloc1(&ro->ro_dst, 1, ignore);
 }
 
@@ -142,7 +147,7 @@ rtalloc1(dst, report, ignflags)
 	u_long nflags;
 	int  s = splnet(), err = 0, msgtype = RTM_MISS;
 
-	/* 
+	/*
 	 * Look up the address in the table for that Address Family
 	 */
 	if (rnh && (rn = rnh->rnh_matchaddr((caddr_t)dst, rnh)) &&
@@ -167,19 +172,19 @@ rtalloc1(dst, report, ignflags)
 				 * what we have will do. Return that.
 				 */
 				newrt = rt;
-				rt->rt_refcnt++;
+				rtref(rt);
 				goto miss;
 			}
 			if ((rt = newrt) && (rt->rt_flags & RTF_XRESOLVE)) {
 				/*
-				 * If the new route specifies it be 
+				 * If the new route specifies it be
 				 * externally resolved, then go do that.
 				 */
 				msgtype = RTM_RESOLVE;
 				goto miss;
 			}
 		} else
-			rt->rt_refcnt++;
+			rtref(rt);
 	} else {
 		/*
 		 * Either we hit the root or couldn't find any match,
@@ -215,7 +220,6 @@ rtfree(rt)
 	 */
 	register struct radix_node_head *rnh =
 		rt_tables[rt_key(rt)->sa_family];
-	register struct ifaddr *ifa;
 
 	if (rt == 0 || rnh == 0)
 		panic("rtfree");
@@ -237,7 +241,7 @@ rtfree(rt)
 	if (rt->rt_refcnt <= 0 && (rt->rt_flags & RTF_UP) == 0) {
 		if (rt->rt_nodes->rn_flags & (RNF_ACTIVE | RNF_ROOT))
 			panic ("rtfree 2");
-		/* 
+		/*
 		 * the rtentry must have been removed from the routing table
 		 * so it is represented in rttrash.. remove that now.
 		 */
@@ -250,14 +254,25 @@ rtfree(rt)
 		}
 #endif
 
-		/* 
+		/*
 		 * release references on items we hold them on..
 		 * e.g other routes and ifaddrs.
 		 */
-		if((ifa = rt->rt_ifa))
-			IFAFREE(ifa);
-		if (rt->rt_parent) {
-			RTFREE(rt->rt_parent);
+		if (rt->rt_parent)
+			rtfree(rt->rt_parent);
+
+		if(rt->rt_ifa && !(rt->rt_parent && rt->rt_parent->rt_ifa == rt->rt_ifa)) {
+			/*
+			 * Only release the ifa if our parent doesn't hold it for us.
+			 * The parent route is responsible for holding a reference
+			 * to the ifa for us. Ifa refcounts are 16bit, if every
+			 * cloned route held a reference, the 16bit refcount may
+			 * rollover, making a mess :(
+			 *
+			 * FreeBSD solved this by making the ifa_refcount 32bits, but
+			 * we can't do that since it changes the size of the ifaddr struct.
+			 */
+			ifafree(rt->rt_ifa);
 		}
 
 		/*
@@ -274,17 +289,97 @@ rtfree(rt)
 	}
 }
 
+/*
+ * Decrements the refcount but does not free the route when
+ * the refcount reaches zero. Unless you have really good reason,
+ * use rtfree not rtunref.
+ */
+void
+rtunref(struct rtentry* rt)
+{
+	if (rt == NULL)
+		panic("rtunref");
+	rt->rt_refcnt--;
+#if DEBUG
+	if (rt->rt_refcnt <= 0 && (rt->rt_flags & RTF_UP) == 0)
+		printf("rtunref - if rtfree were called, we would have freed route\n");
+#endif
+}
+
+/*
+ * Add a reference count from an rtentry.
+ */
+void
+rtref(struct rtentry* rt)
+{
+	if (rt == NULL)
+		panic("rtref");
+
+	rt->rt_refcnt++;
+}
+
+void
+rtsetifa(struct rtentry *rt, struct ifaddr* ifa)
+{
+	if (rt == NULL)
+		panic("rtsetifa");
+
+	if (rt->rt_ifa == ifa)
+		return;
+
+	/* Release the old ifa if it isn't our parent route's ifa */
+	if (rt->rt_ifa && !(rt->rt_parent && rt->rt_parent->rt_ifa == rt->rt_ifa))
+		ifafree(rt->rt_ifa);
+
+	/* Set rt_ifa */
+	rt->rt_ifa = ifa;
+
+	/* Take a reference to the ifa if it isn't our parent route's ifa */
+	if (rt->rt_ifa && !(rt->rt_parent && rt->rt_parent->rt_ifa == ifa))
+		ifaref(rt->rt_ifa);
+}
+
 void
 ifafree(ifa)
 	register struct ifaddr *ifa;
 {
 	if (ifa == NULL)
 		panic("ifafree");
-	if (ifa->ifa_refcnt == 0)
+	if (ifa->ifa_refcnt == 0) {
+#ifdef __APPLE__
+		/* Detect case where an ifa is being freed before it should */
+		struct ifnet* ifp;
+		/* Verify this ifa isn't attached to an interface */
+		for (ifp = ifnet.tqh_first; ifp; ifp = ifp->if_link.tqe_next) {
+			struct ifaddr *ifaInUse;
+			for (ifaInUse = ifp->if_addrhead.tqh_first; ifaInUse; ifaInUse = ifaInUse->ifa_link.tqe_next) {
+				if (ifa == ifaInUse) {
+					/*
+					 * This is an ugly hack done because we can't move to a 32 bit
+					 * refcnt like bsd has. We have to maintain binary compatibility
+					 * in our kernel, unlike FreeBSD.
+					 */
+					log(LOG_ERR, "ifa attached to ifp is being freed, leaking insted\n");
+					return;
+				}
+			}
+		}
+#endif
 		FREE(ifa, M_IFADDR);
+	}
 	else
 		ifa->ifa_refcnt--;
 }
+
+#ifdef __APPLE__
+void
+ifaref(struct ifaddr *ifa)
+{
+	if (ifa == NULL)
+		panic("ifaref");
+	ifa->ifa_refcnt++;
+}
+#endif
 
 /*
  * Force a routing table entry to the specified
@@ -441,7 +536,7 @@ ifa_ifwithroute(flags, dst, gateway)
 		struct rtentry *rt = rtalloc1(dst, 0, 0UL);
 		if (rt == 0)
 			return (0);
-		rt->rt_refcnt--;
+		rtunref(rt);
 		if ((ifa = rt->rt_ifa) == 0)
 			return (0);
 	}
@@ -509,8 +604,9 @@ rtrequest(req, dst, gateway, netmask, flags, ret_nrt)
 		 * Now search what's left of the subtree for any cloned
 		 * routes which might have been formed from this node.
 		 */
-		if ((rt->rt_flags & RTF_PRCLONING) && netmask) {
-			rnh->rnh_walktree_from(rnh, dst, netmask,
+		if ((rt->rt_flags & (RTF_CLONING | RTF_PRCLONING)) &&
+		    rt_mask(rt)) {
+			rnh->rnh_walktree_from(rnh, dst, rt_mask(rt),
 					       rt_fixdelete, rt);
 		}
 
@@ -521,7 +617,7 @@ rtrequest(req, dst, gateway, netmask, flags, ret_nrt)
 		 */
 		if (rt->rt_gwroute) {
 			rt = rt->rt_gwroute;
-			RTFREE(rt);
+			rtfree(rt);
 			(rt = (struct rtentry *)rn)->rt_gwroute = 0;
 		}
 
@@ -534,7 +630,7 @@ rtrequest(req, dst, gateway, netmask, flags, ret_nrt)
 		 */
 		rt->rt_flags &= ~RTF_UP;
 
-		/* 
+		/*
 		 * give the protocol a chance to keep things in sync.
 		 */
 		if ((ifa = rt->rt_ifa) && ifa->ifa_rtrequest)
@@ -554,7 +650,7 @@ rtrequest(req, dst, gateway, netmask, flags, ret_nrt)
 		if (ret_nrt)
 			*ret_nrt = rt;
 		else if (rt->rt_refcnt <= 0) {
-			rt->rt_refcnt++;
+			rt->rt_refcnt++; /* make a 1->0 transition */
 			rtfree(rt);
 		}
 		break;
@@ -588,7 +684,7 @@ rtrequest(req, dst, gateway, netmask, flags, ret_nrt)
 		 * Add the gateway. Possibly re-malloc-ing the storage for it
 		 * also add the rt_gwroute if possible.
 		 */
-		if (error = rt_setgate(rt, dst, gateway)) {
+		if ((error = rt_setgate(rt, dst, gateway)) != 0) {
 			Free(rt);
 			senderr(error);
 		}
@@ -611,10 +707,18 @@ rtrequest(req, dst, gateway, netmask, flags, ret_nrt)
 		 * This moved from below so that rnh->rnh_addaddr() can
 		 * examine the ifa and  ifa->ifa_ifp if it so desires.
 		 */
-	        ifa->ifa_refcnt++;
+		/*
+		 * Note that we do not use rtsetifa here because
+		 * rt_parent has not been setup yet.
+		 */
+		ifaref(ifa);
 		rt->rt_ifa = ifa;
 		rt->rt_ifp = ifa->ifa_ifp;
-		rt->rt_dlt = ifa->ifa_dlt;
+#ifdef __APPLE__
+		rt->rt_dlt = ifa->ifa_dlt; /* dl_tag */
+#endif
+		/* XXX mtu manipulation will be done in rnh_addaddr -- itojun */
+
 		rn = rnh->rnh_addaddr((caddr_t)ndst, (caddr_t)netmask,
 					rnh, rt->rt_nodes);
 		if (rn == 0) {
@@ -628,17 +732,17 @@ rtrequest(req, dst, gateway, netmask, flags, ret_nrt)
 			 */
 			rt2 = rtalloc1(dst, 0, RTF_PRCLONING);
 			if (rt2 && rt2->rt_parent) {
-				rtrequest(RTM_DELETE, 
+				rtrequest(RTM_DELETE,
 					  (struct sockaddr *)rt_key(rt2),
 					  rt2->rt_gateway,
 					  rt_mask(rt2), rt2->rt_flags, 0);
-				RTFREE(rt2);
+				rtfree(rt2);
 				rn = rnh->rnh_addaddr((caddr_t)ndst,
 						      (caddr_t)netmask,
 						      rnh, rt->rt_nodes);
 			} else if (rt2) {
 				/* undo the extra ref we got */
-				RTFREE(rt2);
+				rtfree(rt2);
 			}
 		}
 
@@ -650,7 +754,7 @@ rtrequest(req, dst, gateway, netmask, flags, ret_nrt)
 			if (rt->rt_gwroute)
 				rtfree(rt->rt_gwroute);
 			if (rt->rt_ifa) {
-				IFAFREE(rt->rt_ifa);
+				ifafree(rt->rt_ifa);
 			}
 			Free(rt_key(rt));
 			Free(rt);
@@ -659,16 +763,23 @@ rtrequest(req, dst, gateway, netmask, flags, ret_nrt)
 
 		rt->rt_parent = 0;
 
-		/* 
+		/*
 		 * If we got here from RESOLVE, then we are cloning
-		 * so clone the rest, and note that we 
+		 * so clone the rest, and note that we
 		 * are a clone (and increment the parent's references)
 		 */
 		if (req == RTM_RESOLVE) {
 			rt->rt_rmx = (*ret_nrt)->rt_rmx; /* copy metrics */
-			if ((*ret_nrt)->rt_flags & RTF_PRCLONING) {
+			if ((*ret_nrt)->rt_flags & (RTF_CLONING | RTF_PRCLONING)) {
 				rt->rt_parent = (*ret_nrt);
-				(*ret_nrt)->rt_refcnt++;
+				rtref(*ret_nrt);
+
+				/*
+				 * If our parent is holding a reference to the same ifa,
+				 * free our reference and rely on the parent holding it.
+				 */
+				if (rt->rt_parent && rt->rt_parent->rt_ifa == rt->rt_ifa)
+					ifafree(rt->rt_ifa);
 			}
 		}
 
@@ -698,7 +809,7 @@ rtrequest(req, dst, gateway, netmask, flags, ret_nrt)
 		 */
 		if (ret_nrt) {
 			*ret_nrt = rt;
-			rt->rt_refcnt++;
+			rtref(rt);
 		}
 		break;
 	}
@@ -737,9 +848,7 @@ rt_fixdelete(rn, vp)
  * network route and (cloned) host routes.  For this reason, a simple check
  * of rt->rt_parent is insufficient; each candidate route must be tested
  * against the (mask, value) of the new route (passed as before in vp)
- * to see if the new route matches it.  Unfortunately, this has the obnoxious
- * property of also triggering for insertion /above/ a pre-existing network
- * route and clones.  Sigh.  This may be fixed some day.
+ * to see if the new route matches it.
  *
  * XXX - it may be possible to do fixdelete() for changes and reserve this
  * routine just for adds.  I'm not sure why I thought it was necessary to do
@@ -758,8 +867,8 @@ rt_fixchange(rn, vp)
 	struct rtfc_arg *ap = vp;
 	struct rtentry *rt0 = ap->rt0;
 	struct radix_node_head *rnh = ap->rnh;
-	u_char *xk1, *xm1, *xk2;
-	int i, len;
+	u_char *xk1, *xm1, *xk2, *xmp;
+	int i, len, mlen;
 
 #ifdef DEBUG
 	if (rtfcdebug)
@@ -793,7 +902,29 @@ rt_fixchange(rn, vp)
 	xm1 = (u_char *)rt_mask(rt0);
 	xk2 = (u_char *)rt_key(rt);
 
-	for (i = rnh->rnh_treetop->rn_off; i < len; i++) {
+	/* avoid applying a less specific route */
+	xmp = (u_char *)rt_mask(rt->rt_parent);
+	mlen = ((struct sockaddr *)rt_key(rt->rt_parent))->sa_len;
+	if (mlen > ((struct sockaddr *)rt_key(rt0))->sa_len) {
+#if DEBUG
+		if (rtfcdebug)
+			printf("rt_fixchange: inserting a less "
+			       "specific route\n");
+#endif
+		return 0;
+	}
+	for (i = rnh->rnh_treetop->rn_offset; i < mlen; i++) {
+		if ((xmp[i] & ~(xmp[i] ^ xm1[i])) != xmp[i]) {
+#if DEBUG
+			if (rtfcdebug)
+				printf("rt_fixchange: inserting a less "
+				       "specific route\n");
+#endif
+			return 0;
+		}
+	}
+
+	for (i = rnh->rnh_treetop->rn_offset; i < len; i++) {
 		if ((xk2[i] & xm1[i]) != xk1[i]) {
 #ifdef DEBUG
 			if(rtfcdebug) printf("no match\n");
@@ -867,8 +998,8 @@ rt_setgate(rt0, dst, gate)
 	 */
 	Bcopy(gate, (rt->rt_gateway = (struct sockaddr *)(new + dlen)), glen);
 
-	/* 
-	 * if we are replacing the chunk (or it's new) we need to 
+	/*
+	 * if we are replacing the chunk (or it's new) we need to
 	 * replace the dst as well
 	 */
 	if (old) {
@@ -881,7 +1012,7 @@ rt_setgate(rt0, dst, gate)
 	 * so drop it.
 	 */
 	if (rt->rt_gwroute) {
-		rt = rt->rt_gwroute; RTFREE(rt);
+		rt = rt->rt_gwroute; rtfree(rt);
 		rt = rt0; rt->rt_gwroute = 0;
 	}
 	/*
@@ -897,7 +1028,7 @@ rt_setgate(rt0, dst, gate)
 	if (rt->rt_flags & RTF_GATEWAY) {
 		rt->rt_gwroute = rtalloc1(gate, 1, RTF_PRCLONING);
 		if (rt->rt_gwroute == rt) {
-			RTFREE(rt->rt_gwroute);
+			rtfree(rt->rt_gwroute);
 			rt->rt_gwroute = 0;
 			return EDQUOT; /* failure */
 		}
@@ -962,13 +1093,15 @@ rtinit(ifa, cmd, flags)
 	 * be confusing at best and possibly worse.
 	 */
 	if (cmd == RTM_DELETE) {
-		/* 
+		/*
 		 * It's a delete, so it should already exist..
 		 * If it's a net, mask off the host bits
 		 * (Assuming we have a mask)
 		 */
 		if ((flags & RTF_HOST) == 0 && ifa->ifa_netmask) {
-			m = m_get(M_WAIT, MT_SONAME);
+			m = m_get(M_DONTWAIT, MT_SONAME);
+			if (m == NULL)
+				return(ENOBUFS);
 			deldst = mtod(m, struct sockaddr *);
 			rt_maskedcopy(dst, deldst, ifa->ifa_netmask);
 			dst = deldst;
@@ -986,13 +1119,13 @@ rtinit(ifa, cmd, flags)
 			 * for us at this stage. we won't need that so
 			 * lop that off now.
 			 */
-			rt->rt_refcnt--;
+			rtunref(rt);
 			if (rt->rt_ifa != ifa) {
 				/*
 				 * If the interface in the rtentry doesn't match
 				 * the interface we are using, then we don't
 				 * want to delete it, so return an error.
-				 * This seems to be the only point of 
+				 * This seems to be the only point of
 				 * this whole RTM_DELETE clause.
 				 */
 				if (m)
@@ -1004,7 +1137,7 @@ rtinit(ifa, cmd, flags)
 		/* XXX */
 #if 0
 		else {
-			/* 
+			/*
 			 * One would think that as we are deleting, and we know
 			 * it doesn't exist, we could just return at this point
 			 * with an "ELSE" clause, but apparently not..
@@ -1031,7 +1164,7 @@ rtinit(ifa, cmd, flags)
 		 */
 		rt_newaddrmsg(cmd, ifa, error, nrt);
 		if (rt->rt_refcnt <= 0) {
-			rt->rt_refcnt++;
+			rt->rt_refcnt++; /* need a 1->0 transition to free */
 			rtfree(rt);
 		}
 	}
@@ -1044,14 +1177,16 @@ rtinit(ifa, cmd, flags)
 		/*
 		 * We just wanted to add it.. we don't actually need a reference
 		 */
-		rt->rt_refcnt--;
+		rtunref(rt);
 		/*
-		 * If it came back with an unexpected interface, then it must 
+		 * If it came back with an unexpected interface, then it must
 		 * have already existed or something. (XXX)
 		 */
 		if (rt->rt_ifa != ifa) {
-			printf("rtinit: wrong ifa (%p) was (%p)\n", ifa,
-				rt->rt_ifa);
+			if (!(rt->rt_ifa->ifa_ifp->if_flags &
+			    (IFF_POINTOPOINT|IFF_LOOPBACK)))
+				printf("rtinit: wrong ifa (%p) was (%p)\n",
+				    ifa, rt->rt_ifa);
 			/*
 			 * Ask that the protocol in question
 			 * remove anything it has associated with
@@ -1059,19 +1194,19 @@ rtinit(ifa, cmd, flags)
 			 */
 			if (rt->rt_ifa->ifa_rtrequest)
 			    rt->rt_ifa->ifa_rtrequest(RTM_DELETE, rt, SA(0));
-			/* 
-			 * Remove the referenve to the it's ifaddr.
+			/*
+			 * Set the route's ifa.
 			 */
-			IFAFREE(rt->rt_ifa);
+			rtsetifa(rt, ifa);
 			/*
 			 * And substitute in references to the ifaddr
 			 * we are adding.
 			 */
-			rt->rt_ifa = ifa;
 			rt->rt_ifp = ifa->ifa_ifp;
-			rt->rt_dlt = ifa->ifa_dlt;
-			rt->rt_rmx.rmx_mtu = ifa->ifa_ifp->if_mtu;
-			ifa->ifa_refcnt++;
+#ifdef __APPLE__
+			rt->rt_dlt = ifa->ifa_dlt;	/* dl_tag */
+#endif
+			rt->rt_rmx.rmx_mtu = ifa->ifa_ifp->if_mtu;	/*XXX*/
 			/*
 			 * Now ask the protocol to check if it needs
 			 * any special processing in its new form.

@@ -56,23 +56,41 @@
 #ifndef	_PPC_LOCK_H_
 #define	_PPC_LOCK_H_
 
+#include <sys/appleapiopts.h>
+
+#ifdef __APPLE_API_PRIVATE
+
 #include <kern/macro_help.h>
 #include <kern/assert.h>
 
 extern unsigned int LockTimeOut;			/* Number of hardware ticks of a lock timeout */
 
-#if defined(MACH_KERNEL_PRIVATE) && !(NCPUS == 1 && !ETAP_LOCK_TRACE && !USLOCK_DEBUG)
-extern void                     fast_usimple_lock(usimple_lock_t);
-extern void                     fast_usimple_unlock(usimple_lock_t);
-extern unsigned int             fast_usimple_lock_try(usimple_lock_t);
+#if defined(MACH_KERNEL_PRIVATE)
 
-#define simple_lock_init(l,t)   usimple_lock_init(l,t)
+#include <cpus.h>
+
+#if !(NCPUS == 1 || ETAP_LOCK_TRACE || USLOCK_DEBUG)
+
+#include <ppc/hw_lock_types.h>
+
+#define simple_lock_init(l,t)   hw_lock_init(l)
+#define __slock_held_func__(l)  hw_lock_held(l)
+
+extern void                     fast_usimple_lock(simple_lock_t);
+extern void                     fast_usimple_unlock(simple_lock_t);
+extern unsigned int             fast_usimple_lock_try(simple_lock_t);
+
 #define simple_lock(l)          fast_usimple_lock(l)
 #define simple_unlock(l)        fast_usimple_unlock(l)
 #define simple_lock_try(l)      fast_usimple_lock_try(l)  
 #define simple_lock_addr(l)     (&(l))
-#define __slock_held_func__(l)  usimple_lock_held(l)
+#define thread_sleep_simple_lock(l, e, i) \
+				thread_sleep_fast_usimple_lock((l), (e), (i))
 
-#endif
+#endif /* !(NCPUS == 1 || ETAP_LOCK_TRACE || USLOCK_DEBUG) */
+
+#endif /* MACH_KERNEL_PRIVATE */
+
+#endif /* __APPLE_API_PRIVATE */
 
 #endif	/* _PPC_LOCK_H_ */

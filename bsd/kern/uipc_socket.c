@@ -53,7 +53,8 @@
  * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
  * SUCH DAMAGE.
  *
- *	@(#)uipc_socket.c	8.6 (Berkeley) 5/2/95
+ *	@(#)uipc_socket.c	8.3 (Berkeley) 4/15/94
+ * $FreeBSD: src/sys/kern/uipc_socket.c,v 1.68.2.16 2001/06/14 20:46:06 ume Exp $
  */
 
 #include <sys/param.h>
@@ -123,6 +124,8 @@ SYSCTL_INT(_kern_ipc, OID_AUTO, sosendminchain, CTLFLAG_RW, &sosendminchain,
            0, "");
 
 void  so_cache_timer();
+struct mbuf *m_getpackets(int, int, int);
+
 
 /*
  * Socket operation routines.
@@ -132,6 +135,7 @@ void  so_cache_timer();
  * switching out to the protocol specific routines.
  */
 
+#ifdef __APPLE__
 void socketinit()
 {
     vm_size_t	str_size;
@@ -313,7 +317,7 @@ void so_cache_timer()
 	(void) thread_funnel_set(network_flock, FALSE);
 
 }
-
+#endif /* __APPLE__ */
 
 /*
  * Get a socket structure from our zone, and initialize it.
@@ -354,19 +358,29 @@ socreate(dom, aso, type, proto)
 	struct socket **aso;
 	register int type;
 	int proto;
-
 {
 	struct proc *p = current_proc();
 	register struct protosw *prp;
-	struct socket *so;
+	register struct socket *so;
 	register int error = 0;
 
 	if (proto)
 		prp = pffindproto(dom, proto, type);
 	else
 		prp = pffindtype(dom, type);
+
 	if (prp == 0 || prp->pr_usrreqs->pru_attach == 0)
 		return (EPROTONOSUPPORT);
+#ifndef __APPLE__
+
+	if (p->p_prison && jail_socket_unixiproute_only &&
+	    prp->pr_domain->dom_family != PF_LOCAL &&
+	    prp->pr_domain->dom_family != PF_INET &&
+	    prp->pr_domain->dom_family != PF_ROUTE) {
+		return (EPROTONOSUPPORT);
+	}
+	
+#endif
 	if (prp->pr_type != type)
 		return (EPROTOTYPE);
 	so = soalloc(p != 0, dom, type);
@@ -377,28 +391,35 @@ socreate(dom, aso, type, proto)
 	TAILQ_INIT(&so->so_comp);
 	so->so_type = type;
 
+#ifdef __APPLE__
 	if (p != 0) {
 		if (p->p_ucred->cr_uid == 0)
 			so->so_state = SS_PRIV;
 
 		so->so_uid = p->p_ucred->cr_uid;
 	}
-
+#else
+	so->so_cred = p->p_ucred;
+	crhold(so->so_cred);
+#endif
 	so->so_proto = prp;
+#ifdef __APPLE__
 	so->so_rcv.sb_flags |= SB_RECV;	/* XXX */
 	if (prp->pr_sfilter.tqh_first)
 		error = sfilter_init(so);
 	if (error == 0)
+#endif
 		error = (*prp->pr_usrreqs->pru_attach)(so, proto, p);
-
 	if (error) {
 		so->so_state |= SS_NOFDREF;
 		sofree(so);
 		return (error);
 	}
+#ifdef __APPLE__
 	prp->pr_domain->dom_refs++;
 	so->so_rcv.sb_so = so->so_snd.sb_so = so;
 	TAILQ_INIT(&so->so_evlist);
+#endif
 	*aso = so;
 	return (0);
 }
@@ -415,14 +436,16 @@ sobind(so, nam)
 	int s = splnet();
 
 	error = (*so->so_proto->pr_usrreqs->pru_bind)(so, nam, p);
-	if (error == 0)		/* ??? */
-	{	kp = sotokextcb(so);
-		while (kp)
-		{	if (kp->e_soif && kp->e_soif->sf_sobind)
-			{	error = (*kp->e_soif->sf_sobind)(so, nam, kp);
-				if (error)
-				{	if (error == EJUSTRETURN)
+	if (error == 0) {
+		kp = sotokextcb(so);
+		while (kp) {
+			if (kp->e_soif && kp->e_soif->sf_sobind) {
+				error = (*kp->e_soif->sf_sobind)(so, nam, kp);
+				if (error) {
+					if (error == EJUSTRETURN) {
+						error = 0;
 						break;
+					}
 					splx(s);
 					return(error);
 				}
@@ -440,10 +463,32 @@ sodealloc(so)
 {
 	so->so_gencnt = ++so_gencnt;
 
+#ifndef __APPLE__
+	if (so->so_rcv.sb_hiwat)
+		(void)chgsbsize(so->so_cred->cr_uidinfo,
+		    &so->so_rcv.sb_hiwat, 0, RLIM_INFINITY);
+	if (so->so_snd.sb_hiwat)
+		(void)chgsbsize(so->so_cred->cr_uidinfo,
+		    &so->so_snd.sb_hiwat, 0, RLIM_INFINITY);
+#ifdef INET
+	if (so->so_accf != NULL) {
+		if (so->so_accf->so_accept_filter != NULL && 
+			so->so_accf->so_accept_filter->accf_destroy != NULL) {
+			so->so_accf->so_accept_filter->accf_destroy(so);
+		}
+		if (so->so_accf->so_accept_filter_str != NULL)
+			FREE(so->so_accf->so_accept_filter_str, M_ACCF);
+		FREE(so->so_accf, M_ACCF);
+	}
+#endif /* INET */
+	crfree(so->so_cred);
+	zfreei(so->so_zone, so);
+#else
 	if (so->cached_in_sock_layer == 1) 
 	     cached_sock_free(so);
 	else
 	     _FREE_ZONE(so, sizeof(*so), so->so_zone);
+#endif /* __APPLE__ */
 }
 
 int
@@ -468,13 +513,14 @@ solisten(so, backlog)
 		backlog = somaxconn;
 	so->so_qlimit = backlog;
 	kp = sotokextcb(so);
-	while (kp)
-	{	
-		if (kp->e_soif && kp->e_soif->sf_solisten)
-		{	error = (*kp->e_soif->sf_solisten)(so, kp);
-			if (error)
-			{	if (error == EJUSTRETURN)
+	while (kp) {	
+		if (kp->e_soif && kp->e_soif->sf_solisten) {
+			error = (*kp->e_soif->sf_solisten)(so, kp);
+			if (error) {
+				if (error == EJUSTRETURN) {
+					error = 0;
 					break;
+				}
 				splx(s);
 				return(error);
 			}
@@ -490,14 +536,15 @@ solisten(so, backlog)
 void
 sofree(so)
 	register struct socket *so;
-{	int error;
+{
+	int error;
 	struct kextcb *kp;
 	struct socket *head = so->so_head;
 
 	kp = sotokextcb(so);
-	while (kp)
-	{	if (kp->e_soif && kp->e_soif->sf_sofree)
-		{	error = (*kp->e_soif->sf_sofree)(so, kp);
+	while (kp) {
+		if (kp->e_soif && kp->e_soif->sf_sofree) {
+			error = (*kp->e_soif->sf_sofree)(so, kp);
 			if (error) {
 				selthreadclear(&so->so_snd.sb_sel);
 				selthreadclear(&so->so_rcv.sb_sel);
@@ -508,34 +555,39 @@ sofree(so)
 	}
 
 	if (so->so_pcb || (so->so_state & SS_NOFDREF) == 0) {
+#ifdef __APPLE__
 		selthreadclear(&so->so_snd.sb_sel);
 		selthreadclear(&so->so_rcv.sb_sel);
+#endif
 		return;
 	}
-        if (head != NULL) {
-                if (so->so_state & SS_INCOMP) {  
-                        TAILQ_REMOVE(&head->so_incomp, so, so_list);
-                        head->so_incqlen--;
-                } else if (so->so_state & SS_COMP) {
-                        /*
-                         * We must not decommission a socket that's   
-                         * on the accept(2) queue.  If we do, then
-                         * accept(2) may hang after select(2) indicated
-                         * that the listening socket was ready.
-                         */
-						selthreadclear(&so->so_snd.sb_sel);
-						selthreadclear(&so->so_rcv.sb_sel);
-                        return;
-                } else {
-                        panic("sofree: not queued");
-                }
+	if (head != NULL) {
+		if (so->so_state & SS_INCOMP) {
+			TAILQ_REMOVE(&head->so_incomp, so, so_list);
+			head->so_incqlen--;
+		} else if (so->so_state & SS_COMP) {
+			/*
+			 * We must not decommission a socket that's
+			 * on the accept(2) queue.  If we do, then
+			 * accept(2) may hang after select(2) indicated
+			 * that the listening socket was ready.
+			 */
+#ifdef __APPLE__
+			selthreadclear(&so->so_snd.sb_sel);
+			selthreadclear(&so->so_rcv.sb_sel);
+#endif
+			return;
+		} else {
+			panic("sofree: not queued");
+		}
 		head->so_qlen--;
-		so->so_state &= ~(SS_INCOMP|SS_COMP);
+		so->so_state &= ~SS_INCOMP;
 		so->so_head = NULL;
 	}
-
+#ifdef __APPLE__
 	selthreadclear(&so->so_snd.sb_sel);
 	sbrelease(&so->so_snd);
+#endif
 	sorflush(so);
 	sfilter_term(so);
 	sodealloc(so);
@@ -554,15 +606,15 @@ soclose(so)
 	int error = 0;
 	struct kextcb *kp;
 
-#if FB31SIG
-	funsetown(so->so_pgid);
+#ifndef __APPLE__
+	funsetown(so->so_sigio);
 #endif
 	kp = sotokextcb(so);
-	while (kp)
-	{	if (kp->e_soif && kp->e_soif->sf_soclose)
-		{	error = (*kp->e_soif->sf_soclose)(so, kp);
-			if (error)
-			{	splx(s);
+	while (kp) {
+		if (kp->e_soif && kp->e_soif->sf_soclose) {
+			error = (*kp->e_soif->sf_soclose)(so, kp);
+			if (error) {
+				splx(s);
 				return((error == EJUSTRETURN) ? 0 : error);
 			}
 		}
@@ -618,8 +670,10 @@ discard:
 	if (so->so_pcb && so->so_state & SS_NOFDREF)
 		panic("soclose: NOFDREF");
 	so->so_state |= SS_NOFDREF;
+#ifdef __APPLE__
 	so->so_proto->pr_domain->dom_refs--;
 	evsofree(so);
+#endif
 	sofree(so);
 	splx(s);
 	return (error);
@@ -632,15 +686,22 @@ int
 soabort(so)
 	struct socket *so;
 {
+	int error;
 
-	return (*so->so_proto->pr_usrreqs->pru_abort)(so);
+	error = (*so->so_proto->pr_usrreqs->pru_abort)(so);
+	if (error) {
+		sofree(so);
+		return error;
+	}
+	return (0);
 }
 
 int
 soaccept(so, nam)
 	register struct socket *so;
 	struct sockaddr **nam;
-{	int s = splnet();
+{
+	int s = splnet();
 	int error;
 	struct kextcb *kp;
 
@@ -648,14 +709,16 @@ soaccept(so, nam)
 		panic("soaccept: !NOFDREF");
 	so->so_state &= ~SS_NOFDREF;
 	error = (*so->so_proto->pr_usrreqs->pru_accept)(so, nam);
-	if (error == 0)
-	{	kp = sotokextcb(so);
+	if (error == 0) {
+		kp = sotokextcb(so);
 		while (kp) {
-			if (kp->e_soif && kp->e_soif->sf_soaccept)
-			{	error = (*kp->e_soif->sf_soaccept)(so, nam, kp);
-				if (error)
-				{	if (error == EJUSTRETURN)
+			if (kp->e_soif && kp->e_soif->sf_soaccept) {
+				error = (*kp->e_soif->sf_soaccept)(so, nam, kp);
+				if (error) {
+					if (error == EJUSTRETURN) {
+						error = 0;
 						break;
+					}
 					splx(s);
 					return(error);
 				}
@@ -694,26 +757,27 @@ soconnect(so, nam)
 	    (error = sodisconnect(so))))
 		error = EISCONN;
 	else {
+                /*
+                 * Run connect filter before calling protocol:
+                 *  - non-blocking connect returns before completion;
+                 *  - allows filters to modify address.
+                 */
+                kp = sotokextcb(so);
+                while (kp) {
+                        if (kp->e_soif && kp->e_soif->sf_soconnect) {
+                                error = (*kp->e_soif->sf_soconnect)(so, nam, kp);
+                                if (error) {
+                                        if (error == EJUSTRETURN) {
+                                                error = 0;       
+                                        }
+                                        splx(s);
+                                        return(error);       
+                                }
+                        }
+                        kp = kp->e_next;
+                }
 		error = (*so->so_proto->pr_usrreqs->pru_connect)(so, nam, p);
-		if (error == 0)
-		{	
-			kp = sotokextcb(so);
-			while (kp)
-			{	
-				if (kp->e_soif && kp->e_soif->sf_soconnect)
-				{	error = (*kp->e_soif->sf_soconnect)(so, nam, kp);
-					if (error)
-					{	if (error == EJUSTRETURN)
-							break;
-						splx(s);
-						return(error);
-					}
-				}
-				kp = kp->e_next;
-			}
-		}
 	}
-
 	splx(s);
 	return (error);
 }
@@ -728,14 +792,16 @@ soconnect2(so1, so2)
 	struct kextcb *kp;
 
 	error = (*so1->so_proto->pr_usrreqs->pru_connect2)(so1, so2);
-	if (error == 0)
-	{	kp = sotokextcb(so1);
-		while (kp)
-		{	if (kp->e_soif && kp->e_soif->sf_soconnect2)
-			{	error = (*kp->e_soif->sf_soconnect2)(so1, so2, kp);
-				if (error)
-				{	if (error == EJUSTRETURN)
+	if (error == 0) {
+		kp = sotokextcb(so1);
+		while (kp) {
+			if (kp->e_soif && kp->e_soif->sf_soconnect2) {
+				error = (*kp->e_soif->sf_soconnect2)(so1, so2, kp);
+				if (error) {
+					if (error == EJUSTRETURN) {
+						return 0;
 						break;
+					}
 					splx(s);
 					return(error);
 				}
@@ -764,15 +830,16 @@ sodisconnect(so)
 		goto bad;
 	}
 	error = (*so->so_proto->pr_usrreqs->pru_disconnect)(so);
-
-	if (error == 0)
-	{	kp = sotokextcb(so);
-		while (kp)
-		{	if (kp->e_soif && kp->e_soif->sf_sodisconnect)
-			{	error = (*kp->e_soif->sf_sodisconnect)(so, kp);
-				if (error)
-				{	if (error == EJUSTRETURN)
+	if (error == 0) {
+		kp = sotokextcb(so);
+		while (kp) {
+			if (kp->e_soif && kp->e_soif->sf_sodisconnect) {
+				error = (*kp->e_soif->sf_sodisconnect)(so, kp);
+				if (error) {
+					if (error == EJUSTRETURN) {
+						error = 0;
 						break;
+					}
 					splx(s);
 					return(error);
 				}
@@ -940,6 +1007,14 @@ restart:
 			do {
 
 			if (bytes_to_copy >= MINCLSIZE) {
+			  /*
+			   * try to maintain a local cache of mbuf clusters needed to complete this write
+			   * the list is further limited to the number that are currently needed to fill the socket
+			   * this mechanism allows a large number of mbufs/clusters to be grabbed under a single 
+			   * mbuf lock... if we can't get any clusters, than fall back to trying for mbufs
+			   * if we fail early (or miscalcluate the number needed) make sure to release any clusters
+			   * we haven't yet consumed.
+			   */
 			  if ((m = freelist) == NULL) {
 			        int num_needed;
 				int hdrs_needed = 0;
@@ -1032,7 +1107,6 @@ getpackets_failed:
 		    if (dontroute)
 			    so->so_options |= SO_DONTROUTE;
 		    s = splnet();				/* XXX */
-		    kp = sotokextcb(so);
 		    /* Compute flags here, for pru_send and NKEs */
 		    sendflags = (flags & MSG_OOB) ? PRUS_OOB :
 			/*
@@ -1046,17 +1120,18 @@ getpackets_failed:
 				PRUS_EOF :
 			/* If there is more to send set PRUS_MORETOCOME */
 			(resid > 0 && space > 0) ? PRUS_MORETOCOME : 0;
+		    kp = sotokextcb(so);
 		    while (kp)
-		    {	if (kp->e_soif && kp->e_soif->sf_sosend)
-			{	error = (*kp->e_soif->sf_sosend)(so, &addr,
+		    {	if (kp->e_soif && kp->e_soif->sf_sosend) {
+					error = (*kp->e_soif->sf_sosend)(so, &addr,
 								 &uio, &top,
 								 &control,
 								 &sendflags,
 								 kp);
-				if (error)
-				{	splx(s);
-					if (error == EJUSTRETURN)
-					{	sbunlock(&so->so_snd);
+				if (error) {
+					splx(s);
+					if (error == EJUSTRETURN) {
+						sbunlock(&so->so_snd);
 					
 					        if (freelist)
 						        m_freem_list(freelist);     
@@ -1071,9 +1146,10 @@ getpackets_failed:
 		    error = (*so->so_proto->pr_usrreqs->pru_send)(so,
 			sendflags, top, addr, control, p);
 		    splx(s);
+#ifdef __APPLE__
 		    if (flags & MSG_SEND)
 		    	so->so_temp = NULL;
-
+#endif
 		    if (dontroute)
 			    so->so_options &= ~SO_DONTROUTE;
 		    clen = 0;
@@ -1147,9 +1223,9 @@ soreceive(so, psa, uio, mp0, controlp, flagsp)
 		     so->so_rcv.sb_hiwat);
 
 	kp = sotokextcb(so);
-	while (kp)
-	{	if (kp->e_soif && kp->e_soif->sf_soreceive)
-		{	error = (*kp->e_soif->sf_soreceive)(so, psa, &uio,
+	while (kp) {
+		if (kp->e_soif && kp->e_soif->sf_soreceive) {
+			error = (*kp->e_soif->sf_soreceive)(so, psa, &uio,
 							    mp0, controlp,
 							    flagsp, kp);
 			if (error)
@@ -1177,6 +1253,8 @@ soreceive(so, psa, uio, mp0, controlp, flagsp)
              (so->so_options & SO_OOBINLINE) == 0 &&
              (so->so_oobmark || (so->so_state & SS_RCVATMARK)))) {
 		m = m_get(M_WAIT, MT_DATA);
+		if (m == NULL)
+			return (ENOBUFS);
 		error = (*pr->pr_usrreqs->pru_rcvoob)(so, m, flags & MSG_PEEK);
 		if (error)
 			goto bad;
@@ -1188,19 +1266,21 @@ soreceive(so, psa, uio, mp0, controlp, flagsp)
 bad:
 		if (m)
 			m_freem(m);
-                if ((so->so_options & SO_WANTOOBFLAG) != 0) {
-                    if (error == EWOULDBLOCK || error == EINVAL) {
-                        /* 
-                         * Let's try to get normal data:
-                         *  EWOULDBLOCK: out-of-band data not receive yet;
-                         *  EINVAL: out-of-band data already read.
-                         */
-                        error = 0;
-                        goto nooob;
-                    } else if (error == 0 && flagsp)
-                        *flagsp |= MSG_OOB;
-                }
+#ifdef __APPLE__
+		if ((so->so_options & SO_WANTOOBFLAG) != 0) {
+			if (error == EWOULDBLOCK || error == EINVAL) {
+				/* 
+				 * Let's try to get normal data:
+				 *  EWOULDBLOCK: out-of-band data not receive yet;
+				 *  EINVAL: out-of-band data already read.
+				 */
+				error = 0;
+				goto nooob;
+			} else if (error == 0 && flagsp)
+				*flagsp |= MSG_OOB;
+		}
 		KERNEL_DEBUG(DBG_FNC_SORECEIVE | DBG_FUNC_END, error,0,0,0,0);
+#endif
 		return (error);
 	}
 nooob:
@@ -1210,8 +1290,8 @@ nooob:
 		(*pr->pr_usrreqs->pru_rcvd)(so, 0);
 
 restart:
-	if (error = sblock(&so->so_rcv, SBLOCKWAIT(flags)))
-	{
+	error = sblock(&so->so_rcv, SBLOCKWAIT(flags));
+	if (error) {
 		KERNEL_DEBUG(DBG_FNC_SORECEIVE | DBG_FUNC_END, error,0,0,0,0);
 		return (error);
 	}
@@ -1272,15 +1352,14 @@ restart:
 		if (socket_debug)
 		    printf("SORECEIVE - sbwait returned %d\n", error);
 		splx(s);
-		if (error)
-		{
+		if (error) {
 		    KERNEL_DEBUG(DBG_FNC_SORECEIVE | DBG_FUNC_END, error,0,0,0,0);
 		    return (error);
 		}
 		goto restart;
 	}
 dontblock:
-#ifdef notyet /* XXXX */
+#ifndef __APPLE__
 	if (uio->uio_procp)
 		uio->uio_procp->p_stats->p_ru.ru_msgrcv++;
 #endif
@@ -1344,7 +1423,7 @@ dontblock:
 				break;
 		} else if (type == MT_OOBDATA)
 			break;
-#if 0
+#ifndef __APPLE__
 /*
  * This assertion needs rework.  The trouble is Appletalk is uses many
  * mbuf types (NOT listed in mbuf.h!) which will trigger this panic.
@@ -1353,16 +1432,17 @@ dontblock:
 		else
 		    KASSERT(m->m_type == MT_DATA || m->m_type == MT_HEADER,
 			("receive 3"));
-#endif
-               /*
-                * Make sure to allways set MSG_OOB event when getting 
-                * out of band data inline.
-                */
+#else
+		/*
+		 * Make sure to allways set MSG_OOB event when getting 
+		 * out of band data inline.
+		 */
 		if ((so->so_options & SO_WANTOOBFLAG) != 0 &&
-                    (so->so_options & SO_OOBINLINE) != 0 && 
-                    (so->so_state & SS_RCVATMARK) != 0) {
-		    flags |= MSG_OOB;
-                }
+			(so->so_options & SO_OOBINLINE) != 0 && 
+			(so->so_state & SS_RCVATMARK) != 0) {
+			flags |= MSG_OOB;
+		}
+#endif
 		so->so_state &= ~SS_RCVATMARK;
 		len = uio->uio_resid;
 		if (so->so_oobmark && len > so->so_oobmark - offset)
@@ -1472,13 +1552,17 @@ dontblock:
 	}
 
 	if (m && pr->pr_flags & PR_ATOMIC) {
+#ifdef __APPLE__
 		if (so->so_options & SO_DONTTRUNC)
 			flags |= MSG_RCVMORE;
-		else
-		{	flags |= MSG_TRUNC;
+		else {
+#endif
+			flags |= MSG_TRUNC;
 			if ((flags & MSG_PEEK) == 0)
 				(void) sbdroprecord(&so->so_rcv);
+#ifdef __APPLE__
 		}
+#endif
 	}
 	if ((flags & MSG_PEEK) == 0) {
 		if (m == 0)
@@ -1486,8 +1570,10 @@ dontblock:
 		if (pr->pr_flags & PR_WANTRCVD && so->so_pcb)
 			(*pr->pr_usrreqs->pru_rcvd)(so, flags);
 	}
+#ifdef __APPLE__
 	if ((so->so_options & SO_WANTMORE) && so->so_rcv.sb_cc > 0)
 		flags |= MSG_HAVEMORE;
+#endif
 	if (orig_resid == uio->uio_resid && orig_resid &&
 	    (flags & MSG_EOR) == 0 && (so->so_state & SS_CANTRCVMORE) == 0) {
 		sbunlock(&so->so_rcv);
@@ -1523,21 +1609,20 @@ soshutdown(so, how)
 
 	KERNEL_DEBUG(DBG_FNC_SOSHUTDOWN | DBG_FUNC_START, 0,0,0,0,0);
 	kp = sotokextcb(so);
-	while (kp)
-	{	if (kp->e_soif && kp->e_soif->sf_soshutdown)
-		{	ret = (*kp->e_soif->sf_soshutdown)(so, how, kp);
+	while (kp) {
+		if (kp->e_soif && kp->e_soif->sf_soshutdown) {
+			ret = (*kp->e_soif->sf_soshutdown)(so, how, kp);
 			if (ret)
 				return((ret == EJUSTRETURN) ? 0 : ret);
 		}
 		kp = kp->e_next;
 	}
 
-	how++;
-	if (how & FREAD) {
+	if (how != SHUT_WR) {
 		sorflush(so);
 		postevent(so, 0, EV_RCLOSED);
 	}
-	if (how & FWRITE) {
+	if (how != SHUT_RD) {
 	    ret = ((*pr->pr_usrreqs->pru_shutdown)(so));
 	    postevent(so, 0, EV_WCLOSED);
 	    KERNEL_DEBUG(DBG_FNC_SOSHUTDOWN | DBG_FUNC_END, 0,0,0,0,0);
@@ -1559,9 +1644,9 @@ sorflush(so)
 	struct kextcb *kp;
 
 	kp = sotokextcb(so);
-	while (kp)
-	{	if (kp->e_soif && kp->e_soif->sf_sorflush)
-		{	if ((*kp->e_soif->sf_sorflush)(so, kp))
+	while (kp) {
+		if (kp->e_soif && kp->e_soif->sf_sorflush) {
+			if ((*kp->e_soif->sf_sorflush)(so, kp))
 				return;
 		}
 		kp = kp->e_next;
@@ -1572,12 +1657,21 @@ sorflush(so)
 	s = splimp();
 	socantrcvmore(so);
 	sbunlock(sb);
+#ifdef __APPLE__
 	selthreadclear(&sb->sb_sel);
+#endif
 	asb = *sb;
 	bzero((caddr_t)sb, sizeof (*sb));
+#ifndef __APPLE__
+	if (asb.sb_flags & SB_KNOTE) {
+		sb->sb_sel.si_note = asb.sb_sel.si_note;
+		sb->sb_flags = SB_KNOTE;
+	}
+#endif
 	splx(s);
 	if (pr->pr_flags & PR_RIGHTS && pr->pr_domain->dom_dispose)
 		(*pr->pr_domain->dom_dispose)(asb.sb_mb);
+
 	sbrelease(&asb);
 }
 
@@ -1626,10 +1720,14 @@ sosetopt(so, sopt)
 	short	val;
 	struct kextcb *kp;
 
+	if (sopt->sopt_dir != SOPT_SET) {
+		sopt->sopt_dir = SOPT_SET;
+	}
+
 	kp = sotokextcb(so);
-	while (kp)
-	{	if (kp->e_soif && kp->e_soif->sf_socontrol)
-		{	error = (*kp->e_soif->sf_socontrol)(so, sopt, kp);
+	while (kp) {
+		if (kp->e_soif && kp->e_soif->sf_socontrol) {
+			error = (*kp->e_soif->sf_socontrol)(so, sopt, kp);
 			if (error)
 				return((error == EJUSTRETURN) ? 0 : error);
 		}
@@ -1665,9 +1763,11 @@ sosetopt(so, sopt)
 		case SO_REUSEPORT:
 		case SO_OOBINLINE:
 		case SO_TIMESTAMP:
+#ifdef __APPLE__
 		case SO_DONTTRUNC:
 		case SO_WANTMORE:
-         case SO_WANTOOBFLAG:
+		case SO_WANTOOBFLAG:
+#endif
 			error = sooptcopyin(sopt, &optval, sizeof optval,
 					    sizeof optval);
 			if (error)
@@ -1731,11 +1831,22 @@ sosetopt(so, sopt)
 			if (error)
 				goto bad;
 
-			if (tv.tv_sec > SHRT_MAX / hz - hz) {
+			/* assert(hz > 0); */
+			if (tv.tv_sec < 0 || tv.tv_sec > SHRT_MAX / hz ||
+			    tv.tv_usec < 0 || tv.tv_usec >= 1000000) {
 				error = EDOM;
 				goto bad;
 			}
-			val = tv.tv_sec * hz + tv.tv_usec / tick;
+			/* assert(tick > 0); */
+			/* assert(ULONG_MAX - SHRT_MAX >= 1000000); */
+			{
+			long tmp = (u_long)(tv.tv_sec * hz) + tv.tv_usec / tick;
+			if (tmp > SHRT_MAX) {
+				error = EDOM;
+				goto bad;
+			}
+			val = tmp;
+			}
 
 			switch (sopt->sopt_name) {
 			case SO_SNDTIMEO:
@@ -1748,17 +1859,30 @@ sosetopt(so, sopt)
 			break;
 
 		case SO_NKE:
-		{	struct so_nke nke;
+		{
+			struct so_nke nke;
 			struct NFDescriptor *nf1, *nf2 = NULL;
 
-                        error = sooptcopyin(sopt, &nke,
-					    sizeof nke, sizeof nke);
+			error = sooptcopyin(sopt, &nke,
+								sizeof nke, sizeof nke);
 			if (error)
 			  goto bad;
 
 			error = nke_insert(so, &nke);
 			break;
 		}
+
+		case SO_NOSIGPIPE:
+                        error = sooptcopyin(sopt, &optval, sizeof optval,
+                                            sizeof optval);
+                        if (error)
+                                goto bad;
+                        if (optval)
+                                so->so_flags |= SOF_NOSIGPIPE;
+                        else
+                                so->so_flags &= ~SOF_NOSIGPIPE;
+			
+			break;
 
 		default:
 			error = ENOPROTOOPT;
@@ -1816,10 +1940,14 @@ sogetopt(so, sopt)
 	struct mbuf  *m;
 	struct kextcb *kp;
 
+        if (sopt->sopt_dir != SOPT_GET) {
+                sopt->sopt_dir = SOPT_GET;
+        }
+
 	kp = sotokextcb(so);
-	while (kp)
-	{	if (kp->e_soif && kp->e_soif->sf_socontrol)
-		{	error = (*kp->e_soif->sf_socontrol)(so, sopt, kp);
+	while (kp) {
+		if (kp->e_soif && kp->e_soif->sf_socontrol) {
+			error = (*kp->e_soif->sf_socontrol)(so, sopt, kp);
 			if (error)
 				return((error == EJUSTRETURN) ? 0 : error);
 		}
@@ -1850,9 +1978,11 @@ sogetopt(so, sopt)
 		case SO_BROADCAST:
 		case SO_OOBINLINE:
 		case SO_TIMESTAMP:
+#ifdef __APPLE__
 		case SO_DONTTRUNC:
 		case SO_WANTMORE:
-         case SO_WANTOOBFLAG:
+		case SO_WANTOOBFLAG:
+#endif
 			optval = so->so_options & sopt->sopt_name;
 integer:
 			error = sooptcopyout(sopt, &optval, sizeof optval);
@@ -1862,8 +1992,10 @@ integer:
 			optval = so->so_type;
 			goto integer;
 
+#ifdef __APPLE__
 		case SO_NREAD:
-		{	int pkt_total;
+		{
+			int pkt_total;
 			struct mbuf *m1;
 
 			pkt_total = 0;
@@ -1873,8 +2005,8 @@ integer:
 #if 0
 				kprintf("SKT CC: %d\n", so->so_rcv.sb_cc);
 #endif
-				while (m1)
-				{	if (m1->m_type == MT_DATA)
+				while (m1) {
+					if (m1->m_type == MT_DATA)
 						pkt_total += m1->m_len;
 #if 0
 					kprintf("CNT: %d/%d\n", m1->m_len, pkt_total);
@@ -1889,6 +2021,7 @@ integer:
 #endif
 			goto integer;
 		}
+#endif
 		case SO_ERROR:
 			optval = so->so_error;
 			so->so_error = 0;
@@ -1920,6 +2053,10 @@ integer:
 			error = sooptcopyout(sopt, &tv, sizeof tv);
 			break;			
 
+                case SO_NOSIGPIPE:
+                        optval = (so->so_flags & SOF_NOSIGPIPE);
+                        goto integer;
+
 		default:
 			error = ENOPROTOOPT;
 			break;
@@ -1928,29 +2065,7 @@ integer:
 	}
 }
 
-void
-sohasoutofband(so)
-	register struct socket *so;
-{
-	struct proc *p;
-
-	struct kextcb *kp;
-
-	kp = sotokextcb(so);
-	while (kp)
-	{	if (kp->e_soif && kp->e_soif->sf_sohasoutofband)
-		{	if ((*kp->e_soif->sf_sohasoutofband)(so, kp))
-				return;
-		}
-		kp = kp->e_next;
-	}
-	if (so->so_pgid < 0)
-		gsignal(-so->so_pgid, SIGURG);
-	else if (so->so_pgid > 0 && (p = pfind(so->so_pgid)) != 0)
-		psignal(p, SIGURG);
-	selwakeup(&so->so_rcv.sb_sel);
-}
-
+#ifdef __APPLE__
 /*
  * Network filter support
  */
@@ -1987,7 +2102,6 @@ sfilter_init(register struct socket *so)
 	return(0);
 }
 
-
 /*
  * Run the list of filters, freeing extension control blocks
  * Assumes the soif/soutil blocks have been handled.
@@ -2009,46 +2123,11 @@ sfilter_term(struct socket *so)
 	}
 	return(0);
 }
+#endif __APPLE__
 
-
+/* XXX; prepare mbuf for (__FreeBSD__ < 3) routines. */
 int
-sopoll(struct socket *so, int events, struct ucred *cred, void * wql)
-{
-	struct proc *p = current_proc();
-	int revents = 0;
-	int s = splnet();
-
-	if (events & (POLLIN | POLLRDNORM))
-		if (soreadable(so))
-			revents |= events & (POLLIN | POLLRDNORM);
-
-	if (events & (POLLOUT | POLLWRNORM))
-		if (sowriteable(so))
-			revents |= events & (POLLOUT | POLLWRNORM);
-
-	if (events & (POLLPRI | POLLRDBAND))
-		if (so->so_oobmark || (so->so_state & SS_RCVATMARK))
-			revents |= events & (POLLPRI | POLLRDBAND);
-
-	if (revents == 0) {
-		if (events & (POLLIN | POLLPRI | POLLRDNORM | POLLRDBAND)) {
-			so->so_rcv.sb_flags |= SB_SEL;
-			selrecord(p, &so->so_rcv.sb_sel, wql);
-		}
-
-		if (events & (POLLOUT | POLLWRNORM)) {
-			so->so_snd.sb_flags |= SB_SEL;
-			selrecord(p, &so->so_snd.sb_sel, wql);
-		}
-	}
-
-	splx(s);
-	return (revents);
-}
-
-/*#### IPv6 Integration. Added new routines */
-int
-sooptgetm(struct sockopt *sopt, struct mbuf **mp)
+soopt_getm(struct sockopt *sopt, struct mbuf **mp)
 {
 	struct mbuf *m, *m_prev;
 	int sopt_size = sopt->sopt_valsize;
@@ -2095,7 +2174,7 @@ sooptgetm(struct sockopt *sopt, struct mbuf **mp)
 
 /* XXX; copyin sopt data into mbuf chain for (__FreeBSD__ < 3) routines. */
 int
-sooptmcopyin(struct sockopt *sopt, struct mbuf *m)
+soopt_mcopyin(struct sockopt *sopt, struct mbuf *m)
 {
 	struct mbuf *m0 = m;
 
@@ -2118,13 +2197,13 @@ sooptmcopyin(struct sockopt *sopt, struct mbuf *m)
 		m = m->m_next;
 	}
 	if (m != NULL) /* should be allocated enoughly at ip6_sooptmcopyin() */
-		panic("sooptmcopyin");
+		panic("soopt_mcopyin");
 	return 0;
 }
 
 /* XXX; copyout mbuf chain data into soopt for (__FreeBSD__ < 3) routines. */
 int
-sooptmcopyout(struct sockopt *sopt, struct mbuf *m)
+soopt_mcopyout(struct sockopt *sopt, struct mbuf *m)
 {
 	struct mbuf *m0 = m;
 	size_t valsize = 0;
@@ -2157,3 +2236,61 @@ sooptmcopyout(struct sockopt *sopt, struct mbuf *m)
 	return 0;
 }
 
+void
+sohasoutofband(so)
+	register struct socket *so;
+{
+	struct proc *p;
+	struct kextcb *kp;
+
+	kp = sotokextcb(so);
+	while (kp) {
+		if (kp->e_soif && kp->e_soif->sf_sohasoutofband) {
+			if ((*kp->e_soif->sf_sohasoutofband)(so, kp))
+				return;
+		}
+		kp = kp->e_next;
+	}
+	if (so->so_pgid < 0)
+		gsignal(-so->so_pgid, SIGURG);
+	else if (so->so_pgid > 0 && (p = pfind(so->so_pgid)) != 0)
+		psignal(p, SIGURG);
+	selwakeup(&so->so_rcv.sb_sel);
+}
+
+int
+sopoll(struct socket *so, int events, struct ucred *cred, void * wql)
+{
+	struct proc *p = current_proc();
+	int revents = 0;
+	int s = splnet();
+
+	if (events & (POLLIN | POLLRDNORM))
+		if (soreadable(so))
+			revents |= events & (POLLIN | POLLRDNORM);
+
+	if (events & (POLLOUT | POLLWRNORM))
+		if (sowriteable(so))
+			revents |= events & (POLLOUT | POLLWRNORM);
+
+	if (events & (POLLPRI | POLLRDBAND))
+		if (so->so_oobmark || (so->so_state & SS_RCVATMARK))
+			revents |= events & (POLLPRI | POLLRDBAND);
+
+	if (revents == 0) {
+		if (events & (POLLIN | POLLPRI | POLLRDNORM | POLLRDBAND)) {
+			/* Darwin sets the flag first, BSD calls selrecord first */
+			so->so_rcv.sb_flags |= SB_SEL;
+			selrecord(p, &so->so_rcv.sb_sel, wql);
+		}
+
+		if (events & (POLLOUT | POLLWRNORM)) {
+			/* Darwin sets the flag first, BSD calls selrecord first */
+			so->so_snd.sb_flags |= SB_SEL;
+			selrecord(p, &so->so_snd.sb_sel, wql);
+		}
+	}
+
+	splx(s);
+	return (revents);
+}

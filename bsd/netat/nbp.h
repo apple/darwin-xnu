@@ -52,6 +52,7 @@
 
 #ifndef _NETAT_NBP_H_
 #define _NETAT_NBP_H_
+#include <sys/appleapiopts.h>
 
 /* NBP packet types */
 
@@ -97,6 +98,7 @@ typedef struct at_nbp {
 #define DEFAULT_ZONE(zone) (!(zone)->len || ((zone)->len == 1 && (zone)->str[0] == '*'))
 
 #ifdef KERNEL
+#ifdef __APPLE_API_PRIVATE
 
 /* Struct for name registry */
 typedef struct _nve_ {
@@ -142,5 +144,6 @@ extern int	nbp_fillin_nve();
 extern at_nvestr_t *getSPLocalZone(int);
 extern at_nvestr_t *getLocalZone(int);
 
+#endif /* __APPLE_API_PRIVATE */
 #endif /* KERNEL */
 #endif /* _NETAT_NBP_H_ */

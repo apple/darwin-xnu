@@ -58,11 +58,10 @@
  *
  *      @(#)bpf.c	8.2 (Berkeley) 3/28/94
  *
+ * $FreeBSD: src/sys/net/bpf.c,v 1.59.2.5 2001/01/05 04:49:09 jdp Exp $
  */
 
-#include "bpfilter.h"
-
-#if NBPFILTER > 0
+#include "bpf.h"
 
 #ifndef __GNUC__
 #define inline
@@ -77,16 +76,16 @@
 #include <sys/mbuf.h>
 #include <sys/time.h>
 #include <sys/proc.h>
-
-
-#include <sys/poll.h>
-
-
 #include <sys/signalvar.h>
 #include <sys/filio.h>
 #include <sys/sockio.h>
 #include <sys/ttycom.h>
 #include <sys/filedesc.h>
+
+#if defined(sparc) && BSD < 199103
+#include <sys/stream.h>
+#endif
+#include <sys/poll.h>
 
 #include <sys/socket.h>
 #include <sys/vnode.h>
@@ -104,13 +103,15 @@
 #include <miscfs/devfs/devfs.h>
 #include <net/dlil.h>
 
+#if NBPFILTER > 0
+
 /*
  * Older BSDs don't have kernel malloc.
  */
 #if BSD < 199103
 extern bcopy();
 static caddr_t bpf_alloc();
-
+#include <net/bpf_compat.h>
 #define BPF_BUFSIZE (MCLBYTES-8)
 #define UIOMOVE(cp, len, code, uio) uiomove(cp, len, code, uio)
 #else
@@ -124,27 +125,32 @@ static caddr_t bpf_alloc();
  * The default read buffer size is patchable.
  */
 static int bpf_bufsize = BPF_BUFSIZE;
-
-
-
 SYSCTL_INT(_debug, OID_AUTO, bpf_bufsize, CTLFLAG_RW, 
 	&bpf_bufsize, 0, "");
-
+static int bpf_maxbufsize = BPF_MAXBUFSIZE;
+SYSCTL_INT(_debug, OID_AUTO, bpf_maxbufsize, CTLFLAG_RW, 
+	&bpf_maxbufsize, 0, "");
 
 /*
  *  bpf_iflist is the list of interfaces; each corresponds to an ifnet
  *  bpf_dtab holds the descriptors, indexed by minor device #
  */
 static struct bpf_if	*bpf_iflist;
+#ifdef __APPLE__
+/*
+ * BSD now stores the bpf_d in the dev_t which is a struct
+ * on their system. Our dev_t is an int, so we still store
+ * the bpf_d in a separate table indexed by minor device #.
+ */
 static struct bpf_d	bpf_dtab[NBPFILTER];
 static int		bpf_dtab_init;
 static int		nbpfilter = NBPFILTER;
+#endif
 
 static int	bpf_allocbufs __P((struct bpf_d *));
 static void	bpf_attachd __P((struct bpf_d *d, struct bpf_if *bp));
 static void	bpf_detachd __P((struct bpf_d *d));
 static void	bpf_freed __P((struct bpf_d *));
-static void	bpf_ifname __P((struct ifnet *, struct ifreq *));
 static void	bpf_mcopy __P((const void *, void *, size_t));
 static int	bpf_movein __P((struct uio *, int,
 		    struct mbuf **, struct sockaddr *, int *));
@@ -156,26 +162,43 @@ static void	catchpacket __P((struct bpf_d *, u_char *, u_int,
 static void	reset_d __P((struct bpf_d *));
 static int	 bpf_setf __P((struct bpf_d *, struct bpf_program *));
 
+/*
+ * Darwin differs from BSD here, the following are static
+ * on BSD and not static on Darwin.
+ */
 	d_open_t	bpfopen;
 	d_close_t	bpfclose;
 	d_read_t	bpfread;
 	d_write_t	bpfwrite;
 	d_ioctl_t	bpfioctl;
+	select_fcn_t	bpfpoll;
 
-
-#define BPF_MAJOR	7
-
+#ifdef __APPLE__
 void bpf_mtap(struct ifnet *, struct mbuf *);
 
 int	bpfopen(), bpfclose(), bpfread(), bpfwrite(), bpfioctl(),
 		bpfpoll();
+#endif
 
-
+/* Darwin's cdevsw struct differs slightly from BSDs */
+#define CDEV_MAJOR 23
 static struct cdevsw bpf_cdevsw = {
-    bpfopen,	bpfclose,	bpfread,	bpfwrite,
-    bpfioctl,	nulldev,	nulldev,	NULL,		bpfpoll,
-    eno_mmap,	eno_strat,	eno_getc,	eno_putc,	0
+	/* open */	bpfopen,
+	/* close */	bpfclose,
+	/* read */	bpfread,
+	/* write */	bpfwrite,
+	/* ioctl */	bpfioctl,
+	/* stop */	nulldev,
+	/* reset */	nulldev,
+	/* tty */	NULL,
+	/* select */	bpfpoll,
+	/* mmap */	eno_mmap,
+	/* strategy*/	eno_strat,
+	/* getc */	eno_getc,
+	/* putc */	eno_putc,
+	/* type */	0
 };
+
 
 static int
 bpf_movein(uio, linktype, mp, sockp, datlen)
@@ -239,6 +262,10 @@ bpf_movein(uio, linktype, mp, sockp, datlen)
 		hlen = 12; 	/* XXX 4(ATM_PH) + 3(LLC) + 5(SNAP) */
 		break;
 #endif
+	case DLT_PPP:
+		sockp->sa_family = AF_UNSPEC;
+		hlen = 4;	/* This should match PPP_HDRLEN */
+		break;
 
 	default:
 		return (EIO);
@@ -290,6 +317,8 @@ bpf_movein(uio, linktype, mp, sockp, datlen)
 	return (error);
 }
 
+#ifdef __APPLE__
+/* Callback registered with Ethernet driver. */
 int bpf_tap_callback(struct ifnet *ifp, struct mbuf *m)
 {
     boolean_t funnel_state;
@@ -308,7 +337,7 @@ int bpf_tap_callback(struct ifnet *ifp, struct mbuf *m)
     thread_funnel_set(network_flock, funnel_state);
     return 0;
 }
-
+#endif
 
 /*
  * Attach file to the bpf interface, i.e. make d listen on bp.
@@ -319,8 +348,6 @@ bpf_attachd(d, bp)
 	struct bpf_d *d;
 	struct bpf_if *bp;
 {
-	struct ifnet *ifp;
-
 	/*
 	 * Point d at bp, and add d to the interface's list of listeners.
 	 * Finally, point the driver's bpf cookie at the interface so
@@ -331,10 +358,11 @@ bpf_attachd(d, bp)
 	bp->bif_dlist = d;
 
 	bp->bif_ifp->if_bpf = bp;
-	ifp = bp->bif_ifp;
 
-	if (ifp->if_set_bpf_tap)
-		(*ifp->if_set_bpf_tap)(ifp, BPF_TAP_INPUT_OUTPUT, bpf_tap_callback);
+#ifdef __APPLE__
+	if (bp->bif_ifp->if_set_bpf_tap)
+		(*bp->bif_ifp->if_set_bpf_tap)(bp->bif_ifp, BPF_TAP_INPUT_OUTPUT, bpf_tap_callback);
+#endif
 }
 
 /*
@@ -346,11 +374,12 @@ bpf_detachd(d)
 {
 	struct bpf_d **p;
 	struct bpf_if *bp;
+#ifdef __APPLE__
 	struct ifnet  *ifp;
 
 	ifp = d->bd_bif->bif_ifp;
-	if (ifp->if_set_bpf_tap)
-		(*ifp->if_set_bpf_tap)(ifp, BPF_TAP_DISABLE, 0);
+
+#endif
 
 	bp = d->bd_bif;
 	/*
@@ -364,8 +393,9 @@ bpf_detachd(d)
 			 * Something is really wrong if we were able to put
 			 * the driver into promiscuous mode, but can't
 			 * take it out.
+			 * Most likely the network interface is gone.
 			 */
-			panic("bpf: ifpromisc failed");
+			printf("bpf: ifpromisc failed");
 	}
 	/* Remove d from the interface's descriptor list. */
 	p = &bp->bif_dlist;
@@ -375,15 +405,19 @@ bpf_detachd(d)
 			panic("bpf_detachd: descriptor not in list");
 	}
 	*p = (*p)->bd_next;
-	if (bp->bif_dlist == 0)
+	if (bp->bif_dlist == 0) {
 		/*
 		 * Let the driver know that there are no more listeners.
 		 */
+		if (ifp->if_set_bpf_tap)
+			(*ifp->if_set_bpf_tap)(ifp, BPF_TAP_DISABLE, 0);
 		d->bd_bif->bif_ifp->if_bpf = 0;
+	}
 	d->bd_bif = 0;
 }
 
 
+#ifdef __APPLE__
 /*
  * Mark a descriptor free by making it point to itself.
  * This is probably cheaper than marking with a constant since
@@ -392,7 +426,7 @@ bpf_detachd(d)
 #define D_ISFREE(d) ((d) == (d)->bd_next)
 #define D_MARKFREE(d) ((d)->bd_next = (d))
 #define D_MARKUSED(d) ((d)->bd_next = 0)
-
+#endif
 /*
  * Open ethernet device.  Returns ENXIO for illegal minor device number,
  * EBUSY if file is open by another process.
@@ -407,24 +441,42 @@ bpfopen(dev, flags, fmt, p)
 {
 	register struct bpf_d *d;
 
+#ifdef __APPLE__
 	if (minor(dev) >= nbpfilter)
 		return (ENXIO);
 
 	thread_funnel_switch(KERNEL_FUNNEL, NETWORK_FUNNEL);
+	
+	d = &bpf_dtab[minor(dev)];
+#else
+	if (p->p_prison)
+		return (EPERM);
+
+	d = dev->si_drv1;
+#endif
 	/*
-	 * Each minor can be opened by only one process.  If the requested
+	 * Each minor can be opened by only one process.  If the requested 
 	 * minor is in use, return EBUSY.
 	 */
-	d = &bpf_dtab[minor(dev)];
+#ifdef __APPLE__
 	if (!D_ISFREE(d)) {
 	     thread_funnel_switch(NETWORK_FUNNEL, KERNEL_FUNNEL);
 	     return (EBUSY);
 	}
-
+	
 	/* Mark "free" and do most initialization. */
 	bzero((char *)d, sizeof(*d));
+#else
+	if (d)
+		return (EBUSY);
+	make_dev(&bpf_cdevsw, minor(dev), 0, 0, 0600, "bpf%d", lminor(dev));
+	MALLOC(d, struct bpf_d *, sizeof(*d), M_BPF, M_WAITOK);
+	bzero(d, sizeof(*d));
+	dev->si_drv1 = d;
+#endif
 	d->bd_bufsize = bpf_bufsize;
 	d->bd_sig = SIGIO;
+	d->bd_seesent = 1;
 	thread_funnel_switch(NETWORK_FUNNEL, KERNEL_FUNNEL);
 	return (0);
 }
@@ -446,12 +498,19 @@ bpfclose(dev, flags, fmt, p)
 
 	thread_funnel_switch(KERNEL_FUNNEL, NETWORK_FUNNEL);
 
+#ifndef __APPLE__
+	funsetown(d->bd_sigio);
+#endif
 	s = splimp();
+#ifdef __APPLE__
 	d = &bpf_dtab[minor(dev)];
+#endif
 	if (d->bd_bif)
 		bpf_detachd(d);
 	splx(s);
+#ifdef __APPLE__
 	selthreadclear(&d->bd_sel);
+#endif
 	bpf_freed(d);
 	thread_funnel_switch(NETWORK_FUNNEL, KERNEL_FUNNEL);
 	return (0);
@@ -467,8 +526,6 @@ bpf_timeout(arg)
 {
 	boolean_t 	funnel_state;
 	struct bpf_d *d = (struct bpf_d *)arg;
-        
-        
 	funnel_state = thread_funnel_set(network_flock, TRUE);
 	d->bd_timedout = 1;
 	wakeup(arg);
@@ -525,8 +582,6 @@ bpfread(dev, uio, ioflag)
 	int error;
 	int s;
 
-
-
 	thread_funnel_switch(KERNEL_FUNNEL, NETWORK_FUNNEL);
 	d = &bpf_dtab[minor(dev)];
 
@@ -535,7 +590,7 @@ bpfread(dev, uio, ioflag)
 	 * as kernel buffers.
 	 */
 	if (uio->uio_resid != d->bd_bufsize) {
-	     thread_funnel_switch(NETWORK_FUNNEL, KERNEL_FUNNEL);
+		thread_funnel_switch(NETWORK_FUNNEL, KERNEL_FUNNEL);
 		return (EINVAL);
 	}
 
@@ -555,6 +610,19 @@ bpfread(dev, uio, ioflag)
 			ROTATE_BUFFERS(d);
 			break;
 		}
+
+		/*
+		 * No data is available, check to see if the bpf device
+		 * is still pointed at a real interface.  If not, return
+		 * ENXIO so that the userland process knows to rebind
+		 * it before using it again.
+		 */
+		if (d->bd_bif == NULL) {
+			splx(s);
+			thread_funnel_switch(NETWORK_FUNNEL, KERNEL_FUNNEL);
+			return (ENXIO);
+		}
+		
 		if (ioflag & IO_NDELAY)
 			error = EWOULDBLOCK;
 		else
@@ -623,6 +691,10 @@ bpf_wakeup(d)
 
 #if BSD >= 199103
 	selwakeup(&d->bd_sel);
+#ifndef __APPLE__
+	/* XXX */
+	d->bd_sel.si_pid = 0;
+#endif
 #else
 	if (d->bd_selproc) {
 		selwakeup(d->bd_selproc, (int)d->bd_selcoll);
@@ -639,17 +711,15 @@ bpfwrite(dev, uio, ioflag)
 	int ioflag;
 {
 	register struct bpf_d *d;
-
 	struct ifnet *ifp;
 	struct mbuf *m;
 	int error, s;
 	static struct sockaddr dst;
 	int datlen;
 
-
-
 	thread_funnel_switch(KERNEL_FUNNEL, NETWORK_FUNNEL);
 	d = &bpf_dtab[minor(dev)];
+	
 	if (d->bd_bif == 0) {
 	     thread_funnel_switch(NETWORK_FUNNEL, KERNEL_FUNNEL);
 	     return (ENXIO);
@@ -673,18 +743,16 @@ bpfwrite(dev, uio, ioflag)
 	     return (EMSGSIZE);
 	}
 
+	if (d->bd_hdrcmplt)
+		dst.sa_family = pseudo_AF_HDRCMPLT;
+
 	s = splnet();
 
-	error = dlil_output((u_long) ifp, m, 
-			    (caddr_t) 0, &dst, 0);
-
-	/*
-	error = dlil_inject_if_output(m, DLIL_NULL_FILTER);
-	*/
+	error = dlil_output(ifp->if_data.default_proto, m, 
+			(caddr_t) 0, &dst, 0);
 
 	splx(s);
 	thread_funnel_switch(NETWORK_FUNNEL, KERNEL_FUNNEL);
-
 	/*
 	 * The driver frees the mbuf.
 	 */
@@ -725,9 +793,13 @@ reset_d(d)
  *  BIOCGSTATS		Get packet stats.
  *  BIOCIMMEDIATE	Set immediate mode.
  *  BIOCVERSION		Get filter language version.
+ *  BIOCGHDRCMPLT	Get "header already complete" flag
+ *  BIOCSHDRCMPLT	Set "header already complete" flag
+ *  BIOCGSEESENT	Get "see packets sent" flag
+ *  BIOCSSEESENT	Set "see packets sent" flag
  */
 /* ARGSUSED */
-	int
+int
 bpfioctl(dev, cmd, addr, flags, p)
 	dev_t dev;
 	u_long cmd;
@@ -797,8 +869,8 @@ bpfioctl(dev, cmd, addr, flags, p)
 		else {
 			register u_int size = *(u_int *)addr;
 
-			if (size > BPF_MAXBUFSIZE)
-				*(u_int *)addr = size = BPF_MAXBUFSIZE;
+			if (size > bpf_maxbufsize)
+				*(u_int *)addr = size = bpf_maxbufsize;
 			else if (size < BPF_MINBUFSIZE)
 				*(u_int *)addr = size = BPF_MINBUFSIZE;
 			d->bd_bufsize = size;
@@ -853,13 +925,18 @@ bpfioctl(dev, cmd, addr, flags, p)
 		break;
 
 	/*
-	 * Set interface name.
+	 * Get interface name.
 	 */
 	case BIOCGETIF:
 		if (d->bd_bif == 0)
 			error = EINVAL;
-		else
-			bpf_ifname(d->bd_bif->bif_ifp, (struct ifreq *)addr);
+		else {
+			struct ifnet *const ifp = d->bd_bif->bif_ifp;
+			struct ifreq *const ifr = (struct ifreq *)addr;
+
+			snprintf(ifr->ifr_name, sizeof(ifr->ifr_name),
+			    "%s%d", ifp->if_name, ifp->if_unit);
+		}
 		break;
 
 	/*
@@ -925,13 +1002,41 @@ bpfioctl(dev, cmd, addr, flags, p)
 			break;
 		}
 
+	/*
+	 * Get "header already complete" flag
+	 */
+	case BIOCGHDRCMPLT:
+		*(u_int *)addr = d->bd_hdrcmplt;
+		break;
+
+	/*
+	 * Set "header already complete" flag
+	 */
+	case BIOCSHDRCMPLT:
+		d->bd_hdrcmplt = *(u_int *)addr ? 1 : 0;
+		break;
+
+	/*
+	 * Get "see sent packets" flag
+	 */
+	case BIOCGSEESENT:
+		*(u_int *)addr = d->bd_seesent;
+		break;
+
+	/*
+	 * Set "see sent packets" flag
+	 */
+	case BIOCSSEESENT:
+		d->bd_seesent = *(u_int *)addr;
+		break;
+
 	case FIONBIO:		/* Non-blocking I/O */
 		break;
 
 	case FIOASYNC:		/* Send signal on receive packets */
 		d->bd_async = *(int *)addr;
 		break;
-#if ISFB31
+#ifndef __APPLE__
 	case FIOSETOWN:
 		error = fsetown(*(int *)addr, &d->bd_sigio);
 		break;
@@ -1001,8 +1106,10 @@ bpf_setf(d, fp)
 
 	size = flen * sizeof(*fp->bf_insns);
 	fcode = (struct bpf_insn *) _MALLOC(size, M_DEVBUF, M_WAIT);
+#ifdef __APPLE__
 	if (fcode == NULL)
 		return (ENOBUFS);
+#endif
 	if (copyin((caddr_t)fp->bf_insns, (caddr_t)fcode, size) == 0 &&
 	    bpf_validate(fcode, (int)flen)) {
 		s = splimp();
@@ -1078,28 +1185,6 @@ bpf_setif(d, ifr)
 }
 
 /*
- * Convert an interface name plus unit number of an ifp to a single
- * name which is returned in the ifr.
- */
-static void
-bpf_ifname(ifp, ifr)
-	struct ifnet *ifp;
-	struct ifreq *ifr;
-{
-	char *s = ifp->if_name;
-	char *d = ifr->ifr_name;
-
-	while (*d++ = *s++)
-		continue;
-	d--; /* back to the null */
-	/* XXX Assume that unit number is less than 10. */
-	*d++ = ifp->if_unit + '0';
-	*d = '\0';
-}
-
-
-
-/*
  * Support for select() and poll() system calls
  *
  * Return true iff the specific operation will not block indefinitely.
@@ -1122,13 +1207,18 @@ bpfpoll(dev, events, wql, p)
 	 */
 	d = &bpf_dtab[minor(dev)];
 
+	if (d->bd_bif == NULL) {
+		thread_funnel_switch(NETWORK_FUNNEL, KERNEL_FUNNEL);
+		return (ENXIO);
+	}
+
 	s = splimp();
-	if (events & (POLLIN | POLLRDNORM))
+	if (events & (POLLIN | POLLRDNORM)) {
 		if (d->bd_hlen != 0 || (d->bd_immediate && d->bd_slen != 0))
 			revents |= events & (POLLIN | POLLRDNORM);
 		else
 			selrecord(p, &d->bd_sel, wql);
-
+	}
 	splx(s);
 	thread_funnel_switch(NETWORK_FUNNEL, KERNEL_FUNNEL);
 	return (revents);
@@ -1155,15 +1245,20 @@ bpf_tap(ifp, pkt, pktlen)
 	 * interfaces shared any data.  This is not the case.
 	 */
 	thread_funnel_switch(KERNEL_FUNNEL, NETWORK_FUNNEL);
-	if ((bp = ifp->if_bpf)) {
-        for (d = bp->bif_dlist; d != 0; d = d->bd_next) {
-            ++d->bd_rcount;
-            slen = bpf_filter(d->bd_filter, pkt, pktlen, pktlen);
-            if (slen != 0)
-                catchpacket(d, pkt, pktlen, slen, bcopy);
-        }
+	bp = ifp->if_bpf;
+#ifdef __APPLE__
+	if (bp) {
+#endif
+	for (d = bp->bif_dlist; d != 0; d = d->bd_next) {
+		++d->bd_rcount;
+		slen = bpf_filter(d->bd_filter, pkt, pktlen, pktlen);
+		if (slen != 0)
+			catchpacket(d, pkt, pktlen, slen, bcopy);
+	}
+#ifdef __APPLE__
     }
 	thread_funnel_switch(KERNEL_FUNNEL, NETWORK_FUNNEL);
+#endif
 }
 
 /*
@@ -1211,6 +1306,8 @@ bpf_mtap(ifp, m)
 		pktlen += m0->m_len;
 
 	for (d = bp->bif_dlist; d != 0; d = d->bd_next) {
+		if (!d->bd_seesent && (m->m_pkthdr.rcvif == NULL))
+			continue;
 		++d->bd_rcount;
 		slen = bpf_filter(d->bd_filter, (u_char *)m, pktlen, 0);
 		if (slen != 0)
@@ -1375,6 +1472,7 @@ bpfattach(ifp, dlt, hdrlen)
 	 */
 	bp->bif_hdrlen = BPF_WORDALIGN(hdrlen + SIZEOF_BPF_HDR) - hdrlen;
 
+#ifdef __APPLE__
 	/*
 	 * Mark all the descriptors free if this hasn't been done.
 	 */
@@ -1383,10 +1481,67 @@ bpfattach(ifp, dlt, hdrlen)
 			D_MARKFREE(&bpf_dtab[i]);
 		bpf_dtab_init = 1;
 	}
-#if 0
+#else
 	if (bootverbose)
 		printf("bpf: %s%d attached\n", ifp->if_name, ifp->if_unit);
 #endif
+}
+
+/*
+ * Detach bpf from an interface.  This involves detaching each descriptor
+ * associated with the interface, and leaving bd_bif NULL.  Notify each
+ * descriptor as it's detached so that any sleepers wake up and get
+ * ENXIO.
+ */
+void
+bpfdetach(ifp)
+	struct ifnet *ifp;
+{
+	struct bpf_if	*bp, *bp_prev;
+	struct bpf_d	*d;
+	int	s;
+
+	s = splimp();
+
+	/* Locate BPF interface information */
+	bp_prev = NULL;
+	for (bp = bpf_iflist; bp != NULL; bp = bp->bif_next) {
+		if (ifp == bp->bif_ifp)
+			break;
+		bp_prev = bp;
+	}
+
+#ifdef __APPLE__
+	/* Check for no BPF interface information */
+	if (bp == NULL) {
+		return;
+	}
+#endif
+
+	/* Interface wasn't attached */
+	if (bp->bif_ifp == NULL) {
+		splx(s);
+#ifndef __APPLE__
+		printf("bpfdetach: %s%d was not attached\n", ifp->if_name,
+		    ifp->if_unit);
+#endif
+		return;
+	}
+
+	while ((d = bp->bif_dlist) != NULL) {
+		bpf_detachd(d);
+		bpf_wakeup(d);
+	}
+
+	if (bp_prev) {
+		bp_prev->bif_next = bp->bif_next;
+	} else {
+		bpf_iflist = bp->bif_next;
+	}
+
+	FREE(bp, M_DEVBUF);
+
+	splx(s);
 }
 
 static	void *bpf_devfs_token[NBPFILTER];
@@ -1394,31 +1549,83 @@ static	void *bpf_devfs_token[NBPFILTER];
 static	int bpf_devsw_installed;
 
 void bpf_init __P((void *unused));
+
 void
 bpf_init(unused)
 	void *unused;
 {
+#ifdef __APPLE__
 	int 	i;
-    	int	maj;
+	int	maj;
 
 	if (!bpf_devsw_installed ) {
-	     bpf_devsw_installed = 1;
-	     maj = cdevsw_add(BPF_MAJOR, &bpf_cdevsw);
-	     if (maj == -1) {
-		  printf("bpf_init: failed to allocate a major number!\n");
-		  nbpfilter = 0;
-		  return;
-	     }
-	     for (i = 0 ; i < nbpfilter; i++) {
-		  bpf_devfs_token[i]  = devfs_make_node(makedev(maj, i), 
-							DEVFS_CHAR, UID_ROOT, GID_WHEEL, 0600, 
-							"bpf%x", i);
-	     }
-    	}
+		bpf_devsw_installed = 1;
+		maj = cdevsw_add(CDEV_MAJOR, &bpf_cdevsw);
+		if (maj == -1) {
+			printf("bpf_init: failed to allocate a major number!\n");
+			nbpfilter = 0;
+			return;
+		}
+		for (i = 0 ; i < nbpfilter; i++) {
+			bpf_devfs_token[i]  = devfs_make_node(makedev(maj, i), 
+				DEVFS_CHAR, UID_ROOT, GID_WHEEL, 0600, 
+				"bpf%x", i);
+		}
+	}
+#else
+	cdevsw_add(&bpf_cdevsw);
+#endif
 }
 
-/*
+#ifndef __APPLE__
 SYSINIT(bpfdev,SI_SUB_DRIVERS,SI_ORDER_MIDDLE+CDEV_MAJOR,bpf_drvinit,NULL)
-*/
-
 #endif
+
+#else /* !BPF */
+#ifndef __APPLE__
+/*
+ * NOP stubs to allow bpf-using drivers to load and function.
+ *
+ * A 'better' implementation would allow the core bpf functionality
+ * to be loaded at runtime.
+ */
+
+void
+bpf_tap(ifp, pkt, pktlen)
+	struct ifnet *ifp;
+	register u_char *pkt;
+	register u_int pktlen;
+{
+}
+
+void
+bpf_mtap(ifp, m)
+	struct ifnet *ifp;
+	struct mbuf *m;
+{
+}
+
+void
+bpfattach(ifp, dlt, hdrlen)
+	struct ifnet *ifp;
+	u_int dlt, hdrlen;
+{
+}
+
+void
+bpfdetach(ifp)
+	struct ifnet *ifp;
+{
+}
+
+u_int
+bpf_filter(pc, p, wirelen, buflen)
+	register const struct bpf_insn *pc;
+	register u_char *p;
+	u_int wirelen;
+	register u_int buflen;
+{
+	return -1;	/* "no filter" behaviour */
+}
+#endif /* !defined(__APPLE__) */
+#endif /* NBPFILTER > 0 */

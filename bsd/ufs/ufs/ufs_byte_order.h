@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2002 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -24,10 +24,6 @@
  * UFS byte swapping routines to make a big endian file system useful on a
  * little endian machine.
  *
- * HISTORY
- *
- * 16 Feb 1998 A. Ramesh at Apple
- *      MacOSX version created.
  */
 
 #ifdef	KERNEL_PRIVATE
@@ -35,6 +31,9 @@
 #ifndef _UFS_BYTE_ORDER_H_
 #define _UFS_BYTE_ORDER_H_
 
+#include <sys/appleapiopts.h>
+
+#ifdef __APPLE_API_PRIVATE
 #include <rev_endian_fs.h>
 #include <sys/vnode.h>
 #include <sys/buf.h>
@@ -63,5 +62,6 @@ void byte_swap_direct __P((struct direct *));
 void byte_swap_dirtemplate_in __P((struct dirtemplate *));
 void byte_swap_minidir_in __P((struct direct *));
 
+#endif /* __APPLE_API_PRIVATE */
 #endif /* _UFS_BYTE_ORDER_H_ */
 #endif	/* KERNEL_PRIVATE */

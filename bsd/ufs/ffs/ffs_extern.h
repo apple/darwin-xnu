@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2002 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -55,7 +55,12 @@
  *
  *	@(#)ffs_extern.h	8.6 (Berkeley) 3/30/95
  */
+#ifndef __UFS_FFS_FFS_EXTERN_H__
+#define __UFS_FFS_FFS_EXTERN_H__
 
+#include <sys/appleapiopts.h>
+
+#ifdef __APPLE_API_UNSTABLE
 /*
  * Sysctl values for the fast filesystem.
  */
@@ -72,6 +77,7 @@
 	{ "doreallocblks", CTLTYPE_INT }, \
 	{ "doasyncfree", CTLTYPE_INT }, \
 }
+#endif /* __APPLE_API_UNSTABLE */
 
 struct buf;
 struct fid;
@@ -88,6 +94,7 @@ struct vnode;
 struct mbuf;
 struct vfsconf;
 
+#ifdef __APPLE_API_PRIVATE
 __BEGIN_DECLS
 int	ffs_alloc __P((struct inode *,
 	    ufs_daddr_t, ufs_daddr_t, int, struct ucred *, ufs_daddr_t *));
@@ -144,3 +151,6 @@ extern int (**ffs_fifoop_p)(void *);
 #else
 #define FFS_FIFOOPS NULL
 #endif
+
+#endif /* __APPLE_API_PRIVATE */
+#endif /* __UFS_FFS_FFS_EXTERN_H__ */

@@ -12,21 +12,18 @@ include $(MakeInc_def)
 
 INSTINC_SUBDIRS = \
         adb \
-	cdb \
 	nvram \
         pci \
 	platform \
 	power \
 	pwr_mgt \
 	rtc \
-	scsi \
 	system_management
 
 INSTINC_SUBDIRS_PPC = \
 	ppc
 
 INSTINC_SUBDIRS_I386 = \
-	ata \
 	i386
 
 EXPINC_SUBDIRS = ${INSTINC_SUBDIRS}

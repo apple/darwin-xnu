@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2002 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -53,11 +53,24 @@
  * SUCH DAMAGE.
  *
  *	@(#)ktrace.h	8.1 (Berkeley) 6/2/93
+ * $FreeBSD: src/sys/sys/ktrace.h,v 1.19.2.3 2001/01/06 09:58:23 alfred Exp $
  */
 
 #ifndef _SYS_KTRACE_H_
 #define	_SYS_KTRACE_H_
 
+#include <sys/appleapiopts.h>
+
+#if defined(MACH_KERNEL_PRIVATE)
+
+#ifdef __APPLE_API_PRIVATE
+void ktrsyscall(void *, int, int, void *, int);
+void ktrsysret(void *, int, int, int, int);
+#endif /* __APPLE_API_PRIVATE */
+
+#else
+
+#ifdef __APPLE_API_UNSTABLE
 /*
  * operations to ktrace system call  (KTROP(op))
  */
@@ -97,11 +110,12 @@ struct ktr_header {
  */
 #define KTR_SYSCALL	1
 struct ktr_syscall {
-	int	ktr_code;		/* syscall number */
-	int	ktr_argsize;		/* size of arguments */
+	short	ktr_code;		/* syscall number */
+	short	ktr_narg;		/* number of arguments */
 	/*
-	 * followed by ktr_argsize/sizeof(register_t) "register_t"s
+	 * followed by ktr_narg register_t
 	 */
+	register_t	ktr_args[1];
 };
 
 /*
@@ -112,7 +126,7 @@ struct ktr_sysret {
 	short	ktr_code;
 	short	ktr_eosys;
 	int	ktr_error;
-	int	ktr_retval;
+	register_t	ktr_retval;
 };
 
 /*
@@ -140,8 +154,8 @@ struct ktr_genio {
 struct ktr_psig {
 	int	signo;
 	sig_t	action;
-	int	mask;
 	int	code;
+	sigset_t mask;
 };
 
 /*
@@ -154,6 +168,12 @@ struct ktr_csw {
 };
 
 /*
+ * KTR_USER - data comming from userland
+ */
+#define	KTR_USER_MAXLEN	2048	/* maximum length of passed data */
+#define KTR_USER	7
+
+/*
  * kernel trace points (in p_traceflag)
  */
 #define KTRFAC_MASK	0x00ffffff
@@ -163,6 +183,7 @@ struct ktr_csw {
 #define KTRFAC_GENIO	(1<<KTR_GENIO)
 #define	KTRFAC_PSIG	(1<<KTR_PSIG)
 #define KTRFAC_CSW	(1<<KTR_CSW)
+#define KTRFAC_USER	(1<<KTR_USER)
 /*
  * trace flags (also in p_traceflags)
  */
@@ -170,14 +191,29 @@ struct ktr_csw {
 #define KTRFAC_INHERIT	0x40000000	/* pass trace flags to children */
 #define KTRFAC_ACTIVE	0x20000000	/* ktrace logging in progress, ignore */
 
-#ifndef	KERNEL
+
+#ifdef	KERNEL
+#ifdef __APPLE_API_PRIVATE
+void	ktrnamei __P((struct vnode *,char *));
+void	ktrcsw __P((struct vnode *, int, int, int));
+void	ktrpsig __P((struct vnode *, int, sig_t, sigset_t *, int, int));
+void	ktrgenio __P((struct vnode *, int, enum uio_rw,
+	    struct uio *, int, int));
+void	ktrsyscall __P((struct proc *, int, int, register_t args[], int));
+void	ktrsysret __P((struct proc *, int, int, register_t, int));
+#endif /* __APPLE_API_PRIVATE */
+#else
 
 #include <sys/cdefs.h>
 
 __BEGIN_DECLS
 int	ktrace __P((const char *, int, int, pid_t));
+int	utrace __P((const void *, size_t));
 __END_DECLS
 
 #endif	/* !KERNEL */
+
+#endif /* __APPLE_API_UNSTABLE */
+#endif /* !MACH_KERNEL_PRIVATE */
 #endif /* !_SYS_KTRACE_H_ */
 

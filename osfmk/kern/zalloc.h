@@ -62,7 +62,12 @@
 #include <mach/machine/vm_types.h>
 #include <kern/kern_types.h>
 
-#ifdef MACH_KERNEL_PRIVATE
+#include <sys/appleapiopts.h>
+
+#ifdef	__APPLE_API_PRIVATE
+
+#ifdef	MACH_KERNEL_PRIVATE
+
 #include <zone_debug.h>
 #include <mach_kdb.h>
 #include <kern/lock.h>
@@ -101,7 +106,6 @@ struct zone {
 	decl_simple_lock_data(,lock)		/* generic lock */
 };
 
-
 extern void		zone_gc(void);
 extern void		consider_zone_gc(void);
 
@@ -114,8 +118,9 @@ extern void		zone_bootstrap(void);
 /* Init zone module */
 extern void		zone_init(vm_size_t);
 
-#endif /* ! MACH_KERNEL_PRIVATE */
+#endif	/* MACH_KERNEL_PRIVATE */
 
+#endif	/* __APPLE_API_PRIVATE */
 
 /* Allocate from zone */
 extern vm_offset_t	zalloc(
@@ -179,22 +184,34 @@ extern integer_t              zone_free_count(zone_t zone);
 #define Z_EXPAND	3	/* Make zone expandable		*/
 #define	Z_FOREIGN	4	/* Allow collectable zone to contain foreign */
 				/* (not allocated via zalloc) elements. */
-#ifdef MACH_KERNEL_PRIVATE
+
+#ifdef	__APPLE_API_PRIVATE
+
+#ifdef	MACH_KERNEL_PRIVATE
+
 #if	ZONE_DEBUG
+
 #if	MACH_KDB
+
 extern vm_offset_t	next_element(
 				zone_t		z,
 				vm_offset_t	elt);
 
 extern vm_offset_t	first_element(
 				zone_t		z);
+
 #endif	/* MACH_KDB */
+
 extern void		zone_debug_enable(
 				zone_t		z);
 
 extern void		zone_debug_disable(
 				zone_t		z);
+
 #endif	/* ZONE_DEBUG */
-#endif MACH_KERNEL_PRIVATE
+
+#endif	MACH_KERNEL_PRIVATE
+
+#endif	/* __APPLE_API_PRIVATE */
 
 #endif	/* _KERN_ZALLOC_H_ */

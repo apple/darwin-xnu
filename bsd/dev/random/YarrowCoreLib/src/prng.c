@@ -46,8 +46,6 @@
 #if		defined(macintosh) || defined(__APPLE__)
 /* FIXME - this file needs to be in a platform-independent place */
 
-#include <dev/random/YarrowCoreLib/include/macos_defs.h>
-
 #include "macOnly.h"
 #endif	/* macintosh */
 #include "smf.h"

@@ -68,6 +68,8 @@
 #include <netat/routing_tables.h>
 #include <netat/debug.h>
 
+#include <sys/kern_event.h>
+
 static void zip_reply_to_getmyzone();
 extern int at_reg_mcast(), at_unreg_mcast();
 
@@ -723,6 +725,10 @@ void zip_router_input (m, ifID)
 			bcopy((caddr_t)new_zone, (caddr_t)&ifID->ifZoneName, 
 			      new_zone_len+1);
 
+			/* Send network zone change event and new zone for this interface. */
+			atalk_post_msg(ifID->aa_ifp, KEV_ATALK_ZONEUPDATED, 0, &(ifID->ifZoneName));
+			atalk_post_msg(ifID->aa_ifp, KEV_ATALK_ZONELISTCHANGED, 0, 0);
+			
 			/* add the new zone to the list of local zones */
 			if (!MULTIPORT_MODE && !DEFAULT_ZONE(&ifID->ifZoneName))
 				(void)setLocalZones(&ifID->ifZoneName, 
@@ -864,8 +870,10 @@ static void zip_netinfo_reply (netinfo, ifID)
 	 * to us.
 	 */
 	/* *** Do we really need to check this? *** */
-	if (!zonename_equal((at_nvestr_t *)netinfo->data, &ifID->ifZoneName))
+	if (!zonename_equal((at_nvestr_t *)netinfo->data, &ifID->ifZoneName)) {
+		dPrintf(D_M_ZIP, D_L_INFO, ("zip_netinfo_reply, !zonename_equal!!!"));
 		return;
+	}
 
 	ifID->ifThisCableStart = NET_VALUE(netinfo->cable_range_start);
 	ifID->ifThisCableEnd = NET_VALUE(netinfo->cable_range_end);
@@ -932,6 +940,12 @@ static void zip_netinfo_reply (netinfo, ifID)
 		ZIPwakeup(ifID, ZIP_RE_AARP);
 		return;
 	}
+	
+	if (!ifID->startup_inprogress) {
+		/* Send event with zone info. This covers case where we get zone info
+			after startup. During startup this event is sent from ZIPwakeup. */
+		atalk_post_msg(ifID->aa_ifp, KEV_ATALK_ZONEUPDATED, 0, &(ifID->ifZoneName));
+	}
 
 	ZIPwakeup(ifID, 0); /* no error */
 	return;
@@ -963,6 +977,10 @@ int zip_control (ifID, control)
 		ifID->ifZoneName.len = 1;
 		ifID->ifZoneName.str[0] = '*';
 		ifID->ifZoneName.str[1] = '\0';
+
+		/* Send event with zone info. */
+		atalk_post_msg(ifID->aa_ifp, KEV_ATALK_ZONEUPDATED, 0, &(ifID->ifZoneName));
+
 		break;
 	default :
 		break;

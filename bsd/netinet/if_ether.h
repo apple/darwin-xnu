@@ -52,20 +52,21 @@
  * SUCH DAMAGE.
  *
  *	@(#)if_ether.h	8.3 (Berkeley) 5/2/95
+ * $FreeBSD: src/sys/netinet/if_ether.h,v 1.24 1999/12/29 04:40:58 peter Exp $
  */
 
 #ifndef _NETINET_IF_ETHER_H_
 #define _NETINET_IF_ETHER_H_
-
+#include <sys/appleapiopts.h>
 
 #include <net/ethernet.h>
 
 #include <netinet/in.h>
 #include <net/if_arp.h>
-#include <net/etherdefs.h>
 #define ea_byte	ether_addr_octet
 
-
+#ifdef __APPLE__
+#ifdef __APPLE_API_UNSTABLE
 /*
  * Macro for looking up the ether_multi record for a given range of Ethernet
  * multicast addresses connected to a given arpcom structure.  If no matching
@@ -107,9 +108,9 @@
 	(step).e_enm = (ac)->ac_multiaddrs; \
 	ETHER_NEXT_MULTI((step), (enm)); \
 }
+#endif /* __APPLE_API_UNSTABLE */
+#endif /* __APPLE__ */
 
-#define ETHERTYPE_IPV6          0x86dd
- 
 /*
  * Macro to map an IP multicast address to an Ethernet multicast address.
  * The high-order 25 bits of the Ethernet address are statically assigned,
@@ -132,8 +133,8 @@
  * and the low-order 32 bits are taken from the low end of the IP6 address.
  */
 #define ETHER_MAP_IPV6_MULTICAST(ip6addr, enaddr)			\
-/* struct in6_addr *ip6addr; */					\
-/* u_char enaddr[ETHER_ADDR_LEN]; */					\
+/* struct	in6_addr *ip6addr; */					\
+/* u_char	enaddr[ETHER_ADDR_LEN]; */				\
 {                                                                       \
 	(enaddr)[0] = 0x33;						\
 	(enaddr)[1] = 0x33;						\
@@ -180,13 +181,17 @@ struct sockaddr_inarp {
 #define RTF_ANNOUNCE	RTF_PROTO2	/* announce new arp entry */
 
 #ifdef	KERNEL
+#ifdef __APPLE_API_PRIVATE
 extern u_char	ether_ipmulticast_min[ETHER_ADDR_LEN];
 extern u_char	ether_ipmulticast_max[ETHER_ADDR_LEN];
 extern struct	ifqueue arpintrq;
 
 int	arpresolve __P((struct arpcom *, struct rtentry *, struct mbuf *,
 			struct sockaddr *, u_char *, struct rtentry *));
+#endif /* __APPLE_API_PRIVATE */
+#ifdef __APPLE_API_UNSTABLE
 void	arp_ifinit __P((struct arpcom *, struct ifaddr *));
+#endif /* __APPLE_API_UNSTABLE */
 #endif
 
 #endif

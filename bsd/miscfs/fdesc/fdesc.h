@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2002 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -59,7 +59,12 @@
  *
  * #Id: fdesc.h,v 1.8 1993/04/06 15:28:33 jsp Exp #
  */
+#ifndef __FDESC_FDESC_H__
+#define __FDESC_FDESC_H__
 
+#include  <sys/appleapiopts.h>
+
+#ifdef __APPLE_API_PRIVATE
 #ifdef KERNEL
 struct fdescmount {
 	struct vnode	*f_root;	/* Root node */
@@ -70,7 +75,6 @@ struct fdescmount {
 #define FD_STDIN	4
 #define FD_STDOUT	5
 #define FD_STDERR	6
-#define FD_CTTY		7
 #define FD_DESC		8
 #define FD_MAX		12
 
@@ -79,7 +83,6 @@ typedef enum {
 	Fdevfd,
 	Fdesc,
 	Flink,
-	Fctty
 } fdntype;
 
 struct fdescnode {
@@ -94,10 +97,11 @@ struct fdescnode {
 #define VFSTOFDESC(mp)	((struct fdescmount *)((mp)->mnt_data))
 #define	VTOFDESC(vp) ((struct fdescnode *)(vp)->v_data)
 
-extern dev_t devctty;
 extern int fdesc_init __P((struct vfsconf *));
 extern int fdesc_root __P((struct mount *, struct vnode **));
 extern int fdesc_allocvp __P((fdntype, int, struct mount *, struct vnode **));
 extern int (**fdesc_vnodeop_p)(void *);
 extern struct vfsops fdesc_vfsops;
 #endif /* KERNEL */
+#endif /* __APPLE_API_PRIVATE */
+#endif /* __FDESC_FDESC_H__ */

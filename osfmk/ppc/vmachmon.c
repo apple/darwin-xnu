@@ -282,7 +282,9 @@ int vmm_init_context(struct savearea *save)
 	}
 	
 	/* Map it into the kernel's address space. */
-	pmap_enter(kernel_pmap, conkern, conphys, VM_PROT_READ | VM_PROT_WRITE, TRUE);
+	pmap_enter(kernel_pmap, conkern, conphys, 
+		VM_PROT_READ | VM_PROT_WRITE, 
+		VM_WIMG_USE_DEFAULT, TRUE);
 	
 	/* Clear the vmm state structure. */
 	vks = (vmm_state_page_t *)conkern;
@@ -309,12 +311,16 @@ int vmm_init_context(struct savearea *save)
 	CTable->vmmc[cvi].vmmPmap = new_pmap;		/* Remember the pmap for this guy */
 	CTable->vmmc[cvi].vmmContextKern = vks;		/* Remember the kernel address of comm area */
 	CTable->vmmc[cvi].vmmContextUser = vmm_user_state;		/* Remember user address of comm area */
-	CTable->vmmc[cvi].vmmFPU_pcb = 0;			/* Clear saved floating point context */
-	CTable->vmmc[cvi].vmmFPU_cpu = -1;			/* Invalidate CPU saved fp context is valid on */
-	CTable->vmmc[cvi].vmmVMX_pcb = 0;			/* Clear saved vector context */
-	CTable->vmmc[cvi].vmmVMX_cpu = -1;			/* Invalidate CPU saved vector context is valid on */
+	
+	CTable->vmmc[cvi].vmmFacCtx.FPUsave = 0;	/* Clear facility context control */
+	CTable->vmmc[cvi].vmmFacCtx.FPUlevel = 0;	/* Clear facility context control */
+	CTable->vmmc[cvi].vmmFacCtx.FPUcpu = 0;		/* Clear facility context control */
+	CTable->vmmc[cvi].vmmFacCtx.VMXsave = 0;	/* Clear facility context control */
+	CTable->vmmc[cvi].vmmFacCtx.VMXlevel = 0;	/* Clear facility context control */
+	CTable->vmmc[cvi].vmmFacCtx.VMXcpu = 0;		/* Clear facility context control */
+	CTable->vmmc[cvi].vmmFacCtx.facAct = act;	/* Point back to the activation */
 
-	hw_atomic_add(&saveanchor.saveneed, 2);		/* Account for the number of extra saveareas we think we might "need" */
+	hw_atomic_add((int *)&saveanchor.savetarget, 2);	/* Account for the number of extra saveareas we think we might "need" */
 	
 	ml_set_interrupts_enabled(FALSE);			/* Set back interruptions */
 	save->save_r3 = KERN_SUCCESS;				/* Hip, hip, horay... */	
@@ -358,24 +364,18 @@ kern_return_t vmm_tear_down_context(
 
 	ml_set_interrupts_enabled(TRUE);				/* This can take a bit of time so pass interruptions */
 
-	hw_atomic_sub(&saveanchor.saveneed, 2);			/* We don't need these extra saveareas anymore */
+	hw_atomic_sub((int *)&saveanchor.savetarget, 2);	/* We don't need these extra saveareas anymore */
 
-	if(CEntry->vmmFPU_pcb) {						/* Is there any floating point context? */
-		sv = (savearea *)CEntry->vmmFPU_pcb;		/* Make useable */
-		sv->save_flags  &= ~SAVfpuvalid;			/* Clear in use bit */
-		if(!(sv->save_flags & SAVinuse)) {			/* Anyone left with this one? */			
-			save_release(sv);						/* Nope, release it */
-		}
+	if(CEntry->vmmFacCtx.FPUsave) {					/* Is there any floating point context? */
+		toss_live_fpu(&CEntry->vmmFacCtx);			/* Get rid of any live context here */
+		save_release((savearea *)CEntry->vmmFacCtx.FPUsave);	/* Release it */
 	}
 
-	if(CEntry->vmmVMX_pcb) {						/* Is there any vector context? */
-		sv = (savearea *)CEntry->vmmVMX_pcb;		/* Make useable */
-		sv->save_flags  &= ~SAVvmxvalid;			/* Clear in use bit */
-		if(!(sv->save_flags & SAVinuse)) {			/* Anyone left with this one? */			
-			save_release(sv);						/* Nope, release it */
-		}
+	if(CEntry->vmmFacCtx.VMXsave) {					/* Is there any vector context? */
+		toss_live_vec(&CEntry->vmmFacCtx);			/* Get rid of any live context here */
+		save_release((savearea *)CEntry->vmmFacCtx.VMXsave);	/* Release it */
 	}
-	
+
 	mapping_remove(CEntry->vmmPmap, 0xFFFFF000);	/* Remove final page explicitly because we might have mapped it */	
 	pmap_remove(CEntry->vmmPmap, 0, 0xFFFFF000);	/* Remove all entries from this map */
 	pmap_destroy(CEntry->vmmPmap);					/* Toss the pmap for this context */
@@ -393,10 +393,14 @@ kern_return_t vmm_tear_down_context(
 	CEntry->vmmPmap = 0;							/* Clear pmap pointer */
 	CEntry->vmmContextKern = 0;						/* Clear the kernel address of comm area */
 	CEntry->vmmContextUser = 0;						/* Clear the user address of comm area */
-	CEntry->vmmFPU_pcb = 0;							/* Clear saved floating point context */
-	CEntry->vmmFPU_cpu = -1;						/* Invalidate CPU saved fp context is valid on */
-	CEntry->vmmVMX_pcb = 0;							/* Clear saved vector context */
-	CEntry->vmmVMX_cpu = -1;						/* Invalidate CPU saved vector context is valid on */
+	
+	CEntry->vmmFacCtx.FPUsave = 0;					/* Clear facility context control */
+	CEntry->vmmFacCtx.FPUlevel = 0;					/* Clear facility context control */
+	CEntry->vmmFacCtx.FPUcpu = 0;					/* Clear facility context control */
+	CEntry->vmmFacCtx.VMXsave = 0;					/* Clear facility context control */
+	CEntry->vmmFacCtx.VMXlevel = 0;					/* Clear facility context control */
+	CEntry->vmmFacCtx.VMXcpu = 0;					/* Clear facility context control */
+	CEntry->vmmFacCtx.facAct = 0;					/* Clear facility context control */
 	
 	CTable = act->mact.vmmControl;					/* Get the control table address */
 	for(cvi = 0; cvi < kVmmMaxContextsPerThread; cvi++) {	/* Search to find a free slot */
@@ -440,7 +444,7 @@ void vmm_tear_down_all(thread_act_t act) {
 	spl_t				s;
 	
 	if(act->mact.specFlags & runningVM) {			/* Are we actually in a context right now? */
-		save = (savearea *)find_user_regs(act);		/* Find the user state context */
+		save = find_user_regs(act);					/* Find the user state context */
 		if(!save) {									/* Did we find it? */
 			panic("vmm_tear_down_all: runningVM marked but no user state context\n");
 			return;
@@ -562,7 +566,7 @@ kern_return_t vmm_map_page(
 		}
 
 		ml_set_interrupts_enabled(TRUE);		/* Enable interruptions */
-		ret = vm_fault(map, trunc_page(cva), VM_PROT_READ | VM_PROT_WRITE, FALSE);	/* Didn't find it, try to fault it in read/write... */
+		ret = vm_fault(map, trunc_page(cva), VM_PROT_READ | VM_PROT_WRITE, FALSE, NULL, 0);	/* Didn't find it, try to fault it in read/write... */
 		ml_set_interrupts_enabled(FALSE);		/* Disable interruptions */
 		if (ret != KERN_SUCCESS) return KERN_FAILURE;	/* There isn't a page there, return... */
 	}
@@ -618,6 +622,56 @@ vmm_return_code_t vmm_map_execute(
 	
 	return kVmmInvalidAddress;					/* We had trouble mapping in the page */	
 	
+}
+
+/*-----------------------------------------------------------------------
+** vmm_map_list
+**
+** This function maps a list of pages into the alternate's logical
+** address space.
+**
+** Inputs:
+**		act   - pointer to current thread activation
+**		index - index of vmm state for this page
+**		count - number of pages to release
+**		vmcpComm in the comm page contains up to kVmmMaxMapPages to map
+**
+** Outputs:
+**		kernel return code indicating success or failure
+**		KERN_FAILURE is returned if kVmmMaxUnmapPages is exceeded
+**		or the vmm_map_page call fails.
+-----------------------------------------------------------------------*/
+
+kern_return_t vmm_map_list(
+	thread_act_t 		act,
+	vmm_thread_index_t 	index,
+	unsigned int		cnt)
+{
+	vmmCntrlEntry 		*CEntry;
+	boolean_t			ret;
+	unsigned int 		i;
+	vmmMapList			*lst;
+	vm_offset_t 		cva;
+	vm_offset_t 		ava;
+	vm_prot_t 			prot;
+
+	CEntry = vmm_get_entry(act, index);				/* Get and validate the index */
+	if (CEntry == NULL)return -1;					/* No good, failure... */
+	
+	if(cnt > kVmmMaxMapPages) return KERN_FAILURE;	/* They tried to map too many */
+	if(!cnt) return KERN_SUCCESS;					/* If they said none, we're done... */
+	
+	lst = &((vmm_comm_page_t *)CEntry->vmmContextKern)->vmcpComm[0];	/* Point to the first entry */
+	
+	for(i = 0; i < cnt; i++) {						/* Step and release all pages in list */
+		cva = lst[i].vmlva;							/* Get the actual address */	
+		ava = lst[i].vmlava & -vmlFlgs;				/* Get the alternate address */	
+		prot = lst[i].vmlava & vmlProt;				/* Get the protection bits */	
+		ret = vmm_map_page(act, index, cva, ava, prot);	/* Go try to map the page on in */
+		if(ret != KERN_SUCCESS) return KERN_FAILURE;	/* Bail if any error */
+	}
+	
+	return KERN_SUCCESS	;							/* Return... */
 }
 
 /*-----------------------------------------------------------------------
@@ -712,6 +766,49 @@ kern_return_t vmm_unmap_page(
 	ret = mapping_remove(CEntry->vmmPmap, va);				/* Toss the mapping */
 	
 	return (ret ? KERN_SUCCESS : KERN_FAILURE);				/* Return... */
+}
+
+/*-----------------------------------------------------------------------
+** vmm_unmap_list
+**
+** This function unmaps a list of pages from the alternate's logical
+** address space.
+**
+** Inputs:
+**		act   - pointer to current thread activation
+**		index - index of vmm state for this page
+**		count - number of pages to release
+**		vmcpComm in the comm page contains up to kVmmMaxUnmapPages to unmap
+**
+** Outputs:
+**		kernel return code indicating success or failure
+**		KERN_FAILURE is returned if kVmmMaxUnmapPages is exceeded
+-----------------------------------------------------------------------*/
+
+kern_return_t vmm_unmap_list(
+	thread_act_t 		act,
+	vmm_thread_index_t 	index,
+	unsigned int 		cnt)
+{
+	vmmCntrlEntry 		*CEntry;
+	boolean_t			ret;
+	kern_return_t		kern_result = KERN_SUCCESS;
+	unsigned int		*pgaddr, i;
+
+	CEntry = vmm_get_entry(act, index);						/* Get and validate the index */
+	if (CEntry == NULL)return -1;							/* No good, failure... */
+	
+	if(cnt > kVmmMaxUnmapPages) return KERN_FAILURE;		/* They tried to unmap too many */
+	if(!cnt) return KERN_SUCCESS;							/* If they said none, we're done... */
+	
+	pgaddr = &((vmm_comm_page_t *)CEntry->vmmContextKern)->vmcpComm[0];	/* Point to the first entry */
+	
+	for(i = 0; i < cnt; i++) {								/* Step and release all pages in list */
+	
+		(void)mapping_remove(CEntry->vmmPmap, pgaddr[i]);	/* Toss the mapping */
+	}
+	
+	return KERN_SUCCESS	;									/* Return... */
 }
 
 /*-----------------------------------------------------------------------
@@ -907,23 +1004,26 @@ kern_return_t vmm_get_float_state(
 	vmmCntrlEntry 		*CEntry;
 	vmmCntrlTable		*CTable;
 	int					i;
-	register struct savearea *sv;
+	register struct savearea_fpu *sv;
 
 	CEntry = vmm_get_entry(act, index);				/* Convert index to entry */		
 	if (CEntry == NULL) return KERN_FAILURE;		/* Either this isn't vmm thread or the index is bogus */
 	
 	act->mact.specFlags &= ~floatCng;				/* Clear the special flag */
 	CEntry->vmmContextKern->vmmStat &= ~vmmFloatCngd;	/* Clear the change indication */
+
+	fpu_save(&CEntry->vmmFacCtx);					/* Save context if live */
+
+	CEntry->vmmContextKern->vmm_proc_state.ppcFPSCRshadow.i[0] = CEntry->vmmContextKern->vmm_proc_state.ppcFPSCR.i[0];	/* Copy FPSCR */
+	CEntry->vmmContextKern->vmm_proc_state.ppcFPSCRshadow.i[1] = CEntry->vmmContextKern->vmm_proc_state.ppcFPSCR.i[1];	/* Copy FPSCR */
 	
-	if(sv = (struct savearea *)CEntry->vmmFPU_pcb) {	/* Is there context yet? */
-		bcopy((char *)&sv->save_fp0, (char *)&(CEntry->vmmContextKern->vmm_proc_state.ppcFPRs[0].d), sizeof(vmm_processor_state_t)); /* 32 registers plus status and pad */
+	if(sv = CEntry->vmmFacCtx.FPUsave) {			/* Is there context yet? */
+		bcopy((char *)&sv->save_fp0, (char *)&(CEntry->vmmContextKern->vmm_proc_state.ppcFPRs), 32 * 8); /* 32 registers */
 		return KERN_SUCCESS;
 	}
 
-	CEntry->vmmContextKern->vmm_proc_state.ppcFPSCR.i[0] = 0;	/* Clear FPSCR */
-	CEntry->vmmContextKern->vmm_proc_state.ppcFPSCR.i[1] = 0;	/* Clear FPSCR */
 
-	for(i = 0; i < 32; i++) {					/* Initialize floating points */
+	for(i = 0; i < 32; i++) {						/* Initialize floating points */
 		CEntry->vmmContextKern->vmm_proc_state.ppcFPRs[i].d = FloatInit;	/* Initial value */
 	}
 
@@ -953,22 +1053,24 @@ kern_return_t vmm_get_vector_state(
 	vmmCntrlTable		*CTable;
 	int					i, j;
 	unsigned int 		vrvalidwrk;
-	register struct savearea *sv;
+	register struct savearea_vec *sv;
 
 	CEntry = vmm_get_entry(act, index);				/* Convert index to entry */		
 	if (CEntry == NULL) return KERN_FAILURE;		/* Either this isn't vmm thread or the index is bogus */
+
+	vec_save(&CEntry->vmmFacCtx);					/* Save context if live */
 	
 	act->mact.specFlags &= ~vectorCng;				/* Clear the special flag */
 	CEntry->vmmContextKern->vmmStat &= ~vmmVectCngd;	/* Clear the change indication */
 	
-	if(sv = (savearea *)CEntry->vmmVMX_pcb) {					/* Is there context yet? */
+	for(j=0; j < 4; j++) {							/* Set value for vscr */
+		CEntry->vmmContextKern->vmm_proc_state.ppcVSCRshadow.i[j] = CEntry->vmmContextKern->vmm_proc_state.ppcVSCR.i[j];
+	}
+
+	if(sv = CEntry->vmmFacCtx.VMXsave) {			/* Is there context yet? */
 
 		vrvalidwrk = sv->save_vrvalid;				/* Get the valid flags */
 
-		for(j=0; j < 4; j++) {						/* Set value for vscr */
-			CEntry->vmmContextKern->vmm_proc_state.ppcVSCR.i[j] = sv->save_vscr[j];
-		}
-		
 		for(i = 0; i < 32; i++) {					/* Copy the saved registers and invalidate the others */
 			if(vrvalidwrk & 0x80000000) {			/* Do we have a valid value here? */
 				for(j = 0; j < 4; j++) {			/* If so, copy it over */
@@ -986,10 +1088,6 @@ kern_return_t vmm_get_vector_state(
 		}
 
 		return KERN_SUCCESS;
-	}
-
-	for(j = 0; j < 4; j++) {						/* Initialize vscr to java mode */
-		CEntry->vmmContextKern->vmm_proc_state.ppcVSCR.i[j] = 0;	/* Initial value */
 	}
 
 	for(i = 0; i < 32; i++) {						/* Initialize vector registers */
@@ -1117,7 +1215,7 @@ void vmm_timer_pop(
 
 		if(!(CTable->vmmc[cvi].vmmFlags & vmmInUse)) continue;	/* Do not check if the entry is empty */
 		
-		if(CTable->vmmc[cvi].vmmTimer == 0) {	/* Is the timer reset? */
+		if(CTable->vmmc[cvi].vmmTimer == 0) {		/* Is the timer reset? */
 			CTable->vmmc[cvi].vmmFlags &= ~vmmTimerPop;			/* Clear timer popped */
 			CTable->vmmc[cvi].vmmContextKern->vmmStat &= ~vmmTimerPop;	/* Clear timer popped */
 			continue;								/* Check next */
@@ -1127,7 +1225,7 @@ void vmm_timer_pop(
 			CTable->vmmc[cvi].vmmFlags |= vmmTimerPop;	/* Set timer popped here */
 			CTable->vmmc[cvi].vmmContextKern->vmmStat |= vmmTimerPop;	/* Set timer popped here */
 			if((unsigned int)&CTable->vmmc[cvi] == (unsigned int)act->mact.vmmCEntry) {	/* Is this the running VM? */
-				sv = (savearea *)find_user_regs(act);	/* Get the user state registers */
+				sv = find_user_regs(act);			/* Get the user state registers */
 				if(!sv) {							/* Did we find something? */
 					panic("vmm_timer_pop: no user context; act = %08X\n", act);
 				}
@@ -1304,7 +1402,7 @@ void vmm_interrupt(ReturnHandler *rh, thread_act_t act) {
 	if(!((unsigned int)CTable & -2)) return;	/* Leave if we aren't doing VMs any more... */
 
 	if(act->mact.vmmCEntry && (act->mact.vmmCEntry->vmmFlags & vmmXStop)) {	/* Do we need to stop the running guy? */
-		sv = (savearea *)find_user_regs(act);	/* Get the user state registers */
+		sv = find_user_regs(act);				/* Get the user state registers */
 		if(!sv) {								/* Did we find something? */
 			panic("vmm_interrupt: no user context; act = %08X\n", act);
 		}

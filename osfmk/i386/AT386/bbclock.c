@@ -130,7 +130,7 @@ bbc_gettime(
 		mp_disable_preemption();
 		if (current_processor() != master_processor) {
 			mp_enable_preemption();
-			thread_block((void (*)) 0);
+			thread_block(THREAD_CONTINUE_NULL);
 		} else {
 			mp_enable_preemption();
 		}
@@ -185,7 +185,7 @@ bbc_settime(
 		mp_disable_preemption();
 		if (current_processor() != master_processor) {
 			mp_enable_preemption();
-			thread_block((void (*)) 0);
+			thread_block(THREAD_CONTINUE_NULL);
 		} else { 
 			mp_enable_preemption();
 		}

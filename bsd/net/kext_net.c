@@ -41,6 +41,8 @@
 /* List of kernel extensions (networking) known to kernel */
 struct nf_list nf_list;
 
+static int sockfilter_fix_symantec_bug(struct NFDescriptor* theirDesc);
+
 /*
  * Register a global filter for the specified protocol
  * Make a few checks and then insert the new descriptor in the
@@ -54,6 +56,13 @@ register_sockfilter(struct NFDescriptor *nfp, struct NFDescriptor *nfp1,
 
 	if (nfp == NULL)
 		return(EINVAL);
+
+	/* Fix Symantec's broken NPC kext */
+	if (nfp->nf_handle == 0xf1ab02de) {
+		int err = sockfilter_fix_symantec_bug(nfp);
+		if (err != 0)
+			return err;
+	}
 
 	s = splhigh();
 	if (!NF_initted)
@@ -190,4 +199,144 @@ nke_insert(struct socket *so, struct so_nke *np)
 	if (kp->e_soif && kp->e_soif->sf_socreate)
 		(*kp->e_soif->sf_socreate)(so, so->so_proto, kp);
 	return(0);
+}
+
+/*
+ * The following gunk is a fix for Symantec's broken NPC kext
+ * Symantec's NPC kext does not check that the kextcb->e_fcb
+ * is not NULL before derefing it. The result is a panic in
+ * the very few cases where the e_fcb is actually NULL.
+ *
+ * This gross chunk of code copies the old function ptrs
+ * supplied by the kext and wraps a few select ones in
+ * our own functions that just check for NULL before
+ * calling in to the kext.
+ */
+
+static struct sockif*	g_symantec_if_funcs = NULL;
+static struct sockutil*	g_symantec_util_funcs = NULL;
+static int sym_fix_sbflush(struct sockbuf *, struct kextcb *);
+static int sym_fix_sbappend(struct sockbuf *, struct mbuf *, struct kextcb *);
+static int sym_fix_soclose(struct socket *, struct kextcb *);
+static int sym_fix_sofree(struct socket *, struct kextcb *);
+static int sym_fix_soconnect(struct socket *, struct sockaddr *, struct kextcb *);
+static int sym_fix_soisconnected(struct socket *, struct kextcb *);
+static int sym_fix_sosend(struct socket *, struct sockaddr **, struct uio **, struct mbuf **,
+			struct mbuf **, int *, struct kextcb *);
+static int sym_fix_socantrcvmore(struct socket *, struct kextcb *);
+static int sym_fix_socontrol(struct socket *, struct sockopt *, struct kextcb *);
+
+static int sockfilter_fix_symantec_bug(struct NFDescriptor* theirDesc)
+{
+	if (!g_symantec_if_funcs ) {
+		MALLOC(g_symantec_if_funcs, struct sockif*, sizeof(*g_symantec_if_funcs), M_TEMP, M_WAITOK);
+		
+		if (!g_symantec_if_funcs)
+			return ENOMEM;
+		
+		*g_symantec_if_funcs = *theirDesc->nf_soif;
+	}
+	
+	if (!g_symantec_util_funcs) {
+		MALLOC(g_symantec_util_funcs, struct sockutil*, sizeof(*g_symantec_util_funcs), M_TEMP, M_WAITOK);
+		
+		if (!g_symantec_util_funcs)
+			return ENOMEM;
+		
+		*g_symantec_util_funcs = *theirDesc->nf_soutil;
+	}
+	
+	if (theirDesc->nf_soutil->su_sbflush)
+		theirDesc->nf_soutil->su_sbflush = sym_fix_sbflush;
+	if (theirDesc->nf_soutil->su_sbappend)
+		theirDesc->nf_soutil->su_sbappend = sym_fix_sbappend;
+	if (theirDesc->nf_soif->sf_soclose)
+		theirDesc->nf_soif->sf_soclose = sym_fix_soclose;
+	if (theirDesc->nf_soif->sf_sofree)
+		theirDesc->nf_soif->sf_sofree = sym_fix_sofree;
+	if (theirDesc->nf_soif->sf_soconnect)
+		theirDesc->nf_soif->sf_soconnect = sym_fix_soconnect;
+	if (theirDesc->nf_soif->sf_soisconnected)
+		theirDesc->nf_soif->sf_soisconnected = sym_fix_soisconnected;
+	if (theirDesc->nf_soif->sf_sosend)
+		theirDesc->nf_soif->sf_sosend = sym_fix_sosend;
+	if (theirDesc->nf_soif->sf_socantrcvmore)
+		theirDesc->nf_soif->sf_socantrcvmore = sym_fix_socantrcvmore;
+	if (theirDesc->nf_soif->sf_socontrol)
+		theirDesc->nf_soif->sf_socontrol = sym_fix_socontrol;
+	
+	return 0;
+}
+
+static int sym_fix_sbflush(struct sockbuf *p1, struct kextcb *p2)
+{
+	if (p2->e_fcb != NULL && g_symantec_util_funcs)
+		return g_symantec_util_funcs->su_sbflush(p1, p2);
+	else
+		return 0;
+}
+
+static int sym_fix_sbappend(struct sockbuf *p1, struct mbuf *p2, struct kextcb *p3)
+{
+	if (p3->e_fcb != NULL && g_symantec_util_funcs)
+		return g_symantec_util_funcs->su_sbappend(p1, p2, p3);
+	else
+		return 0;
+}
+
+static int sym_fix_soclose(struct socket *p1, struct kextcb *p2)
+{
+	if (p2->e_fcb != NULL && g_symantec_if_funcs)
+		return g_symantec_if_funcs->sf_soclose(p1, p2);
+	else
+		return 0;
+}
+
+static int sym_fix_sofree(struct socket *p1, struct kextcb *p2)
+{
+	if (p2->e_fcb != NULL && g_symantec_if_funcs)
+		return g_symantec_if_funcs->sf_sofree(p1, p2);
+	else
+		return 0;
+}
+
+static int sym_fix_soconnect(struct socket *p1, struct sockaddr *p2, struct kextcb *p3)
+{
+	if (p3->e_fcb != NULL && g_symantec_if_funcs)
+		return g_symantec_if_funcs->sf_soconnect(p1, p2, p3);
+	else
+		return 0;
+}
+
+static int sym_fix_soisconnected(struct socket *p1, struct kextcb *p2)
+{
+	if (p2->e_fcb != NULL && g_symantec_if_funcs)
+		return g_symantec_if_funcs->sf_soisconnected(p1, p2);
+	else
+		return 0;
+}
+
+static int sym_fix_sosend(struct socket *p1, struct sockaddr **p2, struct uio **p3, struct mbuf **p4,
+			struct mbuf **p5, int *p6, struct kextcb *p7)
+{
+	if (p7->e_fcb != NULL && g_symantec_if_funcs)
+		return g_symantec_if_funcs->sf_sosend(p1, p2, p3, p4, p5, p6, p7);
+	else
+		return 0;
+}
+
+static int sym_fix_socantrcvmore(struct socket *p1, struct kextcb *p2)
+{
+	if (p2->e_fcb != NULL && g_symantec_if_funcs)
+		return g_symantec_if_funcs->sf_socantrcvmore(p1, p2);
+	else
+		return 0;
+}
+
+static int sym_fix_socontrol(struct socket *p1, struct sockopt *p2, struct kextcb *p3)
+{
+	if (p3->e_fcb != NULL && g_symantec_if_funcs)
+		return g_symantec_if_funcs->sf_socontrol(p1, p2, p3);
+	else
+		return 0;
 }

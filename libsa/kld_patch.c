@@ -57,7 +57,10 @@ extern load_return_t fatfile_getarch(
     vm_offset_t       data_ptr,
     struct fat_arch * archret);
 
+__private_extern__ char *strstr(const char *in, const char *str);
+
 #else /* !KERNEL */
+
 #include <unistd.h>
 
 #include <stdio.h>
@@ -68,6 +71,7 @@ extern load_return_t fatfile_getarch(
 #include <sys/fcntl.h>
 #include <sys/stat.h>   
 #include <sys/mman.h>   
+#include <sys/vm.h>   
 
 #include <mach/mach.h>
 #include <mach/mach_error.h>
@@ -75,16 +79,26 @@ extern load_return_t fatfile_getarch(
 #include <mach-o/arch.h>
 
 #include <CoreFoundation/CoreFoundation.h>
- 
+
+#define PAGE_SIZE vm_page_size
+#define PAGE_MASK (PAGE_SIZE - 1)
+
 #endif /* KERNEL */
 
 #include "kld_patch.h"
+#include "c++rem3.h"
 
 #if 0
-static __inline__ void DIE(void) { IODelay(2000000000); }
+#define DIE() do { for (;;) ; } while(0)
 
-#define LOG_DELAY()	IODelay(200000)
-#define DEBUG_LOG(x)	do { IOLog x; LOG_DELAY(); } while(0)
+#if KERNEL
+#    define LOG_DELAY()		/* IODelay(200000) */
+#    define DEBUG_LOG(x)	do { IOLog x; LOG_DELAY(); } while(0)
+#else
+#    define LOG_DELAY()
+#    define DEBUG_LOG(x)	do { printf x; } while(0)
+#endif
+
 #else
 
 #define DIE()
@@ -94,10 +108,13 @@ static __inline__ void DIE(void) { IODelay(2000000000); }
 #endif
 
 // OSObject symbol prefixes and suffixes
-#define kVTablePrefix		"___vt"
-#define kReservedPrefix		"__RESERVED"
-#define kSuperClassSuffix	".superClass"
-#define kGMetaSuffix		".gMetaClass"
+#define kCPPSymbolPrefix	"_Z"
+#define kVTablePrefix		"_" kCPPSymbolPrefix "TV"
+#define kOSObjPrefix		"_" kCPPSymbolPrefix "N"
+#define kReservedNamePrefix	"_RESERVED"
+#define k29SuperClassSuffix	"superClass"
+#define k31SuperClassSuffix	"10superClassE"
+#define kGMetaSuffix		"10gMetaClassE"
 #define kLinkEditSegName	SEG_LINKEDIT
 
 // GCC 2.95 drops 2 leading constants in the vtable
@@ -181,21 +198,25 @@ struct metaClassRecord {
 
 struct fileRecord {
     size_t fMapSize, fMachOSize;
-    const char *fPath;
     unsigned char *fMap, *fMachO, *fPadEnd;
     DataRef fClassList;
     DataRef fSectData;
-    DataRef fNewSymbols, fNewStrings;
+    DataRef fNewSymbols, fNewStringBlocks;
+    DataRef fSym2Strings;
     struct symtab_command *fSymtab;
     struct sectionRecord *fSections;
+    struct segment_command *fLinkEditSeg;
+    const char **fSymbToStringTable;
     char *fStringBase;
     struct nlist *fSymbolBase;
     const struct nlist *fLocalSyms;
     unsigned int fNSects;
     int fNLocal;
-    int fNewStringsLen;
     Boolean fIsKernel, fNoKernelExecutable, fIsKmem;
     Boolean fImageDirty, fSymbolsDirty;
+    Boolean fRemangled, fFoundOSObject;
+    Boolean fIgnoreFile;
+    const char fPath[1];
 };
 
 static DataRef sFilesTable;
@@ -228,17 +249,59 @@ static __inline__ unsigned char *DataGetPtr(DataRef data)
     return data->fData;
 }
 
+static __inline__ unsigned char *DataGetEndPtr(DataRef data)
+{
+    return data->fData + data->fLength;
+}
+
+static __inline__ unsigned long DataRemaining(DataRef data)
+{
+    return data->fCapacity - data->fLength;
+}
 
 static __inline__ Boolean DataContainsAddr(DataRef data, void *vAddr)
 {
-    unsigned char *addr = vAddr;
+    vm_offset_t offset = (vm_address_t) vAddr;
 
-    return (data->fData <= addr) && (addr < data->fData + data->fLength);
+    if (!data)
+        return false;
+
+    offset = (vm_address_t) vAddr - (vm_address_t) data->fData;
+    return (offset < data->fLength);
+}
+
+static Boolean DataEnsureCapacity(DataRef data, unsigned long capacity)
+{
+    // Don't bother to ever shrink a data object.
+    if (capacity > data->fCapacity) {
+	unsigned char *newData;
+
+	capacity += kDataCapacityIncrement - 1;
+	capacity &= ~(kDataCapacityIncrement - 1);
+	newData = (unsigned char *) realloc(data->fData, capacity);
+	if (!newData)
+	    return false;
+
+	bzero(newData + data->fCapacity, capacity - data->fCapacity);
+	data->fData = newData;
+	data->fCapacity = capacity;
+    }
+
+    return true;
+}
+
+static __inline__ Boolean DataSetLength(DataRef data, unsigned long length)
+{
+    if (DataEnsureCapacity(data, length)) {
+        data->fLength = length;
+        return true;
+    }
+    else
+        return false;
 }
 
 static __inline__ Boolean DataAddLength(DataRef data, unsigned long length)
 {
-    static Boolean DataSetLength(DataRef data, unsigned long length);
     return DataSetLength(data, data->fLength + length);
 }
 
@@ -259,37 +322,15 @@ static __inline__ Boolean DataAppendData(DataRef dst, DataRef src)
     return DataAppendBytes(dst, DataGetPtr(src), DataGetLength(src));
 }
 
-static Boolean DataSetLength(DataRef data, unsigned long length)
-{
-    // Don't bother to ever shrink a data object.
-    if (length > data->fCapacity) {
-	unsigned char *newData;
-	unsigned long newCapacity;
-
-	newCapacity  = length + kDataCapacityIncrement - 1;
-	newCapacity &= ~(kDataCapacityIncrement - 1);
-	newData = (unsigned char *) realloc(data->fData, newCapacity);
-	if (!newData)
-	    return false;
-
-	bzero(newData + data->fCapacity, newCapacity - data->fCapacity);
-	data->fData = newData;
-	data->fCapacity = newCapacity;
-    }
-
-    data->fLength = length;
-    return true;
-}
-
-static DataRef DataCreate(unsigned long length)
+static DataRef DataCreate(unsigned long capacity)
 {
     DataRef data = (DataRef) malloc(sizeof(Data));
 
     if (data) {
-	if (!length)
+	if (!capacity)
 	    data->fCapacity = kDataCapacityIncrement;
 	else {
-	    data->fCapacity  = length + kDataCapacityIncrement - 1;
+	    data->fCapacity  = capacity + kDataCapacityIncrement - 1;
 	    data->fCapacity &= ~(kDataCapacityIncrement - 1);
 	}
 
@@ -300,7 +341,7 @@ static DataRef DataCreate(unsigned long length)
 	}
 
 	bzero(data->fData, data->fCapacity);
-	data->fLength = length;
+	data->fLength = 0;
     }
     return data;
 }
@@ -315,25 +356,34 @@ static void DataRelease(DataRef data)
     }
 }
 
-static const char *
-symbolname(const struct fileRecord *file, const struct nlist *sym)
+static __inline__ const char *
+symNameByIndex(const struct fileRecord *file, unsigned int symInd)
 {
-    unsigned long strsize;
-    long strx = sym->n_un.n_strx;
-
-    if (strx >= 0)
-	return file->fStringBase + strx;
-
-    strsize = file->fSymtab->strsize;
-    strx = -strx;
-    if (strx < strsize)
-	return file->fStringBase + strx;
-
-    strx -= strsize;
-    return (char *) DataGetPtr(file->fNewStrings) + strx;
+    return file->fSymbToStringTable[symInd];
 }
 
-static struct fileRecord *getFile(const char *path)
+static __inline__  const char *
+symbolname(const struct fileRecord *file, const struct nlist *sym)
+{
+    unsigned int index;
+
+    index = sym - file->fSymbolBase;
+    if (index < file->fSymtab->nsyms)
+        return symNameByIndex(file,  index);
+
+    if (-1 == sym->n_un.n_strx)
+        return (const char *) sym->n_value;
+
+    // If the preceding tests fail then we have a getNewSymbol patch and
+    // the file it refers to has already been patched as the n_strx is set
+    // to -1 temporarily while we are still processing a file.
+    // Once we have finished with a file then we repair the 'strx' offset 
+    // to be valid for the repaired file's string table.
+    return file->fStringBase + sym->n_un.n_strx;
+}
+
+static struct fileRecord *
+getFile(const char *path)
 {
     if (sFilesTable) {
 	int i, nfiles;
@@ -351,7 +401,8 @@ static struct fileRecord *getFile(const char *path)
     return NULL;
 }
 
-static struct fileRecord * addFile(struct fileRecord *file)
+static struct fileRecord *
+addFile(struct fileRecord *file, const char *path)
 {
     struct fileRecord *newFile;
 
@@ -361,7 +412,8 @@ static struct fileRecord * addFile(struct fileRecord *file)
 	    return NULL;
     }
 
-    newFile = (struct fileRecord *) malloc(sizeof(struct fileRecord));
+    newFile = (struct fileRecord *) 
+        malloc(sizeof(struct fileRecord) + strlen(path));
     if (!newFile)
 	return NULL;
 
@@ -370,19 +422,16 @@ static struct fileRecord * addFile(struct fileRecord *file)
 	return NULL;
     }
 
-    bcopy(file, newFile, sizeof(struct fileRecord));
+    bcopy(file, newFile, sizeof(struct fileRecord) - 1);
+    strcpy((char *) newFile->fPath, path);
+
     return newFile;
 }
 
 // @@@ gvdl: need to clean up the sMergeMetaClasses
 // @@@ gvdl: I had better fix the object file up again
-static void removeFile(struct fileRecord *file)
+static void unmapFile(struct fileRecord *file)
 {
-    if (file->fClassList) {
-	DataRelease(file->fClassList);
-	file->fClassList = 0;
-    }
-
     if (file->fSectData) {
 	struct sectionRecord *section;
 	unsigned int i, nsect;
@@ -400,6 +449,11 @@ static void removeFile(struct fileRecord *file)
 	file->fSectData = 0;
 	file->fSections = 0;
 	file->fNSects = 0;
+    }
+
+    if (file->fSym2Strings) {
+        DataRelease(file->fSym2Strings);
+        file->fSym2Strings = 0;
     }
 
     if (file->fMap) {
@@ -421,16 +475,26 @@ static void removeFile(struct fileRecord *file)
 #endif /* !KERNEL */
 	file->fMap = 0;
     }
+}
 
-    file->fPath = 0;
+static void removeFile(struct fileRecord *file)
+{
+    if (file->fClassList) {
+	DataRelease(file->fClassList);
+	file->fClassList = 0;
+    }
+
+    unmapFile(file);
+
+    free(file);
 }
 
 #if !KERNEL
 static Boolean
-mapObjectFile(struct fileRecord *file)
+mapObjectFile(struct fileRecord *file, const char *pathName)
 {
     Boolean result = false;
-    static unsigned char *sFileMapBaseAddr;
+    static unsigned char *sFileMapBaseAddr = 0;
 
     int fd = 0;
 
@@ -452,9 +516,9 @@ mapObjectFile(struct fileRecord *file)
 	sFileMapBaseAddr = (unsigned char *) probeAddr;
     }
 
-    fd = open(file->fPath, O_RDONLY, 0);
+    fd = open(pathName, O_RDONLY, 0);
     return_if(fd == -1, false, ("Can't open %s for reading - %s\n",
-	file->fPath, strerror(errno)));
+	pathName, strerror(errno)));
 
     do {
 	kern_return_t ret;
@@ -501,7 +565,7 @@ mapObjectFile(struct fileRecord *file)
 		munmap(file->fMap, file->fMapSize);
 		break_if(KERN_INVALID_ADDRESS != ret,
 		    ("Unable to allocate pad vm for %s - %s\n",
-			file->fPath, mach_error_string(ret)));
+			pathName, mach_error_string(ret)));
 
 		file->fMap = (unsigned char *) padVMEnd;
 		continue; // try again wherever the vm system wants
@@ -523,7 +587,7 @@ mapObjectFile(struct fileRecord *file)
 }
 #endif /* !KERNEL */
 
-static Boolean findBestArch(struct fileRecord *file)
+static Boolean findBestArch(struct fileRecord *file, const char *pathName)
 {
     unsigned long magic;
     struct fat_header *fat;
@@ -536,7 +600,7 @@ static Boolean findBestArch(struct fileRecord *file)
 
     // Try to figure out what type of file this is
     return_if(file->fMapSize < sizeof(unsigned long), false,
-	("%s isn't a valid object file - no magic\n", file->fPath));
+	("%s isn't a valid object file - no magic\n", pathName));
 
 #if KERNEL
 
@@ -548,7 +612,7 @@ static Boolean findBestArch(struct fileRecord *file)
 
         load_return = fatfile_getarch(NULL, (vm_address_t) fat, &fatinfo);
 	return_if(load_return != LOAD_SUCCESS, false,
-	    ("Extension \"%s\": has no code for this computer\n", file->fPath));
+	    ("Extension \"%s\": has no code for this computer\n", pathName));
 
 	file->fMachO = file->fMap + fatinfo.offset;
 	file->fMachOSize = fatinfo.size;
@@ -588,15 +652,15 @@ static Boolean findBestArch(struct fileRecord *file)
 	fatsize = sizeof(struct fat_header)
 	    + fat->nfat_arch * sizeof(struct fat_arch);
 	return_if(file->fMapSize < fatsize,
-	    false, ("%s isn't a valid fat file\n", file->fPath));
+	    false, ("%s isn't a valid fat file\n", pathName));
 
 	myArch = NXGetLocalArchInfo();
 	arch = NXFindBestFatArch(myArch->cputype, myArch->cpusubtype,
 		(struct fat_arch *) &fat[1], fat->nfat_arch);
 	return_if(!arch,
-	    false, ("%s hasn't got arch for %s\n", file->fPath, myArch->name));
+	    false, ("%s hasn't got arch for %s\n", pathName, myArch->name));
 	return_if(arch->offset + arch->size > file->fMapSize,
-	    false, ("%s's %s arch is incomplete\n", file->fPath, myArch->name));
+	    false, ("%s's %s arch is incomplete\n", pathName, myArch->name));
 	file->fMachO = file->fMap + arch->offset;
 	file->fMachOSize = arch->size;
 	magic = ((const struct mach_header *) file->fMachO)->magic;
@@ -605,7 +669,7 @@ static Boolean findBestArch(struct fileRecord *file)
 #endif /* KERNEL */
 
     return_if(magic != MH_MAGIC,
-	false, ("%s isn't a valid mach-o\n", file->fPath));
+	false, ("%s isn't a valid mach-o\n", pathName));
 
     return true;
 }
@@ -619,19 +683,6 @@ parseSegments(struct fileRecord *file, struct segment_command *seg)
 	struct segment_command seg;
 	const struct section sect[1];
     } *segMap;
-
-    if (!nsects) {
-#if KERNEL
-	// We don't need to look for the LinkEdit segment unless
-	// we are running in the kernel environment.
-	if (!strcmp(kLinkEditSegName, seg->segname)) {
-	    // Grab symbol table from linkedit we will need this later
-	    file->fSymbolBase = (void *) seg;
-	}
-#endif
-
-	return true; 	// Nothing more to do, so that was easy.
-    }
 
     if (!file->fSectData) {
 	file->fSectData = DataCreate(0);
@@ -650,6 +701,222 @@ parseSegments(struct fileRecord *file, struct segment_command *seg)
     for (i = 0, segMap = (struct segmentMap *) seg; i < nsects; i++)
 	sections[i].fSection = &segMap->sect[i];
 
+    return true;
+}
+
+static Boolean
+remangleExternSymbols(struct fileRecord *file, const char *pathName)
+{
+    const struct nlist *sym;
+    int i, nsyms, len;
+    DataRef strings = NULL;
+
+    DEBUG_LOG(("Remangling %s\n", pathName));
+
+    file->fNewStringBlocks = DataCreate(0);
+    return_if(!file->fNewStringBlocks, false,
+        ("Unable to allocate new string table for %s\n", pathName));
+
+    nsyms = file->fSymtab->nsyms;
+    for (i = 0, sym = file->fSymbolBase; i < nsyms; i++, sym++) {
+        Rem3Return ret;
+	const char *symname;
+        char *newname;
+        unsigned char n_type = sym->n_type;
+
+        // Not an external symbol or it is a stab in any case don't bother
+        if ((n_type ^ N_EXT) & (N_STAB | N_EXT))
+            continue;
+
+        symname = symNameByIndex(file, i);
+
+tryRemangleAgain:
+        if (!strings) {
+            strings = DataCreate(16 * 1024);	// Arbitrary block size
+            return_if(!strings, false,
+                ("Unable to allocate new string block for %s\n", pathName));
+        }
+
+        len = DataRemaining(strings);
+        newname = DataGetEndPtr(strings);
+        ret = rem3_remangle_name(newname, &len, symname);
+        switch (ret) {
+        case kR3InternalNotRemangled:
+            errprintf("Remangler fails on %s in %s\n", symname, pathName);
+            /* No break */
+        case kR3NotRemangled:
+            break;
+
+        case kR3Remangled:
+            file->fSymbToStringTable[i] = newname;
+            file->fRemangled = file->fSymbolsDirty = true; 
+            DataAddLength(strings, len + 1);	// returns strlen
+            break;
+
+        case kR3BufferTooSmallRemangled:
+            return_if(!DataAppendBytes
+                        (file->fNewStringBlocks, &strings, sizeof(strings)),
+                false, ("Unable to allocate string table for %s\n", pathName));
+            strings = NULL;
+            goto tryRemangleAgain;
+
+        case kR3BadArgument:
+        default:
+            return_if(true, false,
+                     ("Internal error - remangle of %s\n", pathName));
+        }
+    }
+
+    if (strings) {
+        return_if(!DataAppendBytes
+                        (file->fNewStringBlocks, &strings, sizeof(strings)),
+            false, ("Unable to allocate string table for %s\n", pathName));
+    }
+
+    return true;
+}
+
+static Boolean parseSymtab(struct fileRecord *file, const char *pathName)
+{
+    const struct nlist *sym;
+    unsigned int i, firstlocal, nsyms;
+    unsigned long strsize;
+    const char *strbase;
+    Boolean foundOSObject, found295CPP;
+
+    // we found a link edit segment so recompute the bases
+    if (file->fLinkEditSeg) {
+        struct segment_command *link = file->fLinkEditSeg;
+
+        file->fSymbolBase = (struct nlist *)
+            (link->vmaddr + (file->fSymtab->symoff - link->fileoff));
+        file->fStringBase = (char *)
+            (link->vmaddr + (file->fSymtab->stroff - link->fileoff));
+        return_if( ( (caddr_t) file->fStringBase + file->fSymtab->strsize
+                    > (caddr_t) link->vmaddr + link->vmsize ), false,
+            ("%s isn't a valid mach-o le, bad symbols\n", pathName));
+    }
+    else {
+        file->fSymbolBase = (struct nlist *)
+            (file->fMachO + file->fSymtab->symoff); 
+        file->fStringBase = (char *)
+            (file->fMachO + file->fSymtab->stroff); 
+        return_if( ( file->fSymtab->stroff + file->fSymtab->strsize
+                    > file->fMachOSize ), false,
+            ("%s isn't a valid mach-o, bad symbols\n", pathName));
+    }
+
+    nsyms = file->fSymtab->nsyms;
+
+    // If this file the kernel and do we have an executable image
+    file->fNoKernelExecutable = (vm_page_size == file->fSymtab->symoff)
+                            && (file->fSections[0].fSection->size == 0);
+
+    // Generate a table of pointers to strings indexed by the symbol number
+
+    file->fSym2Strings = DataCreate(nsyms * sizeof(const char *));
+    DataSetLength(file->fSym2Strings, nsyms * sizeof(const char *));
+    return_if(!file->fSym2Strings, false, 
+	    ("Unable to allocate memory - symbol string trans\n", pathName));
+    file->fSymbToStringTable = (const char **) DataGetPtr(file->fSym2Strings);
+
+    // Search for the first non-stab symbol in table
+    strsize = file->fSymtab->strsize;
+    strbase = file->fStringBase;
+    firstlocal = 0;
+    found295CPP = foundOSObject = false;
+    for (i = 0, sym = file->fSymbolBase; i < nsyms; i++, sym++) {
+        long strx = sym->n_un.n_strx;
+        const char *symname = strbase + strx;
+        unsigned char n_type;
+
+        return_if(((unsigned long) strx > strsize), false,
+            ("%s has an illegal string offset in symbol %d\n", pathName, i));
+
+        // Load up lookup symbol look table with sym names
+	file->fSymbToStringTable[i] = symname;
+
+        n_type = sym->n_type & (N_TYPE | N_EXT);
+
+        // Find the first exported symbol
+        if ( !firstlocal && (n_type & N_EXT) ) {
+            firstlocal = i;
+            file->fLocalSyms = sym;
+        }
+
+        // Find the a OSObject based subclass by searching for symbols
+        // that have a suffix of '10superClassE'
+        symname++; // Skip leading '_'
+
+        if (!foundOSObject
+        && (n_type == (N_SECT | N_EXT) || n_type == (N_ABS | N_EXT))
+        &&  strx) {
+            const char *suffix, *endSym;
+
+            endSym = symname + strlen(symname);
+
+            // Find out if this symbol has the superclass suffix.
+            if (symname[0] == kCPPSymbolPrefix[0]
+            &&  symname[1] == kCPPSymbolPrefix[1]) {
+
+                suffix = endSym - sizeof(k31SuperClassSuffix) + 1;
+
+                // Check for a gcc3 OSObject subclass
+                if (suffix > symname
+                && !strcmp(suffix, k31SuperClassSuffix))
+                    foundOSObject = true;
+            }
+            else {
+                suffix = endSym - sizeof(k29SuperClassSuffix);
+
+                // Check for a gcc295 OSObject subclass
+                if (suffix > symname
+                && ('.' == *suffix || '$' == *suffix)
+                && !strcmp(suffix+1, k29SuperClassSuffix)) {
+                    found295CPP = foundOSObject = true;
+                }
+                else if (!found295CPP) {
+                    // Finally just check if we need to remangle
+                    symname++; // skip leading '__'
+                    while (*symname) {
+                        if ('_' == *symname++ && '_' == *symname++) {
+                            found295CPP = true;
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+        else if (sym->n_type == (N_EXT | N_UNDF)) {
+            if ( !file->fNLocal)	// Find the last local symbol
+                file->fNLocal = i - firstlocal;
+            if (!found295CPP) {
+                symname++;	// Skip possible second '_' at start.
+                while (*symname) {
+                    if ('_' == *symname++ && '_' == *symname++) {
+                        found295CPP = true;
+                        break;
+                    }
+                }
+            }
+        }
+        // Note symname is trashed at this point
+    }
+    return_if(i < nsyms, false,
+        ("%s isn't a valid mach-o, bad symbol strings\n", pathName));
+
+    return_if(!file->fLocalSyms, false, ("%s has no symbols?\n", pathName));
+
+    // If we don't have any undefined symbols then all symbols
+    // must be local so just compute it now if necessary.
+    if ( !file->fNLocal )
+        file->fNLocal = i - firstlocal;
+
+    file->fFoundOSObject = foundOSObject;
+
+    if (found295CPP && !remangleExternSymbols(file, pathName))
+        return false;
+            
     return true;
 }
 
@@ -685,7 +952,7 @@ findSymbolByAddress(const struct fileRecord *file, void *entry)
 
 struct searchContext {
     const char *fSymname;
-    const char *fStrbase;
+    const struct fileRecord *fFile;
 };
 
 static int symbolSearch(const void *vKey, const void *vSym)
@@ -693,20 +960,34 @@ static int symbolSearch(const void *vKey, const void *vSym)
     const struct searchContext *key = (const struct searchContext *) vKey;
     const struct nlist *sym = (const struct nlist *) vSym;
 
-    return strcmp(key->fSymname, key->fStrbase + sym->n_un.n_strx);
+    return strcmp(key->fSymname + 1, symbolname(key->fFile, sym) + 1);
 }
 
 static const struct nlist *
 findSymbolByName(struct fileRecord *file, const char *symname)
 {
-    struct searchContext context;
+    if (file->fRemangled) {
+        // @@@ gvdl: Performance problem
+        // Linear search as we don't sort after remangling
+        const struct nlist *sym;
+        int i = file->fLocalSyms - file->fSymbolBase;
+        int nLocal = file->fNLocal + i;
 
-    context.fSymname = symname;
-    context.fStrbase = file->fStringBase;
-    return (struct nlist *)
-	bsearch(&context,
-		file->fLocalSyms, file->fNLocal, sizeof(struct nlist),
-		symbolSearch);
+        for (sym = file->fLocalSyms; i < nLocal; i++, sym++)
+            if (!strcmp(symNameByIndex(file, i) + 1, symname + 1))
+                return sym;
+        return NULL;
+    }
+    else {
+        struct searchContext context;
+
+        context.fSymname = symname;
+        context.fFile = file;
+        return (struct nlist *)
+            bsearch(&context,
+                    file->fLocalSyms, file->fNLocal, sizeof(struct nlist),
+                    symbolSearch);
+    }
 }
 
 static Boolean
@@ -809,6 +1090,7 @@ relocateSection(const struct fileRecord *file, struct sectionRecord *sectionRec)
 	*entry = (void *) rec;	// Save pointer to record in object image
     }
 
+    DataSetLength(sectionRec->fRelocCache, i * sizeof(struct relocRecord));
     ((struct fileRecord *) file)->fImageDirty = true;
 
     return true;
@@ -837,13 +1119,10 @@ addClass(struct fileRecord *file,
 	 struct metaClassRecord *inClass,
 	 const char *cname)
 {
+    Boolean result = false;
     struct metaClassRecord *newClass = NULL;
     struct metaClassRecord **fileClasses = NULL;
     int len;
-
-if (!file->fIsKernel) {	// @@@ gvdl:
-    DEBUG_LOG(("Adding Class %s\n", cname));
-}
 
     if (!file->fClassList) {
 	file->fClassList = DataCreate(0);
@@ -864,11 +1143,11 @@ if (!file->fIsKernel) {	// @@@ gvdl:
 	fileClasses = (struct metaClassRecord **)
 	    (DataGetPtr(file->fClassList) + DataGetLength(file->fClassList));
 
-	// Copy the meta Class structure and string name into newClass
-	// and insert object at end of the file->fClassList and sMergeMetaClasses 
+	// Copy the meta Class structure and string name into newClass and
+        // insert object at end of the file->fClassList and sMergeMetaClasses 
 	*newClass = *inClass;
 	strcpy(newClass->fClassName, cname);
-	fileClasses[-1]   = newClass;
+	fileClasses[-1] = newClass;
 
 	return true;
     } while (0);
@@ -879,7 +1158,7 @@ if (!file->fIsKernel) {	// @@@ gvdl:
     if (newClass)
 	free(newClass);
 
-    return false;
+    return result;
 }
 
 static struct metaClassRecord *getClass(DataRef classList, const char *cname)
@@ -901,59 +1180,68 @@ static struct metaClassRecord *getClass(DataRef classList, const char *cname)
 }
 
 // Add the class 'cname' to the list of known OSObject based classes
-// Note 'sym' is the <cname>.superClass symbol. 
+// Note 'sym' is the <cname>10superClassE symbol. 
 static Boolean
 recordClass(struct fileRecord *file, const char *cname, const struct nlist *sym)
 {
+    Boolean result = false;
     char *supername = NULL;
     const char *classname = NULL;
     struct metaClassRecord newClass;
     char strbuffer[1024];
 
-    // Only do the work actual work to find the super class if we are
+    // Only do the work to find the super class if we are
     // not currently working on  the kernel.  The kernel is the end
-    // of all superclass chains as by definition the kernel is binary
+    // of all superclass chains by definition as the kernel must be binary
     // compatible with itself.
     if (!file->fIsKernel) {
-	const char *dot;
+	const char *suffix;
 	const struct nlist *supersym;
 	const struct section *section;
 	struct sectionRecord *sectionRec;
 	unsigned char sectind = sym->n_sect;
 	const char *superstr;
 	void **location;
+        int snamelen;
 
 	// We can't resolve anything that isn't in a real section
 	// Note that the sectind is starts at one to make room for the
 	// NO_SECT flag but the fNSects field isn't offset so we have a
 	// '>' test.  Which means this isn't an OSObject based class
-	if (sectind == NO_SECT || sectind > file->fNSects)
-	    return true;
-    
+	if (sectind == NO_SECT || sectind > file->fNSects) {
+	    result = true;
+	    goto finish;
+        }
 	sectionRec = file->fSections + sectind - 1;
 	section = sectionRec->fSection;
 	location = (void **) ( file->fMachO + section->offset
 			    + sym->n_value - section->addr );
     
 	supersym = findSymbolRefAtLocation(file, sectionRec, location);
-	if (!supersym)
-	    return true;	// No superclass symbol then it isn't an OSObject.
+	if (!supersym) {
+	    result = true; // No superclass symbol then it isn't an OSObject.
+	    goto finish;
+        }
 
-	// Find string in file and skip leading '_' and find last '.'
+	// Find string in file and skip leading '_' and then find the suffix
 	superstr = symbolname(file, supersym) + 1;
-	dot = strrchr(superstr, '.');
-	if (!dot || strcmp(dot, kGMetaSuffix))
-	    return true;	// Not an OSObject superclass so ignore it.
+	suffix = superstr + strlen(superstr) - sizeof(kGMetaSuffix) + 1;
+	if (suffix <= superstr || strcmp(suffix, kGMetaSuffix)) {
+	    result = true;	// Not an OSObject superclass so ignore it..
+	    goto finish;
+        }
 
-	supername = (char *) malloc(dot - superstr + 1);
-	strncpy(supername, superstr, dot - superstr);
-	supername[dot - superstr] = '\0';
+	// Got a candidate so hand it over for class processing.
+        snamelen = suffix - superstr - sizeof(kOSObjPrefix) + 2;
+	supername = (char *) malloc(snamelen + 1);
+	bcopy(superstr + sizeof(kOSObjPrefix) - 2, supername, snamelen);
+	supername[snamelen] = '\0';
     }
 
     do {
 	break_if(getClass(file->fClassList, cname),
 	    ("Duplicate class %s in %s\n", cname, file->fPath));
-    
+
 	snprintf(strbuffer, sizeof(strbuffer), "%s%s", kVTablePrefix, cname);
 	newClass.fVTableSym = findSymbolByName(file, strbuffer);
 	break_if(!newClass.fVTableSym,
@@ -968,22 +1256,24 @@ recordClass(struct fileRecord *file, const char *cname, const struct nlist *sym)
 	// so why don't we use that rather than mallocing a string.
 	classname = symbolname(file, newClass.fVTableSym)
 		+ sizeof(kVTablePrefix) - 1;
-	break_if(!addClass(file, &newClass, classname), 
+	break_if(!addClass(file, &newClass, classname),
 		    ("recordClass - no memory?\n"));
 
-	return true;
+        supername = NULL;
+	result = true;
     } while (0);
-    
+
+finish:
     if (supername)
 	free(supername);
 
-    return false;
+    return result;
 }
+
 
 static Boolean getMetaClassGraph(struct fileRecord *file)
 {
     const struct nlist *sym;
-    const char *strbase;
     int i, nsyms;
 
     // Search the symbol table for the local symbols that are generated
@@ -996,35 +1286,40 @@ static Boolean getMetaClassGraph(struct fileRecord *file)
     //	 ___vt<ClassName>	The VTable for the class <ClassName>.
     //
     // In this code I'm going to search for any symbols that
-    // ends in kSuperClassSuffix as this indicates this class is a conforming
+    // ends in k31SuperClassSuffix as this indicates this class is a conforming
     // OSObject subclass and will need to be patched, and it also
     // contains a pointer to the super class's meta class structure.
-    strbase = file->fStringBase;
     sym = file->fLocalSyms;
     for (i = 0, nsyms = file->fNLocal; i < nsyms; i++, sym++) {
 	const char *symname;
-	const char *dot;
+	const char *suffix;
 	char classname[1024];
 	unsigned char n_type = sym->n_type & (N_TYPE | N_EXT);
+        int cnamelen;
 
 	// Check that the symbols is a global and that it has a name.
 	if (((N_SECT | N_EXT) != n_type && (N_ABS | N_EXT) != n_type)
 	||  !sym->n_un.n_strx)
 	    continue;
 
-	// Only search from the last '.' in the symbol.
+	// Only search from the last *sep* in the symbol.
 	// but skip the leading '_' in all symbols first.
-	symname = strbase + sym->n_un.n_strx + 1;
-	dot = strrchr(symname, '.');
-	if (!dot || strcmp(dot, kSuperClassSuffix))
+	symname = symbolname(file, sym) + 1;
+        if (symname[0] != kCPPSymbolPrefix[0]
+        ||  symname[1] != kCPPSymbolPrefix[1])
+            continue;
+
+	suffix = symname + strlen(symname) - sizeof(k31SuperClassSuffix) + 1;
+	if (suffix <= symname || strcmp(suffix, k31SuperClassSuffix))
 	    continue;
 
 	// Got a candidate so hand it over for class processing.
-	return_if(dot - symname >= (int) sizeof(classname),
-	    false, ("Symbol %s is too long\n", symname));
+        cnamelen = suffix - symname - sizeof(kOSObjPrefix) + 2;
+	return_if(cnamelen + 1 >= (int) sizeof(classname),
+	    false, ("Symbol %s is too long", symname));
 
-	bcopy(symname, classname, dot - symname);
-	classname[dot - symname] = '\0';
+	bcopy(symname + sizeof(kOSObjPrefix) - 2, classname, cnamelen);
+	classname[cnamelen] = '\0';
 	if (!recordClass(file, classname, sym))
 	    return false;
     }
@@ -1032,7 +1327,7 @@ static Boolean getMetaClassGraph(struct fileRecord *file)
     return_if(!file->fClassList, false, ("Internal error, "
 	      "getMetaClassGraph(%s) found no classes", file->fPath)); 
 
-    DEBUG_LOG(("Found %d classes in %x for %s\n",
+    DEBUG_LOG(("Found %ld classes in %p for %s\n",
 	DataGetLength(file->fClassList)/sizeof(void*),
 	file->fClassList, file->fPath));
 
@@ -1044,7 +1339,7 @@ static Boolean mergeOSObjectsForFile(const struct fileRecord *file)
     int i, nmerged;
     Boolean foundDuplicates = false;
 
-DEBUG_LOG(("Merging file %s\n", file->fPath));	// @@@ gvdl:
+    DEBUG_LOG(("Merging file %s\n", file->fPath));	// @@@ gvdl:
 
     if (!file->fClassList)
 	return true;
@@ -1155,7 +1450,7 @@ static Boolean resolveKernelVTable(struct metaClassRecord *metaClass)
     if (metaClass->fPatchedVTable)
 	return true;
 
-DEBUG_LOG(("Kernel vtable %s\n", metaClass->fClassName));	// @@@ gvdl:
+    DEBUG_LOG(("Kernel vtable %s\n", metaClass->fClassName));	// @@@ gvdl:
 
     // Do we have a valid vtable to patch?
     return_if(!metaClass->fVTableSym,
@@ -1209,17 +1504,56 @@ DEBUG_LOG(("Kernel vtable %s\n", metaClass->fClassName));	// @@@ gvdl:
     return true;
 }
 
-// reloc->fPatch must contain a valid pointer on entry
+static const char *addNewString(struct fileRecord *file, 
+                                const char *strname, int namelen)
+{
+    DataRef strings = 0;
+    const char *newStr;
+
+    namelen++;	// Include terminating '\0';
+
+    // Make sure we have a string table as well for this symbol
+    if (file->fNewStringBlocks) {
+        DataRef *blockTable = (DataRef *) DataGetPtr(file->fNewStringBlocks);
+        int index = DataGetLength(file->fNewStringBlocks) / sizeof(DataRef*);
+        strings = blockTable[index - 1];
+        if (DataRemaining(strings) < namelen)
+            strings = 0;
+    }
+    else
+    {
+        file->fNewStringBlocks = DataCreate(0);
+        return_if(!file->fNewStringBlocks, NULL,
+            ("Unable to allocate new string table %s\n", file->fPath));
+    }
+
+    if (!strings) {
+        int size = (namelen + 1023) & ~1023;
+        if (size < 16 * 1024)
+            size = 16 * 1024; 
+        strings = DataCreate(size);
+        return_if(!strings, NULL,
+            ("Unable to allocate new string block %s\n", file->fPath));
+        return_if(
+            !DataAppendBytes(file->fNewStringBlocks, &strings, sizeof(strings)),
+            false, ("Unable to allocate string table for %s\n", file->fPath));
+    }
+
+    newStr = DataGetEndPtr(strings);
+    DataAppendBytes(strings, strname, namelen);
+    return newStr;
+}
+
+// reloc->fPatch must contain a valid pointer
 static struct nlist *
 getNewSymbol(struct fileRecord *file,
 	     const struct relocRecord *reloc, const char *supername)
 {
-    unsigned int size, i, namelen;
+    unsigned int size, i;
     struct nlist **sym;
     struct nlist *msym;
-    const char *strbase;
     struct relocation_info *rinfo;
-    long strx;
+    const char *newStr;
 
     if (!file->fNewSymbols) {
 	file->fNewSymbols = DataCreate(0);
@@ -1227,24 +1561,14 @@ getNewSymbol(struct fileRecord *file,
 	    ("Unable to allocate new symbol table for %s\n", file->fPath));
     }
 
-    // Make sure we have a string table as well for the new symbol
-    if (!file->fNewStrings) {
-	file->fNewStrings = DataCreate(0);
-	return_if(!file->fNewStrings, NULL,
-	    ("Unable to allocate string table for %s\n", file->fPath));
-    }
-
     rinfo = (struct relocation_info *) reloc->fRInfo;
     size = DataGetLength(file->fNewSymbols) / sizeof(struct nlist *);
-    sym = (const struct nlist **) DataGetPtr(file->fNewSymbols);
-    // remember that the n_strx for new symbols names is negated
-    strbase = (const char *)
-		DataGetPtr(file->fNewStrings) - file->fSymtab->strsize;
+    sym = (struct nlist **) DataGetPtr(file->fNewSymbols);
     for (i = 0; i < size; i++, sym++) {
-        const char *symname = strbase - (*sym)->n_un.n_strx;
-
-	if (!strcmp(symname, supername)) {
-	    rinfo->r_symbolnum = i + file->fSymtab->nsyms;
+        int symnum = i + file->fSymtab->nsyms;
+        newStr = symNameByIndex(file, symnum);
+	if (!strcmp(newStr, supername)) {
+	    rinfo->r_symbolnum = symnum;
 	    file->fSymbolsDirty = true; 
 	    return *sym;
 	}
@@ -1257,41 +1581,42 @@ getNewSymbol(struct fileRecord *file,
 	("Undefined symbol entry with non-zero section %s:%s\n",
 	file->fPath, symbolname(file, reloc->fSymbol)));
 
+    // If we are here we didn't find the symbol so create a new one now
     msym = (struct nlist *) malloc(sizeof(struct nlist));
     return_if(!msym,
-	NULL, ("Unable to create symbol table entry for %s\n", file->fPath));
-
-    // If we are here we didn't find the symbol so create a new one now
-    if (!DataAppendBytes(file->fNewSymbols, &msym, sizeof(msym))) {
-	free(msym);
-	return_if(true,
+	NULL, ("Unable to create symbol table entry for %s", file->fPath));
+    return_if(!DataAppendBytes(file->fNewSymbols, &msym, sizeof(msym)),
 	    NULL, ("Unable to grow symbol table for %s\n", file->fPath));
-    }
 
-    namelen = strlen(supername) + 1;
-    strx = DataGetLength(file->fNewStrings);
-    if (!DataAppendBytes(file->fNewStrings, supername, namelen)) {
-	free(msym);
-	DataAddLength(file->fNewSymbols, -sizeof(struct nlist)); // Undo harm
-	return_if(true, NULL,
-		 ("Unable to grow string table for %s\n", file->fPath));
-    }
+    newStr = addNewString(file, supername, strlen(supername));
+    if (!newStr)
+        return NULL;
+    // If we are here we didn't find the symbol so create a new one now
+    return_if(!DataAppendBytes(file->fSym2Strings, &newStr, sizeof(newStr)),
+            NULL, ("Unable to grow symbol table for %s\n", file->fPath));
+    file->fSymbToStringTable = (const char **) DataGetPtr(file->fSym2Strings);
 
     // Offset the string index by the original string table size
     // and negate the address to indicate that this is a 'new' symbol
-    msym->n_un.n_strx = -(strx + file->fSymtab->strsize);
+    msym->n_un.n_strx = -1;
     msym->n_type = (N_EXT | N_UNDF);
     msym->n_sect = NO_SECT;
     msym->n_desc = 0;
-    msym->n_value = 0;
+    msym->n_value = (unsigned long) newStr;
 
     // Mark the old symbol as being potentially deletable I can use the
     // n_sect field as the input symbol must be of type N_UNDF which means
     // that the n_sect field must be set to NO_SECT otherwise it is an
-    // in valid input file.
-    ((struct nlist *) reloc->fSymbol)->n_un.n_strx
-	= -reloc->fSymbol->n_un.n_strx;    
-    ((struct nlist *) reloc->fSymbol)->n_sect = (unsigned char) -1;
+    // invalid input file.
+    //
+    // However the symbol may have been just inserted by the fixOldSymbol path.
+    // If this is the case then we know it is in use and we don't have to
+    // mark it as a deletable symbol.
+    if (reloc->fSymbol->n_un.n_strx >= 0) {
+        ((struct nlist *) reloc->fSymbol)->n_un.n_strx
+            = -reloc->fSymbol->n_un.n_strx;    
+        ((struct nlist *) reloc->fSymbol)->n_sect = (unsigned char) -1;
+    }
 
     rinfo->r_symbolnum = i + file->fSymtab->nsyms;
     file->fSymbolsDirty = true; 
@@ -1309,33 +1634,21 @@ fixOldSymbol(struct fileRecord *file,
     // assert(sym->n_un.n_strx >= 0);
 
     namelen = strlen(supername);
-    if (namelen < strlen(oldname)) {
+
+    sym->n_un.n_strx = -sym->n_un.n_strx;
+    if (oldname && namelen < strlen(oldname))
+    {
 	// Overwrite old string in string table
 	strcpy((char *) oldname, supername);
-    }
-    else {
-	long strx;
-
-	// Make sure we have a string table as well for this symbol
-	if (!file->fNewStrings) {
-	    file->fNewStrings = DataCreate(0);
-	    return_if(!file->fNewStrings, NULL,
-		("Unable to allocate string table for %s\n", file->fPath));
-	}
-
-	// Find the end of the fNewStrings data structure;
-	strx = DataGetLength(file->fNewStrings);
-	return_if(!DataAppendBytes(file->fNewStrings, supername, namelen + 1),
-	    NULL, ("Unable to grow string table for %s\n", file->fPath));
-
-	// now add the current table size to the offset
-	sym->n_un.n_strx = strx + file->fSymtab->strsize;
+        file->fSymbolsDirty = true; 
+        return sym;
     }
 
-    // Mark the symbol as having been processed by negating it.
-    // Also note that we have dirtied the file and need to repair the
-    // symbol table.
-    sym->n_un.n_strx = -sym->n_un.n_strx;
+    oldname = addNewString(file, supername, namelen);
+    if (!oldname)
+        return NULL;
+
+    file->fSymbToStringTable[sym - file->fSymbolBase] = oldname;
     file->fSymbolsDirty = true; 
     return sym;
 }
@@ -1359,17 +1672,17 @@ symbolCompare(const struct fileRecord *file,
     if (!strcmp(classname, supername))
 	return kSymbolIdentical;
 
-    // Right now we know that the target's vtable entry is different from the
+    // We know that the target's vtable entry is different from the
     // superclass' vtable entry.  This means that we will have to apply a
     // patch to the current entry, however before returning lets check to
     // see if we have a _RESERVEDnnn field 'cause we can use this as a
     // registration point that must align between vtables.
-    if (!strncmp(supername, kReservedPrefix, sizeof(kReservedPrefix) - 1))
+    if (strstr(supername, kReservedNamePrefix))
 	return kSymbolMismatch;
 
     // OK, we have a superclass difference where the superclass doesn't
     // reference a pad function so assume that the superclass is correct.
-    if (!strncmp(classname, kReservedPrefix, sizeof(kReservedPrefix) - 1))
+    if (strstr(classname, kReservedNamePrefix))
 	return kSymbolPadUpdate; 
     else
 	return kSymbolSuperUpdate;
@@ -1408,7 +1721,7 @@ static Boolean patchVTable(struct metaClassRecord *metaClass)
     // The class isn't in the kernel so make sure that the super class 
     // is patched before patching ouselves.
     super = getClass(sMergeMetaClasses, metaClass->fSuperName);
-    return_if(!super, false, ("Can't find superclass for %s : %s \n",
+    return_if(!super, false, ("Can't find superclass for %s : %s\n",
 	metaClass->fClassName, metaClass->fSuperName));
 
     // Superclass recursion if necessary
@@ -1423,7 +1736,7 @@ static Boolean patchVTable(struct metaClassRecord *metaClass)
 	    return false;
     }
 
-DEBUG_LOG(("Patching %s\n", metaClass->fClassName));	// @@@ gvdl:
+    DEBUG_LOG(("Patching %s\n", metaClass->fClassName));	// @@@ gvdl:
 
     // We are going to need the base and the end
 
@@ -1481,8 +1794,8 @@ DEBUG_LOG(("Patching %s\n", metaClass->fClassName));	// @@@ gvdl:
 		    break;
 
 		case kSymbolMismatch:
-		    errprintf("%s is not compatible with its %s superclass, "
-			      "broken superclass?\n",
+		    errprintf("%s is not compatible with its superclass, "
+			      "%s superclass changed?\n",
 			      metaClass->fClassName, super->fClassName);
 		    goto abortPatch;
 
@@ -1529,7 +1842,7 @@ static Boolean growImage(struct fileRecord *file, vm_size_t delta)
     vm_address_t startMachO, endMachO, endMap;
     vm_offset_t newMachO;
     vm_size_t newsize;
-    unsigned long i, nsect, nclass = 0;
+    unsigned long i, last = 0;
     struct metaClassRecord **classes = NULL;
     struct sectionRecord *section;
     kern_return_t ret;
@@ -1546,6 +1859,8 @@ static Boolean growImage(struct fileRecord *file, vm_size_t delta)
 
     newsize = endMachO - startMachO;
     if (newsize < round_page(file->fMapSize)) {
+        DEBUG_LOG(("Growing image %s by moving\n", file->fPath));
+
 	// We have room in the map if we shift the macho image within the
 	// current map.  We will have to patch up pointers into the object.
 	newMachO = (vm_offset_t) file->fMap;
@@ -1567,10 +1882,12 @@ static Boolean growImage(struct fileRecord *file, vm_size_t delta)
 	    return true;
 	}
 
+        DEBUG_LOG(("Growing image %s by reallocing\n", file->fPath));
 	// We have relocated the kmem image so we are going to have to
 	// move all of the pointers into the image around.
     }
     else {
+        DEBUG_LOG(("Growing image %s by allocating\n", file->fPath));
 	// The image doesn't have room for us and I can't kmem_realloc
 	// then I just have to bite the bullet and copy the object code
 	// into a bigger memory segment
@@ -1601,41 +1918,48 @@ static Boolean growImage(struct fileRecord *file, vm_size_t delta)
 #define REBASE(addr, delta)	( ((vm_address_t) (addr)) += (delta) )
     delta = newMachO - startMachO;
 
-    // Rebase the cached in object 'struct symtab_command' pointer
+    // Rebase the cached-in object 'struct symtab_command' pointer
     REBASE(file->fSymtab, delta);
 
-    // Rebase the cached in object 'struct nlist' pointer for all symbols
+    // Rebase the cached-in object 'struct nlist' pointer for all symbols
     REBASE(file->fSymbolBase, delta);
 
-    // Rebase the cached in object 'struct nlist' pointer for local symbols
+    // Rebase the cached-in object 'struct nlist' pointer for local symbols
     REBASE(file->fLocalSyms, delta);
 
-    // Rebase the cached in object 'char' pointer for the string table
+    // Rebase the cached-in object 'char' pointer for the string table
     REBASE(file->fStringBase, delta);
 
     // Ok now we have to go over all of the relocs one last time
     // to clean up the pad updates which had their string index negated
     // to indicate that we have finished with them.
     section = file->fSections;
-    for (i = 0, nsect = file->fNSects; i < nsect; i++, section++)
+    for (i = 0, last = file->fNSects; i < last; i++, section++)
 	REBASE(section->fSection, delta);
 
     // We only ever grow images that contain class lists so dont bother
     // the check if file->fClassList is non-zero 'cause it can't be
     // assert(file->fClassList);
-    nclass = DataGetLength(file->fClassList)
+    last = DataGetLength(file->fClassList)
 	   / sizeof(struct metaClassRecord *);
     classes = (struct metaClassRecord **) DataGetPtr(file->fClassList);
-    for (i = 0; i < nclass; i++) {
+    for (i = 0; i < last; i++) {
 	struct patchRecord *patch;
 
 	for (patch = classes[i]->fPatchedVTable; patch->fSymbol; patch++) {
 	    vm_address_t symAddr = (vm_address_t) patch->fSymbol;
+            
+            // Only need to rebase if the symbol is part of the image
+            // If this is a new symbol then it was independantly allocated
 	    if (symAddr >= startMachO && symAddr < endMachO)
 		REBASE(patch->fSymbol, delta);
 	}
     }
 
+    // Finally rebase all of the string table pointers
+    last = file->fSymtab->nsyms;
+    for (i = 0; i < last; i++)
+        REBASE(file->fSymbToStringTable[i], delta);
 
 #undef REBASE
 
@@ -1650,6 +1974,7 @@ prepareFileForLink(struct fileRecord *file)
     unsigned long i, last, numnewsyms, newsymsize, newstrsize;
     struct sectionRecord *section;
     struct nlist **symp, *sym;
+    DataRef newStrings, *stringBlocks;
 
     // If we didn't even do a pseudo 'relocate' and dirty the image
     // then we can just return now.
@@ -1685,7 +2010,7 @@ DEBUG_LOG(("Linking 2 %s\n", file->fPath));	// @@@ gvdl:
 		sym = (struct nlist *) rec->fSymbol;
 		if (sym && sym->n_type == (N_EXT | N_UNDF)
 		&&  sym->n_sect == (unsigned char) -1) {
-		    // clear mark now
+		    // It is in use so we better clear the mark
 		    sym->n_un.n_strx = -sym->n_un.n_strx;
 		    sym->n_sect = NO_SECT;
 		}
@@ -1703,72 +2028,114 @@ DEBUG_LOG(("Linking 2 %s\n", file->fPath));	// @@@ gvdl:
 	return true;
 
     // calculate total file size increase and check against padding
-    numnewsyms  = (file->fNewSymbols)? DataGetLength(file->fNewSymbols) : 0;
+    if (file->fNewSymbols) {
+        numnewsyms = DataGetLength(file->fNewSymbols);
+        symp  = (struct nlist **) DataGetPtr(file->fNewSymbols);
+    }
+    else {
+        numnewsyms = 0;
+        symp = 0;
+    }
     numnewsyms /= sizeof(struct nlist *);
+    file->fSymtab->nsyms  += numnewsyms;
+
+    // old sting size + 30% rounded up to nearest page
+    newstrsize = file->fSymtab->strsize * 21 / 16;
+    newstrsize = (newstrsize + PAGE_MASK) & ~PAGE_MASK;
+    newStrings = DataCreate(newstrsize);
+    return_if(!newStrings, false,
+             ("Unable to allocate a copy aside buffer, no memory\n"));
+
     newsymsize  = numnewsyms * sizeof(struct nlist);
-    newstrsize  = (file->fNewStrings)? DataGetLength(file->fNewStrings) : 0;
+    file->fStringBase     += newsymsize;
+    file->fSymtab->stroff += newsymsize;
+
+    last = file->fSymtab->nsyms - numnewsyms;
+    newstrsize = 0;
+    DataAppendBytes(newStrings, &newstrsize, 4);	// Leading nuls
+    sym = file->fSymbolBase;
+
+    // Pre-compute an already offset new symbol pointer.  The offset is the
+    // orignal symbol table.
+    symp -= last;
+    for (i = 0; i < file->fSymtab->nsyms; i++, sym++) {
+        const char *str = symNameByIndex(file, i);
+        int len = strlen(str) + 1;
+        unsigned int strx;
+
+        // Rebase sym in the new symbol region
+        if (i >= last)
+            sym = symp[i];
+
+	if (sym->n_un.n_strx < 0 && sym->n_type == (N_EXT | N_UNDF)
+        && (unsigned char) -1 == sym->n_sect) {
+            // after patching we find that this symbol is no longer in
+            // use.  So invalidate it by converting it into an N_ABS
+            // symbol, remove the external bit and null out the name.
+            bzero(sym, sizeof(*sym));
+            sym->n_type = N_ABS;
+        }
+        else {
+            // Repair the symbol for the getNewSymbol case.
+            if (-1 == sym->n_un.n_strx)
+                sym->n_value = 0;
+
+            // Record the offset of the string in the new table
+            strx = DataGetLength(newStrings);
+            return_if(!DataAppendBytes(newStrings, str, len), false,
+                ("Unable to append string, no memory\n"));
+
+            sym->n_un.n_strx = strx;
+            file->fSymbToStringTable[i] = file->fStringBase + strx;
+        }
+    }
+
+    // Don't need the new strings any more
+    last = DataGetLength(file->fNewStringBlocks) / sizeof(DataRef);
+    stringBlocks = (DataRef *) DataGetPtr(file->fNewStringBlocks);
+    for (i = 0; i < last; i++)
+        DataRelease(stringBlocks[i]);
+
+    DataRelease(file->fNewStringBlocks);
+    file->fNewStringBlocks = 0;
+
+    newstrsize  = DataGetLength(newStrings);
     newstrsize  = (newstrsize + 3) & ~3;	// Round to nearest word
-    
-    return_if(!growImage(file, newsymsize + newstrsize),
+    return_if(
+        !growImage(file, newsymsize + newstrsize - file->fSymtab->strsize),
 	false, ("Unable to patch the extension, no memory\n", file->fPath));
 
     // Push out the new symbol table if necessary
     if (numnewsyms) {
 	caddr_t base;
 
-	// Move the string table out of the way of the grown symbol table
-	// Don't forget the '\0' from end of string table.
-	base = (caddr_t) file->fStringBase;
-	bcopy(base, base + newsymsize, file->fSymtab->strsize);
-	file->fStringBase     += newsymsize;
-	file->fSymtab->stroff += newsymsize;
-
-	// Now append the new symbols to the symbol table.
+	// Append the new symbols to the original symbol table.
 	base = (caddr_t) file->fSymbolBase
-	     + file->fSymtab->nsyms * sizeof(struct nlist);
+	     + (file->fSymtab->nsyms - numnewsyms) * sizeof(struct nlist);
 	symp = (struct nlist **) DataGetPtr(file->fNewSymbols);
 	for (i = 0; i < numnewsyms; i++, base += sizeof(struct nlist), symp++)
 	    bcopy(*symp, base, sizeof(struct nlist));
-	file->fSymtab->nsyms  += numnewsyms;
 
 	DataRelease(file->fNewSymbols);
 	file->fNewSymbols = 0;
     }
 
     // Push out the new string table if necessary
-    if (newstrsize) {
-	caddr_t base = (caddr_t) file->fStringBase + file->fSymtab->strsize;
-	unsigned long actuallen = DataGetLength(file->fNewStrings);
+    if (newStrings) {
+	unsigned long *base = (unsigned long *) file->fStringBase;
+	unsigned long actuallen = DataGetLength(newStrings);
 
 	// Set the last word in string table to zero before copying data
-	*((unsigned long *) ((char *) base + newstrsize - 4)) = 0;
+        base[(newstrsize / sizeof(unsigned long)) - 1] = 0;
 
-	// Now append the new strings to the end of the file
-	bcopy((caddr_t) DataGetPtr(file->fNewStrings), base, actuallen);
+	// Now copy the new strings back to the end of the file
+	bcopy((caddr_t) DataGetPtr(newStrings), file->fStringBase, actuallen);
 
-	file->fSymtab->strsize += newstrsize;
+	file->fSymtab->strsize = newstrsize;
 
-	DataRelease(file->fNewStrings);
-	file->fNewStrings = 0;
+        DataRelease(newStrings);
     }
 
-    // Repair the symbol table string index values
-    // I used negative strx's to indicate symbol has been processed
-    sym = file->fSymbolBase;
-    for (i = 0, last = file->fSymtab->nsyms; i < last; i++, sym++) {
-	if (sym->n_un.n_strx < 0) {
-	    if ( sym->n_type != (N_EXT | N_UNDF)
-	    || (unsigned char) -1 != sym->n_sect)
-		sym->n_un.n_strx = -sym->n_un.n_strx;
-	    else {
-		// This symbol isn't being used by any vtable's reloc so
-		// convert it into an N_ABS style of symbol, remove the
-		// external bit and null out the symbol name.
-		bzero(sym, sizeof(*sym));
-		sym->n_type = N_ABS;	/* type flag, see below */
-	    }
-	}
-    }
     file->fSymbolsDirty = false;
 
     return true;
@@ -1792,14 +2159,13 @@ kld_file_map(const char *pathName)
 	return true;
 
     bzero(&file, sizeof(file));
-    file.fPath = pathName;
 
 #if KERNEL
     file.fMap = map;
     file.fMapSize = mapSize;
     file.fIsKmem = isKmem;
 #else
-    if (!mapObjectFile(&file))
+    if (!mapObjectFile(&file, pathName))
 	return false;
 #endif /* KERNEL */
 
@@ -1809,119 +2175,61 @@ kld_file_map(const char *pathName)
 	    struct load_command c[1];
 	} *machO;
 	const struct load_command *cmd;
-	const struct nlist *sym;
-	unsigned int i, firstlocal, nsyms;
-	unsigned long strsize;
-	const char *strbase;
-	Boolean foundOSObject;
+        int i;
 
-	if (!findBestArch(&file))
+	if (!findBestArch(&file, pathName))
 	    break;
-    
+
 	machO = (const struct machOMapping *) file.fMachO;
 	if (file.fMachOSize < machO->h.sizeofcmds)
 	    break;
 
+        file.fIsKernel = (MH_EXECUTE == machO->h.filetype);
+
 	// If the file type is MH_EXECUTE then this must be a kernel
 	// as all Kernel extensions must be of type MH_OBJECT
 	for (i = 0, cmd = &machO->c[0]; i < machO->h.ncmds; i++) {
-	    if (cmd->cmd == LC_SEGMENT) {
-		return_if(!parseSegments(&file, (struct segment_command *) cmd),
-		    false, ("%s isn't a valid mach-o, bad segment\n",
-			    file.fPath));
-	    }
-	    else if (cmd->cmd == LC_SYMTAB)
+            if (cmd->cmd == LC_SYMTAB)
 		file.fSymtab = (struct symtab_command *) cmd;
+	    else if (cmd->cmd == LC_SEGMENT) {
+                struct segment_command *seg = (struct segment_command *) cmd;
+                int nsects = seg->nsects;
+
+                if (nsects)
+                    return_if(!parseSegments(&file, seg),
+                              false, ("%s isn't a valid mach-o, bad segment",
+			      pathName));
+                else if (file.fIsKernel) {
+#if KERNEL
+                    // We don't need to look for the LinkEdit segment unless
+                    // we are running in the kernel environment.
+                    if (!strcmp(kLinkEditSegName, seg->segname))
+                        file.fLinkEditSeg = seg;
+#endif
+                }
+	    }
     
 	    cmd = (struct load_command *) ((UInt8 *) cmd + cmd->cmdsize);
 	}
 	break_if(!file.fSymtab,
-	    ("%s isn't a valid mach-o, no symbols\n", file.fPath));
+	    ("%s isn't a valid mach-o, no symbols\n", pathName));
 
-	// we found a link edit segment so recompute the bases
-	if (file.fSymbolBase) {
-	    struct segment_command *link =
-		(struct segment_command *) file.fSymbolBase;
+        if (!parseSymtab(&file, pathName))
+            break;
 
-	    file.fSymbolBase = (struct nlist *)
-		(link->vmaddr + (file.fSymtab->symoff - link->fileoff));
-	    file.fStringBase = (char *)
-		(link->vmaddr + (file.fSymtab->stroff - link->fileoff));
-	    break_if( ( (caddr_t) file.fStringBase + file.fSymtab->strsize
-		      > (caddr_t) link->vmaddr + link->vmsize ),
-		("%s isn't a valid mach-o le, bad symbols\n", file.fPath));
-	}
-	else {
-	    file.fSymbolBase = (struct nlist *)
-		(file.fMachO + file.fSymtab->symoff); 
-	    file.fStringBase = (char *)
-		(file.fMachO + file.fSymtab->stroff); 
-	    break_if( ( file.fSymtab->stroff + file.fSymtab->strsize
-		      > file.fMachOSize ),
-		("%s isn't a valid mach-o, bad symbols\n", file.fPath));
-	}
-
-	// If this file the kernel and do we have an executable image
-	file.fIsKernel = (MH_EXECUTE == machO->h.filetype);
-	file.fNoKernelExecutable = (vm_page_size == file.fSymtab->symoff)
-				&& (file.fSections[0].fSection->size == 0);
-
-	// Search for the first non-stab symbol in table
-	strsize = file.fSymtab->strsize;
-	strbase = file.fStringBase;
-	sym = file.fSymbolBase;
-	firstlocal = 0;
-	foundOSObject = false;
-	for (i = 0, nsyms = file.fSymtab->nsyms; i < nsyms; i++, sym++) {
-	    if ((unsigned long) sym->n_un.n_strx > strsize)
-		break;
-
-	    // Find the first exported symbol
-	    if ( !file.fLocalSyms && (sym->n_type & N_EXT) ) {
-		file.fLocalSyms = sym;
-		firstlocal = i;
-	    }
-
-	    // Find the a OSObject based subclass by searching for symbols
-	    // that have a suffix of '.superClass'
-	    if (!foundOSObject
-	    && ((sym->n_type & (N_TYPE | N_EXT)) == (N_SECT | N_EXT)
-	     || (sym->n_type & (N_TYPE | N_EXT)) == (N_ABS | N_EXT))
-	    &&  sym->n_un.n_strx) {
-		const char *dot;
-
-		// Only search from the last '.' in the symbol.
-		// but skip the leading '_' in all symbols first.
-		dot = strrchr(strbase + sym->n_un.n_strx + 1, '.');
-		if (dot && !strcmp(dot, kSuperClassSuffix))
-		    foundOSObject = true;
-	    }
-
-	    // Find the last local symbol
-	    if ( !file.fNLocal && sym->n_type == (N_EXT | N_UNDF) )
-		file.fNLocal = i - firstlocal;
-
-	}
-	break_if(i < nsyms,
-	    ("%s isn't a valid mach-o, bad symbol strings\n", file.fPath));
-
-	break_if(!file.fLocalSyms, ("%s has no symbols?\n", file.fPath));
-
-	// If we don't have any undefined symbols then all symbols
-	// must be local so just compute it now if necessary.
-	if ( !file.fNLocal )
-	    file.fNLocal = i - firstlocal;
-
-	fp = addFile(&file);
+	fp = addFile(&file, pathName);
 	if (!fp)
 	    break;
 
-	if (foundOSObject && !getMetaClassGraph(fp))
+	if (file.fFoundOSObject && !getMetaClassGraph(fp))
 	    break;
 
 	if (file.fIsKernel)
 	    sKernelFile = fp;
+
 #if KERNEL
+        // Automatically load the kernel's link edit segment if we are
+        // attempting to load a driver.
 	if (!sKernelFile) {
 	    extern struct mach_header _mh_execute_header;
 	    extern struct segment_command *getsegbyname(char *seg_name);
@@ -1944,7 +2252,12 @@ kld_file_map(const char *pathName)
 	return true;
     } while(0);
 
-    removeFile(&file);
+    // Failure path, then clean up
+    if (fp)
+        // @@@ gvdl: for the time being leak the file ref in the file table
+        removeFile(fp);
+    else
+        unmapFile(&file);
 
     return false;
 }
@@ -1977,11 +2290,9 @@ void *kld_file_lookupsymbol(const char *pathName, const char *symname)
 
     // May be a non-extern symbol so look for it there
     if (!sym) {
-	const char *strbase;
 	unsigned int i, nsyms;
 
 	sym = file->fSymbolBase;
-	strbase = file->fStringBase;
 	for (i = 0, nsyms = file->fSymtab->nsyms; i < nsyms; i++, sym++) {
 	    if ( (sym->n_type & N_EXT) ) {
 		sym = 0;
@@ -1989,7 +2300,7 @@ void *kld_file_lookupsymbol(const char *pathName, const char *symname)
 	    }
 	    if ( (sym->n_type & N_STAB) )
 		continue;
-	    if ( !strcmp(symname, strbase + sym->n_un.n_strx) )
+	    if ( !strcmp(symname, symNameByIndex(file, i)) )
 		break;
 	}
     }
@@ -2028,7 +2339,7 @@ Boolean kld_file_patch_OSObjects(const char *pathName)
     return_if(!file,
 	false, ("Internal error - unable to find file %s\n", pathName));
 
-DEBUG_LOG(("Patch file %s\n", pathName));	// @@@ gvdl:
+    DEBUG_LOG(("Patch file %s\n", pathName));	// @@@ gvdl:
 
     // If we don't have any classes we can return now.
     if (!file->fClassList)
@@ -2046,8 +2357,14 @@ DEBUG_LOG(("Patch file %s\n", pathName));	// @@@ gvdl:
     last = DataGetLength(file->fClassList) / sizeof(void *);
     classes = (struct metaClassRecord **) DataGetPtr(file->fClassList);
     for (i = 0; i < last; i++) {
-	if (!patchVTable(classes[i]))
-	    return false;
+        if (!patchVTable(classes[i])) {            
+            // RY: Set a flag in the file list to invalidate this data.
+            // I would remove the file from the list, but that seems to be
+            // not worth the effort.            
+            file->fIgnoreFile = TRUE;
+            
+            return false;
+        }
     }
 
     return true;
@@ -2062,8 +2379,8 @@ Boolean kld_file_prepare_for_link()
 	// Check to see if we have already merged this file
 	nmerged = DataGetLength(sMergedFiles) / sizeof(struct fileRecord *);
 	files = (struct fileRecord **) DataGetPtr(sMergedFiles);
-	for (i = 0; i < nmerged; i++) {
-	    if (!prepareFileForLink(files[i]))
+	for (i = 0; i < nmerged; i++) {                
+            if (!files[i]->fIgnoreFile && !prepareFileForLink(files[i]))
 		return false;
 	}
     }
@@ -2092,11 +2409,49 @@ void kld_file_cleanup_all_resources()
     for (i = 0; i < nfiles; i++)
 	removeFile(((void **) DataGetPtr(sFilesTable))[i]);
 
+    DataRelease(sFilesTable);
+    sFilesTable = NULL;
+
     // Don't really have to clean up anything more as the whole
     // malloc engine is going to be released and I couldn't be bothered.
 }
 
+
 #if !KERNEL
+#if 0
+static const struct fileRecord *sortFile;
+static int symCompare(const void *vSym1, const void *vSym2)
+{
+    const struct nlist *sym1 = vSym1;
+    const struct nlist *sym2 = vSym2;
+
+    {
+        unsigned int ind1, ind2;
+    
+        ind1 = sym1->n_type & N_TYPE;
+        ind2 = sym2->n_type & N_TYPE;
+        if (ind1 != ind2) {
+            // if sym1 is undefined then sym1 must come later than sym2
+            if (ind1 == N_UNDF)
+                return 1;
+            // if sym2 is undefined then sym1 must come earlier than sym2
+            if (ind2 == N_UNDF)
+                return -1;
+            /* drop out if neither are undefined */
+        }
+    }
+
+    {
+        const struct fileRecord *file = sortFile;
+        const char *name1, *name2;
+    
+        name1 = file->fStringBase + sym1->n_un.n_strx;
+        name2 = file->fStringBase + sym2->n_un.n_strx;
+        return strcmp(name1, name2);
+    }
+}
+#endif /* 0 */
+
 Boolean kld_file_debug_dump(const char *pathName, const char *outName)
 {
     const struct fileRecord *file = getFile(pathName);
@@ -2110,6 +2465,17 @@ Boolean kld_file_debug_dump(const char *pathName, const char *outName)
 	outName, strerror(errno), errno));
 
     do {
+#if 0
+        // Sorting doesn't work until I fix the relocs too?
+
+        // sort the symbol table appropriately
+        unsigned int nsyms = file->fSymtab->nsyms
+                           - (file->fLocalSyms - file->fSymbolBase);
+        sortFile = file;
+        heapsort((void *) file->fLocalSyms, nsyms, sizeof(struct nlist),
+                symCompare);
+#endif
+
 	break_if(-1 == write(fd, file->fMachO, file->fMachOSize),
 	    ("Can't dump output file %s - %s(%d)\n", 
 		outName, strerror(errno), errno));
@@ -2120,5 +2486,6 @@ Boolean kld_file_debug_dump(const char *pathName, const char *outName)
 
     return ret;
 }
+
 #endif /* !KERNEL */
 

@@ -19,7 +19,6 @@
  * 
  * @APPLE_LICENSE_HEADER_END@
  */
-#include <stddef.h> 
 #include <IOKit/pwr_mgt/IOPM.h>
 #include <IOKit/pwr_mgt/IOPMPowerSourceList.h>
 #include <IOKit/pwr_mgt/IOPMPowerSource.h>

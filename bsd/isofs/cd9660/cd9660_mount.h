@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2002 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -59,6 +59,12 @@
  *	@(#)cd9660_mount.h	8.1 (Berkeley) 5/24/95
  */
 
+#ifndef __ISOFS_CD9660_CD9660_MOUNT_H__
+#define __ISOFS_CD9660_CD9660_MOUNT_H__
+
+#include <sys/appleapiopts.h>
+
+#ifdef __APPLE_API_UNSTABLE
 /*
  * Arguments to mount ISO 9660 filesystems.
  */
@@ -72,3 +78,6 @@ struct iso_args {
 #define	ISOFSMNT_GENS     0x00000002	/* enable generation numbers */
 #define	ISOFSMNT_EXTATT   0x00000004	/* enable extended attributes */
 #define	ISOFSMNT_NOJOLIET 0x00000008	/* disable Joliet Ext.*/
+
+#endif /* __APPLE_API_UNSTABLE */
+#endif /* __ISOFS_CD9660_CD9660_MOUNT_H__ */

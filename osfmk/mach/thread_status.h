@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2002 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -22,90 +22,6 @@
 /*
  * @OSF_COPYRIGHT@
  */
-/*
- * HISTORY
- * Revision 1.2.14.4  1995/01/06  19:52:10  devrcs
- * 	mk6 CR668 - 1.3b26 merge
- * 	[1994/10/14  03:43:20  dwm]
- *
- * Revision 1.2.14.3  1994/09/23  02:43:32  ezf
- * 	change marker to not FREE
- * 	[1994/09/22  21:43:20  ezf]
- * 
- * Revision 1.2.14.2  1994/08/07  20:50:16  bolinger
- * 	Merge up to colo_b7.
- * 	[1994/08/01  21:02:13  bolinger]
- * 
- * Revision 1.2.14.1  1994/06/26  22:59:09  bolinger
- * 	Temporary patch to enable thread state large enough to suit 860.
- * 	[1994/06/26  22:55:25  bolinger]
- * 
- * Revision 1.2.11.2  1994/06/25  03:47:26  dwm
- * 	mk6 CR98 - use new MD THREAD_STATE_MAX
- * 	[1994/06/24  21:55:03  dwm]
- * 
- * Revision 1.2.11.1  1993/12/10  19:37:05  dwm
- * 	Re-hack of workaround: KERNEL_STACK_SIZE back to 1 page;
- * 	lower THREAD_STATE_MAX to 64 ints instead.
- * 	[1993/12/10  19:36:37  dwm]
- * 
- * Revision 1.2.3.3  1993/08/03  18:54:25  gm
- * 	CR9600: Change thread_state_flavor_t typedef from unsigned int to int.
- * 	[1993/08/02  18:57:55  gm]
- * 
- * Revision 1.2.3.2  1993/06/09  02:43:53  gm
- * 	Added to OSF/1 R1.3 from NMK15.0.
- * 	[1993/06/02  21:18:31  jeffc]
- * 
- * Revision 1.2  1993/04/19  16:39:58  devrcs
- * 	ansi C conformance changes
- * 	[1993/02/02  18:54:42  david]
- * 
- * 	Add new thread_state types.				 [sp@gr.osf.org]
- * 	[1992/12/23  13:12:08  david]
- * 
- * Revision 1.1  1992/09/30  02:32:17  robert
- * 	Initial revision
- * 
- * $EndLog$
- */
-/* CMU_HIST */
-/*
- * Revision 2.3  91/05/14  17:01:22  mrt
- * 	Correcting copyright
- * 
- * Revision 2.2  91/02/05  17:36:42  mrt
- * 	Changed to new Mach copyright
- * 	[91/02/01  17:21:56  mrt]
- * 
- * Revision 2.1  89/08/03  16:06:18  rwd
- * Created.
- * 
- * Revision 2.4  89/02/25  18:41:29  gm0w
- * 	Changes for cleanup.
- * 
- * Revision 2.3  89/02/07  00:53:47  mwyoung
- * Relocated from mach/thread_status.h
- * 
- * Revision 2.2  88/08/25  18:21:12  mwyoung
- * 	Adjusted include file references.
- * 	[88/08/16  04:16:13  mwyoung]
- * 	
- * 	Add THREAD_STATE_FLAVOR_LIST; remove old stuff.
- * 	[88/08/11  18:49:48  mwyoung]
- * 
- *
- * 15-Jan-88  David Golub (dbg) at Carnegie-Mellon University
- *	Replaced with variable-length array for flexibile interface.
- *
- * 28-Apr-87  Avadis Tevanian (avie) at Carnegie-Mellon University
- *	Latest hacks to keep MiG happy wrt refarrays.
- *
- * 27-Mar-87  Avadis Tevanian (avie) at Carnegie-Mellon University
- *	Created.
- *
- */
-/* CMU_ENDHIST */
 /*
  * Mach Operating System
  * Copyright (c) 1991,1990,1989,1988 Carnegie Mellon University

@@ -1512,17 +1512,17 @@ int nbp_mh_reg(nbpP)
 	        /* multihoming mode with a specific zone specified */
 	        /* see which segments (interfaces) are seeded for this zone */
 		int zno;
-		char ifs_in_zone[IF_TOTAL_MAX];
+		at_ifnames_t ifs_in_zone;
 		if (!(zno = zt_find_zname(&nve.zone))) {
 			dPrintf(D_M_NBP_LOW, D_L_WARNING, 
 				("nbp_mh_reg: didn't find zone name\n"));
 			return(EINVAL);
 		}
-		getIfUsage(zno-1, ifs_in_zone);
+		getIfUsage(zno-1, &ifs_in_zone);
 
-		/* now find the first matching interface */
+		/* now find the matching interfaces */
 		TAILQ_FOREACH(ifID, &at_ifQueueHd, aa_link) {
-			if (!ifs_in_zone[ifID->ifPort]) 
+			if (!ifs_in_zone.at_if[ifID->ifPort]) 
 					/* zone doesn't match */
 				continue;
 			else
@@ -1551,10 +1551,11 @@ int nbp_mh_reg(nbpP)
 				continue;
 			if (nbp_new_nve_entry(&nve, ifID) == 0)
 				registered++;
-		}
-		if (registered && !nbpP->addr.net && !nbpP->addr.node) {
-			nbpP->addr.net = ifID->ifThisNode.s_net;
-			nbpP->addr.node = ifID->ifThisNode.s_node;
+			if (registered && !nbpP->addr.net && !nbpP->addr.node) {
+				nbpP->addr.net = ifID->ifThisNode.s_net;
+				nbpP->addr.node = ifID->ifThisNode.s_node;
+			}
+
 		}
 	}
 	nbpP->unique_nbp_id = (registered > 1)? 0: nve.unique_nbp_id;

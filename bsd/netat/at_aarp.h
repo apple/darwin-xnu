@@ -21,6 +21,7 @@
  */
 #ifndef _NETAT_AT_AARP_H_
 #define _NETAT_AT_AARP_H_
+#include <sys/appleapiopts.h>
 /*
  *	Copyright (c) 1988, 1989 Apple Computer, Inc. 
  */
@@ -174,10 +175,12 @@ typedef struct {
 	)
 
 #ifdef KERNEL
+#ifdef __APPLE_API_PRIVATE
 
 int aarp_chk_addr(at_ddp_t  *, at_ifaddr_t *);
 int aarp_rcv_pkt(aarp_pkt_t *, at_ifaddr_t *);
 
+#endif /* __APPLE_API_PRIVATE */
 #endif /* KERNEL */
 
 #endif /* _NETAT_AT_AARP_H_ */

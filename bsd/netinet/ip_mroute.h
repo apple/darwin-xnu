@@ -60,6 +60,7 @@
 
 #ifndef _NETINET_IP_MROUTE_H_
 #define _NETINET_IP_MROUTE_H_
+#include <sys/appleapiopts.h>
 
 /*
  * Definitions for IP multicast forwarding.
@@ -270,19 +271,20 @@ struct tbf
 };
 
 #ifdef KERNEL
+#ifdef __APPLE_API_PRIVATE
 
 struct sockopt;
 
 extern int	(*ip_mrouter_set) __P((struct socket *, struct sockopt *));
 extern int	(*ip_mrouter_get) __P((struct socket *, struct sockopt *));
 extern int	(*ip_mrouter_done) __P((void));
-
 #if MROUTING
 extern int	(*mrt_ioctl) __P((int, caddr_t));
 #else
 extern int	(*mrt_ioctl) __P((int, caddr_t, struct proc *));
 #endif
 
+#endif /* __APPLE_API_PRIVATE */
 #endif /* KERNEL */
 
 #endif /* _NETINET_IP_MROUTE_H_ */

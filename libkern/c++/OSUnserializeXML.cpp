@@ -134,7 +134,6 @@ extern unsigned long strtoul(const char *, char **, int);
 #ifndef YYSTYPE
 #define YYSTYPE int
 #endif
-#include <stddef.h>
 
 #ifndef __cplusplus
 #ifndef __STDC__

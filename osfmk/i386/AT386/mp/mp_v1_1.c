@@ -99,7 +99,7 @@ void
 validate_cpus(int ncpus)
 {
 	int i;
-	for(i=0;i<NCPUS;i++)
+	for(i=0;i<ncpus;i++)
 	    machine_slot[i].is_cpu = TRUE;
 }
 

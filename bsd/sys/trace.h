@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2002 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -58,6 +58,9 @@
 #ifndef _SYS_TRACE_H_
 #define	_SYS_TRACE_H_
 
+#include <sys/appleapiopts.h>
+
+#ifdef __APPLE_API_OBSOLETE
 /*
  * File system buffer tracing points; all trace <pack(dev, size), bn>
  */
@@ -139,5 +142,8 @@ extern char	traceflags[TR_NFLAGS];
 #define	trace(a,b,c)
 #endif
 #endif /* KERNEL */
+
+#endif /* __APPLE_API_OBSOLETE */
+
 #endif /* !_SYS_TRACE_H_ */
 

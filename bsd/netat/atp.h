@@ -46,6 +46,7 @@
 
 #ifndef _NETAT_ATP_H_
 #define _NETAT_ATP_H_
+#include <sys/appleapiopts.h>
 
 /* ATP function codes */
 
@@ -184,7 +185,7 @@ typedef struct {
 #define ATP_GETREQUEST   3
 
 #ifdef KERNEL
-
+#ifdef __APPLE_API_PRIVATE
 
 
 /*
@@ -403,19 +404,18 @@ struct atp_state {
 #ifdef ATP_DECLARE
 struct atp_trans *atp_trans_free_list = NULL;	/* free transactions */
 struct atp_rcb *atp_rcb_free_list = NULL;		/* free rcbs */
-static struct atp_state *atp_free_list = NULL;	/* free atp states */
+struct atp_state *atp_free_list = NULL;         	/* free atp states */
 struct atp_trans_qhead	atp_trans_abort;		/* aborted trans list */
-static struct atp_rcb atp_rcb_data[NATP_RCB];
-static struct atp_state atp_state_data[NATP_STATE];
-
+struct atp_rcb* atp_rcb_data = NULL;
+struct atp_state* atp_state_data=NULL;
 
 
 #else
 extern struct atp_trans *atp_trans_free_list;		/* free transactions */
 extern struct atp_rcb *atp_rcb_free_list;			/* free rcbs */
 extern struct atp_state *atp_free_list;				/* free atp states */
-extern struct atp_rcb atp_rcb_data[];
-extern struct atp_state atp_state_data[];
+extern struct atp_rcb* atp_rcb_data;
+extern struct atp_state* atp_state_data;
 extern struct atp_trans_qhead atp_trans_abort;		/* aborting trans list */
 
 extern void atp_req_timeout();
@@ -456,5 +456,6 @@ void atp_timout(void (*func)(), struct atp_trans *, int);
 void atp_untimout(void (*func)(), struct atp_trans *);
 int atp_tid(struct atp_state *);
 
+#endif /* __APPLE_API_PRIVATE */
 #endif /* KERNEL */
 #endif /* _NETAT_ATP_H_ */

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2002 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -53,30 +53,29 @@
  * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
  * SUCH DAMAGE.
  *
- *	@(#)socketvar.h	8.1 (Berkeley) 6/2/93
+ *	@(#)socketvar.h	8.3 (Berkeley) 2/19/95
+ * $FreeBSD: src/sys/sys/socketvar.h,v 1.46.2.6 2001/08/31 13:45:49 jlemon Exp $
  */
 
-#ifndef	_SYS_SOCKETVAR_H_
+#ifndef _SYS_SOCKETVAR_H_
 #define _SYS_SOCKETVAR_H_
 
+#include <sys/appleapiopts.h>
+#include <sys/queue.h>			/* for TAILQ macros */
 #include <sys/select.h>			/* for struct selinfo */
-#include <sys/queue.h>
 #include <net/kext_net.h>
 #include <sys/ev.h>
 /*
  * Hacks to get around compiler complaints
  */
 struct mbuf;
-struct socket;
-struct uio;
-struct sockbuf;
-struct sockaddr;
 struct kextcb;
 struct protosw;
 struct sockif;
 struct sockutil;
 
 /* strings for sleep message: */
+#ifdef __APPLE_API_UNSTABLE
 extern	char netio[], netcon[], netcls[];
 #define SOCKET_CACHE_ON	
 #define SO_CACHE_FLUSH_INTERVAL 1	/* Seconds */
@@ -93,22 +92,27 @@ extern	char netio[], netcon[], netcls[];
  */
 typedef	u_quad_t so_gen_t;
 
+#ifndef __APPLE__
+/* We don't support BSD style socket filters */
+struct accept_filter;
+#endif
+
 struct socket {
-	int     so_zone;	/* zone we were allocated from */
-	short	so_type;		/* generic type, see socket.h */
+	int		so_zone;			/* zone we were allocated from */
+	short	so_type;			/* generic type, see socket.h */
 	short	so_options;		/* from socket call, see socket.h */
 	short	so_linger;		/* time to linger while closing */
-	short	so_state;		/* internal state flags SS_*, below */
+	short	so_state;			/* internal state flags SS_*, below */
 	caddr_t	so_pcb;			/* protocol control block */
 	struct	protosw *so_proto;	/* protocol handle */
 /*
- * Variables for connection queueing.
+ * Variables for connection queuing.
  * Socket where accepts occur is so_head in all subsidiary sockets.
  * If so_head is 0, socket is not related to an accept.
- * For head socket so_q0 queues partially completed connections,
- * while so_q is a queue of connections ready to be accepted.
+ * For head socket so_incomp queues partially completed connections,
+ * while so_comp is a queue of connections ready to be accepted.
  * If a connection is aborted and it has so_head set, then
- * it has to be pulled out of either so_q0 or so_q.
+ * it has to be pulled out of either so_incomp or so_comp.
  * We allow connections to queue up based on current queue lengths
  * and limit on number of queued connections for this socket.
  */
@@ -124,6 +128,10 @@ struct socket {
 	u_short	so_error;		/* error affecting connection */
 	pid_t	so_pgid;		/* pgid for signals */
 	u_long	so_oobmark;		/* chars to oob mark */
+#ifndef __APPLE__
+	/* We don't support AIO ops */
+	TAILQ_HEAD(, aiocblist) so_aiojobq; /* AIO ops waiting on socket */
+#endif
 /*
  * Variables for socket buffering.
  */
@@ -134,7 +142,9 @@ struct socket {
 		u_long	sb_mbmax;	/* max chars of mbufs to use */
 		long	sb_lowat;	/* low water mark */
 		struct	mbuf *sb_mb;	/* the mbuf chain */
-	        struct  socket *sb_so;  /* socket back ptr */
+#if __APPLE__
+        struct  socket *sb_so;  /* socket back ptr for kexts */
+#endif
 		struct	selinfo sb_sel;	/* process selecting read/write */
 		short	sb_flags;	/* flags, see below */
 		short	sb_timeo;	/* timeout for read/write */
@@ -146,18 +156,32 @@ struct socket {
 #define	SB_WANT		0x02		/* someone is waiting to lock */
 #define	SB_WAIT		0x04		/* someone is waiting for data/space */
 #define	SB_SEL		0x08		/* someone is selecting */
-#define	SB_ASYNC	0x10		/* ASYNC I/O, need signals */
+#define	SB_ASYNC		0x10		/* ASYNC I/O, need signals */
+#define	SB_UPCALL		0x20		/* someone wants an upcall */
+#define	SB_NOINTR		0x40		/* operations not interruptible */
+#ifndef __APPLE__
+#define SB_AIO		0x80		/* AIO operations queued */
+#define SB_KNOTE		0x100	/* kernel note attached */
+#else
 #define	SB_NOTIFY	(SB_WAIT|SB_SEL|SB_ASYNC)
-#define	SB_UPCALL	0x20		/* someone wants an upcall */
-#define	SB_NOINTR	0x40		/* operations not interruptible */
 #define SB_RECV		0x8000		/* this is rcv sb */
 
-	caddr_t	so_tpcb;		/* Wisc. protocol control block XXX */
+	caddr_t	so_tpcb;		/* Wisc. protocol control block - XXX unused? */
+#endif
+
 	void	(*so_upcall) __P((struct socket *so, caddr_t arg, int waitf));
 	caddr_t	so_upcallarg;		/* Arg for above */
 	uid_t	so_uid;			/* who opened the socket */
 	/* NB: generation count must not be first; easiest to make it last. */
 	so_gen_t so_gencnt;		/* generation count */
+#ifndef __APPLE__
+	void	*so_emuldata;		/* private data for emulators */
+	struct	so_accf { 
+		struct	accept_filter *so_accept_filter;
+		void	*so_accept_filter_arg;	/* saved filter args */
+		char	*so_accept_filter_str;	/* saved user args */
+	} *so_accf;
+#else
 	TAILQ_HEAD(,eventqelt) so_evlist;
 	int	cached_in_sock_layer;	/* Is socket bundled with pcb/pcb.inp_ppcb? */
 	struct	socket	*cache_next;
@@ -168,11 +192,14 @@ struct socket {
 	/* Plug-in support - make the socket interface overridable */
 	struct	mbuf *so_tail;
 	struct	kextcb *so_ext;		/* NKE hook */
-	void	*reserved1;		/* for future use if needed */
+	u_long	so_flags;		/* Flags */
+#define SOF_NOSIGPIPE	0x00000001
 	void	*reserved2;
 	void	*reserved3;
 	void	*reserved4;
+#endif
 };
+#endif /* __APPLE_API_UNSTABLE */
 
 /*
  * Socket state bits.
@@ -191,6 +218,7 @@ struct socket {
 #define	SS_ISCONFIRMING		0x400	/* deciding to accept connection req */
 #define	SS_INCOMP		0x800	/* Unaccepted, incomplete connection */
 #define	SS_COMP			0x1000	/* unaccepted, complete connection */
+#define	SS_ISDISCONNECTED	0x2000	/* socket disconnected from peer */
 
 /*
  * Externalized form of struct socket used by the sysctl(3) interface.
@@ -227,8 +255,26 @@ struct	xsocket {
 /*
  * Macros for sockets and socket buffering.
  */
+#ifdef __APPLE__
+#ifdef __APPLE_API_UNSTABLE
 #define sbtoso(sb) (sb->sb_so)
 
+/*
+ * Functions for sockets and socket buffering.
+ * These are macros on FreeBSD. On Darwin the
+ * implementation is in bsd/kern/uipc_socket2.c
+ */
+int		sb_notify __P((struct sockbuf *sb));
+long		sbspace	__P((struct sockbuf *sb));
+int		sosendallatonce __P((struct socket *so));
+int		soreadable __P((struct socket *so));
+int		sowriteable __P((struct socket *so));
+void		sballoc __P((struct sockbuf *sb, struct mbuf *m));
+void		sbfree __P((struct sockbuf *sb, struct mbuf *m));
+int		sblock __P((struct sockbuf *sb, int wf));
+void		sbunlock __P((struct sockbuf *sb));
+void		sorwakeup __P((struct socket * so));
+void		sowwakeup __P((struct socket * so));
 
 /*
  * Socket extension mechanism: control block hooks:
@@ -247,8 +293,10 @@ struct kextcb
 };
 #define EXT_NULL	0x0		/* STATE: Not in use */
 #define sotokextcb(so) (so ? so->so_ext : 0)
+#endif /* __APPLE___ */
 
 #ifdef KERNEL
+
 /*
  * Argument structure for sosetopt et seq.  This is in the KERNEL
  * section because it will never be visible to user code.
@@ -264,14 +312,12 @@ struct sockopt {
 };
 
 #if SENDFILE
-
 struct sf_buf {
 	SLIST_ENTRY(sf_buf) free_list;	/* list of free buffer slots */
 	int		refcnt;		/* reference count */
 	struct		vm_page *m;	/* currently mapped page */
 	vm_offset_t	kva;		/* va of mapping */
 };
-
 #endif
 
 #ifdef MALLOC_DECLARE
@@ -291,19 +337,22 @@ struct sockaddr;
 struct stat;
 struct ucred;
 struct uio;
+#ifndef __APPLE
+struct knote;
+#endif
 
 /*
  * File operations on sockets.
  */
-int	soo_read __P((struct file *fp, struct uio *uio, struct ucred *cred));
-int	soo_write __P((struct file *fp, struct uio *uio, struct ucred *cred));
+int	soo_read __P((struct file *fp, struct uio *uio, struct ucred *cred,
+		int flags, struct proc *p));
+int	soo_write __P((struct file *fp, struct uio *uio, struct ucred *cred,
+		int flags, struct proc *p));
+int soo_close __P((struct file *fp, struct proc *p));
 int	soo_ioctl __P((struct file *fp, u_long cmd, caddr_t data,
 	    struct proc *p));
-int	soo_select __P((struct file *fp, int which, void * wql, struct proc *p));
 int	soo_stat __P((struct socket *so, struct stat *ub));
-
-int 	soo_close __P((struct file *fp, struct proc *p));
-
+int	soo_select __P((struct file *fp, int which, void * wql, struct proc *p));
 
 /*
  * From uipc_socket and friends
@@ -358,6 +407,15 @@ struct socket *
 int	sooptcopyin __P((struct sockopt *sopt, void *buf, size_t len,
 			 size_t minlen));
 int	sooptcopyout __P((struct sockopt *sopt, void *buf, size_t len));
+
+/*
+ * XXX; prepare mbuf for (__FreeBSD__ < 3) routines.
+ * Used primarily in IPSec and IPv6 code.
+ */
+int	soopt_getm __P((struct sockopt *sopt, struct mbuf **mp));
+int	soopt_mcopyin __P((struct sockopt *sopt, struct mbuf *m));
+int	soopt_mcopyout __P((struct sockopt *sopt, struct mbuf *m));
+
 int	sopoll __P((struct socket *so, int events, struct ucred *cred, void *wql));
 int	soreceive __P((struct socket *so, struct sockaddr **paddr,
 		       struct uio *uio, struct mbuf **mp0,
@@ -368,33 +426,22 @@ int	sosend __P((struct socket *so, struct sockaddr *addr, struct uio *uio,
 		    struct mbuf *top, struct mbuf *control, int flags));
 
 int	sosetopt __P((struct socket *so, struct sockopt *sopt));
-
-
 int	soshutdown __P((struct socket *so, int how));
 void	sotoxsocket __P((struct socket *so, struct xsocket *xso));
 void	sowakeup __P((struct socket *so, struct sockbuf *sb));
-int	sb_notify __P((struct sockbuf *sb));
-long	sbspace	__P((struct sockbuf *sb));
-int	sosendallatonce __P((struct socket *so));
-int	soreadable __P((struct socket *so));
-int	sowriteable __P((struct socket *so));
-void	sballoc __P((struct sockbuf *sb, struct mbuf *m));
-void	sbfree __P((struct sockbuf *sb, struct mbuf *m));
-int	sblock __P((struct sockbuf *sb, int wf));
-void	sbunlock __P((struct sockbuf *sb));
-void	sorwakeup __P((struct socket * so));
-void	sowwakeup __P((struct socket * so));
 
-
-
-
-
-
-
-
-
-
-
+#ifndef __APPLE__
+/* accept filter functions */
+int	accept_filt_add __P((struct accept_filter *filt));
+int	accept_filt_del __P((char *name));
+struct accept_filter *	accept_filt_get __P((char *name));
+#ifdef ACCEPT_FILTER_MOD
+int accept_filt_generic_mod_event __P((module_t mod, int event, void *data));
+SYSCTL_DECL(_net_inet_accf);
+#endif /* ACCEPT_FILTER_MOD */
+#endif /* !defined(__APPLE__) */
 
 #endif /* KERNEL */
+#endif /* __APPLE_API_UNSTABLE */
+
 #endif /* !_SYS_SOCKETVAR_H_ */

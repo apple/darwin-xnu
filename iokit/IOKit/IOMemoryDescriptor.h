@@ -60,9 +60,10 @@ protected:
     @discussion This structure will be used to expand the capablilties of this class in the future.
     */    
     struct ExpansionData {
-        void *	devicePager;
-        unsigned int pagerContig:1;
-        unsigned int unused:31;
+        void *				devicePager;
+        unsigned int			pagerContig:1;
+        unsigned int			unused:31;
+	IOMemoryDescriptor *		memory;
     };
 
 /*! @var reserved
@@ -325,8 +326,8 @@ public:
     @discussion This method returns the physical address of the  first byte in the memory. It is most useful on memory known to be physically contiguous.
     @result A physical address. */
 
-    inline IOPhysicalAddress 	getPhysicalAddress()
-				{ return( getPhysicalSegment( 0, 0 )); }
+    /* inline */ IOPhysicalAddress getPhysicalAddress();
+        /* { return( getPhysicalSegment( 0, 0 )); } */
 
     /* DEPRECATED */ /* USE INSTEAD: map(), readBytes(), writeBytes() */
     /* DEPRECATED */ virtual void * getVirtualSegment(IOByteCount offset,
@@ -471,8 +472,8 @@ public:
     @discussion This method returns the physical address of the  first byte in the mapping. It is most useful on mappings known to be physically contiguous.
     @result A physical address. */
 
-    inline IOPhysicalAddress 	getPhysicalAddress()
-				{ return( getPhysicalSegment( 0, 0 )); }
+    /* inline */ IOPhysicalAddress getPhysicalAddress();
+        /* { return( getPhysicalSegment( 0, 0 )); } */
 
 /*! @function getLength
     @abstract Accessor to the length of the mapping.
@@ -622,13 +623,14 @@ public:
 	vm_map_t		addressMap,
 	IOVirtualAddress	logical,
 	IOByteCount		length );
+    virtual bool serialize(OSSerialize *s) const;
 };
 
 /* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
 
 class IOSubMemoryDescriptor : public IOMemoryDescriptor
 {
-    friend IOMemoryDescriptor;
+    friend class IOMemoryDescriptor;
 
     OSDeclareDefaultStructors(IOSubMemoryDescriptor);
 
@@ -699,6 +701,8 @@ public:
 
     // make virtual
     IOReturn redirect( task_t safeTask, bool redirect );
+
+    virtual bool serialize(OSSerialize *s) const;
 
 protected:
     virtual IOMemoryMap * 	makeMapping(

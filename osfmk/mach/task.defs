@@ -370,11 +370,3 @@ routine task_set_policy(
 	limit			: policy_limit_t;
 	change			: boolean_t);
 
-/*
- *      Registers the caller-specified RPC subsystem attributes
- *	as a new object.
- */
-routine mach_subsystem_create(
-		task		: task_t;
-		user_subsys 	: user_subsystem_t;
-	out	subsys		: subsystem_t);

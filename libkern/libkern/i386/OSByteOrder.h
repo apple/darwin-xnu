@@ -29,7 +29,7 @@
 #ifndef _OS_OSBYTEORDERI386_H
 #define _OS_OSBYTEORDERI386_H
 
-#include <libkern/OSBase.h>
+#include <libkern/OSTypes.h>
 
 /* Functions for byte reversed loads. */
 

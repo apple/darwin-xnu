@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2002 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -59,6 +59,9 @@
 #ifndef	_SYS_VADVISE_H_
 #define _SYS_VADVISE_H_
 
+#include <sys/appleapiopts.h>
+
+#ifdef __APPLE_API_OBSOLETE
 /*
  * Parameters to vadvise() to tell system of particular paging
  * behaviour:
@@ -73,5 +76,7 @@
 #define	VA_ANOM		1
 #define	VA_SEQL		2
 #define	VA_FLUSH 	3
+
+#endif /* __APPLE_API_OBSOLETE */
 
 #endif	/* !_SYS_VADVISE_H_ */

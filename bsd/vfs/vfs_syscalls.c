@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1995-2001 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 1995-2002 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -75,6 +75,7 @@
 #include <sys/attr.h>
 #include <sys/sysctl.h>
 #include <sys/ubc.h>
+#include <sys/quota.h>
 #include <machine/cons.h>
 #include <miscfs/specfs/specdev.h>
 
@@ -88,6 +89,7 @@ uid_t console_user;
 
 static int change_dir __P((struct nameidata *ndp, struct proc *p));
 static void checkdirs __P((struct vnode *olddp));
+static void enablequotas __P((struct proc *p, struct mount *mp));
 
 /* counts number of mount and unmount operations */
 unsigned int vfs_nummntops=0;
@@ -121,6 +123,7 @@ mount(p, uap, retval)
 	struct nameidata nd;
 	char fstypename[MFSNAMELEN];
 	size_t dummy=0;
+
 	/*
 	 * Get vnode to be covered
 	 */
@@ -303,6 +306,8 @@ update:
 		if (error)
 			mp->mnt_flag = flag;
 		vfs_unbusy(mp, p);
+		if (!error)
+		        enablequotas(p, mp);
 		return (error);
 	}
 
@@ -328,8 +333,10 @@ update:
 			vrele(vp);
 
 		/* increment the operations count */
-		if (!error)
+		if (!error) {
 			vfs_nummntops++;
+			enablequotas(p, mp);
+		}
 	} else {
 		simple_lock(&vp->v_interlock);
 		CLR(vp->v_flag, VMOUNT);
@@ -343,6 +350,48 @@ update:
 			vput(vp);
 	}
 	return (error);
+}
+
+static void
+enablequotas(p, mp)
+     struct proc *p;
+     struct mount *mp;
+{
+	struct vnode *vp;  
+	struct nameidata qnd;
+	int type;
+	char qfpath[MAXPATHLEN];
+	char *qfname = QUOTAFILENAME;
+	char *qfopsname = QUOTAOPSNAME;
+	char *qfextension[] = INITQFNAMES;
+
+
+        if ((strcmp(mp->mnt_stat.f_fstypename, "hfs") != 0 )
+                && (strcmp( mp->mnt_stat.f_fstypename, "ufs") != 0))
+	  return;
+
+	/* 
+	 * Enable filesystem disk quotas if necessary.
+	 * We ignore errors as this should not interfere with final mount
+	 */
+	for (type=0; type < MAXQUOTAS; type++) {
+	      sprintf(qfpath, "%s/%s.%s", mp->mnt_stat.f_mntonname, qfopsname, qfextension[type]);
+	      NDINIT(&qnd, LOOKUP, FOLLOW, UIO_SYSSPACE, qfpath, p);
+	      if (namei(&qnd) != 0)
+		    continue; 	    /* option file to trigger quotas is not present */
+	      vp = qnd.ni_vp;
+	      sprintf(qfpath, "%s/%s.%s", mp->mnt_stat.f_mntonname, qfname, qfextension[type]);
+	      if (vp->v_tag == VT_HFS) {
+		    vrele(vp);
+		    (void)hfs_quotaon(p, mp, type, qfpath, UIO_SYSSPACE);
+	      } else if (vp->v_tag == VT_UFS) {
+		    vrele(vp);
+		    (void)quotaon(p, mp, type, qfpath, UIO_SYSSPACE);
+	      } else {
+		    vrele(vp);
+	      }
+	}
+	return;
 }
 
 /*
@@ -458,8 +507,25 @@ dounmount(mp, flags, p)
 	int error;
 
 	simple_lock(&mountlist_slock);
+	/* XXX post jaguar fix LK_DRAIN - then clean this up */
+	if (mp->mnt_kern_flag & MNTK_UNMOUNT) {
+		simple_unlock(&mountlist_slock);
+		mp->mnt_kern_flag |= MNTK_MWAIT;
+		if ((error = tsleep((void *)mp, PRIBIO, "dounmount", 0)))
+			return (error);
+		/*
+		 * The prior unmount attempt has probably succeeded.
+		 * Do not dereference mp here - returning EBUSY is safest.
+		 */
+		return (EBUSY);
+	}
 	mp->mnt_kern_flag |= MNTK_UNMOUNT;
-	lockmgr(&mp->mnt_lock, LK_DRAIN | LK_INTERLOCK, &mountlist_slock, p);
+	error = lockmgr(&mp->mnt_lock, LK_DRAIN | LK_INTERLOCK,
+			&mountlist_slock, p);
+	if (error) {
+		mp->mnt_kern_flag &= ~MNTK_UNMOUNT;
+		goto out;
+	}
 	mp->mnt_flag &=~ MNT_ASYNC;
 	ubc_umount(mp);	/* release cached vnodes */
 	cache_purgevfs(mp);	/* remove cache entries for this file sys */
@@ -858,6 +924,7 @@ chroot(p, uap, retval)
 	register struct filedesc *fdp = p->p_fd;
 	int error;
 	struct nameidata nd;
+	boolean_t	shared_regions_active;
 	struct vnode *tvp;
 
 	if (error = suser(p->p_ucred, &p->p_acflag))
@@ -868,7 +935,13 @@ chroot(p, uap, retval)
 	if (error = change_dir(&nd, p))
 		return (error);
 
-	if(error = clone_system_shared_regions()) {
+	if(p->p_flag & P_NOSHLIB) {
+		shared_regions_active = FALSE;
+	} else {
+		shared_regions_active = TRUE;
+	}
+
+	if(error = clone_system_shared_regions(shared_regions_active)) {
 		vrele(nd.ni_vp);
 		return (error);
 	}
@@ -1033,6 +1106,7 @@ mknod(p, uap, retval)
 
 	if (error = suser(p->p_ucred, &p->p_acflag))
 		return (error);
+	bwillwrite();
 	NDINIT(&nd, CREATE, LOCKPARENT, UIO_USERSPACE, uap->path, p);
 	if (error = namei(&nd))
 		return (error);
@@ -1107,6 +1181,7 @@ mkfifo(p, uap, retval)
 #if !FIFO 
 	return (EOPNOTSUPP);
 #else
+	bwillwrite();
 	NDINIT(&nd, CREATE, LOCKPARENT, UIO_USERSPACE, uap->path, p);
 	if (error = namei(&nd))
 		return (error);
@@ -1145,6 +1220,7 @@ link(p, uap, retval)
 	struct nameidata nd;
 	int error;
 
+	bwillwrite();
 	NDINIT(&nd, LOOKUP, FOLLOW, UIO_USERSPACE, uap->path, p);
 	if (error = namei(&nd))
 		return (error);
@@ -1200,6 +1276,7 @@ symlink(p, uap, retval)
 	MALLOC_ZONE(path, char *, MAXPATHLEN, M_NAMEI, M_WAITOK);
 	if (error = copyinstr(uap->path, path, MAXPATHLEN, &dummy))
 		goto out;
+	bwillwrite();
 	NDINIT(&nd, CREATE, LOCKPARENT, UIO_USERSPACE, uap->link, p);
 	if (error = namei(&nd))
 		goto out;
@@ -1238,6 +1315,7 @@ undelete(p, uap, retval)
 	int error;
 	struct nameidata nd;
 
+	bwillwrite();
 	NDINIT(&nd, DELETE, LOCKPARENT|DOWHITEOUT, UIO_USERSPACE,
 	    uap->path, p);
 	error = namei(&nd);
@@ -1280,6 +1358,7 @@ _unlink(p, uap, retval, nodelbusy)
 	int error;
 	struct nameidata nd;
 
+	bwillwrite();
 	NDINIT(&nd, DELETE, LOCKPARENT, UIO_USERSPACE, uap->path, p);
 	/* with Carbon semantics, busy files cannot be deleted */
 	if (nodelbusy)
@@ -1960,6 +2039,52 @@ fchown(p, uap, retval)
 	return (error);
 }
 
+static int
+getutimes(usrtvp, tsp)
+	const struct timeval *usrtvp;
+	struct timespec *tsp;
+{
+	struct timeval tv[2];
+	int error;
+
+	if (usrtvp == NULL) {
+		microtime(&tv[0]);
+		TIMEVAL_TO_TIMESPEC(&tv[0], &tsp[0]);
+		tsp[1] = tsp[0];
+	} else {
+		if ((error = copyin(usrtvp, tv, sizeof (tv))) != 0)
+			return (error);
+		TIMEVAL_TO_TIMESPEC(&tv[0], &tsp[0]);
+		TIMEVAL_TO_TIMESPEC(&tv[1], &tsp[1]);
+	}
+	return 0;
+}
+
+static int
+setutimes(p, vp, ts, nullflag)
+	struct proc *p;
+	struct vnode *vp;
+	const struct timespec *ts;
+	int nullflag;
+{
+	int error;
+	struct vattr vattr;
+
+	VOP_LEASE(vp, p, p->p_ucred, LEASE_WRITE);
+	error = vn_lock(vp, LK_EXCLUSIVE | LK_RETRY, p);
+	if (error)
+		goto out;
+	VATTR_NULL(&vattr);
+	vattr.va_atime = ts[0];
+	vattr.va_mtime = ts[1];
+	if (nullflag)
+		vattr.va_vaflags |= VA_UTIMES_NULL;
+	error = VOP_SETATTR(vp, &vattr, p->p_ucred, p);
+	VOP_UNLOCK(vp, 0, p);
+out:
+	return error;
+}
+
 /*
  * Set the access and modification times of a file.
  */
@@ -1974,33 +2099,47 @@ utimes(p, uap, retval)
 	register struct utimes_args *uap;
 	register_t *retval;
 {
-	register struct vnode *vp;
-	struct timeval tv[2];
-	struct vattr vattr;
+	struct timespec ts[2];
+	struct timeval *usrtvp;
 	int error;
 	struct nameidata nd;
 
-	VATTR_NULL(&vattr);
-	if (uap->tptr == NULL) {
-		microtime(&tv[0]);
-		tv[1] = tv[0];
-		vattr.va_vaflags |= VA_UTIMES_NULL;
-	} else if (error = copyin((caddr_t)uap->tptr, (caddr_t)tv,
-	    sizeof (tv)))
-  		return (error);
-	NDINIT(&nd, LOOKUP, FOLLOW, UIO_USERSPACE, uap->path, p);
-	if (error = namei(&nd))
+	usrtvp = uap->tptr;
+	if ((error = getutimes(usrtvp, ts)) != 0)
 		return (error);
-	vp = nd.ni_vp;
-	VOP_LEASE(vp, p, p->p_ucred, LEASE_WRITE);
-	vn_lock(vp, LK_EXCLUSIVE | LK_RETRY, p);
-	vattr.va_atime.tv_sec = tv[0].tv_sec;
-	vattr.va_atime.tv_nsec = tv[0].tv_usec * 1000;
-	vattr.va_mtime.tv_sec = tv[1].tv_sec;
-	vattr.va_mtime.tv_nsec = tv[1].tv_usec * 1000;
-	error = VOP_SETATTR(vp, &vattr, p->p_ucred, p);
-	vput(vp);
+	NDINIT(&nd, LOOKUP, FOLLOW, UIO_USERSPACE, uap->path, p);
+	if ((error = namei(&nd)) != 0)
+		return (error);
+	error = setutimes(p, nd.ni_vp, ts, usrtvp == NULL);
+	vrele(nd.ni_vp);
 	return (error);
+}
+
+/*
+ * Set the access and modification times of a file.
+ */
+struct futimes_args {
+	int	fd;
+	struct	timeval *tptr;
+};
+/* ARGSUSED */
+int
+futimes(p, uap, retval)
+	struct proc *p;
+	register struct futimes_args *uap;
+	register_t *retval;
+{
+	struct timespec ts[2];
+	struct file *fp;
+	struct timeval *usrtvp;
+	int error;
+
+	usrtvp = uap->tptr;
+	if ((error = getutimes(usrtvp, ts)) != 0)
+		return (error);
+	if ((error = getvnode(p, uap->fd, &fp)) != 0)
+		return (error);
+	return setutimes(p, (struct vnode *)fp->f_data, ts, usrtvp == NULL);
 }
 
 /*
@@ -2292,6 +2431,7 @@ rename(p, uap, retval)
 
 	mntrename = FALSE;
 
+	bwillwrite();
 	NDINIT(&fromnd, DELETE, WANTPARENT | SAVESTART, UIO_USERSPACE,
 	    uap->from, p);
 	if (error = namei(&fromnd))
@@ -2300,7 +2440,12 @@ rename(p, uap, retval)
 
 	NDINIT(&tond, RENAME, LOCKPARENT | LOCKLEAF | NOCACHE | SAVESTART,
 	    UIO_USERSPACE, uap->to, p);
+	if (fromnd.ni_vp->v_type == VDIR)
+		tond.ni_cnd.cn_flags |= WILLBEDIR;
 	if (error = namei(&tond)) {
+		/* Translate error code for rename("dir1", "dir2/."). */
+		if (error == EISDIR && fvp->v_type == VDIR)
+			error = EINVAL;
 		VOP_ABORTOP(fromnd.ni_dvp, &fromnd.ni_cnd);
 		vrele(fromnd.ni_dvp);
 		vrele(fvp);
@@ -2322,37 +2467,34 @@ rename(p, uap, retval)
 		error = EINVAL;
 	/*
 	 * If source is the same as the destination (that is the
-	 * same inode number) then there is nothing to do...
-	 * EXCEPT if the
-	 * underlyning file system supports case insensitivity and is case preserving. Then
-	 * a special case is made, i.e. foo -> Foo.
+	 * same inode number) then there is nothing to do...  EXCEPT if the
+	 * underlying file system supports case insensitivity and is case
+	 * preserving. Then a special case is made, i.e. foo -> Foo.
 	 *
-	 * Only file systems that support the pathconf selectors _PC_CASE_SENSITIVE and
-	 * _PC_CASE_PRESERVING can have this exception, and then they would need to
-	 * handle the special case of getting the same vnode as target and source.
-	 * NOTE: Then the target is unlocked going into VOP_RENAME, so not to cause
-	 * locking problems. There is a single reference on tvp.
+	 * Only file systems that support pathconf selectors _PC_CASE_SENSITIVE
+	 * and _PC_CASE_PRESERVING can have this exception, and they need to
+	 * handle the special case of getting the same vnode as target and
+	 * source.  NOTE: Then the target is unlocked going into VOP_RENAME,
+	 * so not to cause locking problems. There is a single reference on tvp.
+	 *
+	 * NOTE - that fvp == tvp also occurs if they are hard linked - NOTE
+	 * that correct behaviour then is just to remove the source (link)
 	 */
-	if (fvp == tvp) {
-		error = -1;
-		/* 
-		 * Check to see if just changing case, if: 
-		 *  - file system is case insensitive
-		 *  - and also case preserving
-		 *  _ same parent directories (so changing case by different links is not supported)
-		 *  For instance: mv a/foo a/Foo
-		 */
-        if ((tond.ni_dvp == fromnd.ni_dvp) &&
-				(VOP_PATHCONF(tdvp, _PC_CASE_SENSITIVE, &casesense) == 0) &&
-                (VOP_PATHCONF(tdvp, _PC_CASE_PRESERVING, &casepres) == 0) &&
-                (casesense == 0) && 
-                (casepres == 1)) {
-            /* Since the target is locked...unlock it and lose a ref */
-            vput(tvp);
-		    error = 0;
-        }
+	if (fvp == tvp && fromnd.ni_dvp == tdvp) {
+		if (fromnd.ni_cnd.cn_namelen == tond.ni_cnd.cn_namelen &&
+	       	    !bcmp(fromnd.ni_cnd.cn_nameptr, tond.ni_cnd.cn_nameptr,
+			  fromnd.ni_cnd.cn_namelen)) {
+			error = -1;	/* Default "unix" behavior */
+		} else {	/* probe for file system specifics */
+			if (VOP_PATHCONF(tdvp, _PC_CASE_SENSITIVE, &casesense))
+				casesense = 1;
+			if (VOP_PATHCONF(tdvp, _PC_CASE_PRESERVING, &casepres))
+				casepres = 1;
+			if (!casesense && casepres)
+				vput(tvp);	/* Unlock target and drop ref */
+		}
 	}
-	
+
 	/*
 	 * Allow the renaming of mount points.
 	 * - target must not exist
@@ -2360,7 +2502,8 @@ rename(p, uap, retval)
 	 * - union mounts cannot be renamed
 	 * - "/" cannot be renamed
 	 */
-	if ((fvp->v_flag & VROOT)  &&
+	if (!error &&
+	    (fvp->v_flag & VROOT)  &&
 	    (fvp->v_type == VDIR) &&
 	    (tvp == NULL)  &&
 	    (fvp->v_mountedhere == NULL)  &&
@@ -2475,7 +2618,9 @@ mkdir(p, uap, retval)
 	int error;
 	struct nameidata nd;
 
+	bwillwrite();
 	NDINIT(&nd, CREATE, LOCKPARENT, UIO_USERSPACE, uap->path, p);
+	nd.ni_cnd.cn_flags |= WILLBEDIR;
 	if (error = namei(&nd))
 		return (error);
 	vp = nd.ni_vp;
@@ -2515,6 +2660,7 @@ rmdir(p, uap, retval)
 	int error;
 	struct nameidata nd;
 
+	bwillwrite();
 	NDINIT(&nd, DELETE, LOCKPARENT | LOCKLEAF, UIO_USERSPACE,
 	    uap->path, p);
 	if (error = namei(&nd))
@@ -2897,10 +3043,15 @@ getvnode(p, fd, fpp)
 
 /*
  *  HFS/HFS PlUS SPECIFIC SYSTEM CALLS
- *  The following 10 system calls are designed to support features
+ *  The following system calls are designed to support features
  *  which are specific to the HFS & HFS Plus volume formats
  */
 
+#ifdef __APPLE_API_OBSOLETE
+
+/************************************************/
+/* *** Following calls will be deleted soon *** */
+/************************************************/
 
 /*
  * Make a complex file.  A complex file is one with multiple forks (data streams)
@@ -2916,7 +3067,6 @@ mkcomplex(p,uap,retval)
 	struct proc *p;
         register struct mkcomplex_args *uap;
         register_t *retval;
-			
 {
 	struct vnode *vp;
         struct vattr vattr;
@@ -2952,8 +3102,6 @@ mkcomplex(p,uap,retval)
 
 } /* end of mkcomplex system call */
 
-
-
 /*
  * Extended stat call which returns volumeid and vnodeid as well as other info
  */
@@ -2973,8 +3121,6 @@ statv(p,uap,retval)
 
 } /* end of statv system call */
 
-
-
 /*
 * Extended lstat call which returns volumeid and vnodeid as well as other info
 */
@@ -2992,8 +3138,6 @@ lstatv(p,uap,retval)
 {
        return (EOPNOTSUPP);	/*  We'll just return an error for now */
 } /* end of lstatv system call */
-
-
 
 /*
 * Extended fstat call which returns volumeid and vnodeid as well as other info
@@ -3013,6 +3157,12 @@ fstatv(p,uap,retval)
        return (EOPNOTSUPP);	/*  We'll just return an error for now */
 } /* end of fstatv system call */
 
+
+/************************************************/
+/* *** Preceding calls will be deleted soon *** */
+/************************************************/
+
+#endif /* __APPLE_API_OBSOLETE */
 
 
 /*
@@ -3328,6 +3478,12 @@ out2:
 
 } /* end of exchangedata system call */
 
+#ifdef __APPLE_API_OBSOLETE
+
+/************************************************/
+/* *** Following calls will be deleted soon *** */
+/************************************************/
+
 /*
 * Check users access to a file 
 */
@@ -3406,6 +3562,13 @@ checkuseraccess (p,uap,retval)
 	return (0); 
 
 } /* end of checkuseraccess system call */
+
+/************************************************/
+/* *** Preceding calls will be deleted soon *** */
+/************************************************/
+
+#endif /* __APPLE_API_OBSOLETE */
+
 
 
 struct searchfs_args {

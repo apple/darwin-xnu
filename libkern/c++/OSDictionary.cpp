@@ -164,8 +164,8 @@ bool OSDictionary::initWithDictionary(const OSDictionary *dict,
     count = dict->count;
     bcopy(dict->dictionary, dictionary, count * sizeof(dictEntry));
     for (unsigned int i = 0; i < count; i++) {
-        dictionary[i].key->retain();
-        dictionary[i].value->retain();
+        dictionary[i].key->taggedRetain(OSTypeID(OSCollection));
+        dictionary[i].value->taggedRetain(OSTypeID(OSCollection));
     }
 
     return true;
@@ -287,8 +287,8 @@ void OSDictionary::flushCollection()
     haveUpdated();
 
     for (unsigned int i = 0; i < count; i++) {
-        dictionary[i].key->release();
-        dictionary[i].value->release();
+        dictionary[i].key->taggedRelease(OSTypeID(OSCollection));
+        dictionary[i].value->taggedRelease(OSTypeID(OSCollection));
     }
     count = 0;
 }
@@ -304,12 +304,12 @@ setObject(const OSSymbol *aKey, const OSMetaClassBase *anObject)
         if (aKey == dictionary[i].key) {
             const OSMetaClassBase *oldObject = dictionary[i].value;
 
-            anObject->retain();
+            anObject->taggedRetain(OSTypeID(OSCollection));
             dictionary[i].value = anObject;
 
             haveUpdated();
 
-            oldObject->release();
+            oldObject->taggedRelease(OSTypeID(OSCollection));
             return true;
         }
     }
@@ -318,8 +318,8 @@ setObject(const OSSymbol *aKey, const OSMetaClassBase *anObject)
     if (count >= capacity && count >= ensureCapacity(count+1))
         return 0;
 
-    aKey->retain();
-    anObject->retain();
+    aKey->taggedRetain(OSTypeID(OSCollection));
+    anObject->taggedRetain(OSTypeID(OSCollection));
     dictionary[count].key = aKey;
     dictionary[count].value = anObject;
     count++;
@@ -345,30 +345,30 @@ void OSDictionary::removeObject(const OSSymbol *aKey)
             for (; i < count; i++)
                 dictionary[i] = dictionary[i+1];
 
-            oldEntry.key->release();
-            oldEntry.value->release();
+            oldEntry.key->taggedRelease(OSTypeID(OSCollection));
+            oldEntry.value->taggedRelease(OSTypeID(OSCollection));
             return;
         }
 }
 
 
 // Returns true on success, false on an error condition.
-bool OSDictionary::merge(const OSDictionary *aDictionary)
+bool OSDictionary::merge(const OSDictionary *srcDict)
 {
     const OSSymbol * sym;
     OSCollectionIterator * iter;
 
-    if ( !OSDynamicCast(OSDictionary, (OSDictionary *) aDictionary) )
+    if ( !OSDynamicCast(OSDictionary, srcDict) )
         return false;
-    
-    iter = OSCollectionIterator::withCollection((OSDictionary *)aDictionary);
+
+    iter = OSCollectionIterator::withCollection((OSDictionary *)srcDict);
     if ( !iter )
         return false;
 
     while ( (sym = (const OSSymbol *)iter->getNextObject()) ) {
         const OSMetaClassBase * obj;
 
-        obj = aDictionary->getObject(sym);
+        obj = srcDict->getObject(sym);
         if ( !setObject(sym, obj) ) {
             iter->release();
             return false;
@@ -435,7 +435,7 @@ void OSDictionary::removeObject(const char *aKey)
     OBJECT_WRAP_3(removeObject, OSSymbol::withCString(aKey))
 
 bool
-OSDictionary::isEqualTo(const OSDictionary *aDictionary, const OSCollection *keys) const
+OSDictionary::isEqualTo(const OSDictionary *srcDict, const OSCollection *keys) const
 {
     OSCollectionIterator * iter;
     unsigned int keysCount;
@@ -444,11 +444,11 @@ OSDictionary::isEqualTo(const OSDictionary *aDictionary, const OSCollection *key
     OSString * aKey;
     bool ret;
 
-    if ( this == aDictionary )
+    if ( this == srcDict )
         return true;
 
     keysCount = keys->getCount();
-    if ( (count < keysCount) || (aDictionary->getCount() < keysCount) )
+    if ( (count < keysCount) || (srcDict->getCount() < keysCount) )
         return false;
 
     iter = OSCollectionIterator::withCollection(keys);
@@ -458,7 +458,7 @@ OSDictionary::isEqualTo(const OSDictionary *aDictionary, const OSCollection *key
     ret = true;
     while ( (aKey = OSDynamicCast(OSString, iter->getNextObject())) ) {
         obj1 = getObject(aKey);
-        obj2 = aDictionary->getObject(aKey);
+        obj2 = srcDict->getObject(aKey);
         if ( !obj1 || !obj2 ) {
             ret = false;
             break;
@@ -474,19 +474,19 @@ OSDictionary::isEqualTo(const OSDictionary *aDictionary, const OSCollection *key
     return ret;
 }
 
-bool OSDictionary::isEqualTo(const OSDictionary *aDictionary) const
+bool OSDictionary::isEqualTo(const OSDictionary *srcDict) const
 {
     unsigned int i;
     const OSMetaClassBase * obj;
     
-    if ( this == aDictionary )
+    if ( this == srcDict )
         return true;
 
-    if ( count != aDictionary->getCount() )
+    if ( count != srcDict->getCount() )
         return false;
 
     for ( i = 0; i < count; i++ ) {
-        obj = aDictionary->getObject(dictionary[i].key);
+        obj = srcDict->getObject(dictionary[i].key);
         if ( !obj )
             return false;
 

@@ -71,7 +71,6 @@
 #include <limits.h>
 */
 #include <sys/types.h>
-#include <stddef.h>
 #include <machine/limits.h>
 
 typedef int BOOL;

@@ -29,10 +29,21 @@
 #include <sys/protosw.h>
 #include <sys/domain.h>
 #include <sys/mbuf.h>
+#include <sys/sys_domain.h>
 
 
-extern struct protosw eventsw;
+/* domain init function */
+void systemdomain_init();
+
 
 struct domain systemdomain =
-    { PF_SYSTEM, "system", 0, 0, 0,
-      &eventsw};
+    { PF_SYSTEM, "system", systemdomain_init, 0, 0, 0};
+
+
+void systemdomain_init()
+{
+    /* add system domain built in protocol initializers here */
+
+    kern_event_init();
+    kern_control_init();
+}

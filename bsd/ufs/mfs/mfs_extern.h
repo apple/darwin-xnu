@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2002 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -54,7 +54,12 @@
  *
  *	@(#)mfs_extern.h	8.2 (Berkeley) 6/16/94
  */
+#ifndef __UFS_MFS_MFS_EXTERN_H__
+#define __UFS_MFS_MFS_EXTERN_H__
 
+#include <sys/appleapiopts.h>
+
+#ifdef __APPLE_API_OBSOLETE
 struct buf;
 struct mount;
 struct nameidata;
@@ -80,3 +85,5 @@ int	mfs_start __P((struct mount *mp, int flags, struct proc *p));
 int	mfs_statfs __P((struct mount *mp, struct statfs *sbp, struct proc *p));
 int	mfs_strategy __P((struct vop_strategy_args *)); /* XXX */
 __END_DECLS
+#endif /* __APPLE_API_OBSOLETE */
+#endif /* __UFS_MFS_MFS_EXTERN_H__ */

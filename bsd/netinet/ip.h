@@ -52,10 +52,12 @@
  * SUCH DAMAGE.
  *
  *	@(#)ip.h	8.2 (Berkeley) 6/1/94
+ * $FreeBSD: src/sys/netinet/ip.h,v 1.17 1999/12/22 19:13:20 shin Exp $
  */
 
 #ifndef _NETINET_IP_H_
 #define _NETINET_IP_H_
+#include <sys/appleapiopts.h>
 
 /*
  * Definitions for internet protocol version 4.
@@ -109,11 +111,10 @@ struct ip {
 #define	IPTOS_THROUGHPUT	0x08
 #define	IPTOS_RELIABILITY	0x04
 #define	IPTOS_MINCOST		0x02
-#if 1 /* ALTQ_ECN */
 /* ECN bits proposed by Sally Floyd */
-#define IPTOS_CE		0x01	/* congestion experienced */
-#define IPTOS_ECT		0x02	/* ECN-capable transport */
-#endif
+#define	IPTOS_CE		0x01	/* congestion experienced */
+#define	IPTOS_ECT		0x02	/* ECN-capable transport */
+
 
 /*
  * Definitions for IP precedence (also in ip_tos) (hopefully unused)

@@ -52,10 +52,12 @@
  * SUCH DAMAGE.
  *
  *	@(#)tcp_fsm.h	8.1 (Berkeley) 6/10/93
+ * $FreeBSD: src/sys/netinet/tcp_fsm.h,v 1.14 1999/11/07 04:18:30 jlemon Exp $
  */
 
 #ifndef _NETINET_TCP_FSM_H_
 #define _NETINET_TCP_FSM_H_
+#include <sys/appleapiopts.h>
 
 /*
  * TCP FSM state definitions.
@@ -94,10 +96,11 @@
 #define	TCP6S_TIME_WAIT		TCPS_TIME_WAIT
 
 #define	TCPS_HAVERCVDSYN(s)	((s) >= TCPS_SYN_RECEIVED)
-#define TCPS_HAVEESTABLISHED(s)	((s) >= TCPS_ESTABLISHED)
+#define	TCPS_HAVEESTABLISHED(s)	((s) >= TCPS_ESTABLISHED)
 #define	TCPS_HAVERCVDFIN(s)	((s) >= TCPS_TIME_WAIT)
 
-#ifdef TCPOUTFLAGS
+#ifdef __APPLE_API_UNSTABLE
+#ifdef	TCPOUTFLAGS
 /*
  * Flags used when sending segments in tcp_output.
  * Basic flags (TH_RST,TH_ACK,TH_SYN,TH_FIN) are totally
@@ -118,9 +121,12 @@ static u_char	tcp_outflags[TCP_NSTATES] = {
 	TH_ACK,			/* 10, TIME_WAIT */
 };	
 #endif
+#endif /* __APPLE_API_UNSTABLE */
 
 #if KPROF
+#ifdef __APPLE_API_PRIVATE
 int	tcp_acounts[TCP_NSTATES][PRU_NREQ];
+#endif /* __APPLE_API_PRIVATE */
 #endif
 
 #ifdef	TCPSTATES

@@ -1,4 +1,5 @@
-/*	$KAME: in6_rmx.c,v 1.6 2000/03/25 07:23:45 sumikawa Exp $	*/
+/*	$FreeBSD: src/sys/netinet6/in6_rmx.c,v 1.1.2.2 2001/07/03 11:01:52 ume Exp $	*/
+/*	$KAME: in6_rmx.c,v 1.10 2001/05/24 05:44:58 itojun Exp $	*/
 
 /*
  * Copyright (C) 1995, 1996, 1997, and 1998 WIDE Project.
@@ -85,9 +86,7 @@
 #include <net/if.h>
 #include <net/route.h>
 #include <netinet/in.h>
-#if defined(__APPLE__)
 #include <netinet/ip_var.h>
-#endif
 #include <netinet/in_var.h>
 
 #include <netinet/ip6.h>
@@ -95,26 +94,14 @@
 
 #include <netinet/icmp6.h>
 
-#if !defined(__APPLE__)
-#include <netinet6/tcp6.h>
-#include <netinet6/tcp6_seq.h>
-#include <netinet6/tcp6_timer.h>
-#include <netinet6/tcp6_var.h>
-#else
 #include <netinet/tcp.h>
 #include <netinet/tcp_seq.h>
 #include <netinet/tcp_timer.h>
 #include <netinet/tcp_var.h>
-#endif
-
-#if !defined(__APPLE__)
-#define tcp_sendspace tcp6_sendspace
-#define tcp_recvspace tcp6_recvspace
-#define time_second time.tv_sec
-#define tvtohz hzto
-#endif
 
 extern int	in6_inithead __P((void **head, int off));
+static void	in6_rtqtimo __P((void *rock));
+static void in6_mtutimo __P((void *rock));
 
 #define RTPRF_OURS		RTF_PROTO3	/* set on routes we manage */
 
@@ -161,23 +148,6 @@ in6_addroute(void *v_arg, void *n_arg, struct radix_node_head *head,
 		}
 	}
 
-	/*
-	 * We also specify a send and receive pipe size for every
-	 * route added, to help TCP a bit.  TCP doesn't actually
-	 * want a true pipe size, which would be prohibitive in memory
-	 * costs and is hard to compute anyway; it simply uses these
-	 * values to size its buffers.  So, we fill them in with the
-	 * same values that TCP would have used anyway, and allow the
-	 * installing program or the link layer to override these values
-	 * as it sees fit.  This will hopefully allow TCP more
-	 * opportunities to save its ssthresh value.
-	 */
-	if (!rt->rt_rmx.rmx_sendpipe && !(rt->rt_rmx.rmx_locks & RTV_SPIPE))
-		rt->rt_rmx.rmx_sendpipe = tcp_sendspace;
-
-	if (!rt->rt_rmx.rmx_recvpipe && !(rt->rt_rmx.rmx_locks & RTV_RPIPE))
-		rt->rt_rmx.rmx_recvpipe = tcp_recvspace;
-
 	if (!rt->rt_rmx.rmx_mtu && !(rt->rt_rmx.rmx_locks & RTV_MTU)
 	    && rt->rt_ifp)
 		rt->rt_rmx.rmx_mtu = rt->rt_ifp->if_mtu;
@@ -204,7 +174,7 @@ in6_addroute(void *v_arg, void *n_arg, struct radix_node_head *head,
 				ret = rn_addroute(v_arg, n_arg, head,
 					treenodes);
 			}
-			RTFREE(rt2);
+			rtfree(rt2);
 		}
 	} else if (ret == NULL && rt->rt_flags & RTF_CLONING) {
 		struct rtentry *rt2;
@@ -230,7 +200,7 @@ in6_addroute(void *v_arg, void *n_arg, struct radix_node_head *head,
 			 && rt2->rt_ifp == rt->rt_ifp) {
 				ret = rt2->rt_nodes;
 			}
-			RTFREE(rt2);
+			rtfree(rt2);
 		}
 	}
 	return ret;
@@ -256,15 +226,23 @@ in6_matroute(void *v_arg, struct radix_node_head *head)
 	return rn;
 }
 
+SYSCTL_DECL(_net_inet6_ip6);
+
 static int rtq_reallyold = 60*60;
 	/* one hour is ``really old'' */
-				   
+SYSCTL_INT(_net_inet6_ip6, IPV6CTL_RTEXPIRE, rtexpire,
+	CTLFLAG_RW, &rtq_reallyold , 0, "");
+				
 static int rtq_minreallyold = 10;
 	/* never automatically crank down to less */
-				   
+SYSCTL_INT(_net_inet6_ip6, IPV6CTL_RTMINEXPIRE, rtminexpire,
+	CTLFLAG_RW, &rtq_minreallyold , 0, "");
+				
 static int rtq_toomany = 128;
 	/* 128 cached routes is ``too many'' */
-				   
+SYSCTL_INT(_net_inet6_ip6, IPV6CTL_RTMAXCACHE, rtmaxcache,
+	CTLFLAG_RW, &rtq_toomany , 0, "");
+				
 
 /*
  * On last reference drop, mark the route as belong to us so that it can be
@@ -416,7 +394,7 @@ in6_rtqtimo(void *rock)
 	}
 
 	atv.tv_usec = 0;
-	atv.tv_sec = arg.nextstop;
+	atv.tv_sec = arg.nextstop - time_second;
 	timeout(in6_rtqtimo_funneled, rock, tvtohz(&atv));
 }
 
@@ -482,9 +460,12 @@ in6_mtutimo(void *rock)
 	atv.tv_usec = 0;
 	atv.tv_sec = arg.nextstop;
 	if (atv.tv_sec < time_second) {
-		printf("invalid mtu expiration time on routing table\n");
+#if DIAGNOSTIC
+		log(LOG_DEBUG, "IPv6: invalid mtu expiration time on routing table\n");
+#endif
 		arg.nextstop = time_second + 30;	/*last resort*/
 	}
+	atv.tv_sec -= time_second;
 	timeout(in6_mtutimo_funneled, rock, tvtohz(&atv));
 }
 

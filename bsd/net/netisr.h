@@ -54,6 +54,7 @@
  *
  *	@(#)netisr.h	8.1 (Berkeley) 6/10/93
  */
+#include <sys/appleapiopts.h>
 
 /*
  * The networking code runs as a seperate kernel task.
@@ -77,6 +78,7 @@
 
 #define NETISR_SET(a,b)
 
+#ifdef __APPLE_API_PRIVATE
 #if	defined(KERNEL) && !defined(LOCORE)
 extern volatile int	netisr;				/* scheduling bits for network */
 void wakeup(void *);
@@ -86,4 +88,4 @@ extern int     dlil_input_thread_wakeup;
 #endif	/* defined(KERNEL) && !defined(LOCORE) */
 
 #define	schednetisr(anisr)	{ netisr |= 1<<(anisr); setsoftnet(); }
-
+#endif __APPLE_API_PRIVATE

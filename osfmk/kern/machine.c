@@ -119,6 +119,7 @@ cpu_up(
 	int		cpu)
 {
 	processor_t				processor = cpu_to_processor(cpu);
+	processor_set_t			pset = &default_pset;
 	struct machine_slot		*ms;
 	spl_t					s;
 	
@@ -126,7 +127,7 @@ cpu_up(
 	 * Just twiddle our thumbs; we've got nothing better to do
 	 * yet, anyway.
 	 */
-	while (!simple_lock_try(&default_pset.processors_lock))
+	while (!simple_lock_try(&pset->processors_lock))
 		continue;
 
 	s = splsched();
@@ -135,12 +136,15 @@ cpu_up(
 	ms = &machine_slot[cpu];
 	ms->running = TRUE;
 	machine_info.avail_cpus++;
-	pset_add_processor(&default_pset, processor);
+	pset_add_processor(pset, processor);
+	simple_lock(&pset->sched_lock);
+	enqueue_tail(&pset->active_queue, (queue_entry_t)processor);
 	processor->state = PROCESSOR_RUNNING;
+	simple_unlock(&pset->sched_lock);
 	processor_unlock(processor);
 	splx(s);
 
-	simple_unlock(&default_pset.processors_lock);
+	simple_unlock(&pset->processors_lock);
 }
 
 /*
@@ -207,81 +211,75 @@ processor_request_action(
 	processor_t			processor,
 	processor_set_t		new_pset)
 {
-	processor_set_t pset, old_next_pset;
+	processor_set_t		pset, old_pset;
 
 	/*
 	 * Processor must be in a processor set.  Must lock its idle lock to
 	 * get at processor state.
 	 */
 	pset = processor->processor_set;
-	simple_lock(&pset->idle_lock);
+	simple_lock(&pset->sched_lock);
 
 	/*
 	 * If the processor is dispatching, let it finish - it will set its
 	 * state to running very soon.
 	 */
 	while (*(volatile int *)&processor->state == PROCESSOR_DISPATCHING) {
-		simple_unlock(&pset->idle_lock);
-		simple_lock(&pset->idle_lock);
+		simple_unlock(&pset->sched_lock);
+
+		simple_lock(&pset->sched_lock);
 	}
+
+	assert(	processor->state == PROCESSOR_IDLE		||
+			processor->state == PROCESSOR_RUNNING	||
+			processor->state == PROCESSOR_ASSIGN	);
 
 	/*
 	 * Now lock the action queue and do the dirty work.
 	 */
 	simple_lock(&processor_action_lock);
 
-	switch (processor->state) {
-
-	case PROCESSOR_IDLE:
-		/*
-		 * Remove from idle queue.
-		 */
-		queue_remove(&pset->idle_queue, processor, 
-						processor_t, processor_queue);
+	if (processor->state == PROCESSOR_IDLE) {
+		remqueue(&pset->idle_queue, (queue_entry_t)processor);
 		pset->idle_count--;
+	}
+	else
+	if (processor->state == PROCESSOR_RUNNING)
+		remqueue(&pset->active_queue, (queue_entry_t)processor);
 
-		/* fall through ... */
-	case PROCESSOR_RUNNING:
-		/*
-		 * Put it on the action queue.
-		 */
-		queue_enter(&processor_action_queue, processor, 
-						processor_t,processor_queue);
+	if (processor->state != PROCESSOR_ASSIGN)
+		enqueue_tail(&processor_action_queue, (queue_entry_t)processor);
 
-		/* Fall through ... */
-	case PROCESSOR_ASSIGN:
-		/*
-		 * And ask the action_thread to do the work.
-		 */
-
-		if (new_pset == PROCESSOR_SET_NULL) {
-			processor->state = PROCESSOR_SHUTDOWN;
-			old_next_pset = PROCESSOR_SET_NULL;
-		} else {
-			processor->state = PROCESSOR_ASSIGN;
-			old_next_pset = processor->processor_set_next;
-			processor->processor_set_next = new_pset;
-		}
-		break;
-
-	default:
-		printf("state: %d\n", processor->state);
-		panic("processor_request_action: bad state");
+	/*
+	 * And ask the action_thread to do the work.
+	 */
+	if (new_pset != PROCESSOR_SET_NULL) {
+		processor->state = PROCESSOR_ASSIGN;
+		old_pset = processor->processor_set_next;
+		processor->processor_set_next = new_pset;
+	}
+	else {
+		processor->state = PROCESSOR_SHUTDOWN;
+		old_pset = PROCESSOR_SET_NULL;
 	}
 
-	if (processor_action_active == FALSE) {
-		processor_action_active = TRUE;
+	simple_unlock(&pset->sched_lock);
+
+	if (processor_action_active) {
 		simple_unlock(&processor_action_lock);
-		simple_unlock(&pset->idle_lock);
-		processor_unlock(processor);
-		thread_call_enter(processor_action_call);
-		processor_lock(processor);
-	} else {
-		simple_unlock(&processor_action_lock);
-    	simple_unlock(&pset->idle_lock);
+
+		return (old_pset);
 	}
 
-	return (old_next_pset);
+	processor_action_active = TRUE;
+	simple_unlock(&processor_action_lock);
+
+	processor_unlock(processor);
+
+	thread_call_enter(processor_action_call);
+	processor_lock(processor);
+
+	return (old_pset);
 }
 
 kern_return_t
@@ -308,8 +306,8 @@ processor_shutdown(
 
 	s = splsched();
 	processor_lock(processor);
-	if ((processor->state == PROCESSOR_OFF_LINE) ||
-		(processor->state == PROCESSOR_SHUTDOWN)) {
+	if (	processor->state == PROCESSOR_OFF_LINE	||
+			processor->state == PROCESSOR_SHUTDOWN	) {
 		/*
 		 * Already shutdown or being shutdown -- nothing to do.
 		 */
@@ -319,14 +317,14 @@ processor_shutdown(
 		return (KERN_SUCCESS);
 	}
 
-	(void) processor_request_action(processor, PROCESSOR_SET_NULL);
+	processor_request_action(processor, PROCESSOR_SET_NULL);
 
 	assert_wait((event_t)processor, THREAD_UNINT);
 
     processor_unlock(processor);
 	splx(s);
 
-	thread_block((void (*)(void)) 0);
+	thread_block(THREAD_CONTINUE_NULL);
 
 	return (KERN_SUCCESS);
 }
@@ -346,9 +344,7 @@ _processor_action(
 	simple_lock(&processor_action_lock);
 
 	while (!queue_empty(&processor_action_queue)) {
-		processor = (processor_t) queue_first(&processor_action_queue);
-		queue_remove(&processor_action_queue, processor, 
-						processor_t, processor_queue);
+		processor = (processor_t)dequeue_head(&processor_action_queue);
 		simple_unlock(&processor_action_lock);
 		splx(s);
 
@@ -392,7 +388,7 @@ processor_doaction(
 	 *	Get onto the processor to shutdown
 	 */
 	thread_bind(self, processor);
-	thread_block((void (*)(void)) 0);
+	thread_block(THREAD_CONTINUE_NULL);
 
 	pset = processor->processor_set;
 	simple_lock(&pset->processors_lock);
@@ -414,10 +410,9 @@ processor_doaction(
 
 		s = splsched();
 		thread_lock(thread);
-		thread->state |= TH_RUN;
-		_mk_sp_thread_unblock(thread);
-		(void)rem_runq(thread);
 		machine_wake_thread = thread;
+		thread_go_locked(thread, THREAD_AWAKENED);
+		(void)rem_runq(thread);
 		thread_unlock(thread);
 		splx(s);
 
@@ -446,6 +441,8 @@ processor_doaction(
 	self->continuation = 0;
 	old_thread = switch_to_shutdown_context(self,
 									processor_doshutdown, processor);
+	if (processor != current_processor())
+		timer_call_shutdown(processor);
 	thread_dispatch(old_thread);
 	thread_wakeup((event_t)processor);
 	splx(s);
@@ -470,8 +467,7 @@ processor_doshutdown(
 	 *	OK, now exit this cpu.
 	 */
 	PMAP_DEACTIVATE_KERNEL(cpu);
-	cpu_data[cpu].active_thread = THREAD_NULL;
-	active_kloaded[cpu] = THR_ACT_NULL;
+	thread_machine_set_current(processor->idle_thread);
 	cpu_down(cpu);
 	cpu_sleep();
 	panic("zombie processor");

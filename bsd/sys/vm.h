@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2002 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -62,6 +62,8 @@
 #ifndef _SYS_VM_H
 #define _SYS_VM_H
 
+#include <sys/appleapiopts.h>
+
 /* Machine specific config stuff */
 #if	defined(KERNEL) && !defined(MACH_USER_API)	
 #include <sys/vmmeter.h>
@@ -69,6 +71,7 @@
 #include <mach/vm_param.h>
 #endif
 
+#ifdef __APPLE_API_OBSOLETE
 /*
  * Shareable process virtual address space.
  * May eventually be merged with vm_map.
@@ -89,11 +92,20 @@ struct vmspace {
 	caddr_t vm_maxsaddr;	/* user VA at max stack growth */
 };
 
+#else /* __APPLE_API_OBSOLETE */
+/* just to keep kinfo_proc happy */
+struct vmspace {
+	int32_t	dummy[10];
+};
+#endif /* __APPLE_API_OBSOLETE */
+
 #ifdef KERNEL
 
+#ifdef __APPLE_API_PRIVATE
 #ifdef BSD_BUILD
 #include <kern/thread.h>
 #endif /* BSD_BUILD */
+#endif /* __APPLE_API_PRIVATE */
 
 struct proc *current_proc(void);
 

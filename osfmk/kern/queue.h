@@ -575,8 +575,12 @@ MACRO_END
 	     !queue_end((head), (queue_entry_t)(elt));		\
 	     (elt) = (type) queue_next(&(elt)->field))
 
+#include <sys/appleapiopts.h>
 
-#ifdef MACH_KERNEL_PRIVATE
+#ifdef	__APPLE_API_PRIVATE
+
+#ifdef	MACH_KERNEL_PRIVATE
+
 /*----------------------------------------------------------------*/
 /*
  *	Define macros for queues with locks.
@@ -613,6 +617,8 @@ MACRO_BEGIN						\
 	simple_unlock(&(q)->lock);			\
 MACRO_END
 
-#endif /* MACH_KERNEL_PRIVATE */
+#endif	/* MACH_KERNEL_PRIVATE */
+
+#endif	/* __APPLE_API_PRIVATE */
 
 #endif	/* _KERN_QUEUE_H_ */

@@ -19,5 +19,11 @@
  * 
  * @APPLE_LICENSE_HEADER_END@
  */
+#warning include <dev/ev_types.h> is going away use <IOKit/hidsystem/IOHIDTypes.h> instead
+ 
+#include <sys/appleapiopts.h>
+
+#ifdef __APPLE_API_OBSOLETE
 #include <IOKit/hidsystem/IOHIDTypes.h>
+#endif /* __APPLE_API_OBSOLETE */
 

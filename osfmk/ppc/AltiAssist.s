@@ -36,6 +36,8 @@
 #include <mach/machine/vm_param.h>
 #include <assym.s>
 
+#define kernAccess 31
+
 ;
 ;
 ;			General stuff what happens here:

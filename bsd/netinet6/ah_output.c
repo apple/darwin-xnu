@@ -1,4 +1,5 @@
-/*	$KAME: ah_output.c,v 1.17 2000/03/09 08:54:48 itojun Exp $	*/
+/*	$FreeBSD: src/sys/netinet6/ah_output.c,v 1.1.2.3 2001/07/03 11:01:49 ume Exp $	*/
+/*	$KAME: ah_output.c,v 1.30 2001/02/21 00:50:53 itojun Exp $	*/
 
 /*
  * Copyright (C) 1995, 1996, 1997, and 1998 WIDE Project.
@@ -34,9 +35,6 @@
  */
 
 #define _IP_VHL
-#if (defined(__FreeBSD__) && __FreeBSD__ >= 3) || defined(__NetBSD__)
-#include "opt_inet.h"
-#endif
 
 #include <sys/param.h>
 #include <sys/systm.h>
@@ -67,14 +65,21 @@
 #endif
 
 #include <netinet6/ipsec.h>
+#if INET6
+#include <netinet6/ipsec6.h>
+#endif
 #include <netinet6/ah.h>
+#if INET6
+#include <netinet6/ah6.h>
+#endif
 #include <netkey/key.h>
 #include <netkey/keydb.h>
-#include <netkey/key_debug.h>
 
 #include <net/net_osdep.h>
 
+#if INET
 static struct in_addr *ah4_finaldst __P((struct mbuf *));
+#endif
 
 /*
  * compute AH header size.
@@ -85,7 +90,7 @@ size_t
 ah_hdrsiz(isr)
 	struct ipsecrequest *isr;
 {
-	struct ah_algorithm *algo;
+	const struct ah_algorithm *algo;
 	size_t hdrsiz;
 
 	/* sanity check */
@@ -102,7 +107,7 @@ ah_hdrsiz(isr)
 		goto estimate;
 
 	/* we need transport mode AH. */
-	algo = &ah_algorithms[isr->sav->alg_auth];
+	algo = ah_algorithm_lookup(isr->sav->alg_auth);
 	if (!algo)
 		goto estimate;
 
@@ -129,6 +134,7 @@ ah_hdrsiz(isr)
 	return sizeof(struct newah) + 16;
 }
 
+#if INET
 /*
  * Modify the packet so that it includes the authentication data.
  * The mbuf passed must start with IPv4 header.
@@ -142,7 +148,7 @@ ah4_output(m, isr)
 	struct ipsecrequest *isr;
 {
 	struct secasvar *sav = isr->sav;
-	struct ah_algorithm *algo;
+	const struct ah_algorithm *algo;
 	u_int32_t spi;
 	u_char *ahdrpos;
 	u_char *ahsumpos = NULL;
@@ -169,7 +175,14 @@ ah4_output(m, isr)
 		return EINVAL;
 	}
 
-	algo = &ah_algorithms[sav->alg_auth];
+	algo = ah_algorithm_lookup(sav->alg_auth);
+	if (!algo) {
+		ipseclog((LOG_ERR, "ah4_output: unsupported algorithm: "
+		    "SPI=%u\n", (u_int32_t)ntohl(sav->spi)));
+		ipsecstat.out_inval++;
+		m_freem(m);
+		return EINVAL;
+	}
 	spi = sav->spi;
 
 	/*
@@ -292,10 +305,11 @@ ah4_output(m, isr)
 	 * calcurate the checksum, based on security association
 	 * and the algorithm specified.
 	 */
-	error = ah4_calccksum(m, (caddr_t)ahsumpos, algo, sav);
+	error = ah4_calccksum(m, (caddr_t)ahsumpos, plen, algo, sav);
 	if (error) {
 		ipseclog((LOG_ERR,
 		    "error after ah4_calccksum, called from ah4_output"));
+		m_freem(m);
 		m = NULL;
 		ipsecstat.out_inval++;
 		return error;
@@ -311,16 +325,19 @@ ah4_output(m, isr)
 
 	return 0;
 }
+#endif
 
 /* Calculate AH length */
 int
 ah_hdrlen(sav)
 	struct secasvar *sav;
 {
-	struct ah_algorithm *algo;
+	const struct ah_algorithm *algo;
 	int plen, ahlen;
 	
-	algo = &ah_algorithms[sav->alg_auth];
+	algo = ah_algorithm_lookup(sav->alg_auth);
+	if (!algo)
+		return 0;
 	if (sav->flags & SADB_X_EXT_OLD) {
 		/* RFC 1826 */
 		plen = ((*algo->sumsiz)(sav) + 3) & ~(4 - 1);	/*XXX pad to 8byte?*/
@@ -348,7 +365,7 @@ ah6_output(m, nexthdrp, md, isr)
 	struct mbuf *mprev;
 	struct mbuf *mah;
 	struct secasvar *sav = isr->sav;
-	struct ah_algorithm *algo;
+	const struct ah_algorithm *algo;
 	u_int32_t spi;
 	u_char *ahsumpos = NULL;
 	size_t plen;	/*AH payload size in bytes*/
@@ -411,7 +428,14 @@ ah6_output(m, nexthdrp, md, isr)
 		return EINVAL;
 	}
 
-	algo = &ah_algorithms[sav->alg_auth];
+	algo = ah_algorithm_lookup(sav->alg_auth);
+	if (!algo) {
+		ipseclog((LOG_ERR, "ah6_output: unsupported algorithm: "
+		    "SPI=%u\n", (u_int32_t)ntohl(sav->spi)));
+		ipsec6stat.out_inval++;
+		m_freem(m);
+		return EINVAL;
+	}
 	spi = sav->spi;
 
 	/*
@@ -444,7 +468,7 @@ ah6_output(m, nexthdrp, md, isr)
 				ipseclog((LOG_WARNING,
 				    "replay counter overflowed. %s\n",
 				    ipsec_logsastr(sav)));
-				ipsecstat.out_inval++;
+				ipsec6stat.out_inval++;
 				m_freem(m);
 				return EINVAL;
 			}
@@ -462,7 +486,7 @@ ah6_output(m, nexthdrp, md, isr)
 	 * calcurate the checksum, based on security association
 	 * and the algorithm specified.
 	 */
-	error = ah6_calccksum(m, (caddr_t)ahsumpos, algo, sav);
+	error = ah6_calccksum(m, (caddr_t)ahsumpos, plen, algo, sav);
 	if (error) {
 		ipsec6stat.out_inval++;
 		m_freem(m);
@@ -476,6 +500,7 @@ ah6_output(m, nexthdrp, md, isr)
 }
 #endif
 
+#if INET
 /*
  * Find the final destination if there is loose/strict source routing option.
  * Returns NULL if there's no source routing options.
@@ -522,6 +547,15 @@ ah4_finaldst(m)
 	q = (u_char *)(ip + 1);
 	i = 0;
 	while (i < optlen) {
+		if (i + IPOPT_OPTVAL >= optlen)
+			return NULL;
+		if (q[i + IPOPT_OPTVAL] == IPOPT_EOL ||
+		    q[i + IPOPT_OPTVAL] == IPOPT_NOP ||
+		    i + IPOPT_OLEN < optlen)
+			;
+		else
+			return NULL;
+
 		switch (q[i + IPOPT_OPTVAL]) {
 		case IPOPT_EOL:
 			i = optlen;	/* bye */
@@ -531,8 +565,8 @@ ah4_finaldst(m)
 			break;
 		case IPOPT_LSRR:
 		case IPOPT_SSRR:
-			if (q[i + IPOPT_OLEN] <= 0
-			 || optlen - i < q[i + IPOPT_OLEN]) {
+			if (q[i + IPOPT_OLEN] < 2 + sizeof(struct in_addr) ||
+			    optlen - i < q[i + IPOPT_OLEN]) {
 				ipseclog((LOG_ERR,
 				    "ip_finaldst: invalid IP option "
 				    "(code=%02x len=%02x)\n",
@@ -542,8 +576,8 @@ ah4_finaldst(m)
 			i += q[i + IPOPT_OLEN] - sizeof(struct in_addr);
 			return (struct in_addr *)(q + i);
 		default:
-			if (q[i + IPOPT_OLEN] <= 0
-			 || optlen - i < q[i + IPOPT_OLEN]) {
+			if (q[i + IPOPT_OLEN] < 2 ||
+			    optlen - i < q[i + IPOPT_OLEN]) {
 				ipseclog((LOG_ERR,
 				    "ip_finaldst: invalid IP option "
 				    "(code=%02x len=%02x)\n",
@@ -556,3 +590,4 @@ ah4_finaldst(m)
 	}
 	return NULL;
 }
+#endif

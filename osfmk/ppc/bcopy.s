@@ -24,10 +24,6 @@
 ;
 ;			Change this to use Altivec later on, and maybe floating point.
 ;
-;			NOTE: This file compiles and executes on both MacOX 8.x (Codewarrior)
-;			      and MacOX X.  The  "#if 0"s are treated as comments by CW so the
-;				  stuff between them is included by CW and excluded on MacOX X.
-;				  Same with the "#include"s.
 ;
 #include <ppc/asm.h>
 #include <ppc/proc_reg.h>
@@ -36,13 +32,8 @@
 #define noncache 20
 ;		Use CR5_gt to indicate that we need to turn data translation back on
 #define fixxlate 21
-#if 0
-noncache:	equ	20
-fixxlate:	equ	21
-#endif
-#if 0
-br0:		equ	0
-#endif
+;		Use CR5_eq to indicate that we need to invalidate bats
+#define killbats 22
 
 ;
 ; bcopy_nc(from, to, nbytes)
@@ -51,26 +42,76 @@ br0:		equ	0
 ; of cache instructions.
 ;
 
+			.align	5
+			.globl	EXT(bcopy_nc)
 
-
-#if 0
-			IF 0
-#endif
-ENTRY(bcopy_nc, TAG_NO_FRAME_USED)
-#if 0
-			ENDIF
-			export	xbcopy_nc[DS]
-			tc		xbcopy_nc[TC],xbcopy_nc[DS]
-			csect	xbcopy_nc[DS]
-			dc.l	.xbcopy_nc
-			dc.l	TOC[tc0]
-			export	.xbcopy_nc
-			csect	xbcopy_nc[PR]
-.xbcopy_nc:
-#endif
+LEXT(bcopy_nc)
 			
 			crset	noncache					; Set non-cached
 			b		bcpswap
+
+;	
+; void bcopy_physvir(from, to, nbytes)
+; Attempt to copy physically addressed memory with translation on if conditions are met.
+; Otherwise do a normal bcopy_phys.
+;
+; Rules are: neither source nor destination can cross a page. 
+; No accesses above the 2GB line (I/O or ROM).
+;
+; Interrupts must be disabled throughout the copy when this is called
+
+; To do this, we build a
+; 128 DBAT for both the source and sink.  If both are the same, only one is
+; loaded.  We do not touch the IBATs, so there is no issue if either physical page
+; address is the same as the virtual address of the instructions we are executing.
+;
+; At the end, we invalidate the used DBATs and reenable interrupts.
+;
+; Note, this one will not work in user state
+; 
+
+			.align	5
+			.globl	EXT(bcopy_physvir)
+
+LEXT(bcopy_physvir)
+
+			addic.	r0,r5,-1					; Get length - 1
+			add		r11,r3,r0					; Point to last byte of sink
+			cmplw	cr1,r3,r4					; Does source == sink?			
+			add		r12,r4,r0					; Point to last byte of source
+			bltlr-								; Bail if length is 0 or way too big
+			xor		r7,r11,r3					; See if we went to next page
+			xor		r8,r12,r4					; See if we went to next page
+			or		r0,r7,r8					; Combine wrap
+			
+			li		r9,((PTE_WIMG_CB_CACHED_COHERENT<<3)|2)	; Set default attributes
+			rlwinm.	r0,r0,0,0,19				; Did we overflow a page?
+			li		r7,2						; Set validity flags
+			li		r8,2						; Set validity flags
+			bne-	EXT(bcopy_phys)				; Overflowed page, do normal physical copy...
+
+			crset	killbats					; Remember to trash BATs on the way out
+			rlwimi	r11,r9,0,15,31				; Set sink lower DBAT value
+			rlwimi	r12,r9,0,15,31				; Set source lower DBAT value
+			rlwimi	r7,r11,0,0,14				; Set sink upper DBAT value
+			rlwimi	r8,r12,0,0,14				; Set source upper DBAT value
+			cmplw	cr1,r11,r12					; See if sink and source are same block
+			
+			sync
+
+			mtdbatl	0,r11						; Set sink lower DBAT 
+			mtdbatu	0,r7						; Set sink upper DBAT
+
+			beq-	cr1,bcpvsame				; Source and sink are in same block
+
+			mtdbatl	1,r12						; Set source lower DBAT 
+			mtdbatu	1,r8						; Set source upper DBAT
+
+bcpvsame:	mr		r6,r3						; Set source
+			crclr	noncache					; Set cached
+			
+			b		copyit						; Go copy it...
+
 
 ;	
 ; void bcopy_phys(from, to, nbytes)
@@ -78,23 +119,13 @@ ENTRY(bcopy_nc, TAG_NO_FRAME_USED)
 ; not work in user state
 ;
 
-#if 0
-			IF 0
-#endif
-ENTRY(bcopy_phys, TAG_NO_FRAME_USED)
-#if 0
-			ENDIF
-			export	xbcopy_phys[DS]
-			tc		bcopy_physc[TC],bcopy_phys[DS]
-			csect	bcopy_phys[DS]
-			dc.l	.bcopy_phys
-			dc.l	TOC[tc0]
-			export	.bcopy_phys
-			csect	bcopy_phys[PR]
-.bcopy_phys:
-#endif
+			.align	5
+			.globl	EXT(bcopy_phys)
+
+LEXT(bcopy_phys)
 
 			mfmsr	r9							; Get the MSR
+
 			crclr	noncache					; Set cached
 			rlwinm.	r8,r9,0,MSR_DR_BIT,MSR_DR_BIT	; Is data translation on?
 
@@ -105,6 +136,9 @@ ENTRY(bcopy_phys, TAG_NO_FRAME_USED)
 			xor		r9,r9,r8					; Turn off translation if it is on (should be)
 			beqlr-	cr7							; Bail if length is 0
 			
+			rlwinm	r9,r9,0,MSR_FP_BIT+1,MSR_FP_BIT-1	; Force floating point off
+			crclr	killbats					; Make sure we do not trash BATs on the way out
+			rlwinm	r9,r9,0,MSR_VEC_BIT+1,MSR_VEC_BIT-1	; Force vectors off
 			mtmsr	r9							; Set DR translation off
 			isync								; Wait for it
 			
@@ -115,27 +149,17 @@ ENTRY(bcopy_phys, TAG_NO_FRAME_USED)
 ; void bcopy(from, to, nbytes)
 ;
 
-#if 0
-			IF 0
-#endif
-ENTRY(bcopy, TAG_NO_FRAME_USED)
-#if 0
-			ENDIF
-			export	xbcopy[DS]
-			tc		xbcopyc[TC],xbcopy[DS]
-			csect	xbcopy[DS]
-			dc.l	.xbcopy
-			dc.l	TOC[tc0]
-			export	.xbcopy
-			csect	xbcopy[PR]
-.xbcopy:
-#endif
+			.align	5
+			.globl	EXT(bcopy)
+
+LEXT(bcopy)
 
 			crclr	noncache					; Set cached
 
 bcpswap:	cmplw	cr1,r4,r3					; Compare "to" and "from"
 			mr.		r5,r5						; Check if we have a 0 length
 			mr		r6,r3						; Set source
+			crclr	killbats					; Make sure we do not trash BATs on the way out
 			beqlr-	cr1							; Bail if "to" and "from" are the same	
 			beqlr-								; Bail if length is 0
 			crclr	fixxlate					; Set translation already ok
@@ -154,21 +178,11 @@ bcpswap:	cmplw	cr1,r4,r3					; Compare "to" and "from"
 ;			Later, we should used Altivec for large moves.
 ;
 	
-#if 0
-			IF 0
-#endif
-ENTRY(memcpy, TAG_NO_FRAME_USED)
-#if 0
-			ENDIF
-			export	xmemcpy[DS]
-			tc		xmemcpy[TC],xmemcpy[DS]
-			csect	xmemcpy[DS]
-			dc.l	.xmemcpy
-			dc.l	TOC[tc0]
-			export	.xmemcpy
-			csect	xmemcpy[PR]
-.xmemcpy:
-#endif
+			.align	5
+			.globl	EXT(memcpy)
+
+LEXT(memcpy)
+
 			cmplw	cr1,r3,r4					; "to" and "from" the same?
 			mr		r6,r4						; Set the "from"
 			mr.		r5,r5						; Length zero?
@@ -177,6 +191,7 @@ ENTRY(memcpy, TAG_NO_FRAME_USED)
 			crclr	fixxlate					; Set translation already ok
 			beqlr-	cr1							; "to" and "from" are the same
 			beqlr-								; Length is 0
+			crclr	killbats					; Make sure we do not trash BATs on the way out
 			
 copyit:		sub		r12,r4,r6					; Get potential overlap (negative if backward move)
 			lis		r8,0x7FFF					; Start up a mask
@@ -343,12 +358,24 @@ nohalf:		bf		31,bcpydone					; Leave cuz we are all done...
 			lbz		r7,0(r6)					; Get the byte
 			stb		r7,0(r4)					; Save the single
 
-bcpydone:	bflr	fixxlate					; Leave now if we do not need to fix translation...
+bcpydone:	bt-		killbats,bcclrbat			; Jump if we need to clear bats...
+			bflr	fixxlate					; Leave now if we do not need to fix translation...
 			mfmsr	r9							; Get the MSR
 			ori		r9,r9,lo16(MASK(MSR_DR))	; Turn data translation on
+			rlwinm	r9,r9,0,MSR_FP_BIT+1,MSR_FP_BIT-1	; Force floating point off
+			rlwinm	r9,r9,0,MSR_VEC_BIT+1,MSR_VEC_BIT-1	; Force vectors off
 			mtmsr	r9							; Just do it
 			isync								; Hang in there
 			blr									; Leave cuz we are all done...			
+
+bcclrbat:	li		r0,0						; Get set to invalidate upper half
+			sync								; Make sure all is well
+			mtdbatu	0,r0						; Clear sink upper DBAT
+			mtdbatu	1,r0						; Clear source upper DBAT
+			sync
+			isync			
+			blr
+
 
 ;
 ;			0123456789ABCDEF0123456789ABCDEF
@@ -433,10 +460,6 @@ balquad:	bf		27,balline					; No quad to do...
 balline:	rlwinm.	r0,r5,27,5,31				; Get the number of full lines to move
 			mtcrf	3,r5						; Make branch mask for backend partial moves
 			beq-	bbackend					; No full lines to move
-#if 0
-			stwu	r1,-8(r1)					; Dummy stack for MacOS
-			stw		r2,4(r1)					; Save RTOC
-#endif
 
 
 ;			Registers in use: R0, R1,     R3, R4, R5, R6
@@ -468,10 +491,6 @@ bnotouch:	stw		r5,-28(r4)					; Get the second word
 			subi	r4,r4,32					; Bump sink
 			
 			bgt+	bnxtline					; Do the next line, if any...
-#if 0
-			lwz		r2,4(r1)					; Restore RTOC
-			lwz		r1,0(r1)					; Pop dummy stack
-#endif
 
 ;
 ;			Note: We touched these lines in at the beginning
@@ -523,4 +542,4 @@ bnohalf:	bflr	31							; Leave cuz we are all done...
 			lbz		r7,-1(r6)					; Get the byte
 			stb		r7,-1(r4)					; Save the single
 			
-			blr									; Leave cuz we are all done...			
+			b		bcpydone					; Go exit cuz we are all done...

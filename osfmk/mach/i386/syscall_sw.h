@@ -143,26 +143,26 @@
 
 #include <architecture/i386/asm_help.h>
 
-#define MACHCALLSEL     0x07
-#define RPCCALLSEL 	0x0f
+#define MACHCALLSEL     $0x07
+#define RPCCALLSEL 	$0x0f
 
 #define kernel_trap(trap_name,trap_number,number_args) \
 LEAF(_##trap_name,0) ;\
 	movl	$##trap_number,%eax   ;\
-        lcall   $##MACHCALLSEL, $0 ;\
+        lcall   MACHCALLSEL, $0 ;\
 END(_##trap_name)
 
 #define rpc_trap(trap_name,trap_number,number_args) \
 LEAF(_##trap_name,0) ;\
         movl    $##trap_number,%eax; \
-        lcall   $##RPCCALLSEL, $0 ;\
+        lcall   RPCCALLSEL, $0 ;\
 END(_##trap_name)
 
 #define rpc_return_trap(trap_name,trap_number,number_args) \
 LEAF(_##trap_name,0) ;\
 	movl    %eax, %ecx; \
         movl    $##trap_number,%eax; \
-        lcall   $##RPCCALLSEL, $0 ;\
+        lcall   RPCCALLSEL, $0 ;\
 END(_##trap_name)
 
 #endif	/* _MACH_I386_SYSCALL_SW_H_ */

@@ -66,6 +66,7 @@
 #include <sys/vnode.h>
 #include <sys/malloc.h>
 #include <sys/fcntl.h>
+#include <sys/quota.h>
 
 #include <ufs/ufs/lockf.h>
 #include <ufs/ufs/quota.h>

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2002 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -77,9 +77,10 @@ typedef	unsigned long long	u_int64_t;
 
 typedef int32_t			register_t;
 
-
 typedef long int		intptr_t;
 typedef unsigned long int	uintptr_t;
+
+#define __offsetof(type, field) ((size_t)(&((type *)0)->field))
 
 #endif /* __ASSEMBLER__ */
 #endif	/* _MACHTYPES_H_ */

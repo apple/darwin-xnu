@@ -105,8 +105,10 @@
 #include <net/if.h>
 #include <netinet/in.h>
 #include <netinet/in_var.h>
-#include <kern/task.h>
 #include <vm/vm_kern.h>
+
+#include <kern/task.h>
+#include <kern/sched_prim.h>
 
 #include <sys/kdebug.h>
 
@@ -782,8 +784,7 @@ nfs_close(ap)
 		    error = nfs_flush(vp, ap->a_cred, MNT_WAIT, ap->a_p, 1);
                     /*
                      * We cannot clear the NMODIFIED bit in np->n_flag due to
-                     * potential races with other processes (and because
-                     * the commit arg is 0 in the nfs_flush call above.)
+                     * potential races with other processes
 		     * NMODIFIED is a hint
                      */
 		    /* np->n_flag &= ~NMODIFIED; */
@@ -1904,9 +1905,8 @@ nfs_remove(ap)
 	register struct vnode *dvp = ap->a_dvp;
 	register struct componentname *cnp = ap->a_cnp;
 	register struct nfsnode *np = VTONFS(vp);
-	int error = 0;
+	int error = 0, gofree = 0;
 	struct vattr vattr;
-	int file_deleted = 0;
 
 #if DIAGNOSTIC
 	if ((cnp->cn_flags & HASBUF) == 0)
@@ -1914,11 +1914,26 @@ nfs_remove(ap)
 	if (vp->v_usecount < 1)
 		panic("nfs_remove: bad v_usecount");
 #endif
-	if (vp->v_usecount == 1 || 
-		(UBCISVALID(vp)&&(vp->v_usecount==2)) || 
-		(np->n_sillyrename &&
-	    VOP_GETATTR(vp, &vattr, cnp->cn_cred, cnp->cn_proc) == 0 &&
-	    vattr.va_nlink > 1)) {
+
+	if (UBCISVALID(vp)) {
+		/* regular files */
+		if (UBCINFOEXISTS(vp))
+			gofree = (ubc_isinuse(vp, 1)) ? 0 : 1;
+		else {
+			/* dead or dying vnode.With vnode locking panic instead of error */
+			FREE_ZONE(cnp->cn_pnbuf, cnp->cn_pnlen, M_NAMEI);
+			vput(dvp);
+			vput(vp);
+			return (EIO);
+		}
+	} else {
+		/* UBC not in play */
+		if (vp->v_usecount == 1)
+			gofree = 1;
+	}
+	if (gofree || (np->n_sillyrename &&
+		VOP_GETATTR(vp, &vattr, cnp->cn_cred, cnp->cn_proc) == 0 &&
+		vattr.va_nlink > 1)) {
 		/*
 		 * Purge the name cache so that the chance of a lookup for
 		 * the name succeeding while the remove is in progress is
@@ -1946,7 +1961,6 @@ nfs_remove(ap)
 		 */
 		if (error == ENOENT)
 			error = 0;
-		file_deleted = 1;
 	} else if (!np->n_sillyrename) {
 		error = nfs_sillyrename(dvp, vp, cnp);
 	}
@@ -1956,10 +1970,7 @@ nfs_remove(ap)
 	vput(dvp);
 
 	VOP_UNLOCK(vp, 0, cnp->cn_proc);
-
-	if (file_deleted)
-		ubc_uncache(vp);
-
+	ubc_uncache(vp);
 	vrele(vp);
 
 	return (error);
@@ -2034,7 +2045,7 @@ nfs_rename(ap)
 	register struct vnode *tdvp = ap->a_tdvp;
 	register struct componentname *tcnp = ap->a_tcnp;
 	register struct componentname *fcnp = ap->a_fcnp;
-	int error;
+	int error, purged=0, inuse=0;
 
 #if DIAGNOSTIC
 	if ((tcnp->cn_flags & HASBUF) == 0 ||
@@ -2045,6 +2056,8 @@ nfs_rename(ap)
 	if ((fvp->v_mount != tdvp->v_mount) ||
 	    (tvp && (fvp->v_mount != tvp->v_mount))) {
 		error = EXDEV;
+		if (tvp)
+			VOP_UNLOCK(tvp, 0, tcnp->cn_proc);
 		goto out;
 	}
 
@@ -2052,12 +2065,37 @@ nfs_rename(ap)
 	 * If the tvp exists and is in use, sillyrename it before doing the
 	 * rename of the new file over it.
 	 * XXX Can't sillyrename a directory.
+	 * Don't sillyrename if source and target are same vnode (hard
+	 * links or case-variants)
 	 */
-	if (tvp && (tvp->v_usecount>(UBCISVALID(tvp) ? 2 : 1)) &&
-			!VTONFS(tvp)->n_sillyrename &&
-		tvp->v_type != VDIR && !nfs_sillyrename(tdvp, tvp, tcnp)) {
-		vput(tvp);
-		tvp = NULL;
+	if (tvp && tvp != fvp) {
+		if (UBCISVALID(tvp)) {
+			/* regular files */
+			if (UBCINFOEXISTS(tvp))
+				inuse = (ubc_isinuse(tvp, 1)) ? 1 : 0;
+			else {
+				/* dead or dying vnode.With vnode locking panic instead of error */
+				error = EIO;
+				VOP_UNLOCK(tvp, 0, tcnp->cn_proc);
+				goto out;  
+			}
+		} else {
+			/* UBC not in play */
+			if (tvp->v_usecount > 1)
+				inuse = 1;
+		}
+	}
+	if (inuse && !VTONFS(tvp)->n_sillyrename && tvp->v_type != VDIR) {
+		if  (error = nfs_sillyrename(tdvp, tvp, tcnp)) {
+			/* sillyrename failed. Instead of pressing on, return error */
+			goto out; /* should not be ENOENT. */
+		} else {
+			/* sillyrename succeeded.*/
+			VOP_UNLOCK(tvp, 0, tcnp->cn_proc);
+			ubc_uncache(tvp); /* get the nfs turd file to disappear */
+			vrele(tvp);
+			tvp = NULL;
+		}
 	}
 
 	error = nfs_renamerpc(fdvp, fcnp->cn_nameptr, fcnp->cn_namelen,
@@ -2065,17 +2103,29 @@ nfs_rename(ap)
 		tcnp->cn_proc);
 
 	if (fvp->v_type == VDIR) {
-		if (tvp != NULL && tvp->v_type == VDIR)
+		if (tvp != NULL && tvp->v_type == VDIR) {
 			cache_purge(tdvp);
+			if (tvp == tdvp) 
+				purged = 1;
+		}
 		cache_purge(fdvp);
 	}
+	
+	cache_purge(fvp);
+	if (tvp) {
+		if (!purged)
+			cache_purge(tvp);
+		VOP_UNLOCK(tvp, 0, tcnp->cn_proc);
+		ubc_uncache(tvp); /* get the nfs turd file to disappear */
+	}
+	
 out:
 	if (tdvp == tvp)
 		vrele(tdvp);
 	else
 		vput(tdvp);
 	if (tvp)
-		vput(tvp);
+		vrele(tvp); /* already unlocked */
 	vrele(fdvp);
 	vrele(fvp);
 	/*
@@ -3304,7 +3354,7 @@ again:
 
 		for (bp = vp->v_dirtyblkhd.lh_first; bp; bp = nbp) {
 			nbp = bp->b_vnbufs.le_next;
-			/* XXX nbp aok if we sleep in this loop? */
+
 			FSDBG(520, bp, bp->b_flags, bvecpos, bp->b_bufsize);
 			FSDBG(520, bp->b_validoff, bp->b_validend,
 			      bp->b_dirtyoff, bp->b_dirtyend);
@@ -3313,6 +3363,8 @@ again:
 			if ((bp->b_flags & (B_BUSY | B_DELWRI | B_NEEDCOMMIT))
 				!= (B_DELWRI | B_NEEDCOMMIT))
 				continue;
+
+			bremfree(bp);
 			SET(bp->b_flags, B_BUSY);
 			/*
 			 * we need a upl to see if the page has been
@@ -3342,7 +3394,10 @@ again:
 				 */
 				bp->b_dirtyoff = bp->b_validoff;
 				bp->b_dirtyend = bp->b_validend;
-				CLR(bp->b_flags, B_BUSY | B_NEEDCOMMIT);
+				CLR(bp->b_flags, B_NEEDCOMMIT);
+				/* blocking calls were made, re-evaluate nbp */
+				nbp = bp->b_vnbufs.le_next;
+				brelse(bp);	/* XXX may block. Is using nbp ok??? */
 				continue;
 			}
 			if (!ISSET(bp->b_flags, B_PAGELIST)) {
@@ -3350,7 +3405,10 @@ again:
 				SET(bp->b_flags, B_PAGELIST);
 				ubc_upl_map(upl, (vm_address_t *)&bp->b_data);
 			}
-			bremfree(bp);
+
+			/* blocking calls were made, re-evaluate nbp */
+			nbp = bp->b_vnbufs.le_next;
+
 			/*
 			 * Work out if all buffers are using the same cred
 			 * so we can deal with them all with one commit.
@@ -3421,11 +3479,18 @@ again:
 			if (retv) {
 				brelse(bp);
 			} else {
+				int oldflags = bp->b_flags;
+
 				s = splbio();
 				vp->v_numoutput++;
 				SET(bp->b_flags, B_ASYNC);
 				CLR(bp->b_flags,
 				    (B_READ|B_DONE|B_ERROR|B_DELWRI));
+				if (ISSET(oldflags, B_DELWRI)) {
+					extern int nbdwrite;
+					nbdwrite--;
+					wakeup((caddr_t)&nbdwrite);
+				}
 				bp->b_dirtyoff = bp->b_dirtyend = 0;
 				reassignbuf(bp, vp);
 				splx(s);
@@ -3792,6 +3857,7 @@ nfs_writebp(bp, force)
 	if (ISSET(oldflags, B_DELWRI)) {
 		extern int nbdwrite;
 		nbdwrite--;
+		wakeup((caddr_t)&nbdwrite);
 	}
 
 	if (ISSET(oldflags, (B_ASYNC|B_DELWRI))) {
@@ -4152,6 +4218,7 @@ nfs_pagein(ap)
 	struct ucred *cred;
 	register struct nfsnode *np = VTONFS(vp);
 	register int biosize;
+	register int iosize;
 	register int xsize;
 	struct vattr vattr;
 	struct proc *p = current_proc();
@@ -4192,8 +4259,6 @@ nfs_pagein(ap)
 	if (cred == NOCRED)
 		cred = ap->a_cred;
 
-	auio.uio_iov = &aiov;
-	auio.uio_iovcnt = 1;
 	auio.uio_offset = f_offset;
 	auio.uio_segflg = UIO_SYSSPACE;
 	auio.uio_rw = UIO_READ;
@@ -4211,8 +4276,11 @@ nfs_pagein(ap)
 	xsize = size;
 
 	do {
-		uio->uio_resid = min(biosize, xsize);
-		aiov.iov_len  = uio->uio_resid;
+	        iosize = min(biosize, xsize);
+		uio->uio_resid = iosize;
+		auio.uio_iov = &aiov;
+		auio.uio_iovcnt = 1;
+		aiov.iov_len  = iosize;
 		aiov.iov_base = (caddr_t)ioaddr;
 
 		FSDBG(322, uio->uio_offset, uio->uio_resid, ioaddr, xsize);
@@ -4225,6 +4293,7 @@ nfs_pagein(ap)
 		upl_ubc_alias_set(pl, current_act(), 2);
 #endif /* UBC_DEBUG */
 		nfsstats.pageins++;
+
 		error = nfs_readrpc(vp, uio, cred);
 
 		if (!error) {
@@ -4236,16 +4305,17 @@ nfs_pagein(ap)
 				 * Just zero fill the rest of the valid area.
 				 */
 				int zcnt = uio->uio_resid;
-				int zoff = biosize - zcnt;
+				int zoff = iosize - zcnt;
 				bzero((char *)ioaddr + zoff, zcnt);
 
 				FSDBG(324, uio->uio_offset, zoff, zcnt, ioaddr);
 				uio->uio_offset += zcnt;
 			}
-			ioaddr += biosize;	
-			xsize  -= biosize;
+			ioaddr += iosize;	
+			xsize  -= iosize;
 		} else
 			FSDBG(322, uio->uio_offset, uio->uio_resid, error, -1);
+
 		if (p && (vp->v_flag & VTEXT) &&
 		    ((nmp->nm_flag & NFSMNT_NQNFS &&
 		      NQNFS_CKINVALID(vp, np, ND_READ) &&

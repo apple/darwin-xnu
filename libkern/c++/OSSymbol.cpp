@@ -21,6 +21,7 @@
  */
 /* IOSymbol.cpp created by gvdl on Fri 1998-11-17 */
 
+#include <string.h>
 #include <sys/cdefs.h>
 
 __BEGIN_DECLS
@@ -29,6 +30,7 @@ __END_DECLS
 
 #include <libkern/c++/OSSymbol.h>
 #include <libkern/c++/OSLib.h>
+#include <string.h>
 
 #define super OSString
 
@@ -91,9 +93,9 @@ public:
     inline void closeGate() { mutex_lock(poolGate); };
     inline void openGate()  { mutex_unlock(poolGate); };
 
-    OSSymbol *findSymbol(const char *cString) const;
+    OSSymbol *findSymbol(const char *cString, OSSymbol ***replace) const;
     OSSymbol *insertSymbol(OSSymbol *sym);
-    void removeSymbol(const char *cString);
+    void removeSymbol(OSSymbol *sym);
 
     OSSymbolPoolState initHashState();
     OSSymbol *nextHashState(OSSymbolPoolState *stateP);
@@ -208,7 +210,7 @@ void OSSymbolPool::reconstructSymbols()
         insertSymbol(insert);
 }
 
-OSSymbol *OSSymbolPool::findSymbol(const char *cString) const
+OSSymbol *OSSymbolPool::findSymbol(const char *cString, OSSymbol ***replace) const
 {
     Bucket *thisBucket;
     unsigned int j, inLen, hash;
@@ -218,6 +220,8 @@ OSSymbol *OSSymbolPool::findSymbol(const char *cString) const
     thisBucket = &buckets[hash % nBuckets];
     j = thisBucket->count;
 
+    *replace = NULL;
+
     if (!j)
         return 0;
 
@@ -225,19 +229,28 @@ OSSymbol *OSSymbolPool::findSymbol(const char *cString) const
         probeSymbol = (OSSymbol *) thisBucket->symbolP;
 
         if (inLen == probeSymbol->length
-        &&  (strcmp(probeSymbol->string, cString) == 0)
-        &&  (probeSymbol->getRetainCount() >= 1))	// WRONG need when
-            return probeSymbol;
-        else
-            return 0;
+        &&  (strcmp(probeSymbol->string, cString) == 0)) {
+	    probeSymbol->retain();
+	    if (probeSymbol->getRetainCount() != 0xffff)
+		return probeSymbol;
+	    else
+		// replace this one
+		*replace = (OSSymbol **) &thisBucket->symbolP;
+        }
+	return 0;
     }
 
     for (list = thisBucket->symbolP; j--; list++) {
         probeSymbol = *list;
         if (inLen == probeSymbol->length
-        &&  (strcmp(probeSymbol->string, cString) == 0)
-        &&  (probeSymbol->getRetainCount() >= 1))	// WRONG need when
-            return probeSymbol;
+        &&  (strcmp(probeSymbol->string, cString) == 0)) {
+	    probeSymbol->retain();
+	    if (probeSymbol->getRetainCount() != 0xffff)
+		return probeSymbol;
+	    else
+		// replace this one
+		*replace = list;
+	}
     }
 
     return 0;
@@ -305,13 +318,13 @@ OSSymbol *OSSymbolPool::insertSymbol(OSSymbol *sym)
     return 0;
 }
 
-void OSSymbolPool::removeSymbol(const char *cString)
+void OSSymbolPool::removeSymbol(OSSymbol *sym)
 {
     Bucket *thisBucket;
     unsigned int j, inLen, hash;
     OSSymbol *probeSymbol, **list;
 
-    hashSymbol(cString, &hash, &inLen); inLen++;
+    hashSymbol(sym->string, &hash, &inLen); inLen++;
     thisBucket = &buckets[hash % nBuckets];
     j = thisBucket->count;
     list = thisBucket->symbolP;
@@ -322,8 +335,7 @@ void OSSymbolPool::removeSymbol(const char *cString)
     if (j == 1) {
         probeSymbol = (OSSymbol *) list;
 
-        if (inLen == probeSymbol->length
-        &&  strcmp(probeSymbol->string, cString) == 0) {
+        if (probeSymbol == sym) {
             thisBucket->symbolP = 0;
             count--;
             thisBucket->count--;
@@ -334,8 +346,7 @@ void OSSymbolPool::removeSymbol(const char *cString)
 
     if (j == 2) {
         probeSymbol = list[0];
-        if (inLen == probeSymbol->length
-        &&  strcmp(probeSymbol->string, cString) == 0) {
+        if (probeSymbol == sym) {
             thisBucket->symbolP = (OSSymbol **) list[1];
             kfree((vm_offset_t)list, 2 * sizeof(OSSymbol *));
 	    ACCUMSIZE(-(2 * sizeof(OSSymbol *)));
@@ -345,8 +356,7 @@ void OSSymbolPool::removeSymbol(const char *cString)
         }
 
         probeSymbol = list[1];
-        if (inLen == probeSymbol->length
-        &&  strcmp(probeSymbol->string, cString) == 0) {
+        if (probeSymbol == sym) {
             thisBucket->symbolP = (OSSymbol **) list[0];
             kfree((vm_offset_t)list, 2 * sizeof(OSSymbol *));
 	    ACCUMSIZE(-(2 * sizeof(OSSymbol *)));
@@ -359,8 +369,7 @@ void OSSymbolPool::removeSymbol(const char *cString)
 
     for (; j--; list++) {
         probeSymbol = *list;
-        if (inLen == probeSymbol->length
-        &&  strcmp(probeSymbol->string, cString) == 0) {
+        if (probeSymbol == sym) {
 
             list = (OSSymbol **)
                 kalloc((thisBucket->count-1) * sizeof(OSSymbol *));
@@ -430,16 +439,19 @@ const OSSymbol *OSSymbol::withString(const OSString *aString)
 
 const OSSymbol *OSSymbol::withCString(const char *cString)
 {
+    OSSymbol **replace;
+
     pool->closeGate();
 
-    OSSymbol *newSymb = pool->findSymbol(cString);
-    if (newSymb)
-        newSymb->retain();
-    else if ( (newSymb = new OSSymbol) ) {
-	if (newSymb->OSString::initWithCString(cString))
-	    pool->insertSymbol(newSymb);
-	else {
-	    newSymb->free();
+    OSSymbol *newSymb = pool->findSymbol(cString, &replace);
+    if (!newSymb && (newSymb = new OSSymbol) ) {
+	if (newSymb->OSString::initWithCString(cString)) {
+	    if (replace)
+		*replace = newSymb;
+	    else
+		pool->insertSymbol(newSymb);
+	} else {
+	    newSymb->OSString::free();
 	    newSymb = 0;
 	}
     }
@@ -450,16 +462,19 @@ const OSSymbol *OSSymbol::withCString(const char *cString)
 
 const OSSymbol *OSSymbol::withCStringNoCopy(const char *cString)
 {
+    OSSymbol **replace;
+
     pool->closeGate();
 
-    OSSymbol *newSymb = pool->findSymbol(cString);
-    if (newSymb)
-        newSymb->retain();
-    else if ( (newSymb = new OSSymbol) ) {
-	if (newSymb->OSString::initWithCStringNoCopy(cString))
-	    pool->insertSymbol(newSymb);
-	else {
-	    newSymb->free();
+    OSSymbol *newSymb = pool->findSymbol(cString, &replace);
+    if (!newSymb && (newSymb = new OSSymbol) ) {
+	if (newSymb->OSString::initWithCStringNoCopy(cString)) {
+	    if (replace)
+		*replace = newSymb;
+	    else
+		pool->insertSymbol(newSymb);
+	} else {
+	    newSymb->OSString::free();
 	    newSymb = 0;
 	}
     }
@@ -491,7 +506,7 @@ void OSSymbol::checkForPageUnload(void *startAddr, void *endAddr)
 void OSSymbol::free()
 {
     pool->closeGate();
-    pool->removeSymbol(string);
+    pool->removeSymbol(this);
     pool->openGate();
     
     super::free();

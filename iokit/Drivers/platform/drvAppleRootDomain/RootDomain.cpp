@@ -1,4 +1,4 @@
-/*
+   /*
  * Copyright (c) 1998-2000 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
@@ -20,9 +20,11 @@
  * @APPLE_LICENSE_HEADER_END@
  */
 #include <IOKit/IOWorkLoop.h>
-#include <IOKit/IOCommandQueue.h>
+#include <IOKit/IOCommandGate.h>
 #include <IOKit/IOTimerEventSource.h>
 #include <IOKit/IOPlatformExpert.h>
+#include <IOKit/IOKitDebug.h>
+#include <IOKit/IOTimeStamp.h>
 #include <IOKit/pwr_mgt/RootDomain.h>
 #include <IOKit/pwr_mgt/IOPMPrivate.h>
 #include <IOKit/IOMessage.h>
@@ -33,7 +35,17 @@ extern "C" void kprintf(const char *, ...);
 
 extern const IORegistryPlane * gIOPowerPlane;
 
-void PMreceiveCmd ( OSObject *,  void *, void *, void *, void * );
+// debug trace function
+static inline void
+ioSPMTrace(unsigned int csc,
+	   unsigned int a = 0, unsigned int b = 0,
+	   unsigned int c = 0, unsigned int d = 0)
+{
+    if (gIOKitDebug & kIOLogTracePower)
+	IOTimeStampConstant(IODBG_POWER(csc), a, b, c, d);
+}
+
+IOReturn broadcast_aggressiveness ( OSObject *, void *, void *, void *, void * );
 static void sleepTimerExpired(thread_call_param_t);
 static void wakeupClamshellTimerExpired ( thread_call_param_t us);
 
@@ -209,11 +221,6 @@ bool IOPMrootDomain::start ( IOService * nub )
     tmpDict->release();
 
     pm_vars->PMworkloop = IOWorkLoop::workLoop();				// make the workloop
-    pm_vars->commandQueue = IOCommandQueue::commandQueue(this, PMreceiveCmd);	// make a command queue
-    if (! pm_vars->commandQueue ||
-        (  pm_vars->PMworkloop->addEventSource( pm_vars->commandQueue) != kIOReturnSuccess) ) {
-        return IOPMNoErr;
-    }
     extraSleepTimer = thread_call_allocate((thread_call_func_t)sleepTimerExpired, (thread_call_param_t) this);
     clamshellWakeupIgnore = thread_call_allocate((thread_call_func_t)wakeupClamshellTimerExpired, (thread_call_param_t) this);
     diskSyncCalloutEntry = thread_call_allocate(&disk_sync_callout, (thread_call_param_t) this);
@@ -241,6 +248,27 @@ bool IOPMrootDomain::start ( IOService * nub )
     return true;
 }
 
+// **********************************************************************************
+// setProperties
+//
+// Receive a setProperty call
+// The "System Boot" property means the system is completely booted.
+// **********************************************************************************
+IOReturn IOPMrootDomain::setProperties ( OSObject *props_obj)
+{
+    OSDictionary    *dict = OSDynamicCast(OSDictionary, props_obj);
+    
+    if(!dict) return kIOReturnBadArgument;
+
+    if(dict->getObject(OSString::withCString("System Boot Complete"))) {
+        systemBooting = false;
+        kprintf("IOPM: received System Boot Complete property");
+        adjustPowerState();
+    }
+    
+    return kIOReturnSuccess;
+}
+
 
 //*********************************************************************************
 // youAreRoot
@@ -258,46 +286,58 @@ IOReturn IOPMrootDomain::youAreRoot ( void )
 // **********************************************************************************
 // command_received
 //
-// We have received a command from ourselves on the command queue.
-// If it is to send a recently-received aggressiveness factor, do so.
-// Otherwise, it's something the superclass enqueued.
+// No longer used
 // **********************************************************************************
-void IOPMrootDomain::command_received ( void * command, void * x, void * y, void * z )
+void IOPMrootDomain::command_received ( void * w, void * x, void * y, void * z )
 {
-    switch ( (int)command ) {
-        case kIOPMBroadcastAggressiveness:
-        
-            super::setAggressiveness((unsigned long)x,(unsigned long)y);
-
-            // Save user's spin down timer to restore after we replace it for idle sleep
-            if( (int)x == kPMMinutesToSpinDown ) user_spindown = (unsigned int) y;
-
-            // Use longestNonSleepSlider to calculate dimming adjust idle sleep timer
-            longestNonSleepSlider = pm_vars->current_aggressiveness_values[kPMMinutesToDim];
+    super::command_received(w,x,y,z);
+}
 
 
-            if ( (int)x == kPMMinutesToSleep ) {
-                if ( (sleepSlider == 0) && ((int)y != 0) ) {
-                    sleepSlider = (int)y;
-                    adjustPowerState();				// idle sleep is now enabled, maybe sleep now
-                }
-                sleepSlider = (int)y;
-                if ( sleepSlider == 0 ) {			
-                    adjustPowerState();				// idle sleep is now disabled
-                    patriarch->wakeSystem();			// make sure we're powered
-                }
-            }
-            if ( sleepSlider > longestNonSleepSlider ) {
-                extraSleepDelay = sleepSlider - longestNonSleepSlider ;
-            }
-            else {
-                extraSleepDelay = 0;
-            }
-            break;
-            
-        default:
-            super::command_received(command,x,y,z);
-            break;
+// **********************************************************************************
+// broadcast_aggressiveness
+//
+// **********************************************************************************
+IOReturn broadcast_aggressiveness ( OSObject * root, void * x, void * y, void *, void * )
+{
+    ((IOPMrootDomain *)root)->broadcast_it((unsigned long)x,(unsigned long)y);
+    return IOPMNoErr;
+}
+
+
+// **********************************************************************************
+// broadcast_it
+//
+// We are behind the command gate to broadcast an aggressiveness factor.  We let the
+// superclass do it, but we need to snoop on factors that affect idle sleep.
+// **********************************************************************************
+void IOPMrootDomain::broadcast_it (unsigned long type, unsigned long value)
+{
+    super::setAggressiveness(type,value);
+
+    // Save user's spin down timer to restore after we replace it for idle sleep
+    if( type == kPMMinutesToSpinDown ) user_spindown = value;
+
+    // Use longestNonSleepSlider to calculate dimming adjust idle sleep timer
+    longestNonSleepSlider = pm_vars->current_aggressiveness_values[kPMMinutesToDim];
+
+
+    if ( type == kPMMinutesToSleep ) {
+        if ( (sleepSlider == 0) && (value != 0) ) {
+            sleepSlider = value;
+            adjustPowerState();				// idle sleep is now enabled, maybe sleep now
+        }
+        sleepSlider = value;
+        if ( sleepSlider == 0 ) {			
+            adjustPowerState();				// idle sleep is now disabled
+            patriarch->wakeSystem();			// make sure we're powered
+        }
+    }
+    if ( sleepSlider > longestNonSleepSlider ) {
+        extraSleepDelay = sleepSlider - longestNonSleepSlider ;
+    }
+    else {
+        extraSleepDelay = 0;
     }
 }
 
@@ -349,8 +389,7 @@ void IOPMrootDomain::stopIgnoringClamshellEventsDuringWakeup(void)
 //*********************************************************************************
 // setAggressiveness
 //
-// Some aggressiveness factor has changed.  We put this change on our
-// command queue so that we can broadcast it to the hierarchy while on
+// Some aggressiveness factor has changed.  We broadcast it to the hierarchy while on
 // the Power Mangement workloop thread.  This enables objects in the
 // hierarchy to successfully alter their idle timers, which are all on the
 // same thread.
@@ -358,14 +397,9 @@ void IOPMrootDomain::stopIgnoringClamshellEventsDuringWakeup(void)
 
 IOReturn IOPMrootDomain::setAggressiveness ( unsigned long type, unsigned long newLevel )
 {
-
-    if ( systemBooting && (type == kPMMinutesToDim) ) {
-        systemBooting = false;  // when the login window launches, this method gets called -- system booting is done.
-        IOLog("Root power domain receiving initial preferences\n");
-        adjustPowerState();
+    if ( pm_vars->PMcommandGate ) {
+        pm_vars->PMcommandGate->runAction(broadcast_aggressiveness,(void *)type,(void *)newLevel);
     }
-
-    pm_vars->commandQueue->enqueueCommand(true, (void *)kIOPMBroadcastAggressiveness, (void *) type, (void *) newLevel );
     
     return kIOReturnSuccess;
 }
@@ -436,8 +470,9 @@ void IOPMrootDomain::powerChangeDone ( unsigned long previousState )
                 idleSleepPending = false;			// re-enable this timer for next sleep
                 IOLog("System Sleep\n");
                 pm_vars->thePlatform->sleepKernel();		// sleep now
-                
-                                                // now we're waking
+
+		ioSPMTrace(IOPOWER_WAKE, * (int *) this);	// now we're waking
+
                 clock_interval_to_deadline(30, kSecondScale, &deadline);	// stay awake for at least 30 seconds
                 thread_call_enter_delayed(extraSleepTimer, deadline);
                 idleSleepPending = true;			// this gets turned off when we sleep again
@@ -573,6 +608,10 @@ IOReturn IOPMrootDomain::newUserClient(  task_t owningTask,  void * /* security_
 
 IOReturn IOPMrootDomain::receivePowerNotification (UInt32 msg)
 {
+    if (msg & kIOPMOverTemp) {
+        IOLog("Power Management received emergency overtemp signal. Going to sleep.");
+        (void) sleepSystem ();
+    }
     if (msg & kIOPMSetDesktopMode) {
         desktopMode = (0 != (msg & kIOPMSetValue));
         msg &= ~(kIOPMSetDesktopMode | kIOPMSetValue);
@@ -601,11 +640,6 @@ IOReturn IOPMrootDomain::receivePowerNotification (UInt32 msg)
     
     if (msg & kIOPMPowerEmergency) {
       (void) sleepSystem ();
-    }
-
-    if (msg & kIOPMOverTemp) {
-        IOLog("Power Management received emergency overtemp signal. Going to sleep.");
-        (void) sleepSystem ();
     }
 
     if (msg & kIOPMClamshellClosed) {
@@ -718,7 +752,7 @@ IOReturn IOPMrootDomain::requestPowerDomainState ( IOPMPowerFlags desiredState, 
         }
         iter->release();
     }
-
+    
     if ( (extraSleepDelay == 0) &&  (powerRequestFlag == 0) ) {
         sleepASAP = true;
     }
@@ -857,6 +891,26 @@ void IOPMrootDomain::restoreUserSpinDownTimeout ( void )
     super::setAggressiveness((unsigned long)kPMMinutesToSpinDown,(unsigned long)user_spindown);
 }
 
+//*********************************************************************************
+// changePowerStateTo & changePowerStateToPriv
+//
+// Override of these methods for logging purposes.
+//*********************************************************************************
+
+IOReturn IOPMrootDomain::changePowerStateTo ( unsigned long ordinal )
+{
+    ioSPMTrace(IOPOWER_ROOT, * (int *) this, (int) true, (int) ordinal);
+
+    return super::changePowerStateTo(ordinal);
+}
+
+IOReturn IOPMrootDomain::changePowerStateToPriv ( unsigned long ordinal )
+{
+    ioSPMTrace(IOPOWER_ROOT, * (int *) this, (int) false, (int) ordinal);
+
+    return super::changePowerStateToPriv(ordinal);
+}
+
 
 //*********************************************************************************
 // sysPowerDownHandler
@@ -900,7 +954,7 @@ IOReturn IOPMrootDomain::sysPowerDownHandler( void * target, void * refCon,
                 // Another option is not to schedule the thread and wait for
                 // ack timeout...
                 AbsoluteTime deadline;
-                clock_interval_to_deadline( 15, kSecondScale, &deadline );
+                clock_interval_to_deadline( 30, kSecondScale, &deadline );
                 thread_call_enter1_delayed( rootDomain->diskSyncCalloutEntry, 
                                             (thread_call_param_t)params->powerRef,
                                             deadline );
@@ -970,7 +1024,8 @@ IOReturn IOPMrootDomain::displayWranglerNotification( void * target, void * refC
             } else {
 
                 // accelerate disk spin down if spin down timer is non-zero (zero = never spin down)
-                if(0 != rootDomain->user_spindown)
+                // and if system sleep is non-Never
+                if( (0 != rootDomain->user_spindown) && (0 != rootDomain->sleepSlider) )
                     rootDomain->setQuickSpinDownTimeout();
             }
 

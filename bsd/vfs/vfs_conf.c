@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2002 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -72,8 +72,6 @@ int (*mountroot)() = NULL;
  */
 extern	struct vfsops ufs_vfsops;
 extern	int ffs_mountroot();
-extern	struct vfsops lfs_vfsops;
-extern	int lfs_mountroot();
 extern	struct vfsops mfs_vfsops;
 extern	int mfs_mountroot();
 extern  struct vfsops hfs_vfsops;
@@ -84,13 +82,9 @@ extern	int cd9660_mountroot();
 extern	struct vfsops nfs_vfsops;
 extern	int nfs_mountroot();
 extern	struct vfsops afs_vfsops;
-extern	struct vfsops procfs_vfsops;
 extern	struct vfsops null_vfsops;
 extern	struct vfsops union_vfsops;
-extern	struct vfsops umap_vfsops;
-extern	struct vfsops portal_vfsops;
 extern	struct vfsops fdesc_vfsops;
-extern	struct vfsops kernfs_vfsops;
 extern	struct vfsops devfs_vfsops;
 
 /*
@@ -112,11 +106,6 @@ static struct vfsconf vfsconflist[] = {
 	{ &cd9660_vfsops, "cd9660", 14, 0, MNT_LOCAL | MNT_DOVOLFS, cd9660_mountroot, NULL },
 #endif
 
-	/* Log-based Filesystem */
-#if LFS
-	{ &lfs_vfsops, "lfs", 5, 0, MNT_LOCAL, lfs_mountroot, NULL },
-#endif
-
 	/* Memory-based Filesystem */
 #if MFS
 	{ &mfs_vfsops, "mfs", 3, 0, MNT_LOCAL, mfs_mountroot, NULL },
@@ -132,11 +121,6 @@ static struct vfsconf vfsconflist[] = {
 	{ &afs_vfsops, "andrewfs", 13, 0, 0, afs_mountroot, NULL },
 #endif
 
-	/* /proc Filesystem */
-#if PROCFS
-	{ &procfs_vfsops, "procfs", 12, 0, 0, NULL, NULL },
-#endif
-
 	/* Loopback (Minimal) Filesystem Layer */
 #if NULLFS
 	{ &null_vfsops, "loopback", 9, 0, 0, NULL, NULL },
@@ -147,34 +131,25 @@ static struct vfsconf vfsconflist[] = {
 	{ &union_vfsops, "union", 15, 0, 0, NULL, NULL },
 #endif
 
-	/* User/Group Identifer Remapping Filesystem */
-#if UMAPFS
-	{ &umap_vfsops, "umap", 10, 0, 0, NULL, NULL },
-#endif
-
-	/* Portal Filesystem */
-#if PORTAL
-	{ &portal_vfsops, "portal", 8, 0, 0, NULL, NULL },
-#endif
-
 	/* File Descriptor Filesystem */
 #if FDESC
 	{ &fdesc_vfsops, "fdesc", 7, 0, 0, NULL, NULL },
-#endif
-
-	/* Kernel Information Filesystem */
-#if KERNFS
-	{ &kernfs_vfsops, "kernfs", 11, 0, 0, NULL, NULL },
 #endif
 
 	/* Volume ID Filesystem */
 #if VOLFS
 	{ &volfs_vfsops, "volfs", 18, 0, 0, NULL, NULL },
 #endif
+
 	/* Device Filesystem */
 #if DEVFS
 	{ &devfs_vfsops, "devfs", 19, 0, 0, NULL, NULL },
 #endif
+
+	{0},
+	{0},
+	{0},
+	{0},
 	{0},
 	{0},
 	{0},
@@ -206,9 +181,6 @@ struct vfsconf *vfsconf = vfsconflist;
 extern struct vnodeopv_desc ffs_vnodeop_opv_desc;
 extern struct vnodeopv_desc ffs_specop_opv_desc;
 extern struct vnodeopv_desc ffs_fifoop_opv_desc;
-extern struct vnodeopv_desc lfs_vnodeop_opv_desc;
-extern struct vnodeopv_desc lfs_specop_opv_desc;
-extern struct vnodeopv_desc lfs_fifoop_opv_desc;
 extern struct vnodeopv_desc mfs_vnodeop_opv_desc;
 extern struct vnodeopv_desc dead_vnodeop_opv_desc;
 extern struct vnodeopv_desc fifo_vnodeop_opv_desc;
@@ -217,11 +189,7 @@ extern struct vnodeopv_desc nfsv2_vnodeop_opv_desc;
 extern struct vnodeopv_desc spec_nfsv2nodeop_opv_desc;
 extern struct vnodeopv_desc fifo_nfsv2nodeop_opv_desc;
 extern struct vnodeopv_desc fdesc_vnodeop_opv_desc;
-extern struct vnodeopv_desc portal_vnodeop_opv_desc;
 extern struct vnodeopv_desc null_vnodeop_opv_desc;
-extern struct vnodeopv_desc umap_vnodeop_opv_desc;
-extern struct vnodeopv_desc kernfs_vnodeop_opv_desc;
-extern struct vnodeopv_desc procfs_vnodeop_opv_desc;
 extern struct vnodeopv_desc hfs_vnodeop_opv_desc;
 extern struct vnodeopv_desc hfs_specop_opv_desc;
 extern struct vnodeopv_desc hfs_fifoop_opv_desc;
@@ -230,7 +198,6 @@ extern struct vnodeopv_desc cd9660_vnodeop_opv_desc;
 extern struct vnodeopv_desc cd9660_specop_opv_desc;
 extern struct vnodeopv_desc cd9660_fifoop_opv_desc;
 extern struct vnodeopv_desc union_vnodeop_opv_desc;
-extern struct vnodeopv_desc procfs_vnodeop_opv_desc;
 extern struct vnodeopv_desc devfs_vnodeop_opv_desc;
 extern struct vnodeopv_desc devfs_spec_vnodeop_opv_desc;
 
@@ -245,13 +212,6 @@ struct vnodeopv_desc *vfs_opv_descs[] = {
 	&fifo_vnodeop_opv_desc,
 #endif
 	&spec_vnodeop_opv_desc,
-#if LFS
-	&lfs_vnodeop_opv_desc,
-	&lfs_specop_opv_desc,
-#if FIFO
-	&lfs_fifoop_opv_desc,
-#endif
-#endif
 #if MFS
 	&mfs_vnodeop_opv_desc,
 #endif
@@ -265,20 +225,8 @@ struct vnodeopv_desc *vfs_opv_descs[] = {
 #if FDESC
 	&fdesc_vnodeop_opv_desc,
 #endif
-#if PORTAL
-	&portal_vnodeop_opv_desc,
-#endif
 #if NULLFS
 	&null_vnodeop_opv_desc,
-#endif
-#if UMAPFS
-	&umap_vnodeop_opv_desc,
-#endif
-#if KERNFS
-	&kernfs_vnodeop_opv_desc,
-#endif
-#if PROCFS
-	&procfs_vnodeop_opv_desc,
 #endif
 #if HFS
 	&hfs_vnodeop_opv_desc,

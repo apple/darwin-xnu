@@ -8,37 +8,32 @@ include $(MakeInc_cmd)
 include $(MakeInc_def)
 
 INSTINC_SUBDIRS = \
+	blowfish \
 	cast128 \
 	des	\
-	blowfish \
-	rc5
+    rc4 \
+	rijndael \
+	sha2
 	
 
 INSTINC_SUBDIRS_PPC = \
 
 INSTINC_SUBDIRS_I386 = \
 
-EXPINC_SUBDIRS = \
-	cast128 \
-	des	\
-	blowfish \
-	rc5
+EXPINC_SUBDIRS = ${INSTINC_SUBDIRS}
 
 EXPINC_SUBDIRS_PPC = \
 
 EXPINC_SUBDIRS_I386 = \
 
-DATAFILES = \
-	sha1.h
-
-INSTALL_MI_LIST	= ${DATAFILES}
+PRIVATE_DATAFILES = \
+	sha1.h md5.h
 
 INSTALL_MI_DIR = crypto
 
-EXPORT_MI_LIST	= ${DATAFILES}
+EXPORT_MI_DIR = ${INSTALL_MI_DIR}
 
-EXPORT_MI_DIR = crypto
-
+INSTALL_MI_LCL_KERN_LIST = ${PRIVATE_DATAFILES}
 
 include $(MakeInc_rule)
 include $(MakeInc_dir)

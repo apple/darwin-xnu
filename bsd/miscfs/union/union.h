@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2002 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -58,7 +58,12 @@
  *
  *	@(#)union.h	8.9 (Berkeley) 12/10/94
  */
+#ifndef __UNION_UNION_H__
+#define __UNION_UNION_H__
 
+#include  <sys/appleapiopts.h>
+
+#ifdef __APPLE_API_PRIVATE
 struct union_args {
 	char		*target;	/* Target of loopback  */
 	int		mntflags;	/* Options on the mount */
@@ -149,3 +154,6 @@ extern void union_newsize __P((struct vnode *, off_t, off_t));
 extern int (**union_vnodeop_p)(void *);
 extern struct vfsops union_vfsops;
 #endif /* KERNEL */
+
+#endif /* __APPLE_API_PRIVATE */
+#endif /* __UNION_UNION_H__ */

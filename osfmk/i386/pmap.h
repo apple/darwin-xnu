@@ -105,6 +105,9 @@ typedef unsigned int	pt_entry_t;
 #define PTESHIFT	12	/* page table shift */
 #define PTEMASK		0x3ff	/* mask for page table index */
 
+
+#define	VM_WIMG_DEFAULT		VM_MEM_COHERENT
+
 /*
  *	Convert kernel virtual address to linear address
  */
@@ -149,6 +152,13 @@ typedef unsigned int	pt_entry_t;
 #define	pa_to_pte(a)		((a) & INTEL_PTE_PFN)
 #define	pte_to_pa(p)		((p) & INTEL_PTE_PFN)
 #define	pte_increment_pa(p)	((p) += INTEL_OFFMASK+1)
+
+#define PMAP_DEFAULT_CACHE	0
+#define PMAP_INHIBIT_CACHE	1
+#define PMAP_GUARDED_CACHE	2
+#define PMAP_ACTIVATE_CACHE	4
+#define PMAP_NO_GUARD_CACHE	8
+
 
 /*
  *	Convert page table entry to kernel virtual address
@@ -511,6 +521,8 @@ extern void flush_dcache(vm_offset_t addr, unsigned count, int phys);
 #define pmap_phys_to_frame(phys)	((int) (intel_btop(phys)))
 #define	pmap_copy(dst_pmap,src_pmap,dst_addr,len,src_addr)
 #define	pmap_attribute(pmap,addr,size,attr,value) \
+					(KERN_INVALID_ADDRESS)
+#define	pmap_attribute_cache_sync(addr,size,attr,value) \
 					(KERN_INVALID_ADDRESS)
 #define pmap_sync_caches_phys(pa) \
 					(KERN_INVALID_ADDRESS)

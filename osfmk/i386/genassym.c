@@ -62,7 +62,6 @@
 #include <kern/task.h>
 #include <kern/lock.h>
 #include <kern/thread_act.h>
-#include <kern/thread_pool.h>
 #include <ipc/ipc_space.h>
 #include <ipc/ipc_port.h>
 #include <ipc/ipc_pset.h>
@@ -74,7 +73,6 @@
 #include <i386/seg.h>
 #include <i386/pmap.h>
 #include <i386/tss.h>
-#include <mach/rpc.h>
 #include <vm/vm_map.h>
 #if	NCPUS > 1
 #include <i386/mp_desc.h>
@@ -150,12 +148,6 @@ main(
 	DECLARE("ACT_MAP",	offsetof(thread_act_t, map));
 
 	DECLARE("MAP_PMAP",	offsetof(vm_map_t, pmap));
-
-	/* XXX Until rpc buffers move from kernel stack to activation */
-	DECLARE("RPC_CLIENT_BUF_SIZE",	 
-			2 * RPC_KBUF_SIZE * sizeof(int) + 
-			RPC_DESC_COUNT * sizeof(rpc_copy_state_data_t) +
-			40 * sizeof(int));
 
 	DECLARE("HOST_NAME",	offsetof(host_t, host_self));
 

@@ -35,7 +35,11 @@
 
 #include <mach/mach_types.h>
 
-#ifdef MACH_KERNEL_PRIVATE
+#include <sys/appleapiopts.h>
+
+#ifdef	__APPLE_API_PRIVATE
+
+#ifdef	MACH_KERNEL_PRIVATE
 
 #include <kern/wait_queue.h>
 #include <kern/macro_help.h>
@@ -81,9 +85,6 @@ typedef struct lock_set {
 #define ULOCK_FREE	0
 #define ULOCK_HELD	1
 
-#define LOCK_OPERATION_ABORTED(th)   ((th)->wait_link.prev != (queue_entry_t) 0)
-#define LOCK_OPERATION_COMPLETE(th)  ((th)->wait_link.prev  = (queue_entry_t) 0)
-
 /*
  *  Data structure internal lock macros
  */
@@ -100,7 +101,13 @@ typedef struct lock_set {
 
 extern void lock_set_init(void);
 
-#endif /* MACH_KERNEL_PRIVATE */
+extern	kern_return_t	lock_release_internal	(ulock_t ulock,
+						 thread_act_t thr_act);
+
+#endif	/* MACH_KERNEL_PRIVATE */
+
+#endif	/* __APPLE_API_PRIVATE */
+
 
 /*
  *	Forward Declarations
@@ -127,9 +134,6 @@ extern	kern_return_t	lock_make_stable	(lock_set_t lock_set,
 						 int lock_id);	       
 
 extern  kern_return_t	lock_make_unstable	(ulock_t ulock,
-						 thread_act_t thr_act);
-
-extern	kern_return_t	lock_release_internal	(ulock_t ulock,
 						 thread_act_t thr_act);
 
 extern	kern_return_t	lock_handoff		(lock_set_t lock_set,

@@ -29,6 +29,7 @@
 
 #ifndef _NETAT_EP_H_
 #define _NETAT_EP_H_
+#include <sys/appleapiopts.h>
 
 #define EP_REQUEST         	1  	/* Echo request packet 		*/
 #define EP_REPLY           	2  	/* Echo reply packet 		*/

@@ -1,3 +1,6 @@
+/*	$FreeBSD: src/sys/crypto/blowfish/bf_enc.c,v 1.1.2.2 2001/07/03 11:01:28 ume Exp $	*/
+/*	$KAME: bf_enc.c,v 1.5 2000/09/18 21:21:19 itojun Exp $	*/
+
 /* crypto/bf/bf_enc.c */
 /* Copyright (C) 1995-1997 Eric Young (eay@mincom.oz.au)
  * All rights reserved.
@@ -56,6 +59,7 @@
  * [including the GNU Public Licence.]
  */
 
+#include <sys/types.h>
 #include <crypto/blowfish/blowfish.h>
 #include <crypto/blowfish/bf_locl.h>
 
@@ -69,72 +73,71 @@ If you set BF_ROUNDS to some value other than 16 or 20, you will have
 to modify the code.
 #endif
 
-void BF_encrypt(data,key,encrypt)
-BF_LONG *data;
-BF_KEY *key;
-int encrypt;
-	{
-	register BF_LONG l,r,*p,*s;
+/* XXX "data" is host endian */
+void
+BF_encrypt(data, key, encrypt)
+	BF_LONG *data;
+	BF_KEY *key;
+	int encrypt;
+{
+	register BF_LONG l, r, *p, *s;
 
-	p=key->P;
-	s= &(key->S[0]);
-	l=data[0];
-	r=data[1];
+	p = key->P;
+	s= &key->S[0];
+	l = data[0];
+	r = data[1];
 
-	if (encrypt)
-		{
+	if (encrypt) {
 		l^=p[0];
-		BF_ENC(r,l,s,p[ 1]);
-		BF_ENC(l,r,s,p[ 2]);
-		BF_ENC(r,l,s,p[ 3]);
-		BF_ENC(l,r,s,p[ 4]);
-		BF_ENC(r,l,s,p[ 5]);
-		BF_ENC(l,r,s,p[ 6]);
-		BF_ENC(r,l,s,p[ 7]);
-		BF_ENC(l,r,s,p[ 8]);
-		BF_ENC(r,l,s,p[ 9]);
-		BF_ENC(l,r,s,p[10]);
-		BF_ENC(r,l,s,p[11]);
-		BF_ENC(l,r,s,p[12]);
-		BF_ENC(r,l,s,p[13]);
-		BF_ENC(l,r,s,p[14]);
-		BF_ENC(r,l,s,p[15]);
-		BF_ENC(l,r,s,p[16]);
+		BF_ENC(r, l, s, p[ 1]);
+		BF_ENC(l, r, s, p[ 2]);
+		BF_ENC(r, l, s, p[ 3]);
+		BF_ENC(l, r, s, p[ 4]);
+		BF_ENC(r, l, s, p[ 5]);
+		BF_ENC(l, r, s, p[ 6]);
+		BF_ENC(r, l, s, p[ 7]);
+		BF_ENC(l, r, s, p[ 8]);
+		BF_ENC(r, l, s, p[ 9]);
+		BF_ENC(l, r, s, p[10]);
+		BF_ENC(r, l, s, p[11]);
+		BF_ENC(l, r, s, p[12]);
+		BF_ENC(r, l, s, p[13]);
+		BF_ENC(l, r, s, p[14]);
+		BF_ENC(r, l, s, p[15]);
+		BF_ENC(l, r, s, p[16]);
 #if BF_ROUNDS == 20
-		BF_ENC(r,l,s,p[17]);
-		BF_ENC(l,r,s,p[18]);
-		BF_ENC(r,l,s,p[19]);
-		BF_ENC(l,r,s,p[20]);
+		BF_ENC(r, l, s, p[17]);
+		BF_ENC(l, r, s, p[18]);
+		BF_ENC(r, l, s, p[19]);
+		BF_ENC(l, r, s, p[20]);
 #endif
-		r^=p[BF_ROUNDS+1];
-		}
-	else
-		{
-		l^=p[BF_ROUNDS+1];
+		r ^= p[BF_ROUNDS + 1];
+	} else {
+		l ^= p[BF_ROUNDS + 1];
 #if BF_ROUNDS == 20
-		BF_ENC(r,l,s,p[20]);
-		BF_ENC(l,r,s,p[19]);
-		BF_ENC(r,l,s,p[18]);
-		BF_ENC(l,r,s,p[17]);
+		BF_ENC(r, l, s, p[20]);
+		BF_ENC(l, r, s, p[19]);
+		BF_ENC(r, l, s, p[18]);
+		BF_ENC(l, r, s, p[17]);
 #endif
-		BF_ENC(r,l,s,p[16]);
-		BF_ENC(l,r,s,p[15]);
-		BF_ENC(r,l,s,p[14]);
-		BF_ENC(l,r,s,p[13]);
-		BF_ENC(r,l,s,p[12]);
-		BF_ENC(l,r,s,p[11]);
-		BF_ENC(r,l,s,p[10]);
-		BF_ENC(l,r,s,p[ 9]);
-		BF_ENC(r,l,s,p[ 8]);
-		BF_ENC(l,r,s,p[ 7]);
-		BF_ENC(r,l,s,p[ 6]);
-		BF_ENC(l,r,s,p[ 5]);
-		BF_ENC(r,l,s,p[ 4]);
-		BF_ENC(l,r,s,p[ 3]);
-		BF_ENC(r,l,s,p[ 2]);
-		BF_ENC(l,r,s,p[ 1]);
-		r^=p[0];
-		}
-	data[1]=l&0xffffffff;
-	data[0]=r&0xffffffff;
+		BF_ENC(r, l, s, p[16]);
+		BF_ENC(l, r, s, p[15]);
+		BF_ENC(r, l, s, p[14]);
+		BF_ENC(l, r, s, p[13]);
+		BF_ENC(r, l, s, p[12]);
+		BF_ENC(l, r, s, p[11]);
+		BF_ENC(r, l, s, p[10]);
+		BF_ENC(l, r, s, p[ 9]);
+		BF_ENC(r, l, s, p[ 8]);
+		BF_ENC(l, r, s, p[ 7]);
+		BF_ENC(r, l, s, p[ 6]);
+		BF_ENC(l, r, s, p[ 5]);
+		BF_ENC(r, l, s, p[ 4]);
+		BF_ENC(l, r, s, p[ 3]);
+		BF_ENC(r, l, s, p[ 2]);
+		BF_ENC(l, r, s, p[ 1]);
+		r ^= p[0];
 	}
+	data[1] = l & 0xffffffff;
+	data[0] = r & 0xffffffff;
+}

@@ -126,6 +126,9 @@ extern mach_msg_return_t mach_msg_rpc_from_kernel(
 
 extern void mach_msg_receive_continue(void);
 
+#include <sys/appleapiopts.h>
+
+#ifdef __APPLE_API_EVOLVING
 /*
  * Kernel implementation of the MIG object base class
  *
@@ -151,5 +154,6 @@ typedef struct mig_notify_object {
 			mach_port_t		port;	 /* our port pointer  */
 } mig_notify_object_data_t;
 
+#endif  /* __APPLE_API_EVOLVING */
 
 #endif	/* _IPC_MIG_H_ */

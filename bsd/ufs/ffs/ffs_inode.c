@@ -70,6 +70,7 @@
 #include <sys/trace.h>
 #include <sys/resourcevar.h>
 #include <sys/ubc.h>
+#include <sys/quota.h>
 
 #include <sys/vm.h>
 
@@ -199,6 +200,9 @@ ffs_truncate(ap)
 	int aflags, error, allerror;
 	off_t osize;
 	int devBlockSize=0;
+#if QUOTA
+	int64_t change;   /* in bytes */
+#endif /* QUOTA */
 
 	if (length < 0)
 		return (EINVAL);
@@ -432,7 +436,8 @@ done:
 		oip->i_blocks = 0;
 	oip->i_flag |= IN_CHANGE;
 #if QUOTA
-	(void) chkdq(oip, -blocksreleased, NOCRED, 0);
+	change = dbtob((int64_t)blocksreleased,devBlockSize);
+	(void) chkdq(oip, -change, NOCRED, 0);
 #endif
 	return (allerror);
 }

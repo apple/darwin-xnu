@@ -148,9 +148,6 @@ CountFilenameExtensionChars( const unsigned char * filename, UInt32 length )
 	UInt16	maxExtChars;
 	Boolean	foundExtension;
 
-	if (length == kUndefinedStrLen)
-		length = strlen(filename);
-
 	if ( length < 3 )
 		return 0;	/* "x.y" is smallest possible extension	*/
 	
@@ -198,9 +195,6 @@ GetEmbeddedFileID(const unsigned char * filename, UInt32 length, UInt32 *prefixL
 
 	if ( filename == NULL )
 		return 0;
-
-	if (length == kUndefinedStrLen)
-		length = strlen(filename);
 
 	if ( length < 28 )
 		return 0;	/* too small to have been mangled */
@@ -274,8 +268,6 @@ HexStringToInteger(UInt32 length, const UInt8 *hexStr)
  *		return	 0 if equal
  *
  */
-extern unsigned short gCompareTable[];
-
 SInt32	FastRelString( ConstStr255Param str1, ConstStr255Param str2 )
 {
 	UInt16*			compareTable;
@@ -389,9 +381,6 @@ SInt32	FastRelString( ConstStr255Param str1, ConstStr255Param str2 )
 //		else
 //			return 1;
 //
-
-extern UInt16 gLowerCaseTable[];
-extern UInt16 gLatinCaseFold[];
 
 SInt32 FastUnicodeCompare ( register ConstUniCharArrayPtr str1, register ItemCount length1,
 							register ConstUniCharArrayPtr str2, register ItemCount length2)

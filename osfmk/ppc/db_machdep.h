@@ -63,23 +63,24 @@
 #include <ppc/thread.h>		/* for thread_status */
 #include <ppc/trap.h>
 #include <ppc/proc_reg.h>
+#include <ppc/savearea.h>
 
 typedef	vm_offset_t	db_addr_t;	/* address - unsigned */
 typedef	int		db_expr_t;	/* expression - signed */
 
-typedef struct ppc_saved_state db_regs_t;
+typedef struct savearea db_regs_t;
 db_regs_t	ddb_regs;	/* register state */
 #define	DDB_REGS	(&ddb_regs)
 extern int	db_active;	/* ddb is active */
 
-#define	PC_REGS(regs)	((db_addr_t)(regs)->srr0)
+#define	PC_REGS(regs)	((db_addr_t)(regs)->save_srr0)
 
 #define	BKPT_INST	0x7c810808	/* breakpoint instruction */
 #define	BKPT_SIZE	(4)		/* size of breakpoint inst */
 #define	BKPT_SET(inst)	(BKPT_INST)
 
-#define db_clear_single_step(regs)	((regs)->srr1 &= ~MASK(MSR_SE))
-#define db_set_single_step(regs)	((regs)->srr1 |= MASK(MSR_SE))
+#define db_clear_single_step(regs)	((regs)->save_srr1 &= ~MASK(MSR_SE))
+#define db_set_single_step(regs)	((regs)->save_srr1 |= MASK(MSR_SE))
 
 #define	IS_BREAKPOINT_TRAP(type, code)	(FALSE)
 #define IS_WATCHPOINT_TRAP(type, code)	(FALSE)
@@ -106,12 +107,12 @@ int db_inst_store(unsigned long);
 	 ((user) && (addr) < VM_MAX_ADDRESS))
 
 /*
- * Given pointer to ppc_saved_state, determine if it represents
+ * Given pointer to savearea, determine if it represents
  * a thread executing a) in user space, b) in the kernel, or c)
  * in a kernel-loaded task.  Return true for cases a) and c).
  */
 #define IS_USER_TRAP(regs)	\
-     (USER_MODE(regs->srr1))
+     (USER_MODE(regs->save_srr1))
 
 extern boolean_t	db_check_access(
 				vm_offset_t	addr,
@@ -175,9 +176,9 @@ extern void		db_task_name(
 
 extern void		kdb_trap(
 				int			type,
-				struct ppc_saved_state	*regs);
+				struct savearea	*regs);
 extern boolean_t	db_trap_from_asm(
-				struct ppc_saved_state *regs);
+				struct savearea *regs);
 extern void		kdb_on(
 				int			cpu);
 extern void		cnpollc(

@@ -1,0 +1,149 @@
+.\"	$NetBSD: types.5,v 1.3 1994/11/30 19:31:34 jtc Exp $
+.\"
+.\" Copyright (c) 1980, 1991, 1993
+.\"	The Regents of the University of California.  All rights reserved.
+.\"
+.\" Redistribution and use in source and binary forms, with or without
+.\" modification, are permitted provided that the following conditions
+.\" are met:
+.\" 1. Redistributions of source code must retain the above copyright
+.\"    notice, this list of conditions and the following disclaimer.
+.\" 2. Redistributions in binary form must reproduce the above copyright
+.\"    notice, this list of conditions and the following disclaimer in the
+.\"    documentation and/or other materials provided with the distribution.
+.\" 3. All advertising materials mentioning features or use of this software
+.\"    must display the following acknowledgement:
+.\"	This product includes software developed by the University of
+.\"	California, Berkeley and its contributors.
+.\" 4. Neither the name of the University nor the names of its contributors
+.\"    may be used to endorse or promote products derived from this software
+.\"    without specific prior written permission.
+.\"
+.\" THIS SOFTWARE IS PROVIDED BY THE REGENTS AND CONTRIBUTORS ``AS IS'' AND
+.\" ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+.\" IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
+.\" ARE DISCLAIMED.  IN NO EVENT SHALL THE REGENTS OR CONTRIBUTORS BE LIABLE
+.\" FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
+.\" DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS
+.\" OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION)
+.\" HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT
+.\" LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
+.\" OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
+.\" SUCH DAMAGE.
+.\"
+.\"     @(#)types.5	8.1 (Berkeley) 6/5/93
+.\"
+.Dd AUGUST 2, 2001
+.Dt TYPES 5
+.Os Darwin 
+.Sh NAME
+.Nm types
+.Nd system data types
+.Sh SYNOPSIS
+.Fd #include <sys/types.h>
+.Sh DESCRIPTION
+The file
+.Pa sys/types.h
+contains the defined data types used in the kernel (most are
+used through out the system).
+.Bd -literal
+#ifndef _TYPES_H_
+#define	_TYPES_H_
+
+typedef	short	dev_t;
+#ifndef _POSIX_SOURCE
+					/* major part of a device */
+#define	major(x)	((int)(((unsigned)(x)>>8)&0377))
+					/* minor part of a device */
+#define	minor(x)	((int)((x)&0377))
+					/* make a device number */
+#define	makedev(x,y)	((dev_t)(((x)<<8) | (y)))
+#endif
+
+typedef	unsigned char	u_char;
+typedef	unsigned short	u_short;
+typedef	unsigned int	u_int;
+typedef	unsigned long	u_long;
+typedef	unsigned short	ushort;		/* Sys V compatibility */
+
+#include <machine/ansi.h>
+#if !defined(_ANSI_SOURCE) && !defined(_POSIX_SOURCE)
+#include <machine/types.h>
+#endif
+
+#ifdef	_CLOCK_T_
+typedef	_CLOCK_T_	clock_t;
+#undef	_CLOCK_T_
+#endif
+
+#ifdef	_SIZE_T_
+typedef	_SIZE_T_	size_t;
+#undef	_SIZE_T_
+#endif
+
+#ifdef	_TIME_T_
+typedef	_TIME_T_	time_t;
+#undef	_TIME_T_
+#endif
+
+#ifndef _POSIX_SOURCE
+typedef	struct	_uquad { unsigned long val[2]; } u_quad;
+typedef	struct	_quad { long val[2]; } quad;
+#endif
+typedef	long *	qaddr_t;	/* should be typedef quad * qaddr_t; */
+
+typedef	long	daddr_t;
+typedef	char *	caddr_t;
+typedef	u_long	ino_t;
+typedef	long	swblk_t;
+typedef	long	segsz_t;
+typedef	long	off_t;
+typedef	u_short	uid_t;
+typedef	u_short	gid_t;
+typedef	short	pid_t;
+typedef	u_short	nlink_t;
+typedef	u_short	mode_t;
+typedef u_long	fixpt_t;
+
+#ifndef _POSIX_SOURCE
+#define	NBBY	8		/* number of bits in a byte */
+
+/*
+ * Select uses bit masks of file descriptors in longs.  These macros
+ * manipulate such bit fields (the filesystem macros use chars).
+ * FD_SETSIZE may be defined by the user, but the default here should
+ * be >= NOFILE (param.h).
+ */
+#ifndef	FD_SETSIZE
+#define	FD_SETSIZE	1024
+#endif
+
+typedef long	fd_mask;
+#define NFDBITS	(sizeof(fd_mask) * NBBY)	/* bits per mask */
+
+#ifndef howmany
+#define	howmany(x, y)	(((x)+((y)-1))/(y))
+#endif
+
+typedef	struct fd_set {
+	fd_mask	fds_bits[howmany(FD_SETSIZE, NFDBITS)];
+} fd_set;
+
+#define	FD_SET(n, p)	((p)->fds_bits[(n)/NFDBITS] |= (1 << ((n) % NFDBITS)))
+#define	FD_CLR(n, p)	((p)->fds_bits[(n)/NFDBITS] &= ~(1 << ((n) % NFDBITS)))
+#define	FD_ISSET(n, p)	((p)->fds_bits[(n)/NFDBITS] & (1 << ((n) % NFDBITS)))
+#define	FD_ZERO(p)	bzero((char *)(p), sizeof(*(p)))
+
+#endif /* !_POSIX_SOURCE */
+#endif /* !_TYPES_H_ */
+.Ed
+.Sh SEE ALSO
+.Xr fs 5 ,
+.Xr time 3 ,
+.Xr lseek 2 ,
+.Xr adb 1
+.Sh HISTORY
+A
+.Nm
+file appeared in
+.At v7 .

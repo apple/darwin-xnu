@@ -22,102 +22,6 @@
 /*
  * @OSF_COPYRIGHT@
  */
-/*
- * HISTORY
- * 
- * Revision 1.1.1.1  1998/09/22 21:05:30  wsanchez
- * Import of Mac OS X kernel (~semeria)
- *
- * Revision 1.2  1998/04/29 17:36:54  mburg
- * MK7.3 merger
- *
- * Revision 1.2.31.1  1998/02/03  09:33:56  gdt
- * 	Merge up to MK7.3
- * 	[1998/02/03  09:17:49  gdt]
- *
- * Revision 1.2.29.1  1997/06/17  03:01:26  devrcs
- * 	Added `TASK_SCHED_INFO.'
- * 	[1996/03/18  15:24:59  rkc]
- * 
- * Revision 1.2.21.3  1995/01/06  19:51:51  devrcs
- * 	mk6 CR668 - 1.3b26 merge
- * 	64bit cleanup, ledgers, security, flavors.
- * 	[1994/10/14  03:43:10  dwm]
- * 
- * Revision 1.2.21.2  1994/09/23  02:42:46  ezf
- * 	change marker to not FREE
- * 	[1994/09/22  21:42:56  ezf]
- * 
- * Revision 1.2.21.1  1994/08/07  20:50:07  bolinger
- * 	Merge up to colo_b7.
- * 	[1994/08/01  21:02:06  bolinger]
- * 
- * Revision 1.2.17.4  1994/06/25  03:47:20  dwm
- * 	mk6 CR98 - add flavor interface typedefs (task_flavor_t).
- * 	[1994/06/24  21:54:58  dwm]
- * 
- * Revision 1.2.17.3  1994/05/02  21:36:04  dwm
- * 	Remove nmk15_compat support.
- * 	[1994/05/02  21:09:10  dwm]
- * 
- * Revision 1.2.17.2  1994/01/14  18:42:23  bolinger
- * 	Add TASK_USER_DATA flavor of task_info() (and task_set_info()).
- * 	[1994/01/14  18:20:52  bolinger]
- * 
- * Revision 1.2.17.1  1994/01/12  17:57:26  dwm
- * 	Fix "ifdef" NMK15_COMPAT to "if"
- * 	[1994/01/12  17:31:13  dwm]
- * 
- * Revision 1.2.3.5  1993/08/03  18:29:52  gm
- * 	CR9596: Change KERNEL to MACH_KERNEL.
- * 	[1993/08/02  18:33:57  gm]
- * 
- * Revision 1.2.3.4  1993/07/08  19:04:52  watkins
- * 	New version of task_basic_info structure; old version
- * 	is now under nmk15_compat.
- * 	[1993/07/07  21:04:11  watkins]
- * 
- * Revision 1.2.3.3  1993/06/29  21:55:50  watkins
- * 	New definitions for scheduling control interfaces.
- * 	[1993/06/29  20:50:59  watkins]
- * 
- * Revision 1.2.3.2  1993/06/09  02:43:32  gm
- * 	Added to OSF/1 R1.3 from NMK15.0.
- * 	[1993/06/02  21:18:18  jeffc]
- * 
- * Revision 1.2  1993/04/19  16:39:27  devrcs
- * 	ansi C conformance changes
- * 	[1993/02/02  18:54:59  david]
- * 
- * Revision 1.1  1992/09/30  02:32:09  robert
- * 	Initial revision
- * 
- * $EndLog$
- */
-/* CMU_HIST */
-/*
- * Revision 2.4  91/05/14  17:00:41  mrt
- * 	Correcting copyright
- * 
- * Revision 2.3  91/02/05  17:36:25  mrt
- * 	Changed to new Mach copyright
- * 	[91/02/01  17:21:17  mrt]
- * 
- * Revision 2.2  90/05/03  15:48:36  dbg
- * 	Added TASK_THREAD_TIMES_INFO flavor.
- * 	[90/04/03            dbg]
- * 
- * Revision 2.1  89/08/03  16:04:49  rwd
- * Created.
- * 
- * Revision 2.3  89/02/25  18:41:06  gm0w
- * 	Changes for cleanup.
- * 
- * 15-Jan-88  David Golub (dbg) at Carnegie-Mellon University
- *	Created, based on old task_statistics.
- *
- */
-/* CMU_ENDHIST */
 /* 
  * Mach Operating System
  * Copyright (c) 1991,1990,1989,1988,1987 Carnegie Mellon University
@@ -160,6 +64,8 @@
 #include <mach/machine/vm_types.h>
 #include <mach/time_value.h>
 #include <mach/policy.h>
+
+#include <sys/appleapiopts.h>
 
 /*
  *	Generic information structure to allow for expansion.
@@ -225,14 +131,18 @@ typedef struct task_thread_times_info	*task_thread_times_info_t;
 #define	TASK_THREAD_TIMES_INFO_COUNT	\
 		(sizeof(task_thread_times_info_data_t) / sizeof(natural_t))
 
+#ifdef	__APPLE_API_UNSTABLE
+
 #define TASK_SCHED_TIMESHARE_INFO	10
 #define TASK_SCHED_RR_INFO		11
 #define TASK_SCHED_FIFO_INFO		12
 
+#define TASK_SCHED_INFO			14
+
+#endif	/* __APPLE_API_UNSTABLE */
+
 #define TASK_SECURITY_TOKEN		13
 #define TASK_SECURITY_TOKEN_COUNT	\
 		(sizeof(security_token_t) / sizeof(natural_t))
-
-#define TASK_SCHED_INFO			14
 
 #endif	/* TASK_INFO_H_ */

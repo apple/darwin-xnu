@@ -1,0 +1,60 @@
+.\""Copyright (c) 2001 Apple Computer, Inc. All Rights Reserved.
+.\"The contents of this file constitute Original Code as defined in and are 
+.\"subject to the Apple Public Source License Version 1.2 (the 'License'). 
+.\"You may not use this file except in compliance with the
+.\"License. Please obtain a copy of the License at 
+.\"http://www.apple.com/publicsource and read it before using this file.
+.\"
+.\"This Original Code and all software distributed under the License are
+.\"distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+.\"EXPRESS OR IMPLIED, AND APPLE
+.\"HEREBY DISCLAIMS ALL SUCH WARRANTIES, INCLUDING WITHOUT LIMITATION, ANY 
+.\"WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE,
+.\"QUIET ENJOYMENT OR NON-INFRINGEMENT. Please see the License for the 
+.\"specific language governing rights and limitations under the License."
+.Dd March 18, 2002
+.Dt CORE 5
+.Os
+.Sh NAME
+.Nm core
+.Nd memory image file format
+.Sh SYNOPSIS
+.In sys/param.h
+.Sh DESCRIPTION
+A small number of signals which cause abnormal termination of a process
+also cause a record of the process's in-core state to be written
+to disk for later examination by one of the available debuggers.
+(See
+.Xr sigaction 2 . )
+This memory image is written to a file named by default
+.Nm core.pid
+in the
+.Nm /cores
+directory;
+provided the terminated process had write permission in the directory,
+and the directory existed.
+.Pp
+The maximum size of a core file is limited by
+.Xr setrlimit 2 .
+Files which would be larger than the limit are not created.
+.Pp
+The core file consists of the
+.Pa Xr Mach-O 5
+header as  described in the
+.Aq Pa sys/loader.h
+file.
+The remainder of the core
+file consists of various sections described in the
+.Xr Mach-O 5
+header.
+.Sh SEE ALSO
+.Xr gdb 1 ,
+.Xr setrlimit 2 ,
+.Xr sigaction 2 ,
+.Xr Mach-O 5,
+.Xr sysctl 8
+.Sh HISTORY
+A
+.Nm
+file format appeared in
+.At v6 .

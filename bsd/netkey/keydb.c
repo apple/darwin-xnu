@@ -29,13 +29,6 @@
  * SUCH DAMAGE.
  */
 
-#if (defined(__FreeBSD__) && __FreeBSD__ >= 3) || defined(__NetBSD__)
-#include "opt_inet.h"
-#ifdef __NetBSD__
-#include "opt_ipsec.h"
-#endif
-#endif
-
 #include <sys/types.h>
 #include <sys/socket.h>
 #include <sys/param.h>
@@ -56,9 +49,7 @@
 
 #include <net/net_osdep.h>
 
-#if defined(__FreeBSD__) && __FreeBSD__ >= 3
 MALLOC_DEFINE(M_SECA, "key mgmt", "security associations, key management");
-#endif
 
 static void keydb_delsecasvar __P((struct secasvar *));
 
@@ -133,11 +124,7 @@ keydb_refsecasvar(p)
 {
 	int s;
 
-#ifdef __NetBSD__
-	s = splsoftnet();
-#else
 	s = splnet();
-#endif
 	p->refcnt++;
 	splx(s);
 }
@@ -148,13 +135,10 @@ keydb_freesecasvar(p)
 {
 	int s;
 
-#ifdef __NetBSD__
-	s = splsoftnet();
-#else
 	s = splnet();
-#endif
 	p->refcnt--;
-	if (p->refcnt == 0)
+	/* negative refcnt will cause panic intentionally */
+	if (p->refcnt <= 0)
 		keydb_delsecasvar(p);
 	splx(s);
 }

@@ -22,7 +22,6 @@
 #ifndef IOKIT_IOTIMESTAMP_H
 #define IOKIT_IOTIMESTAMP_H
 
-#include <kdebug.h>
 #include <sys/kdebug.h>
 
 static inline void
@@ -94,6 +93,7 @@ IOTimeStamp(unsigned int csc,
 #define IODBG_CMDQ(code)	(KDBG_CODE(DBG_IOKIT, DBG_IOCMDQ, code))
 #define IODBG_MCURS(code)	(KDBG_CODE(DBG_IOKIT, DBG_IOMCURS, code))
 #define IODBG_MDESC(code)	(KDBG_CODE(DBG_IOKIT, DBG_IOMDESC, code))
+#define IODBG_POWER(code)	(KDBG_CODE(DBG_IOKIT, DBG_IOPOWER, code))
 
 /* IOKit specific codes - within each subclass */
 
@@ -145,5 +145,12 @@ IOTimeStamp(unsigned int csc,
 /* DBG_IOKIT/DBG_IOMCURS codes */
 
 /* DBG_IOKIT/DBG_IOMDESC codes */
+
+/* DBG_IOKIT/DBG_IOPOWER codes */
+#define IOPOWER_ROOT	1	/* 0x05100004 */
+#define IOPOWER_WAKE	2	/* 0x05100008 */
+#define IOPOWER_STATE	3	/* 0x0510000c */
+#define IOPOWER_ACK	4	/* 0x05100010 */
+#define IOPOWER_CLIENT  5	/* 0x05100014 */
 
 #endif /* ! IOKIT_IOTIMESTAMP_H */

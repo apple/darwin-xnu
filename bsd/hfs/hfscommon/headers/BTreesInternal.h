@@ -71,6 +71,11 @@
 #ifndef	__BTREESINTERNAL__
 #define __BTREESINTERNAL__
 
+#include <sys/appleapiopts.h>
+
+#ifdef KERNEL
+#ifdef __APPLE_API_PRIVATE
+
 #ifndef __FILEMGRINTERNAL__
 #include "FileMgrInternal.h"
 #endif
@@ -117,9 +122,9 @@ typedef BlockDescriptor *BlockDescPtr;
 
 
 struct FSBufferDescriptor {
-	LogicalAddress 					bufferAddress;
-	ByteCount 						itemSize;
-	ItemCount 						itemCount;
+	void *		bufferAddress;
+	ByteCount	itemSize;
+	ItemCount	itemCount;
 };
 typedef struct FSBufferDescriptor FSBufferDescriptor;
 
@@ -148,7 +153,7 @@ enum {
 };
 typedef OptionBits	ReleaseBlockOptions;
 
-typedef	UInt32	FSSize;
+typedef	UInt64	FSSize;
 typedef	UInt32	ForkBlockNumber;
 
 /*============================================================================
@@ -285,7 +290,6 @@ extern OSStatus	BTClosePath			(FCB		 				*filePtr );
 
 extern OSStatus	BTSearchRecord		(FCB		 				*filePtr,
 									 BTreeIterator				*searchIterator,
-									 UInt32						heuristicHint,
 									 FSBufferDescriptor			*btRecord,
 									 UInt16						*recordLen,
 									 BTreeIterator				*resultIterator );
@@ -310,6 +314,10 @@ extern OSStatus	BTReplaceRecord		(FCB		 				*filePtr,
 									 FSBufferDescriptor			*btRecord,
 									 UInt16						 recordLen );
 
+extern OSStatus	BTUpdateRecord		(FCB		 				*filePtr,
+									 BTreeIterator				*iterator,
+									 IterateCallBackProcPtr		 callBackProc,
+									 void						*callBackState );
 
 extern OSStatus	BTDeleteRecord		(FCB		 				*filePtr,
 									 BTreeIterator				*iterator );
@@ -330,4 +338,6 @@ extern OSStatus	BTGetLastSync		(FCB		 				*filePtr,
 extern OSStatus	BTSetLastSync		(FCB		 				*filePtr,
 									 UInt32						lastfsync );
 
+#endif /* __APPLE_API_PRIVATE */
+#endif /* KERNEL */
 #endif // __BTREESINTERNAL__

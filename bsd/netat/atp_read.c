@@ -539,7 +539,7 @@ register struct atp_trans *trp;
 	  if (trp->tr_bdsp == NULL) {
 		gbuf_freem(m);
 		if (trp->tr_rsp_wait)
-			thread_wakeup(&trp->tr_event);
+			wakeup(&trp->tr_event);
 	  } else {
 		gbuf_set_type(m, MSG_IOCACK);
 		((ioc_t *)gbuf_rptr(m))->ioc_count = 0;

@@ -38,8 +38,9 @@
 #define MISSED	8+FM_SIZE
 
 #define	ILK_LOCKED		0x01
-#define	MUTEX_LOCKED	0x02
+#define	WAIT_FLAG		0x02
 #define	SLOCK_FAST		0x02
+#define TH_FN_OWNED		0x01
 
 ;
 ;		NOTE: make sure that PREEMPTSTACK in aligned_data is
@@ -119,11 +120,13 @@ not_a_slock:
 #define CHECK_NO_SIMPLELOCKS()							\
 			bt		24+disLkNmSimpb,2f			__ASMNL__ 	\
 			mfmsr	r11							__ASMNL__	\
+			rlwinm	r11,r11,0,MSR_FP_BIT+1,MSR_FP_BIT-1	__ASMNL__	\
+			rlwinm	r11,r11,0,MSR_VEC_BIT+1,MSR_VEC_BIT-1	__ASMNL__	\
 			rlwinm  r10,r11,0,MSR_EE_BIT+1,MSR_EE_BIT-1	__ASMNL__	\
 			mtmsr	r10							__ASMNL__	\
+			isync								__ASMNL__	\
 			mfsprg	r10,0						__ASMNL__	\
-			lwz		r10,PP_CPU_DATA(r10) 		__ASMNL__	\
-			lwz		r10,CPU_SIMPLE_LOCK_COUNT(r10) __ASMNL__	\
+			lwz		r10,PP_SIMPLE_LOCK_CNT(r10) __ASMNL__	\
 			cmpwi	r10,0 						__ASMNL__	\
 			beq+	1f 							__ASMNL__	\
 			lis		r3,hi16(simple_locks_held) __ASMNL__	\
@@ -146,11 +149,13 @@ simple_locks_held:
 #define CHECK_THREAD(thread_offset)						\
 			bt		24+disLkThreadb,2f			__ASMNL__ 	\
 			mfmsr	r11							__ASMNL__	\
+			rlwinm	r11,r11,0,MSR_FP_BIT+1,MSR_FP_BIT-1	__ASMNL__	\
+			rlwinm	r11,r11,0,MSR_VEC_BIT+1,MSR_VEC_BIT-1	__ASMNL__	\
 			rlwinm  r10,r11,0,MSR_EE_BIT+1,MSR_EE_BIT-1	__ASMNL__	\
 			mtmsr	r10							__ASMNL__	\
+			isync								__ASMNL__	\
 			mfsprg	r10,0						__ASMNL__	\
-			lwz		r10,PP_CPU_DATA(r10) 		__ASMNL__ 	\
-			lwz		r10,CPU_ACTIVE_THREAD(r10)	__ASMNL__	\
+			lwz		r10,PP_ACTIVE_THREAD(r10)	__ASMNL__	\
 			cmpwi	r10,0	 					__ASMNL__ 	\
 			beq-	1f 							__ASMNL__ 	\
 			lwz		r9,thread_offset(r3) 		__ASMNL__ 	\
@@ -171,11 +176,13 @@ wrong_thread:
 #define CHECK_MYLOCK(thread_offset)					\
 			bt		24+disLkMyLckb,2f			__ASMNL__ 	\
 			mfmsr	r11							__ASMNL__	\
+			rlwinm	r11,r11,0,MSR_FP_BIT+1,MSR_FP_BIT-1	__ASMNL__	\
+			rlwinm	r11,r11,0,MSR_VEC_BIT+1,MSR_VEC_BIT-1	__ASMNL__	\
 			rlwinm  r10,r11,0,MSR_EE_BIT+1,MSR_EE_BIT-1	__ASMNL__	\
 			mtmsr	r10							__ASMNL__	\
+			isync								__ASMNL__	\
 			mfsprg	r10,0						__ASMNL__	\
-			lwz		r10,PP_CPU_DATA(r10)	 	__ASMNL__	\
-			lwz		r10,CPU_ACTIVE_THREAD(r10)	__ASMNL__	\
+			lwz		r10,PP_ACTIVE_THREAD(r10)	__ASMNL__	\
 			cmpwi	r10,0	 					__ASMNL__	\
 			beq-	1f 							__ASMNL__	\
 			lwz		r9,	thread_offset(r3) 		__ASMNL__	\
@@ -314,10 +321,13 @@ LEXT(hw_lock_to)
 			cmplw	cr1,r1,r1					/* Set flag to enable disable preemption */
 
 lockComm:	mfmsr	r9							/* Get the MSR value */
+			rlwinm	r9,r9,0,MSR_FP_BIT+1,MSR_FP_BIT-1	; Force floating point off
 			mr		r5,r3						/* Get the address of the lock */
+			rlwinm	r9,r9,0,MSR_VEC_BIT+1,MSR_VEC_BIT-1	; Force vectors off
 			rlwinm	r7,r9,0,MSR_EE_BIT+1,MSR_EE_BIT-1	/* Get MSR that is uninterruptible */
 	
 			mtmsr	r7							/* Turn off interruptions */
+			isync								; May have turned off vec and fp here 
 			mftb	r8							/* Get the low part of the time base */
 			
 lcktry:		lwarx	r6,0,r5						/* Grab the lock value */
@@ -396,9 +406,12 @@ lckfail:										/* We couldn't get the lock */
 LEXT(hw_lock_bit)
 
 			mfmsr	r9							/* Get the MSR value */
+			rlwinm	r9,r9,0,MSR_FP_BIT+1,MSR_FP_BIT-1	; Force floating point off
+			rlwinm	r9,r9,0,MSR_VEC_BIT+1,MSR_VEC_BIT-1	; Force vectors off
 			rlwinm	r7,r9,0,MSR_EE_BIT+1,MSR_EE_BIT-1	/* Get MSR that is uninterruptible */	
 
 			mtmsr	r7							/* Turn off interruptions */
+			isync								; May have turned off vec and fp here 
 
 			mftb	r8							/* Get the low part of the time base */
 			
@@ -503,14 +516,17 @@ ubittry:	lwarx	r0,0,r3						/* Grab the lock value */
 LEXT(hw_lock_mbits)
 
 			mfmsr	r9							; Get the MSR value
+			rlwinm	r9,r9,0,MSR_FP_BIT+1,MSR_FP_BIT-1	; Force floating point off
+			rlwinm	r9,r9,0,MSR_VEC_BIT+1,MSR_VEC_BIT-1	; Force vectors off
 			rlwinm	r8,r9,0,MSR_EE_BIT+1,MSR_EE_BIT-1	; Get MSR that is uninterruptible	
 
 			mtmsr	r8							; Turn off interruptions
-
+			isync								; May have turned off vectors or float here
 			mftb	r10							; Get the low part of the time base
 			
 mbittry:	lwarx	r12,0,r3					; Grab the lock value
 			and		r0,r12,r4					; Clear extra bits
+			andc	r12,r12,r4					; Clear all bits in the bit mask
 			or		r12,r12,r6					; Turn on the lock bits
 			cmplw	r0,r5						; Are these the right bits?
 			bne-	mbitsniff					; Nope, wait for it to clear...
@@ -522,7 +538,6 @@ mbittry:	lwarx	r12,0,r3					; Grab the lock value
 			
 mbitsniff:	lwz		r12,0(r3)					; Get that lock in here
 			and		r0,r12,r4					; Clear extra bits
-			or		r12,r12,r6					; Turn on the lock bits
 			cmplw	r0,r5						; Are these the right bits?
 			beq+	mbittry						; Yeah, try for it again...
 			
@@ -653,6 +668,8 @@ LEXT(hw_lock_try)
 			sc									/* (TEST/DEBUG) */
 #endif
 			mfmsr	r9							/* Save the MSR value */
+			rlwinm	r9,r9,0,MSR_FP_BIT+1,MSR_FP_BIT-1	; Force floating point off
+			rlwinm	r9,r9,0,MSR_VEC_BIT+1,MSR_VEC_BIT-1	; Force vectors off
 			rlwinm	r7,r9,0,MSR_EE_BIT+1,MSR_EE_BIT-1	/* Clear interruption bit */
 
 #if	MACH_LDEBUG
@@ -661,7 +678,7 @@ LEXT(hw_lock_try)
 #endif	/* MACH_LDEBUG */
 			
 			mtmsr	r7							/* Disable interruptions and thus, preemption */
-
+			isync								; May have turned off fp/vec here
 .L_lock_try_loop:	
 
 #if	MACH_LDEBUG
@@ -682,12 +699,11 @@ LEXT(hw_lock_try)
 			mfsprg	r6,0						/* Get the per_proc block */			
 			bne-	.L_lock_try_loop			/* If set failed, loop back */
 			
-			lwz		r6,PP_CPU_DATA(r6)			/* Get the pointer to the CPU data from per proc */
 			isync
 
-			lwz		r5,CPU_PREEMPTION_LEVEL(r6)	/* Get the preemption level */
+			lwz		r5,PP_PREEMPT_CNT(r6)		/* Get the preemption level */
 			addi	r5,r5,1						/* Bring up the disable count */
-			stw		r5,CPU_PREEMPTION_LEVEL(r6)	/* Save it back */
+			stw		r5,PP_PREEMPT_CNT(r6)		/* Save it back */
 
  			mtmsr	r9							/* Allow interruptions now */
 			li		r3,1						/* Set that the lock was free */
@@ -722,11 +738,11 @@ LEXT(hw_lock_held)
 			blr
 
 /*
- *      unsigned int hw_compare_and_store(unsigned int old, unsigned int new, unsigned int *area)
+ *		uint32_t hw_compare_and_store(uint32_t oldval, uint32_t newval, uint32_t *dest)
  *
  *		Compare old to area if equal, store new, and return true
  *		else return false and no store
- *      This is an atomic operation
+ *		This is an atomic operation
  *
  */
 			.align	5
@@ -750,7 +766,7 @@ csfail:		li		r3,0						/* Set failure */
 
 
 /*
- *      unsigned int hw_atomic_add(unsigned int *area, int val)
+ *		uint32_t hw_atomic_add(uint32_t *dest, uint32_t delt)
  *
  *		Atomically add the second parameter to the first.
  *		Returns the result.
@@ -771,7 +787,7 @@ addtry:		lwarx	r3,0,r6						/* Grab the area value */
 
 
 /*
- *      unsigned int hw_atomic_sub(unsigned int *area, int val)
+ *		uint32_t hw_atomic_sub(uint32_t *dest, uint32_t delt)
  *
  *		Atomically subtract the second parameter from the first.
  *		Returns the result.
@@ -792,7 +808,7 @@ subtry:		lwarx	r3,0,r6						/* Grab the area value */
 
 
 /*
- *      unsigned int hw_atomic_or(unsigned int *area, int val)
+ *		uint32_t hw_atomic_or(uint32_t *dest, uint32_t mask)
  *
  *		Atomically ORs the second parameter into the first.
  *		Returns the result.
@@ -813,7 +829,7 @@ ortry:		lwarx	r3,0,r6						; Grab the area value
 
 
 /*
- *      unsigned int hw_atomic_and(unsigned int *area, int val)
+ *		uint32_t hw_atomic_and(uint32_t *dest, uint32_t mask)
  *
  *		Atomically ANDs the second parameter with the first.
  *		Returns the result.
@@ -872,6 +888,7 @@ LEXT(hw_queue_atomic_list)
 hw_queue_comm:
 			lwarx	r9,0,r3						/* Pick up the anchor */
 			stwx	r9,r8,r7					/* Chain that to the end of the new stuff */
+			eieio								; Make sure this store makes it before the anchor update
 			stwcx.	r4,0,r3						/* Try to chain into the front */
 			bne-	hw_queue_comm				/* Didn't make it, try again... */
 			
@@ -912,7 +929,7 @@ ENTRY(mutex_init,TAG_NO_FRAME_USED)
 			li	r10,	0
 			stw	r10,	LOCK_DATA(r3)		/* clear lock word */
 			sth	r10,	MUTEX_WAITERS(r3)	/* init waiter count */
-
+			sth	r10,	MUTEX_PROMOTED_PRI(r3)
 #if	MACH_LDEBUG
 			stw	r10,	MUTEX_PC(r3)		/* init caller pc */
 			stw	r10,	MUTEX_THREAD(r3)	/* and owning thread */
@@ -939,14 +956,14 @@ LEXT(mutex_lock)
 LEXT(_mutex_lock)
 
 #if	!MACH_LDEBUG
+			mfsprg	r6,1					/* load the current thread */
 L_mutex_lock_loop:
-			lwarx	r5,0,r3
-			andi.	r4,r5,ILK_LOCKED|MUTEX_LOCKED
-			bne-	L_mutex_lock_slow
-			ori		r5,r5,MUTEX_LOCKED
-			stwcx.	r5,0,r3
-			bne-	L_mutex_lock_loop
-			isync
+			lwarx	r5,0,r3					/* load the mutex lock */
+			mr.		r5,r5
+			bne-	L_mutex_lock_slow		/* go to the slow path */
+			stwcx.	r6,0,r3					/* grab the lock */
+			bne-	L_mutex_lock_loop		/* loop back if failed */
+			isync							/* stop prefeteching */
 			blr
 L_mutex_lock_slow:
 #endif
@@ -988,9 +1005,8 @@ L_mutex_lock_assert_wait_1:
 .L_ml_retry:
 #if 0
 			mfsprg	r4,0						/* (TEST/DEBUG) */
-			lwz		r4,PP_CPU_DATA(r4)			/* (TEST/DEBUG) */
 			lis		r0,HIGH_ADDR(CutTrace)		/* (TEST/DEBUG) */
-			lwz		r4,CPU_ACTIVE_THREAD(r4)	/* (TEST/DEBUG) */
+			lwz		r4,PP_ACTIVE_THREAD(r4)		/* (TEST/DEBUG) */
 			lis		r5,0xAAAA					/* (TEST/DEBUG) */
 			oris	r0,r0,LOW_ADDR(CutTrace)	/* (TEST/DEBUG) */
 			sc									/* (TEST/DEBUG) */
@@ -1018,19 +1034,17 @@ mlGotInt:
 			have that, so, we're free to play */
 			
 			lwz		r4,LOCK_DATA(r3)		/* Get the mutex's lock field */
-			andi.	r9,r4,MUTEX_LOCKED		/* So, can we have it? */
-			ori		r10,r4,MUTEX_LOCKED		/* Set the lock value */
+			rlwinm.	r9,r4,30,2,31			/* So, can we have it? */
 			bne-	mlInUse					/* Nope, sombody's playing already... */
 
 #if	MACH_LDEBUG
-			mfmsr	r11
+			mfmsr	r11						; Note: no need to deal with fp or vec here
 			rlwinm	r5,r11,0,MSR_EE_BIT+1,MSR_EE_BIT-1
 			mtmsr	r5
 			mfsprg	r9,0					/* Get the per_proc block */
 			lwz		r5,0(r1)				/* Get previous save frame */
-			lwz		r9,PP_CPU_DATA(r9)		/* Point to the cpu data area */
 			lwz		r5,FM_LR_SAVE(r5)		/* Get our caller's address */
-			lwz		r8,	CPU_ACTIVE_THREAD(r9)	/* Get the active thread */
+			lwz		r8,	PP_ACTIVE_THREAD(r9)	/* Get the active thread */
 			stw		r5,MUTEX_PC(r3)		/* Save our caller */
 			mr.		r8,r8					/* Is there any thread? */
 			stw		r8,MUTEX_THREAD(r3)		/* Set the mutex's holding thread */
@@ -1042,8 +1056,15 @@ mlGotInt:
 			mtmsr	r11
 #endif	/* MACH_LDEBUG */
 
-			rlwinm	r10,r10,0,0,30			/* Get the unlock value */
-			stw	r10,LOCK_DATA(r3)			/* grab the mutexlock and free the interlock */
+			bl	EXT(mutex_lock_acquire)
+			mfsprg	r5,1
+			mr.		r4,r3
+			lwz		r3,FM_ARG0(r1)
+			beq		mlUnlock
+			ori		r5,r5,WAIT_FLAG
+mlUnlock:
+			sync
+			stw	r5,LOCK_DATA(r3)			/* grab the mutexlock and free the interlock */
 
 #if	ETAP_LOCK_TRACE
 			mflr	r4
@@ -1083,8 +1104,9 @@ mlInUse:
 /*			Note that we come in here with the interlock set.  The wait routine
  *			will unlock it before waiting.
  */
-			addis	r4,r4,1					/* Bump the wait count */ 
+			ori		r4,r4,WAIT_FLAG			/* Set the wait flag */
 			stw	r4,LOCK_DATA(r3)
+			rlwinm	r4,r4,0,0,29			/* Extract the lock owner */
 			bl	EXT(mutex_lock_wait)		/* Wait for our turn at the lock */
 			
 			lwz	r3,FM_ARG0(r1)				/* restore r3 (saved in prolog) */
@@ -1102,14 +1124,14 @@ LEXT(mutex_try)
 			.globl	EXT(_mutex_try)
 LEXT(_mutex_try)
 #if	!MACH_LDEBUG
+			mfsprg	r6,1					/* load the current thread */
 L_mutex_try_loop:
-			lwarx	r5,0,r3
-			andi.	r4,r5,ILK_LOCKED|MUTEX_LOCKED
-			bne-	L_mutex_try_slow
-			ori		r5,r5,MUTEX_LOCKED
-			stwcx.	r5,0,r3
-			bne-	L_mutex_try_loop
-			isync
+			lwarx	r5,0,r3					/* load the lock value */
+			mr.		r5,r5
+			bne-	L_mutex_try_slow		/* branch to the slow  path */
+			stwcx.	r6,0,r3					/* grab the lock */
+			bne-	L_mutex_try_loop		/* retry if failed */
+			isync							/* stop prefetching */
 			li		r3, 1
 			blr
 L_mutex_try_slow:
@@ -1134,7 +1156,7 @@ L_mutex_try_slow:
 			CHECK_NO_SIMPLELOCKS()
 			
 			lwz		r6,LOCK_DATA(r3)		/* Quick check */
-			andi.	r6,r6,MUTEX_LOCKED		/* to see if someone has this lock already */
+			rlwinm.	r6,r6,30,2,31			/* to see if someone has this lock already */
 			bne-	mtFail					/* Someone's got it already... */
 
 			bl		lockDisa				/* Go get a lock on the mutex's interlock lock */
@@ -1159,8 +1181,7 @@ mtGotInt:
 			have that, so, we're free to play */
 			
 			lwz		r4,LOCK_DATA(r3)		/* Get the mutex's lock field */
-			andi.	r9,r4,MUTEX_LOCKED		/* So, can we have it? */
-			ori		r10,r4,MUTEX_LOCKED		/* Set the lock value */
+			rlwinm.	r9,r4,30,2,31			/* So, can we have it? */
 			bne-	mtInUse					/* Nope, sombody's playing already... */
 			
 #if	MACH_LDEBUG
@@ -1169,9 +1190,8 @@ mtGotInt:
 			mtmsr	r5
 			mfsprg	r9,0					/* Get the per_proc block */
 			lwz		r5,0(r1)				/* Get previous save frame */
-			lwz		r9,PP_CPU_DATA(r9)		/* Point to the cpu data area */
 			lwz		r5,FM_LR_SAVE(r5)		/* Get our caller's address */
-			lwz		r8,	CPU_ACTIVE_THREAD(r9)	/* Get the active thread */
+			lwz		r8,	PP_ACTIVE_THREAD(r9)	/* Get the active thread */
 			stw		r5,MUTEX_PC(r3)		/* Save our caller */
 			mr.		r8,r8					/* Is there any thread? */
 			stw		r8,MUTEX_THREAD(r3)		/* Set the mutex's holding thread */
@@ -1183,10 +1203,15 @@ mtGotInt:
 			mtmsr	r11
 #endif	/* MACH_LDEBUG */
 
-			rlwinm	r10,r10,0,0,30			/* Get the unlock value */
+			bl	EXT(mutex_lock_acquire)
+			mfsprg	r5,1
+			mr.		r4,r3
+			lwz		r3,FM_ARG0(r1)
+			beq		mtUnlock
+			ori		r5,r5,WAIT_FLAG
+mtUnlock:
 			sync							/* Push it all out */
-			stw	r10,LOCK_DATA(r3)			/* grab the mutexlock and free the interlock */
-			isync							/* stop speculative instructions */
+			stw	r5,LOCK_DATA(r3)			/* grab the mutexlock and free the interlock */
 
 #if	ETAP_LOCK_TRACE
 			lwz		r4,0(r1)				/* Back chain the stack */
@@ -1208,8 +1233,8 @@ mtGotInt:
  */
 
 mtInUse:	
-			rlwinm	r10,r10,0,0,30			/* Get the unlock value */
-			stw		r10,LOCK_DATA(r3)		/* free the interlock */
+			rlwinm	r4,r4,0,0,30			/* Get the unlock value */
+			stw		r4,LOCK_DATA(r3)		/* free the interlock */
 			bl		epStart					/* Go enable preemption... */
 
 mtFail:		li		r3,0					/* Set failure code */
@@ -1226,14 +1251,14 @@ mtFail:		li		r3,0					/* Set failure code */
 
 LEXT(mutex_unlock)
 #if	!MACH_LDEBUG
+			sync
 L_mutex_unlock_loop:
 			lwarx	r5,0,r3
-			rlwinm.	r4,r5,16,15,31			/* Bail if pending waiter or interlock set */
-			rlwinm	r5,r5,0,0,29			/* Clear the mutexlock */	
+			rlwinm.	r4,r5,0,30,31			/* Bail if pending waiter or interlock set */
+			li		r5,0					/* Clear the mutexlock */
 			bne-	L_mutex_unlock_slow
 			stwcx.	r5,0,r3
 			bne-	L_mutex_unlock_loop
-			sync
 			blr
 L_mutex_unlock_slow:
 #endif
@@ -1250,9 +1275,8 @@ L_mutex_unlock_slow:
 
 #if 0
 			mfsprg	r4,0						/* (TEST/DEBUG) */
-			lwz		r4,PP_CPU_DATA(r4)			/* (TEST/DEBUG) */
 			lis		r0,HIGH_ADDR(CutTrace)		/* (TEST/DEBUG) */
-			lwz		r4,CPU_ACTIVE_THREAD(r4)	/* (TEST/DEBUG) */
+			lwz		r4,PP_ACTIVE_THREAD(r4)	/* (TEST/DEBUG) */
 			lis		r5,0xCCCC					/* (TEST/DEBUG) */
 			oris	r0,r0,LOW_ADDR(CutTrace)	/* (TEST/DEBUG) */
 			sc									/* (TEST/DEBUG) */
@@ -1274,14 +1298,14 @@ mutex_failed3:
 			
 			
 muGotInt:
-			lhz		r5,LOCK_DATA(r3)
-			mr.		r5,r5					/* are there any waiters ? */
+			lwz		r4,LOCK_DATA(r3)
+			andi.	r5,r4,WAIT_FLAG			/* are there any waiters ? */
+			rlwinm	r4,r4,0,0,29
 			beq+	muUnlock				/* Nope, we're done... */
 
 			bl		EXT(mutex_unlock_wakeup)	/* yes, wake a thread */
 			lwz		r3,FM_ARG0(r1)			/* restore r3 (saved in prolog) */
-			lhz		r5,LOCK_DATA(r3)		/* load the wait count */
-			subi	r5,r5,1
+			lwz		r5,LOCK_DATA(r3)		/* load the lock */
 
 muUnlock:
 #if	MACH_LDEBUG
@@ -1289,8 +1313,7 @@ muUnlock:
 			rlwinm	r9,r11,0,MSR_EE_BIT+1,MSR_EE_BIT-1
 			mtmsr	r9
 			mfsprg	r9,0					
-			lwz		r9,PP_CPU_DATA(r9)
-			lwz		r9,CPU_ACTIVE_THREAD(r9)
+			lwz		r9,PP_ACTIVE_THREAD(r9)
 			stw		r9,MUTEX_THREAD(r3)	/* disown thread */
 			cmpwi	r9,0
 			beq-	.L_mu_no_active_thread
@@ -1301,7 +1324,7 @@ muUnlock:
 			mtmsr	r11
 #endif	/* MACH_LDEBUG */
 
-			rlwinm	r5,r5,16,0,15			/* Shift wait count */
+			andi.	r5,r5,WAIT_FLAG			/* Get the unlock value */
 			sync							/* Make sure it's all there before we release */
 			stw		r5,LOCK_DATA(r3)		/* unlock the interlock and lock */
 		
@@ -1369,13 +1392,15 @@ epStart:	cmplwi	cr1,r1,0			/* Force non-zero cr so we know to check if preempted
  */
 
 epCommn:	mfmsr	r9					/* Save the old MSR */
+			rlwinm	r9,r9,0,MSR_FP_BIT+1,MSR_FP_BIT-1	; Force floating point off
+			rlwinm	r9,r9,0,MSR_VEC_BIT+1,MSR_VEC_BIT-1	; Force vectors off
 			rlwinm	r8,r9,0,MSR_EE_BIT+1,MSR_EE_BIT-1	/* Clear interruptions */
  			mtmsr	r8					/* Interrupts off */
-			
+			isync						; May have mess with vec/fp here
+						
 			mfsprg	r3,0				/* Get the per_proc block */
-			lwz		r6,PP_CPU_DATA(r3)	/* Get the pointer to the CPU data from per proc */
 			li		r8,-1				/* Get a decrimenter */
-			lwz		r5,CPU_PREEMPTION_LEVEL(r6)	/* Get the preemption level */
+			lwz		r5,PP_PREEMPT_CNT(r3)	/* Get the preemption level */
 			add.	r5,r5,r8			/* Bring down the disable count */
 #if 0
 			mfsprg	r4,1				; (TEST/DEBUG) Note the next 3 keep from interrpting too early
@@ -1390,7 +1415,7 @@ epskptrc0:	mr.		r5,r5				; (TEST/DEBUG)
 #if MACH_LDEBUG
 			blt-	epTooFar			/* Yeah, we did... */
 #endif /* MACH_LDEBUG */
-			stw		r5,CPU_PREEMPTION_LEVEL(r6)	/* Save it back */
+			stw		r5,PP_PREEMPT_CNT(r3)	/* Save it back */
 
 			beq+	epCheckPreempt		/* Go check if we need to be preempted... */
 
@@ -1454,14 +1479,16 @@ epCPno:		mtmsr	r9					/* Allow interrupts if we can */
 LEXT(_disable_preemption)
 
 daPreAll:	mfmsr	r9					/* Save the old MSR */
+			rlwinm	r9,r9,0,MSR_FP_BIT+1,MSR_FP_BIT-1	; Force floating point off
+			rlwinm	r9,r9,0,MSR_VEC_BIT+1,MSR_VEC_BIT-1	; Force vectors off
 			rlwinm	r8,r9,0,MSR_EE_BIT+1,MSR_EE_BIT-1	/* Clear interruptions */
  			mtmsr	r8					/* Interrupts off */
+			isync						; May have mess with fp/vec
 			
 daPreComm:	mfsprg	r6,0				/* Get the per_proc block */
-			lwz		r6,PP_CPU_DATA(r6)	/* Get the pointer to the CPU data from per proc */
-			lwz		r5,CPU_PREEMPTION_LEVEL(r6)	/* Get the preemption level */
+			lwz		r5,PP_PREEMPT_CNT(r6)	/* Get the preemption level */
 			addi	r5,r5,1				/* Bring up the disable count */
-			stw		r5,CPU_PREEMPTION_LEVEL(r6)	/* Save it back */
+			stw		r5,PP_PREEMPT_CNT(r6)	/* Save it back */
 #if 0
 			mfsprg	r4,1				; (TEST/DEBUG) Note the next 3 keep from interrpting too early
 			mr.		r4,r4				; (TEST/DEBUG)
@@ -1550,14 +1577,82 @@ nopredeb:
 
 LEXT(current_thread)
 
+#if 1
+			mfsprg	r3,1
+			lwz		r3,ACT_THREAD(r3)
+			blr
+#else
 			mfmsr	r9					/* Save the old MSR */
+			rlwinm	r9,r9,0,MSR_FP_BIT+1,MSR_FP_BIT-1	; Force floating point off
+			rlwinm	r9,r9,0,MSR_VEC_BIT+1,MSR_VEC_BIT-1	; Force vectors off
 			rlwinm	r8,r9,0,MSR_EE_BIT+1,MSR_EE_BIT-1	/* Clear interruptions */
  			mtmsr	r8					/* Interrupts off */
+ 			isync
 			mfsprg	r6,0				/* Get the per_proc */
-			lwz		r6,PP_CPU_DATA(r6)	/* Get the pointer to the CPU data from per proc */
-			lwz		r3,CPU_ACTIVE_THREAD(r6)	/* Get the active thread */
+			lwz		r3,PP_ACTIVE_THREAD(r6)	/* Get the active thread */
+			mfsprg	r4,1
+			lwz	r4,ACT_THREAD(r4)
+			cmplw	cr0,r4,r3
+			beq		current_thread_cont
+			lis		r5,hi16(L_current_thread_paniced)
+			ori		r5,r5,lo16(L_current_thread_paniced)
+			lwz		r6,0(r5)
+			mr.		r6,r6
+			bne		current_thread_cont
+			stw		r9,0(r5)
+			mr		r5,r4
+			mr		r4,r3
+			lis		r3,hi16(L_current_thread_panic)
+			ori		r3,r3,lo16(L_current_thread_panic)
+			bl		EXT(panic)
+
+			.data
+L_current_thread_panic:
+			STRINGD "current_thread: spr1 not sync %x %x %x\n\000"
+L_current_thread_paniced:
+			.long	0
+			.text
+current_thread_cont:
+#endif
 			mtmsr	r9					/* Restore interruptions to entry */
 			blr							/* Return... */
+
+/*
+ *			Set the active thread 
+ */
+			.align	5
+			.globl	EXT(set_machine_current_thread)
+LEXT(set_machine_current_thread)
+
+			mfmsr	r9					/* Save the old MSR */
+			rlwinm	r9,r9,0,MSR_FP_BIT+1,MSR_FP_BIT-1	; Force floating point off
+			rlwinm	r9,r9,0,MSR_VEC_BIT+1,MSR_VEC_BIT-1	; Force vectors off
+			rlwinm	r8,r9,0,MSR_EE_BIT+1,MSR_EE_BIT-1	/* Clear interruptions */
+ 			mtmsr	r8					/* Interrupts off */
+			isync						; May have messed with fp/vec
+			mfsprg	r6,0				/* Get the per_proc */
+			stw		r3,PP_ACTIVE_THREAD(r6)	/* Set the active thread */
+			mtmsr	r9					/* Restore interruptions to entry */
+			blr							/* Return... */
+
+/*
+ *			Set the current activation
+ */
+			.align	5
+			.globl	EXT(set_machine_current_act)
+LEXT(set_machine_current_act)
+			mtsprg	1,r3				/* Set spr1 with the active thread */
+			blr							/* Return... */
+
+/*
+ *			Return the current activation
+ */
+			.align	5
+			.globl	EXT(current_act)
+LEXT(current_act)
+			mfsprg	r3,1
+			blr
+
 
 
 /*
@@ -1570,12 +1665,28 @@ LEXT(current_thread)
 LEXT(get_preemption_level)
  
 			mfmsr	r9					/* Save the old MSR */
+			rlwinm	r9,r9,0,MSR_FP_BIT+1,MSR_FP_BIT-1	; Force floating point off
+			rlwinm	r9,r9,0,MSR_VEC_BIT+1,MSR_VEC_BIT-1	; Force vectors off
 			rlwinm	r8,r9,0,MSR_EE_BIT+1,MSR_EE_BIT-1	/* Clear interruptions */
  			mtmsr	r8					/* Interrupts off */
+			isync			
 			mfsprg	r6,0				/* Get the per_proc */
-			lwz		r6,PP_CPU_DATA(r6)	/* Get the pointer to the CPU data from per proc */
-			lwz		r3,CPU_PREEMPTION_LEVEL(r6)	/* Get the preemption level */
+			lwz		r3,PP_PREEMPT_CNT(r6)	/* Get the preemption level */
 			mtmsr	r9					/* Restore interruptions to entry */
+			blr							/* Return... */
+
+
+/*
+ *			Return the cpu_data
+ */
+ 
+			.align	5
+			.globl	EXT(get_cpu_data)
+
+LEXT(get_cpu_data)
+ 
+			mfsprg	r3,0				/* Get the per_proc */
+			addi	r3,r3,PP_ACTIVE_THREAD		/* Get the pointer to the CPU data from per proc */
 			blr							/* Return... */
 
 
@@ -1589,11 +1700,13 @@ LEXT(get_preemption_level)
 LEXT(get_simple_lock_count)
  
 			mfmsr	r9					/* Save the old MSR */
+			rlwinm	r9,r9,0,MSR_FP_BIT+1,MSR_FP_BIT-1	; Force floating point off
+			rlwinm	r9,r9,0,MSR_VEC_BIT+1,MSR_VEC_BIT-1	; Force vectors off
 			rlwinm	r8,r9,0,MSR_EE_BIT+1,MSR_EE_BIT-1	/* Clear interruptions */
  			mtmsr	r8					/* Interrupts off */
+			isync						; May have messed with vec/fp
 			mfsprg	r6,0				/* Get the per_proc */
-			lwz		r6,PP_CPU_DATA(r6)	/* Get the pointer to the CPU data from per proc */
-			lwz		r3,CPU_SIMPLE_LOCK_COUNT(r6)	/* Get the simple lock count */
+			lwz		r3,PP_SIMPLE_LOCK_CNT(r6)	/* Get the simple lock count */
 			mtmsr	r9					/* Restore interruptions to entry */
 			blr							/* Return... */
 
@@ -1609,6 +1722,9 @@ LEXT(get_simple_lock_count)
 
 LEXT(fast_usimple_lock)
 
+#if CHECKNMI
+		b		EXT(usimple_lock)		; (TEST/DEBUG)  
+#endif                  
 		mfmsr	r9
 		andi.   r7,r9,lo16(MASK(MSR_EE))
 		bne-	L_usimple_lock_c
@@ -1636,6 +1752,9 @@ L_usimple_lock_c:
 
 LEXT(fast_usimple_lock_try)
 
+#if CHECKNMI
+		b		EXT(usimple_lock_try)		; (TEST/DEBUG)  
+#endif                  
 		mfmsr	r9
 		andi.   r7,r9,lo16(MASK(MSR_EE))
 		bne-	L_usimple_lock_try_c
@@ -1666,6 +1785,9 @@ L_usimple_lock_try_c:
 
 LEXT(fast_usimple_unlock)
 
+#if CHECKNMI
+		b		EXT(usimple_unlock)			; (TEST/DEBUG)  
+#endif                  
 		lwz		r5,LOCK_DATA(r3)
 		li		r0,0
 		cmpi	cr0,r5,ILK_LOCKED|SLOCK_FAST
@@ -1689,4 +1811,100 @@ L_usimple_unlock_cont:
 		blr
 L_usimple_unlock_c:
 		b		EXT(usimple_unlock)
+
+/*
+ *		enter_funnel_section():
+ *
+ */
+			.align	5
+			.globl	EXT(enter_funnel_section)
+
+LEXT(enter_funnel_section)
+
+#if	!MACH_LDEBUG
+		lis		r10,hi16(EXT(kdebug_enable))
+		ori		r10,r10,lo16(EXT(kdebug_enable))
+		lwz		r10,0(r10)
+		lis		r11,hi16(EXT(split_funnel_off))
+		ori		r11,r11,lo16(EXT(split_funnel_off))
+		lwz		r11,0(r11)
+		or.		r10,r11,r10							; Check kdebug_enable or split_funnel_off
+		bne-	L_enter_funnel_section_slow1		; If set, call the slow path
+		mfsprg	r6,1								; Get the current activation
+		lwz		r7,LOCK_FNL_MUTEX(r3)
+		mfmsr	r11
+		rlwinm	r11,r11,0,MSR_FP_BIT+1,MSR_FP_BIT-1	; Force floating point off
+		rlwinm	r11,r11,0,MSR_VEC_BIT+1,MSR_VEC_BIT-1	; Force vectors off
+		rlwinm  r10,r11,0,MSR_EE_BIT+1,MSR_EE_BIT-1
+		mtmsr	r10									; Turn off EE
+		isync										; May have messed with vec/fp
+		mr		r9,r6
+L_enter_funnel_section_loop:
+		lwarx	r5,0,r7								; Load the mutex lock
+		mr.		r5,r5
+		bne-	L_enter_funnel_section_slow			; Go to the slow path
+		stwcx.	r6,0,r7								; Grab the lock
+		bne-	L_enter_funnel_section_loop			; Loop back if failed
+		isync										; Stop prefeteching
+		lwz		r6,ACT_THREAD(r6)					; Get the current thread
+		li		r7,TH_FN_OWNED
+		stw		r7,THREAD_FUNNEL_STATE(r6)			; Set the funnel state
+		stw		r3,THREAD_FUNNEL_LOCK(r6)			; Set the funnel lock reference
+		mtmsr	r11
+		blr
+
+L_enter_funnel_section_slow:
+		mtmsr	r11
+L_enter_funnel_section_slow1:
+#endif
+		li		r4,TRUE
+		b		EXT(thread_funnel_set)
+
+/*
+ *		exit_funnel_section():
+ *
+ */
+			.align	5
+			.globl	EXT(exit_funnel_section)
+
+LEXT(exit_funnel_section)
+
+#if	!MACH_LDEBUG
+		mfsprg	r6,1								; Get the current activation
+		lwz		r6,ACT_THREAD(r6)					; Get the current thread
+		lwz		r3,THREAD_FUNNEL_LOCK(r6)			; Get the funnel lock
+		mr.		r3,r3								; Check on funnel held
+		beq-	L_exit_funnel_section_ret			; 
+		lis		r10,hi16(EXT(kdebug_enable))
+		ori		r10,r10,lo16(EXT(kdebug_enable))
+		lwz		r10,0(r10)
+		mr.		r10,r10
+		bne-	L_exit_funnel_section_slow1			; If set, call the slow path
+		lwz		r7,LOCK_FNL_MUTEX(r3)				; Get the funnel mutex lock
+		mfmsr	r11
+		rlwinm	r11,r11,0,MSR_FP_BIT+1,MSR_FP_BIT-1	; Force floating point off
+		rlwinm	r11,r11,0,MSR_VEC_BIT+1,MSR_VEC_BIT-1	; Force vectors off
+		rlwinm  r10,r11,0,MSR_EE_BIT+1,MSR_EE_BIT-1
+		mtmsr	r10									; Turn off EE
+		isync										; May have messed with fp/vec
+		sync
+L_exit_funnel_section_loop:
+		lwarx	r5,0,r7
+		rlwinm.	r4,r5,0,30,31						; Bail if pending waiter or interlock set 
+		li		r5,0								; Clear the mutexlock 
+		bne-	L_exit_funnel_section_slow
+		stwcx.	r5,0,r7								; Release the funnel mutexlock
+		bne-	L_exit_funnel_section_loop
+		li		r7,0
+		stw		r7,THREAD_FUNNEL_STATE(r6)			; Clear the funnel state
+		stw		r7,THREAD_FUNNEL_LOCK(r6)			; Clear the funnel lock reference
+		mtmsr	r11
+L_exit_funnel_section_ret:
+		blr
+L_exit_funnel_section_slow:
+		mtmsr	r11
+L_exit_funnel_section_slow1:
+#endif
+		li		r4,FALSE
+		b		EXT(thread_funnel_set)
 

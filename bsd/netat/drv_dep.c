@@ -46,9 +46,7 @@
 #include <net/if.h>
 #include <net/if_types.h>
 #include <net/if_dl.h>
-#include <net/etherdefs.h>
 #include <net/ethernet.h>
-#include <net/tokendefs.h>
 
 #include <netat/sysglue.h>
 #include <netat/appletalk.h>
@@ -189,7 +187,7 @@ int pat_output(patp, mlist, dst_addr, type)
 		mlist = m->m_nextpkt;
 		m->m_nextpkt = 0;
 
-		M_PREPEND(m, sizeof(llc_header_t), M_DONTWAIT)
+		M_PREPEND(m, sizeof(llc_header_t), M_DONTWAIT);
 		if (m == 0) {
 			continue;
 		}

@@ -1,0 +1,168 @@
+.\"	$NetBSD: send.2,v 1.6 1996/01/15 01:17:18 thorpej Exp $
+.\"
+.\" Copyright (c) 1983, 1991, 1993
+.\"	The Regents of the University of California.  All rights reserved.
+.\"
+.\" Redistribution and use in source and binary forms, with or without
+.\" modification, are permitted provided that the following conditions
+.\" are met:
+.\" 1. Redistributions of source code must retain the above copyright
+.\"    notice, this list of conditions and the following disclaimer.
+.\" 2. Redistributions in binary form must reproduce the above copyright
+.\"    notice, this list of conditions and the following disclaimer in the
+.\"    documentation and/or other materials provided with the distribution.
+.\" 3. All advertising materials mentioning features or use of this software
+.\"    must display the following acknowledgement:
+.\"	This product includes software developed by the University of
+.\"	California, Berkeley and its contributors.
+.\" 4. Neither the name of the University nor the names of its contributors
+.\"    may be used to endorse or promote products derived from this software
+.\"    without specific prior written permission.
+.\"
+.\" THIS SOFTWARE IS PROVIDED BY THE REGENTS AND CONTRIBUTORS ``AS IS'' AND
+.\" ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+.\" IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
+.\" ARE DISCLAIMED.  IN NO EVENT SHALL THE REGENTS OR CONTRIBUTORS BE LIABLE
+.\" FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
+.\" DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS
+.\" OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION)
+.\" HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT
+.\" LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
+.\" OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
+.\" SUCH DAMAGE.
+.\"
+.\"     @(#)send.2	8.2 (Berkeley) 2/21/94
+.\"
+.Dd February 21, 1994
+.Dt SEND 2
+.Os BSD 4.2
+.Sh NAME
+.Nm send ,
+.Nm sendto ,
+.Nm sendmsg
+.Nd send a message from a socket
+.Sh SYNOPSIS
+.Fd #include <sys/types.h>
+.Fd #include <sys/socket.h>
+.Ft ssize_t
+.Fn send "int s" "const void *msg" "size_t len" "int flags"
+.Ft ssize_t
+.Fn sendto "int s" "const void *msg" "size_t len" "int flags" "const struct sockaddr *to" "int tolen"
+.Ft ssize_t
+.Fn sendmsg "int s" "const struct msghdr *msg" "int flags"
+.Sh DESCRIPTION
+.Fn Send ,
+.Fn sendto ,
+and
+.Fn sendmsg
+are used to transmit a message to another socket.
+.Fn Send
+may be used only when the socket is in a 
+.Em connected
+state, while 
+.Fn sendto
+and
+.Fn sendmsg
+may be used at any time.
+.Pp
+The address of the target is given by
+.Fa to
+with 
+.Fa tolen
+specifying its size.
+The length of the message is given by
+.Fa len .
+If the message is too long to pass atomically through the
+underlying protocol, the error
+.Er EMSGSIZE
+is returned, and
+the message is not transmitted.
+.Pp
+No indication of failure to deliver is implicit in a
+.Fn send .
+Locally detected errors are indicated by a return value of -1.
+.Pp
+If no messages space is available at the socket to hold
+the message to be transmitted, then
+.Fn send
+normally blocks, unless the socket has been placed in
+non-blocking I/O mode.
+The
+.Xr select 2
+call may be used to determine when it is possible to
+send more data.
+.Pp
+The
+.Fa flags
+parameter may include one or more of the following:
+.Bd -literal
+#define	MSG_OOB        0x1  /* process out-of-band data */
+#define	MSG_DONTROUTE  0x4  /* bypass routing, use direct interface */
+.Ed
+.Pp
+The flag
+.Dv MSG_OOB
+is used to send
+.Dq out-of-band
+data on sockets that support this notion (e.g.
+.Dv SOCK_STREAM ) ;
+the underlying protocol must also support
+.Dq out-of-band
+data.
+.Dv MSG_DONTROUTE
+is usually used only by diagnostic or routing programs.
+.Pp
+See 
+.Xr recv 2
+for a description of the
+.Fa msghdr
+structure.
+.Sh RETURN VALUES
+The call returns the number of characters sent, or -1
+if an error occurred.
+.Sh ERRORS
+.Fn Send ,
+.Fn sendto ,
+and
+.Fn sendmsg
+fail if:
+.Bl -tag -width Er
+.It Bq Er EBADF
+An invalid descriptor was specified.
+.It Bq Er ENOTSOCK
+The argument
+.Fa s
+is not a socket.
+.It Bq Er EFAULT
+An invalid user space address was specified for a parameter.
+.It Bq Er EMSGSIZE
+The socket requires that message be sent atomically,
+and the size of the message to be sent made this impossible.
+.It Bq Er EAGAIN
+The socket is marked non-blocking and the requested operation
+would block.
+.It Bq Er ENOBUFS
+The system was unable to allocate an internal buffer.
+The operation may succeed when buffers become available.
+.It Bq Er ENOBUFS
+The output queue for a network interface was full.
+This generally indicates that the interface has stopped sending,
+but may be caused by transient congestion.
+.It Bq Er EACCES
+The SO_BROADCAST option is not set on the socket, and a broadcast address
+was given as the destination.
+.It Bq Er EHOSTUNREACH
+The destination address specified an unreachable host.
+.El
+.Sh SEE ALSO
+.Xr fcntl 2 ,
+.Xr recv 2 ,
+.Xr select 2 ,
+.Xr getsockopt 2 ,
+.Xr socket 2 ,
+.Xr write 2
+.Sh HISTORY
+The
+.Fn send
+function call appeared in
+.Bx 4.2 .

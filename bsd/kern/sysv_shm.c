@@ -52,6 +52,7 @@
  */
 
 
+#include <sys/appleapiopts.h>
 #include <sys/param.h>
 #include <sys/systm.h>
 #include <sys/kernel.h>
@@ -60,6 +61,7 @@
 #include <sys/malloc.h>
 #include <sys/mman.h>
 #include <sys/stat.h>
+#include <sys/sysctl.h>
 
 #include <mach/mach_types.h>
 #include <mach/vm_inherit.h>
@@ -100,6 +102,7 @@ static sy_call_t *shmcalls[] = {
 
 static int shm_last_free, shm_nused, shm_committed;
 struct shmid_ds	*shmsegs;
+static int shm_inited = 0;
 
 struct shm_handle {
 	/* vm_offset_t kva; */
@@ -115,6 +118,16 @@ static void shm_deallocate_segment __P((struct shmid_ds *));
 static int shm_find_segment_by_key __P((key_t));
 static struct shmid_ds *shm_find_segment_by_shmid __P((int));
 static int shm_delete_mapping __P((struct proc *, struct shmmap_state *));
+
+#ifdef __APPLE_API_PRIVATE
+struct  shminfo shminfo = {
+        -1,	/* SHMMAX 4096 *1024 */
+        -1,	/* SHMMIN = 1 */
+        -1,	/* SHMMNI = 1 */
+        -1,	/* SHMSEG = 8 */
+        -1	/* SHMALL = 1024 */
+};
+#endif /* __APPLE_API_PRIVATE */
 
 static int
 shm_find_segment_by_key(key)
@@ -204,6 +217,8 @@ shmdt(p, uap, retval)
 	struct shmmap_state *shmmap_s;
 	int i;
 
+	if (!shm_inited)
+		return(EINVAL);
 	shmmap_s = (struct shmmap_state *)p->vm_shm;
  	if (shmmap_s == NULL)
  	    return EINVAL;
@@ -240,6 +255,8 @@ shmat(p, uap, retval)
 	vm_size_t size;
 	kern_return_t rv;
 
+	if (!shm_inited)
+		return(EINVAL);
 	shmmap_s = (struct shmmap_state *)p->vm_shm;
 	if (shmmap_s == NULL) {
 		size = shminfo.shmseg * sizeof(struct shmmap_state);
@@ -341,6 +358,8 @@ oshmctl(p, uap, retval)
 	struct shmid_ds *shmseg;
 	struct oshmid_ds outbuf;
 
+	if (!shm_inited)
+		return(EINVAL);
 	shmseg = shm_find_segment_by_shmid(uap->shmid);
 	if (shmseg == NULL)
 		return EINVAL;
@@ -391,6 +410,8 @@ shmctl(p, uap, 	retval)
 	struct shmid_ds inbuf;
 	struct shmid_ds *shmseg;
 
+	if (!shm_inited)
+		return(EINVAL);
 	shmseg = shm_find_segment_by_shmid(uap->shmid);
 	if (shmseg == NULL)
 		return EINVAL;
@@ -580,6 +601,9 @@ shmget(p, uap, retval)
 {
 	int segnum, mode, error;
 
+	if (!shm_inited)
+		return(EINVAL);
+
 	mode = uap->shmflg & ACCESSPERMS;
 	if (uap->key != IPC_PRIVATE) {
 	again:
@@ -612,6 +636,9 @@ shmsys(p, uap, retval)
 	register_t *retval;
 {
 
+	if (!shm_inited)
+		return(EINVAL);
+
 	if (uap->which >= sizeof(shmcalls)/sizeof(shmcalls[0]))
 		return EINVAL;
 	return ((*shmcalls[uap->which])(p, &uap->a2, retval));
@@ -625,6 +652,8 @@ shmfork(p1, p2)
 	size_t size;
 	int i;
 
+	if (!shm_inited)
+		return;
 	size = shminfo.shmseg * sizeof(struct shmmap_state);
 	shmmap_s = (struct shmmap_state *)_MALLOC(size, M_SHM, M_WAITOK);
 	bcopy((caddr_t)p1->vm_shm, (caddr_t)shmmap_s, size);
@@ -656,15 +685,71 @@ shminit(dummy)
 	int i;
 	int s;
 
-	s = sizeof(struct shmid_ds) * shminfo.shmmni;
+	if (!shm_inited) {
+		s = sizeof(struct shmid_ds) * shminfo.shmmni;
 
-	MALLOC(shmsegs, struct shmid_ds *, s, 
-		M_SHM, M_WAITOK);
-	for (i = 0; i < shminfo.shmmni; i++) {
-		shmsegs[i].shm_perm.mode = SHMSEG_FREE;
-		shmsegs[i].shm_perm.seq = 0;
+		MALLOC(shmsegs, struct shmid_ds *, s, 
+			M_SHM, M_WAITOK);
+		for (i = 0; i < shminfo.shmmni; i++) {
+			shmsegs[i].shm_perm.mode = SHMSEG_FREE;
+			shmsegs[i].shm_perm.seq = 0;
+		}
+		shm_last_free = 0;
+		shm_nused = 0;
+		shm_committed = 0;
+		shm_inited = 1;
 	}
-	shm_last_free = 0;
-	shm_nused = 0;
-	shm_committed = 0;
 }
+
+/* (struct sysctl_oid *oidp, void *arg1, int arg2, \
+        struct sysctl_req *req) */
+static int
+sysctl_shminfo SYSCTL_HANDLER_ARGS
+{
+	int error = 0;
+
+	error = SYSCTL_OUT(req, arg1, sizeof(int));
+	if (error || !req->newptr)
+		return(error);
+
+	/* Set the values only if shared memory is not initialised */
+	if (!shm_inited) {
+		if (error = SYSCTL_IN(req, arg1, sizeof(int)))
+			return(error);
+		if (arg1 == &shminfo.shmmax) {
+			if (shminfo.shmmax & PAGE_MASK) {
+				shminfo.shmmax = -1;
+				return(EINVAL);
+			}
+		}
+
+		/* Initialize only when all values are set */
+		if ((shminfo.shmmax != -1) &&
+			(shminfo.shmmin != -1) &&	
+			(shminfo.shmmni != -1) &&
+			(shminfo.shmseg != -1) &&
+			(shminfo.shmall != -1)) {
+				shminit();
+		}
+	}
+	return(0);
+}
+
+SYSCTL_NODE(_kern, KERN_SYSV, sysv, CTLFLAG_RW, 0, "SYSV");
+
+SYSCTL_PROC(_kern_sysv, KSYSV_SHMMAX, shmmax, CTLTYPE_INT | CTLFLAG_RW,
+    &shminfo.shmmax, 0, &sysctl_shminfo ,"I","shmmax");
+
+SYSCTL_PROC(_kern_sysv, KSYSV_SHMMIN, shmmin, CTLTYPE_INT | CTLFLAG_RW,
+    &shminfo.shmmin, 0, &sysctl_shminfo ,"I","shmmin");
+
+SYSCTL_PROC(_kern_sysv, KSYSV_SHMMNI, shmmni, CTLTYPE_INT | CTLFLAG_RW,
+    &shminfo.shmmni, 0, &sysctl_shminfo ,"I","shmmni");
+
+SYSCTL_PROC(_kern_sysv, KSYSV_SHMSEG, shmseg, CTLTYPE_INT | CTLFLAG_RW,
+    &shminfo.shmseg, 0, &sysctl_shminfo ,"I","shmseg");
+
+SYSCTL_PROC(_kern_sysv, KSYSV_SHMALL, shmall, CTLTYPE_INT | CTLFLAG_RW,
+    &shminfo.shmall, 0, &sysctl_shminfo ,"I","shmall");
+
+

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000,2002 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -19,100 +19,8 @@
  * 
  * @APPLE_LICENSE_HEADER_END@
  */
-/*
-	File:		BTreeWrapper.c
-
-	Contains:	Interface glue for new B-tree manager.
-
-	Version:	HFS Plus 1.0
-
-	Copyright:	© 1996-1998 by Apple Computer, Inc., all rights reserved.
-
-	File Ownership:
-
-		DRI:				Don Brady
-
-		Other Contact:		Mark Day
-
-		Technology:			xxx put technology here xxx
-
-	Writers:
-
-		(msd)	Mark Day
-		(DSH)	Deric Horn
-		(djb)	Don Brady
-
-	Change History (most recent first):
-	  <MacOSX>	 8/10/98	djb		Removed all references to btcb global iterator (lastIterator).
-	  <MacOSX>	04/02/98	djb		GetBTreeRecord is only used for MacOS builds.
-	  <MacOSX>	03/31/98	djb		Sync up with final HFSVolumes.h header file.
-	  <CS18>	  9/4/97	msd		Fix ValidHFSRecord to determine the type of B-tree by FileID,
-									not record size. Add better checking for attribute b-tree keys.
-	  <CS17>	 8/22/97	djb		Get blockReadFromDisk flag from GetCacheBlock call.
-	  <CS16>	 8/14/97	djb		Remove reserved field checks in ValidHFSRecord (radar #1649593).
-									Only call if ValidHFSRecord HFS_DIAGNOSTIC is true.
-	  <CS15>	 8/11/97	djb		Bug 1670441. In SetEndOfForkProc, don't DebugStr if the disk is
-									full.
-	  <CS14>	 7/25/97	DSH		Pass heuristicHint to BTSearchRecord from SearchBTreeRecord.
-	  <CS13>	 7/24/97	djb		CallBackProcs now take a file refNum instead of an FCB.
-									GetBlockProc now reports if block came from disk.
-	  <CS12>	 7/22/97	djb		Move all trace points to BTree.c file.
-	  <CS11>	 7/21/97	djb		LogEndTime now takes an error code.
-	  <CS10>	 7/16/97	DSH		FilesInternal.x -> FileMgrInternal.x to avoid name collision
-	   <CS9>	 7/15/97	msd		Bug #1664103.  OpenBTree is not propagating errors from
-									BTOpenPath.
-	   <CS8>	  7/9/97	djb		Remove maxCNID check from ValidHFSRecord (radar #1649593).
-	   <CS7>	 6/13/97	djb		In ValidHFSRecord HFSPlus threads names can be > 31 chars.
-	   <CS6>	  6/2/97	DSH		Also flush AlternateVolumeHeader whenever Attributes or Startup
-									files change size.
-	   <CS5>	 5/28/97	msd		In ValidHFSRecord, check for attribute keys.
-	   <CS4>	 5/19/97	djb		Move summary traces from GetBTreeRecord to BTIterateRecord.
-	   <CS3>	  5/9/97	djb		Get in sync with new FilesInternal.i.
-	   <CS2>	  5/7/97	djb		Add summary traces to B-tree SPI.
-	   <CS1>	 4/24/97	djb		first checked in
-	 <HFS18>	 4/16/97	djb		Always use new B-tree code.
-	 <HFS17>	  4/4/97	djb		Remove clumpSize test from ValidHFSRecord.
-	 <HFS16>	  4/4/97	djb		Get in sync with volume format changes.
-	 <HFS15>	 3/17/97	DSH		Casting for SC, BlockProcs are now not static.
-	 <HFS14>	  3/3/97	djb		Call trash block after closing btree!
-	 <HFS13>	 2/19/97	djb		Add support for accessing bigger B-tree nodes.
-	 <HFS12>	  2/6/97	msd		In CheckBTreeKey, remove test and DebugStr for parent ID being
-									too big.
-	 <HFS11>	 1/23/97	DSH		SetEndOfForkProc now calls through to update the Alternate MDB
-									or VolumeHeader.
-	 <HFS10>	 1/16/97	djb		Switched to dynamic lengths for BufferDescriptor length field in
-									SearchBTreeRecord and GetBTreeRecord. Round up to clump size in
-									SetEndOfForkProc.
-	  <HFS9>	 1/15/97	djb		Don't return errors for bad file ids in key.
-	  <HFS8>	 1/13/97	djb		Adding support for getting current record. ValidHFSRecord now
-									supports variable sized thread records.
-	  <HFS7>	  1/9/97	djb		Call CheckBTreeKey before using key length in a BlockMoveData
-									call.
-	  <HFS6>	  1/6/97	djb		Implement SetEndOfForkProc.
-	  <HFS5>	  1/6/97	djb		Added HFS Plus support to CheckBTreeKey and ValidHFSRecord.
-	  <HFS4>	  1/3/97	djb		Added support for large keys. Integrated latest HFSVolumesPriv.h
-									changes.
-	  <HFS3>	12/23/96	djb		Fixed problem in SearchBTreeRecord (dataSize is an output so it
-									was undefined). Added some debugging code.
-	  <HFS2>	12/20/96	msd		Fix OpenBTree to use the real data type for the key compare proc
-									pointer (not void *). Fixed problem in SearchBTreeRecord that
-									assigns a pointer to a buffer size field (forgot to dereference
-									the pointer).
-	  <HFS1>	12/19/96	djb		first checked in
-
-*/
 
 #include "../headers/BTreesPrivate.h"
-
-
-
-
-// B-tree callbacks...
-#if TARGET_API_MAC_OS8
-OSStatus	GetBlockProc ( FileReference fileRefNum, UInt32 blockNum, GetBlockOptions options, BlockDescriptor *block );
-OSStatus	ReleaseBlockProc ( FileReference fileRefNum, BlockDescPtr blockPtr, ReleaseBlockOptions options );
-OSStatus	SetBlockSizeProc ( FileReference fileRefNum, ByteCount blockSize, ItemCount minBlockCount );
-#endif
 
 
 // local routines
@@ -124,6 +32,9 @@ static Boolean	ValidHFSRecord(const void *record, const BTreeControlBlock *btcb,
 
 OSErr SearchBTreeRecord(FileReference refNum, const void* key, UInt32 hint, void* foundKey, void* data, UInt16 *dataSize, UInt32 *newHint)
 {
+	panic("SearchBTreeRecord is dead code!");
+	return (-1);
+#if 0
 	FSBufferDescriptor	 btRecord;
 	BTreeIterator		 searchIterator;
 	FCB					*fcb;
@@ -155,27 +66,7 @@ OSErr SearchBTreeRecord(FileReference refNum, const void* key, UInt32 hint, void
 
 	BlockMoveData(key, &searchIterator.key, CalcKeySize(btcb, (BTreeKey *) key));		//€€ should we range check against maxkeylen?
 	
-	//	We only optimize for catalog records
-	if( btRecord.itemSize == sizeof(CatalogRecord) )
-	{
-		UInt32	heuristicHint;
-		UInt32	*cachedHint;
-		Ptr		hintCachePtr = FCBTOVCB(fcb)->hintCachePtr;
-
-		//	We pass a 2nd hint/guess into BTSearchRecord.  The heuristicHint is a mapping of
-		//	dirID and nodeNumber, in hopes that the current search will be in the same node
-		//	as the last search with the same parentID.
-		result = GetMRUCacheBlock( ((HFSCatalogKey *)key)->parentID, hintCachePtr, (Ptr *)&cachedHint );
-		heuristicHint = (result == noErr) ? *cachedHint : kInvalidMRUCacheKey;
-
-		result = BTSearchRecord( fcb, &searchIterator, heuristicHint, &btRecord, dataSize, &searchIterator );
-
-		InsertMRUCacheBlock( hintCachePtr, ((HFSCatalogKey *)key)->parentID, (Ptr) &(searchIterator.hint.nodeNum) );
-	}
-	else
-	{
-		result = BTSearchRecord( fcb, &searchIterator, kInvalidMRUCacheKey, &btRecord, dataSize, &searchIterator );
-	}
+	result = BTSearchRecord( fcb, &searchIterator, &btRecord, dataSize, &searchIterator );
 
 	if (result == noErr)
 	{
@@ -193,69 +84,7 @@ OSErr SearchBTreeRecord(FileReference refNum, const void* key, UInt32 hint, void
 ErrorExit:
 
 	return result;
-}
-
-
-
-OSErr InsertBTreeRecord(FileReference refNum, void* key, void* data, UInt16 dataSize, UInt32 *newHint)
-{
-	FSBufferDescriptor	btRecord;
-	BTreeIterator		iterator;
-	FCB					*fcb;
-	BTreeControlBlock	*btcb;
-	OSStatus			result;
-	
-
-	fcb = GetFileControlBlock(refNum);
-	btcb = (BTreeControlBlock*) fcb->fcbBTCBPtr;
-
-	btRecord.bufferAddress = data;
-	btRecord.itemSize = dataSize;
-	btRecord.itemCount = 1;
-
-	iterator.hint.nodeNum = 0;			// no hint
-
-	result = CheckBTreeKey((BTreeKey *) key, btcb);
-	ExitOnError(result);
-
-	BlockMoveData(key, &iterator.key, CalcKeySize(btcb, (BTreeKey *) key));	//€€ should we range check against maxkeylen?
-
-	if ( DEBUG_BUILD && !ValidHFSRecord(data, btcb, dataSize) )
-		DebugStr("\pInsertBTreeRecord: bad record?");
-
-	result = BTInsertRecord( fcb, &iterator, &btRecord, dataSize );
-
-	*newHint = iterator.hint.nodeNum;
-	
-ErrorExit:
-
-	return result;
-}
-
-
-OSErr DeleteBTreeRecord(FileReference refNum, void* key)
-{
-	BTreeIterator		iterator;
-	FCB					*fcb;
-	BTreeControlBlock	*btcb;
-	OSStatus			result;
-	
-
-	fcb = GetFileControlBlock(refNum);
-	btcb = (BTreeControlBlock*) fcb->fcbBTCBPtr;
-	
-	iterator.hint.nodeNum = 0;			// no hint
-
-	result = CheckBTreeKey((BTreeKey *) key, btcb);
-	ExitOnError(result);
-
-	BlockMoveData(key, &iterator.key, CalcKeySize(btcb, (BTreeKey *) key));	//€€ should we range check against maxkeylen?
-
-	result = BTDeleteRecord( fcb, &iterator );
-
-ErrorExit:
-
-	return result;
+#endif
 }
 
 

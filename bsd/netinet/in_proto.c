@@ -54,20 +54,13 @@
  *	@(#)in_proto.c	8.2 (Berkeley) 2/9/95
  */
 
-#if ISFB31
-#include "opt_ipdivert.h"
-#include "opt_ipx.h"
-#endif
-
 #include <sys/param.h>
 #include <sys/kernel.h>
 #include <sys/socket.h>
 #include <sys/domain.h>
 #include <sys/protosw.h>
-
-
+#include <sys/queue.h>
 #include <sys/sysctl.h>
-
 
 #include <net/if.h>
 #include <net/route.h>
@@ -76,8 +69,6 @@
 #include <netinet/in_systm.h>
 #include <netinet/ip.h>
 #include <netinet/ip_var.h>
-#include <netinet/ip6.h>
-#include <netinet6/ip6_var.h>
 #include <netinet/ip_icmp.h>
 #include <netinet/igmp_var.h>
 #include <netinet/tcp.h>
@@ -86,6 +77,9 @@
 #include <netinet/tcpip.h>
 #include <netinet/udp.h>
 #include <netinet/udp_var.h>
+#include <netinet/ip_encap.h>
+
+
 /*
  * TCP/IP protocol family: IP, ICMP, UDP, TCP.
  */
@@ -99,35 +93,14 @@
 #include <netinet6/ipcomp.h>
 #endif /* IPSEC */
 
-#include "gif.h"
-#if NGIF > 0
-#include <netinet/in_gif.h>
-#endif
-
 #if IPXIP
 #include <netipx/ipx_ip.h>
 #endif
 
-#if NSIP
-#include <netns/ns.h>
-#include <netns/ns_if.h>
-#endif
-
-#if PM
-void	pm_init		__P((void));
-void	pm_input	__P((struct mbuf *, int));
-int	pm_ctloutput	__P((int, struct socket *, int, int, struct mbuf **));
-struct pr_usrreqs pm_usrreqs;
-#endif
-
-#if NATPT
-void	natpt_init	__P((void));
-int	natpt_ctloutput	__P((int, struct socket *, int, int, struct mbuf **));
-struct pr_usrreqs natpt_usrreqs;
-#endif
-
 extern	struct domain inetdomain;
 static	struct pr_usrreqs nousrreqs;
+extern struct   pr_usrreqs icmp_dgram_usrreqs;
+extern int icmp_dgram_ctloutput(struct socket *, struct sockopt *);
 
 struct protosw inetsw[] = {
 { 0,		&inetdomain,	0,		0,
@@ -155,19 +128,25 @@ struct protosw inetsw[] = {
   0,		0,		0,		0,
   0, &rip_usrreqs
 },
-{ SOCK_RAW,	&inetdomain,	IPPROTO_ICMP,	PR_ATOMIC|PR_ADDR,
+{ SOCK_RAW,	&inetdomain,	IPPROTO_ICMP,	PR_ATOMIC|PR_ADDR|PR_LASTHDR,
   icmp_input,	0,		0,		rip_ctloutput,
   0,
   0,		0,		0,		0,
   0, &rip_usrreqs
 },
-{ SOCK_RAW,	&inetdomain,	IPPROTO_IGMP,	PR_ATOMIC|PR_ADDR,
+{ SOCK_DGRAM, &inetdomain,    IPPROTO_ICMP,   PR_ATOMIC|PR_ADDR|PR_LASTHDR,
+  icmp_input,   0,              0,              icmp_dgram_ctloutput,
+  0,
+  0,            0,              0,              0,
+  0, &icmp_dgram_usrreqs
+},
+{ SOCK_RAW,	&inetdomain,	IPPROTO_IGMP,	PR_ATOMIC|PR_ADDR|PR_LASTHDR,
   igmp_input,	0,		0,		rip_ctloutput,
   0,
   igmp_init,	igmp_fasttimo,	igmp_slowtimo,	0,
   0, &rip_usrreqs
 },
-{ SOCK_RAW,	&inetdomain,	IPPROTO_RSVP,	PR_ATOMIC|PR_ADDR,
+{ SOCK_RAW,	&inetdomain,	IPPROTO_RSVP,	PR_ATOMIC|PR_ADDR|PR_LASTHDR,
   rsvp_input,	0,		0,		rip_ctloutput,
   0,
   0,		0,		0,		0,
@@ -195,29 +174,20 @@ struct protosw inetsw[] = {
   0, &nousrreqs
 },
 #endif /* IPSEC */
-#if NGIF > 0
-{ SOCK_RAW,	&inetdomain,	IPPROTO_IPV4,	PR_ATOMIC|PR_ADDR,
-  in_gif_input,	0,	 	0,		0,
-  0,	  
-  0,		0,		0,		0,
-  0, &nousrreqs
-},
-# if INET6
-{ SOCK_RAW,	&inetdomain,	IPPROTO_IPV6,	PR_ATOMIC|PR_ADDR,
-  in_gif_input,	0,	 	0,		0,
-  0,	  
-  0,		0,		0,		0,
-  0, &nousrreqs
-},
-#endif
-#else /*NGIF*/
-{ SOCK_RAW,	&inetdomain,	IPPROTO_IPIP,	PR_ATOMIC|PR_ADDR,
-  ipip_input,	0,	 	0,		rip_ctloutput,
+{ SOCK_RAW,	&inetdomain,	IPPROTO_IPV4,	PR_ATOMIC|PR_ADDR|PR_LASTHDR,
+  encap4_input,	0,	 	0,		rip_ctloutput,
   0,
-  0,		0,		0,		0,
+  encap_init,		0,		0,		0,
   0, &rip_usrreqs
 },
-#endif /*NGIF*/
+# if INET6
+{ SOCK_RAW,	&inetdomain,	IPPROTO_IPV6,	PR_ATOMIC|PR_ADDR|PR_LASTHDR,
+  encap4_input,	0,	 	0,		rip_ctloutput,
+  0,
+  encap_init,	0,		0,		0,
+  0, &rip_usrreqs
+},
+#endif
 #if IPDIVERT
 { SOCK_RAW,	&inetdomain,	IPPROTO_DIVERT,	PR_ATOMIC|PR_ADDR,
   div_input,	0,	 	0,		ip_ctloutput,
@@ -226,23 +196,8 @@ struct protosw inetsw[] = {
   0, &div_usrreqs,
 },
 #endif
-#if TPIP
-{ SOCK_SEQPACKET,&inetdomain,	IPPROTO_TP,	PR_CONNREQUIRED|PR_WANTRCVD,
-  tpip_input,	0,		tpip_ctlinput,	tp_ctloutput,
-  0, tp_usrreq,
-  tp_init,	0,		tp_slowtimo,	tp_drain,
-},
-#endif
-/* EON (ISO CLNL over IP) */
-#if EON
-{ SOCK_RAW,	&inetdomain,	IPPROTO_EON,	0,
-  eoninput,	0,		eonctlinput,		0,
-  0,
-  eonprotoinit,	0,		0,		0,
-},
-#endif
 #if IPXIP
-{ SOCK_RAW,	&inetdomain,	IPPROTO_IDP,	PR_ATOMIC|PR_ADDR,
+{ SOCK_RAW,	&inetdomain,	IPPROTO_IDP,	PR_ATOMIC|PR_ADDR|PR_LASTHDR,
   ipxip_input,	0,		ipxip_ctlinput,	0,
   0,
   0,		0,		0,		0,
@@ -250,7 +205,7 @@ struct protosw inetsw[] = {
 },
 #endif
 #if NSIP
-{ SOCK_RAW,	&inetdomain,	IPPROTO_IDP,	PR_ATOMIC|PR_ADDR,
+{ SOCK_RAW,	&inetdomain,	IPPROTO_IDP,	PR_ATOMIC|PR_ADDR|PR_LASTHDR,
   idpip_input,	0,		nsip_ctlinput,	0,
   0,
   0,		0,		0,		0,
@@ -266,16 +221,6 @@ struct protosw inetsw[] = {
 },
 };
 
-#if NGIF > 0
-struct protosw in_gif_protosw = 
-{ SOCK_RAW,     &inetdomain,    0/*IPPROTO_IPV[46]*/,   PR_ATOMIC|PR_ADDR,   
-  in_gif_input, rip_output,     0,              rip_ctloutput,
-  0,
-  0,            0,              0,              0,
-  0, &rip_usrreqs
-}; 
-#endif /*NGIF*/
-
 extern int in_inithead __P((void **, int));
 
 int in_proto_count = (sizeof (inetsw) / sizeof (struct protosw));
@@ -290,7 +235,6 @@ struct domain inetdomain =
     };
 
 DOMAIN_SET(inet);
-
 
 SYSCTL_NODE(_net,      PF_INET,		inet,	CTLFLAG_RW, 0,
 	"Internet Family");

@@ -52,10 +52,12 @@
  * SUCH DAMAGE.
  *
  *	@(#)if_dl.h	8.1 (Berkeley) 6/10/93
+ * $FreeBSD: src/sys/net/if_dl.h,v 1.10 2000/03/01 02:46:25 archie Exp $
  */
 
 #ifndef _NET_IF_DL_H_
 #define _NET_IF_DL_H_
+#include <sys/appleapiopts.h>
 
 /*
  * A Link-Level Sockaddr may specify the interface in one of two
@@ -80,7 +82,7 @@
  */
 struct sockaddr_dl {
 	u_char	sdl_len;	/* Total length of sockaddr */
-	u_char	sdl_family;	/* AF_DLI */
+	u_char	sdl_family;	/* AF_LINK */
 	u_short	sdl_index;	/* if != 0, system given index for interface */
 	u_char	sdl_type;	/* interface type */
 	u_char	sdl_nlen;	/* interface name length, no trailing 0 reqd. */
@@ -88,6 +90,11 @@ struct sockaddr_dl {
 	u_char	sdl_slen;	/* link layer selector length */
 	char	sdl_data[12];	/* minimum work area, can be larger;
 				   contains both if name and ll address */
+#ifndef __APPLE__
+	/* For TokenRing */
+	u_short	sdl_rcf;	/* source routing control */
+	u_short	sdl_route[16];	/* source routing information */
+#endif
 };
 
 #define LLADDR(s) ((caddr_t)((s)->sdl_data + (s)->sdl_nlen))

@@ -52,10 +52,12 @@
  * SUCH DAMAGE.
  *
  *	@(#)tcpip.h	8.1 (Berkeley) 6/10/93
+ * $FreeBSD: src/sys/netinet/tcpip.h,v 1.8 1999/08/28 00:49:34 peter Exp $
  */
 
 #ifndef _NETINET_TCPIP_H_
 #define _NETINET_TCPIP_H_
+#include <sys/appleapiopts.h>
 
 /*
  * Tcp+ip header, after ip options removed.
@@ -89,90 +91,5 @@ struct full_tcpiphdr {
 #define	ti_win		ti_t.th_win
 #define	ti_sum		ti_t.th_sum
 #define	ti_urp		ti_t.th_urp
-
-#ifndef INET6 
-/*
- * Same for templates.
- */
-struct tcptemp {
-	struct 	ipovly tt_i;		/* overlaid ip structure */
-	struct	tcphdr tt_t;		/* tcp header */
-};
-#define tt_x1		tt_i.ih_x1
-#define	tt_pr		tt_i.ih_pr
-#define	tt_len		tt_i.ih_len
-#define	tt_src		tt_i.ih_src
-#define	tt_dst		tt_i.ih_dst
-#define	tt_sport	tt_t.th_sport
-#define	tt_dport	tt_t.th_dport
-#define	tt_off		tt_t.th_off
-#define tt_seq		tt_t.th_seq
-#define tt_ack		tt_t.th_ack
-#define tt_x2		tt_t.th_x2
-#define tt_flags	tt_t.th_flags
-#define tt_win		tt_t.th_win
-#define tt_sum		tt_t.th_sum
-#define tt_urp		tt_t.th_urp
-#else
-
-#define ip6tcp		tcpip6hdr	/* for KAME src sync over BSD*'s */
-
-/*
- * IPv6+TCP headers.
- */
-struct tcpip6hdr {
-	struct 	ip6_hdr ti6_i;		/* IPv6 header */
-	struct	tcphdr ti6_t;		/* TCP header */
-};
-#define	ti6_vfc		ti6_i.ip6_vfc
-#define	ti6_flow	ti6_i.ip6_vlow
-#define	ti6_plen	ti6_i.ip6_plen
-#define	ti6_nxt		ti6_i.ip6_nxt
-#define	ti6_hlim	ti6_i.ip6_hlim
-#define	ti6_src		ti6_i.ip6_src
-#define	ti6_dst		ti6_i.ip6_dst
-#define	ti6_sport	ti6_t.th_sport
-#define	ti6_dport	ti6_t.th_dport
-#define	ti6_seq		ti6_t.th_seq
-#define	ti6_ack		ti6_t.th_ack
-#define	ti6_x2		ti6_t.th_x2
-#define	ti6_off		ti6_t.th_off
-#define	ti6_flags	ti6_t.th_flags
-#define	ti6_win		ti6_t.th_win
-#define	ti6_sum		ti6_t.th_sum
-#define	ti6_urp		ti6_t.th_urp
-
-/*
- * Dual template for IPv4/IPv6 TCP.
- *
- * Optimized for IPv4
- */
-struct tcptemp {
-	struct	ipovly tt_i;		/* overlaid ip structure */
-	struct	tcphdr tt_t;		/* tcp header */
-	struct	ip6_hdr tt_i6;		/* IPv6 header */
-};
-#define tt_x1		tt_i.ih_x1
-#define	tt_pr		tt_i.ih_pr
-#define	tt_len		tt_i.ih_len
-#define	tt_src		tt_i.ih_src
-#define	tt_dst		tt_i.ih_dst
-#define	tt_sport	tt_t.th_sport
-#define	tt_dport	tt_t.th_dport
-#define	tt_off		tt_t.th_off
-#define tt_seq		tt_t.th_seq
-#define tt_ack		tt_t.th_ack
-#define tt_x2		tt_t.th_x2
-#define tt_flags	tt_t.th_flags
-#define tt_win		tt_t.th_win
-#define tt_sum		tt_t.th_sum
-#define tt_urp		tt_t.th_urp
-#define	tt_vfc		tt_i6.ip6_vfc
-#define	tt_flow		tt_i6.ip6_flow
-#define	tt_pr6		tt_i6.ip6_nxt
-#define	tt_len6		tt_i6.ip6_plen
-#define tt_src6		tt_i6.ip6_src
-#define tt_dst6		tt_i6.ip6_dst
-#endif
 
 #endif

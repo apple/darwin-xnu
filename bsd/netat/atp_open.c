@@ -42,6 +42,7 @@
 #include <sys/ioctl.h>
 #include <sys/malloc.h>
 #include <sys/socket.h>
+#include <vm/vm_kern.h>         /* for kernel_map */
 
 #include <netat/sysglue.h>
 #include <netat/appletalk.h>
@@ -109,15 +110,7 @@ void atp_init()
 	atp_used_list = 0;
 	atp_trans_abort.head = NULL;
 	atp_trans_abort.tail = NULL;
-	
-	for (i = 0; i < NATP_RCB; i++) {
-		atp_rcb_data[i].rc_list.next = atp_rcb_free_list;
-		atp_rcb_free_list = &atp_rcb_data[i];
-	}
-	for (i = 0; i < NATP_STATE; i++) {
-		atp_state_data[i].atp_trans_waiting = atp_free_list;
-		atp_free_list = &atp_state_data[i];
-	}
+		
 	atp_need_rel.head = NULL;
 	atp_need_rel.tail = NULL;
 
@@ -137,7 +130,41 @@ int atp_open(gref, flag)
 	int flag;
 {
 	register struct atp_state *atp;
-	register int s;
+	register int s, i;
+	vm_offset_t	temp;
+	
+	/*
+	 * Allocate and init state and reply control block lists
+	 * if this is the first open
+	 */
+	if (atp_rcb_data == NULL) {
+		if (kmem_alloc(kernel_map, &temp, sizeof(struct atp_rcb) * NATP_RCB) != KERN_SUCCESS) 
+			return(ENOMEM);
+		if (atp_rcb_data == NULL) {						/* in case we lost funnel while allocating */
+		        bzero((caddr_t)temp, sizeof(struct atp_rcb) * NATP_RCB);
+			atp_rcb_data = (struct atp_rcb*)temp;					
+			for (i = 0; i < NATP_RCB; i++) {
+				atp_rcb_data[i].rc_list.next = atp_rcb_free_list;
+				atp_rcb_free_list = &atp_rcb_data[i];
+			}
+		} else
+			kmem_free(kernel_map, temp, sizeof(struct atp_rcb) * NATP_RCB);	/* already allocated by another process */	
+	}
+	
+	if (atp_state_data == NULL) {
+		if (kmem_alloc(kernel_map, &temp, sizeof(struct atp_state) * NATP_STATE) != KERN_SUCCESS) 
+			return(ENOMEM);
+		if (atp_state_data == NULL) {
+		  bzero((caddr_t)temp, sizeof(struct atp_state) * NATP_STATE);
+		        atp_state_data = (struct atp_state*) temp;
+			for (i = 0; i < NATP_STATE; i++) {
+				atp_state_data[i].atp_trans_waiting = atp_free_list;
+				atp_free_list = &atp_state_data[i];
+			}
+		} else
+			kmem_free(kernel_map, temp, sizeof(struct atp_state) * NATP_STATE);	
+	}
+
 
 	/*
 	 *	If no atp structure available return failure

@@ -1,5 +1,24 @@
-/*	$KAME: ip6_fw.h,v 1.2 2000/02/22 14:04:21 itojun Exp $	*/
-
+/*
+ * Copyright (c) 2002 Apple Computer, Inc. All rights reserved.
+ *
+ * @APPLE_LICENSE_HEADER_START@
+ * 
+ * The contents of this file constitute Original Code as defined in and
+ * are subject to the Apple Public Source License Version 1.1 (the
+ * "License").  You may not use this file except in compliance with the
+ * License.  Please obtain a copy of the License at
+ * http://www.apple.com/publicsource and read it before using this file.
+ * 
+ * This Original Code and all software distributed under the License are
+ * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
+ * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
+ * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
+ * License for the specific language governing rights and limitations
+ * under the License.
+ * 
+ * @APPLE_LICENSE_HEADER_END@
+ */
 /*
  * Copyright (c) 1993 Daniel Boulet
  * Copyright (c) 1994 Ugen J.S.Antsilevich
@@ -17,8 +36,13 @@
 
 #ifndef _IP6_FW_H
 #define _IP6_FW_H
+#include <sys/appleapiopts.h>
 
 #include <net/if.h>
+#ifdef __APPLE_API_PRIVATE
+
+#define IP6_FW_CURRENT_API_VERSION 20	/* Version of this API */
+
 
 /*
  * This union structure identifies an interface, either explicitly
@@ -36,8 +60,8 @@
 union ip6_fw_if {
     struct in6_addr fu_via_ip6;	/* Specified by IPv6 address */
     struct {			/* Specified by interface name */
-#define FW_IFNLEN     IFNAMSIZ
-	    char  name[FW_IFNLEN];
+#define IP6FW_IFNLEN     IFNAMSIZ
+	    char  name[IP6FW_IFNLEN];
 	    short unit;		/* -1 means match any unit */
     } fu_via_if;
 };
@@ -52,16 +76,21 @@ union ip6_fw_if {
  */
 
 struct ip6_fw {
+	u_int32_t version;		/* Version of this structure.  Should always be */
+							/* set to IP6_FW_CURRENT_API_VERSION by clients. */
+	void *context;			/* Context that is usable by user processes to */
+							/* identify this rule. */
     u_long fw_pcnt,fw_bcnt;		/* Packet and byte counters */
     struct in6_addr fw_src, fw_dst;	/* Source and destination IPv6 addr */
     struct in6_addr fw_smsk, fw_dmsk;	/* Mask for src and dest IPv6 addr */
     u_short fw_number;			/* Rule number */
     u_short fw_flg;			/* Flags word */
 #define IPV6_FW_MAX_PORTS	10	/* A reasonable maximum */
+    u_int fw_ipflg;			/* IP flags word */
     u_short fw_pts[IPV6_FW_MAX_PORTS];	/* Array of port numbers to match */
     u_char fw_ip6opt,fw_ip6nopt;	/* IPv6 options set/unset */
     u_char fw_tcpf,fw_tcpnf;		/* TCP flags set/unset */
-#define IPV6_FW_ICMPTYPES_DIM (32 / (sizeof(unsigned) * 8))
+#define IPV6_FW_ICMPTYPES_DIM (256 / (sizeof(unsigned) * 8))
     unsigned fw_icmp6types[IPV6_FW_ICMPTYPES_DIM]; /* ICMP types bitmap */
     long timestamp;			/* timestamp (tv_sec) of last match */
     union ip6_fw_if fw_in_if, fw_out_if;/* Incoming and outgoing interfaces */
@@ -136,6 +165,11 @@ struct ip6_fw_chain {
 
 #define IPV6_FW_F_MASK	0xFFFF	/* All possible flag bits mask		*/
 
+/* 
+ * Flags for the 'fw_ipflg' field, for comparing values of ip and its protocols. */
+#define	IPV6_FW_IF_TCPEST 0x00000020	/* established TCP connection	*/
+#define IPV6_FW_IF_TCPMSK 0x00000020	/* mask of all TCP values */
+
 /*
  * For backwards compatibility with rules specifying "via iface" but
  * not restricted to only "in" or "out" packets, we define this combination
@@ -170,36 +204,14 @@ struct ip6_fw_chain {
 #define IPV6_FW_TCPF_PSH	TH_PUSH
 #define IPV6_FW_TCPF_ACK	TH_ACK
 #define IPV6_FW_TCPF_URG	TH_URG
-#define IPV6_FW_TCPF_ESTAB	0x40
-
-/*
- * Names for IPV6_FW sysctl objects
- */
-#define IP6FWCTL_DEBUG         	1
-#define IP6FWCTL_VERBOSE   	2
-#define IP6FWCTL_VERBLIMIT  	3 
-#define IP6FWCTL_MAXID          4
-
-#define IP6FWCTL_NAMES { \
-        { 0, 0 }, \
-        { 0, 0 }, \
-        { "debug", CTLTYPE_INT }, \
-        { "verbose", CTLTYPE_INT }, \
-        { "verbose_limit", CTLTYPE_INT }, \
-}
-
-#define IP6FWCTL_VARS { \
-        0, \
-        0, \
-        &fw6_debug,   \
-        &fw6_verbose,  \
-        &fw6_verbose_limit, \
-}
 
 /*
  * Main firewall chains definitions and global var's definitions.
  */
-#if KERNEL
+#ifdef KERNEL
+
+#define M_IP6FW M_IPFW
+
 
 /*
  * Function definitions.
@@ -213,7 +225,9 @@ typedef	int ip6_fw_chk_t __P((struct ip6_hdr**, struct ifnet*,
 typedef	int ip6_fw_ctl_t __P((int, struct mbuf**));
 extern	ip6_fw_chk_t *ip6_fw_chk_ptr;
 extern	ip6_fw_ctl_t *ip6_fw_ctl_ptr;
+extern	int ip6_fw_enable;
 
 #endif /* KERNEL */
+#endif /* __APPLE_API_PRIVATE */
 
 #endif /* _IP6_FW_H */

@@ -19,7 +19,13 @@
  * 
  * @APPLE_LICENSE_HEADER_END@
  */
+#ifndef _HFS_RANGELIST_H_
+#define _HFS_RANGELIST_H_
 
+#include <sys/appleapiopts.h>
+
+#ifdef KERNEL
+#ifdef __APPLE_API_PRIVATE
 #include <sys/types.h>
 #include <sys/queue.h>
 
@@ -51,3 +57,7 @@ enum rl_overlaptype rl_scan(struct rl_head *rangelist,
 							off_t end,
 							struct rl_entry **overlap);
 __END_DECLS
+
+#endif /* __APPLE_API_PRIVATE */
+#endif /* KERNEL */
+#endif /* ! _HFS_RANGELIST_H_ */

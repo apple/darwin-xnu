@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2002 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -76,6 +76,7 @@
 #include <sys/disklabel.h>
 #include <sys/vm.h>
 #include <sys/sysctl.h>
+#include <sys/user.h>
 #include <mach/machine.h>
 #include <mach/mach_types.h>
 #include <mach/vm_param.h>
@@ -92,7 +93,7 @@ extern vm_map_t bsd_pageable_map;
 #include <pexpert/pexpert.h>
 
 #if __ppc__
-#include <osfmk/ppc/machine_routines.h>
+#include <ppc/machine_routines.h>
 #endif
 
 sysctlfn kern_sysctl;
@@ -121,6 +122,7 @@ fill_externproc(struct proc *p, struct extern_proc *exp);
 /*
  * temporary location for vm_sysctl.  This should be machine independant
  */
+int
 vm_sysctl(name, namelen, oldp, oldlenp, newp, newlen, p)
 	int *name;
 	u_int namelen;
@@ -130,26 +132,20 @@ vm_sysctl(name, namelen, oldp, oldlenp, newp, newlen, p)
 	size_t newlen;
 	struct proc *p;
 {
-	int error, level, inthostid;
-	extern long avenrun[3], mach_factor[3];
+	extern uint32_t mach_factor[3];
 	struct loadavg loadinfo;
-
-	//if (namelen != 1 && !(name[0] == VM_LOADAVG))
-		//return (ENOTDIR);		/* overloaded */
 
 	switch (name[0]) {
 	case VM_LOADAVG:
-		loadinfo.ldavg[0] = avenrun[0];
-		loadinfo.ldavg[1] = avenrun[1];
-		loadinfo.ldavg[2] = avenrun[2];
-		loadinfo.fscale = LSCALE;
-		return (sysctl_struct(oldp, oldlenp, newp, newlen, &loadinfo, sizeof(struct loadavg)));
+		return (sysctl_struct(oldp, oldlenp, newp, newlen,
+					&averunnable, sizeof(struct loadavg)));
 	case VM_MACHFACTOR:
 		loadinfo.ldavg[0] = mach_factor[0];
 		loadinfo.ldavg[1] = mach_factor[1];
 		loadinfo.ldavg[2] = mach_factor[2];
 		loadinfo.fscale = LSCALE;
-		return (sysctl_struct(oldp, oldlenp, newp, newlen, &loadinfo, sizeof(struct loadavg)));
+		return (sysctl_struct(oldp, oldlenp, newp, newlen,
+					&loadinfo, sizeof(struct loadavg)));
 	case VM_METER:
 		return (EOPNOTSUPP);
 	case VM_MAXID:
@@ -201,11 +197,13 @@ __sysctl(p, uap, retval)
 		return (error);
 
 	/* CTL_UNSPEC is used to get oid to AUTO_OID */
-	if (uap->new != NULL && 
-		(((name[0] == CTL_KERN) && (name[1] != KERN_IPC)) || 
-		 (name[0] == CTL_HW) || (name[0] == CTL_VM) ||
-		 (name[0] == CTL_VFS)) &&
-	    (error = suser(p->p_ucred, &p->p_acflag)))
+	if (uap->new != NULL
+		&& ((name[0] == CTL_KERN
+				&& !(name[1] == KERN_IPC || name[1] == KERN_PANICINFO))
+			|| (name[0] == CTL_HW)
+			|| (name[0] == CTL_VM)
+			|| (name[0] == CTL_VFS))
+		&& (error = suser(p->p_ucred, &p->p_acflag)))
 		return (error);
 
 	switch (name[0]) {
@@ -225,11 +223,6 @@ __sysctl(p, uap, retval)
 	case CTL_VFS:
 		fn = vfs_sysctl;
 		break;
-#if FIXME  /* [ */
-	case CTL_MACHDEP:
-		fn = cpu_sysctl;
-		break;
-#endif  /* FIXME ] */
 #ifdef DEBUG
 	case CTL_DEBUG:
 		fn = debug_sysctl;
@@ -248,7 +241,8 @@ __sysctl(p, uap, retval)
 			return (EFAULT);
 
 		/* The pc sampling mechanism does not need to take this lock */
-		if (name[1] != KERN_PCSAMPLES) {
+		if ((name[1] != KERN_PCSAMPLES) &&
+		    (!((name[1] == KERN_KDEBUG) && (name[2] == KERN_KDGETENTROPY)))) {
 		  while (memlock.sl_lock) {
 			memlock.sl_want = 1;
 			sleep((caddr_t)&memlock, PRIBIO+1);
@@ -258,7 +252,8 @@ __sysctl(p, uap, retval)
 		}
 
 		if (dolock && oldlen && (error = vslock(uap->old, oldlen))) {
-			if (name[1] != KERN_PCSAMPLES) {
+			if ((name[1] != KERN_PCSAMPLES) &&
+			   (! ((name[1] == KERN_KDEBUG) && (name[2] == KERN_KDGETENTROPY)))) {
 		  		memlock.sl_lock = 0;
 		  		if (memlock.sl_want) {
 		        	memlock.sl_want = 0;
@@ -321,11 +316,14 @@ int securelevel = -1;
 int securelevel;
 #endif
 
-int get_kernel_symfile( struct proc *p, char **symfile );
+extern int get_kernel_symfile( struct proc *, char **);
+extern int sysctl_dopanicinfo(int *, u_int, void *, size_t *,
+			void *, size_t, struct proc *);
 
 /*
  * kernel related system variables.
  */
+int
 kern_sysctl(name, namelen, oldp, oldlenp, newp, newlen, p)
 	int *name;
 	u_int namelen;
@@ -337,15 +335,21 @@ kern_sysctl(name, namelen, oldp, oldlenp, newp, newlen, p)
 {
 	int error, level, inthostid;
 	unsigned int oldval=0;
+	char *str;
 	extern char ostype[], osrelease[], version[];
+	extern int netboot_root();
 
-	/* all sysctl names at this level are terminal */
-	if (namelen != 1 && !(name[0] == KERN_PROC || name[0] == KERN_PROF 
-		|| name[0] == KERN_KDEBUG
-		|| name[0] == KERN_PROCARGS
-                || name[0] == KERN_PCSAMPLES
-                || name[0] == KERN_IPC
-	))
+	/* all sysctl names not listed below are terminal at this level */
+	if (namelen != 1
+		&& !(name[0] == KERN_PROC
+			|| name[0] == KERN_PROF 
+			|| name[0] == KERN_KDEBUG
+			|| name[0] == KERN_PROCARGS
+			|| name[0] == KERN_PCSAMPLES
+			|| name[0] == KERN_IPC
+			|| name[0] == KERN_SYSV
+			|| name[0] == KERN_PANICINFO)
+		)
 		return (ENOTDIR);		/* overloaded */
 
 	switch (name[0]) {
@@ -423,24 +427,23 @@ kern_sysctl(name, namelen, oldp, oldlenp, newp, newlen, p)
 #else
 		return (sysctl_rdint(oldp, oldlenp, newp, 0));
 #endif
-#if FIXME  /* [ */
-	case KERN_MAXPARTITIONS:
-		return (sysctl_rdint(oldp, oldlenp, newp, MAXPARTITIONS));
-#endif  /* FIXME ] */
 	case KERN_KDEBUG:
 		return (kdebug_ops(name + 1, namelen - 1, oldp, oldlenp, p));
 	case KERN_PCSAMPLES:
 		return (pcsamples_ops(name + 1, namelen - 1, oldp, oldlenp, p));
 	case KERN_PROCARGS:
 		/* new one as it does not use kinfo_proc */
-		return (sysctl_procargs(name + 1, namelen - 1, oldp, oldlenp));
-        case KERN_SYMFILE:
-                {
-                    char *str;
-                    error = get_kernel_symfile( p, &str );
-                    if ( error ) return error;
-                    return (sysctl_rdstring(oldp, oldlenp, newp, str));
-                }    
+		return (sysctl_procargs(name + 1, namelen - 1, oldp, oldlenp, p));
+	case KERN_SYMFILE:
+		error = get_kernel_symfile( p, &str );
+		if ( error )
+			return error;
+		return (sysctl_rdstring(oldp, oldlenp, newp, str));
+	case KERN_NETBOOT:
+		return (sysctl_rdint(oldp, oldlenp, newp, netboot_root()));
+	case KERN_PANICINFO:
+		return(sysctl_dopanicinfo(name + 1, namelen - 1, oldp, oldlenp,
+			newp, newlen, p));
 	default:
 		return (EOPNOTSUPP);
 	}
@@ -481,7 +484,8 @@ hw_sysctl(name, namelen, oldp, oldlenp, newp, newlen, p)
 		if(!PEGetModelName(dummy,64))
 			return(EINVAL);
 		return (sysctl_rdstring(oldp, oldlenp, newp, dummy));
-	case HW_NCPU: {
+	case HW_NCPU:
+		{
 		int numcpus=1;
 		host_basic_info_data_t hinfo;
 		kern_return_t kret;
@@ -592,6 +596,7 @@ debug_sysctl(name, namelen, oldp, oldlenp, newp, newlen, p)
  * Validate parameters and get old / set new parameters
  * for an integer-valued sysctl function.
  */
+int
 sysctl_int(oldp, oldlenp, newp, newlen, valp)
 	void *oldp;
 	size_t *oldlenp;
@@ -616,6 +621,7 @@ sysctl_int(oldp, oldlenp, newp, newlen, valp)
 /*
  * As above, but read-only.
  */
+int
 sysctl_rdint(oldp, oldlenp, newp, val)
 	void *oldp;
 	size_t *oldlenp;
@@ -636,8 +642,57 @@ sysctl_rdint(oldp, oldlenp, newp, val)
 
 /*
  * Validate parameters and get old / set new parameters
+ * for an quad(64bit)-valued sysctl function.
+ */
+int
+sysctl_quad(oldp, oldlenp, newp, newlen, valp)
+	void *oldp;
+	size_t *oldlenp;
+	void *newp;
+	size_t newlen;
+	quad_t *valp;
+{
+	int error = 0;
+
+	if (oldp && *oldlenp < sizeof(quad_t))
+		return (ENOMEM);
+	if (newp && newlen != sizeof(quad_t))
+		return (EINVAL);
+	*oldlenp = sizeof(quad_t);
+	if (oldp)
+		error = copyout(valp, oldp, sizeof(quad_t));
+	if (error == 0 && newp)
+		error = copyin(newp, valp, sizeof(quad_t));
+	return (error);
+}
+
+/*
+ * As above, but read-only.
+ */
+int
+sysctl_rdquad(oldp, oldlenp, newp, val)
+	void *oldp;
+	size_t *oldlenp;
+	void *newp;
+	quad_t val;
+{
+	int error = 0;
+
+	if (oldp && *oldlenp < sizeof(quad_t))
+		return (ENOMEM);
+	if (newp)
+		return (EPERM);
+	*oldlenp = sizeof(quad_t);
+	if (oldp)
+		error = copyout((caddr_t)&val, oldp, sizeof(quad_t));
+	return (error);
+}
+
+/*
+ * Validate parameters and get old / set new parameters
  * for a string-valued sysctl function.
  */
+int
 sysctl_string(oldp, oldlenp, newp, newlen, str, maxlen)
 	void *oldp;
 	size_t *oldlenp;
@@ -653,8 +708,8 @@ sysctl_string(oldp, oldlenp, newp, newlen, str, maxlen)
 		return (ENOMEM);
 	if (newp && newlen >= maxlen)
 		return (EINVAL);
+	*oldlenp = len -1; /* deal with NULL strings correctly */
 	if (oldp) {
-		*oldlenp = len;
 		error = copyout(str, oldp, len);
 	}
 	if (error == 0 && newp) {
@@ -667,6 +722,7 @@ sysctl_string(oldp, oldlenp, newp, newlen, str, maxlen)
 /*
  * As above, but read-only.
  */
+int
 sysctl_rdstring(oldp, oldlenp, newp, str)
 	void *oldp;
 	size_t *oldlenp;
@@ -690,6 +746,7 @@ sysctl_rdstring(oldp, oldlenp, newp, str)
  * Validate parameters and get old / set new parameters
  * for a structure oriented sysctl function.
  */
+int
 sysctl_struct(oldp, oldlenp, newp, newlen, sp, len)
 	void *oldp;
 	size_t *oldlenp;
@@ -717,6 +774,7 @@ sysctl_struct(oldp, oldlenp, newp, newlen, sp, len)
  * Validate parameters and get old parameters
  * for a structure oriented sysctl function.
  */
+int
 sysctl_rdstruct(oldp, oldlenp, newp, sp, len)
 	void *oldp;
 	size_t *oldlenp;
@@ -738,6 +796,7 @@ sysctl_rdstruct(oldp, oldlenp, newp, sp, len)
 /*
  * Get file structures.
  */
+int
 sysctl_file(where, sizep)
 	char *where;
 	size_t *sizep;
@@ -789,6 +848,7 @@ sysctl_file(where, sizep)
  */
 #define KERN_PROCSLOP	(5 * sizeof (struct kinfo_proc))
 
+int
 sysctl_doproc(name, namelen, where, sizep)
 	int *name;
 	u_int namelen;
@@ -907,23 +967,11 @@ fill_eproc(p, ep)
 	ep->e_pcred = *p->p_cred;
 	ep->e_ucred = *p->p_ucred;
 	if (p->p_stat == SIDL || p->p_stat == SZOMB) {
-		ep->e_vm.vm_rssize = 0;
 		ep->e_vm.vm_tsize = 0;
 		ep->e_vm.vm_dsize = 0;
 		ep->e_vm.vm_ssize = 0;
-		/* ep->e_vm.vm_pmap = XXX; */
-	} else {
-#if FIXME  /* [ */
-		register vm_map_t vm = ((task_t)p->task)->map;
-
-		ep->e_vm.vm_rssize = pmap_resident_count(vm->pmap); /*XXX*/
-//		ep->e_vm.vm_tsize = vm->vm_tsize;
-//		ep->e_vm.vm_dsize = vm->vm_dsize;
-//		ep->e_vm.vm_ssize = vm->vm_ssize;
-#else  /* FIXME ][ */
-		ep->e_vm.vm_rssize = 0; /*XXX*/
-#endif  /* FIXME ] */
 	}
+	ep->e_vm.vm_rssize = 0;
 	if (p->p_pptr)
 		ep->e_ppid = p->p_pptr->p_pid;
 	else
@@ -954,6 +1002,8 @@ fill_externproc(p, exp)
 	register struct extern_proc *exp;
 {
 	exp->p_forw = exp->p_back = NULL;
+	if (p->p_stats)
+		exp->p_starttime = p->p_stats->p_start;
 	exp->p_vmspace = NULL;
 	exp->p_sigacts = p->p_sigacts;
 	exp->p_flag  = p->p_flag;
@@ -981,10 +1031,10 @@ fill_externproc(p, exp)
 	exp->p_iticks  = p->p_iticks ;
 	exp->p_traceflag  = p->p_traceflag ;
 	exp->p_tracep  = p->p_tracep ;
-	exp->p_siglist  = p->p_siglist ;
+	exp->p_siglist  = 0 ;	/* No longer relevant */
 	exp->p_textvp  = p->p_textvp ;
 	exp->p_holdcnt = 0 ;
-	exp->p_sigmask  = p->p_sigmask ;
+	exp->p_sigmask  = 0 ;	/* no longer avaialable */
 	exp->p_sigignore  = p->p_sigignore ;
 	exp->p_sigcatch  = p->p_sigcatch ;
 	exp->p_priority  = p->p_priority ;
@@ -999,6 +1049,7 @@ fill_externproc(p, exp)
 	exp->p_ru  = p->p_ru ;
 }
 
+int
 kdebug_ops(name, namelen, where, sizep, p)
 int *name;
 u_int namelen;
@@ -1006,12 +1057,13 @@ char *where;
 size_t *sizep;
 struct proc *p;
 {
-int size=*sizep;
-int ret=0;
-extern int kdbg_control(int *name, u_int namelen, char * where,size_t * sizep);
+	int size=*sizep;
+	int ret=0;
+	extern int kdbg_control(int *name, u_int namelen,
+		char * where,size_t * sizep);
 
-        if (ret = suser(p->p_ucred, &p->p_acflag))
-	        return(ret);
+	if (ret = suser(p->p_ucred, &p->p_acflag))
+		return(ret);
 
 	switch(name[0]) {
 	case KERN_KDEFLAGS:
@@ -1028,6 +1080,7 @@ extern int kdbg_control(int *name, u_int namelen, char * where,size_t * sizep);
 	case KERN_KDPIDEX:
 	case KERN_KDSETRTCDEC:
 	case KERN_KDSETBUF:
+	case KERN_KDGETENTROPY:
 	        ret = kdbg_control(name, namelen, where, sizep);
 	        break;
 	default:
@@ -1037,6 +1090,7 @@ extern int kdbg_control(int *name, u_int namelen, char * where,size_t * sizep);
 	return(ret);
 }
 
+int
 pcsamples_ops(name, namelen, where, sizep, p)
 int *name;
 u_int namelen;
@@ -1044,11 +1098,12 @@ char *where;
 size_t *sizep;
 struct proc *p;
 {
-int ret=0;
-extern int pcsamples_control(int *name, u_int namelen, char * where,size_t * sizep);
+	int ret=0;
+	extern int pcsamples_control(int *name, u_int namelen,
+		char * where,size_t * sizep);
 
-        if (ret = suser(p->p_ucred, &p->p_acflag))
-	        return(ret);
+	if (ret = suser(p->p_ucred, &p->p_acflag))
+		return(ret);
 
 	switch(name[0]) {
 	case KERN_PCDISABLE:
@@ -1074,11 +1129,13 @@ extern int pcsamples_control(int *name, u_int namelen, char * where,size_t * siz
  *	zeroed for security reasons.
  *	Odd data structure is for compatibility.
  */
-sysctl_procargs(name, namelen, where, sizep)
+int
+sysctl_procargs(name, namelen, where, sizep, cur_proc)
 	int *name;
 	u_int namelen;
 	char *where;
 	size_t *sizep;
+	struct proc *cur_proc;
 {
 	register struct proc *p;
 	register int needed = 0;
@@ -1128,6 +1185,9 @@ sysctl_procargs(name, namelen, where, sizep)
 	if (!p->user_stack)
 		return(EINVAL);
 
+	if ((p->p_ucred->cr_uid != cur_proc->p_ucred->cr_uid) 
+		&& suser(cur_proc->p_ucred, &cur_proc->p_acflag))
+		return (EINVAL);
 	arg_addr = (vm_offset_t)(p->user_stack - arg_size);
 
 

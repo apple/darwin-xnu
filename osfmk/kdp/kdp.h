@@ -19,11 +19,9 @@
  * 
  * @APPLE_LICENSE_HEADER_END@
  */
+
 /*
- * Copyright (c) 1993 NeXT Computer, Inc.  All rights reserved.
- *
- * kdp.h -- exported interface to kdp module
- *
+ * Exported interface to kdp module
  */
 
 /* Raise exception in debugger. */

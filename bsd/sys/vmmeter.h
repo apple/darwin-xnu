@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2002 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -58,6 +58,9 @@
 #ifndef _SYS_VMMETER_H_
 #define	_SYS_VMMETER_H_
 
+#include <sys/appleapiopts.h>
+
+#ifdef __APPLE_API_OBSOLETE
 /*
  * System wide statistics counters.
  */
@@ -132,5 +135,7 @@ struct vmtotal
 #ifdef KERNEL
 extern struct	vmtotal total;
 #endif
+
+#endif /*__APPLE_API_OBSOLETE */
 
 #endif /* !_SYS_VMMETER_H_ */

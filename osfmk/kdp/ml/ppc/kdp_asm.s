@@ -41,7 +41,10 @@ ENTRY(kdp_call_with_ctx, TAG_NO_FRAME_USED)
 	mfmsr	r7					/* Get the MSR */
 	mflr	r0
 	rlwinm	r7,r7,0,MSR_EE_BIT+1,MSR_EE_BIT-1	/* Turn off interruptions enable bit */
+	rlwinm	r7,r7,0,MSR_FP_BIT+1,MSR_FP_BIT-1	; Force floating point off
+	rlwinm	r7,r7,0,MSR_VEC_BIT+1,MSR_VEC_BIT-1	; Force vectors off
 	mtmsr	r7
+	isync										; Need this because we may have ditched fp/vec
 	mfsprg	r8,0				/* Get the per_proc block address */
 	stw	r0,	FM_LR_SAVE(r1)		/* save lr in the current frame */
 	
@@ -69,7 +72,10 @@ ENTRY(kdp_call_with_ctx, TAG_NO_FRAME_USED)
 	mfmsr	r0					/* Get the MSR */
 	addi	r1,	r1,	FM_SIZE
 	rlwinm	r0,r0,0,MSR_EE_BIT+1,MSR_EE_BIT-1	/* Turn off interruptions enable bit */
+	rlwinm	r0,r0,0,MSR_FP_BIT+1,MSR_FP_BIT-1	; Force floating point off
+	rlwinm	r0,r0,0,MSR_VEC_BIT+1,MSR_VEC_BIT-1	; Force vectors off
 	mtmsr	r0
+	isync										; Need this because we may have ditched fp/vec
 
 	mfsprg	r8,0				/* Get the per_proc block address */
 	

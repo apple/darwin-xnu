@@ -52,6 +52,7 @@
  * SUCH DAMAGE.
  *
  *	@(#)raw_usrreq.c	8.1 (Berkeley) 6/10/93
+ * $FreeBSD: src/sys/net/raw_usrreq.c,v 1.18 1999/08/28 00:48:28 peter Exp $
  */
 
 #include <sys/param.h>
@@ -178,14 +179,13 @@ raw_uattach(struct socket *so, int proto, struct proc *p)
 
 	if (rp == 0)
 		return EINVAL;
-#if ISFB31
-		if (p && (error = suser(p->p_ucred, &p->p_acflag)) != 0)
-			return error;
-#else
+#ifdef __APPLE__
 		if ((so->so_state & SS_PRIV) == 0)
 			return (EPERM);
+#else
+	if (p && (error = suser(p)) != 0)
+		return error;
 #endif
-
 	return raw_attach(so, proto);
 }
 

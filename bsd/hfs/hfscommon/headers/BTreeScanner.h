@@ -25,6 +25,10 @@
 #ifndef	_BTREESCANNER_H_
 #define _BTREESCANNER_H_
 
+#include <sys/appleapiopts.h>
+
+#ifdef KERNEL
+#ifdef __APPLE_API_PRIVATE
 #include <sys/time.h>
 
 #include "FileMgrInternal.h"
@@ -108,4 +112,6 @@ int	BTScanTerminate(	BTScanState *	scanState,
 						u_int32_t *		startingRecord,
 						u_int32_t *		recordsFound	);
 
+#endif /* __APPLE_API_PRIVATE */
+#endif /* KERNEL */
 #endif /* !_BTREESCANNER_H_ */

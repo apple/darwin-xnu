@@ -153,7 +153,7 @@ Result:		noErr		- success
 OSStatus	VerifyHeader	(FCB				*filePtr,
 							 BTHeaderRec			 *header )
 {
-	UInt32		forkSize;
+	UInt64		forkSize;
 	UInt32		totalNodes;
 	
 
@@ -171,7 +171,7 @@ OSStatus	VerifyHeader	(FCB				*filePtr,
 	
 	totalNodes = header->totalNodes;
 
-	forkSize = totalNodes * header->nodeSize;
+	forkSize = (UInt64)totalNodes * (UInt64)header->nodeSize;
 	
 	if ( forkSize != filePtr->fcbEOF )
 		return fsBTInvalidHeaderErr;

@@ -11,17 +11,6 @@ iokit/Families/IOADBBus/IOADBControllerUserClient.cpp		optional iokitcpp
 iokit/Families/IONVRAM/IONVRAMController.cpp			optional iokitcpp
 iokit/Drivers/platform/drvAppleNVRAM/AppleNVRAM.cpp		optional iokitcpp
 
-iokit/Drivers/platform/drvAppleCuda/AppleCuda.cpp		optional iokitcpp
-iokit/Drivers/platform/drvAppleCuda/IOCudaADBController.cpp	optional iokitcpp
-iokit/Drivers/platform/drvAppleCuda/AppleCudaUserClient.cpp	optional iokitcpp
-
-#iokit/Drivers/platform/drvApplePMU/AppleViaInterface.cpp  	optional iokitcpp
-#iokit/Drivers/platform/drvApplePMU/ApplePMU.cpp		optional iokitcpp
-#iokit/Drivers/platform/drvApplePMU/ApplePMUUserClient.cpp	optional iokitcpp
-#iokit/Drivers/platform/drvApplePMU/IOPMURTCController.cpp	optional iokitcpp
-#iokit/Drivers/platform/drvApplePMU/IOPMUPwrController.cpp	optional iokitcpp
-#iokit/Drivers/platform/drvApplePMU/IOPMUPowerSource.cpp         optional iokitcpp
-
 iokit/Drivers/platform/drvApplePMU/IOPMUADBController.cpp	optional iokitcpp
 
 # Apple Platform Expert
@@ -36,21 +25,3 @@ iokit/Drivers/platform/drvAppleMacIO/AppleMacIO.cpp		optional iokitcpp
 
 # Apple NMI driver
 iokit/Drivers/platform/drvAppleNMI/AppleNMI.cpp			optional iokitcpp
-
-# Platform Experts
-iokit/Drivers/platform/drvApplePowerSurgePE/PowerSurge.cpp	optional disabled-iokitcpp
-iokit/Drivers/platform/drvApplePowerStarPE/PowerStar.cpp	optional disabled-iokitcpp
-iokit/Drivers/platform/drvAppleGossamerPE/Gossamer.cpp		optional iokitcpp
-iokit/Drivers/platform/drvAppleGossamerPE/GossamerCPU.cpp	optional iokitcpp
-iokit/Drivers/platform/drvApplePowerExpressPE/PowerExpress.cpp	optional iokitcpp
-
-
-# Mac-IO drivers
-iokit/Drivers/platform/drvAppleGrandCentral/GrandCentral.cpp	optional disabled-iokitcpp
-iokit/Drivers/platform/drvAppleOHare/OHare.cpp			optional iokitcpp
-
-# ATA driver 
-#iokit/Drivers/ata/drvAppleUltra66ATA/AppleUltra66ATA.cpp		optional iokitcpp
-#iokit/Drivers/ata/drvAppleUltra33ATA/AppleUltra33ATA.cpp		optional iokitcpp
-
-

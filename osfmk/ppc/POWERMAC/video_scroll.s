@@ -41,6 +41,8 @@
 ENTRY(video_scroll_up, TAG_NO_FRAME_USED)
 
 			mfmsr	r0									/* Get the MSR */
+			rlwinm	r0,r0,0,MSR_FP_BIT+1,MSR_FP_BIT-1	; Force floating point off
+			rlwinm	r0,r0,0,MSR_VEC_BIT+1,MSR_VEC_BIT-1	; Force vectors off
 			mflr	r6									/* Get the LR */
 			ori		r7,r0,1<<(31-MSR_FP_BIT)			/* Turn on floating point */
 			stwu	r1,-(FM_SIZE+16)(r1)				/* Get space for a couple of registers on stack */
@@ -52,8 +54,6 @@ ENTRY(video_scroll_up, TAG_NO_FRAME_USED)
 			
 vsufpuon1:	stfd	f0,(FM_SIZE+0)(r1)					/* Save one register */
 			stfd	f1,(FM_SIZE+8)(r1)					/* and the second */
-			
-			stw		r0,(FM_SIZE+FM_LR_SAVE)(r1)			/* Save return */
 
 /* ok, now we can use the FPU registers to do some fast copying
  */
@@ -96,6 +96,8 @@ ENTRY(video_scroll_down, TAG_NO_FRAME_USED)
 	
 
 			mfmsr	r0									/* Get the MSR */
+			rlwinm	r0,r0,0,MSR_FP_BIT+1,MSR_FP_BIT-1	; Force floating point off
+			rlwinm	r0,r0,0,MSR_VEC_BIT+1,MSR_VEC_BIT-1	; Force vectors off
 			mflr	r6									/* Get the LR */
 			ori		r7,r0,1<<(31-MSR_FP_BIT)			/* Turn on floating point */
 			stwu	r1,-(FM_SIZE+16)(r1)				/* Get space for a couple of registers on stack */
@@ -107,8 +109,6 @@ ENTRY(video_scroll_down, TAG_NO_FRAME_USED)
 			
 vsdfpuon1:	stfd	f0,(FM_SIZE+0)(r1)					/* Save one register */
 			stfd	f1,(FM_SIZE+8)(r1)					/* and the second */
-			
-			stw		r0,(FM_SIZE+FM_LR_SAVE)(r1)			/* Save return */
 
 /* ok, now we can use the FPU registers to do some fast copying	 */
 

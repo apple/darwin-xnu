@@ -82,7 +82,10 @@
 #include <mach/mach_types.h>
 #include <vm/pmap.h>
 
-#ifdef MACH_KERNEL_PRIVATE
+#ifdef	__APPLE_API_PRIVATE
+
+#ifdef	MACH_KERNEL_PRIVATE
+
 #include <mach/boolean.h>
 #include <mach/port.h>
 #include <mach/time_value.h>
@@ -172,10 +175,6 @@ typedef struct task {
 
 	struct ipc_space *itk_space;
 
-	/* RPC subsystem information */
-	queue_head_t	subsystem_list;	/* list of subsystems */
-	int		subsystem_count;/* number of subsystems */
-
 	/* Synchronizer ownership information */
 	queue_head_t	semaphore_list;		/* list of owned semaphores   */
 	queue_head_t	lock_set_list;		/* list of owned lock sets    */
@@ -212,7 +211,6 @@ typedef struct task {
 	vm_offset_t	dynamic_working_set;
 } Task;
 
-
 #define task_lock(task)		mutex_lock(&(task)->lock)
 #define task_lock_try(task)	mutex_try(&(task)->lock)
 #define task_unlock(task)	mutex_unlock(&(task)->lock)
@@ -221,6 +219,8 @@ typedef struct task {
 					   ETAP_THREAD_TASK_ITK)
 #define	itk_lock(task)		mutex_lock(&(task)->itk_lock_data)
 #define	itk_unlock(task)	mutex_unlock(&(task)->itk_lock_data)
+
+#define task_reference_locked(task) ((task)->ref_count++)
 
 /*
  *	Internal only routines
@@ -236,28 +236,14 @@ extern kern_return_t	task_create_local(
 				boolean_t	kernel_loaded,
 				task_t		*child_task);	/* OUT */
 
-#if	MACH_HOST
-/* Freeze and unfreeze task from being reassigned processor sets */
-extern void		task_freeze(
-				task_t		task);
-
-extern void		task_unfreeze(
-				task_t		task);
-#endif	/* MACH_HOST */
-
 extern void		consider_task_collect(void);
 
 #define	current_task_fast()	(current_act_fast()->task)
 #define current_task()		current_task_fast()
 
-#else /* !MACH_KERNEL_PRIVATE */
-
-extern task_t current_task(void);
-
-#endif /* !MACH_KERNEL_PRIVATE */
+#endif	/* MACH_KERNEL_PRIVATE */
 
 extern task_t		kernel_task;
-extern boolean_t	is_kerneltask(task_t);
 
 /* Temporarily hold all threads in a task */
 extern kern_return_t	task_hold(
@@ -271,15 +257,6 @@ extern kern_return_t	task_release(
 extern kern_return_t	task_halt(
 				task_t	task);
 
-/* Take reference on task (make sure it doesn't go away) */
-extern void		task_reference(task_t	task);
-
-/* Try to take a reference on task, return false if it would block */
-extern boolean_t	task_reference_try(task_t task);
-
-/* Remove reference to task */
-extern void		task_deallocate(task_t	task);
-
 #if defined(MACH_KERNEL_PRIVATE) || defined(BSD_BUILD)
 extern kern_return_t	task_importance(
 							task_t			task,
@@ -292,4 +269,21 @@ extern void	set_bsdtask_info(task_t,void *);
 extern vm_map_t get_task_map(task_t);
 extern vm_map_t	swap_task_map(task_t, vm_map_t);
 extern pmap_t	get_task_pmap(task_t);
+
+extern boolean_t	task_reference_try(task_t task);
+
+#endif	/* __APPLE_API_PRIVATE */
+
+#if		!defined(MACH_KERNEL_PRIVATE)
+
+extern task_t	current_task(void);
+
+#endif	/* MACH_KERNEL_TASK */
+
+/* Take reference on task (make sure it doesn't go away) */
+extern void		task_reference(task_t	task);
+
+/* Remove reference to task */
+extern void		task_deallocate(task_t	task);
+
 #endif	/* _KERN_TASK_H_ */

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2002 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -58,6 +58,8 @@
 #ifndef	_SYS_REBOOT_H_
 #define _SYS_REBOOT_H_
 
+#include <sys/appleapiopts.h>
+
 #ifdef	KERNEL_BUILD
 #include <mach_kdb.h>
 #endif	/* KERNEL_BUILD */
@@ -66,6 +68,7 @@
  * Arguments to reboot system call.
  */
 
+#ifdef __APPLE_API_PRIVATE
 #define RB_AUTOBOOT	0	/* flags for system auto-booting itself */
 
 #define RB_ASKNAME	0x01	/* ask for file name to reboot from */
@@ -80,6 +83,9 @@
 #define RB_PANIC	0	/* reboot due to panic */
 #define RB_BOOT		1	/* reboot due to boot() */
 
+#endif /* __APPLE_API_PRIVATE */
+
+#ifdef __APPLE_API_OBSOLETE
 /*
  * Constants for converting boot-style device number to type,
  * adaptor (uba, mba, etc), unit number and partition number.
@@ -115,6 +121,7 @@
 	((controller) << B_CONTROLLERSHIFT) | ((unit) << B_UNITSHIFT) | \
 	((partition) << B_PARTITIONSHIFT) | B_DEVMAGIC)
 
+#endif /* __APPLE_API_OBSOLETE */
 #include <machine/reboot.h>
 
 #endif	/* _SYS_REBOOT_H_ */

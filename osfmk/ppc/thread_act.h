@@ -33,6 +33,7 @@
 #include <mach/thread_status.h>
 #include <kern/lock.h>
 #include <kern/clock.h>
+#include <ppc/savearea.h>
 
 /*
  * Kernel state structure
@@ -44,33 +45,35 @@
 /*
  * PPC process control block
  *
- * In the continuation model, the PCB holds the user context. It is used
- * on entry to the kernel from user mode, either by system call or trap,
- * to store the necessary user registers and other state.
+ * The PCB holds normal context.  It does not contain vector or floating point 
+ * registers.
  *
- *	Note that this structure overlays a savearea.  Make sure that these
- *	guys are updated in concert with that.
  */
-struct pcb
-{
-	struct ppc_saved_state ss;
-	struct ppc_exception_state es;
-	struct ppc_float_state fs;
-	unsigned int gas1[6];				/* Force alignment with savearea */
-	struct ppc_vector_state vec;
 
+typedef struct savearea pcb;
+typedef struct savearea *pcb_t;
+
+struct facility_context {
+
+	savearea_fpu	*FPUsave;		/* The floating point savearea */
+	savearea		*FPUlevel;		/* The floating point context level */
+	unsigned int	FPUcpu;			/* The last processor to enable floating point */
+	savearea_vec	*VMXsave;		/* The VMX savearea */
+	savearea		*VMXlevel;		/* The VMX context level */
+	unsigned int	VMXcpu;			/* The last processor to enable vector */
+	struct thread_activation *facAct;	/* Activation associated with context */
 };
 
-typedef struct pcb *pcb_t;
+typedef struct facility_context facility_context;
 
 /*
  * Maps state flavor to number of words in the state:
  */
 extern unsigned int state_count[];
 
-#define USER_REGS(ThrAct)	(&(ThrAct)->mact.pcb->ss)
+#define USER_REGS(ThrAct)	((ThrAct)->mact.pcb)
 
-#define	user_pc(ThrAct)		((ThrAct)->mact.pcb->ss.srr0)
+#define	user_pc(ThrAct)		((ThrAct)->mact.pcb->save_srr0)
 
 #define act_machine_state_ptr(ThrAct)	(thread_state_t)USER_REGS(ThrAct)
 
@@ -80,13 +83,10 @@ typedef struct MachineThrAct {
 	 * one for each active facility context.  They may point to the
 	 * same saveareas.
 	 */
-	pcb_t 			pcb;			/* The "normal" savearea */
-	pcb_t			FPU_pcb;		/* The floating point savearea */
-	pcb_t			FPU_lvl;		/* The floating point context level */
-	unsigned int	FPU_cpu;		/* The last processor to enable floating point */
-	pcb_t 			VMX_pcb;		/* The VMX savearea */
-	pcb_t 			VMX_lvl;		/* The VMX context level */
-	unsigned int	VMX_cpu;		/* The last processor to enable vector */
+	savearea		*pcb;			/* The "normal" savearea */
+	facility_context *curctx;		/* Current facility context */
+	facility_context *deferctx;		/* Deferred facility context */
+	facility_context facctx;		/* "Normal" facility context */
 	struct vmmCntrlEntry *vmmCEntry;	/* Pointer current emulation context or 0 */
 	struct vmmCntrlTable *vmmControl;	/* Pointer to virtual machine monitor control table */
 	uint64_t		qactTimer;		/* Time thread needs to interrupt. This is a single-shot timer. Zero is unset */
@@ -109,6 +109,8 @@ typedef struct MachineThrAct {
 #define vectorCngbit			6
 #define timerPopbit				7
 #define userProtKeybit			8
+#define trapUnalignbit			9
+#define notifyUnalignbit		10
 /*	NOTE: Do not move or assign bit 31 without changing exception vector ultra fast path code */
 #define bbThreadbit				28
 #define bbNoMachSCbit	 		29
@@ -123,6 +125,8 @@ typedef struct MachineThrAct {
 #define vectorCng			(1<<(31-vectorCngbit))
 #define timerPop			(1<<(31-timerPopbit))
 #define userProtKey			(1<<(31-userProtKeybit))
+#define trapUnalign			(1<<(31-trapUnalignbit))
+#define notifyUnalign		(1<<(31-notifyUnalignbit))
 #define bbThread			(1<<(31-bbThreadbit))
 #define bbNoMachSC			(1<<(31-bbNoMachSCbit))
 #define bbPreemptive		(1<<(31-bbPreemptivebit))
@@ -136,11 +140,16 @@ typedef struct MachineThrAct {
 
 } MachineThrAct, *MachineThrAct_t;
 
-extern struct ppc_saved_state * find_user_regs(thread_act_t act);
-extern struct ppc_float_state * find_user_fpu(thread_act_t act);
+extern struct savearea *find_user_regs(thread_act_t act);
+extern struct savearea *get_user_regs(thread_act_t);
+extern struct savearea_fpu *find_user_fpu(thread_act_t act);
+extern struct savearea_vec *find_user_vec(thread_act_t act);
+extern int thread_enable_fpe(thread_act_t act, int onoff);
 
 extern void *act_thread_csave(void);
 extern void act_thread_catt(void *ctx);
 extern void act_thread_cfree(void *ctx);
+
+#define	current_act_fast()	current_act()
 
 #endif	/* _PPC_THREAD_ACT_H_ */

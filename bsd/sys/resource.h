@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2002 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -57,6 +57,8 @@
 
 #ifndef _SYS_RESOURCE_H_
 #define	_SYS_RESOURCE_H_
+
+#include <sys/appleapiopts.h>
 
 /*
  * Process priority specifications to get/setpriority.
@@ -130,8 +132,10 @@ struct loadavg {
 };
 
 #ifdef KERNEL
+#ifdef __APPLE_API_PRIVATE
 extern struct loadavg averunnable;
 #define LSCALE	1000		/* scaling for "fixed point" arithmetic */
+#endif /* __APPLE_API_PRIVATE */
 #else
 #include <sys/cdefs.h>
 

@@ -31,6 +31,8 @@
 
 #ifndef _NETAT_ROUTING_TABLES_H_
 #define _NETAT_ROUTING_TABLES_H_
+#include <sys/appleapiopts.h>
+#ifdef __APPLE_API_PRIVATE
 
 /* RTMP table entry state bitmap (EntryState) values */
 
@@ -211,4 +213,5 @@ extern void rtmp_router_input();
 
 #endif /* KERNEL */
 
+#endif /* __APPLE_API_PRIVATE */
 #endif /* _NETAT_ROUTING_TABLES_H_ */

@@ -63,7 +63,6 @@
 #include <mach/port.h>
 #include <mach/vm_types.h>
 #include <mach/clock_types.h>
-#include <mach/shared_memory_server.h>
 
 mach_port_name_t	mach_reply_port(void);
 

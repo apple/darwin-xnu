@@ -19,6 +19,7 @@
  * 
  * @APPLE_LICENSE_HEADER_END@
  */
+/* $FreeBSD: src/sys/netinet/if_atm.h,v 1.2.6.1 2000/08/03 01:07:02 peter Exp $ */
 /*      $NetBSD: if_atm.h,v 1.2 1996/07/03 17:17:17 chuck Exp $       */
 
 /*
@@ -56,7 +57,9 @@
 /*
  * if_atm.h
  */
+#include <sys/appleapiopts.h>
 
+#ifdef __APPLE_API_PRIVATE
 struct atm_pseudohdr;
 struct mbuf;
 struct rtentry;
@@ -65,3 +68,4 @@ struct sockaddr;
 void atm_rtrequest __P((int, struct rtentry *, struct sockaddr *));
 int atmresolve __P((struct rtentry *, struct mbuf *, struct sockaddr *, 
 		struct atm_pseudohdr *));
+#endif /* __APPLE_API_PRIVATE */

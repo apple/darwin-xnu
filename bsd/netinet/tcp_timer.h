@@ -52,10 +52,12 @@
  * SUCH DAMAGE.
  *
  *	@(#)tcp_timer.h	8.1 (Berkeley) 6/10/93
+ * $FreeBSD: src/sys/netinet/tcp_timer.h,v 1.18 1999/12/29 04:41:03 peter Exp $
  */
 
 #ifndef _NETINET_TCP_TIMER_H_
 #define _NETINET_TCP_TIMER_H_
+#include <sys/appleapiopts.h>
 
 /*
  * Definitions of the TCP timers.  These timers are counted
@@ -107,6 +109,7 @@
 /*
  * Time constants.
  */
+#ifdef __APPLE_API_PRIVATE
 #define	TCPTV_MSL	( 30*PR_SLOWHZ)		/* max seg lifetime (hah!) */
 #define	TCPTV_SRTTBASE	0			/* base roundtrip time;
 						   if 0, no idea yet */
@@ -130,6 +133,8 @@
 
 #define	TCP_MAXRXTSHIFT	12			/* maximum retransmits */
 
+#define	TCPTV_DELACK	PR_FASTHZ 		/* 125ms timeout */
+
 #ifdef	TCPTIMERS
 static char *tcptimers[] =
     { "REXMT", "PERSIST", "KEEP", "2MSL" };
@@ -138,20 +143,32 @@ static char *tcptimers[] =
 /*
  * Force a time value to be in a certain range.
  */
-#define	TCPT_RANGESET(tv, value, tvmin, tvmax) { \
+#define	TCPT_RANGESET(tv, value, tvmin, tvmax) do { \
 	(tv) = (value); \
 	if ((u_long)(tv) < (u_long)(tvmin)) \
 		(tv) = (tvmin); \
 	else if ((u_long)(tv) > (u_long)(tvmax)) \
 		(tv) = (tvmax); \
-}
+} while(0)
 
 #ifdef KERNEL
 extern int tcp_keepinit;		/* time to establish connection */
 extern int tcp_keepidle;		/* time before keepalive probes begin */
+extern int tcp_keepintvl;		/* time between keepalive probes */
 extern int tcp_maxidle;			/* time to drop after starting probes */
+extern int tcp_delacktime;		/* time before sending a delayed ACK */
+extern int tcp_maxpersistidle;
+extern int tcp_msl;
 extern int tcp_ttl;			/* time to live for TCP segs */
 extern int tcp_backoff[];
-#endif
 
-#endif
+void	tcp_timer_2msl __P((void *xtp));
+void	tcp_timer_keep __P((void *xtp));
+void	tcp_timer_persist __P((void *xtp));
+void	tcp_timer_rexmt __P((void *xtp));
+void	tcp_timer_delack __P((void *xtp));
+
+#endif /* KERNEL */
+#endif /* __APPLE_API_PRIVATE */
+
+#endif /* !_NETINET_TCP_TIMER_H_ */

@@ -67,8 +67,8 @@
 #define CPU_NUMBER(r) \
     	movl	EXT(lapic_id), r  ; \
     	movl	0(r),r		  ; \
-    	shrl	$LAPIC_ID_SHIFT, r; \
-    	andl	$LAPIC_ID_MASK, r
+    	shrl	$ LAPIC_ID_SHIFT, r; \
+    	andl	$ LAPIC_ID_MASK, r
 
 
 #define	MP_IPL		SPL6	/* software interrupt level */
@@ -125,11 +125,11 @@ extern	int	kdb_active[];
 
 #if	MACH_RT
 #define _DISABLE_PREEMPTION(r) 					\
-	movl	$CPD_PREEMPTION_LEVEL,r			;	\
+	movl	$ CPD_PREEMPTION_LEVEL,r			;	\
 	incl	%gs:(r)
 
 #define _ENABLE_PREEMPTION(r) 					\
-	movl	$CPD_PREEMPTION_LEVEL,r			;	\
+	movl	$ CPD_PREEMPTION_LEVEL,r			;	\
 	decl	%gs:(r)					;	\
 	jne	9f					;	\
 	pushl	%eax					;	\
@@ -142,7 +142,7 @@ extern	int	kdb_active[];
 9:	
 
 #define _ENABLE_PREEMPTION_NO_CHECK(r)				\
-	movl	$CPD_PREEMPTION_LEVEL,r			;	\
+	movl	$ CPD_PREEMPTION_LEVEL,r			;	\
 	decl	%gs:(r)
 
 #if	MACH_ASSERT

@@ -116,8 +116,10 @@ LEXT(hw_add_map)
 
 			mfmsr	r0							/* Get the MSR */
 			eqv		r6,r6,r6					/* Fill the bottom with foxes */
+			rlwinm	r0,r0,0,MSR_FP_BIT+1,MSR_FP_BIT-1	; Force floating point off
 			rlwinm	r11,r4,6,6,25				/* Position the space for the VSID */
 			mfspr	r10,sdr1					/* Get hash table base and size */
+			rlwinm	r0,r0,0,MSR_VEC_BIT+1,MSR_VEC_BIT-1	; Force vectors off
 			rlwimi	r11,r5,30,2,5				/* Insert the segment no. to make a VSID */
 			mfsprg	r12,2						; Get feature flags
 			rlwimi	r6,r10,16,0,15				/* Make table size -1 out of mask */
@@ -165,8 +167,6 @@ hamNoMSRx:
 			dcbt	0,r4						/* We'll need the hash area in a sec, so get it */
 			add		r4,r4,r9					/* Point to the right mapping hash slot */
 			
-			lwarx	r10,0,r8					; ?
-
 ptegLckx:	lwarx	r10,0,r8					/* Get the PTEG lock */
 			mr.		r10,r10						/* Is it locked? */
 			bne-	ptegLckwx					/* Yeah... */
@@ -264,9 +264,11 @@ LEXT(hw_lock_phys_vir)
 			eqv		r6,r6,r6					/* Fill the bottom with foxes */
 			mfsprg	r9,2						; Get feature flags 
 			rlwinm	r11,r3,6,6,25				/* Position the space for the VSID */
+			rlwinm	r12,r12,0,MSR_FP_BIT+1,MSR_FP_BIT-1	; Force floating point off
 			mfspr	r5,sdr1						/* Get hash table base and size */
 			rlwimi	r11,r4,30,2,5				/* Insert the segment no. to make a VSID */
 			mtcrf	0x04,r9						; Set the features			
+			rlwinm	r12,r12,0,MSR_VEC_BIT+1,MSR_VEC_BIT-1	; Force vectors off
 			rlwimi	r6,r5,16,0,15				/* Make table size -1 out of mask */
 			andi.	r0,r12,0x7FCF				/* Disable translation and interruptions */
 			rlwinm	r9,r4,4,0,3					; Move nybble 1 up to 0
@@ -307,8 +309,6 @@ hlpNoMSRx:
 			dcbt	0,r3						/* We'll need the hash area in a sec, so get it */
 			add		r3,r3,r9					/* Point to the right mapping hash slot */
 			
-			lwarx	r10,0,r8					; ?
-
 ptegLcka:	lwarx	r10,0,r8					/* Get the PTEG lock */
 			li		r5,1						/* Get the locked value */
 			mr.		r10,r10						/* Is it locked? */
@@ -459,6 +459,8 @@ LEXT(hw_rem_map)
 #endif
  			mfsprg	r9,2						; Get feature flags 
 			mfmsr	r0							/* Save the MSR  */
+			rlwinm	r0,r0,0,MSR_FP_BIT+1,MSR_FP_BIT-1	; Force floating point off
+			rlwinm	r0,r0,0,MSR_VEC_BIT+1,MSR_VEC_BIT-1	; Force vectors off
 			rlwinm	r12,r0,0,MSR_EE_BIT+1,MSR_EE_BIT-1	/* Clear interruptions */
 			mtcrf	0x04,r9						; Set the features			
 			rlwinm	r12,r12,0,28,25				/* Clear IR and DR */
@@ -488,8 +490,6 @@ lmvNoMSRx:
 			rlwinm	r7,r6,0,0,25				/* Round hash list down to PCA boundary */
 			li		r12,1						/* Get the locked value */
 			subi	r6,r6,mmhashnext			/* Make the anchor look like an entry */
-
-			lwarx	r10,0,r7					; ?
 
 ptegLck1:	lwarx	r10,0,r7					/* Get the PTEG lock */
 			mr.		r10,r10						/* Is it locked? */
@@ -547,8 +547,6 @@ mapok:		lwz		r6,mmhashnext(r6)			/* Look at the next one */
 			cmplwi	cr1,r11,3					/* Is this a 603? */
 			sync								/* Make sure the invalid is stored */
 						
-			lwarx	r5,0,r12					; ?
-
 tlbhang1:	lwarx	r5,0,r12					/* Get the TLBIE lock */
 			rlwinm	r11,r4,29,29,31				/* Get the bit position of entry */
 			mr.		r5,r5						/* Is it locked? */
@@ -590,8 +588,6 @@ nopte:		mr.		r10,r10						/* See if there is a physical entry */
 			lwz		r6,4(r4)					/* Get the latest reference and change bits */
 			la		r12,pepte1(r10)				/* Point right at the master copy */
 			rlwinm	r6,r6,0,23,24				/* Extract just the RC bits */
-			
-			lwarx	r8,0,r12					; ?
 
 mrgrc:		lwarx	r8,0,r12					/* Get the master copy */
 			or		r8,r8,r6					/* Merge in latest RC */
@@ -600,10 +596,12 @@ mrgrc:		lwarx	r8,0,r12					/* Get the master copy */
 			
 nadamrg:	li		r11,0						/* Clear this out */
 			lwz		r12,mmnext(r3)				/* Prime with our next */
+
+			sync								; Make sure all is saved
+
 			stw		r11,0(r7)					/* Unlock the hash chain now so we don't
-												   lock out another processor during the 
-												   our next little search */
-			
+												   lock out another processor during 
+												   our next little search */		
 			
 srchpmap:	mr.		r10,r9						/* Save the previous entry */
 			bne+	mapok1						/* No error... */
@@ -686,8 +684,10 @@ LEXT(hw_prot)
 #endif
  			mfsprg	r9,2						; Get feature flags 
 			mfmsr	r0							/* Save the MSR  */
-			rlwinm	r12,r0,0,MSR_EE_BIT+1,MSR_EE_BIT-1	/* Clear interruptions */
 			li		r5,pepte1					/* Get displacement to the second word of master pte */
+			rlwinm	r0,r0,0,MSR_FP_BIT+1,MSR_FP_BIT-1	; Force floating point off
+			rlwinm	r0,r0,0,MSR_VEC_BIT+1,MSR_VEC_BIT-1	; Force vectors off
+			rlwinm	r12,r0,0,MSR_EE_BIT+1,MSR_EE_BIT-1	/* Clear interruptions */
 			mtcrf	0x04,r9						; Set the features			
 			rlwinm	r12,r12,0,28,25				/* Clear IR and DR */
 
@@ -719,8 +719,6 @@ hpNoMSRx:
  *			done via interlocked update.
  */
 
-			lwarx	r8,r5,r3					; ?
-
 protcng:	lwarx	r8,r5,r3					/* Get the master copy */
 			rlwimi	r8,r4,0,30,31				/* Move in the protection bits */
 			stwcx.	r8,r5,r3					/* Save it back */
@@ -736,8 +734,6 @@ protnext:	mr.		r10,r10						/* Are there any more mappings? */
 			rlwinm	r7,r7,0,0,25				/* Round hash list down to PCA boundary */
 
 			li		r12,1						/* Get the locked value */
-
-			lwarx	r11,0,r7					; ?
 
 protLck1:	lwarx	r11,0,r7					/* Get the PTEG lock */
 			mr.		r11,r11						/* Is it locked? */
@@ -780,8 +776,6 @@ protSXg1:	isync								/* Make sure we haven't used anything yet */
 			cmplwi	cr1,r11,3					/* Is this a 603? */
 			sync								/* Make sure the invalid is stored */
 						
-			lwarx	r11,0,r12					; ?
-
 tlbhangp:	lwarx	r11,0,r12					/* Get the TLBIE lock */
 			rlwinm	r8,r6,29,29,31				/* Get the bit position of entry */
 			mr.		r11,r11						/* Is it locked? */
@@ -817,17 +811,17 @@ its603p:	stw		r11,0(r12)					/* Clear the lock */
 			li		r5,pepte1					/* Get displacement to the second word of master pte */
 			stw		r9,PCAallo(r7)				/* Store the allocation controls */
 			
-			lwarx	r11,r5,r3					; ?
 protmod:	lwarx	r11,r5,r3					/* Get the master copy */
 			or		r11,r11,r6					/* Merge in latest RC */
 			stwcx.	r11,r5,r3					/* Save it back */
 			bne-	protmod						/* If it changed, try again... */
 			
-			sync								/* Make sure that chain is updated */
-
 protul:		li		r4,0						/* Get a 0 */
 			stw		r2,mmPTEr(r10)				; Save the updated mapping PTE
 			lwz		r10,mmnext(r10)				/* Get the next */
+
+			sync								; Make sure stores are complete
+
 			stw		r4,0(r7)					/* Unlock the hash chain */
 			b		protnext					/* Go get the next one */
 			
@@ -879,6 +873,8 @@ LEXT(hw_prot_virt)
 #endif
  			mfsprg	r9,2						; Get feature flags 
 			mfmsr	r0							/* Save the MSR  */
+			rlwinm	r0,r0,0,MSR_FP_BIT+1,MSR_FP_BIT-1	; Force floating point off
+			rlwinm	r0,r0,0,MSR_VEC_BIT+1,MSR_VEC_BIT-1	; Force vectors off
 			rlwinm	r12,r0,0,MSR_EE_BIT+1,MSR_EE_BIT-1	/* Clear interruptions */
 			mtcrf	0x04,r9						; Set the features			
 			rlwinm	r12,r12,0,28,25				/* Clear IR and DR */
@@ -913,8 +909,6 @@ hpvNoMSRx:
 			rlwinm	r7,r7,0,0,25				/* Round hash list down to PCA boundary */
 
 			li		r12,1						/* Get the locked value */
-
-			lwarx	r11,0,r7					; ?
 
 protvLck1:	lwarx	r11,0,r7					/* Get the PTEG lock */
 			mr.		r11,r11						/* Is it locked? */
@@ -957,8 +951,6 @@ protvSXg1:	isync								/* Make sure we haven't used anything yet */
 			cmplwi	cr1,r11,3					/* Is this a 603? */
 			sync								/* Make sure the invalid is stored */
 						
-			lwarx	r11,0,r12					; ?
-
 tlbhangpv:	lwarx	r11,0,r12					/* Get the TLBIE lock */
 			rlwinm	r8,r6,29,29,31				/* Get the bit position of entry */
 			mr.		r11,r11						/* Is it locked? */
@@ -997,18 +989,16 @@ its603pv:	stw		r11,0(r12)					/* Clear the lock */
 			rlwimi	r2,r6,0,23,24				; Stick in RC bits
 			beq-	pvnophys					; No physical entry...
 			
-			
-			lwarx	r11,r5,r10					; ?
-
 protvmod:	lwarx	r11,r5,r10					/* Get the master copy */
 			or		r11,r11,r6					/* Merge in latest RC */
 			stwcx.	r11,r5,r10					/* Save it back */
 			bne-	protvmod					/* If it changed, try again... */
 			
-			sync								/* Make sure that chain is updated */
-
 pvnophys:	li		r4,0						/* Get a 0 */
 			stw		r2,mmPTEr(r3)				; Set the real part of the PTE
+
+			sync								; Make sure everything is stored
+
 			stw		r4,0(r7)					/* Unlock the hash chain */
 			mtmsr	r0							; Restore interrupts and translation
 			isync
@@ -1057,6 +1047,8 @@ LEXT(hw_attr_virt)
 #endif
 			mfsprg	r9,2						; Get feature flags 
  			mfmsr	r0							/* Save the MSR  */
+			rlwinm	r0,r0,0,MSR_FP_BIT+1,MSR_FP_BIT-1	; Force floating point off
+			rlwinm	r0,r0,0,MSR_VEC_BIT+1,MSR_VEC_BIT-1	; Force vectors off
 			mtcrf	0x04,r9						; Set the features			
 			rlwinm	r12,r0,0,MSR_EE_BIT+1,MSR_EE_BIT-1	/* Clear interruptions */
 			rlwinm	r12,r12,0,28,25				/* Clear IR and DR */
@@ -1089,8 +1081,6 @@ havNoMSRx:
 			rlwinm	r7,r7,0,0,25				/* Round hash list down to PCA boundary */
 
 			li		r12,1						/* Get the locked value */
-
-			lwarx	r11,0,r7					; ?
 
 attrvLck1:	lwarx	r11,0,r7					/* Get the PTEG lock */
 			mr.		r11,r11						/* Is it locked? */
@@ -1132,8 +1122,6 @@ attrvSXg1:	isync								/* Make sure we haven't used anything yet */
 			cmplwi	cr1,r11,3					/* Is this a 603? */
 			sync								/* Make sure the invalid is stored */
 						
-			lwarx	r11,0,r12					; ?
-
 tlbhangav:	lwarx	r11,0,r12					/* Get the TLBIE lock */
 			rlwinm	r8,r6,29,29,31				/* Get the bit position of entry */
 			mr.		r11,r11						/* Is it locked? */
@@ -1172,17 +1160,16 @@ its603av:	stw		r11,0(r12)					/* Clear the lock */
 			rlwimi	r2,r6,0,23,24				; Stick in RC bits
 			beq-	avnophys					; No physical entry...			
 			
-			lwarx	r11,r5,r10					; ?
-
 attrvmod:	lwarx	r11,r5,r10					/* Get the master copy */
 			or		r11,r11,r6					/* Merge in latest RC */
 			stwcx.	r11,r5,r10					/* Save it back */
 			bne-	attrvmod					/* If it changed, try again... */
 			
-			sync								/* Make sure that chain is updated */
-
 avnophys:	li		r4,0						/* Get a 0 */
 			stw		r2,mmPTEr(r3)				; Set the real part of the PTE
+
+			sync								; Make sure that everything is updated
+
 			stw		r4,0(r7)					/* Unlock the hash chain */
 			
 			rlwinm	r2,r2,0,0,19				; Clear back to page boundary
@@ -1196,7 +1183,6 @@ attrflsh:	cmplwi	r4,(4096-32)				; Are we about to do the last line on page?
 			li		r4,0
 attrimvl:	cmplwi	r4,(4096-32)				; Are we about to do the last line on page?
 			dcbi	r2,r4						; Invalidate dcache because we changed attributes
-			icbi	r2,r4						; Invalidate icache because we changed attributes
 			icbi	r2,r4						; Invalidate icache because we changed attributes
 			addi	r4,r4,32					; Bump up cache
 			blt+	attrimvl					; Do the whole page...
@@ -1334,6 +1320,8 @@ hw_pte_comm:									/* Common routine for pte tests and manips */
 			lwz		r10,pephyslink(r3)			/* Get the first mapping block */
 			mfmsr	r0							/* Save the MSR  */
 			rlwinm.	r10,r10,0,0,26				; Clear out the flags from first link and see if we are mapped
+			rlwinm	r0,r0,0,MSR_FP_BIT+1,MSR_FP_BIT-1	; Force floating point off
+			rlwinm	r0,r0,0,MSR_VEC_BIT+1,MSR_VEC_BIT-1	; Force vectors off
 			rlwinm	r12,r0,0,MSR_EE_BIT+1,MSR_EE_BIT-1	/* Clear interruptions */
 			mtcrf	0x04,r8						; Set the features			
 			rlwinm	r12,r12,0,28,25				/* Clear IR and DR */
@@ -1375,8 +1363,6 @@ commnext:	lwz		r11,mmnext(r10)				; Get the pointer to the next mapping (if any)
 
 commnxtch:	li		r12,1						/* Get the locked value */
 
-			lwarx	r11,0,r7					; ?
-
 commLck1:	lwarx	r11,0,r7					/* Get the PTEG lock */
 			mr.		r11,r11						/* Is it locked? */
 			bne-	commLckw1					/* Yeah... */
@@ -1414,8 +1400,6 @@ commSXg1:	isync								/* Make sure we haven't used anything yet */
 			mfspr	r4,pvr						/* Find out what kind of machine we are */
 			sync								/* Make sure the invalid is stored */
 						
-			lwarx	r11,0,r12					; ?
-
 tlbhangco:	lwarx	r11,0,r12					/* Get the TLBIE lock */
 			rlwinm	r8,r6,29,29,31				/* Get the bit position of entry */
 			mr.		r11,r11						/* Is it locked? */
@@ -1452,13 +1436,10 @@ its603co:	stw		r11,0(r12)					/* Clear the lock */
 			li		r5,pepte1					/* Get displacement to the second word of master pte */
 			stw		r9,PCAallo(r7)				/* Store the allocation controls */
 			
-			lwarx	r11,r5,r3					; ?
 commmod:	lwarx	r11,r5,r3					/* Get the master copy */
 			or		r11,r11,r4					/* Merge in latest RC */
 			stwcx.	r11,r5,r3					/* Save it back */
 			bne-	commmod						/* If it changed, try again... */
-
-			sync								/* Make sure that chain is updated */
 			b		commulnl					; Skip loading the old real part...
 
 commul:		lwz		r6,mmPTEr(r10)				; Get the real part
@@ -1474,6 +1455,9 @@ commulnl:	rlwinm	r12,r2,5,23,24				; Get the "set" bits
 			lwz		r10,mmnext(r10)				/* Get the next */
 			li		r4,0						/* Make sure this is 0 */
 			mr.		r10,r10						; Is there another mapping?
+
+			sync								; Make sure that all is saved
+
 			stw		r4,0(r7)					/* Unlock the hash chain */
 			bne+	commnext					; Go get the next if there is one...
 			
@@ -1501,8 +1485,6 @@ commdone:	li		r5,pepte1					/* Get displacement to the second word of master pte
 
 			rlwinm	r12,r2,5,23,24				; Get the "set" bits
 			rlwinm	r11,r2,7,23,24				; Get the "clear" bits
-
-			lwarx	r8,r5,r3					; ?
 
 commcng:	lwarx	r8,r5,r3					/* Get the master copy */
 			or		r8,r8,r12					; Set the bits to come on
@@ -1583,7 +1565,9 @@ LEXT(hw_test_rc)
 
  			mfsprg	r9,2						; Get feature flags 
 			mfmsr	r0							; Save the MSR 
+			rlwinm	r0,r0,0,MSR_FP_BIT+1,MSR_FP_BIT-1	; Force floating point off
  			mr.		r4,r4						; See if we have a reset to do later
+			rlwinm	r0,r0,0,MSR_VEC_BIT+1,MSR_VEC_BIT-1	; Force vectors off
 			rlwinm	r12,r0,0,MSR_EE_BIT+1,MSR_EE_BIT-1	; Clear interruption mask
 			crnot	htrReset,cr0_eq				; Remember reset
 			mtcrf	0x04,r9						; Set the features			
@@ -1697,17 +1681,19 @@ htrmrc:		lwarx	r11,r5,r10					; Get the master copy
 			or		r11,r11,r6					; Merge in latest RC
 			stwcx.	r11,r5,r10					; Save it back
 			bne-	htrmrc						; If it changed, try again... 
-			
-			sync								; Make sure that chain update is stored
 
-htrnopte:	rlwinm	r3,r2,25,30,31				; Position RC and mask off
+htrnopte:	rlwinm	r5,r2,25,30,31				; Position RC and mask off
 			bf		htrReset,htrnorst			; No reset to do...
 			rlwinm	r2,r2,0,25,22				; Clear the RC if requested
 			
 htrnorst:	li		r4,0						; Get a 0 
 			stw		r2,mmPTEr(r3)				; Set the real part of the PTE
+			
+			sync								; Make sure that stuff is all stored
+
 			stw		r4,0(r7)					; Unlock the hash chain
 	
+			mr		r3,r5						; Get the old RC to pass back
 			mtmsr	r0							; Restore interrupts and translation
 			isync
 			blr									; Return...
@@ -1750,6 +1736,8 @@ LEXT(hw_phys_attr)
 #endif
 			mfsprg	r9,2						; Get feature flags 
 			mfmsr	r0							/* Save the MSR  */
+			rlwinm	r0,r0,0,MSR_FP_BIT+1,MSR_FP_BIT-1	; Force floating point off
+			rlwinm	r0,r0,0,MSR_VEC_BIT+1,MSR_VEC_BIT-1	; Force vectors off
 			andi.	r5,r5,0x0078				/* Clean up the WIMG */
 			rlwinm	r12,r0,0,MSR_EE_BIT+1,MSR_EE_BIT-1	/* Clear interruptions */
 			mtcrf	0x04,r9						; Set the features			
@@ -1917,7 +1905,6 @@ havevsid:	mfspr	r5,sdr1						/* Get hash table base and size */
 			dcbt	0,r11						/* We'll need the hash area in a sec, so get it */
 			add		r11,r11,r9					/* Point to the right mapping hash slot */
 			
-			lwarx	r10,0,r8					; ?
 ptegLck:	lwarx	r10,0,r8					/* Get the PTEG lock */
 			mr.		r10,r10						/* Is it locked? */
 			bne-	ptegLckw					/* Yeah... */
@@ -1976,7 +1963,7 @@ gotphys:	lwz		r2,mmPTEr(r12)				; Get the second part of the PTE
 MustBeOK:	li		r10,0						/* Get lock clear value */
 			li		r3,T_IN_VAIN				/* Say that we handled it */
 			stw		r10,PCAlock(r8)				/* Clear the PTEG lock */
-			sync
+
 #if PERFTIMES && DEBUG
 			mflr	r11
 			mr		r4,r3
@@ -2100,7 +2087,11 @@ findAuto:	mr.		r4,r4						; Is there more?
 			lwz		r4,bmnext(r4)				; Get the next one
 			b		findAuto					; Check it out...
 			
-faGot:		rlwinm	r6,r6,0,0,19				; Round to page
+faGot:		
+			lwz		r7,blkFlags(r4)				; Get the flags
+			rlwinm. r7,r7,0,blkRembit,blkRembit	; is this mapping partially removed
+			bne		bmapNone					; Pending remove, bail out
+			rlwinm	r6,r6,0,0,19				; Round to page
 			lwz		r2,bmPTEr(r4)				; Get the real part of the PTE
 			sub		r5,r6,r5					; Get offset into area
 			stw		r9,0(r10)					; Unlock it, we are done with it (no sync needed)
@@ -2250,8 +2241,6 @@ wasauto:	oris	r3,r3,0x8000				/* Turn on the valid bit */
 
 			xor		r4,r4,r5					; Finish splooching nybble 0, 1, and the low bits of the VSID
 						
-			lwarx	r5,0,r9						; ?
-
 tlbhang:	lwarx	r5,0,r9						/* Get the TLBIE lock */
 		
 			rlwinm	r4,r4,0,27,29				; Clean up splooched hash value
@@ -2321,8 +2310,6 @@ nomove:		li		r5,0						/* Clear this on out */
 			
 			rlwinm	r11,r9,0,23,24				/* Keep only the RC bits */
 
-			lwarx	r9,r5,r12					; ?
-
 mrgmrcx:	lwarx	r9,r5,r12					/* Get the master copy */
 			or		r9,r9,r11					/* Merge in latest RC */
 			stwcx.	r9,r5,r12					/* Save it back */
@@ -2368,6 +2355,8 @@ ENTRY(LRA, TAG_NO_FRAME_USED)
 
 			mfsprg	r8,2						; Get feature flags 
 			mfmsr	r10							/* Save the current MSR */
+			rlwinm	r10,r10,0,MSR_FP_BIT+1,MSR_FP_BIT-1	; Force floating point off
+			rlwinm	r10,r10,0,MSR_VEC_BIT+1,MSR_VEC_BIT-1	; Force vectors off
 			mtcrf	0x04,r8						; Set the features			
 			xoris	r5,r3,HIGH_ADDR(PPC_SID_KERNEL)		/* Clear the top half if equal */
 			andi.	r9,r10,0x7FCF				/* Turn off interrupts and translation */
@@ -2441,6 +2430,7 @@ fndbat:		rlwinm	r6,r6,0,0,14				/* Clean up the real address */
 			add		r3,r7,r6					/* Relocate the offset to real */
 			isync								/* Purge pipe */
 			blr									/* Bye, bye... */
+
 notkernsp:	mfspr	r5,sdr1						/* Get hash table base and size */
 			rlwimi	r11,r4,30,2,5				/* Insert the segment no. to make a VSID */
 			rlwimi	r12,r5,16,0,15				/* Make table size -1 out of mask */
@@ -2497,6 +2487,8 @@ LEXT(hw_add_blk)
  			mfsprg	r9,2						; Get feature flags 
 			lwz		r6,PMAP_PMAPVR(r3)			; Get the v to r translation
 			mfmsr	r0							/* Save the MSR  */
+			rlwinm	r0,r0,0,MSR_FP_BIT+1,MSR_FP_BIT-1	; Force floating point off
+			rlwinm	r0,r0,0,MSR_VEC_BIT+1,MSR_VEC_BIT-1	; Force vectors off
 			rlwinm	r12,r0,0,MSR_EE_BIT+1,MSR_EE_BIT-1	/* Clear interruptions */
 			mtcrf	0x04,r9						; Set the features			
 			xor		r3,r3,r6					; Get real address of bmap anchor
@@ -2565,6 +2557,11 @@ abChk:		mr.		r10,r2						; End of chain?
 			crand	cr1_eq,cr1_eq,cr6_eq		; Set cr1_eq if no overlap
 			beq+	cr1,abChk					; Ok check the next...
 			
+			lwz		r8,blkFlags(r10)			; Get the flags
+			rlwinm.	r8,r8,0,blkRembit,blkRembit	; Check the blkRem bit
+			beq		abRet						; Is the mapping partially removed
+			ori		r10,r10,2					; Indicate that this block is partially removed
+abRet:
 			stw		r9,0(r3)					; Unlock
 			mtmsr	r0							; Restore xlation and rupts
 			mr		r3,r10						; Pass back the overlap
@@ -2614,6 +2611,8 @@ LEXT(hw_rem_blk)
   			mfsprg	r9,2						; Get feature flags
 			lwz		r6,PMAP_PMAPVR(r3)			; Get the v to r translation
 			mfmsr	r0							/* Save the MSR  */
+			rlwinm	r0,r0,0,MSR_FP_BIT+1,MSR_FP_BIT-1	; Force floating point off
+			rlwinm	r0,r0,0,MSR_VEC_BIT+1,MSR_VEC_BIT-1	; Force vectors off
 			rlwinm	r12,r0,0,MSR_EE_BIT+1,MSR_EE_BIT-1	/* Clear interruptions */
 			mtcrf	0x04,r9						; Set the features			
 			xor		r3,r3,r6					; Get real address of bmap anchor
@@ -2635,6 +2634,14 @@ hrbNoMSR:
 			mr		r3,r8
 			mr		r0,r9
 hrbNoMSRx:
+			li		r7,0
+			cmp		cr5,r0,r7					; Request to invalidate the ptes
+			b		rbLck
+
+rbunlink:
+			lwz		r4,bmstart(r10)				; Get start of current mapping
+			lwz		r5,bmend(r10)				; Get end of current mapping
+			cmp		cr5,r3,r3					; Request to unlink the mapping
 
 rbLck:		lwarx	r9,0,r3						; Get the block map anchor and lock
 			rlwinm.	r8,r9,0,31,31				; Is it locked?
@@ -2673,19 +2680,58 @@ rbChk:		mr		r12,r10						; Save the previous
 			cror	cr1_eq,cr0_lt,cr1_gt		; Set cr1_eq if new not in range
 			lwz		r2,bmnext(r10)				; Get the next one
 			beq+	cr1,rbChk					; Not this one, check the next...
+
+			cmplw	cr1,r12,r3					; Is the current mapping the first one?
+
+			bne		cr5,rbblkRem				; Do we have to unchain the mapping
+
+			bne		cr1,rbnFirst				; Yes, is this the first mapping?
+			rlwimi	r9,r2,0,0,26				; Yes, Change the lock value
+			ori		r2,r9,1						; Turn on the lock bit
+rbnFirst:
+			stw		r2,bmnext(r12)				; Unchain us
+			sync
+			b		rbDone
+
+rbblkRem:
 		
 			lwz		r8,blkFlags(r10)			; Get the flags
 			
-			cmplw	cr1,r12,r3					; Did we delete the first one?
-			rlwinm.	r8,r8,0,blkPermbit,blkPermbit	; is this a permanent block?
-			bne		cr1,rbnFirst				; Nope...
-			rlwimi	r9,r2,0,0,26				; Change the lock value
-			ori		r2,r9,1						; Turn on the lock bit
+			rlwinm.	r7,r8,0,blkPermbit,blkPermbit	; is this a permanent block?
 			
-rbnFirst:	bne-	rbPerm						; This is permanent, do not remove...
-			lwz		r8,bmspace(r10)				; Get the VSID
-			stw		r2,bmnext(r12)				; Unchain us
+			bne-	rbPerm						; This is permanent, do not remove...
 
+			rlwinm.	r7,r8,0,blkRembit,blkRembit	; is this mapping partially removed
+
+			beq		rbblkRemcont				; If not, check the max size
+			lwz		r11,bmcurrent(r10)			; If yes, resume for the current page
+
+			cmp		cr5,r11,r6					; No partial remove left
+			beq		cr5, rbpendret				; But there is  a pending remove
+
+rbblkRemcont:
+			bne		rbblkRemcont1				; Is it the first remove
+
+			oris	r8,r8,hi16(blkRem)			; Yes
+			stw		r8,blkFlags(r10)			; set the blkRem bit in blkFlags
+
+rbblkRemcont1:
+			lis		r5,hi16(BLKREMMAX*4096)			; Load maximun size tear down
+			ori		r5,r5,lo16(BLKREMMAX*4096)		; Load maximun size tear down
+			sub		r7,r6,r11					; Get the remaining size to tear down
+			cmp		cr5,r7,r5					; Compare against the maximun size
+			ble		cr5,rbfullblk				; If less or equal, go remove the mapping
+
+			add		r7,r11,r5					; Add the max size tear down to the current page
+			stw		r7,bmcurrent(r10)			; Update the current page
+			subi	r6,r7,1						; Set the current end of the partial tear down
+			b		rbcont
+
+rbfullblk:
+			stw		r6,bmcurrent(r10)			; Update the current page
+
+rbcont:
+			lwz		r8,bmspace(r10)				; Get the VSID
 			sync
 			stw		r9,0(r3)					; Unlock and chain the new first one
 			
@@ -2802,11 +2848,22 @@ rbits603a:	sync								; Wait for quiet again
 			
 			sync								; Make sure that is done
 			
+			ble		cr5,rbunlink				; If all ptes are flush, go unlink the mapping
 			mtmsr	r0							; Restore xlation and rupts
-			mr		r3,r10						; Pass back the removed block
+			mr		r3,r10						; Pass back the removed block in progress
+			ori		r3,r3,2						; Indicate that the block remove isn't completed yet
 			isync
 			blr									; Return...
-			
+
+rbpendret:
+			stw		r9,0(r3)					; Unlock
+			mtmsr	r0							; Restore xlation and rupts
+			mr		r3,r10						; Pass back the removed block in progress
+			ori		r3,r3,2						; Indicate that the block remove isn't completed yet
+			isync
+			blr									; Return...
+
+
 rbMT:		stw		r9,0(r3)					; Unlock
 			mtmsr	r0							; Restore xlation and rupts
 			li		r3,0						; Say we did not find one
@@ -2819,6 +2876,120 @@ rbPerm:		stw		r9,0(r3)					; Unlock
 			isync
 			blr									; Return...
 
+rbDone:		stw     r9,0(r3) 					; Unlock
+			mtmsr	r0							; Restore xlation and rupts
+			mr      r3,r10 						; Pass back the removed block
+			isync
+			blr									; Return...
+
+/*
+ *			hw_select_mappings(struct mappingflush *mappingflush)
+ *
+ *			Input: PCA addr
+ *			Ouput: up to 8 user mappings
+ *
+ *			hw_select_mappings() scans every PCA mapping hash lists and select
+ *			the last user mapping if it exists.
+ *
+ */
+
+			.align	5
+			.globl	EXT(hw_select_mappings)
+
+LEXT(hw_select_mappings)
+			mr		r5,r3						; Get the mapping flush addr
+			mfmsr	r12							; Get the MSR 
+			rlwinm	r12,r12,0,MSR_FP_BIT+1,MSR_FP_BIT-1	; Force floating point off
+			rlwinm	r12,r12,0,MSR_VEC_BIT+1,MSR_VEC_BIT-1	; Force vectors off
+			mfsprg	r9,2						; Get feature flags
+			andi.	r0,r12,0x7FCF				; Disable translation and interruptions
+			mtcrf	0x04,r9						; Set the features
+			bt		pfNoMSRirb,hvmNoMSR			; No MSR...
+			mtmsr	r0
+			isync
+			b		hvmNoMSRx
+hvmNoMSR:
+			mr		r3,r0						; Get the new MSR
+			li		r0,loadMSR					; Get the MSR setter SC
+			sc
+hvmNoMSRx:
+			mr		r0,r12
+			li		r11,1						; Get the locked value 
+
+hvmptegLckx:   
+			lwz		r3,MFpcaptr(r5)				; Get the PCA pointer
+			lwarx	r10,0,r3					; Get the PTEG lock
+			mr.		r10,r10						; Is it locked?
+			bne-	hvmptegLckwx				; Yeah...
+			stwcx.	r11,0,r3					; Take take it
+			bne-	hvmptegLckx					; Someone else was trying, try again...
+			b		hvmptegSXgx					; All done...
+
+			.align  4
+
+hvmptegLckwx:
+			mr.		r10,r10						; Check if it is already held
+			beq+	hvmptegLckx					; It's clear...
+			lwz		r10,0(r3)					; Get lock word again...
+			b		hvmptegLckwx				; Wait...
+
+			.align  4
+
+hvmptegSXgx:
+			isync								; Make sure we haven't used anything yet
+
+			li		r11,8						; set count to 8 
+
+			lwz		r6,PCAhash(r3)				; load the first mapping hash list
+			la		r12,PCAhash(r3)				; Point to the mapping hash area
+			la		r4,MFmapping(r5)			; Point to the mapping flush mapping area
+			li		r7,0						; Load zero
+			stw		r7,MFmappingcnt(r5)			; Set the current count to 0
+hvmnexthash:
+			li		r10,0						; Mapping test
+
+hvmfindmap:
+			mr.		r6,r6						; Test if the hash list current pointer is zero
+			beq		hvmfindmapret				; Did we hit the end of the hash list
+			lwz		r7,mmPTEv(r6)				; Pick up our virtual ID
+			rlwinm	r8,r7,5,0,19				; Pick VSID 20 lower bits
+			mr.		r8,r8
+			beq		hvmfindmapnext				; Skip Kernel VSIDs
+			rlwinm	r8,r7,1,0,3					; Extract the Segment index 
+			rlwinm	r9,r7,22,4,9				; Extract API 6 upper bits
+			or		r8,r8,r9					; Add to the virtual address
+			rlwinm	r9,r7,31,6,25				; Pick VSID 19 lower bits
+			xor		r9,r9,r3					; Exclusive or with the PCA address
+			rlwinm	r9,r9,6,10,19				; Extract API 10 lower bits
+			or		r8,r8,r9					; Add to the virtual address
+
+			stw		r8,4(r4)					; Store the virtual address
+			lwz		r8,mmpmap(r6)				; Get the pmap
+			stw		r8,0(r4)					; Store the pmap
+			li		r10,1						; Found one
+
+hvmfindmapnext:
+			lwz		r6,mmhashnext(r6)			; Pick up next mapping block
+			b		hvmfindmap					; Scan the next mapping
+hvmfindmapret:
+			mr.		r10,r10						; Found mapping
+			beq		hvmnexthashprep				; If not, do not update the mappingflush array
+			lwz		r7,MFmappingcnt(r5)			; Get the current count
+			addi	r7,r7,1						; Increment the current count
+			stw		r7,MFmappingcnt(r5)			; Store the current count
+			addi	r4,r4,MFmappingSize			; Point to the next mapping flush entry
+hvmnexthashprep:
+			addi	r12,r12,4					; Load the next hash list
+			lwz		r6,0(r12)					; Load the next hash list entry
+			subi	r11,r11,1					; Decrement hash list index 
+			mr.		r11,r11						; Test for a remaining hash list
+			bne		hvmnexthash					; Loop to scan the next hash list
+
+			li		r10,0
+			stw		r10,0(r3)					; Unlock the hash list
+			mtmsr	r0							; Restore translation and interruptions
+			isync
+			blr
 
 /*
  *			vm_offset_t hw_cvp_blk(pmap_t pmap, vm_offset_t va)
@@ -2836,6 +3007,8 @@ LEXT(hw_cvp_blk)
  			mfsprg	r9,2						; Get feature flags
  			lwz		r6,PMAP_PMAPVR(r3)			; Get the v to r translation
 			mfmsr	r0							/* Save the MSR  */
+			rlwinm	r0,r0,0,MSR_FP_BIT+1,MSR_FP_BIT-1	; Force floating point off
+			rlwinm	r0,r0,0,MSR_VEC_BIT+1,MSR_VEC_BIT-1	; Force vectors off
 			rlwinm	r12,r0,0,MSR_EE_BIT+1,MSR_EE_BIT-1	/* Clear interruptions */
 			mtcrf	0x04,r9						; Set the features			
 			xor		r3,r3,r6					; Get real address of bmap anchor
@@ -2931,6 +3104,8 @@ cbNo:		lwz		r11,bmnext(r11)				; Link next
 LEXT(hw_set_user_space)
 
 			mfmsr	r10							/* Get the current MSR */
+			rlwinm	r10,r10,0,MSR_FP_BIT+1,MSR_FP_BIT-1	; Force floating point off
+			rlwinm	r10,r10,0,MSR_VEC_BIT+1,MSR_VEC_BIT-1	; Force vectors off
 			rlwinm	r9,r10,0,MSR_EE_BIT+1,MSR_EE_BIT-1	/* Turn off 'rupts */
 			mtmsr	r9							/* Disable 'em */
  			lwz		r7,PMAP_PMAPVR(r3)			; Get the v to r translation
@@ -2968,6 +3143,8 @@ LEXT(hw_cpv)
 			rlwinm.	r4,r3,0,0,19				; Round back to the mapping block allocation control block
 			mfmsr	r10							; Get the current MSR
 			beq-	hcpvret						; Skip if we are passed a 0...
+			rlwinm	r10,r10,0,MSR_FP_BIT+1,MSR_FP_BIT-1	; Force floating point off
+			rlwinm	r10,r10,0,MSR_VEC_BIT+1,MSR_VEC_BIT-1	; Force vectors off
 			andi.	r9,r10,0x7FEF				; Turn off interrupts and data translation
 			mtmsr	r9							; Disable DR and EE
 			isync
@@ -3076,8 +3253,10 @@ LEXT(logmem)
 
 			mfmsr	r2							; Get the MSR	
 			lis		r10,hi16(EXT(DebugWork))		; High part of area
+			rlwinm	r2,r2,0,MSR_FP_BIT+1,MSR_FP_BIT-1	; Force floating point off
 			lis		r12,hi16(EXT(mem_actual))	; High part of actual
-			andi.	r0,r10,0x7FCF				; Interrupts and translation off
+			rlwinm	r2,r2,0,MSR_VEC_BIT+1,MSR_VEC_BIT-1	; Force vectors off
+			andi.	r0,r2,0x7FCF				; Interrupts and translation off
 			ori		r10,r10,lo16(EXT(DebugWork))	; Get the entry
 			mtmsr	r0							; Turn stuff off
 			ori		r12,r12,lo16(EXT(mem_actual))	; Get the actual

@@ -70,7 +70,7 @@
 #include <sys/mbuf.h>
 #include <sys/domain.h>
 #include <sys/kernel.h>
-#include <ufs/ufs/quota.h>
+#include <sys/quota.h>
 #include <ufs/ufs/inode.h>
 #include <miscfs/fifofs/fifo.h>
 #include <sys/shm.h>
@@ -95,32 +95,6 @@ int	nport = NPROC / 2;
 #define MAXSOCKETS NMBCLUSTERS
 int	maxsockets = MAXSOCKETS;
 
-#define	SHMMAXPGS	1024		/* XXX until we have more kmap space */
-
-#ifndef SHMMAX
-#define	SHMMAX	(SHMMAXPGS * 4096)
-#endif
-#ifndef SHMMIN
-#define	SHMMIN	1
-#endif
-#ifndef SHMMNI
-#define	SHMMNI	32			/* <= SHMMMNI in shm.h */
-#endif
-#ifndef SHMSEG
-#define	SHMSEG	8
-#endif
-#ifndef SHMALL
-#define	SHMALL	(SHMMAXPGS)
-#endif
-
-struct	shminfo shminfo = {
-	SHMMAX,
-	SHMMIN,
-	SHMMNI,
-	SHMSEG,
-	SHMALL
-};
-
 /*
  * These have to be allocated somewhere; allocating
  * them here forces loader errors if this file is omitted
@@ -132,3 +106,4 @@ struct	cblock *cfreelist = 0;
 int	cfreecount = 0;
 struct	buf *buf;
 struct	domain *domains;
+

@@ -81,7 +81,7 @@
 /* Under ELF and other non-Mach-O formats, the address of
  * etext represents the last text address
  */
-#define ETEXT_ADDR	$EXT(etext)
+#define ETEXT_ADDR	$ EXT(etext)
 #endif
 
 #if	NCPUS > 1
@@ -342,12 +342,12 @@ Entry(start_timer)
 	leal	PCB_ISS(thread),%edi	/* point to PCB`s saved state */;\
 	movl	%edi,thread		/* save for later */		;\
 	movl	stkp,%esi		/* point to start of frame */	;\
-	movl	$R_UESP,%ecx						;\
+	movl	$ R_UESP,%ecx						;\
 	sarl	$2,%ecx			/* word count for transfer */	;\
 	cld				/* we`re incrementing */	;\
 	rep								;\
 	movsl				/* transfer the frame */	;\
-	addl	$R_UESP,stkp		/* derive true "user" esp */	;\
+	addl	$ R_UESP,stkp		/* derive true "user" esp */	;\
 	movl	stkp,R_UESP(thread)	/* store in PCB */		;\
 	movl	$0,%ecx							;\
 	mov	%ss,%cx			/* get current ss */		;\
@@ -373,10 +373,10 @@ Entry(start_timer)
 	movl	MAP_PMAP(%ecx),%ecx	/* get map's pmap */		;\
 	cmpl	EXT(kernel_pmap), %ecx	/* If kernel loaded task */	;\
 	jz	1f			/* use kernel data segment */	;\
-	movl	$USER_DS,%cx		/* else use user data segment */;\
+	movl	$ USER_DS,%cx		/* else use user data segment */;\
 	mov	%cx,%es							;\
 1:									;\
-	movl	$R_UESP,%ecx						;\
+	movl	$ R_UESP,%ecx						;\
 	subl	%ecx,%edi		/* derive start of frame */	;\
 	movl	%edi,thread		/* save for later */		;\
 	sarl	$2,%ecx			/* word count for transfer */	;\
@@ -559,15 +559,15 @@ trap_check_kernel_exit:
 	testl	$3,12(%esp)		/* is trap from kernel mode? */
 	jne	EXT(alltraps)		/* if so: */
 					/* check for the kernel exit sequence */
-	cmpl	$EXT(kret_iret),8(%esp)	/* on IRET? */
+	cmpl	$ EXT(kret_iret),8(%esp)	/* on IRET? */
 	je	fault_iret
-	cmpl	$EXT(kret_popl_ds),8(%esp) /* popping DS? */
+	cmpl	$ EXT(kret_popl_ds),8(%esp) /* popping DS? */
 	je	fault_popl_ds
-	cmpl	$EXT(kret_popl_es),8(%esp) /* popping ES? */
+	cmpl	$ EXT(kret_popl_es),8(%esp) /* popping ES? */
 	je	fault_popl_es
-	cmpl	$EXT(kret_popl_fs),8(%esp) /* popping FS? */
+	cmpl	$ EXT(kret_popl_fs),8(%esp) /* popping FS? */
 	je	fault_popl_fs
-	cmpl	$EXT(kret_popl_gs),8(%esp) /* popping GS? */
+	cmpl	$ EXT(kret_popl_gs),8(%esp) /* popping GS? */
 	je	fault_popl_gs
 take_fault:				/* if none of the above: */
 	jmp	EXT(alltraps)		/* treat as normal trap. */
@@ -713,7 +713,7 @@ trap_from_kloaded:
 	 * up a simulated "uesp" manually, since there's none in the
 	 * frame.
 	 */
-	mov	$CPU_DATA,%dx
+	mov	$ CPU_DATA,%dx
 	mov	%dx,%gs
 	CAH(atstart)
 	CPU_NUMBER(%edx)
@@ -725,7 +725,7 @@ trap_from_kloaded:
 	jmp	EXT(take_trap)
 
 trap_from_user:
-	mov	$CPU_DATA,%ax
+	mov	$ CPU_DATA,%ax
 	mov	%ax,%gs
 
 	CPU_NUMBER(%edx)
@@ -769,7 +769,7 @@ LEXT(return_to_user)
 	CPU_NUMBER(%eax)
 	cmpl	$0,CX(EXT(active_kloaded),%eax)
 	jnz	EXT(return_xfer_stack)
-	movl	$CPD_ACTIVE_THREAD,%ebx
+	movl	$ CPD_ACTIVE_THREAD,%ebx
 	movl	%gs:(%ebx),%ebx			/* get active thread */
 	movl	TH_TOP_ACT(%ebx),%ebx		/* get thread->top_act */
 	cmpl	$0,ACT_KLOADING(%ebx)		/* check if kernel-loading */
@@ -777,7 +777,7 @@ LEXT(return_to_user)
 
 #if	MACH_RT
 #if	MACH_ASSERT
-	movl	$CPD_PREEMPTION_LEVEL,%ebx
+	movl	$ CPD_PREEMPTION_LEVEL,%ebx
 	cmpl	$0,%gs:(%ebx)
 	je	EXT(return_from_kernel)
 	int	$3
@@ -837,7 +837,7 @@ LEXT(return_xfer_stack)
 LEXT(return_kernel_loading)
 	CPU_NUMBER(%eax)
 	movl	CX(EXT(kernel_stack),%eax),%esp
-	movl	$CPD_ACTIVE_THREAD,%ebx
+	movl	$ CPD_ACTIVE_THREAD,%ebx
 	movl	%gs:(%ebx),%ebx			/* get active thread */
 	movl	TH_TOP_ACT(%ebx),%ebx		/* get thread->top_act */
 	movl	%ebx,%edx			/* save for later */
@@ -853,7 +853,7 @@ LEXT(return_kernel_loading)
  */
 trap_from_kernel:
 #if	MACH_KDB || MACH_KGDB
-	mov	$CPU_DATA,%ax
+	mov	$ CPU_DATA,%ax
 	mov	%ax,%gs
 	movl	%esp,%ebx		/* save current stack */
 
@@ -978,11 +978,11 @@ trap_from_kernel:
 	CPU_NUMBER(%edx)
 
 	movl	CX(EXT(need_ast),%edx),%eax /* get pending asts */
-	testl	$AST_URGENT,%eax	/* any urgent preemption? */
+	testl	$ AST_URGENT,%eax	/* any urgent preemption? */
 	je	EXT(return_from_kernel)	/* no, nothing to do */
 	cmpl	$0,EXT(preemptable)	/* kernel-mode, preemption enabled? */
 	je	EXT(return_from_kernel)	/* no, skip it */
-	cmpl	$T_PREEMPT,48(%esp)	/* preempt request? */
+	cmpl	$ T_PREEMPT,48(%esp)	/* preempt request? */
 	jne	EXT(return_from_kernel)	/* no, nothing to do */
 	movl	CX(EXT(kernel_stack),%edx),%eax
 	movl	%esp,%ecx
@@ -1074,12 +1074,13 @@ Entry(all_intrs)
 	mov	%ss,%dx			/* switch to kernel segments */
 	mov	%dx,%ds
 	mov	%dx,%es
-	mov	$CPU_DATA,%dx
+	mov	$ CPU_DATA,%dx
 	mov	%dx,%gs
 
 	CPU_NUMBER(%edx)
 
 	movl	CX(EXT(int_stack_top),%edx),%ecx
+	movl	20(%esp),%edx		/* get eip */
 	xchgl	%ecx,%esp		/* switch to interrupt stack */
 
 #if	STAT_TIME
@@ -1091,26 +1092,28 @@ Entry(all_intrs)
 	TIME_INT_ENTRY			/* do timing */
 #endif
 
+	pushl	%edx			/* pass eip to pe_incoming_interrupt */
+	
 #if	MACH_RT
-	movl	$CPD_PREEMPTION_LEVEL,%edx
+	movl	$ CPD_PREEMPTION_LEVEL,%edx
 	incl	%gs:(%edx)
 #endif	/* MACH_RT */
 
-	movl	$CPD_INTERRUPT_LEVEL,%edx
+	movl	$ CPD_INTERRUPT_LEVEL,%edx
 	incl	%gs:(%edx)
 
 	pushl	%eax				/* Push trap number */
 	call	EXT(PE_incoming_interrupt)		/* call generic interrupt routine */
-	addl	$4,%esp			/* Pop trap number */
+	addl	$8,%esp			/* Pop trap number and eip */
 
 	.globl	EXT(return_to_iret)
 LEXT(return_to_iret)			/* (label for kdb_kintr and hardclock) */
 
-	movl	$CPD_INTERRUPT_LEVEL,%edx
+	movl	$ CPD_INTERRUPT_LEVEL,%edx
 	decl	%gs:(%edx)
 
 #if	MACH_RT
-	movl	$CPD_PREEMPTION_LEVEL,%edx
+	movl	$ CPD_PREEMPTION_LEVEL,%edx
 	decl	%gs:(%edx)
 #endif	/* MACH_RT */
 
@@ -1138,12 +1141,12 @@ LEXT(return_to_iret)			/* (label for kdb_kintr and hardclock) */
 #if	MACH_RT
 	cmpl	$0,EXT(preemptable)	/* kernel-mode, preemption enabled? */
 	je	1f			/* no, skip it */
-	movl	$CPD_PREEMPTION_LEVEL,%ecx
+	movl	$ CPD_PREEMPTION_LEVEL,%ecx
 	cmpl	$0,%gs:(%ecx)		/* preemption masked? */
 	jne	1f			/* yes, skip it */
-	testl	$AST_URGENT,%eax	/* any urgent requests? */
+	testl	$ AST_URGENT,%eax	/* any urgent requests? */
 	je	1f			/* no, skip it */
-	cmpl	$LEXT(locore_end),I_EIP(%esp)	/* are we in locore code? */
+	cmpl	$ EXT(locore_end),I_EIP(%esp)	/* are we in locore code? */
 	jb	1f			/* yes, skip it */
 	movl	CX(EXT(kernel_stack),%edx),%eax
 	movl	%esp,%ecx
@@ -1185,26 +1188,30 @@ LEXT(return_to_iret)			/* (label for kdb_kintr and hardclock) */
 
 int_from_intstack:
 #if	MACH_RT
-	movl	$CPD_PREEMPTION_LEVEL,%edx
+	movl	$ CPD_PREEMPTION_LEVEL,%edx
 	incl	%gs:(%edx)
 #endif	/* MACH_RT */
 
-	movl	$CPD_INTERRUPT_LEVEL,%edx
+	movl	$ CPD_INTERRUPT_LEVEL,%edx
 	incl	%gs:(%edx)
 
+	movl	12(%esp),%edx
+	pushl	%edx			/* push eip */
+	
 	pushl	%eax			/* Push trap number */
 
 	call	EXT(PE_incoming_interrupt)
+	addl	$4,%esp			/* pop eip */
 
 LEXT(return_to_iret_i)			/* ( label for kdb_kintr) */
 
 	addl	$4,%esp			/* pop trap number */
 
-	movl	$CPD_INTERRUPT_LEVEL,%edx
+	movl	$ CPD_INTERRUPT_LEVEL,%edx
 	decl	%gs:(%edx)
 
 #if	MACH_RT
-	movl	$CPD_PREEMPTION_LEVEL,%edx
+	movl	$ CPD_PREEMPTION_LEVEL,%edx
 	decl	%gs:(%edx)
 #endif	/* MACH_RT */
 
@@ -1244,7 +1251,7 @@ ast_from_interrupt:
 	mov	%ss,%dx			/* switch to kernel segments */
 	mov	%dx,%ds
 	mov	%dx,%es
-	mov	$CPU_DATA,%dx
+	mov	$ CPU_DATA,%dx
 	mov	%dx,%gs
 
 	/*
@@ -1332,8 +1339,8 @@ Entry(kgdb_kintr)
 Entry(kdb_kintr)
 #endif /* MACH_KDB */
 	movl	%ebp,%eax		/* save caller`s frame pointer */
-	movl	$EXT(return_to_iret),%ecx /* interrupt return address 1 */
-	movl	$EXT(return_to_iret_i),%edx /* interrupt return address 2 */
+	movl	$ EXT(return_to_iret),%ecx /* interrupt return address 1 */
+	movl	$ EXT(return_to_iret_i),%edx /* interrupt return address 2 */
 
 0:	cmpl	16(%eax),%ecx		/* does this frame return to */
 					/* interrupt handler (1)? */
@@ -1454,7 +1461,7 @@ Entry(mach_rpc)
 	mov	%ss,%dx			/* switch to kernel data segment */
 	mov	%dx,%ds
 	mov	%dx,%es
-	mov	$CPU_DATA,%dx
+	mov	$ CPU_DATA,%dx
 	mov	%dx,%gs
 
 /*
@@ -1533,7 +1540,7 @@ Entry(mach_rpc)
 4:
  	cmpl	$(VM_MAX_ADDRESS),%esi	/* in user space? */
  	ja	mach_call_addr		/* address error if not */
-	movl	$USER_DS,%edx		/* user data segment access */
+	movl	$ USER_DS,%edx		/* user data segment access */
 5:
 	mov	%dx,%fs
 	movl	%esp,%edx		/* save kernel ESP for error recovery */
@@ -1587,7 +1594,7 @@ Entry(syscall_int80)
 	mov	%ss,%dx			/* switch to kernel data segment */
 	mov	%dx,%ds
 	mov	%dx,%es
-	mov	$CPU_DATA,%dx
+	mov	$ CPU_DATA,%dx
 	mov	%dx,%gs
 
 	jmp	syscall_entry_3
@@ -1622,7 +1629,7 @@ syscall_entry_2:
 	mov	%ss,%dx			/* switch to kernel data segment */
 	mov	%dx,%ds
 	mov	%dx,%es
-	mov	$CPU_DATA,%dx
+	mov	$ CPU_DATA,%dx
 	mov	%dx,%gs
 
 /*
@@ -1675,7 +1682,7 @@ syscall_entry_3:
  *   ebx points to user regs
  */
 1:
-	movl	$CPD_ACTIVE_THREAD,%edx
+	movl	$ CPD_ACTIVE_THREAD,%edx
 	movl	%gs:(%edx),%edx			/* get active thread */
 					/* point to current thread */
 	movl	TH_TOP_ACT(%edx),%edx	/* get thread->top_act */
@@ -1710,50 +1717,19 @@ syscall_native:
 
 	movl	EXT(mach_trap_table)+4(%eax),%edx
 					/* get procedure */
-	cmpl	$EXT(kern_invalid),%edx	/* if not "kern_invalid" */
-	jne	mach_syscall_native	/* 	go on with Mach syscall */
+	cmpl	$ EXT(kern_invalid),%edx	/* if not "kern_invalid" */
+	jne	do_native_call		/* go on with Mach syscall */
 
-	movl	$CPD_ACTIVE_THREAD,%edx
+	movl	$ CPD_ACTIVE_THREAD,%edx
 	movl	%gs:(%edx),%edx			/* get active thread */
 					/* point to current thread */
 	movl	TH_TOP_ACT(%edx),%edx	/* get thread->top_act */
 	movl	ACT_TASK(%edx),%edx	/* point to task */
 	movl	TASK_EMUL(%edx),%edx	/* get emulation vector */
 	orl	%edx,%edx		/* if it exists, */
-	jne	mach_syscall_native	/*    do native system call */
+	jne	do_native_call		/* do native system call */
 	shrl	$4,%eax			/* restore syscall number */
 	jmp	mach_call_range		/* try it as a "server" syscall */
-
-mach_syscall_native:
-	movl	$CPD_ACTIVE_THREAD,%edx
-	movl	%gs:(%edx),%edx		/* get active thread */
-
-	movl	TH_TOP_ACT(%edx),%edx	/* get thread->top_act */
-	movl	ACT_MACH_EXC_PORT(%edx),%edx
-	movl	$EXT(realhost),%ecx
-	movl	HOST_NAME(%ecx),%ecx
-	cmpl	%edx,%ecx		/* act->mach_exc_port = host_name ? */
-	je	do_native_call		/* -> send to kernel, do not collect $200 */
-	cmpl	$0,%edx			/* thread->mach_exc_port = null ? */
-	je	try_task		/* try task */
-	jmp	mach_syscall_exception
-        /* NOT REACHED */
-
-try_task:
-	movl	$CPD_ACTIVE_THREAD,%edx
-	movl	%gs:(%edx),%edx		/* get active thread */
-
-	movl	TH_TOP_ACT(%edx),%edx	/* get thread->top_act */
-	movl	ACT_TASK(%edx),%edx	/* point to task */
-	movl	TASK_MACH_EXC_PORT(%edx),%edx
-	movl	$EXT(realhost),%ecx
-	movl	HOST_NAME(%ecx),%ecx
-	cmpl	%edx,%ecx		/* thread->mach_exc_port = host_name ? */
-	je	do_native_call		/* -> send to kernel */
-	cmpl	$0,%edx			/* thread->mach_exc_port = null ? */
-	je	EXT(syscall_failed)	/* try task */
-	jmp	mach_syscall_exception
-	/* NOT REACHED */
 
 /*
  * Register use on entry:
@@ -1777,7 +1753,7 @@ do_native_call:
 0:
 	cmpl	$(VM_MAX_ADDRESS),%esi	/* in user space? */
 	ja	mach_call_addr		/* address error if not */
-	movl	$USER_DS,%edx		/* user data segment access */
+	movl	$ USER_DS,%edx		/* user data segment access */
 1:
 	mov	%dx,%fs
 	movl	%esp,%edx		/* save kernel ESP for error recovery */
@@ -1842,29 +1818,13 @@ mach_call_addr:
 	jmp	EXT(take_trap)		/* treat as a trap */
 
 /*
- * try sending mach system call exception to server
- * Register use on entry:
- *   eax contains syscall number
- */
-mach_syscall_exception:
-	push	%eax			/* code (syscall no.) */
-	movl	%esp,%edx
-	push	$1			/* code_cnt = 1 */
-	push	%edx			/* exception_type_t (see i/f docky) */
-	push	$EXC_MACH_SYSCALL	/* exception */
-
-	CAH(exception)
-	call	EXT(exception)
-	/* no return */
-
-/*
  * System call out of range.  Treat as invalid-instruction trap.
  * (? general protection?)
  * Register use on entry:
  *   eax contains syscall number
  */
 mach_call_range:
-	movl	$CPD_ACTIVE_THREAD,%edx
+	movl	$ CPD_ACTIVE_THREAD,%edx
 	movl	%gs:(%edx),%edx		/* get active thread */
 
 	movl	TH_TOP_ACT(%edx),%edx	/* get thread->top_act */
@@ -1877,7 +1837,7 @@ mach_call_range:
 	movl	%esp,%edx
 	push	$1			/* code_cnt = 1 */
 	push	%edx			/* exception_type_t (see i/f docky) */
-	push	$EXC_SYSCALL
+	push	$ EXC_SYSCALL
 	CAH(call_range)
 	call	EXT(exception)
 	/* no return */
@@ -1926,7 +1886,7 @@ syscall_emul:
 	subl	$8,%edi			/* push space for new arguments */
 	cmpl	$(VM_MIN_ADDRESS),%edi	/* still in user space? */
 	jb	syscall_addr		/* error if not */
-	movl	$USER_DS,%ax		/* user data segment access */
+	movl	$ USER_DS,%ax		/* user data segment access */
 1:
 	mov	%ax,%fs
 	movl	R_EFLAGS(%ebx),%eax	/* move flags */
@@ -1981,14 +1941,14 @@ ENTRY(copyin)
 
 	lea	0(%esi,%edx),%eax	/* get user end address + 1 */
 
-	movl	$CPD_ACTIVE_THREAD,%ecx
+	movl	$ CPD_ACTIVE_THREAD,%ecx
 	movl	%gs:(%ecx),%ecx			/* get active thread */
 	movl	TH_TOP_ACT(%ecx),%ecx		/* get thread->top_act */
 	movl	ACT_MAP(%ecx),%ecx		/* get act->map */
 	movl	MAP_PMAP(%ecx),%ecx		/* get map->pmap */
 	cmpl	EXT(kernel_pmap), %ecx
 	jz	1f
-	movl	$USER_DS,%cx		/* user data segment access */
+	movl	$ USER_DS,%cx		/* user data segment access */
 	mov	%cx,%ds
 1:
 	cmpl	%esi,%eax
@@ -2016,7 +1976,7 @@ copy_ret:
 	ret				/* and return */
 
 copyin_fail:
-	movl	$EFAULT,%eax			/* return error for failure */
+	movl	$ EFAULT,%eax			/* return error for failure */
 	jmp	copy_ret		/* pop frame and return */
 
 /*
@@ -2036,7 +1996,7 @@ Entry(copyinstr)
 
 	lea	0(%esi,%edx),%eax	/* get user end address + 1 */
 
-	movl	$CPD_ACTIVE_THREAD,%ecx
+	movl	$ CPD_ACTIVE_THREAD,%ecx
 	movl	%gs:(%ecx),%ecx			/* get active thread */
 	movl	TH_TOP_ACT(%ecx),%ecx		/* get thread->top_act */
 	movl	ACT_MAP(%ecx),%ecx		/* get act->map */
@@ -2046,7 +2006,7 @@ Entry(copyinstr)
 	mov	%ds,%cx			/* kernel data segment access  */
 	jmp	1f
 0:
-	movl	$USER_DS,%cx		/* user data segment access */
+	movl	$ USER_DS,%cx		/* user data segment access */
 1:
 	mov	%cx,%fs
 	xorl	%eax,%eax
@@ -2068,7 +2028,7 @@ Entry(copyinstr)
 	jne	2b			/* .. a NUL found? */
 	jmp	4f
 5:
-	movl	$ENAMETOOLONG,%eax	/* String is too long.. */
+	movl	$ ENAMETOOLONG,%eax	/* String is too long.. */
 4:
 	xorl	%eax,%eax		/* return zero for success */
 	movl	8+S_ARG3,%edi		/* get OUT len ptr */
@@ -2082,7 +2042,7 @@ copystr_ret:
 	ret				/* and return */
 
 copystr_fail:
-	movl	$EFAULT,%eax		/* return error for failure */
+	movl	$ EFAULT,%eax		/* return error for failure */
 	jmp	copy_ret		/* pop frame and return */
 
 /*
@@ -2103,7 +2063,7 @@ ENTRY(copyout)
 
 	leal	0(%edi,%edx),%eax	/* get user end address + 1 */
 
-	movl	$CPD_ACTIVE_THREAD,%ecx
+	movl	$ CPD_ACTIVE_THREAD,%ecx
 	movl	%gs:(%ecx),%ecx			/* get active thread */
 	movl	TH_TOP_ACT(%ecx),%ecx		/* get thread->top_act */
 	movl	ACT_MAP(%ecx),%ecx		/* get act->map */
@@ -2113,7 +2073,7 @@ ENTRY(copyout)
 	mov	%ds,%cx			/* else kernel data segment access  */
 	jmp	1f
 0:
-	movl	$USER_DS,%cx
+	movl	$ USER_DS,%cx
 1:
 	mov	%cx,%es
 
@@ -2140,7 +2100,7 @@ copyout_retry:
 	movl	%edi,%ebx		/* ebx = edi; */
 
 	mov	%es,%cx		
-	cmpl	$USER_DS,%cx		/* If kernel data segment */
+	cmpl	$ USER_DS,%cx		/* If kernel data segment */
 	jnz	0f			/* skip check */
 
 	cmpb	$(CPUID_FAMILY_386), EXT(cpuid_family)
@@ -2216,7 +2176,7 @@ copyout_ret:
 	ret				/* and return */
 
 copyout_fail:
-	movl	$EFAULT,%eax		/* return error for failure */
+	movl	$ EFAULT,%eax		/* return error for failure */
 	jmp	copyout_ret		/* pop frame and return */
 
 /*
@@ -2838,11 +2798,11 @@ ENTRY(set_cpu_model)
 	pushl	%ecx			/* push original EFLAGS */
 	popfl				/* restore EFLAGS */
 	xorl	%ecx,%eax		/* see what changed */
-	testl	$EFL_AC,%eax		/* test AC bit */
+	testl	$ EFL_AC,%eax		/* test AC bit */
 	jz	0f			/* if AC toggled (486 or higher) */
 	
 	movb	$(CPUID_FAMILY_486),EXT(cpuid_family)
-	testl	$EFL_ID,%eax		/* test ID bit */
+	testl	$ EFL_ID,%eax		/* test ID bit */
 	jz	0f			/* if ID toggled use cpuid instruction */
 	
 	xorl	%eax,%eax		/* get vendor identification string */
@@ -3136,7 +3096,7 @@ Entry(trap_unix_syscall)
 	mov	%ss,%dx			/* switch to kernel data segment */
 	mov	%dx,%ds
 	mov	%dx,%es
-	mov	$CPU_DATA,%dx
+	mov	$ CPU_DATA,%dx
 	mov	%dx,%gs
 
 /*
@@ -3195,7 +3155,7 @@ Entry(trap_machdep_syscall)
 	mov	%ss,%dx			/* switch to kernel data segment */
 	mov	%dx,%ds
 	mov	%dx,%es
-	mov	$CPU_DATA,%dx
+	mov	$ CPU_DATA,%dx
 	mov	%dx,%gs
 
 /*
@@ -3250,7 +3210,7 @@ Entry(trap_mach25_syscall)
 	mov	%ss,%dx			/* switch to kernel data segment */
 	mov	%dx,%ds
 	mov	%dx,%es
-	mov	$CPU_DATA,%dx
+	mov	$ CPU_DATA,%dx
 	mov	%dx,%gs
 
 /*

@@ -28,7 +28,7 @@ DATAFILES = \
         OSReturn.h	\
         OSTypes.h
 
-INSTALL_MI_LIST	= OSReturn.h OSTypes.h 
+INSTALL_MI_LIST	= OSByteOrder.h OSReturn.h OSTypes.h 
 
 INSTALL_MI_DIR = libkern
 

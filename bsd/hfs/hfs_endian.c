@@ -50,9 +50,6 @@ hfs_swap_HFSPlusForkData (
 {
     int i;
 
-    DBG_FUNC_NAME("hfs_swap_HFSPlusForkData");
-    DBG_PRINT_FUNC_NAME();
-
 	src->logicalSize		= SWAP_BE64 (src->logicalSize);
 
 	src->clumpSize			= SWAP_BE32 (src->clumpSize);
@@ -84,8 +81,6 @@ hfs_swap_BTNode (
     UInt32 i;
     int error = 0;
 
-    DBG_FUNC_NAME("hfs_swap_BTNode");
-    DBG_PRINT_FUNC_NAME();
 
 #ifdef ENDIAN_DEBUG
     if (unswap == 0) {
@@ -217,9 +212,6 @@ hfs_swap_HFSPlusBTInternalNode (
 
     UInt32 i;
     UInt32 j;
-
-    DBG_FUNC_NAME("hfs_swap_HFSPlusBTInternalNode");
-    DBG_PRINT_FUNC_NAME();
 
     if (fileID == kHFSExtentsFileID) {
         HFSPlusExtentKey *srcKey;
@@ -382,9 +374,6 @@ hfs_swap_HFSBTInternalNode (
 
     UInt32 i;
     UInt32 j;
-
-    DBG_FUNC_NAME("hfs_swap_HFSBTInternalNode");
-    DBG_PRINT_FUNC_NAME();
 
     if (fileID == kHFSExtentsFileID) {
         HFSExtentKey *srcKey;

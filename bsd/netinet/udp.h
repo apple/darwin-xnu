@@ -56,6 +56,7 @@
 
 #ifndef _NETINET_UDP_H_
 #define _NETINET_UDP_H_
+#include <sys/appleapiopts.h>
 
 /*
  * Udp protocol header.

@@ -56,16 +56,21 @@
 
 #ifndef _NET_IF_GIF_H_
 #define _NET_IF_GIF_H_
+#include <sys/appleapiopts.h>
 
 #include <netinet/in.h>
 /* xxx sigh, why route have struct route instead of pointer? */
 
 struct encaptab;
 
+#ifdef __APPLE_API_PRIVATE
 struct gif_softc {
-	struct ifnet	gif_if;	   /* common area */
+	struct ifnet	gif_if;	   /* common area - must be at the top */
 	struct sockaddr	*gif_psrc; /* Physical src addr */
 	struct sockaddr	*gif_pdst; /* Physical dst addr */
+#ifdef __APPLE__
+	struct if_proto	*gif_proto; /* dlil protocol attached */
+#endif
 	union {
 		struct route  gifscr_ro;    /* xxx */
 #if INET6
@@ -73,31 +78,27 @@ struct gif_softc {
 #endif
 	} gifsc_gifscr;
 	int		gif_flags;
-	const struct encaptab *encap_cookie;
-	short		gif_oflags;	/* copy of ifp->if_flags */
+	const struct encaptab *encap_cookie4;
+	const struct encaptab *encap_cookie6;
+	TAILQ_ENTRY(gif_softc) gif_link; /* all gif's are linked */
 };
 
 #define gif_ro gifsc_gifscr.gifscr_ro
 #if INET6
 #define gif_ro6 gifsc_gifscr.gifscr_ro6
 #endif
-
-#define	GIFF_INUSE	0x1	/* gif is in use */
+#endif /* __APPLE_API_PRIVATE */
 
 #define GIF_MTU		(1280)	/* Default MTU */
 #define	GIF_MTU_MIN	(1280)	/* Minimum MTU */
 #define	GIF_MTU_MAX	(8192)	/* Maximum MTU */
 
-#define GIF_TTL		30
-#define	GIF_HLIM	30
-
-extern int ngif;
-extern struct gif_softc *gif;
-
+#ifdef __APPLE_API_PRIVATE
 /* Prototypes */
-void gif_input __P((struct mbuf *, int, struct ifnet *));
+int gif_input __P((struct mbuf *, char*, struct ifnet *, u_long, int));
 int gif_output __P((struct ifnet *, struct mbuf *,
 		    struct sockaddr *, struct rtentry *));
-int gif_ioctl __P((struct ifnet *, u_long, caddr_t));
+int gif_ioctl __P((struct ifnet *, u_long, void*));
+#endif /* __APPLE_API_PRIVATE */
 
 #endif /* _NET_IF_GIF_H_ */

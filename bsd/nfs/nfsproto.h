@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2002 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -62,6 +62,9 @@
 #ifndef _NFS_NFSPROTO_H_
 #define _NFS_NFSPROTO_H_
 
+#include <sys/appleapiopts.h>
+
+#ifdef __APPLE_API_PRIVATE
 /*
  * nfs definitions as per the Version 2 and 3 specs
  */
@@ -472,4 +475,5 @@ struct nfsv3_pathconf {
 	u_long		pc_casepreserving;
 };
 
-#endif
+#endif /* __APPLE_API_PRIVATE */
+#endif /* _NFS_NFSPROTO_H_ */

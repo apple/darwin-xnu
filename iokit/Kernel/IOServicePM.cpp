@@ -22,13 +22,14 @@
  
 #include <IOKit/IOService.h>
 #include <IOKit/IOLib.h>
-#include <IOKit/IOCommandQueue.h>
 #include <IOKit/IOCommandGate.h>
 #include <IOKit/IOTimerEventSource.h>
 #include <IOKit/IOWorkLoop.h>
 #include <IOKit/IOPlatformExpert.h>
 #include <IOKit/assert.h>
 #include <IOKit/IOMessage.h>
+#include <IOKit/IOKitDebug.h>
+#include <IOKit/IOTimeStamp.h>
 #include <IOKit/pwr_mgt/IOPMinformee.h>
 #include "IOKit/pwr_mgt/IOPMinformeeList.h"
 #include "IOKit/pwr_mgt/IOPMchangeNoteList.h"
@@ -38,9 +39,38 @@
 
 #define super IORegistryEntry
 
+// Some debug functions
+static inline void
+ioSPMTrace(unsigned int csc,
+	   unsigned int a = 0, unsigned int b = 0,
+	   unsigned int c = 0, unsigned int d = 0)
+{
+    if (gIOKitDebug & kIOLogTracePower)
+	IOTimeStampConstant(IODBG_POWER(csc), a, b, c, d);
+}
+
+static inline void
+ioSPMTraceStart(unsigned int csc,
+		unsigned int a = 0, unsigned int b = 0,
+		unsigned int c = 0, unsigned int d = 0)
+{
+    if (gIOKitDebug & kIOLogTracePower)
+	IOTimeStampConstant(IODBG_POWER(csc)|DBG_FUNC_START, a, b, c, d);
+}
+
+static inline void
+ioSPMTraceEnd(unsigned int csc,
+	      unsigned int a = 0, unsigned int b = 0,
+	      unsigned int c = 0, unsigned int d = 0)
+{
+    if (gIOKitDebug & kIOLogTracePower)
+	IOTimeStampConstant(IODBG_POWER(csc)|DBG_FUNC_END, a, b, c, d);
+}
+
+
 static void ack_timer_expired(thread_call_param_t);
 static void settle_timer_expired(thread_call_param_t);
-void PMreceiveCmd ( OSObject *,  void *, void *, void *, void * );
+IOReturn unIdleDevice ( OSObject *, void *, void *, void *, void * );
 static void PM_idle_timer_expired(OSObject *, IOTimerEventSource *);
 static void c_PM_Clamp_Timer_Expired (OSObject * client,IOTimerEventSource *);
 void tellAppWithResponse ( OSObject * object, void * context);
@@ -255,7 +285,6 @@ void IOService::PMinit ( void )
         priv->previousRequest = 0;
         priv->device_overrides = false;
         priv->machine_state = IOPMfinished;
-        pm_vars->commandQueue = NULL;
         priv->timerEventSrc = NULL;
         priv->clampTimerEventSrc = NULL;
         pm_vars->PMworkloop = NULL;
@@ -322,10 +351,6 @@ void IOService::PMfree ( void )
     }
     
     if ( pm_vars ) {
-        if ( pm_vars->commandQueue ) {
-            pm_vars->commandQueue->release();
-            pm_vars->commandQueue = NULL;
-        }
         if ( pm_vars->PMcommandGate ) {
             pm_vars->PMcommandGate->release();
             pm_vars->PMcommandGate = NULL;
@@ -879,6 +904,9 @@ IOReturn IOService::acknowledgeSetPowerState ( void )
     if (! acquire_lock() ) {
         return IOPMNoErr;
     }
+
+    ioSPMTrace(IOPOWER_ACK, * (int *) this);
+
     if ( priv->driver_timer == -1 ) {
         priv->driver_timer = 0;				// driver is acking instead of using return code
     }
@@ -1396,8 +1424,7 @@ bool IOService::activityTickle ( unsigned long type, unsigned long stateNumber=0
 
     if ( type == kIOPMSuperclassPolicy1 ) {
         if ( (priv->activityLock == NULL) ||
-             (pm_vars->theControllingDriver == NULL) ||
-             (pm_vars->commandQueue == NULL) ) {
+             (pm_vars->theControllingDriver == NULL) ) {
             return true;
         }
         IOTakeLock(priv->activityLock);
@@ -1410,8 +1437,8 @@ bool IOService::activityTickle ( unsigned long type, unsigned long stateNumber=0
             IOUnlock(priv->activityLock);
             return true;
         }
-        IOUnlock(priv->activityLock);				// send a message on the command queue
-        pm_vars->commandQueue->enqueueCommand(true, (void *)kIOPMUnidleDevice, (void *)stateNumber);
+        IOUnlock(priv->activityLock);
+        pm_vars->PMcommandGate->runAction(unIdleDevice,(void *)stateNumber);
         return false;
     }
     return true;
@@ -1465,14 +1492,6 @@ IOReturn  IOService::setIdleTimerPeriod ( unsigned long period )
     if ( period > 0 ) {
         if ( getPMworkloop() == NULL ) {
             return kIOReturnError;
-        }
-
-        if (pm_vars->commandQueue == NULL ) {		// make the command queue
-            pm_vars->commandQueue = IOCommandQueue::commandQueue(this, PMreceiveCmd);
-            if (!  pm_vars->commandQueue ||
-                (  pm_vars->PMworkloop->addEventSource( pm_vars->commandQueue) != kIOReturnSuccess) ) {
-                return kIOReturnError;
-            }
         }
        						 // make the timer event
         if (  priv->timerEventSrc == NULL ) {
@@ -1584,34 +1603,31 @@ void IOService::PM_idle_timer_expiration ( void )
 
 
 // **********************************************************************************
-// PMreceiveCmd
+// unIdleDevice
 //
-//
-//
+// We are behind the command gate.  This serializes with respect to timer expiration.
 // **********************************************************************************
-void PMreceiveCmd ( OSObject * theDriver,  void * command, void * param1, void * param2, void *param3 )
+IOReturn unIdleDevice ( OSObject * theDriver, void * param1, void * param2, void * param3, void * param4 )
 {
-   ((IOService *)theDriver)->command_received(command,param1,param2,param3);
+   ((IOService *)theDriver)->command_received(param1,param2,param3,param4);
+    return kIOReturnSuccess;
 }
 
 
 // **********************************************************************************
 // command_received
 //
-// We have received a command from ourselves on the command queue.
-// This is to prevent races with timer-expiration code.
+// We are un-idling a device due to its activity tickle.
 // **********************************************************************************
-void IOService::command_received ( void * command, void *stateNumber , void * , void *)
+void IOService::command_received ( void * stateNumber, void *, void * , void * )
 {
     if ( ! initialized ) {
         return;					// we're unloading
     }
 
-    if ( command == (void *)kIOPMUnidleDevice ) {
-        if ( (pm_vars->myCurrentState < (unsigned long)stateNumber) &&
-            (priv->imminentState < (unsigned long)stateNumber) ) {
-            changePowerStateToPriv((unsigned long)stateNumber);
-        }
+    if ( (pm_vars->myCurrentState < (unsigned long)stateNumber) &&
+        (priv->imminentState < (unsigned long)stateNumber) ) {
+        changePowerStateToPriv((unsigned long)stateNumber);
     }
 }
 
@@ -3258,7 +3274,10 @@ IOReturn IOService::instruct_driver ( unsigned long newState )
     
     pm_vars->thePlatform->PMLog(pm_vars->ourName,PMlogProgramHardware,newState,0);
 
+    ioSPMTraceStart(IOPOWER_STATE, * (int *) this, (int) newState);
     return_code = pm_vars->theControllingDriver->setPowerState( newState,this );	// yes, instruct it
+    ioSPMTraceEnd(IOPOWER_STATE, * (int *) this, (int) newState, (int) return_code);
+
     if ( return_code == IOPMAckImplied ) {					// it finished
         priv->driver_timer = 0;
         return IOPMAckImplied;
@@ -3824,6 +3843,7 @@ IOReturn IOService::allowCancelCommon ( void )
 
 void IOService::clampPowerOn (unsigned long duration)
 {
+/*
   changePowerStateToPriv (pm_vars->theNumberOfPowerStates-1);
 
   if (  priv->clampTimerEventSrc == NULL ) {
@@ -3838,7 +3858,8 @@ void IOService::clampPowerOn (unsigned long duration)
     }
   }
 
-    priv->clampTimerEventSrc->setTimeout(kFiveMinutesInNanoSeconds, NSEC_PER_SEC);
+   priv->clampTimerEventSrc->setTimeout(300*USEC_PER_SEC, USEC_PER_SEC);
+*/
 }
 
 //*********************************************************************************

@@ -39,7 +39,7 @@
 
 class IOPCIBridge : public IOService
 {
-    friend IOPCIDevice;
+    friend class IOPCIDevice;
 
     OSDeclareAbstractStructors(IOPCIBridge)
 

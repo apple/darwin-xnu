@@ -51,7 +51,9 @@
 
 #ifndef _NET_IF_VLAN_VAR_H_
 #define	_NET_IF_VLAN_VAR_H_	1
+#include <sys/appleapiopts.h>
 
+#ifdef __APPLE_API_PRIVATE
 #ifdef KERNEL
 struct	ifvlan {
 	struct	arpcom ifv_ac;	/* make this an interface */
@@ -101,4 +103,5 @@ extern	u_int vlan_proto;
 extern	int vlan_input(struct ether_header *eh, struct mbuf *m);
 #endif
 
+#endif /* __APPLE_API_PRIVATE */
 #endif /* _NET_IF_VLAN_VAR_H_ */

@@ -1,4 +1,5 @@
-/*	$KAME: in6_src.c,v 1.10 2000/03/28 09:02:23 k-sugyou Exp $	*/
+/*	$FreeBSD: src/sys/netinet6/in6_src.c,v 1.1.2.2 2001/07/03 11:01:52 ume Exp $	*/
+/*	$KAME: in6_src.c,v 1.37 2001/03/29 05:34:31 itojun Exp $	*/
 
 /*
  * Copyright (C) 1995, 1996, 1997, and 1998 WIDE Project.
@@ -64,14 +65,6 @@
  *	@(#)in_pcb.c	8.2 (Berkeley) 1/4/94
  */
 
-/* for MIP6 */
-#if (defined(__FreeBSD__) && __FreeBSD__ >= 3) || defined(__NetBSD__)
-#include "opt_inet.h"
-#endif
-
-#ifdef __NetBSD__
-#include "opt_ipsec.h"
-#endif
 
 #include <sys/param.h>
 #include <sys/systm.h>
@@ -80,9 +73,6 @@
 #include <sys/protosw.h>
 #include <sys/socket.h>
 #include <sys/socketvar.h>
-#if !(defined(__FreeBSD__) && __FreeBSD__ >= 4)
-#include <sys/ioctl.h>
-#endif
 #include <sys/errno.h>
 #include <sys/time.h>
 #include <sys/proc.h>
@@ -97,32 +87,21 @@
 #include <netinet/in_pcb.h>
 #include <netinet6/in6_var.h>
 #include <netinet/ip6.h>
-#if !(defined(__OpenBSD__) || (defined(__bsdi__) && _BSDI_VERSION >= 199802))
 #include <netinet6/in6_pcb.h>
-#endif
 #include <netinet6/ip6_var.h>
 #include <netinet6/nd6.h>
+#if ENABLE_DEFAULT_SCOPE
+#include <netinet6/scope6_var.h> 
+#endif
 
 #include <net/net_osdep.h>
 
-#ifndef __bsdi__
 #include "loop.h"
-#endif
-#if defined(__NetBSD__) || defined(__OpenBSD__)
-extern struct ifnet loif[NLOOP];
-#endif
-
-#if MIP6
-#include <netinet6/mip6.h>
-#include <netinet6/mip6_common.h>
-
-extern struct nd_prefix *(*mip6_get_home_prefix_hook) __P((void));
-#endif
 
 /*
- * Return an IPv6 address, which is the most appropriate for given
+ * Return an IPv6 address, which is the most appropriate for a given
  * destination and user specified options.
- * If necessary, this function lookups the routing table and return
+ * If necessary, this function lookups the routing table and returns
  * an entry to the caller for later use.
  */
 struct in6_addr *
@@ -212,21 +191,9 @@ in6_selectsrc(dstsock, opts, mopts, ro, laddr, errorp)
 	 */
 	if (IN6_IS_ADDR_MULTICAST(dst)) {
 		struct ifnet *ifp = mopts ? mopts->im6o_multicast_ifp : NULL;
-#ifdef __bsdi__
-#if _BSDI_VERSION >= 199802
-		extern struct ifnet *loifp;
-#else
-		extern struct ifnet loif;
-		struct ifnet *loifp = &loif;
-#endif
-#endif
 
 		if (ifp == NULL && IN6_IS_ADDR_MC_NODELOCAL(dst)) {
-#ifdef __bsdi__
-			ifp = loifp;
-#else
 			ifp = &loif[0];
-#endif
 		}
 
 		if (ifp) {
@@ -264,32 +231,6 @@ in6_selectsrc(dstsock, opts, mopts, ro, laddr, errorp)
 		}
 	}
 
-#if MIP6
-	/*
-	 * This is needed to assure that the Home Address is used for
-	 * outgoing packets when not at home. We can't choose any other
-	 * address if we want to keep connections up during movement.
-	 */
-	if (mip6_get_home_prefix_hook) {	/* Only Mobile Node */
-		struct nd_prefix *pr;
-		if ((pr = (*mip6_get_home_prefix_hook)()) &&
-		    !IN6_IS_ADDR_UNSPECIFIED(&pr->ndpr_addr)) {
-			if (in6_addrscope(dst) ==
-			    in6_addrscope(&pr->ndpr_addr)) {
-#if MIP6_DEBUG
-				/* Noisy but useful */
-				mip6_debug("%s: Local address %s is chosen "
-					   "for pcb to dest %s.\n",
-					   __FUNCTION__,
-					   ip6_sprintf(&pr->ndpr_addr),
-					   ip6_sprintf(dst));
-#endif
-				return(&pr->ndpr_addr);
-			}
-		}
-	}
-#endif /* MIP6 */
-
 	/*
 	 * If route is known or can be allocated now,
 	 * our src addr is taken from the i/f, else punt.
@@ -297,30 +238,25 @@ in6_selectsrc(dstsock, opts, mopts, ro, laddr, errorp)
 	if (ro) {
 		if (ro->ro_rt &&
 		    !IN6_ARE_ADDR_EQUAL(&satosin6(&ro->ro_dst)->sin6_addr, dst)) {
-			RTFREE(ro->ro_rt);
+			rtfree(ro->ro_rt);
 			ro->ro_rt = (struct rtentry *)0;
 		}
 		if (ro->ro_rt == (struct rtentry *)0 ||
 		    ro->ro_rt->rt_ifp == (struct ifnet *)0) {
+			struct sockaddr_in6 *sa6;
+
 			/* No route yet, so try to acquire one */
 			bzero(&ro->ro_dst, sizeof(struct sockaddr_in6));
-			ro->ro_dst.sin6_family = AF_INET6;
-			ro->ro_dst.sin6_len = sizeof(struct sockaddr_in6);
-			ro->ro_dst.sin6_addr = *dst;
+			sa6 = (struct sockaddr_in6 *)&ro->ro_dst;
+			sa6->sin6_family = AF_INET6;
+			sa6->sin6_len = sizeof(struct sockaddr_in6);
+			sa6->sin6_addr = *dst;
+			sa6->sin6_scope_id = dstsock->sin6_scope_id;
 			if (IN6_IS_ADDR_MULTICAST(dst)) {
-#if defined( __FreeBSD__) || defined (__APPLE__)
 				ro->ro_rt = rtalloc1(&((struct route *)ro)
 						     ->ro_dst, 0, 0UL);
-#else
-				ro->ro_rt = rtalloc1(&((struct route *)ro)
-						     ->ro_dst, 0);
-#endif /*__FreeBSD__*/
 			} else {
-#ifdef __bsdi__  /* bsdi needs rtcalloc to make a host route */
-				rtcalloc((struct route *)ro);
-#else
 				rtalloc((struct route *)ro);
-#endif
 			}
 		}
 
@@ -373,10 +309,6 @@ in6_selectsrc(dstsock, opts, mopts, ro, laddr, errorp)
  *     hop limit of the interface specified by router advertisement.
  * 3. The system default hoplimit.
 */
-#if HAVE_NRL_INPCB
-#define in6pcb		inpcb
-#define in6p_hops	inp_hops	
-#endif
 int
 in6_selecthlim(in6p, ifp)
 	struct in6pcb *in6p;
@@ -389,107 +321,242 @@ in6_selecthlim(in6p, ifp)
 	else
 		return(ip6_defhlim);
 }
-#if HAVE_NRL_INPCB
-#undef in6pcb
-#undef in6p_hops
-#endif
 
-#if !(defined(__FreeBSD__) && __FreeBSD__ >= 3) && !defined(__OpenBSD__) && !defined(__APPLE__)
 /*
- * Find an empty port and set it to the specified PCB.
+ * XXX: this is borrowed from in6_pcbbind(). If possible, we should
+ * share this function by all *bsd*...
  */
-#if HAVE_NRL_INPCB	/* XXX: I really hate such ugly macros...(jinmei) */
-#define in6pcb		inpcb
-#define in6p_socket	inp_socket
-#define in6p_lport	inp_lport
-#define in6p_head	inp_head
-#define in6p_flags	inp_flags
-#define IN6PLOOKUP_WILDCARD INPLOOKUP_WILDCARD
-#endif
 int
-in6_pcbsetport(laddr, in6p)
+in6_pcbsetport(laddr, inp, p)
 	struct in6_addr *laddr;
-	struct in6pcb *in6p;
+	struct inpcb *inp;
+	struct proc *p;
 {
-	struct socket *so = in6p->in6p_socket;
-	struct in6pcb *head = in6p->in6p_head;
-	u_int16_t last_port, lport = 0;
-	int wild = 0;
-	void *t;
-	u_int16_t min, max;
-#ifdef __NetBSD__
-	struct proc *p = curproc;		/* XXX */
-#endif
+	struct socket *so = inp->inp_socket;
+	u_int16_t lport = 0, first, last, *lastport;
+	int count, error = 0, wild = 0;
+	struct inpcbinfo *pcbinfo = inp->inp_pcbinfo;
 
 	/* XXX: this is redundant when called from in6_pcbbind */
-	if ((so->so_options & (SO_REUSEADDR|SO_REUSEPORT)) == 0 &&
-	   ((so->so_proto->pr_flags & PR_CONNREQUIRED) == 0 ||
-	    (so->so_options & SO_ACCEPTCONN) == 0))
-		wild = IN6PLOOKUP_WILDCARD;
+	if ((so->so_options & (SO_REUSEADDR|SO_REUSEPORT)) == 0)
+		wild = INPLOOKUP_WILDCARD;
 
-	if (in6p->in6p_flags & IN6P_LOWPORT) {
-#ifdef __NetBSD__
-		if (p == 0 || (suser(p->p_ucred, &p->p_acflag) != 0))
-			return (EACCES);
+	inp->inp_flags |= INP_ANONPORT;
+
+	if (inp->inp_flags & INP_HIGHPORT) {
+		first = ipport_hifirstauto;	/* sysctl */
+		last  = ipport_hilastauto;
+		lastport = &pcbinfo->lasthi;
+	} else if (inp->inp_flags & INP_LOWPORT) {
+#ifdef __APPLE__
+                if (p && (error = suser(p->p_ucred, &p->p_acflag)))
 #else
-		if ((so->so_state & SS_PRIV) == 0)
-			return (EACCES);
+		if (p && (error = suser(p)))
 #endif
-		min = IPV6PORT_RESERVEDMIN;
-		max = IPV6PORT_RESERVEDMAX;
+
+			return error;
+		first = ipport_lowfirstauto;	/* 1023 */
+		last  = ipport_lowlastauto;	/* 600 */
+		lastport = &pcbinfo->lastlow;
 	} else {
-		min = IPV6PORT_ANONMIN;
-		max = IPV6PORT_ANONMAX;
+		first = ipport_firstauto;	/* sysctl */
+		last  = ipport_lastauto;
+		lastport = &pcbinfo->lastport;
+	}
+	/*
+	 * Simple check to ensure all ports are not used up causing
+	 * a deadlock here.
+	 *
+	 * We split the two cases (up and down) so that the direction
+	 * is not being tested on each round of the loop.
+	 */
+	if (first > last) {
+		/*
+		 * counting down
+		 */
+		count = first - last;
+
+		do {
+			if (count-- < 0) {	/* completely used? */
+				/*
+				 * Undo any address bind that may have
+				 * occurred above.
+				 */
+				inp->in6p_laddr = in6addr_any;
+				return (EAGAIN);
+			}
+			--*lastport;
+			if (*lastport > first || *lastport < last)
+				*lastport = first;
+			lport = htons(*lastport);
+		} while (in6_pcblookup_local(pcbinfo,
+					     &inp->in6p_laddr, lport, wild));
+	} else {
+		/*
+			 * counting up
+			 */
+		count = last - first;
+
+		do {
+			if (count-- < 0) {	/* completely used? */
+				/*
+				 * Undo any address bind that may have
+				 * occurred above.
+				 */
+				inp->in6p_laddr = in6addr_any;
+				return (EAGAIN);
+			}
+			++*lastport;
+			if (*lastport < first || *lastport > last)
+				*lastport = first;
+			lport = htons(*lastport);
+		} while (in6_pcblookup_local(pcbinfo,
+					     &inp->in6p_laddr, lport, wild));
 	}
 
-	/* value out of range */
-	if (head->in6p_lport < min)
-		head->in6p_lport = min;
-	else if (head->in6p_lport > max)
-		head->in6p_lport = min;
-	last_port = head->in6p_lport;
-	goto startover;	/*to randomize*/
-	for (;;) {
-		lport = htons(head->in6p_lport);
-		if (IN6_IS_ADDR_V4MAPPED(laddr)) {
-#if 0
-			t = in_pcblookup_bind(&tcbtable,
-					      (struct in_addr *)&in6p->in6p_laddr.s6_addr32[3],
-					      lport);
+	inp->inp_lport = lport;
+	if (in_pcbinshash(inp) != 0) {
+		inp->in6p_laddr = in6addr_any;
+		inp->inp_lport = 0;
+		return (EAGAIN);
+	}
+
+	return(0);
+}
+
+/*
+ * generate kernel-internal form (scopeid embedded into s6_addr16[1]).
+ * If the address scope of is link-local, embed the interface index in the
+ * address.  The routine determines our precedence
+ * between advanced API scope/interface specification and basic API
+ * specification.
+ *
+ * this function should be nuked in the future, when we get rid of
+ * embedded scopeid thing.
+ *
+ * XXX actually, it is over-specification to return ifp against sin6_scope_id.
+ * there can be multiple interfaces that belong to a particular scope zone
+ * (in specification, we have 1:N mapping between a scope zone and interfaces).
+ * we may want to change the function to return something other than ifp.
+ */
+int
+in6_embedscope(in6, sin6, in6p, ifpp)
+	struct in6_addr *in6;
+	const struct sockaddr_in6 *sin6;
+#ifdef HAVE_NRL_INPCB
+	struct inpcb *in6p;
+#define in6p_outputopts	inp_outputopts6
+#define in6p_moptions	inp_moptions6
 #else
-			t = NULL;
+	struct in6pcb *in6p;
 #endif
-		} else {
-#if HAVE_NRL_INPCB
-			/* XXX: ugly cast... */
-			t = in_pcblookup(head, (struct in_addr *)&zeroin6_addr,
-					 0, (struct in_addr *)laddr,
-					 lport, wild | INPLOOKUP_IPV6);
-#else
-			t = in6_pcblookup(head, &zeroin6_addr, 0, laddr,
-					  lport, wild);
+	struct ifnet **ifpp;
+{
+	struct ifnet *ifp = NULL;
+	u_int32_t scopeid;
+
+	*in6 = sin6->sin6_addr;
+	scopeid = sin6->sin6_scope_id;
+	if (ifpp)
+		*ifpp = NULL;
+
+	/*
+	 * don't try to read sin6->sin6_addr beyond here, since the caller may
+	 * ask us to overwrite existing sockaddr_in6
+	 */
+
+#ifdef ENABLE_DEFAULT_SCOPE
+	if (scopeid == 0)
+		scopeid = scope6_addr2default(in6);
 #endif
+
+	if (IN6_IS_SCOPE_LINKLOCAL(in6)) {
+		struct in6_pktinfo *pi;
+
+		/*
+		 * KAME assumption: link id == interface id
+		 */
+
+		if (in6p && in6p->in6p_outputopts &&
+		    (pi = in6p->in6p_outputopts->ip6po_pktinfo) &&
+		    pi->ipi6_ifindex) {
+			ifp = ifindex2ifnet[pi->ipi6_ifindex];
+			in6->s6_addr16[1] = htons(pi->ipi6_ifindex);
+		} else if (in6p && IN6_IS_ADDR_MULTICAST(in6) &&
+			   in6p->in6p_moptions &&
+			   in6p->in6p_moptions->im6o_multicast_ifp) {
+			ifp = in6p->in6p_moptions->im6o_multicast_ifp;
+			in6->s6_addr16[1] = htons(ifp->if_index);
+		} else if (scopeid) {
+			/* boundary check */
+			if (scopeid < 0 || if_index < scopeid)
+				return ENXIO;  /* XXX EINVAL? */
+			ifp = ifindex2ifnet[scopeid];
+			/*XXX assignment to 16bit from 32bit variable */
+			in6->s6_addr16[1] = htons(scopeid & 0xffff);
 		}
-		if (t == 0)
-			break;
-	  startover:
-		if (head->in6p_lport >= max)
-			head->in6p_lport = min;
-		else
-			head->in6p_lport++;
-		if (head->in6p_lport == last_port)
-			return (EADDRINUSE);
+
+		if (ifpp)
+			*ifpp = ifp;
 	}
 
-	in6p->in6p_lport = lport;
-	return(0);		/* success */
+	return 0;
 }
 #if HAVE_NRL_INPCB
-#undef in6pcb
-#undef in6p_socket
-#undef in6p_lport
-#undef in6p_head
-#undef in6p_flags
-#undef IN6PLOOKUP_WILDCARD
+#undef in6p_outputopts
+#undef in6p_moptions
 #endif
-#endif /* !FreeBSD3 && !OpenBSD*/
+
+/*
+ * generate standard sockaddr_in6 from embedded form.
+ * touches sin6_addr and sin6_scope_id only.
+ *
+ * this function should be nuked in the future, when we get rid of
+ * embedded scopeid thing.
+ */
+int
+in6_recoverscope(sin6, in6, ifp)
+	struct sockaddr_in6 *sin6;
+	const struct in6_addr *in6;
+	struct ifnet *ifp;
+{
+	u_int32_t scopeid;
+
+	sin6->sin6_addr = *in6;
+
+	/*
+	 * don't try to read *in6 beyond here, since the caller may
+	 * ask us to overwrite existing sockaddr_in6
+	 */
+
+	sin6->sin6_scope_id = 0;
+	if (IN6_IS_SCOPE_LINKLOCAL(in6)) {
+		/*
+		 * KAME assumption: link id == interface id
+		 */
+		scopeid = ntohs(sin6->sin6_addr.s6_addr16[1]);
+		if (scopeid) {
+			/* sanity check */
+			if (scopeid < 0 || if_index < scopeid)
+				return ENXIO;
+			if (ifp && ifp->if_index != scopeid)
+				return ENXIO;
+			sin6->sin6_addr.s6_addr16[1] = 0;
+			sin6->sin6_scope_id = scopeid;
+		}
+	}
+
+	return 0;
+}
+
+/*
+ * just clear the embedded scope identifer.
+ * XXX: currently used for bsdi4 only as a supplement function.
+ */
+void
+in6_clearscope(addr)
+	struct in6_addr *addr;
+{
+	if (IN6_IS_SCOPE_LINKLOCAL(addr))
+		addr->s6_addr16[1] = 0;
+}

@@ -75,6 +75,10 @@ timer_call_setup(
 	timer_call_func_t		func,
 	timer_call_param_t		param0);
 
+void
+timer_call_shutdown(
+	processor_t			processor);
+
 #endif /* MACH_KERNEL_PRIVATE */
 
 #endif /* _KERN_TIMER_CALL_H_ */

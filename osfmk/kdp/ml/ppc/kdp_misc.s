@@ -69,6 +69,8 @@ ENTRY(kdp_sync_cache, TAG_NO_FRAME_USED)
 
 ENTRY(kdp_xlate_off, TAG_NO_FRAME_USED)
 	mfmsr	r3
+	rlwinm	r3,r3,0,MSR_FP_BIT+1,MSR_FP_BIT-1	; Force floating point off
+	rlwinm	r3,r3,0,MSR_VEC_BIT+1,MSR_VEC_BIT-1	; Force vectors off
 	rlwinm	r4, r3, 0, MSR_DR_BIT+1, MSR_IR_BIT-1
 	mtmsr	r4
 	isync

@@ -19,5 +19,10 @@
  * 
  * @APPLE_LICENSE_HEADER_END@
  */
-#include <IOKit/hidsystem/ev_keymap.h>
+#warning include <dev/ev_keymap.h> is going away use <IOKit/hidsystem/ev_keymap.h> instead
 
+#include <sys/appleapiopts.h>
+
+#ifdef __APPLE_API_OBSOLETE
+#include <IOKit/hidsystem/ev_keymap.h>
+#endif /* __APPLE_API_OBSOLETE */

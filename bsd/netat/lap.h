@@ -28,6 +28,7 @@
 
 #ifndef _NETAT_LAP_H_
 #define _NETAT_LAP_H_
+#include <sys/appleapiopts.h>
 
 #define	AT_MID_ELAP	202
 

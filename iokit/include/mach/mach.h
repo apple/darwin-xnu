@@ -19,3 +19,9 @@
  * 
  * @APPLE_LICENSE_HEADER_END@
  */
+#warning include <mach.h> is going away, please don't use it anymore.
+
+#include <sys/appleapiopts.h>
+
+#ifdef __APPLE_API_OBSOLETE
+#endif /* __APPLE_API_OBSOLETE */

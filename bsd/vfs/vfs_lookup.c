@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2002 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -292,7 +292,9 @@ lookup(ndp)
 	int namemax = 0;			/* maximun number of bytes for filename returned by pathconf() */
 	int docache;			/* == 0 do not cache last component */
 	int wantparent;			/* 1 => wantparent or lockparent flag */
+	int dp_unlocked = 0;	/* 1 => dp already VOP_UNLOCK()-ed */
 	int rdonly;			/* lookup read-only flag bit */
+	int trailing_slash;
 	int error = 0;
 	struct componentname *cnp = &ndp->ni_cnd;
 	struct proc *p = cnp->cn_proc;
@@ -344,6 +346,25 @@ dirloop:
 #endif
 	ndp->ni_pathlen -= cnp->cn_namelen;
 	ndp->ni_next = cp;
+
+	/*
+	 * Replace multiple slashes by a single slash and trailing slashes
+	 * by a null.  This must be done before VOP_LOOKUP() because some
+	 * fs's don't know about trailing slashes.  Remember if there were
+	 * trailing slashes to handle symlinks, existing non-directories
+	 * and non-existing files that won't be directories specially later.
+	 */
+	trailing_slash = 0;
+	while (*cp == '/' && (cp[1] == '/' || cp[1] == '\0')) {
+		cp++;
+		ndp->ni_pathlen--;
+		if (*cp == '\0') {
+			trailing_slash = 1;
+			*ndp->ni_next = '\0';
+		}
+	}
+	ndp->ni_next = cp;
+
 	cnp->cn_flags |= MAKEENTRY;
 	if (*cp == '\0' && docache == 0)
 		cnp->cn_flags &= ~MAKEENTRY;
@@ -453,6 +474,11 @@ unionlookup:
 			error = EROFS;
 			goto bad;
 		}
+		if (*cp == '\0' && trailing_slash &&
+			!(cnp->cn_flags & WILLBEDIR)) {
+			error = ENOENT;
+			goto bad;
+		}
 		/*
 		 * We return with ni_vp NULL to indicate that the entry
 		 * doesn't currently exist, leaving a pointer to the
@@ -490,11 +516,14 @@ unionlookup:
 	       (cnp->cn_flags & NOCROSSMOUNT) == 0) {
 		if (vfs_busy(mp, 0, 0, p))
 			continue;
+		VOP_UNLOCK(dp, 0, p);
 		error = VFS_ROOT(mp, &tdp);
 		vfs_unbusy(mp, p);
-		if (error)
+		if (error) {
+			dp_unlocked = 1;		/* Signal error path 'dp' has already been unlocked */
 			goto bad2;
-		vput(dp);
+		};
+		vrele(dp);
 		ndp->ni_vp = dp = tdp;
 	}
 
@@ -502,10 +531,19 @@ unionlookup:
 	 * Check for symbolic link
 	 */
 	if ((dp->v_type == VLNK) &&
-	    ((cnp->cn_flags & FOLLOW) || *ndp->ni_next == '/')) {
+	    ((cnp->cn_flags & FOLLOW) || trailing_slash ||
+		*ndp->ni_next == '/')) {
 		cnp->cn_flags |= ISSYMLINK;
 		return (0);
 	}
+
+	/*
+	 * Check for bogus trailing slashes.
+	 */
+	 if (trailing_slash && dp->v_type != VDIR) {
+		error = ENOTDIR;
+		goto bad2;
+	 }
 
 nextname:
 	/*
@@ -547,7 +585,11 @@ bad2:
 		VOP_UNLOCK(ndp->ni_dvp, 0, p);
 	vrele(ndp->ni_dvp);
 bad:
-	vput(dp);
+	if (dp_unlocked) {
+		vrele(dp);
+	} else {
+		vput(dp);
+	};
 	ndp->ni_vp = NULL;
 	if (kdebug_enable)
 	        kdebug_lookup(dp, cnp);
@@ -752,14 +794,18 @@ kdebug_lookup(dp, cnp)
 	        dbg_parms[i++] = 0;
 	}
 
-	KERNEL_DEBUG_CONSTANT((FSDBG_CODE(DBG_FSRW,36)) | DBG_FUNC_NONE,
+	/*
+	  In the event that we collect multiple, consecutive pathname
+	  entries, we must mark the start of the path's string.
+	*/
+	KERNEL_DEBUG_CONSTANT((FSDBG_CODE(DBG_FSRW,36)) | DBG_FUNC_START,
 			      dp, dbg_parms[0], dbg_parms[1], dbg_parms[2], 0);
 
 	for (dbg_namelen = save_dbg_namelen-12, i=3;
 	     dbg_namelen > 0;
-	     dbg_namelen -=(4 * sizeof(long)))
+	     dbg_namelen -=(4 * sizeof(long)), i+= 4)
 	  {
 	    KERNEL_DEBUG_CONSTANT((FSDBG_CODE(DBG_FSRW,36)) | DBG_FUNC_NONE,
-				  dbg_parms[i++], dbg_parms[i++], dbg_parms[i++], dbg_parms[i++], 0);
+				  dbg_parms[i], dbg_parms[i+1], dbg_parms[i+2], dbg_parms[i+3], 0);
 	  }
 }

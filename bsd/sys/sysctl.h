@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2002 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -64,11 +64,10 @@
 /*
  * These are for the eproc structure defined below.
  */
+#include <sys/appleapiopts.h>
 #ifndef KERNEL
 #include <sys/time.h>
 #include <sys/ucred.h>
-
-
 #endif
 
 #include <sys/vm.h>
@@ -123,6 +122,7 @@ struct ctlname {
 #define OID_AUTO	(-1)
 
 #ifdef KERNEL
+#ifdef __APPLE_API_UNSTABLE
 #define SYSCTL_HANDLER_ARGS (struct sysctl_oid *oidp, void *arg1, int arg2, \
 	struct sysctl_req *req)
 
@@ -182,7 +182,7 @@ void sysctl_unregister_oid(struct sysctl_oid *oidp);
 
 /* This constructs a "raw" MIB oid. */
 #define SYSCTL_OID(parent, nbr, name, kind, a1, a2, handler, fmt, descr) \
-	struct sysctl_oid sysctl_##parent##_##name## = {		 \
+	struct sysctl_oid sysctl_##parent##_##name = {		 \
 		&sysctl_##parent##_children, { 0 },			 \
 		nbr, kind, a1, a2, #name, handler, fmt };
 
@@ -224,6 +224,7 @@ void sysctl_unregister_oid(struct sysctl_oid *oidp);
 #define SYSCTL_PROC(parent, nbr, name, access, ptr, arg, handler, fmt, descr) \
 	SYSCTL_OID(parent, nbr, name, access, \
 		ptr, arg, handler, fmt, descr)
+#endif /* __APPLE_API_UNSTABLE */
 #endif /* KERNEL */
 
 /*
@@ -294,8 +295,11 @@ void sysctl_unregister_oid(struct sysctl_oid *oidp);
 #define	KERN_LOGSIGEXIT		36	/* int: do we log sigexit procs? */
 #define KERN_SYMFILE		37	/* string: kernel symbol filename */
 #define KERN_PROCARGS		38
-#define KERN_PCSAMPLES          39      /* int: pc sampling */
-#define KERN_MAXID		40      /* number of valid kern ids */
+#define KERN_PCSAMPLES		39	/* node: pc sampling */
+#define KERN_NETBOOT		40	/* int: are we netbooted? 1=yes,0=no */
+#define	KERN_PANICINFO		41	/* node: panic UI information */
+#define	KERN_SYSV		42	/* node: panic UI information */
+#define	KERN_MAXID		43	/* number of valid kern ids */
 
 
 /* KERN_KDEBUG types */
@@ -314,6 +318,7 @@ void sysctl_unregister_oid(struct sysctl_oid *oidp);
 /* Don't use 13 as it is overloaded with KERN_VNODE */
 #define KERN_KDPIDEX            14
 #define KERN_KDSETRTCDEC        15
+#define KERN_KDGETENTROPY       16
 
 /* KERN_PCSAMPLES types */
 #define KERN_PCDISABLE		1
@@ -324,6 +329,21 @@ void sysctl_unregister_oid(struct sysctl_oid *oidp);
 #define KERN_PCREADBUF		6
 #define KERN_PCSETREG           7
 #define KERN_PCCOMM             8
+
+/* KERN_PANICINFO types */
+#define	KERN_PANICINFO_MAXSIZE	1	/* quad: panic UI image size limit */
+#define	KERN_PANICINFO_IMAGE16	2	/* string: path to the panic UI (16 bit) */
+#define	KERN_PANICINFO_IMAGE32	3	/* string: path to the panic UI (32 bit) */
+
+/*
+ * KERN_SYSV identifiers
+ */
+#define KSYSV_SHMMAX		1	/* int: max shared memory segment size (bytes) */
+#define	KSYSV_SHMMIN		2	/* int: min shared memory segment size (bytes) */
+#define	KSYSV_SHMMNI		3	/* int: max number of shared memory identifiers */
+#define	KSYSV_SHMSEG		4	/* int: max shared memory segments per process */
+#define	KSYSV_SHMALL		5	/* int: max amount of shared memory (pages) */
+
 
 #define CTL_KERN_NAMES { \
 	{ 0, 0 }, \
@@ -353,7 +373,7 @@ void sysctl_unregister_oid(struct sysctl_oid *oidp);
 	{ "kdebug", CTLTYPE_INT }, \
 	{ "update", CTLTYPE_INT }, \
 	{ "osreldate", CTLTYPE_INT }, \
-        { "ntp_pll", CTLTYPE_NODE }, \
+	{ "ntp_pll", CTLTYPE_NODE }, \
 	{ "bootfile", CTLTYPE_STRING }, \
 	{ "maxfilesperproc", CTLTYPE_INT }, \
 	{ "maxprocperuid", CTLTYPE_INT }, \
@@ -363,14 +383,19 @@ void sysctl_unregister_oid(struct sysctl_oid *oidp);
 	{ "ps_strings", CTLTYPE_INT }, \
 	{ "usrstack", CTLTYPE_INT }, \
 	{ "logsigexit", CTLTYPE_INT }, \
-        { "symfile",CTLTYPE_STRING },\
+	{ "symfile",CTLTYPE_STRING },\
+	{ "procargs",CTLTYPE_STRUCT },\
+	{ "pcsamples",CTLTYPE_STRUCT },\
+	{ "netboot", CTLTYPE_INT }, \
+	{ "panicinfo", CTLTYPE_NODE }, \
+	{ "sysv", CTLTYPE_NODE } \
 }
 
 /*
  * CTL_VFS identifiers
  */
 #define CTL_VFS_NAMES { \
-	{ "vfsconf", CTLTYPE_STRUCT }, \
+	{ "vfsconf", CTLTYPE_STRUCT } \
 }
 
 /* 
@@ -387,6 +412,7 @@ void sysctl_unregister_oid(struct sysctl_oid *oidp);
 /* 
  * KERN_PROC subtype ops return arrays of augmented proc structures:
  */
+#ifdef __APPLE_API_UNSTABLE
 struct kinfo_proc {
 	struct	extern_proc kp_proc;			/* proc structure */
 	struct	eproc {
@@ -394,16 +420,7 @@ struct kinfo_proc {
 		struct	session *e_sess;	/* session pointer */
 		struct	pcred e_pcred;		/* process credentials */
 		struct	ucred e_ucred;		/* current credentials */
-#ifdef sparc
-		struct {
-			segsz_t	vm_rssize;	/* resident set size */
-			segsz_t	vm_tsize;	/* text size */
-			segsz_t	vm_dsize;	/* data size */
-			segsz_t	vm_ssize;	/* stack size */
-		} e_vm;
-#else
-		struct	vmspace e_vm;		/* address space */
-#endif
+		struct	 vmspace e_vm;		/* address space */
 		pid_t	e_ppid;			/* parent process id */
 		pid_t	e_pgid;			/* process group id */
 		short	e_jobc;			/* job control counter */
@@ -419,10 +436,12 @@ struct kinfo_proc {
 		long	e_flag;
 #define	EPROC_CTTY	0x01	/* controlling tty vnode active */
 #define	EPROC_SLEADER	0x02	/* session leader */
-		char	e_login[MAXLOGNAME];	/* setlogin() name */
+#define	COMAPT_MAXLOGNAME	12
+		char	e_login[COMAPT_MAXLOGNAME];	/* short setlogin() name */
 		long	e_spare[4];
 	} kp_eproc;
 };
+#endif /* __APPLE_API_UNSTABLE */
 
 /*
  * KERN_IPC identifiers
@@ -448,7 +467,7 @@ struct kinfo_proc {
 #define	CTL_VM_NAMES { \
 	{ 0, 0 }, \
 	{ "vmmeter", CTLTYPE_STRUCT }, \
-	{ "loadavg", CTLTYPE_STRUCT }, \
+	{ "loadavg", CTLTYPE_STRUCT } \
 }
 
 /*
@@ -501,7 +520,7 @@ struct kinfo_proc {
 	{ "l2settings", CTLTYPE_INT }, \
 	{ "l2cachesize", CTLTYPE_INT }, \
 	{ "l3settings", CTLTYPE_INT }, \
-	{ "l3cachesize", CTLTYPE_INT }, \
+	{ "l3cachesize", CTLTYPE_INT } \
 }
 
 /*
@@ -550,7 +569,7 @@ struct kinfo_proc {
 	{ "posix2_sw_dev", CTLTYPE_INT }, \
 	{ "posix2_upe", CTLTYPE_INT }, \
 	{ "stream_max", CTLTYPE_INT }, \
-	{ "tzname_max", CTLTYPE_INT }, \
+	{ "tzname_max", CTLTYPE_INT } \
 }
 
 
@@ -566,6 +585,7 @@ struct kinfo_proc {
 #define	CTL_DEBUG_MAXID		20
 
 #ifdef	KERNEL
+#ifdef __APPLE_API_UNSTABLE
 
 extern struct sysctl_oid_list sysctl__children;
 SYSCTL_DECL(_kern);
@@ -630,11 +650,14 @@ typedef int (sysctlfn)
 
 int sysctl_int __P((void *, size_t *, void *, size_t, int *));
 int sysctl_rdint __P((void *, size_t *, void *, int));
+int sysctl_quad __P((void *, size_t *, void *, size_t, quad_t *));
+int sysctl_rdquad __P((void *, size_t *, void *, quad_t));
 int sysctl_string __P((void *, size_t *, void *, size_t, char *, int));
 int sysctl_rdstring __P((void *, size_t *, void *, char *));
 int sysctl_rdstruct __P((void *, size_t *, void *, void *, int));
 void fill_eproc __P((struct proc *, struct eproc *));
 
+#endif /* __APPLE_API_UNSTABLE */
 #else	/* !KERNEL */
 #include <sys/cdefs.h>
 

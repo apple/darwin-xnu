@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2002 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -55,5 +55,13 @@
  *	@(#)mfsiom.h	8.1 (Berkeley) 6/11/93
  */
 
+#ifndef __UFS_MFS_MFSIOM_H__
+#define __UFS_MFS_MFSIOM_H__
+
+#include <sys/appleapiopts.h>
+
+#ifdef __APPLE_API_OBSOLETE
 #define MFS_MAPREG	(MAXPHYS/NBPG + 2) /* Kernel mapping pte's */
 #define MFS_MAPSIZE	10		   /* Size of alloc map for pte's */
+#endif /* __APPLE_API_OBSOLETE */
+#endif /* __UFS_MFS_MFSIOM_H__ */

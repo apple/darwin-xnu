@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2002 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -63,6 +63,9 @@
 #ifndef _NFS_NQNFS_H_
 #define _NFS_NQNFS_H_
 
+#include <sys/appleapiopts.h>
+
+#ifdef __APPLE_API_PRIVATE
 /*
  * Definitions for NQNFS (Not Quite NFS) cache consistency protocol.
  */
@@ -237,4 +240,5 @@ int	nqnfsrv_getlease __P((struct nfsrv_descript *, struct nfssvc_sock *, struct 
 int	nqnfsrv_vacated __P((struct nfsrv_descript *, struct nfssvc_sock *, struct proc *, struct mbuf **));
 #endif
 
-#endif
+#endif /* __APPLE_API_PRIVATE */
+#endif /* _NFS_NQNFS_H_ */

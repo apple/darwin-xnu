@@ -70,6 +70,7 @@
 #include <kern/lock.h>
 #include <kern/macro_help.h>
 #include <kern/timer_call.h>
+#include <kern/ast.h>
 
 #if	STAT_TIME
 
@@ -87,8 +88,8 @@
 
 #endif	/* STAT_TIME */
 
-#define	NRQS		128				/* 128 run queues per cpu */
-#define NRQBM		(NRQS / 32)		/* number of run queue bit maps */
+#define	NRQS		128				/* 128 levels per run queue */
+#define NRQBM		(NRQS / 32)		/* number of words per bit map */
 
 #define MAXPRI		(NRQS-1)
 #define MINPRI		IDLEPRI			/* lowest legal priority schedulable */
@@ -164,6 +165,9 @@
 #define MINPRI_SYSTEM		(MAXPRI_SYSTEM - (NRQS / 8) + 1)	/* 64 */
 
 #define MAXPRI_USER			(MINPRI_SYSTEM - 1)					/* 63 */
+#define BASEPRI_CONTROL		(BASEPRI_DEFAULT + 17)				/* 48 */
+#define BASEPRI_FOREGROUND	(BASEPRI_DEFAULT + 16)				/* 47 */
+#define BASEPRI_BACKGROUND	(BASEPRI_DEFAULT + 15)				/* 46 */
 #define BASEPRI_DEFAULT		(MAXPRI_USER - (NRQS / 4))			/* 31 */
 #define MINPRI_USER			MINPRI								/*  0 */
 
@@ -179,7 +183,8 @@ struct run_queue {
 	decl_simple_lock_data(,lock)			/* one lock for all queues */
 	int					bitmap[NRQBM];		/* run queue bitmap array */
 	int					highq;				/* highest runnable queue */
-	int					count;				/* # of runnable threads */
+	int					urgency;			/* level of preemption urgency */
+	int					count;				/* # of threads in queue */
 };
 
 typedef struct run_queue	*run_queue_t;
@@ -187,6 +192,7 @@ typedef struct run_queue	*run_queue_t;
 
 #define first_quantum(processor)	((processor)->slice_quanta > 0)
 
+/* Invoked at splsched by a thread on itself */
 #define csw_needed(thread, processor) (										\
 	((thread)->state & TH_SUSP)										||		\
 	(first_quantum(processor)?												\
@@ -210,6 +216,11 @@ extern void		compute_mach_factor(void);
 extern void		thread_quantum_expire(
 					timer_call_param_t	processor,
 					timer_call_param_t	thread);
+
+/* Called at splsched by a thread on itself */
+extern ast_t	csw_check(
+					thread_t		thread,
+					processor_t		processor);
 
 extern uint32_t	std_quantum, min_std_quantum;
 extern uint32_t	std_quantum_us;
@@ -242,10 +253,9 @@ extern unsigned	sched_tick;
 /*
  *	thread_timer_delta macro takes care of both thread timers.
  */
-
 #define thread_timer_delta(thread)  						\
 MACRO_BEGIN													\
-	register unsigned	delta;								\
+	register uint32_t	delta;								\
 															\
 	delta = 0;												\
 	TIMER_DELTA((thread)->system_timer,						\

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2002 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -56,7 +56,7 @@
 #define	CLSIZELOG2	0
 
 #define STACKSIZE 4			/* pages in kernel stack */
-#define	UPAGES	(USIZE+STACKSIZE)	/* total pages in u-area */
+#define	UPAGES	0	/* total pages in u-area */
 					/* red zone is beyond this */
 
 /*

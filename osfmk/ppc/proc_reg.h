@@ -118,19 +118,6 @@
 #define SEG_REG_INVALID 0x0000
 #define KERNEL_SEG_REG0_VALUE 0x20000000 /* T=0,Ks=0,Ku=1 PPC_SID_KERNEL=0*/
 
-/* the following segment register values are only used prior to the probe,
- * they map the various device areas 1-1 on 601 machines
- */
-#define KERNEL_SEG_REG5_VALUE 0xa7F00005 /* T=1,Ks=0,Ku=1,BUID=0x7F,SR=5 */
-#define KERNEL_SEG_REG8_VALUE 0xa7F00008 /* T=1,Ks=0,Ku=1,BUID=0x7F,SR=8 */
-#define KERNEL_SEG_REG9_VALUE 0xa7F00009 /* T=1,Ks=0,Ku=1,BUID=0x7F,SR=9 */
-#define KERNEL_SEG_REG10_VALUE 0xa7F0000a /* T=1,Ks=0,Ku=1,BUID=0x7F,SR=a */
-#define KERNEL_SEG_REG11_VALUE 0xa7F0000b /* T=1,Ks=0,Ku=1,BUID=0x7F,SR=b */
-#define KERNEL_SEG_REG12_VALUE 0xa7F0000c /* T=1,Ks=0,Ku=1,BUID=0x7F,SR=c */
-#define KERNEL_SEG_REG13_VALUE 0xa7F0000d /* T=1,Ks=0,Ku=1,BUID=0x7F,SR=d */
-#define KERNEL_SEG_REG14_VALUE 0xa7F0000e /* T=1,Ks=0,Ku=1,BUID=0x7F,SR=e */
-#define KERNEL_SEG_REG15_VALUE 0xa7F0000f /* T=1,Ks=0,Ku=1,BUID=0x7F,SR=f */
-
 /* For SEG_REG_PROT we have T=0, Ks=0, Ku=1 */
 #define SEG_REG_PROT	0x20000000   /* seg regs should have these bits set */
 
@@ -198,9 +185,26 @@
 #define PTE1_CHANGED_BIT	24
 #define PTE0_HASH_ID_BIT	25
 
-#define PPC_HASHSIZE		2048	/* size of hash table */
-#define PPC_HASHSIZE_LOG2	11
-#define PPC_MIN_MPP		2	/* min # of mappings per phys page */
+#define PTE_NULL ((pte_t*) NULL) /* No pte found/associated with this */
+#define PTE_EMPTY 0x7fffffbf 	 /* Value in the pte0.word of a free pte */
+
+#define PTE_WIMG_CB_CACHED			0 	/* cached, writeback */
+#define PTE_WIMG_CB_CACHED_GUARDED		1 	/* cached, writeback, guarded */
+#define PTE_WIMG_CB_CACHED_COHERENT		2 	/* cached, writeback, coherent (default) */
+#define PTE_WIMG_CB_CACHED_COHERENT_GUARDED	3 	/* cached, writeback, coherent, guarded */
+#define PTE_WIMG_UNCACHED			4 	/* uncached */
+#define PTE_WIMG_UNCACHED_GUARDED		5	/* uncached, guarded */
+#define PTE_WIMG_UNCACHED_COHERENT		6	/* uncached, coherentt */
+#define PTE_WIMG_UNCACHED_COHERENT_GUARDED	7	/* uncached, coherent, guarded */
+#define PTE_WIMG_WT_CACHED			8 	/* cached, writethru */
+#define PTE_WIMG_WT_CACHED_GUARDED		9 	/* cached, writethru, guarded */
+#define PTE_WIMG_WT_CACHED_COHERENT		10 	/* cached, writethru, coherent */
+#define PTE_WIMG_WT_CACHED_COHERENT_GUARDED	11 	/* cached, writethru, coherent, guarded */
+
+#define PTE_WIMG_DEFAULT 	PTE_WIMG_CB_CACHED_COHERENT
+#define PTE_WIMG_IO		PTE_WIMG_UNCACHED_COHERENT_GUARDED
+
+
 
 #ifndef ASSEMBLER
 #ifdef __GNUC__
@@ -328,25 +332,6 @@ typedef struct pte_t {
 	pte0_t pte0;
 	pte1_t pte1;
 } pte_t;
-
-#define PTE_NULL ((pte_t*) NULL) /* No pte found/associated with this */
-#define PTE_EMPTY 0x7fffffbf 	 /* Value in the pte0.word of a free pte */
-
-#define PTE_WIMG_CB_CACHED			0 	/* cached, writeback */
-#define PTE_WIMG_CB_CACHED_GUARDED		1 	/* cached, writeback, guarded */
-#define PTE_WIMG_CB_CACHED_COHERENT		2 	/* cached, writeback, coherent (default) */
-#define PTE_WIMG_CB_CACHED_COHERENT_GUARDED	3 	/* cached, writeback, coherent, guarded */
-#define PTE_WIMG_UNCACHED			4 	/* uncached */
-#define PTE_WIMG_UNCACHED_GUARDED		5	/* uncached, guarded */
-#define PTE_WIMG_UNCACHED_COHERENT		6	/* uncached, coherentt */
-#define PTE_WIMG_UNCACHED_COHERENT_GUARDED	7	/* uncached, coherent, guarded */
-#define PTE_WIMG_WT_CACHED			8 	/* cached, writethru */
-#define PTE_WIMG_WT_CACHED_GUARDED		9 	/* cached, writethru, guarded */
-#define PTE_WIMG_WT_CACHED_COHERENT		10 	/* cached, writethru, coherent */
-#define PTE_WIMG_WT_CACHED_COHERENT_GUARDED	11 	/* cached, writethru, coherent, guarded */
-
-#define PTE_WIMG_DEFAULT 	PTE_WIMG_CB_CACHED_COHERENT
-#define PTE_WIMG_IO		PTE_WIMG_UNCACHED_COHERENT_GUARDED
 
 /*
  * A virtual address is decoded into various parts when looking for its PTE

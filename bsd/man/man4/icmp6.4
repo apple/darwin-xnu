@@ -1,0 +1,267 @@
+.\" Copyright (C) 1999 WIDE Project.
+.\" All rights reserved.
+.\"
+.\" Redistribution and use in source and binary forms, with or without
+.\" modification, are permitted provided that the following conditions
+.\" are met:
+.\" 1. Redistributions of source code must retain the above copyright
+.\"    notice, this list of conditions and the following disclaimer.
+.\" 2. Redistributions in binary form must reproduce the above copyright
+.\"    notice, this list of conditions and the following disclaimer in the
+.\"    documentation and/or other materials provided with the distribution.
+.\" 3. Neither the name of the project nor the names of its contributors
+.\"    may be used to endorse or promote products derived from this software
+.\"    without specific prior written permission.
+.\"
+.\" THIS SOFTWARE IS PROVIDED BY THE PROJECT AND CONTRIBUTORS ``AS IS'' AND
+.\" ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+.\" IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
+.\" ARE DISCLAIMED.  IN NO EVENT SHALL THE PROJECT OR CONTRIBUTORS BE LIABLE
+.\" FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
+.\" DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS
+.\" OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION)
+.\" HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT
+.\" LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
+.\" OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
+.\" SUCH DAMAGE.
+.\"
+.\" Copyright (c) 1986, 1991, 1993
+.\"	The Regents of the University of California.  All rights reserved.
+.\"
+.\" Redistribution and use in source and binary forms, with or without
+.\" modification, are permitted provided that the following conditions
+.\" are met:
+.\" 1. Redistributions of source code must retain the above copyright
+.\"    notice, this list of conditions and the following disclaimer.
+.\" 2. Redistributions in binary form must reproduce the above copyright
+.\"    notice, this list of conditions and the following disclaimer in the
+.\"    documentation and/or other materials provided with the distribution.
+.\" 3. All advertising materials mentioning features or use of this software
+.\"    must display the following acknowledgement:
+.\"	This product includes software developed by the University of
+.\"	California, Berkeley and its contributors.
+.\" 4. Neither the name of the University nor the names of its contributors
+.\"    may be used to endorse or promote products derived from this software
+.\"    without specific prior written permission.
+.\"
+.\" THIS SOFTWARE IS PROVIDED BY THE REGENTS AND CONTRIBUTORS ``AS IS'' AND
+.\" ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+.\" IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
+.\" ARE DISCLAIMED.  IN NO EVENT SHALL THE REGENTS OR CONTRIBUTORS BE LIABLE
+.\" FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
+.\" DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS
+.\" OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION)
+.\" HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT
+.\" LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
+.\" OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
+.\" SUCH DAMAGE.
+.\"
+.\"	KAME $Id: icmp6.4,v 1.2 2002/04/17 00:18:23 lindak Exp $
+.\" $FreeBSD: src/share/man/man4/icmp6.4,v 1.1.2.7 2001/12/17 11:30:12 ru Exp $
+.\"
+.Dd March 13, 2000
+.Dt ICMP6 4
+.Os
+.\"
+.Sh NAME
+.Nm icmp6
+.Nd Internet Control Message Protocol for IPv6
+.\"
+.Sh SYNOPSIS
+.In sys/types.h
+.In sys/socket.h
+.In netinet/in.h
+.In netinet/icmp6.h
+.Ft int
+.Fn socket AF_INET6 SOCK_RAW proto
+.\"
+.Sh DESCRIPTION
+.Tn ICMPv6
+is the error and control message protocol used
+by
+.Tn IPv6
+and the Internet protocol family.
+It may be accessed through a
+.Dq raw socket
+for network monitoring and diagnostic functions.
+The
+.Fa proto
+parameter to the socket call to create an
+.Tn ICMPv6
+socket is obtained from
+.Xr getprotobyname 3 ,
+or you can use
+.Dv IPPROTO_ICMPV6 .
+.Tn ICMPv6
+sockets are connectionless, and are normally used with the
+.Xr sendto 2
+and
+.Xr recvfrom 2
+calls, though the
+.Xr connect 2
+call may also be used to fix the destination for future packets
+(in which case the
+.Xr read 2
+or
+.Xr recv 2
+and
+.Xr write 2
+or
+.Xr send 2
+system calls may be used).
+.Pp
+Outgoing packets automatically have an
+.Tn IPv6
+header prepended to them
+(based on the destination address).
+.Tn ICMPv6
+pseudo header checksum field
+.Pq Li icmp6_cksum
+will be filled automatically by the kernel.
+Incoming packets are received without the
+.Tn IPv6
+header nor IPv6 extension headers.
+Notice that this behavior is opposite from
+.Tn IPv4
+raw sockets and.
+.Tn ICMPv4
+sockets.
+.Pp
+.Ss ICMPv6 type/code filter
+Each
+.Tn ICMPv6
+raw socket has an associated filter whose datatype is defined as
+.Li struct icmp6_filter ;
+.Pp
+This structure, along with the macros and constants defined later in
+this section, are defined as a result of including the
+.Aq Li netinet/icmp6.h
+header.
+.Pp
+The current filter is fetched and stored using
+.Xr getsockopt 2
+and
+.Xr setsockopt 2
+with a level of
+.Dv IPPROTO_ICMPV6
+and an option name of
+.Dv ICMP6_FILTER .
+.Pp
+Six macros operate on an icmp6_filter structure:
+.\" is "Fn" legal for macros?
+.Bl -item -offset indent
+.It
+.Ft void
+.Fn ICMP6_FILTER_SETPASSALL "struct icmp6_filter *filterp"
+.It
+.Ft void
+.Fn ICMP6_FILTER_SETBLOCKALL "struct icmp6_filter *filterp"
+.It
+.Ft void
+.Fn ICMP6_FILTER_SETPASS "int type" "struct icmp6_filter *filterp"
+.It
+.Ft void
+.Fn ICMP6_FILTER_SETBLOCK "int type" "struct icmp6_filter *filterp"
+.It
+.Ft int
+.Fn ICMP6_FILTER_WILLPASS "int type" "const struct icmp6_filter *filterp"
+.It
+.Ft int
+.Fn ICMP6_FILTER_WILLBLOCK "int type" "const struct icmp6_filter *filterp"
+.El
+.Pp
+The first argument to the last four macros
+(an integer)
+is an
+.Tn ICMPv6
+message type, between 0 and 255.
+The pointer argument to all six
+macros is a pointer to a filter that is modified by the first four
+macros examined by the last two macros.
+.Pp
+The first two macros,
+.Dv SETPASSALL
+and
+.Dv SETBLOCKALL ,
+let us specify that
+all
+.Tn ICMPv6
+messages are passed to the application or that all
+.Tn ICMPv6
+messages are blocked from being passed to the application.
+.Pp
+The next two macros,
+.Dv SETPASS
+and
+.Dv SETBLOCK ,
+let us specify that
+messages of a given
+.Tn ICMPv6
+type should be passed to the application
+or not passed to the application
+(blocked).
+.Pp
+The final two macros,
+.Dv WILLPASS
+and
+.Dv WILLBLOCK ,
+return true or false
+depending whether the specified message type is passed to the
+application or blocked from being passed to the application by the
+filter pointed to by the second argument.
+.Pp
+When an
+.Tn ICMPv6
+raw socket is created, it will by default pass all
+.Tn ICMPv6
+message types to the application.
+.Pp
+For further discussions see RFC2292.
+.\"
+.Sh ERRORS
+A socket operation may fail with one of the following errors returned:
+.Bl -tag -width Er
+.It Bq Er EISCONN
+when trying to establish a connection on a socket which
+already has one, or when trying to send a datagram with the destination
+address specified and the socket is already connected;
+.It Bq Er ENOTCONN
+when trying to send a datagram, but
+no destination address is specified, and the socket hasn't been
+connected;
+.It Bq Er ENOBUFS
+when the system runs out of memory for
+an internal data structure;
+.It Bq Er EADDRNOTAVAIL
+when an attempt is made to create a
+socket with a network address for which no network interface exists.
+.El
+.\"
+.Sh SEE ALSO
+.Xr recv 2 ,
+.Xr send 2 ,
+.Xr inet6 4 ,
+.Xr intro 4 ,
+.Xr ip6 4
+.Rs
+.%A W. Stevens
+.%A M. Thomas
+.%R RFC
+.%N 2292
+.%D February 1998
+.%T "Advanced Sockets API for IPv6"
+.Re
+.Rs
+.%A A. Conta
+.%A S. Deering
+.%R RFC
+.%N 2463
+.%D December 1998
+.%T "Internet Control Message Protocol (ICMPv6) for the Internet Protocol Version 6 (IPv6) Specification"
+.Re
+.\"
+.Sh HISTORY
+The implementation is based on KAME stack
+(which is descendant of WIDE hydrangea IPv6 stack kit).
+.Pp
+Part of the document was shamelessly copied from RFC2292.

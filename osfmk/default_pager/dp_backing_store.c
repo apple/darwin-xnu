@@ -82,8 +82,8 @@
 #define ALLOC_STRIDE  (1024 * 1024 * 1024)
 int physical_transfer_cluster_count = 0;
 
-#define VM_SUPER_CLUSTER	0x20000
-#define VM_SUPER_PAGES          32
+#define VM_SUPER_CLUSTER	0x40000
+#define VM_SUPER_PAGES          64
 
 /*
  * 0 means no shift to pages, so == 1 page/cluster. 1 would mean
@@ -191,9 +191,7 @@ get_read_buffer()
 			  return  dpt_array[i];
 			}
 		}
-		assert_wait(&dpt_array, THREAD_UNINT);
-		DPT_UNLOCK(dpt_lock);
-		thread_block((void(*)(void))0);
+		DPT_SLEEP(dpt_lock, &dpt_array, THREAD_UNINT);
 	}
 }
 
@@ -650,12 +648,7 @@ ps_delete(
 
 
 	while(backing_store_release_trigger_disable != 0) {
-		assert_wait((event_t) 
-			&backing_store_release_trigger_disable, 
-			THREAD_UNINT);
-		VSL_UNLOCK();
-		thread_block((void (*)(void)) 0);
-		VSL_LOCK();
+		VSL_SLEEP(&backing_store_release_trigger_disable, THREAD_UNINT);
 	}
 
 	/* we will choose instead to hold a send right */
@@ -701,22 +694,14 @@ ps_delete(
 				UPL_NO_SYNC | UPL_CLEAN_IN_PLACE
 					    | UPL_SET_INTERNAL);
 			if(error == KERN_SUCCESS) {
-#ifndef ubc_sync_working
-				upl_commit(upl, NULL);
-				upl_deallocate(upl);
-				error = ps_vstruct_transfer_from_segment(
-						vs, ps, transfer_object);
-#else
 				error = ps_vstruct_transfer_from_segment(
 							vs, ps, upl);
 				upl_commit(upl, NULL);
 				upl_deallocate(upl);
-#endif
-				vm_object_deallocate(transfer_object);
 			} else {
-				vm_object_deallocate(transfer_object);
 				error = KERN_FAILURE;
 			}
+			vm_object_deallocate(transfer_object);
 		}
 		if(error) {
 			VS_LOCK(vs);
@@ -734,12 +719,8 @@ ps_delete(
 		VSL_LOCK(); 
 
 		while(backing_store_release_trigger_disable != 0) {
-			assert_wait((event_t) 
-				&backing_store_release_trigger_disable, 
-				THREAD_UNINT);
-			VSL_UNLOCK();
-			thread_block((void (*)(void)) 0);
-			VSL_LOCK();
+			VSL_SLEEP(&backing_store_release_trigger_disable,
+				  THREAD_UNINT);
 		}
 
 		next_vs = (vstruct_t) queue_next(&(vs->vs_links));
@@ -1594,7 +1575,7 @@ ps_deallocate_cluster(
 			    &backing_store_release_trigger_disable, 
 			    THREAD_UNINT);
 			VSL_UNLOCK();
-			thread_block((void (*)(void)) 0);
+			thread_block(THREAD_CONTINUE_NULL);
 		} else {
 			VSL_UNLOCK();
 		}
@@ -2288,7 +2269,7 @@ ps_read_device(
 				 (mach_msg_type_number_t *) &bytes_read);
 		if(kr == MIG_NO_REPLY) { 
 			assert_wait(&vsa->vsa_lock, THREAD_UNINT);
-			thread_block((void(*)(void))0);
+			thread_block(THREAD_CONTINUE_NULL);
 
 			dev_buffer = vsa->vsa_addr;
 			bytes_read = (unsigned int)vsa->vsa_size;
@@ -2561,9 +2542,9 @@ pvs_cluster_read(
 	 */
 
 #if	USE_PRECIOUS
-	request_flags = UPL_NO_SYNC |  UPL_CLEAN_IN_PLACE | UPL_PRECIOUS;
+	request_flags = UPL_NO_SYNC |  UPL_CLEAN_IN_PLACE | UPL_PRECIOUS | UPL_RET_ONLY_ABSENT;
 #else
-	request_flags = UPL_NO_SYNC |  UPL_CLEAN_IN_PLACE ;
+	request_flags = UPL_NO_SYNC |  UPL_CLEAN_IN_PLACE | UPL_RET_ONLY_ABSENT;
 #endif
 	while (cnt && (error == KERN_SUCCESS)) {
 	        int     ps_info_valid;
@@ -3004,8 +2985,8 @@ vs_cluster_write(
 						transfer_size -= seg_size;
 						upl_offset += seg_size;
 					}
-					must_abort = 0;
 				}
+				must_abort = 0;
 			}
 			if (must_abort) {
 				boolean_t empty = FALSE;
@@ -3191,11 +3172,7 @@ kern_return_t
 ps_vstruct_transfer_from_segment(
 	vstruct_t	 vs,
 	paging_segment_t segment,
-#ifndef ubc_sync_working
-	vm_object_t	transfer_object)
-#else
 	upl_t		 upl)
-#endif
 {
 	struct vs_map	*vsmap;
 	struct vs_map	old_vsmap;
@@ -3246,11 +3223,7 @@ vs_changed:
 					(vm_page_size * (j << vs->vs_clshift))
 					+ clmap_off, 
 					vm_page_size << vs->vs_clshift,
-#ifndef ubc_sync_working
-					transfer_object)
-#else
 					upl)
-#endif
 						!= KERN_SUCCESS) {
 				   VS_LOCK(vs);
 				   vs->vs_xfer_pending = FALSE;
@@ -3292,11 +3265,7 @@ vs_changed:
 			if(vs_cluster_transfer(vs, 
 				vm_page_size * (j << vs->vs_clshift), 
 				vm_page_size << vs->vs_clshift,
-#ifndef ubc_sync_working
-				transfer_object) != KERN_SUCCESS) {
-#else
 				upl) != KERN_SUCCESS) {
-#endif
 			   VS_LOCK(vs);
 			   vs->vs_xfer_pending = FALSE;
 			   VS_UNLOCK(vs);
@@ -3356,11 +3325,7 @@ vs_cluster_transfer(
 	vstruct_t	vs,
 	vm_offset_t	offset,
 	vm_size_t	cnt,
-#ifndef ubc_sync_working
-	vm_object_t	transfer_object)
-#else
 	upl_t		upl)
-#endif
 {
 	vm_offset_t		actual_offset;
 	paging_segment_t	ps;
@@ -3376,10 +3341,6 @@ vs_cluster_transfer(
 	struct	vs_map		original_read_vsmap;
 	struct	vs_map		write_vsmap;
 	upl_t			sync_upl;
-#ifndef ubc_sync_working
-	upl_t			upl;
-#endif
-
 	vm_offset_t	ioaddr;
 
 	/* vs_cluster_transfer reads in the pages of a cluster and
@@ -3483,30 +3444,15 @@ vs_cluster_transfer(
 
 		if(ps->ps_segtype == PS_PARTITION) {
 /*
-			NEED TO BE WITH SYNC & NO COMMIT
+			NEED TO ISSUE WITH SYNC & NO COMMIT
 			error = ps_read_device(ps, actual_offset, &buffer,
 				       size, &residual, flags);
 */
 		} else {
-#ifndef ubc_sync_working
-			int page_list_count = 0;
-
-			error = vm_object_upl_request(transfer_object, 
-(vm_object_offset_t) (actual_offset & ((vm_page_size << vs->vs_clshift) - 1)),
-					size, &upl, NULL, &page_list_count,
-					UPL_NO_SYNC | UPL_CLEAN_IN_PLACE 
-						    | UPL_SET_INTERNAL);
-			if (error == KERN_SUCCESS) {
-				error = ps_read_file(ps, upl, (vm_offset_t) 0, actual_offset, 
-							size, &residual, 0);
-			}
-					
-#else
-			/* NEED TO BE WITH SYNC & NO COMMIT & NO RDAHEAD*/
+			/* NEED TO ISSUE WITH SYNC & NO COMMIT */
 			error = ps_read_file(ps, upl, (vm_offset_t) 0, actual_offset, 
 					size, &residual, 
-					(UPL_IOSYNC | UPL_NOCOMMIT | UPL_NORDAHEAD));
-#endif
+					(UPL_IOSYNC | UPL_NOCOMMIT));
 		}
 
 		read_vsmap = *vsmap_ptr;
@@ -3535,20 +3481,8 @@ vs_cluster_transfer(
 			/* the vm_map_copy_page_discard call              */
 			*vsmap_ptr = write_vsmap;
 
-#ifndef ubc_sync_working
-			error = vm_object_upl_request(transfer_object, 
-					(vm_object_offset_t)
-     					(actual_offset & ((vm_page_size << vs->vs_clshift) - 1)),
-					 size, &upl, NULL, &page_list_count,
-					 UPL_NO_SYNC | UPL_CLEAN_IN_PLACE | UPL_SET_INTERNAL);
-			if(vs_cluster_write(vs, upl, offset, 
-					size, TRUE, 0) != KERN_SUCCESS) {
-				upl_commit(upl, NULL);
-				upl_deallocate(upl);
-#else
 			if(vs_cluster_write(vs, upl, offset, 
 					size, TRUE, UPL_IOSYNC | UPL_NOCOMMIT ) != KERN_SUCCESS) {
-#endif
 			 	error = KERN_FAILURE;
 				if(!(VSM_ISCLR(*vsmap_ptr))) {
 					/* unmap the new backing store object */

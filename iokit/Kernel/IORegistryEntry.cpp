@@ -61,7 +61,7 @@ enum {
 
 class IORegistryPlane : public OSObject {
 
-    friend IORegistryEntry;
+    friend class IORegistryEntry;
 
     OSDeclareAbstractStructors(IORegistryPlane)
 
@@ -165,8 +165,9 @@ s_lock_write(
 		if (l->can_sleep && l->want_write) {
 			l->waiting = TRUE;
 			thread_sleep_simple_lock((event_t) l,
-					simple_lock_addr(l->interlock), FALSE);
-			simple_lock(&l->interlock);
+					simple_lock_addr(l->interlock),
+					THREAD_UNINT);
+			/* interlock relocked */
 		}
 	}
 	l->want_write = TRUE;
@@ -187,8 +188,9 @@ s_lock_write(
 		if (l->can_sleep && (l->read_count != 0 || l->want_upgrade)) {
 			l->waiting = TRUE;
 			thread_sleep_simple_lock((event_t) l,
-				simple_lock_addr(l->interlock), FALSE);
-			simple_lock(&l->interlock);
+				simple_lock_addr(l->interlock),
+				THREAD_UNINT);
+			/* interlock relocked */
 		}
 	}
 
@@ -257,8 +259,9 @@ s_lock_read(
                     (l->want_upgrade || ((0 == l->read_count) && l->want_write ))) {
 			l->waiting = TRUE;
 			thread_sleep_simple_lock((event_t) l,
-					simple_lock_addr(l->interlock), FALSE);
-			simple_lock(&l->interlock);
+					simple_lock_addr(l->interlock),
+					THREAD_UNINT);
+			/* interlock relocked */
 		}
 	}
 
@@ -399,9 +402,11 @@ bool IORegistryEntry::init( OSDictionary * dict = 0 )
 
     if( dict) {
 	dict->retain();
+	if( fPropertyTable)
+	    fPropertyTable->release();
 	fPropertyTable = dict;
 
-    } else {
+    } else if( !fPropertyTable) {
         fPropertyTable = OSDictionary::withCapacity( kIORegCapacityIncrement );
 	if( fPropertyTable)
             fPropertyTable->setCapacityIncrement( kIORegCapacityIncrement );
@@ -411,9 +416,11 @@ bool IORegistryEntry::init( OSDictionary * dict = 0 )
         return( false);
 
 #ifdef IOREGSPLITTABLES
-    fRegistryTable = OSDictionary::withCapacity( kIORegCapacityIncrement );
-    if( fRegistryTable)
-        fRegistryTable->setCapacityIncrement( kIORegCapacityIncrement );
+    if( !fRegistryTable) {
+	fRegistryTable = OSDictionary::withCapacity( kIORegCapacityIncrement );
+	if( fRegistryTable)
+	    fRegistryTable->setCapacityIncrement( kIORegCapacityIncrement );
+    }
 
     if( (prop = OSDynamicCast( OSString, getProperty( gIONameKey)))) {
         OSSymbol * sym = (OSSymbol *)OSSymbol::withString( prop);
@@ -513,7 +520,7 @@ void IORegistryEntry::setPropertyTable( OSDictionary * dict )
 
 /* Wrappers to synchronize property table */
 
-#define wrap1(func,type,constant)					\
+#define wrap1(func, type, constant)					\
 OSObject *								\
 IORegistryEntry::func ## Property( type * aKey) constant		\
 {									\
@@ -526,14 +533,14 @@ IORegistryEntry::func ## Property( type * aKey) constant		\
     return( obj );							\
 }
 
-#define wrap2(type,constant)						\
+#define wrap2(type, constant)						\
 OSObject *								\
 IORegistryEntry::copyProperty( type * aKey) constant			\
 {									\
     OSObject *	obj;							\
 									\
     PLOCK;								\
-    obj = getPropertyTable()->getObject( aKey );			\
+    obj = getProperty( aKey );						\
     if( obj)								\
         obj->retain();							\
     PUNLOCK;								\
@@ -1234,6 +1241,7 @@ IORegistryEntry * IORegistryEntry::fromPath(
                         IORegistryEntry * 	fromEntry = 0 )
 {
     IORegistryEntry *	where = 0;
+    IORegistryEntry *	aliasEntry = 0;
     IORegistryEntry *	next;
     const char *	alias;
     const char *	end;
@@ -1263,8 +1271,9 @@ IORegistryEntry * IORegistryEntry::fromPath(
     if( (alias = dealiasPath( &end, plane))) {
         if( length)
             len = *length;
-        where = IORegistryEntry::fromPath( alias, plane,
+        aliasEntry = IORegistryEntry::fromPath( alias, plane,
                                     opath, &len, fromEntry );
+        where = aliasEntry;
         if( where)
             path = end;
         else
@@ -1312,6 +1321,8 @@ IORegistryEntry * IORegistryEntry::fromPath(
 
     if( where)
 	where->retain();
+    if( aliasEntry)
+        aliasEntry->release();
 
     UNLOCK;
 
@@ -2065,3 +2076,7 @@ OSMetaClassDefineReservedUnused(IORegistryEntry, 28);
 OSMetaClassDefineReservedUnused(IORegistryEntry, 29);
 OSMetaClassDefineReservedUnused(IORegistryEntry, 30);
 OSMetaClassDefineReservedUnused(IORegistryEntry, 31);
+
+/* inline function implementation */
+OSDictionary * IORegistryEntry::getPropertyTable( void ) const
+{ return(fPropertyTable); }

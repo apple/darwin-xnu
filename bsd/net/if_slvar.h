@@ -57,11 +57,17 @@
 
 #ifndef _NET_IF_SLVAR_H_
 #define _NET_IF_SLVAR_H_
+#include <sys/appleapiopts.h>
+
+#ifndef DONT_WARN_OBSOLETE
+#warning if_slvar.h is not used by the darwin kernel
+#endif
 
 #include <sys/callout.h>
 #include <sys/mbuf.h>
 #include <net/slcompress.h>
 
+#ifdef __APPLE_API_PRIVATE
 
 /*
  * Definitions for SLIP interface data structures
@@ -105,5 +111,5 @@ struct sl_softc {
 #define	SC_NOICMP	IFF_LINK1	/* suppress ICMP traffic */
 #define	SC_AUTOCOMP	IFF_LINK2	/* auto-enable TCP compression */
 
-
+#endif /* __APPLE_API_PRIVATE */
 #endif

@@ -188,7 +188,7 @@
 
 /*#endif*/
 
-#define PMAP_ENTER(pmap, virtual_address, page, protection, wired) \
+#define PMAP_ENTER(pmap, virtual_address, page, protection, flags, wired) \
 	MACRO_BEGIN					\
 	vm_prot_t __prot__ =				\
 		(protection) & ~(page)->page_lock;	\
@@ -201,6 +201,7 @@
 		(virtual_address),			\
 		(page)->phys_addr,			\
 		__prot__,				\
+		flags,					\
 		(wired)					\
 	 );						\
 	MACRO_END

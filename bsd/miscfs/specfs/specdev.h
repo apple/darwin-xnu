@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2002 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -58,6 +58,9 @@
 #ifndef _MISCFS_SPECFS_SPECDEV_H_
 #define _MISCFS_SPECFS_SPECDEV_H_
 
+#include  <sys/appleapiopts.h>
+
+#ifdef __APPLE_API_PRIVATE
 #include <vfs/vfs_support.h>
 
 /*
@@ -160,4 +163,5 @@ int spec_blktooff __P((struct  vop_blktooff_args *));
 int spec_offtoblk __P((struct  vop_offtoblk_args *));
 int spec_cmap __P((struct  vop_cmap_args *));
 
+#endif /* __APPLE_API_PRIVATE */
 #endif /* _MISCFS_SPECFS_SPECDEV_H_ */

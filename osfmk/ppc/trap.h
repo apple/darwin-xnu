@@ -65,33 +65,33 @@
 
 #include <mach/thread_status.h>
 #include <mach/boolean.h>
+#include <mach/kern_return.h>
 #include <ppc/thread.h>
 
 extern void			doexception(int exc, int code, int sub);
 
 extern void			thread_exception_return(void);
 
-extern boolean_t 		alignment(unsigned long dsisr,
-					  unsigned long dar,
-					  struct ppc_saved_state *ssp);
-
-extern struct ppc_saved_state*	trap(int trapno,
-				     struct ppc_saved_state *ss,
+extern struct savearea*	trap(int trapno,
+				     struct savearea *ss,
 				     unsigned int dsisr,
 				     unsigned int dar);
 
-extern struct ppc_saved_state* interrupt(int intno,
-					 struct ppc_saved_state *ss,
+typedef kern_return_t (*perfTrap)(int trapno, struct savearea *ss, 
+	unsigned int dsisr, unsigned int dar);
+
+extern perfTrap perfTrapHook;
+
+extern struct savearea* interrupt(int intno,
+					 struct savearea *ss,
 					 unsigned int dsisr,
 					 unsigned int dar);
 
 extern int			syscall_error(int exception,
 					      int code,
 					      int subcode,
-					      struct ppc_saved_state *ss);
+					      struct savearea *ss);
 
-
-extern int			procitab(unsigned, void (*)(int), int);
 
 #endif	/* ASSEMBLER */
 

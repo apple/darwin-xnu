@@ -62,6 +62,7 @@ public:
     virtual IOReturn setAggressiveness ( unsigned long, unsigned long );
     virtual IOReturn youAreRoot ( void );
     virtual IOReturn sleepSystem ( void );
+    virtual IOReturn setProperties ( OSObject * );
     IOReturn shutdownSystem ( void );
     IOReturn restartSystem ( void );
     virtual IOReturn receivePowerNotification (UInt32 msg);
@@ -71,7 +72,12 @@ public:
     virtual void handleSleepTimerExpiration ( void );
     void stopIgnoringClamshellEventsDuringWakeup ( void );
     void wakeFromDoze( void );
+    void broadcast_it (unsigned long, unsigned long );
     void publishFeature( const char *feature );
+
+    // Override of these methods for logging purposes.
+    virtual IOReturn changePowerStateTo ( unsigned long ordinal );
+    virtual IOReturn changePowerStateToPriv ( unsigned long ordinal );
 
 private:
 

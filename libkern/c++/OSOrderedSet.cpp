@@ -148,7 +148,7 @@ void OSOrderedSet::flushCollection()
     haveUpdated();
 
     for (i = 0; i < count; i++)
-        array[i].obj->release();
+        array[i].obj->taggedRelease(OSTypeID(OSCollection));
 
     count = 0;
 }
@@ -176,7 +176,7 @@ bool OSOrderedSet::setObject(unsigned int index, const OSMetaClassBase *anObject
     }
     array[index].obj = anObject;
 //    array[index].pri = pri;
-    anObject->retain();
+    anObject->taggedRetain(OSTypeID(OSCollection));
     count++;
 
     return true;
@@ -219,7 +219,7 @@ void OSOrderedSet::removeObject(const OSMetaClassBase *anObject)
         if( deleted)
             array[i-1] = array[i];
         else if( (array[i].obj == anObject)) {
-            array[i].obj->release();
+            array[i].obj->taggedRelease(OSTypeID(OSCollection));
             deleted = true;
         }
     }

@@ -27,6 +27,7 @@
 
 __BEGIN_DECLS
 void ipc_port_release_send(ipc_port_t port);
+#include <vm/pmap.h>
 __END_DECLS
 
 extern "C" vm_map_t IOPageableMapForAddress( vm_address_t address );
@@ -82,8 +83,11 @@ bool IOBufferMemoryDescriptor::initWithRanges(
 bool IOBufferMemoryDescriptor::initWithOptions(
                                IOOptionBits options,
                                vm_size_t    capacity,
-                               vm_offset_t  alignment)
+                               vm_offset_t  alignment,
+			       task_t	    inTask)
 {
+    vm_map_t map = 0;
+
     if (!capacity)
         return false;
 
@@ -96,30 +100,66 @@ bool IOBufferMemoryDescriptor::initWithOptions(
     if ((options & kIOMemorySharingTypeMask) && (alignment < page_size))
         alignment = page_size;
 
+    if ((inTask != kernel_task) && !(options & kIOMemoryPageable))
+        return false;
+
     _alignment = alignment;
     if (options & kIOMemoryPageable)
-        /* Allocate some kernel address space. */
-        _buffer = IOMallocPageable(capacity, alignment);
-    /* Allocate a wired-down buffer inside kernel space. */
-    else if (options & kIOMemoryPhysicallyContiguous)
-        _buffer = IOMallocContiguous(capacity, alignment, 0);
-    else if (alignment > 1)
-        _buffer = IOMallocAligned(capacity, alignment);
-    else
-        _buffer = IOMalloc(capacity);
+    {
+	if (inTask == kernel_task)
+	{
+	    /* Allocate some kernel address space. */
+	    _buffer = IOMallocPageable(capacity, alignment);
+	    if (_buffer)
+		map = IOPageableMapForAddress((vm_address_t) _buffer);
+	}
+	else
+	{
+	    kern_return_t kr;
+
+	    if( !reserved) {
+		reserved = IONew( ExpansionData, 1 );
+		if( !reserved)
+		    return( false );
+	    }
+	    map = get_task_map(inTask);
+	    vm_map_reference(map);
+	    reserved->map = map;
+	    kr = vm_allocate( map, (vm_address_t *) &_buffer, round_page(capacity),
+				VM_FLAGS_ANYWHERE | VM_MAKE_TAG(VM_MEMORY_IOKIT) );
+	    if( KERN_SUCCESS != kr)
+		return( false );
+
+	    // we have to make sure that these pages don't get copied on fork.
+	    kr = vm_inherit( map, (vm_address_t) _buffer, round_page(capacity), VM_INHERIT_NONE);
+	    if( KERN_SUCCESS != kr)
+		return( false );
+	}
+    }
+    else 
+    {
+	/* Allocate a wired-down buffer inside kernel space. */
+	if (options & kIOMemoryPhysicallyContiguous)
+	    _buffer = IOMallocContiguous(capacity, alignment, 0);
+	else if (alignment > 1)
+	    _buffer = IOMallocAligned(capacity, alignment);
+	else
+	    _buffer = IOMalloc(capacity);
+    }
 
     if (!_buffer)
-        return false;
+	return false;
 
     _singleRange.v.address = (vm_address_t) _buffer;
     _singleRange.v.length  = capacity;
 
     if (!super::initWithRanges(&_singleRange.v,	1,
                                 (IODirection) (options & kIOMemoryDirectionMask),
-                                kernel_task, true))
+                                inTask, true))
 	return false;
 
-    if (options & kIOMemoryPageable) {
+    if (options & kIOMemoryPageable)
+    {
         _flags |= kIOMemoryRequiresWire;
 
         kern_return_t kr;
@@ -128,7 +168,7 @@ bool IOBufferMemoryDescriptor::initWithOptions(
 
         // must create the entry before any pages are allocated
         if( 0 == sharedMem) {
-            kr = mach_make_memory_entry( IOPageableMapForAddress( _ranges.v[0].address ),
+            kr = mach_make_memory_entry( map,
                         &size, _ranges.v[0].address,
                         VM_PROT_READ | VM_PROT_WRITE, &sharedMem,
                         NULL );
@@ -140,8 +180,9 @@ bool IOBufferMemoryDescriptor::initWithOptions(
                 sharedMem = 0;
             _memEntry = (void *) sharedMem;
         }
-        
-    } else {
+    }
+    else
+    {
         /* Precompute virtual-to-physical page mappings. */
         vm_address_t inBuffer = (vm_address_t) _buffer;
         _physSegCount = atop(trunc_page(inBuffer + capacity - 1) -
@@ -163,6 +204,29 @@ bool IOBufferMemoryDescriptor::initWithOptions(
     return true;
 }
 
+IOBufferMemoryDescriptor * IOBufferMemoryDescriptor::inTaskWithOptions(
+					    task_t       inTask,
+                                            IOOptionBits options,
+                                            vm_size_t    capacity,
+                                            vm_offset_t  alignment = 1)
+{
+    IOBufferMemoryDescriptor *me = new IOBufferMemoryDescriptor;
+    
+    if (me && !me->initWithOptions(options, capacity, alignment, inTask)) {
+	me->release();
+	me = 0;
+    }
+    return me;
+}
+
+bool IOBufferMemoryDescriptor::initWithOptions(
+                               IOOptionBits options,
+                               vm_size_t    capacity,
+                               vm_offset_t  alignment)
+{
+    return( initWithOptions(options, capacity, alignment, kernel_task) );
+}
+
 IOBufferMemoryDescriptor * IOBufferMemoryDescriptor::withOptions(
                                             IOOptionBits options,
                                             vm_size_t    capacity,
@@ -170,7 +234,7 @@ IOBufferMemoryDescriptor * IOBufferMemoryDescriptor::withOptions(
 {
     IOBufferMemoryDescriptor *me = new IOBufferMemoryDescriptor;
     
-    if (me && !me->initWithOptions(options, capacity, alignment)) {
+    if (me && !me->initWithOptions(options, capacity, alignment, kernel_task)) {
 	me->release();
 	me = 0;
     }
@@ -252,18 +316,32 @@ void IOBufferMemoryDescriptor::free()
     IOOptionBits options   = _options;
     vm_size_t    size	   = _capacity;
     void *       buffer	   = _buffer;
+    vm_map_t	 map	   = 0;
     vm_offset_t  alignment = _alignment;
 
     if (_physAddrs)
         IODelete(_physAddrs, IOPhysicalAddress, _physSegCount);
 
+    if (reserved)
+    {
+	map = reserved->map;
+        IODelete( reserved, ExpansionData, 1 );
+    }
+
     /* super::free may unwire - deallocate buffer afterwards */
     super::free();
 
-    if (buffer) {
+    if (buffer)
+    {
         if (options & kIOMemoryPageable)
-            IOFreePageable(buffer, size);
-        else {
+	{
+	    if (map)
+		vm_deallocate(map, (vm_address_t) buffer, round_page(size));
+	    else
+	       IOFreePageable(buffer, size);
+	}
+        else
+	{
             if (options & kIOMemoryPhysicallyContiguous)
                 IOFreeContiguous(buffer, size);
             else if (alignment > 1)
@@ -272,6 +350,8 @@ void IOBufferMemoryDescriptor::free()
                 IOFree(buffer, size);
         }
     }
+    if (map)
+	vm_map_deallocate(map);
 }
 
 /*
@@ -407,7 +487,7 @@ IOBufferMemoryDescriptor::getPhysicalSegment(IOByteCount offset,
     return physAddr;
 }
 
-OSMetaClassDefineReservedUnused(IOBufferMemoryDescriptor, 0);
+OSMetaClassDefineReservedUsed(IOBufferMemoryDescriptor, 0);
 OSMetaClassDefineReservedUnused(IOBufferMemoryDescriptor, 1);
 OSMetaClassDefineReservedUnused(IOBufferMemoryDescriptor, 2);
 OSMetaClassDefineReservedUnused(IOBufferMemoryDescriptor, 3);

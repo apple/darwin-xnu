@@ -1,0 +1,136 @@
+.\"	$NetBSD: copy.9,v 1.2 1996/01/09 03:23:04 thorpej Exp $
+.\"
+.\" Copyright (c) 1996 Jason R. Thorpe.
+.\" All rights reserved.
+.\"
+.\" This code is derived from software contributed by Kenneth Stailey.
+.\"
+.\" Redistribution and use in source and binary forms, with or without
+.\" modification, are permitted provided that the following conditions
+.\" are met:
+.\" 1. Redistributions of source code must retain the above copyright
+.\"    notice, this list of conditions and the following disclaimer.
+.\" 2. Redistributions in binary form must reproduce the above copyright
+.\"    notice, this list of conditions and the following disclaimer in the
+.\"    documentation and/or other materials provided with the distribution.
+.\" 3. All advertising materials mentioning features or use of this software
+.\"    must display the following acknowledgement:
+.\"	This product includes software developed for the NetBSD Project
+.\"	by Jason R. Thorpe.
+.\" 4. The name of the author may not be used to endorse or promote products
+.\"    derived from this software without specific prior written permission.
+.\"
+.\" THIS SOFTWARE IS PROVIDED BY THE AUTHOR ``AS IS'' AND ANY EXPRESS OR
+.\" IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES
+.\" OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED.
+.\" IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY DIRECT, INDIRECT,
+.\" INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING,
+.\" BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES;
+.\" LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED
+.\" AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
+.\" OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
+.\" OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
+.\" SUCH DAMAGE.
+.\"
+.\" $FreeBSD: src/share/man/man9/copy.9,v 1.6.2.5 2001/12/17 11:30:18 ru Exp $
+.\"
+.Dd January 7, 1996
+.Dt COPY 9
+.Os
+.Sh NAME
+.Nm copy ,
+.Nm copyin ,
+.Nm copyout ,
+.Nm copystr ,
+.Nm copyinstr
+.Nd kernel copy functions
+.Sh SYNOPSIS
+.In sys/types.h
+.In sys/systm.h
+.Ft int
+.Fn copyin "const void *uaddr" "void *kaddr" "size_t len"
+.Ft int
+.Fn copyout "const void *kaddr" "void *uaddr" "size_t len"
+.Ft int
+.Fn copystr "const void *kfaddr" "void *kdaddr" "size_t len" "size_t *done"
+.Ft int
+.Fn copyinstr "const void *uaddr" "void *kaddr" "size_t len" "size_t *done"
+.\" .Ft int
+.\" .Fn copyoutstr "const void *kaddr" "void *uaddr" "size_t len" "size_t *done"
+.Sh DESCRIPTION
+The
+.Nm
+functions are designed to copy contiguous data from one address
+to another.  All but
+.Fn copystr
+copy data from user-space to kernel-space or vice-versa.
+.Pp
+The
+.Nm
+routines provide the following functionality:
+.Bl -tag -width "copyoutstr()"
+.It Fn copyin
+Copies
+.Pa len
+bytes of data from the user-space address
+.Pa uaddr
+to the kernel-space address
+.Pa kaddr .
+.It Fn copyout
+Copies
+.Pa len
+bytes of data from the kernel-space address
+.Pa kaddr
+to the user-space address
+.Pa uaddr .
+.It Fn copystr
+Copies a NUL-terminated string, at most
+.Pa len
+bytes long, from kernel-space address
+.Pa kfaddr
+to kernel-space address
+.Pa kdaddr .
+The number of bytes actually copied, including the terminating
+NUL, is returned in
+.Pa *done .
+.It Fn copyinstr
+Copies a NUL-terminated string, at most
+.Pa len
+bytes long, from user-space address
+.Pa uaddr
+to kernel-space address
+.Pa kaddr .
+The number of bytes actually copied, including the terminating
+NUL, is returned in
+.Pa *done .
+.\" .It Fn copyoutstr
+.\" Copies a NUL-terminated string, at most
+.\" bytes long, from kernel-space address
+.\" .Pa kaddr
+.\" to user-space address
+.\" .Pa uaddr .
+.\" The number of bytes actually copied, including the terminating
+.\" NUL, is returned in
+.\" .Pa *done .
+.El
+.Sh RETURN VALUES
+The
+.Nm
+functions return 0 on success or
+.Er EFAULT
+if a bad address is encountered.
+In addition, the
+.Fn copystr ,
+and
+.Fn copyinstr
+.\" .Fn copyinstr ,
+.\" and
+.\" .Fn copyoutstr
+functions return
+.Er ENAMETOOLONG
+if the string is longer than
+.Pa len
+bytes.
+.Sh SEE ALSO
+.Xr fetch 9 ,
+.Xr store 9

@@ -101,7 +101,6 @@
 */
 
 #include "../headers/BTreesPrivate.h"
-#include "../headers/HFSInstrumentation.h"
 
 
 
@@ -193,8 +192,6 @@ OSStatus	GetNode		(BTreeControlBlockPtr	 btreePtr,
 	GetBlockProcPtr		getNodeProc;
 	
 
-	LogStartTime(kTraceGetNode);
-
 	//€€ is nodeNum within proper range?
 	if( nodeNum >= btreePtr->totalNodes )
 	{
@@ -271,15 +268,11 @@ OSStatus	GetNode		(BTreeControlBlockPtr	 btreePtr,
 		}
 	}
 
-	LogEndTime(kTraceGetNode, noErr);
-
 	return noErr;
 
 ErrorExit:
 	nodePtr->buffer			= nil;
 	nodePtr->blockHeader	= nil;
-	
-	LogEndTime(kTraceGetNode, err);
 
 	return	err;
 }
@@ -364,9 +357,7 @@ OSStatus	ReleaseNode	(BTreeControlBlockPtr	 btreePtr,
 {
 	OSStatus			 err;
 	ReleaseBlockProcPtr	 releaseNodeProc;
-	
-	
-	LogStartTime(kTraceReleaseNode);
+
 
 	err = noErr;
 	
@@ -382,8 +373,6 @@ OSStatus	ReleaseNode	(BTreeControlBlockPtr	 btreePtr,
 
 	nodePtr->buffer			= nil;
 	nodePtr->blockHeader	= nil;
-	
-	LogEndTime(kTraceReleaseNode, err);
 
 	return err;
 }
@@ -411,8 +400,6 @@ OSStatus	TrashNode	(BTreeControlBlockPtr	 btreePtr,
 	OSStatus			 err;
 	ReleaseBlockProcPtr	 releaseNodeProc;
 	
-	
-	LogStartTime(kTraceReleaseNode);
 
 	err = noErr;
 	
@@ -429,8 +416,6 @@ OSStatus	TrashNode	(BTreeControlBlockPtr	 btreePtr,
 	nodePtr->buffer			= nil;
 	nodePtr->blockHeader	= nil;
 	
-	LogEndTime(kTraceReleaseNode, err);
-
 	return err;
 }
 
@@ -473,17 +458,12 @@ OSStatus	UpdateNode	(BTreeControlBlockPtr	 btreePtr,
 				(void) CheckNode (btreePtr, nodePtr->buffer);
 		}
 
-		LogStartTime(kTraceReleaseNode);
-
 		releaseNodeProc = btreePtr->releaseBlockProc;
 		err = releaseNodeProc (btreePtr->fileRefNum,
 							   nodePtr,
 							   flags | kMarkBlockDirty );
-							   
-		LogEndTime(kTraceReleaseNode, err);
-
-		M_ExitOnError (err);
 		++btreePtr->numUpdateNodes;
+		M_ExitOnError (err);
 	}
 	
 	nodePtr->buffer			= nil;
@@ -547,8 +527,8 @@ OSStatus	CheckNode	(BTreeControlBlockPtr	 btreePtr, NodeDescPtr	 node )
 		
 	//XXX can we calculate a more accurate minimum record size?
 	maxRecords = ( nodeSize - sizeof (BTNodeDescriptor) ) >> 3;
-	
-	if (node->numRecords > maxRecords)
+
+	if (node->numRecords == 0 || node->numRecords > maxRecords)
 		return fsBTInvalidNodeErr;
 
 	////////////////////////// check record offsets /////////////////////////////

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2002 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -59,12 +59,6 @@
  *
  *	from: @(#)sys_process.c	8.1 (Berkeley) 6/10/93
  */
-/*
- * HISTORY
- *
- *  10-Jun-97  Umesh Vaishampayan (umeshv@apple.com)
- *	Ported to PPC. Cleaned up the architecture specific code.
- */
 
 #include <machine/reg.h>
 #include <machine/psl.h>
@@ -90,7 +84,9 @@
 #define	CLR(t, f)	(t) &= ~(f)
 #define	ISSET(t, f)	((t) & (f))
 
-void psignal_lock __P((struct proc *, int, int, int));
+void psignal_lock __P((struct proc *, int, int));
+int isinferior __P((struct proc *, struct proc *));
+
 /*
  * sys-trace system call.
  */
@@ -100,6 +96,7 @@ struct ptrace_args {
 	caddr_t	addr;
 	int	data;
 };
+
 int
 ptrace(p, uap, retval)
 	struct proc *p;
@@ -110,7 +107,6 @@ ptrace(p, uap, retval)
 	vm_offset_t	start_addr, end_addr,
 			kern_addr, offset;
 	vm_size_t	size;
-	boolean_t	change_protection;
 	task_t		task;
 	thread_t	thread;
 	thread_act_t	th_act;
@@ -118,19 +114,20 @@ ptrace(p, uap, retval)
 	int		*locr0;
 	int error = 0;
 #if defined(ppc)
-	struct ppc_saved_state statep;
+	struct ppc_thread_state statep;
 #elif	defined(i386)
 	struct i386_saved_state statep;
 #else
 #error architecture not supported
 #endif
 	unsigned long state_count;
+	int tr_sigexc = 0;
 
 
         if (uap->req == PT_DENY_ATTACH) {
 	        if (ISSET(p->p_flag, P_TRACED)) {
 				exit1(p, W_EXITCODE(ENOTSUP, 0), retval);
-				/* drop funnel befewo we return */
+				/* drop funnel before we return */
 				thread_funnel_set(kernel_flock, FALSE);
 				thread_exception_return();
 				/* NOTREACHED */
@@ -138,6 +135,14 @@ ptrace(p, uap, retval)
 		SET(p->p_flag, P_NOATTACH);
 
 		return(0);
+	}
+
+	if (uap->req == PT_FORCEQUOTA) {
+		if (is_suser()) {
+			SET(t->p_flag, P_FORCEQUOTA);
+			return (0);
+		} else
+			return (EPERM);
 	}
 
 	/*
@@ -148,6 +153,13 @@ ptrace(p, uap, retval)
 		/* Non-attached case, our tracer is our parent. */
 		t->p_oppid = t->p_pptr->p_pid;
 		return(0);
+	}
+	if (uap->req == PT_SIGEXC) {
+		if (ISSET(p->p_flag, P_TRACED)) {
+			SET(p->p_flag, P_SIGEXC);
+			return(0);
+		} else
+			return(EINVAL);
 	}
 
 	/*
@@ -164,6 +176,10 @@ ptrace(p, uap, retval)
 		return (EPERM);
 
 	task = t->task;
+	if (uap->req == PT_ATTACHEXC) {
+		uap->req = PT_ATTACH;
+		tr_sigexc = 1;
+	}
 	if (uap->req == PT_ATTACH) {
 
 		/*
@@ -188,11 +204,17 @@ ptrace(p, uap, retval)
 		    (error = suser(p->p_ucred, &p->p_acflag)) != 0)
 			return (error);
 
+		if ((p->p_flag & P_TRACED) && isinferior(p, t))
+			return(EPERM);
+
 		if (ISSET(t->p_flag, P_NOATTACH)) {
 			psignal(p, SIGSEGV);
 			return (EBUSY);
 		}
 		SET(t->p_flag, P_TRACED);
+		if (tr_sigexc) 
+			SET(t->p_flag, P_SIGEXC);
+
 		t->p_oppid = t->p_pptr->p_pid;
 		if (t->p_pptr != p)
 			proc_reparent(t, p);
@@ -242,6 +264,7 @@ ptrace(p, uap, retval)
 
 		t->p_oppid = 0;
 		CLR(t->p_flag, P_TRACED);
+		CLR(t->p_flag, P_SIGEXC);
 		goto resume;
 		
 	case PT_KILL:
@@ -249,24 +272,24 @@ ptrace(p, uap, retval)
 		 *	Tell child process to kill itself after it
 		 *	is resumed by adding NSIG to p_cursig. [see issig]
 		 */
-		psignal_lock(t, SIGKILL, 0, 0);
+		psignal_lock(t, SIGKILL, 0);
 		goto resume;
 
 	case PT_STEP:			/* single step the child */
 	case PT_CONTINUE:		/* continue the child */
 		th_act = (thread_act_t)get_firstthread(task);
-		if (th_act == THREAD_NULL)
+		if (th_act == THR_ACT_NULL)
 			goto errorLabel;
 		ut = (uthread_t)get_bsdthread_info(th_act);
 		locr0 = ut->uu_ar0;
 #if defined(i386)
 		state_count = i386_NEW_THREAD_STATE_COUNT;
-		if (act_machine_get_state(th_act, i386_NEW_THREAD_STATE, &statep, &state_count)  != KERN_SUCCESS) {
+		if (thread_getstatus(th_act, i386_NEW_THREAD_STATE, &statep, &state_count)  != KERN_SUCCESS) {
 			goto errorLabel;
 		}	
 #elif defined(ppc)
 		state_count = PPC_THREAD_STATE_COUNT;
-		if (act_machine_get_state(th_act, PPC_THREAD_STATE, &statep, &state_count)  != KERN_SUCCESS) {
+		if (thread_getstatus(th_act, PPC_THREAD_STATE, &statep, &state_count)  != KERN_SUCCESS) {
 			goto errorLabel;
 		}	
 #else
@@ -282,7 +305,7 @@ ptrace(p, uap, retval)
 
 		statep.srr0 = (int)uap->addr;
 		state_count = PPC_THREAD_STATE_COUNT;
-		if (act_machine_set_state(th_act, PPC_THREAD_STATE, &statep, &state_count)  != KERN_SUCCESS) {
+		if (thread_setstatus(th_act, PPC_THREAD_STATE, &statep, &state_count)  != KERN_SUCCESS) {
 			goto errorLabel;
 		}	
 #undef 	ALIGNED
@@ -295,11 +318,11 @@ ptrace(p, uap, retval)
 			goto errorLabel;
 
 		if (uap->data != 0) {
-			psignal_lock(t, uap->data, 0, 1);
+			psignal_lock(t, uap->data, 0);
                 }
 #if defined(ppc)
 		state_count = PPC_THREAD_STATE_COUNT;
-		if (act_machine_get_state(th_act, PPC_THREAD_STATE, &statep, &state_count)  != KERN_SUCCESS) {
+		if (thread_getstatus(th_act, PPC_THREAD_STATE, &statep, &state_count)  != KERN_SUCCESS) {
 			goto errorLabel;
 		}	
 #endif
@@ -324,7 +347,7 @@ ptrace(p, uap, retval)
 		}
 #if defined (ppc)
 		state_count = PPC_THREAD_STATE_COUNT;
-		if (act_machine_set_state(th_act, PPC_THREAD_STATE, &statep, &state_count)  != KERN_SUCCESS) {
+		if (thread_setstatus(th_act, PPC_THREAD_STATE, &statep, &state_count)  != KERN_SUCCESS) {
 			goto errorLabel;
 		}	
 #endif
@@ -337,10 +360,28 @@ ptrace(p, uap, retval)
 		}
 		break;
 		
+	case PT_THUPDATE:  {
+		thread_act_t target_act;
+
+		if ((unsigned)uap->data >= NSIG)
+			goto errorLabel;
+		th_act = (thread_act_t)port_name_to_act((void *)uap->addr);
+		if (th_act == THR_ACT_NULL)
+			return (ESRCH);
+		ut = (uthread_t)get_bsdthread_info(th_act);
+		if (uap->data)
+			ut->uu_siglist |= sigmask(uap->data);
+		t->p_xstat = uap->data;
+		t->p_stat = SRUN;
+		act_deallocate(th_act);
+		return(0);
+		}
+		break;
+errorLabel:
 	default:
-	errorLabel:
 		return(EINVAL);
 	}
+
 	return(0);
 }
 

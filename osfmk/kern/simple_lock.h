@@ -120,7 +120,12 @@
  *	and use the portable lock package for everything else.
  */
 
-#ifdef MACH_KERNEL_PRIVATE
+#include <sys/appleapiopts.h>
+
+#ifdef	__APPLE_API_PRIVATE
+
+#ifdef	MACH_KERNEL_PRIVATE
+
 /*
  *	Mach always initializes locks, even those statically
  *	allocated.
@@ -141,10 +146,13 @@ extern void			hw_lock_unlock(hw_lock_t);
 extern unsigned int		hw_lock_to(hw_lock_t, unsigned int);
 extern unsigned int		hw_lock_try(hw_lock_t);
 extern unsigned int		hw_lock_held(hw_lock_t);
-#endif /* MACH_KERNEL_PRIVATE */
+
+#endif	/* MACH_KERNEL_PRIVATE */
+
+#endif	/* __APPLE_API_PRIVATE */
 
 /*
- * Machine dependent atomic ops.  Probably should be in their own header.
+ * Machine dependent ops.
  */
 extern unsigned int		hw_lock_bit(unsigned int *, unsigned int, unsigned int);
 extern unsigned int		hw_cpu_sync(unsigned int *, unsigned int);
@@ -152,11 +160,28 @@ extern unsigned int		hw_cpu_wcng(unsigned int *, unsigned int, unsigned int);
 extern unsigned int		hw_lock_mbits(unsigned int *, unsigned int, unsigned int,
 	unsigned int, unsigned int);
 void				hw_unlock_bit(unsigned int *, unsigned int);
-extern int			hw_atomic_add(int *area, int inc);
-extern int			hw_atomic_sub(int *area, int dec);
-extern int			hw_atomic_or(int *area, int val);
-extern int			hw_atomic_and(int *area, int mask);
-extern unsigned int 		hw_compare_and_store(unsigned int oldValue, unsigned int newValue, unsigned int *area);
+
+extern uint32_t		hw_atomic_add(
+						uint32_t	*dest,
+						uint32_t	delt);
+
+extern uint32_t		hw_atomic_sub(
+						uint32_t	*dest,
+						uint32_t	delt);
+
+extern uint32_t		hw_atomic_or(
+						uint32_t	*dest,
+						uint32_t	mask);
+
+extern uint32_t		hw_atomic_and(
+						uint32_t	*dest,
+						uint32_t	mask);
+
+extern uint32_t		hw_compare_and_store(
+						uint32_t	oldval,
+						uint32_t	newval,
+						uint32_t	*dest);
+
 extern void			hw_queue_atomic(unsigned int *anchor, unsigned int *elem, unsigned int disp);
 extern void 			hw_queue_atomic_list(unsigned int *anchor, unsigned int *first, unsigned int *last, unsigned int disp);
 extern unsigned int 		*hw_dequeue_atomic(unsigned int *anchor, unsigned int disp);
@@ -248,7 +273,10 @@ extern void		usimple_lock_none_held(void);
  *	Otherwise, deadlock may result.
  */
 
-#if MACH_KERNEL_PRIVATE
+#ifdef	__APPLE_API_PRIVATE
+
+#ifdef	MACH_KERNEL_PRIVATE
+
 #include <cpus.h>
 #include <mach_ldebug.h>
 
@@ -288,7 +316,9 @@ extern	int	simple_lock_try_no_trace(simple_lock_t l);
 extern	void	simple_unlock_no_trace(simple_lock_t l);
 #endif	/* ETAP_LOCK_TRACE */
 
-#endif /* MACH_KERNEL_PRIVATE */
+#endif	/* MACH_KERNEL_PRIVATE */
+
+#endif	/* __APPLE_API_PRIVATE */
 
 /*
  * If we got to here and we still don't have simple_lock_init
@@ -302,6 +332,8 @@ extern	void	simple_unlock_no_trace(simple_lock_t l);
 #define simple_lock_try(l)	usimple_lock_try(l)
 #define simple_lock_addr(l)	(&(l))
 #define	__slock_held_func__(l)	usimple_lock_held(l)
+#define thread_sleep_simple_lock(l, e, i) \
+				thread_sleep_usimple_lock((l), (e), (i))
 #endif / * !defined(simple_lock_init) */
 
 #if	USLOCK_DEBUG
@@ -324,9 +356,12 @@ extern	void	simple_unlock_no_trace(simple_lock_t l);
  */
 #define	simple_lock_held(l)	__slock_held_func__(l)
 #define	check_simple_locks()	usimple_lock_none_held()
+
 #else	/* USLOCK_DEBUG */
+
 #define	simple_lock_held(l)
 #define	check_simple_locks()
+
 #endif	/* USLOCK_DEBUG */
 
 #endif /*!_SIMPLE_LOCK_H_*/

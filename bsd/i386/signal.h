@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2002 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -22,15 +22,14 @@
 /*
  * Copyright (c) 1992 NeXT Computer, Inc.
  *
- * HISTORY
- *
- * 8 April 1992 ? at NeXT
- *	Created.
  */
 
 #ifndef	_i386_SIGNAL_
 #define	_i386_SIGNAL_ 1
 
+#include <sys/appleapiopts.h>
+
+#ifdef __APPLE_API_OBSOLETE
 typedef int sig_atomic_t; 
 
 /*
@@ -61,4 +60,7 @@ struct	sigcontext {
     unsigned int	sc_gs;
 };
 
+#endif /* __APPLE_API_OBSOLETE */
+
 #endif	/* _i386_SIGNAL_ */
+

@@ -65,6 +65,9 @@ extern io_object_t iokit_lookup_connect_ref_current_task(io_object_t clientRef);
 
 extern ipc_port_t master_device_port;
 
+extern void iokit_retain_port( ipc_port_t port );
+extern void iokit_release_port( ipc_port_t port );
+
 #include <vm/vm_map.h>
 
 } /* extern "C" */
@@ -80,9 +83,12 @@ class IOMachPort : public OSObject
 public:
     OSObject *	object;
     ipc_port_t	port;
+    UInt32      mscount;
 
     static IOMachPort * portForObject( OSObject * obj,
 				ipc_kobject_type_t type );
+    static bool noMoreSendersForObject( OSObject * obj,
+				ipc_kobject_type_t type, mach_port_mscount_t * mscount );
     static void releasePortForObject( OSObject * obj,
 				ipc_kobject_type_t type );
     static OSDictionary * dictForType( ipc_kobject_type_t type );
@@ -136,8 +142,11 @@ IOMachPort * IOMachPort::portForObject ( OSObject * obj,
 	    continue;
 
         if( (inst = (IOMachPort *)
-                dict->getObject( (const OSSymbol *) obj )))
+                dict->getObject( (const OSSymbol *) obj ))) {
+	    inst->mscount++;
+	    inst->retain();
             continue;
+	}
 
         inst = new IOMachPort;
         if( inst && !inst->init()) {
@@ -149,7 +158,7 @@ IOMachPort * IOMachPort::portForObject ( OSObject * obj,
         if( inst->port) {
 	    // retains obj
             dict->setObject( (const OSSymbol *) obj, inst );
-            inst->release();	// one more to free port => release obj
+	    inst->mscount++;
 
         } else {
             inst->release();
@@ -161,6 +170,34 @@ IOMachPort * IOMachPort::portForObject ( OSObject * obj,
     IOUnlock( gIOObjectPortLock);
 
     return( inst );
+}
+
+bool IOMachPort::noMoreSendersForObject( OSObject * obj,
+				ipc_kobject_type_t type, mach_port_mscount_t * mscount )
+{
+    OSDictionary *	dict;
+    IOMachPort *	machPort;
+    bool		destroyed = true;
+
+    IOTakeLock( gIOObjectPortLock);
+
+    if( (dict = dictForType( type ))) {
+        obj->retain();
+
+	machPort = (IOMachPort *) dict->getObject( (const OSSymbol *) obj );
+	if( machPort) {
+	    destroyed = (machPort->mscount == *mscount);
+	    if( destroyed)
+		dict->removeObject( (const OSSymbol *) obj );
+	    else
+		*mscount = machPort->mscount;
+	}
+	obj->release();
+    }
+
+    IOUnlock( gIOObjectPortLock);
+
+    return( destroyed );
 }
 
 void IOMachPort::releasePortForObject( OSObject * obj,
@@ -222,19 +259,31 @@ ipc_port_t
 iokit_port_for_object( io_object_t obj, ipc_kobject_type_t type )
 {
     IOMachPort * machPort;
+    ipc_port_t	 port;
 
-    if( (machPort = IOMachPort::portForObject( obj, type )))
-	return( machPort->port );
-    else
-	return( 0 );
+    if( (machPort = IOMachPort::portForObject( obj, type ))) {
+
+	port = machPort->port;
+	if( port)
+	    iokit_retain_port( port );
+
+	machPort->release();
+
+    } else
+	port = NULL;
+
+    return( port );
 }
 
 kern_return_t
 iokit_client_died( io_object_t obj, ipc_port_t /* port */,
-			ipc_kobject_type_t type )
+			ipc_kobject_type_t type, mach_port_mscount_t * mscount )
 {
     IOUserClient *	client;
     IOMemoryMap *	map;
+
+    if( !IOMachPort::noMoreSendersForObject( obj, type, mscount ))
+	return( kIOReturnNotReady );
 
     if( (IKOT_IOKIT_CONNECT == type)
      && (client = OSDynamicCast( IOUserClient, obj )))
@@ -243,9 +292,7 @@ iokit_client_died( io_object_t obj, ipc_port_t /* port */,
      && (map = OSDynamicCast( IOMemoryMap, obj )))
 	map->taskDied();
 
-    IOMachPort::releasePortForObject( obj, type );
-
-    return( kIOReturnSuccess);
+    return( kIOReturnSuccess );
 }
 
 };	/* extern "C" */
@@ -351,7 +398,7 @@ bool IOUserNotification::init( mach_port_t port, natural_t type,
     pingMsg->msgHdr.msgh_remote_port	= port;
     pingMsg->msgHdr.msgh_bits 		= MACH_MSGH_BITS(
                                             MACH_MSG_TYPE_COPY_SEND,
-                                            MACH_MSG_TYPE_COPY_SEND );
+                                            MACH_MSG_TYPE_MAKE_SEND );
     pingMsg->msgHdr.msgh_size 		= msgSize;
     pingMsg->msgHdr.msgh_id		= kOSNotificationMessageID;
 
@@ -436,7 +483,7 @@ bool IOServiceUserNotification::handler( void * /* ref */,
 {
     unsigned int	count;
     kern_return_t	kr;
-    IOMachPort *	machPort;
+    ipc_port_t		port = NULL;
     bool		sendPing = false;
 
     IOTakeLock( lock );
@@ -452,12 +499,16 @@ bool IOServiceUserNotification::handler( void * /* ref */,
     IOUnlock( lock );
 
     if( sendPing) {
-        if( (0 == pingMsg->msgHdr.msgh_local_port)
-         && (machPort = IOMachPort::portForObject( this, IKOT_IOKIT_OBJECT ) ))
-            pingMsg->msgHdr.msgh_local_port = machPort->port;
+	if( (port = iokit_port_for_object( this, IKOT_IOKIT_OBJECT ) ))
+            pingMsg->msgHdr.msgh_local_port = port;
+	else
+            pingMsg->msgHdr.msgh_local_port = NULL;
 
         kr = mach_msg_send_from_kernel( &pingMsg->msgHdr,
                                         pingMsg->msgHdr.msgh_size);
+	if( port)
+	    iokit_release_port( port );
+
         if( KERN_SUCCESS != kr)
             IOLog("%s: mach_msg_send_from_kernel {%x}\n", __FILE__, kr );
     }
@@ -522,7 +573,7 @@ IOReturn IOServiceMessageUserNotification::handler( void * ref,
                                     void * messageArgument, vm_size_t argSize )
 {
     kern_return_t		kr;
-    IOMachPort *		machPort;
+    ipc_port_t 			port;
     IOServiceInterestContent * 	data = (IOServiceInterestContent *)
                                        pingMsg->notifyHeader.content;
 
@@ -540,13 +591,17 @@ IOReturn IOServiceMessageUserNotification::handler( void * ref,
         - sizeof( data->messageArgument)
         + argSize;
 
-    if( (machPort = IOMachPort::portForObject( provider, IKOT_IOKIT_OBJECT ) ))
-        pingMsg->msgHdr.msgh_local_port = machPort->port;
+    if( (port = iokit_port_for_object( provider, IKOT_IOKIT_OBJECT ) ))
+	pingMsg->msgHdr.msgh_local_port = port;
     else
-        pingMsg->msgHdr.msgh_local_port = MACH_PORT_NULL;
+	pingMsg->msgHdr.msgh_local_port = NULL;
     
     kr = mach_msg_send_from_kernel( &pingMsg->msgHdr,
                                     pingMsg->msgHdr.msgh_size);
+
+    if( port)
+	iokit_release_port( port );
+
     if( KERN_SUCCESS != kr)
         IOLog("%s: mach_msg_send_from_kernel {%x}\n", __FILE__, kr );
 
@@ -675,8 +730,8 @@ IOReturn IOUserClient::clientMemoryForType( UInt32 type,
 IOMemoryMap * IOUserClient::mapClientMemory( 
 	IOOptionBits		type,
 	task_t			task,
-	IOOptionBits		mapFlags = kIOMapAnywhere,
-	IOVirtualAddress	atAddress = 0 )
+	IOOptionBits		mapFlags,
+	IOVirtualAddress	atAddress )
 {
     IOReturn		err;
     IOOptionBits	options = 0;
@@ -1311,14 +1366,7 @@ kern_return_t is_io_registry_entry_get_property_bytes(
 
     CHECK( IORegistryEntry, registry_entry, entry );
 
-#if 0
-    // need virtual
     obj = entry->copyProperty(property_name);
-#else
-    obj = entry->getProperty(property_name);
-    if( obj)
-        obj->retain();
-#endif
     if( !obj)
         return( kIOReturnNoResources );
 
@@ -1374,14 +1422,7 @@ kern_return_t is_io_registry_entry_get_property(
 
     CHECK( IORegistryEntry, registry_entry, entry );
 
-#if 0
-    // need virtual
     obj = entry->copyProperty(property_name);
-#else
-    obj = entry->getProperty(property_name);
-    if( obj)
-        obj->retain();
-#endif
     if( !obj)
         return( kIOReturnNotFound );
 
@@ -1421,15 +1462,8 @@ kern_return_t is_io_registry_entry_get_property_recursively(
 
     CHECK( IORegistryEntry, registry_entry, entry );
 
-#if 0
     obj = entry->copyProperty( property_name,
                                IORegistryEntry::getPlane( plane ), options);
-#else
-    obj = entry->getProperty( property_name,
-                               IORegistryEntry::getPlane( plane ), options);
-    if( obj)
-        obj->retain();
-#endif
     if( !obj)
         return( kIOReturnNotFound );
 
@@ -2467,6 +2501,8 @@ kern_return_t is_io_catalog_send_data(
         case kIOCatalogRemoveKernelLinker: {
                 if (gIOCatalogue->removeKernelLinker() != KERN_SUCCESS) {
                     kr = kIOReturnError;
+                } else {
+                    kr = kIOReturnSuccess;
                 }
             }
             break;

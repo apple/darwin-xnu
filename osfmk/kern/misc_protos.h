@@ -117,6 +117,8 @@ extern integer_t sprintf(char *buf, const char *fmt, ...);
 
 extern void printf(const char *format, ...);
 
+extern void kdp_printf(const char *format, ...);
+
 extern void printf_init(void);
 
 extern void panic(const char *string, ...);
@@ -131,12 +133,23 @@ _doprnt(
 	va_list			*argp,
 	void			(*putc)(char),
 	int			radix);
+int
+__doprnt(
+	register const char	*fmt,
+	va_list			*argp,
+	void			(*putc)(int, void *),
+	void                    *arg,
+	int			radix);
 
 extern void safe_gets(
 	char	*str,
 	int	maxlen);
 
 extern void cnputcusr(char);
+
+extern void conslog_putc(char);
+
+extern void consdebug_putc(char);
 
 extern void cnputc(char);
 

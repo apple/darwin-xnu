@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2002 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -57,8 +57,11 @@
 #ifndef _UFS_UFSMOUNT_H_
 #define _UFS_UFSMOUNT_H_
 
-#include <ufs/ufs/quota.h>
+#include <sys/appleapiopts.h>
 
+#include <sys/quota.h>
+
+#ifdef __APPLE_API_UNSTABLE
 /*
  * Arguments to mount UFS-based filesystems
  */
@@ -66,7 +69,9 @@ struct ufs_args {
 	char	*fspec;			/* block special device to mount */
 	struct	export_args export;	/* network export information */
 };
+#endif /* __APPLE_API_UNSTABLE */
 
+#ifdef __APPLE_API_OBSOLETE
 #if MFS
 /*
  * Arguments to mount MFS
@@ -78,14 +83,12 @@ struct mfs_args {
 	u_long	size;			/* size of file system */
 };
 #endif /* MFS */
+#endif /* __APPLE_API_OBSOLETE */
 
 #ifdef KERNEL
-struct buf;
-struct inode;
-struct nameidata;
-struct timeval;
-struct ucred;
-struct uio;
+#ifdef __APPLE_API_PRIVATE
+struct fs;
+struct mount;
 struct vnode;
 struct netexport;
 
@@ -96,29 +99,18 @@ struct ufsmount {
 	struct	vnode *um_devvp;		/* block device mounted vnode */
 
 	union {					/* pointer to superblock */
-		struct	lfs *lfs;		/* LFS */
 		struct	fs *fs;			/* FFS */
 	} ufsmount_u;
 #define	um_fs	ufsmount_u.fs
-#define	um_lfs	ufsmount_u.lfs
 
-	struct	vnode *um_quotas[MAXQUOTAS];	/* pointer to quota files */
-	struct	ucred *um_cred[MAXQUOTAS];	/* quota file access cred */
+	struct	quotafile um_qfiles[MAXQUOTAS];	/* quota files */
 	u_long	um_nindir;			/* indirect ptrs per block */
 	u_long	um_bptrtodb;			/* indir ptr to disk block */
 	u_long	um_seqinc;			/* inc between seq blocks */
-	time_t	um_btime[MAXQUOTAS];		/* block quota time limit */
-	time_t	um_itime[MAXQUOTAS];		/* inode quota time limit */
-	char	um_qflags[MAXQUOTAS];		/* quota specific flags */
 	struct	netexport um_export;		/* export information */
 	int64_t	um_savedmaxfilesize;		/* XXX - limit maxfilesize */
 };
 
-/*
- * Flags describing the state of quotas.
- */
-#define	QTF_OPENING	0x01			/* Q_QUOTAON in progress */
-#define	QTF_CLOSING	0x02			/* Q_QUOTAOFF in progress */
 
 /* Convert mount ptr to ufsmount ptr. */
 #define VFSTOUFS(mp)	((struct ufsmount *)((mp)->mnt_data))
@@ -130,6 +122,7 @@ struct ufsmount {
 #define MNINDIR(ump)			((ump)->um_nindir)
 #define	blkptrtodb(ump, b)		((b) << (ump)->um_bptrtodb)
 #define	is_sequential(ump, a, b)	((b) == (a) + ump->um_seqinc)
+#endif /* __APPLE_API_PRIVATE */
 #endif /* KERNEL */
 
 #endif /* ! _UFS_UFSMOUNT_H_ */

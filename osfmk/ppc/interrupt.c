@@ -39,9 +39,9 @@
 #endif /* NCPUS > 1 */
 #include <sys/kdebug.h>
 
-struct ppc_saved_state * interrupt(
+struct savearea * interrupt(
         int type,
-        struct ppc_saved_state *ssp,
+        struct savearea *ssp,
 	unsigned int dsisr,
 	unsigned int dar)
 {
@@ -51,6 +51,14 @@ struct ppc_saved_state * interrupt(
 	thread_act_t	act;
 
 	disable_preemption();
+	
+#if 0
+	{
+		extern void fctx_text(void);
+		fctx_test();
+	}
+#endif
+	
 	
 	current_cpu = cpu_number();
 
@@ -100,7 +108,7 @@ struct ppc_saved_state * interrupt(
 			
 		case T_DECREMENTER:
 			KERNEL_DEBUG_CONSTANT(MACHDBG_CODE(DBG_MACH_EXCP_DECI, 0) | DBG_FUNC_NONE,
-				  isync_mfdec(), ((savearea *)ssp)->save_srr0, 0, 0, 0);
+				  isync_mfdec(), ssp->save_srr0, 0, 0, 0);
 	
 #if 0
 			if (pcsample_enable) {
@@ -128,7 +136,7 @@ struct ppc_saved_state * interrupt(
 			counter_always(c_incoming_interrupts++);
 	
 			KERNEL_DEBUG_CONSTANT(MACHDBG_CODE(DBG_MACH_EXCP_INTR, 0) | DBG_FUNC_START,
-			   current_cpu, ((savearea *)ssp)->save_srr0, 0, 0, 0);
+			   current_cpu, ssp->save_srr0, 0, 0, 0);
 	
 			per_proc_info[current_cpu].interrupt_handler(
 				per_proc_info[current_cpu].interrupt_target, 

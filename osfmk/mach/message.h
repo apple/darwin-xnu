@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2002 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -67,9 +67,13 @@
 /* static templates are slower and bigger */
 /* #define UseStaticTemplates 0 */
 
-#include <mach/kern_return.h>
-#include <mach/port.h>
+#include <sys/appleapiopts.h>
 
+#include <stdint.h>
+#include <mach/port.h>
+#include <mach/boolean.h>
+#include <mach/kern_return.h>
+#include <mach/machine/vm_types.h>
 
 /*
  *  The timeout mechanism uses mach_msg_timeout_t values,
@@ -337,18 +341,16 @@ typedef union
 
 #define	MACH_MSG_SIZE_MAX	((mach_msg_size_t) ~0)
 
+#ifdef __APPLE_API_OBSOLETE
 /*
  *  Compatibility definitions, for code written
  *  when there was a msgh_kind instead of msgh_seqno.
  */
-
 #define MACH_MSGH_KIND_NORMAL		0x00000000
-#if	0
-/* code using this is likely to break, so better not to have it defined */
 #define MACH_MSGH_KIND_NOTIFICATION	0x00000001
-#endif
 #define	msgh_kind			msgh_seqno
 #define mach_msg_kind_t			mach_port_seqno_t
+#endif  /* __APPLE_API_OBSOLETE */
 
 /*
  *  The msgt_number field specifies the number of data elements.
@@ -451,11 +453,14 @@ typedef integer_t mach_msg_option_t;
 #define MACH_RCV_TRAILER_ELEMENTS(x) (((x) & 0xf) << 24)  
 #define MACH_RCV_TRAILER_MASK 	     ((0xff << 24))
 
-extern mach_msg_trailer_size_t trailer_size[];
-
 #define GET_RCV_ELEMENTS(y) (((y) >> 24) & 0xf)
-#define REQUESTED_TRAILER_SIZE(y) (trailer_size[GET_RCV_ELEMENTS(y)])
-
+#define REQUESTED_TRAILER_SIZE(y) 				\
+	((mach_msg_trailer_size_t)				\
+	 ((GET_RCV_ELEMENTS(y) == MACH_RCV_TRAILER_NULL) ?	\
+	  sizeof(mach_msg_trailer_t) :				\
+	  ((GET_RCV_ELEMENTS(y) == MACH_RCV_TRAILER_SEQNO) ?	\
+	   sizeof(mach_msg_seqno_trailer_t) :			\
+	   sizeof(mach_msg_security_trailer_t))))
 /*
  *  Much code assumes that mach_msg_return_t == kern_return_t.
  *  This definition is useful for descriptive purposes.
@@ -514,7 +519,7 @@ typedef kern_return_t mach_msg_return_t;
 #define MACH_SEND_INVALID_TRAILER	0x10000011
 		/* The trailer to be sent does not match kernel format. */
 #define MACH_SEND_INVALID_RT_OOL_SIZE	0x10000015
-		/* The OOL buffer size is too large for RT behavior */
+		/* compatibility: no longer a returned error */
 
 #define MACH_RCV_IN_PROGRESS		0x10004001
 		/* Thread is waiting for receive.  (Internal use only.) */
@@ -527,7 +532,7 @@ typedef kern_return_t mach_msg_return_t;
 #define MACH_RCV_INTERRUPTED		0x10004005
 		/* Software interrupt. */
 #define MACH_RCV_PORT_CHANGED		0x10004006
-		/* Port moved into a set during the receive. */
+		/* compatibility: no longer a returned error */
 #define MACH_RCV_INVALID_NOTIFY		0x10004007
 		/* Bogus notify port argument. */
 #define MACH_RCV_INVALID_DATA		0x10004008
@@ -535,7 +540,7 @@ typedef kern_return_t mach_msg_return_t;
 #define MACH_RCV_PORT_DIED		0x10004009
 		/* Port/set was sent away/died during receive. */
 #define	MACH_RCV_IN_SET			0x1000400a
-		/* Port is a member of a port set. */
+		/* compatibility: no longer a returned error */
 #define	MACH_RCV_HEADER_ERROR		0x1000400b
 		/* Error receiving message header.  See special bits. */
 #define	MACH_RCV_BODY_ERROR		0x1000400c
@@ -549,6 +554,23 @@ typedef kern_return_t mach_msg_return_t;
 #define MACH_RCV_IN_PROGRESS_TIMED      0x10004011
                 /* Waiting for receive with timeout. (Internal use only.) */
 
+/*
+ *	Routine:	mach_msg_overwrite
+ *	Purpose:
+ *		Send and/or receive a message.  If the message operation
+ *		is interrupted, and the user did not request an indication
+ *		of that fact, then restart the appropriate parts of the
+ *		operation silently (trap version does not restart).
+ *
+ *		Distinct send and receive buffers may be specified.  If
+ *		no separate receive buffer is specified, the msg parameter
+ *		will be used for both send and receive operations.
+ *
+ *		In addition to a distinct receive buffer, that buffer may
+ *		already contain scatter control information to direct the
+ *		receiving of the message.
+ */
+#ifdef __APPLE_API_PRIVATE
 extern mach_msg_return_t	mach_msg_overwrite_trap(
 					mach_msg_header_t *msg,
 					mach_msg_option_t option,
@@ -559,6 +581,7 @@ extern mach_msg_return_t	mach_msg_overwrite_trap(
 					mach_port_name_t notify,
 					mach_msg_header_t *rcv_msg,
 					mach_msg_size_t rcv_limit);
+#endif /* __APPLE_API_PRIVATE */
 
 extern mach_msg_return_t	mach_msg_overwrite(
 					mach_msg_header_t *msg,
@@ -571,6 +594,15 @@ extern mach_msg_return_t	mach_msg_overwrite(
 					mach_msg_header_t *rcv_msg,
 					mach_msg_size_t rcv_limit);
 
+/*
+ *	Routine:	mach_msg
+ *	Purpose:
+ *		Send and/or receive a message.  If the message operation
+ *		is interrupted, and the user did not request an indication
+ *		of that fact, then restart the appropriate parts of the
+ *		operation silently (trap version does not restart).
+ */
+#ifdef __APPLE_API_PRIVATE 
 extern mach_msg_return_t	mach_msg_trap(
 					mach_msg_header_t *msg,
 					mach_msg_option_t option,
@@ -579,6 +611,7 @@ extern mach_msg_return_t	mach_msg_trap(
 					mach_port_name_t rcv_name,
 					mach_msg_timeout_t timeout,
 					mach_port_name_t notify);
+#endif /* __APPLE_API_PRIVATE */
 
 extern mach_msg_return_t	mach_msg(
 					mach_msg_header_t *msg,

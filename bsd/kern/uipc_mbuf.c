@@ -76,6 +76,11 @@
 #include <net/netisr.h>
 
 #include <kern/queue.h>
+#include <kern/kern_types.h>
+#include <kern/sched_prim.h>
+
+#define _MCLREF(p)       (++mclrefcnt[mtocl(p)])
+#define _MCLUNREF(p)     (--mclrefcnt[mtocl(p)] == 0)
 
 extern  kernel_pmap;    /* The kernel's pmap */
 
@@ -108,6 +113,52 @@ extern int dlil_input_thread_wakeup;
 extern int dlil_expand_mcl;
 extern int dlil_initialized;
 
+#if 0
+static int mfree_munge = 0;
+#if 0
+#define _MFREE_MUNGE(m) {                                               \
+    if (mfree_munge)                                                    \
+        {   int i;                                                      \
+            vm_offset_t *element = (vm_offset_t *)(m);                  \
+            for (i = 0;                                                 \
+                 i < sizeof(struct mbuf)/sizeof(vm_offset_t);           \
+                 i++)                                                   \
+                    (element)[i] = 0xdeadbeef;                          \
+        }                                                               \
+}
+#else
+void
+munge_mbuf(struct mbuf *m)
+{
+    int i;
+    vm_offset_t *element = (vm_offset_t *)(m);
+    for (i = 0;
+            i < sizeof(struct mbuf)/sizeof(vm_offset_t);
+            i++)
+            (element)[i] = 0xdeadbeef;
+}
+#define _MFREE_MUNGE(m) {  \
+    if (mfree_munge)       \
+        munge_mbuf(m);     \
+}
+#endif
+#else
+#define _MFREE_MUNGE(m)
+#endif
+
+
+#define _MINTGET(m, type) { 						\
+	MBUF_LOCK();							\
+	if (((m) = mfree) != 0) {					\
+		MCHECK(m);                                              \
+		++mclrefcnt[mtocl(m)]; 					\
+		mbstat.m_mtypes[MT_FREE]--;				\
+		mbstat.m_mtypes[(type)]++;				\
+		mfree = (m)->m_next;					\
+	}								\
+	MBUF_UNLOCK();							\
+}
+	
 
 void
 mbinit()
@@ -250,6 +301,7 @@ m_expand(canwait)
 		mbstat.m_mtypes[MT_FREE] += i;
 		mbstat.m_mbufs += i;
 		while (i--) {
+                        _MFREE_MUNGE(m);
 			m->m_type = MT_FREE;
 			m->m_next = mfree;
 			mfree = m++;
@@ -271,7 +323,6 @@ struct mbuf *
 m_retry(canwait, type)
 	int canwait, type;
 {
-#define	m_retry(h, t)	0
 	register struct mbuf *m;
 	int wait, s;
 	funnel_t * fnl;
@@ -280,41 +331,42 @@ m_retry(canwait, type)
 
 	for (;;) {
 		(void) m_expand(canwait);
-		MGET(m, XXX, type);
+        	_MINTGET(m, type);
+        	if (m) {
+                	(m)->m_next = (m)->m_nextpkt = 0;
+                	(m)->m_type = (type);
+                	(m)->m_data = (m)->m_dat;
+                	(m)->m_flags = 0;
+        	}
 		if (m || canwait == M_DONTWAIT)
 			break;
 		MBUF_LOCK();
 		wait = m_want++;
-
 		dlil_expand_mcl = 1;
+		if (wait == 0)
+			mbstat.m_drain++;
+		else
+			mbstat.m_wait++;
 		MBUF_UNLOCK();
         
 		if (dlil_initialized)
 			wakeup((caddr_t)&dlil_input_thread_wakeup);
-
-		if (wait == 0) {
-			mbstat.m_drain++;
-		}
-		else {
-			assert_wait((caddr_t)&mfree, THREAD_UNINT);
-			mbstat.m_wait++;
-		}
 
 		/* 
 		 * Grab network funnel because m_reclaim calls into the 
 		 * socket domains and tsleep end-up calling splhigh
 		 */
 		fnl = thread_funnel_get();
-			if (fnl && (fnl == kernel_flock)) {
-				fnl_switch = 1;
-				thread_funnel_switch(KERNEL_FUNNEL, NETWORK_FUNNEL);
-			} else
-				funnel_state = thread_funnel_set(network_flock, TRUE);
+		if (fnl && (fnl == kernel_flock)) {
+			fnl_switch = 1;
+			thread_funnel_switch(KERNEL_FUNNEL, NETWORK_FUNNEL);
+		} else
+			funnel_state = thread_funnel_set(network_flock, TRUE);
 		if (wait == 0) {
 			m_reclaim();
 		} else {
 			/* Sleep with a small timeout as insurance */
-			(void) tsleep((caddr_t)0, PZERO-1, "m_retry", hz);
+			(void) tsleep((caddr_t)&mfree, PZERO-1, "m_retry", hz);
 		}
 		if (fnl_switch)
 			thread_funnel_switch(NETWORK_FUNNEL, KERNEL_FUNNEL);
@@ -322,7 +374,6 @@ m_retry(canwait, type)
 			thread_funnel_set(network_flock, funnel_state);
 	}
 	return (m);
-#undef	m_retry
 }
 
 /*
@@ -372,7 +423,15 @@ m_get(nowait, type)
 {
 	register struct mbuf *m;
 
-	MGET(m, nowait, type);
+	_MINTGET(m, type);
+	if (m) {
+		m->m_next = m->m_nextpkt = 0;
+		m->m_type = type;
+		m->m_data = m->m_dat;
+		m->m_flags = 0;
+	} else
+		(m) = m_retry(nowait, type);
+
 	return (m);
 }
 
@@ -382,8 +441,23 @@ m_gethdr(nowait, type)
 {
 	register struct mbuf *m;
 
-	MGETHDR(m, nowait, type);
-	return (m);
+	_MINTGET(m, type);
+	if (m) {
+		m->m_next = m->m_nextpkt = 0;
+		m->m_type = type;
+		m->m_data = m->m_pktdat;
+		m->m_flags = M_PKTHDR;
+		m->m_pkthdr.rcvif = NULL;
+		m->m_pkthdr.header = NULL;
+		m->m_pkthdr.csum_flags = 0;
+		m->m_pkthdr.csum_data = 0;
+		m->m_pkthdr.aux = (struct mbuf *)NULL;
+		m->m_pkthdr.reserved1 = NULL;
+		m->m_pkthdr.reserved2 = NULL;
+	} else
+		m = m_retryhdr(nowait, type);
+
+	return m;
 }
 
 struct mbuf *
@@ -409,13 +483,20 @@ m_free(m)
 	if (m->m_type == MT_FREE)
 		panic("freeing free mbuf");
 
+	/* Free the aux data if there is any */
+	if ((m->m_flags & M_PKTHDR) && m->m_pkthdr.aux)
+	{
+		m_freem(m->m_pkthdr.aux);
+	}
+
 	MBUF_LOCK();
-	if (m->m_flags & M_EXT) {
+	if ((m->m_flags & M_EXT)) 
+    {
 		if (MCLHASREFERENCE(m)) {
 			remque((queue_t)&m->m_ext.ext_refs);
 		} else if (m->m_ext.ext_free == NULL) {
 			union mcluster *mcl= (union mcluster *)m->m_ext.ext_buf;
-			if (MCLUNREF(mcl)) {
+			if (_MCLUNREF(mcl)) {
 				mcl->mcl_next = mclfree;
 				mclfree = mcl;
 				++mbstat.m_clfree;
@@ -434,7 +515,8 @@ m_free(m)
 		}
 	}
 	mbstat.m_mtypes[m->m_type]--;
-	(void) MCLUNREF(m);
+	(void) _MCLUNREF(m);
+        _MFREE_MUNGE(m);
 	m->m_type = MT_FREE;
 	mbstat.m_mtypes[m->m_type]++;
 	m->m_flags = 0;
@@ -446,6 +528,77 @@ m_free(m)
 	MBUF_UNLOCK();
 	if (i) wakeup((caddr_t)&mfree);
 	return (n);
+}
+
+/* m_mclget() add an mbuf cluster to a normal mbuf */
+struct mbuf *
+m_mclget(m, nowait)
+        struct mbuf *m;
+        int nowait;
+{
+	MCLALLOC(m->m_ext.ext_buf, nowait);
+	if (m->m_ext.ext_buf) {
+		m->m_data = m->m_ext.ext_buf;
+		m->m_flags |= M_EXT;
+		m->m_ext.ext_size = MCLBYTES;
+		m->m_ext.ext_free = 0;
+		m->m_ext.ext_refs.forward = m->m_ext.ext_refs.backward =
+			&m->m_ext.ext_refs;
+	}
+        
+    return m;
+}
+
+/* m_mclalloc() allocate an mbuf cluster */
+caddr_t
+m_mclalloc( nowait)
+    int nowait;
+{
+    caddr_t p;
+        
+	(void)m_clalloc(1, nowait);
+	if ((p = (caddr_t)mclfree)) {
+		++mclrefcnt[mtocl(p)];
+		mbstat.m_clfree--;
+		mclfree = ((union mcluster *)p)->mcl_next;
+	}
+	MBUF_UNLOCK();
+        
+        return p;
+}
+
+/* m_mclfree() releases a reference to a cluster allocated by MCLALLOC,
+ * freeing the cluster if the reference count has reached 0. */
+void
+m_mclfree(p)
+    caddr_t p;
+{
+	MBUF_LOCK();
+	if (--mclrefcnt[mtocl(p)] == 0) {
+		((union mcluster *)(p))->mcl_next = mclfree;
+		mclfree = (union mcluster *)(p);
+		mbstat.m_clfree++;
+	}
+	MBUF_UNLOCK();
+}
+
+/* mcl_hasreference() checks if a cluster of an mbuf is referenced by another mbuf */
+int
+m_mclhasreference(m)
+    struct mbuf *m;
+{
+    return (m->m_ext.ext_refs.forward != &(m->m_ext.ext_refs));
+}
+
+/* */
+void
+m_copy_pkthdr(to, from)
+    struct mbuf *to, *from;
+{
+	to->m_pkthdr = from->m_pkthdr;
+	from->m_pkthdr.aux = (struct mbuf *)NULL;
+	to->m_flags = from->m_flags & M_COPYFLAGS;
+	to->m_data = (to)->m_pktdat;
 }
 
 /* Best effort to get a mbuf cluster + pkthdr under one lock.
@@ -474,15 +627,15 @@ m_getpacket(void)
                 m->m_type = MT_DATA;
                 m->m_data = m->m_ext.ext_buf;
                 m->m_flags = M_PKTHDR | M_EXT;
-		m->m_pkthdr.len = 0;
-		m->m_pkthdr.rcvif = NULL;
+			  m->m_pkthdr.len = 0;
+			  m->m_pkthdr.rcvif = NULL;
                 m->m_pkthdr.header = NULL;
                 m->m_pkthdr.csum_data  = 0;
                 m->m_pkthdr.csum_flags = 0;
                 m->m_pkthdr.aux = (struct mbuf *)NULL;
                 m->m_pkthdr.reserved1 = 0;  
                 m->m_pkthdr.reserved2 = 0;  
-		m->m_ext.ext_free = 0;
+			  m->m_ext.ext_free = 0;
                 m->m_ext.ext_size = MCLBYTES;
                 m->m_ext.ext_refs.forward = m->m_ext.ext_refs.backward =
                      &m->m_ext.ext_refs;
@@ -506,6 +659,14 @@ m_getpacket(void)
 }
 
 
+/*
+ * return a list of mbuf hdrs that point to clusters...
+ * try for num_needed, if this can't be met, return whatever
+ * number were available... set up the first num_with_pkthdrs
+ * with mbuf hdrs configured as packet headers... these are
+ * chained on the m_nextpkt field... any packets requested beyond
+ * this are chained onto the last packet header's m_next field.
+ */
 struct mbuf *
 m_getpackets(int num_needed, int num_with_pkthdrs, int how)
 {
@@ -561,9 +722,7 @@ m_getpackets(int num_needed, int num_with_pkthdrs, int how)
 		    MGET(m, how, MT_DATA );
 		} else {
 		    MGETHDR(m, how, MT_DATA);
-		    
-		    if (m)
-		            m->m_pkthdr.len = 0;
+
 		    num_with_pkthdrs--;
 		}
                 if (m == 0)
@@ -589,6 +748,10 @@ m_getpackets(int num_needed, int num_with_pkthdrs, int how)
 }
 
 
+/*
+ * return a list of mbuf hdrs set up as packet hdrs
+ * chained together on the m_nextpkt field
+ */
 struct mbuf *
 m_getpackethdrs(int num_needed, int how)
 {
@@ -658,10 +821,28 @@ m_freem_list(m)
 		        nextpkt = m->m_nextpkt; /* chain of linked mbufs from driver */
 		else 
 		        nextpkt = 0;
+
 		count++;
 
 		while (m) { /* free the mbuf chain (like mfreem) */
-			struct mbuf *n = m->m_next;
+			
+			struct mbuf *n;
+
+			/* Free the aux data if there is any */
+			if ((m->m_flags & M_PKTHDR) && m->m_pkthdr.aux) {
+				/*
+				 * Treat the current m as the nextpkt and set m
+				 * to the aux data. This lets us free the aux
+				 * data in this loop without having to call
+				 * m_freem recursively, which wouldn't work
+				 * because we've still got the lock.
+				 */
+				nextpkt = m;
+				m = nextpkt->m_pkthdr.aux;
+				nextpkt->m_pkthdr.aux = NULL;
+			}
+
+			n = m->m_next;
 
 			if (n && n->m_nextpkt)
 				panic("m_freem_list: m_nextpkt of m_next != NULL");
@@ -673,7 +854,7 @@ m_freem_list(m)
 					remque((queue_t)&m->m_ext.ext_refs);
 				} else if (m->m_ext.ext_free == NULL) {
 					union mcluster *mcl= (union mcluster *)m->m_ext.ext_buf;
-					if (MCLUNREF(mcl)) {
+					if (_MCLUNREF(mcl)) {
 						mcl->mcl_next = mclfree;
 						mclfree = mcl;
 						++mbstat.m_clfree;
@@ -684,7 +865,8 @@ m_freem_list(m)
 				}
 			}
 			mbstat.m_mtypes[m->m_type]--;
-			(void) MCLUNREF(m);
+			(void) _MCLUNREF(m);
+              _MFREE_MUNGE(m);
 			mbstat.m_mtypes[MT_FREE]++;
 			m->m_type = MT_FREE;
 			m->m_flags = 0;
@@ -754,6 +936,7 @@ register struct mbuf *m;
  * Lesser-used path for M_PREPEND:
  * allocate new mbuf to prepend to chain,
  * copy junk along.
+ * Does not adjust packet header length.
  */
 struct mbuf *
 m_prepend(m, len, how)
@@ -777,6 +960,28 @@ m_prepend(m, len, how)
 		MH_ALIGN(m, len);
 	m->m_len = len;
 	return (m);
+}
+
+/*
+ * Replacement for old M_PREPEND macro:
+ * allocate new mbuf to prepend to chain,
+ * copy junk along, and adjust length.
+ * 
+ */
+struct mbuf *
+m_prepend_2(m, len, how)
+        register struct mbuf *m;
+        int len, how;
+{
+        if (M_LEADINGSPACE(m) >= len) {
+                m->m_data -= len;
+                m->m_len += len;
+        } else {
+		m = m_prepend(m, len, how);
+        }
+        if ((m) && (m->m_flags & M_PKTHDR))
+                m->m_pkthdr.len += len;
+        return (m);
 }
 
 /*
@@ -888,7 +1093,13 @@ nospace:
 }
 
 
-
+/*
+ * equivilent to m_copym except that all necessary
+ * mbuf hdrs are allocated within this routine
+ * also, the last mbuf and offset accessed are passed
+ * out and can be passed back in to avoid having to
+ * rescan the entire mbuf list (normally hung off of the socket)
+ */
 struct mbuf *
 m_copym_with_hdrs(m, off0, len, wait, m_last, m_off)
 	register struct mbuf *m;
@@ -1544,6 +1755,56 @@ m_dup(register struct mbuf *m, int how)
 	m_freem(top);
 	MDFail++;
 	return (0);
+}
+
+int
+m_mclref(struct mbuf *p)
+{
+	return (_MCLREF(p));
+}
+
+int
+m_mclunref(struct mbuf *p)
+{
+	return (_MCLUNREF(p));
+}
+
+/* change mbuf to new type */
+void
+m_mchtype(struct mbuf *m, int t)
+{
+        MBUF_LOCK();
+        mbstat.m_mtypes[(m)->m_type]--;
+        mbstat.m_mtypes[t]++;
+        (m)->m_type = t;
+        MBUF_UNLOCK();
+}
+
+void *m_mtod(struct mbuf *m)
+{
+	return ((m)->m_data);
+}
+
+struct mbuf *m_dtom(void *x)
+{
+	return ((struct mbuf *)((u_long)(x) & ~(MSIZE-1)));
+}
+
+int m_mtocl(void *x)
+{
+	return (((char *)(x) - (char *)mbutl) / sizeof(union mcluster));
+}
+
+union mcluster *m_cltom(int x)
+{
+	return ((union mcluster *)(mbutl + (x)));
+}
+
+
+void m_mcheck(struct mbuf *m)
+{
+	if (m->m_type != MT_FREE) 
+		panic("mget MCHECK: m_type=%x m=%x", m->m_type, m);
 }
 
 #if 0

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2002 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -54,6 +54,13 @@
  *	@(#)exec.h	8.1 (Berkeley) 6/11/93
  */
 
+#ifndef _BSD_I386_EXEC_H_
+#define _BSD_I386_EXEC_H_
+
+
+#include <sys/appleapiopts.h>
+
+#ifdef __APPLE_API_OBSOLETE
 /* Size of a page in an object file. */
 #define	__LDPGSZ	4096
 
@@ -109,3 +116,6 @@ struct exec {
  */
 #define	PS_STRINGS \
 	((struct ps_strings *)(USRSTACK - sizeof(struct ps_strings)))
+#endif /* __APPLE_API_OBSOLETE */
+
+#endif /* _BSD_I386_EXEC_H_ */

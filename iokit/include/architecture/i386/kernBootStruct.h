@@ -19,4 +19,10 @@
  * 
  * @APPLE_LICENSE_HEADER_END@
  */
+#warning include <architecture/i386/kernBootStruct.h> is going away use <pexpert/i386/boot.h> instead
+
+#include <sys/appleapiopts.h>
+
+#ifdef __APPLE_API_OBSOLETE
 #include <pexpert/i386/boot.h>
+#endif /* __APPLE_API_OBSOLETE */

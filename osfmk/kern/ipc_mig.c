@@ -50,9 +50,6 @@
 /*
  */
 
-#include <libkern/OSTypes.h>
-#include <libkern/OSAtomic.h>
-
 #include <mach/boolean.h>
 #include <mach/port.h>
 #include <mach/mig.h>
@@ -148,13 +145,9 @@ mach_msg_rpc_from_kernel(
 	if (mr != MACH_MSG_SUCCESS)
 		return mr;
 
-	rpc_lock(self);
-
 	reply = self->ith_rpc_reply;
 	if (reply == IP_NULL) {
-		rpc_unlock(self);
 		reply = ipc_port_alloc_reply();
-		rpc_lock(self);
 		if ((reply == IP_NULL) ||
 		    (self->ith_rpc_reply != IP_NULL))
 			panic("mach_msg_rpc_from_kernel");
@@ -167,7 +160,6 @@ mach_msg_rpc_from_kernel(
 		MACH_MSGH_BITS(0, MACH_MSG_TYPE_MAKE_SEND_ONCE);
 
 	ipc_port_reference(reply);
-	rpc_unlock(self);
 
 	ipc_kmsg_copyin_from_kernel(kmsg);
 
@@ -439,9 +431,9 @@ mig_put_reply_port(
  */
 int 
 mig_strncpy(
-	char	*dest,
-	char	*src,
-	int	len)
+	char		*dest,
+	const char	*src,
+	int		len)
 {
     int i = 0;
 
@@ -589,9 +581,8 @@ convert_mig_object_to_port(
 
 		assert(previous == IP_NULL);
 
-		if (OSCompareAndSwap((UInt32)IP_NULL,
-				      (UInt32)port,
-				      (UInt32 *)&mig_object->port)) {
+		if (hw_compare_and_store((uint32_t)IP_NULL, (uint32_t)port,
+											(uint32_t *)&mig_object->port)) {
 			deallocate = FALSE;
 		} else {
 			ipc_port_dealloc_kernel(port);

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2002 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -61,8 +61,11 @@
 
 #ifndef	_SYS_LOCK_H_
 #define	_SYS_LOCK_H_
-#ifdef KERNEL
 
+#include <sys/appleapiopts.h>
+
+#ifdef KERNEL
+#ifdef __APPLE_API_UNSTABLE
 #include <kern/simple_lock.h>
 #include <kern/simple_lock_types.h>
 
@@ -86,6 +89,12 @@
 #endif
 #define simple_lock_try(l)      1
 
+#if defined(thread_sleep_simple_lock)
+#undef thread_sleep_simple_lock
+#endif
+#define thread_sleep_simple_lock(l, e, i) thread_sleep_funnel((e), (i))
+
+#endif /* __APPLE_API_UNSTABLE */
 #else /* KERNEL */
 
 #ifndef	_MACHINE_SIMPLE_LOCK_DATA_
@@ -110,6 +119,8 @@ class	simple_lock_data_t	name;
 #endif	/* _MACHINE_SIMPLE_LOCK_DATA_ */
 
 #endif /* KERNEL */
+
+#ifdef __APPLE_API_UNSTABLE
 /*
  * The general lock structure.  Provides for multiple shared locks,
  * upgrading from shared to exclusive, and sleeping until the lock
@@ -231,5 +242,7 @@ void	lockinit __P((struct lock__bsd__ *, int prio, char *wmesg, int timo,
 int	lockmgr __P((struct lock__bsd__ *, u_int flags,
 			simple_lock_t, struct proc *p));
 int	lockstatus __P((struct lock__bsd__ *));
+
+#endif /* __APPLE_API_UNSTABLE */
 
 #endif	/* _SYS_LOCK_H_ */

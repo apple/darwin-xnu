@@ -52,14 +52,13 @@ do_setup_conf: $(OBJROOT)/$(KERNEL_CONFIG)_$(ARCH_CONFIG)/$(COMPONENT)/doconf \
 
 do_all: do_setup_conf
 	@echo "[ $(SOURCE) ] Starting do_all  $(COMPONENT) $(OSFMK_KERNEL_CONFIG) $(ARCH_CONFIG) $(TARGET)";	\
-	(cd $(COMPOBJROOT)/$(OSFMK_KERNEL_CONFIG);				\
 	next_source=$(subst conf/,,$(SOURCE));			\
-	${MAKE} MAKEFILES=$(TARGET)/$(OSFMK_KERNEL_CONFIG)/Makefile	\
+	${MAKE} -C $(COMPOBJROOT)/$(OSFMK_KERNEL_CONFIG)	\
+		MAKEFILES=$(TARGET)/$(OSFMK_KERNEL_CONFIG)/Makefile	\
 		SOURCE=$${next_source}			\
 		TARGET=$(TARGET)					\
 		INCL_MAKEDEP=FALSE	\
-		build_all	\
-	);		\
+		build_all;	\
 	echo "[ $(SOURCE) ] Returning do_all $(COMPONENT) $(OSFMK_KERNEL_CONFIG) $(ARCH_CONFIG) $(TARGET)";
 
 do_build_all: do_all 

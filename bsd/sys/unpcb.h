@@ -57,6 +57,7 @@
 #ifndef _SYS_UNPCB_H_
 #define _SYS_UNPCB_H_
 
+#include <sys/appleapiopts.h>
 #include <sys/queue.h>
 #include <sys/un.h>
 
@@ -85,6 +86,7 @@
  * so that changes in the sockbuf may be computed to modify
  * back pressure on the sender accordingly.
  */
+#ifdef __APPLE_API_PRIVATE
 typedef	u_quad_t	unp_gen_t;
 LIST_HEAD(unp_head, unpcb);
 
@@ -103,9 +105,11 @@ struct	unpcb {
 };
 
 #define	sotounpcb(so)	((struct unpcb *)((so)->so_pcb))
+#endif /* __APPLE_API_PRIVATE */
 
 /* Hack alert -- this structure depends on <sys/socketvar.h>. */
 #ifdef	_SYS_SOCKETVAR_H_
+#ifdef __APPLE_API_UNSTABLE
 struct	xunpcb {
 	size_t	xu_len;			/* length of this structure */
 	struct	unpcb *xu_unpp;		/* to help netstat, fstat */
@@ -130,6 +134,7 @@ struct	xunpgen {
 	unp_gen_t xug_gen;
 	so_gen_t xug_sogen;
 };
+#endif /* __APPLE_API_UNSTABLE */
 #endif /* _SYS_SOCKETVAR_H_ */
 
 #endif /* _SYS_UNPCB_H_ */

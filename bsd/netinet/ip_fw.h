@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2002 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -36,8 +36,13 @@
 
 #ifndef _IP_FW_H
 #define _IP_FW_H
+#include <sys/appleapiopts.h>
 
 #include <sys/queue.h>
+
+
+#define IP_FW_CURRENT_API_VERSION 20	/* Version of this API */
+
 
 /*
  * This union structure identifies an interface, either explicitly
@@ -67,10 +72,13 @@ union ip_fw_if {
  * fw_src, fw_dst, fw_smsk, fw_dmsk are always stored in network byte order.
  * fw_flg and fw_n*p are stored in host byte order (of course).
  * Port numbers are stored in HOST byte order.
- * Warning: setsockopt() will fail if sizeof(struct ip_fw) > MLEN (108)
  */
 
 struct ip_fw {
+	u_int32_t version;		/* Version of this structure.  Should always be */
+							/* set to IP_FW_CURRENT_API_VERSION by clients. */
+	void *context;			/* Context that is usable by user processes to */
+							/* identify this rule. */
     u_int64_t fw_pcnt,fw_bcnt;		/* Packet and byte counters */
     struct in_addr fw_src, fw_dst;	/* Source and destination IP addr */
     struct in_addr fw_smsk, fw_dmsk;	/* Mask for src and dest IP addr */
@@ -83,24 +91,47 @@ struct ip_fw {
 #define IP_FW_ICMPTYPES_DIM	(IP_FW_ICMPTYPES_MAX / (sizeof(unsigned) * 8))
 	unsigned fw_icmptypes[IP_FW_ICMPTYPES_DIM]; /* ICMP types bitmap */
 	} fw_uar;
+    u_int fw_ipflg;			/* IP flags word */
     u_char fw_ipopt,fw_ipnopt;		/* IP options set/unset */
+    u_char fw_tcpopt,fw_tcpnopt;	/* TCP options set/unset */
     u_char fw_tcpf,fw_tcpnf;		/* TCP flags set/unset */
     long timestamp;			/* timestamp (tv_sec) of last match */
     union ip_fw_if fw_in_if, fw_out_if;	/* Incoming and outgoing interfaces */
     union {
 	u_short fu_divert_port;		/* Divert/tee port (options IPDIVERT) */
-	u_short fu_pipe_nr;		/* pipe number (option DUMMYNET) */
+	u_short fu_pipe_nr;		/* queue number (option DUMMYNET) */
 	u_short fu_skipto_rule;		/* SKIPTO command rule number */
 	u_short fu_reject_code;		/* REJECT response code */
 	struct sockaddr_in fu_fwd_ip;
     } fw_un;
     u_char fw_prot;			/* IP protocol */
-    u_char fw_nports;			/* N'of src ports and # of dst ports */
-					/* in ports array (dst ports follow */
-					/* src ports; max of 10 ports in all; */
-					/* count of 0 means match all ports) */
-    void *pipe_ptr;                    /* Pipe ptr in case of dummynet pipe */
+	/*
+	 * N'of src ports and # of dst ports in ports array (dst ports
+	 * follow src ports; max of 10 ports in all; count of 0 means
+	 * match all ports)
+	 */
+    u_char fw_nports;
+    void *pipe_ptr;                    /* flow_set ptr for dummynet pipe */
     void *next_rule_ptr ;              /* next rule in case of match */
+    uid_t fw_uid;			/* uid to match */
+    int fw_logamount;			/* amount to log */
+    u_int64_t fw_loghighest;		/* highest number packet to log */
+};
+
+/*
+ * extended ipfw structure... some fields in the original struct
+ * can be used to pass parameters up/down, namely pointers
+ *     void *pipe_ptr
+ *     void *next_rule_ptr 
+ * some others can be used to pass parameters down, namely counters etc.
+ *     u_int64_t fw_pcnt,fw_bcnt;
+ *     long timestamp;
+ */
+
+struct ip_fw_ext {             /* extended structure */
+    struct ip_fw rule;      /* must be at offset 0 */
+    long    dont_match_prob;        /* 0x7fffffff means 1.0, always fail */
+    u_int   dyn_type;  /* type for dynamic rule */
 };
 
 #define IP_FW_GETNSRCP(rule)		((rule)->fw_nports & 0x0f)
@@ -121,9 +152,36 @@ struct ip_fw {
 #define fw_fwd_ip	fw_un.fu_fwd_ip
 
 struct ip_fw_chain {
-        LIST_ENTRY(ip_fw_chain) chain;
-        struct ip_fw    *rule;
+	LIST_ENTRY(ip_fw_chain) next;
+	struct ip_fw *rule;
 };
+
+/*
+ * Flow mask/flow id for each queue.
+ */
+struct ipfw_flow_id {
+    u_int32_t dst_ip, src_ip ;
+    u_int16_t dst_port, src_port ; 
+    u_int8_t proto ;    
+    u_int8_t flags ;    /* protocol-specific flags */
+} ;
+
+/*
+ * dynamic ipfw rule
+ */
+struct ipfw_dyn_rule {
+    struct ipfw_dyn_rule *next ;
+
+    struct ipfw_flow_id id ;
+    struct ipfw_flow_id mask ;
+    struct ip_fw_chain *chain ;		/* pointer to parent rule	*/
+    u_int32_t type ;			/* rule type			*/
+    u_int32_t expire ;			/* expire time			*/
+    u_int64_t pcnt, bcnt;		/* match counters		*/
+    u_int32_t bucket ;			/* which bucket in hash table	*/
+    u_int32_t state ;			/* state of this rule (typ. a   */
+					/* combination of TCP flags)	*/
+} ;
 
 /*
  * Values for "flags" field .
@@ -138,6 +196,7 @@ struct ip_fw_chain {
 #define IP_FW_F_SKIPTO	0x00000006	/* This is a skipto rule		*/
 #define IP_FW_F_FWD	0x00000007	/* This is a "change forwarding address" rule */
 #define IP_FW_F_PIPE	0x00000008	/* This is a dummynet rule */
+#define IP_FW_F_QUEUE	0x00000009	/* This is a dummynet queue */
 
 #define IP_FW_F_IN	0x00000100	/* Check inbound packets		*/
 #define IP_FW_F_OUT	0x00000200	/* Check outbound packets		*/
@@ -164,7 +223,25 @@ struct ip_fw_chain {
 
 #define IP_FW_F_ICMPBIT 0x00100000	/* ICMP type bitmap is valid		*/
 
-#define IP_FW_F_MASK	0x001FFFFF	/* All possible flag bits mask		*/
+#define IP_FW_F_UID	0x00200000	/* filter by uid			*/
+
+#define IP_FW_F_RND_MATCH 0x00800000	/* probabilistic rule match		*/
+#define IP_FW_F_SMSK	0x01000000	/* src-port + mask 			*/
+#define IP_FW_F_DMSK	0x02000000	/* dst-port + mask 			*/
+#define	IP_FW_BRIDGED	0x04000000	/* only match bridged packets		*/
+#define IP_FW_F_KEEP_S	0x08000000	/* keep state	 			*/
+#define IP_FW_F_CHECK_S	0x10000000	/* check state	 			*/
+
+#define IP_FW_F_SME	0x20000000	/* source = me				*/
+#define IP_FW_F_DME	0x40000000	/* destination = me			*/
+
+#define IP_FW_F_MASK	0x7FFFFFFF	/* All possible flag bits mask		*/
+
+/*
+ * Flags for the 'fw_ipflg' field, for comparing values of ip and its protocols.
+ */
+#define	IP_FW_IF_TCPEST	0x00000020	/* established TCP connection */
+#define	IP_FW_IF_TCPMSK	0x00000020	/* mask of all TCP values */
 
 /*
  * For backwards compatibility with rules specifying "via iface" but
@@ -189,6 +266,15 @@ struct ip_fw_chain {
 #define IP_FW_IPOPT_TS		0x08
 
 /*
+ * Definitions for TCP option names.
+ */
+#define IP_FW_TCPOPT_MSS	0x01
+#define IP_FW_TCPOPT_WINDOW	0x02
+#define IP_FW_TCPOPT_SACK	0x04
+#define IP_FW_TCPOPT_TS		0x08
+#define IP_FW_TCPOPT_CC		0x10
+
+/*
  * Definitions for TCP flags.
  */
 #define IP_FW_TCPF_FIN		TH_FIN
@@ -197,12 +283,16 @@ struct ip_fw_chain {
 #define IP_FW_TCPF_PSH		TH_PUSH
 #define IP_FW_TCPF_ACK		TH_ACK
 #define IP_FW_TCPF_URG		TH_URG
-#define IP_FW_TCPF_ESTAB	0x40
 
 /*
  * Main firewall chains definitions and global var's definitions.
  */
 #ifdef KERNEL
+#ifdef __APPLE_API_PRIVATE
+
+#define IP_FW_PORT_DYNT_FLAG	0x10000
+#define	IP_FW_PORT_TEE_FLAG	0x20000
+#define	IP_FW_PORT_DENY_FLAG	0x40000
 
 /*
  * Function definitions.
@@ -217,15 +307,10 @@ typedef	int ip_fw_chk_t __P((struct ip **, int, struct ifnet *, u_int16_t *,
 typedef	int ip_fw_ctl_t __P((struct sockopt *));
 extern	ip_fw_chk_t *ip_fw_chk_ptr;
 extern	ip_fw_ctl_t *ip_fw_ctl_ptr;
-
-/* IP NAT hooks */
-typedef	int ip_nat_t __P((struct ip **, struct mbuf **, struct ifnet *, int));
-typedef	int ip_nat_ctl_t __P((struct sockopt *));
-extern	ip_nat_t *ip_nat_ptr;
-extern	ip_nat_ctl_t *ip_nat_ctl_ptr;
-#define	IP_NAT_IN	0x00000001
-#define	IP_NAT_OUT	0x00000002
-
+extern int fw_one_pass;
+extern int fw_enable;
+extern struct ipfw_flow_id last_pkt ;
+#endif /* __APPLE_API_PRIVATE */
 #endif /* KERNEL */
 
 #endif /* _IP_FW_H */

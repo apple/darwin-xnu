@@ -121,6 +121,8 @@ void ml_install_interrupt_handler(
 
 	per_proc_info[current_cpu].interrupts_enabled = TRUE;  
 	(void) ml_set_interrupts_enabled(current_state);
+
+	initialize_screen(0, kPEAcquireScreen);
 }
 
 /* Initialize Interrupts */
@@ -192,14 +194,26 @@ void ml_cause_interrupt(void)
 	CreateFakeIO();
 }
 
-void ml_thread_policy( 
+void ml_thread_policy(
 	thread_t thread,
 	unsigned policy_id,
 	unsigned policy_info)
 {
 	if ((policy_id == MACHINE_GROUP) &&
-	    ((per_proc_info[0].pf.Available) & pfSMPcap))
-		thread_bind(thread, master_processor);
+		((per_proc_info[0].pf.Available) & pfSMPcap))
+			thread_bind(thread, master_processor);
+
+	if (policy_info & MACHINE_NETWORK_WORKLOOP) {
+		spl_t		s = splsched();
+
+		thread_lock(thread);
+
+		thread->sched_mode |= TH_MODE_FORCEDPREEMPT;
+		set_priority(thread, thread->priority + 1);
+
+		thread_unlock(thread);
+		splx(s);
+	}
 }
 
 void machine_idle(void)
@@ -361,10 +375,11 @@ init_ast_check(processor_t processor)
 {}
                 
 void
-cause_ast_check(processor_t processor)
+cause_ast_check(
+	processor_t		processor)
 {
-	if ((processor != current_processor())
-	    && (per_proc_info[processor->slot_num].interrupts_enabled == TRUE))
+	if (	processor != current_processor()								&&
+	    	per_proc_info[processor->slot_num].interrupts_enabled == TRUE	)
 		cpu_signal(processor->slot_num, SIGPast, NULL, NULL);
 }
               
@@ -374,9 +389,7 @@ switch_to_shutdown_context(
 	void		(*doshutdown)(processor_t),
 	processor_t	processor)
 {
-	disable_preemption();
 	CreateShutdownCTX();   
-	enable_preemption();
 	return((thread_t)(per_proc_info[cpu_number()].old_thread));
 }
 

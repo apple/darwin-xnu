@@ -125,8 +125,8 @@ char env_buf[256];
  * from on to another using kdb_on! #cpu or cpu #cpu
  */
 
-decl_simple_lock_data(, debugger_lock)	/* debugger lock */
-decl_simple_lock_data(, pbtlock)		/* backtrace print lock */
+hw_lock_data_t debugger_lock;	/* debugger lock */
+hw_lock_data_t pbtlock;		/* backtrace print lock */
 
 int			debugger_cpu = -1;			/* current cpu running debugger	*/
 int			debugger_debug = 0;			/* Debug debugger */
@@ -179,7 +179,10 @@ char *failNames[] = {
 	"Corrupt stack",			/* failStack */
 	"Corrupt mapping tables",	/* failMapping */
 	"Corrupt context",			/* failContext */
-	"Unknown failure code"			/* Unknown failure code - must always be last */
+	"No saveareas",				/* failNoSavearea */
+	"Savearea corruption",		/* failSaveareaCorr */
+	"Invalid live context",		/* failBadLiveContext */
+	"Unknown failure code"		/* Unknown failure code - must always be last */
 };
 
 char *invxcption = "Unknown code";
@@ -189,15 +192,15 @@ extern char *trap_type[];
 extern vm_offset_t mem_actual;
 
 #if !MACH_KDB
-void kdb_trap(int type, struct ppc_saved_state *regs);
-void kdb_trap(int type, struct ppc_saved_state *regs) {
+void kdb_trap(int type, struct savearea *regs);
+void kdb_trap(int type, struct savearea *regs) {
 	return;
 }
 #endif
 
 #if !MACH_KDP
-void kdp_trap(int type, struct ppc_saved_state *regs);
-void kdp_trap(int type, struct ppc_saved_state *regs) {
+void kdp_trap(int type, struct savearea *regs);
+void kdp_trap(int type, struct savearea *regs) {
 	return;
 }
 #endif
@@ -220,6 +223,8 @@ machine_startup(boot_args *args)
 		if (boot_arg & DB_HALT) halt_in_debugger=1;
 		if (boot_arg & DB_PRT) disableDebugOuput=FALSE; 
 		if (boot_arg & DB_SLOG) systemLogDiags=TRUE; 
+		if (boot_arg & DB_NMI) panicDebugging=TRUE; 
+		if (boot_arg & DB_LOG_PI_SCRN) logPanicDataToScreen=TRUE; 
 	}
 
 	hw_lock_init(&debugger_lock);				/* initialize debugger lock */
@@ -252,13 +257,6 @@ machine_startup(boot_args *args)
 		extern int default_preemption_rate;
 
 		default_preemption_rate = boot_arg;
-	}
-	if (PE_parse_boot_arg("kpreempt", &boot_arg)) {
-		extern int kernel_preemption_mode;
-		extern boolean_t zone_gc_allowed;
-
-		kernel_preemption_mode = boot_arg;
-		zone_gc_allowed = FALSE; /* XXX: TO BE REMOVED  */
 	}
 	if (PE_parse_boot_arg("unsafe", &boot_arg)) {
 		extern int max_unsafe_quanta;
@@ -353,7 +351,7 @@ void machine_callstack(
 
 
 void
-print_backtrace(struct ppc_saved_state *ssp)
+print_backtrace(struct savearea *ssp)
 {
 	unsigned int stackptr, *raddr, *rstack, trans, fence;
 	int i, frames_cnt, skip_top_frames, frames_max;
@@ -382,47 +380,60 @@ print_backtrace(struct ppc_saved_state *ssp)
 	if(sv) fence = sv->save_r1;				/* Stop at previous exception point */
 	
 	if(!svssp) {							/* Should we start from stack? */
-		printf("Latest stack backtrace for cpu %d:\n", cpu_number());
+		kdb_printf("Latest stack backtrace for cpu %d:\n", cpu_number());
 		__asm__ volatile("mr %0,r1" : "=r" (stackptr));	/* Get current stack */
 		dump_backtrace(stackptr, fence);	/* Dump the backtrace */
 		if(!sv) {							/* Leave if no saveareas */
-			printf("\nKernel version:\n%s\n",version);	/* Print kernel version */
+			kdb_printf("\nKernel version:\n%s\n",version);	/* Print kernel version */
 			hw_lock_unlock(&pbtlock);		/* Allow another back trace to happen */
 			return;	
 		}
 	}
 	else {									/* Were we passed an exception? */
 		fence = 0xFFFFFFFF;					/* Show we go all the way */
-		if(svssp->save_prev) fence = svssp->save_prev->save_r1;		/* Stop at previous exception point */
+		if(svssp->save_hdr.save_prev) {
+			if((svssp->save_hdr.save_prev <= VM_MAX_KERNEL_ADDRESS) && ((unsigned int)LRA(PPC_SID_KERNEL, (void *)svssp->save_hdr.save_prev))) {	/* Valid address? */	
+				fence = svssp->save_hdr.save_prev->save_r1;	/* Stop at previous exception point */
+			}
+		}
 	
-		printf("Latest crash info for cpu %d:\n", cpu_number());
-		printf("   Exception state (sv=0x%08x)\n", sv);
+		kdb_printf("Latest crash info for cpu %d:\n", cpu_number());
+		kdb_printf("   Exception state (sv=0x%08X)\n", sv);
 		dump_savearea(svssp, fence);		/* Dump this savearea */	
 	}
 
 	if(!sv) {								/* Leave if no saveareas */
-		printf("\nKernel version:\n%s\n",version);	/* Print kernel version */
+		kdb_printf("\nKernel version:\n%s\n",version);	/* Print kernel version */
 		hw_lock_unlock(&pbtlock);			/* Allow another back trace to happen */
 		return;	
 	}
 	
-	printf("Proceeding back via exception chain:\n");
+	kdb_printf("Proceeding back via exception chain:\n");
 
 	while(sv) {								/* Do them all... */
-		printf("   Exception state (sv=0x%08x)\n", sv);
+		if(!((sv <= VM_MAX_KERNEL_ADDRESS) && (unsigned int)LRA(PPC_SID_KERNEL, (void *)sv))) {	/* Valid address? */	
+			kdb_printf("   Exception state (sv=0x%08X) Not mapped or invalid. stopping...\n", sv);
+			break;
+		}
+		
+		kdb_printf("   Exception state (sv=0x%08X)\n", sv);
 		if(sv == svssp) {					/* Did we dump it already? */
-			printf("      previously dumped as \"Latest\" state. skipping...\n");
+			kdb_printf("      previously dumped as \"Latest\" state. skipping...\n");
 		}
 		else {
 			fence = 0xFFFFFFFF;				/* Show we go all the way */
-			if(sv->save_prev) fence = sv->save_prev->save_r1;	/* Stop at previous exception point */
+			if(sv->save_hdr.save_prev) {
+				if((sv->save_hdr.save_prev <= VM_MAX_KERNEL_ADDRESS) && ((unsigned int)LRA(PPC_SID_KERNEL, (void *)sv->save_hdr.save_prev))) {	/* Valid address? */	
+					fence = sv->save_hdr.save_prev->save_r1;	/* Stop at previous exception point */
+				}
+			}
 			dump_savearea(sv, fence);		/* Dump this savearea */	
 		}	
 		
-		sv = sv->save_prev;					/* Back chain */
+		sv = sv->save_hdr.save_prev;		/* Back chain */
 	}
 	
-	printf("\nKernel version:\n%s\n",version);	/* Print kernel version */
+	kdb_printf("\nKernel version:\n%s\n",version);	/* Print kernel version */
 
 	pbtcpu = -1;							/* Mark as unowned */
 	hw_lock_unlock(&pbtlock);				/* Allow another back trace to happen */
@@ -440,7 +451,7 @@ void dump_savearea(savearea *sv, unsigned int fence) {
 	if(sv->save_exception > T_MAX) xcode = invxcption;	/* Too big for table */
 	else xcode = trap_type[sv->save_exception / 4];		/* Point to the type */
 	
-	printf("      PC=0x%08X; MSR=0x%08x; DAR=0x%08x; DSISR=0x%08x; LR=0x%08x; R1=0x%08x; XCP=0x%08x (%s)\n",
+	kdb_printf("      PC=0x%08X; MSR=0x%08X; DAR=0x%08X; DSISR=0x%08X; LR=0x%08X; R1=0x%08X; XCP=0x%08X (%s)\n",
 		sv->save_srr0, sv->save_srr1, sv->save_dar, sv->save_dsisr,
 		sv->save_lr, sv->save_r1, sv->save_exception, xcode);
 	
@@ -462,39 +473,39 @@ void dump_backtrace(unsigned int stackptr, unsigned int fence) {
 	unsigned int  sframe[8], raddr, dumbo;
 	int i;
 	
-	printf("      Backtrace:\n");
+	kdb_printf("      Backtrace:\n");
 	for(i = 0; i < DUMPFRAMES; i++) {			/* Dump up to max frames */
 	
 		if(!stackptr || (stackptr == fence)) break;		/* Hit stop point or end... */
 		
 		if(stackptr & 0x0000000f) {				/* Is stack pointer valid? */
-			printf("\n         backtrace terminated - unaligned frame address: 0x%08x\n", stackptr);	/* No, tell 'em */
+			kdb_printf("\n         backtrace terminated - unaligned frame address: 0x%08X\n", stackptr);	/* No, tell 'em */
 			break;
 		}
 
 		raddr = (unsigned int)LRA(PPC_SID_KERNEL, (void *)stackptr);	/* Get physical frame address */
-		if(!raddr) {							/* Is it mapped? */
-			printf("\n         backtrace terminated - frame not mapped: 0x%08x\n", stackptr);	/* No, tell 'em */
+		if(!raddr || (stackptr > VM_MAX_KERNEL_ADDRESS)) {		/* Is it mapped? */
+			kdb_printf("\n         backtrace terminated - frame not mapped or invalid: 0x%08X\n", stackptr);	/* No, tell 'em */
 			break;
 		}
 	
-		if(raddr >= mem_actual) {				/* Is it within physical RAM? */
-			printf("\n         backtrace terminated - frame outside of RAM: v=0x%08x, p=%08X\n", stackptr, raddr);	/* No, tell 'em */
+		if(raddr >= mem_actual) {					/* Is it within physical RAM? */
+			kdb_printf("\n         backtrace terminated - frame outside of RAM: v=0x%08X, p=%08X\n", stackptr, raddr);	/* No, tell 'em */
 			break;
 		}
 	
-		ReadReal(raddr, &sframe[0]);			/* Fetch the stack frame */
+		ReadReal(raddr, &sframe[0]);				/* Fetch the stack frame */
 
-		bframes[i] = sframe[LRindex];			/* Save the link register */
+		bframes[i] = sframe[LRindex];				/* Save the link register */
 		
-		if(!i) printf("         ");				/* Indent first time */
-		else if(!(i & 7)) printf("\n         ");	/* Skip to new line every 8 */
-		printf("0x%08x ", bframes[i]);			/* Dump the link register */
+		if(!i) kdb_printf("         ");				/* Indent first time */
+		else if(!(i & 7)) kdb_printf("\n         ");	/* Skip to new line every 8 */
+		kdb_printf("0x%08X ", bframes[i]);			/* Dump the link register */
 		
-		stackptr = sframe[0];					/* Chain back */
+		stackptr = sframe[0];						/* Chain back */
 	}
-	printf("\n");
-	if(i >= DUMPFRAMES) printf("      backtrace continues...\n");	/* Say we terminated early */
+	kdb_printf("\n");
+	if(i >= DUMPFRAMES) kdb_printf("      backtrace continues...\n");	/* Say we terminated early */
 	if(i) kmod_dump((vm_offset_t *)&bframes[0], i);	/* Show what kmods are in trace */
 	
 }
@@ -506,6 +517,7 @@ Debugger(const char	*message) {
 
 	int i;
 	unsigned int store[8];
+	unsigned long pi_size = 0;
 	spl_t spl;
 	
 	spl = splhigh();								/* No interruptions from here on */
@@ -527,6 +539,49 @@ Debugger(const char	*message) {
 		splx(spl);
 		return;										/* Yeah, don't do it again... */
 	}
+
+
+/*
+ * The above stuff catches the double panic case so we shouldn't have to worry about that here.
+ */
+	if ( panicstr != (char *)0 )
+	{
+		/* diable kernel preemptions */
+		disable_preemption();
+	
+		/* everything should be printed now so copy to NVRAM
+		*/
+		if( debug_buf_size > 0)
+			pi_size = PESavePanicInfo( debug_buf, debug_buf_ptr - debug_buf);
+			
+		if( !panicDebugging && (pi_size != 0) ) {
+			int	my_cpu, debugger_cpu;
+			int	tcpu;
+
+			my_cpu = cpu_number();
+			debugger_cpu = my_cpu;
+
+			hw_atomic_add(&debug_mode, 1);
+			debugger_active[my_cpu]++;
+			lock_debugger();
+
+			for(tcpu = 0; tcpu < NCPUS; tcpu++) {
+				if(tcpu == my_cpu) continue;
+				hw_atomic_add(&debugger_sync, 1);
+				(void)cpu_signal(tcpu, SIGPdebug, 0 ,0);
+			}
+			(void)hw_cpu_sync(&debugger_sync, LockTimeOut);
+			debugger_sync = 0;
+		}
+
+		draw_panic_dialog();
+		
+		if( !panicDebugging && (pi_size != 0))
+					PEHaltRestart( kPEHangCPU );
+
+		enable_preemption();
+	}
+
 
 	if ((current_debugger != NO_CUR_DB)) {			/* If there is a debugger configured, enter it */
 		printf("Debugger(%s)\n", message);
@@ -565,9 +620,9 @@ void SysChoked(int type, savearea *sv) {			/* The system is bad dead */
 	if(failcode > failUnknown) failcode = failUnknown;	/* Set unknown code code */
 	
 	kprintf("System Failure: cpu=%d; code=%08X (%s)\n", cpu_number(), sv->save_r3, failNames[failcode]);
-	printf("System Failure: cpu=%d; code=%08X (%s)\n", cpu_number(), sv->save_r3, failNames[failcode]);
+	kdb_printf("System Failure: cpu=%d; code=%08X (%s)\n", cpu_number(), sv->save_r3, failNames[failcode]);
 
-	print_backtrace((struct ppc_saved_state *)sv);	/* Attempt to print backtrace */
+	print_backtrace(sv);							/* Attempt to print backtrace */
 	Call_DebuggerC(type, sv);						/* Attempt to get into debugger */
 
 	if ((current_debugger != NO_CUR_DB)) Call_DebuggerC(type, sv);	/* Attempt to get into debugger */
@@ -583,7 +638,7 @@ void SysChoked(int type, savearea *sv) {			/* The system is bad dead */
 
 int Call_DebuggerC(
         int	type,
-        struct ppc_saved_state *saved_state)
+        struct savearea *saved_state)
 {
 	int				directcall, wait;
 	vm_offset_t		instr_ptr;
@@ -615,10 +670,10 @@ int Call_DebuggerC(
 		kprintf("Call_DebuggerC(%d): %08X %08X, debact = %d\n", my_cpu, type, saved_state, debug_mode);	/* (TEST/DEBUG) */
 #endif
 		printf("Call_Debugger: enter - cpu %d, is_slave %d, debugger_cpu %d, pc %08X\n",
-		   my_cpu, debugger_is_slave[my_cpu], debugger_cpu, saved_state->srr0);
+		   my_cpu, debugger_is_slave[my_cpu], debugger_cpu, saved_state->save_srr0);
 	}
 	
-	if (instr_ptr = (vm_offset_t)LRA(PPC_SID_KERNEL, (void *)(saved_state->srr0))) {
+	if (instr_ptr = (vm_offset_t)LRA(PPC_SID_KERNEL, (void *)(saved_state->save_srr0))) {
 		instr = ml_phys_read(instr_ptr);				/* Get the trap that caused entry */
 	} 
 	else instr = 0;
@@ -654,7 +709,7 @@ int Call_DebuggerC(
 	switch_debugger = 0;								/* Make sure switch request is off */
 	directcall = 1;										/* Assume direct call */
 
-	if (saved_state->srr1 & MASK(SRR1_PRG_TRAP)) {		/* Trap instruction? */
+	if (saved_state->save_srr1 & MASK(SRR1_PRG_TRAP)) {	/* Trap instruction? */
 		
 		directcall = 0;									/* We had a trap not a direct call */
 
@@ -736,7 +791,7 @@ debugger_exit:
 		instr, my_cpu, debugger_cpu, db_run_mode);	/* (TEST/DEBUG) */
 #endif
 	if ((instr == TRAP_DEBUGGER_INST) ||				/* Did we trap to enter debugger? */
-		(instr == TRAP_DIRECT_INST)) saved_state->srr0 += TRAP_INST_SIZE;	/* Yes, point past trap */
+		(instr == TRAP_DIRECT_INST)) saved_state->save_srr0 += TRAP_INST_SIZE;	/* Yes, point past trap */
 
 	if(debugger_cpu == my_cpu) LLTraceSet(lastTrace);	/* Enable tracing on the way out if we are debugger */
 

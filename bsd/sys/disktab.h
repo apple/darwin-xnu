@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2002 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -35,7 +35,11 @@
  */
 
 #ifndef	_SYS_DISKTAB_
-#define _SYS_DISKTAB_
+#define	_SYS_DISKTAB_
+
+#include <sys/appleapiopts.h>
+
+#ifdef	__APPLE_API_OBSOLETE
 
 /*
  * Disk description table, see disktab(5)
@@ -93,5 +97,7 @@ typedef struct disktab {
 #ifndef KERNEL
 struct	disktab *getdiskbyname(), *getdiskbydev();
 #endif	/* !KERNEL */
+
+#endif	/* __APPLE_API_OBSOLETE */
 
 #endif	/* _SYS_DISKTAB_ */

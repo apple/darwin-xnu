@@ -36,12 +36,8 @@ extern thread_apc_handler_t bsd_ast;
 
 #else /* !BSD_USE_APC */
 
-#define AST_NONE	0
-#define AST_BSD		0x80
-#define AST_BSD_INIT	0x100
-
-extern void ast_on(int);
-extern thread_ast_set(thread_act_t, int);
+extern void astbsd_on(void);
+extern void act_set_astbsd(thread_act_t);
 extern void bsd_ast(thread_act_t);
 
 #endif /* !BSD_USE_APC */

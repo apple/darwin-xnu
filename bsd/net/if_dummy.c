@@ -101,16 +101,6 @@
 #include <netinet6/ip6.h>
 #endif
 
-#if NS
-#include <netns/ns.h>
-#include <netns/ns_if.h>
-#endif
-
-#if ISO
-#include <netiso/iso.h>
-#include <netiso/iso_var.h>
-#endif
-
 #if NETATALK
 #include <netinet/if_ether.h>
 #include <netatalk/at.h>

@@ -39,6 +39,11 @@ class OSBoolean : public OSObject
 protected:
     bool value;
 
+    /*D @function taggedRelease
+	@abstract Override tagged release mechanism.
+	@param when Unused. */
+    virtual void taggedRelease(const void *tag, const int when) const;
+
 public:
     static void initialize();
 
@@ -56,6 +61,10 @@ public:
         @discussion This function should not be called directly, use release() instead.
     */
     virtual void free();
+
+    /*D @function taggedRetain
+	@abstract Override tagged retain mechanism. */
+    virtual void taggedRetain(const void *tag) const;
 
     /*!
         @function isTrue

@@ -26,7 +26,11 @@
  * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
  * SUCH DAMAGE.
  */
+#include <sys/appleapiopts.h>
 
+#include <sys/callout.h>
+
+#ifdef __APPLE_API_PRIVATE
 struct rr_prefix {
 	struct ifprefix	rp_ifpr;
 	LIST_ENTRY(rr_prefix) rp_entry;
@@ -84,3 +88,5 @@ extern struct rr_prhead rr_prefix;
 void in6_rr_timer __P((void *));
 void in6_rr_timer_funneled __P((void *));
 int delete_each_prefix  __P((struct rr_prefix *rpp, u_char origin));
+
+#endif /* __APPLE_API_PRIVATE */

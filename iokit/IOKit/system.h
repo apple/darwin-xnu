@@ -75,8 +75,6 @@ void panic(const char * msg, ...);
 /*
  */
 
-#ifdef __ppc__
-
 /*
  * Really need a set of interfaces from osfmk/pexpert components to do
  * all that is required to prepare an I/O from a cache management point
@@ -85,8 +83,6 @@ void panic(const char * msg, ...);
  */
 extern void invalidate_icache(vm_offset_t addr, unsigned cnt, int phys);
 extern void flush_dcache(vm_offset_t addr, unsigned count, int phys);
-
-#endif
 
 __END_DECLS
 

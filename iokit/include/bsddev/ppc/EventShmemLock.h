@@ -19,5 +19,10 @@
  * 
  * @APPLE_LICENSE_HEADER_END@
  */
-#include <dev/EventShmemLock.h>
+#warning include <dev/machine/EventShmemLock.h> is going away use <IOKit/machine/IOSharedLockImp.h> instead
 
+#include <sys/appleapiopts.h>
+
+#ifdef __APPLE_API_OBSOLETE
+#include <dev/EventShmemLock.h>
+#endif /* __APPLE_API_OBSOLETE */

@@ -54,10 +54,8 @@
 #ifndef	_MACH_MACHINE_H_
 #define _MACH_MACHINE_H_
 
-#ifdef  MACH_KERNEL_PRIVATE
-#include <cpus.h> 
-#endif  /* MACH_KERNEL_PRIVATE */
- 
+#include <sys/appleapiopts.h>
+
 #include <mach/machine/vm_types.h>
 #include <mach/boolean.h>
 
@@ -91,6 +89,9 @@ typedef integer_t	cpu_subtype_t;
 #define CPU_STATE_IDLE		2
 #define CPU_STATE_NICE		3
 
+#ifdef	KERNEL_PRIVATE
+#ifdef   __APPLE_API_UNSTABLE
+
 struct machine_slot {
 /*boolean_t*/integer_t	is_cpu;		/* is there a cpu in this slot? */
 	cpu_type_t	cpu_type;	/* type of cpu */
@@ -103,10 +104,11 @@ struct machine_slot {
 typedef struct machine_slot	*machine_slot_t;
 typedef struct machine_slot	machine_slot_data_t;	/* bogus */
 
-#ifdef	KERNEL_PRIVATE
 extern struct machine_info	machine_info;
 extern struct machine_slot	machine_slot[];
-#endif
+
+#endif /* __APPLE_API_UNSTABLE */
+#endif /* KERNEL_PRIVATE */
 
 /*
  *	Machine types known by all.

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2001 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2002 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -32,12 +32,18 @@
 #ifndef __FILEMGRINTERNAL__
 #define __FILEMGRINTERNAL__
 
+#include <sys/appleapiopts.h>
+
+#ifdef KERNEL
+#ifdef __APPLE_API_PRIVATE
+
 #include <sys/param.h>
 #include <sys/vnode.h>
 
 #include "../../hfs.h"
 #include "../../hfs_macos_defs.h"
 #include "../../hfs_format.h"
+#include "../../hfs_cnode.h"
 
 
 #if PRAGMA_ONCE
@@ -104,10 +110,12 @@ enum {
 /* internal flags*/
 
 enum {
-	kEFContigBit				= 1,							/*	force contiguous allocation*/
-	kEFContigMask				= 0x02,
-	kEFAllBit					= 0,							/*	allocate all requested bytes or none*/
-	kEFAllMask					= 0x01,							/*	TruncateFile option flags*/
+	kEFAllMask      = 0x01,   /* allocate all requested bytes or none */
+	kEFContigMask   = 0x02,   /* force contiguous allocation */
+	kEFReserveMask  = 0x04,   /* keep block reserve */
+	kEFDeferMask    = 0x08,   /* defer file block allocations */
+	kEFNoClumpMask  = 0x10,   /* don't round up to clump size */
+
 	kTFTrunExtBit				= 0,							/*	truncate to the extent containing new PEOF*/
 	kTFTrunExtMask				= 1
 };
@@ -118,12 +126,6 @@ enum {
 
 																/*	FileIDs variables*/
 	kNumExtentsToCache			= 4								/*	just guessing for ExchangeFiles*/
-};
-
-
-enum {
-	kInvalidMRUCacheKey			= -1L,							/* flag to denote current MRU cache key is invalid*/
-	kDefaultNumMRUCacheBlocks	= 16							/* default number of blocks in each cache*/
 };
 
 
@@ -174,16 +176,6 @@ enum {
 };
 
 
-enum {
-	vcbMaxNam					= 27,							/* volumes currently have a 27 byte max name length*/
-																/* VCB flags*/
-	vcbManualEjectMask			= 0x0001,						/* bit 0	manual-eject bit: set if volume is in a manual-eject drive*/
-	vcbFlushCriticalInfoMask	= 0x0002,						/* bit 1	critical info bit: set if critical MDB information needs to flush*/
-																/*	IoParam->ioVAtrb*/
-	kDefaultVolumeMask			= 0x0020,
-	kFilesOpenMask				= 0x0040
-};
-
 
 /* Universal catalog name*/
 
@@ -197,8 +189,8 @@ typedef union CatalogName CatalogName;
 /*
  * MacOS accessor routines
  */
-#define GetFileControlBlock(fref)			((FCB *)((fref)->v_data))
-#define GetFileRefNumFromFCB(filePtr)		((filePtr)->h_vp)
+#define GetFileControlBlock(fref)		VTOF((fref))
+#define GetFileRefNumFromFCB(fcb)		FTOV((fcb))
 
 
 /*	The following macro marks a VCB as dirty by setting the upper 8 bits of the flags*/
@@ -216,8 +208,8 @@ IsVCBDirty						(ExtendedVCB *vcb);
 #define VCB_LOCK(vcb)			simple_lock(&vcb->vcbSimpleLock)
 #define VCB_UNLOCK(vcb)			simple_unlock(&vcb->vcbSimpleLock)
 
-#define	MarkVCBDirty(vcb)		{ VCB_LOCK((vcb)); ((vcb)->vcbFlags |= 0xFF00); VCB_UNLOCK((vcb)); }
-#define	MarkVCBClean(vcb)		{ VCB_LOCK((vcb)); ((vcb)->vcbFlags &= 0x00FF); VCB_UNLOCK((vcb)); }
+#define	MarkVCBDirty(vcb)		{ ((vcb)->vcbFlags |= 0xFF00); }
+#define	MarkVCBClean(vcb)		{ ((vcb)->vcbFlags &= 0x00FF); }
 #define	IsVCBDirty(vcb)			((Boolean) ((vcb->vcbFlags & 0xFF00) != 0))
 
 
@@ -243,62 +235,6 @@ ExitOnError						(OSErr 					result);
 /* Catalog Manager Routines (IPI)*/
 
 EXTERN_API_C( OSErr )
-CreateCatalogNode				(ExtendedVCB *			volume,
-								 HFSCatalogNodeID 		parentID,
-								 ConstUTF8Param	 		name,
-								 UInt32 				nodeType,
-								 HFSCatalogNodeID *		catalogNodeID,
-								 UInt32 *				catalogHint,
-								 UInt32					teHint);
-
-EXTERN_API_C( OSErr )
-DeleteCatalogNode				(ExtendedVCB *			volume,
-								 HFSCatalogNodeID 		parentID,
-								 ConstUTF8Param 		name,
-								 UInt32 				hint);
-
-EXTERN_API_C( OSErr )
-GetCatalogNode					(ExtendedVCB *			volume,
-								 HFSCatalogNodeID 		parentID,
-								 ConstUTF8Param 		name,
-                                 UInt32 				length,
-                                 UInt32 				hint,
-								 CatalogNodeData *		nodeData,
-								 UInt32 *				newHint);
-
-EXTERN_API_C( OSErr )
-GetCatalogOffspring				(ExtendedVCB *			volume,
-								 HFSCatalogNodeID 		folderID,
-								 UInt16 				index,
-								 CatalogNodeData *		nodeData,
-								 HFSCatalogNodeID *		nodeID,
-								 SInt16 *			nodeType);
-
-EXTERN_API_C( OSErr )
-MoveRenameCatalogNode			(ExtendedVCB *			volume,
-								 HFSCatalogNodeID		srcParentID,
-								 ConstUTF8Param			srcName,
-					  			 UInt32					srcHint,
-					  			 HFSCatalogNodeID		dstParentID,
-					  			 ConstUTF8Param			dstName,
-					  			 UInt32 *				newHint,
-					  			 UInt32					teHint);
-
-EXTERN_API_C( OSErr )
-UpdateCatalogNode				(ExtendedVCB *			volume,
-								 HFSCatalogNodeID		parentID,
-								 ConstUTF8Param			name,
-								 UInt32					catalogHint, 
-								 const CatalogNodeData * nodeData);
-
-EXTERN_API_C( OSErr )
-CreateFileIDRef					(ExtendedVCB *			volume,
-								 HFSCatalogNodeID		parentID,
-								 ConstUTF8Param			name,
-								 UInt32					hint,
-								 HFSCatalogNodeID *		threadID);
-
-EXTERN_API_C( OSErr )
 ExchangeFileIDs					(ExtendedVCB *			volume,
 								 ConstUTF8Param			srcName,
 								 ConstUTF8Param			destName,
@@ -306,13 +242,6 @@ ExchangeFileIDs					(ExtendedVCB *			volume,
 								 HFSCatalogNodeID		destID,
 								 UInt32					srcHint,
 								 UInt32					destHint );
-
-EXTERN_API_C( OSErr )
-LinkCatalogNode					(ExtendedVCB *			volume,
-								 HFSCatalogNodeID 		parentID,
-								 ConstUTF8Param 		name,
-								 HFSCatalogNodeID 		linkParentID,
-								 ConstUTF8Param 		linkName);
 
 EXTERN_API_C( SInt32 )
 CompareCatalogKeys				(HFSCatalogKey *		searchKey,
@@ -329,31 +258,6 @@ EXTERN_API_C( void )
 InvalidateCatalogCache			(ExtendedVCB *			volume);
 
 
-/* GenericMRUCache Routines*/
-EXTERN_API_C( OSErr )
-InitMRUCache					(UInt32 				bufferSize,
-								 UInt32 				numCacheBlocks,
-								 Ptr *					cachePtr);
-
-EXTERN_API_C( OSErr )
-DisposeMRUCache					(Ptr 					cachePtr);
-
-EXTERN_API_C( void )
-TrashMRUCache					(Ptr 					cachePtr);
-
-EXTERN_API_C( OSErr )
-GetMRUCacheBlock				(UInt32 				key,
-								 Ptr 					cachePtr,
-								 Ptr *					buffer);
-
-EXTERN_API_C( void )
-InvalidateMRUCacheBlock			(Ptr 					cachePtr,
-								 Ptr 					buffer);
-
-EXTERN_API_C( void )
-InsertMRUCacheBlock				(Ptr 					cachePtr,
-								 UInt32 				key,
-								 Ptr 					buffer);
 
 /* BTree Manager Routines*/
 
@@ -368,17 +272,6 @@ SearchBTreeRecord				(FileReference 				refNum,
 								 void *					data,
 								 UInt16 *				dataSize,
 								 UInt32 *				newHint);
-
-EXTERN_API_C( OSErr )
-InsertBTreeRecord				(FileReference 				refNum,
-								 void *					key,
-								 void *					data,
-								 UInt16 				dataSize,
-								 UInt32 *				newHint);
-
-EXTERN_API_C( OSErr )
-DeleteBTreeRecord				(FileReference 				refNum,
-								 void *					key);
 
 EXTERN_API_C( OSErr )
 ReplaceBTreeRecord				(FileReference 				refNum,
@@ -421,12 +314,6 @@ CompareExtentKeysPlus			(const HFSPlusExtentKey *searchKey,
 								 const HFSPlusExtentKey *trialKey);
 
 EXTERN_API_C( OSErr )
-DeleteFile						(ExtendedVCB *			vcb,
-								 HFSCatalogNodeID 		parDirID,
-								 ConstUTF8Param 		catalogName,
-								 UInt32					catalogHint);
-
-EXTERN_API_C( OSErr )
 TruncateFileC					(ExtendedVCB *			vcb,
 								 FCB *					fcb,
 								 SInt64 				peof,
@@ -457,10 +344,6 @@ NodesAreContiguous				(ExtendedVCB *			vcb,
 
 /*	Utility routines*/
 
-EXTERN_API_C( void )
-ClearMemory						(void *					start,
-								 UInt32 				length);
-
 EXTERN_API_C( OSErr )
 VolumeWritable					(ExtendedVCB *	vcb);
 
@@ -469,23 +352,11 @@ VolumeWritable					(ExtendedVCB *	vcb);
 EXTERN_API_C( UInt32 )
 GetTimeUTC						(void);
 
-/*	Get the current local time*/
-EXTERN_API_C( UInt32 )
-GetTimeLocal					(Boolean forHFS);
-
 EXTERN_API_C( UInt32 )
 LocalToUTC						(UInt32 				localTime);
 
 EXTERN_API_C( UInt32 )
 UTCToLocal						(UInt32 				utcTime);
-
-
-/*	Volumes routines*/
-EXTERN_API_C( OSErr )
-FlushVolumeControlBlock			(ExtendedVCB *			vcb);
-
-EXTERN_API_C( OSErr )
-ValidVolumeHeader				(HFSPlusVolumeHeader *			volumeHeader);
 
 
 #if PRAGMA_STRUCT_ALIGN
@@ -506,5 +377,7 @@ ValidVolumeHeader				(HFSPlusVolumeHeader *			volumeHeader);
 }
 #endif
 
+#endif /* __APPLE_API_PRIVATE */
+#endif /* KERNEL */
 #endif /* __FILEMGRINTERNAL__ */
 

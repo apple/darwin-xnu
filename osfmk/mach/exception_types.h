@@ -135,6 +135,13 @@
 
 #define FIRST_EXCEPTION		1	/* ZERO is illegal */
 
+/*
+ * Machine independent codes for EXC_SOFTWARE
+ * Codes 0x10000 - 0x1FFFF reserved for OS emulation (Unix) 
+ * 0x10000 - 0x10002 in use for unix signals
+ */
+#define	EXC_SOFT_SIGNAL		0x10003	/* Unix signal exceptions */
+
 #ifndef	ASSEMBLER
 #include <mach/port.h>
 #include <mach/thread_status.h>

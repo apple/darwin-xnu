@@ -22,6 +22,10 @@
 #ifndef __HFS_ENDIAN_H__
 #define __HFS_ENDIAN_H__
 
+#include <sys/appleapiopts.h>
+
+#ifdef KERNEL
+#ifdef __APPLE_API_PRIVATE
 /*
  * hfs_endian.h
  *
@@ -75,4 +79,6 @@ int  hfs_swap_BTNode (BlockDescriptor *src, int isHFSPlus, HFSCatalogNodeID file
 }
 #endif
 
+#endif /* __APPLE_API_PRIVATE */
+#endif /* KERNEL */
 #endif /* __HFS_FORMAT__ */

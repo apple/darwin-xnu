@@ -502,7 +502,7 @@ unp_attach(so)
 		if (error)
 			return (error);
 	}
-	unp = zalloc(unp_zone);
+	unp = (struct unpcb*)zalloc(unp_zone);
 	if (unp == NULL)
 		return (ENOBUFS);
 	bzero(unp, sizeof *unp);
@@ -550,7 +550,7 @@ unp_detach(unp)
 	}
 	if (unp->unp_addr)
 		FREE(unp->unp_addr, M_SONAME);
-	zfree(unp_zone, unp);
+	zfree(unp_zone, (vm_offset_t)unp);
 }
 
 static int
@@ -568,7 +568,6 @@ unp_bind(unp, nam, p)
 
 	if (unp->unp_vnode != NULL)
 		return (EINVAL);
-#define offsetof(s, e) ((char *)&((s *)0)->e - (char *)((s *)0))
 	namelen = soun->sun_len - offsetof(struct sockaddr_un, sun_path);
 	if (namelen <= 0)
 		return EINVAL;
@@ -884,7 +883,7 @@ unp_drop(unp, errno)
 		so->so_pcb = (caddr_t) 0;
 		if (unp->unp_addr)
 			FREE(unp->unp_addr, M_SONAME);
-		zfree(unp_zone, unp);
+		zfree(unp_zone, (vm_offset_t)unp);
 		sofree(so);
 	}
 }

@@ -1104,7 +1104,7 @@ asp_ack_reply(gref, mioc)
 			if ((m = scb->sess_ioc) == 0) {
 				scb->sess_ioc = mdata;
 				if (scb->get_wait)
-					thread_wakeup(&scb->event);
+					wakeup(&scb->event);
 				else
 					atalk_notify_sel(gref);
 			} else {
@@ -1317,7 +1317,7 @@ asp_ack_reply(gref, mioc)
 			gbuf_freem(mioc);
 			ATDISABLE(s, scb->lock);
 			if (scb->get_wait)
-				thread_wakeup(&scb->event);
+				wakeup(&scb->event);
 			else
 				atalk_notify_sel(gref);
 			ATENABLE(s, scb->lock);
@@ -1753,7 +1753,7 @@ asp_hangup(scb)
 	 */
 	if (scb->rem_addr.node) {
 		if (scb->get_wait) {
-			thread_wakeup(&scb->event);
+			wakeup(&scb->event);
 			ATENABLE(s, scb->lock);
 		} else {
 			ATENABLE(s, scb->lock);
@@ -1882,7 +1882,7 @@ asp_putnext(gref, mproto)
 		scb->snd_stop = 1;
 
 	if (scb->get_wait) {
-		thread_wakeup(&scb->event);
+		wakeup(&scb->event);
 		ATENABLE(s, scb->lock);
 	} else if (mproto == scb->sess_ioc) {
 		ATENABLE(s, scb->lock);

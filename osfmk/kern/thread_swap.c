@@ -64,10 +64,7 @@
 #include <mach/policy.h>
 
 queue_head_t		swapin_queue;
-decl_simple_lock_data(,swapin_lock_data)
-
-#define swapin_lock()		simple_lock(&swapin_lock_data)
-#define swapin_unlock()		simple_unlock(&swapin_lock_data)
+decl_simple_lock_data(,swapin_lock)
 
 mach_counter_t c_swapin_thread_block;
 
@@ -82,7 +79,7 @@ void
 swapin_init(void)
 {
 	 queue_init(&swapin_queue);
-	 simple_lock_init(&swapin_lock_data, ETAP_THREAD_SWAPPER);
+	 simple_lock_init(&swapin_lock, ETAP_THREAD_SWAPPER);
 	 kernel_thread_with_priority(
 						kernel_task, BASEPRI_PREEMPT - 2,
 										swapin_thread, TRUE, TRUE);
@@ -91,11 +88,8 @@ swapin_init(void)
 /*
  *	thread_swapin: [exported]
  *
- *	Place the specified thread in the list of threads to swapin.  It
- *	is assumed that the thread is locked, therefore we are at splsched.
- *
- *	We don't bother with stack_alloc_try to optimize swapin;
- *	our callers have already tried that route.
+ *	Place the specified thread in the list of threads to swapin.
+ *	Called with thread locked, returned unlocked.
  */
 
 void
@@ -106,23 +100,24 @@ thread_swapin(
 
 	case TH_STACK_HANDOFF:
 		/*
-		 *	Swapped out - queue for swapin thread.
+		 *	Swapped out.
 		 */
 		thread->state = (thread->state & ~TH_STACK_STATE) | TH_STACK_ALLOC;
-		swapin_lock();
+		thread_unlock(thread);
+		simple_lock(&swapin_lock);
 		enqueue_tail(&swapin_queue, (queue_entry_t) thread);
-		swapin_unlock();
-		thread_wakeup((event_t) &swapin_queue);
+		simple_unlock(&swapin_lock);
+		thread_wakeup((event_t)&swapin_queue);
 		break;
 
-	    case TH_STACK_ALLOC:
+	case TH_STACK_ALLOC:
 		/*
-		 *	Already queued for swapin thread, or being
-		 *	swapped in.
+		 *	Already queued.
 		 */
+		thread_unlock(thread);
 		break;
 
-	    default:
+	default:
 		/*
 		 *	Already swapped in.
 		 */
@@ -134,8 +129,7 @@ thread_swapin(
  *	thread_doswapin:
  *
  *	Swapin the specified thread, if it should be runnable, then put
- *	it on a run queue.  No locks should be held on entry, as it is
- *	likely that this routine will sleep (waiting for stack allocation).
+ *	it on a run queue.
  */
 void
 thread_doswapin(
@@ -153,12 +147,11 @@ thread_doswapin(
 	/*
 	 *	Place on run queue.  
 	 */
-
 	s = splsched();
 	thread_lock(thread);
 	thread->state &= ~(TH_STACK_HANDOFF | TH_STACK_ALLOC);
 	if (thread->state & TH_RUN)
-		thread_setrun(thread, TRUE, FALSE);
+		thread_setrun(thread, HEAD_Q);
 	thread_unlock(thread);
 	(void) splx(s);
 }
@@ -174,33 +167,25 @@ swapin_thread_continue(void)
 {
 	register thread_t	thread;
 
-#if defined(__i386__)
-loop:
-#endif
 	(void)splsched();
-	swapin_lock();
+	simple_lock(&swapin_lock);
 
 	while ((thread = (thread_t)dequeue_head(&swapin_queue)) != THREAD_NULL) {
-		swapin_unlock();
+		simple_unlock(&swapin_lock);
 		(void)spllo();
 
 		thread_doswapin(thread);
 
 		(void)splsched();
-		swapin_lock();
+		simple_lock(&swapin_lock);
 	}
 
-	assert_wait((event_t) &swapin_queue, THREAD_UNINT);
-	swapin_unlock();
+	assert_wait((event_t)&swapin_queue, THREAD_UNINT);
+	simple_unlock(&swapin_lock);
 	(void)spllo();
 
 	counter(c_swapin_thread_block++);
-#if defined (__i386__)
-	thread_block((void (*)(void)) 0);
-	goto loop;
-#else
 	thread_block(swapin_thread_continue);
-#endif
 	/*NOTREACHED*/
 }
 

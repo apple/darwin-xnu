@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1999 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 1999,2001-2002 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -20,7 +20,7 @@
  * @APPLE_LICENSE_HEADER_END@
  */
 
-/*	(c) 1997-1998	Apple Computer, Inc.  All Rights Reserved */
+/*	(c) 1997-1998,2001 Apple Computer, Inc.  All Rights Reserved */
 /*
  * Copyright (c) 1991, 1993
  *	The Regents of the University of California.  All rights reserved.
@@ -61,10 +61,17 @@
  *	derived from @(#)lockf.h	8.2 (Berkeley) 10/26/94
  */
 
+#ifndef  __HFS_LOCKF__
+#define  __HFS_LOCKF__
+
+#include <sys/appleapiopts.h>
+
+#ifdef KERNEL
+#ifdef __APPLE_API_PRIVATE
 /*
  * The hfslockf structure is a kernel structure which contains the information
  * associated with a byte range lock.  The hfslockf structures are linked into
- * the inode structure. Locks are sorted by the starting byte of the lock for
+ * a cnode's file fork.  Locks are sorted by the starting byte of the lock for
  * efficiency.
  */
 TAILQ_HEAD(locklist, hfslockf);
@@ -75,8 +82,8 @@ struct hfslockf {
 	off_t	lf_start;	    /* Byte # of the start of the lock */
 	off_t	lf_end;		    /* Byte # of the end of the lock (-1=EOF) */
 	caddr_t	lf_id;		    /* Id of the resource holding the lock */
-    struct	hfsnode *lf_hfsnode;    /* Back pointer to the inode */
-	struct	hfslockf *lf_next;	    /* Pointer to the next lock on this inode */
+	struct	filefork *lf_fork;  /* Back pointer to the file fork */
+	struct	hfslockf *lf_next;  /* Pointer to the next lock on this fork */
 	struct	locklist lf_blkhd;  /* List of requests blocked on this lock */
 	TAILQ_ENTRY(hfslockf) lf_block;/* A request waiting for a lock */
 };
@@ -104,4 +111,7 @@ __BEGIN_DECLS
 void	hfs_lprint __P((char *, struct hfslockf *));
 void	hfs_lprintlist __P((char *, struct hfslockf *));
 __END_DECLS
-#endif
+#endif	/* LOCKF_DEBUG */
+#endif /* __APPLE_API_PRIVATE */
+#endif /* KERNEL */
+#endif  /* __HFS_LOCKF__ */

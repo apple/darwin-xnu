@@ -21,6 +21,8 @@
  */
 #ifndef DLIL_PVT_H
 #define DLIL_PVT_H
+#include <sys/appleapiopts.h>
+#ifdef __APPLE_API_PRIVATE
 
 #include <net/dlil.h>
 #include <sys/queue.h>
@@ -41,6 +43,5 @@ struct dlil_family_mod_str {
     int (*del_proto)(struct if_proto  *proto);
 }
 
-
-    
+#endif /* __APPLE_API_PRIVATE */
 #endif

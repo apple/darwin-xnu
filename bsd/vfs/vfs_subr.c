@@ -64,6 +64,7 @@
  * External virtual filesystem routines
  */
 
+#undef	DIAGNOSTIC
 #define DIAGNOSTIC 1
 
 #include <sys/param.h>
@@ -107,15 +108,6 @@ static void vinactive(struct vnode *vp);
 static int vnreclaim(int count);
 extern kern_return_t 
 	adjust_vm_object_cache(vm_size_t oval, vm_size_t nval);
-
-/*
- * Insq/Remq for the vnode usage lists.
- */
-#define	bufinsvn(bp, dp)	LIST_INSERT_HEAD(dp, bp, b_vnbufs)
-#define	bufremvn(bp) {							\
-	LIST_REMOVE(bp, b_vnbufs);					\
-	(bp)->b_vnbufs.le_next = NOLIST;				\
-}
 
 TAILQ_HEAD(freelst, vnode) vnode_free_list;	/* vnode free list */
 TAILQ_HEAD(inactivelst, vnode) vnode_inactive_list;	/* vnode inactive list */
@@ -260,7 +252,12 @@ __private_extern__ kern_return_t
 reset_vmobjectcache(unsigned int val1, unsigned int val2)
 {
 	vm_size_t oval = val1 - VNODE_FREE_MIN;
-	vm_size_t nval = val2 - VNODE_FREE_MIN;
+	vm_size_t nval;
+	
+	if(val2 < VNODE_FREE_MIN)
+		nval = 0;
+	else
+		nval = val2 - VNODE_FREE_MIN;
 
 	return(adjust_vm_object_cache(oval, nval));
 }
@@ -641,10 +638,9 @@ vpwakeup(struct vnode *vp)
 	if (vp) {
 		if (--vp->v_numoutput < 0)
 			panic("vpwakeup: neg numoutput");
-		if ((vp->v_flag & VBWAIT) && vp->v_numoutput <= 0) {
-			if (vp->v_numoutput < 0)
-				panic("vpwakeup: neg numoutput 2");
-			vp->v_flag &= ~VBWAIT;
+		if ((vp->v_flag & VBWAIT || vp->v_flag & VTHROTTLED)
+		    && vp->v_numoutput <= 0) {
+			vp->v_flag &= ~(VBWAIT|VTHROTTLED);
 			wakeup((caddr_t)&vp->v_numoutput);
 		}
 	}
@@ -657,8 +653,6 @@ void
 vwakeup(bp)
 	register struct buf *bp;
 {
-	register struct vnode *vp;
-
 	CLR(bp->b_flags, B_WRITEINPROG);
 	vpwakeup(bp->b_vp);
 }
@@ -683,7 +677,7 @@ vinvalbuf(vp, flags, cred, p, slpflag, slptimeo)
 		if (error = VOP_FSYNC(vp, cred, MNT_WAIT, p)) {
 			return (error);
 		}
-		if (vp->v_dirtyblkhd.lh_first != NULL || (vp->v_flag & VHASDIRTY))
+		if (vp->v_dirtyblkhd.lh_first)
 			panic("vinvalbuf: dirty bufs");
 	}
 
@@ -734,82 +728,6 @@ vinvalbuf(vp, flags, cred, p, slpflag, slptimeo)
 	    (vp->v_dirtyblkhd.lh_first || vp->v_cleanblkhd.lh_first))
 		panic("vinvalbuf: flush failed");
 	return (0);
-}
-
-/*
- * Associate a buffer with a vnode.
- */
-void
-bgetvp(vp, bp)
-	register struct vnode *vp;
-	register struct buf *bp;
-{
-
-	if (bp->b_vp)
-		panic("bgetvp: not free");
-	VHOLD(vp);
-	bp->b_vp = vp;
-	if (vp->v_type == VBLK || vp->v_type == VCHR)
-		bp->b_dev = vp->v_rdev;
-	else
-		bp->b_dev = NODEV;
-	/*
-	 * Insert onto list for new vnode.
-	 */
-	bufinsvn(bp, &vp->v_cleanblkhd);
-}
-
-/*
- * Disassociate a buffer from a vnode.
- */
-void
-brelvp(bp)
-	register struct buf *bp;
-{
-	struct vnode *vp;
-
-	if (bp->b_vp == (struct vnode *) 0)
-		panic("brelvp: NULL");
-	/*
-	 * Delete from old vnode list, if on one.
-	 */
-	if (bp->b_vnbufs.le_next != NOLIST)
-		bufremvn(bp);
-	vp = bp->b_vp;
-	bp->b_vp = (struct vnode *) 0;
-	HOLDRELE(vp);
-}
-
-/*
- * Reassign a buffer from one vnode to another.
- * Used to assign file specific control information
- * (indirect blocks) to the vnode to which they belong.
- */
-void
-reassignbuf(bp, newvp)
-	register struct buf *bp;
-	register struct vnode *newvp;
-{
-	register struct buflists *listheadp;
-
-	if (newvp == NULL) {
-		printf("reassignbuf: NULL");
-		return;
-	}
-	/*
-	 * Delete from old vnode list, if on one.
-	 */
-	if (bp->b_vnbufs.le_next != NOLIST)
-		bufremvn(bp);
-	/*
-	 * If dirty, put on list of dirty buffers;
-	 * otherwise insert onto list of clean buffers.
-	 */
-	if (ISSET(bp->b_flags, B_DELWRI))
-		listheadp = &newvp->v_dirtyblkhd;
-	else
-		listheadp = &newvp->v_cleanblkhd;
-	bufinsvn(bp, listheadp);
 }
 
 /*
@@ -940,6 +858,8 @@ vget(vp, flags, p)
 {
 	int error = 0;
 
+retry:
+
 	/*
 	 * If the vnode is in the process of being cleaned out for
 	 * another use, we wait for the cleaning to finish and then
@@ -964,6 +884,19 @@ vget(vp, flags, p)
 		simple_unlock(&vp->v_interlock);
 		(void)tsleep((caddr_t)&vp->v_ubcinfo, PINOD, "vclean", 0);
 		return (ENOENT);
+	}
+
+	/*
+	 * if the vnode is being initialized,
+	 * wait for it to finish initialization
+	 */
+	if (ISSET(vp->v_flag,  VUINIT)) {
+		if (ISSET(vp->v_flag,  VUINIT)) {
+			SET(vp->v_flag, VUWANT);
+			simple_unlock(&vp->v_interlock);
+			(void) tsleep((caddr_t)vp, PINOD, "vget2", 0);
+			goto retry;
+		}
 	}
 
 	simple_lock(&vnode_free_list_slock);
@@ -1468,9 +1401,9 @@ loop:
 
 		simple_lock(&vp->v_interlock);
 		/*
-		 * Skip over a vnodes marked VSYSTEM.
+		 * Skip over a vnodes marked VSYSTEM or VNOFLUSH.
 		 */
-		if ((flags & SKIPSYSTEM) && (vp->v_flag & VSYSTEM)) {
+		if ((flags & SKIPSYSTEM) && ((vp->v_flag & VSYSTEM) || (vp->v_flag & VNOFLUSH))) {
 			simple_unlock(&vp->v_interlock);
 			continue;
 		}
@@ -1525,7 +1458,7 @@ loop:
 		busy++;
 	}
 	simple_unlock(&mntvnode_slock);
-	if (busy)
+	if (busy && ((flags & FORCECLOSE)==0))
 		return (EBUSY);
 	return (0);
 }
@@ -1541,8 +1474,6 @@ vclean(vp, flags, p)
 	struct proc *p;
 {
 	int active;
-	void *obj;
-	kern_return_t kret;
 	int removed = 0;
 	int didhold;
 
@@ -1942,6 +1873,8 @@ vprint(label, vp)
 		strcat(buf, "|VTEXT");
 	if (vp->v_flag & VSYSTEM)
 		strcat(buf, "|VSYSTEM");
+	if (vp->v_flag & VNOFLUSH)
+		strcat(buf, "|VNOFLUSH");
 	if (vp->v_flag & VXLOCK)
 		strcat(buf, "|VXLOCK");
 	if (vp->v_flag & VXWANT)
@@ -2006,10 +1939,19 @@ vfs_sysctl(name, namelen, oldp, oldlenp, newp, newlen, p)
 	size_t newlen;
 	struct proc *p;
 {
-	struct ctldebug *cdp;
 	struct vfsconf *vfsp;
 
-	if (name[0] == VFS_NUMMNTOPS) {
+	/*
+	 * The VFS_NUMMNTOPS shouldn't be at name[0] since
+	 * is a VFS generic variable. So now we must check
+	 * namelen so we don't end up covering any UFS
+	 * variables (sinc UFS vfc_typenum is 1).
+	 *
+	 * It should have been:
+	 *    name[0]:  VFS_GENERIC
+	 *    name[1]:  VFS_NUMMNTOPS
+	 */
+	if (namelen == 1 && name[0] == VFS_NUMMNTOPS) {
 		extern unsigned int vfs_nummntops;
 		return (sysctl_rdint(oldp, oldlenp, newp, vfs_nummntops));
 	}
@@ -2364,12 +2306,10 @@ vm_object_cache_reclaim(int count)
 static int
 vnreclaim(int count)
 {
-	int cnt, i, loopcnt;
-	void *obj;
+	int i, loopcnt;
 	struct vnode *vp;
 	int err;
 	struct proc *p;
-	kern_return_t kret;
 
 	i = 0;
 	loopcnt = 0;
@@ -2621,7 +2561,6 @@ int walk_vnodes_debug=0;
 void
 walk_allvnodes()
 {
-	struct proc *p = current_proc();
 	struct mount *mp, *nmp;
 	struct vnode *vp;
 	int cnt = 0;

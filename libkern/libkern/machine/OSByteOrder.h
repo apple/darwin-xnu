@@ -30,7 +30,7 @@
 #ifndef _OS_OSBYTEORDERMACHINE_H
 #define _OS_OSBYTEORDERMACHINE_H
 
-#include <libkern/OSBase.h>
+#include <libkern/OSTypes.h>
 
 /* Functions for byte reversed loads. */
 

@@ -26,6 +26,7 @@
  */
 #ifndef NET_KEXT_NET_H
 #define NET_KEXT_NET_H
+#include <sys/appleapiopts.h>
 
 #include <sys/queue.h>
 #include <sys/socketvar.h>
@@ -40,6 +41,8 @@ struct protosw;
 struct sockif;
 struct sockutil;
 struct sockopt;
+
+#ifdef __APPLE_API_UNSTABLE
 
 /*
  * This structure gives access to the functionality of the filter.
@@ -81,9 +84,11 @@ extern int register_sockfilter(struct NFDescriptor *,
 /* How to unregister: filter, original protosw, flags */
 extern int unregister_sockfilter(struct NFDescriptor *, struct protosw *, int);
 
+#ifdef __APPLE_API_PRIVATE
 TAILQ_HEAD(nf_list, NFDescriptor);
 
 extern struct nf_list nf_list;
+#endif /* __APPLE_API_PRIVATE */
 #endif
 
 #define NKE_OK 0
@@ -152,7 +157,7 @@ struct sockif
 	/* Calls sowwakeup(), sorwakeup() */
 	int (*sf_soisdisconnecting)(struct socket *, struct kextcb *);
 	/* Calls soreserve(), soqinsque(), soqremque(), sorwakeup() */
-	struct socket *(*sf_sonewconn1)(struct socket *, int, struct kextcb *);
+	int (*sf_sonewconn)(struct socket *, int, struct kextcb *);
 	int (*sf_soqinsque)(struct socket *, struct socket *, int,
 			     struct kextcb *);
 	int (*sf_soqremque)(struct socket *, int, struct kextcb *);
@@ -200,5 +205,6 @@ struct sockutil
 	int (*su_sbwait)(struct sockbuf *, struct kextcb *);
 	u_long	reserved[4];
 };
+#endif /* __APPLE_API_UNSTABLE */
 
 #endif

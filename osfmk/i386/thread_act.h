@@ -172,4 +172,11 @@ extern void *act_thread_csave(void);
 extern void act_thread_catt(void *ctx);
 extern void act_thread_cfree(void *ctx);
 
+#define current_act_fast()	(current_thread()->top_act)
+#define current_act_slow()	((current_thread()) ?			\
+								current_act_fast() :		\
+								THR_ACT_NULL)
+
+#define current_act()	current_act_slow()    /* JMM - til we find the culprit */
+
 #endif	/* _I386_THREAD_ACT_H_ */

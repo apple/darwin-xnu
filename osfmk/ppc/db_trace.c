@@ -28,6 +28,7 @@
 #include <mach/boolean.h>
 #include <vm/vm_map.h>
 #include <kern/thread.h>
+#include <kern/processor.h>
 #include <kern/task.h>
 
 #include <machine/asm.h>
@@ -43,9 +44,9 @@
 #include <ddb/db_output.h>
 
 extern jmp_buf_t *db_recover;
-extern struct ppc_saved_state *saved_state[];
+extern struct savearea *saved_state[];
 
-struct ppc_saved_state ddb_null_kregs;
+struct savearea ddb_null_kregs;
 
 extern vm_offset_t vm_min_inks_addr;	/* set by db_clone_symtabXXX */
 
@@ -123,47 +124,45 @@ extern int	_setjmp(
  */
 struct db_variable db_regs[] = {
 	/* XXX "pc" is an alias to "srr0"... */
-  { "pc",	(int *)&ddb_regs.srr0,	db_ppc_reg_value, 0, 0, 0, 0, TRUE },
-  { "srr0",	(int *)&ddb_regs.srr0,	db_ppc_reg_value, 0, 0, 0, 0, TRUE },
-  { "srr1",	(int *)&ddb_regs.srr1,	db_ppc_reg_value, 0, 0, 0, 0, TRUE },
-  { "r0",	(int *)&ddb_regs.r0,	db_ppc_reg_value, 0, 0, 0, 0, TRUE },
-  { "r1",	(int *)&ddb_regs.r1,	db_ppc_reg_value, 0, 0, 0, 0, TRUE },
-  { "r2",	(int *)&ddb_regs.r2,	db_ppc_reg_value, 0, 0, 0, 0, TRUE },
-  { "r3",	(int *)&ddb_regs.r3,	db_ppc_reg_value, 0, 0, 0, 0, TRUE },
-  { "r4",	(int *)&ddb_regs.r4,	db_ppc_reg_value, 0, 0, 0, 0, TRUE },
-  { "r5",	(int *)&ddb_regs.r5,	db_ppc_reg_value, 0, 0, 0, 0, TRUE },
-  { "r6",	(int *)&ddb_regs.r6,	db_ppc_reg_value, 0, 0, 0, 0, TRUE },
-  { "r7",	(int *)&ddb_regs.r7,	db_ppc_reg_value, 0, 0, 0, 0, TRUE },
-  { "r8",	(int *)&ddb_regs.r8,	db_ppc_reg_value, 0, 0, 0, 0, TRUE },
-  { "r9",	(int *)&ddb_regs.r9,	db_ppc_reg_value, 0, 0, 0, 0, TRUE },
-  { "r10",	(int *)&ddb_regs.r10,	db_ppc_reg_value, 0, 0, 0, 0, TRUE },
-  { "r11",	(int *)&ddb_regs.r11,	db_ppc_reg_value, 0, 0, 0, 0, TRUE },
-  { "r12",	(int *)&ddb_regs.r12,	db_ppc_reg_value, 0, 0, 0, 0, TRUE },
-  { "r13",	(int *)&ddb_regs.r13,	db_ppc_reg_value, 0, 0, 0, 0, TRUE },
-  { "r14",	(int *)&ddb_regs.r14,	db_ppc_reg_value, 0, 0, 0, 0, TRUE },
-  { "r15",	(int *)&ddb_regs.r15,	db_ppc_reg_value, 0, 0, 0, 0, TRUE },
-  { "r16",	(int *)&ddb_regs.r16,	db_ppc_reg_value, 0, 0, 0, 0, TRUE },
-  { "r17",	(int *)&ddb_regs.r17,	db_ppc_reg_value, 0, 0, 0, 0, TRUE },
-  { "r18",	(int *)&ddb_regs.r18,	db_ppc_reg_value, 0, 0, 0, 0, TRUE },
-  { "r19",	(int *)&ddb_regs.r19,	db_ppc_reg_value, 0, 0, 0, 0, TRUE },
-  { "r20",	(int *)&ddb_regs.r20,	db_ppc_reg_value, 0, 0, 0, 0, TRUE },
-  { "r21",	(int *)&ddb_regs.r21,	db_ppc_reg_value, 0, 0, 0, 0, TRUE },
-  { "r22",	(int *)&ddb_regs.r22,	db_ppc_reg_value, 0, 0, 0, 0, TRUE },
-  { "r23",	(int *)&ddb_regs.r23,	db_ppc_reg_value, 0, 0, 0, 0, TRUE },
-  { "r24",	(int *)&ddb_regs.r24,	db_ppc_reg_value, 0, 0, 0, 0, TRUE },
-  { "r25",	(int *)&ddb_regs.r25,	db_ppc_reg_value, 0, 0, 0, 0, TRUE },
-  { "r26",	(int *)&ddb_regs.r26,	db_ppc_reg_value, 0, 0, 0, 0, TRUE },
-  { "r27",	(int *)&ddb_regs.r27,	db_ppc_reg_value, 0, 0, 0, 0, TRUE },
-  { "r28",	(int *)&ddb_regs.r28,	db_ppc_reg_value, 0, 0, 0, 0, TRUE },
-  { "r29",	(int *)&ddb_regs.r29,	db_ppc_reg_value, 0, 0, 0, 0, TRUE },
-  { "r30",	(int *)&ddb_regs.r30,	db_ppc_reg_value, 0, 0, 0, 0, TRUE },
-  { "r31",	(int *)&ddb_regs.r31,	db_ppc_reg_value, 0, 0, 0, 0, TRUE },
-  { "cr",	(int *)&ddb_regs.cr,	db_ppc_reg_value, 0, 0, 0, 0, TRUE },
-  { "xer",	(int *)&ddb_regs.xer,	db_ppc_reg_value, 0, 0, 0, 0, TRUE },
-  { "lr",	(int *)&ddb_regs.lr,	db_ppc_reg_value, 0, 0, 0, 0, TRUE },
-  { "ctr",	(int *)&ddb_regs.ctr,	db_ppc_reg_value, 0, 0, 0, 0, TRUE },
-  { "mq",	(int *)&ddb_regs.mq,	db_ppc_reg_value, 0, 0, 0, 0, TRUE },
-  { "sr_copyin",(int *)&ddb_regs.sr_copyin,db_ppc_reg_value, 0, 0, 0, 0, TRUE },
+  { "pc",	(int *)&ddb_regs.save_srr0,	db_ppc_reg_value, 0, 0, 0, 0, TRUE },
+  { "srr0",	(int *)&ddb_regs.save_srr0,	db_ppc_reg_value, 0, 0, 0, 0, TRUE },
+  { "srr1",	(int *)&ddb_regs.save_srr1,	db_ppc_reg_value, 0, 0, 0, 0, TRUE },
+  { "r0",	(int *)&ddb_regs.save_r0,	db_ppc_reg_value, 0, 0, 0, 0, TRUE },
+  { "r1",	(int *)&ddb_regs.save_r1,	db_ppc_reg_value, 0, 0, 0, 0, TRUE },
+  { "r2",	(int *)&ddb_regs.save_r2,	db_ppc_reg_value, 0, 0, 0, 0, TRUE },
+  { "r3",	(int *)&ddb_regs.save_r3,	db_ppc_reg_value, 0, 0, 0, 0, TRUE },
+  { "r4",	(int *)&ddb_regs.save_r4,	db_ppc_reg_value, 0, 0, 0, 0, TRUE },
+  { "r5",	(int *)&ddb_regs.save_r5,	db_ppc_reg_value, 0, 0, 0, 0, TRUE },
+  { "r6",	(int *)&ddb_regs.save_r6,	db_ppc_reg_value, 0, 0, 0, 0, TRUE },
+  { "r7",	(int *)&ddb_regs.save_r7,	db_ppc_reg_value, 0, 0, 0, 0, TRUE },
+  { "r8",	(int *)&ddb_regs.save_r8,	db_ppc_reg_value, 0, 0, 0, 0, TRUE },
+  { "r9",	(int *)&ddb_regs.save_r9,	db_ppc_reg_value, 0, 0, 0, 0, TRUE },
+  { "r10",	(int *)&ddb_regs.save_r10,	db_ppc_reg_value, 0, 0, 0, 0, TRUE },
+  { "r11",	(int *)&ddb_regs.save_r11,	db_ppc_reg_value, 0, 0, 0, 0, TRUE },
+  { "r12",	(int *)&ddb_regs.save_r12,	db_ppc_reg_value, 0, 0, 0, 0, TRUE },
+  { "r13",	(int *)&ddb_regs.save_r13,	db_ppc_reg_value, 0, 0, 0, 0, TRUE },
+  { "r14",	(int *)&ddb_regs.save_r14,	db_ppc_reg_value, 0, 0, 0, 0, TRUE },
+  { "r15",	(int *)&ddb_regs.save_r15,	db_ppc_reg_value, 0, 0, 0, 0, TRUE },
+  { "r16",	(int *)&ddb_regs.save_r16,	db_ppc_reg_value, 0, 0, 0, 0, TRUE },
+  { "r17",	(int *)&ddb_regs.save_r17,	db_ppc_reg_value, 0, 0, 0, 0, TRUE },
+  { "r18",	(int *)&ddb_regs.save_r18,	db_ppc_reg_value, 0, 0, 0, 0, TRUE },
+  { "r19",	(int *)&ddb_regs.save_r19,	db_ppc_reg_value, 0, 0, 0, 0, TRUE },
+  { "r20",	(int *)&ddb_regs.save_r20,	db_ppc_reg_value, 0, 0, 0, 0, TRUE },
+  { "r21",	(int *)&ddb_regs.save_r21,	db_ppc_reg_value, 0, 0, 0, 0, TRUE },
+  { "r22",	(int *)&ddb_regs.save_r22,	db_ppc_reg_value, 0, 0, 0, 0, TRUE },
+  { "r23",	(int *)&ddb_regs.save_r23,	db_ppc_reg_value, 0, 0, 0, 0, TRUE },
+  { "r24",	(int *)&ddb_regs.save_r24,	db_ppc_reg_value, 0, 0, 0, 0, TRUE },
+  { "r25",	(int *)&ddb_regs.save_r25,	db_ppc_reg_value, 0, 0, 0, 0, TRUE },
+  { "r26",	(int *)&ddb_regs.save_r26,	db_ppc_reg_value, 0, 0, 0, 0, TRUE },
+  { "r27",	(int *)&ddb_regs.save_r27,	db_ppc_reg_value, 0, 0, 0, 0, TRUE },
+  { "r28",	(int *)&ddb_regs.save_r28,	db_ppc_reg_value, 0, 0, 0, 0, TRUE },
+  { "r29",	(int *)&ddb_regs.save_r29,	db_ppc_reg_value, 0, 0, 0, 0, TRUE },
+  { "r30",	(int *)&ddb_regs.save_r30,	db_ppc_reg_value, 0, 0, 0, 0, TRUE },
+  { "r31",	(int *)&ddb_regs.save_r31,	db_ppc_reg_value, 0, 0, 0, 0, TRUE },
+  { "cr",	(int *)&ddb_regs.save_cr,	db_ppc_reg_value, 0, 0, 0, 0, TRUE },
+  { "xer",	(int *)&ddb_regs.save_xer,	db_ppc_reg_value, 0, 0, 0, 0, TRUE },
+  { "lr",	(int *)&ddb_regs.save_lr,	db_ppc_reg_value, 0, 0, 0, 0, TRUE },
+  { "ctr",	(int *)&ddb_regs.save_ctr,	db_ppc_reg_value, 0, 0, 0, 0, TRUE },
 };
 struct db_variable *db_eregs = db_regs + sizeof(db_regs)/sizeof(db_regs[0]);
 
@@ -187,7 +186,7 @@ db_ppc_reg_value(
 	    if (thr_act == current_act()) {
 		if (IS_USER_TRAP((&ddb_regs)))
 		    dp = vp->valuep;
-		else if (INFIXEDSTACK(ddb_regs.r1))
+		else if (INFIXEDSTACK(ddb_regs.save_r1))
 		    db_error("cannot get/set user registers in nested interrupt\n");
 	    }
 	} else {
@@ -200,25 +199,21 @@ db_ppc_reg_value(
 		int cpu;
 
 		for (cpu = 0; cpu < NCPUS; cpu++) {
-		    if (machine_slot[cpu].running == TRUE &&
-			cpu_data[cpu].active_thread == thr_act->thread && saved_state[cpu]) {
+		    if (cpu_to_processor(cpu)->state == PROCESSOR_RUNNING &&
+			cpu_to_processor(cpu)->cpu_data->active_thread == thr_act->thread && saved_state[cpu]) {
 			dp = (int *) (((int)saved_state[cpu]) +
 				      (((int) vp->valuep) -
 				       (int) &ddb_regs));
 			break;
 		    }
 		}
-#if 0
-		if (dp == 0 && thr_act && thr_act->thread)
-		    dp = db_lookup_i386_kreg(vp->name,
-			 (int *)(STACK_IKS(thr_act->thread->kernel_stack)));
-#endif
+
 		if (dp == 0)
 		    dp = &null_reg;
 	      } else if (thr_act->thread &&
 			 (thr_act->thread->state&TH_STACK_HANDOFF)){
 		/* only PC is valid */
-		if (vp->valuep == (int *) &ddb_regs.srr0) {
+		if (vp->valuep == (int *) &ddb_regs.save_srr0) {
 		    dp = (int *)(&thr_act->thread->continuation);
 		} else {
 		    dp = &null_reg;
@@ -231,8 +226,8 @@ db_ppc_reg_value(
 
 	    if (!db_option(ap->modif, 'u')) {
 		for (cpu = 0; cpu < NCPUS; cpu++) {
-		    if (machine_slot[cpu].running == TRUE &&
-		    	cpu_data[cpu].active_thread == thr_act->thread && saved_state[cpu]) {
+		    if (cpu_to_processor(cpu)->state == PROCESSOR_RUNNING &&
+		    	cpu_to_processor(cpu)->cpu_data->active_thread == thr_act->thread && saved_state[cpu]) {
 		    	    dp = (int *) (((int)saved_state[cpu]) +
 					  (((int) vp->valuep) -
 					   (int) &ddb_regs));
@@ -243,7 +238,7 @@ db_ppc_reg_value(
 	    if (dp == 0) {
 		if (!thr_act || thr_act->mact.pcb == 0)
 		    db_error("no pcb\n");
-		dp = (int *)((int)(&thr_act->mact.pcb->ss) + 
+		dp = (int *)((int)thr_act->mact.pcb + 
 			     ((int)vp->valuep - (int)&ddb_regs));
 	    }
 	}
@@ -352,59 +347,28 @@ db_nextframe(
 	extern char *	trap_type[];
 	extern int	TRAP_TYPES;
 
-	struct ppc_saved_state *saved_regs;
+	struct savearea *saved_regs;
 
 	task_t task = (thr_act != THR_ACT_NULL)? thr_act->task: TASK_NULL;
 
 	switch(frame_type) {
 	case TRAP:
-#if 0
-	    /*
-	     * We know that trap() has 1 argument and we know that
-	     * it is an (strcut i386_saved_state *).
-	     */
-	    saved_regs = (struct i386_saved_state *)
-			db_get_task_value((int)&((*fp)->f_arg0),4,FALSE,task);
-	    if (saved_regs->trapno >= 0 && saved_regs->trapno < TRAP_TYPES) {
-		db_printf(">>>>> %s trap at ",
-			trap_type[saved_regs->trapno]);
-	    } else {
-		db_printf(">>>>> trap (number %d) at ",
-			saved_regs->trapno & 0xffff);
-	    }
-	    db_task_printsym(saved_regs->eip, DB_STGY_PROC, task);
-	    db_printf(" <<<<<\n");
-	    *fp = (struct i386_frame *)saved_regs->ebp;
-	    *ip = (db_addr_t)saved_regs->eip;
-#else
+
 	    db_printf(">>>>> trap <<<<<\n");
 	    goto miss_frame;
-#endif
 	    break;
 	case INTERRUPT:
 	    if (*lfp == 0) {
 		db_printf(">>>>> interrupt <<<<<\n");
 		goto miss_frame;
 	    }
-#if 0
-	    db_printf(">>>>> interrupt at "); 
-	    ifp = (struct interrupt_frame *)(*lfp);
-	    *fp = ifp->if_frame;
-	    if (ifp->if_iretaddr == db_return_to_iret_symbol_value)
-		*ip = ((struct i386_interrupt_state *) ifp->if_edx)->eip;
-	    else
-		*ip = (db_addr_t) ifp->if_eip;
-	    db_task_printsym(*ip, DB_STGY_PROC, task);
-	    db_printf(" <<<<<\n");
-#else
 	    db_printf(">>>>> interrupt <<<<<\n");
 	    goto miss_frame;
-#endif
 	    break;
 	case SYSCALL:
 	    if (thr_act != THR_ACT_NULL && thr_act->mact.pcb) {
-		*ip = (db_addr_t) thr_act->mact.pcb->ss.srr0;
-		*fp = (struct db_ppc_frame *) (thr_act->mact.pcb->ss.r1);
+		*ip = (db_addr_t) thr_act->mact.pcb->save_srr0;
+		*fp = (struct db_ppc_frame *) (thr_act->mact.pcb->save_r1);
 		break;
 	    }
 	    /* falling down for unknown case */
@@ -514,9 +478,9 @@ next_thread:
 	frame_count = count;
 
 	if (!have_addr && !trace_thread) {
-	    frame = (struct db_ppc_frame *)(ddb_regs.r1);
-	    callpc = (db_addr_t)ddb_regs.srr0;
-	    linkpc = (db_addr_t)ddb_regs.lr;
+	    frame = (struct db_ppc_frame *)(ddb_regs.save_r1);
+	    callpc = (db_addr_t)ddb_regs.save_srr0;
+	    linkpc = (db_addr_t)ddb_regs.save_lr;
 	    th = current_act();
 	    task = (th != THR_ACT_NULL)? th->task: TASK_NULL;
 	} 
@@ -545,9 +509,9 @@ next_activation:
 
 	    task = th->task;
 	    if (th == current_act()) {
-	        frame = (struct db_ppc_frame *)(ddb_regs.r1);
-	        callpc = (db_addr_t)ddb_regs.srr0;
-			linkpc = (db_addr_t)ddb_regs.lr;
+	        frame = (struct db_ppc_frame *)(ddb_regs.save_r1);
+	        callpc = (db_addr_t)ddb_regs.save_srr0;
+			linkpc = (db_addr_t)ddb_regs.save_lr;
 	    } 
 		else {
 			if (th->mact.pcb == 0) {
@@ -555,37 +519,31 @@ next_activation:
 				goto thread_done;
 			}
 			if (!th->thread) {
-				register struct ppc_saved_state *pss =
-							&th->mact.pcb->ss;
+				register struct savearea *pss =
+							th->mact.pcb;
 	
 				db_printf("thread has no shuttle\n");
-	#if 0
-				frame = (struct db_ppc_frame *) (pss->r1);
-				callpc = (db_addr_t) (pss->srr0);
-				linkpc = (db_addr_t) (pss->lr);
-	#else
 				goto thread_done;
-	#endif
 			}
 			else if ((th->thread->state & TH_STACK_HANDOFF) ||
 				  th->thread->kernel_stack == 0) {
-				register struct ppc_saved_state *pss =
-							&th->mact.pcb->ss;
+				register struct savearea *pss =
+							th->mact.pcb;
 	
 				db_printf("Continuation ");
 				db_task_printsym((db_expr_t)th->thread->continuation,
 								DB_STGY_PROC, task);
 				db_printf("\n");
-				frame = (struct db_ppc_frame *) (pss->r1);
-				callpc = (db_addr_t) (pss->srr0);
-				linkpc = (db_addr_t) (pss->lr);
+				frame = (struct db_ppc_frame *) (pss->save_r1);
+				callpc = (db_addr_t) (pss->save_srr0);
+				linkpc = (db_addr_t) (pss->save_lr);
 			} 
 			else {
 				int cpu;
 	
 				for (cpu = 0; cpu < NCPUS; cpu++) {
-					if (machine_slot[cpu].running == TRUE &&
-						cpu_data[cpu].active_thread == th->thread &&
+					if (cpu_to_processor(cpu)->state == PROCESSOR_RUNNING &&
+						cpu_to_processor(cpu)->cpu_data->active_thread == th->thread &&
 						saved_state[cpu]) {
 						break;
 					}
@@ -596,22 +554,22 @@ next_activation:
 					 * which is not the top_most one in the RPC chain:
 					 * use the activation's pcb.
 					 */
-					struct ppc_saved_state *pss;
+					struct savearea *pss;
 	
-					pss = (struct ppc_saved_state *)th->mact.pcb;
-					frame = (struct db_ppc_frame *) (pss->r1);
-					callpc = (db_addr_t) (pss->srr0);
-					linkpc = (db_addr_t) (pss->lr);
+					pss = th->mact.pcb;
+					frame = (struct db_ppc_frame *) (pss->save_r1);
+					callpc = (db_addr_t) (pss->save_srr0);
+					linkpc = (db_addr_t) (pss->save_lr);
 					} else {
 						if (cpu == NCPUS) {
-							register struct ppc_saved_state *iks;
+							register struct savearea *iks;
 							int r;
 			
-							iks = (struct ppc_saved_state *)th->mact.pcb;
+							iks = th->mact.pcb;
 							prev = db_recover;
 							if ((r = _setjmp(db_recover = &db_jmp_buf)) == 0) {
-								frame = (struct db_ppc_frame *) (iks->r1);
-								callpc = (db_addr_t) (iks->lr);
+								frame = (struct db_ppc_frame *) (iks->save_r1);
+								callpc = (db_addr_t) (iks->save_lr);
 								linkpc = 0;
 							} else {
 								/*
@@ -631,9 +589,9 @@ next_activation:
 							db_printf(">>>>> active on cpu %d <<<<<\n",
 								  cpu);
 							frame = (struct db_ppc_frame *)
-							(saved_state[cpu]->r1);
-							callpc = (db_addr_t) saved_state[cpu]->srr0;
-							linkpc = (db_addr_t) saved_state[cpu]->lr;
+							(saved_state[cpu]->save_r1);
+							callpc = (db_addr_t) saved_state[cpu]->save_srr0;
+							linkpc = (db_addr_t) saved_state[cpu]->save_lr;
 						}
 					}
 				}

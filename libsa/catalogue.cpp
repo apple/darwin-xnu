@@ -425,7 +425,6 @@ OSDictionary * readExtension(OSDictionary * propertyDict,
 
     kmod_info_t          * loaded_kmod = NULL;
 
-
     bootxDriverDataObject = OSDynamicCast(OSData,
         propertyDict->getObject(memory_map_name));
     // don't release bootxDriverDataObject
@@ -490,7 +489,7 @@ OSDictionary * readExtension(OSDictionary * propertyDict,
    /* Check if kmod is already loaded and is a real loadable one (has
     * an address).
     */
-    loaded_kmod = kmod_lookupbyname(driverName->getCStringNoCopy());
+    loaded_kmod = kmod_lookupbyname_locked(driverName->getCStringNoCopy());
     if (loaded_kmod && loaded_kmod->address) {
         IOLog("Skipping new extension \"%s\"; an extension named "
             "\"%s\" is already loaded.\n",
@@ -538,6 +537,10 @@ OSDictionary * readExtension(OSDictionary * propertyDict,
     }
 
 finish:
+
+    if (loaded_kmod) {
+        kfree(loaded_kmod, sizeof(kmod_info_t));
+    }
 
     // do not release bootxDriverDataObject
     // do not release driverName
@@ -623,11 +626,12 @@ static bool uncompressFile(u_int8_t *base_address, mkext_file * fileinfo,
             result = false;
             goto finish;
         }
+        uncompressed_file[uncompressed_size] = '\0';
     } else {
         bcopy(base_address + offset, uncompressed_file,
-            compsize);
+            realsize);
+        uncompressed_file[realsize] = '\0';
     }
-    uncompressed_file[uncompressed_size] = '\0';
 
     *file = uncompressedFile;
 
@@ -669,6 +673,8 @@ bool extractExtensionsFromArchive(MemoryMapFileInfo * mkext_file_info,
     mkext_kext   * onekext_data = 0; // don't free
     mkext_file   * plist_file = 0;   // don't free
     mkext_file   * module_file = 0;  // don't free
+    kmod_info_t  * loaded_kmod = 0;  // must free
+
     OSData       * driverPlistDataObject = 0; // must release
     OSDictionary * driverPlist = 0;  // must release
     OSData       * driverCode = 0;   // must release
@@ -748,7 +754,10 @@ bool extractExtensionsFromArchive(MemoryMapFileInfo * mkext_file_info,
          i < OSSwapBigToHostInt32(mkext_data->numkexts);
          i++) {
 
-        kmod_info_t * loaded_kmod = 0;
+        if (loaded_kmod) {
+            kfree(loaded_kmod, sizeof(kmod_info_t));
+            loaded_kmod = 0;
+        }
 
         if (driverPlistDataObject) {
             driverPlistDataObject->release();
@@ -830,7 +839,7 @@ bool extractExtensionsFromArchive(MemoryMapFileInfo * mkext_file_info,
        /* Check if kmod is already loaded and is a real loadable one (has
         * an address).
         */
-        loaded_kmod = kmod_lookupbyname(moduleName->getCStringNoCopy());
+        loaded_kmod = kmod_lookupbyname_locked(moduleName->getCStringNoCopy());
         if (loaded_kmod && loaded_kmod->address) {
             IOLog("Skipping new extension \"%s\"; an extension named "
                 "\"%s\" is already loaded.\n",
@@ -922,6 +931,7 @@ bool extractExtensionsFromArchive(MemoryMapFileInfo * mkext_file_info,
 
 finish:
 
+    if (loaded_kmod) kfree(loaded_kmod, sizeof(kmod_info_t));
     if (driverPlistDataObject) driverPlistDataObject->release();
     if (driverPlist) driverPlist->release();
     if (driverCode)  driverCode->release();
@@ -1077,8 +1087,8 @@ bool addExtensionsFromArchive(OSData * mkextDataObject) {
 
     startupExtensions = getStartupExtensions();
     if (!startupExtensions) {
-        IOLog("Can't record extension archive; there is no
-            extensions dictionary.\n");
+        IOLog("Can't record extension archive; there is no"
+            " extensions dictionary.\n");
         LOG_DELAY();
         result = false;
         goto finish;
@@ -1254,7 +1264,6 @@ bool recordStartupExtensions(void) {
 
     while ( (key = OSDynamicCast(OSString,
              keyIterator->getNextObject())) ) {
-
        /* Clear newDriverDict & mkextExtensions upon entry to the loop,
         * handling both successful and unsuccessful iterations.
         */
@@ -1381,7 +1390,7 @@ bool recordStartupExtensions(void) {
 
         // Do not release key.
 
-    } /* while ( (key = OSDynamicCast(OSString, ... */
+    } /* while ( (key = OSDynamicCast(OSString, ...) ) ) */
 
     if (!mergeExtensionDictionaries(existingExtensions, startupExtensions)) {
         IOLog("Error: Failed to merge new extensions into existing set.\n");
@@ -1483,8 +1492,8 @@ void removeStartupExtension(const char * extensionName) {
     keyIterator = OSCollectionIterator::withCollection(
         extensionPersonalities);
     if (!keyIterator) {
-        IOLog("Error: Couldn't allocate iterator to scan
-            personalities for %s.\n", extensionName);
+        IOLog("Error: Couldn't allocate iterator to scan"
+            " personalities for %s.\n", extensionName);
         LOG_DELAY();
     }
 

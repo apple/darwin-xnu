@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2002 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -57,18 +57,24 @@
 #ifndef _LIBKERN_LIBKERN_H_
 #define _LIBKERN_LIBKERN_H_
 
+#include <sys/appleapiopts.h>
 #include <sys/cdefs.h>
 #include <sys/types.h>
 
+#ifdef __APPLE_API_OBSOLETE
 /* BCD conversions. */
 extern u_char const	bcd2bin_data[];
 extern u_char const	bin2bcd_data[];
-extern char const	hex2ascii_data[];
 
 #define	bcd2bin(bcd)	(bcd2bin_data[bcd])
 #define	bin2bcd(bin)	(bin2bcd_data[bin])
-#define	hex2ascii(hex)	(hex2ascii_data[hex])
+#endif /* __APPLE_API_OBSOLETE */
 
+#ifdef __APPLE_API_PRIVATE
+extern char const	hex2ascii_data[];
+
+#define	hex2ascii(hex)	(hex2ascii_data[hex])
+#endif /* __APPLE_API_PRIVATE */
 
 __BEGIN_DECLS
 static inline int

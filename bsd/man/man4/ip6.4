@@ -1,0 +1,707 @@
+.\"	$KAME: ip6.4,v 1.14 2001/02/26 09:31:39 itojun Exp $
+.\"
+.\" Copyright (C) 1999 WIDE Project.
+.\" All rights reserved.
+.\"
+.\" Redistribution and use in source and binary forms, with or without
+.\" modification, are permitted provided that the following conditions
+.\" are met:
+.\" 1. Redistributions of source code must retain the above copyright
+.\"    notice, this list of conditions and the following disclaimer.
+.\" 2. Redistributions in binary form must reproduce the above copyright
+.\"    notice, this list of conditions and the following disclaimer in the
+.\"    documentation and/or other materials provided with the distribution.
+.\" 3. Neither the name of the project nor the names of its contributors
+.\"    may be used to endorse or promote products derived from this software
+.\"    without specific prior written permission.
+.\"
+.\" THIS SOFTWARE IS PROVIDED BY THE PROJECT AND CONTRIBUTORS ``AS IS'' AND
+.\" ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+.\" IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
+.\" ARE DISCLAIMED.  IN NO EVENT SHALL THE PROJECT OR CONTRIBUTORS BE LIABLE
+.\" FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
+.\" DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS
+.\" OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION)
+.\" HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT
+.\" LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
+.\" OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
+.\" SUCH DAMAGE.
+.\"
+.\" Copyright (c) 1983, 1991, 1993
+.\"	The Regents of the University of California.  All rights reserved.
+.\"
+.\" Redistribution and use in source and binary forms, with or without
+.\" modification, are permitted provided that the following conditions
+.\" are met:
+.\" 1. Redistributions of source code must retain the above copyright
+.\"    notice, this list of conditions and the following disclaimer.
+.\" 2. Redistributions in binary form must reproduce the above copyright
+.\"    notice, this list of conditions and the following disclaimer in the
+.\"    documentation and/or other materials provided with the distribution.
+.\" 3. All advertising materials mentioning features or use of this software
+.\"    must display the following acknowledgement:
+.\"	This product includes software developed by the University of
+.\"	California, Berkeley and its contributors.
+.\" 4. Neither the name of the University nor the names of its contributors
+.\"    may be used to endorse or promote products derived from this software
+.\"    without specific prior written permission.
+.\"
+.\" THIS SOFTWARE IS PROVIDED BY THE REGENTS AND CONTRIBUTORS ``AS IS'' AND
+.\" ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+.\" IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
+.\" ARE DISCLAIMED.  IN NO EVENT SHALL THE REGENTS OR CONTRIBUTORS BE LIABLE
+.\" FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
+.\" DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS
+.\" OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION)
+.\" HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT
+.\" LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
+.\" OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
+.\" SUCH DAMAGE.
+.\"
+.\" $FreeBSD: src/share/man/man4/ip6.4,v 1.1.2.8 2001/12/17 11:30:12 ru Exp $
+.\"
+.Dd March 13, 2000
+.Dt IP6 4
+.Os
+.\"
+.Sh NAME
+.Nm ip6
+.Nd Internet Protocol version 6 (IPv6)
+.\"
+.Sh SYNOPSIS
+.In sys/types.h
+.In sys/socket.h
+.In netinet/in.h
+.Ft int
+.Fn socket AF_INET6 SOCK_RAW proto
+.\"
+.Sh DESCRIPTION
+.Tn IPv6
+is the network layer protocol used by the Internet protocol version 6 family
+.Pq Dv AF_INET6 .
+Options may be set at the
+.Tn IPv6
+level when using higher-level protocols that are based on
+.Tn IPv6
+(such as
+.Tn TCP
+and
+.Tn UDP ) .
+It may also be accessed through a
+.Dq raw socket
+when developing new protocols, or special-purpose applications.
+.Pp
+There are several
+.Tn IPv6-level
+.Xr setsockopt 2 Ns / Ns Xr getsockopt 2
+options.
+They are separated into the basic IPv6 sockets API
+(defined in RFC2553),
+and the advanced API
+(defined in RFC2292).
+The basic API looks very similar to the API presented in
+.Xr ip 4 .
+Advanced API uses ancillary data and can handle more complex cases.
+.Pp
+To specify some of socket options, certain privilege
+(i.e. root privilege) is required.
+.\"
+.Ss Basic IPv6 sockets API
+.Dv IPV6_UNICAST_HOPS
+may be used to set the hoplimit field in the
+.Tn IPv6
+header.
+As symbol name suggests, the option controls hoplimit field on unicast packets.
+If -1 is specified, the kernel will use a default value.
+If a value of 0 to 255 is specified, the packet will have the specified
+value as hoplimit.
+Other values are considered invalid, and
+.Er EINVAL
+will be returned.
+For example:
+.Bd -literal -offset indent
+int hlim = 60;                   /* max = 255 */
+setsockopt(s, IPPROTO_IPV6, IPV6_UNICAST_HOPS, &hlim, sizeof(hlim));
+.Ed
+.Pp
+.Tn IPv6
+multicasting is supported only on
+.Dv AF_INET6
+sockets of type
+.Dv SOCK_DGRAM
+and
+.Dv SOCK_RAW,
+and only on networks where the interface driver supports multicasting.
+.Pp
+The
+.Dv IPV6_MULTICAST_HOPS
+option changes the hoplimit for outgoing multicast datagrams
+in order to control the scope of the multicasts:
+.Bd -literal -offset indent
+unsigned int hlim;	/* range: 0 to 255, default = 1 */
+setsockopt(s, IPPROTO_IPV6, IPV6_MULTICAST_HOPS, &hlim, sizeof(hlim));
+.Ed
+.Pp
+Datagrams with a hoplimit of 1 are not forwarded beyond the local network.
+Multicast datagrams with a hoplimit of 0 will not be transmitted on any network,
+but may be delivered locally if the sending host belongs to the destination
+group and if multicast loopback has not been disabled on the sending socket
+(see below).
+Multicast datagrams with hoplimit greater than 1 may be forwarded
+to other networks if a multicast router is attached to the local network.
+.Pp
+For hosts with multiple interfaces, each multicast transmission is
+sent from the primary network interface.
+The
+.Dv IPV6_MULTICAST_IF
+option overrides the default for
+subsequent transmissions from a given socket:
+.Bd -literal -offset indent
+unsigned int outif;
+outif = if_nametoindex("ne0");
+setsockopt(s, IPPROTO_IPV6, IPV6_MULTICAST_IF, &outif, sizeof(outif));
+.Ed
+.Pp
+where "outif" is an interface index of the desired interface,
+or 0 to specify the default interface.
+.Pp
+If a multicast datagram is sent to a group to which the sending host itself
+belongs (on the outgoing interface), a copy of the datagram is, by default,
+looped back by the IPv6 layer for local delivery.
+The
+.Dv IPV6_MULTICAST_LOOP
+option gives the sender explicit control
+over whether or not subsequent datagrams are looped back:
+.Bd -literal -offset indent
+u_char loop;	/* 0 = disable, 1 = enable (default) */
+setsockopt(s, IPPROTO_IPV6, IPV6_MULTICAST_LOOP, &loop, sizeof(loop));
+.Ed
+.Pp
+This option
+improves performance for applications that may have no more than one
+instance on a single host (such as a router daemon), by eliminating
+the overhead of receiving their own transmissions.
+It should generally not be used by applications for which there
+may be more than one instance on a single host (such as a conferencing
+program) or for which the sender does not belong to the destination
+group (such as a time querying program).
+.Pp
+A multicast datagram sent with an initial hoplimit greater than 1 may be delivered
+to the sending host on a different interface from that on which it was sent,
+if the host belongs to the destination group on that other interface.
+The loopback control option has no effect on such delivery.
+.Pp
+A host must become a member of a multicast group before it can receive
+datagrams sent to the group.
+To join a multicast group, use the
+.Dv IPV6_JOIN_GROUP
+option:
+.Bd -literal -offset indent
+struct ipv6_mreq mreq6;
+setsockopt(s, IPPROTO_IPV6, IPV6_JOIN_GROUP, &mreq6, sizeof(mreq6));
+.Ed
+.Pp
+where
+.Fa mreq6
+is the following structure:
+.Bd -literal -offset indent
+struct ipv6_mreq {
+    struct in6_addr ipv6mr_multiaddr;
+    u_int ipv6mr_interface;
+};
+.Ed
+.Pp
+.Dv ipv6mr_interface
+should be 0 to choose the default multicast interface, or the
+interface index of a particular multicast-capable interface if
+the host is multihomed.
+Membership is associated with a single interface;
+programs running on multihomed hosts may need to
+join the same group on more than one interface.
+.Pp
+To drop a membership, use:
+.Bd -literal -offset indent
+struct ipv6_mreq mreq6;
+setsockopt(s, IPPROTO_IPV6, IPV6_LEAVE_GROUP, &mreq6, sizeof(mreq6));
+.Ed
+.Pp
+where
+.Fa mreq6
+contains the same values as used to add the membership.
+Memberships are dropped when the socket is closed or the process exits.
+.Pp
+.Dv IPV6_PORTRANGE
+controls how ephemeral ports are allocated for
+.Dv SOCK_STREAM
+and
+.Dv SOCK_DGRAM
+sockets.
+For example,
+.Bd -literal -offset indent
+int range = IPV6_PORTRANGE_LOW;       /* see <netinet/in.h> */
+setsockopt(s, IPPROTO_IPV6, IPV6_PORTRANGE, &range, sizeof(range));
+.Ed
+.Pp
+.Dv IPV6_V6ONLY
+controls behavior of
+.Dv AF_INET6
+wildcard listening socket.
+The following example sets the option to 1:
+.Bd -literal -offset indent
+int on = 1;
+setsockopt(s, IPPROTO_IPV6, IPV6_V6ONLY, &on, sizeof(on));
+.Ed
+.Pp
+If set to 1,
+.Dv AF_INET6
+wildcard listening socket will accept IPv6 traffic only.
+If set to 0, it will accept IPv4 traffic as well,
+as if it was from IPv4 mapped address like
+.Li ::ffff:10.1.1.1 .
+.\" RFC2553 defines the behavior when the variable is set to 0.
+Note that if you set it this to 0,
+IPv4 access control gets much more complicated.
+For example, even if you have no listening
+.Dv AF_INET
+listening socket on port
+.Li X ,
+you will end up accepting IPv4 traffic by
+.Dv AF_INET6
+listening socket on the same port.
+The default value for this flag is copied at socket instantiation time,
+from
+.Li net.inet6.ip6.v6only
+.Xr sysctl 3
+variable.
+The option affects
+.Tn TCP
+and
+.Tn UDP
+sockets only.
+.\"
+.Ss Advanced IPv6 sockets API
+The advanced IPv6 sockets API lets userland programs specify or obtain
+details about the IPv6 header and the IPv6 extension headers on packets.
+The advanced API uses ancillary data for passing data from/to the kernel.
+.Pp
+There are
+.Xr setsockopt 2 Ns / Ns Xr getsockopt 2
+options to get optional information on incoming packets.
+They are
+.Dv IPV6_PKTINFO ,
+.Dv IPV6_HOPLIMIT ,
+.Dv IPV6_HOPOPTS ,
+.Dv IPV6_DSTOPTS ,
+and
+.Dv IPV6_RTHDR .
+.Bd -literal -offset indent
+int  on = 1;
+
+setsockopt(fd, IPPROTO_IPV6, IPV6_PKTINFO,  &on, sizeof(on));
+setsockopt(fd, IPPROTO_IPV6, IPV6_HOPLIMIT, &on, sizeof(on));
+setsockopt(fd, IPPROTO_IPV6, IPV6_HOPOPTS,  &on, sizeof(on));
+setsockopt(fd, IPPROTO_IPV6, IPV6_DSTOPTS,  &on, sizeof(on));
+setsockopt(fd, IPPROTO_IPV6, IPV6_RTHDR,    &on, sizeof(on));
+.Ed
+.Pp
+When any of these options are enabled, the corresponding data is
+returned as control information by
+.Xr recvmsg 2 ,
+as one or more ancillary data objects.
+.Pp
+If
+.Dv IPV6_PKTINFO
+is enabled, the destination IPv6 address and the arriving interface index
+will be available via
+.Li struct in6_pktinfo
+on ancillary data stream.
+You can pick the structure by checking for an ancillary data item with
+.Li cmsg_level
+equals to
+.Dv IPPROTO_IPV6 ,
+and
+.Li cmsg_type
+equals to
+.Dv IPV6_PKTINFO .
+.Pp
+If
+.Dv IPV6_HOPLIMIT
+is enabled, hoplimit value on the packet will be made available to the
+userland program.
+Ancillary data stream will contain an integer data item with
+.Li cmsg_level
+equals to
+.Dv IPPROTO_IPV6 ,
+and
+.Li cmsg_type
+equals to
+.Dv IPV6_HOPLIMIT .
+.Pp
+.Xr inet6_option_space 3
+and friends will help you parse ancillary data items for
+.Dv IPV6_HOPOPTS
+and
+.Dv IPV6_DSTOPTS .
+Similarly,
+.Xr inet6_rthdr_space 3
+and friends will help you parse ancillary data items for
+.Dv IPV6_RTHDR .
+.Pp
+.Dv IPV6_HOPOPTS
+and
+.Dv IPV6_DSTOPTS
+may appear multiple times on an ancillary data stream
+(note that the behavior is slightly different than the specification).
+Other ancillary data item will appear no more than once.
+.Pp
+For outgoing direction,
+you can pass ancillary data items with normal payload data, using
+.Xr sendmsg 2 .
+Ancillary data items will be parsed by the kernel, and used to construct
+the IPv6 header and extension headers.
+For the 5
+.Li cmsg_level
+values listed above, ancillary data format is the same as inbound case.
+Additionally, you can specify
+.Dv IPV6_NEXTHOP
+data object.
+The
+.Dv IPV6_NEXTHOP
+ancillary data object specifies the next hop for the
+datagram as a socket address structure.
+In the
+.Li cmsghdr
+structure
+containing this ancillary data, the
+.Li cmsg_level
+member will be
+.Dv IPPROTO_IPV6 ,
+the
+.Li cmsg_type
+member will be
+.Dv IPV6_NEXTHOP ,
+and the first byte of
+.Li cmsg_data[]
+will be the first byte of the socket address structure.
+.Pp
+If the socket address structure contains an IPv6 address (e.g., the
+sin6_family member is
+.Dv AF_INET6 ) ,
+then the node identified by that
+address must be a neighbor of the sending host.
+If that address
+equals the destination IPv6 address of the datagram, then this is
+equivalent to the existing
+.Dv SO_DONTROUTE
+socket option.
+.Pp
+For applications that do not, or unable to use
+.Xr sendmsg 2
+or
+.Xr recvmsg 2 ,
+.Dv IPV6_PKTOPTIONS
+socket option is defined.
+Setting the socket option specifies any of the optional output fields:
+.Bd -literal -offset indent
+setsockopt(fd, IPPROTO_IPV6, IPV6_PKTOPTIONS, &buf, len);
+.Ed
+.Pp
+The fourth argument points to a buffer containing one or more
+ancillary data objects, and the fifth argument is the total length of
+all these objects.
+The application fills in this buffer exactly as
+if the buffer were being passed to
+.Xr sendmsg 2
+as control information.
+.Pp
+The options set by calling
+.Xr setsockopt 2
+for
+.Dv IPV6_PKTOPTIONS
+are
+called "sticky" options because once set they apply to all packets
+sent on that socket.
+The application can call
+.Xr setsockopt 2
+again to
+change all the sticky options, or it can call
+.Xr setsockopt 2
+with a
+length of 0 to remove all the sticky options for the socket.
+.Pp
+The corresponding receive option
+.Bd -literal -offset indent
+getsockopt(fd, IPPROTO_IPV6, IPV6_PKTOPTIONS, &buf, &len);
+.Ed
+.Pp
+returns a buffer with one or more ancillary data objects for all the
+optional receive information that the application has previously
+specified that it wants to receive.
+The fourth argument points to
+the buffer that is filled in by the call.
+The fifth argument is a
+pointer to a value-result integer: when the function is called the
+integer specifies the size of the buffer pointed to by the fourth
+argument, and on return this integer contains the actual number of
+bytes that were returned.
+The application processes this buffer
+exactly as if the buffer were returned by
+.Xr recvmsg 2
+as control information.
+.\"
+.Ss Advanced API and TCP sockets
+When using
+.Xr getsockopt 2
+with the
+.Dv IPV6_PKTOPTIONS
+option and a
+.Tn TCP
+socket, only the options from the most recently received segment are
+retained and returned to the caller, and only after the socket option
+has been set.
+.\" That is,
+.\" .Tn TCP
+.\" need not start saving a copy of the options until the application says
+.\" to do so.
+The application is not allowed to specify ancillary data in a call to
+.Xr sendmsg 2
+on a
+.Tn TCP
+socket, and none of the ancillary data that we
+described above is ever returned as control information by
+.Xr recvmsg 2
+on a
+.Tn TCP
+socket.
+.\"
+.Ss Conflict resolution
+In some cases, there are multiple APIs defined for manipulating
+a IPv6 header field.
+A good example is the outgoing interface for multicast datagrams:
+it can be manipulated by
+.Dv IPV6_MULTICAST_IF
+in basic API,
+.Dv IPV6_PKTINFO
+in advanced API, and
+.Li sin6_scope_id
+field of the socket address passed to
+.Xr sendto 2 .
+.Pp
+When conflicting options are given to the kernel,
+the kernel will get the value in the following preference:
+(1) options specified by using ancillary data,
+(2) options specified by a sticky option of the advanced API,
+(3) options specified by using the basic API, and lastly
+(4) options specified by a socket address.
+Note that the conflict resolution is undefined in the API specifcation
+and implementation dependent.
+.\"
+.Ss "Raw IPv6 Sockets"
+Raw
+.Tn IPv6
+sockets are connectionless, and are normally used with the
+.Xr sendto 2
+and
+.Xr recvfrom 2
+calls, though the
+.Xr connect 2
+call may also be used to fix the destination for future
+packets (in which case the
+.Xr read 2
+or
+.Xr recv 2
+and
+.Xr write 2
+or
+.Xr send 2
+system calls may be used).
+.Pp
+If
+.Fa proto
+is 0, the default protocol
+.Dv IPPROTO_RAW
+is used for outgoing packets, and only incoming packets destined
+for that protocol are received.
+If
+.Fa proto
+is non-zero, that protocol number will be used on outgoing packets
+and to filter incoming packets.
+.Pp
+Outgoing packets automatically have an
+.Tn IPv6
+header prepended to them (based on the destination address and the
+protocol number the socket is created with).
+Incoming packets are received without
+.Tn IPv6
+header nor extension headers.
+.Pp
+All data sent via raw sockets MUST be in network byte order and all
+data received via raw sockets will be in network byte order.
+This differs from the IPv4 raw sockets, which did not specify a byte
+ordering and typically used the host's byte order.
+.Pp
+Another difference from IPv4 raw sockets is that complete packets
+(that is, IPv6 packets with extension headers) cannot be read or
+written using the IPv6 raw sockets API.
+Instead, ancillary data
+objects are used to transfer the extension headers, as described above.
+Should an application need access to the
+complete IPv6 packet, some other technique, such as the datalink
+interfaces, such as
+.Xr bpf 4 ,
+must be used.
+.Pp
+All fields in the IPv6 header that an application might want to
+change (i.e., everything other than the version number) can be
+modified using ancillary data and/or socket options by the
+application for output.
+All fields in a received IPv6 header (other
+than the version number and Next Header fields) and all extension
+headers are also made available to the application as ancillary data
+on input.
+Hence there is no need for a socket option similar to the
+IPv4
+.Dv IP_HDRINCL
+socket option.
+.Pp
+When writing to a raw socket the kernel will automatically fragment
+the packet if its size exceeds the path MTU, inserting the required
+fragmentation headers.  On input the kernel reassembles received
+fragments, so the reader of a raw socket never sees any fragment
+headers.
+.Pp
+Most IPv4 implementations give special treatment to a raw socket
+created with a third argument to
+.Xr socket 2
+of
+.Dv IPPROTO_RAW ,
+whose value is normally 255.
+We note that this value has no special meaning to
+an IPv6 raw socket (and the IANA currently reserves the value of 255
+when used as a next-header field).
+.\" Note: This feature was added to
+.\" IPv4 in 1988 by Van Jacobson to support traceroute, allowing a
+.\" complete IP header to be passed by the application, before the
+.\" .Dv IP_HDRINCL
+.\" socket option was added.
+.Pp
+For ICMPv6 raw sockets,
+the kernel will calculate and insert the ICMPv6 checksum for
+since this checksum is mandatory.
+.Pp
+For other raw IPv6 sockets (that is, for raw IPv6 sockets created
+with a third argument other than IPPROTO_ICMPV6), the application
+must set the new IPV6_CHECKSUM socket option to have the kernel (1)
+compute and store a psuedo header checksum for output,
+and (2) verify the received
+pseudo header checksum on input,
+discarding the packet if the checksum is in error.
+This option prevents applications from having to perform source
+address selection on the packets they send.
+The checksum will
+incorporate the IPv6 pseudo-header, defined in Section 8.1 of RFC2460.
+This new socket option also specifies an integer offset into
+the user data of where the checksum is located.
+.Bd -literal -offset indent
+int offset = 2;
+setsockopt(fd, IPPROTO_IPV6, IPV6_CHECKSUM, &offset, sizeof(offset));
+.Ed
+.Pp
+By default, this socket option is disabled.  Setting the offset to -1
+also disables the option.  By disabled we mean (1) the kernel will
+not calculate and store a checksum for outgoing packets, and (2) the
+kernel will not verify a checksum for received packets.
+.Pp
+Note: Since the checksum is always calculated by the kernel for an
+ICMPv6 socket, applications are not able to generate ICMPv6 packets
+with incorrect checksums (presumably for testing purposes) using this
+API.
+.\"
+.Sh ERRORS
+A socket operation may fail with one of the following errors returned:
+.Bl -tag -width Er
+.It Bq Er EISCONN
+when trying to establish a connection on a socket which already
+has one, or when trying to send a datagram with the destination
+address specified and the socket is already connected;
+.It Bq Er ENOTCONN
+when trying to send a datagram, but no destination address is
+specified, and the socket hasn't been connected;
+.It Bq Er ENOBUFS
+when the system runs out of memory for an internal data structure;
+.It Bq Er EADDRNOTAVAIL
+when an attempt is made to create a socket with a network address
+for which no network interface exists.
+.It Bq Er EACCES
+when an attempt is made to create a raw IPv6 socket by a non-privileged process.
+.El
+.Pp
+The following errors specific to
+.Tn IPv6
+may occur:
+.Bl -tag -width EADDRNOTAVAILxx
+.It Bq Er EINVAL
+An unknown socket option name was given.
+.It Bq Er EINVAL
+The ancillary data items were improperly formed, or option name was unknown.
+.El
+.\"
+.Sh SEE ALSO
+.Xr getsockopt 2 ,
+.Xr recv 2 ,
+.Xr send 2 ,
+.Xr setsockopt 2 ,
+.Xr inet6_option_space 3 ,
+.Xr inet6_rthdr_space 3 ,
+.Xr icmp6 4 ,
+.Xr inet6 4 ,
+.Xr intro 4
+.Rs
+.%A W. Stevens
+.%A M. Thomas
+.%R RFC
+.%N 2292
+.%D February 1998
+.%T "Advanced Sockets API for IPv6"
+.Re
+.Rs
+.%A S. Deering
+.%A R. Hinden
+.%R RFC
+.%N 2460
+.%D December 1998
+.%T "Internet Protocol, Version 6 (IPv6) Specification"
+.Re
+.Rs
+.%A R. Gilligan
+.%A S. Thomson
+.%A J. Bound
+.%A W. Stevens
+.%R RFC
+.%N 2553
+.%D March 1999
+.%T "Basic Socket Interface Extensions for IPv6"
+.Re
+.\"
+.Sh STANDARDS
+Most of the socket options are defined in
+RFC2292 and/or RFC2553.
+.Pp
+.Dv IPV6_V6ONLY
+socket option is defined in draft-ietf-ipngwg-rfc2553bis-03.
+.Dv IPV6_PORTRANGE
+socket option
+and
+conflict resolution rule
+are not defined in the RFCs and should be considered implementation dependent.
+.\"
+.Sh HISTORY
+The implementation is based on KAME stack
+(which is descendant of WIDE hydrangea IPv6 stack kit).
+.Pp
+Part of the document was shamelessly copied from RFC2553 and RFC2292.
+.\"
+.Sh BUGS
+The
+.Dv IPV6_NEXTHOP
+object/option is not fully implemented as of writing this.

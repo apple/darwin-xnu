@@ -67,8 +67,13 @@ extern void cninit(void);
 extern void bcopy(void * from, void * to, int size);
 extern int  sprintf(char * str, const char * format, ...);
 
+//------------------------------------------------------------------------
+// from osfmk/i386/AT386/video_console.c
+
 extern boolean_t vc_progress_initialize( void * desc,
-                                         unsigned char * data,
-                                         unsigned char * clut );
+                                         const unsigned char * data,
+                                         const unsigned char * clut );
+
+extern void vc_display_icon( void * desc, const unsigned char * data );
 
 #endif /* _PEXPERT_I386_PROTOS_H */

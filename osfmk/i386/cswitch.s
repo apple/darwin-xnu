@@ -119,7 +119,7 @@ Entry(Switch_context)
 	movl	%ecx,TH_KERNEL_STACK(%eax)	/* save kernel stack */
 
 	movl	8(%esp),%esi			/* get new thread */
-        movl    $CPD_ACTIVE_THREAD,%ecx
+        movl    $ CPD_ACTIVE_THREAD,%ecx
         movl    %esi,%gs:(%ecx)                 /* new thread is active */
 	movl	TH_KERNEL_STACK(%esi),%ecx	/* get its kernel stack */
 	lea	KERNEL_STACK_SIZE-IKS_SIZE-IEL_SIZE(%ecx),%ebx

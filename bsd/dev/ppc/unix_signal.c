@@ -29,12 +29,17 @@
 #include <sys/param.h>
 #include <sys/proc.h>
 #include <sys/user.h>
+#include <sys/ucontext.h>
 
 #include <ppc/signal.h>
 #include <sys/signalvar.h>
+#include <sys/kdebug.h>
+#include <sys/wait.h>
 #include <kern/thread.h>
 #include <kern/thread_act.h>
 #include <mach/ppc/thread_status.h>
+#define __ELF__ 0
+#include <ppc/proc_reg.h>
 
 #define	C_REDZONE_LEN		224
 #define	C_STK_ALIGN			16
@@ -46,12 +51,6 @@
  * Arrange for this process to run a signal handler
  */
 
-
-struct sigregs {
-	struct ppc_saved_state ss;
-	struct ppc_float_state fs;
-};
-
 void
 sendsig(p, catcher, sig, mask, code)
  	struct proc *p;
@@ -59,90 +58,199 @@ sendsig(p, catcher, sig, mask, code)
 	int sig, mask;
 	u_long code;
 {
-	struct sigregs *p_regs;
-	struct sigcontext context, *p_context;
+	struct mcontext mctx, *p_mctx;
+	struct ucontext uctx, *p_uctx;
+	siginfo_t sinfo, *p_sinfo;
 	struct sigacts *ps = p->p_sigacts;
 	int framesize;
 	int oonstack;
 	unsigned long sp;
-	struct ppc_saved_state statep;
-	struct ppc_float_state fs;
 	unsigned long state_count;
-	struct thread *thread;
 	thread_act_t th_act;
+	struct uthread *ut;
 	unsigned long paramp,linkp;
+	int infostyle = 1;
+	sig_t trampact;
+	int vec_used = 0;
+	int stack_size = 0;
+	int stack_flags = 0;
 
-	thread = current_thread();
 	th_act = current_act();
+	ut = get_bsdthread_info(th_act);
 
+	state_count = PPC_EXCEPTION_STATE_COUNT;
+	if (act_machine_get_state(th_act, PPC_EXCEPTION_STATE, &mctx.es, &state_count)  != KERN_SUCCESS) {
+		goto bad;
+	}	
 	state_count = PPC_THREAD_STATE_COUNT;
-	if (act_machine_get_state(th_act, PPC_THREAD_STATE, &statep, &state_count)  != KERN_SUCCESS) {
+	if (act_machine_get_state(th_act, PPC_THREAD_STATE, &mctx.ss, &state_count)  != KERN_SUCCESS) {
 		goto bad;
 	}	
 	state_count = PPC_FLOAT_STATE_COUNT;
-	if (act_machine_get_state(th_act, PPC_FLOAT_STATE, &fs, &state_count)  != KERN_SUCCESS) {
+	if (act_machine_get_state(th_act, PPC_FLOAT_STATE, &mctx.fs, &state_count)  != KERN_SUCCESS) {
 		goto bad;
 	}	
 
+	vec_save(th_act);
+	if (find_user_vec(th_act)) {
+		vec_used = 1;
+		state_count = PPC_VECTOR_STATE_COUNT;
+		if (act_machine_get_state(th_act, PPC_VECTOR_STATE, &mctx.vs, &state_count)  != KERN_SUCCESS) {
+			goto bad;
+		}	
+		
+	}
+
+	trampact = ps->ps_trampact[sig];
 	oonstack = ps->ps_sigstk.ss_flags & SA_ONSTACK;
+	if (p->p_sigacts->ps_siginfo & sigmask(sig))
+		infostyle = 2;
 
 	/* figure out where our new stack lives */
 	if ((ps->ps_flags & SAS_ALTSTACK) && !oonstack &&
 		(ps->ps_sigonstack & sigmask(sig))) {
 		sp = (unsigned long)(ps->ps_sigstk.ss_sp);
 		sp += ps->ps_sigstk.ss_size;
+		stack_size = ps->ps_sigstk.ss_size;
 		ps->ps_sigstk.ss_flags |= SA_ONSTACK;
 	}
 	else
-		sp = statep.r1;
+		sp = mctx.ss.r1;
 
-	// preserve RED ZONE area
+	/* preserve RED ZONE area */
 	sp = TRUNC_DOWN(sp, C_REDZONE_LEN, C_STK_ALIGN);
 
-	// context goes first on stack
-	sp -= sizeof(*p_context);
-	p_context = (struct sigcontext *) sp;
+	/* context goes first on stack */
+	sp -= sizeof(*p_uctx);
+	p_uctx = (struct ucontext *) sp;
 
-	// next are the saved registers
-	sp -= sizeof(*p_regs);
-	p_regs = (struct sigregs *)sp;
+	/* this is where siginfo goes on stack */
+	sp -= sizeof(*p_sinfo);
+	p_sinfo = (siginfo_t *) sp;
 
-	// C calling conventions, create param save and linkage
-	// areas
+	/* next are the saved registers */
+	sp -= sizeof(*p_mctx);
+	p_mctx = (struct mcontext *)sp;
+
+	/* C calling conventions, create param save and linkage
+	 *  areas
+	 */
 
 	sp = TRUNC_DOWN(sp, C_PARAMSAVE_LEN, C_STK_ALIGN);
 	paramp = sp;
 	sp -= C_LINKAGE_LEN;
 	linkp = sp;
 
-	/* fill out sigcontext */
-	context.sc_onstack = oonstack;
-	context.sc_mask = mask;
-	context.sc_ir = statep.srr0;
-	context.sc_psw = statep.srr1;
-	context.sc_regs = p_regs;
+	uctx.uc_onstack = oonstack;
+	uctx.uc_sigmask = mask;
+	uctx.uc_stack.ss_sp = (char *)sp;
+	uctx.uc_stack.ss_size = stack_size;
+	if (oonstack)
+		uctx.uc_stack.ss_flags |= SS_ONSTACK;
+		
+	uctx.uc_link = 0;
+	uctx.uc_mcsize = (size_t)((PPC_EXCEPTION_STATE_COUNT + PPC_THREAD_STATE_COUNT + PPC_FLOAT_STATE_COUNT) * sizeof(int));
+	if (vec_used) 
+		uctx.uc_mcsize += (size_t)(PPC_VECTOR_STATE_COUNT * sizeof(int));
+	uctx.uc_mcontext = p_mctx;
+
+	/* setup siginfo */
+	bzero((caddr_t)&sinfo, sizeof(siginfo_t));
+	sinfo.si_signo = sig;
+	switch (sig) {
+		case SIGCHLD:
+			sinfo.si_pid = p->si_pid;
+			p->si_pid =0;
+			sinfo.si_status = p->si_status;
+			p->si_status = 0;
+			sinfo.si_uid = p->si_uid;
+			p->si_uid =0;
+			sinfo.si_code = p->si_code;
+			p->si_code = 0;
+			if (sinfo.si_code == CLD_EXITED) {
+				if (WIFEXITED(sinfo.si_status)) 
+					sinfo.si_code = CLD_EXITED;
+				else if (WIFSIGNALED(sinfo.si_status)) {
+					if (WCOREDUMP(sinfo.si_status))
+						sinfo.si_code = CLD_DUMPED;
+					else	
+						sinfo.si_code = CLD_KILLED;
+				}
+			}
+			break;
+		case SIGILL:
+			sinfo.si_addr = (void *)mctx.ss.srr0;
+			if (mctx.ss.srr1 & (1 << (31 - SRR1_PRG_ILL_INS_BIT)))
+				sinfo.si_code = ILL_ILLOPC;
+			else if (mctx.ss.srr1 & (1 << (31 - SRR1_PRG_PRV_INS_BIT)))
+				sinfo.si_code = ILL_PRVOPC;
+			else if (mctx.ss.srr1 & (1 << (31 - SRR1_PRG_TRAP_BIT)))
+				sinfo.si_code = ILL_ILLTRP;
+			else
+				sinfo.si_code = ILL_NOOP;
+			break;
+		case SIGFPE:
+#define FPSCR_VX	2
+#define FPSCR_OX	3
+#define FPSCR_UX	4
+#define FPSCR_ZX	5
+#define FPSCR_XX	6
+			sinfo.si_addr = (void *)mctx.ss.srr0;
+			if (mctx.fs.fpscr & (1 << (31 - FPSCR_VX)))
+				sinfo.si_code = FPE_FLTINV;
+			else if (mctx.fs.fpscr & (1 << (31 - FPSCR_OX)))
+				sinfo.si_code = FPE_FLTOVF;
+			else if (mctx.fs.fpscr & (1 << (31 - FPSCR_UX)))
+				sinfo.si_code = FPE_FLTUND;
+			else if (mctx.fs.fpscr & (1 << (31 - FPSCR_ZX)))
+				sinfo.si_code = FPE_FLTDIV;
+			else if (mctx.fs.fpscr & (1 << (31 - FPSCR_XX)))
+				sinfo.si_code = FPE_FLTRES;
+			else
+				sinfo.si_code = FPE_NOOP;
+			break;
+
+		case SIGBUS:
+			sinfo.si_addr = (void *)mctx.ss.srr0;
+			/* on ppc we generate only if EXC_PPC_UNALIGNED */
+			sinfo.si_code = BUS_ADRALN;
+			break;
+
+		case SIGSEGV:
+			sinfo.si_addr = (void *)mctx.ss.srr0;
+			/* First check in srr1 and then in dsisr */
+			if (mctx.ss.srr1 & (1 << (31 - DSISR_PROT_BIT)))
+				sinfo.si_code = SEGV_ACCERR;
+			else if (mctx.es.dsisr & (1 << (31 - DSISR_PROT_BIT)))
+				sinfo.si_code = SEGV_ACCERR;
+			else
+				sinfo.si_code = SEGV_MAPERR;
+			break;
+		default:
+			break;
+	}
 
 	/* copy info out to user space */
-	if (copyout((caddr_t)&context, (caddr_t)p_context, sizeof(context)))
+	if (copyout((caddr_t)&uctx, (caddr_t)p_uctx, sizeof(struct ucontext)))
 		goto bad;
-	if (copyout((caddr_t)&statep, (caddr_t)&p_regs->ss, 
-			sizeof(struct ppc_saved_state)))
+	if (copyout((caddr_t)&sinfo, (caddr_t)p_sinfo, sizeof(siginfo_t)))
 		goto bad;
-	if (copyout((caddr_t)&fs, (caddr_t)&p_regs->fs,
-			sizeof(struct ppc_float_state)))
+	if (copyout((caddr_t)&mctx, (caddr_t)p_mctx, uctx.uc_mcsize))
 		goto bad;
 
 	/* Place our arguments in arg registers: rtm dependent */
 
-	statep.r3 = (unsigned long)sig;
-	statep.r4 = (unsigned long)code;
-	statep.r5 = (unsigned long)p_context;
+	mctx.ss.r3 = (unsigned long)catcher;
+	mctx.ss.r4 = (unsigned long)infostyle;
+	mctx.ss.r5 = (unsigned long)sig;
+	mctx.ss.r6 = (unsigned long)p_sinfo;
+	mctx.ss.r7 = (unsigned long)p_uctx;
 
-	statep.srr0 = (unsigned long)catcher;
-	statep.srr1 = get_msr_exportmask();	/* MSR_EXPORT_MASK_SET */
-	statep.r1 = sp;
+	mctx.ss.srr0 = (unsigned long)trampact;
+	mctx.ss.srr1 = get_msr_exportmask();	/* MSR_EXPORT_MASK_SET */
+	mctx.ss.r1 = sp;
 	state_count = PPC_THREAD_STATE_COUNT;
-	if (act_machine_set_state(th_act, PPC_THREAD_STATE, &statep, &state_count)  != KERN_SUCCESS) {
+	if (act_machine_set_state(th_act, PPC_THREAD_STATE, &mctx.ss, &state_count)  != KERN_SUCCESS) {
 		goto bad;
 	}	
 
@@ -153,9 +261,9 @@ bad:
 	sig = sigmask(SIGILL);
 	p->p_sigignore &= ~sig;
 	p->p_sigcatch &= ~sig;
-	p->p_sigmask &= ~sig;
+	ut->uu_sigmask &= ~sig;
 	/* sendsig is called with signal lock held */
-	psignal_lock(p, SIGILL, 0, 1);
+	psignal_lock(p, SIGILL, 0);
 	return;
 }
 
@@ -170,7 +278,7 @@ bad:
  * a machine fault.
  */
 struct sigreturn_args {
-	struct sigcontext *sigcntxp;
+	struct ucontext *uctx;
 };
 
 /* ARGSUSED */
@@ -180,74 +288,78 @@ sigreturn(p, uap, retval)
 	struct sigreturn_args *uap;
 	int *retval;
 {
-	struct sigcontext context;
-	struct sigregs *p_regs;
+	struct ucontext uctx, *p_uctx;
+	struct mcontext mctx, *p_mctx;
 	int error;
-	struct thread *thread;
 	thread_act_t th_act;
-	struct ppc_saved_state statep;
 	struct ppc_float_state fs;
+	struct ppc_exception_state es;
+	struct sigacts *ps = p->p_sigacts;
+	sigset_t mask;	
+	register sig_t action;
 	unsigned long state_count;
 	unsigned int nbits, rbits;
+	struct uthread * ut;
+	int vec_used = 0;
 
-	thread = current_thread();
 	th_act = current_act();
 
-	if (error = copyin(uap->sigcntxp, &context, sizeof(context))) {
+	ut = (struct uthread *)get_bsdthread_info(th_act);
+	if (error = copyin(uap->uctx, &uctx, sizeof(struct ucontext))) {
 		return(error);
 	}
-	state_count = PPC_THREAD_STATE_COUNT;
-	if (act_machine_get_state(th_act, PPC_THREAD_STATE, &statep, &state_count)  != KERN_SUCCESS) {
-		return(EINVAL);
-	}	
-	state_count = PPC_FLOAT_STATE_COUNT;
-	if (act_machine_get_state(th_act, PPC_FLOAT_STATE, &fs, &state_count)  != KERN_SUCCESS) {
-		return(EINVAL);
-	}	
+	if (error = copyin(uctx.uc_mcontext, &mctx, sizeof(struct mcontext))) {
+		return(error);
+	}
+	
+	if (uctx.uc_onstack & 01)
+			p->p_sigacts->ps_sigstk.ss_flags |= SA_ONSTACK;
+	else
+		p->p_sigacts->ps_sigstk.ss_flags &= ~SA_ONSTACK;
+	ut->uu_sigmask = uctx.uc_sigmask & ~sigcantmask;
+
+
+	if (ut->uu_siglist & ~ut->uu_sigmask)
+		signal_setast(current_act());	
+
 	nbits = get_msr_nbits();
 	rbits = get_msr_rbits();
 	/* adjust the critical fields */
 	/* make sure naughty bits are off */
-	context.sc_psw &= ~(nbits);
+	mctx.ss.srr1 &= ~(nbits);
 	/* make sure necessary bits are on */
-	context.sc_psw |= (rbits);
+	mctx.ss.srr1 |= (rbits);
 
-//	/* we return from sigreturns as if we faulted in */
-//	entry->es_flags = (entry->es_flags & ~ES_GATEWAY) | ES_TRAP;
+	state_count = (size_t)((PPC_EXCEPTION_STATE_COUNT + PPC_THREAD_STATE_COUNT + PPC_FLOAT_STATE_COUNT) * sizeof(int));
 
-	if (context.sc_regs) {
-		p_regs = (struct sigregs *)context.sc_regs;
-		if (error = copyin(&p_regs->ss, &statep,
-				sizeof(struct ppc_saved_state)))
-			return(error);
-
-		if (error = copyin(&p_regs->fs, &fs,
-				sizeof(struct ppc_float_state)))
-			return(error);
-
-		}
-	else {
-		statep.r1 = context.sc_sp;
-	}
-//		entry->es_general.saved.stack_pointer = context.sc_sp;
-
-	if (context.sc_onstack & 01)
-			p->p_sigacts->ps_sigstk.ss_flags |= SA_ONSTACK;
-	else
-		p->p_sigacts->ps_sigstk.ss_flags &= ~SA_ONSTACK;
-	p->p_sigmask = context.sc_mask &~ sigcantmask;
-	statep.srr0 = context.sc_ir;
-	statep.srr1 = context.sc_psw;
+	if (uctx.uc_mcsize > state_count)
+		vec_used = 1;
 
 	state_count = PPC_THREAD_STATE_COUNT;
-	if (act_machine_set_state(th_act, PPC_THREAD_STATE, &statep, &state_count)  != KERN_SUCCESS) {
+	if (act_machine_set_state(th_act, PPC_THREAD_STATE, &mctx.ss, &state_count)  != KERN_SUCCESS) {
 		return(EINVAL);
 	}	
 
 	state_count = PPC_FLOAT_STATE_COUNT;
-	if (act_machine_set_state(th_act, PPC_FLOAT_STATE, &fs, &state_count)  != KERN_SUCCESS) {
+	if (act_machine_set_state(th_act, PPC_FLOAT_STATE, &mctx.fs, &state_count)  != KERN_SUCCESS) {
 		return(EINVAL);
 	}	
+
+	mask = sigmask(SIGFPE);
+	if (((ut->uu_sigmask & mask) == 0) && (p->p_sigcatch & mask) && ((p->p_sigignore & mask) == 0)) {
+		action = ps->ps_sigact[SIGFPE];
+		if((action != SIG_DFL) && (action != SIG_IGN)) {
+			thread_enable_fpe(th_act, 1);
+		}
+	}
+
+	if (vec_used) {
+		state_count = PPC_VECTOR_STATE_COUNT;
+		if (act_machine_set_state(th_act, PPC_VECTOR_STATE, &mctx.vs, &state_count)  != KERN_SUCCESS) {
+			return(EINVAL);
+		}	
+	}
+
 	return (EJUSTRETURN);
 }
 

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2002 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -55,6 +55,13 @@
 	  <HFS1>	 2/27/97	msd		first checked in
 */
 
+#ifndef _UCSTRINGCOMPAREDATA_
+#define _UCSTRINGCOMPAREDATA_
+
+#include <sys/appleapiopts.h>
+
+#ifdef KERNEL
+#ifdef __APPLE_API_PRIVATE
 /*
  * For better performance, the case folding table for basic latin
  * is seperate from the others.  This eliminates the extra lookup
@@ -311,3 +318,6 @@ unsigned short gCompareTable[] = {
 	/* F */	0xF000, 0xF100, 0xF200, 0xF300, 0xF400, 0xF500, 0xF600, 0xF700, 0xF800, 0xF900, 0xFA00, 0xFB00, 0xFC00, 0xFD00, 0xFE00, 0xFF00, 
 
 };
+#endif /* __APPLE_API_PRIVATE */
+#endif /* KERNEL */
+#endif /* _UCSTRINGCOMPAREDATA_ */

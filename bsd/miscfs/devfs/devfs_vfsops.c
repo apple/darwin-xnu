@@ -201,13 +201,15 @@ devfs_unmount( struct mount *mp, int mntflags, struct proc *p)
 {
 	struct devfsmount *devfs_mp_p = (struct devfsmount *)mp->mnt_data;
 	int flags = 0;
+	int force = 0;
 	int error;
 	
 	if (mntflags & MNT_FORCE) {
 		flags |= FORCECLOSE;
+		force = 1;
 	}
 	error = vflush(mp, NULLVP, flags);
-	if (error)
+	if (error && !force)
 		return error;
 
 	DEVFS_LOCK(p);

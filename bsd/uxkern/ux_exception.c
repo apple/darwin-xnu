@@ -42,6 +42,7 @@
 #include <mach/mig_errors.h>
 #include <kern/task.h>
 #include <kern/thread.h>
+#include <kern/sched_prim.h>
 #include <kern/thread_act.h>
 #include <kern/kalloc.h>
 
@@ -166,7 +167,7 @@ ux_handler_init(void)
 	if (ux_exception_port == MACH_PORT_NULL)  {
 		simple_unlock(&ux_handler_init_lock);
 		assert_wait(&ux_exception_port, THREAD_UNINT);
-		thread_block((void (*)(void)) 0);
+		thread_block(THREAD_CONTINUE_NULL);
 		}
 	else
 		simple_unlock(&ux_handler_init_lock);
@@ -198,7 +199,7 @@ catch_exception_raise(
        (ipc_object_copyin(get_task_ipcspace(self), thread_name,
 		       MACH_MSG_TYPE_PORT_SEND,
 		       (void *) &thread_port) == MACH_MSG_SUCCESS)) {
-        if (IPC_OBJECT_VALID(thread_port)) {
+        if (IPC_PORT_VALID(thread_port)) {
 	   th_act = (thread_act_t)convert_port_to_act(thread_port);
 	   ipc_port_release(thread_port);
 	} else {
@@ -305,6 +306,9 @@ void ux_exception(
 		break;
 	    case EXC_UNIX_ABORT:
 		*ux_signal = SIGABRT;
+		break;
+	    case EXC_SOFT_SIGNAL:
+		*ux_signal = SIGKILL;
 		break;
 	    }
 	    break;

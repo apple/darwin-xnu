@@ -1,0 +1,207 @@
+.\"	$NetBSD: mmap.2,v 1.5 1995/06/24 10:48:59 cgd Exp $
+.\"
+.\" Copyright (c) 1991, 1993
+.\"	The Regents of the University of California.  All rights reserved.
+.\"
+.\" Redistribution and use in source and binary forms, with or without
+.\" modification, are permitted provided that the following conditions
+.\" are met:
+.\" 1. Redistributions of source code must retain the above copyright
+.\"    notice, this list of conditions and the following disclaimer.
+.\" 2. Redistributions in binary form must reproduce the above copyright
+.\"    notice, this list of conditions and the following disclaimer in the
+.\"    documentation and/or other materials provided with the distribution.
+.\" 3. All advertising materials mentioning features or use of this software
+.\"    must display the following acknowledgement:
+.\"	This product includes software developed by the University of
+.\"	California, Berkeley and its contributors.
+.\" 4. Neither the name of the University nor the names of its contributors
+.\"    may be used to endorse or promote products derived from this software
+.\"    without specific prior written permission.
+.\"
+.\" THIS SOFTWARE IS PROVIDED BY THE REGENTS AND CONTRIBUTORS ``AS IS'' AND
+.\" ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+.\" IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
+.\" ARE DISCLAIMED.  IN NO EVENT SHALL THE REGENTS OR CONTRIBUTORS BE LIABLE
+.\" FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
+.\" DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS
+.\" OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION)
+.\" HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT
+.\" LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
+.\" OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
+.\" SUCH DAMAGE.
+.\"
+.\"	@(#)mmap.2	8.1 (Berkeley) 6/4/93
+.\"
+.Dd June 4, 1993
+.Dt MMAP 2
+.Os BSD 4
+.Sh NAME
+.Nm mmap
+.Nd map files or devices into memory
+.Sh SYNOPSIS
+.Fd #include <sys/types.h>
+.Fd #include <sys/mman.h>
+.Ft void *
+.Fn mmap "void *addr" "size_t len" "int prot" "int flags" "int fd" "off_t offset"
+.Sh DESCRIPTION
+The
+.Nm mmap
+function causes the pages starting at
+.Fa addr
+and continuing for at most
+.Fa len
+bytes to be mapped from the object described by
+.Fa fd ,
+starting at byte offset
+.Fa offset .
+If
+.Fa offset
+or
+.Fa len
+is not a multiple of the pagesize, the mapped region may extend past the
+specified range.
+.Pp
+If
+.Fa addr
+is non-zero, it is used as a hint to the system.
+(As a convenience to the system, the actual address of the region may differ
+from the address supplied.)
+If
+.Fa addr
+is zero, an address will be selected by the system.
+The actual starting address of the region is returned.
+A successful
+.Fa mmap
+deletes any previous mapping in the allocated address range.
+.Pp
+The protections (region accessibility) are specified in the
+.Fa prot
+argument by
+.Em or Ns 'ing
+the following values:
+.Pp
+.Bl -tag -width MAP_FIXEDX
+.It Dv PROT_EXEC
+Pages may be executed.
+.It Dv PROT_READ
+Pages may be read.
+.It Dv PROT_WRITE
+Pages may be written.
+.El
+.Pp
+The
+.Fa flags
+parameter specifies the type of the mapped object, mapping options and
+whether modifications made to the mapped copy of the page are private
+to the process or are to be shared with other references.
+Sharing, mapping type and options are specified in the
+.Fa flags
+argument by
+.Em or Ns 'ing
+the following values:
+.Pp
+.Bl -tag -width MAP_FIXEDX
+.It Dv MAP_ANON
+Map anonymous memory not associated with any specific file.
+The file descriptor used for creating
+.Dv MAP_ANON
+regions is used only for
+naming, and may be specified as \-1 if no name is associated with the
+region.
+.It Dv MAP_FILE
+Mapped from a regular file or character-special device memory.  (This is
+the default mapping type, and need not be specified.)
+.It Dv MAP_FIXED
+Do not permit the system to select a different address than the one
+specified.
+If the specified address cannot be used,
+.Nm mmap
+will fail.
+If MAP_FIXED is specified,
+.Fa addr
+must be a multiple of the pagesize.
+Use of this option is discouraged.
+.It Dv MAP_HASSEMAPHORE
+Notify the kernel that the region may contain semaphores and that special
+handling may be necessary.
+.It Dv MAP_INHERIT
+Permit regions to be inherited across
+.Xr exec 2
+system calls.
+.It Dv MAP_PRIVATE
+Modifications are private.
+.It Dv MAP_SHARED
+Modifications are shared.
+.El
+.Pp
+The 
+.Xr close 2
+function does not unmap pages, see
+.Xr munmap 2
+for further information.
+.Pp
+The current design does not allow a process to specify the location of
+swap space.
+In the future we may define an additional mapping type,
+.Dv MAP_SWAP ,
+in which
+the file descriptor argument specifies a file or device to which swapping
+should be done.
+.Sh RETURN VALUES
+Upon successful completion,
+.Nm mmap
+returns a pointer to the mapped region.
+Otherwise, a value of -1 is returned and
+.Va errno
+is set to indicate the error.
+.Sh ERRORS
+.Fn Mmap
+will fail if:
+.Bl -tag -width Er
+.It Bq Er EACCES
+The flag
+.Dv PROT_READ
+was specified as part of the
+.Fa prot
+parameter and
+.Fa fd
+was not open for reading.
+The flags
+.Dv PROT_WRITE
+and
+.Dv MAP_SHARED
+were specified as part
+of the
+.Fa flags
+and
+.Fa prot
+parameters and
+.Fa fd
+was not open for writing.
+.It Bq Er EBADF
+.Fa fd
+is not a valid open file descriptor.
+.It Bq Er EINVAL
+.Dv MAP_FIXED
+was specified and the
+.I addr
+parameter was not page aligned.
+.Fa fd
+did not reference a regular or character special file.
+.It Bq Er ENOMEM
+.Dv MAP_FIXED
+was specified and the
+.Fa addr
+parameter wasn't available.
+.Dv MAP_ANON
+was specified and insufficient memory was available.
+.El
+.Sh "SEE ALSO"
+.Xr getpagesize 2 ,
+.Xr msync 2 ,
+.Xr munmap 2 ,
+.Xr mprotect 2 ,
+.Xr madvise 2 ,
+.Xr mincore 2 ,
+.Xr mlock 2

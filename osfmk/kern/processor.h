@@ -64,10 +64,11 @@
 #include <mach/kern_return.h>
 #include <kern/kern_types.h>
 
-extern struct processor_set	default_pset;
-extern processor_t	master_processor;
+#include <sys/appleapiopts.h>
 
-#ifdef MACH_KERNEL_PRIVATE
+#ifdef	__APPLE_API_PRIVATE
+
+#ifdef	MACH_KERNEL_PRIVATE
 
 #include <cpus.h>
 
@@ -76,37 +77,48 @@ extern processor_t	master_processor;
 #include <kern/lock.h>
 #include <kern/queue.h>
 #include <kern/sched.h>
+#include <kern/cpu_data.h>
 
 #include <machine/ast_types.h>
 
 struct processor_set {
-	struct	run_queue	runq;			/* runq for this set */
 	queue_head_t		idle_queue;		/* idle processors */
 	int					idle_count;		/* how many ? */
-	decl_simple_lock_data(,idle_lock)	/* lock for above */
+	queue_head_t		active_queue;	/* active processors */
+	decl_simple_lock_data(,sched_lock)	/* lock for above */
+
 	queue_head_t		processors;		/* all processors here */
 	int					processor_count;/* how many ? */
 	decl_simple_lock_data(,processors_lock)	/* lock for above */
+
+	struct	run_queue	runq;			/* runq for this set */
+
 	queue_head_t		tasks;			/* tasks assigned */
 	int					task_count;		/* how many */
 	queue_head_t		threads;		/* threads in this set */
 	int					thread_count;	/* how many */
 	int					ref_count;		/* structure ref count */
 	boolean_t			active;			/* is pset in use */
-	decl_mutex_data(,	lock)			/* lock for everything else */
-	struct ipc_port	*	pset_self;		/* port for operations */
-	struct ipc_port *	pset_name_self;	/* port for information */
+	decl_mutex_data(,	lock)			/* lock for above */
+
 	int					set_quanta;		/* timeslice quanta for timesharing */
 	int					machine_quanta[NCPUS+1];
+
+	struct ipc_port	*	pset_self;		/* port for operations */
+	struct ipc_port *	pset_name_self;	/* port for information */
+
+	uint32_t			run_count;		/* number of threads running in set */
+
 	integer_t			mach_factor;	/* mach_factor */
 	integer_t			load_average;	/* load_average */
-	long				sched_load;		/* load avg for scheduler */
+	uint32_t			sched_load;		/* load avg for scheduler */
 };
 
 struct processor {
-	struct run_queue	runq;			/* local runq for this processor */
-	queue_chain_t		processor_queue;/* idle/assign/shutdown queue link */
+	queue_chain_t		processor_queue;/* idle/active/action queue link,
+										 * MUST remain the first element */
 	int					state;			/* See below */
+	int					current_pri;	/* priority of current thread */
 	struct thread_shuttle
 						*next_thread,	/* next thread to run if dispatched */
 						*idle_thread;	/* this processor's idle thread. */
@@ -115,13 +127,19 @@ struct processor {
 	uint64_t			quantum_end;	/* time when current quantum ends */
 	uint64_t			last_dispatch;	/* time of last dispatch */
 
-	processor_set_t		processor_set;		/* processor set I belong to */
-	processor_set_t		processor_set_next;	/* set I will belong to */
+	struct run_queue	runq;			/* local runq for this processor */
+
+	processor_set_t		processor_set;		/* current membership */
+	processor_set_t		processor_set_next;	/* set to join in progress */
 	queue_chain_t		processors;			/* all processors in set */
 	decl_simple_lock_data(,lock)
 	struct ipc_port		*processor_self;/* port for operations */
+	cpu_data_t			*cpu_data;		/* machine-dep per-cpu data */
 	int					slot_num;		/* machine-indep slot number */
 };
+
+extern struct processor_set	default_pset;
+extern processor_t	master_processor;
 
 extern struct processor	processor_array[NCPUS];
 
@@ -144,8 +162,8 @@ extern struct processor	processor_array[NCPUS];
  *	Values for the processor state are defined below.  If the processor
  *	is off-line or being shutdown, then it is only necessary to lock
  *	the processor to change its state.  Otherwise it is only necessary
- *	to lock its processor set's idle_lock.  Scheduler code will
- *	typically lock only the idle_lock, but processor manipulation code
+ *	to lock its processor set's sched_lock.  Scheduler code will
+ *	typically lock only the sched_lock, but processor manipulation code
  *	will often lock both.
  */
 
@@ -185,8 +203,17 @@ extern processor_t	processor_ptr[NCPUS];
 #define processor_lock(pr)	simple_lock(&(pr)->lock)
 #define processor_unlock(pr)	simple_unlock(&(pr)->lock)
 
-
 extern void		pset_sys_bootstrap(void);
+
+#define pset_quanta_update(pset)						\
+MACRO_BEGIN												\
+	int		proc_count = (pset)->processor_count;		\
+	int		runq_count = (pset)->runq.count;			\
+														\
+	(pset)->set_quanta = (pset)->machine_quanta[		\
+					(runq_count > proc_count)?			\
+							proc_count: runq_count];	\
+MACRO_END
 
 /* Implemented by MD layer */
 
@@ -225,12 +252,6 @@ extern void		thread_change_psets(
 				processor_set_t old_pset,
 				processor_set_t new_pset);
 
-extern void		pset_deallocate(
-				processor_set_t	pset);
-
-extern void		pset_reference(
-				processor_set_t	pset);
-
 extern kern_return_t	processor_assign(
 				processor_t	processor,
 				processor_set_t	new_pset,
@@ -239,12 +260,21 @@ extern kern_return_t	processor_assign(
 extern kern_return_t	processor_info_count(
 				processor_flavor_t flavor,
 				mach_msg_type_number_t *count);
-#endif /* MACH_KERNEL_PRIVATE */
+
+#endif	/* MACH_KERNEL_PRIVATE */
 
 extern kern_return_t	processor_start(
 				processor_t	processor);
 
 extern kern_return_t	processor_exit(
 				processor_t	processor);
+
+#endif	/* __APPLE_API_PRIVATE */
+
+extern void		pset_deallocate(
+				processor_set_t	pset);
+
+extern void		pset_reference(
+				processor_set_t	pset);
 
 #endif	/* _KERN_PROCESSOR_H_ */

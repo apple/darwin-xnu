@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2001 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -542,6 +542,7 @@ sendit(p, s, mp, flags, retsize)
 	struct socket *so;
 #if KTRACE
 	struct iovec *ktriov = NULL;
+	struct uio ktruio;
 #endif
 	
 	KERNEL_DEBUG(DBG_FNC_SENDIT | DBG_FUNC_START, 0,0,0,0,0);
@@ -613,6 +614,15 @@ sendit(p, s, mp, flags, retsize)
 	} else
 		control = 0;
 
+#if KTRACE    
+    if (KTRPOINT(p, KTR_GENIO)) {
+        int iovlen = auio.uio_iovcnt * sizeof (struct iovec);
+
+        MALLOC(ktriov, struct iovec *, iovlen, M_TEMP, M_WAITOK);
+        bcopy((caddr_t)auio.uio_iov, (caddr_t)ktriov, iovlen);
+        ktruio = auio;
+    }   
+#endif
 	len = auio.uio_resid;
 	so = (struct socket *)fp->f_data;
 	error = so->so_proto->pr_usrreqs->pru_sosend(so, to, &auio, 0, control,
@@ -621,16 +631,19 @@ sendit(p, s, mp, flags, retsize)
 		if (auio.uio_resid != len && (error == ERESTART ||
 		    error == EINTR || error == EWOULDBLOCK))
 			error = 0;
-		if (error == EPIPE)
+                /* Generation of SIGPIPE can be controlled per socket */
+		if (error == EPIPE && !(so->so_flags & SOF_NOSIGPIPE))
 			psignal(p, SIGPIPE);
 	}
 	if (error == 0)
 		*retsize = len - auio.uio_resid;
 #if KTRACE
 	if (ktriov != NULL) {
-		if (error == 0)
-			ktrgenio(p->p_tracep, s, UIO_WRITE,
-				ktriov, *retsize, error);
+		if (error == 0) {
+			ktruio.uio_iov = ktriov;
+			ktruio.uio_resid = retsize[0];
+			ktrgenio(p->p_tracep, s, UIO_WRITE, &ktruio, error, -1);
+		}
 		FREE(ktriov, M_TEMP);
 	}
 #endif
@@ -833,6 +846,7 @@ recvit(p, s, mp, namelenp, retval)
 	struct sockaddr *fromsa = 0;
 #if KTRACE
 	struct iovec *ktriov = NULL;
+	struct uio ktruio;
 #endif
 
 	KERNEL_DEBUG(DBG_FNC_RECVIT | DBG_FUNC_START, 0,0,0,0,0);
@@ -862,6 +876,7 @@ recvit(p, s, mp, namelenp, retval)
 
 		MALLOC(ktriov, struct iovec *, iovlen, M_TEMP, M_WAITOK);
 		bcopy((caddr_t)auio.uio_iov, (caddr_t)ktriov, iovlen);
+		ktruio = auio;
 	}
 #endif
 	len = auio.uio_resid;
@@ -876,9 +891,11 @@ recvit(p, s, mp, namelenp, retval)
 	}
 #if KTRACE
 	if (ktriov != NULL) {
-		if (error == 0)
-			ktrgenio(p->p_tracep, s, UIO_WRITE,
-				ktriov, len - auio.uio_resid, error);
+		if (error == 0) {
+			ktruio.uio_iov = ktriov;
+			ktruio.uio_resid = len - auio.uio_resid;
+			ktrgenio(p->p_tracep, s, UIO_WRITE, &ktruio, error, -1);
+		}
 		FREE(ktriov, M_TEMP);
 	}
 #endif
@@ -1033,15 +1050,17 @@ orecvfrom(p, uap, retval)
 
 
 #ifdef COMPAT_OLDSOCK
+struct	orecv_args {
+	int	s;
+	caddr_t	buf;
+	int	len;
+	int	flags;
+};
+
 int
 orecv(p, uap, retval)
 	struct proc *p;
-	register struct orecv_args  {
-		int	s;
-		caddr_t	buf;
-		int	len;
-		int	flags;
-	}  *uap;
+	struct	orecv_args	*uap;
 	register_t *retval;
 {
 	struct msghdr msg;
@@ -1063,14 +1082,16 @@ orecv(p, uap, retval)
  * overlays the new one, missing only the flags, and with the (old) access
  * rights where the control fields are now.
  */
+struct orecvmsg_args  {
+	int	s;
+	struct	omsghdr *msg;
+	int	flags;
+};
+
 int
 orecvmsg(p, uap, retval)
 	struct proc *p;
-	register struct orecvmsg_args  {
-		int	s;
-		struct	omsghdr *msg;
-		int	flags;
-	}  *uap;
+	struct orecvmsg_args *uap;
 	register_t *retval;
 {
 	struct msghdr msg;
@@ -1107,14 +1128,16 @@ done:
 }
 #endif
 
+struct recvmsg_args  {
+	int	s;
+	struct	msghdr *msg;
+	int	flags;
+};
+
 int
 recvmsg(p, uap, retval)
 	struct proc *p;
-	register struct recvmsg_args  {
-		int	s;
-		struct	msghdr *msg;
-		int	flags;
-	}  *uap;
+	struct recvmsg_args *uap;
 	register_t *retval;
 {
 	struct msghdr msg;
@@ -1163,13 +1186,15 @@ done:
 }
 
 /* ARGSUSED */
+struct shutdown_args  {
+	int	s;
+	int	how;
+};
+
 int
 shutdown(p, uap, retval)
 	struct proc *p;
-	register struct shutdown_args  {
-		int	s;
-		int	how;
-	}  *uap;
+	struct shutdown_args *uap;
 	register_t *retval;
 {
 	struct file *fp;
@@ -1186,16 +1211,18 @@ shutdown(p, uap, retval)
 
 
 /* ARGSUSED */
+struct setsockopt_args  {
+	int	s;
+	int	level;
+	int	name;
+	caddr_t	val;
+	int	valsize;
+};
+
 int
 setsockopt(p, uap, retval)
 	struct proc *p;
-	register struct setsockopt_args  {
-		int	s;
-		int	level;
-		int	name;
-		caddr_t	val;
-		int	valsize;
-	}  *uap;
+	struct setsockopt_args *uap;
 	register_t *retval;
 {
 	struct file *fp;

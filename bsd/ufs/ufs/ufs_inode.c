@@ -67,6 +67,7 @@
 #include <sys/mount.h>
 #include <sys/kernel.h>
 #include <sys/malloc.h>
+#include <sys/quota.h>
 
 #include <ufs/ufs/quota.h>
 #include <ufs/ufs/inode.h>

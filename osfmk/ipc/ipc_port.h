@@ -72,7 +72,6 @@
 #include <kern/lock.h>
 #include <kern/ipc_kobject.h>
 #include <kern/wait_queue.h>
-#include <kern/thread_pool.h>
 
 #include <ipc/ipc_object.h>
 #include <ipc/ipc_mqueue.h>
@@ -115,7 +114,6 @@ struct ipc_port {
 	} data;
 
 	ipc_kobject_t ip_kobject;
-	struct rpc_subsystem * ip_subsystem;
 	mach_port_mscount_t ip_mscount;
 	mach_port_rights_t ip_srights;
 	mach_port_rights_t ip_sorights;
@@ -154,8 +152,6 @@ struct ipc_port {
 #define ip_references		ip_object.io_references
 #define ip_bits			ip_object.io_bits
 #define ip_receiver_name	ip_object.io_receiver_name
-
-#define ip_thread_pool		ip_object.io_thread_pool
 
 #define	ip_receiver		data.receiver
 #define	ip_destination		data.destination

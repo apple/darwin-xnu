@@ -26,6 +26,7 @@
 
 #ifndef _NETAT_AT_PAT_H_
 #define _NETAT_AT_PAT_H_
+#include <sys/appleapiopts.h>
 
 /* This is header for the PAT module. This contains a table of pointers that 
  * should get initialized with the BNET stuff and the ethernet driver. The 

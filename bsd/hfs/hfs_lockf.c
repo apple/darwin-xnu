@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1999 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 1999,2001-2002 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -20,7 +20,7 @@
  * @APPLE_LICENSE_HEADER_END@
  */
 
-/*	(c) 1997-1998	Apple Computer, Inc.  All Rights Reserved */
+/*	(c) 1997-1998,2001 Apple Computer, Inc.  All Rights Reserved */
 /*
  * Copyright (c) 1982, 1986, 1989, 1993
  *	The Regents of the University of California.  All rights reserved.
@@ -69,8 +69,8 @@
 #include <sys/malloc.h>
 #include <sys/fcntl.h>
 
+#include "hfs_cnode.h"
 #include "hfs_lockf.h"
-#include "hfs.h"
 
 /*
  * This variable controls the maximum number of processes that will
@@ -97,7 +97,7 @@ hfs_setlock(lock)
 	register struct hfslockf *lock;
 {
 	register struct hfslockf *block;
-	struct hfsnode *hp = lock->lf_hfsnode;
+	struct filefork *fork = lock->lf_fork;
 	struct hfslockf **prev, *overlap, *ltmp;
 	static char lockstr[] = "hfslockf";
 	int ovcase, priority, needtolink, error;
@@ -205,8 +205,8 @@ hfs_setlock(lock)
 	 * Skip over locks owned by other processes.
 	 * Handle any locks that overlap and are owned by ourselves.
 	 */
-	prev = &hp->h_lockf;
-	block = hp->h_lockf;
+	prev = &fork->ff_lockf;
+	block = fork->ff_lockf;
 	needtolink = 1;
 	for (;;) {
 		if ((ovcase = hfs_findoverlap(block, lock, SELF, &prev, &overlap)))
@@ -324,7 +324,7 @@ hfs_setlock(lock)
 }
 
 /*
- * Remove a byte-range lock on an hfsnode.
+ * Remove a file fork's byte-range lock.
  *
  * Generally, find the lock (or an overlap to that lock)
  * and remove it (or shrink it), then wakeup anyone we can.
@@ -333,8 +333,8 @@ int
 hfs_clearlock(unlock)
 	register struct hfslockf *unlock;
 {
-	struct hfsnode *hp = unlock->lf_hfsnode;
-	register struct hfslockf *lf = hp->h_lockf;
+	struct filefork *fork = unlock->lf_fork;
+	register struct hfslockf *lf = fork->ff_lockf;
 	struct hfslockf *overlap, **prev;
 	int ovcase;
 
@@ -346,7 +346,7 @@ hfs_clearlock(unlock)
 	if (lockf_debug & 1)
 		hfs_lprint("hfs_clearlock", unlock);
 #endif /* LOCKF_DEBUG */
-	prev = &hp->h_lockf;
+	prev = &fork->ff_lockf;
 	while ((ovcase = hfs_findoverlap(lf, unlock, SELF, &prev, &overlap))) {
 		/*
 		 * Wakeup the list of locks to be retried.
@@ -429,17 +429,17 @@ hfs_getlock(lock, fl)
 }
 
 /*
- * Walk the list of locks for an hfsnode and
+ * Walk a file fork's list of locks and
  * return the first blocking lock.
  */
 struct hfslockf *
 hfs_getblock(lock)
 	register struct hfslockf *lock;
 {
-	struct hfslockf **prev, *overlap, *lf = lock->lf_hfsnode->h_lockf;
+	struct hfslockf **prev, *overlap, *lf = lock->lf_fork->ff_lockf;
 	int ovcase;
 
-	prev = &lock->lf_hfsnode->h_lockf;
+	prev = &lock->lf_fork->ff_lockf;
 	while ((ovcase = hfs_findoverlap(lf, lock, OTHERS, &prev, &overlap))) {
 		/*
 		 * We've found an overlap, see if it blocks us
@@ -456,7 +456,7 @@ hfs_getblock(lock)
 }
 
 /*
- * Walk the list of locks for an hfsnode to
+ * Walk a file fork's list of locks to
  * find an overlapping lock (if any).
  *
  * NOTE: this returns only the FIRST overlapping lock.  There
@@ -651,9 +651,9 @@ hfs_lprint(tag, lock)
 	else
 		printf("id 0x%x", lock->lf_id);
 	printf(" in ino %d on dev <%d, %d>, %s, start %d, end %d",
-		lock->lf_hfsnode->i_number,
-		major(lock->lf_hfsnode->h_dev),
-		minor(lock->lf_hfsnode->h_dev),
+		FTOC(lock->lf_fork)->c_fileid,
+		major(FTOC(lock->lf_fork)->c_dev),
+		minor(FTOC(lock->lf_fork)->c_dev),
 		lock->lf_type == F_RDLCK ? "shared" :
 		lock->lf_type == F_WRLCK ? "exclusive" :
 		lock->lf_type == F_UNLCK ? "unlock" :
@@ -671,10 +671,10 @@ hfs_lprintlist(tag, lock)
 	register struct hfslockf *lf, *blk;
 
 	printf("%s: Lock list for ino %d on dev <%d, %d>:\n",
-		tag, lock->lf_hfsnode->i_number,
-		major(lock->lf_hfsnode->h_dev),
-		minor(lock->lf_hfsnode->h_dev));
-	for (lf = lock->lf_hfsnode->h_lockf; lf; lf = lf->lf_next) {
+		tag, FTOC(lock->lf_fork)->i_number,
+		major(FTOC(lock->lf_fork)->c_dev),
+		minor(FTOC(lock->lf_fork)->c_dev));
+	for (lf = lock->lf_fork->ff_lockf; lf; lf = lf->lf_next) {
 		printf("\tlock 0x%lx for ", lf);
 		if (lf->lf_flags & F_POSIX)
 			printf("proc %d", ((struct proc *)(lf->lf_id))->p_pid);

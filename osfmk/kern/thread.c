@@ -129,16 +129,18 @@
 vm_offset_t			active_stacks[NCPUS];	/* per-cpu active stacks	*/
 vm_offset_t			kernel_stack[NCPUS];	/* top of active stacks		*/
 thread_act_t		active_kloaded[NCPUS];	/*  + act if kernel loaded	*/
+boolean_t			first_thread;
 
 struct zone			*thread_shuttle_zone;
 
 queue_head_t		reaper_queue;
 decl_simple_lock_data(,reaper_lock)
-thread_call_t		thread_reaper_call;
 
 extern int		tick;
 
 extern void		pcb_module_init(void);
+
+struct thread_shuttle	pageout_thread;
 
 /* private */
 static struct thread_shuttle	thr_sh_template;
@@ -505,15 +507,18 @@ thread_init(void)
 	/* thr_sh_template.thread_list (later) */
 	/* thr_sh_template.pset_threads (later) */
 
-	/* one ref for pset, one for activation */
-	thr_sh_template.ref_count = 2;
+	/* reference for activation */
+	thr_sh_template.ref_count = 1;
 
-	thr_sh_template.wait_event = NO_EVENT;
-	thr_sh_template.wait_result = KERN_SUCCESS;
+	thr_sh_template.reason = AST_NONE;
+	thr_sh_template.at_safe_point = FALSE;
+	thr_sh_template.wait_event = NO_EVENT64;
 	thr_sh_template.wait_queue = WAIT_QUEUE_NULL;
-	thr_sh_template.wake_active = FALSE;
+	thr_sh_template.wait_result = THREAD_WAITING;
+	thr_sh_template.interrupt_level = THREAD_ABORTSAFE;
 	thr_sh_template.state = TH_STACK_HANDOFF | TH_WAIT | TH_UNINT;
-	thr_sh_template.interruptible = TRUE;
+	thr_sh_template.wake_active = FALSE;
+	thr_sh_template.active_callout = FALSE;
 	thr_sh_template.continuation = (void (*)(void))0;
 	thr_sh_template.top_act = THR_ACT_NULL;
 
@@ -523,13 +528,16 @@ thread_init(void)
 
 	thr_sh_template.priority = 0;
 	thr_sh_template.sched_pri = 0;
-	thr_sh_template.depress_priority = -1;
 	thr_sh_template.max_priority = 0;
 	thr_sh_template.task_priority = 0;
+	thr_sh_template.promotions = 0;
+	thr_sh_template.pending_promoter_index = 0;
+	thr_sh_template.pending_promoter[0] =
+		thr_sh_template.pending_promoter[1] = NULL;
 
 	thr_sh_template.current_quantum = 0;
 
-	thr_sh_template.metered_computation = 0;
+	thr_sh_template.computation_metered = 0;
 	thr_sh_template.computation_epoch = 0;
 
 	thr_sh_template.cpu_usage = 0;
@@ -539,6 +547,10 @@ thread_init(void)
 	thr_sh_template.sched_stamp = 0;
 	thr_sh_template.sleep_stamp = 0;
 	thr_sh_template.safe_release = 0;
+
+	thr_sh_template.bound_processor = PROCESSOR_NULL;
+	thr_sh_template.last_processor = PROCESSOR_NULL;
+	thr_sh_template.last_switch = 0;
 
 	thr_sh_template.vm_privilege = FALSE;
 
@@ -551,19 +563,12 @@ thread_init(void)
 
 	thr_sh_template.active = FALSE; /* reset */
 
-	/* thr_sh_template.processor_set (later) */
-#if	NCPUS > 1
-	thr_sh_template.bound_processor = PROCESSOR_NULL;
-#endif	/*NCPUS > 1*/
+	thr_sh_template.processor_set = PROCESSOR_SET_NULL;
 #if	MACH_HOST
 	thr_sh_template.may_assign = TRUE;
 	thr_sh_template.assign_active = FALSE;
 #endif	/* MACH_HOST */
 	thr_sh_template.funnel_state = 0;
-
-#if	NCPUS > 1
-	/* thr_sh_template.last_processor  (later) */
-#endif	/* NCPUS > 1 */
 
 	/*
 	 *	Initialize other data structures used in
@@ -611,7 +616,6 @@ thread_init(void)
 #endif  /* MACHINE_STACK */
 
 #if	MACH_LDEBUG
-	thr_sh_template.kthread = FALSE;
 	thr_sh_template.mutex_count = 0;
 #endif	/* MACH_LDEBUG */
 
@@ -647,6 +651,7 @@ thread_init(void)
 												(1 << SCHED_TICK_SHIFT);
 	}
 
+	first_thread = TRUE;
 	/*
 	 *	Initialize any machine-dependent
 	 *	per-thread structures necessary.
@@ -654,21 +659,26 @@ thread_init(void)
 	thread_machine_init();
 }
 
+/*
+ * Called at splsched.
+ */
 void
 thread_reaper_enqueue(
 	thread_t		thread)
 {
-	/*
-	 * thread lock is already held, splsched()
-	 * not necessary here.
-	 */
 	simple_lock(&reaper_lock);
 	enqueue_tail(&reaper_queue, (queue_entry_t)thread);
 	simple_unlock(&reaper_lock);
 
-	thread_call_enter(thread_reaper_call);
+	thread_wakeup((event_t)&reaper_queue);
 }
 
+void
+thread_termination_continue(void)
+{
+	panic("thread_termination_continue");
+	/*NOTREACHED*/
+}
 
 /*
  *	Routine: thread_terminate_self
@@ -690,16 +700,27 @@ thread_reaper_enqueue(
 void
 thread_terminate_self(void)
 {
-	register thread_t	thread = current_thread();
-	thread_act_t		thr_act = thread->top_act;
+	thread_act_t	thr_act = current_act();
+	thread_t		thread;
 	task_t			task = thr_act->task;
-	int			active_acts;
+	long			active_acts;
 	spl_t			s;
 
 	/*
 	 * We should be at the base of the inheritance chain.
 	 */
+	thread = act_lock_thread(thr_act);
 	assert(thr_act->thread == thread);
+
+	/* This will allow no more control ops on this thr_act. */
+	ipc_thr_act_disable(thr_act);
+
+	/* Clean-up any ulocks that are still owned by the thread
+	 * activation (acquired but not released or handed-off).
+	 */
+	act_ulock_release_all(thr_act);
+	
+	act_unlock_thread(thr_act);
 
 	_mk_sp_thread_depress_abort(thread, TRUE);
 
@@ -709,45 +730,13 @@ thread_terminate_self(void)
 	 * If so, and the task is associated with a BSD process, we
 	 * need to call BSD and let them clean up.
 	 */
-	task_lock(task);
-	active_acts = --task->active_act_count;
-	task_unlock(task);
-	if (!active_acts && task->bsd_info)
+	active_acts = hw_atomic_sub(&task->active_act_count, 1);
+
+	if (active_acts == 0 && task->bsd_info)
 		proc_exit(task->bsd_info);
 
-#ifdef CALLOUT_RPC_MODEL
-	if (thr_act->lower) {
-		/*
-		 * JMM - RPC will not be using a callout/stack manipulation
-		 * mechanism.  instead we will let it return normally as if
-		 * from a continuation.  Accordingly, these need to be cleaned
-		 * up a bit.
-		 */
-		act_switch_swapcheck(thread, (ipc_port_t)0);
-		act_lock(thr_act);	/* hierarchy violation XXX */
-		(void) switch_act(THR_ACT_NULL);
-		assert(thr_act->ref_count == 1);	/* XXX */
-		/* act_deallocate(thr_act);		   XXX */
-		prev_act = thread->top_act;
-		/* 
-		 * disable preemption to protect kernel stack changes
-		 * disable_preemption();
-		 * MACH_RPC_RET(prev_act) = KERN_RPC_SERVER_TERMINATED;
-		 * machine_kernel_stack_init(thread, mach_rpc_return_error);
-		 */
-		act_unlock(thr_act);
-
-		/*
-		 * Load_context(thread);
-		 */
-		/* NOTREACHED */
-	}
-
-#else /* !CALLOUT_RPC_MODEL */
-
+	/* JMM - for now, no migration */
 	assert(!thr_act->lower);
-
-#endif /* CALLOUT_RPC_MODEL */
 
 	s = splsched();
 	thread_lock(thread);
@@ -764,18 +753,17 @@ thread_terminate_self(void)
 
 	s = splsched();
 	thread_lock(thread);
-	thread->state |= (TH_HALTED|TH_TERMINATE);
+	thread->state |= TH_TERMINATE;
 	assert((thread->state & TH_UNINT) == 0);
 	thread_mark_wait_locked(thread, THREAD_UNINT);
+	assert(thread->promotions == 0);
 	thread_unlock(thread);
 	/* splx(s); */
 
 	ETAP_SET_REASON(thread, BLOCKED_ON_TERMINATION);
-	thread_block((void (*)(void)) 0);
-	panic("the zombie walks!");
+	thread_block(thread_termination_continue);
 	/*NOTREACHED*/
 }
-
 
 /*
  * Create a new thread.
@@ -789,26 +777,30 @@ thread_create_shuttle(
 	void					(*start)(void),
 	thread_t				*new_thread)
 {
+	kern_return_t			result;
 	thread_t				new_shuttle;
 	task_t					parent_task = thr_act->task;
 	processor_set_t			pset;
-	kern_return_t			result;
-	int						suspcnt;
-
-	assert(!thr_act->thread);
-	assert(!thr_act->pool_port);
 
 	/*
 	 *	Allocate a thread and initialize static fields
 	 */
-	new_shuttle = (thread_t)zalloc(thread_shuttle_zone);
+	if (first_thread) {
+		new_shuttle = &pageout_thread;
+		first_thread = FALSE;
+	} else
+		new_shuttle = (thread_t)zalloc(thread_shuttle_zone);
 	if (new_shuttle == THREAD_NULL)
 		return (KERN_RESOURCE_SHORTAGE);
+
+#ifdef  DEBUG
+	if (new_shuttle != &pageout_thread)
+		assert(!thr_act->thread);
+#endif
 
 	*new_shuttle = thr_sh_template;
 
 	thread_lock_init(new_shuttle);
-	rpc_lock_init(new_shuttle);
 	wake_lock_init(new_shuttle);
 	new_shuttle->sleep_stamp = sched_tick;
 
@@ -824,12 +816,11 @@ thread_create_shuttle(
 	ipc_thread_init(new_shuttle);
 
 	pset = parent_task->processor_set;
-	if (!pset->active) {
-		pset = &default_pset;
-	}
+	assert(pset == &default_pset);
 	pset_lock(pset);
 
 	task_lock(parent_task);
+	assert(parent_task->processor_set == pset);
 
 	/*
 	 *	Don't need to initialize because the context switch
@@ -849,7 +840,9 @@ thread_create_shuttle(
 	queue_enter(&parent_task->thr_acts, thr_act, thread_act_t, thr_acts);
 	parent_task->thr_act_count++;
 	parent_task->res_act_count++;
-	parent_task->active_act_count++;
+	
+	/* So terminating threads don't need to take the task lock to decrement */
+	hw_atomic_add(&parent_task->active_act_count, 1);
 
 	/* Associate the thread with the processor set */
 	pset_add_thread(pset, new_shuttle);
@@ -865,7 +858,7 @@ thread_create_shuttle(
 	new_shuttle->importance =
 					new_shuttle->priority - new_shuttle->task_priority;
 	new_shuttle->sched_stamp = sched_tick;
-	compute_priority(new_shuttle, TRUE);
+	compute_priority(new_shuttle, FALSE);
 
 #if	ETAP_EVENT_MONITOR
 	new_thread->etap_reason = 0;
@@ -874,113 +867,107 @@ thread_create_shuttle(
 
 	new_shuttle->active = TRUE;
 	thr_act->active = TRUE;
-	pset_unlock(pset);
-
-	/*
-	 * No need to lock thr_act, since it can't be known to anyone --
-	 * we set its suspend_count to one more than the task suspend_count
-	 * by calling thread_hold.
-	 */
-	thr_act->user_stop_count = 1;
-	for (suspcnt = thr_act->task->suspend_count + 1; suspcnt; --suspcnt)
-		thread_hold(thr_act);
-	task_unlock(parent_task);
 
 	*new_thread = new_shuttle;
 
 	{
-	  long dbg_arg1, dbg_arg2, dbg_arg3, dbg_arg4;
+		long	dbg_arg1, dbg_arg2, dbg_arg3, dbg_arg4;
 
-	  KERNEL_DEBUG_CONSTANT((TRACEDBG_CODE(DBG_TRACE_DATA, 1)) | DBG_FUNC_NONE,
-				(vm_address_t)new_shuttle, 0,0,0,0);
+		KERNEL_DEBUG_CONSTANT(
+					TRACEDBG_CODE(DBG_TRACE_DATA, 1) | DBG_FUNC_NONE,
+							(vm_address_t)new_shuttle, 0, 0, 0, 0);
 
-	  kdbg_trace_string(parent_task->bsd_info, &dbg_arg1, &dbg_arg2, &dbg_arg3, 
-			    &dbg_arg4);
-          KERNEL_DEBUG_CONSTANT((TRACEDBG_CODE(DBG_TRACE_STRING, 1)) | DBG_FUNC_NONE,
-				dbg_arg1, dbg_arg2, dbg_arg3, dbg_arg4, 0);
+		kdbg_trace_string(parent_task->bsd_info,
+							&dbg_arg1, &dbg_arg2, &dbg_arg3, &dbg_arg4);
+
+		KERNEL_DEBUG_CONSTANT(
+					TRACEDBG_CODE(DBG_TRACE_STRING, 1) | DBG_FUNC_NONE,
+							dbg_arg1, dbg_arg2, dbg_arg3, dbg_arg4, 0);
 	}
 
 	return (KERN_SUCCESS);
 }
+
+extern void			thread_bootstrap_return(void);
 
 kern_return_t
 thread_create(
 	task_t				task,
 	thread_act_t		*new_act)
 {
-	thread_act_t		thr_act;
-	thread_t			thread;
 	kern_return_t		result;
-	spl_t				s;
-	extern void			thread_bootstrap_return(void);
+	thread_t			thread;
+	thread_act_t		act;
 
 	if (task == TASK_NULL)
 		return KERN_INVALID_ARGUMENT;
 
-	result = act_create(task, &thr_act);
+	result = act_create(task, &act);
 	if (result != KERN_SUCCESS)
 		return (result);
 
-	result = thread_create_shuttle(thr_act, -1, thread_bootstrap_return, &thread);
+	result = thread_create_shuttle(act, -1, thread_bootstrap_return, &thread);
 	if (result != KERN_SUCCESS) {
-		act_deallocate(thr_act);
+		act_deallocate(act);
 		return (result);
 	}
 
-	if (task->kernel_loaded)
-		thread_user_to_kernel(thread);
+	act->user_stop_count = 1;
+	thread_hold(act);
+	if (task->suspend_count > 0)
+		thread_hold(act);
 
-	/* Start the thread running (it will immediately suspend itself).  */
-	s = splsched();
-	thread_ast_set(thr_act, AST_APC);
-	thread_lock(thread);
-	thread_go_locked(thread, THREAD_AWAKENED);
-	thread_unlock(thread);
-	splx(s);
+	pset_unlock(task->processor_set);
+	task_unlock(task);
 	
-	*new_act = thr_act;
+	*new_act = act;
 
 	return (KERN_SUCCESS);
 }
 
-/*
- * Update thread that belongs to a task created via kernel_task_create().
- */
-void
-thread_user_to_kernel(
-	thread_t		thread)
-{
-	/*
-	 * Used to set special swap_func here...
-	 */
-}
-
 kern_return_t
 thread_create_running(
-	register task_t         parent_task,
+	register task_t         task,
 	int                     flavor,
 	thread_state_t          new_state,
 	mach_msg_type_number_t  new_state_count,
-	thread_act_t			*child_act)		/* OUT */
+	thread_act_t			*new_act)			/* OUT */
 {
 	register kern_return_t  result;
+	thread_t				thread;
+	thread_act_t			act;
 
-	result = thread_create(parent_task, child_act);
+	if (task == TASK_NULL)
+		return KERN_INVALID_ARGUMENT;
+
+	result = act_create(task, &act);
 	if (result != KERN_SUCCESS)
 		return (result);
 
-	result = act_machine_set_state(*child_act, flavor,
-				       new_state, new_state_count);
+	result = thread_create_shuttle(act, -1, thread_bootstrap_return, &thread);
 	if (result != KERN_SUCCESS) {
-		(void) thread_terminate(*child_act);
+		act_deallocate(act);
 		return (result);
 	}
 
-	result = thread_resume(*child_act);
+	act_lock(act);
+	result = act_machine_set_state(act, flavor, new_state, new_state_count);
 	if (result != KERN_SUCCESS) {
-		(void) thread_terminate(*child_act);
+		act_unlock(act);
+		pset_unlock(task->processor_set);
+		task_unlock(task);
+
+		(void)thread_terminate(act);
 		return (result);
 	}
+
+	clear_wait(thread, THREAD_AWAKENED);
+	act->inited = TRUE;
+	act_unlock(act);
+	pset_unlock(task->processor_set);
+	task_unlock(task);
+
+	*new_act = act;
 
 	return (result);
 }
@@ -1001,41 +988,32 @@ kernel_thread_with_priority(
 {
 	kern_return_t		result;
 	thread_t			thread;
-	thread_act_t		thr_act;
-	spl_t				s;
+	thread_act_t		act;
 
-	result = act_create(task, &thr_act);
+	result = act_create(task, &act);
+	if (result != KERN_SUCCESS)
+		return (THREAD_NULL);
+
+	result = thread_create_shuttle(act, priority, start, &thread);
 	if (result != KERN_SUCCESS) {
-		return THREAD_NULL;
+		act_deallocate(act);
+		return (THREAD_NULL);
 	}
 
-	result = thread_create_shuttle(thr_act, priority, start, &thread);
-	if (result != KERN_SUCCESS) {
-		act_deallocate(thr_act);
-		return THREAD_NULL;
-	}
+	pset_unlock(task->processor_set);
+	task_unlock(task);
 
 	if (alloc_stack)
 		thread_doswapin(thread);
 
-	s = splsched();
-	thread_lock(thread);
-
-	thr_act = thread->top_act;
-#if	MACH_LDEBUG
-	thread->kthread = TRUE;
-#endif	/* MACH_LDEBUG */
-
+	act_lock(act);
 	if (start_running)
-		thread_go_locked(thread, THREAD_AWAKENED);
+		clear_wait(thread, THREAD_AWAKENED);
+	act->inited = TRUE;
+	act_unlock(act);
 
-	thread_unlock(thread);
-	splx(s);
+	act_deallocate(act);
 
-	if (start_running)
-		thread_resume(thr_act);
-
-	act_deallocate(thr_act);
 	return (thread);
 }
 
@@ -1049,90 +1027,65 @@ kernel_thread(
 
 unsigned int c_weird_pset_ref_exit = 0;	/* pset code raced us */
 
+#if	MACH_HOST
+/* Preclude thread processor set assignement */
+#define thread_freeze(thread) 	assert((thread)->processor_set == &default_pset)
+
+/* Allow thread processor set assignement */
+#define thread_unfreeze(thread)	assert((thread)->processor_set == &default_pset)
+
+#endif	/* MACH_HOST */
+
 void
 thread_deallocate(
 	thread_t			thread)
 {
 	task_t				task;
 	processor_set_t		pset;
+	int					refs;
 	spl_t				s;
 
 	if (thread == THREAD_NULL)
 		return;
 
 	/*
-	 *	First, check for new count > 1 (the common case).
+	 *	First, check for new count > 0 (the common case).
 	 *	Only the thread needs to be locked.
 	 */
 	s = splsched();
 	thread_lock(thread);
-	if (--thread->ref_count > 1) {
-		thread_unlock(thread);
-		splx(s);
-		return;
-	}
-
-	/*
-	 *	Down to pset reference, lets try to clean up.
-	 *	However, the processor set may make more. Its lock
-	 *	also dominate the thread lock.  So, reverse the
-	 *	order of the locks and see if its still the last
-	 *	reference;
-	 */
-	assert(thread->ref_count == 1); /* Else this is an extra dealloc! */
+	refs = --thread->ref_count;
 	thread_unlock(thread);
 	splx(s);
 
-#if	MACH_HOST
-	thread_freeze(thread);
-#endif	/* MACH_HOST */
-
-	pset = thread->processor_set;
-	pset_lock(pset);
-
-	s = splsched();
-	thread_lock(thread);
-
-	if (thread->ref_count > 1) {
-#if	MACH_HOST
-		boolean_t need_wakeup = FALSE;
-		/*
-		 *	processor_set made extra reference.
-		 */
-		/* Inline the unfreeze */
-		thread->may_assign = TRUE;
-		if (thread->assign_active) {
-			need_wakeup = TRUE;
-			thread->assign_active = FALSE;
-		}
-#endif	/* MACH_HOST */
-		thread_unlock(thread);
-		splx(s);
-		pset_unlock(pset);
-#if	MACH_HOST
-		if (need_wakeup)
-			thread_wakeup((event_t)&thread->assign_active);
-#endif	/* MACH_HOST */
-		c_weird_pset_ref_exit++;
+	if (refs > 0)
 		return;
-	}
-#if	MACH_HOST
-	assert(thread->assign_active == FALSE);
-#endif	/* MACH_HOST */
 
-	/*
-	 *	Thread only had pset reference - we can remove it.
-	 */
 	if (thread == current_thread())
 	    panic("thread deallocating itself");
 
+	/*
+	 *	There is a dangling pointer to the thread from the
+	 *	processor_set.  To clean it up, we freeze the thread
+	 *	in the pset (because pset destruction can cause even
+	 *	reference-less threads to be reassigned to the default
+	 *	pset) and then remove it.
+	 */
+
+#if MACH_HOST
+	thread_freeze(thread);
+#endif
+
+	pset = thread->processor_set;
+	pset_lock(pset);
 	pset_remove_thread(pset, thread);
-	thread->ref_count = 0;
-	thread_unlock(thread);		/* no more references - safe */
-	splx(s);
 	pset_unlock(pset);
 
-	pset_deallocate(thread->processor_set);
+#if MACH_HOST
+	thread_unfreeze(thread);
+#endif
+
+	pset_deallocate(pset);
 
 	if (thread->stack_privilege != 0) {
 		if (thread->stack_privilege != thread->kernel_stack)
@@ -1156,7 +1109,7 @@ thread_reference(
 
 	s = splsched();
 	thread_lock(thread);
-	thread->ref_count++;
+	thread_reference_locked(thread);
 	thread_unlock(thread);
 	splx(s);
 }
@@ -1230,7 +1183,7 @@ thread_info_shuttle(
 			flags |= TH_FLAGS_SWAPPED;
 
 	    state = 0;
-	    if (thread->state & TH_HALTED)
+	    if (thread->state & TH_TERMINATE)
 			state = TH_STATE_HALTED;
 	    else
 		if (thread->state & TH_RUN)
@@ -1276,12 +1229,18 @@ thread_info_shuttle(
 			return (KERN_INVALID_POLICY);
 	    }
 
-		ts_info->base_priority = thread->priority;
-		ts_info->max_priority =	thread->max_priority;
-		ts_info->cur_priority = thread->sched_pri;
+		ts_info->depressed = (thread->sched_mode & TH_MODE_ISDEPRESSED) != 0;
+		if (ts_info->depressed) {
+			ts_info->base_priority = DEPRESSPRI;
+			ts_info->depress_priority = thread->priority;
+		}
+		else {
+			ts_info->base_priority = thread->priority;
+			ts_info->depress_priority = -1;
+		}
 
-		ts_info->depressed = (thread->depress_priority >= 0);
-		ts_info->depress_priority = thread->depress_priority;
+		ts_info->cur_priority = thread->sched_pri;
+		ts_info->max_priority =	thread->max_priority;
 
 		thread_unlock(thread);
 	    splx(s);
@@ -1316,12 +1275,18 @@ thread_info_shuttle(
 			return (KERN_INVALID_POLICY);
 	    }
 
-		rr_info->base_priority = thread->priority;
+		rr_info->depressed = (thread->sched_mode & TH_MODE_ISDEPRESSED) != 0;
+		if (rr_info->depressed) {
+			rr_info->base_priority = DEPRESSPRI;
+			rr_info->depress_priority = thread->priority;
+		}
+		else {
+			rr_info->base_priority = thread->priority;
+			rr_info->depress_priority = -1;
+		}
+
 		rr_info->max_priority = thread->max_priority;
 	    rr_info->quantum = std_quantum_us / 1000;
-
-		rr_info->depressed = (thread->depress_priority >= 0);
-		rr_info->depress_priority = thread->depress_priority;
 
 		thread_unlock(thread);
 	    splx(s);
@@ -1339,14 +1304,12 @@ thread_doreap(
 	register thread_t	thread)
 {
 	thread_act_t		thr_act;
-	struct ipc_port		*pool_port;
 
 
 	thr_act = thread_lock_act(thread);
 	assert(thr_act && thr_act->thread == thread);
 
 	act_locked_act_reference(thr_act);
-	pool_port = thr_act->pool_port;
 
 	/*
 	 * Replace `act_unlock_thread()' with individual
@@ -1354,70 +1317,62 @@ thread_doreap(
 	 * to determine which locks are held, confusing
 	 * `act_unlock_thread()'.)
 	 */
-	rpc_unlock(thread);
-	if (pool_port != IP_NULL)
-		ip_unlock(pool_port);
 	act_unlock(thr_act);
 
 	/* Remove the reference held by a rooted thread */
-	if (pool_port == IP_NULL)
-		act_deallocate(thr_act);
+	act_deallocate(thr_act);
 
 	/* Remove the reference held by the thread: */
 	act_deallocate(thr_act);
 }
 
-static thread_call_data_t	thread_reaper_call_data;
-
 /*
  *	reaper_thread:
  *
- *	This kernel thread runs forever looking for threads to destroy
- *	(when they request that they be destroyed, of course).
- *
- *	The reaper thread will disappear in the next revision of thread
- *	control when it's function will be moved into thread_dispatch.
+ *	This kernel thread runs forever looking for terminating
+ *	threads, releasing their "self" references.
  */
 static void
-_thread_reaper(
-	thread_call_param_t		p0,
-	thread_call_param_t		p1)
+reaper_thread_continue(void)
 {
 	register thread_t	thread;
-	spl_t				s;
 
-	s = splsched();
+	(void)splsched();
 	simple_lock(&reaper_lock);
 
 	while ((thread = (thread_t) dequeue_head(&reaper_queue)) != THREAD_NULL) {
 		simple_unlock(&reaper_lock);
-
-		/*
-		 * wait for run bit to clear
-		 */
-		thread_lock(thread);
-		if (thread->state & TH_RUN)
-			panic("thread reaper: TH_RUN");
-		thread_unlock(thread);
-		splx(s);
+		(void)spllo();
 
 		thread_doreap(thread);
 
-		s = splsched();
+		(void)splsched();
 		simple_lock(&reaper_lock);
 	}
 
+	assert_wait((event_t)&reaper_queue, THREAD_UNINT);
 	simple_unlock(&reaper_lock);
-	splx(s);
+	(void)spllo();
+
+	thread_block(reaper_thread_continue);
+	/*NOTREACHED*/
+}
+
+static void
+reaper_thread(void)
+{
+	thread_t	self = current_thread();
+
+	stack_privilege(self);
+
+	reaper_thread_continue();
+	/*NOTREACHED*/
 }
 
 void
-thread_reaper(void)
+thread_reaper_init(void)
 {
-	thread_call_setup(&thread_reaper_call_data,	_thread_reaper, NULL);
-	thread_reaper_call = &thread_reaper_call_data;
-
-	_thread_reaper(NULL, NULL);
+	kernel_thread(kernel_task, reaper_thread);
 }
 
 kern_return_t
@@ -1425,9 +1380,6 @@ thread_assign(
 	thread_act_t	thr_act,
 	processor_set_t	new_pset)
 {
-#ifdef	lint
-	thread++; new_pset++;
-#endif	/* lint */
 	return(KERN_FAILURE);
 }
 
@@ -1626,6 +1578,8 @@ processor_set_stack_usage(
 	vm_size_t size, size_needed;
 	vm_offset_t addr;
 
+	spl_t s;
+
 	if (pset == PROCESSOR_SET_NULL)
 		return KERN_INVALID_ARGUMENT;
 
@@ -1661,16 +1615,20 @@ processor_set_stack_usage(
 	}
 
 	/* OK, have memory and the processor_set is locked & active */
-
+	s = splsched();
 	threads = (thread_t *) addr;
 	for (i = 0, thread = (thread_t) queue_first(&pset->threads);
-	     i < actual;
-	     i++,
+	     !queue_end(&pset->threads, (queue_entry_t) thread);
 	     thread = (thread_t) queue_next(&thread->pset_threads)) {
-		thread_reference(thread);
-		threads[i] = thread;
+		thread_lock(thread);
+		if (thread->ref_count > 0) {
+			thread_reference_locked(thread);
+			threads[i++] = thread;
+		}
+		thread_unlock(thread);
 	}
-	assert(queue_end(&pset->threads, (queue_entry_t) thread));
+	splx(s);
+	assert(i <= actual);
 
 	/* can unlock processor set now that we have the thread refs */
 	pset_unlock(pset);
@@ -1680,9 +1638,9 @@ processor_set_stack_usage(
 	total = 0;
 	maxusage = 0;
 	maxstack = 0;
-	for (i = 0; i < actual; i++) {
+	while (i > 0) {
 		int cpu;
-		thread_t thread = threads[i];
+		thread_t thread = threads[--i];
 		vm_offset_t stack = 0;
 
 		/*
@@ -1696,7 +1654,7 @@ processor_set_stack_usage(
 		stack = thread->kernel_stack;
 
 		for (cpu = 0; cpu < NCPUS; cpu++)
-			if (cpu_data[cpu].active_thread == thread) {
+			if (cpu_to_processor(cpu)->cpu_data->active_thread == thread) {
 				stack = active_stacks[cpu];
 				break;
 			}
@@ -1720,7 +1678,7 @@ processor_set_stack_usage(
 #endif	/* MACH_DEBUG */
 }
 
-static int split_funnel_off = 0;
+int split_funnel_off = 0;
 funnel_t *
 funnel_alloc(
 	int type)
@@ -1898,4 +1856,3 @@ thread_should_halt(
 {
 	return(thread_should_halt_fast(th));
 }
-

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2002 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -58,6 +58,9 @@
 #ifndef	_SYS_SIGNALVAR_H_		/* tmp for user.h */
 #define	_SYS_SIGNALVAR_H_
 
+#include <sys/appleapiopts.h>
+
+#ifdef __APPLE_API_PRIVATE
 /*
  * Kernel signal definitions and data structures,
  * not exported to user programs.
@@ -69,9 +72,13 @@
  */
 struct	sigacts {
 	sig_t	ps_sigact[NSIG];	/* disposition of signals */
+	sig_t 	ps_trampact[NSIG];	/* disposition of signals */
 	sigset_t ps_catchmask[NSIG];	/* signals to be blocked */
 	sigset_t ps_sigonstack;		/* signals to take on sigstack */
 	sigset_t ps_sigintr;		/* signals that interrupt syscalls */
+	sigset_t ps_sigreset;		/* signals that reset when caught */
+	sigset_t ps_signodefer;		/* signals not masked while handled */
+	sigset_t ps_siginfo;		/* signals that want SA_SIGINFO args */
 	sigset_t ps_oldmask;		/* saved mask from before sigpause */
 	int	ps_flags;		/* signal flags, below */
 	struct	sigaltstack ps_sigstk;	/* sp & on stack state variable */
@@ -88,7 +95,7 @@ struct	sigacts {
 /* additional signal action values, used only temporarily/internally */
 #define	SIG_CATCH	(void (*)())2
 #define	SIG_HOLD	(void (*)())3
-
+#define	SIG_WAIT	(void (*)())4
 
 #define pgsigio(pgid, sig, notused) \
 	{ \
@@ -99,30 +106,17 @@ struct	sigacts {
 		psignal(p, sig); \
 }
 
-
 /*
  * get signal action for process and signal; currently only for current process
  */
 #define SIGACTION(p, sig)	(p->p_sigacts->ps_sigact[(sig)])
 
 /*
- * Determine signal that should be delivered to process p, the current
- * process, 0 if none.  If there is a pending stop signal with default
- * action, the process stops in issig().
- */
-
-#define	HAVE_SIGNALS(p) \
-	 ((p)->p_siglist \
-	  & ~((((p)->p_sigmask) \
-	       | (((p)->p_flag & P_TRACED) ? 0 : (p)->p_sigignore)) \
-	      & ~sigcantmask))
-
-/*
  *	Check for per-process and per thread signals.
  */
 #define SHOULDissignal(p,uthreadp) \
-	 (((p)->p_siglist | (uthreadp)->uu_sig)	\
-	  & ~((((p)->p_sigmask) \
+	 (((uthreadp)->uu_siglist)	\
+	  & ~((((uthreadp)->uu_sigmask) \
 	       | (((p)->p_flag & P_TRACED) ? 0 : (p)->p_sigignore)) \
 	      & ~sigcantmask))
 
@@ -134,12 +128,6 @@ struct	sigacts {
 #define	CHECK_SIGNALS(p, thread, uthreadp)	\
 	(!thread_should_halt(thread)	\
 	 && (SHOULDissignal(p,uthreadp)))
-
-	   
-/*
- * Clear a pending signal from a process.
- */
-#define	CLRSIG(p, sig)	{ (p)->p_siglist &= ~sigmask(sig); }
 
 /*
  * Signal properties and actions.
@@ -203,14 +191,15 @@ int sigprop[NSIG + 1] = {
  * Machine-independent functions:
  */
 int	coredump __P((struct proc *p));
-void	execsigs __P((struct proc *p));
+void	execsigs __P((struct proc *p, thread_act_t thr_act));
 void	gsignal __P((int pgid, int sig));
 int	issignal __P((struct proc *p));
 int	CURSIG __P((struct proc *p));
-int clear_sigbits __P((struct proc *p, int bit));
-void	pgsignal __P((struct pgrp *pgrp, int sig, int checkctty));
+int clear_procsiglist __P((struct proc *p, int bit));
+int clear_procsigmask __P((struct proc *p, int bit));
+int set_procsigmask __P((struct proc *p, int bit));
+void	tty_pgsignal __P((struct pgrp *pgrp, int sig));
 void	postsig __P((int sig));
-void	psignal __P((struct proc *p, int sig));
 void	siginit __P((struct proc *p));
 void	trapsignal __P((struct proc *p, int sig, unsigned code));
 void	pt_setrunnable __P((struct proc *p));
@@ -218,6 +207,16 @@ void	pt_setrunnable __P((struct proc *p));
 /*
  * Machine-dependent functions:
  */
-void	sendsig __P((struct proc *, sig_t action, int sig, int returnmask, u_long code));
+void	sendsig __P((struct proc *, sig_t action, int sig,
+	int returnmask, u_long code));
+
+#ifdef __APPLE_API_UNSTABLE
+void	psignal __P((struct proc *p, int sig));
+void	pgsignal __P((struct pgrp *pgrp, int sig, int checkctty));
+#endif /* __APPLE_API_UNSTABLE */
+
 #endif	/* KERNEL */
+
+#endif /* __APPLE_API_PRIVATE */
+
 #endif	/* !_SYS_SIGNALVAR_H_ */

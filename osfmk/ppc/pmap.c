@@ -93,6 +93,7 @@
 #include <db_machine_commands.h>
 
 #include <kern/thread.h>
+#include <kern/simple_lock.h>
 #include <mach/vm_attributes.h>
 #include <mach/vm_param.h>
 #include <kern/spl.h>
@@ -113,6 +114,7 @@
 #include <ppc/new_screen.h>
 #include <ppc/Firmware.h>
 #include <ppc/savearea.h>
+#include <ppc/exception.h>
 #include <ddb/db_output.h>
 
 #if	DB_MACHINE_COMMANDS
@@ -426,8 +428,6 @@ pmap_bootstrap(unsigned int mem_size, vm_offset_t *first_avail, vm_offset_t *fir
 	unsigned int	 mask;
 	vm_offset_t		first_used_addr;
 	PCA				*pcaptr;
-	savectl			*savec, *savec2;
-	vm_offset_t		save, save2;
 
 	*first_avail = round_page(*first_avail);
 	
@@ -491,7 +491,7 @@ pmap_bootstrap(unsigned int mem_size, vm_offset_t *first_avail, vm_offset_t *fir
 
 		size = (vm_size_t) (
 			(InitialSaveBloks * PAGE_SIZE) +	/* Allow space for the initial context saveareas */
-			(8 * PAGE_SIZE) +					/* For backpocket saveareas */
+			((InitialSaveBloks / 2) * PAGE_SIZE) +	/* For backpocket saveareas */
 			hash_table_size +					/* For hash table */
 			hash_table_size +					/* For PTEG allocation table */
 			(num * sizeof(struct phys_entry))	/* For the physical entries */
@@ -580,75 +580,15 @@ pmap_bootstrap(unsigned int mem_size, vm_offset_t *first_avail, vm_offset_t *fir
 	assert((hash_table_base & (hash_table_size-1)) == 0);
 
 	pcaptr = (PCA *)(hash_table_base+hash_table_size);	/* Point to the PCA table */
+	mapCtl.mapcflush.pcaptr = pcaptr;
 	
 	for(i=0; i < (hash_table_size/64) ; i++) {			/* For all of PTEG control areas: */
 		pcaptr[i].flgs.PCAalflgs.PCAfree=0xFF;			/* Mark all slots free */
 		pcaptr[i].flgs.PCAalflgs.PCAsteal=0x01;			/* Initialize steal position */
 	}
 	
-/*
- *		Allocate our initial context save areas.  As soon as we do this,
- *		we can take an interrupt. We do the saveareas here, 'cause they're guaranteed
- *		to be at least page aligned.
- */
-	save2 = addr;										/* Remember first page */	
-	save = 	addr;										/* Point to the whole block of blocks */	
-	savec2 = (savectl *)(addr + PAGE_SIZE - sizeof(savectl));	/* Point to the first's control area */
-
-	for(i=0; i < InitialSaveBloks; i++) {				/* Initialize the saveareas */
-
-		savec = (savectl *)(save + PAGE_SIZE - sizeof(savectl));	/* Get the control area for this one */
-
-		savec->sac_alloc = sac_empty;					/* Mark both free */
-		savec->sac_vrswap = 0;							/* V=R, so the translation factor is 0 */
-		savec->sac_flags = sac_perm;					/* Mark it permanent */
-
-		savec->sac_flags |= 0x0000EE00;					/* (TEST/DEBUG) */
-
-		save += PAGE_SIZE;								/* Jump up to the next one now */
-		
-		savec->sac_next = (unsigned int *)save;			/* Link these two */
-	
-	}
-	
-	savec->sac_next = (unsigned int *)0;				/* Clear the forward pointer for the last */
-	savec2->sac_alloc &= 0x7FFFFFFF;					/* Mark the first one in use */
-
-	saveanchor.savefree		= (unsigned int)save2;		/* Point to the first one */
-	saveanchor.savecount	= InitialSaveBloks * sac_cnt;	/* The total number of save areas allocated */
-	saveanchor.saveinuse	= 1;						/* Number of areas in use */
-	saveanchor.savemin		= InitialSaveMin;			/* We abend if lower than this */
-	saveanchor.saveneghyst	= InitialNegHysteresis;		/* The minimum number to keep free (must be a multiple of sac_cnt) */
-	saveanchor.savetarget	= InitialSaveTarget;		/* The target point for free save areas (must be a multiple of sac_cnt) */
-	saveanchor.saveposhyst	= InitialPosHysteresis;		/* The high water mark for free save areas (must be a multiple of sac_cnt) */
-	__asm__ volatile ("mtsprg 1, %0" : : "r" (save2));	/* Tell the exception handler about it */
-		
-	addr += InitialSaveBloks * PAGE_SIZE;				/* Move up the next free address */
-
-	save2 = addr;										
-	save = 	addr;										
-	savec2 = (savectl *)(addr + PAGE_SIZE - sizeof(savectl));	
-
-	for(i=0; i < 8; i++) {								/* Allocate backpocket saveareas */
-	
-		savec = (savectl *)(save + PAGE_SIZE - sizeof(savectl));	
-	
-		savec->sac_alloc = sac_empty;					
-		savec->sac_vrswap = 0;							
-		savec->sac_flags = sac_perm;					
-		savec->sac_flags |= 0x0000EE00;					
-		
-		save += PAGE_SIZE;								
-		
-		savec->sac_next = (unsigned int *)save;			
-	
-	}
-	
-	savec->sac_next = (unsigned int *)0;				
-	savec2->sac_alloc &= 0x7FFFFFFF;					
-	debugbackpocket = save2;							
-	addr += 8 * PAGE_SIZE;								
-			
+ 	savearea_init(&addr);								/* Initialize the savearea chains and data */
+ 
 	/* phys_table is static to help debugging,
 	 * this variable is no longer actually used
 	 * outside of this scope
@@ -1175,13 +1115,13 @@ pmap_remove(
 
 	while(mp = (mapping *)hw_rem_blk(pmap, sva, lpage)) {	/* Keep going until no more */
 		if((unsigned int)mp & 1) {							/* Make sure we don't unmap a permanent one */
-			blm = (blokmap *)hw_cpv((mapping *)((unsigned int)mp & 0xFFFFFFFE));		/* Get virtual address */
+			blm = (struct mapping  *)hw_cpv((mapping *)((unsigned int)mp & 0xFFFFFFFC));		/* Get virtual address */
 			panic("mapping_remove: attempt to unmap a permanent mapping - pmap = %08X, va = %08X, mapping = %08X\n",
 				pmap, sva, blm);
 		}
-		mapping_free(hw_cpv(mp));							/* Release it */
+		if (!((unsigned int)mp & 2))
+			mapping_free(hw_cpv(mp));							/* Release it */
 	}
-
 	while (pmap->stats.resident_count && (eva > sva)) {
 
 		eva -= PAGE_SIZE;						/* Back up a page */
@@ -1324,6 +1264,8 @@ void pmap_protect(
 	return;										/* Leave... */
 }
 
+
+
 /*
  * pmap_enter
  *
@@ -1338,8 +1280,8 @@ void pmap_protect(
  *     insert this page into the given map NOW.
  */
 void
-pmap_enter(pmap_t pmap, vm_offset_t va, vm_offset_t pa, vm_prot_t prot,
-	   boolean_t wired)
+pmap_enter(pmap_t pmap, vm_offset_t va, vm_offset_t pa, vm_prot_t prot, 
+		unsigned int flags, boolean_t wired)
 {
 	spl_t				spl;
 	struct mapping		*mp;
@@ -1368,11 +1310,21 @@ pmap_enter(pmap_t pmap, vm_offset_t va, vm_offset_t pa, vm_prot_t prot,
 													   bug!!!!) */
 
 	mapping_remove(pmap, va);						/* Remove any other mapping at this address */
-	
-	memattr = PTE_WIMG_IO;							/* Assume I/O mapping for a moment */
-	if(pp) memattr = ((pp->pte1&0x00000078) >> 3);	/* Set the attribute to the physical default */
 
-	mp=mapping_make(pmap, pp, va, pa, prot, memattr, 0);	/* Make the address mapping */
+	if(flags & VM_WIMG_USE_DEFAULT) {
+	    if(pp) {
+			/* Set attr to the phys default */
+			memattr = ((pp->pte1&0x00000078) >> 3);	
+		} else {
+			memattr = PTE_WIMG_UNCACHED_COHERENT_GUARDED;
+		}
+	} else {
+		memattr = flags & VM_WIMG_MASK;
+	}
+	
+
+	/* Make the address mapping */
+	mp=mapping_make(pmap, pp, va, pa, prot, memattr, 0);	
 
 	splx(spl);										/* I'm not busy no more - come what may */
 
@@ -1441,6 +1393,45 @@ vm_offset_t pmap_extract(pmap_t pmap, vm_offset_t va) {
 	debugLog2(53, pa, 0);							/* Log pmap_map call */
 	return pa;										/* Return physical address or 0 */
 }
+
+/*
+ *	pmap_attribute_cache_sync
+ *	Handle the machine attribute calls which involve sync the prcessor
+ *	cache.
+ */
+kern_return_t
+pmap_attribute_cache_sync(address, size, attribute, value)
+	vm_offset_t	address;
+	vm_size_t	size;
+	vm_machine_attribute_t	attribute;
+	vm_machine_attribute_val_t* value;	
+{
+	while(size) {
+		switch (*value) {					/* What type was that again? */
+			case MATTR_VAL_CACHE_SYNC:			/* It is sync I+D caches */
+				sync_cache(address, PAGE_SIZE);		/* Sync up dem caches */
+				break;					/* Done with this one here... */
+						
+			case MATTR_VAL_CACHE_FLUSH:			/* It is flush from all caches */
+				flush_dcache(address, PAGE_SIZE, TRUE);	/* Flush out the data cache */
+				invalidate_icache(address, 
+						PAGE_SIZE, TRUE);	/* Flush out the instruction cache */
+				break;					/* Done with this one here... */
+				
+			case MATTR_VAL_DCACHE_FLUSH:			/* It is flush from data cache(s) */
+				flush_dcache(address, PAGE_SIZE, TRUE);	/* Flush out the data cache */
+				break;					/* Done with this one here... */
+
+			case MATTR_VAL_ICACHE_FLUSH:			/* It is flush from instr cache(s) */
+				invalidate_icache(address, 
+						PAGE_SIZE, TRUE);	/* Flush out the instruction cache */
+				break;					/* Done with this one here... */
+		}
+		size -= PAGE_SIZE;
+	}
+	return KERN_SUCCESS;;
+}
+	
 
 /*
  *	pmap_attributes:
@@ -2283,7 +2274,10 @@ void pmap_ver(pmap_t pmap, vm_offset_t sva, vm_offset_t eva) {
 }
 
 
-
-
-
+/* temporary workaround */
+boolean_t
+coredumpok(vm_map_t map, vm_offset_t va)
+{
+  return TRUE;
+}
 

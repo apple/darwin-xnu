@@ -32,20 +32,14 @@
 
 #include <sys/types.h>
 #include <sys/param.h>
+#include <sys/quota.h>
 #include <ufs/ufs/ufs_byte_order.h>
 #include <architecture/byte_order.h>
 
-
-
-#if 0
-#define	byte_swap_longlong(thing) ((thing) = NXSwapBigLongLongToHost(thing))
-#define	byte_swap_int(thing) ((thing) = NXSwapBigLongToHost(thing))
-#define	byte_swap_short(thing) ((thing) = NXSwapBigShortToHost(thing))
-#else
 #define	byte_swap_longlong(thing) ((thing) = NXSwapLongLong(thing))
 #define	byte_swap_int(thing) ((thing) = NXSwapLong(thing))
 #define	byte_swap_short(thing) ((thing) = NXSwapShort(thing))
-#endif
+
 void
 byte_swap_longlongs(unsigned long long *array, int count)
 {
@@ -64,7 +58,6 @@ byte_swap_ints(int *array, int count)
 		byte_swap_int(array[i]);
 }
 
-
 void
 byte_swap_shorts(short *array, int count)
 {
@@ -73,7 +66,6 @@ byte_swap_shorts(short *array, int count)
 	for (i = 0;  i < count;  i++)
 		byte_swap_short(array[i]);
 }
-
 
 void
 byte_swap_sbin(struct fs *sb)
@@ -119,6 +111,7 @@ byte_swap_sbout(struct fs *sb)
 	byte_swap_longlongs((u_int64_t *)&sb->fs_maxfilesize,3);
 	byte_swap_ints((int32_t *)&sb->fs_state, 6);
 }
+
 void
 byte_swap_csum(struct csum *cs)
 {
@@ -173,7 +166,7 @@ byte_swap_cgin(struct cg *cg, struct fs * fs)
 
 }
 
-// This is for the new 4.4 cylinder group block
+/* This is for the new 4.4 cylinder group block */
 void
 byte_swap_cgout(struct cg *cg, struct fs * fs)
 {
@@ -220,7 +213,7 @@ byte_swap_cgout(struct cg *cg, struct fs * fs)
 
 }
 
-/* This value should correspond to the value set in the ffs_mounts */
+/* This value MUST correspond to the value set in the ffs_mounts */
 
 #define RESYMLNKLEN 60
 
@@ -231,12 +224,8 @@ byte_swap_inode_in(struct dinode *di, struct inode *ip)
 
 	ip->i_mode = NXSwapShort(di->di_mode);
 	ip->i_nlink = NXSwapShort(di->di_nlink);
-#ifdef LFS
-	ip->i_inumber = NXSwapLong(di->di_u.inumber);
-#else
 	ip->i_oldids[0] = NXSwapShort(di->di_u.oldids[0]);
 	ip->i_oldids[1] = NXSwapShort(di->di_u.oldids[1]);
-#endif
 	ip->i_size = NXSwapLongLong(di->di_size);
 	ip->i_atime = NXSwapLong(di->di_atime);
 	ip->i_atimensec = NXSwapLong(di->di_atimensec);
@@ -259,9 +248,7 @@ byte_swap_inode_in(struct dinode *di, struct inode *ip)
 	ip->i_gid = NXSwapLong(di->di_gid);
 	ip->i_spare[0] = NXSwapLong(di->di_spare[0]);
 	ip->i_spare[1] = NXSwapLong(di->di_spare[1]);
-
 }
-
 
 void
 byte_swap_inode_out(struct inode *ip, struct dinode *di)
@@ -274,12 +261,8 @@ byte_swap_inode_out(struct inode *ip, struct dinode *di)
  
 	di->di_mode = NXSwapShort(ip->i_mode);
 	di->di_nlink = NXSwapShort(ip->i_nlink);
-#ifdef LFS
-	di->di_u.inumber = NXSwapLong(ip->i_inumber);
-#else
 	di->di_u.oldids[0] = NXSwapShort(ip->i_oldids[0]);
 	di->di_u.oldids[1] = NXSwapShort(ip->i_oldids[1]);
-#endif /* LFS */
 	di->di_size = NXSwapLongLong(ip->i_size);
 	di->di_atime = NXSwapLong(ip->i_atime);
 	di->di_atimensec = NXSwapLong(ip->i_atimensec);
@@ -302,9 +285,7 @@ byte_swap_inode_out(struct inode *ip, struct dinode *di)
 	di->di_gid = NXSwapLong(ip->i_gid);
 	di->di_spare[0] = NXSwapLong(ip->i_spare[0]);
 	di->di_spare[1] = NXSwapLong(ip->i_spare[1]);
-
 }
-
 
 void
 byte_swap_direct(struct direct *dirp)
@@ -328,6 +309,7 @@ byte_swap_dir_block_in(char *addr, int count)
 			break;
 	}
 }
+
 void
 byte_swap_dir_out(char *addr, int count)
 {
@@ -371,6 +353,7 @@ byte_swap_dirtemplate_in(struct dirtemplate *dirt)
 	byte_swap_int(dirt->dotdot_ino);
 	byte_swap_short(dirt->dotdot_reclen);
 }
+
 void
 byte_swap_minidir_in(struct direct *dirp)
 {
@@ -379,7 +362,7 @@ byte_swap_minidir_in(struct direct *dirp)
 }
 
 #if 0
-// This is for the compatability (old) cylinder group block
+/* This is for the compatability (old) cylinder group block */
 void
 byte_swap_ocylgroup(struct cg *cg)
 {
@@ -397,5 +380,4 @@ byte_swap_ocylgroup(struct cg *cg)
 	byte_swap_shorts((short *)&cg->cg_b, 32 * 8);
 	byte_swap_int(cg->cg_magic);
 }
-
 #endif /* 0 */

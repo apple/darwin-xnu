@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2001 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2001-2002 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -35,8 +35,11 @@
 #define CJK_KATAKANA	(CJK_JAPAN | CJK_CHINESE_SIMP | CJK_KOREAN)
 
 
-/* Remeber the las unique CJK bit */
+/* Remember the last unique CJK bit */
 u_int8_t cjk_lastunique = 0;
+
+/* CJK encoding bias */
+u_int32_t hfs_encodingbias = 0;
 
 
 /* Map CJK bits to Mac encoding */
@@ -808,7 +811,33 @@ hfs_pickencoding(const u_int16_t *src, int len)
 	if (cjkstate) {
 		if (powerof2(cjkstate)) {
 			cjk_lastunique = cjkstate;
-		} else if (cjk_lastunique) {
+			return ((u_int32_t)cjk_encoding[cjkstate]);
+		} 
+		if (hfs_encodingbias != 0) {
+			switch(hfs_encodingbias) {
+			case kTextEncodingMacJapanese:
+				if (cjkstate & CJK_JAPAN)
+					return (kTextEncodingMacJapanese);
+				break;
+			case kTextEncodingMacKorean:
+				if (cjkstate & CJK_KOREAN)
+					return (kTextEncodingMacKorean);
+				break;
+			case kTextEncodingMacChineseTrad:
+				if (cjkstate & CJK_CHINESE_TRAD)
+					return (kTextEncodingMacChineseTrad);
+				if (cjkstate & CJK_CHINESE_SIMP)
+					return (kTextEncodingMacChineseSimp);
+				break;
+			case kTextEncodingMacChineseSimp:
+				if (cjkstate & CJK_CHINESE_SIMP)
+					return (kTextEncodingMacChineseSimp);
+				if (cjkstate & CJK_CHINESE_TRAD)
+					return (kTextEncodingMacChineseTrad);
+				break;
+			}
+		}
+		if (cjk_lastunique) {
 			if (cjkstate & cjk_lastunique)
 				cjkstate = cjk_lastunique;
 			else

@@ -42,6 +42,8 @@ ENTRY(db_phys_copy, TAG_NO_FRAME_USED)
 
 	/* Switch off data translations */
 	mfmsr	r6
+	rlwinm	r6,r6,0,MSR_FP_BIT+1,MSR_FP_BIT-1	; Force floating point off
+	rlwinm	r6,r6,0,MSR_VEC_BIT+1,MSR_VEC_BIT-1	; Force vectors off
 	rlwinm	r7,	r6,	0,	MSR_DR_BIT+1,	MSR_DR_BIT-1
 	mtmsr	r7
 	isync			/* Ensure data translations are off */
@@ -94,6 +96,8 @@ ENTRY(db_phys_copy, TAG_NO_FRAME_USED)
 
 	/* Switch off data translations */
 	mfmsr	r6
+	rlwinm	r6,r6,0,MSR_FP_BIT+1,MSR_FP_BIT-1	; Force floating point off
+	rlwinm	r6,r6,0,MSR_VEC_BIT+1,MSR_VEC_BIT-1	; Force vectors off
 	rlwinm	r7,	r6,	0,	MSR_DR_BIT+1,	MSR_DR_BIT-1
 	mtmsr	r7
 	isync			/* Ensure data translations are off */

@@ -105,24 +105,39 @@ Boolean IODataQueue::enqueue(void * data, UInt32 dataSize)
     const UInt32       tail      = dataQueue->tail;
     const UInt32       entrySize = dataSize + DATA_QUEUE_ENTRY_HEADER_SIZE;
     IODataQueueEntry * entry;
-    
+
     if ( tail >= head )
     {
-        if ( (tail + entrySize) < dataQueue->queueSize )
+        // Is there enough room at the end for the entry?
+        if ( (tail + entrySize) <= dataQueue->queueSize )
         {
             entry = (IODataQueueEntry *)((UInt8 *)dataQueue->queue + tail);
 
             entry->size = dataSize;
             memcpy(&entry->data, data, dataSize);
+
+            // The tail can be out of bound when the size of the new entry
+            // exactly matches the available space at the end of the queue.
+            // The tail can range from 0 to dataQueue->queueSize inclusive.
+
             dataQueue->tail += entrySize;
         }
-        else if ( head > entrySize )
+        else if ( head > entrySize ) 	// Is there enough room at the beginning?
         {
             // Wrap around to the beginning, but do not allow the tail to catch
             // up to the head.
 
             dataQueue->queue->size = dataSize;
-            ((IODataQueueEntry *)((UInt8 *)dataQueue->queue + tail))->size = dataSize;
+
+            // We need to make sure that there is enough room to set the size before
+            // doing this. The user client checks for this and will look for the size
+            // at the beginning if there isn't room for it at the end.
+
+            if ( ( dataQueue->queueSize - tail ) >= DATA_QUEUE_ENTRY_HEADER_SIZE )
+            {
+                ((IODataQueueEntry *)((UInt8 *)dataQueue->queue + tail))->size = dataSize;
+            }
+
             memcpy(&dataQueue->queue->data, data, dataSize);
             dataQueue->tail = entrySize;
         }

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2001 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2002 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -74,6 +74,22 @@
 #include <sys/ioctl.h>
 #include <sys/tty.h>
 #include <sys/ubc.h>
+#include <sys/conf.h>
+#include <sys/disk.h>
+
+#include <vm/vm_kern.h>
+
+#include <miscfs/specfs/specdev.h>
+
+static int vn_closefile __P((struct file *fp, struct proc *p));
+static int vn_ioctl __P((struct file *fp, u_long com, caddr_t data,
+		struct proc *p));
+static int vn_read __P((struct file *fp, struct uio *uio,
+		struct ucred *cred, int flags, struct proc *p));
+static int vn_write __P((struct file *fp, struct uio *uio,
+		struct ucred *cred, int flags, struct proc *p));
+static int vn_select __P(( struct file *fp, int which, void * wql,
+		struct proc *p));
 
 struct 	fileops vnops =
 	{ vn_read, vn_write, vn_ioctl, vn_select, vn_closefile };
@@ -82,6 +98,7 @@ struct 	fileops vnops =
  * Common code for vnode open operations.
  * Check permissions, and call the VOP_OPEN or VOP_CREATE routine.
  */
+int
 vn_open(ndp, fmode, cmode)
 	register struct nameidata *ndp;
 	int fmode, cmode;
@@ -92,12 +109,14 @@ vn_open(ndp, fmode, cmode)
 	struct vattr vat;
 	struct vattr *vap = &vat;
 	int error;
+	int didhold = 0;
 
 	if (fmode & O_CREAT) {
 		ndp->ni_cnd.cn_nameiop = CREATE;
 		ndp->ni_cnd.cn_flags = LOCKPARENT | LOCKLEAF;
 		if ((fmode & O_EXCL) == 0)
 			ndp->ni_cnd.cn_flags |= FOLLOW;
+		bwillwrite();
 		if (error = namei(ndp))
 			return (error);
 		if (ndp->ni_vp == NULL) {
@@ -137,6 +156,17 @@ vn_open(ndp, fmode, cmode)
 		error = EOPNOTSUPP;
 		goto bad;
 	}
+
+#if DIAGNOSTIC
+	if (UBCINFOMISSING(vp))
+		panic("vn_open: ubc_info_init");
+#endif /* DIAGNOSTIC */
+
+	if (UBCINFOEXISTS(vp) && ((didhold = ubc_hold(vp)) == 0)) {
+		error = ENOENT;
+		goto bad;
+	}
+
 	if ((fmode & O_CREAT) == 0) {
 		if (fmode & FREAD && fmode & (FWRITE | O_TRUNC)) {
 			int err = 0;
@@ -172,18 +202,7 @@ vn_open(ndp, fmode, cmode)
 			goto bad;
 	}
 
-#if DIAGNOSTIC
-	if (UBCINFOMISSING(vp))
-		panic("vn_open: ubc_info_init");
-#endif /* DIAGNOSTIC */
-
-	if (UBCINFOEXISTS(vp) && !ubc_hold(vp)) {
-		error = ENOENT;
-		goto bad;
-	}
-
 	if (error = VOP_OPEN(vp, fmode, cred, p)) {
-		ubc_rele(vp);
 		goto bad;
 	}
 
@@ -192,7 +211,10 @@ vn_open(ndp, fmode, cmode)
 			panic("vn_open: v_writecount");
 	return (0);
 bad:
-	vput(vp);
+	VOP_UNLOCK(vp, 0, p);
+	if (didhold)
+		ubc_rele(vp);
+	vrele(vp);
 	return (error);
 }
 
@@ -200,6 +222,7 @@ bad:
  * Check for write permissions on the specified vnode.
  * Prototype text segments cannot be written.
  */
+int
 vn_writechk(vp)
 	register struct vnode *vp;
 {
@@ -220,6 +243,7 @@ vn_writechk(vp)
 /*
  * Vnode close call
  */
+int
 vn_close(vp, flags, cred, p)
 	register struct vnode *vp;
 	int flags;
@@ -239,6 +263,7 @@ vn_close(vp, flags, cred, p)
 /*
  * Package up an I/O request on a vnode into a uio and do it.
  */
+int
 vn_rdwr(rw, vp, base, len, offset, segflg, ioflg, cred, aresid, p)
 	enum uio_rw rw;
 	struct vnode *vp;
@@ -286,24 +311,81 @@ vn_rdwr(rw, vp, base, len, offset, segflg, ioflg, cred, aresid, p)
 /*
  * File table vnode read routine.
  */
-vn_read(fp, uio, cred)
+static int
+vn_read(fp, uio, cred, flags, p)
 	struct file *fp;
 	struct uio *uio;
 	struct ucred *cred;
+	int flags;
+	struct proc *p;
 {
-	struct vnode *vp = (struct vnode *)fp->f_data;
-	struct proc *p = uio->uio_procp;
-	int error;
+	struct vnode *vp;
+	int error, ioflag;
 	off_t count;
 
+	if (p != uio->uio_procp)
+		panic("vn_read: uio_procp does not match p");
+
+	vp = (struct vnode *)fp->f_data;
+	ioflag = 0;
+	if (fp->f_flag & FNONBLOCK)
+		ioflag |= IO_NDELAY;
 	VOP_LEASE(vp, p, cred, LEASE_READ);
-	(void)vn_lock(vp, LK_EXCLUSIVE | LK_RETRY, p);
-	uio->uio_offset = fp->f_offset;
+	error = vn_lock(vp, LK_EXCLUSIVE | LK_RETRY, p);
+	if (error)
+		return (error);
+	if ((flags & FOF_OFFSET) == 0)
+		uio->uio_offset = fp->f_offset;
 	count = uio->uio_resid;
 
-	error = VOP_READ(vp, uio, (fp->f_flag & FNONBLOCK) ? IO_NDELAY : 0, cred);
+	if(UBCINFOEXISTS(vp)) {
+		memory_object_t	pager;
+		struct iovec    *iov;
+		off_t		file_off;
+		kern_return_t	kr = KERN_SUCCESS;
+		kern_return_t	ret = KERN_SUCCESS;
+		int		count;
 
-	fp->f_offset += count - uio->uio_resid;
+		pager = (memory_object_t)ubc_getpager(vp);
+		file_off = uio->uio_offset;
+		iov = uio->uio_iov;
+		count = uio->uio_iovcnt;
+		while(count) {
+			kr = vm_conflict_check(current_map(), 
+				(vm_offset_t)iov->iov_base, iov->iov_len, 
+				pager, file_off);
+			if(kr == KERN_ALREADY_WAITING) {
+				if((count != uio->uio_iovcnt) &&
+				   (ret != KERN_ALREADY_WAITING)) {
+					error = EINVAL;
+					goto done;
+				}
+				ret = KERN_ALREADY_WAITING;
+			} else if (kr != KERN_SUCCESS) {
+				error = EINVAL;
+				goto done;
+			}
+			if(kr != ret) {
+				error = EINVAL;
+				goto done;
+			}
+			file_off += iov->iov_len;
+			iov++;
+			count--;
+		}
+		if(ret == KERN_ALREADY_WAITING) {
+			uio->uio_resid = 0;
+			if ((flags & FOF_OFFSET) == 0)
+				fp->f_offset += 
+					count - uio->uio_resid;
+			error = 0;
+			goto done;
+		}
+	}
+	error = VOP_READ(vp, uio, ioflag, cred);
+	if ((flags & FOF_OFFSET) == 0)
+		fp->f_offset += count - uio->uio_resid;
+done:
 	VOP_UNLOCK(vp, 0, p);
 	return (error);
 }
@@ -312,16 +394,25 @@ vn_read(fp, uio, cred)
 /*
  * File table vnode write routine.
  */
-vn_write(fp, uio, cred)
+static int
+vn_write(fp, uio, cred, flags, p)
 	struct file *fp;
 	struct uio *uio;
 	struct ucred *cred;
+	int flags;
+	struct proc *p;
 {
-	struct vnode *vp = (struct vnode *)fp->f_data;
-	struct proc *p = uio->uio_procp;
-	int error, ioflag = IO_UNIT;
+	struct vnode *vp;
+	int error, ioflag;
 	off_t count;
 
+	if (p != uio->uio_procp)
+		panic("vn_write: uio_procp does not match p");
+
+	vp = (struct vnode *)fp->f_data;
+	ioflag = IO_UNIT;
+	if (vp->v_type == VREG)
+		bwillwrite();
 	if (vp->v_type == VREG && (fp->f_flag & O_APPEND))
 		ioflag |= IO_APPEND;
 	if (fp->f_flag & FNONBLOCK)
@@ -330,16 +421,67 @@ vn_write(fp, uio, cred)
 		(vp->v_mount && (vp->v_mount->mnt_flag & MNT_SYNCHRONOUS)))
 		ioflag |= IO_SYNC;
 	VOP_LEASE(vp, p, cred, LEASE_WRITE);
-	(void)vn_lock(vp, LK_EXCLUSIVE | LK_RETRY, p);
-	uio->uio_offset = fp->f_offset;
-	count = uio->uio_resid;
+	error = vn_lock(vp, LK_EXCLUSIVE | LK_RETRY, p);
+	if (error)
+		return (error);
+	if ((flags & FOF_OFFSET) == 0) {
+		uio->uio_offset = fp->f_offset;
+		count = uio->uio_resid;
+	}
 
+	if(UBCINFOEXISTS(vp)) {
+		memory_object_t		pager;
+		struct iovec		*iov;
+		off_t			file_off;
+		kern_return_t		kr = KERN_SUCCESS;
+		kern_return_t		ret = KERN_SUCCESS;
+		int			count;
+
+		pager = (memory_object_t)ubc_getpager(vp);
+		file_off = uio->uio_offset;
+		iov = uio->uio_iov;
+		count = uio->uio_iovcnt;
+		while(count) {
+			kr = vm_conflict_check(current_map(), 
+				(vm_offset_t)iov->iov_base, 
+				iov->iov_len, pager, file_off);
+			if(kr == KERN_ALREADY_WAITING) {
+				if((count != uio->uio_iovcnt) &&
+				   (ret != KERN_ALREADY_WAITING)) {
+					error = EINVAL;
+					goto done;
+				}
+				ret = KERN_ALREADY_WAITING;
+			} else if (kr != KERN_SUCCESS) {
+				error = EINVAL;
+				goto done;
+			}
+			if(kr != ret) {
+				error = EINVAL;
+				goto done;
+			}
+			file_off += iov->iov_len;
+			iov++;
+			count--;
+		}
+		if(ret == KERN_ALREADY_WAITING) {
+			uio->uio_resid = 0;
+			if ((flags & FOF_OFFSET) == 0)
+				fp->f_offset += 
+					count - uio->uio_resid;
+			error = 0;
+			goto done;
+		}
+	}
 	error = VOP_WRITE(vp, uio, ioflag, cred);
 
-	if (ioflag & IO_APPEND)
-		fp->f_offset = uio->uio_offset;
-	else
-		fp->f_offset += count - uio->uio_resid;
+	if ((flags & FOF_OFFSET) == 0) {
+		if (ioflag & IO_APPEND)
+			fp->f_offset = uio->uio_offset;
+		else
+			fp->f_offset += count - uio->uio_resid;
+	}
+
 	/*
 	 * Set the credentials on successful writes
 	 */
@@ -347,6 +489,7 @@ vn_write(fp, uio, cred)
 		ubc_setcred(vp, p);
 	}
 
+done:
 	VOP_UNLOCK(vp, 0, p);
 	return (error);
 }
@@ -354,6 +497,7 @@ vn_write(fp, uio, cred)
 /*
  * File table vnode stat routine.
  */
+int
 vn_stat(vp, sb, p)
 	struct vnode *vp;
 	register struct stat *sb;
@@ -422,6 +566,7 @@ vn_stat(vp, sb, p)
 /*
  * File table vnode ioctl routine.
  */
+static int
 vn_ioctl(fp, com, data, p)
 	struct file *fp;
 	u_long com;
@@ -432,7 +577,7 @@ vn_ioctl(fp, com, data, p)
 	struct vattr vattr;
 	int error;
 	struct vnode *ttyvp;
-
+	
 	switch (vp->v_type) {
 
 	case VREG:
@@ -453,21 +598,41 @@ vn_ioctl(fp, com, data, p)
 	case VFIFO:
 	case VCHR:
 	case VBLK:
-		error = VOP_IOCTL(vp, com, data, fp->f_flag, p->p_ucred, p);
-		if (error == 0 && com == TIOCSCTTY) {
-			VREF(vp);
-			ttyvp = p->p_session->s_ttyvp;
-			p->p_session->s_ttyvp = vp;
-			if (ttyvp)
-				vrele(ttyvp);
-		}
-		return (error);
+
+	  /* Should not be able to set block size from user space */
+	  if(com == DKIOCSETBLOCKSIZE)
+	    return (EPERM);
+	  
+	  if (com == FIODTYPE) {
+	    if (vp->v_type == VBLK) {
+	      if (major(vp->v_rdev) >= nblkdev)
+		return (ENXIO);
+	      *(int *)data = bdevsw[major(vp->v_rdev)].d_type;
+	    } else if (vp->v_type == VCHR) {
+	      if (major(vp->v_rdev) >= nchrdev)
+		return (ENXIO);
+	      *(int *)data = cdevsw[major(vp->v_rdev)].d_type;
+	    } else {
+	      return (ENOTTY);
+	    }
+	    return (0);
+	  }
+	  error = VOP_IOCTL(vp, com, data, fp->f_flag, p->p_ucred, p);
+	  if (error == 0 && com == TIOCSCTTY) {
+	    VREF(vp);
+	    ttyvp = p->p_session->s_ttyvp;
+	    p->p_session->s_ttyvp = vp;
+	    if (ttyvp)
+	      vrele(ttyvp);
+	  }
+	  return (error);
 	}
 }
 
 /*
  * File table vnode select routine.
  */
+static int
 vn_select(fp, which, wql, p)
 	struct file *fp;
 	int which;
@@ -514,6 +679,7 @@ vn_lock(vp, flags, p)
 /*
  * File table vnode close routine.
  */
+static int
 vn_closefile(fp, p)
 	struct file *fp;
 	struct proc *p;

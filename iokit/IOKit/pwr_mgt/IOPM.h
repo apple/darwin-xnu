@@ -268,9 +268,16 @@ enum {
     kPMMinutesToSpinDown,
     kPMMinutesToSleep,
     kPMEthernetWakeOnLANSettings,
-    kPMSetProcessorSpeed
+    kPMSetProcessorSpeed,
+    kPMPowerSource
 };
 #define kMaxType kPMEthernetWakeOnLANSettings
+
+// SetAggressiveness values for the kPMPowerSource aggressiveness type
+enum {
+    kIOPMInternalPower = 1,
+    kIOPMExternalPower
+};
 
 #define kAppleClamshellStateKey           "AppleClamshellState"
 #define kIOREMSleepEnabledKey             "REMSleepEnabled"

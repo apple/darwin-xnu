@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000, 2002 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -68,6 +68,11 @@
 
 #ifndef	__CATALOGPRIVATE__
 #define __CATALOGPRIVATE__
+
+#include <sys/appleapiopts.h>
+
+#ifdef KERNEL
+#ifdef __APPLE_API_PRIVATE
 
 #include "../../hfs_format.h"
 
@@ -145,8 +150,6 @@ typedef struct CatalogCacheGlobals CatalogCacheGlobals;
 // Private Catalog Manager Routines (for use only by Catalog Manager, CatSearch and FileID Services)
 //
 
-extern	OSErr	LocateCatalogThread( const ExtendedVCB *volume, HFSCatalogNodeID nodeID, CatalogRecord *threadData,
-									 UInt16 *threadSize, UInt32 *threadHint);
 
 extern	OSErr	LocateCatalogNode(	const ExtendedVCB *volume, HFSCatalogNodeID folderID, const CatalogName *name,
 									UInt32 hint, CatalogKey *key, CatalogRecord *data, UInt32 *newHint);
@@ -160,19 +163,8 @@ extern OSErr	LocateCatalogRecord( const ExtendedVCB *volume, HFSCatalogNodeID fo
 extern OSErr	LocateCatalogNodeWithRetry ( const ExtendedVCB *volume, HFSCatalogNodeID folderID, ConstStr31Param pascalName,
 											 CatalogName *unicodeName, UInt32 hint, CatalogKey *keyPtr, CatalogRecord *dataPtr,
 											 UInt32 *newHint );
-
-extern OSErr	LocateCatalogNodeByMangledName( const ExtendedVCB *volume, HFSCatalogNodeID folderID, 
-				ConstStr31Param name, UInt32 length,
-				CatalogKey *keyPtr, CatalogRecord *dataPtr, UInt32 *hintPtr );
-
 extern OSErr	FlushCatalog( ExtendedVCB *volume);
 
-#define			InvalidateCatalogNodeCache(v, pid)
-
-extern OSErr	UpdateFolderCount( ExtendedVCB *volume, HFSCatalogNodeID parentID, const CatalogName *name, SInt16 newType,
-								   UInt32 hint, SInt16 valenceDelta);
-
-extern UInt16	GetCatalogRecordSize( const CatalogRecord *dataRecord);
 
 extern void		ConvertInputNameToUnicode(ConstStr31Param name, TextEncoding encodingHint,
 										  TextEncoding *actualEncoding, CatalogName *catalogName);
@@ -182,10 +174,6 @@ extern	void	BuildCatalogKey( HFSCatalogNodeID parentID, const CatalogName *name,
 
 extern	OSErr	BuildCatalogKeyUTF8(ExtendedVCB *volume, HFSCatalogNodeID parentID, const char *name,
 				    UInt32 length, CatalogKey *key, UInt32 *textEncoding);
-
-extern	void	UpdateCatalogName( ConstStr31Param srcName, Str31 destName);
-
-extern UInt32	CatalogNameLength( const CatalogName *name, Boolean isHFSPlus);
 
 extern void		CopyCatalogName( const CatalogName *srcName, CatalogName *dstName, Boolean isHFSPLus);
 
@@ -197,16 +185,9 @@ extern OSErr	CreateFileThreadID( FIDParam *filePB, WDCBRecPtr *wdcbPtr );
 extern OSErr	ExchangeFiles( FIDParam *filePB, WDCBRecPtr *wdcbPtr );
 #endif 
 
-extern void		CopyCatalogNodeData( const ExtendedVCB *volume, const CatalogRecord *dataPtr, CatalogNodeData *nodeData);
-
-extern void		UpdateVolumeEncodings( ExtendedVCB *volume, TextEncoding encoding);
-
-extern void		AdjustVolumeCounts( ExtendedVCB *volume, SInt16 type, SInt16 delta );
-
 
 // Catalog Iterator Routines
 
-extern CatalogIterator* oGetCatalogIterator( const ExtendedVCB *volume, HFSCatalogNodeID folderID, UInt16 index);
 extern CatalogIterator* GetCatalogIterator(ExtendedVCB *volume, HFSCatalogNodeID folderID, UInt32 offset);
 
 extern OSErr	ReleaseCatalogIterator( CatalogIterator *catalogIterator );
@@ -220,4 +201,6 @@ extern void		UpdateBtreeIterator( const CatalogIterator *catalogIterator, BTreeI
 extern void		UpdateCatalogIterator( const BTreeIterator *btreeIterator, CatalogIterator *catalogIterator );
 
 
+#endif /* __APPLE_API_PRIVATE */
+#endif /* KERNEL */
 #endif //__CATALOGPRIVATE__

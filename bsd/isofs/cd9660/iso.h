@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2001 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2002 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -63,6 +63,9 @@
 #ifndef _ISO_H_
 #define _ISO_H_
 
+#include <sys/appleapiopts.h>
+
+#ifdef __APPLE_API_PRIVATE
 #define ISODCL(from, to) (to - from + 1)
 
 struct iso_volume_descriptor {
@@ -396,4 +399,5 @@ void packattrblk __P((struct attrlist *alist, struct vnode *vp,
  */
 #define	ASSOCCHAR	'='
 
+#endif /* __APPLE_API_PRIVATE */
 #endif /* ! _ISO_H_ */

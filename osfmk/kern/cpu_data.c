@@ -31,20 +31,3 @@
 #include <kern/cpu_number.h>
 #include <kern/cpu_data.h>
 #include <kern/thread.h>
-
-int master_cpu = 0;
-
-#ifdef	PPC
-
-cpu_data_t	cpu_data[NCPUS] =
-	{ { THREAD_NULL,		/* active_thread */
-	    0,				/* preemption_level */
-	    0,				/* simple_lock_cout */
-	    0			/* interrupt_level */
-	}, };
-
-#else	/* PPC */
-
-cpu_data_t	cpu_data[NCPUS];
-
-#endif	/* PPC */

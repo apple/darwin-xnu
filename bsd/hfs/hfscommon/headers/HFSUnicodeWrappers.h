@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2002 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -65,29 +65,16 @@
 	  <HFS1>	12/12/96	msd		first checked in
 
 */
+#ifndef _HFSUNICODEWRAPPERS_
+#define _HFSUNICODEWRAPPERS_
+
+#include <sys/appleapiopts.h>
+
+#ifdef KERNEL
+#ifdef __APPLE_API_PRIVATE
 
 #include "../../hfs_macos_defs.h"
 #include "../../hfs_format.h"
-
-// Encoding vs. Index
-//
-// For runtime table lookups and for the volume encoding bitmap we
-// need to map some encodings to keep them in a reasonable range.
-//
-
-enum {
-	kIndexMacUkrainian	= 48,		// MacUkrainian encoding is 152
-	kIndexMacFarsi		= 49		// MacFarsi encoding is 140
-};
-
-#define MapEncodingToIndex(e) \
-	( (e) < 48 ? (e) : ( (e) == kTextEncodingMacUkrainian ? kIndexMacUkrainian : ( (e) == kTextEncodingMacFarsi ? kIndexMacFarsi : kTextEncodingMacRoman) ) )
-
-#define MapIndexToEncoding(i) \
-	( (i) == kIndexMacFarsi ? kTextEncodingMacFarsi : ( (i) == kIndexMacUkrainian ? kTextEncodingMacUkrainian : (i) ) )
-
-#define ValidMacEncoding(e)	\
-	( ((e) < 39)  ||  ((e) == kTextEncodingMacFarsi)  ||  ((e) == kTextEncodingMacUkrainian) )
 
 
 extern OSErr ConvertUnicodeToUTF8Mangled ( ByteCount srcLen,
@@ -119,3 +106,6 @@ extern SInt32 FastRelString( ConstStr255Param str1, ConstStr255Param str2 );
 
 extern HFSCatalogNodeID GetEmbeddedFileID( ConstStr31Param filename, UInt32 length, UInt32 *prefixLength );
 
+#endif /* __APPLE_API_PRIVATE */
+#endif /* KERNEL */
+#endif /* _HFSUNICODEWRAPPERS_ */

@@ -1,0 +1,145 @@
+.\"	$NetBSD: madvise.2,v 1.7 1995/12/27 21:17:02 jtc Exp $
+.\"
+.\" Copyright (c) 1991, 1993
+.\"	The Regents of the University of California.  All rights reserved.
+.\"
+.\" Redistribution and use in source and binary forms, with or without
+.\" modification, are permitted provided that the following conditions
+.\" are met:
+.\" 1. Redistributions of source code must retain the above copyright
+.\"    notice, this list of conditions and the following disclaimer.
+.\" 2. Redistributions in binary form must reproduce the above copyright
+.\"    notice, this list of conditions and the following disclaimer in the
+.\"    documentation and/or other materials provided with the distribution.
+.\" 3. All advertising materials mentioning features or use of this software
+.\"    must display the following acknowledgement:
+.\"	This product includes software developed by the University of
+.\"	California, Berkeley and its contributors.
+.\" 4. Neither the name of the University nor the names of its contributors
+.\"    may be used to endorse or promote products derived from this software
+.\"    without specific prior written permission.
+.\"
+.\" THIS SOFTWARE IS PROVIDED BY THE REGENTS AND CONTRIBUTORS ``AS IS'' AND
+.\" ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+.\" IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
+.\" ARE DISCLAIMED.  IN NO EVENT SHALL THE REGENTS OR CONTRIBUTORS BE LIABLE
+.\" FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
+.\" DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS
+.\" OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION)
+.\" HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT
+.\" LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
+.\" OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
+.\" SUCH DAMAGE.
+.\"
+.\"	@(#)madvise.2	8.1 (Berkeley) 6/9/93
+.\"
+.Dd June 9, 1993
+.Dt MADVISE 2
+.Os
+.Sh NAME
+.Nm madvise
+.Nd give advice about use of memory
+.Sh SYNOPSIS
+.Fd #include <sys/types.h>
+.Fd #include <sys/mman.h>
+.Ft int
+.Fn madvise "caddr_t addr" "size_t len" "int behav"
+.Ft int
+.Fn posix_madvise "caddr_t addr" "size_t len" "int behav"
+.Sh DESCRIPTION
+The
+.Fn madvise
+system call allows a process that has knowledge of its memory behavior to describe it to the system. The advice passed in may be used by the system to alter its virtual memory paging strategy. This advice may improve application and system performance. The behavior specified in
+.Fa behav
+can only be one of the following values:
+.Pp
+.Bl -tag -width MADV_SEQUENTIAL
+.It Dv  MADV_NORMAL
+Indicates that the application has no advice to give on its behavior in the specifed address range. This is the system default behavior. This is used with 
+.Fn madvise
+system call.
+.It Dv POSIX_MADV_NORMAL
+Same as MADV_NORMAL but used with 
+.Fn posix_madvise
+system call.
+.It Dv MADV_SEQUENTIAL
+Indicates that the application expects to access this address range in a sequential manner. This is used with
+.Fn madvise
+system call.
+.It Dv POSIX_MADV_SEQUENTIAL
+Same as MADV_SEQUENTIAL but used with 
+.Fn posix_madvise
+system call.
+.It Dv MADV_RANDOM
+Indicates that the application expects to access this address range in a random manner. This is used with
+.Fn madvise
+system call.
+.It Dv POSIX_MADV_RANDOM
+Same as MADV_RANDOM but used with 
+.Fn posix_madvise
+system call.
+.It Dv MADV_WILLNEED
+Indicates that the application expects to access this address range soon. This is used with
+.Fn madvise
+system call.
+.It Dv POSIX_MADV_WILLNEED
+Same as MADV_WILLNEED but used with 
+.Fn posix_madvise
+system call.
+.It Dv MADV_DONTNEED
+Indicates that the application is not expecting to access this address range soon. This is used with
+.Fn madvise
+system call.
+.It Dv POSIX_MADV_DONTNEED
+Same as MADV_DONTNEED but used with 
+.Fn posix_madvise
+system call.
+.It Dv MADV_FREE
+Indicates that the application will not need the information contained in this address range so the pages may be reused right away. The address range will remain valid. This is used with
+.Fn madvise
+system call.
+.El
+
+The
+.Fn posix_madvise
+behaves same as 
+.Fn madvise
+except that it uses values with POSIX_ prefix for the 
+.Fa behav
+system call argument.
+.Sh RETURN VALUES
+Upon successful completion,
+a value of 0 is returned.
+Otherwise, a value of -1 is returned and
+.Va errno
+is set to indicate the error.
+.Sh ERRORS
+.Fn madvise
+fails if one or more of the following are true:
+.Bl -tag -width Er
+.It Bq Er EINVAL
+The value of 
+.Fa behav 
+is incorrect.
+.It Bq Er ENOMEM
+The virtual address range specified by the 
+.Fa addr
+and
+.Fa len
+are outside the range allowed for the address space.
+.It Bq Er EINVAL
+The address range includes unallocated regions.
+.El
+.Sh SEE ALSO
+.Xr mincore 2 ,
+.Xr minherit 2 ,
+.Xr mprotect 2 , 
+.Xr msync 2 ,
+.Xr munmap 2
+.Sh HISTORY
+The
+.Nm madvise
+function first appeared in 4.4BSD.
+The
+.Nm posix_madvise
+function is part of IEEE 1003.1-2001 and was first implemented in Mac OS X 10.2.

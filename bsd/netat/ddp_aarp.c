@@ -58,6 +58,8 @@
 #include <netat/at_aarp.h>
 #include <netat/debug.h>
 
+#include <sys/kern_event.h>
+
 static int	probing;
 /* Following two variables are used to keep track of how many dynamic addresses
  * we have tried out at startup.
@@ -158,7 +160,13 @@ int aarp_init2(elapp)
 
 	elapp->ifThisNode = elapp->initial_addr;
 	probing = PROBE_DONE;
-
+	
+	/* AppleTalk was successfully started up. Send event with node and net. */
+	atalk_post_msg(elapp->aa_ifp, KEV_ATALK_ENABLED, &(elapp->ifThisNode), 0);
+	
+	/* Set global flag */
+	at_state.flags |= AT_ST_STARTED;
+	
 	return(0);
 }
 

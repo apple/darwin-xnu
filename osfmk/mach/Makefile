@@ -31,7 +31,6 @@ MIG_TYPES = \
 	std_types.defs
 
 MIG_DEFS =	\
-	bootstrap.defs  \
 	clock.defs \
 	clock_priv.defs \
 	clock_reply.defs \
@@ -68,7 +67,6 @@ MIG_USHDRS = \
 	notify_server.h
 
 MIG_UUHDRS = \
-	bootstrap.h  \
 	clock.h \
 	clock_priv.h \
 	host_priv.h \
@@ -91,6 +89,7 @@ MIGINCLUDES = ${MIG_UUHDRS} ${MIG_USHDRS}
 DATAFILES = \
         boolean.h \
 	boot_info.h \
+	bootstrap.h \
         clock_types.h \
         error.h \
 	exception.h \
@@ -99,7 +98,6 @@ DATAFILES = \
 	host_reboot.h \
 	kern_return.h \
         kmod.h \
-	mach_ioctl.h \
         mach_param.h \
 	mach_time.h \
 	mach_traps.h \
@@ -110,7 +108,6 @@ DATAFILES = \
         message.h \
 	mig.h \
 	mig_errors.h \
-	mig_log.h \
 	ndr.h \
         notify.h \
 	policy.h \

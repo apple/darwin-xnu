@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2002 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -56,7 +56,11 @@
  */
 
 #ifndef	_SYS_MTIO_H_
-#define _SYS_MTIO_H_
+#define	_SYS_MTIO_H_
+
+#include <sys/appleapiopts.h>
+
+#ifdef	__APPLE_API_OBSOLETE
 
 /*
  * Structures and definitions for mag tape io control commands
@@ -160,4 +164,7 @@ struct mtget {
 #define	T_6250BPI	020		/* select 6250 bpi */
 #define	T_BADBPI	030		/* undefined selection */
 #endif
+
+#endif	/* __APPLE_API_OBSOLETE */
+
 #endif	/* !_SYS_MTIO_H_ */

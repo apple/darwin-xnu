@@ -95,6 +95,7 @@ const OSSymbol * 		gIONameMatchKey;
 const OSSymbol *		gIONameMatchedKey;
 const OSSymbol *		gIOPropertyMatchKey;
 const OSSymbol *		gIOLocationMatchKey;
+const OSSymbol *		gIOParentMatchKey;
 const OSSymbol *		gIOPathMatchKey;
 const OSSymbol *		gIOMatchCategoryKey;
 const OSSymbol *		gIODefaultMatchCategoryKey;
@@ -149,6 +150,10 @@ static OSArray *		gIOFinalizeList;
 #define LOCKWRITE2READNOTIFY()
 #define UNLOCKNOTIFY()		\
     IORecursiveLockUnlock( gNotificationLock )
+#define SLEEPNOTIFY(event) \
+    IORecursiveLockSleep( gNotificationLock, (void *)(event), THREAD_UNINT )
+#define WAKEUPNOTIFY(event) \
+	IORecursiveLockWakeup( gNotificationLock, (void *)(event), /* wake one */ false )
 
 #define randomDelay()	\
         int del = read_processor_clock();				\
@@ -171,6 +176,9 @@ static queue_head_t gArbitrationLockQueueWaiting;
 static queue_head_t gArbitrationLockQueueFree;
 static IOLock *     gArbitrationLockQueueLock;
 
+bool IOService::isInactive( void ) const
+    { return( 0 != (kIOServiceInactiveState & getState())); }
+
 /* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
 
 void IOService::initialize( void )
@@ -185,7 +193,8 @@ void IOService::initialize( void )
     gIONameMatchedKey	= OSSymbol::withCStringNoCopy( kIONameMatchedKey );
     gIOPropertyMatchKey	= OSSymbol::withCStringNoCopy( kIOPropertyMatchKey );
     gIOPathMatchKey 	= OSSymbol::withCStringNoCopy( kIOPathMatchKey );
-    gIOLocationMatchKey = OSSymbol::withCStringNoCopy( kIOLocationMatchKey );
+    gIOLocationMatchKey	= OSSymbol::withCStringNoCopy( kIOLocationMatchKey );
+    gIOParentMatchKey	= OSSymbol::withCStringNoCopy( kIOParentMatchKey );
 
     gIOMatchCategoryKey	= OSSymbol::withCStringNoCopy( kIOMatchCategoryKey );
     gIODefaultMatchCategoryKey	= OSSymbol::withCStringNoCopy( 
@@ -513,7 +522,7 @@ void IOService::startMatching( IOOptionBits options = 0 )
 
             IOLockUnlock( gIOServiceBusyLock );
             if( waitAgain)
-                thread_block((void (*)(void)) 0);
+                thread_block(THREAD_CONTINUE_NULL);
 
         } while( waitAgain );
     }
@@ -924,7 +933,9 @@ bool IOService::lockForArbitration( bool isSuccessRequired = true )
                                               link );
 
                                 // wake the victim
-                                thread_wakeup_one(victim);
+                                IOLockWakeup( gArbitrationLockQueueLock, 
+                                              victim, 
+                                              /* one thread */ true );
 
                                 // allow this thread to proceed (ie. wait)
                                 success = true; // (put request on wait queue)
@@ -962,15 +973,17 @@ bool IOService::lockForArbitration( bool isSuccessRequired = true )
                              link );
 
                 // declare that this thread will wait for a given event
-restart_sleep:  assert_wait( element,
-                             element->required ? THREAD_UNINT
-                                               : THREAD_INTERRUPTIBLE );
+restart_sleep:  wait_result = assert_wait( element,
+					   element->required ? THREAD_UNINT
+					   : THREAD_INTERRUPTIBLE );
 
                 // unlock global access
                 IOUnlock( gArbitrationLockQueueLock );
 
                 // put thread to sleep, waiting for our event to fire...
-                wait_result = thread_block((void (*)(void)) 0);
+		if (wait_result == THREAD_WAITING)
+		    wait_result = thread_block(THREAD_CONTINUE_NULL);
+
 
                 // ...and we've been woken up; we might be in one of two states:
                 // (a) we've been aborted and our queue element is not on
@@ -1154,7 +1167,9 @@ void IOService::unlockForArbitration( void )
                          link );
 
             // wake the waiting thread
-            thread_wakeup_one(element);
+            IOLockWakeup( gArbitrationLockQueueLock,
+                          element,
+                          /* one thread */ true );
         }
     }
 
@@ -1219,7 +1234,7 @@ IOReturn IOService::messageClient( UInt32 type, OSObject * client,
                             _IOServiceNotifierInvocation *, link );
             if( kIOServiceNotifyWaiter & notify->state) {
                 notify->state &= ~kIOServiceNotifyWaiter;
-                thread_wakeup( (event_t) notify);
+                WAKEUPNOTIFY( notify );
             }
             UNLOCKNOTIFY();
 
@@ -1401,10 +1416,7 @@ void _IOServiceInterestNotifier::wait()
         }
         if( doWait) {
             state |= kIOServiceNotifyWaiter;
-            assert_wait( this, THREAD_UNINT);
-            UNLOCKNOTIFY();
-            thread_block((void (*)(void)) 0);
-            LOCKWRITENOTIFY();
+	       SLEEPNOTIFY(this);
         }
 
     } while( doWait );
@@ -1531,7 +1543,7 @@ bool IOService::terminatePhase1( IOOptionBits options = 0 )
 
     while( victim ) {
 
-        didInactive = victim->lockForArbitration( true );
+	didInactive = victim->lockForArbitration( true );
         if( didInactive) {
             didInactive = (0 == (victim->__state[0] & kIOServiceInactiveState));
             if( didInactive) {
@@ -1540,7 +1552,7 @@ bool IOService::terminatePhase1( IOOptionBits options = 0 )
                                         | kIOServiceFirstPublishState | kIOServiceFirstMatchState);
                 victim->_adjustBusy( 1 );
             }
-            victim->unlockForArbitration();
+	    victim->unlockForArbitration();
         }
         if( victim == this)
             startPhase2 = didInactive;
@@ -1599,10 +1611,7 @@ void IOService::scheduleTerminatePhase2( IOOptionBits options = 0 )
             wait = (gIOTerminateThread != 0);
             if( wait) {
                 // wait to become the terminate thread
-                assert_wait( (event_t) &gIOTerminateThread, THREAD_UNINT );
-                IOLockUnlock( gJobsLock );
-                thread_block((void (*)(void)) 0);
-                IOLockLock( gJobsLock );
+                IOLockSleep( gJobsLock, &gIOTerminateThread, THREAD_UNINT);
             }
         } while( wait );
 
@@ -1615,24 +1624,21 @@ void IOService::scheduleTerminatePhase2( IOOptionBits options = 0 )
             wait = (0 != (__state[1] & kIOServiceBusyStateMask));
             if( wait) {
                 // wait for the victim to go non-busy
-                assert_wait( (event_t) &gIOTerminateWork, THREAD_UNINT );
                 if( !haveDeadline) {
                     clock_interval_to_deadline( 15, kSecondScale, &deadline );
                     haveDeadline = true;
                 }
-                thread_set_timer_deadline( deadline );
-                IOLockUnlock( gJobsLock );
-                waitResult = thread_block((void (*)(void)) 0);
+                waitResult = IOLockSleepDeadline( gJobsLock, &gIOTerminateWork,
+                                                  deadline, THREAD_UNINT );
                 if( waitResult == THREAD_TIMED_OUT) {
                     TLOG("%s::terminate(kIOServiceSynchronous) timeout", getName());
                 } else
                     thread_cancel_timer();
-                IOLockLock( gJobsLock );
             }
         } while( wait && (waitResult != THREAD_TIMED_OUT));
 
         gIOTerminateThread = 0;
-        thread_wakeup( (event_t) &gIOTerminateThread );
+        IOLockWakeup( gJobsLock, (event_t) &gIOTerminateThread, /* one-thread */ false);
 
     } else {
         // ! kIOServiceSynchronous
@@ -1654,7 +1660,7 @@ void IOService::terminateThread( void * arg )
     terminateWorker( (IOOptionBits) arg );
 
     gIOTerminateThread = 0;
-    thread_wakeup( (event_t) &gIOTerminateThread );
+    IOLockWakeup( gJobsLock, (event_t) &gIOTerminateThread, /* one-thread */ false);
 
     IOLockUnlock( gJobsLock );
 }
@@ -1671,7 +1677,7 @@ void IOService::scheduleStop( IOService * provider )
         if( !gIOTerminateThread)
             gIOTerminateThread = IOCreateThread( &terminateThread, (void *) 0 );
         else
-            thread_wakeup( (event_t) &gIOTerminateWork );
+            IOLockWakeup(gJobsLock, (event_t) &gIOTerminateWork, /* one-thread */ false );
     }
 
     IOLockUnlock( gJobsLock );
@@ -1688,7 +1694,7 @@ void IOService::scheduleFinalize( void )
         if( !gIOTerminateThread)
             gIOTerminateThread = IOCreateThread( &terminateThread, (void *) 0 );
         else
-            thread_wakeup( (event_t) &gIOTerminateWork );
+            IOLockWakeup(gJobsLock, (event_t) &gIOTerminateWork, /* one-thread */ false );
     }
 
     IOLockUnlock( gJobsLock );
@@ -2234,7 +2240,7 @@ bool IOService::invokeNotifer( _IOServiceNotifier * notify )
                         _IOServiceNotifierInvocation *, link );
         if( kIOServiceNotifyWaiter & notify->state) {
             notify->state &= ~kIOServiceNotifyWaiter;
-            thread_wakeup( (event_t) notify);
+            WAKEUPNOTIFY( notify );
         }
         UNLOCKNOTIFY();
     }
@@ -2874,7 +2880,7 @@ IOReturn IOService::waitForState( UInt32 mask, UInt32 value,
             unlockForArbitration();
         IOLockUnlock( gIOServiceBusyLock );
         if( wait) {
-            waitResult = thread_block((void (*)(void)) 0);
+            waitResult = thread_block(THREAD_CONTINUE_NULL);
             if( timeout && (waitResult != THREAD_TIMED_OUT))
 	    	thread_cancel_timer();
         }
@@ -2956,7 +2962,7 @@ void _IOConfigThread::main( _IOConfigThread * self )
 	    else {
                 if( 0 == --gNumConfigThreads) {
 //                    IOLog("MATCH IDLE\n");
-                    thread_wakeup( (event_t) &gNumConfigThreads);
+                    IOLockWakeup( gJobsLock, (event_t) &gNumConfigThreads, /* one-thread */ false );
                 }
             }
             IOUnlock( gJobsLock );
@@ -2977,11 +2983,10 @@ IOReturn IOService::waitMatchIdle( UInt32 msToWait )
     bool            computeDeadline = true;
     AbsoluteTime    abstime;
 
+    IOLockLock( gJobsLock );
     do {
-        IOLockLock( gJobsLock );
         wait = (0 != gNumConfigThreads);
         if( wait) {
-            assert_wait( (event_t) &gNumConfigThreads, THREAD_UNINT );
             if( msToWait) {
                 if( computeDeadline ) {
                     clock_interval_to_absolutetime_interval(
@@ -2990,17 +2995,15 @@ IOReturn IOService::waitMatchIdle( UInt32 msToWait )
                           abstime, &abstime );
                     computeDeadline = false;
                 }
-                thread_set_timer_deadline( abstime );
-            }
+			  waitResult = IOLockSleepDeadline( gJobsLock, &gNumConfigThreads,
+								abstime, THREAD_UNINT );
+	    	   } else {
+			  waitResult = IOLockSleep( gJobsLock, &gNumConfigThreads,
+								THREAD_UNINT );
+	        }
         }
-        IOUnlock( gJobsLock );
-        if( wait) {
-            waitResult = thread_block((void (*)(void)) 0);
-            if( msToWait && (waitResult != THREAD_TIMED_OUT))
-	    	thread_cancel_timer();
-        }
-
     } while( wait && (waitResult != THREAD_TIMED_OUT));
+	IOLockUnlock( gJobsLock );
 
     if( waitResult == THREAD_TIMED_OUT)
         return( kIOReturnTimeout );
@@ -3468,10 +3471,7 @@ void _IOServiceNotifier::wait()
         }
         if( doWait) {
             state |= kIOServiceNotifyWaiter;
-            assert_wait( this, THREAD_UNINT);
-            UNLOCKNOTIFY();
-            thread_block((void (*)(void)) 0);
-            LOCKWRITENOTIFY();
+            SLEEPNOTIFY(this);
         }
 
     } while( doWait );
@@ -3585,6 +3585,34 @@ bool IOResources::matchPropertyTable( OSDictionary * table )
     return( ok );
 }
 
+IOReturn IOResources::setProperties( OSObject * properties )
+{
+    IOReturn			err;
+    const OSSymbol *		key;
+    OSDictionary *		dict;
+    OSCollectionIterator *	iter;
+
+    err = IOUserClient::clientHasPrivilege(current_task(), kIOClientPrivilegeAdministrator);
+    if ( kIOReturnSuccess != err)
+	return( err );
+
+    dict = OSDynamicCast(OSDictionary, properties);
+    if( 0 == dict)
+	return( kIOReturnBadArgument);
+
+    iter = OSCollectionIterator::withCollection( dict);
+    if( 0 == iter)
+	return( kIOReturnBadArgument);
+
+    while( (key = OSDynamicCast(OSSymbol, iter->getNextObject()))) {
+	publishResource( key, dict->getObject(key) );
+    }
+
+    iter->release();
+
+    return( kIOReturnSuccess );
+}
+
 /*
  * Helpers for matching dictionaries.
  * Keys existing in matching are checked in properties.
@@ -3690,6 +3718,7 @@ bool IOService::passiveMatch( OSDictionary * table, bool changesOK )
     SInt32		score;
     OSNumber *		newPri;
     bool		match = true;
+    bool		matchParent = false;
     UInt32		done;
 
     assert( table );
@@ -3697,140 +3726,174 @@ bool IOService::passiveMatch( OSDictionary * table, bool changesOK )
     where = this;
 
     do {
-        done = 0;
+        do {
+            done = 0;
 
-        str = OSDynamicCast( OSString, table->getObject( gIOProviderClassKey));
-        if( str) {
-            done++;
-            match = (0 != where->metaCast( str ));
-            if( !match)
-                break;
-        }
-
-        obj = table->getObject( gIONameMatchKey );
-        if( obj) {
-            done++;
-            match = compareNames( obj, changesOK ? &matched : 0 );
-            if( !match)
-                break;
-            if( changesOK && matched) {
-                // leave a hint as to which name matched
-                table->setObject( gIONameMatchedKey, matched );
-                matched->release();
-            }
-        }
-        obj = table->getObject( gIOPropertyMatchKey );
-        if( obj) {
-
-            OSDictionary * dict;
-            OSDictionary * nextDict;
-            OSIterator *   iter;
-
-            done++;
-            dict = where->dictionaryWithProperties();
-            if( dict) {
-                nextDict = OSDynamicCast( OSDictionary, obj);
-                if( nextDict)
-                    iter = 0;
-                else
-                    iter = OSCollectionIterator::withCollection(
-                                OSDynamicCast(OSCollection, obj));
-
-                while( nextDict
-                    || (iter && (0 != (nextDict = OSDynamicCast(OSDictionary,
-                                            iter->getNextObject()))))) {
-                    match = dict->isEqualTo( nextDict, nextDict);
-                    if( match)
-                        break;
-                    nextDict = 0;
-                }
-                dict->release();
-                if( iter)
-                    iter->release();
+            str = OSDynamicCast( OSString, table->getObject( gIOProviderClassKey));
+            if( str) {
+                done++;
+                match = (0 != where->metaCast( str ));
                 if( !match)
                     break;
             }
-	}
 
-        str = OSDynamicCast( OSString, table->getObject( gIOPathMatchKey ));
-        if( str) {
-            done++;
-            entry = IORegistryEntry::fromPath( str->getCStringNoCopy() );
-	    match = (where == entry);
-	    if( entry)
-                entry->release();
-	    if( !match)
-                break;
-	}
-
-        num = OSDynamicCast( OSNumber, table->getObject( gIOMatchedServiceCountKey ));
-        if( num) {
-
-            OSIterator *	iter;
-            IOService *		service = 0;
-            UInt32		serviceCount = 0;
-
-            done++;
-            iter = getClientIterator();
-            if( iter) {
-                while( (service = (IOService *) iter->getNextObject())) {
-                    if( kIOServiceInactiveState & service->__state[0])
-                        continue;
-                    if( 0 == service->getProperty( gIOMatchCategoryKey ))
-                        continue;
-                    ++serviceCount;
+            obj = table->getObject( gIONameMatchKey );
+            if( obj) {
+                done++;
+                match = where->compareNames( obj, changesOK ? &matched : 0 );
+                if( !match)
+                    break;
+                if( changesOK && matched) {
+                    // leave a hint as to which name matched
+                    table->setObject( gIONameMatchedKey, matched );
+                    matched->release();
                 }
-                iter->release();
             }
-	    match = (serviceCount == num->unsigned32BitValue());
-	    if( !match)
+
+            str = OSDynamicCast( OSString, table->getObject( gIOLocationMatchKey ));
+            if( str) {
+
+                const OSSymbol * sym;
+
+                done++;
+                match = false;
+                sym = where->copyLocation();
+                if( sym) {
+                    match = sym->isEqualTo( str );
+                    sym->release();
+                }
+                if( !match)
+                    break;
+            }
+
+            obj = table->getObject( gIOPropertyMatchKey );
+            if( obj) {
+
+                OSDictionary * dict;
+                OSDictionary * nextDict;
+                OSIterator *   iter;
+
+                done++;
+                match = false;
+                dict = where->dictionaryWithProperties();
+                if( dict) {
+                    nextDict = OSDynamicCast( OSDictionary, obj);
+                    if( nextDict)
+                        iter = 0;
+                    else
+                        iter = OSCollectionIterator::withCollection(
+                                    OSDynamicCast(OSCollection, obj));
+
+                    while( nextDict
+                        || (iter && (0 != (nextDict = OSDynamicCast(OSDictionary,
+                                                iter->getNextObject()))))) {
+                        match = dict->isEqualTo( nextDict, nextDict);
+                        if( match)
+                            break;
+                        nextDict = 0;
+                    }
+                    dict->release();
+                    if( iter)
+                        iter->release();
+                }
+                if( !match)
+                    break;
+            }
+
+            str = OSDynamicCast( OSString, table->getObject( gIOPathMatchKey ));
+            if( str) {
+                done++;
+                entry = IORegistryEntry::fromPath( str->getCStringNoCopy() );
+                match = (where == entry);
+                if( entry)
+                    entry->release();
+                if( !match)
+                    break;
+            }
+
+            num = OSDynamicCast( OSNumber, table->getObject( gIOMatchedServiceCountKey ));
+            if( num) {
+
+                OSIterator *	iter;
+                IOService *		service = 0;
+                UInt32		serviceCount = 0;
+
+                done++;
+                iter = where->getClientIterator();
+                if( iter) {
+                    while( (service = (IOService *) iter->getNextObject())) {
+                        if( kIOServiceInactiveState & service->__state[0])
+                            continue;
+                        if( 0 == service->getProperty( gIOMatchCategoryKey ))
+                            continue;
+                        ++serviceCount;
+                    }
+                    iter->release();
+                }
+                match = (serviceCount == num->unsigned32BitValue());
+                if( !match)
+                    break;
+            }
+
+            if( done == table->getCount()) {
+                // don't call family if we've done all the entries in the table
+                matchParent = false;
                 break;
-	}
-
-	if( done == table->getCount())
-	    // don't call family if we've done all the entries in the table
-	    break;
-
-        // pass in score from property table
-        score = IOServiceObjectOrder( table, (void *) gIOProbeScoreKey);
-
-	// do family specific matching
-	match = where->matchPropertyTable( table, &score );
-
-	if( !match) {
-#if IOMATCHDEBUG
-	    if( kIOLogMatch & getDebugFlags( table ))
-		LOG("%s: family specific matching fails\n", where->getName());
-#endif
-	    break;
-	}
-
-        if( changesOK) {
-            // save the score
-            newPri = OSNumber::withNumber( score, 32 );
-            if( newPri) {
-                table->setObject( gIOProbeScoreKey, newPri );
-                newPri->release();
             }
-        }
 
-        if( !(match = where->compareProperty( table, kIOBSDNameKey )))
-	    break;
+            // pass in score from property table
+            score = IOServiceObjectOrder( table, (void *) gIOProbeScoreKey);
 
-	table = OSDynamicCast( OSDictionary,
-		table->getObject( gIOLocationMatchKey ));
-	if( table) {
-	    match = false;
-	    where = where->getProvider();
-	    if( where)
-		where = where->matchLocation( where );
-	}
+            // do family specific matching
+            match = where->matchPropertyTable( table, &score );
 
-    } while( table && where );
+            if( !match) {
+#if IOMATCHDEBUG
+                if( kIOLogMatch & getDebugFlags( table ))
+                    LOG("%s: family specific matching fails\n", where->getName());
+#endif
+                break;
+            }
+
+            if( changesOK) {
+                // save the score
+                newPri = OSNumber::withNumber( score, 32 );
+                if( newPri) {
+                    table->setObject( gIOProbeScoreKey, newPri );
+                    newPri->release();
+                }
+            }
+
+            if( !(match = where->compareProperty( table, kIOBSDNameKey )))
+                break;
+
+            matchParent = false;
+
+            obj = OSDynamicCast( OSDictionary,
+                  table->getObject( gIOParentMatchKey ));
+            if( obj) {
+                match = false;
+                matchParent = true;
+                table = (OSDictionary *) obj;
+                break;
+            }
+
+            table = OSDynamicCast( OSDictionary,
+                    table->getObject( gIOLocationMatchKey ));
+            if( table) {
+                match = false;
+                where = where->getProvider();
+                if( where)
+                    where = where->matchLocation( where );
+            }
+
+        } while( table && where );
+
+    } while( matchParent && (where = where->getProvider()) );
 
     if( kIOLogMatch & gIOKitDebug)
         if( where != this)
-            LOG("match location @ %s = %d\n",
+            LOG("match parent @ %s = %d\n",
                         where->getName(), match );
 
     return( match );
@@ -4040,7 +4103,7 @@ int IOService::errnoFromReturn( IOReturn rtn )
         case kIOReturnBadMedia:
         case kIOReturnNoMedia:
         case kIOReturnUnformattedMedia:
-            return(EIO); // (media error)
+            return(ENXIO); // (media error)
         case kIOReturnDMAError:
         case kIOReturnOverrun:
         case kIOReturnUnderrun:

@@ -63,10 +63,15 @@ private:
 protected:
 
 /*! @function release
-    @abstract Primary implementation of the release mechanism.
-    @discussion  If $link retainCount <= the when argument then call $link free().  This indirect implementation of $link release allows the developer to break reference circularity.  An example of this sort of problem is a parent/child mutual reference, either the parent or child can implement: void release() { release(2); } thus breaking the cirularity. 
-    @param when When retainCount == when then call free(). */
+    @abstract untagged release(when) mechansim.
+    @param when Pass through to taggedRelease. */
     virtual void release(int when) const;
+
+/*! @function taggedRelease
+    @abstract Primary implementation of the tagged release mechanism.
+    @discussion  If $link retainCount <= the when argument then call $link free().  This indirect implementation of $link release allows the developer to break reference circularity.  An example of this sort of problem is a parent/child mutual reference, either the parent or child can implement: void taggedRelease(tag) { taggedRelease(tag, 2); } thus breaking the cirularity. 
+    @param when If retainCount == when then call free(). */
+    virtual void taggedRelease(const void *tag, const int when) const;
 
 /*! @function init
     @abstract Mac OS X kernel's primary mechanism for constructing objects.
@@ -110,13 +115,27 @@ public:
 
 /*! @function retain
     @abstract Retain a reference in this object.
+    @discussion Takes a reference that is NULL tagged.  See taggedRetain().
 */
     virtual void retain() const;
 
 /*! @function release
     @abstract Release a reference to this object
+    @discussion Removes a reference that is NULL tagged.  See taggedRelease().
 */
     virtual void release() const;
+
+/*! @function taggedRetain
+    @abstract Retain a tagged reference in this object.
+    @param tag Retain a reference on this object with this tag, see taggedRelease.
+*/
+    virtual void taggedRetain(const void *tag = 0) const;
+
+/*! @function taggedRelease
+    @abstract Release a tagged reference to this object
+    @param tag Remove a reference on this object with this tag, if an attempt is made to remove a reference that isn't associated with this tag the kernel will panic immediately.
+*/
+    virtual void taggedRelease(const void *tag = 0) const;
 
 /*! @function serialize
     @abstract 

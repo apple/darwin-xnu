@@ -78,107 +78,115 @@ sendsig(p, catcher, sig, mask, code)
 	int sig, mask;
 	u_long code;
 {
-    struct sigframe {
-	int			retaddr;
-	int			sig;
-	int			code;
-	struct sigcontext *	scp;
-    }				frame, *fp;
-    struct sigcontext		context, *scp;
+	struct sigframe {
+		int			retaddr;
+		sig_t			catcher;
+		int			sigstyle;
+		int			sig;
+		int			code;
+		struct sigcontext *	scp;
+	} frame, *fp;
+	struct sigcontext		context, *scp;
 	struct sigacts *ps = p->p_sigacts;
-    int				oonstack;
-    thread_t			thread = current_thread();
-    thread_act_t		th_act = current_act();
-    struct i386_saved_state *	saved_state = get_user_regs(th_act);
+	int oonstack;
+	thread_t thread = current_thread();
+	thread_act_t th_act = current_act();
+	struct uthread * ut;
+	struct i386_saved_state * saved_state = get_user_regs(th_act);
+	sig_t trampact;
     
+	ut = get_bsdthread_info(th_act);
 	oonstack = ps->ps_sigstk.ss_flags & SA_ONSTACK;
-    if ((ps->ps_flags & SAS_ALTSTACK) && !oonstack &&
+	if ((ps->ps_flags & SAS_ALTSTACK) && !oonstack &&
 		(ps->ps_sigonstack & sigmask(sig))) {
-	    	scp = ((struct sigcontext *)ps->ps_sigstk.ss_sp) - 1;
+			scp = ((struct sigcontext *)ps->ps_sigstk.ss_sp) - 1;
 			ps->ps_sigstk.ss_flags |= SA_ONSTACK;
-    } else
-	    scp = ((struct sigcontext *)saved_state->uesp) - 1;
-    fp = ((struct sigframe *)scp) - 1;
+	} else
+		scp = ((struct sigcontext *)saved_state->uesp) - 1;
+	fp = ((struct sigframe *)scp) - 1;
 
-    /* 
-     * Build the argument list for the signal handler.
-     */
+	/* 
+	 * Build the argument list for the signal handler.
+	 */
 
-    frame.retaddr = 0xffffffff;	/* Handler should call sigreturn to get out of it */
-    frame.sig = sig;
+	trampact = ps->ps_trampact[sig];
+	/* Handler should call sigreturn to get out of it */
+	frame.retaddr = 0xffffffff;	
+	frame.catcher = catcher;
+	frame.sigstyle = 1;
+	frame.sig = sig;
 
-    if (sig == SIGILL || sig == SIGFPE) {
-	    frame.code = code;
-    } else
-	    frame.code = 0;
-    frame.scp = scp;
-    if (copyout((caddr_t)&frame, (caddr_t)fp, sizeof (frame))) 
-	goto bad;
+	if (sig == SIGILL || sig == SIGFPE) {
+		frame.code = code;
+	} else
+		frame.code = 0;
+	frame.scp = scp;
+	if (copyout((caddr_t)&frame, (caddr_t)fp, sizeof (frame))) 
+		goto bad;
 
 #if	PC_SUPPORT
-    {
+	{
 	PCcontext_t	context = threadPCContext(thread);
 	
 	if (context && context->running) {
-	    oonstack |= 02;
-	    context->running = FALSE;
+		oonstack |= 02;
+		context->running = FALSE;
 	}
-    }
+	}
 #endif
-    /*
-     * Build the signal context to be used by sigreturn.
-     */
-    context.sc_onstack = oonstack;
-    context.sc_mask = mask;
-    context.sc_eax = saved_state->eax;
-    context.sc_ebx = saved_state->ebx;
-    context.sc_ecx = saved_state->ecx;
-    context.sc_edx = saved_state->edx;
-    context.sc_edi = saved_state->edi;
-    context.sc_esi = saved_state->esi;
-    context.sc_ebp = saved_state->ebp;
-    context.sc_esp = saved_state->uesp;
-    context.sc_ss = saved_state->ss;
-    context.sc_eflags = saved_state->efl;
-    context.sc_eip = saved_state->eip;
-    context.sc_cs = saved_state->cs;
-    if (saved_state->efl & EFL_VM) {
-	context.sc_ds = saved_state->v86_segs.v86_ds;
-	context.sc_es = saved_state->v86_segs.v86_es;
-	context.sc_fs = saved_state->v86_segs.v86_fs;
-	context.sc_gs = saved_state->v86_segs.v86_gs;
+	/*
+	 * Build the signal context to be used by sigreturn.
+	 */
+	context.sc_onstack = oonstack;
+	context.sc_mask = mask;
+	context.sc_eax = saved_state->eax;
+	context.sc_ebx = saved_state->ebx;
+	context.sc_ecx = saved_state->ecx;
+	context.sc_edx = saved_state->edx;
+	context.sc_edi = saved_state->edi;
+	context.sc_esi = saved_state->esi;
+	context.sc_ebp = saved_state->ebp;
+	context.sc_esp = saved_state->uesp;
+	context.sc_ss = saved_state->ss;
+	context.sc_eflags = saved_state->efl;
+	context.sc_eip = saved_state->eip;
+	context.sc_cs = saved_state->cs;
+	if (saved_state->efl & EFL_VM) {
+		context.sc_ds = saved_state->v86_segs.v86_ds;
+		context.sc_es = saved_state->v86_segs.v86_es;
+		context.sc_fs = saved_state->v86_segs.v86_fs;
+		context.sc_gs = saved_state->v86_segs.v86_gs;
 
-	saved_state->efl &= ~EFL_VM;
-    }
-    else {
-	context.sc_ds = saved_state->ds;
-	context.sc_es = saved_state->es;
-	context.sc_fs = saved_state->fs;
-	context.sc_gs = saved_state->gs;
-    }
-    if (copyout((caddr_t)&context, (caddr_t)scp, sizeof (context))) 
-	goto bad;
+		saved_state->efl &= ~EFL_VM;
+	} else {
+		context.sc_ds = saved_state->ds;
+		context.sc_es = saved_state->es;
+		context.sc_fs = saved_state->fs;
+		context.sc_gs = saved_state->gs;
+	}
+	if (copyout((caddr_t)&context, (caddr_t)scp, sizeof (context))) 
+		goto bad;
 
-    saved_state->eip = (unsigned int)catcher;
-    saved_state->cs = UCODE_SEL;
+	saved_state->eip = (unsigned int)trampact;
+	saved_state->cs = UCODE_SEL;
 
-    saved_state->uesp = (unsigned int)fp;
-    saved_state->ss = UDATA_SEL;
+	saved_state->uesp = (unsigned int)fp;
+	saved_state->ss = UDATA_SEL;
 
-    saved_state->ds = UDATA_SEL;
-    saved_state->es = UDATA_SEL;
-    saved_state->fs = NULL_SEG;
-    saved_state->gs = NULL_SEG;
-    return;
+	saved_state->ds = UDATA_SEL;
+	saved_state->es = UDATA_SEL;
+	saved_state->fs = NULL_SEG;
+	saved_state->gs = NULL_SEG;
+	return;
 
 bad:
 	SIGACTION(p, SIGILL) = SIG_DFL;
 	sig = sigmask(SIGILL);
 	p->p_sigignore &= ~sig;
 	p->p_sigcatch &= ~sig;
-	p->p_sigmask &= ~sig;
+	ut->uu_sigmask &= ~sig;
 	/* sendsig is called with signal lock held */
-	psignal_lock(p, SIGILL, 0, 1);
+	psignal_lock(p, SIGILL, 0);
 	return;
 }
 
@@ -207,6 +215,9 @@ sigreturn(p, uap, retval)
     thread_act_t		th_act = current_act();
 	int error;
     struct i386_saved_state*	saved_state = get_user_regs(th_act);	
+	struct uthread * ut;
+
+
     
     if (saved_state == NULL) 
 	return EINVAL;
@@ -214,24 +225,15 @@ sigreturn(p, uap, retval)
     if (error = copyin((caddr_t)uap->sigcntxp, (caddr_t)&context, 
 						sizeof (context))) 
 					return(error);
-
-#if 0 /*FIXME*/
-    if ((context.sc_eflags & EFL_VM) == 0 &&
-	   (!valid_user_code_selector(context.sc_cs) ||
-	    !valid_user_data_selector(context.sc_ds) ||
-	    !valid_user_data_selector(context.sc_es) ||
-	    !valid_user_data_selector(context.sc_fs) ||
-	    !valid_user_data_selector(context.sc_gs) ||
-	    !valid_user_stack_selector(context.sc_ss))
-	)
-	return(EINVAL);
-#endif
+	ut = (struct uthread *)get_bsdthread_info(th_act);
 
     if (context.sc_onstack & 01)
 			p->p_sigacts->ps_sigstk.ss_flags |= SA_ONSTACK;
 	else
 		p->p_sigacts->ps_sigstk.ss_flags &= ~SA_ONSTACK;
-	p->p_sigmask = context.sc_mask &~ sigcantmask;
+	ut->uu_sigmask = context.sc_mask &~ sigcantmask;
+	if(ut->uu_siglist & ~ut->uu_sigmask)
+		signal_setast(current_act());
     saved_state->eax = context.sc_eax;
     saved_state->ebx = context.sc_ebx;
     saved_state->ecx = context.sc_ecx;

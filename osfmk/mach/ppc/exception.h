@@ -95,6 +95,7 @@
 
 /*
  *	EXC_SOFTWARE
+ * 	Note: 0x10000-0x10003 in use for unix signal 
  */
 #define EXC_PPC_TRAP		1		/* Program trap */
 #define EXC_PPC_MIGRATE		0x10100		/* Time to bolt */

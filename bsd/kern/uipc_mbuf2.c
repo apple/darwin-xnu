@@ -85,14 +85,8 @@
  *	@(#)uipc_mbuf.c	8.4 (Berkeley) 2/14/95
  */
 
-#define PULLDOWN_STAT
-/*#define PULLDOWN_DEBUG*/
 
-#ifdef PULLDOWN_STAT
-#if defined(__NetBSD__) || (defined(__FreeBSD__) && __FreeBSD__ >= 3)
-#include "opt_inet.h"
-#endif
-#endif
+/*#define PULLDOWN_DEBUG*/
 
 #include <sys/param.h>
 #include <sys/systm.h>

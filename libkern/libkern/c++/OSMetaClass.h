@@ -33,13 +33,27 @@ class OSSymbol;
 class OSDictionary;
 class OSSerialize;
 
+#if __GNUC__ < 3
+#define APPLE_KEXT_COMPATIBILITY
+#else
+#define APPLE_KEXT_COMPATIBILITY __attribute__ ((apple_kext_compatibility))
+#endif
+
 class OSMetaClassBase
 {
 public:
+/*! @function OSTypeAlloc
+    @abstract Allocate an instance of the desired object.
+    @discussion The OSTypeAlloc macro can be used to break the binary compatibility difficulties presented by new.  The problem is that C++ compiles the knowledge of the size of the class into the cade calling new.  If you use the alloc code however the class size is determined by the callee not the caller.
+    @param type Name of the desired type to be created.
+    @result 'this' if object cas been successfully created.
+*/
+#define OSTypeAlloc(type)	((type *) ((type::metaClass)->alloc()))
+
 /*! @function OSTypeID
     @abstract Given the name of a class return it's typeID
     @param type Name of the desired type, eg. OSObject.
-    @result 'this' if object is of desired type, otherwise 0.
+    @result A unique Type ID for the class.
 */
 #define OSTypeID(type)	(type::metaClass)
 
@@ -160,27 +174,40 @@ public:
 
     // Helper inlines for runtime type preprocessor macros
     static OSMetaClassBase *
-    safeMetaCast(const OSMetaClassBase *me, const OSMetaClass *toType)
-	{ return (me)? me->metaCast(toType) : 0; }
+    safeMetaCast(const OSMetaClassBase *me, const OSMetaClass *toType);
 
     static bool
-    checkTypeInst(const OSMetaClassBase *inst, const OSMetaClassBase *typeinst)
-    {
-	const OSMetaClass *toType = OSTypeIDInst(typeinst);
-	return typeinst && inst && (0 != inst->metaCast(toType));
-    }
+    checkTypeInst(const OSMetaClassBase *inst, const OSMetaClassBase *typeinst);
+
+public:
+
+/*! @function taggedRetain
+    @abstract Retain a tagged reference in this object.
+*/
+    // WAS: virtual void _RESERVEDOSMetaClassBase0();
+    virtual void taggedRetain(const void *tag = 0) const = 0;
+
+/*! @function taggedRelease
+    @abstract Release a tagged reference to this object
+*/
+    // WAS:  virtual void _RESERVEDOSMetaClassBase1();
+    virtual void taggedRelease(const void *tag = 0) const = 0;
+
+protected:
+/*! @function taggedRelease
+    @abstract Release a tagged reference to this object and free if retainCount == when on entry
+*/
+    // WAS:  virtual void _RESERVEDOSMetaClassBase2();
+    virtual void taggedRelease(const void *tag, const int when) const = 0;
 
 private:
     // Virtual Padding
-    virtual void _RESERVEDOSMetaClassBase0();
-    virtual void _RESERVEDOSMetaClassBase1();
-    virtual void _RESERVEDOSMetaClassBase2();
     virtual void _RESERVEDOSMetaClassBase3();
     virtual void _RESERVEDOSMetaClassBase4();
     virtual void _RESERVEDOSMetaClassBase5();
     virtual void _RESERVEDOSMetaClassBase6();
     virtual void _RESERVEDOSMetaClassBase7();
-};
+} APPLE_KEXT_COMPATIBILITY;
 
 /*!
     @class OSMetaClass : OSMetaClassBase
@@ -190,6 +217,7 @@ class OSMetaClass : private OSMetaClassBase
 {
 
 private:
+    // Can never be allocated must be created at compile time
     static void *operator new(size_t size);
 
     struct ExpansionData { };
@@ -239,6 +267,21 @@ protected:
     @param when ignored. */
     virtual void release(int when) const;
 
+/*! @function taggedRetain
+    @abstract Retain a tagged reference in this object.
+*/
+    virtual void taggedRetain(const void *tag = 0) const;
+
+/*! @function release
+    @abstract Release a tagged reference to this object
+*/
+    virtual void taggedRelease(const void *tag = 0) const;
+
+/*! @function release
+    @abstract Release a tagged reference to this object
+*/
+    virtual void taggedRelease(const void *tag, const int when) const;
+
 /*! @function getRetainCount
     @abstract Implement abstract but should no dynamic allocation is allowed */
     virtual int getRetainCount() const;
@@ -260,7 +303,9 @@ protected:
     @discussion If this function is called it means that the object code that implemented this class is actually in the process of unloading.  The destructor removes all reference's to the subclass from the runtime type information system. */
     virtual ~OSMetaClass();
 
-    static void operator delete(void *mem, size_t size);
+    // Needs to be overriden as NULL as all OSMetaClass objects are allocated
+    // statically at compile time, don't accidently try to free them.
+    void operator delete(void *mem, size_t size) { };
 
 public:
     static const OSMetaClass * const metaClass;
@@ -412,11 +457,11 @@ public:
             MetaClass();						\
             virtual OSObject *alloc() const;				\
         } gMetaClass;							\
-        friend class className ## ::MetaClass;				\
+        friend class className ::MetaClass;				\
         virtual const OSMetaClass * getMetaClass() const;		\
     protected:								\
-	className ## (const OSMetaClass *);				\
-	virtual ~ ## className ## ()
+	className (const OSMetaClass *);				\
+	virtual ~ className ()
 
 
 /*! @function OSDeclareDefaultStructors
@@ -426,7 +471,7 @@ public:
 #define OSDeclareDefaultStructors(className)				\
 	OSDeclareCommonStructors(className);				\
     public:								\
-	className ## ();						\
+	className ();							\
     protected:
 
 
@@ -437,7 +482,7 @@ public:
 #define OSDeclareAbstractStructors(className)				\
 	OSDeclareCommonStructors(className);				\
     private:								\
-	className ## (); /* Make primary constructor private in abstract */ \
+	className (); /* Make primary constructor private in abstract */ \
     protected:
 
 /*! @function OSDefineMetaClassWithInit
@@ -447,19 +492,19 @@ public:
     @param init Name of a function to call after the OSMetaClass is constructed. */
 #define OSDefineMetaClassWithInit(className, superClassName, init)	\
     /* Class global data */						\
-    className ## ::MetaClass className ## ::gMetaClass;			\
-    const OSMetaClass * const className ## ::metaClass = 		\
-        & ## className ## ::gMetaClass;					\
-    const OSMetaClass * const className ## ::superClass = 		\
-        & ## superClassName ## ::gMetaClass;				\
+    className ::MetaClass className ::gMetaClass;			\
+    const OSMetaClass * const className ::metaClass = 			\
+        & className ::gMetaClass;					\
+    const OSMetaClass * const className ::superClass = 			\
+        & superClassName ::gMetaClass;					\
     /* Class member functions */					\
-    className ## :: ## className(const OSMetaClass *meta)		\
-	    : superClassName ## (meta) { }				\
-    className ## ::~ ## className() { }					\
-    const OSMetaClass * className ## ::getMetaClass() const		\
+    className :: className(const OSMetaClass *meta)			\
+	    : superClassName (meta) { }					\
+    className ::~ className() { }					\
+    const OSMetaClass * className ::getMetaClass() const		\
         { return &gMetaClass; }						\
     /* The ::MetaClass constructor */					\
-    className ## ::MetaClass::MetaClass()				\
+    className ::MetaClass::MetaClass()					\
         : OSMetaClass(#className, className::superClass, sizeof(className)) \
         { init; }
 
@@ -468,16 +513,16 @@ public:
     @param className Name of class. NO QUOTES and NO MACROS.
     @param superClassName Name of super class. NO QUOTES and NO MACROS. */
 #define OSDefineAbstractStructors(className, superClassName)		\
-    OSObject * ## className ## ::MetaClass::alloc() const { return 0; }
+    OSObject * className ::MetaClass::alloc() const { return 0; }
 
 /*! @function OSDefineDefaultStructors
     @abstract Basic helper macro for the OSDefineMetaClass for the default and Abstract macros, qv.  DO NOT USE.
     @param className Name of class. NO QUOTES and NO MACROS.
     @param superClassName Name of super class. NO QUOTES and NO MACROS. */
 #define OSDefineDefaultStructors(className, superClassName)		\
-    OSObject * ## className ## ::MetaClass::alloc() const		\
+    OSObject * className ::MetaClass::alloc() const			\
 	{ return new className; }					\
-    className ## :: ## className () : superClassName ## (&gMetaClass)	\
+    className :: className () : superClassName (&gMetaClass)		\
 	{ gMetaClass.instanceConstructed(); }
 
 
@@ -535,7 +580,7 @@ public:
 #define OSMetaClassDeclareReservedUsed(classname, index)
 
 #define OSMetaClassDefineReservedUnused(classname, index)		\
-void classname ## ::_RESERVED ## classname ## index () 			\
+void classname ::_RESERVED ## classname ## index () 			\
     { gMetaClass.reservedCalled(index); }
 
 #define OSMetaClassDefineReservedUsed(classname, index)

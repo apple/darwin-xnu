@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2002 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -65,197 +65,283 @@
 #include <kern/queue.h>
 #include <kern/spl.h>
 #include <mach/sync_policy.h>
-
 #include <kern/sched_prim.h>
+
 #include <kern/wait_queue.h>
 
-void
+/*
+ *	Routine:        wait_queue_init
+ *	Purpose:
+ *		Initialize a previously allocated wait queue.
+ *	Returns:
+ *		KERN_SUCCESS - The wait_queue_t was initialized
+ *		KERN_INVALID_ARGUMENT - The policy parameter was invalid
+ */
+kern_return_t
 wait_queue_init(
-        wait_queue_t wq,
+	wait_queue_t wq,
 	int policy)
 {
-	wq->wq_fifo = (policy == SYNC_POLICY_FIFO);
-	wq->wq_issub = FALSE;
+	if (!((policy & SYNC_POLICY_ORDER_MASK) == SYNC_POLICY_FIFO))
+		return KERN_INVALID_ARGUMENT;
+
+	wq->wq_fifo = TRUE;
+	wq->wq_type = _WAIT_QUEUE_inited;
 	queue_init(&wq->wq_queue);
 	hw_lock_init(&wq->wq_interlock);
-}
-
-void
-wait_queue_sub_init(
-        wait_queue_sub_t wqsub,
-	int policy)
-{
-	wait_queue_init(&wqsub->wqs_wait_queue, policy);
-	wqsub->wqs_wait_queue.wq_issub = TRUE;
-	if ( policy & SYNC_POLICY_PREPOST) {
-		wqsub->wqs_wait_queue.wq_isprepost = TRUE;
-		wqsub->wqs_refcount = 0;
-	} else 
-		wqsub->wqs_wait_queue.wq_isprepost = FALSE;
-	queue_init(&wqsub->wqs_sublinks);
-}
-
-void
-wait_queue_sub_clearrefs(
-        wait_queue_sub_t wq_sub)
-{
-	assert(wait_queue_is_sub(wq_sub));
-
-	wqs_lock(wq_sub);
-
-	wq_sub->wqs_refcount = 0;
-
-	wqs_unlock(wq_sub);
-
-}
-
-void
-wait_queue_link_init(
-	wait_queue_link_t wql)
-{
-	queue_init(&wql->wql_links);
-	queue_init(&wql->wql_sublinks);
-	wql->wql_queue = WAIT_QUEUE_NULL;
-	wql->wql_subqueue = WAIT_QUEUE_SUB_NULL;
-	wql->wql_event = NO_EVENT;
+	return KERN_SUCCESS;
 }
 
 /*
- *     Routine:        wait_queue_alloc
- *     Purpose:
- *             Allocate and initialize a wait queue for use outside of
- *             of the mach part of the kernel.
- *
- *     Conditions:
- *             Nothing locked - can block.
- *
- *     Returns:
- *             The allocated and initialized wait queue
- *             WAIT_QUEUE_NULL if there is a resource shortage
+ *	Routine:		   wait_queue_alloc
+ *	Purpose:
+ *		Allocate and initialize a wait queue for use outside of
+ *		of the mach part of the kernel.
+ *	Conditions:
+ *		Nothing locked - can block.
+ *	Returns:
+ *		The allocated and initialized wait queue
+ *		WAIT_QUEUE_NULL if there is a resource shortage
  */
 wait_queue_t
 wait_queue_alloc(
-         int policy)
+	int policy)
 {
 	wait_queue_t wq;
+	kern_return_t ret;
 
 	wq = (wait_queue_t) kalloc(sizeof(struct wait_queue));
-	if (wq != WAIT_QUEUE_NULL)
-		wait_queue_init(wq, policy);
+	if (wq != WAIT_QUEUE_NULL) {
+		ret = wait_queue_init(wq, policy);
+		if (ret != KERN_SUCCESS) {
+			kfree((vm_offset_t)wq, sizeof(struct wait_queue));
+			wq = WAIT_QUEUE_NULL;
+		}
+	}
 	return wq;
 }
 
 /*
- *     Routine:        wait_queue_free
- *     Purpose:
- *             Free an allocated wait queue.
- *
- *     Conditions:
- *             Nothing locked - can block.
+ *	Routine:        wait_queue_free
+ *	Purpose:
+ *		Free an allocated wait queue.
+ *	Conditions:
+ *		May block.
  */
-void
+kern_return_t
 wait_queue_free(
 	wait_queue_t wq)
 {
-	assert(queue_empty(&wq->wq_queue));
+	if (!wait_queue_is_queue(wq))
+		return KERN_INVALID_ARGUMENT;
+	if (!queue_empty(&wq->wq_queue))
+		return KERN_FAILURE;
 	kfree((vm_offset_t)wq, sizeof(struct wait_queue));
+	return KERN_SUCCESS;
 }
 
+/*
+ *	Routine:        wait_queue_set_init
+ *	Purpose:
+ *		Initialize a previously allocated wait queue set.
+ *	Returns:
+ *		KERN_SUCCESS - The wait_queue_set_t was initialized
+ *		KERN_INVALID_ARGUMENT - The policy parameter was invalid
+ */
+kern_return_t
+wait_queue_set_init(
+	wait_queue_set_t wqset,
+	int policy)
+{
+	kern_return_t ret;
+
+	ret = wait_queue_init(&wqset->wqs_wait_queue, policy);
+	if (ret != KERN_SUCCESS)
+		return ret;
+
+	wqset->wqs_wait_queue.wq_type = _WAIT_QUEUE_SET_inited;
+	if (policy & SYNC_POLICY_PREPOST)
+		wqset->wqs_wait_queue.wq_isprepost = TRUE;
+	else 
+		wqset->wqs_wait_queue.wq_isprepost = FALSE;
+	queue_init(&wqset->wqs_setlinks);
+	wqset->wqs_refcount = 0;
+	return KERN_SUCCESS;
+}
+
+/* legacy API */
+kern_return_t
+wait_queue_sub_init(
+	wait_queue_set_t wqset,
+	int policy)
+{
+	return wait_queue_set_init(wqset, policy);
+}
 
 /*
- *	Routine:	wait_queue_lock
+ *	Routine:        wait_queue_set_alloc
  *	Purpose:
- *		Lock the wait queue.
+ *		Allocate and initialize a wait queue set for
+ *		use outside of the mach part of the kernel.
  *	Conditions:
- *		the appropriate spl level (if any) is already raised.
+ *		May block.
+ *	Returns:
+ *		The allocated and initialized wait queue set
+ *		WAIT_QUEUE_SET_NULL if there is a resource shortage
  */
-void
-wait_queue_lock(
-        wait_queue_t wq)
+wait_queue_set_t
+wait_queue_set_alloc(
+    int policy)
 {
-#ifdef __ppc__
-	vm_offset_t pc;
+	wait_queue_set_t wq_set;
 
-        /*
-         * Double the standard lock timeout, because wait queues tend
-         * to iterate over a number of threads - locking each.  If there is
-         * a problem with a thread lock, it normally times out at the wait
-         * queue level first, hiding the real problem.
-         */
-	pc = GET_RETURN_PC(&wq);
-	if (!hw_lock_to(&wq->wq_interlock, LockTimeOut * 2)) {
-		panic("wait queue deadlock detection - wq=0x%x, cpu=%d, ret=0x%x\n", wq, cpu_number(), pc);
+	wq_set = (wait_queue_set_t) kalloc(sizeof(struct wait_queue_set));
+	if (wq_set != WAIT_QUEUE_SET_NULL) {
+		kern_return_t ret;
+
+		ret = wait_queue_set_init(wq_set, policy);
+		if (ret != KERN_SUCCESS) {
+			kfree((vm_offset_t)wq_set, sizeof(struct wait_queue_set));
+			wq_set = WAIT_QUEUE_SET_NULL;
+		}
 	}
-#else
-	hw_lock_lock(&wq->wq_interlock);
-#endif
+	return wq_set;
 }
 
 /*
- *	Routine:	wait_queue_lock_try
- *	Purpose:
- *		Try to lock the wait queue without waiting
- *	Conditions:
- *		the appropriate spl level (if any) is already raised.
- *  Returns:
- *		TRUE if the lock was acquired
- *		FALSE if we would have needed to wait
+ *     Routine:        wait_queue_set_free
+ *     Purpose:
+ *             Free an allocated wait queue set
+ *     Conditions:
+ *             May block.
  */
-boolean_t
-wait_queue_lock_try(
-        wait_queue_t wq)
+kern_return_t
+wait_queue_set_free(
+	wait_queue_set_t wq_set)
 {
-	return hw_lock_try(&wq->wq_interlock);
+	if (!wait_queue_is_set(wq_set))
+		return KERN_INVALID_ARGUMENT;
+
+	if (!queue_empty(&wq_set->wqs_wait_queue.wq_queue))
+		return KERN_FAILURE;
+
+	kfree((vm_offset_t)wq_set, sizeof(struct wait_queue_set));
+	return KERN_SUCCESS;
+}
+
+kern_return_t
+wait_queue_sub_clearrefs(
+        wait_queue_set_t wq_set)
+{
+	if (!wait_queue_is_set(wq_set))
+		return KERN_INVALID_ARGUMENT;
+
+	wqs_lock(wq_set);
+	wq_set->wqs_refcount = 0;
+	wqs_unlock(wq_set);
+	return KERN_SUCCESS;
 }
 
 /*
- *	Routine:	wait_queue_unlock
- *	Purpose:
- *		unlock the wait queue
- *	Conditions:
- *		The wait queue is assumed locked.
- *		appropriate spl level is still maintained
+ *	
+ *     Routine:        wait_queue_set_size
+ *     Routine:        wait_queue_link_size
+ *     Purpose:
+ *             Return the size of opaque wait queue structures
  */
-void
-wait_queue_unlock(
-	wait_queue_t wq)
-{
-	assert(hw_lock_held(&wq->wq_interlock));
+unsigned int wait_queue_set_size(void) { return sizeof(WaitQueueSet); }
+unsigned int wait_queue_link_size(void) { return sizeof(WaitQueueLink); }
 
-	hw_lock_unlock(&wq->wq_interlock);
-}
+/* declare a unique type for wait queue link structures */
+static unsigned int _wait_queue_link;
+static unsigned int _wait_queue_unlinked;
 
-int _wait_queue_subordinate; /* phoney event for subordinate wait q elements */
+#define WAIT_QUEUE_LINK ((void *)&_wait_queue_link)
+#define WAIT_QUEUE_UNLINKED ((void *)&_wait_queue_unlinked)
 
-	
+#define WAIT_QUEUE_ELEMENT_CHECK(wq, wqe) \
+	WQASSERT(((wqe)->wqe_queue == (wq) && \
+	  queue_next(queue_prev((queue_t) (wqe))) == (queue_t)(wqe)), \
+	  "wait queue element list corruption: wq=%#x, wqe=%#x", \
+	  (wq), (wqe))
+
+#define WQSPREV(wqs, wql) ((wait_queue_link_t)queue_prev( \
+			((&(wqs)->wqs_setlinks == (queue_t)(wql)) ? \
+			(queue_t)(wql) : &(wql)->wql_setlinks)))
+
+#define WQSNEXT(wqs, wql) ((wait_queue_link_t)queue_next( \
+			((&(wqs)->wqs_setlinks == (queue_t)(wql)) ? \
+			(queue_t)(wql) : &(wql)->wql_setlinks)))
+
+#define WAIT_QUEUE_SET_LINK_CHECK(wqs, wql) \
+		WQASSERT((((wql)->wql_type == WAIT_QUEUE_LINK) && \
+			((wql)->wql_setqueue == (wqs)) && \
+			((wql)->wql_queue->wq_type == _WAIT_QUEUE_inited) && \
+			(WQSNEXT((wqs), WQSPREV((wqs),(wql))) == (wql))), \
+			"wait queue set links corruption: wqs=%#x, wql=%#x", \
+			(wqs), (wql))
+
+#if defined(_WAIT_QUEUE_DEBUG_)
+
+#define WQASSERT(e, s, p0, p1) ((e) ? 0 : panic(s, p0, p1))
+
+#define WAIT_QUEUE_CHECK(wq) \
+MACRO_BEGIN \
+	queue_t q2 = &(wq)->wq_queue; \
+	wait_queue_element_t wqe2 = (wait_queue_element_t) queue_first(q2); \
+	while (!queue_end(q2, (queue_entry_t)wqe2)) { \
+		WAIT_QUEUE_ELEMENT_CHECK((wq), wqe2); \
+		wqe2 = (wait_queue_element_t) queue_next((queue_t) wqe2); \
+	} \
+MACRO_END
+
+#define WAIT_QUEUE_SET_CHECK(wqs) \
+MACRO_BEGIN \
+	queue_t q2 = &(wqs)->wqs_setlinks; \
+	wait_queue_link_t wql2 = (wait_queue_link_t) queue_first(q2); \
+	while (!queue_end(q2, (queue_entry_t)wql2)) { \
+		WAIT_QUEUE_SET_LINK_CHECK((wqs), wql2); \
+		wql2 = (wait_queue_link_t) wql2->wql_setlinks.next; \
+	} \
+MACRO_END
+
+#else /* !_WAIT_QUEUE_DEBUG_ */
+
+#define WQASSERT(e, s, p0, p1) assert(e)
+
+#define WAIT_QUEUE_CHECK(wq)
+#define WAIT_QUEUE_SET_CHECK(wqs)
+
+#endif /* !_WAIT_QUEUE_DEBUG_ */
+
 /*
  *	Routine:	wait_queue_member_locked
  *	Purpose:
- *		Indicate if this sub queue is a member of the queue
+ *		Indicate if this set queue is a member of the queue
  *	Conditions:
  *		The wait queue is locked
- *		The sub queue is just that, a sub queue
+ *		The set queue is just that, a set queue
  */
-boolean_t
+__private_extern__ boolean_t
 wait_queue_member_locked(
 	wait_queue_t wq,
-	wait_queue_sub_t wq_sub)
+	wait_queue_set_t wq_set)
 {
 	wait_queue_element_t wq_element;
 	queue_t q;
 
 	assert(wait_queue_held(wq));
-	assert(wait_queue_is_sub(wq_sub));
+	assert(wait_queue_is_set(wq_set));
 
 	q = &wq->wq_queue;
 
 	wq_element = (wait_queue_element_t) queue_first(q);
 	while (!queue_end(q, (queue_entry_t)wq_element)) {
-
-		if ((wq_element->wqe_event == WAIT_QUEUE_SUBORDINATE)) {
+		WAIT_QUEUE_ELEMENT_CHECK(wq, wq_element);
+		if ((wq_element->wqe_type == WAIT_QUEUE_LINK)) {
 			wait_queue_link_t wql = (wait_queue_link_t)wq_element;
 
-			if (wql->wql_subqueue == wq_sub)
+			if (wql->wql_setqueue == wq_set)
 				return TRUE;
 		}
 		wq_element = (wait_queue_element_t)
@@ -268,108 +354,88 @@ wait_queue_member_locked(
 /*
  *	Routine:	wait_queue_member
  *	Purpose:
- *		Indicate if this sub queue is a member of the queue
+ *		Indicate if this set queue is a member of the queue
  *	Conditions:
- *		The sub queue is just that, a sub queue
+ *		The set queue is just that, a set queue
  */
 boolean_t
 wait_queue_member(
 	wait_queue_t wq,
-	wait_queue_sub_t wq_sub)
+	wait_queue_set_t wq_set)
 {
 	boolean_t ret;
 	spl_t s;
 
-	assert(wait_queue_is_sub(wq_sub));
+	if (!wait_queue_is_set(wq_set))
+		return FALSE;
 
 	s = splsched();
 	wait_queue_lock(wq);
-	ret = wait_queue_member_locked(wq, wq_sub);
+	ret = wait_queue_member_locked(wq, wq_set);
 	wait_queue_unlock(wq);
 	splx(s);
 
 	return ret;
 }
 
-/*
- *	Routine:	wait_queue_link
- *	Purpose:
- *		Insert a subordinate wait queue into a wait queue.  This
- *		requires us to link the two together using a wait_queue_link
- *		structure that we allocate.
- *	Conditions:
- *		The wait queue being inserted must be inited as a sub queue
- *		The sub waitq is not already linked
- *
- */
-kern_return_t
-wait_queue_link(
-	wait_queue_t wq,
-	wait_queue_sub_t wq_sub)
-{
-	wait_queue_link_t wql;
-	spl_t s;
 
-	assert(wait_queue_is_sub(wq_sub));
-	assert(!wait_queue_member(wq, wq_sub));
-
-	wql = (wait_queue_link_t) kalloc(sizeof(struct wait_queue_link));
-	if (wql == WAIT_QUEUE_LINK_NULL)
-		return KERN_RESOURCE_SHORTAGE;
-	
-	wait_queue_link_init(wql);
-
-	s = splsched();
-	wait_queue_lock(wq);
-	wqs_lock(wq_sub);
-
-	wql->wql_queue = wq;
-	wql->wql_subqueue = wq_sub;
-	wql->wql_event = WAIT_QUEUE_SUBORDINATE;
-	queue_enter(&wq->wq_queue, wql, wait_queue_link_t, wql_links);
-	queue_enter(&wq_sub->wqs_sublinks, wql, wait_queue_link_t, wql_sublinks);
-	
-	wqs_unlock(wq_sub);
-	wait_queue_unlock(wq);
-	splx(s);
-
-	return KERN_SUCCESS;
-}	
 /*
  *	Routine:	wait_queue_link_noalloc
  *	Purpose:
- *		Insert a subordinate wait queue into a wait queue.  This
+ *		Insert a set wait queue into a wait queue.  This
  *		requires us to link the two together using a wait_queue_link
  *		structure that we allocate.
  *	Conditions:
- *		The wait queue being inserted must be inited as a sub queue
- *		The sub waitq is not already linked
- *
+ *		The wait queue being inserted must be inited as a set queue
  */
 kern_return_t
 wait_queue_link_noalloc(
 	wait_queue_t wq,
-	wait_queue_sub_t wq_sub,
+	wait_queue_set_t wq_set,
 	wait_queue_link_t wql)
 {
+	wait_queue_element_t wq_element;
+	queue_t q;
 	spl_t s;
 
-	assert(wait_queue_is_sub(wq_sub));
-	assert(!wait_queue_member(wq, wq_sub));
+	if (!wait_queue_is_queue(wq) || !wait_queue_is_set(wq_set))
+  		return KERN_INVALID_ARGUMENT;
 
-	wait_queue_link_init(wql);
-
+	/*
+	 * There are probably less threads and sets associated with
+	 * the wait queue, then there are wait queues associated with
+	 * the set.  So lets validate it that way.
+	 */
 	s = splsched();
 	wait_queue_lock(wq);
-	wqs_lock(wq_sub);
+	q = &wq->wq_queue;
+	wq_element = (wait_queue_element_t) queue_first(q);
+	while (!queue_end(q, (queue_entry_t)wq_element)) {
+		WAIT_QUEUE_ELEMENT_CHECK(wq, wq_element);
+		if (wq_element->wqe_type == WAIT_QUEUE_LINK &&
+		    ((wait_queue_link_t)wq_element)->wql_setqueue == wq_set) {
+			wait_queue_unlock(wq);
+			splx(s);
+			return KERN_ALREADY_IN_SET;
+		}
+		wq_element = (wait_queue_element_t)
+				queue_next((queue_t) wq_element);
+	}
+
+	/*
+	 * Not already a member, so we can add it.
+	 */
+	wqs_lock(wq_set);
+
+	WAIT_QUEUE_SET_CHECK(wq_set);
 
 	wql->wql_queue = wq;
-	wql->wql_subqueue = wq_sub;
-	wql->wql_event = WAIT_QUEUE_SUBORDINATE;
 	queue_enter(&wq->wq_queue, wql, wait_queue_link_t, wql_links);
-	queue_enter(&wq_sub->wqs_sublinks, wql, wait_queue_link_t, wql_sublinks);
-	
-	wqs_unlock(wq_sub);
+	wql->wql_setqueue = wq_set;
+	queue_enter(&wq_set->wqs_setlinks, wql, wait_queue_link_t, wql_setlinks);
+	wql->wql_type = WAIT_QUEUE_LINK;
+
+	wqs_unlock(wq_set);
 	wait_queue_unlock(wq);
 	splx(s);
 
@@ -377,159 +443,114 @@ wait_queue_link_noalloc(
 }	
 
 /*
- *	Routine:	wait_queue_unlink
+ *	Routine:	wait_queue_link
  *	Purpose:
- *		Remove the linkage between a wait queue and its subordinate.
+ *		Insert a set wait queue into a wait queue.  This
+ *		requires us to link the two together using a wait_queue_link
+ *		structure that we allocate.
  *	Conditions:
- *		The wait queue being must be a member sub queue
+ *		The wait queue being inserted must be inited as a set queue
  */
 kern_return_t
-wait_queue_unlink(
+wait_queue_link(
 	wait_queue_t wq,
-	wait_queue_sub_t wq_sub)
+	wait_queue_set_t wq_set)
 {
-	wait_queue_element_t wq_element;
-	queue_t q;
-	spl_t s;
+	wait_queue_link_t wql;
+	kern_return_t ret;
 
-	assert(wait_queue_is_sub(wq_sub));
-	assert(wait_queue_member(wq, wq_sub));
+	wql = (wait_queue_link_t) kalloc(sizeof(struct wait_queue_link));
+	if (wql == WAIT_QUEUE_LINK_NULL)
+		return KERN_RESOURCE_SHORTAGE;
 
-	s = splsched();
-	wait_queue_lock(wq);
-	wqs_lock(wq_sub);
+	ret = wait_queue_link_noalloc(wq, wq_set, wql);
+	if (ret != KERN_SUCCESS)
+		kfree((vm_offset_t)wql, sizeof(struct wait_queue_link));
 
-	q = &wq->wq_queue;
-
-	wq_element = (wait_queue_element_t) queue_first(q);
-	while (!queue_end(q, (queue_entry_t)wq_element)) {
-
-		if (wq_element->wqe_event == WAIT_QUEUE_SUBORDINATE) {
-			wait_queue_link_t wql = (wait_queue_link_t)wq_element;
-			queue_t sq;
-			
-			if (wql->wql_subqueue == wq_sub) {
-				sq = &wq_sub->wqs_sublinks;
-				queue_remove(q, wql, wait_queue_link_t, wql_links);
-				queue_remove(sq, wql, wait_queue_link_t, wql_sublinks);
-				wqs_unlock(wq_sub);
-				wait_queue_unlock(wq);
-				splx(s);
-				kfree((vm_offset_t)wql,sizeof(struct wait_queue_link));
-				return;
-			}
-		}
-
-		wq_element = (wait_queue_element_t)
-			     queue_next((queue_t) wq_element);
-	}
-	panic("wait_queue_unlink");
+	return ret;
 }	
+
 
 /*
  *	Routine:	wait_queue_unlink_nofree
  *	Purpose:
- *		Remove the linkage between a wait queue and its subordinate. Do not deallcoate the wql
- *	Conditions:
- *		The wait queue being must be a member sub queue
+ *		Undo the linkage between a wait queue and a set.
  */
-kern_return_t
-wait_queue_unlink_nofree(
+static void
+wait_queue_unlink_locked(
 	wait_queue_t wq,
-	wait_queue_sub_t wq_sub)
+	wait_queue_set_t wq_set,
+	wait_queue_link_t wql)
 {
-	wait_queue_element_t wq_element;
-	queue_t q;
+	assert(wait_queue_held(wq));
+	assert(wait_queue_held(&wq_set->wqs_wait_queue));
 
-	assert(wait_queue_is_sub(wq_sub));
+	wql->wql_queue = WAIT_QUEUE_NULL;
+	queue_remove(&wq->wq_queue, wql, wait_queue_link_t, wql_links);
+	wql->wql_setqueue = WAIT_QUEUE_SET_NULL;
+	queue_remove(&wq_set->wqs_setlinks, wql, wait_queue_link_t, wql_setlinks);
+	wql->wql_type = WAIT_QUEUE_UNLINKED;
 
-	q = &wq->wq_queue;
-
-	wq_element = (wait_queue_element_t) queue_first(q);
-	while (!queue_end(q, (queue_entry_t)wq_element)) {
-
-		if (wq_element->wqe_event == WAIT_QUEUE_SUBORDINATE) {
-			wait_queue_link_t wql = (wait_queue_link_t)wq_element;
-			queue_t sq;
-			
-			if (wql->wql_subqueue == wq_sub) {
-				sq = &wq_sub->wqs_sublinks;
-				queue_remove(q, wql, wait_queue_link_t, wql_links);
-				queue_remove(sq, wql, wait_queue_link_t, wql_sublinks);
-				return(KERN_SUCCESS);
-			}
-		}
-
-		wq_element = (wait_queue_element_t)
-			     queue_next((queue_t) wq_element);
-	}
-	/* due to dropping the sub's lock to get to this routine we can see
-	 * no entries in waitqueue. It is valid case, so we should just return
-	 */
-	return(KERN_FAILURE);
+	WAIT_QUEUE_CHECK(wq);
+	WAIT_QUEUE_SET_CHECK(wq_set);
 }
 
 /*
- *	Routine:	wait_subqueue_unlink_all
+ *	Routine:	wait_queue_unlink
  *	Purpose:
- *		Remove the linkage between a wait queue and its subordinate.
+ *		Remove the linkage between a wait queue and a set,
+ *		freeing the linkage structure.
  *	Conditions:
- *		The wait queue being must be a member sub queue
+ *		The wait queue being must be a member set queue
  */
 kern_return_t
-wait_subqueue_unlink_all(
-	wait_queue_sub_t wq_sub)
+wait_queue_unlink(
+	wait_queue_t wq,
+	wait_queue_set_t wq_set)
 {
+	wait_queue_element_t wq_element;
 	wait_queue_link_t wql;
-	wait_queue_t wq;
 	queue_t q;
-	kern_return_t kret;
 	spl_t s;
 
-	assert(wait_queue_is_sub(wq_sub));
-
-retry:
-	s = splsched();
-	wqs_lock(wq_sub);
-
-	q = &wq_sub->wqs_sublinks;
-
-	wql = (wait_queue_link_t)queue_first(q);
-	while (!queue_end(q, (queue_entry_t)wql)) {
-		wq = wql->wql_queue;
-		if (wait_queue_lock_try(wq)) {
-#if 0
-			queue_t q1;
-
-				q1 = &wq->wq_queue;
-
-				queue_remove(q1, wql, wait_queue_link_t, wql_links);
-				queue_remove(q, wql, wait_queue_link_t, wql_sublinks);
-#else
-				if ((kret = wait_queue_unlink_nofree(wq, wq_sub)) != KERN_SUCCESS) {
-				queue_remove(q, wql, wait_queue_link_t, wql_sublinks);
-
-}
-#endif
-				wait_queue_unlock(wq);
-				wql = (wait_queue_link_t)queue_first(q);
-		} else {
-			wqs_unlock(wq_sub);
-			splx(s);
-			mutex_pause();
-			goto retry;
-		}
+	if (!wait_queue_is_queue(wq) || !wait_queue_is_set(wq_set)) {
+		return KERN_INVALID_ARGUMENT;
 	}
-	wqs_unlock(wq_sub);
+	s = splsched();
+	wait_queue_lock(wq);
+
+	q = &wq->wq_queue;
+	wq_element = (wait_queue_element_t) queue_first(q);
+	while (!queue_end(q, (queue_entry_t)wq_element)) {
+		WAIT_QUEUE_ELEMENT_CHECK(wq, wq_element);
+		if (wq_element->wqe_type == WAIT_QUEUE_LINK) {
+		   	wql = (wait_queue_link_t)wq_element;
+			
+			if (wql->wql_setqueue == wq_set) {
+				wqs_lock(wq_set);
+				wait_queue_unlink_locked(wq, wq_set, wql);
+				wqs_unlock(wq_set);
+				wait_queue_unlock(wq);
+				splx(s);
+				kfree((vm_offset_t)wql, sizeof(struct wait_queue_link));
+				return KERN_SUCCESS;
+			}
+		}
+		wq_element = (wait_queue_element_t)
+				queue_next((queue_t) wq_element);
+	}
+	wait_queue_unlock(wq);
 	splx(s);
-	return(KERN_SUCCESS);
+	return KERN_NOT_IN_SET;
 }	
 
 
 /*
  *	Routine:	wait_queue_unlinkall_nofree
  *	Purpose:
- *		Remove the linkage between a wait queue and all subordinates.
+ *		Remove the linkage between a wait queue and all its
+ *		sets. The caller is responsible for freeing
+ *		the wait queue link structures.
  */
 
 kern_return_t
@@ -537,10 +558,19 @@ wait_queue_unlinkall_nofree(
 	wait_queue_t wq)
 {
 	wait_queue_element_t wq_element;
-	wait_queue_sub_t wq_sub;
+	wait_queue_element_t wq_next_element;
+	wait_queue_set_t wq_set;
+	wait_queue_link_t wql;
+	queue_head_t links_queue_head;
+	queue_t links = &links_queue_head;
 	queue_t q;
 	spl_t s;
 
+	if (!wait_queue_is_queue(wq)) {
+		return KERN_INVALID_ARGUMENT;
+	}
+
+	queue_init(links);
 
 	s = splsched();
 	wait_queue_lock(wq);
@@ -549,40 +579,215 @@ wait_queue_unlinkall_nofree(
 
 	wq_element = (wait_queue_element_t) queue_first(q);
 	while (!queue_end(q, (queue_entry_t)wq_element)) {
-
-		if (wq_element->wqe_event == WAIT_QUEUE_SUBORDINATE) {
-			wait_queue_link_t wql = (wait_queue_link_t)wq_element;
-			queue_t sq;
-			
-				wq_sub = wql->wql_subqueue;
-				wqs_lock(wq_sub);
-				sq = &wq_sub->wqs_sublinks;
-				queue_remove(q, wql, wait_queue_link_t, wql_links);
-				queue_remove(sq, wql, wait_queue_link_t, wql_sublinks);
-				wqs_unlock(wq_sub);
-				wq_element = (wait_queue_element_t) queue_first(q);
-		} else {
-			wq_element = (wait_queue_element_t)
+		WAIT_QUEUE_ELEMENT_CHECK(wq, wq_element);
+		wq_next_element = (wait_queue_element_t)
 			     queue_next((queue_t) wq_element);
-		}
 
+		if (wq_element->wqe_type == WAIT_QUEUE_LINK) {
+			wql = (wait_queue_link_t)wq_element;
+			wq_set = wql->wql_setqueue;
+			wqs_lock(wq_set);
+			wait_queue_unlink_locked(wq, wq_set, wql);
+			wqs_unlock(wq_set);
+		}
+		wq_element = wq_next_element;
+	}
+	wait_queue_unlock(wq);
+	splx(s);
+	return(KERN_SUCCESS);
+}	
+
+
+/*
+ *	Routine:	wait_queue_unlink_all
+ *	Purpose:
+ *		Remove the linkage between a wait queue and all its	sets.
+ *		All the linkage structures are freed.
+ *	Conditions:
+ *		Nothing of interest locked.
+ */
+
+kern_return_t
+wait_queue_unlink_all(
+	wait_queue_t wq)
+{
+	wait_queue_element_t wq_element;
+	wait_queue_element_t wq_next_element;
+	wait_queue_set_t wq_set;
+	wait_queue_link_t wql;
+	queue_head_t links_queue_head;
+	queue_t links = &links_queue_head;
+	queue_t q;
+	spl_t s;
+
+	if (!wait_queue_is_queue(wq)) {
+		return KERN_INVALID_ARGUMENT;
+	}
+
+	queue_init(links);
+
+	s = splsched();
+	wait_queue_lock(wq);
+
+	q = &wq->wq_queue;
+
+	wq_element = (wait_queue_element_t) queue_first(q);
+	while (!queue_end(q, (queue_entry_t)wq_element)) {
+		WAIT_QUEUE_ELEMENT_CHECK(wq, wq_element);
+		wq_next_element = (wait_queue_element_t)
+			     queue_next((queue_t) wq_element);
+
+		if (wq_element->wqe_type == WAIT_QUEUE_LINK) {
+			wql = (wait_queue_link_t)wq_element;
+			wq_set = wql->wql_setqueue;
+			wqs_lock(wq_set);
+			wait_queue_unlink_locked(wq, wq_set, wql);
+			wqs_unlock(wq_set);
+			enqueue(links, &wql->wql_links);
+		}
+		wq_element = wq_next_element;
 	}
 	wait_queue_unlock(wq);
 	splx(s);
 
+	while(!queue_empty(links)) {
+		wql = (wait_queue_link_t) dequeue(links);
+		kfree((vm_offset_t) wql, sizeof(struct wait_queue_link));
+	}
+
 	return(KERN_SUCCESS);
 }	
+
+/*
+ *	Routine:	wait_queue_set_unlink_all_nofree
+ *	Purpose:
+ *		Remove the linkage between a set wait queue and all its
+ *		member wait queues. The link structures are not freed, nor
+ *		returned. It is the caller's responsibility to track and free
+ *		them.
+ *	Conditions:
+ *		The wait queue being must be a member set queue
+ */
+kern_return_t
+wait_queue_set_unlink_all_nofree(
+	wait_queue_set_t wq_set)
+{
+	wait_queue_link_t wql;
+	wait_queue_t wq;
+	queue_t q;
+	kern_return_t kret;
+	spl_t s;
+
+	if (!wait_queue_is_set(wq_set)) {
+		return KERN_INVALID_ARGUMENT;
+	}
+
+retry:
+	s = splsched();
+	wqs_lock(wq_set);
+
+	q = &wq_set->wqs_setlinks;
+
+	wql = (wait_queue_link_t)queue_first(q);
+	while (!queue_end(q, (queue_entry_t)wql)) {
+		WAIT_QUEUE_SET_LINK_CHECK(wq_set, wql);
+		wq = wql->wql_queue;
+		if (wait_queue_lock_try(wq)) {
+			wait_queue_unlink_locked(wq, wq_set, wql);
+			wait_queue_unlock(wq);
+			wql = (wait_queue_link_t)queue_first(q);
+		} else {
+			wqs_unlock(wq_set);
+			splx(s);
+			delay(1);
+			goto retry;
+		}
+	}
+	wqs_unlock(wq_set);
+	splx(s);
+
+	return(KERN_SUCCESS);
+}	
+
+/* legacy interface naming */
+kern_return_t
+wait_subqueue_unlink_all(
+	wait_queue_set_t	wq_set)
+{
+	return wait_queue_set_unlink_all_nofree(wq_set);
+}
+
+
+/*
+ *	Routine:	wait_queue_set_unlink_all
+ *	Purpose:
+ *		Remove the linkage between a set wait queue and all its
+ *		member wait queues. The link structures are freed.
+ *	Conditions:
+ *		The wait queue must be a set
+ */
+kern_return_t
+wait_queue_set_unlink_all(
+	wait_queue_set_t wq_set)
+{
+	wait_queue_link_t wql;
+	wait_queue_t wq;
+	queue_t q;
+	queue_head_t links_queue_head;
+	queue_t links = &links_queue_head;
+	kern_return_t kret;
+	spl_t s;
+
+	if (!wait_queue_is_set(wq_set)) {
+		return KERN_INVALID_ARGUMENT;
+	}
+
+	queue_init(links);
+
+retry:
+	s = splsched();
+	wqs_lock(wq_set);
+
+	q = &wq_set->wqs_setlinks;
+
+	wql = (wait_queue_link_t)queue_first(q);
+	while (!queue_end(q, (queue_entry_t)wql)) {
+		WAIT_QUEUE_SET_LINK_CHECK(wq_set, wql);
+		wq = wql->wql_queue;
+		if (wait_queue_lock_try(wq)) {
+			wait_queue_unlink_locked(wq, wq_set, wql);
+			wait_queue_unlock(wq);
+			enqueue(links, &wql->wql_links);
+			wql = (wait_queue_link_t)queue_first(q);
+		} else {
+			wqs_unlock(wq_set);
+			splx(s);
+			delay(1);
+			goto retry;
+		}
+	}
+	wqs_unlock(wq_set);
+	splx(s);
+
+	while (!queue_empty (links)) {
+		wql = (wait_queue_link_t) dequeue(links);
+		kfree((vm_offset_t)wql, sizeof(struct wait_queue_link));
+	}
+	return(KERN_SUCCESS);
+}	
+
+
 /*
  *	Routine:	wait_queue_unlink_one
  *	Purpose:
- *		Find and unlink one subordinate wait queue
+ *		Find and unlink one set wait queue
  *	Conditions:
  *		Nothing of interest locked.
  */
 void
 wait_queue_unlink_one(
 	wait_queue_t wq,
-	wait_queue_sub_t *wq_subp)
+	wait_queue_set_t *wq_setp)
 {
 	wait_queue_element_t wq_element;
 	queue_t q;
@@ -592,37 +797,35 @@ wait_queue_unlink_one(
 	wait_queue_lock(wq);
 
 	q = &wq->wq_queue;
-
+	
 	wq_element = (wait_queue_element_t) queue_first(q);
 	while (!queue_end(q, (queue_entry_t)wq_element)) {
 
-		if (wq_element->wqe_event == WAIT_QUEUE_SUBORDINATE) {
+		if (wq_element->wqe_type == WAIT_QUEUE_LINK) {
 			wait_queue_link_t wql = (wait_queue_link_t)wq_element;
-			wait_queue_sub_t wq_sub = wql->wql_subqueue;
-			queue_t sq;
-
-			wqs_lock(wq_sub);
-			sq = &wq_sub->wqs_sublinks;
-			queue_remove(q, wql, wait_queue_link_t, wql_links);
-			queue_remove(sq, wql, wait_queue_link_t, wql_sublinks);
-			wqs_unlock(wq_sub);
+			wait_queue_set_t wq_set = wql->wql_setqueue;
+			
+			wqs_lock(wq_set);
+			wait_queue_unlink_locked(wq, wq_set, wql);
+			wqs_unlock(wq_set);
 			wait_queue_unlock(wq);
 			splx(s);
 			kfree((vm_offset_t)wql,sizeof(struct wait_queue_link));
-			*wq_subp = wq_sub;
+			*wq_setp = wq_set;
 			return;
 		}
 
 		wq_element = (wait_queue_element_t)
-			     queue_next((queue_t) wq_element);
+			queue_next((queue_t) wq_element);
 	}
 	wait_queue_unlock(wq);
 	splx(s);
-	*wq_subp = WAIT_QUEUE_SUB_NULL;
-}	
+	*wq_setp = WAIT_QUEUE_SET_NULL;
+}
+
 
 /*
- *	Routine:	wait_queue_assert_wait_locked
+ *	Routine:	wait_queue_assert_wait64_locked
  *	Purpose:
  *		Insert the current thread into the supplied wait queue
  *		waiting for a particular event to be posted to that queue.
@@ -631,46 +834,46 @@ wait_queue_unlink_one(
  *		The wait queue is assumed locked.
  *
  */
-boolean_t
-wait_queue_assert_wait_locked(
+__private_extern__ wait_result_t
+wait_queue_assert_wait64_locked(
 	wait_queue_t wq,
-	event_t event,
-	int interruptible,
+	event64_t event,
+	wait_interrupt_t interruptible,
 	boolean_t unlock)
 {
-	thread_t thread = current_thread();
-	boolean_t ret;
+	thread_t thread;
+	wait_result_t wait_result;
 
-
-	if (wq->wq_issub && wq->wq_isprepost) {
-		wait_queue_sub_t wqs = (wait_queue_sub_t)wq;
-
-		if (wqs->wqs_refcount > 0) {
+	if (wq->wq_type == _WAIT_QUEUE_SET_inited) {
+		wait_queue_set_t wqs = (wait_queue_set_t)wq;
+		if (wqs->wqs_isprepost && wqs->wqs_refcount > 0) {
 			if (unlock)
 				wait_queue_unlock(wq);
-			return(FALSE);
+			return(THREAD_AWAKENED);
 		}
 	}
-
-	thread_lock(thread);
-
+	  
 	/*
 	 * This is the extent to which we currently take scheduling attributes
 	 * into account.  If the thread is vm priviledged, we stick it at
 	 * the front of the queue.  Later, these queues will honor the policy
 	 * value set at wait_queue_init time.
 	 */
-	if (thread->vm_privilege)
-		enqueue_head(&wq->wq_queue, (queue_entry_t) thread);
-	else
-		enqueue_tail(&wq->wq_queue, (queue_entry_t) thread);
-	thread->wait_event = event;
-	thread->wait_queue = wq;
-	thread_mark_wait_locked(thread, interruptible);
+	thread = current_thread();
+	thread_lock(thread);
+	wait_result = thread_mark_wait_locked(thread, interruptible);
+	if (wait_result == THREAD_WAITING) {
+		if (thread->vm_privilege)
+			enqueue_head(&wq->wq_queue, (queue_entry_t) thread);
+		else
+			enqueue_tail(&wq->wq_queue, (queue_entry_t) thread);
+		thread->wait_event = event;
+		thread->wait_queue = wq;
+	}
 	thread_unlock(thread);
 	if (unlock)
 		wait_queue_unlock(wq);
-	return(TRUE);
+	return(wait_result);
 }
 
 /*
@@ -682,18 +885,57 @@ wait_queue_assert_wait_locked(
  *	Conditions:
  *		nothing of interest locked.
  */
-boolean_t
+wait_result_t
 wait_queue_assert_wait(
 	wait_queue_t wq,
 	event_t event,
-	int interruptible)
+	wait_interrupt_t interruptible)
 {
 	spl_t s;
-	boolean_t ret;
+	wait_result_t ret;
+
+	/* If it is an invalid wait queue, you can't wait on it */
+	if (!wait_queue_is_valid(wq)) {
+		thread_t thread = current_thread();
+		return (thread->wait_result = THREAD_RESTART);
+	}
 
 	s = splsched();
 	wait_queue_lock(wq);
-	ret = wait_queue_assert_wait_locked(wq, event, interruptible, TRUE);
+	ret = wait_queue_assert_wait64_locked(
+				wq, (event64_t)((uint32_t)event),
+				interruptible, TRUE);
+	/* wait queue unlocked */
+	splx(s);
+	return(ret);
+}
+
+/*
+ *	Routine:	wait_queue_assert_wait64
+ *	Purpose:
+ *		Insert the current thread into the supplied wait queue
+ *		waiting for a particular event to be posted to that queue.
+ *	Conditions:
+ *		nothing of interest locked.
+ */
+wait_result_t
+wait_queue_assert_wait64(
+	wait_queue_t wq,
+	event64_t event,
+	wait_interrupt_t interruptible)
+{
+	spl_t s;
+	wait_result_t ret;
+
+	/* If it is an invalid wait queue, you cant wait on it */
+	if (!wait_queue_is_valid(wq)) {
+		thread_t thread = current_thread();
+		return (thread->wait_result = THREAD_RESTART);
+	}
+
+	s = splsched();
+	wait_queue_lock(wq);
+	ret = wait_queue_assert_wait64_locked(wq, event, interruptible, TRUE);
 	/* wait queue unlocked */
 	splx(s);
 	return(ret);
@@ -701,24 +943,22 @@ wait_queue_assert_wait(
 
 
 /*
- *	Routine:	wait_queue_select_all
+ *	Routine:	_wait_queue_select64_all
  *	Purpose:
  *		Select all threads off a wait queue that meet the
  *		supplied criteria.
- *
  *	Conditions:
  *		at splsched
  *		wait queue locked
  *		wake_queue initialized and ready for insertion
  *		possibly recursive
- *
  *	Returns:
  *		a queue of locked threads
  */
-void
-_wait_queue_select_all(
+static void
+_wait_queue_select64_all(
 	wait_queue_t wq,
-	event_t event,
+	event64_t event,
 	queue_t wake_queue)
 {
 	wait_queue_element_t wq_element;
@@ -729,33 +969,34 @@ _wait_queue_select_all(
 
 	wq_element = (wait_queue_element_t) queue_first(q);
 	while (!queue_end(q, (queue_entry_t)wq_element)) {
+		WAIT_QUEUE_ELEMENT_CHECK(wq, wq_element);
 		wqe_next = (wait_queue_element_t)
 			   queue_next((queue_t) wq_element);
 
 		/*
 		 * We may have to recurse if this is a compound wait queue.
 		 */
-		if (wq_element->wqe_event == WAIT_QUEUE_SUBORDINATE) {
+		if (wq_element->wqe_type == WAIT_QUEUE_LINK) {
 			wait_queue_link_t wql = (wait_queue_link_t)wq_element;
-			wait_queue_t sub_queue;
+			wait_queue_t set_queue;
 
 			/*
-			 * We have to check the subordinate wait queue.
+			 * We have to check the set wait queue.
 			 */
-			sub_queue = (wait_queue_t)wql->wql_subqueue;
-			wait_queue_lock(sub_queue);
-			if (sub_queue->wq_isprepost) {
-				wait_queue_sub_t wqs = (wait_queue_sub_t)sub_queue;
+			set_queue = (wait_queue_t)wql->wql_setqueue;
+			wait_queue_lock(set_queue);
+			if (set_queue->wq_isprepost) {
+				wait_queue_set_t wqs = (wait_queue_set_t)set_queue;
 				
 				/*
-				 * Preposting is only for subordinates and wait queue
-				 * is the first element of subordinate 
+				 * Preposting is only for sets and wait queue
+				 * is the first element of set 
 				 */
 				wqs->wqs_refcount++;
 			}
-			if (! wait_queue_empty(sub_queue)) 
-				_wait_queue_select_all(sub_queue, event, wake_queue);
-			wait_queue_unlock(sub_queue);
+			if (! wait_queue_empty(set_queue)) 
+				_wait_queue_select64_all(set_queue, event, wake_queue);
+			wait_queue_unlock(set_queue);
 		} else {
 			
 			/*
@@ -770,7 +1011,7 @@ _wait_queue_select_all(
 				remqueue(q, (queue_entry_t) t);
 				enqueue (wake_queue, (queue_entry_t) t);
 				t->wait_queue = WAIT_QUEUE_NULL;
-				t->wait_event = NO_EVENT;
+				t->wait_event = NO_EVENT64;
 				t->at_safe_point = FALSE;
 				/* returned locked */
 			}
@@ -780,86 +1021,121 @@ _wait_queue_select_all(
 }
 
 /*
- *      Routine:        wait_queue_wakeup_all_locked
- *      Purpose:
- *              Wakeup some number of threads that are in the specified
- *              wait queue and waiting on the specified event.
- *      Conditions:
- *              wait queue already locked (may be released).
- *      Returns:
- *              KERN_SUCCESS - Threads were woken up
- *              KERN_NOT_WAITING - No threads were waiting <wq,event> pair
+ *	Routine:        wait_queue_wakeup64_all_locked
+ *	Purpose:
+ *		Wakeup some number of threads that are in the specified
+ *		wait queue and waiting on the specified event.
+ *	Conditions:
+ *		wait queue already locked (may be released).
+ *	Returns:
+ *		KERN_SUCCESS - Threads were woken up
+ *		KERN_NOT_WAITING - No threads were waiting <wq,event> pair
  */
-kern_return_t
-wait_queue_wakeup_all_locked(
-        wait_queue_t wq,
-        event_t event,
-        int result,
-        boolean_t unlock)
+__private_extern__ kern_return_t
+wait_queue_wakeup64_all_locked(
+	wait_queue_t wq,
+	event64_t event,
+	wait_result_t result,
+	boolean_t unlock)
 {
-        queue_head_t wake_queue_head;
-        queue_t q = &wake_queue_head;
-        kern_return_t ret = KERN_NOT_WAITING;
+	queue_head_t wake_queue_head;
+	queue_t q = &wake_queue_head;
+	kern_return_t res;
 
-        assert(wait_queue_held(wq));
+	assert(wait_queue_held(wq));
+	queue_init(q);
 
-        queue_init(q);
+	/*
+	 * Select the threads that we will wake up.	 The threads
+	 * are returned to us locked and cleanly removed from the
+	 * wait queue.
+	 */
+	_wait_queue_select64_all(wq, event, q);
+	if (unlock)
+		wait_queue_unlock(wq);
 
-        /*
-         * Select the threads that we will wake up.  The threads
-         * are returned to us locked and cleanly removed from the
-         * wait queue.
-         */
-        _wait_queue_select_all(wq, event, q);
-        if (unlock)
-            wait_queue_unlock(wq);
-
-        /*
-         * For each thread, set it running.
-         */
-        while (!queue_empty (q)) {
-                thread_t thread = (thread_t) dequeue(q);
-                thread_go_locked(thread, result);
-                thread_unlock(thread);
-                ret = KERN_SUCCESS;
-        }
-        return ret;
+	/*
+	 * For each thread, set it running.
+	 */
+	res = KERN_NOT_WAITING;
+	while (!queue_empty (q)) {
+		thread_t thread = (thread_t) dequeue(q);
+		res = thread_go_locked(thread, result);
+		assert(res == KERN_SUCCESS);
+		thread_unlock(thread);
+	}
+	return res;
 }
 
 
 /*
- *      Routine:        wait_queue_wakeup_all
- *      Purpose:
- *              Wakeup some number of threads that are in the specified
- *              wait queue and waiting on the specified event.
- *
- *      Conditions:
- *              Nothing locked
- *
- *      Returns:
- *              KERN_SUCCESS - Threads were woken up
- *              KERN_NOT_WAITING - No threads were waiting <wq,event> pair
+ *	Routine:		wait_queue_wakeup_all
+ *	Purpose:
+ *		Wakeup some number of threads that are in the specified
+ *		wait queue and waiting on the specified event.
+ *	Conditions:
+ *		Nothing locked
+ *	Returns:
+ *		KERN_SUCCESS - Threads were woken up
+ *		KERN_NOT_WAITING - No threads were waiting <wq,event> pair
  */
 kern_return_t
 wait_queue_wakeup_all(
-        wait_queue_t wq,
-        event_t event,
-        int result)
+	wait_queue_t wq,
+	event_t event,
+	wait_result_t result)
 {
-        kern_return_t ret;
-        spl_t s;
+	kern_return_t ret;
+	spl_t s;
 
-        s = splsched();
-        wait_queue_lock(wq);
-        ret = wait_queue_wakeup_all_locked(wq, event, result, TRUE);
-        /* lock released */
-        splx(s);
+	if (!wait_queue_is_valid(wq)) {
+		return KERN_INVALID_ARGUMENT;
+	}
 
-        return ret;
+	s = splsched();
+	wait_queue_lock(wq);
+	ret = wait_queue_wakeup64_all_locked(
+				wq, (event64_t)((uint32_t)event),
+				result, TRUE);
+	/* lock released */
+	splx(s);
+	return ret;
 }
 
 /*
- *	Routine:	wait_queue_select_one
+ *	Routine:		wait_queue_wakeup64_all
+ *	Purpose:
+ *		Wakeup some number of threads that are in the specified
+ *		wait queue and waiting on the specified event.
+ *	Conditions:
+ *		Nothing locked
+ *	Returns:
+ *		KERN_SUCCESS - Threads were woken up
+ *		KERN_NOT_WAITING - No threads were waiting <wq,event> pair
+ */
+kern_return_t
+wait_queue_wakeup64_all(
+	wait_queue_t wq,
+	event64_t event,
+	wait_result_t result)
+{
+	kern_return_t ret;
+	spl_t s;
+
+	if (!wait_queue_is_valid(wq)) {
+		return KERN_INVALID_ARGUMENT;
+	}
+
+	s = splsched();
+	wait_queue_lock(wq);
+	ret = wait_queue_wakeup64_all_locked(wq, event, result, TRUE);
+	/* lock released */
+	splx(s);
+	return ret;
+}
+
+/*
+ *	Routine:	_wait_queue_select64_one
  *	Purpose:
  *		Select the best thread off a wait queue that meet the
  *		supplied criteria.
@@ -873,10 +1149,10 @@ wait_queue_wakeup_all(
  *		This is where the sync policy of the wait queue comes
  *		into effect.  For now, we just assume FIFO.
  */
-thread_t
-_wait_queue_select_one(
+static thread_t
+_wait_queue_select64_one(
 	wait_queue_t wq,
-	event_t event)
+	event64_t event)
 {
 	wait_queue_element_t wq_element;
 	wait_queue_element_t wqe_next;
@@ -889,25 +1165,26 @@ _wait_queue_select_one(
 
 	wq_element = (wait_queue_element_t) queue_first(q);
 	while (!queue_end(q, (queue_entry_t)wq_element)) {
+		WAIT_QUEUE_ELEMENT_CHECK(wq, wq_element);
 		wqe_next = (wait_queue_element_t)
 			       queue_next((queue_t) wq_element);
 
 		/*
 		 * We may have to recurse if this is a compound wait queue.
 		 */
-		if (wq_element->wqe_event == WAIT_QUEUE_SUBORDINATE) {
+		if (wq_element->wqe_type == WAIT_QUEUE_LINK) {
 			wait_queue_link_t wql = (wait_queue_link_t)wq_element;
-			wait_queue_t sub_queue;
+			wait_queue_t set_queue;
 
 			/*
-			 * We have to check the subordinate wait queue.
+			 * We have to check the set wait queue.
 			 */
-			sub_queue = (wait_queue_t)wql->wql_subqueue;
-			wait_queue_lock(sub_queue);
-			if (! wait_queue_empty(sub_queue)) {
-				t = _wait_queue_select_one(sub_queue, event);
+			set_queue = (wait_queue_t)wql->wql_setqueue;
+			wait_queue_lock(set_queue);
+			if (! wait_queue_empty(set_queue)) {
+				t = _wait_queue_select64_one(set_queue, event);
 			}
-			wait_queue_unlock(sub_queue);
+			wait_queue_unlock(set_queue);
 			if (t != THREAD_NULL)
 				return t;
 		} else {
@@ -923,7 +1200,7 @@ _wait_queue_select_one(
 				thread_lock(t);
 				remqueue(q, (queue_entry_t) t);
 				t->wait_queue = WAIT_QUEUE_NULL;
-				t->wait_event = NO_EVENT;
+				t->wait_event = NO_EVENT64;
 				t->at_safe_point = FALSE;
 				return t;	/* still locked */
 			}
@@ -934,10 +1211,10 @@ _wait_queue_select_one(
 }
 
 /*
- *	Routine:	wait_queue_peek_locked
+ *	Routine:	wait_queue_peek64_locked
  *	Purpose:
  *		Select the best thread from a wait queue that meet the
- *		supplied criteria, but leave it on the queue you it was
+ *		supplied criteria, but leave it on the queue it was
  *		found on.  The thread, and the actual wait_queue the
  *		thread was found on are identified.
  * 	Conditions:
@@ -948,13 +1225,13 @@ _wait_queue_select_one(
  *		a locked thread - if one found
  *		a locked waitq - the one the thread was found on
  *	Note:
- *		Only the waitq the thread was actually found on is locked
- *		after this.
+ *		Both the waitq the thread was actually found on, and
+ *		the supplied wait queue, are locked after this.
  */
-void
-wait_queue_peek_locked(
+__private_extern__ void
+wait_queue_peek64_locked(
 	wait_queue_t wq,
-	event_t event,
+	event64_t event,
 	thread_t *tp,
 	wait_queue_t *wqp)
 {
@@ -971,28 +1248,32 @@ wait_queue_peek_locked(
 
 	wq_element = (wait_queue_element_t) queue_first(q);
 	while (!queue_end(q, (queue_entry_t)wq_element)) {
+		WAIT_QUEUE_ELEMENT_CHECK(wq, wq_element);
 		wqe_next = (wait_queue_element_t)
 			       queue_next((queue_t) wq_element);
 
 		/*
 		 * We may have to recurse if this is a compound wait queue.
 		 */
-		if (wq_element->wqe_event == WAIT_QUEUE_SUBORDINATE) {
+		if (wq_element->wqe_type == WAIT_QUEUE_LINK) {
 			wait_queue_link_t wql = (wait_queue_link_t)wq_element;
-			wait_queue_t sub_queue;
+			wait_queue_t set_queue;
 
 			/*
-			 * We have to check the subordinate wait queue.
+			 * We have to check the set wait queue.
 			 */
-			sub_queue = (wait_queue_t)wql->wql_subqueue;
-			wait_queue_lock(sub_queue);
-			if (! wait_queue_empty(sub_queue)) {
-				wait_queue_peek_locked(sub_queue, event, tp, wqp);
+			set_queue = (wait_queue_t)wql->wql_setqueue;
+			wait_queue_lock(set_queue);
+			if (! wait_queue_empty(set_queue)) {
+				wait_queue_peek64_locked(set_queue, event, tp, wqp);
 			}
-			if (*tp != THREAD_NULL)
+			if (*tp != THREAD_NULL) {
+				if (*wqp != set_queue)
+					wait_queue_unlock(set_queue);
 				return;  /* thread and its waitq locked */
+			}
 
-			wait_queue_unlock(sub_queue);
+			wait_queue_unlock(set_queue);
 		} else {
 			
 			/*
@@ -1036,7 +1317,7 @@ wait_queue_pull_thread_locked(
 
 	remqueue(&waitq->wq_queue, (queue_entry_t)thread );
 	thread->wait_queue = WAIT_QUEUE_NULL;
-	thread->wait_event = NO_EVENT;
+	thread->wait_event = NO_EVENT64;
 	thread->at_safe_point = FALSE;
 	if (unlock)
 		wait_queue_unlock(waitq);
@@ -1044,7 +1325,7 @@ wait_queue_pull_thread_locked(
 
 
 /*
- *	Routine:	wait_queue_select_thread
+ *	Routine:	wait_queue_select64_thread
  *	Purpose:
  *		Look for a thread and remove it from the queues, if
  *		(and only if) the thread is waiting on the supplied
@@ -1057,10 +1338,10 @@ wait_queue_pull_thread_locked(
  *		KERN_NOT_WAITING: Thread is not waiting here.
  *		KERN_SUCCESS: It was, and is now removed (returned locked)
  */
-kern_return_t
-_wait_queue_select_thread(
+static kern_return_t
+_wait_queue_select64_thread(
 	wait_queue_t wq,
-	event_t event,
+	event64_t event,
 	thread_t thread)
 {
 	wait_queue_element_t wq_element;
@@ -1068,13 +1349,11 @@ _wait_queue_select_thread(
 	kern_return_t res = KERN_NOT_WAITING;
 	queue_t q = &wq->wq_queue;
 
-	assert(wq->wq_fifo);
-
 	thread_lock(thread);
 	if ((thread->wait_queue == wq) && (thread->wait_event == event)) {
 		remqueue(q, (queue_entry_t) thread);
 		thread->at_safe_point = FALSE;
-		thread->wait_event = NO_EVENT;
+		thread->wait_event = NO_EVENT64;
 		thread->wait_queue = WAIT_QUEUE_NULL;
 		/* thread still locked */
 		return KERN_SUCCESS;
@@ -1083,26 +1362,27 @@ _wait_queue_select_thread(
 	
 	/*
 	 * The wait_queue associated with the thread may be one of this
-	 * wait queue's subordinates.  Go see.  If so, removing it from
+	 * wait queue's sets.  Go see.  If so, removing it from
 	 * there is like removing it from here.
 	 */
 	wq_element = (wait_queue_element_t) queue_first(q);
 	while (!queue_end(q, (queue_entry_t)wq_element)) {
+		WAIT_QUEUE_ELEMENT_CHECK(wq, wq_element);
 		wqe_next = (wait_queue_element_t)
 			       queue_next((queue_t) wq_element);
 
-		if (wq_element->wqe_event == WAIT_QUEUE_SUBORDINATE) {
+		if (wq_element->wqe_type == WAIT_QUEUE_LINK) {
 			wait_queue_link_t wql = (wait_queue_link_t)wq_element;
-			wait_queue_t sub_queue;
+			wait_queue_t set_queue;
 
-			sub_queue = (wait_queue_t)wql->wql_subqueue;
-			wait_queue_lock(sub_queue);
-			if (! wait_queue_empty(sub_queue)) {
-				res = _wait_queue_select_thread(sub_queue,
+			set_queue = (wait_queue_t)wql->wql_setqueue;
+			wait_queue_lock(set_queue);
+			if (! wait_queue_empty(set_queue)) {
+				res = _wait_queue_select64_thread(set_queue,
 								event,
 								thread);
 			}
-			wait_queue_unlock(sub_queue);
+			wait_queue_unlock(set_queue);
 			if (res == KERN_SUCCESS)
 				return KERN_SUCCESS;
 		}
@@ -1113,7 +1393,7 @@ _wait_queue_select_thread(
 
 
 /*
- *	Routine:	wait_queue_wakeup_identity_locked
+ *	Routine:	wait_queue_wakeup64_identity_locked
  *	Purpose:
  *		Select a single thread that is most-eligible to run and set
  *		set it running.  But return the thread locked.
@@ -1125,29 +1405,33 @@ _wait_queue_select_thread(
  * 	Returns:
  *		a pointer to the locked thread that was awakened
  */
-thread_t
-wait_queue_wakeup_identity_locked(
+__private_extern__ thread_t
+wait_queue_wakeup64_identity_locked(
 	wait_queue_t wq,
-	event_t event,
-	int result,
+	event64_t event,
+	wait_result_t result,
 	boolean_t unlock)
 {
+	kern_return_t res;
 	thread_t thread;
 
 	assert(wait_queue_held(wq));
 
-	thread = _wait_queue_select_one(wq, event);
+
+	thread = _wait_queue_select64_one(wq, event);
 	if (unlock)
 		wait_queue_unlock(wq);
 
-	if (thread)
-		thread_go_locked(thread, result);
+	if (thread) {
+		res = thread_go_locked(thread, result);
+		assert(res == KERN_SUCCESS);
+	}
 	return thread;  /* still locked if not NULL */
 }
 
 
 /*
- *	Routine:	wait_queue_wakeup_one_locked
+ *	Routine:	wait_queue_wakeup64_one_locked
  *	Purpose:
  *		Select a single thread that is most-eligible to run and set
  *		set it runnings.
@@ -1160,25 +1444,28 @@ wait_queue_wakeup_identity_locked(
  *		KERN_SUCCESS: It was, and is, now removed.
  *		KERN_NOT_WAITING - No thread was waiting <wq,event> pair
  */
-kern_return_t
-wait_queue_wakeup_one_locked(
+__private_extern__ kern_return_t
+wait_queue_wakeup64_one_locked(
 	wait_queue_t wq,
-	event_t event,
-	int result,
+	event64_t event,
+	wait_result_t result,
 	boolean_t unlock)
 {
 	thread_t thread;
 
 	assert(wait_queue_held(wq));
 
-	thread = _wait_queue_select_one(wq, event);
+	thread = _wait_queue_select64_one(wq, event);
 	if (unlock)
 		wait_queue_unlock(wq);
 
 	if (thread) {
-		thread_go_locked(thread, result);
+		kern_return_t res;
+		
+		res = thread_go_locked(thread, result);
+		assert(res == KERN_SUCCESS);
 		thread_unlock(thread);
-		return KERN_SUCCESS;
+		return res;
 	}
 
 	return KERN_NOT_WAITING;
@@ -1189,10 +1476,8 @@ wait_queue_wakeup_one_locked(
  *	Purpose:
  *		Wakeup the most appropriate thread that is in the specified
  *		wait queue for the specified event.
- *
  *	Conditions:
  *		Nothing locked
- *
  *	Returns:
  *		KERN_SUCCESS - Thread was woken up
  *		KERN_NOT_WAITING - No thread was waiting <wq,event> pair
@@ -1201,21 +1486,70 @@ kern_return_t
 wait_queue_wakeup_one(
 	wait_queue_t wq,
 	event_t event,
-	int result)
+	wait_result_t result)
 {
 	thread_t thread;
 	spl_t s;
 
+	if (!wait_queue_is_valid(wq)) {
+		return KERN_INVALID_ARGUMENT;
+	}
+
 	s = splsched();
 	wait_queue_lock(wq);
-	thread = _wait_queue_select_one(wq, event);
+	thread = _wait_queue_select64_one(wq, (event64_t)((uint32_t)event));
 	wait_queue_unlock(wq);
 
 	if (thread) {
-		thread_go_locked(thread, result);
+		kern_return_t res;
+
+		res = thread_go_locked(thread, result);
+		assert(res == KERN_SUCCESS);
 		thread_unlock(thread);
 		splx(s);
-		return KERN_SUCCESS;
+		return res;
+	}
+
+	splx(s);
+	return KERN_NOT_WAITING;
+}
+
+/*
+ *	Routine:	wait_queue_wakeup64_one
+ *	Purpose:
+ *		Wakeup the most appropriate thread that is in the specified
+ *		wait queue for the specified event.
+ *	Conditions:
+ *		Nothing locked
+ *	Returns:
+ *		KERN_SUCCESS - Thread was woken up
+ *		KERN_NOT_WAITING - No thread was waiting <wq,event> pair
+ */
+kern_return_t
+wait_queue_wakeup64_one(
+	wait_queue_t wq,
+	event64_t event,
+	wait_result_t result)
+{
+	thread_t thread;
+	spl_t s;
+
+	if (!wait_queue_is_valid(wq)) {
+		return KERN_INVALID_ARGUMENT;
+	}
+	s = splsched();
+	wait_queue_lock(wq);
+	thread = _wait_queue_select64_one(wq, event);
+	wait_queue_unlock(wq);
+
+	if (thread) {
+		kern_return_t res;
+
+		res = thread_go_locked(thread, result);
+		assert(res == KERN_SUCCESS);
+		thread_unlock(thread);
+		splx(s);
+		return res;
 	}
 
 	splx(s);
@@ -1223,12 +1557,11 @@ wait_queue_wakeup_one(
 }
 
 
-
 /*
- *	Routine:	wait_queue_wakeup_thread_locked
+ *	Routine:	wait_queue_wakeup64_thread_locked
  *	Purpose:
  *		Wakeup the particular thread that was specified if and only
- *		it was in this wait queue (or one of it's subordinate queues)
+ *		it was in this wait queue (or one of it's set queues)
  *		and waiting on the specified event.
  *
  *		This is much safer than just removing the thread from
@@ -1243,12 +1576,12 @@ wait_queue_wakeup_one(
  *		KERN_SUCCESS - the thread was found waiting and awakened
  *		KERN_NOT_WAITING - the thread was not waiting here
  */
-kern_return_t
-wait_queue_wakeup_thread_locked(
+__private_extern__ kern_return_t
+wait_queue_wakeup64_thread_locked(
 	wait_queue_t wq,
-	event_t event,
+	event64_t event,
 	thread_t thread,
-	int result,
+	wait_result_t result,
 	boolean_t unlock)
 {
 	kern_return_t res;
@@ -1259,23 +1592,24 @@ wait_queue_wakeup_thread_locked(
 	 * See if the thread was still waiting there.  If so, it got
 	 * dequeued and returned locked.
 	 */
-	res = _wait_queue_select_thread(wq, event, thread);
+	res = _wait_queue_select64_thread(wq, event, thread);
 	if (unlock)
 	    wait_queue_unlock(wq);
 
 	if (res != KERN_SUCCESS)
 		return KERN_NOT_WAITING;
 
-	thread_go_locked(thread, result);
+	res = thread_go_locked(thread, result);
+	assert(res == KERN_SUCCESS);
 	thread_unlock(thread);
-	return KERN_SUCCESS;
+	return res;
 }
 
 /*
  *	Routine:	wait_queue_wakeup_thread
  *	Purpose:
  *		Wakeup the particular thread that was specified if and only
- *		it was in this wait queue (or one of it's subordinate queues)
+ *		it was in this wait queue (or one of it's set queues)
  *		and waiting on the specified event.
  *
  *		This is much safer than just removing the thread from
@@ -1295,69 +1629,76 @@ wait_queue_wakeup_thread(
 	wait_queue_t wq,
 	event_t event,
 	thread_t thread,
-	int result)
+	wait_result_t result)
 {
 	kern_return_t res;
 	spl_t s;
 
+	if (!wait_queue_is_valid(wq)) {
+		return KERN_INVALID_ARGUMENT;
+	}
+
 	s = splsched();
 	wait_queue_lock(wq);
-	res = _wait_queue_select_thread(wq, event, thread);
+	res = _wait_queue_select64_thread(wq, (event64_t)((uint32_t)event), thread);
 	wait_queue_unlock(wq);
 
 	if (res == KERN_SUCCESS) {
-		thread_go_locked(thread, result);
+		res = thread_go_locked(thread, result);
+		assert(res == KERN_SUCCESS);
 		thread_unlock(thread);
 		splx(s);
-		return KERN_SUCCESS;
+		return res;
 	}
 	splx(s);
 	return KERN_NOT_WAITING;
 }
 
-
 /*
- *	Routine:	wait_queue_remove
+ *	Routine:	wait_queue_wakeup64_thread
  *	Purpose:
- *		Normal removal operations from wait queues drive from the
- *		wait queue to select a thread.  However, if a thread is
- *		interrupted out of a wait, this routine is called to
- *		remove it from whatever wait queue it may be in.
+ *		Wakeup the particular thread that was specified if and only
+ *		it was in this wait queue (or one of it's set's queues)
+ *		and waiting on the specified event.
  *
+ *		This is much safer than just removing the thread from
+ *		whatever wait queue it happens to be on.  For instance, it
+ *		may have already been awoken from the wait you intended to
+ *		interrupt and waited on something else (like another
+ *		semaphore).
  *	Conditions:
- *		splsched
- *		thread locked on entry and exit, but may be dropped.
- *
+ *		nothing of interest locked
+ *		we need to assume spl needs to be raised
  *	Returns:
- *		KERN_SUCCESS - if thread was in a wait queue
- *		KERN_NOT_WAITING - it was not
+ *		KERN_SUCCESS - the thread was found waiting and awakened
+ *		KERN_NOT_WAITING - the thread was not waiting here
  */
 kern_return_t
-wait_queue_remove(
-        thread_t thread)
+wait_queue_wakeup64_thread(
+	wait_queue_t wq,
+	event64_t event,
+	thread_t thread,
+	wait_result_t result)
 {
-	wait_queue_t wq = thread->wait_queue;
+	kern_return_t res;
+	spl_t s;
 
-	if (wq == WAIT_QUEUE_NULL)
-		return KERN_NOT_WAITING;
-
-	/*
-	 * have to get the locks again in the right order.
-	 */
-	thread_unlock(thread);
-	wait_queue_lock(wq);
-	thread_lock(thread);
-	
-	if (thread->wait_queue == wq) {
-		remqueue(&wq->wq_queue, (queue_entry_t)thread);
-		thread->wait_queue = WAIT_QUEUE_NULL;
-		thread->wait_event = NO_EVENT;
-		thread->at_safe_point = FALSE;
-		wait_queue_unlock(wq);
-		return KERN_SUCCESS;
-	} else {
-		wait_queue_unlock(wq);
-		return KERN_NOT_WAITING; /* anymore */
+	if (!wait_queue_is_valid(wq)) {
+		return KERN_INVALID_ARGUMENT;
 	}
-}
 
+	s = splsched();
+	wait_queue_lock(wq);
+	res = _wait_queue_select64_thread(wq, event, thread);
+	wait_queue_unlock(wq);
+
+	if (res == KERN_SUCCESS) {
+		res = thread_go_locked(thread, result);
+		assert(res == KERN_SUCCESS);
+		thread_unlock(thread);
+		splx(s);
+		return res;
+	}
+	splx(s);
+	return KERN_NOT_WAITING;
+}

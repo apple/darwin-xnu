@@ -22,7 +22,7 @@
 /*
  * Copyright (C) 1999 WIDE Project.
  * All rights reserved.
- * 
+ *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
  * are met:
@@ -34,7 +34,7 @@
  * 3. Neither the name of the project nor the names of its contributors
  *    may be used to endorse or promote products derived from this software
  *    without specific prior written permission.
- * 
+ *
  * THIS SOFTWARE IS PROVIDED BY THE PROJECT AND CONTRIBUTORS ``AS IS'' AND
  * ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
  * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
@@ -47,22 +47,20 @@
  * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
  * SUCH DAMAGE.
  *
- * $Id: ip_ecn.h,v 1.3 2000/11/22 01:12:12 zarzycki Exp $
  */
 /*
  * ECN consideration on tunnel ingress/egress operation.
  * http://www.aciri.org/floyd/papers/draft-ipsec-ecn-00.txt
  */
+#include <sys/appleapiopts.h>
 
 #define ECN_ALLOWED	1	/* ECN allowed */
 #define ECN_FORBIDDEN	0	/* ECN forbidden */
 #define ECN_NOCARE	(-1)	/* no consideration to ECN */
 
-#if defined(KERNEL) || defined(_KERNEL)
-extern void ip_ecn_ingress __P((int, u_int8_t *, u_int8_t *));
-extern void ip_ecn_egress __P((int, u_int8_t *, u_int8_t *));
-#ifdef INET6
-extern void ip6_ecn_ingress __P((int, u_int32_t *, u_int32_t *));
-extern void ip6_ecn_egress __P((int, u_int32_t *, u_int32_t *));
-#endif
+#ifdef KERNEL
+#ifdef __APPLE_API_PRIVATE
+extern void ip_ecn_ingress __P((int, u_int8_t *, const u_int8_t *));
+extern void ip_ecn_egress __P((int, const u_int8_t *, u_int8_t *));
+#endif /* __APPLE_API_PRIVATE */
 #endif

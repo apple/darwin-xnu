@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2002 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -24,10 +24,6 @@
  *
  * Intel386 Family:	User registers for U**X.
  *
- * HISTORY
- *
- * 20 April 1992 ? at NeXT
- *	Created.
  */
  
 #ifdef	KERNEL_PRIVATE

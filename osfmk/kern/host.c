@@ -229,16 +229,9 @@ host_info(
 	}
 
 	/*
-	 * JMM - Temporary check to see if semaphore traps are
-	 * supported on this machine.  Sadly, just trying to call
-	 * the traps gets your process terminated instead of
-	 * returning an error, so we have to query during mach_init
-	 * to see if the machine supports them.
-	 *
-	 * KERN_INVALID_ARGUMENT - kernel has no semaphore traps
-	 * KERN_SUCCESS - kernel has sema traps (up to semaphore_signal_wait)
-	 * KERN_SEMAPHORE_DESTROYED - kernel has the latest semaphore traps
+	 * Gestalt for various trap facilities.
 	 */
+	case HOST_MACH_MSG_TRAP:
 	case HOST_SEMAPHORE_TRAPS:
 	{
 		*count = 0;
@@ -265,7 +258,7 @@ host_statistics(
 
 	case HOST_LOAD_INFO: {
 		register host_load_info_t load_info;
-		extern integer_t avenrun[3], mach_factor[3];
+		extern uint32_t avenrun[3], mach_factor[3];
 
 		if (*count < HOST_LOAD_INFO_COUNT)
 			return(KERN_FAILURE);

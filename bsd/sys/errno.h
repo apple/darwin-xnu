@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2002 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -204,7 +204,8 @@ __END_DECLS
 #define ESHLIBVERS	87	/* Shared library version mismatch */
 #define EBADMACHO	88	/* Malformed Macho file */
 
-#define	ELAST		88		/* Must be equal largest errno */
+#define	ECANCELED	89		/* Operation canceled */
+#define	ELAST		89		/* Must be equal largest errno */
 #endif /* _POSIX_SOURCE */
 
 #ifdef KERNEL

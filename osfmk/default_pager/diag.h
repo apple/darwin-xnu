@@ -26,7 +26,7 @@
 #ifndef MACH_KERNEL
 #ifdef ASSERTIONS
 #define assert(cond)	\
-	if (!(cond)) panic("%sassertion: %s", my_name, # cond)
+	((void) ((cond) ? 0 : panic("%sassertion: %s", my_name, # cond)))
 #endif
 #ifndef ASSERTIONS
 #define assert(cond)

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2002 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -23,7 +23,12 @@
 /*
  * Header file for volfs
  */
+#ifndef __VOLFS_VOLFS_H__
+#define __VOLFS_VOLFS_H__
 
+#include  <sys/appleapiopts.h>
+
+#ifdef __APPLE_API_PRIVATE
 struct volfs_mntdata
 {
 	struct vnode *volfs_rootvp;
@@ -187,3 +192,6 @@ typedef struct	VopDbgStoreRec {
 #define  DBG_VOP_UPDATE_VP(I, VP)
 
 #endif	/* DBG_VOP_TEST_LOCKS */
+
+#endif /* __APPLE_API_PRIVATE */
+#endif /* __VOLFS_VOLFS_H__ */

@@ -52,6 +52,7 @@
  * SUCH DAMAGE.
  *
  *	@(#)if_loop.c	8.1 (Berkeley) 6/10/93
+ * $FreeBSD: src/sys/net/if_loop.c,v 1.47.2.5 2001/07/03 11:01:41 ume Exp $
  */
 
 /*
@@ -90,16 +91,6 @@
 #endif
 #include <netinet6/in6_var.h>
 #include <netinet/ip6.h>
-#endif
-
-#if NS
-#include <netns/ns.h>
-#include <netns/ns_if.h>
-#endif
-
-#if ISO
-#include <netiso/iso.h>
-#include <netiso/iso_var.h>
 #endif
 
 #include <net/dlil.h>
@@ -280,14 +271,10 @@ lo_output(ifp, m)
 	ifp->if_opackets++;
 	ifp->if_ipackets++;
 
-	/* WARNING
-         * This won't work for loopbacked multicast 
-         */
 	m->m_pkthdr.header = mtod(m, char *);
-        m->m_pkthdr.aux = ifp; /* HACKERY */
-        m->m_pkthdr.csum_data = 0xffff; /* loopback checksums are always OK */
-        m->m_pkthdr.csum_flags = CSUM_DATA_VALID | CSUM_PSEUDO_HDR | 
-                               CSUM_IP_CHECKED | CSUM_IP_VALID;
+	m->m_pkthdr.csum_data = 0xffff; /* loopback checksums are always OK */
+	m->m_pkthdr.csum_flags = CSUM_DATA_VALID | CSUM_PSEUDO_HDR | 
+							 CSUM_IP_CHECKED | CSUM_IP_VALID;
 	return dlil_input(ifp, m, m);
 }
 
@@ -335,6 +322,7 @@ lo_pre_output(ifp, m, dst, route, frame_type, dst_addr, dl_tag)
 #endif
 #if INET6
 	case AF_INET6:
+	    (*m)->m_flags |= M_LOOP;
 	    ifq = &ip6intrq;
 	    isr = NETISR_IPV6;
 	    break;
@@ -512,6 +500,7 @@ void lo_reg_if_mods()
 {
      struct dlil_ifmod_reg_str  lo_ifmod;
 
+     bzero(&lo_ifmod, sizeof(lo_ifmod));
      lo_ifmod.add_if = lo_add_if;
      lo_ifmod.del_if = lo_del_if;
      lo_ifmod.add_proto = lo_add_proto;
@@ -565,6 +554,47 @@ u_long  lo_attach_inet(struct ifnet *ifp)
     return dl_tag;
 }
 
+u_long  lo_attach_inet6(struct ifnet *ifp)
+{
+    struct dlil_proto_reg_str   reg;
+    struct dlil_demux_desc      desc;
+    u_long			dl_tag=0;
+    short native=0;
+    int   stat;
+    int i;
+
+    for (i=0; i < lo_count; i++) {
+	if ((lo_array[i]) && (lo_array[i]->ifp == ifp)) {
+	    if (lo_array[i]->protocol_family == PF_INET6)
+		return lo_array[i]->dl_tag;
+	}
+    }
+
+    TAILQ_INIT(&reg.demux_desc_head);
+    desc.type = DLIL_DESC_RAW;
+    desc.variants.bitmask.proto_id_length = 0;
+    desc.variants.bitmask.proto_id = 0;
+    desc.variants.bitmask.proto_id_mask = 0;
+    desc.native_type = (char *) &native;
+    TAILQ_INSERT_TAIL(&reg.demux_desc_head, &desc, next);
+    reg.interface_family = ifp->if_family;
+    reg.unit_number      = ifp->if_unit;
+    reg.input		 = lo_input;
+    reg.pre_output       = lo_pre_output;
+    reg.event            = 0;
+    reg.offer            = 0;
+    reg.ioctl            = loioctl;
+    reg.default_proto    = 0;
+    reg.protocol_family  = PF_INET6;
+
+    stat = dlil_attach_protocol(&reg, &dl_tag);
+    if (stat) {
+	panic("lo_attach_inet6 can't attach interface\n");
+    }
+    
+    return dl_tag;
+}
+
 
 int lo_set_bpf_tap(struct ifnet *ifp, int mode, int (*bpf_callback)(struct ifnet *, struct mbuf *))
 {
@@ -604,7 +634,7 @@ loopattach(dummy)
 		ifp->if_unit = i++;
 		ifp->if_mtu = LOMTU;
 		ifp->if_flags = IFF_LOOPBACK | IFF_MULTICAST;
-		ifp->if_ioctl = 0;
+		ifp->if_ioctl = loioctl;
 		ifp->if_set_bpf_tap = lo_set_bpf_tap;
 		ifp->if_output = lo_output;
 		ifp->if_type = IFT_LOOP;

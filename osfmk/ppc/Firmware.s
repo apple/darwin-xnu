@@ -39,6 +39,7 @@
 #include <cpus.h>
 #include <ppc/asm.h>
 #include <ppc/proc_reg.h>
+#include <ppc/spec_reg.h>
 #include <ppc/POWERMAC/mp/MPPlugIn.h>
 #include <ppc/exception.h>
 #include <mach/machine/vm_param.h>
@@ -184,8 +185,10 @@ ENTRY(ReadReal, TAG_NO_FRAME_USED)
 			lwz		r6,4(r3)						/* Get word 1 */
 			lwz		r7,8(r3)						/* Get word 2 */
 			lwz		r8,12(r3)						/* Get word 3 */
+			rlwinm	r0,r0,0,MSR_FP_BIT+1,MSR_FP_BIT-1	; Force floating point off
 			lwz		r9,16(r3)						/* Get word 4 */
 			lwz		r10,20(r3)						/* Get word 5 */
+			rlwinm	r0,r0,0,MSR_VEC_BIT+1,MSR_VEC_BIT-1	; Force vectors off
 			lwz		r11,24(r3)						/* Get word 6 */
 			lwz		r12,28(r3)						/* Get word 7 */
 			
@@ -227,7 +230,7 @@ ENTRY(xLoadDBATsLL, TAG_NO_FRAME_USED)
 			lwz		r10,24(r3)						/* Get DBAT 3 high */
 			lwz		r11,28(r3)						/* Get DBAT 3 low */
 			
-			sync									/* Common decency and the state law require you to wash your hands */
+			sync									/* Common decency and the state law require that you wash your hands */
 			mtdbatu	0,r4							/* Load DBAT 0 high */
 			mtdbatl	0,r5							/* Load DBAT 0 low */
 			mtdbatu	1,r6							/* Load DBAT 1 high */
@@ -247,7 +250,7 @@ ENTRY(xLoadDBATsLL, TAG_NO_FRAME_USED)
 
 ENTRY(LoadIBATs, TAG_NO_FRAME_USED)
 
-			lis		r0,HIGH_ADDR(LoadIBATsCall)		/* Top half of CreateFakeIO firmware call number */
+			lis		r0,HIGH_ADDR(LoadIBATsCall)		/* Top half of LoadIBATsCall firmware call number */
 			ori		r0,r0,LOW_ADDR(LoadIBATsCall)	/* Bottom half */
 			sc										/* Do it to it */
 			blr										/* Bye bye, Birdie... */
@@ -263,7 +266,7 @@ ENTRY(xLoadIBATsLL, TAG_NO_FRAME_USED)
 			lwz		r10,24(r3)						/* Get IBAT 3 high */
 			lwz		r11,28(r3)						/* Get IBAT 3 low */
 			
-			sync									/* Common decency and the state law require you to wash your hands */
+			sync									/* Common decency and the state law require that you wash your hands */
 			mtibatu	0,r4							/* Load IBAT 0 high */
 			mtibatl	0,r5							/* Load IBAT 0 low */
 			mtibatu	1,r6							/* Load IBAT 1 high */
@@ -306,6 +309,11 @@ ENTRY(CreateFakeIO, TAG_NO_FRAME_USED)
  
 ENTRY(CreateFakeDEC, TAG_NO_FRAME_USED)
 			
+#if 0
+			mflr	r4								; (TEST/DEBUG)
+			bl		EXT(ml_sense_nmi)				; (TEST/DEBUG)
+			mtlr	r4								; (TEST/DEBUG)
+#endif
 			lis		r0,HIGH_ADDR(CreateFakeDECCall)	/* Top half of CreateFakeDEC firmware call number */
 			ori		r0,r0,LOW_ADDR(CreateFakeDECCall)	/* Bottom half */
 			sc										/* Do it to it */
@@ -1650,9 +1658,11 @@ ltsNoMSR:	li		r0,loadMSR						; Get the MSR setter SC
 ltsNoMSRx:
 			
 			lis		r5,hi16(EXT(trcWork))			; Get trace area
+			rlwinm	r12,r12,0,MSR_FP_BIT+1,MSR_FP_BIT-1	; Force floating point off
 			ori		r5,r5,lo16(EXT(trcWork))		; again
 			
 			lwz		r3,traceMask(r5)				/* Get the old trace flags to pass back */
+			rlwinm	r12,r12,0,MSR_VEC_BIT+1,MSR_VEC_BIT-1	; Force vectors off
 			stw		r4,traceMask(r5)				/* Replace with the new ones */
 			
 			mtmsr	r12								/* Restore the MSR */
@@ -1846,10 +1856,12 @@ ENTRY(checkNMI,TAG_NO_FRAME_USED)
 			ori		r7,r7,0x0020					/* Find it */
 			dcbi	0,r7							/* Toss it */
 			sync									/* Sync it */
+			rlwinm	r9,r9,0,MSR_FP_BIT+1,MSR_FP_BIT-1	; Force floating point off
 			eieio									/* Get it */
 			lwz		r6,0x000C(r7)					/* Check it */
 			eieio									/* Fence it */
 			dcbi	0,r7							/* Toss it */
+			rlwinm	r9,r9,0,MSR_VEC_BIT+1,MSR_VEC_BIT-1	; Force vectors off
 			rlwinm.	r4,r6,0,19,19					/* Check it */
 			rlwinm	r6,r6,0,20,18					/* Clear it */
 			sync									/* Sync it */
@@ -2069,6 +2081,8 @@ waytoofar2:	mtmsr	r10					; Back to normal
 LEXT(stFloat)
 
 			mfmsr	r0					; Save the MSR
+			rlwinm	r0,r0,0,MSR_FP_BIT+1,MSR_FP_BIT-1	; Force floating point off
+			rlwinm	r0,r0,0,MSR_VEC_BIT+1,MSR_VEC_BIT-1	; Force vectors off
 			rlwinm	r4,r0,0,MSR_EE_BIT,MSR_EE_BIT	; Turn off interruptions
 			ori		r4,r4,lo16(MASK(MSR_FP))	; Enable floating point
 			mtmsr	r4
@@ -2122,16 +2136,17 @@ LEXT(stFloat)
 			.globl	EXT(stVectors)
 
 LEXT(stVectors)
-#if 0
 
-			mfpvr	r6					; Get machine type
+			
+			mfsprg	r6,2				; Get features
 			mr		r5,r3				; Save area address
-			rlwinm	r6,r6,16,17,31		; Rotate on it
+			rlwinm.	r6,r6,0,pfAltivecb,pfAltivecb		;  Do we have Altivec?
 			li		r3,0				; Assume failure
-			cmplwi	r6,PROCESSOR_VERSION_7400	; Do we have Altivec?
-			bltlr+						; No...
+			beqlr-						; No...
 			
 			mfmsr	r0					; Save the MSR
+			rlwinm	r0,r0,0,MSR_FP_BIT+1,MSR_FP_BIT-1	; Force floating point off
+			rlwinm	r0,r0,0,MSR_VEC_BIT+1,MSR_VEC_BIT-1	; Force vectors off
 			rlwinm	r4,r0,0,MSR_EE_BIT,MSR_EE_BIT	; Turn off interruptions
 			oris	r4,r4,hi16(MASK(MSR_VEC))	; Enable vectors
 			mtmsr	r4
@@ -2208,7 +2223,6 @@ LEXT(stVectors)
 			mtmsr	r0
 			isync
 
-#endif
 			blr
 
 
@@ -2220,9 +2234,10 @@ LEXT(stVectors)
 			.globl	EXT(stSpecrs)
 
 LEXT(stSpecrs)
-#if 0
 
 			mfmsr	r0					; Save the MSR
+			rlwinm	r0,r0,0,MSR_FP_BIT+1,MSR_FP_BIT-1	; Force floating point off
+			rlwinm	r0,r0,0,MSR_VEC_BIT+1,MSR_VEC_BIT-1	; Force vectors off
 			rlwinm	r4,r0,0,MSR_EE_BIT,MSR_EE_BIT	; Turn off interruptions
 			mtmsr	r4
 			isync
@@ -2352,5 +2367,4 @@ nnmax:		stw		r4,(48*4)(r3)
 			mtmsr	r0
 			isync
 
-#endif
 			blr

@@ -23,6 +23,8 @@
  *	Copyright (c) 1998 Apple Computer, Inc. 
  */
 
+#include <sys/appleapiopts.h>
+#ifdef __APPLE_API_PRIVATE
 #include <sys/queue.h>
 
 /* at_var.h */
@@ -277,3 +279,27 @@ int ddp_ctloutput __P((struct socket *, struct sockopt *));
 void ddp_init __P((void));;
 void ddp_slowtimo __P((void));
 #endif
+
+/*
+ * Define AppleTalk event subclass and specific AppleTalk events.
+ */
+
+#define KEV_ATALK_SUBCLASS 5
+
+#define KEV_ATALK_ENABLED				1	/* AppleTalk enabled from user space - node/net set and valid */
+#define KEV_ATALK_DISABLED				2	/* AppleTalk disabled from user space */
+#define KEV_ATALK_ZONEUPDATED			3	/* Zone for this node set/changed */
+#define KEV_ATALK_ROUTERUP				4	/* Seed router found with valid cable range */
+#define KEV_ATALK_ROUTERUP_INVALID		5	/* Seed router found with invalid cable range */
+#define KEV_ATALK_ROUTERDOWN			6	/* Seed router down */
+#define KEV_ATALK_ZONELISTCHANGED		7	/* Zone list changed by router */
+
+struct kev_atalk_data {
+	struct	net_event_data	link_data;
+	union {
+		struct	at_addr		address;
+		at_nvestr_t			zone;
+	} node_data;
+};
+
+#endif /* __APPLE_API_PRIVATE */

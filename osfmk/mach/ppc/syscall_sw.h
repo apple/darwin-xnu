@@ -70,6 +70,7 @@ ppc_trap(bb_enable_bluebox,0x6005)
 ppc_trap(bb_disable_bluebox,0x6006)	
 ppc_trap(bb_settaskenv,0x6007)	
 ppc_trap(vmm_stop_vm,0x6008)	
+ppc_trap(CHUDCall,0x6009)	
 #endif /* _MACH_SYSCALL_SW_H_ */
 
 #endif	/* _MACH_PPC_SYSCALL_SW_H_ */

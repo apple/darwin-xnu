@@ -56,7 +56,7 @@ decl_simple_lock_data(static,thread_call_lock)
 
 static
 timer_call_data_t
-	thread_call_delayed_timers[NCPUS];
+	thread_call_delayed_timer;
 
 static
 queue_head_t
@@ -64,8 +64,8 @@ queue_head_t
 	pending_call_queue, delayed_call_queue;
 
 static
-queue_head_t
-	idle_thread_queue;
+struct wait_queue
+	call_thread_idle_queue;
 
 static
 thread_t
@@ -79,7 +79,8 @@ static struct {
 	int		pending_num,
 			pending_hiwat;
 	int		active_num,
-			active_hiwat;
+			active_hiwat,
+			active_lowat;
 	int		delayed_num,
 			delayed_hiwat;
 	int		idle_thread_num;
@@ -162,7 +163,6 @@ thread_call_initialize(void)
 {
     thread_call_t		call;
 	spl_t				s;
-	int					i;
 
     if (thread_call_initialized)
     	panic("thread_call_initialize");
@@ -184,12 +184,9 @@ thread_call_initialize(void)
 		enqueue_tail(&internal_call_free_queue, qe(call));
     }
 
-	for (i = 0; i < NCPUS; i++) {
-		timer_call_setup(&thread_call_delayed_timers[i],
-												_delayed_call_timer, NULL);
-	}
+	timer_call_setup(&thread_call_delayed_timer, _delayed_call_timer, NULL);
 
-	queue_init(&idle_thread_queue);
+	wait_queue_init(&call_thread_idle_queue, SYNC_POLICY_FIFO);
 	thread_calls.thread_lowat = thread_call_thread_min;
 
 	activate_thread_awake = TRUE;
@@ -383,9 +380,7 @@ _set_delayed_call_timer(
     thread_call_t		call
 )
 {
-	timer_call_t	timer = &thread_call_delayed_timers[cpu_number()];
-
-    timer_call_enter(timer, call->deadline);
+    timer_call_enter(&thread_call_delayed_timer, call->deadline);
 }
 
 /*
@@ -534,7 +529,8 @@ thread_call_func(
 	
 		_pending_call_enqueue(call);
 		
-		_call_thread_wake();
+		if (thread_calls.active_num <= 0)
+			_call_thread_wake();
     }
 
 	simple_unlock(&thread_call_lock);
@@ -722,8 +718,9 @@ thread_call_enter(
 			result = FALSE;
 
     	_pending_call_enqueue(call);
-
-		_call_thread_wake();
+		
+		if (thread_calls.active_num <= 0)
+			_call_thread_wake();
 	}
 
 	call->param1 = 0;
@@ -754,7 +751,8 @@ thread_call_enter1(
 
     	_pending_call_enqueue(call);
 
-		_call_thread_wake();
+		if (thread_calls.active_num <= 0)
+			_call_thread_wake();
     }
 
 	call->param1 = param1;
@@ -922,11 +920,11 @@ thread_call_is_delayed(
 }
 
 /*
- * Routine:	_call_thread_wake [private]
+ * Routine:	_call_thread_wake [private, inline]
  *
  * Purpose:	Wake a callout thread to service
- *		newly pending callout entries.  May wake
- *		the activate thread to either wake or
+ *		pending callout entries.  May wake
+ *		the activate thread in order to
  *		create additional callout threads.
  *
  * Preconditions:	thread_call_lock held.
@@ -938,30 +936,68 @@ static __inline__
 void
 _call_thread_wake(void)
 {
-	thread_t		thread_to_wake;
-
-	if (!queue_empty(&idle_thread_queue)) {
-		queue_remove_first(
-				&idle_thread_queue, thread_to_wake, thread_t, wait_link);
-		clear_wait(thread_to_wake, THREAD_AWAKENED);
+	if (wait_queue_wakeup_one(
+					&call_thread_idle_queue, &call_thread_idle_queue,
+										THREAD_AWAKENED) == KERN_SUCCESS) {
 		thread_calls.idle_thread_num--;
+
+		if (++thread_calls.active_num > thread_calls.active_hiwat)
+			thread_calls.active_hiwat = thread_calls.active_num;
 	}
 	else
-		thread_to_wake = THREAD_NULL;
-
-	if (!activate_thread_awake &&
-			(thread_to_wake == THREAD_NULL || thread_calls.thread_num <
-					(thread_calls.active_num + thread_calls.pending_num))) {
+	if (!activate_thread_awake) {
 		clear_wait(activate_thread, THREAD_AWAKENED);
 		activate_thread_awake = TRUE;
 	}
 }
 
-#if defined (__i386__)
-#define NO_CONTINUATIONS	(1)
-#else
-#define NO_CONTINUATIONS	(0)
-#endif
+/*
+ * Routine:	call_thread_block [private]
+ *
+ * Purpose:	Hook via thread dispatch on
+ *		the occasion of a callout blocking.
+ *
+ * Preconditions:	splsched.
+ *
+ * Postconditions:	None.
+ */
+
+void
+call_thread_block(void)
+{
+	simple_lock(&thread_call_lock);
+
+	if (--thread_calls.active_num < thread_calls.active_lowat)
+		thread_calls.active_lowat = thread_calls.active_num;
+
+	if (	thread_calls.active_num <= 0	&&
+			thread_calls.pending_num > 0		)
+		_call_thread_wake();
+
+	simple_unlock(&thread_call_lock);
+}
+
+/*
+ * Routine:	call_thread_unblock [private]
+ *
+ * Purpose:	Hook via thread wakeup on
+ *		the occasion of a callout unblocking.
+ *
+ * Preconditions:	splsched.
+ *
+ * Postconditions:	None.
+ */
+
+void
+call_thread_unblock(void)
+{
+	simple_lock(&thread_call_lock);
+
+	if (++thread_calls.active_num > thread_calls.active_hiwat)
+		thread_calls.active_hiwat = thread_calls.active_num;
+
+	simple_unlock(&thread_call_lock);
+}
 
 /*
  * Routine:	_call_thread [private]
@@ -979,11 +1015,10 @@ _call_thread_continue(void)
 {
 	thread_t		self = current_thread();
 
-#if	NO_CONTINUATIONS
- loop:
-#endif
     (void) splsched();
     simple_lock(&thread_call_lock);
+
+	self->active_callout = TRUE;
 
     while (thread_calls.pending_num > 0) {
 		thread_call_t			call;
@@ -1001,12 +1036,6 @@ _call_thread_continue(void)
 
 		_internal_call_release(call);
 
-		if (++thread_calls.active_num > thread_calls.active_hiwat)
-			thread_calls.active_hiwat = thread_calls.active_num;
-
-		if (thread_calls.pending_num > 0)
-			_call_thread_wake();
-
 		simple_unlock(&thread_call_lock);
 		(void) spllo();
 
@@ -1016,26 +1045,24 @@ _call_thread_continue(void)
 
 		(void) splsched();
 		simple_lock(&thread_call_lock);
-
-		thread_calls.active_num--;
     }
+
+	self->active_callout = FALSE;
+
+	if (--thread_calls.active_num < thread_calls.active_lowat)
+		thread_calls.active_lowat = thread_calls.active_num;
 	
-    if ((thread_calls.thread_num - thread_calls.active_num) <=
-											thread_calls.thread_lowat) {
-		queue_enter(&idle_thread_queue, self, thread_t, wait_link);
+    if (thread_calls.idle_thread_num < thread_calls.thread_lowat) {
 		thread_calls.idle_thread_num++;
 
-		assert_wait(&idle_thread_queue, THREAD_INTERRUPTIBLE);
+		wait_queue_assert_wait(
+					&call_thread_idle_queue, &call_thread_idle_queue,
+														THREAD_INTERRUPTIBLE);
 	
 		simple_unlock(&thread_call_lock);
 		(void) spllo();
 
-#if	NO_CONTINUATIONS
-		thread_block((void (*)(void)) 0);
-		goto loop;
-#else	
 		thread_block(_call_thread_continue);
-#endif
 		/* NOTREACHED */
     }
     
@@ -1074,14 +1101,14 @@ static
 void
 _activate_thread_continue(void)
 {
-#if	NO_CONTINUATIONS
- loop:
-#endif
     (void) splsched();
     simple_lock(&thread_call_lock);
         
-    if (thread_calls.thread_num <
-			(thread_calls.active_num + thread_calls.pending_num)) {
+	while (		thread_calls.active_num <= 0	&&
+				thread_calls.pending_num > 0		) {
+
+		if (++thread_calls.active_num > thread_calls.active_hiwat)
+			thread_calls.active_hiwat = thread_calls.active_num;
 
 		if (++thread_calls.thread_num > thread_calls.thread_hiwat)
 			thread_calls.thread_hiwat = thread_calls.thread_num;
@@ -1092,28 +1119,9 @@ _activate_thread_continue(void)
 		(void) kernel_thread_with_priority(
 									kernel_task, MAXPRI_KERNEL - 1,
 													_call_thread, TRUE, TRUE);
-#if	NO_CONTINUATIONS
-		thread_block((void (*)(void)) 0);
-		goto loop;
-#else	
-		thread_block(_activate_thread_continue);
-#endif
-		/* NOTREACHED */
+		(void) splsched();
+		simple_lock(&thread_call_lock);
     }
-	else if (thread_calls.pending_num > 0) {
-		_call_thread_wake();
-
-		simple_unlock(&thread_call_lock);
-		(void) spllo();
-
-#if	NO_CONTINUATIONS
-		thread_block((void (*)(void)) 0);
-		goto loop;
-#else	
-		thread_block(_activate_thread_continue);
-#endif
-		/* NOTREACHED */
-	}
 		
     assert_wait(&activate_thread_awake, THREAD_INTERRUPTIBLE);
 	activate_thread_awake = FALSE;
@@ -1121,12 +1129,7 @@ _activate_thread_continue(void)
     simple_unlock(&thread_call_lock);
 	(void) spllo();
     
-#if	NO_CONTINUATIONS
-	thread_block((void (*)(void)) 0);
-	goto loop;
-#else	
 	thread_block(_activate_thread_continue);
-#endif
 	/* NOTREACHED */
 }
 
@@ -1179,7 +1182,7 @@ _delayed_call_timer(
 	if (!queue_end(&delayed_call_queue, qe(call)))
 		_set_delayed_call_timer(call);
 
-    if (new_pending)
+    if (new_pending && thread_calls.active_num <= 0)
 		_call_thread_wake();
 
     simple_unlock(&thread_call_lock);

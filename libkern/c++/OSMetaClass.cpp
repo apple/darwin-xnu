@@ -46,6 +46,7 @@ __BEGIN_DECLS
 #include <kern/lock.h>
 #include <kern/clock.h>
 #include <kern/thread_call.h>
+#include <kern/host.h>
 #include <mach/kmod.h>
 #include <mach/mach_interface.h>
 
@@ -84,12 +85,16 @@ static unsigned int sConsiderUnloadDelay = 60;	/* secs */
 static const char OSMetaClassBasePanicMsg[] =
     "OSMetaClassBase::_RESERVEDOSMetaClassBase%d called\n";
 
+#if SLOT_USED
 void OSMetaClassBase::_RESERVEDOSMetaClassBase0()
     { panic(OSMetaClassBasePanicMsg, 0); }
 void OSMetaClassBase::_RESERVEDOSMetaClassBase1()
     { panic(OSMetaClassBasePanicMsg, 1); }
 void OSMetaClassBase::_RESERVEDOSMetaClassBase2()
     { panic(OSMetaClassBasePanicMsg, 2); }
+#endif /* SLOT_USED */
+
+// As these slots are used move them up inside the #if above
 void OSMetaClassBase::_RESERVEDOSMetaClassBase3()
     { panic(OSMetaClassBasePanicMsg, 3); }
 void OSMetaClassBase::_RESERVEDOSMetaClassBase4()
@@ -98,6 +103,28 @@ void OSMetaClassBase::_RESERVEDOSMetaClassBase5()
     { panic(OSMetaClassBasePanicMsg, 5); }
 void OSMetaClassBase::_RESERVEDOSMetaClassBase6()
     { panic(OSMetaClassBasePanicMsg, 6); }
+    
+/*
+ * These used to be inline in the header but gcc didn't believe us
+ * Now we MUST pull the inline out at least until the compiler is
+ * repaired.
+ */
+// Helper inlines for runtime type preprocessor macros
+OSMetaClassBase *OSMetaClassBase::
+safeMetaCast(const OSMetaClassBase *me, const OSMetaClass *toType)
+    { return (me)? me->metaCast(toType) : 0; }
+
+bool OSMetaClassBase::
+checkTypeInst(const OSMetaClassBase *inst, const OSMetaClassBase *typeinst)
+{
+    const OSMetaClass *toType = OSTypeIDInst(typeinst);
+    return typeinst && inst && (0 != inst->metaCast(toType));
+}
+
+
+// If you need this slot you had better setup an IOCTL style interface.
+// 'Cause the whole kernel world depends on OSMetaClassBase and YOU
+// CANT change the VTABLE size ever.
 void OSMetaClassBase::_RESERVEDOSMetaClassBase7()
     { panic(OSMetaClassBasePanicMsg, 7); }
 
@@ -141,7 +168,7 @@ OSMetaClassBase *OSMetaClassBase::metaCast(const OSString *toMetaStr) const
 
 OSMetaClassBase *OSMetaClassBase::metaCast(const char *toMetaCStr) const
 {
-    const OSSymbol *tempSymb = OSSymbol::withCStringNoCopy(toMetaCStr);
+    const OSSymbol *tempSymb = OSSymbol::withCString(toMetaCStr);
     OSMetaClassBase *ret = 0;
     if (tempSymb) {
         ret = metaCast(tempSymb);
@@ -296,12 +323,13 @@ OSMetaClass::~OSMetaClass()
     }
 }
 
-// Don't do anything as these classes must be statically allocated
 void *OSMetaClass::operator new(size_t size) { return 0; }
-void OSMetaClass::operator delete(void *mem, size_t size) { }
 void OSMetaClass::retain() const { }
 void OSMetaClass::release() const { }
-void OSMetaClass::release(int when) const { };
+void OSMetaClass::release(int when) const { }
+void OSMetaClass::taggedRetain(const void *tag) const { }
+void OSMetaClass::taggedRelease(const void *tag) const { }
+void OSMetaClass::taggedRelease(const void *tag, const int when) const { }
 int  OSMetaClass::getRetainCount() const { return 0; }
 
 const char *OSMetaClass::getClassName() const
@@ -531,7 +559,7 @@ static void _OSMetaClassConsiderUnloads(thread_call_param_t p0,
     OSCollectionIterator *kmods;
     OSCollectionIterator *classes;
     OSMetaClass *checkClass;
-    kmod_info_t *ki;
+    kmod_info_t *ki = 0;
     kern_return_t ret;
     bool didUnload;
 
@@ -546,12 +574,18 @@ static void _OSMetaClassConsiderUnloads(thread_call_param_t p0,
         didUnload = false;
         while ( (kmodName = (OSSymbol *) kmods->getNextObject()) ) {
 
-            ki = kmod_lookupbyname((char *)kmodName->getCStringNoCopy());
+            if (ki) {
+                kfree(ki, sizeof(kmod_info_t));
+                ki = 0;
+            }
+
+            ki = kmod_lookupbyname_locked((char *)kmodName->getCStringNoCopy());
             if (!ki)
                 continue;
 
-            if (ki->reference_count)
-                continue;
+            if (ki->reference_count) {
+                 continue;
+            }
 
             kmodClasses = OSDynamicCast(OSSet,
                                 sKModClassesDict->getObject(kmodName));
@@ -570,7 +604,7 @@ static void _OSMetaClassConsiderUnloads(thread_call_param_t p0,
                 didUnload = true;
             }
 
-        } while (false);
+        }
 
         kmods->release();
 

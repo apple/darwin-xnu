@@ -65,6 +65,8 @@
 #include <netat/aurp.h>
 #include <netat/debug.h>
 
+#include <sys/kern_event.h>
+
 extern void (*ddp_AURPsendx)();
 extern at_ifaddr_t *aurp_ifID;
 extern at_ifaddr_t *ifID_table[];
@@ -1387,7 +1389,7 @@ int rtmp_router_start(keP)
 		/* set the right net and node for each port */
 		Entry->NextIRNet = ifID->ifThisNode.s_net;
 		Entry->NextIRNode= ifID->ifThisNode.s_node;
-
+		
 		dPrintf(D_M_RTMP, D_L_STARTUP,
 			("rtmp_router_start: bring port=%d [%d.%d]... on line\n",
 			 ifID->ifPort, ifID->ifThisNode.s_net,
@@ -1430,6 +1432,12 @@ int rtmp_router_start(keP)
 	    != EWOULDBLOCK) {
 		goto error;
 	}
+	
+	/* Is the stack still up ? */
+	if (!(at_state.flags & AT_ST_STARTED) || !ifID_home) {
+		err = ECONNABORTED;
+		goto error;
+	}
 
 startZoneInfo:
 	err = 0;
@@ -1468,6 +1476,12 @@ startZoneInfo:
 			     tsleep(&ifID_home->startup_inprogress, 
 				    PSOCK | PCATCH, "router_start2", 10 * SYS_HZ))
 			    != EWOULDBLOCK) {
+				goto error;
+			}
+			
+			/* Is the stack still up ? */
+			if (!(at_state.flags & AT_ST_STARTED) || !ifID_home) {
+				err = ECONNABORTED;
 				goto error;
 			}
 
@@ -1514,6 +1528,9 @@ startZoneInfo:
 				if ((ifID == ifID_home) || MULTIHOME_MODE) {
 					ifID->ifZoneName = ZT_table[Index-1].Zone;
 					(void)regDefaultZone(ifID);
+
+					/* Send zone change event */
+					atalk_post_msg(ifID->aa_ifp, KEV_ATALK_ZONEUPDATED, 0, &(ifID->ifZoneName));
 				}
 			}
 		}

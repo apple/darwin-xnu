@@ -236,7 +236,7 @@ ipc_kmsg_free(
 			ip_unlock(port);
 			return;
 		}
-		ip_unlock(port);
+		ip_check_unlock(port);  /* May be last reference */
 		goto free_it;
 	}
 

@@ -1,3 +1,6 @@
+/*	$FreeBSD: src/sys/crypto/des/des_locl.h,v 1.2.2.2 2001/07/03 11:01:31 ume Exp $	*/
+/*	$KAME: des_locl.h,v 1.6 2000/11/06 13:58:09 itojun Exp $	*/
+
 /* lib/des/des_locl.h */
 /* Copyright (C) 1995-1996 Eric Young (eay@mincom.oz.au)
  * All rights reserved.
@@ -52,75 +55,15 @@
  * WARNING WARNING WARNING WARNING WARNING WARNING WARNING WARNING WARNING
  */
 
-#include <sys/param.h>
-#include <sys/malloc.h>
-#include <sys/mbuf.h>
-#include <sys/systm.h>
-
 #ifndef HEADER_DES_LOCL_H
 #define HEADER_DES_LOCL_H
 
-#if defined(WIN32) || defined(WIN16)
-#ifndef MSDOS
-#define MSDOS
-#endif
-#endif
-
-/*
-#include <stdio.h>
-#include <stdlib.h>
-#ifndef MSDOS
-#include <unistd.h>
-#endif
-*/
 #include <crypto/des/des.h>
 
-/* the following is tweaked from a config script, that is why it is a
- * protected undef/define */
-#ifndef DES_PTR
 #undef DES_PTR
-#endif
-
-#ifdef MSDOS		/* Visual C++ 2.1 (Windows NT/95) */
-#include <stdlib.h>
-#include <errno.h>
-#include <time.h>
-#include <io.h>
-#ifndef RAND
-#define RAND
-#endif
-#undef NOPROTO
-#endif
-
-#if !defined(KERNEL) && (defined(__STDC__) || defined(VMS) || defined(M_XENIX) || defined(MSDOS))
-#include <string.h>
-#endif
-
-#ifndef RAND
-#define RAND
-#endif
-
-#ifdef linux
-#undef RAND
-#endif
-
-#ifdef MSDOS
-#define getpid() 2
-#define RAND
-#undef NOPROTO
-#endif
-
-#if defined(NOCONST)
-#define const
-#endif
 
 #ifdef __STDC__
 #undef NOPROTO
-#endif
-
-#ifdef RAND
-#define srandom(s) srand(s)
-#define random rand
 #endif
 
 #define ITERATIONS 16
@@ -185,11 +128,7 @@
 				} \
 			}
 
-#if defined(WIN32)
-#define	ROTATE(a,n)	(_lrotr(a,n))
-#else
 #define	ROTATE(a,n)	(((a)>>(n))+((a)<<(32-(n))))
-#endif
 
 /* The changes to this macro may help or hinder, depending on the
  * compiler and the achitecture.  gcc2 always seems to do well :-).
@@ -304,36 +243,3 @@
 	PERM_OP(l,r,tt, 4,0x0f0f0f0fL); \
 	}
 #endif
-
-
-/*
-#define mbuf2char(i_mbuf, i_index, in) \
-	{					\
-	register int	i;			\	
-	struct	mbuf	*m;			\	
-	char		*buf;			\
-	m = i_mbuf;				\
-	for (i = 0; i < 8; i ++){		\
-		if (i_index + i == m->m_len){	\
-			m = m->m_next;		\
-		}				\
-		buf = mtod(m, char *);		\
-		in[i] = *(buf + i);		\
-	}
-
-
-#define char2mbuf(o_mbuf, o_index, out) \
-	{					\
-	register int	i;			\	
-	struct	mbuf	*m;			\	
-	char		*buf;			\
-	m = o_mbuf;				\
-	for (i = 0; i < 8; i ++){		\
-		if (i_index + i == m->m_len){	\
-			m = m->m_next;		\
-		}				\
-		buf = mtod(m, char *);		\
-		*(buf + i) = out[i];		\
-	}
-*/
-

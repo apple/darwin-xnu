@@ -31,8 +31,10 @@
 
 #ifndef _NETKEY_KEYDB_H_
 #define _NETKEY_KEYDB_H_
+#include <sys/appleapiopts.h>
 
 #ifdef KERNEL
+#ifdef __APPLE_API_PRIVATE
 
 #include <netkey/key_var.h>
 
@@ -78,19 +80,14 @@ struct secasvar {
 	u_int32_t flags;		/* holder for SADB_KEY_FLAGS */
 
 	struct sadb_key *key_auth;	/* Key for Authentication */
-					/* length has been shifted up to 3. */
 	struct sadb_key *key_enc;	/* Key for Encryption */
-					/* length has been shifted up to 3. */
 	caddr_t iv;			/* Initilization Vector */
 	u_int ivlen;			/* length of IV */
-#if 0
-	caddr_t misc1;
-	caddr_t misc2;
-	caddr_t misc3;
-#endif
+	void *sched;			/* intermediate encryption key */
+	size_t schedlen;
 
 	struct secreplay *replay;	/* replay prevention */
-	u_int32_t tick;			/* for lifetime */
+	long created;			/* for lifetime */
 
 	struct sadb_lifetime *lft_c;	/* CURRENT lifetime, it's constant. */
 	struct sadb_lifetime *lft_h;	/* HARD lifetime */
@@ -127,7 +124,7 @@ struct secacq {
 	struct secasindex saidx;
 
 	u_int32_t seq;		/* sequence number */
-	u_int32_t tick;		/* for lifetime */
+	long created;		/* for lifetime */
 	int count;		/* for lifetime */
 };
 #endif
@@ -159,6 +156,7 @@ extern void keydb_delsecreplay __P((struct secreplay *));
 extern struct secreg *keydb_newsecreg __P((void));
 extern void keydb_delsecreg __P((struct secreg *));
 
+#endif /* __APPLE_API_PRIVATE */
 #endif /* KERNEL */
 
 #endif /* _NETKEY_KEYDB_H_ */

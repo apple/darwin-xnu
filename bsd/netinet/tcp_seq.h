@@ -52,10 +52,12 @@
  * SUCH DAMAGE.
  *
  *	@(#)tcp_seq.h	8.3 (Berkeley) 6/21/95
+ * $FreeBSD: src/sys/netinet/tcp_seq.h,v 1.11.2.5 2001/08/22 00:59:12 silby Exp $
  */
 
 #ifndef _NETINET_TCP_SEQ_H_
 #define _NETINET_TCP_SEQ_H_
+#include <sys/appleapiopts.h>
 /*
  * TCP sequence numbers are 32 bit integers operated
  * on with modular arithmetic.  These macros can be
@@ -83,6 +85,7 @@
 /* Macro to increment a CC: skip 0 which has a special meaning */
 #define CC_INC(c)	(++(c) == 0 ? ++(c) : (c))
 
+#ifdef __APPLE_API_PRIVATE
 /*
  * Macros to initialize tcp sequence numbers for
  * send and receive from initial send and receive
@@ -97,28 +100,11 @@
 
 #define TCP_PAWS_IDLE	(24 * 24 * 60 * 60 * PR_SLOWHZ)
 					/* timestamp wrap-around time */
+#endif /* __APPLE_API_PRIVATE */
 
 #ifdef KERNEL
+#ifdef __APPLE_API_PRIVATE
 extern tcp_cc	tcp_ccgen;		/* global connection count */
-
-#ifdef TCP_COMPAT_42
-/*
- * Increment for tcp_iss each second.
- * This is designed to increment at the standard 250 KB/s,
- * but with a random component averaging 128 KB.
- * We also increment tcp_iss by a quarter of this amount
- * each time we use the value for a new connection.
- * If defined, the tcp_random18() macro should produce a
- * number in the range [0-0x3ffff] that is hard to predict.
- */
-#ifndef tcp_random18
-#define	tcp_random18()	((random() >> 14) & 0x3ffff)
-#endif
-#define	TCP_ISSINCR	(122*1024 + tcp_random18())
-
-extern tcp_seq	tcp_iss;		/* tcp initial send seq # */
-#endif /* TCP_COMPAT_42 */
-#else
-#define	TCP_ISSINCR	(250*1024)	/* increment for tcp_iss each second */
+#endif /* __APPLE_API_PRIVATE */
 #endif /* KERNEL */
 #endif /* _NETINET_TCP_SEQ_H_ */

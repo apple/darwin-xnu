@@ -33,6 +33,7 @@ enum {
     kIOMemoryKernelUserShared		= 0x00010000,
 };
 
+#define _IOBUFFERMEMORYDESCRIPTOR_INTASKWITHOPTIONS_	1
 
 class IOBufferMemoryDescriptor : public IOGeneralMemoryDescriptor
 {
@@ -42,7 +43,9 @@ protected:
 /*! @struct ExpansionData
     @discussion This structure will be used to expand the capablilties of this class in the future.
     */    
-    struct ExpansionData { };
+    struct ExpansionData {
+	vm_map_t	map;
+    };
 
 /*! @var reserved
     Reserved for future use.  (Internal use only)  */
@@ -57,7 +60,13 @@ protected:
     unsigned             _physSegCount;
 
 private:
-    OSMetaClassDeclareReservedUnused(IOBufferMemoryDescriptor, 0);
+    virtual bool initWithOptions(
+                               IOOptionBits options,
+                               vm_size_t    capacity,
+                               vm_offset_t  alignment,
+			       task_t	    inTask);
+
+    OSMetaClassDeclareReservedUsed(IOBufferMemoryDescriptor, 0);
     OSMetaClassDeclareReservedUnused(IOBufferMemoryDescriptor, 1);
     OSMetaClassDeclareReservedUnused(IOBufferMemoryDescriptor, 2);
     OSMetaClassDeclareReservedUnused(IOBufferMemoryDescriptor, 3);
@@ -125,6 +134,24 @@ public:
     static IOBufferMemoryDescriptor * withOptions(  IOOptionBits options,
                                                     vm_size_t    capacity,
                                                     vm_offset_t  alignment = 1);
+
+/*! @function inTaskWithOptions
+    @abstract Create a memory buffer with memory descriptor for that buffer. Added in Mac OS X 10.2.
+    @discussion This method allocates a memory buffer with a given size and alignment in the task's address space specified, and returns a memory descriptor instance representing the memory. It is recommended memory allocated for I/O or sharing via mapping be created via IOBufferMemoryDescriptor. Options passed with the request specify the kind of memory to be allocated - pageablity and sharing are specified with option bits. This function may block and so should not be called from interrupt level or while a simple lock is held.
+    @param inTask The task the buffer will be allocated in.
+    @param options Options for the allocation:
+    kIOMemoryPhysicallyContiguous - pass to request memory be physically contiguous. This option is heavily discouraged. The request may fail if memory is fragmented, may cause large amounts of paging activity, and may take a very long time to execute.
+    kIOMemoryPageable - pass to request memory be non-wired - the default for kernel allocated memory is wired.
+    kIOMemoryKernelUserShared - pass to request memory that will be mapped into both the kernel and client applications.
+    @param capacity The number of bytes to allocate.
+    @param alignment The minimum required alignment of the buffer in bytes - 1 is the default for no required alignment. For example, pass 256 to get memory allocated at an address with bits 0-7 zero.
+    @result An instance of class IOBufferMemoryDescriptor. To be released by the caller, which will free the memory desriptor and associated buffer. */
+
+    static IOBufferMemoryDescriptor * inTaskWithOptions(
+					    task_t       inTask,
+                                            IOOptionBits options,
+                                            vm_size_t    capacity,
+                                            vm_offset_t  alignment = 1);
 
     /*
      * withCapacity:

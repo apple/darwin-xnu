@@ -119,13 +119,15 @@ typedef struct ipc_kmsg {
 
 #define	ikm_prealloc_set_inuse(kmsg, port)				\
 MACRO_BEGIN								\
-	assert(port != IP_NULL);					\
-	(kmsg)->ikm_prealloc = port;					\
+	assert((port) != IP_NULL);					\
+	(kmsg)->ikm_prealloc = (port);					\
+	ip_reference(port);						\
 MACRO_END
 
 #define ikm_prealloc_clear_inuse(kmsg, port)				\
 MACRO_BEGIN								\
 	(kmsg)->ikm_prealloc = IP_NULL;					\
+	ip_release(port);						\
 MACRO_END
 
 

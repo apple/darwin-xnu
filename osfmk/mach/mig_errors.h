@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2002 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -57,10 +57,10 @@
 #ifndef	_MACH_MIG_ERRORS_H_
 #define _MACH_MIG_ERRORS_H_
 
-#include <mach/kern_return.h>
+#include <mach/mig.h>
+#include <mach/ndr.h>
 #include <mach/message.h>
-#include <mach/rpc.h>
-#include <mach/vm_types.h>
+#include <mach/kern_return.h>
 
 /*
  *	These error codes should be specified as system 4, subsytem 2.
@@ -82,43 +82,15 @@
 #define MIG_SERVER_DIED		-308	/* server died */
 #define MIG_TRAILER_ERROR       -309    /* trailer has an unknown format */
 
-#include <mach/ndr.h>
-
+/*
+ *	Whenever MIG detects an error, it sends back a generic
+ *	mig_reply_error_t format message.  Clients must accept
+ *	these in addition to the expected reply message format.
+ */
 typedef struct {
 	mach_msg_header_t	Head;
 	NDR_record_t		NDR;
 	kern_return_t		RetCode;
 } mig_reply_error_t;
-
-typedef struct mig_symtab {
-	char	*ms_routine_name;
-	int	ms_routine_number;
-	void    (*ms_routine)(void);	/* Since the functions in the
-					 * symbol table have unknown
-					 * signatures, this is the best
-					 * we can do...
-					 */
-} mig_symtab_t;
-
-/* Client side reply port allocate */
-extern mach_port_t mig_get_reply_port(void);
-
-/* Client side reply port deallocate */
-extern void mig_dealloc_reply_port(mach_port_t reply_port);
-
-/* Client side reply port "deallocation" */
-extern void mig_put_reply_port(mach_port_t reply_port);
-
-/* Allocate memory for out-of-stack mig structures */
-extern char *mig_user_allocate(vm_size_t size);
-
-/* Deallocate memory used for out-of-stack mig structures */
-extern void mig_user_deallocate(char *data, vm_size_t size);
-
-/* Bounded string copy */
-extern int mig_strncpy(
-	char	*dest,
-	char	*src,
-	int	len);
 
 #endif	/* _MACH_MIG_ERRORS_H_ */

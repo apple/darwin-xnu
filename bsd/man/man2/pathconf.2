@@ -1,0 +1,165 @@
+.\"	$NetBSD: pathconf.2,v 1.2 1995/02/27 12:35:22 cgd Exp $
+.\"
+.\" Copyright (c) 1993
+.\"	The Regents of the University of California.  All rights reserved.
+.\"
+.\" Redistribution and use in source and binary forms, with or without
+.\" modification, are permitted provided that the following conditions
+.\" are met:
+.\" 1. Redistributions of source code must retain the above copyright
+.\"    notice, this list of conditions and the following disclaimer.
+.\" 2. Redistributions in binary form must reproduce the above copyright
+.\"    notice, this list of conditions and the following disclaimer in the
+.\"    documentation and/or other materials provided with the distribution.
+.\" 3. All advertising materials mentioning features or use of this software
+.\"    must display the following acknowledgement:
+.\"	This product includes software developed by the University of
+.\"	California, Berkeley and its contributors.
+.\" 4. Neither the name of the University nor the names of its contributors
+.\"    may be used to endorse or promote products derived from this software
+.\"    without specific prior written permission.
+.\"
+.\" THIS SOFTWARE IS PROVIDED BY THE REGENTS AND CONTRIBUTORS ``AS IS'' AND
+.\" ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+.\" IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
+.\" ARE DISCLAIMED.  IN NO EVENT SHALL THE REGENTS OR CONTRIBUTORS BE LIABLE
+.\" FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
+.\" DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS
+.\" OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION)
+.\" HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT
+.\" LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
+.\" OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
+.\" SUCH DAMAGE.
+.\"
+.\"	@(#)pathconf.2	8.1 (Berkeley) 6/4/93
+.\"
+.Dd June 4, 1993
+.Dt PATHCONF 2
+.Os BSD 4
+.Sh NAME
+.Nm pathconf ,
+.Nm fpathconf
+.Nd get configurable pathname variables
+.Sh SYNOPSIS
+.Fd #include <unistd.h>
+.Ft long
+.Fn pathconf "const char *path" "int name"
+.Ft long
+.Fn fpathconf "int fd" "int name"
+.Sh DESCRIPTION
+.Pp
+The
+.Fn pathconf
+and
+.Fn fpathconf
+functions provides a method for applications to determine the current
+value of a configurable system limit or option variable associated
+with a pathname or file descriptor.
+.Pp
+For
+.Nm pathconf ,
+the
+.Fa path
+argument is the name of a file or directory.
+For
+.Nm fpathconf ,
+the
+.Fa fd
+argument is an open file descriptor.
+The
+.Fa name
+argument specifies the system variable to be queried.
+Symbolic constants for each name value are found in the include file
+.Li <unistd.h> .
+.Pp
+The available values are as follows:
+.Pp
+.Bl -tag -width "123456"
+.Pp
+.It Li _PC_LINK_MAX
+The maximum file link count.
+.It Li _PC_MAX_CANON
+The maximum number of bytes in terminal canonical input line.
+.It Li _PC_MAX_INPUT
+The minimum maximum number of bytes for which space is available in
+a terminal input queue.
+.It Li _PC_NAME_MAX
+The maximum number of bytes in a file name.
+.It Li _PC_PATH_MAX
+The maximum number of bytes in a pathname.
+.It Li _PC_PIPE_BUF
+The maximum number of bytes which will be written atomically to a pipe.
+.It Li _PC_CHOWN_RESTRICTED
+Return 1 if appropriate privileges are required for the
+.Xr chown 2
+system call, otherwise 0.
+.It Li _PC_NO_TRUNC
+Return 1 if file names longer than KERN_NAME_MAX are truncated.
+.It Li _PC_VDISABLE
+Returns the terminal character disabling value.
+.El
+.Sh RETURN VALUES
+If the call to
+.Nm pathconf
+or
+.Nm fpathconf
+is not successful, \-1 is returned and
+.Va errno
+is set appropriately.
+Otherwise, if the variable is associated with functionality that does
+not have a limit in the system, \-1 is returned and
+.Va errno
+is not modified.
+Otherwise, the current variable value is returned.
+.Sh ERRORS
+If any of the following conditions occur, the
+.Nm pathconf
+and
+.Nm fpathconf
+functions shall return -1 and set
+.Va errno
+to the corresponding value.
+.Bl -tag -width Er
+.It Bq Er EINVAL
+The value of the
+.Fa name
+argument is invalid.
+.It Bq Er EINVAL
+The implementation does not support an association of the variable
+name with the associated file.
+.El
+.Fn Pathconf
+will fail if:
+.Bl -tag -width ENAMETOOLONGAA
+.It Bq Er ENOTDIR
+A component of the path prefix is not a directory.
+.It Bq Er ENAMETOOLONG
+A component of a pathname exceeded 255 characters,
+or an entire path name exceeded 1023 characters.
+.It Bq Er ENOENT
+The named file does not exist.
+.It Bq Er EACCES
+Search permission is denied for a component of the path prefix.
+.It Bq Er ELOOP
+Too many symbolic links were encountered in translating the pathname.
+.It Bq Er EIO
+An I/O error occurred while reading from or writing to the file system.
+.El
+.Pp
+.Bl -tag -width [EFAULT]
+.Fn Fpathconf
+will fail if:
+.It Bq Er EBADF
+.Fa fd
+is not a valid open file descriptor.
+.It Bq Er EIO
+An I/O error occurred while reading from or writing to the file system.
+.El
+.Sh SEE ALSO
+.Xr sysctl 3
+.Sh HISTORY
+The
+.Nm pathconf
+and
+.Nm fpathconf
+functions first appeared in 4.4BSD.

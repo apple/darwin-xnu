@@ -776,10 +776,7 @@ BYPASS_COW_COPYIN:
 				continue;
 			}
 
-			PAGE_ASSERT_WAIT(m, THREAD_UNINT);
-			vm_object_unlock(object);
-			thread_block((void (*)(void))0);
-			vm_object_lock(object);
+			PAGE_SLEEP(object, m, THREAD_UNINT);
 			continue;
 
 		    case MEMORY_OBJECT_LOCK_RESULT_MUST_CLEAN:
@@ -812,9 +809,7 @@ BYPASS_COW_COPYIN:
 			m->busy = FALSE;
 			holding_page = VM_PAGE_NULL;
 			if(m->cleaning) {
-				PAGE_ASSERT_WAIT(m, THREAD_UNINT);
-				vm_object_unlock(object);
-				thread_block((void (*)(void))0);
+				PAGE_SLEEP(object, m, THREAD_UNINT);
 				continue;
 			}
 			if(!pending_pageout) {
@@ -1462,9 +1457,12 @@ memory_manager_default_reference(
 	mutex_lock(&memory_manager_default_lock);
 	current_manager = memory_manager_default;
 	while (current_manager == MEMORY_OBJECT_DEFAULT_NULL) {
-		thread_sleep_mutex((event_t) &memory_manager_default,
-			&memory_manager_default_lock, THREAD_UNINT);
-		mutex_lock(&memory_manager_default_lock);
+		wait_result_t res;
+
+		res = thread_sleep_mutex((event_t) &memory_manager_default,
+					 &memory_manager_default_lock,
+					 THREAD_UNINT);
+		assert(res == THREAD_AWAKENED);
 		current_manager = memory_manager_default;
 	}
 	memory_object_default_reference(current_manager);
@@ -1560,7 +1558,15 @@ memory_object_deactivate_pages(
 					}
 					VM_PAGE_QUEUES_REMOVE(m);
 
-					queue_enter_first(&vm_page_queue_inactive, m, vm_page_t, pageq);
+					if(m->zero_fill) {
+						queue_enter_first(
+							&vm_page_queue_zf, 
+							m, vm_page_t, pageq);
+					} else {
+						queue_enter_first(
+							&vm_page_queue_inactive, 
+							m, vm_page_t, pageq);
+					}
 
 					m->inactive = TRUE;
 					if (!m->fictitious)  
@@ -1645,10 +1651,7 @@ memory_object_page_op(
 			   (ops & UPL_POP_BUSY)) || (ops & UPL_POP_DUMP))) {
 			/* someone else is playing with the page, we will */
 			/* have to wait */
-			PAGE_ASSERT_WAIT(dst_page, THREAD_UNINT);
-			vm_object_unlock(object);
-			thread_block((void(*)(void))0);
-			vm_object_lock(object);
+			PAGE_SLEEP(object, dst_page, THREAD_UNINT);
 			continue;
 		}
 

@@ -1,4 +1,5 @@
-/*	$KAME: esp.h,v 1.5 2000/02/22 14:04:15 itojun Exp $	*/
+/*	$FreeBSD: src/sys/netinet6/esp.h,v 1.2.2.2 2001/07/03 11:01:49 ume Exp $	*/
+/*	$KAME: esp.h,v 1.16 2000/10/18 21:28:00 itojun Exp $	*/
 
 /*
  * Copyright (C) 1995, 1996, 1997, and 1998 WIDE Project.
@@ -35,8 +36,8 @@
 
 #ifndef _NETINET6_ESP_H_
 #define _NETINET6_ESP_H_
+#include <sys/appleapiopts.h>
 
-#include <netkey/keydb.h>		/* for struct secas */
 
 struct esp {
 	u_int32_t	esp_spi;	/* ESP */
@@ -66,41 +67,43 @@ struct esptail {
 	/*variable size, 32bit bound*/	/* Authentication data (new IPsec)*/
 };
 
-struct esp_algorithm_state {
-	struct secasvar *sav;
-	void* foo;	/*per algorithm data - maybe*/
-};
+#ifdef KERNEL
+#ifdef __APPLE_API_PRIVATE
+struct secasvar;
 
-/* XXX yet to be defined */
 struct esp_algorithm {
 	size_t padbound;	/* pad boundary, in byte */
+	int ivlenval;		/* iv length, in byte */
 	int (*mature) __P((struct secasvar *));
 	int keymin;	/* in bits */
 	int keymax;	/* in bits */
-	int (*ivlen) __P((struct secasvar *));
+	int (*schedlen) __P((const struct esp_algorithm *));
+	const char *name;
+	int (*ivlen) __P((const struct esp_algorithm *, struct secasvar *));
 	int (*decrypt) __P((struct mbuf *, size_t,
-		struct secasvar *, struct esp_algorithm *, int));
+		struct secasvar *, const struct esp_algorithm *, int));
 	int (*encrypt) __P((struct mbuf *, size_t, size_t,
-		struct secasvar *, struct esp_algorithm *, int));
+		struct secasvar *, const struct esp_algorithm *, int));
+	/* not supposed to be called directly */
+	int (*schedule) __P((const struct esp_algorithm *, struct secasvar *));
+	int (*blockdecrypt) __P((const struct esp_algorithm *,
+		struct secasvar *, u_int8_t *, u_int8_t *));
+	int (*blockencrypt) __P((const struct esp_algorithm *,
+		struct secasvar *, u_int8_t *, u_int8_t *));
 };
 
-#if KERNEL
-extern struct esp_algorithm esp_algorithms[];
+extern const struct esp_algorithm *esp_algorithm_lookup __P((int));
+extern int esp_max_ivlen __P((void));
 
 /* crypt routines */
 extern int esp4_output __P((struct mbuf *, struct ipsecrequest *));
 extern void esp4_input __P((struct mbuf *, int off));
 extern size_t esp_hdrsiz __P((struct ipsecrequest *));
 
-#if INET6
-extern int esp6_output __P((struct mbuf *, u_char *, struct mbuf *,
-	struct ipsecrequest *));
-extern int esp6_input __P((struct mbuf **, int *, int));
-#endif /* INET6 */
-#endif /*KERNEL*/
-
-struct secasvar;
+extern int esp_schedule __P((const struct esp_algorithm *, struct secasvar *));
 extern int esp_auth __P((struct mbuf *, size_t, size_t,
 	struct secasvar *, u_char *));
+#endif /* __APPLE_API_PRIVATE */
+#endif /*KERNEL*/
 
 #endif /*_NETINET6_ESP_H_*/

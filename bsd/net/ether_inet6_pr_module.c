@@ -86,7 +86,6 @@
 
 
 #include <sys/socketvar.h>
-#include <net/if_blue.h>
 
 #include <net/dlil.h>
 
@@ -104,10 +103,6 @@ extern struct ifqueue pkintrq;
 #if NVLAN > 0
 #include <net/if_vlan_var.h>
 #endif /* NVLAN > 0 */
-
-
-extern struct ifnet_blue *blue_if;
-extern struct mbuf *splitter_input(struct mbuf *, struct ifnet *);
 
 static u_long lo_dlt = 0;
 static ivedonethis = 0;
@@ -208,7 +203,6 @@ inet6_ether_pre_output(ifp, m0, dst_netaddr, route, type, edst, dl_tag )
     register struct mbuf *m = *m0;
     register struct rtentry *rt;
     register struct ether_header *eh;
-    int off, len = m->m_pkthdr.len;
     int hlen;	/* link layer header lenght */
     struct arpcom *ac = IFP2AC(ifp);
 
@@ -222,7 +216,7 @@ inet6_ether_pre_output(ifp, m0, dst_netaddr, route, type, edst, dl_tag )
 	if ((rt->rt_flags & RTF_UP) == 0) {
 	    rt0 = rt = rtalloc1(dst_netaddr, 1, 0UL);
 	    if (rt0)
-		rt->rt_refcnt--;
+		rtunref(rt);
 	    else
 		return EHOSTUNREACH;
 	}
@@ -262,7 +256,6 @@ inet6_ether_pre_output(ifp, m0, dst_netaddr, route, type, edst, dl_tag )
              printf("nd6_storelladdr failed\n");
              return(0);
                 }
-       off = m->m_pkthdr.len - m->m_len;
        *(u_short *)type = htons(ETHERTYPE_IPV6);
        break;
 
@@ -324,8 +317,10 @@ ether_inet6_prmod_ioctl(dl_tag, ifp, command, data)
                 sdl->sdl_slen = 0;
                 e_addr = LLADDR(sdl);
                 ETHER_MAP_IPV6_MULTICAST(&sin6->sin6_addr, e_addr);
+#ifndef __APPLE__
                 printf("ether_resolvemulti AF_INET6 Adding %x:%x:%x:%x:%x:%x\n",
                                 e_addr[0], e_addr[1], e_addr[2], e_addr[3], e_addr[4], e_addr[5]);
+#endif
                 *rsreq->llsa = (struct sockaddr *)sdl;
                 return 0;
 
@@ -358,14 +353,10 @@ ether_inet6_prmod_ioctl(dl_tag, ifp, command, data)
 
     case SIOCSIFMTU:
 	/*
-	 * Set the interface MTU.
+	 * IOKit IONetworkFamily will set the right MTU according to the driver
 	 */
-	if (ifr->ifr_mtu > ETHERMTU) {
-	    error = EINVAL;
-	} else {
-	    ifp->if_mtu = ifr->ifr_mtu;
-	}
-	break;
+
+	 return (0);
 
     default:
 	 return EOPNOTSUPP;
@@ -417,3 +408,19 @@ u_long  ether_attach_inet6(struct ifnet *ifp)
 
     return ip_dl_tag;
 }
+
+int  ether_detach_inet6(struct ifnet *ifp)
+{
+    u_long      ip_dl_tag = 0;
+    int         stat;
+
+    stat = dlil_find_dltag(ifp->if_family, ifp->if_unit, PF_INET6, &ip_dl_tag);
+    if (stat == 0) {
+        stat = dlil_detach_protocol(ip_dl_tag);
+        if (stat) {
+            printf("WARNING: ether_detach_inet6 can't detach ip6 from interface\n");
+        }
+    }
+    return stat;
+}
+

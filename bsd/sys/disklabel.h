@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2002 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -56,6 +56,10 @@
  */
 #ifndef _SYS_DISKLABEL_H_
 #define _SYS_DISKLABEL_H_
+
+#include <sys/appleapiopts.h>
+
+#ifdef __APPLE_API_OBSOLETE
 
 /*
  * Disk description table, see disktab(5)
@@ -357,6 +361,8 @@ struct disklabel *getdiskbyname __P((const char *));
 __END_DECLS
 
 #endif
+
+#endif /* __APPLE_API_OBSOLETE */
 
 #endif /* ! _SYS_DISKLABEL_H_ */
 

@@ -11,19 +11,15 @@ INSTINC_SUBDIRS = \
 	crypto \
 	dev \
 	hfs \
-	include \
 	isofs \
 	libkern \
 	machine \
 	miscfs \
 	net \
 	netat \
-	netccitt \
 	netinet \
 	netinet6 \
-	netiso \
 	netkey \
-	netns \
 	nfs \
 	sys \
 	ufs \
@@ -39,19 +35,15 @@ EXPINC_SUBDIRS = \
 	crypto \
 	dev \
 	hfs \
-	include \
 	isofs \
 	libkern \
 	machine \
 	miscfs \
 	net \
 	netat \
-	netccitt \
 	netinet \
 	netinet6 \
-	netiso \
 	netkey \
-	netns \
 	nfs \
 	sys \
 	ufs \
@@ -72,6 +64,8 @@ COMP_SUBDIRS = 	\
 
 INST_SUBDIRS =	\
 
+INSTMAN_SUBDIRS = \
+	man
 
 include $(MakeInc_rule)
 include $(MakeInc_dir)

@@ -41,9 +41,12 @@
 #include <ppc/proc_reg.h>	/* for SR_xxx definitions */
 #include <ppc/pmap.h>
 #include <ppc/mem.h>
-#include <ppc/fpu_protos.h>
+#include <ppc/Firmware.h>
+#include <ppc/low_trace.h>
 
 #include <sys/kdebug.h>
+
+perfTrap perfTrapHook = 0;							/* Pointer to performance trap hook routine */
 
 #if	MACH_KDB
 #include <ddb/db_watch.h>
@@ -62,58 +65,61 @@ extern boolean_t db_breakpoints_inserted;
 #endif	/* MACH_KDB */
 
 extern int debugger_active[NCPUS];
-extern vm_address_t bsd_init_task;
+extern task_t bsd_init_task;
 extern char init_task_failure_data[];
 
-/*
- * XXX don't pass VM_PROT_EXECUTE to vm_fault(), execute permission is implied
- * in either R or RW (note: the pmap module knows this).  This is done for the
- * benefit of programs that execute out of their data space (ala lisp).
- * If we didn't do this in that scenerio, the ITLB miss code would call us
- * and we would call vm_fault() with RX permission.  However, the space was
- * probably vm_allocate()ed with just RW and vm_fault would fail.  The "right"
- * solution to me is to have the un*x server always allocate data with RWX for
- * compatibility with existing binaries.
- */
 
-#define	PROT_EXEC	(VM_PROT_READ)
+#define	PROT_EXEC	(VM_PROT_EXECUTE)
 #define PROT_RO		(VM_PROT_READ)
 #define PROT_RW		(VM_PROT_READ|VM_PROT_WRITE)
 
 /* A useful macro to update the ppc_exception_state in the PCB
  * before calling doexception
  */
-#define UPDATE_PPC_EXCEPTION_STATE {					      \
-	thread_act_t thr_act = current_act();				      \
-	struct ppc_exception_state *es = &thr_act->mact.pcb->es;	      \
-	es->dar = dar;							      \
-	es->dsisr = dsisr;						      \
-	es->exception = trapno / T_VECTOR_SIZE;	/* back to powerpc */ \
+#define UPDATE_PPC_EXCEPTION_STATE {							\
+	thread_act_t thr_act = current_act();						\
+	thr_act->mact.pcb->save_dar = dar;							\
+	thr_act->mact.pcb->save_dsisr = dsisr;						\
+	thr_act->mact.pcb->save_exception = trapno / T_VECTOR_SIZE;	/* back to powerpc */ \
 }
 
 static void unresolved_kernel_trap(int trapno,
-				   struct ppc_saved_state *ssp,
+				   struct savearea *ssp,
 				   unsigned int dsisr,
 				   unsigned int dar,
 				   char *message);
 
-struct ppc_saved_state *trap(int trapno,
-			     struct ppc_saved_state *ssp,
+struct savearea *trap(int trapno,
+			     struct savearea *ssp,
 			     unsigned int dsisr,
 			     unsigned int dar)
 {
-	int exception=0;
+	int exception;
 	int code;
 	int subcode;
 	vm_map_t map;
-        unsigned int sp;
-	unsigned int space,space2;
+    unsigned int sp;
+	unsigned int space, space2;
 	unsigned int offset;
-	thread_act_t thr_act = current_act();
+	thread_act_t thr_act;
 	boolean_t intr;
 #ifdef MACH_BSD
 	time_value_t tv;
 #endif /* MACH_BSD */
+
+	if(perfTrapHook) {							/* Is there a hook? */
+		if(perfTrapHook(trapno, ssp, dsisr, dar) == KERN_SUCCESS) return ssp;	/* If it succeeds, we are done... */
+	}
+
+#if 0
+	{
+		extern void fctx_text(void);
+		fctx_test();
+	}
+#endif
+
+	thr_act = current_act();					/* Get current activation */
+	exception = 0;								/* Clear exception for now */
 
 /*
  *	Remember that we are disabled for interruptions when we come in here.  Because
@@ -121,11 +127,11 @@ struct ppc_saved_state *trap(int trapno,
  *	was enabled itself as soon as we can.
  */
 
-	intr = (ssp->srr1 & MASK(MSR_EE)) != 0;		/* Remember if we were enabled */
+	intr = (ssp->save_srr1 & MASK(MSR_EE)) != 0;	/* Remember if we were enabled */
 
 	/* Handle kernel traps first */
 
-	if (!USER_MODE(ssp->srr1)) {
+	if (!USER_MODE(ssp->save_srr1)) {
 		/*
 		 * Trap came from kernel
 		 */
@@ -138,10 +144,10 @@ struct ppc_saved_state *trap(int trapno,
 		case T_RESET:					/* Reset interruption */
 #if 0
 			kprintf("*** Reset exception ignored; srr0 = %08X, srr1 = %08X\n",
-				ssp->srr0, ssp->srr1);
+				ssp->save_srr0, ssp->save_srr1);
 #else
 			panic("Unexpected Reset exception; srr0 = %08X, srr1 = %08X\n",
-				ssp->srr0, ssp->srr1);
+				ssp->save_srr0, ssp->save_srr1);
 #endif
 			break;						/* We just ignore these */
 		
@@ -162,6 +168,7 @@ struct ppc_saved_state *trap(int trapno,
 		case T_FP_UNAVAILABLE:
 		case T_IO_ERROR:
 		case T_RESERVED:
+		case T_ALIGNMENT:
 		default:
 			unresolved_kernel_trap(trapno, ssp, dsisr, dar, NULL);
 			break;
@@ -174,18 +181,12 @@ struct ppc_saved_state *trap(int trapno,
 			break;
 
 		case T_PROGRAM:
-			if (ssp->srr1 & MASK(SRR1_PRG_TRAP)) {
+			if (ssp->save_srr1 & MASK(SRR1_PRG_TRAP)) {
 				if (!Call_Debugger(trapno, ssp))
 					unresolved_kernel_trap(trapno, ssp, dsisr, dar, NULL);
 			} else {
 				unresolved_kernel_trap(trapno, ssp, 
 							dsisr, dar, NULL);
-			}
-			break;
-
-		case T_ALIGNMENT:
-			if (alignment(dsisr, dar, ssp)) {
-				unresolved_kernel_trap(trapno, ssp, dsisr, dar, NULL);
 			}
 			break;
 
@@ -221,19 +222,19 @@ struct ppc_saved_state *trap(int trapno,
 				if((0 == (dar & -PAGE_SIZE)) && 	/* Check for access of page 0 and */
 				  ((thr_act->mact.specFlags) & ignoreZeroFault)) {
 									/* special case of ignoring page zero faults */
-					ssp->srr0 += 4;			/* Point to next instruction */
+					ssp->save_srr0 += 4;			/* Point to next instruction */
 					break;
 				}
 
 				code = vm_fault(map, trunc_page(offset),
 						dsisr & MASK(DSISR_WRITE) ? PROT_RW : PROT_RO,
-						FALSE, THREAD_UNINT);
+						FALSE, THREAD_UNINT, NULL, 0);
 
 				if (code != KERN_SUCCESS) {
 					unresolved_kernel_trap(trapno, ssp, dsisr, dar, NULL);
 				} else { 
-					((savearea *)ssp)->save_flags |= SAVredrive;	/* Tell low-level to re-try fault */
-					((savearea *)ssp)->save_dsisr |= MASK(DSISR_HASH);	/* Make sure this is marked as a miss */
+					ssp->save_hdr.save_flags |= SAVredrive;	/* Tell low-level to re-try fault */
+					ssp->save_dsisr |= MASK(DSISR_HASH);	/* Make sure this is marked as a miss */
 				}
 				break;
 			}
@@ -249,7 +250,7 @@ struct ppc_saved_state *trap(int trapno,
 
 			code = vm_fault(map, trunc_page(offset),
 					dsisr & MASK(DSISR_WRITE) ? PROT_RW : PROT_RO,
-					FALSE, THREAD_ABORTSAFE);
+					FALSE, THREAD_UNINT, NULL, 0);
 
 			/* If we failed, there should be a recovery
 			 * spot to rfi to.
@@ -259,7 +260,7 @@ struct ppc_saved_state *trap(int trapno,
 				if (thr_act->thread->recover) {
 				
 					act_lock_thread(thr_act);
-					ssp->srr0 = thr_act->thread->recover;
+					ssp->save_srr0 = thr_act->thread->recover;
 					thr_act->thread->recover =
 							(vm_offset_t)NULL;
 					act_unlock_thread(thr_act);
@@ -268,8 +269,8 @@ struct ppc_saved_state *trap(int trapno,
 				}
 			}
 			else { 
-				((savearea *)ssp)->save_flags |= SAVredrive;	/* Tell low-level to re-try fault */
-				((savearea *)ssp)->save_dsisr |= MASK(DSISR_HASH);	/* Make sure this is marked as a miss */
+				ssp->save_hdr.save_flags |= SAVredrive;	/* Tell low-level to re-try fault */
+				ssp->save_dsisr |= MASK(DSISR_HASH);	/* Make sure this is marked as a miss */
 			}
 			
 			break;
@@ -295,14 +296,14 @@ struct ppc_saved_state *trap(int trapno,
 
 			map = kernel_map;
 			
-			code = vm_fault(map, trunc_page(ssp->srr0),
-					PROT_EXEC, FALSE, THREAD_UNINT);
+			code = vm_fault(map, trunc_page(ssp->save_srr0),
+					PROT_EXEC, FALSE, THREAD_UNINT, NULL, 0);
 
 			if (code != KERN_SUCCESS) {
 				unresolved_kernel_trap(trapno, ssp, dsisr, dar, NULL);
 			} else { 
-				((savearea *)ssp)->save_flags |= SAVredrive;	/* Tell low-level to re-try fault */
-				ssp->srr1 |= MASK(DSISR_HASH);					/* Make sure this is marked as a miss */
+				ssp->save_hdr.save_flags |= SAVredrive;	/* Tell low-level to re-try fault */
+				ssp->save_srr1 |= MASK(DSISR_HASH);		/* Make sure this is marked as a miss */
 			}
 			break;
 
@@ -362,21 +363,35 @@ struct ppc_saved_state *trap(int trapno,
 			ml_set_interrupts_enabled(FALSE);					/* Turn off interruptions */
 
 			panic("Unexpected user state trap(cpu %d): 0x%08x DSISR=0x%08x DAR=0x%08x PC=0x%08x, MSR=0x%08x\n",
-			       cpu_number(), trapno, dsisr, dar, ssp->srr0, ssp->srr1);
+			       cpu_number(), trapno, dsisr, dar, ssp->save_srr0, ssp->save_srr1);
 			break;
 
 		case T_RESET:
 #if 0
 			kprintf("*** Reset exception ignored; srr0 = %08X, srr1 = %08X\n",
-				ssp->srr0, ssp->srr1);
+				ssp->save_srr0, ssp->save_srr1);
 #else
 			panic("Unexpected Reset exception: srr0 = %0x08x, srr1 = %0x08x\n",
-				ssp->srr0, ssp->srr1);
+				ssp->save_srr0, ssp->save_srr1);
 #endif
 			break;						/* We just ignore these */
 
 		case T_ALIGNMENT:
-			if (alignment(dsisr, dar, ssp)) {
+/*
+*			If notifyUnaligned is set, we have actually already emulated the unaligned access.
+*			All that we want to do here is to ignore the interrupt. This is to allow logging or
+*			tracing of unaligned accesses.  Note that if trapUnaligned is also set, it takes 
+*			precedence and we will take a bad access fault.
+*/
+
+			if(thr_act->mact.specFlags & notifyUnalign) {
+			
+				KERNEL_DEBUG_CONSTANT(
+						MACHDBG_CODE(DBG_MACH_EXCP_ALNG, 0) | DBG_FUNC_NONE,
+								(int)ssp->save_srr0, (int)dar, (int)dsisr, (int)ssp->save_lr, 0);
+			}
+			
+			if((!(thr_act->mact.specFlags & notifyUnalign)) || (thr_act->mact.specFlags & trapUnalign)) {
 				code = EXC_PPC_UNALIGNED;
 				exception = EXC_BAD_ACCESS;
 				subcode = dar;
@@ -394,36 +409,36 @@ struct ppc_saved_state *trap(int trapno,
 		case T_RUNMODE_TRACE:		/* 601  PPC chips */
 			exception = EXC_BREAKPOINT;
 			code = EXC_PPC_TRACE;
-			subcode = ssp->srr0;
+			subcode = ssp->save_srr0;
 			break;
 
 		case T_PROGRAM:
-			if (ssp->srr1 & MASK(SRR1_PRG_FE)) {
-				fpu_save(thr_act);
+			if (ssp->save_srr1 & MASK(SRR1_PRG_FE)) {
+				fpu_save(thr_act->mact.curctx);
 				UPDATE_PPC_EXCEPTION_STATE;
 				exception = EXC_ARITHMETIC;
 				code = EXC_ARITHMETIC;
 			
 				mp_disable_preemption();
-				subcode = current_act()->mact.FPU_pcb->fs.fpscr;
+				subcode = ssp->save_fpscr;
 				mp_enable_preemption();
 			} 	
-			else if (ssp->srr1 & MASK(SRR1_PRG_ILL_INS)) {
+			else if (ssp->save_srr1 & MASK(SRR1_PRG_ILL_INS)) {
 				
 				UPDATE_PPC_EXCEPTION_STATE
 				exception = EXC_BAD_INSTRUCTION;
 				code = EXC_PPC_UNIPL_INST;
-				subcode = ssp->srr0;
-			} else if (ssp->srr1 & MASK(SRR1_PRG_PRV_INS)) {
+				subcode = ssp->save_srr0;
+			} else if (ssp->save_srr1 & MASK(SRR1_PRG_PRV_INS)) {
 
 				UPDATE_PPC_EXCEPTION_STATE;
 				exception = EXC_BAD_INSTRUCTION;
 				code = EXC_PPC_PRIVINST;
-				subcode = ssp->srr0;
-			} else if (ssp->srr1 & MASK(SRR1_PRG_TRAP)) {
+				subcode = ssp->save_srr0;
+			} else if (ssp->save_srr1 & MASK(SRR1_PRG_TRAP)) {
 				unsigned int inst;
 
-				if (copyin((char *) ssp->srr0, (char *) &inst, 4 ))
+				if (copyin((char *) ssp->save_srr0, (char *) &inst, 4 ))
 					panic("copyin failed\n");
 				UPDATE_PPC_EXCEPTION_STATE;
 				if (inst == 0x7FE00008) {
@@ -433,7 +448,7 @@ struct ppc_saved_state *trap(int trapno,
 					exception = EXC_SOFTWARE;
 					code = EXC_PPC_TRAP;
 				}
-				subcode = ssp->srr0;
+				subcode = ssp->save_srr0;
 			}
 			break;
 			
@@ -441,7 +456,7 @@ struct ppc_saved_state *trap(int trapno,
 			UPDATE_PPC_EXCEPTION_STATE;
 			exception = EXC_ARITHMETIC;
 			code = EXC_PPC_ALTIVECASSIST;
-			subcode = ssp->srr0;
+			subcode = ssp->save_srr0;
 			break;
 
 		case T_DATA_ACCESS:
@@ -449,15 +464,15 @@ struct ppc_saved_state *trap(int trapno,
 			
 			code = vm_fault(map, trunc_page(dar),
 				 dsisr & MASK(DSISR_WRITE) ? PROT_RW : PROT_RO,
-				 FALSE, THREAD_ABORTSAFE);
+				 FALSE, THREAD_ABORTSAFE, NULL, 0);
 
 			if ((code != KERN_SUCCESS) && (code != KERN_ABORTED)) {
 				UPDATE_PPC_EXCEPTION_STATE;
 				exception = EXC_BAD_ACCESS;
 				subcode = dar;
 			} else { 
-				((savearea *)ssp)->save_flags |= SAVredrive;	/* Tell low-level to re-try fault */
-				((savearea *)ssp)->save_dsisr |= MASK(DSISR_HASH);	/* Make sure this is marked as a miss */
+				ssp->save_hdr.save_flags |= SAVredrive;	/* Tell low-level to re-try fault */
+				ssp->save_dsisr |= MASK(DSISR_HASH);	/* Make sure this is marked as a miss */
 			}
 			break;
 			
@@ -467,16 +482,16 @@ struct ppc_saved_state *trap(int trapno,
 			 */
 			map = thr_act->map;
 			
-			code = vm_fault(map, trunc_page(ssp->srr0),
-					PROT_EXEC, FALSE, THREAD_ABORTSAFE);
+			code = vm_fault(map, trunc_page(ssp->save_srr0),
+					PROT_EXEC, FALSE, THREAD_ABORTSAFE, NULL, 0);
 
 			if ((code != KERN_SUCCESS) && (code != KERN_ABORTED)) {
 				UPDATE_PPC_EXCEPTION_STATE;
 				exception = EXC_BAD_ACCESS;
-				subcode = ssp->srr0;
+				subcode = ssp->save_srr0;
 			} else { 
-				((savearea *)ssp)->save_flags |= SAVredrive;	/* Tell low-level to re-try fault */
-				ssp->srr1 |= MASK(DSISR_HASH);					/* Make sure this is marked as a miss */
+				ssp->save_hdr.save_flags |= SAVredrive;	/* Tell low-level to re-try fault */
+				ssp->save_srr1 |= MASK(DSISR_HASH);		/* Make sure this is marked as a miss */
 			}
 			break;
 
@@ -490,7 +505,7 @@ struct ppc_saved_state *trap(int trapno,
 		{
 		void bsd_uprofil(time_value_t *, unsigned int);
 
-		bsd_uprofil(&tv, ssp->srr0);
+		bsd_uprofil(&tv, ssp->save_srr0);
 		}
 #endif /* MACH_BSD */
 	}
@@ -513,24 +528,24 @@ struct ppc_saved_state *trap(int trapno,
 		       		if ((i % 8) == 0) {
 					buf += sprintf(buf, "\n%4d :",i);
 				}
-				buf += sprintf(buf, " %08x",*(&ssp->r0+i));
+				buf += sprintf(buf, " %08x",*(&ssp->save_r0+i));
 			}
 
         		buf += sprintf(buf, "\n\n");
-        		buf += sprintf(buf, "cr        = 0x%08x\t\t",ssp->cr);
-        		buf += sprintf(buf, "xer       = 0x%08x\n",ssp->xer);
-        		buf += sprintf(buf, "lr        = 0x%08x\t\t",ssp->lr);
-        		buf += sprintf(buf, "ctr       = 0x%08x\n",ssp->ctr); 
-        		buf += sprintf(buf, "srr0(iar) = 0x%08x\t\t",ssp->srr0);
-        		buf += sprintf(buf, "srr1(msr) = 0x%08B\n",ssp->srr1,
+        		buf += sprintf(buf, "cr        = 0x%08x\t\t",ssp->save_cr);
+        		buf += sprintf(buf, "xer       = 0x%08x\n",ssp->save_xer);
+        		buf += sprintf(buf, "lr        = 0x%08x\t\t",ssp->save_lr);
+        		buf += sprintf(buf, "ctr       = 0x%08x\n",ssp->save_ctr); 
+        		buf += sprintf(buf, "srr0(iar) = 0x%08x\t\t",ssp->save_srr0);
+        		buf += sprintf(buf, "srr1(msr) = 0x%08B\n",ssp->save_srr1,
                    	   "\x10\x11""EE\x12PR\x13""FP\x14ME\x15""FE0\x16SE\x18"
                     	   "FE1\x19""AL\x1a""EP\x1bIT\x1c""DT");
         		buf += sprintf(buf, "\n\n");
 
         		/* generate some stack trace */
         		buf += sprintf(buf, "Application level back trace:\n");
-        		if (ssp->srr1 & MASK(MSR_PR)) { 
-                	   char *addr = (char*)ssp->r1;
+        		if (ssp->save_srr1 & MASK(MSR_PR)) { 
+                	   char *addr = (char*)ssp->save_r1;
                 	   unsigned int stack_buf[3];
                 	   for (i = 0; i < 8; i++) {
                         	if (addr == (char*)NULL)
@@ -553,7 +568,7 @@ struct ppc_saved_state *trap(int trapno,
 	 * Check to see if we need an AST, if so take care of it here
 	 */
 	ml_set_interrupts_enabled(FALSE);
-	if (USER_MODE(ssp->srr1))
+	if (USER_MODE(ssp->save_srr1))
 		while (ast_needed(cpu_number())) {
 			ast_taken(AST_ALL, intr);
 			ml_set_interrupts_enabled(FALSE);
@@ -566,28 +581,28 @@ struct ppc_saved_state *trap(int trapno,
  * It must preserve r3.
  */
 
-extern int syscall_trace(int, struct ppc_saved_state *);
+extern int syscall_trace(int, struct savearea *);
 
 
 extern int pmdebug;
 
-int syscall_trace(int retval, struct ppc_saved_state *ssp)
+int syscall_trace(int retval, struct savearea *ssp)
 {
 	int i, argc;
 
 	int kdarg[3];
 	/* Always prepare to trace mach system calls */
-	if (kdebug_enable && (ssp->r0 & 0x80000000)) {
+	if (kdebug_enable && (ssp->save_r0 & 0x80000000)) {
 	  /* Mach trap */
 	  kdarg[0]=0;
 	  kdarg[1]=0;
 	  kdarg[2]=0;
-	  argc = mach_trap_table[-(ssp->r0)].mach_trap_arg_count;
+	  argc = mach_trap_table[-(ssp->save_r0)].mach_trap_arg_count;
 	  if (argc > 3)
 	    argc = 3;
 	  for (i=0; i < argc; i++)
-	    kdarg[i] = (int)*(&ssp->r3 + i);
-	  KERNEL_DEBUG_CONSTANT(MACHDBG_CODE(DBG_MACH_EXCP_SC, (-(ssp->r0))) | DBG_FUNC_START,
+	    kdarg[i] = (int)*(&ssp->save_r3 + i);
+	  KERNEL_DEBUG_CONSTANT(MACHDBG_CODE(DBG_MACH_EXCP_SC, (-(ssp->save_r0))) | DBG_FUNC_START,
 		       kdarg[0], kdarg[1], kdarg[2], 0, 0);
 	}	    
 
@@ -598,13 +613,13 @@ int syscall_trace(int retval, struct ppc_saved_state *ssp)
  * It must preserve r3.
  */
 
-extern int syscall_trace_end(int, struct ppc_saved_state *);
+extern int syscall_trace_end(int, struct savearea *);
 
-int syscall_trace_end(int retval, struct ppc_saved_state *ssp)
+int syscall_trace_end(int retval, struct savearea *ssp)
 {
-	if (kdebug_enable && (ssp->r0 & 0x80000000)) {
+	if (kdebug_enable && (ssp->save_r0 & 0x80000000)) {
 	  /* Mach trap */
-	  KERNEL_DEBUG_CONSTANT(MACHDBG_CODE(DBG_MACH_EXCP_SC,(-(ssp->r0))) | DBG_FUNC_END,
+	  KERNEL_DEBUG_CONSTANT(MACHDBG_CODE(DBG_MACH_EXCP_SC,(-(ssp->save_r0))) | DBG_FUNC_END,
 		       retval, 0, 0, 0, 0);
 	}	    
 	return retval;
@@ -618,7 +633,7 @@ int syscall_error(
 	int exception,
 	int code,
 	int subcode,
-	struct ppc_saved_state *ssp)
+	struct savearea *ssp)
 {
 	register thread_t thread;
 
@@ -627,7 +642,7 @@ int syscall_error(
 	if (thread == 0)
 	    panic("syscall error in boot phase");
 
-	if (!USER_MODE(ssp->srr1))
+	if (!USER_MODE(ssp->save_srr1))
 		panic("system call called from kernel");
 
 	doexception(exception, code, subcode);
@@ -693,18 +708,21 @@ char *trap_type[] = {
 int TRAP_TYPES = sizeof (trap_type) / sizeof (trap_type[0]);
 
 void unresolved_kernel_trap(int trapno,
-			    struct ppc_saved_state *ssp,
+			    struct savearea *ssp,
 			    unsigned int dsisr,
 			    unsigned int dar,
 			    char *message)
 {
 	char *trap_name;
-	extern void print_backtrace(struct ppc_saved_state *);
+	extern void print_backtrace(struct savearea *);
 	extern unsigned int debug_mode, disableDebugOuput;
 
 	ml_set_interrupts_enabled(FALSE);					/* Turn off interruptions */
+	lastTrace = LLTraceSet(0);							/* Disable low-level tracing */
 
-	disableDebugOuput = FALSE;
+	if( logPanicDataToScreen )
+		disableDebugOuput = FALSE;
+	
 	debug_mode++;
 	if ((unsigned)trapno <= T_MAX)
 		trap_name = trap_type[trapno / T_VECTOR_SIZE];
@@ -713,12 +731,15 @@ void unresolved_kernel_trap(int trapno,
 	if (message == NULL)
 		message = trap_name;
 
-	printf("\n\nUnresolved kernel trap(cpu %d): %s DAR=0x%08x PC=0x%08x\n",
-	       cpu_number(), trap_name, dar, ssp->srr0);
+	kdb_printf("\n\nUnresolved kernel trap(cpu %d): %s DAR=0x%08x PC=0x%08x\n",
+	       cpu_number(), trap_name, dar, ssp->save_srr0);
 
 	print_backtrace(ssp);
 
-	(void *)Call_Debugger(trapno, ssp);
+	draw_panic_dialog();
+		
+	if( panicDebugging )
+		(void *)Call_Debugger(trapno, ssp);
 	panic(message);
 }
 
@@ -727,14 +748,14 @@ thread_syscall_return(
         kern_return_t ret)
 {
         register thread_act_t   thr_act = current_act();
-        register struct ppc_saved_state *regs = USER_REGS(thr_act);
+        register struct savearea *regs = USER_REGS(thr_act);
 
-	if (kdebug_enable && (regs->r0 & 0x80000000)) {
+	if (kdebug_enable && (regs->save_r0 & 0x80000000)) {
 	  /* Mach trap */
-	  KERNEL_DEBUG_CONSTANT(MACHDBG_CODE(DBG_MACH_EXCP_SC,(-(regs->r0))) | DBG_FUNC_END,
+	  KERNEL_DEBUG_CONSTANT(MACHDBG_CODE(DBG_MACH_EXCP_SC,(-(regs->save_r0))) | DBG_FUNC_END,
 		       ret, 0, 0, 0, 0);
 	}	    
-        regs->r3 = ret;
+        regs->save_r3 = ret;
 
         thread_exception_return();
         /*NOTREACHED*/
@@ -747,9 +768,9 @@ thread_kdb_return(void)
 {
 	register thread_act_t	thr_act = current_act();
 	register thread_t	cur_thr = current_thread();
-	register struct ppc_saved_state *regs = USER_REGS(thr_act);
+	register struct savearea *regs = USER_REGS(thr_act);
 
-	Call_Debugger(thr_act->mact.pcb->es.exception, regs);
+	Call_Debugger(thr_act->mact.pcb->save_exception, regs);
 #if		MACH_LDEBUG
 	assert(cur_thr->mutex_count == 0); 
 #endif		/* MACH_LDEBUG */

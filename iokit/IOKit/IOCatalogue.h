@@ -161,7 +161,7 @@ public:
     /*!
         @function terminateDrivers
         @abstract Terminates all instances of a driver which match the contents of the matching dictionary. Does not unload module.
-        @param matching Dictionary containing the matching criteria.
+        @param matching  A dictionary whose keys and values are used for matching personalities in the database.  For example, a matching dictionary containing a 'IOProviderClass' key with the value 'IOPCIDevice' will cause termination for all instances whose personalities have the key 'IOProviderClass' equal to 'IOPCIDevice'.
      */
     IOReturn terminateDrivers( OSDictionary * matching );
 
@@ -184,7 +184,7 @@ public:
     /*!
         @function startMatching
         @abstract Starts an IOService matching thread where matching keys and values are provided by the matching dictionary.
-        @param matching A dictionary containing keys and values to match against.
+        @param matching  A dictionary whose keys and values are used for matching personalities in the database.  For example, a matching dictionary containing a 'IOProviderClass' key with the value 'IOPCIDevice' will start matching for all personalities which have the key 'IOProviderClass' equal to 'IOPCIDevice'.
      */
     bool startMatching( OSDictionary * matching );
 

@@ -24,10 +24,12 @@ endif
 
 ifeq ($(INCR_INSTALLHDRS), TRUE)
 
+#
+# These are the machine independent headers that end up in /usr/include
+# Eventually they're copied to System framework's headers directory
+#
 INSTALL_MI_INC_FILES = $(addprefix $(DSTROOT)/$(INCDIR)/$(INSTALL_MI_DIR)/, $(INSTALL_MI_LIST))
 INSTALL_MI_GEN_INC_FILES = $(addprefix $(DSTROOT)/$(INCDIR)/$(INSTALL_MI_DIR)/, $(INSTALL_MI_GEN_LIST))
-INSTALL_MI_LCL_FILES = $(addprefix $(DSTROOT)/$(LCLDIR)/$(INSTALL_MI_DIR)/, $(INSTALL_MI_LCL_LIST))
-INSTALL_MI_GEN_LCL_FILES = $(addprefix $(DSTROOT)/$(LCLDIR)/$(INSTALL_MI_DIR)/, $(INSTALL_MI_LCL_GEN_LIST))
 
 $(INSTALL_MI_INC_FILES) $(INSTALL_MI_GEN_INC_FILES): $(DSTROOT)/$(INCDIR)/$(INSTALL_MI_DIR)/% : %
 	@true echo Installing $< in $(dir $@);			\
@@ -50,16 +52,38 @@ $(INSTALL_MI_INC_FILES) $(INSTALL_MI_GEN_INC_FILES): $(DSTROOT)/$(INCDIR)/$(INST
 	fi;							\
 	$(RM) -rf ./incdir;
 
+#
+# These are usually machine independent System framework private headers
+# Unless LCLDIR is specified as something else
+#
+INSTALL_MI_LCL_FILES = $(addprefix $(DSTROOT)/$(LCLDIR)/$(INSTALL_MI_DIR)/, $(INSTALL_MI_LCL_LIST))
+INSTALL_MI_GEN_LCL_FILES = $(addprefix $(DSTROOT)/$(LCLDIR)/$(INSTALL_MI_DIR)/, $(INSTALL_MI_LCL_GEN_LIST))
+
 $(INSTALL_MI_LCL_FILES) $(INSTALL_MI_GEN_LCL_FILES): $(DSTROOT)/$(LCLDIR)/$(INSTALL_MI_DIR)/% : %
 	@true echo Installing $< in $(dir $@);			\
 	$(MKDIR) $(DSTROOT)/$(LCLDIR)/$(INSTALL_MI_DIR);	\
 	$(RM) $(RMFLAGS) $@;					\
 	install $(INSTALL_FLAGS) $< $(dir $@);
 
+#
+# These are the Kernel framework's machine independent private headers
+# They should be specified in INSTALL_MI_LCL_KERN_LIST and INSTALL_MI_LCL_GEN_KERN_LIST
+#
+INSTALL_MI_LCL_KERN_FILES = $(addprefix $(DSTROOT)/$(KPINCDIR)/$(INSTALL_MI_DIR)/, $(INSTALL_MI_LCL_KERN_LIST))
+INSTALL_MI_GEN_LCL_KERN_FILES = $(addprefix $(DSTROOT)/$(KPINCDIR)/$(INSTALL_MI_DIR)/, $(INSTALL_MI_LCL_GEN_KERN_LIST))
+
+$(INSTALL_MI_LCL_KERN_FILES) $(INSTALL_MI_GEN_LCL_KERN_FILES): $(DSTROOT)/$(KPINCDIR)/$(INSTALL_MI_DIR)/% : %
+	@true echo Installing $< in $(dir $@);			\
+	$(MKDIR) $(DSTROOT)/$(KPINCDIR)/$(INSTALL_MI_DIR);	\
+	$(RM) $(RMFLAGS) $@;					\
+	install $(INSTALL_FLAGS) $< $(dir $@);
+
+#
+# These are the machine dependent headers that end up in /usr/include
+# Eventually they're copied to System framework's headers directory
+#
 INSTALL_MD_INC_FILES = $(addprefix $(DSTROOT)/$(INCDIR)/$(INSTALL_MD_DIR)/, $(INSTALL_MD_LIST))
 INSTALL_MD_GEN_INC_FILES = $(addprefix $(DSTROOT)/$(INCDIR)/$(INSTALL_MD_DIR)/, $(INSTALL_MD_GEN_LIST))
-INSTALL_MD_LCL_FILES = $(addprefix $(DSTROOT)/$(LCLDIR)/$(INSTALL_MD_DIR)/, $(INSTALL_MD_LCL_LIST))
-INSTALL_MD_GEN_LCL_FILES = $(addprefix $(DSTROOT)/$(LCLDIR)/$(INSTALL_MD_DIR)/, $(INSTALL_MD_LCL_GEN_LIST))
 
 $(INSTALL_MD_INC_FILES) $(INSTALL_MD_GEN_INC_FILES): $(DSTROOT)/$(INCDIR)/$(INSTALL_MD_DIR)/% : %
 	@true echo Installing $< in $(dir $@);			\
@@ -82,32 +106,48 @@ $(INSTALL_MD_INC_FILES) $(INSTALL_MD_GEN_INC_FILES): $(DSTROOT)/$(INCDIR)/$(INST
 	fi;							\
 	$(RM) -rf ./incdir;
 
+#
+# These are usually machine dependent System framework private headers
+# Unless LCLDIR is specified as something else
+#
+INSTALL_MD_LCL_FILES = $(addprefix $(DSTROOT)/$(LCLDIR)/$(INSTALL_MD_DIR)/, $(INSTALL_MD_LCL_LIST))
+INSTALL_MD_GEN_LCL_FILES = $(addprefix $(DSTROOT)/$(LCLDIR)/$(INSTALL_MD_DIR)/, $(INSTALL_MD_LCL_GEN_LIST))
+
 $(INSTALL_MD_LCL_FILES) $(INSTALL_MD_GEN_LCL_FILES): $(DSTROOT)/$(LCLDIR)/$(INSTALL_MD_DIR)/% : %
 	@true echo Installing $< in $(dir $@);			\
 	$(MKDIR) $(DSTROOT)/$(LCLDIR)/$(INSTALL_MD_DIR);	\
 	$(RM) $(RMFLAGS) $@;					\
 	install $(INSTALL_FLAGS) $< $(dir $@);
 
+#
+# These are the Kernel framework's machine dependent private headers
+# They should be specified in INSTALL_MD_LCL_KERN_LIST and INSTALL_MD_LCL_GEN_KERN_LIST
+#
+INSTALL_MD_LCL_KERN_FILES = $(addprefix $(DSTROOT)/$(KPINCDIR)/$(INSTALL_MD_DIR)/, $(INSTALL_MD_LCL_KERN_LIST))
+INSTALL_MD_GEN_LCL_KERN_FILES = $(addprefix $(DSTROOT)/$(KPINCDIR)/$(INSTALL_MD_DIR)/, $(INSTALL_MD_LCL_GEN_KERN_LIST))
+
+$(INSTALL_MD_LCL_KERN_FILES) $(INSTALL_MD_GEN_LCL_KERN_FILES): $(DSTROOT)/$(KPINCDIR)/$(INSTALL_MD_DIR)/% : %
+	@true echo Installing $< in $(dir $@);			\
+	$(MKDIR) $(DSTROOT)/$(KPINCDIR)/$(INSTALL_MD_DIR);	\
+	$(RM) $(RMFLAGS) $@;					\
+	install $(INSTALL_FLAGS) $< $(dir $@);
+
 setup_installhdrs_mi: 
 	@echo "[ $(SOURCE) ] make setup_installhdrs_mi $(KERNEL_CONFIG) $(ARCH_CONFIG) $(TARGET)"
 
-do_installhdrs_mi: $(INSTALL_MI_INC_FILES) $(INSTALL_MI_GEN_INC_FILES) $(INSTALL_MI_LCL_FILES) $(INSTALL_MI_GEN_LCL_FILES)
-	@echo "[ $(SOURCE) ] make do_installhdrs_mi $(KERNEL_CONFIG) $(ARCH_CONFIG) $(TARGET)"
+do_installhdrs_mi: $(INSTALL_MI_INC_FILES) $(INSTALL_MI_GEN_INC_FILES) $(INSTALL_MI_LCL_FILES) $(INSTALL_MI_GEN_LCL_FILES) $(INSTALL_MI_LCL_KERN_FILES) $(INSTALL_MI_GEN_LCL_KERN_FILES)
+	@true echo "[ $(SOURCE) ] make do_installhdrs_mi $(KERNEL_CONFIG) $(ARCH_CONFIG) $(TARGET)"
 
 setup_installhdrs_md:
 	@echo "[ $(SOURCE) ] make setup_installhdrs_md $(KERNEL_CONFIG) $(ARCH_CONFIG) $(TARGET)"
 
-do_installhdrs_md: $(INSTALL_MD_INC_FILES) $(INSTALL_MD_GEN_INC_FILES) $(INSTALL_MD_LCL_FILES) $(INSTALL_MD_GEN_LCL_FILES)
-	@echo "[ $(SOURCE) ] make do_installhdrs_md $(KERNEL_CONFIG) $(ARCH_CONFIG) $(TARGET)"
+do_installhdrs_md: $(INSTALL_MD_INC_FILES) $(INSTALL_MD_GEN_INC_FILES) $(INSTALL_MD_LCL_FILES) $(INSTALL_MD_GEN_LCL_FILES) $(INSTALL_MD_LCL_KERN_FILES) $(INSTALL_MD_GEN_LCL_KERN_FILES)
+	@true echo "[ $(SOURCE) ] make do_installhdrs_md $(KERNEL_CONFIG) $(ARCH_CONFIG) $(TARGET)"
 
 else
 
 INSTALL_MI_INC_FILES = $(addprefix $(SOURCE), $(INSTALL_MI_LIST))
 INSTALL_MI_GEN_INC_FILES = $(addprefix $(DSTROOT)/$(INCDIR)/$(INSTALL_MI_DIR)/, $(INSTALL_MI_GEN_LIST))
-
-INSTALL_MI_LCL_FILES = $(addprefix $(SOURCE), $(INSTALL_MI_LCL_LIST))
-INSTALL_MI_GEN_LCL_FILES = $(addprefix $(DSTROOT)/$(LCLDIR)/$(INSTALL_MI_DIR)/, $(INSTALL_MI_LCL_GEN_LIST))
-
 
 $(INSTALL_MI_GEN_INC_FILES): $(DSTROOT)/$(INCDIR)/$(INSTALL_MI_DIR)/% : %
 	@true echo Installing $< in $(dir $@);			\
@@ -130,17 +170,26 @@ $(INSTALL_MI_GEN_INC_FILES): $(DSTROOT)/$(INCDIR)/$(INSTALL_MI_DIR)/% : %
 	fi;							\
 	$(RM) -rf ./incdir;
 
+INSTALL_MI_LCL_FILES = $(addprefix $(SOURCE), $(INSTALL_MI_LCL_LIST))
+INSTALL_MI_GEN_LCL_FILES = $(addprefix $(DSTROOT)/$(LCLDIR)/$(INSTALL_MI_DIR)/, $(INSTALL_MI_LCL_GEN_LIST))
+
 $(INSTALL_MI_GEN_LCL_FILES): $(DSTROOT)/$(LCLDIR)/$(INSTALL_MI_DIR)/% : %
 	@true echo Installing $< in $(dir $@);			\
 	$(MKDIR) $(DSTROOT)/$(LCLDIR)/$(INSTALL_MI_DIR);	\
 	$(RM) $(RMFLAGS) $@;					\
 	install $(INSTALL_FLAGS) $< $(dir $@);
 
+INSTALL_MI_LCL_KERN_FILES = $(addprefix $(SOURCE), $(INSTALL_MI_LCL_KERN_LIST))
+INSTALL_MI_GEN_LCL_KERN_FILES = $(addprefix $(KPINCDIR)/$(LCLDIR)/$(INSTALL_MI_DIR)/, $(INSTALL_MI_LCL_KERN_GEN_LIST))
+
+$(INSTALL_MI_GEN_LCL_KERN_FILES): $(DSTROOT)/$(KPINCDIR)/$(INSTALL_MI_DIR)/% : %
+	@true echo Installing $< in $(dir $@);			\
+	$(MKDIR) $(DSTROOT)/$(KPINCDIR)/$(INSTALL_MI_DIR);	\
+	$(RM) $(RMFLAGS) $@;					\
+	install $(INSTALL_FLAGS) $< $(dir $@);
+
 INSTALL_MD_INC_FILES = $(addprefix $(SOURCE), $(INSTALL_MD_LIST))
 INSTALL_MD_GEN_INC_FILES = $(addprefix $(DSTROOT)/$(INCDIR)/$(INSTALL_MD_DIR)/, $(INSTALL_MD_GEN_LIST))
-
-INSTALL_MD_LCL_FILES = $(addprefix $(SOURCE), $(INSTALL_MD_LCL_LIST))
-INSTALL_MD_GEN_LCL_FILES = $(addprefix $(DSTROOT)/$(LCLDIR)/$(INSTALL_MD_DIR)/, $(INSTALL_MD_LCL_GEN_LIST))
 
 $(INSTALL_MD_GEN_INC_FILES): $(DSTROOT)/$(INCDIR)/$(INSTALL_MD_DIR)/% : %
 	@true echo Installing $< in $(dir $@);			\
@@ -163,17 +212,29 @@ $(INSTALL_MD_GEN_INC_FILES): $(DSTROOT)/$(INCDIR)/$(INSTALL_MD_DIR)/% : %
 	fi;							\
 	$(RM) -rf /incdir;
 
+INSTALL_MD_LCL_FILES = $(addprefix $(SOURCE), $(INSTALL_MD_LCL_LIST))
+INSTALL_MD_GEN_LCL_FILES = $(addprefix $(DSTROOT)/$(LCLDIR)/$(INSTALL_MD_DIR)/, $(INSTALL_MD_LCL_GEN_LIST))
+
 $(INSTALL_MD_GEN_LCL_FILES): $(DSTROOT)/$(LCLDIR)/$(INSTALL_MD_DIR)/% : %
 	@true echo Installing $< in $(dir $@);			\
 	$(MKDIR) $(DSTROOT)/$(LCLDIR)/$(INSTALL_MD_DIR);	\
 	$(RM) $(RMFLAGS) $@;					\
 	install $(INSTALL_FLAGS) $< $(dir $@);
 
+INSTALL_MD_LCL_KERN_FILES = $(addprefix $(SOURCE), $(INSTALL_MD_LCL_KERN_LIST))
+INSTALL_MD_GEN_LCL_KERN_FILES = $(addprefix $(KPINCDIR)/$(LCLDIR)/$(INSTALL_MD_DIR)/, $(INSTALL_MD_LCL_KERN_GEN_LIST))
+
+$(INSTALL_MD_GEN_LCL_KERN_FILES): $(DSTROOT)/$(KPINCDIR)/$(INSTALL_MD_DIR)/% : %
+	@true echo Installing $< in $(dir $@);			\
+	$(MKDIR) $(DSTROOT)/$(KPINCDIR)/$(INSTALL_MD_DIR);	\
+	$(RM) $(RMFLAGS) $@;					\
+	install $(INSTALL_FLAGS) $< $(dir $@);
+
 setup_installhdrs_mi: 
 	@echo "[ $(SOURCE) ] make setup_installhdrs_mi $(KERNEL_CONFIG) $(ARCH_CONFIG) $(TARGET)"
 
-do_installhdrs_mi: $(INSTALL_MI_GEN_INC_FILES) $(INSTALL_MI_GEN_LCL_FILES)
-	@echo "[ $(SOURCE) ] make do_installhdrs_mi $(KERNEL_CONFIG) $(ARCH_CONFIG) $(TARGET)"
+do_installhdrs_mi: $(INSTALL_MI_GEN_INC_FILES) $(INSTALL_MI_GEN_LCL_FILES) $(INSTALL_MI_GEN_LCL_KERN_FILES)
+	@true echo "[ $(SOURCE) ] make do_installhdrs_mi $(KERNEL_CONFIG) $(ARCH_CONFIG) $(TARGET)"
 	@if [ -n "$(strip $(INSTALL_MI_LIST))" ]; then			\
 	    if [ -d $(DSTROOT)/$(INCDIR)/$(INSTALL_MI_DIR) ]; then	\
 		(cd $(DSTROOT)/$(INCDIR)/$(INSTALL_MI_DIR);$(RM) $(RMFLAGS) $(INSTALL_MI_LIST) );       \
@@ -206,12 +267,20 @@ do_installhdrs_mi: $(INSTALL_MI_GEN_INC_FILES) $(INSTALL_MI_GEN_LCL_FILES)
 	    fi;								\
 	    install $(INSTALL_FLAGS) $(INSTALL_MI_LCL_FILES) $(DSTROOT)/$(LCLDIR)/$(INSTALL_MI_DIR);	\
 	fi
+	@if [ -n "$(strip $(INSTALL_MI_LCL_KERN_LIST))" ]; then	\
+	    if [ -d $(DSTROOT)/$(KPINCDIR)/$(INSTALL_MI_DIR) ]; then	\
+		(cd $(DSTROOT)/$(KPINCDIR)/$(INSTALL_MI_DIR);$(RM) $(RMFLAGS) $(INSTALL_MI_LCL_KERN_LIST) );       \
+	    else							\
+		$(MKDIR) $(DSTROOT)/$(KPINCDIR)/$(INSTALL_MI_DIR);	\
+	    fi;								\
+	    install $(INSTALL_FLAGS) $(INSTALL_MI_LCL_KERN_FILES) $(DSTROOT)/$(KPINCDIR)/$(INSTALL_MI_DIR);	\
+	fi
 
 setup_installhdrs_md:
 	@echo "[ $(SOURCE) ] make setup_installhdrs_md $(KERNEL_CONFIG) $(ARCH_CONFIG) $(TARGET)"
 
-do_installhdrs_md: $(INSTALL_MD_GEN_INC_FILES) $(INSTALL_MD_GEN_LCL_FILES)
-	@echo "[ $(SOURCE) ] make do_installhdrs_md $(KERNEL_CONFIG) $(ARCH_CONFIG) $(TARGET)"
+do_installhdrs_md: $(INSTALL_MD_GEN_INC_FILES) $(INSTALL_MD_GEN_LCL_FILES) $(INSTALL_MI_GEN_LCL_KERN_FILES)
+	@true echo "[ $(SOURCE) ] make do_installhdrs_md $(KERNEL_CONFIG) $(ARCH_CONFIG) $(TARGET)"
 	@if [ -n "$(strip $(INSTALL_MD_LIST))" ]; then			\
 	    if [ -d $(DSTROOT)/$(INCDIR)/$(INSTALL_MD_DIR) ]; then	\
 		(cd $(DSTROOT)/$(INCDIR)/$(INSTALL_MD_DIR);$(RM) $(RMFLAGS) $(INSTALL_MD_LIST) );       \
@@ -244,6 +313,14 @@ do_installhdrs_md: $(INSTALL_MD_GEN_INC_FILES) $(INSTALL_MD_GEN_LCL_FILES)
 	    fi;								\
 	    install $(INSTALL_FLAGS) $(INSTALL_MD_LCL_FILES) $(DSTROOT)/$(LCLDIR)/$(INSTALL_MD_DIR);	\
 	fi
+	@if [ -n "$(strip $(INSTALL_MD_LCL_KERN_LIST))" ]; then	\
+	    if [ -d $(DSTROOT)/$(KPINCDIR)/$(INSTALL_MD_DIR) ]; then	\
+		(cd $(DSTROOT)/$(KPINCDIR)/$(INSTALL_MD_DIR);$(RM) $(RMFLAGS) $(INSTALL_MD_LCL_KERN_LIST) );       \
+	    else							\
+		$(MKDIR) $(DSTROOT)/$(KPINCDIR)/$(INSTALL_MD_DIR);	\
+	    fi;								\
+	    install $(INSTALL_FLAGS) $(INSTALL_MD_LCL_KERN_FILES) $(DSTROOT)/$(KPINCDIR)/$(INSTALL_MD_DIR);	\
+	fi
 
 
 endif
@@ -274,13 +351,13 @@ setup_exporthdrs_mi:
 	@echo "[ $(SOURCE) ] make setup_exporthdrs_mi $(KERNEL_CONFIG) $(ARCH_CONFIG) $(TARGET)"
 
 do_exporthdrs_mi: $(EXPORT_MI_INC_FILES) $(EXPORT_MI_GEN_INC_FILES)
-	@echo "[ $(SOURCE) ] make do_exporthdrs_mi $(KERNEL_CONFIG) $(ARCH_CONFIG) $(TARGET)"
+	@true echo "[ $(SOURCE) ] make do_exporthdrs_mi $(KERNEL_CONFIG) $(ARCH_CONFIG) $(TARGET)"
 
 setup_exporthdrs_md:
 	@echo "[ $(SOURCE) ] make setup_exporthdrs_md $(KERNEL_CONFIG) $(ARCH_CONFIG) $(TARGET)"
 
 do_exporthdrs_md: $(EXPORT_MD_INC_FILES) $(EXPORT_MD_GEN_INC_FILES)
-	@echo "[ $(SOURCE) ] make do_exporthdrs_md $(KERNEL_CONFIG) $(ARCH_CONFIG) $(TARGET)"
+	@true echo "[ $(SOURCE) ] make do_exporthdrs_md $(KERNEL_CONFIG) $(ARCH_CONFIG) $(TARGET)"
 
 else
 
@@ -305,7 +382,7 @@ setup_exporthdrs_mi:
 	@echo "[ $(SOURCE) ] make setup_exporthdrs_mi $(KERNEL_CONFIG) $(ARCH_CONFIG) $(TARGET)"
 
 do_exporthdrs_mi: $(EXPORT_MI_GEN_INC_FILES)
-	@echo "[ $(SOURCE) ] make do_exporthdrs_mi $(KERNEL_CONFIG) $(ARCH_CONFIG) $(TARGET)"
+	@true echo "[ $(SOURCE) ] make do_exporthdrs_mi $(KERNEL_CONFIG) $(ARCH_CONFIG) $(TARGET)"
 	@if [ -n "$(strip $(EXPORT_MI_LIST))" ]; then					\
 		if [ -d $(OBJROOT)/$(EXPDIR)/$(EXPORT_MI_DIR) ]; then			\
 			(cd $(OBJROOT)/$(EXPDIR)/$(EXPORT_MI_DIR);$(RM) $(RMFLAGS) $(EXPORT_MI_LIST) );       \
@@ -319,7 +396,7 @@ setup_exporthdrs_md:
 	@echo "[ $(SOURCE) ] make setup_exporthdrs_md $(KERNEL_CONFIG) $(ARCH_CONFIG) $(TARGET)"
 
 do_exporthdrs_md: $(EXPORT_MD_GEN_INC_FILES)
-	@echo "[ $(SOURCE) ] make do_exporthdrs_md $(KERNEL_CONFIG) $(ARCH_CONFIG) $(TARGET)"
+	@true echo "[ $(SOURCE) ] make do_exporthdrs_md $(KERNEL_CONFIG) $(ARCH_CONFIG) $(TARGET)"
 	@if [ -n "$(strip $(EXPORT_MD_LIST))" ]; then					\
 		if [ -d $(OBJROOT)/$(EXPDIR)/$(EXPORT_MD_DIR) ]; then			\
 			(cd $(OBJROOT)/$(EXPDIR)/$(EXPORT_MD_DIR);$(RM) $(RMFLAGS) $(EXPORT_MD_LIST) );       \
@@ -395,9 +472,9 @@ M_RULE_4=
 #   The config tool slickly changes the last source filename char to 'o'
 #   for the object filename.
 #
-P_RULE_1A=${KCC} -o $@ -c ${CPPFLAGS} ${CFLAGS} -MD ${${join $@,_CFLAGS}} ${INCFLAGS} ${${join $@,_INCFLAGS}} 
+P_RULE_1A=${KC++} -o $@ -c ${CPPFLAGS} ${CFLAGS} -MD ${${join $@,_CFLAGS}} ${INCFLAGS} ${${join $@,_INCFLAGS}} 
 P_RULE_1B=$(<F)
-P_RULE_2=@sed 's/.o: /.cpo: /' $(@:.cpo=.d) > $(@:.cpo=.d~) && mv $(@:.cpo=.d~) $(@:.cpo=.d)
+P_RULE_2=@sed 's/.c.o: /.cpo: /' $(@:.cpo=.d) > $(@:.cpo=.d~) && mv $(@:.cpo=.d~) $(@:.cpo=.d)
 P_RULE_3=
 P_RULE_4=
 
@@ -417,7 +494,7 @@ setup_build_all:
 	@echo "[ $(SOURCE) ] make setup_build_all $(KERNEL_CONFIG) $(ARCH_CONFIG) $(TARGET)"
 
 do_build_all: $(COMP_FILES) $(COMP_COBJ_FILES) $(COMP_SOBJ_FILES) $(COMPONENT_IMAGE_FILE)
-	@echo "[ $(SOURCE) ] make do_build_all $(KERNEL_CONFIG) $(ARCH_CONFIG) $(TARGET)"
+	@true echo "[ $(SOURCE) ] make do_build_all $(KERNEL_CONFIG) $(ARCH_CONFIG) $(TARGET)"
 
 ifeq ($(COMPONENT), .)
 do_build_all: do_build_mach_kernel
@@ -483,6 +560,30 @@ setup_build_install:
 
 do_build_install: $(INSTALL_FILESYS_FILES) $(INSTALL_FILE_FILES)
 	@echo "[ $(SOURCE) ] make do_build_install $(KERNEL_CONFIG) $(ARCH_CONFIG) $(TARGET)"
+
+INSTALL_MAN_FILES = $(addprefix $(DSTROOT)/$(MANDIR)/$(INSTALL_MAN_DIR)/, $(INSTALL_MAN_LIST))
+
+do_installman: $(INSTALL_MAN_FILES)
+	@echo "[ $(SOURCE) ] make do_installman"
+	@if [ -n "$(strip $(INSTALL_MAN_LIST))" ]; then \
+		man_dir=$(DSTROOT)/$(MANDIR)/$(INSTALL_MAN_DIR); \
+		if [ -d $$man_dir ]; then       \
+			cur_dir=`pwd`;  \
+			cd $$man_dir;   \
+			$(RM) $(RMFLAGS) $(INSTALL_MAN_LIST); \
+			cd $$cur_dir;   \
+		else                    \
+			$(MKDIR) $$man_dir;     \
+		fi;                             \
+		echo Installing $(INSTALL_MAN_LIST) in $$man_dir;	\
+		install $(INSTALL_FLAGS) $(INSTALL_MAN_LIST) $$man_dir;	\
+	fi
+
+$(INSTALL_MAN_FILES): $(DSTROOT)/$(MANDIR)/$(INSTALL_MAN_DIR)/% : %
+	@true echo Installing $< in $(dir $@);                  \
+	$(MKDIR) $(DSTROOT)/$(MANDIR)/$(INSTALL_MAN_DIR);       \
+	$(RM) $(RMFLAGS) $@;                                    \
+	install $(INSTALL_FLAGS) $< $(dir $@);
 
 ifeq    ($(INCL_MAKEDEP), TRUE)
 -include Makedep

@@ -77,11 +77,6 @@
 #include <netinet6/in6_ifattach.h>
 #endif /* INET6 */
 
-#if NS
-#include <netns/ns.h>
-#include <netns/ns_if.h>
-#endif
-
 #include "bpfilter.h"
 #if NBPFILTER > 0
 #include <net/bpf.h>
@@ -304,6 +299,12 @@ tunifioctl(ifp, cmd, data)
 
 	s = splimp();
 	switch(cmd) {
+	case SIOCGIFSTATUS:
+		ifs = (struct ifstat *)data;
+		if (tp->tun_pid)
+			sprintf(ifs->ascii + strlen(ifs->ascii),
+			    "\tOpened by PID %d\n", tp->tun_pid);
+		break;
 	case SIOCSIFADDR:
 		tuninit(ifp->if_unit);
 		TUNDEBUG("%s%d: address set\n",

@@ -103,7 +103,7 @@ void IOKitResetTime( void )
 		calend_sleep_wake_call = thread_call_allocate(
 											calend_wakeup_resynch, NULL);
 
-		registerSleepWakeInterest(calend_sleep_wake_notif, NULL, NULL);
+		registerSleepWakeInterest((void *)calend_sleep_wake_notif, NULL, NULL);
 	}
 
     clock_initialize_calendar();

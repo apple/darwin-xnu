@@ -22,6 +22,8 @@
 #ifndef __HFS_FORMAT__
 #define __HFS_FORMAT__
 
+#include <sys/appleapiopts.h>
+
 /*
  * hfs_format.c
  *
@@ -49,6 +51,7 @@ enum {
 };
 
 
+#ifdef __APPLE_API_PRIVATE
 /*
  * Mac OS X has a special directory for linked and unlinked files (HFS Plus only).
  * This directory and its contents are never exported from the filesystem under
@@ -69,6 +72,8 @@ enum {
  */
 #define HFS_INODE_PREFIX	"iNode"
 #define HFS_DELETE_PREFIX	"temp"
+
+#endif /* __APPLE_API_PRIVATE */
 
 /*
  * Indirect link files (hard links) have the following type/creator.
@@ -363,7 +368,7 @@ struct HFSPlusCatalogThread {
 };
 typedef struct HFSPlusCatalogThread HFSPlusCatalogThread;
 
-
+#ifdef __APPLE_API_UNSTABLE
 /*
   	These are the types of records in the attribute B-tree.  The values were
   	chosen so that they wouldn't conflict with the catalog record types.
@@ -436,7 +441,7 @@ enum {
 	kHFSPlusExtentMinNodeSize	= 512,
 	kHFSPlusAttrMinNodeSize		= 4096
 };
-
+#endif /* __APPLE_API_UNSTABLE */
 
 /* HFS and HFS Plus volume attribute bits */
 enum {

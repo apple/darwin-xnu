@@ -37,8 +37,9 @@
 #include <ppc/machine_routines.h>
 #include <ppc/machine_cpu.h>
 #include <ppc/exception.h>
+#include <ppc/asm.h>
 #include <pexpert/pexpert.h>
-//#include <pexpert/ppc/powermac.h>
+#include <kern/cpu_data.h>
 
 /* TODO: BOGUS TO BE REMOVED */
 int real_ncpus = 1;
@@ -62,6 +63,8 @@ struct SIGtimebase {
 	uint64_t	abstime;
 };
 
+struct per_proc_info	*pper_proc_info = per_proc_info; 
+ 
 extern struct SIGtimebase syncClkSpot;
 
 void cpu_sync_timebase(void);
@@ -460,21 +463,19 @@ cpu_start(
 
 		proc_info->cpu_number = cpu;
 		proc_info->cpu_flags &= BootDone;
-		proc_info->istackptr = (vm_offset_t)&intstack + (INTSTACK_SIZE*(cpu+1)) - sizeof (struct ppc_saved_state);
+		proc_info->istackptr = (vm_offset_t)&intstack + (INTSTACK_SIZE*(cpu+1)) - FM_SIZE;
 		proc_info->intstack_top_ss = proc_info->istackptr;
 #if     MACH_KDP || MACH_KDB
-		proc_info->debstackptr = (vm_offset_t)&debstack + (KERNEL_STACK_SIZE*(cpu+1)) - sizeof (struct ppc_saved_state);
+		proc_info->debstackptr = (vm_offset_t)&debstack + (KERNEL_STACK_SIZE*(cpu+1)) - FM_SIZE;
 		proc_info->debstack_top_ss = proc_info->debstackptr;
 #endif  /* MACH_KDP || MACH_KDB */
 		proc_info->interrupts_enabled = 0;
 		proc_info->active_kloaded = (unsigned int)&active_kloaded[cpu];
-		proc_info->cpu_data = (unsigned int)&cpu_data[cpu];
 		proc_info->active_stacks = (unsigned int)&active_stacks[cpu];
 		proc_info->need_ast = (unsigned int)&need_ast[cpu];
-		proc_info->FPU_thread = 0;
-		proc_info->FPU_vmmCtx = 0;
-		proc_info->VMX_thread = 0;
-		proc_info->VMX_vmmCtx = 0;
+		proc_info->FPU_owner = 0;
+		proc_info->VMX_owner = 0;
+
 
 		if (proc_info->start_paddr == EXCEPTION_VECTOR(T_RESET)) {
 
@@ -499,7 +500,7 @@ cpu_start(
  *		that all processors are the same.  This is just to get close.
  */
 
-		ml_get_timebase(&proc_info->ruptStamp);	/* Pass our current time to the other guy */
+		ml_get_timebase((unsigned long long *)&proc_info->ruptStamp);	/* Pass our current time to the other guy */
 		
 		__asm__ volatile("sync");				/* Commit to storage */
 		__asm__ volatile("isync");				/* Wait a second */
@@ -540,8 +541,8 @@ cpu_signal_handler(
 /*
  *	Since we've been signaled, wait just under 1ms for the signal lock to pass
  */
-	if(!hw_lock_mbits(&pproc->MPsigpStat, MPsigpMsgp, (MPsigpBusy | MPsigpPass),
-	  (MPsigpBusy | MPsigpPass), (gPEClockFrequencyInfo.bus_clock_rate_hz >> 7))) {
+	if(!hw_lock_mbits(&pproc->MPsigpStat, (MPsigpMsgp | MPsigpAck), (MPsigpBusy | MPsigpPass),
+	  (MPsigpBusy | MPsigpPass | MPsigpAck), (gPEClockFrequencyInfo.bus_clock_rate_hz >> 7))) {
 		panic("cpu_signal_handler: Lock pass timed out\n");
 	}
 	
@@ -552,7 +553,7 @@ cpu_signal_handler(
 	
 	__asm__ volatile("isync");						/* Make sure we don't unlock until memory is in */
 
-	pproc->MPsigpStat = holdStat & ~(MPsigpMsgp | MPsigpFunc);	/* Release lock */
+	pproc->MPsigpStat = holdStat & ~(MPsigpMsgp | MPsigpAck | MPsigpFunc);	/* Release lock */
 
 	switch ((holdStat & MPsigpFunc) >> 8) {			/* Decode function code */
 
@@ -568,9 +569,7 @@ cpu_signal_handler(
 #if 0
 					kprintf("cpu_signal_handler: AST check on cpu %x\n", cpu_number());
 #endif
-					ast_check();					/* Yes, do it */
-					/* XXX: Should check if AST_URGENT is needed */
-					ast_on(AST_URGENT);
+					ast_check(cpu_to_processor(cpu));
 					return;							/* All done... */
 					
 				case SIGPcpureq:					/* CPU specific function? */
@@ -673,6 +672,7 @@ cpu_signal(
 	unsigned int holdStat, holdParm0, holdParm1, holdParm2, mtype;
 	struct per_proc_info *tpproc, *mpproc;			/* Area for per_proc addresses */
 	int cpu;
+	int busybitset =0;
 
 #if DEBUG
 	if(target > NCPUS) panic("cpu_signal: invalid target CPU - %08X\n", target);
@@ -686,18 +686,32 @@ cpu_signal(
 	tpproc = &per_proc_info[target];				/* Point to the target's block */
 
 	if (!(tpproc->cpu_flags & SignalReady)) return KERN_FAILURE;
-	
+		
 	if((tpproc->MPsigpStat & MPsigpMsgp) == MPsigpMsgp) {	/* Is there an unreceived message already pending? */
 
-		if(signal == SIGPwake) return KERN_SUCCESS;			/* SIGPwake can merge into all others... */
+		if(signal == SIGPwake) {					/* SIGPwake can merge into all others... */
+			mpproc->numSIGPmwake++;					/* Account for merged wakes */
+			return KERN_SUCCESS;
+		}
 
 		if((signal == SIGPast) && (tpproc->MPsigpParm0 == SIGPast)) {	/* We can merge ASTs */
+			mpproc->numSIGPmast++;					/* Account for merged ASTs */
 			return KERN_SUCCESS;					/* Don't bother to send this one... */
+		}
+
+		if (tpproc->MPsigpParm0 == SIGPwake) {
+			if (hw_lock_mbits(&tpproc->MPsigpStat, (MPsigpMsgp | MPsigpAck), 
+			                  (MPsigpBusy | MPsigpPass ), MPsigpBusy, 0)) {
+				busybitset = 1;
+				mpproc->numSIGPmwake++;	
+			}
 		}
 	}	
 	
-	if(!hw_lock_mbits(&tpproc->MPsigpStat, MPsigpMsgp, 0, MPsigpBusy, 
-	  (gPEClockFrequencyInfo.bus_clock_rate_hz >> 13))) {	/* Try to lock the message block with a .5ms timeout */
+	if((busybitset == 0) && 
+	   (!hw_lock_mbits(&tpproc->MPsigpStat, MPsigpMsgp, 0, MPsigpBusy, 
+	   (gPEClockFrequencyInfo.bus_clock_rate_hz >> 13)))) {	/* Try to lock the message block with a .5ms timeout */
+		mpproc->numSIGPtimo++;						/* Account for timeouts */
 		return KERN_FAILURE;						/* Timed out, take your ball and go home... */
 	}
 
@@ -711,7 +725,8 @@ cpu_signal(
 	tpproc->MPsigpStat = holdStat;					/* Set status and pass the lock */
 	__asm__ volatile("eieio");						/* I'm a paraniod freak */
 	
-	PE_cpu_signal(mpproc->cpu_id, tpproc->cpu_id);	/* Kick the other processor */
+	if (busybitset == 0)
+		PE_cpu_signal(mpproc->cpu_id, tpproc->cpu_id);	/* Kick the other processor */
 
 	return KERN_SUCCESS;							/* All is goodness and rainbows... */
 }
@@ -729,6 +744,7 @@ cpu_sleep(
 {
 	struct per_proc_info	*proc_info;
 	unsigned int	cpu;
+	facility_context *fowner;
 	extern void (*exception_handlers[])(void);
 	extern vm_offset_t	intstack;
 	extern vm_offset_t	debstack;
@@ -741,18 +757,20 @@ cpu_sleep(
 
 	proc_info = &per_proc_info[cpu];
 
-	if(proc_info->FPU_thread) fpu_save(proc_info->FPU_thread);	/* If anyone owns FPU, save it */
-	proc_info->FPU_thread = 0;						/* Set no fpu owner now */
+	fowner = proc_info->FPU_owner;					/* Cache this */
+	if(fowner) fpu_save(fowner);					/* If anyone owns FPU, save it */
+	proc_info->FPU_owner = 0;						/* Set no fpu owner now */
 
-	if(proc_info->VMX_thread) vec_save(proc_info->VMX_thread);	/* If anyone owns vectors, save it */
-	proc_info->VMX_thread = 0;						/* Set no vector owner now */
+	fowner = proc_info->VMX_owner;					/* Cache this */
+	if(fowner) vec_save(fowner);					/* If anyone owns vectors, save it */
+	proc_info->VMX_owner = 0;						/* Set no vector owner now */
 
 	if (proc_info->cpu_number == 0)  {
 		proc_info->cpu_flags &= BootDone;
-		proc_info->istackptr = (vm_offset_t)&intstack + (INTSTACK_SIZE*(cpu+1)) - sizeof (struct ppc_saved_state);
+		proc_info->istackptr = (vm_offset_t)&intstack + (INTSTACK_SIZE*(cpu+1)) - FM_SIZE;
 		proc_info->intstack_top_ss = proc_info->istackptr;
 #if     MACH_KDP || MACH_KDB
-		proc_info->debstackptr = (vm_offset_t)&debstack + (KERNEL_STACK_SIZE*(cpu+1)) - sizeof (struct ppc_saved_state);
+		proc_info->debstackptr = (vm_offset_t)&debstack + (KERNEL_STACK_SIZE*(cpu+1)) - FM_SIZE;
 		proc_info->debstack_top_ss = proc_info->debstackptr;
 #endif  /* MACH_KDP || MACH_KDB */
 		proc_info->interrupts_enabled = 0;

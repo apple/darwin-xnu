@@ -69,10 +69,6 @@
 #include <sys/errno.h>
 #include <sys/select.h>
 #include <kern/thread.h>
-#if 0 /* [ */
-#include <kern/sched_prim.h>
-#include <kern/parallel.h>
-#endif  /* 0 ] */
 
 #define LOG_RDPRI	(PZERO + 1)
 
@@ -107,11 +103,9 @@ logopen(dev, flags, mode, p)
 	int flags, mode;
 	struct proc *p;
 {
-	unix_master();			/* for pg_id, sigh */
 	LOG_LOCK();
 	if (log_open) {
 		LOG_UNLOCK();
-		unix_release();
 		return (EBUSY);
 	}
 	log_open = 1;
@@ -130,7 +124,7 @@ logopen(dev, flags, mode, p)
 			msgbufp->msg_bufc[i] = 0;
 	}
 	LOG_UNLOCK();
-	unix_release();
+
 	return (0);
 }
 
@@ -235,7 +229,6 @@ logwakeup()
 	funnel_state = thread_funnel_set(kernel_flock, TRUE);
 	selwakeup(&logsoftc.sc_selp);
 	if (logsoftc.sc_state & LOG_ASYNC) {
-		unix_master();
 		LOG_LOCK();
 		pgid = logsoftc.sc_pgid;
 		LOG_UNLOCK();
@@ -243,7 +236,6 @@ logwakeup()
 			gsignal(-pgid, SIGIO); 
 		else if (p = pfind(pgid))
 			psignal(p, SIGIO);
-		unix_release();
 	}
 	if (logsoftc.sc_state & LOG_RDWAIT) {
 		wakeup((caddr_t)msgbufp);

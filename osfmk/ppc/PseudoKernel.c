@@ -59,7 +59,6 @@ kern_return_t syscall_notify_interrupt ( void ) {
   
     UInt32			interruptState; 
     task_t			task;
-    spl_t 			s;
 	thread_act_t 	act, fact;
 	thread_t		thread;
 	bbRupt			*bbr;
@@ -121,9 +120,7 @@ kern_return_t syscall_notify_interrupt ( void ) {
 	bbr->rh.next = act->handlers;					/* Put our interrupt at the start of the list */
 	act->handlers = &bbr->rh;
 
-	s = splsched();									/* No talking in class */
 	act_set_apc(act);								/* Set an APC AST */
-	splx(s);										/* Ok, you can talk now */
 
 	act_unlock_thread(act);							/* Unlock the activation */
 	return KERN_SUCCESS;							/* We're done... */
@@ -151,7 +148,7 @@ void bbSetRupt(ReturnHandler *rh, thread_act_t act) {
 
 	(void)hw_atomic_sub(&act->mact.emPendRupts, 1);	/* Uncount this 'rupt */
 
-	if(!(sv = (savearea *)find_user_regs(act))) {	/* Find the user state registers */
+	if(!(sv = find_user_regs(act))) {				/* Find the user state registers */
 		kfree((vm_offset_t)bbr, sizeof(bbRupt));	/* Couldn't find 'em, release the control block */
 		return;
 	}
@@ -256,7 +253,7 @@ kern_return_t enable_bluebox(
 	
 	(void) pmap_enter(kernel_pmap, 							/* Map this into the kernel */
 		kerndescaddr, physdescaddr, VM_PROT_READ|VM_PROT_WRITE, 
-		TRUE);
+		VM_WIMG_USE_DEFAULT, TRUE);
 	
 	th->top_act->mact.bbDescAddr = (unsigned int)kerndescaddr+origdescoffset;	/* Set kernel address of the table */
 	th->top_act->mact.bbUserDA = (unsigned int)Desc_TableStart;	/* Set user address of the table */

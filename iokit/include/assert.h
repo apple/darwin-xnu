@@ -21,4 +21,8 @@
  */
 #warning include <assert.h> is going away use IOKit/assert.h instead
 
+#include <sys/appleapiopts.h>
+
+#ifdef __APPLE_API_OBSOLETE
 #include <IOKit/assert.h>
+#endif /* __APPLE_API_OBSOLETE */

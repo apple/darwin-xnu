@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2002 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -91,8 +91,8 @@
 #ifndef _SYS_SYSTM_H_
 #define	_SYS_SYSTM_H_
 
+#include <sys/appleapiopts.h>
 #include <sys/cdefs.h>
-
 #include <sys/types.h>
 #include <sys/time.h>
 #include <sys/tty.h>
@@ -103,19 +103,12 @@ __BEGIN_DECLS
 #include <kern/thread.h>
 __END_DECLS
 
-#define KERNEL_FUNNEL 1
-#define NETWORK_FUNNEL 2
-
+#ifdef __APPLE_API_PRIVATE
 extern int securelevel;		/* system security level */
 extern const char *panicstr;	/* panic message */
 extern char version[];		/* system version */
 extern char copyright[];	/* system copyright */
 
-extern int nblkdev;		/* number of entries in bdevsw */
-extern int nchrdev;		/* number of entries in cdevsw */
-
-extern dev_t rootdev;		/* root device */
-extern struct vnode *rootvp;	/* vnode equivalent to above */
 
 extern struct sysent {		/* system call table */
 	int16_t		sy_narg;	/* number of args */
@@ -128,12 +121,23 @@ extern int nsysent;
 extern int	boothowto;	/* reboot flags, from console subsystem */
 extern int	show_space;
 
+extern int nblkdev;		/* number of entries in bdevsw */
+extern int nchrdev;		/* number of entries in cdevsw */
+extern dev_t rootdev;		/* root device */
+extern struct vnode *rootvp;	/* vnode equivalent to above */
+#endif /* __APPLE_API_PRIVATE */
+
+#ifdef __APPLE_API_UNSTABLE
+#define NO_FUNNEL 0
+#define KERNEL_FUNNEL 1
+#define NETWORK_FUNNEL 2
+
 extern funnel_t * kernel_flock;
 extern funnel_t * network_flock;
+#endif /* __APPLE_API_UNSTABLE */
 
 #define SYSINIT(a,b,c,d,e)
 #define MALLOC_DEFINE(a,b,c)
-
 
 #define getenv_int(a,b) (*b = 0)
 #define	KASSERT(exp,msg)
@@ -150,7 +154,11 @@ int	enoioctl __P((void));
 int	enxio __P((void));
 int	eopnotsupp __P((void));
 int	einval __P((void));
+
+#ifdef __APPLE_API_UNSTABLE
 int	seltrue __P((dev_t dev, int which, struct proc *p));
+#endif /* __APPLE_API_UNSTABLE */
+
 void	*hashinit __P((int count, int type, u_long *hashmask));
 int	nosys __P((struct proc *, void *, register_t *));
 
@@ -174,7 +182,6 @@ void	vprintf __P((const char *, _BSD_VA_LIST_));
 int	vsnprintf __P((char *, size_t, const char *, _BSD_VA_LIST_));
 int     vsprintf __P((char *buf, const char *, _BSD_VA_LIST_));
 
-
 void	bcopy __P((const void *from, void *to, size_t len));
 void	ovbcopy __P((const void *from, void *to, size_t len));
 void	bzero __P((void *buf, size_t len));
@@ -197,12 +204,15 @@ long	fuiword __P((void *base));
 int	suword __P((void *base, long word));
 int	suiword __P((void *base, long word));
 
+#ifdef __APPLE_API_UNSTABLE
 int	hzto __P((struct timeval *tv));
 typedef void (*timeout_fcn_t)(void *);
 void	timeout __P((void (*)(void *), void *arg, int ticks));
 void	untimeout __P((void (*)(void *), void *arg));
 void	realitexpire __P((void *));
+#endif /* __APPLE_API_UNSTABLE */
 
+#ifdef __APPLE_API_PRIVATE
 void	bsd_hardclock __P((boolean_t usermode, caddr_t pc, int numticks));
 void	gatherstats __P((boolean_t usermode, caddr_t pc));
 
@@ -211,7 +221,13 @@ void	initclocks __P((void));
 void	startprofclock __P((struct proc *));
 void	stopprofclock __P((struct proc *));
 void	setstatclockrate __P((int hzrate));
+#ifdef DDB
+/* debugger entry points */
+int	Debugger __P((void));	/* in DDB only */
+#endif
+
 void	set_fsblocksize __P((struct vnode *));
+#endif /* __APPLE_API_PRIVATE */
 
 void addlog __P((const char *, ...));
 void printf __P((const char *, ...));
@@ -219,11 +235,6 @@ void printf __P((const char *, ...));
 extern boolean_t    thread_funnel_switch(int oldfnl, int newfnl);
 
 #include <libkern/libkern.h>
-
-#ifdef DDB
-/* debugger entry points */
-int	Debugger __P((void));	/* in DDB only */
-#endif
 
 __END_DECLS
 

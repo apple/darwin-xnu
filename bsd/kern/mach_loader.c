@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2001 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2002 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -54,8 +54,12 @@
 #include <vm/vm_kern.h>
 #include <vm/vm_pager.h>
 #include <vm/vnode_pager.h>
-#include <mach/shared_memory_server.h>
 #include <mach/vm_statistics.h>
+
+#include <mach/shared_memory_server.h>
+#include <vm/vm_shared_memory_server.h>
+
+#include <machine/vmparam.h>
 
 /*
  * Prototypes of static functions.
@@ -403,20 +407,18 @@ RedoLookup:
 			&(map_info.alternate_next), 
 			&(map_info.flags), &next);
 
-		if((map_info.flags & SHARED_REGION_FULL) &&
+		if((map_info.self != (vm_offset_t)system_shared_region) &&
 			(map_info.flags & SHARED_REGION_SYSTEM)) {
-			if(map_info.self != (vm_offset_t)system_shared_region) {
-				shared_region_mapping_ref(system_shared_region);
-				vm_set_shared_region(task, 
-							system_shared_region);
-				shared_region_mapping_dealloc(
+			shared_region_mapping_ref(system_shared_region);
+			vm_set_shared_region(task, system_shared_region);
+			shared_region_mapping_dealloc(
 					(shared_region_mapping_t)map_info.self);
-				goto RedoLookup;
-			}
+			goto RedoLookup;
 		}
 
 
 		if (dylink_test) {
+			p->p_flag |=  P_NOSHLIB; /* no shlibs in use */
 			addr = map_info.client_base;
 			vm_map(map, &addr, map_info.text_size, 0, 
 				(VM_MEMORY_SHARED_PMAP << 24) 
@@ -723,17 +725,15 @@ load_threadstack(
 	unsigned long	size;
 	int		flavor;
 
-	/*
-	 *	Set the thread state.
-	 */
-	*user_stack = 0;
 	while (total_size > 0) {
 		flavor = *ts++;
 		size = *ts++;
 		total_size -= (size+2)*sizeof(unsigned long);
 		if (total_size < 0)
 			return(LOAD_BADMACHO);
-		ret = thread_userstack(thread, flavor, ts, size, user_stack, customstack);
+		*user_stack = USRSTACK;
+		ret = thread_userstack(thread, flavor, ts, size,
+				user_stack, customstack);
 		if (ret != KERN_SUCCESS)
 			return(LOAD_FAILURE);
 		ts += size;	/* ts is a (unsigned long *) */

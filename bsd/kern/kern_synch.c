@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2001 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -40,6 +40,7 @@
 #include <kern/queue.h>
 #include <sys/lock.h>
 #include <kern/thread.h>
+#include <kern/sched_prim.h>
 #include <kern/ast.h>
 
 #include <kern/cpu_number.h>
@@ -48,7 +49,13 @@
 #include <kern/task.h>
 #include <mach/time_value.h>
 
-_sleep_continue()
+#if KTRACE
+#include <sys/uio.h>
+#include <sys/ktrace.h>
+#endif 
+
+static void
+_sleep_continue(void)
 {
 	register struct proc *p;
 	register thread_t thread = current_thread();
@@ -80,7 +87,6 @@ _sleep_continue()
 			/* else fall through */
 		case THREAD_INTERRUPTED:
 			if (catch) {
-				unix_master();
 				if (thread_should_abort(current_thread())) {
 					error = EINTR;
 				} else if (SHOULDissignal(p,ut)) {
@@ -94,18 +100,21 @@ _sleep_continue()
 						error = EINTR;
 					}
 				}
-				unix_release();
 			}  else
 				error = EINTR;
 			break;
 	}
 
-	if ((error == EINTR) || (error == ERESTART)) {
-			thread_ast_set(th_act, AST_BSD);
-			ast_on(AST_BSD);
-	}
+	if (error == EINTR || error == ERESTART)
+		act_set_astbsd(th_act);
+
 	if (ut->uu_timo)
 		thread_cancel_timer();
+
+#if KTRACE
+	if (KTRPOINT(p, KTR_CSW))
+		ktrcsw(p->p_tracep, 0, 0, -1);
+#endif
 
 	unix_syscall_return((*ut->uu_continuation)(error));
 }
@@ -124,17 +133,13 @@ _sleep_continue()
  * sleeping has gone away.
  */
 
-#if FIXME
-static __inline__
-#endif
-int
-_sleep(chan, pri, wmsg, timo, continuation, preassert)
-	caddr_t chan;
-	int pri;
-	char *wmsg;
-	int timo;
-	int (*continuation)();
-	int preassert;
+static int
+_sleep(
+	caddr_t		chan,
+	int			pri,
+	char		*wmsg,
+	u_int64_t	abstime,
+	int			(*continuation)(int))
 {
 	register struct proc *p;
 	register thread_t thread = current_thread();
@@ -142,6 +147,7 @@ _sleep(chan, pri, wmsg, timo, continuation, preassert)
 	struct uthread * ut;
 	int sig, catch = pri & PCATCH;
 	int sigttblock = pri & PTTYBLOCK;
+	int wait_result;
 	int error = 0;
 	spl_t	s;
 
@@ -153,18 +159,16 @@ _sleep(chan, pri, wmsg, timo, continuation, preassert)
 	p = current_proc();
 #if KTRACE
 	if (KTRPOINT(p, KTR_CSW))
-		ktrcsw(p->p_tracep, 1, 0);
+		ktrcsw(p->p_tracep, 1, 0, -1);
 #endif	
 	p->p_priority = pri & PRIMASK;
 		
-	if (!preassert) {
-		/* it is already pre asserted */
-		if (chan)
-			assert_wait(chan, (catch) ? THREAD_ABORTSAFE : THREAD_UNINT);
-		
-	}
-	if (timo)
-		thread_set_timer(timo, NSEC_PER_SEC / hz);
+	if (chan)
+		wait_result = assert_wait(chan,
+								  (catch) ? THREAD_ABORTSAFE : THREAD_UNINT);
+
+	if (abstime)
+		thread_set_timer_deadline(abstime);
 
 	/*
 	 * We start our timeout
@@ -176,7 +180,6 @@ _sleep(chan, pri, wmsg, timo, continuation, preassert)
 	 * stopped, p->p_wchan will be 0 upon return from CURSIG.
 	 */
 	if (catch) {
-		unix_master();
 		if (SHOULDissignal(p,ut)) {
 			if (sig = CURSIG(p)) {
 				clear_wait(thread, THREAD_INTERRUPTED);
@@ -184,11 +187,11 @@ _sleep(chan, pri, wmsg, timo, continuation, preassert)
 				if (sigttblock && ((sig == SIGTTOU) || (sig == SIGTTIN))) {
 					p->p_flag |= P_TTYSLEEP;
 					/* reset signal bits */
-					clear_sigbits(p, sig);
+					clear_procsiglist(p, sig);
 					assert_wait(&p->p_siglist, THREAD_ABORTSAFE);
 					/* assert wait can block and SIGCONT should be checked */
 					if (p->p_flag & P_TTYSLEEP)
-						thread_block(0);
+						thread_block(THREAD_CONTINUE_NULL);
 					/* return with success */
 					error = 0;
 					goto out;
@@ -197,21 +200,18 @@ _sleep(chan, pri, wmsg, timo, continuation, preassert)
 					error = EINTR;
 				else
 					error = ERESTART;
-				unix_release();
 				goto out;
 			}
 		}
 		if (thread_should_abort(current_thread())) {
 			clear_wait(thread, THREAD_INTERRUPTED);
 			error = EINTR;
-			unix_release();
 			goto out;
 		}
-		if (get_thread_waitevent(thread) == 0) {  /*already happened */
-			unix_release();
+		if (get_thread_waitresult(thread) != THREAD_WAITING) {
+			/*already happened */
 			goto out;
 		}
-		unix_release();
 	}
 
 #if FIXME  /* [ */
@@ -220,20 +220,20 @@ _sleep(chan, pri, wmsg, timo, continuation, preassert)
 	splx(s);
 	p->p_stats->p_ru.ru_nvcsw++;
 
-	if (continuation != (int (*)()) 0 ) {
+	if (continuation != THREAD_CONTINUE_NULL ) {
 	  ut->uu_continuation = continuation;
 	  ut->uu_pri = pri;
-	  ut->uu_timo = timo;
-	  thread_block(_sleep_continue);
+	  ut->uu_timo = abstime? 1: 0;
+	  (void) thread_block(_sleep_continue);
 	  /* NOTREACHED */
 	}
 
-	thread_block(0);
+	wait_result = thread_block(THREAD_CONTINUE_NULL);
 
 #if FIXME  /* [ */
 	thread->wait_mesg = NULL;
 #endif  /* FIXME ] */
-	switch (get_thread_waitresult(thread)) {
+	switch (wait_result) {
 		case THREAD_TIMED_OUT:
 			error = EWOULDBLOCK;
 			break;
@@ -248,7 +248,6 @@ _sleep(chan, pri, wmsg, timo, continuation, preassert)
 			/* else fall through */
 		case THREAD_INTERRUPTED:
 			if (catch) {
-				unix_master();
 				if (thread_should_abort(current_thread())) {
 					error = EINTR;
 				} else if (SHOULDissignal(p,ut)) {
@@ -262,67 +261,69 @@ _sleep(chan, pri, wmsg, timo, continuation, preassert)
 						error = EINTR;
 					}
 				}
-				unix_release();
 			}  else
 				error = EINTR;
 			break;
 	}
 out:
-	if ((error == EINTR) || (error == ERESTART)) {
-		thread_ast_set(th_act, AST_BSD);
-		ast_on(AST_BSD);
-	}
-	if (timo)
+	if (error == EINTR || error == ERESTART)
+		act_set_astbsd(th_act);
+	if (abstime)
 		thread_cancel_timer();
 	(void) splx(s);
+#if KTRACE
+	if (KTRPOINT(p, KTR_CSW))
+		ktrcsw(p->p_tracep, 0, 0, -1);
+#endif
 	return (error);
 }
 
-int sleep(chan, pri)
-	void *chan;
-	int pri;
+int
+sleep(
+	void	*chan,
+	int		pri)
 {
-
-	return (_sleep((caddr_t)chan, pri, (char *)NULL, 0, (void (*)())0, 0));
-	
+	return _sleep((caddr_t)chan, pri, (char *)NULL, 0, (int (*)(int))0);
 }
 
-int	tsleep(chan, pri, wmsg, timo)
-	void *chan;
-	int pri;
-	char * wmsg;
-	int	timo;
-{			
-	return(_sleep((caddr_t)chan, pri, wmsg, timo, (void (*)())0, 0));
+int
+tsleep(
+	void	*chan,
+	int		pri,
+	char	*wmsg,
+	int		timo)
+{
+	u_int64_t	abstime = 0;
+
+	if (timo)
+		clock_interval_to_deadline(timo, NSEC_PER_SEC / hz, &abstime);
+	return _sleep((caddr_t)chan, pri, wmsg, abstime, (int (*)(int))0);
 }
 
-int	tsleep0(chan, pri, wmsg, timo, continuation)
-	void *chan;
-	int pri;
-	char * wmsg;
-	int	timo;
-	int (*continuation)();
+int
+tsleep0(
+	void	*chan,
+	int		pri,
+	char	*wmsg,
+	int		timo,
+	int		(*continuation)(int))
 {			
-#if defined (__i386__)
-	return(_sleep((caddr_t)chan, pri, wmsg, timo, (void (*)())0, 0));
-#else
-	return(_sleep((caddr_t)chan, pri, wmsg, timo, continuation, 0));
-#endif
+	u_int64_t	abstime = 0;
+
+	if (timo)
+		clock_interval_to_deadline(timo, NSEC_PER_SEC / hz, &abstime);
+	return _sleep((caddr_t)chan, pri, wmsg, abstime, continuation);
 }
 
-/* tsleeps without assertwait or thread block */
-int	tsleep1(chan, pri, wmsg, timo, continuation)
-	void *chan;
-	int pri;
-	char * wmsg;
-	int	timo;
-	int (*continuation)();
+int
+tsleep1(
+	void		*chan,
+	int			pri,
+	char		*wmsg,
+	u_int64_t	abstime,
+	int			(*continuation)(int))
 {			
-#if defined (__i386__)
-	return(_sleep((caddr_t)chan, pri, wmsg, timo, (void (*)())0, 1));
-#else
-	return(_sleep((caddr_t)chan, pri, wmsg, timo, continuation, 1));
-#endif
+	return _sleep((caddr_t)chan, pri, wmsg, abstime, continuation);
 }
 
 /*
@@ -332,7 +333,7 @@ void
 wakeup(chan)
 	register void *chan;
 {
-	thread_wakeup_prim((caddr_t)chan,FALSE, THREAD_AWAKENED);
+	thread_wakeup_prim((caddr_t)chan, FALSE, THREAD_AWAKENED);
 }
 
 /*
@@ -341,6 +342,7 @@ wakeup(chan)
  * Be very sure that the first process is really
  * the right one to wakeup.
  */
+void
 wakeup_one(chan)
 	register caddr_t chan;
 {
@@ -357,4 +359,28 @@ resetpriority(p)
 	register struct proc *p;
 {
 	(void)task_importance(p->task, -p->p_nice);
+}
+
+struct loadavg averunnable =
+	{ {0, 0, 0}, FSCALE };		/* load average, of runnable procs */
+/*
+ * Constants for averages over 1, 5, and 15 minutes
+ * when sampling at 5 second intervals.
+ */
+static fixpt_t cexp[3] = {
+    (fixpt_t)(0.9200444146293232 * FSCALE),    /* exp(-1/12) */
+    (fixpt_t)(0.9834714538216174 * FSCALE),    /* exp(-1/60) */
+    (fixpt_t)(0.9944598480048967 * FSCALE),    /* exp(-1/180) */
+};
+
+void
+compute_averunnable(
+	register int	nrun)
+{
+	register int		i;
+	struct loadavg		*avg = &averunnable;
+
+    for (i = 0; i < 3; i++)
+        avg->ldavg[i] = (cexp[i] * avg->ldavg[i] +
+            nrun * FSCALE * (FSCALE - cexp[i])) >> FSHIFT;
 }

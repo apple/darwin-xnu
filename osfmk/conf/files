@@ -142,7 +142,6 @@ osfmk/ipc/mig_log.c			optional mig_debug
 osfmk/kern/ast.c			standard
 osfmk/kern/clock.c			standard
 osfmk/kern/counters.c			standard
-osfmk/kern/cpu_data.c                 standard
 osfmk/kern/debug.c			standard
 osfmk/kern/exception.c		standard
 osfmk/kern/etap.c			standard
@@ -152,7 +151,6 @@ osfmk/kern/ipc_clock.c		standard
 osfmk/kern/ipc_host.c			standard
 osfmk/kern/ipc_kobject.c		standard
 osfmk/kern/ipc_mig.c			standard
-osfmk/kern/ipc_subsystem.c		standard
 osfmk/kern/ipc_sync.c			standard
 osfmk/kern/ipc_tt.c			standard
 osfmk/kern/kalloc.c			standard
@@ -172,7 +170,6 @@ osfmk/kern/queue.c			standard
 osfmk/kern/sched_prim.c		standard
 osfmk/kern/sscanf.c			standard
 osfmk/kern/startup.c			standard
-osfmk/kern/subsystem.c		standard
 osfmk/kern/sync_lock.c		standard
 osfmk/kern/sync_sema.c		standard
 osfmk/kern/syscall_emulation.c	standard
@@ -185,7 +182,6 @@ osfmk/kern/thread.c			standard
 osfmk/kern/thread_act.c		standard
 osfmk/kern/thread_call.c	standard
 osfmk/kern/thread_policy.c	standard
-osfmk/kern/thread_pool.c		standard
 osfmk/kern/thread_swap.c	standard
 osfmk/kern/timer.c			standard
 osfmk/kern/timer_call.c		standard

@@ -76,15 +76,12 @@ void OSBoolean::free()
     assert(false);
 }
 
+void OSBoolean::taggedRetain(const void *tag) const { }
+void OSBoolean::taggedRelease(const void *tag, const int when) const { }
+
 OSBoolean *OSBoolean::withBoolean(bool inValue)
 {
-    if (inValue) {
-        kOSBooleanTrue->retain();
-        return kOSBooleanTrue;
-    } else {
-        kOSBooleanFalse->retain();
-        return kOSBooleanFalse;
-    }
+    return (inValue) ? kOSBooleanTrue : kOSBooleanFalse;
 }
 
 bool OSBoolean::isTrue() const { return value; }

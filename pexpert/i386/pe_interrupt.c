@@ -22,6 +22,7 @@
 #include <pexpert/pexpert.h>
 #include <pexpert/protos.h>
 #include <machine/machine_routines.h>
+#include <sys/kdebug.h>
 
 struct i386_interrupt_handler {
 	IOInterruptHandler	handler;
@@ -39,17 +40,22 @@ void PE_platform_interrupt_initialize(void)
 }
 
 void
-PE_incoming_interrupt(int interrupt, struct i386_saved_state *ssp)
+PE_incoming_interrupt(int interrupt, void *eip)
 {
 	boolean_t		save_int;
-
 	i386_interrupt_handler_t	*vector;
 
-	vector = &PE_interrupt_handler;
+	KERNEL_DEBUG_CONSTANT(MACHDBG_CODE(DBG_MACH_EXCP_INTR, 0) | DBG_FUNC_START,
+	   0, (unsigned int)eip, 0, 0, 0);
 
+	vector = &PE_interrupt_handler;
 	save_int  = ml_set_interrupts_enabled(FALSE);
 	vector->handler(vector->target, vector->refCon, vector->nub, interrupt);
 	ml_set_interrupts_enabled(save_int);
+
+	KERNEL_DEBUG_CONSTANT(MACHDBG_CODE(DBG_MACH_EXCP_INTR, 0) | DBG_FUNC_END,
+	   0, 0, 0, 0, 0);
+
 }
 
 void PE_install_interrupt_handler(void *nub, int source,

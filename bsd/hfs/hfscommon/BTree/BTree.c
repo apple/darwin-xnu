@@ -146,8 +146,6 @@
 
 #include "../headers/BTreesPrivate.h"
 
-#include "../headers/HFSInstrumentation.h"
-
 /* 
  * The amount that the BTree header leaf count can be wrong before we assume
  * it is in an infinite loop.
@@ -192,8 +190,6 @@ OSStatus	BTOpenPath			(FCB					*filePtr,
 	BTreeControlBlockPtr	btreePtr;
 	BTHeaderRec				*header;
 	NodeRec					nodeRec;
-
-	LogStartTime(kTraceOpenBTree);
 
 	////////////////////// Preliminary Error Checking ///////////////////////////
 
@@ -256,7 +252,7 @@ OSStatus	BTOpenPath			(FCB					*filePtr,
 		Panic("\pBTOpen: getNodeProc returned error getting header node.");
 		goto ErrorExit;
 	}
-
+	++btreePtr->numGetNodes;
 	header = (BTHeaderRec*) ((u_long)nodeRec.buffer + sizeof(BTNodeDescriptor));
 
 
@@ -293,20 +289,26 @@ OSStatus	BTOpenPath			(FCB					*filePtr,
 	btreePtr->flags				= 0;
 	btreePtr->writeCount		= 1;
 
-	btreePtr->numGetNodes		= 1;		// for earlier call to getNodeProc
-
 	/////////////////////////// Check Header Node ///////////////////////////////
 
-	//€€ set kBadClose attribute bit, and UpdateNode
-
-	// if nodeSize matches then we don't need to release, just CheckNode
+	// set kBadClose attribute bit, and UpdateNode
 
 	/* b-tree node size must be at least as big as the physical block size */
-	if (btreePtr->nodeSize < nodeRec.blockSize) {
-		err = fsBTBadNodeSize;
-		goto ErrorExit;
+	if (btreePtr->nodeSize < nodeRec.blockSize)
+	{
+		/*
+		 * If this tree has any records or the media is writeable then
+		 * we cannot mount using the current physical block size.
+		 */
+		if (btreePtr->leafRecords > 0 ||
+		    VTOHFS(btreePtr->fileRefNum)->hfs_media_writeable)		
+		{
+			err = fsBTBadNodeSize;
+			goto ErrorExit;
+		}
 	}
 
+	// if nodeSize Matches then we don't need to release, just CheckNode
 	if ( btreePtr->nodeSize == nodeRec.blockSize )
 	{
 		err = CheckNode (btreePtr, nodeRec.buffer);
@@ -324,6 +326,7 @@ OSStatus	BTOpenPath			(FCB					*filePtr,
 		 * buffer cache to read the entire node
 		 */
 		err = releaseBlockProc(btreePtr->fileRefNum, &nodeRec, kTrashBlock);
+		++btreePtr->numReleaseNodes;
 		M_ExitOnError (err);
 
 		err = GetNode (btreePtr, kHeaderNodeNum, &nodeRec );		// calls CheckNode...
@@ -336,18 +339,9 @@ OSStatus	BTOpenPath			(FCB					*filePtr,
 	err = ReleaseNode (btreePtr, &nodeRec);
 	M_ExitOnError (err);
 
-	/*
-	 * Under Mac OS, b-tree nodes can be non-contiguous on disk when the
-	 * allocation block size is smaller than the b-tree node size.
-	 */
-	if ( !NodesAreContiguous(FCBTOVCB(filePtr), filePtr, btreePtr->nodeSize) )
-		return fsBTInvalidNodeErr;
-
 	//////////////////////////////// Success ////////////////////////////////////
 
 	//€€ align LEOF to multiple of node size?	- just on close
-
-	LogEndTime(kTraceOpenBTree, noErr);
 
 	return noErr;
 
@@ -359,8 +353,6 @@ ErrorExit:
 	filePtr->fcbBTCBPtr = nil;
 	(void) ReleaseNode (btreePtr, &nodeRec);
 	DisposePtr( (Ptr) btreePtr );
-
-	LogEndTime(kTraceOpenBTree, err);
 
 	return err;
 }
@@ -387,8 +379,6 @@ OSStatus	BTClosePath			(FCB					*filePtr)
 	OSStatus				err;
 	BTreeControlBlockPtr	btreePtr;
 
-	LogStartTime(kTraceCloseBTree);
-
 	btreePtr = (BTreeControlBlockPtr) filePtr->fcbBTCBPtr;
 
 	if (btreePtr == nil)
@@ -405,15 +395,11 @@ OSStatus	BTClosePath			(FCB					*filePtr)
 	DisposePtr( (Ptr) btreePtr );
 	filePtr->fcbBTCBPtr = nil;
 
-	LogEndTime(kTraceCloseBTree, noErr);
-
 	return	noErr;
 
 	/////////////////////// Error - Clean Up and Exit ///////////////////////////
 
 ErrorExit:
-
-	LogEndTime(kTraceCloseBTree, err);
 
 	return	err;
 }
@@ -451,7 +437,6 @@ Result:		noErr			- success, record contains copy of record found
 
 OSStatus	BTSearchRecord		(FCB						*filePtr,
 								 BTreeIterator				*searchIterator,
-								 UInt32						heuristicHint,
 								 FSBufferDescriptor			*record,
 								 UInt16						*recordLen,
 								 BTreeIterator				*resultIterator )
@@ -467,9 +452,6 @@ OSStatus	BTSearchRecord		(FCB						*filePtr,
 	UInt16					len;
 	Boolean					foundRecord;
 	Boolean					validHint;
-
-
-	LogStartTime(kTraceSearchBTree);
 
 	if (filePtr == nil)									return	paramErr;
 	if (searchIterator == nil)							return	paramErr;
@@ -516,30 +498,6 @@ OSStatus	BTSearchRecord		(FCB						*filePtr,
 			(void) BTInvalidateHint( searchIterator );
 	}
 
-	////////////////////////////// Try the heuristicHint //////////////////////////////////
-
-	if ( (foundRecord == false) && (heuristicHint != kInvalidMRUCacheKey) && (nodeNum != heuristicHint) )
-	{
-		LogStartTime(kHeuristicHint);
-		nodeNum = heuristicHint;
-		
-		err = GetNode (btreePtr, nodeNum, &node);
-		if( err == noErr )
-		{
-			if ( ((BTNodeDescriptor*) node.buffer)->kind == kBTLeafNode &&
-				 ((BTNodeDescriptor*) node.buffer)->numRecords	>  0 )
-			{
-				foundRecord = SearchNode (btreePtr, node.buffer, &searchIterator->key, &index);
-			}
-
-			if (foundRecord == false)
-			{
-				err = ReleaseNode (btreePtr, &node);
-				M_ExitOnError (err);
-			}
-		}
-		LogEndTime(kHeuristicHint, (foundRecord == false));
-	}
 
 	//////////////////////////// Search The Tree ////////////////////////////////
 
@@ -600,8 +558,6 @@ OSStatus	BTSearchRecord		(FCB						*filePtr,
 	err = ReleaseNode (btreePtr, &node);
 	M_ExitOnError (err);
 
-	LogEndTime(kTraceSearchBTree, (foundRecord == false));
-
 	if (foundRecord == false)	return	fsBTRecordNotFoundErr;
 	else						return	noErr;
 
@@ -628,8 +584,6 @@ ErrorExit:
 
 	if ( err == fsBTEmptyErr )
 		err = fsBTRecordNotFoundErr;
-
-	LogEndTime(kTraceSearchBTree, err);
 
 	return err;
 }
@@ -672,8 +626,6 @@ OSStatus	BTIterateRecord		(FCB						*filePtr,
 	BlockDescriptor				left,		node,		right;
 	UInt16						index;
 
-
-	LogStartTime(kTraceGetBTreeRecord);
 
 	////////////////////////// Priliminary Checks ///////////////////////////////
 
@@ -909,8 +861,6 @@ CopyData:
 		M_ExitOnError (err);
 	}
 
-	LogEndTime(kTraceGetBTreeRecord, noErr);
-
 	return noErr;
 
 	/////////////////////// Error - Clean Up and Exit ///////////////////////////
@@ -939,8 +889,6 @@ ErrorExit:
 
 	if ( err == fsBTEmptyErr || err == fsBTEndOfIterationErr )
 		err = fsBTRecordNotFoundErr;
-
-	LogEndTime(kTraceGetBTreeRecord, err);
 
 	return err;
 }
@@ -1039,6 +987,8 @@ BTIterateRecords(FCB *filePtr, BTreeIterationOperation operation, BTreeIterator 
 
 	err = FindIteratorPosition(btreePtr, iterator, &left, &node, &right,
 				   &nodeNum, &index, &foundRecord);
+	if (err == fsBTRecordNotFoundErr)
+		err = 0;
 	M_ExitOnError(err);
 
 
@@ -1134,6 +1084,10 @@ BTIterateRecords(FCB *filePtr, BTreeIterationOperation operation, BTreeIterator 
 
 ProcessData:
 	err = GetRecordByIndex(btreePtr, node.buffer, index, &keyPtr, &recordPtr, &len);
+	if (err) {
+		err = btBadNode;
+		goto ErrorExit;
+	}
 	
 	while (err == 0) {
 		if (callBackProc(keyPtr, recordPtr, len, callBackState) == 0)
@@ -1166,6 +1120,10 @@ ProcessData:
 		}
 		err = GetRecordByIndex(btreePtr, node.buffer, index,
 						&keyPtr, &recordPtr, &len);
+		if (err) {
+			err = btBadNode;
+			goto ErrorExit;
+		}
 	}
 
 
@@ -1251,8 +1209,6 @@ OSStatus	BTInsertRecord		(FCB						*filePtr,
 	err = CheckInsertParams (filePtr, iterator, record, recordLen);
 	if (err != noErr)
 		return	err;
-
-	LogStartTime(kTraceInsertBTreeRecord);
 
 	btreePtr = (BTreeControlBlockPtr) filePtr->fcbBTCBPtr;
 
@@ -1360,8 +1316,6 @@ Success:
 	iterator->hint.reserved1	= 0;
 	iterator->hint.reserved2	= 0;
 
-	LogEndTime(kTraceInsertBTreeRecord, noErr);
-
 	return noErr;
 
 
@@ -1379,8 +1333,6 @@ ErrorExit:
 	
 	if (err == fsBTEmptyErr)
 		err = fsBTRecordNotFoundErr;
-
-	LogEndTime(kTraceInsertBTreeRecord, err);
 
 	return err;
 }
@@ -1411,8 +1363,6 @@ OSStatus	BTReplaceRecord		(FCB						*filePtr,
 	err = CheckInsertParams (filePtr, iterator, record, recordLen);
 	if (err != noErr)
 		return err;
-
-	LogStartTime(kTraceReplaceBTreeRecord);
 
 	btreePtr = (BTreeControlBlockPtr) filePtr->fcbBTCBPtr;
 
@@ -1507,8 +1457,6 @@ Success:
 	iterator->hint.reserved1	= 0;
 	iterator->hint.reserved2	= 0;
 
-	LogEndTime(kTraceReplaceBTreeRecord, noErr);
-
 	return noErr;
 
 
@@ -1524,9 +1472,113 @@ ErrorExit:
 	iterator->hint.reserved1	= 0;
 	iterator->hint.reserved2	= 0;
 
+	return err;
+}
 
-	LogEndTime(kTraceReplaceBTreeRecord, err);
 
+
+//////////////////////////////// BTUpdateRecord ////////////////////////////////
+
+OSStatus
+BTUpdateRecord(FCB *filePtr, BTreeIterator *iterator,
+               IterateCallBackProcPtr callBackProc, void * callBackState)
+{
+	OSStatus				err;
+	BTreeControlBlockPtr	btreePtr;
+	TreePathTable			treePathTable;
+	BlockDescriptor			nodeRec;
+	RecordPtr				recordPtr;
+	BTreeKeyPtr				keyPtr;
+	UInt32					insertNodeNum;
+	UInt16					recordLen;
+	UInt16					index;
+	Boolean					validHint;
+
+
+	////////////////////////// Priliminary Checks ///////////////////////////////
+
+	nodeRec.buffer = nil;					// so we can call ReleaseNode
+
+	btreePtr = (BTreeControlBlockPtr) filePtr->fcbBTCBPtr;
+
+	REQUIRE_FILE_LOCK(btreePtr->fileRefNum, false);
+
+	////////////////////////////// Take A Hint //////////////////////////////////
+
+	err = IsItAHint (btreePtr, iterator, &validHint);
+	M_ExitOnError (err);
+
+	if (validHint)
+	{
+		insertNodeNum = iterator->hint.nodeNum;
+
+		err = GetNode (btreePtr, insertNodeNum, &nodeRec);
+		if (err == noErr)
+		{
+			if (((NodeDescPtr)nodeRec.buffer)->kind == kBTLeafNode &&
+			    SearchNode (btreePtr, nodeRec.buffer, &iterator->key, &index))
+			{
+				err = GetRecordByIndex(btreePtr, nodeRec.buffer, index, &keyPtr, &recordPtr, &recordLen);
+				M_ExitOnError (err);
+
+				err = callBackProc(keyPtr, recordPtr, recordLen, callBackState);
+				M_ExitOnError (err);
+
+				err = UpdateNode (btreePtr, &nodeRec, 0, 0);
+				M_ExitOnError (err);
+
+				++btreePtr->numValidHints;
+
+				goto Success;
+			}
+			else
+			{
+				(void) BTInvalidateHint( iterator );
+			}
+			
+			err = ReleaseNode (btreePtr, &nodeRec);
+			M_ExitOnError (err);
+		}
+		else
+		{
+			(void) BTInvalidateHint( iterator );
+		}
+	}
+
+	////////////////////////////// Get A Clue ///////////////////////////////////
+
+	err = SearchTree (btreePtr, &iterator->key, treePathTable, &insertNodeNum, &nodeRec, &index);
+	M_ExitOnError (err);
+
+	err = GetRecordByIndex(btreePtr, nodeRec.buffer, index, &keyPtr, &recordPtr, &recordLen);
+	M_ExitOnError (err);
+
+	err = callBackProc(keyPtr, recordPtr, recordLen, callBackState);
+	M_ExitOnError (err);
+
+	err = UpdateNode (btreePtr, &nodeRec, 0, 0);
+	M_ExitOnError (err);
+
+Success:
+	// create hint
+	iterator->hint.writeCount 	= btreePtr->writeCount;
+	iterator->hint.nodeNum		= insertNodeNum;
+	iterator->hint.index		= 0;
+	iterator->hint.reserved1	= 0;
+	iterator->hint.reserved2	= 0;
+	return noErr;
+
+	////////////////////////////// Error Exit ///////////////////////////////////
+
+ErrorExit:
+
+	(void) ReleaseNode (btreePtr, &nodeRec);
+
+	iterator->hint.writeCount 	= 0;
+	iterator->hint.nodeNum		= 0;
+	iterator->hint.index		= 0;
+	iterator->hint.reserved1	= 0;
+	iterator->hint.reserved2	= 0;
 	return err;
 }
 
@@ -1544,7 +1596,6 @@ OSStatus	BTDeleteRecord		(FCB						*filePtr,
 	UInt32					nodeNum;
 	UInt16					index;
 
-	LogStartTime(kTraceDeleteBTreeRecord);
 
 	////////////////////////// Priliminary Checks ///////////////////////////////
 
@@ -1582,16 +1633,12 @@ OSStatus	BTDeleteRecord		(FCB						*filePtr,
 
 	iterator->hint.nodeNum	= 0;
 
-	LogEndTime(kTraceDeleteBTreeRecord, noErr);
-
 	return noErr;
 
 	////////////////////////////// Error Exit ///////////////////////////////////
 
 ErrorExit:
 	(void) ReleaseNode (btreePtr, &nodeRec);
-
-	LogEndTime(kTraceDeleteBTreeRecord, err);
 
 	return	err;
 }
@@ -1657,8 +1704,6 @@ OSStatus	BTFlushPath				(FCB					*filePtr)
 	BTreeControlBlockPtr	btreePtr;
 
 
-	LogStartTime(kTraceFlushBTree);
-
 	M_ReturnErrorIf (filePtr == nil, 	paramErr);
 
 	btreePtr = (BTreeControlBlockPtr) filePtr->fcbBTCBPtr;
@@ -1668,8 +1713,6 @@ OSStatus	BTFlushPath				(FCB					*filePtr)
 	REQUIRE_FILE_LOCK(btreePtr->fileRefNum, false);
 
 	err = UpdateHeader (btreePtr, false);
-
-	LogEndTime(kTraceFlushBTree, err);
 
 	return	err;
 }

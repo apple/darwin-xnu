@@ -47,11 +47,14 @@
  * OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
  * SUCH DAMAGE.
  *
+ * $FreeBSD: src/sys/net/if_mib.h,v 1.6 1999/08/28 00:48:19 peter Exp $
  */
 
 #ifndef _NET_IF_MIB_H
 #define	_NET_IF_MIB_H	1
+#include <sys/appleapiopts.h>
 
+#ifdef __APPLE_API_UNSTABLE
 struct ifmibdata {
 	char	ifmd_name[IFNAMSIZ]; /* name of interface */
 	int	ifmd_pcount;	/* number of promiscuous listeners */
@@ -187,4 +190,5 @@ enum {
  * Put other types of interface MIBs here, or in interface-specific
  * header files if convenient ones already exist.
  */
+#endif /* __APPLE_API_UNSTABLE */
 #endif /* _NET_IF_MIB_H */

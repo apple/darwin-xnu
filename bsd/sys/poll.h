@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2002 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -51,6 +51,9 @@
 #ifndef _SYS_POLL_H_
 #define	_SYS_POLL_H_
 
+#include <sys/appleapiopts.h>
+
+#ifdef __APPLE_API_PRIVATE
 /*
  * This file is intended to be compatable with the traditional poll.h.
  */
@@ -93,5 +96,6 @@
 #define	POLLSTANDARD	(POLLIN|POLLPRI|POLLOUT|POLLRDNORM|POLLRDBAND|\
 			 POLLWRBAND|POLLERR|POLLHUP|POLLNVAL)
 
+#endif /* __APPLE_API_PRIVATE */
 
 #endif /* !_SYS_POLL_H_ */

@@ -41,6 +41,10 @@
 #endif
 #endif
 
+extern cpu_data_t	cpu_data[NCPUS];  
+
+#define	get_cpu_data()	&cpu_data[cpu_number()]
+
 /*
  * Everyone within the osfmk part of the kernel can use the fast
  * inline versions of these routines.  Everyone outside, must call

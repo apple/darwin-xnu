@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2002 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -62,9 +62,13 @@
 #ifndef _UFS_INDOE_H_
 #define _UFS_INDOE_H_
 
+#include <sys/appleapiopts.h>
+
+#ifdef __APPLE_API_PRIVATE
 #include <ufs/ufs/dir.h>
 #include <ufs/ufs/dinode.h>
 #include <sys/lock.h>
+#include <sys/quota.h>
 
 /*
  * The inode is used to describe each active (or recently active) file in the
@@ -85,14 +89,8 @@ struct inode {
 
 	union {			/* Associated filesystem. */
 		struct	fs *fs;		/* FFS */
-#if LFS
-		struct	lfs *lfs;	/* LFS */
-#endif
 	} inode_u;
 #define	i_fs	inode_u.fs
-#if LFS
-#define	i_lfs	inode_u.lfs
-#endif
 
 	struct	 dquot *i_dquot[MAXQUOTAS]; /* Dquot structures. */
 	u_quad_t i_modrev;	/* Revision level for NFS lease. */
@@ -187,4 +185,5 @@ struct ufid {
 };
 #endif /* KERNEL */
 
+#endif /* __APPLE_API_PRIVATE */
 #endif /* ! _UFS_INDOE_H_ */

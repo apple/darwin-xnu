@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1999, 2000-2001 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 1999, 2000-2002 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -38,24 +38,24 @@
 #ifndef	_WINDOWS_TYPES_FOR_MAC_H_
 #define _WINDOWS_TYPES_FOR_MAC_H_
 
-#include <dev/random/YarrowCoreLib/include/macos_defs.h>
+#include <sys/types.h>
 
-typedef UInt8 	UCHAR;
-typedef SInt8 	CHAR;
-typedef UInt8 	BYTE;
+typedef u_int8_t 	UCHAR;
+typedef int8_t 	CHAR;
+typedef u_int8_t 	BYTE;
 typedef char	TCHAR;
-typedef SInt16	WORD;
-typedef SInt32	DWORD;
-typedef UInt16	USHORT;
-typedef UInt32	ULONG;
-typedef SInt32	LONG;
-typedef UInt32	UINT;
-typedef SInt64	LONGLONG;
-typedef UInt8	*LPBYTE;
-typedef SInt8 	*LPSTR;
-typedef SInt16	*LPWORD;
-typedef	SInt8	*LPCTSTR;		/* ??? */
-typedef	SInt8	*LPCSTR;		/* ??? */
+typedef int16_t	WORD;
+typedef int32_t	DWORD;
+typedef u_int16_t	USHORT;
+typedef u_int32_t	ULONG;
+typedef int32_t	LONG;
+typedef u_int32_t	UINT;
+typedef int64_t	LONGLONG;
+typedef u_int8_t	*LPBYTE;
+typedef int8_t 	*LPSTR;
+typedef int16_t	*LPWORD;
+typedef	int8_t	*LPCTSTR;		/* ??? */
+typedef	int8_t	*LPCSTR;		/* ??? */
 typedef void	*LPVOID;
 typedef void	*HINSTANCE;
 typedef	void	*HANDLE;

@@ -1,0 +1,99 @@
+.\"	$NetBSD: readlink.2,v 1.7 1995/02/27 12:35:54 cgd Exp $
+.\"
+.\" Copyright (c) 1983, 1991, 1993
+.\"	The Regents of the University of California.  All rights reserved.
+.\"
+.\" Redistribution and use in source and binary forms, with or without
+.\" modification, are permitted provided that the following conditions
+.\" are met:
+.\" 1. Redistributions of source code must retain the above copyright
+.\"    notice, this list of conditions and the following disclaimer.
+.\" 2. Redistributions in binary form must reproduce the above copyright
+.\"    notice, this list of conditions and the following disclaimer in the
+.\"    documentation and/or other materials provided with the distribution.
+.\" 3. All advertising materials mentioning features or use of this software
+.\"    must display the following acknowledgement:
+.\"	This product includes software developed by the University of
+.\"	California, Berkeley and its contributors.
+.\" 4. Neither the name of the University nor the names of its contributors
+.\"    may be used to endorse or promote products derived from this software
+.\"    without specific prior written permission.
+.\"
+.\" THIS SOFTWARE IS PROVIDED BY THE REGENTS AND CONTRIBUTORS ``AS IS'' AND
+.\" ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+.\" IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
+.\" ARE DISCLAIMED.  IN NO EVENT SHALL THE REGENTS OR CONTRIBUTORS BE LIABLE
+.\" FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
+.\" DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS
+.\" OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION)
+.\" HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT
+.\" LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
+.\" OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
+.\" SUCH DAMAGE.
+.\"
+.\"     @(#)readlink.2	8.1 (Berkeley) 6/4/93
+.\"
+.Dd June 4, 1993
+.Dt READLINK 2
+.Os BSD 4.2
+.Sh NAME
+.Nm readlink
+.Nd read value of a symbolic link
+.Sh SYNOPSIS
+.Fd #include <unistd.h>
+.Ft int
+.Fn readlink "const char *path" "char *buf" "int bufsiz"
+.Sh DESCRIPTION
+.Fn Readlink
+places the contents of the symbolic link
+.Fa path
+in the buffer
+.Fa buf ,
+which has size
+.Fa bufsiz .
+.Nm Readlink
+does not append a
+.Dv NUL
+character to
+.Fa buf .
+.Sh RETURN VALUES
+The call returns the count of characters placed in the buffer
+if it succeeds, or a -1 if an error occurs, placing the error
+code in the global variable
+.Va errno .
+.Sh ERRORS
+.Fn Readlink
+will fail if:
+.Bl -tag -width Er
+.It Bq Er ENOTDIR
+A component of the path prefix is not a directory.
+.It Bq Er ENAMETOOLONG
+A component of a pathname exceeded 
+.Dv {NAME_MAX}
+characters, or an entire path name exceeded 
+.Dv {PATH_MAX}
+characters.
+.It Bq Er ENOENT
+The named file does not exist.
+.It Bq Er EACCES
+Search permission is denied for a component of the path prefix.
+.It Bq Er ELOOP
+Too many symbolic links were encountered in translating the pathname.
+.It Bq Er EINVAL
+The named file is not a symbolic link.
+.It Bq Er EIO
+An I/O error occurred while reading from the file system.
+.It Bq Er EFAULT
+.Fa Buf
+extends outside the process's allocated address space.
+.El
+.Sh SEE ALSO
+.Xr stat 2 ,
+.Xr lstat 2 ,
+.Xr symlink 2
+.Xr symlink 7 ,
+.Sh HISTORY
+The
+.Fn readlink
+function call appeared in
+.Bx 4.2 .

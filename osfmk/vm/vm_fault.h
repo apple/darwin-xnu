@@ -118,18 +118,22 @@ extern kern_return_t vm_fault(
 		vm_offset_t	vaddr,
 		vm_prot_t	fault_type,
 		boolean_t	change_wiring,
-		int             interruptible);
+		int             interruptible,
+		pmap_t		pmap,
+		vm_offset_t	pmap_addr);
 
 extern kern_return_t vm_fault_wire(
 		vm_map_t	map,
 		vm_map_entry_t	entry,
-		pmap_t		pmap);
+		pmap_t		pmap,
+		vm_offset_t	pmap_addr);
 
 extern void vm_fault_unwire(
 		vm_map_t	map,
 		vm_map_entry_t	entry,
 		boolean_t	deallocate,
-		pmap_t		pmap);
+		pmap_t		pmap,
+		vm_offset_t	pmap_addr);
 
 extern kern_return_t	vm_fault_copy(
 		vm_object_t		src_object,

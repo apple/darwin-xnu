@@ -38,6 +38,8 @@ class AppleI386PlatformExpert : public IOPlatformExpert
 private:
     void    setupPIC(IOService * nub);
 
+    static  int handlePEHaltRestart(unsigned int type);
+
 public:
     virtual IOService * probe(IOService * provider,
                               SInt32 *    score);

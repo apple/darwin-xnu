@@ -27,6 +27,20 @@
 
 #ifndef _NET_NDRV_VAR_H
 #define _NET_NDRV_VAR_H
+#include <sys/appleapiopts.h>
+#ifdef KERNEL
+#ifdef __APPLE_API_PRIVATE
+
+/*
+ * structure for storing a linked list of multicast addresses
+ * registered by this socket. May be variable in length.
+ */
+
+struct ndrv_multiaddr
+{
+    struct ndrv_multiaddr*	next;
+    struct sockaddr			addr;
+};
 
 /*
  * The cb is plugged into the socket (so_pcb), and the ifnet structure
@@ -38,16 +52,17 @@ struct ndrv_cb
     struct ndrv_cb *nd_next;	/* Doubly-linked list */
 	struct ndrv_cb *nd_prev;
 	struct socket *nd_socket;	/* Back to the socket */
-	unsigned int nd_signature;	/* Just double-checking */
+	u_int32_t nd_signature;	/* Just double-checking */
 	struct sockaddr_ndrv *nd_faddr;
 	struct sockaddr_ndrv *nd_laddr;
 	struct sockproto nd_proto;	/* proto family, protocol */
 	int nd_descrcnt;		/* # elements in nd_dlist - Obsolete */
 	TAILQ_HEAD(dlist, dlil_demux_desc) nd_dlist; /* Descr. list */
-	struct ifnet *nd_if;
+	struct ifnet *nd_if; /* obsolete, maintained for binary compatibility */
     u_long	nd_send_tag;
     u_long	nd_tag;
     u_long	nd_family;
+    struct ndrv_multiaddr*	nd_multiaddrs;
     short	nd_unit;
 };
 
@@ -58,7 +73,7 @@ struct ndrv_cb
 #define NDRVSNDQ	 8192
 #define NDRVRCVQ	 8192
 
-#if KERNEL
 extern struct ndrv_cb ndrvl;		/* Head of controlblock list */
-#endif
+#endif /* __APPLE_API_PRIVATE */
+#endif	/* KERNEL */
 #endif	/* _NET_NDRV_VAR_H */

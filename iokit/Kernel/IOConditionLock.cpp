@@ -101,7 +101,7 @@ void IOConditionLock::unlock()
     want_lock = false;
     if (waiting) {
 	waiting = false;
-	thread_wakeup(this);	// Wakeup everybody
+	IOLockWakeup(sleep_interlock, this, /* one-thread */ false);	// Wakeup everybody
     }
 
     IOUnlock(sleep_interlock);
@@ -145,12 +145,7 @@ int IOConditionLock::lock()
     while (want_lock && thread_res == THREAD_AWAKENED)
     {
 	waiting = true;
-
-        assert_wait((void *) this, interruptible);	/* assert event */
-	IOUnlock(sleep_interlock);			/* release the lock */
-	thread_res = thread_block((void (*)(void)) 0);	/* block ourselves */
-
-        IOTakeLock(sleep_interlock);
+	thread_res = IOLockSleep(sleep_interlock, (void *) this, interruptible);
     }
     if (thread_res == THREAD_AWAKENED)
 	want_lock = true;
@@ -191,8 +186,8 @@ int IOConditionLock::lockWhen(int inCondition)
 	 * of changes in _condition.
 	 */
         assert_wait((void *) &condition, interruptible); /* assert event */
-	IOUnlock(cond_interlock);			/* release the lock */
-	thread_res = thread_block((void (*)(void)) 0);	/* block ourselves */
+	IOUnlock(cond_interlock);			 /* release the lock */
+	thread_res = thread_block(THREAD_CONTINUE_NULL); /* block ourselves */
     } while (thread_res == THREAD_AWAKENED);
     
     return thread_res;

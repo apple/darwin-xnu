@@ -34,9 +34,9 @@
 #include <platforms.h>
 #include <mach_ldebug.h>
 #include <i386/asm.h>
-#include <assym.s>
 #include <kern/etap_options.h>
 
+#include "assym.s"
 
 /*
  *	When performance isn't the only concern, it's
@@ -67,13 +67,14 @@
 #endif   /* BUILD_STACK_FRAMES */
 
 
-#define	M_ILK		(%edx)
-#define	M_LOCKED	1(%edx)
-#define	M_WAITERS	2(%edx)
+#define	M_ILK			(%edx)
+#define	M_LOCKED		1(%edx)
+#define	M_WAITERS		2(%edx)
+#define	M_PROMOTED_PRI	4(%edx)
 #if	MACH_LDEBUG
-#define	M_TYPE		4(%edx)
-#define	M_PC		8(%edx)
-#define	M_THREAD	12(%edx)
+#define	M_TYPE			6(%edx)
+#define	M_PC			10(%edx)
+#define	M_THREAD		14(%edx)
 #endif	/* MACH_LDEBUG */
 
 #include <i386/AT386/mp/mp.h>
@@ -100,7 +101,7 @@
  * type simplelock and vice versa.
  */
 #define	CHECK_MUTEX_TYPE()					\
-	cmpl	$MUTEX_TAG, M_TYPE			;	\
+	cmpl	$ MUTEX_TAG,M_TYPE			;	\
 	je	1f					;	\
 	pushl	$2f					;	\
 	call	EXT(panic)				;	\
@@ -111,7 +112,7 @@
 1:
 
 #define	CHECK_SIMPLE_LOCK_TYPE()				\
-	cmpl	$SIMPLE_LOCK_TAG,S_TYPE 		;	\
+	cmpl	$ SIMPLE_LOCK_TAG,S_TYPE 		;	\
 	je	1f					;	\
 	pushl	$2f					;	\
 	call	EXT(panic)				;	\
@@ -129,7 +130,7 @@
  */
 #if	0 /*MACH_RT - 11/12/99 - lion@apple.com disable check for now*/
 #define CHECK_PREEMPTION_LEVEL()				\
-	movl	$CPD_PREEMPTION_LEVEL,%eax		;	\
+	movl	$ CPD_PREEMPTION_LEVEL,%eax		;	\
 	cmpl	$0,%gs:(%eax)				;	\
 	je	1f					;	\
 	pushl	$2f					;	\
@@ -144,7 +145,7 @@
 #endif	/* MACH_RT */
 
 #define	CHECK_NO_SIMPLELOCKS()					\
-	movl	$CPD_SIMPLE_LOCK_COUNT,%eax		;	\
+	movl	$ CPD_SIMPLE_LOCK_COUNT,%eax		;	\
 	cmpl	$0,%gs:(%eax)				;	\
 	je	1f					;	\
 	pushl	$2f					;	\
@@ -159,7 +160,7 @@
  * Verifies return to the correct thread in "unlock" situations.
  */
 #define	CHECK_THREAD(thd)					\
-	movl	$CPD_ACTIVE_THREAD,%eax			;	\
+	movl	$ CPD_ACTIVE_THREAD,%eax			;	\
 	movl	%gs:(%eax),%ecx				;	\
 	testl	%ecx,%ecx				;	\
 	je	1f					;	\
@@ -174,7 +175,7 @@
 1:
 
 #define	CHECK_MYLOCK(thd)					\
-	movl	$CPD_ACTIVE_THREAD,%eax			;	\
+	movl	$ CPD_ACTIVE_THREAD,%eax			;	\
 	movl	%gs:(%eax),%ecx				;	\
 	testl	%ecx,%ecx				;	\
 	je	1f					;	\
@@ -225,11 +226,13 @@ ENTRY(hw_lock_init)
 
 /*
  *	void hw_lock_lock(hw_lock_t)
+ *	unsigned int hw_lock_to(hw_lock_t, unsigned int)
  *
  *	Acquire lock, spinning until it becomes available.
+ *	XXX:  For now, we don't actually implement the timeout.
  *	MACH_RT:  also return with preemption disabled.
  */
-ENTRY(hw_lock_lock)
+ENTRY2(hw_lock_lock,hw_lock_to)
 	FRAME
 	movl	L_ARG0,%edx		/* fetch lock pointer */
 
@@ -238,7 +241,7 @@ ENTRY(hw_lock_lock)
 	xchgb	0(%edx),%cl		/* try to acquire the HW lock */
 	testb	%cl,%cl			/* success? */
 	jne	3f
-
+	movl	$1,%eax			/* In case this was a timeout call */
 	EMARF				/* if yes, then nothing left to do */
 	ret
 
@@ -346,7 +349,7 @@ sl_get_hw:
 #if	MACH_LDEBUG
 	movl	L_PC,%ecx
 	movl	%ecx,S_PC
-	movl	$CPD_ACTIVE_THREAD,%eax
+	movl	$ CPD_ACTIVE_THREAD,%eax
 	movl	%gs:(%eax),%ecx
 	movl	%ecx,S_THREAD
 	incl	CX(EXT(simple_lock_count),%eax)
@@ -382,7 +385,7 @@ ENTRY(_simple_lock_try)
 #if	MACH_LDEBUG
 	movl	L_PC,%ecx
 	movl	%ecx,S_PC
-	movl	$CPD_ACTIVE_THREAD,%eax
+	movl	$ CPD_ACTIVE_THREAD,%eax
 	movl	%gs:(%eax),%ecx
 	movl	%ecx,S_THREAD
 	incl	CX(EXT(simple_lock_count),%eax)
@@ -457,9 +460,10 @@ ENTRY(mutex_init)
 	movb	%al,M_ILK		/* clear interlock */
 	movb	%al,M_LOCKED		/* clear locked flag */
 	movw	%ax,M_WAITERS		/* init waiter count */
+	movw	%ax,M_PROMOTED_PRI
 
 #if	MACH_LDEBUG
-	movl	$MUTEX_TAG,M_TYPE	/* set lock type */
+	movl	$ MUTEX_TAG,M_TYPE	/* set lock type */
 	movl	%eax,M_PC		/* init caller pc */
 	movl	%eax,M_THREAD		/* and owning thread */
 #endif
@@ -499,21 +503,20 @@ ml_get_hw:
 	testb	%cl,%cl			/* did we succeed? */
 	jne	ml_get_hw		/* no, try again */
 
-/*
-/ Beware of a race between this code path and the inline ASM fast-path locking
-/ sequence which attempts to lock a mutex by directly setting the locked flag 
-/ 
-*/
-
 	movb	$1,%cl
 	xchgb	%cl,M_LOCKED		/* try to set locked flag */
 	testb	%cl,%cl			/* is the mutex locked? */
 	jne	ml_fail			/* yes, we lose */
 
+	pushl	%edx
+	call	EXT(mutex_lock_acquire)
+	addl	$4,%esp
+	movl	L_ARG0,%edx
+
 #if	MACH_LDEBUG
 	movl	L_PC,%ecx
 	movl	%ecx,M_PC
-	movl	$CPD_ACTIVE_THREAD,%eax
+	movl	$ CPD_ACTIVE_THREAD,%eax
 	movl	%gs:(%eax),%ecx
 	movl	%ecx,M_THREAD
 	testl	%ecx,%ecx
@@ -554,9 +557,11 @@ ml_fail:
 
 ml_block:
 	CHECK_MYLOCK(M_THREAD)
+	xorl	%eax,%eax
+	pushl	%eax			/* no promotion here yet */
 	pushl	%edx			/* push mutex address */
 	call	EXT(mutex_lock_wait)	/* wait for the lock */
-	addl	$4,%esp
+	addl	$8,%esp
 	movl	L_ARG0,%edx		/* refetch lock pointer */
 	jmp	ml_retry		/* and try again */
 
@@ -574,20 +579,28 @@ ENTRY2(mutex_try,_mutex_try)
 	CHECK_MUTEX_TYPE()
 	CHECK_NO_SIMPLELOCKS()
 
-	xorl	%eax,%eax
-	movb	$1,%al			/* locked value for mutex */
-	xchgb	%al,M_LOCKED		/* swap locked values */
-	xorb	$1,%al			/* generate return value */
+	DISABLE_PREEMPTION(%eax)
 
-#if	MACH_LDEBUG || ETAP_LOCK_TRACE
-	testl	%eax,%eax		/* did we succeed? */
-	je	2f			/* no, skip */
-#endif
+mt_get_hw:
+	movb	$1,%cl
+	xchgb	%cl,M_ILK
+	testb	%cl,%cl
+	jne		mt_get_hw
+
+	movb	$1,%cl
+	xchgb	%cl,M_LOCKED
+	testb	%cl,%cl
+	jne		mt_fail
+
+	pushl	%edx
+	call	EXT(mutex_lock_acquire)
+	addl	$4,%esp
+	movl	L_ARG0,%edx
 
 #if	MACH_LDEBUG
 	movl	L_PC,%ecx
 	movl	%ecx,M_PC
-	movl	$CPD_ACTIVE_THREAD,%ecx
+	movl	$ CPD_ACTIVE_THREAD,%ecx
 	movl	%gs:(%ecx),%ecx
 	movl	%ecx,M_THREAD
 	testl	%ecx,%ecx
@@ -595,6 +608,11 @@ ENTRY2(mutex_try,_mutex_try)
 	incl	TH_MUTEX_COUNT(%ecx)
 1:
 #endif
+
+	xorb	%cl,%cl
+	xchgb	%cl,M_ILK
+
+	ENABLE_PREEMPTION(%eax)
 
 #if	ETAP_LOCK_TRACE
 	movl	L_PC,%eax		/* fetch pc */
@@ -604,11 +622,50 @@ ENTRY2(mutex_try,_mutex_try)
 	pushl	%edx			/* push mutex address */
 	call	EXT(etap_mutex_hold)	/* get start hold timestamp */
 	addl	$16,%esp		/* clean up stack, adjusting for locals */
-	movl	$1,%eax			/* put back successful return value */
 #endif	/* ETAP_LOCK_TRACE */
 
+	movl	$1,%eax
+
 #if	MACH_LDEBUG || ETAP_LOCK_TRACE
-2:
+#if	ETAP_LOCK_TRACE
+	addl	$8,%esp			/* pop stack claimed on entry */
+#endif
+#endif
+
+	EMARF
+	ret
+
+mt_fail:
+#if	MACH_LDEBUG
+	movl	L_PC,%ecx
+	movl	%ecx,M_PC
+	movl	$ CPD_ACTIVE_THREAD,%ecx
+	movl	%gs:(%ecx),%ecx
+	movl	%ecx,M_THREAD
+	testl	%ecx,%ecx
+	je	1f
+	incl	TH_MUTEX_COUNT(%ecx)
+1:
+#endif
+
+	xorb	%cl,%cl
+	xchgb	%cl,M_ILK
+
+	ENABLE_PREEMPTION(%eax)
+
+#if	ETAP_LOCK_TRACE
+	movl	L_PC,%eax		/* fetch pc */
+	pushl	SWT_LO			/* push wait time (low) */
+	pushl	SWT_HI			/* push wait time (high) */
+	pushl	%eax			/* push pc */
+	pushl	%edx			/* push mutex address */
+	call	EXT(etap_mutex_hold)	/* get start hold timestamp */
+	addl	$16,%esp		/* clean up stack, adjusting for locals */
+#endif	/* ETAP_LOCK_TRACE */
+
+	xorl	%eax,%eax
+
+#if	MACH_LDEBUG || ETAP_LOCK_TRACE
 #if	ETAP_LOCK_TRACE
 	addl	$8,%esp			/* pop stack claimed on entry */
 #endif
@@ -645,7 +702,7 @@ mu_doit:
 #if	MACH_LDEBUG
 	xorl	%eax,%eax
 	movl	%eax,M_THREAD		/* disown thread */
-	movl	$CPD_ACTIVE_THREAD,%eax
+	movl	$ CPD_ACTIVE_THREAD,%eax
 	movl	%gs:(%eax),%ecx
 	testl	%ecx,%ecx
 	je	0f
@@ -665,9 +722,11 @@ mu_doit:
 	ret
 
 mu_wakeup:
+	xorl	%eax,%eax
+	pushl	%eax			/* no promotion here yet */
 	pushl	%edx			/* push mutex address */
 	call	EXT(mutex_unlock_wakeup)/* yes, wake a thread */
-	addl	$4,%esp
+	addl	$8,%esp
 	movl	L_ARG0,%edx		/* refetch lock pointer */
 	jmp	mu_doit
 
@@ -693,7 +752,7 @@ ENTRY(_disable_preemption)
 ENTRY(_enable_preemption)
 #if	MACH_RT
 #if	MACH_ASSERT
-	movl	$CPD_PREEMPTION_LEVEL,%eax
+	movl	$ CPD_PREEMPTION_LEVEL,%eax
 	cmpl	$0,%gs:(%eax)
 	jg	1f
 	pushl	%gs:(%eax)
@@ -712,7 +771,7 @@ ENTRY(_enable_preemption)
 ENTRY(_enable_preemption_no_check)
 #if	MACH_RT
 #if	MACH_ASSERT
-	movl	$CPD_PREEMPTION_LEVEL,%eax
+	movl	$ CPD_PREEMPTION_LEVEL,%eax
 	cmpl	$0,%gs:(%eax)
 	jg	1f
 	pushl	$2f
@@ -737,7 +796,7 @@ ENTRY(_mp_disable_preemption)
 ENTRY(_mp_enable_preemption)
 #if	MACH_RT && NCPUS > 1
 #if	MACH_ASSERT
-	movl	$CPD_PREEMPTION_LEVEL,%eax
+	movl	$ CPD_PREEMPTION_LEVEL,%eax
 	cmpl	$0,%gs:(%eax)
 	jg	1f
 	pushl	%gs:(%eax)
@@ -756,7 +815,7 @@ ENTRY(_mp_enable_preemption)
 ENTRY(_mp_enable_preemption_no_check)
 #if	MACH_RT && NCPUS > 1
 #if	MACH_ASSERT
-	movl	$CPD_PREEMPTION_LEVEL,%eax
+	movl	$ CPD_PREEMPTION_LEVEL,%eax
 	cmpl	$0,%gs:(%eax)
 	jg	1f
 	pushl	$2f

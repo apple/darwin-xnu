@@ -26,6 +26,7 @@
 
 #ifndef _NETAT_RTMP_H_
 #define _NETAT_RTMP_H_
+#include <sys/appleapiopts.h>
 
 /* Changed 03-22-94 for router support  LD */
 

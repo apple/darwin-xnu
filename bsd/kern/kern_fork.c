@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2002 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -71,16 +71,18 @@
 #include <sys/vnode.h>
 #include <sys/file.h>
 #include <sys/acct.h>
+#if KTRACE
 #include <sys/ktrace.h>
+#endif
 
 #include <mach/mach_types.h>
 #include <kern/mach_param.h>
 
 #include <machine/spl.h>
 
-thread_t cloneproc(struct proc *, int); 
+thread_act_t cloneproc(struct proc *, int); 
 struct proc * forkproc(struct proc *, int);
-thread_t procdup();
+thread_act_t procdup();
 
 #define	DOFORK	0x1	/* fork() system call */
 #define	DOVFORK	0x2	/* vfork() system call */
@@ -164,6 +166,7 @@ vfork(p, uap, retval)
 	ut->uu_flag |= P_VFORK;
 	ut->uu_proc = newproc;
 	ut->uu_userstate = (void *)act_thread_csave();
+	ut->uu_vforkmask = ut->uu_sigmask;
 
 	thread_set_child(cur_act, newproc->p_pid);
 
@@ -217,6 +220,7 @@ vfork_return(th_act, p, p2, retval)
 	ut->uu_userstate = 0;
 	ut->uu_flag &= ~P_VFORK;
 	ut->uu_proc = 0;
+	ut->uu_sigmask = ut->uu_vforkmask;
 	p2->p_flag  &= ~P_INVFORK;
 	p2->p_vforkact = (void *)0;
 
@@ -230,12 +234,12 @@ vfork_return(th_act, p, p2, retval)
 	return;
 }
 
-thread_t
+thread_act_t
 procdup(
 	struct proc		*child,
 	struct proc		*parent)
 {
-	thread_t		thread;
+	thread_act_t		thread;
 	task_t			task;
  	kern_return_t	result;
 	extern task_t kernel_task;
@@ -267,7 +271,7 @@ fork1(p1, flags, retval)
 {
 	register struct proc *p2;
 	register uid_t uid;
-	thread_t newth, self = current_thread();
+	thread_act_t newth;
 	int s, count;
         task_t t;
 
@@ -297,7 +301,7 @@ fork1(p1, flags, retval)
 
 	/* The newly created process comes with signal lock held */
 	newth = cloneproc(p1, 1);
-	thread_dup(current_act(), newth);
+	thread_dup(newth);
 	/* p2 = newth->task->proc; */
 	p2 = (struct proc *)(get_bsdtask_info(get_threadtask(newth)));
 
@@ -344,15 +348,17 @@ fork1(p1, flags, retval)
  * lock set. fork() code needs to explicity remove this lock 
  * before signals can be delivered
  */
-thread_t
+thread_act_t
 cloneproc(p1, lock)
 	register struct proc *p1;
 	register int lock;
 {
 	register struct proc *p2;
-	thread_t th;
+	thread_act_t th;
 
 	p2 = (struct proc *)forkproc(p1,lock);
+
+
 	th = procdup(p2, p1);	/* child, parent */
 
 	LIST_INSERT_AFTER(p1, p2, p_pglist);
@@ -417,7 +423,8 @@ retry:
 again:
 		for (; p2 != 0; p2 = p2->p_list.le_next) {
 			while (p2->p_pid == nextpid ||
-			    p2->p_pgrp->pg_id == nextpid) {
+			    p2->p_pgrp->pg_id == nextpid ||
+				p2->p_session->s_sid == nextpid) {
 				nextpid++;
 				if (nextpid >= pidchecked)
 					goto retry;
@@ -427,6 +434,9 @@ again:
 			if (p2->p_pgrp && p2->p_pgrp->pg_id > nextpid && 
 			    pidchecked > p2->p_pgrp->pg_id)
 				pidchecked = p2->p_pgrp->pg_id;
+			if (p2->p_session->s_sid > nextpid &&
+				pidchecked > p2->p_session->s_sid)
+				pidchecked = p2->p_session->s_sid;
 		}
 		if (!doingzomb) {
 			doingzomb = 1;
@@ -464,7 +474,7 @@ again:
 	crhold(p1->p_ucred);
 	lockinit(&p2->p_cred->pc_lock, PLOCK, "proc cred", 0, 0);
 
-	/* bump references to the text vnode (for procfs) */
+	/* bump references to the text vnode */
 	p2->p_textvp = p1->p_textvp;
 	if (p2->p_textvp)
 		VREF(p2->p_textvp);
@@ -514,9 +524,10 @@ again:
 	p2->sigwait_thread = NULL;
 	p2->exit_thread = NULL;
 	p2->user_stack = p1->user_stack;
-	p2->p_sigpending = 0;
+	p2->p_xxxsigpending = 0;
 	p2->p_vforkcnt = 0;
 	p2->p_vforkact = 0;
+	TAILQ_INIT(&p2->p_uthlist);
 
 #if KTRACE
 	/*
@@ -551,25 +562,53 @@ uthread_zone_init()
 }
 
 void *
-uthread_alloc(void)
+uthread_alloc(task_t task, thread_act_t thr_act )
 {
+	struct proc *p;
+	struct uthread *uth, *uth_parent;
 	void *ut;
+	extern task_t kernel_task;
+	boolean_t funnel_state;
 
 	if (!uthread_zone_inited)
 		uthread_zone_init();
 
 	ut = (void *)zalloc(uthread_zone);
 	bzero(ut, sizeof(struct uthread));
+
+	if (task != kernel_task) {
+		uth = (struct uthread *)ut;
+		p = get_bsdtask_info(task);
+
+		funnel_state = thread_funnel_set(kernel_flock, TRUE);
+		uth_parent = (struct uthread *)get_bsdthread_info(current_act());
+		if (uth_parent) {
+			if (uth_parent->uu_flag & USAS_OLDMASK)
+				uth->uu_sigmask = uth_parent->uu_oldmask;
+			else
+				uth->uu_sigmask = uth_parent->uu_sigmask;
+		}
+		uth->uu_act = thr_act;
+		//signal_lock(p);
+		if (p)
+			TAILQ_INSERT_TAIL(&p->p_uthlist, uth, uu_list);
+		//signal_unlock(p);
+		(void)thread_funnel_set(kernel_flock, funnel_state);
+	}
+
 	return (ut);
 }
 
 
 void
-uthread_free(void *uthread)
+uthread_free(task_t task, void *uthread, void * bsd_info)
 {
 	struct _select *sel;
 	struct uthread *uth = (struct uthread *)uthread;
+	struct proc * p = (struct proc *)bsd_info;
+	extern task_t kernel_task;
 	int size;
+	boolean_t funnel_state;
 
 	sel = &uth->uu_state.ss_select;
 	/* cleanup the select bit space */
@@ -586,6 +625,13 @@ uthread_free(void *uthread)
 		sel->wql = 0;
 	}
 
+	if ((task != kernel_task) && p) {
+		funnel_state = thread_funnel_set(kernel_flock, TRUE);
+		//signal_lock(p);
+		TAILQ_REMOVE(&p->p_uthlist, uth, uu_list);
+		//signal_unlock(p);
+		(void)thread_funnel_set(kernel_flock, funnel_state);
+	}
 	/* and free the uthread itself */
 	zfree(uthread_zone, (vm_offset_t)uthread);
 }

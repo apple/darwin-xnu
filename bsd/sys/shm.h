@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2002 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -59,6 +59,7 @@
 #ifndef _SYS_SHM_H_
 #define _SYS_SHM_H_
 
+#include <sys/appleapiopts.h>
 #include <sys/param.h>
 #include <sys/ipc.h>
 
@@ -85,7 +86,7 @@ struct shmid_ds {
 };
 
 #ifdef KERNEL
-
+#ifdef __APPLE_API_PRIVATE
 /*
  * System 5 style catch-all structure for shared memory constants that
  * might be of interest to user programs.  Do we really want/need this?
@@ -104,6 +105,7 @@ struct proc;
 
 void	shmexit __P((struct proc *));
 void	shmfork __P((struct proc *, struct proc *));
+#endif /* __APPLE_API_PRIVATE */
 #else /* !KERNEL */
 
 #include <sys/cdefs.h>

@@ -19,19 +19,14 @@ EXPINC_SUBDIRS_PPC = \
 
 EXPINC_SUBDIRS_I386 = \
 
-DATAFILES = \
-	bf_locl.h  bf_pi.h    blowfish.h
-
-INSTALL_MI_LIST	= ${DATAFILES}
+PRIVATE_DATAFILES = \
+	blowfish.h
 
 INSTALL_MI_DIR = crypto
 
-EXPORT_MI_LIST	= ${DATAFILES}
+EXPORT_MI_DIR = ${INSTALL_MI_DIR}
 
-EXPORT_MI_DIR = crypto
-
+INSTALL_MI_LCL_KERN_LIST = ${PRIVATE_DATAFILES}
 
 include $(MakeInc_rule)
 include $(MakeInc_dir)
-
-

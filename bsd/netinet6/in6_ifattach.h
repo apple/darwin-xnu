@@ -31,20 +31,18 @@
 
 #ifndef _NETINET6_IN6_IFATTACH_H_
 #define _NETINET6_IN6_IFATTACH_H_
+#include <sys/appleapiopts.h>
 
-#if KERNEL
-extern int found_first_ifid;
-
-int in6_ifattach_getifid __P((struct ifnet *));
-void in6_ifattach_p2p __P((void));
-void in6_ifattach __P((struct ifnet *, u_int, caddr_t, int));
+#ifdef KERNEL
+#ifdef __APPLE_API_PRIVATE
+void in6_nigroup_attach __P((const char *, int));
+void in6_nigroup_detach __P((const char *, int));
+void in6_ifattach __P((struct ifnet *, struct ifnet *));
 void in6_ifdetach __P((struct ifnet *));
+void in6_get_tmpifid __P((struct ifnet *, u_int8_t *, const u_int8_t *, int));
+void in6_tmpaddrtimer __P((void *));
+int in6_nigroup __P((struct ifnet *, const char *, int, struct in6_addr *));
+#endif /* __APPLE_API_PRIVATE */
 #endif /* KERNEL */
-
-#define IN6_IFT_LOOP	1
-#define IN6_IFT_P2P	2
-#define IN6_IFT_802	3
-#define IN6_IFT_P2P802	4
-#define IN6_IFT_ARCNET	5
 
 #endif /* _NETINET6_IN6_IFATTACH_H_ */

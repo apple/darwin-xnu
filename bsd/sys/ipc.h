@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2002 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -64,6 +64,8 @@
  *	@(#)ipc.h	8.4 (Berkeley) 2/19/95
  */
 
+#include <sys/appleapiopts.h>
+
 /*
  * SVID compatible ipc.h file
  */
@@ -97,6 +99,8 @@ struct ipc_perm {
 #define	IPC_STAT	2	/* get options */
 
 #ifdef KERNEL
+#ifdef __APPLE_API_PRIVATE
+
 /* Macros to convert between ipc ids and array indices or sequence ids */
 #define	IPCID_TO_IX(id)		((id) & 0xffff)
 #define	IPCID_TO_SEQ(id)	(((id) >> 16) & 0xffff)
@@ -105,6 +109,7 @@ struct ipc_perm {
 struct ucred;
 
 int	ipcperm __P((struct ucred *, struct ipc_perm *, int));
+#endif /* __APPLE_API_PRIVATE */
 #else /* ! KERNEL */
 
 /* XXX doesn't really belong here, but has been historical practice in SysV. */

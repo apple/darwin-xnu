@@ -47,18 +47,22 @@
  * any improvements or extensions that they make and grant Carnegie Mellon
  * the rights to redistribute these changes.
  */
-/*
- */
 
 #ifndef	_KERN_CPU_NUMBER_H_
 #define	_KERN_CPU_NUMBER_H_
 
+#include <sys/appleapiopts.h>
+
+#ifdef	__APPLE_API_PRIVATE
+
+#ifdef	MACH_KERNEL_PRIVATE
+
+extern int		master_cpu;
+
+#endif	/* MACH_KERNEL_PRIVATE */
+
+#endif	/* __APPLE_API_PRIVATE */
+
 #include <machine/cpu_number.h>
-
-/*
- *	Definitions for cpu identification in multi-processors.
- */
-
-extern int	master_cpu;	/* 'master' processor - keeps time */
 
 #endif	/* _KERN_CPU_NUMBER_H_ */

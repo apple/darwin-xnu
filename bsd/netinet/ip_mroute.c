@@ -30,13 +30,9 @@
  * Modified by Bill Fenner, PARC, April 1995
  *
  * MROUTING Revision: 3.5
+ * $FreeBSD: src/sys/netinet/ip_mroute.c,v 1.56.2.2 2001/07/19 06:37:26 kris Exp $
  */
 
-#if ISFB31
-#include "opt_mrouting.h"
-#else
-#define MROUTE_LKM 0
-#endif
 
 #include <sys/param.h>
 #include <sys/systm.h>
@@ -53,11 +49,6 @@
 #include <net/route.h>
 #include <netinet/in.h>
 #include <netinet/in_systm.h>
-#ifdef INET6
-#include <netinet/ip6.h>
-#include <netinet6/ip6_var.h>
-#endif
-#include <netinet/in_pcb.h>
 #include <netinet/ip.h>
 #include <netinet/ip_var.h>
 #include <netinet/in_var.h>
@@ -79,7 +70,7 @@
 #endif
 #endif
 
-#if !MROUTING
+#ifndef MROUTING
 extern u_long	_ip_mcast_src __P((int vifi));
 extern int	_ip_mforward __P((struct ip *ip, struct ifnet *ifp,
 				  struct mbuf *m, struct ip_moptions *imo));
@@ -220,7 +211,7 @@ ip_rsvp_force_done(so)
  * Globals.  All but ip_mrouter and ip_mrtproto could be static,
  * except for netstat or debugging purposes.
  */
-#if !MROUTE_LKM
+#ifndef MROUTE_LKM
 struct socket  *ip_mrouter  = NULL;
 static struct mrtstat	mrtstat;
 #else /* MROUTE_LKM */
@@ -242,8 +233,6 @@ static u_int	mrtdebug = 0;	  /* debug level 	*/
 #define		DEBUG_XMIT	0x10
 static u_int  	tbfdebug = 0;     /* tbf debug level 	*/
 static u_int	rsvpdebug = 0;	  /* rsvp debug level   */
-
-
 
 #define		EXPIRE_TIMEOUT	(hz / 4)	/* 4x / second		*/
 #define		UPCALL_EXPIRE	6		/* number of timeouts	*/
@@ -469,7 +458,7 @@ X_ip_mrouter_set(so, sopt)
 	return (error);
 }
 
-#if !MROUTE_LKM
+#if !defined(MROUTE_LKM) || !MROUTE_LKM
 int (*ip_mrouter_set)(struct socket *, struct sockopt *) = X_ip_mrouter_set;
 #endif
 
@@ -499,7 +488,7 @@ X_ip_mrouter_get(so, sopt)
 	return (error);
 }
 
-#if !MROUTE_LKM
+#if !defined(MROUTE_LKM) || !MROUTE_LKM
 int (*ip_mrouter_get)(struct socket *, struct sockopt *) = X_ip_mrouter_get;
 #endif
 
@@ -527,7 +516,7 @@ X_mrt_ioctl(cmd, data)
     return error;
 }
 
-#if !MROUTE_LKM
+#if !defined(MROUTE_LKM) || !MROUTE_LKM
 int (*mrt_ioctl)(int, caddr_t) = X_mrt_ioctl;
 #endif
 
@@ -683,7 +672,7 @@ X_ip_mrouter_done()
     return 0;
 }
 
-#if !MROUTE_LKM
+#if !defined(MROUTE_LKM) || !MROUTE_LKM
 int (*ip_mrouter_done)(void) = X_ip_mrouter_done;
 #endif
 
@@ -1332,7 +1321,7 @@ X_ip_mforward(ip, ifp, m, imo)
     }		
 }
 
-#if !MROUTE_LKM
+#if !defined(MROUTE_LKM) || !MROUTE_LKM
 int (*ip_mforward)(struct ip *, struct ifnet *, struct mbuf *,
 		   struct ip_moptions *) = X_ip_mforward;
 #endif
@@ -1528,7 +1517,7 @@ X_legal_vif_num(vif)
        return(0);
 }
 
-#if !MROUTE_LKM
+#if !defined(MROUTE_LKM) || !MROUTE_LKM
 int (*legal_vif_num)(int) = X_legal_vif_num;
 #endif
 
@@ -1545,7 +1534,7 @@ X_ip_mcast_src(vifi)
 	return INADDR_ANY;
 }
 
-#if !MROUTE_LKM
+#if !defined(MROUTE_LKM) || !MROUTE_LKM
 u_long (*ip_mcast_src)(int) = X_ip_mcast_src;
 #endif
 
@@ -1613,7 +1602,11 @@ encap_send(ip, vifp, m)
      */
     ip_copy = mtod(mb_copy, struct ip *);
     *ip_copy = multicast_encap_iphdr;
+#if RANDOM_IP_ID
+    ip_copy->ip_id = ip_randomid();
+#else
     ip_copy->ip_id = htons(ip_id++);
+#endif
     ip_copy->ip_len += len;
     ip_copy->ip_src = vifp->v_lcl_addr;
     ip_copy->ip_dst = vifp->v_rmt_addr;
@@ -2181,16 +2174,6 @@ rsvp_input(m, iphlen)
 	return;
     }
 
-    /* If the old-style non-vif-associated socket is set, then use
-     * it and ignore the new ones.
-     */
-    if (ip_rsvpd != NULL) {
-	if (rsvpdebug)
-	    printf("rsvp_input: Sending packet up old-style socket\n");
-	rip_input(m, iphlen);
-	return;
-    }
-
     s = splnet();
 
     if (rsvpdebug)
@@ -2203,31 +2186,29 @@ rsvp_input(m, iphlen)
 
     ifp = m->m_pkthdr.rcvif;
     /* Find which vif the packet arrived on. */
-    for (vifi = 0; vifi < numvifs; vifi++) {
+    for (vifi = 0; vifi < numvifs; vifi++)
 	if (viftable[vifi].v_ifp == ifp)
- 		break;
- 	}
- 
-    if (vifi == numvifs) {
-	/* Can't find vif packet arrived on. Drop packet. */
-	if (rsvpdebug)
-	    printf("rsvp_input: Can't find vif for packet...dropping it.\n");
-	m_freem(m);
+	    break;
+
+    if (vifi == numvifs || viftable[vifi].v_rsvpd == NULL) {
+	/*
+	 * If the old-style non-vif-associated socket is set,
+	 * then use it.  Otherwise, drop packet since there
+	 * is no specific socket for this vif.
+	 */
+	if (ip_rsvpd != NULL) {
+	    if (rsvpdebug)
+		printf("rsvp_input: Sending packet up old-style socket\n");
+	    rip_input(m, iphlen);  /* xxx */
+	} else {
+	    if (rsvpdebug && vifi == numvifs)
+		printf("rsvp_input: Can't find vif for packet.\n");
+	    else if (rsvpdebug && viftable[vifi].v_rsvpd == NULL)
+		printf("rsvp_input: No socket defined for vif %d\n",vifi);
+	    m_freem(m);
+	}
 	splx(s);
 	return;
-    }
-
-    if (rsvpdebug)
-	printf("rsvp_input: check socket\n");
-
-    if (viftable[vifi].v_rsvpd == NULL) {
-	/* drop packet, since there is no specific socket for this
-	 * interface */
-	    if (rsvpdebug)
-		    printf("rsvp_input: No socket defined for vif %d\n",vifi);
-	    m_freem(m);
-	    splx(s);
-	    return;
     }
     rsvp_src.sin_addr = ip->ip_src;
 
@@ -2235,13 +2216,14 @@ rsvp_input(m, iphlen)
 	printf("rsvp_input: m->m_len = %d, sbspace() = %ld\n",
 	       m->m_len,sbspace(&(viftable[vifi].v_rsvpd->so_rcv)));
 
-    if (socket_send(viftable[vifi].v_rsvpd, m, &rsvp_src) < 0)
+    if (socket_send(viftable[vifi].v_rsvpd, m, &rsvp_src) < 0) {
 	if (rsvpdebug)
 	    printf("rsvp_input: Failed to append to socket\n");
-    else
+    } else {
 	if (rsvpdebug)
 	    printf("rsvp_input: send packet up\n");
-    
+    }
+
     splx(s);
 }
 

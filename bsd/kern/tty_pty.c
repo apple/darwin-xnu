@@ -71,6 +71,7 @@
 #include <sys/uio.h>
 #include <sys/kernel.h>
 #include <sys/vnode.h>
+#include <sys/user.h>
 #include <sys/signalvar.h>
 
 #ifndef NeXT
@@ -316,12 +317,14 @@ ptsread(dev, uio, flag)
 	register struct tty *tp = pt_tty[minor(dev)];
 	register struct pt_ioctl *pti = &pt_ioctl[minor(dev)];
 	int error = 0;
+	struct uthread *ut;
 
+	ut = (struct uthread *)get_bsdthread_info(current_act());
 again:
 	if (pti->pt_flags & PF_REMOTE) {
 		while (isbackground(p, tp)) {
 			if ((p->p_sigignore & sigmask(SIGTTIN)) ||
-			    (p->p_sigmask & sigmask(SIGTTIN)) ||
+			    (ut->uu_sigmask & sigmask(SIGTTIN)) ||
 			    p->p_pgrp->pg_jobc == 0 ||
 			    p->p_flag & P_PPWAIT)
 				return (EIO);

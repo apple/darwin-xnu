@@ -52,10 +52,12 @@
  * SUCH DAMAGE.
  *
  *	@(#)slip.h	8.1 (Berkeley) 2/12/94
+ * $FreeBSD: src/sys/net/slip.h,v 1.9 1999/08/28 00:48:29 peter Exp $
  */
 
 #ifndef _NET_SLIP_H_
 #define	_NET_SLIP_H_
+#include <sys/appleapiopts.h>
 
 /* Ioctls operating on SLIP ttys. */
 #define	SLIOCGUNIT	_IOR('t', 88, int)	/* get slip unit number */

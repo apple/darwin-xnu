@@ -54,10 +54,12 @@
  * SUCH DAMAGE.
  *
  *	@(#)if_fddi.h	8.1 (Berkeley) 6/10/93
+ * $FreeBSD: src/sys/netinet/if_fddi.h,v 1.8 1999/12/29 04:40:58 peter Exp $
  */
 
 #ifndef _NETINET_IF_FDDI_H_
 #define _NETINET_IF_FDDI_H_
+#include <sys/appleapiopts.h>
 
 /*
  * Structure of an 100Mb/s FDDI header.
@@ -89,7 +91,8 @@ struct	fddi_header {
 #define FDDIFC_LLC_SYNC         0xd0
 #define	FDDIFC_SMT		0x40
 
-#if defined(KERNEL)
+#ifdef KERNEL
+#ifdef __APPLE_API_PRIVATE
 #define	fddibroadcastaddr	etherbroadcastaddr
 #define	fddi_ipmulticast_min	ether_ipmulticast_min
 #define	fddi_ipmulticast_max	ether_ipmulticast_max
@@ -101,7 +104,7 @@ void    fddi_ifattach __P((struct ifnet *));
 void    fddi_input __P((struct ifnet *, struct fddi_header *, struct mbuf *));
 int     fddi_output __P((struct ifnet *,
            struct mbuf *, struct sockaddr *, struct rtentry *)); 
-
+#endif /* __APPLE_API_PRIVATE */
 #endif
 
 #endif

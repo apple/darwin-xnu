@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2002 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -63,6 +63,9 @@
 #ifndef _NFS_NFSDISKLESS_H_
 #define _NFS_NFSDISKLESS_H_
 
+#include <sys/appleapiopts.h>
+
+#ifdef __APPLE_API_PRIVATE
 /*
  * Structure that must be initialized for a diskless nfs client.
  * This structure is used by nfs_mountroot() to set up the root and swap
@@ -137,4 +140,5 @@ struct nfs_diskless {
 	struct nfs_dlmount nd_private; 	/* Mount info for private */
 };
 
-#endif
+#endif /* __APPLE_API_PRIVATE */
+#endif /* _NFS_NFSDISKLESS_H_ */

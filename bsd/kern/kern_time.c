@@ -64,14 +64,13 @@
 
 #include <sys/mount.h>
 
-#include <kern/cpu_number.h>
-
 #include <kern/clock.h>
 
 #define HZ	100	/* XXX */
 
-struct timeval		time;
-
+volatile struct timeval		time;
+/* simple lock used to access timezone, tz structure */
+decl_simple_lock_data(, tz_slock);
 /* 
  * Time of day and interval timer support.
  *
@@ -94,6 +93,10 @@ gettimeofday(p, uap, retval)
 {
 	struct timeval atv;
 	int error = 0;
+	extern simple_lock_data_t tz_slock;
+	struct timezone ltz; /* local copy */
+
+/*  NOTE THIS implementation is for non ppc architectures only */
 
 	if (uap->tp) {
 		microtime(&atv);
@@ -102,9 +105,13 @@ gettimeofday(p, uap, retval)
 			return(error);
 	}
 	
-	if (uap->tzp)
-		error = copyout((caddr_t)&tz, (caddr_t)uap->tzp,
+	if (uap->tzp) {
+		usimple_lock(&tz_slock);
+		ltz = tz;
+		usimple_unlock(&tz_slock);
+		error = copyout((caddr_t)&ltz, (caddr_t)uap->tzp,
 		    sizeof (tz));
+	}
 
 	return(error);
 }
@@ -123,6 +130,7 @@ settimeofday(p, uap, retval)
 	struct timeval atv;
 	struct timezone atz;
 	int error, s;
+	extern simple_lock_data_t tz_slock;
 
 	if (error = suser(p->p_ucred, &p->p_acflag))
 		return (error);
@@ -135,36 +143,32 @@ settimeofday(p, uap, retval)
 		return (error);
 	if (uap->tv)
 		setthetime(&atv);
-	if (uap->tzp)
+	if (uap->tzp) {
+		usimple_lock(&tz_slock);
 		tz = atz;
+		usimple_unlock(&tz_slock);
+	}
 	return (0);
 }
 
 setthetime(tv)
 	struct timeval *tv;
 {
+	long delta = tv->tv_sec - time.tv_sec;
 	mach_timespec_t	now;
-	long delta;
-	int s;
 
 	now.tv_sec = tv->tv_sec;
 	now.tv_nsec = tv->tv_usec * NSEC_PER_USEC;
 
 	clock_set_calendar_value(now);
-	delta = tv->tv_sec - time.tv_sec;
 	boottime.tv_sec += delta;
 #if NFSCLIENT || NFSSERVER
 	lease_updatetime(delta);
 #endif
-	s = splhigh();
-	microtime(&time);
-	splx(s);
 }
 
-int	tickadj = 240000 / (60 * HZ);	/* "standard" clock skew, us./tick */
-int	tickdelta;			/* current clock skew, us. per tick */
-long	timedelta;			/* unapplied time correction, us. */
-long	bigadj = 1000000;		/* use 10x skew above bigadj us. */
+#define tickadj		(40 * NSEC_PER_USEC)	/* "standard" skew, ns / 10 ms */
+#define	bigadj		(1 * NSEC_PER_SEC)		/* use 10x skew above bigadj ns */
 
 struct adjtime_args {
 	struct timeval *delta;
@@ -177,42 +181,37 @@ adjtime(p, uap, retval)
 	register struct adjtime_args *uap;
 	register_t *retval;
 {
-	struct timeval atv, oatv;
-	register long ndelta;
-	int s, error;
+	struct timeval atv;
+	int64_t total;
+	uint32_t delta;
+	int error;
 
 	if (error = suser(p->p_ucred, &p->p_acflag))
 		return (error);
-	if(error = copyin((caddr_t)uap->delta, (caddr_t)&atv,
-		sizeof (struct timeval)))
-		return(error);
+	if (error = copyin((caddr_t)uap->delta,
+							(caddr_t)&atv, sizeof (struct timeval)))
+		return (error);
 		
-	ndelta = atv.tv_sec * 1000000 + atv.tv_usec;
-	if (timedelta == 0)
-		if (ndelta > bigadj)
-			tickdelta = 10 * tickadj;
-		else
-			tickdelta = tickadj;
-	if (ndelta % tickdelta)
-		ndelta = ndelta / tickdelta * tickdelta;
+    /*
+     * Compute the total correction and the rate at which to apply it.
+     */
+	total = (int64_t)atv.tv_sec * NSEC_PER_SEC + atv.tv_usec * NSEC_PER_USEC;
+	if (total > bigadj || total < -bigadj)
+		delta = 10 * tickadj;
+	else
+		delta = tickadj;
 
-	s = splclock();
+	total = clock_set_calendar_adjtime(total, delta);
+
 	if (uap->olddelta) {
-		oatv.tv_sec = timedelta / 1000000;
-		oatv.tv_usec = timedelta % 1000000;
+		atv.tv_sec = total / NSEC_PER_SEC;
+		atv.tv_usec = (total / NSEC_PER_USEC) % USEC_PER_SEC;
+		(void) copyout((caddr_t)&atv,
+							(caddr_t)uap->olddelta, sizeof (struct timeval));
 	}
-	timedelta = ndelta;
-	splx(s);
 
-	if (uap->olddelta)
-		(void) copyout((caddr_t)&oatv, (caddr_t)uap->olddelta,
-			sizeof (struct timeval));
-	return(0);
+	return (0);
 }
-
-#define SECDAY          ((unsigned)(24*60*60))          /* seconds per day */
-#define SECYR           ((unsigned)(365*SECDAY))        /* per common year */
-#define YRREF           70      /* UNIX time referenced to 1970 */
 
 /*
  * Initialze the time of day register. 
@@ -258,26 +257,37 @@ inittodr(base)
 	return;
 }
 
+void	timevaladd(
+			struct timeval	*t1,
+			struct timeval	*t2);
+void	timevalsub(
+			struct timeval	*t1,
+			struct timeval	*t2);
+void	timevalfix(
+			struct timeval	*t1);
+
+uint64_t
+		tvtoabstime(
+			struct timeval	*tvp);
+
 /*
  * Get value of an interval timer.  The process virtual and
- * profiling virtual time timers are kept in the u. area, since
- * they can be swapped out.  These are kept internally in the
+ * profiling virtual time timers are kept internally in the
  * way they are specified externally: in time until they expire.
  *
- * The real time interval timer is kept in the process table slot
- * for the process, and its value (it_value) is kept as an
- * absolute time rather than as a delta, so that it is easy to keep
- * periodic real-time signals from drifting.
+ * The real time interval timer expiration time (p_rtime)
+ * is kept as an absolute time rather than as a delta, so that
+ * it is easy to keep periodic real-time signals from drifting.
  *
  * Virtual time timers are processed in the hardclock() routine of
- * kern_clock.c.  The real time timer is processed by a timeout
- * routine, called from the softclock() routine.  Since a callout
- * may be delayed in real time due to interrupt processing in the system,
- * it is possible for the real time timeout routine (realitexpire, given below),
- * to be delayed in real time past when it is supposed to occur.  It
- * does not suffice, therefore, to reload the real timer .it_value from the
- * real time timers .it_interval.  Rather, we compute the next time in
- * absolute time the timer should go off.
+ * kern_clock.c.  The real time timer is processed by a callout
+ * routine.  Since a callout may be delayed in real time due to
+ * other processing in the system, it is possible for the real
+ * time callout routine (realitexpire, given below), to be delayed
+ * in real time past when it is supposed to occur.  It does not
+ * suffice, therefore, to reload the real time .it_value from the
+ * real time .it_interval.  Rather, we compute the next time in
+ * absolute time when the timer should go off.
  */
  
 struct getitimer_args {
@@ -292,30 +302,35 @@ getitimer(p, uap, retval)
 	register_t *retval;
 {
 	struct itimerval aitv;
-	int s;
 
 	if (uap->which > ITIMER_PROF)
 		return(EINVAL);
-	
-	s = splclock();
 	if (uap->which == ITIMER_REAL) {
 		/*
-		 * Convert from absoulte to relative time in .it_value
-		 * part of real time timer.  If time for real time timer
-		 * has passed return 0, else return difference between
-		 * current time and time for the timer to go off.
+		 * If time for real time timer has passed return 0,
+		 * else return difference between current time and
+		 * time for the timer to go off.
 		 */
 		aitv = p->p_realtimer;
-		if (timerisset(&aitv.it_value))
-			if (timercmp(&aitv.it_value, &time, <))
+		if (timerisset(&p->p_rtime)) {
+			struct timeval		now;
+
+			microuptime(&now);
+			if (timercmp(&p->p_rtime, &now, <))
 				timerclear(&aitv.it_value);
-			else
-				timevalsub(&aitv.it_value, &time);
-	} else
-		aitv =p->p_stats->p_timer[uap->which];
-	splx(s);
-	return(copyout((caddr_t)&aitv, (caddr_t)uap->itv,
-	    sizeof (struct itimerval)));
+			else {
+				aitv.it_value = p->p_rtime;
+				timevalsub(&aitv.it_value, &now);
+			}
+		}
+		else
+			timerclear(&aitv.it_value);
+	}
+	else
+		aitv = p->p_stats->p_timer[uap->which];
+
+	return (copyout((caddr_t)&aitv,
+						(caddr_t)uap->itv, sizeof (struct itimerval)));
 }
 
 struct setitimer_args {
@@ -332,33 +347,38 @@ setitimer(p, uap, retval)
 {
 	struct itimerval aitv;
 	register struct itimerval *itvp;
-	int s, error;
+	int error;
 
 	if (uap->which > ITIMER_PROF)
-		return(EINVAL);
-	itvp = uap->itv;
-	if (itvp && (error = copyin((caddr_t)itvp, (caddr_t)&aitv,
-	    sizeof(struct itimerval))))
+		return (EINVAL);
+	if ((itvp = uap->itv) &&
+		(error = copyin((caddr_t)itvp,
+							(caddr_t)&aitv, sizeof (struct itimerval))))
 		return (error);
-	if ((uap->itv = uap->oitv) &&
-	    (error = getitimer(p, uap, retval)))
+	if ((uap->itv = uap->oitv) && (error = getitimer(p, uap, retval)))
 		return (error);
 	if (itvp == 0)
 		return (0);
 	if (itimerfix(&aitv.it_value) || itimerfix(&aitv.it_interval))
 		return (EINVAL);
-	s = splclock();
 	if (uap->which == ITIMER_REAL) {
-		untimeout(realitexpire, (caddr_t)p);
+		thread_call_func_cancel(realitexpire, (void *)p->p_pid, FALSE);
 		if (timerisset(&aitv.it_value)) {
-			timevaladd(&aitv.it_value, &time);
-			timeout(realitexpire, (caddr_t)p, hzto(&aitv.it_value));
+			microuptime(&p->p_rtime);
+			timevaladd(&p->p_rtime, &aitv.it_value);
+			thread_call_func_delayed(
+								realitexpire, (void *)p->p_pid,
+										tvtoabstime(&p->p_rtime));
 		}
+		else
+			timerclear(&p->p_rtime);
+
 		p->p_realtimer = aitv;
-	} else
+	}
+	else
 		p->p_stats->p_timer[uap->which] = aitv;
-	splx(s);
-	return(0); /* To insure good return value on success */
+
+	return (0);
 }
 
 /*
@@ -370,53 +390,47 @@ setitimer(p, uap, retval)
  * SIGALRM calls to be compressed into one.
  */
 void
-realitexpire(arg)
-	void *arg;
+realitexpire(
+	void		*pid)
 {
 	register struct proc *p;
-	int s;
-	boolean_t 	funnel_state;
+	struct timeval	now;
+	boolean_t		funnel_state = thread_funnel_set(kernel_flock, TRUE);
 
-	funnel_state = thread_funnel_set(kernel_flock,TRUE);
+	p = pfind((pid_t)pid);
+	if (p == NULL) {
+		(void) thread_funnel_set(kernel_flock, FALSE);
+		return;
+	}
 
-	p = (struct proc *)arg;
-	psignal(p, SIGALRM);
 	if (!timerisset(&p->p_realtimer.it_interval)) {
-		timerclear(&p->p_realtimer.it_value);
-                (void) thread_funnel_set(kernel_flock, FALSE);
-		return;
-	}
-	
-	/*
-	 * If the time's way off, don't try to compensate by getting
-	 * there incrementally.
-	 */
-	s = splclock();
-	if (p->p_realtimer.it_value.tv_sec < time.tv_sec - 10) {
-		p->p_realtimer.it_value = time;
-		timeout(realitexpire, (caddr_t)p,
-			hzto(&p->p_realtimer.it_value));
-		splx(s);
-                (void) thread_funnel_set(kernel_flock, FALSE);
-		return;
-		
-	}
-	splx(s);
+		timerclear(&p->p_rtime);
+		psignal(p, SIGALRM);
 
-	for (;;) {
-		s = splclock();
-		timevaladd(&p->p_realtimer.it_value,
-		    &p->p_realtimer.it_interval);
-		if (timercmp(&p->p_realtimer.it_value, &time, >)) {
-			timeout(realitexpire, (caddr_t)p,
-			    hzto(&p->p_realtimer.it_value));
-			splx(s);
-                        (void) thread_funnel_set(kernel_flock, FALSE);
-			return;
-		}
-		splx(s);
+		(void) thread_funnel_set(kernel_flock, FALSE);
+		return;
 	}
-        
+
+	microuptime(&now);
+	timevaladd(&p->p_rtime, &p->p_realtimer.it_interval);
+	if (timercmp(&p->p_rtime, &now, <=)) {
+		if ((p->p_rtime.tv_sec + 2) >= now.tv_sec) {
+			for (;;) {
+				timevaladd(&p->p_rtime, &p->p_realtimer.it_interval);
+				if (timercmp(&p->p_rtime, &now, >))
+					break;
+			}
+		}
+		else {
+			p->p_rtime = p->p_realtimer.it_interval;
+			timevaladd(&p->p_rtime, &now);
+		}
+	}
+
+	thread_call_func_delayed(realitexpire, pid, tvtoabstime(&p->p_rtime));
+
+	psignal(p, SIGALRM);
+
 	(void) thread_funnel_set(kernel_flock, FALSE);
 }
 
@@ -490,8 +504,9 @@ expire:
  * Caveat emptor.
  */
 void
-timevaladd(t1, t2)
-	struct timeval *t1, *t2;
+timevaladd(
+	struct timeval *t1,
+	struct timeval *t2)
 {
 
 	t1->tv_sec += t2->tv_sec;
@@ -499,8 +514,9 @@ timevaladd(t1, t2)
 	timevalfix(t1);
 }
 void
-timevalsub(t1, t2)
-	struct timeval *t1, *t2;
+timevalsub(
+	struct timeval *t1,
+	struct timeval *t2)
 {
 
 	t1->tv_sec -= t2->tv_sec;
@@ -508,8 +524,8 @@ timevalsub(t1, t2)
 	timevalfix(t1);
 }
 void
-timevalfix(t1)
-	struct timeval *t1;
+timevalfix(
+	struct timeval *t1)
 {
 
 	if (t1->tv_usec < 0) {
@@ -527,10 +543,67 @@ timevalfix(t1)
  * to which tvp points.
  */
 void
-microtime(struct timeval * tvp)
+microtime(
+	struct timeval	*tvp)
 {
 	mach_timespec_t		now = clock_get_calendar_value();
 
 	tvp->tv_sec = now.tv_sec;
 	tvp->tv_usec = now.tv_nsec / NSEC_PER_USEC;
+}
+
+void
+microuptime(
+	struct timeval	*tvp)
+{
+	mach_timespec_t		now = clock_get_system_value();
+
+	tvp->tv_sec = now.tv_sec;
+	tvp->tv_usec = now.tv_nsec / NSEC_PER_USEC;
+}
+
+/*
+ * Ditto for timespec.
+ */
+void
+nanotime(
+	struct timespec *tsp)
+{
+	mach_timespec_t		now = clock_get_calendar_value();
+
+	tsp->tv_sec = now.tv_sec;
+	tsp->tv_nsec = now.tv_nsec;
+}
+
+void
+nanouptime(
+	struct timespec *tsp)
+{
+	mach_timespec_t		now = clock_get_system_value();
+
+	tsp->tv_sec = now.tv_sec;
+	tsp->tv_nsec = now.tv_nsec;
+}
+
+uint64_t
+tvtoabstime(
+	struct timeval	*tvp)
+{
+	uint64_t	result, usresult;
+
+	clock_interval_to_absolutetime_interval(
+						tvp->tv_sec, NSEC_PER_SEC, &result);
+	clock_interval_to_absolutetime_interval(
+						tvp->tv_usec, NSEC_PER_USEC, &usresult);
+
+	return (result + usresult);
+}
+void
+time_zone_slock_init(void)
+{
+	extern simple_lock_data_t tz_slock;
+
+	simple_lock_init(&tz_slock);
+
+
 }

@@ -546,6 +546,7 @@ typedef struct vstruct_alias {
 #define DPT_LOCK_INIT(lock)	mutex_init(&(lock), ETAP_DPAGE_VSTRUCT)
 #define DPT_LOCK(lock)		mutex_lock(&(lock))
 #define DPT_UNLOCK(lock)	mutex_unlock(&(lock))
+#define DPT_SLEEP(lock, e, i)	thread_sleep_mutex(&(lock), (event_t)(e), i)
 #define VS_LOCK_TYPE		hw_lock_data_t
 #define VS_LOCK_INIT(vs)	hw_lock_init(&(vs)->vs_lock)
 #define VS_TRY_LOCK(vs)		(VS_LOCK(vs),TRUE)
@@ -711,6 +712,7 @@ __private_extern__ void vstruct_list_delete(vstruct_t vs);
 #define VSL_LOCK()	mutex_lock(&vstruct_list.vsl_lock)
 #define VSL_LOCK_TRY()	mutex_try(&vstruct_list.vsl_lock)
 #define VSL_UNLOCK()	mutex_unlock(&vstruct_list.vsl_lock)
+#define VSL_SLEEP(e,i)	thread_sleep_mutex((e), &vstruct_list.vsl_lock, (i))
 
 #ifdef MACH_KERNEL
 __private_extern__ zone_t	vstruct_zone;

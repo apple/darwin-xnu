@@ -52,16 +52,14 @@
  * SUCH DAMAGE.
  *
  *	@(#)tcp_timer.c	8.2 (Berkeley) 5/24/95
+ * $FreeBSD: src/sys/netinet/tcp_timer.c,v 1.34.2.11 2001/08/22 00:59:12 silby Exp $
  */
 
-#if ISFB31
-#include "opt_compat.h"
-#include "opt_tcpdebug.h"
-#endif
 
 #include <sys/param.h>
 #include <sys/systm.h>
 #include <sys/kernel.h>
+#include <sys/mbuf.h>
 #include <sys/sysctl.h>
 #include <sys/socket.h>
 #include <sys/socketvar.h>
@@ -73,9 +71,10 @@
 
 #include <netinet/in.h>
 #include <netinet/in_systm.h>
-#include <netinet/ip.h>
-#include <netinet/ip6.h>
 #include <netinet/in_pcb.h>
+#if INET6
+#include <netinet6/in6_pcb.h>
+#endif
 #include <netinet/ip_var.h>
 #include <netinet/tcp.h>
 #include <netinet/tcp_fsm.h>
@@ -91,37 +90,61 @@
 #define DBG_FNC_TCP_FAST	NETDBG_CODE(DBG_NETTCP, (5 << 8))
 #define DBG_FNC_TCP_SLOW	NETDBG_CODE(DBG_NETTCP, (5 << 8) | 1)
 
+static int
+sysctl_msec_to_ticks SYSCTL_HANDLER_ARGS
+{
+	int error, s, tt;
 
-int	tcp_keepinit = TCPTV_KEEP_INIT;
-SYSCTL_INT(_net_inet_tcp, TCPCTL_KEEPINIT, keepinit,
-	CTLFLAG_RW, &tcp_keepinit , 0, "");
+	tt = *(int *)oidp->oid_arg1;
+	s = tt * 1000 / hz;
 
-int	tcp_keepidle = TCPTV_KEEP_IDLE;
-SYSCTL_INT(_net_inet_tcp, TCPCTL_KEEPIDLE, keepidle,
-	CTLFLAG_RW, &tcp_keepidle , 0, "");
+	error = sysctl_handle_int(oidp, &s, 0, req);
+	if (error || !req->newptr)
+		return (error);
 
-static int	tcp_keepintvl = TCPTV_KEEPINTVL;
-SYSCTL_INT(_net_inet_tcp, TCPCTL_KEEPINTVL, keepintvl,
-	CTLFLAG_RW, &tcp_keepintvl , 0, "");
+	tt = s * hz / 1000;
+	if (tt < 1)
+		return (EINVAL);
+
+	*(int *)oidp->oid_arg1 = tt;
+        return (0);
+}
+
+int	tcp_keepinit;
+SYSCTL_PROC(_net_inet_tcp, TCPCTL_KEEPINIT, keepinit, CTLTYPE_INT|CTLFLAG_RW,
+    &tcp_keepinit, 0, sysctl_msec_to_ticks, "I", "");
+
+int	tcp_keepidle;
+SYSCTL_PROC(_net_inet_tcp, TCPCTL_KEEPIDLE, keepidle, CTLTYPE_INT|CTLFLAG_RW,
+    &tcp_keepidle, 0, sysctl_msec_to_ticks, "I", "");
+
+int	tcp_keepintvl;
+SYSCTL_PROC(_net_inet_tcp, TCPCTL_KEEPINTVL, keepintvl, CTLTYPE_INT|CTLFLAG_RW,
+    &tcp_keepintvl, 0, sysctl_msec_to_ticks, "I", "");
+
+int	tcp_delacktime;
+SYSCTL_PROC(_net_inet_tcp, TCPCTL_DELACKTIME, delacktime,
+    CTLTYPE_INT|CTLFLAG_RW, &tcp_delacktime, 0, sysctl_msec_to_ticks, "I",
+    "Time before a delayed ACK is sent");
+ 
+int	tcp_msl;
+SYSCTL_PROC(_net_inet_tcp, OID_AUTO, msl, CTLTYPE_INT|CTLFLAG_RW,
+    &tcp_msl, 0, sysctl_msec_to_ticks, "I", "Maximum segment lifetime");
 
 static int	always_keepalive = 0;
-SYSCTL_INT(_net_inet_tcp, OID_AUTO, always_keepalive,
-	CTLFLAG_RW, &always_keepalive , 0, "");
+SYSCTL_INT(_net_inet_tcp, OID_AUTO, always_keepalive, CTLFLAG_RW, 
+    &always_keepalive , 0, "Assume SO_KEEPALIVE on all TCP connections");
 
 static int	tcp_keepcnt = TCPTV_KEEPCNT;
 	/* max idle probes */
-static int	tcp_maxpersistidle = TCPTV_KEEP_IDLE;
+int	tcp_maxpersistidle;
 	/* max idle time in persist */
 int	tcp_maxidle;
-
-
 
 struct	inpcbhead	time_wait_slots[N_TIME_WAIT_SLOTS];
 int		cur_tw_slot = 0;
 
 u_long		*delack_bitmask;
-u_long		current_active_connections = 0;
-u_long		last_active_conn_count = 0;
 
 
 void	add_to_time_wait(tp) 
@@ -134,7 +157,7 @@ void	add_to_time_wait(tp)
 	if (tp->t_timer[TCPT_2MSL] == 0) 
 	    tp->t_timer[TCPT_2MSL] = 1;
 
-	tp->t_idle += tp->t_timer[TCPT_2MSL] & (N_TIME_WAIT_SLOTS - 1);
+	tp->t_rcvtime += tp->t_timer[TCPT_2MSL] & (N_TIME_WAIT_SLOTS - 1);
 	tw_slot = (tp->t_timer[TCPT_2MSL] & (N_TIME_WAIT_SLOTS - 1)) + cur_tw_slot; 
 	if (tw_slot >= N_TIME_WAIT_SLOTS)
 	    tw_slot -= N_TIME_WAIT_SLOTS;
@@ -170,9 +193,7 @@ tcp_fasttimo()
     if (!tcp_delack_enabled) 
 	return;
 
-    if ((current_active_connections > DELACK_BITMASK_THRESH) &&
-	(last_active_conn_count > DELACK_BITMASK_THRESH)) {
-	for (i=0; i < (tcbinfo.hashsize / 32); i++) {
+    for (i=0; i < (tcbinfo.hashsize / 32); i++) {
 	    if (delack_bitmask[i]) {
 		temp_mask = 1;
 		for (j=0; j < 32; j++) {
@@ -193,22 +214,7 @@ tcp_fasttimo()
 		delack_bitmask[i] = 0;
 	    }
 	    elem_base += 32;
-	}
     }
-    else 
-    {
-	for (inp = tcb.lh_first; inp != NULL; inp = inp->inp_list.le_next) {
-	    if ((tp = (struct tcpcb *)inp->inp_ppcb) &&
-		(tp->t_flags & TF_DELACK)) {
-		tp->t_flags &= ~TF_DELACK;
-		tp->t_flags |= TF_ACKNOW;
-		tcpstat.tcps_delack++;
-		(void) tcp_output(tp);
-	    }
-	}
-    }
-
-    last_active_conn_count = current_active_connections;
     KERNEL_DEBUG(DBG_FNC_TCP_FAST | DBG_FUNC_END, delack_checked,tcpstat.tcps_delack,0,0,0);
     splx(s);
 
@@ -251,6 +257,13 @@ tcp_slowtimo()
 		tp = intotcpcb(ip);
 		if (tp == 0 || tp->t_state == TCPS_LISTEN)
 			continue;
+		/*
+ 		 * Bogus state when port owned by SharedIP with loopback as the
+		 * only configured interface: BlueBox does not filters loopback
+		 */
+		if (tp->t_state == TCP_NSTATES)
+			continue;      
+
 		for (i = 0; i < TCPT_NTIMERS; i++) {
 			if (tp->t_timer[i] && --tp->t_timer[i] == 0) {
 #if TCPDEBUG
@@ -269,10 +282,10 @@ tcp_slowtimo()
 #endif
 			}
 		}
-		tp->t_idle++;
-		tp->t_duration++;
-		if (tp->t_rtt)
-			tp->t_rtt++;
+		tp->t_rcvtime++;
+		tp->t_starttime++;
+		if (tp->t_rtttime)
+			tp->t_rtttime++;
 tpgone:
 		;
 	}
@@ -295,7 +308,7 @@ tpgone:
 		tp = intotcpcb(ip);
 		if (tp->t_timer[TCPT_2MSL] >= N_TIME_WAIT_SLOTS) {
 		    tp->t_timer[TCPT_2MSL] -= N_TIME_WAIT_SLOTS;
-		    tp->t_idle += N_TIME_WAIT_SLOTS;
+		    tp->t_rcvtime += N_TIME_WAIT_SLOTS;
 		}
 		else
 		    tp->t_timer[TCPT_2MSL] = 0;
@@ -306,12 +319,6 @@ tpgone:
 
 	if (++cur_tw_slot >= N_TIME_WAIT_SLOTS)
 		cur_tw_slot = 0;
-
-#if TCP_COMPAT_42
-	tcp_iss += TCP_ISSINCR/PR_SLOWHZ;		/* increment iss */
-	if ((int)tcp_iss < 0)
-		tcp_iss = TCP_ISSINCR;			/* XXX */
-#endif
 	tcp_now++;					/* for timestamps */
 	splx(s);
 	KERNEL_DEBUG(DBG_FNC_TCP_SLOW | DBG_FUNC_END, tws_checked, cur_tw_slot,0,0,0);
@@ -330,6 +337,9 @@ tcp_canceltimers(tp)
 		tp->t_timer[i] = 0;
 }
 
+int	tcp_syn_backoff[TCP_MAXRXTSHIFT + 1] =
+    { 1, 1, 1, 1, 1, 2, 4, 8, 16, 32, 64, 64, 64 };
+
 int	tcp_backoff[TCP_MAXRXTSHIFT + 1] =
     { 1, 2, 4, 8, 16, 32, 64, 64, 64, 64, 64, 64, 64 };
 
@@ -345,9 +355,12 @@ tcp_timers(tp, timer)
 {
 	register int rexmt;
 	struct socket *so_tmp;
+	struct tcptemp *t_template;
+
 #if INET6
 	int isipv6 = (tp->t_inpcb->inp_vflag & INP_IPV4) == 0;
 #endif /* INET6 */
+
 
 	switch (timer) {
 
@@ -359,7 +372,7 @@ tcp_timers(tp, timer)
 	 */
 	case TCPT_2MSL:
 		if (tp->t_state != TCPS_TIME_WAIT &&
-		    tp->t_idle <= tcp_maxidle) {
+		    tp->t_rcvtime <= tcp_maxidle) {
 			tp->t_timer[TCPT_2MSL] = tcp_keepintvl;
 			add_to_time_wait(tp);
 		}
@@ -382,11 +395,39 @@ tcp_timers(tp, timer)
 			postevent(so_tmp, 0, EV_TIMEOUT);			
 			break;
 		}
+
+		if (tp->t_rxtshift == 1) {
+			/*
+			 * first retransmit; record ssthresh and cwnd so they can
+			 * be recovered if this turns out to be a "bad" retransmit.
+			 * A retransmit is considered "bad" if an ACK for this 
+			 * segment is received within RTT/2 interval; the assumption
+			 * here is that the ACK was already in flight.  See 
+			 * "On Estimating End-to-End Network Path Properties" by
+			 * Allman and Paxson for more details.
+			 */
+			tp->snd_cwnd_prev = tp->snd_cwnd;
+			tp->snd_ssthresh_prev = tp->snd_ssthresh;
+			tp->t_badrxtwin = tcp_now + (tp->t_srtt >> (TCP_RTT_SHIFT + 1));
+		}
 		tcpstat.tcps_rexmttimeo++;
-		rexmt = TCP_REXMTVAL(tp) * tcp_backoff[tp->t_rxtshift];
+		if (tp->t_state == TCPS_SYN_SENT)
+			rexmt = TCP_REXMTVAL(tp) * tcp_syn_backoff[tp->t_rxtshift];
+		else
+			rexmt = TCP_REXMTVAL(tp) * tcp_backoff[tp->t_rxtshift];
 		TCPT_RANGESET(tp->t_rxtcur, rexmt,
-		    tp->t_rttmin, TCPTV_REXMTMAX);
+			tp->t_rttmin, TCPTV_REXMTMAX);
 		tp->t_timer[TCPT_REXMT] = tp->t_rxtcur;
+
+		/*
+		 * Disable rfc1323 and rfc1644 if we havn't got any response to
+		 * our third SYN to work-around some broken terminal servers 
+		 * (most of which have hopefully been retired) that have bad VJ 
+		 * header compression code which trashes TCP segments containing 
+		 * unknown-to-them TCP options.
+		 */
+		if ((tp->t_state == TCPS_SYN_SENT) && (tp->t_rxtshift == 3))
+				tp->t_flags &= ~(TF_REQ_SCALE|TF_REQ_TSTMP|TF_REQ_CC);
 		/*
 		 * If losing, let the lower level know and try for
 		 * a better route.  Also, if we backed off this far,
@@ -407,13 +448,18 @@ tcp_timers(tp, timer)
 		}
 		tp->snd_nxt = tp->snd_una;
 		/*
+		 * Note:  We overload snd_recover to function also as the
+		 * snd_last variable described in RFC 2582
+		 */
+		tp->snd_recover = tp->snd_max;
+		/*
 		 * Force a segment to be sent.
 		 */
 		tp->t_flags |= TF_ACKNOW;
 		/*
 		 * If timing a segment in this window, stop the timer.
 		 */
-		tp->t_rtt = 0;
+		tp->t_rtttime = 0;
 		/*
 		 * Close the congestion window down to one segment
 		 * (we'll open it by one segment for each ack we get).
@@ -463,8 +509,8 @@ tcp_timers(tp, timer)
 		 * backoff that we would use if retransmitting.
 		 */
 		if (tp->t_rxtshift == TCP_MAXRXTSHIFT &&
-		    (tp->t_idle >= tcp_maxpersistidle ||
-		    tp->t_idle >= TCP_REXMTVAL(tp) * tcp_totbackoff)) {
+		    (tp->t_rcvtime >= tcp_maxpersistidle ||
+		    tp->t_rcvtime >= TCP_REXMTVAL(tp) * tcp_totbackoff)) {
 			tcpstat.tcps_persistdrop++;
 			so_tmp = tp->t_inpcb->inp_socket;
 			tp = tcp_drop(tp, ETIMEDOUT);
@@ -488,7 +534,7 @@ tcp_timers(tp, timer)
 		if ((always_keepalive ||
 		    tp->t_inpcb->inp_socket->so_options & SO_KEEPALIVE) &&
 		    tp->t_state <= TCPS_CLOSING) {
-		    	if (tp->t_idle >= tcp_keepidle + tcp_maxidle)
+		    	if (tp->t_rcvtime >= tcp_keepidle + tcp_maxidle)
 				goto dropit;
 			/*
 			 * Send a packet designed to force a response
@@ -503,41 +549,23 @@ tcp_timers(tp, timer)
 			 * correspondent TCP to respond.
 			 */
 			tcpstat.tcps_keepprobe++;
-#if TCP_COMPAT_42
-			/*
-			 * The keepalive packet must have nonzero length
-			 * to get a 4.2 host to respond.
-			 */
-#if INET6
-			if (isipv6)
-				tcp_respond(tp, (void *)&tp->t_template->tt_i6,
-					    &tp->t_template->tt_t,
-					    (struct mbuf *)NULL,
-					    tp->rcv_nxt - 1, tp->snd_una - 1,
-					    0, isipv6);
-			else
-#endif /* INET6 */
-			tcp_respond(tp, (void *)&tp->t_template->tt_i,
-				    &tp->t_template->tt_t, (struct mbuf *)NULL,
-				    tp->rcv_nxt - 1, tp->snd_una - 1, 0,
-				    isipv6);
-#else
-#if INET6
-			if (isipv6)
-				tcp_respond(tp, (void *)&tp->t_template->tt_i6,
-					    &tp->t_template->tt_t,
-					    (struct mbuf *)NULL, tp->rcv_nxt,
-					    tp->snd_una - 1, 0, isipv6);
-			else
-#endif /* INET6 */
-			tcp_respond(tp, (void *)&tp->t_template->tt_i,
-				    &tp->t_template->tt_t, (struct mbuf *)NULL,
-				    tp->rcv_nxt, tp->snd_una - 1, 0, isipv6);
-#endif
+			t_template = tcp_maketemplate(tp);
+			if (t_template) {
+				tcp_respond(tp, t_template->tt_ipgen,
+				    &t_template->tt_t, (struct mbuf *)NULL,
+				    tp->rcv_nxt, tp->snd_una - 1, 0);
+				(void) m_free(dtom(t_template));
+			}
 			tp->t_timer[TCPT_KEEP] = tcp_keepintvl;
 		} else
 			tp->t_timer[TCPT_KEEP] = tcp_keepidle;
 		break;
+
+#if TCPDEBUG
+	if (tp->t_inpcb->inp_socket->so_options & SO_DEBUG)
+		tcp_trace(TA_USER, ostate, tp, (void *)0, (struct tcphdr *)0,
+			  PRU_SLOWTIMO);
+#endif
 	dropit:
 		tcpstat.tcps_keepdrops++;
 		so_tmp = tp->t_inpcb->inp_socket;

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2002 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -54,7 +54,12 @@
  *
  *	@(#)fifo.h	8.3 (Berkeley) 8/10/94
  */
+#ifndef __FIFOFS_FOFO_H__
+#define __FIFOFS_FOFO_H__
 
+#include  <sys/appleapiopts.h>
+
+#ifdef __APPLE_API_PRIVATE
 /*
  * Prototypes for fifo operations on vnodes.
  */
@@ -106,3 +111,5 @@ int	fifo_advlock __P((struct vop_advlock_args *));
 #define fifo_bwrite ((int (*) __P((struct  vop_bwrite_args *)))nullop)
 #define fifo_blktooff ((int (*) __P((struct vop_blktooff_args *)))err_blktooff)
 
+#endif /* __APPLE_API_PRIVATE */
+#endif /* __FIFOFS_FOFO_H__ */

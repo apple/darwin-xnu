@@ -29,46 +29,21 @@
  * SUCH DAMAGE.
  */
 
-#if defined(__FreeBSD__) && __FreeBSD__ >= 3
-#include "opt_inet.h"
-#endif
-
 /* This code has derived from sys/net/rtsock.c on FreeBSD2.2.5 */
-
-#if defined(__NetBSD__) || defined (__APPLE__)
-# ifdef _KERNEL
-#  define KERNEL
-# endif
-#endif
 
 #include <sys/types.h>
 #include <sys/param.h>
 #include <sys/systm.h>
 #include <sys/kernel.h>
-#if defined(__FreeBSD__) || defined (__APPLE__)
 #include <sys/sysctl.h>
-#endif
 #include <sys/mbuf.h>
-#if defined(__FreeBSD__) && __FreeBSD__ >= 3 || defined (__APPLE__)
 #include <sys/malloc.h>
-#endif
 #include <sys/socket.h>
 #include <sys/socketvar.h>
 #include <sys/domain.h>
 #include <sys/protosw.h>
 #include <sys/errno.h>
-#ifdef __NetBSD__
-#include <sys/proc.h>
-#include <sys/queue.h>
-#endif
 
-#ifdef __FreeBSD__
-#if __FreeBSD__ >= 3
-#include <machine/ipl.h>
-#else
-#include <machine/spl.h>
-#endif
-#endif
 
 #include <net/raw_cb.h>
 #include <net/route.h>
@@ -79,141 +54,41 @@
 #include <netkey/keysock.h>
 #include <netkey/key_debug.h>
 
-
 struct sockaddr key_dst = { 2, PF_KEY, };
 struct sockaddr key_src = { 2, PF_KEY, };
-struct sockproto key_proto = { PF_KEY, PF_KEY_V2 };
 
 static int key_sendup0 __P((struct rawcb *, struct mbuf *, int));
 
 struct pfkeystat pfkeystat;
 
-#if !(defined(__FreeBSD__) && __FreeBSD__ >= 3) && !defined(__APPLE__)
-/*
- * key_usrreq()
- * derived from net/rtsock.c:route_usrreq()
- */
-#ifndef __NetBSD__
-int
-key_usrreq(so, req, m, nam, control)
-	register struct socket *so;
-	int req;
-	struct mbuf *m, *nam, *control;
-#else
-int
-key_usrreq(so, req, m, nam, control, p)
-	register struct socket *so;
-	int req;
-	struct mbuf *m, *nam, *control;
-	struct proc *p;
-#endif /*__NetBSD__*/
-{
-	register int error = 0;
-	register struct keycb *kp = (struct keycb *)sotorawcb(so);
-	int s;
-
-#ifdef __NetBSD__
-	s = splsoftnet();
-#else
-	s = splnet();
-#endif
-	if (req == PRU_ATTACH) {
-		kp = (struct keycb *)_MALLOC(sizeof(*kp), M_PCB, M_WAITOK);
-		so->so_pcb = (caddr_t)kp;
-		if (so->so_pcb)
-			bzero(so->so_pcb, sizeof(*kp));
-	}
-	if (req == PRU_DETACH && kp) {
-		int af = kp->kp_raw.rcb_proto.sp_protocol;
-		if (af == PF_KEY) /* XXX: AF_KEY */
-			key_cb.key_count--;
-		key_cb.any_count--;
-
-		key_freereg(so);
-	}
-
-#ifndef __NetBSD__
-	error = raw_usrreq(so, req, m, nam, control);
-#else
-	error = raw_usrreq(so, req, m, nam, control, p);
-#endif
-	m = control = NULL;	/* reclaimed in raw_usrreq */
-	kp = (struct keycb *)sotorawcb(so);
-	if (req == PRU_ATTACH && kp) {
-		int af = kp->kp_raw.rcb_proto.sp_protocol;
-		if (error) {
-#if IPSEC_DEBUG
-			printf("key_usrreq: key_usrreq results %d\n", error);
-#endif
-			pfkeystat.sockerr++;
-			_FREE((caddr_t)kp, M_PCB);
-			so->so_pcb = (caddr_t) 0;
-			splx(s);
-			return(error);
-		}
-
-		kp->kp_promisc = kp->kp_registered = 0;
-
-		if (af == PF_KEY) /* XXX: AF_KEY */
-			key_cb.key_count++;
-		key_cb.any_count++;
-#ifndef __bsdi__
-		kp->kp_raw.rcb_laddr = &key_src;
-		kp->kp_raw.rcb_faddr = &key_dst;
-#else
-		/*
-		 * XXX rcb_faddr must be dynamically allocated, otherwise
-		 * raw_disconnect() will be angry.
-		 */
-	    {
-		struct mbuf *m, *n;
-		MGET(m, M_WAITOK, MT_DATA);
-		if (!m) {
-			error = ENOBUFS;
-			pfkeystat.in_nomem++;
-			_FREE((caddr_t)kp, M_PCB);
-			so->so_pcb = (caddr_t) 0;
-			splx(s);
-			return(error);
-		}
-		MGET(n, M_WAITOK, MT_DATA);
-		if (!n) {
-			error = ENOBUFS;
-			m_freem(m);
-			pfkeystat.in_nomem++;
-			_FREE((caddr_t)kp, M_PCB);
-			so->so_pcb = (caddr_t) 0;
-			splx(s);
-			return(error);
-		}
-		m->m_len = sizeof(key_src);
-		kp->kp_raw.rcb_laddr = mtod(m, struct sockaddr *);
-		bcopy(&key_src, kp->kp_raw.rcb_laddr, sizeof(key_src));
-		n->m_len = sizeof(key_dst);
-		kp->kp_raw.rcb_faddr = mtod(n, struct sockaddr *);
-		bcopy(&key_dst, kp->kp_raw.rcb_faddr, sizeof(key_dst));
-	    }
-#endif
-		soisconnected(so);
-		so->so_options |= SO_USELOOPBACK;
-	}
-	splx(s);
-	return(error);
-}
-#endif /* other than FreeBSD >= 3 */
-
 /*
  * key_output()
  */
 int
-key_output(m, so)
-	register struct mbuf *m;
-	struct socket *so;
+#ifdef __APPLE__
+/* No variable argument support? */
+key_output(struct mbuf *m, struct socket *so)
+#else
+#if __STDC__
+key_output(struct mbuf *m, ...)
+#else
+key_output(m, va_alist)
+	struct mbuf *m;
+	va_dcl
+#endif
+#endif
 {
-	struct sadb_msg *msg = NULL;
+	struct sadb_msg *msg;
 	int len, error = 0;
 	int s;
-	int target;
+#ifndef __APPLE__
+	struct socket *so;
+	va_list ap;
+
+	va_start(ap, m);
+	so = va_arg(ap, struct socket *);
+	va_end(ap);
+#endif
 
 	if (m == 0)
 		panic("key_output: NULL pointer was passed.\n");
@@ -245,7 +120,7 @@ key_output(m, so)
 	if ((m->m_flags & M_PKTHDR) == 0)
 		panic("key_output: not M_PKTHDR ??");
 
-#if defined(IPSEC_DEBUG)
+#if IPSEC_DEBUG
 	KEYDEBUG(KEYDEBUG_KEY_DUMP, kdebug_mbuf(m));
 #endif /* defined(IPSEC_DEBUG) */
 
@@ -260,43 +135,15 @@ key_output(m, so)
 		goto end;
 	}
 
-	/*
-	 * allocate memory for sadb_msg, and copy to sadb_msg from mbuf
-	 * XXX: To be processed directly without a copy.
-	 */
-	msg = (struct sadb_msg *)_MALLOC(len, M_SECA, M_WAITOK);
-	if (msg == NULL) {
-#if IPSEC_DEBUG
-		printf("key_output: No more memory.\n");
-#endif
-		error = ENOBUFS;
-		pfkeystat.out_nomem++;
-		goto end;
-		/* or do panic ? */
-	}
-	m_copydata(m, 0, len, (caddr_t)msg);
-
 	/*XXX giant lock*/
-#ifdef __NetBSD__
-	s = splsoftnet();
-#else
 	s = splnet();
-#endif
-	if ((len = key_parse(&msg, so, &target)) == 0) {
-		/* discard. i.e. no need to reply. */
-		/* msg has been freed at key_parse() */
-		error = 0;
-		splx(s);
-		goto end;
-	}
-
-	/* send up message to the socket */
-	error = key_sendup(so, msg, len, target);
+	error = key_parse(m, so);
+	m = NULL;
 	splx(s);
-	_FREE(msg, M_SECA);
 end:
-	m_freem(m);
-	return (error);
+	if (m)
+		m_freem(m);
+	return error;
 }
 
 /*
@@ -308,6 +155,8 @@ key_sendup0(rp, m, promisc)
 	struct mbuf *m;
 	int promisc;
 {
+	int error;
+
 	if (promisc) {
 		struct sadb_msg *pmsg;
 
@@ -318,7 +167,7 @@ key_sendup0(rp, m, promisc)
 #if IPSEC_DEBUG
 			printf("key_sendup0: cannot pullup\n");
 #endif
-		pfkeystat.in_nomem++;
+			pfkeystat.in_nomem++;
 			m_freem(m);
 			return ENOBUFS;
 		}
@@ -334,17 +183,18 @@ key_sendup0(rp, m, promisc)
 		pfkeystat.in_msgtype[pmsg->sadb_msg_type]++;
 	}
 
-	if (!sbappendaddr(&rp->rcb_socket->so_rcv,
-			(struct sockaddr *)&key_src, m, NULL)) {
+	if (!sbappendaddr(&rp->rcb_socket->so_rcv, (struct sockaddr *)&key_src,
+	    m, NULL)) {
 #if IPSEC_DEBUG
 		printf("key_sendup0: sbappendaddr failed\n");
 #endif
 		pfkeystat.in_nomem++;
 		m_freem(m);
-		return ENOBUFS;
-	}
+		error = ENOBUFS;
+	} else
+		error = 0;
 	sorwakeup(rp->rcb_socket);
-	return 0;
+	return error;
 }
 
 /* XXX this interface should be obsoleted. */
@@ -377,7 +227,7 @@ key_sendup(so, msg, len, target)
 	/*
 	 * Get mbuf chain whenever possible (not clusters),
 	 * to save socket buffer.  We'll be generating many SADB_ACQUIRE
-	 * messages to listening key sockets.  If we simmply allocate clusters,
+	 * messages to listening key sockets.  If we simply allocate clusters,
 	 * sbappendaddr() will raise ENOBUFS due to too little sbspace().
 	 * sbspace() computes # of actual data bytes AND mbuf region.
 	 *
@@ -432,6 +282,7 @@ key_sendup(so, msg, len, target)
 	return key_sendup_mbuf(so, m, target);
 }
 
+/* so can be NULL if target != KEY_SENDUP_ONE */
 int
 key_sendup_mbuf(so, m, target)
 	struct socket *so;
@@ -442,9 +293,11 @@ key_sendup_mbuf(so, m, target)
 	struct keycb *kp;
 	int sendup;
 	struct rawcb *rp;
-	int error;
+	int error = 0;
 
-	if (so == NULL || m == NULL)
+	if (m == NULL)
+		panic("key_sendup_mbuf: NULL pointer was passed.\n");
+	if (so == NULL && target == KEY_SENDUP_ONE)
 		panic("key_sendup_mbuf: NULL pointer was passed.\n");
 
 	pfkeystat.in_total++;
@@ -466,13 +319,7 @@ key_sendup_mbuf(so, m, target)
 		pfkeystat.in_msgtype[msg->sadb_msg_type]++;
 	}
 
-#ifdef __NetBSD__
-	for (rp = rawcb.lh_first; rp; rp = rp->rcb_list.le_next)
-#elif defined(__FreeBSD__) && __FreeBSD__ >= 3 || defined (__APPLE__)
 	LIST_FOREACH(rp, &rawcb_list, list)
-#else
-	for (rp = rawcb.rcb_next; rp != &rawcb; rp = rp->rcb_next)
-#endif
 	{
 		if (rp->rcb_proto.sp_family != PF_KEY)
 			continue;
@@ -496,14 +343,14 @@ key_sendup_mbuf(so, m, target)
 		}
 
 		/* the exact target will be processed later */
-		if (sotorawcb(so) == rp)
+		if (so && sotorawcb(so) == rp)
 			continue;
 
 		sendup = 0;
 		switch (target) {
 		case KEY_SENDUP_ONE:
 			/* the statement has no effect */
-			if (sotorawcb(so) == rp)
+			if (so && sotorawcb(so) == rp)
 				sendup++;
 			break;
 		case KEY_SENDUP_ALL:
@@ -536,12 +383,16 @@ key_sendup_mbuf(so, m, target)
 		n = NULL;
 	}
 
-	error = key_sendup0(sotorawcb(so), m, 0);
-	m = NULL;
+	if (so) {
+		error = key_sendup0(sotorawcb(so), m, 0);
+		m = NULL;
+	} else {
+		error = 0;
+		m_freem(m);
+	}
 	return error;
 }
 
-#if defined(__FreeBSD__) && __FreeBSD__ >= 3 || defined (__APPLE__)
 /*
  * key_abort()
  * derived from net/rtsock.c:rts_abort()
@@ -738,12 +589,9 @@ struct pr_usrreqs key_usrreqs = {
 	pru_rcvoob_notsupp, key_send, pru_sense_null, key_shutdown,
 	key_sockaddr, sosend, soreceive, sopoll
 };
-#endif /* __FreeBSD__ >= 3 */
 
-#if __FreeBSD__ || defined (__APPLE__)
 /* sysctl */
 SYSCTL_NODE(_net, PF_KEY, key, CTLFLAG_RW, 0, "Key Family");
-#endif
 
 /*
  * Definitions of protocols supported in the KEY domain.

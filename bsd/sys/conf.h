@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2002 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -63,6 +63,8 @@
 #ifndef _SYS_CONF_H_
 #define _SYS_CONF_H_ 1
 
+#include <sys/appleapiopts.h>
+
 /*
  * Definitions of device driver entry switches
  */
@@ -73,6 +75,7 @@ struct tty;
 struct uio;
 struct vnode;
 
+#ifdef __APPLE_API_UNSTABLE
 /* 
  * Device switch function types.
  */
@@ -143,13 +146,14 @@ struct bdevsw {
 	int			d_type;
 };
 
-#ifdef	KERNEL
+#ifdef KERNEL
 
 d_devtotty_t    nodevtotty;
 d_write_t	nowrite;
 
-
+#ifdef __APPLE_API_PRIVATE
 extern struct bdevsw bdevsw[];
+#endif /* __APPLE_API_PRIVATE */
 
 /*
  * Contents of empty bdevsw slot.
@@ -158,7 +162,7 @@ extern struct bdevsw bdevsw[];
 	{ eno_opcl,	eno_opcl,	eno_strat, eno_ioctl,	\
 	  eno_dump,	eno_psize,	0 	}
 	  
-#endif	/* KERNEL */
+#endif /* KERNEL */
 
 /*
  * Character device switch table
@@ -182,7 +186,9 @@ struct cdevsw {
 
 #ifdef KERNEL
 
+#ifdef __APPLE_API_PRIVATE
 extern struct cdevsw cdevsw[];
+#endif /* __APPLE_API_PRIVATE */
 
 /*
  * Contents of empty cdevsw slot.
@@ -195,9 +201,8 @@ extern struct cdevsw cdevsw[];
 	seltrue,	eno_mmap,	eno_strat,	eno_getc,	\
 	eno_putc,	0 					  	\
     }
+#endif /* KERNEL */
     
-#endif	/* KERNEL */
-
 /*
  * Line discipline switch table
  */
@@ -216,14 +221,19 @@ struct linesw {
 };
 
 #ifdef KERNEL
+
+#ifdef __APPLE_API_PRIVATE
 extern struct linesw linesw[];
 extern int nlinesw;
+#endif /* __APPLE_API_PRIVATE */
  
 int ldisc_register __P((int , struct linesw *));
 void ldisc_deregister __P((int));
 #define LDISC_LOAD      -1              /* Loadable line discipline */
-#endif
 
+#endif /* KERNEL */
+
+#ifdef __APPLE_API_OBSOLETE
 /*
  * Swap device table
  */
@@ -239,7 +249,10 @@ struct swdevt {
 
 #ifdef KERNEL
 extern struct swdevt swdevt[];
-#endif
+#endif /* KERNEL */
+
+#endif /* __APPLE_API_OBSOLETE */
+
 
 #ifdef KERNEL
 /*
@@ -257,6 +270,8 @@ int  cdevsw_isfree __P((int));
 int  cdevsw_add __P((int, struct cdevsw *));
 int  cdevsw_remove __P((int, struct cdevsw *));
 __END_DECLS
-#endif
+#endif /* KERNEL */
+
+#endif /* __APPLE_API_UNSTABLE */
 
 #endif /* _SYS_CONF_H_ */

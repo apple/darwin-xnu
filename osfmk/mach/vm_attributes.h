@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2002 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -22,59 +22,6 @@
 /*
  * @OSF_COPYRIGHT@
  */
-/*
- * HISTORY
- * 
- * Revision 1.1.1.1  1998/09/22 21:05:31  wsanchez
- * Import of Mac OS X kernel (~semeria)
- *
- * Revision 1.1.1.1  1998/03/07 02:25:46  wsanchez
- * Import of OSF Mach kernel (~mburg)
- *
- * Revision 1.2.9.2  1998/02/02  09:22:22  gdt
- * 	Add new function "MATTR_VAL_GET_INFO" to get shared/resident information
- * 	about a page.  This lets Linux display better statistics (e.g. 'top').
- * 	[1998/02/02  09:21:30  gdt]
- *
- * Revision 1.2.9.1  1997/09/12  17:16:06  stephen
- * 	Add new MATTR_VAL_CACHE_SYNC which
- * 	syncs I+D caches without necessarily
- * 	flushing them.
- * 	[1997/09/12  16:32:45  stephen]
- * 
- * Revision 1.2.6.1  1994/09/23  02:43:58  ezf
- * 	change marker to not FREE
- * 	[1994/09/22  21:43:31  ezf]
- * 
- * Revision 1.2.2.2  1993/06/09  02:44:08  gm
- * 	Added to OSF/1 R1.3 from NMK15.0.
- * 	[1993/06/02  21:18:41  jeffc]
- * 
- * Revision 1.2  1993/04/19  16:40:21  devrcs
- * 	ansi C conformance changes
- * 	[1993/02/02  18:55:22  david]
- * 
- * Revision 1.1  1992/09/30  02:32:22  robert
- * 	Initial revision
- * 
- * $EndLog$
- */
-/* CMU_HIST */
-/*
- * Revision 2.4  91/05/14  17:02:37  mrt
- * 	Correcting copyright
- * 
- * Revision 2.3  91/02/05  17:37:24  mrt
- * 	Changed to new Mach copyright
- * 	[91/02/01  17:22:17  mrt]
- * 
- * Revision 2.2  90/01/22  23:05:53  af
- * 	Created.
- * 	[89/12/08            af]
- * 
- *
- */
-/* CMU_ENDHIST */
 /* 
  * Mach Operating System
  * Copyright (c) 1991,1990,1989,1988,1987 Carnegie Mellon University

@@ -1,4 +1,5 @@
-/*	$KAME: pim6_var.h,v 1.5 2000/03/25 07:23:59 sumikawa Exp $	*/
+/*	$FreeBSD: src/sys/netinet6/pim6_var.h,v 1.2.2.1 2000/07/15 07:14:36 kris Exp $	*/
+/*	$KAME: pim6_var.h,v 1.8 2000/06/06 08:07:43 jinmei Exp $	*/
 
 /*
  * Copyright (C) 1998 WIDE Project.
@@ -31,6 +32,7 @@
 
 #ifndef _NETINET6_PIM6_VAR_H_
 #define _NETINET6_PIM6_VAR_H_
+#include <sys/appleapiopts.h>
 
 /*
  * Protocol Independent Multicast (PIM),
@@ -40,6 +42,7 @@
  * Modified by Pavlin Ivanov Radoslavov, USC/ISI, May 1998
  */
 
+#ifdef __APPLE_API_UNSTABLE
 struct pim6stat {
 	u_quad_t pim6s_rcv_total;	/* total PIM messages received	*/
 	u_quad_t pim6s_rcv_tooshort;	/* received with too few bytes	*/
@@ -49,22 +52,24 @@ struct pim6stat {
 	u_quad_t pim6s_rcv_badregisters; /* received invalid registers	*/
 	u_quad_t pim6s_snd_registers;	/* sent registers		*/
 };
+#endif
 
 #if (defined(KERNEL)) || (defined(_KERNEL))
+#ifdef __APPLE_API_PRIVATE
 extern struct pim6stat pim6stat;
 
-int pim6_input __P((struct mbuf **, int*, int));
+int pim6_input __P((struct mbuf **, int*));
+#endif /* __APPLE_API_PRIVATE */
 #endif /* KERNEL */
 
 /*
  * Names for PIM sysctl objects
  */
-#define PIMCTL_STATS		1	/* statistics (read-only) */
-#define PIMCTL_MAXID		2
+#define PIM6CTL_STATS		1	/* statistics (read-only) */
+#define PIM6CTL_MAXID		2
 
-#define PIMCTL_NAMES { \
+#define PIM6CTL_NAMES { \
 	{ 0, 0 }, \
 	{ 0, 0 }, \
 }
-
 #endif /* _NETINET6_PIM6_VAR_H_ */

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2002 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -20,12 +20,14 @@
  * @APPLE_LICENSE_HEADER_END@
  */
 /*
- * Copyright (c) 1997-2000 Apple Computer, Inc. All Rights Reserved
+ * Copyright (c) 1997-2002 Apple Computer, Inc. All Rights Reserved
  *
  */
 
 #ifndef _HFS_MOUNT_H_
 #define _HFS_MOUNT_H_
+
+#include <sys/appleapiopts.h>
 
 #include <sys/mount.h>
 #include <sys/time.h>
@@ -40,6 +42,7 @@
 #define UNKNOWNGID ((gid_t)99)
 #define UNKNOWNPERMISSIONS (S_IRWXU | S_IROTH | S_IXOTH)		/* 705 */
 
+#ifdef __APPLE_API_UNSTABLE
 struct hfs_mount_args {
 	char	*fspec;			/* block special device to mount */
 	struct	export_args export;	/* network export information */
@@ -52,5 +55,7 @@ struct hfs_mount_args {
 };
 
 #define HFSFSMNT_NOXONFILES	0x1	/* disable execute permissions for files */
+#define HFSFSMNT_WRAPPER	0x2	/* mount HFS wrapper (if it exists) */
+#endif /* __APPLE_API_UNSTABLE */
 
 #endif /* ! _HFS_MOUNT_H_ */

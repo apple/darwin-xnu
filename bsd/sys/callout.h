@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2002 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -62,10 +62,12 @@
 #ifndef _SYS_CALLOUT_H_
 #define _SYS_CALLOUT_H_
 
+#include <sys/appleapiopts.h>
+
 #include <sys/queue.h>
 
 
-
+#ifdef __APPLE_API_OBSOLETE
 #define CALLOUT_PRI_SOFTINT0	0
 #define CALLOUT_PRI_SOFTINT1	1
 #define CALLOUT_PRI_RETRACE	2
@@ -74,5 +76,5 @@
 #define CALLOUT_PRI_NOW		5	/* must be last */
 #define N_CALLOUT_PRI		6
 
-
+#endif /* __APPLE_API_OBSOLETE */
 #endif /* _SYS_CALLOUT_H_ */

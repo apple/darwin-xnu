@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2001 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -35,7 +35,10 @@
 #include <ppc/exception.h>
 #include <kern/assert.h>
 
+#include <sys/syscall.h>
+#include <sys/ktrace.h>
 #include <sys/kdebug.h>
+struct proc;
 
 #define	ERESTART	-1		/* restart syscall */
 #define	EJUSTRETURN	-2		/* don't modify regs, just return */
@@ -48,7 +51,7 @@ struct unix_syscallargs {
 struct sysent {		/* system call table */
 	unsigned short		sy_narg;		/* number of args */
 	char			sy_parallel;	/* can execute in parallel */
-        char			sy_funnel;	/* funnel type */
+	char			sy_funnel;	/* funnel type */
 	unsigned long		(*sy_call)(void *, void *, int *);	/* implementing function */
 };
 
@@ -101,79 +104,73 @@ unix_syscall(
     int arg7 
     )
 {
-    struct ppc_saved_state	*regs;
-    thread_act_t		thread;
-    struct sysent		*callp;
-    int				nargs, error;
-    unsigned short		code;
-    void *  p, *vt;
-    int * vtint;
+	struct ppc_saved_state	*regs;
+	thread_act_t		thread;
+	struct sysent		*callp;
+	int				nargs, error;
+	unsigned short		code;
+	struct proc *p;
+	void *vt;
+	int * vtint;
 	int *rval;
-        int funnel_type;
+	int funnel_type;
+	struct proc *current_proc();
 
 	struct unix_syscallargs sarg;
 	extern int nsysent;
 
+	regs = &pcb->ss;
+	code = regs->r0;
 
-    regs = &pcb->ss;
-    code = regs->r0;
-
-    thread = current_act();
+	thread = current_act();
 	p = current_proc();
 	rval = (int *)get_bsduthreadrval(thread);
 
-    /*
-    ** Get index into sysent table
-    */   
-
-    
 	/*
-	** Set up call pointer
-	*/
+	 * Set up call pointer
+	 */
 	callp = (code >= nsysent) ? &sysent[63] : &sysent[code];
 
 	sarg. flavor = (callp == sysent)? 1: 0;
 	if (sarg.flavor) {
-        	code = regs->r3;
-        	callp = (code >= nsysent) ? &sysent[63] : &sysent[code];
-
-	}
-	else 
+		code = regs->r3;
+		callp = (code >= nsysent) ? &sysent[63] : &sysent[code];
+	} else 
 		sarg. r3 = regs->r3;
 
 	if (code != 180) {
-	        if (sarg.flavor)
-		        KERNEL_DEBUG_CONSTANT(BSDDBG_CODE(DBG_BSD_EXCP_SC, code) | DBG_FUNC_START,
-					      arg1, arg2, arg3, arg4, 0);
+		if (sarg.flavor)
+			KERNEL_DEBUG_CONSTANT(BSDDBG_CODE(DBG_BSD_EXCP_SC, code) | DBG_FUNC_START,
+				arg1, arg2, arg3, arg4, 0);
 		else
-		        KERNEL_DEBUG_CONSTANT(BSDDBG_CODE(DBG_BSD_EXCP_SC, code) | DBG_FUNC_START,
-					      sarg.r3, arg1, arg2, arg3, 0);
+			KERNEL_DEBUG_CONSTANT(BSDDBG_CODE(DBG_BSD_EXCP_SC, code) | DBG_FUNC_START,
+				sarg.r3, arg1, arg2, arg3, 0);
 	}
-	sarg. arg1 = arg1;
-	sarg. arg2 = arg2;
-	sarg. arg3 = arg3;
-	sarg. arg4 = arg4;
-	sarg. arg5 = arg5;
-	sarg. arg6 = arg6;
-	sarg. arg7 = arg7;
+	sarg.arg1 = arg1;
+	sarg.arg2 = arg2;
+	sarg.arg3 = arg3;
+	sarg.arg4 = arg4;
+	sarg.arg5 = arg5;
+	sarg.arg6 = arg6;
+	sarg.arg7 = arg7;
 
-        if(callp->sy_funnel == NETWORK_FUNNEL) {
-            (void) thread_funnel_set(network_flock, TRUE);
-	   }
-        else {
-            (void) thread_funnel_set(kernel_flock, TRUE);
-	   }
+	if(callp->sy_funnel == NETWORK_FUNNEL) {
+		(void) thread_funnel_set(network_flock, TRUE);
+	} else {
+		(void) thread_funnel_set(kernel_flock, TRUE);
+	}
 
 	set_bsduthreadargs(thread,pcb,&sarg);
 
-
 	if (callp->sy_narg > 8)
-	panic("unix_syscall: max arg count exceeded");
+		panic("unix_syscall: max arg count exceeded");
 
 	rval[0] = 0;
 
-	/* r4 is volatile, if we set it to regs->r4 here the child
-	 * will have parents r4 after execve */
+	/*
+	 * r4 is volatile, if we set it to regs->r4 here the child
+	 * will have parents r4 after execve
+	 */
 	rval[1] = 0;
 
 	error = 0; /* Start with a good value */
@@ -187,92 +184,97 @@ unix_syscall(
 	vt = get_bsduthreadarg(thread);
 	counter_always(c_syscalls_unix++);
 	current_task()->syscalls_unix++;
+
+	ktrsyscall(p, code, callp->sy_narg, vt);
+
 	error = (*(callp->sy_call))(p, (void *)vt, rval);
 
 	regs = find_user_regs(thread);
 	if (regs == (struct ppc_saved_state  *)0)
 		panic("No user savearea while returning from system call");
 
-    if (error == ERESTART) {
-	regs->srr0 -= 8;
-    }
-    else if (error != EJUSTRETURN) {
-	if (error)
-	{
-	    regs->r3 = error;
-	    /* set the "pc" to execute cerror routine */
-	    regs->srr0 -= 4;
-	} else { /* (not error) */
-	    regs->r3 = rval[0];
-	    regs->r4 = rval[1];
-	} 
-    }
-    /* else  (error == EJUSTRETURN) { nothing } */
+	if (error == ERESTART) {
+		regs->srr0 -= 8;
+	} else if (error != EJUSTRETURN) {
+		if (error) {
+			regs->r3 = error;
+			/* set the "pc" to execute cerror routine */
+			regs->srr0 -= 4;
+		} else { /* (not error) */
+			regs->r3 = rval[0];
+			regs->r4 = rval[1];
+		} 
+	}
+	/* else  (error == EJUSTRETURN) { nothing } */
 
-    (void) thread_funnel_set(current_thread()->funnel_lock, FALSE);
+	ktrsysret(p, code, error, rval[0]);
 
-    if (code != 180) {
-        KERNEL_DEBUG_CONSTANT(BSDDBG_CODE(DBG_BSD_EXCP_SC, code) | DBG_FUNC_END,
-		       error, rval[0], rval[1], 0, 0);
-    }
+	(void) thread_funnel_set(current_thread()->funnel_lock, FALSE);
 
-    thread_exception_return();
-    /* NOTREACHED */
+	if (code != 180) {
+		KERNEL_DEBUG_CONSTANT(BSDDBG_CODE(DBG_BSD_EXCP_SC, code) | DBG_FUNC_END,
+			error, rval[0], rval[1], 0, 0);
+	}
+
+	thread_exception_return();
+	/* NOTREACHED */
 }
 
 unix_syscall_return(error)
 {
-    struct ppc_saved_state	*regs;
-    thread_act_t		thread;
-    struct sysent		*callp;
-    int				nargs;
-    unsigned short		code;
+	struct ppc_saved_state	*regs;
+	thread_act_t		thread;
+	struct sysent		*callp;
+	int				nargs;
+	unsigned short		code;
 	int *rval;
-   void *  p, *vt;
-    int * vtint;
+	struct proc *p;
+	void *vt;
+	int * vtint;
 	struct pcb *pcb;
+	struct proc *current_proc();
 
 	struct unix_syscallargs sarg;
 	extern int nsysent;
 
-    thread = current_act();
+	thread = current_act();
 	p = current_proc();
 	rval = (int *)get_bsduthreadrval(thread);
 	pcb = thread->mact.pcb;
-    regs = &pcb->ss;
+	regs = &pcb->ss;
 
-    if (thread_funnel_get() == THR_FUNNEL_NULL)
-        panic("Unix syscall return without funnel held");
+	if (thread_funnel_get() == THR_FUNNEL_NULL)
+		panic("Unix syscall return without funnel held");
 
-    /*
-    ** Get index into sysent table
-    */   
-    code = regs->r0;
+	/*
+	 * Get index into sysent table
+	 */   
+	code = regs->r0;
 
-    if (error == ERESTART) {
-	regs->srr0 -= 8;
-    }
-    else if (error != EJUSTRETURN) {
-	if (error)
-	{
-	    regs->r3 = error;
-	    /* set the "pc" to execute cerror routine */
-	    regs->srr0 -= 4;
-	} else { /* (not error) */
-	    regs->r3 = rval[0];
-	    regs->r4 = rval[1];
-	} 
-    }
-    /* else  (error == EJUSTRETURN) { nothing } */
+	if (error == ERESTART) {
+		regs->srr0 -= 8;
+	} else if (error != EJUSTRETURN) {
+		if (error) {
+			regs->r3 = error;
+			/* set the "pc" to execute cerror routine */
+			regs->srr0 -= 4;
+		} else { /* (not error) */
+			regs->r3 = rval[0];
+			regs->r4 = rval[1];
+		} 
+	}
+	/* else  (error == EJUSTRETURN) { nothing } */
 
-    (void) thread_funnel_set(current_thread()->funnel_lock, FALSE);
+	ktrsysret(p, code, error, rval[0]);
 
-    if (code != 180) {
-	  KERNEL_DEBUG_CONSTANT(BSDDBG_CODE(DBG_BSD_EXCP_SC, code) | DBG_FUNC_END,
-		       error, rval[0], rval[1], 0, 0);
-    }
+	(void) thread_funnel_set(current_thread()->funnel_lock, FALSE);
 
-    thread_exception_return();
-    /* NOTREACHED */
+	if (code != 180) {
+		KERNEL_DEBUG_CONSTANT(BSDDBG_CODE(DBG_BSD_EXCP_SC, code) | DBG_FUNC_END,
+			error, rval[0], rval[1], 0, 0);
+	}
+
+	thread_exception_return();
+	/* NOTREACHED */
 }
 

@@ -20,11 +20,16 @@ EXPINC_SUBDIRS_PPC = \
 EXPINC_SUBDIRS_I386 = \
 
 DATAFILES = \
-	ah.h esp.h icmp6.h in6.h in6_gif.h in6_ifattach.h in6_pcb.h \
-	in6_prefix.h in6_var.h ip6.h ip6_fw.h ip6_mroute.h ip6_var.h \
-	ip6protosw.h ipcomp.h ipsec.h mip6.h mip6_common.h mld6_var.h \
-	natpt_defs.h natpt_list.h natpt_log.h natpt_soctl.h natpt_var.h \
-	nd6.h pim6.h pim6_var.h udp6.h udp6_var.h
+	ah.h             esp_rijndael.h   in6_ifattach.h   ip6.h \
+        ip6_var.h	 ipsec.h          pim6.h           tcp6_var.h \
+	ah6.h            icmp6.h          in6_pcb.h        ip6_ecn.h \
+        ip6protosw.h     ipsec6.h         pim6_var.h       udp6_var.h \
+	esp.h            in6.h            in6_prefix.h     \
+        ipcomp.h         mld6_var.h       raw_ip6.h	   esp6.h \
+        in6_gif.h        in6_var.h        ip6_mroute.h     ipcomp6.h \
+	nd6.h            scope6_var.h
+
+
 
 INSTALL_MI_LIST	= ${DATAFILES}
 
@@ -34,6 +39,10 @@ EXPORT_MI_LIST	= ${DATAFILES}
 
 EXPORT_MI_DIR = netinet6
 
+PRIVATE_DATAFILES = \
+	ip6_fw.h
+
+INSTALL_MI_LCL_KERN_LIST = ${PRIVATE_DATAFILES}
 
 include $(MakeInc_rule)
 include $(MakeInc_dir)

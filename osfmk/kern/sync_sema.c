@@ -50,8 +50,8 @@
 #include <kern/zalloc.h>
 #include <kern/mach_param.h>
 
-unsigned int semaphore_event;
-#define SEMAPHORE_EVENT ((event_t)&semaphore_event)
+static unsigned int semaphore_event;
+#define SEMAPHORE_EVENT ((event64_t)&semaphore_event)
 
 zone_t semaphore_zone;
 unsigned int semaphore_max = SEMAPHORE_MAX;
@@ -188,7 +188,7 @@ semaphore_destroy(
 	semaphore->count = 0;
 
 	if (old_count < 0) {
-		wait_queue_wakeup_all_locked(&semaphore->wait_queue,
+		wait_queue_wakeup64_all_locked(&semaphore->wait_queue,
 					     SEMAPHORE_EVENT,
 					     THREAD_RESTART,
 					     TRUE);		/* unlock? */
@@ -235,7 +235,7 @@ semaphore_signal_internal(
 
 	if (thread_act != THR_ACT_NULL) {
 		if (semaphore->count < 0) {
-			kr = wait_queue_wakeup_thread_locked(
+			kr = wait_queue_wakeup64_thread_locked(
 			        	&semaphore->wait_queue,
 					SEMAPHORE_EVENT,
 					thread_act->thread,
@@ -254,7 +254,7 @@ semaphore_signal_internal(
 
 		if (old_count < 0) {
 			semaphore->count = 0;  /* always reset */
-			kr = wait_queue_wakeup_all_locked(
+			kr = wait_queue_wakeup64_all_locked(
 					&semaphore->wait_queue,
 					SEMAPHORE_EVENT,
 					THREAD_AWAKENED,
@@ -270,7 +270,7 @@ semaphore_signal_internal(
 	}
 	
 	if (semaphore->count < 0) {
-		if (wait_queue_wakeup_one_locked(
+		if (wait_queue_wakeup64_one_locked(
 					&semaphore->wait_queue,
 					SEMAPHORE_EVENT,
 					THREAD_AWAKENED,
@@ -582,10 +582,11 @@ semaphore_wait_internal(
 		kr = KERN_OPERATION_TIMED_OUT;
 	} else {		
 		wait_semaphore->count = -1;  /* we don't keep an actual count */
-		(void)wait_queue_assert_wait_locked(&wait_semaphore->wait_queue,
-					      SEMAPHORE_EVENT,
-					      THREAD_ABORTSAFE,
-					      FALSE); /* unlock? */
+		(void)wait_queue_assert_wait64_locked(
+					&wait_semaphore->wait_queue,
+					SEMAPHORE_EVENT,
+					THREAD_ABORTSAFE,
+					FALSE); /* unlock? */
 	}
 	semaphore_unlock(wait_semaphore);
 	splx(spl_level);
@@ -671,7 +672,7 @@ semaphore_wait_internal(
 		self->sth_signalsemaphore = signal_semaphore;
 		wait_result = thread_block(continuation);
 	} else {
-		wait_result = thread_block((void (*)(void))0);
+		wait_result = thread_block(THREAD_CONTINUE_NULL);
 	}
 
 	/*

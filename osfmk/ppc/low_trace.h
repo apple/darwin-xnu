@@ -61,8 +61,8 @@ typedef struct LowTraceRecord {
 
 typedef struct traceWork {
 
-	unsigned int traceMask;				/* Types to be traced */
 	unsigned int traceCurr;				/* Address of next slot */
+	unsigned int traceMask;				/* Types to be traced */
 	unsigned int traceStart;			/* Start of trace table */
 	unsigned int traceEnd;				/* End of trace table */
 	unsigned int traceMsnd;				/* Saved trace mask */
@@ -70,6 +70,7 @@ typedef struct traceWork {
 } traceWork;
 
 extern traceWork trcWork;
+extern unsigned int lastTrace;			/* Value of low-level exception trace controls */
 
 
 #endif /* ifndef _LOW_TRACE_H_ */

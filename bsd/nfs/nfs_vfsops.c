@@ -418,10 +418,14 @@ nfs_mountroot()
 
 	/*
 	 * Call nfs_boot_init() to fill in the nfs_diskless struct.
-	 * Side effect:  Finds and configures a network interface.
+	 * Note: networking must already have been configured before
+	 * we're called.
 	 */
 	bzero((caddr_t) &nd, sizeof(nd));
-	nfs_boot_init(&nd, procp);
+	error = nfs_boot_init(&nd, procp);
+	if (error) {
+		panic("nfs_boot_init failed with %d\n", error);
+	}
 
 	/*
 	 * Create the root mount point.
@@ -431,7 +435,7 @@ nfs_mountroot()
 #else
 	if (error = nfs_mount_diskless(&nd.nd_root, "/", NULL, &vp, &mp)) {
 #endif /* NO_MOUNT_PRIVATE */
-		return(error);
+		panic("nfs_mount_diskless failed with %d\n", error);
 	}
 	printf("root on %s\n", (char *)&nd.nd_root.ndm_host);
 
@@ -445,8 +449,9 @@ nfs_mountroot()
 	if (nd.nd_private.ndm_saddr.sin_addr.s_addr) {
 	    error = nfs_mount_diskless_private(&nd.nd_private, "/private",
 					       NULL, &vppriv, &mppriv);
-	    if (error)
-		return(error);
+	    if (error) {
+		panic("nfs_mount_diskless failed with %d\n", error);
+	    }
 	    printf("private on %s\n", (char *)&nd.nd_private.ndm_host);
 	    
 	    simple_lock(&mountlist_slock);
@@ -496,7 +501,7 @@ nfs_mount_diskless(ndmntp, mntname, mntflag, vpp, mpp)
 	args.addrlen  = args.addr->sa_len;
 	args.sotype   = SOCK_DGRAM;
 	args.fh       = ndmntp->ndm_fh;
-	args.fhsize   = NFSX_V2FH;
+	args.fhsize   = NFSX_V2FH; /* need to try v3, then v2 */
 	args.hostname = ndmntp->ndm_host;
 	args.flags    = NFSMNT_RESVPORT;
 

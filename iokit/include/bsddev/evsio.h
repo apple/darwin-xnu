@@ -19,6 +19,11 @@
  * 
  * @APPLE_LICENSE_HEADER_END@
  */
+#warning include <dev/evsio.h> is going away use <IOKit/hidsystem/IOHIDTypes.h> instead
+
+#include <sys/appleapiopts.h>
+
+#ifdef __APPLE_API_OBSOLETE
 #include <IOKit/hidsystem/IOHIDTypes.h>
 
 /*
@@ -27,3 +32,5 @@
 #ifndef _NeXT_MACH_EVENT_DRIVER_
 #define _NeXT_MACH_EVENT_DRIVER_	(1)
 #endif /* _NeXT_MACH_EVENT_DRIVER_ */
+
+#endif /* __APPLE_API_OBSOLETE */

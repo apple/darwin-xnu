@@ -112,7 +112,7 @@ l_notify:
 				ATENABLE(s, atp->atp_lock);
 				gbuf_freem(m);
 				if (trp->tr_rsp_wait)
-					thread_wakeup(&trp->tr_event);
+					wakeup(&trp->tr_event);
 				break;
 			}
 			ATENABLE(s, atp->atp_lock);
@@ -184,7 +184,7 @@ register struct atp_trans *trp;
 		if (trp->tr_rsp_wait) {
 			trp->tr_state = TRANS_ABORTING;
 			ATP_Q_APPEND(atp_trans_abort, trp, tr_list);
-			thread_wakeup(&trp->tr_event);
+			wakeup(&trp->tr_event);
 			ATENABLE(s, atpgen_lock);
 			return;
 		}

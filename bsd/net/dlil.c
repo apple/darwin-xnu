@@ -42,8 +42,10 @@
 #include <sys/kdebug.h>
 #include <string.h>
 
-#include <kern/thread.h>
 #include <kern/task.h>
+#include <kern/thread.h>
+#include <kern/sched_prim.h>
+
 #include <net/netisr.h>
 #include <net/if_types.h>
 
@@ -56,8 +58,8 @@
 #define DBG_FNC_DLIL_IFOUT      DLILDBG_CODE(DBG_DLIL_STATIC, (3 << 8))
 
 
-#define MAX_DL_TAGS 50
-#define MAX_DLIL_FILTERS 50
+#define MAX_DL_TAGS 		16
+#define MAX_DLIL_FILTERS 	16
 #define MAX_FRAME_TYPE_SIZE 4 /* LONGWORDS */
 #define MAX_LINKADDR	    4 /* LONGWORDS */
 #define M_NKE M_IFADDR
@@ -71,6 +73,20 @@ struct dl_tag_str {
     struct dlil_filterq_head *pr_flt_head;
 };
 
+
+struct dlil_ifnet {
+    /* ifnet and drvr_ext are used by the stack and drivers
+    drvr_ext extends the public ifnet and must follow dl_if */
+    struct ifnet	dl_if;			/* public ifnet */
+    void		*drvr_ext[4];	/* driver reserved (e.g arpcom extension for enet) */ 
+    
+    /* dlil private fields */
+    TAILQ_ENTRY(dlil_ifnet) dl_if_link;	/* dlil_ifnet are link together */
+    								/* it is not the ifnet list */
+    void		*if_uniqueid;	/* unique id identifying the interface */
+    size_t		if_uniqueid_len;/* length of the unique id */
+    char		if_namestorage[IFNAMSIZ]; /* interface name storage for detached interfaces */
+};
 
 struct dlil_stats_str {
     int	   inject_pr_in1;    
@@ -104,6 +120,7 @@ struct if_family_str {
 
     int (*add_if)(struct ifnet *ifp);
     int (*del_if)(struct ifnet *ifp);
+    int (*init_if)(struct ifnet *ifp);
     int (*add_proto)(struct ddesc_head_str *demux_desc_head,
 		     struct if_proto  *proto, u_long dl_tag);
     int (*del_proto)(struct if_proto  *proto, u_long dl_tag);
@@ -116,15 +133,20 @@ struct if_family_str {
 struct dlil_stats_str dlil_stats;
 
 static
-struct dlil_filter_id_str dlil_filters[MAX_DLIL_FILTERS+1];
+struct dlil_filter_id_str *dlil_filters;
 
 static
-struct dl_tag_str    dl_tag_array[MAX_DL_TAGS+1];
+struct dl_tag_str *dl_tag_array;
+
+static
+TAILQ_HEAD(, dlil_ifnet) dlil_ifnet_head;
 
 static 
 TAILQ_HEAD(, if_family_str) if_family_head;
 
 static		    ifnet_inited = 0;
+static u_long	dl_tag_nb = 0; 
+static u_long	dlil_filters_nb = 0; 
 
 int dlil_initialized = 0;
 decl_simple_lock_data(, dlil_input_lock)
@@ -132,11 +154,15 @@ int dlil_input_thread_wakeup = 0;
 int dlil_expand_mcl;
 static struct mbuf *dlil_input_mbuf_head = NULL;
 static struct mbuf *dlil_input_mbuf_tail = NULL;
+#if NLOOP > 1
+#error dlil_input() needs to be revised to support more than on loopback interface
+#endif
 static struct mbuf *dlil_input_loop_head = NULL;
 static struct mbuf *dlil_input_loop_tail = NULL;
 
 static void dlil_input_thread(void);
 extern void run_netisr(void);
+extern void bpfdetach(struct ifnet*);
 
 
 /*
@@ -173,10 +199,11 @@ struct ifnet *ifbyfamily(u_long family, short unit)
     return 0;
 }
 
-struct if_proto *dlttoproto(dl_tag)
-    u_long dl_tag;
+struct if_proto *dlttoproto(u_long dl_tag)
 {
-    return dl_tag_array[dl_tag].proto;
+    if (dl_tag < dl_tag_nb && dl_tag_array[dl_tag].ifp)
+ 	return dl_tag_array[dl_tag].proto;
+    return 0;
 }
 
 
@@ -224,27 +251,6 @@ int  dlil_find_dltag(u_long if_family, short unit, u_long proto_family, u_long *
 }
 
 
-int dlil_get_next_dl_tag(u_long current_tag, struct dl_tag_attr_str *next)
-{
-    int i;
-
-    for (i = (current_tag+1); i < MAX_DL_TAGS; i++)
-	if (dl_tag_array[i].ifp) {
-	    next->dl_tag   = i;
-	    next->if_flags = dl_tag_array[i].ifp->if_flags;
-	    next->if_unit  = dl_tag_array[i].ifp->if_unit;
-	    next->protocol_family = dl_tag_array[i].proto->protocol_family;
-	    next->if_family = dl_tag_array[i].ifp->if_family;
-	    return 0;
-	}
-
-    /*
-     * If we got here, there are no more entries
-     */
-
-    return ENOENT;
-} 
-
 void dlil_post_msg(struct ifnet *ifp, u_long event_subclass, u_long event_code, 
 		   struct net_event_data *event_data, u_long event_data_len) 
 {
@@ -285,14 +291,26 @@ dlil_init()
 {
     int i;
 
-    printf("dlil_init\n");
-
+    TAILQ_INIT(&dlil_ifnet_head);
     TAILQ_INIT(&if_family_head);
-    for (i=0; i < MAX_DL_TAGS; i++)
-	dl_tag_array[i].ifp = 0;
 
-    for (i=0; i < MAX_DLIL_FILTERS; i++)
-	dlil_filters[i].type = 0;
+    // create the dl tag array
+    MALLOC(dl_tag_array, void *, sizeof(struct dl_tag_str) * MAX_DL_TAGS, M_NKE, M_WAITOK);
+    if (dl_tag_array == 0) {
+        printf("dlil_init tags array allocation failed\n");
+        return;	//very bad
+    }
+    bzero(dl_tag_array, sizeof(struct dl_tag_str) * MAX_DL_TAGS);
+    dl_tag_nb = MAX_DL_TAGS;
+
+    // create the dl filters array
+    MALLOC(dlil_filters, void *, sizeof(struct dlil_filter_id_str) * MAX_DLIL_FILTERS, M_NKE, M_WAITOK);
+    if (dlil_filters == 0) {
+        printf("dlil_init filters array allocation failed\n");
+        return;	//very bad
+    }
+    bzero(dlil_filters, sizeof(struct dlil_filter_id_str) * MAX_DLIL_FILTERS);
+    dlil_filters_nb = MAX_DLIL_FILTERS;
 
     bzero(&dlil_stats, sizeof(dlil_stats));
 
@@ -304,16 +322,29 @@ dlil_init()
     (void) kernel_thread(kernel_task, dlil_input_thread);
 }
 
-
 u_long get_new_filter_id()
 {
     u_long i;
-
-    for (i=1; i < MAX_DLIL_FILTERS; i++)
+    u_char *p;
+    
+    for (i=1; i < dlil_filters_nb; i++)
 	if (dlil_filters[i].type == 0)
-	    return i;
- 
-    return 0;
+	    break;
+
+    if (i == dlil_filters_nb) {
+        // expand the filters array by MAX_DLIL_FILTERS
+        MALLOC(p, u_char *, sizeof(struct dlil_filter_id_str) * (dlil_filters_nb + MAX_DLIL_FILTERS), M_NKE, M_WAITOK);
+        if (p == 0)
+            return 0;
+
+        bcopy(dlil_filters, p, sizeof(struct dlil_filter_id_str) * dlil_filters_nb);
+        bzero(p + sizeof(struct dlil_filter_id_str) * dlil_filters_nb, sizeof(struct dlil_filter_id_str) * MAX_DL_TAGS);
+        dlil_filters_nb += MAX_DLIL_FILTERS;
+        FREE(dlil_filters, M_NKE);
+        dlil_filters = (struct dlil_filter_id_str *)p;
+    }
+    
+    return i;
 }
 
 
@@ -323,23 +354,35 @@ int   dlil_attach_interface_filter(struct ifnet *ifp,
 				   int			   insertion_point)
 {
     int s;
-    int retval;
+    int retval = 0;
     struct dlil_filterq_entry	*tmp_ptr;
     struct dlil_filterq_entry	*if_filt;
     struct dlil_filterq_head *fhead = (struct dlil_filterq_head *) &ifp->if_flt_head;
     boolean_t funnel_state;
 
-
     MALLOC(tmp_ptr, struct dlil_filterq_entry *, sizeof(*tmp_ptr), M_NKE, M_WAITOK);
     if (tmp_ptr == NULL)
-	return (ENOBUFS);
+        return (ENOBUFS);
 
     bcopy((caddr_t) if_filter, (caddr_t) &tmp_ptr->variants.if_filter, 
 	  sizeof(struct dlil_if_flt_str));
 
     funnel_state = thread_funnel_set(network_flock, TRUE);
-
     s = splnet();
+
+    *filter_id = get_new_filter_id();
+    if (*filter_id == 0) {
+    	FREE(tmp_ptr, M_NKE);
+	retval = ENOMEM;
+        goto end;
+    }
+    
+    dlil_filters[*filter_id].filter_ptr = tmp_ptr;
+    dlil_filters[*filter_id].head = (struct dlil_filterq_head *) &ifp->if_flt_head;
+    dlil_filters[*filter_id].type = DLIL_IF_FILTER;
+    dlil_filters[*filter_id].ifp = ifp;
+    tmp_ptr->filter_id = *filter_id;
+    tmp_ptr->type	   = DLIL_IF_FILTER;
 
     if (insertion_point != DLIL_LAST_FILTER) {
 	TAILQ_FOREACH(if_filt, fhead, que)
@@ -351,22 +394,7 @@ int   dlil_attach_interface_filter(struct ifnet *ifp,
     else 
 	TAILQ_INSERT_TAIL(fhead, tmp_ptr, que);
 
-    if (*filter_id = get_new_filter_id()) {
-	dlil_filters[*filter_id].filter_ptr = tmp_ptr;
-	dlil_filters[*filter_id].head = (struct dlil_filterq_head *) &ifp->if_flt_head;
-	dlil_filters[*filter_id].type = DLIL_IF_FILTER;
-	dlil_filters[*filter_id].ifp = ifp;
-	tmp_ptr->filter_id = *filter_id;
-	tmp_ptr->type	   = DLIL_IF_FILTER;
-	retval = 0;
-    }
-    else {
-	kprintf("dlil_attach_interface_filter - can't alloc filter_id\n");
-	TAILQ_REMOVE(fhead, tmp_ptr, que);
-	FREE(tmp_ptr, M_NKE);
-	retval = ENOMEM;
-    }
-
+end:
     splx(s);
     thread_funnel_set(network_flock, funnel_state);
     return retval;
@@ -378,28 +406,39 @@ int   dlil_attach_protocol_filter(u_long			 dl_tag,
 				  u_long			 *filter_id,
 				  int				 insertion_point)
 {
-    struct dlil_filterq_entry	*tmp_ptr;
-    struct dlil_filterq_entry	*pr_filt;
+    struct dlil_filterq_entry	*tmp_ptr, *pr_filt;
     int s;
-    int retval;
+    int retval = 0;
     boolean_t funnel_state;
-
-    if (dl_tag > MAX_DL_TAGS)
-	return ERANGE;
-
-    if (dl_tag_array[dl_tag].ifp == 0)
-	return ENOENT;
+    
+    if (dl_tag >= dl_tag_nb || dl_tag_array[dl_tag].ifp == 0)
+        return (ENOENT);
 
     MALLOC(tmp_ptr, struct dlil_filterq_entry *, sizeof(*tmp_ptr), M_NKE, M_WAITOK);
     if (tmp_ptr == NULL)
-	return (ENOBUFS);
+        return (ENOBUFS);
 
     bcopy((caddr_t) pr_filter, (caddr_t) &tmp_ptr->variants.pr_filter, 
 	  sizeof(struct dlil_pr_flt_str));
 
     funnel_state = thread_funnel_set(network_flock, TRUE);
-
     s = splnet();
+
+    *filter_id = get_new_filter_id();
+    if (*filter_id == 0) {
+	FREE(tmp_ptr, M_NKE);
+	retval =  ENOMEM;
+        goto end;
+    }
+    
+    dlil_filters[*filter_id].filter_ptr = tmp_ptr; 
+    dlil_filters[*filter_id].head = dl_tag_array[dl_tag].pr_flt_head;
+    dlil_filters[*filter_id].type = DLIL_PR_FILTER;
+    dlil_filters[*filter_id].proto = dl_tag_array[dl_tag].proto;
+    dlil_filters[*filter_id].ifp   = dl_tag_array[dl_tag].ifp;
+    tmp_ptr->filter_id = *filter_id;
+    tmp_ptr->type	   = DLIL_PR_FILTER;
+
     if (insertion_point != DLIL_LAST_FILTER) {
 	TAILQ_FOREACH(pr_filt, dl_tag_array[dl_tag].pr_flt_head, que)
 	    if (insertion_point == pr_filt->filter_id) {
@@ -410,24 +449,7 @@ int   dlil_attach_protocol_filter(u_long			 dl_tag,
     else 
 	TAILQ_INSERT_TAIL(dl_tag_array[dl_tag].pr_flt_head, tmp_ptr, que);
 
-    
-    if (*filter_id = get_new_filter_id()) {
-	dlil_filters[*filter_id].filter_ptr = tmp_ptr; 
-	dlil_filters[*filter_id].head = dl_tag_array[dl_tag].pr_flt_head;
-	dlil_filters[*filter_id].type = DLIL_PR_FILTER;
-	dlil_filters[*filter_id].proto = dl_tag_array[dl_tag].proto;
-	dlil_filters[*filter_id].ifp   = dl_tag_array[dl_tag].ifp;
-	tmp_ptr->filter_id = *filter_id;
-	tmp_ptr->type	   = DLIL_PR_FILTER;
-	retval = 0;
-    }
-    else {
-	kprintf("dlil_attach_protocol_filter - can't alloc filter_id\n");
-	TAILQ_REMOVE(dl_tag_array[dl_tag].pr_flt_head, tmp_ptr, que);
-	FREE(tmp_ptr, M_NKE);
-	retval =  ENOMEM;
-    }
-
+end:
     splx(s);
     thread_funnel_set(network_flock, funnel_state);
     return retval;
@@ -438,23 +460,18 @@ int
 dlil_detach_filter(u_long	filter_id)
 {
     struct dlil_filter_id_str *flt;
-    int s;
+    int s, retval = 0;
     boolean_t funnel_state;
-
-    if (filter_id > MAX_DLIL_FILTERS) {
-	kprintf("dlil_detach_filter - Bad filter_id value %d\n", filter_id);
-	return ERANGE;
-    }
 
     funnel_state = thread_funnel_set(network_flock, TRUE);
     s = splnet();
-    flt = &dlil_filters[filter_id];
-    if (flt->type == 0) {
-	kprintf("dlil_detach_filter - no such filter_id %d\n", filter_id);
-	thread_funnel_set(network_flock, funnel_state);
-	return ENOENT;
+    
+    if (filter_id >= dlil_filters_nb || dlil_filters[filter_id].type == 0) {
+        retval = ENOENT;
+	goto end;
     }
 
+    flt = &dlil_filters[filter_id];
 
     if (flt->type == DLIL_IF_FILTER) {
 	if (IFILT(flt->filter_ptr).filter_detach)
@@ -470,9 +487,11 @@ dlil_detach_filter(u_long	filter_id)
     TAILQ_REMOVE(flt->head, flt->filter_ptr, que);
     FREE(flt->filter_ptr, M_NKE);
     flt->type = 0;
+
+end:
     splx(s);
     thread_funnel_set(network_flock, funnel_state);
-    return 0;
+    return retval;
 }
 
 
@@ -520,11 +539,10 @@ dlil_input_thread_continue(void)
         while (m) {
             struct mbuf *m0 = m->m_nextpkt;
             void *header = m->m_pkthdr.header;
-            struct ifnet *ifp = (struct ifnet *) m->m_pkthdr.aux;
+            struct ifnet *ifp = &loif[0];
 
             m->m_nextpkt = NULL;
             m->m_pkthdr.header = NULL;
-            m->m_pkthdr.aux = NULL;
             (void) dlil_input_packet(ifp, m, header);
             m = m0;
         }
@@ -536,11 +554,7 @@ dlil_input_thread_continue(void)
             dlil_input_loop_head == NULL &&
             netisr == 0) {
             assert_wait(&dlil_input_thread_wakeup, THREAD_UNINT);
-#if defined (__i386__)
-            thread_block(0);
-#else
-            thread_block(dlil_input_thread_continue);
-#endif
+            (void) thread_block(dlil_input_thread_continue);
         /* NOTREACHED */
         }
     }
@@ -551,15 +565,14 @@ void dlil_input_thread(void)
     register thread_t self = current_thread();
     extern void stack_privilege(thread_t thread);
 
-    printf("dlil_input_thread %x\n", self);
-
     /*
      *      Make sure that this thread
      *      always has a kernel stack, and
      *      bind it to the master cpu.
      */
     stack_privilege(self);
-    ml_thread_policy(current_thread(), MACHINE_GROUP, (MACHINE_NETWORK_GROUP|MACHINE_NETWORK_NETISR));
+    ml_thread_policy(current_thread(), MACHINE_GROUP, 
+    			(MACHINE_NETWORK_GROUP|MACHINE_NETWORK_NETISR));
 
     /* The dlil thread is always funneled */
     thread_funnel_set(network_flock, TRUE);
@@ -866,38 +879,15 @@ dlil_output(u_long		dl_tag,
     char			 dst_linkaddr_buffer[MAX_LINKADDR * 4];
     struct dlil_filterq_head	 *fhead;
 
-
     KERNEL_DEBUG(DBG_FNC_DLIL_OUTPUT | DBG_FUNC_START,0,0,0,0,0);
 
-    /*
-     * Temporary hackery until all the existing protocols can become fully
-     * "dl_tag aware". Some things only have the ifp, so this handles that
-     * case for the time being.
-     */
+    if (dl_tag >= dl_tag_nb || dl_tag_array[dl_tag].ifp == 0) {
+    	m_freem(m);
+        return ENOENT;
+    }
 
-    if (dl_tag > MAX_DL_TAGS) {
-	/* dl_tag is really an ifnet pointer! */
-
-	ifp = (struct ifnet *) dl_tag;
-	dl_tag = ifp->if_data.default_proto;
-	if (dl_tag)
-	    proto = dl_tag_array[dl_tag].proto;
-	else
-	    retval = ENOENT;
-    }
-    else {
-	if ((dl_tag == 0) || (dl_tag_array[dl_tag].ifp == 0))
-	    retval = ENOENT;
-	else {
-	    ifp = dl_tag_array[dl_tag].ifp;
-	    proto = dl_tag_array[dl_tag].proto;
-	}
-    }
-    
-    if (retval) {
-	m_freem(m);
-	return retval;
-    }
+    ifp = dl_tag_array[dl_tag].ifp;
+    proto = dl_tag_array[dl_tag].proto;
 
     frame_type	   = frame_type_buffer;
     dst_linkaddr   = dst_linkaddr_buffer;
@@ -958,10 +948,11 @@ dlil_output(u_long		dl_tag,
 #if BRIDGE
     if (do_bridge) {
 	struct mbuf *m0 = m ;
+	struct ether_header *eh = mtod(m, struct ether_header *);
 	
 	if (m->m_pkthdr.rcvif)
 	    m->m_pkthdr.rcvif = NULL ;
-	ifp = bridge_dst_lookup(m);
+	ifp = bridge_dst_lookup(eh);
 	bdg_forward(&m0, ifp);
 	if (m0)
 	    m_freem(m0);
@@ -1028,7 +1019,7 @@ dlil_ioctl(u_long	proto_fam,
      struct dlil_filterq_head	 *fhead;
      int			 retval  = EOPNOTSUPP;
      int                         retval2 = EOPNOTSUPP;
-     u_long		         dl_tag;
+     u_long			 dl_tag;
      struct if_family_str    *if_family;
 
 
@@ -1133,12 +1124,11 @@ dlil_attach_protocol(struct dlil_proto_reg_str	 *proto,
     struct if_proto  *ifproto;
     u_long	     i;
     struct if_family_str *if_family;
-    int		     error;
     struct dlil_proto_head  *tmp;
     struct kev_dl_proto_data	ev_pr_data;
-    int	 s;
+    int	 s, retval = 0;
     boolean_t funnel_state;
-
+    u_char *p;
 
     if ((proto->protocol_family == 0) || (proto->interface_family == 0))
 	return EINVAL;
@@ -1149,36 +1139,42 @@ dlil_attach_protocol(struct dlil_proto_reg_str	 *proto,
     if ((!if_family) || (if_family->flags & DLIL_SHUTDOWN)) {
 	kprintf("dlil_attach_protocol -- no interface family module %d", 
 	       proto->interface_family);
-	splx(s);
-	thread_funnel_set(network_flock, funnel_state);
-	return ENOENT;
+	retval = ENOENT;
+        goto end;
     }
 
     ifp = ifbyfamily(proto->interface_family, proto->unit_number);
     if (!ifp) {
 	kprintf("dlil_attach_protocol -- no such interface %d unit %d\n", 
 	       proto->interface_family, proto->unit_number);
-	splx(s);
-	thread_funnel_set(network_flock, funnel_state);
-	return ENOENT;
+	retval = ENOENT;
+        goto end;
     }
 
     if (dlil_find_dltag(proto->interface_family, proto->unit_number,
 			proto->protocol_family, &i) == 0) {
-	 thread_funnel_set(network_flock, funnel_state);
-	 return EEXIST;
+	retval = EEXIST;
+        goto end;
     }
 
-    for (i=1; i < MAX_DL_TAGS; i++)
+    for (i=1; i < dl_tag_nb; i++)
 	if (dl_tag_array[i].ifp == 0)
 	    break;
 
-    if (i >= MAX_DL_TAGS) {
-	splx(s);
-	thread_funnel_set(network_flock, funnel_state);
-	return ENOMEM;
+    if (i == dl_tag_nb) {
+        // expand the tag array by MAX_DL_TAGS
+        MALLOC(p, u_char *, sizeof(struct dl_tag_str) * (dl_tag_nb + MAX_DL_TAGS), M_NKE, M_WAITOK);
+        if (p == 0) {
+            retval = ENOBUFS;
+            goto end;
+        }
+        bcopy(dl_tag_array, p, sizeof(struct dl_tag_str) * dl_tag_nb);
+        bzero(p + sizeof(struct dl_tag_str) * dl_tag_nb, sizeof(struct dl_tag_str) * MAX_DL_TAGS);
+        dl_tag_nb += MAX_DL_TAGS;
+        FREE(dl_tag_array, M_NKE);
+        dl_tag_array = (struct dl_tag_str *)p;
     }
-
+    
     /*
      * Allocate and init a new if_proto structure
      */
@@ -1186,8 +1182,8 @@ dlil_attach_protocol(struct dlil_proto_reg_str	 *proto,
     ifproto = _MALLOC(sizeof(struct if_proto), M_IFADDR, M_WAITOK);
     if (!ifproto) {
 	printf("ERROR - DLIL failed if_proto allocation\n");
-	thread_funnel_set(network_flock, funnel_state);
-	return ENOMEM;
+	retval = ENOMEM;
+        goto end;
     }
     
     bzero(ifproto, sizeof(struct if_proto));
@@ -1218,13 +1214,11 @@ dlil_attach_protocol(struct dlil_proto_reg_str	 *proto,
      * Call family module add_proto routine so it can refine the
      * demux descriptors as it wishes.
      */
-    error = (*if_family->add_proto)(&proto->demux_desc_head, ifproto, *dl_tag);
-    if (error) {
-	dl_tag_array[*dl_tag].ifp = 0;
+    retval = (*if_family->add_proto)(&proto->demux_desc_head, ifproto, *dl_tag);
+    if (retval) {
+	dl_tag_array[i].ifp = 0;
 	FREE(ifproto, M_IFADDR);
-	splx(s);
-	thread_funnel_set(network_flock, funnel_state);
-	return error;
+        goto end;
     }
 
     /*
@@ -1244,9 +1238,10 @@ dlil_attach_protocol(struct dlil_proto_reg_str	 *proto,
 		  (struct net_event_data *)&ev_pr_data, 
 		  sizeof(struct kev_dl_proto_data));
 
+end:
     splx(s);
     thread_funnel_set(network_flock, funnel_state);
-    return 0;
+    return retval;
 }
 
 
@@ -1260,22 +1255,17 @@ dlil_detach_protocol(u_long	dl_tag)
     struct dlil_proto_head  *tmp; 
     struct if_family_str   *if_family;
     struct dlil_filterq_entry *filter;
-    int s, retval;
+    int s, retval = 0;
     struct dlil_filterq_head *fhead;
     struct kev_dl_proto_data	ev_pr_data;
     boolean_t funnel_state;
 
-
-    if (dl_tag > MAX_DL_TAGS) 
-	return ERANGE;
-
     funnel_state = thread_funnel_set(network_flock, TRUE);
-
     s = splnet();
-    if (dl_tag_array[dl_tag].ifp == 0) {
-	splx(s);
-	thread_funnel_set(network_flock, funnel_state);
-	return ENOENT;
+
+    if (dl_tag >= dl_tag_nb || dl_tag_array[dl_tag].ifp == 0) {
+	retval = ENOENT;
+	goto end;
     }
 
     ifp = dl_tag_array[dl_tag].ifp;
@@ -1283,9 +1273,8 @@ dlil_detach_protocol(u_long	dl_tag)
 
     if_family = find_family_module(ifp->if_family);
     if (if_family == NULL) {
-	 splx(s);
-	 thread_funnel_set(network_flock, funnel_state);
-	 return ENOENT;
+	retval = ENOENT;
+	goto end;
     }
 
     tmp = (struct dlil_proto_head *) &ifp->proto_head;
@@ -1313,6 +1302,13 @@ dlil_detach_protocol(u_long	dl_tag)
 	
     /* the reserved field carries the number of protocol still attached (subject to change) */
     ev_pr_data.proto_family   = proto->protocol_family;
+
+    /*
+     * Cleanup routes that may still be in the routing table for that interface/protocol pair.
+     */
+
+    if_rtproto_del(ifp, proto->protocol_family);
+
     TAILQ_REMOVE(tmp, proto, next);
     FREE(proto, M_IFADDR);
 
@@ -1322,9 +1318,7 @@ dlil_detach_protocol(u_long	dl_tag)
 		  (struct net_event_data *)&ev_pr_data, 
 		  sizeof(struct kev_dl_proto_data));
 
-    if (ifp->refcnt == 0 && (ifp->if_eflags & IFEF_DETACH_DISABLED) == 0) {
-	if (ifp->if_flags & IFF_UP) 
-	    printf("WARNING - dlil_detach_protocol - ifp refcnt 0, but IF still up\n");
+    if (ifp->refcnt == 0) {
 
 	TAILQ_REMOVE(&ifnet, ifp, if_link);
 
@@ -1361,9 +1355,10 @@ dlil_detach_protocol(u_long	dl_tag)
 	(*ifp->if_free)(ifp);
     }
 
+end:
     splx(s);
     thread_funnel_set(network_flock, funnel_state);
-    return 0;
+    return retval;
 }
 
 
@@ -1397,33 +1392,42 @@ dlil_if_attach(struct ifnet	*ifp)
 	return ENODEV;
     }
 
+    if (ifp->refcnt == 0) {
+        /*
+        * Call the family module to fill in the appropriate fields in the
+        * ifnet structure.
+        */
+        
+        stat = (*if_family->add_if)(ifp);
+        if (stat) {
+            splx(s);
+            kprintf("dlil_if_attach -- add_if failed with %d\n", stat);
+            thread_funnel_set(network_flock, funnel_state);
+            return stat;
+        }
+	if_family->refcnt++;
 
-    /*
-     * Call the family module to fill in the appropriate fields in the
-     * ifnet structure.
-     */
-
-    stat = (*if_family->add_if)(ifp);
-    if (stat) {
-	splx(s);
-	kprintf("dlil_if_attach -- add_if failed with %d\n", stat);
-	thread_funnel_set(network_flock, funnel_state);
-	return stat;
-    }
-
-    /*
-     * Add the ifp to the interface list.
-     */
-
-    tmp = (struct dlil_proto_head *) &ifp->proto_head;
-    TAILQ_INIT(tmp);
+        /*
+        * Add the ifp to the interface list.
+        */
     
-    ifp->if_data.default_proto = 0;
-    ifp->refcnt = 1;
-    ifp->offercnt = 0;
-    TAILQ_INIT(&ifp->if_flt_head);
-    old_if_attach(ifp);
-    if_family->refcnt++;
+        tmp = (struct dlil_proto_head *) &ifp->proto_head;
+        TAILQ_INIT(tmp);
+        
+        ifp->if_data.default_proto = 0;
+        ifp->offercnt = 0;
+        TAILQ_INIT(&ifp->if_flt_head);
+        old_if_attach(ifp);
+        
+        if (if_family->init_if) {
+            stat = (*if_family->init_if)(ifp);
+            if (stat) {
+                kprintf("dlil_if_attach -- init_if failed with %d\n", stat);
+            }
+        }
+    }
+    
+    ifp->refcnt++;
 
     dlil_post_msg(ifp, KEV_DL_SUBCLASS, KEV_DL_IF_ATTACHED, 0, 0);
 
@@ -1446,8 +1450,6 @@ dlil_if_detach(struct ifnet *ifp)
 
     funnel_state = thread_funnel_set(network_flock, TRUE);
     s = splnet();
-    if (ifp->if_flags & IFF_UP)
-	printf("WARNING - dlil_if_detach called for UP interface\n");
 
     if_family = find_family_module(ifp->if_family);
 
@@ -1464,7 +1466,9 @@ dlil_if_detach(struct ifnet *ifp)
 
     ifp->refcnt--;
 
-    if (ifp->refcnt == 0 && (ifp->if_eflags & IFEF_DETACH_DISABLED) == 0) {
+    if (ifp->refcnt == 0) {
+    /* Let BPF know the interface is detaching. */
+    bpfdetach(ifp);
 	TAILQ_REMOVE(&ifnet, ifp, if_link);
 	
 	(*if_family->del_if)(ifp);
@@ -1518,6 +1522,24 @@ dlil_reg_if_modules(u_long  interface_family,
 	thread_funnel_set(network_flock, funnel_state);
 	return EINVAL;
     }
+    
+    /*
+     * The following is a gross hack to keep from breaking
+     * Vicomsoft's internet gateway on Jaguar. Vicomsoft
+     * does not zero the reserved fields in dlil_ifmod_reg_str.
+     * As a result, we have to zero any function that used to
+     * be reserved fields at the time Vicomsoft built their
+     * kext. Radar #2974305
+     */
+    if (ifmod->reserved[0] != 0 || ifmod->reserved[1] != 0 || ifmod->reserved[2]) {
+    	if (interface_family == 123) {	/* Vicom */
+			ifmod->init_if = 0;
+		} else {
+			splx(s);
+			thread_funnel_set(network_flock, funnel_state);
+			return EINVAL;
+		}
+    }
 
     if_family = (struct if_family_str *) _MALLOC(sizeof(struct if_family_str), M_IFADDR, M_WAITOK);
     if (!if_family) {
@@ -1533,6 +1555,7 @@ dlil_reg_if_modules(u_long  interface_family,
     if_family->shutdown		= ifmod->shutdown;
     if_family->add_if		= ifmod->add_if;
     if_family->del_if		= ifmod->del_if;
+    if_family->init_if		= ifmod->init_if;
     if_family->add_proto	= ifmod->add_proto;
     if_family->del_proto	= ifmod->del_proto;
     if_family->ifmod_ioctl      = ifmod->ifmod_ioctl;
@@ -1548,7 +1571,7 @@ dlil_reg_if_modules(u_long  interface_family,
 int dlil_dereg_if_modules(u_long interface_family)
 {
     struct if_family_str  *if_family;
-    int s;
+    int s, ret = 0;
     boolean_t funnel_state;
 
     funnel_state = thread_funnel_set(network_flock, TRUE);
@@ -1567,12 +1590,14 @@ int dlil_dereg_if_modules(u_long interface_family)
 	TAILQ_REMOVE(&if_family_head, if_family, if_fam_next);
 	FREE(if_family, M_IFADDR);
     }	
-    else
+    else {
 	if_family->flags |= DLIL_SHUTDOWN;
+        ret = DLIL_WAIT_FOR_FREE;
+    }
 
     splx(s);
     thread_funnel_set(network_flock, funnel_state);
-    return 0;
+    return ret;
 }
 					    
 	    
@@ -1603,12 +1628,9 @@ dlil_inject_if_input(struct mbuf *m, char *frame_header, u_long from_id)
     struct dlil_filterq_head	 *fhead;
     int				 match_found;
 
-
     dlil_stats.inject_if_in1++;
-    if (from_id > MAX_DLIL_FILTERS)
-	return ERANGE;
 
-    if (dlil_filters[from_id].type != DLIL_IF_FILTER)
+    if (from_id >= dlil_filters_nb || dlil_filters[from_id].type != DLIL_IF_FILTER)
 	return ENOENT;
 
     ifp = dlil_filters[from_id].ifp;
@@ -1741,18 +1763,13 @@ dlil_inject_pr_input(struct mbuf *m, char *frame_header, u_long from_id)
     struct if_proto		 *ifproto = 0;
     int				 match_found;
     struct ifnet		 *ifp;
-    
 
     dlil_stats.inject_pr_in1++;
-    if (from_id > MAX_DLIL_FILTERS)
-	return ERANGE;
-
-    if (dlil_filters[from_id].type != DLIL_PR_FILTER)
+    if (from_id >= dlil_filters_nb || dlil_filters[from_id].type != DLIL_PR_FILTER)
 	return ENOENT;
 
     ifproto = dlil_filters[from_id].proto;
     ifp	  = dlil_filters[from_id].ifp;
-
 
 /*
  * Call any attached protocol filters.
@@ -1815,7 +1832,6 @@ dlil_inject_pr_output(struct mbuf		*m,
     int				 match_found;
     u_long			 dl_tag;
 
-
     dlil_stats.inject_pr_out1++;
     if (raw == 0) { 
 	if (frame_type)
@@ -1829,15 +1845,11 @@ dlil_inject_pr_output(struct mbuf		*m,
 	    return EINVAL;
     }
 
-    if (from_id > MAX_DLIL_FILTERS)
-	return ERANGE;
-
-    if (dlil_filters[from_id].type != DLIL_PR_FILTER)
+    if (from_id >= dlil_filters_nb || dlil_filters[from_id].type != DLIL_PR_FILTER)
 	return ENOENT;
 
     ifp	  = dlil_filters[from_id].ifp;
     dl_tag = dlil_filters[from_id].proto->dl_tag;
-    
 
     frame_type	   = frame_type_buffer;
     dst_linkaddr   = dst_linkaddr_buffer;
@@ -1890,10 +1902,11 @@ dlil_inject_pr_output(struct mbuf		*m,
 #if BRIDGE
     if (do_bridge) {
 	struct mbuf *m0 = m ;
+	struct ether_header *eh = mtod(m, struct ether_header *);
 	
 	if (m->m_pkthdr.rcvif)
 	    m->m_pkthdr.rcvif = NULL ;
-	ifp = bridge_dst_lookup(m);
+	ifp = bridge_dst_lookup(eh);
 	bdg_forward(&m0, ifp);
 	if (m0)
 	    m_freem(m0);
@@ -1956,12 +1969,8 @@ dlil_inject_if_output(struct mbuf *m, u_long from_id)
     struct dlil_filterq_head	 *fhead;
     int				 match_found;
 
-
     dlil_stats.inject_if_out1++;
-    if (from_id > MAX_DLIL_FILTERS)
-	return ERANGE;
-
-    if (dlil_filters[from_id].type != DLIL_IF_FILTER)
+    if (from_id > dlil_filters_nb || dlil_filters[from_id].type != DLIL_IF_FILTER)
 	return ENOENT;
 
     ifp = dlil_filters[from_id].ifp;
@@ -2012,3 +2021,127 @@ dlil_inject_if_output(struct mbuf *m, u_long from_id)
     else 
 	return retval;
 }
+
+static
+int dlil_recycle_ioctl(struct ifnet *ifnet_ptr, u_long ioctl_code, void *ioctl_arg)
+{
+
+    return EOPNOTSUPP;
+}
+
+static
+int dlil_recycle_output(struct ifnet *ifnet_ptr, struct mbuf *m)
+{
+
+    m_freem(m);
+    return 0;
+}
+
+static
+int dlil_recycle_free(struct ifnet *ifnet_ptr)
+{
+    return 0;
+}
+
+static
+int dlil_recycle_set_bpf_tap(struct ifnet *ifp, int mode, 
+			int (*bpf_callback)(struct ifnet *, struct mbuf *))
+{
+    /* XXX not sure what to do here */
+    return 0;
+}
+
+int dlil_if_acquire(u_long family, void *uniqueid, size_t uniqueid_len, 
+			struct ifnet **ifp)
+{
+    struct ifnet	*ifp1 = NULL;
+    struct dlil_ifnet	*dlifp1 = NULL;
+    int	s, ret = 0;
+    boolean_t	funnel_state;
+
+    funnel_state = thread_funnel_set(network_flock, TRUE);
+    s = splnet();
+
+    TAILQ_FOREACH(dlifp1, &dlil_ifnet_head, dl_if_link) {
+        
+        ifp1 = (struct ifnet *)dlifp1;
+            
+		if (ifp1->if_family == family)  {
+        
+            /* same uniqueid and same len or no unique id specified */
+            if ((uniqueid_len == dlifp1->if_uniqueid_len)
+                && !bcmp(uniqueid, dlifp1->if_uniqueid, uniqueid_len)) {
+                
+				/* check for matching interface in use */
+				if (ifp1->if_eflags & IFEF_INUSE) {
+					if (uniqueid_len) {
+						ret = EBUSY;
+						goto end;
+					}
+				}
+				else {
+	
+					ifp1->if_eflags |= (IFEF_INUSE + IFEF_REUSE);
+					*ifp = ifp1;
+					goto end;
+            	}
+            }
+        }
+    }
+
+    /* no interface found, allocate a new one */
+    MALLOC(dlifp1, struct dlil_ifnet *, sizeof(*dlifp1), M_NKE, M_WAITOK);
+    if (dlifp1 == 0) {
+        ret = ENOMEM;
+        goto end;
+    }
+    
+    bzero(dlifp1, sizeof(*dlifp1));
+    
+    if (uniqueid_len) {
+        MALLOC(dlifp1->if_uniqueid, void *, uniqueid_len, M_NKE, M_WAITOK);
+        if (dlifp1->if_uniqueid == 0) {
+            FREE(dlifp1, M_NKE);
+            ret = ENOMEM;
+           goto end;
+        }
+        bcopy(uniqueid, dlifp1->if_uniqueid, uniqueid_len);
+        dlifp1->if_uniqueid_len = uniqueid_len;
+    }
+
+    ifp1 = (struct ifnet *)dlifp1;
+    ifp1->if_eflags |= IFEF_INUSE;
+
+    TAILQ_INSERT_TAIL(&dlil_ifnet_head, dlifp1, dl_if_link);
+     
+     *ifp = ifp1;
+
+end:
+
+    splx(s);
+    thread_funnel_set(network_flock, funnel_state);
+    return ret;
+}
+
+void dlil_if_release(struct ifnet *ifp)
+{
+    struct dlil_ifnet	*dlifp = (struct dlil_ifnet *)ifp;
+    int	s;
+    boolean_t	funnel_state;
+
+    funnel_state = thread_funnel_set(network_flock, TRUE);
+    s = splnet();
+    
+    ifp->if_eflags &= ~IFEF_INUSE;
+    ifp->if_ioctl = dlil_recycle_ioctl;
+    ifp->if_output = dlil_recycle_output;
+    ifp->if_free = dlil_recycle_free;
+    ifp->if_set_bpf_tap = dlil_recycle_set_bpf_tap;
+
+    strncpy(dlifp->if_namestorage, ifp->if_name, IFNAMSIZ);
+    ifp->if_name = dlifp->if_namestorage;
+    
+    splx(s);
+    thread_funnel_set(network_flock, funnel_state);
+}
+

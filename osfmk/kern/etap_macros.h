@@ -55,10 +55,10 @@
 
 #if	ETAP
 
-#include <kern/macro_help.h>
 #include <mach/vm_param.h>
-#include <ipc/ipc_types.h>
 #include <mach/message.h>
+
+#include <kern/macro_help.h>
 
 extern void etap_init_phase1(void);
 extern void etap_init_phase2(void);
@@ -260,6 +260,22 @@ MACRO_END
 #define MON_ASSIGN_PC(t,s,tr)
 #endif /* ETAP_LOCK_MONITOR */
 
+
+#if     ETAP_EVENT_MONITOR
+
+#include <mach/exception_types.h>
+
+#define ETAP_EXCEPTION_PROBE(_f, _th, _ex, _sysnum)             \
+        if (_ex == EXC_SYSCALL) {                               \
+                ETAP_PROBE_DATA(ETAP_P_SYSCALL_UNIX,            \
+                                _f,                             \
+                                _th,                            \
+                                _sysnum,                        \
+                                sizeof(int));                   \
+        }
+#else   /* ETAP_EVENT_MONITOR */
+#define ETAP_EXCEPTION_PROBE(_f, _th, _ex, _sysnum)
+#endif  /* ETAP_EVENT_MONITOR */
 
 #if	ETAP_EVENT_MONITOR
 

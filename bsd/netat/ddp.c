@@ -542,6 +542,14 @@ int ddp_output(mp, src_socket, src_addr_included)
 
 	m = *mp;
 	ddp = (at_ddp_t *)gbuf_rptr(m);
+	
+	if (!ifID) {
+		/* Device/Interface not configured */
+		dPrintf(D_M_DDP, D_L_ERROR, ("Device/Interface not configured"));
+		error = ENXIO;
+		gbuf_freel(*mp);
+		goto exit_ddp_output;
+	}
 
 	if ((ddp->dst_socket > (unsigned) (DDP_SOCKET_LAST + 1)) || 
 	    (ddp->dst_socket < DDP_SOCKET_1st_RESERVED)) {

@@ -22,11 +22,13 @@
 /* IOString.m created by rsulack on Wed 17-Sep-1997 */
 /* IOString.cpp converted to C++ on Tue 1998-9-22 */
 
+#include <string.h>
 
 #include <libkern/c++/OSString.h>
 #include <libkern/c++/OSSerialize.h>
 #include <libkern/c++/OSLib.h>
 #include <libkern/c++/OSData.h>
+#include <string.h>
 
 #define super OSObject
 

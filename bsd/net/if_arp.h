@@ -52,10 +52,13 @@
  * SUCH DAMAGE.
  *
  *	@(#)if_arp.h	8.1 (Berkeley) 6/10/93
+ * $FreeBSD: src/sys/net/if_arp.h,v 1.14.2.1 2000/07/11 20:46:55 archie Exp $
  */
 
 #ifndef _NET_IF_ARP_H_
 #define	_NET_IF_ARP_H_
+#include <sys/appleapiopts.h>
+#include <netinet/in.h>
 
 /*
  * Address Resolution Protocol.
@@ -70,6 +73,7 @@
 struct	arphdr {
 	u_short	ar_hrd;		/* format of hardware address */
 #define ARPHRD_ETHER 	1	/* ethernet hardware format */
+#define ARPHRD_IEEE802	6	/* token-ring hardware format */
 #define ARPHRD_FRELAY 	15	/* frame relay hardware format */
 	u_short	ar_pro;		/* format of protocol address */
 	u_char	ar_hln;		/* length of hardware address */
@@ -108,7 +112,9 @@ struct arpreq {
 #define	ATF_PUBL	0x08	/* publish entry (respond for other host) */
 #define	ATF_USETRAILERS	0x10	/* has requested trailers */
 
+#ifdef __APPLE_API_UNSTABLE
 
+#ifdef __APPLE__
 /*
  * Ethernet multicast address structure.  There is one of these for each
  * multicast address or range of multicast addresses that we are supposed
@@ -132,6 +138,7 @@ struct ether_multi {
 struct ether_multistep {
 	struct ether_multi  *e_enm;
 };
+#endif /* __APPLE__ */
 
 #ifdef KERNEL
 /*
@@ -145,12 +152,18 @@ struct	arpcom {
 	 */
 	struct 	ifnet ac_if;		/* network-visible interface */
 	u_char	ac_enaddr[6];		/* ethernet hardware address */
+#ifdef __APPLE__
 	struct	in_addr ac_ipaddr;	/* copy of ip address- XXX */
 	struct	ether_multi *ac_multiaddrs; /* list of ether multicast addrs */
+#endif
 	int	ac_multicnt;		/* length of ac_multiaddrs list */
+#ifndef __APPLE__
+	void	*ac_netgraph;		/* ng_ether(4) netgraph node info */
+#endif
 };
 
 
 #endif
+#endif /* __APPLE_API_UNSTABLE */
 
 #endif /* !_NET_IF_ARP_H_ */

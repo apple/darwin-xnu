@@ -23,6 +23,7 @@
  * 12 Nov 1998 suurballe  Created.
  */
 
+#include <IOKit/pwr_mgt/IOPM.h>
 #include <IOKit/IOSyncer.h>
 #include "IOPMUADBController.h"
 
@@ -69,7 +70,7 @@ bool IOPMUADBController::start ( IOService * nub )
     waitingForData = NULL;
 
     // Registers for the two interrupts that needs to handle:
-    if (PMUdriver->callPlatformFunction("registerForPMUInterrupts", true, (void*)kPMUADBint, (void*)handleADBInterrupt, (void*)this, NULL) != kIOReturnSuccess) {
+    if (PMUdriver->callPlatformFunction("registerForPMUInterrupts", true, (void*) (kPMUADBint | kPMUenvironmentInt), (void*)handleADBInterrupt, (void*)this, NULL) != kIOReturnSuccess) {
 #ifdef VERBOSE_LOGS_ON
         IOLog("IOPMUADBController::start registerForPMUInterrupts kPMUADBint fails\n");
 #endif // VERBOSE_LOGS_ON
@@ -82,6 +83,8 @@ bool IOPMUADBController::start ( IOService * nub )
     requestMutexLock = IOLockAlloc();
     if (!requestMutexLock)
         return false;
+
+    clamshellOpen = true;
 
     // This happens last (while the most common place is the begin) because
     // trhe superclass may need the services of the functions above.
@@ -105,7 +108,7 @@ void IOPMUADBController::free ( )
 
     // And removes the interrupt handler:
     if (PMUdriver != NULL)
-        PMUdriver->callPlatformFunction("deRegisterClient", true, (void*)this, (void*)kPMUADBint, NULL, NULL);
+        PMUdriver->callPlatformFunction("deRegisterClient", true, (void*)this, (void*)(kPMUADBint | kPMUenvironmentInt), NULL, NULL);
 }
 
 // **********************************************************************************
@@ -144,7 +147,9 @@ IOReturn IOPMUADBController::localSendMiscCommand(int command, IOByteCount sLeng
 
 // **********************************************************************************
 // this is the interrupt handler for all ADB interrupts:
-//
+// A.W.  Added code to check for clamshell status, and block all ADB traffic except 
+//       for POWER key scan code from default ADB keyboard or devices that connect
+//       to that keyboard power button.
 // **********************************************************************************
 
 /* static */ void
@@ -156,8 +161,36 @@ IOPMUADBController::handleADBInterrupt(IOService *client, UInt8 interruptMask, U
     if (myThis == NULL)
         return;
     
+    if (interruptMask & kPMUenvironmentInt)
+    {
+        if (buffer) 
+        {
+            if (*buffer & kClamshellClosedEventMask)
+                myThis->clamshellOpen = false;
+            else
+                myThis->clamshellOpen = true;
+        }
+        if ( !(interruptMask & kPMUautopoll))
+        {
+            return;   //Nothing left to do
+        }
+    }
     if ((interruptMask & kPMUautopoll) && (myThis->autopollOn))
-        autopollHandler(client, buffer[0], length - 1, buffer + 1); // yes, call adb input handler
+    {
+        if (myThis->clamshellOpen)
+	{
+            autopollHandler(client, buffer[0], length - 1, buffer + 1); // yes, call adb input handler
+	}
+	else if ( (buffer[0] == 0x2c) && (buffer[1] == 0x7f) && (buffer[2] == 0x7f))
+	{
+            autopollHandler(client, buffer[0], length - 1, buffer + 1); // POWER down
+	}
+	else if ( (buffer[0] == 0x2c) && (buffer[1] == 0xff) && (buffer[2] == 0xff))
+	{
+            autopollHandler(client, buffer[0], length - 1, buffer + 1); // POWER up
+	}
+
+    }
     else {
         if (myThis->waitingForData != NULL) {
             // Complets the adb transaction

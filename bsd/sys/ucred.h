@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2002 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -58,8 +58,10 @@
 #ifndef _SYS_UCRED_H_
 #define	_SYS_UCRED_H_
 
+#include <sys/appleapiopts.h>
 #include <sys/param.h>
 
+#ifdef __APPLE_API_UNSTABLE
 /*
  * Credentials.
  */
@@ -85,6 +87,8 @@ struct ucred	*crdup __P((struct ucred *cr));
 void		crfree __P((struct ucred *cr));
 struct ucred	*crget __P((void));
 int		suser __P((struct ucred *cred, u_short *acflag));
+
 #endif /* KERNEL */
+#endif /* __APPLE_API_UNSTABLE */
 
 #endif /* !_SYS_UCRED_H_ */

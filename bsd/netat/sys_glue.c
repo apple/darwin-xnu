@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2002 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -393,10 +393,12 @@ int _ATrw(fp, rw, uio, ext)
   return 0;
 } /* _ATrw */
 
-int _ATread(fp, uio, cred)
+int _ATread(fp, uio, cred, flags, p)
 	void *fp;
 	struct uio *uio;
 	void *cred;
+	int flags;
+	struct proc *p;
 {
      int stat;
 
@@ -406,10 +408,12 @@ int _ATread(fp, uio, cred)
 	return stat;
 }
 
-int _ATwrite(fp, uio, cred)
+int _ATwrite(fp, uio, cred, flags, p)
 	void *fp;
 	struct uio *uio;
 	void *cred;
+	int flags;
+	struct proc *p;
 {
      int stat;
 
@@ -650,7 +654,7 @@ void atalk_putnext(gref, m)
 #ifdef APPLETALK_DEBUG
 				kprintf("wakeup gref = 0x%x\n", (unsigned)gref);
 #endif
-				thread_wakeup(&gref->iocevent);
+				wakeup(&gref->iocevent);
 			}
 		}
 		break;
@@ -669,7 +673,7 @@ void atalk_putnext(gref, m)
 			gref->rdhead = m;
 			if (gref->sevents & POLLMSG) {
 				gref->sevents &= ~POLLMSG;
-				thread_wakeup(&gref->event);
+				wakeup(&gref->event);
 			}
 			if (gref->sevents & POLLIN) {
 				gref->sevents &= ~POLLIN;
@@ -686,7 +690,7 @@ void atalk_enablew(gref)
 	gref_t *gref;
 {
 	if (gref->sevents & POLLSYNC)
-		thread_wakeup(&gref->event);
+		wakeup(&gref->event);
 }
 
 void atalk_flush(gref)
@@ -737,7 +741,7 @@ void atalk_notify(gref, errno)
 		/* blocked read */
 		if (gref->sevents & POLLMSG) {
 			gref->sevents &= ~POLLMSG;
-			thread_wakeup(&gref->event);
+			wakeup(&gref->event);
 		}
 		/* select */
 		if (gref->sevents & POLLIN) {

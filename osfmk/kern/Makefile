@@ -19,6 +19,7 @@ EXPORT_ONLY_FILES = \
 	kalloc.h \
 	kern_types.h \
 	lock.h \
+	ledger.h \
 	host.h \
 	mach_param.h \
 	macro_help.h \

@@ -19,5 +19,11 @@
  * 
  * @APPLE_LICENSE_HEADER_END@
  */
+#warning include <dev/machine/evsio.h> is going away use <IOKit/hidsystem/IOHIDTypes.h> instead
+
+#include <sys/appleapiopts.h>
+
+#ifdef __APPLE_API_OBSOLETE
 #include <dev/evsio.h>
+#endif /* __APPLE_API_OBSOLETE */
 

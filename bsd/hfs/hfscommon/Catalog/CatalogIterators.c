@@ -63,7 +63,6 @@
 #include	"../headers/FileMgrInternal.h"
 #include	"../headers/BTreesInternal.h"
 #include	"../headers/CatalogPrivate.h"
-#include	"../headers/HFSInstrumentation.h"
 
 
 #include <sys/param.h>
@@ -133,10 +132,6 @@ InitCatalogCache(void)
 
 	cacheSize = sizeof(CatalogCacheGlobals) + ( kCatalogIteratorCount * sizeof(CatalogIterator) );
 	cacheGlobals = (CatalogCacheGlobals *) NewPtrSysClear( cacheSize );
-
-	err = MemError();
-	if (err != noErr)
-		return err;
 
 	cacheGlobals->iteratorCount = kCatalogIteratorCount;
 
@@ -325,114 +320,6 @@ ReleaseCatalogIterator( CatalogIterator* catalogIterator)
 //				be called to unlock it.
 //
 //_______________________________________________________________________________
-CatalogIterator*
-oGetCatalogIterator( const ExtendedVCB *volume, HFSCatalogNodeID folderID, UInt16 index)
-{
-	CatalogCacheGlobals *	cacheGlobals = GetCatalogCacheGlobals();
-	CatalogIterator *		iterator;
-	CatalogIterator *		bestIterator;
-	UInt16					bestDelta;
-	Boolean					newIterator = false;
-
-
-	LogStartTime(kGetCatalogIterator);	
-	
-	bestDelta = 0xFFFF;				// assume the best thing is to start from scratch
-	bestIterator = nil;
-
-	CATALOG_ITER_LIST_LOCK(cacheGlobals);
-
-	for ( iterator = cacheGlobals->mru ; iterator != nil ; iterator = iterator->nextMRU )
-	{
-		UInt16	delta;
-		UInt16	iteratorIndex;
-	
-		// first make sure volume, folder id and type matches
-		if ( (iterator->volume != volume) ||
-			 (iterator->folderID != folderID) || 
-                         (iterator->currentIndex == 0xFFFFFFFF))
-		{
-			continue;
-		}
-
-		if ( CI_SLEEPLESS_LOCK(iterator) == EBUSY )		/* ignore busy iterators */
-		{
-			//PRINTIT(" GetCatalogIterator: busy v=%d, d=%ld, i=%d\n", volume, folderID, iterator->currentIndex);
-			continue;
-		}
-	
-			iteratorIndex = iterator->currentIndex;	
-	
-		// we matched volume, folder id and type, now check the index
-		if ( iteratorIndex == index )
-		{
-			bestDelta = 0;
-			bestIterator = iterator;	// we scored! - so get out of this loop
-			break;						// break with iterator locked
-		}
-
-		// calculate how far this iterator is from the requested index
-		if ( index > iteratorIndex )
-			delta = index - iteratorIndex;
-		else
-			delta = iteratorIndex - index;
-
-		
-		// remember the best iterator so far (there could be more than one)
-		if ( delta < bestDelta )
-		{
-			bestDelta = delta;			// we found a better one!
-			bestIterator = iterator;	// so remember it
-			if ( delta == 1 )			// just one away is good enough!
-				break;					// break with iterator locked
-		}
-
-		(void) CI_UNLOCK(iterator);		// unlock iterator before moving to the next one
-
-	} // end for
-
-
-	// check if we didn't get one or if the one we got is too far away...
-	if ( (bestIterator == nil) || (index < bestDelta) )
-	{
-		bestIterator = cacheGlobals->lru;					// start over with a new iterator
-
-		//PRINTIT(" GetCatalogIterator: recycle v=%d, d=%ld, i=%d\n", bestIterator->volRefNum, bestIterator->folderID, bestIterator->currentIndex);
-		(void) CI_LOCK_FROM_LIST(cacheGlobals, bestIterator);	// XXX we should not eat the error!
-	
-		CATALOG_ITER_LIST_LOCK(cacheGlobals);				// grab the lock again for MRU Insert below...
-
-		bestIterator->volume = volume;				// update the iterator's volume
-		bestIterator->folderID = folderID;					// ... and folderID
-		bestIterator->currentIndex = 0;						// ... and offspring index marker
-		
-		bestIterator->btreeNodeHint = 0;
-		bestIterator->btreeIndexHint = 0;
-		bestIterator->parentID = folderID;					// set key to folderID + empty name
-		bestIterator->folderName.unicodeName.length = 0;	// clear pascal/unicode name
-
-		if ( volume->vcbSigWord == kHFSPlusSigWord )
-			bestIterator->nameType = kShortUnicodeName;
-		else
-			bestIterator->nameType = kShortPascalName;
-
-		newIterator = true;
-	}
-	else {
-		//PRINTIT(" GetCatalogIterator: found v=%d, d=%ld, i=%d\n", bestIterator->volRefNum, bestIterator->folderID, bestIterator->currentIndex);
-		}
-
-	// put this iterator at the front of the list
-	InsertCatalogIteratorAsMRU( cacheGlobals, bestIterator );
-
-	CATALOG_ITER_LIST_UNLOCK(cacheGlobals);
-	
-	LogEndTime(kGetCatalogIterator, newIterator);
-
-	return bestIterator;	// return our best shot
-
-} // end oGetCatalogIterator
-
 
 CatalogIterator*
 GetCatalogIterator(ExtendedVCB *volume, HFSCatalogNodeID folderID, UInt32 offset)

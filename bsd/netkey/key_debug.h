@@ -1,4 +1,4 @@
-/*	$KAME: key_debug.h,v 1.5 2000/03/25 07:24:12 sumikawa Exp $	*/
+/*	$KAME: key_debug.h,v 1.7 2000/07/04 04:08:16 itojun Exp $	*/
 
 /*
  * Copyright (C) 1995, 1996, 1997, and 1998 WIDE Project.
@@ -31,6 +31,7 @@
 
 #ifndef _NETKEY_KEY_DEBUG_H_
 #define _NETKEY_KEY_DEBUG_H_
+#include <sys/appleapiopts.h>
 
 #if !defined(KERNEL) || (defined(KERNEL) && defined(IPSEC_DEBUG))
 
@@ -55,16 +56,15 @@
 
 #define KEYDEBUG(lev,arg) if ((key_debug_level & (lev)) == (lev)) { arg; }
 
-#ifdef KERNEL
-extern u_int32_t key_debug_level;
-#endif /*KERNEL*/
-
 struct sadb_msg;
 struct sadb_ext;
 extern void kdebug_sadb __P((struct sadb_msg *));
 extern void kdebug_sadb_x_policy __P((struct sadb_ext *));
 
 #ifdef KERNEL
+#ifdef __APPLE_API_PRIVATE
+extern u_int32_t key_debug_level;
+
 struct secpolicy;
 struct secpolicyindex;
 struct secasindex;
@@ -77,19 +77,20 @@ extern void kdebug_secasindex __P((struct secasindex *));
 extern void kdebug_secasv __P((struct secasvar *));
 extern void kdebug_mbufhdr __P((struct mbuf *));
 extern void kdebug_mbuf __P((struct mbuf *));
+#endif /* __APPLE_API_PRIVATE */
 #endif /*KERNEL*/
 
 struct sockaddr;
 extern void kdebug_sockaddr __P((struct sockaddr *));
+
+extern void ipsec_hexdump __P((caddr_t, int));
+extern void ipsec_bindump __P((caddr_t, int));
 
 #else
 
 #define KEYDEBUG(lev,arg)
 
 #endif /*!defined(KERNEL) || (defined(KERNEL) && defined(IPSEC_DEBUG))*/
-
-extern void ipsec_hexdump __P((caddr_t, int));
-extern void ipsec_bindump __P((caddr_t, int));
 
 #endif /* _NETKEY_KEY_DEBUG_H_ */
 

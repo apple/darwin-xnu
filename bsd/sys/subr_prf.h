@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2002 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -57,14 +57,15 @@
  * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
  * SUCH DAMAGE.
  *
- * HISTORY
- * 23-Oct-1995	Doug Mitchell at NeXT
- *	Split out from subr_prf.c
  */
-#ifdef	KERNEL_PRIVATE
-
 #ifndef _SYS_SUBRPRF_H_
 #define _SYS_SUBRPRF_H_
+
+#include <sys/appleapiopts.h>
+
+#ifdef	KERNEL_PRIVATE
+
+#ifdef __APPLE_API_PRIVATE
 
 /*
  * "flags" argument to prf().
@@ -76,7 +77,8 @@
 
 extern int prf(const char *fmt, va_list ap, int flags, struct tty *ttyp);
 
-#endif /* ! _SYS_SUBRPRF_H_ */
-
+#endif /* __APPLE_API_PRIVATE */
 #endif	/* KERNEL_PRIVATE */
+
+#endif /* ! _SYS_SUBRPRF_H_ */
 

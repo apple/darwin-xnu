@@ -51,14 +51,15 @@ extern void printf(const char *fmt, ...);
 
 extern void bcopy_nc(char *from, char *to, int size); /* uncached-safe */
 extern void bcopy_phys(char *from, char *to, int size); /* Physical to physical copy (ints must be disabled) */
+extern void bcopy_physvir(char *from, char *to, int size); /* Physical to physical copy virtually (ints must be disabled) */
 
 extern void ppc_init(boot_args *args);
-extern struct ppc_saved_state *enterDebugger(unsigned int trap,
-				      struct ppc_saved_state *state,
+extern struct savearea *enterDebugger(unsigned int trap,
+				      struct savearea *state,
 				      unsigned int dsisr);
 
+extern void draw_panic_dialog(void);
 extern void ppc_vm_init(unsigned int mem_size, boot_args *args);
-extern void regDump(struct ppc_saved_state *state);
 
 extern void autoconf(void);
 extern void machine_init(void);
@@ -75,7 +76,6 @@ extern void disable_bluebox_internal(thread_act_t act);
 extern void db_interrupt_enable(void);
 extern void db_interrupt_disable(void);
 #endif	/* MACH_KDB */
-extern void amic_init(void);
 
 extern void phys_zero(vm_offset_t, vm_size_t);
 extern void phys_copy(vm_offset_t, vm_offset_t, vm_size_t);
@@ -86,6 +86,11 @@ extern struct thread_shuttle *Switch_context(struct thread_shuttle   *old,
 				      void                    (*cont)(void),
 				      struct thread_shuttle   *new);
 
+extern void fpu_save(struct facility_context *);
+extern void vec_save(struct facility_context *);
+extern void toss_live_fpu(struct facility_context *);
+extern void toss_live_vec(struct facility_context *);
+
 extern int nsec_to_processor_clock_ticks(int nsec);
 
 extern void tick_delay(int ticks);
@@ -95,7 +100,6 @@ extern void tick_delay(int ticks);
 #endif	/* DEBUG */
 
 #if MACH_ASSERT
-extern void dump_pcb(pcb_t pcb);
 extern void dump_thread(thread_t th);
 #endif 
 

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2002 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -63,10 +63,12 @@
 #ifndef _SYS_TTY_H_
 #define	_SYS_TTY_H_
 
+#include <sys/appleapiopts.h>
 #include <sys/cdefs.h>
-
 #include <sys/termios.h>
 #include <sys/select.h>		/* For struct selinfo. */
+
+#ifdef __APPLE_API_UNSTABLE
 
 #ifndef __APPLE__
 /*
@@ -155,6 +157,7 @@ struct tty {
 #define	t_ospeed	t_termios.c_ospeed
 #define	t_time		t_termios.c_time
 
+
 #define	TTIPRI	25			/* Sleep priority for tty reads. */
 #define	TTOPRI	26			/* Sleep priority for tty writes. */
 
@@ -214,6 +217,7 @@ struct tty {
 #define	TS_DSR_OFLOW	0x800000	/* For CDSR_OFLOW. */
 #endif
 
+
 /* Character type information. */
 #define	ORDINARY	0
 #define	CONTROL		1
@@ -259,6 +263,7 @@ struct speedtab {
 #define	TSA_PTC_READ(tp)	((void *)&(tp)->t_outq.c_cf)
 #define	TSA_PTC_WRITE(tp)	((void *)&(tp)->t_rawq.c_cl)
 #define	TSA_PTS_READ(tp)	((void *)&(tp)->t_canq)
+
 
 #ifdef KERNEL
 __BEGIN_DECLS
@@ -340,5 +345,7 @@ void     ttyfree __P((struct tty *));
 __END_DECLS
 
 #endif /* KERNEL */
+
+#endif /* __APPLE_API_UNSTABLE */
 
 #endif /* !_SYS_TTY_H_ */

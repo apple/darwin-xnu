@@ -19,7 +19,7 @@
  * 
  * @APPLE_LICENSE_HEADER_END@
  */
-/*	$KAME: ip6.h,v 1.6 2000/02/26 12:53:07 jinmei Exp $	*/
+/*	$KAME: ip6.h,v 1.18 2001/03/29 05:34:30 itojun Exp $*/
 
 /*
  * Copyright (C) 1995, 1996, 1997, and 1998 WIDE Project.
@@ -87,6 +87,7 @@
 
 #ifndef _NETINET_IP6_H_
 #define _NETINET_IP6_H_
+#include <sys/appleapiopts.h>
 
 /*
  * Definition for internet protocol version 6.
@@ -105,7 +106,7 @@ struct ip6_hdr {
 	} ip6_ctlun;
 	struct in6_addr ip6_src;	/* source address */
 	struct in6_addr ip6_dst;	/* destination address */
-};
+} __attribute__((__packed__));
 
 #define ip6_vfc		ip6_ctlun.ip6_un2_vfc
 #define ip6_flow	ip6_ctlun.ip6_un1.ip6_un1_flow
@@ -137,9 +138,9 @@ struct ip6_hdr {
  */
 
 struct	ip6_ext {
-	u_char	ip6e_nxt;
-	u_char	ip6e_len;
-};
+	u_int8_t ip6e_nxt;
+	u_int8_t ip6e_len;
+} __attribute__((__packed__));
 
 /* Hop-by-Hop options header */
 /* XXX should we pad it to force alignment on an 8-byte boundary? */
@@ -147,7 +148,7 @@ struct ip6_hbh {
 	u_int8_t ip6h_nxt;	/* next header */
 	u_int8_t ip6h_len;	/* length in units of 8 octets */
 	/* followed by options */
-};
+} __attribute__((__packed__));
 
 /* Destination options header */
 /* XXX should we pad it to force alignment on an 8-byte boundary? */
@@ -155,7 +156,7 @@ struct ip6_dest {
 	u_int8_t ip6d_nxt;	/* next header */
 	u_int8_t ip6d_len;	/* length in units of 8 octets */
 	/* followed by options */
-};
+} __attribute__((__packed__));
 
 /* Option types and related macros */
 #define IP6OPT_PAD1		0x00	/* 00 0 00000 */
@@ -164,7 +165,6 @@ struct ip6_dest {
 #define IP6OPT_NSAP_ADDR	0xC3	/* 11 0 00011 */
 #define IP6OPT_TUNNEL_LIMIT	0x04	/* 00 0 00100 */
 #define IP6OPT_RTALERT		0x05	/* 00 0 00101 (KAME definition) */
-#define IP6OPT_ROUTER_ALERT	0x05	/* (2292bis def, recommended) */
 
 #define IP6OPT_RTALERT_LEN	4
 #define IP6OPT_RTALERT_MLD	0	/* Datagram contains an MLD message */
@@ -172,11 +172,11 @@ struct ip6_dest {
 #define IP6OPT_RTALERT_ACTNET	2 	/* contains an Active Networks msg */
 #define IP6OPT_MINLEN		2
 
-#define IP6OPT_BINDING_UPDATE	0xc6 /* 11 0 00110 */
-#define IP6OPT_BINDING_ACK	0x07 /* 00 0 00111 */
-#define IP6OPT_BINDING_REQ	0x08 /* 00 0 01000 */
-#define IP6OPT_HOME_ADDRESS	0xc9 /* 11 0 01001 */
-#define IP6OPT_EID		0x8a /* 10 0 01010 */
+#define IP6OPT_BINDING_UPDATE	0xc6	/* 11 0 00110 */
+#define IP6OPT_BINDING_ACK	0x07	/* 00 0 00111 */
+#define IP6OPT_BINDING_REQ	0x08	/* 00 0 01000 */
+#define IP6OPT_HOME_ADDRESS	0xc9	/* 11 0 01001 */
+#define IP6OPT_EID		0x8a	/* 10 0 01010 */
 
 #define IP6OPT_TYPE(o)		((o) & 0xC0)
 #define IP6OPT_TYPE_SKIP	0x00
@@ -186,99 +186,7 @@ struct ip6_dest {
 
 #define IP6OPT_MUTABLE		0x20
 
-/* IPv6 options: common part */
-struct ip6_opt {
-	u_int8_t ip6o_type;
-	u_int8_t ip6o_len;
-};
-
-/* Jumbo Payload Option */
-struct ip6_opt_jumbo {
-	u_int8_t ip6oj_type;
-	u_int8_t ip6oj_len;
-	u_int8_t ip6oj_jumbo_len[4];
-};
-#define IP6OPT_JUMBO_LEN 6
-
-/* NSAP Address Option */
-struct ip6_opt_nsap {
-	u_int8_t ip6on_type;
-	u_int8_t ip6on_len;
-	u_int8_t ip6on_src_nsap_len;
-	u_int8_t ip6on_dst_nsap_len;
-	/* followed by source NSAP */
-	/* followed by destination NSAP */
-};
-
-/* Tunnel Limit Option */
-struct ip6_opt_tunnel {
-	u_int8_t ip6ot_type;
-	u_int8_t ip6ot_len;
-	u_int8_t ip6ot_encap_limit;
-};
-
-/* Router Alert Option */
-struct ip6_opt_router {
-	u_int8_t ip6or_type;
-	u_int8_t ip6or_len;
-	u_int8_t ip6or_value[2];
-};
-/* Router alert values (in network byte order) */
-#if BYTE_ORDER == BIG_ENDIAN
-#define IP6_ALERT_MLD	0x0000
-#define IP6_ALERT_RSVP	0x0001
-#define IP6_ALERT_AN	0x0002
-#else
-#if BYTE_ORDER == LITTLE_ENDIAN
-#define IP6_ALERT_MLD	0x0000
-#define IP6_ALERT_RSVP	0x0100
-#define IP6_ALERT_AN	0x0200
-#endif /* LITTLE_ENDIAN */
-#endif
-
-/* Binding Update Option */
-struct ip6_opt_binding_update {
-	u_int8_t ip6ou_type;
-	u_int8_t ip6ou_len;
-	u_int8_t ip6ou_flags;
-	u_int8_t ip6ou_prefixlen;
-	u_int8_t ip6ou_seqno[2];
-	u_int8_t ip6ou_lifetime[4];
-	u_int8_t ip6ou_coa[16];/* Optional based on flags */
-	/* followed by sub-options */
-};
-
-/* Binding Update Flags */
-#define IP6_BUF_ACK	0x80	/* Request a binding ack */
-#define IP6_BUF_HOME	0x40	/* Home Registration */
-#define IP6_BUF_COA	0x20	/* Care-of-address present in option */
-#define IP6_BUF_ROUTER	0x10	/* Sending mobile node is a router */
-
-/* Binding Ack Option */
-struct ip6_opt_binding_ack {
-	u_int8_t ip6oa_type;
-	u_int8_t ip6oa_len;
-	u_int8_t ip6oa_status;
-	u_int8_t ip6oa_seqno[2];
-	u_int8_t ip6oa_lifetime[4];
-	u_int8_t ip6oa_refresh[4];
-	/* followed by sub-options */
-};
-
-/* Binding Request Option */
-struct ip6_opt_binding_request {
-	u_int8_t ip6or_type;
-	u_int8_t ip6or_len;
-	/* followed by sub-options */
-};
-
-/* Home Address Option */
-struct ip6_opt_home_address {
-    u_int8_t ip6oh_type;
-    u_int8_t ip6oh_len;
-    u_int8_t ip6oh_addr[16];/* Home Address */
-      /* followed by sub-options */
-};
+#define IP6OPT_JUMBO_LEN	6
 
 /* Routing header */
 struct ip6_rthdr {
@@ -287,7 +195,7 @@ struct ip6_rthdr {
 	u_int8_t  ip6r_type;	/* routing type */
 	u_int8_t  ip6r_segleft;	/* segments left */
 	/* followed by routing type specific data */
-};
+} __attribute__((__packed__));
 
 /* Type 0 Routing header */
 struct ip6_rthdr0 {
@@ -295,13 +203,10 @@ struct ip6_rthdr0 {
 	u_int8_t  ip6r0_len;		/* length in units of 8 octets */
 	u_int8_t  ip6r0_type;		/* always zero */
 	u_int8_t  ip6r0_segleft;	/* segments left */
-	u_int32_t  ip6r0_reserved;	/* reserved field */
-	/* followed by up to 127 struct in6_addr */
-
-#ifdef COMPAT_RFC2292
-	struct in6_addr  ip6r0_addr[1];	/* up to 127 addresses */
-#endif
-};
+	u_int8_t  ip6r0_reserved;	/* reserved field */
+	u_int8_t  ip6r0_slmap[3];	/* strict/loose bit map */
+	struct in6_addr  ip6r0_addr[1];	/* up to 23 addresses */
+} __attribute__((__packed__));
 
 /* Fragment header */
 struct ip6_frag {
@@ -309,7 +214,7 @@ struct ip6_frag {
 	u_int8_t  ip6f_reserved;	/* reserved field */
 	u_int16_t ip6f_offlg;		/* offset, reserved, and flag */
 	u_int32_t ip6f_ident;		/* identification */
-};
+} __attribute__((__packed__));
 
 #if BYTE_ORDER == BIG_ENDIAN
 #define IP6F_OFF_MASK		0xfff8	/* mask out offset from _offlg */
@@ -333,6 +238,7 @@ struct ip6_frag {
 #define IPV6_MAXPACKET	65535	/* ip6 max packet size without Jumbo payload*/
 
 #ifdef KERNEL
+#ifdef __APPLE_API_PRIVATE
 /*
  * IP6_EXTHDR_CHECK ensures that region between the IP6 header and the
  * target header (including IPv6 itself, extension headers and
@@ -363,8 +269,7 @@ do {									\
 			return ret;					\
 		}							\
 	}								\
-    }									\
-    else {								\
+    } else {								\
 	if ((m)->m_len < (off) + (hlen)) {				\
 		ip6stat.ip6s_tooshort++;				\
 		in6_ifstat_inc(m->m_pkthdr.rcvif, ifs6_in_truncated);	\
@@ -388,7 +293,6 @@ do {									\
 do {									\
 	struct mbuf *t;							\
 	int tmp;							\
-	ip6stat.ip6s_exthdrget++;					\
 	if ((m)->m_len >= (off) + (len))				\
 		(val) = (typ)(mtod((m), caddr_t) + (off));		\
 	else {								\
@@ -407,7 +311,6 @@ do {									\
 #define IP6_EXTHDR_GET0(val, typ, m, off, len) \
 do {									\
 	struct mbuf *t;							\
-	ip6stat.ip6s_exthdrget0++;					\
 	if ((off) == 0)							\
 		(val) = (typ)mtod(m, caddr_t);				\
 	else {								\
@@ -422,6 +325,7 @@ do {									\
 		}							\
 	}								\
 } while (0)
+#endif /* __APPLE_API_PRIVATE */
 #endif /*KERNEL*/
 
 #endif /* not _NETINET_IP6_H_ */

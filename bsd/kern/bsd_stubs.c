@@ -47,8 +47,6 @@ kmem_mb_alloc(vm_map_t  mbmap, int size)
 }
 
 pcb_synch() {}
-unix_master() {}
-unix_release() {}
 
 struct proc *
 current_proc(void)
@@ -123,7 +121,8 @@ bdevsw_add(int index, struct bdevsw * bsw)
 
 	if (index == -1) {
 	    devsw = bdevsw;
-	    for(index=0; index < nblkdev; index++, devsw++) {
+	    /* yes, start at 1 to avoid collision with volfs (Radar 2842228) */
+	    for(index=1; index < nblkdev; index++, devsw++) {
 		if(memcmp((char *)devsw, 
 			    (char *)&nobdev, 
 			    sizeof(struct bdevsw)) == 0)
@@ -238,7 +237,28 @@ cdevsw_remove(int index, struct cdevsw * csw)
 	return(index);
 }
 
-int
+static int
+cdev_set_bdev(int cdev, int bdev)
+{
+	extern int chrtoblk_add(int cdev, int bdev);
+
+	return (chrtoblk_set(cdev, bdev));
+}
+
+int  
+cdevsw_add_with_bdev(int index, struct cdevsw * csw, int bdev)
+{
+	index = cdevsw_add(index, csw);
+	if (index < 0) {
+		return (index);
+	}
+	if (cdev_set_bdev(index, bdev) < 0) {
+		cdevsw_remove(index, csw);
+		return (-1);
+	}
+	return (index);
+}
+
 issingleuser(void)
 {
 	char namep[16];

@@ -17,17 +17,3 @@ iokit/Drivers/platform/drvAppleIntelClock/IntelClock.cpp    optional iokitcpp
 
 # Power Domains
 iokit/Drivers/platform/drvAppleRootDomain/RootDomain.cpp    optional iokitcpp
-
-# ATA support
-iokit/Families/IOATAStandard/IOATAStandardController.cpp       optional iokitcpp
-iokit/Families/IOATAStandard/IOATAStandardDevice.cpp           optional iokitcpp
-iokit/Families/IOATAStandard/IOATAStandardCommand.cpp          optional iokitcpp
-iokit/Families/IOATAStandard/IOATAStandardData.cpp             optional iokitcpp
-iokit/Families/IOATAStandard/ATAQueueHelpers.cpp               optional iokitcpp
-
-iokit/Families/IOATAStandard/IOATAStandardDriver.cpp            optional iokitcpp
-iokit/Families/IOATAStandard/IOATAStandardDriverPio.cpp         optional iokitcpp
-iokit/Families/IOATAStandard/IOATAStandardDriverDma.cpp         optional iokitcpp
-
-# ATA (Intel PIIX IDE) controller driver
-iokit/Drivers/ata/drvApplePIIXATA/AppleATAPIIX.cpp              optional iokitcpp

@@ -1,5 +1,6 @@
 #include <libsa/vers_rsrc.h>
 #include <sys/systm.h>
+#include <libkern/OSByteOrder.h>
 
 
 int isdigit(char c) {
@@ -58,8 +59,8 @@ char BCD_char_for_digit(UInt8 digit) {
 }
 
 
-VERS_revision VERS_revision_for_string(char ** string_p) {
-    char * string;
+VERS_revision VERS_revision_for_string(const char ** string_p) {
+    const char * string;
 
     if (!string_p || !*string_p) {
         return VERS_invalid;
@@ -113,7 +114,7 @@ VERS_revision VERS_revision_for_string(char ** string_p) {
 int VERS_parse_string(const char * vers_string, UInt32 * version_num) {
     int result = 1;
     VERS_version vers;
-    char * current_char_p;
+    const char * current_char_p;
     UInt8  scratch;
 
     if (!vers_string || *vers_string == '\0') {
@@ -293,7 +294,7 @@ release_state:
     }
 
 finish:
-    *version_num = vers.vnum;
+    *version_num = OSSwapBigToHostInt32(vers.vnum);
     return result;
 }
 
@@ -310,7 +311,7 @@ int VERS_string(char * buffer, UInt32 length, UInt32 vers) {
     char minor;
     char bugfix;
 
-    version.vnum = vers;
+    version.vnum = OSSwapHostToBigInt32(vers);
 
    /* No buffer, length less than longest possible vers string,
     * return 0.

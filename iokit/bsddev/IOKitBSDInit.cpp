@@ -528,4 +528,35 @@ kern_return_t IOFindBSDRoot( char * rootName,
     return( kIOReturnSuccess );
 }
 
+void *
+IOBSDRegistryEntryForDeviceTree(char * path)
+{
+    return (IORegistryEntry::fromPath(path, gIODTPlane));
+}
+
+void
+IOBSDRegistryEntryRelease(void * entry)
+{
+    IORegistryEntry * regEntry = (IORegistryEntry *)entry;
+
+    if (regEntry)
+	regEntry->release();
+    return;
+}
+
+const void *
+IOBSDRegistryEntryGetData(void * entry, char * property_name, 
+			  int * packet_length)
+{
+    OSData *		data;
+    IORegistryEntry * 	regEntry = (IORegistryEntry *)entry;
+
+    data = (OSData *) regEntry->getProperty(property_name);
+    if (data) {
+	*packet_length = data->getLength();
+        return (data->getBytesNoCopy());
+    }
+    return (NULL);
+}
+
 } /* extern "C" */

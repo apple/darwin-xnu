@@ -63,6 +63,20 @@
 	 * Should be rewritten in asm anyway.
 	 */
 
+
+
+/*
+ *              Copies data from a physical page to a virtual page.  This is used to
+ *              move data from the kernel to user state.
+ *
+ */
+
+kern_return_t
+copyp2v(char *from, char *to, unsigned int size) {
+
+  return(copyout(phystokv(from), to, size));
+}
+
 /*
  * bcopy_phys - like bcopy but copies from/to physical addresses.
  *              this is trivial since all phys mem is mapped into 
@@ -152,6 +166,85 @@ strlen(
 	while (*string++ != '\0')
 		continue;
 	return string - 1 - ret;
+}
+
+#include <libkern/OSAtomic.h>
+
+uint32_t
+hw_atomic_add(
+	uint32_t	*dest,
+	uint32_t	delt)
+{
+	uint32_t	oldValue;
+	uint32_t	newValue;
+	
+	do {
+		oldValue = *dest;
+		newValue = (oldValue + delt);
+	} while (!OSCompareAndSwap((UInt32)oldValue,
+									(UInt32)newValue, (UInt32 *)dest));
+	
+	return newValue;
+}
+
+uint32_t
+hw_atomic_sub(
+	uint32_t	*dest,
+	uint32_t	delt)
+{
+	uint32_t	oldValue;
+	uint32_t	newValue;
+	
+	do {
+		oldValue = *dest;
+		newValue = (oldValue - delt);
+	} while (!OSCompareAndSwap((UInt32)oldValue,
+									(UInt32)newValue, (UInt32 *)dest));
+	
+	return newValue;
+}
+
+uint32_t
+hw_atomic_or(
+	uint32_t	*dest,
+	uint32_t	mask)
+{
+	uint32_t	oldValue;
+	uint32_t	newValue;
+	
+	do {
+		oldValue = *dest;
+		newValue = (oldValue | mask);
+	} while (!OSCompareAndSwap((UInt32)oldValue,
+									(UInt32)newValue, (UInt32 *)dest));
+	
+	return newValue;
+}
+
+uint32_t
+hw_atomic_and(
+	uint32_t	*dest,
+	uint32_t	mask)
+{
+	uint32_t	oldValue;
+	uint32_t	newValue;
+	
+	do {
+		oldValue = *dest;
+		newValue = (oldValue & mask);
+	} while (!OSCompareAndSwap((UInt32)oldValue,
+									(UInt32)newValue, (UInt32 *)dest));
+	
+	return newValue;
+}
+
+uint32_t
+hw_compare_and_store(
+	uint32_t	oldval,
+	uint32_t	newval,
+	uint32_t	*dest)
+{
+	return OSCompareAndSwap((UInt32)oldval, (UInt32)newval, (UInt32 *)dest);
 }
 
 #if	MACH_ASSERT

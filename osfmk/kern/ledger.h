@@ -25,9 +25,18 @@
 #ifndef _KERN_LEDGER_H_
 #define _KERN_LEDGER_H_
 
-#include <kern/lock.h>
-#include <ipc/ipc_port.h>
+
 #include <mach/mach_types.h>
+#include <ipc/ipc_port.h>
+
+#include <sys/appleapiopts.h>
+
+#ifdef	__APPLE_API_PRIVATE
+
+#ifdef MACH_KERNEL_PRIVATE
+
+#include <kern/lock.h>
+#include <mach/etap_events.h>
 
 #define LEDGER_ITEM_INFINITY	(~0)
 
@@ -43,8 +52,6 @@ struct ledger {
 
 typedef struct ledger ledger_data_t;
 
-#define LEDGER_NULL ((ledger_t)0)
-
 #define ledger_lock(ledger)	simple_lock(&(ledger)->lock)
 #define ledger_unlock(ledger)	simple_unlock(&(ledger)->lock)
 #define	ledger_lock_init(ledger) \
@@ -56,10 +63,18 @@ extern ledger_t	root_paged_ledger;
 #define root_wired_ledger_port root_wired_ledger->ledger_self
 #define root_paged_ledger_port root_paged_ledger->ledger_self
 
-extern ipc_port_t convert_ledger_to_port(ledger_t);
+extern void ledger_init(void);
+
 extern ipc_port_t ledger_copy(ledger_t);
 
 extern kern_return_t ledger_enter(ledger_t, ledger_item_t);
-extern void ledger_init(void);
+
+#endif /* MACH_KERNEL_PRIVATE */
+
+#endif	/* __APPLE_API_PRIVATE */
+
+extern ledger_t convert_port_to_ledger(ipc_port_t);
+
+extern ipc_port_t convert_ledger_to_port(ledger_t);
 
 #endif	/* _KERN_LEDGER_H_ */

@@ -626,7 +626,7 @@ static void reversecursor(int xx, int yy)
  * cursor is on a character that is in a different color that the
  * current one. When we have buffering, things will work better. MP
  */
-#ifdef 1 /*VC_BINARY_REVERSE*/
+#if 1 /*VC_BINARY_REVERSE*/
 			case 8:
 				where.longptr[0] = ~where.longptr[0];
 				where.longptr[1] = ~where.longptr[1];
@@ -1593,17 +1593,23 @@ struct vc_progress_element {
 typedef struct vc_progress_element vc_progress_element;
 
 static vc_progress_element *	vc_progress;
-static unsigned char *		vc_progress_data;
+static const unsigned char *  	vc_progress_data;
+static const unsigned char *    vc_progress_alpha;
 static boolean_t		vc_progress_enable;
-static unsigned char *		vc_clut;
+static const unsigned char *	vc_clut;
+static const unsigned char *	vc_clut8;
 static unsigned int		vc_progress_tick;
 static boolean_t		vc_graphics_mode;
 static boolean_t		vc_acquired;
 static boolean_t		vc_need_clear;
+static boolean_t		vc_needsave;
+static vm_address_t		vc_saveunder;
+static vm_size_t		vc_saveunder_len;
 
 void vc_blit_rect_8c(	int x, int y,
 			int width, int height, 
-			int transparent, unsigned char * dataPtr )
+			const unsigned char * dataPtr, const unsigned char * alphaPtr,
+			unsigned char * backPtr, boolean_t save )
 {
     volatile unsigned char * dst;
     int line, col;
@@ -1613,53 +1619,25 @@ void vc_blit_rect_8c(	int x, int y,
                                     (y * vinfo.v_rowbytes) +
                                     (x));
 
-    for( line = 0; line < height; line++) {
-        for( col = 0; col < width; col++) {
-	    data = *dataPtr++;
-	    if( data == transparent)
-		continue;
-
-            *(dst + col) = data;
-	}
-        dst = (volatile unsigned char *) (((int)dst) + vinfo.v_rowbytes);
-    }
-
-}
-
-void vc_blit_rect_8m(	int x, int y,
-			int width, int height,
-			int transparent, unsigned char * dataPtr )
-{
-    volatile unsigned char * dst;
-    int line, col;
-    unsigned int data;
-
     dst = (unsigned char *)(vinfo.v_baseaddr +
-                                    (y * vinfo.v_rowbytes) +
-                                    (x));
+                            (y * vinfo.v_rowbytes) +
+                            (x));
 
     for( line = 0; line < height; line++) {
-        for( col = 0; col < width; col++) {
-	    data = *dataPtr++;
-	    if( data == transparent)
-		continue;
-
-            data *= 3;
-            *(dst + col) = ((19595 * vc_clut[data + 0] +
-                             38470 * vc_clut[data + 1] +
-                             7471  * vc_clut[data + 2] ) / 65536);
-	}
+        for( col = 0; col < width; col++)
+            *(dst + col) = *dataPtr++;
         dst = (volatile unsigned char *) (((int)dst) + vinfo.v_rowbytes);
     }
 }
 
 void vc_blit_rect_16(	int x, int y,
 			int width, int height,
-			int transparent, unsigned char * dataPtr )
+			const unsigned char * dataPtr, const unsigned char * alphaPtr,
+			unsigned short *  backPtr, boolean_t save )
 {
     volatile unsigned short * dst;
     int line, col;
-    unsigned int data;
+    unsigned int data, index, alpha, back;
 
     dst = (volatile unsigned short *)(vinfo.v_baseaddr +
                                     (y * vinfo.v_rowbytes) +
@@ -1667,14 +1645,36 @@ void vc_blit_rect_16(	int x, int y,
 
     for( line = 0; line < height; line++) {
         for( col = 0; col < width; col++) {
-	    data = *dataPtr++;
-	    if( data == transparent)
-		continue;
+	    index = *dataPtr++;
+            index *= 3;
 
-            data *= 3;
-            *(dst + col) =	( (0xf8 & (vc_clut[data + 0])) << 7)
-                              | ( (0xf8 & (vc_clut[data + 1])) << 2)
-                              | ( (0xf8 & (vc_clut[data + 2])) >> 3);
+            if( alphaPtr && backPtr && (alpha = *alphaPtr++)) {
+
+                data = 0;
+                if( vc_clut[index + 0] > alpha)
+                    data |= (((vc_clut[index + 0] - alpha) & 0xf8) << 7);
+                if( vc_clut[index + 1] > alpha)
+                    data |= (((vc_clut[index + 1] - alpha) & 0xf8) << 2);
+                if( vc_clut[index + 2] > alpha)
+                    data |= (((vc_clut[index + 2] - alpha) & 0xf8) >> 3);
+
+                if( save) {
+                    back = *(dst + col);
+                    alpha >>= 3;
+                    back = (((((back & 0x7c1f) * alpha) + 0x7c1f) >> 5) & 0x7c1f)
+                         | (((((back & 0x03e0) * alpha) + 0x03e0) >> 5) & 0x03e0);
+                    *backPtr++ = back;
+                } else
+                    back = *backPtr++;
+
+                data += back;
+
+            } else
+            	data =	 ( (0xf8 & (vc_clut[index + 0])) << 7)
+                       | ( (0xf8 & (vc_clut[index + 1])) << 2)
+                       | ( (0xf8 & (vc_clut[index + 2])) >> 3);
+
+            *(dst + col) = data;
 	}
         dst = (volatile unsigned short *) (((int)dst) + vinfo.v_rowbytes);
     }
@@ -1682,11 +1682,12 @@ void vc_blit_rect_16(	int x, int y,
 
 void vc_blit_rect_32(	unsigned int x, unsigned int y,
 			unsigned int width, unsigned int height,
-			int transparent, unsigned char * dataPtr )
+			const unsigned char * dataPtr, const unsigned char * alphaPtr,
+			unsigned int *  backPtr, boolean_t save )
 {
     volatile unsigned int * dst;
     int line, col;
-    unsigned int data;
+    unsigned int data, index, alpha, back;
 
     dst = (volatile unsigned int *) (vinfo.v_baseaddr +
                                     (y * vinfo.v_rowbytes) +
@@ -1694,32 +1695,57 @@ void vc_blit_rect_32(	unsigned int x, unsigned int y,
 
     for( line = 0; line < height; line++) {
         for( col = 0; col < width; col++) {
-	    data = *dataPtr++;
-	    if( data == transparent)
-		continue;
+	    index = *dataPtr++;
+            index *= 3;
+            if( alphaPtr && backPtr && (alpha = *alphaPtr++)) {
 
-            data *= 3;
-            *(dst + col) = 	(vc_clut[data + 0] << 16)
-                              | (vc_clut[data + 1] << 8)
-                              | (vc_clut[data + 2]);
+                data = 0;
+                if( vc_clut[index + 0] > alpha)
+                    data |= ((vc_clut[index + 0] - alpha) << 16);
+                if( vc_clut[index + 1] > alpha)
+                    data |= ((vc_clut[index + 1] - alpha) << 8);
+                if( vc_clut[index + 2] > alpha)
+                    data |= ((vc_clut[index + 2] - alpha));
+
+                if( save) {
+                    back = *(dst + col);
+                    back = (((((back & 0x00ff00ff) * alpha) + 0x00ff00ff) >> 8) & 0x00ff00ff)
+                         | (((((back & 0x0000ff00) * alpha) + 0x0000ff00) >> 8) & 0x0000ff00);
+                    *backPtr++ = back;
+                } else
+                    back = *backPtr++;
+
+                data += back;
+
+            } else
+                data =	  (vc_clut[index + 0] << 16)
+                        | (vc_clut[index + 1] << 8)
+                        | (vc_clut[index + 2]);
+
+            *(dst + col) = data;
 	}
         dst = (volatile unsigned int *) (((int)dst) + vinfo.v_rowbytes);
     }
 }
 
-void vc_blit_rect(	int x, int y,
-			int width, int height,
-			int transparent, unsigned char * dataPtr )
+void vc_blit_rect( unsigned int x, unsigned int y,
+                   unsigned int width, unsigned int height,
+                   const unsigned char * dataPtr, const unsigned char * alphaPtr,
+                   vm_address_t backBuffer, boolean_t save )
 {
+    if(!vinfo.v_baseaddr)
+        return;
+
     switch( vinfo.v_depth) {
 	case 8:
-	    vc_blit_rect_8c( x, y, width, height, transparent, dataPtr);
+            if( vc_clut8 == vc_clut)
+                vc_blit_rect_8c( x, y, width, height, dataPtr, alphaPtr, (unsigned char *) backBuffer, save );
 	    break;
 	case 16:
-	    vc_blit_rect_16( x, y, width, height, transparent, dataPtr);
+	    vc_blit_rect_16( x, y, width, height, dataPtr, alphaPtr, (unsigned short *) backBuffer, save );
 	    break;
 	case 32:
-	    vc_blit_rect_32( x, y, width, height, transparent, dataPtr);
+	    vc_blit_rect_32( x, y, width, height, dataPtr, alphaPtr, (unsigned int *) backBuffer, save );
 	    break;
     }
 }
@@ -1729,12 +1755,13 @@ void vc_progress_task( void * arg )
     spl_t		s;
     int			count = (int) arg;
     int			x, y, width, height;
-    unsigned char * 	data;
+    const unsigned char * data;
 
     s = splhigh();
     simple_lock(&vc_forward_lock);
 
     if( vc_progress_enable) {
+
         count++;
         if( count >= vc_progress->count)
             count = 0;
@@ -1746,11 +1773,12 @@ void vc_progress_task( void * arg )
 	data = vc_progress_data;
 	data += count * width * height;
 	if( 1 & vc_progress->flags) {
-	    x += (vinfo.v_width / 2);
-	    x += (vinfo.v_height / 2);
+        x += ((vinfo.v_width - width) / 2);
+        y += ((vinfo.v_height - height) / 2);
 	}
 	vc_blit_rect( x, y, width, height,
-			vc_progress->transparent,data );
+			data, vc_progress_alpha, vc_saveunder, vc_needsave );
+        vc_needsave = FALSE;
 
         timeout( vc_progress_task, (void *) count,
                  vc_progress_tick );
@@ -1760,7 +1788,7 @@ void vc_progress_task( void * arg )
 }
 
 void vc_display_icon( vc_progress_element * desc,
-			unsigned char * data )
+			const unsigned char * data )
 {
     int			x, y, width, height;
 
@@ -1771,35 +1799,58 @@ void vc_display_icon( vc_progress_element * desc,
 	x = desc->dx;
 	y = desc->dy;
 	if( 1 & desc->flags) {
-	    x += (vinfo.v_width / 2);
-	    y += (vinfo.v_height / 2);
+        x += ((vinfo.v_width - width) / 2);
+        y += ((vinfo.v_height - height) / 2);
 	}
-	vc_blit_rect( x, y, width, height, desc->transparent, data );
+	vc_blit_rect( x, y, width, height, data, NULL, (vm_address_t) NULL, FALSE );
     }
 }
 
 boolean_t
-vc_progress_set( boolean_t enable )
+vc_progress_set( boolean_t enable, unsigned int initial_tick )
 {
     spl_t		s;
+    vm_address_t saveBuf = 0;
+    vm_size_t    saveLen = 0;
 
     if( !vc_progress)
 	return( FALSE );
+
+    if( enable) {
+        saveLen = vc_progress->width * vc_progress->height * vinfo.v_depth / 8;
+        saveBuf = kalloc( saveLen );
+    }
 
     s = splhigh();
     simple_lock(&vc_forward_lock);
 
     if( vc_progress_enable != enable) {
         vc_progress_enable = enable;
-        if( enable)
+        if( enable) {
+            vc_needsave      = TRUE;
+            vc_saveunder     = saveBuf;
+            vc_saveunder_len = saveLen;
+            saveBuf	     = 0;
+            saveLen 	     = 0;
             timeout(vc_progress_task, (void *) 0,
-                    vc_progress_tick );
-        else
+                    initial_tick );
+        }
+        else {
+            if( vc_saveunder) {
+                saveBuf      = vc_saveunder;
+                saveLen      = vc_saveunder_len;
+                vc_saveunder = 0;
+                vc_saveunder_len = 0;
+            }
             untimeout( vc_progress_task, (void *) 0 );
+        }
     }
 
     simple_unlock(&vc_forward_lock);
     splx(s);
+
+    if( saveBuf)
+        kfree( saveBuf, saveLen );
 
     return( TRUE );
 }
@@ -1807,15 +1858,21 @@ vc_progress_set( boolean_t enable )
 
 boolean_t
 vc_progress_initialize( vc_progress_element * desc,
-			unsigned char * data,
-			unsigned char * clut )
+			const unsigned char * data,
+			const unsigned char * clut )
 {
     if( (!clut) || (!desc) || (!data))
 	return( FALSE );
     vc_clut = clut;
+    vc_clut8 = clut;
 
     vc_progress = desc;
     vc_progress_data = data;
+    if( 2 & vc_progress->flags)
+        vc_progress_alpha = vc_progress_data 
+                            + vc_progress->count * vc_progress->width * vc_progress->height;
+    else
+        vc_progress_alpha = NULL;
     vc_progress_tick = vc_progress->time * hz / 1000;
 
     return( TRUE );
@@ -1894,7 +1951,7 @@ initialize_screen(Boot_Video * boot_vinfo, int op)
             break;
 
 	    case kPETextScreen:
-            vc_progress_set( FALSE );
+            vc_progress_set( FALSE, 0 );
             disableConsoleOutput = FALSE;
             if( vc_need_clear) {
                 vc_need_clear = FALSE;
@@ -1905,20 +1962,20 @@ initialize_screen(Boot_Video * boot_vinfo, int op)
         case kPEEnableScreen:
             if ( vc_acquired) {
                 if( vc_graphics_mode)
-                    vc_progress_set( TRUE );
+                    vc_progress_set( TRUE, vc_progress_tick );
                 else
                     vc_clear_screen();
             }
             break;
 
         case kPEDisableScreen:
-            vc_progress_set( FALSE );
+            vc_progress_set( FALSE, 0 );
             break;
 
 	    case kPEAcquireScreen:
             vc_need_clear = (FALSE == vc_acquired);
             vc_acquired = TRUE;
-            vc_progress_set( vc_graphics_mode );
+            vc_progress_set( vc_graphics_mode, vc_need_clear ? 2 * hz : 0 );
             disableConsoleOutput = vc_graphics_mode;
             if( vc_need_clear && !vc_graphics_mode) {
                 vc_need_clear = FALSE;
@@ -1928,7 +1985,8 @@ initialize_screen(Boot_Video * boot_vinfo, int op)
 
 	    case kPEReleaseScreen:
             vc_acquired = FALSE;
-            vc_progress_set( FALSE );
+            vc_progress_set( FALSE, 0 );
+            vc_clut8 = NULL;
             disableConsoleOutput = TRUE;
             break;
 	}

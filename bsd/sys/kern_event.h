@@ -25,9 +25,9 @@
 #ifndef SYS_KERN_EVENT_H
 #define SYS_KERN_EVENT_H
 
-#define SYSPROTO_EVENT 1
-
+#include <sys/appleapiopts.h>
 #include <sys/ioccom.h>
+#include <sys/sys_domain.h>
 
 #define KEVENTS_ON  1
 #define KEV_SNDSPACE (4 * 1024)
@@ -50,6 +50,7 @@
 
 #define KEV_NETWORK_CLASS 1
 #define KEV_IOKIT_CLASS   2
+#define KEV_SYSTEM_CLASS  3
 
 
 struct kern_event_msg {
@@ -77,6 +78,7 @@ struct kev_request {
 #define SIOCGKEVFILT    _IOR('e', 3, struct kev_request)
 
 #ifdef KERNEL
+#ifdef __APPLE_API_UNSTABLE
 
 #define N_KEV_VECTORS     5
 
@@ -95,7 +97,10 @@ struct kev_msg {
      struct kev_d_vectors  dv[N_KEV_VECTORS];      /* Up to n data vectors  */
 };
 
+int  kev_post_msg(struct kev_msg *event);
 
+#endif /* ___APPLE_API_UNSTABLE */
+#ifdef __APPLE_API_PRIVATE
 
 LIST_HEAD(kern_event_head, kern_event_pcb);
 
@@ -109,9 +114,7 @@ struct  kern_event_pcb {
 
 #define sotoevpcb(so)   ((struct kern_event_pcb *)((so)->so_pcb))
 
-
-int  kev_post_msg(struct kev_msg *event);
-
+#endif /* __APPLE_API_PRIVATE */
 #endif
 
 #endif

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2002 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -23,7 +23,10 @@
 #ifndef _SYS_UTFCONV_H_
 #define	_SYS_UTFCONV_H_
 
+#include <sys/appleapiopts.h>
+
 #ifdef KERNEL
+#ifdef __APPLE_API_UNSTABLE
 /*
  * UTF-8 encode/decode flags
  */
@@ -42,6 +45,7 @@ int	utf8_decodestr __P((const u_int8_t *, size_t, u_int16_t *,size_t *,
 		size_t, u_int16_t, int));
 __END_DECLS
 
+#endif /* __APPLE_API_UNSTABLE */
 #endif /* KERNEL */
 
 #endif /* !_SYS_UTFCONV_H_ */

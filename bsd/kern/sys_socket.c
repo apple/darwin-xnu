@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2002 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -70,9 +70,9 @@
 #include <net/route.h>
 
 int soo_read __P((struct file *fp, struct uio *uio, 
-		struct ucred *cred));
+		struct ucred *cred, int flags, struct proc *p));
 int soo_write __P((struct file *fp, struct uio *uio, 
-		struct ucred *cred));
+		struct ucred *cred, int flags, struct proc *p));
 int soo_close __P((struct file *fp, struct proc *p));
 
 int soo_select __P((struct file *fp, int which, void * wql, struct proc *p));
@@ -82,12 +82,14 @@ struct	fileops socketops =
 
 /* ARGSUSED */
 int
-soo_read(fp, uio, cred)
+soo_read(fp, uio, cred, flags, p)
 	struct file *fp;
 	struct uio *uio;
 	struct ucred *cred;
+	int flags;
+	struct proc *p;
 {
-	struct socket *so = (struct socket *)fp->f_data;
+	struct socket *so;
 	struct kextcb *kp;
 	int stat;
 	int (*fsoreceive) __P((struct socket *so, 
@@ -97,6 +99,12 @@ soo_read(fp, uio, cred)
 
 
 	thread_funnel_switch(KERNEL_FUNNEL, NETWORK_FUNNEL);
+
+        if ((so = (struct socket *)fp->f_data) == NULL) {
+                /* This is not a valid open file descriptor */
+                thread_funnel_switch(NETWORK_FUNNEL, KERNEL_FUNNEL);
+                return (EBADF);
+        }
 
 	fsoreceive = so->so_proto->pr_usrreqs->pru_soreceive;
 	if (fsoreceive != soreceive)
@@ -117,12 +125,14 @@ soo_read(fp, uio, cred)
 
 /* ARGSUSED */
 int
-soo_write(fp, uio, cred)
+soo_write(fp, uio, cred, flags, p)
 	struct file *fp;
 	struct uio *uio;
 	struct ucred *cred;
+	int flags;
+	struct proc *p;
 {
-	struct socket *so = (struct socket *)fp->f_data;
+	struct socket *so;
 	int	(*fsosend) __P((struct socket *so, struct sockaddr *addr,
 				struct uio *uio, struct mbuf *top,
 				struct mbuf *control, int flags));
@@ -130,6 +140,13 @@ soo_write(fp, uio, cred)
 	int           stat;
 
 	thread_funnel_switch(KERNEL_FUNNEL, NETWORK_FUNNEL);
+
+        if ((so = (struct socket *)fp->f_data) == NULL) {
+                /* This is not a valid open file descriptor */
+                thread_funnel_switch(NETWORK_FUNNEL, KERNEL_FUNNEL);
+                return (EBADF);
+        }
+
 	fsosend = so->so_proto->pr_usrreqs->pru_sosend;
 	if (fsosend != sosend)
 	{	kp = sotokextcb(so);
@@ -143,7 +160,12 @@ soo_write(fp, uio, cred)
 
 	stat = (*fsosend)(so, 0, uio, 0, 0, 0);
 	thread_funnel_switch(NETWORK_FUNNEL, KERNEL_FUNNEL);
-	return stat;
+
+        /* Generation of SIGPIPE can be controlled per socket */
+        if (stat == EPIPE && uio->uio_procp && !(so->so_flags & SOF_NOSIGPIPE))
+            psignal(uio->uio_procp, SIGPIPE);
+
+        return stat;
 }
 
 int
@@ -153,18 +175,23 @@ soo_ioctl(fp, cmd, data, p)
 	register caddr_t data;
 	struct proc *p;
 {
-	register struct socket *so = (struct socket *)fp->f_data;
-
+	register struct socket *so;
 	struct sockopt sopt;
 	struct kextcb *kp;
 	int    error = 0;
-	kp = sotokextcb(so);
-	sopt.sopt_level = cmd;
-	sopt.sopt_name = (int)data;
-	sopt.sopt_p = p;
-
 
 	thread_funnel_switch(KERNEL_FUNNEL, NETWORK_FUNNEL);
+
+	if ((so = (struct socket *)fp->f_data) == NULL) {
+		/* This is not a valid open file descriptor */
+		thread_funnel_switch(NETWORK_FUNNEL, KERNEL_FUNNEL);
+		return (EBADF);
+	}
+
+        kp = sotokextcb(so);
+        sopt.sopt_level = cmd;
+        sopt.sopt_name = (int)data;
+        sopt.sopt_p = p;
 
 	while (kp)
 	{	if (kp->e_soif && kp->e_soif->sf_socontrol)
@@ -240,6 +267,7 @@ soo_ioctl(fp, cmd, data, p)
 	     fp->f_flag |= FNONBLOCK;
 	     so->so_state |= SS_NBIO;
 	     so->so_options |= SO_DONTTRUNC | SO_WANTMORE;
+          so->so_flags |= SOF_NOSIGPIPE;
 
 	     if (cloned_so && so != cloned_so) {
 		  /* Flags options */
@@ -362,8 +390,12 @@ soo_stat(so, ub)
 	register struct socket *so;
 	register struct stat *ub;
 {
-     int stat;
+	int stat;
 
+	/*
+	 * DANGER: by the time we get the network funnel the socket 
+	 * may have been closed
+	 */
 	thread_funnel_switch(KERNEL_FUNNEL, NETWORK_FUNNEL);
 	bzero((caddr_t)ub, sizeof (*ub));
 	ub->st_mode = S_IFSOCK;
@@ -380,11 +412,12 @@ soo_close(fp, p)
 {
 	int error = 0;
 
-	if (fp->f_data) {
-	     thread_funnel_switch(KERNEL_FUNNEL, NETWORK_FUNNEL);
+	thread_funnel_switch(KERNEL_FUNNEL, NETWORK_FUNNEL);
+
+	if (fp->f_data)
 	     error = soclose((struct socket *)fp->f_data);
-	     thread_funnel_switch(NETWORK_FUNNEL, KERNEL_FUNNEL);
-	}
+
+	thread_funnel_switch(NETWORK_FUNNEL, KERNEL_FUNNEL);
 
 	fp->f_data = 0;
 	return (error);

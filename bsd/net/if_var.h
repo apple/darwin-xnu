@@ -52,11 +52,14 @@
  * SUCH DAMAGE.
  *
  *	From: @(#)if.h	8.1 (Berkeley) 6/10/93
+ * $FreeBSD: src/sys/net/if_var.h,v 1.18.2.7 2001/07/24 19:10:18 brooks Exp $
  */
 
 #ifndef	_NET_IF_VAR_H_
 #define	_NET_IF_VAR_H_
+#include <sys/appleapiopts.h>
 
+#ifdef __APPLE__
 #define APPLE_IF_FAM_LOOPBACK  1
 #define APPLE_IF_FAM_ETHERNET  2
 #define APPLE_IF_FAM_SLIP      3
@@ -68,7 +71,8 @@
 #define APPLE_IF_FAM_MDECAP    9
 #define APPLE_IF_FAM_GIF       10
 #define APPLE_IF_FAM_FAITH     11
-
+#define APPLE_IF_FAM_STF	   12
+#endif
 
 /*
  * Structures defining a network interface, providing a packet
@@ -103,6 +107,7 @@ struct	mbuf;
 struct	proc;
 struct	rtentry;
 struct	socket;
+struct	ether_header;
 struct  sockaddr_dl;
 #endif
 
@@ -110,11 +115,11 @@ struct  sockaddr_dl;
 
 #include <sys/queue.h>		/* get TAILQ macros */
 
-struct tqdummy {
-};
+#ifdef __APPLE_API_UNSTABLE
+#ifdef __APPLE__
+struct tqdummy;
 
 TAILQ_HEAD(tailq_head, tqdummy);
-
 
 /* This belongs up in socket.h or socketvar.h, depending on how far the
  *   event bubbles up.
@@ -125,14 +130,15 @@ struct net_event_data {
      u_long		if_unit;
      char		if_name[IFNAMSIZ];
 };
-
+#endif
 
 
 TAILQ_HEAD(ifnethead, ifnet);	/* we use TAILQs so that the order of */
 TAILQ_HEAD(ifaddrhead, ifaddr);	/* instantiation is preserved in the list */
+TAILQ_HEAD(ifprefixhead, ifprefix);
 LIST_HEAD(ifmultihead, ifmultiaddr);
 
-
+#ifdef __APPLE__
 /*
  * Structure describing information about an interface
  * which may be of interest to management entities.
@@ -140,7 +146,9 @@ LIST_HEAD(ifmultihead, ifmultiaddr);
 struct if_data {
 	/* generic interface information */
 	u_char	ifi_type;		/* ethernet, tokenring, etc */
-        u_char  ifi_typelen;		/* Length of frame type id */
+#ifdef __APPLE__
+	u_char	ifi_typelen;		/* Length of frame type id */
+#endif
 	u_char	ifi_physical;		/* e.g., AUI, Thinnet, 10base-T, etc */
 	u_char	ifi_addrlen;		/* media address length */
 	u_char	ifi_hdrlen;		/* media header length */
@@ -161,16 +169,20 @@ struct if_data {
 	u_long	ifi_omcasts;		/* packets sent via multicast */
 	u_long	ifi_iqdrops;		/* dropped on input, this interface */
 	u_long	ifi_noproto;		/* destined for unsupported protocol */
+#ifdef __APPLE__
 	u_long	ifi_recvtiming;		/* usec spent receiving when timing */
 	u_long	ifi_xmittiming;		/* usec spent xmitting when timing */
+#endif
 	struct	timeval ifi_lastchange;	/* time of last administrative change */
-        u_long  default_proto;		/* Default dl_tag when none is specified 
-					*  on dlil_output */
-        u_long  ifi_hwassist;           /* HW offload capabilities */
-	u_long  ifi_reserved1;		/* for future use */
-	u_long  ifi_reserved2;		/* for future use */
+#ifdef __APPLE__
+	u_long	default_proto;		/* Default dl_tag when none is specified 
+								 * on dlil_output */
+#endif
+	u_long	ifi_hwassist;		/* HW offload capabilities */
+	u_long	ifi_reserved1;		/* for future use */
+	u_long	ifi_reserved2;		/* for future use */
 };
-
+#endif
 
 /*
  * Structure defining a queue for a network interface.
@@ -193,7 +205,9 @@ struct ifnet {
 	char	*if_name;		/* name, e.g. ``en'' or ``lo'' */
 	TAILQ_ENTRY(ifnet) if_link; 	/* all struct ifnets are chained */
 	struct	ifaddrhead if_addrhead;	/* linked list of addresses per if */
-        struct  tailq_head proto_head;  /* Head for if_proto structures */  
+#ifdef __APPLE__
+	struct  tailq_head proto_head;  /* Head for if_proto structures */  
+#endif
         int	if_pcount;		/* number of promiscuous listeners */
 	struct	bpf_if *if_bpf;		/* packet filter structure */
 	u_short	if_index;		/* numeric abbreviation for this if  */
@@ -205,6 +219,7 @@ struct ifnet {
 	size_t	if_linkmiblen;		/* length of above data */
 	struct	if_data if_data;
 
+#ifdef __APPLE__
 /* New with DLIL */
 	int	refcnt;
 	int	offercnt;
@@ -229,22 +244,27 @@ struct ifnet {
 
 /* End DLIL specific */
 
-/* #if defined(ppc) */
-	void	*if_Y;			/* For Y-adapter connection */
-/* #endif */
-	void    *if_private;            /* private to interface */
-/* procedure handles */
-#if 	__APPLE__
+	void 	*reserved0;	/* for future use */
+	void    *if_private;	/* private to interface */
 	long	if_eflags;		/* autoaddr, autoaddr done, etc. */
-#else
-	int	(*if_done)		/* output complete routine */
-		__P((struct ifnet *));	/* (XXX not used; fake prototype) */
-#endif
-
+#endif /* __APPLE__ */
 
 	struct	ifmultihead if_multiaddrs; /* multicast addresses configured */
 	int	if_amcount;		/* number of all-multicast requests */
 /* procedure handles */
+#ifndef __APPLE__
+	int	(*if_output)		/* output routine (enqueue) */
+		__P((struct ifnet *, struct mbuf *, struct sockaddr *,
+		     struct rtentry *));
+	void	(*if_start)		/* initiate output routine */
+		__P((struct ifnet *));
+	int	(*if_done)		/* output complete routine */
+		__P((struct ifnet *));	/* (XXX not used; fake prototype) */
+	int	(*if_ioctl)		/* ioctl routine */
+		__P((struct ifnet *, u_long, caddr_t));
+	void	(*if_watchdog)		/* timer routine */
+		__P((struct ifnet *));
+#endif
 	int	(*if_poll_recv)		/* polled receive routine */
 		__P((struct ifnet *, int *));
 	int	(*if_poll_xmit)		/* polled transmit routine */
@@ -259,10 +279,13 @@ struct ifnet {
 		__P((struct ifnet *, struct sockaddr **, struct sockaddr *));
 	struct	ifqueue if_snd;		/* output queue */
 	struct	ifqueue *if_poll_slowq;	/* input queue for slow devices */
+#ifdef __APPLE__
 	u_long  family_cookie;	
-	struct	ifprefix *if_prefixlist; /* linked list of prefixes per if */
+	struct	ifprefixhead if_prefixhead; /* list of prefixes per if */
 	void *reserved1;	/* for future use */
-	void *reserved2;	/* for future use */
+#else
+	struct	ifprefixhead if_prefixhead; /* list of prefixes per if */
+#endif /* __APPLE__ */
 };
 typedef void if_init_f_t __P((void *));
 
@@ -274,7 +297,7 @@ typedef void if_init_f_t __P((void *));
 #define	if_hdrlen	if_data.ifi_hdrlen
 #define	if_metric	if_data.ifi_metric
 #define	if_baudrate	if_data.ifi_baudrate
-#define if_hwassist     if_data.ifi_hwassist
+#define	if_hwassist	if_data.ifi_hwassist
 #define	if_ipackets	if_data.ifi_ipackets
 #define	if_ierrors	if_data.ifi_ierrors
 #define	if_opackets	if_data.ifi_opackets
@@ -290,6 +313,12 @@ typedef void if_init_f_t __P((void *));
 #define if_recvquota	if_data.ifi_recvquota
 #define	if_xmitquota	if_data.ifi_xmitquota
 #define if_rawoutput(if, m, sa) if_output(if, m, sa, (struct rtentry *)0)
+
+#ifndef __APPLE__
+/* for compatibility with other BSDs */
+#define	if_addrlist	if_addrhead
+#define	if_list		if_link
+#endif
 
 /*
  * Bit values in if_ipending
@@ -358,8 +387,18 @@ int	if_enq_drop __P((struct ifqueue *, struct mbuf *));
 #endif
 
 #endif
+#endif /* __APPLE_API_UNSTABLE */
+
+/*
+ * 72 was chosen below because it is the size of a TCP/IP
+ * header (40) + the minimum mss (32).
+ */
+#define	IF_MINMTU	72
+#define	IF_MAXMTU	65535
+
 #endif /* KERNEL */
 
+#ifdef __APPLE_API_UNSTABLE
 /*
  * The ifaddr structure contains information about one address
  * of an interface.  They are maintained by the different address families,
@@ -371,12 +410,16 @@ struct ifaddr {
 	struct	sockaddr *ifa_dstaddr;	/* other end of p-to-p link */
 #define	ifa_broadaddr	ifa_dstaddr	/* broadcast address interface */
 	struct	sockaddr *ifa_netmask;	/* used to determine subnet */
+#ifndef __APPLE__
+	/* Use of if_data doesn't justify change of API */
+	struct	if_data if_data;	/* not all members are meaningful */
+#endif
 	struct	ifnet *ifa_ifp;		/* back-pointer to interface */
 	TAILQ_ENTRY(ifaddr) ifa_link;	/* queue macro glue */
 	void	(*ifa_rtrequest)	/* check or clean routes (+ or -)'d */
 		__P((int, struct rtentry *, struct sockaddr *));
 	u_short	ifa_flags;		/* mostly rt_flags for cloning */
-	short	ifa_refcnt;		/* references to this structure */
+	short	ifa_refcnt;/* 16bit ref count, use ifaref, ifafree */
 	int	ifa_metric;		/* cost of going out this interface */
 #ifdef notdef
 	struct	rtentry *ifa_rt;	/* XXXX for ROUTETOIF ????? */
@@ -384,7 +427,6 @@ struct ifaddr {
 	u_long  ifa_dlt;
 	int (*ifa_claim_addr)		/* check if an addr goes to this if */
 		__P((struct ifaddr *, struct sockaddr *));
-
 };
 #define	IFA_ROUTE	RTF_UP		/* route installed */
 
@@ -397,7 +439,7 @@ struct ifaddr {
 struct ifprefix {
 	struct	sockaddr *ifpr_prefix;	/* prefix of interface */
 	struct	ifnet *ifpr_ifp;	/* back-pointer to interface */
-	struct ifprefix *ifpr_next;
+	TAILQ_ENTRY(ifprefix) ifpr_list; /* queue macro glue */
 	u_char	ifpr_plen;		/* prefix length in bits */
 	u_char	ifpr_type;		/* protocol dependent prefix type */
 };
@@ -417,23 +459,31 @@ struct ifmultiaddr {
 	void	*ifma_protospec;	/* protocol-specific state, if any */
 };
 
-#if KERNEL
-#define	IFAFREE(ifa) \
-	do { \
-		if ((ifa)->ifa_refcnt <= 0) \
-			ifafree(ifa); \
-		else \
-			(ifa)->ifa_refcnt--; \
-	} while (0)
+#ifdef KERNEL
+#define IFAREF(ifa) ifaref(ifa)
+#define IFAFREE(ifa) ifafree(ifa)
 
+#ifdef __APPLE_API_PRIVATE
 extern	struct ifnethead ifnet;
 extern struct	ifnet	**ifindex2ifnet;
 extern	int ifqmaxlen;
 extern	struct ifnet loif[];
 extern	int if_index;
 extern	struct ifaddr **ifnet_addrs;
+#endif /* __APPLE_API_PRIVATE */
 
-int	if_addmulti __P((struct ifnet *, struct sockaddr *, 
+#ifndef __APPLE__
+void	ether_ifattach __P((struct ifnet *, int));
+void	ether_ifdetach __P((struct ifnet *, int));
+void	ether_input __P((struct ifnet *, struct ether_header *, struct mbuf *));
+void	ether_demux __P((struct ifnet *, struct ether_header *, struct mbuf *));
+int	ether_output __P((struct ifnet *,
+	   struct mbuf *, struct sockaddr *, struct rtentry *));
+int	ether_output_frame __P((struct ifnet *, struct mbuf *));
+int	ether_ioctl __P((struct ifnet *, int, caddr_t));
+#endif
+
+int	if_addmulti __P((struct ifnet *, struct sockaddr *,
 			 struct ifmultiaddr **));
 int	if_allmulti __P((struct ifnet *, int));
 void	if_attach __P((struct ifnet *));
@@ -445,7 +495,7 @@ void	if_up __P((struct ifnet *));
 /*void	ifinit __P((void));*/ /* declared in systm.h for main() */
 int	ifioctl __P((struct socket *, u_long, caddr_t, struct proc *));
 int	ifpromisc __P((struct ifnet *, int));
-struct	ifnet *ifunit __P((char *));
+struct	ifnet *ifunit __P((const char *));
 struct  ifnet *if_withname __P((struct sockaddr *));
 
 int	if_poll_recv_slow __P((struct ifnet *ifp, int *quotap));
@@ -462,13 +512,17 @@ struct	ifaddr *ifa_ifwithroute __P((int, struct sockaddr *,
 					struct sockaddr *));
 struct	ifaddr *ifaof_ifpforaddr __P((struct sockaddr *, struct ifnet *));
 void	ifafree __P((struct ifaddr *));
+void	ifaref __P((struct ifaddr *));
 
 struct	ifmultiaddr *ifmaof_ifpforaddr __P((struct sockaddr *, 
 					    struct ifnet *));
+#ifndef __APPLE__
 int	if_simloop __P((struct ifnet *ifp, struct mbuf *m,
 		struct sockaddr *dst, int hlen));
+#endif
 
 #endif /* KERNEL */
 
 
+#endif /* __APPLE_API_UNSTABLE */
 #endif /* !_NET_IF_VAR_H_ */

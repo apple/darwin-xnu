@@ -68,20 +68,21 @@
 #include <machine/ast.h>
 
 /*
- *      A CPU takes an AST when it is about to return to user code.
- *      Instead of going back to user code, it calls ast_taken.
- *      Machine-dependent code is responsible for maintaining
- *      a set of reasons for an AST, and passing this set to ast_taken.
+ * A processor takes an AST when it is about to return from an
+ * interrupt context, and calls ast_taken.
+ *
+ * Machine-dependent code is responsible for maintaining
+ * a set of reasons for an AST, and passing this set to ast_taken.
  */
-typedef unsigned int	ast_t;
+typedef uint32_t		ast_t;
 
 /*
  *      Bits for reasons
  */
-#define AST_HALT		0x01
-#define AST_TERMINATE	0x02
-#define AST_BLOCK       0x04
-#define AST_QUANTUM     0x08
+#define AST_BLOCK       0x01
+#define AST_QUANTUM     0x02
+#define AST_HANDOFF		0x04
+#define AST_YIELD		0x08
 #define	AST_URGENT		0x10
 #define AST_APC			0x20	/* migration APC hook */
 /*
@@ -90,12 +91,11 @@ typedef unsigned int	ast_t;
  * from the outside.
  */
 #define	AST_BSD			0x80
-#define	AST_BSD_INIT	0x100
 
 #define AST_NONE		0x00
 #define	AST_ALL			(~AST_NONE)
 
-#define AST_SCHEDULING	(AST_HALT | AST_TERMINATE | AST_BLOCK)
+#define AST_SCHEDULING	(AST_PREEMPT | AST_YIELD | AST_HANDOFF)
 #define	AST_PREEMPT		(AST_BLOCK | AST_QUANTUM | AST_URGENT)
 
 extern volatile ast_t	need_ast[NCPUS];
@@ -120,7 +120,8 @@ extern void		ast_taken(
 					boolean_t	enable);
 
 /* Check for pending ASTs */
-extern void    	ast_check(void);
+extern void    	ast_check(
+					processor_t		processor);
 
 /*
  * Per-thread ASTs are reset at context-switch time.
@@ -129,13 +130,12 @@ extern void    	ast_check(void);
 #define MACHINE_AST_PER_THREAD  0
 #endif
 
-#define AST_PER_THREAD	(	AST_HALT | AST_TERMINATE | AST_APC | AST_BSD |	\
-										MACHINE_AST_PER_THREAD	)
+#define AST_PER_THREAD	(AST_APC | AST_BSD | MACHINE_AST_PER_THREAD)
 /*
  *	ast_needed(), ast_on(), ast_off(), ast_context(), and ast_propagate()
  *	assume splsched.
  */
-#define ast_needed(mycpu)			need_ast[mycpu]
+#define ast_needed(mycpu)			(need_ast[mycpu] != AST_NONE)
 
 #define ast_on_fast(reasons)							\
 MACRO_BEGIN												\
@@ -166,9 +166,12 @@ MACRO_END
 #define ast_on(reason)			     ast_on_fast(reason)
 #define ast_off(reason)			     ast_off_fast(reason)
 
-#define thread_ast_set(act, reason)			((act)->ast |= (reason))
-#define thread_ast_clear(act, reason)		((act)->ast &= ~(reason))
-#define thread_ast_clear_all(act)			((act)->ast = AST_NONE)
+#define thread_ast_set(act, reason)		\
+						(hw_atomic_or(&(act)->ast, (reason)))
+#define thread_ast_clear(act, reason)	\
+						(hw_atomic_and(&(act)->ast, ~(reason)))
+#define thread_ast_clear_all(act)		\
+						(hw_atomic_and(&(act)->ast, AST_NONE))
 
 /*
  *	NOTE: if thread is the current thread, thread_ast_set() should

@@ -19,7 +19,8 @@
  * 
  * @APPLE_LICENSE_HEADER_END@
  */
-/*	$KAME: ip_encap.c,v 1.21 2000/03/30 14:30:06 itojun Exp $	*/
+/*	$FreeBSD: src/sys/netinet/ip_encap.c,v 1.1.2.2 2001/07/03 11:01:46 ume Exp $	*/
+/*	$KAME: ip_encap.c,v 1.41 2001/03/15 08:35:08 itojun Exp $	*/
 
 /*
  * Copyright (C) 1995, 1996, 1997, and 1998 WIDE Project.
@@ -62,7 +63,8 @@
  *	mobile-ip6 (uses RFC2473)
  *	6to4 tunnel
  * Here's a list of protocol that want protocol #4:
- *	RFC1853 IPv4-in-IPv4 tunnel
+ *	RFC1853 IPv4-in-IPv4 tunnelling
+ *	RFC2003 IPv4 encapsulation within IPv4
  *	RFC2344 reverse tunnelling for mobile-ip4
  *	RFC2401 IPsec tunnel
  * Well, what can I say.  They impose different en/decapsulation mechanism
@@ -73,21 +75,7 @@
  * So, clearly good old protosw does not work for protocol #4 and #41.
  * The code will let you match protocol via src/dst address pair.
  */
-
-#ifdef __FreeBSD__
-# include "opt_mrouting.h"
-# if __FreeBSD__ == 3
-#  include "opt_inet.h"
-# endif
-# if __FreeBSD__ >= 4
-#  include "opt_inet.h"
-#  include "opt_inet6.h"
-# endif
-#else
-# ifdef __NetBSD__
-#  include "opt_inet.h"
-# endif
-#endif
+/* XXX is M_NETADDR correct? */
 
 #include <sys/param.h>
 #include <sys/systm.h>
@@ -96,7 +84,7 @@
 #include <sys/mbuf.h>
 #include <sys/errno.h>
 #include <sys/protosw.h>
-#include <sys/malloc.h>
+#include <sys/queue.h>
 
 #include <net/if.h>
 #include <net/route.h>
@@ -109,9 +97,6 @@
 #if MROUTING
 #include <netinet/ip_mroute.h>
 #endif /* MROUTING */
-#ifdef __OpenBSD__
-#include <netinet/ip_ipsp.h>
-#endif
 
 #if INET6
 #include <netinet/ip6.h>
@@ -122,26 +107,36 @@
 
 #include <net/net_osdep.h>
 
-#if defined(__FreeBSD__) && __FreeBSD__ >= 3
+#ifndef __APPLE__
 #include <sys/kernel.h>
 #include <sys/malloc.h>
 MALLOC_DEFINE(M_NETADDR, "Export Host", "Export host address structure");
 #endif
 
+static void encap_add __P((struct encaptab *));
 static int mask_match __P((const struct encaptab *, const struct sockaddr *,
 		const struct sockaddr *));
 static void encap_fillarg __P((struct mbuf *, const struct encaptab *));
 
+#ifndef LIST_HEAD_INITIALIZER
 /* rely upon BSS initialization */
 LIST_HEAD(, encaptab) encaptab;
+#else
+LIST_HEAD(, encaptab) encaptab = LIST_HEAD_INITIALIZER(&encaptab);
+#endif
 
 void
 encap_init()
 {
+	static int initialized = 0;
+
+	if (initialized)
+		return;
+	initialized++;
 #if 0
 	/*
 	 * we cannot use LIST_INIT() here, since drivers may want to call
-	 * encap_attach(), on driver attach.  encap_init() wlil be called
+	 * encap_attach(), on driver attach.  encap_init() will be called
 	 * on AF_INET{,6} initialization, which happens after driver
 	 * initialization - using LIST_INIT() here can nuke encap_attach()
 	 * from drivers.
@@ -150,19 +145,28 @@ encap_init()
 #endif
 }
 
+#if INET
 void
-encap4_input(m, off, proto)
+encap4_input(m, off)
 	struct mbuf *m;
 	int off;
-	int proto;
 {
+	int proto;
 	struct ip *ip;
 	struct sockaddr_in s, d;
-	struct encaptab *ep;
+	const struct protosw *psw;
+	struct encaptab *ep, *match;
+	int prio, matchprio;
 
+#ifndef __APPLE__
+	va_start(ap, m);
+	off = va_arg(ap, int);
+	proto = va_arg(ap, int);
+	va_end(ap);
+#endif
 
 	ip = mtod(m, struct ip *);
-#ifdef __OpenBSD__
+#ifdef __APPLE__
 	proto = ip->ip_p;
 #endif
 
@@ -175,66 +179,94 @@ encap4_input(m, off, proto)
 	d.sin_len = sizeof(struct sockaddr_in);
 	d.sin_addr = ip->ip_dst;
 
+	match = NULL;
+	matchprio = 0;
 	for (ep = LIST_FIRST(&encaptab); ep; ep = LIST_NEXT(ep, chain)) {
+		if (ep->af != AF_INET)
+			continue;
 		if (ep->proto >= 0 && ep->proto != proto)
 			continue;
-
-		if (ep->func) {
-			if ((*ep->func)(m, off, proto, ep->arg) == 0)
-				continue;
-		} else {
+		if (ep->func)
+			prio = (*ep->func)(m, off, proto, ep->arg);
+		else {
 			/*
 			 * it's inbound traffic, we need to match in reverse
 			 * order
 			 */
-			if (mask_match(ep, (struct sockaddr *)&d,
-			    (struct sockaddr *)&s) == 0)
-				continue;
+			prio = mask_match(ep, (struct sockaddr *)&d,
+			    (struct sockaddr *)&s);
 		}
 
-		/* found a match */
-		if (ep->psw && ep->psw->pr_input) {
-			encap_fillarg(m, ep);
-#warning watchout pr_input!
-			(*ep->psw->pr_input)(m, off);
+		/*
+		 * We prioritize the matches by using bit length of the
+		 * matches.  mask_match() and user-supplied matching function
+		 * should return the bit length of the matches (for example,
+		 * if both src/dst are matched for IPv4, 64 should be returned).
+		 * 0 or negative return value means "it did not match".
+		 *
+		 * The question is, since we have two "mask" portion, we
+		 * cannot really define total order between entries.
+		 * For example, which of these should be preferred?
+		 * mask_match() returns 48 (32 + 16) for both of them.
+		 *	src=3ffe::/16, dst=3ffe:501::/32
+		 *	src=3ffe:501::/32, dst=3ffe::/16
+		 *
+		 * We need to loop through all the possible candidates
+		 * to get the best match - the search takes O(n) for
+		 * n attachments (i.e. interfaces).
+		 */
+		if (prio <= 0)
+			continue;
+		if (prio > matchprio) {
+			matchprio = prio;
+			match = ep;
+		}
+	}
+
+	if (match) {
+		/* found a match, "match" has the best one */
+		psw = (const struct protosw *)match->psw;
+		if (psw && psw->pr_input) {
+			encap_fillarg(m, match);
+			(*psw->pr_input)(m, off);
 		} else
 			m_freem(m);
 		return;
 	}
 
 	/* for backward compatibility */
+# if MROUTING
+#  define COMPATFUNC	ipip_input
+# endif /*MROUTING*/
+
+#if COMPATFUNC
 	if (proto == IPPROTO_IPV4) {
-#ifdef __OpenBSD__
-#if defined(MROUTING) || defined(IPSEC)
-		ip4_input(m, off, proto);
+		COMPATFUNC(m, off);
 		return;
-#endif
-#else
-#if MROUTING
-		ipip_input(m, off);
-		return;
-#endif /*MROUTING*/
-#endif
 	}
+#endif
 
 	/* last resort: inject to raw socket */
 	rip_input(m, off);
 }
+#endif
 
 #if INET6
 int
-encap6_input(mp, offp, proto)
+encap6_input(mp, offp)
 	struct mbuf **mp;
 	int *offp;
-	int proto;
 {
 	struct mbuf *m = *mp;
 	struct ip6_hdr *ip6;
 	struct sockaddr_in6 s, d;
-	struct ip6protosw *psw;
-	struct encaptab *ep;
+	const struct ip6protosw *psw;
+	struct encaptab *ep, *match;
+	int prio, matchprio;
+	int proto;
 
 	ip6 = mtod(m, struct ip6_hdr *);
+	proto = ip6->ip6_nxt;
 
 	bzero(&s, sizeof(s));
 	s.sin6_family = AF_INET6;
@@ -245,28 +277,39 @@ encap6_input(mp, offp, proto)
 	d.sin6_len = sizeof(struct sockaddr_in6);
 	d.sin6_addr = ip6->ip6_dst;
 
+	match = NULL;
+	matchprio = 0;
 	for (ep = LIST_FIRST(&encaptab); ep; ep = LIST_NEXT(ep, chain)) {
+		if (ep->af != AF_INET6)
+			continue;
 		if (ep->proto >= 0 && ep->proto != proto)
 			continue;
-		if (ep->func) {
-			if ((*ep->func)(m, *offp, proto, ep->arg) == 0)
-				continue;
-		} else {
+		if (ep->func)
+			prio = (*ep->func)(m, *offp, proto, ep->arg);
+		else {
 			/*
 			 * it's inbound traffic, we need to match in reverse
 			 * order
 			 */
-			if (mask_match(ep, (struct sockaddr *)&d,
-			    (struct sockaddr *)&s) == 0)
-				continue;
+			prio = mask_match(ep, (struct sockaddr *)&d,
+			    (struct sockaddr *)&s);
 		}
 
+		/* see encap4_input() for issues here */
+		if (prio <= 0)
+			continue;
+		if (prio > matchprio) {
+			matchprio = prio;
+			match = ep;
+		}
+	}
+
+	if (match) {
 		/* found a match */
-		psw = (struct ip6protosw *)ep->psw;
-#warning watchout pr_input!
+		psw = (const struct ip6protosw *)match->psw;
 		if (psw && psw->pr_input) {
-			encap_fillarg(m, ep);
-			return (*psw->pr_input)(mp, offp, proto);
+			encap_fillarg(m, match);
+			return (*psw->pr_input)(mp, offp);
 		} else {
 			m_freem(m);
 			return IPPROTO_DONE;
@@ -274,9 +317,17 @@ encap6_input(mp, offp, proto)
 	}
 
 	/* last resort: inject to raw socket */
-	return rip6_input(mp, offp, proto);
+	return rip6_input(mp, offp);
 }
 #endif
+
+static void
+encap_add(ep)
+	struct encaptab *ep;
+{
+
+	LIST_INSERT_HEAD(&encaptab, ep, chain);
+}
 
 /*
  * sp (src ptr) is always my side, and dp (dst ptr) is always remote side.
@@ -296,11 +347,7 @@ encap_attach(af, proto, sp, sm, dp, dm, psw, arg)
 	int error;
 	int s;
 
-#if defined(__NetBSD__) || defined(__OpenBSD__)
-	s = splsoftnet();
-#else
 	s = splnet();
-#endif
 	/* sanity check on args */
 	if (sp->sa_len > sizeof(ep->src) || dp->sa_len > sizeof(ep->dst)) {
 		error = EINVAL;
@@ -334,7 +381,7 @@ encap_attach(af, proto, sp, sm, dp, dm, psw, arg)
 		goto fail;
 	}
 
-	ep = _MALLOC(sizeof(*ep), M_NETADDR, M_NOWAIT);	/*XXX*/
+	ep = _MALLOC(sizeof(*ep), M_NETADDR, M_WAITOK);	/*XXX*/
 	if (ep == NULL) {
 		error = ENOBUFS;
 		goto fail;
@@ -350,18 +397,8 @@ encap_attach(af, proto, sp, sm, dp, dm, psw, arg)
 	ep->psw = psw;
 	ep->arg = arg;
 
-	/*
-	 * Order of insertion will determine the priority in lookup.
-	 * We should be careful putting them in specific-one-first order.
-	 * The question is, since we have two "mask" portion, we cannot really
-	 * define total order between entries.
-	 * For example, which of these should be preferred?
-	 *	src=3ffe::/16, dst=3ffe:501::/32
-	 *	src=3ffe:501::/32, dst=3ffe::/16
-	 *
-	 * At this moment we don't care about the ordering.
-	 */
-	LIST_INSERT_HEAD(&encaptab, ep, chain);
+	encap_add(ep);
+
 	error = 0;
 	splx(s);
 	return ep;
@@ -383,18 +420,14 @@ encap_attach_func(af, proto, func, psw, arg)
 	int error;
 	int s;
 
-#if defined(__NetBSD__) || defined(__OpenBSD__)
-	s = splsoftnet();
-#else
 	s = splnet();
-#endif
 	/* sanity check on args */
 	if (!func) {
 		error = EINVAL;
 		goto fail;
 	}
 
-	ep = _MALLOC(sizeof(*ep), M_NETADDR, M_NOWAIT);	/*XXX*/
+	ep = _MALLOC(sizeof(*ep), M_NETADDR, M_WAITOK);	/*XXX*/
 	if (ep == NULL) {
 		error = ENOBUFS;
 		goto fail;
@@ -407,18 +440,8 @@ encap_attach_func(af, proto, func, psw, arg)
 	ep->psw = psw;
 	ep->arg = arg;
 
-	/*
-	 * Order of insertion will determine the priority in lookup.
-	 * We should be careful putting them in specific-one-first order.
-	 * The question is, since we have two "mask" portion, we cannot really
-	 * define total order between entries.
-	 * For example, which of these should be checked first?
-	 *	src=3ffe::/16, dst=3ffe:501::/32
-	 *	src=3ffe:501::/32, dst=3ffe::/16
-	 *
-	 * At this moment we don't care about the ordering.
-	 */
-	LIST_INSERT_HEAD(&encaptab, ep, chain);
+	encap_add(ep);
+
 	error = 0;
 	splx(s);
 	return ep;
@@ -455,7 +478,9 @@ mask_match(ep, sp, dp)
 	struct sockaddr_storage s;
 	struct sockaddr_storage d;
 	int i;
-	u_int8_t *p, *q, *r;
+	const u_int8_t *p, *q;
+	u_int8_t *r;
+	int matchlen;
 
 	if (sp->sa_len > sizeof(s) || dp->sa_len > sizeof(d))
 		return 0;
@@ -464,17 +489,25 @@ mask_match(ep, sp, dp)
 	if (sp->sa_len != ep->src.ss_len || dp->sa_len != ep->dst.ss_len)
 		return 0;
 
-	p = (u_int8_t *)sp;
-	q = (u_int8_t *)&ep->srcmask;
-	r = (u_int8_t *)&s;
-	for (i = 0 ; i < sp->sa_len; i++)
-		r[i] = p[i] & q[i];
+	matchlen = 0;
 
-	p = (u_int8_t *)dp;
-	q = (u_int8_t *)&ep->dstmask;
-	r = (u_int8_t *)&d;
-	for (i = 0 ; i < dp->sa_len; i++)
+	p = (const u_int8_t *)sp;
+	q = (const u_int8_t *)&ep->srcmask;
+	r = (u_int8_t *)&s;
+	for (i = 0 ; i < sp->sa_len; i++) {
 		r[i] = p[i] & q[i];
+		/* XXX estimate */
+		matchlen += (q[i] ? 8 : 0);
+	}
+
+	p = (const u_int8_t *)dp;
+	q = (const u_int8_t *)&ep->dstmask;
+	r = (u_int8_t *)&d;
+	for (i = 0 ; i < dp->sa_len; i++) {
+		r[i] = p[i] & q[i];
+		/* XXX rough estimate */
+		matchlen += (q[i] ? 8 : 0);
+	}
 
 	/* need to overwrite len/family portion as we don't compare them */
 	s.ss_len = sp->sa_len;
@@ -484,7 +517,7 @@ mask_match(ep, sp, dp)
 
 	if (bcmp(&s, &ep->src, ep->src.ss_len) == 0 &&
 	    bcmp(&d, &ep->dst, ep->dst.ss_len) == 0) {
-		return 1;
+		return matchlen;
 	} else
 		return 0;
 }

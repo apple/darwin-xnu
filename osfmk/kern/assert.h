@@ -69,11 +69,8 @@ extern void	Assert(
 
 #if	MACH_ASSERT
 
-#define assert(ex)							\
-MACRO_BEGIN								\
-	if (!(ex))							\
-		Assert(__FILE__, __LINE__, # ex);			\
-MACRO_END
+#define assert(ex)  \
+    ((ex) ? (void)0 : Assert(__FILE__, __LINE__, # ex))
 #define	assert_static(x)	assert(x)
 
 #else	/* MACH_ASSERT */

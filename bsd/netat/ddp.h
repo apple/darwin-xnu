@@ -30,6 +30,7 @@
 
 #ifndef _NETAT_DDP_H_
 #define _NETAT_DDP_H_
+#include <sys/appleapiopts.h>
 
 /* Header and data sizes */
 
@@ -124,6 +125,7 @@ typedef struct at_ddp_stats {
 #endif
 
 #ifdef KERNEL
+#ifdef __APPLE_API_PRIVATE
 
 #define DDP_MIN_NETWORK		0x0001
 #define	DDP_MAX_NETWORK		0xfffe
@@ -182,5 +184,6 @@ void ddp_bit_reverse(unsigned char *);
 /* in ddp_lap.c */
 int ddp_shutdown(int);
 
+#endif /* __APPLE_API_PRIVATE */
 #endif /* KERNEL */
 #endif /* _NETAT_DDP_H_ */

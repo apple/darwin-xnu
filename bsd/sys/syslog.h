@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2002 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -57,6 +57,8 @@
 
 #ifndef	_SYS_SYSLOG_H_
 #define _SYS_SYSLOG_H_
+
+#include <sys/appleapiopts.h>
 
 #define	_PATH_LOG	"/var/run/syslog"
 
@@ -171,7 +173,9 @@ CODE facilitynames[] = {
 #endif
 
 #ifdef KERNEL
+#ifdef __APPLE_API_PRIVATE
 #define	LOG_PRINTF	-1	/* pseudo-priority to indicate use of printf */
+#endif /* __APPLE_API_PRIVATE */
 #endif
 
 /*
@@ -215,7 +219,7 @@ void	vsyslog __P((int, const char *, _BSD_VA_LIST_));
 __END_DECLS
 
 #else /* !KERNEL */
-
+#ifdef __APPLE_API_OBSOLETE
 /*
  * bit field descriptions for printf %r and %R formats
  */
@@ -294,6 +298,8 @@ struct reg_desc {
 	char *rd_format;	/* format to print field */
 	struct reg_values *rd_values;	/* symbolic names of values */
 };
+
+#endif /* __APPLE_API_OBSOLETE */
 
 void	logpri __P((int));
 void	log __P((int, const char *, ...));

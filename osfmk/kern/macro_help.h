@@ -22,58 +22,6 @@
 /*
  * @OSF_COPYRIGHT@
  */
-/*
- * HISTORY
- * 
- * Revision 1.1.1.1  1998/09/22 21:05:34  wsanchez
- * Import of Mac OS X kernel (~semeria)
- *
- * Revision 1.1.1.1  1998/03/07 02:25:55  wsanchez
- * Import of OSF Mach kernel (~mburg)
- *
- * Revision 1.1.6.1  1994/09/23  02:23:07  ezf
- * 	change marker to not FREE
- * 	[1994/09/22  21:34:48  ezf]
- *
- * Revision 1.1.2.3  1993/06/07  22:14:06  jeffc
- * 	CR9176 - ANSI C violations: trailing tokens on CPP
- * 	directives, extra semicolons after decl_ ..., asm keywords
- * 	[1993/06/07  19:06:13  jeffc]
- * 
- * Revision 1.1.2.2  1993/06/02  23:39:03  jeffc
- * 	Added to OSF/1 R1.3 from NMK15.0.
- * 	[1993/06/02  21:13:38  jeffc]
- * 
- * Revision 1.1  1992/09/30  02:29:53  robert
- * 	Initial revision
- * 
- * $EndLog$
- */
-/* CMU_HIST */
-/*
- * Revision 2.3  91/05/14  16:44:49  mrt
- * 	Correcting copyright
- * 
- * Revision 2.2  91/02/05  17:28:09  mrt
- * 	Changed to new Mach copyright
- * 	[91/02/01  16:15:31  mrt]
- * 
- * Revision 2.1  89/08/03  15:53:45  rwd
- * Created.
- * 
- * Revision 2.2  88/10/18  03:36:20  mwyoung
- * 	Added a form of return that can be used within macros that
- * 	does not result in "statement not reached" noise.
- * 	[88/10/17            mwyoung]
- * 	
- * 	Add MACRO_BEGIN, MACRO_END.
- * 	[88/10/11            mwyoung]
- * 	
- * 	Created.
- * 	[88/10/08            mwyoung]
- * 
- */
-/* CMU_ENDHIST */
 /* 
  * Mach Operating System
  * Copyright (c) 1991,1990,1989,1988 Carnegie Mellon University

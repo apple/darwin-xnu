@@ -23,10 +23,11 @@
 
 #include <libkern/c++/OSObject.h>
 #include <libkern/c++/OSSerialize.h>
-#include <libkern/c++/OSSymbol.h>
 #include <libkern/c++/OSLib.h>
 #include <libkern/c++/OSCPPDebug.h>
 #include <libkern/OSAtomic.h>
+
+#include <libkern/c++/OSCollection.h>
 
 __BEGIN_DECLS
 int debug_ivars_size;
@@ -91,8 +92,15 @@ OSMetaClassDefineReservedUnused(OSObject, 29);
 OSMetaClassDefineReservedUnused(OSObject, 30);
 OSMetaClassDefineReservedUnused(OSObject, 31);
 
+static const char *getClassName(const OSObject *obj)
+{
+    const OSMetaClass *meta = obj->getMetaClass();
+    return (meta) ? meta->getClassName() : "unknown class?";
+}
 
-bool OSObject::init()			{ return true; }
+bool OSObject::init()
+    { return true; }
+
 void OSObject::free()
 {
     const OSMetaClass *meta = getMetaClass();
@@ -104,23 +112,151 @@ void OSObject::free()
 
 int OSObject::getRetainCount() const
 {
-    return retainCount;
+    return (int) ((UInt16) retainCount);
 }
 
-void OSObject::retain() const
+void OSObject::taggedRetain(const void *tag) const
 {
-    OSIncrementAtomic((SInt32 *) &retainCount);
+#if !DEBUG
+    volatile UInt32 *countP = (volatile UInt32 *) &retainCount;
+    UInt32 inc = 1;
+    UInt32 origCount;
+    UInt32 newCount;
+
+    // Increment the collecion bucket.
+    if ((const void *) OSTypeID(OSCollection) == tag)
+	inc |= (1UL<<16);
+
+    do {
+	origCount = *countP;
+	if (-1UL == origCount)
+	    // @@@ Pinot: panic("Attempting to retain a freed object");
+	    return;
+
+	newCount = origCount + inc;
+    } while (!OSCompareAndSwap(origCount, newCount, (UInt32 *) countP));
+#else
+    volatile UInt32 *countP = (volatile UInt32 *) &retainCount;
+    UInt32 inc = 1;
+    UInt32 origCount;
+    UInt32 newCount;
+
+    // Increment the collecion bucket.
+    if ((const void *) OSTypeID(OSCollection) == tag)
+	inc |= (1UL<<16);
+
+    do {
+	origCount = *countP;
+	if (-1UL == origCount)
+	    return;	// We are freeing so leave now.
+
+	newCount = origCount + inc;
+    } while (!OSCompareAndSwap(origCount, newCount, (UInt32 *) countP));
+#endif
 }
 
-void OSObject::release(int when) const
+void OSObject::taggedRelease(const void *tag) const
 {
-    if (OSDecrementAtomic((SInt32 *) &retainCount) <= when)
+    taggedRelease(tag, 1);
+}
+
+void OSObject::taggedRelease(const void *tag, const int when) const
+{
+#if !DEBUG
+    volatile UInt32 *countP = (volatile UInt32 *) &retainCount;
+    UInt32 dec = 1;
+    UInt32 origCount;
+    UInt32 newCount;
+    UInt32 actualCount;
+
+    // Increment the collecion bucket.
+    if ((const void *) OSTypeID(OSCollection) == tag)
+	dec |= (1UL<<16);
+
+    do {
+	origCount = *countP;
+	if (-1UL == origCount)
+	    return;	// We are freeing already leave now.
+
+	actualCount = origCount - dec;
+        if ((SInt16) actualCount < when)
+            newCount = (UInt32) -1;
+        else
+            newCount = actualCount;
+
+    } while (!OSCompareAndSwap(origCount, newCount, (UInt32 *) countP));
+
+    //
+    // This panic means that we have just attempted to release an object
+    // who's retain count has gone to less than the number of collections
+    // it is a member off.  Take a panic immediately.
+    // In Fact the panic MAY not be a registry corruption but it is 
+    // ALWAYS the wrong thing to do.  I call it a registry corruption 'cause
+    // the registry is the biggest single use of a network of collections.
+    //
+    if ((UInt16) actualCount < (actualCount >> 16))
+	panic("A driver releasing a(n) %s has corrupted the registry\n",
+	    getClassName(this));
+
+    // Check for a 'free' condition and that if we are first through
+    if ((UInt32) -1 == newCount)
 	((OSObject *) this)->free();
+#else
+    // @@@ Pinot:  Need to update the debug build release code.
+    volatile UInt32 *countP = (volatile UInt32 *) &retainCount;
+    UInt32 dec = 1;
+    UInt32 origCount;
+    UInt32 newCount;
+
+    // Increment the collecion bucket.
+    if ((const void *) OSTypeID(OSCollection) == tag)
+	dec |= (1UL<<16);
+
+    do {
+	origCount = *countP;
+	if (-1UL == origCount)
+	    return;	// We are freeing already leave now.
+
+	newCount = origCount - dec;
+    } while (!OSCompareAndSwap(origCount, newCount, (UInt32 *) countP));
+
+    //
+    // This panic means that we have just attempted to release an object
+    // who's retain count has gone to less than the number of collections
+    // it is a member off.  Take a panic immediately.
+    // In Fact the panic MAY not be a registry corruption but it is 
+    // ALWAYS the wrong thing to do.  I call it a registry corruption 'cause
+    // the registry is the biggest single use of a network of collections.
+    //
+    if ((UInt16) newCount < (newCount >> 16))
+	panic("A driver releasing a(n) %s has corrupted the registry\n",
+	    getClassName(this));
+
+    // Check for a release too many
+    if ((SInt16) newCount < 0)
+	panic("An object has had a release too many\n",
+	    getClassName(this));
+
+    // Check for a 'free' condition and that if we are first through
+    if ((SInt16) newCount < when
+    && OSCompareAndSwap(newCount, -1UL, (UInt32 *) countP))
+	((OSObject *) this)->free();
+#endif
 }
 
 void OSObject::release() const
 {
-    release(1);
+    taggedRelease(0);
+}
+
+void OSObject::retain() const
+{
+    taggedRetain(0);
+}
+
+void OSObject::release(int when) const
+{
+    taggedRelease(0, when);
 }
 
 bool OSObject::serialize(OSSerialize *s) const
@@ -129,10 +265,7 @@ bool OSObject::serialize(OSSerialize *s) const
 
     if (!s->addXMLStartTag(this, "string")) return false;
 
-    const OSMetaClass *meta = getMetaClass();
-    const char *className = (meta)? meta->getClassName() : "unknown class?";
-
-    if (!s->addString(className)) return false;
+    if (!s->addString(getClassName(this))) return false;
     if (!s->addString(" is not serializable")) return false;
     
     return s->addXMLEndTag("string");

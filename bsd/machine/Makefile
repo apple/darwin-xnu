@@ -12,7 +12,7 @@ DATAFILES = \
 	ansi.h byte_order.h cons.h cpu.h disklabel.h endian.h exec.h \
 	label_t.h param.h proc.h  profile.h psl.h ptrace.h reboot.h \
 	reg.h setjmp.h signal.h spl.h table.h trap.h types.h unix_traps.h \
-	user.h vmparam.h
+	ucontext.h user.h vmparam.h
 
 
 INSTALL_MI_LIST = ${DATAFILES}

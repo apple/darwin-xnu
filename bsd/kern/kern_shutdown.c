@@ -45,7 +45,7 @@
 #include <sys/signal.h>
 #include <sys/tty.h>
 #include <kern/task.h>
-#include <ufs/ufs/quota.h>
+#include <sys/quota.h>
 #include <ufs/ufs/inode.h>
 #if	NCPUS > 1
 #include <kern/processor.h>
@@ -171,13 +171,6 @@ proc_shutdown()
 	if (p && p != self)
 		task_suspend(p->task);		/* stop init */
 
-	/*
-	 * Suspend mach_init
-	 */
-	p = pfind(2);
-	if (p && p != self)
-		task_suspend(p->task);		/* stop mach_init */
-
 	printf("Killing all processes ");
 
 	/*
@@ -251,7 +244,8 @@ proc_shutdown()
 			 * XXX
 			 */
 		        if (p->exit_thread) {	/* someone already doing it */
-			        thread_block(0);/* give him a chance */
+						/* give him a chance */
+			        thread_block(THREAD_CONTINUE_NULL);
 			}
 			else {
 			        p->exit_thread = current_thread();

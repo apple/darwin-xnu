@@ -71,6 +71,7 @@
 #include <net/if_dl.h>
 #include <net/if_types.h>
 #include <netinet/if_ether.h>
+#include <netinet/in.h>	/* For M_LOOP */
 
 /*
 #if INET
@@ -109,7 +110,6 @@ extern struct ifqueue atalkintrq;
 #endif /* NVLAN > 0 */
 
 static u_long lo_dlt = 0;
-static ivedonethis = 0;
 
 #define IFP2AC(IFP) ((struct arpcom *)IFP)
 
@@ -249,7 +249,7 @@ ether_add_proto(struct ddesc_head_str *desc_head, struct if_proto *proto, u_long
         }
         
         ed[i].proto	= proto;
-        ed[i].data[0]	= 0;
+        ed[i].data[0] = 0;
         ed[i].data[1] = 0;
         
         switch (desc->type) {
@@ -291,7 +291,7 @@ ether_add_proto(struct ddesc_head_str *desc_head, struct if_proto *proto, u_long
             case DLIL_DESC_SNAP: {
                 u_int8_t*	pDest = ((u_int8_t*)&ed[i].data[0]) + 3;
                 ed[i].type = DLIL_DESC_SNAP;
-                bcopy(&desc->native_type, pDest, 5);
+                bcopy(desc->native_type, pDest, 5);
             }
             break;
         }
@@ -341,7 +341,7 @@ int ether_demux(ifp, m, frame_header, proto)
      * longs for quick compares.
      */
     
-    if (ntohs(ether_type) < 1500) {
+    if (ntohs(ether_type) <= 1500) {
         extProto1 = *(u_int32_t*)data;
         
         // SAP or SNAP
@@ -516,6 +516,24 @@ int  ether_del_if(struct ifnet *ifp)
         return ENOENT;
 }
 
+static
+int  ether_init_if(struct ifnet *ifp)
+{
+    register struct ifaddr *ifa;
+    register struct sockaddr_dl *sdl;
+
+    ifa = ifnet_addrs[ifp->if_index - 1];
+    if (ifa == 0) {
+            printf("ether_ifattach: no lladdr!\n");
+            return;
+    }
+    sdl = (struct sockaddr_dl *)ifa->ifa_addr;
+    sdl->sdl_type = IFT_ETHER;
+    sdl->sdl_alen = ifp->if_addrlen;
+    bcopy((IFP2AC(ifp))->ac_enaddr, LLADDR(sdl), ifp->if_addrlen);
+
+    return 0;
+}
 
 
 int
@@ -571,13 +589,13 @@ int ether_family_init()
     int  i;
     struct dlil_ifmod_reg_str  ifmod_reg;
 
-    if (ivedonethis)
-        return 0;
+    /* ethernet family is built-in, called from bsd_init */
+    thread_funnel_switch(KERNEL_FUNNEL, NETWORK_FUNNEL);
 
-    ivedonethis = 1;
-
+    bzero(&ifmod_reg, sizeof(ifmod_reg));
     ifmod_reg.add_if = ether_add_if;
     ifmod_reg.del_if = ether_del_if;
+    ifmod_reg.init_if = ether_init_if;
     ifmod_reg.add_proto = ether_add_proto;
     ifmod_reg.del_proto = ether_del_proto;
     ifmod_reg.ifmod_ioctl = ether_ifmod_ioctl;
@@ -590,6 +608,8 @@ int ether_family_init()
 
     for (i=0; i < MAX_INTERFACES; i++)
         ether_desc_blk[i].n_count = 0;
+
+    thread_funnel_switch(NETWORK_FUNNEL, KERNEL_FUNNEL);
 
     return 0;
 }

@@ -140,6 +140,10 @@ options         IPFIREWALL_FORWARD      #Transparent proxy      # <ipfirewall>
 options         IPFIREWALL_DEFAULT_TO_ACCEPT    # allow everything by default   # <ipfirewall>
 options         IPFIREWALL_KEXT # Kernel extension              # <ipfirewall>
 options		MULTICAST	# Internet Protocol Class-D	$
+options		TCPDEBUG	# TCP debug			# <tcpdebug>
+options		RANDOM_IP_ID	# random (not sequential) ip ids	# <randomipid>
+options		TCP_DROP_SYNFIN	# Drop TCP packets with SYN+FIN set	# <tcpdrop_synfin>
+options		ICMP_BANDLIM	# ICMP bandwidth limiting sysctl
 
 
 #
@@ -154,9 +158,7 @@ options		KTRACE		# ktrace support			# <ktrace>
 #
 options		FFS		# Fast Filesystem Support	# <ffs>
 options		HFS		# HFS/HFS+ support		# <hfs>
-options		HFS_HARDLINKS	# HFS+ hardlink support		# <hfs>
 options		FIFO		# fifo support			# <fifo>
-options		PORTAL		# portal_fs support		# <portal>
 options		UNION		# union_fs support		# <union>
 options		FDESC		# fdesc_fs support		# <fdesc>
 options		CD9660		# ISO 9660 CD-ROM support	# <cd9660>
@@ -186,20 +188,27 @@ options		OBJCTEST	# Objc internal test		# <objctest>
 options		KERNEL_STACK	# MI kernel stack support	# <kernstack>
 profile				# build a profiling kernel	# <profile>
 
+#
+#  Point-to-Point Protocol support
+#
+pseudo-device ppp 2						# <ppp>
+
 #       
-# IPv6 (Kame Stable 20000425) Support 
+# IPv6 Support
 #       
 options         "INET6"         		# kernel IPv6 Support           # <inet6>
-options		MAPPED_ADDR_ENABLED     	# enable IPv4, on IPv6 socket	# <inet6>
 options         IPSEC                  		# IP security            	# <ipsec>
 options         IPSEC_ESP              		# IP security            	# <ipsec>
 options         "IPV6FIREWALL"         		# IPv6 Firewall Feature   	# <ipv6firewall>
 options         "IPV6FIREWALL_DEFAULT_TO_ACCEPT"  #IPv6 Firewall Feature   	# <ipv6firewall>
 options         "IPV6FIREWALL_VERBOSE" 		#IPv6 Firewall Feature   	# <ipv6firewall>
-options		NATPT				# KAME/IPv6 NAT feature		#<natpt>
-pseudo-device   gif     2		# <gif>
+
+pseudo-device   gif     1		# <gif>
 pseudo-device   dummy   2		# <dummy>
 pseudo-device   faith   1		# <faith>
+pseudo-device   stf 	1 		# <stf>
+
+options			crypto			# <ipsec,crypto>
 
 makeoptions	LIBDRIVER = "libDriver_kern.o"			# <libdriver>
 makeoptions	LIBOBJC   = "libkobjc.o"			# <kernobjc>
@@ -231,7 +240,13 @@ pseudo-device	loop
 #
 #  UCB pseudo terminal service
 #
-pseudo-device	pty	32 init pty_init
+pseudo-device	pty	128 init pty_init
+
+#
+# vnode device
+pseudo-device	vndevice	4	init	vndevice_init
+
+#
 #
 # packet filter device
 #

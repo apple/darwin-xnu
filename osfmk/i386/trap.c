@@ -355,7 +355,7 @@ kernel_trap(
 					  trunc_page((vm_offset_t)subcode),
 					  VM_PROT_READ|VM_PROT_WRITE,
 					  FALSE, 
-					  (map == kernel_map) ? interruptible : THREAD_ABORTSAFE);
+					  (map == kernel_map) ? interruptible : THREAD_ABORTSAFE, NULL, 0);
 		}
 #if	MACH_KDB
 		if (result == KERN_SUCCESS) {
@@ -577,7 +577,7 @@ user_trap(
 				trunc_page((vm_offset_t)subcode),
 				prot,
 				FALSE,
-				THREAD_ABORTSAFE));
+				THREAD_ABORTSAFE, NULL, 0));
 			/* NOTREACHED */
 		}
 		else {
@@ -589,7 +589,7 @@ user_trap(
 				trunc_page((vm_offset_t)subcode),
 				prot,
 				FALSE,
-				(map == kernel_map) ? THREAD_UNINT : THREAD_ABORTSAFE);
+				(map == kernel_map) ? THREAD_UNINT : THREAD_ABORTSAFE, NULL, 0);
 			if ((result != KERN_SUCCESS) && (result != KERN_ABORTED)) {
 				/*
 				 * Must expand vm_fault by hand,

@@ -20,15 +20,14 @@ EXPINC_SUBDIRS_PPC = \
 EXPINC_SUBDIRS_I386 = \
 
 DATAFILES = \
-	randomdev.h
 
 INSTALL_MI_LIST	= ${DATAFILES}
 
-INSTALL_MI_DIR = dev/random
+INSTALL_MI_DIR = 
 
 EXPORT_MI_LIST	= ${DATAFILES}
 
-EXPORT_MI_DIR = dev/random
+EXPORT_MI_DIR =
 
 
 include $(MakeInc_rule)

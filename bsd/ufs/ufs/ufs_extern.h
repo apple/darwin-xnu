@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2002 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -57,6 +57,9 @@
 #ifndef _UFS_EXTERN_H_
 #define _UFS_EXTERN_H_
 
+#include <sys/appleapiopts.h>
+
+#ifdef __APPLE_API_PRIVATE
 struct buf;
 struct direct;
 struct disklabel;
@@ -160,4 +163,5 @@ int	 ufs_cmap __P((struct vop_cmap_args *));
 
 __END_DECLS
 
+#endif /* __APPLE_API_PRIVATE */
 #endif /* ! _UFS_EXTERN_H_ */

@@ -147,6 +147,13 @@ extern boolean_t	copyoutmap(
 				vm_offset_t	toaddr,
 				vm_size_t	length);
 
+extern kern_return_t	vm_conflict_check(
+				vm_map_t		map,
+				vm_offset_t		off,
+				vm_size_t		len,
+				memory_object_t		pager,
+				vm_object_offset_t	file_off);
+
 extern vm_map_t	kernel_map;
 extern vm_map_t	kernel_pageable_map;
 extern vm_map_t ipc_kernel_map;

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2002 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -62,10 +62,13 @@
 #ifndef	_SYS_KERNEL_H_
 #define _SYS_KERNEL_H_
 
+#include <sys/appleapiopts.h>
+
 #ifdef	KERNEL
 
 #include <sys/param.h>
 
+#ifdef __APPLE_API_PRIVATE
 /* Global variables for the kernel. */
 
 /* 1.1 */
@@ -76,20 +79,20 @@ extern char domainname[MAXHOSTNAMELEN];
 extern int domainnamelen;
 
 /* 1.2 */
-// extern volatile struct timeval mono_time;
 extern struct timeval boottime;
-extern struct timeval runtime;
+#ifdef __APPLE_API_OBSOLETE
 extern volatile struct timeval time;
 extern struct timezone tz;			/* XXX */
-
+extern int lbolt;		/* once a second sleep address */
 extern int tick;		/* usec per tick (1000000 / hz) */
-extern int tickfix;		/* periodic tick adj. tick not integral */
-extern int tickfixinterval;	/* interval at which to apply adjustment */
-extern int tickadj;		/* "standard" clock skew, us./tick */
 extern int hz;			/* system clock's frequency */
+
 extern int stathz;		/* statistics clock's frequency */
 extern int profhz;		/* profiling clock's frequency */
-extern int lbolt;		/* once a second sleep address */
-#endif	/* KERNEL */
-#endif	/* !_SYS_KERNEL_H_ */
+#endif /* __APPLE_API_OBSOLETE */
 
+#endif /* __APPLE_API_PRIVATE */
+
+#endif	/* KERNEL */
+
+#endif	/* !_SYS_KERNEL_H_ */

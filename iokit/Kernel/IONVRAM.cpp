@@ -69,10 +69,11 @@ void IODTNVRAM::registerNVRAMController(IONVRAMController *nvram)
   
   _nvramController->read(0, _nvramImage, kIODTNVRAMImageSize);
   
-  // Find the offsets for the OF, XPRAM, and NameRegistry partitions.
+  // Find the offsets for the OF, XPRAM, NameRegistry and PanicInfo partitions.
   _ofPartitionOffset = 0xFFFFFFFF;
   _xpramPartitionOffset = 0xFFFFFFFF;
   _nrPartitionOffset = 0xFFFFFFFF;
+  _piPartitionOffset = 0xFFFFFFFF;
   freePartitionOffset = 0xFFFFFFFF;
   freePartitionSize = 0;
   if (getPlatform()->getBootROMType()) {
@@ -93,6 +94,10 @@ void IODTNVRAM::registerNVRAMController(IONVRAMController *nvram)
 	_xpramPartitionSize = kIODTNVRAMXPRAMSize;
 	_nrPartitionOffset = _xpramPartitionOffset + _xpramPartitionSize;
 	_nrPartitionSize = partitionLength - _xpramPartitionSize;
+      } else if (strncmp((const char *)_nvramImage + currentOffset + 4,
+			 kIODTNVRAMPanicInfoPartitonName, 12) == 0) {
+	_piPartitionOffset = partitionOffset;
+	_piPartitionSize = partitionLength;
       } else if (strncmp((const char *)_nvramImage + currentOffset + 4,
 			 kIODTNVRAMFreePartitionName, 12) == 0) {
 	freePartitionOffset = currentOffset;
@@ -134,6 +139,60 @@ void IODTNVRAM::registerNVRAMController(IONVRAMController *nvram)
   if (_nrPartitionOffset != 0xFFFFFFFF)
     _nrImage    = _nvramImage + _nrPartitionOffset;
   
+  if (_piPartitionOffset == 0xFFFFFFFF) {
+    if (freePartitionSize > 0x20) {
+      // Set the signature to 0xa1.
+      _nvramImage[freePartitionOffset] = 0xa1;
+      // Set the checksum to 0.
+      _nvramImage[freePartitionOffset + 1] = 0;
+      // Set the name for the Panic Info partition.
+      strncpy((char *)(_nvramImage + freePartitionOffset + 4),
+	      kIODTNVRAMPanicInfoPartitonName, 12);
+      
+      // Calculate the partition offset and size.
+      _piPartitionOffset = freePartitionOffset + 0x10;
+      _piPartitionSize = 0x800;
+      if (_piPartitionSize + 0x20 > freePartitionSize)
+	_piPartitionSize = freePartitionSize - 0x20;
+      
+      _piImage = _nvramImage + _piPartitionOffset;
+      
+      // Zero the new partition.
+      bzero(_piImage, _piPartitionSize);
+      
+      // Set the partition size.
+      *(UInt16 *)(_nvramImage + freePartitionOffset + 2) =
+	(_piPartitionSize / 0x10) + 1;
+      
+      // Set the partition checksum.
+      _nvramImage[freePartitionOffset + 1] =
+	calculatePartitionChecksum(_nvramImage + freePartitionOffset);
+      
+      // Calculate the free partition offset and size.
+      freePartitionOffset += _piPartitionSize + 0x10;
+      freePartitionSize -= _piPartitionSize + 0x10;
+      
+      // Set the signature to 0x7f.
+      _nvramImage[freePartitionOffset] = 0x7f;
+      // Set the checksum to 0.
+      _nvramImage[freePartitionOffset + 1] = 0;
+      // Set the name for the free partition.
+      strncpy((char *)(_nvramImage + freePartitionOffset + 4),
+	      kIODTNVRAMFreePartitionName, 12);
+      // Set the partition size.
+      *(UInt16 *)(_nvramImage + freePartitionOffset + 2) =
+	freePartitionSize / 0x10;
+      // Set the partition checksum.
+      _nvramImage[freePartitionOffset + 1] =
+	calculatePartitionChecksum(_nvramImage + freePartitionOffset);
+      
+      // Set the nvram image as dirty.
+      _nvramImageDirty = true;
+    }
+  } else {
+    _piImage = _nvramImage + _piPartitionOffset;
+  }
+  
   initOFVariables();
 }
 
@@ -141,7 +200,8 @@ void IODTNVRAM::sync(void)
 {
   if (!_nvramImageDirty && !_ofImageDirty) return;
   
-  syncOFVariables();
+  // Don't try to sync OF Variables if the system has already paniced.
+  if (!_systemPaniced) syncOFVariables();
   
   _nvramController->write(0, _nvramImage, kIODTNVRAMImageSize);
   _nvramController->sync();
@@ -241,6 +301,9 @@ bool IODTNVRAM::setProperty(const OSSymbol *aKey, OSObject *anObject)
   if (getPlatform()->getBootROMType() == 0) {
     if (_ofDict->getObject(aKey) == 0) return false;
   }
+  
+  // Don't allow change of 'aapl,panic-info'.
+  if (aKey->isEqualTo(kIODTNVRAMPanicInfoKey)) return false;
   
   // Make sure the object is of the correct type.
   propType = getOFVariableType(aKey);
@@ -433,7 +496,40 @@ IOReturn IODTNVRAM::writeNVRAMPartition(const OSSymbol *partitionID,
   return kIOReturnSuccess;
 }
 
-// Private methods for Open Firmware variable access.
+UInt32 IODTNVRAM::savePanicInfo(UInt8 *buffer, IOByteCount length)
+{
+  if ((_piImage == 0) || (length <= 0)) return 0;
+  
+  if (length > (_piPartitionSize - 4))
+    length = _piPartitionSize - 4;
+  
+  // Save the Panic Info.
+  bcopy(buffer, _piImage + 4, length);
+  
+  // Save the Panic Info length.
+  *(UInt32 *)_piImage = length;
+  
+  _nvramImageDirty = true;
+  
+  _systemPaniced = true;
+  
+  return length;
+}
+
+// Private methods
+
+UInt8 IODTNVRAM::calculatePartitionChecksum(UInt8 *partitionHeader)
+{
+  UInt8 cnt, isum, csum = 0;
+  
+  for (cnt = 0; cnt < 0x10; cnt++) {
+    isum = csum + partitionHeader[cnt];
+    if (isum < csum) isum++;
+    csum = isum;
+  }
+  
+  return csum;
+}
 
 struct OWVariablesHeader {
   UInt16   owMagic;
@@ -508,6 +604,20 @@ IOReturn IODTNVRAM::initOFVariables(void)
       if (propObject != 0) {
 	_ofDict->setObject("boot-args", propObject);
 	propObject->release();
+      }
+    }
+    
+    // Create the 'aapl,panic-info' property if needed.
+    if (_piImage != 0) {
+      propDataLength = *(UInt32 *)_piImage;
+      if ((propDataLength != 0) && (propDataLength < (_piPartitionSize - 4))) {
+	propObject = OSData::withBytes(_piImage + 4, propDataLength);
+	_ofDict->setObject(kIODTNVRAMPanicInfoKey, propObject);
+	propObject->release();
+	
+	// Clear the length from _piImage and mark dirty.
+	*(UInt32 *)_piImage = 0;
+	_nvramImageDirty = true;
       }
     }
   } else {
@@ -599,6 +709,9 @@ IOReturn IODTNVRAM::syncOFVariables(void)
     while (ok) {
       tmpSymbol = OSDynamicCast(OSSymbol, iter->getNextObject());
       if (tmpSymbol == 0) break;
+      
+      // Don't save 'aapl,panic-info'.
+      if (tmpSymbol->isEqualTo(kIODTNVRAMPanicInfoKey)) continue;
       
       tmpObject = _ofDict->getObject(tmpSymbol);
       

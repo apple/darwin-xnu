@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2002 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -22,15 +22,15 @@
 /*
  * Copyright (c) 1997, Apple Computer, Inc. All rights reserved.
  *
- *	History :
- *	29-Sep-1997  Umesh Vaishampayan
- *		Created.
  */
 
 #ifndef _BSD_PPC_PROFILE_H_
 #define _BSD_PPC_PROFILE_H_
 
+#include <sys/appleapiopts.h>
+
 #ifdef KERNEL
+#ifdef __APPLE_API_UNSTABLE
 /*
  * Block interrupts during mcount so that those interrupts can also be
  * counted (as soon as we get done with the current counting).  On the
@@ -46,6 +46,7 @@ extern void restore_ee(unsigned long smsr);
 
 #define	MCOUNT_EXIT		restore_ee(smsr);
 
+#endif /* __APPLE_API_UNSTABLE */
 #endif /* KERNEL */
 
 #endif /* _BSD_PPC_PROFILE_H_ */

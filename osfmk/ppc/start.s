@@ -28,6 +28,7 @@
 #include <mach_kgdb.h>
 #include <ppc/asm.h>
 #include <ppc/proc_reg.h>
+#include <ppc/spec_reg.h>
 #include <mach/ppc/vm_param.h>
 #include <assym.s>
 	
@@ -54,6 +55,7 @@
 #define PROCESSOR_VERSION_604		4
 #define PROCESSOR_VERSION_603e		6
 #define PROCESSOR_VERSION_750		8
+#define PROCESSOR_VERSION_750FX		0x7000  /* ? */
 #define PROCESSOR_VERSION_604e		9
 #define PROCESSOR_VERSION_604ev		10	/* ? */
 #define PROCESSOR_VERSION_7400		12	/* ? */
@@ -488,6 +490,40 @@ init750CX:
 			b	init750								; Join common...
 
 
+;			750FX
+
+init750FX:
+			bf	firstBoot, init750FXnb
+			mfspr	r11, hid1
+			stw	r11, pfHID1(r30)						; Save the HID1 value
+			b	init750
+
+init750FXnb:
+			lwz	r13, pfHID0(r30)						; Get HID0
+			lwz	r11, pfHID1(r30)						; Get HID1
+
+			rlwinm.	r0, r11, 0, hid1ps, hid1ps					; Isolate the hid1ps bit
+			beq	init750FXnb2							; Clear BTIC if hid1ps set
+			rlwinm	r13, r13, 0, btic+1, btic-1					; Clear the BTIC bit
+
+init750FXnb2:
+			sync
+			mtspr	hid0, r13							; Set the HID
+			isync
+			sync
+
+			rlwinm  r12, r11, 0, hid1ps+1, hid1ps-1					; Select PLL0
+			mtspr	hid1, r12							; Restore PLL config
+			mftb	r13								; Wait 5000 ticks (> 200 us)
+
+init750FXnbloop:
+			mftb	r14
+			sub	r14, r14, r13
+			cmpli	cr0, r14, 5000
+			ble	init750FXnbloop
+			mtspr	hid1, r11							; Select the desired PLL
+			blr
+
 ;			7400
 
 init7400:	bf		firstBoot,i7400nb					; Do different if not initial boot...
@@ -536,7 +572,18 @@ i7400nb:
 			isync
 			sync
 			blr
-				
+
+;			7400 (ver 2.0 - ver 2.7)
+
+init7400v2_7:
+			bf	firstBoot, init7400
+			mfspr	r13, hid0							; Get the HID0
+			ori	r13, r13, nopdstm						; ?
+			mtspr	hid0, r13							; Set the HID0
+			isync
+			sync
+			b	init7400
+
 ;			7410
 ;			Note that this is the same as 7400 except we initialize the l2cr2 register
 
@@ -810,7 +857,36 @@ processor_types:
 	.long	32*1024
 	.long	32*1024
 	
+;       750FX (generic)
 
+        .align  2
+        .long   0xFFFF0000              ; All revisions
+        .short  PROCESSOR_VERSION_750FX
+        .short  0
+        .long   pfFloat | pfCanSleep | pfCanNap | pfCanDoze | pfSlowNap | pfNoMuMMCK | pfL1i | pfL1d | pfL2
+        .long   init750FX
+        .long   CPU_SUBTYPE_POWERPC_750
+        .long   105
+        .long   90
+        .long   32
+        .long   32*1024
+        .long   32*1024
+	
+;	7400 (ver 2.0 - ver 2.7)
+
+	.align	2
+	.long	0xFFFFFFF8		; All revisions
+	.short	PROCESSOR_VERSION_7400
+	.short	0x0200
+	.long	pfFloat | pfAltivec | pfSMPcap | pfCanSleep | pfCanNap | pfCanDoze | pfThermal | pfL1i | pfL1d | pfL1fa | pfL2 | pfL2fa
+	.long	init7400v2_7
+	.long	CPU_SUBTYPE_POWERPC_7400
+	.long	105
+	.long	90
+	.long	32
+	.long	32*1024
+	.long	32*1024
+	
 ;	7400 (generic)
 
 	.align	2
@@ -862,7 +938,7 @@ processor_types:
 	.long	0xFFFFFF00		; Just revisions 1.xx
 	.short	PROCESSOR_VERSION_7450
 	.short	0x0100
-	.long	pfFloat | pfAltivec | pfSMPcap | pfCanSleep | pfNoMSRir | pfLClck | pfL1i | pfL1d | pfL2 | pfL2fa | pfL2i | pfL3 | pfL3fa
+	.long	pfFloat | pfAltivec | pfSMPcap | pfCanSleep | pfNoMSRir | pfNoL2PFNap | pfLClck | pfL1i | pfL1d | pfL2 | pfL2fa | pfL2i | pfL3 | pfL3fa
 	.long	init7450
 	.long	CPU_SUBTYPE_POWERPC_7450
 	.long	105
@@ -877,7 +953,7 @@ processor_types:
 	.long	0xFFFFFFFF		; Just revision 2.0
 	.short	PROCESSOR_VERSION_7450
 	.short	0x0200
-	.long	pfFloat | pfAltivec | pfSMPcap | pfCanSleep | pfNoMSRir | pfLClck | pfL1i | pfL1d | pfL2 | pfL2fa | pfL2i | pfL3 | pfL3fa
+	.long	pfFloat | pfAltivec | pfSMPcap | pfCanSleep | pfNoMSRir | pfNoL2PFNap | pfLClck | pfL1i | pfL1d | pfL2 | pfL2fa | pfL2i | pfL3 | pfL3fa
 	.long	init7450
 	.long	CPU_SUBTYPE_POWERPC_7450
 	.long	105
@@ -892,7 +968,7 @@ processor_types:
 	.long	0xFFFF0000		; All other revisions
 	.short	PROCESSOR_VERSION_7450
 	.short	0
-	.long	pfFloat | pfAltivec | pfSMPcap | pfCanSleep | pfWillNap | pfNoMSRir | pfLClck | pfL1i | pfL1d | pfL2 | pfL2fa | pfL2i | pfL3 | pfL3fa
+	.long	pfFloat | pfAltivec | pfSMPcap | pfCanSleep | pfWillNap | pfNoMSRir | pfNoL2PFNap | pfLClck | pfL1i | pfL1d | pfL2 | pfL2fa | pfL2i | pfL3 | pfL3fa
 	.long	init7450
 	.long	CPU_SUBTYPE_POWERPC_7450
 	.long	105
@@ -907,7 +983,7 @@ processor_types:
 	.long	0xFFFFFF00		; Just revisions 1.xx
 	.short	PROCESSOR_VERSION_7455
 	.short	0x0100
-	.long	pfFloat | pfAltivec | pfSMPcap | pfCanSleep | pfNoMSRir | pfLClck | pfL1i | pfL1d | pfL2 | pfL2fa | pfL2i | pfL3 | pfL3fa
+	.long	pfFloat | pfAltivec | pfSMPcap | pfCanSleep | pfNoMSRir | pfNoL2PFNap | pfLClck | pfL1i | pfL1d | pfL2 | pfL2fa | pfL2i | pfL3 | pfL3fa
 	.long	init745X
 	.long	CPU_SUBTYPE_POWERPC_7450
 	.long	105
@@ -922,7 +998,7 @@ processor_types:
 	.long	0xFFFFFFFF		; Just revision 2.0
 	.short	PROCESSOR_VERSION_7455
 	.short	0x0200
-	.long	pfFloat | pfAltivec | pfSMPcap | pfCanSleep | pfWillNap | pfNoMSRir | pfLClck | pfL1i | pfL1d | pfL2 | pfL2fa | pfL2i | pfL3 | pfL3fa
+	.long	pfFloat | pfAltivec | pfSMPcap | pfCanSleep | pfWillNap | pfNoMSRir | pfNoL2PFNap | pfLClck | pfL1i | pfL1d | pfL2 | pfL2fa | pfL2i | pfL3 | pfL3fa
 	.long	init745X
 	.long	CPU_SUBTYPE_POWERPC_7450
 	.long	105
@@ -937,7 +1013,7 @@ processor_types:
 	.long	0xFFFF0000		; All other revisions
 	.short	PROCESSOR_VERSION_7455
 	.short	0
-	.long	pfFloat | pfAltivec | pfSMPcap | pfCanSleep | pfCanNap | pfNoMSRir | pfLClck | pfL1i | pfL1d | pfL2 | pfL2fa | pfL2i | pfL3 | pfL3fa
+	.long	pfFloat | pfAltivec | pfSMPcap | pfCanSleep | pfCanNap | pfNoMSRir | pfNoL2PFNap | pfLClck | pfL1i | pfL1d | pfL2 | pfL2fa | pfL2i | pfL3 | pfL3fa
 	.long	init745X
 	.long	CPU_SUBTYPE_POWERPC_7450
 	.long	105

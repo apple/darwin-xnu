@@ -389,7 +389,7 @@ IOReturn IOCPUInterruptController::registerInterrupt(IOService *nub,
   
   if (enabledCPUs != numCPUs) {
     assert_wait(this, THREAD_UNINT);
-    thread_block(0);
+    thread_block(THREAD_CONTINUE_NULL);
   }
   
   return kIOReturnSuccess;

@@ -254,7 +254,7 @@ static struct vm_object			vm_object_template;
  *	not be held to make simple references.
  */
 static queue_head_t	vm_object_cached_list;
-static int		vm_object_cached_count;
+static int		vm_object_cached_count=0;
 static int		vm_object_cached_high;	/* highest # cached objects */
 static int		vm_object_cached_max = 512;	/* may be patched*/
 
@@ -472,6 +472,9 @@ vm_object_bootstrap(void)
 	vm_object_template.nophyscache = FALSE;
 	/* End bitfields */
 
+	/* cache bitfields */
+	vm_object_template.wimg_bits = VM_WIMG_DEFAULT;
+
 	/* cached_list; init after allocation */
 	vm_object_template.last_alloc = (vm_object_offset_t) 0;
 	vm_object_template.cluster_size = 0;
@@ -631,7 +634,7 @@ vm_object_deallocate(
 					      THREAD_UNINT);
 			vm_object_unlock(object);
 			vm_object_cache_unlock();
-			thread_block((void (*)(void))0);
+			thread_block(THREAD_CONTINUE_NULL);
 			continue;
 		}
 
@@ -797,6 +800,16 @@ vm_object_cache_trim(
 			(integer_t)vm_object_cached_list.prev, 0, 0, 0);
 
 		object = (vm_object_t) queue_first(&vm_object_cached_list);
+		if(object == (vm_object_t) &vm_object_cached_list) {
+			/* something's wrong with the calling parameter or */
+			/* the value of vm_object_cached_count, just fix   */
+			/* and return */
+			if(vm_object_cached_max < 0)
+				vm_object_cached_max = 0;
+			vm_object_cached_count = 0;
+			vm_object_cache_unlock();
+			return VM_OBJECT_NULL;
+		}
 		vm_object_lock(object);
 		queue_remove(&vm_object_cached_list, object, vm_object_t,
 			     cached_list);
@@ -1314,7 +1327,15 @@ vm_object_deactivate_pages(
 					}
 					VM_PAGE_QUEUES_REMOVE(m);
 
-					queue_enter_first(&vm_page_queue_inactive, m, vm_page_t, pageq);
+					if(m->zero_fill) {
+						queue_enter_first(
+							&vm_page_queue_zf, 
+							m, vm_page_t, pageq);
+					} else {
+						queue_enter_first(
+							&vm_page_queue_inactive, 
+							m, vm_page_t, pageq);
+					}
 
 					m->inactive = TRUE;
 					if (!m->fictitious)  
@@ -1382,6 +1403,8 @@ vm_object_pmap_protect(
 {
 	if (object == VM_OBJECT_NULL)
 	    return;
+	size = round_page_64(size);
+	offset = trunc_page_64(offset);
 
 	vm_object_lock(object);
 
@@ -1395,9 +1418,12 @@ vm_object_pmap_protect(
 		return;
 	    }
 
-	    {
-		register vm_page_t		p;
-		register vm_object_offset_t	end;
+	    /* if we are doing large ranges with respect to resident */
+	    /* page count then we should interate over pages otherwise */
+	    /* inverse page look-up will be faster */
+	    if ((object->resident_page_count / 4) <  atop(size)) {
+		vm_page_t		p;
+		vm_object_offset_t	end;
 
 		end = offset + size;
 
@@ -1422,7 +1448,33 @@ vm_object_pmap_protect(
 		    }
 		  }
 		}
-	    }
+	   } else {
+		vm_page_t		p;
+		vm_object_offset_t	end;
+		vm_object_offset_t	target_off;
+
+		end = offset + size;
+
+		if (pmap != PMAP_NULL) {
+			for(target_off = offset; 
+				target_off < end; target_off += PAGE_SIZE) {
+				if(p = vm_page_lookup(object, target_off)) {
+					vm_offset_t start = pmap_start + 
+						(vm_offset_t)(p->offset - offset);
+					pmap_protect(pmap, start, 
+							start + PAGE_SIZE, prot);
+				}
+		    	}
+		} else {
+			for(target_off = offset; 
+				target_off < end; target_off += PAGE_SIZE) {
+				if(p = vm_page_lookup(object, target_off)) {
+		    			pmap_page_protect(p->phys_addr,
+						      prot & ~p->page_lock);
+				}
+		    	}
+		}
+	  }
 
 	    if (prot == VM_PROT_NONE) {
 		/*
@@ -1793,9 +1845,8 @@ vm_object_copy_call(
 	 */
 	copy_call_count++;
 	while (vm_object_wanted(src_object, VM_OBJECT_EVENT_COPY_CALL)) {
-		vm_object_wait(src_object, VM_OBJECT_EVENT_COPY_CALL,
+		vm_object_sleep(src_object, VM_OBJECT_EVENT_COPY_CALL,
 			       THREAD_UNINT);
-		vm_object_lock(src_object);
 		copy_call_restart_count++;
 	}
 
@@ -1828,9 +1879,8 @@ vm_object_copy_call(
 	 */
 	vm_object_lock(src_object);
 	while (vm_object_wanted(src_object, VM_OBJECT_EVENT_COPY_CALL)) {
-		vm_object_wait(src_object, VM_OBJECT_EVENT_COPY_CALL,
+		vm_object_sleep(src_object, VM_OBJECT_EVENT_COPY_CALL,
 			       THREAD_UNINT);
-		vm_object_lock(src_object);
 		copy_call_sleep_count++;
 	}
 Retry:
@@ -1859,9 +1909,7 @@ Retry:
 	if (check_ready == TRUE) {
 		vm_object_lock(copy);
 		while (!copy->pager_ready) {
-			vm_object_wait(copy, VM_OBJECT_EVENT_PAGER_READY,
-									FALSE);
-			vm_object_lock(copy);
+			vm_object_sleep(copy, VM_OBJECT_EVENT_PAGER_READY, THREAD_UNINT);
 		}
 		vm_object_unlock(copy);
 	}
@@ -2138,18 +2186,18 @@ vm_object_copy_strategically(
 	 */
 
 	while (!src_object->internal && !src_object->pager_ready) {
+		wait_result_t wait_result;
 
-		vm_object_wait(	src_object,
-				VM_OBJECT_EVENT_PAGER_READY,
-				interruptible);
-		if (interruptible &&
-		    (current_thread()->wait_result != THREAD_AWAKENED)) {
+		wait_result = vm_object_sleep(	src_object,
+						VM_OBJECT_EVENT_PAGER_READY,
+						interruptible);
+		if (wait_result != THREAD_AWAKENED) {
+			vm_object_unlock(src_object);
 			*dst_object = VM_OBJECT_NULL;
 			*dst_offset = 0;
 			*dst_needs_copy = FALSE;
 			return(MACH_SEND_INTERRUPTED);
 		}
-		vm_object_lock(src_object);
 	}
 
 	copy_strategy = src_object->copy_strategy;
@@ -2641,10 +2689,9 @@ restart:
 	 */
 
 	while (!object->pager_initialized) {
-		vm_object_wait(	object,
+		vm_object_sleep(object,
 				VM_OBJECT_EVENT_INITIALIZED,
 				THREAD_UNINT);
-		vm_object_lock(object);
 	}
 	vm_object_unlock(object);
 
@@ -2696,10 +2743,9 @@ vm_object_pager_create(
 		 *	wait for them to finish initializing the ports
 		 */
 		while (!object->pager_initialized) {
-			vm_object_wait(	object,
-				       VM_OBJECT_EVENT_INITIALIZED,
-				       THREAD_UNINT);
-			vm_object_lock(object);
+			vm_object_sleep(object,
+				        VM_OBJECT_EVENT_INITIALIZED,
+				        THREAD_UNINT);
 		}
 		vm_object_paging_end(object);
 		return;
@@ -4109,10 +4155,9 @@ memory_object_create_named(
 		vm_object_lock(object);
 		object->named = TRUE;
 		while (!object->pager_ready) {
-			vm_object_wait(object,
-				VM_OBJECT_EVENT_PAGER_READY,
-				FALSE);
-			vm_object_lock(object);
+			vm_object_sleep(object,
+					VM_OBJECT_EVENT_PAGER_READY,
+					THREAD_UNINT);
 		}
 		*control = object->pager_request;
 		vm_object_unlock(object);
@@ -4188,10 +4233,9 @@ restart:
 	object->ref_count++;
 	vm_object_res_reference(object);
 	while (!object->pager_ready) {
-		vm_object_wait(object,
-			VM_OBJECT_EVENT_PAGER_READY,
-			FALSE);
-		vm_object_lock(object);
+		vm_object_sleep(object,
+				VM_OBJECT_EVENT_PAGER_READY,
+				THREAD_UNINT);
 	}
 	vm_object_unlock(object);
 	return (KERN_SUCCESS);
@@ -4251,7 +4295,7 @@ vm_object_release_name(
 					THREAD_UNINT);
 			vm_object_unlock(object);
 			vm_object_cache_unlock();
-			thread_block((void (*)(void)) 0);
+			thread_block(THREAD_CONTINUE_NULL);
 			continue;
 		}
 

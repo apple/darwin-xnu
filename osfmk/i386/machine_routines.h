@@ -31,32 +31,7 @@
 #include <kern/kern_types.h>
 #include <pexpert/pexpert.h>
 
-
-#if	defined(PEXPERT_KERNEL_PRIVATE) || defined(MACH_KERNEL_PRIVATE)
-/* IO memory map services */
-
-/* Map memory map IO space */
-vm_offset_t ml_io_map(
-	vm_offset_t phys_addr, 
-	vm_size_t size);
-
-/* boot memory allocation */
-vm_offset_t ml_static_malloc(
-	vm_size_t size);
-
-#endif
-
-vm_offset_t
-ml_static_ptovirt(
-	vm_offset_t);
-
-void ml_static_mfree(
-	vm_offset_t,
-	vm_size_t);
-
-/* virtual to physical on wired pages */
-vm_offset_t ml_vtophys(
-	vm_offset_t vaddr);
+#include <sys/appleapiopts.h>
 
 /* Interrupt handling */
 
@@ -72,33 +47,7 @@ boolean_t ml_at_interrupt_context(void);
 /* Generate a fake interrupt */
 void ml_cause_interrupt(void);
 
-void ml_thread_policy(
-	thread_t thread,
-	unsigned policy_id,
-	unsigned policy_info);
-
-#define MACHINE_GROUP				0x00000001
-#define MACHINE_NETWORK_GROUP		0x10000000
-#define MACHINE_NETWORK_WORKLOOP	0x00000001
-#define MACHINE_NETWORK_NETISR		0x00000002
-
-/* Initialize Interrupts */
-void ml_install_interrupt_handler(
-    void *nub,
-    int source,
-    void *target,
-    IOInterruptHandler handler,
-    void *refCon);
-
-#ifdef  MACH_KERNEL_PRIVATE 
-/* check pending timers */
-#define machine_clock_assist()
-
-void machine_idle(void);
-
-void machine_signal_idle(
-        processor_t processor);
-#endif
+void ml_get_timebase(unsigned long long *timestamp);
 
 /* Type for the IPI Hander */
 typedef void (*ipi_handler_t)(void);
@@ -111,6 +60,64 @@ kern_return_t ml_processor_register(
 	ipi_handler_t *ipi_handler,
 	boolean_t boot_cpu);
 
-void ml_get_timebase(unsigned long long *timestamp);
+/* Initialize Interrupts */
+void ml_install_interrupt_handler(
+    void *nub,
+    int source,
+    void *target,
+    IOInterruptHandler handler,
+    void *refCon);
+
+#ifdef __APPLE_API_UNSTABLE
+vm_offset_t
+ml_static_ptovirt(
+	vm_offset_t);
+
+void ml_static_mfree(
+	vm_offset_t,
+	vm_size_t);
+
+/* virtual to physical on wired pages */
+vm_offset_t ml_vtophys(
+	vm_offset_t vaddr);
+
+#endif /* __APPLE_API_UNSTABLE */
+
+#ifdef __APPLE_API_PRIVATE
+#if	defined(PEXPERT_KERNEL_PRIVATE) || defined(MACH_KERNEL_PRIVATE)
+/* IO memory map services */
+
+/* Map memory map IO space */
+vm_offset_t ml_io_map(
+	vm_offset_t phys_addr, 
+	vm_size_t size);
+
+/* boot memory allocation */
+vm_offset_t ml_static_malloc(
+	vm_size_t size);
+
+#endif /* PEXPERT_KERNEL_PRIVATE || MACH_KERNEL_PRIVATE  */
+
+#ifdef  MACH_KERNEL_PRIVATE 
+/* check pending timers */
+#define machine_clock_assist()
+
+void machine_idle(void);
+
+void machine_signal_idle(
+        processor_t processor);
+#endif /* MACH_KERNEL_PRIVATE */
+
+void ml_thread_policy(
+	thread_t thread,
+	unsigned policy_id,
+	unsigned policy_info);
+
+#define MACHINE_GROUP					0x00000001
+#define MACHINE_NETWORK_GROUP			0x10000000
+#define MACHINE_NETWORK_WORKLOOP		0x00000001
+#define MACHINE_NETWORK_NETISR			0x00000002
+
+#endif /* __APPLE_API_PRIVATE */
 
 #endif /* _I386_MACHINE_ROUTINES_H_ */

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2002,2000 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -63,7 +63,6 @@
 #include <mach/message.h>
 #include <kern/assert.h>
 #include <kern/misc_protos.h>
-#include <kern/ipc_subsystem.h>
 #include <ipc/port.h>
 #include <ipc/ipc_entry.h>
 #include <ipc/ipc_space.h>
@@ -657,8 +656,6 @@ ipc_right_destroy(
 		assert(pset != IPS_NULL);
 
 		entry->ie_object = IO_NULL;
-		/* port sets are not sharable entries on a subspace basis */
-		/* so there is no need to check the subspace array here   */
 		ipc_entry_dealloc(space, name, entry);
 
 		ips_lock(pset);
@@ -717,9 +714,6 @@ ipc_right_destroy(
 			assert(ip_active(port));
 			assert(port->ip_receiver == space);
 
-			if (port->ip_subsystem)
-				subsystem_deallocate(
-					port->ip_subsystem->subsystem);
 			ipc_port_clear_receiver(port);
 			ipc_port_destroy(port); /* consumes our ref, unlocks */
 		} else if (type & MACH_PORT_TYPE_SEND_ONCE) {

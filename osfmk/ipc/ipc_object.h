@@ -68,7 +68,6 @@
 #include <mach/message.h>
 #include <kern/lock.h>
 #include <kern/macro_help.h>
-#include <kern/thread_pool.h>
 #include <kern/zalloc.h>
 #include <ipc/ipc_types.h>
 
@@ -93,7 +92,6 @@ struct ipc_object {
 	ipc_object_refs_t io_references;
 	ipc_object_bits_t io_bits;
 	port_name_t	  io_receiver_name;
-	struct thread_pool	io_thread_pool;
 #if NCPUS == 1
 	usimple_lock_data_t	io_lock_data;
 #else

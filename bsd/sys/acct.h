@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2002 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -62,6 +62,8 @@
 #ifndef _SYS_ACCT_H_
 #define _SYS_ACCT_H_
 
+#include <sys/appleapiopts.h>
+
 /*
  * Accounting structures; these use a comp_t type which is a 3 bits base 8
  * exponent, 13 bit fraction ``floating point'' number.  Units are 1/AHZ
@@ -96,9 +98,10 @@ struct acct {
 #define	AHZ	64
 
 #ifdef KERNEL
+#ifdef __APPLE_API_PRIVATE
 extern struct vnode	*acctp;
-
 int	acct_process __P((struct proc *p));
-#endif
+#endif /* __APPLE_API_PRIVATE */
+#endif /* KERNEL */
 
 #endif /* ! _SYS_ACCT_H_ */

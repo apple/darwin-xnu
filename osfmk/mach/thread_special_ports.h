@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2002 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -22,75 +22,6 @@
 /*
  * @OSF_COPYRIGHT@
  */
-/*
- * HISTORY
- * 
- * Revision 1.1.1.1  1998/09/22 21:05:30  wsanchez
- * Import of Mac OS X kernel (~semeria)
- *
- * Revision 1.1.1.1  1998/03/07 02:25:46  wsanchez
- * Import of OSF Mach kernel (~mburg)
- *
- * Revision 1.2.6.1  1994/09/23  02:43:25  ezf
- * 	change marker to not FREE
- * 	[1994/09/22  21:43:16  ezf]
- *
- * Revision 1.2.2.5  1993/09/03  15:53:56  jeffc
- * 	CR9255 - Remove MACH_EXC_COMPAT
- * 	[1993/08/26  15:57:00  jeffc]
- * 
- * Revision 1.2.2.4  1993/08/05  19:09:47  jeffc
- * 	CR9508 - Delete dead code. Remove MACH_IPC_COMPAT
- * 	[1993/08/03  17:09:33  jeffc]
- * 
- * Revision 1.2.2.3  1993/08/03  18:29:57  gm
- * 	CR9596: Change KERNEL to MACH_KERNEL.
- * 	[1993/08/02  18:56:38  gm]
- * 
- * Revision 1.2.2.2  1993/06/09  02:43:48  gm
- * 	Added to OSF/1 R1.3 from NMK15.0.
- * 	[1993/06/02  21:18:28  jeffc]
- * 
- * Revision 1.2  1993/04/19  16:39:50  devrcs
- * 	make endif tags ansi compliant/include files
- * 	[1993/02/20  21:45:05  david]
- * 
- * Revision 1.1  1992/09/30  02:32:15  robert
- * 	Initial revision
- * 
- * $EndLog$
- */
-/* CMU_HIST */
-/*
- * Revision 2.4.2.1  92/03/03  16:22:38  jeffreyh
- * 	Changes from TRUNK
- * 	[92/02/26  12:20:46  jeffreyh]
- * 
- * Revision 2.5  92/01/15  13:44:57  rpd
- * 	Changed MACH_IPC_COMPAT conditionals to default to not present.
- * 
- * Revision 2.4  91/05/14  17:01:15  mrt
- * 	Correcting copyright
- * 
- * Revision 2.3  91/02/05  17:36:38  mrt
- * 	Changed to new Mach copyright
- * 	[91/02/01  17:21:48  mrt]
- * 
- * Revision 2.2  90/06/02  15:00:15  rpd
- * 	Converted to new IPC.
- * 	[90/03/26  22:41:20  rpd]
- * 
- * Revision 2.1  89/08/03  16:06:13  rwd
- * Created.
- * 
- * Revision 2.3  89/02/25  18:41:23  gm0w
- * 	Changes for cleanup.
- * 
- * 17-Jan-88  David Golub (dbg) at Carnegie-Mellon University
- *	Created.
- *
- */
-/* CMU_ENDHIST */
 /* 
  * Mach Operating System
  * Copyright (c) 1991,1990,1989,1988,1987 Carnegie Mellon University

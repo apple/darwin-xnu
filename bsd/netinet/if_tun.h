@@ -37,7 +37,9 @@
 
 #ifndef _NET_IF_TUN_H_
 #define _NET_IF_TUN_H_
+#include <sys/appleapiopts.h>
 
+#ifdef __APPLE_API_PRIVATE
 struct tun_softc {
 	u_short	tun_flags;		/* misc flags */
 #define	TUN_OPEN	0x0001
@@ -59,6 +61,7 @@ struct tun_softc {
 	caddr_t		tun_bpf;
 #endif
 };
+#endif /* __APPLE_API_PRIVATE */
 
 /* Maximum packet size */
 #define	TUNMTU		1500

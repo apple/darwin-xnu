@@ -19,11 +19,9 @@
  * 
  * @APPLE_LICENSE_HEADER_END@
  */
+
 /*
- * Copyright (c) 1993 NeXT Computer, Inc.  All rights reserved.
- *
- * kdp_internal.h -- internal definitions for kdp module
- *
+ * Internal definitions for kdp module
  */
 
 #include <kdp/kdp.h>
@@ -41,7 +39,12 @@ typedef struct {
 } kdp_glob_t;
 
 extern kdp_glob_t	kdp;
+
 extern int		kdp_flag;
+#define KDP_READY       0x1
+#define KDP_ARP         0x2
+#define KDP_BP_DIS      0x4
+
 
 typedef boolean_t
 (*kdp_dispatch_t) (
@@ -56,6 +59,9 @@ kdp_packet(
     int *,
     unsigned short *
 );
+
+boolean_t
+kdp_remove_all_breakpoints ();
 
 void
 kdp_exception(
@@ -128,5 +134,4 @@ void
 kdp_sync_cache(
     void
 );
-
 

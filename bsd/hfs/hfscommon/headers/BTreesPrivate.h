@@ -111,6 +111,11 @@
 #ifndef	__BTREESPRIVATE__
 #define __BTREESPRIVATE__
 
+#include <sys/appleapiopts.h>
+
+#ifdef KERNEL
+#ifdef __APPLE_API_PRIVATE
+
 #include "../../hfs_macos_defs.h"
 
 #ifndef __FILEMGRINTERNAL__
@@ -489,4 +494,6 @@ OSStatus	DeleteTree				(BTreeControlBlockPtr	 btreePtr,
 									 UInt16					 index,
 									 UInt16					 level );
 
+#endif /* __APPLE_API_PRIVATE */
+#endif /* KERNEL */
 #endif //__BTREESPRIVATE__

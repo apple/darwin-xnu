@@ -280,8 +280,8 @@ synthfs_mount(mp, path, data, ndp, p)
 {
 	size_t size;
 
-    (void) copyinstr(path, mp->mnt_stat.f_mntonname, sizeof(mp->mnt_stat.f_mntonname) - 1, &size);
-	synthfs_mount_fs(mp, path, data, ndp, p);
+	(void) copyinstr(path, mp->mnt_stat.f_mntonname, sizeof(mp->mnt_stat.f_mntonname) - 1, &size);
+	return (synthfs_mount_fs(mp, path, data, ndp, p));
 }
 
 

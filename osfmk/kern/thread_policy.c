@@ -198,15 +198,7 @@ thread_recompute_priority(
 			priority = MINPRI;
 	}
 
-	if (thread->depress_priority >= 0)
-		thread->depress_priority = priority;
-	else {
-		thread->priority = priority;
-		compute_priority(thread, TRUE);
-
-		if (thread == current_thread())
-			ast_on(AST_BLOCK);
-	}
+	set_priority(thread, priority);
 }
 
 void

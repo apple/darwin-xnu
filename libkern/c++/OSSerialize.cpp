@@ -21,6 +21,12 @@
  */
 /* OSSerialize.cpp created by rsulack on Wen 25-Nov-1998 */
 
+#include <sys/cdefs.h>
+
+__BEGIN_DECLS
+#include <vm/vm_kern.h>
+__END_DECLS
+
 #include <libkern/c++/OSContainers.h>
 #include <libkern/c++/OSLib.h>
 #include <libkern/c++/OSDictionary.h>
@@ -142,13 +148,14 @@ bool OSSerialize::initWithCapacity(unsigned int inCapacity)
 
     tag = 0;
     length = 1;
-    capacity = inCapacity;
-    capacityIncrement = (capacity)? capacity : 256;
+    capacity = (inCapacity) ? round_page(inCapacity) : round_page(1);
+    capacityIncrement = capacity;
 
-    capacity = (((capacity - 1) / capacityIncrement) + 1)
-             * capacityIncrement;
-    data = (char *) kalloc(capacity);
-    if (!data) {
+    // allocate from the kernel map so that we can safely map this data
+    // into user space (the primary use of the OSSerialize object)
+    
+    kern_return_t rc = kmem_alloc(kernel_map, (vm_offset_t *)&data, capacity);
+    if (rc) {
         tags->release();
         tags = 0;
         return false;
@@ -185,25 +192,31 @@ unsigned int OSSerialize::setCapacityIncrement(unsigned int increment)
 unsigned int OSSerialize::ensureCapacity(unsigned int newCapacity)
 {
 	char *newData;
-	unsigned int oldCapacity;
 
 	if (newCapacity <= capacity)
 		return capacity;
 
 	// round up
-	newCapacity = (((newCapacity - 1) / capacityIncrement) + 1)
-                * capacityIncrement;
-	newData = (char *) kalloc(newCapacity);
-	if (newData) {
-		oldCapacity = capacity;
+	newCapacity = round_page(newCapacity);
 
-		ACCUMSIZE(newCapacity - oldCapacity);
+	kern_return_t rc = kmem_realloc(kernel_map,
+					(vm_offset_t)data,
+					capacity,
+					(vm_offset_t *)&newData,
+					newCapacity);
+	if (!rc) {
+	    ACCUMSIZE(newCapacity);
 
-		bcopy(data, newData, oldCapacity);
-		bzero(&newData[capacity], newCapacity - oldCapacity);
-		kfree((vm_offset_t)data, oldCapacity);
-		data = newData;
-		capacity = newCapacity;
+	    // kmem realloc does not free the old address range
+	    kmem_free(kernel_map, (vm_offset_t)data, capacity); 
+	    ACCUMSIZE(-capacity);
+	    
+	    // kmem realloc does not zero out the new memory
+	    // and this could end up going to user land
+	    bzero(&newData[capacity], newCapacity - capacity);
+		
+	    data = newData;
+	    capacity = newCapacity;
 	}
 
 	return capacity;
@@ -215,7 +228,7 @@ void OSSerialize::free()
         tags->release();
 
     if (data) {
-        kfree((vm_offset_t)data, capacity);
+	kmem_free(kernel_map, (vm_offset_t)data, capacity); 
         ACCUMSIZE( -capacity );
     }
     super::free();

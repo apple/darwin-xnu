@@ -50,7 +50,6 @@
 
 #include <vm/vm_map.h>
 #include <vm/vm_kern.h>
-#include <kern/parallel.h>
 #include <kern/zalloc.h>
 #include <kern/kalloc.h>
 #include <libkern/libkern.h>
@@ -59,6 +58,7 @@
 #include <vm/vm_pageout.h>
 
 #include <kern/assert.h>
+#include <sys/kdebug.h>
 
 unsigned int vp_pagein=0;
 unsigned int vp_pgodirty=0;
@@ -102,18 +102,17 @@ vnode_pageout(struct vnode *vp,
 
 	isize = (int)size;
 
-	if (isize < 0)
-		panic("-ve count in vnode_pageout");
-	if (isize == 0)
-		panic("vnode_pageout: size == 0\n");
-
+	if (isize <= 0) {
+	        result = error = PAGER_ERROR;
+		goto out;
+	}
 	UBCINFOCHECK("vnode_pageout", vp);
 
 	if (UBCINVALID(vp)) {
-		result = PAGER_ERROR;
-		error  = PAGER_ERROR;
+		result = error = PAGER_ERROR;
+
 		if (upl && !(flags & UPL_NOCOMMIT))
-			ubc_upl_abort(upl, 0);
+		        ubc_upl_abort_range(upl, upl_offset, size, UPL_ABORT_FREE_ON_EMPTY);
 		goto out;
 	}
 	if (upl) {
@@ -122,14 +121,31 @@ vnode_pageout(struct vnode *vp,
 		 * just go ahead and call VOP_PAGEOUT
 		 */
 		dp_pgouts++;
+
+		KERNEL_DEBUG_CONSTANT((MACHDBG_CODE(DBG_MACH_VM, 1)) | DBG_FUNC_START, 
+				      size, 1, 0, 0, 0);
+
 		if (error = VOP_PAGEOUT(vp, upl, upl_offset, (off_t)f_offset,
 					(size_t)size, p->p_ucred, flags))
 			result = error = PAGER_ERROR;
+
+		KERNEL_DEBUG_CONSTANT((MACHDBG_CODE(DBG_MACH_VM, 1)) | DBG_FUNC_END, 
+				      size, 1, 0, 0, 0);
+
 		goto out;
 	}
 	ubc_create_upl(vp, f_offset, isize, &vpupl, &pl, UPL_COPYOUT_FROM);
-	if (vpupl == (upl_t) 0)
-		return PAGER_ABSENT;
+
+	if (vpupl == (upl_t) 0) {
+		result = error = PAGER_ABSENT;
+		goto out;
+	}
+	/*
+	 * if we get here, we've created the upl and
+	 * are responsible for commiting/aborting it
+	 * regardless of what the caller has passed in
+	 */
+	flags &= ~UPL_NOCOMMIT;
 
 	if (ubc_getsize(vp) == 0) {
 		for (offset = 0; isize; isize -= PAGE_SIZE,
@@ -223,11 +239,17 @@ vnode_pageout(struct vnode *vp,
 		}
 		xsize = num_of_pages * PAGE_SIZE;
 
-		/*  By defn callee will commit or abort upls */
+		KERNEL_DEBUG_CONSTANT((MACHDBG_CODE(DBG_MACH_VM, 1)) | DBG_FUNC_START, 
+				      xsize, 0, 0, 0, 0);
+
 		if (error = VOP_PAGEOUT(vp, vpupl, (vm_offset_t)offset,
 					(off_t)(f_offset + offset), xsize,
-					p->p_ucred, flags & ~UPL_NOCOMMIT))
+					p->p_ucred, flags))
 			result = error = PAGER_ERROR;
+
+		KERNEL_DEBUG_CONSTANT((MACHDBG_CODE(DBG_MACH_VM, 1)) | DBG_FUNC_END, 
+				      xsize, 0, 0, 0, 0);
+
 		offset += xsize;
 		isize  -= xsize;
 		pg_index += num_of_pages;
@@ -245,21 +267,26 @@ out:
 pager_return_t
 vnode_pagein(
 	struct vnode 		*vp,
-	upl_t        		 pl,
-	vm_offset_t  		 pl_offset,
+	upl_t        		upl,
+	vm_offset_t  		upl_offset,
 	vm_object_offset_t	f_offset,
 	vm_size_t     		size,
 	int           		flags,
 	int 			*errorp)
 {
-	int	result = PAGER_SUCCESS;
-	struct proc	*p = current_proc();
+        struct proc     *p = current_proc();
+        upl_page_info_t *pl;
+	int	        result = PAGER_SUCCESS;
 	int		error = 0;
 	int		xfer_size;
+        int             pages_in_upl;
+        int             start_pg;
+        int             last_pg;
+	int             first_pg;
+        int             xsize;
+	int             abort_needed = 1;
 	boolean_t	funnel_state;
-	upl_t vpupl = NULL;
-	off_t	local_offset;
-	unsigned int  ioaddr;
+
 
 	funnel_state = thread_funnel_set(kernel_flock, TRUE);
 
@@ -268,50 +295,129 @@ vnode_pagein(
 	if (UBCINVALID(vp)) {
 		result = PAGER_ERROR;
 		error  = PAGER_ERROR;
-		if (pl && !(flags & UPL_NOCOMMIT)) {
-			ubc_upl_abort(pl, 0);
+		if (upl && !(flags & UPL_NOCOMMIT)) {
+			ubc_upl_abort_range(upl, upl_offset, size, UPL_ABORT_FREE_ON_EMPTY | UPL_ABORT_ERROR);
 		}
 		goto out;
 	}
-
-	if (pl) {
-		dp_pgins++;
-		if (error = VOP_PAGEIN(vp, pl, pl_offset, (off_t)f_offset,
-				       size, p->p_ucred, flags)) {
-			result = PAGER_ERROR;
+	if (upl == (upl_t)NULL) {
+	        if (size > (MAX_UPL_TRANSFER * PAGE_SIZE)) {
+		        result = PAGER_ERROR;
+			error  = PAGER_ERROR;
+			goto out;
 		}
+	        ubc_create_upl(vp, f_offset, size, &upl, &pl, UPL_RET_ONLY_ABSENT);
+
+		if (upl == (upl_t)NULL) {
+		        result =  PAGER_ABSENT;
+			error = PAGER_ABSENT;
+			goto out;
+		}
+		upl_offset = 0;
+		/*
+		 * if we get here, we've created the upl and
+		 * are responsible for commiting/aborting it
+		 * regardless of what the caller has passed in
+		 */
+		flags &= ~UPL_NOCOMMIT;
+		
+		vp_pagein++;
 	} else {
+	        pl = ubc_upl_pageinfo(upl);
 
-		local_offset = 0;
-		while (size) {
-			if(size > 4096 && vp->v_tag == VT_NFS) {
-				xfer_size =  4096;
-				size = size - xfer_size;
-			} else {
-				xfer_size = size;
-				size = 0;
-			}
-			ubc_create_upl(vp, f_offset + local_offset, xfer_size,
-				       &vpupl, NULL, UPL_FLAGS_NONE);
-			if (vpupl == (upl_t) 0) {
-				result =  PAGER_ABSENT;
-				error = PAGER_ABSENT;
-				goto out;
-			}
+		dp_pgins++;
+	}
+	pages_in_upl = size / PAGE_SIZE;
+	first_pg     = upl_offset / PAGE_SIZE;
 
-			vp_pagein++;
+	/*
+	 * before we start marching forward, we must make sure we end on 
+	 * a present page, otherwise we will be working with a freed
+         * upl
+	 */
+	for (last_pg = pages_in_upl - 1; last_pg >= first_pg; last_pg--) {
+		if (upl_page_present(pl, last_pg))
+			break;
+	}
+	pages_in_upl = last_pg + 1;
 
-			/*  By defn callee will commit or abort upls */
-			if (error = VOP_PAGEIN(vp, vpupl, (vm_offset_t) 0,
-					       (off_t)f_offset + local_offset,
-					       xfer_size, p->p_ucred,
-					       flags & ~UPL_NOCOMMIT)) {
+	for (last_pg = first_pg; last_pg < pages_in_upl;) {
+	        /*
+		 * scan the upl looking for the next
+		 * page that is present.... if all of the 
+		 * pages are absent, we're done
+		 */
+	        for (start_pg = last_pg; last_pg < pages_in_upl; last_pg++) {
+		        if (upl_page_present(pl, last_pg))
+			        break;
+		}
+		if (last_pg == pages_in_upl)
+		        break;
+
+	        /*
+		 * if we get here, we've sitting on a page 
+		 * that is present... we want to skip over
+		 * any range of 'valid' pages... if this takes
+		 * us to the end of the request, than we're done
+		 */
+	        for (start_pg = last_pg; last_pg < pages_in_upl; last_pg++) {
+		        if (!upl_valid_page(pl, last_pg) || !upl_page_present(pl, last_pg))
+			        break;
+		}
+		if (last_pg > start_pg) {
+		        /*
+			 * we've found a range of valid pages
+			 * if we've got COMMIT responsibility
+			 * commit this range of pages back to the
+			 * cache unchanged
+			 */
+		        xsize = (last_pg - start_pg) * PAGE_SIZE;
+
+			if (!(flags & UPL_NOCOMMIT))
+			        ubc_upl_abort_range(upl, start_pg * PAGE_SIZE, xsize, UPL_ABORT_FREE_ON_EMPTY);
+
+			abort_needed = 0;
+		}
+		if (last_pg == pages_in_upl)
+		        break;
+
+		if (!upl_page_present(pl, last_pg))
+		        /*
+			 * if we found a range of valid pages 
+			 * terminated by a non-present page
+			 * than start over
+			 */
+		        continue;
+
+		/*
+		 * scan from the found invalid page looking for a valid
+		 * or non-present page before the end of the upl is reached, if we
+		 * find one, then it will be the last page of the request to
+		 * 'cluster_io'
+		 */
+		for (start_pg = last_pg; last_pg < pages_in_upl; last_pg++) {
+		        if (upl_valid_page(pl, last_pg) || !upl_page_present(pl, last_pg))
+			        break;
+		}
+		if (last_pg > start_pg) {
+		        int xoff;
+
+		        xsize = (last_pg - start_pg) * PAGE_SIZE;
+			xoff  = start_pg * PAGE_SIZE;
+
+			if (error = VOP_PAGEIN(vp, upl, (vm_offset_t) xoff,
+					       (off_t)f_offset + xoff,
+					       xsize, p->p_ucred,
+					       flags)) {
 				result = PAGER_ERROR;
 				error  = PAGER_ERROR;
+
 			}
-			local_offset += PAGE_SIZE_64;
+			abort_needed = 0;
 		}
-	}
+        }
+	if (!(flags & UPL_NOCOMMIT) && abort_needed)
+	        ubc_upl_abort_range(upl, upl_offset, size, UPL_ABORT_FREE_ON_EMPTY);
 out:
 	if (errorp)
 		*errorp = result;

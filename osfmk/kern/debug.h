@@ -19,9 +19,13 @@
  * 
  * @APPLE_LICENSE_HEADER_END@
  */
+
 #ifndef	_KERN_DEBUG_H_
 #define _KERN_DEBUG_H_
 
+#include <sys/appleapiopts.h>
+
+#ifdef	__APPLE_API_PRIVATE
 
 extern unsigned int	systemLogDiags;
 
@@ -38,7 +42,10 @@ extern unsigned int     current_debugger;
 
 extern unsigned int     active_debugger;
 extern unsigned int 	debug_mode; 
-extern unsigned int	disableDebugOuput;
+extern unsigned int		disableDebugOuput;
+
+extern unsigned int panicDebugging;
+extern unsigned int	logPanicDataToScreen;
 
 extern int db_run_mode;
 
@@ -57,6 +64,13 @@ extern char	*panicstr;
 
 extern unsigned int	nestedpanic;
 
+extern char *debug_buf;
+extern char *debug_buf_ptr;
+extern unsigned int debug_buf_size;
+
+extern void	debug_log_init(void);
+extern void	debug_putc(char);
+
 #endif /* MACH_KERNEL_PRIVATE */
 
 #define DB_HALT		0x1
@@ -65,5 +79,10 @@ extern unsigned int	nestedpanic;
 #define DB_KPRT		0x8
 #define DB_KDB		0x10
 #define DB_SLOG		0x20
+#define DB_ARP          0x40
+#define DB_KDP_BP_DIS   0x80
+#define DB_LOG_PI_SCRN	0x100
+
+#endif	/* __APPLE_API_PRIVATE */
 
 #endif	/* _KERN_DEBUG_H_ */

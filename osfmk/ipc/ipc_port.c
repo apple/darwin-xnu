@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2002,2000 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -66,9 +66,7 @@
 #include <mach/kern_return.h>
 #include <kern/lock.h>
 #include <kern/ipc_kobject.h>
-#include <kern/ipc_subsystem.h>
 #include <kern/thread.h>
-#include <kern/thread_pool.h>
 #include <kern/misc_protos.h>
 #include <kern/wait_queue.h>
 #include <ipc/ipc_entry.h>
@@ -413,8 +411,8 @@ ipc_port_clear_receiver(
 	 * pull ourselves from any sets.
 	 */
 	if (port->ip_pset_count != 0) {
-		ipc_pset_remove_all(port);
-		port->ip_pset_count = 0;
+		ipc_pset_remove_from_all(port);
+		assert(port->ip_pset_count == 0);
 	}
 
 	/*
@@ -459,10 +457,6 @@ ipc_port_init(
 	port->ip_pset_count = 0;
 	port->ip_premsg = IKM_NULL;
 
-	thread_pool_init(&port->ip_thread_pool);
-
-	port->ip_subsystem = RPC_SUBSYSTEM_NULL;
-	
 #if	MACH_ASSERT
 	ipc_port_init_debug(port);
 #endif	/* MACH_ASSERT */
@@ -602,7 +596,6 @@ ipc_port_destroy(
 	ipc_kmsg_queue_t kmqueue;
 	ipc_kmsg_t kmsg;
 	ipc_port_request_t dnrequests;
-	thread_pool_t thread_pool;
 
 	assert(ip_active(port));
 	/* port->ip_receiver_name is garbage */
@@ -653,29 +646,18 @@ ipc_port_destroy(
 
 	/*
 	 * If the port has a preallocated message buffer and that buffer
-	 * is not inuse, free it.  If it has and inuse one, then the kmsg
+	 * is not inuse, free it.  If it has an inuse one, then the kmsg
 	 * free will detect that we freed the association and it can free it
 	 * like a normal buffer.
 	 */
 	if (IP_PREALLOC(port)) {
 		kmsg = port->ip_premsg;
 		assert(kmsg != IKM_NULL);
-		if (!ikm_prealloc_inuse(kmsg)) {
-			ikm_prealloc_clear_inuse(kmsg, port);
-			IP_CLEAR_PREALLOC(port, kmsg);
+		IP_CLEAR_PREALLOC(port, kmsg);
+		if (!ikm_prealloc_inuse(kmsg))
 			ipc_kmsg_free(kmsg);
-		} else {
-			assert(ikm_prealloc_inuse_port(kmsg) == port);
-			ikm_prealloc_clear_inuse(kmsg, port);
-			IP_CLEAR_PREALLOC(port, kmsg);
-		}
 	}
-
 	ip_unlock(port);
-
-	/* wakeup any threads waiting on this pool port for an activation */
-	if ((thread_pool = &port->ip_thread_pool) != THREAD_POOL_NULL)
-		thread_pool_wakeup(thread_pool);
 
 	/* throw away no-senders request */
 
@@ -693,12 +675,6 @@ ipc_port_destroy(
 	}
 
 	ipc_kobject_destroy(port);
-
-	if (port->ip_subsystem != RPC_SUBSYSTEM_NULL) {
-		subsystem_deallocate((subsystem_t) port->ip_kobject);
-	}
-
-	/* XXXX Perhaps should verify that ip_thread_pool is empty! */
 
 	ipc_port_release(port); /* consume caller's ref */
 }
@@ -1352,7 +1328,6 @@ ipc_port_print(
 	ipc_object_print(&port->ip_object);
 
 	if (ipc_port_print_long) {
-		iprintf("pool=0x%x", port->ip_thread_pool);
 		printf("\n");
 	}
 

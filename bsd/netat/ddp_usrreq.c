@@ -184,7 +184,14 @@ int	ddp_pru_send(struct socket *so, int flags, struct mbuf *m,
 
 	if (pcb == NULL)
 		return (EINVAL);
-
+		
+	/*
+	 * Set type to MSG_DATA.  Otherwise looped back packet is not
+	 * recognized by atp_input() and possibly other protocols.
+	 */
+	 
+	MCHTYPE(m, MSG_DATA);
+	
 	if (!(pcb->ddp_flags & DDPFLG_HDRINCL)) {
 		/* prepend a DDP header */
 		M_PREPEND(m, DDP_X_HDR_SIZE, M_WAIT);

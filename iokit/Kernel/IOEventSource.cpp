@@ -43,6 +43,16 @@ OSMetaClassDefineReservedUnused(IOEventSource, 5);
 OSMetaClassDefineReservedUnused(IOEventSource, 6);
 OSMetaClassDefineReservedUnused(IOEventSource, 7);
 
+/* inline function implementations */
+void IOEventSource::signalWorkAvailable()	{ workLoop->signalWorkAvailable(); }
+void IOEventSource::openGate()			{ workLoop->openGate(); }
+void IOEventSource::closeGate()			{ workLoop->closeGate(); }
+bool IOEventSource::tryCloseGate()		{ return workLoop->tryCloseGate(); }
+int IOEventSource::sleepGate(void *event, UInt32 type)
+        { return workLoop->sleepGate(event, type); }
+void IOEventSource::wakeupGate(void *event, bool oneThread)
+        { workLoop->wakeupGate(event, oneThread); }
+
 bool IOEventSource::init(OSObject *inOwner,
                          Action inAction = 0)
 {

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2002 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -27,8 +27,14 @@
  *
  */
  
+#ifndef __NFS_KRPC_H__
+#define __NFS_KRPC_H__
+
+#include <sys/appleapiopts.h>
+
 #include <sys/cdefs.h>
 
+#ifdef __APPLE_API_PRIVATE
 int krpc_call __P((struct sockaddr_in *sin,
 	u_int prog, u_int vers, u_int func,
 	struct mbuf **data, struct sockaddr_in **from));
@@ -59,3 +65,5 @@ int krpc_portmap __P((struct sockaddr_in *sin,
 #define BOOTPARAM_WHOAMI	1
 #define BOOTPARAM_GETFILE	2
 
+#endif /* __APPLE_API_PRIVATE */
+#endif /* __NFS_KRPC_H__ */
