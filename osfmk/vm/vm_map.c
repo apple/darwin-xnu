@@ -1951,6 +1951,14 @@ vm_map_protect(
 		current = current->vme_next;
 	}
 
+	/* coalesce the map entries, if possible */
+	current = entry;
+	while (current != vm_map_to_entry(map) &&
+	       current->vme_start <= end) {
+		vm_map_simplify_entry(map, current);
+		current = current->vme_next;
+	}
+
 	vm_map_unlock(map);
 	return(KERN_SUCCESS);
 }
@@ -7821,90 +7829,71 @@ vm_region_count_obj_refs(
  *		is often wired down.
  */
 void
+vm_map_simplify_entry(
+	vm_map_t	map,
+	vm_map_entry_t	this_entry)
+{
+	vm_map_entry_t	prev_entry;
+
+	prev_entry = this_entry->vme_prev;
+
+	if ((this_entry != vm_map_to_entry(map)) &&
+	    (prev_entry != vm_map_to_entry(map)) &&
+
+	    (prev_entry->vme_end == this_entry->vme_start) &&
+
+	    (prev_entry->is_sub_map == FALSE) &&
+	    (this_entry->is_sub_map == FALSE) &&
+ 
+	    (prev_entry->object.vm_object == this_entry->object.vm_object) &&
+	    ((prev_entry->offset + (prev_entry->vme_end -
+				    prev_entry->vme_start))
+	     == this_entry->offset) &&
+ 
+	    (prev_entry->inheritance == this_entry->inheritance) &&
+	    (prev_entry->protection == this_entry->protection) &&
+	    (prev_entry->max_protection == this_entry->max_protection) &&
+	    (prev_entry->behavior == this_entry->behavior) &&
+	    (prev_entry->alias == this_entry->alias) &&
+	    (prev_entry->wired_count == this_entry->wired_count) &&
+	    (prev_entry->user_wired_count == this_entry->user_wired_count) &&
+	    (prev_entry->needs_copy == this_entry->needs_copy) &&
+ 
+	    (prev_entry->use_pmap == FALSE) &&
+	    (this_entry->use_pmap == FALSE) &&
+	    (prev_entry->in_transition == FALSE) &&
+	    (this_entry->in_transition == FALSE) &&
+	    (prev_entry->needs_wakeup == FALSE) &&
+	    (this_entry->needs_wakeup == FALSE) &&
+	    (prev_entry->is_shared == FALSE) &&
+	    (this_entry->is_shared == FALSE)
+		) {
+		_vm_map_entry_unlink(&map->hdr, prev_entry);
+		this_entry->vme_start = prev_entry->vme_start;
+		this_entry->offset = prev_entry->offset;
+		vm_object_deallocate(prev_entry->object.vm_object);
+		vm_map_entry_dispose(map, prev_entry);
+		SAVE_HINT(map, this_entry);
+		counter(c_vm_map_entry_simplified++);
+	}
+	counter(c_vm_map_simplify_entry_called++);
+}
+
+void
 vm_map_simplify(
 	vm_map_t	map,
 	vm_offset_t	start)
 {
 	vm_map_entry_t	this_entry;
-	vm_map_entry_t	prev_entry;
-	vm_map_entry_t	next_entry;
 
 	vm_map_lock(map);
-	if (
-		(vm_map_lookup_entry(map, start, &this_entry)) &&
-		((prev_entry = this_entry->vme_prev) != vm_map_to_entry(map)) &&
-
-		(prev_entry->vme_end == this_entry->vme_start) &&
-
-		(prev_entry->is_shared == FALSE) &&
-		(prev_entry->is_sub_map == FALSE) &&
-
-		(this_entry->is_shared == FALSE) &&
-		(this_entry->is_sub_map == FALSE) &&
-
-		(prev_entry->inheritance == this_entry->inheritance) &&
-		(prev_entry->protection == this_entry->protection) &&
-		(prev_entry->max_protection == this_entry->max_protection) &&
-		(prev_entry->behavior == this_entry->behavior) &&
-		(prev_entry->wired_count == this_entry->wired_count) &&
-		(prev_entry->user_wired_count == this_entry->user_wired_count)&&
-		(prev_entry->in_transition == FALSE) &&
-		(this_entry->in_transition == FALSE) &&
-
-		(prev_entry->needs_copy == this_entry->needs_copy) &&
-
-		(prev_entry->object.vm_object == this_entry->object.vm_object)&&
-		((prev_entry->offset +
-		 (prev_entry->vme_end - prev_entry->vme_start))
-		     == this_entry->offset)
-	) {
-		SAVE_HINT(map, prev_entry);
-		vm_map_entry_unlink(map, this_entry);
-		prev_entry->vme_end = this_entry->vme_end;
-		UPDATE_FIRST_FREE(map, map->first_free);
-	 	vm_object_deallocate(this_entry->object.vm_object);
-		vm_map_entry_dispose(map, this_entry);
-		counter(c_vm_map_simplified_lower++);
-	}
-	if (
-		(vm_map_lookup_entry(map, start, &this_entry)) &&
-		((next_entry = this_entry->vme_next) != vm_map_to_entry(map)) &&
-
-		(next_entry->vme_start == this_entry->vme_end) &&
-
-		(next_entry->is_shared == FALSE) &&
-		(next_entry->is_sub_map == FALSE) &&
-
-		(next_entry->is_shared == FALSE) &&
-		(next_entry->is_sub_map == FALSE) &&
-
-		(next_entry->inheritance == this_entry->inheritance) &&
-		(next_entry->protection == this_entry->protection) &&
-		(next_entry->max_protection == this_entry->max_protection) &&
-		(next_entry->behavior == this_entry->behavior) &&
-		(next_entry->wired_count == this_entry->wired_count) &&
-		(next_entry->user_wired_count == this_entry->user_wired_count)&&
-		(this_entry->in_transition == FALSE) &&
-		(next_entry->in_transition == FALSE) &&
-
-		(next_entry->needs_copy == this_entry->needs_copy) &&
-
-		(next_entry->object.vm_object == this_entry->object.vm_object)&&
-		((this_entry->offset +
-		 (this_entry->vme_end - this_entry->vme_start))
-		     == next_entry->offset)
-	) {
-		vm_map_entry_unlink(map, next_entry);
-		this_entry->vme_end = next_entry->vme_end;
-		UPDATE_FIRST_FREE(map, map->first_free);
-	 	vm_object_deallocate(next_entry->object.vm_object);
-		vm_map_entry_dispose(map, next_entry);
-		counter(c_vm_map_simplified_upper++);
+	if (vm_map_lookup_entry(map, start, &this_entry)) {
+		vm_map_simplify_entry(map, this_entry);
+		vm_map_simplify_entry(map, this_entry->vme_next);
 	}
 	counter(c_vm_map_simplify_called++);
 	vm_map_unlock(map);
 }
-
 
 /*
  *	Routine:	vm_map_machine_attribute

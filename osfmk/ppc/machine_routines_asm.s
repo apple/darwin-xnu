@@ -783,8 +783,9 @@ LEXT(machine_idle_ppc)
 			
 			lis		r4,hi16(dozem)					; Assume we can doze
 			bt		pfCanDozeb,yesnap				; We can sleep or doze one this machine...
-			
+
 			ori		r3,r3,lo16(MASK(MSR_EE))		; Flip on EE
+			
 			mtmsr	r3								; Turn interruptions back on
 			blr										; Leave...
 
@@ -792,8 +793,7 @@ yesnap:		mftbu	r9								; Get the upper timebase
 			mftb	r7								; Get the lower timebase
 			mftbu	r8								; Get the upper one again
 			cmplw	r9,r8							; Did the top tick?
-			bne-	yesnap							; Yeah, need to get it again...
-
+			bne--	yesnap							; Yeah, need to get it again...
 			stw		r8,napStamp(r12)				; Set high order time stamp
 			stw		r7,napStamp+4(r12)				; Set low order nap stamp
 
@@ -804,12 +804,12 @@ yesnap:		mftbu	r9								; Get the upper timebase
 			lwz		r8,napStamp(r12)				; Reload high order time stamp
 clearpipe:
 			cmplw	r8,r8
-			bne-	clearpipe			
+			bne-	clearpipe
 			isync
 minovec:
 
 			rlwinm.	r7,r11,0,pfNoL2PFNapb,pfNoL2PFNapb	; Turn off L2 Prefetch before nap?
-			beq	miL2PFok
+			beq		miL2PFok
 
 			mfspr	r7,msscr0						; Get currect MSSCR0 value
 			rlwinm	r7,r7,0,0,l2pfes-1				; Disable L2 Prefetch
@@ -817,24 +817,23 @@ minovec:
 			sync
 			isync
 
-miL2PFok:
-			rlwinm.	r7,r11,0,pfSlowNapb,pfSlowNapb	; Should nap at slow speed?
-			beq	minoslownap
+miL2PFok:	rlwinm.	r7,r11,0,pfSlowNapb,pfSlowNapb	; Should nap at slow speed?
+			beq		minoslownap
 
 			mfspr	r7,hid1							; Get current HID1 value
 			oris	r7,r7,hi16(hid1psm)				; Select PLL1
 			mtspr	hid1,r7							; Update HID1 value
 
-minoslownap:
 
 ;
 ;			We have to open up interruptions here because book 4 says that we should
-;			turn on only the POW bit and that we should have interrupts enabled
+;			turn on only the POW bit and that we should have interrupts enabled.
 ;			The interrupt handler will detect that nap or doze is set if an interrupt
 ;			is taken and set everything up to return directly to machine_idle_ret.
 ;			So, make sure everything we need there is already set up...
 ;
 
+minoslownap:
 			lis		r10,hi16(dozem|napm|sleepm)		; Mask of power management bits
 		
 			bf--	pf64Bitb,mipNSF1				; skip if 32-bit...
@@ -842,12 +841,13 @@ minoslownap:
 			sldi	r4,r4,32						; Position the flags
 			sldi	r10,r10,32						; Position the masks
 
-		
-mipNSF1:	andc	r6,r6,r10						; Clean up the old power bits		
-
-			ori		r7,r5,lo16(MASK(MSR_EE))		; Flip on EE
+mipNSF1:	li		r2,lo16(MASK(MSR_DR)|MASK(MSR_IR))	; Get the translation mask
+			andc	r6,r6,r10						; Clean up the old power bits		
+			ori		r7,r5,lo16(MASK(MSR_EE))		; Flip on EE to make exit msr
+			andc	r5,r5,r2						; Clear IR and DR from current MSR
 			or		r6,r6,r4						; Set nap or doze
-			oris	r5,r7,hi16(MASK(MSR_POW))		; Turn on power management in next MSR
+			ori		r5,r5,lo16(MASK(MSR_EE))		; Flip on EE to make nap msr
+			oris	r2,r5,hi16(MASK(MSR_POW))		; Turn on power management in next MSR
 			
 			sync
 			mtspr	hid0,r6							; Set up the HID for nap/doze
@@ -858,22 +858,33 @@ mipNSF1:	andc	r6,r6,r10						; Clean up the old power bits
 			mfspr	r6,hid0							; Yes, this is a duplicate, keep it here
 			mfspr	r6,hid0							; Yes, this is a duplicate, keep it here
 			isync									; Make sure it is set
-		
-			mtmsr	r7								; Enable for interrupts
 
-			bf--	pf64Bitb,mipowloop				; skip if 32-bit...
+;
+;			Turn translation off to nap
+;
+
+			bt		pfNoMSRirb,miNoMSR				; Jump if we need to use SC for this...
+			mtmsr	r5								; Turn translation off, interrupts on
+			isync									; Wait for it
+			b		miNoMSRx						; Jump back in line...
 			
-			li		r3,0x10							; Fancy nap threashold is 0x10 ticks
+miNoMSR:	mr		r3,r5							; Pass in the new MSR value 
+			li		r0,loadMSR						; MSR setter ultrafast
+			sc										; Do it to it like you never done before...
+
+miNoMSRx:	bf--	pf64Bitb,mipowloop				; skip if 32-bit...
+			
+			li		r3,0x10							; Fancy nap threshold is 0x10 ticks
 			mftb	r8								; Get the low half of the time base
 			mfdec	r4								; Get the decrementer ticks
-			cmplw	r4,r3							; Less than threashold?
+			cmplw	r4,r3							; Less than threshold?
 			blt		mipowloop
 			
-			mtdec	r3								; Load decrimenter with threshold
+			mtdec	r3								; Load decrementer with threshold
 			isync									; and make sure,
 			mfdec	r3								; really sure, it gets there
 			
-			rlwinm	r6,r5,0,MSR_EE_BIT+1,MSR_EE_BIT-1	; Clear out the EE bit
+			rlwinm	r6,r2,0,MSR_EE_BIT+1,MSR_EE_BIT-1	; Clear out the EE bit
 			sync									; Make sure queues are clear
 			mtmsr	r6								; Set MSR with EE off but POW on
 			isync									; Make sure this takes before we proceed
@@ -882,13 +893,13 @@ mipNSF1:	andc	r6,r6,r10						; Clean up the old power bits
 			sub		r9,r9,r8						; Get the number of ticks spent waiting
 			sub		r4,r4,r9						; Adjust the decrementer value
 			
-			mtdec	r4								; Load decrimenter with the rest of the timeout
+			mtdec	r4								; Load decrementer with the rest of the timeout
 			isync									; and make sure,
 			mfdec	r4								; really sure, it gets there
 			
 mipowloop:
 			sync									; Make sure queues are clear
-			mtmsr	r5								; Nap or doze, MSR with POW and EE set
+			mtmsr	r2								; Nap or doze, MSR with POW, EE set, translation off
 			isync									; Make sure this takes before we proceed
 			b		mipowloop						; loop if POW does not take
 
@@ -1894,14 +1905,14 @@ LEXT(ml_sense_nmi)
 			blr										; Leave...
 
 /*
-**      ml_set_processor_speed()
+**      ml_set_processor_speed_powertunw()
 **
 */
 ;			Force a line boundry here
 			.align	5
-			.globl	EXT(ml_set_processor_speed)
+			.globl	EXT(ml_set_processor_speed_powertune)
 
-LEXT(ml_set_processor_speed)
+LEXT(ml_set_processor_speed_powertune)
 			mflr	r0										; Save the link register
 			stwu    r1, -(FM_ALIGN(4*4)+FM_SIZE)(r1)		; Make some space on the stack
 			stw		r28, FM_ARG0+0x00(r1)					; Save a register
@@ -1914,58 +1925,6 @@ LEXT(ml_set_processor_speed)
 
 			lwz		r30, pfPowerModes(r31)					; Get the supported power modes
 
-			rlwinm.	r0, r30, 0, pmDualPLLb, pmDualPLLb		; Is DualPLL supported?
-			bne		spsDPLL
-
-			rlwinm.	r0, r30, 0, pmDFSb, pmDFSb				; Is DFS supported?
-			bne		spsDFS
-
-			rlwinm.	r0, r30, 0, pmPowerTuneb, pmPowerTuneb	; Is PowerTune supported?
-			bne		spsPowerTune
-
-			b		spsDone									; No supported power modes
-
-spsDPLL:
-			cmpli	cr0, r3, 0								; Turn off BTIC before low speed
-			beq		spsDPLL1
-			mfspr	r4, hid0								; Get the current hid0 value
-			rlwinm	r4, r4, 0, btic+1, btic-1				; Clear the BTIC bit
-			sync
-			mtspr	hid0, r4								; Set the new hid0 value
-			isync
-			sync
-
-spsDPLL1:
-			mfspr	r4, hid1								; Get the current PLL settings
-			rlwimi  r4, r3, 31-hid1ps, hid1ps, hid1ps		; Copy the PLL Select bit
-			stw		r4, pfHID1(r31)							; Save the new hid1 value
-			mtspr	hid1, r4								; Select desired PLL
-
-			cmpli	cr0, r3, 0								; Restore BTIC after high speed
-			bne		spsDone
-			lwz		r4, pfHID0(r31)							; Load the hid0 value
-			sync
-			mtspr	hid0, r4								; Set the hid0 value
-			isync
-			sync
-			b		spsDone
-
-spsDFS:
-			cmplwi	r3, 0									; full speed?
-			mfspr	r3, hid1								; Get the current HID1
-			rlwinm	r3, r3, 0, hid1dfs1+1, hid1dfs0-1		; assume full speed, clear dfs bits
-			beq		spsDFS1
-			oris	r3, r3, hi16(hid1dfs1m)					; slow, set half speed dfs1 bit
-
-spsDFS1:
-			stw		r3, pfHID1(r31)							; Save the new hid1 value
-			sync
-			mtspr	hid1, r3								; Set the new HID1
-			sync
-			isync
-			b		spsDone
-
-spsPowerTune:
 			rlwinm	r28, r3, 31-dnap, dnap, dnap			; Shift the 1 bit to the dnap+32 bit
 			rlwinm	r3, r3, 2, 29, 29						; Shift the 1 to a 4 and mask
 			addi	r3, r3, pfPowerTune0					; Add in the pfPowerTune0 offset
@@ -2026,9 +1985,6 @@ spsPowerTuneDone:
 			mfspr	r28, hid0								; Yes, this is a duplicate, keep it here
 			isync											; Make sure it is set
 
-			b		spsDone
-
-spsDone:
 			lwz		r0, (FM_ALIGN(4*4)+FM_SIZE+FM_LR_SAVE)(r1)	; Get the return
 			lwz		r28, FM_ARG0+0x00(r1)					; Restore a register
 			lwz		r29, FM_ARG0+0x04(r1)					; Restore a register
@@ -2037,6 +1993,69 @@ spsDone:
 			lwz		r1, FM_BACKPTR(r1)						; Pop the stack
 			mtlr	r0
 			blr
+
+/*
+**      ml_set_processor_speed_dpll()
+**
+*/
+;			Force a line boundry here
+			.align	5
+			.globl	EXT(ml_set_processor_speed_dpll)
+
+LEXT(ml_set_processor_speed_dpll)
+			mfsprg	r5, 0									; Get the per_proc_info
+			
+			cmplwi	r3, 0									; Turn off BTIC before low speed
+			beq		spsDPLL1
+			mfspr	r4, hid0								; Get the current hid0 value
+			rlwinm	r4, r4, 0, btic+1, btic-1				; Clear the BTIC bit
+			sync
+			mtspr	hid0, r4								; Set the new hid0 value
+			isync
+			sync
+
+spsDPLL1:
+			mfspr	r4, hid1								; Get the current PLL settings
+			rlwimi  r4, r3, 31-hid1ps, hid1ps, hid1ps		; Copy the PLL Select bit
+			stw		r4, pfHID1(r5)							; Save the new hid1 value
+			mtspr	hid1, r4								; Select desired PLL
+
+			cmplwi	r3, 0									; Restore BTIC after high speed
+			bne		spsDPLL2
+			lwz		r4, pfHID0(r5)							; Load the hid0 value
+			sync
+			mtspr	hid0, r4								; Set the hid0 value
+			isync
+			sync
+spsDPLL2:
+			blr
+
+
+/*
+**      ml_set_processor_speed_dfs()
+**
+*/
+;			Force a line boundry here
+			.align	5
+			.globl	EXT(ml_set_processor_speed_dfs)
+
+LEXT(ml_set_processor_speed_dfs)
+			mfsprg	r5, 0									; Get the per_proc_info
+
+			cmplwi	r3, 0									; full speed?
+			mfspr	r3, hid1								; Get the current HID1
+			rlwinm	r3, r3, 0, hid1dfs1+1, hid1dfs0-1		; assume full speed, clear dfs bits
+			beq		spsDFS
+			oris	r3, r3, hi16(hid1dfs1m)					; slow, set half speed dfs1 bit
+
+spsDFS:
+			stw		r3, pfHID1(r5)							; Save the new hid1 value
+			sync
+			mtspr	hid1, r3								; Set the new HID1
+			sync
+			isync
+			blr
+
 
 /*
 **      ml_set_processor_voltage()

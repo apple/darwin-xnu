@@ -293,12 +293,31 @@ fifo_read(ap)
 	if (ap->a_ioflag & IO_NDELAY)
 		rso->so_state |= SS_NBIO;
 	startresid = uio->uio_resid;
-	VOP_UNLOCK(ap->a_vp, 0, p);
-	thread_funnel_switch(KERNEL_FUNNEL, NETWORK_FUNNEL);
-	error = soreceive(rso, (struct sockaddr **)0, uio, (struct mbuf **)0,
-	    (struct mbuf **)0, (int *)0);
-	thread_funnel_switch(NETWORK_FUNNEL, KERNEL_FUNNEL);
-	vn_lock(ap->a_vp, LK_EXCLUSIVE | LK_RETRY, p);
+	/* fifo conformance - if we have a reader open on the fifo but no 
+	 * writers then we need to make sure we do not block.  We do that by 
+	 * checking the receive buffer and if empty set error to EWOULDBLOCK.
+	 * If error is set to EWOULDBLOCK we skip the call into soreceive
+	 */
+	error = 0;
+	if (ap->a_vp->v_fifoinfo->fi_writers < 1) {
+		 error = (rso->so_rcv.sb_cc == 0) ? EWOULDBLOCK : 0;
+	}
+
+	/* skip soreceive to avoid blocking when we have no writers */
+	if (error != EWOULDBLOCK) {
+		VOP_UNLOCK(ap->a_vp, 0, p);
+		thread_funnel_switch(KERNEL_FUNNEL, NETWORK_FUNNEL);
+
+		error = soreceive(rso, (struct sockaddr **)0, uio, (struct mbuf **)0,
+	    					(struct mbuf **)0, (int *)0);
+
+		thread_funnel_switch(NETWORK_FUNNEL, KERNEL_FUNNEL);
+		vn_lock(ap->a_vp, LK_EXCLUSIVE | LK_RETRY, p);
+	}
+	else {
+		/* clear EWOULDBLOCK and return EOF (zero) */
+		error = 0;
+	}
 	/*
 	 * Clear EOF indication after first such return.
 	 */

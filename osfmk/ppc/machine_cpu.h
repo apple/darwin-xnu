@@ -45,4 +45,7 @@ void	cpu_sleep(
 void	cpu_signal_handler(
 	void);
 
+void	cpu_exit_wait(
+	int);
+
 #endif /* _PPC_MACHINE_CPU_H_ */

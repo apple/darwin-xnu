@@ -693,6 +693,9 @@ extern vm_object_t	vm_submap_object;
 
 
 /* simplify map entries */
+extern void		vm_map_simplify_entry(
+	vm_map_t	map,
+	vm_map_entry_t	this_entry);
 extern void		vm_map_simplify(
 				vm_map_t	map,
 				vm_offset_t	start);

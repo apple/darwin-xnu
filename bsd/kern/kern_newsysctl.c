@@ -521,7 +521,7 @@ sysctl_sysctl_name2oid SYSCTL_HANDLER_ARGS
 	return (error);
 }
 
-SYSCTL_PROC(_sysctl, 3, name2oid, CTLFLAG_RW|CTLFLAG_ANYBODY, 0, 0, 
+SYSCTL_PROC(_sysctl, 3, name2oid, CTLFLAG_RW|CTLFLAG_ANYBODY|CTLFLAG_KERN, 0, 0, 
 	sysctl_sysctl_name2oid, "I", "");
 
 static int

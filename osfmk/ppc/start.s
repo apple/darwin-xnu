@@ -825,20 +825,48 @@ init970nb:
 			mfspr	r11,hid0							; Get it
 			isync
 		
-			ld		r11,pfHID1(r30)						; Get it
+			ld		r20,pfHID1(r30)						; Get it
 			isync
-			mtspr	hid1,r11							; Stick it
-			mtspr	hid1,r11							; Stick it again
+			mtspr	hid1,r20							; Stick it
+			mtspr	hid1,r20							; Stick it again
 			isync
 		
 			ld		r11,pfHID4(r30)						; Get it
 			sync
 			mtspr	hid4,r11							; Stick it
 			isync
+
+			lis		r11,0xE000							; Get the unlikeliest ESID possible
+			srdi	r11,r11,1							; Make 0x7FFFFFFFF0000000
+			slbie	r11									; Make sure the ERAT is cleared 
 			
 			ld		r11,pfHID5(r30)						; Get it
 			mtspr	hid5,r11							; Set it
 			isync
+;
+;			May have changed dcbz mode so kill icache
+;
+
+			eqv		r13,r13,r13							; Get a constant -1
+			mr		r14,r20								; Save HID1
+			rldimi	r14,r13,54,9						; Set force icbi match mode
+			
+			li		r11,0								; Set start if ICBI range
+			isync
+			mtspr	hid1,r14							; Stick it
+			mtspr	hid1,r14							; Stick it again
+			isync
+
+inin970ki:	icbi	0,r11								; Kill I$
+			addi	r11,r11,128							; Next line
+			andis.	r0,r11,1							; Have we done them all?
+			beq++	inin970ki							; Not yet...
+
+			isync
+			mtspr	hid1,r20							; Stick it
+			mtspr	hid1,r20							; Stick it again
+			isync
+
 			blr											; Leave...
 		
 

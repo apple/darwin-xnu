@@ -253,6 +253,10 @@ processor_shutdown(
 	processor_doshutdown(processor);
 	splx(s);
 
+#ifdef	__ppc__
+	cpu_exit_wait(processor->slot_num);
+#endif
+
 	return (KERN_SUCCESS);
 }
 

@@ -5,7 +5,7 @@
 	<key>CFBundleDevelopmentRegion</key>
 	<string>English</string>
 	<key>CFBundleGetInfoString</key>
-	<string>System Resource Pseudoextension, Apple Computer Inc, 7.7.0</string>
+	<string>System Resource Pseudoextension, Apple Computer Inc, 7.8.0</string>
 	<key>CFBundleIdentifier</key>
 	<string>com.apple.kernel</string>
 	<key>CFBundleInfoDictionaryVersion</key>
@@ -15,13 +15,13 @@
 	<key>CFBundlePackageType</key>
 	<string>KEXT</string>
 	<key>CFBundleShortVersionString</key>
-	<string>7.7.0</string>
+	<string>7.8.0</string>
 	<key>CFBundleSignature</key>
 	<string>????</string>
 	<key>CFBundleVersion</key>
-	<string>7.7.0</string>
+	<string>7.8.0</string>
 	<key>OSBundleCompatibleVersion</key>
-	<string>7.7.0</string>
+	<string>7.8.0</string>
 	<key>OSBundleRequired</key>
 	<string>Root</string>
 	<key>OSKernelResource</key>

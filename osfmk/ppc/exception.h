@@ -329,6 +329,7 @@ struct per_proc_info {
 #define CPRQsegload	2					/* Segment registers reload */
 #define CPRQscom	3					/* SCOM */
 #define CPRQchud	4					/* CHUD perfmon */
+#define CPRQsps		5					/* Set Processor Speed */
 	unsigned int	MPsigpParm0;		/* SIGP parm 0 */
 	unsigned int	MPsigpParm1;		/* SIGP parm 1 */
 	unsigned int	MPsigpParm2;		/* SIGP parm 2 */
