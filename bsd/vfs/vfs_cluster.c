@@ -94,7 +94,7 @@ static int cluster_nocopy_write(struct vnode *vp, struct uio *uio,
 		off_t newEOF, int devblocksize, int flags);
 static int cluster_phys_read(struct vnode *vp, struct uio *uio,
 		off_t filesize);
-static int cluster_phys_write(struct vnode *vp, struct uio *uio);
+static int cluster_phys_write(struct vnode *vp, struct uio *uio, off_t newEOF);
 static int cluster_push_x(struct vnode *vp, off_t EOF, daddr_t first, daddr_t last, int can_delay);
 static int cluster_try_push(struct vnode *vp, off_t newEOF, int can_delay, int push_all);
 
@@ -1090,7 +1090,7 @@ cluster_write(vp, uio, oldEOF, newEOF, headOff, tailOff, devblocksize, flags)
 		        return(retval);
 		  }
 
-		retval = cluster_phys_write(vp, uio);
+		retval = cluster_phys_write(vp, uio, newEOF);
 
 		if (uio->uio_resid == 0 && (flags & IO_TAILZEROFILL))
 		  {
@@ -1206,6 +1206,7 @@ cluster_nocopy_write(vp, uio, newEOF, devblocksize, flags)
 	 *  -- the resid is a page multiple
 	 *  -- the resid will not exceed iov_len
 	 */
+	cluster_try_push(vp, newEOF, 0, 1);
 
 	iov = uio->uio_iov;
 
@@ -1361,9 +1362,10 @@ cluster_nocopy_write(vp, uio, newEOF, devblocksize, flags)
 }
 
 static int
-cluster_phys_write(vp, uio)
+cluster_phys_write(vp, uio, newEOF)
 	struct vnode *vp;
 	struct uio   *uio;
+	off_t        newEOF;
 {
  	upl_t            upl;
 	vm_offset_t      upl_offset;
@@ -1381,6 +1383,7 @@ cluster_phys_write(vp, uio)
 	 *  -- the resid will not exceed iov_len
 	 *  -- the vector target address is physcially contiguous
 	 */
+	cluster_try_push(vp, newEOF, 0, 1);
 
 	iov = uio->uio_iov;
 	io_size = iov->iov_len;
@@ -1907,7 +1910,7 @@ cluster_write_x(vp, uio, oldEOF, newEOF, headOff, tailOff, devblocksize, flags)
 			else
 			        can_delay = 1;
 
-			if (cluster_try_push(vp, newEOF, can_delay, 0) == 0) {
+			if (cluster_try_push(vp, newEOF, 0, 0) == 0) {
 			        vp->v_flag |= VHASDIRTY;
 				goto delay_io;
 			}

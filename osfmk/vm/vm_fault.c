@@ -1,3 +1,4 @@
+
 /*
  * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
  *
@@ -1834,6 +1835,7 @@ vm_fault(
 	vm_prot_t		full_fault_type;
 	
 
+
 	KERNEL_DEBUG_CONSTANT((MACHDBG_CODE(DBG_MACH_VM, 0)) | DBG_FUNC_START,
 			      vaddr,
 			      0,
@@ -1953,13 +1955,39 @@ vm_fault(
 	while (TRUE) {
 		m = vm_page_lookup(cur_object, cur_offset);
 		if (m != VM_PAGE_NULL) {
-			if (m->busy)
-				break;
+		        if (m->busy) {
+			        wait_result_t	result;
 
+				if (object != cur_object)
+				        vm_object_unlock(object);
+
+				vm_map_unlock_read(map);
+				if (pmap_map != map)
+				        vm_map_unlock(pmap_map);
+
+#if	!VM_FAULT_STATIC_CONFIG
+				if (!vm_fault_interruptible)
+				        interruptible = THREAD_UNINT;
+#endif
+				result = PAGE_ASSERT_WAIT(m, interruptible);
+
+				vm_object_unlock(cur_object);
+
+				if (result == THREAD_WAITING) {
+				        result = thread_block(THREAD_CONTINUE_NULL);
+
+					counter(c_vm_fault_page_block_busy_kernel++);
+				}
+				if (result == THREAD_AWAKENED || result == THREAD_RESTART)
+				        goto RetryFault;
+
+				kr = KERN_ABORTED;
+				goto done;
+			}
 			if (m->unusual && (m->error || m->restart || m->private
 			    || m->absent || (fault_type & m->page_lock))) {
 
-			/*
+			        /*
 				 *	Unusual case. Give up.
 				 */
 				break;
@@ -1995,7 +2023,6 @@ FastMapInFault:
 				m->busy = TRUE;
 
 				vm_object_paging_begin(object);
-				vm_object_unlock(object);
 
 FastPmapEnter:
 				/*
@@ -2017,8 +2044,10 @@ FastPmapEnter:
 					prot &= ~VM_PROT_WRITE;
 #endif	/* MACH_KDB */
 #endif	/* STATIC_CONFIG */
-				if (m->no_isync == TRUE)
+				if (m->no_isync == TRUE) {
 				        pmap_sync_caches_phys(m->phys_addr);
+					m->no_isync = FALSE;
+				}
 
 				cache_attr = ((unsigned int)m->object->wimg_bits) & VM_WIMG_MASK;
 				if(caller_pmap) {
@@ -2029,6 +2058,55 @@ FastPmapEnter:
 					PMAP_ENTER(pmap, vaddr, m, 
 						prot, cache_attr, wired);
 				}
+
+				/*
+				 *	Grab the queues lock to manipulate
+				 *	the page queues.  Change wiring
+				 *	case is obvious.  In soft ref bits
+				 *	case activate page only if it fell
+				 *	off paging queues, otherwise just
+				 *	activate it if it's inactive.
+				 *
+				 *	NOTE: original vm_fault code will
+				 *	move active page to back of active
+				 *	queue.  This code doesn't.
+				 */
+				vm_page_lock_queues();
+
+				if (m->clustered) {
+				        vm_pagein_cluster_used++;
+					m->clustered = FALSE;
+				}
+				m->reference = TRUE;
+
+				if (change_wiring) {
+					if (wired)
+						vm_page_wire(m);
+					else
+						vm_page_unwire(m);
+				}
+#if VM_FAULT_STATIC_CONFIG
+				else {
+					if (!m->active && !m->inactive)
+					        vm_page_activate(m);
+				}
+#else				
+				else if (software_reference_bits) {
+					if (!m->active && !m->inactive)
+						vm_page_activate(m);
+				}
+				else if (!m->active) {
+					vm_page_activate(m);
+				}
+#endif
+				vm_page_unlock_queues();
+
+				/*
+				 *	That's it, clean up and return.
+				 */
+				PAGE_WAKEUP_DONE(m);
+				vm_object_paging_end(object);
+
 				{
 				   tws_hash_line_t	line;
 				   task_t		task;
@@ -2060,10 +2138,14 @@ FastPmapEnter:
 						   base_offset, base_object,
 						   vaddr, pmap_map);
 					   	if(kr == KERN_NO_SPACE) {
+						  vm_object_unlock(object);
+
 						   tws_expand_working_set(
 						      task->dynamic_working_set,
 						      TWS_HASH_LINE_COUNT,
 						      FALSE);
+
+						   vm_object_lock(object);
 						}
 						if(kr == 
 						   KERN_OPERATION_TIMED_OUT) {
@@ -2072,63 +2154,8 @@ FastPmapEnter:
 					}
 				   }
 				}
-				/*
-				 *	Grab the object lock to manipulate
-				 *	the page queues.  Change wiring
-				 *	case is obvious.  In soft ref bits
-				 *	case activate page only if it fell
-				 *	off paging queues, otherwise just
-				 *	activate it if it's inactive.
-				 *
-				 *	NOTE: original vm_fault code will
-				 *	move active page to back of active
-				 *	queue.  This code doesn't.
-				 */
-				vm_object_lock(object);
-				vm_page_lock_queues();
-
-				if (m->clustered) {
-				        vm_pagein_cluster_used++;
-					m->clustered = FALSE;
-				}
-				/* 
-				 * we did the isync above (if needed)... we're clearing
-				 * the flag here to avoid holding a lock
-				 * while calling pmap functions, however
-				 * we need hold the object lock before
-				 * we can modify the flag
-				 */
-				m->no_isync = FALSE;
-				m->reference = TRUE;
-
-				if (change_wiring) {
-					if (wired)
-						vm_page_wire(m);
-					else
-						vm_page_unwire(m);
-				}
-#if VM_FAULT_STATIC_CONFIG
-				else {
-					if (!m->active && !m->inactive)
-					        vm_page_activate(m);
-				}
-#else				
-				else if (software_reference_bits) {
-					if (!m->active && !m->inactive)
-						vm_page_activate(m);
-				}
-				else if (!m->active) {
-					vm_page_activate(m);
-				}
-#endif
-				vm_page_unlock_queues();
-
-				/*
-				 *	That's it, clean up and return.
-				 */
-				PAGE_WAKEUP_DONE(m);
-				vm_object_paging_end(object);
 				vm_object_unlock(object);
+
 				vm_map_unlock_read(map);
 				if(pmap_map != map)
 					vm_map_unlock(pmap_map);
@@ -2136,11 +2163,11 @@ FastPmapEnter:
 				if(write_startup_file)
 					tws_send_startup_info(current_task());
 
-				if (funnel_set) {
+				if (funnel_set)
 					thread_funnel_set( curflock, TRUE);
-					funnel_set = FALSE;
-				}
+
 				thread_interrupt_level(interruptible_state);
+
 
 				KERNEL_DEBUG_CONSTANT((MACHDBG_CODE(DBG_MACH_VM, 0)) | DBG_FUNC_END,
 						      vaddr,
@@ -2148,6 +2175,7 @@ FastPmapEnter:
 						      KERN_SUCCESS,
 						      type_of_fault >> 8,
 						      0);
+
 				return KERN_SUCCESS;
 			}
 
@@ -2161,7 +2189,6 @@ FastPmapEnter:
 
 			if (cur_object == object)
 				break;
-
 			/*
 			 *	This is now a shadow based copy on write
 			 *	fault -- it requires a copy up the shadow
@@ -2177,7 +2204,6 @@ FastPmapEnter:
 			if (m == VM_PAGE_NULL) {
 				break;
 			}
-
 			/*
 			 *	Now do the copy.  Mark the source busy
 			 *	and take out paging references on both
@@ -2226,7 +2252,6 @@ FastPmapEnter:
 			vm_object_paging_end(object); 
 			vm_object_collapse(object);
 			vm_object_paging_begin(object);
-			vm_object_unlock(object);
 
 			goto FastPmapEnter;
 		}
@@ -2241,7 +2266,6 @@ FastPmapEnter:
 				/*
 				 *	Have to talk to the pager.  Give up.
 				 */
-
 				break;
 			}
 
@@ -2346,6 +2370,8 @@ FastPmapEnter:
 				m->inactive = TRUE;
 				vm_page_inactive_count++;
 				vm_page_unlock_queues();
+				vm_object_lock(object);
+
 				goto FastPmapEnter;
 		        }
 
@@ -2373,6 +2399,7 @@ FastPmapEnter:
 		vm_object_unlock(cur_object);
 	}
 	vm_map_unlock_read(map);
+
 	if(pmap_map != map)
 		vm_map_unlock(pmap_map);
 
@@ -2522,7 +2549,6 @@ FastPmapEnter:
 
 	if(m != VM_PAGE_NULL) {
 		old_copy_object = m->object->copy;
-
 		vm_object_unlock(m->object);
 	} else {
 		old_copy_object = VM_OBJECT_NULL;
@@ -2643,7 +2669,6 @@ FastPmapEnter:
 		}
 
 		cache_attr = ((unsigned int)m->object->wimg_bits) & VM_WIMG_MASK;
-	        vm_object_unlock(m->object);
 
 		if(caller_pmap) {
 			PMAP_ENTER(caller_pmap, 
@@ -2687,10 +2712,12 @@ FastPmapEnter:
 						   base_offset, base_object,
 						   vaddr, pmap_map);
 				   	if(kr == KERN_NO_SPACE) {
+	        				vm_object_unlock(m->object);
 						tws_expand_working_set(
 					 	   task->dynamic_working_set, 
 						   TWS_HASH_LINE_COUNT,
 						   FALSE);
+	        				vm_object_lock(m->object);
 					}
 					if(kr == KERN_OPERATION_TIMED_OUT) {
 						write_startup_file = 1;
@@ -2706,6 +2733,7 @@ FastPmapEnter:
 		vm_map_entry_t		entry;
 		vm_offset_t		laddr;
 		vm_offset_t		ldelta, hdelta;
+
 		/* 
 		 * do a pmap block mapping from the physical address
 		 * in the object 
@@ -2820,7 +2848,6 @@ FastPmapEnter:
 	 *	pageout daemon can find it.
 	 */
 	if(m != VM_PAGE_NULL) {
-		vm_object_lock(m->object);
 		vm_page_lock_queues();
 
 		if (change_wiring) {
@@ -2881,6 +2908,7 @@ FastPmapEnter:
 			      kr,
 			      type_of_fault >> 8,
 			      0);
+
 	return(kr);
 }
 
@@ -3207,14 +3235,8 @@ vm_fault_wire_fast(
 	}
 
 	cache_attr = ((unsigned int)m->object->wimg_bits) & VM_WIMG_MASK;
-	vm_object_unlock(object);
 
 	PMAP_ENTER(pmap, pmap_addr, m, prot, cache_attr, TRUE);
-
-	/*
-	 *	Must relock object so that paging_in_progress can be cleared.
-	 */
-	vm_object_lock(object);
 
 	/*
 	 *	Unlock everything, and return

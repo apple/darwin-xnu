@@ -214,6 +214,10 @@ esp4_input(m, off)
 	if (!sumalgo)
 		goto noreplaycheck;
 	siz = (((*sumalgo->sumsiz)(sav) + 3) & ~(4 - 1));
+	if (m->m_pkthdr.len < off + ESPMAXLEN + siz) {
+		ipsecstat.in_inval++;
+		goto bad;
+	}
 	if (AH_MAXSUMSIZE < siz) {
 		ipseclog((LOG_DEBUG,
 		    "internal error: AH_MAXSUMSIZE must be larger than %lu\n",
@@ -581,6 +585,10 @@ esp6_input(mp, offp, proto)
 	if (!sumalgo)
 		goto noreplaycheck;
 	siz = (((*sumalgo->sumsiz)(sav) + 3) & ~(4 - 1));
+	if (m->m_pkthdr.len < off + ESPMAXLEN + siz) {
+		ipsecstat.in_inval++;
+		goto bad;
+	}
 	if (AH_MAXSUMSIZE < siz) {
 		ipseclog((LOG_DEBUG,
 		    "internal error: AH_MAXSUMSIZE must be larger than %lu\n",

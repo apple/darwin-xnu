@@ -1046,7 +1046,7 @@ findpcb:
 					tp->snd_nxt = tp->snd_max;
 					tp->t_badrxtwin = 0;
 				}
-				if ((to.to_flag & TOF_TS) != 0)
+				if (((to.to_flag & TOF_TS) != 0) && (to.to_tsecr != 0)) /* Makes sure we already have a TS */
 					tcp_xmit_timer(tp,
 					    tcp_now - to.to_tsecr + 1);
 				else if (tp->t_rtttime &&
@@ -2060,8 +2060,9 @@ process_ACK:
 		 * Since we now have an rtt measurement, cancel the
 		 * timer backoff (cf., Phil Karn's retransmit alg.).
 		 * Recompute the initial retransmit timer.
+		 * Also makes sure we have a valid time stamp in hand
 		 */
-		if (to.to_flag & TOF_TS)
+		if (((to.to_flag & TOF_TS) != 0) && (to.to_tsecr != 0))
 			tcp_xmit_timer(tp, tcp_now - to.to_tsecr + 1);
 		else if (tp->t_rtttime && SEQ_GT(th->th_ack, tp->t_rtseq))
 			tcp_xmit_timer(tp, tp->t_rtttime);
