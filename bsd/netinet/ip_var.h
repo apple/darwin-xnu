@@ -81,6 +81,7 @@ struct ipq {
 	u_short	ipq_id;			/* sequence id for reassembly */
 	struct mbuf *ipq_frags;		/* to ip headers of fragments */
 	struct	in_addr ipq_src,ipq_dst;
+	u_long	reserved[4];		/* for future use */
 #if IPDIVERT
 	u_short ipq_divert;		/* divert protocol port */
 	u_short ipq_div_cookie;		/* divert protocol cookie */

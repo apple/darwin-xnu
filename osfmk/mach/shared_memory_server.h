@@ -29,8 +29,15 @@
 #ifndef _SHARED_MEMORY_SERVER_H_
 #define _SHARED_MEMORY_SERVER_H_
 
+#define	SHARED_LIBRARY_SERVER_SUPPORTED
+#define GLOBAL_SHARED_TEXT_SEGMENT 0x70000000
+#define GLOBAL_SHARED_DATA_SEGMENT 0x80000000
+#define GLOBAL_SHARED_SEGMENT_MASK 0xF0000000
+
 #define		SHARED_TEXT_REGION_SIZE 0x10000000
 #define		SHARED_DATA_REGION_SIZE 0x10000000
+#define		SHARED_ALTERNATE_LOAD_BASE 0x9000000
+
 /* 
  *  Note: the two masks below are useful because the assumption is 
  *  made that these shared regions will always be mapped on natural boundaries 
@@ -40,7 +47,6 @@
 #define		SHARED_TEXT_REGION_MASK 0xFFFFFFF
 #define		SHARED_DATA_REGION_MASK 0xFFFFFFF
 
-#define		SHARED_ALTERNATE_LOAD_BASE 0x9000000
 
 #include <mach/vm_prot.h>
 #ifndef MACH_KERNEL
@@ -53,6 +59,7 @@
 
 #include <kern/queue.h>
 #include <vm/vm_object.h>
+#include <vm/memory_object.h>
 
 extern ipc_port_t      shared_text_region_handle;
 extern ipc_port_t      shared_data_region_handle;
@@ -172,7 +179,7 @@ copyin_shared_file(
         vm_offset_t     *base_address,
         int             map_cnt,
         sf_mapping_t    *mappings,
-        vm_object_t     file_object,
+        memory_object_control_t		file_control,
 	shared_region_task_mappings_t	shared_region,
         int             *flags);
 

@@ -77,7 +77,7 @@ typedef	unsigned long long	u_int64_t;
 
 typedef int32_t			register_t;
 
-typedef int 			*intptr_t;
-typedef unsigned long		*uintptr_t;
+typedef long int		intptr_t;
+typedef unsigned long int	uintptr_t;
 #endif /* __ASSEMBLER__ */
 #endif	/* _MACHTYPES_H_ */

@@ -875,7 +875,7 @@ nfssvc_iod_continue(error)
 	 */
 	ut = get_bsdthread_info(current_act());
 	myiod = ut->uu_state.uu_nfs_myiod;
-	p = get_bsdtask_info(current_task());
+	p = current_proc();
 
 	/*
 	 * Just loop around doin our stuff until SIGKILL

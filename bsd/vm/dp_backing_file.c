@@ -85,7 +85,7 @@ macx_swapon(
 	register int		error;
 	kern_return_t		kr;
 	mach_port_t		backing_store;
-	mach_port_t		default_pager_port = MACH_PORT_NULL;
+	memory_object_default_t	default_pager;
 	int			i;
 	boolean_t		funnel_state;
 
@@ -156,7 +156,8 @@ macx_swapon(
 	 * Look to see if we are already paging to this file.
 	 */
 	/* make certain the copy send of kernel call will work */
-	kr = host_default_memory_manager(host_priv_self(), &default_pager_port, 0);
+	default_pager = MEMORY_OBJECT_DEFAULT_NULL;
+	kr = host_default_memory_manager(host_priv_self(), &default_pager, 0);
 	if(kr != KERN_SUCCESS) {
 	   error = EAGAIN;
 	   VOP_UNLOCK(vp, 0, p);
@@ -164,10 +165,12 @@ macx_swapon(
 	   goto swapon_bailout;
 	}
 
-	kr = default_pager_backing_store_create(default_pager_port, 
+	kr = default_pager_backing_store_create(default_pager, 
 					-1, /* default priority */
 					0, /* default cluster size */
 					&backing_store);
+	memory_object_default_deallocate(default_pager);
+
 	if(kr != KERN_SUCCESS) {
 	   error = ENOMEM;
 	   VOP_UNLOCK(vp, 0, p);

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2001 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -59,9 +59,6 @@
  *
  *	@(#)vfs_vnops.c	8.14 (Berkeley) 6/15/95
  *
- *	History
- *	10-20-1997	Umesh Vaishampayan
- *		Fixed the count to be off_t rather than int.
  */
 
 #include <sys/param.h>
@@ -77,9 +74,6 @@
 #include <sys/ioctl.h>
 #include <sys/tty.h>
 #include <sys/ubc.h>
-#include <mach/kern_return.h>
-#include <mach/memory_object_control.h>
-#include <mach/vm_prot.h>
 
 struct 	fileops vnops =
 	{ vn_read, vn_write, vn_ioctl, vn_select, vn_closefile };
@@ -171,18 +165,28 @@ vn_open(ndp, fmode, cmode)
 	if (fmode & O_TRUNC) {
 		VOP_UNLOCK(vp, 0, p);				/* XXX */
 		VOP_LEASE(vp, p, cred, LEASE_WRITE);
-		vn_lock(vp, LK_EXCLUSIVE | LK_RETRY, p);	/* XXX */
+		(void)vn_lock(vp, LK_EXCLUSIVE | LK_RETRY, p);	/* XXX */
 		VATTR_NULL(vap);
 		vap->va_size = 0;
 		if (error = VOP_SETATTR(vp, vap, cred, p))
 			goto bad;
 	}
-	if (error = VOP_OPEN(vp, fmode, cred, p))
-		goto bad;
+
+#if DIAGNOSTIC
 	if (UBCINFOMISSING(vp))
-			panic("vn_open: ubc_info_init");
-	if (UBCINFOEXISTS(vp) && !ubc_hold(vp))
-		panic("vn_open: hold");
+		panic("vn_open: ubc_info_init");
+#endif /* DIAGNOSTIC */
+
+	if (UBCINFOEXISTS(vp) && !ubc_hold(vp)) {
+		error = ENOENT;
+		goto bad;
+	}
+
+	if (error = VOP_OPEN(vp, fmode, cred, p)) {
+		ubc_rele(vp);
+		goto bad;
+	}
+
 	if (fmode & FWRITE)
 		if (++vp->v_writecount <= 0)
 			panic("vn_open: v_writecount");
@@ -223,9 +227,6 @@ vn_close(vp, flags, cred, p)
 	struct proc *p;
 {
 	int error;
-	vm_map_t user_map;
-	vm_offset_t addr, addr1;
-	vm_size_t size, pageoff;
 
 	if (flags & FWRITE)
 		vp->v_writecount--;
@@ -256,7 +257,7 @@ vn_rdwr(rw, vp, base, len, offset, segflg, ioflg, cred, aresid, p)
 
 	 /* FIXME XXX */
 	if ((ioflg & IO_NODELOCKED) == 0)
-			vn_lock(vp, LK_EXCLUSIVE | LK_RETRY, p);
+		(void)vn_lock(vp, LK_EXCLUSIVE | LK_RETRY, p);
 	auio.uio_iov = &aiov;
 	auio.uio_iovcnt = 1;
 	aiov.iov_base = base;
@@ -296,7 +297,7 @@ vn_read(fp, uio, cred)
 	off_t count;
 
 	VOP_LEASE(vp, p, cred, LEASE_READ);
-	vn_lock(vp, LK_EXCLUSIVE | LK_RETRY, p);
+	(void)vn_lock(vp, LK_EXCLUSIVE | LK_RETRY, p);
 	uio->uio_offset = fp->f_offset;
 	count = uio->uio_resid;
 
@@ -329,7 +330,7 @@ vn_write(fp, uio, cred)
 		(vp->v_mount && (vp->v_mount->mnt_flag & MNT_SYNCHRONOUS)))
 		ioflag |= IO_SYNC;
 	VOP_LEASE(vp, p, cred, LEASE_WRITE);
-	vn_lock(vp, LK_EXCLUSIVE | LK_RETRY, p);
+	(void)vn_lock(vp, LK_EXCLUSIVE | LK_RETRY, p);
 	uio->uio_offset = fp->f_offset;
 	count = uio->uio_resid;
 
@@ -465,14 +466,15 @@ vn_ioctl(fp, com, data, p)
 /*
  * File table vnode select routine.
  */
-vn_select(fp, which, p)
+vn_select(fp, which, wql, p)
 	struct file *fp;
 	int which;
+	void * wql;
 	struct proc *p;
 {
 
-	return (VOP_SELECT(((struct vnode *)fp->f_data), which, fp->f_flag,
-		fp->f_cred, p));
+	return(VOP_SELECT(((struct vnode *)fp->f_data), which, fp->f_flag,
+		fp->f_cred, wql, p));
 }
 
 /*
@@ -494,7 +496,7 @@ vn_lock(vp, flags, p)
 			while (vp->v_flag & VXLOCK) {
 				vp->v_flag |= VXWANT;
 				simple_unlock(&vp->v_interlock);
-				tsleep((caddr_t)vp, PINOD, "vn_lock", 0);
+				(void)tsleep((caddr_t)vp, PINOD, "vn_lock", 0);
 			}
 			error = ENOENT;
 		} else {

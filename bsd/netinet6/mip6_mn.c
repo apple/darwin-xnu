@@ -2545,7 +2545,7 @@ void  *arg;  /* Not used */
 
 #ifdef __APPLE__
 	boolean_t   funnel_state;
-    	funnel_state = thread_set_funneled(TRUE);
+    	funnel_state = thread_funnel_set(network_flock, TRUE);
 #endif
 	/* Go through the entire output queue and send all packets that
 	   have not been sent. */
@@ -2653,7 +2653,7 @@ void  *arg;  /* Not used */
 				hz * (MIP6_OUTQ_INTERVAL/10));
 	}
 #ifdef __APPLE__
-    (void) thread_set_funneled(funnel_state);
+        (void) thread_funnel_set(network_flock, FALSE);
 #endif
 }
 
@@ -2688,7 +2688,7 @@ void  *arg;   /* Not used */
 #endif
 #ifdef __APPLE__
 	boolean_t   funnel_state;
-    	funnel_state = thread_set_funneled(TRUE);
+    	funnel_state = thread_funnel_set(network_flock, TRUE);
 #endif
 
 	/* Go through the entire BUL and check if any BU have to be sent. */
@@ -2872,7 +2872,7 @@ void  *arg;   /* Not used */
 	}
 	splx(s);
 #ifdef __APPLE__
-	(void) thread_set_funneled(funnel_state);
+        (void) thread_funnel_set(network_flock, FALSE);
 #endif
 }
 
@@ -2898,7 +2898,7 @@ void  *arg;  /* Not used */
 	int              s, start_timer;
 #ifdef __APPLE__
     	boolean_t   funnel_state;
-    	funnel_state = thread_set_funneled(TRUE);
+    	funnel_state = thread_funnel_set(network_flock, TRUE);
 #endif
 	
 	/* Go through the entire list of event-state machines. */
@@ -2933,7 +2933,7 @@ void  *arg;  /* Not used */
 	}
 	splx(s);
 #ifdef __APPLE__
-    	(void) thread_set_funneled(funnel_state);
+        (void) thread_funnel_set(network_flock, FALSE);
 #endif
 }
 

@@ -67,11 +67,16 @@ void IOPrintPlane( const IORegistryPlane * plane )
 
     iter->reset();
     while( (next = iter->getNextObjectRecursive())) {
-	sprintf( format + 1, "%ds", next->getDepth( plane ));
+	sprintf( format + 1, "%ds", 2 * next->getDepth( plane ));
 	IOLog( format, "");
+	IOLog( "\033[33m%s", next->getName( plane ));
+	if( (next->getLocation( plane )))
+            IOLog("@%s", next->getLocation( plane ));
+	IOLog("\033[0m <class %s", next->getMetaClass()->getClassName());
         if( (service = OSDynamicCast(IOService, next)))
-            IOLog("<%ld>", service->getBusyState());
-	IOLog( "%s\n", next->getName());
+            IOLog(", busy %ld", service->getBusyState());
+	IOLog( ">\n");
+	IOSleep(250);
     }
     iter->release();
 }

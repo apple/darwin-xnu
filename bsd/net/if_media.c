@@ -133,7 +133,7 @@ ifmedia_add(ifm, mword, data, aux)
 	}
 #endif
 
-	entry = _MALLOC(sizeof(*entry), M_IFADDR, M_NOWAIT);
+	entry = _MALLOC(sizeof(*entry), M_IFADDR, M_WAITOK);
 	if (entry == NULL)
 		panic("ifmedia_add: can't malloc entry");
 

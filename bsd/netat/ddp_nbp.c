@@ -116,10 +116,13 @@ void sethzonehash(elapp)
 void nbp_shutdown()
 {
 	/* delete all NVE's and release buffers */
-	register nve_entry_t	*nve_entry, *next_nve;
+	register nve_entry_t	*nve_entry, *nve_next;
 
 	ATDISABLE(nve_lock_pri,NVE_LOCK);
-	TAILQ_FOREACH(nve_entry, &name_registry, nve_link) {
+        for ((nve_entry = TAILQ_FIRST(&name_registry)); nve_entry; nve_entry = nve_next) {
+                nve_next = TAILQ_NEXT(nve_entry, nve_link);
+
+                /* NB: nbp_delete_entry calls TAILQ_REMOVE */
 		nbp_delete_entry(nve_entry);
 	}
 	ATENABLE(nve_lock_pri,NVE_LOCK);

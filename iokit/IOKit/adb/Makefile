@@ -11,7 +11,7 @@ include $(MakeInc_cmd)
 include $(MakeInc_def)
 
 MI_DIR = adb
-NOT_EXPORT_HEADERS = adb.h
+# NOT_EXPORT_HEADERS = adb.h
 
 INSTINC_SUBDIRS =
 INSTINC_SUBDIRS_PPC =

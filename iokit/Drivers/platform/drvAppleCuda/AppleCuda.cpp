@@ -79,6 +79,7 @@
 
 
 #include "AppleCuda.h"
+#include "AppleCudaUserClient.h"
 #include "IOCudaADBController.h"
 #include <IOKit/IOLib.h>
 #include <IOKit/IOSyncer.h>
@@ -122,6 +123,7 @@ autopollArrived ( OSObject *inCuda, IOInterruptEventSource *, int );
 
 static int set_cuda_power_message ( int command );
 static int set_cuda_file_server_mode ( int command );
+static int set_cuda_poweruptime(long secs);
 static void cuda_async_set_power_message_enable( thread_call_param_t param, thread_call_param_t );
 static void cuda_async_set_file_server_mode( thread_call_param_t param, thread_call_param_t ) ;
 
@@ -210,6 +212,7 @@ workLoop = NULL;
 eventSrc = NULL;
 ourADBinterface = NULL;
 _rootDomain = 0; 
+_wakeup_from_sleep = false;
 
 workLoop = IOWorkLoop::workLoop();
 if ( !workLoop ) {
@@ -391,7 +394,6 @@ bool CudahasRoot( OSObject * us, void *, IOService * yourDevice )
 IOReturn AppleCuda::powerStateWillChangeTo ( IOPMPowerFlags theFlags, unsigned long unused1,
     IOService* unused2)
 {
-//kprintf("will change to %x", theFlags);
     if ( ! (theFlags & IOPMPowerOn) )
     {
         _cuda_power_state = 0;  //0 means sleeping
@@ -402,10 +404,10 @@ IOReturn AppleCuda::powerStateWillChangeTo ( IOPMPowerFlags theFlags, unsigned l
 IOReturn AppleCuda::powerStateDidChangeTo ( IOPMPowerFlags theFlags, unsigned long unused1,
     IOService* unused2)
 {
-//kprintf("did change to %x", theFlags);
     if (theFlags & IOPMPowerOn)
     {
         _cuda_power_state = 1;  //1 means awake
+	_wakeup_from_sleep = false; //normally it is false
     }
     return IOPMAckImplied;
 }
@@ -499,7 +501,6 @@ void AppleCuda::serviceAutopolls ( void )
 cuda_packet_t *	response;
 
   while( inIndex != outIndex ) {
-
         response = &cuda_unsolicited[ outIndex ];
 
         //Check for power messages, which are handled differently from regular
@@ -543,7 +544,6 @@ cuda_packet_t *	response;
 		}
 
         }
-
         if ( ADBid != NULL ) {
            (*autopoll_handler)(ADBid,response->a_header[2],response->a_bcount,response->a_buffer);
         }
@@ -581,12 +581,145 @@ IOReturn AppleCuda::callPlatformFunction(const OSSymbol *functionName,
 	{
 	    *hasint = true;
 	}
+	
+	if (_wakeup_from_sleep)
+	{
+	    *hasint = true;
+	}
 	return kIOReturnSuccess;
     }
     
     return kIOReturnBadArgument;
 }
 
+
+void
+AppleCuda::setWakeTime(UInt32 waketime)
+{
+    //Call this function with waketime=0 in order to allow normal sleep again
+    _wakeup_from_sleep = false;
+    if (waketime != 0) {
+        timerSrc = IOTimerEventSource::timerEventSource((OSObject*)this, WakeupTimeoutHandler);
+
+	if (!timerSrc || (workLoop->addEventSource(timerSrc) != kIOReturnSuccess)) 
+	{
+	    IOLog("Cuda can not register timeout event\n");
+	    return;
+	}
+
+	timerSrc->setTimeoutMS(waketime);
+    }
+}
+
+static void
+AppleCuda::WakeupTimeoutHandler(OSObject *object, IOTimerEventSource *timer)
+{
+    gCuda->_wakeup_from_sleep = true;
+    if (gCuda->_rootDomain) 
+    {
+	gCuda->_rootDomain->activityTickle(0,0);
+    }
+}
+
+
+void
+AppleCuda::setPowerOnTime(UInt32 newTime)
+{
+    long long_secs;
+
+    if (newTime != 0) {
+	Cuda_PE_read_write_time_of_day(kPEReadTOD, &long_secs);
+	set_cuda_poweruptime((long)newTime + long_secs);
+    }
+}
+
+void
+AppleCuda::setFileServerMode(bool fileServerModeON)
+{
+    set_cuda_file_server_mode((int) fileServerModeON);
+}
+
+void AppleCuda::demandSleepNow(void)
+{
+    if (_rootDomain)
+    {
+	_rootDomain->receivePowerNotification (kIOPMSleepNow);
+    }
+}
+
+// --------------------------------------------------------------------------
+//
+// Method: newUserClient
+//
+// Purpose:
+//        newUserClient is called by the IOKit manager to create the
+//        kernel receiver of a user request. The "type" is a qualifier
+//        shared between the kernel and user client class instances..
+
+#define kAppleCudaUserClientMagicCookie 0x0C00DA
+
+IOReturn
+AppleCuda::newUserClient(task_t        owningTask,
+                        void          *securityToken,
+                        UInt32        magicCookie,
+                        IOUserClient  **handler)
+{
+    IOReturn ioReturn = kIOReturnSuccess;
+    AppleCudaUserClient *client = NULL;
+
+    IOLog("AppleCuda::newUserClient\n");
+
+    if (IOUserClient::clientHasPrivilege(securityToken, "root") != kIOReturnSuccess) {
+        IOLog("AppleCuda::newUserClient: Can't create user client, not privileged\n");
+        return kIOReturnNotPrivileged;
+    }
+
+    // Check that this is a user client type that we support.
+    // type is known only to this driver's user and kernel
+    // classes. It could be used, for example, to define
+    // read or write privileges. In this case, we look for
+    // a private value.
+    if (magicCookie == kAppleCudaUserClientMagicCookie) {
+        // Construct a new client instance for the requesting task.
+        // This is, essentially  client = new AppleCudaUserClient;
+        //				... create metaclasses ...
+        //				client->setTask(owningTask)
+        client = AppleCudaUserClient::withTask(owningTask);
+        if (client == NULL) {
+            ioReturn = kIOReturnNoResources;
+            IOLog("AppleCuda::newUserClient: Can't create user client\n");
+        }
+    }
+    else {
+        ioReturn = kIOReturnInvalid;
+        IOLog("AppleCuda::newUserClient: bad magic cookie.\n");
+    }
+
+    if (ioReturn == kIOReturnSuccess) {
+        // Attach ourself to the client so that this client instance
+        // can call us.
+        if (client->attach(this) == false) {
+            ioReturn = kIOReturnError;
+            IOLog("AppleCuda::newUserClient: Can't attach user client\n");
+        }
+    }
+
+    if (ioReturn == kIOReturnSuccess) {
+        // Start the client so it can accept requests.
+        if (client->start(this) == false) {
+            ioReturn = kIOReturnError;
+            IOLog("AppleCuda::newUserClientt: Can't start user client\n");
+        }
+    }
+
+    if (ioReturn != kIOReturnSuccess && client != NULL) {
+        client->detach(this);
+        client->release();
+    }
+
+    *handler = client;
+    return (ioReturn);
+}
 
 // **********************************************************************************
 // cuda_do_sync_request
@@ -698,6 +831,26 @@ switch( type ) {
     }
 
 return cuda_do_sync_request(gCuda, &cmd, true);
+}
+
+// **********************************************************************************
+// Set the power-on time.  2001
+// **********************************************************************************
+static int set_cuda_poweruptime (long secs)
+{
+    cuda_request_t cmd;
+    long localsecs = secs;
+
+    adb_init_request(&cmd);
+
+    cmd.a_cmd.a_hcount = 2;
+    cmd.a_cmd.a_header[0] = ADB_PACKET_PSEUDO;
+
+    cmd.a_cmd.a_header[1] = ADB_PSEUDOCMD_SET_POWER_UPTIME;
+    cmd.a_cmd.a_buffer = (UInt8 *)&localsecs;
+    cmd.a_cmd.a_bcount = 4;
+
+    return cuda_do_sync_request(gCuda, &cmd, true);
 }
 
 

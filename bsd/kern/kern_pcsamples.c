@@ -37,6 +37,9 @@ unsigned int pc_bufsize      = 0;
 unsigned int pcsample_flags  = 0;
 unsigned int pcsample_enable = 0;
 
+pid_t pc_sample_pid = 0;
+boolean_t pc_trace_frameworks = FALSE;
+
 char pcsample_comm[MAXCOMLEN + 1];
 
 /* Set the default framework boundaries */
@@ -48,6 +51,65 @@ static pid_t global_state_pid = -1;       /* Used to control exclusive use of pc
 extern int pc_trace_buf[];
 extern int pc_trace_cnt;
 
+int
+enable_branch_tracing()
+{
+#ifndef i386
+  struct proc *p;
+  if (-1 != pc_sample_pid) {
+    p = pfind(pc_sample_pid);
+    if (p) {
+      p->p_flag |= P_BTRACE;
+    } 
+  }
+  else {
+    pc_trace_frameworks = TRUE;
+  }
+
+  return 1;
+
+#else
+    return 0;
+#endif
+}
+
+int
+disable_branch_tracing()
+{
+  struct proc *p;
+  switch (pc_sample_pid) {
+    case -1:
+      pc_trace_frameworks = FALSE;
+  break;
+ case 0:
+   break;
+ default:
+   p = pfind(pc_sample_pid);
+   if (p) {
+     p->p_flag &= ~P_BTRACE;
+   }
+   break;
+}
+  clr_be_bit();
+  return 1;
+}
+
+/*
+ * this only works for the current proc as it
+ * is called from context_switch in the scheduler
+ */
+int
+branch_tracing_enabled()
+{
+  struct proc *p = current_proc();
+  if (TRUE == pc_trace_frameworks) return TRUE;
+  if (p) {
+    return (P_BTRACE == (p->p_flag & P_BTRACE));
+  }
+  return 0;
+}
+
+
 void
 add_pcbuffer()
 {
@@ -58,15 +120,6 @@ add_pcbuffer()
 
 	if (!pcsample_enable)
 	  return;
-
-	if (pcsample_comm[0] != '\0')
-	{
-	  /* If command string does not match, then return */
-	    curproc = current_proc();
-	    if (curproc && 
-		(strncmp(curproc->p_comm, pcsample_comm, sizeof(pcsample_comm))))
-	      return;
-	}
 
 	for (i=0; i < pc_trace_cnt; i++)
 	  {
@@ -90,7 +143,7 @@ add_pcbuffer()
 	if ((pc_bufptr + pc_trace_cnt) >= pc_buflast)
 	  {
 	    pcsample_enable = 0;
-	    (void)clr_be_bit();
+	    (void)disable_branch_tracing();
 	    wakeup(&pcsample_enable);
 	  }
 	return;
@@ -98,7 +151,7 @@ add_pcbuffer()
 
 pcsamples_bootstrap()
 {
-       if (!clr_be_bit())
+        if (!disable_branch_tracing())
             return(ENOTSUP);
 
 	pc_bufsize = npcbufs * sizeof(* pc_buffer);
@@ -148,7 +201,10 @@ pcsamples_clear()
 	pcsample_beg= 0;
 	pcsample_end= 0;
 	bzero((void *)pcsample_comm, sizeof(pcsample_comm));
-	(void)clr_be_bit();
+	(void)disable_branch_tracing();
+	pc_sample_pid = 0;
+	pc_trace_frameworks = FALSE;
+
 }
 
 pcsamples_control(name, namelen, where, sizep)
@@ -161,6 +217,7 @@ int ret=0;
 int size=*sizep;
 unsigned int value = name[1];
 pcinfo_t pc_bufinfo;
+pid_t *pidcheck;
 
 pid_t curpid;
 struct proc *p, *curproc;
@@ -234,7 +291,7 @@ struct proc *p, *curproc;
 			  {
 			    /* Do not wait on the buffer */
 			    pcsample_enable = 0;
-			    (void)clr_be_bit();
+			    (void)disable_branch_tracing();
 			    ret = pcsamples_read(where, sizep);
 			    break;
 			  }
@@ -246,9 +303,9 @@ struct proc *p, *curproc;
 			}
 
 			/* Turn on branch tracing */
-			if (!set_be_bit())
+			if (!enable_branch_tracing())
 			  {
-			    ret = ENOTSUP;;
+			    ret = ENOTSUP;
 			    break;
 			  }
 
@@ -257,7 +314,7 @@ struct proc *p, *curproc;
 
 			ret = tsleep(&pcsample_enable, PRIBIO | PCATCH, "pcsample", 0);
 			pcsample_enable = 0;
-			(void)clr_be_bit();
+			(void)disable_branch_tracing();
 
 			if (ret)
 			  {
@@ -298,10 +355,31 @@ struct proc *p, *curproc;
 		            break;
 		        }
 		        bzero((void *)pcsample_comm, sizeof(pcsample_comm));
-		        if (copyin(where, pcsample_comm, size))
-		        {
-		            ret = EINVAL;
-		        }
+			if (copyin(where, pcsample_comm, size))
+			  {
+			    ret = EINVAL;
+			    break;
+			  }
+
+			/* Check for command name or pid */
+			if (pcsample_comm[0] != '\0')
+			  {
+			    ret= EOPNOTSUPP;
+			    break;
+			  }
+			else
+			  {
+			    if (size != (2 * sizeof(pid_t)))
+			    {
+			      ret = EINVAL;
+			      break;
+			    }
+			    else
+			      {
+				pidcheck = (pid_t *)pcsample_comm;
+				pc_sample_pid = pidcheck[1];
+			      }
+			  }
 		        break;
 		default:
 		        ret= EOPNOTSUPP;
@@ -355,7 +433,4 @@ int copycount;
 	    return(0);
 	  }
 }
-
-
-
 

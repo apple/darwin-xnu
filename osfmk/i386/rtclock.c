@@ -112,7 +112,7 @@ clock_res_t			RtcDelt;
 
 /* global data declarations */
 struct	{
-	AbsoluteTime		abstime;
+	uint64_t			abstime;
 
 	mach_timespec_t 	time;
 	mach_timespec_t		alarm_time;	/* time of next alarm */
@@ -120,7 +120,7 @@ struct	{
 	mach_timespec_t		calend_offset;
 	boolean_t			calend_is_set;
 
-	AbsoluteTime		timer_deadline;
+	uint64_t			timer_deadline;
 	boolean_t			timer_is_set;
 	clock_timer_func_t	timer_expire;
 
@@ -214,7 +214,7 @@ MACRO_END
 /*
  * Calibration delay counts.
  */
-unsigned int	delaycount = 10;
+unsigned int	delaycount = 100;
 unsigned int	microdata = 50;
 
 /*
@@ -783,7 +783,7 @@ clock_timebase_info(
 
 void
 clock_set_timer_deadline(
-	AbsoluteTime			deadline)
+	uint64_t			deadline)
 {
 	spl_t			s;
 
@@ -849,7 +849,7 @@ rtclock_reset(void)
 int
 rtclock_intr(void)
 {
-	AbsoluteTime	abstime;
+	uint64_t		abstime;
 	mach_timespec_t	clock_time;
 	int				i;
 	spl_t			s;
@@ -870,10 +870,10 @@ rtclock_intr(void)
 	/* note time now up to date */
 	last_ival = 0;
 
-	ADD_ABSOLUTETIME_TICKS(&rtclock.abstime, NSEC_PER_SEC/HZ);
+	rtclock.abstime += (NSEC_PER_SEC/HZ);
 	abstime = rtclock.abstime;
-	if (rtclock.timer_is_set &&
-			CMP_ABSOLUTETIME(&rtclock.timer_deadline, &abstime) <= 0) {
+	if (	rtclock.timer_is_set				&&
+			rtclock.timer_deadline <= abstime		) {
 		rtclock.timer_is_set = FALSE;
 		UNLOCK_RTC(s);
 
@@ -926,9 +926,9 @@ rtclock_intr(void)
 
 void
 clock_get_uptime(
-	AbsoluteTime	*result)
+	uint64_t		*result)
 {
-	natural_t		ticks;
+	uint32_t		ticks;
 	spl_t			s;
 
 	LOCK_RTC(s);
@@ -936,57 +936,57 @@ clock_get_uptime(
 	*result = rtclock.abstime;
 	UNLOCK_RTC(s);
 
-	ADD_ABSOLUTETIME_TICKS(result, ticks);
+	*result += ticks;
 }
 
 void
 clock_interval_to_deadline(
-	natural_t			interval,
-	natural_t			scale_factor,
-	AbsoluteTime		*result)
+	uint32_t		interval,
+	uint32_t		scale_factor,
+	uint64_t		*result)
 {
-	AbsoluteTime		abstime;
+	uint64_t		abstime;
 
 	clock_get_uptime(result);
 
 	clock_interval_to_absolutetime_interval(interval, scale_factor, &abstime);
 
-	ADD_ABSOLUTETIME(result, &abstime);
+	*result += abstime;
 }
 
 void
 clock_interval_to_absolutetime_interval(
-	natural_t			interval,
-	natural_t			scale_factor,
-	AbsoluteTime		*result)
+	uint32_t		interval,
+	uint32_t		scale_factor,
+	uint64_t		*result)
 {
-	AbsoluteTime_to_scalar(result) = (uint64_t)interval * scale_factor;
+	*result = (uint64_t)interval * scale_factor;
 }
 
 void
 clock_absolutetime_interval_to_deadline(
-	AbsoluteTime		abstime,
-	AbsoluteTime		*result)
+	uint64_t		abstime,
+	uint64_t		*result)
 {
 	clock_get_uptime(result);
 
-	ADD_ABSOLUTETIME(result, &abstime);
+	*result += abstime;
 }
 
 void
 absolutetime_to_nanoseconds(
-	AbsoluteTime		abstime,
-	UInt64				*result)
+	uint64_t		abstime,
+	uint64_t		*result)
 {
-	*result = AbsoluteTime_to_scalar(&abstime);
+	*result = abstime;
 }
 
 void
 nanoseconds_to_absolutetime(
-	UInt64				nanoseconds,
-	AbsoluteTime		*result)
+	uint64_t		nanoseconds,
+	uint64_t		*result)
 {
-	AbsoluteTime_to_scalar(result) = nanoseconds;
+	*result = nanoseconds;
 }
 
 /*
@@ -1038,14 +1038,18 @@ calibrate_delay(void)
 	for (i=0; i<10; i++) {
 	  	prev = delaycount;
 		/* 
-		 * microdata must not be to large since measure_timer
+		 * microdata must not be too large since measure_timer
 		 * will not return accurate values if the counter (short) 
 		 * rolls over
 		 */
  		val = measure_delay(microdata);
+		if (val == 0) {
+		  delaycount *= 2;
+		} else {
 		delaycount *= microdata;
 		delaycount += val-1; 	/* round up to upper us */
 		delaycount /= val;
+		}
 		if (delaycount <= 0)
 			delaycount = 1;
 		if (delaycount != prev)

@@ -139,6 +139,7 @@
 #define hid1	1009	/* Clock configuration */
 #define iabr	1010	/* Instruction address breakpoint register */
 #define ictrl	1011	/* Instruction Cache Control */
+#define ldstdb	1012	/* Load/Store Debug */
 #define dabr	1013	/* Data address breakpoint register */
 #define msscr0	1014	/* Memory subsystem control */
 #define msscr1	1015	/* Memory subsystem debug */
@@ -239,6 +240,9 @@
 #define tfsts	24
 #define tfste	25
 #define tfstm	0x000000C0
+#define	l2pfes	30
+#define	l2pfee	31
+#define	l2pfem	0x00000003
 
 ;	msscr1 bits
 #define cqd		15

@@ -333,6 +333,8 @@ int sem_post();
 int sem_getvalue();
 int sem_init();
 int sem_destroy();
+
+int issetugid();
 /*
  * System call switch table.
  */
@@ -727,7 +729,7 @@ struct sysent sysent[] = {
 	syss(mlockall,1),	/* 324 */
 	syss(munlockall,1),	/* 325 */
 	syss(nosys,0),		/* 326 */
-	syss(nosys,0),		/* 327 */
+	sysp(issetugid,0),	/* 327 = issetugid */
 	syss(nosys,0),		/* 328 */
 	syss(nosys,0),		/* 329 */
 	syss(nosys,0),		/* 330 */

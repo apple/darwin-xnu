@@ -170,8 +170,6 @@ osfmk/kern/priority.c			standard
 osfmk/kern/processor.c		standard
 osfmk/kern/queue.c			standard
 osfmk/kern/sched_prim.c		standard
-osfmk/kern/sf.c			standard
-osfmk/kern/spl.c			standard
 osfmk/kern/sscanf.c			standard
 osfmk/kern/startup.c			standard
 osfmk/kern/subsystem.c		standard
@@ -206,9 +204,7 @@ osfmk/kern/bsd_kern.c		optional mach_bsd
 ./mach/lock_set_server.c		standard
 ./mach/mach_host_server.c		standard
 ./mach/mach_port_server.c		standard
-./mach/memory_object_user.c		standard
 ./mach/memory_object_server.c		standard
-./mach/memory_object_default_user.c	standard
 ./mach/memory_object_control_server.c	standard
 ./mach/memory_object_default_server.c	standard
 ./mach/memory_object_name_server.c	standard
@@ -219,6 +215,8 @@ osfmk/kern/bsd_kern.c		optional mach_bsd
 # when we can (i.e. when we can get the send-always behavior covered
 # even with MIG-generated code).
 # ./mach/notify_user.c			standard
+# ./mach/memory_object_user.c		standard
+# ./mach/memory_object_default_user.c	standard
 #
 ./mach/processor_server.c		standard
 ./mach/processor_set_server.c		standard
@@ -228,7 +226,9 @@ osfmk/kern/bsd_kern.c		optional mach_bsd
 ./mach/thread_act_server.c		standard
 ./mach/vm_map_server.c			standard
 osfmk/mach-o/mach_header.c		standard
+osfmk/vm/device_vm.c			standard
 osfmk/vm/memory_object.c		standard
+osfmk/vm/task_working_set.c		standard
 osfmk/vm/vm_debug.c			standard
 osfmk/vm/vm_external.c                optional mach_pagemap
 osfmk/vm/vm_fault.c			standard

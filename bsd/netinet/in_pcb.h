@@ -188,6 +188,7 @@ struct inpcb {
 #endif
 	int	hash_element;           /* Array index of pcb's hash list    */
 	caddr_t inp_saved_ppcb;		/* place to save pointer while cached */
+	u_long	reserved[4];
 };
 /*
  * The range of the generation count, as used in this implementation,

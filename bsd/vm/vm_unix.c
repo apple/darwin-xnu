@@ -76,9 +76,22 @@ vslock(addr, len)
 	caddr_t	addr;
 	int	len;
 {
-	vm_map_wire(current_map(), trunc_page(addr),
+kern_return_t kret;
+	kret = vm_map_wire(current_map(), trunc_page(addr),
 			round_page(addr+len), 
 			VM_PROT_READ | VM_PROT_WRITE ,FALSE);
+
+	switch (kret) {
+	case KERN_SUCCESS:
+		return (0);
+	case KERN_INVALID_ADDRESS:
+	case KERN_NO_SPACE:
+		return (ENOMEM);
+	case KERN_PROTECTION_FAILURE:
+		return (EACCES);
+	default:
+		return (EINVAL);
+	}
 }
 
 vsunlock(addr, len, dirtied)
@@ -91,6 +104,7 @@ vsunlock(addr, len, dirtied)
 	vm_page_t	pg;
 #endif  /* FIXME ] */
 	vm_offset_t	vaddr, paddr;
+	kern_return_t kret;
 
 #if FIXME  /* [ */
 	if (dirtied) {
@@ -106,8 +120,19 @@ vsunlock(addr, len, dirtied)
 #ifdef	lint
 	dirtied++;
 #endif	/* lint */
-	vm_map_unwire(current_map(), trunc_page(addr),
+	kret = vm_map_unwire(current_map(), trunc_page(addr),
 				round_page(addr+len), FALSE);
+	switch (kret) {
+	case KERN_SUCCESS:
+		return (0);
+	case KERN_INVALID_ADDRESS:
+	case KERN_NO_SPACE:
+		return (ENOMEM);
+	case KERN_PROTECTION_FAILURE:
+		return (EACCES);
+	default:
+		return (EINVAL);
+	}
 }
 
 #if	defined(sun) || BALANCE || defined(m88k)
@@ -195,39 +220,6 @@ swapon()
 	return(EOPNOTSUPP);
 }
 
-thread_t
-procdup(
-	struct proc		*child,
-	struct proc		*parent)
-{
-	thread_t		thread;
-	task_t			task;
- 	kern_return_t	result;
-
-	if (parent->task == kernel_task)
-		result = task_create_local(TASK_NULL, FALSE, FALSE, &task);
-	else
-		result = task_create_local(parent->task, TRUE, FALSE, &task);
-	if (result != KERN_SUCCESS)
-	    printf("fork/procdup: task_create failed. Code: 0x%x\n", result);
-	child->task = task;
-	/* task->proc = child; */
-	set_bsdtask_info(task, child);
-	result = thread_create(task, &thread);
-	if (result != KERN_SUCCESS)
-	    printf("fork/procdup: thread_create failed. Code: 0x%x\n", result);
-
-#if FIXME /* [ */
-	thread_deallocate(thread); // extra ref
-
-	/*
-	 *	Don't need to lock thread here because it can't
-	 *	possibly execute and no one else knows about it.
-	 */
-	/* compute_priority(thread, FALSE); */
-#endif /* ] */
-	return(thread);
-}
 
 kern_return_t
 pid_for_task(t, x)
@@ -238,7 +230,7 @@ pid_for_task(t, x)
 	task_t		t1;
 	extern task_t port_name_to_task(mach_port_t t);
 	int	pid = -1;
-	kern_return_t	err;
+	kern_return_t	err = KERN_SUCCESS;
 	boolean_t funnel_state;
 
 	funnel_state = thread_funnel_set(kernel_flock, TRUE);
@@ -246,6 +238,7 @@ pid_for_task(t, x)
 
 	if (t1 == TASK_NULL) {
 		err = KERN_FAILURE;
+		goto pftout;
 	} else {
 		p = get_bsdtask_info(t1);
 		if (p) {
@@ -256,8 +249,8 @@ pid_for_task(t, x)
 		}
 	}
 	task_deallocate(t1);
-	(void) copyout((char *) &pid, (char *) x, sizeof(*x));
 pftout:
+	(void) copyout((char *) &pid, (char *) x, sizeof(*x));
 	thread_funnel_set(kernel_flock, funnel_state);
 	return(err);
 }
@@ -289,8 +282,7 @@ task_for_pid(target_tport, pid, t)
 	t1 = port_name_to_task(target_tport);
 	if (t1 == TASK_NULL) {
 		(void ) copyout((char *)&t1, (char *)t, sizeof(mach_port_t));
-		error = KERN_FAILURE;
-		goto tfpout;
+		return(KERN_FAILURE);
 	} 
 
 	funnel_state = thread_funnel_set(kernel_flock, TRUE);
@@ -338,6 +330,7 @@ struct load_shared_file_args {
 		int		*flags;
 };
 
+int	ws_disabled = 1;
 
 int
 load_shared_file(
@@ -359,8 +352,7 @@ load_shared_file(
 	kern_return_t		kr;
 
 	struct vattr	vattr;
-	void 		*object;
-	void		*file_object;
+	memory_object_control_t file_control;
         sf_mapping_t    *map_list;
         caddr_t		local_base;
 	int		local_flags;
@@ -434,8 +426,8 @@ load_shared_file(
 	}
 
 
-	file_object = ubc_getobject(vp, (UBC_NOREACTIVATE|UBC_HOLDOBJECT));
-	if (file_object == (void *)NULL) {
+	file_control = ubc_getobject(vp, UBC_HOLDOBJECT);
+	if (file_control == MEMORY_OBJECT_CONTROL_NULL) {
 		error = EINVAL;
 		goto lsf_bailout_free_vput;
 	}
@@ -551,7 +543,7 @@ load_shared_file(
 	if((kr = copyin_shared_file((vm_offset_t)mapped_file_addr, 
 			mapped_file_size, 
 			(vm_offset_t *)&local_base,
-			map_cnt, map_list, file_object, 
+			map_cnt, map_list, file_control, 
 			&task_mapping_info, &local_flags))) {
 		switch (kr) {
 			case KERN_FAILURE:
@@ -575,7 +567,7 @@ load_shared_file(
 				error = EINVAL;
 		};
 		if((caller_flags & ALTERNATE_LOAD_SITE) && systemLogDiags) {
-			printf("load_shared_file:  Failed to load shared file! error: 0x%x, Base_address: 0x%x, number of mappings: %d, file_object 0x%x\n", error, local_base, map_cnt, file_object);
+			printf("load_shared_file:  Failed to load shared file! error: 0x%x, Base_address: 0x%x, number of mappings: %d, file_control 0x%x\n", error, local_base, map_cnt, file_control);
 			for(i=0; i<map_cnt; i++) {
 				printf("load_shared_file: Mapping%d, mapping_offset: 0x%x, size: 0x%x, file_offset: 0x%x, protection: 0x%x\n"
 					, i, map_list[i].mapping_offset, 

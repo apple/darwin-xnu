@@ -28,6 +28,8 @@
 
 #ifdef KERNEL_PRIVATE
 
+#include <stdint.h>
+
 #include <mach/machine/vm_types.h>
 #include <ipc/ipc_types.h>
 
@@ -52,7 +54,8 @@ struct ledger ;
 struct alarm ;
 struct clock ;
 struct zone ;
-struct wait_queue ;
+struct wait_queue_sub ;
+struct wait_queue_link;
 
 #else /* MACH_KERNEL_PRIVATE */
 
@@ -61,6 +64,8 @@ typedef struct clock			*clock_t;          /* Internal use only */
 
 #endif /* MACH_KERNEL_PRIVATE */
 
+typedef struct mig_object		*mig_object_t;
+typedef struct mig_notify		*mig_notify_t;
 typedef struct thread_shuttle		*thread_t;
 typedef struct thread_shuttle		*thread_shuttle_t;
 typedef struct task			*task_t;
@@ -77,6 +82,8 @@ typedef	struct clock			*clock_serv_t;
 typedef	struct clock			*clock_ctrl_t;
 typedef struct zone			*zone_t;
 typedef struct wait_queue		*wait_queue_t;
+typedef struct wait_queue_sub		*wait_queue_sub_t;
+typedef struct wait_queue_link		*wait_queue_link_t;
 
 typedef host_t host_priv_t;
 typedef host_t host_security_t;
@@ -87,10 +94,13 @@ typedef	void	*event_t;			/* wait event */
 typedef	void	(*continuation_t)(void);	/* continuation */
 
 #define		ZONE_NULL	((zone_t) 0)
-#define		IKO_NULL	((ipc_kobject_t) 0)
-#define		WAIT_QUEUE_NULL ((wait_queue_t) 0)
-#define		NO_EVENT	((event_t)0)
 
+#define		NO_EVENT	((event_t) 0)
+#define		WAIT_QUEUE_NULL ((wait_queue_t) 0)
+
+#define		IKO_NULL	((ipc_kobject_t) 0)
+#define		MIG_OBJECT_NULL ((mig_object_t) 0)
+#define 	MIG_NOTIFY_NULL ((mig_notify_t) 0)
 
 #endif /* KERNEL_PRIVATE */
 

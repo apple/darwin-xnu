@@ -37,7 +37,8 @@ HISTORY
 OSDefineMetaClassAndStructors(IOWorkLoop, OSObject);
 
 // Block of unused functions intended for future use
-OSMetaClassDefineReservedUnused(IOWorkLoop, 0);
+OSMetaClassDefineReservedUsed(IOWorkLoop, 0);
+
 OSMetaClassDefineReservedUnused(IOWorkLoop, 1);
 OSMetaClassDefineReservedUnused(IOWorkLoop, 2);
 OSMetaClassDefineReservedUnused(IOWorkLoop, 3);
@@ -372,6 +373,20 @@ int IOWorkLoop::sleepGate(void *event, UInt32 interuptibleType)
 void IOWorkLoop::wakeupGate(void *event, bool oneThread)
 {
     IORecursiveLockWakeup(gateLock, event, oneThread);
+}
+
+IOReturn IOWorkLoop::runAction(Action inAction, OSObject *target,
+                                  void *arg0 = 0, void *arg1 = 0,
+                                  void *arg2 = 0, void *arg3 = 0)
+{
+    IOReturn res;
+
+    // closeGate is recursive so don't worry if we already hold the lock.
+    closeGate();
+    res = (*inAction)(target, arg0, arg1, arg2, arg3);
+    openGate();
+
+    return res;
 }
 
 IOReturn IOWorkLoop::_maintRequest(void *inC, void *inD, void *, void *)

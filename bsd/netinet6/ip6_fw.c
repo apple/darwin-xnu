@@ -14,7 +14,7 @@
  *
  * This software is provided ``AS IS'' without any warranties of any kind.
  *
- *	$Id: ip6_fw.c,v 1.2 2000/09/14 20:35:14 lindak Exp $
+ *	$Id: ip6_fw.c,v 1.3 2001/05/01 21:52:50 lindak Exp $
  */
 
 /*
@@ -840,8 +840,8 @@ add_entry6(struct ip6_fw_head *chainptr, struct ip6_fw *frwl)
 	u_short nbr = 0;
 	int s;
 
-	fwc = _MALLOC(sizeof *fwc, M_IP6FW, M_DONTWAIT);
-	ftmp = _MALLOC(sizeof *ftmp, M_IP6FW, M_DONTWAIT);
+	fwc = _MALLOC(sizeof *fwc, M_IP6FW, M_NOWAIT);
+	ftmp = _MALLOC(sizeof *ftmp, M_IP6FW, M_NOWAIT);
 	if (!fwc || !ftmp) {
 		dprintf(("%s malloc said no\n", err_prefix));
 		if (fwc)  _FREE(fwc, M_IP6FW);

@@ -258,7 +258,7 @@ sonewconn(head, connstatus)
 
 	if (head->so_qlen > 3 * head->so_qlimit / 2)
 		return ((struct socket *)0);
-	so = soalloc(0, head->so_proto->pr_domain->dom_family, head->so_type);
+	so = soalloc(1, head->so_proto->pr_domain->dom_family, head->so_type);
 	if (so == NULL)
 		return ((struct socket *)0);
         
@@ -409,10 +409,9 @@ sowakeup(so, sb)
 
 
 
-	thread_funnel_switch(NETWORK_FUNNEL, KERNEL_FUNNEL);
-	sb->sb_sel.si_flags &= ~SI_SBSEL;
+
+	sb->sb_flags &= ~SB_SEL;
 	selwakeup(&sb->sb_sel);
-    	thread_funnel_switch(KERNEL_FUNNEL, NETWORK_FUNNEL); 
 
 	if (sb->sb_flags & SB_WAIT) {
 		sb->sb_flags &= ~SB_WAIT;
@@ -489,6 +488,7 @@ soreserve(so, sndcc, rcvcc)
 		so->so_snd.sb_lowat = so->so_snd.sb_hiwat;
 	return (0);
 bad2:
+	selthreadclear(&so->so_snd.sb_sel);
 	sbrelease(&so->so_snd);
 bad:
 	return (ENOBUFS);
@@ -516,6 +516,7 @@ sbreserve(sb, cc)
 /*
  * Free mbufs held by a socket, and reserved mbuf space.
  */
+ /*  WARNING needs to do selthreadclear() before calling this */
 void
 sbrelease(sb)
 	struct sockbuf *sb;
@@ -523,12 +524,14 @@ sbrelease(sb)
 
 	sbflush(sb);
 	sb->sb_hiwat = sb->sb_mbmax = 0;
-
+#if 0
+	/* this is getting called with bzeroed sb in sorflush */
 	{
 		int oldpri = splimp();
 		selthreadclear(&sb->sb_sel);
 		splx(oldpri);
 	}
+#endif
 }
 
 /*
@@ -1178,6 +1181,116 @@ int	pru_sopoll_notsupp(struct socket *so, int events,
 }
 
 
+
+/*
+ * Do we need to notify the other side when I/O is possible?
+ */
+
+int 
+sb_notify(struct sockbuf *sb)
+{
+	return ((sb->sb_flags & (SB_WAIT|SB_SEL|SB_ASYNC|SB_UPCALL)) != 0); 
+}
+
+/*
+ * How much space is there in a socket buffer (so->so_snd or so->so_rcv)?
+ * This is problematical if the fields are unsigned, as the space might
+ * still be negative (cc > hiwat or mbcnt > mbmax).  Should detect
+ * overflow and return 0.  Should use "lmin" but it doesn't exist now.
+ */
+long
+sbspace(struct sockbuf *sb)
+{
+    return ((long) imin((int)(sb->sb_hiwat - sb->sb_cc), 
+	 (int)(sb->sb_mbmax - sb->sb_mbcnt)));
+}
+
+/* do we have to send all at once on a socket? */
+int
+sosendallatonce(struct socket *so)
+{
+    return (so->so_proto->pr_flags & PR_ATOMIC);
+}
+
+/* can we read something from so? */
+int
+soreadable(struct socket *so)
+{
+    return (so->so_rcv.sb_cc >= so->so_rcv.sb_lowat || 
+	(so->so_state & SS_CANTRCVMORE) || 
+	so->so_comp.tqh_first || so->so_error);
+}
+
+/* can we write something to so? */
+
+int
+sowriteable(struct socket *so)
+{
+    return ((sbspace(&(so)->so_snd) >= (so)->so_snd.sb_lowat && 
+	((so->so_state&SS_ISCONNECTED) || 
+	  (so->so_proto->pr_flags&PR_CONNREQUIRED)==0)) || 
+     (so->so_state & SS_CANTSENDMORE) || 
+     so->so_error);
+}
+
+/* adjust counters in sb reflecting allocation of m */
+
+void
+sballoc(struct sockbuf *sb, struct mbuf *m)
+{
+	sb->sb_cc += m->m_len; 
+	sb->sb_mbcnt += MSIZE; 
+	if (m->m_flags & M_EXT) 
+		sb->sb_mbcnt += m->m_ext.ext_size; 
+}
+
+/* adjust counters in sb reflecting freeing of m */
+void
+sbfree(struct sockbuf *sb, struct mbuf *m)
+{
+	sb->sb_cc -= m->m_len; 
+	sb->sb_mbcnt -= MSIZE; 
+	if (m->m_flags & M_EXT) 
+		sb->sb_mbcnt -= m->m_ext.ext_size; 
+}
+
+/*
+ * Set lock on sockbuf sb; sleep if lock is already held.
+ * Unless SB_NOINTR is set on sockbuf, sleep is interruptible.
+ * Returns error without lock if sleep is interrupted.
+ */
+int
+sblock(struct sockbuf *sb, int wf)
+{
+	return(sb->sb_flags & SB_LOCK ? 
+		((wf == M_WAIT) ? sb_lock(sb) : EWOULDBLOCK) : 
+		(sb->sb_flags |= SB_LOCK), 0);
+}
+
+/* release lock on sockbuf sb */
+void
+sbunlock(struct sockbuf *sb)
+{
+	sb->sb_flags &= ~SB_LOCK; 
+	if (sb->sb_flags & SB_WANT) { 
+		sb->sb_flags &= ~SB_WANT; 
+		wakeup((caddr_t)&(sb)->sb_flags); 
+	} 
+}
+
+void
+sorwakeup(struct socket * so)
+{
+  if (sb_notify(&so->so_rcv)) 
+	sowakeup(so, &so->so_rcv); 
+}
+
+void
+sowwakeup(struct socket * so)
+{
+  if (sb_notify(&so->so_snd)) 
+	sowakeup(so, &so->so_snd); 
+}
 
 /*
  * Make a copy of a sockaddr in a malloced buffer of type M_SONAME.

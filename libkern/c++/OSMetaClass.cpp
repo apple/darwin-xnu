@@ -318,10 +318,10 @@ void *OSMetaClass::preModLoad(const char *kmodName)
 {
     if (!loadLock) {
         loadLock = mutex_alloc(ETAP_IO_AHA);
-	_mutex_lock(loadLock);
+	mutex_lock(loadLock);
     }
     else
-	_mutex_lock(loadLock);
+	mutex_lock(loadLock);
 
     sStalled = (StalledData *) kalloc(sizeof(*sStalled));
     if (sStalled) {
@@ -464,10 +464,10 @@ bool OSMetaClass::modHasInstance(const char *kmodName)
 
     if (!loadLock) {
         loadLock = mutex_alloc(ETAP_IO_AHA);
-	_mutex_lock(loadLock);
+	mutex_lock(loadLock);
     }
     else
-	_mutex_lock(loadLock);
+	mutex_lock(loadLock);
 
     do {
 	OSSet *kmodClasses;
@@ -535,7 +535,7 @@ static void _OSMetaClassConsiderUnloads(thread_call_param_t p0,
     kern_return_t ret;
     bool didUnload;
 
-    _mutex_lock(loadLock);
+    mutex_lock(loadLock);
 
     do {
 
@@ -584,7 +584,7 @@ void OSMetaClass::considerUnloads()
     static thread_call_t unloadCallout;
     AbsoluteTime when;
 
-    _mutex_lock(loadLock);
+    mutex_lock(loadLock);
 
     if (!unloadCallout)
         unloadCallout = thread_call_allocate(&_OSMetaClassConsiderUnloads, 0);
@@ -630,7 +630,7 @@ const OSMetaClass *OSMetaClass::getMetaClassWithName(const OSSymbol *name)
 OSObject *OSMetaClass::allocClassWithName(const OSSymbol *name)
 {
     OSObject * result;
-    _mutex_lock(loadLock);
+    mutex_lock(loadLock);
 
     const OSMetaClass * const meta = getMetaClassWithName(name);
 
@@ -665,7 +665,7 @@ OSMetaClassBase *OSMetaClass::
 checkMetaCastWithName(const OSSymbol *name, const OSMetaClassBase *in)
 {
     OSMetaClassBase * result;
-    _mutex_lock(loadLock);
+    mutex_lock(loadLock);
     const OSMetaClass * const meta = getMetaClassWithName(name);
 
     if (meta)

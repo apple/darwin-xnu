@@ -112,13 +112,15 @@ void IOPMUADBController::free ( )
 // localSendMiscCommand
 //
 // **********************************************************************************
-IOReturn IOPMUADBController::localSendMiscCommand(int command, IOByteCount sLength, UInt8 *sBuffer, IOByteCount *rLength, UInt8 *rBuffer)
+IOReturn IOPMUADBController::localSendMiscCommand(int command, IOByteCount sLength, UInt8 *sBuffer)
 {
     IOReturn returnValue = kIOReturnError;
- 
+    IOByteCount rLength = 1;
+    UInt8 rBuffer;
+    
     // The poupose of this method is to free us from the pain to create a parameter block each time
     // we wish to talk to the pmu:
-    SendMiscCommandParameterBlock prmBlock = {command, sLength, sBuffer, rLength, rBuffer};
+    SendMiscCommandParameterBlock prmBlock = {command, sLength, sBuffer, &rLength, &rBuffer};
 
 #ifdef VERBOSE_LOGS_ON
     IOLog("ApplePMUInterface::localSendMiscCommand 0x%02x %d 0x%08lx 0x%08lx 0x%08lx\n",
@@ -148,12 +150,16 @@ IOReturn IOPMUADBController::localSendMiscCommand(int command, IOByteCount sLeng
 /* static */ void
 IOPMUADBController::handleADBInterrupt(IOService *client, UInt8 interruptMask, UInt32 length, UInt8 *buffer)
 {
-    if (interruptMask & kPMUautopoll)
+    IOPMUADBController *myThis = OSDynamicCast(IOPMUADBController, client);
+
+    // Check if we are the right client for this interrupt:
+    if (myThis == NULL)
+        return;
+    
+    if ((interruptMask & kPMUautopoll) && (myThis->autopollOn))
         autopollHandler(client, buffer[0], length - 1, buffer + 1); // yes, call adb input handler
     else {
-        IOPMUADBController *myThis = OSDynamicCast(IOPMUADBController, client);
-
-        if ((myThis != NULL) && (myThis->waitingForData != NULL)) {
+        if (myThis->waitingForData != NULL) {
             // Complets the adb transaction
             myThis->dataLen = length - 1;
             bcopy(buffer + 1, myThis->dataBuffer, myThis->dataLen);
@@ -161,6 +167,21 @@ IOPMUADBController::handleADBInterrupt(IOService *client, UInt8 interruptMask, U
         }
     }
 }
+
+
+// **********************************************************************************
+// cancelAllIO
+//
+// **********************************************************************************
+IOReturn IOPMUADBController::cancelAllIO ( void )
+{
+    if (waitingForData != NULL) {
+        dataLen = 0;	// read fails with error, write fails quietly
+        waitingForData->signal();
+    }
+    return kPMUNoError;
+}
+
 
 // **********************************************************************************
 // setAutoPollPeriod
@@ -197,8 +218,8 @@ IOReturn IOPMUADBController::setAutoPollList ( UInt16 PollBitField )
         oBuffer[1] = 0x86;                              // adb Command op.
         oBuffer[2] = (UInt8)(PollBitField >> 8);        // ??
         oBuffer[3] = (UInt8)(PollBitField & 0xff);      // ??
-        
-        localSendMiscCommand (kPMUpMgrADB, 4, oBuffer, NULL, NULL);
+
+        localSendMiscCommand (kPMUpMgrADB, 4, oBuffer);
     }
     return kPMUNoError;
 }
@@ -223,17 +244,24 @@ IOReturn IOPMUADBController::setAutoPollEnable ( bool enable )
 {
     UInt8 oBuffer[4];
     
+    autopollOn = enable;
+    
     if ( enable ) {							// enabling autopoll
         oBuffer[0] = 0;
         oBuffer[1] = 0x86;
         oBuffer[2] = (UInt8)(pollList >> 8);
         oBuffer[3] = (UInt8)(pollList & 0xff);
 
-        localSendMiscCommand (kPMUpMgrADB, 4, oBuffer, NULL,NULL);
-        autopollOn = true;
+        localSendMiscCommand (kPMUpMgrADB, 4, oBuffer);
     }
     else {								// disabling autopoll;
-        localSendMiscCommand (kPMUpMgrADBoff, 0, NULL, NULL, NULL);
+        /* Waits one second for the trackpads to be up (this is needed only in old machines)
+           This is placed here because this is the fist call at wake. */
+        if (IODTMatchNubWithKeys(getPlatform()->getProvider(), "'PowerBook1,1'") ||
+            IODTMatchNubWithKeys(getPlatform()->getProvider(), "'AAPL,PowerBook1998'"))
+            IOSleep(1500);
+
+        localSendMiscCommand (kPMUpMgrADBoff, 0, NULL);
     }
 
     return kPMUNoError;
@@ -250,20 +278,25 @@ IOReturn IOPMUADBController::resetBus ( void )
         IOLockLock(requestMutexLock);
 
     UInt8 oBuffer[4];
-
+        
     oBuffer[0] = kPMUResetADBBus;
     oBuffer[1] = 0;
     oBuffer[2] = 0;
 
     // Reset bus needs to wait for the interrupt to terminate the transaction:
     waitingForData = IOSyncer::create();
-    localSendMiscCommand (kPMUpMgrADB, 3, oBuffer, NULL, NULL);
+    localSendMiscCommand (kPMUpMgrADB, 3, oBuffer);
     waitingForData->wait();			// wait till done
     waitingForData = 0;
 
     if (requestMutexLock != NULL)
         IOLockUnlock(requestMutexLock);
-    
+
+    /* Waits one second for the trackpads to be up (this is needed only in old machines) */
+    if (IODTMatchNubWithKeys(getPlatform()->getProvider(), "'PowerBook1,1'") ||
+        IODTMatchNubWithKeys(getPlatform()->getProvider(), "'AAPL,PowerBook1998'"))
+        IOSleep(1500);
+
     return kPMUNoError;
 }
 
@@ -285,7 +318,7 @@ IOReturn IOPMUADBController::flushDevice ( IOADBAddress address )
 
     // flush device needs to wait for the interrupt to terminate the transaction
     waitingForData = IOSyncer::create();
-    localSendMiscCommand (kPMUpMgrADB, 3, oBuffer, NULL, NULL);
+    localSendMiscCommand (kPMUpMgrADB, 3, oBuffer);
     waitingForData->wait();			// wait till done
     waitingForData = 0;
 
@@ -321,7 +354,7 @@ IOReturn IOPMUADBController::readFromDevice ( IOADBAddress address, IOADBRegiste
     // read from device needs to wait for the interrupt to terminate the transaction
     // and to obtain the data from the device.
     waitingForData = IOSyncer::create();
-    localSendMiscCommand (kPMUpMgrADB, 3, oBuffer, NULL, NULL);
+    localSendMiscCommand (kPMUpMgrADB, 3, oBuffer);
     waitingForData->wait();			// wait till done
     waitingForData = 0;
 
@@ -370,7 +403,7 @@ IOReturn IOPMUADBController::writeToDevice ( IOADBAddress address, IOADBRegister
 
     // write to the device needs to wait for the interrupt to terminate the transaction
     waitingForData = IOSyncer::create();
-    localSendMiscCommand (kPMUpMgrADB, 3 + *length, oBuffer, NULL, NULL);
+    localSendMiscCommand (kPMUpMgrADB, 3 + *length, oBuffer);
     waitingForData->wait();
     waitingForData = 0;
 

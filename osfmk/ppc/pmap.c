@@ -1092,6 +1092,30 @@ pmap_reference(pmap_t pmap)
 }
 
 /*
+ * pmap_remove_some_phys
+ *
+ *	Removes mappings of the associated page from the specified pmap
+ *
+ */
+void pmap_remove_some_phys(
+	     pmap_t pmap,
+	     vm_offset_t pa)
+{
+	register struct phys_entry 	*pp;
+	register struct mapping 	*mp, *mpv;
+
+
+	if (pmap == PMAP_NULL) return;				/* Do nothing if no pmap */
+
+	pp = pmap_find_physentry(pa);				/* Get the physent for this page */
+	if (pp == PHYS_NULL) return;				/* Leave if not in physical RAM */
+
+	mapping_purge_pmap(pp, pmap);	
+
+	return;							/* Leave... */
+}
+
+/*
  * pmap_remove(pmap, s, e)
  *	unmaps all virtual addresses v in the virtual address
  *	range determined by [s, e) and pmap.
@@ -2114,14 +2138,11 @@ kern_return_t pmap_nest(pmap_t grand, pmap_t subord, vm_offset_t vaddr, vm_size_
  *	Note that the following will force the segment registers to be reloaded following
  *	the next interrupt on all processors if they are using the pmap we just changed.
  *
- *	This probably isn't needed, but it just feels better to do it.  The reason it isn't
- *	needed is that there is no mapped memory in the grand pmap's segment before we
- *	nest and we will take a fault if it is accessed.
  */
 
 
 	for(i=0; i < real_ncpus; i++) {							/* Cycle through processors */
-		(void)hw_compare_and_store((unsigned int)grand, 0, &per_proc_info[i].userpmap);	/* Clear if ours */
+		(void)hw_compare_and_store((unsigned int)grandr, 0, &per_proc_info[i].Lastpmap);	/* Clear if ours */
 	}
 		
 	return KERN_SUCCESS;						/* Bye, bye, butterfly... */
@@ -2185,13 +2206,13 @@ kern_return_t pmap_unnest(pmap_t grand, vm_offset_t vaddr, vm_size_t size) {
 
 	mycpu = cpu_number();						/* Who am I? Am I just a dream? */
 	for(i=0; i < real_ncpus; i++) {				/* Cycle through processors */
-		if(hw_compare_and_store((unsigned int)grand, 0, &per_proc_info[i].userpmap)) {	/* Clear if ours and kick the other guy if he was using it */
+		if(hw_compare_and_store((unsigned int)grandr, 0, &per_proc_info[i].Lastpmap)) {	/* Clear if ours and kick the other guy if he was using it */
 			if(i == mycpu) continue;				/* Don't diddle ourselves */
 			tstamp = per_proc_info[i].ruptStamp[1];	/* Save the processor's last interrupt time stamp */
-			if(cpu_signal(i, SIGPwake, 0, 0) != KERN_SUCCESS) {	/* Make sure we see the pmap change
-				panic("pmap_unnest: Signal processor (%d) failed\n", i);
+			if(cpu_signal(i, SIGPwake, 0, 0) != KERN_SUCCESS) {	/* Make sure we see the pmap change */
+				continue;
 			}
-			if(!hw_cpu_wcng(tstamp, &per_proc_info[i].ruptStamp[1], LockTimeOut) {	/* Wait for the other processors to enter debug */
+			if(!hw_cpu_wcng(&per_proc_info[i].ruptStamp[1], tstamp, LockTimeOut)) {	/* Wait for the other processors to enter debug */
 				panic("pmap_unnest: Other processor (%d) did not see interruption request\n", i);
 			}
 		}

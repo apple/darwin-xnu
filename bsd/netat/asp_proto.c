@@ -580,8 +580,9 @@ int asp_wput(gref, m)
 		aw.param2 = 0;
 		scb->ioc_wait = (unsigned char)(iocbp->ioc_cmd & 0xff);
 		iocbp->ioc_cmd = AT_ATP_ISSUE_REQUEST_DEF;
+		/* bms:  make sure this is an ALO request */
 		asp_send_req(gref, mioc, &status_cmd->SLSEntityIdentifier,
-			     &status_cmd->Retry, &aw, 1, ASPSTATE_WaitingForGetStatusRsp, 0xff);
+			     &status_cmd->Retry, &aw, 0, ASPSTATE_WaitingForGetStatusRsp, 0xff);
 		gbuf_freeb(mdata);
 		return 0;
 
@@ -1357,6 +1358,9 @@ asp_ack_reply(gref, mioc)
 			} else {
 				scb->rem_addr.node = scb->rem_node;
 				scb->rem_addr.socket = awp->func;
+				/* bms:  need to set the reply_socket for client side too.
+				This makes ALO atten replies sent by the client work. */
+				scb->reply_socket = scb->rem_addr.socket;
 				scb->sess_id = awp->param1;
 				gbuf_freeb(mx);
 				atalk_putnext(gref, mioc);
@@ -1894,265 +1898,294 @@ asp_putnext(gref, mproto)
 
 /* in ASPputmsg we expect:
 
-	ASPFUNC_CmdReply
-	ASPFUNC_Attention
-	ASPFUNC_Command
-	ASPFUNC_Write
-	ASPFUNC_WriteContinue
+    ASPFUNC_CmdReply
+    ASPFUNC_Attention
+    ASPFUNC_Command
+    ASPFUNC_Write
+    ASPFUNC_WriteContinue
+    
+    bms:  Make this callable from the kernel.
+    If mreq != NULL, then must be called from kernel space and the following apply:
+    1)  *mreq is data to be sent already in mbuf chains.
+    2)  datptr->len = size of data
 */
 
-int ASPputmsg(gref, ctlptr, datptr, flags, errp)
-	gref_t *gref;
-	strbuf_t *ctlptr;
-	strbuf_t *datptr;
-	int flags;
-	int *errp;
+int ASPputmsg(gref_t *gref, strbuf_t *ctlptr, strbuf_t *datptr, gbuf_t *mreq, int flags, int *errp)
 {
-	int s, i, err, len;
-	gbuf_t *mioc, *mdata, *mx;
-	ioc_t *iocbp;
-	strbuf_t ctlbuf;
-	strbuf_t datbuf;
-	asp_scb_t *scb;
-	int nbds, result, msize, Primitive;
-	unsigned char *wptr;
-	struct atp_set_default *sd;
-	at_ddp_t *ddp;
-	at_atp_t *atp;
-	struct atpBDS *atpBDS;
-	asp_word_t *awp;
-	union asp_primitives *primitives;
-	unsigned short tid;
-
-	if ((scb = (asp_scb_t *)gref->info) == 0) {
+    int s, i, err, len;
+    gbuf_t *mioc, *mdata, *mx;
+    ioc_t *iocbp;
+    strbuf_t ctlbuf;
+    strbuf_t datbuf;
+    asp_scb_t *scb;
+    int nbds, result, msize, Primitive;
+    unsigned char *wptr;
+    struct atp_set_default *sd;
+    at_ddp_t *ddp;
+    at_atp_t *atp;
+    struct atpBDS *atpBDS;
+    asp_word_t *awp;
+    union asp_primitives *primitives;
+    unsigned short tid;
+    
+    if ((scb = (asp_scb_t *)gref->info) == 0) {
 		dPrintf(D_M_ASP, D_L_ERROR,
 			("ASPputmsg: stale handle=0x%x, pid=%d\n",
 			(u_int) gref, gref->pid));
 
-		*errp = EINVAL;
-		return -1;
-	}
+        *errp = EINVAL;
+        return -1;
+    }
 
-	if (scb->state == ASPSTATE_Close)
-		return 0;
-	if (scb->snd_stop) {
-		*errp = EAGAIN;
-		return -1;
-	}
+    if (scb->state == ASPSTATE_Close)
+        return 0;
+    if (scb->snd_stop) {
+        *errp = EAGAIN;
+        return -1;
+    }
 
-	/*
-	 * copy in the control and data info
-	 */
-	if ((err = copyin((caddr_t)ctlptr,
-			(caddr_t)&ctlbuf, sizeof(ctlbuf))) != 0)
-		goto l_err;
-	if ((err = copyin((caddr_t)datptr,
-			(caddr_t)&datbuf, sizeof(datbuf))) != 0)
-		goto l_err;
+    /*
+     * copy in the control and data info
+     */
+     if (mreq != NULL) {
+        /* being called from kernel space */
+        bcopy (ctlptr, &ctlbuf, sizeof (strbuf_t));
+        bcopy (datptr, &datbuf, sizeof (strbuf_t));
+     } else {
+        /* being called from user space */
+        if ((err = copyin((caddr_t)ctlptr, (caddr_t)&ctlbuf, sizeof(ctlbuf))) != 0)
+            goto l_err;
+        if ((err = copyin((caddr_t)datptr, (caddr_t)&datbuf, sizeof(datbuf))) != 0)
+            goto l_err;
+     }
 
-	/*
-	 * allocate buffer and copy in the control content
-	 */
-	if (!(mioc = gbuf_alloc_wait(ctlbuf.len, TRUE))) {
-		/* error return should not be possible */
-		err = ENOBUFS;
-		goto l_err;
-	}
-	gbuf_set_type(mioc, MSG_IOCTL); /* for later, in ATP */
-	gbuf_wset(mioc, ctlbuf.len);
-	if ((err = copyin((caddr_t)ctlbuf.buf,
-			(caddr_t)gbuf_rptr(mioc), ctlbuf.len)) != 0) {
-		gbuf_freem(mioc);
-		goto l_err;
-	}
+    /*
+     * allocate buffer and copy in the control content
+     */
+    if (!(mioc = gbuf_alloc_wait(ctlbuf.len, TRUE))) {
+        /* error return should not be possible */
+        err = ENOBUFS;
+        goto l_err;
+    }
+    gbuf_set_type(mioc, MSG_IOCTL); /* for later, in ATP */
+    gbuf_wset(mioc, ctlbuf.len);
+    
+    if (mreq != NULL) {
+        /* being called from kernel space */
+        bcopy (ctlbuf.buf, gbuf_rptr(mioc), ctlbuf.len);
+    } else {
+        /* being called from user space */
+        if ((err = copyin((caddr_t)ctlbuf.buf, (caddr_t)gbuf_rptr(mioc), ctlbuf.len)) != 0) {
+            gbuf_freem(mioc);
+            goto l_err;
+        }
+    }
 
-	iocbp = (ioc_t *)gbuf_rptr(mioc);
-	primitives = (union asp_primitives *)gbuf_rptr(mioc);
-	Primitive = primitives->Primitive;
+    iocbp = (ioc_t *)gbuf_rptr(mioc);
+    primitives = (union asp_primitives *)gbuf_rptr(mioc);
+    Primitive = primitives->Primitive;
 	dPrintf(D_M_ASP, D_L_INFO,
 		("ASPputmsg: %s\n", aspCmdStr(Primitive)));
 
-	/*
-	 * allocate buffer and copy in the data content
-	 */
-	len = (Primitive == ASPFUNC_CmdReply) ? 0 : aspCMDsize;
-	if (!(mdata = gbuf_alloc_wait(datbuf.len+len, TRUE))) {
-		/* error return should not be possible */
-		err = ENOBUFS;
-		gbuf_freem(mioc);
-		goto l_err;
-	}
-	gbuf_wset(mdata,(datbuf.len+len));
-	gbuf_cont(mioc) = mdata;
-	if ((err = copyin((caddr_t)datbuf.buf,
-			  (caddr_t)(gbuf_rptr(mdata)+len), datbuf.len)) != 0) {
-		gbuf_freem(mioc);
-		goto l_err;
-	}
+    /*
+     * allocate buffer and copy in the data content
+     */
+    len = (Primitive == ASPFUNC_CmdReply) ? 0 : aspCMDsize;
+    
+    if (!(mdata = gbuf_alloc_wait(datbuf.len+len, TRUE))) {
+        /* error return should not be possible */
+        err = ENOBUFS;
+        gbuf_freem(mioc);
+        goto l_err;
+    }
+    gbuf_wset(mdata, (datbuf.len+len));
+    gbuf_cont(mioc) = mdata;
+    
+    if (mreq != NULL) {
+        /* being called from kernel space */
+        gbuf_t *tmp = mreq;
+        unsigned long offset = 0;
+        
+        /* copy afp cmd data from the passed in mbufs to mdata.  I cant
+        chain mreq to mdata since the rest of this code assumes
+        just one big mbuf with space in front for the BDS */
+        offset = len;
+        while (tmp != NULL) {
+            bcopy (gbuf_rptr(tmp), (gbuf_rptr(mdata) + offset), gbuf_len(tmp));
+            offset += gbuf_len(tmp);
+            tmp = gbuf_cont(tmp);           /* on to next mbuf in chain */
+        }
+        
+        /* all data copied out of mreq so free it */
+        gbuf_freem(mreq);
+    } else {
+        /* being called from user space */
+        if ((err = copyin((caddr_t)datbuf.buf,
+                  (caddr_t)(gbuf_rptr(mdata)+len), datbuf.len)) != 0) {
+            gbuf_freem(mioc);
+            goto l_err;
+        }
+    }
 
-	switch (Primitive) {
+    switch (Primitive) {
 
-	case ASPFUNC_Command:
-	case ASPFUNC_Write:
-	case ASPFUNC_WriteContinue:
-	case ASPFUNC_Attention:
-		/*
-		 * build the command/write/write_continue request
-		 */
-		wptr = gbuf_rptr(mdata);
-		atpBDS = (struct atpBDS *)wptr;
-		wptr += atpBDSsize;
-		for (i=0; i < ATP_TRESP_MAX; i++) {
-			*(unsigned long  *)atpBDS[i].bdsBuffAddr = 1;
-			*(unsigned short *)atpBDS[i].bdsBuffSz = ATP_DATA_SIZE;
-		}
-		sd = (struct atp_set_default *)wptr;
-		wptr += sizeof(struct atp_set_default);
-		sd->def_retries = (scb->cmd_retry.retries == -1) ?
-		  ATP_INFINITE_RETRIES : scb->cmd_retry.retries;
-		sd->def_rate = scb->cmd_retry.interval*TICKS_PER_SEC;
-		sd->def_BDSlen = atpBDSsize;
-		ddp = (at_ddp_t *)wptr;
-		NET_ASSIGN(ddp->src_net, scb->loc_addr.net);
-		ddp->src_node = scb->loc_addr.node;
-		NET_ASSIGN(ddp->dst_net, scb->rem_addr.net);
-		ddp->dst_node = scb->rem_addr.node;
-		ddp->dst_socket = scb->rem_addr.socket;
-		UAS_ASSIGN(ddp->checksum, 0);
-		atp = ATP_ATP_HDR(wptr);
-		wptr += TOTAL_ATP_HDR_SIZE;
-		atp->xo = 1;
-		atp->xo_relt = 1;
-		atp->bitmap = 0xff;
-		awp = (asp_word_t *)atp->user_bytes;
-		awp->func = (unsigned char)Primitive;
-		awp->param1 = scb->sess_id;
-		awp->param2 = scb->snd_seq_num;
-		iocbp->ioc_private = (void *)scb;
-		iocbp->ioc_count = gbuf_len(mdata);
-		iocbp->ioc_rval = 0;
-		iocbp->ioc_cmd = AT_ATP_ISSUE_REQUEST_DEF;
+    case ASPFUNC_Command:
+    case ASPFUNC_Write:
+    case ASPFUNC_WriteContinue:
+    case ASPFUNC_Attention:
+        /*
+         * build the command/write/write_continue request
+         */
+        wptr = gbuf_rptr(mdata);
+        atpBDS = (struct atpBDS *)wptr;
+        wptr += atpBDSsize;
+        for (i=0; i < ATP_TRESP_MAX; i++) {
+            *(unsigned long  *)atpBDS[i].bdsBuffAddr = 1;
+            *(unsigned short *)atpBDS[i].bdsBuffSz = ATP_DATA_SIZE;
+        }
+        sd = (struct atp_set_default *)wptr;
+        wptr += sizeof(struct atp_set_default);
+        sd->def_retries = (scb->cmd_retry.retries == -1) ?
+          ATP_INFINITE_RETRIES : scb->cmd_retry.retries;
+        sd->def_rate = scb->cmd_retry.interval*TICKS_PER_SEC;
+        sd->def_BDSlen = atpBDSsize;
+        ddp = (at_ddp_t *)wptr;
+        NET_ASSIGN(ddp->src_net, scb->loc_addr.net);
+        ddp->src_node = scb->loc_addr.node;
+        NET_ASSIGN(ddp->dst_net, scb->rem_addr.net);
+        ddp->dst_node = scb->rem_addr.node;
+        ddp->dst_socket = scb->rem_addr.socket;
+        UAS_ASSIGN(ddp->checksum, 0);
+        atp = ATP_ATP_HDR(wptr);
+        wptr += TOTAL_ATP_HDR_SIZE;
+        atp->xo = 1;
+        atp->xo_relt = 1;
+        atp->bitmap = 0xff;
+        awp = (asp_word_t *)atp->user_bytes;
+        awp->func = (unsigned char)Primitive;
+        awp->param1 = scb->sess_id;
+        awp->param2 = scb->snd_seq_num;
+        iocbp->ioc_private = (void *)scb;
+        iocbp->ioc_count = gbuf_len(mdata);
+        iocbp->ioc_rval = 0;
+        iocbp->ioc_cmd = AT_ATP_ISSUE_REQUEST_DEF;
 
-		/*
-		 * send the command/write/write_continue/attention request
-		 */
-		ATDISABLE(s, scb->lock);
-		switch (awp->func) {
-		case ASPFUNC_Command:
-			scb->state = ASPSTATE_WaitingForCommandRsp;
-			break;
-		case ASPFUNC_Write:
-			scb->state = ASPSTATE_WaitingForWriteRsp;
-			break;
-		case ASPFUNC_WriteContinue:
-			scb->state = ASPSTATE_WaitingForWriteContinueRsp;
-			awp->param2 = scb->wrt_seq_num;
-			break;
-		case ASPFUNC_Attention:
-			scb->state = ASPSTATE_WaitingForCommandRsp;
-			atp->xo = 0;
-			atp->xo_relt = 0;
-			atp->bitmap = 0x01;
-			gbuf_wdec(mdata,2);
-			awp->param2 = *(unsigned short *)gbuf_wptr(mdata);
-			break;
-		}
-		ATENABLE(s, scb->lock);
-		dPrintf(D_M_ASP,D_L_INFO,
-			("ASPputmsg: %s, loc=%d, rem=%x.%x.%d\n",
-			 (awp->func == ASPFUNC_Command ? "CommandReq" :
-			  awp->func == ASPFUNC_Write ? "WriteReq" :
-			  awp->func == ASPFUNC_WriteContinue ? "WriteContinue" :
-			  "AttentionReq"),scb->loc_addr.socket,
-			 NET_VALUE(ddp->dst_net),ddp->dst_node,ddp->dst_socket));
-		atp_send_req(gref, mioc);
-		return 0;
+        /*
+         * send the command/write/write_continue/attention request
+         */
+        ATDISABLE(s, scb->lock);
+        switch (awp->func) {
+        case ASPFUNC_Command:
+            scb->state = ASPSTATE_WaitingForCommandRsp;
+            break;
+        case ASPFUNC_Write:
+            scb->state = ASPSTATE_WaitingForWriteRsp;
+            break;
+        case ASPFUNC_WriteContinue:
+            scb->state = ASPSTATE_WaitingForWriteContinueRsp;
+            awp->param2 = scb->wrt_seq_num;
+            break;
+        case ASPFUNC_Attention:
+            scb->state = ASPSTATE_WaitingForCommandRsp;
+            atp->xo = 0;
+            atp->xo_relt = 0;
+            atp->bitmap = 0x01;
+            gbuf_wdec(mdata,2);
+            awp->param2 = *(unsigned short *)gbuf_wptr(mdata);
+            break;
+        }
+        ATENABLE(s, scb->lock);
+        dPrintf(D_M_ASP,D_L_INFO,
+            ("ASPputmsg: %s, loc=%d, rem=%x.%x.%d\n",
+             (awp->func == ASPFUNC_Command ? "CommandReq" :
+              awp->func == ASPFUNC_Write ? "WriteReq" :
+              awp->func == ASPFUNC_WriteContinue ? "WriteContinue" :
+              "AttentionReq"),scb->loc_addr.socket,
+             NET_VALUE(ddp->dst_net),ddp->dst_node,ddp->dst_socket));
+        atp_send_req(gref, mioc);
+        return 0;
 
-	case ASPFUNC_CmdReply:
+    case ASPFUNC_CmdReply:
 
-		ATDISABLE(s, scb->lock);
-		if (scb->req_msgq) {
-			mx = scb->req_msgq;
-			scb->req_msgq = gbuf_next(mx);
-			gbuf_next(mx) = 0;
-			ATENABLE(s, scb->lock);
-			asp_putnext(scb->gref, mx);
-		} else {
-			scb->req_flag = 0;
-			ATENABLE(s, scb->lock);
-		}
-		result = primitives->CmdReplyReq.CmdResult;
-		tid = primitives->CmdReplyReq.ReqRefNum;
+        ATDISABLE(s, scb->lock);
+        if (scb->req_msgq) {
+            mx = scb->req_msgq;
+            scb->req_msgq = gbuf_next(mx);
+            gbuf_next(mx) = 0;
+            ATENABLE(s, scb->lock);
+            asp_putnext(scb->gref, mx);
+        } else {
+            scb->req_flag = 0;
+            ATENABLE(s, scb->lock);
+        }
+        result = primitives->CmdReplyReq.CmdResult;
+        tid = primitives->CmdReplyReq.ReqRefNum;
 
-		/* Re-use the original mioc mbuf to send the response. */
-		gbuf_rinc(mioc,sizeof(void *));
-		gbuf_wset(mioc,0);
-		ddp = (at_ddp_t *)gbuf_wptr(mioc);
-		gbuf_winc(mioc,DDP_X_HDR_SIZE);
-		atp = (at_atp_t *)gbuf_wptr(mioc);
-		gbuf_winc(mioc,ATP_HDR_SIZE);
-		NET_ASSIGN(ddp->src_net, scb->loc_addr.net);
-		ddp->src_node = scb->loc_addr.node;
-		NET_ASSIGN(ddp->dst_net, scb->rem_addr.net);
-		ddp->dst_node = scb->rem_addr.node;
-		ddp->dst_socket = scb->reply_socket;
-		ddp->type = DDP_ATP;
-		UAS_ASSIGN(ddp->checksum, 0);
-		UAS_ASSIGN(atp->tid, tid);
-		if (scb->attn_flag && (tid == scb->attn_tid)) {
-			scb->attn_flag = 0;
-			atp->xo = 0;
-			atp->xo_relt = 0;
-		} else {
-			atp->xo = 1;
-			atp->xo_relt = 1;
-		}
-		atpBDS = (struct atpBDS *)gbuf_wptr(mioc);
-		msize = mdata ? gbuf_msgsize(mdata) : 0;
-		for (nbds=0; (nbds < ATP_TRESP_MAX) && (msize > 0); nbds++) {
-			len = msize < ATP_DATA_SIZE ? msize : ATP_DATA_SIZE;
-			msize -= ATP_DATA_SIZE;
-			*(long *)atpBDS[nbds].bdsUserData = 0;
-			UAL_ASSIGN(atpBDS[nbds].bdsBuffAddr, 1);
-			UAS_ASSIGN(atpBDS[nbds].bdsBuffSz, len);
-		}
-		UAS_ASSIGN(atpBDS[0].bdsDataSz, nbds);
-		*(long *)atpBDS[0].bdsUserData = (long)result;
-		*(long *)atp->user_bytes = (long)result;
-		gbuf_winc(mioc,atpBDSsize);
+        /* Re-use the original mioc mbuf to send the response. */
+        gbuf_rinc(mioc,sizeof(void *));
+        gbuf_wset(mioc,0);
+        ddp = (at_ddp_t *)gbuf_wptr(mioc);
+        gbuf_winc(mioc,DDP_X_HDR_SIZE);
+        atp = (at_atp_t *)gbuf_wptr(mioc);
+        gbuf_winc(mioc,ATP_HDR_SIZE);
+        NET_ASSIGN(ddp->src_net, scb->loc_addr.net);
+        ddp->src_node = scb->loc_addr.node;
+        NET_ASSIGN(ddp->dst_net, scb->rem_addr.net);
+        ddp->dst_node = scb->rem_addr.node;
+        ddp->dst_socket = scb->reply_socket;
+        ddp->type = DDP_ATP;
+        UAS_ASSIGN(ddp->checksum, 0);
+        UAS_ASSIGN(atp->tid, tid);
+        if (scb->attn_flag && (tid == scb->attn_tid)) {
+           scb->attn_flag = 0;
+            atp->xo = 0;
+            atp->xo_relt = 0;
+        } else {
+            atp->xo = 1;
+            atp->xo_relt = 1;
+        }
+        atpBDS = (struct atpBDS *)gbuf_wptr(mioc);
+        msize = mdata ? gbuf_msgsize(mdata) : 0;
+       for (nbds=0; (nbds < ATP_TRESP_MAX) && (msize > 0); nbds++) {
+            len = msize < ATP_DATA_SIZE ? msize : ATP_DATA_SIZE;
+            msize -= ATP_DATA_SIZE;
+            *(long *)atpBDS[nbds].bdsUserData = 0;
+            UAL_ASSIGN(atpBDS[nbds].bdsBuffAddr, 1);
+            UAS_ASSIGN(atpBDS[nbds].bdsBuffSz, len);
+        }
+        UAS_ASSIGN(atpBDS[0].bdsDataSz, nbds);
+        *(long *)atpBDS[0].bdsUserData = (long)result;
+        *(long *)atp->user_bytes = (long)result;
+        gbuf_winc(mioc,atpBDSsize);
 		dPrintf(D_M_ASP, D_L_INFO,
 			("ASPputmsg: ATP CmdReplyReq, loc=%d, state=%s, msgsize = %d, result = %d, tid = %d\n",
 			 scb->loc_addr.socket, aspStateStr(scb->state), 
 			 (mdata ? gbuf_msgsize(mdata) : 0), result, tid));
-		atp_send_rsp(gref, mioc, TRUE);
-		return 0;
-	}
+        atp_send_rsp(gref, mioc, TRUE);
+        return 0;
+    }
 
-	/* Not an expected ASPFUNC */
-	gbuf_freem(mioc);
-	err = EOPNOTSUPP;
+    /* Not an expected ASPFUNC */
+    gbuf_freem(mioc);
+    err = EOPNOTSUPP;
 
 l_err:
-	*errp = err;
-	return -1;
+    *errp = err;
+    return -1;
 } /* ASPputmsg */
 
-int
-ASPgetmsg(gref, ctlptr, datptr, flags, errp)
-	gref_t *gref;
-	strbuf_t *ctlptr;
-	strbuf_t *datptr;
-	int *flags;
-	int *errp;
-{
-	int err, s, len, sum, rval;
-	gbuf_t *mproto, *mdata;
-	strbuf_t ctlbuf;
-	strbuf_t datbuf;
-	asp_scb_t *scb;
-	unsigned char get_wait;
 
-	if ((scb = (asp_scb_t *)gref->info) == 0) {
+/* bms:  make this callable from kernel.  reply date is passed back as a mbuf chain in *mreply  */
+int ASPgetmsg(gref_t *gref, strbuf_t *ctlptr, strbuf_t *datptr, gbuf_t **mreply, int *flags, int *errp)
+{
+    int err, s, len, sum, rval;
+    gbuf_t *mproto, *mdata;
+    strbuf_t ctlbuf;
+    strbuf_t datbuf;
+    asp_scb_t *scb;
+    unsigned char get_wait;
+
+    if ((scb = (asp_scb_t *)gref->info) == 0) {
 		dPrintf(D_M_ASP, D_L_ERROR,
 			("ASPgetmsg: stale handle=0x%x, pid=%d\n",
 			(u_int) gref, gref->pid));
@@ -2161,138 +2194,162 @@ ASPgetmsg(gref, ctlptr, datptr, flags, errp)
 		return -1;
 	}
 
-	ATDISABLE(s, scb->lock);
-	if (scb->state == ASPSTATE_Close) {
-		ATENABLE(s, scb->lock);
-		return 0;
-	}
+    ATDISABLE(s, scb->lock);
+    if (scb->state == ASPSTATE_Close) {
+        ATENABLE(s, scb->lock);
+        return 0;
+    }
 
-	/*
-	 * get receive data
-	 */
-	while ((mproto = scb->sess_ioc) == 0) {
-		scb->get_wait = 1;
-		err = tsleep(&scb->event, PSOCK | PCATCH, "aspgetmsg", 0);
-		if (err != 0) {
-			scb->get_wait = 0;
-			ATENABLE(s, scb->lock);
-			*errp = err;
-			return -1;
-		}
-		if (scb->state == ASPSTATE_Close) {
-			scb->get_wait = 0;
-			ATENABLE(s, scb->lock);
-			return 0;
-		}
-	}
-	get_wait = scb->get_wait;
-	scb->get_wait = 0;
-	if ((ctlptr == 0) && (datptr == 0)) {
-		ATENABLE(s, scb->lock);
-		return 0;
-	}
-	scb->sess_ioc = gbuf_next(mproto);
-	mdata = gbuf_cont(mproto);
-	ATENABLE(s, scb->lock);
+    /*
+     * get receive data
+     */
+    while ((mproto = scb->sess_ioc) == 0) {
+        scb->get_wait = 1;
+        err = tsleep(&scb->event, PSOCK | PCATCH, "aspgetmsg", 0);
+        if (err != 0) {
+            scb->get_wait = 0;
+            ATENABLE(s, scb->lock);
+            *errp = err;
+            return -1;
+        }
+        if (scb->state == ASPSTATE_Close) {
+            scb->get_wait = 0;
+            ATENABLE(s, scb->lock);
+            return 0;
+        }
+    }
+    get_wait = scb->get_wait;
+    scb->get_wait = 0;
+    if ((ctlptr == 0) && (datptr == 0)) {
+        ATENABLE(s, scb->lock);
+        return 0;
+    }
+    scb->sess_ioc = gbuf_next(mproto);
+    mdata = gbuf_cont(mproto);
+    ATENABLE(s, scb->lock);
 
-	/* last remaining use of MSG_ERROR */
-	if (gbuf_type(mproto) == MSG_ERROR) {
-		err = (int)gbuf_rptr(mproto)[0];
-		goto l_err;
-	}
+    /* last remaining use of MSG_ERROR */
+    if (gbuf_type(mproto) == MSG_ERROR) {
+        err = (int)gbuf_rptr(mproto)[0];
+        goto l_err;
+    }
 
-	/*
-	 * copy in the control and data info
-	 */
-	if ((err = copyin((caddr_t)ctlptr,
-			(caddr_t)&ctlbuf, sizeof(ctlbuf))) != 0)
-		goto l_err;
-	if ((err = copyin((caddr_t)datptr,
-			(caddr_t)&datbuf, sizeof(datbuf))) != 0)
-		goto l_err;
-	if ((datbuf.maxlen < 0) || (datbuf.maxlen < gbuf_msgsize(mdata))) {
-		ATDISABLE(s, scb->lock);
-		gbuf_next(mproto) = scb->sess_ioc;
-		scb->sess_ioc = mproto;
-		ATENABLE(s, scb->lock);
-		return MOREDATA;
-	}
+    /*
+     * copy in the control and data info
+     */
+    if (mreply != NULL) {
+        /* called from kernel space */
+        bcopy (ctlptr, &ctlbuf, sizeof(ctlbuf));
+        bcopy (datptr, &datbuf, sizeof(datbuf));
+    } else {
+        /* called from user space */
+        if ((err = copyin((caddr_t)ctlptr,
+                (caddr_t)&ctlbuf, sizeof(ctlbuf))) != 0)
+            goto l_err;
+        if ((err = copyin((caddr_t)datptr,
+                (caddr_t)&datbuf, sizeof(datbuf))) != 0)
+            goto l_err;
+    }
+    if ((datbuf.maxlen < 0) || (datbuf.maxlen < gbuf_msgsize(mdata))) {
+        ATDISABLE(s, scb->lock);
+        gbuf_next(mproto) = scb->sess_ioc;
+        scb->sess_ioc = mproto;
+        ATENABLE(s, scb->lock);
+        return MOREDATA;
+    }
 
-	if (get_wait == 0) {
-		/*
-		 * this is a hack to support the select() call.
-		 * we're not supposed to dequeue messages in the Streams 
-		 * head's read queue this way; but there is no better way.
-		 */
-		ATDISABLE(s, scb->lock);
-		if (scb->sess_ioc == 0) {
-			ATENABLE(s, scb->lock);
-		} else {
-			ATENABLE(s, scb->lock);
-			atalk_notify_sel(gref); 
-		}
-	}
+    if (get_wait == 0) {
+        /*
+         * this is a hack to support the select() call.
+         * we're not supposed to dequeue messages in the Streams 
+         * head's read queue this way; but there is no better way.
+         */
+        ATDISABLE(s, scb->lock);
+        if (scb->sess_ioc == 0) {
+            ATENABLE(s, scb->lock);
+        } else {
+            ATENABLE(s, scb->lock);
+            atalk_notify_sel(gref); 
+        }
+    }
 
-	/*
-	 * copy out the control content and info
-	 */
-	ctlbuf.len = gbuf_len(mproto);
-	if ((err = copyout((caddr_t)gbuf_rptr(mproto),
-			(caddr_t)ctlbuf.buf, ctlbuf.len)) != 0)
-		goto l_err;
-	if ((err = copyout((caddr_t)&ctlbuf,
-			(caddr_t)ctlptr, sizeof(ctlbuf))) != 0)
-		goto l_err;
+    /*
+     * copy out the control content and info
+     */
+    ctlbuf.len = gbuf_len(mproto);
 
-	/*
-	 * copy out the data content and info
-	 */
-	for (rval=0, sum=0; mdata && (rval == 0); mdata = gbuf_cont(mdata)) {
-		len = gbuf_len(mdata);
-	  if (len) {
-		if ((len + sum) > datbuf.maxlen) {
-			len = datbuf.maxlen - sum;
-			rval = MOREDATA;
-		}
-		if ((err = copyout((caddr_t)gbuf_rptr(mdata),
-				(caddr_t)&datbuf.buf[sum], len)) != 0)
-			goto l_err;
-		sum += len;
-	  }
-	}
-	datbuf.len = sum;
-	if ((err = copyout((caddr_t)&datbuf,
-			(caddr_t)datptr, sizeof(datbuf))) != 0)
-		goto l_err;
+    if (mreply != NULL) {
+        /* called from kernel space */
+        bcopy (gbuf_rptr(mproto), ctlbuf.buf, ctlbuf.len);
+        bcopy (&ctlbuf, ctlptr, sizeof(ctlbuf));
+    } else {
+        /* called from user space */
+        if ((err = copyout((caddr_t)gbuf_rptr(mproto),
+                (caddr_t)ctlbuf.buf, ctlbuf.len)) != 0)
+            goto l_err;
+        if ((err = copyout((caddr_t)&ctlbuf,
+                (caddr_t)ctlptr, sizeof(ctlbuf))) != 0)
+            goto l_err;
+    }
 
-#ifdef APPLETALK_DEBUG
-	if (mproto == 0) 
-		kprintf("ASPgetmsg: null mproto!!!\n");
-#endif
+    /*
+     * copy out the data content and info
+     */
+    for (rval = 0, sum = 0; mdata && (rval == 0); mdata = gbuf_cont(mdata)) 
+    {
+        len = gbuf_len(mdata);
+        if (len) {
+            if ((len + sum) > datbuf.maxlen) {
+                len = datbuf.maxlen - sum;
+                rval = MOREDATA;
+            }
+            
+            if (mreply == NULL) {
+                /* called from user space */
+                if ((err = copyout((caddr_t)gbuf_rptr(mdata), (caddr_t)&datbuf.buf[sum], len)) != 0)
+                    goto l_err;
+            }
+            sum += len;
+        }
+    }
+    datbuf.len = sum;
+    if (mreply != NULL) {
+        /* called from kernel space */
+        bcopy (&datbuf, datptr, sizeof(datbuf));
+    } else {
+        /* called from user space */
+        if ((err = copyout((caddr_t)&datbuf, (caddr_t)datptr, sizeof(datbuf))) != 0)
+            goto l_err;
+    }
+    
+    if (mreply != NULL) {
+        /* called from kernel space */
+        /* return the reply data in mbufs, so dont free them.  
+        Just free the proto info */
+        mdata = gbuf_cont(mproto);
+        *mreply = mdata;
+        gbuf_cont(mproto) = NULL;
+        gbuf_freem(mproto);
+    } else {
+        /* called from user space */
+        gbuf_freem(mproto);
+    }
 
-	gbuf_freem(mproto);
-
-	ATDISABLE(s, scb->lock);
-	if (scb->sess_ioc)
-		scb->rcv_cnt--;
-	else {
-		scb->rcv_cnt = 0;
-		scb->snd_stop = 0;
-	}
-	ATENABLE(s, scb->lock);
-	return rval;
+    ATDISABLE(s, scb->lock);
+    if (scb->sess_ioc)
+        scb->rcv_cnt--;
+    else {
+        scb->rcv_cnt = 0;
+        scb->snd_stop = 0;
+    }
+    ATENABLE(s, scb->lock);
+    return rval;
 
 l_err:
-	dPrintf(D_M_ASP, D_L_ERROR,
-		("ASPgetmsg: err=%d, loc=%d, rem=%x.%x.%d, state=%s\n",
-		 err, scb->loc_addr.socket, 
-		 scb->rem_addr.net,
-		 scb->rem_addr.node, scb->rem_addr.socket,
-		 aspStateStr(scb->state)));
-	ATDISABLE(s, scb->lock);
-	gbuf_next(mproto) = scb->sess_ioc;
-	scb->sess_ioc = mproto;
-	ATENABLE(s, scb->lock);
-	*errp = err;
-	return -1;
+    ATDISABLE(s, scb->lock);
+    gbuf_next(mproto) = scb->sess_ioc;
+    scb->sess_ioc = mproto;
+    ATENABLE(s, scb->lock);
+    *errp = err;
+    return -1;
 }

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1995-2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 1995-2001 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -258,6 +258,11 @@ mount(p, uap, retval)
 	mp = (struct mount *)_MALLOC_ZONE((u_long)sizeof(struct mount),
 		M_MOUNT, M_WAITOK);
 	bzero((char *)mp, (u_long)sizeof(struct mount));
+
+	/* Initialize the default IO constraints */
+	mp->mnt_maxreadcnt = mp->mnt_maxwritecnt = MAXPHYS;
+	mp->mnt_segreadcnt = mp->mnt_segwritecnt = 32;
+
 	lockinit(&mp->mnt_lock, PVFS, "vfslock", 0, 0);
 	(void)vfs_busy(mp, LK_NOWAIT, 0, p);
 	mp->mnt_op = vfsp->vfc_vfsops;
@@ -278,10 +283,12 @@ update:
 		mp->mnt_flag |= MNT_RDONLY;
 	else if (mp->mnt_flag & MNT_RDONLY)
 		mp->mnt_kern_flag |= MNTK_WANTRDWR;
-	mp->mnt_flag &=~ (MNT_NOSUID | MNT_NOEXEC | MNT_NODEV |
-	    MNT_SYNCHRONOUS | MNT_UNION | MNT_ASYNC | MNT_UNKNOWNPERMISSIONS);
-	mp->mnt_flag |= uap->flags & (MNT_NOSUID | MNT_NOEXEC |
-	    MNT_NODEV | MNT_SYNCHRONOUS | MNT_UNION | MNT_ASYNC | MNT_UNKNOWNPERMISSIONS);
+	mp->mnt_flag &= ~(MNT_NOSUID | MNT_NOEXEC | MNT_NODEV |
+			  MNT_SYNCHRONOUS | MNT_UNION | MNT_ASYNC |
+			  MNT_UNKNOWNPERMISSIONS | MNT_DONTBROWSE | MNT_AUTOMOUNTED);
+	mp->mnt_flag |= uap->flags & (MNT_NOSUID | MNT_NOEXEC |	MNT_NODEV |
+				      MNT_SYNCHRONOUS | MNT_UNION | MNT_ASYNC |
+				      MNT_UNKNOWNPERMISSIONS | MNT_DONTBROWSE | MNT_AUTOMOUNTED);
 	/*
 	 * Mount the filesystem.
 	 */
@@ -528,7 +535,8 @@ sync(p, uap, retval)
 	extern unsigned int dp_pgins, dp_pgouts;
 	if(print_vmpage_stat) {
 		vm_countdirtypages();
-		printf("VP: %d: %d: %d: %d: %d\n", vp_pgodirty, vp_pgoclean, vp_pagein, dp_pgins, dp_pgouts);
+		printf("VP: %d: %d: %d: %d: %d\n", vp_pgodirty, vp_pgoclean, vp_pagein,
+			dp_pgins, dp_pgouts);
 	}
 	}
 #if DIAGNOSTIC
@@ -595,8 +603,8 @@ statfs(p, uap, retval)
 	if (error = VFS_STATFS(mp, sp, p))
 		return (error);
 	sp->f_flags = mp->mnt_flag & MNT_VISFLAGMASK;
-/*	return (copyout((caddr_t)sp, (caddr_t)uap->buf, sizeof(*sp))); */
-	return (copyout((caddr_t)sp, (caddr_t)uap->buf, sizeof(*sp)-sizeof(sp->f_reserved3)-sizeof(sp->f_reserved4)));
+	return (copyout((caddr_t)sp, (caddr_t)uap->buf,
+		sizeof(*sp)-sizeof(sp->f_reserved3)-sizeof(sp->f_reserved4)));
 }
 
 /*
@@ -627,8 +635,8 @@ fstatfs(p, uap, retval)
 	if (error = VFS_STATFS(mp, sp, p))
 		return (error);
 	sp->f_flags = mp->mnt_flag & MNT_VISFLAGMASK;
-/*	return (copyout((caddr_t)sp, (caddr_t)uap->buf, sizeof(*sp))); */
-	return (copyout((caddr_t)sp, (caddr_t)uap->buf, sizeof(*sp)-sizeof(sp->f_reserved3)-sizeof(sp->f_reserved4)));
+	return (copyout((caddr_t)sp, (caddr_t)uap->buf,
+		sizeof(*sp)-sizeof(sp->f_reserved3)-sizeof(sp->f_reserved4)));
 }
 
 /*
@@ -726,7 +734,9 @@ ogetfsstat(p, uap, retval)
 				continue;
 			}
 			sp->f_flags = mp->mnt_flag & MNT_VISFLAGMASK;
-			if (error = copyout((caddr_t)sp, sfsp, sizeof(*sp) - sizeof(sp->f_reserved3) - sizeof(sp->f_reserved4)))
+			error = copyout((caddr_t)sp, sfsp,
+					sizeof(*sp) - sizeof(sp->f_reserved3) - sizeof(sp->f_reserved4));
+			if (error)
 				return (error);
 			sfsp += sizeof(*sp) - sizeof(sp->f_reserved4);
 		}
@@ -897,18 +907,17 @@ open(p, uap, retval)
 	register struct filedesc *fdp = p->p_fd;
 	register struct file *fp;
 	register struct vnode *vp;
-	int flags, cmode;
+	int flags, cmode, oflags;
 	struct file *nfp;
 	int type, indx, error;
 	struct flock lf;
 	struct nameidata nd;
 	extern struct fileops vnops;
 
-	/* CERT advisory patch applied from FreeBSD */
-	/* Refer to Radar#2262895 A. Ramesh */
-	flags = FFLAGS(uap->flags);
-	if ((flags & (FREAD | FWRITE))==0)
+	oflags = uap->flags;
+	if ((oflags & O_ACCMODE) == O_ACCMODE)
 		return(EINVAL);
+	flags = FFLAGS(uap->flags);
 	if (error = falloc(p, &nfp, &indx))
 		return (error);
 	fp = nfp;
@@ -1256,7 +1265,7 @@ _unlink(p, uap, retval, nodelbusy)
 	struct nameidata nd;
 
 	NDINIT(&nd, DELETE, LOCKPARENT, UIO_USERSPACE, uap->path, p);
-	/* with hfs semantics, busy files cannot be deleted */
+	/* with Carbon semantics, busy files cannot be deleted */
 	if (nodelbusy)
 		nd.ni_cnd.cn_flags |= NODELETEBUSY;
 	if (error = namei(&nd))
@@ -1305,7 +1314,7 @@ unlink(p, uap, retval)
 }
 
 /*
- * Delete a name from the filesystem using HFS semantics.
+ * Delete a name from the filesystem using Carbon semantics.
  */
 int
 delete(p, uap, retval)
@@ -1883,8 +1892,8 @@ chown(p, uap, retval)
 	vp = nd.ni_vp;
 
 	/*
-		XXX A TEMPORARY HACK FOR NOW: Try to track console_user
-		by looking for chown() calls on /dev/console from a console process:
+	 * XXX A TEMPORARY HACK FOR NOW: Try to track console_user
+	 * by looking for chown() calls on /dev/console from a console process.
 	 */
 	if ((vp) && (vp->v_specinfo) &&
 		(major(vp->v_specinfo->si_rdev) == CONSMAJOR) &&
@@ -2000,8 +2009,8 @@ truncate(p, uap, retval)
 	int error;
 	struct nameidata nd;
 
-        if (uap->length < 0)
-                return(EINVAL);
+	if (uap->length < 0)
+		return(EINVAL);
 	NDINIT(&nd, LOOKUP, FOLLOW, UIO_USERSPACE, uap->path, p);
 	if (error = namei(&nd))
 		return (error);
@@ -2042,8 +2051,8 @@ ftruncate(p, uap, retval)
 	struct file *fp;
 	int error;
 
-        if (uap->length < 0)
-                return(EINVAL);
+	if (uap->length < 0)
+		return(EINVAL);
         
 	if (error = fdgetf(p, uap->fd, &fp))
 		return (error);
@@ -2054,7 +2063,6 @@ ftruncate(p, uap, retval)
 	if (fp->f_type != DTYPE_VNODE) 
 		return (EINVAL);
 
-	
 	if ((fp->f_flag & FWRITE) == 0)
 		return (EINVAL);
 	vp = (struct vnode *)fp->f_data;
@@ -2264,6 +2272,7 @@ rename(p, uap, retval)
 	struct nameidata fromnd, tond;
 	int error;
 	int mntrename;
+	int casesense,casepres;
 
 	mntrename = FALSE;
 
@@ -2297,10 +2306,36 @@ rename(p, uap, retval)
 		error = EINVAL;
 	/*
 	 * If source is the same as the destination (that is the
-	 * same inode number) then there is nothing to do.
+	 * same inode number) then there is nothing to do...
+	 * EXCEPT if the
+	 * underlyning file system supports case insensitivity and is case preserving. Then
+	 * a special case is made, i.e. foo -> Foo.
+	 *
+	 * Only file systems that support the pathconf selectors _PC_CASE_SENSITIVE and
+	 * _PC_CASE_PRESERVING can have this exception, and then they would need to
+	 * handle the special case of getting the same vnode as target and source.
+	 * NOTE: Then the target is unlocked going into VOP_RENAME, so not to cause
+	 * locking problems. There is a single reference on tvp.
 	 */
-	if (fvp == tvp)
+	if (fvp == tvp) {
 		error = -1;
+		/* 
+		 * Check to see if just changing case, if: 
+		 *  - file system is case insensitive
+		 *  - and also case preserving
+		 *  _ same parent directories (so changing case by different links is not supported)
+		 *  For instance: mv a/foo a/Foo
+		 */
+        if ((tond.ni_dvp == fromnd.ni_dvp) &&
+				(VOP_PATHCONF(tdvp, _PC_CASE_SENSITIVE, &casesense) == 0) &&
+                (VOP_PATHCONF(tdvp, _PC_CASE_PRESERVING, &casepres) == 0) &&
+                (casesense == 0) && 
+                (casepres == 1)) {
+            /* Since the target is locked...unlock it and lose a ref */
+            vput(tvp);
+		    error = 0;
+        }
+	}
 	
 	/*
 	 * Allow the renaming of mount points.
@@ -2632,7 +2667,8 @@ unionread:
 			VOP_UNLOCK(lvp, 0, p);
 			fp->f_data = (caddr_t) lvp;
 			fp->f_offset = 0;
-			error = vn_close(vp, FREAD, fp->f_cred, p);
+			error = VOP_CLOSE(vp, FREAD, fp->f_cred, p);
+			vrele(vp);
 			if (error)
 				return (error);
 			vp = lvp;
@@ -2740,7 +2776,8 @@ unionread:
 			VOP_UNLOCK(lvp, 0, p);
 			fp->f_data = (caddr_t) lvp;
 			fp->f_offset = 0;
-			error = vn_close(vp, FREAD, fp->f_cred, p);
+			error = VOP_CLOSE(vp, FREAD, fp->f_cred, p);
+			vrele(vp);
 			if (error)
 				return (error);
 			vp = lvp;
@@ -2841,6 +2878,7 @@ getvnode(p, fd, fpp)
 	*fpp = fp;
 	return (0);
 }
+
 /*
  *  HFS/HFS PlUS SPECIFIC SYSTEM CALLS
  *  The following 10 system calls are designed to support features
@@ -3573,3 +3611,26 @@ FSCtl_Exit:
 	return error;
 }
 /* end of fsctl system call */
+
+/*
+ * An in-kernel sync for power management to call.
+ */
+__private_extern__ int
+sync_internal(void)
+{
+	boolean_t   funnel_state;
+	int error;
+
+	struct sync_args data;
+
+	int retval[2];
+
+	funnel_state = thread_funnel_set(kernel_flock, TRUE);
+
+	error = sync(current_proc(), &data, &retval);
+
+	thread_funnel_set(kernel_flock, funnel_state);
+
+	return (error);
+} /* end of sync_internal call */
+

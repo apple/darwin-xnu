@@ -106,6 +106,11 @@ ufs_inactive(ap)
 		if (!getinoquota(ip))
 			(void)chkiq(ip, -1, NOCRED, 0);
 #endif
+		/*
+		 * marking inode in transit so that one can get this 
+		 * inode from inodecache
+		 */
+		ip->i_flag |= IN_TRANSIT;
 		error = VOP_TRUNCATE(vp, (off_t)0, 0, NOCRED, p);
 		ip->i_rdev = 0;
 		mode = ip->i_mode;

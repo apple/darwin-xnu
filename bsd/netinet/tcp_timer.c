@@ -307,8 +307,8 @@ tpgone:
 	if (++cur_tw_slot >= N_TIME_WAIT_SLOTS)
 		cur_tw_slot = 0;
 
-	tcp_iss += TCP_ISSINCR/PR_SLOWHZ;		/* increment iss */
 #if TCP_COMPAT_42
+	tcp_iss += TCP_ISSINCR/PR_SLOWHZ;		/* increment iss */
 	if ((int)tcp_iss < 0)
 		tcp_iss = TCP_ISSINCR;			/* XXX */
 #endif

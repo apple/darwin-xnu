@@ -1337,7 +1337,6 @@ ipc_kmsg_copyin_body(
     mach_msg_descriptor_t	*saddr, *eaddr;
     boolean_t 			complex;
     mach_msg_return_t 		mr;
-    boolean_t 			use_page_lists, steal_pages;
     int				i;
     kern_return_t		kr;
     vm_size_t			space_needed = 0;
@@ -1350,8 +1349,6 @@ ipc_kmsg_copyin_body(
      */
     dest = (ipc_object_t) kmsg->ikm_header.msgh_remote_port;
     complex = FALSE;
-    use_page_lists = ipc_kobject_vm_page_list(ip_kotype((ipc_port_t)dest));
-    steal_pages = ipc_kobject_vm_page_steal(ip_kotype((ipc_port_t)dest));
 
     body = (mach_msg_body_t *) (&kmsg->ikm_header + 1);
     saddr = (mach_msg_descriptor_t *) (body + 1);
@@ -1376,9 +1373,6 @@ ipc_kmsg_copyin_body(
 
 	if (sstart->type.type == MACH_MSG_OOL_DESCRIPTOR ||
 	    sstart->type.type == MACH_MSG_OOL_VOLATILE_DESCRIPTOR) {
-
-		assert(!(sstart->out_of_line.copy == MACH_MSG_PHYSICAL_COPY &&
-		       (use_page_lists || steal_pages)));
 
 		if (sstart->out_of_line.copy != MACH_MSG_PHYSICAL_COPY &&
 		    sstart->out_of_line.copy != MACH_MSG_VIRTUAL_COPY) {
@@ -1477,51 +1471,6 @@ ipc_kmsg_copyin_body(
 		
 		if (length == 0) {
 		    dsc->address = 0;
-		} else if (use_page_lists) {
-		    int	options;
-
-		    /*
-		     * Use page list copy mechanism if specified.
-		     */
-		    if (steal_pages == FALSE) {
-			/*
-			 * XXX Temporary Hackaround.
-			 * XXX Because the same page
-			 * XXX might be in more than one
-			 * XXX out of line region, steal
-			 * XXX (busy) pages from previous
-			 * XXX region so that this copyin
-			 * XXX won't block (permanently).
-			 */
-			if (copy != VM_MAP_COPY_NULL)
-			    vm_map_copy_steal_pages(copy);
-		    }
-
-		    /*
-		     *	Set up options for copying in page list.
-		     *  If deallocating, steal pages to prevent
-		     *  vm code from lazy evaluating deallocation.
-		     */
-		    options = VM_PROT_READ;
-		    if (dealloc) {
-			options |= VM_MAP_COPYIN_OPT_SRC_DESTROY |
-		    			VM_MAP_COPYIN_OPT_STEAL_PAGES;
-		    }
-		    else if (steal_pages) {
-		    	options |= VM_MAP_COPYIN_OPT_STEAL_PAGES;
-		    }
-
-		    if (vm_map_copyin_page_list(map, addr, length, options,
-						&copy, FALSE)
-			!= KERN_SUCCESS) {
-
-			ipc_kmsg_clean_partial(kmsg, i, paddr, space_needed);
-			return MACH_SEND_INVALID_MEMORY;
-		    }
-
-		    dsc->address = (void *) copy;
-		    dsc->copy = MACH_MSG_PAGE_LIST_COPY_T;
-
 		} else if ((length >= MSG_OOL_SIZE_SMALL) &&
 			   (dsc->copy == MACH_MSG_PHYSICAL_COPY) && !dealloc) {
 
@@ -2333,7 +2282,6 @@ ipc_kmsg_copyout_body(
 		dsc = &saddr->out_of_line;
 
 		assert(dsc->copy != MACH_MSG_KALLOC_COPY_T);
-		assert(dsc->copy != MACH_MSG_PAGE_LIST_COPY_T);
 
 		copy_option = dsc->copy;
 
@@ -3016,9 +2964,6 @@ mm_copy_options_string(
 		break;
 	    case MACH_MSG_KALLOC_COPY_T:
 		name = "KALLOC_COPY_T";
-		break;
-	    case MACH_MSG_PAGE_LIST_COPY_T:
-		name = "PAGE_LIST_COPY_T";
 		break;
 	    default:
 		name = "unknown";

@@ -66,6 +66,17 @@ unsigned int vp_pgoclean=0;
 unsigned int dp_pgouts=0;	/* Default pager pageouts */
 unsigned int dp_pgins=0;	/* Default pager pageins */
 
+vm_object_offset_t
+vnode_pager_get_filesize(struct vnode *vp)
+{
+	if (UBCINVALID(vp)) {
+		return (vm_object_offset_t) 0;
+	}
+
+	return (vm_object_offset_t) ubc_getsize(vp);
+	
+}
+
 pager_return_t
 vnode_pageout(struct vnode *vp,
 	upl_t			upl,
@@ -86,9 +97,8 @@ vnode_pageout(struct vnode *vp,
 	struct buf *bp;
 	boolean_t	funnel_state;
 	int haveupl=0;
-	void * object;
 	upl_page_info_t *pl;
-	upl_t vpupl;
+	upl_t vpupl = NULL;
 
 	funnel_state = thread_funnel_set(kernel_flock, TRUE);
 
@@ -122,20 +132,16 @@ vnode_pageout(struct vnode *vp,
 		}
 		goto out;
 	}
-
-	object = ubc_getobject(vp, UBC_PAGINGOP|UBC_NOREACTIVATE);
-	if (object == NULL)
-		panic("vnode_pageout: null object");
-	vp_size = ubc_getsize(vp);
-
-	vm_fault_list_request(object, 
-			      f_offset, isize, &vpupl, NULL, 0,
-			      UPL_NO_SYNC |  UPL_CLEAN_IN_PLACE | UPL_COPYOUT_FROM | UPL_SET_INTERNAL);
+	ubc_create_upl( vp,
+					f_offset,
+					isize,
+					&vpupl,
+					&pl,
+					UPL_COPYOUT_FROM);
 	if (vpupl == (upl_t) 0)
-		panic("vnode_pageout: null upl returned");
+		return PAGER_ABSENT;
 
-	pl = UPL_GET_INTERNAL_PAGE_LIST(vpupl);
-
+	vp_size = ubc_getsize(vp);
 	if (vp_size == 0) {
 
 		while (isize) {
@@ -156,8 +162,7 @@ start0:
 			f_offset += PAGE_SIZE;
 			isize    -= PAGE_SIZE;
 		}
-		kernel_upl_commit_range(vpupl, 0, size, UPL_COMMIT_FREE_ON_EMPTY, 
-							pl, MAX_UPL_TRANSFER);
+		ubc_upl_commit_range(vpupl, 0, size, UPL_COMMIT_FREE_ON_EMPTY);
 
 		error = 0;
 		goto out;
@@ -170,7 +175,8 @@ start0:
 		int  num_of_pages;
 
 		if ( !upl_valid_page(pl, pg_index)) {
-		        kernel_upl_abort_range(vpupl, offset, PAGE_SIZE, UPL_ABORT_FREE_ON_EMPTY);
+			ubc_upl_abort_range(vpupl, offset, PAGE_SIZE,
+					UPL_ABORT_FREE_ON_EMPTY);
 	         
 			offset += PAGE_SIZE;
 			isize  -= PAGE_SIZE;
@@ -205,8 +211,8 @@ start:
 			if (bp)
 				brelse(bp);
 
-			kernel_upl_commit_range(vpupl, offset, PAGE_SIZE, 
-				UPL_COMMIT_FREE_ON_EMPTY, pl, MAX_UPL_TRANSFER);
+			ubc_upl_commit_range(vpupl, offset, PAGE_SIZE, 
+					UPL_COMMIT_FREE_ON_EMPTY);
 
 			offset += PAGE_SIZE;
 			isize  -= PAGE_SIZE;
@@ -263,10 +269,11 @@ vnode_pagein(
 	int	result = PAGER_SUCCESS;
 	struct proc	*p = current_proc();
 	int		error = 0;
+	int		xfer_size;
 	boolean_t	funnel_state;
 	int haveupl=0;
-	void * object;
-	upl_t vpupl;
+	upl_t vpupl = NULL;
+	off_t	local_offset;
 	unsigned int  ioaddr;
 
 	funnel_state = thread_funnel_set(kernel_flock, TRUE);
@@ -295,22 +302,36 @@ vnode_pagein(
 		}
 	} else {
 
-		object = ubc_getobject(vp, UBC_PAGINGOP|UBC_NOREACTIVATE);
-		if (object == (void *)NULL)
-			panic("vnode_pagein: null object");
-		vm_fault_list_request(object, f_offset, size, &vpupl, NULL, 0,
-			UPL_NO_SYNC |  UPL_CLEAN_IN_PLACE | UPL_SET_INTERNAL);
+		local_offset = 0;
+		while (size) {
+			if((size > 4096) && (vp->v_tag == VT_NFS)) {
+				xfer_size =  4096;
+				size = size - xfer_size;
+			} else {
+				xfer_size = size;
+				size = 0;
+			}
+			ubc_create_upl(	vp,
+							f_offset+local_offset,
+							xfer_size,
+							&vpupl,
+							NULL,
+							UPL_FLAGS_NONE);
+			if (vpupl == (upl_t) 0) {
+				result =  PAGER_ABSENT;
+				error = PAGER_ABSENT;
+				goto out;
+			}
 
-		if (vpupl == (upl_t) 0)
-			panic("vnode_pagein: null upl returned");
+			vp_pagein++;
 
-		vp_pagein++;
-
-		/*  By defn callee will commit or abort upls */
-		if (error = VOP_PAGEIN(vp, vpupl, (vm_offset_t) 0,
-			(off_t)f_offset, size,p->p_ucred, flags & ~UPL_NOCOMMIT)) {
-			result = PAGER_ERROR;
-			error  = PAGER_ERROR;
+			/*  By defn callee will commit or abort upls */
+			if (error = VOP_PAGEIN(vp, vpupl, (vm_offset_t) 0,
+				(off_t)f_offset+local_offset, xfer_size,p->p_ucred, flags & ~UPL_NOCOMMIT)) {
+				result = PAGER_ERROR;
+				error  = PAGER_ERROR;
+			}
+			local_offset += PAGE_SIZE_64;
 		}
 	}
 out:
@@ -342,10 +363,10 @@ vnode_pager_shutdown()
 	}
 }
 
-void * 
+
+void *
 upl_get_internal_page_list(upl_t upl)
 {
-	return(UPL_GET_INTERNAL_PAGE_LIST(upl));
+  return(UPL_GET_INTERNAL_PAGE_LIST(upl));
 
 }
-

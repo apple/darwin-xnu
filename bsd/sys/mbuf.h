@@ -203,6 +203,7 @@ struct mbuf {
 #define CSUM_IP_VALID           0x0200          /*   ... the csum is valid */
 #define CSUM_DATA_VALID         0x0400          /* csum_data field is valid */
 #define CSUM_PSEUDO_HDR         0x0800          /* csum_data has pseudo hdr */
+#define CSUM_TCP_SUM16          0x1000          /* simple TCP Sum16 computation */
  
 #define CSUM_DELAY_DATA         (CSUM_TCP | CSUM_UDP)
 #define CSUM_DELAY_IP           (CSUM_IP)       /* XXX add ipv6 here too? */
@@ -244,8 +245,8 @@ struct mbuf {
 
 extern
 decl_simple_lock_data(, mbuf_slock);
-#define MBUF_LOCK() simple_lock(&mbuf_slock);
-#define MBUF_UNLOCK() simple_unlock(&mbuf_slock);
+#define MBUF_LOCK() usimple_lock(&mbuf_slock);
+#define MBUF_UNLOCK() usimple_unlock(&mbuf_slock);
 #define MBUF_LOCKINIT() simple_lock_init(&mbuf_slock);
 
 

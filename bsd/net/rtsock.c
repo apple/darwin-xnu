@@ -755,7 +755,7 @@ again:
 				if (rw->w_tmem)
 					FREE(rw->w_tmem, M_RTABLE);
 				rw->w_tmem = (caddr_t)
-					_MALLOC(len, M_RTABLE, M_NOWAIT);
+					_MALLOC(len, M_RTABLE, M_WAITOK); /*###LD0412 was NOWAIT */
 				if (rw->w_tmem)
 					rw->w_tmemsize = len;
 			}

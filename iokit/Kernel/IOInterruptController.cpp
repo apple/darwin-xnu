@@ -244,7 +244,17 @@ IOReturn IOInterruptController::enableInterrupt(IOService *nub, int source)
   
   if (vector->interruptDisabledSoft) {
     vector->interruptDisabledSoft = 0;
+#if __ppc__
+    sync();
+    isync();
+#endif
     
+    if (!getPlatform()->atInterruptLevel()) {
+      while (vector->interruptActive);
+#if __ppc__
+      isync();
+#endif
+    }
     if (vector->interruptDisabledHard) {
       vector->interruptDisabledHard = 0;
       
@@ -554,9 +564,8 @@ IOReturn IOSharedInterruptController::enableInterrupt(IOService *nub,
   vector = &vectors[vectorNumber];
   
   if (vector->interruptDisabledSoft) {
-    vector->interruptDisabledSoft = 0;
-    
     interruptState = IOSimpleLockLockDisableInterrupt(controllerLock);
+    vector->interruptDisabledSoft = 0;
     vectorsEnabled++;
     IOSimpleLockUnlockEnableInterrupt(controllerLock, interruptState);
     
@@ -584,13 +593,12 @@ IOReturn IOSharedInterruptController::disableInterrupt(IOService *nub,
   vector = &vectors[vectorNumber];
   
   if (!vector->interruptDisabledSoft) {
+    interruptState = IOSimpleLockLockDisableInterrupt(controllerLock); 
     vector->interruptDisabledSoft = 1;
 #if __ppc__
     sync();
     isync();
 #endif
-    
-    interruptState = IOSimpleLockLockDisableInterrupt(controllerLock); 
     vectorsEnabled--;
     IOSimpleLockUnlockEnableInterrupt(controllerLock, interruptState);
   }

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2001 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -254,18 +254,6 @@ Error_Exit: ;
     return status;
 }
 
-void MarkBlock_glue (Ptr address)
-{
-    int		err;
-    struct buf *bp = NULL;
-    int mappingEntry;
-
-    if ((err = LookupBufferMapping(address, &bp, &mappingEntry))) {
-        panic("Failed to find buffer pointer for buffer in MarkBlock_glue.");
-    } else {
-        bp->b_flags |= B_DIRTY;
-    };
-}
 
 OSErr RelBlock_glue (Ptr address, UInt16 options )
 {
@@ -310,7 +298,7 @@ OSErr RelBlock_glue (Ptr address, UInt16 options )
 /*	Creates a new vnode to hold a psuedo file like an extents tree file	*/
 /*										*/
 
-OSStatus  GetInitializedVNode(struct hfsmount *hfsmp, struct vnode **tmpvnode, int init_ubc)
+OSStatus  GetInitializedVNode(struct hfsmount *hfsmp, struct vnode **tmpvnode)
 {
 
     struct hfsnode	*hp;
@@ -351,6 +339,7 @@ OSStatus  GetInitializedVNode(struct hfsmount *hfsmp, struct vnode **tmpvnode, i
     hp->h_meta->h_dev = hfsmp->hfs_raw_dev;
     hp->h_meta->h_usecount++;
     hp->h_nodeflags |= IN_ACCESS | IN_CHANGE | IN_UPDATE;
+	rl_init(&hp->h_invalidranges);
 #if HFS_DIAGNOSTIC
     hp->h_valid = HFS_VNODE_MAGIC;
 #endif
@@ -361,10 +350,7 @@ OSStatus  GetInitializedVNode(struct hfsmount *hfsmp, struct vnode **tmpvnode, i
 	 * through mapped IO as will as POSIX IO APIs.
 	 * Hence we do not initialize UBC for those files
 	 */
-    if (init_ubc) 
-		ubc_info_init(vp);
-    else
-		vp->v_ubcinfo = UBC_NOINFO;
+	vp->v_ubcinfo = UBC_NOINFO;
 
     *tmpvnode = vp;
     
@@ -378,24 +364,6 @@ Err_Exit:
 
     return rtn;
 }
-
-OSErr GetNewFCB(ExtendedVCB *vcb, FileReference* fRefPtr)
-{
-    OSErr    err;
-
-    err = GetInitializedVNode( VCBTOHFS(vcb), fRefPtr, 0 );
-    panic("This node is not completely initialized in GetNewFCB!");		/* XXX SER */
-
-	return( err );    
-}
-
-
-OSErr	CheckVolumeOffLine( ExtendedVCB *vcb )
-{
-
-    return( 0 );
-}
-
 
 OSErr	C_FlushMDB( ExtendedVCB *volume)
 {

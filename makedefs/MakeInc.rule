@@ -344,7 +344,7 @@ COMP_SOBJ_FILES = $(addprefix $(TARGET)$(COMP_OBJ_DIR), $(COMP_SOBJ_LIST))
 $(COMP_SOBJ_FILES): $(TARGET)$(COMP_OBJ_DIR)%.o : %.s
 	${S_KCC} -E -MD ${SFLAGS} -DASSEMBLER $(INCFLAGS) $< > $(patsubst %.o, %.pp, ${@});
 	sed '/^\#/d' $(patsubst %.o, %.pp, ${@}) > $(patsubst %.o, %.s, ${@});
-	${S_KCC} ${SFLAGS} -m${arch_config} ${_HOST_AS_FLAGS}  -c $(patsubst %.o, %.s, ${@});
+	${S_KCC} ${SFLAGS} -m${ARCH_CONFIG_LC} ${_HOST_AS_FLAGS}  -c $(patsubst %.o, %.s, ${@});
 	${RM} ${_RMFLAGS_} $(patsubst %.o, %.pp, ${@}) $(patsubst %.o,%.s,${@});
 
 S_RULE_1A=@ls /
@@ -352,7 +352,7 @@ S_RULE_1B= ${patsubst %.o,%.s,${@}} > /dev/null
 S_RULE_2= ${S_KCC} -E -MD ${SFLAGS} -DASSEMBLER $(INCFLAGS) $< \
                > $(patsubst %.o, %.pp, ${@}); \
 	sed '/^\#/d' $(patsubst %.o, %.pp, ${@}) > $(patsubst %.o, %.s, ${@});
-S_RULE_3= ${S_KCC} ${SFLAGS} -m${arch_config} ${_HOST_AS_FLAGS}  -c $(patsubst %.o, %.s, ${@});\
+S_RULE_3= ${S_KCC} ${SFLAGS} -m${ARCH_CONFIG_LC} ${_HOST_AS_FLAGS}  -c $(patsubst %.o, %.s, ${@});\
        ${RM} ${_RMFLAGS_} $(patsubst %.o, %.pp, ${@}) $(patsubst %.o,%.s,${@})
 
 #
@@ -419,24 +419,22 @@ setup_build_all:
 do_build_all: $(COMP_FILES) $(COMP_COBJ_FILES) $(COMP_SOBJ_FILES) $(COMPONENT_IMAGE_FILE)
 	@echo "[ $(SOURCE) ] make do_build_all $(KERNEL_CONFIG) $(ARCH_CONFIG) $(TARGET)"
 
-ifeq ($(shell $(RELPATH) $(SRCROOT) $(SOURCE)), .)
+ifeq ($(COMPONENT), .)
 do_build_all: do_build_mach_kernel
 endif
 
 #
 # mach_kernel building rules
 #
-MK_COMPONENT_OBJ_FILES = $(addprefix $(TARGET),$(foreach component,$(COMPONENT_LIST), $(addprefix $(component)/$(firstword $($(addsuffix _KERNEL_CONFIG, $(shell echo -n $(component) | tr a-z A-Z))) $(KERNEL_CONFIG))/, $(addsuffix .o, $(component)))))
-
 do_build_mach_kernel:
-	@echo "[ building mach_kernel ]"
+	@echo "[ building mach_kernel ]";
 	$(OBJROOT)/$(KERNEL_CONFIG)_$(ARCH_CONFIG)/kernel_newvers	\
 	    "`${CAT} $(SRCROOT)/osfmk/conf/kernelversion.major`"	\
 	    "`${CAT} $(SRCROOT)/osfmk/conf/kernelversion.minor`"	\
-	    "`${CAT} $(SRCROOT)/osfmk/conf/kernelversion.variant`"
-	${KCC} $(CFLAGS) $(INCLUDES) -c kernel_vers.c
-	$(LD) $(LDFLAGS_KERNEL) $(MK_COMPONENT_OBJ_FILES) kernel_vers.o -o $(TARGET)mach_kernel.sys $(LD_KERNEL_LIBS)
-	$(STRIP) $(STRIP_FLAGS) $(TARGET)mach_kernel.sys -o $(TARGET)mach_kernel
+	    "`${CAT} $(SRCROOT)/osfmk/conf/kernelversion.variant`";				\
+	${KCC} $(CFLAGS) $(INCLUDES) -c kernel_vers.c;						\
+	$(LD) $(LDFLAGS_KERNEL) $(addprefix $(TARGET)/,$(foreach component,$(COMPONENT_LIST), $(addprefix $(component)/$(firstword $($(addsuffix _KERNEL_CONFIG, $(component))) $(KERNEL_CONFIG))/, $(addsuffix .o, $(component))))) kernel_vers.o -o $(TARGET)/mach_kernel.sys $(LD_KERNEL_LIBS);	\
+	$(STRIP) $(STRIP_FLAGS) $(TARGET)/mach_kernel.sys -o $(TARGET)/mach_kernel;
 #
 # Generic Install rules
 #
@@ -444,40 +442,40 @@ INSTALL_FILE_FILES = $(addprefix $(DSTROOT)$(INSTALL_FILE_DIR), $(INSTALL_FILE_L
 
 force_file_install:
 
-$(INSTALL_FILE_FILES): $(DSTROOT)$(INSTALL_FILE_DIR)% : $(TARGET)% force_file_install
+$(INSTALL_FILE_FILES): $(DSTROOT)$(INSTALL_FILE_DIR)% : $(TARGET)/% force_file_install
 	@echo Installing $< in $@;
 	@$(MKDIR) $(DSTROOT)$(INSTALL_FILE_DIR);			\
-	if [ "`echo $(INSTALL_ARCHS) | wc -w`" -eq 1 ]; then	\
+	if [ "`echo $(INSTALL_ARCHS_LC) | wc -w`" -eq 1 ]; then	\
 		$(RM) $(RMFLAGS) $@;				\
 		install $(INSTALL_FLAGS) $< $(dir $@);		\
 	else							\
 		if [ ! -e $@ ]; then				\
 			echo >empty_file;			\
-			lipo_arg="$(subst _empty_file, empty_file,$(foreach lipo_arch,$(shell echo -n $(INSTALL_ARCHS) | tr A-Z a-z), $(addprefix -arch , $(addsuffix _empty_file, $(lipo_arch)))))"; \
+			lipo_arg="$(subst _empty_file, empty_file,$(foreach lipo_arch,$(INSTALL_ARCHS_LC), $(addprefix -arch , $(addsuffix _empty_file, $(lipo_arch)))))"; \
 			$(LIPO) $${lipo_arg} -create -output $@;	\
 			$(RM) $(RMFLAGS) empty_file;			\
 		fi;										\
-		$(LIPO) $@ -replace $(shell echo -n $(ARCH_CONFIG) | tr A-Z a-z)  $< -o $@;	\
+		$(LIPO) $@ -replace $(ARCH_CONFIG_LC)  $< -o $@;	\
 	fi
 
 INSTALL_FILESYS_FILES = $(addprefix $(SYMROOT)$(INSTALL_FILE_DIR), $(INSTALL_FILE_LIST))
 
 force_filesys_install:
 
-$(INSTALL_FILESYS_FILES): $(SYMROOT)$(INSTALL_FILE_DIR)% : $(TARGET)%.sys force_filesys_install
+$(INSTALL_FILESYS_FILES): $(SYMROOT)$(INSTALL_FILE_DIR)% : $(TARGET)/%.sys force_filesys_install
 	@echo Installing $< in $@;
 	@$(MKDIR) $(SYMROOT)$(INSTALL_FILE_DIR);			\
-	if [ "`echo $(INSTALL_ARCHS) | wc -w`" -eq 1 ]; then	\
+	if [ "`echo $(INSTALL_ARCHS_LC) | wc -w`" -eq 1 ]; then	\
 		$(RM) $(RMFLAGS) $@;				\
 		install $(INSTALL_FLAGS) $< $(dir $@);		\
 	else							\
 		if [ ! -e $@ ]; then				\
 			echo >empty_file;			\
-			lipo_arg="$(subst _empty_file, empty_file,$(foreach lipo_arch,$(shell echo -n $(INSTALL_ARCHS) | tr A-Z a-z), $(addprefix -arch , $(addsuffix _empty_file, $(lipo_arch)))))"; \
+			lipo_arg="$(subst _empty_file, empty_file,$(foreach lipo_arch,$(INSTALL_ARCHS_LC), $(addprefix -arch , $(addsuffix _empty_file, $(lipo_arch)))))"; \
 			$(LIPO) $${lipo_arg} -create -output $@;	\
 			$(RM) $(RMFLAGS) empty_file;			\
 		fi;										\
-		$(LIPO) $@ -replace $(shell echo -n $(ARCH_CONFIG) | tr A-Z a-z)  $< -o $@;	\
+		$(LIPO) $@ -replace $(ARCH_CONFIG_LC)  $< -o $@;	\
 	fi
 
 setup_build_install:
@@ -486,5 +484,7 @@ setup_build_install:
 do_build_install: $(INSTALL_FILESYS_FILES) $(INSTALL_FILE_FILES)
 	@echo "[ $(SOURCE) ] make do_build_install $(KERNEL_CONFIG) $(ARCH_CONFIG) $(TARGET)"
 
+ifeq    ($(INCL_MAKEDEP), TRUE)
 -include Makedep
+endif
 

@@ -82,4 +82,5 @@ LIST_HEAD(rr_prhead, rr_prefix);
 extern struct rr_prhead rr_prefix;
 
 void in6_rr_timer __P((void *));
+void in6_rr_timer_funneled __P((void *));
 int delete_each_prefix  __P((struct rr_prefix *rpp, u_char origin));

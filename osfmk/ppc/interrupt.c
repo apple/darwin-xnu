@@ -47,7 +47,7 @@ struct ppc_saved_state * interrupt(
 {
 	int	current_cpu, tmpr, targtemp;
 	unsigned int	throttle;
-	AbsoluteTime	now;
+	uint64_t		now;
 	thread_act_t	act;
 
 	disable_preemption();
@@ -110,11 +110,10 @@ struct ppc_saved_state * interrupt(
 #endif
 
 			act = current_act();					/* Find ourselves */
-			if(act->mact.qactTimer.hi | act->mact.qactTimer.lo) {	/* Is the timer set? */
+			if(act->mact.qactTimer != 0) {	/* Is the timer set? */
 				clock_get_uptime(&now);				/* Find out what time it is */
-				if (CMP_ABSOLUTETIME(&act->mact.qactTimer, &now) <= 0) {	/* It is set, has it popped? */
-					act->mact.qactTimer.hi = 0;		/* Clear single shot timer */
-					act->mact.qactTimer.lo = 0;		/* and the other half */
+				if (act->mact.qactTimer <= now) {	/* It is set, has it popped? */
+					act->mact.qactTimer = 0;		/* Clear single shot timer */
 					if((unsigned int)act->mact.vmmControl & 0xFFFFFFFE) {	/* Are there any virtual machines? */
 						vmm_timer_pop(act);			/* Yes, check out them out... */
 					}

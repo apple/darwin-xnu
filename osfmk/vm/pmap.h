@@ -165,10 +165,15 @@ extern void		pmap_enter(	/* Enter a mapping */
 				vm_prot_t	prot,
 				boolean_t	wired);
 
+extern void		pmap_remove_some_phys(
+				pmap_t		pmap,
+				vm_offset_t	pa);
+
 
 /*
  *	Routines that operate on physical addresses.
  */
+
 extern void		pmap_page_protect(	/* Restrict access to page. */
 				vm_offset_t	phys,
 				vm_prot_t	prot);

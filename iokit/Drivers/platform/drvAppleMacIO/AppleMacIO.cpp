@@ -43,7 +43,7 @@ extern "C" {
 
 #include <IOKit/ppc/IODBDMA.h>
 
-#include <assert.h>
+#include <IOKit/assert.h>
 
 /* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
 

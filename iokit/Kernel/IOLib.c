@@ -53,7 +53,7 @@ static lock_t * threadArgLock;
 
 enum { kIOMaxPageableMaps = 16 };
 enum { kIOPageableMapSize = 16 * 1024 * 1024 };
-enum { kIOPageableMaxMapSize = 32 * 1024 * 1024 };
+enum { kIOPageableMaxMapSize = 64 * 1024 * 1024 };
 
 typedef struct {
     vm_map_t	map;
@@ -342,27 +342,26 @@ void IOFreeContiguous(void * address, vm_size_t size)
 
 /* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
 
-void * IOMallocPageable(vm_size_t size, vm_size_t alignment)
+typedef kern_return_t (*IOIteratePageableMapsCallback)(vm_map_t map, void * ref);
+
+kern_return_t IOIteratePageableMaps(vm_size_t size,
+                    IOIteratePageableMapsCallback callback, void * ref)
 {
     kern_return_t	kr = kIOReturnNotReady;
-    vm_address_t	address;
     vm_size_t		segSize;
     UInt32		attempts;
     UInt32		index;
     vm_offset_t		min;
     vm_map_t		map;
 
-    if (alignment > page_size)
-        return( 0 );
     if (size > kIOPageableMaxMapSize)
-        return( 0 );
+        return( kIOReturnBadArgument );
 
     do {
         index = gIOKitPageableSpace.hint;
         attempts = gIOKitPageableSpace.count;
         while( attempts--) {
-            kr = kmem_alloc_pageable( gIOKitPageableSpace.maps[index].map,
-                                        &address, size);
+            kr = (*callback)(gIOKitPageableSpace.maps[index].map, ref);
             if( KERN_SUCCESS == kr) {
                 gIOKitPageableSpace.hint = index;
                 break;
@@ -410,15 +409,46 @@ void * IOMallocPageable(vm_size_t size, vm_size_t alignment)
 
     } while( true );
 
-    if( KERN_SUCCESS != kr)
-        address = 0;
+    return kr;
+}
+
+struct IOMallocPageableRef
+{
+    vm_address_t address;
+    vm_size_t	 size;
+};
+
+static kern_return_t IOMallocPageableCallback(vm_map_t map, void * _ref)
+{
+    struct IOMallocPageableRef * ref = (struct IOMallocPageableRef *) _ref;
+    kern_return_t	         kr;
+
+    kr = kmem_alloc_pageable( map, &ref->address, ref->size );
+
+    return( kr );
+}
+
+void * IOMallocPageable(vm_size_t size, vm_size_t alignment)
+{
+    kern_return_t	       kr = kIOReturnNotReady;
+    struct IOMallocPageableRef ref;
+
+    if (alignment > page_size)
+        return( 0 );
+    if (size > kIOPageableMaxMapSize)
+        return( 0 );
+
+    ref.size = size;
+    kr = IOIteratePageableMaps( size, &IOMallocPageableCallback, &ref );
+    if( kIOReturnSuccess != kr)
+        ref.address = 0;
 
 #if IOALLOCDEBUG
-    if( address)
-	debug_iomalloc_size += round_page(size);
+    if( ref.address)
+       debug_iomalloc_size += round_page(size);
 #endif
 
-    return (void *) address;
+    return( (void *) ref.address );
 }
 
 vm_map_t IOPageableMapForAddress( vm_address_t address )
@@ -604,4 +634,9 @@ unsigned int IOAlignmentToSize(IOAlignment align)
 	size <<= 1;
     }
     return size;
+}
+
+IOReturn IONDRVLibrariesInitialize( void )
+{
+    return( kIOReturnUnsupported );
 }

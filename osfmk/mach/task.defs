@@ -371,7 +371,8 @@ routine task_set_policy(
 	change			: boolean_t);
 
 /*
- *      Registers the caller-specified RPC subsystem as a new object.
+ *      Registers the caller-specified RPC subsystem attributes
+ *	as a new object.
  */
 routine mach_subsystem_create(
 		task		: task_t;

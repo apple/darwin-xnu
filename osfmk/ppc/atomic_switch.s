@@ -57,33 +57,9 @@
 ENTRY(atomic_switch_syscall, TAG_NO_FRAME_USED)
 	
 /*
- *			Here's where we check for special Blue Box fast traps
- *			If we don't recognize the syscall, we'll go back to regular processing
+ *			Note: the BlueBox fast path system calls (-1 and -2) we handled as
+ *			an ultra-fast trap in lowmem_vectors.
  */
-			cmpwi	r0,-1								; Is it NKIsPreemptiveTask 
-			beq-	isBBpretask 						; It is a fast syscall...
-			cmpwi	r0,-2								; Is it kcNKIsPreemptiveTaskEnv 
-			bne-	nofastSC							; Not a fast syscall...
-
-		; kcNKIsPreemptiveTaskEnv return task.taskEnv in r0 
-
-			lwz		r23, ACT_MACT_BTE(r13)				; Get the taskEnv
-			stw		r23, saver0(r4)						; Return the taskEnv in R0
-
-isBBpretask:											; answer the question is this a preemptive task ?
-			rlwinm	r6,r26,0,0,19						; Start of page is bttd
-			lwz		r1,BTTD_INTERRUPT_VECTOR(r6)		; Get interrupt vector
-			lwz		r6, savecr(r4)						; Get the current CCRs
-			cmpwi	r1,0								; Is this a preemptive thread ?
-			rlwinm	r6,r6,0,cr0_eq+1,cr0_eq-1			; Clear CR0 EQ bit
-			bne		notpretask							; Only the cooperative thread has an interrupt vector
-			oris	r6,r6,(0x8000 >> cr0_eq)			; Set CR0[eq] if task is preemptive.
-notpretask:
-			stw		r6, savecr(r4)						; Save the new current CCRs
-
-			b       EXT(fastexit)						; Take the fast path exit...	
-
-nofastSC:
 			li		r5, BTTD_SYSCALL_VECTOR
 			b		.L_CallPseudoKernel
 
@@ -128,6 +104,7 @@ ENTRY(atomic_switch_trap, TAG_NO_FRAME_USED)
 
 .L_CallPseudoKernel:
 
+			mfsprg	r2,0								; Get the per_proc
 			rlwinm	r6,r26,0,0,19						; Start of page is bttd
 			lwz		r7,ACT_MACT_SPF(r13)				; Get special flags 
 			lwz		r1,BTTD_INTERRUPT_VECTOR(r6)		; Get interrupt vector
@@ -136,6 +113,7 @@ ENTRY(atomic_switch_trap, TAG_NO_FRAME_USED)
 			lwz		r8,BTTD_INTCONTROLWORD(r6)			; Get Interrupt Control Word
 			cmpwi	r1,0								; Is this a preemptive thread ?
 			stw		r7,ACT_MACT_SPF(r13)				; Update special flags
+			stw		r7,spcFlags(r2)						; Update per_proc version
 			beq		.L_CallFromPreemptiveThread			; No int vector means preemptive thread
 
 			rlwinm	r1,r8,0,INTSTATEMASK_B,INTSTATEMASK_E
@@ -202,7 +180,7 @@ ENTRY(atomic_switch_trap, TAG_NO_FRAME_USED)
 			lwz		r7,ACT_MACT_SPF(r13)				; Get special flags
 			lwz		r2,BTTD_INTERRUPT_VECTOR(r6)		; Get the interrupt vector
 			lwz		r1,BEDA_SPRG1(r26)					; Get saved CTR
-			oris	r7,r7,(0x8000 >> bbNoMachSCbit)		; Disable Mach SCs for Blue Box
+			ori		r7,r7,(0x8000 >> (bbNoMachSCbit - 16))	; Disable Mach SCs for Blue Box
 
 			cmpwi	r2,0								; Is this a preemptive thread
 			stw		r1,savectr(r4)						; Update CTR
@@ -236,9 +214,11 @@ ENTRY(atomic_switch_trap, TAG_NO_FRAME_USED)
 			stw		r1,savecr(r4)						; Update CR
 
 .L_ExitFromPreemptiveThread:
+			mfsprg	r3,0								; Get the per_proc
 			lwz		r2,savesrr1(r4)						; Get current MSR	
 			lwz		r1,BEDA_SRR1(r26)					; Get new MSR
 			stw		r7,ACT_MACT_SPF(r13)				; Update special flags
+			stw		r7,spcFlags(r3)						; Update per_proc version
 			rlwimi	r2,r1,0,MSR_FE0_BIT,MSR_FE1_BIT
 														; Insert FE0,FE1,SE,BE bits
 			lwz		r3,BEDA_SRR0(r26)					; Get new PC

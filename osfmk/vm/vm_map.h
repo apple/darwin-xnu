@@ -154,7 +154,7 @@ struct vm_named_entry {
 	vm_object_t		object;		/* object I point to */
 	vm_object_offset_t	offset;		/* offset into object */
 	union {
-		ipc_port_t		pager;	/* amo pager port */
+		memory_object_t		pager;	/* amo pager port */
 		vm_map_t		map;	/* map backing submap */
 	} backing;
 	unsigned int		size;		/* size of region */
@@ -164,9 +164,6 @@ struct vm_named_entry {
 	/* boolean_t */		internal:1,	/* is an internal object */
 	/* boolean_t */		is_sub_map:1;	/* is object is a submap? */
 };
-
-typedef struct vm_named_entry	*vm_named_entry_t;
-
 
 /*
  *	Type:		vm_map_entry_t [internal use only]
@@ -375,8 +372,7 @@ struct vm_map_copy {
 	int			type;
 #define VM_MAP_COPY_ENTRY_LIST		1
 #define VM_MAP_COPY_OBJECT		2
-#define VM_MAP_COPY_PAGE_LIST		3
-#define VM_MAP_COPY_KERNEL_BUFFER	4
+#define VM_MAP_COPY_KERNEL_BUFFER	3
 	vm_object_offset_t	offset;
 	vm_size_t		size;
 	union {
@@ -390,13 +386,6 @@ struct vm_map_copy {
 						 * vm_map_object_to_page_list
 						 */
 	    } c_o;
-	    struct {				/* PAGE_LIST */
-		int			npages;
-		boolean_t		page_loose;
-		vm_map_copy_cont_t	cont;
-		vm_map_copyin_args_t	cont_args;
-		vm_page_t		page_list[VM_MAP_COPY_PAGE_LIST_MAX];
-	    } c_p;
 	    struct {				/* KERNEL_BUFFER */
 		vm_offset_t		kdata;
 		vm_size_t		kalloc_size;  /* size of this copy_t */
@@ -409,12 +398,6 @@ struct vm_map_copy {
 
 #define cpy_object		c_u.c_o.object
 #define	cpy_index		c_u.c_o.index
-
-#define cpy_page_list		c_u.c_p.page_list
-#define cpy_npages		c_u.c_p.npages
-#define cpy_page_loose		c_u.c_p.page_loose
-#define cpy_cont		c_u.c_p.cont
-#define cpy_cont_args		c_u.c_p.cont_args
 
 #define cpy_kdata		c_u.c_k.kdata
 #define cpy_kalloc_size		c_u.c_k.kalloc_size
@@ -430,47 +413,6 @@ struct vm_map_copy {
 		((copy)->cpy_hdr.links.next)
 #define vm_map_copy_last_entry(copy)		\
 		((copy)->cpy_hdr.links.prev)
-
-/*
- *	Continuation macros for page list copy objects
- */
-
-#define	vm_map_copy_invoke_cont(old_copy, new_copy, result)		\
-MACRO_BEGIN								\
-	assert(vm_map_copy_cont_is_valid(old_copy));			\
-	vm_map_copy_page_discard(old_copy);				\
-	*result = (*((old_copy)->cpy_cont))((old_copy)->cpy_cont_args,	\
-					    new_copy);			\
-	(old_copy)->cpy_cont = VM_MAP_COPY_CONT_NULL;			\
-MACRO_END
-
-#define	vm_map_copy_invoke_extend_cont(old_copy, new_copy, result)	\
-MACRO_BEGIN								\
-	assert(vm_map_copy_cont_is_valid(old_copy));			\
-	*result = (*((old_copy)->cpy_cont))((old_copy)->cpy_cont_args,	\
-					    new_copy);			\
-	(old_copy)->cpy_cont = VM_MAP_COPY_CONT_NULL;			\
-MACRO_END
-
-#define vm_map_copy_abort_cont(old_copy)				\
-MACRO_BEGIN								\
-	assert(vm_map_copy_cont_is_valid(old_copy));			\
-	vm_map_copy_page_discard(old_copy);				\
-	(*((old_copy)->cpy_cont))((old_copy)->cpy_cont_args,		\
-				  (vm_map_copy_t *) 0);			\
-	(old_copy)->cpy_cont = VM_MAP_COPY_CONT_NULL;			\
-  	(old_copy)->cpy_cont_args = VM_MAP_COPYIN_ARGS_NULL;		\
-MACRO_END
-
-#define vm_map_copy_has_cont(copy)					\
-    (((copy)->cpy_cont) != VM_MAP_COPY_CONT_NULL)
-
-/*
- *	Macro to determine number of pages in a page-list copy chain.
- */
-
-#define vm_map_copy_page_count(copy)					\
-    (round_page(((vm_offset_t)(copy)->offset - trunc_page((vm_offset_t)(copy)->offset)) + (copy)->size) / PAGE_SIZE)
 
 /*
  *	Macros:		vm_map_lock, etc. [internal use only]
@@ -522,12 +464,6 @@ extern boolean_t	vm_map_lookup_entry(
 				vm_map_t	map,
 				vm_offset_t	address,
 				vm_map_entry_t	*entry);	/* OUT */
-
-/* A version of vm_map_copy_discard that can be called
- * as a continuation from a vm_map_copy page list. */
-extern kern_return_t	vm_map_copy_discard_cont(
-				vm_map_copyin_args_t	cont_args,
-				vm_map_copy_t		*copy_result);/* OUT */
 
 /* Find the VM object, offset, and protection for a given virtual address
  * in the specified map, assuming a page fault of the	type specified. */
@@ -787,33 +723,12 @@ extern kern_return_t	vm_map_copy_overwrite(
 				vm_map_copy_t	copy,
 				int		interruptible);
 
-/* Version of vm_map_copyout() for page list vm map copies. */
-extern kern_return_t	vm_map_copyout_page_list(
-				vm_map_t	dst_map,
-				vm_offset_t	*dst_addr,	/* OUT */
-				vm_map_copy_t	copy);
-
-/* Get rid of the pages in a page_list copy. */
-extern void		vm_map_copy_page_discard(
-				vm_map_copy_t	copy);
-
 /* Create a copy object from an object. */
 extern kern_return_t	vm_map_copyin_object(
 				vm_object_t		object,
 				vm_object_offset_t	offset,
 				vm_object_size_t	size,
 				vm_map_copy_t		*copy_result); /* OUT */
-
-
-/* Make a copy of a region */
-/* Make a copy of a region using a page list copy */
-extern kern_return_t	vm_map_copyin_page_list(
-				vm_map_t	src_map,
-				vm_offset_t	src_addr,
-				vm_size_t	len,
-				int		options,
-				vm_map_copy_t	*copy_result,	/* OUT */
-				boolean_t	is_cont);
 
 extern vm_map_t		vm_map_switch(
 				vm_map_t	map);
@@ -945,6 +860,17 @@ extern kern_return_t	vm_map_submap(
 				vm_offset_t	offset,
 				boolean_t	use_pmap);
 
+extern kern_return_t vm_region_clone(
+				ipc_port_t	src_region,
+				ipc_port_t	dst_region);
+
+extern kern_return_t vm_map_region_replace(
+				vm_map_t	target_map,
+				ipc_port_t	old_region,
+				ipc_port_t	new_region,
+				vm_offset_t	start,  
+				vm_offset_t	end);
+
 /*
  *	Macros to invoke vm_map_copyin_common.  vm_map_copyin is the
  *	usual form; it handles a copyin based on the current protection
@@ -1006,8 +932,58 @@ struct shared_region_object_chain {
 
 typedef struct shared_region_object_chain *shared_region_object_chain_t;
 
+#else  /* !MACH_KERNEL_PRIVATE */
+
+typedef void *shared_region_mapping_t;
+
 #endif /* MACH_KERNEL_PRIVATE */
 
+/* address space shared region descriptor */
+
+extern kern_return_t shared_region_mapping_info(
+				shared_region_mapping_t	shared_region,
+				ipc_port_t		*text_region,
+				vm_size_t		*text_size,
+				ipc_port_t		*data_region,
+				vm_size_t		*data_size,
+				vm_offset_t		*region_mappings,
+				vm_offset_t		*client_base,
+				vm_offset_t		*alternate_base,
+				vm_offset_t		*alternate_next,
+				int			*flags,
+				shared_region_mapping_t	*next);
+
+extern kern_return_t shared_region_mapping_create(
+				ipc_port_t		text_region,
+				vm_size_t		text_size,
+				ipc_port_t		data_region,
+				vm_size_t		data_size,
+				vm_offset_t		region_mappings,
+				vm_offset_t		client_base,
+				shared_region_mapping_t	*shared_region,
+				vm_offset_t		alt_base,
+				vm_offset_t		alt_next);
+
+extern kern_return_t shared_region_mapping_ref(
+				shared_region_mapping_t	shared_region);
+
+extern kern_return_t shared_region_mapping_dealloc(
+				shared_region_mapping_t	shared_region);
+
+extern kern_return_t
+shared_region_object_chain_attach(
+				shared_region_mapping_t	target_region,
+				shared_region_mapping_t	object_chain);
+
+/*
+extern kern_return_t vm_get_shared_region(
+				task_t	task,
+				shared_region_mapping_t	*shared_region);
+
+extern kern_return_t vm_set_shared_region(
+				task_t	task,
+				shared_region_mapping_t	shared_region);
+*/
 
 #endif	/* _VM_VM_MAP_H_ */
 

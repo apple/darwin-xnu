@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2001 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -89,6 +89,10 @@
 
 #include <miscfs/specfs/specdev.h>
 
+#include <mach/mach_types.h>
+#include <mach/memory_object_types.h>
+
+
 enum vtype iftovt_tab[16] = {
 	VNON, VFIFO, VCHR, VNON, VDIR, VNON, VBLK, VNON,
 	VREG, VNON, VLNK, VNON, VSOCK, VNON, VNON, VBAD,
@@ -100,7 +104,7 @@ int	vttoif_tab[9] = {
 
 static void vfree(struct vnode *vp);
 static void vinactive(struct vnode *vp);
-extern int vnreclaim(int count);
+static int vnreclaim(int count);
 extern kern_return_t 
 	adjust_vm_object_cache(vm_size_t oval, vm_size_t nval);
 
@@ -207,7 +211,7 @@ unsigned long vnodetarget;		/* target for vnreclaim() */
  * cache. Having too few vnodes on the free list causes serious disk
  * thrashing as we cycle through them.
  */
-#define VNODE_FREE_MIN		100	/* freelist should have at least these many */
+#define VNODE_FREE_MIN		300	/* freelist should have at least these many */
 
 /*
  * We need to get vnodes back from the VM object cache when a certain #
@@ -226,7 +230,7 @@ unsigned long vnodetarget;		/* target for vnreclaim() */
 /*
  * Initialize the vnode management data structures.
  */
-void
+__private_extern__ void
 vntblinit()
 {
 	extern struct lock__bsd__	exchangelock;
@@ -252,7 +256,7 @@ vntblinit()
 }
 
 /* Reset the VM Object Cache with the values passed in */
-kern_return_t
+__private_extern__ kern_return_t
 reset_vmobjectcache(unsigned int val1, unsigned int val2)
 {
 	vm_size_t oval = val1 - VNODE_FREE_MIN;
@@ -334,6 +338,11 @@ vfs_rootmountalloc(fstypename, devname, mpp)
 		return (ENODEV);
 	mp = _MALLOC_ZONE((u_long)sizeof(struct mount), M_MOUNT, M_WAITOK);
 	bzero((char *)mp, (u_long)sizeof(struct mount));
+
+    /* Initialize the default IO constraints */
+    mp->mnt_maxreadcnt = mp->mnt_maxwritecnt = MAXPHYS;
+    mp->mnt_segreadcnt = mp->mnt_segwritecnt = 32;
+
 	lockinit(&mp->mnt_lock, PVFS, "vfslock", 0, 0);
 	(void)vfs_busy(mp, LK_NOWAIT, 0, p);
 	LIST_INIT(&mp->mnt_vnodelist);
@@ -908,12 +917,14 @@ loop:
 }
 
 /*
- * Grab a particular vnode from the free list, increment its
- * reference count and lock it. The vnode lock bit is set the
- * vnode is being eliminated in vgone. The process is awakened
- * when the transition is completed, and an error returned to
- * indicate that the vnode is no longer usable (possibly having
- * been changed to a new file system type).
+ * Get a reference on a particular vnode and lock it if requested.
+ * If the vnode was on the inactive list, remove it from the list.
+ * If the vnode was on the free list, remove it from the list and
+ * move it to inactive list as needed.
+ * The vnode lock bit is set if the vnode is being eliminated in
+ * vgone. The process is awakened when the transition is completed,
+ * and an error returned to indicate that the vnode is no longer
+ * usable (possibly having been changed to a new file system type).
  */
 int
 vget(vp, flags, p)
@@ -934,7 +945,7 @@ vget(vp, flags, p)
 	if ((vp->v_flag & VXLOCK) || (vp->v_flag & VORECLAIM)) {
 		vp->v_flag |= VXWANT;
 		simple_unlock(&vp->v_interlock);
-		tsleep((caddr_t)vp, PINOD, "vget", 0);
+		(void)tsleep((caddr_t)vp, PINOD, "vget", 0);
 		return (ENOENT);
 	}
 
@@ -945,13 +956,13 @@ vget(vp, flags, p)
 	if (ISSET(vp->v_flag, VTERMINATE)) {
 		SET(vp->v_flag, VTERMWANT);
 		simple_unlock(&vp->v_interlock);
-		tsleep((caddr_t)&vp->v_ubcinfo, PINOD, "vclean", 0);
+		(void)tsleep((caddr_t)&vp->v_ubcinfo, PINOD, "vclean", 0);
 		return (ENOENT);
 	}
 
 	simple_lock(&vnode_free_list_slock);
-	/* If on the free list, remove it from there */
 	if (vp->v_usecount == 0) {
+		/* If on the free list, remove it from there */
 		if (VONLIST(vp))
 			VREMFREE("vget", vp);
 	} else {
@@ -966,74 +977,99 @@ vget(vp, flags, p)
 	VINACTIVECHECK("vget", vp, 0);
 
 	simple_unlock(&vnode_free_list_slock);
+
 	if (++vp->v_usecount <= 0)
 		panic("vget: v_usecount");                     
 
-	if (flags & LK_TYPE_MASK) {
-		if (error = vn_lock(vp, flags | LK_INTERLOCK, p)) {
-			/*
-			 * If the vnode was not active in the first place
-			 * must not call vrele() as VOP_INACTIVE() is not
-			 * required.
-			 * So inlined part of vrele() here.
-			 */
-			simple_lock(&vp->v_interlock);
-			if (--vp->v_usecount == 1) {
-				if (UBCINFOEXISTS(vp)) {
-					vinactive(vp);
-					simple_unlock(&vp->v_interlock);
-					return (error);
-				}
-			}
-			if (vp->v_usecount > 0) {
-				simple_unlock(&vp->v_interlock);
-				return (error);
-			}
-			if (vp->v_usecount < 0)
-				panic("vget: negative usecount (%d)", vp->v_usecount);
-			vfree(vp);
-			simple_unlock(&vp->v_interlock);
-		}
-		return (error);
-	}
-
 	/*
-	 * If this is a valid UBC vnode, if usecount is 1 and if
-	 * this vnode was mapped in the past, it is likely
-	 * that ubc_info freed due to the memory object getting recycled.
-	 * Just re-initialize the ubc_info.
+	 * Recover named reference as needed
 	 */
-	if ((vp->v_usecount == 1) && UBCISVALID(vp)) {
-		if (UBCINFOMISSING(vp))
-			panic("vget: lost ubc_info");
-
-		if (ISSET(vp->v_flag, VTERMINATE)) {
-			/* 
-			 * vnode is being terminated.
-			 * wait for vnode_pager_no_senders() to clear
-			 * VTERMINATE
-			 */
-			SET(vp->v_flag, VTERMWANT);
-			simple_unlock(&vp->v_interlock);
-			tsleep((caddr_t)&vp->v_ubcinfo, PINOD, "vclean", 0);
-			/* return error */
-			return (ENOENT);
+	if (UBCISVALID(vp) && !ubc_issetflags(vp, UI_HASOBJREF)) {
+		simple_unlock(&vp->v_interlock);
+		if (ubc_getobject(vp, UBC_HOLDOBJECT)) {
+			error = ENOENT;
+			goto errout;
 		}
-
-		if ((!UBCINFOEXISTS(vp)) && ISSET(vp->v_flag, VWASMAPPED)) {
-			simple_unlock(&vp->v_interlock);
-			ubc_info_init(vp);
-			simple_lock(&vp->v_interlock);
-		} else
-			panic("vget: stolen ubc_info");
-
-		if (!ubc_issetflags(vp, UI_HASOBJREF))
-			if (ubc_getobject(vp, (UBC_NOREACTIVATE|UBC_HOLDOBJECT)))
-				panic("vget: null object");
+		simple_lock(&vp->v_interlock);
 	}
-out:
+
+	if (flags & LK_TYPE_MASK) {
+		if (error = vn_lock(vp, flags | LK_INTERLOCK, p))
+			goto errout;
+		return (0);
+	}
+
 	if ((flags & LK_INTERLOCK) == 0)
 		simple_unlock(&vp->v_interlock);
+	return (0);
+
+errout:
+	/*
+	 * If the vnode was not active in the first place
+	 * must not call vrele() as VOP_INACTIVE() is not
+	 * required.
+	 * So inlined part of vrele() here.
+	 */
+	simple_lock(&vp->v_interlock);
+	if (--vp->v_usecount == 1) {
+		if (UBCINFOEXISTS(vp)) {
+			vinactive(vp);
+			simple_unlock(&vp->v_interlock);
+			return (error);
+		}
+	}
+	if (vp->v_usecount > 0) {
+		simple_unlock(&vp->v_interlock);
+		return (error);
+	}
+	if (vp->v_usecount < 0)
+		panic("vget: negative usecount (%d)", vp->v_usecount);
+	vfree(vp);
+	simple_unlock(&vp->v_interlock);
+	return (error);
+}
+
+/*
+ * Get a pager reference on the particular vnode.
+ *
+ * This is called from ubc_info_init() and it is asumed that
+ * the vnode is neither on the free list on on the inactive list.
+ * It is also assumed that the vnode is neither being recycled
+ * by vgonel nor being terminated by vnode_pager_vrele().
+ *
+ * The vnode interlock is NOT held by the caller.
+ */
+__private_extern__ int
+vnode_pager_vget(vp)
+	struct vnode *vp;
+{
+	simple_lock(&vp->v_interlock);
+	if (UBCINFOMISSING(vp))
+		panic("vnode_pager_vget: stolen ubc_info");
+
+	if (!UBCINFOEXISTS(vp))
+		panic("vnode_pager_vget: lost ubc_info");
+
+	if ((vp->v_flag & VXLOCK) || (vp->v_flag & VORECLAIM))
+		panic("vnode_pager_vget: already being reclaimd");
+
+	if (ISSET(vp->v_flag, VTERMINATE))
+		panic("vnode_pager_vget: already being terminated");
+
+	simple_lock(&vnode_free_list_slock);
+	/* The vnode should not be on ANY list */
+	if (VONLIST(vp))
+		panic("vnode_pager_vget: still on the list");
+
+	/* The vnode should not be on the inactive list here */
+	VINACTIVECHECK("vnode_pager_vget", vp, 0);
+	simple_unlock(&vnode_free_list_slock);
+
+	/* After all those checks, now do the real work :-) */
+	if (++vp->v_usecount <= 0)
+		panic("vnode_pager_vget: v_usecount");                     
+	simple_unlock(&vp->v_interlock);
+
 	return (0);
 }
 
@@ -1242,10 +1278,6 @@ vput(vp)
 {
 	struct proc *p = current_proc();	/* XXX */
 
-#if DIAGNOSTIC
-	if (vp == NULL)
-		panic("vput: null vp");
-#endif
 	simple_lock(&vp->v_interlock);
 	if (--vp->v_usecount == 1) {
 		if (UBCINFOEXISTS(vp)) {
@@ -1298,10 +1330,6 @@ vrele(vp)
 {
 	struct proc *p = current_proc();	/* XXX */
 
-#if DIAGNOSTIC
-	if (vp == NULL)
-		panic("vrele: null vp");
-#endif
 	simple_lock(&vp->v_interlock);
 	if (--vp->v_usecount == 1) {
 		if (UBCINFOEXISTS(vp)) {
@@ -1361,7 +1389,6 @@ void
 vagevp(vp)
 	struct vnode *vp;
 {
-	assert(vp);
 	simple_lock(&vp->v_interlock);
 	vp->v_flag |= VAGE;
 	simple_unlock(&vp->v_interlock);
@@ -1417,7 +1444,7 @@ vflush(mp, skipvp, flags)
 	struct vnode *skipvp;
 	int flags;
 {
-	struct proc *p = current_proc();	/* XXX */
+	struct proc *p = current_proc();
 	struct vnode *vp, *nvp;
 	int busy = 0;
 
@@ -1509,7 +1536,9 @@ vclean(vp, flags, p)
 {
 	int active;
 	void *obj;
+	kern_return_t kret;
 	int removed = 0;
+	int didhold;
 
 	/*
 	 * if the vnode is not obtained by calling getnewvnode() we
@@ -1559,42 +1588,40 @@ vclean(vp, flags, p)
 	}
 
 	/* Clean the pages in VM. */
-	if ((active) && UBCINFOEXISTS(vp)) {
+	if (active && (flags & DOCLOSE))
+		VOP_CLOSE(vp, IO_NDELAY, NOCRED, p);
+
+	/* Clean the pages in VM. */
+	didhold = ubc_hold(vp);
+	if ((active) && (didhold))
 		(void)ubc_clean(vp, 0); /* do not invalidate */
-	}
 
 	/*
 	 * Clean out any buffers associated with the vnode.
 	 */
 	if (flags & DOCLOSE) {
 		if (vp->v_tag == VT_NFS)
-			nfs_vinvalbuf(vp, V_SAVE, NOCRED, p, 0);
-		else
-			vinvalbuf(vp, V_SAVE, NOCRED, p, 0, 0);
-	}
-	/*
-	 * If purging an active vnode, it must be closed and
-	 * deactivated before being reclaimed. Note that the
-	 * VOP_INACTIVE will unlock the vnode.
-	 */
-	if (active) {
-		if (flags & DOCLOSE)
-			VOP_CLOSE(vp, IO_NDELAY, NOCRED, p);
+            nfs_vinvalbuf(vp, V_SAVE, NOCRED, p, 0);
+        else
+            vinvalbuf(vp, V_SAVE, NOCRED, p, 0, 0);
+    }
+
+	if (active)
 		VOP_INACTIVE(vp, p);
-	} else {
-		/*
-		 * Any other processes trying to obtain this lock must first
-		 * wait for VXLOCK to clear, then call the new lock operation.
-		 */
+	else
 		VOP_UNLOCK(vp, 0, p);
+
+	/* Destroy ubc named reference */
+    if (didhold) {
+        ubc_rele(vp);
+		ubc_destroy_named(vp);
 	}
+
 	/*
 	 * Reclaim the vnode.
 	 */
 	if (VOP_RECLAIM(vp, p))
 		panic("vclean: cannot reclaim");
-	if (active)
-		vrele(vp);
 	cache_purge(vp);
 	if (vp->v_vnlock) {
 		if ((vp->v_vnlock->lk_flags & LK_DRAINED) == 0)
@@ -1608,41 +1635,6 @@ vclean(vp, flags, p)
 	vp->v_tag = VT_NON;
 
 	/*
-	 * v_data is reclaimed by VOP_RECLAIM, all the vnode
-	 * operation generated by the code below would be directed
-	 * to the deadfs
-	 */
-	if (UBCINFOEXISTS(vp)) {
-		/* vnode is dying, destroy the object */
-		if (ubc_issetflags(vp, UI_HASOBJREF)) {
-			obj = ubc_getobject(vp, UBC_NOREACTIVATE);
-			if (obj == NULL)
-				panic("vclean: null object");
-			if (ISSET(vp->v_flag, VTERMINATE))
-				panic("vclean: already teminating");
-			SET(vp->v_flag, VTERMINATE);
-
-			ubc_clearflags(vp, UI_HASOBJREF);
-			memory_object_destroy(obj, 0);
-
-			/* 
-			 * memory_object_destroy() is asynchronous with respect
-			 * to vnode_pager_no_senders().
-			 * wait for vnode_pager_no_senders() to clear
-			 * VTERMINATE
-			 */
-			while (ISSET(vp->v_flag, VTERMINATE)) {
-				SET(vp->v_flag, VTERMWANT);
-				tsleep((caddr_t)&vp->v_ubcinfo, PINOD, "vclean", 0);
-			}
-			if (UBCINFOEXISTS(vp)) {
-				ubc_info_free(vp);
-				vp->v_ubcinfo = UBC_NOINFO;  /* catch bad accesses */
-			}
-		}
-	}
-
-	/*
 	 * Done with purge, notify sleepers of the grim news.
 	 */
 	vp->v_flag &= ~VXLOCK;
@@ -1650,6 +1642,9 @@ vclean(vp, flags, p)
 		vp->v_flag &= ~VXWANT;
 		wakeup((caddr_t)vp);
 	}
+
+	if (active)
+		vrele(vp);
 }
 
 /*
@@ -1664,7 +1659,7 @@ vop_revoke(ap)
 	} */ *ap;
 {
 	struct vnode *vp, *vq;
-	struct proc *p = current_proc();	/* XXX */
+	struct proc *p = current_proc();
 
 #if DIAGNOSTIC
 	if ((ap->a_flags & REVOKEALL) == 0)
@@ -1683,7 +1678,7 @@ vop_revoke(ap)
 			while (vp->v_flag & VXLOCK) {
 				vp->v_flag |= VXWANT;
 				simple_unlock(&vp->v_interlock);
-				tsleep((caddr_t)vp, PINOD, "vop_revokeall", 0);
+				(void)tsleep((caddr_t)vp, PINOD, "vop_revokeall", 0);
 			}
 			return (0);
 		}
@@ -1748,7 +1743,7 @@ void
 vgone(vp)
 	struct vnode *vp;
 {
-	struct proc *p = current_proc();	/* XXX */
+	struct proc *p = current_proc();
 
 	simple_lock(&vp->v_interlock);
 	vgonel(vp, p);
@@ -1782,7 +1777,7 @@ vgonel(vp, p)
 		while (vp->v_flag & VXLOCK) {
 			vp->v_flag |= VXWANT;
 			simple_unlock(&vp->v_interlock);
-			tsleep((caddr_t)vp, PINOD, "vgone", 0);
+			(void)tsleep((caddr_t)vp, PINOD, "vgone", 0);
 		}
 		return;
 	}
@@ -1967,7 +1962,7 @@ vprint(label, vp)
 void
 printlockedvnodes()
 {
-	struct proc *p = current_proc();	/* XXX */
+	struct proc *p = current_proc();
 	struct mount *mp, *nmp;
 	struct vnode *vp;
 
@@ -2149,11 +2144,11 @@ vfs_mountedon(vp)
  * Unmount all filesystems. The list is traversed in reverse order
  * of mounting to avoid dependencies.
  */
-void
+__private_extern__ void
 vfs_unmountall()
 {
 	struct mount *mp, *nmp;
-	struct proc *p = current_proc();	/* XXX */
+	struct proc *p = current_proc();
 
 	/*
 	 * Since this only runs when rebooting, it is not interlocked.
@@ -2166,7 +2161,7 @@ vfs_unmountall()
 
 /*
  * Build hash lists of net addresses and hang them off the mount point.
- * Called by ufs_mount() to set up the lists of export addresses.
+ * Called by vfs_export() to set up the lists of export addresses.
  */
 static int
 vfs_hang_addrlist(mp, nep, argp)
@@ -2343,7 +2338,7 @@ vfs_export_lookup(mp, nep, nam)
  * try to reclaim vnodes from the memory 
  * object cache
  */
-int
+static int
 vm_object_cache_reclaim(int count)
 {
 	int cnt;
@@ -2360,7 +2355,7 @@ vm_object_cache_reclaim(int count)
  * and then try to reclaim some vnodes from the memory 
  * object cache
  */
-int
+static int
 vnreclaim(int count)
 {
 	int cnt, i, loopcnt;
@@ -2368,6 +2363,7 @@ vnreclaim(int count)
 	struct vnode *vp;
 	int err;
 	struct proc *p;
+	kern_return_t kret;
 
 	i = 0;
 	loopcnt = 0;
@@ -2390,163 +2386,123 @@ restart:
 	for (vp = TAILQ_FIRST(&vnode_inactive_list);
 			(vp != NULLVP) && (i < count);
 			vp = TAILQ_NEXT(vp, v_freelist)) {
+		
+		if (!simple_lock_try(&vp->v_interlock))
+			continue;
 
-		if (simple_lock_try(&vp->v_interlock)) {
-			if (vp->v_usecount != 1)
-				panic("vnreclaim: v_usecount");
+		if (vp->v_usecount != 1)
+			panic("vnreclaim: v_usecount");
 
-			if(!UBCINFOEXISTS(vp)) {
-				if (vp->v_type == VBAD) {
-					VREMINACTIVE("vnreclaim", vp);
-					simple_unlock(&vp->v_interlock);
-					continue;
-				} else
-					panic("non UBC vnode on inactive list");
+		if(!UBCINFOEXISTS(vp)) {
+			if (vp->v_type == VBAD) {
+				VREMINACTIVE("vnreclaim", vp);
+				simple_unlock(&vp->v_interlock);
+				continue;
+			} else
+				panic("non UBC vnode on inactive list");
 				/* Should not reach here */
-			}
+		}
 
-			/* If vnode is already being reclaimed, wait */
-			if ((vp->v_flag & VXLOCK) || (vp->v_flag & VORECLAIM)) {
-				vp->v_flag |= VXWANT;
-				simple_unlock(&vp->v_interlock);
-				simple_unlock(&vnode_free_list_slock);
-				(void)tsleep((caddr_t)vp, PINOD, "vocr", 0);
-				goto restart;
-			}
-
-			VREMINACTIVE("vnreclaim", vp);
+		/* If vnode is already being reclaimed, wait */
+		if ((vp->v_flag & VXLOCK) || (vp->v_flag & VORECLAIM)) {
+			vp->v_flag |= VXWANT;
+			simple_unlock(&vp->v_interlock);
 			simple_unlock(&vnode_free_list_slock);
+			(void)tsleep((caddr_t)vp, PINOD, "vocr", 0);
+			goto restart;
+		}
 
-			/* held vnodes must not be reclaimed */
-			if (vp->v_ubcinfo->ui_holdcnt)  { /* XXX */
-				vinactive(vp);
-				simple_unlock(&vp->v_interlock);
-				goto restart;
-			}
+		VREMINACTIVE("vnreclaim", vp);
+		simple_unlock(&vnode_free_list_slock);
 
-			if (ubc_issetflags(vp, UI_WASMAPPED)) {
-				/*
-				 * We should not reclaim as it is likely
-				 * to be in use. Let it die a natural death.
-				 * Release the UBC reference if one exists
-				 * and put it back at the tail.
-				 */
-				if (ubc_issetflags(vp, UI_HASOBJREF)) {
-					obj = ubc_getobject(vp, UBC_NOREACTIVATE);
-					if (obj == NULL)
-						panic("vnreclaim: null object");
-					/* release the reference gained by ubc_info_init() */
-					ubc_clearflags(vp, UI_HASOBJREF);
-					simple_unlock(&vp->v_interlock);
-					vm_object_deallocate(obj);
-					/*
-					 * The vnode interlock was release. 
-					 * vm_object_deallocate() might have blocked.
-					 * It is possible that the object was terminated.
-					 * It is also possible that the vnode was
-					 * reactivated. Evaluate the state again.
-					 */ 
-					if (UBCINFOEXISTS(vp)) {
-						simple_lock(&vp->v_interlock);
-						if ((vp->v_usecount == 1) && !VONLIST(vp))
-							vinactive(vp);
-						simple_unlock(&vp->v_interlock);
-					}
-				} else {
-					vinactive(vp);
+		if (ubc_issetflags(vp, UI_WASMAPPED)) {
+			/*
+			 * We should not reclaim as it is likely
+			 * to be in use. Let it die a natural death.
+			 * Release the UBC reference if one exists
+			 * and put it back at the tail.
+			 */
+			simple_unlock(&vp->v_interlock);
+			if (ubc_release_named(vp)) {
+				if (UBCINFOEXISTS(vp)) {
+					simple_lock(&vp->v_interlock);
+					if (vp->v_usecount == 1 && !VONLIST(vp))
+						vinactive(vp);
 					simple_unlock(&vp->v_interlock);
 				}
 			} else {
-				VORECLAIM_ENABLE(vp);
-
-				/*
-				 * scrub the dirty pages and invalidate the buffers
-				 */
-				p = current_proc();
-				err = vn_lock(vp, LK_EXCLUSIVE|LK_INTERLOCK, p); 
-				if (err) {
-					/* cannot reclaim */
-					simple_lock(&vp->v_interlock);
-					vinactive(vp);
-					VORECLAIM_DISABLE(vp);
-					simple_unlock(&vp->v_interlock);
-					goto restart;
-				}
-				simple_lock(&vp->v_interlock);
-				if(vp->v_usecount != 1)
-					panic("VOCR: usecount race");
+			    simple_lock(&vp->v_interlock);
+				vinactive(vp);
 				simple_unlock(&vp->v_interlock);
+			}
+		} else {
+			int didhold;
 
-				/*
-				 * If the UBC reference on the memory object
-				 * was already lost, regain it. This will
-				 * keep the memory object alive for rest of the
-				 * reclaim and finally this reference would
-				 * be lost by memory_object_destroy()
-				 */
-				obj = ubc_getobject(vp, (UBC_NOREACTIVATE|UBC_HOLDOBJECT));
-				if (obj == (void *)NULL)
-					panic("vnreclaim: null object");
+			VORECLAIM_ENABLE(vp);
 
-				/* clean up the state in VM without invalidating */
-				(void)ubc_clean(vp, 0);
-
-				/* flush and invalidate buffers associated with the vnode */
-				if (vp->v_tag == VT_NFS)
-					nfs_vinvalbuf(vp, V_SAVE, NOCRED, p, 0);
-				else
-					vinvalbuf(vp, V_SAVE, NOCRED, p, 0, 0);
-
-				/*
-				 * It is not necessary to call ubc_uncache()
-				 * here because memory_object_destroy() marks
-				 * the memory object non cachable already
-				 *
-				 * Need to release the vnode lock before calling
-				 * vm_object_deallocate() to avoid deadlock
-				 * when the vnode goes through vop_inactive
-				 *
-				 * Note: for the v_usecount == 1 case, VOP_INACTIVE
-				 * has not yet been called.  Call it now while vp is
-				 * still locked, it will also release the lock.
-				 */
-				if (vp->v_usecount == 1)
-					VOP_INACTIVE(vp, p);
-				else
-					VOP_UNLOCK(vp, 0, p);
-
-				/* 
-				 * This vnode is ready to be reclaimed.
-				 * Terminate the memory object.
-				 * memory_object_destroy() will result in
-				 * vnode_pager_no_senders(). 
-				 * That will release the pager reference
-				 * and the vnode will move to the free list.
-				 */
-				if (ISSET(vp->v_flag, VTERMINATE))
-					panic("vnreclaim: already teminating");
-				SET(vp->v_flag, VTERMINATE);
-
-				memory_object_destroy(obj, 0);
-
-				/* 
-				 * memory_object_destroy() is asynchronous with respect
-				 * to vnode_pager_no_senders().
-				 * wait for vnode_pager_no_senders() to clear
-				 * VTERMINATE
-				 */
-				while (ISSET(vp->v_flag, VTERMINATE)) {
-					SET(vp->v_flag, VTERMWANT);
-					tsleep((caddr_t)&vp->v_ubcinfo, PINOD, "vnreclaim", 0);
-				}
+			/*
+			 * scrub the dirty pages and invalidate the buffers
+			 */
+			p = current_proc();
+			err = vn_lock(vp, LK_EXCLUSIVE|LK_INTERLOCK, p); 
+			if (err) {
+				/* cannot reclaim */
 				simple_lock(&vp->v_interlock);
+				vinactive(vp);
 				VORECLAIM_DISABLE(vp);
 				i++;
 				simple_unlock(&vp->v_interlock);
+				goto restart;
 			}
-			/* inactive list lock was released, must restart */
-			goto restart;
+
+			/* keep the vnode alive so we can kill it */
+			simple_lock(&vp->v_interlock);
+			if(vp->v_usecount != 1)
+				panic("VOCR: usecount race");
+			vp->v_usecount++;
+			simple_unlock(&vp->v_interlock);
+
+			/* clean up the state in VM without invalidating */
+			didhold = ubc_hold(vp);
+			if (didhold)
+				(void)ubc_clean(vp, 0);
+
+			/* flush and invalidate buffers associated with the vnode */
+			if (vp->v_tag == VT_NFS)
+				nfs_vinvalbuf(vp, V_SAVE, NOCRED, p, 0);
+			else
+				vinvalbuf(vp, V_SAVE, NOCRED, p, 0, 0);
+
+			/*
+			 * Note: for the v_usecount == 2 case, VOP_INACTIVE
+			 * has not yet been called.  Call it now while vp is
+			 * still locked, it will also release the lock.
+			 */
+			if (vp->v_usecount == 2)
+				VOP_INACTIVE(vp, p);
+			else
+				VOP_UNLOCK(vp, 0, p);
+
+			if (didhold)
+				ubc_rele(vp);
+
+			/*
+			 * destroy the ubc named reference.
+			 * If we can't because it is held for I/Os
+			 * in progress, just put it back on the inactive
+			 * list and move on.  Otherwise, the paging reference
+			 * is toast (and so is this vnode?).
+			 */
+			if (ubc_destroy_named(vp)) {
+			    i++;
+			}
+			simple_lock(&vp->v_interlock);
+			VORECLAIM_DISABLE(vp);
+			simple_unlock(&vp->v_interlock);
+			vrele(vp);  /* release extra use we added here */
 		}
+		/* inactive list lock was released, must restart */
+		goto restart;
 	}
 	simple_unlock(&vnode_free_list_slock);
 
@@ -2566,7 +2522,7 @@ out:
  * AGE the vnode so that it gets recycled quickly.
  * Check lock status to decide whether to call vput() or vrele().
  */
-void
+__private_extern__ void
 vnode_pager_vrele(struct vnode *vp)
 {
 
@@ -2613,22 +2569,22 @@ vnode_pager_vrele(struct vnode *vp)
 	if (!ISSET(vp->v_flag, VTERMINATE))
 		SET(vp->v_flag, VTERMINATE);
 	if (UBCINFOEXISTS(vp)) {
+		struct ubc_info *uip = vp->v_ubcinfo;
+
 		if (ubc_issetflags(vp, UI_WASMAPPED))
 			SET(vp->v_flag, VWASMAPPED);
 
-		if ((vp->v_ubcinfo->ui_holdcnt) /* XXX */
-			&& !(vp->v_flag & VXLOCK))
-			panic("vnode_pager_vrele: freeing held ubc_info");
-
-		simple_unlock(&vp->v_interlock);
-		ubc_info_free(vp);
 		vp->v_ubcinfo = UBC_NOINFO;  /* catch bad accesses */
+		simple_unlock(&vp->v_interlock);
+		ubc_info_deallocate(uip);
 	} else {
 		if ((vp->v_type == VBAD) && ((vp)->v_ubcinfo != UBC_INFO_NULL) 
 			&& ((vp)->v_ubcinfo != UBC_NOINFO)) {
-			simple_unlock(&vp->v_interlock);
-			ubc_info_free(vp);
+			struct ubc_info *uip = vp->v_ubcinfo;
+
 			vp->v_ubcinfo = UBC_NOINFO;  /* catch bad accesses */
+			simple_unlock(&vp->v_interlock);
+			ubc_info_deallocate(uip);
 		} else {
 			simple_unlock(&vp->v_interlock);
 		}
@@ -2659,7 +2615,7 @@ int walk_vnodes_debug=0;
 void
 walk_allvnodes()
 {
-	struct proc *p = current_proc();	/* XXX */
+	struct proc *p = current_proc();
 	struct mount *mp, *nmp;
 	struct vnode *vp;
 	int cnt = 0;
@@ -2697,3 +2653,100 @@ walk_allvnodes()
 	printf("%d - inactive\n", cnt);
 }
 #endif /* DIAGNOSTIC */
+
+void
+vfs_io_attributes(vp, flags, iosize, vectors)
+	struct vnode	*vp;
+	int	flags;	/* B_READ or B_WRITE */
+	int	*iosize;
+	int	*vectors;
+{
+	struct mount *mp;
+
+	/* start with "reasonable" defaults */
+	*iosize = MAXPHYS;
+	*vectors = 32;
+
+	mp = vp->v_mount;
+	if (mp != NULL) {
+		switch (flags) {
+		case B_READ:
+			*iosize = mp->mnt_maxreadcnt;
+			*vectors = mp->mnt_segreadcnt;
+			break;
+		case B_WRITE:
+			*iosize = mp->mnt_maxwritecnt;
+			*vectors = mp->mnt_segwritecnt;
+			break;
+		default:
+			break;
+		}
+	}
+
+	return;
+}
+
+#include <dev/disk.h>
+
+int
+vfs_init_io_attributes(devvp, mp)
+	struct vnode *devvp;
+	struct mount *mp;
+{
+	int error;
+	off_t readblockcnt;
+	off_t writeblockcnt;
+	off_t readsegcnt;
+	off_t writesegcnt;
+	u_long blksize;
+
+	u_int64_t temp;
+
+	struct proc *p = current_proc();
+	struct  ucred *cred = p->p_ucred;
+
+	if ((error = VOP_IOCTL(devvp, DKIOCGETMAXBLOCKCOUNTREAD,
+				(caddr_t)&readblockcnt, 0, cred, p)))
+		return (error);
+
+	if ((error = VOP_IOCTL(devvp, DKIOCGETMAXBLOCKCOUNTWRITE,
+				(caddr_t)&writeblockcnt, 0, cred, p)))
+		return (error);
+
+	if ((error = VOP_IOCTL(devvp, DKIOCGETMAXSEGMENTCOUNTREAD,
+				(caddr_t)&readsegcnt, 0, cred, p)))
+		return (error);
+
+	if ((error = VOP_IOCTL(devvp, DKIOCGETMAXSEGMENTCOUNTWRITE,
+				(caddr_t)&writesegcnt, 0, cred, p)))
+		return (error);
+
+	if ((error = VOP_IOCTL(devvp, DKIOCGETBLOCKSIZE,
+				(caddr_t)&blksize, 0, cred, p)))
+		return (error);
+
+	temp = readblockcnt * blksize;
+	temp = (temp > UINT32_MAX) ? (UINT32_MAX / blksize) * blksize : temp;
+	mp->mnt_maxreadcnt = (u_int32_t)temp;
+
+	temp = writeblockcnt * blksize;
+	temp = (temp > UINT32_MAX) ? (UINT32_MAX / blksize) * blksize : temp;
+	mp->mnt_maxwritecnt = (u_int32_t)temp;
+
+	temp = (readsegcnt > UINT16_MAX) ? UINT16_MAX : readsegcnt;
+	mp->mnt_segreadcnt = (u_int16_t)temp;
+
+	temp = (writesegcnt > UINT16_MAX) ? UINT16_MAX : writesegcnt;
+	mp->mnt_segwritecnt = (u_int16_t)temp;
+
+#if 0
+	printf("--- IO attributes for mount point 0x%08x ---\n", mp);
+	printf("\tmnt_maxreadcnt = 0x%x", mp->mnt_maxreadcnt);
+	printf("\tmnt_maxwritecnt = 0x%x\n", mp->mnt_maxwritecnt);
+	printf("\tmnt_segreadcnt = 0x%x", mp->mnt_segreadcnt);
+	printf("\tmnt_segwritecnt = 0x%x\n", mp->mnt_segwritecnt);
+#endif /* 0 */
+
+	return (error);
+}
+

@@ -142,12 +142,10 @@ typedef struct task {
 	/* User-visible scheduling information */
 	integer_t		user_stop_count;	/* outstanding stops */
 
-	integer_t		importance;		/* system-wide importance */
+	task_role_t		role;
 
-	integer_t		priority;		/* base priority */
-	integer_t		max_priority;	/* maximum priority */
-
-	integer_t		policy;			/* obsolete */
+	integer_t		priority;			/* base priority for threads */
+	integer_t		max_priority;		/* maximum priority for threads */
 
 	/* Task security token */
 	security_token_t sec_token;
@@ -211,6 +209,7 @@ typedef struct task {
 	void *bsd_info;
 #endif  
 	vm_offset_t	system_shared_region;
+	vm_offset_t	dynamic_working_set;
 } Task;
 
 
@@ -280,6 +279,12 @@ extern boolean_t	task_reference_try(task_t task);
 
 /* Remove reference to task */
 extern void		task_deallocate(task_t	task);
+
+#if defined(MACH_KERNEL_PRIVATE) || defined(BSD_BUILD)
+extern kern_return_t	task_importance(
+							task_t			task,
+							integer_t		importance);
+#endif
 
 /* JMM - should just be temporary (implementation in bsd_kern still) */
 extern void 	*get_bsdtask_info(task_t);

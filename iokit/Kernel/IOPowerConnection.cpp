@@ -48,6 +48,67 @@ unsigned long IOPowerConnection::getDesiredDomainState ( void )
 
 
 // **********************************************************************************
+// setChildHasRequestedPower
+//
+// Parent of the connection calls here when the child requests power
+// **********************************************************************************
+void IOPowerConnection::setChildHasRequestedPower ( void )
+{
+    requestFlag = true;
+}
+
+// **********************************************************************************
+// childHasRequestedPower
+//
+// Parent of the connection calls here when the child requests power
+// **********************************************************************************
+bool IOPowerConnection::childHasRequestedPower ( void )
+{
+    return requestFlag;
+}
+
+
+// **********************************************************************************
+// setPreventIdleSleepFlag
+//
+// **********************************************************************************
+void IOPowerConnection::setPreventIdleSleepFlag ( unsigned long flag )
+{
+    preventIdleSleepFlag = (flag != 0);
+}
+
+
+// **********************************************************************************
+// getPreventIdleSleepFlag
+//
+// **********************************************************************************
+bool IOPowerConnection::getPreventIdleSleepFlag ( void )
+{
+    return preventIdleSleepFlag;
+}
+
+
+// **********************************************************************************
+// setPreventSystemSleepFlag
+//
+// **********************************************************************************
+void IOPowerConnection::setPreventSystemSleepFlag ( unsigned long flag )
+{
+    preventSystemSleepFlag = (flag != 0);
+}
+
+
+// **********************************************************************************
+// getPreventSystemSleepFlag
+//
+// **********************************************************************************
+bool IOPowerConnection::getPreventSystemSleepFlag ( void )
+{
+    return preventSystemSleepFlag;
+}
+
+
+// **********************************************************************************
 // setParentKnowsState
 //
 // Child of the connection calls here to set its reminder that the parent does
@@ -91,3 +152,21 @@ IOPMPowerFlags IOPowerConnection::parentCurrentPowerFlags (void )
 }
 
 
+// **********************************************************************************
+// setAwaitingAck
+//
+// **********************************************************************************
+void IOPowerConnection::setAwaitingAck ( bool value )
+{
+    awaitingAck = value;
+}
+
+
+// **********************************************************************************
+// getAwaitingAck
+//
+// **********************************************************************************
+bool IOPowerConnection::getAwaitingAck ( void )
+{
+    return awaitingAck;
+}

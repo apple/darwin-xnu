@@ -613,6 +613,8 @@ in_setsockaddr(so, nam)
 	 * Do the malloc first in case it blocks.
 	 */
 	MALLOC(sin, struct sockaddr_in *, sizeof *sin, M_SONAME, M_WAITOK);
+	if (sin == NULL)
+		return ENOBUFS;
 	bzero(sin, sizeof *sin);
 	sin->sin_family = AF_INET;
 	sin->sin_len = sizeof(*sin);
@@ -645,6 +647,8 @@ in_setpeeraddr(so, nam)
 	 * Do the malloc first in case it blocks.
 	 */
 	MALLOC(sin, struct sockaddr_in *, sizeof *sin, M_SONAME, M_WAITOK);
+	if (sin == NULL)
+		return ENOBUFS;
 	bzero((caddr_t)sin, sizeof (*sin));
 	sin->sin_family = AF_INET;
 	sin->sin_len = sizeof(*sin);
@@ -1004,7 +1008,7 @@ in_pcbinshash(inp)
 	 * If none exists, malloc one and tack it on.
 	 */
 	if (phd == NULL) {
-		MALLOC(phd, struct inpcbport *, sizeof(struct inpcbport), M_PCB, M_NOWAIT);
+		MALLOC(phd, struct inpcbport *, sizeof(struct inpcbport), M_PCB, M_WAITOK);
 		if (phd == NULL) {
 			return (ENOBUFS); /* XXX */
 		}

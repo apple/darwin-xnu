@@ -556,6 +556,10 @@ rip6_attach(struct socket *so, int proto, struct proc *p)
 #endif /*IPSEC*/
 	MALLOC(inp->in6p_icmp6filt, struct icmp6_filter *,
 	       sizeof(struct icmp6_filter), M_PCB, M_NOWAIT);
+
+	if (inp->in6p_icmp6filt == NULL)
+		return(ENOBUFS);
+
 	ICMP6_FILTER_SETPASSALL(inp->in6p_icmp6filt);
 	return 0;
 }

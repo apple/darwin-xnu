@@ -149,6 +149,14 @@ struct IOPCIPhysicalAddress {
 #define kIOPCISecondaryMatchKey		"IOPCISecondaryMatch"
 #define kIOPCIClassMatchKey		"IOPCIClassMatch"
 
+// property to control PCI default config space save on sleep
+#define kIOPMPCIConfigSpaceVolatileKey	"IOPMPCIConfigSpaceVolatile"
+
+enum {
+    kIOPCIDevicePowerStateCount = 3,
+    kIOPCIDeviceOffState	= 0,
+    kIOPCIDeviceOnState		= 2
+};
 
 /*! @class IOPCIDevice : public IOService
     @abstract An IOService class representing a PCI device.
@@ -241,9 +249,7 @@ public:
     /* IOService/IORegistryEntry methods */
 
     virtual bool attach( IOService * provider );
-    virtual unsigned long maxCapabilityForDomainState( IOPMPowerFlags );
-    virtual unsigned long initialPowerStateForDomainState( IOPMPowerFlags );
-    virtual unsigned long powerStateForDomainState( IOPMPowerFlags );
+    virtual void detach( IOService * provider );
     virtual IOReturn setPowerState( unsigned long, IOService * );
     virtual IOReturn addPowerChild ( IOService * theChild );
     virtual void joinPMtree( IOService * driver );

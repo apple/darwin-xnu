@@ -95,7 +95,7 @@
  * clusters (MAPPED_MBUFS), MCLBYTES must also be an integral multiple
  * of the hardware page size.
  */
-#define	MSIZE		128		/* size of an mbuf */
+#define	MSIZE		256		/* size of an mbuf */
 #define	MCLBYTES	2048		/* large enough for ether MTU */
 #define	MCLSHIFT	11
 #define	MCLOFSET	(MCLBYTES - 1)

@@ -70,12 +70,7 @@ subsystem
 #include <mach/mach_types.defs>
 
 #if KERNEL_SERVER
-serverprefix dp_;
-#else
-#if	SEQNOS
-serverprefix seqnos_;
-serverdemux seqnos_memory_object_default_server;
-#endif	/* SEQNOS */
+serverprefix default_pager_;
 #endif
 
 /*
@@ -86,28 +81,7 @@ serverdemux seqnos_memory_object_default_server;
  *	[No reply required.]
  */
 routine	memory_object_create(
-		old_memory_object	: memory_object_default_t =
-						MACH_MSG_TYPE_MOVE_SEND;
-#if	SEQNOS
-	msgseqno seqno			: mach_port_seqno_t;
-#endif	SEQNOS
-	out	new_memory_object	: memory_object_default_t =
-						MACH_MSG_TYPE_MAKE_SEND;
-		new_object_size		: vm_size_t);
-
-/*
- *	Provide initial data contents for this region of
- *	the memory object.  If data has already been written
- *	to the object, this value must be discarded; otherwise,
- *	this call acts identically to memory_object_data_write.
- */
-simpleroutine	memory_object_data_initialize(
-		memory_object		: memory_object_default_t;
-#if	SEQNOS
-	msgseqno seqno			: mach_port_seqno_t;
-#endif	SEQNOS
-		memory_control_port	: memory_object_control_t =
-						MACH_MSG_TYPE_MAKE_SEND;
-		offset			: memory_object_offset_t;
-		data			: pointer_t);
+		default_memory_manager	: memory_object_default_t;
+		new_memory_object_size	: vm_size_t;
+	out	new_memory_object	: memory_object_t);
 

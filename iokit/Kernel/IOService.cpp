@@ -46,17 +46,17 @@
 #include <IOKit/IOKitKeys.h>
 #include <IOKit/IOBSD.h>
 #include <IOKit/IOUserClient.h>
+#include <IOKit/IOWorkLoop.h>
+#include <mach/sync_policy.h>
+#include <IOKit/assert.h>
+#include <sys/errno.h>
 
-//#define LESS_THREAD_CREATE
 //#define LOG kprintf
 #define LOG IOLog
 
 #include "IOServicePrivate.h"
-#include <mach/sync_policy.h>
 
-#include <IOKit/assert.h>
-
-#include <sys/errno.h>
+// take lockForArbitration before LOCKNOTIFY
 
 /* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
 
@@ -81,6 +81,7 @@ OSDefineMetaClassAndAbstractStructors(IONotifier, OSObject)
 /* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
 
 static IOPlatformExpert *	gIOPlatform;
+static class IOPMrootDomain *	gIOPMRootDomain;
 const IORegistryPlane *		gIOServicePlane;
 const IORegistryPlane *		gIOPowerPlane;
 const OSSymbol *		gIODeviceMemoryKey;
@@ -116,6 +117,7 @@ const OSSymbol *		gIOTerminatedNotification;
 const OSSymbol *		gIOGeneralInterest;
 const OSSymbol *		gIOBusyInterest;
 const OSSymbol *		gIOAppPowerStateInterest;
+const OSSymbol *		gIOPriorityPowerStateInterest;
 
 static OSDictionary * 		gNotifications;
 static IORecursiveLock *	gNotificationLock;
@@ -131,6 +133,13 @@ static int			gNumConfigThreads;
 static int			gNumWaitingThreads;
 static IOLock *			gIOServiceBusyLock;
 
+static thread_t			gIOTerminateThread;
+static UInt32			gIOTerminateWork;
+static OSArray *		gIOTerminatePhase2List;
+static OSArray *		gIOStopList;
+static OSArray *		gIOStopProviderList;
+static OSArray *		gIOFinalizeList;
+
 /* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
 
 #define LOCKREADNOTIFY()	\
@@ -140,6 +149,11 @@ static IOLock *			gIOServiceBusyLock;
 #define LOCKWRITE2READNOTIFY()
 #define UNLOCKNOTIFY()		\
     IORecursiveLockUnlock( gNotificationLock )
+
+#define randomDelay()	\
+        int del = read_processor_clock();				\
+        del = (((int)IOThreadSelf()) ^ del ^ (del >> 10)) & 0x3ff;	\
+        IOSleep( del );
 
 /* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
 
@@ -197,6 +211,7 @@ void IOService::initialize( void )
     gIOGeneralInterest 		= OSSymbol::withCStringNoCopy( kIOGeneralInterest );
     gIOBusyInterest   		= OSSymbol::withCStringNoCopy( kIOBusyInterest );
     gIOAppPowerStateInterest   	= OSSymbol::withCStringNoCopy( kIOAppPowerStateInterest );
+    gIOPriorityPowerStateInterest   	= OSSymbol::withCStringNoCopy( kIOPriorityPowerStateInterest );
 
     gNotifications		= OSDictionary::withCapacity( 1 );
     gIOPublishNotification	= OSSymbol::withCStringNoCopy(
@@ -240,11 +255,11 @@ void IOService::initialize( void )
 
     assert( gArbitrationLockQueueLock );
 
-#ifdef LESS_THREAD_CREATE
-    for( int i = 0; i < kMaxConfigThreads; i++)
-        _IOConfigThread::configThread();
-#endif
-
+    gIOTerminatePhase2List = OSArray::withCapacity( 2 );
+    gIOStopList            = OSArray::withCapacity( 16 );
+    gIOStopProviderList    = OSArray::withCapacity( 16 );
+    gIOFinalizeList	   = OSArray::withCapacity( 16 );
+    assert( gIOTerminatePhase2List && gIOStopList && gIOStopProviderList && gIOFinalizeList );
 }
 
 /* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
@@ -272,8 +287,8 @@ static UInt64 getDebugFlags( OSDictionary * props )
 // The default score is from the property table, & may be altered
 // during probe to change the start order.
 
-IOService * IOService::probe(	IOService *	/* provider */,
-				SInt32	  *	/* score */)
+IOService * IOService::probe(	IOService * provider,
+				SInt32	  * score )
 {
     return( this );
 }
@@ -283,8 +298,16 @@ bool IOService::start( IOService * provider )
     return( true );
 }
 
-void IOService::stop( IOService * /* provider */ )
+void IOService::stop( IOService * provider )
 {
+}
+
+void IOService::free( void )
+{
+    if( getPropertyTable())
+        unregisterAllInterest();
+    PMfree();
+    super::free();
 }
 
 /*
@@ -308,12 +331,8 @@ bool IOService::attach( IOService * provider )
         provider->unlockForArbitration();
 
     } else {
-
 	gIOServiceRoot = this;
 	ok = attachToParent( getRegistryRoot(), gIOServicePlane);
-	gIOResources->attachToParent( getRegistryRoot(),
-			gIOServicePlane );
-	publishResource("IOKit");
     }
 
     return( ok );
@@ -326,18 +345,44 @@ IOService * IOService::getServiceRoot( void )
 
 void IOService::detach( IOService * provider )
 {
+    IOService * newProvider = 0;
+    SInt32	busy;
+    bool	adjParent;
+
     if( gIOKitDebug & kIOLogAttach)
         LOG("%s::detach(%s)\n", getName(), provider->getName());
 
     lockForArbitration();
 
-    if( (__state[1] & kIOServiceBusyStateMask) 
-     && (provider == getProvider()))
-        provider->adjustBusy( -1 );
+    adjParent = ((busy = (__state[1] & kIOServiceBusyStateMask))
+               && (provider == getProvider()));
 
     detachFromParent( provider, gIOServicePlane );
 
+    if( busy) {
+        newProvider = getProvider();
+        if( busy && (__state[1] & kIOServiceTermPhase3State) && (0 == newProvider))
+            _adjustBusy( -busy );
+    }
+
     unlockForArbitration();
+
+    if( newProvider) {
+        newProvider->lockForArbitration();
+        newProvider->_adjustBusy(1);
+        newProvider->unlockForArbitration();
+    }
+
+    // check for last client detach from a terminated service
+    if( provider->lockForArbitration( true )) {
+        if( adjParent)
+            provider->_adjustBusy( -1 );
+        if( (provider->__state[1] & kIOServiceTermPhase3State)
+         && (0 == provider->getClient())) {
+            provider->scheduleFinalize();
+        }
+        provider->unlockForArbitration();
+    }
 }
 
 /*
@@ -400,40 +445,77 @@ void IOService::registerService( IOOptionBits options = 0 )
 void IOService::startMatching( IOOptionBits options = 0 )
 {
     IOService *	provider;
+    UInt32	prevBusy = 0;
     bool	needConfig;
+    bool	needWake = false;
     bool	ok;
     bool	sync;
+    bool	waitAgain;
 
     lockForArbitration();
 
     sync = (options & kIOServiceSynchronous)
 	|| ((provider = getProvider())
 		&& (provider->__state[1] & kIOServiceSynchronousState));
-    if( sync)
-	__state[1] |= kIOServiceSynchronousState;
-    else
-	__state[1] &= ~kIOServiceSynchronousState;
 
-    needConfig =  (0 == (__state[1] & kIOServiceConfigState))
-	       && (0 == (__state[0] & kIOServiceInactiveState))
-    	       && (kIOServiceRegisteredState !=
-                                (__state[0] & (kIOServiceRegisteredState
-                                          | kIOServiceMatchedState)));
-    __state[1] |= kIOServiceConfigState;
+
+    needConfig =  (0 == (__state[1] & (kIOServiceNeedConfigState | kIOServiceConfigState)))
+	       && (0 == (__state[0] & kIOServiceInactiveState));
+
+    __state[1] |= kIOServiceNeedConfigState;
+
 //    __state[0] &= ~kIOServiceInactiveState;
 
 //    if( sync) LOG("OSKernelStackRemaining = %08x @ %s\n",
 //			OSKernelStackRemaining(), getName());
 
+    if( needConfig) {
+	prevBusy = _adjustBusy( 1 );
+        needWake = (0 != (kIOServiceSyncPubState & __state[1]));
+    }
+
+    if( sync)
+	__state[1] |= kIOServiceSynchronousState;
+    else
+	__state[1] &= ~kIOServiceSynchronousState;
+
     unlockForArbitration();
 
     if( needConfig) {
-	adjustBusy( 1 );
-        if( sync) {
-	    doServiceMatch( options );
-	    waitQuiet();
-	} else
+
+        if( needWake) {
+            IOLockLock( gIOServiceBusyLock );
+            thread_wakeup( (event_t) this/*&__state[1]*/ );
+            IOLockUnlock( gIOServiceBusyLock );
+
+        } else if( !sync || (kIOServiceAsynchronous & options)) {
+
             ok = (0 != _IOServiceJob::startJob( this, kMatchNubJob, options ));
+    
+        } else do {
+
+            if( (__state[1] & kIOServiceNeedConfigState))
+                doServiceMatch( options );
+
+            lockForArbitration();
+            IOLockLock( gIOServiceBusyLock );
+
+            waitAgain = (prevBusy != (__state[1] & kIOServiceBusyStateMask));
+            if( waitAgain)
+                __state[1] |= kIOServiceSyncPubState | kIOServiceBusyWaiterState;
+            else
+                __state[1] &= ~kIOServiceSyncPubState;
+
+            unlockForArbitration();
+
+            if( waitAgain)
+                assert_wait( (event_t) this/*&__state[1]*/, THREAD_UNINT);
+
+            IOLockUnlock( gIOServiceBusyLock );
+            if( waitAgain)
+                thread_block((void (*)(void)) 0);
+
+        } while( waitAgain );
     }
 }
 
@@ -452,11 +534,11 @@ IOReturn IOService::catalogNewDrivers( OSOrderedSet * newTables )
 
 	LOCKWRITENOTIFY();
         iter = (OSIterator *) getExistingServices( table,
-                                                    kIOServiceMatchedState );
+                                                    kIOServiceRegisteredState );
 	UNLOCKNOTIFY();
 	if( iter) {
 	    while( (service = (IOService *) iter->getNextObject())) {
-                service->startMatching();
+                service->startMatching(kIOServiceAsynchronous);
 #if IOMATCHDEBUG
 		count++;
 #endif
@@ -687,7 +769,7 @@ IOReturn IOService::callPlatformFunction( const char * functionName,
 
 
 /*
- * Platform expert accessors
+ * Accessors for global services
  */
 
 IOPlatformExpert * IOService::getPlatform( void )
@@ -695,9 +777,26 @@ IOPlatformExpert * IOService::getPlatform( void )
     return( gIOPlatform);
 }
 
+class IOPMrootDomain * IOService::getPMRootDomain( void )
+{
+    return( gIOPMRootDomain);
+}
+
+IOService * IOService::getResourceService( void )
+{
+    return( gIOResources );
+}
+
 void IOService::setPlatform( IOPlatformExpert * platform)
 {
     gIOPlatform = platform;
+    gIOResources->attachToParent( gIOServiceRoot, gIOServicePlane );
+}
+
+void IOService::setPMRootDomain( class IOPMrootDomain * rootDomain)
+{
+    gIOPMRootDomain = rootDomain;
+    publishResource("IOKit");
 }
 
 /*
@@ -1212,7 +1311,8 @@ IONotifier * IOService::registerInterest( const OSSymbol * typeOfInterest,
 
     if( (typeOfInterest != gIOGeneralInterest)
      && (typeOfInterest != gIOBusyInterest)
-     && (typeOfInterest != gIOAppPowerStateInterest))
+     && (typeOfInterest != gIOAppPowerStateInterest)
+     && (typeOfInterest != gIOPriorityPowerStateInterest))
         return( 0 );
 
     lockForArbitration();
@@ -1274,6 +1374,8 @@ void IOService::unregisterAllInterest( void )
 {
     cleanInterestArray( getProperty( gIOGeneralInterest ));
     cleanInterestArray( getProperty( gIOBusyInterest ));
+    cleanInterestArray( getProperty( gIOAppPowerStateInterest ));
+    cleanInterestArray( getProperty( gIOPriorityPowerStateInterest ));
 }
 
 /*
@@ -1359,10 +1461,511 @@ void _IOServiceInterestNotifier::enable( bool was )
     UNLOCKNOTIFY();
 }
 
+/* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
+
+/*
+ * Termination
+ */
+
+#define tailQ(o)		setObject(o)
+#define headQ(o)		setObject(0, o)
+#define TLOG(fmt, args...)  	{ if(kIOLogYield & gIOKitDebug) IOLog(fmt, ## args); }
+
+inline void _workLoopAction( IOWorkLoop::Action action,
+                             IOService * service,
+                             void * p0 = 0, void * p1 = 0,
+                             void * p2 = 0, void * p3 = 0 )
+{
+    IOWorkLoop * wl;
+
+    if( (wl = service->getWorkLoop())) {
+        wl->retain();
+        wl->runAction( action, service, p0, p1, p2, p3 );
+        wl->release();
+    } else
+        (*action)( service, p0, p1, p2, p3 );
+}
+
+bool IOService::requestTerminate( IOService * provider, IOOptionBits options )
+{
+    bool ok;
+
+    // if its our only provider
+    ok = isParent( provider, gIOServicePlane, true);
+
+    // -- compat
+    if( ok) {
+        provider->terminateClient( this, options | kIOServiceRecursing );
+        ok = (0 != (__state[1] & kIOServiceRecursing));
+    }
+    // --
+
+    return( ok );
+}
+
+bool IOService::terminatePhase1( IOOptionBits options = 0 )
+{
+    IOService *		victim;
+    IOService *		client;
+    OSIterator *	iter;
+    OSArray *		makeInactive;
+    bool		ok;
+    bool		didInactive;
+    bool		startPhase2 = false;
+
+    TLOG("%s::terminatePhase1(%08lx)\n", getName(), options);
+
+    // -- compat
+    if( options & kIOServiceRecursing) {
+        __state[1] |= kIOServiceRecursing;
+        return( true );
+    }
+    // -- 
+
+    makeInactive = OSArray::withCapacity( 16 );
+    if( !makeInactive)
+        return( false );
+
+    victim = this;
+    victim->retain();
+
+    while( victim ) {
+
+        didInactive = victim->lockForArbitration( true );
+        if( didInactive) {
+            didInactive = (0 == (victim->__state[0] & kIOServiceInactiveState));
+            if( didInactive) {
+                victim->__state[0] |= kIOServiceInactiveState;
+                victim->__state[0] &= ~(kIOServiceRegisteredState | kIOServiceMatchedState
+                                        | kIOServiceFirstPublishState | kIOServiceFirstMatchState);
+                victim->_adjustBusy( 1 );
+            }
+            victim->unlockForArbitration();
+        }
+        if( victim == this)
+            startPhase2 = didInactive;
+        if( didInactive) {
+
+            victim->deliverNotification( gIOTerminatedNotification, 0, 0xffffffff );
+            IOUserClient::destroyUserReferences( victim );
+            victim->unregisterAllInterest();
+
+            iter = victim->getClientIterator();
+            if( iter) {
+                while( (client = (IOService *) iter->getNextObject())) {
+                    TLOG("%s::requestTerminate(%s, %08lx)\n",
+                            client->getName(), victim->getName(), options);
+                    ok = client->requestTerminate( victim, options );
+                    TLOG("%s::requestTerminate(%s, ok = %d)\n",
+                            client->getName(), victim->getName(), ok);
+                    if( ok)
+                        makeInactive->setObject( client );
+                }
+                iter->release();
+            }
+        }
+        victim->release();
+        victim = (IOService *) makeInactive->getObject(0);
+        if( victim) {
+            victim->retain();
+            makeInactive->removeObject(0);
+        }
+    }
+
+    makeInactive->release();
+
+    if( startPhase2)
+        scheduleTerminatePhase2( options );
+
+    return( true );
+}
+
+void IOService::scheduleTerminatePhase2( IOOptionBits options = 0 )
+{
+    AbsoluteTime	deadline;
+    int			waitResult;
+    bool		wait, haveDeadline = false;
+
+    options |= kIOServiceRequired;
+
+    retain();
+
+    IOLockLock( gJobsLock );
+
+    if( (options & kIOServiceSynchronous)
+        && (current_thread() != gIOTerminateThread)) {
+
+        do {
+            wait = (gIOTerminateThread != 0);
+            if( wait) {
+                // wait to become the terminate thread
+                assert_wait( (event_t) &gIOTerminateThread, THREAD_UNINT );
+                IOLockUnlock( gJobsLock );
+                thread_block((void (*)(void)) 0);
+                IOLockLock( gJobsLock );
+            }
+        } while( wait );
+
+        gIOTerminateThread = current_thread();
+        gIOTerminatePhase2List->setObject( this );
+        gIOTerminateWork++;
+
+        do {
+            terminateWorker( options );
+            wait = (0 != (__state[1] & kIOServiceBusyStateMask));
+            if( wait) {
+                // wait for the victim to go non-busy
+                assert_wait( (event_t) &gIOTerminateWork, THREAD_UNINT );
+                if( !haveDeadline) {
+                    clock_interval_to_deadline( 15, kSecondScale, &deadline );
+                    haveDeadline = true;
+                }
+                thread_set_timer_deadline( deadline );
+                IOLockUnlock( gJobsLock );
+                waitResult = thread_block((void (*)(void)) 0);
+                if( waitResult == THREAD_TIMED_OUT) {
+                    TLOG("%s::terminate(kIOServiceSynchronous) timeout", getName());
+                } else
+                    thread_cancel_timer();
+                IOLockLock( gJobsLock );
+            }
+        } while( wait && (waitResult != THREAD_TIMED_OUT));
+
+        gIOTerminateThread = 0;
+        thread_wakeup( (event_t) &gIOTerminateThread );
+
+    } else {
+        // ! kIOServiceSynchronous
+
+        gIOTerminatePhase2List->setObject( this );
+        if( 0 == gIOTerminateWork++)
+            gIOTerminateThread = IOCreateThread( &terminateThread, (void *) options );
+    }
+
+    IOLockUnlock( gJobsLock );
+
+    release();
+}
+
+void IOService::terminateThread( void * arg )
+{
+    IOLockLock( gJobsLock );
+
+    terminateWorker( (IOOptionBits) arg );
+
+    gIOTerminateThread = 0;
+    thread_wakeup( (event_t) &gIOTerminateThread );
+
+    IOLockUnlock( gJobsLock );
+}
+
+void IOService::scheduleStop( IOService * provider )
+{
+    TLOG("%s::scheduleStop(%s)\n", getName(), provider->getName());
+
+    IOLockLock( gJobsLock );
+    gIOStopList->tailQ( this );
+    gIOStopProviderList->tailQ( provider );
+
+    if( 0 == gIOTerminateWork++) {
+        if( !gIOTerminateThread)
+            gIOTerminateThread = IOCreateThread( &terminateThread, (void *) 0 );
+        else
+            thread_wakeup( (event_t) &gIOTerminateWork );
+    }
+
+    IOLockUnlock( gJobsLock );
+}
+
+void IOService::scheduleFinalize( void )
+{
+    TLOG("%s::scheduleFinalize\n", getName());
+
+    IOLockLock( gJobsLock );
+    gIOFinalizeList->tailQ( this );
+
+    if( 0 == gIOTerminateWork++) {
+        if( !gIOTerminateThread)
+            gIOTerminateThread = IOCreateThread( &terminateThread, (void *) 0 );
+        else
+            thread_wakeup( (event_t) &gIOTerminateWork );
+    }
+
+    IOLockUnlock( gJobsLock );
+}
+
+bool IOService::willTerminate( IOService * provider, IOOptionBits options )
+{
+    return( true );
+}
+
+bool IOService::didTerminate( IOService * provider, IOOptionBits options, bool * defer )
+{
+    if( false == *defer) {
+
+        if( lockForArbitration( true )) {
+            if( false == provider->handleIsOpen( this ))
+                scheduleStop( provider );
+            // -- compat
+            else {
+                message( kIOMessageServiceIsRequestingClose, provider, (void *) options );
+                if( false == provider->handleIsOpen( this ))
+                    scheduleStop( provider );
+            }
+            // --
+            unlockForArbitration();
+        }
+    }
+
+    return( true );
+}
+
+void IOService::actionWillTerminate( IOService * victim, IOOptionBits options, 
+                                    OSArray * doPhase2List )
+{
+    OSIterator * iter;
+    IOService *	 client;
+    bool	 ok;
+
+    iter = victim->getClientIterator();
+    if( iter) {
+        while( (client = (IOService *) iter->getNextObject())) {
+            TLOG("%s::willTerminate(%s, %08lx)\n",
+                    client->getName(), victim->getName(), options);
+            ok = client->willTerminate( victim, options );
+            doPhase2List->tailQ( client );
+        }
+        iter->release();
+    }
+}
+
+void IOService::actionDidTerminate( IOService * victim, IOOptionBits options )
+{
+    OSIterator * iter;
+    IOService *	 client;
+    bool defer = false;
+
+    victim->messageClients( kIOMessageServiceIsTerminated, (void *) options );
+
+    iter = victim->getClientIterator();
+    if( iter) {
+        while( (client = (IOService *) iter->getNextObject())) {
+            TLOG("%s::didTerminate(%s, %08lx)\n",
+                    client->getName(), victim->getName(), options);
+            client->didTerminate( victim, options, &defer );
+            TLOG("%s::didTerminate(%s, defer %d)\n",
+                    client->getName(), victim->getName(), defer);
+        }
+        iter->release();
+    }
+}
+
+void IOService::actionFinalize( IOService * victim, IOOptionBits options )
+{
+    TLOG("%s::finalize(%08lx)\n", victim->getName(), options);
+    victim->finalize( options );
+}
+
+void IOService::actionStop( IOService * provider, IOService * client )
+{
+    TLOG("%s::stop(%s)\n", client->getName(), provider->getName());
+    client->stop( provider );
+    if( provider->isOpen( client ))
+        provider->close( client );
+    TLOG("%s::detach(%s)\n", client->getName(), provider->getName());
+    client->detach( provider );
+}
+
+void IOService::terminateWorker( IOOptionBits options )
+{
+    OSArray *		doPhase2List;
+    OSArray *		didPhase2List;
+    OSSet *		freeList;
+    UInt32		workDone;
+    IOService * 	victim;
+    IOService * 	client;
+    IOService * 	provider;
+    unsigned int	idx;
+    bool		moreToDo;
+    bool		doPhase2;
+    bool		doPhase3;
+
+    options |= kIOServiceRequired;
+
+    doPhase2List  = OSArray::withCapacity( 16 );
+    didPhase2List = OSArray::withCapacity( 16 );
+    freeList	  = OSSet::withCapacity( 16 );
+    if( (0 == doPhase2List) || (0 == didPhase2List) || (0 == freeList))
+        return;
+
+    do {
+        workDone = gIOTerminateWork;
+
+        while( (victim = (IOService *) gIOTerminatePhase2List->getObject(0) )) {
+    
+            victim->retain();
+            gIOTerminatePhase2List->removeObject(0);
+            IOLockUnlock( gJobsLock );
+
+            while( victim ) {
+        
+                doPhase2 = victim->lockForArbitration( true );
+                if( doPhase2) {
+                    doPhase2 = (0 != (kIOServiceInactiveState & victim->__state[0]));
+                    if( doPhase2) {
+                        doPhase2 = (0 == (victim->__state[1] & kIOServiceTermPhase2State))
+                                && (0 == (victim->__state[1] & kIOServiceConfigState));
+                        if( doPhase2)
+                            victim->__state[1] |= kIOServiceTermPhase2State;
+                    }
+                    victim->unlockForArbitration();
+                }
+                if( doPhase2) {
+                    if( 0 == victim->getClient()) {
+                        // no clients - will go to finalize
+                        IOLockLock( gJobsLock );
+                        gIOFinalizeList->tailQ( victim );
+                        IOLockUnlock( gJobsLock );
+                    } else {
+                        _workLoopAction( (IOWorkLoop::Action) &actionWillTerminate,
+                                            victim, (void *) options, (void *) doPhase2List );
+                    }
+                    didPhase2List->headQ( victim );
+                }
+                victim->release();
+                victim = (IOService *) doPhase2List->getObject(0);
+                if( victim) {
+                    victim->retain();
+                    doPhase2List->removeObject(0);
+                }
+            }
+        
+            while( (victim = (IOService *) didPhase2List->getObject(0)) ) {
+    
+                if( victim->lockForArbitration( true )) {
+                    victim->__state[1] |= kIOServiceTermPhase3State;
+                    victim->unlockForArbitration();
+                }
+                _workLoopAction( (IOWorkLoop::Action) &actionDidTerminate,
+                                    victim, (void *) options );
+                didPhase2List->removeObject(0);
+            }
+            IOLockLock( gJobsLock );
+        }
+
+        // phase 3
+        do {
+            doPhase3 = false;
+            // finalize leaves
+            while( (victim = (IOService *) gIOFinalizeList->getObject(0))) {
+    
+                IOLockUnlock( gJobsLock );
+                _workLoopAction( (IOWorkLoop::Action) &actionFinalize,
+                                    victim, (void *) options );
+                IOLockLock( gJobsLock );
+                // hold off free
+                freeList->setObject( victim );
+                // safe if finalize list is append only
+                gIOFinalizeList->removeObject(0);
+            }
+        
+            for( idx = 0;
+                 (!doPhase3) && (client = (IOService *) gIOStopList->getObject(idx)); ) {
+        
+                provider = (IOService *) gIOStopProviderList->getObject(idx);
+                assert( provider );
+        
+                if( !provider->isChild( client, gIOServicePlane )) {
+                    // may be multiply queued - nop it
+                    TLOG("%s::nop stop(%s)\n", client->getName(), provider->getName());
+                } else {
+                    // not ready for stop if it has clients, skip it
+                    if( (client->__state[1] & kIOServiceTermPhase3State) && client->getClient()) {
+                        TLOG("%s::defer stop(%s)\n", client->getName(), provider->getName());
+                        idx++;
+                        continue;
+                    }
+        
+                    IOLockUnlock( gJobsLock );
+                    _workLoopAction( (IOWorkLoop::Action) &actionStop,
+                                     provider, (void *) client );
+                    IOLockLock( gJobsLock );
+                    // check the finalize list now
+                    doPhase3 = true;
+                }
+                // hold off free
+                freeList->setObject( client );
+                freeList->setObject( provider );
+
+                // safe if stop list is append only
+                gIOStopList->removeObject( idx );
+                gIOStopProviderList->removeObject( idx );
+                idx = 0;
+            }
+
+        } while( doPhase3 );
+
+        gIOTerminateWork -= workDone;
+        moreToDo = (gIOTerminateWork != 0);
+
+        if( !moreToDo) {
+            TLOG("iokit terminate done, %d stops remain\n", gIOStopList->getCount());
+        }
+
+    } while( moreToDo );
+
+    IOLockUnlock( gJobsLock );
+
+    freeList->release();
+    doPhase2List->release();
+    didPhase2List->release();
+
+    IOLockLock( gJobsLock );
+}
+
+bool IOService::finalize( IOOptionBits options )
+{
+    OSIterator *	iter;
+    IOService *		provider;
+
+    iter = getProviderIterator();
+    assert( iter );
+
+    if( iter) {
+        while( (provider = (IOService *) iter->getNextObject())) {
+
+            // -- compat
+            if( 0 == (__state[1] & kIOServiceTermPhase3State)) {
+                /* we come down here on programmatic terminate */
+                stop( provider );
+                if( provider->isOpen( this ))
+                    provider->close( this );
+                detach( provider );
+            } else {
+            //--
+                if( provider->lockForArbitration( true )) {
+                    if( 0 == (provider->__state[1] & kIOServiceTermPhase3State))
+                        scheduleStop( provider );
+                    provider->unlockForArbitration();
+                }
+            }
+        }
+        iter->release();
+    }
+
+    return( true );
+}
+
+#undef tailQ(o)
+#undef headQ(o)
 
 /*
  * Terminate
  */
+
+void IOService::doServiceTerminate( IOOptionBits options )
+{
+}
 
 // a method in case someone needs to override it
 bool IOService::terminateClient( IOService * client, IOOptionBits options )
@@ -1378,220 +1981,49 @@ bool IOService::terminateClient( IOService * client, IOOptionBits options )
     return( ok );
 }
 
-struct TerminateClientsContext {
-    IOService * 	provider;
-    IOOptionBits	options;
-};
-
-static void terminateInterestApplier( OSObject * object, void * ctx )
-{
-    TerminateClientsContext * context = (TerminateClientsContext *) ctx;
-
-    context->provider->messageClient( kIOMessageServiceIsTerminated,
-                                      object, (void *) context->options );
-}
-
-static void terminateClientsApplier( IOService * client, void * ctx )
-{
-    TerminateClientsContext * context = (TerminateClientsContext *) ctx;
-
-    if( gIOKitDebug & kIOLogYield)
-        LOG("%s::terminateClient(%s,%08lx)\n",
-            context->provider->getName(),
-            client->getName(), context->options);
-
-    context->provider->terminateClient( client,
-            ((context->options) | kIOServiceRecursing) & ~kIOServiceSynchronous );
-}
-
-static void terminateRequestClose( IOService * client, void * ctx )
-{
-    TerminateClientsContext * context = (TerminateClientsContext *) ctx;
-    IOService * provider = context->provider;
-
-    if( provider->isOpen( client)) {
-        if( gIOKitDebug & kIOLogYield)
-            LOG("%s::terminate request close(%s,%08lx)\n",
-                provider->getName(),
-                client->getName(), context->options);
-        provider->messageClient( kIOMessageServiceIsRequestingClose,
-				 client, (void *) context->options );
-    }
-}
-
 bool IOService::terminate( IOOptionBits options = 0 )
 {
-    bool			ok;
-    bool			wasClosed;
-    bool			madeInactive;
-    TerminateClientsContext	context;
+    options |= kIOServiceTerminate;
 
-    if( false == lockForArbitration( (options & kIOServiceRequired) ))
-        return false;
-
-    retain();
-
-    context.provider = this;
-    context.options  = options;
-
-    ok = (options & kIOServiceRequired);
-    wasClosed = (false == handleIsOpen( 0 ));
-    if( !ok)
-        ok = wasClosed;
-
-    if( !ok) {
-        applyToClients( &terminateRequestClose, (void *) &context );
-        wasClosed = (false == handleIsOpen( 0 ));
-        ok = wasClosed;
-    }
-
-    if( ok) {
-        madeInactive = (0 == (__state[0] & kIOServiceInactiveState));
-	if( madeInactive) {
-            __state[0] |= kIOServiceInactiveState;
-            __state[0] &= ~(kIOServiceRegisteredState | kIOServiceMatchedState);
-                if( 0 == (options & kIOServiceRecursing))
-                    __state[1] |= kIOServiceTerminatedState;
-	}
-    } else
-	madeInactive = false;
-
-    unlockForArbitration();
-
-    if( madeInactive) {
-
-        adjustBusy( 1 );
-        applyToInterested( gIOGeneralInterest,
-                           &terminateInterestApplier, (void *) &context );
-
-        deliverNotification( gIOTerminatedNotification, 0, 0xffffffff );
-
-        applyToClients( &terminateClientsApplier, (void *) &context );
-
-	if( wasClosed && (0 == (options & kIOServiceRecursing))) {
-	    if( options & kIOServiceSynchronous)
-                doServiceTerminate( 0 );
-	    else
-                ok = (0 != _IOServiceJob::startJob( this, kTerminateNubJob, 0 ));
-	}
-        if( options & kIOServiceSynchronous)
-	    waitQuiet();
-    }
-
-    release();
-
-    return( ok );
+    return( terminatePhase1( options ));
 }
 
-void IOService::doServiceTerminate( IOOptionBits options )
-{
-    IOService *		next;
-    OSIterator *	iter;
-    IOService *		client;
-    OSArray *		deathList = 0;
-    unsigned int	index;
-    bool		finalize;
-    bool		ok = true;
-
-    next = this;
-    deathList = OSArray::withObjects( & (const OSObject *) next, 1, 1 );
-    assert( deathList );
-    if( !deathList)
-	return;
-
-    index = 0;
-    do {
-        iter = next->getClientIterator();
-        assert( iter );
-        if( iter) {
-
-            while( (client = (IOService *) iter->getNextObject())) {
-
-                if( gIOKitDebug & kIOLogYield)
-                    LOG("%s::actionClients(%s)\n",
-                            next->getName(), client->getName());
-
-                client->stop( next );
-
-                if( next->isOpen( client ))
-                    next->close( client );
-
-                client->detach( next );
-
-                client->lockForArbitration();
-                if( (client->__state[0] & kIOServiceInactiveState)
-                 && (0 == (client->__state[1] & kIOServiceTerminatedState))
-                 && (0 == client->getProvider()) ) {
-                    client->__state[1] |= kIOServiceTerminatedState;
-                    finalize = (false == client->handleIsOpen( 0 ));
-                } else
-                    finalize = false;
-                client->unlockForArbitration();
-
-                if( finalize)
-                    deathList->setObject( client );
-            }
-            iter->release();
-        }
-
-    } while( (next = (IOService *) deathList->getObject( ++index )) );
-
-    while( index--) {
-
-        next = (IOService *) deathList->getObject( index );
-	assert( next );
-        next->retain();
-        deathList->removeObject( index );
-
-        IOUserClient::destroyUserReferences( next );
-
-        next->unregisterAllInterest();
-
-        ok = next->finalize( options );
-	assert( ok );
-
-	if( gIOKitDebug & kIOLogYield)
-            LOG("%s __state = %08lx:%08lx\n", next->getName(),
-				next->__state[0], next->__state[1]);
-        next->adjustBusy( -1 );
-
-	next->release();
-    }
-
-    deathList->release();
-}
-
-bool IOService::finalize( IOOptionBits options )
-{
-    OSIterator *	iter;
-    IOService *		provider;
-    
-    iter = getProviderIterator();
-    assert( iter );
-
-    if( iter) {
-	while( (provider = (IOService *) iter->getNextObject())) {
-            /* we come down here on programmatic terminate */
-            stop( provider );
-            if( provider->isOpen( this ))
-                provider->close( this );
-            detach( provider );
-	}
-	iter->release();
-    }
-
-    return( true );
-}
+/* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
 
 /*
  * Open & close
  */
 
+struct ServiceOpenMessageContext
+{
+    IOService *	 service;
+    UInt32	 type;
+    IOService *  excludeClient;
+    IOOptionBits options;
+};
+
+static void serviceOpenMessageApplier( OSObject * object, void * ctx )
+{
+    ServiceOpenMessageContext * context = (ServiceOpenMessageContext *) ctx;
+
+    if( object != context->excludeClient)
+        context->service->messageClient( context->type, object, (void *) context->options );    
+}
+
 bool IOService::open( 	IOService *	forClient,
                         IOOptionBits	options = 0,
                         void *		arg = 0 )
 {
-    bool	ok;
+    bool			ok;
+    ServiceOpenMessageContext	context;
+
+    context.service		= this;
+    context.type		= kIOMessageServiceIsAttemptingOpen;
+    context.excludeClient	= forClient;
+    context.options		= options;
+
+    applyToInterested( gIOGeneralInterest,
+                        &serviceOpenMessageApplier, &context );
 
     if( false == lockForArbitration(false) )
         return false;
@@ -1608,40 +2040,33 @@ bool IOService::open( 	IOService *	forClient,
 void IOService::close( 	IOService *	forClient,
                         IOOptionBits	options = 0 )
 {
-    bool		ok;
     bool		wasClosed;
     bool		last = false;
-    OSIterator *	iter;
-    IOService *		client;
 
     lockForArbitration();
 
     wasClosed = handleIsOpen( forClient );
     if( wasClosed) {
         handleClose( forClient, options );
-
-	last = ( (__state[1] & kIOServiceTerminatedState)
-                && (false == handleIsOpen( 0 )) );
+	last = (__state[1] & kIOServiceTermPhase3State);
     }
 
     unlockForArbitration();
 
-    if( last) {
-        ok = (0 != _IOServiceJob::startJob( this, kTerminateNubJob, 0 ));
-        assert( ok );
+    if( last)
+        forClient->scheduleStop( this );
 
-    } else if( wasClosed) {
+    else if( wasClosed) {
 
-        iter = getClientIterator();
-        assert( iter );
+        ServiceOpenMessageContext context;
+    
+        context.service		= this;
+        context.type		= kIOMessageServiceWasClosed;
+        context.excludeClient	= forClient;
+        context.options		= options;
 
-        if( iter) {
-            while( (client = (IOService *) iter->getNextObject())) {
-		if( client != forClient)
-                    messageClient( kIOMessageServiceWasClosed, client, 0 );
-            }
-            iter->release();
-        }
+        applyToInterested( gIOGeneralInterest,
+                            &serviceOpenMessageApplier, &context );
     }
 }
 
@@ -1671,11 +2096,12 @@ bool IOService::handleOpen( 	IOService *	forClient,
 
     else if( options & kIOServiceSeize ) {
         ok = (kIOReturnSuccess == messageClient( kIOMessageServiceIsRequestingClose,
-				__owner, (void *) options ));
-	if( ok && (0 == __owner ))
+                                __owner, (void *) options ));
+        if( ok && (0 == __owner ))
             __owner = forClient;
+        else
+            ok = false;
     }
-
     return( ok );
 }
 
@@ -2074,6 +2500,24 @@ void IOService::probeCandidates( OSOrderedSet * matches )
 	iter->release();
     }
 
+
+    // adjust the busy count by -1 if matching is stalled for a module,
+    // or +1 if a previously stalled matching is complete.
+    lockForArbitration();
+    SInt32 adjBusy = 0;
+    if( needReloc) {
+        adjBusy = (__state[1] & kIOServiceModuleStallState) ? 0 : 1;
+        if( adjBusy)
+            __state[1] |= kIOServiceModuleStallState;
+
+    } else if( __state[1] & kIOServiceModuleStallState) {
+        __state[1] &= ~kIOServiceModuleStallState;
+        adjBusy = -1;
+    }
+    if( adjBusy)
+        _adjustBusy( adjBusy );
+    unlockForArbitration();
+
     if( startDict)
 	startDict->release();
 }
@@ -2094,6 +2538,7 @@ bool IOService::startCandidate( IOService * service )
         checkResources();
         // stall for any driver resources
         service->checkResources();
+
 
         ok = service->start( this );
         if( !ok)
@@ -2268,7 +2713,8 @@ void IOService::doServiceMatch( IOOptionBits options )
                 deliverNotification( gIOFirstPublishNotification,
                                      kIOServiceFirstPublishState, 0xffffffff );
 	    LOCKREADNOTIFY();
-            __state[1] &= ~kIOServiceConfigState;
+            __state[1] &= ~kIOServiceNeedConfigState;
+            __state[1] |= kIOServiceConfigState;
             __state[0] |= kIOServiceRegisteredState;
 
             if( reRegistered && (0 == (__state[0] & kIOServiceInactiveState))) {
@@ -2297,7 +2743,7 @@ void IOService::doServiceMatch( IOOptionBits options )
         }
 
         lockForArbitration();
-	reRegistered = (0 != (__state[1] & kIOServiceConfigState));
+	reRegistered = (0 != (__state[1] & kIOServiceNeedConfigState));
 	keepGuessing =
 		   (reRegistered || (catalogGeneration !=
 					gIOCatalogue->getGenerationCount()))
@@ -2307,7 +2753,8 @@ void IOService::doServiceMatch( IOOptionBits options )
             unlockForArbitration();
     }
 
-    if( 0 == (__state[0] & kIOServiceInactiveState)) {
+    if( (0 == (__state[0] & kIOServiceInactiveState))
+     && (0 == (__state[1] & kIOServiceModuleStallState)) ) {
         deliverNotification( gIOMatchedNotification,
 		kIOServiceMatchedState, 0xffffffff );
 	if( 0 == (__state[0] & kIOServiceFirstMatchState))
@@ -2315,33 +2762,43 @@ void IOService::doServiceMatch( IOOptionBits options )
 		kIOServiceFirstMatchState, 0xffffffff );
     }
 
-    unlockForArbitration();
+    __state[1] &= ~kIOServiceConfigState;
+    if( __state[0] & kIOServiceInactiveState)
+        scheduleTerminatePhase2();
 
-    adjustBusy( -1 );
+    _adjustBusy( -1 );
+    unlockForArbitration();
 }
 
-void IOService::adjustBusy( SInt32 delta )
+UInt32 IOService::_adjustBusy( SInt32 delta )
 {
     IOService * next;
     UInt32	count;
-    bool	wasQuiet, nowQuiet;
+    UInt32	result;
+    bool	wasQuiet, nowQuiet, needWake;
 
-    if( 0 == delta)
-	return;
-
-    IOTakeLock( gIOServiceBusyLock );
     next = this;
+    result = __state[1] & kIOServiceBusyStateMask;
 
-    do {
+    if( delta) do {
+        if( next != this)
+            next->lockForArbitration();
         count = next->__state[1] & kIOServiceBusyStateMask;
         assert( count < kIOServiceBusyMax);
         wasQuiet = (0 == count);
         assert( (!wasQuiet) || (delta > 0));
         next->__state[1] += delta;
         nowQuiet = (0 == (next->__state[1] & kIOServiceBusyStateMask));
+	needWake = (0 != (kIOServiceBusyWaiterState & next->__state[1]));
 
-	if( nowQuiet)
+        if( needWake) {
+            next->__state[1] &= ~kIOServiceBusyWaiterState;
+            IOLockLock( gIOServiceBusyLock );
 	    thread_wakeup( (event_t) next);
+            IOLockUnlock( gIOServiceBusyLock );
+        }
+        if( next != this)
+            next->unlockForArbitration();
 
         if( (wasQuiet || nowQuiet) ) {
             OSArray *		array;
@@ -2368,7 +2825,14 @@ void IOService::adjustBusy( SInt32 delta )
 
     } while( (wasQuiet || nowQuiet) && (next = next->getProvider()));
 
-    IOUnlock( gIOServiceBusyLock );
+    return( result );
+}
+
+void IOService::adjustBusy( SInt32 delta )
+{
+    lockForArbitration();
+    _adjustBusy( delta );
+    unlockForArbitration();
 }
 
 UInt32 IOService::getBusyState( void )
@@ -2385,15 +2849,15 @@ IOReturn IOService::waitForState( UInt32 mask, UInt32 value,
     AbsoluteTime    abstime;
 
     do {
-        IOTakeLock( gIOServiceBusyLock );
+        lockForArbitration();
+        IOLockLock( gIOServiceBusyLock );
         wait = (value != (__state[1] & mask));
-        if( wait)
-        {
+        if( wait) {
+            __state[1] |= kIOServiceBusyWaiterState;
+            unlockForArbitration();
             assert_wait( (event_t) this, THREAD_UNINT );
-            if ( timeout )
-            {
-                if ( computeDeadline )
-                {
+            if( timeout ) {
+                if( computeDeadline ) {
                     AbsoluteTime  nsinterval;
                     clock_interval_to_absolutetime_interval(
                           timeout->tv_sec, kSecondScale, &abstime );
@@ -2406,18 +2870,18 @@ IOReturn IOService::waitForState( UInt32 mask, UInt32 value,
                 }
                 thread_set_timer_deadline( abstime );
             }
-        }
-        IOUnlock( gIOServiceBusyLock );
-        if( wait)
-        {
+        } else
+            unlockForArbitration();
+        IOLockUnlock( gIOServiceBusyLock );
+        if( wait) {
             waitResult = thread_block((void (*)(void)) 0);
-            if ( timeout  && (waitResult != THREAD_TIMED_OUT))
+            if( timeout && (waitResult != THREAD_TIMED_OUT))
 	    	thread_cancel_timer();
         }
 
-    } while( wait && ( waitResult != THREAD_TIMED_OUT ) );
+    } while( wait && (waitResult != THREAD_TIMED_OUT));
 
-    if ( waitResult == THREAD_TIMED_OUT )
+    if( waitResult == THREAD_TIMED_OUT)
         return( kIOReturnTimeout );
     else
         return( kIOReturnSuccess );
@@ -2446,13 +2910,7 @@ void _IOConfigThread::main( _IOConfigThread * self )
 
     do {
 
-#if 0
-#define randomDelay()	\
-        int del = read_processor_clock();				\
-        del = (((int)IOThreadSelf()) ^ del ^ (del >> 10)) & 0x3ff;	\
-        IOSleep( del );
-	randomDelay();
-#endif
+//	randomDelay();
 
         semaphore_wait( gJobsSemaphore );
 
@@ -2462,10 +2920,8 @@ void _IOConfigThread::main( _IOConfigThread * self )
         gJobs->removeObject(job);
 	if( job) {
 	    gOutstandingJobs--;
-#ifndef LESS_THREAD_CREATE
 //	    gNumConfigThreads--;	// we're out of service
 	    gNumWaitingThreads--;	// we're out of service
-#endif
 	}
 	IOUnlock( gJobsLock );
 
@@ -2483,10 +2939,6 @@ void _IOConfigThread::main( _IOConfigThread * self )
 		nub->doServiceMatch( job->options );
 		break;
 
-	    case kTerminateNubJob:
-		nub->doServiceTerminate( job->options );
-		break;
-
             default:
                 LOG("config(%x): strange type (%d)\n",
 			(int) IOThreadSelf(), job->type );
@@ -2497,14 +2949,16 @@ void _IOConfigThread::main( _IOConfigThread * self )
             job->release();
 
             IOTakeLock( gJobsLock );
-#ifndef LESS_THREAD_CREATE
 	    alive = (gOutstandingJobs > gNumWaitingThreads);
 	    if( alive)
 		gNumWaitingThreads++;	// back in service
 //		gNumConfigThreads++;
-	    else
-	        gNumConfigThreads--;
-#endif
+	    else {
+                if( 0 == --gNumConfigThreads) {
+//                    IOLog("MATCH IDLE\n");
+                    thread_wakeup( (event_t) &gNumConfigThreads);
+                }
+            }
             IOUnlock( gJobsLock );
 	}
 
@@ -2514,6 +2968,44 @@ void _IOConfigThread::main( _IOConfigThread * self )
         LOG("config(%x): terminating\n", (int) IOThreadSelf() );
 
     self->release();
+}
+
+IOReturn IOService::waitMatchIdle( UInt32 msToWait )
+{
+    bool            wait;
+    int             waitResult = THREAD_AWAKENED;
+    bool            computeDeadline = true;
+    AbsoluteTime    abstime;
+
+    do {
+        IOLockLock( gJobsLock );
+        wait = (0 != gNumConfigThreads);
+        if( wait) {
+            assert_wait( (event_t) &gNumConfigThreads, THREAD_UNINT );
+            if( msToWait) {
+                if( computeDeadline ) {
+                    clock_interval_to_absolutetime_interval(
+                          msToWait, kMillisecondScale, &abstime );
+                    clock_absolutetime_interval_to_deadline(
+                          abstime, &abstime );
+                    computeDeadline = false;
+                }
+                thread_set_timer_deadline( abstime );
+            }
+        }
+        IOUnlock( gJobsLock );
+        if( wait) {
+            waitResult = thread_block((void (*)(void)) 0);
+            if( msToWait && (waitResult != THREAD_TIMED_OUT))
+	    	thread_cancel_timer();
+        }
+
+    } while( wait && (waitResult != THREAD_TIMED_OUT));
+
+    if( waitResult == THREAD_TIMED_OUT)
+        return( kIOReturnTimeout );
+    else
+        return( kIOReturnSuccess );
 }
 
 void _IOServiceJob::pingConfig( _IOServiceJob * job )
@@ -2606,7 +3098,7 @@ OSIterator * IOService::getMatchingServices( OSDictionary * matching )
     LOCKWRITENOTIFY();
 
     iter = (OSIterator *) getExistingServices( matching,
-						kIOServiceRegisteredState );
+						kIOServiceMatchedState );
     
     UNLOCKNOTIFY();
 
@@ -2673,9 +3165,12 @@ IONotifier * IOService::doInstallNotification(
     if( !matching)
 	return( 0 );
 
-    if( (type == gIOPublishNotification)
-     || (type == gIOFirstPublishNotification))
+    if( type == gIOPublishNotification)
 	inState = kIOServiceRegisteredState;
+
+    else if( type == gIOFirstPublishNotification)
+	inState = kIOServiceFirstPublishState;
+
     else if( (type == gIOMatchedNotification)
 	  || (type == gIOFirstMatchNotification))
 	inState = kIOServiceMatchedState;
@@ -3245,7 +3740,7 @@ bool IOService::passiveMatch( OSDictionary * table, bool changesOK )
                     || (iter && (0 != (nextDict = OSDynamicCast(OSDictionary,
                                             iter->getNextObject()))))) {
                     match = dict->isEqualTo( nextDict, nextDict);
-                    if( !match)
+                    if( match)
                         break;
                     nextDict = 0;
                 }
@@ -3799,9 +4294,10 @@ IOReturn IOService::causeInterrupt(int source)
   return interruptController->causeInterrupt(this, source);
 }
 
-OSMetaClassDefineReservedUnused(IOService, 0);
-OSMetaClassDefineReservedUnused(IOService, 1);
-OSMetaClassDefineReservedUnused(IOService, 2);
+OSMetaClassDefineReservedUsed(IOService, 0);
+OSMetaClassDefineReservedUsed(IOService, 1);
+OSMetaClassDefineReservedUsed(IOService, 2);
+
 OSMetaClassDefineReservedUnused(IOService, 3);
 OSMetaClassDefineReservedUnused(IOService, 4);
 OSMetaClassDefineReservedUnused(IOService, 5);

@@ -97,6 +97,7 @@ __BEGIN_DECLS
 #define MACH_CALL_CONT          0x3     /* call_continuation() */
 #define MACH_CALLOUT            0x4     /* callouts */
 #define MACH_STACK_DETACH       0x5
+#define MACH_MAKE_RUNNABLE      0x6     /* make thread runnable */
 
 /* **** The Kernel Debug Sub Classes for Network (DBG_NETWORK) **** */
 #define DBG_NETIP	1	/* Internet Protocol */
@@ -216,6 +217,12 @@ extern unsigned int kdebug_enable;
 do {					\
     if (kdebug_enable)			\
         kernel_debug(x,a,b,c,d,e);	\
+} while(0)
+
+#define KERNEL_DEBUG_CONSTANT1(x,a,b,c,d,e)    \
+do {					\
+    if (kdebug_enable)			\
+        kernel_debug1(x,a,b,c,d,e);	\
 } while(0)
 
 extern void kernel_debug(unsigned int debugid, unsigned int arg1, unsigned int arg2, unsigned int arg3,  unsigned int arg4, unsigned int arg5);

@@ -48,33 +48,13 @@ extern const char version[];
 extern const char version_variant[];
 
 extern unsigned int intstack_top_ss;	/* declared in start.s */
-#if	MACH_KDP || MACH_KDB
 extern unsigned int debstackptr;	/* declared in start.s */
 extern unsigned int debstack_top_ss;	/* declared in start.s */
-#endif	/* MACH_KDP || MACH_KDB */
-
-unsigned int kernel_seg_regs[] = {
-  KERNEL_SEG_REG0_VALUE,	/* 0 */
-  KERNEL_SEG_REG0_VALUE + 1,	/* 1 */
-  KERNEL_SEG_REG0_VALUE + 2,	/* 2 */
-  SEG_REG_INVALID, /* 3 */
-  SEG_REG_INVALID, /* 4 */
-  KERNEL_SEG_REG5_VALUE, /* 5 - I/O segment */
-  SEG_REG_INVALID, /* 6 */
-  SEG_REG_INVALID, /* 7 */
-  KERNEL_SEG_REG8_VALUE, /* 8-F are possible IO space */
-  KERNEL_SEG_REG9_VALUE,
-  KERNEL_SEG_REG10_VALUE,
-  KERNEL_SEG_REG11_VALUE,
-  KERNEL_SEG_REG12_VALUE,
-  KERNEL_SEG_REG13_VALUE,
-  KERNEL_SEG_REG14_VALUE, /* 14 - A/V video */
-  KERNEL_SEG_REG15_VALUE /* 15 - NuBus etc */
-};
 
 extern void thandler(void);     /* trap handler */
 extern void ihandler(void);     /* interrupt handler */
 extern void shandler(void);     /* syscall handler */
+extern void chandler(void);     /* system choke */
 extern void fpu_switch(void);   /* fp handler */
 extern void vec_switch(void);   /* vector handler */
 extern void atomic_switch_trap(void);   /* fast path atomic thread switch */
@@ -118,7 +98,8 @@ void (*exception_handlers[])(void) = {
 	ihandler,	/* Software  Signal processor (T_SIGP) */
 	thandler,	/* Software  Preemption (T_PREEMPT) */
 	ihandler,	/* Software  INVALID EXCEPTION (T_CSWITCH) */ 
-	ihandler	/* Software  Shutdown Context (T_SHUTDOWN) */
+	ihandler,	/* Software  Shutdown Context (T_SHUTDOWN) */
+	chandler	/* Software  System choke (crash) (T_CHOKE) */
 };
 
 int pc_trace_buf[1024] = {0};
@@ -142,14 +123,9 @@ void ppc_init(boot_args *args)
 	per_proc_info[0].cpu_flags = 0;
 	per_proc_info[0].istackptr = 0;	/* we're on the interrupt stack */
 	per_proc_info[0].intstack_top_ss = intstack_top_ss;
-#if	MACH_KDP || MACH_KDB
 	per_proc_info[0].debstackptr = debstackptr;
 	per_proc_info[0].debstack_top_ss = debstack_top_ss;
-#endif	/* MACH_KDP || MACH_KDB */
-	per_proc_info[0].get_interrupts_enabled =
-		fake_get_interrupts_enabled;
-	per_proc_info[0].set_interrupts_enabled =
-		fake_set_interrupts_enabled;
+	per_proc_info[0].interrupts_enabled = 0;
 	per_proc_info[0].active_kloaded = (unsigned int)
 		&active_kloaded[0];
 	per_proc_info[0].cpu_data = (unsigned int)

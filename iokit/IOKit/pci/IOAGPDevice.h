@@ -45,6 +45,7 @@ enum {
     kIOAGPSideBandAddresssing	= 0x00000200,
     kIOAGPEnable		= 0x00000100,
     kIOAGP4GbAddressing		= 0x00000020,
+    kIOAGPFastWrite		= 0x00000010,
     kIOAGP4xDataRate		= 0x00000004,
     kIOAGP2xDataRate		= 0x00000002,
     kIOAGP1xDataRate		= 0x00000001

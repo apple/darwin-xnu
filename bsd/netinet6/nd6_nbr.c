@@ -79,6 +79,7 @@
 struct dadq;
 static struct dadq *nd6_dad_find __P((struct ifaddr *));
 static void nd6_dad_timer __P((struct ifaddr *));
+static void nd6_dad_timer_funnel __P((struct ifaddr *));
 static void nd6_dad_ns_output __P((struct dadq *, struct ifaddr *));
 static void nd6_dad_ns_input __P((struct ifaddr *));
 static void nd6_dad_na_input __P((struct ifaddr *));
@@ -1071,7 +1072,7 @@ nd6_dad_start(ifa, tick)
 #if defined(__FreeBSD__) && __FreeBSD__ >= 3
 		dp->dad_timer =
 #endif
-		timeout((void (*) __P((void *)))nd6_dad_timer, (void *)ifa,
+		timeout((void (*) __P((void *)))nd6_dad_timer_funnel, (void *)ifa,
 			nd_ifinfo[ifa->ifa_ifp->if_index].retrans * hz / 1000);
 	} else {
 		int ntick;
@@ -1084,10 +1085,26 @@ nd6_dad_start(ifa, tick)
 #if defined(__FreeBSD__) && __FreeBSD__ >= 3
 		dp->dad_timer =
 #endif
-		timeout((void (*) __P((void *)))nd6_dad_timer, (void *)ifa,
+		timeout((void (*) __P((void *)))nd6_dad_timer_funnel, (void *)ifa,
 			ntick);
 	}
 }
+
+static void     
+nd6_dad_timer_funnel(ifa)
+	struct ifaddr *ifa;
+{
+                
+#ifdef __APPLE__
+        boolean_t       funnel_state;
+        funnel_state = thread_funnel_set(network_flock, TRUE);
+#endif	
+	nd6_dad_timer(ifa);
+#ifdef __APPLE__
+        (void) thread_funnel_set(network_flock, FALSE);
+#endif
+
+} 
 
 static void
 nd6_dad_timer(ifa)
@@ -1097,10 +1114,6 @@ nd6_dad_timer(ifa)
 	struct in6_ifaddr *ia = (struct in6_ifaddr *)ifa;
 	struct dadq *dp;
 
-#ifdef __APPLE__
-    	boolean_t   funnel_state;
-    	funnel_state = thread_set_funneled(TRUE);
-#endif
 #if __NetBSD__
 	s = splsoftnet();	/*XXX*/
 #else
@@ -1153,7 +1166,7 @@ nd6_dad_timer(ifa)
 #if defined(__FreeBSD__) && __FreeBSD__ >= 3
 		dp->dad_timer =
 #endif
-		timeout((void (*) __P((void *)))nd6_dad_timer, (void *)ifa,
+		timeout((void (*) __P((void *)))nd6_dad_timer_funnel, (void *)ifa,
 			nd_ifinfo[ifa->ifa_ifp->if_index].retrans * hz / 1000);
 	} else {
 		/*
@@ -1229,9 +1242,6 @@ nd6_dad_timer(ifa)
 
 done:
 	splx(s);
-#ifdef __APPLE__
-    	(void) thread_set_funneled(funnel_state);
-#endif
 }
 
 void
@@ -1256,7 +1266,7 @@ nd6_dad_duplicated(ifa)
 	ia->ia6_flags |= IN6_IFF_DUPLICATED;
 
 	/* We are done with DAD, with duplicated address found. (failure) */
-	untimeout((void (*) __P((void *)))nd6_dad_timer, (void *)ifa
+	untimeout((void (*) __P((void *)))nd6_dad_timer_funnel, (void *)ifa
 #if defined(__FreeBSD__) && __FreeBSD__ >= 3
 		, dp->dad_timer
 #endif

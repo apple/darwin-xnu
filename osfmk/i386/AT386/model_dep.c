@@ -188,18 +188,12 @@ i386_preinit()
 		}
 	}
 
-
 	bcopy((char *) KERNSTRUCT_ADDR, (char *) &kernBootStructData,
 					sizeof(kernBootStructData));
 
 	kernBootStruct = &kernBootStructData;
 
-	end = getlastaddr();
-	
-	for (i = 0; i < kernBootStruct->numBootDrivers; i++)
-		end += kernBootStruct->driverConfig[i].size;
-
-	end = round_page(end);
+    end = round_page( kernBootStruct->kaddr + kernBootStruct->ksize );
 
 	return	end;
 }
@@ -326,32 +320,28 @@ parse_arguments(void)
 
 	if (kern_args_start == 0)
 	    return;
-	while (p < endp) {
-	    if (*p++ != '-') {
-		while (*p++ != '\0')
-		    ;
-		continue;
-	    }
-	    while (ch = *p++) {
-		switch (ch) {
-		case 'h':
-		    halt_in_debugger = 1;
-		    break;
-		case 'm':	/* -m??:  memory size Mbytes*/
-		    mem_size = atoi_term(p, &p)*1024*1024;
-		    break;
-		case 'k':	/* -k??:  memory size Kbytes */
-		    mem_size = atoi_term(p, &p)*1024;
-		    break;
-		default:
-#if	NCPUS > 1 && AT386
-		    if (ch > '0' && ch <= '9')
-			wncpu = ch - '0';
-#endif	/* NCPUS > 1 && AT386 */
-		    break;
-		}
-	    }
+
+	/*
+	 * handle switches in exact format of  -h  or -m64
+	 */
+	while ( (p < endp) && (*p != '\0')) {
+	  if (*p++ != '-') 
+	    continue;
+	  switch (*p++) {
+	  case 'h':
+	    halt_in_debugger = 1;
+	    break;
+	  case 'm':
+	    mem_size = atoi_term(p,&p)*1024*1024;
+	    break;
+	  case 'k':
+	    mem_size = atoi_term(p,&p)*1024;
+	    break;
+	  default:
+	    break;
+	  }
 	}
+
 }
 
 const char *

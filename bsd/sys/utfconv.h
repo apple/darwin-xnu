@@ -29,7 +29,8 @@
  */
 #define	UTF_REVERSE_ENDIAN	0x01	/* reverse UCS-2 byte order */
 #define UTF_NO_NULL_TERM	0x02	/* do not add null termination */
-#define	UTF_DECOMPOSED		0x04	/* generate fully decompsed UCS-2 */
+#define	UTF_DECOMPOSED		0x04	/* generate fully decomposed UCS-2 */
+#define	UTF_PRECOMPOSED		0x08	/* generate precomposed UCS-2 */
 
 __BEGIN_DECLS
 size_t	utf8_encodelen __P((const u_int16_t *, size_t, u_int16_t, int));

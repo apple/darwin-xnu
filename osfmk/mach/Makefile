@@ -204,6 +204,7 @@ MIG_KUHDRS = \
 	clock_reply.h \
 	exc.h \
 	memory_object.h \
+	memory_object_control.h \
 	memory_object_default.h \
 	upl.h \
 	vm_map.h
@@ -212,6 +213,7 @@ MIG_KUSRC = \
 	clock_reply_user.c \
 	exc_user.c \
 	memory_object_user.c \
+	memory_object_control_user.c \
 	memory_object_default_user.c \
 	upl_user.c \
 	vm_map_user.c

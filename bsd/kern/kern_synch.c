@@ -101,20 +101,12 @@ _sleep_continue()
 	}
 
 	if ((error == EINTR) || (error == ERESTART)) {
-#ifdef BSD_USE_APC
-		thread_apc_set(th_act, bsd_ast);
-#else
-                thread_ast_set(th_act, AST_BSD);
-                ast_on(AST_BSD);
-#endif
+			thread_ast_set(th_act, AST_BSD);
+			ast_on(AST_BSD);
 	}
 	if (ut->uu_timo)
 		thread_cancel_timer();
 
-#if 0
-	/* We should never get here without funnel, so we should not grab again */
-	thread_funnel_set(kernel_flock, TRUE);
-#endif /* 0 */
 	unix_syscall_return((*ut->uu_continuation)(error));
 }
 
@@ -136,12 +128,13 @@ _sleep_continue()
 static __inline__
 #endif
 int
-_sleep(chan, pri, wmsg, timo, continuation)
+_sleep(chan, pri, wmsg, timo, continuation, preassert)
 	caddr_t chan;
 	int pri;
 	char *wmsg;
 	int timo;
 	int (*continuation)();
+	int preassert;
 {
 	register struct proc *p;
 	register thread_t thread = current_thread();
@@ -164,11 +157,15 @@ _sleep(chan, pri, wmsg, timo, continuation)
 #endif	
 	p->p_priority = pri & PRIMASK;
 		
-	if (chan)
-		assert_wait(chan, (catch) ? THREAD_ABORTSAFE : THREAD_UNINT);
+	if (!preassert) {
+		/* it is already pre asserted */
+		if (chan)
+			assert_wait(chan, (catch) ? THREAD_ABORTSAFE : THREAD_UNINT);
 		
+	}
 	if (timo)
 		thread_set_timer(timo, NSEC_PER_SEC / hz);
+
 	/*
 	 * We start our timeout
 	 * before calling CURSIG, as we could stop there, and a wakeup
@@ -272,12 +269,8 @@ _sleep(chan, pri, wmsg, timo, continuation)
 	}
 out:
 	if ((error == EINTR) || (error == ERESTART)) {
-#ifdef BSD_USE_APC
-		thread_apc_set(th_act, bsd_ast);
-#else
-                thread_ast_set(th_act, AST_BSD);
-                ast_on(AST_BSD);
-#endif
+		thread_ast_set(th_act, AST_BSD);
+		ast_on(AST_BSD);
 	}
 	if (timo)
 		thread_cancel_timer();
@@ -290,7 +283,7 @@ int sleep(chan, pri)
 	int pri;
 {
 
-	return (_sleep((caddr_t)chan, pri, (char *)NULL, 0, (void (*)())0 ));
+	return (_sleep((caddr_t)chan, pri, (char *)NULL, 0, (void (*)())0, 0));
 	
 }
 
@@ -300,7 +293,7 @@ int	tsleep(chan, pri, wmsg, timo)
 	char * wmsg;
 	int	timo;
 {			
-	return(_sleep((caddr_t)chan, pri, wmsg, timo, (void (*)())0 ));
+	return(_sleep((caddr_t)chan, pri, wmsg, timo, (void (*)())0, 0));
 }
 
 int	tsleep0(chan, pri, wmsg, timo, continuation)
@@ -311,9 +304,24 @@ int	tsleep0(chan, pri, wmsg, timo, continuation)
 	int (*continuation)();
 {			
 #if defined (__i386__)
-	return(_sleep((caddr_t)chan, pri, wmsg, timo, (void (*)())0 ));
+	return(_sleep((caddr_t)chan, pri, wmsg, timo, (void (*)())0, 0));
 #else
-	return(_sleep((caddr_t)chan, pri, wmsg, timo, continuation));
+	return(_sleep((caddr_t)chan, pri, wmsg, timo, continuation, 0));
+#endif
+}
+
+/* tsleeps without assertwait or thread block */
+int	tsleep1(chan, pri, wmsg, timo, continuation)
+	void *chan;
+	int pri;
+	char * wmsg;
+	int	timo;
+	int (*continuation)();
+{			
+#if defined (__i386__)
+	return(_sleep((caddr_t)chan, pri, wmsg, timo, (void (*)())0, 1));
+#else
+	return(_sleep((caddr_t)chan, pri, wmsg, timo, continuation, 1));
 #endif
 }
 
@@ -348,16 +356,5 @@ void
 resetpriority(p)
 	register struct proc *p;
 {
-	int newpri;
-#if FIXME
-	if (p->p_nice < 0)
-	    newpri = BASEPRI_USER +
-		(p->p_nice * (MAXPRI_USER - BASEPRI_USER)) / PRIO_MIN;
-	else
-	    newpri = BASEPRI_USER -
-		(p->p_nice * BASEPRI_USER) / PRIO_MAX;
-
-	(void)task_priority(p->task, newpri, TRUE);
-#endif /* FIXME */
+	(void)task_importance(p->task, -p->p_nice);
 }
-

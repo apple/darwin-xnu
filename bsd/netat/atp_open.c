@@ -107,6 +107,9 @@ void atp_init()
   if (!atp_inited) {
 	atp_inited = 1;
 	atp_used_list = 0;
+	atp_trans_abort.head = NULL;
+	atp_trans_abort.tail = NULL;
+	
 	for (i = 0; i < NATP_RCB; i++) {
 		atp_rcb_data[i].rc_list.next = atp_rcb_free_list;
 		atp_rcb_free_list = &atp_rcb_data[i];

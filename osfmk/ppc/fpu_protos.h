@@ -29,7 +29,7 @@
 
 #include <ppc/thread_act.h>
 
-extern void fpu_save(void);
+extern void fpu_save(thread_act_t act);
 extern void fpu_disable(void);
 
 #endif /* _PPC_FPU_PROTOS_H_ */

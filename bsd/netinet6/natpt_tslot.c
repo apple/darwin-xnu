@@ -713,7 +713,7 @@ _expireTSlot(void *ignored_arg)
     struct timeval	atv;
 #ifdef __APPLE__
     boolean_t   funnel_state;
-    funnel_state = thread_set_funneled(TRUE);
+    funnel_state = thread_funnel_set(network_flock, TRUE);
 #endif
 
     timeout(_expireTSlot, (caddr_t)0, tSlotTimer);
@@ -721,7 +721,7 @@ _expireTSlot(void *ignored_arg)
 
     _expireTSlotEntry(&atv);
 #ifdef __APPLE__
-    (void) thread_set_funneled(funnel_state);
+   (void) thread_funnel_set(network_flock, FALSE);
 #endif
 }
 

@@ -598,16 +598,16 @@ ffs_pageout(ap)
 
         if (vp->v_mount->mnt_flag & MNT_RDONLY) {
 		if (!nocommit)
-  			kernel_upl_abort_range(pl, pl_offset, size, 
-					       UPL_ABORT_FREE_ON_EMPTY);
+  			ubc_upl_abort_range(pl, pl_offset, size, 
+				UPL_ABORT_FREE_ON_EMPTY);
 		return (EROFS);
 	}
 	fs = ip->I_FS;
 
 	if (f_offset < 0 || f_offset >= ip->i_size) {
 	        if (!nocommit)
-		        kernel_upl_abort_range(pl, pl_offset, size, 
-					       UPL_ABORT_FREE_ON_EMPTY);
+		        ubc_upl_abort_range(pl, pl_offset, size, 
+				UPL_ABORT_FREE_ON_EMPTY);
 		return (EINVAL);
 	}
 
@@ -671,8 +671,8 @@ ffs_pageout(ap)
 		lupl_offset = size - save_size;
 		resid = round_page(save_size);
 		if (!nocommit)
-			kernel_upl_abort_range(pl, lupl_offset,
-					       resid, UPL_ABORT_FREE_ON_EMPTY);
+			ubc_upl_abort_range(pl, lupl_offset, resid,
+				UPL_ABORT_FREE_ON_EMPTY);
 		if(!error)
 			error= save_error;
 	}

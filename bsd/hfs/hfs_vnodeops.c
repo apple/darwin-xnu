@@ -179,6 +179,8 @@ extern void hfs_name_CatToMeta(CatalogNodeData *nodeData, struct hfsfilemeta *fm
 
 extern groupmember(gid_t gid, struct ucred *cred);
 
+extern void hfs_resolvelink(ExtendedVCB *vcb, CatalogNodeData *cndp);
+
 static int hfs_makenode( int mode,
 	dev_t rawdev, struct vnode *dvp, struct vnode **vpp,
 	struct componentname *cnp, struct proc *p);
@@ -484,6 +486,8 @@ struct vop_close_args /* {
 	off_t					leof;
 	u_long					blks, blocksize;
     int 					retval = E_NONE;
+    int						devBlockSize;
+    int						forceUpdate = 0;
 
 	DBG_FUNC_NAME("close");
 	DBG_VOP_LOCKS_DECL(1);
@@ -518,7 +522,7 @@ struct vop_close_args /* {
 		
 		vn_lock(vp, LK_EXCLUSIVE | LK_RETRY, p);
 		/*
-		 * Since we can contact switch in vn_lock our vnode
+		 * Since we can context switch in vn_lock our vnode
 		 * could get recycled (eg umount -f).  Double check
 		 * that its still ours.
 		 */
@@ -528,6 +532,26 @@ struct vop_close_args /* {
 			return(E_NONE);
 		}
 
+		/* Last chance to explicitly zero out the areas that are currently marked invalid: */
+		VOP_DEVBLOCKSIZE(hp->h_meta->h_devvp, &devBlockSize);
+		while (!CIRCLEQ_EMPTY(&hp->h_invalidranges)) {
+    		struct rl_entry *invalid_range = CIRCLEQ_FIRST(&hp->h_invalidranges);
+    		off_t start = invalid_range->rl_start;
+    		off_t end = invalid_range->rl_end;
+    		
+    		/* The range about to be written must be validated first, so that
+    		   VOP_CMAP() will return the appropriate mapping for the cluster code: */
+    		rl_remove(start, end, &hp->h_invalidranges);
+    		
+			retval = cluster_write(vp, (struct uio *) 0, fcb->fcbEOF, invalid_range->rl_end + 1, invalid_range->rl_start,
+			 (off_t)0, devBlockSize, IO_HEADZEROFILL | 0x8000);
+			 
+			 forceUpdate = 1;
+		};
+		/* Make sure the EOF gets written out at least once more
+		   now that all invalid ranges have been zero-filled and validated: */
+		if (forceUpdate) hp->h_nodeflags |= IN_MODIFIED;
+		
 		blocksize = HTOVCB(hp)->blockSize;
 		blks = leof / blocksize;
 		if (((off_t)blks * (off_t)blocksize) != leof)
@@ -540,6 +564,13 @@ struct vop_close_args /* {
 	 		retval = VOP_TRUNCATE(vp, leof, IO_NDELAY, ap->a_cred, p);
 		}
 		cluster_push(vp);
+		
+		/* If the VOP_TRUNCATE didn't happen to flush the vnode's information out to
+		   disk, force it to be updated now that all invalid ranges have been zero-filled
+		   and validated:
+		 */
+		if (hp->h_nodeflags & IN_MODIFIED) VOP_UPDATE(vp, &time, &time, 0);
+		
 		VOP_UNLOCK(vp, 0, p);
 	}
 
@@ -1276,12 +1307,6 @@ struct proc *a_p;
 
 	INIT_CATALOGDATA(&catInfo.nodeData, kCatNameNoCopyName);
 	catInfo.hint = kNoHint;
-    
-    /* lock catalog b-tree */
-    error = hfs_metafilelocking(VTOHFS(vp), kHFSCatalogFileID, LK_EXCLUSIVE, p);
-    if (error != E_NONE) {
-        goto FreeBuffer;
-    };
 
 	filename = H_NAME(hp);
 	pid = H_DIRID(hp);
@@ -1298,12 +1323,18 @@ struct proc *a_p;
 	}
 #endif
 
+	/* lock catalog b-tree */
+	error = hfs_metafilelocking(VTOHFS(vp), kHFSCatalogFileID, LK_EXCLUSIVE, p);
+	if (error != E_NONE)
+		goto ErrorExit;
 
 	error = hfs_getcatalog(VTOVCB(vp), pid, filename, -1, &catInfo);
-    if (error != E_NONE) {
-        DBG_ERR(("%s: Lookup failed on file '%s'\n", funcname,  filename));
-        goto ErrorExit;
-    };
+
+	/* unlock catalog b-tree */
+	(void) hfs_metafilelocking(VTOHFS(vp), kHFSCatalogFileID, LK_RELEASE, p);
+	if (error != E_NONE)
+		goto ErrorExit;
+
     H_HINT(hp) = catInfo.hint;						/* Remember the last valid hint */
 
     error = uiomove((caddr_t)attrbufptr, attrblocksize, ap->a_uio);
@@ -1339,9 +1370,13 @@ struct proc *a_p;
 			}
 			simple_unlock(&hp->h_meta->h_siblinglock);
 	
-			/* The only error that vget returns is when the vnode is going away, so ignore the vnode */
+			/* 
+			 * The only error that vget returns is when the vnode is going away,
+			 * so ignore the vnode
+			 */
 			if (sib_vp && vget(sib_vp, LK_EXCLUSIVE | LK_RETRY, p) == 0) {
-				if (VTOH(sib_vp)->h_nodeflags & (IN_ACCESS | IN_CHANGE | IN_UPDATE)) {
+				if ((sib_vp->v_tag == VT_HFS)
+					&& VTOH(sib_vp)->h_nodeflags & (IN_ACCESS | IN_CHANGE | IN_UPDATE)) {
 					if (alist->commonattr & ATTR_CMN_MODTIME)
 							VTOH(sib_vp)->h_nodeflags &= ~IN_UPDATE;
 					if (alist->commonattr & ATTR_CMN_CHGTIME)
@@ -1350,8 +1385,8 @@ struct proc *a_p;
 							VTOH(sib_vp)->h_nodeflags &= ~IN_ACCESS;
 				}
 				vput(sib_vp);
-			}		/* vget() */
-		}		/* h_use_count > 1 */
+			}
+		}
 	}
 
     /* save these in case hfs_chown() or hfs_chmod() fail */
@@ -1397,6 +1432,11 @@ struct proc *a_p;
     };
 	
 	
+	/* lock catalog b-tree */
+	error = hfs_metafilelocking(VTOHFS(vp), kHFSCatalogFileID, LK_EXCLUSIVE, p);
+	if (error != E_NONE)
+		goto ErrorExit;
+
 	/* Update Catalog Tree */
 	if (alist->volattr == 0) {
 		error = MacToVFSError( UpdateCatalogNode(HTOVCB(hp), pid, filename, H_HINT(hp), &catInfo.nodeData));
@@ -1407,36 +1447,46 @@ struct proc *a_p;
 			ExtendedVCB *vcb 	= VTOVCB(vp);
 			int			namelen = strlen(vcb->vcbVN);
 			
-	if (vcb->vcbVN[0] == 0) {
-	  /*
+		if (vcb->vcbVN[0] == 0) {
+			/*
 			 *	Ignore attempts to rename a volume to a zero-length name:
 			 *	restore the original name from the metadata.
-	   */
-	  copystr(H_NAME(hp), vcb->vcbVN, sizeof(vcb->vcbVN), NULL);
-	} else {
+			 */
+			copystr(H_NAME(hp), vcb->vcbVN, sizeof(vcb->vcbVN), NULL);
+		} else {
+			UInt32 tehint = 0;
+
+			/*
+			 * Force Carbon renames to have MacUnicode encoding
+			 */
+			if ((hp->h_nodeflags & IN_BYCNID) && (!ISSET(p->p_flag, P_TBE))) {
+				tehint = kTextEncodingMacUnicode;
+			}
+
 			error = MoveRenameCatalogNode(vcb, kRootParID, H_NAME(hp), H_HINT(hp), 
-					kRootParID, vcb->vcbVN, &H_HINT(hp));
-	  if (error) {
+					kRootParID, vcb->vcbVN, &H_HINT(hp), tehint);
+			if (error) {
 					VCB_LOCK(vcb);
 					copystr(H_NAME(hp), vcb->vcbVN, sizeof(vcb->vcbVN), NULL);	/* Restore the old name in the VCB */
 					vcb->vcbFlags |= 0xFF00;		// Mark the VCB dirty
 					VCB_UNLOCK(vcb);
-					goto ErrorExit;
-	  };
+					goto UnlockExit;
+			};
 		
-		hfs_set_metaname(vcb->vcbVN, hp->h_meta, HTOHFS(hp));
-		hp->h_nodeflags |= IN_CHANGE;
-		
+			hfs_set_metaname(vcb->vcbVN, hp->h_meta, HTOHFS(hp));
+			hp->h_nodeflags |= IN_CHANGE;
+				
 		}	 /* vcb->vcbVN[0] == 0 ... else ... */
 	} 	/* alist->volattr & ATTR_VOL_NAME */
 
+UnlockExit:
+	/* unlock catalog b-tree */
+	(void) hfs_metafilelocking(VTOHFS(vp), kHFSCatalogFileID, LK_RELEASE, p);
+
 ErrorExit:
-    /* unlock catalog b-tree */
-    (void) hfs_metafilelocking(VTOHFS(vp), kHFSCatalogFileID, LK_RELEASE, p);
 
 	CLEAN_CATALOGDATA(&catInfo.nodeData);
 
-FreeBuffer:
     if (attrbufptr) FREE(attrbufptr, M_TEMP);
 
     DBG_VOP_LOCKS_TEST(error);
@@ -2159,6 +2209,7 @@ struct vop_remove_args /* {
         struct timeval tv;
         int retval, use_count;
         int filebusy = 0;
+        int uncache = 0;
         DBG_FUNC_NAME("remove");
         DBG_VOP_LOCKS_DECL(2);
         DBG_VOP_PRINT_FUNCNAME();
@@ -2336,7 +2387,14 @@ hfs_nobusy2:
 
                 if ((ap->a_cnp->cn_flags & (HASBUF | SAVENAME)) == (HASBUF | SAVENAME))
                         FREE_ZONE(ap->a_cnp->cn_pnbuf, ap->a_cnp->cn_pnlen, M_NAMEI);
-
+				/*
+				 * This is a deleted file no new clients
+				 * would be able to look it up. Maked the VM object
+				 * not cachable so that it dies as soon as the last
+				 * mapping disappears. This will reclaim the disk
+				 * space as soon as possible.
+				 */
+				uncache = 1;
                 goto out2;	/* link deleted, all done */
         }
 #endif
@@ -2364,6 +2422,14 @@ hfs_nobusy2:
                 H_DIRID(hp) = hfsmp->hfs_private_metadata_dir;
                 hfs_set_metaname(nodeName, hp->h_meta, HTOHFS(hp));
 
+				/*
+				 * This is an open deleted file no new clients
+				 * would be able to look it up. Maked the VM object
+				 * not cachable so that it dies as soon as the last
+				 * mapping disappears. This will reclaim the disk
+				 * space as soon as possible.
+				 */
+				uncache = 1;
                 goto out2;	/* all done, unlock the catalog */
         }
 
@@ -2409,37 +2475,27 @@ hfs_nobusy2:
 
 	VTOH(dvp)->h_nodeflags |= IN_CHANGE | IN_UPDATE;
 
-	if (dvp == vp) {
-                vrele(vp);
-        } else {
-                vput(vp);
-        };
-
-	vput(dvp);
-	DBG_VOP_LOCKS_TEST(retval);
-
-	if (UBCINFOEXISTS(vp)) {
-                (void) ubc_uncache(vp);
-                ubc_release(vp);
-                /* WARNING vp may not be valid after this */
-        }
-	return (retval);
+	uncache = 1;
+	goto done;
 
 out2:
 	(void) hfs_metafilelocking(hfsmp, kHFSCatalogFileID, LK_RELEASE, p);
 
-out:;
+out:
 
 	if (! retval)
                 VTOH(dvp)->h_nodeflags |= IN_CHANGE | IN_UPDATE;
 
-	if (dvp == vp) {
-                vrele(vp);
-        } else {
-                vput(vp);
-        };
+done:
+	if (dvp != vp)
+		VOP_UNLOCK(vp, 0, p);
 
+	if (uncache)
+		ubc_uncache(vp);
+
+	vrele(vp);
 	vput(dvp);
+
 	DBG_VOP_LOCKS_TEST(retval);
 	return (retval);
 }
@@ -2498,6 +2554,7 @@ struct vop_rename_args  /* {
 	int						retval = 0;
 	struct timeval			tv;
 	struct hfsCatalogInfo 	catInfo;
+	u_int32_t tehint = 0;
 	DBG_VOP_LOCKS_DECL(4);
 
     DBG_FUNC_NAME("rename");DBG_VOP_PRINT_FUNCNAME();DBG_VOP_CONT(("\n"));
@@ -2524,6 +2581,15 @@ struct vop_rename_args  /* {
 	DBG_ASSERT((ap->a_fdvp->v_type == VDIR) && (ap->a_tdvp->v_type == VDIR));
 	target_hp = targetPar_hp = source_hp = sourcePar_hp = 0;
 
+    /* If fvp is the same as tvp...then we are just changing case, ignore target_vp */
+    /*
+     * This must be done now, since the value of target_vp is used to 
+     * determine wether to unlock it (for instance, goto abortit).
+     * In this case, target_vp comes in unlocked
+     */
+    if (source_vp == target_vp)
+        target_vp = NULL;
+        
 	/*
 	 * Check for cross-device rename.
 	 */
@@ -2540,6 +2606,13 @@ struct vop_rename_args  /* {
 					  (VTOH(targetPar_vp)->h_meta->h_pflags & APPEND))) {
 		retval = EPERM;
 		goto abortit;
+	}
+
+	/*
+	 * Force Carbon renames to have MacUnicode encoding
+	 */
+	if ((VTOH(targetPar_vp)->h_nodeflags & IN_BYCNID) && (!ISSET(p->p_flag, P_TBE))) {
+		tehint = kTextEncodingMacUnicode;
 	}
 
 	if ((retval = vn_lock(source_vp, LK_EXCLUSIVE, p)))
@@ -2664,10 +2737,13 @@ struct vop_rename_args  /* {
 			VOP_UNLOCK(sourcePar_vp, 0, p);
 		 goto bad;
  	};
-	
+
 	/* use source_cnp instead of H_NAME(source_hp) in case source is a hard link */
-	retval = hfsMoveRename( HTOVCB(source_hp), H_DIRID(source_hp), source_cnp->cn_nameptr,
-							H_FILEID(VTOH(targetPar_vp)), target_cnp->cn_nameptr, &H_HINT(source_hp));
+    retval = MoveRenameCatalogNode(HTOVCB(source_hp), H_DIRID(source_hp),
+                                   source_cnp->cn_nameptr, H_HINT(source_hp),
+                                   H_FILEID(VTOH(targetPar_vp)),
+                                   target_cnp->cn_nameptr, &H_HINT(source_hp), tehint);
+    retval = MacToVFSError(retval);
 
 	if (retval == 0) {	
 	    /* Look up the catalog entry just renamed since it might have been auto-decomposed */
@@ -2942,21 +3018,22 @@ hfs_symlink(ap)
     register struct vnode *vp, **vpp = ap->a_vpp;
 	struct proc *p = current_proc();
 	struct hfsnode *hp;
-	u_int32_t dfltClump;
     int len, retval;
-    DBG_FUNC_NAME("symlink");
-    DBG_VOP_LOCKS_DECL(2);
-    DBG_VOP_PRINT_FUNCNAME();
-    DBG_VOP_LOCKS_INIT(0,ap->a_dvp, VOPDBG_LOCKED, VOPDBG_UNLOCKED, VOPDBG_UNLOCKED, VOPDBG_POS);
-    DBG_VOP_LOCKS_INIT(1,*ap->a_vpp, VOPDBG_IGNORE, VOPDBG_UNLOCKED, VOPDBG_IGNORE, VOPDBG_POS);
+	struct buf *bp = NULL;
 
+	/* HFS standard disks don't support symbolic links */
     if (VTOVCB(ap->a_dvp)->vcbSigWord != kHFSPlusSigWord) {
     	VOP_ABORTOP(ap->a_dvp, ap->a_cnp);
         vput(ap->a_dvp);
-        DBG_VOP((" ...sorry HFS disks don't support symbolic links.\n"));
-        DBG_VOP_LOCKS_TEST(EOPNOTSUPP);
         return (EOPNOTSUPP);
     }
+
+	/* Check for empty target name */
+	if (ap->a_target[0] == 0) {
+		VOP_ABORTOP(ap->a_dvp, ap->a_cnp);
+		vput(ap->a_dvp);
+		return (EINVAL);
+	}
 
 	/* Create the vnode */
 	retval = hfs_makenode(IFLNK | ap->a_vap->va_mode, 0, ap->a_dvp,
@@ -2964,25 +3041,29 @@ hfs_symlink(ap)
     DBG_VOP_UPDATE_VP(1, *ap->a_vpp);
 
     if (retval != E_NONE) {
-        DBG_VOP_LOCKS_TEST(retval);
         return (retval);
 	}
-
 
     vp = *vpp;
     len = strlen(ap->a_target);
 	hp = VTOH(vp);
-	dfltClump = hp->fcbClmpSize;
-	/* make clump size minimal */
 	hp->fcbClmpSize = VTOVCB(vp)->blockSize;
-    retval = vn_rdwr(UIO_WRITE, vp, ap->a_target, len, (off_t)0,
-                     UIO_SYSSPACE, IO_NODELOCKED, ap->a_cnp->cn_cred, (int *)0,
-                     (struct proc *)0);
-	hp->fcbClmpSize = dfltClump;
 
+	/* Allocate space for the link */
+	retval = VOP_TRUNCATE(vp, len, IO_NOZEROFILL,
+	                      ap->a_cnp->cn_cred, ap->a_cnp->cn_proc);
+	if (retval)
+		goto out;
 
+	/* Write the link to disk */
+	bp = getblk(vp, 0, roundup((int)hp->fcbEOF, kHFSBlockSize), 0, 0, BLK_META);
+	bzero(bp->b_data, bp->b_bufsize);
+	bcopy(ap->a_target, bp->b_data, len);
+	bp->b_flags |= B_DIRTY;
+	bawrite(bp);
+
+out:
     vput(vp);
-    DBG_VOP_LOCKS_TEST(retval);
     return (retval);
 }
 
@@ -3429,9 +3510,7 @@ struct vop_readdirattr_args /* {
     u_long		currattrbufsize;
     void 		*attrbufptr = NULL;
     void 		*attrptr;
-    void 		*varptr;
-    struct vnode *entryvnode;
- 
+    void 		*varptr; 
 
     *(ap->a_actualcount) = 0;
     *(ap->a_eofflag) = 0;
@@ -3477,9 +3556,6 @@ struct vop_readdirattr_args /* {
     index = (uio->uio_offset / sizeof(struct dirent)) + 1;
 	INIT_CATALOGDATA(&catInfo.nodeData, 0);
 
-    /* Lock catalog b-tree */  
-    if ((retval = hfs_metafilelocking(VTOHFS(vp), kHFSCatalogFileID, LK_SHARED, proc)) != E_NONE)
-        goto exit;
 
     /* HFS Catalog does not have a bulk directory enumeration call. Do it one at
      * time, using hints. GetCatalogOffspring takes care of hfsplus and name issues
@@ -3492,7 +3568,20 @@ struct vop_readdirattr_args /* {
          * Thus fixedblocksize is too large in some cases.Also, the variable
          * part (like name)  could be between fixedblocksize and the max.
         */
-        OSErr result = GetCatalogOffspring(vcb, dirID, index, &catInfo.nodeData, NULL, NULL);
+	OSErr result;
+
+        /* Lock catalog b-tree */  
+        if ((retval = hfs_metafilelocking(VTOHFS(vp), kHFSCatalogFileID, LK_SHARED, proc)) != E_NONE)
+            goto exit;
+
+		catInfo.nodeData.cnd_iNodeNumCopy = 0;
+		result = GetCatalogOffspring(vcb, dirID, index, &catInfo.nodeData, NULL, NULL);
+		if (result == 0)
+			hfs_resolvelink(vcb, &catInfo.nodeData);
+ 
+       /* Unlock catalog b-tree, unconditionally . Ties up the everything during enumeration */
+        (void) hfs_metafilelocking( VTOHFS(ap->a_vp), kHFSCatalogFileID, LK_RELEASE, proc );
+ 
         if (result != noErr) {
             if (result == cmNotFound) {
                 *(ap->a_eofflag) = TRUE;
@@ -3508,26 +3597,64 @@ struct vop_readdirattr_args /* {
 	    catInfo.nodeData.cnd_type == kCatalogFolderNode) {
 
 	    ++index;
+	     CLEAN_CATALOGDATA(&catInfo.nodeData);
 	     continue;
 	}
 
         *((u_long *)attrptr)++ = 0; /* move it past length */
 
-       	if (ap->a_options & FSOPT_NOINMEMUPDATE) {
-	  /* vp okay to use instead of root vp */
-	  PackCatalogInfoAttributeBlock(alist, vp, &catInfo, &attrptr, &varptr);
-	} else {
-	  /* Check to see if there's a vnode for this item in the cache: */
-	  entryvnode = hfs_vhashget(H_DEV(VTOH(vp)), catInfo.nodeData.cnd_nodeID, kDefault);
-	  if (entryvnode != NULL) {
-	    PackAttributeBlock(alist, entryvnode, &catInfo, &attrptr, &varptr);
-	    vput(entryvnode);
-	  } else {
-	    /* vp okay to use instead of root vp */
-	    PackCatalogInfoAttributeBlock(alist, vp, &catInfo, &attrptr, &varptr);
-	  };
-	};
-	currattrbufsize = *((u_long *)attrbufptr) = ((char *)varptr - (char *)attrbufptr);
+		/*
+		 * Don't use data from cached vnodes when FSOPT_NOINMEMUPDATE
+		 * option is active or if this entry is a hard link.
+		 */
+		if ((ap->a_options & FSOPT_NOINMEMUPDATE)
+			|| (catInfo.nodeData.cnd_iNodeNumCopy != 0)) {
+			/* vp okay to use instead of root vp */
+			PackCatalogInfoAttributeBlock(alist, vp, &catInfo, &attrptr, &varptr);
+		} else {
+			struct vnode *entry_vp = NULL;
+			struct vnode *rsrc_vp = NULL;
+			int nodetype;
+			UInt32 nodeid;
+
+			/*
+			 * Flush out any in-memory state to the catalog record.
+			 *
+			 * In the HFS locking hierarchy, the data fork vnode must
+			 * be acquired before the resource fork vnode.
+			 */
+			nodeid = catInfo.nodeData.cnd_nodeID;
+			if (catInfo.nodeData.cnd_type == kCatalogFolderNode)
+				nodetype = kDirectory;
+			else
+				nodetype = kDataFork;
+	
+			/* Check for this entry's cached vnode: */
+			entry_vp = hfs_vhashget(H_DEV(VTOH(vp)), nodeid, nodetype);
+
+			/* Also check for a cached resource fork vnode: */
+			if (nodetype == kDataFork) {
+				rsrc_vp = hfs_vhashget(H_DEV(VTOH(vp)), nodeid, kRsrcFork);
+				if ((rsrc_vp != NULL)
+					&& (VTOH(rsrc_vp)->h_nodeflags & (IN_ACCESS | IN_CHANGE | IN_MODIFIED | IN_UPDATE))) {
+						/* Pick up resource fork info */
+						CopyVNodeToCatalogNode(rsrc_vp, &catInfo.nodeData);
+				}
+			}
+			
+			if (entry_vp != NULL)
+				PackAttributeBlock(alist, entry_vp, &catInfo, &attrptr, &varptr);
+			else if (rsrc_vp != NULL)
+				PackAttributeBlock(alist, rsrc_vp, &catInfo, &attrptr, &varptr);
+			else
+				PackCatalogInfoAttributeBlock(alist, vp, &catInfo, &attrptr, &varptr);
+			
+			if (rsrc_vp)
+				vput(rsrc_vp);
+			if (entry_vp)
+				vput(entry_vp);
+		}
+		currattrbufsize = *((u_long *)attrbufptr) = ((char *)varptr - (char *)attrbufptr);
 		
         /* now check if we can't fit in the buffer space remaining */
         if (currattrbufsize > uio->uio_resid) 
@@ -3542,10 +3669,10 @@ struct vop_readdirattr_args /* {
 		    *ap->a_actualcount += 1;
 		    maxcount--;
 		}
+    /* Clean for the next loop */
+	CLEAN_CATALOGDATA(&catInfo.nodeData);
     };
     *ap->a_newstate = VTOH(vp)->h_meta->h_mtime;/* before we unlock, know the mod date */
-   /* Unlock catalog b-tree, finally. Ties up the everything during enumeration */
-    (void) hfs_metafilelocking( VTOHFS(ap->a_vp), kHFSCatalogFileID, LK_RELEASE, proc );
     
 	CLEAN_CATALOGDATA(&catInfo.nodeData);
 
@@ -3600,20 +3727,48 @@ struct uio *a_uio;
 struct ucred *a_cred;
 } */ *ap;
 {
-    int retval;
-    DBG_FUNC_NAME("readlink");
-    DBG_VOP_LOCKS_DECL(1);
-    DBG_VOP_PRINT_FUNCNAME();
-    DBG_VOP_PRINT_VNODE_INFO(ap->a_vp);DBG_VOP_CONT(("\n"));
+	int retval;
+	struct vnode *vp = ap->a_vp;
+	struct hfsnode *hp = VTOH(vp);
 
-    DBG_VOP_LOCKS_INIT(0,ap->a_vp, VOPDBG_LOCKED, VOPDBG_LOCKED, VOPDBG_LOCKED, VOPDBG_POS);
-    retval = VOP_READ(ap->a_vp, ap->a_uio, 0, ap->a_cred);
-    /* clear IN_ACCESS to prevent needless update of symlink vnode */
-    VTOH(ap->a_vp)->h_nodeflags &= ~IN_ACCESS;
+	if (vp->v_type != VLNK)
+		return (EINVAL);
+    
+    /* Zero length sym links are not allowed */
+    if (hp->fcbEOF == 0) {
+        VTOVCB(vp)->vcbFlags |= kHFS_DamagedVolume;
+        return (EINVAL);
+    }
+    
+	/* Cache the path so we don't waste buffer cache resources */
+	if (hp->h_symlinkptr == NULL) {
+		struct buf *bp = NULL;
 
-    DBG_VOP_LOCKS_TEST(retval);
-    return (retval);
+		if (H_ISBIGLINK(hp))
+			MALLOC(hp->h_symlinkptr, char *, hp->fcbEOF, M_TEMP, M_WAITOK);
 
+		retval = meta_bread(vp, 0, roundup((int)hp->fcbEOF, kHFSBlockSize), ap->a_cred, &bp);
+		if (retval) {
+			if (bp)
+				brelse(bp);
+			if (hp->h_symlinkptr) {
+				FREE(hp->h_symlinkptr, M_TEMP);
+				hp->h_symlinkptr = NULL;
+			}
+			return (retval);
+		}
+		
+		bcopy(bp->b_data, H_SYMLINK(hp), (size_t)hp->fcbEOF);
+
+		if (bp) {
+			bp->b_flags |= B_INVAL;		/* data no longer needed */
+			brelse(bp);
+		}
+	}
+
+	retval = uiomove((caddr_t)H_SYMLINK(hp), (int)hp->fcbEOF, ap->a_uio);
+
+	return (retval);
 }
 
 
@@ -3845,7 +4000,13 @@ struct vop_reclaim_args /* {
 	    }
 	else
 		DBG_ASSERT(hp->h_meta->h_usecount == 1);
-   
+
+	/* Dump cached symlink data */
+	if ((vp->v_type == VLNK) && (hp->h_symlinkptr != NULL)) {
+			if (H_ISBIGLINK(hp))
+				FREE(hp->h_symlinkptr, M_TEMP);
+			hp->h_symlinkptr = NULL;
+	}
 
 	/*
 	 * Purge old data structures associated with the inode.
@@ -3899,6 +4060,9 @@ struct vop_lock_args /* {
 		goto Err_Exit;
 	};
 
+	if (vp->v_type == VDIR)
+		hp->h_nodeflags &= ~IN_BYCNID;
+
 Err_Exit:;
 	DBG_ASSERT(*((int*)&vp->v_interlock) == 0);
 	DBG_VOP_LOCKS_TEST(retval);
@@ -3933,6 +4097,8 @@ struct vop_unlock_args /* {
 	DBG_VOP_PRINT_VNODE_INFO(vp);DBG_VOP_CONT((" flags = 0x%08X.\n", ap->a_flags));
 	DBG_VOP_LOCKS_INIT(0,vp, VOPDBG_LOCKED, VOPDBG_UNLOCKED, VOPDBG_LOCKED, VOPDBG_ZERO);
 
+	if (vp->v_type == VDIR)
+		hp->h_nodeflags &= ~IN_BYCNID;
 
 	DBG_ASSERT((ap->a_flags & (LK_EXCLUSIVE|LK_SHARED)) == 0);
 	retval = lockmgr(&hp->h_lock, ap->a_flags | LK_RELEASE, &vp->v_interlock, ap->a_p);
@@ -4054,6 +4220,15 @@ struct vop_pathconf_args /* {
             break;
         case _PC_NO_TRUNC:
             *ap->a_retval = 0;
+            break;
+        case _PC_NAME_CHARS_MAX:
+            *ap->a_retval = kHFSPlusMaxFileNameChars;
+            break;
+        case _PC_CASE_SENSITIVE:
+            *ap->a_retval = 0;
+            break;
+        case _PC_CASE_PRESERVING:
+            *ap->a_retval = 1;
             break;
         default:
             retval = EINVAL;
@@ -4427,6 +4602,7 @@ hfs_makenode(mode, rawdev, dvp, vpp, cnp, p)
     UInt8					forkType;
     int 					retval;
 	int hasmetalock = 0;
+	u_int32_t tehint = 0;
     DBG_FUNC_NAME("makenode");
 
     parhp	= VTOH(dvp);
@@ -4449,8 +4625,15 @@ hfs_makenode(mode, rawdev, dvp, vpp, cnp, p)
 	else
 		hasmetalock = 1;
 
+	/*
+	 * Force Carbon creates to have MacUnicode encoding
+	 */
+	if ((parhp->h_nodeflags & IN_BYCNID) && (!ISSET(p->p_flag, P_TBE))) {
+		tehint = kTextEncodingMacUnicode;
+	}
+
     /* Create the Catalog B*-Tree entry */
-    retval = hfsCreate(vcb, H_FILEID(parhp), cnp->cn_nameptr, mode);
+    retval = hfsCreate(vcb, H_FILEID(parhp), cnp->cn_nameptr, mode, tehint);
     if (retval != E_NONE) {
         DBG_ERR(("%s: hfsCreate FAILED: %s, %s\n", funcname, cnp->cn_nameptr, H_NAME(parhp)));
         goto bad1;

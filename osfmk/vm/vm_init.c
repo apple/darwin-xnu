@@ -109,6 +109,8 @@ vm_mem_bootstrap(void)
 	vm_fault_init();
 	vm_page_module_init();
 	memory_manager_default_init();
+	memory_object_control_bootstrap();
+	device_pager_bootstrap();
 }
 
 void

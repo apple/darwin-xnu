@@ -179,6 +179,20 @@ struct if_proto *dlttoproto(dl_tag)
 }
 
 
+static int dlil_ifp_proto_count(struct ifnet * ifp) 
+{
+    int				count = 0;
+    struct if_proto *		proto;
+    struct dlil_proto_head *	tmp;
+
+    tmp = (struct dlil_proto_head *) &ifp->proto_head;
+
+    TAILQ_FOREACH(proto, tmp, next)
+	count++;
+
+    return count;
+}
+
 u_long	ifptodlt(struct ifnet *ifp, u_long proto_family)
 {
     struct if_proto *proto;
@@ -186,9 +200,8 @@ u_long	ifptodlt(struct ifnet *ifp, u_long proto_family)
 
 
     TAILQ_FOREACH(proto, tmp, next)
-	if (proto->ifp == ifp)
-	    if (proto->protocol_family == proto_family)
-		return proto->dl_tag;
+	if (proto->protocol_family == proto_family)
+	    return proto->dl_tag;
 
     return 0;
 }
@@ -230,6 +243,40 @@ int dlil_get_next_dl_tag(u_long current_tag, struct dl_tag_attr_str *next)
 
     return ENOENT;
 } 
+
+void dlil_post_msg(struct ifnet *ifp, u_long event_subclass, u_long event_code, 
+		   struct net_event_data *event_data, u_long event_data_len) 
+{
+    struct net_event_data  	ev_data;
+    struct kev_msg  		ev_msg;
+
+    /* 
+     * a net event always start with a net_event_data structure
+     * but the caller can generate a simple net event or
+     * provide a longer event structure to post
+     */
+    
+    ev_msg.vendor_code    = KEV_VENDOR_APPLE;
+    ev_msg.kev_class      = KEV_NETWORK_CLASS;
+    ev_msg.kev_subclass   = event_subclass;
+    ev_msg.event_code 	  = event_code;    
+    
+    if (event_data == 0) {
+        event_data = &ev_data;
+        event_data_len = sizeof(struct net_event_data);
+    }
+    
+    strncpy(&event_data->if_name[0], ifp->if_name, IFNAMSIZ);
+    event_data->if_family = ifp->if_family;
+    event_data->if_unit   = (unsigned long) ifp->if_unit;
+
+    ev_msg.dv[0].data_length = event_data_len;
+    ev_msg.dv[0].data_ptr    = event_data;	
+    ev_msg.dv[1].data_length = 0;
+
+    kev_post_msg(&ev_msg);
+}
+
 
 
 void
@@ -283,6 +330,9 @@ int   dlil_attach_interface_filter(struct ifnet *ifp,
 
 
     MALLOC(tmp_ptr, struct dlil_filterq_entry *, sizeof(*tmp_ptr), M_NKE, M_WAITOK);
+    if (tmp_ptr == NULL)
+	return (ENOBUFS);
+
     bcopy((caddr_t) if_filter, (caddr_t) &tmp_ptr->variants.if_filter, 
 	  sizeof(struct dlil_if_flt_str));
 
@@ -340,6 +390,9 @@ int   dlil_attach_protocol_filter(u_long			 dl_tag,
 	return ENOENT;
 
     MALLOC(tmp_ptr, struct dlil_filterq_entry *, sizeof(*tmp_ptr), M_NKE, M_WAITOK);
+    if (tmp_ptr == NULL)
+	return (ENOBUFS);
+
     bcopy((caddr_t) pr_filter, (caddr_t) &tmp_ptr->variants.pr_filter, 
 	  sizeof(struct dlil_pr_flt_str));
 
@@ -429,14 +482,14 @@ dlil_input_thread_continue(void)
         struct mbuf *m, *m_loop;
 	int expand_mcl;
 
-        simple_lock(&dlil_input_lock);
+        usimple_lock(&dlil_input_lock);
         m = dlil_input_mbuf_head;
         dlil_input_mbuf_head = NULL;
         dlil_input_mbuf_tail = NULL;
         m_loop = dlil_input_loop_head;
         dlil_input_loop_head = NULL;
         dlil_input_loop_tail = NULL;
-        simple_unlock(&dlil_input_lock);
+        usimple_unlock(&dlil_input_lock);
 	
 	MBUF_LOCK();
 	expand_mcl = dlil_expand_mcl;
@@ -445,7 +498,7 @@ dlil_input_thread_continue(void)
 	if (expand_mcl) {
 		caddr_t	p;
 		MCLALLOC(p, M_WAIT);
-		MCLFREE(p);
+		if (p) MCLFREE(p);
 	}
 
         /*
@@ -521,7 +574,7 @@ dlil_input(struct ifnet  *ifp, struct mbuf *m_head, struct mbuf *m_tail)
      * input queue
      */
   
-    simple_lock(&dlil_input_lock);
+    usimple_lock(&dlil_input_lock);
     if (ifp->if_type != IFT_LOOP) {
         if (dlil_input_mbuf_head == NULL)
             dlil_input_mbuf_head = m_head;
@@ -535,7 +588,7 @@ dlil_input(struct ifnet  *ifp, struct mbuf *m_head, struct mbuf *m_tail)
             dlil_input_loop_tail->m_nextpkt = m_head;
         dlil_input_loop_tail = m_tail ? m_tail : m_head;
     }   
-    simple_unlock(&dlil_input_lock);
+    usimple_unlock(&dlil_input_lock);
 
     wakeup((caddr_t)&dlil_input_thread_wakeup);
          
@@ -1080,6 +1133,7 @@ dlil_attach_protocol(struct dlil_proto_reg_str	 *proto,
     struct if_family_str *if_family;
     int		     error;
     struct dlil_proto_head  *tmp;
+    struct kev_dl_proto_data	ev_pr_data;
     int	 s;
     boolean_t funnel_state;
 
@@ -1170,7 +1224,6 @@ dlil_attach_protocol(struct dlil_proto_reg_str	 *proto,
 	thread_funnel_set(network_flock, funnel_state);
 	return error;
     }
-    
 
     /*
      * Add to if_proto list for this interface
@@ -1181,6 +1234,13 @@ dlil_attach_protocol(struct dlil_proto_reg_str	 *proto,
     ifp->refcnt++;
     if (ifproto->dl_offer)
 	ifp->offercnt++;
+
+    /* the reserved field carries the number of protocol still attached (subject to change) */
+    ev_pr_data.proto_family = proto->protocol_family;
+    ev_pr_data.proto_remaining_count = dlil_ifp_proto_count(ifp);
+    dlil_post_msg(ifp, KEV_DL_SUBCLASS, KEV_DL_PROTO_ATTACHED, 
+		  (struct net_event_data *)&ev_pr_data, 
+		  sizeof(struct kev_dl_proto_data));
 
     splx(s);
     thread_funnel_set(network_flock, funnel_state);
@@ -1200,8 +1260,7 @@ dlil_detach_protocol(u_long	dl_tag)
     struct dlil_filterq_entry *filter;
     int s, retval;
     struct dlil_filterq_head *fhead;
-    struct kev_msg  ev_msg;
-    struct net_event_data  ev_data;
+    struct kev_dl_proto_data	ev_pr_data;
     boolean_t funnel_state;
 
 
@@ -1246,12 +1305,22 @@ dlil_detach_protocol(u_long	dl_tag)
     if (proto->dl_offer)
 	ifp->offercnt--;
 
+    if (ifp->if_data.default_proto == dl_tag)
+	ifp->if_data.default_proto = 0;
     dl_tag_array[dl_tag].ifp = 0;
-
+	
+    /* the reserved field carries the number of protocol still attached (subject to change) */
+    ev_pr_data.proto_family   = proto->protocol_family;
     TAILQ_REMOVE(tmp, proto, next);
     FREE(proto, M_IFADDR);
 
-    if (--ifp->refcnt == 0) {
+    ifp->refcnt--;
+    ev_pr_data.proto_remaining_count = dlil_ifp_proto_count(ifp);
+    dlil_post_msg(ifp, KEV_DL_SUBCLASS, KEV_DL_PROTO_DETACHED, 
+		  (struct net_event_data *)&ev_pr_data, 
+		  sizeof(struct kev_dl_proto_data));
+
+    if (ifp->refcnt == 0 && (ifp->if_eflags & IFEF_DETACH_DISABLED) == 0) {
 	if (ifp->if_flags & IFF_UP) 
 	    printf("WARNING - dlil_detach_protocol - ifp refcnt 0, but IF still up\n");
 
@@ -1285,22 +1354,9 @@ dlil_detach_protocol(u_long	dl_tag)
 	    }
 	}
 	
+        dlil_post_msg(ifp, KEV_DL_SUBCLASS, KEV_DL_IF_DETACHED, 0, 0);
+
 	(*ifp->if_free)(ifp);
-
-	ev_msg.vendor_code    = KEV_VENDOR_APPLE;
-	ev_msg.kev_class      = KEV_NETWORK_CLASS;
-	ev_msg.kev_subclass   = KEV_DL_SUBCLASS;
-	
-	ev_msg.event_code = KEV_DL_IF_DETACHED;
-	strncpy(&ev_data.if_name[0], ifp->if_name, IFNAMSIZ);
-	ev_data.if_family = ifp->if_family;
-	ev_data.if_unit   = (unsigned long) ifp->if_unit;
-
-	ev_msg.dv[0].data_length = sizeof(struct net_event_data);
-	ev_msg.dv[0].data_ptr    = &ev_data;
-	ev_msg.dv[1].data_length = 0;
-
-	kev_post_msg(&ev_msg);
     }
 
     splx(s);
@@ -1320,8 +1376,6 @@ dlil_if_attach(struct ifnet	*ifp)
     struct dlil_proto_head  *tmp;
     int			    stat;
     int s;
-    struct kev_msg          ev_msg;
-    struct net_event_data   ev_data;
     boolean_t funnel_state;
 
     funnel_state = thread_funnel_set(network_flock, TRUE);
@@ -1369,21 +1423,7 @@ dlil_if_attach(struct ifnet	*ifp)
     old_if_attach(ifp);
     if_family->refcnt++;
 
-    ev_msg.vendor_code    = KEV_VENDOR_APPLE;
-    ev_msg.kev_class      = KEV_NETWORK_CLASS;
-    ev_msg.kev_subclass   = KEV_DL_SUBCLASS;
-	
-    ev_msg.event_code = KEV_DL_IF_ATTACHED;
-    strncpy(&ev_data.if_name[0], ifp->if_name, IFNAMSIZ);
-    ev_data.if_family = ifp->if_family;
-    ev_data.if_unit   = (unsigned long) ifp->if_unit;
-    
-    ev_msg.dv[0].data_length = sizeof(struct net_event_data);
-    ev_msg.dv[0].data_ptr    = &ev_data;
-
-    ev_msg.dv[1].data_length = 0;
-
-    kev_post_msg(&ev_msg);
+    dlil_post_msg(ifp, KEV_DL_SUBCLASS, KEV_DL_IF_ATTACHED, 0, 0);
 
     splx(s);
     thread_funnel_set(network_flock, funnel_state);
@@ -1400,7 +1440,6 @@ dlil_if_detach(struct ifnet *ifp)
     struct dlil_filterq_head *fhead = (struct dlil_filterq_head *) &ifp->if_flt_head;
     int s;
     struct kev_msg   ev_msg;
-    struct net_event_data  ev_data;
     boolean_t funnel_state;
 
     funnel_state = thread_funnel_set(network_flock, TRUE);
@@ -1421,7 +1460,9 @@ dlil_if_detach(struct ifnet *ifp)
     while (if_filter = TAILQ_FIRST(fhead)) 
 	   dlil_detach_filter(if_filter->filter_id);
 
-    if (--ifp->refcnt == 0) {
+    ifp->refcnt--;
+
+    if (ifp->refcnt == 0 && (ifp->if_eflags & IFEF_DETACH_DISABLED) == 0) {
 	TAILQ_REMOVE(&ifnet, ifp, if_link);
 	
 	(*if_family->del_if)(ifp);
@@ -1434,40 +1475,14 @@ dlil_if_detach(struct ifnet *ifp)
 	    FREE(if_family, M_IFADDR);
 	}
 
-	ev_msg.vendor_code    = KEV_VENDOR_APPLE;
-	ev_msg.kev_class      = KEV_NETWORK_CLASS;
-	ev_msg.kev_subclass   = KEV_DL_SUBCLASS;
-	
-	ev_msg.event_code = KEV_DL_IF_DETACHED;
-	strncpy(&ev_data.if_name[0], ifp->if_name, IFNAMSIZ);
-	ev_data.if_family = ifp->if_family;
-	ev_data.if_unit   = (unsigned long) ifp->if_unit;
-
-	ev_msg.dv[0].data_length = sizeof(struct net_event_data);
-	ev_msg.dv[0].data_ptr    = &ev_data;
-
-	ev_msg.dv[1].data_length = 0;
-	kev_post_msg(&ev_msg);
+        dlil_post_msg(ifp, KEV_DL_SUBCLASS, KEV_DL_IF_DETACHED, 0, 0);
 	splx(s);
 	thread_funnel_set(network_flock, funnel_state);
 	return 0;
     }
     else
     {
-	ev_msg.vendor_code    = KEV_VENDOR_APPLE;
-	ev_msg.kev_class      = KEV_NETWORK_CLASS;
-	ev_msg.kev_subclass   = KEV_DL_SUBCLASS;
-	
-	ev_msg.event_code = KEV_DL_IF_DETACHING;
-	strncpy(&ev_data.if_name[0], ifp->if_name, IFNAMSIZ);
-	ev_data.if_family = ifp->if_family;
-	ev_data.if_unit   = (unsigned long) ifp->if_unit;
-	ev_msg.dv[0].data_length = sizeof(struct net_event_data);
-	ev_msg.dv[0].data_ptr    = &ev_data;
-	ev_msg.dv[1].data_length = 0;
-
-	kev_post_msg(&ev_msg);
-
+        dlil_post_msg(ifp, KEV_DL_SUBCLASS, KEV_DL_IF_DETACHING, 0, 0);
 	splx(s);
 	thread_funnel_set(network_flock, funnel_state);
 	return DLIL_WAIT_FOR_FREE;

@@ -116,6 +116,7 @@ struct protosw {
 /* Implant hooks */
 	TAILQ_HEAD(pr_sfilter, NFDescriptor) pr_sfilter;
 	struct protosw *pr_next;	/* Chain for domain */
+	u_long	reserved[4];		/* Padding for future use */
 };
 
 #define	PR_SLOWHZ	2		/* 2 slow timeouts per second */
@@ -244,7 +245,7 @@ struct pr_usrreqs {
 				      struct uio *uio, struct mbuf **mp0,
 				      struct mbuf **controlp, int *flagsp));
 	int	(*pru_sopoll) __P((struct socket *so, int events, 
-				   struct ucred *cred));
+				   struct ucred *cred, void *));
 };
 
 

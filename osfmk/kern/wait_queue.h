@@ -24,8 +24,8 @@
 
 #include <kern/kern_types.h>		/* for wait_queue_t */
 #include <mach/sync_policy.h>
+#include <mach/kern_return.h>		/* for kern_return_t */
 
-#ifdef MACH_KERNEL_PRIVATE
 
 #include <kern/lock.h>
 #include <kern/queue.h>
@@ -44,15 +44,24 @@
  *	NOTE:  Hardware locks are used to protect event wait
  *	queues since interrupt code is free to post events to
  *	them.
+ *	WARNING: Cannot change this data structure without updating SIZEOF_WAITQUEUE
  */
 typedef struct wait_queue {
     hw_lock_data_t	wq_interlock;	/* interlock */
     unsigned int                        /* flags */
     /* boolean_t */	wq_fifo:1,	/* fifo wakeup policy? */
 			wq_issub:1,	/* is waitq linked? */
+			wq_isprepost:1,	/* is waitq preposted? sub only */
 			:0;		/* force to long boundary */
     queue_head_t	wq_queue;	/* queue of elements */
 } WaitQueue;
+
+#define SIZEOF_WAITQUEUE 	16		/* 16 bytes for wq */
+#define SIZEOF_WAITQUEUE_SUB 28		/* 24 byets for wqs */
+#define SIZEOF_WAITQUEUE_ELEMENT 16		/* 16 byets per wqe */
+#define SIZEOF_WAITQUEUE_LINK 28		/* 28 byets per wqe */
+
+#ifdef MACH_KERNEL_PRIVATE
 
 /*
  *	wait_queue_sub_t
@@ -60,13 +69,14 @@ typedef struct wait_queue {
  *	These can be linked as members/elements of multiple regular
  *	wait queues.  They have an additional set of linkages to
  *	identify the linkage structures that point to them.
+ *	WARNING: Cannot change this data structure without updating SIZEOF_WAITQUEUE_SUB
  */
 typedef struct wait_queue_sub {
 	WaitQueue	wqs_wait_queue; /* our wait queue */
 	queue_head_t	wqs_sublinks;	/* links from sub perspective */
+	unsigned int 	wqs_refcount;	/* refcount for preposting */
 } WaitQueueSub;
 
-typedef WaitQueueSub *wait_queue_sub_t;
 
 #define WAIT_QUEUE_SUB_NULL ((wait_queue_sub_t)0)
 
@@ -82,12 +92,14 @@ typedef WaitQueueSub *wait_queue_sub_t;
  *	WARNING: The first three fields of the thread shuttle
  *	definition does not use this definition yet.  Any change in
  *	the layout here will have to be matched with a change there.
+ *	WARNING: Cannot change this data structure without updating SIZEOF_WAITQUEUE_ELEMENT
  */
 typedef struct wait_queue_element {
 	queue_chain_t	wqe_links;	/* link of elements on this queue */
 	wait_queue_t	wqe_queue;	/* queue this element is on */
 	event_t		wqe_event;	/* event this element is waiting for */
 } *wait_queue_element_t;
+
 
 /*
  *	wait_queue_link_t
@@ -103,18 +115,29 @@ typedef struct wait_queue_element {
  *	event queues of which it is a member.  An IPC event post associated
  *	with that port may wake up any thread from any of those portsets,
  *	or one that was waiting locally on the port itself.
+ *	WARNING: Cannot change this data structure without updating SIZEOF_WAITQUEUE_LINK
  */
 typedef struct wait_queue_link {
 	struct wait_queue_element	wql_element;	/* element on master */
-        wait_queue_sub_t		wql_subqueue;	/* sub queue */
 	queue_chain_t			wql_sublinks;	/* element on sub */
-} *wait_queue_link_t;
+    wait_queue_sub_t		wql_subqueue;	/* sub queue */
+} WaitQueueLink;
+
 
 #define WAIT_QUEUE_LINK_NULL ((wait_queue_link_t)0)
 
 #define wql_links wql_element.wqe_links
 #define wql_queue wql_element.wqe_queue
 #define wql_event wql_element.wqe_event
+
+#define wait_queue_empty(wq)	(queue_empty(&(wq)->wq_queue))
+
+#define wait_queue_held(wq)	(hw_lock_held(&(wq)->wq_interlock))
+
+#define wait_queue_is_sub(wqs)	((wqs)->wqs_wait_queue.wq_issub)
+#define wqs_lock(wqs)		wait_queue_lock(&(wqs)->wqs_wait_queue)
+#define wqs_unlock(wqs)		wait_queue_unlock(&(wqs)->wqs_wait_queue)
+#define wqs_lock_try(wqs)	wait_queue__try_lock(&(wqs)->wqs_wait_queue)
 
 extern int wait_queue_subordinate;
 #define WAIT_QUEUE_SUBORDINATE &_wait_queue_subordinate
@@ -149,14 +172,6 @@ extern kern_return_t wait_queue_remove(
 			((thread)->wait_queue == WAIT_QUEUE_NULL)
 
 
-#define wait_queue_empty(wq)	(queue_empty(&(wq)->wq_queue))
-
-#define wait_queue_held(wq)	(hw_lock_held(&(wq)->wq_interlock))
-
-#define wait_queue_is_sub(wqs)	((wqs)->wqs_wait_queue.wq_issub)
-#define wqs_lock(wqs)		wait_queue_lock(&(wqs)->wqs_wait_queue)
-#define wqs_unlock(wqs)		wait_queue_unlock(&(wqs)->wqs_wait_queue)
-#define wqs_lock_try(wqs)	wait_queue__try_lock(&(wqs)->wqs_wait_queue)
 
 /******** Decomposed interfaces (to build higher level constructs) ***********/
 
@@ -170,7 +185,7 @@ extern boolean_t wait_queue_lock_try(
 			wait_queue_t wait_queue);
 
 /* assert intent to wait on a locked wait queue */
-extern void wait_queue_assert_wait_locked(
+extern boolean_t  wait_queue_assert_wait_locked(
 			wait_queue_t wait_queue,
 			event_t wait_event,
 			int interruptible,
@@ -234,7 +249,7 @@ extern void wait_queue_free(
 /******** Standalone interfaces (not a part of a higher construct) ************/
 
 /* assert intent to wait on <wait_queue,event> pair */
-extern void wait_queue_assert_wait(
+extern boolean_t wait_queue_assert_wait(
 			wait_queue_t wait_queue,
 			event_t wait_event,
 			int interruptible);

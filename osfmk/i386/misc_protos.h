@@ -65,3 +65,9 @@ extern unsigned int	mul_scale(
 				unsigned int	multiplicand,
 				unsigned int	multiplier,
 				unsigned int	*scale);
+
+/* Move arbitrarily-aligned data from one physical address to another */
+extern void bcopy_phys(
+		       const char *from,
+		       char       *to,
+		       vm_size_t  nbytes);

@@ -5,30 +5,15 @@ iokit/Kernel/ppc/IOSharedLock.s					standard
 
 iokit/Families/IOADBBus/IOADBBus.cpp				optional iokitcpp
 iokit/Families/IOADBBus/IOADBController.cpp			optional iokitcpp
+iokit/Families/IOADBBus/IOADBDevice.cpp				optional iokitcpp
 iokit/Families/IOADBBus/IOADBControllerUserClient.cpp		optional iokitcpp
-iokit/Families/IOPCIBus/IOPCIDevicePPC.cpp			optional iokitcpp
-
-# ndrv support
-
-iokit/Families/IONDRVSupport/IOPEFLoader.c			standard
-iokit/Families/IONDRVSupport/IOPEFInternals.c			standard
-iokit/Families/IONDRVSupport/IONDRV.cpp				optional iokitcpp
-iokit/Families/IONDRVSupport/IONDRVLibraries.cpp		optional iokitcpp
-iokit/Families/IONDRVSupport/IONDRVFramebuffer.cpp		optional iokitcpp
-
-iokit/Drivers/hidsystem/drvAppleADBDevices/IOADBDevice.cpp	optional iokitcpp
-iokit/Drivers/hidsystem/drvAppleADBDevices/AppleADBMouse.cpp	optional iokitcpp
-iokit/Drivers/hidsystem/drvAppleADBDevices/AppleADBKeyboard.cpp	optional iokitcpp
-iokit/Drivers/hidsystem/drvAppleADBDevices/AppleADBDisplay.cpp	optional iokitcpp
-iokit/Drivers/hidsystem/drvAppleADBDevices/AppleADBButtons.cpp	optional iokitcpp
 
 iokit/Families/IONVRAM/IONVRAMController.cpp			optional iokitcpp
 iokit/Drivers/platform/drvAppleNVRAM/AppleNVRAM.cpp		optional iokitcpp
 
-#iokit/Drivers/platform/drvApplePMU/IOPMUNVRAMController.cpp	optional iokitcpp
-
 iokit/Drivers/platform/drvAppleCuda/AppleCuda.cpp		optional iokitcpp
 iokit/Drivers/platform/drvAppleCuda/IOCudaADBController.cpp	optional iokitcpp
+iokit/Drivers/platform/drvAppleCuda/AppleCudaUserClient.cpp	optional iokitcpp
 
 #iokit/Drivers/platform/drvApplePMU/AppleViaInterface.cpp  	optional iokitcpp
 #iokit/Drivers/platform/drvApplePMU/ApplePMU.cpp		optional iokitcpp
@@ -38,10 +23,6 @@ iokit/Drivers/platform/drvAppleCuda/IOCudaADBController.cpp	optional iokitcpp
 #iokit/Drivers/platform/drvApplePMU/IOPMUPowerSource.cpp         optional iokitcpp
 
 iokit/Drivers/platform/drvApplePMU/IOPMUADBController.cpp	optional iokitcpp
-
-iokit/Drivers/pci/drvApplePCI/AppleMacRiscPCI.cpp		optional iokitcpp
-iokit/Drivers/pci/drvApplePCI/AppleGracklePCI.cpp		optional iokitcpp
-
 
 # Apple Platform Expert
 iokit/Drivers/platform/drvApplePlatformExpert/ApplePlatformExpert.cpp	optional iokitcpp
@@ -67,32 +48,6 @@ iokit/Drivers/platform/drvApplePowerExpressPE/PowerExpress.cpp	optional iokitcpp
 # Mac-IO drivers
 iokit/Drivers/platform/drvAppleGrandCentral/GrandCentral.cpp	optional disabled-iokitcpp
 iokit/Drivers/platform/drvAppleOHare/OHare.cpp			optional iokitcpp
-
-
-
-# BMac driver
-
-iokit/Drivers/network/drvPPCBMac/BMacEnetHW.cpp			optional iokitcpp
-iokit/Drivers/network/drvPPCBMac/BMacEnetPrivate.cpp		optional iokitcpp
-iokit/Drivers/network/drvPPCBMac/BMacEnet.cpp			optional iokitcpp
-iokit/Drivers/network/drvPPCBMac/BMacEnetMII.cpp		optional iokitcpp
-
-
-# Mace driver
-iokit/Drivers/network/drvMaceEnet/MaceEnetHW.cpp		optional disabled-iokitcpp
-iokit/Drivers/network/drvMaceEnet/MaceEnetPrivate.cpp		optional disabled-iokitcpp
-iokit/Drivers/network/drvMaceEnet/MaceEnet.cpp			optional disabled-iokitcpp
-
-# Display drivers
-
-iokit/Families/IOGraphics/AppleG3SeriesDisplay.cpp		optional iokitcpp
-
-
-# Intel EtherExpress Pro driver (i82557/i82558)
-iokit/Drivers/network/drvIntel82557/i82557.cpp			optional iokitcpp
-iokit/Drivers/network/drvIntel82557/i82557Private.cpp		optional iokitcpp
-iokit/Drivers/network/drvIntel82557/i82557PHY.cpp		optional iokitcpp
-iokit/Drivers/network/drvIntel82557/i82557eeprom.cpp		optional iokitcpp
 
 # Symbios 8xx SCSI Driver
 #iokit/Drivers/scsi/drvSymbios8xx/Sym8xxClient.cpp		optional iokitcpp

@@ -888,27 +888,49 @@ ipc_port_lookup_notify(
 }
 
 /*
+ *	Routine:	ipc_port_make_send_locked
+ *	Purpose:
+ *		Make a naked send right from a receive right.
+ *
+ *	Conditions:
+ *		port locked and active.
+ */
+ipc_port_t
+ipc_port_make_send_locked(
+	ipc_port_t	port)
+{
+	assert(ip_active(port));
+	port->ip_mscount++;
+	port->ip_srights++;
+	ip_reference(port);
+	ip_unlock(port);
+	return port;
+}
+
+/*
  *	Routine:	ipc_port_make_send
  *	Purpose:
  *		Make a naked send right from a receive right.
- *	Conditions:
- *		The port is not locked but it is active.
  */
 
 ipc_port_t
 ipc_port_make_send(
 	ipc_port_t	port)
 {
-	assert(IP_VALID(port));
+	
+	if (!IP_VALID(port))
+		return port;
 
 	ip_lock(port);
-	assert(ip_active(port));
-	port->ip_mscount++;
-	port->ip_srights++;
-	ip_reference(port);
+	if (ip_active(port)) {
+		port->ip_mscount++;
+		port->ip_srights++;
+		ip_reference(port);
+		ip_unlock(port);
+		return port;
+	}
 	ip_unlock(port);
-
-	return port;
+	return IP_DEAD;
 }
 
 /*
@@ -1535,8 +1557,8 @@ print_ports(void)
 	PRINT_ONE_PORT_TYPE(PSET);
 	PRINT_ONE_PORT_TYPE(PSET_NAME);
 	PRINT_ONE_PORT_TYPE(PAGING_REQUEST);
-	PRINT_ONE_PORT_TYPE(XMM_OBJECT);
-	PRINT_ONE_PORT_TYPE(DEVICE);
+	PRINT_ONE_PORT_TYPE(MEMORY_OBJECT);
+	PRINT_ONE_PORT_TYPE(MIG);
 	PRINT_ONE_PORT_TYPE(XMM_PAGER);
 	PRINT_ONE_PORT_TYPE(XMM_KERNEL);
 	PRINT_ONE_PORT_TYPE(XMM_REPLY);

@@ -69,6 +69,7 @@ struct rawcb {
 	struct	sockaddr *rcb_faddr;	/* destination address */
 	struct	sockaddr *rcb_laddr;	/* socket's address */
 	struct	sockproto rcb_proto;	/* protocol family, protocol */
+	u_long	reserved[4];		/* for future use */
 };
 
 #define	sotorawcb(so)		((struct rawcb *)(so)->so_pcb)

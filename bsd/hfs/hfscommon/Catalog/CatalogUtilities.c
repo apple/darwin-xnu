@@ -89,6 +89,7 @@
 */
 #include <sys/param.h>
 #include <sys/utfconv.h>
+#include <sys/stat.h>
 
 #include	"../headers/FileMgrInternal.h"
 #include	"../headers/BTreesInternal.h"
@@ -96,7 +97,6 @@
 #include	"../headers/HFSUnicodeWrappers.h"
 #include	<string.h>
 
-static void ExtractTextEncoding (ItemCount length, ConstUniCharArrayPtr string, UInt32 * textEncoding);
 
 //*******************************************************************************
 //	Routine:	LocateCatalogNode
@@ -472,9 +472,6 @@ BuildCatalogKey(HFSCatalogNodeID parentID, const CatalogName *cName, Boolean isH
 	}
 }
 
-/*
- * for HFS, only MacRoman is supported. If a non-MacRoman character is found, an error is returned
- */
 OSErr
 BuildCatalogKeyUTF8(ExtendedVCB *volume, HFSCatalogNodeID parentID, const char *name, UInt32 nameLength,
 		    CatalogKey *key, UInt32 *textEncoding)
@@ -499,8 +496,9 @@ BuildCatalogKeyUTF8(ExtendedVCB *volume, HFSCatalogNodeID parentID, const char *
 			key->hfsPlus.keyLength += unicodeBytes;
 		}
 
-		if (textEncoding)
-		ExtractTextEncoding(key->hfsPlus.nodeName.length, key->hfsPlus.nodeName.unicode, textEncoding);
+		if (textEncoding && (*textEncoding != kTextEncodingMacUnicode))
+			*textEncoding = hfs_pickencoding(key->hfsPlus.nodeName.unicode,
+				key->hfsPlus.nodeName.length);
 	}
 	else {
 		key->hfs.keyLength		= kHFSCatalogKeyMinimumLength;	// initial key length (1 + 4 + 1)
@@ -530,36 +528,6 @@ BuildCatalogKeyUTF8(ExtendedVCB *volume, HFSCatalogNodeID parentID, const char *
 	}
 
 	return err;
-}
-
-
-/*
- * make a guess at the text encoding value that coresponds to the Unicode characters
- */
-static void
-ExtractTextEncoding(ItemCount length, ConstUniCharArrayPtr string, UInt32 * textEncoding)
-{
-	int i;
-	UniChar ch;
-
-	*textEncoding = 0;
-
-	for (i = 0; i < length; ++i) {
-		ch = string[i];
-		/* CJK codepoints are 0x3000 thru 0x9FFF */
-		if (ch >= 0x3000) {
-			if (ch < 0xa000) {
-				*textEncoding = kTextEncodingMacJapanese;
-				break;
-			}
-
-			/* fullwidth character codepoints are 0xFF00 thru 0xFFEF */
-			if (ch >= 0xff00 && ch <= 0xffef) {
-				*textEncoding = kTextEncodingMacJapanese;
-				break;	
-			}
-		}
-	}
 }
 
 
@@ -798,7 +766,14 @@ CopyCatalogNodeData(const ExtendedVCB *volume, const CatalogRecord *dataPtr, Cat
 		nodeData->cnd_nodeID = dataPtr->hfsFolder.folderID;
 		nodeData->cnd_createDate = LocalToUTC(dataPtr->hfsFolder.createDate);
 		nodeData->cnd_contentModDate = LocalToUTC(dataPtr->hfsFolder.modifyDate);
+		nodeData->cnd_attributeModDate = LocalToUTC(dataPtr->hfsFolder.modifyDate);
+		nodeData->cnd_accessDate = LocalToUTC(dataPtr->hfsFolder.modifyDate);
 		nodeData->cnd_backupDate = LocalToUTC(dataPtr->hfsFolder.backupDate);
+		nodeData->cnd_ownerID = VCBTOHFS(volume)->hfs_uid;
+		nodeData->cnd_groupID = VCBTOHFS(volume)->hfs_gid;
+		nodeData->cnd_adminFlags = 0;
+		nodeData->cnd_ownerFlags = 0; /* HFS directories cannot be locked */
+		nodeData->cnd_mode = IFDIR | (ACCESSPERMS & VCBTOHFS(volume)->hfs_dir_mask);
 		nodeData->cnd_valence = dataPtr->hfsFolder.valence;
 
 		BlockMoveData(&dataPtr->hfsFolder.userInfo, &nodeData->cnd_finderInfo, 32);
@@ -810,7 +785,14 @@ CopyCatalogNodeData(const ExtendedVCB *volume, const CatalogRecord *dataPtr, Cat
 		nodeData->cnd_nodeID = dataPtr->hfsFile.fileID;
 		nodeData->cnd_createDate = LocalToUTC(dataPtr->hfsFile.createDate);
 		nodeData->cnd_contentModDate = LocalToUTC(dataPtr->hfsFile.modifyDate);
+		nodeData->cnd_attributeModDate = LocalToUTC(dataPtr->hfsFolder.modifyDate);
+		nodeData->cnd_accessDate = LocalToUTC(dataPtr->hfsFolder.modifyDate);
 		nodeData->cnd_backupDate = LocalToUTC(dataPtr->hfsFile.backupDate);
+		nodeData->cnd_ownerID = VCBTOHFS(volume)->hfs_uid;
+		nodeData->cnd_groupID = VCBTOHFS(volume)->hfs_gid;
+		nodeData->cnd_adminFlags = 0;
+		nodeData->cnd_ownerFlags = (nodeData->cnd_flags & kHFSFileLockedMask) ? UF_IMMUTABLE : 0;
+		nodeData->cnd_mode = IFREG | (ACCESSPERMS & VCBTOHFS(volume)->hfs_file_mask);
 		nodeData->cnd_linkCount = 0;
 
 		BlockMoveData(&dataPtr->hfsFile.userInfo, &nodeData->cnd_finderInfo, 16);

@@ -75,7 +75,7 @@ void	IOLockFree( IOLock * lock);
 static __inline__
 void	IOLockLock( IOLock * lock)
 {
-    _mutex_lock(lock);
+    mutex_lock(lock);
 }
 
 /*! @function IOLockTryLock
@@ -87,7 +87,7 @@ void	IOLockLock( IOLock * lock)
 static __inline__
 boolean_t IOLockTryLock( IOLock * lock)
 {
-    return(_mutex_try(lock));
+    return(mutex_try(lock));
 }
 
 /*! @function IOLockUnlock
@@ -273,7 +273,7 @@ void IOSimpleLockInit( IOSimpleLock * lock );
 static __inline__
 void IOSimpleLockLock( IOSimpleLock * lock )
 {
-    simple_lock( lock );
+    usimple_lock( lock );
 }
 
 /*! @function IOSimpleLockTryLock
@@ -285,7 +285,7 @@ void IOSimpleLockLock( IOSimpleLock * lock )
 static __inline__
 boolean_t IOSimpleLockTryLock( IOSimpleLock * lock )
 {
-    return( simple_lock_try( lock ) );
+    return( usimple_lock_try( lock ) );
 }
 
 /*! @function IOSimpleLockUnlock
@@ -296,7 +296,7 @@ boolean_t IOSimpleLockTryLock( IOSimpleLock * lock )
 static __inline__
 void IOSimpleLockUnlock( IOSimpleLock * lock )
 {
-    simple_unlock( lock );
+    usimple_unlock( lock );
 }
 
 typedef long int IOInterruptState;
@@ -310,7 +310,7 @@ static __inline__
 IOInterruptState IOSimpleLockLockDisableInterrupt( IOSimpleLock * lock )
 {
     IOInterruptState	state = ml_set_interrupts_enabled( false );
-    simple_lock( lock );
+    usimple_lock( lock );
     return( state );
 }
 
@@ -324,7 +324,7 @@ static __inline__
 void IOSimpleLockUnlockEnableInterrupt( IOSimpleLock * lock,
 					IOInterruptState state )
 {
-    simple_unlock( lock );
+    usimple_unlock( lock );
     ml_set_interrupts_enabled( state );
 }
 

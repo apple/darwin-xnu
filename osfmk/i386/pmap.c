@@ -1262,6 +1262,21 @@ pmap_remove_range(
 }
 
 /*
+ *	Remove phys addr if mapped in specified map
+ *
+ */
+void
+pmap_remove_some_phys(
+	pmap_t		map,
+	vm_offset_t	phys_addr)
+{
+
+/* Implement to support working set code */
+
+}
+
+
+/*
  *	Remove the given range of addresses
  *	from the specified map.
  *

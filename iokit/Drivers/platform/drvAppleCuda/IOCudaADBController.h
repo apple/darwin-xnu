@@ -48,6 +48,7 @@ IOReturn setAutoPollList ( UInt16 activeAddressMask );
 IOReturn getAutoPollList ( UInt16 * activeAddressMask );
 IOReturn setAutoPollEnable ( bool enable );
 IOReturn resetBus ( void );
+IOReturn cancelAllIO ( void );
 IOReturn flushDevice ( IOADBAddress address );
 IOReturn readFromDevice ( IOADBAddress address, IOADBRegister adbRegister,
 			UInt8 * data, IOByteCount * length );

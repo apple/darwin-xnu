@@ -98,8 +98,6 @@
 #include <kern/kalloc.h>
 #include <kern/processor.h>
 #include <kern/sched_prim.h>	/* for thread_wakeup */
-#include <kern/sf.h>
-#include <kern/mk_sp.h>	/*** ??? fix so this can be removed ***/
 #include <kern/ipc_tt.h>
 #include <kern/ledger.h>
 #include <kern/host.h>
@@ -122,6 +120,7 @@
 #include <mach/task_server.h>
 #include <mach/mach_host_server.h>
 #include <mach/host_security_server.h>
+#include <vm/task_working_set.h>
 
 task_t	kernel_task;
 zone_t	task_zone;
@@ -354,7 +353,7 @@ task_create_local(
 	new_task->res_act_count = 0;
 	new_task->active_act_count = 0;
 	new_task->user_stop_count = 0;
-	new_task->importance = 0;
+	new_task->role = TASK_UNSPECIFIED;
 	new_task->active = TRUE;
 	new_task->kernel_loaded = kernel_loaded;
 	new_task->user_data = 0;
@@ -366,6 +365,10 @@ task_create_local(
 	new_task->syscalls_mach = 0;
 	new_task->syscalls_unix=0;
 	new_task->csw=0;
+	new_task->dynamic_working_set = 0;
+	
+	task_working_set_create(new_task, TWS_SMALL_HASH_LINE_COUNT, 
+						0, TWS_HASH_STYLE_DEFAULT);
 
 #ifdef MACH_BSD
 	new_task->bsd_info = 0;
@@ -412,11 +415,6 @@ task_create_local(
 		if (!pset->active)
 			pset = &default_pset;
 
-		new_task->policy = parent_task->policy;
-
-		new_task->priority = parent_task->priority;
-		new_task->max_priority = parent_task->max_priority;
-
 		new_task->sec_token = parent_task->sec_token;
 
 		shared_region_mapping_ref(parent_task->system_shared_region);
@@ -430,22 +428,18 @@ task_create_local(
 	else {
 		pset = &default_pset;
 
-		if (kernel_task == TASK_NULL) {
-			new_task->policy = POLICY_RR;
-
-			new_task->priority = MINPRI_KERNBAND;
-			new_task->max_priority = MAXPRI_KERNBAND;
-		}
-		else {
-			new_task->policy = POLICY_TIMESHARE;
-
-			new_task->priority = BASEPRI_DEFAULT;
-			new_task->max_priority = MAXPRI_HIGHBAND;
-		}
-
 		new_task->sec_token = KERNEL_SECURITY_TOKEN;
 		new_task->wired_ledger_port = ledger_copy(root_wired_ledger);
 		new_task->paged_ledger_port = ledger_copy(root_paged_ledger);
+	}
+
+	if (kernel_task == TASK_NULL) {
+		new_task->priority = MINPRI_KERNEL;
+		new_task->max_priority = MAXPRI_KERNEL;
+	}
+	else {
+		new_task->priority = BASEPRI_DEFAULT;
+		new_task->max_priority = MAXPRI_USER;
 	}
 
 	pset_lock(pset);
@@ -555,6 +549,9 @@ task_free(
 	vm_map_deallocate(task->map);
 	is_release(task->itk_space);
 	task_prof_deallocate(task);
+	if(task->dynamic_working_set)
+		tws_hash_destroy((tws_hash_t)
+			task->dynamic_working_set);
 	zfree(task_zone, (vm_offset_t) task);
 }
 
@@ -1335,7 +1332,8 @@ task_info(
 						   * PAGE_SIZE;
 
 		task_lock(task);
-		basic_info->policy = task->policy;
+		basic_info->policy = ((task != kernel_task)?
+										  POLICY_TIMESHARE: POLICY_RR);
 		basic_info->suspend_count = task->user_stop_count;
 		basic_info->user_time.seconds
 				= task->total_user_time.seconds;
@@ -1404,24 +1402,11 @@ task_info(
 
 	    case TASK_SCHED_FIFO_INFO:
 	    {
-		register policy_fifo_base_t	fifo_base;
 
 		if (*task_info_count < POLICY_FIFO_BASE_COUNT)
 			return(KERN_INVALID_ARGUMENT);
 
-		fifo_base = (policy_fifo_base_t) task_info_out;
-
-		task_lock(task);
-		if (task->policy != POLICY_FIFO) {
-			task_unlock(task);
-			return(KERN_INVALID_POLICY);
-		}
-
-		fifo_base->base_priority = task->priority;
-		task_unlock(task);
-
-		*task_info_count = POLICY_FIFO_BASE_COUNT;
-		break;
+		return(KERN_INVALID_POLICY);
 	    }
 
 	    case TASK_SCHED_RR_INFO:
@@ -1434,7 +1419,7 @@ task_info(
 		rr_base = (policy_rr_base_t) task_info_out;
 
 		task_lock(task);
-		if (task->policy != POLICY_RR) {
+		if (task != kernel_task) {
 			task_unlock(task);
 			return(KERN_INVALID_POLICY);
 		}
@@ -1442,7 +1427,7 @@ task_info(
 		rr_base->base_priority = task->priority;
 		task_unlock(task);
 
-		rr_base->quantum = (min_quantum	* tick) / 1000;
+		rr_base->quantum = tick / 1000;
 
 		*task_info_count = POLICY_RR_BASE_COUNT;
 		break;
@@ -1458,7 +1443,7 @@ task_info(
 		ts_base = (policy_timeshare_base_t) task_info_out;
 
 		task_lock(task);
-		if (task->policy != POLICY_TIMESHARE) {
+		if (task == kernel_task) {
 			task_unlock(task);
 			return(KERN_INVALID_POLICY);
 		}
@@ -1651,6 +1636,7 @@ task_collect_scan(void)
 		task_deallocate(prev_task);
 }
 
+/* Also disabled in vm/vm_pageout.c */
 boolean_t task_collect_allowed = FALSE;
 unsigned task_collect_last_tick = 0;
 unsigned task_collect_max_rate = 0;		/* in ticks */
@@ -1670,7 +1656,7 @@ consider_task_collect(void)
 	 */
 
 	if (task_collect_max_rate == 0)
-		task_collect_max_rate = (2 << SCHED_TICK_SHIFT);
+		task_collect_max_rate = (1 << SCHED_TICK_SHIFT) + 1;
 
 	if (task_collect_allowed &&
 	    (sched_tick > (task_collect_last_tick + task_collect_max_rate))) {

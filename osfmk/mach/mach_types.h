@@ -61,6 +61,8 @@
 #ifndef	_MACH_MACH_TYPES_H_
 #define _MACH_MACH_TYPES_H_
 
+#include <stdint.h>
+
 #include <mach/host_info.h>
 #include <mach/machine.h>
 #include <mach/machine/vm_types.h>
@@ -123,9 +125,6 @@ typedef mach_port_t		ledger_t;
 typedef mach_port_t		alarm_t;
 typedef mach_port_t		clock_serv_t;
 typedef mach_port_t		clock_ctrl_t;
-typedef mach_port_t		vm_map_t;
-typedef mach_port_t		vm_map_copy_t;
-typedef mach_port_t		vm_object_t;
 
 #endif	/* !KERNEL_PRIVATE */
 
@@ -138,9 +137,7 @@ typedef mach_port_t		bootstrap_t;
 typedef	mach_port_t		mem_entry_name_port_t;
 typedef mach_port_t		exception_handler_t;
 typedef exception_handler_t	*exception_handler_array_t;
-typedef mach_port_t		vm_object_entry_t; 
 typedef mach_port_t		vm_task_entry_t;
-typedef mach_port_t		upl_object_entry_t;
 typedef mach_port_t		io_master_t;
 typedef mach_port_t		UNDServerRef;
 
@@ -187,8 +184,6 @@ typedef ledger_array_t		ledger_port_array_t;
 typedef alarm_t			alarm_port_t;
 typedef clock_serv_t		clock_serv_port_t;
 typedef clock_ctrl_t		clock_ctrl_port_t;
-typedef vm_map_t		vm_map_port_t;
-typedef vm_map_copy_t		vm_map_copy_port_t;
 typedef exception_handler_t	exception_port_t;
 typedef exception_handler_array_t exception_port_arrary_t;
 
@@ -205,9 +200,6 @@ typedef exception_handler_array_t exception_port_arrary_t;
 #define LOCK_SET_NULL		((lock_set_t) 0)
 #define ALARM_NULL		((alarm_t) 0)
 #define CLOCK_NULL		((clock_t) 0)
-#define	VM_MAP_NULL		((vm_map_t) 0)
-#define	VM_MAP_COPY_NULL	((vm_map_copy_t) 0)
-#define VM_OBJECT_NULL		((vm_object_t) 0)
 #define UND_SERVER_NULL		((UNDServerRef) 0)
 
 typedef integer_t 		ledger_item_t;

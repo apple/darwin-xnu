@@ -59,9 +59,11 @@
 
 #include <mach/std_types.defs>
 
-type upl_page_info_t	= struct[2] of integer_t;
-type memory_object_offset_t = struct[2] of integer_t;
-type memory_object_size_t = struct[2] of integer_t;
+type upl_page_info_t		= struct[2] of integer_t;
+type upl_page_info_array_t	= array[*:20] of upl_page_info_t;
+
+type memory_object_offset_t 	= struct[2] of integer_t;
+type memory_object_size_t 	= struct[2] of integer_t;
 
 
 
@@ -138,22 +140,6 @@ type vm_task_entry_t = mach_port_t
 #endif	/* KERNEL_SERVER */
 		;
 
-type vm_object_entry_t = mach_port_t
-		ctype: vm_object_t
-#if	KERNEL_SERVER
-		intran: vm_object_t convert_port_entry_to_object(mach_port_t)
-		destructor: vm_object_deallocate(vm_object_t)
-#endif	/* KERNEL_SERVER */
-		;
-
-type upl_object_entry_t = mach_port_t
-		ctype: upl_t
-#if	KERNEL_SERVER
-		intran: upl_t convert_port_to_upl(mach_port_t)
-		destructor: mach_destroy_upl(upl_t)
-#endif	/* KERNEL_SERVER */
-		;
-
 type ipc_space_t = mach_port_t
 #if	KERNEL_SERVER
 		intran: ipc_space_t convert_port_to_space(mach_port_t)
@@ -205,38 +191,45 @@ type task_policy_t		= array[*:16] of integer_t;
 
 type mem_entry_name_port_t = mach_port_t
 #if     KERNEL_SERVER
-                intran: mem_entry_name_port_t null_conversion(mach_port_t)
+		intran: mem_entry_name_port_t null_conversion(mach_port_t)
 #endif  /* KERNEL_SERVER */
 		;
 
+type memory_object_default_t = mach_port_t
+#if	KERNEL_PRIVATE
+		intran: memory_object_default_t null_conversion(mach_port_t)
+		outtran: mach_port_t null_conversion(memory_object_default_t)
+#endif	/* KERNEL_PRIVATE */
+		;
  
 type memory_object_t = mach_port_t
-#if	KERNEL_SERVER
-		intran: memory_object_t null_conversion(mach_port_t)
-#endif	/* KERNEL_SERVER */
+#if	KERNEL_PRIVATE
+		intran: memory_object_t convert_port_to_memory_object(mach_port_t)
+		outtran: mach_port_t convert_memory_object_to_port(memory_object_t)
+#endif	/* KERNEL_PRIVATE */
 		;
 
-type memory_object_default_t = mach_port_t
-#if	KERNEL_SERVER
-		intran: memory_object_default_t null_conversion(mach_port_t)
-#endif	/* KERNEL_SERVER */
-		;
 
-type upl_object_t = mach_port_t
-#if	KERNEL_SERVER
-		intran: upl_object_t null_conversion(mach_port_t)
-#endif	/* KERNEL_SERVER */
-		;
-
-type vm_object_t = mach_port_t
-#if	KERNEL_SERVER
-		intran: vm_object_t vm_object_lookup(mach_port_t)
-#endif	/* KERNEL_SERVER */
+type memory_object_control_t = mach_port_t
+#if	KERNEL_PRIVATE
+		intran: memory_object_control_t convert_port_to_mo_control(mach_port_t)
+		outtran: mach_port_t convert_mo_control_to_port(memory_object_control_t)
+		destructor: memory_object_control_deallocate(memory_object_control_t)
+#endif	/* KERNEL_PRIVATE */
 		;
 
 type memory_object_name_t = mach_port_t
 		ctype: mach_port_t
 		;
+
+type upl_t = mach_port_t
+#if	KERNEL_PRIVATE
+		intran: upl_t convert_port_to_upl(mach_port_t)
+		outtran: mach_port_t convert_upl_to_port(upl_t)
+		destructor: upl_deallocate(upl_t)
+#endif	/* KERNEL_PRIVATE */
+		;
+
 
 type memory_object_copy_strategy_t = int;
 type memory_object_return_t = int;
@@ -428,6 +421,7 @@ type semaphore_consume_ref_t = mach_port_move_send_t
 		ctype: semaphore_t
 #if	KERNEL_SERVER
 		intran: semaphore_t convert_port_to_semaphore(mach_port_t)
+		outtran: mach_port_t convert_semaphore_to_port(semaphore_t)
 		destructor: semaphore_dereference(semaphore_t)
 #endif	/* KERNEL_SERVER */
 		;
@@ -439,8 +433,6 @@ type lock_set_t = mach_port_t
 		destructor: lock_set_dereference(lock_set_t)
 #endif	/* KERNEL_SERVER */
 		;
-
-type upl_page_list_ptr_t	= array[*:20] of upl_page_info_t;
 
 /* kernel module loader */
 type kmod_t = int;
@@ -459,6 +451,7 @@ simport <kern/ipc_tt.h>;	/* for task/thread conversion */
 simport <kern/ipc_host.h>;	/* for host/processor/pset conversions */
 simport <kern/ipc_subsystem.h>;	/* for subsystem conversions */
 simport <kern/ipc_sync.h>;      /* for lock_set and semaphore conversions */
+simport <vm/memory_object.h>; /* for memory object type conversions */
 #endif	/* MACH_KERNEL_PRIVATE */
 
 simport <kern/ipc_mig.h>;	/* pick up kernel-specific MIG things */

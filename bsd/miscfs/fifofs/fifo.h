@@ -58,12 +58,11 @@
 /*
  * Prototypes for fifo operations on vnodes.
  */
-int	fifo_badop(),
-	fifo_ebadf();
+int	fifo_ebadf();
 
 int	fifo_lookup __P((struct vop_lookup_args *));
-#define fifo_create ((int (*) __P((struct  vop_create_args *)))fifo_badop)
-#define fifo_mknod ((int (*) __P((struct  vop_mknod_args *)))fifo_badop)
+#define fifo_create ((int (*) __P((struct  vop_create_args *)))err_create)
+#define fifo_mknod ((int (*) __P((struct  vop_mknod_args *)))err_mknod)
 int	fifo_open __P((struct vop_open_args *));
 int	fifo_close __P((struct vop_close_args *));
 #define fifo_access ((int (*) __P((struct  vop_access_args *)))fifo_ebadf)
@@ -75,35 +74,35 @@ int	fifo_write __P((struct vop_write_args *));
 int	fifo_ioctl __P((struct vop_ioctl_args *));
 int	fifo_select __P((struct vop_select_args *));
 #define	fifo_revoke vop_revoke
-#define fifo_mmap ((int (*) __P((struct  vop_mmap_args *)))fifo_badop)
+#define fifo_mmap ((int (*) __P((struct  vop_mmap_args *)))err_mmap)
 #define fifo_fsync ((int (*) __P((struct  vop_fsync_args *)))nullop)
-#define fifo_seek ((int (*) __P((struct  vop_seek_args *)))fifo_badop)
-#define fifo_remove ((int (*) __P((struct  vop_remove_args *)))fifo_badop)
-#define fifo_link ((int (*) __P((struct  vop_link_args *)))fifo_badop)
-#define fifo_rename ((int (*) __P((struct  vop_rename_args *)))fifo_badop)
-#define fifo_mkdir ((int (*) __P((struct  vop_mkdir_args *)))fifo_badop)
-#define fifo_rmdir ((int (*) __P((struct  vop_rmdir_args *)))fifo_badop)
-#define fifo_symlink ((int (*) __P((struct  vop_symlink_args *)))fifo_badop)
-#define fifo_readdir ((int (*) __P((struct  vop_readdir_args *)))fifo_badop)
-#define fifo_readlink ((int (*) __P((struct  vop_readlink_args *)))fifo_badop)
-#define fifo_abortop ((int (*) __P((struct  vop_abortop_args *)))fifo_badop)
+#define fifo_seek ((int (*) __P((struct  vop_seek_args *)))err_seek)
+#define fifo_remove ((int (*) __P((struct  vop_remove_args *)))err_remove)
+#define fifo_link ((int (*) __P((struct  vop_link_args *)))err_link)
+#define fifo_rename ((int (*) __P((struct  vop_rename_args *)))err_rename)
+#define fifo_mkdir ((int (*) __P((struct  vop_mkdir_args *)))err_mkdir)
+#define fifo_rmdir ((int (*) __P((struct  vop_rmdir_args *)))err_rmdir)
+#define fifo_symlink ((int (*) __P((struct  vop_symlink_args *)))err_symlink)
+#define fifo_readdir ((int (*) __P((struct  vop_readdir_args *)))err_readdir)
+#define fifo_readlink ((int (*) __P((struct  vop_readlink_args *)))err_readlink)
+#define fifo_abortop ((int (*) __P((struct  vop_abortop_args *)))err_abortop)
 int	fifo_inactive __P((struct  vop_inactive_args *));
 #define fifo_reclaim ((int (*) __P((struct  vop_reclaim_args *)))nullop)
 #define fifo_lock ((int (*) __P((struct  vop_lock_args *)))vop_nolock)
 #define fifo_unlock ((int (*) __P((struct  vop_unlock_args *)))vop_nounlock)
 int	fifo_bmap __P((struct vop_bmap_args *));
-#define fifo_strategy ((int (*) __P((struct  vop_strategy_args *)))fifo_badop)
+#define fifo_strategy ((int (*) __P((struct  vop_strategy_args *)))err_strategy)
 int	fifo_print __P((struct vop_print_args *));
 #define fifo_islocked ((int(*) __P((struct vop_islocked_args *)))vop_noislocked)
 int	fifo_pathconf __P((struct vop_pathconf_args *));
 int	fifo_advlock __P((struct vop_advlock_args *));
-#define fifo_blkatoff ((int (*) __P((struct  vop_blkatoff_args *)))fifo_badop)
-#define fifo_valloc ((int (*) __P((struct  vop_valloc_args *)))fifo_badop)
+#define fifo_blkatoff ((int (*) __P((struct  vop_blkatoff_args *)))err_blkatoff)
+#define fifo_valloc ((int (*) __P((struct  vop_valloc_args *)))err_valloc)
 #define fifo_reallocblks \
-	((int (*) __P((struct  vop_reallocblks_args *)))fifo_badop)
-#define fifo_vfree ((int (*) __P((struct  vop_vfree_args *)))fifo_badop)
+	((int (*) __P((struct  vop_reallocblks_args *)))err_reallocblks)
+#define fifo_vfree ((int (*) __P((struct  vop_vfree_args *)))err_vfree)
 #define fifo_truncate ((int (*) __P((struct  vop_truncate_args *)))nullop)
 #define fifo_update ((int (*) __P((struct  vop_update_args *)))nullop)
 #define fifo_bwrite ((int (*) __P((struct  vop_bwrite_args *)))nullop)
-#define fifo_blktooff ((int (*) __P((struct vop_blktooff_args *)))fifo_badop)
+#define fifo_blktooff ((int (*) __P((struct vop_blktooff_args *)))err_blktooff)
 

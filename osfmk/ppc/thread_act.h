@@ -34,15 +34,11 @@
 #include <kern/lock.h>
 #include <kern/clock.h>
 
-
 /*
  * Kernel state structure
  *
  * This holds the kernel state that is saved and restored across context
- * switches. This is kept at the top of the kernel stack.
- *
- * XXX Some state is saved only because it is not saved on entry to the
- * kernel from user mode. This needs to be straightened out.
+ * switches. 
  */
 
 /*
@@ -93,12 +89,12 @@ typedef struct MachineThrAct {
 	unsigned int	VMX_cpu;		/* The last processor to enable vector */
 	struct vmmCntrlEntry *vmmCEntry;	/* Pointer current emulation context or 0 */
 	struct vmmCntrlTable *vmmControl;	/* Pointer to virtual machine monitor control table */
-	AbsoluteTime	qactTimer;		/* Time thread needs to interrupt. This is a single-shot timer. Zero is unset */
+	uint64_t		qactTimer;		/* Time thread needs to interrupt. This is a single-shot timer. Zero is unset */
 	unsigned int	ksp;			/* points to TOP OF STACK or zero */
 	unsigned int	bbDescAddr;		/* Points to Blue Box Trap descriptor area in kernel (page aligned) */
 	unsigned int	bbUserDA;		/* Points to Blue Box Trap descriptor area in user (page aligned) */
 	unsigned int	bbTableStart;	/* Points to Blue Box Trap dispatch area in user */
-	unsigned int	bbPendRupt;		/* Number of pending Blue Box interruptions */
+	unsigned int	emPendRupts;	/* Number of pending emulated interruptions */
 	unsigned int	bbTaskID;		/* Opaque task ID for Blue Box threads */
 	unsigned int	bbTaskEnv;		/* Opaque task data reference for Blue Box threads */
 	unsigned int	specFlags;		/* Special flags */
@@ -108,20 +104,31 @@ typedef struct MachineThrAct {
 #define ignoreZeroFaultbit		0
 #define floatUsedbit			1
 #define vectorUsedbit			2
-#define bbNoMachSCbit	 		3
 #define runningVMbit			4
 #define floatCngbit				5
 #define vectorCngbit			6
 #define timerPopbit				7
+#define userProtKeybit			8
+/*	NOTE: Do not move or assign bit 31 without changing exception vector ultra fast path code */
+#define bbThreadbit				28
+#define bbNoMachSCbit	 		29
+#define bbPreemptivebit			30
+#define spfReserved1			31	/* See note above */
 
 #define ignoreZeroFault		(1<<(31-ignoreZeroFaultbit))
 #define floatUsed			(1<<(31-floatUsedbit))
 #define vectorUsed			(1<<(31-vectorUsedbit))
-#define bbNoMachSC			(1<<(31-bbNoMachSCbit))
 #define runningVM			(1<<(31-runningVMbit))
 #define floatCng			(1<<(31-floatCngbit))
 #define vectorCng			(1<<(31-vectorCngbit))
 #define timerPop			(1<<(31-timerPopbit))
+#define userProtKey			(1<<(31-userProtKeybit))
+#define bbThread			(1<<(31-bbThreadbit))
+#define bbNoMachSC			(1<<(31-bbNoMachSCbit))
+#define bbPreemptive		(1<<(31-bbPreemptivebit))
+
+#define fvChkb 0
+#define fvChk 0x80000000
 
 #ifdef	MACH_BSD
 	unsigned long	cthread_self;	/* for use of cthread package */
@@ -131,5 +138,9 @@ typedef struct MachineThrAct {
 
 extern struct ppc_saved_state * find_user_regs(thread_act_t act);
 extern struct ppc_float_state * find_user_fpu(thread_act_t act);
+
+extern void *act_thread_csave(void);
+extern void act_thread_catt(void *ctx);
+extern void act_thread_cfree(void *ctx);
 
 #endif	/* _PPC_THREAD_ACT_H_ */

@@ -898,8 +898,8 @@ add_entry(struct ip_fw_head *chainptr, struct ip_fw *frwl)
 	u_short nbr = 0;
 	int s;
 
-	fwc = _MALLOC(sizeof *fwc, M_IPFW, M_DONTWAIT);
-	ftmp = _MALLOC(sizeof *ftmp, M_IPFW, M_DONTWAIT);
+	fwc = _MALLOC(sizeof *fwc, M_IPFW, M_NOWAIT);
+	ftmp = _MALLOC(sizeof *ftmp, M_IPFW, M_NOWAIT);
 	if (!fwc || !ftmp) {
 		dprintf(("%s MALLOC said no\n", err_prefix));
 		if (fwc)  FREE(fwc, M_IPFW);

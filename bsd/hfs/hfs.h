@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2001 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -27,33 +27,6 @@
 *	hfs.h -- constants, structures, function declarations. etc.
 *			for Macintosh file system vfs.
 *
-*	HISTORY
-* 12-Aug-1999	Scott Roberts	Merge into HFSStruct, the FCB
-*  6-Jun-1999	Don Brady	Minor cleanup of hfsmount struct.
-* 22-Mar-1999	Don Brady	For POSIX delete semantics: add private metadata strings.
-* 13-Jan-1999	Don Brady	Add ATTR_CMN_SCRIPT to HFS_ATTR_CMN_LOOKUPMASK (radar #2296613).
-* 20-Nov-1998	Don Brady	Remove UFSToHFSStr and HFSToUFSStr prototypes (obsolete).
-*							Move filename entry from FCB to hfsfilemeta, hfsdirentry
-*							names are now 255 byte long.
-* 10-Nov-1998	Pat Dirks	Added MAXLOGBLOCKSIZE and MAXLOGBLOCKSIZEBLOCKS and RELEASE_BUFFER flag.
-*                           Added hfsLogicalBlockTableEntry and h_logicalblocktable field in struct hfsnode.
-*  4-Sep-1998	Pat Dirks	Added hfs_log_block_size to hfsmount struct [again] and BestBlockSizeFit routine.
-* 31-aug-1998	Don Brady	Add UL to MAC_GMT_FACTOR constant.
-* 04-jun-1998	Don Brady	Add hfsMoveRename prototype to replace hfsMove and hfsRename.
-*							Add VRELE and VPUT macros to catch bad ref counts.
-* 28-May-1998	Pat Dirks	Move internal 'struct searchinfo' def'n here from attr.h
-* 03-may-1998	Brent Knight	Add gTimeZone.
-* 23-apr-1998	Don Brady	Add File type and creator for symbolic links.
-* 22-apr-1998	Don Brady	Removed kMetaFile.
-* 21-apr-1998	Don Brady	Add to_bsd_time and to_hfs_time prototypes.
-* 20-apr-1998	Don Brady	Remove course-grained hfs metadata locking.
-* 15-apr-1998	Don Brady	Add hasOverflowExtents and hfs_metafilelocking prototypes. Add kSysFile constant.
-* 14-apr-1998	Deric Horn	Added searchinfo_t, definition of search criteria used by searchfs.
-*  9-apr-1998	Don Brady	Added hfs_flushMDB and hfs_flushvolumeheader prototypes.
-*  8-apr-1998	Don Brady	Add MAKE_VREFNUM macro.
-* 26-mar-1998	Don Brady	Removed CloseBTreeFile and OpenBtreeFile prototypes.
-*
-* 12-nov-1997 	Scott Roberts	Added changes for HFSPlus
 */
 
 #ifndef __HFS__
@@ -69,6 +42,7 @@
 #include <hfs/hfs_format.h>
 #include <hfs/hfs_macos_defs.h>
 #include <hfs/hfs_encodings.h>
+#include <hfs/rangelist.h>
 
 
 struct uio;				// This is more effective than #include <sys/uio.h> in case KERNEL is undefined...
@@ -99,14 +73,16 @@ enum {
 
 enum {
 	kUndefinedFork 	= 0,
-	kAnyFork,
 	kDataFork,
 	kRsrcFork,
 	kDirectory,
 	kSysFile,
-	kDefault
+	kDefault,
+	kAnyFork
 };
 
+/* number of locked buffer caches to hold for b-tree meta data */
+#define kMaxLockedMetaBuffers		32		
 
 /*
  *	File type and creator for symbolic links
@@ -129,46 +105,62 @@ extern struct timezone gTimeZone;
 #define RELEASE_BUFFER 0x00000001
 
 
+/* How many free extents to cache per volume */
+#define kMaxFreeExtents		10
+
 /* Internal Data structures*/
 
 struct vcb_t {
-    int16_t			vcbFlags;
     u_int16_t 			vcbSigWord;
+    int16_t 			vcbAtrb;
+    int16_t				vcbFlags;
+    int16_t 			vcbVRefNum;
+
     u_int32_t 			vcbCrDate;
     u_int32_t 			vcbLsMod;
-    int16_t 			vcbAtrb;
-    u_int16_t 			vcbNmFls;			/* HFS only */
-    int16_t 			vcbVBMSt;
-    int16_t 			vcbAlBlSt;
-    int32_t 			vcbClpSiz;
-    u_int32_t 			vcbNxtCNID;
-    u_int8_t		 	vcbVN[256];
-    int16_t 			vcbVRefNum;
-    u_int16_t 			vcbVSeqNum;
     u_int32_t 			vcbVolBkUp;
-    int32_t 			vcbWrCnt;
-    u_int16_t 			vcbNmRtDirs;		/* HFS only */
-    u_int16_t 			vcbReserved;
+    u_int32_t 			checkedDate;		/* time of last disk check */
+
     int32_t 			vcbFilCnt;
     int32_t 			vcbDirCnt;
+    u_int32_t 			blockSize;			/*	size of allocation blocks */
+    u_int32_t 			totalBlocks;		/* total allocation blocks */
+    u_int32_t 			freeBlocks;			/* free allocation blocks */
+    u_int32_t 			nextAllocation;		/* start of next allocation search */
+    int32_t 			vcbClpSiz;
+    u_int32_t 			vcbNxtCNID;
+	u_int32_t 			vcbCNIDGen;
+	int32_t 			vcbWrCnt;
+
     int32_t 			vcbFndrInfo[8];
+
+    u_int64_t 			encodingsBitmap;	/* HFS Plus only */
+
+    u_int16_t 			vcbNmFls;			/* HFS only */
+    u_int16_t 			vcbNmRtDirs;		/* HFS only */
+    int16_t 			vcbVBMSt;			/* HFS only */
+    int16_t 			vcbAlBlSt;			/* HFS only */
+
     struct vnode *		extentsRefNum;
     struct vnode *		catalogRefNum;
     struct vnode *		allocationsRefNum;
-    u_int32_t 			blockSize;			/*	size of allocation blocks - vcbAlBlkSiz*/
-    u_int32_t 			totalBlocks;		/*	number of allocation blocks in volume */
-    u_int32_t 			freeBlocks;			/*	number of unused allocation blocks - vcbFreeBks*/
-    u_int32_t 			nextAllocation;		/*	start of next allocation search - vcbAllocPtr*/
+
+    u_int8_t		 	vcbVN[256];			/* volume name in UTF-8 */
+    u_int32_t	 		volumeNameEncodingHint;
 	u_int32_t			altIDSector;		/* location of alternate MDB/VH */
-    u_int32_t 			hfsPlusIOPosOffset;	/*	Disk block where HFS+ starts	*/
-    u_int32_t 			checkedDate;		/*	date and time of last disk check	*/
-    u_int64_t 			encodingsBitmap;	/* HFS Plus only*/
-    u_int32_t	 		volumeNameEncodingHint;	/* Text encoding used for volume name*/
-    char *	 			hintCachePtr;		/* points to this volumes heuristicHint cache*/
+    u_int32_t 			hfsPlusIOPosOffset;	/*	Disk block where HFS+ starts */
+    u_int32_t 			vcbVBMIOSize;		/* volume bitmap I/O size */
+    char *	 			hintCachePtr;		/* volume heuristicHint cache */
+
+	/* cache of largest known free extents */
+	u_int32_t				vcbFreeExtCnt;
+	HFSPlusExtentDescriptor vcbFreeExt[kMaxFreeExtents];
+
     u_int32_t 			localCreateDate;	/* creation times for HFS+ volumes are in local time */
     simple_lock_data_t	vcbSimpleLock;		/* simple lock to allow concurrent access to vcb data */
 };
 typedef struct vcb_t ExtendedVCB;
+
 
 /* vcbFlags */
 #define			kHFS_DamagedVolume			0x1	/* This volume has errors, unmount dirty */
@@ -226,6 +218,9 @@ typedef struct hfsmount {
 	unicode_to_hfs_func_t	hfs_get_hfsname;
 } hfsmount_t;
 
+#define HFSPLUS_PRIVATE_DIR	\
+        "\xE2\x90\x80\xE2\x90\x80\xE2\x90\x80\xE2\x90\x80HFS+ Private Data"
+
 
 /*****************************************************************************
 *
@@ -248,15 +243,17 @@ struct  hfsnode {
 	union {
 		struct hfslockf *hu_lockf;	/* Head of byte-level lock list. */
 		void            *hu_sysdata;	/* private data for system files */
+		char	hu_symlinkdata[4];	/* symbolic link (4 chars or less) */
+		char	*hu_symlinkptr;		/* symbolic link pathname */
 	} h_un;
 	struct vnode *		h_vp;		/* vnode associated with this inode. */
 	struct hfsfilemeta *	h_meta;		/* Ptr to file meta data */
 	u_int16_t		h_nodeflags;	/* flags, see below */
 	u_int8_t		h_type;		/* Type of info: dir, data, rsrc */
 	int8_t 			fcbFlags;	/* FCB flags */
+	struct rl_head	h_invalidranges;/* Areas of disk that should read back as zeroes */
 	u_int64_t 		fcbEOF;		/* Logical length or EOF in bytes */
 	u_int64_t 		fcbPLen;	/* Physical file length in bytes */
-	u_int64_t 		fcbMaxEOF;	/* Maximum logical length or EOF in bytes */
 	u_int32_t 		fcbClmpSize;	/* Number of bytes per clump */
 	HFSPlusExtentRecord	fcbExtents;	/* Extents of file */
 
@@ -266,6 +263,8 @@ struct  hfsnode {
 };
 #define	h_lockf		h_un.hu_lockf
 #define	fcbBTCBPtr	h_un.hu_sysdata
+#define	h_symlinkptr  h_un.hu_symlinkptr
+#define	h_symlinkdata h_un.hu_symlinkdata
 
 typedef struct hfsnode FCB;
 
@@ -321,6 +320,9 @@ typedef struct hfsfilemeta {
 #define H_HINT(HP)		((HP)->h_meta->h_hint)
 #define H_DEV(HP)		((HP)->h_meta->h_dev)
 
+#define H_ISBIGLINK(HP) ((HP)->fcbEOF > 4)
+#define H_SYMLINK(HP)   (H_ISBIGLINK((HP)) ? (HP)->h_symlinkptr : (HP)->h_symlinkdata)
+
 /* These flags are kept in flags. */
 #define IN_ACCESS		0x0001		/* Access time update request. */
 #define IN_CHANGE		0x0002		/* Change time update request. */
@@ -329,6 +331,7 @@ typedef struct hfsfilemeta {
 #define IN_RENAME		0x0010		/* Node is being renamed. */
 #define IN_SHLOCK		0x0020		/* File has shared lock. */
 #define IN_EXLOCK		0x0040		/* File has exclusive lock. */
+#define IN_BYCNID		0x0100		/* Dir was found by CNID */
 #define IN_ALLOCATING	0x1000		/* vnode is in transit, wait or ignore */
 #define IN_WANT			0x2000		/* Its being waited for */
 
@@ -695,7 +698,7 @@ short hfs_flushvolumeheader(struct hfsmount *hfsmp, int waitfor);
 
 short hfs_getcatalog (ExtendedVCB *vcb, u_int32_t dirID, char *name, short len, hfsCatalogInfo *catInfo);
 short hfsMoveRename (ExtendedVCB *vcb, u_int32_t oldDirID, char *oldName, u_int32_t newDirID, char *newName, u_int32_t *hint);
-short hfsCreate (ExtendedVCB *vcb, u_int32_t dirID, char *name, int mode);
+short hfsCreate (ExtendedVCB *vcb, u_int32_t dirID, char *name, int mode, u_int32_t tehint);
 short hfsCreateFileID (ExtendedVCB *vcb, u_int32_t parentDirID, StringPtr name, u_int32_t catalogHint, u_int32_t *fileIDPtr);
 short hfs_vcreate (ExtendedVCB *vcb, hfsCatalogInfo *catInfo, u_int8_t forkType, struct vnode **vpp);
 short hfsDelete (ExtendedVCB *vcb, u_int32_t parentDirID, StringPtr name, short isfile, u_int32_t catalogHint);
@@ -765,7 +768,7 @@ OSErr	hfs_MountHFSVolume(struct hfsmount *hfsmp, HFSMasterDirectoryBlock *mdb,
 		u_long sectors, struct proc *p);
 OSErr	hfs_MountHFSPlusVolume(struct hfsmount *hfsmp, HFSPlusVolumeHeader *vhp,
 		u_long embBlkOffset, u_long sectors, struct proc *p);
-OSStatus  GetInitializedVNode(struct hfsmount *hfsmp, struct vnode **tmpvnode, int init_ubc);
+OSStatus  GetInitializedVNode(struct hfsmount *hfsmp, struct vnode **tmpvnode);
 
 int hfs_getconverter(u_int32_t encoding, hfs_to_unicode_func_t *get_unicode,
 		     unicode_to_hfs_func_t *get_hfsname);
@@ -782,5 +785,7 @@ int mac_roman_to_utf8(Str31 hfs_str, ByteCount maxDstLen, ByteCount *actualDstLe
 		unsigned char* dstStr);
 
 int utf8_to_mac_roman(ByteCount srcLen, const unsigned char* srcStr, Str31 dstStr);
+
+u_int32_t hfs_pickencoding(const u_int16_t *src, int len);
 
 #endif /* __HFS__ */

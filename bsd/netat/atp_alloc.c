@@ -52,6 +52,8 @@
 
 gbuf_t *atp_resource_m = 0;
 extern atlock_t atpgen_lock;
+extern caddr_t atp_free_cluster_list;
+extern void atp_delete_free_clusters();
 
 struct atp_trans *atp_trans_alloc(atp)
 struct  atp_state *atp;
@@ -178,6 +180,8 @@ register struct atp_rcb *rcbp;
 		for (i=0; i < rcbp->rc_pktcnt; i++)
 			rcbp->rc_snd[i] = 0;
 	}
+	if (atp_free_cluster_list)
+		atp_delete_free_clusters();
 	if (rc_state != RCB_UNQUEUED) {
 		if (rc_state == RCB_PENDING) {
 			ATP_Q_REMOVE(atp->atp_attached, rcbp, rc_list);

@@ -608,6 +608,11 @@ nfs_mount_diskless_private(ndmntp, mntname, mntflag, vpp, mpp)
 	 */
 	mp = _MALLOC_ZONE((u_long)sizeof(struct mount), M_MOUNT, M_WAITOK);
 	bzero((char *)mp, (u_long)sizeof(struct mount));
+
+    /* Initialize the default IO constraints */
+    mp->mnt_maxreadcnt = mp->mnt_maxwritecnt = MAXPHYS;
+    mp->mnt_segreadcnt = mp->mnt_segwritecnt = 32;
+
 	lockinit(&mp->mnt_lock, PVFS, "vfslock", 0, 0);
 	(void)vfs_busy(mp, LK_NOWAIT, 0, procp);
 	LIST_INIT(&mp->mnt_vnodelist);
@@ -936,32 +941,43 @@ nfs_unmount(mp, mntflags, p)
 	nmp = VFSTONFS(mp);
 	/*
 	 * Goes something like this..
-	 * - Check for activity on the root vnode (other than ourselves).
 	 * - Call vflush() to clear out vnodes for this file system,
-	 *   except for the root vnode.
+	 *   except for the swap files. Deal with them in 2nd pass.
+	 *   It will do vgone making the vnode VBAD at that time.
 	 * - Decrement reference on the vnode representing remote root.
 	 * - Close the socket
 	 * - Free up the data structures
-	 */
-	/*
+	 *
 	 * We need to decrement the ref. count on the nfsnode representing
 	 * the remote root.  See comment in mountnfs().  The VFS unmount()
 	 * has done vput on this vnode, otherwise we would get deadlock!
 	 */
 	vp = nmp->nm_dvp;
 	vn_lock(vp, LK_EXCLUSIVE | LK_RETRY, p);
-	if (vp->v_usecount > 1) {
-		VOP_UNLOCK(vp, 0, p);
-		return (EBUSY);
-	}
-
+	
 	/*
 	 * Must handshake with nqnfs_clientd() if it is active.
 	 */
 	nmp->nm_flag |= NFSMNT_DISMINPROG;
 	while (nmp->nm_inprog != NULLVP)
 		(void) tsleep((caddr_t)&lbolt, PSOCK, "nfsdism", 0);
-	error = vflush(mp, vp, flags);
+	/*
+	 * vflush will check for busy vnodes on mountpoint. 
+	 * Will do the right thing for MNT_FORCE. That is, we should
+	 * not get EBUSY back.
+	 */
+	error = vflush(mp, vp, SKIPSWAP | flags);
+	if (mntflags & MNT_FORCE) 
+		error = vflush(mp, NULLVP, flags);
+	else {
+		if (vp->v_usecount > 1) {
+			VOP_UNLOCK(vp, 0, p);
+			nmp->nm_flag &= ~NFSMNT_DISMINPROG;
+			return (EBUSY);
+		}
+		error = vflush(mp, vp, flags);
+	}
+
 	if (error) {
 		VOP_UNLOCK(vp, 0, p);
 		nmp->nm_flag &= ~NFSMNT_DISMINPROG;
@@ -977,9 +993,13 @@ nfs_unmount(mp, mntflags, p)
 
 	/*
 	 * Release the root vnode reference held by mountnfs()
+	 * Note: vflush would have done the vgone for us if we
+	 * didn't skip over it due to mount reference held.
 	 */
 	vput(vp);
-	vgone(vp);
+	if (!(mntflags & MNT_FORCE))
+		vgone(vp);
+	mp->mnt_data = 0; /* don't want to end up using stale vp */
 	nfs_disconnect(nmp);
 	m_freem(nmp->nm_nam);
 

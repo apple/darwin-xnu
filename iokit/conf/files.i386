@@ -4,24 +4,10 @@
 iokit/Drivers/platform/drvAppleI386Generic/AppleI386PlatformExpert.cpp	optional iokitcpp
 iokit/Drivers/platform/drvAppleI386Generic/AppleI386CPU.cpp            optional iokitcpp
 
-# PCI support
-
-iokit/Families/IOPCIBus/IOPCIDeviceI386.cpp                 optional iokitcpp
-iokit/Drivers/pci/drvApplePCI/AppleI386PCI.cpp              optional iokitcpp
-
 # Shared lock
 
 iokit/Kernel/i386/IOSharedLock.s                            standard
 iokit/Kernel/i386/IOAsmSupport.s                            standard
-
-# PS2 support
-
-iokit/Drivers/platform/drvApplePS2Controller/ApplePS2Controller.cpp	optional iokitcpp
-iokit/Drivers/platform/drvApplePS2Controller/ApplePS2KeyboardDevice.cpp	optional iokitcpp
-iokit/Drivers/platform/drvApplePS2Controller/ApplePS2MouseDevice.cpp	optional iokitcpp
-iokit/Drivers/hidsystem/drvApplePS2Keyboard/ApplePS2Keyboard.cpp	optional iokitcpp
-iokit/Drivers/hidsystem/drvApplePS2Mouse/ApplePS2Mouse.cpp		optional iokitcpp
-
 
 # Interrupt Controller
 iokit/Drivers/platform/drvAppleIntelClassicPIC/PIC8259.cpp  optional iokitcpp
@@ -31,12 +17,6 @@ iokit/Drivers/platform/drvAppleIntelClock/IntelClock.cpp    optional iokitcpp
 
 # Power Domains
 iokit/Drivers/platform/drvAppleRootDomain/RootDomain.cpp    optional iokitcpp
-
-# Intel EtherExpress Pro driver (i82557/i82558)
-iokit/Drivers/network/drvIntel82557/i82557.cpp              optional iokitcpp
-iokit/Drivers/network/drvIntel82557/i82557Private.cpp       optional iokitcpp
-iokit/Drivers/network/drvIntel82557/i82557PHY.cpp           optional iokitcpp
-iokit/Drivers/network/drvIntel82557/i82557eeprom.cpp        optional iokitcpp
 
 # ATA support
 iokit/Families/IOATAStandard/IOATAStandardController.cpp       optional iokitcpp
@@ -48,25 +28,6 @@ iokit/Families/IOATAStandard/ATAQueueHelpers.cpp               optional iokitcpp
 iokit/Families/IOATAStandard/IOATAStandardDriver.cpp            optional iokitcpp
 iokit/Families/IOATAStandard/IOATAStandardDriverPio.cpp         optional iokitcpp
 iokit/Families/IOATAStandard/IOATAStandardDriverDma.cpp         optional iokitcpp
-
-# Block Storage Family: ATA
-iokit/Families/IOATAHDDrive/IOATAHDDrive.cpp        optional iokitcpp
-iokit/Families/IOATAHDDrive/IOATAHDDriveNub.cpp     optional iokitcpp
-iokit/Families/IOATAHDDrive/IOATAHDCommand.cpp      optional iokitcpp
-iokit/Families/IOATAHDDrive/IOATAHDPower.cpp           optional iokitcpp
-
-# Block Storage Family: ATAPI
-iokit/Families/IOATAPIHDDrive/IOATAPIHDDrive.cpp    optional iokitcpp
-iokit/Families/IOATAPIHDDrive/IOATAPIHDDriveNub.cpp optional iokitcpp
-iokit/Families/IOATAPIHDDrive/IOATAPIHDCommand.cpp  optional iokitcpp
-
-iokit/Families/IOATAPICDDrive/IOATAPICDDrive.cpp    optional iokitcpp          
-iokit/Families/IOATAPICDDrive/IOATAPICDDriveNub.cpp optional iokitcpp
-iokit/Families/IOATAPICDDrive/IOATAPICDCommand.cpp  optional iokitcpp
-
-iokit/Families/IOATAPIDVDDrive/IOATAPIDVDDrive.cpp    optional iokitcpp
-iokit/Families/IOATAPIDVDDrive/IOATAPIDVDDriveNub.cpp optional iokitcpp
-iokit/Families/IOATAPIDVDDrive/IOATAPIDVDCommand.cpp  optional iokitcpp
 
 # ATA (Intel PIIX IDE) controller driver
 iokit/Drivers/ata/drvApplePIIXATA/AppleATAPIIX.cpp              optional iokitcpp

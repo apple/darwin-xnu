@@ -69,6 +69,24 @@
 
 #include <kern/macro_help.h>
 
+/* 
+ * Each page entered on the inactive queue obtains a ticket from a
+ * particular ticket roll.  Pages granted tickets from a particular 
+ * roll  generally flow through the queue as a group.  In this way when a
+ * page with a ticket from a particular roll is pulled from the top of the
+ * queue it is extremely likely that the pages near the top will have tickets
+ * from the same or adjacent rolls.  In this way the proximity to the top
+ * of the queue can be loosely ascertained by determining the identity of
+ * the roll the pages ticket came from. 
+ */
+
+
+extern int	vm_page_ticket_roll;
+extern int	vm_page_ticket;
+
+#define VM_PAGE_TICKETS_IN_ROLL  512
+#define VM_PAGE_TICKET_ROLL_IDS  16
+
 /*
  *	Management of resident (logical) pages.
  *
@@ -105,24 +123,26 @@ struct vm_page {
 	vm_object_offset_t offset;	/* offset into that object (O,P) */
 
 	unsigned int	wire_count:16,	/* how many wired down maps use me? (O&P) */
-	                page_error:8,   /* error from I/O operations */
+			page_ticket:4,	/* age of the page on the       */
+					/* inactive queue.		    */
 	/* boolean_t */	inactive:1,	/* page is in inactive list (P) */
 			active:1,	/* page is in active list (P) */
 			laundry:1,	/* page is being cleaned now (P)*/
 			free:1,		/* page is on free list (P) */
 			reference:1,	/* page has been used (P) */
-			limbo:1,	/* page prepped then stolen (P) */
 			pageout:1,	/* page wired & busy for pageout (P) */
-			gobbled:1;      /* page used internally (P) */
-        /* we've used up all 32 bits */
+			gobbled:1,      /* page used internally (P) */
+			private:1,	/* Page should not be returned to
+					 *  the free list (O) */
+			:0;
 
 	unsigned int
+	                page_error:8,   /* error from I/O operations */
 	/* boolean_t */	busy:1,		/* page is in transit (O) */
 			wanted:1,	/* someone is waiting for page (O) */
 			tabled:1,	/* page is in VP table (O) */
 			fictitious:1,	/* Physical page doesn't exist (O) */
-			private:1,	/* Page should not be returned to
-					 *  the free list (O) */
+			no_isync:1,     /* page has not been instruction synced */
 			absent:1,	/* Data has been requested, but is
 					 *  not yet available (O) */
 			error:1,	/* Data manager was unable to provide
@@ -149,24 +169,17 @@ struct vm_page {
 					    /* allows creation of list      */
 					    /* requests on pages that are   */
 					    /* actively being paged.        */
-			:0;
+			dump_cleaning:1;   /* set by the pageout daemon when */
+					   /* a page being cleaned is       */
+					   /* encountered and targeted as   */
+					   /* a pageout candidate           */
+        /* we've used up all 32 bits */
 
 	vm_offset_t	phys_addr;	/* Physical address of page, passed
 					 *  to pmap_enter (read-only) */
-	union {
-	  struct {
-	   unsigned int	prep:16,	/* page prep count */
-			pin:16;		/* page pin pount */
-	  } pp_counts;
-	  unsigned int	pp_both;	/* used to test for both zero */
-	} prep_pin_u;
 };
 
 typedef struct vm_page	*vm_page_t;
-
-#define prep_count	prep_pin_u.pp_counts.prep
-#define pin_count	prep_pin_u.pp_counts.pin
-#define prep_pin_count	prep_pin_u.pp_both
 
 #define VM_PAGE_NULL		((vm_page_t) 0)
 #define NEXT_PAGE(m)    ((vm_page_t) (m)->pageq.next)
@@ -354,20 +367,6 @@ extern void		vm_set_page_size(void);
 
 extern void		vm_page_gobble(
 				        vm_page_t      page);
-
-extern kern_return_t	vm_page_prep(
-					vm_page_t	m);
-
-extern kern_return_t	vm_page_pin(
-					vm_page_t	m);
-
-extern kern_return_t	vm_page_unprep(
-					vm_page_t	m);
-
-extern kern_return_t	vm_page_unpin(
-					vm_page_t	m);
-
-extern void		cleanup_limbo_queue(void);
 
 /*
  *	Functions implemented as macros. m->wanted and m->busy are

@@ -358,6 +358,19 @@ in6_rtqkill(struct radix_node *rn, void *rock)
 static int rtq_timeout = RTQ_TIMEOUT;
 
 static void
+in6_rtqtimo_funneled(void *rock)
+{
+#ifdef __APPLE__
+    	boolean_t   funnel_state;
+    	funnel_state = thread_funnel_set(network_flock, TRUE);
+	in6_rtqtimo(rock);
+#endif
+#ifdef __APPLE__
+        (void) thread_funnel_set(network_flock, FALSE);
+#endif
+}
+
+static void
 in6_rtqtimo(void *rock)
 {
 	struct radix_node_head *rnh = rock;
@@ -365,10 +378,6 @@ in6_rtqtimo(void *rock)
 	struct timeval atv;
 	static time_t last_adjusted_timeout = 0;
 	int s;
-#ifdef __APPLE__
-    	boolean_t   funnel_state;
-    	funnel_state = thread_set_funneled(TRUE);
-#endif
 
 	arg.found = arg.killed = 0;
 	arg.rnh = rnh;
@@ -408,10 +417,7 @@ in6_rtqtimo(void *rock)
 
 	atv.tv_usec = 0;
 	atv.tv_sec = arg.nextstop;
-	timeout(in6_rtqtimo, rock, tvtohz(&atv));
-#ifdef __APPLE__
-    	(void) thread_set_funneled(funnel_state);
-#endif
+	timeout(in6_rtqtimo_funneled, rock, tvtohz(&atv));
 }
 
 /*
@@ -447,16 +453,25 @@ in6_mtuexpire(struct radix_node *rn, void *rock)
 #define	MTUTIMO_DEFAULT	(60*1)
 
 static void
+in6_mtutimo_funneled(void *rock)
+{
+#ifdef __APPLE__
+    	boolean_t   funnel_state;
+    	funnel_state = thread_funnel_set(network_flock, TRUE);
+	in6_mtutimo(rock);
+#endif
+#ifdef __APPLE__
+        (void) thread_funnel_set(network_flock, FALSE);
+#endif
+}
+
+static void
 in6_mtutimo(void *rock)
 {
 	struct radix_node_head *rnh = rock;
 	struct mtuex_arg arg;
 	struct timeval atv;
 	int s;
-#ifdef __APPLE__
-    	boolean_t   funnel_state;
-    	funnel_state = thread_set_funneled(TRUE);
-#endif
 
 	arg.rnh = rnh;
 	arg.nextstop = time_second + MTUTIMO_DEFAULT;
@@ -470,10 +485,7 @@ in6_mtutimo(void *rock)
 		printf("invalid mtu expiration time on routing table\n");
 		arg.nextstop = time_second + 30;	/*last resort*/
 	}
-	timeout(in6_mtutimo, rock, tvtohz(&atv));
-#ifdef __APPLE__
-    	(void) thread_set_funneled(funnel_state);
-#endif
+	timeout(in6_mtutimo_funneled, rock, tvtohz(&atv));
 }
 
 #if 0

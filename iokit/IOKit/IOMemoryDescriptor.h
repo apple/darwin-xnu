@@ -59,7 +59,11 @@ protected:
 /*! @struct ExpansionData
     @discussion This structure will be used to expand the capablilties of this class in the future.
     */    
-    struct ExpansionData { };
+    struct ExpansionData {
+        void *	devicePager;
+        unsigned int pagerContig:1;
+        unsigned int unused:31;
+    };
 
 /*! @var reserved
     Reserved for future use.  (Internal use only)  */
@@ -74,8 +78,13 @@ protected:
     IOByteCount         _length;           /* length of all ranges */
     IOOptionBits 	_tag;
 
+public:
+
+    virtual IOPhysicalAddress getSourceSegment( IOByteCount offset,
+						IOByteCount * length );
+
 private:
-    OSMetaClassDeclareReservedUnused(IOMemoryDescriptor, 0);
+    OSMetaClassDeclareReservedUsed(IOMemoryDescriptor, 0);
     OSMetaClassDeclareReservedUnused(IOMemoryDescriptor, 1);
     OSMetaClassDeclareReservedUnused(IOMemoryDescriptor, 2);
     OSMetaClassDeclareReservedUnused(IOMemoryDescriptor, 3);
@@ -288,7 +297,7 @@ public:
     @result The number of bytes copied, zero will be returned if the specified offset is beyond the length of the descriptor. */
 
     virtual IOByteCount readBytes(IOByteCount offset,
-				void * bytes, IOByteCount withLength) = 0;
+				void * bytes, IOByteCount withLength);
 
 /*! @function writeBytes
     @abstract Copy data to the memory descriptor's buffer from the specified buffer.
@@ -299,7 +308,7 @@ public:
     @result The number of bytes copied, zero will be returned if the specified offset is beyond the length of the descriptor. */
 
     virtual IOByteCount writeBytes(IOByteCount offset,
-				const void * bytes, IOByteCount withLength) = 0;
+				const void * bytes, IOByteCount withLength);
 
 /*! @function getPhysicalSegment
     @abstract Break a memory descriptor into its physically contiguous segments.
@@ -319,16 +328,10 @@ public:
     inline IOPhysicalAddress 	getPhysicalAddress()
 				{ return( getPhysicalSegment( 0, 0 )); }
 
-    /*
-     * getVirtualSegment:
-     *
-     * Get the virtual address of the buffer, relative to the given offset.
-     * If the memory wasn't mapped into the caller's address space, it will be
-     * mapped in now.   If the current position is at the end of the buffer, a
-     * null is returned.
-     */
-    virtual void * getVirtualSegment(IOByteCount offset,
-					IOByteCount * length) = 0;
+    /* DEPRECATED */ /* USE INSTEAD: map(), readBytes(), writeBytes() */
+    /* DEPRECATED */ virtual void * getVirtualSegment(IOByteCount offset,
+    /* DEPRECATED */					IOByteCount * length) = 0;
+    /* DEPRECATED */ /* USE INSTEAD: map(), readBytes(), writeBytes() */
 
 /*! @function prepare
     @abstract Prepare the memory for an I/O transfer.
@@ -398,6 +401,14 @@ public:
 
     // make virtual
     IOReturn redirect( task_t safeTask, bool redirect );
+
+    IOReturn handleFault(
+        void *			pager,
+	vm_map_t		addressMap,
+	IOVirtualAddress	address,
+	IOByteCount		sourceOffset,
+	IOByteCount		length,
+        IOOptionBits		options );
 
 protected:
     virtual IOMemoryMap * 	makeMapping(
@@ -504,8 +515,10 @@ public:
 /* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
 
 // The following classes are private implementation of IOMemoryDescriptor - they
-// should not be reference directly, just through the public API's in the 
-// IOMemoryDescriptor class.
+// should not be referenced directly, just through the public API's in the 
+// IOMemoryDescriptor class. For example, an IOGeneralMemoryDescriptor instance
+// might be created by IOMemoryDescriptor::withAddress(), but there should be 
+// no need to reference as anything but a generic IOMemoryDescriptor *.
 
 enum {
     kIOMemoryRequiresWire	= 0x00000001
@@ -539,20 +552,20 @@ protected:
 
     virtual void free();
 
-protected: /* (to be deprecated) */
-    IOByteCount		_position;         /* absolute position over all ranges */
-    virtual void setPosition(IOByteCount position);
+protected:
+    /* DEPRECATED */ IOByteCount _position; /* absolute position over all ranges */
+    /* DEPRECATED */ virtual void setPosition(IOByteCount position);
 
 private:
-    unsigned		_positionAtIndex;  /* range #n in which position is now */
-    IOByteCount		_positionAtOffset; /* relative position within range #n */
+    /* DEPRECATED */ unsigned    _positionAtIndex;  /* range #n in which position is now */
+    /* DEPRECATED */ IOByteCount _positionAtOffset; /* relative position within range #n */
     OSData *_memoryEntries;
 
-    vm_offset_t _kernPtrAligned;
-    unsigned    _kernPtrAtIndex;
-    IOByteCount  _kernSize;
-    virtual void mapIntoKernel(unsigned rangeIndex);
-    virtual void unmapFromKernel();
+    /* DEPRECATED */ vm_offset_t _kernPtrAligned;
+    /* DEPRECATED */ unsigned    _kernPtrAtIndex;
+    /* DEPRECATED */ IOByteCount  _kernSize;
+    /* DEPRECATED */ virtual void mapIntoKernel(unsigned rangeIndex);
+    /* DEPRECATED */ virtual void unmapFromKernel();
     inline vm_map_t getMapForTask( task_t task, vm_address_t address );
 
 public:
@@ -585,17 +598,14 @@ public:
                                         IODirection      withDirection,
                                         bool             asReference = false);
 
-    virtual IOByteCount readBytes(IOByteCount offset,
-				void * bytes, IOByteCount withLength);
-
-    virtual IOByteCount writeBytes(IOByteCount offset,
-				const void * bytes, IOByteCount withLength);
-
     virtual IOPhysicalAddress getPhysicalSegment(IOByteCount offset,
 						 IOByteCount * length);
 
-    virtual void * getVirtualSegment(IOByteCount offset,
-					IOByteCount * length);
+    virtual IOPhysicalAddress getSourceSegment(IOByteCount offset,
+                                               IOByteCount * length);
+
+    /* DEPRECATED */ virtual void * getVirtualSegment(IOByteCount offset,
+    /* DEPRECATED */					IOByteCount * length);
 
     virtual IOReturn prepare(IODirection forDirection = kIODirectionNone);
 
@@ -670,6 +680,9 @@ public:
 
     virtual IOPhysicalAddress getPhysicalSegment(IOByteCount offset,
 						 IOByteCount * length);
+
+    virtual IOPhysicalAddress getSourceSegment(IOByteCount offset,
+                                               IOByteCount * length);
 
     virtual IOByteCount readBytes(IOByteCount offset,
 				void * bytes, IOByteCount withLength);

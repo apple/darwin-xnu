@@ -92,7 +92,6 @@
 #include <vm/vm_map.h>
 #include <mach/policy.h>
 #include <mach/sync_policy.h>
-#include <kern/sf.h>
 #include <kern/mk_sp.h>	/*** ??? fix so this can be removed ***/
 #include <sys/kdebug.h>
 
@@ -103,15 +102,23 @@ extern int	task_swap_on;
 
 extern int	hz;
 
-#define		DEFAULT_PREEMPTION_RATE		100	/* (1/s) */
+#define		DEFAULT_PREEMPTION_RATE		100		/* (1/s) */
 int			default_preemption_rate = DEFAULT_PREEMPTION_RATE;
+
+#define		MAX_UNSAFE_QUANTA			800
+int			max_unsafe_quanta = MAX_UNSAFE_QUANTA;
+
+#define		MAX_POLL_QUANTA				2
+int			max_poll_quanta = MAX_POLL_QUANTA;
+
+#define		SCHED_POLL_YIELD_SHIFT		4		/* 1/16 */
+int			sched_poll_yield_shift = SCHED_POLL_YIELD_SHIFT;
 
 #define		NO_KERNEL_PREEMPT	0
 #define		KERNEL_PREEMPT		1
 int			kernel_preemption_mode = KERNEL_PREEMPT;
 
-int			min_quantum;
-natural_t	min_quantum_ms;
+uint32_t	std_quantum_us;
 
 unsigned	sched_tick;
 
@@ -165,10 +172,13 @@ void		checkrq(
 void		thread_check(
 				thread_t		thread,
 				run_queue_t		runq);
-#endif	/*DEBUG*/
 
+static
 boolean_t	thread_runnable(
 				thread_t		thread);
+
+#endif	/*DEBUG*/
+
 
 /*
  *	State machine
@@ -233,25 +243,14 @@ void
 sched_init(void)
 {
 	/*
-	 *	Calculate the minimum quantum
-	 *	in ticks.
+	 * Calculate the timeslicing quantum
+	 * in us.
 	 */
 	if (default_preemption_rate < 1)
 		default_preemption_rate = DEFAULT_PREEMPTION_RATE;
-	min_quantum = hz / default_preemption_rate;
+	std_quantum_us = (1000 * 1000) / default_preemption_rate;
 
-	/*
-	 *	Round up result (4/5) to an
-	 *	integral number of ticks.
-	 */
-	if (((hz * 10) / default_preemption_rate) - (min_quantum * 10) >= 5)
-		min_quantum++;
-	if (min_quantum < 1)
-		min_quantum = 1;
-
-	min_quantum_ms = (1000 / hz) * min_quantum;
-
-	printf("scheduling quantum is %d ms\n", min_quantum_ms);
+	printf("standard timeslicing quantum is %d us\n", std_quantum_us);
 
 	wait_queues_init();
 	pset_sys_bootstrap();		/* initialize processor mgmt. */
@@ -261,7 +260,6 @@ sched_init(void)
 	sched_usec = 0;
 #endif	/* SIMPLE_CLOCK */
 	ast_init();
-	sf_init();
 }
 
 void
@@ -275,7 +273,7 @@ wait_queues_init(void)
 }
 
 /*
- *	Thread timeout routine, called when timer expires.
+ *	Thread wait timer expiration.
  */
 void
 thread_timer_expire(
@@ -287,17 +285,17 @@ thread_timer_expire(
 
 	s = splsched();
 	wake_lock(thread);
-	if (	thread->wait_timer_is_set							&&
-			!timer_call_is_delayed(&thread->wait_timer, NULL)		) {
-		thread->wait_timer_active--;
-		thread->wait_timer_is_set = FALSE;
-		thread_lock(thread);
-		if (thread->active)
-			clear_wait_internal(thread, THREAD_TIMED_OUT);
-		thread_unlock(thread);
+	if (--thread->wait_timer_active == 1) {
+		if (thread->wait_timer_is_set) {
+			thread->wait_timer_is_set = FALSE;
+			thread_lock(thread);
+			if (thread->active)
+				clear_wait_internal(thread, THREAD_TIMED_OUT);
+			thread_unlock(thread);
+		}
 	}
 	else
-	if (--thread->wait_timer_active == 0)
+	if (thread->wait_timer_active == 0)
 		thread_wakeup_one(&thread->wait_timer_active);
 	wake_unlock(thread);
 	splx(s);
@@ -312,11 +310,11 @@ thread_timer_expire(
  */
 void
 thread_set_timer(
-	natural_t		interval,
-	natural_t		scale_factor)
+	uint32_t		interval,
+	uint32_t		scale_factor)
 {
 	thread_t		thread = current_thread();
-	AbsoluteTime	deadline;
+	uint64_t		deadline;
 	spl_t			s;
 
 	s = splsched();
@@ -336,7 +334,7 @@ thread_set_timer(
 
 void
 thread_set_timer_deadline(
-	AbsoluteTime	deadline)
+	uint64_t		deadline)
 {
 	thread_t		thread = current_thread();
 	spl_t			s;
@@ -373,44 +371,24 @@ thread_cancel_timer(void)
 }
 
 /*
- *	thread_depress_timeout:
- *
- *	Timeout routine for priority depression.
- */
-void
-thread_depress_timeout(
-	thread_call_param_t		p0,
-	thread_call_param_t		p1)
-{
-	thread_t		thread = p0;
-    sched_policy_t	*policy;
-    spl_t			s;
-
-    s = splsched();
-    thread_lock(thread);
-    policy = policy_id_to_sched_policy(thread->policy);
-    thread_unlock(thread);
-    splx(s);
-
-	if (policy != SCHED_POLICY_NULL)
-		policy->sp_ops.sp_thread_depress_timeout(policy, thread);
-
-	thread_deallocate(thread);
-}
-
-/*
  * Set up thread timeout element when thread is created.
  */
 void
 thread_timer_setup(
 	 thread_t		thread)
 {
+	extern void	thread_depress_expire(
+					timer_call_param_t	p0,
+					timer_call_param_t	p1);
+
 	timer_call_setup(&thread->wait_timer, thread_timer_expire, thread);
 	thread->wait_timer_is_set = FALSE;
 	thread->wait_timer_active = 1;
-	thread->ref_count++;
 
-	thread_call_setup(&thread->depress_timer, thread_depress_timeout, thread);
+	timer_call_setup(&thread->depress_timer, thread_depress_expire, thread);
+	thread->depress_timer_active = 1;
+
+	thread->ref_count++;
 }
 
 void
@@ -440,6 +418,19 @@ thread_timer_terminate(void)
 		wake_lock(thread);
 	}
 
+	thread->depress_timer_active--;
+
+	while (thread->depress_timer_active > 0) {
+		assert_wait((event_t)&thread->depress_timer_active, THREAD_UNINT);
+		wake_unlock(thread);
+		splx(s);
+
+		thread_block((void (*)(void)) 0);
+
+		s = splsched();
+		wake_lock(thread);
+	}
+
 	wake_unlock(thread);
 	splx(s);
 
@@ -459,45 +450,20 @@ thread_go_locked(
 	thread_t		thread,
 	int				result)
 {
-	int				state;
-	sched_policy_t	*policy;
-	sf_return_t		sfr;
-
 	assert(thread->at_safe_point == FALSE);
 	assert(thread->wait_event == NO_EVENT);
 	assert(thread->wait_queue == WAIT_QUEUE_NULL);
 
 	if (thread->state & TH_WAIT) {
-
 		thread->state &= ~(TH_WAIT|TH_UNINT);
 		if (!(thread->state & TH_RUN)) {
 			thread->state |= TH_RUN;
-#if	THREAD_SWAPPER
-			if (thread->state & TH_SWAPPED_OUT)
-				thread_swapin(thread->top_act, FALSE);
-			else 
-#endif	/* THREAD_SWAPPER */
-			{
-				policy = &sched_policy[thread->policy];
-				sfr = policy->sp_ops.sp_thread_unblock(policy, thread);
-				assert(sfr == SF_SUCCESS);
-			}
+
+			_mk_sp_thread_unblock(thread);
 		}
+
 		thread->wait_result = result;
 	}
-
-					
-	/*
-	 * The next few lines are a major hack. Hopefully this will get us
-	 * around all of the scheduling framework hooha. We can't call
-	 * sp_thread_unblock yet because we could still be finishing up the
-	 * durn two stage block on another processor and thread_setrun
-	 * could be called by s_t_u and we'll really be messed up then.
-	 */		
-	/* Don't mess with this if we are still swapped out */
-	if (!(thread->state & TH_SWAPPED_OUT))
-		thread->sp_state = MK_SP_RUNNABLE;
-			
 }
 
 void
@@ -578,7 +544,7 @@ assert_wait(
 
 	index = wait_hash(event);
 	wq = &wait_queues[index];
-	wait_queue_assert_wait(wq,
+	(void)wait_queue_assert_wait(wq,
 			       event,
 			       interruptible);
 }
@@ -642,8 +608,6 @@ void
 thread_unstop(
 	thread_t			thread)
 {
-	sched_policy_t		*policy;
-	sf_return_t			sfr;
 	spl_t				s;
 
 	s = splsched();
@@ -651,17 +615,10 @@ thread_unstop(
 	thread_lock(thread);
 
 	if ((thread->state & (TH_RUN|TH_WAIT|TH_SUSP/*|TH_UNINT*/)) == TH_SUSP) {
-		thread->state = (thread->state & ~TH_SUSP) | TH_RUN;
-#if	THREAD_SWAPPER
-		if (thread->state & TH_SWAPPED_OUT)
-			thread_swapin(thread->top_act, FALSE);
-		else
-#endif	/* THREAD_SWAPPER */
-			{
-				policy = &sched_policy[thread->policy];
-				sfr = policy->sp_ops.sp_thread_unblock(policy, thread);
-				assert(sfr == SF_SUCCESS);
-			}
+		thread->state &= ~TH_SUSP;
+		thread->state |= TH_RUN;
+
+		_mk_sp_thread_unblock(thread);
 	}
 	else
 	if (thread->state & TH_SUSP) {
@@ -713,9 +670,11 @@ thread_wait(
 		s = splsched();
 		wake_lock(thread);
 	}
+
 	wake_unlock(thread);
 	splx(s);
-	return TRUE;
+
+	return (TRUE);
 }
 
 
@@ -854,18 +813,23 @@ thread_select(
 	processor_set_t			pset;
 	register run_queue_t	runq = &myprocessor->runq;
 	boolean_t				other_runnable;
-	sched_policy_t			*policy;
 
 	/*
 	 *	Check for other non-idle runnable threads.
 	 */
-	myprocessor->first_quantum = TRUE;
 	pset = myprocessor->processor_set;
 	thread = current_thread();
 
-#if 0 /* CHECKME! */
-	thread->unconsumed_quantum = myprocessor->quantum;
-#endif
+	/*
+	 *	Update set_quanta for timesharing.
+	 */
+	pset->set_quanta = pset->machine_quanta[
+							(pset->runq.count > pset->processor_count) ?
+								  pset->processor_count : pset->runq.count];
+
+	/* Update the thread's priority */
+	if (thread->sched_stamp != sched_tick)
+		update_priority(thread);
 
 	simple_lock(&runq->lock);
 	simple_lock(&pset->runq.lock);
@@ -884,10 +848,8 @@ thread_select(
 		simple_unlock(&pset->runq.lock);
 		simple_unlock(&runq->lock);
 
-		/* Update the thread's meta-priority */
-		policy = policy_id_to_sched_policy(thread->policy);
-		assert(policy != SCHED_POLICY_NULL);
-		(void)policy->sp_ops.sp_thread_update_mpri(policy, thread);
+		myprocessor->slice_quanta =
+				(thread->sched_mode & TH_MODE_TIMESHARE)? pset->set_quanta: 1;
 	}
 	else
 	if (other_runnable) {
@@ -934,11 +896,10 @@ thread_select(
  *	If continuation is non-zero, and the current thread is blocked,
  *	then it will resume by executing continuation on a new stack.
  *	Returns TRUE if the hand-off succeeds.
- *	The reason parameter == AST_QUANTUM if the thread blocked
+ *	The reason parameter contains | AST_QUANTUM if the thread blocked
  *	because its quantum expired.
  *	Assumes splsched.
  */
-
 
 static thread_t
 __current_thread(void)
@@ -953,9 +914,11 @@ thread_invoke(
 	int					reason,
 	void                (*continuation)(void))
 {
-	sched_policy_t		*policy;
-	sf_return_t			sfr;
 	void                (*lcont)(void);
+
+	if (cpu_data[cpu_number()].preemption_level != 0)
+		panic("thread_invoke: preemption_level %d\n",
+								cpu_data[cpu_number()].preemption_level);
 
 	/*
 	 *	Mark thread interruptible.
@@ -963,17 +926,13 @@ thread_invoke(
 	thread_lock(new_thread);
 	new_thread->state &= ~TH_UNINT;
 
-	if (cpu_data[cpu_number()].preemption_level != 1)
-		panic("thread_invoke: preemption_level %d\n",
-								cpu_data[cpu_number()].preemption_level);
-
-
 	assert(thread_runnable(new_thread));
 
 	assert(old_thread->continuation == (void (*)(void))0);	
 
-	if ((old_thread->sched_mode & TH_MODE_REALTIME) && (!old_thread->stack_privilege)) {
-	  old_thread->stack_privilege = old_thread->kernel_stack;
+	if (	(old_thread->sched_mode & TH_MODE_REALTIME)		&&
+					!old_thread->stack_privilege				) {
+		old_thread->stack_privilege = old_thread->kernel_stack;
 	}
 
 	if (continuation != (void (*)()) 0) {
@@ -1002,6 +961,8 @@ thread_invoke(
 		ast_context(new_thread->top_act, cpu_number());
 		timer_switch(&new_thread->system_timer);
 		thread_unlock(new_thread);
+		
+		current_task()->csw++;
 
 		old_thread->continuation = continuation;
 		stack_handoff(old_thread, new_thread);
@@ -1009,14 +970,14 @@ thread_invoke(
 		wake_lock(old_thread);
 		thread_lock(old_thread);
 		act_machine_sv_free(old_thread->top_act);
+	   
+		_mk_sp_thread_done(old_thread);
 
 		/* 
 		 *  inline thread_dispatch but don't free stack
 		 */
 
 		switch (old_thread->state & (TH_RUN|TH_WAIT|TH_UNINT|TH_IDLE)) {
-		  sched_policy_t *policy;
-		  sf_return_t sfr;
  
 	    case TH_RUN			    | TH_UNINT:
 	    case TH_RUN:
@@ -1024,13 +985,7 @@ thread_invoke(
 		   *	No reason to stop.  Put back on a run queue.
 		   */
 		  old_thread->state |= TH_STACK_HANDOFF;
-
-		  /* Get pointer to scheduling policy "object" */
-		  policy = &sched_policy[old_thread->policy];
-
-		  /* Leave enqueueing thread up to scheduling policy */
-		  sfr = policy->sp_ops.sp_thread_dispatch(policy, old_thread);
-		  assert(sfr == SF_SUCCESS);
+		  _mk_sp_thread_dispatch(old_thread);
 		  break;
 
 	    case TH_RUN | TH_WAIT	    | TH_UNINT:
@@ -1068,27 +1023,13 @@ thread_invoke(
 	    default:
 		  panic("State 0x%x \n",old_thread->state);
 		}
-	   
-		/* Get pointer to scheduling policy "object" */
-		policy = &sched_policy[old_thread->policy];
 
-		/* Indicate to sched policy that old thread has stopped execution */
-		/*** ??? maybe use a macro -- rkc, 1/4/96 ***/
-		sfr = policy->sp_ops.sp_thread_done(policy,	old_thread);
-		assert(sfr == SF_SUCCESS);
 		thread_unlock(old_thread);
 		wake_unlock(old_thread);
+
 		thread_lock(new_thread);
-
 		assert(thread_runnable(new_thread));
-
-		/* Get pointer to scheduling policy "object" */
-		policy = &sched_policy[new_thread->policy];
-
-		/* Indicate to sched policy that new thread has started execution */
-		/*** ??? maybe use a macro ***/
-		sfr = policy->sp_ops.sp_thread_begin(policy, new_thread);
-		assert(sfr == SF_SUCCESS);
+		_mk_sp_thread_begin(new_thread);
 
 		lcont = new_thread->continuation;
 		new_thread->continuation = (void(*)(void))0;
@@ -1116,7 +1057,7 @@ thread_invoke(
 		/*NOTREACHED*/
 		return TRUE;
 
-	  case TH_STACK_COMING_IN:
+	  case TH_STACK_ALLOC:
 		/*
 		 * waiting for a stack
 		 */
@@ -1159,7 +1100,7 @@ thread_invoke(
 	  if (new_thread->state & TH_STACK_STATE) {
 	  get_new_stack:
 		/* has no stack. if not already waiting for one try to get one */
-		if ((new_thread->state & TH_STACK_COMING_IN) ||
+		if ((new_thread->state & TH_STACK_ALLOC) ||
 			/* not already waiting. nonblocking try to get one */
 			!stack_alloc_try(new_thread, thread_continue))
 		  {
@@ -1206,7 +1147,6 @@ thread_invoke(
 	counter_always(c_thread_invoke_csw++);
 	current_task()->csw++;
 
-	
 	thread_lock(old_thread);
 	old_thread->reason = reason;
 	assert(old_thread->runq == RUN_QUEUE_NULL);
@@ -1214,11 +1154,7 @@ thread_invoke(
 	if (continuation != (void (*)(void))0)
 		old_thread->continuation = continuation;
 
-	/* Indicate to sched policy that old thread has stopped execution */
-	policy = &sched_policy[old_thread->policy];
-	/*** ??? maybe use a macro -- ***/
-	sfr = policy->sp_ops.sp_thread_done(policy, old_thread);
-	assert(sfr == SF_SUCCESS);
+	_mk_sp_thread_done(old_thread);
 	thread_unlock(old_thread);
 
 	/*
@@ -1232,35 +1168,16 @@ thread_invoke(
 	new_thread = __current_thread();
 	assert(old_thread != new_thread);
 
-	assert(thread_runnable(new_thread));
-
 	thread_lock(new_thread);
 	assert(thread_runnable(new_thread));
-	/* Indicate to sched policy that new thread has started execution */
-	policy = &sched_policy[new_thread->policy];
-	/*** ??? maybe use a macro -- rkc, 1/4/96 ***/
-	sfr = policy->sp_ops.sp_thread_begin(policy, new_thread);
-	assert(sfr == SF_SUCCESS);
+	_mk_sp_thread_begin(new_thread);
 	thread_unlock(new_thread);
 
 	/*
 	 *	We're back.  Now old_thread is the thread that resumed
 	 *	us, and we have to dispatch it.
 	 */
-	/* CHECKME! */
-//	Code from OSF in Grenoble deleted the following fields. They were
-//	used in HPPA and 386 code, but not in the PPC for other than
-//	just setting and resetting. They didn't delete these lines from
-//	the MACH_RT builds, though, causing compile errors.  I'm going
-//	to make a wild guess and assume we can just delete these.
-#if 0
-	if (old_thread->preempt == TH_NOT_PREEMPTABLE) {
-	    /*
-	     * Mark that we have been really preempted
-	     */
-	    old_thread->preempt = TH_PREEMPTED;
-	}
-#endif
+
 	thread_dispatch(old_thread);
 	enable_preemption();
 
@@ -1282,14 +1199,10 @@ thread_invoke(
  */
 void
 thread_continue(
-	register thread_t old_thread)
+	register thread_t	old_thread)
 {
-	register thread_t self;
-	register void (*continuation)();
-	sched_policy_t          *policy;
-	sf_return_t             sfr;
-
-	self = current_thread();
+	register thread_t	self = current_thread();
+	register void		(*continuation)();
 	
 	/*
 	 *	We must dispatch the old thread and then
@@ -1297,24 +1210,14 @@ thread_continue(
 	 *	There might not be an old thread, if we are
 	 *	the first thread to run on this processor.
 	 */
-	if (old_thread != THREAD_NULL) {
+	if (old_thread != THREAD_NULL)
 		thread_dispatch(old_thread);
 	
-		thread_lock(self);
-
-        /* Get pointer to scheduling policy "object" */
-        policy = &sched_policy[self->policy];
-
-       /* Indicate to sched policy that new thread has started execution */
-       /*** ??? maybe use a macro -- rkc, 1/4/96 ***/
-       sfr = policy->sp_ops.sp_thread_begin(policy,self);
-       assert(sfr == SF_SUCCESS);
-	} else {
-		thread_lock(self);
-	}
-	
+	thread_lock(self);
 	continuation = self->continuation;
 	self->continuation = (void (*)(void))0;
+
+	_mk_sp_thread_begin(self);
 	thread_unlock(self);
 
 	/*
@@ -1327,15 +1230,17 @@ thread_continue(
 	enable_preemption();
 
 	if (self->funnel_state & TH_FN_REFUNNEL) {
-	  kern_return_t save_wait_result;
-	  self->funnel_state = 0;
-	  save_wait_result = self->wait_result;
-	  KERNEL_DEBUG(0x6032428 | DBG_FUNC_NONE, self->funnel_lock, 4, 0, 0, 0);
-	  funnel_lock(self->funnel_lock);
-	  KERNEL_DEBUG(0x6032430 | DBG_FUNC_NONE, self->funnel_lock, 4, 0, 0, 0);
-	  self->wait_result = save_wait_result;
-	  self->funnel_state = TH_FN_OWNED;
+		kern_return_t	save_wait_result;
+
+		self->funnel_state = 0;
+		save_wait_result = self->wait_result;
+		KERNEL_DEBUG(0x6032428 | DBG_FUNC_NONE, self->funnel_lock, 4, 0, 0, 0);
+		funnel_lock(self->funnel_lock);
+		KERNEL_DEBUG(0x6032430 | DBG_FUNC_NONE, self->funnel_lock, 4, 0, 0, 0);
+		self->wait_result = save_wait_result;
+		self->funnel_state = TH_FN_OWNED;
 	}
+
 	spllo();
 
 	assert(continuation);
@@ -1439,11 +1344,10 @@ db_show_thread_log(void)
 /*
  *	thread_block_reason:
  *
- *	Block the current thread.  If the thread is runnable
- *	then someone must have woken it up between its request
- *	to sleep and now.  In this case, it goes back on a
- *	run queue.
- *
+ *	Block the current thread if a wait has been asserted,
+ *	otherwise unconditionally yield the remainder of the
+ *	current quantum unless reason contains AST_BLOCK.
+ *	
  *	If a continuation is specified, then thread_block will
  *	attempt to discard the thread's kernel stack.  When the
  *	thread resumes, it will execute the continuation function
@@ -1481,8 +1385,11 @@ thread_block_reason(
 	if (thread->state & TH_ABORT)
 		clear_wait_internal(thread, THREAD_INTERRUPTED);
 
+	if (!(reason & AST_BLOCK))
+		myprocessor->slice_quanta = 0;
+
 	/* Unconditionally remove either | both */
-	ast_off(AST_QUANTUM|AST_BLOCK|AST_URGENT);
+	ast_off(AST_PREEMPT);
 
 	new_thread = thread_select(myprocessor);
 	assert(new_thread);
@@ -1516,15 +1423,14 @@ thread_block_reason(
 /*
  *	thread_block:
  *
- *	Now calls thread_block_reason() which forwards the
- *	the reason parameter to thread_invoke() so it can
- *	do the right thing if the thread's quantum expired.
+ *	Block the current thread if a wait has been asserted,
+ *	otherwise yield the remainder of the current quantum.
  */
 int
 thread_block(
 	void		(*continuation)(void))
 {
-	return thread_block_reason(continuation, 0);
+	return thread_block_reason(continuation, AST_NONE);
 }
 
 /*
@@ -1560,9 +1466,6 @@ void
 thread_dispatch(
 	register thread_t	thread)
 {
-	sched_policy_t		*policy;
-	sf_return_t			sfr;
-
 	/*
 	 *	If we are discarding the thread's stack, we must do it
 	 *	before the thread has a chance to run.
@@ -1589,11 +1492,7 @@ thread_dispatch(
 		/*
 		 *	No reason to stop.  Put back on a run queue.
 		 */
-		/* Leave enqueueing thread up to scheduling policy */
-		policy = &sched_policy[thread->policy];
-		/*** ??? maybe use a macro ***/
-		sfr = policy->sp_ops.sp_thread_dispatch(policy, thread);
-		assert(sfr == SF_SUCCESS);
+		_mk_sp_thread_dispatch(thread);
 		break;
 
 	case TH_RUN | TH_WAIT	| TH_UNINT:
@@ -1694,9 +1593,6 @@ thread_setrun(
 	thread_t					thread;
 	ast_t						ast_flags = AST_BLOCK;
 
-	mp_disable_preemption();
-
-	assert(!(new_thread->state & TH_SWAPPED_OUT));
 	assert(thread_runnable(new_thread));
 	
 	/*
@@ -1705,11 +1601,9 @@ thread_setrun(
 	if (new_thread->sched_stamp != sched_tick)
 		update_priority(new_thread);
 
-	if (new_thread->policy & (POLICY_FIFO|POLICY_RR)) {
-		if (	new_thread->sched_pri >= (MAXPRI_KERNBAND - 2)		&&
-				kernel_preemption_mode == KERNEL_PREEMPT			)
-			ast_flags |= AST_URGENT;
-	}
+	if (	new_thread->sched_pri >= BASEPRI_PREEMPT		&&
+			kernel_preemption_mode == KERNEL_PREEMPT			)
+		ast_flags |= AST_URGENT;
 	
 	assert(new_thread->runq == RUN_QUEUE_NULL);
 
@@ -1733,40 +1627,32 @@ thread_setrun(
 				simple_unlock(&pset->idle_lock);
 				if(processor->slot_num != cpu_number())	
 					machine_signal_idle(processor);
-				mp_enable_preemption();
 				return;
 			}
 			simple_unlock(&pset->idle_lock);
 	    }
-	
 
+		/*
+		 * Place thread on processor set run queue.
+		 */
+	    runq = &pset->runq;
+		run_queue_enqueue(runq, new_thread, tail);
+	
 	    /*
 	     * Preempt check
 	     */
-	    runq = &pset->runq;
 		thread = current_thread();
 	    processor = current_processor();
-	    if (	may_preempt									&&
-				pset == processor->processor_set			&&
-				thread->sched_pri < new_thread->sched_pri			) {
+	    if (	may_preempt							&&
+				pset == processor->processor_set		) {
 		    /*
 		     * XXX if we have a non-empty local runq or are
 		     * XXX running a bound thread, ought to check for
 		     * XXX another cpu running lower-pri thread to preempt.
 			 */
-		    /*
-		     *	Turn off first_quantum to allow csw.
-		     */
-			processor->first_quantum = FALSE;
-
-			ast_on(ast_flags);
+			if (csw_needed(thread, processor))
+				ast_on(ast_flags);
 	    }
-
-		/*
-		 * Put us on the end of the runq, if we are not preempting
-		 * or the guy we are preempting.
-		 */
-		run_queue_enqueue(runq, new_thread, tail);
 	}
 	else {
 	    /*
@@ -1787,7 +1673,6 @@ thread_setrun(
 				simple_unlock(&processor->lock);
 				if(processor->slot_num != cpu_number())	
 					machine_signal_idle(processor);
-				mp_enable_preemption();
 				return;
 			}
 			simple_unlock(&pset->idle_lock);
@@ -1803,15 +1688,13 @@ thread_setrun(
 	     * since the idle_thread is bound.
 	     */
 	    runq = &processor->runq;
-		thread = current_thread();
 	    if (processor == current_processor()) {
-			if (	thread->bound_processor == PROCESSOR_NULL		||
-						thread->sched_pri < new_thread->sched_pri		) {
-				processor->first_quantum = FALSE;
-				ast_on(ast_flags);
-			}
-
 			run_queue_enqueue(runq, new_thread, tail);
+
+			thread = current_thread();
+			if (	thread->bound_processor == PROCESSOR_NULL	||
+						csw_needed(thread, processor))
+				ast_on(ast_flags);
 	    }
 		else {
 			thread = cpu_data[processor->slot_num].active_thread;
@@ -1821,8 +1704,6 @@ thread_setrun(
 				cause_ast_check(processor);
 	    }
 	}
-
-	mp_enable_preemption();
 }
 
 /*
@@ -2081,11 +1962,12 @@ idle_thread_continue(void)
 					(*gcount == 0) && (*lcount == 0)				) {
 
 			/* check for ASTs while we wait */
-
-			if (need_ast[mycpu] &~ (AST_SCHEDULING|AST_URGENT|AST_BSD|AST_BSD_INIT)) {
+			if (need_ast[mycpu] &~ (	AST_SCHEDULING | AST_PREEMPT |
+										AST_BSD | AST_BSD_INIT			)) {
 				/* don't allow scheduling ASTs */
-				need_ast[mycpu] &= ~(AST_SCHEDULING|AST_URGENT|AST_BSD|AST_BSD_INIT);
-				ast_taken(FALSE, AST_ALL, TRUE);	/* back at spllo */
+				need_ast[mycpu] &= ~(	AST_SCHEDULING | AST_PREEMPT |
+										AST_BSD | AST_BSD_INIT			);
+				ast_taken(AST_ALL, TRUE);	/* back at spllo */
 			}
 			else
 #ifdef	__ppc__
@@ -2141,17 +2023,8 @@ retry:
 			else {
 				simple_unlock(&pset->runq.lock);
 				simple_unlock(&myprocessor->runq.lock);
-
-				/*
-				 *	set up quantum for new thread.
-				 */
-				if (new_thread->policy & (POLICY_RR|POLICY_FIFO))
-					myprocessor->quantum = new_thread->unconsumed_quantum;
-				else
-					myprocessor->quantum = pset->set_quantum;
 				thread_unlock(new_thread);
 
-				myprocessor->first_quantum = TRUE;
 				counter(c_idle_thread_handoff++);
 				thread_run(myprocessor->idle_thread,
 									idle_thread_continue, new_thread);
@@ -2218,7 +2091,6 @@ idle_thread(void)
 	spl_t			s;
 
 	stack_privilege(self);
-	thread_swappable(current_act(), FALSE);
 
 	s = splsched();
 	thread_lock(self);
@@ -2235,7 +2107,17 @@ idle_thread(void)
 	/*NOTREACHED*/
 }
 
-static AbsoluteTime			sched_tick_interval, sched_tick_deadline;
+static uint64_t				sched_tick_interval, sched_tick_deadline;
+
+void	sched_tick_thread(void);
+
+void
+sched_tick_init(void)
+{
+	kernel_thread_with_priority(
+						kernel_task, MAXPRI_STANDARD,
+								sched_tick_thread, TRUE, TRUE);
+}
 
 /*
  *	sched_tick_thread
@@ -2245,7 +2127,7 @@ static AbsoluteTime			sched_tick_interval, sched_tick_deadline;
 void
 sched_tick_thread_continue(void)
 {
-	AbsoluteTime		abstime;
+	uint64_t			abstime;
 #if	SIMPLE_CLOCK
 	int					new_usec;
 #endif	/* SIMPLE_CLOCK */
@@ -2291,16 +2173,6 @@ sched_tick_thread(void)
 	spl_t			s;
 
 	stack_privilege(self);
-	thread_swappable(self->top_act, FALSE);
-
-	s = splsched();
-	thread_lock(self);
-
-	self->priority = MAXPRI_STANDARD;
-	self->sched_pri = self->priority;
-
-	thread_unlock(self);
-	splx(s);
 
 	rate = (1000 >> SCHED_TICK_SHIFT);
 	clock_interval_to_absolutetime_interval(rate, USEC_PER_SEC,
@@ -2354,8 +2226,8 @@ do_runq_scan(
 	    q = runq->queues + runq->highq;
 		while (count > 0) {
 			queue_iterate(q, thread, thread_t, links) {
-				if (	!(thread->state & (TH_WAIT|TH_SUSP))	&&
-						thread->policy == POLICY_TIMESHARE				) {
+				if (	!(thread->state & (TH_WAIT|TH_SUSP))		&&
+						(thread->sched_mode & TH_MODE_TIMESHARE)	) {
 					if (thread->sched_stamp != sched_tick) {
 						/*
 						 *	Stuck, save its id for later.
@@ -2423,6 +2295,16 @@ do_thread_scan(void)
 				if (restart_needed = do_runq_scan(&processor->runq))
 					break;
 
+				thread = processor->idle_thread;
+				if (thread->sched_stamp != sched_tick) {
+					if (stuck_count == MAX_STUCK_THREADS) {
+						restart_needed = TRUE;
+						break;
+					}
+
+					stuck_threads[stuck_count++] = thread;
+				}
+
 				processor = (processor_t)queue_next(&processor->processors);
 			}
 			simple_unlock(&pset->processors_lock);
@@ -2436,14 +2318,16 @@ do_thread_scan(void)
 			stuck_threads[stuck_count] = THREAD_NULL;
 			s = splsched();
 			thread_lock(thread);
-			if (thread->policy == POLICY_TIMESHARE) {
+			if (	(thread->sched_mode & TH_MODE_TIMESHARE)	||
+							(thread->state & TH_IDLE)				) {
 				if (	!(thread->state & (TH_WAIT|TH_SUSP))	&&
-						thread->sched_stamp != sched_tick			)
+						thread->sched_stamp != sched_tick		)
 					update_priority(thread);
 			}
 			thread_unlock(thread);
 			splx(s);
-			thread_deallocate(thread);
+			if (!(thread->state & TH_IDLE))
+				thread_deallocate(thread);
 	    }
 		
 	} while (restart_needed);
@@ -2464,20 +2348,14 @@ thread_wakeup(
 	thread_wakeup_with_result(x, THREAD_AWAKENED);
 }
 
-boolean_t
-thread_runnable(
-	thread_t		thread)
-{
-	sched_policy_t	*policy;
-
-	/* Ask sched policy if thread is runnable */
-	policy = policy_id_to_sched_policy(thread->policy);
-
-	return ((policy != SCHED_POLICY_NULL)?
-				policy->sp_ops.sp_thread_runnable(policy, thread) : FALSE);
-}
-
 #if	DEBUG
+
+static boolean_t
+thread_runnable(
+	thread_t	thread)
+{
+	return ((thread->state & (TH_RUN|TH_WAIT)) == TH_RUN);
+}
 
 void
 dump_processor_set(
@@ -2495,8 +2373,7 @@ dump_processor_set(
     printf("ref_count: 0x%x, active: %x\n",
 	ps->ref_count,ps->active);
     printf("pset_self: %08x, pset_name_self: %08x\n",ps->pset_self, ps->pset_name_self);
-    printf("max_priority: 0x%x, policies: 0x%x, set_quantum: 0x%x\n",
-	ps->max_priority, ps->policies, ps->set_quantum);
+    printf("set_quanta: 0x%x\n", ps->set_quanta);
 }
 
 #define processor_state(s) (((s)>PROCESSOR_SHUTDOWN)?"*unknown*":states[s])
@@ -2513,8 +2390,7 @@ dump_processor(
 	p->processor_queue.next,p->processor_queue.prev);
     printf("state: %8s, next_thread: %08x, idle_thread: %08x\n",
 	processor_state(p->state), p->next_thread, p->idle_thread);
-    printf("quantum: %u, first_quantum: %x, last_quantum: %u\n",
-	p->quantum, p->first_quantum, p->last_quantum);
+    printf("slice_quanta: %x\n", p->slice_quanta);
     printf("processor_set: %08x, processor_set_next: %08x\n",
 	p->processor_set, p->processor_set_next);
     printf("processors: %08x %08x\n", p->processors.next,p->processors.prev);

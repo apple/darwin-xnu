@@ -96,45 +96,23 @@ UInt32	OSBitXorAtomic(UInt32 mask, UInt32 * value)
 	return OSBitwiseAtomic((UInt32) -1, 0, mask, value);
 }
 
-
-static Boolean	OSCompareAndSwap8(UInt8 oldValue8, UInt8 newValue8, UInt8 * value8)
+static Boolean OSCompareAndSwap8(UInt8 oldValue8, UInt8 newValue8, UInt8 * value8)
 {
-	UInt32		mask = 0x000000ff;
-	UInt32		newbits = (UInt32) newValue8;
-	int			shift;
-	UInt32		alignment = ((UInt32) value8) & (sizeof(UInt32) - 1);
-	UInt32		oldValue;
-	UInt32		newValue;
-	UInt32 *	value;
+	UInt32		mask        = 0x000000ff;
+	UInt32		alignment   = ((UInt32) value8) & (sizeof(UInt32) - 1);
+    UInt32      shiftValues = (24 << 24) | (16 << 16) | (8 << 8);
+    int			shift       = (UInt32) *(((UInt8 *) &shiftValues) + alignment);
+	UInt32 *	value32     = (UInt32 *) (value8 - alignment);
+    UInt32      oldValue;
+    UInt32      newValue;
 
-	switch (alignment) {
-		default:
-			// assert(false);
-		case 0:
-			value = (UInt32 *) value8;
-			shift = 24;
-			break;
-		case 1:
-			value = (UInt32 *) (value8 + 1);
-			shift = 16;
-			break;
-		case 2:
-			value = (UInt32 *) (value8 + 2);
-			shift = 8;
-			break;
-		case 3:
-			value = (UInt32 *) (value8 + 3);
-			shift = 0;
-			break;
-	}
+    mask <<= shift;
 
-	mask <<= shift;
-	newbits <<= shift;
-	
-	oldValue = *value;
-	newValue = (oldValue & ~mask) | (newbits & mask);
-	
-	return OSCompareAndSwap(oldValue, newValue, value);
+    oldValue = *value32;
+    oldValue = (oldValue & ~mask) | (oldValue8 << shift);
+    newValue = (oldValue & ~mask) | (newValue8 << shift);
+
+	return OSCompareAndSwap(oldValue, newValue, value32);
 }
 
 static Boolean	OSTestAndSetClear(UInt32 bit, Boolean wantSet, UInt8 * startAddress)
@@ -253,34 +231,23 @@ UInt8	OSBitXorAtomic8(UInt32 mask, UInt8 * value)
 	return OSBitwiseAtomic8((UInt32) -1, 0, mask, value);
 }
 
-
-static Boolean	OSCompareAndSwap16(UInt16 oldValue16, UInt16 newValue16, UInt16 * value16)
+static Boolean OSCompareAndSwap16(UInt16 oldValue16, UInt16 newValue16, UInt16 * value16)
 {
-	UInt32		mask = 0x0000ffff;
-	UInt32		newbits = (UInt32) newValue16;
-	int			shift;
-	UInt32		alignment = ((UInt32) value16) & (sizeof(UInt32) - 1);
-	UInt32		oldValue;
-	UInt32		newValue;
-	UInt32 *	value;
+	UInt32		mask        = 0x0000ffff;
+	UInt32		alignment   = ((UInt32) value16) & (sizeof(UInt32) - 1);
+    UInt32      shiftValues = (16 << 24) | (16 << 16);
+    UInt32		shift       = (UInt32) *(((UInt8 *) &shiftValues) + alignment);
+	UInt32 *	value32     = (UInt32 *) (((UInt32) value16) - alignment);
+    UInt32      oldValue;
+    UInt32      newValue;
 
-	if (alignment == 2) {
-		value = (UInt32 *) (value16 - 1);
-		shift = 0;
-	}
-	else {
-		// assert(alignment == 0);
-		value = (UInt32 *) value16;
-		shift = 16;
-	}
+    mask <<= shift;
 
-	mask <<= shift;
-	newbits <<= shift;
-	
-	oldValue = *value;
-	newValue = (oldValue & ~mask) | (newbits & mask);
-	
-	return OSCompareAndSwap(oldValue, newValue, value);
+    oldValue = *value32;
+    oldValue = (oldValue & ~mask) | (oldValue16 << shift);
+    newValue = (oldValue & ~mask) | (newValue16 << shift);
+
+	return OSCompareAndSwap(oldValue, newValue, value32);
 }
 
 SInt16	OSIncrementAtomic16(SInt16 * value)

@@ -249,9 +249,8 @@ tunclose(dev, foo, bar, p)
 	}
 	ifp->if_flags &= ~IFF_RUNNING;
 	funsetown(tp->tun_sigio);
-	thread_funnel_switch(NETWORK_FUNNEL, KERNEL_FUNNEL);
 	selwakeup(&tp->tun_rsel);
-	thread_funnel_switch(KERNEL_FUNNEL, NETWORK_FUNNEL);
+	selthreadclear(&tp->tun_rsel);
 
 	TUNDEBUG ("%s%d: closed\n", ifp->if_name, ifp->if_unit);
 	return (0);
@@ -451,9 +450,7 @@ tunoutput(ifp, m0, dst, rt)
 	}
 	if (tp->tun_flags & TUN_ASYNC && tp->tun_sigio)
 		pgsigio(tp->tun_sigio, SIGIO, 0);
-	thread_funnel_switch(NETWORK_FUNNEL, KERNEL_FUNNEL);
 	selwakeup(&tp->tun_rsel);
-	thread_funnel_switch(KERNEL_FUNNEL, NETWORK_FUNNEL);
 	return 0;
 }
 
@@ -730,9 +727,10 @@ tunwrite(dev, uio, flag)
  * anyway, it either accepts the packet or drops it.
  */
 static	int
-tunpoll(dev, events, p)
+tunpoll(dev, events, wql, p)
 	dev_t dev;
 	int events;
+	void * wql;
 	struct proc *p;
 {
 	int		unit = dev_val(minor(dev)), s;
@@ -751,7 +749,7 @@ tunpoll(dev, events, p)
 		} else {
 			TUNDEBUG("%s%d: tunpoll waiting\n", ifp->if_name,
 			    ifp->if_unit);
-			selrecord(p, &tp->tun_rsel);
+			selrecord(p, &tp->tun_rsel, wql);
 		}
 
 	if (events & (POLLOUT | POLLWRNORM))

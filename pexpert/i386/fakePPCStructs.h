@@ -23,37 +23,54 @@
 #include <pexpert/boot.h>
 
 typedef struct {
-        char *          name;
-	unsigned long   length;
-	void *		value;
+    char *        name;
+    unsigned long length;
+    void *        value;
 } prop_init;
 
 typedef struct {
-	long zero;
-        long nProps;
-        long nChildren;
+    long   zero;
+    long   nProps;
+    long   nChildren;
 } node_init;
 
+typedef struct {
+    long   one;
+    long * length;
+    long * address;
+} data_init;
+
 typedef union {
-	prop_init	propInit;
-	node_init	nodeInit;
+    prop_init propInit;
+    node_init nodeInit;
+    data_init dataInit;
 } dt_init;
+
+typedef struct {
+    long   length;
+    long * address;
+} dt_data;
 
 extern boot_args fakePPCBootArgs;
 extern unsigned char *nptr;
 
-void printdt(void);
-void * createdt(dt_init *template, long *retSize);
+void   printdt(void);
+void * createdt(dt_init * template, long * retSize);
 
+#define NODE(props,children)  \
+        {{(char *)0, props, (void *)children }}
 
-#define NODE(props,children)	\
-		{{(char *)0, props, (void *)children }}
+#define INTPROP(name,value)   \
+        {{name, 4, (void *)value }}
 
-#define INTPROP(name,value)	\
-		{{name, 4, (void *)value }}
+#define PROP(name,value)      \
+        {{name, sizeof( value), value }}
 
-#define PROP(name,value)	\
-		{{name, sizeof( value), value }}
+#define NULLPROP(name)        \
+        {{name, 0, (void *)0 }}
 
-#define NULLPROP(name)	\
-		{{name, 0, (void *)0 }}
+#define DATAPROP(data)    \
+		{{(char *)1, (long)&((data).length), (void *)&((data).address) }}
+        
+#define DATANODE(data)    \
+		{{(char *)1, (long)&((data).length), (void *)&((data).address) }}

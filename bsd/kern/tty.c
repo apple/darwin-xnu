@@ -243,7 +243,9 @@ ttyopen(device, tp)
 	register struct tty *tp;
 {
 	int s;
+	boolean_t funnel_state;
 
+	funnel_state = thread_funnel_set(kernel_flock, TRUE);
 	s = spltty();
 	tp->t_dev = device;
 	if (!ISSET(tp->t_state, TS_ISOPEN)) {
@@ -265,6 +267,7 @@ ttyopen(device, tp)
 #endif /* !NeXT */
 
 	splx(s);
+	thread_funnel_set(kernel_flock, funnel_state);
 	return (0);
 }
 
@@ -1143,9 +1146,10 @@ ttioctl(tp, cmd, data, flag, p)
 }
 
 int
-ttyselect(tp, rw, p)
+ttyselect(tp, rw, wql, p)
 	struct tty *tp;
 	int rw;
+	void * wql;
 	struct proc *p;
 {
 	int s;
@@ -1158,7 +1162,7 @@ ttyselect(tp, rw, p)
 	case FREAD:
 		if (ttnread(tp) > 0 || ISSET(tp->t_state, TS_ZOMBIE))
 			goto win;
-		selrecord(p, &tp->t_rsel);
+		selrecord(p, &tp->t_rsel, wql);
 		break;
 	case FWRITE:
 		if ((tp->t_outq.c_cc <= tp->t_lowat &&
@@ -1167,7 +1171,7 @@ ttyselect(tp, rw, p)
 win:			splx(s);
 			return (1);
 		}
-		selrecord(p, &tp->t_wsel);
+		selrecord(p, &tp->t_wsel, wql);
 		break;
 	}
 	splx(s);
@@ -1179,15 +1183,16 @@ win:			splx(s);
  * cdevsw.  It relies on a proper xxxdevtotty routine.
  */
 int
-ttselect(dev, rw, p)
+ttselect(dev, rw, wql, p)
 	dev_t dev;
 	int rw;
+	void * wql;
 	struct proc *p;
 {
 #ifndef NeXT
-	return ttyselect((*cdevsw[major(dev)]->d_devtotty)(dev), rw, p);
+	return ttyselect((*cdevsw[major(dev)]->d_devtotty)(dev), rw, wql, p);
 #else
-	return ttyselect(cdevsw[major(dev)].d_ttys[minor(dev)], rw, p);
+	return ttyselect(cdevsw[major(dev)].d_ttys[minor(dev)], rw, wql, p);
 #endif
 }
 
@@ -1430,9 +1435,13 @@ int
 ttstart(tp)
 	struct tty *tp;
 {
+	boolean_t funnel_state;
+
+	funnel_state = thread_funnel_set(kernel_flock, TRUE);
 
 	if (tp->t_oproc != NULL)	/* XXX: Kludge for pty. */
 		(*tp->t_oproc)(tp);
+	thread_funnel_set(kernel_flock, funnel_state);
 	return (0);
 }
 
@@ -1444,8 +1453,12 @@ ttylclose(tp, flag)
 	struct tty *tp;
 	int flag;
 {
+	boolean_t funnel_state;
+
+	funnel_state = thread_funnel_set(kernel_flock, TRUE);
 	if ( (flag & FNONBLOCK) || ttywflush(tp))
 		ttyflush(tp, FREAD | FWRITE);
+	thread_funnel_set(kernel_flock, funnel_state);
 	return (0);
 }
 
@@ -1459,6 +1472,9 @@ ttymodem(tp, flag)
 	register struct tty *tp;
 	int flag;
 {
+	boolean_t funnel_state;
+
+	funnel_state = thread_funnel_set(kernel_flock, TRUE);
 
 	if (ISSET(tp->t_state, TS_CARR_ON) && ISSET(tp->t_cflag, MDMBUF)) {
 		/*
@@ -1487,6 +1503,7 @@ ttymodem(tp, flag)
 			if (tp->t_session && tp->t_session->s_leader)
 				psignal(tp->t_session->s_leader, SIGHUP);
 			ttyflush(tp, FREAD | FWRITE);
+			thread_funnel_set(kernel_flock, funnel_state);
 			return (0);
 		}
 	} else {
@@ -1500,6 +1517,7 @@ ttymodem(tp, flag)
 		ttwakeup(tp);
 		ttwwakeup(tp);
 	}
+	thread_funnel_set(kernel_flock, funnel_state);
 	return (1);
 }
 
@@ -1554,7 +1572,9 @@ ttread(tp, uio, flag)
 	int s, first, error = 0;
 	int has_etime = 0, last_cc = 0;
 	long slp = 0;		/* XXX this should be renamed `timo'. */
+	boolean_t funnel_state;
 
+	funnel_state = thread_funnel_set(kernel_flock, TRUE);
 loop:
 	s = spltty();
 	lflag = tp->t_lflag;
@@ -1575,17 +1595,22 @@ loop:
 		splx(s);
 		if ((p->p_sigignore & sigmask(SIGTTIN)) ||
 		   (p->p_sigmask & sigmask(SIGTTIN)) ||
-		    p->p_flag & P_PPWAIT || p->p_pgrp->pg_jobc == 0)
+		    p->p_flag & P_PPWAIT || p->p_pgrp->pg_jobc == 0) {
+			thread_funnel_set(kernel_flock, funnel_state);
 			return (EIO);
+		}
 		pgsignal(p->p_pgrp, SIGTTIN, 1);
 		error = ttysleep(tp, &lbolt, TTIPRI | PCATCH | PTTYBLOCK, "ttybg2", 0);
-		if (error)
+		if (error){
+			thread_funnel_set(kernel_flock, funnel_state);
 			return (error);
+		}
 		goto loop;
 	}
 
 	if (ISSET(tp->t_state, TS_ZOMBIE)) {
 		splx(s);
+		thread_funnel_set(kernel_flock, funnel_state);
 		return (0);	/* EOF */
 	}
 
@@ -1602,9 +1627,11 @@ loop:
 			goto read;
 		if (!ISSET(lflag, ICANON) && cc[VMIN] == 0) {
 			splx(s);
+			thread_funnel_set(kernel_flock, funnel_state);
 			return (0);
 		}
 		splx(s);
+		thread_funnel_set(kernel_flock, funnel_state);
 		return (EWOULDBLOCK);
 	}
 	if (!ISSET(lflag, ICANON)) {
@@ -1629,6 +1656,7 @@ loop:
 
 			/* m, t and qp->c_cc are all 0.  0 is enough input. */
 			splx(s);
+			thread_funnel_set(kernel_flock, funnel_state);
 			return (0);
 		}
 		t *= 100000;		/* time in us */
@@ -1685,6 +1713,7 @@ loop:
 			        if (timercmp(&etime, &timecopy, <=)) {
 					/* Timed out, but 0 is enough input. */
 					splx(s);
+					thread_funnel_set(kernel_flock, funnel_state);
 					return (0);
 				}
 				slp = diff(etime, timecopy);
@@ -1714,8 +1743,10 @@ sleep:
 		splx(s);
 		if (error == EWOULDBLOCK)
 			error = 0;
-		else if (error)
+		else if (error) {
+			thread_funnel_set(kernel_flock, funnel_state);
 			return (error);
+		}
 		/*
 		 * XXX what happens if another process eats some input
 		 * while we are asleep (not just here)?  It would be
@@ -1832,6 +1863,7 @@ out:
 		ttyunblock(tp);
 	splx(s);
 
+	thread_funnel_set(kernel_flock, funnel_state);
 	return (error);
 }
 
@@ -1882,6 +1914,9 @@ ttwrite(tp, uio, flag)
 	register struct proc *p;
 	int i, hiwat, cnt, error, s;
 	char obuf[OBUFSIZ];
+	boolean_t funnel_state;
+
+	funnel_state = thread_funnel_set(kernel_flock, TRUE);
 
 	hiwat = tp->t_hiwat;
 	cnt = uio->uio_resid;
@@ -1935,6 +1970,7 @@ loop:
 	while (uio->uio_resid > 0 || cc > 0) {
 		if (ISSET(tp->t_lflag, FLUSHO)) {
 			uio->uio_resid = 0;
+			thread_funnel_set(kernel_flock, funnel_state);
 			return (0);
 		}
 		if (tp->t_outq.c_cc > hiwat)
@@ -2049,6 +2085,7 @@ out:
 	 * (the call will either return short or restart with a new uio).
 	 */
 	uio->uio_resid += cc;
+	thread_funnel_set(kernel_flock, funnel_state);
 	return (error);
 
 #ifdef NeXT
@@ -2077,6 +2114,7 @@ ovhiwat:
 	if (flag & IO_NDELAY) {
 		splx(s);
 		uio->uio_resid += cc;
+		thread_funnel_set(kernel_flock, funnel_state);
 		return (uio->uio_resid == cnt ? EWOULDBLOCK : 0);
 	}
 	SET(tp->t_state, TS_SO_OLOWAT);

@@ -51,12 +51,6 @@ typedef struct _load_result {
 					:0;
 } load_result_t;
 
-load_return_t load_machfile(
-	struct vnode		*vp,
-	struct mach_header	*header,
-	unsigned long		file_offset,
-	unsigned long		macho_size,
-	load_result_t		*result);
 
 #define LOAD_SUCCESS		0
 #define LOAD_BADARCH		1	/* CPU type/subtype not found */

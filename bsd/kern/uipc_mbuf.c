@@ -461,6 +461,8 @@ m_getpacket(void)
                 m->m_data = m->m_ext.ext_buf;
                 m->m_flags = M_PKTHDR | M_EXT;
                 m->m_pkthdr.aux = (struct mbuf *)NULL;
+                m->m_pkthdr.csum_data  = 0;
+                m->m_pkthdr.csum_flags = 0;
                 m->m_ext.ext_size = MCLBYTES;
                 m->m_ext.ext_refs.forward = m->m_ext.ext_refs.backward =
                      &m->m_ext.ext_refs;
@@ -955,11 +957,10 @@ m_split(m0, len0, wait)
 extpacket:
 	if (m->m_flags & M_EXT) {
 		n->m_flags |= M_EXT;
-		n->m_ext = m->m_ext;
 		MBUF_LOCK();
-		mclrefcnt[mtocl(m->m_ext.ext_buf)]++;
+		n->m_ext = m->m_ext;
+                insque((queue_t)&n->m_ext.ext_refs, (queue_t)&m->m_ext.ext_refs);
 		MBUF_UNLOCK();
-		m->m_ext.ext_size = 0; /* For Accounting XXXXXX danger */
 		n->m_data = m->m_data + len;
 	} else {
 		bcopy(mtod(m, caddr_t) + len, mtod(n, caddr_t), remain);

@@ -474,7 +474,7 @@ ENTRY(mutex_init)
 	EMARF
 	ret
 
-ENTRY(_mutex_lock)
+ENTRY2(mutex_lock,_mutex_lock)
 	FRAME
 
 #if	ETAP_LOCK_TRACE
@@ -560,7 +560,7 @@ ml_block:
 	movl	L_ARG0,%edx		/* refetch lock pointer */
 	jmp	ml_retry		/* and try again */
 
-ENTRY(_mutex_try)
+ENTRY2(mutex_try,_mutex_try)	
 	FRAME
 
 #if	ETAP_LOCK_TRACE

@@ -64,6 +64,9 @@
 #define _MIG_KERNEL_SPECIFIC_CODE_ 1
 #endif	/* MACH_KERNEL */
 
+/* static templates are slower and bigger */
+/* #define UseStaticTemplates 0 */
+
 #include <mach/kern_return.h>
 #include <mach/port.h>
 
@@ -183,7 +186,6 @@ typedef unsigned int mach_msg_copy_options_t;
 #define MACH_MSG_OVERWRITE		3
 #ifdef  MACH_KERNEL
 #define MACH_MSG_KALLOC_COPY_T		4
-#define MACH_MSG_PAGE_LIST_COPY_T	5
 #endif  /* MACH_KERNEL */
 
 typedef unsigned int mach_msg_descriptor_type_t;

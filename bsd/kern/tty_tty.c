@@ -205,16 +205,17 @@ cttyioctl(dev, cmd, addr, flag, p)
 
 /*ARGSUSED*/
 int
-cttyselect(dev, flag, p)
+cttyselect(dev, flag, wql, p)
 	dev_t dev;
 	int flag;
+	void * wql;
 	struct proc *p;
 {
 	struct vnode *ttyvp = cttyvp(p);
 
 	if (ttyvp == NULL)
 		return (1);	/* try operation to get EOF/failure */
-	return (VOP_SELECT(ttyvp, flag, FREAD|FWRITE, NOCRED, p));
+	return (VOP_SELECT(ttyvp, flag, FREAD|FWRITE, NOCRED, wql, p));
 }
 
 #ifndef NeXT

@@ -71,6 +71,21 @@
 #endif
 #define simple_lock_init(l)	usimple_lock_init((l),0)
 
+#if defined(simple_lock)
+#undef simple_lock
+#endif
+#define simple_lock(l)         ((void) 1)
+
+#if defined(simple_unlock)
+#undef simple_unlock
+#endif
+#define simple_unlock(l)        ((void) 1)
+
+#if defined(simple_lock_try)
+#undef simple_lock_try
+#endif
+#define simple_lock_try(l)      1
+
 #else /* KERNEL */
 
 #ifndef	_MACHINE_SIMPLE_LOCK_DATA_

@@ -50,7 +50,7 @@
 /*
  */
 /*
- * File:	mach/memory_object.defs
+ * File:	mach/memory_object_control.defs
  *
  * Abstract:
  *	Basic Mach external memory management interface declaration.
@@ -73,37 +73,25 @@ subsystem
 #include <mach/mach_types.defs>
 
 /*
- * JMM - For now we define back-and-forth paging until we get the code
- * cleaned up.
- */
-#define _BACK_AND_FORTH_PAGING_
-
-/*
  *      Retrieves the attributes currently associated with
  *      a memory object.
  */
 routine memory_object_get_attributes(
-                memory_control  : vm_object_t;
+                memory_control	: memory_object_control_t;
 		flavor		: memory_object_flavor_t;
 	out	attributes	: memory_object_info_t, CountInOut);
 
 
-simpleroutine memory_object_change_attributes(
-                memory_control  : vm_object_t;
+routine memory_object_change_attributes(
+                memory_control	: memory_object_control_t;
                 flavor          : memory_object_flavor_t;
         	attributes      : memory_object_info_t
-#ifdef _BACK_AND_FORTH_PAGING_
-                ; reply_to      : mach_port_t =
-                        MACH_MSG_TYPE_MAKE_SEND|polymorphic
-#endif
 		);
 
-simpleroutine memory_object_synchronize_completed (
-			memory_control	: vm_object_t;
-			offset		: memory_object_offset_t;
-			length		: vm_offset_t);
-
-skip;
+routine memory_object_synchronize_completed (
+		memory_control	: memory_object_control_t;
+		offset		: memory_object_offset_t;
+		length		: vm_offset_t);
 
 /*
  *	Control use of the data associated with the given
@@ -121,99 +109,69 @@ skip;
  *	("offset") and size ("size").  Only pages with the
  *	same page alignment as the starting offset are
  *	considered.
- *
- *	A single acknowledgement is sent (to the "reply_to"
- *	port) when these actions are complete.
- *
- *	There are two versions of this routine because IPC distinguishes
- *	between booleans and integers (a 2-valued integer is NOT a
- *	boolean).  The new routine is backwards compatible at the C
- *	language interface.
  */
-simpleroutine memory_object_lock_request(
-		memory_control	: vm_object_t;
+routine memory_object_lock_request(
+		memory_control	: memory_object_control_t;
 		offset		: memory_object_offset_t;
 		size		: memory_object_size_t;
 		should_return	: memory_object_return_t;
 		flags		: integer_t;
 		lock_value	: vm_prot_t
-#ifdef _BACK_AND_FORTH_PAGING_
-		; reply_to	: mach_port_t =
-			MACH_MSG_TYPE_MAKE_SEND|polymorphic
-#endif
 		);
 
 
-	skip;
-
 /*
  */
-simpleroutine memory_object_destroy(
-		memory_control	: vm_object_t;
+routine memory_object_destroy(
+		memory_control	: memory_object_control_t;
 		reason		: kern_return_t);
 
 /*
- *	Provide the data contents of a range of the given memory
- *	object, with the access restriction specified, optional
- *	precious attribute, and reply message.  [Only
- *	whole virtual pages of data can be accepted; partial pages
- *	will be discarded.  Data should be provided on request, but
- *	may be provided in advance as desired.  When data already
- *	held by this kernel is provided again, the new data is ignored.
- *	The access restriction is the subset of {read, write, execute}
- *	which are prohibited.  The kernel may not provide any data (or
- *	protection) consistency among pages with different virtual page
- *	alignments within the same object.  The precious value controls
- *	how the kernel treats the data.  If it is FALSE, the kernel treats
- *	its copy as a temporary and may throw it away if it hasn't been
- *	changed.  If the precious value is TRUE, the kernel treats its
- *	copy as a data repository and promises to return it to the manager;
- *	the manager may tell the kernel to throw it away instead by flushing
- *	and not cleaning the data -- see memory_object_lock_request.  The
- *	reply_to port is for a compeletion message; it will be
- *	memory_object_supply_completed.]
+ *	The pager gets memory_object_data_request and memory_object_data_return
+ *	calls to inform it that data within the memory object needs to be
+ *	manipulated.  Those requests simply identify the range in the memory
+ *	object that needs servicing, but not the data itself.  The pager
+ *	turns around and requests one (or several) Universal Page Lists (UPLs)
+ *	from the VM cache object associated with the memory object via one
+ *	of the following calls.  These UPLs are then committed (or aborted)
+ *	in whole (or in ranges) as the processing completes.
  */
 
-	skip;
+routine memory_object_upl_request(
+		memory_control	: memory_object_control_t;
+	in	offset		: memory_object_offset_t;
+	in	size		: vm_size_t;
+	out	upl		: upl_t;
+	out	page_list	: upl_page_info_array_t, CountInOut;
+	in	cntrl_flags	: integer_t);
 
-	skip;
+routine memory_object_super_upl_request(
+		memory_control		: memory_object_control_t;
+	in	offset		: memory_object_offset_t;
+	in	size		: vm_size_t;
+	in	super_size	: vm_size_t;
+	out	upl		: upl_t;
+	out	page_list	: upl_page_info_array_t, CountInOut;
+	in	cntrl_flags	: integer_t);
 
-routine vm_object_upl_request(
-		object		:vm_object_entry_t;
-	in	offset		:memory_object_offset_t;
-	in	size		:vm_size_t;
-	out	upl		:mach_port_move_send_t;
-	out	page_list	:upl_page_list_ptr_t, CountInOut;
-	in	cntrl_flags	:integer_t);
+/*
+ * This functions allows a single page to be manipulated with less overhead
+ * than creating a UPL.
+ */
+routine memory_object_page_op(
+		memory_control	: memory_object_control_t;
+	in	offset		: memory_object_offset_t;
+	in	ops		: integer_t;
+	out	phys_entry	: vm_offset_t;
+	out	flags		: integer_t);
 
-routine vm_pager_upl_request(
-		object		:vm_object_entry_t;
-	in	offset		:memory_object_offset_t;
-	in	size		:vm_size_t;
-	in	super_size	:vm_size_t;
-	out	upl		:mach_port_move_send_t;
-	out	page_list	:upl_page_list_ptr_t, CountInOut;
-	in	cntrl_flags	:integer_t);
+routine memory_object_recover_named(
+		memory_control	: memory_object_control_t;
+	in	wait_on_terminating : boolean_t);
 
-routine vm_upl_map(
-		map		:vm_task_entry_t;
-	in	upl		:upl_object_t;
-	inout	dst_addr	:vm_offset_t);
+routine memory_object_release_name(
+		memory_control	: memory_object_control_t;
+		flags		: integer_t);
 
-routine vm_upl_unmap(
-		map		:vm_task_entry_t;
-	in	upl		:upl_object_t);
 
-routine vm_upl_abort(
-		upl_object	:upl_object_entry_t;
-	in	abort_cond	:integer_t);
- 
-routine vm_upl_commit(
-		upl_object	:upl_object_entry_t;
-	in	page_list	:upl_page_list_ptr_t);
 
-routine vm_upl_commit_range(
-		upl_object	:upl_object_entry_t;
-		offset		:vm_offset_t;
-		size		:vm_size_t;
-	in	page_list	:upl_page_list_ptr_t);

@@ -127,13 +127,10 @@ routine io_service_get_matching_services(
 	out existing		: io_object_t
 	);
 
-routine io_service_add_notification_old(
-	    master_port		: mach_port_t;
-	in  notification_type	: io_name_t;
-	in  matching		: io_string_t;
-	in  wake_port		: mach_port_make_send_t;
-	in  reference		: natural_t;
-	out notification	: io_object_t
+routine io_registry_entry_get_property(
+	    registry_entry	: io_object_t;
+	in  property_name	: io_name_t;
+	out properties		: io_buf_ptr_t, physicalcopy
 	);
 
 routine io_registry_create_iterator(
@@ -167,7 +164,7 @@ routine io_registry_entry_get_properties(
 	out properties		: io_buf_ptr_t, physicalcopy
 	);
 
-routine io_registry_entry_get_property(
+routine io_registry_entry_get_property_bytes(
 	    registry_entry	: io_object_t;
 	in  property_name	: io_name_t;
 	out data		: io_struct_inband_t, CountInOut
@@ -431,12 +428,25 @@ routine io_connect_get_notification_semaphore(
 	out semaphore		: semaphore_t
 	);
 
-
 routine io_connect_unmap_memory(
 	    connection		: io_connect_t;
 	in  memory_type		: int;
 	in  into_task		: task_t;
 	in  address		: vm_address_t
+	);
+
+routine io_registry_entry_get_location_in_plane(
+	    registry_entry	: io_object_t;
+	in  plane		: io_name_t;
+	out location		: io_name_t
+	);
+
+routine io_registry_entry_get_property_recursively(
+	    registry_entry	: io_object_t;
+	in  plane		: io_name_t;
+	in  property_name	: io_name_t;
+	in  options		: int;
+	out properties		: io_buf_ptr_t, physicalcopy
 	);
 
 #endif

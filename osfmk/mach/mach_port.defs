@@ -197,7 +197,7 @@ routine mach_port_mod_refs(
 
 /*
  *      Allocates a new receive right, and associates it with the
- *	specified RPC subsystem.
+ *	specified RPC subsystem attributes.
  */
 routine mach_port_allocate_subsystem(
 		task		: ipc_space_t;
@@ -263,7 +263,7 @@ routine mach_port_request_notification(
 		msgid		: mach_msg_id_t;
 		sync		: mach_port_mscount_t;
 		notify		: mach_port_send_once_t;
-	out	previous	: mach_port_send_once_t);
+	out	previous	: mach_port_move_send_once_t);
 
 /*
  *	Inserts the specified rights into the target task,

@@ -65,9 +65,13 @@ extern void
   aurp_wput(gref_t *gref, gbuf_t *m),
 #endif
   adsp_wput(gref_t *gref, gbuf_t *m);
+  
+int atp_free_cluster_timeout_set = 0;
+
 
 void atalk_putnext(gref_t *gref, gbuf_t *m);
-static int gref_close(gref_t *gref);
+/* bms:  make gref_close non static so its callable from kernel */
+int gref_close(gref_t *gref);
 
 SYSCTL_DECL(_net_appletalk);
 dbgBits_t dbgBits;
@@ -82,7 +86,9 @@ SYSCTL_STRUCT(_net_appletalk, OID_AUTO, ddpstats, CTLFLAG_RD,
 
 atlock_t refall_lock;
 
-static void gref_wput(gref, m)
+caddr_t	atp_free_cluster_list = 0;
+
+void gref_wput(gref, m)
 	gref_t *gref;
 	gbuf_t *m;
 {
@@ -208,7 +214,7 @@ int _ATgetmsg(fd, ctlptr, datptr, flags, err, proc)
 	if ((*err = atalk_getref(0, fd, &gref, proc)) == 0) {
 		switch (gref->proto) {
 		case ATPROTO_ASP:
-			rc = ASPgetmsg(gref, ctlptr, datptr, flags, err); 
+			rc = ASPgetmsg(gref, ctlptr, datptr, NULL, flags, err); 
 			break;
 		case ATPROTO_AURP:
 #ifdef AURP_SUPPORT
@@ -239,7 +245,7 @@ int _ATputmsg(fd, ctlptr, datptr, flags, err, proc)
 	if ((*err = atalk_getref(0, fd, &gref, proc)) == 0) {
 		switch (gref->proto) {
 		case ATPROTO_ASP:
-			rc = ASPputmsg(gref, ctlptr, datptr, flags, err); break;
+			rc = ASPputmsg(gref, ctlptr, datptr, NULL, flags, err); break;
 		default:
 			*err = EPROTONOSUPPORT; break;
 		}
@@ -255,8 +261,6 @@ int _ATclose(fp, proc)
 {
 	int err;
 	gref_t *gref;
-
-
 
 	if ((err = atalk_closeref(fp, &gref)) == 0) {
 	     thread_funnel_switch(KERNEL_FUNNEL, NETWORK_FUNNEL);
@@ -419,69 +423,76 @@ int _ATwrite(fp, uio, cred)
 
 /* Most of the processing from _ATioctl, so that it can be called
    from the new ioctl code */
-int at_ioctl(gref, cmd, arg)
-     gref_t *gref;
-     register caddr_t arg;
+/* bms:  update to be callable from kernel */
+int at_ioctl(gref_t *gref, u_long cmd, caddr_t arg, int fromKernel)
 {
-	int s, err = 0, len;
-	gbuf_t *m, *mdata;
-	ioc_t *ioc;
-	ioccmd_t ioccmd;
+    int s, err = 0, len;
+    gbuf_t *m, *mdata;
+    ioc_t *ioc;
+    ioccmd_t ioccmd;
 
-	/* error if not for us */
-	if ((cmd  & 0xffff) != 0xff99)
-		return EOPNOTSUPP;
+    /* error if not for us */
+    if ((cmd  & 0xffff) != 0xff99)
+        return EOPNOTSUPP;
 
-	/* copy in ioc command info */
+    /* copy in ioc command info */
 /*
-	kprintf("at_ioctl: arg ioccmd.ic_cmd=%x ic_len=%x gref->lock=%x, gref->event=%x\n",
-		((ioccmd_t *)arg)->ic_cmd, ((ioccmd_t *)arg)->ic_len, 
-		gref->lock, gref->event);
+    kprintf("at_ioctl: arg ioccmd.ic_cmd=%x ic_len=%x gref->lock=%x, gref->event=%x\n",
+        ((ioccmd_t *)arg)->ic_cmd, ((ioccmd_t *)arg)->ic_len, 
+        gref->lock, gref->event);
 */
-	if ((err = copyin((caddr_t)arg,
-			(caddr_t)&ioccmd, sizeof(ioccmd_t))) != 0) { 
+    if (fromKernel)
+        bcopy (arg, &ioccmd, sizeof (ioccmd_t));
+    else {
+    	if ((err = copyin((caddr_t)arg, (caddr_t)&ioccmd, sizeof(ioccmd_t))) != 0) { 
 #ifdef APPLETALK_DEBUG
-	  kprintf("at_ioctl: err = %d, copyin(%x, %x, %d)\n", err, 
-		  (caddr_t)arg, (caddr_t)&ioccmd, sizeof(ioccmd_t));
+			kprintf("at_ioctl: err = %d, copyin(%x, %x, %d)\n", err, 
+              		(caddr_t)arg, (caddr_t)&ioccmd, sizeof(ioccmd_t));
 #endif
-		return err;
-	} 
+            return err;
+        } 
+    }
 
-	/* allocate a buffer to create an ioc command */
-	if ((m = gbuf_alloc(sizeof(ioc_t), PRI_HI)) == 0)
-		return ENOBUFS;
-	gbuf_wset(m,sizeof(ioc_t));
-	gbuf_set_type(m, MSG_IOCTL);
+    /* allocate a buffer to create an ioc command
+       first mbuf contains ioc command */
+    if ((m = gbuf_alloc(sizeof(ioc_t), PRI_HI)) == 0)
+        return ENOBUFS;
+    gbuf_wset(m, sizeof(ioc_t));    /* mbuf->m_len */
+    gbuf_set_type(m, MSG_IOCTL);    /* mbuf->m_type */
 
-	/* create the ioc command */
-	if (ioccmd.ic_len) {
-		if ((gbuf_cont(m) = gbuf_alloc(ioccmd.ic_len, PRI_HI)) == 0) {
-			gbuf_freem(m);
+    /* create the ioc command 
+       second mbuf contains the actual ASP command */
+    if (ioccmd.ic_len) {
+        if ((gbuf_cont(m) = gbuf_alloc(ioccmd.ic_len, PRI_HI)) == 0) {
+            gbuf_freem(m);
 #ifdef APPLETALK_DEBUG
 			kprintf("at_ioctl: gbuf_alloc err=%d\n",ENOBUFS);
 #endif
-			return ENOBUFS;
-		}
-		gbuf_wset(gbuf_cont(m),ioccmd.ic_len);
-		if ((err = copyin((caddr_t)ioccmd.ic_dp,
-				(caddr_t)gbuf_rptr(gbuf_cont(m)), ioccmd.ic_len)) != 0) { 
-			gbuf_freem(m);
-			return err;
-		}
-	}
-	ioc = (ioc_t *)gbuf_rptr(m);
-	ioc->ioc_cmd = ioccmd.ic_cmd;
-	ioc->ioc_count = ioccmd.ic_len;
-	ioc->ioc_error = 0;
-	ioc->ioc_rval = 0;
+            return ENOBUFS;
+        }
+        gbuf_wset(gbuf_cont(m), ioccmd.ic_len);     /* mbuf->m_len */
+        if (fromKernel)
+            bcopy (ioccmd.ic_dp, gbuf_rptr(gbuf_cont(m)), ioccmd.ic_len);
+        else {
+            if ((err = copyin((caddr_t)ioccmd.ic_dp, (caddr_t)gbuf_rptr(gbuf_cont(m)), ioccmd.ic_len)) != 0) { 
+                gbuf_freem(m);
+                return err;
+            }
+        }
+    }
+    ioc = (ioc_t *) gbuf_rptr(m);
+    ioc->ioc_cmd = ioccmd.ic_cmd;
+    ioc->ioc_count = ioccmd.ic_len;
+    ioc->ioc_error = 0;
+    ioc->ioc_rval = 0;
 
-	/* send the ioc command to the appropriate recipient */
+    /* send the ioc command to the appropriate recipient */
 	gref_wput(gref, m);
 
-	/* wait for the ioc ack */
-	ATDISABLE(s, gref->lock);
-	while ((m = gref->ichead) == 0) {
-		gref->sevents |= POLLPRI;
+    /* wait for the ioc ack */
+    ATDISABLE(s, gref->lock);
+    while ((m = gref->ichead) == 0) {
+        gref->sevents |= POLLPRI;
 #ifdef APPLETALK_DEBUG
 		kprintf("sleep gref = 0x%x\n", (unsigned)gref);
 #endif
@@ -508,36 +519,43 @@ int at_ioctl(gref, cmd, arg)
 	kprintf("at_ioctl: woke up from ioc sleep gref = 0x%x\n", 
 		(unsigned)gref);
 #endif
-	/* process the ioc response */
-	ioc = (ioc_t *)gbuf_rptr(m);
-	if ((err = ioc->ioc_error) == 0) {
-		ioccmd.ic_timout = ioc->ioc_rval;
-		ioccmd.ic_len = 0;
-		mdata = gbuf_cont(m);
-		if (mdata && ioccmd.ic_dp) {
-			ioccmd.ic_len = gbuf_msgsize(mdata);
-		  for (len=0; mdata; mdata=gbuf_cont(mdata)) {
-			if ((err = copyout((caddr_t)gbuf_rptr(mdata),
-					(caddr_t)&ioccmd.ic_dp[len], gbuf_len(mdata))) < 0) {
+
+    /* process the ioc response */
+    ioc = (ioc_t *) gbuf_rptr(m);
+    if ((err = ioc->ioc_error) == 0) {
+        ioccmd.ic_timout = ioc->ioc_rval;
+        ioccmd.ic_len = 0;
+        mdata = gbuf_cont(m);
+        if (mdata && ioccmd.ic_dp) {
+            ioccmd.ic_len = gbuf_msgsize(mdata);
+            for (len = 0; mdata; mdata = gbuf_cont(mdata)) {
+                if (fromKernel)
+                    bcopy (gbuf_rptr(mdata), &ioccmd.ic_dp[len], gbuf_len(mdata));
+                else {
+                    if ((err = copyout((caddr_t)gbuf_rptr(mdata), (caddr_t)&ioccmd.ic_dp[len], gbuf_len(mdata))) < 0) {
 #ifdef APPLETALK_DEBUG
-				kprintf("at_ioctl: len=%d error copyout=%d from=%x to=%x gbuf_len=%x\n",
-					 len, err, (caddr_t)gbuf_rptr(mdata), 
-					 (caddr_t)&ioccmd.ic_dp[len], gbuf_len(mdata));
+						kprintf("at_ioctl: len=%d error copyout=%d from=%x to=%x gbuf_len=%x\n",
+					 			len, err, (caddr_t)gbuf_rptr(mdata), (caddr_t)&ioccmd.ic_dp[len], gbuf_len(mdata));
 #endif
-				goto l_done;
-			}
-			len += gbuf_len(mdata);
-		  }
-		}
-		if ((err = copyout((caddr_t)&ioccmd,
-				(caddr_t)arg, sizeof(ioccmd_t))) != 0) {
+                        goto l_done;
+                    }
+                }
+                len += gbuf_len(mdata);
+            }
+        }
+        
+        if (fromKernel)
+            bcopy (&ioccmd, arg, sizeof(ioccmd_t));
+        else {
+            if ((err = copyout((caddr_t)&ioccmd, (caddr_t)arg, sizeof(ioccmd_t))) != 0) {
 #ifdef APPLETALK_DEBUG
-				kprintf("at_ioctl: error copyout2=%d from=%x to=%x len=%d\n",
-					 err, &ioccmd, arg, sizeof(ioccmd_t));
+                kprintf("at_ioctl: error copyout2=%d from=%x to=%x len=%d\n",
+                         err, &ioccmd, arg, sizeof(ioccmd_t));
 #endif
-			goto l_done;
-		}
-	}
+                goto l_done;
+            }
+        }
+    }
 
 l_done:
 	gbuf_freem(m);
@@ -561,16 +579,17 @@ int _ATioctl(fp, cmd, arg, proc)
 #endif
 	}
 	else
-	     err = at_ioctl(gref, cmd, arg);
+	     err = at_ioctl(gref, cmd, arg, 0);
 
 	thread_funnel_switch(NETWORK_FUNNEL, KERNEL_FUNNEL);
 
 	return err;
 }
 
-int _ATselect(fp, which, proc)
+int _ATselect(fp, which, wql, proc)
 	struct file *fp;
 	int which;
+	void * wql;
 	struct proc *proc;
 {
 	int s, err, rc = 0;
@@ -589,7 +608,7 @@ int _ATselect(fp, which, proc)
 		       rc = 1;
 		  else {
 		       gref->sevents |= POLLIN;
-		       selrecord(proc, &gref->si);
+		       selrecord(proc, &gref->si, wql);
 		  }
 	     }
 	     else if (which == POLLOUT) {
@@ -598,7 +617,7 @@ int _ATselect(fp, which, proc)
 			    rc = 1;
 		       else {
 			    gref->sevents |= POLLOUT;
-			    selrecord(proc, &gref->si);
+			    selrecord(proc, &gref->si, wql);
 		       }
 		  } else
 		       rc = 1;
@@ -654,9 +673,7 @@ void atalk_putnext(gref, m)
 			}
 			if (gref->sevents & POLLIN) {
 				gref->sevents &= ~POLLIN;
-				thread_funnel_switch(NETWORK_FUNNEL, KERNEL_FUNNEL);
 				selwakeup(&gref->si);
-				thread_funnel_switch(KERNEL_FUNNEL, NETWORK_FUNNEL);
 			}
 			gref->rdtail = m;
 		    }
@@ -725,9 +742,7 @@ void atalk_notify(gref, errno)
 		/* select */
 		if (gref->sevents & POLLIN) {
 			gref->sevents &= ~POLLIN;
-			thread_funnel_switch(NETWORK_FUNNEL, KERNEL_FUNNEL);
 			selwakeup(&gref->si);
-			thread_funnel_switch(KERNEL_FUNNEL, NETWORK_FUNNEL);
 		}
 	    }
 	}
@@ -742,9 +757,7 @@ void atalk_notify_sel(gref)
 	ATDISABLE(s, gref->lock);
 	if (gref->sevents & POLLIN) {
 		gref->sevents &= ~POLLIN;
-		thread_funnel_switch(NETWORK_FUNNEL, KERNEL_FUNNEL);
 		selwakeup(&gref->si);
-		thread_funnel_switch(KERNEL_FUNNEL, NETWORK_FUNNEL);
 	}
 	ATENABLE(s, gref->lock);
 }
@@ -848,8 +861,8 @@ int gref_alloc(grefp)
 	return 0;
 } /* gref_alloc */
 
-static int gref_close(gref)
-	gref_t *gref;
+/* bms:  make gref_close callable from kernel */
+int gref_close(gref_t *gref)
 {
 	int s, rc;
 
@@ -927,16 +940,62 @@ struct mbuf *m_clattach(extbuf, extfree, extsize, extarg, wait)
         return (m);
 }
 
+
+
+/*
+	temp fix for bug 2731148  - until this code is re-written to use standard clusters
+	Deletes any free clusters on the free list.
+*/
+void atp_delete_free_clusters()
+{
+	caddr_t cluster;
+	caddr_t cluster_list;
+	
+	
+	/* check for free clusters on the free_cluster_list to be deleted */
+	MBUF_LOCK();	/* lock used by mbuf routines */
+
+		untimeout(&atp_delete_free_clusters, NULL);
+		atp_free_cluster_timeout_set = 0;
+
+		cluster_list = atp_free_cluster_list;
+		atp_free_cluster_list = 0;
+		
+	MBUF_UNLOCK();
+	
+	while (cluster = cluster_list)
+	{
+		cluster_list = *((caddr_t*)cluster);
+		FREE(cluster, M_MCLUST);
+	}
+	
+}
+
+
 /* 
    Used as the "free" routine for over-size clusters allocated using
-   m_lgbuf_alloc(). 
+   m_lgbuf_alloc(). Called by m_free while under MBUF_LOCK.
 */
 
 void m_lgbuf_free(buf, size, arg)
      void *buf;
      int size, arg; /* not needed, but they're in m_free() */
 {
-	FREE(buf, M_MCLUST);
+	/* FREE(buf, M_MCLUST); - can't free here - called from m_free while under lock */
+	
+	/* move to free_cluster_list to be deleted later */
+	caddr_t cluster = (caddr_t)buf;
+	
+	/* don't need a lock because this is only called called from m_free which */
+	/* is under MBUF_LOCK */
+	*((caddr_t*)cluster) = atp_free_cluster_list;
+	atp_free_cluster_list = cluster;
+	
+	if (atp_free_cluster_timeout_set == 0)
+	{
+		atp_free_cluster_timeout_set = 1;
+		timeout(&atp_delete_free_clusters, NULL, (1 * HZ));
+	}
 }
 
 /*
@@ -949,6 +1008,9 @@ struct mbuf *m_lgbuf_alloc(size, wait)
 {
 	struct mbuf *m;
 
+	if (atp_free_cluster_list)
+		atp_delete_free_clusters();	/* delete any free clusters on the free list */
+	
 	/* If size is too large, allocate a cluster, otherwise, use the
 	   standard mbuf allocation routines.*/
 	if (size > MCLBYTES) {

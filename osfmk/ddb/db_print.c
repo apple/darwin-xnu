@@ -82,9 +82,6 @@
 #include <ddb/db_output.h>		/* For db_printf() */
 #include <ddb/db_print.h>
 
-#include <kern/sf.h>
-#include <kern/mk_sp.h>	/*** ??? fix so this can be removed ***/
-
 #if	TASK_SWAPPER
 #include <kern/task_swap.h>
 #endif	/* TASK_SWAPPER */
@@ -245,7 +242,7 @@ db_act_stat(
 		*p++ = (athread->state & TH_RUN)  ? 'R' : '.';
 		*p++ = (athread->state & TH_WAIT) ? 'W' : '.';
 		*p++ = (athread->state & TH_SUSP) ? 'S' : '.';
-		*p++ = (athread->state & TH_SWAPPED_OUT) ? 'O' : '.';
+		*p++ = (athread->state & TH_STACK_HANDOFF) ? 'O' : '.';
 		*p++ = (athread->state & TH_UNINT) ? 'N' : '.';
 		/* show if the FPU has been used */
 		*p++ = db_act_fp_used(thr_act) ? 'F' : '.';
@@ -322,7 +319,7 @@ db_print_act(
 		    db_printf("%s ID:   ACT     STAT  SW STACK    SHUTTLE", indent);
 		    db_printf("  SUS  PRI  WAIT_FUNC\n");
 		}
-		policy = (athread ? athread->policy : 2);
+		policy = ((athread && (athread->sched_mode&TH_MODE_TIMESHARE))? 1: 2);
 		db_printf("%s%3d%c %0*X %s %s %0*X %0*X %3d %3d/%s ",
 		    indent, act_id,
 		    (thr_act == current_act())? '#': ':',

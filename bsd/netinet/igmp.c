@@ -157,7 +157,7 @@ find_rti(ifp)
 #if ISFB31
 	MALLOC(rti, struct router_info *, sizeof *rti, M_IGMP, M_NOWAIT);
 #else
-	MALLOC(rti, struct router_info *, sizeof *rti, M_TEMP, M_NOWAIT);
+	MALLOC(rti, struct router_info *, sizeof *rti, M_TEMP, M_WAITOK);
 #endif
         rti->rti_ifp = ifp;
         rti->rti_type = IGMP_V2_ROUTER;
@@ -473,6 +473,8 @@ igmp_sendpkt(inm, type, addr)
 	MH_ALIGN(m, IGMP_MINLEN + sizeof(struct ip));
 	m->m_data += sizeof(struct ip);
         m->m_len = IGMP_MINLEN;
+	m->m_pkthdr.csum_flags = 0;
+	m->m_pkthdr.csum_data = 0;
         igmp = mtod(m, struct igmp *);
         igmp->igmp_type   = type;
         igmp->igmp_code   = 0;

@@ -77,9 +77,10 @@ kern_return_t	thread_policy_get(
 /*
  * THREAD_STANDARD_POLICY:
  *
- * This is the standard [fair] scheduling mode, assigned to new
- * threads.  Specifying it explicitly is not typically required,
- * but may be used to return a thread to the default mode setting.
+ * This is the standard (fair) scheduling mode, assigned to new
+ * threads.  The thread will be given processor time in a manner
+ * which apportions approximately equal share to long running
+ * computations.
  *
  * Parameters:
  *	[none]
@@ -88,14 +89,37 @@ kern_return_t	thread_policy_get(
 #define THREAD_STANDARD_POLICY			1
 
 struct thread_standard_policy {
-	/* no data */
+	natural_t		no_data;
 };
 
 typedef struct thread_standard_policy	thread_standard_policy_data_t;
 typedef struct thread_standard_policy	*thread_standard_policy_t;
 
-#define THREAD_STANDARD_POLICY_COUNT	\
-	(sizeof (thread_standard_policy_data_t) / sizeof (integer_t))
+#define THREAD_STANDARD_POLICY_COUNT	0
+
+/*
+ * THREAD_EXTENDED_POLICY:
+ *
+ * Extended form of THREAD_STANDARD_POLICY, which supplies a
+ * hint indicating whether this is a long running computation.
+ *
+ * Parameters:
+ *
+ * timeshare: TRUE (the default) results in identical scheduling
+ * behavior as THREAD_STANDARD_POLICY.
+ */
+
+#define THREAD_EXTENDED_POLICY			1
+
+struct thread_extended_policy {
+	boolean_t		timeshare;
+};
+
+typedef struct thread_extended_policy	thread_extended_policy_data_t;
+typedef struct thread_extended_policy	*thread_extended_policy_t;
+
+#define THREAD_EXTENDED_POLICY_COUNT	\
+	(sizeof (thread_extended_policy_data_t) / sizeof (integer_t))
 
 /*
  * THREAD_TIME_CONSTRAINT_POLICY:
@@ -127,9 +151,9 @@ typedef struct thread_standard_policy	*thread_standard_policy_t;
 #define THREAD_TIME_CONSTRAINT_POLICY	2
 
 struct thread_time_constraint_policy {
-	natural_t		period;
-	natural_t		computation;
-	natural_t		constraint;
+	uint32_t		period;
+	uint32_t		computation;
+	uint32_t		constraint;
 	boolean_t		preemptible;
 };
 

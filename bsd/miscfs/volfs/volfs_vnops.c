@@ -323,7 +323,7 @@ volfs_getattr(ap)
 int
 volfs_select(ap)
     struct vop_select_args	/* { struct vnode *a_vp; int  a_which; int
-				 * a_fflags; struct ucred *a_cred; struct
+				 * a_fflags; struct ucred *a_cred; void * a_wql; struct
         proc *a_p; } */ *ap;
 {
     DBG_VOP(("volfs_select called\n"));
@@ -883,7 +883,7 @@ volfs_lookup(ap)
 		char	*check_ptr;
 		u_long	id;
 
-		id = strtol(cnp, &check_ptr, 10);
+		id = strtoul(cnp, &check_ptr, 10);
 
     	/*
 		 * strtol will leave us at the first non-numeric character.

@@ -51,7 +51,7 @@
 #include <netat/routing_tables.h>
 #include <netat/debug.h>
 
-extern int at_ioctl(struct atpcb *, u_long, caddr_t);
+extern int at_ioctl(struct atpcb *, u_long, caddr_t, int fromKernel);
 extern int routerStart(at_kern_err_t *);
 extern void elap_offline(at_ifaddr_t *);
 extern at_ifaddr_t *find_ifID(char *);
@@ -142,10 +142,10 @@ int at_control(so, cmd, data, ifp)
 		   work with BSD-style sockets instead of the special purpose 
 		   system calls, ATsocket() and ATioctl().
 		   *** */
-		if ((error = at_ioctl((struct atpcb *)so->so_pcb, cmd, data))) {
+		if ((error = at_ioctl((struct atpcb *)so->so_pcb, cmd, data, 0))) {
 		  if (((struct atpcb *)so->so_pcb)->proto != ATPROTO_LAP) {
 		    ((struct atpcb *)so->so_pcb)->proto = ATPROTO_LAP;
-		    error = at_ioctl((struct atpcb *)so->so_pcb, cmd, data);
+		    error = at_ioctl((struct atpcb *)so->so_pcb, cmd, data, 0);
 		  }
 		}
 		return(error);

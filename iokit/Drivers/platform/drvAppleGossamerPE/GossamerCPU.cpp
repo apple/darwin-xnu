@@ -30,7 +30,6 @@ extern "C" {
 
 #include <IOKit/IODeviceTreeSupport.h>
 #include <IOKit/IOPlatformExpert.h>
-#include <IOKit/pci/IOPCIBridge.h>
 
 #include "GossamerCPU.h"
 #include "Gossamer.h"
@@ -377,7 +376,7 @@ void GossamerCPU::haltCPU(void)
     long	machine_type;
     grackle = NULL;
 
-    grackle = OSDynamicCast(AppleGracklePCI, findIOInterface("AppleGracklePCI"));
+    grackle = (IOPCIBridge *)findIOInterface("AppleGracklePCI")->metaCast("IOPCIBridge");
     if (grackle == NULL)
         kprintf("GossamerCPU::haltCPU missing grackle\n");
 
@@ -458,8 +457,8 @@ void GossamerCPU::haltCPU(void)
 		    break;
 		}		
 	    }
-	    IOSleep(5);	//allows USB thread to run since no more thread scheduling.  1 ms
-			// is enough for slow Yosemite, 5 is needed for iMacs.
+	    IOSleep(7);	//allows USB thread to run since no more thread scheduling.  1 ms
+			// is enough for slow Yosemite, 7 is needed for iMacs.
 	}
 
 	ml_throttle(0);		//remove throttle from CPU speed
@@ -475,7 +474,7 @@ void GossamerCPU::haltCPU(void)
     else
     {
 	pmu = OSDynamicCast(IOService, findIOInterface("ApplePMU"));
-	processor_exit(machProcessor); 
+processor_exit(machProcessor); 
     }
 }
 

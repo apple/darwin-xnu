@@ -110,7 +110,7 @@ VERS_revision VERS_revision_for_string(char ** string_p) {
 }
 
 
-int VERS_parse_string(char * vers_string, UInt32 * version_num) {
+int VERS_parse_string(const char * vers_string, UInt32 * version_num) {
     int result = 1;
     VERS_version vers;
     char * current_char_p;

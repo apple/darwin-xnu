@@ -66,6 +66,7 @@
 #include <kern/lock.h>
 #include <kern/sched_prim.h>
 #include <kern/misc_protos.h>
+#include <kern/thread_call.h>
 #include <kern/zalloc.h>
 #include <mach/vm_param.h>
 #include <vm/vm_kern.h>
@@ -198,6 +199,11 @@ void		zone_page_keep(
 				vm_offset_t	addr,
 				vm_size_t	size);
 
+void		zalloc_async(
+				thread_call_param_t	p0,  
+				thread_call_param_t	p1);
+
+
 #if	ZONE_DEBUG && MACH_KDB
 int		zone_count(
 				zone_t		z,
@@ -273,6 +279,12 @@ zone_t			first_zone;
 zone_t			*last_zone;
 int			num_zones;
 
+boolean_t zone_gc_allowed = TRUE;
+boolean_t zone_gc_forced = FALSE;
+unsigned zone_gc_last_tick = 0;
+unsigned zone_gc_max_rate = 0;		/* in ticks */
+
+
 /*
  *	zinit initializes a new zone.  The zone data structures themselves
  *	are stored in a zone, which is initially a static structure that
@@ -340,6 +352,7 @@ zinit(
 	z->allows_foreign = FALSE;
 	z->expandable  = TRUE;
 	z->waiting = FALSE;
+	z->async_pending = FALSE;
 
 #if	ZONE_DEBUG
 	z->active_zones.next = z->active_zones.prev = 0;	
@@ -352,6 +365,7 @@ zinit(
 	 */
 
 	z->next_zone = ZONE_NULL;
+	thread_call_setup(&z->call_async_alloc, zalloc_async, z);
 	simple_lock(&all_zones_lock);
 	*last_zone = z;
 	last_zone = &z->next_zone;
@@ -600,20 +614,17 @@ zalloc_canblock(
 	lock_zone(zone);
 
 	REMOVE_FROM_ZONE(zone, addr, vm_offset_t);
-	while (addr == 0) {
+
+	while ((addr == 0) && canblock) {
 		/*
  		 *	If nothing was there, try to get more
 		 */
 		if (zone->doing_alloc) {
-		        if (!canblock) {
-			  unlock_zone(zone);
-			  return(0);
-		        }
 			/*
 			 *	Someone is allocating memory for this zone.
 			 *	Wait for it to show up, then try again.
 			 */
-			assert_wait((event_t)zone, THREAD_INTERRUPTIBLE);
+			assert_wait((event_t)zone, THREAD_UNINT);
 			zone->waiting = TRUE;
 			unlock_zone(zone);
 			thread_block((void (*)(void)) 0);
@@ -639,10 +650,6 @@ zalloc_canblock(
 				} else {
 					unlock_zone(zone);
 
-					if (!canblock) {
-					  return(0);
-					}
-					
 					panic("zalloc: zone \"%s\" empty.", zone->zone_name);
 				}
 			}
@@ -669,10 +676,6 @@ zalloc_canblock(
 				} else if (retval != KERN_RESOURCE_SHORTAGE) {
 					/* would like to cause a zone_gc() */
 
-				        if (!canblock) {
-					  return(0);
-					}
-
 					panic("zalloc");
 				}
 				lock_zone(zone);
@@ -686,10 +689,6 @@ zalloc_canblock(
 					retval == KERN_RESOURCE_SHORTAGE) {
 					unlock_zone(zone);
 					
-					if (!canblock) {
-					  return(0);
-					}
-
 					VM_PAGE_WAIT();
 					lock_zone(zone);
 				}
@@ -722,23 +721,23 @@ zalloc_canblock(
 				if (retval == KERN_RESOURCE_SHORTAGE) {
 					unlock_zone(zone);
 					
-					if (!canblock) {
-					  return(0);
-					}
-
 					VM_PAGE_WAIT();
 					lock_zone(zone);
 				} else {
-				        if (!canblock) {
-					  return(0);
-					}
-
 					panic("zalloc");
 				}
 			}
 		}
 		if (addr == 0)
 			REMOVE_FROM_ZONE(zone, addr, vm_offset_t);
+	}
+
+	if ((addr == 0) && !canblock && (zone->async_pending == FALSE) && (!vm_pool_low())) {
+		zone->async_pending = TRUE;
+		unlock_zone(zone);
+		thread_call_enter(&zone->call_async_alloc);
+		lock_zone(zone);
+		REMOVE_FROM_ZONE(zone, addr, vm_offset_t);
 	}
 
 #if	ZONE_DEBUG
@@ -749,6 +748,7 @@ zalloc_canblock(
 #endif
 
 	unlock_zone(zone);
+
 	return(addr);
 }
 
@@ -765,6 +765,20 @@ zalloc_noblock(
 	       register zone_t zone)
 {
   return( zalloc_canblock(zone, FALSE) );
+}
+
+void
+zalloc_async(
+	thread_call_param_t	p0,
+	thread_call_param_t	p1)
+{
+	vm_offset_t	elt;
+
+	elt = zalloc_canblock((zone_t)p0, TRUE);
+	zfree((zone_t)p0, elt);
+	lock_zone(((zone_t)p0));
+	((zone_t)p0)->async_pending = FALSE;
+	unlock_zone(((zone_t)p0));
 }
 
 
@@ -851,24 +865,17 @@ zfree(
 			if (!pmap_kernel_va(this) || this == elem)
 				panic("zfree");
 	}
+	ADD_TO_ZONE(zone, elem);
+
 	/*
 	 * If elements have one or more pages, and memory is low,
-	 * put it directly back into circulation rather than
-	 * back into a zone, where a non-vm_privileged task can grab it.
-	 * This lessens the impact of a privileged task cycling reserved
-	 * memory into a publicly accessible zone.
+	 * request to run the garbage collection in the zone  the next 
+	 * time the pageout thread runs.
 	 */
 	if (zone->elem_size >= PAGE_SIZE && 
 	    vm_pool_low()){
-		assert( !(zone->elem_size & (zone->alloc_size-1)) );
-		zone->count--;
-		zone->cur_size -= zone->elem_size;
-		zone_page_init(elem, zone->elem_size, ZONE_PAGE_UNUSED);
-		unlock_zone(zone);
-		kmem_free(zone_map, elem, zone->elem_size);
-		return;
+		zone_gc_forced = TRUE;
 	}
-	ADD_TO_ZONE(zone, elem);
 	unlock_zone(zone);
 }
 
@@ -1308,10 +1315,6 @@ zone_gc(void)
 	mutex_unlock(&zone_gc_lock);
 }
 
-boolean_t zone_gc_allowed = TRUE;	/* XXX */
-unsigned zone_gc_last_tick = 0;
-unsigned zone_gc_max_rate = 0;		/* in ticks */
-
 /*
  *	consider_zone_gc:
  *
@@ -1323,14 +1326,16 @@ consider_zone_gc(void)
 {
 	/*
 	 *	By default, don't attempt zone GC more frequently
-	 *	than once a second (which is one scheduler tick).
+	 *	than once a second.
 	 */
 
 	if (zone_gc_max_rate == 0)
-		zone_gc_max_rate = 2;		/* sched_tick is a 1 second resolution 2 here insures at least 1 second interval */
+		zone_gc_max_rate = (1 << SCHED_TICK_SHIFT) + 1;
 
 	if (zone_gc_allowed &&
-	    (sched_tick > (zone_gc_last_tick + zone_gc_max_rate))) {
+	    ((sched_tick > (zone_gc_last_tick + zone_gc_max_rate)) ||
+	     zone_gc_forced)) {
+		zone_gc_forced = FALSE;
 		zone_gc_last_tick = sched_tick;
 		zone_gc();
 	}

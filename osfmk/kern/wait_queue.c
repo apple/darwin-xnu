@@ -87,7 +87,26 @@ wait_queue_sub_init(
 {
 	wait_queue_init(&wqsub->wqs_wait_queue, policy);
 	wqsub->wqs_wait_queue.wq_issub = TRUE;
+	if ( policy & SYNC_POLICY_PREPOST) {
+		wqsub->wqs_wait_queue.wq_isprepost = TRUE;
+		wqsub->wqs_refcount = 0;
+	} else 
+		wqsub->wqs_wait_queue.wq_isprepost = FALSE;
 	queue_init(&wqsub->wqs_sublinks);
+}
+
+void
+wait_queue_sub_clearrefs(
+        wait_queue_sub_t wq_sub)
+{
+	assert(wait_queue_is_sub(wq_sub));
+
+	wqs_lock(wq_sub);
+
+	wq_sub->wqs_refcount = 0;
+
+	wqs_unlock(wq_sub);
+
 }
 
 void
@@ -99,6 +118,47 @@ wait_queue_link_init(
 	wql->wql_queue = WAIT_QUEUE_NULL;
 	wql->wql_subqueue = WAIT_QUEUE_SUB_NULL;
 	wql->wql_event = NO_EVENT;
+}
+
+/*
+ *     Routine:        wait_queue_alloc
+ *     Purpose:
+ *             Allocate and initialize a wait queue for use outside of
+ *             of the mach part of the kernel.
+ *
+ *     Conditions:
+ *             Nothing locked - can block.
+ *
+ *     Returns:
+ *             The allocated and initialized wait queue
+ *             WAIT_QUEUE_NULL if there is a resource shortage
+ */
+wait_queue_t
+wait_queue_alloc(
+         int policy)
+{
+	wait_queue_t wq;
+
+	wq = (wait_queue_t) kalloc(sizeof(struct wait_queue));
+	if (wq != WAIT_QUEUE_NULL)
+		wait_queue_init(wq, policy);
+	return wq;
+}
+
+/*
+ *     Routine:        wait_queue_free
+ *     Purpose:
+ *             Free an allocated wait queue.
+ *
+ *     Conditions:
+ *             Nothing locked - can block.
+ */
+void
+wait_queue_free(
+	wait_queue_t wq)
+{
+	assert(queue_empty(&wq->wq_queue));
+	kfree((vm_offset_t)wq, sizeof(struct wait_queue));
 }
 
 
@@ -275,6 +335,46 @@ wait_queue_link(
 
 	return KERN_SUCCESS;
 }	
+/*
+ *	Routine:	wait_queue_link_noalloc
+ *	Purpose:
+ *		Insert a subordinate wait queue into a wait queue.  This
+ *		requires us to link the two together using a wait_queue_link
+ *		structure that we allocate.
+ *	Conditions:
+ *		The wait queue being inserted must be inited as a sub queue
+ *		The sub waitq is not already linked
+ *
+ */
+kern_return_t
+wait_queue_link_noalloc(
+	wait_queue_t wq,
+	wait_queue_sub_t wq_sub,
+	wait_queue_link_t wql)
+{
+	spl_t s;
+
+	assert(wait_queue_is_sub(wq_sub));
+	assert(!wait_queue_member(wq, wq_sub));
+
+	wait_queue_link_init(wql);
+
+	s = splsched();
+	wait_queue_lock(wq);
+	wqs_lock(wq_sub);
+
+	wql->wql_queue = wq;
+	wql->wql_subqueue = wq_sub;
+	wql->wql_event = WAIT_QUEUE_SUBORDINATE;
+	queue_enter(&wq->wq_queue, wql, wait_queue_link_t, wql_links);
+	queue_enter(&wq_sub->wqs_sublinks, wql, wait_queue_link_t, wql_sublinks);
+	
+	wqs_unlock(wq_sub);
+	wait_queue_unlock(wq);
+	splx(s);
+
+	return KERN_SUCCESS;
+}	
 
 /*
  *	Routine:	wait_queue_unlink
@@ -326,6 +426,152 @@ wait_queue_unlink(
 	panic("wait_queue_unlink");
 }	
 
+/*
+ *	Routine:	wait_queue_unlink_nofree
+ *	Purpose:
+ *		Remove the linkage between a wait queue and its subordinate. Do not deallcoate the wql
+ *	Conditions:
+ *		The wait queue being must be a member sub queue
+ */
+kern_return_t
+wait_queue_unlink_nofree(
+	wait_queue_t wq,
+	wait_queue_sub_t wq_sub)
+{
+	wait_queue_element_t wq_element;
+	queue_t q;
+
+	assert(wait_queue_is_sub(wq_sub));
+
+	q = &wq->wq_queue;
+
+	wq_element = (wait_queue_element_t) queue_first(q);
+	while (!queue_end(q, (queue_entry_t)wq_element)) {
+
+		if (wq_element->wqe_event == WAIT_QUEUE_SUBORDINATE) {
+			wait_queue_link_t wql = (wait_queue_link_t)wq_element;
+			queue_t sq;
+			
+			if (wql->wql_subqueue == wq_sub) {
+				sq = &wq_sub->wqs_sublinks;
+				queue_remove(q, wql, wait_queue_link_t, wql_links);
+				queue_remove(sq, wql, wait_queue_link_t, wql_sublinks);
+				return(KERN_SUCCESS);
+			}
+		}
+
+		wq_element = (wait_queue_element_t)
+			     queue_next((queue_t) wq_element);
+	}
+	/* due to dropping the sub's lock to get to this routine we can see
+	 * no entries in waitqueue. It is valid case, so we should just return
+	 */
+	return(KERN_FAILURE);
+}
+
+/*
+ *	Routine:	wait_subqueue_unlink_all
+ *	Purpose:
+ *		Remove the linkage between a wait queue and its subordinate.
+ *	Conditions:
+ *		The wait queue being must be a member sub queue
+ */
+kern_return_t
+wait_subqueue_unlink_all(
+	wait_queue_sub_t wq_sub)
+{
+	wait_queue_link_t wql;
+	wait_queue_t wq;
+	queue_t q;
+	kern_return_t kret;
+	spl_t s;
+
+	assert(wait_queue_is_sub(wq_sub));
+
+retry:
+	s = splsched();
+	wqs_lock(wq_sub);
+
+	q = &wq_sub->wqs_sublinks;
+
+	wql = (wait_queue_link_t)queue_first(q);
+	while (!queue_end(q, (queue_entry_t)wql)) {
+		wq = wql->wql_queue;
+		if (wait_queue_lock_try(wq)) {
+#if 0
+			queue_t q1;
+
+				q1 = &wq->wq_queue;
+
+				queue_remove(q1, wql, wait_queue_link_t, wql_links);
+				queue_remove(q, wql, wait_queue_link_t, wql_sublinks);
+#else
+				if ((kret = wait_queue_unlink_nofree(wq, wq_sub)) != KERN_SUCCESS) {
+				queue_remove(q, wql, wait_queue_link_t, wql_sublinks);
+
+}
+#endif
+				wait_queue_unlock(wq);
+				wql = (wait_queue_link_t)queue_first(q);
+		} else {
+			wqs_unlock(wq_sub);
+			splx(s);
+			mutex_pause();
+			goto retry;
+		}
+	}
+	wqs_unlock(wq_sub);
+	splx(s);
+	return(KERN_SUCCESS);
+}	
+
+
+/*
+ *	Routine:	wait_queue_unlinkall_nofree
+ *	Purpose:
+ *		Remove the linkage between a wait queue and all subordinates.
+ */
+
+kern_return_t
+wait_queue_unlinkall_nofree(
+	wait_queue_t wq)
+{
+	wait_queue_element_t wq_element;
+	wait_queue_sub_t wq_sub;
+	queue_t q;
+	spl_t s;
+
+
+	s = splsched();
+	wait_queue_lock(wq);
+
+	q = &wq->wq_queue;
+
+	wq_element = (wait_queue_element_t) queue_first(q);
+	while (!queue_end(q, (queue_entry_t)wq_element)) {
+
+		if (wq_element->wqe_event == WAIT_QUEUE_SUBORDINATE) {
+			wait_queue_link_t wql = (wait_queue_link_t)wq_element;
+			queue_t sq;
+			
+				wq_sub = wql->wql_subqueue;
+				wqs_lock(wq_sub);
+				sq = &wq_sub->wqs_sublinks;
+				queue_remove(q, wql, wait_queue_link_t, wql_links);
+				queue_remove(sq, wql, wait_queue_link_t, wql_sublinks);
+				wqs_unlock(wq_sub);
+				wq_element = (wait_queue_element_t) queue_first(q);
+		} else {
+			wq_element = (wait_queue_element_t)
+			     queue_next((queue_t) wq_element);
+		}
+
+	}
+	wait_queue_unlock(wq);
+	splx(s);
+
+	return(KERN_SUCCESS);
+}	
 /*
  *	Routine:	wait_queue_unlink_one
  *	Purpose:
@@ -385,7 +631,7 @@ wait_queue_unlink_one(
  *		The wait queue is assumed locked.
  *
  */
-void
+boolean_t
 wait_queue_assert_wait_locked(
 	wait_queue_t wq,
 	event_t event,
@@ -393,6 +639,18 @@ wait_queue_assert_wait_locked(
 	boolean_t unlock)
 {
 	thread_t thread = current_thread();
+	boolean_t ret;
+
+
+	if (wq->wq_issub && wq->wq_isprepost) {
+		wait_queue_sub_t wqs = (wait_queue_sub_t)wq;
+
+		if (wqs->wqs_refcount > 0) {
+			if (unlock)
+				wait_queue_unlock(wq);
+			return(FALSE);
+		}
+	}
 
 	thread_lock(thread);
 
@@ -412,6 +670,7 @@ wait_queue_assert_wait_locked(
 	thread_unlock(thread);
 	if (unlock)
 		wait_queue_unlock(wq);
+	return(TRUE);
 }
 
 /*
@@ -423,19 +682,21 @@ wait_queue_assert_wait_locked(
  *	Conditions:
  *		nothing of interest locked.
  */
-void
+boolean_t
 wait_queue_assert_wait(
 	wait_queue_t wq,
 	event_t event,
 	int interruptible)
 {
 	spl_t s;
+	boolean_t ret;
 
 	s = splsched();
 	wait_queue_lock(wq);
-	wait_queue_assert_wait_locked(wq, event, interruptible, TRUE);
+	ret = wait_queue_assert_wait_locked(wq, event, interruptible, TRUE);
 	/* wait queue unlocked */
 	splx(s);
+	return(ret);
 }
 
 
@@ -483,6 +744,15 @@ _wait_queue_select_all(
 			 */
 			sub_queue = (wait_queue_t)wql->wql_subqueue;
 			wait_queue_lock(sub_queue);
+			if (sub_queue->wq_isprepost) {
+				wait_queue_sub_t wqs = (wait_queue_sub_t)sub_queue;
+				
+				/*
+				 * Preposting is only for subordinates and wait queue
+				 * is the first element of subordinate 
+				 */
+				wqs->wqs_refcount++;
+			}
 			if (! wait_queue_empty(sub_queue)) 
 				_wait_queue_select_all(sub_queue, event, wake_queue);
 			wait_queue_unlock(sub_queue);

@@ -145,38 +145,53 @@ l_notify:
 
 void atp_free(trp)
 register struct atp_trans *trp;
-{
+{	
 	register struct atp_state *atp;
 	register int i;
 	int s;
 	
 	dPrintf(D_M_ATP_LOW, D_L_TRACE,
 		("atp_free: freeing trp 0x%x\n", (u_int) trp));
+
 	ATDISABLE(s, atpgen_lock);
-	if (trp->tr_tmo_func)
-	        atp_untimout(atp_req_timeout, trp);
-	atp = trp->tr_queue;
 
-	ATP_Q_REMOVE(atp->atp_trans_wait, trp, tr_list);
-
-	if (trp->tr_xmt) {
-	  	gbuf_freem(trp->tr_xmt);
-		trp->tr_xmt = NULL;
+	if (trp->tr_state == TRANS_ABORTING) {
+		ATP_Q_REMOVE(atp_trans_abort, trp, tr_list);
+		trp->tr_state = TRANS_DONE;
 	}
-	for (i = 0; i < 8; i++) {
-	        if (trp->tr_rcv[i]) {
-		        gbuf_freem(trp->tr_rcv[i]);
-			trp->tr_rcv[i] = NULL;
+	else {
+		if (trp->tr_tmo_func)
+	        atp_untimout(atp_req_timeout, trp);
+
+		atp = trp->tr_queue;
+		ATP_Q_REMOVE(atp->atp_trans_wait, trp, tr_list);
+	
+		if (trp->tr_xmt) {
+		  	gbuf_freem(trp->tr_xmt);
+			trp->tr_xmt = NULL;
+		}
+		for (i = 0; i < 8; i++) {
+		        if (trp->tr_rcv[i]) {
+			        gbuf_freem(trp->tr_rcv[i]);
+				trp->tr_rcv[i] = NULL;
+			}
+		}
+		if (trp->tr_bdsp) {
+			gbuf_freem(trp->tr_bdsp);
+			trp->tr_bdsp = NULL;
+		}
+		
+		if (trp->tr_rsp_wait) {
+			trp->tr_state = TRANS_ABORTING;
+			ATP_Q_APPEND(atp_trans_abort, trp, tr_list);
+			thread_wakeup(&trp->tr_event);
+			ATENABLE(s, atpgen_lock);
+			return;
 		}
 	}
-	if (trp->tr_bdsp) {
-		gbuf_freem(trp->tr_bdsp);
-		trp->tr_bdsp = NULL;
-	}
-
+	
 	ATENABLE(s, atpgen_lock);
 	atp_trans_free(trp);
-
 } /* atp_free */
 
 

@@ -150,6 +150,9 @@ extern ipc_port_t convert_task_to_port(
 /* Convert from a thread to a port */
 extern ipc_port_t convert_act_to_port( thread_act_t );
 
+/* Convert from a upl to a port */
+extern ipc_port_t convert_upl_to_port( upl_t );
+
 /* Deallocate a space ref produced by convert_port_to_space */
 extern void space_deallocate(
 	ipc_space_t	space);

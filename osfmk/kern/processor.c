@@ -55,7 +55,6 @@
  */
 
 #include <cpus.h>
-#include <mach_host.h>
 
 #include <mach/boolean.h>
 #include <mach/policy.h>
@@ -73,14 +72,6 @@
 #include <kern/ipc_tt.h>
 #include <ipc/ipc_port.h>
 #include <kern/kalloc.h>
-
-#if	MACH_HOST
-#include <kern/zalloc.h>
-zone_t	pset_zone;
-#endif	/* MACH_HOST */
-
-#include <kern/sf.h>
-#include <kern/mk_sp.h>	/*** ??? fix so this can be removed ***/
 
 /*
  * Exported interface
@@ -104,7 +95,7 @@ void	processor_init(
 		register processor_t	pr,
 		int			slot_num);
 
-void	quantum_set(
+void	pset_quanta_set(
 		processor_set_t		pset);
 
 kern_return_t	processor_set_base(
@@ -185,25 +176,10 @@ void pset_init(
 	mutex_init(&pset->lock, ETAP_THREAD_PSET);
 	pset->pset_self = IP_NULL;
 	pset->pset_name_self = IP_NULL;
-	pset->max_priority = MAXPRI_STANDARD;
-	pset->policies = POLICY_TIMESHARE | POLICY_FIFO | POLICY_RR;
-	pset->set_quantum = min_quantum;
+	pset->set_quanta = 1;
 
-	pset->quantum_adj_index = 0;
-	simple_lock_init(&pset->quantum_adj_lock, ETAP_THREAD_PSET_QUANT);
-
-	for (i = 0; i <= NCPUS; i++) {
-	    pset->machine_quantum[i] = min_quantum;
-	}
-
-	pset->policy_default = POLICY_TIMESHARE;
-	pset->policy_limit.ts.max_priority = MAXPRI_STANDARD;
-	pset->policy_limit.rr.max_priority = MAXPRI_STANDARD;
-	pset->policy_limit.fifo.max_priority = MAXPRI_STANDARD;
-	pset->policy_base.ts.base_priority = BASEPRI_DEFAULT;
-	pset->policy_base.rr.base_priority = BASEPRI_DEFAULT;
-	pset->policy_base.rr.quantum = min_quantum;
-	pset->policy_base.fifo.base_priority = BASEPRI_DEFAULT;
+	for (i = 0; i <= NCPUS; i++)
+	    pset->machine_quanta[i] = 1;
 }
 
 /*
@@ -233,9 +209,8 @@ processor_init(
 	pr->state = PROCESSOR_OFF_LINE;
 	pr->next_thread = THREAD_NULL;
 	pr->idle_thread = THREAD_NULL;
-	pr->quantum = 0;
-	pr->first_quantum = FALSE;
-	pr->last_quantum = 0;
+	timer_call_setup(&pr->quantum_timer, thread_quantum_expire, pr);
+	pr->slice_quanta = 0;
 	pr->processor_set = PROCESSOR_SET_NULL;
 	pr->processor_set_next = PROCESSOR_SET_NULL;
 	queue_init(&pr->processors);
@@ -260,7 +235,7 @@ pset_remove_processor(
 	queue_remove(&pset->processors, processor, processor_t, processors);
 	processor->processor_set = PROCESSOR_SET_NULL;
 	pset->processor_count--;
-	quantum_set(pset);
+	pset_quanta_set(pset);
 }
 
 /*
@@ -277,7 +252,7 @@ pset_add_processor(
 	queue_enter(&pset->processors, processor, processor_t, processors);
 	processor->processor_set = pset;
 	pset->processor_count++;
-	quantum_set(pset);
+	pset_quanta_set(pset);
 }
 
 /*
@@ -499,8 +474,14 @@ processor_start(
 	if (processor == PROCESSOR_NULL)
 		return(KERN_INVALID_ARGUMENT);
 
-	if (processor == master_processor)
-		return(cpu_start(processor->slot_num));
+	if (processor == master_processor) {
+		thread_bind(current_thread(), processor);
+		thread_block((void (*)(void)) 0);
+		kr = cpu_start(processor->slot_num);
+		thread_bind(current_thread(), PROCESSOR_NULL);
+
+		return(kr);
+	}
 
 	s = splsched();
 	processor_lock(processor);
@@ -519,8 +500,9 @@ processor_start(
 		thread_t		thread;   
 		extern void		start_cpu_thread(void);
 	
-		thread = kernel_thread_with_priority(kernel_task, MAXPRI_KERNBAND,
-										start_cpu_thread, FALSE);   
+		thread = kernel_thread_with_priority(
+									kernel_task, MAXPRI_KERNEL,
+										start_cpu_thread, TRUE, FALSE);
 
 		s = splsched();
 		thread_lock(thread);
@@ -568,31 +550,27 @@ processor_control(
 }
 
 /*
- *	Precalculate the appropriate system quanta based on load.  The
- *	index into machine_quantum is the number of threads on the
+ *	Precalculate the appropriate timesharing quanta based on load.  The
+ *	index into machine_quanta is the number of threads on the
  *	processor set queue.  It is limited to the number of processors in
  *	the set.
  */
 
 void
-quantum_set(
+pset_quanta_set(
 	processor_set_t		pset)
 {
-#if NCPUS > 1
 	register int    i, ncpus;
 
 	ncpus = pset->processor_count;
 
 	for (i=1; i <= ncpus; i++)
-		pset->machine_quantum[i] = ((min_quantum * ncpus) + (i / 2)) / i ;
+		pset->machine_quanta[i] = (ncpus + (i / 2)) / i;
 
-	pset->machine_quantum[0] = pset->machine_quantum[1];
+	pset->machine_quanta[0] = pset->machine_quanta[1];
 
-	i = (pset->runq.count > ncpus) ? ncpus : pset->runq.count;
-	pset->set_quantum = pset->machine_quantum[i];
-#else   /* NCPUS > 1 */
-	default_pset.set_quantum = min_quantum;
-#endif  /* NCPUS > 1 */
+	i = (pset->runq.count > ncpus)? ncpus: pset->runq.count;
+	pset->set_quanta = pset->machine_quanta[i];
 }
 	    
 kern_return_t
@@ -651,13 +629,8 @@ processor_set_info(
 			return(KERN_FAILURE);
 
 		basic_info = (processor_set_basic_info_t) info;
-
-		pset_lock(pset);
-		simple_lock(&pset->processors_lock);
 		basic_info->processor_count = pset->processor_count;
-		simple_unlock(&pset->processors_lock);
-		basic_info->default_policy = pset->policy_default;
-		pset_unlock(pset);
+		basic_info->default_policy = POLICY_TIMESHARE;
 
 		*count = PROCESSOR_SET_BASIC_INFO_COUNT;
 		*host = &realhost;
@@ -670,10 +643,7 @@ processor_set_info(
 			return(KERN_FAILURE);
 
 		ts_base = (policy_timeshare_base_t) info;
-
-		pset_lock(pset);
-		*ts_base = pset->policy_base.ts;
-		pset_unlock(pset);
+		ts_base->base_priority = BASEPRI_DEFAULT;
 
 		*count = POLICY_TIMESHARE_BASE_COUNT;
 		*host = &realhost;
@@ -686,10 +656,7 @@ processor_set_info(
 			return(KERN_FAILURE);
 
 		fifo_base = (policy_fifo_base_t) info;
-
-		pset_lock(pset);
-		*fifo_base = pset->policy_base.fifo;
-		pset_unlock(pset);
+		fifo_base->base_priority = BASEPRI_DEFAULT;
 
 		*count = POLICY_FIFO_BASE_COUNT;
 		*host = &realhost;
@@ -702,10 +669,8 @@ processor_set_info(
 			return(KERN_FAILURE);
 
 		rr_base = (policy_rr_base_t) info;
-
-		pset_lock(pset);
-		*rr_base = pset->policy_base.rr;
-		pset_unlock(pset);
+		rr_base->base_priority = BASEPRI_DEFAULT;
+		rr_base->quantum = 1;
 
 		*count = POLICY_RR_BASE_COUNT;
 		*host = &realhost;
@@ -718,10 +683,7 @@ processor_set_info(
 			return(KERN_FAILURE);
 
 		ts_limit = (policy_timeshare_limit_t) info;
-
-		pset_lock(pset);
-		*ts_limit = pset->policy_limit.ts;
-		pset_unlock(pset);
+		ts_limit->max_priority = MAXPRI_STANDARD;
 
 		*count = POLICY_TIMESHARE_LIMIT_COUNT;
 		*host = &realhost;
@@ -734,10 +696,7 @@ processor_set_info(
 			return(KERN_FAILURE);
 
 		fifo_limit = (policy_fifo_limit_t) info;
-
-		pset_lock(pset);
-		*fifo_limit = pset->policy_limit.fifo;
-		pset_unlock(pset);
+		fifo_limit->max_priority = MAXPRI_STANDARD;
 
 		*count = POLICY_FIFO_LIMIT_COUNT;
 		*host = &realhost;
@@ -750,10 +709,7 @@ processor_set_info(
 			return(KERN_FAILURE);
 
 		rr_limit = (policy_rr_limit_t) info;
-
-		pset_lock(pset);
-		*rr_limit = pset->policy_limit.rr;
-		pset_unlock(pset);
+		rr_limit->max_priority = MAXPRI_STANDARD;
 
 		*count = POLICY_RR_LIMIT_COUNT;
 		*host = &realhost;
@@ -766,10 +722,7 @@ processor_set_info(
 			return(KERN_FAILURE);
 
 		enabled = (int *) info;
-
-		pset_lock(pset);
-		*enabled = pset->policies;
-		pset_unlock(pset);
+		*enabled = POLICY_TIMESHARE | POLICY_RR | POLICY_FIFO;
 
 		*count = sizeof(*enabled)/sizeof(int);
 		*host = &realhost;

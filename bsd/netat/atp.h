@@ -319,8 +319,9 @@ struct atp_trans {
 #define	TRANS_TIMEOUT		0	/* waiting for a reply */
 #define	TRANS_REQUEST		1	/* waiting to send a request */
 #define	TRANS_RELEASE		2	/* waiting to send a release */
-#define	TRANS_DONE		3	/* done - waiting for poll to complete */
+#define	TRANS_DONE			3	/* done - waiting for poll to complete */
 #define	TRANS_FAILED		4	/* done - waiting for poll to report failure */
+#define TRANS_ABORTING		5	/* waiting on atp_trans_abort list for thread to wakeup */
 
 /*
  *	reply control block (local context at repling end)
@@ -401,17 +402,21 @@ struct atp_state {
 
 #ifdef ATP_DECLARE
 struct atp_trans *atp_trans_free_list = NULL;	/* free transactions */
-struct atp_rcb *atp_rcb_free_list = NULL;	/* free rcbs */
-static struct atp_state *atp_free_list = NULL;		/* free atp states */
+struct atp_rcb *atp_rcb_free_list = NULL;		/* free rcbs */
+static struct atp_state *atp_free_list = NULL;	/* free atp states */
+struct atp_trans_qhead	atp_trans_abort;		/* aborted trans list */
 static struct atp_rcb atp_rcb_data[NATP_RCB];
 static struct atp_state atp_state_data[NATP_STATE];
 
+
+
 #else
 extern struct atp_trans *atp_trans_free_list;		/* free transactions */
-extern struct atp_rcb *atp_rcb_free_list;		/* free rcbs */
-extern struct atp_state *atp_free_list;			/* free atp states */
+extern struct atp_rcb *atp_rcb_free_list;			/* free rcbs */
+extern struct atp_state *atp_free_list;				/* free atp states */
 extern struct atp_rcb atp_rcb_data[];
 extern struct atp_state atp_state_data[];
+extern struct atp_trans_qhead atp_trans_abort;		/* aborting trans list */
 
 extern void atp_req_timeout();
 extern void atp_rcb_timer();

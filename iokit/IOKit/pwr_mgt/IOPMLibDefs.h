@@ -26,5 +26,7 @@
 #define	kPMSleepSystem			2
 #define	kPMAllowPowerChange		3
 #define	kPMCancelPowerChange		4
+#define	kPMShutdownSystem		5
+#define	kPMRestartSystem		6
 
-#define kNumPMMethods 5
+#define kNumPMMethods 7

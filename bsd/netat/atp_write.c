@@ -456,7 +456,8 @@ void atp_send_replies(atp, rcbp)
 	unsigned char *m0_rptr = NULL, *m0_wptr = NULL;
 	register at_atp_t *athp;
 	register struct atpBDS *bdsp;
-	register gbuf_t *m2, *m1, *m0;
+	register gbuf_t *m2, *m1, *m0, *m3;
+	caddr_t lastPage;
 	gbuf_t *mprev, *mlist = 0;
 	at_socket src_socket = (at_socket)atp->atp_socket_no;
 	gbuf_t *rc_xmt[ATP_TRESP_MAX];
@@ -549,6 +550,24 @@ void atp_send_replies(atp, rcbp)
 			} else
 				gbuf_cont(m1) = 0;
 			gbuf_cont(m2) = m1;
+				
+			/* temp fix for page boundary problem  - bug# 2703163 */
+			lastPage = (caddr_t)((int)(gbuf_wptr(m1) - 1) & ~PAGE_MASK);  			/* 4k page of last byte */
+			if (lastPage != (caddr_t)((int)(gbuf_rptr(m1)) & ~PAGE_MASK)) {			/* 1st byte and last on same page ? */
+				if ((m3 = gbuf_dupb(m1)) == NULL) {
+					for (i = 0; i < cnt; i++)
+						if (rc_xmt[i])
+							gbuf_freem(rc_xmt[i]);
+					(gbuf_rptr(m0)) = m0_rptr;
+					gbuf_wset(m0, (m0_wptr - m0_rptr));
+					goto nothing_to_send;
+				}
+				(gbuf_rptr(m3)) = lastPage;						/* new mbuf starts at beginning of page */
+				gbuf_wset(m3, (gbuf_wptr(m1) - lastPage));		/* len = remaining data crossing over page boundary */
+				gbuf_wset(m1, (lastPage - (gbuf_rptr(m1))));	/* adjust len of m1 */
+				(gbuf_cont(m1)) = m3;
+				(gbuf_cont(m3)) = 0;
+			}
 		  }
 		}
 
@@ -689,10 +708,11 @@ atp_unpack_bdsp(atp, m, rcbp, cnt, wait)
 	struct atp_state *atp;
         gbuf_t          *m;	/* ddp, atp and bdsp gbuf_t */
 	register struct atp_rcb *rcbp;
-        register int    cnt, wait;
+    register int    cnt, wait;
 {
 	register struct atpBDS *bdsp;
-	register gbuf_t        *m2, *m1, *m0;
+	register gbuf_t        *m2, *m1, *m0, *m3;
+	caddr_t lastPage;
         register at_atp_t        *athp;
 	register int  i, len, s_gen;
 	at_socket src_socket;
@@ -823,8 +843,26 @@ atp_unpack_bdsp(atp, m, rcbp, cnt, wait)
 			} else
 				gbuf_cont(m1) = 0;
 			gbuf_cont(m2) = m1;
+			
+			/* temp fix for page boundary problem  - bug# 2703163 */
+			lastPage = (caddr_t)((int)(gbuf_wptr(m1) - 1) & ~PAGE_MASK);  			/* 4k page of last byte */
+			if (lastPage != (caddr_t)((int)(gbuf_rptr(m1)) & ~PAGE_MASK)) {			/* 1st byte and last on same page ? */
+				if ((m3 = gbuf_dupb_wait(m1, wait)) == NULL) {
+					for (i = 0; i < cnt; i++)
+						if (rc_xmt[i])
+							gbuf_freem(rc_xmt[i]);
+					(gbuf_rptr(m0)) = m0_rptr;
+					gbuf_wset(m0, (m0_wptr - m0_rptr));
+					return 0;
+				}
+				(gbuf_rptr(m3)) = lastPage;						/* new mbuf starts at beginning of page */
+				gbuf_wset(m3, (gbuf_wptr(m1) - lastPage));		/* len = remaining data crossing over page boundary */
+				gbuf_wset(m1, (lastPage - (gbuf_rptr(m1))));		/* adjust len of m1 */
+				(gbuf_cont(m1)) = m3;
+				(gbuf_cont(m3)) = 0;
 			}
 		  }
+		}
 
 		AT_DDP_HDR(m2)->src_socket = src_socket;
 		dPrintf(D_M_ATP_LOW,D_L_INFO,
@@ -1603,7 +1641,8 @@ _ATPsndreq(fd, buf, len, nowait, err, proc)
 	 * wait for the transaction to complete
 	 */
 	ATDISABLE(s, trp->tr_lock);
-	while ((trp->tr_state != TRANS_DONE) && (trp->tr_state != TRANS_FAILED)) {
+	while ((trp->tr_state != TRANS_DONE) && (trp->tr_state != TRANS_FAILED) &&
+				(trp->tr_state != TRANS_ABORTING)) {
 		trp->tr_rsp_wait = 1;
 		rc = tsleep(&trp->tr_event, PSOCK | PCATCH, "atpsndreq", 0);
 		if (rc != 0) {
@@ -1616,7 +1655,8 @@ _ATPsndreq(fd, buf, len, nowait, err, proc)
 	trp->tr_rsp_wait = 0;
 	ATENABLE(s, trp->tr_lock);
 
-	if (trp->tr_state == TRANS_FAILED) {
+
+	if (trp->tr_state == TRANS_FAILED || trp->tr_state == TRANS_ABORTING) {
 		/*
 		 * transaction timed out, return error
 		 */
@@ -1674,14 +1714,9 @@ _ATPsndrsp(fd, respbuff, resplen, datalen, err, proc)
 	/*
 	 * allocate buffer and copy in the response info
 	 */
-	while ((m = gbuf_alloc(resplen, PRI_MED)) == 0) {
-		ATDISABLE(s, atp->atp_delay_lock);
-		rc = tsleep(&atp->atp_delay_event, PSOCK | PCATCH, "atprspinfo", 10);
-		ATENABLE(s, atp->atp_delay_lock);
-		if (rc != 0) {
-			*err = rc;
-			return -1;
-		}
+	if ((m = gbuf_alloc_wait(resplen, TRUE)) == 0) {
+	        *err = ENOMEM;
+	        return -1;
 	}
 	if ((*err = copyin((caddr_t)respbuff, (caddr_t)gbuf_rptr(m), resplen)) != 0) {
 		gbuf_freeb(m);
@@ -1698,15 +1733,10 @@ _ATPsndrsp(fd, respbuff, resplen, datalen, err, proc)
 	/*
 	 * allocate buffer and copy in the response data
 	 */
-	while ((mdata = gbuf_alloc(datalen+len, PRI_MED)) == 0) {
-		ATDISABLE(s, atp->atp_delay_lock);
-		rc = tsleep(&atp->atp_delay_event, PSOCK | PCATCH, "atprspdata", 10);
-		ATENABLE(s, atp->atp_delay_lock);
-		if (rc != 0) {
-			gbuf_freem(m);
-			*err = rc;
-			return -1;
-		}
+	if ((mdata = gbuf_alloc_wait(datalen+len, TRUE)) == 0) {
+	        gbuf_freem(m);
+		*err = ENOMEM;
+		return -1;
 	}
 	gbuf_cont(m) = mdata;
 	for (size=0; bdsp < (struct atpBDS *)gbuf_wptr(m); bdsp++) {

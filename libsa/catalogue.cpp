@@ -39,7 +39,6 @@ extern "C" {
 
 #include <IOKit/assert.h>
 
-
 extern "C" {
 extern void IODTFreeLoaderInfo( char *key, void *infoAddr, int infoSize );
 extern kern_return_t host_info(host_t host,
@@ -47,8 +46,6 @@ extern kern_return_t host_info(host_t host,
     host_info_t info,
     mach_msg_type_number_t  *count);
 extern int check_cpu_subtype(cpu_subtype_t cpu_subtype);
-
-extern IOLock * kld_lock;
 };
 
 
@@ -61,6 +58,7 @@ extern IOLock * kld_lock;
 /*********************************************************************
 *********************************************************************/
 static OSDictionary * gStartupExtensions = 0;
+static OSArray * gBootLoaderObjects = 0;
 
 OSDictionary * getStartupExtensions(void) {
     if (gStartupExtensions) {
@@ -73,6 +71,25 @@ OSDictionary * getStartupExtensions(void) {
         LOG_DELAY();
     }
     return gStartupExtensions;
+}
+
+/* This array holds objects that are needed to be held around during
+ * boot before kextd starts up. Currently it contains OSData objects
+ * copied from OF entries for mkext archives in device ROMs. Because
+ * the Device Tree support code dumps these after initially handing
+ * them to us, we have to be able to clean them up later.
+ */
+OSArray * getBootLoaderObjects(void) {
+    if (gBootLoaderObjects) {
+        return gBootLoaderObjects;
+    }
+    gBootLoaderObjects = OSArray::withCapacity(1);
+    if (! gBootLoaderObjects) {
+        IOLog("Error: Couldn't allocate "
+            "bootstrap objects array.\n");
+        LOG_DELAY();
+    }
+    return gBootLoaderObjects;
 }
 
 
@@ -380,6 +397,11 @@ typedef struct BootxDriverInfo {
     long  moduleLength;
 } BootxDriverInfo;
 
+typedef struct MkextEntryInfo {
+    vm_address_t  base_address;
+    mkext_file  * fileinfo;
+} MkextEntryInfo;
+
 
 /*********************************************************************
 * This private function reads the data for a single extension from
@@ -492,9 +514,14 @@ OSDictionary * readExtension(OSDictionary * propertyDict,
    /* It's perfectly okay for a KEXT to have no executable.
     * Check that moduleAddr is nonzero before attempting to
     * get one.
+    *
+    * NOTE: The driverCode object is created "no-copy", so
+    * it doesn't own that memory. The memory must be freed
+    * separately from the OSData object (see
+    * clearStartupExtensionsAndLoaderInfo() at the end of this file).
     */
     if (dataBuffer->moduleAddr && dataBuffer->moduleLength) {
-        driverCode = OSData::withBytes(dataBuffer->moduleAddr,
+        driverCode = OSData::withBytesNoCopy(dataBuffer->moduleAddr,
             dataBuffer->moduleLength);
         if (!driverCode) {
             IOLog("Error: Couldn't allocate data object "
@@ -511,12 +538,6 @@ OSDictionary * readExtension(OSDictionary * propertyDict,
     }
 
 finish:
-
-   /* Free the memory for this extension that was set up
-    * by bootx.
-    */
-    IODTFreeLoaderInfo(memory_map_name, (void *)driverInfo->paddr,
-        (int)driverInfo->length);
 
     // do not release bootxDriverDataObject
     // do not release driverName
@@ -542,14 +563,17 @@ finish:
 
 /*********************************************************************
 * Used to uncompress a single file entry in an mkext archive.
+*
+* The OSData returned does not own its memory! You must deallocate
+* that memory using kmem_free() before releasing the OSData().
 *********************************************************************/
-int uncompressFile(u_int8_t * base_address,
-    mkext_file * fileinfo,
-    /* out */ OSData ** file) {
+static bool uncompressFile(u_int8_t *base_address, mkext_file * fileinfo,
+		           /* out */ OSData ** file) {
 
-    int result = 1;
-    u_int8_t * uncompressed_file = 0;   // don't free; owned by OSData obj
-    OSData * uncompressedFile = 0;  // don't release
+    bool result = true;
+    kern_return_t kern_result;
+    u_int8_t * uncompressed_file = 0; // kmem_free() on error
+    OSData * uncompressedFile = 0;    // returned
     size_t uncompressed_size = 0;
 
     size_t offset = OSSwapBigToHostInt32(fileinfo->offset);
@@ -568,12 +592,13 @@ int uncompressFile(u_int8_t * base_address,
     }
 
     // Add 1 for '\0' to terminate XML string!
-    uncompressed_file = (u_int8_t *)kalloc(realsize + 1);
-    if (!uncompressed_file) {
+    kern_result = kmem_alloc(kernel_map, (vm_offset_t *)&uncompressed_file,
+        realsize + 1);
+    if (kern_result != KERN_SUCCESS) {
         IOLog("Error: Couldn't allocate data buffer "
               "to uncompress file.\n");
         LOG_DELAY();
-        result = 0;
+        result = false;
         goto finish;
     }
 
@@ -583,7 +608,7 @@ int uncompressFile(u_int8_t * base_address,
         IOLog("Error: Couldn't allocate data object "
               "to uncompress file.\n");
         LOG_DELAY();
-        result = 0;
+        result = false;
         goto finish;
     }
 
@@ -595,7 +620,7 @@ int uncompressFile(u_int8_t * base_address,
             IOLog("Error: Uncompressed file is not the length "
                   "recorded.\n");
             LOG_DELAY();
-            result = 0;
+            result = false;
             goto finish;
         }
     } else {
@@ -608,12 +633,24 @@ int uncompressFile(u_int8_t * base_address,
 
 finish:
     if (!result) {
+        if (uncompressed_file) {
+            kmem_free(kernel_map, (vm_address_t)uncompressed_file,
+                realsize + 1);
+        }
         if (uncompressedFile) {
             uncompressedFile->release();
             *file = 0;
         }
     }
     return result;
+}
+
+bool uncompressModule(OSData *compData, /* out */ OSData ** file) {
+
+    MkextEntryInfo *info = (MkextEntryInfo *) compData->getBytesNoCopy();
+
+    return uncompressFile((u_int8_t *) info->base_address, 
+			  info->fileinfo, file);
 }
 
 
@@ -638,6 +675,9 @@ bool extractExtensionsFromArchive(MemoryMapFileInfo * mkext_file_info,
     OSDictionary * driverDict = 0;   // must release
     OSString     * moduleName = 0;   // don't release
     OSString     * errorString = NULL;  // must release
+
+    OSData         * moduleInfo = 0;  // must release
+    MkextEntryInfo   module_info;
 
     mkext_data = (mkext_header *)mkext_file_info->paddr;
 
@@ -739,18 +779,16 @@ bool extractExtensionsFromArchive(MemoryMapFileInfo * mkext_file_info,
             &driverPlistDataObject)) {
 
             IOLog("Error: couldn't uncompress plist file "
-                "%d from multikext archive.\n", i);
+                "from multikext archive entry %d.\n", i);
             LOG_DELAY();
-            result = false;
-            goto finish;  // or just continue?
+            continue;
         }
 
         if (!driverPlistDataObject) {
             IOLog("Error: No property list present "
                 "for multikext archive entry %d.\n", i);
             LOG_DELAY();
-            result = false;
-            goto finish;  // or just continue?
+            continue;
         } else {
             driverPlist = OSDynamicCast(OSDictionary,
                 OSUnserializeXML(
@@ -765,16 +803,14 @@ bool extractExtensionsFromArchive(MemoryMapFileInfo * mkext_file_info,
                         errorString->getCStringNoCopy());
                     LOG_DELAY();
                 }
-                result = false;
-                goto finish;  // or just continue?
+                continue;
             }
 
             if (!validateExtensionDict(driverPlist)) {
                 IOLog("Error: Failed to validate property list "
                       "for multikext archive entry %d.\n", i);
                 LOG_DELAY();
-                result = false;
-                goto finish;
+                continue;
             }
 
         }
@@ -815,20 +851,37 @@ bool extractExtensionsFromArchive(MemoryMapFileInfo * mkext_file_info,
 
         driverDict->setObject("plist", driverPlist);
 
-        if (!uncompressFile((u_int8_t *)mkext_data, module_file,
-            &driverCode)) {
-
-            IOLog("Error: couldn't uncompress module file "
-                "%d from multikext archive.\n", i);
-            LOG_DELAY();
-            result = false;
-            goto finish;  // or just continue?
-        }
-
-       /* It's okay for there to be no module
+       /*****
+        * Prepare an entry to hold the mkext entry info for the
+        * compressed binary module, if there is one. If all four fields
+        * of the module entry are zero, there isn't one.
         */
-        if (driverCode) {
-            driverDict->setObject("code", driverCode);
+        if (OSSwapBigToHostInt32(module_file->offset) ||
+            OSSwapBigToHostInt32(module_file->compsize) ||
+            OSSwapBigToHostInt32(module_file->realsize) ||
+            OSSwapBigToHostInt32(module_file->modifiedsecs)) {
+
+            moduleInfo = OSData::withCapacity(sizeof(MkextEntryInfo));
+            if (!moduleInfo) {
+                IOLog("Error: Couldn't allocate data object "
+                      "for multikext archive entry %d.\n", i);
+                LOG_DELAY();
+                result = false;
+                goto finish;
+            }
+
+            module_info.base_address = (vm_address_t)mkext_data;
+            module_info.fileinfo = module_file;
+
+            if (!moduleInfo->appendBytes(&module_info, sizeof(module_info))) {
+                IOLog("Error: Couldn't record info "
+                      "for multikext archive entry %d.\n", i);
+                LOG_DELAY();
+                result = false;
+                goto finish;
+            }
+
+            driverDict->setObject("compressedCode", moduleInfo);
         }
 
         OSDictionary * incumbentExt = OSDynamicCast(OSDictionary,
@@ -871,18 +924,16 @@ finish:
 
     if (driverPlistDataObject) driverPlistDataObject->release();
     if (driverPlist) driverPlist->release();
-    if (driverCode) driverCode->release();
-    if (driverDict) driverDict->release();
+    if (driverCode)  driverCode->release();
+    if (moduleInfo)  moduleInfo->release();
+    if (driverDict)  driverDict->release();
     if (errorString) errorString->release();
 
     return result;
 }
 
-
 /*********************************************************************
-* Unlike with single KEXTs, a failure to read any member of a
-* multi-KEXT archive is considered a failure for all. We want to
-* take no chances unpacking a single, compressed archive of drivers.
+*
 *********************************************************************/
 bool readExtensions(OSDictionary * propertyDict,
     const char * memory_map_name,
@@ -918,9 +969,6 @@ finish:
     if (!result && extensions) {
         extensions->flushCollection();
     }
-
-    IODTFreeLoaderInfo(memory_map_name, (void *)mkext_file_info->paddr,
-        (int)mkext_file_info->length);
 
     return result;
 }
@@ -1012,22 +1060,33 @@ finish:
 
 /*********************************************************************
 * Called from IOCatalogue to add extensions from an mkext archive.
+* This function makes a copy of the mkext object passed in because
+* the device tree support code dumps it after calling us (indirectly
+* through the IOCatalogue).
 *********************************************************************/
 bool addExtensionsFromArchive(OSData * mkextDataObject) {
     bool result = true;
 
     OSDictionary * startupExtensions = NULL;  // don't release
+    OSArray      * bootLoaderObjects = NULL;  // don't release
+    OSData       * localMkextDataObject = NULL; // don't release
     OSDictionary * extensions = NULL;         // must release
     MemoryMapFileInfo mkext_file_info;
     OSCollectionIterator * keyIterator = NULL;   // must release
     OSString             * key = NULL;           // don't release
 
-    IOLockLock(kld_lock);
-
     startupExtensions = getStartupExtensions();
     if (!startupExtensions) {
         IOLog("Can't record extension archive; there is no
             extensions dictionary.\n");
+        LOG_DELAY();
+        result = false;
+        goto finish;
+    }
+
+    bootLoaderObjects = getBootLoaderObjects();
+    if (! bootLoaderObjects) {
+        IOLog("Error: Couldn't allocate array to hold temporary objects.\n");
         LOG_DELAY();
         result = false;
         goto finish;
@@ -1042,8 +1101,25 @@ bool addExtensionsFromArchive(OSData * mkextDataObject) {
         goto finish;
     }
 
-    mkext_file_info.paddr = (UInt32)mkextDataObject->getBytesNoCopy();
-    mkext_file_info.length = mkextDataObject->getLength();
+   /* The mkext we've been handed (or the data it references) can go away,
+    * so we need to make a local copy to keep around as long as it might
+    * be needed.
+    */
+    localMkextDataObject = OSData::withData(mkextDataObject);
+    if (!localMkextDataObject) {
+        IOLog("Error: Couldn't copy extension archive.\n");
+        LOG_DELAY();
+        result = false;
+        goto finish;
+    }
+
+    mkext_file_info.paddr = (UInt32)localMkextDataObject->getBytesNoCopy();
+    mkext_file_info.length = localMkextDataObject->getLength();
+
+   /* Save the local mkext data object so that we can deallocate it later.
+    */
+    bootLoaderObjects->setObject(localMkextDataObject);
+    localMkextDataObject->release();
 
     result = extractExtensionsFromArchive(&mkext_file_info, extensions);
     if (!result) {
@@ -1092,8 +1168,6 @@ finish:
 
     if (extensions) extensions->release();
 
-    IOLockUnlock(kld_lock);
-
     return result;
 }
 
@@ -1126,8 +1200,6 @@ bool recordStartupExtensions(void) {
 
     OSDictionary * newDriverDict = NULL;  // must release
     OSDictionary * driverPlist = NULL; // don't release
-
-    IOLockLock(kld_lock);
 
     IOLog("Recording startup extensions.\n");
     LOG_DELAY();
@@ -1339,6 +1411,7 @@ finish:
         IOLog("Error: Failed to record startup extensions.\n");
         LOG_DELAY();
     } else {
+#if DEBUG
         keyIterator = OSCollectionIterator::withCollection(
             startupExtensions);
 
@@ -1353,6 +1426,7 @@ finish:
             keyIterator->release();
             keyIterator = 0;
         }
+#endif DEBUG
     }
 
     if (newDriverDict)     newDriverDict->release();
@@ -1361,7 +1435,6 @@ finish:
     if (mkextExtensions)   mkextExtensions->release();
     if (startupExtensions) startupExtensions->release();
 
-    IOLockUnlock(kld_lock);
     return result;
 }
 
@@ -1381,8 +1454,6 @@ void removeStartupExtension(const char * extensionName) {
     OSDictionary * personality = NULL;            // don't release
     OSCollectionIterator * keyIterator = NULL;    // must release
     OSString     * key = NULL;                    // don't release
-
-    IOLockLock(kld_lock);
 
     startupExtensions = getStartupExtensions();
     if (!startupExtensions) goto finish;
@@ -1432,7 +1503,143 @@ void removeStartupExtension(const char * extensionName) {
 finish:
 
     if (keyIterator) keyIterator->release();
+    return;
+}
 
-    IOLockUnlock(kld_lock);
+/*********************************************************************
+* FIXME: This function invalidates the globals gStartupExtensions and
+* FIXME: ...gBootLoaderObjects without setting them to NULL. Since
+* FIXME: ...the code itself is immediately unloaded, there may not be
+* FIXME: ...any reason to worry about that!
+*********************************************************************/
+void clearStartupExtensionsAndLoaderInfo(void)
+{
+    OSDictionary * startupExtensions = NULL;  // must release
+    OSArray      * bootLoaderObjects = NULL;  // must release
+
+    IORegistryEntry      * bootxMemoryMap = NULL;    // must release
+    OSDictionary         * propertyDict = NULL;      // must release
+    OSCollectionIterator * keyIterator = NULL;       // must release
+    OSString             * key = NULL;               // don't release
+
+   /*****
+    * Drop any temporarily held data objects.
+    */
+    bootLoaderObjects = getBootLoaderObjects();
+    if (bootLoaderObjects) {
+        bootLoaderObjects->release();
+    }
+
+   /****
+    * If any "code" entries in driver dictionaries are accompanied
+    * by "compressedCode" entries, then those data objects were
+    * created based of of kmem_alloc()'ed memory, which must be
+    * freed specially.
+    */
+    startupExtensions = getStartupExtensions();
+    if (startupExtensions) {
+        keyIterator =
+            OSCollectionIterator::withCollection(startupExtensions);
+        if (!keyIterator) {
+            IOLog("Error: Couldn't allocate iterator for startup "
+                "extensions.\n");
+            LOG_DELAY();
+            goto memory_map;  // bail to the memory_map label
+        }
+
+        while ( (key = OSDynamicCast(OSString,
+                 keyIterator->getNextObject())) ) {
+
+            OSDictionary * driverDict = 0;
+            OSData * codeData = 0;
+
+            driverDict = OSDynamicCast(OSDictionary,
+                startupExtensions->getObject(key));
+            if (driverDict) {
+                codeData = OSDynamicCast(OSData,
+                    driverDict->getObject("code"));
+
+                if (codeData &&
+                    driverDict->getObject("compressedCode")) {
+
+                    kmem_free(kernel_map,
+                       (unsigned int)codeData->getBytesNoCopy(),
+                        codeData->getLength());
+                }
+            }
+        }
+
+        keyIterator->release();
+        startupExtensions->release();
+    }
+
+memory_map:
+
+   /****
+    * Go through the device tree's memory map and remove any driver
+    * data entries.
+    */
+    bootxMemoryMap =
+        IORegistryEntry::fromPath(
+            "/chosen/memory-map", // path
+            gIODTPlane            // plane
+            );
+    // return value is retained so be sure to release it
+
+    if (!bootxMemoryMap) {
+        IOLog("Error: Couldn't read booter memory map.\n");
+        LOG_DELAY();
+        goto finish;
+    }
+
+    propertyDict = bootxMemoryMap->dictionaryWithProperties();
+    if (!propertyDict) {
+        IOLog("Error: Couldn't get property dictionary "
+            "from memory map.\n");
+        LOG_DELAY();
+        goto finish;
+    }
+
+    keyIterator = OSCollectionIterator::withCollection(propertyDict);
+    if (!keyIterator) {
+        IOLog("Error: Couldn't allocate iterator for driver images.\n");
+        LOG_DELAY();
+        goto finish;
+    }
+
+    while ( (key = OSDynamicCast(OSString,
+             keyIterator->getNextObject())) ) {
+
+        const char * keyValue = key->getCStringNoCopy();
+
+        if ( !strncmp(keyValue, BOOTX_KEXT_PREFIX,
+                  strlen(BOOTX_KEXT_PREFIX)) ||
+             !strncmp(keyValue, BOOTX_MULTIKEXT_PREFIX,
+                  strlen(BOOTX_MULTIKEXT_PREFIX)) ) {
+
+            OSData            * bootxDriverDataObject = NULL;
+            MemoryMapFileInfo * driverInfo = 0;
+
+            bootxDriverDataObject = OSDynamicCast(OSData,
+                propertyDict->getObject(keyValue));
+            // don't release bootxDriverDataObject
+
+            if (!bootxDriverDataObject) {
+                continue;
+            }
+            driverInfo = (MemoryMapFileInfo *)
+                bootxDriverDataObject->getBytesNoCopy(0,
+                sizeof(MemoryMapFileInfo));
+            IODTFreeLoaderInfo((char *)keyValue,
+                (void *)driverInfo->paddr,
+                (int)driverInfo->length);
+        }
+    }
+
+finish:
+    if (bootxMemoryMap) bootxMemoryMap->release();
+    if (propertyDict)   propertyDict->release();
+    if (keyIterator)    keyIterator->release();
+
     return;
 }

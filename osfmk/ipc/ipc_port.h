@@ -115,7 +115,7 @@ struct ipc_port {
 	} data;
 
 	ipc_kobject_t ip_kobject;
-	struct rpc_subsystem *	ip_subsystem;
+	struct rpc_subsystem * ip_subsystem;
 	mach_port_mscount_t ip_mscount;
 	mach_port_rights_t ip_srights;
 	mach_port_rights_t ip_sorights;
@@ -376,6 +376,10 @@ ipc_port_check_circularity(
 extern ipc_port_t ipc_port_lookup_notify(
 	ipc_space_t		space, 
 	mach_port_name_t 	name);
+
+/* Make a naked send right from a receive right - port locked and active */
+extern ipc_port_t ipc_port_make_send_locked(
+	ipc_port_t	port);
 
 /* Make a naked send right from a receive right */
 extern ipc_port_t ipc_port_make_send(

@@ -22,10 +22,10 @@ EXPINC_SUBDIRS_I386 = \
 DATAFILES = \
 	bootp.h icmp6.h icmp_var.h if_atm.h if_ether.h if_fddi.h \
 	igmp.h igmp_var.h in.h in_gif.h in_hostcache.h in_pcb.h \
-	in_systm.h in_var.h ip.h ip6.h ip_auth.h ip_compat.h \
-	ip_dummynet.h ip_ecn.h ip_encap.h ip_fil.h ip_flow.h \
-	ip_frag.h ip_fw.h ip_icmp.h ip_mroute.h ip_nat.h \
-	ip_proxy.h ip_state.h ip_var.h ipl.h tcp.h \
+	in_systm.h in_var.h ip.h ip6.h ip_compat.h \
+	ip_dummynet.h ip_ecn.h ip_encap.h ip_flow.h \
+	ip_fw.h ip_icmp.h ip_mroute.h \
+	ip_var.h ipl.h tcp.h \
 	tcp_debug.h tcp_fsm.h tcp_seq.h tcp_timer.h tcp_var.h \
 	tcpip.h udp.h udp_var.h
 

@@ -170,7 +170,7 @@ struct radix_node_head {
 #define Bcmp(a, b, n) bcmp(((caddr_t)(a)), ((caddr_t)(b)), (unsigned)(n))
 #define Bcopy(a, b, n) bcopy(((caddr_t)(a)), ((caddr_t)(b)), (unsigned)(n))
 #define Bzero(p, n) bzero((caddr_t)(p), (unsigned)(n));
-#define R_Malloc(p, t, n) (p = (t) _MALLOC((unsigned long)(n), M_RTABLE, M_DONTWAIT))
+#define R_Malloc(p, t, n) (p = (t) _MALLOC((unsigned long)(n), M_RTABLE, M_WAITOK))
 #define Free(p) FREE((caddr_t)p, M_RTABLE);
 #endif /*KERNEL*/
 

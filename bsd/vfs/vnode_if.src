@@ -251,6 +251,7 @@ vop_select {
 	IN int which;
 	IN int fflags;
 	IN struct ucred *cred;
+	IN void  * wql;
 	IN struct proc *p;
 };
 
@@ -564,6 +565,7 @@ vop_allocate {
 	IN off_t length;
 	IN u_int32_t flags;
 	OUT off_t *bytesallocated;
+	IN off_t offset;
 	IN struct ucred *cred;
 	IN struct proc *p;
 };

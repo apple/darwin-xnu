@@ -63,6 +63,8 @@ extern int 	sscanf(const char *input, const char *fmt, ...);
 extern int 	sprintf(char *s, const char *format, ...);
 extern long 	strtol(const char *, char **, int);
 extern unsigned long strtoul(const char *, char **, int);
+extern long long strtoq(const char *, char **, int);
+extern unsigned long long strtouq(const char *, char **, int);
 
 extern
 #ifdef __GNUC__

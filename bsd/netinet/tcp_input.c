@@ -125,6 +125,7 @@ struct tcphdr tcp_savetcp;
 static int	tcprexmtthresh = 3;
 tcp_seq	tcp_iss;
 tcp_cc	tcp_ccgen;
+extern int apple_hwcksum_rx;
 
 struct	tcpstat tcpstat;
 SYSCTL_STRUCT(_net_inet_tcp, TCPCTL_STATS, stats,
@@ -365,9 +366,9 @@ present:
 		ND6_HINT(tp);
 #endif
 
-	KERNEL_DEBUG(DBG_LAYER_END, ((ti->ti_dport << 16) | ti->ti_sport),
-		     (((ti->ti_src.s_addr & 0xffff) << 16) | (ti->ti_dst.s_addr & 0xffff)),
-		     ti->ti_seq, ti->ti_ack, ti->ti_win);
+	KERNEL_DEBUG(DBG_LAYER_END, ((th->th_dport << 16) | th->th_sport),
+		     (((thtoti(th)->ti_src.s_addr & 0xffff) << 16) | (thtoti(th)->ti_dst.s_addr & 0xffff)),
+		     th->th_seq, th->th_ack, th->th_win);
 
 	sorwakeup(so);
 	return (flags);
@@ -442,9 +443,9 @@ tcp_input(m, off)
 	 */
 	th = mtod(m, struct tcpiphdr *);
 
-	KERNEL_DEBUG(DBG_LAYER_BEG, ((ti->ti_dport << 16) | ti->ti_sport),
-		     (((ti->ti_src.s_addr & 0xffff) << 16) | (ti->ti_dst.s_addr & 0xffff)),
-		     ti->ti_seq, ti->ti_ack, ti->ti_win);
+	KERNEL_DEBUG(DBG_LAYER_BEG, ((th->th_dport << 16) | th->th_sport),
+		     (((thtoti(th)->ti_src.s_addr & 0xffff) << 16) | (thtoti(th)->ti_dst.s_addr & 0xffff)),
+		     th->th_seq, th->th_ack, th->th_win);
 
 #if INET6
 	if (isipv6) {
@@ -491,6 +492,8 @@ tcp_input(m, off)
 		if (off > sizeof (struct ip)) {
 			ip_stripoptions(m, (struct mbuf *)0);
 			off = sizeof(struct ip);
+			if (m->m_pkthdr.csum_flags & CSUM_TCP_SUM16)
+				m->m_pkthdr.csum_flags = 0; /* invalidate hwcksuming */
 		}
 		if (m->m_len < lgminh) {
 			if ((m = m_pullup(m, lgminh)) == 0) {
@@ -500,17 +503,42 @@ tcp_input(m, off)
 		}
 		ip = mtod(m, struct ip *);
 		ipov = (struct ipovly *)ip;
-
-		/*
-		 * Checksum extended TCP header and data.
-		 */
+        	th = (struct tcphdr *)((caddr_t)ip + off);
 		tilen = ip->ip_len;
 		len = sizeof (struct ip) + tilen;
-		bzero(ipov->ih_x1, sizeof(ipov->ih_x1));
-		ipov->ih_len = (u_short)tilen;
-		HTONS(ipov->ih_len);
-		th = (struct tcphdr *)((caddr_t)ip + off);
-		th->th_sum = in_cksum(m, len);
+
+		if (m->m_pkthdr.csum_flags & CSUM_DATA_VALID) {
+
+			if (apple_hwcksum_rx && (m->m_pkthdr.csum_flags & CSUM_TCP_SUM16)) {
+				u_short pseudo;
+				bzero(ipov->ih_x1, sizeof(ipov->ih_x1));
+				ipov->ih_len = (u_short)tilen;
+				HTONS(ipov->ih_len);
+				pseudo = in_cksum(m, sizeof (struct ip));
+				th->th_sum = in_addword(pseudo, (m->m_pkthdr.csum_data & 0xFFFF));
+			}
+                	else {
+                		if (m->m_pkthdr.csum_flags & CSUM_PSEUDO_HDR)
+                       	 		th->th_sum = m->m_pkthdr.csum_data;
+				else goto dotcpcksum;
+			}
+               		th->th_sum ^= 0xffff;
+
+        	} else { 
+	                 /*
+       		          * Checksum extended TCP header and data.
+       		          */
+dotcpcksum:
+			if (th->th_sum) {
+				len = sizeof (struct ip) + tilen;
+				bzero(ipov->ih_x1, sizeof(ipov->ih_x1));
+				ipov->ih_len = (u_short)tilen;
+				HTONS(ipov->ih_len);
+				th = (struct tcphdr *)((caddr_t)ip + off);
+				th->th_sum = in_cksum(m, len);
+			}
+		}
+
 		if (th->th_sum) {
 			tcpstat.tcps_rcvbadsum++;
 			goto drop;
@@ -1027,7 +1055,7 @@ findpcb:
 #endif
 			sbappend(&so->so_rcv, m);
 			KERNEL_DEBUG(DBG_LAYER_END, ((th->th_dport << 16) | th->th_sport),
-			     (((th->th_src.s_addr & 0xffff) << 16) | (th->th_dst.s_addr & 0xffff)),
+			     (((thtoti(th)->ti_src.s_addr & 0xffff) << 16) | (thtoti(th)->ti_dst.s_addr & 0xffff)),
 			     th->th_seq, th->th_ack, th->th_win); 
 			if (tcp_delack_enabled) {
 			    if (last_active_conn_count > DELACK_BITMASK_THRESH)
@@ -1187,9 +1215,14 @@ findpcb:
 			tcp_mss(tp, to.to_maxseg, isipv6);	/* sets t_maxseg */
 		if (iss)
 			tp->iss = iss;
-		else
+		else {
+#ifdef TCP_COMPAT_42
+			tcp_iss += TCP_ISSINCR/2;
 			tp->iss = tcp_iss;
-		tcp_iss += TCP_ISSINCR/4;
+#else
+			tp->iss = tcp_rndiss_next();
+#endif /* TCP_COMPAT_42 */
+                }
 		tp->irs = th->th_seq;
 		tcp_sendseqinit(tp);
 		tcp_rcvseqinit(tp);
@@ -1720,7 +1753,11 @@ trimthenstep6:
 			if (thflags & TH_SYN &&
 			    tp->t_state == TCPS_TIME_WAIT &&
 			    SEQ_GT(th->th_seq, tp->rcv_nxt)) {
+#ifdef TCP_COMPAT_42
 				iss = tp->rcv_nxt + TCP_ISSINCR;
+#else
+				iss = tcp_rndiss_next();
+#endif /* TCP_COMPAT_42 */
 				tp = tcp_close(tp);
 				goto findpcb;
 			}
@@ -2179,7 +2216,7 @@ dodata:							/* XXX */
 		if (tp->t_flags & TF_DELACK) 
 		{
 		KERNEL_DEBUG(DBG_LAYER_END, ((th->th_dport << 16) | th->th_sport),
-			     (((th->th_src.s_addr & 0xffff) << 16) | (th->th_dst.s_addr & 0xffff)),
+			     (((thtoti(th)->ti_src.s_addr & 0xffff) << 16) | (thtoti(th)->ti_dst.s_addr & 0xffff)),
 			     th->th_seq, th->th_ack, th->th_win); 
 		}
 		/*

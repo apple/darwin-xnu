@@ -137,7 +137,7 @@ typedef	_BSD_TIME_T_	time_t;
  * manipulate such bit fields (the filesystem macros use chars).
  */
 #ifndef	FD_SETSIZE
-#define	FD_SETSIZE	256
+#define	FD_SETSIZE	1024
 #endif
 
 typedef int32_t	fd_mask;

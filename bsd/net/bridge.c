@@ -331,9 +331,13 @@ bdginit(dummy)
 	bdg_table = (struct hash_table *)
 		_MALLOC(HASH_SIZE * sizeof(struct hash_table),
 		    M_IFADDR, M_WAITOK);
+    if (bdg_table == NULL)
+	return (ENOBUFS);
     flush_table();
 
     ifp2sc = _MALLOC(if_index * sizeof(struct bdg_softc *), M_IFADDR, M_WAITOK );
+    if (ifp2sc == NULL)
+	return (ENOBUFS);
     bzero(ifp2sc, if_index * sizeof(struct bdg_softc *) );
 
     bzero(&bdg_stats, sizeof(bdg_stats) );
@@ -358,6 +362,8 @@ bdginit(dummy)
 
 	ifp2sc[bdg_ports] = _MALLOC(sizeof(struct bdg_softc),
 		M_IFADDR, M_WAITOK );
+	if (ifp2sc[bdg_ports] == NULL)
+		return (ENOBUFS);
 	ifp2sc[bdg_ports]->ifp = ifp ;
 	ifp2sc[bdg_ports]->flags = 0 ;
 	ifp2sc[bdg_ports]->group = 0 ;

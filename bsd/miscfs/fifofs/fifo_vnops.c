@@ -88,8 +88,8 @@ int (**fifo_vnodeop_p)(void *);
 struct vnodeopv_entry_desc fifo_vnodeop_entries[] = {
 	{ &vop_default_desc, (VOPFUNC)vn_default_error },
 	{ &vop_lookup_desc, (VOPFUNC)fifo_lookup },		/* lookup */
-	{ &vop_create_desc, (VOPFUNC)fifo_create },		/* create */
-	{ &vop_mknod_desc, (VOPFUNC)fifo_mknod },		/* mknod */
+	{ &vop_create_desc, (VOPFUNC)err_create },		/* create */
+	{ &vop_mknod_desc, (VOPFUNC)err_mknod },		/* mknod */
 	{ &vop_open_desc, (VOPFUNC)fifo_open },			/* open */
 	{ &vop_close_desc, (VOPFUNC)fifo_close },		/* close */
 	{ &vop_access_desc, (VOPFUNC)fifo_access },		/* access */
@@ -101,31 +101,31 @@ struct vnodeopv_entry_desc fifo_vnodeop_entries[] = {
 	{ &vop_ioctl_desc, (VOPFUNC)fifo_ioctl },		/* ioctl */
 	{ &vop_select_desc, (VOPFUNC)fifo_select },		/* select */
 	{ &vop_revoke_desc, (VOPFUNC)fifo_revoke },		/* revoke */
-	{ &vop_mmap_desc, (VOPFUNC)fifo_mmap },			/* mmap */
+	{ &vop_mmap_desc, (VOPFUNC)err_mmap },			/* mmap */
 	{ &vop_fsync_desc, (VOPFUNC)fifo_fsync },		/* fsync */
-	{ &vop_seek_desc, (VOPFUNC)fifo_seek },			/* seek */
-	{ &vop_remove_desc, (VOPFUNC)fifo_remove },		/* remove */
-	{ &vop_link_desc, (VOPFUNC)fifo_link },			/* link */
-	{ &vop_rename_desc, (VOPFUNC)fifo_rename },		/* rename */
-	{ &vop_mkdir_desc, (VOPFUNC)fifo_mkdir },		/* mkdir */
-	{ &vop_rmdir_desc, (VOPFUNC)fifo_rmdir },		/* rmdir */
-	{ &vop_symlink_desc, (VOPFUNC)fifo_symlink },		/* symlink */
-	{ &vop_readdir_desc, (VOPFUNC)fifo_readdir },		/* readdir */
-	{ &vop_readlink_desc, (VOPFUNC)fifo_readlink },		/* readlink */
-	{ &vop_abortop_desc, (VOPFUNC)fifo_abortop },		/* abortop */
+	{ &vop_seek_desc, (VOPFUNC)err_seek },			/* seek */
+	{ &vop_remove_desc, (VOPFUNC)err_remove },		/* remove */
+	{ &vop_link_desc, (VOPFUNC)err_link },			/* link */
+	{ &vop_rename_desc, (VOPFUNC)err_rename },		/* rename */
+	{ &vop_mkdir_desc, (VOPFUNC)err_mkdir },		/* mkdir */
+	{ &vop_rmdir_desc, (VOPFUNC)err_rmdir },		/* rmdir */
+	{ &vop_symlink_desc, (VOPFUNC)err_symlink },		/* symlink */
+	{ &vop_readdir_desc, (VOPFUNC)err_readdir },		/* readdir */
+	{ &vop_readlink_desc, (VOPFUNC)err_readlink },		/* readlink */
+	{ &vop_abortop_desc, (VOPFUNC)err_abortop },		/* abortop */
 	{ &vop_inactive_desc, (VOPFUNC)fifo_inactive },		/* inactive */
 	{ &vop_reclaim_desc, (VOPFUNC)fifo_reclaim },		/* reclaim */
 	{ &vop_lock_desc, (VOPFUNC)fifo_lock },			/* lock */
 	{ &vop_unlock_desc, (VOPFUNC)fifo_unlock },		/* unlock */
 	{ &vop_bmap_desc, (VOPFUNC)fifo_bmap },			/* bmap */
-	{ &vop_strategy_desc, (VOPFUNC)fifo_strategy },		/* strategy */
+	{ &vop_strategy_desc, (VOPFUNC)err_strategy },		/* strategy */
 	{ &vop_print_desc, (VOPFUNC)fifo_print },		/* print */
 	{ &vop_islocked_desc, (VOPFUNC)fifo_islocked },		/* islocked */
 	{ &vop_pathconf_desc, (VOPFUNC)fifo_pathconf },		/* pathconf */
 	{ &vop_advlock_desc, (VOPFUNC)fifo_advlock },		/* advlock */
-	{ &vop_blkatoff_desc, (VOPFUNC)fifo_blkatoff },		/* blkatoff */
-	{ &vop_valloc_desc, (VOPFUNC)fifo_valloc },		/* valloc */
-	{ &vop_vfree_desc, (VOPFUNC)fifo_vfree },		/* vfree */
+	{ &vop_blkatoff_desc, (VOPFUNC)err_blkatoff },		/* blkatoff */
+	{ &vop_valloc_desc, (VOPFUNC)err_valloc },		/* valloc */
+	{ &vop_vfree_desc, (VOPFUNC)err_vfree },		/* vfree */
 	{ &vop_truncate_desc, (VOPFUNC)fifo_truncate },		/* truncate */
 	{ &vop_update_desc, (VOPFUNC)fifo_update },		/* update */
 	{ &vop_bwrite_desc, (VOPFUNC)fifo_bwrite },		/* bwrite */
@@ -382,6 +382,7 @@ fifo_select(ap)
 		int  a_which;
 		int  a_fflags;
 		struct ucred *a_cred;
+		void * a_wql;
 		struct proc *a_p;
 	} */ *ap;
 {
@@ -390,13 +391,13 @@ fifo_select(ap)
 
 	if (ap->a_fflags & FREAD) {
 		filetmp.f_data = (caddr_t)ap->a_vp->v_fifoinfo->fi_readsock;
-		ready = soo_select(&filetmp, ap->a_which, ap->a_p);
+		ready = soo_select(&filetmp, ap->a_which, ap->a_wql, ap->a_p);
 		if (ready)
 			return (ready);
 	}
 	if (ap->a_fflags & FWRITE) {
 		filetmp.f_data = (caddr_t)ap->a_vp->v_fifoinfo->fi_writesock;
-		ready = soo_select(&filetmp, ap->a_which, ap->a_p);
+		ready = soo_select(&filetmp, ap->a_which, ap->a_wql, ap->a_p);
 		if (ready)
 			return (ready);
 	}
@@ -561,12 +562,3 @@ fifo_advlock(ap)
 	return (EOPNOTSUPP);
 }
 
-/*
- * Fifo bad operation
- */
-fifo_badop()
-{
-
-	panic("fifo_badop called");
-	/* NOTREACHED */
-}

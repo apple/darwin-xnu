@@ -79,6 +79,7 @@
 #include <machine/spl.h>
 
 thread_t cloneproc(struct proc *, int); 
+struct proc * forkproc(struct proc *, int);
 thread_t procdup();
 
 #define	DOFORK	0x1	/* fork() system call */
@@ -106,8 +107,157 @@ vfork(p, uap, retval)
 	void *uap;
 	register_t *retval;
 {
-	return (fork1(p, (long)DOVFORK, retval));
+	register struct proc * newproc;
+	register uid_t uid;
+	thread_act_t cur_act = (thread_act_t)current_act();
+	int count;
+	task_t t;
+	uthread_t ut;
+	
+	/*
+	 * Although process entries are dynamically created, we still keep
+	 * a global limit on the maximum number we will create.  Don't allow
+	 * a nonprivileged user to use the last process; don't let root
+	 * exceed the limit. The variable nprocs is the current number of
+	 * processes, maxproc is the limit.
+	 */
+	uid = p->p_cred->p_ruid;
+	if ((nprocs >= maxproc - 1 && uid != 0) || nprocs >= maxproc) {
+		tablefull("proc");
+		retval[1] = 0;
+		return (EAGAIN);
+	}
+
+	/*
+	 * Increment the count of procs running with this uid. Don't allow
+	 * a nonprivileged user to exceed their current limit.
+	 */
+	count = chgproccnt(uid, 1);
+	if (uid != 0 && count > p->p_rlimit[RLIMIT_NPROC].rlim_cur) {
+		(void)chgproccnt(uid, -1);
+		return (EAGAIN);
+	}
+
+	ut = (struct uthread *)get_bsdthread_info(cur_act);
+	if (ut->uu_flag & P_VFORK) {
+		printf("vfork called recursively by %s\n", p->p_comm);
+		return (EINVAL);
+	}
+	p->p_flag  |= P_VFORK;
+	p->p_vforkcnt++;
+
+	/* The newly created process comes with signal lock held */
+	newproc = (struct proc *)forkproc(p,1);
+
+	LIST_INSERT_AFTER(p, newproc, p_pglist);
+	newproc->p_pptr = p;
+	newproc->task = p->task;
+	LIST_INSERT_HEAD(&p->p_children, newproc, p_sibling);
+	LIST_INIT(&newproc->p_children);
+	LIST_INSERT_HEAD(&allproc, newproc, p_list);
+	LIST_INSERT_HEAD(PIDHASH(newproc->p_pid), newproc, p_hash);
+	TAILQ_INIT(& newproc->p_evlist);
+	newproc->p_stat = SRUN;
+	newproc->p_flag  |= P_INVFORK;
+	newproc->p_vforkact = cur_act;
+
+	ut->uu_flag |= P_VFORK;
+	ut->uu_proc = newproc;
+	ut->uu_userstate = (void *)act_thread_csave();
+
+	thread_set_child(cur_act, newproc->p_pid);
+
+	newproc->p_stats->p_start = time;
+	newproc->p_acflag = AFORK;
+
+	/*
+	 * Preserve synchronization semantics of vfork.  If waiting for
+	 * child to exec or exit, set P_PPWAIT on child, and sleep on our
+	 * proc (in case of exit).
+	 */
+	newproc->p_flag |= P_PPWAIT;
+
+	/* drop the signal lock on the child */
+	signal_unlock(newproc);
+
+	retval[0] = newproc->p_pid;
+	retval[1] = 1;			/* mark child */
+
+	return (0);
 }
+
+/*
+ * Return to parent vfork ehread()
+ */
+void
+vfork_return(th_act, p, p2, retval)
+	thread_act_t th_act;
+	struct proc * p;
+	struct proc *p2;
+	register_t *retval;
+{
+	long flags;
+	register uid_t uid;
+	thread_t newth, self = current_thread();
+	thread_act_t cur_act = (thread_act_t)current_act();
+	int s, count;
+	task_t t;
+	uthread_t ut;
+	
+	ut = (struct uthread *)get_bsdthread_info(cur_act);
+
+	act_thread_catt(ut->uu_userstate);
+
+	/* Make sure only one at this time */
+	p->p_vforkcnt--;
+	if (p->p_vforkcnt <0)
+		panic("vfork cnt is -ve");
+	if (p->p_vforkcnt <=0)
+		p->p_flag  &= ~P_VFORK;
+	ut->uu_userstate = 0;
+	ut->uu_flag &= ~P_VFORK;
+	ut->uu_proc = 0;
+	p2->p_flag  &= ~P_INVFORK;
+	p2->p_vforkact = (void *)0;
+
+	thread_set_parent(cur_act, p2->p_pid);
+
+	if (retval) {
+		retval[0] = p2->p_pid;
+		retval[1] = 0;			/* mark parent */
+	}
+
+	return;
+}
+
+thread_t
+procdup(
+	struct proc		*child,
+	struct proc		*parent)
+{
+	thread_t		thread;
+	task_t			task;
+ 	kern_return_t	result;
+	extern task_t kernel_task;
+
+	if (parent->task == kernel_task)
+		result = task_create_local(TASK_NULL, FALSE, FALSE, &task);
+	else
+		result = task_create_local(parent->task, TRUE, FALSE, &task);
+	if (result != KERN_SUCCESS)
+	    printf("fork/procdup: task_create failed. Code: 0x%x\n", result);
+	child->task = task;
+	/* task->proc = child; */
+	set_bsdtask_info(task, child);
+	if (child->p_nice != 0)
+		resetpriority(child);
+	result = thread_create(task, &thread);
+	if (result != KERN_SUCCESS)
+	    printf("fork/procdup: thread_create failed. Code: 0x%x\n", result);
+
+	return(thread);
+}
+
 
 static int
 fork1(p1, flags, retval)
@@ -171,7 +321,7 @@ fork1(p1, flags, retval)
 	(void) thread_resume(newth);
 
         /* drop the extra references we got during the creation */
-        if (t = get_threadtask(newth)) {
+        if (t = (task_t)get_threadtask(newth)) {
                 task_deallocate(t);
         }
         act_deallocate(newth);
@@ -196,6 +346,32 @@ fork1(p1, flags, retval)
  */
 thread_t
 cloneproc(p1, lock)
+	register struct proc *p1;
+	register int lock;
+{
+	register struct proc *p2;
+	thread_t th;
+
+	p2 = (struct proc *)forkproc(p1,lock);
+	th = procdup(p2, p1);	/* child, parent */
+
+	LIST_INSERT_AFTER(p1, p2, p_pglist);
+	p2->p_pptr = p1;
+	LIST_INSERT_HEAD(&p1->p_children, p2, p_sibling);
+	LIST_INIT(&p2->p_children);
+	LIST_INSERT_HEAD(&allproc, p2, p_list);
+	LIST_INSERT_HEAD(PIDHASH(p2->p_pid), p2, p_hash);
+	TAILQ_INIT(&p2->p_evlist);
+	/*
+	 * Make child runnable, set start time.
+	 */
+	p2->p_stat = SRUN;
+
+	return(th);
+}
+
+struct proc *
+forkproc(p1, lock)
 	register struct proc *p1;
 	register int lock;
 {
@@ -339,6 +515,8 @@ again:
 	p2->exit_thread = NULL;
 	p2->user_stack = p1->user_stack;
 	p2->p_sigpending = 0;
+	p2->p_vforkcnt = 0;
+	p2->p_vforkact = 0;
 
 #if KTRACE
 	/*
@@ -351,21 +529,8 @@ again:
 			VREF(p2->p_tracep);
 	}
 #endif
+	return(p2);
 
-	th = procdup(p2, p1);	/* child, parent */
-	LIST_INSERT_AFTER(p1, p2, p_pglist);
-	p2->p_pptr = p1;
-	LIST_INSERT_HEAD(&p1->p_children, p2, p_sibling);
-	LIST_INIT(&p2->p_children);
-	LIST_INSERT_HEAD(&allproc, p2, p_list);
-	LIST_INSERT_HEAD(PIDHASH(p2->p_pid), p2, p_hash);
-	TAILQ_INIT(&p2->p_evlist);
-	/*
-	 * Make child runnable, set start time.
-	 */
-	p2->p_stat = SRUN;
-
-	return(th);
 }
 
 #include <kern/zalloc.h>
@@ -398,17 +563,27 @@ uthread_alloc(void)
 	return (ut);
 }
 
+
 void
 uthread_free(void *uthread)
 {
 	struct _select *sel;
 	struct uthread *uth = (struct uthread *)uthread;
+	int size;
 
 	sel = &uth->uu_state.ss_select;
 	/* cleanup the select bit space */
 	if (sel->nbytes) {
 		FREE(sel->ibits, M_TEMP);
 		FREE(sel->obits, M_TEMP);
+	}
+
+	if (sel->allocsize && uth->uu_wqsub){
+		kfree(uth->uu_wqsub, sel->allocsize);
+		sel->count = sel->nfcount = 0;
+		sel->allocsize = 0;
+		uth->uu_wqsub = 0;
+		sel->wql = 0;
 	}
 
 	/* and free the uthread itself */

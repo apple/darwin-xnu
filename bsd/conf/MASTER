@@ -87,6 +87,7 @@ options		TIMEZONE=0, PST=0
 
 options		QUOTA		# 				# <quota>
 options		INET
+options		ABSOLUTETIME_SCALAR_TYPE
 options		NEW_VM_CODE	#				# <newvm>
 options		OLD_VM_CODE	#				# <!newvm>
 options		HW_AST		# Hardware ast support		# <hw_ast>
@@ -241,3 +242,6 @@ pseudo-device	bpfilter	4	init	bpf_init
 #
 # now using iokit disk shim, this is code is obsolete
 #pseudo-device diskshim
+
+pseudo-device	random		1	init	random_init
+

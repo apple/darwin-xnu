@@ -87,7 +87,6 @@ OPTIONS/disc				optional disc
 OPTIONS/ether				optional ether
 OPTIONS/fddi				optional fddi
 
-OPTIONS/ipfilter			optional ipfilter
 OPTIONS/ipdivert			optional ipdivert
 OPTIONS/dummynet			optional dummynet
 OPTIONS/ipfirewall			optional ipfirewall
@@ -116,6 +115,13 @@ OPTIONS/cd9660				optional cd9660
 OPTIONS/volfs				optional volfs
 OPTIONS/devfs				optional devfs
 OPTIONS/synthfs				optional synthfs
+
+bsd/dev/random/randomdev.c							standard
+bsd/dev/random/YarrowCoreLib/port/smf.c				standard
+bsd/dev/random/YarrowCoreLib/src/comp.c				standard
+bsd/dev/random/YarrowCoreLib/src/prng.c				standard
+bsd/dev/random/YarrowCoreLib/src/sha1mod.c			standard
+bsd/dev/random/YarrowCoreLib/src/yarrowUtils.c		standard
 
 bsd/libkern/random.c			standard
 bsd/libkern/scanc.c			standard
@@ -247,7 +253,6 @@ bsd/netccitt/pk_subr.c			optional ccitt
 bsd/netccitt/pk_timer.c			optional ccitt
 bsd/netccitt/pk_usrreq.c		optional ccitt
 
-bsd/netinet/fil.c			optional ipfilter inet
 bsd/netinet/if_atm.c			optional atm
 bsd/netinet/if_ether.c			optional ether
 bsd/netinet/igmp.c			standard
@@ -256,22 +261,14 @@ bsd/netinet/in_bootp.c			standard
 bsd/netinet/in_pcb.c			standard
 bsd/netinet/in_proto.c			standard
 bsd/netinet/in_rmx.c			standard
-bsd/netinet/ip_auth.c			optional ipfilter inet
 bsd/netinet/ip_divert.c			optional ipdivert
 bsd/netinet/ip_dummynet.c  		optional dummynet
-bsd/netinet/ip_fil.c			optional ipfilter inet
 bsd/netinet/ip_flow.c			standard
-bsd/netinet/ip_frag.c			optional ipfilter inet
 bsd/netinet/ip_fw.c			optional ipfirewall
 bsd/netinet/ip_icmp.c			standard
 bsd/netinet/ip_input.c			standard
-bsd/netinet/ip_log.c			optional ipfilter inet
 bsd/netinet/ip_mroute.c			standard
-bsd/netinet/ip_nat.c			optional ipfilter inet
 bsd/netinet/ip_output.c			standard
-bsd/netinet/ip_proxy.c			optional ipfilter inet
-bsd/netinet/ip_state.c			optional ipfilter inet
-bsd/netinet/mlf_ipl.c			optional ipfilter inet
 bsd/netinet/raw_ip.c			standard
 bsd/netinet/tcp_debug.c			optional tcpdebug
 bsd/netinet/tcp_input.c			standard
@@ -469,6 +466,7 @@ bsd/ufs/ufs/ufs_vfsops.c		standard
 bsd/ufs/ufs/ufs_vnops.c			standard
 
 bsd/hfs/hfs_btreeio.c				optional hfs
+bsd/hfs/hfs_encodinghint.c			optional hfs
 bsd/hfs/hfs_encodings.c				optional hfs
 bsd/hfs/hfs_endian.c				optional hfs
 bsd/hfs/hfs_link.c				optional hfs
@@ -481,6 +479,7 @@ bsd/hfs/hfs_vfsutils.c				optional hfs
 bsd/hfs/hfs_vhash.c				optional hfs
 bsd/hfs/hfs_vnodeops.c				optional hfs
 bsd/hfs/MacOSStubs.c				optional hfs
+bsd/hfs/rangelist.c				optional hfs
 bsd/hfs/hfscommon/BTree/BTree.c			optional hfs
 bsd/hfs/hfscommon/BTree/BTreeAllocate.c		optional hfs
 bsd/hfs/hfscommon/BTree/BTreeMiscOps.c		optional hfs

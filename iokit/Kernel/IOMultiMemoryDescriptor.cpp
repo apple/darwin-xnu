@@ -289,6 +289,34 @@ IOPhysicalAddress IOMultiMemoryDescriptor::getPhysicalSegment(
 
 // - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 
+IOPhysicalAddress IOMultiMemoryDescriptor::getSourceSegment(
+                                                       IOByteCount   offset,
+                                                       IOByteCount * length )
+{
+    //
+    // This method returns the physical address of the byte at the given offset
+    // into the memory,  and optionally the length of the physically contiguous
+    // segment from that offset.
+    //
+
+    assert(offset <= _length);
+
+    for ( unsigned index = 0; index < _descriptorsCount; index++ ) 
+    {
+        if ( offset < _descriptors[index]->getLength() )
+        {
+            return _descriptors[index]->getSourceSegment(offset, length);
+        }
+        offset -= _descriptors[index]->getLength();
+    }
+
+    if ( length )  *length = 0;
+
+    return 0;
+}
+
+// - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+
 void * IOMultiMemoryDescriptor::getVirtualSegment( IOByteCount   /* offset */ ,
                                                    IOByteCount * /* length */ )
 {

@@ -43,7 +43,7 @@ extern "C" {
     @param address The 4-byte aligned address of the data to update atomically.
     @result true if newValue was written to the address. */
 
-extern Boolean	OSCompareAndSwap( UInt32 oldValue, UInt32 newValue, UInt32 * address );
+extern Boolean OSCompareAndSwap( UInt32 oldValue, UInt32 newValue, UInt32 * address );
 
 /*! @function OSAddAtomic
     @abstract 32-bit add operation, performed atomically with respect to all devices that participate in the coherency architecture of the platform.
@@ -58,7 +58,7 @@ extern SInt32	OSAddAtomic(SInt32 amount, SInt32 * address);
     @abstract 16-bit add operation, performed atomically with respect to all devices that participate in the coherency architecture of the platform.
     @discussion The OSAddAtomic16 function adds the specified amount to the value at the specified address and returns the result.
     @param amount The amount to add.
-    @param address The 4-byte aligned address of the value to update atomically.
+    @param address The 2-byte aligned address of the value to update atomically.
     @result The result of the addition. */
 
 extern SInt16	OSAddAtomic16(SInt32 amount, SInt16 * address);
@@ -67,7 +67,7 @@ extern SInt16	OSAddAtomic16(SInt32 amount, SInt16 * address);
     @abstract 8-bit add operation, performed atomically with respect to all devices that participate in the coherency architecture of the platform.
     @discussion The OSAddAtomic8 function adds the specified amount to the value at the specified address and returns the result.
     @param amount The amount to add.
-    @param address The 4-byte aligned address of the value to update atomically.
+    @param address The address of the value to update atomically.
     @result The result of the addition. */
 
 extern SInt8	OSAddAtomic8(SInt32 amount, SInt8 * address);
@@ -83,7 +83,7 @@ extern SInt32	OSIncrementAtomic(SInt32 * address);
 /*! @function OSIncrementAtomic16
     @abstract 16-bit increment operation, performed atomically with respect to all devices that participate in the coherency architecture of the platform.
     @discussion The OSIncrementAtomic16 function increments the value at the specified address by one and returns the value as it was before the change.
-    @param address The 4-byte aligned address of the value to update atomically.
+    @param address The 2-byte aligned address of the value to update atomically.
     @result The value before the increment. */
 
 extern SInt16	OSIncrementAtomic16(SInt16 * address);
@@ -91,7 +91,7 @@ extern SInt16	OSIncrementAtomic16(SInt16 * address);
 /*! @function OSIncrementAtomic8
     @abstract 8-bit increment operation, performed atomically with respect to all devices that participate in the coherency architecture of the platform.
     @discussion The OSIncrementAtomic8 function increments the value at the specified address by one and returns the value as it was before the change.
-    @param address The 4-byte aligned address of the value to update atomically.
+    @param address The address of the value to update atomically.
     @result The value before the increment. */
 
 extern SInt8	OSIncrementAtomic8(SInt8 * address);
@@ -107,7 +107,7 @@ extern SInt32	OSDecrementAtomic(SInt32 * address);
 /*! @function OSDecrementAtomic16
     @abstract 16-bit decrement operation, performed atomically with respect to all devices that participate in the coherency architecture of the platform.
     @discussion The OSDecrementAtomic16 function decrements the value at the specified address by one and returns the value as it was before the change.
-    @param address The 4-byte aligned address of the value to update atomically.
+    @param address The 2-byte aligned address of the value to update atomically.
     @result The value before the decrement. */
 
 extern SInt16	OSDecrementAtomic16(SInt16 * address);
@@ -115,7 +115,7 @@ extern SInt16	OSDecrementAtomic16(SInt16 * address);
 /*! @function OSDecrementAtomic8
     @abstract 8-bit decrement operation, performed atomically with respect to all devices that participate in the coherency architecture of the platform.
     @discussion The OSDecrementAtomic8 function decrements the value at the specified address by one and returns the value as it was before the change.
-    @param address The 4-byte aligned address of the value to update atomically.
+    @param address The address of the value to update atomically.
     @result The value before the decrement. */
 
 extern SInt8	OSDecrementAtomic8(SInt8 * address);
@@ -133,7 +133,7 @@ extern UInt32	OSBitAndAtomic(UInt32 mask, UInt32 * address);
     @abstract 16-bit logical and operation, performed atomically with respect to all devices that participate in the coherency architecture of the platform.
     @discussion The OSBitAndAtomic16 function logically ands the bits of the specified mask into the value at the specified address and returns the result.
     @param mask The mask to logically and with the value.
-    @param address The 4-byte aligned address of the value to update atomically.
+    @param address The 2-byte aligned address of the value to update atomically.
     @result The result of the logical and. */
 
 extern UInt16	OSBitAndAtomic16(UInt32 mask, UInt16 * address);
@@ -142,7 +142,7 @@ extern UInt16	OSBitAndAtomic16(UInt32 mask, UInt16 * address);
     @abstract 8-bit logical and operation, performed atomically with respect to all devices that participate in the coherency architecture of the platform.
     @discussion The OSBitAndAtomic8 function logically ands the bits of the specified mask into the value at the specified address and returns the result.
     @param mask The mask to logically and with the value.
-    @param address The 4-byte aligned address of the value to update atomically.
+    @param address The address of the value to update atomically.
     @result The result of the logical and. */
 
 extern UInt8	OSBitAndAtomic8(UInt32 mask, UInt8 * address);
@@ -160,7 +160,7 @@ extern UInt32	OSBitOrAtomic(UInt32 mask, UInt32 * address);
     @abstract 16-bit logical or operation, performed atomically with respect to all devices that participate in the coherency architecture of the platform.
     @discussion The OSBitOrAtomic16 function logically ors the bits of the specified mask into the value at the specified address and returns the result.
     @param mask The mask to logically or with the value.
-    @param address The 4-byte aligned address of the value to update atomically.
+    @param address The 2-byte aligned address of the value to update atomically.
     @result The result of the logical or. */
 
 extern UInt16	OSBitOrAtomic16(UInt32 mask, UInt16 * address);
@@ -169,7 +169,7 @@ extern UInt16	OSBitOrAtomic16(UInt32 mask, UInt16 * address);
     @abstract 8-bit logical or operation, performed atomically with respect to all devices that participate in the coherency architecture of the platform.
     @discussion The OSBitOrAtomic8 function logically ors the bits of the specified mask into the value at the specified address and returns the result.
     @param mask The mask to logically or with the value.
-    @param address The 4-byte aligned address of the value to update atomically.
+    @param address The address of the value to update atomically.
     @result The result of the logical or. */
 
 extern UInt8	OSBitOrAtomic8(UInt32 mask, UInt8 * address);
@@ -187,7 +187,7 @@ extern UInt32	OSBitXorAtomic(UInt32 mask, UInt32 * address);
     @abstract 16-bit logical xor operation, performed atomically with respect to all devices that participate in the coherency architecture of the platform.
     @discussion The OSBitXorAtomic16 function logically xors the bits of the specified mask into the value at the specified address and returns the result.
     @param mask The mask to logically or with the value.
-    @param address The 4-byte aligned address of the value to update atomically.
+    @param address The 2-byte aligned address of the value to update atomically.
     @result The result of the logical xor. */
 
 extern UInt16	OSBitXorAtomic16(UInt32 mask, UInt16 * address);
@@ -196,7 +196,7 @@ extern UInt16	OSBitXorAtomic16(UInt32 mask, UInt16 * address);
     @abstract 8-bit logical xor operation, performed atomically with respect to all devices that participate in the coherency architecture of the platform.
     @discussion The OSBitXorAtomic8 function logically xors the bits of the specified mask into the value at the specified address and returns the result.
     @param mask The mask to logically or with the value.
-    @param address The 4-byte aligned address of the value to update atomically.
+    @param address The address of the value to update atomically.
     @result The result of the logical xor. */
 
 extern UInt8	OSBitXorAtomic8(UInt32 mask, UInt8 * address);
@@ -255,5 +255,3 @@ static __inline__ void OSSynchronizeIO(void)
 #endif
 
 #endif /* ! _OS_OSATOMIC_H */
-
-

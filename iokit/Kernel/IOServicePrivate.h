@@ -39,9 +39,15 @@ enum {
 enum {
     kIOServiceBusyStateMask	= 0x000000ff,
     kIOServiceBusyMax		= 255,
-    kIOServiceTerminatedState	= 0x80000000,
-    kIOServiceConfigState	= 0x40000000,
-    kIOServiceSynchronousState	= 0x20000000,
+    kIOServiceNeedConfigState	= 0x80000000,
+    kIOServiceSynchronousState	= 0x40000000,
+    kIOServiceModuleStallState	= 0x20000000,
+    kIOServiceBusyWaiterState	= 0x10000000,
+
+    kIOServiceSyncPubState	= 0x08000000,
+    kIOServiceConfigState	= 0x04000000,
+    kIOServiceTermPhase2State	= 0x01000000,
+    kIOServiceTermPhase3State	= 0x00800000,
 };
 
 // options for terminate()
@@ -49,11 +55,10 @@ enum {
     kIOServiceRecursing		= 0x00100000,
 };
 
-
 // notify state
 enum {
-    kIOServiceNotifyEnable		= 0x00000001,
-    kIOServiceNotifyWaiter		= 0x00000002
+    kIOServiceNotifyEnable	= 0x00000001,
+    kIOServiceNotifyWaiter	= 0x00000002
 };
 
 struct _IOServiceNotifierInvocation
@@ -133,7 +138,6 @@ enum {
 
 enum {
     kMatchNubJob	= 10,
-    kTerminateNubJob,
 };
 
 class _IOServiceJob : public OSObject

@@ -261,7 +261,7 @@ ip6_init2(dummy)
 #endif
 #ifdef __APPLE__
     	boolean_t   funnel_state;
-    	funnel_state = thread_set_funneled(TRUE);
+    	funnel_state = thread_funnel_set(network_flock, TRUE);
 #endif
 
 	/* get EUI64 from somewhere */
@@ -288,11 +288,11 @@ ip6_init2(dummy)
 #endif
 
 	/* nd6_timer_init */
-	timeout(nd6_timer, (caddr_t)0, hz);
+	timeout(nd6_timer_funneled, (caddr_t)0, hz);
 	/* router renumbering prefix list maintenance */
-	timeout(in6_rr_timer, (caddr_t)0, hz);
+	timeout(in6_rr_timer_funneled, (caddr_t)0, hz);
 #ifdef __APPLE__
-    	(void) thread_set_funneled(funnel_state);
+        (void) thread_funnel_set(network_flock, FALSE);
 #endif
 }
 

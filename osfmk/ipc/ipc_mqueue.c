@@ -342,7 +342,7 @@ ipc_mqueue_send(
 			return MACH_SEND_TIMED_OUT;
 		}
 		mqueue->imq_fullwaiters = TRUE;
-		wait_queue_assert_wait_locked(&mqueue->imq_wait_queue,
+		(void)wait_queue_assert_wait_locked(&mqueue->imq_wait_queue,
 									  IPC_MQUEUE_FULL,
 									  THREAD_ABORTSAFE,
 									  TRUE); /* unlock? */
@@ -715,7 +715,7 @@ ipc_mqueue_receive(
 	self->ith_option = option;
 	self->ith_msize = max_size;
 		
-	wait_queue_assert_wait_locked(&mqueue->imq_wait_queue,
+	(void)wait_queue_assert_wait_locked(&mqueue->imq_wait_queue,
 								  IPC_MQUEUE_RECEIVE,
 								  interruptible,
 								  TRUE); /* unlock? */

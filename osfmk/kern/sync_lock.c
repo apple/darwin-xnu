@@ -317,7 +317,7 @@ lock_acquire (lock_set_t lock_set, int lock_id)
 		}
 
 		ulock->blocked = TRUE;
-		wait_queue_assert_wait(&ulock->wait_queue,
+		(void)wait_queue_assert_wait(&ulock->wait_queue,
 				       LOCK_SET_EVENT,
 				       THREAD_ABORTSAFE);
 		ulock_unlock(ulock);
@@ -681,7 +681,7 @@ lock_handoff (lock_set_t lock_set, int lock_id)
 	 * for an accepting thread.
 	 */
 	ulock->ho_wait = TRUE;
-	wait_queue_assert_wait(&ulock->wait_queue,
+	(void)wait_queue_assert_wait(&ulock->wait_queue,
 			       LOCK_SET_HANDOFF,
 			       THREAD_ABORTSAFE);
 	ulock_unlock(ulock);
@@ -792,7 +792,7 @@ lock_handoff_accept (lock_set_t lock_set, int lock_id)
 	}		
 
 	ulock->accept_wait = TRUE;
-	wait_queue_assert_wait(&ulock->wait_queue,
+	(void)wait_queue_assert_wait(&ulock->wait_queue,
 			       LOCK_SET_HANDOFF,
 			       THREAD_ABORTSAFE);
 	ulock_unlock(ulock);

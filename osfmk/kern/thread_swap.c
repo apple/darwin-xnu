@@ -49,23 +49,6 @@
  */
 /*
  */
-/*
- *
- *	File:	kern/thread_swap.c
- *	Author:	Avadis Tevanian, Jr.
- *	Date:	1987
- *
- *	Mach thread swapper:
- *		Swap in threads that need to be run.  This is done here
- *		by the swapper thread since it cannot be done (in general)
- *		when the kernel tries to place a thread on a run queue.
- *
- *	Note: The act of swapping a thread in Mach does not mean that
- *	its memory gets forcibly swapped to secondary storage.  The memory
- *	for the task corresponding to a swapped thread is paged out
- *	through the normal paging mechanism.
- *
- */
 
 #include <kern/thread.h>
 #include <kern/lock.h>
@@ -73,7 +56,6 @@
 #include <vm/vm_kern.h>
 #include <mach/vm_param.h>
 #include <kern/sched_prim.h>
-#include <kern/sf.h>
 #include <kern/processor.h>
 #include <kern/thread_swap.h>
 #include <kern/spl.h>		/* for splsched */
@@ -82,22 +64,28 @@
 #include <mach/policy.h>
 
 queue_head_t		swapin_queue;
-decl_simple_lock_data(,	swapper_lock_data)
+decl_simple_lock_data(,swapin_lock_data)
 
-#define swapper_lock()		simple_lock(&swapper_lock_data)
-#define swapper_unlock()	simple_unlock(&swapper_lock_data)
+#define swapin_lock()		simple_lock(&swapin_lock_data)
+#define swapin_unlock()		simple_unlock(&swapin_lock_data)
 
 mach_counter_t c_swapin_thread_block;
 
+void	swapin_thread(void);
+
 /*
- *	swapper_init: [exported]
+ *	swapin_init: [exported]
  *
  *	Initialize the swapper module.
  */
-void swapper_init()
+void
+swapin_init(void)
 {
 	 queue_init(&swapin_queue);
-	 simple_lock_init(&swapper_lock_data, ETAP_THREAD_SWAPPER);
+	 simple_lock_init(&swapin_lock_data, ETAP_THREAD_SWAPPER);
+	 kernel_thread_with_priority(
+						kernel_task, BASEPRI_PREEMPT - 2,
+										swapin_thread, TRUE, TRUE);
 }
 
 /*
@@ -110,23 +98,24 @@ void swapper_init()
  *	our callers have already tried that route.
  */
 
-void thread_swapin(thread)
-	thread_t	thread;
+void
+thread_swapin(
+	register thread_t	thread)
 {
 	switch (thread->state & TH_STACK_STATE) {
+
 	case TH_STACK_HANDOFF:
 		/*
 		 *	Swapped out - queue for swapin thread.
 		 */
-		thread->state = (thread->state & ~TH_STACK_STATE)
-				| TH_STACK_COMING_IN;
-		swapper_lock();
+		thread->state = (thread->state & ~TH_STACK_STATE) | TH_STACK_ALLOC;
+		swapin_lock();
 		enqueue_tail(&swapin_queue, (queue_entry_t) thread);
-		swapper_unlock();
+		swapin_unlock();
 		thread_wakeup((event_t) &swapin_queue);
 		break;
 
-	    case TH_STACK_COMING_IN:
+	    case TH_STACK_ALLOC:
 		/*
 		 *	Already queued for swapin thread, or being
 		 *	swapped in.
@@ -148,15 +137,12 @@ void thread_swapin(thread)
  *	it on a run queue.  No locks should be held on entry, as it is
  *	likely that this routine will sleep (waiting for stack allocation).
  */
-void thread_doswapin(thread)
-	register thread_t thread;
+void
+thread_doswapin(
+	register thread_t	thread)
 {
-	spl_t	s;
-	vm_offset_t stack;
-
-	/*
-	 * do machdep allocation
-	 */
+	vm_offset_t		stack;
+	spl_t			s;
 
 	/*
 	 *	Allocate the kernel stack.
@@ -170,7 +156,7 @@ void thread_doswapin(thread)
 
 	s = splsched();
 	thread_lock(thread);
-	thread->state &= ~(TH_STACK_HANDOFF | TH_STACK_COMING_IN);
+	thread->state &= ~(TH_STACK_HANDOFF | TH_STACK_ALLOC);
 	if (thread->state & TH_RUN)
 		thread_setrun(thread, TRUE, FALSE);
 	thread_unlock(thread);
@@ -183,42 +169,47 @@ void thread_doswapin(thread)
  *	This procedure executes as a kernel thread.  Threads that need to
  *	be swapped in are swapped in by this thread.
  */
-void swapin_thread_continue()
+void
+swapin_thread_continue(void)
 {
-	for (;;) {
-		register thread_t thread;
-		spl_t s;
+	register thread_t	thread;
 
-		s = splsched();
-		swapper_lock();
-
-		while ((thread = (thread_t) dequeue_head(&swapin_queue))
-							!= THREAD_NULL) {
-			swapper_unlock();
-			(void) splx(s);
-
-			thread_doswapin(thread);		/* may block */
-
-			s = splsched();
-			swapper_lock();
-		}
-
-		assert_wait((event_t) &swapin_queue, THREAD_UNINT);
-		swapper_unlock();
-		(void) splx(s);
-		counter(c_swapin_thread_block++);
-#if defined (__i386__)
-		thread_block((void (*)(void)) 0);
-#else
-		thread_block(swapin_thread_continue);
+#if defined(__i386__)
+loop:
 #endif
+	(void)splsched();
+	swapin_lock();
+
+	while ((thread = (thread_t)dequeue_head(&swapin_queue)) != THREAD_NULL) {
+		swapin_unlock();
+		(void)spllo();
+
+		thread_doswapin(thread);
+
+		(void)splsched();
+		swapin_lock();
 	}
+
+	assert_wait((event_t) &swapin_queue, THREAD_UNINT);
+	swapin_unlock();
+	(void)spllo();
+
+	counter(c_swapin_thread_block++);
+#if defined (__i386__)
+	thread_block((void (*)(void)) 0);
+	goto loop;
+#else
+	thread_block(swapin_thread_continue);
+#endif
+	/*NOTREACHED*/
 }
 
-void swapin_thread()
+void
+swapin_thread(void)
 {
-	stack_privilege(current_thread());
-	current_thread()->vm_privilege = TRUE;
+	thread_t	self = current_thread();
+
+	stack_privilege(self);
 
 	swapin_thread_continue();
 	/*NOTREACHED*/

@@ -300,43 +300,8 @@ extern void bit_unlock(
 #define	USIMPLE_LOCK_CALLS
 #endif	/* !(USLOCK_DEBUG || USLOCK_STATS) */
 
-
-#if	MACH_RT || (NCPUS > 1) || MACH_LDEBUG
-#if	MACH_LDEBUG || !MACH_RT
-#define	mutex_try(m)	(!(m)->interlock && _mutex_try(m))
-#define	mutex_lock(m)						\
-MACRO_BEGIN							\
-	assert(assert_wait_possible());				\
-	_mutex_lock((m));					\
-MACRO_END
-
-#else	/* MACH_LDEBUG || !MACH_RT */
-#define	mutex_try(m)	(!(m)->interlock && \
-		!xchgb ((volatile char *)&((m)->locked), 1))
-#define	mutex_lock(m)						\
-MACRO_BEGIN							\
-	assert(assert_wait_possible());				\
-	_mutex_lock (m);					\
-MACRO_END
-
-#endif	/* MACH_LDEBUG || !MACH_RT */
-#else	/* MACH_RT || (NCPUS > 1) || MACH_LDEBUG */
-#define	mutex_try	_mutex_try
-#define	mutex_lock	_mutex_lock
-#endif	/* MACH_RT || (NCPUS > 1) || MACH_LDEBUG */
-
-#else /* !MACH_KERNEL_PRIVATE */
-
-#define mutex_try	_mutex_try
-#define mutex_lock(m)				\
-MACRO_BEGIN					\
-	assert(assert_wait_possible());		\
-	_mutex_lock((m));			\
-MACRO_END
-
-#endif /* !MACH_KERNEL_PRIVATE */
+#endif /* MACH_KERNEL_PRIVATE */
 
 extern void		kernel_preempt_check (void);
 
 #endif	/* _I386_LOCK_H_ */
-

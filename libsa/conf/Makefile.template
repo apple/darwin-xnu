@@ -27,7 +27,7 @@ include $(MakeInc_def)
 #
 # XXX: CFLAGS
 #
-CFLAGS+= -DKERNEL -DLIBKERN_KERNEL_PRIVATE -DDEBUG \
+CFLAGS+= -DKERNEL -DLIBKERN_KERNEL_PRIVATE \
          -Wall -Wno-four-char-constants -fno-common
 
 SFLAGS+= -DKERNEL
@@ -104,9 +104,6 @@ do_build_all: do_depend
 
 %RULES
 
--include Makedep
-
 include $(MakeInc_rule)
-
 include $(MakeInc_dir)
 

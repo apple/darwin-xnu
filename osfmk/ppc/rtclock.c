@@ -31,6 +31,8 @@
  *				real-time clock.
  */
 
+#include <libkern/OSTypes.h>
+
 #include <mach/mach_types.h>
 
 #include <kern/clock.h>
@@ -42,16 +44,6 @@
 #include <ppc/proc_reg.h>
 
 #include <pexpert/pexpert.h>
-
-/*XXX power management hacks XXX*/
-#include <IOKit/IOReturn.h>
-#include <IOKit/IOMessage.h>
-
-extern void *registerSleepWakeInterest(
-						void		*callback,
-						void		*target,
-						void		*refCon);
-/*XXX power management hacks XXX*/
 
 #include <sys/kdebug.h>
 
@@ -108,7 +100,7 @@ static struct rtclock {
 	mach_timebase_info_data_t	timebase_const;
 
 	struct rtclock_timer {
-		AbsoluteTime		deadline;
+		uint64_t			deadline;
 		boolean_t			is_set;
 	}					timer[NCPUS];
 
@@ -117,7 +109,7 @@ static struct rtclock {
 	timer_call_data_t	alarm[NCPUS];
 
 	/* debugging */
-	AbsoluteTime		last_abstime[NCPUS];
+	uint64_t			last_abstime[NCPUS];
 	int					last_decr[NCPUS];
 
 	decl_simple_lock_data(,lock)	/* real-time clock device lock */
@@ -125,16 +117,16 @@ static struct rtclock {
 
 static boolean_t		rtclock_initialized;
 
-static AbsoluteTime		rtclock_tick_deadline[NCPUS];
-static AbsoluteTime	 	rtclock_tick_interval;
+static uint64_t			rtclock_tick_deadline[NCPUS];
+static uint64_t		 	rtclock_tick_interval;
 
 static void		timespec_to_absolutetime(
 							mach_timespec_t		timespec,
-							AbsoluteTime		*result);
+							uint64_t			*result);
 
 static int		deadline_to_decrementer(
-							AbsoluteTime		deadline,
-							AbsoluteTime		now);
+							uint64_t			deadline,
+							uint64_t			now);
 
 static void		rtclock_alarm_timer(
 					timer_call_param_t		p0,
@@ -219,7 +211,7 @@ sysclk_config(void)
 int
 sysclk_init(void)
 {
-	AbsoluteTime	abstime;
+	uint64_t		abstime;
 	int				decr, mycpu = cpu_number();
 
 	if (mycpu != master_cpu) {
@@ -229,8 +221,7 @@ sysclk_init(void)
 		/* Set decrementer and hence our next tick due */
 		clock_get_uptime(&abstime);
 		rtclock_tick_deadline[mycpu] = abstime;
-		ADD_ABSOLUTETIME(&rtclock_tick_deadline[mycpu],
-											&rtclock_tick_interval);
+		rtclock_tick_deadline[mycpu] += rtclock_tick_interval;
 		decr = deadline_to_decrementer(rtclock_tick_deadline[mycpu], abstime);
 		mtdec(decr);
 		rtclock.last_decr[mycpu] = decr;
@@ -246,7 +237,7 @@ sysclk_init(void)
 	/* Set decrementer and our next tick due */
 	clock_get_uptime(&abstime);
 	rtclock_tick_deadline[mycpu] = abstime;
-	ADD_ABSOLUTETIME(&rtclock_tick_deadline[mycpu], &rtclock_tick_interval);
+	rtclock_tick_deadline[mycpu] += rtclock_tick_interval;
 	decr = deadline_to_decrementer(rtclock_tick_deadline[mycpu], abstime);
 	mtdec(decr);
 	rtclock.last_decr[mycpu] = decr;
@@ -256,6 +247,9 @@ sysclk_init(void)
 	return (1);
 }
 
+#define UnsignedWide_to_scalar(x)	(*(uint64_t *)(x))
+#define scalar_to_UnsignedWide(x)	(*(UnsignedWide *)(x))
+
 /*
  * Perform a full 64 bit by 32 bit unsigned multiply,
  * yielding a 96 bit product.  The most significant
@@ -264,12 +258,12 @@ sysclk_init(void)
  */
 static void
 umul_64by32(
-	AbsoluteTime 		now64,
-	natural_t			mult32,
-	AbsoluteTime		*result64,
-	natural_t			*result32)
+	UnsignedWide 		now64,
+	uint32_t			mult32,
+	UnsignedWide		*result64,
+	uint32_t			*result32)
 {
-	natural_t			mid, mid2;
+	uint32_t			mid, mid2;
 
 	asm volatile("	mullw %0,%1,%2" :
 				 			"=r" (*result32) :
@@ -299,11 +293,11 @@ umul_64by32(
  */
 static void
 umul_64by32to64(
-	AbsoluteTime		now64,
-	natural_t			mult32,
-	AbsoluteTime		*result64)
+	UnsignedWide		now64,
+	uint32_t			mult32,
+	UnsignedWide		*result64)
 {
-	natural_t			mid, mid2;
+	uint32_t			mid, mid2;
 
 	asm volatile("	mullw %0,%1,%2" :
 				 			"=r" (result64->lo) :
@@ -328,31 +322,30 @@ umul_64by32to64(
  * returned as a 64 bit quantity, with the lower
  * portion as a 32 bit word.
  */
-static __inline__
-void
+static void
 udiv_96by32(
-	AbsoluteTime	now64,
-	natural_t		now32,
-	natural_t		div32,
-	AbsoluteTime	*result64,
-	natural_t		*result32)
+	UnsignedWide	now64,
+	uint32_t		now32,
+	uint32_t		div32,
+	UnsignedWide	*result64,
+	uint32_t		*result32)
 {
-	AbsoluteTime	t64;
+	UnsignedWide	t64;
 
 	if (now64.hi > 0 || now64.lo >= div32) {
-		AbsoluteTime_to_scalar(result64) =
-							AbsoluteTime_to_scalar(&now64) / div32;
+		UnsignedWide_to_scalar(result64) =
+							UnsignedWide_to_scalar(&now64) / div32;
 
 		umul_64by32to64(*result64, div32, &t64);
 
-		AbsoluteTime_to_scalar(&t64) =
-				AbsoluteTime_to_scalar(&now64) - AbsoluteTime_to_scalar(&t64);
+		UnsignedWide_to_scalar(&t64) =
+				UnsignedWide_to_scalar(&now64) - UnsignedWide_to_scalar(&t64);
 
-		*result32 =	(((unsigned long long)t64.lo << 32) | now32) / div32;
+		*result32 =	(((uint64_t)t64.lo << 32) | now32) / div32;
 	}
 	else {
-		AbsoluteTime_to_scalar(result64) =
-					(((unsigned long long)now64.lo << 32) | now32) / div32;
+		UnsignedWide_to_scalar(result64) =
+					(((uint64_t)now64.lo << 32) | now32) / div32;
 
 		*result32 = result64->lo;
 		result64->lo = result64->hi;
@@ -366,31 +359,30 @@ udiv_96by32(
  * Any higher order bits of the quotient are simply
  * discarded.
  */
-static __inline__
-void
+static void
 udiv_96by32to64(
-	AbsoluteTime	now64,
-	natural_t		now32,
-	natural_t		div32,
-	AbsoluteTime	*result64)
+	UnsignedWide	now64,
+	uint32_t		now32,
+	uint32_t		div32,
+	UnsignedWide	*result64)
 {
-	AbsoluteTime	t64;
+	UnsignedWide	t64;
 
 	if (now64.hi > 0 || now64.lo >= div32) {
-		AbsoluteTime_to_scalar(result64) =
-						AbsoluteTime_to_scalar(&now64) / div32;
+		UnsignedWide_to_scalar(result64) =
+						UnsignedWide_to_scalar(&now64) / div32;
 
 		umul_64by32to64(*result64, div32, &t64);
 
-		AbsoluteTime_to_scalar(&t64) =
-				AbsoluteTime_to_scalar(&now64) - AbsoluteTime_to_scalar(&t64);
+		UnsignedWide_to_scalar(&t64) =
+				UnsignedWide_to_scalar(&now64) - UnsignedWide_to_scalar(&t64);
 
 		result64->hi = result64->lo;
-		result64->lo = (((unsigned long long)t64.lo << 32) | now32) / div32;
+		result64->lo = (((uint64_t)t64.lo << 32) | now32) / div32;
 	}
 	else {
-		AbsoluteTime_to_scalar(result64) =
-					(((unsigned long long)now64.lo << 32) | now32) / div32;
+		UnsignedWide_to_scalar(result64) =
+						(((uint64_t)now64.lo << 32) | now32) / div32;
 	}
 }
 
@@ -400,52 +392,49 @@ udiv_96by32to64(
  * and a 32 bit remainder.  Any higher order bits
  * of the quotient are simply discarded.
  */
-static __inline__
-void
+static void
 udiv_96by32to32and32(
-	AbsoluteTime	now64,
-	natural_t		now32,
-	natural_t		div32,
-	natural_t		*result32,
-	natural_t		*remain32)
+	UnsignedWide	now64,
+	uint32_t		now32,
+	uint32_t		div32,
+	uint32_t		*result32,
+	uint32_t		*remain32)
 {
-	AbsoluteTime	t64, u64;
+	UnsignedWide	t64, u64;
 
 	if (now64.hi > 0 || now64.lo >= div32) {
-		AbsoluteTime_to_scalar(&t64) =
-							AbsoluteTime_to_scalar(&now64) / div32;
+		UnsignedWide_to_scalar(&t64) =
+							UnsignedWide_to_scalar(&now64) / div32;
 
 		umul_64by32to64(t64, div32, &t64);
 
-		AbsoluteTime_to_scalar(&t64) =
-			AbsoluteTime_to_scalar(&now64) - AbsoluteTime_to_scalar(&t64);
+		UnsignedWide_to_scalar(&t64) =
+			UnsignedWide_to_scalar(&now64) - UnsignedWide_to_scalar(&t64);
 
-		AbsoluteTime_to_scalar(&t64) =
-						((unsigned long long)t64.lo << 32) | now32;
+		UnsignedWide_to_scalar(&t64) = ((uint64_t)t64.lo << 32) | now32;
 
-		AbsoluteTime_to_scalar(&u64) =
-							AbsoluteTime_to_scalar(&t64) / div32;
+		UnsignedWide_to_scalar(&u64) =
+							UnsignedWide_to_scalar(&t64) / div32;
 
 		*result32 = u64.lo;
 
 		umul_64by32to64(u64, div32, &u64);
 
-		*remain32 = AbsoluteTime_to_scalar(&t64) -
-									AbsoluteTime_to_scalar(&u64);
+		*remain32 = UnsignedWide_to_scalar(&t64) -
+									UnsignedWide_to_scalar(&u64);
 	}
 	else {
-		AbsoluteTime_to_scalar(&t64) =
-						((unsigned long long)now64.lo << 32) | now32;
+		UnsignedWide_to_scalar(&t64) = ((uint64_t)now64.lo << 32) | now32;
 
-		AbsoluteTime_to_scalar(&u64) =
-							AbsoluteTime_to_scalar(&t64) / div32;
+		UnsignedWide_to_scalar(&u64) =
+							UnsignedWide_to_scalar(&t64) / div32;
 
 		*result32 =	 u64.lo;
 
 		umul_64by32to64(u64, div32, &u64);
 
-		*remain32 =	AbsoluteTime_to_scalar(&t64) -
-									AbsoluteTime_to_scalar(&u64);
+		*remain32 =	UnsignedWide_to_scalar(&t64) -
+									UnsignedWide_to_scalar(&u64);
 	}
 }
 
@@ -454,22 +443,21 @@ udiv_96by32to32and32(
  * for converting the device's machine dependent time value
  * into a canonical mach_timespec_t value.
  *
- * SMP configurations - *this currently assumes that the processor
- * clocks will be synchronised*
+ * SMP configurations - *the processor clocks are synchronised*
  */
 kern_return_t
 sysclk_gettime_internal(
 	mach_timespec_t	*time)	/* OUT */
 {
-	AbsoluteTime		now;
-	AbsoluteTime		t64;
-	natural_t			t32;
-	natural_t			numer, denom;
+	UnsignedWide		now;
+	UnsignedWide		t64;
+	uint32_t			t32;
+	uint32_t			numer, denom;
 
 	numer = rtclock.timebase_const.numer;
 	denom = rtclock.timebase_const.denom;
 
-	clock_get_uptime(&now);
+	clock_get_uptime((uint64_t *)&now);
 
 	umul_64by32(now, numer, &t64, &t32);
 
@@ -485,10 +473,10 @@ kern_return_t
 sysclk_gettime(
 	mach_timespec_t	*time)	/* OUT */
 {
-	AbsoluteTime		now;
-	AbsoluteTime		t64;
-	natural_t			t32;
-	natural_t			numer, denom;
+	UnsignedWide		now;
+	UnsignedWide		t64;
+	uint32_t			t32;
+	uint32_t			numer, denom;
 	spl_t				s;
 
 	LOCK_RTC(s);
@@ -496,7 +484,7 @@ sysclk_gettime(
 	denom = rtclock.timebase_const.denom;
 	UNLOCK_RTC(s);
 
-	clock_get_uptime(&now);
+	clock_get_uptime((uint64_t *)&now);
 
 	umul_64by32(now, numer, &t64, &t32);
 
@@ -546,7 +534,7 @@ void
 sysclk_setalarm(
 	mach_timespec_t		*deadline)
 {
-	AbsoluteTime			abstime;
+	uint64_t			abstime;
 
 	timespec_to_absolutetime(*deadline, &abstime);
 	timer_call_enter(&rtclock.alarm[cpu_number()], abstime);
@@ -662,12 +650,14 @@ clock_adjust_calendar(
 	UNLOCK_RTC(s);
 }
 
-static void
-calend_setup_internal(
-	long			seconds)
+void
+clock_initialize_calendar(void)
 {
-	mach_timespec_t	curr_time;
+	mach_timespec_t		curr_time;
+	long				seconds = PEGetGMTTimeOfDay();
+	spl_t				s;
 
+	LOCK_RTC(s);
 	(void) sysclk_gettime_internal(&curr_time);
 	if (curr_time.tv_nsec < 500*USEC_PER_SEC)
 		rtclock.calend_offset.tv_sec = seconds;
@@ -676,58 +666,6 @@ calend_setup_internal(
 	rtclock.calend_offset.tv_nsec = 0;
 	SUB_MACH_TIMESPEC(&rtclock.calend_offset, &curr_time);
 	rtclock.calend_is_set = TRUE;
-}
-
-static thread_call_t		calend_wakeup_call;
-static thread_call_data_t	calend_wakeup_call_data;
-
-static void
-calend_wakeup_resynch(
-	thread_call_param_t		p0,
-	thread_call_param_t		p1)
-{
-	long		seconds = PEGetGMTTimeOfDay();
-	spl_t		s;
-
-	LOCK_RTC(s);
-	calend_setup_internal(seconds);
-	UNLOCK_RTC(s);
-}
-
-static IOReturn
-calend_sleep_wake_notif(
-	void		*target,
-	void		*refCon,
-	UInt32		messageType,
-	void		*provider,
-	void		*messageArg,
-	vm_size_t	argSize)
-{
-	if (messageType != kIOMessageSystemHasPoweredOn)
-		return (kIOReturnUnsupported);
-
-	if (calend_wakeup_call != NULL)
-		thread_call_enter(calend_wakeup_call);
-
-	return (kIOReturnSuccess);
-}
-
-void
-clock_initialize_calendar(void)
-{
-	long		seconds;
-	spl_t		s;
-
-	thread_call_setup(&calend_wakeup_call_data, calend_wakeup_resynch, NULL);
-	calend_wakeup_call = &calend_wakeup_call_data;
-
-	registerSleepWakeInterest(calend_sleep_wake_notif, NULL, NULL);
-
-	seconds = PEGetGMTTimeOfDay();
-
-	LOCK_RTC(s);
-	if (!rtclock.calend_is_set)
-		calend_setup_internal(seconds);
 	UNLOCK_RTC(s);
 }
 
@@ -758,9 +696,9 @@ clock_timebase_info(
 
 void
 clock_set_timer_deadline(
-	AbsoluteTime			deadline)
+	uint64_t				deadline)
 {
-	AbsoluteTime			abstime;
+	uint64_t				abstime;
 	int						decr, mycpu;
 	struct rtclock_timer	*mytimer;
 	spl_t					s;
@@ -772,18 +710,17 @@ clock_set_timer_deadline(
 	rtclock.last_abstime[mycpu] = abstime;
 	mytimer->deadline = deadline;
 	mytimer->is_set = TRUE;
-	if (	CMP_ABSOLUTETIME(&mytimer->deadline,
-										&rtclock_tick_deadline[mycpu]) < 0) {
+	if (	mytimer->deadline < rtclock_tick_deadline[mycpu]		) {
 		decr = deadline_to_decrementer(mytimer->deadline, abstime);
 		if (	rtclock_decrementer_min != 0				&&
 				rtclock_decrementer_min < (natural_t)decr		)
 			decr = rtclock_decrementer_min;
 
-		KERNEL_DEBUG_CONSTANT(MACHDBG_CODE(DBG_MACH_EXCP_DECI, 1)
-							  | DBG_FUNC_NONE, decr, 2, 0, 0, 0);
-
 		mtdec(decr);
 		rtclock.last_decr[mycpu] = decr;
+
+		KERNEL_DEBUG_CONSTANT(MACHDBG_CODE(DBG_MACH_EXCP_DECI, 1)
+							  | DBG_FUNC_NONE, decr, 2, 0, 0, 0);
 	}
 	splx(s);
 }
@@ -819,7 +756,7 @@ rtclock_intr(
 	struct ppc_saved_state	*ssp,
 	spl_t					old_spl)
 {
-	AbsoluteTime			abstime;
+	uint64_t				abstime;
 	int						decr[3], mycpu = cpu_number();
 	struct rtclock_timer	*mytimer = &rtclock.timer[mycpu];
 
@@ -835,7 +772,7 @@ rtclock_intr(
 
 	clock_get_uptime(&abstime);
 	rtclock.last_abstime[mycpu] = abstime;
-	if (CMP_ABSOLUTETIME(&rtclock_tick_deadline[mycpu], &abstime) <= 0) {
+	if (	rtclock_tick_deadline[mycpu] <= abstime		) {
 		clock_deadline_for_periodic_event(rtclock_tick_interval, abstime,
 										  		&rtclock_tick_deadline[mycpu]);
 		hertz_tick(USER_MODE(ssp->srr1), ssp->srr0);
@@ -843,8 +780,8 @@ rtclock_intr(
 
 	clock_get_uptime(&abstime);
 	rtclock.last_abstime[mycpu] = abstime;
-	if (mytimer->is_set &&
-					CMP_ABSOLUTETIME(&mytimer->deadline, &abstime) <= 0) {
+	if (	mytimer->is_set					&&
+			mytimer->deadline <= abstime		) {
 		mytimer->is_set = FALSE;
 		(*rtclock.timer_expire)(abstime);
 	}
@@ -863,11 +800,11 @@ rtclock_intr(
 			rtclock_decrementer_min < (natural_t)decr[1]		)
 		decr[1] = rtclock_decrementer_min;
 
-	KERNEL_DEBUG_CONSTANT(MACHDBG_CODE(DBG_MACH_EXCP_DECI, 1)
-						  | DBG_FUNC_NONE, decr[1], 3, 0, 0, 0);
-
 	mtdec(decr[1]);
 	rtclock.last_decr[mycpu] = decr[1];
+
+	KERNEL_DEBUG_CONSTANT(MACHDBG_CODE(DBG_MACH_EXCP_DECI, 1)
+						  | DBG_FUNC_NONE, decr[1], 3, 0, 0, 0);
 }
 
 static void
@@ -884,9 +821,10 @@ rtclock_alarm_timer(
 
 void
 clock_get_uptime(
-	AbsoluteTime	*result)
+	uint64_t		*result0)
 {
-	natural_t	hi, lo, hic;
+	UnsignedWide	*result = (UnsignedWide *)result0;
+	uint32_t		hi, lo, hic;
 
 	do {
 		asm volatile("	mftbu %0" : "=r" (hi));
@@ -900,16 +838,15 @@ clock_get_uptime(
 
 static int
 deadline_to_decrementer(
-	AbsoluteTime		deadline,
-	AbsoluteTime		now)
+	uint64_t			deadline,
+	uint64_t			now)
 {
 	uint64_t			delt;
 
-	if (CMP_ABSOLUTETIME(&deadline, &now) <= 0)
+	if (deadline <= now)
 		return DECREMENTER_MIN;
 	else {
-		delt = AbsoluteTime_to_scalar(&deadline) -
-									AbsoluteTime_to_scalar(&now);
+		delt = deadline - now;
 		return (delt >= (DECREMENTER_MAX + 1))? DECREMENTER_MAX:
 				((delt >= (DECREMENTER_MIN + 1))? (delt - 1): DECREMENTER_MIN);
 	}
@@ -918,11 +855,12 @@ deadline_to_decrementer(
 static void
 timespec_to_absolutetime(
 	mach_timespec_t			timespec,
-	AbsoluteTime			*result)
+	uint64_t				*result0)
 {
-	AbsoluteTime			t64;
-	natural_t				t32;
-	natural_t				numer, denom;
+	UnsignedWide			*result = (UnsignedWide *)result0;
+	UnsignedWide			t64;
+	uint32_t				t32;
+	uint32_t				numer, denom;
 	spl_t					s;
 
 	LOCK_RTC(s);
@@ -938,7 +876,7 @@ timespec_to_absolutetime(
 							"=r" (t64.hi) :
 								"r" (timespec.tv_sec), "r" (NSEC_PER_SEC));
 
-	AbsoluteTime_to_scalar(&t64) += timespec.tv_nsec;
+	UnsignedWide_to_scalar(&t64) += timespec.tv_nsec;
 
 	umul_64by32(t64, denom, &t64, &t32);
 
@@ -950,28 +888,29 @@ timespec_to_absolutetime(
 
 void
 clock_interval_to_deadline(
-	natural_t			interval,
-	natural_t			scale_factor,
-	AbsoluteTime		*result)
+	uint32_t			interval,
+	uint32_t			scale_factor,
+	uint64_t			*result)
 {
-	AbsoluteTime		abstime;
+	uint64_t			abstime;
 
 	clock_get_uptime(result);
 
 	clock_interval_to_absolutetime_interval(interval, scale_factor, &abstime);
 
-	ADD_ABSOLUTETIME(result, &abstime);
+	*result += abstime;
 }
 
 void
 clock_interval_to_absolutetime_interval(
-	natural_t			interval,
-	natural_t			scale_factor,
-	AbsoluteTime		*result)
+	uint32_t			interval,
+	uint32_t			scale_factor,
+	uint64_t			*result0)
 {
-	AbsoluteTime		t64;
-	natural_t			t32;
-	natural_t			numer, denom;
+	UnsignedWide		*result = (UnsignedWide *)result0;
+	UnsignedWide		t64;
+	uint32_t			t32;
+	uint32_t			numer, denom;
 	spl_t				s;
 
 	LOCK_RTC(s);
@@ -996,22 +935,22 @@ clock_interval_to_absolutetime_interval(
 
 void
 clock_absolutetime_interval_to_deadline(
-	AbsoluteTime		abstime,
-	AbsoluteTime		*result)
+	uint64_t			abstime,
+	uint64_t			*result)
 {
 	clock_get_uptime(result);
 
-	ADD_ABSOLUTETIME(result, &abstime);
+	*result += abstime;
 }
 
 void
 absolutetime_to_nanoseconds(
-	AbsoluteTime		abstime,
-	UInt64				*result)
+	uint64_t			abstime,
+	uint64_t			*result)
 {
-	AbsoluteTime		t64;
-	natural_t			t32;
-	natural_t			numer, denom;
+	UnsignedWide		t64;
+	uint32_t			t32;
+	uint32_t			numer, denom;
 	spl_t				s;
 
 	LOCK_RTC(s);
@@ -1019,19 +958,21 @@ absolutetime_to_nanoseconds(
 	denom = rtclock.timebase_const.denom;
 	UNLOCK_RTC(s);
 
-	umul_64by32(abstime, numer, &t64, &t32);
+	UnsignedWide_to_scalar(&t64) = abstime;
+
+	umul_64by32(t64, numer, &t64, &t32);
 
 	udiv_96by32to64(t64, t32, denom, (void *)result);
 }
 
 void
 nanoseconds_to_absolutetime(
-	UInt64				nanoseconds,
-	AbsoluteTime		*result)
+	uint64_t			nanoseconds,
+	uint64_t			*result)
 {
-	AbsoluteTime		t64;
-	natural_t			t32;
-	natural_t			numer, denom;
+	UnsignedWide		t64;
+	uint32_t			t32;
+	uint32_t			numer, denom;
 	spl_t				s;
 
 	LOCK_RTC(s);
@@ -1039,11 +980,11 @@ nanoseconds_to_absolutetime(
 	denom = rtclock.timebase_const.denom;
 	UNLOCK_RTC(s);
 
-	AbsoluteTime_to_scalar(&t64) = nanoseconds;
+	UnsignedWide_to_scalar(&t64) = nanoseconds;
 
 	umul_64by32(t64, denom, &t64, &t32);
 
-	udiv_96by32to64(t64, t32, numer, result);
+	udiv_96by32to64(t64, t32, numer, (void *)result);
 }
 
 /*
@@ -1051,32 +992,32 @@ nanoseconds_to_absolutetime(
  */
 void
 delay_for_interval(
-	natural_t			interval,
-	natural_t			scale_factor)
+	uint32_t		interval,
+	uint32_t		scale_factor)
 {
-	AbsoluteTime		now, end;
+	uint64_t		now, end;
 
 	clock_interval_to_deadline(interval, scale_factor, &end);
 
 	do {
 		clock_get_uptime(&now);
-	} while (CMP_ABSOLUTETIME(&now, &end) < 0);
+	} while (now < end);
 }
 
 void
 clock_delay_until(
-	AbsoluteTime		deadline)
+	uint64_t		deadline)
 {
-	AbsoluteTime		now;
+	uint64_t		now;
 
 	do {
 		clock_get_uptime(&now);
-	} while (CMP_ABSOLUTETIME(&now, &deadline) < 0);
+	} while (now < deadline);
 }
 
 void
 delay(
-	int			usec)
+	int		usec)
 {
 	delay_for_interval((usec < 0)? -usec: usec, NSEC_PER_USEC);
 }

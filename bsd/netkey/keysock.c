@@ -264,7 +264,7 @@ key_output(m, so)
 	 * allocate memory for sadb_msg, and copy to sadb_msg from mbuf
 	 * XXX: To be processed directly without a copy.
 	 */
-	msg = (struct sadb_msg *)_MALLOC(len, M_SECA, M_NOWAIT);
+	msg = (struct sadb_msg *)_MALLOC(len, M_SECA, M_WAITOK);
 	if (msg == NULL) {
 #if IPSEC_DEBUG
 		printf("key_output: No more memory.\n");

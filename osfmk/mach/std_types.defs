@@ -93,6 +93,7 @@ type mach_port_mscount_t = unsigned;
 type mach_port_msgcount_t = unsigned;
 type mach_port_rights_t = unsigned;
 type mach_msg_id_t = integer_t;
+type mach_msg_size_t = natural_t;
 type mach_msg_type_name_t = unsigned;
 type mach_msg_options_t = integer_t;
 

@@ -1353,7 +1353,7 @@ in6_ifadd(ifp, in6, addr, prefixlen)
 	}
 
 	/* make ifaddr */
-	ia = (struct in6_ifaddr *)_MALLOC(sizeof(*ia), M_IFADDR, M_DONTWAIT);
+	ia = (struct in6_ifaddr *)_MALLOC(sizeof(*ia), M_IFADDR, M_NOWAIT);
 	if (ia == NULL) {
 		printf("ENOBUFS in in6_ifadd %d\n", __LINE__);
 		return NULL;

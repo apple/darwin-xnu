@@ -149,6 +149,7 @@ bool IOCatalogue::init(OSArray * initArray)
     kernelTables = OSCollectionIterator::withCollection( array );
 
     lock = IOLockAlloc();
+    kld_lock = IOLockAlloc();
 
     kernelTables->reset();
     while( (dict = (OSDictionary *) kernelTables->getNextObject())) {
@@ -358,11 +359,6 @@ bool IOCatalogue::addDrivers(OSArray * drivers,
     }
     IOUnlock( lock );
 
-    if ( doNubMatching ) {
-        (IOService::getServiceRoot())->waitQuiet();
-        kmod_send_generic( kIOCatalogMatchIdle, 0, 0 );
-    }
-
     set->release();
     iter->release();
     
@@ -452,9 +448,17 @@ bool IOCatalogue::isModuleLoaded( const char * moduleName ) const
     if ( !k_info ) {
         kern_return_t            ret;
 
+       /* To make sure this operation completes even if a bad extension needs
+        * to be removed, take the kld lock for this whole block, spanning the
+        * kmod_load_function() and remove_startup_extension_function() calls.
+        */
+        IOLockLock(kld_lock);
+
         // If the module hasn't been loaded, then load it.
         if (kmod_load_function != 0) {
+
             ret = kmod_load_function((char *)moduleName);
+
             if  ( ret != kIOReturnSuccess ) {
                 IOLog("IOCatalogue: %s cannot be loaded.\n", moduleName);
 
@@ -466,25 +470,30 @@ bool IOCatalogue::isModuleLoaded( const char * moduleName ) const
                 if (kernelLinkerPresent && remove_startup_extension_function) {
                     (*remove_startup_extension_function)(moduleName);
                 }
+                IOLockUnlock(kld_lock);
                 return false;
             } else if (kernelLinkerPresent) {
                 // If kern linker is here, the driver is actually loaded,
                 // so return true.
+                IOLockUnlock(kld_lock);
                 return true;
             } else {
                 // kern linker isn't here, a request has been queued
                 // but the module isn't necessarily loaded yet, so stall.
+                IOLockUnlock(kld_lock);
                 return false;
             }
         } else {
-                IOLog("IOCatalogue: %s cannot be loaded "
-                    "(kmod load function not set).\n",
-                    moduleName);
+            IOLog("IOCatalogue: %s cannot be loaded "
+                "(kmod load function not set).\n",
+                moduleName);
         }
 
+        IOLockUnlock(kld_lock);
         return false;
     }
 
+    /* Lock wasn't taken if we get here. */
     return true;
 }
 
@@ -761,13 +770,15 @@ bool IOCatalogue::serialize(OSSerialize * s) const
 bool IOCatalogue::recordStartupExtensions(void) {
     bool result = false;
 
-    if (record_startup_extensions_function) {
+    IOLockLock(kld_lock);
+    if (kernelLinkerPresent && record_startup_extensions_function) {
         result = (*record_startup_extensions_function)();
     } else {
         IOLog("Can't record startup extensions; "
             "kernel linker is not present.\n");
         result = false;
     }
+    IOLockUnlock(kld_lock);
 
     return result;
 }
@@ -778,13 +789,15 @@ bool IOCatalogue::recordStartupExtensions(void) {
 bool IOCatalogue::addExtensionsFromArchive(OSData * mkext) {
     bool result = false;
 
-    if (add_from_mkext_function) {
+    IOLockLock(kld_lock);
+    if (kernelLinkerPresent && add_from_mkext_function) {
         result = (*add_from_mkext_function)(mkext);
     } else {
         IOLog("Can't add startup extensions from archive; "
             "kernel linker is not present.\n");
         result = false;
     }
+    IOLockUnlock(kld_lock);
 
     return result;
 }
@@ -805,7 +818,7 @@ kern_return_t IOCatalogue::removeKernelLinker(void) {
 
    /* This must be the very first thing done by this function.
     */
-    IOTakeLock(lock);
+    IOLockLock(kld_lock);
 
 
    /* If the kernel linker isn't here, that's automatically
@@ -871,7 +884,7 @@ finish:
 
    /* This must be the very last thing done before returning.
     */
-    IOUnlock(lock);
+    IOLockUnlock(kld_lock);
 
     return result;
 }

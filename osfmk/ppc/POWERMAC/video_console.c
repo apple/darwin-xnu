@@ -999,13 +999,9 @@ putc_normal(unsigned char ch)
 	switch (ch) {
 	case '\a':		/* Beep			 */
         {
-            extern int asc_ringbell();	//In IOBSDConsole.cpp
-            int rang;
             spl_t s;
 
-            rang = asc_ringbell();
-
-            if(!rang) {
+            if(FALSE) {
                 /*
                  * No sound hardware, invert the screen twice instead
                  */

@@ -126,6 +126,8 @@ extern struct sysctl_oid sysctl__net_link_ether_inet_maxtries;
 extern struct sysctl_oid sysctl__net_link_ether_inet_proxyall;
 extern struct sysctl_oid sysctl__net_link_ether_inet_prune_intvl;
 extern struct sysctl_oid sysctl__net_link_ether_inet_useloopback;
+extern struct sysctl_oid sysctl__net_link_ether_inet_apple_hwcksum_tx;
+extern struct sysctl_oid sysctl__net_link_ether_inet_apple_hwcksum_rx;
 
 #if NETMIBS
 extern struct sysctl_oid sysctl__net_link_generic_system_ifcount;
@@ -398,6 +400,8 @@ struct sysctl_oid *newsysctl_list[] =
     ,&sysctl__net_link_ether_inet_proxyall
     ,&sysctl__net_link_ether_inet_prune_intvl
     ,&sysctl__net_link_ether_inet_useloopback
+    ,&sysctl__net_link_ether_inet_apple_hwcksum_tx
+    ,&sysctl__net_link_ether_inet_apple_hwcksum_rx
 #if NETMIBS
     ,&sysctl__net_link_generic_system_ifcount
     ,&sysctl__net_link_generic

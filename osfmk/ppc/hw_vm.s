@@ -2685,6 +2685,9 @@ rbChk:		mr		r12,r10						; Save the previous
 rbnFirst:	bne-	rbPerm						; This is permanent, do not remove...
 			lwz		r8,bmspace(r10)				; Get the VSID
 			stw		r2,bmnext(r12)				; Unchain us
+
+			sync
+			stw		r9,0(r3)					; Unlock and chain the new first one
 			
 			eqv		r4,r4,r4					; Fill the bottom with foxes
 			mfspr	r12,sdr1					; Get hash table base and size
@@ -2799,7 +2802,6 @@ rbits603a:	sync								; Wait for quiet again
 			
 			sync								; Make sure that is done
 			
-			stw		r9,0(r3)					; Unlock and chain the new first one
 			mtmsr	r0							; Restore xlation and rupts
 			mr		r3,r10						; Pass back the removed block
 			isync

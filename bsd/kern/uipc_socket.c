@@ -497,14 +497,20 @@ sofree(so)
 	while (kp)
 	{	if (kp->e_soif && kp->e_soif->sf_sofree)
 		{	error = (*kp->e_soif->sf_sofree)(so, kp);
-			if (error)
+			if (error) {
+				selthreadclear(&so->so_snd.sb_sel);
+				selthreadclear(&so->so_rcv.sb_sel);
 				return;	/* void fn */
+			}
 		}
 		kp = kp->e_next;
 	}
 
-	if (so->so_pcb || (so->so_state & SS_NOFDREF) == 0)
+	if (so->so_pcb || (so->so_state & SS_NOFDREF) == 0) {
+		selthreadclear(&so->so_snd.sb_sel);
+		selthreadclear(&so->so_rcv.sb_sel);
 		return;
+	}
         if (head != NULL) {
                 if (so->so_state & SS_INCOMP) {  
                         TAILQ_REMOVE(&head->so_incomp, so, so_list);
@@ -516,6 +522,8 @@ sofree(so)
                          * accept(2) may hang after select(2) indicated
                          * that the listening socket was ready.
                          */
+						selthreadclear(&so->so_snd.sb_sel);
+						selthreadclear(&so->so_rcv.sb_sel);
                         return;
                 } else {
                         panic("sofree: not queued");
@@ -525,6 +533,7 @@ sofree(so)
 		so->so_head = NULL;
 	}
 
+	selthreadclear(&so->so_snd.sb_sel);
 	sbrelease(&so->so_snd);
 	sorflush(so);
 	sfilter_term(so);
@@ -1506,6 +1515,7 @@ sorflush(so)
 	s = splimp();
 	socantrcvmore(so);
 	sbunlock(sb);
+	selthreadclear(&sb->sb_sel);
 	asb = *sb;
 	bzero((caddr_t)sb, sizeof (*sb));
 	splx(s);
@@ -1881,9 +1891,7 @@ sohasoutofband(so)
 		gsignal(-so->so_pgid, SIGURG);
 	else if (so->so_pgid > 0 && (p = pfind(so->so_pgid)) != 0)
 		psignal(p, SIGURG);
-	thread_funnel_switch(NETWORK_FUNNEL, KERNEL_FUNNEL);
 	selwakeup(&so->so_rcv.sb_sel);
-	thread_funnel_switch(KERNEL_FUNNEL, NETWORK_FUNNEL);
 }
 
 /*
@@ -1947,7 +1955,7 @@ sfilter_term(struct socket *so)
 
 
 int
-sopoll(struct socket *so, int events, struct ucred *cred)
+sopoll(struct socket *so, int events, struct ucred *cred, void * wql)
 {
 	struct proc *p = current_proc();
 	int revents = 0;
@@ -1967,13 +1975,13 @@ sopoll(struct socket *so, int events, struct ucred *cred)
 
 	if (revents == 0) {
 		if (events & (POLLIN | POLLPRI | POLLRDNORM | POLLRDBAND)) {
-			selrecord(p, &so->so_rcv.sb_sel);
-			so->so_rcv.sb_sel.si_flags |= SI_SBSEL;
+			so->so_rcv.sb_flags |= SB_SEL;
+			selrecord(p, &so->so_rcv.sb_sel, wql);
 		}
 
 		if (events & (POLLOUT | POLLWRNORM)) {
-			selrecord(p, &so->so_snd.sb_sel);
-			so->so_snd.sb_sel.si_flags |= SI_SBSEL;
+			so->so_snd.sb_flags |= SB_SEL;
+			selrecord(p, &so->so_snd.sb_sel, wql);
 		}
 	}
 

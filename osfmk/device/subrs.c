@@ -214,27 +214,6 @@ strncpy(
         return (os1);
 }
 
-
-#if !defined(__alpha)
-
-/*
- * Abstract:
- *      strlen returns the number of characters in "string" preceeding
- *      the terminating null character.
- */
-
-size_t
-strlen(
-        register const char *string)
-{
-        register const char *ret = string;
-
-        while (*string++ != '\0')
-                continue;
-        return string - 1 - ret;
-}
-#endif /* !defined(__alpha) */
-
 /*
  * atoi:
  *

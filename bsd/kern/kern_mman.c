@@ -1061,7 +1061,7 @@ kern_return_t map_fd_funneled(
 	vm_map_copy_t	tmp;
 	int		err=0;
 	vm_map_t	my_map;
-	struct proc	*p =(struct proc *)(get_bsdtask_info(current_task()));
+	struct proc	*p =(struct proc *)current_proc();
 #if 0
 	extern int print_map_addr;
 #endif /* 0 */

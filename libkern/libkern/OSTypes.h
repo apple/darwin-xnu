@@ -80,7 +80,4 @@ typedef unsigned char Boolean;
 #endif /* __TYPES__ */
 #endif /* __MACTYPES__ */
 
-
 #endif /* _OS_OSTYPES_H */
-
-

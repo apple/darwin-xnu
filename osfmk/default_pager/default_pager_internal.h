@@ -81,8 +81,10 @@
 
 #define MACH_PORT_FACE mach_port_t
 
+#if 0
 #ifndef	USE_PRECIOUS
 #define	USE_PRECIOUS	TRUE
+#endif
 #endif
 
 #ifdef	USER_PAGER
@@ -90,8 +92,6 @@
 #else	/* USER_PAGER */
 #define UP(stuff)
 #endif	/* USER_PAGER */
-
-extern int norma_mk;		/* is the kernel configured with NORMA ? */
 
 #ifndef MACH_KERNEL
 extern struct mutex dprintf_lock;
@@ -104,14 +104,14 @@ extern struct mutex dprintf_lock;
 #define dprintf(args)							\
 	do {								\
 		PRINTF_LOCK();						\
-		printf("%s[%d]%s: ", my_name, dp_thread_id(), here);	\
+		printf("%s[%d]: ", my_name, dp_thread_id());		\
 		printf args;						\
 		PRINTF_UNLOCK();					\
 	} while (0)
 #else
 #define dprintf(args)						\
 	do {							\
-		printf("%s[KERNEL:]%s: ", my_name, here);		\
+		printf("%s[KERNEL]: ", my_name);		\
 		printf args;					\
 	} while (0)
 #endif
@@ -119,7 +119,7 @@ extern struct mutex dprintf_lock;
 /*
  * Debug.
  */
-extern char	my_name[];
+__private_extern__ char	my_name[];
 
 #define DEFAULT_PAGER_DEBUG	0
 
@@ -149,15 +149,15 @@ extern int	debug_mask;
 			      my_name, dp_thread_id(), here,		\
 			      __FILE__, __LINE__, # expr);		\
 #else
-		  panic("%s[KERNEL]%s: assertion failed in %s line %d: %s",\
-			      my_name, here, __FILE__, __LINE__, # expr); \
+		  panic("%s[KERNEL]: assertion failed in %s line %d: %s",\
+			      my_name, __FILE__, __LINE__, # expr); \
 #endif
 	} while (0)
 
 #else	/* DEFAULT_PAGER_DEBUG */
 
-#define DEBUG(level, args)	here[0] = here[0]
-#define ASSERT(clause)		here[0] = here[0]
+#define DEBUG(level, args)
+#define ASSERT(clause)
 
 #endif	/* DEFAULT_PAGER_DEBUG */
 
@@ -189,6 +189,8 @@ extern int		vm_page_shift;
 #endif
 #define	howmany(a,b)	(((a) + (b) - 1)/(b))
 
+extern memory_object_default_t	default_pager_object;
+
 #ifdef MACH_KERNEL
 extern mutex_t		dpt_lock;	/* Lock for the dpt array */
 extern unsigned int	default_pager_internal_count;
@@ -196,14 +198,12 @@ extern MACH_PORT_FACE	default_pager_host_port;
 /* extern task_t		default_pager_self; */  /* dont need or want */
 extern MACH_PORT_FACE	default_pager_internal_set;
 extern MACH_PORT_FACE	default_pager_external_set;
-extern MACH_PORT_FACE	default_pager_default_port;
 extern MACH_PORT_FACE	default_pager_default_set;
 #else
 extern mach_port_t	default_pager_host_port;
 extern task_port_t	default_pager_self;
 extern mach_port_t	default_pager_internal_set;
 extern mach_port_t	default_pager_external_set;
-extern mach_port_t	default_pager_default_port;
 extern mach_port_t	default_pager_default_set;
 #endif
 
@@ -315,6 +315,7 @@ struct backing_store_list_head {
 #endif
 };
 extern struct backing_store_list_head	backing_store_list;
+extern int	backing_store_release_trigger_disable;
 
 #ifdef MACH_KERNEL
 #define	BSL_LOCK_INIT()	mutex_init(&backing_store_list.bsl_lock, ETAP_DPAGE_BSL)
@@ -537,53 +538,80 @@ struct clmap {
 	(clm)->cl_alloc.clb_map >>= (VSCLSIZE(vs) - (clm)->cl_numpages)
 
 typedef struct vstruct_alias {
-	vm_offset_t name;
+	int *name;
 	struct vstruct *vs;
 } vstruct_alias_t;
 
+#ifdef MACH_KERNEL
+#define DPT_LOCK_INIT(lock)	mutex_init(&(lock), ETAP_DPAGE_VSTRUCT)
+#define DPT_LOCK(lock)		mutex_lock(&(lock))
+#define DPT_UNLOCK(lock)	mutex_unlock(&(lock))
+#define VS_LOCK_TYPE		hw_lock_data_t
+#define VS_LOCK_INIT(vs)	hw_lock_init(&(vs)->vs_lock)
+#define VS_TRY_LOCK(vs)		(VS_LOCK(vs),TRUE)
+#define VS_LOCK(vs)		hw_lock_lock(&(vs)->vs_lock)
+#define VS_UNLOCK(vs)		hw_lock_unlock(&(vs)->vs_lock)
+#define VS_MAP_LOCK_TYPE	mutex_t
+#define VS_MAP_LOCK_INIT(vs)	mutex_init(&(vs)->vs_map_lock, ETAP_DPAGE_VSMAP)
+#define VS_MAP_LOCK(vs)		mutex_lock(&(vs)->vs_map_lock)
+#define VS_MAP_TRY_LOCK(vs)	mutex_try(&(vs)->vs_map_lock)
+#define VS_MAP_UNLOCK(vs)	mutex_unlock(&(vs)->vs_map_lock)
+#else
+#define VS_LOCK_TYPE		struct mutex
+#define VS_LOCK_INIT(vs)	mutex_init(&(vs)->vs_lock, ETAP_DPAGE_VSTRUCT)
+#define VS_TRY_LOCK(vs)		mutex_try(&(vs)->vs_lock)
+#define VS_LOCK(vs)		mutex_lock(&(vs)->vs_lock)
+#define VS_UNLOCK(vs)		mutex_unlock(&(vs)->vs_lock)
+#define VS_MAP_LOCK_TYPE	struct mutex
+#define VS_MAP_LOCK_INIT(vs)	mutex_init(&(vs)->vs_map_lock)
+#define VS_MAP_LOCK(vs)		mutex_lock(&(vs)->vs_map_lock)
+#define VS_MAP_TRY_LOCK(vs)	mutex_try(&(vs)->vs_map_lock)
+#define VS_MAP_UNLOCK(vs)	mutex_unlock(&(vs)->vs_map_lock)
+#endif
+
+
 /*
- * VM Object Structure:  This is the structure used to manage pagers associated
- * to VM objects.Mapping between pager port and paging object.
+ * VM Object Structure:  This is the structure used to manage
+ * default pager object associations with their control counter-
+ * parts (VM objects).
  */
-
 typedef struct vstruct {
-	queue_chain_t	vs_links;	/* Link in pager-port list */
-#ifdef MACH_KERNEL
-	hw_lock_data_t	vs_lock;	/* Lock for the structure */
-#else
-	struct mutex	vs_lock;	/* Lock for the structure */
-#endif
-	MACH_PORT_FACE	vs_mem_obj_port; /* Memory object port */
-	mach_port_seqno_t vs_next_seqno; /* next sequence number to issue */
-	mach_port_seqno_t vs_seqno;	/* Pager port sequence number */
-	MACH_PORT_FACE	vs_control_port;/* Memory object's control port */
-	mach_port_urefs_t vs_control_refs; /* Mem object's control port refs */
-	MACH_PORT_FACE	vs_object_name;	/* Name port */
-	mach_port_urefs_t vs_name_refs;	/* Name port user-refs */
+	int		 	*vs_mem_obj;	/* our memory obj - temp */
+	int			vs_mem_obj_ikot;/* JMM:fake ip_kotype() */
+	memory_object_control_t vs_control;	/* our mem obj control ref */
+	VS_LOCK_TYPE		vs_lock;	/* data for the lock */
+
+	/* JMM - Could combine these first two in a single pending count now */
+	unsigned int		vs_next_seqno;	/* next sequence num to issue */
+	unsigned int		vs_seqno;	/* Pager port sequence number */
+	unsigned int		vs_readers;	/* Reads in progress */
+	unsigned int		vs_writers;	/* Writes in progress */
 
 #ifdef MACH_KERNEL
-	boolean_t vs_waiting_seqno;/* to wait on seqno */
-	boolean_t vs_waiting_read; /* to wait on readers */
-	boolean_t vs_waiting_write;/* to wait on writers */
-	boolean_t vs_waiting_refs; /* to wait on refs */
-	boolean_t vs_waiting_async;/* to wait on async_pending */
+	int
+	/* boolean_t */		vs_waiting_seqno:1,	/* to wait on seqno */
+	/* boolean_t */		vs_waiting_read:1, 	/* waiting on reader? */
+	/* boolean_t */		vs_waiting_write:1,	/* waiting on writer? */
+	/* boolean_t */		vs_waiting_async:1,	/* waiting on async? */
+	/* boolean_t */		vs_indirect:1,		/* map indirect? */
+	/* boolean_t */		vs_xfer_pending:1;	/* xfer out of seg? */
 #else
-	event_t vs_waiting_seqno;/* to wait on seqno */
-	event_t vs_waiting_read; /* to wait on readers */
-	event_t vs_waiting_write;/* to wait on writers */
-	event_t vs_waiting_refs; /* to wait on refs */
-	event_t vs_waiting_async;/* to wait on async_pending */
+	event_t			vs_waiting_seqno;/* to wait on seqno */
+	event_t			vs_waiting_read; /* to wait on readers */
+	event_t			vs_waiting_write;/* to wait on writers */
+	event_t			vs_waiting_async;/* to wait on async_pending */
+	int			vs_indirect:1,	/* Is the map indirect ? */
+				vs_xfer_pending:1; /* xfering out of a seg ? */
 #endif
-	unsigned int	vs_readers;	/* Reads in progress */
-	unsigned int	vs_writers;	/* Writes in progress */
 
-	unsigned int	vs_errors;	/* Pageout error count */
+	unsigned int		vs_async_pending;/* pending async write count */
+	unsigned int		vs_errors;	/* Pageout error count */
+	unsigned int		vs_references;	/* references */
 
-	int		vs_clshift;	/* Bit shift: clusters to pages */
-	int		vs_size;	/* Object size in clusters */
-	int		vs_indirect:1,	/* Is the map indirect ? */
-			vs_xfer_pending:1; /* xfering out of a seg ? */
-	int		vs_async_pending; /* Count of pending async writes */
+	queue_chain_t		vs_links;	/* Link in pager-wide list */
+
+	int			vs_clshift;	/* Bit shift: clusters->pages */
+	int			vs_size;	/* Object size in clusters */
 #ifdef MACH_KERNEL
 	mutex_t		vs_map_lock;	/* to protect map below */
 #else
@@ -597,37 +625,31 @@ typedef struct vstruct {
 
 #define vs_dmap vs_un.vsu_dmap
 #define vs_imap vs_un.vsu_imap
-#define MEM_OBJ_CTL(vs)	((vs)->vs_control_port)
 
 #define VSTRUCT_NULL	((vstruct_t) 0)
 
-#ifdef MACH_KERNEL
-#define DPT_LOCK_INIT(lock)	mutex_init(&(lock), ETAP_DPAGE_VSTRUCT)
-#define DPT_LOCK(lock)		mutex_lock(&(lock))
-#define DPT_UNLOCK(lock)	mutex_unlock(&(lock))
-#define VS_LOCK_INIT(vs)	hw_lock_init(&(vs)->vs_lock)
-#define VS_TRY_LOCK(vs)		(VS_LOCK(vs),TRUE)
-#define VS_LOCK(vs)		hw_lock_lock(&(vs)->vs_lock)
-#define VS_UNLOCK(vs)		hw_lock_unlock(&(vs)->vs_lock)
-#else
-#define VS_LOCK_INIT(vs)	mutex_init(&(vs)->vs_lock, ETAP_DPAGE_VSTRUCT)
-#define VS_TRY_LOCK(vs)		mutex_try_lock(&(vs)->vs_lock)
-#define VS_LOCK(vs)		mutex_lock(&(vs)->vs_lock)
-#define VS_UNLOCK(vs)		mutex_unlock(&(vs)->vs_lock)
-#endif
+__private_extern__ void vs_async_wait(vstruct_t);
 
-#ifdef MACH_KERNEL
-#define VS_MAP_LOCK_INIT(vs)	mutex_init(&(vs)->vs_map_lock, ETAP_DPAGE_VSMAP)
-#else
-#define VS_MAP_LOCK_INIT(vs)	mutex_init(&(vs)->vs_map_lock)
-#endif
-#define VS_MAP_LOCK(vs)		mutex_lock(&(vs)->vs_map_lock)
-#ifndef MACH_KERNEL
-#define VS_MAP_TRY_LOCK(vs)	mutex_try_lock(&(vs)->vs_map_lock)
-#else
-#define VS_MAP_TRY_LOCK(vs)	mutex_try(&(vs)->vs_map_lock)
-#endif
-#define VS_MAP_UNLOCK(vs)	mutex_unlock(&(vs)->vs_map_lock)
+#if PARALLEL
+__private_extern__ void vs_lock(vstruct_t);
+__private_extern__ void vs_unlock(vstruct_t);
+__private_extern__ void vs_start_read(vstruct_t);
+__private_extern__ void vs_finish_read(vstruct_t);
+__private_extern__ void vs_wait_for_readers(vstruct_t);
+__private_extern__ void vs_start_write(vstruct_t);
+__private_extern__ void vs_finish_write(vstruct_t);
+__private_extern__ void vs_wait_for_writers(vstruct_t);
+#else	/* PARALLEL */
+#define	vs_lock(vs)
+#define	vs_unlock(vs)
+#define	vs_start_read(vs)
+#define	vs_wait_for_readers(vs)
+#define	vs_finish_read(vs)
+#define	vs_start_write(vs)
+#define	vs_wait_for_writers(vs)
+#define	vs_wait_for_sync_writers(vs)
+#define	vs_finish_write(vs)
+#endif /* PARALLEL */
 
 /*
  * Data structures and variables dealing with asynchronous
@@ -673,9 +695,13 @@ struct vstruct_list_head {
 	struct mutex	vsl_lock;
 #endif
 	int		vsl_count;	/* saves code */
-	queue_head_t	vsl_leak_queue;
 };
-extern struct vstruct_list_head	vstruct_list;
+
+__private_extern__ struct vstruct_list_head	vstruct_list;
+
+__private_extern__ void vstruct_list_insert(vstruct_t vs);
+__private_extern__ void vstruct_list_delete(vstruct_t vs);
+
 
 #ifdef MACH_KERNEL
 #define VSL_LOCK_INIT()	mutex_init(&vstruct_list.vsl_lock, ETAP_DPAGE_VSLIST)
@@ -686,6 +712,10 @@ extern struct vstruct_list_head	vstruct_list;
 #define VSL_LOCK_TRY()	mutex_try(&vstruct_list.vsl_lock)
 #define VSL_UNLOCK()	mutex_unlock(&vstruct_list.vsl_lock)
 
+#ifdef MACH_KERNEL
+__private_extern__ zone_t	vstruct_zone;
+#endif
+
 /*
  * Create port alias for vstruct address.
  *
@@ -694,21 +724,28 @@ extern struct vstruct_list_head	vstruct_list;
  * check.
  */
 #ifdef MACH_KERNEL
-#define ISVS 123456
-#define port_is_vs(_port_)						\
-	((((struct vstruct_alias *)((_port_)->alias)) != NULL) &&	\
-		(((struct vstruct_alias *)(_port_)->alias)->name==ISVS))
-#define port_to_vs(_port_)						\
-	((struct vstruct_alias *)(_port_)->alias)->vs
-#define vs_to_port(_vs_) (_vs_->vs_mem_obj_port)
-#define vs_lookup(_port_, _vs_)						\
+
+#define ISVS ((int *)123456)
+#define mem_obj_is_vs(_mem_obj_)					\
+	(((_mem_obj_) != NULL) && ((_mem_obj_)->pager == ISVS))
+#define mem_obj_to_vs(_mem_obj_)					\
+	((vstruct_t)(_mem_obj_))
+#define vs_to_mem_obj(_vs_) ((memory_object_t)(_vs_))
+#define vs_lookup(_mem_obj_, _vs_)					\
 	do {								\
-	if ((((struct vstruct_alias *)(_port_)->alias) == NULL) || 	\
-		(((struct vstruct_alias *)(_port_)->alias)->name!=ISVS)) \
-		panic("bad pager port");				\
-	_vs_ = port_to_vs(_port_);					\
+	if (!mem_obj_is_vs(_mem_obj_))					\
+		panic("bad dp memory object");				\
+	_vs_ = mem_obj_to_vs(_mem_obj_);				\
+	} while (0)
+#define vs_lookup_safe(_mem_obj_, _vs_)					\
+	do {								\
+	if (!mem_obj_is_vs(_mem_obj_))					\
+		_vs_ = VSTRUCT_NULL;					\
+	else								\
+		_vs_ = mem_obj_to_vs(_mem_obj_);			\
 	} while (0)
 #else
+
 #define	vs_to_port(_vs_)	(((vm_offset_t)(_vs_))+1)
 #define	port_to_vs(_port_)	((vstruct_t)(((vm_offset_t)(_port_))&~3))
 #define port_is_vs(_port_)	((((vm_offset_t)(_port_))&3) == 1)
@@ -716,7 +753,7 @@ extern struct vstruct_list_head	vstruct_list;
 #define vs_lookup(_port_, _vs_)						\
 	do {								\
 		if (!MACH_PORT_VALID(_port_) || !port_is_vs(_port_)	\
-		    || port_to_vs(_port_)->vs_mem_obj_port != (_port_))	\
+		    || port_to_vs(_port_)->vs_mem_obj != (_port_))	\
 			Panic("bad pager port");			\
 		_vs_ = port_to_vs(_port_);				\
 	} while (0)
@@ -731,14 +768,14 @@ extern int		dp_thread_id(void);
 extern boolean_t	device_reply_server(mach_msg_header_t *,
 					    mach_msg_header_t *);
 #ifdef MACH_KERNEL
-extern void		default_pager_no_senders(MACH_PORT_FACE,
-						 mach_port_seqno_t,
+extern boolean_t	default_pager_no_senders(memory_object_t,
 						 mach_port_mscount_t);
 #else
 extern void		default_pager_no_senders(memory_object_t,
 						 mach_port_seqno_t,
 						 mach_port_mscount_t);
 #endif
+
 extern int		local_log2(unsigned int);
 extern void		bs_initialize(void);
 extern void		bs_global_info(vm_size_t *,

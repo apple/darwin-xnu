@@ -57,21 +57,34 @@
 #ifndef _SYS_SELECT_H_
 #define	_SYS_SELECT_H_
 
+#ifdef KERNEL
+__BEGIN_DECLS
+#include <kern/wait_queue.h>
+__END_DECLS
+#endif
+
 /*
  * Used to maintain information about processes that wish to be
  * notified when I/O becomes possible.
  */
 struct selinfo {
-	void		*si_thread;	/* thread to be notified */
-	short		si_flags;	/* see below */
+#ifdef KERNEL
+	struct  wait_queue  wait_queue;	 /* wait_queue for wait/wakeup */
+#else
+	char  wait_queue[16];
+#endif
+	u_int	si_flags;	/* see below */
 };
+
 #define	SI_COLL		0x0001		/* collision occurred */
-#define	SI_SBSEL	0x0002		/* select socket buffer wanted  replaces SB_SEL */ 
+#define	SI_RECORDED	0x0004		/* select has been recorded */ 
+#define	SI_INITED	0x0008		/* selinfo has been inited */ 
+#define	SI_CLEAR	0x0010		/* selinfo has been cleared */ 
 
 #ifdef KERNEL
 struct proc;
 
-void	selrecord __P((struct proc *selector, struct selinfo *));
+void	selrecord __P((struct proc *selector, struct selinfo *, void *));
 void	selwakeup __P((struct selinfo *));
 void	selthreadclear __P((struct selinfo *));
 #endif

@@ -285,6 +285,9 @@ lo_output(ifp, m)
          */
 	m->m_pkthdr.header = mtod(m, char *);
         m->m_pkthdr.aux = ifp; /* HACKERY */
+        m->m_pkthdr.csum_data = 0xffff; /* loopback checksums are always OK */
+        m->m_pkthdr.csum_flags = CSUM_DATA_VALID | CSUM_PSEUDO_HDR | 
+                               CSUM_IP_CHECKED | CSUM_IP_VALID;
 	return dlil_input(ifp, m, m);
 }
 
@@ -605,6 +608,7 @@ loopattach(dummy)
 		ifp->if_set_bpf_tap = lo_set_bpf_tap;
 		ifp->if_output = lo_output;
 		ifp->if_type = IFT_LOOP;
+		ifp->if_hwassist = 0; /* HW cksum on send side breaks Classic loopback */
 		dlil_if_attach(ifp);
 #if NBPFILTER > 0
 		bpfattach(ifp, DLT_NULL, sizeof(u_int));

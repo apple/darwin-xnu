@@ -666,6 +666,7 @@ ufs_select(ap)
 		int  a_which;
 		int  a_fflags;
 		struct ucred *a_cred;
+		void *a_wql;
 		struct proc *a_p;
 	} */ *ap;
 {
@@ -744,17 +745,13 @@ ufs_remove(ap)
 		ip->i_flag |= IN_CHANGE;
 	}
 
-	if (dvp == vp)
-		vrele(vp);
-	else
-		vput(vp);
-	vput(dvp);
+	if (dvp != vp)
+		VOP_UNLOCK(vp, 0, ap->a_cnp->cn_proc);
 
-	if (UBCINFOEXISTS(vp)) {
-		(void) ubc_uncache(vp); 
-		ubc_release(vp);
-		/* WARNING vp may not be valid after this */
-	}
+	(void) ubc_uncache(vp); 
+
+	vrele(vp);
+	vput(dvp);
 
 	return (error);
 

@@ -41,15 +41,12 @@
 #include <kern/misc_protos.h>
 #include <kern/lock.h>
 #include <kern/host.h>
-#include <kern/processor.h>
-#include <kern/sched.h>
 #include <kern/spl.h>
 #include <kern/thread.h>
 #include <kern/thread_swap.h>
 #include <kern/ipc_host.h>
 #include <kern/clock.h>
 #include <kern/zalloc.h>
-#include <kern/sf.h>
 #include <ipc/ipc_port.h>
 
 #include <mach/mach_syscalls.h>
@@ -794,24 +791,22 @@ clock_set_calendar_value(
 
 void
 clock_deadline_for_periodic_event(
-	AbsoluteTime		interval,
-	AbsoluteTime		abstime,
-	AbsoluteTime		*deadline)
+	uint64_t			interval,
+	uint64_t			abstime,
+	uint64_t			*deadline)
 {
-	assert(AbsoluteTime_to_scalar(&interval) != 0);
+	assert(interval != 0);
 
-	ADD_ABSOLUTETIME(deadline, &interval);
+	*deadline += interval;
 
-	if (	AbsoluteTime_to_scalar(deadline)	<=
-			AbsoluteTime_to_scalar(&abstime)		) {
+	if (*deadline <= abstime) {
 		*deadline = abstime;
 		clock_get_uptime(&abstime);
-		ADD_ABSOLUTETIME(deadline, &interval);
+		*deadline += interval;
 
-		if (	AbsoluteTime_to_scalar(deadline)	<=
-				AbsoluteTime_to_scalar(&abstime)		) {
+		if (*deadline <= abstime) {
 			*deadline = abstime;
-			ADD_ABSOLUTETIME(deadline, &interval);
+			*deadline += interval;
 		}
 	}
 }
@@ -858,7 +853,7 @@ mach_wait_until(
 	int				wait_result;
 
 	assert_wait((event_t)&mach_wait_until, THREAD_ABORTSAFE);
-	thread_set_timer_deadline(scalar_to_AbsoluteTime(&deadline));
+	thread_set_timer_deadline(deadline);
 	wait_result = thread_block((void (*)) 0);
 	if (wait_result != THREAD_TIMED_OUT)
 		thread_cancel_timer();

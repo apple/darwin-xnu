@@ -60,7 +60,8 @@ unsigned long		newStateNumber;
 IOPMPowerFlags		outputPowerCharacter;
 IOPMPowerFlags		inputPowerRequirement;
 IOPMPowerFlags		domainState;
-IOPowerConnection *		parent;
+IOPowerConnection *	parent;
+IOPMPowerFlags		singleParentState;
 IOPMPowerFlags		capabilityFlags;
 };
 

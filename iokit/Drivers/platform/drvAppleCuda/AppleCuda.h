@@ -77,6 +77,8 @@
  * Port to C++
  */
 
+#ifndef APPLECUDA_H
+#define APPLECUDA_H
 
 #include <mach/mach_types.h>
 
@@ -90,6 +92,7 @@ extern "C" {
 #include "AppleCudaHW.h"
 #include <IOKit/adb/adb.h>
 #include <IOKit/pwr_mgt/RootDomain.h>
+#include <IOKit/IOTimerEventSource.h>
 
 //
 //  CudaInterruptState - internal to CudaCore.c
@@ -138,6 +141,8 @@ IOService *			ADBid;
 IOCudaADBController *		ourADBinterface;
 ADB_callback_func		autopoll_handler;
 UInt8                           _cuda_power_state;
+IOTimerEventSource *		timerSrc;
+bool				_wakeup_from_sleep;
 // callPlatformFunction symbols
 const OSSymbol 	*cuda_check_any_interrupt;
 
@@ -148,6 +153,7 @@ const OSSymbol 	*cuda_check_any_interrupt;
 
 unsigned char			cuda_autopoll_buffers[ NUM_AP_BUFFERS ]
 						     [ MAX_AP_RESPONSE ];
+static void WakeupTimeoutHandler(OSObject *object, IOTimerEventSource *timer);
 
 protected:
 
@@ -181,10 +187,21 @@ void registerForADBInterrupts ( ADB_callback_func handler, IOService * caller );
 IOReturn doSyncRequest ( cuda_request_t * request );
 IOReturn powerStateWillChangeTo ( IOPMPowerFlags, unsigned long, IOService*);
 IOReturn powerStateDidChangeTo ( IOPMPowerFlags, unsigned long, IOService*);
+void setWakeTime(UInt32 waketime);
+void setPowerOnTime(UInt32 newTime);
+void setFileServerMode(bool fileServerModeON);
+void demandSleepNow(void);
+IOReturn newUserClient(task_t owningTask, void*,     // Security id (?!)
+			    UInt32        type,     // Magic number
+			    IOUserClient  **handler);
+
 virtual IOReturn callPlatformFunction(const OSSymbol *functionName,
 					bool waitForFunction,
                                         void *param1, void *param2,
                                         void *param3, void *param4);
 
 };
+
+#endif /* APPLECUDA_H */
+
 

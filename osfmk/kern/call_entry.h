@@ -48,7 +48,7 @@ typedef struct call_entry {
     call_entry_func_t	func;
     call_entry_param_t	param0;
     call_entry_param_t	param1;
-    AbsoluteTime		deadline;
+    uint64_t			deadline;
     enum {
 	  IDLE,
 	  PENDING,

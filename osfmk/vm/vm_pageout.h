@@ -65,6 +65,11 @@
 #include <vm/vm_object.h>
 #include <vm/vm_page.h>
 
+
+
+
+extern unsigned int	vm_pageout_scan_event_counter;
+
 /*
  *	The following ifdef only exists because XMM must (currently)
  *	be given a page at a time.  This should be removed
@@ -148,6 +153,10 @@ struct upl {
 #define UPL_INTERNAL		0x10
 #define UPL_PAGE_SYNC_DONE	0x20
 #define UPL_DEVICE_MEMORY	0x40
+#define UPL_PAGEOUT		0x80
+
+#define	UPL_PAGE_TICKET_MASK	0xF00
+#define UPL_PAGE_TICKET_SHIFT	8
 
 
 

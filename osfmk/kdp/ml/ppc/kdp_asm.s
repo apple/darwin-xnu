@@ -51,7 +51,7 @@ ENTRY(kdp_call_with_ctx, TAG_NO_FRAME_USED)
 
 #ifdef	LET_KDP_REENTER
 	mr	r9,	r1 			/* get current stack pointer */
-	subi	r9,	r9,	FM_REDZONE + SS_SIZE
+	subi	r9,	r9,	FM_REDZONE + FM_SIZE
 #else
 	bl	EXT(kdp_print_backtrace)
 #endif

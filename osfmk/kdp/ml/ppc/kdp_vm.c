@@ -45,7 +45,7 @@ unsigned kdp_vm_read( caddr_t, caddr_t, unsigned);
 unsigned kdp_vm_write( caddr_t, caddr_t, unsigned);
 
 extern vm_offset_t kvtophys(vm_offset_t);
-
+extern vm_offset_t mem_actual;
 
 /*
  *
@@ -57,7 +57,7 @@ vm_offset_t kdp_vtophys(
 	register mapping                *mp;
 	register vm_offset_t    pa;
 
-	pa = LRA(pmap->space,(void *)va);
+	pa = (vm_offset_t)LRA(pmap->space,(void *)va);
 
 	if (pa != 0)            
 		return(pa);     
@@ -113,9 +113,10 @@ unsigned kdp_vm_read(
     kprintf("kdp_vm_read1: src %x dst %x len %x - %08X %08X\n", src, dst, len, ((unsigned long *)src)[0], ((unsigned long *)src)[1]);
 #endif
 	if (kdp_trans_off) {
-		cur_virt_src = (vm_offset_t) ((int)src & 0x0fffffff);
-        	cur_virt_dst = (vm_offset_t)dst;
-        	resid = len;
+		cur_virt_src = (vm_offset_t)src;
+		if((vm_offset_t)src >= mem_actual) return 0;	/* Can't read where there's not any memory */
+		cur_virt_dst = (vm_offset_t)dst;
+		resid = (mem_actual - (vm_offset_t)src) > len ? len : (mem_actual - (vm_offset_t)src);
 
 		while (resid != 0) {
 			cur_phys_src = cur_virt_src;

@@ -202,7 +202,7 @@ define showactint
 	    	while ($mysp != 0) && (($mysp & 0xf) == 0) && ($mysp < 0xb0000000) && ($mysp > $prevsp)
 				printf "\n\t\t0x%08x  ", $mysp
 				set $kgm_return = *($mysp + 8)
-				if ($kgm_return > end)
+				if (($kgm_return > end) && ($kgm_return < 0x40000000))
 				    showkmodaddr $kgm_return
 				else
 				    output /a * ($mysp + 8)

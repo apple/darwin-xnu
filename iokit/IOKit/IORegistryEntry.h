@@ -75,12 +75,74 @@ private:
     OSDictionary *	fRegistryTable;
     OSDictionary *	fPropertyTable;
 
+public:
+    /* methods available in Mac OS X 10.1 or later */
+
+/*! @function copyProperty
+    @abstract Synchronized method to obtain a property from a registry entry or one of its parents (or children) in the hierarchy. Available in Mac OS X 10.1 or later.
+    @discussion This method will search for a property, starting first with this registry entry's property table, then iterating recusively through either the parent registry entries or the child registry entries of this entry. Once the first occurrence is found, it will lookup and return the value of the property, using the OSDictionary::getObject semantics. The iteration keeps track of entries that have been recursed into previously to avoid loops. This method is synchronized with other IORegistryEntry accesses to the property table(s).
+    @param aKey The property's name as a C-string.
+    @param plane The plane to iterate over, eg. gIOServicePlane.
+    @param options kIORegistryIterateRecursively may be set to recurse automatically into the registry hierarchy. Without this option, this method degenerates into the standard getProperty() call. kIORegistryIterateParents may be set to iterate the parents of the entry, in place of the children.
+    @result The property value found, or zero. A reference on any found property is returned to caller, which should be released. */
+
+    virtual OSObject * copyProperty( const char *           aKey,
+                                     const IORegistryPlane * plane,
+                                     IOOptionBits            options =
+                                        kIORegistryIterateRecursively |
+                                        kIORegistryIterateParents) const;
+/*! @function copyProperty
+    @abstract Synchronized method to obtain a property from a registry entry or one of its parents (or children) in the hierarchy. Available in Mac OS X 10.1 or later.
+    @discussion This method will search for a property, starting first with this registry entry's property table, then iterating recusively through either the parent registry entries or the child registry entries of this entry. Once the first occurrence is found, it will lookup and return the value of the property, using the OSDictionary::getObject semantics. The iteration keeps track of entries that have been recursed into previously to avoid loops. This method is synchronized with other IORegistryEntry accesses to the property table(s).
+    @param aKey The property's name as an OSString.
+    @param plane The plane to iterate over, eg. gIOServicePlane.
+    @param options kIORegistryIterateRecursively may be set to recurse automatically into the registry hierarchy. Without this option, this method degenerates into the standard getProperty() call. kIORegistryIterateParents may be set to iterate the parents of the entry, in place of the children.
+    @result The property value found, or zero. A reference on any found property is returned to caller, which should be released. */
+
+    virtual OSObject * copyProperty( const OSString *        aKey,
+                                     const IORegistryPlane * plane,
+                                     IOOptionBits            options =
+                                        kIORegistryIterateRecursively |
+                                        kIORegistryIterateParents) const;
+
+/*! @function copyProperty
+    @abstract Synchronized method to obtain a property from a registry entry or one of its parents (or children) in the hierarchy. Available in Mac OS X 10.1 or later.
+    @discussion This method will search for a property, starting first with this registry entry's property table, then iterating recusively through either the parent registry entries or the child registry entries of this entry. Once the first occurrence is found, it will lookup and return the value of the property, using the OSDictionary::getObject semantics. The iteration keeps track of entries that have been recursed into previously to avoid loops. This method is synchronized with other IORegistryEntry accesses to the property table(s).
+    @param aKey The property's name as an OSSymbol.
+    @param plane The plane to iterate over, eg. gIOServicePlane.
+    @param options kIORegistryIterateRecursively may be set to recurse automatically into the registry hierarchy. Without this option, this method degenerates into the standard getProperty() call. kIORegistryIterateParents may be set to iterate the parents of the entry, in place of the children.
+    @result The property value found, or zero. A reference on any found property is returned to caller, which should be released. */
+
+    virtual OSObject * copyProperty( const OSSymbol *        aKey,
+                                     const IORegistryPlane * plane,
+                                     IOOptionBits            options =
+                                        kIORegistryIterateRecursively |
+                                        kIORegistryIterateParents) const;
+
+/*! @function copyParentEntry
+    @abstract Returns an registry entry's first parent entry in a plane. Available in Mac OS X 10.1 or later.
+    @discussion This function will return the parent to which a registry entry was first attached. Since the majority of registry entrys have only one provider, this is a useful simplification.
+    @param plane The plane object.
+    @result Returns the first parent of the registry entry, or zero if the entry is not attached into the registry in that plane. A reference on the entry is returned to caller, which should be released. */
+
+    virtual IORegistryEntry * copyParentEntry( const IORegistryPlane * plane ) const;
+
+/*! @function copyChildEntry
+    @abstract Returns an registry entry's first child entry in a plane. Available in Mac OS X 10.1 or later.
+    @discussion This function will return the child which first attached to a registry entry.
+    @param plane The plane object.
+    @result Returns the first child of the registry entry, or zero if the entry is not attached into the registry in that plane. A reference on the entry is returned to caller, which should be released. */
+
+    virtual IORegistryEntry * copyChildEntry( const IORegistryPlane * plane ) const;
+
 private:
-    OSMetaClassDeclareReservedUnused(IORegistryEntry, 0);
-    OSMetaClassDeclareReservedUnused(IORegistryEntry, 1);
-    OSMetaClassDeclareReservedUnused(IORegistryEntry, 2);
-    OSMetaClassDeclareReservedUnused(IORegistryEntry, 3);
-    OSMetaClassDeclareReservedUnused(IORegistryEntry, 4);
+
+    OSMetaClassDeclareReservedUsed(IORegistryEntry, 0);
+    OSMetaClassDeclareReservedUsed(IORegistryEntry, 1);
+    OSMetaClassDeclareReservedUsed(IORegistryEntry, 2);
+    OSMetaClassDeclareReservedUsed(IORegistryEntry, 3);
+    OSMetaClassDeclareReservedUsed(IORegistryEntry, 4);
+
     OSMetaClassDeclareReservedUnused(IORegistryEntry, 5);
     OSMetaClassDeclareReservedUnused(IORegistryEntry, 6);
     OSMetaClassDeclareReservedUnused(IORegistryEntry, 7);
@@ -394,8 +456,7 @@ public:
     @param plane The plane object.
     @result Returns the first parent of the registry entry, or zero if the entry is not attached into the registry in that plane. The parent is retained while the entry is attached, and should not be released by the caller. */
 
-    virtual IORegistryEntry * getParentEntry( const IORegistryPlane * plane )
-									const;
+    virtual IORegistryEntry * getParentEntry( const IORegistryPlane * plane ) const;
 
 /*! @function getChildIterator
     @abstract Returns an iterator over an registry entry's child entries in a plane.
@@ -416,8 +477,7 @@ public:
     @param plane The plane object.
     @result Returns the first child of the registry entry, or zero if the entry is not attached into the registry in that plane. The child is retained while the entry is attached, and should not be released by the caller. */
 
-    virtual IORegistryEntry * getChildEntry( const IORegistryPlane * plane )
-									const;
+    virtual IORegistryEntry * getChildEntry( const IORegistryPlane * plane ) const;
 
 /*! @function isChild
     @abstract Determines whether a registry entry is the child of another in a plane.

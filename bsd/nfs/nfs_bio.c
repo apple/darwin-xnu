@@ -553,8 +553,11 @@ again:
 			return (error);
 		}
 		if (bp->b_wcred == NOCRED) {
-			crhold(cred);
-			bp->b_wcred = cred;
+            /*
+             * NFS has embedded ucred.
+             * Can not crhold() here as that causes zone corruption
+             */
+			bp->b_wcred = crdup(cred);
 		}
 		np->n_flag |= NMODIFIED;
 
@@ -660,8 +663,11 @@ nfs_getwriteblk(vp, bn, size, p, cred, off, len)
 	if (!bp)
 		return (NULL);
 	if (bp->b_wcred == NOCRED) {
-		crhold(cred);
-		bp->b_wcred = cred;
+		/*
+		 * NFS has embedded ucred.
+		 * Can not crhold() here as that causes zone corruption
+		 */
+		bp->b_wcred = crdup(cred);
 	}
 
 	if ((bp->b_blkno * DEV_BSIZE) + bp->b_dirtyend > np->n_size) {
@@ -745,13 +751,22 @@ nfs_getwriteblk(vp, bn, size, p, cred, off, len)
 			error = nfs_readrpc(vp, &uio, cred);
 			if (error) {
 				/*
-				 * If we couldn't read, fall back to writing
-				 * out the old dirty region.
-				 */
-				bp->b_proc = p;
-				if (VOP_BWRITE(bp) == EINTR)
-					return (NULL);
-				goto again;
+				 * If we couldn't read, do not do a VOP_BWRITE
+                                 * as originally coded. That, could also error
+                                 * and looping back to "again" as it was doing
+                                 * could have us stuck trying to write same buffer
+                                 * again. nfs_write, will get the entire region
+                                 * if nfs_readrpc was successful. If not successful
+                                 * we should just error out. Errors like ESTALE
+                                 * would keep us in this loop rather than transient
+                                 * errors justifying a retry. We can return from here
+                                 * instead of altering dirty region later in routine.
+                                 * We did not write out old dirty region at this point.
+                                 */
+                                bp->b_error = error;
+                                SET(bp->b_flags, B_ERROR);
+                                printf("nfs_getwriteblk: readrpc (2) returned %d", error);
+                                return bp; 
 			} else {
 				/*
 				 * The read worked.
@@ -835,6 +850,7 @@ nfs_vinvalbuf(vp, flags, cred, p, intrflg)
 	register struct nfsnode *np = VTONFS(vp);
 	struct nfsmount *nmp = VFSTONFS(vp->v_mount);
 	int error = 0, slpflag, slptimeo;
+	int didhold = 0;
 
 	if ((nmp->nm_flag & NFSMNT_INT) == 0)
 		intrflg = 0;
@@ -862,7 +878,16 @@ nfs_vinvalbuf(vp, flags, cred, p, intrflg)
 	np->n_flag |= NFLUSHINPROG;
 	error = vinvalbuf(vp, flags, cred, p, slpflag, 0);
 	while (error) {
-		if (intrflg && nfs_sigintr(nmp, (struct nfsreq *)0, p)) {
+		/* we seem to be stuck in a loop here if the thread got aborted.
+		 * nfs_flush will return EINTR. Not sure if that will cause
+		 * other consequences due to EINTR having other meanings in NFS
+		 * To handle, no dirty pages, it seems safe to just return from
+		 * here. But if we did have dirty pages, how would we get them
+		 * written out if thread was aborted? Some other strategy is
+		 * necessary. -- EKN
+		 */
+		if ((intrflg && nfs_sigintr(nmp, (struct nfsreq *)0, p)) ||
+				((error == EINTR) && current_thread_aborted())) {
 			np->n_flag &= ~NFLUSHINPROG;
 			if (np->n_flag & NFLUSHWANT) {
 				np->n_flag &= ~NFLUSHWANT;
@@ -877,7 +902,11 @@ nfs_vinvalbuf(vp, flags, cred, p, intrflg)
 		np->n_flag &= ~NFLUSHWANT;
 		wakeup((caddr_t)&np->n_flag);
 	}
-	(void) ubc_clean(vp, 1); /* get the pages out of vm also */
+	didhold = ubc_hold(vp);
+	if (didhold) {
+	  (void) ubc_clean(vp, 1); /* get the pages out of vm also */
+		ubc_rele(vp);
+	}
 	return (0);
 }
 
@@ -975,14 +1004,20 @@ again:
 
 		if (ISSET(bp->b_flags, B_READ)) {
 			if (bp->b_rcred == NOCRED && cred != NOCRED) {
-				crhold(cred);
-				bp->b_rcred = cred;
+				/*
+				 * NFS has embedded ucred.
+				 * Can not crhold() here as that causes zone corruption
+				 */
+				bp->b_rcred = crdup(cred);
 			}
 		} else {
 			SET(bp->b_flags, B_WRITEINPROG);
 			if (bp->b_wcred == NOCRED && cred != NOCRED) {
-				crhold(cred);
-				bp->b_wcred = cred;
+				/*
+				 * NFS has embedded ucred.
+				 * Can not crhold() here as that causes zone corruption
+				 */
+				bp->b_wcred = crdup(cred);
 			}
 		}
 

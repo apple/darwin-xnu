@@ -85,8 +85,8 @@ typedef natural_t	ipc_kobject_type_t;
 #define	IKOT_PSET_NAME			7
 #define	IKOT_TIMER				8
 #define	IKOT_PAGING_REQUEST		9
-#define	IKOT_DEVICE				10
-#define	IKOT_XMM_OBJECT			11
+#define	IKOT_MIG				10
+#define	IKOT_MEMORY_OBJECT		11
 #define	IKOT_XMM_PAGER			12
 #define	IKOT_XMM_KERNEL			13
 #define	IKOT_XMM_REPLY			14
@@ -119,11 +119,6 @@ typedef natural_t	ipc_kobject_type_t;
  *	Define types of kernel objects that use page lists instead
  *	of entry lists for copyin of out of line memory.
  */
-
-#define ipc_kobject_vm_page_list(ikot) 			\
-	((ikot) == IKOT_PAGING_REQUEST || (ikot) == IKOT_DEVICE)
-
-#define ipc_kobject_vm_page_steal(ikot)	((ikot) == IKOT_PAGING_REQUEST)
 
 /* Initialize kernel server dispatch table */
 extern void		mig_init(void);

@@ -29,6 +29,7 @@
 #include <sys/systm.h>
 #include <sys/conf.h>
 #include <sys/buf.h>	/* for SET */
+#include <sys/user.h>
 
 /* Just to satisfy pstat command */
 int     dmmin, dmmax, dmtext;
@@ -53,9 +54,25 @@ struct proc *
 current_proc(void)
 {
 	/* Never returns a NULL */
-	struct proc *p = (struct proc *)get_bsdtask_info(current_task());
+	struct uthread * ut;
+	struct proc *p; 
+	thread_act_t thr_act = current_act();
+
+	ut = (struct uthread *)get_bsdthread_info(thr_act); 
+	if (ut &&  (ut->uu_flag & P_VFORK) && ut->uu_proc) {
+		p = ut->uu_proc;
+		if ((p->p_flag & P_INVFORK) == 0) 
+			panic("returning child proc not under vfork");
+		if (p->p_vforkact != (void *)thr_act) 
+			panic("returning child proc which is not cur_act");
+		return(p);
+	}
+
+	p = (struct proc *)get_bsdtask_info(current_task());
+
 	if (p == NULL)
-		p = kernproc;
+		return (kernproc);
+
 	return (p);
 }
 
@@ -221,16 +238,6 @@ cdevsw_remove(int index, struct cdevsw * csw)
 	return(index);
 }
 
-int
-memcmp(s1, s2, n)
-	register char *s1, *s2;
-	register n;
-{
-	while (--n >= 0)
-		if (*s1++ != *s2++)
-			return (*--s1 - *--s2);
-	return (0);
-}
 int
 issingleuser(void)
 {

@@ -421,8 +421,8 @@ void IOSCSIParallelCommand::zeroCommand()
     senseData = 0;
     origCommand = 0;
     bzero(&completionInfo, sizeof(completionInfo));
-    if (dataArea && dataSize)
-        bzero( dataArea, dataSize );
+//    if (dataArea && dataSize)
+//        bzero( dataArea, dataSize );
 //  commandPrivateData = <same-as-before>;
 //  clientData = <same-as-before>;
     sequenceNumber = 0;

@@ -133,7 +133,7 @@ event source is currently disabled, kIOReturnNoResources if no action available.
     @discussion Client function that causes the given action to be called in
 a single threaded manner.  Beware the work-loop's gate is recursive and command
 gates can cause direct or indirect re-entrancy.	 When the executing on a
-client's thread runCommand will sleep until the work-loop's gate opens for
+client's thread runAction will sleep until the work-loop's gate opens for
 execution of client actions, the action is single threaded against all other
 work-loop event sources.
     @param action Pointer to function to be executed in work-loop context.

@@ -313,8 +313,8 @@ int	 ttioctl __P((struct tty *tp, u_long com, caddr_t data, int flag,
 #endif
 int	 ttread __P((struct tty *tp, struct uio *uio, int flag));
 void	 ttrstrt __P((void *tp));
-int	 ttyselect __P((struct tty *tp, int rw, struct proc *p));
-int	 ttselect __P((dev_t dev, int rw, struct proc *p));
+int	 ttyselect __P((struct tty *tp, int rw, void * wql, struct proc *p));
+int	 ttselect __P((dev_t dev, int rw, void * wql, struct proc *p));
 void	 ttsetwater __P((struct tty *tp));
 int	 ttspeedtab __P((int speed, struct speedtab *table));
 int	 ttstart __P((struct tty *tp));

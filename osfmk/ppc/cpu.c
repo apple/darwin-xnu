@@ -59,7 +59,7 @@ struct SIGtimebase {
 	boolean_t	avail;
 	boolean_t	ready;
 	boolean_t	done;
-	AbsoluteTime	abstime;
+	uint64_t	abstime;
 };
 
 extern struct SIGtimebase syncClkSpot;
@@ -390,18 +390,23 @@ void
 cpu_machine_init(
 	void)
 {
-	struct per_proc_info	*proc_info;
+	struct per_proc_info	*tproc_info;
+	volatile struct per_proc_info	*mproc_info;
 	int cpu;
 
 	/* TODO: realese mutex lock reset_handler_lock */
 
 	cpu = cpu_number();
-	proc_info = &per_proc_info[cpu];
-	PE_cpu_machine_init(proc_info->cpu_id, !(proc_info->cpu_flags & BootDone));
-	if (cpu != master_cpu)
+	tproc_info = &per_proc_info[cpu];
+	mproc_info = &per_proc_info[master_cpu];
+	PE_cpu_machine_init(tproc_info->cpu_id, !(tproc_info->cpu_flags & BootDone));
+	if (cpu != master_cpu) {
+		while (!((mproc_info->cpu_flags) & SignalReady))
+			continue;
 		cpu_sync_timebase();
+	}
 	ml_init_interrupt();
-	proc_info->cpu_flags |= BootDone;
+	tproc_info->cpu_flags |= BootDone|SignalReady;
 }
 
 kern_return_t
@@ -447,7 +452,7 @@ cpu_start(
 	if (cpu == cpu_number()) {
  	  PE_cpu_machine_init(proc_info->cpu_id, !(proc_info->cpu_flags & BootDone));
 	  ml_init_interrupt();
-	  proc_info->cpu_flags |= BootDone;
+	  proc_info->cpu_flags |= BootDone|SignalReady;
 
 	  return KERN_SUCCESS;
 	} else {
@@ -461,8 +466,7 @@ cpu_start(
 		proc_info->debstackptr = (vm_offset_t)&debstack + (KERNEL_STACK_SIZE*(cpu+1)) - sizeof (struct ppc_saved_state);
 		proc_info->debstack_top_ss = proc_info->debstackptr;
 #endif  /* MACH_KDP || MACH_KDB */
-		proc_info->get_interrupts_enabled = fake_get_interrupts_enabled;
-		proc_info->set_interrupts_enabled = fake_set_interrupts_enabled;
+		proc_info->interrupts_enabled = 0;
 		proc_info->active_kloaded = (unsigned int)&active_kloaded[cpu];
 		proc_info->cpu_data = (unsigned int)&cpu_data[cpu];
 		proc_info->active_stacks = (unsigned int)&active_stacks[cpu];
@@ -589,7 +593,7 @@ cpu_signal_handler(
 							if(pproc->time_base_enable !=  (void(*)(cpu_id_t, boolean_t ))NULL)
 								pproc->time_base_enable(pproc->cpu_id, FALSE);
 
-							timebaseAddr->abstime.hi = 0;	/* Touch to force into cache */
+							timebaseAddr->abstime = 0;	/* Touch to force into cache */
 							sync();
 							
 							do {
@@ -598,8 +602,7 @@ cpu_signal_handler(
 								asm volatile("	mftbu %0" : "=r" (tbu2));
 							} while (tbu != tbu2);
 							
-							timebaseAddr->abstime.lo = tbl;	/* Set low order */
-							timebaseAddr->abstime.hi = tbu;	/* Set high order */
+							timebaseAddr->abstime = ((uint64_t)tbu << 32) | tbl;
 							sync();					/* Force order */
 						
 							timebaseAddr->avail = TRUE;
@@ -681,6 +684,8 @@ cpu_signal(
 
 	mpproc = &per_proc_info[cpu];					/* Point to our block */
 	tpproc = &per_proc_info[target];				/* Point to the target's block */
+
+	if (!(tpproc->cpu_flags & SignalReady)) return KERN_FAILURE;
 	
 	if(!hw_lock_mbits(&tpproc->MPsigpStat, MPsigpMsgp, 0, MPsigpBusy, 
 	  (gPEClockFrequencyInfo.bus_clock_rate_hz >> 7))) {	/* Try to lock the message block */
@@ -735,8 +740,7 @@ cpu_sleep(
 		proc_info->debstackptr = (vm_offset_t)&debstack + (KERNEL_STACK_SIZE*(cpu+1)) - sizeof (struct ppc_saved_state);
 		proc_info->debstack_top_ss = proc_info->debstackptr;
 #endif  /* MACH_KDP || MACH_KDB */
-		proc_info->get_interrupts_enabled = fake_get_interrupts_enabled;
-		proc_info->set_interrupts_enabled = fake_set_interrupts_enabled;
+		proc_info->interrupts_enabled = 0;
 		proc_info->FPU_thread = 0;
 
 	    	if (proc_info->start_paddr == EXCEPTION_VECTOR(T_RESET)) {
@@ -775,19 +779,21 @@ cpu_sync_timebase(
 	syncClkSpot.ready = FALSE;
 	syncClkSpot.done = FALSE;
 
-	while (cpu_signal(master_cpu, SIGPcpureq, CPRQtimebase, (unsigned int)&syncClkSpot) 
-	       != KERN_SUCCESS);
+	while (cpu_signal(master_cpu, SIGPcpureq, CPRQtimebase,
+							(unsigned int)&syncClkSpot) != KERN_SUCCESS)
+		continue;
 
+	while (*(volatile int *)&(syncClkSpot.avail) == FALSE)
+		continue;
 
-	while (*(volatile int *)&(syncClkSpot.avail) == FALSE);
 	isync();
 
 	/*
 	 * We do the following to keep the compiler from generating extra stuff 
 	 * in tb set part
 	 */
-	tbu = syncClkSpot.abstime.hi;
-	tbl = syncClkSpot.abstime.lo;
+	tbu = syncClkSpot.abstime >> 32;
+	tbl = (uint32_t)syncClkSpot.abstime;
 
 	mttb(0);
 	mttbu(tbu);
@@ -795,7 +801,8 @@ cpu_sync_timebase(
 
 	syncClkSpot.ready = TRUE;
 
-	while (*(volatile int *)&(syncClkSpot.done) == FALSE);
+	while (*(volatile int *)&(syncClkSpot.done) == FALSE)
+		continue;
 
 	(void)ml_set_interrupts_enabled(intr);
 }

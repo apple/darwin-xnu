@@ -104,15 +104,15 @@ clalloc(clp, size, quot)
 	int quot;
 {
 
-	MALLOC(clp->c_cs, u_char *, size, M_TTYS, M_WAITOK);
+	MALLOC_ZONE(clp->c_cs, u_char *, size, M_TTYS, M_WAITOK);
 	if (!clp->c_cs)
 		return (-1);
 	bzero(clp->c_cs, size);
 
 	if(quot) {
-		MALLOC(clp->c_cq, u_char *, QMEM(size), M_TTYS, M_WAITOK);
+		MALLOC_ZONE(clp->c_cq, u_char *, QMEM(size), M_TTYS, M_WAITOK);
 		if (!clp->c_cq) {
-			FREE(clp->c_cs, M_TTYS);
+			FREE_ZONE(clp->c_cs, size, M_TTYS);
 			return (-1);
 		}
 		bzero(clp->c_cs, QMEM(size));
@@ -131,9 +131,9 @@ clfree(clp)
 	struct clist *clp;
 {
 	if(clp->c_cs)
-		FREE(clp->c_cs, M_TTYS);
+		FREE_ZONE(clp->c_cs, clp->c_cn, M_TTYS);
 	if(clp->c_cq)
-		FREE(clp->c_cq, M_TTYS);
+		FREE_ZONE(clp->c_cq, QMEM(clp->c_cn), M_TTYS);
 	clp->c_cs = clp->c_cq = (u_char *)0;
 }
 

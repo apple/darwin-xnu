@@ -133,7 +133,7 @@ public:
                                       UInt8 capabilityID, UInt8 * offset = 0 );
 
     virtual IOReturn setDevicePowerState( IOPCIDevice * device,
-                                          unsigned long powerState );
+                                          unsigned long whatToDo );
     virtual IOReturn saveDeviceState( IOPCIDevice * device,
                                       IOOptionBits options = 0 );
     virtual IOReturn restoreDeviceState( IOPCIDevice * device,

@@ -1939,7 +1939,7 @@ sppp_lcp_RCR(struct sppp *sp, struct lcp_header *h, int len)
 
 	len -= 4;
 	origlen = len;
-	buf = r = _MALLOC(len, M_TEMP, M_NOWAIT);
+	buf = r = _MALLOC(len, M_TEMP, M_WAITOK);
 	if (! buf)
 		return (0);
 
@@ -2152,7 +2152,7 @@ sppp_lcp_RCN_rej(struct sppp *sp, struct lcp_header *h, int len)
 	u_char *buf, *p;
 
 	len -= 4;
-	buf = MALLOC (len, M_TEMP, M_NOWAIT);
+	buf = MALLOC (len, M_TEMP, M_WAITOK);
 	if (!buf)
 		return;
 
@@ -2216,7 +2216,7 @@ sppp_lcp_RCN_nak(struct sppp *sp, struct lcp_header *h, int len)
 	u_long magic;
 
 	len -= 4;
-	buf = MALLOC (len, M_TEMP, M_NOWAIT);
+	buf = MALLOC (len, M_TEMP, M_WAITOK);
 	if (!buf)
 		return;
 
@@ -2589,7 +2589,7 @@ sppp_ipcp_RCR(struct sppp *sp, struct lcp_header *h, int len)
 	 * Make sure to allocate a buf that can at least hold a
 	 * conf-nak with an `address' option.  We might need it below.
 	 */
-	buf = r = MALLOC ((len < 6? 6: len), M_TEMP, M_NOWAIT);
+	buf = r = MALLOC ((len < 6? 6: len), M_TEMP, M_WAITOK);
 	if (! buf)
 		return (0);
 
@@ -2751,7 +2751,7 @@ sppp_ipcp_RCN_rej(struct sppp *sp, struct lcp_header *h, int len)
 	int debug = ifp->if_flags & IFF_DEBUG;
 
 	len -= 4;
-	buf = MALLOC (len, M_TEMP, M_NOWAIT);
+	buf = MALLOC (len, M_TEMP, M_WAITOK);
 	if (!buf)
 		return;
 
@@ -2798,7 +2798,7 @@ sppp_ipcp_RCN_nak(struct sppp *sp, struct lcp_header *h, int len)
 	u_long wantaddr;
 
 	len -= 4;
-	buf = MALLOC (len, M_TEMP, M_NOWAIT);
+	buf = MALLOC (len, M_TEMP, M_WAITOK);
 	if (!buf)
 		return;
 

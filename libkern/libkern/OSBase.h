@@ -41,5 +41,27 @@
     #endif
 #endif
 
+#include <stdint.h>
+
+__BEGIN_DECLS
+
+OS_INLINE
+uint64_t
+__OSAbsoluteTime(
+	AbsoluteTime	abstime)
+{
+	return (*(uint64_t *)&abstime);
+}
+
+OS_INLINE
+uint64_t *
+__OSAbsoluteTimePtr(
+	AbsoluteTime	*abstime)
+{
+	return ((uint64_t *)abstime);
+}
+
+__END_DECLS
+
 #endif /* _OS_OSBASE_H */
 

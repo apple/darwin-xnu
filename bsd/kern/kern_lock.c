@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2001 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -384,9 +384,11 @@ lockmgr(lkp, flags, interlkp, p)
 		if (lkp->lk_exclusivecount != 0) {
 			if (pid != lkp->lk_lockholder ||
 					lkp->lk_lockthread != self)
-				panic("lockmgr: pid %d, not %s %d unlocking",
-				    pid, "exclusive lock holder",
-				    lkp->lk_lockholder);
+				panic("lockmgr: pid %d, thread 0x%8x,"
+					" not exclusive lock holder pid %d"
+					" thread 0x%8x unlocking, exclusive count %d",
+				    pid, self, lkp->lk_lockholder,
+					lkp->lk_lockthread, lkp->lk_exclusivecount);
 			lkp->lk_exclusivecount--;
 			COUNT(p, -1);
 			if (lkp->lk_exclusivecount == 0) {

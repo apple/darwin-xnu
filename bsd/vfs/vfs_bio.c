@@ -364,8 +364,11 @@ bio_doread(vp, blkno, size, cred, async, queuetype)
 		/* Start I/O for the buffer (keeping credentials). */
 		SET(bp->b_flags, B_READ | async);
 		if (cred != NOCRED && bp->b_rcred == NOCRED) {
-			crhold(cred);
-			bp->b_rcred = cred;
+			/*
+			 * NFS has embedded ucred.
+			 * Can not crhold() here as that causes zone corruption
+			 */
+			bp->b_rcred = crdup(cred);
 		}
 		VOP_STRATEGY(bp);
 
@@ -633,60 +636,45 @@ brelse(bp)
 		&& UBCINFOEXISTS(bp->b_vp) && bp->b_bufsize) {
 		kern_return_t kret;
 		upl_t	      upl;
-		upl_page_info_t *pl;
 		int           upl_flags;
 
 		if ( !ISSET(bp->b_flags, B_PAGELIST)) {
 		        if ( !ISSET(bp->b_flags, B_INVAL)) {
-			        void  *object;
-				off_t  file_offset;
-
-				object = ubc_getobject(bp->b_vp, UBC_NOREACTIVATE);
-				if (object == (void *)NULL)
-				        panic("vmobject for vp is null");
-				if (bp->b_bufsize & 0xfff)
-				        panic("list request is with less than 4k");
-
-				file_offset = ubc_blktooff(bp->b_vp, bp->b_lblkno);
-
-				kret = vm_fault_list_request(object, 
-							     (vm_object_offset_t)file_offset, bp->b_bufsize, 
-							     &upl, NULL, 0,  
-						(UPL_NO_SYNC | UPL_CLEAN_IN_PLACE | UPL_PRECIOUS
-						| UPL_SET_INTERNAL));
+				kret = ubc_create_upl(bp->b_vp, 
+								ubc_blktooff(bp->b_vp, bp->b_lblkno),
+								bp->b_bufsize, 
+							    &upl,
+								NULL,
+								UPL_PRECIOUS);
 				if (kret != KERN_SUCCESS)
 				        panic("brelse: Failed to get pagelists");
 #ifdef  UBC_DEBUG
 				upl_ubc_alias_set(upl, bp, 5);
 #endif /* UBC_DEBUG */
 			} else
-			        upl = (upl_t) 0;
+				upl = (upl_t) 0;
 		} else {
-		        upl = bp->b_pagelist;
-			kret = kernel_upl_unmap(kernel_map, upl);
+			upl = bp->b_pagelist;
+			kret = ubc_upl_unmap(upl);
 
 			if (kret != KERN_SUCCESS)
 			        panic("kernel_upl_unmap failed");
 			bp->b_data = 0;
 		}
 		if (upl) {
-		        pl = UPL_GET_INTERNAL_PAGE_LIST(upl);
-
 			if (bp->b_flags & (B_ERROR | B_INVAL)) {
-			        if (bp->b_flags & (B_READ | B_INVAL))
+			    if (bp->b_flags & (B_READ | B_INVAL))
 				        upl_flags = UPL_ABORT_DUMP_PAGES;
 				else
 				        upl_flags = 0;
-				kernel_upl_abort(upl, upl_flags);
+				ubc_upl_abort(upl, upl_flags);
 			} else {
-			        if (ISSET(bp->b_flags, (B_DELWRI | B_WASDIRTY)))
-				        upl_flags = UPL_COMMIT_SET_DIRTY | UPL_COMMIT_FREE_ON_EMPTY;
+			    if (ISSET(bp->b_flags, (B_DELWRI | B_WASDIRTY)))
+					upl_flags = UPL_COMMIT_SET_DIRTY ;
 				else
-				        upl_flags = UPL_COMMIT_CLEAR_DIRTY | UPL_COMMIT_FREE_ON_EMPTY;
-				kernel_upl_commit_range(upl, 0, bp->b_bufsize,
-					upl_flags 
-						| UPL_COMMIT_INACTIVATE, 
-					pl, MAX_UPL_TRANSFER);
+				    upl_flags = UPL_COMMIT_CLEAR_DIRTY ;
+				ubc_upl_commit_range(upl, 0, bp->b_bufsize, upl_flags |
+					UPL_COMMIT_INACTIVATE | UPL_COMMIT_FREE_ON_EMPTY);
 			}
 			s = splbio();
 			CLR(bp->b_flags, B_PAGELIST);
@@ -817,16 +805,13 @@ getblk(vp, blkno, size, slpflag, slptimeo, operation)
 	int s, err;
 	upl_t upl;
 	upl_page_info_t *pl;
-	void * object;
 	kern_return_t kret;
-	void *pager;
-	off_t file_offset;
 	int error=0;
 	int pagedirty = 0;
 
-start:
 	KERNEL_DEBUG((FSDBG_CODE(DBG_FSRW, 386)) | DBG_FUNC_START,
 		     blkno * PAGE_SIZE, size, operation, 0, 0);
+start:
 
 	s = splbio();
 	if (bp = incore(vp, blkno)) {
@@ -887,28 +872,17 @@ start:
 			case BLK_READ:
 			case BLK_WRITE:
 			        if (UBCISVALID(bp->b_vp) && bp->b_bufsize) {
-
-					if (bp->b_bufsize & 0xfff)
-					        panic("list request is with less than 4k");
-
-					object = ubc_getobject(vp, UBC_NOREACTIVATE);
-					if (object == (void *)NULL)
-					        panic("vmobject for vp is null");
-
-					file_offset = ubc_blktooff(vp, bp->b_lblkno);
-					
-					kret = vm_fault_list_request(object, 
-								     (vm_object_offset_t)file_offset, bp->b_bufsize, 
-								     &upl, NULL, 0,  
-								     (UPL_NO_SYNC | UPL_CLEAN_IN_PLACE | UPL_PRECIOUS | UPL_SET_INTERNAL));
-
+					kret = ubc_create_upl(vp,
+									ubc_blktooff(vp, bp->b_lblkno), 
+									bp->b_bufsize, 
+									&upl, 
+									&pl,
+									UPL_PRECIOUS);
 					if (kret != KERN_SUCCESS)
 					        panic("Failed to get pagelists");
 
 					SET(bp->b_flags, B_PAGELIST);
 					bp->b_pagelist = upl;
-
-					pl = UPL_GET_INTERNAL_PAGE_LIST(upl);
 
 					if ( !upl_valid_page(pl, 0))
 					        panic("getblk: incore buffer without valid page");
@@ -918,12 +892,12 @@ start:
 					else
 					        CLR(bp->b_flags, B_WASDIRTY);
 
-					kret = kernel_upl_map(kernel_map, upl, (vm_address_t *)&(bp->b_data));
+					kret = ubc_upl_map(upl, (vm_address_t *)&(bp->b_data));
 					if (kret != KERN_SUCCESS) {
-					        panic("getblk: kernel_upl_map() "
-						      "failed with (%d)", kret);
+					        panic("getblk: ubc_upl_map() failed with (%d)",
+								  kret);
 					}
-					if (bp->b_data == 0) panic("kernel_upl_map mapped 0");
+					if (bp->b_data == 0) panic("ubc_upl_map mapped 0");
 				}
 				break;
 
@@ -957,6 +931,13 @@ start:
 		}
 		if ((bp = getnewbuf(slpflag, slptimeo, &queue)) == NULL)
 			goto start;
+		if (incore(vp, blkno)) {
+			SET(bp->b_flags, B_INVAL);
+			binshash(bp, &invalhash);
+			brelse(bp);
+			goto start;
+		}
+
 		/*
 		 * if it is meta, the queue may be set to other 
 		 * type so reset as well as mark it to be B_META
@@ -967,16 +948,17 @@ start:
 			SET(bp->b_flags, B_META);
 			queue = BQ_META;
 		}
+		/*
+		 * Insert in the hash so that incore() can find it 
+		 */
+		binshash(bp, BUFHASH(vp, blkno)); 
+
 		allocbuf(bp, size);
 
 		switch (operation) {
 		case BLK_META:
 			/* buffer data is invalid */
 
-			/*
-			 * Insert in the hash so that incore() can find it 
-			 */
-			binshash(bp, BUFHASH(vp, blkno)); 
 #if !ZALLOC_METADATA
 			if (bp->b_data)
 				panic("bp->b_data is not nul; %x",bp);
@@ -1004,27 +986,16 @@ start:
 
 		case BLK_READ:
 		case BLK_WRITE:
-			/*
-			 * Insert in the hash so that incore() can find it 
-			 */
-			binshash(bp, BUFHASH(vp, blkno)); 
-			pager = ubc_getpager(vp);
-			file_offset = ubc_blktooff(vp, blkno);
-
-			object = ubc_getobject(vp, UBC_NOREACTIVATE);
-			if (object == (void *)NULL)
-				panic("vmobject for vp is null");
-			if (bp->b_bufsize & 0xfff)
-				panic("list request is with less than 4k");
 
 			if (ISSET(bp->b_flags, B_PAGELIST))
 				panic("B_PAGELIST in bp=%x",bp);
 
-			kret = vm_fault_list_request(object, 
-					(vm_object_offset_t)file_offset, bp->b_bufsize, 
-					&upl, NULL, 0,  
-					(UPL_NO_SYNC | UPL_CLEAN_IN_PLACE | UPL_PRECIOUS | UPL_SET_INTERNAL));
-
+			kret = ubc_create_upl(vp,
+							ubc_blktooff(vp, blkno),
+							bp->b_bufsize, 
+							&upl,
+							&pl,
+							UPL_PRECIOUS);
 			if (kret != KERN_SUCCESS)
 				panic("Failed to get pagelists");
 
@@ -1035,7 +1006,6 @@ start:
 			bp->b_pagelist = upl;
 
 			SET(bp->b_flags, B_PAGELIST);
-			pl = UPL_GET_INTERNAL_PAGE_LIST(upl);
 
 			if (upl_valid_page(pl, 0)) {
 				SET(bp->b_flags, B_CACHE | B_DONE);
@@ -1102,9 +1072,9 @@ start:
 			} else {
 				bufstats.bufs_miss++;
 			}
-			kret = kernel_upl_map(kernel_map, upl, (vm_address_t *)&(bp->b_data));
+			kret = ubc_upl_map(upl, (vm_address_t *)&(bp->b_data));
 			if (kret != KERN_SUCCESS) {
-			        panic("getblk: kernel_upl_map() "
+			        panic("getblk: ubc_upl_map() "
 				      "failed with (%d)", kret);
 			}
 			if (bp->b_data == 0) panic("kernel_upl_map mapped 0");
@@ -1558,6 +1528,7 @@ bcleanbuf(struct buf *bp)
 	s = splbio();
 
 	/* clear out various other fields */
+	bp->b_bufsize = 0;
 	bp->b_data = 0;
 	bp->b_flags = B_BUSY;
 	bp->b_dev = NODEV;
@@ -1733,21 +1704,30 @@ vfs_bufstats()
 }
 #endif /* DIAGNOSTIC */
 
+#define	NRESERVEDIOBUFS	16
 
 struct buf *
-alloc_io_buf(vp)
+alloc_io_buf(vp, priv)
 	struct vnode *vp;
+	int priv;
 {
 	register struct buf *bp;
 	int s;
 
 	s = splbio();
 
+	while (niobuf - NRESERVEDIOBUFS < bufstats.bufs_iobufinuse && !priv) {
+		need_iobuffer = 1;
+		bufstats.bufs_iobufsleeps++;
+		(void) tsleep(&need_iobuffer, (PRIBIO+1), "alloc_io_buf", 0);
+	}
+
 	while ((bp = iobufqueue.tqh_first) == NULL) {
 		need_iobuffer = 1;
 		bufstats.bufs_iobufsleeps++;
-		tsleep(&need_iobuffer, (PRIBIO+1), "alloc_io_buf", 0);
+		(void) tsleep(&need_iobuffer, (PRIBIO+1), "alloc_io_buf1", 0);
 	}
+
 	TAILQ_REMOVE(&iobufqueue, bp, b_freelist);
 	bp->b_timestamp = 0; 
 

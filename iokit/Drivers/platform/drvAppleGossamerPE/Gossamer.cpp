@@ -149,16 +149,6 @@ bool GossamerPE::platformAdjustService(IOService *service)
     }
   }
 
-  // Publish out the dual display heads on 101.
-  if (getMachineType() == kGossamerType101) {
-    if (!strcmp(service->getName(), "ATY,LTProParent")) {
-      if (kIOReturnSuccess == IONDRVLibrariesInitialize(service)) {
-        createNubs(this, service->getChildIterator( gIODTPlane ));
-      }
-      return true;
-    }
-  }
-  
   return true;
 }
 

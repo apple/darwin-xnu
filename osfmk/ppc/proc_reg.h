@@ -202,18 +202,6 @@
 #define PPC_HASHSIZE_LOG2	11
 #define PPC_MIN_MPP		2	/* min # of mappings per phys page */
 
-/* macros to help decide processor type */
-#define PROCESSOR_VERSION_601		1
-#define PROCESSOR_VERSION_603		3
-#define PROCESSOR_VERSION_604		4
-#define PROCESSOR_VERSION_603e		6
-#define PROCESSOR_VERSION_750		8
-#define PROCESSOR_VERSION_604e		9
-#define PROCESSOR_VERSION_604ev		10	/* ? */
-#define PROCESSOR_VERSION_7400		12	/* ? */
-#define PROCESSOR_VERSION_7410		0x800C	/* ? */
-#define PROCESSOR_VERSION_7450		0x8000	/* ? */
-
 #ifndef ASSEMBLER
 #ifdef __GNUC__
 

@@ -1996,9 +1996,9 @@ OSUnserializeXML(const char *buffer, OSString **errorString)
 
 	if (!lock) {
 		lock = mutex_alloc(ETAP_IO_AHA);
-		_mutex_lock(lock);
+		mutex_lock(lock);
 	} else {
-		_mutex_lock(lock);
+		mutex_lock(lock);
 
 	}
 

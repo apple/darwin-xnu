@@ -73,7 +73,6 @@ fatfile_getarch(
 	int			best_grade;
 	int			nfat_arch;
 	int			end_of_archs;
-	struct proc *p = current_proc();		/* XXXX */
 	struct fat_header	*header;
 	off_t filesize;
 
@@ -93,7 +92,7 @@ fatfile_getarch(
 		+ nfat_arch * sizeof(struct fat_arch);
 #if 0
 	filesize = ubc_getsize(vp);
-	if (end_of_archs > (int)filesize)
+	if (end_of_archs > (int)filesize) {
 		return(LOAD_BADMACHO);
 	}
 #endif

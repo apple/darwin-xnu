@@ -375,6 +375,7 @@ struct vop_select_args /* {
 	int a_which;
 	int a_fflags;
 	struct ucred *a_cred;
+	void *a_wql;
 	struct proc *a_p;
 } */;
 
@@ -1045,6 +1046,7 @@ struct vop_allocate_args /* {
 	off_t a_length;
 	u_int32_t a_flags;
 	off_t *a_bytesallocated;
+	off_t a_offset;
 	struct ucred *a_cred;
 	struct proc *a_p;
 } */;
@@ -1153,14 +1155,14 @@ struct vop_pagein_args /* {
 int
 nop_pagein(struct vop_pagein_args *ap)
 {
-	kernel_upl_abort(ap->a_pl, UPL_ABORT_ERROR);
+	ubc_upl_abort(ap->a_pl, UPL_ABORT_ERROR);
 	return (0);
 }
 
 int
 err_pagein(struct vop_pagein_args *ap)
 {
-	kernel_upl_abort(ap->a_pl, UPL_ABORT_ERROR);
+	ubc_upl_abort(ap->a_pl, UPL_ABORT_ERROR);
 	return (EOPNOTSUPP);
 }
 
@@ -1178,14 +1180,14 @@ struct vop_pageout_args /* {
 int
 nop_pageout(struct vop_pageout_args *ap)
 {
-	kernel_upl_abort(ap->a_pl, UPL_ABORT_ERROR);
+	ubc_upl_abort(ap->a_pl, UPL_ABORT_ERROR);
 	return (0);
 }
 
 int
 err_pageout(struct vop_pageout_args *ap)
 {
-	kernel_upl_abort(ap->a_pl, UPL_ABORT_ERROR);
+	ubc_upl_abort(ap->a_pl, UPL_ABORT_ERROR);
 	return (EOPNOTSUPP);
 }
 

@@ -159,7 +159,9 @@ static int vlan_setmulti(struct ifnet *ifp)
 	    ifma != NULL;ifma = ifma->ifma_link.le_next) {
 		if (ifma->ifma_addr->sa_family != AF_LINK)
 			continue;
-		mc = _MALLOC(sizeof(struct vlan_mc_entry), M_DEVBUF, M_NOWAIT);
+		mc = _MALLOC(sizeof(struct vlan_mc_entry), M_DEVBUF, M_WAITOK);
+		if (mc == NULL)
+			return (ENOMEM);
 		bcopy(LLADDR((struct sockaddr_dl *)ifma->ifma_addr),
 		    (char *)&mc->mc_addr, ETHER_ADDR_LEN);
 		SLIST_INSERT_HEAD(&sc->vlan_mc_listhead, mc, mc_entries);

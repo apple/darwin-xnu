@@ -233,6 +233,8 @@ ndrv_attach(struct socket *so, int proto, struct proc *p)
 	kprintf("NDRV attach: %x, %x, %x\n", so, proto, np);
 #endif
 	MALLOC(np, struct ndrv_cb *, sizeof(*np), M_PCB, M_WAITOK);
+	if (np == NULL)
+		return (ENOMEM);
 #if NDRV_DEBUG
 	kprintf("NDRV attach: %x, %x, %x\n", so, proto, np);
 #endif
@@ -647,6 +649,8 @@ ndrv_setspec(struct ndrv_cb *np, struct ndrv_descr *nd)
 	bzero((caddr_t)&proto_spec, sizeof (proto_spec));
 	i = nd->nd_len / (sizeof (struct dlil_demux_desc)); /* # elts */
 	MALLOC(native_values,int *, i * sizeof (int), M_TEMP, M_WAITOK);
+	if (native_values == NULL)
+		return (ENOMEM);
 	mp = (struct dlil_demux_desc *)nd->nd_buf;
 	for (j = 0; j++ < i;)
 	{	MALLOC(mp1, struct dlil_demux_desc *,
@@ -680,8 +684,10 @@ ndrv_setspec(struct ndrv_cb *np, struct ndrv_descr *nd)
 	if (error)
 	{	struct dlil_demux_desc *mp2;
 
-		TAILQ_FOREACH(mp2, &np->nd_dlist, next)
+                while ((mp2 = TAILQ_FIRST(&np->nd_dlist))) {
+                        TAILQ_REMOVE(&np->nd_dlist, mp2, next);
 			FREE(mp2, M_PCB);
+                }
 	} else
 		error = ndrv_add_descr(np, &proto_spec);
 #ifdef NDRV_DEBUG

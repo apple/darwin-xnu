@@ -694,6 +694,11 @@ unp_connect2(so, so2)
 	if (so2->so_type != so->so_type)
 		return (EPROTOTYPE);
 	unp2 = sotounpcb(so2);
+
+	/* Verify both sockets are still opened */
+	if (unp == 0 || unp2 == 0)
+		return (EINVAL);
+
 	unp->unp_conn = unp2;
 	switch (so->so_type) {
 
@@ -786,6 +791,12 @@ unp_pcblist SYSCTL_HANDLER_ARGS
 	error = SYSCTL_OUT(req, &xug, sizeof xug);
 	if (error)
 		return error;
+
+	/*
+	 * We are done if there is no pcb
+	 */
+	if (n == 0) 
+	    return 0;
 
 	unp_list = _MALLOC(n * sizeof *unp_list, M_TEMP, M_WAITOK);
 	if (unp_list == 0)
@@ -924,6 +935,7 @@ unp_externalize(rights)
 			panic("unp_externalize");
 		fp = *rp;
 		p->p_fd->fd_ofiles[f] = fp;
+		*fdflags(p, f) &= ~UF_RESERVED;
 		fp->f_msgcount--;
 		unp_rights--;
 		*(int *)rp++ = f;

@@ -26,6 +26,7 @@
 #ifndef	MACH_VM_TYPES_H_
 #define MACH_VM_TYPES_H_
 
+#include <mach/port.h>
 #include <mach/machine/vm_types.h>
 
 typedef vm_offset_t     	pointer_t;
@@ -35,6 +36,7 @@ typedef unsigned long long	vm_object_offset_t;
 #ifdef KERNEL_PRIVATE
 
 #if !defined(MACH_KERNEL_PRIVATE)
+
 /*
  * Use specifically typed null structures for these in
  * other parts of the kernel to enable compiler warnings
@@ -45,15 +47,30 @@ struct upl ;
 struct vm_map ;
 struct vm_object ;
 struct vm_map_copy ;
-#else
-typedef struct upl	   *upl_t;
+struct vm_named_entry ;
+
 #endif /* !MACH_KERNEL_PRIVATE */
 
-typedef struct vm_map	   *vm_map_t;
-typedef struct vm_object   *vm_object_t;
-typedef struct vm_map_copy *vm_map_copy_t;
+typedef struct upl		*upl_t;
+typedef struct vm_map		*vm_map_t;
+typedef struct vm_named_entry	*vm_named_entry_t;
 
-#endif
+typedef struct vm_object 	*vm_object_t;
+typedef struct vm_map_copy	*vm_map_copy_t;
+#define VM_OBJECT_NULL		((vm_object_t) 0)
+#define VM_MAP_COPY_NULL	((vm_map_copy_t) 0)
+
+#else  /* !KERNEL_PRIVATE */
+
+typedef mach_port_t		upl_t;
+typedef mach_port_t		vm_map_t;
+typedef mach_port_t		vm_named_entry_t;
+
+#endif /* !KERNEL_PRIVATE */
+
+#define UPL_NULL		((upl_t) 0)
+#define VM_MAP_NULL		((vm_map_t) 0)
+#define VM_NAMED_ENTRY_NULL	((vm_named_entry_t) 0)
 
 #endif	/* MACH_VM_TYPES_H_ */
 

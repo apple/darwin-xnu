@@ -56,46 +56,54 @@
 #include <mach_pagemap.h>
 
 #include <mach/boolean.h>
+#include <mach/mach_types.h>
+#include <mach/memory_object_types.h>
 #include <ipc/ipc_types.h>
 
-extern kern_return_t	memory_object_set_attributes_common(
-				vm_object_t	object,
-				boolean_t	may_cache,
-				memory_object_copy_strategy_t copy_strategy,
-				boolean_t	temporary,
-				vm_size_t	cluster_size,
-				boolean_t	silent_overwrite,
-				boolean_t	advisory_pageout);
+__private_extern__
+memory_object_default_t	memory_manager_default_reference(
+				vm_size_t		*cluster_size);
 
-extern boolean_t	memory_object_sync (
-				vm_object_t		object,
-				vm_object_offset_t	offset,
-				vm_object_size_t	size,
-				boolean_t		should_flush,
-				boolean_t		should_return);
+__private_extern__
+kern_return_t		memory_manager_default_check(void);
 
-extern ipc_port_t	memory_manager_default_reference(
-					vm_size_t	*cluster_size);
+__private_extern__
+void			memory_manager_default_init(void);
 
-extern boolean_t	memory_manager_default_port(ipc_port_t port);
+__private_extern__
+void			memory_object_control_bootstrap(void);
+__private_extern__
+memory_object_control_t memory_object_control_allocate(
+				vm_object_t		object);
 
-extern kern_return_t	memory_manager_default_check(void);
+__private_extern__
+void			memory_object_control_collapse(
+				memory_object_control_t control,
+				vm_object_t		object);
 
-extern void		memory_manager_default_init(void);
+__private_extern__
+vm_object_t 		memory_object_control_to_vm_object(
+				memory_object_control_t control);
 
+extern
+mach_port_t		convert_mo_control_to_port(
+				memory_object_control_t	control);
+
+extern
+memory_object_control_t convert_port_to_mo_control(
+				mach_port_t		port);
+
+extern
+mach_port_t		convert_memory_object_to_port(
+				memory_object_t		object);
+
+extern
+memory_object_t		convert_port_to_memory_object(
+				mach_port_t		port);
 
 extern kern_return_t	memory_object_free_from_cache(
 				host_t		host,
-				int		pager_id,
+				int		*pager_id,
 				int		*count);
-
-extern kern_return_t	memory_object_remove_cached_object(
-				ipc_port_t	port);
-
-extern void		memory_object_deactivate_pages(
-				vm_object_t		object,
-				vm_object_offset_t	offset,
-				vm_object_size_t	size,
-				boolean_t               kill_page);
 
 #endif	/* _VM_MEMORY_OBJECT_H_ */

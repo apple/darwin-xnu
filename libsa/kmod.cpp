@@ -37,13 +37,10 @@ extern "C" {
 #include <mach_loader.h>
 };
 
+#include "kld_patch.h"
+
 
 extern "C" {
-extern load_return_t fatfile_getarch(
-    void            * vp,       // normally a (struct vnode *)
-    vm_offset_t       data_ptr,
-    struct fat_arch * archret);
-
 extern kern_return_t
 kmod_create_internal(
             kmod_info_t *info,
@@ -67,14 +64,108 @@ extern void invalidate_icache(vm_offset_t addr, unsigned cnt, int phys);
 };
 
 
-IOLock * kld_lock;
-
-
 #define LOG_DELAY()
 
-#define VTYELLOW   "\033[33m"
-#define VTRESET    "\033[0m"
+#define VTYELLOW	"\033[33m"
+#define VTRESET		"\033[0m"
 
+
+
+
+/*********************************************************************
+*
+*********************************************************************/
+bool verifyCompatibility(OSString * extName, OSString * requiredVersion)
+{
+    OSDictionary * extensionsDict;   // don't release
+    OSDictionary * extDict;          // don't release
+    OSDictionary * extPlist;         // don't release
+    OSString     * extVersion;       // don't release
+    OSString     * extCompatVersion; // don't release
+    UInt32 ext_version;
+    UInt32 ext_compat_version;
+    UInt32 required_version;
+
+   /* Get the dictionary of startup extensions.
+    * This is keyed by module name.
+    */
+    extensionsDict = getStartupExtensions();
+    if (!extensionsDict) {
+        IOLog("verifyCompatibility(): No extensions dictionary.\n");
+        return false;
+    }
+
+   /* Get the requested extension's dictionary entry and its property
+    * list, containing module dependencies.
+    */
+    extDict = OSDynamicCast(OSDictionary,
+        extensionsDict->getObject(extName));
+
+    if (!extDict) {
+        IOLog("verifyCompatibility(): "
+           "Extension \"%s\" cannot be found.\n",
+           extName->getCStringNoCopy());
+        return false;
+    }
+
+    extPlist = OSDynamicCast(OSDictionary, extDict->getObject("plist"));
+    if (!extPlist) {
+        IOLog("verifyCompatibility(): "
+            "Extension \"%s\" has no property list.\n",
+            extName->getCStringNoCopy());
+        return false;
+    }
+
+
+    extVersion = OSDynamicCast(OSString,
+        extPlist->getObject("CFBundleVersion"));
+    if (!extVersion) {
+        IOLog("verifyCompatibility(): "
+            "Extension \"%s\" has no \"CFBundleVersion\" property.\n",
+            extName->getCStringNoCopy());
+        return false;
+    }
+
+    extCompatVersion = OSDynamicCast(OSString,
+        extPlist->getObject("OSBundleCompatibleVersion"));
+    if (!extCompatVersion) {
+        IOLog("verifyCompatibility(): "
+            "Extension \"%s\" has no \"OSBundleCompatibleVersion\" property.\n",
+            extName->getCStringNoCopy());
+        return false;
+    }
+
+    if (!VERS_parse_string(requiredVersion->getCStringNoCopy(),
+         &required_version)) {
+        IOLog("verifyCompatibility(): "
+            "Can't parse required version \"%s\" of dependency %s.\n",
+            requiredVersion->getCStringNoCopy(),
+            extName->getCStringNoCopy());
+        return false;
+    }
+    if (!VERS_parse_string(extVersion->getCStringNoCopy(),
+         &ext_version)) {
+        IOLog("verifyCompatibility(): "
+            "Can't parse version \"%s\" of dependency %s.\n",
+            extVersion->getCStringNoCopy(),
+            extName->getCStringNoCopy());
+        return false;
+    }
+    if (!VERS_parse_string(extCompatVersion->getCStringNoCopy(),
+         &ext_compat_version)) {
+        IOLog("verifyCompatibility(): "
+            "Can't parse compatible version \"%s\" of dependency %s.\n",
+            extCompatVersion->getCStringNoCopy(),
+            extName->getCStringNoCopy());
+        return false;
+    }
+
+    if (required_version > ext_version || required_version < ext_compat_version) {
+        return false;
+    }
+
+    return true;
+}
 
 /*********************************************************************
 * This function builds a uniqued, in-order list of modules that need
@@ -82,7 +173,7 @@ IOLock * kld_lock;
 * list ends with kmod_name itself.
 *********************************************************************/
 static
-OSArray * getDependencyListForKmod(char * kmod_name) {
+OSArray * getDependencyListForKmod(const char * kmod_name) {
 
     int error = 0;
 
@@ -91,6 +182,9 @@ OSArray * getDependencyListForKmod(char * kmod_name) {
     OSDictionary * extPlist;       // don't release
     OSString     * extName;        // don't release
     OSArray      * dependencyList = NULL; // return value, caller releases
+    OSBoolean * isKernelResourceObj = 0; // don't release
+    bool isKernelResource = false;
+    bool declaresExecutable = false;
     unsigned int   i;
 
    /* These are used to remove duplicates from the dependency list.
@@ -161,6 +255,30 @@ OSArray * getDependencyListForKmod(char * kmod_name) {
         goto finish;
     }
 
+   /* A kext that's not a kernel extension and declares no executable has nothing
+    * to load, so just return an empty array.
+    */
+    isKernelResourceObj = OSDynamicCast(OSBoolean,
+        extPlist->getObject("OSKernelResource"));
+    if (isKernelResourceObj && isKernelResourceObj->isTrue()) {
+        isKernelResource = true;
+    } else {
+        isKernelResource = false;
+    }
+
+    if (extPlist->getObject("CFBundleExecutable")) {
+        declaresExecutable = true;
+    } else {
+        declaresExecutable = false;
+    }
+
+    if (!isKernelResource && !declaresExecutable) {
+        error = 0;
+        goto finish;
+    }
+
+   /* Okay, let's get started.
+    */
     dependencyList->setObject(extName);
 
 
@@ -219,9 +337,9 @@ OSArray * getDependencyListForKmod(char * kmod_name) {
             goto finish;
         }
 
-      curExtDepDict = OSDynamicCast(OSDictionary,
-          curExtPlist->getObject("OSBundleLibraries"));
-      if (curExtDepDict) {
+        curExtDepDict = OSDynamicCast(OSDictionary,
+              curExtPlist->getObject("OSBundleLibraries"));
+        if (curExtDepDict) {
             OSCollectionIterator * keyIterator =
                 OSCollectionIterator::withCollection(curExtDepDict);
 
@@ -236,6 +354,41 @@ OSArray * getDependencyListForKmod(char * kmod_name) {
             while ( (curDepName =
                      OSDynamicCast(OSString,
                          keyIterator->getNextObject())) ) {
+
+                OSString * requiredVersion = OSDynamicCast(OSString,
+                    curExtDepDict->getObject(curDepName));
+
+                if (!verifyCompatibility(curDepName, requiredVersion)) {
+                    IOLog("getDependencyListForKmod(): "
+                        "Dependency %s of %s is not compatible or is unavailable.\n",
+                        curDepName->getCStringNoCopy(),
+                        curName->getCStringNoCopy());
+                    LOG_DELAY();
+                    error = 1;
+                    goto finish;
+                }
+
+               /* Don't add any entries that are not kernel resources and that declare no
+                * executable. Such kexts have nothing to load and so don't belong in the
+                * dependency list. Entries that are kernel resource *do* get added,
+                * however, because such kexts get fake kmod entries for reference counting.
+                */
+                isKernelResourceObj = OSDynamicCast(OSBoolean,
+                    curExtPlist->getObject("OSKernelResource"));
+                if (isKernelResourceObj && isKernelResourceObj->isTrue()) {
+                    isKernelResource = true;
+                } else {
+                    isKernelResource = false;
+                }
+                if (curExtPlist->getObject("CFBundleExecutable")) {
+                    declaresExecutable = true;
+                } else {
+                    declaresExecutable = false;
+                }
+
+                if (!isKernelResource && !declaresExecutable) {
+                    continue;
+                }
 
                 dependencyList->setObject(curDepName);
             }
@@ -292,7 +445,6 @@ OSArray * getDependencyListForKmod(char * kmod_name) {
     }
 
 
-
 finish:
 
     if (originalList) {
@@ -314,209 +466,6 @@ finish:
 
 /*********************************************************************
 *********************************************************************/
-static bool verifyCompatibleVersions(OSArray * dependencyList) {
-    bool result = true;
-
-    OSString * requestedModuleName = NULL;
-
-    OSDictionary * extensionsDict = NULL;
-    int count, i;
-    OSString * curName = NULL;
-    OSDictionary * curExt = NULL;
-    OSDictionary * curExtPlist = NULL;
-
-    OSBoolean * isKernelResource = NULL;
-
-    OSDictionary * dependencies = NULL;
-    OSCollectionIterator * dependencyIterator = NULL; // must release
-    OSString * dependencyName = NULL;
-    OSString * curExtDependencyVersion = NULL;
-    UInt32 cur_ext_required_dependency_vers;
-
-    OSDictionary * dependency = NULL;
-    OSDictionary * dependencyPlist = NULL;
-
-    OSString * dependencyVersion = NULL;
-    OSString * dependencyCompatibleVersion = NULL;
-    UInt32 dependency_vers;
-    UInt32 dependency_compat_vers;
-
-
-   /* Get the dictionary of startup extensions.
-    * This is keyed by module name.
-    */
-    extensionsDict = getStartupExtensions();
-    if (!extensionsDict) {
-        IOLog("verifyCompatibleVersions(): No extensions dictionary.\n");
-        LOG_DELAY();
-        result = false;
-        goto finish;
-    }
-    
-
-    count = dependencyList->getCount();
-    if (!count) {
-        IOLog("verifyCompatibleVersions(): "
-            "Invoked with no dependency list.\n");
-        LOG_DELAY();
-        result = false;
-        goto finish;
-    }
-
-    requestedModuleName = OSDynamicCast(OSString,
-        dependencyList->getObject(count - 1));
-
-    for (i = count - 1; i >= 0; i--) {
-
-        if (dependencyIterator) {
-            dependencyIterator->release();
-            dependencyIterator = NULL;
-        }
-
-        curName = OSDynamicCast(OSString, dependencyList->getObject(i));
-        if (!curName) {
-            IOLog("verifyCompatibleVersions(): Internal error (1).\n");
-            LOG_DELAY();
-            result = false;
-            goto finish;
-        }
-
-        curExt = OSDynamicCast(OSDictionary,
-            extensionsDict->getObject(curName));
-        if (!curExt) {
-            IOLog("verifyCompatibleVersions(): Internal error (2).\n");
-            LOG_DELAY();
-            result = false;
-            goto finish;
-        }
-
-        curExtPlist = OSDynamicCast(OSDictionary,
-            curExt->getObject("plist"));
-        if (!curExtPlist) {
-            IOLog("verifyCompatibleVersions(): Internal error (3).\n");
-            LOG_DELAY();
-            result = false;
-            goto finish;
-        }
-
-
-       /* In-kernel extensions don't need to check dependencies.
-        */
-        isKernelResource = OSDynamicCast(OSBoolean,
-            curExtPlist->getObject("OSKernelResource"));
-        if (isKernelResource && isKernelResource->isTrue()) {
-            continue;
-        }
-
-        dependencies = OSDynamicCast(OSDictionary,
-            curExtPlist->getObject("OSBundleLibraries"));
-        if (!dependencies || dependencies->getCount() < 1) {
-            IOLog(VTYELLOW "verifyCompatibleVersions(): Extension \"%s\" "
-                "declares no dependencies.\n" VTRESET,
-                curName->getCStringNoCopy());
-            LOG_DELAY();
-            result = false;
-            goto finish;
-        }
-
-        dependencyIterator =
-            OSCollectionIterator::withCollection(dependencies);
-        if (!curExtPlist) {
-            IOLog("verifyCompatibleVersions(): Internal error (4).\n");
-            LOG_DELAY();
-            result = false;
-            goto finish;
-        }
-
-        while ((dependencyName = OSDynamicCast(OSString,
-            dependencyIterator->getNextObject()))) {
-
-            curExtDependencyVersion = OSDynamicCast(OSString,
-                dependencies->getObject(dependencyName));
-            if (!curExtDependencyVersion) {
-                IOLog("verifyCompatibleVersions(): Internal error (5).\n");
-                LOG_DELAY();
-                result = false;
-                goto finish;
-            }
-
-            dependency = OSDynamicCast(OSDictionary,
-                extensionsDict->getObject(dependencyName));
-            if (!dependency) {
-                IOLog("verifyCompatibleVersions(): Internal error (6).\n");
-                LOG_DELAY();
-                result = false;
-                goto finish;
-            }
-
-            dependencyPlist = OSDynamicCast(OSDictionary,
-                dependency->getObject("plist"));
-            if (!dependencyPlist) {
-                IOLog("verifyCompatibleVersions(): Internal error (7).\n");
-                LOG_DELAY();
-                result = false;
-                goto finish;
-            }
-
-            dependencyVersion = OSDynamicCast(OSString,
-                dependencyPlist->getObject("CFBundleVersion"));
-            if (!curExtDependencyVersion) {
-                IOLog(VTYELLOW "Dependency extension \"%s\" doesn't declare a "
-                    "version.\n" VTRESET,
-                    dependencyName->getCStringNoCopy());
-                LOG_DELAY();
-                result = false;
-                goto finish;
-            }
-
-            dependencyCompatibleVersion = OSDynamicCast(OSString,
-                dependencyPlist->getObject("OSBundleCompatibleVersion"));
-            if (!dependencyCompatibleVersion) {
-                IOLog(VTYELLOW "Dependency extension \"%s\" doesn't declare a "
-                    "compatible version.\n" VTRESET,
-                    dependencyName->getCStringNoCopy());
-                LOG_DELAY();
-                result = false;
-                goto finish;
-            }
-
-IOLog("\033[33m    %s (needs %s, compat-current is %s-%s).\n" VTRESET, 
-    dependencyName->getCStringNoCopy(),
-    curExtDependencyVersion->getCStringNoCopy(),
-    dependencyCompatibleVersion->getCStringNoCopy(),
-    dependencyVersion->getCStringNoCopy());
-LOG_DELAY();
-
-            if (!VERS_parse_string(curExtDependencyVersion->getCStringNoCopy(),
-                 &cur_ext_required_dependency_vers)) {
-            }
-            if (!VERS_parse_string(dependencyVersion->getCStringNoCopy(),
-                 &dependency_vers)) {
-            }
-            if (!VERS_parse_string(dependencyCompatibleVersion->getCStringNoCopy(),
-                 &dependency_compat_vers)) {
-            }
-
-            if (cur_ext_required_dependency_vers > dependency_vers ||
-                cur_ext_required_dependency_vers < dependency_compat_vers) {
-
-                IOLog(VTYELLOW "Cannot load extension \"%s\": dependencies "
-                    "\"%s\" and \"%s\" are not of compatible versions.\n" VTRESET,
-                    requestedModuleName->getCStringNoCopy(),
-                    curName->getCStringNoCopy(),
-                    dependencyName->getCStringNoCopy());
-                LOG_DELAY();
-                result = false;
-                goto finish;
-            }
-        }
-    }
-
-finish:
-    return result;
-}
-
-
 /* Used in address_for_loaded_kmod.
  */
 static kmod_info_t * g_current_kmod_info = NULL;
@@ -635,35 +584,34 @@ unsigned long alloc_for_kmod(
     return link_load_address;
 }
 
-
 /*********************************************************************
 * This function reads the startup extensions dictionary to get the
 * address and length of the executable data for the requested kmod.
 *********************************************************************/
 static
-int get_text_info_for_kmod(const char * kmod_name,
-    char ** text_address,
-    unsigned long * text_size) {
+int map_and_patch(const char * kmod_name) {
+
+    char *address;
+
+    // Does the kld system already know about this kmod?
+    address = (char *) kld_file_getaddr(kmod_name, NULL);
+    if (address)
+	return 1;
 
     // None of these needs to be released.
     OSDictionary * extensionsDict;
     OSDictionary * kmodDict;
+    OSData * compressedCode = 0;
+
+    // Driver Code may need to be released
     OSData * driverCode;
-
-    vm_offset_t kmod_address;
-    typedef union {
-        struct mach_header mach_header;
-        struct fat_header  fat_header;
-    } kmod_header_composite;
-    kmod_header_composite * kmod_headers;
-
 
    /* Get the requested kmod's info dictionary from the global
     * startup extensions dictionary.
     */
     extensionsDict = getStartupExtensions();
     if (!extensionsDict) {
-        IOLog("text_address_for_kmod(): No extensions dictionary.\n");
+        IOLog("map_and_patch(): No extensions dictionary.\n");
         LOG_DELAY();
         return 0;
     }
@@ -671,62 +619,71 @@ int get_text_info_for_kmod(const char * kmod_name,
     kmodDict = OSDynamicCast(OSDictionary,
         extensionsDict->getObject(kmod_name));
     if (!kmodDict) {
-        IOLog("text_address_for_kmod(): "
+        IOLog("map_and_patch(): "
             "Extension \"%s\" cannot be found.\n", kmod_name);
         LOG_DELAY();
         return 0;
     }
 
+    Boolean ret = false;
+
     driverCode = OSDynamicCast(OSData, kmodDict->getObject("code"));
-    if (!driverCode) {
-        IOLog("text_address_for_kmod(): "
-            "Extension \"%s\" has no \"code\" property.\n",
-            kmod_name);
+    if (driverCode) {
+	ret =  kld_file_map(kmod_name,
+			    (unsigned char *) driverCode->getBytesNoCopy(),
+			    (size_t) driverCode->getLength(),
+			    /* isKmem */ false);
+    }
+    else {	// May be an compressed extension
+
+	// If we have a compressed segment the uncompressModule
+	// will return a new OSData object that points to the kmem_alloced
+	// memory.  Note we don't take a reference to driverCode so later
+	// when we release it we will actually free this driver.  Ownership
+	// of the kmem has been handed of to kld_file.
+	compressedCode = OSDynamicCast(OSData,
+	    kmodDict->getObject("compressedCode"));
+	if (!compressedCode) {
+	    IOLog("map_and_patch(): "
+		 "Extension \"%s\" has no \"code\" property.\n", kmod_name);
+	    LOG_DELAY();
+	    return 0;
+	}
+	if (!uncompressModule(compressedCode, &driverCode)) {
+	    IOLog("map_and_patch(): "
+		 "Extension \"%s\" Couldn't uncompress code.\n", kmod_name);
+	    LOG_DELAY();
+	    return 0;
+	}
+
+	unsigned char *driver = (unsigned char *) driverCode->getBytesNoCopy();
+	size_t driverSize = driverCode->getLength();
+
+	ret =  kld_file_map(kmod_name, driver, driverSize, /* isKmem */ true);
+	driverCode->release();
+	if (!ret)
+	    kmem_free(kernel_map, (vm_address_t) driver, driverSize);
+    }
+
+    if (!ret) {
+        IOLog("map_and_patch(): "
+              "Extension \"%s\" Didn't successfully load.\n", kmod_name);
+        LOG_DELAY();
+	return 0;
+    }
+
+    if (!kld_file_patch_OSObjects(kmod_name)) {
+        IOLog("map_and_patch(): "
+              "Extension \"%s\" Error binding OSObjects.\n", kmod_name);
         LOG_DELAY();
         return 0;
     }
 
-    kmod_address = (vm_offset_t)driverCode->getBytesNoCopy();
-    kmod_headers = (kmod_header_composite *)kmod_address;
-
-   /* Now extract the appropriate code from the executable data.
-    */
-    if (kmod_headers->mach_header.magic == MH_MAGIC) {
-
-        *text_address = (char *)kmod_address;
-        *text_size = driverCode->getLength();
-        return 1;
-
-    } else if (kmod_headers->fat_header.magic == FAT_MAGIC ||
-               kmod_headers->fat_header.magic == FAT_CIGAM) {
-                             // CIGAM is byte-swapped MAGIC
-
-        load_return_t load_return;
-        struct fat_arch fatinfo;
-
-        load_return = fatfile_getarch(NULL, kmod_address, &fatinfo);
-        if (load_return != LOAD_SUCCESS) {
-            IOLog("text_address_for_kmod(): Extension \"%s\" "
-                "doesn't contain code for this computer.\n", kmod_name);
-            LOG_DELAY();
-            return 0;
-        }
-
-        *text_address = (char *)(kmod_address + fatinfo.offset);
-        *text_size = fatinfo.size;
-        return 1;
-
-    } else {
-        IOLog("text_address_for_kmod(): Extension \"%s\" either "
-            "isn't code or doesn't contain code for this computer.\n",
-            kmod_name);
-        LOG_DELAY();
-        return 0;
-    }
+    // Now repair any damage that the kld patcher may have done to the image
+    kld_file_prepare_for_link();
 
     return 1;
 }
-
 
 /*********************************************************************
 *********************************************************************/
@@ -750,8 +707,8 @@ bool verify_kmod(const char * kmod_name, kmod_info_t * kmod_info) {
     if (!VERS_parse_string(kmod_info->version,
          &kmod_vers)) {
 
-        IOLog(VTYELLOW "verify_kmod(): kmod \"%s\" has an invalid "
-            "version.\n" VTRESET, kmod_info->name);
+        IOLog("verify_kmod(): kmod \"%s\" has an invalid "
+            "version.\n", kmod_info->name);
         LOG_DELAY();
         result = false;
         goto finish;
@@ -780,7 +737,7 @@ bool verify_kmod(const char * kmod_name, kmod_info_t * kmod_info) {
     }
 
     plist = OSDynamicCast(OSDictionary,
-        extensionsDict->getObject("plist"));
+        kmodDict->getObject("plist"));
     if (!kmodDict) {
         IOLog("verify_kmod(): Kmod \"%s\" has no property list.\n",
             kmod_name);
@@ -790,10 +747,10 @@ bool verify_kmod(const char * kmod_name, kmod_info_t * kmod_info) {
     }
 
     versionString = OSDynamicCast(OSString,
-        extensionsDict->getObject("CFBundleVersion"));
+        plist->getObject("CFBundleVersion"));
     if (!versionString) {
-        IOLog(VTYELLOW "verify_kmod(): Kmod \"%s\" has no \"CFBundleVersion\" "
-            "property.\n" VTRESET,
+        IOLog("verify_kmod(): Kmod \"%s\" has no \"CFBundleVersion\" "
+            "property.\n",
             kmod_name);
         LOG_DELAY();
         result = false;
@@ -803,16 +760,16 @@ bool verify_kmod(const char * kmod_name, kmod_info_t * kmod_info) {
     if (!VERS_parse_string(versionString->getCStringNoCopy(),
          &plist_vers)) {
 
-        IOLog(VTYELLOW "verify_kmod(): Property list for kmod \"%s\" has "
-            "an invalid version.\n" VTRESET, kmod_info->name);
+        IOLog("verify_kmod(): Property list for kmod \"%s\" has "
+            "an invalid version.\n", kmod_info->name);
         LOG_DELAY();
         result = false;
         goto finish;
     }
 
     if (kmod_vers != plist_vers) {
-        IOLog(VTYELLOW "verify_kmod(): Kmod \"%s\" and its property list "
-            "claim different versions (%s & %s).\n" VTRESET,
+        IOLog("verify_kmod(): Kmod \"%s\" and its property list "
+            "claim different versions (%s & %s).\n",
             kmod_info->name,
             kmod_info->version,
             versionString->getCStringNoCopy());
@@ -821,11 +778,9 @@ bool verify_kmod(const char * kmod_name, kmod_info_t * kmod_info) {
         goto finish;
     }
 
+    result = true;
 
 finish:
-
-    // FIXME: make this really return the result after conversion
-    return true;
 
     return result;
 }
@@ -946,8 +901,17 @@ kern_return_t load_kmod(OSArray * dependencyList) {
         if (!g_current_kmod_info->size)
             continue;
 
-        if (!get_text_info_for_kmod(current_kmod_name,
-             &kmod_address, &kmod_size)) {
+	if (!kld_file_merge_OSObjects(current_kmod_name)) {
+            IOLog("get_text_info_for_kmod(): Can't merge OSObjects \"%s\".\n",
+		current_kmod_name);
+            LOG_DELAY();
+            result = KERN_FAILURE;
+            goto finish;
+        }
+
+	kmod_address = (char *)
+	    kld_file_getaddr(current_kmod_name, (long *) &kmod_size);
+        if (!kmod_address) {
 
             IOLog("get_text_info_for_kmod() failed for dependency kmod "
                 "\"%s\".\n", current_kmod_name);
@@ -957,9 +921,7 @@ kern_return_t load_kmod(OSArray * dependencyList) {
         }
 
         kld_result = kld_load_from_memory(&kmod_header,
-            current_kmod_name,
-            (char *)kmod_address,
-            kmod_size);
+            current_kmod_name, kmod_address, kmod_size);
 
         if (kld_result) {
             do_kld_unload = 1;
@@ -986,19 +948,26 @@ kern_return_t load_kmod(OSArray * dependencyList) {
     g_current_kmod_name = requested_kmod_name;
     g_current_kmod_info = 0;  // there is no kmod yet
 
-    if (!get_text_info_for_kmod(requested_kmod_name,
-         &kmod_address, &kmod_size)) {
-        IOLog("load_kmod: get_text_info_for_kmod() failed for "
-            "kmod \"%s\".\n", requested_kmod_name);
+    if (!map_and_patch(requested_kmod_name)) {
+	IOLog("load_kmod: map_and_patch() failed for "
+	    "kmod \"%s\".\n", requested_kmod_name);
+	LOG_DELAY();
+	result = KERN_FAILURE;
+	goto finish;
+    }
+
+    kmod_address = (char *)
+	kld_file_getaddr(requested_kmod_name, (long *) &kmod_size);
+    if (!kmod_address) {
+        IOLog("load_kmod: kld_file_getaddr()  failed internal error "
+            "on \"%s\".\n", requested_kmod_name);
         LOG_DELAY();
         result = KERN_FAILURE;
         goto finish;
     }
 
     kld_result = kld_load_from_memory(&kmod_header,
-        requested_kmod_name,
-        (char *)kmod_address,
-        kmod_size);
+			    requested_kmod_name, kmod_address, kmod_size);
 
     if (kld_result) {
         do_kld_unload = 1;
@@ -1068,9 +1037,11 @@ kern_return_t load_kmod(OSArray * dependencyList) {
         goto finish;
     }
 
+#if DEBUG
     IOLog("kmod id %d successfully created at 0x%lx, size %ld.\n",
         (unsigned int)kmod_id, link_buffer_address, link_buffer_size);
     LOG_DELAY();
+#endif DEBUG
 
    /* Record dependencies for the newly-loaded kmod.
     */
@@ -1149,12 +1120,7 @@ kern_return_t load_kernel_extension(char * kmod_name) {
     kmod_info_t * kmod_info;
     OSArray * dependencyList = NULL;     // must release
     OSArray * curDependencyList = NULL;  // must release
-
-
-   /* This must be the very first thing done by this function.
-    */
-    IOLockLock(kld_lock);
-
+    bool isKernelResource = false;
 
    /* See if the kmod is already loaded.
     */
@@ -1163,8 +1129,6 @@ kern_return_t load_kernel_extension(char * kmod_name) {
         result = KERN_SUCCESS;
         goto finish;
     }
-
-    // FIXME: Need to check whether kmod is built into the kernel!
 
    /* It isn't loaded; build a dependency list and
     * load those.
@@ -1181,21 +1145,6 @@ kern_return_t load_kernel_extension(char * kmod_name) {
         goto finish;
     }
 
-    if (!verifyCompatibleVersions(dependencyList)) {
-        IOLog(VTYELLOW "load_kernel_extension(): "
-            "Version mismatch for kernel extension \"%s\".\n" VTRESET,
-            kmod_name);
-        LOG_DELAY();
-#if 0
-// FIXME: This is currently a warning only; when kexts are updated
-// this will become an error.
-        result = KERN_FAILURE;
-        goto finish;
-#else
-        IOLog(VTYELLOW "Loading anyway.\n" VTRESET);
-#endif 0
-    }
-
     count = dependencyList->getCount();
     for (i = 0; i < count; i++) {
         kern_return_t load_result;
@@ -1206,18 +1155,26 @@ kern_return_t load_kernel_extension(char * kmod_name) {
             dependencyList->getObject(i));
         cur_kmod_name = curKmodName->getCStringNoCopy();
         curDependencyList = getDependencyListForKmod(cur_kmod_name);
-
-        load_result = load_kmod(curDependencyList);
-        if (load_result != KERN_SUCCESS) {
+        if (!curDependencyList) {
             IOLog("load_kernel_extension(): "
-                "load_kmod() failed for kmod \"%s\".\n",
+                "Can't get dependencies for kernel extension \"%s\".\n",
                 cur_kmod_name);
             LOG_DELAY();
-            result = load_result;
+            result = KERN_FAILURE;
             goto finish;
+        } else {
+            load_result = load_kmod(curDependencyList);
+            if (load_result != KERN_SUCCESS) {
+                IOLog("load_kernel_extension(): "
+                    "load_kmod() failed for kmod \"%s\".\n",
+                    cur_kmod_name);
+                LOG_DELAY();
+                result = load_result;
+                goto finish;
+            }
+            curDependencyList->release();
+            curDependencyList = NULL;
         }
-        curDependencyList->release();
-        curDependencyList = NULL;
     }
 
 
@@ -1231,10 +1188,6 @@ finish:
         curDependencyList->release();
         curDependencyList = NULL;
     }
-
-   /* This must be the very last thing done before returning.
-    */
-    IOLockUnlock(kld_lock);
 
     return result;
 }

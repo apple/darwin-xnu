@@ -70,21 +70,6 @@ struct  ether_addr {
         u_char  ether_addr_octet[6];
 };
 
-
-#if defined(__sgi) && !defined(IPFILTER_LKM)
-# ifdef __STDC__
-#  define IPL_EXTERN(ep) ipfilter##ep
-# else
-#  define IPL_EXTERN(ep) ipfilter/**/ep
-# endif
-#else
-# ifdef __STDC__
-#  define IPL_EXTERN(ep) ipl##ep
-# else
-#  define IPL_EXTERN(ep) ipl/**/ep
-# endif
-#endif
-
 #ifdef	linux
 # include <sys/sysmacros.h>
 #endif
@@ -210,9 +195,6 @@ typedef unsigned long   u_32_t;
 #if defined(__FreeBSD__) && defined(KERNEL)
 # if __FreeBSD__ < 3
 #  include <machine/spl.h>
-# endif
-# if defined(IPFILTER_LKM) && !defined(ACTUALLY_LKM_NOT_KERNEL)
-#  define	ACTUALLY_LKM_NOT_KERNEL
 # endif
 #endif /* __FreeBSD__ && KERNEL */
 

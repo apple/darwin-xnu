@@ -75,7 +75,7 @@ int soo_write __P((struct file *fp, struct uio *uio,
 		struct ucred *cred));
 int soo_close __P((struct file *fp, struct proc *p));
 
-int soo_select __P((struct file *fp, int which, struct proc *p));
+int soo_select __P((struct file *fp, int which, void * wql, struct proc *p));
 
 struct	fileops socketops =
     { soo_read, soo_write, soo_ioctl, soo_select, soo_close };
@@ -95,7 +95,9 @@ soo_read(fp, uio, cred)
 			       struct uio *uio, struct mbuf **mp0,
 			       struct mbuf **controlp, int *flagsp));
 
+
 	thread_funnel_switch(KERNEL_FUNNEL, NETWORK_FUNNEL);
+
 	fsoreceive = so->so_proto->pr_usrreqs->pru_soreceive;
 	if (fsoreceive != soreceive)
 	{	kp = sotokextcb(so);
@@ -303,55 +305,54 @@ soo_ioctl(fp, cmd, data, p)
 }
 
 int
-soo_select(fp, which, p)
+soo_select(fp, which, wql, p)
 	struct file *fp;
 	int which;
+	void * wql;
 	struct proc *p;
 {
 	register struct socket *so = (struct socket *)fp->f_data;
 	register int s = splnet();
 	int retnum=0;
 
-/*	thread_funnel_switch(KERNEL_FUNNEL, NETWORK_FUNNEL); */
 
 	switch (which) {
 
 	case FREAD:
-		so->so_rcv.sb_sel.si_flags |= SI_SBSEL;
+		so->so_rcv.sb_flags |= SB_SEL;
 		if (soreadable(so)) {
 			splx(s);
 			retnum = 1;
-			so->so_rcv.sb_sel.si_flags &= ~SI_SBSEL;
+			so->so_rcv.sb_flags &= ~SB_SEL;
 			goto done;
 		}
-		selrecord(p, &so->so_rcv.sb_sel);
+		selrecord(p, &so->so_rcv.sb_sel, wql);
 		break;
 
 	case FWRITE:
-		so->so_snd.sb_sel.si_flags |= SI_SBSEL;
+		so->so_snd.sb_flags |= SB_SEL;
 		if (sowriteable(so)) {
 			splx(s);
 			retnum = 1;
-			so->so_snd.sb_sel.si_flags &= ~SI_SBSEL;
+			so->so_snd.sb_flags &= ~SB_SEL;
 			goto done;
 		}
-		selrecord(p, &so->so_snd.sb_sel);
+		selrecord(p, &so->so_snd.sb_sel, wql);
 		break;
 
 	case 0:
-		so->so_rcv.sb_sel.si_flags |= SI_SBSEL;
+		so->so_rcv.sb_flags |= SB_SEL;
 		if (so->so_oobmark || (so->so_state & SS_RCVATMARK)) {
 			splx(s);
 			retnum = 1;
-			so->so_rcv.sb_sel.si_flags &= ~SI_SBSEL;
+			so->so_rcv.sb_flags &= ~SB_SEL;
 			goto done;
 		}
-		selrecord(p, &so->so_rcv.sb_sel);
+		selrecord(p, &so->so_rcv.sb_sel, wql);
 		break;
 	}
 	splx(s);
 done:
-/*	thread_funnel_switch(NETWORK_FUNNEL, KERNEL_FUNNEL); */
 	return (retnum);
 }
 

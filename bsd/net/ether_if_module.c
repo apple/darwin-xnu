@@ -267,7 +267,7 @@ restart:
        if (!desc_in_bounds(proto->ifp->family_cookie, current_ptr, total_length)) {
 
 	   tmp = _MALLOC((ETHER_DESC_BLK_SIZE * (block_count + 1)), 
-			 M_IFADDR, M_NOWAIT);
+			 M_IFADDR, M_WAITOK);
 	   if (tmp  == 0) {
 	       /*
 	   	* Remove any previous descriptors set in the call.
@@ -506,7 +506,7 @@ int  ether_add_if(struct ifnet *ifp)
     if (i == MAX_INTERFACES)
 	return ENOMEM;
 
-    ether_desc_blk[i].block_ptr = _MALLOC(ETHER_DESC_BLK_SIZE, M_IFADDR, M_NOWAIT);
+    ether_desc_blk[i].block_ptr = _MALLOC(ETHER_DESC_BLK_SIZE, M_IFADDR, M_WAITOK);
     if (ether_desc_blk[i].block_ptr == 0)
 	return ENOMEM;
 

@@ -149,3 +149,14 @@ bsd_bufferinit()
     bufinit();
 }
 
+void
+md_prepare_for_shutdown(int paniced, int howto, char * command)
+{
+	extern void IOSystemShutdownNotification();
+
+    /*
+     * Temporary hack to notify the power management root domain
+     * that the system will shut down.
+     */
+    IOSystemShutdownNotification();
+}

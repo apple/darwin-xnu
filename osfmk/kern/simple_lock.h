@@ -89,6 +89,7 @@
 #include <kern/kern_types.h>
 
 #include <kern/simple_lock_types.h>
+#include <machine/lock.h>
 #include <mach/etap_events.h>
 #include <mach/etap.h>
 
@@ -153,6 +154,8 @@ extern unsigned int		hw_lock_mbits(unsigned int *, unsigned int, unsigned int,
 void				hw_unlock_bit(unsigned int *, unsigned int);
 extern int			hw_atomic_add(int *area, int inc);
 extern int			hw_atomic_sub(int *area, int dec);
+extern int			hw_atomic_or(int *area, int val);
+extern int			hw_atomic_and(int *area, int mask);
 extern unsigned int 		hw_compare_and_store(unsigned int oldValue, unsigned int newValue, unsigned int *area);
 extern void			hw_queue_atomic(unsigned int *anchor, unsigned int *elem, unsigned int disp);
 extern void 			hw_queue_atomic_list(unsigned int *anchor, unsigned int *first, unsigned int *last, unsigned int disp);

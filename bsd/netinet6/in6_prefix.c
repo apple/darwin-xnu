@@ -1189,6 +1189,19 @@ in6_prefix_ioctl(struct socket *so, u_long cmd, caddr_t data,
 }
 
 void
+in6_rr_timer_funneled(void *ignored_arg)
+{
+#ifdef __APPLE__
+    	boolean_t   funnel_state;
+    	funnel_state = thread_funnel_set(network_flock, TRUE);
+#endif
+	in6_rr_timer(ignored_arg);
+#ifdef __APPLE__
+        (void) thread_funnel_set(network_flock, FALSE);
+#endif
+}
+
+void
 in6_rr_timer(void *ignored_arg)
 {
 	int s;
@@ -1196,12 +1209,8 @@ in6_rr_timer(void *ignored_arg)
 #if !(defined(__FreeBSD__) && __FreeBSD__ >= 3) && !defined(__APPLE__)
 	long time_second = time.tv_sec;
 #endif
-#ifdef __APPLE__
-    	boolean_t   funnel_state;
-    	funnel_state = thread_set_funneled(TRUE);
-#endif
 
-	timeout(in6_rr_timer, (caddr_t)0, ip6_rr_prune * hz);
+	timeout(in6_rr_timer_funneled, (caddr_t)0, ip6_rr_prune * hz);
 
 	s = splnet();
 	/* expire */
@@ -1220,7 +1229,4 @@ in6_rr_timer(void *ignored_arg)
 		rpp = LIST_NEXT(rpp, rp_entry);
 	}
 	splx(s);
-#ifdef __APPLE__
-    	(void) thread_set_funneled(funnel_state);
-#endif
 }

@@ -124,7 +124,7 @@ bool IOBufferMemoryDescriptor::initWithOptions(
 
         kern_return_t kr;
         ipc_port_t sharedMem = (ipc_port_t) _memEntry;
-        vm_size_t size = _ranges.v[0].length;
+        vm_size_t size = round_page(_ranges.v[0].length);
 
         // must create the entry before any pages are allocated
         if( 0 == sharedMem) {
@@ -132,7 +132,7 @@ bool IOBufferMemoryDescriptor::initWithOptions(
                         &size, _ranges.v[0].address,
                         VM_PROT_READ | VM_PROT_WRITE, &sharedMem,
                         NULL );
-            if( (KERN_SUCCESS == kr) && (size != _ranges.v[0].length)) {
+            if( (KERN_SUCCESS == kr) && (size != round_page(_ranges.v[0].length))) {
                 ipc_port_release_send( sharedMem );
                 kr = kIOReturnVMError;
             }

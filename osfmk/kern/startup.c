@@ -75,7 +75,7 @@
 #include <kern/machine.h>
 #include <kern/processor.h>
 #include <kern/sched_prim.h>
-#include <kern/sf.h>
+#include <kern/mk_sp.h>
 #include <kern/startup.h>
 #include <kern/task.h>
 #include <kern/thread.h>
@@ -122,7 +122,6 @@ setup_main(void)
 	ipc_bootstrap();
 	vm_mem_init();
 	ipc_init();
-	pager_mux_hash_init();
 
 	/*
 	 * As soon as the virtual memory system is up, we record
@@ -151,7 +150,6 @@ setup_main(void)
 	 *	Initialize the IPC, task, and thread subsystems.
 	 */
 	ledger_init();
-	swapper_init();
 	task_init();
 	act_init();
 	thread_init();
@@ -169,8 +167,9 @@ setup_main(void)
 	 *	thread_setrun, which may look at current thread;
 	 *	we must avoid this, since there is no current thread.
 	 */
-	startup_thread = kernel_thread_with_priority(kernel_task, MAXPRI_KERNBAND,
-											start_kernel_threads, FALSE);
+	startup_thread = kernel_thread_with_priority(
+										kernel_task, MAXPRI_KERNEL,
+											start_kernel_threads, TRUE, FALSE);
 							
 	/*
 	 * Pretend it is already running, and resume it.
@@ -206,23 +205,33 @@ start_kernel_threads(void)
 	 *	service threads.
 	 */
 	for (i = 0; i < NCPUS; i++) {
-	  if (1 /*machine_slot[i].is_cpu*/) {
-			processor_t		processor = cpu_to_processor(i);
-			thread_t		thread;
-			spl_t			s;
+		processor_t		processor = cpu_to_processor(i);
+		thread_t		thread;
+		spl_t			s;
 
-			thread = kernel_thread_with_priority(kernel_task,
-										MAXPRI_KERNBAND, idle_thread, FALSE);
-			s = splsched();
-			thread_lock(thread);
-			thread_bind_locked(thread, processor);
-			processor->idle_thread = thread;
-			thread->state |= TH_IDLE;
-			thread_go_locked(thread, THREAD_AWAKENED);
-			thread_unlock(thread);
-			splx(s);
-	    }
+		thread = kernel_thread_with_priority(
+									kernel_task, MAXPRI_KERNEL,
+											idle_thread, TRUE, FALSE);
+		s = splsched();
+		thread_lock(thread);
+		thread_bind_locked(thread, processor);
+		processor->idle_thread = thread;
+		thread->ref_count++;
+		thread->state |= TH_IDLE;
+		thread_go_locked(thread, THREAD_AWAKENED);
+		thread_unlock(thread);
+		splx(s);
 	}
+
+	/*
+	 * Initialize the stack swapin mechanism.
+	 */
+	swapin_init();
+
+	/*
+	 * Initialize the periodic scheduler mechanism.
+	 */
+	sched_tick_init();
 
 	/*
 	 * Initialize the thread callout mechanism.
@@ -237,19 +246,9 @@ start_kernel_threads(void)
 #endif
 
 	/*
-	 *	Invoke the thread reaper mechanism.
+	 * Initialize the thread reaper mechanism.
 	 */
 	thread_reaper();
-
-	/*
-	 *	Start the stack swapin thread
-	 */
-	kernel_thread(kernel_task, swapin_thread);
-
-	/*
-	 *	Invoke the periodic scheduler mechanism.
-	 */
-	kernel_thread(kernel_task, sched_tick_thread);
 
 	/*
 	 *	Create the clock service.
@@ -303,6 +302,7 @@ slave_main(void)
 	if (thread == THREAD_NULL) {
 		thread = machine_wake_thread;
 		machine_wake_thread = THREAD_NULL;
+		thread_bind(thread, myprocessor);
 	}
 	cpu_launch_first_thread(thread);
 	/*NOTREACHED*/
@@ -326,11 +326,6 @@ start_cpu_thread(void)
 		ipc_processor_enable(processor);
 	}
 
-#if 0
-	printf("start_cpu_thread done on cpu %x\n", cpu_number());
-#endif
-	/* TODO: Mark this processor ready to dispatch threads */
-
 	(void) thread_terminate(current_act());
 }
 
@@ -348,6 +343,7 @@ cpu_launch_first_thread(
 
 	cpu_up(mycpu);
 	start_timer(&kernel_timer[mycpu]);
+	clock_get_uptime(&cpu_to_processor(mycpu)->last_dispatch);
 
 	if (thread == THREAD_NULL) {
 	    thread = cpu_to_processor(mycpu)->idle_thread;
@@ -361,6 +357,7 @@ cpu_launch_first_thread(
 	thread_machine_set_current(thread);
 	thread_lock(thread);
 	thread->state &= ~TH_UNINT;
+	_mk_sp_thread_begin(thread);
 	thread_unlock(thread);
 	timer_switch(&thread->system_timer);
 

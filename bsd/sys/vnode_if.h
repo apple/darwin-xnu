@@ -354,7 +354,7 @@ static __inline int _VOP_READ(struct vnode *vp, struct uio *uio, int ioflag, str
 		int _didhold = ubc_hold(vp);
 		_err = VCALL(vp, VOFFSET(vop_read), &a);
 		if (_didhold)
-		ubc_rele(vp);
+			ubc_rele(vp);
 		return (_err);
 	}
 }
@@ -383,7 +383,7 @@ static __inline int _VOP_WRITE(struct vnode *vp, struct uio *uio, int ioflag, st
 		int _didhold = ubc_hold(vp);
 		_err = VCALL(vp, VOFFSET(vop_write), &a);
 		if (_didhold)
-		ubc_rele(vp);
+			ubc_rele(vp);
 		return (_err);
 	}
 }
@@ -438,11 +438,12 @@ struct vop_select_args {
 	int a_which;
 	int a_fflags;
 	struct ucred *a_cred;
+	void * a_wql;
 	struct proc *a_p;
 };
 extern struct vnodeop_desc vop_select_desc;
-#define VOP_SELECT(vp, which, fflags, cred, p) _VOP_SELECT(vp, which, fflags, cred, p)
-static __inline int _VOP_SELECT(struct vnode *vp, int which, int fflags, struct ucred *cred, struct proc *p)
+#define VOP_SELECT(vp, which, fflags, cred, wql, p) _VOP_SELECT(vp, which, fflags, cred, wql, p)
+static __inline int _VOP_SELECT(struct vnode *vp, int which, int fflags, struct ucred *cred, void * wql, struct proc *p)
 {
 	struct vop_select_args a;
 	a.a_desc = VDESC(vop_select);
@@ -450,6 +451,7 @@ static __inline int _VOP_SELECT(struct vnode *vp, int which, int fflags, struct 
 	a.a_which = which;
 	a.a_fflags = fflags;
 	a.a_cred = cred;
+	a.a_wql = wql;
 	a.a_p = p;
 	return (VCALL(vp, VOFFSET(vop_select), &a));
 }
@@ -534,7 +536,7 @@ static __inline int _VOP_FSYNC(struct vnode *vp, struct ucred *cred, int waitfor
 		int _didhold = ubc_hold(vp);
 		_err = VCALL(vp, VOFFSET(vop_fsync), &a);
 		if (_didhold)
-		ubc_rele(vp);
+			ubc_rele(vp);
 		return (_err);
 	}
 }
@@ -1027,7 +1029,7 @@ static __inline int _VOP_TRUNCATE(struct vnode *vp, off_t length, int flags, str
 		int _didhold = ubc_hold(vp);
 		_err = VCALL(vp, VOFFSET(vop_truncate), &a);
 		if (_didhold)
-		ubc_rele(vp);
+			ubc_rele(vp);
 		return (_err);
 	}
 }
@@ -1038,12 +1040,13 @@ struct vop_allocate_args {
 	off_t a_length;
 	u_int32_t a_flags;
 	off_t *a_bytesallocated;
+	off_t a_offset;
 	struct ucred *a_cred;
 	struct proc *a_p;
 };
 extern struct vnodeop_desc vop_allocate_desc;
-#define VOP_ALLOCATE(vp, length, flags, bytesallocated, cred, p) _VOP_ALLOCATE(vp, length, flags, bytesallocated, cred, p)
-static __inline int _VOP_ALLOCATE(struct vnode *vp, off_t length, u_int32_t flags, off_t *bytesallocated, struct ucred *cred, struct proc *p)
+#define VOP_ALLOCATE(vp, length, flags, bytesallocated, offset, cred, p) _VOP_ALLOCATE(vp, length, flags, bytesallocated, offset, cred, p)
+static __inline int _VOP_ALLOCATE(struct vnode *vp, off_t length, u_int32_t flags, off_t *bytesallocated, off_t offset, struct ucred *cred, struct proc *p)
 {
 	struct vop_allocate_args a;
 	a.a_desc = VDESC(vop_allocate);
@@ -1051,6 +1054,7 @@ static __inline int _VOP_ALLOCATE(struct vnode *vp, off_t length, u_int32_t flag
 	a.a_length = length;
 	a.a_flags = flags;
 	a.a_bytesallocated = bytesallocated;
+	a.a_offset = offset;
 	a.a_cred = cred;
 	a.a_p = p;
 	return (VCALL(vp, VOFFSET(vop_allocate), &a));

@@ -17,6 +17,7 @@ LIPO = /usr/bin/lipo
 
 BASENAME = /usr/bin/basename
 RELPATH = $(NEXT_ROOT)/usr/local/bin/relpath
+TR = /usr/bin/tr
 SEG_HACK = $(NEXT_ROOT)/usr/local/bin/seg_hack
 
 UNIFDEF   = /usr/bin/unifdef

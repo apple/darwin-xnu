@@ -85,6 +85,7 @@ struct	domain {
 	int	dom_maxrtkey;		/* for routing layer */
 	int	dom_protohdrlen;	/* Let the protocol tell us */
 	int	dom_refs;		/* # socreates outstanding */
+	u_long	reserved[4];
 };
 
 #ifdef KERNEL

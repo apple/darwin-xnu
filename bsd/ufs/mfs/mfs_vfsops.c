@@ -134,6 +134,11 @@ mfs_mountroot()
 	MALLOC_ZONE(mp, struct mount *,
 			sizeof(struct mount), M_MOUNT, M_WAITOK);
 	bzero((char *)mp, (u_long)sizeof(struct mount));
+
+    /* Initialize the default IO constraints */
+    mp->mnt_maxreadcnt = mp->mnt_maxwritecnt = MAXPHYS;
+    mp->mnt_segreadcnt = mp->mnt_segwritecnt = 32;
+
 	mp->mnt_op = &mfs_vfsops;
 	mp->mnt_flag = MNT_RDONLY;
 	MALLOC(mfsp, struct mfsnode *, sizeof(struct mfsnode), M_MFSNODE, M_WAITOK);

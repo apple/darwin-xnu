@@ -126,6 +126,11 @@ devfs_sinit(void)
 	MALLOC(devfs_hidden_mount, struct mount *, sizeof(struct mount),
 	       M_MOUNT, M_WAITOK);
 	bzero(devfs_hidden_mount,sizeof(struct mount));
+
+    /* Initialize the default IO constraints */
+    mp->mnt_maxreadcnt = mp->mnt_maxwritecnt = MAXPHYS;
+    mp->mnt_segreadcnt = mp->mnt_segwritecnt = 32;
+
 	devfs_mount(devfs_hidden_mount,"dummy",NULL,NULL,NULL);
 	dev_root->de_dnp->dn_dvm 
 	    = (struct devfsmount *)devfs_hidden_mount->mnt_data;

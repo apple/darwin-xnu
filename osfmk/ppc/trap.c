@@ -132,7 +132,7 @@ struct ppc_saved_state *trap(int trapno,
 	      	switch (trapno) {
 
 		case T_PREEMPT:			/* Handle a preempt trap */
-			ast_taken(FALSE, AST_URGENT, FALSE);
+			ast_taken(AST_PREEMPT, FALSE);
 			break;	
 
 		case T_RESET:					/* Reset interruption */
@@ -361,7 +361,7 @@ struct ppc_saved_state *trap(int trapno,
 
 			ml_set_interrupts_enabled(FALSE);					/* Turn off interruptions */
 
-			panic("Unexpected user state trap(cpu %d): %08X DSISR=0x%08X DAR=0x%08X PC=0x%08X, MSR=0x%08X\n",
+			panic("Unexpected user state trap(cpu %d): 0x%08x DSISR=0x%08x DAR=0x%08x PC=0x%08x, MSR=0x%08x\n",
 			       cpu_number(), trapno, dsisr, dar, ssp->srr0, ssp->srr1);
 			break;
 
@@ -370,7 +370,7 @@ struct ppc_saved_state *trap(int trapno,
 			kprintf("*** Reset exception ignored; srr0 = %08X, srr1 = %08X\n",
 				ssp->srr0, ssp->srr1);
 #else
-			panic("Unexpected Reset exception: srr0 = %08X, srr1 = %08X\n",
+			panic("Unexpected Reset exception: srr0 = %0x08x, srr1 = %0x08x\n",
 				ssp->srr0, ssp->srr1);
 #endif
 			break;						/* We just ignore these */
@@ -399,7 +399,7 @@ struct ppc_saved_state *trap(int trapno,
 
 		case T_PROGRAM:
 			if (ssp->srr1 & MASK(SRR1_PRG_FE)) {
-				fpu_save();
+				fpu_save(thr_act);
 				UPDATE_PPC_EXCEPTION_STATE;
 				exception = EXC_ARITHMETIC;
 				code = EXC_ARITHMETIC;
@@ -482,7 +482,7 @@ struct ppc_saved_state *trap(int trapno,
 
 		case T_AST:
 			ml_set_interrupts_enabled(FALSE);
-			ast_taken(FALSE, AST_ALL, intr);
+			ast_taken(AST_ALL, intr);
 			break;
 			
 		}
@@ -555,7 +555,7 @@ struct ppc_saved_state *trap(int trapno,
 	ml_set_interrupts_enabled(FALSE);
 	if (USER_MODE(ssp->srr1))
 		while (ast_needed(cpu_number())) {
-			ast_taken(FALSE, AST_ALL, intr);
+			ast_taken(AST_ALL, intr);
 			ml_set_interrupts_enabled(FALSE);
 		}
 
@@ -650,40 +650,45 @@ doexception(
 }
 
 char *trap_type[] = {
-	"0x000   Interrupt in vain",
-	"0x100   System reset",
-	"0x200   Machine check",
-	"0x300   Data access",
-	"0x400   Instruction access",
-	"0x500   External interrupt",
-	"0x600   Alignment",
-	"0x700   Program",
-	"0x800   Floating point",
-	"0x900   Decrementer",
-	"0xA00   I/O controller interface",
-	"0xB00   INVALID EXCEPTION",
-	"0xC00   System call exception",
-	"0xD00   Trace",
-	"0xE00   FP assist",
-	"0xF20   VMX",
-	"0xF00   INVALID EXCEPTION",
-	"0x1000  Instruction PTE miss",
-	"0x1100  Data load PTE miss",
-	"0x1200  Data store PTE miss",
-	"0x1300  Instruction Breakpoint",
-	"0x1400  System Management",
-	"0x1500  INVALID EXCEPTION",
-	"0x1600  Altivec Assist",
-	"0x1700  INVALID EXCEPTION",
-	"0x1800  INVALID EXCEPTION",
-	"0x1900  INVALID EXCEPTION",
-	"0x1A00  INVALID EXCEPTION",
-	"0x1B00  INVALID EXCEPTION",
-	"0x1C00  INVALID EXCEPTION",
-	"0x1D00  INVALID EXCEPTION",
-	"0x1E00  INVALID EXCEPTION",
-	"0x1F00  INVALID EXCEPTION",
-	"0x2000  Run Mode/Trace"
+	"Unknown",
+	"0x100 - System reset",
+	"0x200 - Machine check",
+	"0x300 - Data access",
+	"0x400 - Inst access",
+	"0x500 - Ext int",
+	"0x600 - Alignment",
+	"0x700 - Program",
+	"0x800 - Floating point",
+	"0x900 - Decrementer",
+	"0xA00 - n/a",
+	"0xB00 - n/a",
+	"0xC00 - System call",
+	"0xD00 - Trace",
+	"0xE00 - FP assist",
+	"0xF00 - Perf mon",
+	"0xF20 - VMX",
+	"INVALID EXCEPTION",
+	"INVALID EXCEPTION",
+	"INVALID EXCEPTION",
+	"0x1300 - Inst bkpnt",
+	"0x1400 - Sys mgmt",
+	"0x1600 - Altivec Assist",
+	"0x1700 - Thermal",
+	"INVALID EXCEPTION",
+	"INVALID EXCEPTION",
+	"INVALID EXCEPTION",
+	"INVALID EXCEPTION",
+	"INVALID EXCEPTION",
+	"INVALID EXCEPTION",
+	"INVALID EXCEPTION",
+	"INVALID EXCEPTION",
+	"INVALID EXCEPTION",
+	"0x2000 - Run Mode/Trace",
+	"Signal Processor",
+	"Preemption",
+	"Context Switch",
+	"Shutdown",
+	"System Failure"
 };
 int TRAP_TYPES = sizeof (trap_type) / sizeof (trap_type[0]);
 
@@ -708,9 +713,8 @@ void unresolved_kernel_trap(int trapno,
 	if (message == NULL)
 		message = trap_name;
 
-	printf("\n\nUnresolved kernel trap(cpu %d): %s DSISR=0x%08x DAR=0x%08x PC=0x%08x, MSR=0x%08X\n"
-	       "generating stack backtrace prior to panic:\n\n",
-	       cpu_number(), trap_name, dsisr, dar, ssp->srr0, ssp->srr1);
+	printf("\n\nUnresolved kernel trap(cpu %d): %s DAR=0x%08x PC=0x%08x\n",
+	       cpu_number(), trap_name, dar, ssp->srr0);
 
 	print_backtrace(ssp);
 

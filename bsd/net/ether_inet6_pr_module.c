@@ -297,8 +297,6 @@ ether_inet6_prmod_ioctl(dl_tag, ifp, command, data)
     u_char *e_addr;
 
 
-    funnel_state = thread_funnel_set(TRUE);
-
     switch (command) {
     case SIOCRSLVMULTI: {
 	switch(rsreq->sa->sa_family) {
@@ -373,8 +371,6 @@ ether_inet6_prmod_ioctl(dl_tag, ifp, command, data)
 	 return EOPNOTSUPP;
     }
 
-    (void) thread_funnel_set(funnel_state);
-
     return (error);
 }
 
@@ -410,7 +406,7 @@ u_long  ether_attach_inet6(struct ifnet *ifp)
     reg.event            = 0;
     reg.offer            = 0;
     reg.ioctl            = ether_inet6_prmod_ioctl;
-    reg.default_proto    = 1;
+    reg.default_proto    = 0;
     reg.protocol_family  = PF_INET6;
 
     stat = dlil_attach_protocol(&reg, &ip_dl_tag);

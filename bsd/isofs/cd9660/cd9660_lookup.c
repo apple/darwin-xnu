@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2001 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -257,7 +257,7 @@ cd9660_lookup(ap)
 	 */
 	if ((imp->iso_ftype == ISO_FTYPE_JOLIET) &&
 	    !((len == 1 && *name == '.') || (flags & ISDOTDOT))) {
-		int flags = 0;
+		int flags = UTF_PRECOMPOSED;
 
 		if (BYTE_ORDER != BIG_ENDIAN)
 			flags |= UTF_REVERSE_ENDIAN;

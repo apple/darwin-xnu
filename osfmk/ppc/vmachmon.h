@@ -84,14 +84,21 @@ typedef struct vmm_processor_state_t {
 typedef unsigned long vmm_return_code_t;
 
 typedef unsigned long vmm_thread_index_t;
+
 enum {
-	kVmmCurrentVersion				= 0x00010000
+	kVmmCurMajorVersion					= 0x0001,
+	kVmmCurMinorVersion					= 0x0002,
+	kVmmMinMajorVersion					= 0x0001,
 };
+#define kVmmCurrentVersion ((kVmmCurMajorVersion << 16) | kVmmCurMinorVersion)
 
 typedef unsigned long vmm_features_t;
 enum {
-	kVmmFeature_LittleEndian			= 0x00000001
+	kVmmFeature_LittleEndian			= 0x00000001,
+	kVmmFeature_Stop					= 0x00000002,
+	kVmmFeature_ExtendedMapping			= 0x00000004,
 };
+#define kVmmCurrentFeatures (kVmmFeature_LittleEndian | kVmmFeature_Stop | kVmmFeature_ExtendedMapping)
 
 typedef unsigned long vmm_version_t;
 
@@ -109,6 +116,10 @@ typedef struct vmm_state_page_t {
 #define vmmVectVRallb	2
 #define vmmVectVAss		0x10000000
 #define vmmVectVAssb	3
+#define vmmXStart		0x08000000
+#define vmmXStartb		4
+#define vmmKey			0x04000000
+#define vmmKeyb			5
 	vmm_return_code_t		return_code;
 	unsigned long			return_params[4];
 	unsigned long			gas[7];		/* For alignment */
@@ -134,11 +145,15 @@ enum {
 	kVmmGetVectorState,
 	kVmmSetTimer,
 	kVmmGetTimer,
-	kVmmExecuteVM
+	kVmmExecuteVM,
+	kVmmProtectPage,
+	kVmmMapExecute,
+	kVmmProtectExecute,
 };
 
 #define kVmmReturnNull					0
 #define kVmmBogusContext				1
+#define kVmmStopped						2
 #define kVmmReturnDataPageFault			3
 #define kVmmReturnInstrPageFault		4
 #define kVmmReturnAlignmentFault		6
@@ -146,17 +161,35 @@ enum {
 #define kVmmReturnSystemCall			12
 #define kVmmReturnTraceException		13
 #define kVmmAltivecAssist				22
+#define kVmmInvalidAddress				4096
 
+/*
+ *	Storage Extended Protection modes
+ *	Notes:
+ *		To keep compatibility, vmmKey and the PPC key have reversed meanings,
+ *		i.e., vmmKey 0 is PPC key 1 and vice versa.
+ *
+ *	    vmmKey										Notes
+ *	Mode			0				1
+ *
+ *	kVmmProtNARW	not accessible	read/write		VM_PROT_NONE (not settable via VM calls)
+ *	kVmmProtRORW	read only		read/write		
+ *	kVmmProtRWRW	read/write		read/write		VM_PROT_WRITE or (VM_PROT_WRITE | VM_PROT_READ)
+ *	kVmmProtRORO	read only		read only		VM_PROT_READ
+ 
+ */
+ 
+#define kVmmProtXtnd 0x00000008
+#define kVmmProtNARW (kVmmProtXtnd | 0x00000000)
+#define kVmmProtRORW (kVmmProtXtnd | 0x00000001)
+#define kVmmProtRWRW (kVmmProtXtnd | 0x00000002)
+#define kVmmProtRORO (kVmmProtXtnd | 0x00000003)
 
 /*************************************************************************************
 	Internal Emulation Types
 **************************************************************************************/
 
 #define kVmmMaxContextsPerThread		32
-
-enum {
-	kVmmCurrentFeatures				= kVmmFeature_LittleEndian
-};
 
 typedef struct vmmCntrlEntry {						/* Virtual Machine Monitor control table entry */
 	unsigned int	vmmFlags;						/* Assorted control flags */
@@ -170,6 +203,8 @@ typedef struct vmmCntrlEntry {						/* Virtual Machine Monitor control table ent
 #define vmmTimerPopb	3
 #define vmmMapDone		0x08000000
 #define vmmMapDoneb		4
+#define vmmXStop		0x00800000
+#define vmmXStopb		8
 #define vmmSpfSave		0x000000FF
 #define vmmSpfSaveb		24
 	pmap_t			vmmPmap;						/* pmap for alternate context's view of task memory */
@@ -179,7 +214,7 @@ typedef struct vmmCntrlEntry {						/* Virtual Machine Monitor control table ent
 	unsigned int	vmmFPU_cpu;						/* CPU saved fp context is valid on */
 	pcb_t 			vmmVMX_pcb;						/* Saved vector context */
 	unsigned int	vmmVMX_cpu;						/* CPU saved vector context is valid on */
-	AbsoluteTime	vmmTimer;						/* Last set timer value. Zero means unset */
+	uint64_t		vmmTimer;						/* Last set timer value. Zero means unset */
 	vm_offset_t		vmmLastMap;						/* Last vaddr mapping into virtual machine */
 } vmmCntrlEntry;
 
@@ -188,6 +223,7 @@ typedef struct vmmCntrlTable {						/* Virtual Machine Monitor Control table */
 } vmmCntrlTable;
 
 /* function decls for kernel level routines... */
+extern void vmm_execute_vm(thread_act_t act, vmm_thread_index_t index);
 extern vmmCntrlEntry *vmm_get_entry(thread_act_t act, vmm_thread_index_t index);
 extern kern_return_t vmm_tear_down_context(thread_act_t act, vmm_thread_index_t index);
 extern kern_return_t vmm_get_float_state(thread_act_t act, vmm_thread_index_t index);
@@ -197,6 +233,12 @@ extern kern_return_t vmm_get_timer(thread_act_t act, vmm_thread_index_t index);
 extern void vmm_tear_down_all(thread_act_t act);
 extern kern_return_t vmm_map_page(thread_act_t act, vmm_thread_index_t hindex, vm_offset_t cva,
 	vm_offset_t ava, vm_prot_t prot);
+extern vmm_return_code_t vmm_map_execute(thread_act_t act, vmm_thread_index_t hindex, vm_offset_t cva,
+	vm_offset_t ava, vm_prot_t prot);
+extern kern_return_t vmm_protect_page(thread_act_t act, vmm_thread_index_t hindex, vm_offset_t va,
+	vm_prot_t prot);
+extern vmm_return_code_t vmm_protect_execute(thread_act_t act, vmm_thread_index_t hindex, vm_offset_t va,
+	vm_prot_t prot);
 extern vm_offset_t vmm_get_page_mapping(thread_act_t act, vmm_thread_index_t index,
 	vm_offset_t va);
 extern kern_return_t vmm_unmap_page(thread_act_t act, vmm_thread_index_t index, vm_offset_t va);
@@ -209,7 +251,9 @@ extern int vmm_init_context(struct savearea *);
 extern int vmm_dispatch(struct savearea *);
 extern int vmm_exit(thread_act_t act, struct savearea *);
 extern void vmm_force_exit(thread_act_t act, struct savearea *);
-void vmm_timer_pop(thread_act_t act);
+extern int vmm_stop_vm(struct savearea *save);
+extern void vmm_timer_pop(thread_act_t act);
+extern void vmm_interrupt(ReturnHandler *rh, thread_act_t act);
 
 #endif
 

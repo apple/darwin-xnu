@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1999 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 1999-2001 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -26,8 +26,11 @@
  *
  *	Functions related to Unified Buffer cache.
  *
+ * Caller of UBC functions MUST have a valid reference on the vnode.
+ *
  */ 
 
+#undef DIAGNOSTIC
 #define DIAGNOSTIC 1
 
 #include <sys/types.h>
@@ -59,44 +62,26 @@
 
 struct zone	*ubc_info_zone;
 
-#if DIAGNOSTIC
-#define USHOULDNOT(fun)	panic("%s: should not", (fun));
-#else
-#define USHOULDNOT(fun)
-#endif /* DIAGNOSTIC */
-
-
-static void *_ubc_getobject(struct vnode *, int);
-static void ubc_lock(struct vnode *);
-static void ubc_unlock(struct vnode *);
-
-static void
-ubc_getobjref(struct vnode *vp)
+/* lock for changes to struct UBC */
+static __inline__ void
+ubc_lock(struct vnode *vp)
 {
-	register struct ubc_info	*uip;
-	void *pager_cport;
-	void *object;
+	/* For now, just use the v_interlock */
+	simple_lock(&vp->v_interlock);
+}
 
-	uip = vp->v_ubcinfo;
-
-	if (pager_cport = (void *)vnode_pager_lookup(vp, uip->ui_pager))
-		object = (void *)vm_object_lookup(pager_cport);
-
-	if (object != uip->ui_object) {
-#if 0
-		Debugger("ubc_getobjref: object changed");
-#endif /* 0 */
-		uip->ui_object = object;
-	}
-
-	if (uip->ui_object == NULL)
-		panic("ubc_getobjref: lost object");
+/* unlock */
+static __inline__ void
+ubc_unlock(struct vnode *vp)
+{
+	/* For now, just use the v_interlock */
+	simple_unlock(&vp->v_interlock);
 }
 
 /*
  *	Initialization of the zone for Unified Buffer Cache.
  */
-void
+__private_extern__ void
 ubc_init()
 {
 	int	i;
@@ -119,10 +104,10 @@ ubc_info_init(struct vnode *vp)
 	struct proc *p = current_proc();
 	int error = 0;
 	kern_return_t kret;
-	void * 	pager_cport;
+	memory_object_control_t control;
 
-	assert(vp);
-	assert(UBCISVALID(vp));
+	if (!UBCISVALID(vp))
+		return (EINVAL);
 
 	ubc_lock(vp);
 	if (ISSET(vp->v_flag,  VUINIT)) {
@@ -146,12 +131,20 @@ ubc_info_init(struct vnode *vp)
 	if ((uip == UBC_INFO_NULL) || (uip == UBC_NOINFO)) {
 		ubc_unlock(vp);
 		uip = (struct ubc_info *) zalloc(ubc_info_zone);
-		bzero(uip, sizeof(struct ubc_info));
-		ubc_lock(vp);
-		SET(uip->ui_flags, UI_INITED);
+		uip->ui_pager = MEMORY_OBJECT_NULL;
+		uip->ui_control = MEMORY_OBJECT_CONTROL_NULL;
+		uip->ui_flags = UI_INITED;
 		uip->ui_vnode = vp;
 		uip->ui_ucred = NOCRED;
+		uip->ui_refcount = 1;
+		uip->ui_size = 0;
+		uip->ui_mapped = 0;
+		ubc_lock(vp);
 	}
+#if DIAGNOSTIC
+	else
+		Debugger("ubc_info_init: already");
+#endif /* DIAGNOSTIC */
 	
 	assert(uip->ui_flags != UI_NONE);
 	assert(uip->ui_vnode == vp);
@@ -167,35 +160,37 @@ ubc_info_init(struct vnode *vp)
 	ubc_unlock(vp);
 	pager = (void *)vnode_pager_setup(vp, uip->ui_pager);
 	assert(pager);
+	ubc_setpager(vp, pager);
 
 	/*
-	 * Can not use VOP_GETATTR() to get accurate value
-	 * of ui_size. Thanks to NFS.
+	 * Note: We can not use VOP_GETATTR() to get accurate
+	 * value of ui_size. Thanks to NFS.
 	 * nfs_getattr() can call vinvalbuf() and in this case
 	 * ubc_info is not set up to deal with that.
 	 * So use bogus size.
 	 */
 
-	/* create a vm_object association */
-	kret = vm_object_create_nomap(pager, (vm_object_offset_t)uip->ui_size);
-	if (kret != KERN_SUCCESS)
-		panic("ubc_info_init: vm_object_create_nomap returned %d", kret);
-
-	/* _ubc_getobject() gets a reference on the memory object */
-	if (_ubc_getobject(vp, 0) == NULL)
-		panic("ubc_info_init: lost vmobject : uip = 0X%08x", uip);
-
 	/*
-	 * vm_object_allocate() called from vm_object_create_nomap()
-	 * created the object with a refcount of 1
-	 * need to drop the reference gained by vm_object_lookup()
+	 * create a vnode - vm_object association
+	 * memory_object_create_named() creates a "named" reference on the
+	 * memory object we hold this reference as long as the vnode is
+	 * "alive."  Since memory_object_create_named() took its own reference
+	 * on the vnode pager we passed it, we can drop the reference
+	 * vnode_pager_setup() returned here.
 	 */
-	vm_object_deallocate(uip->ui_object);
+	kret = memory_object_create_named(pager,
+		(memory_object_size_t)uip->ui_size, &control);
+	vnode_pager_deallocate(pager); 
+	if (kret != KERN_SUCCESS)
+		panic("ubc_info_init: memory_object_create_named returned %d", kret);
 
+	assert(control);
+	uip->ui_control = control;	/* cache the value of the mo control */
+	SET(uip->ui_flags, UI_HASOBJREF);	/* with a named reference */
 	/* create a pager reference on the vnode */
-	error = vget(vp, LK_INTERLOCK, p);
+	error = vnode_pager_vget(vp);
 	if (error)
-		panic("ubc_info_init: vget error = %d", error);
+		panic("ubc_info_init: vnode_pager_vget error = %d", error);
 
 	/* initialize the size */
 	error = VOP_GETATTR(vp, &vattr, p->p_ucred, p);
@@ -212,27 +207,35 @@ done:
 	} else 
 		ubc_unlock(vp);
 
-	return(error);
+	return (error);
 }
 
 /* Free the ubc_info */
-void
-ubc_info_free(struct vnode *vp)
+static void
+ubc_info_free(struct ubc_info *uip)
 {
-	register struct ubc_info	*uip;
 	struct ucred *credp;
 	
-	assert(vp);
-
-	uip = vp->v_ubcinfo;
-	vp->v_ubcinfo = UBC_INFO_NULL;
 	credp = uip->ui_ucred;
 	if (credp != NOCRED) {
 		uip->ui_ucred = NOCRED;
 		crfree(credp);
 	}
+
+	if (uip->ui_control != MEMORY_OBJECT_CONTROL_NULL)
+		memory_object_control_deallocate(uip->ui_control);
+
 	zfree(ubc_info_zone, (vm_offset_t)uip);
 	return;
+}
+
+void
+ubc_info_deallocate(struct ubc_info *uip)
+{
+	assert(uip->ui_refcount > 0);
+
+    if (uip->ui_refcount-- == 1)
+		ubc_info_free(uip);
 }
 
 /*
@@ -245,20 +248,16 @@ ubc_setsize(struct vnode *vp, off_t nsize)
 	off_t osize;	/* ui_size before change */
 	off_t lastpg, olastpgend, lastoff;
 	struct ubc_info *uip;
-	void *object;
+	memory_object_control_t control;
 	kern_return_t kret;
-	int didhold;
 
-#if DIAGNOSTIC
-	assert(vp);
 	assert(nsize >= (off_t)0);
-#endif
 
 	if (UBCINVALID(vp))
-		return(0);
+		return (0);
 
 	if (!UBCINFOEXISTS(vp))
-		return(0);
+		return (0);
 
 	uip = vp->v_ubcinfo;
 	osize = uip->ui_size;	/* call ubc_getsize() ??? */
@@ -266,7 +265,7 @@ ubc_setsize(struct vnode *vp, off_t nsize)
 	uip->ui_size = nsize;
 
 	if (nsize >= osize)	/* Nothing more to do */
-		return(0);
+		return (1);		/* return success */
 
 	/*
 	 * When the file shrinks, invalidate the pages beyond the
@@ -276,11 +275,10 @@ ubc_setsize(struct vnode *vp, off_t nsize)
 	 * end of the file.
 	 */
 
-	didhold = ubc_hold(vp);
 	lastpg = trunc_page_64(nsize);
 	olastpgend = round_page_64(osize);
-	object = _ubc_getobject(vp, UBC_NOREACTIVATE);
-	assert(object);
+	control = uip->ui_control;
+	assert(control);
 	lastoff = (nsize & PAGE_MASK_64);
 
 	/*
@@ -288,59 +286,37 @@ ubc_setsize(struct vnode *vp, off_t nsize)
 	 * invalidating is sufficient
 	 */
 	 if (!lastoff) {
-        /*
-         * memory_object_lock_request() drops an object
-         * reference. gain a reference before calling it
-         */
-        ubc_getobjref(vp);
-
         /* invalidate last page and old contents beyond nsize */
-        kret = memory_object_lock_request(object,
-                    (vm_object_offset_t)lastpg,
+        kret = memory_object_lock_request(control,
+                    (memory_object_offset_t)lastpg,
                     (memory_object_size_t)(olastpgend - lastpg),
-                    MEMORY_OBJECT_RETURN_NONE,TRUE,
-                    VM_PROT_NO_CHANGE,MACH_PORT_NULL);
+                    MEMORY_OBJECT_RETURN_NONE, MEMORY_OBJECT_DATA_FLUSH,
+                    VM_PROT_NO_CHANGE);
         if (kret != KERN_SUCCESS)
             printf("ubc_setsize: invalidate failed (error = %d)\n", kret);
 
-		if (didhold)
-			ubc_rele(vp);
 		return ((kret == KERN_SUCCESS) ? 1 : 0);
 	 }
 
-	/* 
-	 * memory_object_lock_request() drops an object
-	 * reference. gain a reference before calling it
-	 */
-	ubc_getobjref(vp);
-
 	/* flush the last page */
-	kret = memory_object_lock_request(object,
-				(vm_object_offset_t)lastpg,
+	kret = memory_object_lock_request(control,
+				(memory_object_offset_t)lastpg,
 				PAGE_SIZE_64,
-				MEMORY_OBJECT_RETURN_DIRTY,FALSE,
-				VM_PROT_NO_CHANGE,MACH_PORT_NULL);
+				MEMORY_OBJECT_RETURN_DIRTY, FALSE,
+				VM_PROT_NO_CHANGE);
 
 	if (kret == KERN_SUCCESS) {
-		/* 
-		 * memory_object_lock_request() drops an object
-		 * reference. gain a reference before calling it
-		 */
-		ubc_getobjref(vp);
-
 		/* invalidate last page and old contents beyond nsize */
-		kret = memory_object_lock_request(object,
-					(vm_object_offset_t)lastpg,
+		kret = memory_object_lock_request(control,
+					(memory_object_offset_t)lastpg,
 					(memory_object_size_t)(olastpgend - lastpg),
-					MEMORY_OBJECT_RETURN_NONE,TRUE,
-					VM_PROT_NO_CHANGE,MACH_PORT_NULL);
+					MEMORY_OBJECT_RETURN_NONE, MEMORY_OBJECT_DATA_FLUSH,
+					VM_PROT_NO_CHANGE);
 		if (kret != KERN_SUCCESS)
 			printf("ubc_setsize: invalidate failed (error = %d)\n", kret);
 	} else
 		printf("ubc_setsize: flush failed (error = %d)\n", kret);
 
-	if (didhold)
-		ubc_rele(vp);
 	return ((kret == KERN_SUCCESS) ? 1 : 0);
 }
 
@@ -356,39 +332,18 @@ ubc_getsize(struct vnode *vp)
 	return (vp->v_ubcinfo->ui_size);
 }
 
-/* lock for changes to struct UBC */
-static void
-ubc_lock(struct vnode *vp)
-{
-	/* For now, just use the v_interlock */
-	simple_lock(&vp->v_interlock);
-}
-
-/* unlock */
-static void
-ubc_unlock(struct vnode *vp)
-{
-	/* For now, just use the v_interlock */
-	simple_unlock(&vp->v_interlock);
-}
-
 /*
  * Caller indicate that the object corresponding to the vnode 
  * can not be cached in object cache. Make it so.
  * returns 1 on success, 0 on failure
- *
- * Caller of ubc_uncache() MUST have a valid reference on the vnode.
  */
 int
 ubc_uncache(struct vnode *vp)
 {
-	void *object;
 	kern_return_t kret;
 	struct ubc_info *uip;
+	memory_object_control_t control;
 	memory_object_perf_info_data_t   perf;
-	int didhold;
-
-	assert(vp);
 
 	if (!UBCINFOEXISTS(vp))
 		return (0);
@@ -407,46 +362,33 @@ ubc_uncache(struct vnode *vp)
 	/* set the "do not cache" bit */
 	SET(uip->ui_flags, UI_DONTCACHE);
 
-	didhold = ubc_hold(vp);
-
-	object = _ubc_getobject(vp, UBC_NOREACTIVATE);
-	assert(object);
-
-	/* 
-	 * memory_object_change_attributes() drops an object
-	 * reference. gain a reference before calling it
-	 */
-	ubc_getobjref(vp);
+	control = uip->ui_control;
+	assert(control);
 
 	perf.cluster_size = PAGE_SIZE; /* XXX use real cluster_size. */
 	perf.may_cache = FALSE;
-	kret = memory_object_change_attributes(object,
+	kret = memory_object_change_attributes(control,
 				MEMORY_OBJECT_PERFORMANCE_INFO,
 				(memory_object_info_t) &perf,
-				MEMORY_OBJECT_PERF_INFO_COUNT,
-				MACH_PORT_NULL, 0);
-
-	if (didhold)
-		ubc_rele(vp);
+				MEMORY_OBJECT_PERF_INFO_COUNT);
 
 	if (kret != KERN_SUCCESS) {
-#if DIAGNOSTIC
-		panic("ubc_uncache: memory_object_change_attributes "
+		printf("ubc_uncache: memory_object_change_attributes_named "
 			"kret = %d", kret);
-#endif /* DIAGNOSTIC */
 		return (0);
 	}
 
+	ubc_release_named(vp);
+
 	return (1);
 }
-
 
 /*
  * call ubc_clean() and ubc_uncache() on all the vnodes
  * for this mount point.
  * returns 1 on success, 0 on failure
  */
-int
+__private_extern__ int
 ubc_umount(struct mount *mp)
 {
 	struct proc *p = current_proc();
@@ -463,9 +405,19 @@ loop:
 		nvp = vp->v_mntvnodes.le_next;
 		simple_unlock(&mntvnode_slock);
 		if (UBCINFOEXISTS(vp)) {
+
+			/*
+			 * Must get a valid reference on the vnode
+			 * before callig UBC functions
+			 */
+			if (vget(vp, 0, p)) {
+				ret = 0;
+				simple_lock(&mntvnode_slock);
+				continue; /* move on to the next vnode */
+			}
 			ret &= ubc_clean(vp, 0); /* do not invalidate */
 			ret &= ubc_uncache(vp);
-			ubc_release(vp);
+			vrele(vp);
 		}
 		simple_lock(&mntvnode_slock);
 	}
@@ -478,7 +430,7 @@ loop:
  * The list is traversed in reverse order
  * of mounting to avoid dependencies.
  */
-void
+__private_extern__ void
 ubc_unmountall()
 {
 	struct mount *mp, *nmp;
@@ -498,15 +450,10 @@ ubc_getcred(struct vnode *vp)
 {
 	struct ubc_info *uip;
 
-	assert(vp);
-
 	uip = vp->v_ubcinfo;
 
-	assert(uip);
-
-	if (UBCINVALID(vp)) {
+	if (UBCINVALID(vp))
 		return (NOCRED);
-	}
 
 	return (uip->ui_ucred);
 }
@@ -516,24 +463,16 @@ ubc_getcred(struct vnode *vp)
  * existing credentials are not changed
  * returns 1 on success and 0 on failure
  */
-
 int
 ubc_setcred(struct vnode *vp, struct proc *p)
 {
 	struct ubc_info *uip;
 	struct ucred *credp;
 
-	assert(vp);
-	assert(p);
-
 	uip = vp->v_ubcinfo;
 
-	assert(uip);
-
-	if (UBCINVALID(vp)) {
-		USHOULDNOT("ubc_setcred");
+	if (UBCINVALID(vp))
 		return (0); 
-	}
 
 	credp = uip->ui_ucred;
 	if (credp == NOCRED) {
@@ -545,21 +484,15 @@ ubc_setcred(struct vnode *vp, struct proc *p)
 }
 
 /* Get the pager */
-void *
+__private_extern__ memory_object_t
 ubc_getpager(struct vnode *vp)
 {
 	struct ubc_info *uip;
 
-	assert(vp);
-
 	uip = vp->v_ubcinfo;
 
-	assert(uip);
-
-	if (UBCINVALID(vp)) {
-		USHOULDNOT("ubc_getpager");
+	if (UBCINVALID(vp))
 		return (0);
-	}
 
 	return (uip->ui_pager);
 }
@@ -568,91 +501,59 @@ ubc_getpager(struct vnode *vp)
  * Get the memory object associated with this vnode
  * If the vnode was reactivated, memory object would not exist.
  * Unless "do not rectivate" was specified, look it up using the pager.
- * The vm_object_lookup() would create a reference on the memory object.
  * If hold was requested create an object reference of one does not
  * exist already.
  */
 
-static void *
-_ubc_getobject(struct vnode *vp, int flags)
-{
-	struct ubc_info *uip;
-	void *object;
-
-	uip = vp->v_ubcinfo;
-	object = uip->ui_object;
-
-	if ((object == NULL) && ISSET(uip->ui_flags, UI_HASPAGER)
-		&& !(flags & UBC_NOREACTIVATE)) {
-		void *pager_cport; 
-
-		if (ISSET(uip->ui_flags, UI_HASOBJREF))
-			panic("ubc_getobject: lost object");
-
-		if (pager_cport = (void *)vnode_pager_lookup(vp, uip->ui_pager)) {
-			object = (void *)vm_object_lookup(pager_cport);
-#if 0
-			if ((uip->ui_object) && (uip->ui_object != object))
-				Debugger("_ubc_getobject: object changed");
-#endif /* 0 */
-
-			uip->ui_object = object;
-		}
-
-		if (object != NULL)
-			SET(uip->ui_flags, UI_HASOBJREF);
-	}
-
-	if ((flags & UBC_HOLDOBJECT)
-		&& (object != NULL)) {
-		if (!ISSET(uip->ui_flags, UI_HASOBJREF)) {
-			ubc_getobjref(vp);
-			SET(uip->ui_flags, UI_HASOBJREF);
-		}
-	}
-	return (uip->ui_object);
-}
-
-void *
+memory_object_control_t
 ubc_getobject(struct vnode *vp, int flags)
 {
 	struct ubc_info *uip;
-	void *object;
+	memory_object_control_t control;
 
-	assert(vp);
 	uip = vp->v_ubcinfo;
-	assert(uip);
 
-	if (UBCINVALID(vp)) {
+	if (UBCINVALID(vp))
 		return (0);
+
+	ubc_lock(vp);
+
+	control = uip->ui_control;
+
+	if ((flags & UBC_HOLDOBJECT) && (!ISSET(uip->ui_flags, UI_HASOBJREF))) {
+
+		/*
+		 * Take a temporary reference on the ubc info so that it won't go
+		 * away during our recovery attempt.
+		 */
+		uip->ui_refcount++;
+		ubc_unlock(vp);
+		if (memory_object_recover_named(control, TRUE) == KERN_SUCCESS) {
+			ubc_lock(vp);
+			SET(uip->ui_flags, UI_HASOBJREF);
+			ubc_unlock(vp);
+		} else {
+			control = MEMORY_OBJECT_CONTROL_NULL;
+		}
+		ubc_info_deallocate(uip);
+
+	} else {
+		ubc_unlock(vp);
 	}
 
-	object = _ubc_getobject(vp, flags);
-	assert(object);
-
-	if (!ISSET(uip->ui_flags, (UI_HASOBJREF|UI_WASMAPPED)) 
-		&& !(uip->ui_holdcnt)) {
-		if (!(flags & UBC_PAGINGOP))
-		panic("ubc_getobject: lost reference");
-	}
+	return (control);
 }
 
 /* Set the pager */
 int
-ubc_setpager(struct vnode *vp, void *pager)
+ubc_setpager(struct vnode *vp, memory_object_t pager)
 {
 	struct ubc_info *uip;
 
-	assert(vp);
-
 	uip = vp->v_ubcinfo;
 
-	assert(uip);
-
-	if (UBCINVALID(vp)) {
-		USHOULDNOT("ubc_setpager");
+	if (UBCINVALID(vp))
 		return (0);
-	}
 
 	uip->ui_pager = pager;
 	return (1);
@@ -663,20 +564,14 @@ ubc_setflags(struct vnode * vp, int  flags)
 {
 	struct ubc_info *uip;
 
-	if (UBCINVALID(vp)) {
-		USHOULDNOT("ubc_setflags");
-		return (EINVAL);
-	}
-
-	assert(vp);
+	if (UBCINVALID(vp))
+		return (0);
 
 	uip = vp->v_ubcinfo;
 
-	assert(uip);
-
 	SET(uip->ui_flags, flags);
 
-	return(0);	
+	return (1);	
 } 
 
 int 
@@ -684,20 +579,14 @@ ubc_clearflags(struct vnode * vp, int  flags)
 {
 	struct ubc_info *uip;
 
-	if (UBCINVALID(vp)) {
-		USHOULDNOT("ubc_clearflags");
-		return (EINVAL);
-	}
-
-	assert(vp);
+	if (UBCINVALID(vp))
+		return (0);
 
 	uip = vp->v_ubcinfo;
 
-	assert(uip);
-
 	CLR(uip->ui_flags, flags);
 
-	return(0);	
+	return (1);	
 } 
 
 
@@ -706,18 +595,12 @@ ubc_issetflags(struct vnode * vp, int  flags)
 {
 	struct ubc_info *uip;
 
-	if (UBCINVALID(vp)) {
-		USHOULDNOT("ubc_issetflags");
-		return (EINVAL);
-	}
-
-	assert(vp);
+	if (UBCINVALID(vp))
+		return (0);
 
 	uip = vp->v_ubcinfo;
 
-	assert(uip);
-
-	return(ISSET(uip->ui_flags, flags));
+	return (ISSET(uip->ui_flags, flags));
 } 
 
 off_t
@@ -726,11 +609,8 @@ ubc_blktooff(struct vnode *vp, daddr_t blkno)
 	off_t file_offset;
 	int error;
 
-	assert(vp);
-    if (UBCINVALID(vp)) { 
-		USHOULDNOT("ubc_blktooff");
+    if (UBCINVALID(vp))
         return ((off_t)-1);
-    }   
 
 	error = VOP_BLKTOOFF(vp, blkno, &file_offset);
 	if (error)
@@ -738,13 +618,13 @@ ubc_blktooff(struct vnode *vp, daddr_t blkno)
 
 	return (file_offset);
 }
+
 daddr_t
 ubc_offtoblk(struct vnode *vp, off_t offset)
 {
 	daddr_t blkno;
-	int error=0;
+	int error = 0;
 
-	assert(vp);
     if (UBCINVALID(vp)) { 
         return ((daddr_t)-1);
     }   
@@ -766,20 +646,15 @@ ubc_clean(struct vnode *vp, int invalidate)
 {
 	off_t size;
 	struct ubc_info *uip;
-	void *object;
+	memory_object_control_t control;
 	kern_return_t kret;
 	int flags = 0;
-	int didhold;
-
-#if DIAGNOSTIC
-	assert(vp);
-#endif
 
 	if (UBCINVALID(vp))
-		return(0);
+		return (0);
 
 	if (!UBCINFOEXISTS(vp))
-		return(0);
+		return (0);
 
 	/*
 	 * if invalidate was requested, write dirty data and then discard
@@ -788,35 +663,24 @@ ubc_clean(struct vnode *vp, int invalidate)
 	if (invalidate)
 		flags = (MEMORY_OBJECT_DATA_FLUSH | MEMORY_OBJECT_DATA_NO_CHANGE);
 
-	didhold = ubc_hold(vp);
 	uip = vp->v_ubcinfo;
 	size = uip->ui_size;	/* call ubc_getsize() ??? */
 
-	object = _ubc_getobject(vp, UBC_NOREACTIVATE);
-	assert(object);
-
-	/* 
-	 * memory_object_lock_request() drops an object
-	 * reference. gain a reference before calling it
-	 */
-	ubc_getobjref(vp);
+	control = uip->ui_control;
+	assert(control);
 
 	vp->v_flag &= ~VHASDIRTY;
 	vp->v_clen = 0;
 
 	/* Write the dirty data in the file and discard cached pages */
-	kret = memory_object_lock_request(object,
-				(vm_object_offset_t)0,
+	kret = memory_object_lock_request(control,
+				(memory_object_offset_t)0,
 				(memory_object_size_t)round_page_64(size),
 				MEMORY_OBJECT_RETURN_ALL, flags,
-				VM_PROT_NO_CHANGE,MACH_PORT_NULL);
+				VM_PROT_NO_CHANGE);
 
-	if (kret != KERN_SUCCESS) {
+	if (kret != KERN_SUCCESS)
 		printf("ubc_clean: clean failed (error = %d)\n", kret);
-	}
-
-	if (didhold)
-		ubc_rele(vp);
 
 	return ((kret == KERN_SUCCESS) ? 1 : 0);
 }
@@ -831,49 +695,69 @@ ubc_pushdirty(struct vnode *vp)
 {
 	off_t size;
 	struct ubc_info *uip;
-	void *object;
+	memory_object_control_t control;
 	kern_return_t kret;
-	int didhold;
-
-#if DIAGNOSTIC
-	assert(vp);
-#endif
 
 	if (UBCINVALID(vp))
-		return(0);
+		return (0);
 
 	if (!UBCINFOEXISTS(vp))
-		return(0);
+		return (0);
 
-	didhold = ubc_hold(vp);
 	uip = vp->v_ubcinfo;
 	size = uip->ui_size;	/* call ubc_getsize() ??? */
 
-	object = _ubc_getobject(vp, UBC_NOREACTIVATE);
-	assert(object);
-
-	/* 
-	 * memory_object_lock_request() drops an object
-	 * reference. gain a reference before calling it
-	 */
-	ubc_getobjref(vp);
+	control = uip->ui_control;
+	assert(control);
 
 	vp->v_flag &= ~VHASDIRTY;
 	vp->v_clen = 0;
 
 	/* Write the dirty data in the file and discard cached pages */
-	kret = memory_object_lock_request(object,
-				(vm_object_offset_t)0,
+	kret = memory_object_lock_request(control,
+				(memory_object_offset_t)0,
 				(memory_object_size_t)round_page_64(size),
-				MEMORY_OBJECT_RETURN_DIRTY,FALSE,
-				VM_PROT_NO_CHANGE,MACH_PORT_NULL);
+				MEMORY_OBJECT_RETURN_DIRTY, FALSE,
+				VM_PROT_NO_CHANGE);
 
-	if (kret != KERN_SUCCESS) {
+	if (kret != KERN_SUCCESS)
 		printf("ubc_pushdirty: flush failed (error = %d)\n", kret);
-	}
 
-	if (didhold)
-		ubc_rele(vp);
+	return ((kret == KERN_SUCCESS) ? 1 : 0);
+}
+
+/*
+ * Cause the file data in VM to be pushed out to the storage
+ * currently valid pages are NOT invalidated
+ * returns 1 on success, 0 on failure
+ */
+int
+ubc_pushdirty_range(struct vnode *vp, off_t offset, off_t size)
+{
+	struct ubc_info *uip;
+	memory_object_control_t control;
+	kern_return_t kret;
+
+	if (UBCINVALID(vp))
+		return (0);
+
+	if (!UBCINFOEXISTS(vp))
+		return (0);
+
+	uip = vp->v_ubcinfo;
+
+	control = uip->ui_control;
+	assert(control);
+
+	/* Write any dirty pages in the requested range of the file: */
+	kret = memory_object_lock_request(control,
+				(memory_object_offset_t)offset,
+				(memory_object_size_t)round_page_64(size),
+				MEMORY_OBJECT_RETURN_DIRTY, FALSE,
+				VM_PROT_NO_CHANGE);
+
+	if (kret != KERN_SUCCESS)
+		printf("ubc_pushdirty_range: flush failed (error = %d)\n", kret);
 
 	return ((kret == KERN_SUCCESS) ? 1 : 0);
 }
@@ -889,36 +773,50 @@ int
 ubc_hold(struct vnode *vp)
 {
 	struct ubc_info *uip;
-	void *object;
+	memory_object_control_t object;
 
 	if (UBCINVALID(vp))
 		return (0);
 
 	if (!UBCINFOEXISTS(vp)) {
-		/* nothing more to do for a dying vnode */
-		if  ((vp->v_flag & VXLOCK) || (vp->v_flag & VTERMINATE))
-			return (0);
-		vp->v_ubcinfo = UBC_INFO_NULL;
-		ubc_info_init(vp);
+		/* must be invalid or dying vnode */
+		assert(UBCINVALID(vp) ||
+			   ((vp->v_flag & VXLOCK) || (vp->v_flag & VTERMINATE)));
+		return (0);
 	}
+
 	uip = vp->v_ubcinfo;
-	object = _ubc_getobject(vp, UBC_NOREACTIVATE);
-	assert(object);
+	assert(uip->ui_control != MEMORY_OBJECT_CONTROL_NULL);
 
-	if (uip->ui_holdcnt++ == 0)
-			ubc_getobjref(vp);
-	if (uip->ui_holdcnt < 0)
-		panic("ubc_hold: ui_holdcnt");
+	ubc_lock(vp);
+	uip->ui_refcount++;
 
+	if (!ISSET(uip->ui_flags, UI_HASOBJREF)) {
+		ubc_unlock(vp);
+		if (memory_object_recover_named(uip->ui_control, TRUE) != KERN_SUCCESS) {
+			ubc_info_deallocate(uip);
+			return (0);
+		}
+		ubc_lock(vp);
+		SET(uip->ui_flags, UI_HASOBJREF);
+		ubc_unlock(vp);
+	} else {
+		ubc_unlock(vp);
+	}
+
+	assert(uip->ui_refcount > 0);
 	return (1);
 }
 
-/* relese the reference on the vm object */
+/*
+ * Drop the holdcount.
+ * release the reference on the vm object if the this is "uncached"
+ * ubc_info.
+ */
 void
 ubc_rele(struct vnode *vp)
 {
 	struct ubc_info *uip;
-	void *object;
 
 	if (UBCINVALID(vp))
 		return;
@@ -932,76 +830,40 @@ ubc_rele(struct vnode *vp)
 
 	uip = vp->v_ubcinfo;
 
-	/* get the object before loosing to hold count */
-	object = _ubc_getobject(vp, UBC_NOREACTIVATE);
+	if (uip->ui_refcount == 1)
+		panic("ubc_rele: ui_refcount");
 
-	if (uip->ui_holdcnt == 0)
-		panic("ubc_rele: ui_holdcnt");
+	--uip->ui_refcount;
 
-	if (--uip->ui_holdcnt == 0) {
-		/* If the object is already dead do nothing */
-		if (object)
-		vm_object_deallocate(object);
-#if DIAGNOSTIC
-		else
-			printf("ubc_rele: null object for %x", vp);
-#endif /* DIAGNOSTIC */
-	}
+	if ((uip->ui_refcount == 1)
+		&& ISSET(uip->ui_flags, UI_DONTCACHE))
+		(void) ubc_release_named(vp);
 
 	return;
 }
 
 /*
- * The vnode is mapped explicitly
- * Mark it so, and release the vm object reference gained in
- * ubc_info_init()
+ * The vnode is mapped explicitly, mark it so.
  */
-void
+__private_extern__ void
 ubc_map(struct vnode *vp)
 {
 	struct ubc_info *uip;
-	void *object;
- 
-	ubc_lock(vp);
-#if DIAGNOSTIC
-	assert(vp);
-#endif
 
-	if (UBCINVALID(vp)) {
-		ubc_unlock(vp);
+	if (UBCINVALID(vp))
 		return;
-	}
 
 	if (!UBCINFOEXISTS(vp))
-		panic("ubc_map: can not");
+		return;
 
+	ubc_lock(vp);
 	uip = vp->v_ubcinfo;
 
 	SET(uip->ui_flags, UI_WASMAPPED);
 	uip->ui_mapped = 1;
 	ubc_unlock(vp);
 
-#if 1
-	/*
-	 * Do not release the ubc reference on the
-	 * memory object right away. Let vnreclaim
-	 * deal with that
-	 */
-#else
-	/*
-	 * Release the ubc reference. memory object cahe
-	 * is responsible for caching this object now.
-	 */
-	if (ISSET(uip->ui_flags, UI_HASOBJREF)) {
-		object = _ubc_getobject(vp, UBC_NOREACTIVATE);
-		assert(object);
-		CLR(uip->ui_flags, UI_HASOBJREF);
-		vm_object_deallocate(object);
-	}
-#endif
-
 	return;
-
 }
 
 /*
@@ -1010,35 +872,108 @@ ubc_map(struct vnode *vp)
  * Return 1 if the reference was released, 0 otherwise.
  */
 int
-ubc_release(struct vnode *vp)
+ubc_release_named(struct vnode *vp)
 {
 	struct ubc_info *uip;
-	void *object;
-#if DIAGNOSTIC
-	assert(vp);
-#endif
+	memory_object_control_t control;
+	kern_return_t kret;
 
 	if (UBCINVALID(vp))
 		return (0);
 
 	if (!UBCINFOEXISTS(vp))
-		panic("ubc_release: can not");
+		return (0);
 
 	uip = vp->v_ubcinfo;
 
-	/* can not release held vnodes */
-	if (uip->ui_holdcnt)
-		return (0);
-
-	if (ISSET(uip->ui_flags, UI_HASOBJREF)) {
-		object = _ubc_getobject(vp, UBC_NOREACTIVATE);
-		assert(object);
+	/* can not release held or mapped vnodes */
+	if (ISSET(uip->ui_flags, UI_HASOBJREF) && 
+	    (uip->ui_refcount == 1) && !uip->ui_mapped) {
+		control = uip->ui_control;
+		assert(control);
 		CLR(uip->ui_flags, UI_HASOBJREF);
-		vm_object_deallocate(object);
-		return (1);
+		kret = memory_object_release_name(control,
+				MEMORY_OBJECT_RESPECT_CACHE);
+		return ((kret != KERN_SUCCESS) ? 0 : 1);
 	} else 
 		return (0);
 }
+
+/*
+ * This function used to called by extensions directly.  Some may
+ * still exist with this behavior.  In those cases, we will do the
+ * release as part of reclaiming or cleaning the vnode.  We don't
+ * need anything explicit - so just stub this out until those callers
+ * get cleaned up.
+ */
+int
+ubc_release(
+	struct vnode	*vp)
+{
+	return 0;
+}
+
+/*
+ * destroy the named reference for a given vnode
+ */
+__private_extern__ int
+ubc_destroy_named(
+	struct vnode	*vp)
+{
+	memory_object_control_t control;
+	struct proc *p;
+	struct ubc_info *uip;
+	kern_return_t kret;
+
+	/*
+	 * We may already have had the object terminated
+	 * and the ubcinfo released as a side effect of
+	 * some earlier processing.  If so, pretend we did
+	 * it, because it probably was a result of our
+	 * efforts.
+	 */
+	if (!UBCINFOEXISTS(vp))
+		return (1);
+
+	uip = vp->v_ubcinfo;
+
+	/* can not destroy held vnodes */
+	if (uip->ui_refcount > 1)
+		return (0);
+
+	/* 
+	 * Terminate the memory object.
+	 * memory_object_destroy() will result in
+	 * vnode_pager_no_senders(). 
+	 * That will release the pager reference
+	 * and the vnode will move to the free list.
+	 */
+	control = ubc_getobject(vp, UBC_HOLDOBJECT);
+	if (control != MEMORY_OBJECT_CONTROL_NULL) {
+
+		if (ISSET(vp->v_flag, VTERMINATE))
+			panic("ubc_destroy_named: already teminating");
+		SET(vp->v_flag, VTERMINATE);
+
+		kret = memory_object_destroy(control, 0);
+		if (kret != KERN_SUCCESS)
+			return (0);
+
+		/* 
+		 * memory_object_destroy() is asynchronous
+		 * with respect to vnode_pager_no_senders().
+		 * wait for vnode_pager_no_senders() to clear
+		 * VTERMINATE
+		 */
+		while (ISSET(vp->v_flag, VTERMINATE)) {
+			SET(vp->v_flag, VTERMWANT);
+			(void)tsleep((caddr_t)&vp->v_ubcinfo,
+						 PINOD, "ubc_destroy_named", 0);
+		}
+	}
+	return (1);
+}
+
 
 /*
  * Invalidate a range in the memory object that backs this
@@ -1049,47 +984,32 @@ int
 ubc_invalidate(struct vnode *vp, off_t offset, size_t size)
 {
 	struct ubc_info *uip;
-	void *object;
+	memory_object_control_t control;
 	kern_return_t kret;
 	off_t toff;
 	size_t tsize;
-	int didhold;
-
-#if DIAGNOSTIC
-	assert(vp);
-#endif
 
 	if (UBCINVALID(vp))
-		return;
+		return (0);
 
 	if (!UBCINFOEXISTS(vp))
-		panic("ubc_invalidate: can not");
+		return (0);
 
-	didhold = ubc_hold(vp);
 	toff = trunc_page_64(offset);
 	tsize = (size_t)(round_page_64(offset+size) - toff);
 	uip = vp->v_ubcinfo;
-	object = _ubc_getobject(vp, UBC_NOREACTIVATE);
-	assert(object);
-
-	/* 
-	 * memory_object_lock_request() drops an object
-	 * reference. gain a reference before calling it
-	 */
-	ubc_getobjref(vp);
+	control = uip->ui_control;
+	assert(control);
 
 	/* invalidate pages in the range requested */
-	kret = memory_object_lock_request(object,
-				(vm_object_offset_t)toff,
+	kret = memory_object_lock_request(control,
+				(memory_object_offset_t)toff,
 				(memory_object_size_t)tsize,
 				MEMORY_OBJECT_RETURN_NONE,
 				(MEMORY_OBJECT_DATA_NO_CHANGE| MEMORY_OBJECT_DATA_FLUSH),
-				VM_PROT_NO_CHANGE,MACH_PORT_NULL);
+				VM_PROT_NO_CHANGE);
 	if (kret != KERN_SUCCESS)
 		printf("ubc_invalidate: invalidate failed (error = %d)\n", kret);
-
-	if (didhold)
-		ubc_rele(vp);
 
 	return ((kret == KERN_SUCCESS) ? 1 : 0);
 }
@@ -1104,52 +1024,196 @@ ubc_isinuse(struct vnode *vp, int tookref)
 	int busycount = tookref ? 2 : 1;
 
 	if (!UBCINFOEXISTS(vp))
-		return(0);
+		return (0);
 
 	if (vp->v_usecount > busycount)
 		return (1);
 
 	if ((vp->v_usecount == busycount)
 		&& (vp->v_ubcinfo->ui_mapped == 1))
-		return(1);
+		return (1);
 	else
-		return(0);
+		return (0);
 }
 
-
-/* -- UGLY HACK ALERT -- */
 /*
- * The backdoor routine to clear the UI_WASMAPPED bit.
+ * The backdoor routine to clear the ui_mapped.
  * MUST only be called by the VM
  *
- * Note that this routine is not under funnel. There are numerous
- * thing about the calling sequence that make this work on SMP.
+ * Note that this routine is not called under funnel. There are numerous
+ * things about the calling sequence that make this work on SMP.
  * Any code change in those paths can break this.
  *
- * This will be replaced soon.
  */
-void
+__private_extern__ void
 ubc_unmap(struct vnode *vp)
 {
 	struct ubc_info *uip;
+	boolean_t 	funnel_state;
  
-#if DIAGNOSTIC
-	assert(vp);
-#endif
-
-	if (UBCINVALID(vp)) {
+	if (UBCINVALID(vp))
 		return;
-	}
 
 	if (!UBCINFOEXISTS(vp))
-		panic("ubc_unmap: can not");
+		return;
 
 	ubc_lock(vp);
 	uip = vp->v_ubcinfo;
-
 	uip->ui_mapped = 0;
+	if ((uip->ui_refcount > 1) || !ISSET(uip->ui_flags, UI_DONTCACHE)) {
+		ubc_unlock(vp);
+		return;
+	}
 	ubc_unlock(vp);
 
-	return;
+	funnel_state = thread_funnel_set(kernel_flock, TRUE);
+	(void) ubc_release_named(vp);
+	(void) thread_funnel_set(kernel_flock, funnel_state);
 }
 
+kern_return_t
+ubc_page_op(
+	struct vnode 	*vp,
+	off_t		f_offset,
+	int		ops,
+	vm_offset_t	*phys_entryp,
+	int		*flagsp)
+{
+	memory_object_control_t		control;
+
+	control = ubc_getobject(vp, UBC_FLAGS_NONE);
+	if (control == MEMORY_OBJECT_CONTROL_NULL)
+		return KERN_INVALID_ARGUMENT;
+
+	return (memory_object_page_op(control,
+				      (memory_object_offset_t)f_offset,
+				      ops,
+				      phys_entryp,
+				      flagsp));
+}
+				      
+kern_return_t
+ubc_create_upl(
+	struct vnode	*vp,
+	off_t 			f_offset,
+	long			bufsize,
+	upl_t			*uplp,
+	upl_page_info_t	**plp,
+	int				uplflags)
+{
+	memory_object_control_t		control;
+	int							count;
+	off_t						file_offset;
+	kern_return_t				kr;
+	
+	if (bufsize & 0xfff)
+		return KERN_INVALID_ARGUMENT;
+
+	control = ubc_getobject(vp, UBC_FLAGS_NONE);
+	if (control == MEMORY_OBJECT_CONTROL_NULL)
+		return KERN_INVALID_ARGUMENT;
+
+	uplflags |= (UPL_NO_SYNC|UPL_CLEAN_IN_PLACE|UPL_SET_INTERNAL);
+	count = 0;
+	kr = memory_object_upl_request(control, f_offset, bufsize,
+								   uplp, NULL, &count, uplflags);
+	if (plp != NULL)
+			*plp = UPL_GET_INTERNAL_PAGE_LIST(*uplp);
+	return kr;
+}
+				      
+
+kern_return_t
+ubc_upl_map(
+	upl_t		upl,
+	vm_offset_t	*dst_addr)
+{
+	return (vm_upl_map(kernel_map, upl, dst_addr));
+}
+
+
+kern_return_t
+ubc_upl_unmap(
+	upl_t	upl)
+{
+	return(vm_upl_unmap(kernel_map, upl));
+}
+
+kern_return_t
+ubc_upl_commit(
+	upl_t 			upl)
+{
+	upl_page_info_t	*pl;
+	kern_return_t 	kr;
+
+	pl = UPL_GET_INTERNAL_PAGE_LIST(upl);
+	kr = upl_commit(upl, pl, MAX_UPL_TRANSFER);
+	upl_deallocate(upl);
+	return kr;
+}
+
+
+kern_return_t
+ubc_upl_commit_range(
+	upl_t 			upl,
+	vm_offset_t		offset,
+	vm_size_t		size,
+	int				flags)
+{
+	upl_page_info_t	*pl;
+	boolean_t		empty;
+	kern_return_t 	kr;
+
+	if (flags & UPL_COMMIT_FREE_ON_EMPTY)
+		flags |= UPL_COMMIT_NOTIFY_EMPTY;
+
+	pl = UPL_GET_INTERNAL_PAGE_LIST(upl);
+
+	kr = upl_commit_range(upl, offset, size, flags,
+						  pl, MAX_UPL_TRANSFER, &empty);
+
+	if((flags & UPL_COMMIT_FREE_ON_EMPTY) && empty)
+		upl_deallocate(upl);
+
+	return kr;
+}
+	
+kern_return_t
+ubc_upl_abort_range(
+	upl_t			upl,
+	vm_offset_t		offset,
+	vm_size_t		size,
+	int				abort_flags)
+{
+	kern_return_t 	kr;
+	boolean_t		empty = FALSE;
+
+	if (abort_flags & UPL_ABORT_FREE_ON_EMPTY)
+		abort_flags |= UPL_ABORT_NOTIFY_EMPTY;
+
+	kr = upl_abort_range(upl, offset, size, abort_flags, &empty);
+
+	if((abort_flags & UPL_ABORT_FREE_ON_EMPTY) && empty)
+		upl_deallocate(upl);
+
+	return kr;
+}
+
+kern_return_t
+ubc_upl_abort(
+	upl_t			upl,
+	int				abort_type)
+{
+	kern_return_t	kr;
+
+	kr = upl_abort(upl, abort_type);
+	upl_deallocate(upl);
+	return kr;
+}
+
+upl_page_info_t *
+ubc_upl_pageinfo(
+	upl_t			upl)
+{	       
+	return (UPL_GET_INTERNAL_PAGE_LIST(upl));
+}

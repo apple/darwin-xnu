@@ -90,6 +90,13 @@ typedef struct blokmap {
 
 #define MAPPING_NULL	((struct mapping *) 0)
 
+#define mapDirect 0x08
+#define mapRWNA   0x00000000
+#define mapRWRO   0x00000001
+#define mapRWRW   0x00000002
+#define mapRORO   0x00000003
+
+
 typedef struct mappingctl {
 	unsigned int		mapclock;		/* Mapping allocation lock */
 	unsigned int		mapcrecurse;	/* Mapping allocation recursion control */
@@ -141,6 +148,7 @@ extern void 		mapping_protect_phys(struct phys_entry *pp, vm_prot_t prot, boolea
 extern void 		mapping_protect(pmap_t pmap, vm_offset_t vaddr, vm_prot_t prot);	/* Change protection of a single mapping to page */
 extern mapping 		*mapping_make(pmap_t pmap, struct phys_entry *pp, vm_offset_t va, vm_offset_t pa, vm_prot_t prot, int attr, boolean_t locked);	/* Make an address mapping */
 extern void 		mapping_purge(struct phys_entry *pp);		/* Remove all mappings for this physent */
+extern void		mapping_purge_pmap(struct phys_entry *pp, pmap_t pmap); /* Remove physent mappings for this pmap */
 extern vm_offset_t	mapping_p2v(pmap_t pmap, struct phys_entry *pp);	/* Finds first virtual mapping of a physical page in a space */
 extern void 		mapping_phys_attr(struct phys_entry *pp, vm_prot_t prot, unsigned int wimg);	/* Sets the default physical page attributes */
 extern void 		mapping_block_map_opt(pmap_t pmap, vm_offset_t va, vm_offset_t pa, vm_offset_t bnd, vm_size_t size, vm_prot_t prot, int attr);	/* Map a block optimally */

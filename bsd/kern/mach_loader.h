@@ -48,6 +48,7 @@ typedef struct _load_result {
     unsigned int
     /* boolean_t */	unixproc	:1,
     			dynlinker	:1,
+    			customstack	:1,
 					:0;
 } load_result_t;
 
@@ -56,7 +57,9 @@ load_return_t load_machfile(
 	struct mach_header	*header,
 	unsigned long		file_offset,
 	unsigned long		macho_size,
-	load_result_t		*result);
+	load_result_t		*result,
+	thread_act_t		thr_act,
+	vm_map_t			map);
 
 #define LOAD_SUCCESS		0
 #define LOAD_BADARCH		1	/* CPU type/subtype not found */

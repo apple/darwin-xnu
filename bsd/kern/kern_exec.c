@@ -155,6 +155,8 @@ execve(p, uap, retval)
 	load_return_t		lret;
 	load_result_t		load_result;
 	struct uthread		*uthread;
+	vm_map_t old_map;
+	vm_map_t map;
 	int i;
 	union {
 		/* #! and name of interpreter */
@@ -170,26 +172,34 @@ execve(p, uap, retval)
 	int savedpathlen = 0;
 	vm_offset_t *execargsp;
 	char *cpnospace;
-	task_t tsk;
+	task_t  task;
+	task_t new_task;
+	thread_act_t thr_act;
 	int numthreads;
+	int vfexec=0;
+	unsigned long arch_offset =0;
+	unsigned long arch_size = 0;
 
-	tsk = current_task();
+	task = current_task();
+	thr_act = current_act();
+	uthread = get_bsdthread_info(thr_act);
 
-
-	if(tsk != kernel_task) { 
-		numthreads = get_task_numacts(tsk);
-		if (numthreads <= 0 )
-			return(EINVAL);
-		if (numthreads > 1) {
-			return(EOPNOTSUPP);
+	if (uthread->uu_flag & P_VFORK) {
+			vfexec = 1; /* Mark in exec */
+	} else {
+		if (task != kernel_task) { 
+			numthreads = get_task_numacts(task);
+			if (numthreads <= 0 )
+				return(EINVAL);
+			if (numthreads > 1) {
+				return(EOPNOTSUPP);
+			}
 		}
 	}
 
 	ret = kmem_alloc_pageable(bsd_pageable_map, &execargs, NCARGS);
 	if (ret != KERN_SUCCESS)
 		return(ENOMEM);
-
-	uthread = get_bsdthread_info(current_act());
 
 	savedpath = execargs;
 
@@ -459,24 +469,45 @@ again:
 			goto bad;
 		}
 
-		/*
-		 *	Load the Mach-O file.
-		 */
-        VOP_UNLOCK(vp, 0, p);
-		lret = load_machfile(vp, mach_header, fat_arch.offset,
-				    fat_arch.size, &load_result);
+		arch_offset = fat_arch.offset;
+		arch_size = fat_arch.size;
 	} else {
 		/*
 		 *	Load the Mach-O file.
 		 */
-		VOP_UNLOCK(vp, 0, p);
-		lret = load_machfile(vp, mach_header, 0,
-				    (u_long)vattr.va_size, &load_result);
+		arch_offset = 0;
+		arch_size = (u_long)vattr.va_size;
 	}
+
+	if (vfexec) {
+ 		kern_return_t	result;
+
+		result = task_create_local(task, FALSE, FALSE, &new_task);
+		if (result != KERN_SUCCESS)
+	    	printf("execve: task_create failed. Code: 0x%x\n", result);
+		p->task = new_task;
+		set_bsdtask_info(new_task, p);
+		task = new_task;
+		map = get_task_map(new_task);
+		result = thread_create(new_task, &thr_act);
+		if (result != KERN_SUCCESS)
+	    	printf("execve: thread_create failed. Code: 0x%x\n", result);
+		uthread = get_bsdthread_info(thr_act);
+	} else {
+		map = VM_MAP_NULL;
+
+	}
+
+	/*
+	 *	Load the Mach-O file.
+	 */
+	VOP_UNLOCK(vp, 0, p);
+	lret = load_machfile(vp, mach_header, arch_offset,
+				arch_size, &load_result, thr_act, map);
 
 	if (lret != LOAD_SUCCESS) {
 		error = load_return_to_errno(lret);
-		goto bad;
+		goto badtoolate;
 	}
 
 	/* load_machfile() maps the vnode */
@@ -546,34 +577,38 @@ again:
 	p->p_cred->p_svuid = p->p_ucred->cr_uid;
 	p->p_cred->p_svgid = p->p_ucred->cr_gid;
 
-	if (p->p_flag & P_TRACED) {
+	if (!vfexec && (p->p_flag & P_TRACED)) {
 		psignal(p, SIGTRAP);
-#ifdef BSD_USE_APC
-		thread_apc_set(current_act(), bsd_ast);
-#else
 		ast_on(AST_BSD);
-#endif
 	}
 
 	if (error) {
-		goto bad;
+		goto badtoolate;
 	}
 	VOP_LOCK(vp,  LK_EXCLUSIVE | LK_RETRY, p);
 	vput(vp);
 	vp = NULL;
 	
 	if (load_result.unixproc &&
-		create_unix_stack(current_map(),
-				  load_result.user_stack, p)) {
+		create_unix_stack(get_task_map(task),
+				  load_result.user_stack, load_result.customstack, p)) {
 		error = load_return_to_errno(LOAD_NOSPACE);
-		goto bad;
+		goto badtoolate;
+	}
+
+	if (vfexec) {
+		uthread->uu_ar0 = (void *)get_user_regs(thr_act);
 	}
 
 	/*
 	 * Copy back arglist if necessary.
 	 */
 
+
 	ucp = p->user_stack;
+	if (vfexec) {
+		old_map = vm_map_switch(get_task_map(task));
+	}
 	if (load_result.unixproc) {
 		int pathptr;
 		
@@ -584,13 +619,16 @@ again:
 		 * the "path" at the begining of the execargs buffer.
 		 * copy it just before the string area.
 		 */
-                savedpathlen = (savedpathlen + NBPW-1) & ~(NBPW-1);
+		savedpathlen = (savedpathlen + NBPW-1) & ~(NBPW-1);
 		len = 0;
 		pathptr = ucp - savedpathlen;
 		error = copyoutstr(savedpath, (caddr_t)pathptr,
 					(unsigned)savedpathlen, &len);
-		if (error)
-			goto bad;
+		if (error) {
+			if (vfexec)
+				vm_map_switch(old_map);
+			goto badtoolate;
+		}
 		
 		/* Save a NULL pointer below it */
 		(void) suword((caddr_t)(pathptr - NBPW), 0);
@@ -645,6 +683,9 @@ again:
 		(void) suword((caddr_t)ap, load_result.mach_header);
 	}
 
+	if (vfexec) {
+		vm_map_switch(old_map);
+	}
 #if defined(i386) || defined(ppc)
  	uthread->uu_ar0[PC] = load_result.entry_point;
 #else
@@ -684,8 +725,13 @@ again:
 
 	  /* Collect the pathname for tracing */
 	  kdbg_trace_string(p, &dbg_arg1, &dbg_arg2, &dbg_arg3, &dbg_arg4);
-	  KERNEL_DEBUG_CONSTANT((TRACEDBG_CODE(DBG_TRACE_STRING, 2)) | DBG_FUNC_NONE,
-				dbg_arg1, dbg_arg2, dbg_arg3, dbg_arg4, 0);
+
+	  if (vfexec)
+	          KERNEL_DEBUG_CONSTANT1((TRACEDBG_CODE(DBG_TRACE_STRING, 2)) | DBG_FUNC_NONE,
+					dbg_arg1, dbg_arg2, dbg_arg3, dbg_arg4, getshuttle_thread(thr_act));
+	  else
+	          KERNEL_DEBUG_CONSTANT((TRACEDBG_CODE(DBG_TRACE_STRING, 2)) | DBG_FUNC_NONE,
+					dbg_arg1, dbg_arg2, dbg_arg3, dbg_arg4, 0);
 	}
 
 	/*
@@ -698,18 +744,29 @@ again:
 		wakeup((caddr_t)p->p_pptr);
 	}
 
+	if (vfexec && (p->p_flag & P_TRACED)) {
+			psignal_vfork(p, new_task, thr_act, SIGTRAP);
+	}
+
+badtoolate:
+	if (vfexec) {
+		(void) thread_resume(thr_act);
+		task_deallocate(new_task);
+		act_deallocate(thr_act);
+		if (error)
+			error = 0;
+	}
 bad:
 	FREE_ZONE(nd.ni_cnd.cn_pnbuf, nd.ni_cnd.cn_pnlen, M_NAMEI);
 	if (vp)
 		vput(vp);
 bad1:
-#if FIXME  /* [ */
-	if (execargs)
-		kmem_free_wakeup(bsd_pageable_map, execargs, NCARGS);
-#else  /* FIXME ][ */
 	if (execargs)
 		kmem_free(bsd_pageable_map, execargs, NCARGS);
-#endif  /* FIXME ] */
+	if (!error && vfexec) {
+			vfork_return(current_act(), p->p_pptr, p, retval);
+			return(0);
+	}
 	return(error);
 }
 
@@ -717,23 +774,22 @@ bad1:
 #define	unix_stack_size(p)	(p->p_rlimit[RLIMIT_STACK].rlim_cur)
 
 kern_return_t
-create_unix_stack(map, user_stack, p)
+create_unix_stack(map, user_stack, customstack, p)
 	vm_map_t	map;
 	vm_offset_t	user_stack;
+	int			customstack;
 	struct proc	*p;
 {
 	vm_size_t	size;
 	vm_offset_t	addr;
 
 	p->user_stack = user_stack;
-	size = round_page(unix_stack_size(p));
-#if	STACK_GROWTH_UP
-	/* stack always points to first address for stacks */
-	addr = user_stack;
-#else	STACK_GROWTH_UP
-	addr = trunc_page(user_stack - size);
-#endif	/* STACK_GROWTH_UP */
-	return (vm_allocate(map,&addr, size, FALSE));
+	if (!customstack) {
+		size = round_page(unix_stack_size(p));
+		addr = trunc_page(user_stack - size);
+		return (vm_allocate(map,&addr, size, FALSE));
+	} else
+		return(KERN_SUCCESS);
 }
 
 #include <sys/reboot.h>

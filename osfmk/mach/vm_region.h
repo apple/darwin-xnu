@@ -141,7 +141,7 @@ struct vm_region_extended_info {
         unsigned int            pages_resident;
         unsigned int            pages_shared_now_private;
         unsigned int            pages_swapped_out;
-        unsigned int            pages_referenced;
+        unsigned int            pages_dirtied;
         unsigned int            ref_count;
         unsigned short          shadow_depth;
         unsigned char           external_pager;
@@ -205,7 +205,7 @@ struct vm_region_submap_info {
         unsigned int            pages_resident;	/* only valid for objects */
         unsigned int            pages_shared_now_private; /* only for objects */
         unsigned int            pages_swapped_out; /* only for objects */
-        unsigned int            pages_referenced; /* only for objects */
+        unsigned int            pages_dirtied;   /* only for objects */
         unsigned int            ref_count;	 /* obj/map mappers, etc */
         unsigned short          shadow_depth; 	/* only for obj */
         unsigned char           external_pager;  /* only for obj */
@@ -233,7 +233,7 @@ struct vm_region_submap_info_64 {
         unsigned int            pages_resident;	/* only valid for objects */
         unsigned int            pages_shared_now_private; /* only for objects */
         unsigned int            pages_swapped_out; /* only for objects */
-        unsigned int            pages_referenced; /* only for objects */
+        unsigned int            pages_dirtied;   /* only for objects */
         unsigned int            ref_count;	 /* obj/map mappers, etc */
         unsigned short          shadow_depth; 	/* only for obj */
         unsigned char           external_pager;  /* only for obj */

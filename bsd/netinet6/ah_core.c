@@ -221,7 +221,7 @@ ah_keyed_md5_init(state, sav)
 		panic("ah_keyed_md5_init: what?");
 
 	state->sav = sav;
-	state->foo = (void *)_MALLOC(sizeof(MD5_CTX), M_TEMP, M_NOWAIT);
+	state->foo = (void *)_MALLOC(sizeof(MD5_CTX), M_TEMP, M_WAITOK);
 	if (state->foo == NULL)
 		panic("ah_keyed_md5_init: what?");
 	MD5Init((MD5_CTX *)state->foo);
@@ -334,7 +334,7 @@ ah_keyed_sha1_init(state, sav)
 		panic("ah_keyed_sha1_init: what?");
 
 	state->sav = sav;
-	state->foo = (void *)_MALLOC(sizeof(SHA1_CTX), M_TEMP, M_NOWAIT);
+	state->foo = (void *)_MALLOC(sizeof(SHA1_CTX), M_TEMP, M_WAITOK);
 	if (!state->foo)
 		panic("ah_keyed_sha1_init: what?");
 
@@ -458,7 +458,7 @@ ah_hmac_md5_init(state, sav)
 		panic("ah_hmac_md5_init: what?");
 
 	state->sav = sav;
-	state->foo = (void *)_MALLOC(64 + 64 + sizeof(MD5_CTX), M_TEMP, M_NOWAIT);
+	state->foo = (void *)_MALLOC(64 + 64 + sizeof(MD5_CTX), M_TEMP, M_WAITOK);
 	if (!state->foo)
 		panic("ah_hmac_md5_init: what?");
 
@@ -575,7 +575,7 @@ ah_hmac_sha1_init(state, sav)
 
 	state->sav = sav;
 	state->foo = (void *)_MALLOC(64 + 64 + sizeof(SHA1_CTX),
-			M_TEMP, M_NOWAIT);
+			M_TEMP, M_WAITOK);
 	if (!state->foo)
 		panic("ah_hmac_sha1_init: what?");
 

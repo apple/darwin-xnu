@@ -28,7 +28,13 @@
  *  Created.
  */
 
-#include <mach/mach_types.h>
+#include <kern/task.h>
+
+static void
+task_priority(
+	task_t			task,
+	integer_t		priority,
+	integer_t		max_priority);
 
 kern_return_t
 task_policy_set(
@@ -37,7 +43,9 @@ task_policy_set(
 	task_policy_t			policy_info,
 	mach_msg_type_number_t	count)
 {
-	if (task == TASK_NULL)
+	kern_return_t		result = KERN_SUCCESS;
+
+	if (task == TASK_NULL || task == kernel_task)
 		return (KERN_INVALID_ARGUMENT);
 
 	switch (flavor) {
@@ -49,29 +57,125 @@ task_policy_set(
 		if (count < TASK_CATEGORY_POLICY_COUNT)
 			return (KERN_INVALID_ARGUMENT);
 
-		switch (info->role) {
+		task_lock(task);
 
-		case TASK_UNSPECIFIED:
-		case TASK_FOREGROUND_APPLICATION:
-		case TASK_BACKGROUND_APPLICATION:
-		case TASK_CONTROL_APPLICATION:
-		case TASK_GRAPHICS_SERVER:
-			return (KERN_SUCCESS);
+		if (	info->role == TASK_FOREGROUND_APPLICATION	||
+				info->role == TASK_BACKGROUND_APPLICATION		) {
+			switch (task->role) {
 
-		default:
-			return (KERN_INVALID_ARGUMENT);
+			case TASK_FOREGROUND_APPLICATION:
+			case TASK_BACKGROUND_APPLICATION:
+			case TASK_UNSPECIFIED:
+				task_priority(task, BASEPRI_DEFAULT +
+					((info->role == TASK_FOREGROUND_APPLICATION)? +16: +15),
+							  task->max_priority);
+				task->role = info->role;
+				break;
+
+			case TASK_CONTROL_APPLICATION:
+			case TASK_RENICED:
+				/* fail silently */
+				break;
+
+			default:
+				result = KERN_INVALID_ARGUMENT;
+				break;
+			}
 		}
+		else
+		if (info->role == TASK_CONTROL_APPLICATION) {
+			if (	task != current_task()			||
+					task->sec_token.val[0] != 0			)
+				result = KERN_INVALID_ARGUMENT;
+			else {
+				task_priority(task, BASEPRI_DEFAULT + 17, task->max_priority);
+				task->role = info->role;
+			}
+		}
+		else
+		if (info->role == TASK_GRAPHICS_SERVER) {
+			if (	task != current_task()			||
+					task->sec_token.val[0] != 0			)
+				result = KERN_INVALID_ARGUMENT;
+			else {
+				task_priority(task, MAXPRI_SYSTEM - 3, MAXPRI_SYSTEM);
+				task->role = info->role;
+			}
+		}
+		else
+			result = KERN_INVALID_ARGUMENT;
+
+		task_unlock(task);
 
 		break;
 	}
 
 	default:
+		result = KERN_INVALID_ARGUMENT;
+		break;
+	}
+
+	return (result);
+}
+
+static void
+task_priority(
+	task_t			task,
+	integer_t		priority,
+	integer_t		max_priority)
+{
+	thread_act_t	act;
+
+	task->max_priority = max_priority;
+
+	if (priority > task->max_priority)
+		priority = task->max_priority;
+	else
+	if (priority < MINPRI)
+		priority = MINPRI;
+
+	task->priority = priority;
+
+	queue_iterate(&task->thr_acts, act, thread_act_t, thr_acts) {
+		thread_t		thread = act_lock_thread(act);
+
+		if (act->active)
+			thread_task_priority(thread, priority, max_priority);
+
+		act_unlock_thread(act);
+	}
+}
+
+kern_return_t
+task_importance(
+	task_t				task,
+	integer_t			importance)
+{
+	if (task == TASK_NULL || task == kernel_task)
+		return (KERN_INVALID_ARGUMENT);
+
+	task_lock(task);
+
+	if (!task->active) {
+		task_unlock(task);
+
+		return (KERN_TERMINATED);
+	}
+
+	if (task->role >= TASK_CONTROL_APPLICATION) {
+		task_unlock(task);
+
 		return (KERN_INVALID_ARGUMENT);
 	}
 
+	task_priority(task, importance + BASEPRI_DEFAULT, task->max_priority);
+	task->role = TASK_RENICED;
+
+	task_unlock(task);
+
 	return (KERN_SUCCESS);
 }
-
+		
 kern_return_t
 task_policy_get(
 	task_t					task,
@@ -80,7 +184,7 @@ task_policy_get(
 	mach_msg_type_number_t	*count,
 	boolean_t				*get_default)
 {
-	if (task == TASK_NULL)
+	if (task == TASK_NULL || task == kernel_task)
 		return (KERN_INVALID_ARGUMENT);
 
 	switch (flavor) {
@@ -92,7 +196,13 @@ task_policy_get(
 		if (*count < TASK_CATEGORY_POLICY_COUNT)
 			return (KERN_INVALID_ARGUMENT);
 
-		info->role = TASK_UNSPECIFIED;
+		if (*get_default)
+			info->role = TASK_UNSPECIFIED;
+		else {
+			task_lock(task);
+			info->role = task->role;
+			task_unlock(task);
+		}
 		break;
 	}
 

@@ -168,4 +168,8 @@ typedef struct MachineThrAct {
 
 } MachineThrAct, *MachineThrAct_t;
 
+extern void *act_thread_csave(void);
+extern void act_thread_catt(void *ctx);
+extern void act_thread_cfree(void *ctx);
+
 #endif	/* _I386_THREAD_ACT_H_ */

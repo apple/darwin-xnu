@@ -448,17 +448,19 @@ void ddp_notify_nbp(socket, pid, ddptype)
      unsigned char ddptype; /* not used */
 {
 	extern int nve_lock;
-	nve_entry_t *nve_entry;
+	nve_entry_t *nve_entry, *nve_next;
 
 	if (at_state.flags & AT_ST_STARTED) {
 		/* *** NBP_CLOSE_NOTE processing (from ddp_nbp.c) *** */
    		ATDISABLE(nve_lock, NVE_LOCK);
-		TAILQ_FOREACH(nve_entry, &name_registry, nve_link) {
+                for ((nve_entry = TAILQ_FIRST(&name_registry)); nve_entry; nve_entry = nve_next) {
+                        nve_next = TAILQ_NEXT(nve_entry, nve_link);
 			if ((at_socket)socket == nve_entry->address.socket &&
 			    /* *** check complete address and ddptype here *** */
 			    pid == nve_entry->pid &&
 			    ot_ddp_check_socket(nve_entry->address.socket,
 						nve_entry->pid) < 2) {
+                                /* NB: nbp_delete_entry calls TAILQ_REMOVE */
 				nbp_delete_entry(nve_entry);
 			}
 		}
@@ -1041,9 +1043,10 @@ void ddp_input(mp, ifID)
 		   ATP / raw-DDP and ADSP / raw-DDP are possible */
 		for (gref = ddp_head.atpcb_next; gref != &ddp_head; 
 		       gref = gref->atpcb_next)
-		    if (gref->lport == socket) {
-			dPrintf(D_M_DDP, D_L_INPUT, 
-				("ddp_input: streamq, skt %d\n", socket));
+		    if (gref->lport == socket &&
+		    	(gref->ddptype == 0 || gref->ddptype == ddp->type)) {
+					dPrintf(D_M_DDP, D_L_INPUT, 
+					("ddp_input: streamq, skt %d\n", socket));
 			if (gref->atpcb_socket) {
 				struct sockaddr_at ddp_in;
 				ddp_in.sat_len = sizeof(ddp_in);

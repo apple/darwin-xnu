@@ -145,9 +145,6 @@ simple_lock_data_t	gBufferPtrListLock;
 
 //static char hfs_fs_name[MFSNAMELEN] = "hfs";
 
-/* The following represent information held in low-memory on the MacOS: */
-
-struct FSVarsRec	*gFSMVars;
 
 /*
  * Global variables defined in other modules:
@@ -211,8 +208,10 @@ hfs_mountroot()
 	/* Init hfsmp */
 	hfsmp = VFSTOHFS(mp);
 
-	hfsmp->hfs_dir_mask = (S_IRWXU|S_IRWXG|S_IRWXO);		/* 0777 */
-	hfsmp->hfs_file_mask = (S_IRWXU|S_IRWXG|S_IRWXO);		/* 0777 */
+	hfsmp->hfs_uid = UNKNOWNUID;
+	hfsmp->hfs_gid = UNKNOWNGID;
+	hfsmp->hfs_dir_mask = (S_IRWXU | S_IRGRP|S_IXGRP | S_IROTH|S_IXOTH); /* 0755 */
+	hfsmp->hfs_file_mask = (S_IRWXU | S_IRGRP|S_IXGRP | S_IROTH|S_IXOTH); /* 0755 */
 
 	(void)hfs_statfs(mp, &mp->mnt_stat, p);
 	
@@ -253,7 +252,7 @@ hfs_mount (mp, path, data, ndp, p)
 	 * read/write; if there is no device name, that's all we do.
 	 */
 	if (mp->mnt_flag & MNT_UPDATE) {
-
+		
 		hfsmp = VFSTOHFS(mp);
 		if ((hfsmp->hfs_fs_ronly == 0) && (mp->mnt_flag & MNT_RDONLY)) {
 		
@@ -429,6 +428,11 @@ hfs_changefs(mp, args, p)
 	vcb = HFSTOVCB(hfsmp);
 	permswitch = (((hfsmp->hfs_unknownpermissions != 0) && ((mp->mnt_flag & MNT_UNKNOWNPERMISSIONS) == 0)) ||
 					((hfsmp->hfs_unknownpermissions == 0) && ((mp->mnt_flag & MNT_UNKNOWNPERMISSIONS) != 0)));
+	/* The root filesystem must operate with actual permissions: */
+	if (permswitch && (mp->mnt_flag & MNT_ROOTFS) && (mp->mnt_flag & MNT_UNKNOWNPERMISSIONS)) {
+		mp->mnt_flag &= ~MNT_UNKNOWNPERMISSIONS;	/* Just say "No". */
+		return EINVAL;
+	};		
 	hfsmp->hfs_unknownpermissions = ((mp->mnt_flag & MNT_UNKNOWNPERMISSIONS) != 0);
 	namefix =  permfix = 0;
 
@@ -556,12 +560,13 @@ loop:
 				hp->h_meta->h_gid = VTOHFS(vp)->hfs_gid;
                                 
 				/* Default access is full read/write/execute: */
-				hp->h_meta->h_mode = ACCESSPERMS;	/* 0777: rwxrwxrwx */
+				hp->h_meta->h_mode &= IFMT;
+				hp->h_meta->h_mode |= ACCESSPERMS;	/* 0777: rwxrwxrwx */
 				/* ... but no more than that permitted by the mount point's: */
 				if ((hp->h_meta->h_mode & IFMT) == IFDIR) {
-					hp->h_meta->h_mode &= VTOHFS(vp)->hfs_dir_mask;
+					hp->h_meta->h_mode &= IFMT | VTOHFS(vp)->hfs_dir_mask;
 				} else {
-					hp->h_meta->h_mode &= VTOHFS(vp)->hfs_file_mask;
+					hp->h_meta->h_mode &= IFMT | VTOHFS(vp)->hfs_file_mask;
 				}
 			};
 		};
@@ -872,6 +877,13 @@ hfs_mountfs(struct vnode *devvp, struct mount *mp, struct proc *p, struct hfs_mo
 	retval = VOP_IOCTL(devvp, DKIOCSETBLOCKSIZE, &blksize, FWRITE, cred, p);
 	if (retval) return retval;
 	devvp->v_specsize = blksize;
+
+	/* cache the IO attributes */
+	if ((retval = vfs_init_io_attributes(devvp, mp))) {
+		printf("hfs_mountfs: vfs_init_io_attributes returned %d\n",
+			retval);
+		return (retval);
+	}
 
     DBG_VFS(("hfs_mountfs: reading MDB [block no. %d + %d bytes, size %d bytes]...\n",
              IOBLKNOFORBLK(kMasterDirectoryBlock, blksize),
@@ -1260,6 +1272,7 @@ loop:;
     for (vp = mp->mnt_vnodelist.lh_first;
          vp != NULL;
          vp = nvp) {
+		 int didhold;
         /*
          * If the vnode that we are about to sync is no longer
          * associated with this mount point, start over.
@@ -1289,12 +1302,16 @@ loop:;
             continue;
         }
 		
+		didhold = ubc_hold(vp);
         if ((error = VOP_FSYNC(vp, cred, waitfor, p))) {
             DBG_ERR(("hfs_sync: error %d calling fsync on vnode 0x%X.\n", error, (u_int)vp));
             allerror = error;
         };
         DBG_ASSERT(*((volatile int *)(&(vp)->v_interlock))==0);
-        vput(vp);
+        VOP_UNLOCK(vp, 0, p);
+		if (didhold)
+			ubc_rele(vp);
+        vrele(vp);
         simple_lock(&mntvnode_slock);
     };
 
@@ -1398,7 +1415,18 @@ struct ucred **credanonp;
 	if (result) return result;
 	if (nvp == NULL) return ESTALE;
 	
-	if ((hfsfhp->hfsfid_gen != VTOH(nvp)->h_meta->h_crtime)) {
+	/* The createtime can be changed by hfs_setattr or hfs_setattrlist.
+	 * For NFS, we are assuming that only if the createtime was moved
+	 * forward would it mean the fileID got reused in that session by
+	 * wrapping. We don't have a volume ID or other unique identifier to
+	 * to use here for a generation ID across reboots, crashes where 
+	 * metadata noting lastFileID didn't make it to disk but client has
+	 * it, or volume erasures where fileIDs start over again. Lastly,
+	 * with HFS allowing "wraps" of fileIDs now, this becomes more
+	 * error prone. Future, would be change the "wrap bit" to a unique
+	 * wrap number and use that for generation number. For now do this.
+	 */  
+	if ((hfsfhp->hfsfid_gen < VTOH(nvp)->h_meta->h_crtime)) {
 		vput(nvp);
 		return ESTALE;
 	};
@@ -1484,25 +1512,10 @@ struct vfsconf *vfsp;
     };
     gBufferListIndex = 0;
 
-    /*
-     * Do any initialization that the MacOS/MacOS X shared code relies on
-     * (normally done as part of MacOS's startup):
-     */
-    MALLOC(gFSMVars, FSVarsRec *, sizeof(FSVarsRec), M_TEMP, M_WAITOK);
-    bzero(gFSMVars, sizeof(FSVarsRec));
-
 	/*
 	 * Allocate Catalog Iterator cache...
 	 */
 	err = InitCatalogCache();
-#if HFS_DIAGNOSTIC
-    if (err) panic("hfs_init: Error returned from InitCatalogCache() call.");
-#endif
-	/*
-	 * XXX do we need to setup the following?
-	 *
-	 * GMT offset, Unicode globals, CatSearch Buffers, BTSscanner
-	 */
 
     return E_NONE;
 }
@@ -1619,12 +1632,10 @@ Lookup_Err_Exit:
 
 Err_Exit:
 
-	if (retval != E_NONE) {
-        DBG_VFS(("hfs_vget: Error returned of %d\n", retval));
-		}
-	else {
-        DBG_VFS(("hfs_vget: vp = 0x%x\n", (u_int)*vpp));
-		}
+	/* rember if a parent directory was looked up by CNID */
+	if (retval == 0 && ((*vpp)->v_type == VDIR)
+	    && lockstatus(&mp->mnt_lock) != LK_SHARED)
+		VTOH(*vpp)->h_nodeflags |= IN_BYCNID;
 
     return (retval);
 
@@ -1690,7 +1701,6 @@ short hfs_flushMDB(struct hfsmount *hfsmp, int waitfor)
 		retval = utf8_to_mac_roman(namelen, vcb->vcbVN, mdb->drVN);
 	
 	mdb->drVolBkUp	= SWAP_BE32 (UTCToLocal(vcb->vcbVolBkUp));
-	mdb->drVSeqNum	= SWAP_BE16 (vcb->vcbVSeqNum);
 	mdb->drWrCnt	= SWAP_BE32 (vcb->vcbWrCnt);
 	mdb->drNmRtDirs	= SWAP_BE16 (vcb->vcbNmRtDirs);
 	mdb->drFilCnt	= SWAP_BE32 (vcb->vcbFilCnt);

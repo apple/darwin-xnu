@@ -164,8 +164,9 @@ struct	linger {
 #define	AF_NATM		31		/* native ATM access */
 #define AF_SYSTEM	32              /* Kernel event messages */
 #define AF_NETBIOS	33		/* NetBIOS */
+#define AF_PPP		34		/* PPP communication protocol */
 
-#define	AF_MAX		34
+#define	AF_MAX		35
 
 /*
  * Structure used by kernel to store most
@@ -247,6 +248,7 @@ struct sockaddr_storage {
 #define	PF_ATM		AF_ATM
 #define PF_SYSTEM	AF_SYSTEM
 #define PF_NETBIOS	AF_NETBIOS
+#define PF_PPP		AF_PPP
 
 #define	PF_MAX		AF_MAX
 

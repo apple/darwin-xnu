@@ -142,13 +142,13 @@ notonintstack:
 #endif	
  			stw		r4,THREAD_CONTINUATION(r3)
 			cmpwi	cr1,r4,0						/* used waaaay down below */
-			lwz		r11,0(r12)
-			stw		r11,THREAD_KERNEL_STACK(r3)
+			lwz		r7,0(r12)
 /*
  * Make the new thread the current thread.
  */
 	
 			lwz		r11,PP_CPU_DATA(r6)
+			stw		r7,THREAD_KERNEL_STACK(r3)
 			stw		r5,	CPU_ACTIVE_THREAD(r11)
 			
 			lwz		r11,THREAD_KERNEL_STACK(r5)
@@ -156,14 +156,17 @@ notonintstack:
 			lwz		r5,THREAD_TOP_ACT(r5)
 			lwz		r10,PP_ACTIVE_STACKS(r6)
 			lwz		r7,CTHREAD_SELF(r5)				; Pick up the user assist word
-			lwz		r8,ACT_MACT_PCB(r5)				/* Get the PCB for the new guy */
+			lwz		r8,ACT_MACT_PCB(r5)				; Get the PCB for the new guy
 		
 			stw		r11,0(r10)						; Save the kernel stack address
 			stw		r7,UAW(r6)						; Save the assist word for the "ultra fast path"
+			
+			lwz		r11,ACT_MACT_BTE(r5)			; Get BlueBox Task Environment
 		
 			lwz		r7,ACT_MACT_SPF(r5)				; Get the special flags
 			
 			lwz		r10,ACT_KLOADED(r5)
+			stw		r11,ppbbTaskEnv(r6)				; Save the bb task env
 			li		r0,0
 			cmpwi	cr0,r10,0
 			lwz		r10,PP_ACTIVE_KLOADED(r6)
@@ -272,7 +275,7 @@ ENTRY(switch_in, TAG_NO_FRAME_USED)
 
 			
 /*
- * void fpu_save(void)
+ * void fpu_save(thread_act_t act)
  *
  *		To do the floating point and VMX, we keep three thread pointers:  one
  *		to the current thread, one to the thread that has the floating point context
@@ -441,11 +444,10 @@ ENTRY(switch_in, TAG_NO_FRAME_USED)
 ;       7)	exit to interrupt return
 ;       
 ;       
-;       Context save (operates on current activation's data; only used during context switch):
-;       			 (context switch always disables the facility)
-;       
+;       Context save (operates on specified activation's data):
+
 ;       1)	if no owner exit
-;       2)	if owner != current activation exit
+;       2)	if owner != specified activation exit
 ;       3)	if context processor != current processor 
 ;       	1)	clear owner
 ;       	2)	exit
@@ -507,6 +509,7 @@ ENTRY(fpu_save, TAG_NO_FRAME_USED)
 #if FPVECDBG
 			mr		r7,r0					; (TEST/DEBUG)
 			li		r4,0					; (TEST/DEBUG)
+			mr		r10,r3					; (TEST/DEBUG)
 			lis		r0,HIGH_ADDR(CutTrace)	; (TEST/DEBUG)
 			mr.		r3,r12					; (TEST/DEBUG)
 			li		r2,0x6F00				; (TEST/DEBUG)
@@ -518,23 +521,29 @@ ENTRY(fpu_save, TAG_NO_FRAME_USED)
 noowneryet:	oris	r0,r0,LOW_ADDR(CutTrace)	; (TEST/DEBUG)
 			sc								; (TEST/DEBUG)
 			mr		r0,r7					; (TEST/DEBUG)
+			mr		r3,r10					; (TEST/DEBUG)
 #endif	
 			mflr	r2						; Save the return address
-			lwz		r10,PP_CPU_DATA(r6)		; Get the CPU data pointer
 			lhz		r11,PP_CPU_NUMBER(r6)	; Get our CPU number
 			
 			mr.		r12,r12					; Anyone own the FPU?
+			cmplw	cr1,r3,r12				; Is the specified thread the owner?
 			
-			lwz		r10,CPU_ACTIVE_THREAD(r10)	; Get the pointer to the active thread
+			beq-	fsretnr					; Nobody owns the FPU, no save required...
 			
-			beq-	fsret					; Nobody owns the FPU, no save required...
+			li		r4,ACT_MACT_FPUcpu		; Point to the CPU indication/lock word
+			bne-	cr1,fsretnr				; Facility belongs to some other activation...
 			
-			lwz		r10,THREAD_TOP_ACT(r10)	; Now get the activation that is running
-			lwz		r9,ACT_MACT_FPUcpu(r12)	; Get the last CPU to use this context
+fsvSpin2:	lwarx	r9,r4,r12				; Get and reserve the last used CPU
+			mr.		r9,r9					; Is it changing now?
+			oris	r3,r9,hi16(fvChk)		; Set the "changing" flag
+			blt-	fsvSpin2				; Spin if changing
+			stwcx.	r3,r4,r12				; Lock it up
+			bne-	fsvSpin2				; Someone is messing right now
+
+			isync							; Make sure we see everything
 			
-			cmplw	r12,r10					; Do we own the FPU?
 			cmplw	cr1,r9,r11				; Was the context for this processor? 
-			bne+	fsret					; Facility belongs to some other activation...
 			li		r3,0					; Assume we need a fix-me-up
 			beq-	cr1,fsgoodcpu			; Facility last used on this processor...
 			stw		r3,PP_FPU_THREAD(r6)	; Clear owner because it was really on the other processor
@@ -648,7 +657,12 @@ dontkillmedead:								; (TEST/DEBUG)
 			ble+	cr1,chkkillmedead		; (TEST/DEBUG)
 #endif
 
-fsret:		mtmsr	r0						; Put interrupts on if they were and floating point off
+fsret:		lwz		r4,ACT_MACT_FPUcpu(r12)	; Get back the owner CPU
+			rlwinm	r4,r4,0,fvChkb+1,31		; Clear lock
+			sync
+			stw		r4,ACT_MACT_FPUcpu(r12)	; Unlock the context
+
+fsretnr:	mtmsr	r0						; Put interrupts on if they were and floating point off
 			isync
 
 			blr
@@ -725,11 +739,21 @@ ENTRY(fpu_switch, TAG_NO_FRAME_USED)
 			
 			beq-	fsnosave				; No live context, so nothing to save...
 
-			lwz		r19,ACT_MACT_FPUcpu(r12)	; Get the "old" active CPU
+			li		r20,ACT_MACT_FPUcpu		; Point to the CPU indication/lock word
+
+fsSpin1:	lwarx	r19,r20,r12				; Get and reserve the last used CPU
+			mr.		r19,r19					; Is it changing now?
+			oris	r21,r19,hi16(fvChk)		; Set the "changing" flag
+			blt-	fsSpin1					; Spin if changing
+			stwcx.	r21,r20,r12				; Lock it up
+			bne-	fsSpin1					; Someone is messing right now
+
+			isync							; Make sure we see everything
+
 			lwz		r15,ACT_MACT_PCB(r12)	; Get the current level of the "old" one
 			cmplw	r18,r19					; Check the CPU that the old context is live on
 			lwz		r14,ACT_MACT_FPU(r12)	; Point to the top of the old context stack
-			bne-	fsnosave				; Context is not live if used on a different CPU...
+			bne-	fsnosaverel				; Context is not live if used on a different CPU...
 			lwz		r13,ACT_MACT_FPUlvl(r12)	; Get the "old" active level
 			
 ;
@@ -768,7 +792,7 @@ ENTRY(fpu_switch, TAG_NO_FRAME_USED)
 			cmplwi	cr2,r14,0				; Is there any saved context?
 			bne-	fsmstsave				; Levels are different, we need to save...
 			
-			beq-	cr2,fsenable			; No saved context at all, enable and go...
+			beq-	cr2,fsenableret			; No saved context at all, enable and go...
 			
 			lwz		r20,SAVlvlfp(r14)		; Get the level of the top savearea
 
@@ -782,9 +806,12 @@ ENTRY(fpu_switch, TAG_NO_FRAME_USED)
 #endif	
 			cmplw	r15,r20					; Is the top level the same as the current?
 			li		r0,1					; Get the invalid flag
-			bne-	fsenable				; Not the same, just enable and go...
+			bne-	fsenableret				; Not the same, just enable and go...
 			
 			stw		r0,SAVlvlfp(r14)		; Invalidate that top savearea
+fsenableret:
+			sync							; Make sure everything is saved
+			stw		r19,ACT_MACT_FPUcpu(r12)	; Say we are not using the context anymore
 
 			b		fsenable				; Then enable and go...
 			
@@ -811,7 +838,7 @@ fsmstsave:	beq-	cr2,fsgetsave			; There is no possible cached save area
 			cmplwi	r5,1					; Is it invalid?
 			cmplw	cr1,r5,r13				; Is the SA level the active one?
 			beq+	fsusecache				; Invalid, just use it...
-			beq-	cr1,fsnosave			; The SA level is active, it is already saved...
+			beq-	cr1,fsnosaverel			; The SA level is active, it is already saved...
 			
 fsgetsave:	mr		r3,r4					; Use the interrupt save as the context savearea if none cached
 #if FPVECDBG
@@ -919,8 +946,24 @@ fsusecache:	la		r11,savefp0(r3)			; Point to the 1st line in area
 ;			would be safe! My God! It is terrifying!
 ;
 
+
+fsnosaverel:
+			sync							; Make sure everything is saved
+			stw		r19,ACT_MACT_FPUcpu(r12)	; Say we are not using the context anymore
 			
-fsnosave:	lwz		r15,ACT_MACT_PCB(r17)	; Get the current level of the "new" one
+fsnosave:	
+			li		r20,ACT_MACT_FPUcpu		; Point to the CPU indication/lock word
+			
+fsSpin2:	lwarx	r19,r20,r17				; Get and reserve the last used CPU
+			mr.		r19,r19					; Is it changing now?
+			oris	r21,r19,hi16(fvChk)		; Set the "changing" flag
+			blt-	fsSpin2					; Spin if changing
+			stwcx.	r21,r20,r17				; Lock it up
+			bne-	fsSpin2					; Someone is messing right now
+
+			isync							; Make sure we see everything
+
+			lwz		r15,ACT_MACT_PCB(r17)	; Get the current level of the "new" one
 			lwz		r14,ACT_MACT_FPU(r17)	; Point to the top of the "new" context stack
 			lwz		r13,ACT_MACT_FPUlvl(r17)	; Get the "new" active level
 #if FPVECDBG
@@ -935,7 +978,6 @@ fsnosave:	lwz		r15,ACT_MACT_PCB(r17)	; Get the current level of the "new" one
 
 			cmplwi	cr1,r14,0				; Do we possibly have some context to load?
 			stw		r15,ACT_MACT_FPUlvl(r17)	; Set the "new" active level
-			stw		r18,ACT_MACT_FPUcpu(r17)	; Set the active CPU
 			la		r11,savefp0(r14)		; Point to first line to bring in
 			stw		r17,PP_FPU_THREAD(r6)	; Store current thread address in fpu_thread to claim fpu for thread
 			
@@ -1002,6 +1044,9 @@ fsnosave:	lwz		r15,ACT_MACT_PCB(r17)	; Get the current level of the "new" one
 			lfd     f30,savefp30(r14)
 			lfd     f31,savefp31(r14)
 			
+fsenablexx:	sync							; Make sure all is saved
+			stw		r18,ACT_MACT_FPUcpu(r17)	; Set the active CPU and release
+
 fsenable:	lwz		r9,SAVflags(r4)			/* Get the flags of the current savearea */
 			lwz		r8,savesrr1(r4)			; Get the msr of the interrupted guy
 			rlwinm	r5,r4,0,0,19			/* Get the page address of the savearea */
@@ -1034,7 +1079,18 @@ fsnuser:
  */
 
 MakeSureThatNoTerroristsCanHurtUsByGod:
-			
+
+#if 0
+			lwz		r10,savesrr1(r4)		; (TEST/DEBUG)
+			rlwinm.	r10,r10,0,MSR_PR_BIT,MSR_PR_BIT	; (TEST/DEBUG)
+			beq-	nxxxxxx					; (TEST/DEBUG)
+			lwz		r10,ACT_MACT_SPF(r17)	; (TEST/DEBUG)
+			rlwinm.	r10,r10,0,1,1			; (TEST/DEBUG)
+			beq+	nxxxxxx
+			BREAKPOINT_TRAP					; (TEST/DEBUG)
+nxxxxxx:
+#endif
+
 #if FPVECDBG
 			lis		r0,HIGH_ADDR(CutTrace)	; (TEST/DEBUG)
 			li		r2,0x7F09				; (TEST/DEBUG)
@@ -1077,7 +1133,7 @@ MakeSureThatNoTerroristsCanHurtUsByGod:
 			fmr		f29,f0						
 			fmr		f30,f0						
 			fmr		f31,f0						
-			b		fsenable				; Finish setting it all up...				
+			b		fsenablexx				; Finish setting it all up...				
 
 ;
 ;			Finds an unused floating point area in the activation pointed
@@ -1148,6 +1204,7 @@ ENTRY(vec_save, TAG_NO_FRAME_USED)
 #if FPVECDBG
 			mr		r7,r0					; (TEST/DEBUG)
 			li		r4,0					; (TEST/DEBUG)
+			mr		r10,r3					; (TEST/DEBUG)
 			lis		r0,HIGH_ADDR(CutTrace)	; (TEST/DEBUG)
 			mr.		r3,r12					; (TEST/DEBUG)
 			li		r2,0x5F00				; (TEST/DEBUG)
@@ -1159,23 +1216,29 @@ ENTRY(vec_save, TAG_NO_FRAME_USED)
 noowneryeu:	oris	r0,r0,LOW_ADDR(CutTrace)	; (TEST/DEBUG)
 			sc								; (TEST/DEBUG)
 			mr		r0,r7					; (TEST/DEBUG)
+			mr		r3,r10					; (TEST/DEBUG)
 #endif	
 			mflr	r2						; Save the return address
-			lwz		r10,PP_CPU_DATA(r6)		; Get the CPU data pointer
 			lhz		r11,PP_CPU_NUMBER(r6)	; Get our CPU number
 			
 			mr.		r12,r12					; Anyone own the vector?
+			cmplw	cr1,r3,r12				; Is the specified thread the owner?
+						
+			beq-	vsretnr					; Nobody owns the vector, no save required...
 			
-			lwz		r10,CPU_ACTIVE_THREAD(r10)	; Get the pointer to the active thread
+			li		r4,ACT_MACT_VMXcpu		; Point to the CPU indication/lock word
+			bne-	cr1,vsretnr				; Facility belongs to some other activation...
 			
-			beq-	vsret					; Nobody owns the vector, no save required...
+vsvSpin2:	lwarx	r9,r4,r12				; Get and reserve the last used CPU
+			mr.		r9,r9					; Is it changing now?
+			oris	r3,r9,hi16(fvChk)		; Set the "changing" flag
+			blt-	vsvSpin2				; Spin if changing
+			stwcx.	r3,r4,r12				; Lock it up
+			bne-	vsvSpin2				; Someone is messing right now
+
+			isync							; Make sure we see everything
 			
-			lwz		r10,THREAD_TOP_ACT(r10)	; Now get the activation that is running
-			lwz		r9,ACT_MACT_VMXcpu(r12)	; Get the last CPU to use this context
-			
-			cmplw	r12,r10					; Do we own the thread?
 			cmplw	cr1,r9,r11				; Was the context for this processor? 
-			bne+	vsret					; Facility belongs to some other activation...
 			li		r3,0					; Assume we need a fix-me-up
 			beq-	cr1,vsgoodcpu			; Facility last used on this processor...
 			stw		r3,PP_VMX_THREAD(r6)	; Clear owner because it was really on the other processor
@@ -1213,9 +1276,9 @@ vsusespare:	stw		r9,SAVlvlvec(r3)		; And set the level this savearea is for
 			lis		r9,0x5555				; Mask with odd bits set		
 			rlwinm	r11,r10,1,0,31			; Shift over 1
 			ori		r9,r9,0x5555			; Finish mask
-			or		r12,r10,r11				; After this, even bits show which lines to zap
+			or		r4,r10,r11				; After this, even bits show which lines to zap
 			
-			andc	r11,r12,r9				; Clear out odd bits
+			andc	r11,r4,r9				; Clear out odd bits
 			
 			la		r6,savevr0(r3)			; Point to line 0
 			rlwinm	r4,r11,15,0,15			; Move line 8-15 flags to high order odd bits
@@ -1495,7 +1558,12 @@ v27ok:		mtcrf	255,r2					; Restore all non-volatile CRs
 ; 			Save the current vector state into the savearea of the thread that owns it.
 ; 
 
-vsret:		mtmsr	r0						; Put interrupts on if they were and vector off
+vsret:		lwz		r4,ACT_MACT_VMXcpu(r12)	; Get back the owner CPU
+			rlwinm	r4,r4,0,fvChkb+1,31		; Clear lock
+			sync
+			stw		r4,ACT_MACT_VMXcpu(r12)	; Unlock the context
+
+vsretnr:	mtmsr	r0						; Put interrupts on if they were and vector off
 			isync
 
 			blr
@@ -1582,14 +1650,23 @@ ENTRY(vec_switch, TAG_NO_FRAME_USED)
 			mtmsr	r19						/* Set vector available */
 			isync
 			
-			
 			beq-	vsnosave				; No live context, so nothing to save...
-	
-			lwz		r19,ACT_MACT_VMXcpu(r12)	; Get the "old" active CPU
+
+			li		r20,ACT_MACT_VMXcpu		; Point to the CPU indication/lock word
+			
+vsSpin1:	lwarx	r19,r20,r12				; Get and reserve the last used CPU
+			mr.		r19,r19					; Is it changing now?
+			oris	r21,r19,hi16(fvChk)		; Set the "changing" flag
+			blt-	vsSpin1					; Spin if changing
+			stwcx.	r21,r20,r12				; Lock it up
+			bne-	vsSpin1					; Someone is messing right now
+
+			isync							; Make sure we see everything
+
 			lwz		r15,ACT_MACT_PCB(r12)	; Get the current level of the "old" one
 			cmplw	r18,r19					; Check the CPU that the old context is live on
 			lwz		r14,ACT_MACT_VMX(r12)	; Point to the top of the old context stack
-			bne-	vsnosave				; Context is not live if used on a different CPU...
+			bne-	vsnosaverel				; Context is not live if used on a different CPU...
 			lwz		r13,ACT_MACT_VMXlvl(r12)	; Get the "old" active level
 			
 ;
@@ -1638,7 +1715,7 @@ ENTRY(vec_switch, TAG_NO_FRAME_USED)
 			cmplwi	cr2,r14,0				; Is there any saved context?
 			bne-	vsmstsave				; Levels are different, we need to save...
 			
-			beq-	cr2,vrenable			; No saved context at all, enable and go...
+			beq-	cr2,vrenableret			; No saved context at all, enable and go...
 			
 			lwz		r20,SAVlvlvec(r14)		; Get the level of the top savearea
 
@@ -1662,10 +1739,13 @@ ENTRY(vec_switch, TAG_NO_FRAME_USED)
 #endif	
 			cmplw	r15,r20					; Is the top level the same as the current?
 			li		r0,1					; Get the invalid flag
-			bne-	vrenable				; Not the same, just enable and go...
+			bne-	vrenableret				; Not the same, just enable and go...
 			
 			stw		r0,SAVlvlvec(r14)		; Invalidate that top savearea
 
+vrenableret:
+			sync							; Make sure everything is saved
+			stw		r19,ACT_MACT_VMXcpu(r12)	; Say we are not using the context anymore
 			b		vrenable				; Then enable and go...
 			
 ;
@@ -1703,7 +1783,7 @@ vsmstsave:	beq-	cr2,vsgetsave			; There is no possible cached save area
 			cmplwi	r5,1					; Is it invalid?
 			cmplw	cr1,r5,r13				; Is the SA level the active one?
 			beq+	vsusecache				; Invalid, just use it...
-			beq-	cr1,vsnosave			; The SA level is active, it is already saved...
+			beq-	cr1,vsnosaverel			; The SA level is active, it is already saved...
 			
 vsgetsave:	mr		r3,r4					; Use the interrupt save as the context savearea if none cached
 #if FPVECDBG
@@ -1761,10 +1841,10 @@ vsgotsave:
 			lis		r9,0x5555				; Mask with odd bits set		
 			rlwinm	r11,r10,1,0,31			; Shift over 1
 			ori		r9,r9,0x5555			; Finish mask
-			or		r12,r10,r11				; After this, even bits show which lines to zap
+			or		r21,r10,r11				; After this, even bits show which lines to zap
 			
 			stw		r13,SAVlvlvec(r3)		; Set the savearea level
-			andc	r13,r12,r9				; Clear out odd bits
+			andc	r13,r21,r9				; Clear out odd bits
 			
 			la		r20,savevr0(r3)			; Point to line 0
 			rlwinm	r24,r13,15,0,15			; Move line 8-15 flags to high order odd bits
@@ -2046,7 +2126,24 @@ novr31:
  *			would be safe! My Gosh! It's terrifying!
  */
 
-vsnosave:	lwz		r15,ACT_MACT_PCB(r17)	; Get the current level of the "new" one
+vsnosaverel:
+			sync							; Make sure everything is saved
+			stw		r19,ACT_MACT_VMXcpu(r12)	; Say we are not using the context anymore
+
+
+vsnosave:	
+			li		r20,ACT_MACT_VMXcpu		; Point to the CPU indication/lock word
+			
+vsSpin2:	lwarx	r19,r20,r17				; Get and reserve the last used CPU
+			mr.		r19,r19					; Is it changing now?
+			oris	r21,r19,hi16(fvChk)		; Set the "changing" flag
+			blt-	vsSpin2					; Spin if changing
+			stwcx.	r21,r20,r17				; Lock it up
+			bne-	vsSpin2					; Someone is messing right now
+
+			isync							; Make sure we see everything
+			
+			lwz		r15,ACT_MACT_PCB(r17)	; Get the current level of the "new" one
 			lwz		r14,ACT_MACT_VMX(r17)	; Point to the top of the "new" context stack
 			lwz		r13,ACT_MACT_VMXlvl(r17)	; Get the "new" active level
 
@@ -2063,7 +2160,6 @@ vsnosave:	lwz		r15,ACT_MACT_PCB(r17)	; Get the current level of the "new" one
 			cmplwi	cr1,r14,0				; Do we possibly have some context to load?
 			stw		r15,ACT_MACT_VMXlvl(r17)	; Set the "new" active level
 			la		r23,savevscr(r14)		; Point to the VSCR
-			stw		r18,ACT_MACT_VMXcpu(r17)	; Set the active CPU
 			la		r20,savevr0(r14)		; Point to first line to bring in
 			stw		r17,PP_VMX_THREAD(r6)	; Store current thread address in vmx_thread to claim vector for thread
 			beq-	cr1,ProtectTheAmericanWay	; Nothing to restore, first time use...
@@ -2468,6 +2564,9 @@ ni30:
 mstlvr31:	lvxl	v31,r30,r23				; Restore VR31
 			
 lnovr31:
+
+vrenablexx:	sync							; Make sure all is saved
+			stw		r18,ACT_MACT_VMXcpu(r17)	; Set the active CPU and release
 			
 vrenable:	
 			lwz		r9,SAVflags(r4)			/* Get the flags of the current savearea */
@@ -2513,6 +2612,16 @@ vrnuser:
 
 ProtectTheAmericanWay:
 			
+#if 0
+			lwz		r10,savesrr1(r4)		; (TEST/DEBUG)
+			rlwinm.	r10,r10,0,MSR_PR_BIT,MSR_PR_BIT	; (TEST/DEBUG)
+			beq-	nxxxxxx2				; (TEST/DEBUG)
+			lwz		r10,ACT_MACT_SPF(r17)	; (TEST/DEBUG)
+			rlwinm.	r10,r10,0,2,2			; (TEST/DEBUG)
+			beq+	nxxxxxx2
+			BREAKPOINT_TRAP					; (TEST/DEBUG)
+nxxxxxx2:
+#endif
 #if FPVECDBG
 			lis		r0,HIGH_ADDR(CutTrace)	; (TEST/DEBUG)
 			li		r2,0x5F09				; (TEST/DEBUG)
@@ -2568,7 +2677,7 @@ ProtectTheAmericanWay:
 			vor		v29,v0,v0				; Copy into the next register
 			vor		v30,v0,v0				; Copy into the next register
 			vor		v31,v0,v0				; Copy into the next register
-			b		vrenable				; Finish setting it all up...				
+			b		vrenablexx				; Finish setting it all up...				
 
 ;
 ;			Finds a unused vector area in the activation pointed

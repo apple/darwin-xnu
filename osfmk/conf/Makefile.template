@@ -109,7 +109,7 @@ do_build_all: do_depend
 # we name it genassym.o to help with the automatic
 # dependency generation
 
-genassym.o: $(SOURCE_DIR)/$(COMPONENT)/$(arch_config)/genassym.c
+genassym.o: $(SOURCE_DIR)/$(COMPONENT)/$(ARCH_CONFIG_LC)/genassym.c
 	${KCC} ${CFLAGS} -MD ${_HOST_EXTRA_CFLAGS} -S -o ${@} -c ${INCFLAGS} $<
 
 assym.s: genassym.o
@@ -119,8 +119,6 @@ ${SOBJS}: assym.s
 
 
 %RULES
-
--include Makedep
 
 include $(MakeInc_rule)
 include $(MakeInc_dir)

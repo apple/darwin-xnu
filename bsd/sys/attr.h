@@ -114,6 +114,7 @@ typedef struct vol_capabilities_attr {
 #define VOL_CAP_INT_SEARCHFS 0x00000001
 #define VOL_CAP_INT_ATTRLIST 0x00000002
 #define VOL_CAP_INT_NFSEXPORT 0x00000004
+#define VOL_CAP_INT_READDIRATTR 0x00000008
 
 typedef struct vol_attributes_attr {
 	attribute_set_t validattr;

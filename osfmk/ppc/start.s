@@ -47,7 +47,19 @@
 #define bootCPU 10
 #define firstInit 9
 #define firstBoot 8
-	
+
+/* Defines for PVRs */
+#define PROCESSOR_VERSION_601		1
+#define PROCESSOR_VERSION_603		3
+#define PROCESSOR_VERSION_604		4
+#define PROCESSOR_VERSION_603e		6
+#define PROCESSOR_VERSION_750		8
+#define PROCESSOR_VERSION_604e		9
+#define PROCESSOR_VERSION_604ev		10	/* ? */
+#define PROCESSOR_VERSION_7400		12	/* ? */
+#define PROCESSOR_VERSION_7410		0x800C	/* ? */
+#define PROCESSOR_VERSION_7450		0x8000	/* ? */
+
 /*
  * Interrupt and bootup stack for initial processor
  */
@@ -82,17 +94,17 @@ EXT(FixedStackEnd):
 	.align	ALIGN
     .globl  EXT(intstack_top_ss)
 EXT(intstack_top_ss):
-	.long	EXT(intstack)+INTSTACK_SIZE-SS_SIZE			/* intstack_top_ss points to the top of interrupt stack */
+	.long	EXT(intstack)+INTSTACK_SIZE-FM_SIZE			/* intstack_top_ss points to the top of interrupt stack */
 
 	.align	ALIGN
     .globl  EXT(debstack_top_ss)	
 EXT(debstack_top_ss):
 
-	.long	EXT(debstack)+KERNEL_STACK_SIZE-SS_SIZE		/* debstack_top_ss points to the top of debug stack */
+	.long	EXT(debstack)+KERNEL_STACK_SIZE-FM_SIZE		/* debstack_top_ss points to the top of debug stack */
 
     .globl  EXT(debstackptr)
 EXT(debstackptr):	
-	.long	EXT(debstack)+KERNEL_STACK_SIZE-SS_SIZE
+	.long	EXT(debstack)+KERNEL_STACK_SIZE-FM_SIZE
 
 #endif /* MACH_KDP || MACH_KDB */
 
@@ -542,9 +554,14 @@ i7450hl3:	cmplwi	cr0,r13,0							; No L3 if L3CR is zero
 			b		init7450fin							; Return....
 				
 init7450none:
-			rlwinm	r17,r17,0,pfL3fab+1,pfL3b-1			; No 3rd level cache or assist
+			rlwinm	r17,r17,0,pfL3fab+1,pfL3b-1					; No 3rd level cache or assist
+			rlwinm	r11,r17,pfWillNapb-pfCanNapb,pfCanNapb,pfCanNapb		; Set pfCanNap if pfWillNap is set
+			or	r17,r17,r11
 
-init7450fin:	mfspr	r11,hid0							; Get the current HID0
+init7450fin:
+			rlwinm	r17,r17,0,pfWillNapb+1,pfWillNapb-1				; Make sure pfWillNap is not set
+
+			mfspr	r11,hid0							; Get the current HID0
 			stw		r11,pfHID0(r30)						; Save the HID0 value
 			mfspr	r11,hid1							; Get the current HID1
 			stw		r11,pfHID1(r30)						; Save the HID1 value
@@ -556,6 +573,8 @@ init7450fin:	mfspr	r11,hid0							; Get the current HID0
 			stw		r11,pfICTRL(r30)					; Save the ICTRL value
 			mfspr	r11,ldstcr							; Get the ldstcr register
 			stw		r11,pfLDSTCR(r30)					; Save the LDSTCR value
+			mfspr	r11,ldstdb							; Get the ldstdb register
+			stw		r11,pfLDSTDB(r30)					; Save the LDSTDB value
 			blr											; Return....
 
 
@@ -580,6 +599,11 @@ i7450nb:	lwz		r11,pfHID0(r30)						; Get HID0
 			lwz		r11,pfLDSTCR(r30)					; Get LDSTCR
 			sync
 			mtspr	ldstcr,r11							; Set the LDSTCR
+			isync
+			sync
+			lwz		r11,pfLDSTDB(r30)					; Get LDSTDB
+			sync
+			mtspr	ldstdb,r11							; Set the LDSTDB
 			isync
 			sync
 			blr
@@ -741,6 +765,7 @@ processor_types:
 	.long	32*1024
 	.long	32*1024
 	
+
 ;	7400 (generic)
 
 	.align	2
@@ -792,7 +817,7 @@ processor_types:
 	.long	0xFFFFFF00		; Just revisions 1.xx
 	.short	PROCESSOR_VERSION_7450
 	.short	0x0100
-	.long	pfFloat | pfAltivec | pfSMPcap | pfCanSleep | pfNoMSRir | pfL23lck | pfL1nnc | pfL1i | pfL1d | pfL2 | pfL2fa | pfL2i | pfL3 | pfL3fa
+	.long	pfFloat | pfAltivec | pfSMPcap | pfCanSleep | pfNoMSRir | pfLClck | pfL1nnc | pfL1i | pfL1d | pfL2 | pfL2fa | pfL2i | pfL3 | pfL3fa
 	.long	init7450
 	.long	CPU_SUBTYPE_POWERPC_7450
 	.long	105
@@ -801,13 +826,28 @@ processor_types:
 	.long	32*1024
 	.long	32*1024
 
-;	7450 (>=2)
+;	7450 (2.0)
+
+	.align	2
+	.long	0xFFFFFFFF		; Just revision 2.0
+	.short	PROCESSOR_VERSION_7450
+	.short	0x0200
+	.long	pfFloat | pfAltivec | pfSMPcap | pfCanSleep | pfNoMSRir | pfLClck | pfL1i | pfL1d | pfL2 | pfL2fa | pfL2i | pfL3 | pfL3fa
+	.long	init7450
+	.long	CPU_SUBTYPE_POWERPC_7450
+	.long	105
+	.long	90
+	.long	32
+	.long	32*1024
+	.long	32*1024
+
+;	7450 (2.1)
 
 	.align	2
 	.long	0xFFFF0000		; All other revisions
 	.short	PROCESSOR_VERSION_7450
 	.short	0
-	.long	pfFloat | pfAltivec | pfSMPcap | pfCanSleep | pfNoMSRir | pfL23lck | pfL1i | pfL1d | pfL2 | pfL2fa | pfL2i | pfL3 | pfL3fa
+	.long	pfFloat | pfAltivec | pfSMPcap | pfCanSleep | pfNoMSRir | pfWillNap | pfLClck | pfL1i | pfL1d | pfL2 | pfL2fa | pfL2i | pfL3 | pfL3fa
 	.long	init7450
 	.long	CPU_SUBTYPE_POWERPC_7450
 	.long	105
@@ -815,6 +855,7 @@ processor_types:
 	.long	32
 	.long	32*1024
 	.long	32*1024
+
 
 ;	Default dumb loser machine
 

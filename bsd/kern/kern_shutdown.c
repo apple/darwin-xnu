@@ -70,11 +70,12 @@ boot(paniced, howto, command)
 	int hostboot_option=0;
 	int funnel_state;
 
-        static void proc_shutdown();
+	static void proc_shutdown();
+    extern void md_prepare_for_shutdown(int paniced, int howto, char * command);
 
 	funnel_state = thread_funnel_set(kernel_flock, TRUE);
 
-	/* md_prepare_for_shutdown(paniced, howto, command); */
+	md_prepare_for_shutdown(paniced, howto, command);
 
 	if ((howto&RB_NOSYNC)==0 && waittime < 0) {
 		int iter, nbusy;
@@ -161,7 +162,7 @@ proc_shutdown()
 	/*
 	 *	Kill as many procs as we can.  (Except ourself...)
 	 */
-	self = (struct proc *)(get_bsdtask_info(current_task()));
+	self = (struct proc *)current_proc();
 	
 	/*
 	 * Suspend /etc/init
@@ -255,7 +256,7 @@ proc_shutdown()
 			else {
 			        p->exit_thread = current_thread();
 				printf(".");
-				exit1(p, 1);
+				exit1(p, 1, (int *)NULL);
 			}
 			p = allproc.lh_first;
 		}

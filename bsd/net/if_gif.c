@@ -278,7 +278,7 @@ gifattach(dummy)
 
 	gif_reg_if_mods(); /* DLIL modules */
 
-	gif = sc = _MALLOC (ngif * sizeof(struct gif_softc), M_DEVBUF, M_WAIT);
+	gif = sc = _MALLOC (ngif * sizeof(struct gif_softc), M_DEVBUF, M_WAITOK);
 	bzero(sc, ngif * sizeof(struct gif_softc));
 	for (i = 0; i < ngif; sc++, i++) {
 		sc->gif_if.if_name   = "gif";

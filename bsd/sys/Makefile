@@ -26,7 +26,7 @@ DATAFILES = \
 	ioctl_compat.h ipc.h kernel.h kern_event.h ktrace.h loadable_fs.h lock.h lockf.h mach_swapon.h malloc.h \
 	kdebug.h linker_set.h md5.h\
 	mbuf.h mman.h mount.h msgbuf.h mtio.h namei.h netport.h param.h paths.h \
-	proc.h protosw.h ptrace.h queue.h reboot.h resource.h resourcevar.h \
+	proc.h protosw.h ptrace.h queue.h random.h reboot.h resource.h resourcevar.h \
 	select.h semaphore.h shm.h signal.h signalvar.h socket.h socketvar.h sockio.h stat.h \
 	syscall.h sysctl.h syslimits.h syslog.h systm.h termios.h  time.h \
 	timeb.h times.h tprintf.h trace.h tty.h  ttychars.h ttycom.h \

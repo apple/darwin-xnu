@@ -53,7 +53,7 @@ createindirectlink(struct hfsnode *dnhp, UInt32 linkPID, char *linkName)
 	vcb = HTOVCB(dnhp);
 
 	/* Create the indirect link directly in the catalog */
-	result = hfsCreate(vcb, linkPID, linkName, IFREG);
+	result = hfsCreate(vcb, linkPID, linkName, IFREG, 0);
 	if (result) return (result);
 
 	/* 

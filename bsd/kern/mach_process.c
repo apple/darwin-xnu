@@ -77,6 +77,7 @@
 #include <sys/uio.h>
 #include <sys/user.h>
 #include <sys/sysctl.h>
+#include <sys/wait.h>
 
 #include <sys/mount.h>
 
@@ -126,6 +127,19 @@ ptrace(p, uap, retval)
 	unsigned long state_count;
 
 
+        if (uap->req == PT_DENY_ATTACH) {
+	        if (ISSET(p->p_flag, P_TRACED)) {
+				exit1(p, W_EXITCODE(ENOTSUP, 0), retval);
+				/* drop funnel befewo we return */
+				thread_funnel_set(kernel_flock, FALSE);
+				thread_exception_return();
+				/* NOTREACHED */
+			}
+		SET(p->p_flag, P_NOATTACH);
+
+		return(0);
+	}
+
 	/*
 	 *	Intercept and deal with "please trace me" request.
 	 */	 
@@ -174,6 +188,10 @@ ptrace(p, uap, retval)
 		    (error = suser(p->p_ucred, &p->p_acflag)) != 0)
 			return (error);
 
+		if (ISSET(t->p_flag, P_NOATTACH)) {
+			psignal(p, SIGSEGV);
+			return (EBUSY);
+		}
 		SET(t->p_flag, P_TRACED);
 		t->p_oppid = t->p_pptr->p_pid;
 		if (t->p_pptr != p)
@@ -231,7 +249,7 @@ ptrace(p, uap, retval)
 		 *	Tell child process to kill itself after it
 		 *	is resumed by adding NSIG to p_cursig. [see issig]
 		 */
-		psignal_lock(t, SIGKILL, 0, 1);
+		psignal_lock(t, SIGKILL, 0, 0);
 		goto resume;
 
 	case PT_STEP:			/* single step the child */

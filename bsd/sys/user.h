@@ -102,6 +102,10 @@ struct uthread {
 			struct	timeval atv;
 			int	poll;
 			int error;
+			int count;
+			int nfcount;
+			char * wql;
+			int allocsize;		/* select allocated size */
 		} ss_select;			/* saved state for select() */
 		struct _wait {
 			int	f;
@@ -119,8 +123,12 @@ struct uthread {
     int (*uu_continuation)(int);
     int uu_pri;
     int uu_timo;
-
+	int uu_flag;
+	struct proc * uu_proc;
+	void * uu_userstate;
+	wait_queue_sub_t uu_wqsub;
 };
+
 typedef struct uthread * uthread_t;
 #endif	/* KERNEL */
 

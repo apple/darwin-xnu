@@ -557,7 +557,7 @@ semaphore_wait_internal(
 	void 			(*caller_cont)(kern_return_t))
 {
 	void			(*continuation)(void);
-	AbsoluteTime		abstime, nsinterval;
+	uint64_t		abstime, nsinterval;
 	boolean_t		nonblocking;
 	int			wait_result;
 	spl_t			spl_level;
@@ -582,7 +582,7 @@ semaphore_wait_internal(
 		kr = KERN_OPERATION_TIMED_OUT;
 	} else {		
 		wait_semaphore->count = -1;  /* we don't keep an actual count */
-		wait_queue_assert_wait_locked(&wait_semaphore->wait_queue,
+		(void)wait_queue_assert_wait_locked(&wait_semaphore->wait_queue,
 					      SEMAPHORE_EVENT,
 					      THREAD_ABORTSAFE,
 					      FALSE); /* unlock? */
@@ -648,7 +648,7 @@ semaphore_wait_internal(
 		clock_interval_to_absolutetime_interval(wait_timep->tv_nsec,
 							1,
 							&nsinterval);
-		ADD_ABSOLUTETIME(&abstime, &nsinterval);
+		abstime += nsinterval;
 		clock_absolutetime_interval_to_deadline(abstime, &abstime);
 		thread_set_timer_deadline(abstime);
 		continuation = semaphore_timedwait_continue;

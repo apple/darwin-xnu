@@ -1,2 +1,5 @@
 libkern/ppc/OSAtomic.s			standard
+libkern/ppc/bcmp.s			standard
+libkern/ppc/memcmp.s			standard
+libkern/ppc/strlen.s			standard
 

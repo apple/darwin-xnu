@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2001 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -77,6 +77,8 @@
 #include <sys/malloc.h>
 #include <sys/stat.h>
 #include <sys/ubc.h>
+#include <sys/utfconv.h>
+#include <architecture/byte_order.h>
 
 #include <isofs/cd9660/iso.h>
 #include <isofs/cd9660/iso_rrip.h>
@@ -147,6 +149,11 @@ cd9660_mountroot()
 	MALLOC_ZONE(mp, struct mount *,
 			sizeof(struct mount), M_MOUNT, M_WAITOK);
 	bzero((char *)mp, (u_long)sizeof(struct mount));
+
+    /* Initialize the default IO constraints */
+    mp->mnt_maxreadcnt = mp->mnt_maxwritecnt = MAXPHYS;
+    mp->mnt_segreadcnt = mp->mnt_segwritecnt = 32;
+
 	mp->mnt_op = &cd9660_vfsops;
 	mp->mnt_flag = MNT_RDONLY;
 	LIST_INIT(&mp->mnt_vnodelist);
@@ -423,8 +430,11 @@ iso_mountfs(devvp, mp, p, argp)
 			myPtr--;
 		}
 	}
-	/* YYY need to use secondary volume descriptor name for kanji disks */
-	bcopy(pri->volume_id, isomp->volume_id, sizeof(isomp->volume_id));
+
+	if (pri->volume_id[0] == 0)
+		strcpy(isomp->volume_id, ISO_DFLT_VOLUME_ID);
+	else
+		bcopy(pri->volume_id, isomp->volume_id, sizeof(isomp->volume_id));
 	cd9660_tstamp_conv17(pri->creation_date, &isomp->creation_date);
 	cd9660_tstamp_conv17(pri->modification_date, &isomp->modification_date);
 
@@ -501,6 +511,33 @@ skipRRIP:
 	/* Decide whether to use the Joliet descriptor */
 
 	if (isomp->iso_ftype != ISO_FTYPE_RRIP && joliet_level != 0) {
+		char vol_id[32];
+		int i, convflags;
+		size_t convbytes;
+		u_int16_t *uchp;
+		
+		/*
+		 * On Joliet CDs use the UCS-2 volume identifier.
+		 *
+		 * This name can have up to 15 UCS-2 chars and is
+		 * terminated with 0x0000 or padded with 0x0020.
+		 */
+		convflags = UTF_DECOMPOSED;
+		if (BYTE_ORDER != BIG_ENDIAN)
+			convflags |= UTF_REVERSE_ENDIAN;
+		for (i = 0, uchp = (u_int16_t *)sup->volume_id; i < 15 && uchp[i]; ++i);
+		if ((utf8_encodestr((u_int16_t *)sup->volume_id, (i * 2), vol_id,
+			&convbytes, sizeof(vol_id), 0, convflags) == 0)
+			&& convbytes && (vol_id[0] != ' ')) {
+			char * strp;
+
+			/* Remove trailing spaces */
+			strp = vol_id + convbytes - 1;
+			while (strp > vol_id && *strp == ' ')
+				*strp-- = '\0';
+			bcopy(vol_id, isomp->volume_id, convbytes);
+		}
+
 		rootp = (struct iso_directory_record *)
 			sup->root_directory_record;
 		bcopy (rootp, isomp->root, sizeof isomp->root);
@@ -1078,8 +1115,8 @@ DRGetTypeCreatorAndFlags(	struct iso_mnt * theMountPointPtr,
 	char				*myPtr;
 
 	foundStuff = 1;
-	myType = 0L;
-	myCreator = 0L;
+	myType = 0x3f3f3f3f;
+	myCreator = 0x3f3f3f3f;
 	myFinderFlags = 0;
 	*theFlagsPtr = 0x0000;
 

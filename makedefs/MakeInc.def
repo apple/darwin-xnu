@@ -28,23 +28,36 @@ endif
 #
 # Component List
 #
+ifndef COMPONENT_LIST 
 export COMPONENT_LIST 	= osfmk bsd iokit pexpert libkern libsa
-export COMPONENT 	= $(firstword $(subst /, ,$(shell $(RELPATH) $(SRCROOT) $(SOURCE))))
-export COMPONENT_IMPORT_LIST = $(filter-out $(COMPONENT),$(COMPONENT_LIST)) 
+export COMPONENT_LIST_UC := $(shell echo -n $(COMPONENT_LIST) | $(TR) a-z A-Z)
+endif
+ifndef	COMPONENT
+export COMPONENT 	:= $(firstword $(subst /, ,$(shell $(RELPATH) $(SRCROOT) $(SOURCE))))
+export COMPONENT_IMPORT_LIST := $(filter-out $(COMPONENT),$(COMPONENT_LIST)) 
+else
+ifeq	($(COMPONENT), .)
+export COMPONENT        := $(firstword $(subst /, ,$(shell $(RELPATH) $(SRCROOT) $(SOURCE))))
+export COMPONENT_IMPORT_LIST := $(filter-out $(COMPONENT),$(COMPONENT_LIST)) 
+endif
+endif
 
 # Architecture options
 #
 #  supported configurations : PPC I386
 #
-ifdef RC_ARCHS
-export ARCH_CONFIGS 	= $(shell echo -n $(RC_ARCHS) | tr a-z A-Z)
-else
 ifndef ARCH_CONFIGS
-export ARCH_CONFIGS 	= $(shell arch | tr a-z A-Z)
+ifdef RC_ARCHS
+export ARCH_CONFIGS 	:= $(shell echo -n $(RC_ARCHS) | $(TR) a-z A-Z)
+else
+export ARCH_CONFIGS 	:= $(shell arch | $(TR) a-z A-Z)
 endif
 endif
-export ARCH_CONFIG 	= $(firstword $(ARCH_CONFIGS))
-export arch_config 	= $(shell echo -n $(ARCH_CONFIG) | tr A-Z a-z)
+ifdef	ARCH_CONFIG
+ifndef ARCH_CONFIG_LC
+export ARCH_CONFIG_LC 	:= $(shell echo -n $(ARCH_CONFIG) | $(TR) A-Z a-z)
+endif
+endif
 
 
 # Kernel Configuration options  
@@ -54,7 +67,9 @@ export arch_config 	= $(shell echo -n $(ARCH_CONFIG) | tr A-Z a-z)
 ifndef KERNEL_CONFIGS
 export KERNEL_CONFIGS 	= RELEASE
 endif
+ifndef KERNEL_CONFIG
 export KERNEL_CONFIG 	= $(firstword $(KERNEL_CONFIGS))
+endif
 
 #
 # Kernel Configuration to install
@@ -62,12 +77,14 @@ export KERNEL_CONFIG 	= $(firstword $(KERNEL_CONFIGS))
 #  supported install architecture : PPC I386
 #
 export INSTALL_TYPE 	= RELEASE
+ifndef INSTALL_ARCHS
 ifdef RC_ARCHS
 export INSTALL_ARCHS 	= $(ARCH_CONFIGS)
 else
 export INSTALL_ARCHS 	= $(ARCH_CONFIGS)
 endif
-export INSTALL_ARCH	= $(ARCH_CONFIG)
+export INSTALL_ARCHS_LC := $(shell echo -n $(ARCH_CONFIGS) | $(TR) A-Z a-z)
+endif
 
 export INSTALL_ARCH_DEFAULT	= PPC
 
@@ -98,9 +115,9 @@ export CFLAGS_PROFILE 	=
 export CFLAGS_PPC 	= -arch ppc -Dppc -DPPC -D__PPC__ -D_BIG_ENDIAN=__BIG_ENDIAN__
 export CFLAGS_I386 	= -arch i386 -Di386 -DI386 -D__I386__ -D_BIG_ENDIAN=__LITTLE_ENDIAN__
 
-export CFLAGS_RELEASEPPC = -O2 -mcpu=750 -fschedule-insns
-export CFLAGS_RELEASE_TRACEPPC = -O2 -mcpu=750 -fschedule-insns
-export CFLAGS_DEBUGPPC = -O1 -mcpu=750 -fschedule-insns
+export CFLAGS_RELEASEPPC = -O2 -mcpu=750 -mmultiple -fschedule-insns
+export CFLAGS_RELEASE_TRACEPPC = -O2 -mcpu=750 -mmultiple -fschedule-insns
+export CFLAGS_DEBUGPPC = -O1 -mcpu=750 -mmultiple -fschedule-insns
 export CFLAGS_RELEASEI386 = -O2
 export CFLAGS_DEBUGI386 = -O2
 
@@ -175,7 +192,7 @@ export LDFLAGS_KERNEL_DEBUG 	=
 export LDFLAGS_KERNEL_PROFILE 	= 
 
 export LDFLAGS_KERNEL_PPC      = -arch ppc -segaddr __VECTORS 0x0 -segaddr __TEXT 0x11000 -e __start -sectalign __DATA __common 0x1000 -sectalign __DATA __bss 0x1000
-export LDFLAGS_KERNEL_I386     = -arch i386 -segaddr __TEXT 0x100000 -segaddr __LINKEDIT 0x780000 -e _pstart
+export LDFLAGS_KERNEL_I386     = -arch i386 -segaddr __TEXT 0x100000 -e _pstart
 
 export LDFLAGS_KERNEL	= $(LDFLAGS_KERNEL_GEN) \
 		  $($(addsuffix $(ARCH_CONFIG),LDFLAGS_KERNEL_)) \
@@ -235,6 +252,7 @@ endif
 KINCVERS = A
 KINCFRAME = $(FRAMEDIR)/Kernel.framework
 KINCDIR = $(KINCFRAME)/Versions/$(KINCVERS)/Headers
+KPINCDIR = $(KINCFRAME)/Versions/$(KINCVERS)/PrivateHeaders
 
 #
 # Compononent Header file destinations

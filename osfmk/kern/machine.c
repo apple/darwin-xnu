@@ -80,8 +80,7 @@
 #include <kern/thread_swap.h>
 #include <kern/misc_protos.h>
 
-#include <kern/sf.h>
-#include <kern/mk_sp.h> /*** ??? fix so this can be removed ***/
+#include <kern/mk_sp.h>
 
 /*
  *	Exported variables:
@@ -400,7 +399,6 @@ processor_doaction(
 
 	if (pset->processor_count == 1) {
 		thread_t		thread;
-		sched_policy_t	*policy;
 		extern void		start_cpu_thread(void);
 
 		simple_unlock(&pset->processors_lock);
@@ -408,16 +406,16 @@ processor_doaction(
 		/*
 		 * Create the thread, and point it at the routine.
 		 */
-		thread = kernel_thread_with_priority(kernel_task, MAXPRI_KERNBAND,
-										start_cpu_thread, FALSE);
+		thread = kernel_thread_with_priority(
+									kernel_task, MAXPRI_KERNEL,
+										start_cpu_thread, TRUE, FALSE);
 
 		disable_preemption();
 
 		s = splsched();
 		thread_lock(thread);
 		thread->state |= TH_RUN;
-		policy = &sched_policy[thread->policy];
-		(void)policy->sp_ops.sp_thread_unblock(policy, thread);
+		_mk_sp_thread_unblock(thread);
 		(void)rem_runq(thread);
 		machine_wake_thread = thread;
 		thread_unlock(thread);
@@ -464,6 +462,7 @@ processor_doshutdown(
 {
 	register int	cpu = processor->slot_num;
 
+	timer_call_cancel(&processor->quantum_timer);
 	thread_dispatch(current_thread());
 	timer_switch(&kernel_timer[cpu]);
 

@@ -86,12 +86,19 @@
 #define kIOGeneralInterest		"IOGeneralInterest"
 #define kIOBusyInterest			"IOBusyInterest"
 #define kIOAppPowerStateInterest	"IOAppPowerStateInterest"
+#define kIOPriorityPowerStateInterest	"IOPriorityPowerStateInterest"
 
 // IOService interest notification types
 #define kIOCFPlugInTypesKey		"IOCFPlugInTypes"
 
 // properties found in services that implement command pooling
-#define kIOCommandPoolSizeKey	"IOCommandPoolSize"
+#define kIOCommandPoolSizeKey	       "IOCommandPoolSize"          // (OSNumber)
+
+// properties found in services that have transfer constraints
+#define kIOMaximumBlockCountReadKey    "IOMaximumBlockCountRead"    // (OSNumber)
+#define kIOMaximumBlockCountWriteKey   "IOMaximumBlockCountWrite"   // (OSNumber)
+#define kIOMaximumSegmentCountReadKey  "IOMaximumSegmentCountRead"  // (OSNumber)
+#define kIOMaximumSegmentCountWriteKey "IOMaximumSegmentCountWrite" // (OSNumber)
 
 #endif /* ! _IOKIT_IOKITKEYS_H */
 

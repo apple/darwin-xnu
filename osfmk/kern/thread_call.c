@@ -198,8 +198,9 @@ thread_call_initialize(void)
 	simple_unlock(&thread_call_lock);
 	splx(s);
 
-    activate_thread = kernel_thread_with_priority(kernel_task,
-									MAXPRI_KERNBAND-2, _activate_thread, TRUE);
+    activate_thread = kernel_thread_with_priority(
+										kernel_task, MAXPRI_KERNEL - 2,
+												_activate_thread, TRUE, TRUE);
 }
 
 void
@@ -327,9 +328,8 @@ _delayed_call_enqueue(
     current = TC(queue_first(&delayed_call_queue));
     
     while (TRUE) {
-    	if (	queue_end(&delayed_call_queue, qe(current))			||
-					CMP_ABSOLUTETIME(&call->deadline,
-											&current->deadline) < 0		) {
+    	if (	queue_end(&delayed_call_queue, qe(current))		||
+					call->deadline < current->deadline			) {
 			current = TC(queue_prev(qe(current)));
 			break;
 		}
@@ -557,7 +557,7 @@ void
 thread_call_func_delayed(
     thread_call_func_t		func,
     thread_call_param_t		param,
-    AbsoluteTime			deadline
+    uint64_t				deadline
 )
 {
     thread_call_t		call;
@@ -782,7 +782,7 @@ thread_call_enter1(
 boolean_t
 thread_call_enter_delayed(
     thread_call_t		call,
-    AbsoluteTime		deadline
+    uint64_t			deadline
 )
 {
 	boolean_t		result = TRUE;
@@ -816,7 +816,7 @@ boolean_t
 thread_call_enter1_delayed(
     thread_call_t			call,
     thread_call_param_t		param1,
-    AbsoluteTime			deadline
+    uint64_t				deadline
 )
 {
 	boolean_t			result = TRUE;
@@ -901,7 +901,7 @@ thread_call_cancel(
 boolean_t
 thread_call_is_delayed(
 	thread_call_t		call,
-	AbsoluteTime		*deadline)
+	uint64_t			*deadline)
 {
 	boolean_t		result = FALSE;
 	int				s;
@@ -1089,8 +1089,9 @@ _activate_thread_continue(void)
 		simple_unlock(&thread_call_lock);
 		(void) spllo();
 	
-		(void) kernel_thread_with_priority(kernel_task,
-									MAXPRI_KERNBAND-1, _call_thread, TRUE);
+		(void) kernel_thread_with_priority(
+									kernel_task, MAXPRI_KERNEL - 1,
+													_call_thread, TRUE, TRUE);
 #if	NO_CONTINUATIONS
 		thread_block((void (*)(void)) 0);
 		goto loop;
@@ -1150,7 +1151,7 @@ _delayed_call_timer(
 	timer_call_param_t		p1
 )
 {
-	AbsoluteTime		timestamp;
+	uint64_t			timestamp;
     thread_call_t		call;
 	boolean_t			new_pending = FALSE;
     int					s;
@@ -1163,7 +1164,7 @@ _delayed_call_timer(
     call = TC(queue_first(&delayed_call_queue));
     
     while (!queue_end(&delayed_call_queue, qe(call))) {
-    	if (CMP_ABSOLUTETIME(&call->deadline, &timestamp) <= 0) {
+    	if (call->deadline <= timestamp) {
 			_delayed_call_dequeue(call);
 
 			_pending_call_enqueue(call);

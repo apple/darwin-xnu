@@ -119,7 +119,7 @@ unix_syscall(
     code = regs->r0;
 
     thread = current_act();
-	p = get_bsdtask_info(current_task());
+	p = current_proc();
 	rval = (int *)get_bsduthreadrval(thread);
 
     /*
@@ -189,6 +189,10 @@ unix_syscall(
 	current_task()->syscalls_unix++;
 	error = (*(callp->sy_call))(p, (void *)vt, rval);
 
+	regs = find_user_regs(thread);
+	if (regs == (struct ppc_saved_state  *)0)
+		panic("No user savearea while returning from system call");
+
     if (error == ERESTART) {
 	regs->srr0 -= 8;
     }
@@ -232,7 +236,7 @@ unix_syscall_return(error)
 	extern int nsysent;
 
     thread = current_act();
-	p = get_bsdtask_info(current_task());
+	p = current_proc();
 	rval = (int *)get_bsduthreadrval(thread);
 	pcb = thread->mact.pcb;
     regs = &pcb->ss;

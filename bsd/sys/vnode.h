@@ -172,6 +172,9 @@ struct vnode {
 #define	VHASDIRTY	0x100000	/* UBC vnode may have 1 or more */
 		/* delayed dirty pages that need to be flushed at the next 'sync' */
 #define	VSWAP		0x200000	/* vnode is being used as swapfile */
+#define VTHROTTLED      0x400000        /* writes or pageouts have been throttled */
+                /* wakeup tasks waiting when count falls below threshold */
+
 /*
  * Vnode attributes.  A field value of VNOVAL represents a field whose value
  * is unavailable (getattr) or which is not to be changed (setattr).
@@ -266,6 +269,7 @@ extern int		vttoif_tab[];
 #define	FREEREMAINDER	0x00000008	/* deallocate allocated but */
 									/* unfilled blocks */
 #define	ALLOCATEFROMPEOF	0x00000010	/* allocate from the physical eof */
+#define	ALLOCATEFROMVOL		0x00000020	/* allocate from the volume offset */
 
 #if DIAGNOSTIC
 #define	VATTR_NULL(vap)	vattr_null(vap)
@@ -476,7 +480,7 @@ int 	vn_rdwr __P((enum uio_rw rw, struct vnode *vp, caddr_t base,
 	    int len, off_t offset, enum uio_seg segflg, int ioflg,
 	    struct ucred *cred, int *aresid, struct proc *p));
 int	vn_read __P((struct file *fp, struct uio *uio, struct ucred *cred));
-int	vn_select __P((struct file *fp, int which, struct proc *p));
+int	vn_select __P((struct file *fp, int which, void * wql, struct proc *p));
 int	vn_stat __P((struct vnode *vp, struct stat *sb, struct proc *p));
 int	vn_write __P((struct file *fp, struct uio *uio, struct ucred *cred));
 int	vop_noislocked __P((struct vop_islocked_args *));

@@ -128,19 +128,6 @@ extern kern_return_t	kmem_suballoc(
 				boolean_t	anywhere,
 				vm_map_t	*new_map);
 
-extern kern_return_t	kmem_io_map_copyout(
-				vm_map_t 	map,
-				vm_offset_t	*addr,
-				vm_size_t	*alloc_size,
-				vm_map_copy_t	copy,
-				vm_size_t	min_size,
-				vm_prot_t	prot);
-
-extern void		kmem_io_map_deallocate(
-				vm_map_t	map,
-				vm_offset_t	addr,
-				vm_size_t	size);
-
 extern void		kmem_io_object_deallocate(
 				vm_map_copy_t	copy);
 

@@ -405,6 +405,11 @@ dirloop:
 			if ((dp->v_flag & VROOT) == 0 ||
 			    (cnp->cn_flags & NOCROSSMOUNT))
 				break;
+			if (dp->v_mount == NULL) {	/* forced umount */
+				error = EBADF;
+				goto bad;
+			}
+
 			tdp = dp;
 			dp = dp->v_mount->mnt_vnodecovered;
 			vput(tdp);
@@ -428,7 +433,7 @@ unionlookup:
 		printf("not found\n");
 #endif
 		if ((error == ENOENT) &&
-		    (dp->v_flag & VROOT) &&
+		    (dp->v_flag & VROOT) && (dp->v_mount != NULL) &&
 		    (dp->v_mount->mnt_flag & MNT_UNION)) {
 			tdp = dp;
 			dp = dp->v_mount->mnt_vnodecovered;
@@ -696,7 +701,7 @@ bad:
 }
 
 
-#define NUMPARMS 7
+#define NUMPARMS 23
 
 kdebug_lookup(dp, cnp)
         struct vnode *dp;
@@ -704,6 +709,7 @@ kdebug_lookup(dp, cnp)
 {
         register int i, n;
 	register int dbg_namelen;
+	register int save_dbg_namelen;
 	register char *dbg_nameptr;
 	long dbg_parms[NUMPARMS];
 	char dbg_buf[4];
@@ -716,6 +722,7 @@ kdebug_lookup(dp, cnp)
 	if (dbg_namelen > sizeof(dbg_parms))
 	    dbg_namelen = sizeof(dbg_parms);
 	dbg_nameptr -= dbg_namelen;
+	save_dbg_namelen = dbg_namelen;
 
 	i = 0;
 
@@ -744,8 +751,15 @@ kdebug_lookup(dp, cnp)
 	    else
 	        dbg_parms[i++] = 0;
 	}
+
 	KERNEL_DEBUG_CONSTANT((FSDBG_CODE(DBG_FSRW,36)) | DBG_FUNC_NONE,
 			      dp, dbg_parms[0], dbg_parms[1], dbg_parms[2], 0);
-	KERNEL_DEBUG_CONSTANT((FSDBG_CODE(DBG_FSRW,36)) | DBG_FUNC_NONE,
-			      dbg_parms[3], dbg_parms[4], dbg_parms[5], dbg_parms[6], 0);
+
+	for (dbg_namelen = save_dbg_namelen-12, i=3;
+	     dbg_namelen > 0;
+	     dbg_namelen -=(4 * sizeof(long)))
+	  {
+	    KERNEL_DEBUG_CONSTANT((FSDBG_CODE(DBG_FSRW,36)) | DBG_FUNC_NONE,
+				  dbg_parms[i++], dbg_parms[i++], dbg_parms[i++], dbg_parms[i++], 0);
+	  }
 }

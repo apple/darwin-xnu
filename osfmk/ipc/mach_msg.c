@@ -85,8 +85,8 @@
 #include <kern/thread_swap.h>
 #include <kern/processor.h>
 
-#include <kern/sf.h>
-#include <kern/mk_sp.h>  /* JMM - to support handoff hack */
+#include <kern/mk_sp.h>
+
 #include <machine/machine_routines.h>
 #include <sys/kdebug.h>
 
@@ -344,6 +344,8 @@ mach_msg_receive(
 	self->ith_continuation = continuation;
 
 	ipc_mqueue_receive(mqueue, option, rcv_size, timeout, THREAD_ABORTSAFE);
+	if ((option & MACH_RCV_TIMEOUT) && timeout == 0)
+		_mk_sp_thread_perhaps_yield(self);
 	return mach_msg_receive_results();
 }
 
@@ -1215,11 +1217,11 @@ mach_msg_overwrite_trap(
 		   * that doesn't try to put thread on a runq.
 		   */
 		  {
-			receiver->sp_state = MK_SP_RUNNABLE;
+			  receiver->state &= ~(TH_WAIT|TH_UNINT);
+			  receiver->state |= TH_RUN;
+			  receiver->wait_result = THREAD_AWAKENED;
 
-			receiver->state &= ~(TH_WAIT|TH_UNINT);
-			receiver->state |= TH_RUN;
-			receiver->wait_result = THREAD_AWAKENED;
+			  receiver->metered_computation = 0;
 		  }
 		  
 		  thread_unlock(receiver);
@@ -1246,7 +1248,7 @@ mach_msg_overwrite_trap(
 		  self->ith_continuation = thread_syscall_return;
 
 		  waitq = &rcv_mqueue->imq_wait_queue;
-		  wait_queue_assert_wait_locked(waitq,
+		  (void)wait_queue_assert_wait_locked(waitq,
 										IPC_MQUEUE_RECEIVE,
 										THREAD_ABORTSAFE,
 										TRUE); /* unlock? */

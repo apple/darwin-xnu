@@ -49,8 +49,6 @@ void	IOLockFree( IOLock * lock)
 
 void	IOLockInitWithState( IOLock * lock, IOLockState state)
 {
-    mutex_init( lock, ETAP_IO_AHA);
-
     if( state == kIOLockStateLocked)
         IOLockLock( lock);
 }
@@ -96,7 +94,7 @@ void IORecursiveLockLock( IORecursiveLock * _lock)
     if( lock->thread == IOThreadSelf())
         lock->count++;
     else {
-        _mutex_lock( lock->mutex );
+        mutex_lock( lock->mutex );
         assert( lock->thread == 0 );
         assert( lock->count == 0 );
         lock->thread = IOThreadSelf();
@@ -112,7 +110,7 @@ boolean_t IORecursiveLockTryLock( IORecursiveLock * _lock)
         lock->count++;
 	return( true );
     } else {
-        if( _mutex_try( lock->mutex )) {
+        if( mutex_try( lock->mutex )) {
             assert( lock->thread == 0 );
             assert( lock->count == 0 );
             lock->thread = IOThreadSelf();
@@ -159,7 +157,7 @@ int IORecursiveLockSleep(IORecursiveLock *_lock, void *event, UInt32 interType)
     res = thread_block(0);
 
     if (THREAD_AWAKENED == res) {
-        _mutex_lock(lock->mutex);
+        mutex_lock(lock->mutex);
         assert(lock->thread == 0);
         assert(lock->count == 0);
         lock->thread = IOThreadSelf();

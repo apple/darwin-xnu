@@ -63,8 +63,8 @@ struct procFeatures {
 #define pfThermalb	7
 #define pfThermInt	0x00800000
 #define pfThermIntb	8
-#define pfL23lck	0x00001000
-#define pfL23lckb	19
+#define pfLClck		0x00001000
+#define pfLClckb	19
 #define pfWillNap	0x00000800
 #define pfWillNapb	20
 #define pfNoMSRir	0x00000400
@@ -105,6 +105,8 @@ struct procFeatures {
 	unsigned int	pfMSSCR1;
 	unsigned int	pfICTRL;
 	unsigned int	pfLDSTCR;
+	unsigned int	pfLDSTDB;
+	unsigned int	reserved[7];
 };
 
 typedef struct procFeatures procFeatures;
@@ -128,12 +130,8 @@ struct per_proc_info {
 	vm_offset_t  	istackptr;
 	vm_offset_t  	intstack_top_ss;
 
-#if	MACH_KDP || MACH_KDB
 	vm_offset_t  	debstackptr;
 	vm_offset_t  	debstack_top_ss;
-#else
-	unsigned int	ppigas1[2];			/* Take up some space if no KDP or KDB */
-#endif
 
 	unsigned int	tempwork1;			/* Temp work area - monitor use carefully */
 	unsigned int	save_exception_type;
@@ -162,11 +160,11 @@ struct per_proc_info {
 	unsigned int 	liveVRSave;			/* VRSave assiciated with live vector registers */
 	unsigned int 	spcFlags;			/* Special thread flags */
 	unsigned int	liveFPSCR;			/* FPSCR which is for the live context */
-	unsigned int	ppigas05C;			/* Reserved area */
+	unsigned int	ppbbTaskEnv;		/* BlueBox Task Environment */
 
 	/* PPC cache line boundary here - 060 */
-	boolean_t		(*set_interrupts_enabled)(boolean_t);
-	boolean_t		(*get_interrupts_enabled)(void);
+	boolean_t		interrupts_enabled;
+	unsigned int	rsrvd064;
 	IOInterruptHandler	interrupt_handler;
 	void *			interrupt_nub;
 	unsigned int	interrupt_source;
@@ -201,10 +199,10 @@ struct per_proc_info {
 	/* PPC cache line boundary here - 0A0 */
 	procFeatures 	pf;					/* Processor features */
 	
-	/* PPC cache line boundary here - 0E0 */
+	/* PPC cache line boundary here - 100 */
 	thrmControl		thrm;				/* Thermal controls */
 	
-	/* PPC cache line boundary here - 100 */
+	/* PPC cache line boundary here - 120 */
 	unsigned int	napStamp[2];		/* Time base when we napped */
 	unsigned int	napTotal[2];		/* Total nap time in ticks */
 	unsigned int	numSIGPast;			/* Number of SIGP asts recieved */
@@ -212,18 +210,15 @@ struct per_proc_info {
 	unsigned int	numSIGPdebug;		/* Number of SIGP debugs recieved */
 	unsigned int	numSIGPwake;		/* Number of SIGP wakes recieved */
 	
-	/* PPC cache line boundary here - 120 */
+	/* PPC cache line boundary here - 140 */
 	unsigned int	spcTRc;				/* Special trace count */
 	unsigned int	spcTRp;				/* Special trace buffer pointer */
 	unsigned int 	Uassist;			/* User Assist Word */
-	unsigned int	rsrvd12C[5];		/* Reserved slots */
-	
-	/* PPC cache line boundary here - 140 */
-	time_base_enable_t	time_base_enable;
-	unsigned int	rsrvd140[7];		/* Reserved slots */
+	unsigned int	rsrvd14C[5];		/* Reserved slots */
 	
 	/* PPC cache line boundary here - 160 */
-	unsigned int	rsrvd160[8];		/* Reserved slots */
+	time_base_enable_t	time_base_enable;
+	unsigned int	rsrvd164[7];		/* Reserved slots */
 	
 	/* PPC cache line boundary here - 180 */
 	unsigned int	rsrvd180[8];		/* Reserved slots */
@@ -566,6 +561,7 @@ extern char *trap_type[];
 #define traceBE     0x1000					/* user mode BE tracing in enabled */
 #define traceBEb    3						/* bit number for traceBE */
 #define BootDone	0x0100
+#define SignalReady	0x0200
 #define loadMSR		0x7FF4
 
 #define T_VECTOR_SIZE	4					/* function pointer size */
@@ -618,11 +614,24 @@ extern char *trap_type[];
 #define T_PREEMPT				(0x23 * T_VECTOR_SIZE)
 #define T_CSWITCH				(0x24 * T_VECTOR_SIZE)
 #define T_SHUTDOWN				(0x25 * T_VECTOR_SIZE)
+#define T_CHOKE					(0x26 * T_VECTOR_SIZE)
 
 #define T_AST					(0x100 * T_VECTOR_SIZE) 
-#define T_MAX					T_SHUTDOWN		 /* Maximum exception no */
+#define T_MAX					T_CHOKE		 /* Maximum exception no */
 
 #define	EXCEPTION_VECTOR(exception)	(exception * 0x100 /T_VECTOR_SIZE )
+
+/*
+ *		System choke (failure) codes 
+ */
+ 
+#define failDebug 0
+#define failStack 1
+#define failMapping 2
+#define failContext 3
+
+/* Always must be last - update failNames table in model_dep.c as well */
+#define failUnknown 4
 
 #ifndef ASSEMBLER
 

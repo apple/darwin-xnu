@@ -293,4 +293,5 @@
        				/* 298 - 323 are reserved  */
 #define SYS_mlockall	 324
 #define SYS_munlockall	 325
-
+				/* 326 is reserved */
+#define SYS_issetugid    327

@@ -36,8 +36,6 @@
 #include <IOKit/IOLib.h>
 #include <IOKit/IOKitKeys.h>
 #include <IOKit/IOKitDebug.h>
-#include <IOKit/network/IONetworkController.h>
-#include <IOKit/graphics/IODisplay.h>
 
 #include <IOKit/assert.h>
 
@@ -48,6 +46,45 @@ extern void IOLibInit(void);
 
 #include <kern/clock.h>
 
+/*XXX power management hacks XXX*/
+#include <IOKit/IOReturn.h>
+#include <IOKit/IOMessage.h>
+
+extern void *registerSleepWakeInterest(
+						void		*callback,
+						void		*target,
+						void		*refCon);
+/*XXX power management hacks XXX*/
+
+static void
+calend_wakeup_resynch(
+	thread_call_param_t		p0,
+	thread_call_param_t		p1)
+{
+	void		IOKitResetTime(void);
+
+	IOKitResetTime();
+}
+
+static thread_call_t	calend_sleep_wake_call;
+
+static IOReturn
+calend_sleep_wake_notif(
+	void			*target,
+	void			*refCon,
+	unsigned int	messageType,
+	void			*provider,
+	void			*messageArg,
+	vm_size_t		argSize)
+{
+	if (messageType != kIOMessageSystemHasPoweredOn)
+		return (kIOReturnUnsupported);
+
+	if (calend_sleep_wake_call != NULL)
+		thread_call_enter(calend_sleep_wake_call);
+
+	return (kIOReturnSuccess);
+}
 
 void IOKitResetTime( void )
 {
@@ -61,6 +98,13 @@ void IOKitResetTime( void )
     IOService::waitForService(
         IOService::resourceMatching("IONVRAM"), &t );
 #endif
+
+	if (calend_sleep_wake_call == NULL) {
+		calend_sleep_wake_call = thread_call_allocate(
+											calend_wakeup_resynch, NULL);
+
+		registerSleepWakeInterest(calend_sleep_wake_notif, NULL, NULL);
+	}
 
     clock_initialize_calendar();
 }
@@ -143,8 +187,6 @@ void StartIOKit( void * p1, void * p2, void * p3, void * p4 )
     IOCatalogue::initialize();
     IOUserClient::initialize();
     IOMemoryDescriptor::initialize();
-    IONetworkController::initialize();
-    IODisplay::initialize();
 
     obj = OSString::withCString( iokit_version );
     assert( obj );
@@ -157,11 +199,6 @@ void StartIOKit( void * p1, void * p2, void * p3, void * p4 )
         root->setProperty( kIOKitDiagnosticsKey, obj );
 	obj->release();
     }
-
-#ifdef i386
-    // pretend there's no device-tree for intel
-    p1 = 0;
-#endif
 
     rootNub = new IOPlatformExpertDevice;
 

@@ -133,7 +133,6 @@ hertz_tick(
 	pc++;
 #endif	/* lint */
 
-	mp_disable_preemption();
 	my_cpu = cpu_number();
 
 	/*
@@ -142,10 +141,8 @@ hertz_tick(
 	 *	especially when debugging, to wind up here with
 	 *	no thread to bill against.  So ignore the tick.
 	 */
-	if (thread == THREAD_NULL) {
-		mp_enable_preemption();
+	if (thread == THREAD_NULL)
 		return;
-	}
 
 #if		MACH_PROF
 	inkernel = !usermode && (pc < (unsigned int)ETEXT);
@@ -211,7 +208,6 @@ hertz_tick(
 	}
 
 	machine_slot[my_cpu].cpu_ticks[state]++;
-	thread_quantum_update(my_cpu, thread, 1, state);
 
 	/*
 	 * Hertz processing performed by the master-cpu
@@ -260,5 +256,4 @@ hertz_tick(
 			profile(pc, kernel_task->profil_buffer);
 	}
 #endif	/* MACH_PROF */
-	mp_enable_preemption();
 }

@@ -14,7 +14,7 @@ include $(MakeInc_def)
 INSTALL_DIR = 		$(DSTROOT)/usr/lib
 KMOD_NAME =		libkmod
 KMODCPP_NAME =		libkmodc++
-LIB_INSTALL_FLAGS = 	-c -m 444 -S "-S"
+LIB_INSTALL_FLAGS = 	-p -m 444
 
 CFLAGS += -Wall -Wno-four-char-constants
 CFLAGS_PPC += -mlong-branch

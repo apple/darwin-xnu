@@ -1084,6 +1084,7 @@ struct vop_select_args /* {
     int  a_which;
     int  a_fflags;
     struct ucred *a_cred;
+	void *a_wql;
     struct proc *a_p;
 } */ *ap;
 {

@@ -72,41 +72,26 @@ subsystem
 #include <mach/std_types.defs>
 #include <mach/mach_types.defs>
 
+routine upl_abort(
+		upl_object	: upl_t;
+	in	abort_cond	: integer_t);
 
-routine vm_object_upl_request(
-		object		:vm_object_entry_t;
-	in	offset		:memory_object_offset_t;
-	in	size		:vm_size_t;
-	out	upl		:mach_port_move_send_t;
-	out	page_list	:upl_page_list_ptr_t, CountInOut;
-	in	cntrl_flags	:integer_t);
-
-routine vm_pager_upl_request(
-		object		:vm_object_entry_t;
-	in	offset		:memory_object_offset_t;
-	in	size		:vm_size_t;
-	in	super_size	:vm_size_t;
-	out	upl		:mach_port_move_send_t;
-	out	page_list	:upl_page_list_ptr_t, CountInOut;
-	in	cntrl_flags	:integer_t);
-
-routine vm_upl_abort(
-		upl_object	:upl_object_entry_t;
-	in	abort_cond	:integer_t);
-
-routine vm_upl_abort_range(
-		upl_object	:upl_object_entry_t;
-		offset		:vm_offset_t;
-		size		:vm_size_t;
-	in	abort_cond	:integer_t);
+routine upl_abort_range(
+		upl_object	: upl_t;
+		offset		: vm_offset_t;
+		size		: vm_size_t;
+	in	abort_cond	: integer_t;
+	out	empty	: boolean_t);
  
-routine vm_upl_commit(
-		upl_object	:upl_object_entry_t;
-	in	page_list	:upl_page_list_ptr_t);
+routine upl_commit(
+		upl_object	: upl_t;
+	in	page_list	: upl_page_info_array_t);
 
-routine vm_upl_commit_range(
-		upl_object	:upl_object_entry_t;
-		offset		:vm_offset_t;
-		size		:vm_size_t;
-	in	cntrl_flags	:integer_t;
-	in	page_list	:upl_page_list_ptr_t);
+routine upl_commit_range(
+		upl_object	: upl_t;
+		offset		: vm_offset_t;
+		size		: vm_size_t;
+	in	cntrl_flags	: integer_t;
+	in	page_list	: upl_page_info_array_t;
+	out	empty	: boolean_t);
+

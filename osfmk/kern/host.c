@@ -214,14 +214,14 @@ host_info(
 
 		priority_info = (host_priority_info_t) info;
 
-		priority_info->kernel_priority	= MINPRI_KERNBAND;
-		priority_info->system_priority	= MINPRI_KERNBAND;
-		priority_info->server_priority	= MINPRI_HIGHBAND;
+		priority_info->kernel_priority	= MINPRI_KERNEL;
+		priority_info->system_priority	= MINPRI_KERNEL;
+		priority_info->server_priority	= MINPRI_SYSTEM;
 		priority_info->user_priority	= BASEPRI_DEFAULT;
 		priority_info->depress_priority	= DEPRESSPRI;
 		priority_info->idle_priority	= IDLEPRI;
 		priority_info->minimum_priority	= MINPRI_STANDARD;
-		priority_info->maximum_priority	= MAXPRI_HIGHBAND;
+		priority_info->maximum_priority	= MAXPRI_SYSTEM;
 
 		*count = HOST_PRIORITY_INFO_COUNT;
 

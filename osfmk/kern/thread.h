@@ -131,9 +131,9 @@
  * Interruptible flags for assert_wait
  *
  */
-#define THREAD_UNINT		0		/* not interruptible      */
+#define THREAD_UNINT			0		/* not interruptible      */
 #define THREAD_INTERRUPTIBLE	1		/* may not be restartable */
-#define THREAD_ABORTSAFE	2		/* abortable safely       */
+#define THREAD_ABORTSAFE		2		/* abortable safely       */
 
 #ifdef MACH_KERNEL_PRIVATE
 #include <cpus.h>
@@ -159,26 +159,16 @@
 #include <ipc/ipc_kmsg.h>
 #include <machine/thread.h>
 
-typedef struct {
-	int			fnl_type;	/* funnel type */
-	mutex_t *	fnl_mutex;	/* underlying mutex for the funnel */
-	void *		fnl_mtxholder; /* thread (last)holdng mutex */
-	void *		fnl_mtxrelease;	/* thread (last)releasing mutex */
-	mutex_t *	fnl_oldmutex;	/* Mutex before collapsing split funnel */
-} funnel_t;
-
-
-typedef struct thread_shuttle {
+struct thread_shuttle {
 	/*
 	 * Beginning of thread_shuttle proper.  When the thread is on
 	 * a wait queue, these three fields are in treated as an un-
 	 * official union with a wait_queue_element.  If you change
 	 * these, you must change that definition as well.
 	 */
-	queue_chain_t	links;		/* current run/wait queue links */
-	run_queue_t	runq;			/* run queue p is on SEE BELOW */
-	int		whichq;				/* which queue level p is on */
-
+	queue_chain_t	links;				/* current run/wait queue links */
+	run_queue_t		runq;				/* run queue p is on SEE BELOW */
+	int				whichq;				/* which queue level p is on */
 /*
  *	NOTE:	The runq field in the thread structure has an unusual
  *	locking protocol.  If its value is RUN_QUEUE_NULL, then it is
@@ -187,38 +177,35 @@ typedef struct thread_shuttle {
  */
 
 	/* Thread bookkeeping */
-	queue_chain_t	pset_threads;	/* list of all shuttles in proc set */
+	queue_chain_t	pset_threads;		/* list of all shuttles in proc set */
 
-	/* Self-preservation */
-	decl_simple_lock_data(,lock)	/* scheduling lock (thread_lock()) */
-	decl_simple_lock_data(,wake_lock) /* covers wake_active (wake_lock())*/
-	decl_mutex_data(,rpc_lock)	/* RPC lock (rpc_lock()) */
-	int		ref_count;	/* number of references to me */
+	/* Synchronization */
+	decl_simple_lock_data(,lock)		/* scheduling lock (thread_lock()) */
+	decl_simple_lock_data(,wake_lock)	/* covers wake_active (wake_lock())*/
+	decl_mutex_data(,rpc_lock)			/* RPC lock (rpc_lock()) */
+	int				ref_count;			/* number of references to me */
         
-        vm_offset_t     kernel_stack;   /* accurate only if the thread is 
-                                           not swapped and not executing */
-
-	vm_offset_t	stack_privilege;/* reserved kernel stack */
+	vm_offset_t     kernel_stack;
+	vm_offset_t		stack_privilege;	/* reserved kernel stack */
 
 	/* Blocking information */
-	int		reason;		/* why we blocked */
-	event_t		wait_event;	/* event we are waiting on */
-	kern_return_t	wait_result;	/* outcome of wait -
-					   may be examined by this thread
-					   WITHOUT locking */
-	wait_queue_t	wait_queue;     /* wait queue we are currently on */
-	queue_chain_t	wait_link;	/* event's wait queue link */
-	boolean_t	wake_active;	/* Someone is waiting for this
-					   thread to become suspended */
-	int		state;		/* Thread state: */
-	boolean_t	preempt;	/* Thread is undergoing preemption */
-	boolean_t	interruptible;	/* Thread is interruptible */
+	int				reason;				/* why we blocked */
 
-#if	ETAP_EVENT_MONITOR
-	int		etap_reason;	/* real reason why we blocked */
-	boolean_t	etap_trace;	/* ETAP trace status */
-#endif	/* ETAP_EVENT_MONITOR */
+	event_t			wait_event;			/* event we are waiting on */
+	kern_return_t	wait_result;		/* outcome of wait -
+										 * may be examined by this thread
+										 * WITHOUT locking */
 
+	wait_queue_t	wait_queue;			/* wait queue we are currently on */
+	queue_chain_t	wait_link;			/* event's wait queue link */
+
+	boolean_t		wake_active;		/* Someone is waiting for this
+										 * thread to become suspended */
+
+	boolean_t		interruptible;		/* Thread is "interruptible" */
+
+	/* Thread state: */
+	int				state;
 /*
  *	Thread states [bits or'ed]
  */
@@ -229,30 +216,32 @@ typedef struct thread_shuttle {
 #define	TH_HALTED		0x10	/* thread is halted at clean point ? */
 
 #define TH_ABORT		0x20	/* abort interruptible waits */
-#define TH_SWAPPED_OUT	0x40	/* thread is swapped out */
 
 #define TH_IDLE			0x80	/* thread is an idle thread */
 
 #define	TH_SCHED_STATE	(TH_WAIT|TH_SUSP|TH_RUN|TH_UNINT)
 
 #define	TH_STACK_HANDOFF	0x0100	/* thread has no kernel stack */
-#define	TH_STACK_COMING_IN	0x0200	/* thread is waiting for kernel stack */
-#define	TH_STACK_STATE	(TH_STACK_HANDOFF | TH_STACK_COMING_IN)
+#define	TH_STACK_ALLOC		0x0200	/* thread is waiting for kernel stack */
+#define	TH_STACK_STATE	(TH_STACK_HANDOFF | TH_STACK_ALLOC)
 
 #define	TH_TERMINATE		0x0400	/* thread is terminating */
 
 	/* Stack handoff information */
-	void		(*continuation)(void);	/* start here next time dispatched */
-	int			cont_arg;				/* XXX continuation argument */
+	void		(*continuation)(void);	/* re-start here next dispatch */
 
 	/* Scheduling information */
 	integer_t			importance;		/* task-relative importance */
 	integer_t			sched_mode;		/* scheduling mode bits */
-#define TH_MODE_REALTIME	0x0001
+#define TH_MODE_REALTIME		0x0001
+#define TH_MODE_TIMESHARE		0x0002
+#define TH_MODE_FAILSAFE		0x0004
+#define TH_MODE_POLLDEPRESS		0x0008
+	integer_t			safe_mode;		/* saved mode during fail-safe */
 	struct {							/* see mach/thread_policy.h */
-		natural_t			period;
-		natural_t			computation;
-		natural_t			constraint;
+		uint32_t			period;
+		uint32_t			computation;
+		uint32_t			constraint;
 		boolean_t			preemptible;
 	}					realtime;
 
@@ -260,20 +249,25 @@ typedef struct thread_shuttle {
 	integer_t			sched_pri;			/* scheduled (current) priority */
 	integer_t			depress_priority;	/* priority to restore */
 	integer_t			max_priority;
+	integer_t			task_priority;		/* copy of task base priority */
+
+	uint32_t			current_quantum;	/* duration of current quantum */
+
+	/* Fail-safe computation since last unblock or qualifying yield */
+	uint64_t			metered_computation;
+	uint64_t			computation_epoch;
 
 	natural_t			cpu_usage;		/* exp. decaying cpu usage [%cpu] */
+	natural_t			cpu_delta;		/* cpu usage since last update */
 	natural_t			sched_usage;	/* load-weighted cpu usage [sched] */
-	natural_t			sched_stamp;	/* last time priority was updated */
-	natural_t			sleep_stamp;	/* last time in TH_WAIT state */
-
-	/* 'Obsolete' stuff that cannot be removed yet */
-	integer_t			policy;
-	integer_t			sp_state;
-	integer_t			unconsumed_quantum;
+	natural_t			sched_delta;	/* weighted cpu usage since update */
+	natural_t			sched_stamp;	/* when priority was updated */
+	natural_t			sleep_stamp;	/* when entered TH_WAIT state */
+	natural_t			safe_release;	/* when to release fail-safe */
 
 	/* VM global variables */
-	boolean_t	vm_privilege;	/* can use reserved memory? */
-	vm_offset_t	recover;	/* page fault recovery (copyin/out) */
+	boolean_t			vm_privilege;	/* can use reserved memory? */
+	vm_offset_t			recover;		/* page fault recovery (copyin/out) */
 
 	/* IPC data structures */
 
@@ -285,39 +279,34 @@ typedef struct thread_shuttle {
 	/* Various bits of stashed state */
 	union {
 		struct {
-		  	mach_msg_return_t state;	/* receive state */
-		  	ipc_object_t	  object;	/* object received on */
-		  	mach_msg_header_t *msg;		/* receive buffer pointer */
-			mach_msg_size_t	  msize;	/* max size for recvd msg */
-		  	mach_msg_option_t option;	/* options for receive */
-		  	mach_msg_size_t   slist_size;   /* scatter list size */
-			struct ipc_kmsg   *kmsg;	/* received message */
-			mach_port_seqno_t seqno;	/* seqno of recvd message */
-			void			  (*continuation)(mach_msg_return_t);
-		} receive;
+		  	mach_msg_return_t	state;		/* receive state */
+		  	ipc_object_t		object;		/* object received on */
+		  	mach_msg_header_t	*msg;		/* receive buffer pointer */
+			mach_msg_size_t		msize;		/* max size for recvd msg */
+		  	mach_msg_option_t	option;		/* options for receive */
+		  	mach_msg_size_t		slist_size;	/* scatter list size */
+			struct ipc_kmsg		*kmsg;		/* received message */
+			mach_port_seqno_t	seqno;		/* seqno of recvd message */
+			void			(*continuation)(mach_msg_return_t);
+		}			receive;
 		struct {
-			struct semaphore  *waitsemaphore;   /* semaphore ref */
-			struct semaphore  *signalsemaphore; /* semaphore ref */
-			int		  options;	/* semaphore options */
-			kern_return_t	  result;	/* primary result */
-			void		  (*continuation)(kern_return_t);
-		} sema;
+			struct semaphore	*waitsemaphore;  	/* semaphore ref */
+			struct semaphore	*signalsemaphore;	/* semaphore ref */
+			int					options;			/* semaphore options */
+			kern_return_t		result;				/* primary result */
+			void			(*continuation)(kern_return_t);
+		}			sema;
 	  	struct {
-			struct sf_policy  *policy;	/* scheduling policy */
-			int		  option;	/* switch option */
-		} swtch;
-		char *other;		/* catch-all for other state */
-	} saved;
+			int				option;		/* switch option */
+		}			swtch;
+		int					misc;		/* catch-all for other state */
+	}		saved;
 
 	/* Timing data structures */
-	timer_data_t	user_timer;	/* user mode timer */
-	timer_data_t	system_timer;	/* system mode timer */
-	timer_data_t	depressed_timer;/* depressed priority timer */
-	timer_save_data_t user_timer_save;  /* saved user timer value */
-	timer_save_data_t system_timer_save;  /* saved sys timer val. */
-	/*** ??? should the next two fields be moved to SP-specific struct?***/
-	unsigned int	cpu_delta;	/* cpu usage since last update */
-	unsigned int	sched_delta;	/* weighted cpu usage since update */
+	timer_data_t			user_timer;			/* user mode timer */
+	timer_data_t			system_timer;		/* system mode timer */
+	timer_save_data_t		user_timer_save;	/* saved user timer value */
+	timer_save_data_t		system_timer_save;	/* saved system timer value */
 
 	/* Timed wait expiration */
 	timer_call_data_t		wait_timer;
@@ -325,37 +314,41 @@ typedef struct thread_shuttle {
 	boolean_t				wait_timer_is_set;
 
 	/* Priority depression expiration */
-	thread_call_data_t		depress_timer;
+	timer_call_data_t		depress_timer;
+	integer_t				depress_timer_active;
 
 	/* Ast/Halt data structures */
-	boolean_t	active;		/* how alive is the thread */
+	boolean_t			active;				/* thread is active */
+
+	int					at_safe_point;		/* thread_abort_safely allowed */
 
 	/* Processor data structures */
-	processor_set_t	processor_set;	/* assigned processor set */
-#if	NCPUS > 1
-	processor_t	bound_processor;	/* bound to processor ?*/
-#endif	/* NCPUS > 1 */
+	processor_set_t		processor_set;		/* assigned processor set */
+	processor_t			bound_processor;	/* bound to processor ?*/
 #if	MACH_HOST
-	boolean_t	may_assign;	/* may assignment change? */
-	boolean_t	assign_active;	/* someone waiting for may_assign */
+	boolean_t			may_assign;			/* may assignment change? */
+	boolean_t			assign_active;		/* waiting for may_assign */
 #endif	/* MACH_HOST */
 
-#if	XKMACHKERNEL
-	int		xk_type;
-#endif	/* XKMACHKERNEL */
+	processor_t			last_processor;		/* processor last ran on */
 
-#if	NCPUS > 1
-	processor_t	last_processor; /* processor this last ran on */
+	/* Non-reentrancy funnel */
+    struct funnel_lock		*funnel_lock;
+    int				    	funnel_state;
+#define TH_FN_OWNED				0x1			/* we own the funnel */
+#define TH_FN_REFUNNEL			0x2			/* re-acquire funnel on dispatch */
+
+/* BEGIN TRACING/DEBUG */
+
 #if	MACH_LOCK_MON
-	unsigned	lock_stack;	/* number of locks held */
+	unsigned			lock_stack;			/* number of locks held */
 #endif  /* MACH_LOCK_MON */
-#endif	/* NCPUS > 1 */
 
-	int		at_safe_point;	/* thread_abort_safely allowed */
-    int	    funnel_state;
-#define TH_FN_OWNED    0x1  /* we own the funnel lock */
-#define TH_FN_REFUNNEL 0x2  /* must reaquire funnel lock when unblocking */
-    funnel_t	*funnel_lock;
+#if	ETAP_EVENT_MONITOR
+	int					etap_reason;		/* real reason why we blocked */
+	boolean_t			etap_trace;			/* ETAP trace status */
+#endif	/* ETAP_EVENT_MONITOR */
+
 #if	MACH_LDEBUG
 	/*
 	 *	Debugging:  track acquired mutexes and locks.
@@ -365,24 +358,19 @@ typedef struct thread_shuttle {
 	 */
 #define	MUTEX_STACK_DEPTH	20
 #define	LOCK_STACK_DEPTH	20
-	mutex_t		*mutex_stack[MUTEX_STACK_DEPTH];
-	lock_t		*lock_stack[LOCK_STACK_DEPTH];
-	unsigned int	mutex_stack_index;
-	unsigned int	lock_stack_index;
-	unsigned	mutex_count;	/* XXX to be deleted XXX */
-	boolean_t	kthread;	/* thread is a kernel thread */
+	mutex_t				*mutex_stack[MUTEX_STACK_DEPTH];
+	lock_t				*lock_stack[LOCK_STACK_DEPTH];
+	unsigned int		mutex_stack_index;
+	unsigned int		lock_stack_index;
+	unsigned			mutex_count;		/* XXX to be deleted XXX */
+	boolean_t			kthread;			/* thread is a kernel thread */
 #endif	/* MACH_LDEBUG */
 
-	/*
-	 * End of thread_shuttle proper
-	 */
+/* END TRACING/DEBUG */
 
-	/*
-	 * Migration and thread_activation linkage information
-	 */
-	struct thread_activation *top_act; /* "current" thr_act */
-
-} Thread_Shuttle;
+	/* Migration and thread_activation linkage */
+	struct thread_activation	*top_act;		/* "current" thr_act */
+};
 
 #define THREAD_SHUTTLE_NULL	((thread_shuttle_t)0)
 
@@ -401,6 +389,16 @@ typedef struct thread_shuttle {
 #define sth_options		saved.sema.options
 #define sth_result		saved.sema.result
 #define sth_continuation	saved.sema.continuation
+
+struct funnel_lock {
+	int			fnl_type;			/* funnel type */
+	mutex_t		*fnl_mutex;			/* underlying mutex for the funnel */
+	void *		fnl_mtxholder;		/* thread (last)holdng mutex */
+	void *		fnl_mtxrelease;		/* thread (last)releasing mutex */
+	mutex_t		*fnl_oldmutex;		/* Mutex before collapsing split funnel */
+};
+
+typedef struct funnel_lock		funnel_t;
 
 extern thread_act_t active_kloaded[NCPUS];	/* "" kernel-loaded acts */
 extern vm_offset_t active_stacks[NCPUS];	/* active kernel stacks */
@@ -435,9 +433,11 @@ extern void		thread_reference(
 extern void		thread_deallocate(
 					thread_t		thread);
 
-/* Set priority of calling thread */
-extern void		thread_set_own_priority(
-					int				priority);
+/* Set task priority of member thread */
+extern void		thread_task_priority(
+					thread_t		thread,
+					integer_t		priority,
+					integer_t		max_priority);
 
 /* Start a thread at specified routine */
 #define thread_start(thread, start)						\
@@ -591,6 +591,7 @@ extern thread_t     kernel_thread_with_priority(
                     task_t          task,
 					integer_t		priority,
                     void            (*start)(void),
+					boolean_t		alloc_stack,
                     boolean_t       start_running);
 
 extern void 		funnel_lock(funnel_t *);
@@ -599,7 +600,7 @@ extern void 		funnel_unlock(funnel_t *);
 
 #else /* !MACH_KERNEL_PRIVATE */
 
-typedef struct __funnel__ funnel_t;
+typedef struct funnel_lock		funnel_t;
 
 extern boolean_t thread_should_halt(thread_t);
 

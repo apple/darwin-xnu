@@ -26,6 +26,7 @@
 #ifndef	_IPC_MIG_H_
 #define	_IPC_MIG_H_
 
+#include <mach/mig.h>
 #include <mach/message.h>
 #include <sys/kdebug.h>
 
@@ -124,5 +125,31 @@ extern mach_msg_return_t mach_msg_rpc_from_kernel(
 	mach_msg_size_t		rcv_size);
 
 extern void mach_msg_receive_continue(void);
+
+/*
+ * Kernel implementation of the MIG object base class
+ *
+ * Conforms to the MIGObjectInterface defined in <mach/mig.h>
+ * Ports are automatically allocated for the duration of outstanding
+ * cross-task references and then released.  
+ */
+
+typedef struct mig_object {
+			IMIGObjectVtbl		*pVtbl; /* our interface def */
+			mach_port_t		port;	 /* our port pointer  */
+} mig_object_data_t;
+
+
+/*
+ * MIG notify base class definition
+ * These are chained off the mig object to which the are registered.
+ * When that object triggers a notification delivery, we walk this
+ * chain and deliver the appropriate notification.
+ */
+typedef struct mig_notify_object {
+			IMIGNotifyObjectVtbl	*pVtbl; /* our interface def */
+			mach_port_t		port;	 /* our port pointer  */
+} mig_notify_object_data_t;
+
 
 #endif	/* _IPC_MIG_H_ */

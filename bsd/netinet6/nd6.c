@@ -120,6 +120,7 @@ int nd6_recalc_reachtm_interval = ND6_RECALC_REACHTM_INTERVAL;
 static struct sockaddr_in6 all1_sa;
 
 static void nd6_slowtimo __P((void *));
+static void nd6_slowtimo_funneled __P((void *));
 
 #if MIP6
 void (*mip6_expired_defrouter_hook)(struct nd_defrouter *dr) = 0;
@@ -147,7 +148,7 @@ nd6_init()
 	nd6_init_done = 1;
 
 	/* start timer */
-	timeout(nd6_slowtimo, (caddr_t)0, ND6_SLOWTIMER_INTERVAL * hz);
+	timeout(nd6_slowtimo_funneled, (caddr_t)0, ND6_SLOWTIMER_INTERVAL * hz);
 }
 
 void
@@ -394,6 +395,19 @@ skip1:
  * ND6 timer routine to expire default route list and prefix list
  */
 void
+nd6_timer_funneled(ignored_arg)
+	void	*ignored_arg;
+{
+#ifdef __APPLE__
+        boolean_t   funnel_state;
+    	funnel_state = thread_funnel_set(network_flock, TRUE);
+#endif
+	nd6_timer(ignored_arg);
+#ifdef __APPLE__
+        (void) thread_funnel_set(network_flock, FALSE);
+#endif
+}
+void
 nd6_timer(ignored_arg)
 	void	*ignored_arg;
 {
@@ -404,17 +418,13 @@ nd6_timer(ignored_arg)
 #if !(defined(__FreeBSD__) && __FreeBSD__ >= 3) && !defined (__APPLE__)
 	long time_second = time.tv_sec;
 #endif
-#ifdef __APPLE__
-        boolean_t   funnel_state;
-    	funnel_state = thread_set_funneled(TRUE);
-#endif
 	
 #if __NetBSD__
 	s = splsoftnet();
 #else
 	s = splnet();
 #endif
-	timeout(nd6_timer, (caddr_t)0, nd6_prune * hz);
+	timeout(nd6_timer_funneled, (caddr_t)0, nd6_prune * hz);
 
 	ln = llinfo_nd6.ln_next;
 	/* XXX BSD/OS separates this code -- itojun */
@@ -583,9 +593,6 @@ nd6_timer(ignored_arg)
 			pr = pr->ndpr_next;
 	}
 	splx(s);
-#ifdef __APPLE__
-       (void) thread_set_funneled(funnel_state);
-#endif
 }
 
 /*
@@ -1810,16 +1817,26 @@ fail:
 }
 
 static void
+nd6_slowtimo_funneled(ignored_arg)
+	void	*ignored_arg;
+{
+#ifdef __APPLE__
+        boolean_t   funnel_state;
+    	funnel_state = thread_funnel_set(network_flock, TRUE);
+#endif
+	nd6_slowtimo(ignored_arg);
+#ifdef __APPLE__
+        (void) thread_funnel_set(network_flock, FALSE);
+#endif
+}
+
+static void
 nd6_slowtimo(ignored_arg)
     void *ignored_arg;
 {
 	int s;
 	register int i;
 	register struct nd_ifinfo *nd6if;
-#ifdef __APPLE__
-    	boolean_t   funnel_state;
-    	funnel_state = thread_set_funneled(TRUE);
-#endif
 
 #ifdef __NetBSD__
 	s = splsoftnet();
@@ -1827,7 +1844,7 @@ nd6_slowtimo(ignored_arg)
 	s = splnet();
 #endif
 
-	timeout(nd6_slowtimo, (caddr_t)0, ND6_SLOWTIMER_INTERVAL * hz);
+	timeout(nd6_slowtimo_funneled, (caddr_t)0, ND6_SLOWTIMER_INTERVAL * hz);
 	for (i = 1; i < if_index + 1; i++) {
 		nd6if = &nd_ifinfo[i];
 		if (nd6if->basereachable && /* already initialized */
@@ -1843,9 +1860,6 @@ nd6_slowtimo(ignored_arg)
 		}
 	}
 	splx(s);
-#ifdef __APPLE__
-    (void) thread_set_funneled(funnel_state);
-#endif
 
 }
 

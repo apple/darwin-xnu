@@ -28,6 +28,7 @@
 #include <IOKit/scsi/IOSCSIParallelInterface.h>
 
 #include <IOKit/IOKitKeys.h>
+#include <IOKit/system.h>
 
 #undef  super
 #define super IOSCSIDevice
@@ -161,7 +162,7 @@ IOReturn IOSCSIParallelDevice::probeTargetLun()
         goto probeError;
     }
     
-    size = kDefaultInquirySize;
+    size = sizeof(SCSIInquiry);
      
     if ( !(inqData = (SCSIInquiry *)IOMalloc(size)) )
     {
@@ -1315,16 +1316,19 @@ bool IOSCSIParallelDevice::checkTag( IOSCSIParallelCommand *scsiCmd )
         {
             break;
         }
+
+	/* If the command is untagged, then don't allocate a tag nor
+	 * send the untagged command as a simple-tagged command.
+	 */
+        if ( scsiCDB.cdbTagMsg == 0 )
+        {
+            break;
+        }
     
         if ( allocTag( &scsiCDB.cdbTag ) == false )
         {
              rc = false;
              break;
-        }
-
-        if ( scsiCDB.cdbTagMsg == 0 )
-        {
-            scsiCDB.cdbTagMsg = kSCSIMsgSimpleQueueTag;
         }
     }
     while ( 0 );
@@ -1848,6 +1852,7 @@ OSDictionary *IOSCSIParallelDevice::createProperties()
     OSObject		*regObj;
     char		tmpbuf[81];
     char		*d;   
+    char		unit[10];
 
     propTable = OSDictionary::withCapacity(kSCSIMaxProperties);
     if ( propTable == NULL )
@@ -1866,6 +1871,9 @@ OSDictionary *IOSCSIParallelDevice::createProperties()
     {
         goto createprop_error;
     }
+
+    sprintf(unit,"%x",targetLun.target);
+    setLocation(unit);
 
     regObj = (OSObject *)OSNumber::withNumber(targetLun.lun,32);
     if ( addToRegistry( propTable, regObj, kSCSIPropertyLun ) != true )

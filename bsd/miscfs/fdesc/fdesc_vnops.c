@@ -768,6 +768,7 @@ fdesc_select(ap)
 		int  a_which;
 		int  a_fflags;
 		struct ucred *a_cred;
+		void *a_wql;
 		struct proc *a_p;
 	} */ *ap;
 {
@@ -775,7 +776,7 @@ fdesc_select(ap)
 
 	switch (VTOFDESC(ap->a_vp)->fd_type) {
 	case Fctty:
-		error = cttyselect(devctty, ap->a_fflags, ap->a_p);
+		error = cttyselect(devctty, ap->a_fflags, ap->a_wql, ap->a_p);
 		break;
 
 	default:

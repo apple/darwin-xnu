@@ -288,6 +288,7 @@ int nd6_options __P((union nd_opts *));
 struct	rtentry *nd6_lookup __P((struct in6_addr *, int, struct ifnet *));
 void nd6_setmtu __P((struct ifnet *));
 void nd6_timer __P((void *));
+void nd6_timer_funneled __P((void *));
 void nd6_purge __P((struct ifnet *));
 void nd6_free __P((struct rtentry *));
 void nd6_nud_hint __P((struct rtentry *, struct in6_addr *));

@@ -802,47 +802,6 @@ IOReturn IOUserClient::sendAsyncResult(OSAsyncReference reference,
 
 /* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
 
-#include <IOKit/pci/IOPCIDevice.h>
-
-static void makeMatchingCompatible( OSDictionary * dict )
-{
-    const char *	key;
-    const char *	newKey;
-    OSObject *		value;
-    OSString *		str;
-    int			i = 0;
-
-    static const char * gratuitousNameChanges[] = {
-	"IOImports",		kIOProviderClassKey,
-	"IOClass Names",	kIOClassKey,
-	"IOProbe Score",	kIOProbeScoreKey,
-	"IOKit Debug",		kIOKitDebugKey,
-	"IONeededResources",	kIOResourceMatchKey,
-	"IOName Match",		kIONameMatchKey,
-	"IOPCI Match",		kIOPCIMatchKey,
-	"IOPCI Primary Match",	kIOPCIPrimaryMatchKey,
-	"IOPCI Secondary Match",kIOPCISecondaryMatchKey,
-	"IOPCI Class Match",	kIOPCIClassMatchKey,
-	0
-    };
-
-    while( (key = gratuitousNameChanges[i++])) {
-	newKey = gratuitousNameChanges[i++];
-        if( (value = dict->getObject( key))
-         && (0 == dict->getObject( newKey))) {
-
-            dict->setObject( newKey, value);
-            dict->removeObject( key);
-
-            if( (str = OSDynamicCast(OSString, dict->getObject("CFBundleIdentifier"))))
-                IOLog("kext \"%s\" ", str->getCStringNoCopy());
-            IOLog("must change \"%s\" to \"%s\"\n", key, newKey);
-	}
-    }
-}
-
-/* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
-
 extern "C" {
 
 #define CHECK(cls,obj,out)			\
@@ -970,7 +929,6 @@ kern_return_t is_io_service_get_matching_services(
     obj = OSUnserializeXML( matching );
 
     if( (dict = OSDynamicCast( OSDictionary, obj))) {
-	makeMatchingCompatible( dict );	// temp for binary compatibility
         *existing = IOService::getMatchingServices( dict );
 	kr = kIOReturnSuccess;
     } else
@@ -1015,7 +973,6 @@ kern_return_t is_io_service_add_notification(
             err = kIOReturnBadArgument;
 	    continue;
 	}
-	makeMatchingCompatible( dict );	// temp for binary compatibility
 
 	if( (sym == gIOPublishNotification)
 	 || (sym == gIOFirstPublishNotification))
@@ -1277,15 +1234,43 @@ kern_return_t is_io_registry_entry_get_name(
 /* Routine io_registry_entry_get_name_in_plane */
 kern_return_t is_io_registry_entry_get_name_in_plane(
 	io_object_t registry_entry,
-	io_name_t plane,
+	io_name_t planeName,
 	io_name_t name )
 {
+    const IORegistryPlane * plane;
     CHECK( IORegistryEntry, registry_entry, entry );
 
-    strncpy( name, entry->getName( IORegistryEntry::getPlane( plane )),
-		sizeof( io_name_t));
+    if( planeName[0])
+        plane = IORegistryEntry::getPlane( planeName );
+    else
+        plane = 0;
+
+    strncpy( name, entry->getName( plane), sizeof( io_name_t));
 
     return( kIOReturnSuccess );
+}
+
+/* Routine io_registry_entry_get_location_in_plane */
+kern_return_t is_io_registry_entry_get_location_in_plane(
+	io_object_t registry_entry,
+	io_name_t planeName,
+	io_name_t location )
+{
+    const IORegistryPlane * plane;
+    CHECK( IORegistryEntry, registry_entry, entry );
+
+    if( planeName[0])
+        plane = IORegistryEntry::getPlane( planeName );
+    else
+        plane = 0;
+
+    const char * cstr = entry->getLocation( plane );
+
+    if( cstr) {
+        strncpy( location, cstr, sizeof( io_name_t));
+        return( kIOReturnSuccess );
+    } else
+        return( kIOReturnNotFound );
 }
 
 // Create a vm_map_copy_t or kalloc'ed data for memory
@@ -1297,15 +1282,178 @@ static kern_return_t copyoutkdata( void * data, vm_size_t len,
     kern_return_t	err;
     vm_map_copy_t	copy;
 
-    	err = vm_map_copyin( kernel_map, (vm_offset_t) data, len,
-			false /* src_destroy */, &copy);
+    err = vm_map_copyin( kernel_map, (vm_offset_t) data, len,
+                    false /* src_destroy */, &copy);
 
-	assert( err == KERN_SUCCESS );
-	if( err == KERN_SUCCESS )
-            *buf = (char *) copy;
+    assert( err == KERN_SUCCESS );
+    if( err == KERN_SUCCESS )
+        *buf = (char *) copy;
+
     return( err );
 }
 
+/* Routine io_registry_entry_get_property */
+kern_return_t is_io_registry_entry_get_property_bytes(
+	io_object_t registry_entry,
+	io_name_t property_name,
+	io_scalar_inband_t buf,
+	mach_msg_type_number_t *dataCnt )
+{
+    OSObject	*	obj;
+    OSData 	*	data;
+    OSString 	*	str;
+    OSBoolean	*	boo;
+    OSNumber 	*	off;
+    UInt64		offsetBytes;
+    unsigned int	len = 0;
+    const void *	bytes = 0;
+    IOReturn		ret = kIOReturnSuccess;
+
+    CHECK( IORegistryEntry, registry_entry, entry );
+
+#if 0
+    // need virtual
+    obj = entry->copyProperty(property_name);
+#else
+    obj = entry->getProperty(property_name);
+    if( obj)
+        obj->retain();
+#endif
+    if( !obj)
+        return( kIOReturnNoResources );
+
+    // One day OSData will be a common container base class
+    // until then...
+    if( (data = OSDynamicCast( OSData, obj ))) {
+	len = data->getLength();
+	bytes = data->getBytesNoCopy();
+
+    } else if( (str = OSDynamicCast( OSString, obj ))) {
+	len = str->getLength() + 1;
+	bytes = str->getCStringNoCopy();
+
+    } else if( (boo = OSDynamicCast( OSBoolean, obj ))) {
+	len = boo->isTrue() ? sizeof("Yes") : sizeof("No");
+	bytes = boo->isTrue() ? "Yes" : "No";
+
+    } else if( (off = OSDynamicCast( OSNumber, obj ))) {
+	offsetBytes = off->unsigned64BitValue();
+	len = off->numberOfBytes();
+	bytes = &offsetBytes;
+#if __BIG_ENDIAN__
+	bytes = (const void *)
+		(((UInt32) bytes) + (sizeof( UInt64) - len));
+#endif
+
+    } else
+	ret = kIOReturnBadArgument;
+
+    if( bytes) {
+	if( *dataCnt < len)
+	    ret = kIOReturnIPCError;
+	else {
+            *dataCnt = len;
+            bcopy( bytes, buf, len );
+	}
+    }
+    obj->release();
+
+    return( ret );
+}
+
+/* Routine io_registry_entry_get_property */
+kern_return_t is_io_registry_entry_get_property(
+	io_object_t registry_entry,
+	io_name_t property_name,
+	io_buf_ptr_t *properties,
+	mach_msg_type_number_t *propertiesCnt )
+{
+    kern_return_t	err;
+    vm_size_t 		len;
+    OSObject *		obj;
+
+    CHECK( IORegistryEntry, registry_entry, entry );
+
+#if 0
+    // need virtual
+    obj = entry->copyProperty(property_name);
+#else
+    obj = entry->getProperty(property_name);
+    if( obj)
+        obj->retain();
+#endif
+    if( !obj)
+        return( kIOReturnNotFound );
+
+    OSSerialize * s = OSSerialize::withCapacity(4096);
+    if( !s) {
+        obj->release();
+	return( kIOReturnNoMemory );
+    }
+    s->clearText();
+
+    if( obj->serialize( s )) {
+        len = s->getLength();
+        *propertiesCnt = len;
+        err = copyoutkdata( s->text(), len, properties );
+
+    } else
+        err = kIOReturnUnsupported;
+
+    s->release();
+    obj->release();
+
+    return( err );
+}
+
+/* Routine io_registry_entry_get_property_recursively */
+kern_return_t is_io_registry_entry_get_property_recursively(
+	io_object_t registry_entry,
+	io_name_t plane,
+	io_name_t property_name,
+        int options,
+	io_buf_ptr_t *properties,
+	mach_msg_type_number_t *propertiesCnt )
+{
+    kern_return_t	err;
+    vm_size_t 		len;
+    OSObject *		obj;
+
+    CHECK( IORegistryEntry, registry_entry, entry );
+
+#if 0
+    obj = entry->copyProperty( property_name,
+                               IORegistryEntry::getPlane( plane ), options);
+#else
+    obj = entry->getProperty( property_name,
+                               IORegistryEntry::getPlane( plane ), options);
+    if( obj)
+        obj->retain();
+#endif
+    if( !obj)
+        return( kIOReturnNotFound );
+
+    OSSerialize * s = OSSerialize::withCapacity(4096);
+    if( !s) {
+        obj->release();
+	return( kIOReturnNoMemory );
+    }
+
+    s->clearText();
+
+    if( obj->serialize( s )) {
+        len = s->getLength();
+        *propertiesCnt = len;
+        err = copyoutkdata( s->text(), len, properties );
+
+    } else
+        err = kIOReturnUnsupported;
+
+    s->release();
+    obj->release();
+
+    return( err );
+}
 
 /* Routine io_registry_entry_get_properties */
 kern_return_t is_io_registry_entry_get_properties(
@@ -1319,7 +1467,6 @@ kern_return_t is_io_registry_entry_get_properties(
     CHECK( IORegistryEntry, registry_entry, entry );
 
     OSSerialize * s = OSSerialize::withCapacity(4096);
-
     if( !s)
 	return( kIOReturnNoMemory );
 
@@ -1333,7 +1480,7 @@ kern_return_t is_io_registry_entry_get_properties(
     } else
         err = kIOReturnUnsupported;
 
-        s->release();
+    s->release();
 
     return( err );
 }
@@ -1372,69 +1519,6 @@ kern_return_t is_io_registry_entry_set_properties
     *result = res;
     return( err );
 }
-
-
-/* Routine io_registry_entry_get_property */
-kern_return_t is_io_registry_entry_get_property(
-	io_object_t registry_entry,
-	io_name_t property_name,
-	io_scalar_inband_t buf,
-	mach_msg_type_number_t *dataCnt )
-{
-    OSObject	*	obj;
-    OSData 	*	data;
-    OSString 	*	str;
-    OSBoolean	*	boo;
-    OSNumber 	*	off;
-    UInt64		offsetBytes;
-    unsigned int	len = 0;
-    const void *	bytes = 0;
-    IOReturn		ret = kIOReturnSuccess;
-
-    CHECK( IORegistryEntry, registry_entry, entry );
-
-    obj = entry->getProperty( property_name );
-    if( !obj)
-        return( kIOReturnNoResources );
-
-    // One day OSData will be a common container base class
-    // until then...
-    if( (data = OSDynamicCast( OSData, obj ))) {
-	len = data->getLength();
-	bytes = data->getBytesNoCopy();
-
-    } else if( (str = OSDynamicCast( OSString, obj ))) {
-	len = str->getLength() + 1;
-	bytes = str->getCStringNoCopy();
-
-    } else if( (boo = OSDynamicCast( OSBoolean, obj ))) {
-	len = boo->isTrue() ? sizeof("Yes") : sizeof("No");
-	bytes = boo->isTrue() ? "Yes" : "No";
-
-    } else if( (off = OSDynamicCast( OSNumber, obj ))) {
-	offsetBytes = off->unsigned64BitValue();
-	len = off->numberOfBytes();
-	bytes = &offsetBytes;
-#if __BIG_ENDIAN__
-	bytes = (const void *)
-		(((UInt32) bytes) + (sizeof( UInt64) - len));
-#endif
-
-    } else
-	ret = kIOReturnBadArgument;
-
-    if( bytes) {
-	if( *dataCnt < len)
-	    ret = kIOReturnIPCError;
-	else {
-            *dataCnt = len;
-            bcopy( bytes, buf, len );
-	}
-    }
-
-    return( ret );
-}
-
 
 /* Routine io_registry_entry_get_child_iterator */
 kern_return_t is_io_registry_entry_get_child_iterator(
@@ -1633,8 +1717,8 @@ kern_return_t is_io_connect_unmap_memory(
             IOLockLock( gIOObjectPortLock);
             if( client->mappings)
                 client->mappings->removeObject( map);
-            IOMachPort::releasePortForObject( map, IKOT_IOKIT_OBJECT );
             IOLockUnlock( gIOObjectPortLock);
+            IOMachPort::releasePortForObject( map, IKOT_IOKIT_OBJECT );
             map->release();
         } else
             err = kIOReturnBadArgument;
@@ -2337,12 +2421,6 @@ kern_return_t is_io_catalog_send_data(
 
                 array = OSDynamicCast(OSArray, obj);
                 if ( array ) {
-//--
-    OSDictionary * dict;
-    int i = 0;
-        while( (dict = OSDynamicCast(OSDictionary, array->getObject(i++))))
-            makeMatchingCompatible( dict );
-//--
                     if ( !gIOCatalogue->addDrivers( array , 
                                           flag == kIOCatalogAddDrivers) ) {
                         kr = kIOReturnError;
@@ -2360,7 +2438,6 @@ kern_return_t is_io_catalog_send_data(
 
                 dict = OSDynamicCast(OSDictionary, obj);
                 if ( dict ) {
-		    makeMatchingCompatible( dict );
                     if ( !gIOCatalogue->removeDrivers( dict, 
                                           flag == kIOCatalogRemoveDrivers ) ) {
                         kr = kIOReturnError;
@@ -2377,7 +2454,6 @@ kern_return_t is_io_catalog_send_data(
 
                 dict = OSDynamicCast(OSDictionary, obj);
                 if ( dict ) {
-		    makeMatchingCompatible( dict );
                     if ( !gIOCatalogue->startMatching( dict ) ) {
                         kr = kIOReturnError;
                     }
@@ -2568,31 +2644,34 @@ kern_return_t is_io_catalog_reset(
     return kIOReturnSuccess;
 }
 
-kern_return_t iokit_user_client_trap(io_object_t userClientRef, UInt32 index, void *p1, void *p2, void *p3, void *p4, void *p5, void *p6)
+kern_return_t iokit_user_client_trap(io_object_t userClientRef, UInt32 index,
+                                    void *p1, void *p2, void *p3,
+                                    void *p4, void *p5, void *p6)
 {
-	kern_return_t result = kIOReturnBadArgument;
-	IOUserClient *userClient;
+    kern_return_t result = kIOReturnBadArgument;
+    IOUserClient *userClient;
 
-	if ((userClient = OSDynamicCast(IOUserClient, iokit_lookup_connect_ref_current_task(userClientRef)))) {
-		IOExternalTrap *trap;
-		IOService *target = NULL;
+    if ((userClient = OSDynamicCast(IOUserClient,
+            iokit_lookup_connect_ref_current_task(userClientRef)))) {
+        IOExternalTrap *trap;
+        IOService *target = NULL;
 
-		trap = userClient->getTargetAndTrapForIndex(&target, index);
+        trap = userClient->getTargetAndTrapForIndex(&target, index);
 
-		if (trap && target) {
-			IOTrap func;
+        if (trap && target) {
+            IOTrap func;
 
-			func = trap->func;
+            func = trap->func;
 
-			if (func) {
-				result = (target->*func)(p1, p2, p3, p4, p5, p6);
-			}
-		}
+            if (func) {
+                result = (target->*func)(p1, p2, p3, p4, p5, p6);
+            }
+        }
 
-		userClient->release();
-	}
+        userClient->release();
+    }
 
-	return result;
+    return result;
 }
 
 };	/* extern "C" */

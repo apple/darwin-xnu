@@ -257,7 +257,7 @@ _ANIL,			/* 10 0 0100 ?*/
 _ANIL,			/* 10 0 0101 ?*/
 _ANIL,			/* 10 0 0110 ?*/
 _ANIL,			/* 10 0 0111 ?*/
-_AENTRY(lwbrx, 2, 0),	/* 10 0 1000 */
+_AENTRY(lwbrx, 4, 0),	/* 10 0 1000 */
 _ANIL,			/* 10 0 1001 ?*/
 _AENTRY(stwbrx, 0, 4),	/* 10 0 1010 */
 _ANIL,			/* 10 0 1011 */
@@ -309,7 +309,7 @@ _AENTRY(lhaux, 4, 0),	/* 11 1 0101 */
 _AENTRY(sthux, 0, 4),	/* 11 1 0110 */
 _ANIL,			/* 11 1 0111 ?*/
 _AFENTRY(lfsux, 4, 0),	/* 11 1 1000 */
-_AFENTRY(lfdux, 0, 8),	/* 11 1 1001 */
+_AFENTRY(lfdux, 8, 0),	/* 11 1 1001 */
 _AFENTRY(stfsux, 0, 4),	/* 11 1 1010 */
 _AFENTRY(stfdux, 0, 8),	/* 11 1 1011 */
 };
@@ -379,6 +379,8 @@ alignment(unsigned long dsisr, unsigned long dar,
 	else 						(void)hw_atomic_add(&alignment_exception_count_kernel, 1);
 #endif
 
+	act = current_act();						/* Get the current activation */
+
 	table = &align_tables[DSISR_BITS_15_16(dsisr)];
 
 	if (table == (void *) 0
@@ -411,7 +413,7 @@ alignment(unsigned long dsisr, unsigned long dar,
 	 */
 
 	if (entry->a_is_float)
-		fpu_save();
+		fpu_save(act);
 
 	/*
 	 * Pull in any bytes which are going to be
@@ -440,12 +442,10 @@ alignment(unsigned long dsisr, unsigned long dar,
 	printf("    pc=(0x%08X), msr=(0x%X)",ssp->srr0, ssp->srr1);
 #endif
 
-	act = current_act();						/* Get the current activation */
 	
 	success = entry->a_instruct(dsisr,
 				    ssp,
-					find_user_fpu(act),			/* Find this user's FPU state. NULL if none */
-				   								/* NULL should never happen */
+					(entry->a_is_float ? find_user_fpu(act) : 0),	/* Find this user's FPU state if FP op */
 				    align_buffer,
 				    dar);
 
@@ -464,8 +464,10 @@ alignment(unsigned long dsisr, unsigned long dar,
 			}
 		}
 		else {
-			for(i=0; i < real_ncpus; i++) {							/* Cycle through processors */
-				(void)hw_compare_and_store((unsigned int)act, 0, &per_proc_info[i].FPU_thread);	/* Clear if ours */
+			if(entry->a_is_float) {				/* If we are an FP op, blow away live context */
+				for(i=0; i < real_ncpus; i++) {	/* Cycle through processors */
+					(void)hw_compare_and_store((unsigned int)act, 0, &per_proc_info[i].FPU_thread);	/* Clear if ours */
+				}
 			}
 
 			if (USER_MODE(ssp->srr1)) {

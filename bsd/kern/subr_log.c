@@ -201,9 +201,10 @@ logread(dev, uio, flag)
 
 /*ARGSUSED*/
 int
-logselect(dev, rw, p)
+logselect(dev, rw, wql, p)
 	dev_t dev;
 	int rw;
+	void * wql;
 	struct proc *p;
 {
 	int s = splhigh();
@@ -215,7 +216,7 @@ logselect(dev, rw, p)
 			splx(s);
 			return (1);
 		}
-		selrecord(p, &logsoftc.sc_selp);
+		selrecord(p, &logsoftc.sc_selp, wql);
 		break;
 	}
 	splx(s);

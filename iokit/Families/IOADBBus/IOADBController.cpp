@@ -151,13 +151,12 @@ bool ADBhasRoot( OSObject * us, void *, IOService * yourDevice )
 IOReturn IOADBController::powerStateWillChangeTo ( IOPMPowerFlags theFlags, unsigned long, IOService*)
 {
     int i;
-
-    if ( ! (theFlags & IOPMPowerOn) ) {
+    if ( ! (theFlags & kIOPMPowerOn) && ! (theFlags & kIOPMDoze) ) {
         busProbed = false;
         for ( i = 1; i < ADB_DEVICE_COUNT; i++ ) {
             if( adbDevices[ i ] != NULL ) {
                 if ( adbDevices[ i ]->nub ) {
-                    adbDevices[ i ]->nub->terminate(kIOServiceRequired);
+                    adbDevices[ i ]->nub->terminate(kIOServiceRequired | kIOServiceSynchronous);
                     adbDevices[ i ]->nub->release();
                 }
                 IOFree( adbDevices[ i ], sizeof (ADBDeviceControl));
@@ -178,7 +177,7 @@ IOReturn IOADBController::powerStateWillChangeTo ( IOPMPowerFlags theFlags, unsi
 //*********************************************************************************
 IOReturn IOADBController::powerStateDidChangeTo ( IOPMPowerFlags theFlags, unsigned long, IOService*)
 {
-    if ( theFlags & IOPMPowerOn ) {
+    if ( (theFlags & kIOPMPowerOn) || (theFlags & kIOPMDoze) ) {
         if ( ! busProbed ) {
             thread_call_enter(probeThread);
             busProbed = true;
@@ -288,24 +287,15 @@ IOReturn IOADBController::probeBus ( void )
     const OSNumber * object;
     const OSSymbol * key;
 
-    /* Waits one second for the trackpads to be up */
-    
-    IOSleep(1500);
-
     /* Kill the auto poll until a new dev id's have been setup */
-
     setAutoPollEnable(false);
-
+    
     /*
      * Send a ADB bus reset - reply is sent after bus has reset,
      * so there is no need to wait for the reset to complete.
      */
     
     resetBus();
-
-    /* Waits one second for the trackpads to be up */
-    
-    IOSleep(1500);
 
     /*
      * Okay, now attempt reassign the
@@ -323,7 +313,7 @@ IOReturn IOADBController::probeBus ( void )
             }
     }
 
-    /* Now attempt to reassign the addresses */
+/* Now attempt to reassign the addresses */
     while( unresolvedAddrs) {
         if( !freeAddrs) {
             panic("ADB: Cannot find a free ADB slot for reassignment!");
@@ -471,8 +461,9 @@ IOReturn IOADBController::probeBus ( void )
             newDev->release();
             continue;
         }
-        newDev->registerService();
         newDev->start(this);
+        newDev->registerService();
+        newDev->waitQuiet();
     }							// repeat loop
     return kIOReturnSuccess;
 }
@@ -556,8 +547,8 @@ IOReturn IOADBController::setOwner ( void * device, IOService * client, ADB_call
 {
    ADBDeviceControl * deviceInfo = (ADBDeviceControl *)device;
 
-   deviceInfo->owner = client;
    deviceInfo->handler = handler;
+   deviceInfo->owner = client;
    return kIOReturnSuccess;
 }
 
@@ -684,6 +675,16 @@ UInt8 IOADBController::handlerID ( ADBDeviceControl * busRef )
 UInt8 IOADBController::defaultHandlerID ( ADBDeviceControl * busRef )
 {
     return busRef->defaultHandlerID;
+}
+
+
+// **********************************************************************************
+// cancelAllIO
+//
+// **********************************************************************************
+IOReturn IOADBController::cancelAllIO ( void )
+{
+    return kIOReturnSuccess;
 }
 
 

@@ -50,11 +50,11 @@ return super::init(properties);
 // **********************************************************************************
 bool IOCudaADBController::start ( IOService *nub )
 {
-if( !super::start(nub))
-    return false;
 
-CudaDriver->registerForADBInterrupts ( autopollHandler, this );
-return true;
+	CudaDriver->registerForADBInterrupts ( autopollHandler, this );
+	if( !super::start(nub))
+    		return false;
+	return true;
 }
 
 
@@ -160,6 +160,16 @@ adb_init_request(&cmd);
 ADB_BUILD_CMD2(&cmd, ADB_PACKET_ADB, ADB_ADBCMD_RESET_BUS );
 
 return CudaDriver->doSyncRequest(&cmd);
+}
+
+
+// **********************************************************************************
+// cancelAllIO
+//
+// **********************************************************************************
+IOReturn IOCudaADBController::cancelAllIO ( void )
+{
+    return kIOReturnSuccess;
 }
 
 

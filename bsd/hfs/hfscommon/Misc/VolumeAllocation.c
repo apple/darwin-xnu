@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2001 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -26,88 +26,8 @@
 
 	Version:	HFS Plus 1.0
 
-	Copyright:	© 1996-2000 by Apple Computer, Inc., all rights reserved.
+	Copyright:	© 1996-2001 by Apple Computer, Inc., all rights reserved.
 
-	File Ownership:
-
-		DRI:				Mark Day
-
-		Other Contact:		Greg Parks
-
-		Technology:			HFS+
-
-	Writers:
-
-		(djb)	Don Brady
-		(DSH)	Deric Horn
-		(msd)	Mark Day
-
-	Change History (most recent first):
-	  <MacOSX>	 1/22/2000	djb	Removed unused BlockCheck and BlockVerifyAllocated routines.
-	  <MacOSX>	 4/27/98	djb	Remove references to unused/legacy vcbFreeBks.
-	  <MacOSX>	 4/27/98	djb	Remove unneccessary DebugStr in BlockVerifyAllocated.
-	  <MacOSX>	 4/17/98	djb	Add VCB locking.
-	  <MacOSX>	 4/13/98	djb	Add RequireFileLock checking to ReadBitmapBlock.
-	  <MacOSX>	 3/31/98	djb	Sync up with final HFSVolumes.h header file.
-
-	  <12>	1	0/31/97		DSH		Modify BlockVerifyAllocated() so DFA can call without actually
-									writing to the disk.
-	  <CS11>	10/20/97	msd		The way BlockAllocate rounds up to a multiple of the clump size
-									is wrong. ExtendFileC should do the round-up and pass the result
-									into BlockAllocate. Removed the fcb parameter to BlockAllocate;
-									added a bytesMaximum parameter.
-	  <CS10>	10/17/97	msd		Conditionalize DebugStrs.
-	   <CS9>	  9/4/97	djb		Add logging to BlockAllocate.
-	   <CS8>	  9/4/97	msd		Add a histogram of allocation sizes. Use DEBUG_BUILD instead of
-									VSM_DEBUG to generate DebugStr messages.
-	   <CS7>	 8/14/97	msd		Bug 1662332. Don't mark blocks dirty in UpdateFreeCount. In
-									BlockVerifyAllocated, only mark blocks dirty if they've actually
-									changed.
-	   <CS6>	 7/16/97	DSH		FilesInternal.i renamed FileMgrInternal.i to avoid name
-									collision
-	   <CS5>	  7/8/97	DSH		Loading PrecompiledHeaders from define passed in on C line
-	   <CS4>	 6/12/97	msd		Export BlockAllocateAny and UpdateVCBFreeBlks.
-		 <3>	  5/8/97	DSH		Added comments and ascii diagram of new BlockFindContiguous()
-									algorithm.
-		 <2>	  5/7/97	DSH		New faster BlockFindContiguous algorithm.  It searches backwards
-									until a dirty bit is found instead of forwards.
-	   <CS1>	 4/25/97	djb		first checked in
-
-	 <HFS21>	 4/14/97	msd		Fix UpdateVCBFreeBlks so free space calculation doesn't overflow
-									on volumes bigger than 4GB.
-	 <HFS20>	  4/4/97	djb		Get in sync with volume format changes.
-	 <HFS19>	 1/27/97	msd		Speed up BlockCheck and UpdateFreeCount. Removed DebugStr from
-									BlockCheck; there are now DebugStr's in BlockVerifyAllocated,
-									before the bitmap gets fixed (so potential problems can be
-									debugged easier). Adjusted comments about internal routines.
-									Changed names of "Fast" routines back to their original names
-									(since the originals are now removed).
-	 <HFS18>	 1/24/97	msd		Speed up allocation and deallocation.
-	 <HFS17>	 1/21/97	msd		Add instrumentation for function entry/exit.  BlockAllocate and
-									ReadBitMapBlock use the event tag to log bytes requested and
-									block number (respectively).
-	 <HFS16>	 1/15/97	djb		Add HFS+ supprt to BlockCheck (for MountCheck).
-	 <HFS15>	 1/13/97	DSH		Use vcb->nextAllocation instead of vcbAllocPtr.
-	 <HFS14>	  1/9/97	djb		UpdateVCBFreeBlks is not converting correctly.
-	 <HFS13>	  1/6/97	djb		Use vcb's allocationsRefNum to access allocation file.
-	 <HFS12>	  1/2/97	DSH		Added UpdateVCBFreeBlks() to update vcbFreeBks whenever we
-									update vcb->freeblocks.
-	 <HFS11>	12/19/96	DSH		All refs to VCB are now refs to ExtendedVCB
-	 <HFS10>	12/12/96	msd		DivideAndRoundUp should not be declared as static.
-	  <HFS9>	12/10/96	msd		Check PRAGMA_LOAD_SUPPORTED before loading precompiled headers.
-	  <HFS8>	 12/4/96	DSH		PrecompiledHeaders
-	  <HFS7>	11/27/96	djb		Added AllocateFreeSpace for HFS wrapper support.
-	  <HFS6>	11/27/96	msd		Changed ReadBitmapBlock to read from HFS+ allocation file.
-									Temporarily uses the vcbVBMSt field of the VCB as the allocation
-									file's refnum until extended VCB changes are checked in.
-	  <HFS5>	11/26/96	msd		VSM and FileExtentMapping routines use FCB instead of FCBRec.
-	  <HFS4>	11/20/96	DSH		Changed a parameter in GetBlock_glue, so I also changed the
-									caller.
-	  <HFS3>	11/20/96	msd		Include FilesInternal.h. Remove definition of MarkVCBDirty
-									(since it is now in FilesInternal.h).
-	  <HFS2>	11/12/96	msd		Need to bound allocations to be within the last allocation block
-									of the volume (function AllocateAt).
-	  <HFS1>	11/11/96	msd		first checked in
 */
 
 /*
@@ -119,22 +39,7 @@ Public routines:
 					blocks.  (Will only do a single extent???)
 	BlockDeallocate
 					Deallocate a contiguous run of allocation blocks.
-	UpdateFreeCount
-					Computes the number of free allocation blocks on a volume.
-					The vcb's free block count is updated.
 
-	AllocateFreeSpace
-					Allocates all the remaining free space (used for embedding HFS+ volumes).
-
-	BlockAllocateAny
-					Find and allocate a contiguous range of blocks up to a given size.  The
-					first range of contiguous free blocks found are allocated, even if there
-					are fewer blocks than requested (and even if a contiguous range of blocks
-					of the given size exists elsewhere).
-
-	UpdateVCBFreeBlks
-					Given an ExtenddVCB, calculate the vcbFreeBks value
-					so that vcbFreeBks*vcbAlBlkSiz == freeBlocks*blockSize.
 
 Internal routines:
 	BlockMarkFree
@@ -148,13 +53,26 @@ Internal routines:
 					Find a contiguous range of blocks of a given size.  The caller
 					specifies where to begin the search (by block number).  The
 					block number of the first block in the range is returned.
+	BlockAllocateAny
+					Find and allocate a contiguous range of blocks up to a given size.  The
+					first range of contiguous free blocks found are allocated, even if there
+					are fewer blocks than requested (and even if a contiguous range of blocks
+					of the given size exists elsewhere).
 	BlockAllocateContig
 					Find and allocate a contiguous range of blocks of a given size.  If
 					a contiguous range of free blocks of the given size isn't found, then
 					the allocation fails (i.e. it is "all or nothing").
+
+	BlockAllocateKnown
+					Try to allocate space from known free space in the volume's
+					free extent cache.
+
 	ReadBitmapBlock
 					Given an allocation block number, read the bitmap block that
 					contains that allocation block into a caller-supplied buffer.
+
+	ReleaseBitmapBlock
+					Release a bitmap block back into the buffer cache.
 */
 
 #include "../../hfs_macos_defs.h"
@@ -170,22 +88,13 @@ Internal routines:
 
 #include "../headers/FileMgrInternal.h"
 
-#include "../headers/HFSInstrumentation.h"
-
-#define EXPLICIT_BUFFER_RELEASES 1
 
 enum {
+	kBytesPerWord			=	4,
 	kBitsPerByte			=	8,
 	kBitsPerWord			=	32,
-	kWordsPerBlock			=	128,
-	kBytesPerBlock			=	512,
-	kBitsPerBlock			=	4096,
-	
-	kBitsWithinWordMask		=	kBitsPerWord-1,
-	kBitsWithinBlockMask	=	kBitsPerBlock-1,
-	kWordsWithinBlockMask	=	kWordsPerBlock-1,
-	
-	kExtentsPerRecord		=	3
+
+	kBitsWithinWordMask		=	kBitsPerWord-1
 };
 
 #define kLowBitInWordMask	0x00000001ul
@@ -195,8 +104,22 @@ enum {
 
 static OSErr ReadBitmapBlock(
 	ExtendedVCB		*vcb,
-	UInt32			block,
-	UInt32			**buffer);
+	UInt32			bit,
+	UInt32			**buffer,
+	UInt32			*blockRef);
+
+static OSErr ReleaseBitmapBlock(
+	ExtendedVCB		*vcb,
+	UInt32			blockRef,
+	Boolean			dirty);
+
+static OSErr BlockAllocateAny(
+	ExtendedVCB		*vcb,
+	UInt32			startingBlock,
+	UInt32			endingBlock,
+	UInt32			maxBlocks,
+	UInt32			*actualStartBlock,
+	UInt32			*actualNumBlocks);
 
 static OSErr BlockAllocateContig(
 	ExtendedVCB		*vcb,
@@ -224,6 +147,12 @@ static OSErr BlockMarkFree(
 	ExtendedVCB		*vcb,
 	UInt32			startingBlock,
 	UInt32			numBlocks);
+
+static OSErr BlockAllocateKnown(
+	ExtendedVCB		*vcb,
+	UInt32			maxBlocks,
+	UInt32			*actualStartBlock,
+	UInt32			*actualNumBlocks);
 
 
 /*
@@ -266,13 +195,6 @@ static OSErr BlockMarkFree(
 ;
 ; Side effects:
 ;	 The volume bitmap is read and updated; the volume bitmap cache may be changed.
-;
-; Modification history:
-;	<06Oct85>  PWD	Changed to check for errors after calls to ReadBM and NextWord
-;					Relocated call to MarkBlock in allocation loop
-;					Changed to call NextBit
-; <21Oct85>   PWD	Changed to check VCBFreeBks before attempting to allocate any block.
-;					Speed up scan for free space by checking for all 1's.
 ;________________________________________________________________________________
 */
 
@@ -292,25 +214,6 @@ OSErr BlockAllocate (
 	UInt32			minBlocks;					//	minimum number of allocation blocks requested
 	UInt32			maxBlocks;					//	number of allocation blocks requested, rounded to clump size
 	Boolean			updateAllocPtr = false;		//	true if nextAllocation needs to be updated
-
-	LogStartTime(kTraceBlockAllocate);
-
-#if HFSInstrumentation
-	InstSplitHistogramClassRef	histogram;
-	InstTraceClassRef			trace;
-	InstEventTag				eventTag;
-	
-	err = InstCreateTraceClass(kInstRootClassRef, "HFS:VSM:BlockAllocate", 'hfs+', kInstEnableClassMask, &trace);
-	if (err != noErr) DebugStr("\pError from InstCreateTraceClass");
-
-	err = InstCreateSplitHistogramClass(kInstRootClassRef, "HFS:VSM:BlockAllocate size", 0, 512, 16384, 262144, 16384,
-										kInstEnableClassMask, &histogram);
-	if (err != noErr) DebugStr("\pError from InstCreateHistogramClass");
-
-	eventTag = bytesRequested;		// a cheap way to get bytesRequested into the log
-	InstLogTraceEvent( trace, eventTag, kInstStartEvent);
-	InstUpdateHistogram( histogram, bytesRequested, 1);
-#endif
 
 	//
 	//	Initialize outputs in case we get an error
@@ -346,7 +249,7 @@ OSErr BlockAllocate (
 		VCB_UNLOCK(vcb);
 		updateAllocPtr = true;
 	}
-	
+
 	//
 	//	If the request must be contiguous, then find a sequence of free blocks
 	//	that is long enough.  Otherwise, find the first free block.
@@ -354,10 +257,18 @@ OSErr BlockAllocate (
 	if (forceContiguous) {
 		err = BlockAllocateContig(vcb, startingBlock, minBlocks, maxBlocks, actualStartBlock, actualNumBlocks);
 	} else {
-		err = BlockAllocateAny(vcb, startingBlock, vcb->totalBlocks, maxBlocks, actualStartBlock, actualNumBlocks);
-		if (err == dskFulErr) {
+		/*
+		 * Scan the bitmap once, gather the N largest free extents, then
+		 * allocate from these largest extents.  Repeat as needed until
+		 * we get all the space we needed.  We could probably build up
+		 * that list when the higher level caller tried (and failed) a
+		 * contiguous allocation first.
+		 */
+		err = BlockAllocateKnown(vcb, maxBlocks, actualStartBlock, actualNumBlocks);
+		if (err == dskFulErr)
+			err = BlockAllocateAny(vcb, startingBlock, vcb->totalBlocks, maxBlocks, actualStartBlock, actualNumBlocks);
+		if (err == dskFulErr)
 			err = BlockAllocateAny(vcb, 0, startingBlock, maxBlocks, actualStartBlock, actualNumBlocks);
-			};
 	}
 
 	if (err == noErr) {
@@ -380,40 +291,12 @@ OSErr BlockAllocate (
 		vcb->freeBlocks -= *actualNumBlocks;
 		VCB_UNLOCK(vcb);
 
-		UpdateVCBFreeBlks( vcb );
 		MarkVCBDirty(vcb);
 	}
 	
 Exit:
 
-#if HFSInstrumentation
-	InstLogTraceEvent( trace, eventTag, kInstEndEvent);
-#endif
-	LogEndTime(kTraceBlockAllocate, err);
-
 	return err;
-}
-
-
-/*
-;________________________________________________________________________________
-;
-; Routine:	   UpdateVCBFreeBlks
-;
-; Function:    Whenever the freeBlocks field in the ExtendedVCB is updated,
-;			   we must also recalculate the (UInt16) vcbFreeBks field in the
-;			   traditional HFS VCB structure.
-;
-; Input Arguments:
-;	 vcb		- Pointer to ExtendedVCB for the volume to free space on
-;________________________________________________________________________________
-*/
-void UpdateVCBFreeBlks( ExtendedVCB *vcb )
-{
-	#if DEBUG_BUILD
-		if ( vcb->vcbSigWord == kHFSSigWord && vcb->freeBlocks > 0xFFFF )
-			DebugStr("\p UpdateVCBFreeBlks: freeBlocks overflow!");
-	#endif
 }
 
 
@@ -434,11 +317,6 @@ void UpdateVCBFreeBlks( ExtendedVCB *vcb )
 ;
 ; Side effects:
 ;	 The volume bitmap is read and updated; the volume bitmap cache may be changed.
-;
-; Modification history:
-;
-;	<06Oct85>  PWD	Changed to check for error after calls to ReadBM and NextWord
-;					Now calls NextBit to read successive bits from the bitmap
 ;________________________________________________________________________________
 */
 
@@ -449,17 +327,6 @@ OSErr BlockDeallocate (
 {
 	OSErr			err;
 	
-#if HFSInstrumentation
-	InstTraceClassRef	trace;
-	InstEventTag		eventTag;
-	
-	err = InstCreateTraceClass(kInstRootClassRef, "HFS:VSM:BlockDeallocate", 'hfs+', kInstEnableClassMask, &trace);
-	if (err != noErr) DebugStr("\pError from InstCreateTraceClass");
-
-	eventTag = InstCreateEventTag();
-	InstLogTraceEvent( trace, eventTag, kInstStartEvent);
-#endif
-
 	//
 	//	If no blocks to deallocate, then exit early
 	//
@@ -481,196 +348,13 @@ OSErr BlockDeallocate (
 	VCB_LOCK(vcb);
 	vcb->freeBlocks += numBlocks;
 	VCB_UNLOCK(vcb);
-	UpdateVCBFreeBlks( vcb );
 	MarkVCBDirty(vcb);
 
 Exit:
 
-#if HFSInstrumentation
-	InstLogTraceEvent( trace, eventTag, kInstEndEvent);
-#endif
-
 	return err;
 }
 
-
-/*
-;_______________________________________________________________________
-;
-; Routine:		UpdateFree
-; Arguments:	vcb	-- ExtendedVCB for volume
-;
-; Called By:	MountVol
-; Function: 	This routine is used as part of the MountVol consistency check
-;				to figure out the number of free allocation blocks in the volume.
-;
-; Modification History:
-;	<08Sep85>  LAK	New today.
-;	<06Oct85>  PWD	Added explicit check for errors after calls to ReadBM, NextWord
-;					Now calls NextBit.
-;_______________________________________________________________________
-*/
-
-OSErr UpdateFreeCount (
-	ExtendedVCB	*vcb)				//	Volume whose free block count should be updated
-{
-	OSErr			err;
-	register UInt32	wordsLeft;		//	Number of words left in this bitmap block
-	register UInt32	numBlocks;		//	Number of blocks left to scan
-	register UInt32	freeCount;		//	Running count of free blocks found so far
-	register UInt32	temp;
-	UInt32			blockNum;		//	Block number of first block in this bitmap block
-	UInt32			*buffer = NULL;	//	Pointer to bitmap block
-	register UInt32	*currentWord;	//	Pointer to current word in bitmap block
-	
-#if HFSInstrumentation
-	InstTraceClassRef	trace;
-	InstEventTag		eventTag;
-	
-	err = InstCreateTraceClass(kInstRootClassRef, "HFS:VSM:UpdateFreeCount", 'hfs+', kInstEnableClassMask, &trace);
-	if (err != noErr) DebugStr("\pError from InstCreateTraceClass");
-
-	eventTag = InstCreateEventTag();
-	InstLogTraceEvent( trace, eventTag, kInstStartEvent);
-#endif
-
-	//
-	//	Pre-read the first bitmap block
-	//
-
-	err = ReadBitmapBlock(vcb, 0, &buffer);
-	if (err != noErr) goto Exit;
-
-	//
-	//	Initialize buffer stuff
-	//
-	currentWord = buffer;
-	wordsLeft = kWordsPerBlock;
-	numBlocks = vcb->totalBlocks;
-	freeCount = 0;
-	blockNum = 0;
-	
-	//
-	//	Scan whole words first
-	//
-	
-	while (numBlocks >= kBitsPerWord) {
-		//	See if it's time to move to the next bitmap block
-		if (wordsLeft == 0) {
-			//	Read in the next bitmap block
-			blockNum += kBitsPerBlock;				//	generate a block number in the next bitmap block
-			
-#if EXPLICIT_BUFFER_RELEASES
-			err = RelBlock_glue((Ptr)buffer, rbDefault);
-			if (err != noErr) goto Exit;
-			buffer = NULL;
-#endif
-			err = ReadBitmapBlock(vcb, blockNum, &buffer);
-			if (err != noErr) goto Exit;
-			
-			//	Readjust currentWord, wordsLeft
-			currentWord = buffer;
-			wordsLeft = kWordsPerBlock;
-		}
-		
-		//	We count free blocks by inverting the word in the bitmap and counting set bits.
-		temp = ~(*currentWord);
-		while (temp) {
-			++freeCount;
-			temp &= temp-1;			//	this clears least significant bit that is currently set
-		}
-
-		numBlocks -= kBitsPerWord;
-		++currentWord;								//	move to next word
-		--wordsLeft;								//	one less word left in this block
-	}
-	
-	//
-	//	Check any remaining blocks.
-	//
-	
-	if (numBlocks != 0) {
-		if (wordsLeft == 0) {
-			//	Read in the next bitmap block
-			blockNum += kBitsPerBlock;				//	generate a block number in the next bitmap block
-			
-#if EXPLICIT_BUFFER_RELEASES
-			err = RelBlock_glue((Ptr)buffer, rbDefault);
-			if (err != noErr) goto Exit;
-			buffer = NULL;
-#endif
-			err = ReadBitmapBlock(vcb, blockNum, &buffer);
-			if (err != noErr) goto Exit;
-			
-			//	Readjust currentWord, wordsLeft
-			currentWord = buffer;
-			wordsLeft = kWordsPerBlock;
-		}
-		
-		//	We count free blocks by inverting the word in the bitmap and counting set bits.
-		temp = SWAP_BE32 (~(*currentWord));
-		while (numBlocks != 0) {
-			if (temp & kHighBitInWordMask)
-				++freeCount;
-			temp <<= 1;
-			--numBlocks;
-		}
-	}
-
-	VCB_LOCK(vcb);
-	vcb->freeBlocks = freeCount;
-	VCB_UNLOCK(vcb);
-	UpdateVCBFreeBlks( vcb );
-
-Exit:
-
-#if EXPLICIT_BUFFER_RELEASES
-	if (buffer) {
-		(void)RelBlock_glue((Ptr)buffer, rbDefault);		/* Ignore any additional errors */
-	};
-#endif
-
-#if HFSInstrumentation
-	InstLogTraceEvent( trace, eventTag, kInstEndEvent);
-#endif
-
-	return err;
-}
-
-
-
-/*
-;_______________________________________________________________________
-;
-; Routine:		AllocateFreeSpace
-; Arguments:	vcb	-- ExtendedVCB for volume
-;
-; Called By:	HFSDiskInitComponent
-; Function: 	This routine is used as part of DiskInit to create an
-;				embedded HFS+ volume.
-;
-; Note: Assumes that the free space is contiguous (true for a freshly erased disk)
-;_______________________________________________________________________
-*/
-
-OSErr AllocateFreeSpace (
-	ExtendedVCB		*vcb,				//	Volume whose free space is about to be expropriated
-	UInt32			*startBlock,		// return where free space starts
-	UInt32			*actualBlocks)		// return the number of blocks in free space
-{
-	OSErr			err;
-
-	err = BlockAllocateAny(vcb, 0, vcb->totalBlocks, vcb->freeBlocks, startBlock, actualBlocks);
-
-	if (err == noErr) {
-		VCB_LOCK(vcb);
-		vcb->freeBlocks = 0;	// sorry, no more blocks left!
-		VCB_UNLOCK(vcb);
-		MarkVCBDirty(vcb);
-	}
-	
-	return err;
-}
 
 /*
 ;_______________________________________________________________________
@@ -706,86 +390,93 @@ UInt32 FileBytesToBlocks(
 ; Routine:	ReadBitmapBlock
 ;
 ; Function:	Read in a bitmap block corresponding to a given allocation
-;			block.  Return a pointer to the bitmap block.
+;			block (bit).  Return a pointer to the bitmap block.
 ;
 ; Inputs:
 ;	vcb			--	Pointer to ExtendedVCB
-;	block		--	Allocation block whose bitmap block is desired
+;	bit			--	Allocation block whose bitmap block is desired
 ;
 ; Outputs:
 ;	buffer		--	Pointer to bitmap block corresonding to "block"
+;	blockRef
 ;_______________________________________________________________________
 */
 static OSErr ReadBitmapBlock(
 	ExtendedVCB		*vcb,
-	UInt32			block,
-	UInt32			**buffer)
+	UInt32			bit,
+	UInt32			**buffer,
+	UInt32			*blockRef)
 {
 	OSErr			err;
+	struct buf *bp = NULL;
+	struct vnode *vp = NULL;
+	UInt32 block;
+	UInt32 blockSize;
 
-#if HFSInstrumentation
-	InstTraceClassRef	trace;
-	InstEventTag		eventTag;
-	
-	err = InstCreateTraceClass(kInstRootClassRef, "HFS:VSM:ReadBitmapBlock", 'hfs+', kInstEnableClassMask, &trace);
-	if (err != noErr) DebugStr("\pError from InstCreateTraceClass");
+	/*
+	 * volume bitmap blocks are protected by the Extents B-tree lock
+	 */
+	REQUIRE_FILE_LOCK(vcb->extentsRefNum, false);	
 
-	eventTag = block;		// a cheap way to get the block number into the log
-	InstLogTraceEvent( trace, eventTag, kInstStartEvent);
-#endif
+	blockSize = (UInt32)vcb->vcbVBMIOSize;
+	block = bit / (blockSize * kBitsPerByte);
 
-	err = noErr;
+	if (vcb->vcbSigWord == kHFSPlusSigWord) {
+		vp = vcb->allocationsRefNum;	/* use allocation file vnode */
 
-	REQUIRE_FILE_LOCK(vcb->extentsRefNum, false);	/* bitmap blocks are covered by the Extents B-tree lock */
-
-	if (vcb->vcbSigWord == kHFSSigWord) {
-		//
-		//	HFS: Turn block number into physical block offset within the
-		//	bitmap, and then the physical block within the volume.
-		//
-		block /= kBitsPerBlock;		// block offset within bitmap
-		block += vcb->vcbVBMSt;		// block within whole volume
-	}
-	else {
-		FCB		*allocFile;
-		daddr_t	startBlock;
-		size_t	availableBytes;
-		
-		//
-		//	HFS+: Read from allocation file.  We simply convert the block number into a byte
-		//	offset within the allocation file and then determine which block that byte is in.
-		//
-		allocFile = GetFileControlBlock(vcb->allocationsRefNum);
-
-		//
-		//	Find out which physical block holds byte #offset in allocation file.  Note that we
-		//	map only 1 byte (the one we asked for).
-		//
-		err = MapFileBlockC(vcb, allocFile, (size_t)1, (off_t)(block/kBitsPerByte), &startBlock, &availableBytes);
-		block = startBlock;
+	} else /* hfs */ {
+		vp = VCBTOHFS(vcb)->hfs_devvp;	/* use device I/O vnode */
+		block += vcb->vcbVBMSt;			/* map to physical block */
 	}
 
-	if (err == noErr) {
-	            err = GetBlock_glue(
-#if EXPLICIT_BUFFER_RELEASES
-								0,						// No options
-#else
-                                gbReleaseMask,			// Release block immediately.  We only work on one
-														// block at a time.  Call MarkBlock later if dirty.
-#endif
-                                block,					// Physical block on volume
-                                (Ptr *) buffer,			// A place to return the buffer pointer
-                                kNoFileReference,		// Not a file read
-                                vcb);					// Volume to read from
-	}
+	err = meta_bread(vp, block, blockSize, NOCRED, &bp);
 
-#if HFSInstrumentation
-	InstLogTraceEvent( trace, eventTag, kInstEndEvent);
-#endif
+	if (bp) {
+		if (err) {
+			brelse(bp);
+			*blockRef = NULL;
+			*buffer = NULL;
+		} else {
+			*blockRef = (UInt32)bp;
+			*buffer = (UInt32 *)bp->b_data;
+		}
+	}
 
 	return err;
 }
 
+
+/*
+;_______________________________________________________________________
+;
+; Routine:	ReleaseBitmapBlock
+;
+; Function:	Relase a bitmap block. 
+;
+; Inputs:
+;	vcb
+;	blockRef
+;	dirty
+;_______________________________________________________________________
+*/
+static OSErr ReleaseBitmapBlock(
+	ExtendedVCB		*vcb,
+	UInt32			blockRef,
+	Boolean			dirty)
+{
+	struct buf *bp = (struct buf *)blockRef;
+
+	if (bp) {
+		if (dirty) {
+			bp->b_flags |= B_DIRTY;
+			bdwrite(bp);
+		} else {
+			brelse(bp);
+		}
+	}
+
+	return (0);
+}
 
 
 /*
@@ -824,12 +515,23 @@ static OSErr BlockAllocateContig(
 	//	Determine the number of contiguous blocks available (up
 	//	to maxBlocks).
 	//
+
+	/*
+	 * NOTE: If the only contiguous free extent of at least minBlocks
+	 * crosses startingBlock (i.e. starts before, ends after), then we
+	 * won't find it. Earlier versions *did* find this case by letting
+	 * the second search look past startingBlock by minBlocks.  But
+	 * with the free extent cache, this can lead to duplicate entries
+	 * in the cache, causing the same blocks to be allocated twice.
+	 */
 	err = BlockFindContiguous(vcb, startingBlock, vcb->totalBlocks, minBlocks, maxBlocks,
 								  actualStartBlock, actualNumBlocks);
-	if (err == dskFulErr) {
-		//€€ Should constrain the endingBlock here, so we don't bother looking for ranges
-		//€€ that start after startingBlock, since we already checked those.
-		err = BlockFindContiguous(vcb, 0, vcb->totalBlocks, minBlocks, maxBlocks,
+	if (err == dskFulErr && startingBlock != 0) {
+		/*
+		 * Constrain the endingBlock so we don't bother looking for ranges
+		 * that would overlap those found in the previous call.
+		 */
+		err = BlockFindContiguous(vcb, 0, startingBlock, minBlocks, maxBlocks,
 									  actualStartBlock, actualNumBlocks);
 	}
 	if (err != noErr) goto Exit;
@@ -871,7 +573,7 @@ Outputs:
 	actualNumBlocks		Number of blocks allocated, or 0 if error
 _______________________________________________________________________
 */
-OSErr BlockAllocateAny(
+static OSErr BlockAllocateAny(
 	ExtendedVCB		*vcb,
 	UInt32			startingBlock,
 	register UInt32	endingBlock,
@@ -886,37 +588,35 @@ OSErr BlockAllocateAny(
 	register UInt32	wordsLeft;		//	Number of words left in this bitmap block
     UInt32			*buffer = NULL;
     UInt32			*currCache = NULL;
-
-#if HFS_DIAGNOSTIC
-    struct buf *bp = NULL;
-    int mappingEntry;
-#endif
+	UInt32  blockRef;
+	UInt32  bitsPerBlock;
+	UInt32  wordsPerBlock;
+	Boolean dirty = false;
 
 	//	Since this routine doesn't wrap around
 	if (maxBlocks > (endingBlock - startingBlock)) {
 		maxBlocks = endingBlock - startingBlock;
 	}
 
-    DBG_TREE (("\nAllocating starting at %ld, maxblocks %ld\n", startingBlock, maxBlocks));	
 	//
 	//	Pre-read the first bitmap block
 	//
-    err = ReadBitmapBlock(vcb, startingBlock, &currCache);
-    DBG_TREE (("\n1. Read bit map at %ld, buffer is 0x%x\n", startingBlock, (int)currCache));	
+    err = ReadBitmapBlock(vcb, startingBlock, &currCache, &blockRef);
 	if (err != noErr) goto Exit;
     buffer = currCache;
-    MarkBlock_glue((Ptr) currCache);		//	this block will be dirty
-    DBG_ASSERT(! LookupBufferMapping((caddr_t)currCache, &bp, &mappingEntry));
 
 	//
 	//	Set up the current position within the block
 	//
 	{
 		UInt32 wordIndexInBlock;
+		
+		bitsPerBlock  = vcb->vcbVBMIOSize * kBitsPerByte;
+		wordsPerBlock = vcb->vcbVBMIOSize / kBytesPerWord;
 
-		wordIndexInBlock = (startingBlock & kBitsWithinBlockMask) / kBitsPerWord;
+		wordIndexInBlock = (startingBlock & (bitsPerBlock-1)) / kBitsPerWord;
 		buffer += wordIndexInBlock;
-		wordsLeft = kWordsPerBlock - wordIndexInBlock;
+		wordsLeft = wordsPerBlock - wordIndexInBlock;
 		currentWord = SWAP_BE32 (*buffer);
 		bitMask = kHighBitInWordMask >> (startingBlock & kBitsWithinWordMask);
 	}
@@ -939,20 +639,15 @@ OSErr BlockAllocateAny(
 			
 			if (--wordsLeft == 0) {
 				//	Next block
-#if EXPLICIT_BUFFER_RELEASES
-            	DBG_ASSERT(! LookupBufferMapping((caddr_t)currCache, &bp, &mappingEntry));
-            	err = RelBlock_glue((Ptr)currCache, rbDefault);
-				if (err != noErr) goto Exit;
                 buffer = currCache = NULL;
-#endif
-                err = ReadBitmapBlock(vcb, block, &currCache);
+				err = ReleaseBitmapBlock(vcb, blockRef, false);
+				if (err != noErr) goto Exit;
+
+                err = ReadBitmapBlock(vcb, block, &currCache, &blockRef);
 				if (err != noErr) goto Exit;
                 buffer = currCache;
-                DBG_TREE (("\n2. Read bit map at %ld, buffer is 0x%x\n", block, (int)currCache));	
-                DBG_ASSERT(! LookupBufferMapping((caddr_t)currCache, &bp, &mappingEntry));
-                MarkBlock_glue((Ptr) currCache);		//	this block will be dirty
 
-				wordsLeft = kWordsPerBlock;
+				wordsLeft = wordsPerBlock;
 			}
 			
 			currentWord = SWAP_BE32 (*buffer);
@@ -968,6 +663,7 @@ OSErr BlockAllocateAny(
 
 	//	Return the first block in the allocated range
 	*actualStartBlock = block;
+	dirty = true;
 	
 	//	If we could get the desired number of blocks before hitting endingBlock,
 	//	then adjust endingBlock so we won't keep looking.  Ideally, the comparison
@@ -1000,20 +696,15 @@ OSErr BlockAllocateAny(
 			
 			if (--wordsLeft == 0) {
 				//	Next block
-#if EXPLICIT_BUFFER_RELEASES
-            	DBG_ASSERT(! LookupBufferMapping((caddr_t)currCache, &bp, &mappingEntry));
-           	 	err = RelBlock_glue((Ptr)currCache, rbDefault);
-				if (err != noErr) goto Exit;
                 buffer = currCache = NULL;
-#endif
-                err = ReadBitmapBlock(vcb, block, &currCache);
+				err = ReleaseBitmapBlock(vcb, blockRef, true);
+				if (err != noErr) goto Exit;
+
+                err = ReadBitmapBlock(vcb, block, &currCache, &blockRef);
 				if (err != noErr) goto Exit;
                 buffer = currCache;
-                DBG_TREE (("\n3. Read bit map at %ld, buffer is 0x%x\n", block, (int)currCache));	
-                DBG_ASSERT(! LookupBufferMapping((caddr_t)currCache, &bp, &mappingEntry));
-                MarkBlock_glue((Ptr) currCache);		//	this block will be dirty
 
-				wordsLeft = kWordsPerBlock;
+				wordsLeft = wordsPerBlock;
 			}
 			
 			currentWord = SWAP_BE32 (*buffer);
@@ -1030,14 +721,91 @@ Exit:
 		*actualNumBlocks = 0;
 	}
 	
-#if EXPLICIT_BUFFER_RELEASES
-    if (currCache) {
-        DBG_ASSERT(! LookupBufferMapping((caddr_t)currCache, &bp, &mappingEntry));
-        (void)RelBlock_glue((Ptr)currCache, rbDefault);		/* Ignore any additional errors */
-        };
-#endif
+    if (currCache)
+    	(void) ReleaseBitmapBlock(vcb, blockRef, dirty);
 
 	return err;
+}
+
+
+/*
+_______________________________________________________________________
+
+Routine:	BlockAllocateKnown
+
+Function:	Try to allocate space from known free space in the free
+			extent cache.
+
+Inputs:
+	vcb				Pointer to volume where space is to be allocated
+	maxBlocks		Maximum number of contiguous blocks to allocate
+
+Outputs:
+	actualStartBlock	First block of range allocated, or 0 if error
+	actualNumBlocks		Number of blocks allocated, or 0 if error
+
+Returns:
+	dskFulErr		Free extent cache is empty
+_______________________________________________________________________
+*/
+static OSErr BlockAllocateKnown(
+	ExtendedVCB		*vcb,
+	UInt32			maxBlocks,
+	UInt32			*actualStartBlock,
+	UInt32			*actualNumBlocks)
+{
+	UInt32			i;
+	UInt32			foundBlocks;
+	UInt32			newStartBlock, newBlockCount;
+	
+	if (vcb->vcbFreeExtCnt == 0)
+		return dskFulErr;
+
+	//	Just grab up to maxBlocks of the first (largest) free exent.
+	*actualStartBlock = vcb->vcbFreeExt[0].startBlock;
+	foundBlocks = vcb->vcbFreeExt[0].blockCount;
+	if (foundBlocks > maxBlocks)
+		foundBlocks = maxBlocks;
+	*actualNumBlocks = foundBlocks;
+	
+	//	Adjust the start and length of that extent.
+	newStartBlock = vcb->vcbFreeExt[0].startBlock + foundBlocks;
+	newBlockCount = vcb->vcbFreeExt[0].blockCount - foundBlocks;
+	
+	//	The first extent might not be the largest anymore.  Bubble up any
+	//	(now larger) extents to the top of the list.
+	for (i=1; i<vcb->vcbFreeExtCnt; ++i)
+	{
+		if (vcb->vcbFreeExt[i].blockCount > newBlockCount)
+		{
+			vcb->vcbFreeExt[i-1].startBlock = vcb->vcbFreeExt[i].startBlock;
+			vcb->vcbFreeExt[i-1].blockCount = vcb->vcbFreeExt[i].blockCount;
+		}
+		else
+		{
+			break;
+		}
+	}
+	
+	//	If this is now the smallest known free extent, then it might be smaller than
+	//	other extents we didn't keep track of.  So, just forget about this extent.
+	//	After the previous loop, (i-1) is the index of the extent we just allocated from.
+	if (i == vcb->vcbFreeExtCnt)
+	{
+		//	It's now the smallest extent, so forget about it
+		--vcb->vcbFreeExtCnt;
+	}
+	else
+	{
+		//	It's not the smallest, so store it in its proper place
+		vcb->vcbFreeExt[i-1].startBlock = newStartBlock;
+		vcb->vcbFreeExt[i-1].blockCount = newBlockCount;
+	}
+	
+	//
+	//	Now mark the found extent in the bitmap
+	//
+	return BlockMarkAllocated(vcb, *actualStartBlock, *actualNumBlocks);
 }
 
 
@@ -1069,35 +837,28 @@ static OSErr BlockMarkAllocated(
 	UInt32			firstBit;		//	Bit index within word of first bit to allocate
 	UInt32			numBits;		//	Number of bits in word to allocate
 	UInt32			*buffer = NULL;
-
-#if HFSInstrumentation
-	InstTraceClassRef	trace;
-	InstEventTag		eventTag;
-	
-	err = InstCreateTraceClass(kInstRootClassRef, "HFS:VSM:BlockMarkAllocated", 'hfs+', kInstEnableClassMask, &trace);
-	if (err != noErr) DebugStr("\pError from InstCreateTraceClass");
-
-	eventTag = InstCreateEventTag();
-	InstLogTraceEvent( trace, eventTag, kInstStartEvent);
-#endif
+	UInt32  blockRef;
+	UInt32  bitsPerBlock;
+	UInt32  wordsPerBlock;
 
 	//
 	//	Pre-read the bitmap block containing the first word of allocation
 	//
 
-	err = ReadBitmapBlock(vcb, startingBlock, &buffer);
+	err = ReadBitmapBlock(vcb, startingBlock, &buffer, &blockRef);
 	if (err != noErr) goto Exit;
-	MarkBlock_glue((Ptr) buffer);		//	this block will be dirty
-
 	//
 	//	Initialize currentWord, and wordsLeft.
 	//
 	{
 		UInt32 wordIndexInBlock;
+		
+		bitsPerBlock  = vcb->vcbVBMIOSize * kBitsPerByte;
+		wordsPerBlock = vcb->vcbVBMIOSize / kBytesPerWord;
 
-		wordIndexInBlock = (startingBlock & kBitsWithinBlockMask) / kBitsPerWord;
+		wordIndexInBlock = (startingBlock & (bitsPerBlock-1)) / kBitsPerWord;
 		currentWord = buffer + wordIndexInBlock;
-		wordsLeft = kWordsPerBlock - wordIndexInBlock;
+		wordsLeft = wordsPerBlock - wordIndexInBlock;
 	}
 	
 	//
@@ -1116,9 +877,7 @@ static OSErr BlockMarkAllocated(
 		}
 #if DEBUG_BUILD
 		if ((*currentWord & SWAP_BE32 (bitMask)) != 0) {
-			DebugStr("\pFATAL: blocks already allocated!");
-			//err = fsDSIntErr;
-			//goto Exit;
+			panic("BlockMarkAllocated: blocks already allocated!");
 		}
 #endif
 		*currentWord |= SWAP_BE32 (bitMask);		//	set the bits in the bitmap
@@ -1136,26 +895,22 @@ static OSErr BlockMarkAllocated(
 	while (numBlocks >= kBitsPerWord) {
 		if (wordsLeft == 0) {
 			//	Read in the next bitmap block
-			startingBlock += kBitsPerBlock;			//	generate a block number in the next bitmap block
+			startingBlock += bitsPerBlock;			//	generate a block number in the next bitmap block
 			
-#if EXPLICIT_BUFFER_RELEASES
-			err = RelBlock_glue((Ptr)buffer, rbDefault);
-			if (err != noErr) goto Exit;
 			buffer = NULL;
-#endif
-			err = ReadBitmapBlock(vcb, startingBlock, &buffer);
+			err = ReleaseBitmapBlock(vcb, blockRef, true);
 			if (err != noErr) goto Exit;
-			MarkBlock_glue((Ptr) buffer);			//	this block will be dirty
-			
+
+			err = ReadBitmapBlock(vcb, startingBlock, &buffer, &blockRef);
+			if (err != noErr) goto Exit;
+
 			//	Readjust currentWord and wordsLeft
 			currentWord = buffer;
-			wordsLeft = kWordsPerBlock;
+			wordsLeft = wordsPerBlock;
 		}
 #if DEBUG_BUILD
 		if (*currentWord != 0) {
-			DebugStr("\pFATAL: blocks already allocated!");
-			//err = fsDSIntErr;
-			//goto Exit;
+			panic("BlockMarkAllocated: blocks already allocated!");
 		}
 #endif
 		*currentWord = SWAP_BE32 (bitMask);
@@ -1173,26 +928,22 @@ static OSErr BlockMarkAllocated(
 		bitMask = ~(kAllBitsSetInWord >> numBlocks);	//	set first numBlocks bits
 		if (wordsLeft == 0) {
 			//	Read in the next bitmap block
-			startingBlock += kBitsPerBlock;				//	generate a block number in the next bitmap block
+			startingBlock += bitsPerBlock;				//	generate a block number in the next bitmap block
 			
-#if EXPLICIT_BUFFER_RELEASES
-			err = RelBlock_glue((Ptr)buffer, rbDefault);
-			if (err != noErr) goto Exit;
 			buffer = NULL;
-#endif
-			err = ReadBitmapBlock(vcb, startingBlock, &buffer);
+			err = ReleaseBitmapBlock(vcb, blockRef, true);
 			if (err != noErr) goto Exit;
-			MarkBlock_glue((Ptr) buffer);				//	this block will be dirty
-			
+
+			err = ReadBitmapBlock(vcb, startingBlock, &buffer, &blockRef);
+			if (err != noErr) goto Exit;
+
 			//	Readjust currentWord and wordsLeft
 			currentWord = buffer;
-			wordsLeft = kWordsPerBlock;
+			wordsLeft = wordsPerBlock;
 		}
 #if DEBUG_BUILD
 		if ((*currentWord & SWAP_BE32 (bitMask)) != 0) {
-			DebugStr("\pFATAL: blocks already allocated!");
-			//err = fsDSIntErr;
-			//goto Exit;
+			panic("BlockMarkAllocated: blocks already allocated!");
 		}
 #endif
 		*currentWord |= SWAP_BE32 (bitMask);			//	set the bits in the bitmap
@@ -1202,19 +953,11 @@ static OSErr BlockMarkAllocated(
 
 Exit:
 
-#if EXPLICIT_BUFFER_RELEASES
-	if (buffer) {
-		(void)RelBlock_glue((Ptr)buffer, rbDefault);		/* Ignore any additional errors */
-	};
-#endif
-
-#if HFSInstrumentation
-	InstLogTraceEvent( trace, eventTag, kInstEndEvent);
-#endif
+	if (buffer)
+		(void)ReleaseBitmapBlock(vcb, blockRef, true);
 
 	return err;
 }
-
 
 
 /*
@@ -1244,35 +987,28 @@ static OSErr BlockMarkFree(
 	UInt32			firstBit;		//	Bit index within word of first bit to allocate
 	UInt32			numBits;		//	Number of bits in word to allocate
 	UInt32			*buffer = NULL;
-
-#if HFSInstrumentation
-	InstTraceClassRef	trace;
-	InstEventTag		eventTag;
-	
-	err = InstCreateTraceClass(kInstRootClassRef, "HFS:VSM:BlockMarkFree", 'hfs+', kInstEnableClassMask, &trace);
-	if (err != noErr) DebugStr("\pError from InstCreateTraceClass");
-
-	eventTag = InstCreateEventTag();
-	InstLogTraceEvent( trace, eventTag, kInstStartEvent);
-#endif
+	UInt32  blockRef;
+	UInt32  bitsPerBlock;
+	UInt32  wordsPerBlock;
 
 	//
 	//	Pre-read the bitmap block containing the first word of allocation
 	//
 
-	err = ReadBitmapBlock(vcb, startingBlock, &buffer);
+	err = ReadBitmapBlock(vcb, startingBlock, &buffer, &blockRef);
 	if (err != noErr) goto Exit;
-	MarkBlock_glue((Ptr) buffer);		//	this block will be dirty
-
 	//
 	//	Initialize currentWord, and wordsLeft.
 	//
 	{
 		UInt32 wordIndexInBlock;
+		
+		bitsPerBlock  = vcb->vcbVBMIOSize * kBitsPerByte;
+		wordsPerBlock = vcb->vcbVBMIOSize / kBytesPerWord;
 
-		wordIndexInBlock = (startingBlock & kBitsWithinBlockMask) / kBitsPerWord;
+		wordIndexInBlock = (startingBlock & (bitsPerBlock-1)) / kBitsPerWord;
 		currentWord = buffer + wordIndexInBlock;
-		wordsLeft = kWordsPerBlock - wordIndexInBlock;
+		wordsLeft = wordsPerBlock - wordIndexInBlock;
 	}
 	
 	//
@@ -1291,9 +1027,7 @@ static OSErr BlockMarkFree(
 		}
 #if DEBUG_BUILD
 		if ((*currentWord & SWAP_BE32 (bitMask)) != SWAP_BE32 (bitMask)) {
-			DebugStr("\pFATAL: blocks not allocated!");
-			//err = fsDSIntErr;
-			//goto Exit;
+			panic("BlockMarkFree: blocks not allocated!");
 		}
 #endif
 		*currentWord &= SWAP_BE32 (~bitMask);		//	clear the bits in the bitmap
@@ -1304,33 +1038,29 @@ static OSErr BlockMarkFree(
 	}
 
 	//
-	//	Allocate whole words (32 blocks) at a time.
+	//	Free whole words (32 blocks) at a time.
 	//
 
 	while (numBlocks >= kBitsPerWord) {
 		if (wordsLeft == 0) {
 			//	Read in the next bitmap block
-			startingBlock += kBitsPerBlock;			//	generate a block number in the next bitmap block
+			startingBlock += bitsPerBlock;			//	generate a block number in the next bitmap block
 			
-#if EXPLICIT_BUFFER_RELEASES
-			err = RelBlock_glue((Ptr)buffer, rbDefault);
-			if (err != noErr) goto Exit;
 			buffer = NULL;
-#endif
-			err = ReadBitmapBlock(vcb, startingBlock, &buffer);
+			err = ReleaseBitmapBlock(vcb, blockRef, true);
 			if (err != noErr) goto Exit;
-			MarkBlock_glue((Ptr) buffer);			//	this block will be dirty
-			
+
+			err = ReadBitmapBlock(vcb, startingBlock, &buffer, &blockRef);
+			if (err != noErr) goto Exit;
+
 			//	Readjust currentWord and wordsLeft
 			currentWord = buffer;
-			wordsLeft = kWordsPerBlock;
+			wordsLeft = wordsPerBlock;
 		}
 
 #if DEBUG_BUILD
 		if (*currentWord != SWAP_BE32 (kAllBitsSetInWord)) {
-			DebugStr("\pFATAL: blocks not allocated!");
-			//err = fsDSIntErr;
-			//goto Exit;
+			panic("BlockMarkFree: blocks not allocated!");
 		}
 #endif
 		*currentWord = 0;							//	clear the entire word
@@ -1341,33 +1071,29 @@ static OSErr BlockMarkFree(
 	}
 	
 	//
-	//	Allocate any remaining blocks.
+	//	Free any remaining blocks.
 	//
 	
 	if (numBlocks != 0) {
 		bitMask = ~(kAllBitsSetInWord >> numBlocks);	//	set first numBlocks bits
 		if (wordsLeft == 0) {
 			//	Read in the next bitmap block
-			startingBlock += kBitsPerBlock;				//	generate a block number in the next bitmap block
+			startingBlock += bitsPerBlock;				//	generate a block number in the next bitmap block
 			
-#if EXPLICIT_BUFFER_RELEASES
-			err = RelBlock_glue((Ptr)buffer, rbDefault);
-			if (err != noErr) goto Exit;
 			buffer = NULL;
-#endif
-			err = ReadBitmapBlock(vcb, startingBlock, &buffer);
+			err = ReleaseBitmapBlock(vcb, blockRef, true);
 			if (err != noErr) goto Exit;
-			MarkBlock_glue((Ptr) buffer);				//	this block will be dirty
-			
+
+			err = ReadBitmapBlock(vcb, startingBlock, &buffer, &blockRef);
+			if (err != noErr) goto Exit;
+
 			//	Readjust currentWord and wordsLeft
 			currentWord = buffer;
-			wordsLeft = kWordsPerBlock;
+			wordsLeft = wordsPerBlock;
 		}
 #if DEBUG_BUILD
 		if ((*currentWord & SWAP_BE32 (bitMask)) != SWAP_BE32 (bitMask)) {
-			DebugStr("\pFATAL: blocks not allocated!");
-			//err = fsDSIntErr;
-			//goto Exit;
+			panic("BlockMarkFree: blocks not allocated!");
 		}
 #endif
 		*currentWord &= SWAP_BE32 (~bitMask);			//	clear the bits in the bitmap
@@ -1377,15 +1103,8 @@ static OSErr BlockMarkFree(
 
 Exit:
 
-#if EXPLICIT_BUFFER_RELEASES
-	if (buffer) {
-		(void)RelBlock_glue((Ptr)buffer, rbDefault);		/* Ignore any additional errors */
-	};
-#endif
-
-#if HFSInstrumentation
-	InstLogTraceEvent( trace, eventTag, kInstEndEvent);
-#endif
+	if (buffer)
+		(void)ReleaseBitmapBlock(vcb, blockRef, true);
 
 	return err;
 }
@@ -1399,13 +1118,6 @@ Routine:	BlockFindContiguous
 Function:	Find a contiguous range of blocks that are free (bits
 			clear in the bitmap).  If a contiguous range of the
 			minimum size can't be found, an error will be returned.
-			
-			€€ It would be nice if we could skip over whole words
-			€€ with all bits set.
-			
-			€€ When we find a bit set, and are about to set freeBlocks
-			€€ to 0, we should check to see whether there are still
-			€€ minBlocks bits left in the bitmap.
 
 Inputs:
 	vcb				Pointer to volume where space is to be allocated
@@ -1417,340 +1129,264 @@ Inputs:
 Outputs:
 	actualStartBlock	First block of range found, or 0 if error
 	actualNumBlocks		Number of blocks found, or 0 if error
+
+Returns:
+	noErr			Found at least minBlocks contiguous
+	dskFulErr		No contiguous space found, or all less than minBlocks
 _______________________________________________________________________
-*/
-/*
-_________________________________________________________________________________________
-	(DSH) 5/8/97 Description of BlockFindContiguous() algorithm
-	Finds a contiguous range of free blocks by searching back to front.  This
-	allows us to skip ranges of bits knowing that they are not candidates for
-	a match because they are too small.  The below ascii diagrams illustrate
-	the algorithm in action.
-	
-	Representation of a piece of a volume bitmap file
-	If BlockFindContiguous() is called with minBlocks == 10, maxBlocks == 20
-
-
-Fig. 1 initialization of variables, "<--" represents direction of travel
-
-startingBlock (passed in)
-	|
-	1  0  1  0  1  0  1  0  0  0  0  0  0  0  0  0  0  0  0  0  0  0  0  1
-	|                       <--|
-stopBlock                 currentBlock                        freeBlocks == 0
-                                                              countedFreeBlocks == 0
-
-Fig. 2 dirty bit found
-
-	1  0  1  0  1  0  1  0  0  0  0  0  0  0  0  0  0  0  0  0  0  0  0  1
-	|                 |
-stopBlock        currentBlock                                 freeBlocks == 3
-                                                              countedFreeBlocks == 0
-
-Fig. 3 reset variables to search for remainder of minBlocks
-
-	1  0  1  0  1  0  1  0  0  0  0  0  0  0  0  0  0  0  0  0  0  0  0  1
-	|_________________|           |                 |
-	     Unsearched            stopBlock        currentBlock    freeBlocks == 0
-	                                                            countedFreeBlocks == 3
-
-Fig. 4 minBlocks contiguous blocks found, *actualStartBlock is set
-
-	1  0  1  0  1  0  1  0  0  0  0  0  0  0  0  0  0  0  0  0  0  0  0  1
-	|_________________|           |
-	     Unsearched            stopBlock                      freeBlocks == 7
-	                          currentBlock                    countedFreeBlocks == 3
-
-Fig. 5 Now run it forwards trying to accumalate up to maxBlocks if possible
-
-	1  0  1  0  1  0  1  0  0  0  0  0  0  0  0  0  0  0  0  0  0  0  0  1
-	|_________________|                                | -->
-	     Unsearched                               currentBlock
-		                                                      *actualNumBlocks == 10
-
-Fig. 6 Dirty bit is found, return actual number of contiguous blocks found
-
-	1  0  1  0  1  0  1  0  0  0  0  0  0  0  0  0  0  0  0  0  0  0  0  1
-	|_________________|                                                  |
-	     Unsearched                                                 currentBlock
-		                                                      *actualNumBlocks == 16
-_________________________________________________________________________________________
 */
 
 static OSErr BlockFindContiguous(
 	ExtendedVCB		*vcb,
 	UInt32			startingBlock,
-	register UInt32	endingBlock,
+	UInt32			endingBlock,
 	UInt32			minBlocks,
 	UInt32			maxBlocks,
 	UInt32			*actualStartBlock,
 	UInt32			*actualNumBlocks)
 {
 	OSErr			err;
-	register UInt32	bitMask;			//	mask of bit within word for currentBlock
-	register UInt32	tempWord;			//	bitmap word currently being examined
-	register UInt32	freeBlocks;			//	number of contiguous free blocks so far
-	register UInt32	currentBlock;		//	block number we're currently examining
-	UInt32			wordsLeft;			//	words remaining in bitmap block
+	register UInt32	currentBlock;		//	Block we're currently looking at.
+	UInt32			firstBlock;			//	First free block in current extent.
+	UInt32			stopBlock;			//	If we get to this block, stop searching for first free block.
+	UInt32			foundBlocks;		//	Number of contiguous free blocks in current extent.
 	UInt32			*buffer = NULL;
 	register UInt32	*currentWord;
-	
-	UInt32			stopBlock;			//	when all blocks until stopBlock are free, we found enough
-	UInt32			countedFreeBlocks;	//	how many contiguous free block behind stopBlock
-	UInt32			currentSector;		//	which allocations file sector
+	register UInt32	bitMask;
+	register UInt32	wordsLeft;
+	register UInt32	tempWord;
+	UInt32  blockRef;
+	UInt32  wordsPerBlock;
 
-#if HFSInstrumentation
-	InstTraceClassRef		trace;
-	InstEventTag			eventTag;
-	
-	err = InstCreateTraceClass(kInstRootClassRef, "HFS:VSM:BlockFindContiguous", 'hfs+', kInstEnableClassMask, &trace);
-	if (err != noErr) DebugStr("\pError from InstCreateTraceClass");
-
-	eventTag = InstCreateEventTag();
-	InstLogTraceEvent( trace, eventTag, kInstStartEvent);
-#endif
-
-	if ((endingBlock - startingBlock) < minBlocks) {
+	if ((endingBlock - startingBlock) < minBlocks)
+	{
 		//	The set of blocks we're checking is smaller than the minimum number
 		//	of blocks, so we couldn't possibly find a good range.
-		err = dskFulErr;
-		goto Exit;
+		goto DiskFull;
 	}
-	
-	//	Search for min blocks from back to front.
-	//	If min blocks is found, advance the allocation pointer up to max blocks
-	
-	//
-	//	Pre-read the bitmap block containing currentBlock
-	//
-	stopBlock		= startingBlock;
-	currentBlock	= startingBlock + minBlocks - 1;		//	(-1) to include startingBlock
-	
-	err = ReadBitmapBlock( vcb, currentBlock, &buffer );
-	if ( err != noErr ) goto Exit;
+
+	stopBlock = endingBlock - minBlocks + 1;
+	currentBlock = startingBlock;
 	
 	//
-	//	Init buffer, currentWord, wordsLeft, and bitMask
+	//	Pre-read the first bitmap block.
 	//
+	err = ReadBitmapBlock(vcb, currentBlock, &buffer, &blockRef);
+	if ( err != noErr ) goto ErrorExit;
+
+	//
+	//	Figure out where currentBlock is within the buffer.
+	//
+	wordsPerBlock = vcb->vcbVBMIOSize / kBytesPerWord;
+
+	wordsLeft = (startingBlock / kBitsPerWord) & (wordsPerBlock-1);	// Current index into buffer
+	currentWord = buffer + wordsLeft;
+	wordsLeft = wordsPerBlock - wordsLeft;
+	
+	do
 	{
-		UInt32 wordIndexInBlock;
-
-		wordIndexInBlock = ( currentBlock & kBitsWithinBlockMask ) / kBitsPerWord;
-		currentWord		= buffer + wordIndexInBlock;
-				
-		wordsLeft		= wordIndexInBlock;
-		tempWord		= SWAP_BE32 (*currentWord);
-		bitMask			= kHighBitInWordMask >> ( currentBlock & kBitsWithinWordMask );
-		currentSector	= currentBlock / kBitsPerBlock;
-	}
-	
-	//
-	//	Look for maxBlocks free blocks.  If we find an allocated block,
-	//	see if we've found minBlocks.
-	//
-	freeBlocks			= 0;
-	countedFreeBlocks	= 0;
-
-	while ( currentBlock >= stopBlock )
-	{
-		//	Check current bit
-		if ((tempWord & bitMask) == 0)
-		{
-			++freeBlocks;
-		}
-		else															//	Used bitmap block found
-		{
-			if ( ( freeBlocks +  countedFreeBlocks ) >= minBlocks )
-			{
-				break;													//	Found enough
-			}
-			else
-			{
-				//	We found a dirty bit, so we want to check if the next (minBlocks-freeBlocks) blocks
-				//	are free beyond what we have already checked. At Fig.2 setting up for Fig.3
-				
-				stopBlock			= currentBlock + 1 + freeBlocks;	//	Advance stop condition
-				currentBlock		+= minBlocks;
-				if ( currentBlock >= endingBlock ) break;
-				countedFreeBlocks	= freeBlocks;
-				freeBlocks			= 0;								//	Not enough; look for another range
-
-				if ( currentSector != currentBlock / kBitsPerBlock )
-				{
-#if EXPLICIT_BUFFER_RELEASES
-					err = RelBlock_glue((Ptr)buffer, rbDefault);
-					if (err != noErr) goto Exit;
-					buffer = NULL;
-#endif
-					err = ReadBitmapBlock( vcb, currentBlock, &buffer );
-					if (err != noErr) goto Exit;
-					currentSector = currentBlock / kBitsPerBlock;
-				}
-					
-				wordsLeft	= ( currentBlock & kBitsWithinBlockMask ) / kBitsPerWord;
-				currentWord	= buffer + wordsLeft;
-				tempWord	= SWAP_BE32 (*currentWord);
-				bitMask		= kHighBitInWordMask >> ( currentBlock & kBitsWithinWordMask );
-
-				continue;												//	Back to the while loop
-			}
-		}
+		foundBlocks = 0;
 		
-		//	Move to next bit
-		--currentBlock;
-		bitMask <<= 1;
-		if (bitMask == 0)												//	On a word boundry, start masking words
-		{
-			bitMask = kLowBitInWordMask;
+		//============================================================
+		//	Look for a free block, skipping over allocated blocks.
+		//============================================================
 
-			//	Move to next word
-NextWord:
-			if ( wordsLeft != 0 )
+		//
+		//	Check an initial partial word (if any)
+		//
+		bitMask = currentBlock & kBitsWithinWordMask;
+		if (bitMask)
+		{			
+			tempWord = *currentWord;			//	Fetch the current word only once
+			bitMask = kHighBitInWordMask >> bitMask;
+			while (tempWord & bitMask)
 			{
-				--currentWord;
-				--wordsLeft;
+				bitMask >>= 1;
+				++currentBlock;
 			}
-			else
+
+			//	Did we find an unused bit (bitMask != 0), or run out of bits (bitMask == 0)? 
+			if (bitMask)
+				goto FoundUnused;
+
+			//	Didn't find any unused bits, so we're done with this word.
+			++currentWord;
+			--wordsLeft;
+		}
+
+		//
+		//	Check whole words
+		//
+		while (currentBlock < stopBlock)
+		{
+			//	See if it's time to read another block.
+			if (wordsLeft == 0)
 			{
-				//	Read in the next bitmap block
-#if EXPLICIT_BUFFER_RELEASES
-				err = RelBlock_glue((Ptr)buffer, rbDefault);
-				if (err != noErr) goto Exit;
 				buffer = NULL;
-#endif
-				err = ReadBitmapBlock( vcb, currentBlock, &buffer );
-				if (err != noErr) goto Exit;
+				err = ReleaseBitmapBlock(vcb, blockRef, false);
+				if (err != noErr) goto ErrorExit;
+
+				err = ReadBitmapBlock(vcb, currentBlock, &buffer, &blockRef);
+				if ( err != noErr ) goto ErrorExit;
 				
-				//	Adjust currentWord, wordsLeft, currentSector
-				currentSector	= currentBlock / kBitsPerBlock;
-				currentWord		= buffer + kWordsPerBlock - 1;	//	Last word in buffer
-				wordsLeft		= kWordsPerBlock - 1;
+				currentWord = buffer;
+				wordsLeft = wordsPerBlock;
 			}
 			
-			tempWord = SWAP_BE32 (*currentWord);				//	Grab the current word
-
-			//
-			//	If we found a whole word of free blocks, quickly skip over it.
-			//	NOTE: we could actually go beyond the end of the bitmap if the
-			//	number of allocation blocks on the volume is not a multiple of
-			//	32.  If this happens, we'll adjust currentBlock and freeBlocks
-			//	after the loop.
-			//
-			if ( tempWord == 0 )
+			//	See if any of the bits are clear
+			if ((tempWord=*currentWord) + 1)	//	non-zero if any bits were clear
 			{
-				freeBlocks		+= kBitsPerWord;
-				currentBlock	-= kBitsPerWord;
-				if ( freeBlocks + countedFreeBlocks >= minBlocks )
-					break;									//	Found enough
-				goto NextWord;
+				//	Figure out which bit is clear
+				bitMask = kHighBitInWordMask;
+				while (tempWord & bitMask)
+				{
+					bitMask >>= 1;
+					++currentBlock;
+				}
+				
+				break;		//	Found the free bit; break out to FoundUnused.
 			}
+
+			//	Keep looking at the next word
+			currentBlock += kBitsPerWord;
+			++currentWord;
+			--wordsLeft;
 		}
-	}
 
-	if ( freeBlocks + countedFreeBlocks < minBlocks )
-	{
-		*actualStartBlock	= 0;
-		*actualNumBlocks	= 0;
-		err					= dskFulErr;
-		goto Exit;
-	}
-
-	//
-	//	When we get here, we know we've found minBlocks continuous space.
-	//	At Fig.4, setting up for Fig.5
-	//	From here we do a forward search accumalating additional free blocks.
-	//
-	
-	*actualNumBlocks	= minBlocks;
-	*actualStartBlock	= stopBlock - countedFreeBlocks;	//	ActualStartBlock is set to return to the user
-	currentBlock		= *actualStartBlock + minBlocks;	//	Right after found free space
-	
-	//	Now lets see if we can run the actualNumBlocks number all the way up to maxBlocks
-	if ( currentSector != currentBlock / kBitsPerBlock )
-	{
-#if EXPLICIT_BUFFER_RELEASES
-		err = RelBlock_glue((Ptr)buffer, rbDefault);
-		if (err != noErr) goto Exit;
-		buffer = NULL;
-#endif
-		err = ReadBitmapBlock( vcb, currentBlock, &buffer );
-		if (err != noErr)
+FoundUnused:
+		//	Make sure the unused bit is early enough to use
+		if (currentBlock >= stopBlock)
 		{
-			err	= noErr;									//	We already found the space
-			goto Exit;
+			break;
+		}
+
+		//	Remember the start of the extent
+		firstBlock = currentBlock;
+
+		//============================================================
+		//	Count the number of contiguous free blocks.
+		//============================================================
+
+		//
+		//	Check an initial partial word (if any)
+		//
+		bitMask = currentBlock & kBitsWithinWordMask;
+		if (bitMask)
+		{
+			tempWord = *currentWord;			//	Fetch the current word only once
+			bitMask = kHighBitInWordMask >> bitMask;
+			while (bitMask && !(tempWord & bitMask))
+			{
+				bitMask >>= 1;
+				++currentBlock;
+			}
+
+			//	Did we find a used bit (bitMask != 0), or run out of bits (bitMask == 0)? 
+			if (bitMask)
+				goto FoundUsed;
+
+			//	Didn't find any used bits, so we're done with this word.
+			++currentWord;
+			--wordsLeft;
 		}
 		
-		currentSector = currentBlock / kBitsPerBlock;
-	}
-
-	//
-	//	Init buffer, currentWord, wordsLeft, and bitMask
-	//
-	{
-		UInt32 wordIndexInBlock;
-
-		wordIndexInBlock = (currentBlock & kBitsWithinBlockMask) / kBitsPerWord;
-		currentWord		= buffer + wordIndexInBlock;
-		tempWord		= SWAP_BE32 (*currentWord);
-		wordsLeft		= kWordsPerBlock - wordIndexInBlock;
-		bitMask			= kHighBitInWordMask >> (currentBlock & kBitsWithinWordMask);
-	}
-
-	if ( *actualNumBlocks < maxBlocks )
-	{
-		while ( currentBlock < endingBlock )
+		//
+		//	Check whole words
+		//
+		while (currentBlock < endingBlock)
 		{
+			//	See if it's time to read another block.
+			if (wordsLeft == 0)
+			{
+				buffer = NULL;
+				err = ReleaseBitmapBlock(vcb, blockRef, false);
+				if (err != noErr) goto ErrorExit;
+
+				err = ReadBitmapBlock(vcb, currentBlock, &buffer, &blockRef);
+				if ( err != noErr ) goto ErrorExit;
 				
-			if ( (tempWord & bitMask) == 0 )
-			{
-				*actualNumBlocks	+= 1;
-				
-				if ( *actualNumBlocks == maxBlocks )
-					break;
+				currentWord = buffer;
+				wordsLeft = wordsPerBlock;
 			}
-			else
+			
+			//	See if any of the bits are set
+			if ((tempWord=*currentWord) != 0)
 			{
-				break;
-			}
-	
-			//	Move to next bit
-			++currentBlock;
-			bitMask >>= 1;
-			if (bitMask == 0)
-			{
+				//	Figure out which bit is set
 				bitMask = kHighBitInWordMask;
-				++currentWord;
-	
-				if ( --wordsLeft == 0)
+				while (!(tempWord & bitMask))
 				{
-#if EXPLICIT_BUFFER_RELEASES
-					err = RelBlock_glue((Ptr)buffer, rbDefault);
-					if (err != noErr) goto Exit;
-					buffer = NULL;
-#endif
-					err = ReadBitmapBlock(vcb, currentBlock, &buffer);
-					if (err != noErr) break;
-					
-					//	Adjust currentWord, wordsLeft
-					currentWord		= buffer;
-					wordsLeft		= kWordsPerBlock;
+					bitMask >>= 1;
+					++currentBlock;
 				}
-				tempWord = SWAP_BE32 (*currentWord);		//	grab the current word
+				
+				break;		//	Found the used bit; break out to FoundUsed.
 			}
+
+			//	Keep looking at the next word
+			currentBlock += kBitsPerWord;
+			++currentWord;
+			--wordsLeft;
+			
+			//	If we found at least maxBlocks, we can quit early.
+			if ((currentBlock - firstBlock) >= maxBlocks)
+				break;
 		}
+
+FoundUsed:
+		//	Make sure we didn't run out of bitmap looking for a used block.
+		//	If so, pin to the end of the bitmap.
+		if (currentBlock > endingBlock)
+			currentBlock = endingBlock;
+
+		//	Figure out how many contiguous free blocks there were.
+		//	Pin the answer to maxBlocks.
+		foundBlocks = currentBlock - firstBlock;
+		if (foundBlocks > maxBlocks)
+			foundBlocks = maxBlocks;
+		if (foundBlocks >= minBlocks)
+			break;		//	Found what we needed!
+
+		//	This free chunk wasn't big enough.  Try inserting it into the free extent cache in case
+		//	the allocation wasn't forced contiguous.
+		tempWord = vcb->vcbFreeExtCnt;
+		if (tempWord == kMaxFreeExtents && vcb->vcbFreeExt[kMaxFreeExtents-1].blockCount < foundBlocks)
+			--tempWord;
+		if (tempWord < kMaxFreeExtents)
+		{
+			//	We're going to add this extent.  Bubble any smaller extents down in the list.
+			while (tempWord && vcb->vcbFreeExt[tempWord-1].blockCount < foundBlocks)
+			{
+				vcb->vcbFreeExt[tempWord] = vcb->vcbFreeExt[tempWord-1];
+				--tempWord;
+			}
+			vcb->vcbFreeExt[tempWord].startBlock = firstBlock;
+			vcb->vcbFreeExt[tempWord].blockCount = foundBlocks;
+			
+			if (vcb->vcbFreeExtCnt < kMaxFreeExtents)
+				++vcb->vcbFreeExtCnt;
+		}
+	} while (currentBlock < stopBlock);
+
+
+	//	Return the outputs.
+	if (foundBlocks < minBlocks)
+	{
+DiskFull:
+		err = dskFulErr;
+ErrorExit:
+		*actualStartBlock = 0;
+		*actualNumBlocks = 0;
+	}
+	else
+	{
+		err = noErr;
+		*actualStartBlock = firstBlock;
+		*actualNumBlocks = foundBlocks;
 	}
 	
-Exit:
-
-#if EXPLICIT_BUFFER_RELEASES
-	if (buffer) {
-		(void)RelBlock_glue((Ptr)buffer, rbDefault);		/* Ignore any additional errors */
-	};
-#endif
-
-#if HFSInstrumentation
-	InstLogTraceEvent( trace, eventTag, kInstEndEvent);
-#endif
+	if (buffer)
+		(void) ReleaseBitmapBlock(vcb, blockRef, false);
 
 	return err;
 }

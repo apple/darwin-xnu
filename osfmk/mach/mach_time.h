@@ -31,8 +31,6 @@
 #ifndef	_MACH_MACH_TIME_H_
 #define	_MACH_MACH_TIME_H_
 
-#include <stdint.h>
-
 #include <mach/mach_types.h>
 
 uint64_t			mach_absolute_time(void);

@@ -24,29 +24,6 @@
 #include <ppc/boot.h>
 #include <ppc/mem.h>
 
-#ifdef XXX_LOADER
-unsigned int kernel_seg_regs[] = {
-  KERNEL_SEG_REG0_VALUE,
-  KERNEL_SEG_REG1_VALUE,
-  SEG_REG_INVALID, /* 2 */
-  SEG_REG_INVALID, /* 3 */
-  SEG_REG_INVALID, /* 4 */
-  KERNEL_SEG_REG5_VALUE, /* 5 - I/O segment */
-  SEG_REG_INVALID, /* 6 */
-  SEG_REG_INVALID, /* 7 */
-  KERNEL_SEG_REG8_VALUE, /* 8-F are possible IO space */
-  KERNEL_SEG_REG9_VALUE,
-  KERNEL_SEG_REG10_VALUE,
-  KERNEL_SEG_REG11_VALUE,
-  KERNEL_SEG_REG12_VALUE,
-  KERNEL_SEG_REG13_VALUE,
-  KERNEL_SEG_REG14_VALUE, /* 14 - A/V video */
-  KERNEL_SEG_REG15_VALUE /* 15 - NuBus etc */
-};
-#else
-extern unsigned int kernel_seg_regs[];
-#endif
-
 // The sophisticated BAT manager
 
 unsigned int mappedSegments = 0;

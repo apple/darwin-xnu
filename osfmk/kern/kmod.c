@@ -73,7 +73,7 @@ kmod_lookupbyid(kmod_t id)
 }
 
 kmod_info_t *
-kmod_lookupbyname(char * name)
+kmod_lookupbyname(const char * name)
 {
 	kmod_info_t *k = 0;
 
@@ -211,8 +211,10 @@ kmod_create_internal(kmod_info_t *info, kmod_t *id)
 
 	simple_unlock(&kmod_lock);
 
+#if DEBUG
 	printf("kmod_create: %s (id %d), %d pages loaded at 0x%x, header size 0x%x\n", 
 	       info->name, info->id, info->size / PAGE_SIZE, info->address, info->hdr_size);
+#endif DEBUG
 
 	return KERN_SUCCESS;
 }
@@ -232,6 +234,13 @@ kmod_create_fake(char *name, char *version)
 {
 	kmod_info_t *info;
 
+        if (!name || ! version || 
+            (1 + strlen(name) > KMOD_MAX_NAME) ||
+            (1 + strlen(version) > KMOD_MAX_NAME)) {
+
+            return KERN_INVALID_ARGUMENT;
+        }
+ 
 	info = (kmod_info_t *)kalloc(sizeof(kmod_info_t));
 	if (!info) {
 		return KERN_RESOURCE_SHORTAGE;
@@ -239,8 +248,8 @@ kmod_create_fake(char *name, char *version)
 
 	// make de fake
 	info->info_version = KMOD_INFO_VERSION;
-	bcopy(name, info->name, KMOD_MAX_NAME);
-	bcopy(version, info->version, KMOD_MAX_NAME);
+	bcopy(name, info->name, 1 + strlen(name));
+	bcopy(version, info->version, 1 + strlen(version));  //NIK fixed this part
 	info->reference_count = 1;	// keep it from unloading, starting, stopping
 	info->reference_list = 0;
 	info->address = info->size = info->hdr_size = 0;
@@ -298,8 +307,10 @@ kmod_destroy_internal(kmod_t id)
 				kfree((vm_offset_t)t, sizeof(struct kmod_reference));
 			}
 
+#if DEBUG
 			printf("kmod_destroy: %s (id %d), deallocating %d pages starting at 0x%x\n", 
 			       k->name, k->id, k->size / PAGE_SIZE, k->address);
+#endif DEBUG
 
 			rc = vm_map_unwire(kernel_map, k->address + k->hdr_size, 
 					   k->address + k->size, FALSE);
@@ -717,7 +728,7 @@ kmod_dump(vm_offset_t *addr, unsigned int cnt)
 	while (k) {
 	    // XXX - validate page(s) that k points to
 		if(pmap_extract(kernel_pmap, (vm_offset_t)k) == 0) { 	/* Exit loop if page not mapped */
-			printf("kmod scan stopped due to missing page: %08X\n", k);
+			printf("         kmod scan stopped due to missing page: %08X\n", k);
 			break;
 		}
 	    if ((*addr >= k->address) && (*addr < (k->address + k->size))) {
@@ -731,25 +742,24 @@ kmod_dump(vm_offset_t *addr, unsigned int cnt)
     }
     if (!found_one) return;
 
-    printf("kernel modules in backtrace: ");
+    printf("      Kernel loadable modules in backtrace:\n");
     k = kmod;
     while (k) {
 		if(pmap_extract(kernel_pmap, (vm_offset_t)k) == 0) { 	/* Exit loop if page not mapped */
-			printf("kmod scan stopped due to missing page: %08X\n", k);
+			printf("         kmod scan stopped due to missing page: %08X\n", k);
 			break;
 		}
 		if (k->info_version == IS_IN_BACKTRACE) {
-		    printf("%s(%s)@0x%x ", k->name, k->version, k->address);
+		    printf("         %s(%s)@0x%x\n", k->name, k->version, k->address);
 		}
 		k = k->next;
     }
-    printf("\n");
 
     // look for dependencies
     k = kmod; found_one = 0;
     while (k) {
 		if(pmap_extract(kernel_pmap, (vm_offset_t)k) == 0) { 	/* Exit loop if page not mapped */
-			printf("kmod dependency scan stopped due to missing page: %08X\n", k);
+			printf("         kmod dependency scan stopped due to missing page: %08X\n", k);
 			break;
 		}
 		if (k->info_version == IS_IN_BACKTRACE) {
@@ -757,7 +767,7 @@ kmod_dump(vm_offset_t *addr, unsigned int cnt)
 		    while (r) {
 				// XXX - validate page(s) that r and r->info point to
 				if(pmap_extract(kernel_pmap, (vm_offset_t)r) == 0) { 	/* Exit loop if page not mapped */
-					printf("kmod validation scan stopped due to missing page: %08X\n", r);
+					printf("         kmod validation scan stopped due to missing page: %08X\n", r);
 					break;
 				}
 				if (r->info->info_version != IS_IN_BACKTRACE) {
@@ -771,26 +781,25 @@ kmod_dump(vm_offset_t *addr, unsigned int cnt)
     }
     if (!found_one) goto cleanup;
 
-    printf("kernel module dependencies: ");
+    printf("      Kernel loadable module dependencies:\n");
     k = kmod;
     while (k) {
 		if(pmap_extract(kernel_pmap, (vm_offset_t)k) == 0) { 	/* Exit loop if page not mapped */
-			printf("kmod dependency print stopped due to missing page: %08X\n", k);
+			printf("         kmod dependency print stopped due to missing page: %08X\n", k);
 			break;
 		}
 		if (k->info_version == IS_A_DEPENDENCY) {
-		    printf("%s(%s)@0x%x ", k->name, k->version, k->address);
+		    printf("         %s(%s)@0x%x\n", k->name, k->version, k->address);
 		}
 		k = k->next;
     }
-    printf("\n");
 
  cleanup:
     // in case we double panic
     k = kmod;
     while (k) {
 		if(pmap_extract(kernel_pmap, (vm_offset_t)k) == 0) { 	/* Exit loop if page not mapped */
-			printf("kmod dump cleanup stopped due to missing page: %08X\n", k);
+			printf("         kmod dump cleanup stopped due to missing page: %08X\n", k);
 			break;
 		}
 		k->info_version = KMOD_INFO_VERSION;

@@ -42,6 +42,8 @@ extern unsigned int killprint;
 extern double FloatInit;
 extern unsigned long QNaNbarbarian[4];
 extern void thread_bootstrap_return(void);
+extern struct   Saveanchor saveanchor;
+extern int      real_ncpus;                     /* Number of actual CPUs */
 
 
 struct ppc_saved_state * get_user_regs(thread_act_t);
@@ -54,7 +56,8 @@ thread_userstack(
     int,
     thread_state_t,
     unsigned int,
-    vm_offset_t *
+    vm_offset_t *,
+	int *
 );
 
 kern_return_t
@@ -70,6 +73,7 @@ unsigned int get_msr_exportmask(void);
 unsigned int get_msr_nbits(void);
 unsigned int get_msr_rbits(void);
 void thread_set_child(thread_act_t child, int pid);
+void thread_set_parent(thread_act_t parent, int pid);
 		
 /*
  * Maps state flavor to number of words in the state:
@@ -240,7 +244,7 @@ act_machine_get_state(
 				return KERN_INVALID_ARGUMENT;
 			}
 		
-			fpu_save();									/* Just in case it's live, save it */
+			fpu_save(thr_act);							/* Just in case it's live, save it */
 		
 			fs = (struct ppc_float_state *) tstate;		/* Point to destination */
 			
@@ -274,7 +278,7 @@ act_machine_get_state(
 				return KERN_INVALID_ARGUMENT;
 			}
 		
-			vec_save();									/* Just in case it's live, save it */
+			vec_save(thr_act);							/* Just in case it's live, save it */
 		
 			vs = (struct ppc_vector_state *) tstate;	/* Point to destination */
 			
@@ -492,7 +496,7 @@ act_machine_set_state(
 	
 				if(!kernel_act) sv->save_srr1 |= MSR_EXPORT_MASK_SET;	/* If not a kernel guy, force the magic bits on */	
 			
-				sv->save_srr1 &= ~(MASK(MSR_FP) | MASK(MSR_FP));	/* Make sure we don't enable the floating point unit */
+				sv->save_srr1 &= ~(MASK(MSR_FP) | MASK(MSR_VEC));	/* Make sure we don't enable the floating point unit */
 			
 				if(isnew) {										/* Is it a new one? */
 					sv->save_dar = 0;							/* Yes, these need initialization also */
@@ -538,6 +542,15 @@ act_machine_set_state(
 			sv = (savearea *)thr_act->mact.FPU_pcb;			/* Get the top savearea on the stack */
 			osv = 0;										/* Set no user savearea yet */	
 			
+			if(sv && (sv->save_level_fp == 1)) {			/* Is the first savearea invalid? */
+				thr_act->mact.FPU_pcb = (pcb_t)sv->save_prev_float;	/* Yes, clean it out */
+				sv->save_flags &= ~SAVfpuvalid;				/* Clear the floating point flag */
+				if(!(sv->save_flags & SAVinuse)) {			/* Anyone left with this one? */			
+					save_release(sv);						/* Nope, release it */
+				}
+				sv = (savearea *)thr_act->mact.FPU_pcb;		/* Get the new top savearea on the stack */
+			}
+
 			while(sv) {										/* Find the user context */
 				if(!(sv->save_level_fp)) {					/* Are we looking at the user context? */
 					break;									/* Outta here */
@@ -599,7 +612,6 @@ act_machine_set_state(
 			usv->save_xfpscrpad = sv->save_fpscr_pad;		/* Copy the pad value to normal */	
 			usv->save_xfpscr = sv->save_fpscr;				/* Copy the fpscr value to normal */	
 			
-			
 			return KERN_SUCCESS;
 			
 	
@@ -614,6 +626,15 @@ act_machine_set_state(
 			
 			sv = (savearea *)thr_act->mact.VMX_pcb;			/* Get the top savearea on the stack */
 			osv = 0;										/* Set no user savearea yet */	
+			
+			if(sv && (sv->save_level_vec == 1)) {			/* Is the first savearea invalid? */
+				thr_act->mact.VMX_pcb = (pcb_t)sv->save_prev_vector;	/* Yes, clean it out */
+				sv->save_flags &= ~SAVvmxvalid;				/* Clear the floating point flag */
+				if(!(sv->save_flags & SAVinuse)) {			/* Anyone left with this one? */			
+					save_release(sv);						/* Nope, release it */
+				}
+				sv = (savearea *)thr_act->mact.VMX_pcb;		/* Get the new top savearea on the stack */
+			}
 			
 			while(sv) {										/* Find the user context */
 				if(!(sv->save_level_vec)) {					/* Are we looking at the user context? */
@@ -694,8 +715,8 @@ void act_thread_dup(thread_act_t old, thread_act_t new) {
   	savearea		*sv, *osv, *fsv;
 	unsigned int	spc, i, *srs;
 	
-	fpu_save();										/* Make certain floating point state is all saved */
-	vec_save();										/* Make certain the vector state is all saved */
+	fpu_save(old);									/* Make certain floating point state is all saved */
+	vec_save(old);									/* Make certain the vector state is all saved */
 	
 	osv = (savearea *)new->mact.pcb;				/* Get the top savearea on the stack */
 	sv = 0;											/* Set no new user savearea yet */	
@@ -755,6 +776,8 @@ void act_thread_dup(thread_act_t old, thread_act_t new) {
 
 	sv->save_prev_float = (savearea *)0;			/* Clear the back chain */
 	sv->save_prev_vector = (savearea *)0;			/* Clear the back chain */
+	sv->save_level_fp = 0;							/* Set the level for FP */
+	sv->save_level_vec = 0;							/* Set the level for vector */
 	
 	sv->save_srr1 &= ~(MASK(MSR_FP) | MASK(MSR_VEC));	/* Make certain that floating point and vector are turned off */
 	
@@ -896,7 +919,8 @@ thread_userstack(
     int                 flavor,
     thread_state_t      tstate,
     unsigned int        count,
-    vm_offset_t         *user_stack
+    vm_offset_t         *user_stack,
+	int					*customstack
 )
 {
         struct ppc_thread_state *state;
@@ -906,6 +930,8 @@ thread_userstack(
          */
         if (*user_stack == 0)
                 *user_stack = USRSTACK;
+		if (customstack)
+			*customstack = 0;
 
         switch (flavor) {
         case PPC_THREAD_STATE:
@@ -918,6 +944,10 @@ thread_userstack(
                  * If a valid user stack is specified, use it.
                  */
                 *user_stack = state->r1 ? state->r1: USRSTACK;
+
+				if (customstack && state->r1)
+					*customstack = 1;
+					
                 break;
         default :
                 return (KERN_INVALID_ARGUMENT);
@@ -985,4 +1015,287 @@ void  thread_set_child(thread_act_t child, int pid)
 	
 	child_state->r3 = pid;
 	child_state->r4 = 1;
+}
+void  thread_set_parent(thread_act_t parent, int pid)
+{
+	struct ppc_saved_state *parent_state;
+	
+	parent_state = find_user_regs(parent);
+	
+	parent_state->r3 = pid;
+	parent_state->r4 = 0;
+}
+
+/*
+ *		Saves the complete context (general, floating point, and vector) of the current activation.
+ *		We will collect everything into one savearea and pass that back.
+ *
+ *		The savearea is made to look like it belongs to the source activation.  This needs to 
+ *		be adjusted when these contexts are attached to a new activation.
+ *
+ */
+
+void *act_thread_csave(void) {
+
+  	savearea		*sv, *osv, *fsv;
+	unsigned int	spc, i, *srs;
+	
+	thread_act_t act;	
+	
+	fpu_save(current_act());						/* Make certain floating point state is all saved */
+	vec_save(current_act());						/* Make certain the vector state is all saved */
+
+	sv = save_alloc();								/* Get a fresh save area */
+	hw_atomic_add(&saveanchor.saveneed, 1);			/* Account for the extra saveareas "need" */
+
+	act = current_act();							/* Find ourselves */	
+	
+	sv->save_flags |= SAVattach;					/* Say that it is in use  */
+	sv->save_act = act;								/* Point to the activation */
+	
+	spc=(unsigned int)act->map->pmap->space;		/* Get the space we're in */
+	
+	srs=(unsigned int *)&sv->save_sr0;				/* Point to the SRs */
+	for(i=0; i < 16; i++) {							/* Fill in the SRs for the new context */
+		srs[i] = SEG_REG_PROT | (i<<20) | spc;		/* Set the SR */
+	}
+	
+	sv->save_sr_copyin = SEG_REG_PROT | (SR_COPYIN_NUM<<20) | spc;	/* Make sure the copyin is set */
+
+	osv = (savearea *)(act->mact.pcb);				/* Start with the normal savearea */
+	fsv = 0;										/* Assume none */
+	while(osv) {									/* Find the user context */
+		if(osv->save_srr1 & MASK(MSR_PR)) {			/* Are we looking at the user context? */
+			fsv = osv;								/* Remember what we found */
+			break;									/* Outta here */
+		}
+		osv = osv->save_prev;						/* Back chain */
+	}
+
+	if(!fsv) {										/* Did we find one? */
+		for(i=0; i < 32; i+=2) {					/* Fill up with defaults */
+			((unsigned int *)&sv->save_r0)[i] = ((unsigned int *)&FloatInit)[0];
+			((unsigned int *)&sv->save_r0)[i+1] = ((unsigned int *)&FloatInit)[1];
+		}
+		sv->save_cr	= 0;
+		sv->save_xer	= 0;
+		sv->save_lr	= ((unsigned int *)&FloatInit)[0];
+		sv->save_ctr	= ((unsigned int *)&FloatInit)[1];
+		sv->save_srr0	= ((unsigned int *)&FloatInit)[0];
+		sv->save_srr1 = MSR_EXPORT_MASK_SET;
+		sv->save_mq	= 0;
+		sv->save_vrsave = 0;						/* VRSAVE register (Altivec only) */
+		sv->save_xfpscrpad = 0;						/* Start with a clear fpscr */
+		sv->save_xfpscr = 0;						/* Start with a clear fpscr */
+	}
+	else {											/* We did find one, copy it */
+		bcopy((char *)&fsv->save_srr0, (char *)&sv->save_srr0, sizeof(struct ppc_thread_state)); /* Copy in normal state stuff */
+		sv->save_xfpscrpad = osv->save_xfpscrpad;	/* Copy the pad value to old */	
+		sv->save_xfpscr = osv->save_xfpscr;			/* Copy the fpscr value to old */	
+	}
+
+	
+	sv->save_prev = (savearea *)0xDEBB1ED0;			/* Eye catcher for debug */
+	sv->save_prev_float = (savearea *)0xE5DA11A5;	/* Eye catcher for debug */
+	sv->save_prev_vector = (savearea *)0;			/* Clear */
+	sv->save_level_fp = 0;							/* Set the level for FP */
+	sv->save_level_vec = 0;							/* Set the level for vector */
+	
+	sv->save_srr1 &= ~(MASK(MSR_FP) | MASK(MSR_VEC));	/* Make certain that floating point and vector are turned off */
+	
+	fsv = (savearea *)act->mact.FPU_pcb;			/* Get the start of the floating point chain */
+	while(fsv) {									/* Look until the end or we find it */
+		if(!(fsv->save_level_fp)) {					/* Is the the user state stuff? (the level is 0 if so) */	
+			sv->save_flags |= SAVfpuvalid;			/* Show we have it */
+			bcopy((char *)&fsv->save_fp0, (char *)&sv->save_fp0, sizeof(struct ppc_float_state)); /* Copy in floating point state stuff */
+			break;									/* Done, everything else is all set up... */
+		}
+		fsv = fsv->save_prev_float;					/* Try the previous one */
+	}
+	
+	fsv = (savearea *)act->mact.VMX_pcb;			/* Get the start of the vector chain */
+	while(fsv) {									/* Look until the end or we find it */
+		if(!(fsv->save_level_vec)) {				/* Is the the user state stuff? (the level is 0 if so) */	
+			sv->save_flags |= SAVvmxvalid;			/* Show we have it */
+			bcopy((char *)&fsv->save_vr0, (char *)&sv->save_vr0, sizeof(struct ppc_vector_state)); /* Copy in Altivec state stuff */
+			break;									/* Done, everything else is all set up... */
+		}
+		fsv = fsv->save_prev_vector;				/* Try the previous one */
+	}
+
+	return (void *)sv;								/* Bye bye... */
+}
+
+
+
+/*
+ *		Attaches saved user state context to an activation.  We will replace any
+ *		user state context with what is passed in.  The saved context consists of a
+ *		savearea that was setup by 
+ *		We will collect everything into one savearea and pass that back.
+ *
+ *		The savearea is made to look like it belongs to the source activation.  This needs to 
+ *		be adjusted when these contexts are attached to a new activation.
+ *
+ */
+
+void act_thread_catt(void *ctx) {
+
+  	savearea		*sv, *osv, *fsv, *psv;
+	unsigned int	spc, i, *srs;
+	thread_act_t act;	
+	
+	sv = (savearea *)ctx;							/* Make this easier for C */
+	
+	if((sv->save_prev != (savearea *)0xDEBB1ED0) || (sv->save_prev_float != (savearea *)0xE5DA11A5)) {	/* See if valid savearea */
+		panic("act_thread_catt: attempt to attach invalid context savearea - %08X\n", sv);	/* Die */
+	}
+
+	act = current_act();							/* Find ourselves */	
+		
+/*
+ *	This next bit insures that any live facility context for this thread is discarded on every processor
+ *	that may have it. 
+ *
+ *	Note that this will not be good if the activation has any kernel fp or vec contexts that are live.
+ *	We won't worry about it because it would be silly to call this if we are a kernel task using altivec
+ *	or floating point......
+ */
+ 
+	for(i=0; i < real_ncpus; i++) {							/* Cycle through processors */
+		(void)hw_compare_and_store((unsigned int)act, 0, &per_proc_info[i].FPU_thread);	/* Clear if ours */
+		(void)hw_compare_and_store((unsigned int)act, 0, &per_proc_info[i].VMX_thread);	/* Clear if ours */
+	}
+
+
+/*
+ *	Now we make the savearea look like we own it
+ */
+
+	sv->save_prev = (savearea *)0;					/* Clear */
+	sv->save_prev_float = (savearea *)0;			/* Clear */
+	sv->save_prev_vector = (savearea *)0;			/* Clear */
+	sv->save_act = act;								/* Point to the activation */
+	
+	spc=(unsigned int)act->map->pmap->space;		/* Get the space we're in */
+	
+	srs=(unsigned int *)&sv->save_sr0;				/* Point to the SRs */
+	for(i=0; i < 16; i++) {							/* Fill in the SRs for the new context */
+		srs[i] = SEG_REG_PROT | (i<<20) | spc;		/* Set the SRs */
+	}
+	
+	sv->save_sr_copyin = SEG_REG_PROT | (SR_COPYIN_NUM<<20) | spc;	/* Make sure the copyin is set */
+	
+	osv = (savearea *)act->mact.VMX_pcb;			/* Get the top vector savearea */
+	
+	if(osv && (osv->save_level_vec == 1)) {			/* Is the first one a special dummy one? */
+		psv = osv;									/* Yes, remember it */
+		osv = osv->save_prev_vector;				/* Step to the next */
+		(savearea *)act->mact.VMX_pcb = osv;		/* Dequeue it */
+		psv->save_flags &= ~SAVvmxvalid;			/* Clear the VMX flag */
+		if(!(psv->save_flags & SAVinuse)) {			/* Anyone left with this one? */			
+			save_release(psv);						/* Nope, release it */
+		}
+	}
+	
+	psv = 0;
+	while(osv) {									/* Any VMX saved state? */
+		if(!(osv->save_level_vec)) break;			/* Leave if this is user state */
+		psv = osv;									/* Save previous savearea address */
+		osv = osv->save_prev_vector;				/* Get one underneath our's */
+	}
+	
+	if(osv) {										/* Did we find one? */
+		if(psv) psv->save_prev_vector = 0;			/* Yes, clear pointer to it (it should always be last) or */	
+		else act->mact.VMX_pcb = 0;					/* to the start if the only one */
+
+		osv->save_flags &= ~SAVvmxvalid;			/* Clear the VMX flag */
+		if(!(osv->save_flags & SAVinuse)) {			/* Anyone left with this one? */			
+			save_release(osv);						/* Nope, release it */
+		}
+	}
+	
+	if(sv->save_flags & SAVvmxvalid) {				/* Are we adding Altivec context? */
+		if(psv)	psv->save_prev_vector = sv;			/* Yes, chain us to the end or */
+		else act->mact.VMX_pcb = (pcb_t)sv;			/* to the start if the only one */
+	}
+	
+	osv = (savearea *)act->mact.FPU_pcb;			/* Get the top floating point savearea */
+	
+	if(osv && (osv->save_level_fp == 1)) {			/* Is the first one a special dummy one? */
+		psv = osv;									/* Yes, remember it */
+		osv = osv->save_prev_float;					/* Step to the next */
+		(savearea *)act->mact.FPU_pcb = osv;		/* Dequeue it */
+		psv->save_flags &= ~SAVfpuvalid;			/* Clear the float flag */
+		if(!(psv->save_flags & SAVinuse)) {			/* Anyone left with this one? */			
+			save_release(psv);						/* Nope, release it */
+		}
+	}
+
+	psv = 0;
+	while(osv) {									/* Any floating point saved state? */
+		if(!(osv->save_level_fp)) break;			/* Leave if this is user state */
+		psv = osv;									/* Save previous savearea address */
+		osv = osv->save_prev_float;					/* Get one underneath our's */
+	}
+	
+	if(osv) {										/* Did we find one? */
+		if(psv) psv->save_prev_float = 0;			/* Yes, clear pointer to it (it should always be last) or */	
+		else act->mact.FPU_pcb = 0;					/* to the start if the only one */
+
+		osv->save_flags &= ~SAVfpuvalid;			/* Clear the floating point flag */
+		if(!(osv->save_flags & SAVinuse)) {			/* Anyone left with this one? */			
+			save_release(osv);						/* Nope, release it */
+		}
+	}
+	
+	if(sv->save_flags & SAVfpuvalid) {				/* Are we adding floating point context? */
+		if(psv)	psv->save_prev_float = sv;			/* Yes, chain us to the end or */
+		else act->mact.FPU_pcb = (pcb_t)sv;			/* to the start if the only one */
+	}
+	
+	osv = (savearea *)act->mact.pcb;				/* Get the top general savearea */
+	psv = 0;
+	while(osv) {									/* Any floating point saved state? */
+		if(osv->save_srr1 & MASK(MSR_PR)) break;	/* Leave if this is user state */
+		psv = osv;									/* Save previous savearea address */
+		osv = osv->save_prev;						/* Get one underneath our's */
+	}
+	
+	if(osv) {										/* Did we find one? */
+		if(psv) psv->save_prev = 0;					/* Yes, clear pointer to it (it should always be last) or */	
+		else act->mact.pcb = 0;						/* to the start if the only one */
+
+		osv->save_flags &= ~SAVattach;				/* Clear the attached flag */
+		if(!(osv->save_flags & SAVinuse)) {			/* Anyone left with this one? */			
+			save_release(osv);						/* Nope, release it */
+		}
+	}
+	
+	if(psv)	psv->save_prev = sv;					/* Chain us to the end or */
+	else act->mact.pcb = (pcb_t)sv;					/* to the start if the only one */
+
+	hw_atomic_sub(&saveanchor.saveneed, 1);			/* Unaccount for the savearea we think we "need" */
+}
+
+
+
+/*
+ *		Releases saved context.  We need this because the saved context is opague.
+ *		be adjusted when these contexts are attached to a new activation.
+ *
+ */
+
+void act_thread_cfree(void *ctx) {
+
+	if((((savearea *)ctx)->save_prev != (savearea *)0xDEBB1ED0) || 
+		(((savearea *)ctx)->save_prev_float != (savearea *)0xE5DA11A5)) {	/* See if valid savearea */
+		panic("act_thread_cfree: attempt to free invalid context savearea - %08X\n", ctx);	/* Die */
+	}
+
+	((savearea *)ctx)->save_flags = 0;				/* Clear all flags since we release this in any case */
+	save_release((savearea *)ctx);					/* Release this one */
+	hw_atomic_sub(&saveanchor.saveneed, 1);			/* Unaccount for the savearea we think we "need" */
+	
+	return;
 }

@@ -64,4 +64,7 @@
  */
 extern mach_port_t	master_device_port;
 
+#define DEVICE_PAGER_CONTIGUOUS		1
+#define DEVICE_PAGER_NOPHYSCACHE	2
+
 #endif	/* _DEVICE_DEVICE_PORT_H_ */

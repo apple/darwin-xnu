@@ -93,7 +93,7 @@ private:
     IOLock *requestMutexLock;
 
     // A simpler way to interface with the pmu SendMiscCommand
-    IOReturn localSendMiscCommand(int command, IOByteCount sLength, UInt8 *sBuffer, IOByteCount *rLength, UInt8 *rBuffer);
+    IOReturn localSendMiscCommand(int command, IOByteCount sLength, UInt8 *sBuffer);
 
 public:
         IOService *probe( IOService * nub, SInt32 * score );
@@ -105,6 +105,7 @@ public:
     IOReturn getAutoPollList ( UInt16 * activeAddressMask );
     IOReturn setAutoPollEnable ( bool enable );
     IOReturn resetBus ( void );
+    IOReturn cancelAllIO ( void );
     IOReturn flushDevice ( IOADBAddress address );
     IOReturn readFromDevice ( IOADBAddress address, IOADBRegister adbRegister, UInt8 * data, IOByteCount * length );
     IOReturn writeToDevice ( IOADBAddress address, IOADBRegister adbRegister, UInt8 * data, IOByteCount * length );

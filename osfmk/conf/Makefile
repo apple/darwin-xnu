@@ -24,11 +24,11 @@ $(OBJROOT)/$(KERNEL_CONFIG)_$(ARCH_CONFIG)/$(COMPONENT)/doconf:
 	make build_setup 
 
 $(COMPOBJROOT)/$(OSFMK_KERNEL_CONFIG)/Makefile:  $(SOURCE)/MASTER  \
-	$(SOURCE)/MASTER.$(arch_config) \
+	$(SOURCE)/MASTER.$(ARCH_CONFIG_LC) \
 	$(SOURCE)/Makefile.template  \
-	$(SOURCE)/Makefile.$(arch_config)  \
+	$(SOURCE)/Makefile.$(ARCH_CONFIG_LC)  \
 	$(SOURCE)/files \
-	$(SOURCE)/files.$(arch_config) \
+	$(SOURCE)/files.$(ARCH_CONFIG_LC) \
 	$(OBJROOT)/$(KERNEL_CONFIG)_$(ARCH_CONFIG)/$(COMPONENT)/doconf
 	@echo "Running doconf for $(OSFMK_KERNEL_CONFIG)";
 	(doconf_target=$(addsuffix /conf, $(TARGET)); \
@@ -37,7 +37,7 @@ $(COMPOBJROOT)/$(OSFMK_KERNEL_CONFIG)/Makefile:  $(SOURCE)/MASTER  \
 	cd $${doconf_target}; \
 	rm -f $(notdir $?); \
 	cp  $? $${doconf_target}; \
-	$(OBJROOT)/$(KERNEL_CONFIG)_$(ARCH_CONFIG)/$(COMPONENT)/doconf -c -cpu $(arch_config) -d  $(TARGET)/$(OSFMK_KERNEL_CONFIG) $(OSFMK_KERNEL_CONFIG); \
+	$(OBJROOT)/$(KERNEL_CONFIG)_$(ARCH_CONFIG)/$(COMPONENT)/doconf -c -cpu $(ARCH_CONFIG_LC) -d  $(TARGET)/$(OSFMK_KERNEL_CONFIG) $(OSFMK_KERNEL_CONFIG); \
 	);
 
 $(COMPOBJROOT)/$(OSFMK_KERNEL_CONFIG)/platforms.h: $(COMPOBJROOT)/$(OSFMK_KERNEL_CONFIG)/Makefile
@@ -57,6 +57,7 @@ do_all: do_setup_conf
 	${MAKE} MAKEFILES=$(TARGET)/$(OSFMK_KERNEL_CONFIG)/Makefile	\
 		SOURCE=$${next_source}			\
 		TARGET=$(TARGET)					\
+		INCL_MAKEDEP=FALSE	\
 		build_all	\
 	);		\
 	echo "[ $(SOURCE) ] Returning do_all $(COMPONENT) $(OSFMK_KERNEL_CONFIG) $(ARCH_CONFIG) $(TARGET)";

@@ -89,7 +89,7 @@
 #include <kern/assert.h>
 
 extern char init_task_failure_data[];
-void exit1 __P((struct proc *, int));
+int exit1 __P((struct proc *, int, int *));
 
 /*
  * exit --
@@ -104,7 +104,7 @@ exit(p, uap, retval)
 	struct exit_args *uap;
 	int *retval;
 {
-	exit1(p, W_EXITCODE(uap->rval, 0));
+	exit1(p, W_EXITCODE(uap->rval, 0), retval);
 
 	/* drop funnel befewo we return */
 	thread_funnel_set(kernel_flock, FALSE);
@@ -120,10 +120,11 @@ exit(p, uap, retval)
  * to zombie, and unlink proc from allproc and parent's lists.  Save exit
  * status and rusage for wait().  Check for child processes and orphan them.
  */
-void
-exit1(p, rv)
+int
+exit1(p, rv, retval)
 	register struct proc *p;
 	int rv;
+	int * retval;
 {
 	register struct proc *q, *nq;
 	thread_t self = current_thread();
@@ -137,12 +138,20 @@ exit1(p, rv)
 	 * called exit(), then halt any others
 	 * right here.
 	 */
+
+	 ut = get_bsdthread_info(th_act_self);
+	 if (ut->uu_flag & P_VFORK) {
+			vfork_exit(p, rv);
+			vfork_return(th_act_self, p->p_pptr, p , retval);
+			unix_syscall_return(0);
+			/* NOT REACHED */
+	 }
         signal_lock(p);
 	while (p->exit_thread != self) {
 		if (sig_try_locked(p) <= 0) {
 			if (get_threadtask(th_act_self) != task) {
                                 signal_unlock(p);
-				return;
+				return(0);
                         }
 			signal_unlock(p);
 			thread_terminate(th_act_self);
@@ -184,6 +193,7 @@ exit1(p, rv)
 		/*NOTREACHED*/
 	}
 #endif
+	return(0);
 }
 
 void
@@ -495,7 +505,7 @@ wait1continue(result)
   int *retval;
   struct proc *p;
 
-	p = get_bsdtask_info(current_task());
+	p = current_proc();
 	p->p_flag &= ~P_WAITING;
 
       if (result != 0) {
@@ -715,7 +725,272 @@ process_terminate_self(void)
 	struct proc *p = current_proc();
 
 	if (p != NULL) {
-		exit1(p, W_EXITCODE(0, SIGKILL));
+		exit1(p, W_EXITCODE(0, SIGKILL), (int *)NULL);
 		/*NOTREACHED*/
 	}
 }
+/*
+ * Exit: deallocate address space and other resources, change proc state
+ * to zombie, and unlink proc from allproc and parent's lists.  Save exit
+ * status and rusage for wait().  Check for child processes and orphan them.
+ */
+
+void
+vfork_exit(p, rv)
+	register struct proc *p;
+	int rv;
+{
+	register struct proc *q, *nq;
+	thread_t self = current_thread();
+	thread_act_t th_act_self = current_act();
+	struct task *task = p->task;
+	register int i,s;
+	struct uthread *ut;
+
+	/*
+	 * If a thread in this task has already
+	 * called exit(), then halt any others
+	 * right here.
+	 */
+
+	 ut = get_bsdthread_info(th_act_self);
+#ifdef FIXME
+        signal_lock(p);
+	while (p->exit_thread != self) {
+		if (sig_try_locked(p) <= 0) {
+			if (get_threadtask(th_act_self) != task) {
+                                signal_unlock(p);
+				return;
+                        }
+			signal_unlock(p);
+			thread_terminate(th_act_self);
+			thread_funnel_set(kernel_flock, FALSE);
+			thread_exception_return();
+			/* NOTREACHED */
+		}
+		sig_lock_to_exit(p);
+	}
+        signal_unlock(p);
+	if (p->p_pid == 1) {
+		printf("pid 1 exited (signal %d, exit %d)",
+		    WTERMSIG(rv), WEXITSTATUS(rv));
+panic("init died\nState at Last Exception:\n\n%s", init_task_failure_data);
+	}
+#endif /* FIXME */
+
+	s = splsched();
+	p->p_flag |= P_WEXIT;
+	splx(s);
+	/*
+	 * Remove proc from allproc queue and from pidhash chain.
+	 * Need to do this before we do anything that can block.
+	 * Not doing causes things like mount() find this on allproc
+	 * in partially cleaned state.
+	 */
+	LIST_REMOVE(p, p_list);
+	LIST_REMOVE(p, p_hash);
+	/*
+	 * If parent is waiting for us to exit or exec,
+	 * P_PPWAIT is set; we will wakeup the parent below.
+	 */
+	p->p_flag &= ~(P_TRACED | P_PPWAIT);
+	p->p_sigignore = ~0;
+	p->p_siglist = 0;
+
+	ut->uu_sig = 0;
+	untimeout(realitexpire, (caddr_t)p);
+
+	p->p_xstat = rv;
+
+	vproc_exit(p);
+}
+
+
+void 
+vproc_exit(struct proc *p)
+{
+	register struct proc *q, *nq;
+	thread_t self = current_thread();
+	thread_act_t th_act_self = current_act();
+	struct task *task = p->task;
+	register int i,s;
+	struct uthread *ut;
+	boolean_t funnel_state;
+
+	MALLOC_ZONE(p->p_ru, struct rusage *,
+			sizeof (*p->p_ru), M_ZOMBIE, M_WAITOK);
+
+	/*
+	 * Close open files and release open-file table.
+	 * This may block!
+	 */
+	fdfree(p);
+
+	/* Close ref SYSV Shared memory*/
+	if (p->vm_shm)
+		shmexit(p);
+	
+	if (SESS_LEADER(p)) {
+		register struct session *sp = p->p_session;
+
+		if (sp->s_ttyvp) {
+			/*
+			 * Controlling process.
+			 * Signal foreground pgrp,
+			 * drain controlling terminal
+			 * and revoke access to controlling terminal.
+			 */
+			if (sp->s_ttyp->t_session == sp) {
+				if (sp->s_ttyp->t_pgrp)
+					pgsignal(sp->s_ttyp->t_pgrp, SIGHUP, 1);
+				(void) ttywait(sp->s_ttyp);
+				/*
+				 * The tty could have been revoked
+				 * if we blocked.
+				 */
+				if (sp->s_ttyvp)
+					VOP_REVOKE(sp->s_ttyvp, REVOKEALL);
+			}
+			if (sp->s_ttyvp)
+				vrele(sp->s_ttyvp);
+			sp->s_ttyvp = NULL;
+			/*
+			 * s_ttyp is not zero'd; we use this to indicate
+			 * that the session once had a controlling terminal.
+			 * (for logging and informational purposes)
+			 */
+		}
+		sp->s_leader = NULL;
+	}
+
+	fixjobc(p, p->p_pgrp, 0);
+	p->p_rlimit[RLIMIT_FSIZE].rlim_cur = RLIM_INFINITY;
+#if KTRACE
+	/* 
+	 * release trace file
+	 */
+	p->p_traceflag = 0;	/* don't trace the vrele() */
+	if (p->p_tracep)
+		vrele(p->p_tracep);
+#endif
+
+
+	q = p->p_children.lh_first;
+	if (q)		/* only need this if any child is S_ZOMB */
+		wakeup((caddr_t) initproc);
+	for (; q != 0; q = nq) {
+		nq = q->p_sibling.le_next;
+		proc_reparent(q, initproc);
+		/*
+		 * Traced processes are killed
+		 * since their existence means someone is messing up.
+		 */
+		if (q->p_flag & P_TRACED) {
+			q->p_flag &= ~P_TRACED;
+			if (q->sigwait_thread) {
+				thread_t sig_shuttle  = getshuttle_thread(q->sigwait_thread);
+				/*
+				 * The sigwait_thread could be stopped at a
+				 * breakpoint. Wake it up to kill.
+				 * Need to do this as it could be a thread which is not
+				 * the first thread in the task. So any attempts to kill
+				 * the process would result into a deadlock on q->sigwait.
+				 */
+				thread_resume((struct thread *)q->sigwait_thread);
+				clear_wait(sig_shuttle, THREAD_INTERRUPTED);
+				threadsignal(q->sigwait_thread, SIGKILL, 0);
+			}
+			psignal(q, SIGKILL);
+		}
+	}
+
+
+	/*
+	 * Save exit status and final rusage info, adding in child rusage
+	 * info and self times.
+	 */
+	*p->p_ru = p->p_stats->p_ru;
+
+	timerclear(&p->p_ru->ru_utime);
+	timerclear(&p->p_ru->ru_stime);
+
+#ifdef  FIXME
+	if (task) {
+		task_basic_info_data_t tinfo;
+		task_thread_times_info_data_t ttimesinfo;
+		int task_info_stuff, task_ttimes_stuff;
+		struct timeval ut,st;
+
+		task_info_stuff	= TASK_BASIC_INFO_COUNT;
+		task_info(task, TASK_BASIC_INFO,
+			  &tinfo, &task_info_stuff);
+		p->p_ru->ru_utime.tv_sec = tinfo.user_time.seconds;
+		p->p_ru->ru_utime.tv_usec = tinfo.user_time.microseconds;
+		p->p_ru->ru_stime.tv_sec = tinfo.system_time.seconds;
+		p->p_ru->ru_stime.tv_usec = tinfo.system_time.microseconds;
+
+		task_ttimes_stuff = TASK_THREAD_TIMES_INFO_COUNT;
+		task_info(task, TASK_THREAD_TIMES_INFO,
+			  &ttimesinfo, &task_ttimes_stuff);
+
+		ut.tv_sec = ttimesinfo.user_time.seconds;
+		ut.tv_usec = ttimesinfo.user_time.microseconds;
+		st.tv_sec = ttimesinfo.system_time.seconds;
+		st.tv_usec = ttimesinfo.system_time.microseconds;
+		timeradd(&ut,&p->p_ru->ru_utime,&p->p_ru->ru_utime);
+		timeradd(&st,&p->p_ru->ru_stime,&p->p_ru->ru_stime);
+	}
+#endif /* FIXME */
+
+	ruadd(p->p_ru, &p->p_stats->p_cru);
+
+	/*
+	 * Free up profiling buffers.
+	 */
+	{
+		struct uprof *p0 = &p->p_stats->p_prof, *p1, *pn;
+
+		p1 = p0->pr_next;
+		p0->pr_next = NULL;
+		p0->pr_scale = 0;
+
+		for (; p1 != NULL; p1 = pn) {
+			pn = p1->pr_next;
+			kfree((vm_offset_t)p1, sizeof *p1);
+		}
+	}
+
+	/*
+	 * Other substructures are freed from wait().
+	 */
+	FREE_ZONE(p->p_stats, sizeof *p->p_stats, M_SUBPROC);
+	p->p_stats = NULL;
+
+	FREE_ZONE(p->p_sigacts, sizeof *p->p_sigacts, M_SUBPROC);
+	p->p_sigacts = NULL;
+
+	if (--p->p_limit->p_refcnt == 0)
+		FREE_ZONE(p->p_limit, sizeof *p->p_limit, M_SUBPROC);
+	p->p_limit = NULL;
+
+	/*
+	 * Finish up by terminating the task
+	 * and halt this thread (only if a
+	 * member of the task exiting).
+	 */
+	p->task = TASK_NULL;
+
+	/*
+	 * Notify parent that we're gone.
+	 */
+	psignal(p->p_pptr, SIGCHLD);
+
+	/* Place onto zombproc. */
+	LIST_INSERT_HEAD(&zombproc, p, p_list);
+	p->p_stat = SZOMB;
+
+	/* and now wakeup the parent */
+	wakeup((caddr_t)p->p_pptr);
+
+}
+

@@ -63,6 +63,7 @@ struct NFDescriptor
 	 */
 	struct  sockif *nf_soif;		/* Socket functions */
 	struct	sockutil *nf_soutil;		/* Sockbuf utility functions */
+	u_long	reserved[4];			/* for future use if needed */
 };
 
 #define NFD_GLOBAL	0x01
@@ -100,6 +101,7 @@ struct so_nke
 {	unsigned int nke_handle;
 	unsigned int nke_where;
 	int nke_flags; /* NFF_BEFORE, NFF_AFTER: net/kext_net.h */
+	unsigned long reserved[4];	/* for future use */
 };
 
 /*
@@ -157,6 +159,7 @@ struct sockif
 	int (*sf_soreserve)(struct socket *, u_long, u_long, struct kextcb *);
 	int (*sf_sowakeup)(struct socket *, struct sockbuf *,
 			    struct kextcb *);
+	u_long	reserved[4];
 };
 
 
@@ -195,6 +198,7 @@ struct sockutil
 	int (*su_sbreserve)(struct sockbuf *, u_long, struct kextcb *);
 	/* Calls tsleep() */
 	int (*su_sbwait)(struct sockbuf *, struct kextcb *);
+	u_long	reserved[4];
 };
 
 #endif

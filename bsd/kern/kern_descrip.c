@@ -426,11 +426,18 @@ fcntl(p, uap, retval)
 	
 		case F_PEOFPOSMODE:
 
-			if ((alloc_struct.fst_offset != 0) ||
-			    (alloc_struct.fst_length  < 0))
-			return (EINVAL);
+			if (alloc_struct.fst_offset != 0)
+				return (EINVAL);
 
 			alloc_flags |= ALLOCATEFROMPEOF;
+			break;
+
+		case F_VOLPOSMODE:
+
+			if (alloc_struct.fst_offset <= 0)
+				return (EINVAL);
+
+			alloc_flags |= ALLOCATEFROMVOL;
 			break;
 
 		default:
@@ -439,14 +446,14 @@ fcntl(p, uap, retval)
 
 		}
 
-
 		/* Now lock the vnode and call allocate to get the space */
 
         	vp = (struct vnode *)fp->f_data;
 
 		VOP_LOCK(vp,LK_EXCLUSIVE,p);
 		error = VOP_ALLOCATE(vp,alloc_struct.fst_length,alloc_flags,
-				     &alloc_struct.fst_bytesalloc,fp->f_cred,p);
+				     &alloc_struct.fst_bytesalloc, alloc_struct.fst_offset,
+				     fp->f_cred, p);
 		VOP_UNLOCK(vp,0,p);
 
 		if (error2 = (copyout((caddr_t)&alloc_struct, (caddr_t)uap->arg,

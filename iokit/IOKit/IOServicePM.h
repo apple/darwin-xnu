@@ -118,6 +118,9 @@ class IOPMpriv : public OSObject
     /*! @field flags_lock		used to control access to response flags array */
     IOLock	*		flags_lock;
 
+    /*! @field queue_lock		used to control access to change note queue */
+    IOLock	*		queue_lock;
+
     /*! @field initial_change			true forces first state to be broadcast even if it isn't a change */
     bool			initial_change;
 
@@ -203,8 +206,7 @@ except while a power change is in progress.
 
 
     /*! @field askingFor
-Used by activityTickle so it doesn't try to raise the device to a lower state than
-what it may have previously requested.
+Not used.
 */
     unsigned long		askingFor;		 
 
@@ -293,6 +295,17 @@ class IOPMprot : public OSObject //management
     /*! @field doNotPowerDown		keeps track of any negative responses from notified apps and clients */
     bool	doNotPowerDown;
     
+    /*! @field childLock		used to serialize scanning the children */
+    IOLock	*		childLock;
+
+    /*! @field parentLock		used to serialize scanning the parents */
+    IOLock	*		parentLock;
+
+    /*! @field outofbandparameter	used to communicate desired function to tellClientsWithResponse().
+                                        This is used because it avoids changing the signatures of the affected
+                                        virtual methods. */
+    int				outofbandparameter;
+
     /*! @function serialize
 Serialize protected instance variables for debug output (IORegistryDumper).
 */

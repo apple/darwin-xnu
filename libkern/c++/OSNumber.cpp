@@ -26,7 +26,7 @@
 #include <libkern/c++/OSSerialize.h>
 #include <libkern/c++/OSLib.h>
 
-#define sizeMask ((1ULL << (size)) - 1)
+#define sizeMask (~0ULL >> (64 - size))
 
 #define super OSObject
 

@@ -329,6 +329,7 @@ ffs_reload(mountp, cred, p)
 	struct buf *bp;
 	struct fs *fs, *newfs;
 	int i, blks, size, error;
+	u_int64_t maxfilesize;					/* XXX */
 	int32_t *lp;
 #if REV_ENDIAN_FS
 	int rev_endian = (mountp->mnt_flag & MNT_REVEND);
@@ -385,6 +386,9 @@ ffs_reload(mountp, cred, p)
 	brelse(bp);
 	mountp->mnt_maxsymlinklen = fs->fs_maxsymlinklen;
 	ffs_oldfscompat(fs);
+	maxfilesize = (u_int64_t)0x100000000;                  /* 4GB */
+	if (fs->fs_maxfilesize > maxfilesize)			/* XXX */
+		fs->fs_maxfilesize = maxfilesize;		/* XXX */
 	/*
 	 * Step 3: re-read summary information from disk.
 	 */
@@ -600,6 +604,13 @@ ffs_mountfs(devvp, mp, p)
 		set_fsblocksize(devvp);
         } 
 
+	/* cache the IO attributes */
+	error = vfs_init_io_attributes(devvp, mp);
+	if (error) {
+		printf("ffs_mountfs: vfs_init_io_attributes returned %d\n",
+			error);
+		goto out;
+	}
 
 	/* XXX updating 4.2 FFS superblocks trashes rotational layout tables */
 	if (fs->fs_postblformat == FS_42POSTBLFMT && !ronly) {
@@ -916,6 +927,8 @@ loop:
 	for (vp = mp->mnt_vnodelist.lh_first;
 	     vp != NULL;
 	     vp = nvp) {
+		int didhold = 0;
+
 		/*
 		 * If the vnode that we are about to sync is no longer
 		 * associated with this mount point, start over.
@@ -939,9 +952,12 @@ loop:
 				goto loop;
 			continue;
 		}
+		didhold = ubc_hold(vp);
 		if (error = VOP_FSYNC(vp, cred, waitfor, p))
 			allerror = error;
 		VOP_UNLOCK(vp, 0, p);
+		if (didhold)
+			ubc_rele(vp);
 		vrele(vp);
 		simple_lock(&mntvnode_slock);
 	}

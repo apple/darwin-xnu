@@ -378,5 +378,7 @@ char *syscallnames[] = {
 	"#322",			/* 322 = thr_sleep */
 	"#323",			/* 323 = thr_wakeup */
 	"mlockall",		/* 324 = mlockall */
-	"munlockall"		/* 325 = munlockall */
+	"munlockall",	/* 325 = munlockall */
+	"#326",			/* 326 */
+	"issetugid"		/* 327 = issetugid */
 };

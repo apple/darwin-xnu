@@ -600,7 +600,11 @@ int bootp(struct ifnet * ifp, struct in_addr * iaddr_p, int max_try,
     { /* bind the socket */
 	struct sockaddr_in * sin;
 
-	sin = _MALLOC(sizeof(struct sockaddr_in), M_IFADDR, M_NOWAIT);
+	sin = _MALLOC(sizeof(struct sockaddr_in), M_IFADDR, M_WAIT);
+	if (sin == NULL) {
+	  	error = ENOMEM;
+		goto cleanup;
+	}
 	sin->sin_len = sizeof(struct sockaddr_in);
 	sin->sin_family = AF_INET;
 	sin->sin_port = htons(IPPORT_BOOTPC);
@@ -627,14 +631,3 @@ int bootp(struct ifnet * ifp, struct in_addr * iaddr_p, int max_try,
     return (error);
 }
 
-/*
- * Function: in_bootp
- * Purpose: 
- *   This is deprecated API.  Once SIOCAUTOADDR is eliminated from
- *   the system (IOEthernet class as well), this routine can be removed.
- */
-int
-in_bootp(struct ifnet * ifp, struct sockaddr_in * sin, u_char my_enaddr[6])
-{
-    return (EOPNOTSUPP);
-}

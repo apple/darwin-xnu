@@ -30,6 +30,7 @@ typedef int sync_policy_t;
 
 #define SYNC_POLICY_FIFO		0
 #define SYNC_POLICY_FIXED_PRIORITY	1
-#define SYNC_POLICY_MAX			1
+#define SYNC_POLICY_PREPOST		2
+#define SYNC_POLICY_MAX			2
 
 #endif 	/*_SYNC_POLICY_H_*/

@@ -451,6 +451,7 @@ bpfclose(dev, flags, fmt, p)
 	if (d->bd_bif)
 		bpf_detachd(d);
 	splx(s);
+	selthreadclear(&d->bd_sel);
 	bpf_freed(d);
 	thread_funnel_switch(NETWORK_FUNNEL, KERNEL_FUNNEL);
 	return (0);
@@ -621,16 +622,10 @@ bpf_wakeup(d)
 		pgsigio(d->bd_sigio, d->bd_sig, 0);
 
 #if BSD >= 199103
-	thread_funnel_switch(NETWORK_FUNNEL, KERNEL_FUNNEL);
 	selwakeup(&d->bd_sel);
-	thread_funnel_switch(KERNEL_FUNNEL, NETWORK_FUNNEL); 
-	/* XXX */
-	d->bd_sel.si_thread = 0;
 #else
 	if (d->bd_selproc) {
-		thread_funnel_switch(NETWORK_FUNNEL, KERNEL_FUNNEL);
 		selwakeup(d->bd_selproc, (int)d->bd_selcoll);
-		thread_funnel_switch(KERNEL_FUNNEL, NETWORK_FUNNEL); 
 		d->bd_selcoll = 0;
 		d->bd_selproc = 0;
 	}
@@ -1006,6 +1001,8 @@ bpf_setf(d, fp)
 
 	size = flen * sizeof(*fp->bf_insns);
 	fcode = (struct bpf_insn *) _MALLOC(size, M_DEVBUF, M_WAIT);
+	if (fcode == NULL)
+		return (ENOBUFS);
 	if (copyin((caddr_t)fp->bf_insns, (caddr_t)fcode, size) == 0 &&
 	    bpf_validate(fcode, (int)flen)) {
 		s = splimp();
@@ -1109,9 +1106,10 @@ bpf_ifname(ifp, ifr)
  * Otherwise, return false but make a note that a selwakeup() must be done.
  */
 int
-bpfpoll(dev, events, p)
+bpfpoll(dev, events, wql, p)
 	register dev_t dev;
 	int events;
+	void * wql;
 	struct proc *p;
 {
 	register struct bpf_d *d;
@@ -1129,7 +1127,7 @@ bpfpoll(dev, events, p)
 		if (d->bd_hlen != 0 || (d->bd_immediate && d->bd_slen != 0))
 			revents |= events & (POLLIN | POLLRDNORM);
 		else
-			selrecord(p, &d->bd_sel);
+			selrecord(p, &d->bd_sel, wql);
 
 	splx(s);
 	thread_funnel_switch(NETWORK_FUNNEL, KERNEL_FUNNEL);
@@ -1356,7 +1354,7 @@ bpfattach(ifp, dlt, hdrlen)
 {
 	struct bpf_if *bp;
 	int i;
-	bp = (struct bpf_if *) _MALLOC(sizeof(*bp), M_DEVBUF, M_DONTWAIT);
+	bp = (struct bpf_if *) _MALLOC(sizeof(*bp), M_DEVBUF, M_WAIT);
 	if (bp == 0)
 		panic("bpfattach");
 

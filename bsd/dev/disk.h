@@ -160,5 +160,10 @@ struct drive_location {
 #define DKIOCGETLOCATION    DKIOCGLOCATION      /* get media's location description */
 #define DKIOCISFORMATTED    DKIOCGFORMAT        /* is media formatted? */
 #define DKIOCISWRITABLE     _IOR('d', 29, int)  /* is media writable? */
-#endif	/* _BSD_DEV_DISK_ */
 
+#define DKIOCGETMAXBLOCKCOUNTREAD    _IOR('d', 64, u_int64_t) /* get device's maximum block count for read requests */
+#define DKIOCGETMAXBLOCKCOUNTWRITE   _IOR('d', 65, u_int64_t) /* get device's maximum block count for write requests */
+#define DKIOCGETMAXSEGMENTCOUNTREAD  _IOR('d', 66, u_int64_t) /* get device's maximum physical segment count for read buffers */
+#define DKIOCGETMAXSEGMENTCOUNTWRITE _IOR('d', 67, u_int64_t) /* get device's maximum physical segment count for write buffers */
+
+#endif	/* _BSD_DEV_DISK_ */

@@ -1052,7 +1052,7 @@ thread_set_syscall_return(
 kern_return_t
 thread_machine_create(thread_t thread, thread_act_t thr_act, void (*start_pos)(thread_t))
 {
-        MachineThrAct_t mact = &thr_act->mact;
+	MachineThrAct_t mact = &thr_act->mact;
 
 #if	MACH_ASSERT
 	if (watchacts & WA_PCB)
@@ -1060,23 +1060,21 @@ thread_machine_create(thread_t thread, thread_act_t thr_act, void (*start_pos)(t
 			thread, thr_act, start_pos);
 #endif	/* MACH_ASSERT */
 
-        assert(thread != NULL);
-        assert(thr_act != NULL);
-
-        /*
-         *      Allocate a kernel stack per shuttle
-         */
-        thread->kernel_stack = (int)stack_alloc(thread,start_pos);
-        assert(thread->kernel_stack != 0);
-
-        /*
-         *      Point top of kernel stack to user`s registers.
-         */
-        STACK_IEL(thread->kernel_stack)->saved_state = &mact->pcb->iss;
+	assert(thread != NULL);
+	assert(thr_act != NULL);
 
 	/*
-	 * Utah code fiddles with pcb here - (we don't need to)
+	 *      Allocate a kernel stack per shuttle
 	 */
+	thread->kernel_stack = (int)stack_alloc(thread,start_pos);
+	thread->stack_privilege = thread->kernel_stack;
+	assert(thread->kernel_stack != 0);
+
+	/*
+	 *      Point top of kernel stack to user`s registers.
+	 */
+	STACK_IEL(thread->kernel_stack)->saved_state = &mact->pcb->iss;
+
 	return(KERN_SUCCESS);
 }
 
@@ -1418,7 +1416,6 @@ stack_attach(struct thread_shuttle *thread,
 	     void (*start_pos)(thread_t))
 {
   struct i386_kernel_state *statep;
-  thread_act_t thr_act;
 
 		KERNEL_DEBUG(MACHDBG_CODE(DBG_MACH_SCHED,MACH_STACK_ATTACH),
 			thread, thread->priority,
@@ -1432,8 +1429,8 @@ stack_attach(struct thread_shuttle *thread,
   statep->k_eip = (unsigned long) Thread_continue;
   statep->k_ebx = (unsigned long) start_pos;
   statep->k_esp = (unsigned long) STACK_IEL(stack);
-
-  STACK_IEL(stack)->saved_state = &thr_act->mact.pcb->iss;
+  assert(thread->top_act);
+  STACK_IEL(stack)->saved_state = &thread->top_act->mact.pcb->iss;
 
   return;
 }
@@ -1471,3 +1468,63 @@ stack_handoff(thread_t old,
 
   return;
 }
+
+struct i386_act_context {
+	struct i386_saved_state ss;
+	struct i386_float_state fs;
+};
+
+void *
+act_thread_csave(void)
+{
+struct i386_act_context *ic;
+kern_return_t kret;
+int val;
+
+		ic = (struct i386_act_context *)kalloc(sizeof(struct i386_act_context));
+
+		if (ic == (struct i386_act_context *)NULL)
+				return((void *)0);
+
+		val = i386_SAVED_STATE_COUNT; 
+		kret = act_machine_get_state(current_act(), i386_SAVED_STATE, &ic->ss, &val);
+		if (kret != KERN_SUCCESS) {
+				kfree((vm_offset_t)ic,sizeof(struct i386_act_context));
+				return((void *)0);
+		}
+		val = i386_FLOAT_STATE_COUNT; 
+		kret = act_machine_get_state(current_act(), i386_FLOAT_STATE, &ic->fs, &val);
+		if (kret != KERN_SUCCESS) {
+				kfree((vm_offset_t)ic,sizeof(struct i386_act_context));
+				return((void *)0);
+		}
+		return(ic);
+}
+void 
+act_thread_catt(void *ctx)
+{
+struct i386_act_context *ic;
+kern_return_t kret;
+int val;
+
+		ic = (struct i386_act_context *)ctx;
+
+		if (ic == (struct i386_act_context *)NULL)
+				return;
+
+		kret = act_machine_set_state(current_act(), i386_SAVED_STATE, &ic->ss, i386_SAVED_STATE_COUNT);
+		if (kret != KERN_SUCCESS) 
+				goto out;
+
+		kret = act_machine_set_state(current_act(), i386_FLOAT_STATE, &ic->fs, i386_FLOAT_STATE_COUNT);
+		if (kret != KERN_SUCCESS)
+				goto out;
+out:
+	kfree((vm_offset_t)ic,sizeof(struct i386_act_context));		
+}
+
+void act_thread_cfree(void *ctx)
+{
+	kfree((vm_offset_t)ctx,sizeof(struct i386_act_context));		
+}
+

@@ -85,8 +85,6 @@ vm_offset_t sectTEXTB;
 int sectSizeTEXT;
 vm_offset_t sectDATAB;
 int sectSizeDATA;
-vm_offset_t sectOBJCB;
-int sectSizeOBJC;
 vm_offset_t sectLINKB;
 int sectSizeLINK;
 vm_offset_t sectKLDB;
@@ -110,7 +108,6 @@ void ppc_vm_init(unsigned int mem_limit, boot_args *args)
 	vm_offset_t first_phys_avail;
 	vm_offset_t		sizeadj, oldstart;
 
-#ifdef __MACHO__
 	/* Now retrieve addresses for end, edata, and etext 
 	 * from MACH-O headers.
 	 */
@@ -118,8 +115,6 @@ void ppc_vm_init(unsigned int mem_limit, boot_args *args)
 		&_mh_execute_header, "__TEXT", &sectSizeTEXT);
 	sectDATAB = (vm_offset_t)getsegdatafromheader(
 		&_mh_execute_header, "__DATA", &sectSizeDATA);
-	sectOBJCB = (vm_offset_t)getsegdatafromheader(
-		&_mh_execute_header, "__OBJC", &sectSizeOBJC);
 	sectLINKB = (vm_offset_t)getsegdatafromheader(
 		&_mh_execute_header, "__LINKEDIT", &sectSizeLINK);
 	sectKLDB = (vm_offset_t)getsegdatafromheader(
@@ -131,17 +126,15 @@ void ppc_vm_init(unsigned int mem_limit, boot_args *args)
 #if DEBUG
 	kprintf("sectTEXT: %x, size: %x\n", sectTEXTB, sectSizeTEXT);
 	kprintf("sectDATA: %x, size: %x\n", sectDATAB, sectSizeDATA);
-	kprintf("sectOBJC: %x, size: %x\n", sectOBJCB, sectSizeOBJC);
 	kprintf("sectLINK: %x, size: %x\n", sectLINKB, sectSizeLINK);
 	kprintf("sectKLD:  %x, size: %x\n", sectKLDB, sectSizeKLD);
 	kprintf("end: %x\n", end);
 #endif
-#endif /* __MACHO__ */
 
 /* Stitch valid memory regions together - they may be contiguous
  * even though they're not already glued together
  */
-	mem_actual = mem_actual = args->PhysicalDRAM[0].base + args->PhysicalDRAM[0].size;	/* Initialize to the first region size */
+	mem_actual = args->PhysicalDRAM[0].base + args->PhysicalDRAM[0].size;	/* Initialize to the first region size */
 	addr = 0;											/* temp use as pointer to previous memory region... */
 	for (i = 1; i < kMaxDRAMBanks; i++) {
 	  	
@@ -229,7 +222,6 @@ void ppc_vm_init(unsigned int mem_limit, boot_args *args)
 	kmapsize = (round_page(exception_end) - trunc_page(exception_entry)) +	/* Get size we will map later */
 		(round_page(sectTEXTB+sectSizeTEXT) - trunc_page(sectTEXTB)) +
 		(round_page(sectDATAB+sectSizeDATA) - trunc_page(sectDATAB)) +
-		(round_page(sectOBJCB+sectSizeOBJC) - trunc_page(sectOBJCB)) +
 		(round_page(sectLINKB+sectSizeLINK) - trunc_page(sectLINKB)) +
 		(round_page(sectKLDB+sectSizeKLD) - trunc_page(sectKLDB)) +
 		(round_page(static_memory_end) - trunc_page(end));
@@ -245,8 +237,6 @@ void ppc_vm_init(unsigned int mem_limit, boot_args *args)
 		trunc_page(sectTEXTB), round_page(sectTEXTB+sectSizeTEXT));
 	kprintf("          sectDATAB: %08X, %08X - %08X\n", trunc_page(sectDATAB), 
 		trunc_page(sectDATAB), round_page(sectDATAB+sectSizeDATA));
-	kprintf("          sectOBJCB: %08X, %08X - %08X\n", trunc_page(sectOBJCB), 
-		trunc_page(sectOBJCB), round_page(sectOBJCB+sectSizeOBJC));
 	kprintf("          sectLINKB: %08X, %08X - %08X\n", trunc_page(sectLINKB), 
 		trunc_page(sectLINKB), round_page(sectLINKB+sectSizeLINK));
 	kprintf("           sectKLDB: %08X, %08X - %08X\n", trunc_page(sectKLDB), 
@@ -260,8 +250,6 @@ void ppc_vm_init(unsigned int mem_limit, boot_args *args)
 		round_page(sectTEXTB+sectSizeTEXT), VM_PROT_READ|VM_PROT_EXECUTE);
 	pmap_map(trunc_page(sectDATAB), trunc_page(sectDATAB), 
 		round_page(sectDATAB+sectSizeDATA), VM_PROT_READ|VM_PROT_WRITE);
-	pmap_map(trunc_page(sectOBJCB), trunc_page(sectOBJCB), 
-		round_page(sectOBJCB+sectSizeOBJC), VM_PROT_READ|VM_PROT_WRITE);
 
 
        /* The KLD and LINKEDIT segments are unloaded in toto after boot completes,

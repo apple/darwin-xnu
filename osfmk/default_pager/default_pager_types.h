@@ -27,8 +27,11 @@
 #ifndef	_MACH_DEFAULT_PAGER_TYPES_H_
 #define _MACH_DEFAULT_PAGER_TYPES_H_
 
-
+#include <mach/mach_types.h>
 #include <mach/machine/vm_types.h>
+#include <mach/memory_object_types.h>
+
+typedef	memory_object_default_t	default_pager_t;
 
 #ifdef MACH_KERNEL_PRIVATE
 

@@ -42,7 +42,6 @@
 #include <vm/vm_kern.h>
 
 void bbSetRupt(ReturnHandler *rh, thread_act_t ct);
-void DumpTheSave(struct savearea *save);			/* (TEST/DEBUG) */
 
 /*
 ** Function:	NotifyInterruption
@@ -106,7 +105,7 @@ kern_return_t syscall_notify_interrupt ( void ) {
 		return KERN_SUCCESS;
 	}
 
-	if(act->mact.bbPendRupt >= 16) {				/* Have we hit the arbitrary maximum? */
+	if(act->mact.emPendRupts >= 16) {				/* Have we hit the arbitrary maximum? */
 		act_unlock_thread(act);						/* Unlock the activation */
 		return KERN_RESOURCE_SHORTAGE;				/* Too many pending right now */
 	}
@@ -116,7 +115,7 @@ kern_return_t syscall_notify_interrupt ( void ) {
 		return KERN_RESOURCE_SHORTAGE;				/* No storage... */
 	}
 	
-	(void)hw_atomic_add(&act->mact.bbPendRupt, 1);	/* Count this 'rupt */
+	(void)hw_atomic_add(&act->mact.emPendRupts, 1);	/* Count this 'rupt */
 	bbr->rh.handler = bbSetRupt;					/* Set interruption routine */
 
 	bbr->rh.next = act->handlers;					/* Put our interrupt at the start of the list */
@@ -150,7 +149,7 @@ void bbSetRupt(ReturnHandler *rh, thread_act_t act) {
 		return;
 	}
 
-	(void)hw_atomic_sub(&act->mact.bbPendRupt, 1);	/* Uncount this 'rupt */
+	(void)hw_atomic_sub(&act->mact.emPendRupts, 1);	/* Uncount this 'rupt */
 
 	if(!(sv = (savearea *)find_user_regs(act))) {	/* Find the user state registers */
 		kfree((vm_offset_t)bbr, sizeof(bbRupt));	/* Couldn't find 'em, release the control block */
@@ -178,6 +177,9 @@ void bbSetRupt(ReturnHandler *rh, thread_act_t act) {
 			bttd->exceptionInfo.srr1 = sv->save_srr1;		/* Save the original MSR */
 			sv->save_srr1 &= ~(MASK(MSR_BE)|MASK(MSR_SE));	/* Clear SE|BE bits in MSR */
 			act->mact.specFlags &= ~bbNoMachSC;				/* reactivate Mach SCs */ 
+			disable_preemption();							/* Don't move us around */
+			per_proc_info[cpu_number()].spcFlags = act->mact.specFlags;	/* Copy the flags */
+			enable_preemption();							/* Ok to move us around */
 			/* drop through to post int in backup CR2 in ICW */
 
 		case kInExceptionHandler:
@@ -257,12 +259,21 @@ kern_return_t enable_bluebox(
 		TRUE);
 	
 	th->top_act->mact.bbDescAddr = (unsigned int)kerndescaddr+origdescoffset;	/* Set kernel address of the table */
-	th->top_act->mact.bbUserDA = (unsigned int)Desc_TableStart;					/* Set user address of the table */
-	th->top_act->mact.bbTableStart = (unsigned int)TWI_TableStart;				/* Set address of the trap table */
-	th->top_act->mact.bbTaskID = (unsigned int)taskID;							/* Assign opaque task ID */
-	th->top_act->mact.bbTaskEnv = 0;											/* Clean task environment data */
-	th->top_act->mact.bbPendRupt = 0;											/* Clean pending 'rupt count */
-	th->top_act->mact.specFlags &= ~bbNoMachSC;									/* Make sure mach SCs are enabled */
+	th->top_act->mact.bbUserDA = (unsigned int)Desc_TableStart;	/* Set user address of the table */
+	th->top_act->mact.bbTableStart = (unsigned int)TWI_TableStart;	/* Set address of the trap table */
+	th->top_act->mact.bbTaskID = (unsigned int)taskID;		/* Assign opaque task ID */
+	th->top_act->mact.bbTaskEnv = 0;						/* Clean task environment data */
+	th->top_act->mact.emPendRupts = 0;						/* Clean pending 'rupt count */
+	th->top_act->mact.specFlags &= ~(bbNoMachSC | bbPreemptive);	/* Make sure mach SCs are enabled and we are not marked preemptive */
+	th->top_act->mact.specFlags |= bbThread;				/* Set that we are Classic thread */
+		
+	if(!(((BTTD_t *)kerndescaddr)->InterruptVector)) {		/* See if this is a preemptive (MP) BlueBox thread */
+		th->top_act->mact.specFlags |= bbPreemptive;		/* Yes, remember it */
+	}
+		
+	disable_preemption();									/* Don't move us around */
+	per_proc_info[cpu_number()].spcFlags = th->top_act->mact.specFlags;	/* Copy the flags */
+	enable_preemption();									/* Ok to move us around */
 		
 	{
 		/* mark the proc to indicate that this is a TBE proc */
@@ -303,8 +314,11 @@ void disable_bluebox_internal(thread_act_t act) {			/* Terminate bluebox */
 	act->mact.bbTableStart = 0;								/* Clear user pointer to TWI table */
 	act->mact.bbTaskID = 0;									/* Clear opaque task ID */
 	act->mact.bbTaskEnv = 0;								/* Clean task environment data */
-	act->mact.bbPendRupt = 0;								/* Clean pending 'rupt count */
-	act->mact.specFlags &= ~bbNoMachSC;						/* Clean up Blue Box enables */
+	act->mact.emPendRupts = 0;								/* Clean pending 'rupt count */
+	act->mact.specFlags &= ~(bbNoMachSC | bbPreemptive | bbThread);	/* Clean up Blue Box enables */
+	disable_preemption();								/* Don't move us around */
+	per_proc_info[cpu_number()].spcFlags = act->mact.specFlags;	/* Copy the flags */
+	enable_preemption();								/* Ok to move us around */
 	return;
 }
 
@@ -379,12 +393,17 @@ int bb_settaskenv( struct savearea *save )
 	task_unlock(task);								/* Safe to release now */
 
 	act->mact.bbTaskEnv = save->save_r4;
+	if(act == current_act()) {						/* Are we setting our own? */
+		disable_preemption();						/* Don't move us around */
+		per_proc_info[cpu_number()].spcFlags = act->mact.specFlags;	/* Copy the flags */
+		enable_preemption();						/* Ok to move us around */
+	}
 
 	act_unlock_thread(act);							/* Unlock the activation */
 	save->save_r3 = 0;
-	return KERN_SUCCESS;
+	return 1;
 
 failure:
 	save->save_r3 = -1;								/* we failed to find the taskID */
-	return KERN_FAILURE;
+	return 1;
 }

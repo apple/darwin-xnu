@@ -158,17 +158,16 @@ OSErr ExchangeFileIDs( ExtendedVCB *vcb, ConstUTF8Param srcName, ConstUTF8Param 
 	CatalogRecord	swapData;	// 520 bytes
 	SInt16			numSrcExtentBlocks;
 	SInt16			numDestExtentBlocks;
-	UInt32			textEncoding;
 	OSErr			err;
 	Boolean			isHFSPlus = ( vcb->vcbSigWord == kHFSPlusSigWord );
 
 	TrashCatalogIterator(vcb, srcID);	//	invalidate any iterators for this parentID
 	TrashCatalogIterator(vcb, destID);	//	invalidate any iterators for this parentID
 
-	err = BuildCatalogKeyUTF8(vcb, srcID, srcName, kUndefinedStrLen, &srcKey, &textEncoding);
+	err = BuildCatalogKeyUTF8(vcb, srcID, srcName, kUndefinedStrLen, &srcKey, NULL);
 	ReturnIfError(err);
 
-	err = BuildCatalogKeyUTF8(vcb, destID, destName, kUndefinedStrLen, &destKey, &textEncoding);
+	err = BuildCatalogKeyUTF8(vcb, destID, destName, kUndefinedStrLen, &destKey, NULL);
 	ReturnIfError(err);
 
 	if ( isHFSPlus )

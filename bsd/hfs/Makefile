@@ -25,7 +25,7 @@ DATAFILES = \
 	 hfs_encodings.h hfs_format.h hfs_mount.h
 
 PRIVATE_DATAFILES = \
-	hfs.h hfs_macos_defs.h
+	hfs.h hfs_macos_defs.h rangelist.h
 
 INSTALL_MI_LIST	= ${DATAFILES}
 

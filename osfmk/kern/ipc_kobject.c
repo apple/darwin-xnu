@@ -81,12 +81,6 @@
 #include <kern/counters.h>
 
 
-void
-		 def_pager_hash_insert(
-				ipc_port_t name_port);
-void             pager_mux_hash_insert(
-                                ipc_port_t              port,
-                                rpc_subsystem_t         rec);
 void             pager_mux_hash_delete(
                                 ipc_port_t              port);
 rpc_subsystem_t  pager_mux_hash_lookup(
@@ -166,10 +160,7 @@ rpc_subsystem_t mig_e[] = {
         (rpc_subsystem_t)&processor_subsystem,
         (rpc_subsystem_t)&processor_set_subsystem,
         (rpc_subsystem_t)&is_iokit_subsystem,
-        (rpc_subsystem_t)&dp_memory_object_subsystem,
-        (rpc_subsystem_t)&dp_memory_object_default_subsystem,
         (rpc_subsystem_t)&memory_object_name_subsystem,
-	(rpc_subsystem_t)&default_pager_object_subsystem,
 	(rpc_subsystem_t)&lock_set_subsystem,
 	(rpc_subsystem_t)&ledger_subsystem,
 	(rpc_subsystem_t)&semaphore_subsystem,
@@ -228,112 +219,7 @@ mig_init(void)
 	  }
 	}
     }
-}
-
-
-#define PAGER_MUX_HASH_COUNT 127
-
-
-struct pager_mux_entry {
-	queue_chain_t	links;
-	ipc_port_t	name;
-	rpc_subsystem_t	pager_object;
-};
-typedef struct pager_mux_entry *pager_mux_entry_t;
-
-queue_head_t	pager_mux_hashtable[PAGER_MUX_HASH_COUNT];
-zone_t		pager_mux_hash_zone;
-
-decl_mutex_data(,pager_mux_hash_lock)
-
-#define	pager_mux_hash(name_port) \
-		(((natural_t)(name_port) & 0xffffff) % PAGER_MUX_HASH_COUNT)
-
-
-rpc_subsystem_t
-pager_mux_hash_lookup(
-	ipc_port_t	name_port)
-{
-	register queue_t	bucket;
-	register pager_mux_entry_t	entry;
-	register rpc_subsystem_t	pager_object;
-
-	bucket = &pager_mux_hashtable[pager_mux_hash(name_port)];
-
-	mutex_lock(&pager_mux_hash_lock);
-	for (entry = (pager_mux_entry_t)queue_first(bucket);
-	     !queue_end(bucket, &entry->links);
-	     entry = (pager_mux_entry_t)queue_next(&entry->links)) {
-	    if (entry->name == name_port) {
-		pager_object = entry->pager_object;
-		/* don't need to reference the object, it can't disappear */
-		/* pager_mux_reference(pager_object); */
-		mutex_unlock(&pager_mux_hash_lock);
-		return (pager_object);
-	    }
-	}
-	mutex_unlock(&pager_mux_hash_lock);
-	return (rpc_subsystem_t)0;
-}
-
-
-void
-pager_mux_hash_init(void)
-{
-	register int	i;
-	register vm_size_t	size;
-
-	size = sizeof(struct pager_mux_entry);
-	pager_mux_hash_zone = zinit(
-				size,
-				size * 2000,
-				PAGE_SIZE,
-				"pager mux port hash");
-	for (i = 0; i < PAGER_MUX_HASH_COUNT; i++)
-	    queue_init(&pager_mux_hashtable[i]);
-	mutex_init(&pager_mux_hash_lock, ETAP_IO_DEV_PAGEH);
-}
-
-
-void
-pager_mux_hash_insert(
-	ipc_port_t	name_port,
-	rpc_subsystem_t	pager_object)
-{
-	register pager_mux_entry_t new_entry;
-
-	new_entry = (pager_mux_entry_t) zalloc(pager_mux_hash_zone);
-	new_entry->links.prev = (queue_entry_t) 0;
-	new_entry->links.next = (queue_entry_t) 0;
-	new_entry->name = name_port;
-	new_entry->pager_object = pager_object;
-
-	mutex_lock(&pager_mux_hash_lock);
-	queue_enter((&pager_mux_hashtable[pager_mux_hash(name_port)]),
-			new_entry, pager_mux_entry_t, links);
-	mutex_unlock(&pager_mux_hash_lock);
-}
-
-void
-pager_mux_hash_delete(
-	ipc_port_t	name_port)
-{
-	register queue_t	bucket;
-	register pager_mux_entry_t	entry;
-
-	bucket = &pager_mux_hashtable[pager_mux_hash(name_port)];
-
-	mutex_lock(&pager_mux_hash_lock);
-	for (entry = (pager_mux_entry_t)queue_first(bucket);
-	     !queue_end(bucket, &entry->links);
-	     entry = (pager_mux_entry_t)queue_next(&entry->links)) {
-	    if (entry->name == name_port) {
-		queue_remove(bucket, entry, pager_mux_entry_t, links);
-	    	zfree(pager_mux_hash_zone, (vm_offset_t)entry);
-		break;
-	    }
-	}
-	mutex_unlock(&pager_mux_hash_lock);
+    printf("mig_table_max_displ = %d\n", mig_table_max_displ);
 }
 
 
@@ -609,12 +495,7 @@ ipc_kobject_destroy(
 		mach_destroy_memory_entry(port);
 		break;
 
-	case IKOT_UPL:
-		mach_destroy_upl(port);
-		break;
-
 	default:	/* XXX (bogon) */
-		vm_object_destroy(port);
 		break;
 	}
 }
@@ -646,32 +527,19 @@ ipc_kobject_notify(
 			ipc_port_destroy(port); /* releases lock */
 			return TRUE;
 		   }
-		   paging_subsystem_object = pager_mux_hash_lookup(
-				(ipc_port_t)request_header->msgh_remote_port);
-		   if(paging_subsystem_object == (rpc_subsystem_t)
-					&dp_memory_object_subsystem) {
-		      default_pager_no_senders(
-		         (ipc_port_t)request_header->msgh_remote_port, 
-			 seqno, 
-			 (mach_port_mscount_t) 
-			 ((mach_no_senders_notification_t *) 
-			 request_header)->not_count);
-		      (ipc_port_t)reply_header->msgh_remote_port
-			  = MACH_PORT_NULL;
-		      return TRUE;
+		   if (ip_kotype(port) == IKOT_UPL) {
+			   upl_no_senders(
+				(ipc_port_t)request_header->msgh_remote_port, 
+				(mach_port_mscount_t) 
+				((mach_no_senders_notification_t *) 
+				 request_header)->not_count);
+			   (ipc_port_t)reply_header->msgh_remote_port
+				   = MACH_PORT_NULL;
+			   return TRUE;
 		   }
-		   if(paging_subsystem_object == (rpc_subsystem_t)
-					&vnode_pager_workaround) {
-		      vnode_pager_no_senders(
-		         (ipc_port_t)request_header->msgh_remote_port, 
-			 (mach_port_mscount_t) 
-			 ((mach_no_senders_notification_t *) 
-			 request_header)->not_count);
-		      (ipc_port_t)reply_header->msgh_remote_port
-			  = MACH_PORT_NULL;
-		      return TRUE;
-		   }
+				
 	  	   break;
+
 		case MACH_NOTIFY_PORT_DELETED:
 		case MACH_NOTIFY_PORT_DESTROYED:
 		case MACH_NOTIFY_SEND_ONCE:

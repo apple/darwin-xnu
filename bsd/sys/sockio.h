@@ -119,6 +119,14 @@
 #define	SIOCGIFPSRCADDR	_IOWR('i', 71, struct ifreq)	/* get gif psrc addr */
 #define	SIOCGIFPDSTADDR	_IOWR('i', 72, struct ifreq)	/* get gif pdst addr */
 
+#ifdef KERNEL_PRIVATE
+/* 
+ * temporary control calls to attach/detach IP to/from an ethernet interface
+ */
+#define	SIOCPROTOATTACH	_IOWR('i', 80, struct ifreq)	/* attach proto to interface */
+#define	SIOCPROTODETACH	_IOWR('i', 81, struct ifreq)	/* detach proto from interface */
+#endif KERNEL_PRIVATE
+
 #define	SIOCGIFASYNCMAP _IOWR('i', 124, struct ifreq)	/* get ppp asyncmap */
 #define	SIOCSIFASYNCMAP _IOW('i', 125, struct ifreq)	/* set ppp asyncmap */
 

@@ -190,6 +190,7 @@ struct tcpcb {
 /* RFC 1644 variables */
 	tcp_cc	cc_send;		/* send connection count */
 	tcp_cc	cc_recv;		/* receive connection count */
+	u_long	reserved[4];
 };
 
 /*
@@ -480,6 +481,11 @@ extern	struct pr_usrreqs tcp6_usrreqs;
 #endif /* INET6 */
 extern	u_long tcp_sendspace;
 extern	u_long tcp_recvspace;
+void		tcp_rndiss_init __P((void));
+tcp_seq		tcp_rndiss_next __P((void));
+u_int16_t	tcp_rndiss_encrypt __P((u_int16_t));
+ 
+
 
 #endif /* KERNEL */
 

@@ -98,6 +98,8 @@ static SInt32			gIORegistryGenerationCount;
 #define registryTable()	fPropertyTable
 #endif
 
+#define DEBUG_FREE	1
+
 /* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
 
 struct s_lock_t {
@@ -468,28 +470,18 @@ bool IORegistryEntry::init( IORegistryEntry * old,
 void IORegistryEntry::free( void )
 {
 
-#ifdef DEBUG
-    OSArray *			links;
-    const OSSymbol *		key;
-    const IORegistryPlane *	plane;
-    OSCollectionIterator *	iter;
+#if DEBUG_FREE
+#define msg ": attached at free()"
+    char buf[ strlen(msg) + 40 ];
 
-    if( registryTable()) {
-        iter = OSCollectionIterator::withCollection( gIORegistryPlanes );
-        if( iter) {
-            while( (key = (const OSSymbol *) iter->getNextObject())) {
-                if( 0 == (plane = (const IORegistryPlane *)
-			OSDynamicCast( IORegistryPlane,
-                                 gIORegistryPlanes->getObject( key ))))
-		    continue;
-                if( (links = getParentSetReference( plane ))
-                 || (links = getChildSetReference( plane )) ) {
+    if( registryTable() && gIOServicePlane) {
+        if( getParentSetReference( gIOServicePlane )
+            || getChildSetReference( gIOServicePlane )) {
 
-                    IOLog("%s: Still attached in %s at free()\n",
-				getName(), plane->nameKey->getCStringNoCopy());
-		}
-            }
-            iter->release();
+            strncpy( buf, getName(), 32);
+            buf[32] = 0;
+            strcat( buf, msg );
+            IOPanic( buf );
         }
     }
 #endif
@@ -563,15 +555,41 @@ IORegistryEntry::getProperty( type *                  aKey, \
 { \
     OSObject * obj = getProperty( aKey ); \
     \
-    if ( (0 == obj) && (options & kIORegistryIterateRecursively) ) { \
+    if ( (0 == obj) && plane && (options & kIORegistryIterateRecursively) ) { \
         IORegistryEntry * entry = (IORegistryEntry *) this; \
         IORegistryIterator * iter; \
         iter = IORegistryIterator::iterateOver( entry, plane, options ); \
         \
-        while ( (0 == obj) && (entry = iter->getNextObject()) ) { \
-            obj = entry->getProperty( aKey ); \
+        if(iter) { \
+            while ( (0 == obj) && (entry = iter->getNextObject()) ) { \
+                obj = entry->getProperty( aKey ); \
+            } \
+            iter->release(); \
         } \
-        iter->release(); \
+    } \
+    \
+    return( obj ); \
+}
+
+#define wrap5(type,constant) \
+OSObject * \
+IORegistryEntry::copyProperty( type *                  aKey, \
+                              const IORegistryPlane * plane, \
+                              IOOptionBits            options ) constant \
+{ \
+    OSObject * obj = copyProperty( aKey ); \
+    \
+    if ( (0 == obj) && plane && (options & kIORegistryIterateRecursively) ) { \
+        IORegistryEntry * entry = (IORegistryEntry *) this; \
+        IORegistryIterator * iter; \
+        iter = IORegistryIterator::iterateOver( entry, plane, options ); \
+        \
+        if(iter) { \
+            while ( (0 == obj) && (entry = iter->getNextObject()) ) { \
+                obj = entry->copyProperty( aKey ); \
+            } \
+            iter->release(); \
+        } \
     } \
     \
     return( obj ); \
@@ -622,6 +640,11 @@ wrap3(remove, const char,)         // removeProperty() definition
 wrap4(const OSSymbol, const)       // getProperty() w/plane definition
 wrap4(const OSString, const)       // getProperty() w/plane definition
 wrap4(const char, const)           // getProperty() w/plane definition
+
+wrap5(const OSSymbol, const)       // copyProperty() w/plane definition
+wrap5(const OSString, const)       // copyProperty() w/plane definition
+wrap5(const char, const)           // copyProperty() w/plane definition
+
 
 bool
 IORegistryEntry::setProperty( const OSSymbol * aKey, OSObject * anObject)
@@ -1031,16 +1054,16 @@ const char * IORegistryEntry::matchPathLocation( const char * cmp,
 {
     const char	*	str;
     const char	*	result = 0;
-    int			num1, num2;
+    u_quad_t		num1, num2;
     char		c1, c2;
 
     str = getLocation( plane );
     if( str) {
 	c2 = str[0];
 	do {
-            num1 = strtoul( cmp, (char **) &cmp, 16 );
+            num1 = strtouq( cmp, (char **) &cmp, 16 );
             if( c2) {
-                num2 = strtoul( str, (char **) &str, 16 );
+                num2 = strtouq( str, (char **) &str, 16 );
                 c2 = str[0];
 	    } else
                 num2 = 0;
@@ -1080,6 +1103,7 @@ IORegistryEntry * IORegistryEntry::getChildFromComponent( const char ** opath,
     unsigned int	index;
     const char *	path;
     const char *	cmp = 0;
+    char		c;
     size_t		len;
     const char *	str;
 
@@ -1100,8 +1124,12 @@ IORegistryEntry * IORegistryEntry::getChildFromComponent( const char ** opath,
                 if( strncmp( str, cmp, len ))
                     continue;
                 cmp += len;
-                if( *cmp != '@' )
-                break;
+
+                c = *cmp;
+                if( (c == 0) || (c == '/') || (c == ':'))
+                    break;
+                if( c != '@')
+                    continue;
             }
             cmp++;
             if( (cmp = entry->matchPathLocation( cmp, plane )))
@@ -1402,19 +1430,32 @@ OSIterator * IORegistryEntry::getParentIterator(
     return( iter );
 }
 
-IORegistryEntry * IORegistryEntry::getParentEntry( const IORegistryPlane * plane ) const
+IORegistryEntry * IORegistryEntry::copyParentEntry( const IORegistryPlane * plane ) const
 {
     IORegistryEntry *	entry = 0;
     OSArray *		links;
 
     RLOCK;
 
-    if( (links = getParentSetReference( plane )))
+    if( (links = getParentSetReference( plane ))) {
         entry = (IORegistryEntry *) links->getObject( 0 );
+        entry->retain();
+    }
 
     UNLOCK;
 
     return( entry);
+}
+
+IORegistryEntry * IORegistryEntry::getParentEntry( const IORegistryPlane * plane ) const
+{
+    IORegistryEntry * entry;
+
+    entry = copyParentEntry( plane );
+    if( entry)
+        entry->release();
+
+    return( entry );
 }
 
 OSArray * IORegistryEntry::getChildSetReference( const IORegistryPlane * plane ) const
@@ -1451,7 +1492,7 @@ OSIterator * IORegistryEntry::getChildIterator( const IORegistryPlane * plane ) 
 }
 
 
-IORegistryEntry * IORegistryEntry::getChildEntry(
+IORegistryEntry * IORegistryEntry::copyChildEntry(
 				const IORegistryPlane * plane ) const
 {
     IORegistryEntry *	entry = 0;
@@ -1459,12 +1500,26 @@ IORegistryEntry * IORegistryEntry::getChildEntry(
 
     RLOCK;
 
-    if( (links = getChildSetReference( plane )))
+    if( (links = getChildSetReference( plane ))) {
 	entry = (IORegistryEntry *) links->getObject( 0 );
+        entry->retain();
+    }
 
     UNLOCK;
 
     return( entry);
+}
+
+IORegistryEntry * IORegistryEntry::getChildEntry(
+				const IORegistryPlane * plane ) const
+{
+    IORegistryEntry * entry;
+
+    entry = copyChildEntry( plane );
+    if( entry)
+        entry->release();
+        
+    return( entry );
 }
 
 void IORegistryEntry::applyToChildren( IORegistryEntryApplierFunction applier,
@@ -1965,11 +2020,12 @@ OSOrderedSet * IORegistryIterator::iterateAll( void )
     return( done);
 }
 
-OSMetaClassDefineReservedUnused(IORegistryEntry, 0);
-OSMetaClassDefineReservedUnused(IORegistryEntry, 1);
-OSMetaClassDefineReservedUnused(IORegistryEntry, 2);
-OSMetaClassDefineReservedUnused(IORegistryEntry, 3);
-OSMetaClassDefineReservedUnused(IORegistryEntry, 4);
+OSMetaClassDefineReservedUsed(IORegistryEntry, 0);
+OSMetaClassDefineReservedUsed(IORegistryEntry, 1);
+OSMetaClassDefineReservedUsed(IORegistryEntry, 2);
+OSMetaClassDefineReservedUsed(IORegistryEntry, 3);
+OSMetaClassDefineReservedUsed(IORegistryEntry, 4);
+
 OSMetaClassDefineReservedUnused(IORegistryEntry, 5);
 OSMetaClassDefineReservedUnused(IORegistryEntry, 6);
 OSMetaClassDefineReservedUnused(IORegistryEntry, 7);

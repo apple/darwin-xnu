@@ -107,8 +107,8 @@ struct devnode
     devfstype_t		dn_type;
     int			dn_flags;
     u_short		dn_mode;
-    u_short		dn_uid; 
-    u_short		dn_gid;
+    uid_t		dn_uid; 
+    gid_t		dn_gid;
     struct timespec	dn_atime;/* time of last access */
     struct timespec	dn_mtime;/* time of last modification */
     struct timespec	dn_ctime;/* time file changed */

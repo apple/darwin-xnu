@@ -484,10 +484,14 @@ in_gif_ioctl(ifp, cmd, data)
 		sc->gif_oflags = ifp->if_flags;
 
 		sa = (struct sockaddr *)_MALLOC(size, M_IFADDR, M_WAITOK);
+		if (sa == NULL)
+			return (ENOMEM);
 		bcopy((caddr_t)src, (caddr_t)sa, size);
 		sc->gif_psrc = sa;
 		
 		sa = (struct sockaddr *)_MALLOC(size, M_IFADDR, M_WAITOK);
+		if (sa == NULL)
+			return (ENOMEM);
 		bcopy((caddr_t)dst, (caddr_t)sa, size);
 		sc->gif_pdst = sa;
 		

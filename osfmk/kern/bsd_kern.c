@@ -73,9 +73,6 @@ int  get_task_numacts(task_t);
 thread_act_t get_firstthread(task_t task);
 kern_return_t get_signalact(task_t , thread_act_t *, thread_t *, int);
 
-kern_return_t bsd_refvm_object(vm_object_t object);
-
-
 /*
  *
  */
@@ -161,6 +158,60 @@ out:
 	task_unlock(task);
 
         if (thr_act) 
+            return(KERN_SUCCESS);
+        else 
+            return(KERN_FAILURE);
+}
+
+
+kern_return_t check_actforsig(task_t task, thread_act_t * thact, thread_t * thshut, int setast)
+{
+
+        thread_act_t inc;
+        thread_act_t ninc;
+        thread_act_t thr_act;
+		thread_t	th;
+		int found=0;
+
+	task_lock(task);
+	if (!task->active) {
+		task_unlock(task);
+		return(KERN_FAILURE);
+	}
+
+        thr_act = THR_ACT_NULL;
+        for (inc  = (thread_act_t)queue_first(&task->thr_acts);
+             inc != (thread_act_t)&task->thr_acts;
+             inc  = ninc) {
+
+				if (inc != thact) {
+                	ninc = (thread_act_t)queue_next(&inc->thr_acts);
+						continue;
+				}
+                th = act_lock_thread(inc);
+                if ((inc->active)  && ((th->state & TH_ABORT) != TH_ABORT)) {
+					found = 1;
+                    thr_act = inc;
+                   break;
+                }
+                act_unlock_thread(inc);
+                /* ninc = (thread_act_t)queue_next(&inc->thr_acts); */
+				break;
+        }
+out:
+		if (found) {
+        	if (thshut)
+                	*thshut = thr_act? thr_act->thread: THREAD_NULL ;
+            if (setast) {
+                 thread_ast_set(thr_act, AST_BSD);
+				if (current_act() == thr_act)
+						ast_on(AST_BSD);
+				}
+           act_unlock_thread(thr_act);
+        }
+		task_unlock(task);
+
+        if (found) 
             return(KERN_SUCCESS);
         else 
             return(KERN_FAILURE);
@@ -495,10 +546,4 @@ get_thread_waitresult(
 	return(th->wait_result);
 }
 
-kern_return_t
-bsd_refvm_object(vm_object_t object)
-{
-	vm_object_reference(object);
-	return(KERN_SUCCESS);
-}
 

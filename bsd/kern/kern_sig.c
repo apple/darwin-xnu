@@ -95,7 +95,7 @@ int cansignal __P((struct proc *, struct pcred *, struct proc *, int));
 int killpg1 __P((struct proc *, int, int, int));
 void sigexit_locked __P((struct proc *, int));
 void setsigvec __P((struct proc *, int, struct sigaction *));
-void exit1 __P((struct proc *, int));
+void exit1 __P((struct proc *, int, int *));
 int signal_lock __P((struct proc *));
 int signal_unlock __P((struct proc *));
 void signal_setast __P((thread_act_t *));
@@ -828,13 +828,15 @@ threadsignal(sig_actthread, signum, code)
 	if ((mask & threadmask) == 0)
 		return;
 	sig_task = get_threadtask(sig_actthread);
-	/* p = sig_task->proc; */
 	p = (struct proc *)(get_bsdtask_info(sig_task));
+
+	uth = get_bsdthread_info(sig_actthread);
+	if (uth && (uth->uu_flag & P_VFORK))
+		p = uth->uu_proc;
 
 	if (!(p->p_flag & P_TRACED) && (p->p_sigignore & mask))
 		return;
 
-	uth = get_bsdthread_info(sig_actthread);
 	uth->uu_sig |= mask;
 	uth->uu_code = code;
 	/* mark on process as well */
@@ -883,6 +885,112 @@ psignal(p, signum)
 	psignal_lock(p, signum, 1, 1);
 }
 
+
+void
+psignal_vfork(p, new_task, thr_act, signum)
+	register struct proc *p;
+	task_t new_task;
+	thread_act_t thr_act;
+	register int signum;
+{
+	int withlock = 1;
+	int pend = 0;
+	register int s, prop;
+	register sig_t action;
+	int mask;
+	kern_return_t kret;
+
+	if ((u_int)signum >= NSIG || signum == 0)
+		panic("psignal signal number");
+	mask = sigmask(signum);
+	prop = sigprop[signum];
+
+#if SIGNAL_DEBUG
+        if(rdebug_proc && (p == rdebug_proc)) {
+                ram_printf(3);
+        }
+#endif /* SIGNAL_DEBUG */
+
+	if ((new_task == TASK_NULL) || (thr_act == (thread_act_t)NULL)  || is_kerneltask(new_task))
+		return;
+
+
+	signal_lock(p);
+
+	/*
+	 * proc is traced, always give parent a chance.
+	 */
+	action = SIG_DFL;
+
+	if (p->p_nice > NZERO && action == SIG_DFL && (prop & SA_KILL) &&
+		(p->p_flag & P_TRACED) == 0)
+		p->p_nice = NZERO;
+
+	if (prop & SA_CONT)
+		p->p_siglist &= ~stopsigmask;
+
+	if (prop & SA_STOP) {
+		/*
+		 * If sending a tty stop signal to a member of an orphaned
+		 * process group, discard the signal here if the action
+		 * is default; don't stop the process below if sleeping,
+		 * and don't clear any pending SIGCONT.
+		 */
+		if (prop & SA_TTYSTOP && p->p_pgrp->pg_jobc == 0 &&
+			action == SIG_DFL)
+			goto psigout;
+		p->p_siglist &= ~contsigmask;
+	}
+	p->p_siglist |= mask;
+	
+        /* Deliver signal to the activation passed in */
+	thread_ast_set(thr_act, AST_BSD);
+
+	/*
+	 *	SIGKILL priority twiddling moved here from above because
+	 *	it needs sig_thread.  Could merge it into large switch
+	 *	below if we didn't care about priority for tracing
+	 *	as SIGKILL's action is always SIG_DFL.
+	 */
+	if ((signum == SIGKILL) && (p->p_nice > NZERO)) {
+		p->p_nice = NZERO;
+#if XXX
+		/*
+		 * we need to make changes here to get nice to work 
+		 * reset priority to BASEPRI_USER
+		 */
+#endif
+	}
+
+	/*
+	 *	This Process is traced - wake it up (if not already
+	 *	stopped) so that it can discover the signal in
+	 *	issig() and stop for the parent.
+	 */
+	  if (p->p_flag & P_TRACED) {
+		if (p->p_stat != SSTOP)
+			goto run;
+		else
+			goto psigout;
+	}
+run:
+	/*
+	 * If we're being traced (possibly because someone attached us
+	 * while we were stopped), check for a signal from the debugger.
+	 */
+	if (p->p_stat == SSTOP) {
+		if ((p->p_flag & P_TRACED) != 0 && p->p_xstat != 0)
+			p->p_siglist |= sigmask(p->p_xstat); 
+	}
+
+	/*
+	 * setrunnable(p) in BSD
+	 */
+	p->p_stat = SRUN;
+
+psigout:
+	signal_unlock(p);
+}
 
 /*
  * Send the signal to the process.  If the signal has an action, the action
@@ -1023,6 +1131,15 @@ psignal_lock(p, signum, withlock, pend)
 	cur_thread = current_thread();	 /* this is a shuttle */
 	cur_act = current_act();
         
+	if ((p->p_flag & P_INVFORK) && p->p_vforkact) {
+			sig_thread_act = p->p_vforkact;	
+
+			kret = check_actforsig(sig_task, sig_thread_act, &sig_thread, 1);
+			if (kret == KERN_SUCCESS) {
+				goto psig_foundthread;
+			}
+	} 
+
 	/* If successful return with ast set */
 	kret = (kern_return_t)get_signalact(sig_task, 
 				&sig_thread_act, &sig_thread, 1);
@@ -1030,17 +1147,22 @@ psignal_lock(p, signum, withlock, pend)
 	if ((kret != KERN_SUCCESS) || (sig_thread_act == THREAD_NULL)) {
 		/* XXXX FIXME
 		/* if it is sigkill, may be we should
-		 * inject a thread to terminate
-		 */
-		printf("WARNING: no activation in psignal\n");
+	 	* inject a thread to terminate
+	 	*/
+#if DIAGNOSTIC
+		printf("WARNING: no activation in psignal\n"); 
+#endif
 #if SIGNAL_DEBUG
-                ram_printf(1);
+       	ram_printf(1);
 #endif /* SIGNAL_DEBUG */
-		goto psigout;
-	}
+			goto psigout;
+		}
 
+psig_foundthread:
 	if (sig_thread == THREAD_NULL) {
+#if DIAGNOSTIC
 		printf("WARNING: valid act; but no shutte in psignal\n");
+#endif
 #if 0
 		/* FIXME : NO VALID SHUTTLE */
 		goto psigout;
@@ -1337,7 +1459,7 @@ issignal(p)
 			 *	XXX middle of it.
 			 */
 			task = p->task;
-                        task_hold(task);
+			task_hold(task);
 			p->sigwait = TRUE;
 			p->sigwait_thread = cur_act;
 			p->p_stat = SSTOP;
@@ -1373,7 +1495,7 @@ issignal(p)
 			 	* calls closef() which can trash u_qsave.)
 			 	*/
 				signal_unlock(p);
-				exit1(p,signum);
+				exit1(p,signum, (int *)NULL);
 				return(0);
 			}
 
@@ -1461,6 +1583,8 @@ issignal(p)
 				 */
 				break;		/* == ignore */
 			} else {
+				p->p_siglist &= ~mask;		/* take the signal! */
+				p->p_sigpending &= ~mask;	/* take the pending signal */
 				signal_unlock(p);
 				return (signum);
 			}
@@ -1482,6 +1606,8 @@ issignal(p)
 			 * This signal has an action, let
 			 * postsig() process it.
 			 */
+			p->p_siglist &= ~mask;		/* take the signal! */
+			p->p_sigpending &= ~mask;	/* take the pending signal */
 			signal_unlock(p);
 			return (signum);
 		}
@@ -1743,7 +1869,7 @@ sigexit_locked(p, signum)
 			signum |= WCOREFLAG;
 	}
 	signal_unlock(p);
-	exit1(p, W_EXITCODE(0, signum));
+	exit1(p, W_EXITCODE(0, signum), (int *)NULL);
 	/* NOTREACHED */
 }
 

@@ -324,7 +324,7 @@ static struct vnodeopv_entry_desc fifo_nfsv2nodeop_entries[] = {
 	{ &vop_lock_desc, (vop_t *)nfs_lock },		/* lock */
 	{ &vop_unlock_desc, (vop_t *)nfs_unlock },	/* unlock */
 	{ &vop_bmap_desc, (vop_t *)fifo_bmap },		/* bmap */
-	{ &vop_strategy_desc, (vop_t *)fifo_badop },	/* strategy */
+	{ &vop_strategy_desc, (vop_t *)fifo_strategy },	/* strategy */
 	{ &vop_print_desc, (vop_t *)nfs_print },	/* print */
 	{ &vop_islocked_desc, (vop_t *)nfs_islocked },	/* islocked */
 	{ &vop_pathconf_desc, (vop_t *)fifo_pathconf },	/* pathconf */
@@ -383,41 +383,163 @@ static int	nfsaccess_cache_timeout = NFS_MAXATTRTIMO;
 			 | NFSV3ACCESS_EXTEND | NFSV3ACCESS_EXECUTE	\
 			 | NFSV3ACCESS_DELETE | NFSV3ACCESS_LOOKUP)
                          
-                         
+
+/* 
+ * the following are needed only by nfs_pageout to know how to handle errors
+ * see nfs_pageout comments on explanation of actions.
+ * the errors here are copied from errno.h and errors returned by servers
+ * are expected to match the same numbers here. If not, our actions maybe
+ * erroneous.
+ */
+enum actiontype {NOACTION, DUMP, DUMPANDLOG, RETRY, RETRYWITHSLEEP, SEVER};
+
+static int errorcount[ELAST+1]; /* better be zeros when initialized */
+
+static const short errortooutcome[ELAST+1] = {
+	NOACTION,
+	DUMP,			/* EPERM	1	Operation not permitted */
+	DUMP,			/* ENOENT	2	No such file or directory */
+	DUMPANDLOG,		/* ESRCH	3	No such process */
+	RETRY,			/* EINTR 	4	Interrupted system call */
+	DUMP,			/* EIO		5	Input/output error */
+	DUMP,			/* ENXIO	6	Device not configured */
+	DUMPANDLOG,		/* E2BIG	7	Argument list too long */
+	DUMPANDLOG,		/* ENOEXEC	8	Exec format error */
+	DUMPANDLOG,		/* EBADF	9	Bad file descriptor */
+	DUMPANDLOG,		/* ECHILD	10	No child processes */
+	DUMPANDLOG,		/* EDEADLK	11	Resource deadlock avoided - was EAGAIN */
+	RETRY,			/* ENOMEM	12	Cannot allocate memory */
+	DUMP,			/* EACCES	13	Permission denied */
+	DUMPANDLOG,		/* EFAULT	14	Bad address */
+	DUMPANDLOG,		/* ENOTBLK	15	POSIX - Block device required */
+	RETRY,			/* EBUSY	16	Device busy */
+	DUMP,			/* EEXIST	17	File exists */
+	DUMP,			/* EXDEV	18	Cross-device link */
+	DUMP,			/* ENODEV	19	Operation not supported by device */
+	DUMP,			/* ENOTDIR	20	Not a directory */
+	DUMP,			/* EISDIR 	21	Is a directory */
+	DUMP,			/* EINVAL	22	Invalid argument */
+	DUMPANDLOG,		/* ENFILE	23	Too many open files in system */
+	DUMPANDLOG,		/* EMFILE	24	Too many open files */
+	DUMPANDLOG,		/* ENOTTY	25	Inappropriate ioctl for device */
+	DUMPANDLOG,		/* ETXTBSY	26	Text file busy - POSIX */
+	DUMP,			/* EFBIG	27	File too large */
+	DUMP,			/* ENOSPC	28	No space left on device */
+	DUMPANDLOG,		/* ESPIPE	29	Illegal seek */
+	DUMP,			/* EROFS	30	Read-only file system */
+	DUMP,			/* EMLINK	31	Too many links */
+	RETRY,			/* EPIPE	32	Broken pipe */
+	/* math software */
+	DUMPANDLOG,		/* EDOM				33	Numerical argument out of domain */
+	DUMPANDLOG,		/* ERANGE			34	Result too large */
+	RETRY,			/* EAGAIN/EWOULDBLOCK	35	Resource temporarily unavailable */
+	DUMPANDLOG,		/* EINPROGRESS		36	Operation now in progress */
+	DUMPANDLOG,		/* EALREADY			37	Operation already in progress */
+	/* ipc/network software -- argument errors */
+	DUMPANDLOG,		/* ENOTSOC			38	Socket operation on non-socket */
+	DUMPANDLOG,		/* EDESTADDRREQ		39	Destination address required */
+	DUMPANDLOG,		/* EMSGSIZE			40	Message too long */
+	DUMPANDLOG,		/* EPROTOTYPE		41	Protocol wrong type for socket */
+	DUMPANDLOG,		/* ENOPROTOOPT		42	Protocol not available */
+	DUMPANDLOG,		/* EPROTONOSUPPORT	43	Protocol not supported */
+	DUMPANDLOG,		/* ESOCKTNOSUPPORT	44	Socket type not supported */
+	DUMPANDLOG,		/* ENOTSUP			45	Operation not supported */
+	DUMPANDLOG,		/* EPFNOSUPPORT		46	Protocol family not supported */
+	DUMPANDLOG,		/* EAFNOSUPPORT		47	Address family not supported by protocol family */
+	DUMPANDLOG,		/* EADDRINUSE		48	Address already in use */
+	DUMPANDLOG,		/* EADDRNOTAVAIL	49	Can't assign requested address */
+	/* ipc/network software -- operational errors */
+	RETRY,			/* ENETDOWN			50	Network is down */
+	RETRY,			/* ENETUNREACH		51	Network is unreachable */
+	RETRY,			/* ENETRESET		52	Network dropped connection on reset */
+	RETRY,			/* ECONNABORTED		53	Software caused connection abort */
+	RETRY,			/* ECONNRESET		54	Connection reset by peer */
+	RETRY,			/* ENOBUFS			55	No buffer space available */
+	RETRY,			/* EISCONN			56	Socket is already connected */
+	RETRY,			/* ENOTCONN			57	Socket is not connected */
+	RETRY,			/* ESHUTDOWN		58	Can't send after socket shutdown */
+	RETRY,			/* ETOOMANYREFS		59	Too many references: can't splice */
+	RETRY,			/* ETIMEDOUT		60	Operation timed out */
+	RETRY,			/* ECONNREFUSED		61	Connection refused */
+
+	DUMPANDLOG,		/* ELOOP			62	Too many levels of symbolic links */
+	DUMP,			/* ENAMETOOLONG		63	File name too long */
+	RETRY,			/* EHOSTDOWN		64	Host is down */ 
+	RETRY,			/* EHOSTUNREACH		65	No route to host */
+	DUMP,			/* ENOTEMPTY		66	Directory not empty */
+	/* quotas & mush */     
+	DUMPANDLOG,		/* PROCLIM			67	Too many processes */
+	DUMPANDLOG,		/* EUSERS			68	Too many users */
+	DUMPANDLOG,		/* EDQUOT			69	Disc quota exceeded */   
+	/* Network File System */
+	DUMP,			/* ESTALE			70	Stale NFS file handle */
+	DUMP,			/* EREMOTE			71	Too many levels of remote in path */
+	DUMPANDLOG,		/* EBADRPC			72	RPC struct is bad */
+	DUMPANDLOG,		/* ERPCMISMATCH		73	RPC version wrong */
+	DUMPANDLOG,		/* EPROGUNAVAIL		74	RPC prog. not avail */
+	DUMPANDLOG,		/* EPROGMISMATCH	75	Program version wrong */
+	DUMPANDLOG,		/* EPROCUNAVAIL		76	Bad procedure for program */
+
+	DUMPANDLOG,		/* ENOLCK			77	No locks available */
+	DUMPANDLOG,		/* ENOSYS			78	Function not implemented */
+	DUMPANDLOG,		/* EFTYPE			79	Inappropriate file type or format */  
+	DUMPANDLOG,		/* EAUTH			80	Authentication error */
+	DUMPANDLOG,		/* ENEEDAUTH		81	Need authenticator */
+	/* Intelligent device errors */
+	DUMPANDLOG,		/* EPWROFF			82	Device power is off */
+	DUMPANDLOG,		/* EDEVERR			83	Device error, e.g. paper out */
+	DUMPANDLOG,		/* EOVERFLOW		84	Value too large to be stored in data type */
+	/* Program loading errors */
+	DUMPANDLOG,		/* EBADEXEC			85	Bad executable */
+	DUMPANDLOG,		/* EBADARCH			86	Bad CPU type in executable */
+	DUMPANDLOG,		/* ESHLIBVERS		87	Shared library version mismatch */
+	DUMPANDLOG,		/* EBADMACHO		88	Malformed Macho file */
+};
+
+
+static short
+nfs_pageouterrorhandler(error)
+	int error;
+{
+	if (error > ELAST) 
+		return(DUMP);
+	else 
+		return(errortooutcome[error]);
+}
 
 static int
 nfs3_access_otw(struct vnode *vp,  
-                int wmode,
-                struct proc *p,
-                struct ucred *cred)  
+		int wmode,
+		struct proc *p,
+		struct ucred *cred)  
 {
-        const int v3 = 1;
-        u_int32_t *tl;
-        int error = 0, attrflag;
+	const int v3 = 1;
+	u_int32_t *tl;
+	int error = 0, attrflag;
 
-        struct mbuf *mreq, *mrep, *md, *mb, *mb2;
-        caddr_t bpos, dpos, cp2;
-        register int32_t t1, t2;
-        register caddr_t cp;
-        u_int32_t rmode;
-        struct nfsnode *np = VTONFS(vp);
+	struct mbuf *mreq, *mrep, *md, *mb, *mb2;
+	caddr_t bpos, dpos, cp2;
+	register int32_t t1, t2;
+	register caddr_t cp;
+	u_int32_t rmode;
+	struct nfsnode *np = VTONFS(vp);
 
-        nfsstats.rpccnt[NFSPROC_ACCESS]++;   
-        nfsm_reqhead(vp, NFSPROC_ACCESS, NFSX_FH(v3) + NFSX_UNSIGNED);
-        nfsm_fhtom(vp, v3);
-        nfsm_build(tl, u_int32_t *, NFSX_UNSIGNED);
-        *tl = txdr_unsigned(wmode);
-        nfsm_request(vp, NFSPROC_ACCESS, p, cred);
-        nfsm_postop_attr(vp, attrflag);
-        if (!error) {
-                nfsm_dissect(tl, u_int32_t *, NFSX_UNSIGNED);
-                rmode = fxdr_unsigned(u_int32_t, *tl);
-                np->n_mode = rmode;
-                np->n_modeuid = cred->cr_uid;
-                np->n_modestamp = time_second;
-        }
-        nfsm_reqdone;
-        return error;
+	nfsstats.rpccnt[NFSPROC_ACCESS]++;   
+	nfsm_reqhead(vp, NFSPROC_ACCESS, NFSX_FH(v3) + NFSX_UNSIGNED);
+	nfsm_fhtom(vp, v3);
+	nfsm_build(tl, u_int32_t *, NFSX_UNSIGNED);
+	*tl = txdr_unsigned(wmode);
+	nfsm_request(vp, NFSPROC_ACCESS, p, cred);
+	nfsm_postop_attr(vp, attrflag);
+	if (!error) {
+		nfsm_dissect(tl, u_int32_t *, NFSX_UNSIGNED);
+		rmode = fxdr_unsigned(u_int32_t, *tl);
+		np->n_mode = rmode;
+		np->n_modeuid = cred->cr_uid;
+		np->n_modestamp = time_second;
+		}
+	nfsm_reqdone;
+	return error;
 }
 
 /*
@@ -436,10 +558,10 @@ nfs_access(ap)
 	} */ *ap;
 {
 	register struct vnode *vp = ap->a_vp;
-        int error = 0;
-        u_long mode, wmode;
+	int error = 0;
+	u_long mode, wmode;
 	int v3 = NFS_ISV3(vp);
-        struct nfsnode *np = VTONFS(vp);
+	struct nfsnode *np = VTONFS(vp);
 
 	/*
 	 * For nfs v3, do an access rpc, otherwise you are stuck emulating
@@ -466,53 +588,52 @@ nfs_access(ap)
 			if (ap->a_mode & VEXEC)
 				mode |= NFSV3ACCESS_EXECUTE;
 		}
-                /* XXX safety belt, only make blanket request if caching */
-                if (nfsaccess_cache_timeout > 0) {
-                        wmode = NFSV3ACCESS_READ | NFSV3ACCESS_MODIFY |
-                                NFSV3ACCESS_EXTEND | NFSV3ACCESS_EXECUTE |
-                                NFSV3ACCESS_DELETE | NFSV3ACCESS_LOOKUP;
-                } else {
-                        wmode = mode;
-                }
+		/* XXX safety belt, only make blanket request if caching */
+		if (nfsaccess_cache_timeout > 0) {
+			wmode = NFSV3ACCESS_READ | NFSV3ACCESS_MODIFY |
+					NFSV3ACCESS_EXTEND | NFSV3ACCESS_EXECUTE |
+					NFSV3ACCESS_DELETE | NFSV3ACCESS_LOOKUP;
+		} else
+			wmode = mode;
                 
-                /*
-                 * Does our cached result allow us to give a definite yes to
-                 * this request?
-                 */     
-                if ((time_second < (np->n_modestamp + nfsaccess_cache_timeout)) &&
-                    (ap->a_cred->cr_uid == np->n_modeuid) &&
-                    ((np->n_mode & mode) == mode)) {
-                        /* nfsstats.accesscache_hits++; */
-                } else {
-                        /*
-                         * Either a no, or a don't know.  Go to the wire.
-                         */
-                       /* nfsstats.accesscache_misses++; */
-                       error = nfs3_access_otw(vp, wmode, ap->a_p,ap->a_cred);
-                       if (!error) {
-                            if ((np->n_mode & mode) != mode)
-				error = EACCES;
-                        }
-                }
+		/*
+		 * Does our cached result allow us to give a definite yes to
+		 * this request?
+		 */     
+		if ((time_second < (np->n_modestamp + nfsaccess_cache_timeout)) &&
+			(ap->a_cred->cr_uid == np->n_modeuid) &&
+			((np->n_mode & mode) == mode)) {
+			/* nfsstats.accesscache_hits++; */
+		} else {
+			/*
+			 * Either a no, or a don't know.  Go to the wire.
+			 */
+			/* nfsstats.accesscache_misses++; */
+			error = nfs3_access_otw(vp, wmode, ap->a_p,ap->a_cred);
+			if (!error) {
+				if ((np->n_mode & mode) != mode)
+					error = EACCES;
+					}
+				}
 	} else
-		return (nfsspec_access(ap)); /* NFSv2 case checks for EROFS here*/
-	/* CSM - moved EROFS check down per NetBSD rev 1.71.  So you
-	 * get the correct error value with layered filesystems. 
-         * EKN - moved the return(error) below this so it does get called.*/
+		return (nfsspec_access(ap)); /* NFSv2 case checks for EROFS here */
 	/*
 	 * Disallow write attempts on filesystems mounted read-only;
 	 * unless the file is a socket, fifo, or a block or character
 	 * device resident on the filesystem.
+	 * CSM - moved EROFS check down per NetBSD rev 1.71.  So you
+	 * get the correct error value with layered filesystems. 
+	 * EKN - moved the return(error) below this so it does get called.	 
 	 */
 	if (!error && (ap->a_mode & VWRITE) && (vp->v_mount->mnt_flag & MNT_RDONLY)) {
 		switch (vp->v_type) {
-		case VREG: case VDIR: case VLNK:
-			error = EROFS;
-                default: 
-                        break;
+			case VREG: case VDIR: case VLNK:
+				error = EROFS;
+			default: 
+				break;
+			}
 		}
-	}
-        return (error);
+	return (error);
 }
 
 /*
@@ -1011,7 +1132,7 @@ nfs_lookup(ap)
 	int lockparent, wantparent, error = 0, attrflag, fhsize;
 	int v3 = NFS_ISV3(dvp);
 	struct proc *p = cnp->cn_proc;
-        int worldbuildworkaround = 1;
+	int worldbuildworkaround = 1;
 
 	if ((flags & ISLASTCN) && (dvp->v_mount->mnt_flag & MNT_RDONLY) &&
 	    (cnp->cn_nameiop == DELETE || cnp->cn_nameiop == RENAME))
@@ -1024,19 +1145,21 @@ nfs_lookup(ap)
 	nmp = VFSTONFS(dvp->v_mount);
 	np = VTONFS(dvp);
         
-        if (worldbuildworkaround) {
-        /* temporary workaround for world builds to not have dvp go
-            VBAD on during server calls in this routine. When
-            the real ref counting problem is found take this out.
-            Note if this was later and before the nfsm_request
-            set up, the workaround did not work (NOTE other difference
-            was I only put one VREF in that time. Thus it needs
-            to be above the cache_lookup branch or with 2 VREFS. Not
-            sure which. Can't play with world builds right now to see
-            which.  VOP_ACCESS could also make it go to server.  - EKN */
-            VREF(dvp);   /* hang on to this dvp - EKN */
-            VREF(dvp);   /* hang on tight - EKN  */
-        }
+	if (worldbuildworkaround) {
+		/* 
+		 * Temporary workaround for world builds to not have dvp go
+		 * VBAD on during server calls in this routine. When
+		 * the real ref counting problem is found take this out.
+		 * Note if this was later and before the nfsm_request
+		 * set up, the workaround did not work (NOTE other difference
+		 * was I only put one VREF in that time. Thus it needs
+		 * to be above the cache_lookup branch or with 2 VREFS. Not
+		 * sure which. Can't play with world builds right now to see
+		 * which.  VOP_ACCESS could also make it go to server.  - EKN
+		 */
+		VREF(dvp);   /* hang on to this dvp - EKN */
+		VREF(dvp);   /* hang on tight - EKN  */
+		}
 
 	if ((error = cache_lookup(dvp, vpp, cnp)) && error != ENOENT) {
 		struct vattr vattr;
@@ -1044,21 +1167,14 @@ nfs_lookup(ap)
 
 		if ((error = VOP_ACCESS(dvp, VEXEC, cnp->cn_cred, p))) {
 			*vpp = NULLVP;
-                        if (worldbuildworkaround) {
-                            vrele(dvp);  /* end of hanging on tight to dvp - EKN */
-                            vrele(dvp);  /* end of hanging on tight to dvp - EKN */
-                        }
-			return (error);
-		}
+			goto error_return;
+			}
                 
-                /* got to check to make sure the vnode didn't go away if access went to server */
-                if ((*vpp)->v_type == VBAD) {
-                       if (worldbuildworkaround) {
-                            vrele(dvp);  /* end of hanging on tight to dvp - EKN */
-                            vrele(dvp);  /* end of hanging on tight to dvp - EKN */
-                        }
-                        return(EINVAL);
-                }
+		/* got to check to make sure the vnode didn't go away if access went to server */
+		if ((*vpp)->v_type == VBAD) {
+			error = EINVAL;
+			goto error_return;
+			}
 
 		newvp = *vpp;
 		vpid = newvp->v_id;
@@ -1082,47 +1198,33 @@ nfs_lookup(ap)
 		if (!error) {
 			if (vpid == newvp->v_id) {
 			   if (!VOP_GETATTR(newvp, &vattr, cnp->cn_cred, p)
-			    && vattr.va_ctime.tv_sec == VTONFS(newvp)->n_ctime) {
-				nfsstats.lookupcache_hits++;
-				if (cnp->cn_nameiop != LOOKUP &&
-				    (flags & ISLASTCN))
-					cnp->cn_flags |= SAVENAME;
-                                        
-                                if (worldbuildworkaround) {
-                                    vrele(dvp);  /* end of hanging on tight to dvp - EKN */
-                                    vrele(dvp);  /* end of hanging on tight to dvp - EKN */
-                                }
-                                
-				return (0);
-			   }
-			   cache_purge(newvp);
-                        }
+					&& vattr.va_ctime.tv_sec == VTONFS(newvp)->n_ctime) {
+					nfsstats.lookupcache_hits++;
+					if (cnp->cn_nameiop != LOOKUP && (flags & ISLASTCN))
+						cnp->cn_flags |= SAVENAME;
+					error = 0; /* ignore any from VOP_GETATTR  */
+					goto error_return;
+				}
+				cache_purge(newvp);
+			}
 			vput(newvp);
 			if (lockparent && dvp != newvp && (flags & ISLASTCN))
 				VOP_UNLOCK(dvp, 0, p);
 		}
 		error = vn_lock(dvp, LK_EXCLUSIVE, p);
 		*vpp = NULLVP;
-		if (error) {
-                        if (worldbuildworkaround) {
-                            vrele(dvp);  /* end of hanging on tight to dvp - EKN */
-                            vrele(dvp);  /* end of hanging on tight to dvp - EKN */
-                        }
-			return (error);
-                }
+		if (error) 
+			goto error_return;
 	}
         
 	/* 
-         * Got to check to make sure the vnode didn't go away if VOP_GETATTR went to server
+	 * Got to check to make sure the vnode didn't go away if VOP_GETATTR went to server
 	 * or callers prior to this blocked and had it go VBAD.
-         */
-	if (dvp->v_type == VBAD) {                   
-            if (worldbuildworkaround) {
-                vrele(dvp);  /* end of hanging on tight to dvp - EKN */
-                vrele(dvp);  /* end of hanging on tight to dvp - EKN */
-                }
-            return(EINVAL);
-        }
+	 */
+	if (dvp->v_type == VBAD) { 
+		error = EINVAL;
+		goto error_return;
+	}
 
 	error = 0;
 	newvp = NULLVP;
@@ -1133,16 +1235,8 @@ nfs_lookup(ap)
 		NFSX_FH(v3) + NFSX_UNSIGNED + nfsm_rndup(len));
 	nfsm_fhtom(dvp, v3);
 	nfsm_strtom(cnp->cn_nameptr, len, NFS_MAXNAMLEN);
-	nfsm_request(dvp, NFSPROC_LOOKUP, cnp->cn_proc, cnp->cn_cred);
-        
-        /* this two lines set dvp refcounts back to where they were
-        * before we took extra 2 VREFS to avoid VBAD vnode on dvp
-        * during server calls for world builds. Remove when real
-        * fix is found. - EKN */
-        if (worldbuildworkaround) {
-            vrele(dvp);  /* end of hanging on tight to dvp - EKN */
-            vrele(dvp);  /* end of hanging on tight to dvp - EKN */
-            }
+	/* nfsm_request for NFSv2 causes you to goto to nfsmout upon errors */
+	nfsm_request(dvp, NFSPROC_LOOKUP, cnp->cn_proc, cnp->cn_cred); 
 
 	if (error) {
 		nfsm_postop_attr(dvp, attrflag);
@@ -1157,11 +1251,12 @@ nfs_lookup(ap)
 	if (cnp->cn_nameiop == RENAME && wantparent && (flags & ISLASTCN)) {
 		if (NFS_CMPFH(np, fhp, fhsize)) {
 			m_freem(mrep);
-			return (EISDIR);
+			error = EISDIR;
+			goto error_return;
 		}
 		if ((error = nfs_nget(dvp->v_mount, fhp, fhsize, &np))) {
 			m_freem(mrep);
-			return (error);
+			goto error_return;
 		}
 		newvp = NFSTOV(np);
 		if (v3) {
@@ -1174,7 +1269,8 @@ nfs_lookup(ap)
 		cnp->cn_flags |= SAVENAME;
 		if (!lockparent)
 			VOP_UNLOCK(dvp, 0, p);
-		return (0);
+		error = 0;
+		goto error_return;
 	}
 
 	if (flags & ISDOTDOT) {
@@ -1182,13 +1278,13 @@ nfs_lookup(ap)
 		error = nfs_nget(dvp->v_mount, fhp, fhsize, &np);
 		if (error) {
 			vn_lock(dvp, LK_EXCLUSIVE + LK_RETRY, p);
-			return (error);
+			goto error_return;
 		}
 		newvp = NFSTOV(np);
 		if (lockparent && (flags & ISLASTCN) &&
 		    (error = vn_lock(dvp, LK_EXCLUSIVE, p))) {
 		    	vput(newvp);
-			return (error);
+			goto error_return;
 		}
 	} else if (NFS_CMPFH(np, fhp, fhsize)) {
 		VREF(dvp);
@@ -1196,7 +1292,7 @@ nfs_lookup(ap)
 	} else {
 		if ((error = nfs_nget(dvp->v_mount, fhp, fhsize, &np))) {
 			m_freem(mrep);
-			return (error);
+			goto error_return;
 		}
 		if (!lockparent || !(flags & ISLASTCN))
 			VOP_UNLOCK(dvp, 0, p);
@@ -1233,6 +1329,18 @@ nfs_lookup(ap)
 		if (cnp->cn_nameiop != LOOKUP && (flags & ISLASTCN))
 			cnp->cn_flags |= SAVENAME;
 	}
+error_return:
+	/*
+	 * These "vreles" set dvp refcounts back to where they were
+	 * before we took extra 2 VREFS to avoid VBAD vnode on dvp
+	 * during server calls for world builds. Remove when real
+	 * fix is found. - EKN 
+	 */
+	if (worldbuildworkaround) {
+		vrele(dvp);  /* end of hanging on tight to dvp - EKN */
+		vrele(dvp);  /* end of hanging on tight to dvp - EKN */
+	}
+
 	return (error);
 }
 
@@ -1803,17 +1911,12 @@ nfs_remove(ap)
 	np->n_attrstamp = 0;
 	vput(dvp);
 
+	VOP_UNLOCK(vp, 0, cnp->cn_proc);
 
-	if (vp == dvp)
-		vrele(vp);
-	else
-		vput(vp);
+	if (file_deleted)
+		ubc_uncache(vp);
 
-	if (file_deleted && UBCINFOEXISTS(vp)) {
-		(void) ubc_uncache(vp); 
-		ubc_release(vp);
-		/* WARNING vp may not be valid after this */
-	}
+	vrele(vp);
 
 	return (error);
 }
@@ -1858,11 +1961,11 @@ nfs_removerpc(dvp, name, namelen, cred, proc)
 	if (v3)
 		nfsm_wcc_data(dvp, wccflag);
 	nfsm_reqdone;
-        if (dvp->v_type != VBAD) { /* EINVAL set on VBAD vnode */
-            VTONFS(dvp)->n_flag |= NMODIFIED;
-            if (!wccflag)
-		VTONFS(dvp)->n_attrstamp = 0;
-        }
+	if (dvp->v_type != VBAD) { /* EINVAL set on VBAD vnode */
+		VTONFS(dvp)->n_flag |= NMODIFIED;
+		if (!wccflag)
+			VTONFS(dvp)->n_attrstamp = 0;
+		}
 	return (error);
 }
 
@@ -1906,7 +2009,7 @@ nfs_rename(ap)
 	 * XXX Can't sillyrename a directory.
 	 */
 	if (tvp && (tvp->v_usecount>(UBCISVALID(tvp) ? 2 : 1)) &&
-                !VTONFS(tvp)->n_sillyrename &&
+			!VTONFS(tvp)->n_sillyrename &&
 		tvp->v_type != VDIR && !nfs_sillyrename(tdvp, tvp, tcnp)) {
 		vput(tvp);
 		tvp = NULL;
@@ -2197,11 +2300,11 @@ nfs_mkdir(ap)
 	if (v3)
 		nfsm_wcc_data(dvp, wccflag);
 	nfsm_reqdone;
-        if (dvp->v_type != VBAD) { /* EINVAL set on this case */
-            VTONFS(dvp)->n_flag |= NMODIFIED;
-            if (!wccflag)
-		VTONFS(dvp)->n_attrstamp = 0;
-        }
+	if (dvp->v_type != VBAD) { /* EINVAL set on this case */
+		VTONFS(dvp)->n_flag |= NMODIFIED;
+		if (!wccflag)
+			VTONFS(dvp)->n_attrstamp = 0;
+		}
 	/*
 	 * Kludge: Map EEXIST => 0 assuming that you have a reply to a retry
 	 * if we can succeed in looking up the directory.
@@ -3068,17 +3171,16 @@ nfs_flush(vp, cred, waitfor, p, commit)
 	u_quad_t off, endoff, toff;
 	struct ucred* wcred = NULL;
 	struct buf **bvec = NULL;
-        void * object;
-        kern_return_t kret;
-        upl_t *upls = NULL;
+	kern_return_t kret;
+	upl_t *upls = NULL;
 
 
 #ifndef NFS_COMMITBVECSIZ
 #define NFS_COMMITBVECSIZ	20
 #endif
 	struct buf *bvec_on_stack[NFS_COMMITBVECSIZ];
-        struct upl_t *upls_on_stack[NFS_COMMITBVECSIZ]; 
-        int bvecsize = 0, bveccount, buplpos;
+	struct upl_t *upls_on_stack[NFS_COMMITBVECSIZ]; 
+	int bvecsize = 0, bveccount, buplpos;
 
 	if (nmp->nm_flag & NFSMNT_INT)
 		slpflag = PCATCH;
@@ -3098,7 +3200,7 @@ again:
 	off = (u_quad_t)-1;
 	endoff = 0;
 	bvecpos = 0;
-        buplpos = 0;
+	buplpos = 0;
 	if (NFS_ISV3(vp) && commit) {
 		s = splbio();
 		/*
@@ -3117,31 +3219,29 @@ again:
 		 * If we can't get memory (for whatever reason), we will end up
 		 * committing the buffers one-by-one in the loop below.
 		 */
-		if (bveccount > NFS_COMMITBVECSIZ) {
-			if (bvec != NULL && bvec != bvec_on_stack)
+		if (bvec != NULL && bvec != bvec_on_stack)
 				_FREE(bvec, M_TEMP);
+		if (upls != NULL && upls != (upl_t *) upls_on_stack)
+				_FREE(upls, M_TEMP);
+				
+		bvecsize = NFS_COMMITBVECSIZ;
+		if (bveccount > NFS_COMMITBVECSIZ) {
 			MALLOC(bvec, struct buf **,
-			       bveccount * sizeof(struct buf *), M_TEMP, M_NOWAIT);
-			if (bvec == NULL) {
+					bveccount * sizeof(struct buf *), M_TEMP, M_NOWAIT);
+			MALLOC(upls, upl_t *,
+					bveccount * sizeof(upl_t), M_TEMP, M_NOWAIT);
+			if ((bvec == NULL) || (upls == NULL)) {
+				if (bvec) 
+					_FREE(bvec, M_TEMP);
+				if (upls)
+					_FREE(upls, M_TEMP);
 				bvec = bvec_on_stack;
-				bvecsize = NFS_COMMITBVECSIZ;
+				upls = (upl_t *) upls_on_stack;
 			} else
 				bvecsize = bveccount;
-                        /* allocate the upl structure before the loop based on buffers to commit */
-			if (upls != NULL && upls != upls_on_stack)
-               			_FREE(upls, M_TEMP);
-			MALLOC(upls, struct upl_t *,
-                            bveccount * sizeof(upl_t), M_TEMP, M_NOWAIT);
-                        if (upls == NULL)
-                            upls = upls_on_stack;
 		} else {
-			if (bvec && bvec != bvec_on_stack)
-				_FREE(bvec, M_TEMP);
 			bvec = bvec_on_stack;
-			bvecsize = NFS_COMMITBVECSIZ;
-			if (upls && upls != upls_on_stack)
-               			_FREE(upls, M_TEMP);
-                        upls = upls_on_stack;
+			upls = (upl_t *) upls_on_stack;
 		}
 
 		for (bp = vp->v_dirtyblkhd.lh_first; bp; bp = nbp) {
@@ -3163,27 +3263,22 @@ again:
 			SET(bp->b_flags, (B_BUSY | B_WRITEINPROG));
 
 			/*
-			 * we need vm_fault_list_request so if vm decides to
+			 * we need ubc_create_upl so if vm decides to
 			 * do paging while we are waiting on commit rpc,
 			 * that it doesn't pick these pages.
 			 */
 			if (!ISSET(bp->b_flags, B_PAGELIST)) {
-				/* if pagelist exists, assume vm pages are locked/busy already */				off_t file_offset = ubc_blktooff(vp, bp->b_lblkno);
-				object = ubc_getobject(vp, (UBC_NOREACTIVATE|UBC_HOLDOBJECT));
-				if (object == (void*)NULL)
-					panic("nfs_getcacheblk: NULL vmobject");
-				if(bp->b_bufsize & 0xfff)
-					panic("nfs_getcacheblk: list request is less than 4k");
-				kret = vm_fault_list_request(
-						object, (vm_object_offset_t)file_offset,
-						bp->b_bufsize, &(upls[buplpos]), NULL, 0,
-						(int)(UPL_NO_SYNC | UPL_CLEAN_IN_PLACE |UPL_PRECIOUS |
-						UPL_SET_INTERNAL));
+				kret = ubc_create_upl(vp,
+								ubc_blktooff(vp, bp->b_lblkno),
+								bp->b_bufsize,
+								&(upls[buplpos]),
+								NULL,	  
+								UPL_PRECIOUS);
 				if (kret != KERN_SUCCESS) 
 					panic("nfs_getcacheblk: get pagelists failed with (%d)", kret);
                                     
 #ifdef UBC_DEBUG
-				upl_ubc_alias_set(pl, ioaddr, 1);
+				upl_ubc_alias_set(upls[buplpos], ioaddr, 1);
 #endif /* UBC_DEBUG */
 				buplpos++; /* not same as bvecpos if upl existed already */
 			}
@@ -3234,19 +3329,20 @@ again:
 		if (retv == NFSERR_STALEWRITEVERF)
 			nfs_clearcommit(vp->v_mount);
                         
-                for (i = 0; i < buplpos; i++) {
-                    /*
-                    * before the VOP_BWRITE and biodone(ASYNC)/brelse, we have to undo
-                    * holding the vm page or we we will deadlock on another vm_fault_list_request.
-                    * Here's a convenient place to put it. 
-                    * Better if we could hold it by setting the PAGELIST flag and kernel_upl_map
-                    * as does nfs_writebp. Then normal biodones and brelse will clean it up and 
-                    * we can avoid this abort. For now make minimal changse and test this out.
-                    */
-                    err = kernel_upl_abort(upls[i], NULL); 
-                    if (err)
-                        printf("nfs_flush: kernel_upl_abort %d\n", err);
-                    }
+        for (i = 0; i < buplpos; i++) {
+			/*
+			 * Before the VOP_BWRITE and biodone(ASYNC)/brelse, we have to undo
+			 * holding the vm page or we we will deadlock on another vm_fault_list_request.
+			 * Here's a convenient place to put it. 
+			 * Better if we could hold it by setting the PAGELIST flag and kernel_upl_map
+			 * as does nfs_writebp. Then normal biodones and brelse will clean it up and 
+			 * we can avoid this abort. For now make minimal changes.
+			 */
+			err = ubc_upl_abort(upls[i], NULL); 
+			if (err)
+				printf("nfs_flush: kernel_upl_abort %d\n", err);
+		}
+
 
 		/*
 		 * Now, either mark the blocks I/O done or mark the
@@ -3275,10 +3371,10 @@ again:
 
 	/*
 	 * Start/do any write(s) that are required.
-         * There is a window here where B_BUSY protects the buffer. The vm pages have been
-         * freed up, yet B_BUSY is set. Don't think you will hit any busy/incore problems while
-         * we sleep, but not absolutely sure. Keep an eye on it. Otherwise we will have to hold
-         * vm page across this locked. - EKN
+	 * There is a window here where B_BUSY protects the buffer. The vm pages have been
+	 * freed up, yet B_BUSY is set. Don't think you will hit any busy/incore problems while
+	 * we sleep, but not absolutely sure. Keep an eye on it. Otherwise we will have to hold
+	 * vm page across this locked. - EKN
 	 */
 loop:
 	if (current_thread_aborted()) {
@@ -3313,9 +3409,9 @@ loop:
 			continue;
 		bremfree(bp);
 		if (passone || !commit)
-		    SET(bp->b_flags, (B_BUSY|B_ASYNC));
+            SET(bp->b_flags, (B_BUSY|B_ASYNC));
 		else
-		    SET(bp->b_flags, (B_BUSY|B_ASYNC|B_WRITEINPROG|B_NEEDCOMMIT));
+            SET(bp->b_flags, (B_BUSY|B_ASYNC|B_WRITEINPROG|B_NEEDCOMMIT));
 
 		splx(s);
 		VOP_BWRITE(bp);
@@ -3353,8 +3449,8 @@ loop:
 done:
 	if (bvec != NULL && bvec != bvec_on_stack)
 		_FREE(bvec, M_TEMP);
-        if (upls != NULL && upls != upls_on_stack)
-                _FREE(upls, M_TEMP);
+	if (upls != NULL && upls != (upl_t *) upls_on_stack)
+        _FREE(upls, M_TEMP);
 	return (error);
 }
 
@@ -3617,7 +3713,6 @@ nfs_writebp(bp, force)
 	register int oldflags = bp->b_flags, retv = 1;
 	off_t off;
 	upl_t upl;
-	void * object;
 	kern_return_t kret;
 	struct vnode *vp = bp->b_vp;
 	upl_page_info_t *pl;
@@ -3645,52 +3740,44 @@ nfs_writebp(bp, force)
         if (!ISSET(bp->b_flags, B_META) && UBCISVALID(vp)) {
     
             if (!ISSET(bp->b_flags, B_PAGELIST)) {
-
-				off_t file_offset = ubc_blktooff(vp, bp->b_lblkno);
-
-				object = ubc_getobject(vp, (UBC_NOREACTIVATE|UBC_HOLDOBJECT));
-				if (object == (void*)NULL)
-					panic("nfs_writebp: NULL vmobject");
-
-				if(bp->b_bufsize & 0xfff)
-					panic("nfs_writebp: list request is with less than 4k");
-	
-				kret = vm_fault_list_request(object, (vm_object_offset_t)file_offset, 
-							bp->b_bufsize, &upl, NULL, 0, 
-							(int)(UPL_NO_SYNC | UPL_CLEAN_IN_PLACE | UPL_PRECIOUS | UPL_SET_INTERNAL));
+				kret = ubc_create_upl(vp,
+								ubc_blktooff(vp, bp->b_lblkno),
+								bp->b_bufsize,
+								&upl,
+								&pl,
+								UPL_PRECIOUS);
 				if (kret != KERN_SUCCESS) {
 					panic("nfs_writebp: get pagelists failed with (%d)", kret);
 				}
                     
 #ifdef UBC_DEBUG
-                    upl_ubc_alias_set(pl, ioaddr, 2);
+				upl_ubc_alias_set(upl, ioaddr, 2);
 #endif /* UBC_DEBUG */
 
-                    s = splbio();
+				s = splbio();
 
-                    pl = UPL_GET_INTERNAL_PAGE_LIST(upl);
-                    bp->b_pagelist = upl;
-                    SET(bp->b_flags, B_PAGELIST);
-                    splx(s);
+				bp->b_pagelist = upl;
+				SET(bp->b_flags, B_PAGELIST);
+				splx(s);
                     
-                    kret = kernel_upl_map(kernel_map, upl, 
-                            (vm_address_t *)&(bp->b_data));
-                    if (kret != KERN_SUCCESS) {
-                            panic("nfs_writebp: kernel_upl_map() failed with (%d)", kret);
-                    }
-                    if(bp->b_data == 0) 
-                            panic("nfs_writebp: upl_map mapped 0");
-                    if (!upl_page_present(pl, 0)) {
-                            /* 
-                                * may be the page got paged out.
-                                * let's just read it in. It is marked
-                                * busy so we should not have any one
-                                * yanking this page underneath the fileIO
-                                */
-                            panic("nfs_writebp: nopage");
-                    }
-            }
-        }
+				kret = ubc_upl_map(upl, (vm_address_t *)&(bp->b_data));
+				if (kret != KERN_SUCCESS) {
+					panic("nfs_writebp: ubc_upl_map() failed with (%d)", kret);
+				}
+				if(bp->b_data == 0) 
+					panic("nfs_writebp: upl_map mapped 0");
+
+				if (!upl_page_present(pl, 0)) {
+					/* 
+					 * may be the page got paged out.
+					 * let's just read it in. It is marked
+					 * busy so we should not have any one
+					 * yanking this page underneath the fileIO
+					 */
+					panic("nfs_writebp: nopage");
+				}
+		}
+	}
 
 	/*
 	 * If B_NEEDCOMMIT is set, a commit rpc may do the trick. If not
@@ -3714,9 +3801,7 @@ nfs_writebp(bp, force)
 	if (retv) {
 		if (force)
 			SET(bp->b_flags, B_WRITEINPROG);
-                
-                VOP_STRATEGY(bp);
-                
+		VOP_STRATEGY(bp);
 	} 
         
 	if( (oldflags & B_ASYNC) == 0) {
@@ -4052,7 +4137,7 @@ nfs_pagein(ap)
 	if (f_offset < 0 || f_offset >= np->n_size 
 					|| (f_offset & PAGE_MASK_64)) {
 		if (!nocommit)
-			kernel_upl_abort_range(pl, pl_offset, size, 
+			ubc_upl_abort_range(pl, pl_offset, size, 
 				UPL_ABORT_ERROR | UPL_ABORT_FREE_ON_EMPTY);
 		return (EINVAL);
 	}
@@ -4098,10 +4183,8 @@ nfs_pagein(ap)
 			error = VOP_GETATTR(vp, &vattr, cred, p);
 			if (error) {
 				if (!nocommit)
-					kernel_upl_abort_range(pl, pl_offset, 
-						size, 
-						UPL_ABORT_ERROR |
-						UPL_ABORT_FREE_ON_EMPTY);
+					ubc_upl_abort_range(pl, pl_offset, size, 
+							UPL_ABORT_ERROR | UPL_ABORT_FREE_ON_EMPTY);
 				return (error);
 			}
 			np->n_mtime = vattr.va_mtime.tv_sec;
@@ -4109,18 +4192,16 @@ nfs_pagein(ap)
 			error = VOP_GETATTR(vp, &vattr, cred, p);
 			if (error){
 				if (!nocommit)
-					kernel_upl_abort_range(pl, pl_offset, size,  
-						UPL_ABORT_ERROR |
-						UPL_ABORT_FREE_ON_EMPTY);
+					ubc_upl_abort_range(pl, pl_offset, size,  
+							UPL_ABORT_ERROR | UPL_ABORT_FREE_ON_EMPTY);
 				return (error);
 			}
 			if (np->n_mtime != vattr.va_mtime.tv_sec) {
 				error = nfs_vinvalbuf(vp, V_SAVE, cred, p, 1);
 				if (error){
 				        if (!nocommit)
-					        kernel_upl_abort_range(pl, pl_offset, size, 
-								UPL_ABORT_ERROR |
-								UPL_ABORT_FREE_ON_EMPTY);
+					        ubc_upl_abort_range(pl, pl_offset, size, 
+								UPL_ABORT_ERROR | UPL_ABORT_FREE_ON_EMPTY);
 					return (error);
 				}
 				np->n_mtime = vattr.va_mtime.tv_sec;
@@ -4129,7 +4210,7 @@ nfs_pagein(ap)
 	}
 #endif 0 /* Why bother? */
 
-	kernel_upl_map(kernel_map, pl, &ioaddr);
+	ubc_upl_map(pl, &ioaddr);
 	ioaddr += pl_offset;
 	xsize = size;
 
@@ -4154,11 +4235,10 @@ nfs_pagein(ap)
 					error = nqnfs_getlease(vp, ND_READ, cred, p);
 				} while (error == NQNFS_EXPIRED);
 				if (error){
-					kernel_upl_unmap(kernel_map, pl);
+					ubc_upl_unmap(pl);
 					if (!nocommit)
-						kernel_upl_abort_range(pl, pl_offset,
-							size ,UPL_ABORT_ERROR |
-						UPL_ABORT_FREE_ON_EMPTY);
+						ubc_upl_abort_range(pl, pl_offset, size,
+								UPL_ABORT_ERROR | UPL_ABORT_FREE_ON_EMPTY);
 
 					return (error);
 				}
@@ -4166,10 +4246,9 @@ nfs_pagein(ap)
 					(np->n_flag & NQNFSNONCACHE)) {
 					error = nfs_vinvalbuf(vp, V_SAVE, cred, p, 1);
 					if (error) {
-						kernel_upl_unmap(kernel_map, pl);
+						ubc_upl_unmap(pl);
 					if (!nocommit)
-						kernel_upl_abort_range(pl,
-								pl_offset,size ,
+						ubc_upl_abort_range(pl,	pl_offset, size,
 								UPL_ABORT_ERROR | UPL_ABORT_FREE_ON_EMPTY);
 						return (error);
 					}
@@ -4181,19 +4260,15 @@ nfs_pagein(ap)
 
 		if (np->n_flag & NQNFSNONCACHE) {
 			error = nfs_readrpc(vp, uio, cred);
-			kernel_upl_unmap(kernel_map, pl);
+			ubc_upl_unmap(pl);
 
 			if (!nocommit) {
 				if(error) 
-					kernel_upl_abort_range(pl, pl_offset, size ,
+					ubc_upl_abort_range(pl, pl_offset, size,
 						UPL_ABORT_ERROR | UPL_ABORT_FREE_ON_EMPTY);
 				else
-					kernel_upl_commit_range(pl, 
-						pl_offset, size, 
-						UPL_COMMIT_CLEAR_DIRTY 
-						   | UPL_COMMIT_FREE_ON_EMPTY,
-						UPL_GET_INTERNAL_PAGE_LIST(pl),
-						MAX_UPL_TRANSFER);
+					ubc_upl_commit_range(pl, pl_offset, size, 
+						UPL_COMMIT_CLEAR_DIRTY | UPL_COMMIT_FREE_ON_EMPTY);
 			}
 			return (error);
 		}
@@ -4247,22 +4322,21 @@ nfs_pagein(ap)
 
 	} while (error == 0 && xsize > 0);
 
-	kernel_upl_unmap(kernel_map, pl);
+	ubc_upl_unmap(pl);
 
 	if (!nocommit) {
 		if (error) 
-			kernel_upl_abort_range(pl, pl_offset, size, 
-				UPL_ABORT_ERROR |  UPL_ABORT_FREE_ON_EMPTY);
+			ubc_upl_abort_range(pl, pl_offset, size, 
+					UPL_ABORT_ERROR |  UPL_ABORT_FREE_ON_EMPTY);
 		else
-			kernel_upl_commit_range(pl, pl_offset, size,
-				UPL_COMMIT_CLEAR_DIRTY 
-						| UPL_COMMIT_FREE_ON_EMPTY,
-				UPL_GET_INTERNAL_PAGE_LIST(pl), 
-				MAX_UPL_TRANSFER);
+			ubc_upl_commit_range(pl, pl_offset, size,
+					UPL_COMMIT_CLEAR_DIRTY | UPL_COMMIT_FREE_ON_EMPTY);
 	}
 
 	return (error);
 }
+
+
 
 /*
  * Vnode op for pageout using UPL
@@ -4329,10 +4403,10 @@ nfs_pageout(ap)
 	 * will be the same size within a filesystem. nfs_writerpc will
 	 * still use nm_wsize when sizing the rpc's.
 	 */
-        biosize = min(vp->v_mount->mnt_stat.f_iosize, size);
+	biosize = min(vp->v_mount->mnt_stat.f_iosize, size);
 
-        if (biosize & PAGE_MASK)
-                panic("nfs_pageout(%x): biosize not page aligned", biosize);
+	if (biosize & PAGE_MASK)
+		panic("nfs_pageout(%x): biosize not page aligned", biosize);
 
 
 	/*
@@ -4342,17 +4416,17 @@ nfs_pageout(ap)
 	 * vm_fault_list_request in 'getblk' before returning
 	 * which would block on the page busy status
 	 */
-        lbn = f_offset / PAGE_SIZE; /* to match the size getblk uses */
+	lbn = f_offset / PAGE_SIZE; /* to match the size getblk uses */
         
 	for (iosize = size; iosize > 0; iosize -= PAGE_SIZE, lbn++) {
 
 		s = splbio();
 		if (bp = incore(vp, lbn)) {
 			if (ISSET(bp->b_flags, B_BUSY)) {
-                                /* don't panic incore. just tell vm we are busy */
-				(void) kernel_upl_abort(pl, NULL); 
-                                return(EBUSY);
-                                };
+				/* don't panic incore. just tell vm we are busy */
+				(void) ubc_upl_abort(pl, NULL); 
+				return(EBUSY);
+			};
 
 			bremfree(bp);
 			SET(bp->b_flags, (B_BUSY | B_INVAL));
@@ -4368,8 +4442,7 @@ nfs_pageout(ap)
 	if (np->n_flag & NWRITEERR) {
 		np->n_flag &= ~NWRITEERR;
 		if (!nocommit)
-			kernel_upl_abort_range(pl, pl_offset, size, 
-				UPL_ABORT_FREE_ON_EMPTY);
+			ubc_upl_abort_range(pl, pl_offset, size, UPL_ABORT_FREE_ON_EMPTY);
 		return (np->n_error);
 	}
 	if ((nmp->nm_flag & (NFSMNT_NFSV3 | NFSMNT_GOTFSINFO)) == NFSMNT_NFSV3)
@@ -4378,12 +4451,11 @@ nfs_pageout(ap)
 	if (f_offset < 0 || f_offset >= np->n_size ||
 	   (f_offset & PAGE_MASK_64) || (size & PAGE_MASK)) {
 		if (!nocommit)
-			kernel_upl_abort_range(pl, pl_offset, size, 
-				UPL_ABORT_FREE_ON_EMPTY);
+			ubc_upl_abort_range(pl, pl_offset, size, UPL_ABORT_FREE_ON_EMPTY);
 		return (EINVAL);
 	}
 
-	kernel_upl_map(kernel_map, pl, &ioaddr);
+	ubc_upl_map(pl, &ioaddr);
 
 	if ((f_offset + size) > np->n_size)
 		iosize = np->n_size - f_offset;
@@ -4394,8 +4466,8 @@ nfs_pageout(ap)
 
 	if (size > pgsize) {
 		if (!nocommit)
-			kernel_upl_abort_range(pl, pl_offset + pgsize, size - pgsize,
-				UPL_ABORT_FREE_ON_EMPTY);
+			ubc_upl_abort_range(pl, pl_offset + pgsize, size - pgsize,
+					UPL_ABORT_FREE_ON_EMPTY);
 	}
 	auio.uio_iov = &aiov;
 	auio.uio_iovcnt = 1;
@@ -4438,21 +4510,20 @@ nfs_pageout(ap)
 				error = nqnfs_getlease(vp, ND_WRITE, cred, p);
 			} while (error == NQNFS_EXPIRED);
 			if (error) {
-				kernel_upl_unmap(kernel_map, pl);
+				ubc_upl_unmap(pl);
 				if (!nocommit)
-					kernel_upl_abort_range(pl, pl_offset, size, 
-						UPL_ABORT_FREE_ON_EMPTY);
+					ubc_upl_abort_range(pl, pl_offset, size, 
+							UPL_ABORT_FREE_ON_EMPTY);
 				return (error);
 			}
 			if (np->n_lrev != np->n_brev ||
 			    (np->n_flag & NQNFSNONCACHE)) {
 				error = nfs_vinvalbuf(vp, V_SAVE, cred, p, 1);
 				if (error) {
-					kernel_upl_unmap(kernel_map, pl);
+					ubc_upl_unmap(pl);
 					if (!nocommit)
-						kernel_upl_abort_range(pl, 
-						pl_offset, size, 
-					 	UPL_ABORT_FREE_ON_EMPTY);
+						ubc_upl_abort_range(pl, pl_offset, size, 
+					 			UPL_ABORT_FREE_ON_EMPTY);
 					return (error);
 				}
 				np->n_brev = np->n_lrev;
@@ -4465,26 +4536,48 @@ nfs_pageout(ap)
 			error = nfs_writerpc(vp, uio, cred, &iomode, &must_commit);
 			if (must_commit)
 				nfs_clearcommit(vp->v_mount);
-			kernel_upl_unmap(kernel_map, pl);
+			ubc_upl_unmap(pl);
                         
-                        /* see comments below after other nfs_writerpc and ESTALE */
-                        if (error == ESTALE) {
-                            kernel_upl_abort_range(pl, pl_offset, size, 
-                                UPL_ABORT_DUMP_PAGES|UPL_ABORT_FREE_ON_EMPTY);
-                        } else {
-                            if (!nocommit) {
-                                if(error)
-                                    kernel_upl_abort_range(pl, pl_offset, size, 
-                                    UPL_ABORT_FREE_ON_EMPTY);
-                                else
-                                    kernel_upl_commit_range(pl, 
-                                        pl_offset, size, 
-                                        UPL_COMMIT_CLEAR_DIRTY | UPL_COMMIT_FREE_ON_EMPTY,
-                                        UPL_GET_INTERNAL_PAGE_LIST(pl), MAX_UPL_TRANSFER);
-                            }
-                        }
-			return (error);
+			/* copied from non-nqnfs case below. see there for comments */
+			if (!nocommit) {
+				if (error) {
+					int abortflags; 
+					short action = nfs_pageouterrorhandler(error);
+					
+					switch (action) {
+						case DUMP:
+							abortflags = UPL_ABORT_DUMP_PAGES|UPL_ABORT_FREE_ON_EMPTY;
+							break;
+						case DUMPANDLOG:
+							abortflags = UPL_ABORT_DUMP_PAGES|UPL_ABORT_FREE_ON_EMPTY;
+							if ((error <= ELAST) && (errorcount[error] % 100 == 0)) 
+								printf("nfs_pageout: unexpected error %d. dumping vm page\n", error);
+							errorcount[error]++;
+							break;
+						case RETRY:
+							abortflags = UPL_ABORT_FREE_ON_EMPTY;
+							break;
+						case RETRYWITHSLEEP:
+							abortflags = UPL_ABORT_FREE_ON_EMPTY;
+							(void) tsleep(&lbolt, PSOCK, "nfspageout", 0); /* pri unused. PSOCK for placeholder. */
+							break;
+						case SEVER: /* not implemented */
+						default:
+							printf("nfs_pageout: action %d not expected\n", action);
+							break;
+					}
+						
+					ubc_upl_abort_range(pl, pl_offset, size, abortflags);
+					/* return error in all cases above */
+
+				} else
+					ubc_upl_commit_range(pl, 
+						pl_offset, size, 
+						UPL_COMMIT_CLEAR_DIRTY | UPL_COMMIT_FREE_ON_EMPTY);
+			}
+			return (error); /* note this early return */
 		}
+
 		nfsstats.pageouts++;
 		lbn = uio->uio_offset / biosize;
 		on = uio->uio_offset & (biosize-1);
@@ -4520,12 +4613,10 @@ again:
 			    (np->n_flag & NQNFSNONCACHE)) {
 					error = nfs_vinvalbuf(vp, V_SAVE, cred, p, 1);
 					if (error) {
-						kernel_upl_unmap(kernel_map, pl);
+						ubc_upl_unmap(pl);
 						if (!nocommit)
-							kernel_upl_abort_range(pl, 
-							pl_offset,
-					 		size,
-						  UPL_ABORT_FREE_ON_EMPTY);
+							ubc_upl_abort_range(pl, pl_offset, size,
+									UPL_ABORT_FREE_ON_EMPTY);
 
 						return (error);
 					}
@@ -4553,30 +4644,66 @@ again:
 	} while (uio->uio_resid > 0 && n > 0);
 
 cleanup:
-	kernel_upl_unmap(kernel_map, pl);
-	/* 
-	* EStale is special. In this case, we want vm to dump out
-	* the pages. Better yet, sever the object so we don't come
-	* back here on each page of the object to page out. For now,
-	* just dump. 
-	* XXX What about !nocommit case? Should ESTALE only be checked
-	* in that portion? - EKN
-	*/
-	if (error == ESTALE) {
-            kernel_upl_abort_range(pl, pl_offset, size, 
-                UPL_ABORT_DUMP_PAGES|UPL_ABORT_FREE_ON_EMPTY);
-	} else {
-            if (!nocommit) {
-                if(error)
-                    kernel_upl_abort_range(pl, pl_offset, pgsize, 
-                        UPL_ABORT_FREE_ON_EMPTY);
-                else
-                    kernel_upl_commit_range(pl, pl_offset, pgsize,
-                        UPL_COMMIT_CLEAR_DIRTY | UPL_COMMIT_FREE_ON_EMPTY,
-                    UPL_GET_INTERNAL_PAGE_LIST(pl), MAX_UPL_TRANSFER);
-            }
+	ubc_upl_unmap(pl);
+	/*
+	 * We've had several different solutions on what to do when the pageout
+	 * gets an error. If we don't handle it, and return an error to the 
+	 * caller, vm, it will retry . This can end in endless looping 
+	 * between vm and here doing retries of the same page. Doing a dump
+	 * back to vm, will get it out of vm's knowledge and we lose whatever
+	 * data existed. This is risky, but in some cases necessary. For
+	 * example, the initial fix here was to do that for ESTALE. In that case
+	 * the server is telling us that the file is no longer the same. We 
+	 * would not want to keep paging out to that. We also saw some 151 
+	 * errors from Auspex server and NFSv3 can return errors higher than
+	 * ELAST. Those along with NFS known server errors we will "dump" from vm. 
+	 * Errors we don't expect to occur, we dump and log for further
+	 * analysis. Errors that could be transient, networking ones,
+	 * we let vm "retry". Lastly, errors that we retry, but may have potential
+	 * to storm the network, we "retrywithsleep". "sever" will be used in
+	 * in the future to dump all pages of object for cases like ESTALE.
+	 * All this is the basis for the states returned and first guesses on
+	 * error handling. Tweaking expected as more statistics are gathered.
+	 * Note, in the long run we may need another more robust solution to
+	 * have some kind of persistant store when the vm cannot dump nor keep
+	 * retrying as a solution, but this would be a file architectural change.
+	 */
+	  
+	if (!nocommit) { /* otherwise stacked file system has to handle this */
+		if (error) {
+			int abortflags; 
+			short action = nfs_pageouterrorhandler(error);
+			
+			switch (action) {
+				case DUMP:
+					abortflags = UPL_ABORT_DUMP_PAGES|UPL_ABORT_FREE_ON_EMPTY;
+					break;
+				case DUMPANDLOG:
+					abortflags = UPL_ABORT_DUMP_PAGES|UPL_ABORT_FREE_ON_EMPTY;
+					if ((error <= ELAST) && (errorcount[error] % 100 == 0)) 
+						printf("nfs_pageout: unexpected error %d. dumping vm page\n", error);
+					errorcount[error]++;
+					break;
+				case RETRY:
+					abortflags = UPL_ABORT_FREE_ON_EMPTY;
+					break;
+				case RETRYWITHSLEEP:
+					abortflags = UPL_ABORT_FREE_ON_EMPTY;
+					(void) tsleep(&lbolt, PSOCK, "nfspageout", 0); /* pri unused. PSOCK for placeholder. */
+					break;
+				case SEVER: /* not implemented */
+				default:
+					printf("nfs_pageout: action %d not expected\n", action);
+					break;
+			}
+				
+			ubc_upl_abort_range(pl, pl_offset, size, abortflags);
+			/* return error in all cases above */
+			
+		} else 
+			ubc_upl_commit_range(pl, pl_offset, pgsize,
+				UPL_COMMIT_CLEAR_DIRTY | UPL_COMMIT_FREE_ON_EMPTY);
 	}
-
 	return (error);
 }
 

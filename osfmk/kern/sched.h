@@ -61,7 +61,6 @@
 #ifndef	_KERN_SCHED_H_
 #define _KERN_SCHED_H_
 
-#include <cpus.h>
 #include <simple_clock.h>
 #include <stat_time.h>
 
@@ -70,12 +69,12 @@
 #include <kern/queue.h>
 #include <kern/lock.h>
 #include <kern/macro_help.h>
+#include <kern/timer_call.h>
 
 #if	STAT_TIME
 
 /*
- *	Statistical timing uses microseconds as timer units.  16 bit shift
- *	yields priorities.  PRI_SHIFT_2 isn't needed.
+ *	Statistical timing uses microseconds as timer units.
  */
 #define PRI_SHIFT	(16 - SCHED_TICK_SHIFT)
 
@@ -114,13 +113,13 @@
  *				+
  *				V
  * 80		Kernel mode only
- * 79		High priority
+ * 79		System high priority
  *				A
  *				+
  *			(16 levels)
  *				+
  *				V
- * 64		High priority
+ * 64		System high priority
  * 63		Elevated priorities
  *				A
  *				+
@@ -157,17 +156,18 @@
 
 #define MAXPRI_STANDARD		(BASEPRI_REALTIME - 1)				/* 95 */
 
-#define MAXPRI_KERNBAND		MAXPRI_STANDARD						/* 95 */
-#define MINPRI_KERNBAND		(MAXPRI_KERNBAND - (NRQS / 8) + 1)	/* 80 */
+#define MAXPRI_KERNEL		MAXPRI_STANDARD						/* 95 */
+#define BASEPRI_PREEMPT		(MAXPRI_KERNEL - 2)					/* 93 */
+#define MINPRI_KERNEL		(MAXPRI_KERNEL - (NRQS / 8) + 1)	/* 80 */
 
-#define MAXPRI_HIGHBAND		(MINPRI_KERNBAND - 1)				/* 79 */
-#define MINPRI_HIGHBAND		(MAXPRI_HIGHBAND - (NRQS / 8) + 1)	/* 64 */
+#define MAXPRI_SYSTEM		(MINPRI_KERNEL - 1)					/* 79 */
+#define MINPRI_SYSTEM		(MAXPRI_SYSTEM - (NRQS / 8) + 1)	/* 64 */
 
-#define MAXPRI_MAINBAND		(MINPRI_HIGHBAND - 1)				/* 63 */
-#define BASEPRI_DEFAULT		(MAXPRI_MAINBAND - (NRQS / 4))		/* 31 */
-#define MINPRI_MAINBAND		MINPRI								/*  0 */
+#define MAXPRI_USER			(MINPRI_SYSTEM - 1)					/* 63 */
+#define BASEPRI_DEFAULT		(MAXPRI_USER - (NRQS / 4))			/* 31 */
+#define MINPRI_USER			MINPRI								/*  0 */
 
-#define MINPRI_STANDARD		MINPRI_MAINBAND						/*  0 */
+#define MINPRI_STANDARD		MINPRI_USER							/*  0 */
 
 /*
  *	Macro to check for invalid priorities.
@@ -185,9 +185,11 @@ struct run_queue {
 typedef struct run_queue	*run_queue_t;
 #define RUN_QUEUE_NULL		((run_queue_t) 0)
 
+#define first_quantum(processor)	((processor)->slice_quanta > 0)
+
 #define csw_needed(thread, processor) (										\
 	((thread)->state & TH_SUSP)										||		\
-	((processor)->first_quantum?											\
+	(first_quantum(processor)?												\
 	 ((processor)->runq.highq > (thread)->sched_pri				||			\
 	  (processor)->processor_set->runq.highq > (thread)->sched_pri) :		\
 	 ((processor)->runq.highq >= (thread)->sched_pri			||			\
@@ -199,19 +201,20 @@ typedef struct run_queue	*run_queue_t;
 
 /* Remove thread from its run queue */
 extern run_queue_t	rem_runq(
-					thread_t	thread);
+						thread_t	thread);
 
-/* Mach factor computation (in mach_factor.c) */
+/* Periodic computation of load factors */
 extern void		compute_mach_factor(void);
 
-/* Update threads quantum (in priority.c) */
-extern void		thread_quantum_update(
-					int			mycpu,
-					thread_t	thread,
-					int			nticks,
-					int			state);
+/* Handle quantum expiration for an executing thread */
+extern void		thread_quantum_expire(
+					timer_call_param_t	processor,
+					timer_call_param_t	thread);
 
-extern int		min_quantum;	/* defines max context switch rate */
+extern uint32_t	std_quantum, min_std_quantum;
+extern uint32_t	std_quantum_us;
+
+extern uint32_t	max_rt_quantum, min_rt_quantum;
 
 /*
  *	Shift structures for holding update shifts.  Actual computation

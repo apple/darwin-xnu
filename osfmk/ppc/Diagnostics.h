@@ -47,6 +47,11 @@ int diagCall(struct savearea *save);
 #define dgpcpy 2
 #define dgreset 3
 #define dgtest 4
+#define dgBMphys 5
+#define dgUnMap 6
+#define dgBootScreen 7
+#define dgflush 8
+
 
 typedef struct diagWork {			/* Diagnostic work area */
 

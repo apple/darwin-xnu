@@ -225,12 +225,10 @@ inittodr(base)
 	time_t base;
 {
 	/*
-	 * Initialize the calendar by
-	 * reading the BBC, if not already set.
-	 */
-	clock_initialize_calendar();
-
-	/*
+	 * Assertion:
+	 * The calendar has already been
+	 * set up from the battery clock.
+	 *
 	 * The value returned by microtime()
 	 * is gotten from the calendar.
 	 */

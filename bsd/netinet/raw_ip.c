@@ -153,7 +153,6 @@ rip_input(m, iphlen)
 	register struct inpcb *inp;
 	struct inpcb *last = 0;
 	struct mbuf *opts = 0;
-	short need_wakeup = 0;
 
 	ripsrc.sin_addr = ip->ip_src;
 	LIST_FOREACH(inp, &ripcb, inp_list) {
@@ -189,7 +188,7 @@ rip_input(m, iphlen)
 					    m_freem(opts);
 				} else {
 				    /* kprintf("rip_input calling sorwakeup\n"); */
-				    need_wakeup++;
+				    sorwakeup(last->inp_socket);
 				}
 				opts = 0;
 			}
@@ -213,15 +212,13 @@ rip_input(m, iphlen)
 			    m_freem(opts);
 		} else {
 		    /* kprintf("rip_input calling sorwakeup\n"); */
-		    need_wakeup++;
+		    sorwakeup(last->inp_socket);
 		}
 	} else {
 		m_freem(m);
               ipstat.ips_noproto++;
               ipstat.ips_delivered--;
       }
-      if (need_wakeup)
-		    sorwakeup(last->inp_socket);
 }
 
 /*
@@ -695,6 +692,11 @@ rip_pcblist SYSCTL_HANDLER_ARGS
 	error = SYSCTL_OUT(req, &xig, sizeof xig);
 	if (error)
 		return error;
+        /*
+         * We are done if there is no pcb
+         */
+        if (n == 0)  
+            return 0; 
 
 	inp_list = _MALLOC(n * sizeof *inp_list, M_TEMP, M_WAITOK);
 	if (inp_list == 0)

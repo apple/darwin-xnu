@@ -54,27 +54,22 @@
 #define	_KERN_TIME_OUT_H_
 
 /*
- * Mach time-out facility.
+ * Mach tick-based timing.
  */
 
 #include <mach/boolean.h>
-#include <kern/lock.h>
-#include <kern/queue.h>
-#include <kern/zalloc.h>
 #include <kern/kern_types.h>
-
-/*
- *	Timers in kernel:
- */
 
 extern int				hz;				/* num of ticks per second */
 extern int				tick;			/* num of usec per tick */
 
-typedef void (*timeout_fcn_t)(void *);
+#ifdef MACH_KERNEL_PRIVATE
 
 extern void		hertz_tick(
 					boolean_t		usermode,	/* executing user code */
 					natural_t		pc);
+
+typedef void (*timeout_fcn_t)(void *);
 
 /* Set timeout */
 extern void		timeout(
@@ -86,5 +81,7 @@ extern void		timeout(
 extern void		untimeout(
 					timeout_fcn_t	fcn,
 					void			*param);
+
+#endif	/* MACH_KERNEL_PRIVATE */
 
 #endif	/* _KERN_TIME_OUT_H_ */

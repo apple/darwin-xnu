@@ -74,6 +74,12 @@
 #include <zone_debug.h>
 #include <vm/cpm.h>
 
+/*	Variables used to indicate the relative age of pages in the
+ *	inactive list
+ */
+
+int	vm_page_ticket_roll = 0;
+int	vm_page_ticket = 0;
 /*
  *	Associated with page of user-allocatable memory is a
  *	page structure.
@@ -314,6 +320,7 @@ vm_page_bootstrap(
 	m->free = FALSE;
 	m->reference = FALSE;
 	m->pageout = FALSE;
+	m->dump_cleaning = FALSE;
 	m->list_req_pending = FALSE;
 
 	m->busy = TRUE;
@@ -330,7 +337,6 @@ vm_page_bootstrap(
 	m->lock_supplied = FALSE;
 	m->unusual = FALSE;
 	m->restart = FALSE;
-	m->limbo = FALSE;
 
 	m->phys_addr = 0;		/* reset later */
 
@@ -1027,9 +1033,6 @@ void vm_page_more_fictitious(void)
 
 	c_vm_page_more_fictitious++;
 
-	/* this may free up some fictitious pages */
-	cleanup_limbo_queue();
-
 	/*
 	 * Allocate a single page from the zone_map. Do not wait if no physical
 	 * pages are immediately available, and do not zero the space. We need
@@ -1111,6 +1114,8 @@ vm_page_convert(
 	m->fictitious = FALSE;
 
 	vm_page_lock_queues();
+	m->no_isync = TRUE;
+	real_m->no_isync = FALSE;
 	if (m->active)
 		vm_page_active_count++;
 	else if (m->inactive)
@@ -1196,6 +1201,7 @@ vm_page_grab(void)
 	mem = vm_page_queue_free;
 	vm_page_queue_free = (vm_page_t) mem->pageq.next;
 	mem->free = FALSE;
+	mem->no_isync = TRUE;
 	mutex_unlock(&vm_page_queue_free_lock);
 
 	/*
@@ -1272,56 +1278,6 @@ vm_page_release(
 }
 
 /*
- * Release a page to the limbo list.
- * Put real pages at the head of the queue, fictitious at the tail.
- * Page queues must be locked.
- */
-void
-vm_page_release_limbo(
-	register vm_page_t	m)
-{
-	assert(m->limbo);
-	vm_page_limbo_count++;
-	if (m->fictitious) {
-		queue_enter(&vm_page_queue_limbo, m, vm_page_t, pageq);
-	} else {
-		vm_page_limbo_real_count++;
-		queue_enter_first(&vm_page_queue_limbo, m, vm_page_t, pageq);
-	}
-}
-
-/*
- * Exchange a real page in limbo (limbo_m) with a fictitious page (new_m).
- * The end result is that limbo_m is fictitious and still in limbo, and new_m
- * is the real page.  The prep and pin counts remain with the page in limbo
- * although they will be briefly cleared by vm_page_init.  This is OK since
- * there will be no interrupt-level interactions (the page is in limbo) and
- * vm_page_unprep must lock the page queues before changing the prep count.
- *
- * Page queues must be locked, and limbo_m must have been removed from its
- * object.
- */
-void
-vm_page_limbo_exchange(
-	register vm_page_t	limbo_m,
-	register vm_page_t	new_m)
-{
-	assert(limbo_m->limbo && !limbo_m->fictitious);
-	assert(!limbo_m->tabled);
-	assert(new_m->fictitious);
-
-	*new_m = *limbo_m;
-	vm_page_init(limbo_m, vm_page_fictitious_addr);
-
-	limbo_m->fictitious = TRUE;
-	limbo_m->limbo = TRUE;
-	new_m->limbo = FALSE;
-
-	limbo_m->prep_pin_count = new_m->prep_pin_count;
-	new_m->prep_pin_count = 0;
-}
-
-/*
  *	vm_page_wait:
  *
  *	Wait for a page to become available.
@@ -1344,15 +1300,20 @@ vm_page_wait(
 	 *	a call to vm_page_wait must really block.
 	 */
 	kern_return_t wait_result;
+	int           need_wakeup = 0;
 
 	mutex_lock(&vm_page_queue_free_lock);
 	if (vm_page_free_count < vm_page_free_target) {
 		if (vm_page_free_wanted++ == 0)
-			thread_wakeup((event_t)&vm_page_free_wanted);
+		        need_wakeup = 1;
 		assert_wait((event_t)&vm_page_free_count, interruptible);
 		mutex_unlock(&vm_page_queue_free_lock);
 		counter(c_vm_page_wait_block++);
+
+		if (need_wakeup)
+			thread_wakeup((event_t)&vm_page_free_wanted);
 		wait_result = thread_block((void (*)(void))0);
+
 		return(wait_result == THREAD_AWAKENED);
 	} else {
 		mutex_unlock(&vm_page_queue_free_lock);
@@ -1385,8 +1346,6 @@ vm_page_alloc(
 	return(mem);
 }
 
-int c_limbo_page_free = 0;	/* debugging */
-int c_limbo_convert = 0;	/* debugging */
 counter(unsigned int c_laundry_pages_freed = 0;)
 
 int vm_pagein_cluster_unused = 0;
@@ -1449,23 +1408,7 @@ vm_page_free(
 	if (mem->absent)
 		vm_object_absent_release(object);
 
-	if (mem->limbo) {
-		/*
-		 * The pageout daemon put this page into limbo and then freed
-		 * it.  The page has already been removed from the object and
-		 * queues, so any attempt to look it up will fail.  Put it
-		 * on the limbo queue; the pageout daemon will convert it to a
-		 * fictitious page and/or free the real one later.
-		 */
-		/* assert that it came from pageout daemon (how?) */
-		assert(!mem->fictitious && !mem->absent);
-		c_limbo_page_free++;
-		vm_page_release_limbo(mem);
-		return;
-	}
-	assert(mem->prep_pin_count == 0);
-
-		/* Some of these may be unnecessary */
+	/* Some of these may be unnecessary */
 	mem->page_lock = 0;
 	mem->unlock_request = 0;
 	mem->busy = TRUE;
@@ -1614,6 +1557,17 @@ vm_page_deactivate(
 		VM_PAGE_QUEUES_REMOVE(m);
 	}
 	if (m->wire_count == 0 && !m->inactive) {
+		m->page_ticket = vm_page_ticket;
+		vm_page_ticket_roll++;
+
+		if(vm_page_ticket_roll == VM_PAGE_TICKETS_IN_ROLL) {
+			vm_page_ticket_roll = 0;
+			if(vm_page_ticket == VM_PAGE_TICKET_ROLL_IDS)
+				vm_page_ticket= 0;
+			else
+				vm_page_ticket++;
+		}
+		
 		queue_enter(&vm_page_queue_inactive, m, vm_page_t, pageq);
 		m->inactive = TRUE;
 		if (!m->fictitious)
@@ -1764,200 +1718,6 @@ vm_page_copy(
 	VM_PAGE_CHECK(dest_m);
 
 	pmap_copy_page(src_m->phys_addr, dest_m->phys_addr);
-}
-
-/*
- * Limbo pages are placed on the limbo queue to await their prep count
- * going to zero.  A page is put into limbo by the pageout daemon.  If the
- * page is real, then the pageout daemon did not need to page out the page,
- * it just freed it.  When the prep_pin_count is zero the page can be freed.
- * Real pages with a non-zero prep count are converted to fictitious pages
- * so that the memory can be reclaimed; the fictitious page will remain on
- * the limbo queue until its prep count reaches zero.
- *
- * cleanup_limbo_queue is called by vm_page_more_fictitious and the pageout
- * daemon since it can free both real and fictitious pages.
- * It returns the number of fictitious pages freed.
- */
-void
-cleanup_limbo_queue(void)
-{
-	register vm_page_t free_m, m;
-	vm_offset_t phys_addr;
-
-	vm_page_lock_queues();
-	assert(vm_page_limbo_count >= vm_page_limbo_real_count);
-
-	/*
-	 * first free up all pages with prep/pin counts of zero.  This
-	 * may free both real and fictitious pages, which may be needed
-	 * later to convert real ones.
-	 */
-	m = (vm_page_t)queue_first(&vm_page_queue_limbo);
-	while (!queue_end(&vm_page_queue_limbo, (queue_entry_t)m)) {
-		if (m->prep_pin_count == 0) {
-			free_m = m;
-			m = (vm_page_t)queue_next(&m->pageq);
-			queue_remove(&vm_page_queue_limbo, free_m, vm_page_t,
-									pageq);
-			vm_page_limbo_count--;
-			if (!free_m->fictitious)
-				vm_page_limbo_real_count--;
-			free_m->limbo = FALSE;
-			vm_page_free(free_m);
-			assert(vm_page_limbo_count >= 0);
-			assert(vm_page_limbo_real_count >= 0);
-		} else {
-			m = (vm_page_t)queue_next(&m->pageq);
-		}
-	}
-
-	/*
-	 * now convert any remaining real pages to fictitious and free the
-	 * real ones.
-	 */
-	while (vm_page_limbo_real_count > 0) {
-		queue_remove_first(&vm_page_queue_limbo, m, vm_page_t, pageq);
-		assert(!m->fictitious);
-		assert(m->limbo);
-
-		/*
-		 * Try to get a fictitious page.  If impossible,
-		 * requeue the real one and give up.
-		 */
-		free_m = vm_page_grab_fictitious();
-		if (free_m == VM_PAGE_NULL) {
-			queue_enter_first(&vm_page_queue_limbo, m, vm_page_t,
-									pageq);
-			break;
-		}
-		c_limbo_convert++;
-		vm_page_limbo_exchange(m, free_m);
-		assert(m->limbo && m->fictitious);
-		assert(!free_m->limbo && !free_m->fictitious);
-		queue_enter(&vm_page_queue_limbo, m, vm_page_t, pageq);
-		vm_page_free(free_m);
-		vm_page_limbo_real_count--;
-	}
-
-	vm_page_unlock_queues();
-}
-
-/*
- * Increment prep_count on a page.
- * Must be called in thread context.  Page must not disappear: object
- * must be locked.
- */
-kern_return_t
-vm_page_prep(
-	register vm_page_t	m)
-{
-	kern_return_t retval = KERN_SUCCESS;
-
-	assert(m != VM_PAGE_NULL);
-   	vm_page_lock_queues();
-   	if (!m->busy && !m->error && !m->fictitious && !m->absent) {
-   		if (m->prep_pin_count != 0) {
-   			vm_page_pin_lock();
-	   		m->prep_count++;
-   			vm_page_pin_unlock();
-   		} else {
-	   		m->prep_count++;
-		}
-		assert(m->prep_count != 0);	/* check for wraparound */
-   	} else {
-		retval = KERN_FAILURE;
-	}
-   	vm_page_unlock_queues();
-	return retval;
-}
-
-
-/*
- * Pin a page (increment pin count).
- * Must have been previously prepped.
- *
- * MUST BE CALLED AT SPLVM.
- *
- * May be called from thread or interrupt context.
- * If page is in "limbo" it cannot be pinned.
- */
-kern_return_t
-vm_page_pin(
-	register vm_page_t	m)
-{
-	kern_return_t retval = KERN_SUCCESS;
-
-	assert(m != VM_PAGE_NULL);
-	vm_page_pin_lock();
-	if (m->limbo || m->prep_count == 0) {
-		retval = KERN_FAILURE;
-	} else {
-		assert(!m->fictitious);
-		if (m->pin_count == 0)
-			vm_page_pin_count++;
-		m->pin_count++;
-	}
-	vm_page_pin_unlock();
-	return retval;
-}
-
-
-/*
- * Unprep a page (decrement prep count).
- * Must have been previously prepped.
- * Called to decrement prep count after an attempt to pin failed.
- * Must be called from thread context.
- */
-kern_return_t
-vm_page_unprep(
-	register vm_page_t	m)
-{
-	kern_return_t retval = KERN_SUCCESS;
-
-	assert(m != VM_PAGE_NULL);
-	vm_page_lock_queues();
-	vm_page_pin_lock();
-	assert(m->prep_count != 0);
-	if (m->prep_count == 0)
-		retval = KERN_FAILURE;		/* shouldn't happen */
-	else
-		m->prep_count--;
-	vm_page_pin_unlock();
-	vm_page_unlock_queues();
-	return retval;
-}
-
-
-/*
- * Unpin a page: decrement pin AND prep counts.
- * Must have been previously prepped AND pinned.
- *
- * MUST BE CALLED AT SPLVM.
- *
- * May be called from thread or interrupt context.
- */
-kern_return_t
-vm_page_unpin(
-	register vm_page_t	m)
-{
-	kern_return_t retval = KERN_SUCCESS;
-
-	assert(m != VM_PAGE_NULL);
-	vm_page_pin_lock();
-	assert(m->prep_count != 0 && m->pin_count != 0);
-	assert(m->prep_count >= m->pin_count);
-	assert(!m->limbo && !m->fictitious);
-	if (m->prep_count != 0 && m->pin_count != 0) {
-		m->prep_count--;
-		m->pin_count--;
-		if (m->pin_count == 0)
-			vm_page_pin_count--;
-	} else {
-		retval = KERN_FAILURE;		/* shouldn't happen */
-	}
-	vm_page_pin_unlock();
-	return retval;
 }
 
 /*
@@ -2330,8 +2090,6 @@ vm_page_print(
 	iprintf("object=0x%x", p->object);
 	printf(", offset=0x%x", p->offset);
 	printf(", wire_count=%d", p->wire_count);
-	printf(", prep_count=%d", p->prep_count);
-	printf(", pin_count=%d\n", p->pin_count);
 
 	iprintf("%sinactive, %sactive, %sgobbled, %slaundry, %sfree, %sref, %sdiscard\n",
 		(p->inactive ? "" : "!"),
@@ -2355,12 +2113,11 @@ vm_page_print(
 		(p->cleaning ? "" : "!"),
 		(p->pageout ? "" : "!"),
 		(p->clustered ? "" : "!"));
-	iprintf("%slock_supplied, %soverwriting, %srestart, %sunusual, %slimbo\n",
+	iprintf("%slock_supplied, %soverwriting, %srestart, %sunusual\n",
 		(p->lock_supplied ? "" : "!"),
 		(p->overwriting ? "" : "!"),
 		(p->restart ? "" : "!"),
-		(p->unusual ? "" : "!"),
-		(p->limbo ? "" : "!"));
+		(p->unusual ? "" : "!"));
 
 	iprintf("phys_addr=0x%x", p->phys_addr);
 	printf(", page_error=0x%x", p->page_error);

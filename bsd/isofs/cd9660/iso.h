@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2001 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -92,6 +92,8 @@ struct iso_volume_descriptor {
 #define UCS_SEPARATOR1	0x002e
 #define UCS_SEPARATOR2	0x003b
 
+#define ISO_DFLT_VOLUME_ID "ISO_9660_CD"
+
 /* pathconf filename lengths */
 #define ISO_NAMEMAX		(31+1)
 #define ISO_JOLIET_NAMEMAX	(64*3)
@@ -119,7 +121,11 @@ struct finder_info {
 	unsigned long		fdType;
 	unsigned long		fdCreator;
 	unsigned short		fdFlags;
-	unsigned short		fdReserved[3];
+	struct {
+	    short	v;		/* file's location */
+	    short	h;
+	} fdLocation;
+	unsigned short		fdReserved;
 };
 
 struct iso_primary_descriptor {

@@ -261,7 +261,7 @@ routine vm_map(
 		size		: vm_size_t;
 		mask		: vm_address_t;
 		flags		: int;
-		memory_object	: memory_object_t;
+		object		: mem_entry_name_port_t;
 		offset		: vm_offset_t;
 		copy		: boolean_t;
 		cur_protection	: vm_prot_t;
@@ -417,10 +417,29 @@ routine vm_map_64(
 		size		: vm_size_t;
 		mask		: vm_address_t;
 		flags		: int;
-		memory_object	: memory_object_t;
+		object		: mem_entry_name_port_t;
 		offset		: memory_object_offset_t;
 		copy		: boolean_t;
 		cur_protection	: vm_prot_t;
 		max_protection	: vm_prot_t;
 		inheritance	: vm_inherit_t);
+
+routine vm_map_get_upl(
+		target_task	: vm_map_t;
+		address		: vm_address_t;
+	inout	size		: vm_size_t;
+	out	upl		: upl_t;
+	out	page_info	: upl_page_info_array_t, CountInOut;
+	inout	flags		: integer_t;
+		force_data_sync	: integer_t);
+
+routine vm_upl_map(
+		target_task	: vm_map_t;
+		upl		: upl_t;
+	inout	address		: vm_address_t);
+
+routine vm_upl_unmap(
+		target_task	: vm_map_t;
+		upl		: upl_t);
+		
 

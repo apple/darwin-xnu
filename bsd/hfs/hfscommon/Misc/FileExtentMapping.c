@@ -159,8 +159,6 @@
 #include "../headers/BTreesInternal.h"
 #include "../headers/CatalogPrivate.h"		// calling a private catalog routine (LocateCatalogNode)
 
-#include "../headers/HFSInstrumentation.h"
-
 #include <sys/malloc.h>
  
 /*
@@ -331,14 +329,6 @@ static OSErr UpdateExtentRecord (
 	const HFSPlusExtentKey	*extentFileKey,
 	const HFSPlusExtentRecord	extentData,
 	UInt32					extentBTreeHint);
-
-static OSErr MapFileBlockFromFCB(
-	const ExtendedVCB		*vcb,
-	const FCB				*fcb,
-	SInt64					offset,			// Desired offset in bytes from start of file
-	UInt32					*firstFABN,		// FABN of first block of found extent
-	UInt32					*firstBlock,	// Corresponding allocation block number
-	UInt32					*nextFABN);		// FABN of block after end of extent
 
 static Boolean ExtentsAreIntegral(
 	const HFSPlusExtentRecord extentRecord,
@@ -625,25 +615,17 @@ OSErr MapFileBlockC (
 	UInt32				startBlock;				// volume allocation block corresponding to firstFABN
 	daddr_t				temp;
 	off_t				tmpOff;
-	
-	
-	LogStartTime(kTraceMapFileBlock);
 
 	allocBlockSize = vcb->blockSize;
 	
-	err = MapFileBlockFromFCB(vcb, fcb, offset, &firstFABN, &startBlock, &nextFABN);
-	if (err != noErr) {
-		err = SearchExtentFile(vcb, fcb, offset, &foundKey, foundData, &foundIndex, &hint, &nextFABN);
-		if (err == noErr) {
-			startBlock = foundData[foundIndex].startBlock;
-			firstFABN = nextFABN - foundData[foundIndex].blockCount;
-		}
+	err = SearchExtentFile(vcb, fcb, offset, &foundKey, foundData, &foundIndex, &hint, &nextFABN);
+	if (err == noErr) {
+		startBlock = foundData[foundIndex].startBlock;
+		firstFABN = nextFABN - foundData[foundIndex].blockCount;
 	}
 	
 	if (err != noErr)
 	{
-		LogEndTime(kTraceMapFileBlock, err);
-
 		return err;
 	}
 
@@ -680,7 +662,6 @@ OSErr MapFileBlockC (
 		*availableBytes = numberOfBytes;	// more there than they asked for, so pin the output
 	else
 		*availableBytes = tmpOff;
-	LogEndTime(kTraceMapFileBlock, noErr);
 
 	return noErr;
 }
@@ -1060,6 +1041,7 @@ OSErr ExtendFileC (
 	ExtendedVCB		*vcb,				// volume that file resides on
 	FCB				*fcb,				// FCB of file to truncate
 	SInt64			bytesToAdd,			// number of bytes to allocate
+	UInt32			blockHint,			// desired starting allocation block
 	UInt32			flags,				// EFContig and/or EFAll
 	SInt64			*actualBytesAdded)	// number of bytes actually allocated
 {
@@ -1084,21 +1066,6 @@ OSErr ExtendFileC (
 	SInt64				peof;
 	SInt64				previousPEOF;
 	
-
-#if HFSInstrumentation
-	InstTraceClassRef	trace;
-	InstEventTag		eventTag;
-	InstDataDescriptorRef	traceDescriptor;
-	FSVarsRec			*fsVars = (FSVarsRec *) LMGetFSMVars();
-
-	traceDescriptor = (InstDataDescriptorRef) fsVars->later[2];
-	
-	err = InstCreateTraceClass(kInstRootClassRef, "HFS:Extents:ExtendFileC", 'hfs+', kInstEnableClassMask, &trace);
-	if (err != noErr) DebugStr("\pError from InstCreateTraceClass");
-
-	eventTag = InstCreateEventTag();
-	InstLogTraceEvent( trace, eventTag, kInstStartEvent);
-#endif
 
 	needsFlush = false;
 	*actualBytesAdded = 0;
@@ -1197,8 +1164,12 @@ OSErr ExtendFileC (
 	//		else, keep getting bits and pieces (non-contig)
 	err = noErr;
 	wantContig = true;
+	vcb->vcbFreeExtCnt = 0;	/* For now, force rebuild of free extent list */
 	do {
-		startBlock = foundData[foundIndex].startBlock + foundData[foundIndex].blockCount;
+		if (blockHint != 0)
+			startBlock = blockHint;
+		else
+			startBlock = foundData[foundIndex].startBlock + foundData[foundIndex].blockCount;
 		err = BlockAllocate(vcb, startBlock, bytesToAdd, maximumBytes, wantContig, &actualStartBlock, &actualNumBlocks);
 		if (err == dskFulErr) {
 			if (forceContig)
@@ -1213,26 +1184,8 @@ OSErr ExtendFileC (
 				err = noErr;
 		}
 		if (err == noErr) {
-#if HFSInstrumentation
-			{
-				struct {
-					UInt32	fileID;
-					UInt32	start;
-					UInt32	count;
-					UInt32	fabn;
-				} x;
-				
-				x.fileID = H_FILEID(fcb);
-				x.start = actualStartBlock;
-				x.count = actualNumBlocks;
-				x.fabn = nextBlock;
-				
-				InstLogTraceEventWithDataStructure( trace, eventTag, kInstMiddleEvent, traceDescriptor,
-													(UInt8 *) &x, sizeof(x));
-			}
-#endif
 			//	Add the new extent to the existing extent record, or create a new one.
-			if (actualStartBlock == startBlock) {
+			if ((actualStartBlock == startBlock) && (blockHint == 0)) {
 				//	We grew the file's last extent, so just adjust the number of blocks.
 				foundData[foundIndex].blockCount += actualNumBlocks;
 				err = UpdateExtentRecord(vcb, fcb, &foundKey, foundData, hint);
@@ -1247,7 +1200,8 @@ OSErr ExtendFileC (
 				if (foundIndex == numExtentsPerRecord) {
 					//	This record is full.  Need to create a new one.
 					if (H_FILEID(fcb) == kHFSExtentsFileID) {
-						err = fxOvFlErr;		// Oops.  Can't extend extents file (?? really ??)
+						(void) BlockDeallocate(vcb, actualStartBlock, actualNumBlocks);
+						err = dskFulErr;		// Oops.  Can't extend extents file past first record.
 						break;
 					}
 					
@@ -1326,10 +1280,6 @@ Exit:
 	if (needsFlush)
 		(void) FlushExtentFile(vcb);
 
-#if HFSInstrumentation
-	InstLogTraceEvent( trace, eventTag, kInstEndEvent);
-#endif
-
 	return err;
 
 Overflow:
@@ -1384,20 +1334,6 @@ OSErr TruncateFileC (
 	Boolean				extentChanged;	// true if we actually changed an extent
 	Boolean				recordDeleted;	// true if an extent record got deleted
 	
-#if HFSInstrumentation
-	InstTraceClassRef	trace;
-	InstEventTag		eventTag;
-	InstDataDescriptorRef	traceDescriptor;
-	FSVarsRec			*fsVars = (FSVarsRec *) LMGetFSMVars();
-
-	traceDescriptor = (InstDataDescriptorRef) fsVars->later[2];
-	
-	err = InstCreateTraceClass(kInstRootClassRef, "HFS:Extents:TruncateFileC", 'hfs+', kInstEnableClassMask, &trace);
-	if (err != noErr) DebugStr("\pError from InstCreateTraceClass");
-
-	eventTag = InstCreateEventTag();
-	InstLogTraceEvent( trace, eventTag, kInstStartEvent);
-#endif
 
 	recordDeleted = false;
 	
@@ -1537,10 +1473,6 @@ ErrorExit:
 
 	if (recordDeleted)
 		(void) FlushExtentFile(vcb);
-
-#if HFSInstrumentation
-	InstLogTraceEvent( trace, eventTag, kInstEndEvent);
-#endif
 
 	return err;
 }
@@ -1906,104 +1838,6 @@ OSErr GetFCBExtentRecord(
 	BlockMoveData(fcb->fcbExtents, extents, sizeof(HFSPlusExtentRecord));
 	
 	return noErr;
-}
-
-
-
-//ÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑ
-//	Routine:	MapFileBlockFromFCB
-//
-//	Function: 	Determine if the given file offset is within the set of extents
-//				stored in the FCB.  If so, return the file allocation
-//				block number of the start of the extent, volume allocation block number
-//				of the start of the extent, and file allocation block number immediately
-//				following the extent.
-//
-//	Input:		vcb			  			-	the volume containing the extents
-//				fcb						-	the file that owns the extents
-//				offset					-	desired offset in bytes
-//
-//	Output:		firstFABN				-	file alloc block number of start of extent
-//				firstBlock				-	volume alloc block number of start of extent
-//				nextFABN				-	file alloc block number of next extent
-//
-//	Result:		noErr		= ok
-//				fxRangeErr	= beyond FCB's extents
-//ÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑ
-static OSErr MapFileBlockFromFCB(
-	const ExtendedVCB		*vcb,
-	const FCB				*fcb,
-	SInt64					offset,			// Desired offset in bytes from start of file
-	UInt32					*firstFABN,		// FABN of first block of found extent
-	UInt32					*firstBlock,	// Corresponding allocation block number
-	UInt32					*nextFABN)		// FABN of block after end of extent
-{
-	UInt32	index;
-	UInt32	offsetBlocks;
-	SInt64  temp64;
-	
-	temp64 = offset / (SInt64)vcb->blockSize;
-	offsetBlocks = (UInt32)temp64;
-
-	if (vcb->vcbSigWord == kHFSSigWord) {
-		/* XXX SER Do we need to test for overflow values ??? */
-		UInt16	blockCount;
-		UInt16	currentFABN;
-		
-		currentFABN = 0;
-		
-		for (index=0; index<kHFSExtentDensity; index++) {
-
-			blockCount = fcb->fcbExtents[index].blockCount;
-
-			if (blockCount == 0)
-				return fxRangeErr;				//	ran out of extents!
-
-			//	Is it in this extent?
-			if (offsetBlocks < blockCount) {
-				*firstFABN	= currentFABN;
-				*firstBlock	= fcb->fcbExtents[index].startBlock;
-				currentFABN += blockCount;		//	faster to add these as UInt16 first, then extend to UInt32
-				*nextFABN	= currentFABN;
-				return noErr;					//	found the right extent
-			}
-
-			//	Not in current extent, so adjust counters and loop again
-			offsetBlocks -= blockCount;
-			currentFABN += blockCount;
-		}
-	}
-	else {
-		UInt32	blockCount;
-		UInt32	currentFABN;
-		
-		currentFABN = 0;
-		
-		for (index=0; index<kHFSPlusExtentDensity; index++) {
-
-			blockCount = fcb->fcbExtents[index].blockCount;
-
-			if (blockCount == 0)
-				return fxRangeErr;				//	ran out of extents!
-
-			//	Is it in this extent?
-			if (offsetBlocks < blockCount) {
-				*firstFABN	= currentFABN;
-				*firstBlock	= fcb->fcbExtents[index].startBlock;
-				*nextFABN	= currentFABN + blockCount;
-				return noErr;					//	found the right extent
-			}
-
-			//	Not in current extent, so adjust counters and loop again
-			offsetBlocks -= blockCount;
-			currentFABN += blockCount;
-		}
-	}
-	
-	//	If we fall through here, the extent record was full, but the offset was
-	//	beyond those extents.
-	
-	return fxRangeErr;
 }
 
 

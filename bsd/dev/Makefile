@@ -8,6 +8,7 @@ include $(MakeInc_cmd)
 include $(MakeInc_def)
 
 INSTINC_SUBDIRS = \
+	random
 
 INSTINC_SUBDIRS_PPC = \
 

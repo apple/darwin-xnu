@@ -78,12 +78,14 @@ extern unsigned int	hash_table_size;
 extern vm_offset_t mem_size;
 /*
  *	ppc_prot translates from the mach representation of protections to the PPC version.
+ *  We also allow for a direct setting of the protection bits. This extends the mach
+ *	concepts to allow the greater control we need for Virtual Machines (VMM).
  *	Calculation of it like this saves a memory reference - and maybe a couple of microseconds.
  *	It eliminates the used of this table.
- *	unsigned char ppc_prot[8] = { 0, 3, 2, 2, 3, 3, 2, 2 };
+ *	unsigned char ppc_prot[16] = { 0, 3, 2, 2, 3, 3, 2, 2, 0, 1, 2, 3, 0, 1, 2, 3 };
  */
 
-#define ppc_prot(p) ((0xAFAC >> (p << 1)) & 3)
+#define ppc_prot(p) ((0xE4E4AFAC >> (p << 1)) & 3)
 
 /*
  *			About PPC VSID generation:
@@ -254,6 +256,66 @@ boolean_t mapping_remove(pmap_t pmap, vm_offset_t va) {			/* Remove a single map
 	return TRUE;												/* Tell them we did it */
 }
 
+/*
+ *		mapping_purge_pmap(struct phys_entry *pp, pmap_t pmap) - release all mappings for this physent for the specified map
+ *
+ *		This guy releases any mappings that exist for a physical page on a specified map.
+ *		We get the lock on the phys_entry, and hold it through out this whole routine.
+ *		That way, no one can change the queue out from underneath us.  We keep fetching
+ *		the physents mapping anchor until it is null, then we're done.  
+ *
+ *		For each mapping, we call the remove routine to remove it from the PTEG hash list and 
+ *		decriment the pmap's residency count.  Then we release the mapping back to the free list.
+ *
+ */
+ 
+
+void mapping_purge_pmap(struct phys_entry *pp, pmap_t pmap) {		/* Remove all mappings from specified pmap for this physent */
+
+	mapping		*mp, *mp_next, *mpv;
+	spl_t 		s;
+	unsigned int *useadd, *useaddr, uindx;
+	int i;
+		
+	s=splhigh();									/* Don't bother me */
+	
+	if(!hw_lock_bit((unsigned int *)&pp->phys_link, PHYS_LOCK, LockTimeOut)) {	/* Lock the physical entry */
+		panic("\nmapping_purge_pmap: Timeout attempting to lock physical entry at %08X: %08X %08X\n", 
+			pp, pp->phys_link, pp->pte1);	/* Complain about timeout */
+	}
+
+	mp = (mapping *)((unsigned int)pp->phys_link & ~PHYS_FLAGS);
+	
+	while(mp) {	/* Keep going so long as there's another */
+
+		mpv = hw_cpv(mp);					/* Get the virtual address */
+		if(mpv->pmap != pmap) {
+			mp = ((unsigned int)mpv->next & ~PHYS_FLAGS);
+			continue;
+		}
+#if DEBUG
+		if(hw_atomic_sub(&mpv->pmap->stats.resident_count, 1) < 0) panic("pmap resident count went negative\n");
+#else
+		(void)hw_atomic_sub(&mpv->pmap->stats.resident_count, 1);	/* Decrement the resident page count */
+#endif
+
+		uindx = ((mpv->PTEv >> 24) & 0x78) | ((mpv->PTEv >> 3) & 7);	/* Join seg # and top 2 bits of API */
+		useadd = (unsigned int *)&mpv->pmap->pmapUsage[uindx];	/* Point to slot to bump */
+		useaddr = (unsigned int *)((unsigned int)useadd & -4);	/* Round down to word */
+		(void)hw_atomic_sub(useaddr, (useaddr == useadd) ? 0x00010000 : 1); /* Incr the even or odd slot */
+
+	
+	
+		mp_next = (mapping *)((unsigned int)mpv->next & ~PHYS_FLAGS);
+		hw_rem_map(mp);						/* Remove the mapping */
+		mapping_free(mpv);					/* Add mapping to the free list */
+		mp = mp_next;
+	}
+		
+	hw_unlock_bit((unsigned int *)&pp->phys_link, PHYS_LOCK);	/* We're done, unlock the physical entry */
+	splx(s);
+	return;
+}
 /*
  *		mapping_purge(struct phys_entry *pp) - release all mappings for this physent to the free list 
  *

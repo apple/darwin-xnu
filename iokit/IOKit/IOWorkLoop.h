@@ -51,6 +51,26 @@ class IOWorkLoop : public OSObject
 {
     OSDeclareDefaultStructors(IOWorkLoop)
 
+public:
+/*!
+    @typedef Action
+    @discussion Type and arguments of callout C function that is used when
+a runCommand is executed by a client.  Cast to this type when you want a C++
+member function to be used.  Note the arg1 - arg3 parameters are straight pass
+through from the runCommand to the action callout.
+    @param target
+	Target of the function, can be used as a refcon.  Note if a C++ function
+was specified this parameter is implicitly the first paramter in the target
+member function's parameter list.
+    @param arg0 Argument to action from run operation.
+    @param arg1 Argument to action from run operation.
+    @param arg2 Argument to action from run operation.
+    @param arg3 Argument to action from run operation.
+*/
+    typedef IOReturn (*Action)(OSObject *target,
+			       void *arg0, void *arg1,
+			       void *arg2, void *arg3);
+
 private:
 /*! @function launchThreadMain
     @abstract Static function that setup thread state and calls the continuation function, $link threadMainContinuation */
@@ -178,6 +198,7 @@ public:
     @discussion For all event sources, ES, for which IODynamicCast(IOInterruptEventSource, ES) is valid,  in $link eventChain call disable() function.	See $link IOEventSource::disable() */
     virtual void disableAllInterrupts() const;
 
+
 protected:
     // Internal APIs used by event sources to control the thread
     friend class IOEventSource;
@@ -188,7 +209,31 @@ protected:
     virtual int sleepGate(void *event, UInt32 interuptibleType);
     virtual void wakeupGate(void *event, bool oneThread);
 
-    OSMetaClassDeclareReservedUnused(IOWorkLoop, 0);
+public:
+    /* methods available in Mac OS X 10.1 or later */
+
+/*! @function runAction
+    @abstract Single thread a call to an action with the work-loop.
+    @discussion Client function that causes the given action to be called in
+a single threaded manner.  Beware the work-loop's gate is recursive and runAction
+ can cause direct or indirect re-entrancy.	 When the executing on a
+client's thread runAction will sleep until the work-loop's gate opens for
+execution of client actions, the action is single threaded against all other
+work-loop event sources.
+    @param action Pointer to function to be executed in work-loop context.
+    @param arg0 Parameter for action parameter, defaults to 0.
+    @param arg1 Parameter for action parameter, defaults to 0.
+    @param arg2 Parameter for action parameter, defaults to 0.
+    @param arg3 Parameter for action parameter, defaults to 0.
+    @result return value of the Action callout.
+*/
+    virtual IOReturn runAction(Action action, OSObject *target,
+			       void *arg0 = 0, void *arg1 = 0,
+			       void *arg2 = 0, void *arg3 = 0);
+
+protected:
+    OSMetaClassDeclareReservedUsed(IOWorkLoop, 0);
+
     OSMetaClassDeclareReservedUnused(IOWorkLoop, 1);
     OSMetaClassDeclareReservedUnused(IOWorkLoop, 2);
     OSMetaClassDeclareReservedUnused(IOWorkLoop, 3);

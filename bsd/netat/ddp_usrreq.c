@@ -259,6 +259,8 @@ int   ddp_pru_sockaddr(struct socket *so,
 	struct sockaddr_at *sat;
 
 	MALLOC(sat, struct sockaddr_at *, sizeof *sat, M_SONAME, M_WAITOK);
+	if (sat == NULL)
+		return(ENOMEM);
 	bzero((caddr_t)sat, sizeof(*sat));
 
 	s = splnet();
@@ -287,6 +289,8 @@ int  ddp_pru_peeraddr(struct socket *so,
 	struct sockaddr_at *sat;
 
 	MALLOC(sat, struct sockaddr_at *, sizeof *sat, M_SONAME, M_WAITOK);
+	if (sat == NULL)
+		return (ENOMEM);
 	bzero((caddr_t)sat, sizeof(*sat));
 
 	s = splnet();

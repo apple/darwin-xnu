@@ -206,58 +206,14 @@
 
 #include "../headers/FileMgrInternal.h"
 
-#define		kIDSectorOffset	2
-
-OSErr	GetNewFCB( ExtendedVCB *vcb, FileReference* fRefPtr);
-
-OSErr	AccessBTree( ExtendedVCB *vcb, FileReference refNum, UInt32 fileID, UInt32 fileClumpSize, void *CompareRoutine );
-
-UInt16	DivUp( UInt32 byteRun, UInt32 blockSize );
-
-Boolean	IsARamDiskDriver( void );
-
-OSErr	GetVCBRefNum( ExtendedVCB **vcb, short vRefNum );
 
 OSErr	ValidMasterDirectoryBlock( HFSMasterDirectoryBlock *mdb );
 
-void	RenameWrapperVolume( Str27 newVolumeName, UInt16 driveNumber );
-
-OSErr	CheckExternalFileSystem( ExtendedVCB *vcb );
-
-OSErr	FlushVolume( ExtendedVCB *vcb );
-
-FCB		*SetupFCB( ExtendedVCB *vcb, FileReference refNum, UInt32 fileID, UInt32 fileClumpSize );
-
-void	AddVCB( ExtendedVCB	*vcb, short driveNumber, short ioDRefNum );
-
-short	IsPressed( unsigned short k );
-
-FileReference	GetNewVRefNum();
-
 OSErr	GetVolumeNameFromCatalog(ExtendedVCB *vcb);
-
-#if TARGET_API_MAC_OS8
-static UInt16 CountRootFiles(ExtendedVCB *vcb);
-#endif /* TARGET_API_MAC_OS8 */
-
-
-#if ( hasHFSManualEject )
-static void SetVCBManEject(ExtendedVCB *vcb);
-#endif
 
 // External routines
 
 extern	OSErr	C_FlushMDB( ExtendedVCB *volume );
-
-extern	OSErr	DisposeVolumeCacheBlocks( ExtendedVCB *vcb );
-
-extern	void	DisposeVolumeControlBlock( ExtendedVCB *vcb );
-
-extern	OSErr	FlushVolumeBuffers( ExtendedVCB *vcb );
-
-extern	void	MultiplyUInt32IntoUInt64( UInt64 *wideResult, UInt32 num1, UInt32 num2 );
-
-extern void		TrashCatalogNodeCache( void );
 
 
 //‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹
@@ -280,55 +236,6 @@ OSErr	VolumeWritable( ExtendedVCB *vcb )
 		return( vLckdErr );
 	}
 }
-
-
-//‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹
-//	Routine:	DivUp from Asm: DivUp
-//
-//	Function:	Given a number of bytes and block size, calculate the number of
-//				blocks needd to hold all the bytes.
-//
-// 	Result:		Number of physical blocks needed
-//‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹
-UInt16	DivUp( UInt32 byteRun, UInt32 blockSize )
-{
-	UInt32	blocks;
-	
-	blocks = (byteRun + blockSize - 1) / blockSize;							//	Divide up, remember this is integer math.
-	
-	if ( blocks > 0xffff )													//	maximum 16 bit value
-		blocks = 0xffff;
-		
-	return( (UInt16) blocks );
-}
-
-
-
-
-//‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹
-//	Routine:	HFSBlocksFromTotalSectors
-//
-//	Function:	Given the total number of sectors on the volume, calculate
-//				the 16Bit number of allocation blocks, and allocation block size.
-//
-// 	Result:		none
-//‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹
-void	HFSBlocksFromTotalSectors( UInt32 totalSectors, UInt32 *blockSize, UInt16 *blockCount )
-{
-	UInt16	newBlockSizeInSectors	= 1;
-	UInt32	newBlockCount			= totalSectors;
-	
-	while ( newBlockCount > 0XFFFF )
-	{
-		newBlockSizeInSectors++;
-		newBlockCount	=  totalSectors / newBlockSizeInSectors;
-	}
-	
-	*blockSize	= newBlockSizeInSectors * 512;
-	*blockCount	= newBlockCount;
-}
-
-
 
 
 //‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹‹
@@ -383,52 +290,6 @@ OSErr	ValidVolumeHeader( HFSPlusVolumeHeader *volumeHeader )
 	
 	return( err );
 }
-
-
-
-
-//_______________________________________________________________________
-//
-//	Routine:	CountRootFiles
-//
-//	Input:		pointer to VCB
-//
-//	Function: 	Return a count of the number of files and folders in
-//				the root directory of a volume.  For HFS volumes, this
-//				is maintained in the VCB (and MDB).  For HFS Plus volumes,
-//				we get the valence of the root directory from its catalog
-//				record.
-//_______________________________________________________________________
-UInt16 CountRootFiles(ExtendedVCB *vcb)
-{
-	OSErr			err;
-	CatalogNodeData	catNodeData;
-	UInt32			hint;
-	UInt16			rootCount;
-	
-//	if (vcb->vcbSigWord == kHFSSigWord || vcb->vcbFSID != 0) {
-//		return vcb->vcbNmFls;
-//	}
-	
-	//	Here, it's an HFS Plus volume, so get the valence from the root
-	//	directory's catalog record.
-	
-	rootCount = 0;
-	
-	INIT_CATALOGDATA(&catNodeData, kCatNameNoCopyName);
-	
-    err = GetCatalogNode( vcb, kHFSRootFolderID, nil, kUndefinedStrLen, kNoHint, &catNodeData, &hint );
-	if ( err == noErr ) {
-		if (catNodeData.cnd_valence < 65536)
-			rootCount = catNodeData.cnd_valence;
-	else
-			rootCount = 65535;			//	if the value is too large, pin it
-	}
-	CLEAN_CATALOGDATA(&catNodeData);
-
-	return rootCount;
-}
-
 
 
 //_______________________________________________________________________

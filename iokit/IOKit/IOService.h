@@ -62,15 +62,18 @@ enum {
     kIOServiceFirstMatchState	= 0x00000010
 };
 
-// options for registerService()
 enum {
+    // options for registerService()
     kIOServiceExclusive		= 0x00000001,
-    kIOServiceSynchronous	= 0x00000002,
-};
 
-// options for terminate()
-enum {
-    kIOServiceRequired		= 0x00000001
+    // options for terminate()
+    kIOServiceRequired		= 0x00000001,
+    kIOServiceTerminate		= 0x00000004,
+
+    // options for registerService() & terminate()
+    kIOServiceSynchronous	= 0x00000002,
+    // options for registerService()
+    kIOServiceAsynchronous	= 0x00000008
 };
 
 // options for open()
@@ -115,7 +118,9 @@ extern const OSSymbol *		gIOTerminatedNotification;
 
 extern const OSSymbol *		gIOGeneralInterest;
 extern const OSSymbol *		gIOBusyInterest;
+extern const OSSymbol *		gIOOpenInterest;
 extern const OSSymbol *		gIOAppPowerStateInterest;
+extern const OSSymbol *		gIOPriorityPowerStateInterest;
 
 extern const OSSymbol *		gIODeviceMemoryKey;
 extern const OSSymbol *		gIOInterruptControllersKey;
@@ -273,13 +278,46 @@ private:
 protected:
     // TRUE once PMinit has been called
         bool		initialized;
+        
+public:
     // pointer to protected instance variables for power management
     IOPMprot * 	 	pm_vars;
 
+public:
+    /* methods available in Mac OS X 10.1 or later */
+/*! @function requestTerminate
+    @abstract Passes a termination up the stack.
+    @discussion When an IOService is made inactive the default behaviour is to also make any of its clients that have it as their only provider also inactive, in this way recursing the termination up the driver stack. This method allows an IOService object to override this behaviour. Returning true from this method when passed a just terminated provider will cause the client to also be terminated.
+    @param provider The terminated provider of this object.
+    @param options Options originally passed to terminate, plus kIOServiceRecursing.
+    @result true if this object should be terminated now that its provider as been. */
+
+    virtual bool requestTerminate( IOService * provider, IOOptionBits options );
+
+/*! @function willTerminate
+    @abstract Passes a termination up the stack.
+    @discussion Notification that a provider has been terminated, sent before recursing up the stack, in root-to-leaf order.
+    @param provider The terminated provider of this object.
+    @param options Options originally passed to terminate.
+    @result true return true. */
+
+    virtual bool willTerminate( IOService * provider, IOOptionBits options );
+
+/*! @function didTerminate
+    @abstract Passes a termination up the stack.
+    @discussion Notification that a provider has been terminated, sent after recursing up the stack, in leaf-to-root order.
+    @param provider The terminated provider of this object.
+    @param options Options originally passed to terminate.
+    @param defer If there is pending I/O that requires this object to persist, and the provider is not opened by this object set defer to true and call the IOService::didTerminate() implementation when the I/O completes. Otherwise, leave defer set to its default value of false.
+    @result true return true. */
+
+    virtual bool didTerminate( IOService * provider, IOOptionBits options, bool * defer );
+
 private:
-    OSMetaClassDeclareReservedUnused(IOService, 0);
-    OSMetaClassDeclareReservedUnused(IOService, 1);
-    OSMetaClassDeclareReservedUnused(IOService, 2);
+    OSMetaClassDeclareReservedUsed(IOService, 0);
+    OSMetaClassDeclareReservedUsed(IOService, 1);
+    OSMetaClassDeclareReservedUsed(IOService, 2);
+
     OSMetaClassDeclareReservedUnused(IOService, 3);
     OSMetaClassDeclareReservedUnused(IOService, 4);
     OSMetaClassDeclareReservedUnused(IOService, 5);
@@ -465,6 +503,11 @@ public:
     
     virtual bool finalize( IOOptionBits options );
 
+/*! @function free
+    @discussion Free data structures that were allocated when power management was initialized on this service. */
+    
+    virtual void free( void );
+
 /*! @function lockForArbitration
     @abstract Locks an IOService against changes in state or ownership.
     @discussion The registration, termination and open / close functions of IOService use lockForArbtration to single thread access to an IOService. lockForArbitration will grant recursive access to the same thread.
@@ -498,7 +541,7 @@ public:
     
 /*! @function adjustBusy
     @abstract Adjusts the busyState of an IOService.
-    @discussion Applies a delta to an IOService's busyState. A change in the busyState to or from zero will changes the IOService's provider's busyState by one (in the same direction). 
+    @discussion Applies a delta to an IOService's busyState. A change in the busyState to or from zero will change the IOService's provider's busyState by one (in the same direction). 
     @param delta The delta to be applied to the IOService busy state. */
 
     virtual void adjustBusy( SInt32 delta );
@@ -807,12 +850,26 @@ public:
 
     static IOPlatformExpert * getPlatform( void );
 
+/*! @function getPMRootDomain
+    @abstract Returns a pointer to the power management root domain instance for the machine.
+    @discussion This method provides an accessor to the power management root domain instance for the machine. 
+    @result A pointer to the power management root domain instance. It should not be released by the caller. */
+
+    static class IOPMrootDomain * getPMRootDomain( void );
+
 /*! @function getServiceRoot
     @abstract Returns a pointer to the root of the service plane.
     @discussion This method provides an accessor to the root of the service plane for the machine. 
     @result A pointer to the IOService instance at the root of the service plane. It should not be released by the caller. */
 
     static IOService * getServiceRoot( void );
+
+/*! @function getResourceService
+    @abstract Returns a pointer to the IOResources service.
+    @discussion IOService maintains a resource service IOResources that allows objects to be published and found globally in IOKit based on a name, using the standard IOService matching and notification calls.
+    @result A pointer to the IOResources instance. It should not be released by the caller. */
+
+    static IOService * getResourceService( void );
 
     /* Allocate resources for a matched service */
 
@@ -1028,8 +1085,10 @@ public:
     virtual bool serializeProperties( OSSerialize * s ) const;
 
     static void setPlatform( IOPlatformExpert * platform);
+    static void setPMRootDomain( class IOPMrootDomain * rootDomain );
 
     static IOReturn catalogNewDrivers( OSOrderedSet * newTables );
+    static IOReturn waitMatchIdle( UInt32 ms );
 
     static IOService * resources( void );
     virtual bool checkResources( void );
@@ -1072,6 +1131,22 @@ public:
 
     virtual IOReturn waitForState( UInt32 mask, UInt32 value,
 				 mach_timespec_t * timeout = 0 );
+
+    UInt32 _adjustBusy( SInt32 delta );
+
+    bool terminatePhase1( IOOptionBits options = 0 );
+    void scheduleTerminatePhase2( IOOptionBits options = 0 );
+    void scheduleStop( IOService * provider );
+    void scheduleFinalize( void );
+    static void terminateThread( void * arg );
+    static void terminateWorker( IOOptionBits options );
+    static void actionWillTerminate( IOService * victim, IOOptionBits options, 
+                                        OSArray * doPhase2List );
+    static void actionDidTerminate( IOService * victim, IOOptionBits options );
+    static void actionFinalize( IOService * victim, IOOptionBits options );
+    static void actionStop( IOService * client, IOService * provider );
+
+    void PMfree( void );
 
     virtual IOReturn resolveInterrupt(IOService *nub, int source);
     virtual IOReturn lookupInterrupt(int source, bool resolve, IOInterruptController **interruptController);
@@ -1647,6 +1722,8 @@ virtual IOReturn newTemperature  ( long currentTemp, IOService * whichZone );
 
     virtual bool askChangeDown ( unsigned long );
     virtual bool tellChangeDown ( unsigned long );
+    bool tellChangeDown1 ( unsigned long );
+    bool tellChangeDown2 ( unsigned long );
     virtual void tellNoChangeDown ( unsigned long );
     virtual void tellChangeUp ( unsigned long );
     virtual IOReturn allowPowerChange ( unsigned long refcon );
@@ -1702,7 +1779,7 @@ virtual IOReturn newTemperature  ( long currentTemp, IOService * whichZone );
         subclassed policy-makers, and that is how one finds out that a power change
         it initiated is complete
             @param stateNumber
-            This is the number of the state in the state array that the device has switched to.  */
+            This is the number of the state in the state array that the device has switched from.  */
     virtual void powerChangeDone ( unsigned long );
     
     bool tellClientsWithResponse ( int messageType );
@@ -1710,17 +1787,21 @@ virtual IOReturn newTemperature  ( long currentTemp, IOService * whichZone );
 
 private:
 
-    IOReturn enqueuePowerChange ( unsigned long, unsigned long, unsigned long, IOPowerConnection * );
+    IOReturn enqueuePowerChange ( unsigned long, unsigned long, unsigned long, IOPowerConnection *, unsigned long );
+    void setParentInfo ( IOPMPowerFlags, IOPowerConnection * );
     IOReturn notifyAll ( bool is_prechange );
     bool notifyChild ( IOPowerConnection * nextObject, bool is_prechange );
     bool inform ( IOPMinformee * nextObject, bool is_prechange );
     void our_prechange_03 ( void );
+    void our_prechange_04 ( void );
     void our_prechange_05 ( void );
     void our_prechange_1 ( void );
     void our_prechange_2 ( void );
     void our_prechange_3 ( void );
     void our_prechange_4 ( void );
     IOReturn parent_down_0 ( void );
+    IOReturn parent_down_02 ( void );
+    void parent_down_04 ( void );
     void parent_down_05 ( void );
     IOReturn parent_down_1 ( void );
     IOReturn parent_down_2 ( void );
@@ -1753,6 +1834,7 @@ private:
     bool checkForDone ( void );
     bool responseValid ( unsigned long x );
     IOReturn allowCancelCommon ( void );
+    void computeDesiredState ( void );
 };
 
 #endif /* ! _IOKIT_IOSERVICE_H */

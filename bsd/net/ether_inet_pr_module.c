@@ -463,6 +463,23 @@ ether_attach_inet(struct ifnet *ifp)
 	printf("WARNING: ether_attach_inet can't attach ip to interface\n");
 	return stat;
     }
-
+    /* XXX avoid free'ing the interface */
+    ifp->if_eflags |= IFEF_DETACH_DISABLED;
     return ip_dl_tag;
 }
+
+int  ether_detach_inet(struct ifnet *ifp)
+{
+    u_long      ip_dl_tag = 0;
+    int         stat;
+
+    stat = dlil_find_dltag(ifp->if_family, ifp->if_unit, PF_INET, &ip_dl_tag);
+    if (stat == 0) {
+        stat = dlil_detach_protocol(ip_dl_tag);
+        if (stat) {
+            printf("WARNING: ether_detach_inet can't detach ip from interface\n");
+        }
+    }
+    return stat;
+}
+

@@ -30,7 +30,6 @@
 #include <kern/processor.h>
 
 boolean_t get_interrupts_enabled(void);
-extern boolean_t set_interrupts_enabled(boolean_t);
 
 /* Map memory map IO space */
 vm_offset_t 
@@ -120,10 +119,7 @@ void ml_install_interrupt_handler(
 	per_proc_info[current_cpu].interrupt_handler = handler;
 	per_proc_info[current_cpu].interrupt_refCon  = refCon;
 
-	per_proc_info[current_cpu].get_interrupts_enabled 
-						= get_interrupts_enabled;
-	per_proc_info[current_cpu].set_interrupts_enabled 
-						= set_interrupts_enabled;  
+	per_proc_info[current_cpu].interrupts_enabled = TRUE;  
 	(void) ml_set_interrupts_enabled(current_state);
 }
 
@@ -136,10 +132,7 @@ void ml_init_interrupt(void)
 	current_state = ml_get_interrupts_enabled();
 
 	current_cpu = cpu_number();
-	per_proc_info[current_cpu].get_interrupts_enabled 
-						= get_interrupts_enabled;
-	per_proc_info[current_cpu].set_interrupts_enabled 
-						= set_interrupts_enabled;  
+	per_proc_info[current_cpu].interrupts_enabled = TRUE;  
 	(void) ml_set_interrupts_enabled(current_state);
 }
 
@@ -170,7 +163,10 @@ boolean_t fake_set_interrupts_enabled(boolean_t enable)
 /* Get Interrupts Enabled */
 boolean_t ml_get_interrupts_enabled(void)
 {
-	return(per_proc_info[cpu_number()].get_interrupts_enabled());
+	if (per_proc_info[cpu_number()].interrupts_enabled == TRUE)
+		return(get_interrupts_enabled());
+	else
+		return(fake_get_interrupts_enabled());
 }
 
 boolean_t get_interrupts_enabled(void)
@@ -178,20 +174,16 @@ boolean_t get_interrupts_enabled(void)
 	return((mfmsr() & MASK(MSR_EE)) != 0);
 }
 
-/* Set Interrupts Enabled */
-boolean_t ml_set_interrupts_enabled(boolean_t enable)
-{
-	return(per_proc_info[cpu_number()].set_interrupts_enabled(enable));
-}
-
 /* Check if running at interrupt context */
 boolean_t ml_at_interrupt_context(void)
 {
-	/*
-	 * If running at interrupt context, the current thread won't be 
-	 * dispatched on another cpu. There is no need to turn off preemption.
-	 */
-	return (per_proc_info[cpu_number()].istackptr == 0);
+	boolean_t	ret;
+	boolean_t	current_state;
+
+	current_state = ml_set_interrupts_enabled(FALSE);
+ 	ret = (per_proc_info[cpu_number()].istackptr == 0);	
+	ml_set_interrupts_enabled(current_state);
+	return(ret);
 }
 
 /* Generate a fake interrupt */
@@ -200,15 +192,9 @@ void ml_cause_interrupt(void)
 	CreateFakeIO();
 }
 
-void machine_clock_assist(void)
-{
-	if (per_proc_info[cpu_number()].get_interrupts_enabled == fake_get_interrupts_enabled)
-		CreateFakeDEC();
-}
-
 void machine_idle(void)
 {
-        if (per_proc_info[cpu_number()].get_interrupts_enabled != fake_get_interrupts_enabled) {
+        if (per_proc_info[cpu_number()].interrupts_enabled == TRUE) {
 	        int cur_decr;
 
 	        machine_idle_ppc();
@@ -324,8 +310,7 @@ void
 cause_ast_check(processor_t processor)
 {
 	if ((processor != current_processor())
-	    && (per_proc_info[processor->slot_num].get_interrupts_enabled
-	        != fake_get_interrupts_enabled))
+	    && (per_proc_info[processor->slot_num].interrupts_enabled == TRUE))
 		cpu_signal(processor->slot_num, SIGPast, NULL, NULL);
 }
               
@@ -374,3 +359,4 @@ be_tracing()
   int mycpu = cpu_number();
   return(per_proc_info[mycpu].cpu_flags & traceBE);
 }
+

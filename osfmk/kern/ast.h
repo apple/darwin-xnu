@@ -73,37 +73,32 @@
  *      Machine-dependent code is responsible for maintaining
  *      a set of reasons for an AST, and passing this set to ast_taken.
  */
-
-typedef unsigned int ast_t;
+typedef unsigned int	ast_t;
 
 /*
  *      Bits for reasons
  */
-#define AST_NONE	0x00
-#define AST_HALT	0x01
+#define AST_HALT		0x01
 #define AST_TERMINATE	0x02
 #define AST_BLOCK       0x04
-#define AST_UNUSED      0x08
-#define AST_QUANTUM     0x10
-#define AST_APC		0x20	/* migration APC hook */
-#define	AST_URGENT	0x40
-
+#define AST_QUANTUM     0x08
+#define	AST_URGENT		0x10
+#define AST_APC			0x20	/* migration APC hook */
 /*
  * JMM - This is here temporarily. AST_BSD is used to simulate a
  * general purpose mechanism for setting asynchronous procedure calls
  * from the outside.
  */
-#define	AST_BSD		0x80
+#define	AST_BSD			0x80
 #define	AST_BSD_INIT	0x100
 
-#define AST_SWAPOUT	0x20000
+#define AST_NONE		0x00
+#define	AST_ALL			(~AST_NONE)
 
-#define	AST_ALL		(~AST_NONE)
+#define AST_SCHEDULING	(AST_HALT | AST_TERMINATE | AST_BLOCK)
+#define	AST_PREEMPT		(AST_BLOCK | AST_QUANTUM | AST_URGENT)
 
-#define AST_SCHEDULING  (AST_HALT | AST_TERMINATE | AST_BLOCK | AST_SWAPOUT)
-#define	AST_PREEMPT	(AST_BLOCK | AST_QUANTUM | AST_URGENT)
-
-extern volatile ast_t need_ast[NCPUS];
+extern volatile ast_t	need_ast[NCPUS];
 
 #ifdef  MACHINE_AST
 /*
@@ -117,13 +112,12 @@ extern volatile ast_t need_ast[NCPUS];
 #endif  /* MACHINE_AST */
 
 /* Initialize module */
-extern void	ast_init(void);
+extern void		ast_init(void);
 
 /* Handle ASTs */
-extern void	ast_taken(
-			boolean_t	preemption,
-			ast_t		mask,
-			boolean_t	interrupt);
+extern void		ast_taken(
+					ast_t		mask,
+					boolean_t	enable);
 
 /* Check for pending ASTs */
 extern void    	ast_check(void);
@@ -135,57 +129,55 @@ extern void    	ast_check(void);
 #define MACHINE_AST_PER_THREAD  0
 #endif
 
-#define AST_PER_THREAD (MACHINE_AST_PER_THREAD|AST_HALT|AST_TERMINATE|AST_APC|AST_BSD)
-
+#define AST_PER_THREAD	(	AST_HALT | AST_TERMINATE | AST_APC | AST_BSD |	\
+										MACHINE_AST_PER_THREAD	)
 /*
- *      ast_needed, ast_on, ast_off, ast_context, and ast_propagate
- *      assume splsched.
+ *	ast_needed(), ast_on(), ast_off(), ast_context(), and ast_propagate()
+ *	assume splsched.
  */
+#define ast_needed(mycpu)			need_ast[mycpu]
 
-#define ast_needed(mycpu)               need_ast[mycpu]
-
-#define ast_on_fast(reasons)						\
-MACRO_BEGIN								\
-	int mycpu = cpu_number();					\
-	if ((need_ast[mycpu] |= (reasons)) != AST_NONE)			\
-		{ aston(mycpu); }					\
+#define ast_on_fast(reasons)							\
+MACRO_BEGIN												\
+	int		mycpu = cpu_number();						\
+	if ((need_ast[mycpu] |= (reasons)) != AST_NONE)		\
+		{ aston(mycpu); }								\
 MACRO_END
 
-#define ast_off_fast(reasons)						\
-MACRO_BEGIN								\
-	int mycpu = cpu_number();					\
-	if ((need_ast[mycpu] &= ~(reasons)) == AST_NONE)		\
-                { astoff(mycpu); }	 				\
+#define ast_off_fast(reasons)							\
+MACRO_BEGIN												\
+	int		mycpu = cpu_number();						\
+	if ((need_ast[mycpu] &= ~(reasons)) == AST_NONE)	\
+		{ astoff(mycpu); }				 				\
 MACRO_END
 
 #define ast_propagate(reasons)		ast_on(reasons)
 
-#define ast_context(act, mycpu)						\
-MACRO_BEGIN								\
-	assert(mycpu == cpu_number());					\
-	if ((need_ast[mycpu] =						\
-	     (need_ast[mycpu] &~ AST_PER_THREAD) | (act)->ast)		\
-					!= AST_NONE)			\
-		{ aston(mycpu);	}					\
-	else								\
-		{ astoff(mycpu); }					\
+#define ast_context(act, mycpu)							\
+MACRO_BEGIN												\
+	assert((mycpu) == cpu_number());					\
+	if ((need_ast[mycpu] =								\
+			((need_ast[mycpu] &~ AST_PER_THREAD) | (act)->ast)) != AST_NONE) \
+		{ aston(mycpu);	}								\
+	else												\
+		{ astoff(mycpu); }								\
 MACRO_END
 
 #define ast_on(reason)			     ast_on_fast(reason)
 #define ast_off(reason)			     ast_off_fast(reason)
 
-#define thread_ast_set(act, reason)          (act)->ast |= (reason)
-#define thread_ast_clear(act, reason)        (act)->ast &= ~(reason)
-#define thread_ast_clear_all(act)            (act)->ast = AST_NONE
+#define thread_ast_set(act, reason)			((act)->ast |= (reason))
+#define thread_ast_clear(act, reason)		((act)->ast &= ~(reason))
+#define thread_ast_clear_all(act)			((act)->ast = AST_NONE)
 
 /*
- *      NOTE: if thread is the current thread, thread_ast_set should
- *      be followed by ast_propagate().
+ *	NOTE: if thread is the current thread, thread_ast_set() should
+ *  be followed by ast_propagate().
  */
 
 #ifdef MACH_KERNEL_PRIVATE
 
-#define ast_urgency() (need_ast[cpu_number()] & AST_URGENT)
+#define ast_urgency()		(need_ast[cpu_number()] & AST_URGENT)
 
 #endif /* MACH_KERNEL_PRIVATE */
 

@@ -54,6 +54,7 @@
 #include <string.h>
 #include <mach/boolean.h>
 #include <mach/i386/vm_types.h>
+#include <mach/i386/vm_param.h>
 #include <kern/kern_types.h>
 #include <kern/misc_protos.h>
 #include <i386/misc_protos.h>
@@ -61,6 +62,20 @@
 	/*
 	 * Should be rewritten in asm anyway.
 	 */
+
+/*
+ * bcopy_phys - like bcopy but copies from/to physical addresses.
+ *              this is trivial since all phys mem is mapped into 
+ *              kernel virtual space
+ */
+
+void
+bcopy_phys(const char *from, char *to, vm_size_t bytes)
+{
+  bcopy((char *)phystokv(from), (char *)phystokv(to), bytes);
+}
+
+
 /* 
  * ovbcopy - like bcopy, but recognizes overlapping ranges and handles 
  *           them correctly.
@@ -109,6 +124,34 @@ int bcmp(
 	while (--len);
 
 	return len;
+}
+
+int
+memcmp(s1, s2, n)
+	register char *s1, *s2;
+	register n;
+{
+	while (--n >= 0)
+		if (*s1++ != *s2++)
+			return (*--s1 - *--s2);
+	return (0);
+}
+
+/*
+ * Abstract:
+ * strlen returns the number of characters in "string" preceeding
+ * the terminating null character.
+ */
+
+size_t
+strlen(
+	register const char *string)
+{
+	register const char *ret = string;
+
+	while (*string++ != '\0')
+		continue;
+	return string - 1 - ret;
 }
 
 #if	MACH_ASSERT

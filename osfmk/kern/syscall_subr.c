@@ -50,8 +50,6 @@
 /*
  */
 
-#include <cpus.h>
-
 #include <mach/boolean.h>
 #include <mach/thread_switch.h>
 #include <ipc/ipc_port.h>
@@ -72,7 +70,7 @@
 #include <mach/mach_host_server.h>
 #include <mach/mach_syscalls.h>
 
-#include <kern/sf.h>
+#include <kern/mk_sp.h>
 
 /*
  *	swtch and swtch_pri both attempt to context switch (logic in
@@ -88,27 +86,21 @@
  *	lock and then be a good citizen and really suspend.
  */
 
-#if		0
-
-/* broken..do not enable */
-
-swtch_continue()
+void
+swtch_continue(void)
 {
-    boolean_t retval;
-	register processor_t myprocessor;
+	register processor_t	myprocessor;
+    boolean_t				result;
 
     mp_disable_preemption();
 	myprocessor = current_processor();
-	retval = (
-#if	NCPUS > 1
-	       myprocessor->runq.count > 0 ||
-#endif	/*NCPUS > 1*/
-	       myprocessor->processor_set->runq.count > 0);
+	result =		myprocessor->runq.count > 0					||
+				myprocessor->processor_set->runq.count > 0;
 	mp_enable_preemption();
-	return retval;
-}
 
-#endif
+	thread_syscall_return(result);
+	/*NOTREACHED*/
+}
 
 boolean_t
 swtch(void)
@@ -118,10 +110,7 @@ swtch(void)
 
 	mp_disable_preemption();
 	myprocessor = current_processor();
-	if (
-#if	NCPUS > 1
-			myprocessor->runq.count == 0					&&
-#endif	/* NCPUS > 1 */
+	if (		myprocessor->runq.count == 0				&&
 			myprocessor->processor_set->runq.count == 0			) {
 		mp_enable_preemption();
 
@@ -131,57 +120,64 @@ swtch(void)
 
 	counter(c_swtch_block++);
 
-	thread_block((void (*)(void)) 0);
+	thread_block(swtch_continue);
 
 	mp_disable_preemption();
 	myprocessor = current_processor();
-	result = 
-#if	NCPUS > 1
-		myprocessor->runq.count > 0							||
-#endif	/*NCPUS > 1*/
-		myprocessor->processor_set->runq.count > 0;
+	result =		myprocessor->runq.count > 0					||
+				myprocessor->processor_set->runq.count > 0;
 	mp_enable_preemption();
 
 	return (result);
+}
+
+void
+swtch_pri_continue(void)
+{
+	register processor_t	myprocessor;
+    boolean_t				result;
+
+	_mk_sp_thread_depress_abort(current_thread(), FALSE);
+
+    mp_disable_preemption();
+	myprocessor = current_processor();
+	result =		myprocessor->runq.count > 0					||
+				myprocessor->processor_set->runq.count > 0;
+	mp_enable_preemption();
+
+	thread_syscall_return(result);
+	/*NOTREACHED*/
 }
 
 boolean_t
 swtch_pri(
 	int				pri)
 {
-	thread_t				self = current_thread();
 	register processor_t	myprocessor;
 	boolean_t				result;
-	sched_policy_t			*policy;
-	spl_t					s;
-
-	s = splsched();
-	thread_lock(self);
-	myprocessor = current_processor();
-	if (
-#if	NCPUS > 1
-			myprocessor->runq.count == 0					&&
-#endif	/* NCPUS > 1 */
-			myprocessor->processor_set->runq.count == 0			) {
-		thread_unlock(self);
-		splx(s);
-
-		return (FALSE);
-	}
-
-	policy = &sched_policy[self->policy];
-	thread_unlock(self);
-	splx(s);
-
-	policy->sp_ops.sp_swtch_pri(policy, pri);
 
 	mp_disable_preemption();
 	myprocessor = current_processor();
-	result = 
-#if	NCPUS > 1
-		myprocessor->runq.count > 0							||
-#endif	/*NCPUS > 1*/
-		myprocessor->processor_set->runq.count > 0;
+	if (	myprocessor->runq.count == 0					&&
+			myprocessor->processor_set->runq.count == 0			) {
+		mp_enable_preemption();
+
+		return (FALSE);
+	}
+	mp_enable_preemption();
+
+	counter(c_swtch_pri_block++);
+
+	_mk_sp_thread_depress_abstime(std_quantum);
+
+	thread_block(swtch_pri_continue);
+
+	_mk_sp_thread_depress_abort(current_thread(), FALSE);
+
+	mp_disable_preemption();
+	myprocessor = current_processor();
+	result =	myprocessor->runq.count > 0						||
+				myprocessor->processor_set->runq.count > 0;
 	mp_enable_preemption();
 
 	return (result);
@@ -200,8 +196,6 @@ thread_switch(
 {
     register thread_t		self = current_thread();
     register thread_act_t 	hint_act = THR_ACT_NULL;
-	sched_policy_t			*policy;
-	spl_t					s;
 
     /*
      *	Process option.
@@ -230,17 +224,5 @@ thread_switch(
 		}
 	}
 
-	s = splsched();
-	thread_lock(self);
-	policy = &sched_policy[self->policy];
-	thread_unlock(self);
-	splx(s);
-
-    /*
-     * This is a scheduling policy-dependent operation.
-     * Call the routine associated with the thread's
-     * scheduling policy.
-     */
-    return (policy->sp_ops.
-				sp_thread_switch(policy, hint_act, option, option_time));
+    return _mk_sp_thread_switch(hint_act, option, option_time);
 }

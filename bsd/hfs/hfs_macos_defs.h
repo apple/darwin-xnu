@@ -28,11 +28,6 @@
  
  	DRI:		Nick Kledzik
  
- 	History:
- 	12-Aug-1999	Scott Roberts	Created from ConditionalMacros.h, MacOSStubs.h, MacOSTypes.h
-
- 
- 
 */
 
 
@@ -1051,10 +1046,12 @@ enum {
 	kTextEncodingMacTurkish		= 35,
 	kTextEncodingMacCroatian	= 36,
 	kTextEncodingMacIcelandic	= 37,
-	kTextEncodingMacRomanian	= 38,							/* The following use script code 4, smArabic*/
-	kTextEncodingMacFarsi		= 0x8C,							/* Like MacArabic but uses Farsi digits*/
-																/* The following use script code 7, smCyrillic*/
-	kTextEncodingMacUkrainian	= 0x98,							/* The following use script code 32, smUnimplemented*/
+	kTextEncodingMacRomanian	= 38,					
+	kTextEncodingMacUnicode		= 0x7E,
+																/* The following use script code 4, smArabic */
+	kTextEncodingMacFarsi		= 0x8C,							/* Like MacArabic but uses Farsi digits */
+																/* The following use script code 7, smCyrillic */
+	kTextEncodingMacUkrainian	= 0x98,							/* The following use script code 32, smUnimplemented */
 	kTextEncodingMacVT100		= 0xFC,							/* VT100/102 font from Comm Toolbox: Latin-1 repertoire + box drawing etc*/
 																/* Special Mac OS encodings*/
 	kTextEncodingMacHFS			= 0xFF,							/* Meta-value, should never appear in a table.*/
@@ -1556,13 +1553,6 @@ EqualString						(ConstStr255Param 		str1,
  
  
 */
-
-/* The following replace storage used in low-mem on MacOS: */
-extern struct FSVarsRec * gFSMVars;
-
-
-#define LMGetFSMVars() gFSMVars
-
 
 
 EXTERN_API( void )

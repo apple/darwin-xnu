@@ -72,6 +72,7 @@
 struct route {
 	struct	rtentry *ro_rt;
 	struct	sockaddr ro_dst;
+	u_long	reserved[2];	/* for future use if needed */
 };
 
 /*

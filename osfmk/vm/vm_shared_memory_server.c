@@ -233,10 +233,11 @@ copyin_shared_file(
 	vm_offset_t	*base_address, 
 	int 		map_cnt,
 	sf_mapping_t	*mappings,
-	vm_object_t	file_object,
+	memory_object_control_t	file_control,
 	shared_region_task_mappings_t	sm_info,
 	int		*flags)
 {
+	vm_object_t	file_object;
 	vm_map_entry_t		entry;
 	shared_file_info_t	*shared_file_header;
 	load_struct_t		*file_entry;
@@ -301,7 +302,7 @@ copyin_shared_file(
 	
 	/* Find the entry in the map associated with the current mapping */
 	/* of the file object */
-
+	file_object = memory_object_control_to_vm_object(file_control);
 	if(vm_map_lookup_entry(current_map(), mapped_file, &entry)) {
 		vm_object_t	mapped_object;
 		if(entry->is_sub_map) {

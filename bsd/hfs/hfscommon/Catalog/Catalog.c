@@ -236,7 +236,8 @@ void InitCatalogRecord(ExtendedVCB *volume, UInt32 nodeType, UInt32 textEncoding
 
 OSErr
 CreateCatalogNode ( ExtendedVCB *volume, HFSCatalogNodeID parentID, ConstUTF8Param name,
-					UInt32 nodeType, HFSCatalogNodeID *catalogNodeID, UInt32 *catalogHint)
+					UInt32 nodeType, HFSCatalogNodeID *catalogNodeID, UInt32 *catalogHint,
+					UInt32 teHint)
 {
 	CatalogKey		*nodeKey;
 	CatalogRecord	nodeData;			// 520 bytes
@@ -291,6 +292,7 @@ CreateCatalogNode ( ExtendedVCB *volume, HFSCatalogNodeID parentID, ConstUTF8Par
 	InvalidateCatalogNodeCache(volume, parentsParentID);	
 
 	//--- build key for new catalog node
+	textEncoding = teHint;
 	result = BuildCatalogKeyUTF8(volume, parentID, name, kUndefinedStrLen, nodeKey, &textEncoding);
 	ReturnIfError(result);
 
@@ -512,6 +514,18 @@ DeleteCatalogNode(ExtendedVCB *volume, HFSCatalogNodeID parentID, ConstUTF8Param
 	// if we did not find it by name, then look for an embedded file ID in a mangled name
 	if ( (result == cmNotFound) && isHFSPlus )
         result = LocateCatalogNodeByMangledName(volume, parentID, name, kUndefinedStrLen, &key, &data, &nodeHint);
+
+	/*
+	 * In Mac OS X there can also be HFS filenames that
+	 * could not be encoded using the default encoding.
+	 */
+	if (result == cmNotFound && !isHFSPlus && VCBTOHFS(volume)->hfs_encoding != 0) {
+		Str31 hfsName;
+
+		utf8_to_mac_roman(strlen(name), name, hfsName);	
+		result = LocateCatalogNode(volume, parentID, (CatalogName*)hfsName,
+		                           0, &key, &data, &nodeHint);
+	}
 	ReturnIfError(result);
 
 	nodeParentID = isHFSPlus ? key.hfsPlus.parentID : key.hfs.parentID;	// establish real parent cnid
@@ -695,7 +709,7 @@ GetCatalogNode( ExtendedVCB *volume, HFSCatalogNodeID parentID, ConstUTF8Param n
 	 * could not be encoded using the default encoding.
 	 * In which case they were encoded as MacRoman.
 	 */
-	if (result == cmNotFound && !isHFSPlus) {
+	if (result == cmNotFound && !isHFSPlus && VCBTOHFS(volume)->hfs_encoding != 0) {
 		Str31 hfsName;
 
 		utf8_to_mac_roman(nameLen, name, hfsName);	
@@ -801,7 +815,14 @@ GetDirEntrySize(BTreeIterator *bip, ExtendedVCB * vol)
 		cnp = (CatalogName*) ckp->hfs.nodeName;
 		result = hfs_to_utf8(vol, cnp->pstr, kdirentMaxNameBytes + 1,
 				&utf8chars, name);
-		/*XXX ignoring error */
+		if (result) {
+			/*
+			 * When an HFS name cannot be encoded with the current
+			 * volume encoding we use MacRoman as a fallback.
+			 */
+			result = mac_roman_to_utf8(cnp->pstr, MAXHFSVNODELEN + 1,
+					                           &utf8chars, name);
+		}
 	}
 
 	return DIRENTRY_SIZE(utf8chars);
@@ -1148,6 +1169,13 @@ IterateCatalogNode( ExtendedVCB *volume, CatalogIterator *catalogIterator, UInt1
 					nodeData->cnm_nameptr = NewPtr(utf8len+1);
 					nodeData->cnm_flags |= kCatNameIsAllocated;
 					result = hfs_to_utf8(volume, offspringName->pstr, utf8len + 1, &utf8len, nodeData->cnm_nameptr);
+				} else if (result) {
+					/*
+					 * When an HFS name cannot be encoded with the current
+					 * volume encoding we use MacRoman as a fallback.
+					 */
+					result = mac_roman_to_utf8(offspringName->pstr, MAXHFSVNODELEN + 1,
+					                           &utf8len, nodeData->cnm_namespace);
 				}
 
 			} else {
@@ -1180,7 +1208,8 @@ ErrorExit:
 
 OSErr
 MoveRenameCatalogNode(ExtendedVCB *volume, HFSCatalogNodeID srcParentID, ConstUTF8Param srcName,
-					  UInt32 srcHint, HFSCatalogNodeID dstParentID, ConstUTF8Param dstName, UInt32 *newHint)
+					  UInt32 srcHint, HFSCatalogNodeID dstParentID, ConstUTF8Param dstName,
+					  UInt32 *newHint, UInt32 teHint)
 {
 	CatalogKey			srcKey;			// 518 bytes
 	CatalogRecord		srcRecord;		// 520 bytes
@@ -1199,7 +1228,7 @@ MoveRenameCatalogNode(ExtendedVCB *volume, HFSCatalogNodeID srcParentID, ConstUT
 	short srcNameLen;
 	short dstNameLen;
 
-
+	textEncoding = teHint;
 	result = BuildCatalogKeyUTF8(volume, srcParentID, srcName, kUndefinedStrLen, &srcKey, &textEncoding);
 	ReturnIfError(result);
 
@@ -1235,6 +1264,17 @@ MoveRenameCatalogNode(ExtendedVCB *volume, HFSCatalogNodeID srcParentID, ConstUT
 	// if we did not find it by name, then look for an embedded file ID in a mangled name
 	if ( (result == cmNotFound) && isHFSPlus )
         result = LocateCatalogNodeByMangledName(volume, srcParentID, srcName, kUndefinedStrLen, &srcKey, &srcRecord, &srcHint);
+	/*
+	 * In Mac OS X there can also be HFS filenames that
+	 * could not be encoded using the default encoding.
+	 */
+	if (result == cmNotFound && !isHFSPlus && VCBTOHFS(volume)->hfs_encoding != 0) {
+		Str31 hfsName;
+		
+		utf8_to_mac_roman(strlen(srcName), srcName, hfsName);	
+		result = LocateCatalogNode(volume, srcParentID, (CatalogName*)hfsName,
+		                           0, &srcKey, &srcRecord, &srcHint);
+	}
 	ReturnIfError(result);
 
 	srcParentID = (isHFSPlus ? srcKey.hfsPlus.parentID : srcKey.hfs.parentID);
@@ -1530,6 +1570,17 @@ UpdateCatalogNode(ExtendedVCB *volume, HFSCatalogNodeID parentID, ConstUTF8Param
 	if ( (result == cmNotFound) && isHFSPlus )
         result = LocateCatalogNodeByMangledName(volume, parentID, name, kUndefinedStrLen, key, record, &hint);
 
+	/*
+	 * In Mac OS X there can also be HFS filenames that
+	 * could not be encoded using the default encoding.
+	 */
+	if (result == cmNotFound && !isHFSPlus && VCBTOHFS(volume)->hfs_encoding != 0) {
+		Str31 hfsName;
+		
+		utf8_to_mac_roman(strlen(name), name, hfsName);	
+		result = LocateCatalogNode(volume, parentID, (CatalogName*)hfsName,
+		                           0, key, record, &hint);
+	}
 	if (result == btNotFound)
 		result = cmNotFound;
 
@@ -1722,6 +1773,17 @@ CreateFileIDRef(ExtendedVCB *volume, HFSCatalogNodeID parentID, ConstUTF8Param n
 	// if we did not find it by name, then look for an embedded file ID in a mangled name
 	if ( (result == cmNotFound) && isHFSPlus )
         result = LocateCatalogNodeByMangledName(volume, parentID, name, kUndefinedStrLen, &nodeKey, &nodeData, &nodeHint);
+	/*
+	 * In Mac OS X there can also be HFS filenames that
+	 * could not be encoded using the default encoding.
+	 */
+	if ((result == cmNotFound) && !isHFSPlus && VCBTOHFS(volume)->hfs_encoding != 0) {
+		Str31 hfsName;
+		
+		utf8_to_mac_roman(strlen(name), name, hfsName);	
+		result = LocateCatalogNode(volume, parentID, (CatalogName*)hfsName,
+		                           0, &nodeKey, &nodeData, &nodeHint);
+	}
 	ReturnIfError(result);
 	
     if (nodeData.recordType == kHFSPlusFileRecord)

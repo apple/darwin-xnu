@@ -25,35 +25,79 @@
 #define IOPMMaxPowerStates 10
 
 typedef unsigned long IOPMPowerFlags;
+enum {
+                        // following  bits are used in the input and output power fields
+    kIOPMClockNormal		= 0x0004,
+    kIOPMClockRunning		= 0x0008,
+    kIOPMAuxPowerOn		= 0x0020,	// used only between root and root parent
+    kIOPMPagingAvailable	= 0x0020,	// used only between paging plexus and its children
+    kIOPMPassThrough		= 0x0100,
+    kIOPMDoze			= 0x0400,
+    kIOPMSoftSleep		= 0x0400,	// old usage, replaced by kIOPMDoze
+    kIOPMSleep			= 0x0001,
+    kIOPMRestart		= 0x0080,
+                        // following  bits are used in the capabilites field and the power fields
+    kIOPMPowerOn		= 0x0002,
+    kIOPMPreventSystemSleep	= 0x0010,
+    kIOPMPreventIdleSleep	= 0x0040,
+                        // following  bits are used in the capabilites field
+    kIOPMNotAttainable		= 0x0001,	// used between a driver and its policy-maker
+    kIOPMChildClamp		= 0x0080,	// used internally in a power domain parent
+    kIOPMChildClamp2		= 0x0200,	// used internally in a power domain parent
+    kIOPMDeviceUsable		= 0x8000,
+    kIOPMMaxPerformance	 	= 0x4000,
+    kIOPMContextRetained	= 0x2000,
+    kIOPMConfigRetained		= 0x1000,
+    kIOPMSleepCapability	= 0x0004,
+    kIOPMRestartCapability	= 0x0080,
+    kIOPMNotPowerManaged	= 0x0800,	// this is an error return rather than a bit
+    kIOPMStaticPowerValid	= 0x0800,	// therefore this bit safely overloads it
+    
+    kIOPMCapabilitiesMask =     kIOPMPowerOn | kIOPMDeviceUsable | kIOPMMaxPerformance |
+                                kIOPMContextRetained | kIOPMConfigRetained | kIOPMSleepCapability |
+                                kIOPMRestartCapability
+};
 
-#define IOPMNotAttainable	0x0001
-#define IOPMPowerOn		0x0002
-#define IOPMClockNormal	0x0004
-#define IOPMClockRunning	0x0008
-#define IOPMWakeupEnabled	0x0010
-#define IOPMAuxPowerOn		0x0020
-                        // following "capabilites" exist for the convenience
-                        // of the "interested drivers"
-#define IOPMDeviceUsable	0x8000
-#define IOPMMaxPerformance	0x4000
-#define IOPMContextRetained	0x2000
-#define IOPMConfigRetained	0x1000
-#define IOPMNotPowerManaged	0x0800
-#define IOPMSoftSleep		0x0400
 
-#define IOPMNextHigherState	1
-#define IOPMHighestState	2
-#define IOPMNextLowerState	3
-#define IOPMLowestState		4
+enum {
+    IOPMNotAttainable	= kIOPMNotAttainable,
+    IOPMPowerOn		= kIOPMPowerOn,
+    IOPMClockNormal	= kIOPMClockNormal,
+    IOPMClockRunning	= kIOPMClockRunning,
+    IOPMAuxPowerOn	= kIOPMAuxPowerOn,
+    IOPMDeviceUsable	= kIOPMDeviceUsable,
+    IOPMMaxPerformance	= kIOPMMaxPerformance,
+    IOPMContextRetained	= kIOPMContextRetained,
+    IOPMConfigRetained	= kIOPMConfigRetained,
+    IOPMNotPowerManaged	= kIOPMNotPowerManaged,
+    IOPMPagingAvailable	= kIOPMPagingAvailable,
+    IOPMSoftSleep	= kIOPMSoftSleep
+};
+
+
+enum {
+    kIOPMNextHigherState	= 1,
+    kIOPMHighestState		= 2,
+    kIOPMNextLowerState		= 3,
+    kIOPMLowestState		= 4
+};
+
+enum {
+    IOPMNextHigherState		= kIOPMNextHigherState,
+    IOPMHighestState		= kIOPMHighestState,
+    IOPMNextLowerState		= kIOPMNextLowerState,
+    IOPMLowestState		= kIOPMLowestState
+};
+
 
 
 enum {		// commands on power managment command queue
-    kPMbroadcastAggressiveness = 1,
-    kPMunIdleDevice,
-    kPMsleepDemand,
-    kPMwakeSignal,
-    kPMallowSleep,
-    kPMcancelSleep
+    kIOPMBroadcastAggressiveness = 1,
+    kIOPMUnidleDevice
+};
+
+enum {		// special value means "power consumption unknown"
+    kIOPMUnknown = 0xFFFF
 };
 
 // Power events
@@ -73,7 +117,8 @@ enum {
   kIOPMPowerButton		 = (1<<3),  // power button was pressed
   kIOPMClamshellClosed		 = (1<<4),  // clamshell was closed
   kIOPMPowerEmergency		 = (1<<5),  // battery dangerously low
-  kIOPMIgnoreClamshell		 = (1<<6)   // take no action on clamshell closure
+  kIOPMDisableClamshell		 = (1<<6),  // do not sleep on clamshell closure
+  kIOPMEnableClamshell		 = (1<<7)   // sleep on clamshell closure
 };
                                         // Return codes
 
@@ -219,9 +264,10 @@ enum {
     kPMGeneralAggressiveness = 0,
     kPMMinutesToDim,
     kPMMinutesToSpinDown,
-    kPMMinutesToSleep
+    kPMMinutesToSleep,
+    kPMEthernetWakeOnLANSettings,
 };
-#define kMaxType kPMMinutesToSleep
+#define kMaxType kPMEthernetWakeOnLANSettings
 
 
 #define kIOBatteryInfoKey		"IOBatteryInfo"
@@ -256,11 +302,14 @@ struct stateChangeNote{
 };
 typedef struct stateChangeNote stateChangeNote;
 
-struct sleepWakeNote{
+struct IOPowerStateChangeNotification {
     void *		powerRef;
     unsigned long	returnValue;
+    unsigned long	stateNumber;
+    IOPMPowerFlags	stateFlags;
 };
-typedef struct sleepWakeNote sleepWakeNote;
+typedef struct IOPowerStateChangeNotification IOPowerStateChangeNotification;
+typedef IOPowerStateChangeNotification sleepWakeNote;
 
 extern void IOPMRegisterDevice(const char *, IOService *);
 #endif /* KERNEL && __cplusplus */

@@ -80,7 +80,6 @@
 #include <simple_clock.h>
 #include <mach_debug.h>
 #include <mach_prof.h>
-#include <stack_usage.h>
 
 #include <mach/boolean.h>
 #include <mach/policy.h>
@@ -102,7 +101,6 @@
 #include <kern/queue.h>
 #include <kern/sched.h>
 #include <kern/sched_prim.h>
-#include <kern/sf.h>
 #include <kern/mk_sp.h>	/*** ??? fix so this can be removed ***/
 #include <kern/task.h>
 #include <kern/thread.h>
@@ -146,32 +144,12 @@ extern void		pcb_module_init(void);
 static struct thread_shuttle	thr_sh_template;
 
 #if	MACH_DEBUG
-#if	STACK_USAGE
-static void	stack_init(vm_offset_t stack, unsigned int bytes);
-void		stack_finalize(vm_offset_t stack);
-vm_size_t	stack_usage(vm_offset_t stack);
-#else	/*STACK_USAGE*/
-#define stack_init(stack, size)
-#define stack_finalize(stack)
-#define stack_usage(stack) (vm_size_t)0
-#endif	/*STACK_USAGE*/
 
 #ifdef	MACHINE_STACK
-extern
-#endif
-    void	stack_statistics(
+extern void	stack_statistics(
 			unsigned int	*totalp,
 			vm_size_t	*maxusagep);
-
-#define	STACK_MARKER	0xdeadbeef
-#if	STACK_USAGE
-boolean_t		stack_check_usage = TRUE;
-#else	/* STACK_USAGE */
-boolean_t		stack_check_usage = FALSE;
-#endif	/* STACK_USAGE */
-decl_simple_lock_data(,stack_usage_lock)
-vm_size_t		stack_max_usage = 0;
-vm_size_t		stack_max_use = KERNEL_STACK_SIZE - 64;
+#endif	/* MACHINE_STACK */
 #endif	/* MACH_DEBUG */
 
 /* Forwards */
@@ -202,6 +180,7 @@ extern void		Load_context(
  *		stack_alloc_try
  *		stack_alloc
  *		stack_free
+ *		stack_free_stack
  *		stack_collect
  *	and if MACH_DEBUG:
  *		stack_statistics
@@ -220,16 +199,20 @@ decl_simple_lock_data(,stack_lock_data)         /* splsched only */
 #define stack_lock()	simple_lock(&stack_lock_data)
 #define stack_unlock()	simple_unlock(&stack_lock_data)
 
+mutex_t stack_map_lock;				/* Lock when allocating stacks maps */
+vm_map_t stack_map;					/* Map for allocating stacks */
 vm_offset_t stack_free_list;		/* splsched only */
 unsigned int stack_free_max = 0;
 unsigned int stack_free_count = 0;	/* splsched only */
-unsigned int stack_free_limit = 1;	/* patchable */
+unsigned int stack_free_limit = 1;	/* Arbitrary  */
 
 unsigned int stack_alloc_hits = 0;	/* debugging */
 unsigned int stack_alloc_misses = 0;	/* debugging */
 
 unsigned int stack_alloc_total = 0;
 unsigned int stack_alloc_hiwater = 0;
+unsigned int stack_alloc_bndry = 0;
+
 
 /*
  *	The next field is at the base of the stack,
@@ -249,14 +232,31 @@ stack_alloc(
 	thread_t thread,
 	void (*start_pos)(thread_t))
 {
-	vm_offset_t stack;
-	spl_t	s;
+	vm_offset_t 	stack = thread->kernel_stack;
+	spl_t			s;
 
-	/*
-	 *	We first try the free list.  It is probably empty,
-	 *	or stack_alloc_try would have succeeded, but possibly
-	 *	a stack was freed before the swapin thread got to us.
-	 */
+	if (stack)
+		return (stack);
+
+/*
+ *	We first try the free list.  It is probably empty, or
+ *	stack_alloc_try would have succeeded, but possibly a stack was
+ *	freed before the swapin thread got to us.
+ *
+ *	We allocate stacks from their own map which is submaps of the
+ *	kernel map.  Because we want to have a guard page (at least) in
+ *	front of each stack to catch evil code that overruns its stack, we
+ *	allocate the stack on aligned boundaries.  The boundary is
+ *	calculated as the next power of 2 above the stack size. For
+ *	example, a stack of 4 pages would have a boundry of 8, likewise 5
+ *	would also be 8.
+ *
+ *	We limit the number of stacks to be one allocation chunk
+ *	(THREAD_CHUNK) more than the maximum number of threads
+ *	(THREAD_MAX).  The extra is to allow for priviliged threads that
+ *	can sometimes have 2 stacks.
+ *
+ */
 
 	s = splsched();
 	stack_lock();
@@ -268,49 +268,21 @@ stack_alloc(
 	stack_unlock();
 	splx(s);
 
-	if (stack == 0) {
-		/*
-		 *	Kernel stacks should be naturally aligned,
-		 *	so that it is easy to find the starting/ending
-		 *	addresses of a stack given an address in the middle.
-		 */
-
-		if (kmem_alloc_aligned(kernel_map, &stack,
-				round_page(KERNEL_STACK_SIZE)) != KERN_SUCCESS)
-			panic("stack_alloc");
-
-		stack_alloc_total++;
-		if (stack_alloc_total > stack_alloc_hiwater)
-		  stack_alloc_hiwater = stack_alloc_total;
-
-#if	MACH_DEBUG
-		stack_init(stack, round_page(KERNEL_STACK_SIZE));
-#endif	/* MACH_DEBUG */
-
-		/*
-		 * If using fractional pages, free the remainder(s)
-		 */
-		if (KERNEL_STACK_SIZE < round_page(KERNEL_STACK_SIZE)) {
-		    vm_offset_t ptr  = stack + KERNEL_STACK_SIZE;
-		    vm_offset_t endp = stack + round_page(KERNEL_STACK_SIZE);
-		    while (ptr < endp) {
-#if	MACH_DEBUG
-			    /*
-			     * We need to initialize just the end of the 
-			     * region.
-			     */
-			    stack_init(ptr, (unsigned int) (endp - ptr));
-#endif
-				stack_lock();
-				stack_next(stack) = stack_free_list;
-				stack_free_list = stack;
-				if (++stack_free_count > stack_free_max)
-				  stack_free_max = stack_free_count;
-				stack_unlock();
-			    ptr += KERNEL_STACK_SIZE;
-		    }
-		}
+	if (stack != 0) {							/* Did we find a free one? */
+		stack_attach(thread, stack, start_pos);	/* Initialize it */
+		return (stack);							/* Send it on home */
 	}
+		
+	if (kernel_memory_allocate(
+					stack_map, &stack,
+						KERNEL_STACK_SIZE, stack_alloc_bndry - 1,
+										KMA_KOBJECT) != KERN_SUCCESS)
+		panic("stack_alloc: no space left for stack maps");
+
+	stack_alloc_total++;
+	if (stack_alloc_total > stack_alloc_hiwater)
+		stack_alloc_hiwater = stack_alloc_total;
+
 	stack_attach(thread, stack, start_pos);
 	return (stack);
 }
@@ -327,15 +299,32 @@ stack_free(
 	thread_t thread)
 {
     vm_offset_t stack = stack_detach(thread);
+
 	assert(stack);
 	if (stack != thread->stack_privilege) {
-	  stack_lock();
-	  stack_next(stack) = stack_free_list;
-	  stack_free_list = stack;
-	  if (++stack_free_count > stack_free_max)
-		stack_free_max = stack_free_count;
-	  stack_unlock();
+		stack_lock();
+		stack_next(stack) = stack_free_list;
+		stack_free_list = stack;
+		if (++stack_free_count > stack_free_max)
+			stack_free_max = stack_free_count;
+		stack_unlock();
 	}
+}
+
+static void
+stack_free_stack(
+	vm_offset_t		stack)
+{
+	spl_t	s;
+
+	s = splsched();
+	stack_lock();
+	stack_next(stack) = stack_free_list;
+	stack_free_list = stack;
+	if (++stack_free_count > stack_free_max)
+		stack_free_max = stack_free_count;
+	stack_unlock();
+	splx(s);
 }
 
 /*
@@ -348,14 +337,9 @@ stack_free(
 void
 stack_collect(void)
 {
-	register vm_offset_t stack;
-	spl_t	s;
-
-	/* If using fractional pages, Cannot just call kmem_free(),
-	 * and we're too lazy to coalesce small chunks.
-	 */
-	if (KERNEL_STACK_SIZE < round_page(KERNEL_STACK_SIZE))
-		return;
+	vm_offset_t	stack;
+	int			i;
+	spl_t		s;
 
 	s = splsched();
 	stack_lock();
@@ -366,14 +350,14 @@ stack_collect(void)
 		stack_unlock();
 		splx(s);
 
-#if	MACH_DEBUG
-		stack_finalize(stack);
-#endif	/* MACH_DEBUG */
-		kmem_free(kernel_map, stack, KERNEL_STACK_SIZE);
+		if (vm_map_remove(
+					stack_map, stack, stack + KERNEL_STACK_SIZE,
+									VM_MAP_REMOVE_KUNWIRE) != KERN_SUCCESS)
+			panic("stack_collect: vm_map_remove failed");
 
 		s = splsched();
-		stack_alloc_total--;
 		stack_lock();
+		stack_alloc_total--;
 	}
 	stack_unlock();
 	splx(s);
@@ -398,27 +382,9 @@ stack_statistics(
 	s = splsched();
 	stack_lock();
 
-#if	STACK_USAGE
-	if (stack_check_usage) {
-		vm_offset_t stack;
-
-		/*
-		 *	This is pretty expensive to do at splsched,
-		 *	but it only happens when someone makes
-		 *	a debugging call, so it should be OK.
-		 */
-
-		for (stack = stack_free_list; stack != 0;
-		     stack = stack_next(stack)) {
-			vm_size_t usage = stack_usage(stack);
-
-			if (usage > *maxusagep)
-				*maxusagep = usage;
-		}
-	}
-#endif	/* STACK_USAGE */
-
 	*totalp = stack_free_count;
+	*maxusagep = 0;
+
 	stack_unlock();
 	splx(s);
 }
@@ -472,34 +438,53 @@ boolean_t stack_alloc_try(
 	thread_t	thread,
 	void		(*start_pos)(thread_t))
 {
-	register vm_offset_t stack;
+	register vm_offset_t stack = thread->stack_privilege;
 
-	if ((stack = thread->stack_privilege) == (vm_offset_t)0) {
-	  stack_lock();
-	  stack = stack_free_list;
-	  if (stack != (vm_offset_t)0) {
-	    stack_free_list = stack_next(stack);
-	    stack_free_count--;
-	  }
-	  stack_unlock();
+	if (stack == 0) {
+		stack_lock();
+
+		stack = stack_free_list;
+		if (stack != (vm_offset_t)0) {
+			stack_free_list = stack_next(stack);
+			stack_free_count--;
+		}
+
+		stack_unlock();
 	}
 
 	if (stack != 0) {
 		stack_attach(thread, stack, start_pos);
 		stack_alloc_hits++;
-		return TRUE;
-	} else {
+
+		return (TRUE);
+	}
+	else {
 		stack_alloc_misses++;
-		return FALSE;
+
+		return (FALSE);
 	}
 }
 
-natural_t			min_quantum_abstime;
-extern natural_t	min_quantum_ms;
+uint64_t			max_unsafe_computation;
+extern int			max_unsafe_quanta;
+
+uint32_t			sched_safe_duration;
+
+uint64_t			max_poll_computation;
+extern int			max_poll_quanta;
+
+uint32_t			std_quantum;
+uint32_t			min_std_quantum;
+
+uint32_t			max_rt_quantum;
+uint32_t			min_rt_quantum;
 
 void
 thread_init(void)
 {
+	kern_return_t ret;
+	unsigned int stack;
+	
 	thread_shuttle_zone = zinit(
 			sizeof(struct thread_shuttle),
 			THREAD_MAX * sizeof(struct thread_shuttle),
@@ -527,27 +512,33 @@ thread_init(void)
 	thr_sh_template.wait_result = KERN_SUCCESS;
 	thr_sh_template.wait_queue = WAIT_QUEUE_NULL;
 	thr_sh_template.wake_active = FALSE;
-	thr_sh_template.state = TH_WAIT|TH_UNINT;
+	thr_sh_template.state = TH_STACK_HANDOFF | TH_WAIT | TH_UNINT;
 	thr_sh_template.interruptible = TRUE;
 	thr_sh_template.continuation = (void (*)(void))0;
 	thr_sh_template.top_act = THR_ACT_NULL;
 
 	thr_sh_template.importance = 0;
 	thr_sh_template.sched_mode = 0;
+	thr_sh_template.safe_mode = 0;
 
 	thr_sh_template.priority = 0;
 	thr_sh_template.sched_pri = 0;
 	thr_sh_template.depress_priority = -1;
 	thr_sh_template.max_priority = 0;
+	thr_sh_template.task_priority = 0;
+
+	thr_sh_template.current_quantum = 0;
+
+	thr_sh_template.metered_computation = 0;
+	thr_sh_template.computation_epoch = 0;
 
 	thr_sh_template.cpu_usage = 0;
+	thr_sh_template.cpu_delta = 0;
 	thr_sh_template.sched_usage = 0;
+	thr_sh_template.sched_delta = 0;
 	thr_sh_template.sched_stamp = 0;
 	thr_sh_template.sleep_stamp = 0;
-
-	thr_sh_template.policy = POLICY_NULL;
-	thr_sh_template.sp_state = 0;
-	thr_sh_template.unconsumed_quantum = 0;
+	thr_sh_template.safe_release = 0;
 
 	thr_sh_template.vm_privilege = FALSE;
 
@@ -557,8 +548,6 @@ thread_init(void)
 	thr_sh_template.user_timer_save.high = 0;
 	thr_sh_template.system_timer_save.low = 0;
 	thr_sh_template.system_timer_save.high = 0;
-	thr_sh_template.cpu_delta = 0;
-	thr_sh_template.sched_delta = 0;
 
 	thr_sh_template.active = FALSE; /* reset */
 
@@ -586,12 +575,40 @@ thread_init(void)
     thr_sh_template.funnel_lock = THR_FUNNEL_NULL;
 
 #ifndef MACHINE_STACK
-	simple_lock_init(&stack_lock_data, ETAP_THREAD_STACK);
-#endif  /* MACHINE_STACK */
+	simple_lock_init(&stack_lock_data, ETAP_THREAD_STACK);	/* Initialize the stack lock */
+	
+	if (KERNEL_STACK_SIZE < round_page(KERNEL_STACK_SIZE)) {	/* Kernel stacks must be multiples of pages */
+		panic("thread_init: kernel stack size (%08X) must be a multiple of page size (%08X)\n", 
+			KERNEL_STACK_SIZE, PAGE_SIZE);
+	}
+	
+	for(stack_alloc_bndry = PAGE_SIZE; stack_alloc_bndry <= KERNEL_STACK_SIZE; stack_alloc_bndry <<= 1);	/* Find next power of 2 above stack size */
 
-#if	MACH_DEBUG
-	simple_lock_init(&stack_usage_lock, ETAP_THREAD_STACK_USAGE);
-#endif	/* MACH_DEBUG */
+	ret = kmem_suballoc(kernel_map, 		/* Suballocate from the kernel map */
+
+		&stack,
+		(stack_alloc_bndry * (THREAD_MAX + 64)),	/* Allocate enough for all of it */
+		FALSE,								/* Say not pageable so that it is wired */
+		TRUE,								/* Allocate from anywhere */
+		&stack_map);						/* Allocate a submap */
+		
+	if(ret != KERN_SUCCESS) {				/* Did we get one? */
+		panic("thread_init: kmem_suballoc for stacks failed - ret = %d\n", ret);	/* Die */
+	}	
+	stack = vm_map_min(stack_map);			/* Make sure we skip the first hunk */
+	ret = vm_map_enter(stack_map, &stack, PAGE_SIZE, 0,	/* Make sure there is nothing at the start */
+		0, 									/* Force it at start */
+		VM_OBJECT_NULL, 0, 					/* No object yet */
+		FALSE,								/* No copy */
+		VM_PROT_NONE,						/* Allow no access */
+		VM_PROT_NONE,						/* Allow no access */
+		VM_INHERIT_DEFAULT);				/* Just be normal */
+		
+	if(ret != KERN_SUCCESS) {					/* Did it work? */
+		panic("thread_init: dummy alignment allocation failed; ret = %d\n", ret);
+	}
+		
+#endif  /* MACHINE_STACK */
 
 #if	MACH_LDEBUG
 	thr_sh_template.kthread = FALSE;
@@ -599,12 +616,35 @@ thread_init(void)
 #endif	/* MACH_LDEBUG */
 
 	{
-		AbsoluteTime		abstime;
+		uint64_t			abstime;
 
 		clock_interval_to_absolutetime_interval(
-							min_quantum_ms, 1000*NSEC_PER_USEC, &abstime);
-		assert(abstime.hi == 0 && abstime.lo != 0);
-		min_quantum_abstime = abstime.lo;
+							std_quantum_us, NSEC_PER_USEC, &abstime);
+		assert((abstime >> 32) == 0 && (uint32_t)abstime != 0);
+		std_quantum = abstime;
+
+		/* 250 us */
+		clock_interval_to_absolutetime_interval(250, NSEC_PER_USEC, &abstime);
+		assert((abstime >> 32) == 0 && (uint32_t)abstime != 0);
+		min_std_quantum = abstime;
+
+		/* 50 us */
+		clock_interval_to_absolutetime_interval(50, NSEC_PER_USEC, &abstime);
+		assert((abstime >> 32) == 0 && (uint32_t)abstime != 0);
+		min_rt_quantum = abstime;
+
+		/* 50 ms */
+		clock_interval_to_absolutetime_interval(
+										50, 1000*NSEC_PER_USEC, &abstime);
+		assert((abstime >> 32) == 0 && (uint32_t)abstime != 0);
+		max_rt_quantum = abstime;
+
+		max_unsafe_computation = max_unsafe_quanta * std_quantum;
+		max_poll_computation = max_poll_quanta * std_quantum;
+
+		sched_safe_duration = 2 * max_unsafe_quanta *
+										(std_quantum_us / (1000 * 1000)) *
+												(1 << SCHED_TICK_SHIFT);
 	}
 
 	/*
@@ -623,16 +663,7 @@ thread_reaper_enqueue(
 	 * not necessary here.
 	 */
 	simple_lock(&reaper_lock);
-
 	enqueue_tail(&reaper_queue, (queue_entry_t)thread);
-#if 0 /* CHECKME! */
-	/*
-	 * Since thread has been put in the reaper_queue, it must no longer
-	 * be preempted (otherwise, it could be put back in a run queue).
-	 */
-	thread->preempt = TH_NOT_PREEMPTABLE;
-#endif
-
 	simple_unlock(&reaper_lock);
 
 	thread_call_enter(thread_reaper_call);
@@ -669,6 +700,8 @@ thread_terminate_self(void)
 	 * We should be at the base of the inheritance chain.
 	 */
 	assert(thr_act->thread == thread);
+
+	_mk_sp_thread_depress_abort(thread, TRUE);
 
 	/*
 	 * Check to see if this is the last active activation.  By
@@ -733,13 +766,6 @@ thread_terminate_self(void)
 	thread_lock(thread);
 	thread->state |= (TH_HALTED|TH_TERMINATE);
 	assert((thread->state & TH_UNINT) == 0);
-#if 0 /* CHECKME! */
-	/*
-	 * Since thread has been put in the reaper_queue, it must no longer
-	 * be preempted (otherwise, it could be put back in a run queue).
-	 */
-	thread->preempt = TH_NOT_PREEMPTABLE;
-#endif
 	thread_mark_wait_locked(thread, THREAD_UNINT);
 	thread_unlock(thread);
 	/* splx(s); */
@@ -767,8 +793,6 @@ thread_create_shuttle(
 	task_t					parent_task = thr_act->task;
 	processor_set_t			pset;
 	kern_return_t			result;
-	sched_policy_t			*policy;
-	sf_return_t				sfr;
 	int						suspcnt;
 
 	assert(!thr_act->thread);
@@ -788,6 +812,17 @@ thread_create_shuttle(
 	wake_lock_init(new_shuttle);
 	new_shuttle->sleep_stamp = sched_tick;
 
+	/*
+	 *	Thread still isn't runnable yet (our caller will do
+	 *	that).  Initialize runtime-dependent fields here.
+	 */
+	result = thread_machine_create(new_shuttle, thr_act, thread_continue);
+	assert (result == KERN_SUCCESS);
+
+	thread_start(new_shuttle, start);
+	thread_timer_setup(new_shuttle);
+	ipc_thread_init(new_shuttle);
+
 	pset = parent_task->processor_set;
 	if (!pset->active) {
 		pset = &default_pset;
@@ -803,6 +838,7 @@ thread_create_shuttle(
 	if (!parent_task->active) {
 		task_unlock(parent_task);
 		pset_unlock(pset);
+		thread_machine_destroy(new_shuttle);
 		zfree(thread_shuttle_zone, (vm_offset_t) new_shuttle);
 		return (KERN_FAILURE);
 	}
@@ -815,26 +851,21 @@ thread_create_shuttle(
 	parent_task->res_act_count++;
 	parent_task->active_act_count++;
 
-	/* Associate the thread with that scheduling policy */
-	new_shuttle->policy = parent_task->policy;
-	policy = &sched_policy[new_shuttle->policy];
-	sfr = policy->sp_ops.sp_thread_attach(policy, new_shuttle);
-	if (sfr != SF_SUCCESS)
-		panic("thread_create_shuttle: sp_thread_attach");
-
 	/* Associate the thread with the processor set */
-	sfr = policy->sp_ops.sp_thread_processor_set(policy, new_shuttle, pset);
-	if (sfr != SF_SUCCESS)
-		panic("thread_create_shuttle: sp_thread_proceessor_set");
+	pset_add_thread(pset, new_shuttle);
 
 	/* Set the thread's scheduling parameters */
+	if (parent_task != kernel_task)
+		new_shuttle->sched_mode |= TH_MODE_TIMESHARE;
 	new_shuttle->max_priority = parent_task->max_priority;
+	new_shuttle->task_priority = parent_task->priority;
 	new_shuttle->priority = (priority < 0)? parent_task->priority: priority;
 	if (new_shuttle->priority > new_shuttle->max_priority)
 		new_shuttle->priority = new_shuttle->max_priority;
-	sfr = policy->sp_ops.sp_thread_setup(policy, new_shuttle);
-	if (sfr != SF_SUCCESS)
-		panic("thread_create_shuttle: sp_thread_setup");
+	new_shuttle->importance =
+					new_shuttle->priority - new_shuttle->task_priority;
+	new_shuttle->sched_stamp = sched_tick;
+	compute_priority(new_shuttle, TRUE);
 
 #if	ETAP_EVENT_MONITOR
 	new_thread->etap_reason = 0;
@@ -845,7 +876,6 @@ thread_create_shuttle(
 	thr_act->active = TRUE;
 	pset_unlock(pset);
 
-
 	/*
 	 * No need to lock thr_act, since it can't be known to anyone --
 	 * we set its suspend_count to one more than the task suspend_count
@@ -855,18 +885,6 @@ thread_create_shuttle(
 	for (suspcnt = thr_act->task->suspend_count + 1; suspcnt; --suspcnt)
 		thread_hold(thr_act);
 	task_unlock(parent_task);
-
-	/*
-	 *	Thread still isn't runnable yet (our caller will do
-	 *	that).  Initialize runtime-dependent fields here.
-	 */
-	result = thread_machine_create(new_shuttle, thr_act, thread_continue);
-	assert (result == KERN_SUCCESS);
-
-	machine_kernel_stack_init(new_shuttle, thread_continue);
-	ipc_thread_init(new_shuttle);
-	thread_start(new_shuttle, start);
-	thread_timer_setup(new_shuttle);
 
 	*new_thread = new_shuttle;
 
@@ -893,8 +911,6 @@ thread_create(
 	thread_act_t		thr_act;
 	thread_t			thread;
 	kern_return_t		result;
-	sched_policy_t		*policy;
-	sf_return_t			sfr;
 	spl_t				s;
 	extern void			thread_bootstrap_return(void);
 
@@ -980,13 +996,12 @@ kernel_thread_with_priority(
 	task_t				task,
 	integer_t			priority,
 	void				(*start)(void),
+	boolean_t			alloc_stack,
 	boolean_t			start_running)
 {
 	kern_return_t		result;
 	thread_t			thread;
 	thread_act_t		thr_act;
-	sched_policy_t		*policy;
-	sf_return_t			sfr;
 	spl_t				s;
 
 	result = act_create(task, &thr_act);
@@ -1000,7 +1015,8 @@ kernel_thread_with_priority(
 		return THREAD_NULL;
 	}
 
-	thread_swappable(thr_act, FALSE);
+	if (alloc_stack)
+		thread_doswapin(thread);
 
 	s = splsched();
 	thread_lock(thread);
@@ -1028,7 +1044,7 @@ kernel_thread(
 	task_t			task,
 	void			(*start)(void))
 {
-	return kernel_thread_with_priority(task, -1, start, TRUE);
+	return kernel_thread_with_priority(task, -1, start, FALSE, TRUE);
 }
 
 unsigned int c_weird_pset_ref_exit = 0;	/* pset code raced us */
@@ -1039,8 +1055,6 @@ thread_deallocate(
 {
 	task_t				task;
 	processor_set_t		pset;
-	sched_policy_t		*policy;
-	sf_return_t			sfr;
 	spl_t				s;
 
 	if (thread == THREAD_NULL)
@@ -1112,12 +1126,6 @@ thread_deallocate(
 	if (thread == current_thread())
 	    panic("thread deallocating itself");
 
-	/* Detach thread (shuttle) from its sched policy */
-	policy = &sched_policy[thread->policy];
-	sfr = policy->sp_ops.sp_thread_detach(policy, thread);
-	if (sfr != SF_SUCCESS)
-		panic("thread_deallocate: sp_thread_detach");
-
 	pset_remove_thread(pset, thread);
 	thread->ref_count = 0;
 	thread_unlock(thread);		/* no more references - safe */
@@ -1126,16 +1134,12 @@ thread_deallocate(
 
 	pset_deallocate(thread->processor_set);
 
-	/* frees kernel stack & other MD resources */
-	if (thread->stack_privilege && (thread->stack_privilege != thread->kernel_stack)) {
-	  vm_offset_t stack;
-	  int s = splsched();
-	  stack = thread->stack_privilege;
-	  stack_free(thread);
-	  thread->kernel_stack = stack;
-	  splx(s);
+	if (thread->stack_privilege != 0) {
+		if (thread->stack_privilege != thread->kernel_stack)
+			stack_free_stack(thread->stack_privilege);
+		thread->stack_privilege = 0;
 	}
-	thread->stack_privilege = 0;
+	/* frees kernel stack & other MD resources */
 	thread_machine_destroy(thread);
 
 	zfree(thread_shuttle_zone, (vm_offset_t) thread);
@@ -1192,42 +1196,38 @@ thread_info_shuttle(
 	    thread_read_times(thread, &basic_info->user_time,
 									&basic_info->system_time);
 
-	    if (thread->policy & (POLICY_TIMESHARE|POLICY_RR|POLICY_FIFO)) {
-			/*
-			 *	Update lazy-evaluated scheduler info because someone wants it.
-			 */
-			if (thread->sched_stamp != sched_tick)
-				update_priority(thread);
+		/*
+		 *	Update lazy-evaluated scheduler info because someone wants it.
+		 */
+		if (thread->sched_stamp != sched_tick)
+			update_priority(thread);
 
-			basic_info->sleep_time = 0;
+		basic_info->sleep_time = 0;
 
-			/*
-			 *	To calculate cpu_usage, first correct for timer rate,
-			 *	then for 5/8 ageing.  The correction factor [3/5] is
-			 *	(1/(5/8) - 1).
-			 */
-			basic_info->cpu_usage = (thread->cpu_usage << SCHED_TICK_SHIFT) /
-											(TIMER_RATE / TH_USAGE_SCALE);
-			basic_info->cpu_usage = (basic_info->cpu_usage * 3) / 5;
+		/*
+		 *	To calculate cpu_usage, first correct for timer rate,
+		 *	then for 5/8 ageing.  The correction factor [3/5] is
+		 *	(1/(5/8) - 1).
+		 */
+		basic_info->cpu_usage = (thread->cpu_usage << SCHED_TICK_SHIFT) /
+												(TIMER_RATE / TH_USAGE_SCALE);
+		basic_info->cpu_usage = (basic_info->cpu_usage * 3) / 5;
 #if	SIMPLE_CLOCK
-			/*
-			 *	Clock drift compensation.
-			 */
-			basic_info->cpu_usage =
-					(basic_info->cpu_usage * 1000000) / sched_usec;
+		/*
+		 *	Clock drift compensation.
+		 */
+		basic_info->cpu_usage = (basic_info->cpu_usage * 1000000) / sched_usec;
 #endif	/* SIMPLE_CLOCK */
-	    }
-		else
-			basic_info->sleep_time = basic_info->cpu_usage = 0;
 
-	    basic_info->policy	= thread->policy;
+		basic_info->policy = ((thread->sched_mode & TH_MODE_TIMESHARE)?
+												POLICY_TIMESHARE: POLICY_RR);
 
 	    flags = 0;
-	    if (thread->state & TH_SWAPPED_OUT)
-			flags = TH_FLAGS_SWAPPED;
-	    else
 		if (thread->state & TH_IDLE)
-			flags = TH_FLAGS_IDLE;
+			flags |= TH_FLAGS_IDLE;
+
+	    if (thread->state & TH_STACK_HANDOFF)
+			flags |= TH_FLAGS_SWAPPED;
 
 	    state = 0;
 	    if (thread->state & TH_HALTED)
@@ -1269,7 +1269,7 @@ thread_info_shuttle(
 	    s = splsched();
 		thread_lock(thread);
 
-	    if (thread->policy != POLICY_TIMESHARE) {
+	    if (!(thread->sched_mode & TH_MODE_TIMESHARE)) {
 	    	thread_unlock(thread);
 			splx(s);
 
@@ -1292,35 +1292,10 @@ thread_info_shuttle(
 	}
 	else
 	if (flavor == THREAD_SCHED_FIFO_INFO) {
-		policy_fifo_info_t			fifo_info;
-
 		if (*thread_info_count < POLICY_FIFO_INFO_COUNT)
 			return (KERN_INVALID_ARGUMENT);
 
-		fifo_info = (policy_fifo_info_t)thread_info_out;
-
-	    s = splsched();
-		thread_lock(thread);
-
-	    if (thread->policy != POLICY_FIFO) {
-	    	thread_unlock(thread);
-			splx(s);
-
-			return (KERN_INVALID_POLICY);
-	    }
-
-		fifo_info->base_priority = thread->priority;
-		fifo_info->max_priority = thread->max_priority;
-
-		fifo_info->depressed = (thread->depress_priority >= 0);
-		fifo_info->depress_priority = thread->depress_priority;
-
-		thread_unlock(thread);
-	    splx(s);
-
-		*thread_info_count = POLICY_FIFO_INFO_COUNT;
-
-		return (KERN_SUCCESS);	
+		return (KERN_INVALID_POLICY);
 	}
 	else
 	if (flavor == THREAD_SCHED_RR_INFO) {
@@ -1334,7 +1309,7 @@ thread_info_shuttle(
 	    s = splsched();
 		thread_lock(thread);
 
-	    if (thread->policy != POLICY_RR) {
+	    if (thread->sched_mode & TH_MODE_TIMESHARE) {
 	    	thread_unlock(thread);
 			splx(s);
 
@@ -1343,7 +1318,7 @@ thread_info_shuttle(
 
 		rr_info->base_priority = thread->priority;
 		rr_info->max_priority = thread->max_priority;
-	    rr_info->quantum = min_quantum_ms;
+	    rr_info->quantum = std_quantum_us / 1000;
 
 		rr_info->depressed = (thread->depress_priority >= 0);
 		rr_info->depress_priority = thread->depress_priority;
@@ -1545,12 +1520,6 @@ thread_wire(
 	splx(s);
 	act_unlock_thread(thr_act);
 
-	/*
-	 * Make the thread unswappable.
-	 */
-	if (wired)
-		thread_swappable(thr_act, FALSE);
-
 	return KERN_SUCCESS;
 }
 
@@ -1566,7 +1535,8 @@ thread_collect_scan(void)
 	/* This code runs very quickly! */
 }
 
-boolean_t thread_collect_allowed = TRUE;
+/* Also disabled in vm/vm_pageout.c */
+boolean_t thread_collect_allowed = FALSE;
 unsigned thread_collect_last_tick = 0;
 unsigned thread_collect_max_rate = 0;		/* in ticks */
 
@@ -1581,11 +1551,11 @@ consider_thread_collect(void)
 {
 	/*
 	 *	By default, don't attempt thread collection more frequently
-	 *	than once a second (one scheduler tick).
+	 *	than once a second.
 	 */
 
 	if (thread_collect_max_rate == 0)
-		thread_collect_max_rate = 2;		/* sched_tick is a 1 second resolution 2 here insures at least 1 second interval */
+		thread_collect_max_rate = (1 << SCHED_TICK_SHIFT) + 1;
 
 	if (thread_collect_allowed &&
 	    (sched_tick >
@@ -1594,66 +1564,6 @@ consider_thread_collect(void)
 		thread_collect_scan();
 	}
 }
-
-#if	MACH_DEBUG
-#if	STACK_USAGE
-
-vm_size_t
-stack_usage(
-	register vm_offset_t stack)
-{
-	int i;
-
-	for (i = 0; i < KERNEL_STACK_SIZE/sizeof(unsigned int); i++)
-	    if (((unsigned int *)stack)[i] != STACK_MARKER)
-		break;
-
-	return KERNEL_STACK_SIZE - i * sizeof(unsigned int);
-}
-
-/*
- *	Machine-dependent code should call stack_init
- *	before doing its own initialization of the stack.
- */
-
-static void
-stack_init(
-	   register vm_offset_t stack,
-	   unsigned int bytes)
-{
-	if (stack_check_usage) {
-	    int i;
-
-	    for (i = 0; i < bytes / sizeof(unsigned int); i++)
-		((unsigned int *)stack)[i] = STACK_MARKER;
-	}
-}
-
-/*
- *	Machine-dependent code should call stack_finalize
- *	before releasing the stack memory.
- */
-
-void
-stack_finalize(
-	register vm_offset_t stack)
-{
-	if (stack_check_usage) {
-	    vm_size_t used = stack_usage(stack);
-
-	    simple_lock(&stack_usage_lock);
-	    if (used > stack_max_usage)
-		stack_max_usage = used;
-	    simple_unlock(&stack_usage_lock);
-	    if (used > stack_max_use) {
-		printf("stack usage = %x\n", used);
-		panic("stack overflow");
-	    }
-	}
-}
-
-#endif	/*STACK_USAGE*/
-#endif /* MACH_DEBUG */
 
 kern_return_t
 host_stack_usage(
@@ -1674,9 +1584,7 @@ host_stack_usage(
 	if (host == HOST_NULL)
 		return KERN_INVALID_HOST;
 
-	simple_lock(&stack_usage_lock);
-	maxusage = stack_max_usage;
-	simple_unlock(&stack_usage_lock);
+	maxusage = 0;
 
 	stack_statistics(&total, &maxusage);
 
@@ -1795,15 +1703,6 @@ processor_set_stack_usage(
 
 		if (stack != 0) {
 			total++;
-
-			if (stack_check_usage) {
-				vm_size_t usage = stack_usage(stack);
-
-				if (usage > maxusage) {
-					maxusage = usage;
-					maxstack = (vm_offset_t) thread;
-				}
-			}
 		}
 
 		thread_deallocate(thread);
@@ -1829,9 +1728,9 @@ funnel_alloc(
 	mutex_t *m;
 	funnel_t * fnl;
 	if ((fnl = (funnel_t *)kalloc(sizeof(funnel_t))) != 0){
-		bzero(fnl, sizeof(funnel_t));
+		bzero((void *)fnl, sizeof(funnel_t));
 		if ((m = mutex_alloc(0)) == (mutex_t *)NULL) {
-			kfree(fnl, sizeof(funnel_t));
+			kfree((vm_offset_t)fnl, sizeof(funnel_t));
 			return(THR_FUNNEL_NULL);
 		}
 		fnl->fnl_mutex = m;
@@ -1847,7 +1746,7 @@ funnel_free(
 	mutex_free(fnl->fnl_mutex);
 	if (fnl->fnl_oldmutex)
 		mutex_free(fnl->fnl_oldmutex);
-	kfree(fnl, sizeof(funnel_t));
+	kfree((vm_offset_t)fnl, sizeof(funnel_t));
 }
 
 void 
@@ -1972,17 +1871,20 @@ thread_funnel_merge(
 }
 
 void
-thread_set_cont_arg(int arg)
+thread_set_cont_arg(
+	int				arg)
 {
-  thread_t th = current_thread();
-  th->cont_arg = arg; 
+	thread_t		self = current_thread();
+
+	self->saved.misc = arg; 
 }
 
 int
 thread_get_cont_arg(void)
 {
-  thread_t th = current_thread();
-  return(th->cont_arg); 
+	thread_t		self = current_thread();
+
+	return (self->saved.misc); 
 }
 
 /*

@@ -379,7 +379,7 @@ hfs_lookup(ap)
 					goto Err_Exit;
 			}
 			else {
-				retval = hfs_vget_catinfo(parent_vp, &catInfo, kAnyFork, &target_vp);
+				retval = hfs_vget_catinfo(parent_vp, &catInfo, kDefault, &target_vp);
 				if (retval)
 					goto Err_Exit;
 				CLEAN_CATALOGDATA(&catInfo.nodeData);
@@ -439,19 +439,8 @@ hfs_lookup(ap)
 					goto Err_Exit;
 			}
             else {
-                /* If then name differs in case, then act like it does not exist
-                 * This allows renaming foo->Foo
-                 * Exclude length difference due to compose/decompe issues.
-                 */
-                if ((cnp->cn_namelen == catInfo.nodeData.cnm_length) &&
-                    strncmp(cnp->cn_nameptr, catInfo.nodeData.cnm_nameptr, targetLen)) {
-                    if (!lockparent)
-                        VOP_UNLOCK(parent_vp, 0, p);
-                    retval = EJUSTRETURN;
-                    goto Err_Exit;
-                };
 
-                retval = hfs_vget_catinfo(parent_vp, &catInfo, kAnyFork, &target_vp);
+                retval = hfs_vget_catinfo(parent_vp, &catInfo, kDefault, &target_vp);
                 if (retval)
                     goto Err_Exit;
 
@@ -465,7 +454,7 @@ hfs_lookup(ap)
 			goto Err_Exit;
 		/* Finished...all is well, goto the end */
 		 };
-	
+
 		/*
 		 * Step through the translation in the name.  We do not `vput' the
 		 * directory because we may need it again if a symbolic link
@@ -548,7 +537,7 @@ hfs_lookup(ap)
 			
 			/* If couldn't determine what type of fork, leave */
 			if (forkType == kUndefinedFork) {				
-				retval = EISDIR;
+				retval = ENOTDIR;
 				goto Err_Exit;
 			};
 				
@@ -640,11 +629,11 @@ hfs_cache_lookup(ap)
 	int lockparent; 
 	int error;
 	struct vnode **vpp = ap->a_vpp;
-	struct componentname *cnp = ap->a_cnp;
-	struct ucred *cred = cnp->cn_cred;
+	struct componentname    *cnp = ap->a_cnp;
+	struct ucred            *cred = cnp->cn_cred;
 	int flags = cnp->cn_flags;
-	struct proc *p = cnp->cn_proc;
-	struct hfsnode *hp;
+	struct proc             *p = cnp->cn_proc;
+	struct hfsnode          *hp;
 	u_int32_t vpid;	/* capability number of vnode */
 	DBG_FUNC_NAME("cache_lookup");
 	DBG_VOP_LOCKS_DECL(2);
@@ -659,7 +648,7 @@ hfs_cache_lookup(ap)
 	lockparent = flags & LOCKPARENT;
 
 	if (vdp->v_type != VDIR)
-				return (ENOTDIR);
+		return (ENOTDIR);
 
 	if ((flags & ISLASTCN) && (vdp->v_mount->mnt_flag & MNT_RDONLY) &&
 		(cnp->cn_nameiop == DELETE || cnp->cn_nameiop == RENAME))
@@ -737,55 +726,17 @@ hfs_cache_lookup(ap)
 		error = vget(vdp, LK_EXCLUSIVE, p);
 		if (!error && lockparent && (flags & ISLASTCN))
 			error = vn_lock(pdp, LK_EXCLUSIVE, p);
-	} else {
+	} else if ((! (flags & ISLASTCN)) && (vdp->v_type == VREG) && 
+				(GetForkFromName(cnp) != kDataFork)) {
 		/* 
-		 * Check to see if a specific fork is not being requested.
-		 *
-		 * If it is a file and not the last path item
-		 * then check if its a proper fork
-		 * 		If it is, check to see if the matched vnode is the same fork
-		 *  	else see if the proper fork exists.
-		 *   		If it does, return that one, else do VOP_CACHEDLOOKUP()
-		 * Notice that nothing is done if an undefined fork is named. Just leave and let lookup()
-		 * handle strange cases.
-		 *
-		 * XXX SER Notice that when the target is not what was in the name cache,
-		 * it is locked, before trying to get its sibling. Could this be a problem since both 
-		 * siblings can be locked, but not in a determinalistic order????
-		 */
-		u_int16_t	forkType;
-				 
+		 * We only store data forks in the name cache.
+		 */				 
+		goto finished;
+	} else {
 		error = vget(vdp, LK_EXCLUSIVE, p);
-		if ((! error) && (vdp->v_type == VREG) && (vpid == vdp->v_id)) {
-			if (!(flags & ISLASTCN)) {
-				forkType = GetForkFromName(cnp);
-				if (forkType != kUndefinedFork) {
-					flags |= ISLASTCN;
-					if (H_FORKTYPE(VTOH(vdp)) != forkType) {
-						error = hfs_vget_sibling(vdp, forkType, vpp);
-						vput(vdp);
-						if (! error) {
-							vdp = *vpp;
-							vpid = vdp->v_id;
-						}
-					}
-				}
-			} 
-			else {
-				/* Its the last item, so we want the data fork */
-				if (H_FORKTYPE(VTOH(vdp)) != kDataFork) {
-					error = hfs_vget_sibling(vdp, kDataFork, vpp);
-					vput(vdp);
-					if (! error) {
-						vdp = *vpp;
-						vpid = vdp->v_id;
-					}
-				}
-			};
-		};
 		if (!lockparent || error || !(flags & ISLASTCN))
 			VOP_UNLOCK(pdp, 0, p);
-	};
+	}
 	/*
 	 * Check that the capability number did not change
 	 * while we were waiting for the lock.
@@ -804,6 +755,9 @@ hfs_cache_lookup(ap)
 	error = vn_lock(pdp, LK_EXCLUSIVE, p);
 	if (error)
 		return (error);
+
+finished:
+
 	return (hfs_lookup(ap));
 }
 

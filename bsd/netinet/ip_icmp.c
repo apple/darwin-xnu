@@ -733,6 +733,8 @@ icmp_send(m, opts)
 	m->m_len += hlen;
 	m->m_pkthdr.rcvif = (struct ifnet *)0;
 	m->m_pkthdr.aux = NULL;
+	m->m_pkthdr.csum_data = 0;
+	m->m_pkthdr.csum_flags = 0;
 #if ICMPPRINTFS
 	if (icmpprintfs) {
 		char buf[4 * sizeof "123"];

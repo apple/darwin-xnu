@@ -802,29 +802,41 @@ StaticProc void aarp_build_pkt(pkt, elapp)
 StaticProc int	aarp_sched_req(amt_ptr)
      register aarp_amt_t *amt_ptr;
 {
-	int s;
+	int s, i;
 	boolean_t 	funnel_state;
 
 	funnel_state = thread_funnel_set(network_flock, TRUE);
 
-	ATDISABLE(s, arpinp_lock);
-	if (amt_ptr->tmo == 0)
-	{
-		ATENABLE(s, arpinp_lock);
-                (void) thread_funnel_set(network_flock, FALSE);
-		return(0);
-	}
-	if (amt_ptr->no_of_retries < AARP_MAX_REQ_RETRIES) {
-		ATENABLE(s, arpinp_lock);
-		if (aarp_send_req(amt_ptr) == 0) {
-                        (void) thread_funnel_set(network_flock, FALSE);
-			return(0);
-                }
-		ATDISABLE(s, arpinp_lock);
-	}
-	ATENABLE(s, arpinp_lock);
-	aarp_delete_amt_info(amt_ptr);
-
+	/*
+	 * make sure pointer still valid in case interface removed
+	 * while trying to acquire the funnel. make sure it points
+	 * into one of the amt arrays.
+	 */
+	for (i = 0; i < IF_TOTAL_MAX; i++) {
+	    if (aarp_table[i] == NULL || amt_ptr < aarp_table[i] || amt_ptr >= (aarp_table[i] + 1))
+	        continue;  /* no match - try next entry */
+		
+	    /*
+	     * found match - pointer is valid
+	     */
+	    ATDISABLE(s, arpinp_lock);
+	    if (amt_ptr->tmo == 0) {
+	        ATENABLE(s, arpinp_lock);
+	        (void) thread_funnel_set(network_flock, FALSE);
+	        return(0);
+	    }
+	    if (amt_ptr->no_of_retries < AARP_MAX_REQ_RETRIES) {
+	        ATENABLE(s, arpinp_lock);
+	        if (aarp_send_req(amt_ptr) == 0) {
+	            (void) thread_funnel_set(network_flock, FALSE);
+	            return(0);
+	        }
+	        ATDISABLE(s, arpinp_lock);
+	    }
+	    ATENABLE(s, arpinp_lock);
+	    aarp_delete_amt_info(amt_ptr);
+	    break;
+	}	
 	(void) thread_funnel_set(network_flock, FALSE);
 
 	return(0);

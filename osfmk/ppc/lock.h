@@ -53,21 +53,26 @@
  * the rights to redistribute these changes.
  */
 
-#ifndef	_PPC_HW_LOCK_H_
-#define	_PPC_HW_LOCK_H_
+#ifndef	_PPC_LOCK_H_
+#define	_PPC_LOCK_H_
 
 #include <kern/macro_help.h>
 #include <kern/assert.h>
 
-#define	NEED_ATOMIC 1
-
-#define mutex_try	_mutex_try
-#define mutex_lock(m)				\
-MACRO_BEGIN					\
-	assert(assert_wait_possible());		\
-	_mutex_lock((m));			\
-MACRO_END
-
 extern unsigned int LockTimeOut;			/* Number of hardware ticks of a lock timeout */
 
-#endif	/* _PPC_HW_LOCK_H_ */
+#if defined(MACH_KERNEL_PRIVATE) && !(NCPUS == 1 && !ETAP_LOCK_TRACE && !USLOCK_DEBUG)
+extern void                     fast_usimple_lock(usimple_lock_t);
+extern void                     fast_usimple_unlock(usimple_lock_t);
+extern unsigned int             fast_usimple_lock_try(usimple_lock_t);
+
+#define simple_lock_init(l,t)   usimple_lock_init(l,t)
+#define simple_lock(l)          fast_usimple_lock(l)
+#define simple_unlock(l)        fast_usimple_unlock(l)
+#define simple_lock_try(l)      fast_usimple_lock_try(l)  
+#define simple_lock_addr(l)     (&(l))
+#define __slock_held_func__(l)  usimple_lock_held(l)
+
+#endif
+
+#endif	/* _PPC_LOCK_H_ */

@@ -54,7 +54,6 @@
  *** into this file from `kern/syscall_subr.c.'
  ***/
 
-#include <kern/sf.h>
 #include <kern/mk_sp.h>
 #include <kern/misc_protos.h>
 #include <kern/spl.h>
@@ -64,11 +63,6 @@
 #include <kern/thread.h>
 #include <mach/mach_host_server.h>
 
-/* Forwards */
-void	_mk_sp_thread_depress_priority(
-			sf_object_t			policy,
-			mach_msg_timeout_t	depress_time);
-
 /***
  *** ??? The next two files supply the prototypes for `thread_set_policy()'
  *** and `thread_policy.'  These routines cannot stay here if they are
@@ -76,306 +70,113 @@ void	_mk_sp_thread_depress_priority(
  ***/
 #include <mach/thread_act_server.h>
 #include <mach/host_priv_server.h>
+#include <sys/kdebug.h>
 
-/*
- * Vector containing standard scheduling policy operations
- */
-sp_ops_t	mk_sp_ops = {
-		    _mk_sp_thread_update_mpri,
-		    _mk_sp_thread_unblock,
-		    _mk_sp_thread_done,
-		    _mk_sp_thread_begin,
-		    _mk_sp_thread_dispatch,
-		    _mk_sp_thread_attach,
-		    _mk_sp_thread_detach,
-		    _mk_sp_thread_processor,
-		    _mk_sp_thread_processor_set,
-		    _mk_sp_thread_setup,
-		    _mk_sp_swtch_pri,
-		    _mk_sp_thread_switch,
-		    _mk_sp_thread_depress_abort,
-		    _mk_sp_thread_depress_timeout,
-		    _mk_sp_thread_runnable,
-};
-
-/* Forwards */
-kern_return_t	thread_policy_common(
-					thread_t		thread,
-					int				policy,
-					int				data,
-					processor_set_t	pset);
-
-/*
- * Standard operations for MK Scheduling Policy
- */
-
-sf_return_t
-_mk_sp_thread_update_mpri(
-	sf_object_t			policy,
-	thread_t			thread)
-{
-	if (thread->sched_stamp != sched_tick)
-		update_priority(thread);
-
-	return(SF_SUCCESS);
-}
-
-sf_return_t
+void
 _mk_sp_thread_unblock(
-	sf_object_t			policy,
 	thread_t			thread)
 {
-	/* indicate thread is now runnable */
-	thread->sp_state = MK_SP_RUNNABLE;
-
-	/* place thread at end of appropriate run queue */
-	if (!(thread->state&TH_IDLE))
+	if (!(thread->state & TH_IDLE))
 		thread_setrun(thread, TRUE, TAIL_Q);
 
-	return(SF_SUCCESS);
+	thread->current_quantum = 0;
+	thread->metered_computation = 0;
+	thread->reason = AST_NONE;
+
+	KERNEL_DEBUG_CONSTANT(
+			MACHDBG_CODE(DBG_MACH_SCHED,MACH_MAKE_RUNNABLE) | DBG_FUNC_NONE,
+					(int)thread, (int)thread->sched_pri, 0, 0, 0);
 }
 
-sf_return_t
+void
 _mk_sp_thread_done(
-	sf_object_t			policy,
-	thread_t			old_thread)
+	thread_t			thread)
 {
 	processor_t			myprocessor = cpu_to_processor(cpu_number());
 
 	/*
 	 * A running thread is being taken off a processor:
-	 *
-	 *   - update the thread's `unconsumed_quantum' field
-	 *   - update the thread's state field
 	 */
+	clock_get_uptime(&myprocessor->last_dispatch);
+	if (!(thread->state & TH_IDLE)) {
+		if (		first_quantum(myprocessor)							&&
+				myprocessor->quantum_end > myprocessor->last_dispatch		)
+			thread->current_quantum =
+					(myprocessor->quantum_end - myprocessor->last_dispatch);
+		else
+			thread->current_quantum = 0;
 
-	old_thread->unconsumed_quantum = myprocessor->quantum;
-
-	if (old_thread->state & TH_WAIT)
-		old_thread->sp_state = MK_SP_BLOCKED;
-
-	return(SF_SUCCESS);
-}
-
-sf_return_t
-_mk_sp_thread_begin(
-	sf_object_t			policy,
-	thread_t			thread)
-{
-
-	processor_t			myprocessor = cpu_to_processor(cpu_number());
-	processor_set_t		pset;
-
-	pset = myprocessor->processor_set;
-	/*
-	 * The designated thread is about to begin execution:
-	 *
-	 *   - update the processor's `quantum' field
-	 */
-	/* check for legal thread state */
-	assert(thread->sp_state == MK_SP_RUNNABLE);
-
-	if (thread->policy & (POLICY_RR|POLICY_FIFO))
-		myprocessor->quantum = thread->unconsumed_quantum;
-	else
-		myprocessor->quantum = (thread->bound_processor ?
-										min_quantum : pset->set_quantum);
-
-	return(SF_SUCCESS);
-}
-
-sf_return_t
-_mk_sp_thread_dispatch(
-	sf_object_t			policy,
-	thread_t			old_thread)
-{
-	if (old_thread->sp_state & MK_SP_RUNNABLE) {
-		if (old_thread->reason & AST_QUANTUM) {
-			thread_setrun(old_thread, FALSE, TAIL_Q);
-			old_thread->unconsumed_quantum = min_quantum;
+		if (!(thread->sched_mode & TH_MODE_REALTIME)) {
+			if (thread->current_quantum < min_std_quantum) {
+				thread->reason |= AST_QUANTUM;
+				thread->current_quantum += std_quantum;
+			}
 		}
 		else
-			thread_setrun(old_thread, FALSE, HEAD_Q);
+		if (thread->current_quantum == 0)
+			thread->reason |= AST_QUANTUM;
+
+		thread->metered_computation +=
+				(myprocessor->last_dispatch - thread->computation_epoch);
 	}
-
-	if (old_thread->sp_state & MK_SP_ATTACHED) {
-		/* indicate thread is now runnable */
-		old_thread->sp_state = MK_SP_RUNNABLE;
-
-		/* place thread at end of appropriate run queue */
-		thread_setrun(old_thread, FALSE, TAIL_Q);
-	}
-
-	return(SF_SUCCESS);
 }
 
-/*
- * Thread must already be locked.
- */
-sf_return_t
-_mk_sp_thread_attach(
-	sf_object_t			policy,
+void
+_mk_sp_thread_begin(
 	thread_t			thread)
 {
-	thread->sp_state = MK_SP_ATTACHED;
+	processor_t			myprocessor = cpu_to_processor(cpu_number());
 
-	thread->max_priority = thread->priority = BASEPRI_DEFAULT;
-	thread->depress_priority = -1;
+	/*
+	 * The designated thread is beginning execution:
+	 */
+	if (!(thread->state & TH_IDLE)) {
+		if (thread->current_quantum == 0)
+			thread->current_quantum =
+						(thread->sched_mode & TH_MODE_REALTIME)?
+									thread->realtime.computation: std_quantum;
 
-	thread->cpu_usage = 0;
-	thread->sched_usage = 0;
-	thread->sched_stamp = 0;
+		myprocessor->quantum_end =
+					(myprocessor->last_dispatch + thread->current_quantum);
+		timer_call_enter1(&myprocessor->quantum_timer,
+								thread, myprocessor->quantum_end);
 
-	thread->unconsumed_quantum = min_quantum;
+		myprocessor->slice_quanta =
+						(thread->sched_mode & TH_MODE_TIMESHARE)?
+									myprocessor->processor_set->set_quanta: 1;
 
-	/* Reflect this policy in thread data structure */
-	thread->policy = policy->policy_id;
-
-	return(SF_SUCCESS);
-}
-
-/*
- * Check to make sure that thread is removed from run
- * queues and active execution; and clear pending
- * priority depression.
- *
- * Thread must already be locked.
- */
-sf_return_t
-_mk_sp_thread_detach(
-	sf_object_t			policy,
-	thread_t			thread)
-{
-	struct run_queue	*rq;
-
-	assert(thread->policy == policy->policy_id);
-
-	/* make sure that the thread is no longer on any run queue */
-	if (thread->runq != RUN_QUEUE_NULL) {
-		rq = rem_runq(thread);
-		if (rq == RUN_QUEUE_NULL) {
-			panic("mk_sp_thread_detach: missed thread");
-		}
+		thread->computation_epoch = myprocessor->last_dispatch;
 	}
-
-	/* clear pending priority depression */
-
-	if (thread->depress_priority >= 0) {
-		thread->priority = thread->depress_priority;
-		thread->depress_priority = -1;
-		if (thread_call_cancel(&thread->depress_timer))
-			thread_call_enter(&thread->depress_timer);
-	}
-
-	/* clear the thread's policy field */
-	thread->policy = POLICY_NULL;
-
-	return(SF_SUCCESS);
-}
-
-sf_return_t
-_mk_sp_thread_processor(
-	sf_object_t			policy,
-	thread_t			*thread,
-	processor_t			processor)
-{
-	return(SF_FAILURE);
-}
-
-sf_return_t
-_mk_sp_thread_processor_set(
-	sf_object_t			policy,
-	thread_t			thread,
-	processor_set_t		processor_set)
-{
-	pset_add_thread(processor_set, thread);
-
-	return(SF_SUCCESS);
-}
-
-sf_return_t
-_mk_sp_thread_setup(
-	sf_object_t			policy,
-	thread_t			thread)
-{
-	/*
-	 * Determine thread's state.  (It may be an "older" thread
-	 * that has just been associated with this policy.)
-	 */
-	if (thread->state & TH_WAIT)
-	    thread->sp_state = MK_SP_BLOCKED;
-
-	/* recompute priority */
-	thread->sched_stamp = sched_tick;
-	compute_priority(thread, TRUE);
-
-	return(SF_SUCCESS);
-}
-
-/*
- *	thread_priority_internal:
- *
- *	Kernel-internal work function for thread_priority().  Called
- *	with thread "properly locked" to ensure synchrony with RPC
- *	(see act_lock_thread()).
- */
-kern_return_t
-thread_priority_internal(
-	thread_t		thread,
-	int				priority)
-{
-	kern_return_t	result = KERN_SUCCESS;
-	spl_t			s;
-
-	s = splsched();
-	thread_lock(thread);
-
-	/*
-	 *	Check for violation of max priority
-	 */
-	if (priority > thread->max_priority)
-		priority = thread->max_priority;
-
-	/*
-	 *	Set priorities.  If a depression is in progress,
-	 *	change the priority to restore.
-	 */
-	if (thread->depress_priority >= 0)
-		thread->depress_priority = priority;
 	else {
-		thread->priority = priority;
-		compute_priority(thread, TRUE);
+		timer_call_cancel(&myprocessor->quantum_timer);
 
-		/*
-		 * If the current thread has changed its
-		 * priority let the ast code decide whether
-		 * a different thread should run.
-		 */
-		if (thread == current_thread())
-			ast_on(AST_BLOCK);
+		myprocessor->slice_quanta = 1;
 	}
+}
 
-	thread_unlock(thread);
-	splx(s);
+void
+_mk_sp_thread_dispatch(
+	thread_t			old_thread)
+{
+	if (old_thread->reason & AST_QUANTUM)
+		thread_setrun(old_thread, FALSE, TAIL_Q);
+	else
+		thread_setrun(old_thread, FALSE, HEAD_Q);
 
-	return (result);
+	old_thread->reason = AST_NONE;
 }
 
 /*
  *	thread_policy_common:
  *
- *	Set scheduling policy for thread. If pset == PROCESSOR_SET_NULL,
- * 	policy will be checked to make sure it is enabled.
+ *	Set scheduling policy & priority for thread.
  */
-kern_return_t
+static kern_return_t
 thread_policy_common(
 	thread_t		thread,
 	integer_t		policy,
-	integer_t		data,
-	processor_set_t	pset)
+	integer_t		priority)
 {
-	kern_return_t	result = KERN_SUCCESS;
-	register int	temp;
 	spl_t			s;
 
 	if (	thread == THREAD_NULL		||
@@ -385,34 +186,63 @@ thread_policy_common(
 	s = splsched();
 	thread_lock(thread);
 
-	/*
-	 *	Check if changing policy.
-	 */
-	if (policy != thread->policy) {
-	    /*
-	     *	Changing policy.  Check if new policy is allowed.
-	     */
-	    if (	pset == PROCESSOR_SET_NULL							&&
-				(thread->processor_set->policies & policy) == 0			)
-			result = KERN_FAILURE;
-	    else {
-			if (pset != thread->processor_set)
-				result = KERN_FAILURE;
-			else {
-				/*
-				 *	Changing policy.  Calculate new
-				 *	priority.
-				 */
-				thread->policy = policy;
-				compute_priority(thread, TRUE);
-			}
-	    }
+	if (	!(thread->sched_mode & TH_MODE_REALTIME)	&&
+			!(thread->safe_mode & TH_MODE_REALTIME)			) {
+		if (!(thread->sched_mode & TH_MODE_FAILSAFE)) {
+			if (policy == POLICY_TIMESHARE)
+				thread->sched_mode |= TH_MODE_TIMESHARE;
+			else
+				thread->sched_mode &= ~TH_MODE_TIMESHARE;
+		}
+		else {
+			if (policy == POLICY_TIMESHARE)
+				thread->safe_mode |= TH_MODE_TIMESHARE;
+			else
+				thread->safe_mode &= ~TH_MODE_TIMESHARE;
+		}
+
+		if (priority >= thread->max_priority)
+			priority = thread->max_priority - thread->task_priority;
+		else
+		if (priority >= MINPRI_KERNEL)
+			priority -= MINPRI_KERNEL;
+		else
+		if (priority >= MINPRI_SYSTEM)
+			priority -= MINPRI_SYSTEM;
+		else
+			priority -= BASEPRI_DEFAULT;
+
+		priority += thread->task_priority;
+
+		if (priority > thread->max_priority)
+			priority = thread->max_priority;
+
+		thread->importance = priority - thread->task_priority;
+
+		/*
+		 *	Set priorities.  If a depression is in progress,
+		 *	change the priority to restore.
+		 */
+		if (thread->depress_priority >= 0)
+			thread->depress_priority = priority;
+		else {
+			thread->priority = priority;
+			compute_priority(thread, TRUE);
+
+			/*
+			 * If the current thread has changed its
+			 * priority let the ast code decide whether
+			 * a different thread should run.
+			 */
+			if (thread == current_thread())
+				ast_on(AST_BLOCK);
+		}
 	}
 
 	thread_unlock(thread);
 	splx(s);
 
-	return (result);
+	return (KERN_SUCCESS);
 }
 
 /*
@@ -433,7 +263,7 @@ thread_set_policy(
 	mach_msg_type_number_t	limit_count)
 {
 	thread_t				thread;
-	int 					max, bas, dat, incr;
+	int 					max, bas;
 	kern_return_t			result = KERN_SUCCESS;
 
 	if (	thr_act == THR_ACT_NULL			||
@@ -466,7 +296,6 @@ thread_set_policy(
 			break;
 		}
 
-		dat = rr_base->quantum;
 		bas = rr_base->base_priority;
 		max = rr_limit->max_priority;
 		if (invalid_pri(bas) || invalid_pri(max)) {
@@ -488,7 +317,6 @@ thread_set_policy(
 			break;
 		}
 
-		dat = 0;
 		bas = fifo_base->base_priority;
 		max = fifo_limit->max_priority;
 		if (invalid_pri(bas) || invalid_pri(max)) {
@@ -511,7 +339,6 @@ thread_set_policy(
 			break;
 		}
 
-		dat = 0;
 		bas = ts_base->base_priority;
 		max = ts_limit->max_priority;
 		if (invalid_pri(bas) || invalid_pri(max)) {
@@ -532,9 +359,7 @@ thread_set_policy(
 		return(result);
 	}
 
-	result = thread_priority_internal(thread, bas);
-	if (result == KERN_SUCCESS)
-		result = thread_policy_common(thread, policy, dat, pset);
+	result = thread_policy_common(thread, policy, bas);
 	act_unlock_thread(thr_act);
 
 	return(result);
@@ -577,8 +402,8 @@ thread_policy(
 		return(KERN_INVALID_ARGUMENT);
 	}
 
-	if (	invalid_policy(policy)			||
-			(pset->policies & policy) == 0		) {
+	if (	invalid_policy(policy)											||
+			((POLICY_TIMESHARE | POLICY_RR | POLICY_FIFO) & policy) == 0	) {
 		act_unlock_thread(thr_act);
 
 		return(KERN_INVALID_POLICY);
@@ -815,7 +640,7 @@ compute_priority(
 {
 	register int		pri;
 
-	if (thread->policy == POLICY_TIMESHARE) {
+	if (thread->sched_mode & TH_MODE_TIMESHARE) {
 	    do_priority_computation(thread, pri);
 	    if (thread->depress_priority < 0)
 			set_pri(thread, pri, resched);
@@ -846,16 +671,6 @@ compute_my_priority(
 	assert(thread->runq == RUN_QUEUE_NULL);
 	thread->sched_pri = pri;
 }
-
-#if		DEBUG
-struct mk_sp_usage {
-	natural_t	cpu_delta, sched_delta;
-	natural_t	sched_tick, ticks;
-	natural_t	cpu_usage, sched_usage,
-				aged_cpu, aged_sched;
-	thread_t	thread;
-} idled_info, loaded_info;
-#endif
 
 /*
  *	update_priority
@@ -888,32 +703,8 @@ update_priority(
 		thread->sched_usage = 0;
 	}
 	else {
-#if		DEBUG
-		struct mk_sp_usage *sp_usage;
-#endif
-
 		thread->cpu_usage += thread->cpu_delta;
 		thread->sched_usage += thread->sched_delta;
-
-#if		DEBUG
-		if (thread->state & TH_IDLE)
-			sp_usage = &idled_info;
-		else
-		if (thread == loaded_info.thread)
-			sp_usage = &loaded_info;
-		else
-			sp_usage = NULL;
-
-		if (sp_usage != NULL) {
-			sp_usage->cpu_delta = thread->cpu_delta;
-			sp_usage->sched_delta = thread->sched_delta;
-			sp_usage->sched_tick = thread->sched_stamp;
-			sp_usage->ticks = ticks;
-			sp_usage->cpu_usage = thread->cpu_usage;
-			sp_usage->sched_usage = thread->sched_usage;
-			sp_usage->thread = thread;
-		}
-#endif
 
 		shiftp = &wait_shift[ticks];
 		if (shiftp->shift2 > 0) {
@@ -932,70 +723,57 @@ update_priority(
 						(thread->sched_usage >> shiftp->shift1) -
 						(thread->sched_usage >> -(shiftp->shift2));
 		}
-
-#if		DEBUG
-		if (sp_usage != NULL) {
-			sp_usage->aged_cpu = thread->cpu_usage;
-			sp_usage->aged_sched = thread->sched_usage;
-		}
-#endif
 	}
+
 	thread->cpu_delta = 0;
 	thread->sched_delta = 0;
+
+	if (	(thread->sched_mode & TH_MODE_FAILSAFE)		&&
+			thread->sched_stamp >= thread->safe_release		) {
+		if (!(thread->safe_mode & TH_MODE_TIMESHARE)) {
+			if (thread->safe_mode & TH_MODE_REALTIME) {
+				if (thread->depress_priority < 0)
+					thread->priority = BASEPRI_REALTIME;
+				else
+					thread->depress_priority = BASEPRI_REALTIME;
+
+				thread->sched_mode |= TH_MODE_REALTIME;
+			}
+
+			if (	thread->depress_priority < 0			&&
+					thread->sched_pri != thread->priority		) {
+				run_queue_t		runq;
+
+				runq = rem_runq(thread);
+				thread->sched_pri = thread->priority;
+				if (runq != RUN_QUEUE_NULL)
+					thread_setrun(thread, TRUE, TAIL_Q);
+			}
+
+			thread->sched_mode &= ~TH_MODE_TIMESHARE;
+		}
+
+		thread->safe_mode = 0;
+		thread->sched_mode &= ~TH_MODE_FAILSAFE;
+	}
 
 	/*
 	 *	Recompute priority if appropriate.
 	 */
-	if (	thread->policy == POLICY_TIMESHARE		&&
-			thread->depress_priority < 0			) {
+	if (	(thread->sched_mode & TH_MODE_TIMESHARE)	&&
+			thread->depress_priority < 0				) {
 		register int		new_pri;
-		run_queue_t			runq;
 
 		do_priority_computation(thread, new_pri);
 		if (new_pri != thread->sched_pri) {
+			run_queue_t		runq;
+
 			runq = rem_runq(thread);
 			thread->sched_pri = new_pri;
 			if (runq != RUN_QUEUE_NULL)
 				thread_setrun(thread, TRUE, TAIL_Q);
 		}
 	}
-}
-
-/*
- *	`mk_sp_swtch_pri()' attempts to context switch (logic in
- *	thread_block no-ops the context switch if nothing would happen).
- *	A boolean is returned that indicates whether there is anything
- *	else runnable.
- *
- *	This boolean can be used by a thread waiting on a
- *	lock or condition:  If FALSE is returned, the thread is justified
- *	in becoming a resource hog by continuing to spin because there's
- *	nothing else useful that the processor could do.  If TRUE is
- *	returned, the thread should make one more check on the
- *	lock and then be a good citizen and really suspend.
- */
-
-void
-_mk_sp_swtch_pri(
-	sf_object_t			policy,
-	int					pri)
-{
-	register thread_t	self = current_thread();
-	extern natural_t	min_quantum_ms;
-
-#ifdef	lint
-	pri++;
-#endif	/* lint */
-
-	/*
-	 *	XXX need to think about depression duration.
-	 *	XXX currently using min quantum.
-	 */
-	_mk_sp_thread_depress_priority(policy, min_quantum_ms);
-
-	thread_block((void (*)(void)) 0);
-
-	_mk_sp_thread_depress_abort(policy, self);
 }
 
 /*
@@ -1010,16 +788,18 @@ _mk_sp_swtch_pri(
 void
 _mk_sp_thread_switch_continue(void)
 {
-	thread_t self = current_thread();
-	int wait_result = self->wait_result;
-	int option = self->saved.swtch.option;
-	sf_object_t policy = self->saved.swtch.policy;
+	register thread_t	self = current_thread();
+	int					wait_result = self->wait_result;
+	int					option = self->saved.swtch.option;
 
 	if (option == SWITCH_OPTION_WAIT && wait_result != THREAD_TIMED_OUT)
 		thread_cancel_timer();
-	else if (option == SWITCH_OPTION_DEPRESS)
-		_mk_sp_thread_depress_abort(policy, self);
+	else
+	if (option == SWITCH_OPTION_DEPRESS)
+		_mk_sp_thread_depress_abort(self, FALSE);
+
 	thread_syscall_return(KERN_SUCCESS);
+	/*NOTREACHED*/
 }
 
 /*
@@ -1032,7 +812,6 @@ _mk_sp_thread_switch_continue(void)
  */
 kern_return_t
 _mk_sp_thread_switch(
-	sf_object_t				policy,
 	thread_act_t			hint_act,
 	int						option,
 	mach_msg_timeout_t		option_time)
@@ -1064,12 +843,6 @@ _mk_sp_thread_switch(
 				/*
 				 *	Hah, got it!!
 				 */
-				if (thread->policy & (POLICY_FIFO|POLICY_RR)) {
-					myprocessor = current_processor();
-
-					myprocessor->quantum = thread->unconsumed_quantum;
-					myprocessor->first_quantum = TRUE;
-				}
 				thread_unlock(thread);
 
 				act_unlock_thread(hint_act);
@@ -1077,10 +850,10 @@ _mk_sp_thread_switch(
 
 				if (option == SWITCH_OPTION_WAIT)
 					assert_wait_timeout(option_time, THREAD_ABORTSAFE);
-				else if (option == SWITCH_OPTION_DEPRESS)
-					_mk_sp_thread_depress_priority(policy, option_time);
+				else
+				if (option == SWITCH_OPTION_DEPRESS)
+					_mk_sp_thread_depress_ms(option_time);
 
-				self->saved.swtch.policy = policy;
 				self->saved.swtch.option = option;
 
 				thread_run(self, _mk_sp_thread_switch_continue, thread);
@@ -1110,15 +883,14 @@ _mk_sp_thread_switch(
     if (	option != SWITCH_OPTION_NONE					||
 			myprocessor->processor_set->runq.count > 0		||
 			myprocessor->runq.count > 0							) {
-		myprocessor->first_quantum = FALSE;
 		mp_enable_preemption();
 
 		if (option == SWITCH_OPTION_WAIT)
 			assert_wait_timeout(option_time, THREAD_ABORTSAFE);
-		else if (option == SWITCH_OPTION_DEPRESS)
-			_mk_sp_thread_depress_priority(policy, option_time);
+		else
+		if (option == SWITCH_OPTION_DEPRESS)
+			_mk_sp_thread_depress_ms(option_time);
 	  
-		self->saved.swtch.policy = policy;
 		self->saved.swtch.option = option;
 
 		thread_block(_mk_sp_thread_switch_continue);
@@ -1129,89 +901,75 @@ _mk_sp_thread_switch(
 out:
 	if (option == SWITCH_OPTION_WAIT)
 		thread_cancel_timer();
-	else if (option == SWITCH_OPTION_DEPRESS)
-		_mk_sp_thread_depress_abort(policy, self);
+	else
+	if (option == SWITCH_OPTION_DEPRESS)
+		_mk_sp_thread_depress_abort(self, FALSE);
 
     return (KERN_SUCCESS);
 }
 
 /*
- *	mk_sp_thread_depress_priority
- *
- *	Depress thread's priority to lowest possible for specified period.
- *	Intended for use when thread wants a lock but doesn't know which
- *	other thread is holding it.  As with thread_switch, fixed
- *	priority threads get exactly what they asked for.  Users access
- *	this by the SWITCH_OPTION_DEPRESS option to thread_switch.  A Time
- *      of zero will result in no timeout being scheduled.
+ * Depress thread's priority to lowest possible for the specified interval,
+ * with a value of zero resulting in no timeout being scheduled.
  */
 void
-_mk_sp_thread_depress_priority(
-	sf_object_t				policy,
-	mach_msg_timeout_t		interval)
+_mk_sp_thread_depress_abstime(
+	uint64_t				interval)
 {
 	register thread_t		self = current_thread();
-	AbsoluteTime			deadline;
-	boolean_t				release = FALSE;
+	uint64_t				deadline;
     spl_t					s;
 
     s = splsched();
+	wake_lock(self);
     thread_lock(self);
-
-	if (self->policy == policy->policy_id) {
-		/*
-		 * If we haven't already saved the priority to be restored
-		 * (depress_priority), then save it.
-		 */
-		if (self->depress_priority < 0)
-			self->depress_priority = self->priority;
-		else if (thread_call_cancel(&self->depress_timer))
-			release = TRUE;
-
+	if (self->depress_priority < 0) {
+		self->depress_priority = self->priority;
 		self->sched_pri = self->priority = DEPRESSPRI;
+		thread_unlock(self);
 
 		if (interval != 0) {
-			clock_interval_to_deadline(
-								interval, 1000*NSEC_PER_USEC, &deadline);
-			thread_call_enter_delayed(&self->depress_timer, deadline);
-			if (!release)
-				self->ref_count++;
-			else
-				release = FALSE;
+			clock_absolutetime_interval_to_deadline(interval, &deadline);
+			if (!timer_call_enter(&self->depress_timer, deadline))
+				self->depress_timer_active++;
 		}
 	}
-
-    thread_unlock(self);
+	else
+		thread_unlock(self);
+	wake_unlock(self);
     splx(s);
+}
 
-	if (release)
-		thread_deallocate(self);
-}	
+void
+_mk_sp_thread_depress_ms(
+	mach_msg_timeout_t		interval)
+{
+	uint64_t		abstime;
+
+	clock_interval_to_absolutetime_interval(
+							interval, 1000*NSEC_PER_USEC, &abstime);
+	_mk_sp_thread_depress_abstime(abstime);
+}
 
 /*
- *	mk_sp_thread_depress_timeout:
- *
- *	Timeout routine for priority depression.
+ *	Priority depression expiration.
  */
 void
-_mk_sp_thread_depress_timeout(
-	sf_object_t				policy,
-	register thread_t		thread)
+thread_depress_expire(
+	timer_call_param_t		p0,
+	timer_call_param_t		p1)
 {
-    spl_t					s;
+	thread_t		thread = p0;
+    spl_t			s;
 
     s = splsched();
-    thread_lock(thread);
-	if (thread->policy == policy->policy_id) {
-		/*
-		 *	If we lose a race with mk_sp_thread_depress_abort,
-		 *	then depress_priority might be -1.
-		 */
-		if (	thread->depress_priority >= 0							&&
-				!thread_call_is_delayed(&thread->depress_timer, NULL)		) {
+    wake_lock(thread);
+	if (--thread->depress_timer_active == 1) {
+		thread_lock(thread);
+		if (thread->depress_priority >= 0) {
 			thread->priority = thread->depress_priority;
 			thread->depress_priority = -1;
-			compute_priority(thread, FALSE);
+			compute_priority(thread, TRUE);
 		}
 		else
 		if (thread->depress_priority == -2) {
@@ -1223,58 +981,100 @@ _mk_sp_thread_depress_timeout(
 			 */
 			thread->depress_priority = -1;
 		}
+		thread->sched_mode &= ~TH_MODE_POLLDEPRESS;
+		thread_unlock(thread);
 	}
-	thread_unlock(thread);
-	splx(s);
+	else
+	if (thread->depress_timer_active == 0)
+		thread_wakeup_one(&thread->depress_timer_active);
+    wake_unlock(thread);
+    splx(s);
 }
 
 /*
- *	mk_sp_thread_depress_abort:
- *
  *	Prematurely abort priority depression if there is one.
  */
 kern_return_t
 _mk_sp_thread_depress_abort(
-	sf_object_t				policy,
-	register thread_t		thread)
+	register thread_t		thread,
+	boolean_t				abortall)
 {
-    kern_return_t 			result = KERN_SUCCESS;
-	boolean_t				release = FALSE;
+    kern_return_t 			result = KERN_NOT_DEPRESSED;
     spl_t					s;
 
     s = splsched();
+	wake_lock(thread);
     thread_lock(thread);
-
-	if (thread->policy == policy->policy_id) {
+	if (abortall || !(thread->sched_mode & TH_MODE_POLLDEPRESS)) {
 		if (thread->depress_priority >= 0) {
-			if (thread_call_cancel(&thread->depress_timer))
-				release = TRUE;
 			thread->priority = thread->depress_priority;
 			thread->depress_priority = -1;
-			compute_priority(thread, FALSE);
+			compute_priority(thread, TRUE);
+			result = KERN_SUCCESS;
 		}
-		else
-			result = KERN_NOT_DEPRESSED;
+
+		thread->sched_mode &= ~TH_MODE_POLLDEPRESS;
+		thread_unlock(thread);
+
+		if (timer_call_cancel(&thread->depress_timer))
+			thread->depress_timer_active--;
 	}
-
-    thread_unlock(thread);
+	else
+		thread_unlock(thread);
+	wake_unlock(thread);
     splx(s);
-
-	if (release)
-		thread_deallocate(thread);
 
     return (result);
 }
 
-/*
- *	mk_sp_thread_runnable:
- *
- *	Return TRUE iff policy believes thread is runnable
- */
-boolean_t
-_mk_sp_thread_runnable(
-	sf_object_t			policy,
-	thread_t			thread)
+void
+_mk_sp_thread_perhaps_yield(
+	thread_t			self)
 {
-	return (thread->sp_state == MK_SP_RUNNABLE);
+	spl_t			s;
+
+	assert(self == current_thread());
+
+	s = splsched();
+	thread_lock(self);
+	if (!(self->sched_mode & (TH_MODE_REALTIME|TH_MODE_TIMESHARE))) {
+		extern uint64_t		max_poll_computation;
+		extern int			sched_poll_yield_shift;
+		uint64_t			abstime, total_computation;
+
+		clock_get_uptime(&abstime);
+		total_computation = abstime - self->computation_epoch;
+		total_computation += self->metered_computation;
+		if (total_computation >= max_poll_computation) {
+			processor_t		myprocessor;
+
+			thread_unlock(self);
+
+			wake_lock(self);
+			thread_lock(self);
+			if (self->depress_priority < 0) {
+				self->depress_priority = self->priority;
+				self->sched_pri = self->priority = DEPRESSPRI;
+			}
+			self->computation_epoch = abstime;
+			self->metered_computation = 0;
+			self->sched_mode |= TH_MODE_POLLDEPRESS;
+			thread_unlock(self);
+
+			abstime += (total_computation >> sched_poll_yield_shift);
+			if (!timer_call_enter(&self->depress_timer, abstime))
+				self->depress_timer_active++;
+			wake_unlock(self);
+
+			myprocessor = current_processor();
+			if (csw_needed(self, myprocessor))
+				ast_on(AST_BLOCK);
+		}
+		else
+			thread_unlock(self);
+	}
+	else
+		thread_unlock(self);
+
+	splx(s);
 }

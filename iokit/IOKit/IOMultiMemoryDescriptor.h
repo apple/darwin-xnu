@@ -159,6 +159,9 @@ public:
     virtual IOByteCount writeBytes( IOByteCount  offset,
                                     const void * bytes,
                                     IOByteCount  withLength );
+
+    virtual IOPhysicalAddress getSourceSegment(IOByteCount offset,
+                                               IOByteCount * length);
 };
 
 #endif /* !_IOMULTIMEMORYDESCRIPTOR_H */

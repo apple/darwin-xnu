@@ -71,9 +71,8 @@ type vnode_ptr_t = array[1] of int;
 
 routine	default_pager_object_create(
 		default_pager		: mach_port_t;
-	out	memory_object		: memory_object_t =
-			MACH_MSG_TYPE_MAKE_SEND;
-		object_size		: vm_size_t);
+		object_size		: vm_size_t;
+	out	memory_object		: memory_object_t);
 
 routine default_pager_info(
 		default_pager		: mach_port_t;

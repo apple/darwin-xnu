@@ -76,11 +76,16 @@ integer_t	mach_factor[3] = {0, 0, 0};
 /*
  * Values are scaled by LOAD_SCALE, defined in processor_info.h
  */
+#define base(n)		((n) << SCHED_TICK_SHIFT)
+#define frac(n)		(((base(n) - 1) * LOAD_SCALE) /	base(n))
+
 static	long	fract[3] = {
-	800,			/* (4.0/5.0) 5 second average */
-	966,			/* (29.0/30.0) 30 second average */
-	983,			/* (59.0/60.) 1 minute average */
+	frac(5),		/* 5 second average */
+	frac(30),		/* 30 second average */
+	frac(60),		/* 1 minute average */
 };
+#undef base
+#undef frac
 
 void
 compute_mach_factor(void)

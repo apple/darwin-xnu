@@ -38,8 +38,6 @@
 #include <mach/boolean.h>
 #include <vm/vm_pager.h>
 
-void		vnode_pager_init();
-
 vm_pager_t	vnode_pager_setup();
 boolean_t	vnode_has_page();
 boolean_t	vnode_pager_active();

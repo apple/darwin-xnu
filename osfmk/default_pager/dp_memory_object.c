@@ -54,8 +54,10 @@
  */
 
 #include "default_pager_internal.h"
+#include <mach/memory_object_types.h>
 #include <mach/memory_object_server.h>
-#include <vm/vm_pageout.h> /* include for upl_t */
+#include <vm/memory_object.h>
+#include <vm/vm_pageout.h> 
 
 
 /*
@@ -69,9 +71,7 @@
  */
 struct vstruct_list_head	vstruct_list;
 
-void vstruct_list_insert(vstruct_t vs);	/* forward */
-
-void
+__private_extern__ void
 vstruct_list_insert(
 	vstruct_t vs)
 {
@@ -81,9 +81,8 @@ vstruct_list_insert(
 	VSL_UNLOCK();
 }
 
-void vstruct_list_delete(vstruct_t vs);	/* forward */
 
-void
+__private_extern__ void
 vstruct_list_delete(
 	vstruct_t vs)
 {
@@ -101,24 +100,21 @@ vstruct_list_delete(
  * terminate requests wait for proceeding reads and writes to finish.
  */
 
-unsigned int	default_pager_total = 0;		/* debugging */
-unsigned int	default_pager_wait_seqno = 0;		/* debugging */
-unsigned int	default_pager_wait_read = 0;		/* debugging */
-unsigned int	default_pager_wait_write = 0;		/* debugging */
-unsigned int	default_pager_wait_refs = 0;		/* debugging */
+static unsigned int	default_pager_total = 0;		/* debugging */
+static unsigned int	default_pager_wait_seqno = 0;		/* debugging */
+static unsigned int	default_pager_wait_read = 0;		/* debugging */
+static unsigned int	default_pager_wait_write = 0;		/* debugging */
+static unsigned int	default_pager_wait_refs = 0;		/* debugging */
 
-void vs_async_wait(vstruct_t);	/* forward */
-
-void
+__private_extern__ void
 vs_async_wait(
 	vstruct_t	vs)
 {
-	static char here[] = "vs_async_wait";
 
 	ASSERT(vs->vs_async_pending >= 0);
 	while (vs->vs_async_pending > 0) {
 		vs->vs_waiting_async = TRUE;
-		assert_wait(&vs->vs_waiting_async, THREAD_UNINT);
+		assert_wait(&vs->vs_async_pending, THREAD_UNINT);
 		VS_UNLOCK(vs);
 		thread_block((void (*)(void))0);
 		VS_LOCK(vs);
@@ -126,32 +122,27 @@ vs_async_wait(
 	ASSERT(vs->vs_async_pending == 0);
 }
 
-#if	PARALLEL
-void vs_lock(vstruct_t, mach_port_seqno_t);
-void vs_unlock(vstruct_t);
-void vs_start_read(vstruct_t);
-void vs_wait_for_readers(vstruct_t);
-void vs_finish_read(vstruct_t);
-void vs_start_write(vstruct_t);
-void vs_wait_for_writers(vstruct_t);
-void vs_finish_write(vstruct_t);
-void vs_wait_for_refs(vstruct_t);
-void vs_finish_refs(vstruct_t);
 
+#if	PARALLEL
 /* 
  * Waits for correct sequence number.  Leaves pager locked.
- * JMM - Sequence numbers guarantee ordering, but in a preemptible
- *       kernel, they are generated without locks, and so their
- *       generation order is undefined (and therefore unreliable).
- *	 Since we ned to fix this anyway, and I needed to get rid
- *	 rid of asymmetry in the interface definitions, I have
- *       punted this to here.
+ *
+ * JMM - Sequence numbers guarantee ordering of requests generated
+ *	 by a single thread if the receiver is multithreaded and
+ *	 the interfaces are asynchronous (i.e. sender can generate
+ *	 more than one request before the first is received in the
+ *	 pager).  Normally, IPC would generate these number in that
+ *	 case.  But we are trying to avoid using IPC for the in-kernel
+ *	 scenario. Since these are actually invoked synchronously
+ *	 anyway (in-kernel), we can just fake the sequence number
+ *	 generation here (thus avoiding the dependence on IPC).
  */
-void
+__private_extern__ void
 vs_lock(
-	vstruct_t		vs,
-	mach_port_seqno_t	seqno)
+	vstruct_t		vs)
 {
+	mach_port_seqno_t	seqno;
+
 	default_pager_total++;
 	VS_LOCK(vs);
 
@@ -160,7 +151,7 @@ vs_lock(
 	while (vs->vs_seqno != seqno) {
 		default_pager_wait_seqno++;
 		vs->vs_waiting_seqno = TRUE;
-		assert_wait(&vs->vs_waiting_seqno, THREAD_UNINT);
+		assert_wait(&vs->vs_seqno, THREAD_UNINT);
 		VS_UNLOCK(vs);
 		thread_block((void (*)(void))0);
 		VS_LOCK(vs);
@@ -170,22 +161,23 @@ vs_lock(
 /*
  * Increments sequence number and unlocks pager.
  */
-void
+__private_extern__ void
 vs_unlock(vstruct_t vs)
 {
-	boolean_t need_wakeups = vs->vs_waiting_seqno;
-
-	vs->vs_waiting_seqno = FALSE;
 	vs->vs_seqno++;
+	if (vs->vs_waiting_seqno) {
+		vs->vs_waiting_seqno = FALSE;
+		VS_UNLOCK(vs);
+		thread_wakeup(&vs->vs_seqno);
+		return;
+	}
 	VS_UNLOCK(vs);
-	if (need_wakeups)
-		thread_wakeup(&vs->vs_waiting_seqno);
 }
 
 /* 
  * Start a read - one more reader.  Pager must be locked.
  */
-void
+__private_extern__ void
 vs_start_read(
 	vstruct_t vs)
 {
@@ -195,14 +187,14 @@ vs_start_read(
 /*
  * Wait for readers.  Unlocks and relocks pager if wait needed.
  */
-void
+__private_extern__ void
 vs_wait_for_readers(
 	vstruct_t vs)
 {
 	while (vs->vs_readers != 0) {
 		default_pager_wait_read++;
 		vs->vs_waiting_read = TRUE;
-		assert_wait(&vs->vs_waiting_read, THREAD_UNINT);
+		assert_wait(&vs->vs_readers, THREAD_UNINT);
 		VS_UNLOCK(vs);
 		thread_block((void (*)(void))0);
 		VS_LOCK(vs);
@@ -212,26 +204,24 @@ vs_wait_for_readers(
 /*
  * Finish a read.  Pager is unlocked and returns unlocked.
  */
-void
+__private_extern__ void
 vs_finish_read(
 	vstruct_t vs)
 {
 	VS_LOCK(vs);
-	if (--vs->vs_readers == 0) {
-		boolean_t need_wakeups = vs->vs_waiting_read;
-
+	if (--vs->vs_readers == 0 && vs->vs_waiting_read) {
 		vs->vs_waiting_read = FALSE;
 		VS_UNLOCK(vs);
-		if (need_wakeups)
-			thread_wakeup(&vs->vs_waiting_read);
-	} else
-		VS_UNLOCK(vs);
+		thread_wakeup(&vs->vs_readers);
+		return;
+	}
+	VS_UNLOCK(vs);
 }
 
 /*
  * Start a write - one more writer.  Pager must be locked.
  */
-void
+__private_extern__ void
 vs_start_write(
 	vstruct_t vs)
 {
@@ -241,14 +231,14 @@ vs_start_write(
 /* 
  * Wait for writers.  Unlocks and relocks pager if wait needed.
  */
-void
+__private_extern__ void
 vs_wait_for_writers(
 	vstruct_t vs)
 {
 	while (vs->vs_writers != 0) {
 		default_pager_wait_write++;
 		vs->vs_waiting_write = TRUE;
-		assert_wait(&vs->vs_waiting_write, THREAD_UNINT);
+		assert_wait(&vs->vs_writers, THREAD_UNINT);
 		VS_UNLOCK(vs);
 		thread_block((void (*)(void))0);
 		VS_LOCK(vs);
@@ -261,14 +251,15 @@ vs_wait_for_writers(
 /* vs_async_wait count non-zero.  It will not ocnflict with   */
 /* other writers on an async basis because it only writes on  */
 /* a cluster basis into fresh (as of sync time) cluster locations */
-void 
+
+__private_extern__ void 
 vs_wait_for_sync_writers(
         vstruct_t vs)
 {
         while (vs->vs_writers != 0) {
                 default_pager_wait_write++;
 		vs->vs_waiting_write = TRUE;
-                assert_wait(&vs->vs_waiting_write, THREAD_UNINT);
+                assert_wait(&vs->vs_writers, THREAD_UNINT);
                 VS_UNLOCK(vs);
                 thread_block((void (*)(void))0);
                 VS_LOCK(vs);
@@ -279,77 +270,26 @@ vs_wait_for_sync_writers(
 /*
  * Finish a write.  Pager is unlocked and returns unlocked.
  */
-void
+__private_extern__ void
 vs_finish_write(
 	vstruct_t vs)
 {
 	VS_LOCK(vs);
-	if (--vs->vs_writers == 0) {
-		boolean_t need_wakeups = vs->vs_waiting_write;
-
+	if (--vs->vs_writers == 0 && vs->vs_waiting_write) {
 		vs->vs_waiting_write = FALSE;
 		VS_UNLOCK(vs);
-		if (need_wakeups)
-			thread_wakeup(&vs->vs_waiting_write);
-	} else
-		VS_UNLOCK(vs);
-}
-
-/*
- * Wait for concurrent default_pager_objects.
- * Unlocks and relocks pager if wait needed.
- */
-void
-vs_wait_for_refs(
-	vstruct_t vs)
-{
-	while (vs->vs_name_refs == 0) {
-		default_pager_wait_refs++;
-		vs->vs_waiting_refs = TRUE;
-		assert_wait(&vs->vs_waiting_refs, THREAD_UNINT);
-		VS_UNLOCK(vs);
-		thread_block((void (*)(void))0);
-		VS_LOCK(vs);
+		thread_wakeup(&vs->vs_writers);
+		return;
 	}
+	VS_UNLOCK(vs);
 }
-
-/*
- * Finished creating name refs - wake up waiters.
- */
-void
-vs_finish_refs(
-	vstruct_t vs)
-{
-	boolean_t need_wakeups = vs->vs_waiting_refs;
-	vs->vs_waiting_refs = FALSE;
-	if (need_wakeups)
-		thread_wakeup(&vs->vs_waiting_refs);
-}
-
-#else	/* PARALLEL */
-
-#define	vs_lock(vs,seqno)
-#define	vs_unlock(vs)
-#define	vs_start_read(vs)
-#define	vs_wait_for_readers(vs)
-#define	vs_finish_read(vs)
-#define	vs_start_write(vs)
-#define	vs_wait_for_writers(vs)
-#define	vs_wait_for_sync_writers(vs)
-#define	vs_finish_write(vs)
-#define vs_wait_for_refs(vs)
-#define vs_finish_refs(vs)
-
 #endif	/* PARALLEL */
-
-vstruct_t vs_object_create(vm_size_t);	/* forward */
 
 vstruct_t
 vs_object_create(
 	vm_size_t size)
 {
 	vstruct_t	vs;
-	static char here[] = "vs_object_create";
 
 	/*
 	 * Allocate a vstruct. If there are any problems, then report them
@@ -365,46 +305,7 @@ vs_object_create(
 	return vs;
 }
 
-mach_port_urefs_t default_pager_max_urefs = 10000;
-
-/*
- * Check user reference count on memory object control port.
- * Vstruct must be locked.
- * Unlocks and re-locks vstruct if needs to call kernel.
- */
-void vs_check_request(vstruct_t, MACH_PORT_FACE);	/* forward */
-
-void
-vs_check_request(
-	vstruct_t	vs,
-	MACH_PORT_FACE	control_port)
-{
-	mach_port_delta_t delta;
-	kern_return_t	kr;
-	static char	here[] = "vs_check_request";
-
-	if (++vs->vs_control_refs > default_pager_max_urefs) {
-		delta = 1 - vs->vs_control_refs;
-		vs->vs_control_refs = 1;
-
-		VS_UNLOCK(vs);
-
-		/*
-		 * Deallocate excess user references.
-		 */
-
-		{
-/* find a better interface for this, what will we use as a component */
-			int i;
-			delta = -delta;
-			for(i=0; i<delta; i++)
-				ipc_port_release_send(control_port);
-		}
-
-		VS_LOCK(vs);
-	}
-}
-
+#if 0
 void default_pager_add(vstruct_t, boolean_t);	/* forward */
 
 void
@@ -412,10 +313,10 @@ default_pager_add(
 	vstruct_t vs,
 	boolean_t internal)
 {
-	MACH_PORT_FACE		mem_obj = vs->vs_mem_obj_port;
-	MACH_PORT_FACE		pset;
+	memory_object_t		mem_obj = vs->vs_mem_obj;
+	mach_port_t		pset;
 	mach_port_mscount_t 	sync;
-	MACH_PORT_FACE		previous;
+	mach_port_t		previous;
 	kern_return_t		kr;
 	static char		here[] = "default_pager_add";
 
@@ -440,97 +341,27 @@ default_pager_add(
 	ipc_port_nsrequest(mem_obj, sync, mem_obj, &previous);
 }
 
-
-/*
- * Routine:	dp_memory_object_create
- * Purpose:
- * 	Handle requests for memory objects from the
- * 	kernel.
- * Notes:
- * 	Because we only give out the default memory
- * 	manager port to the kernel, we don't have to
- * 	be so paranoid about the contents.
- */
-kern_return_t
-dp_memory_object_create(
-	MACH_PORT_FACE		dmm,
-	MACH_PORT_FACE		*new_mem_obj,
-	vm_size_t		new_size)
-{
-	mach_port_seqno_t	seqno;
-	vstruct_t		vs;
-	MACH_PORT_FACE		pager;
-	static char		here[] = "memory_object_create";
-
-	assert(dmm == default_pager_default_port);
-
-	vs = vs_object_create(new_size);
-	if (vs == VSTRUCT_NULL)
-		return KERN_RESOURCE_SHORTAGE;
-
-	pager = *new_mem_obj = ipc_port_alloc_kernel();
-	assert (pager != IP_NULL);
-	(void) ipc_port_make_send(pager);
-
-	{
-	   struct vstruct_alias	*alias_struct;
-
-	   alias_struct = (struct vstruct_alias *)
-			kalloc(sizeof(struct vstruct_alias));
-	   if(alias_struct != NULL) {
-		alias_struct->vs = vs;
-		alias_struct->name = ISVS;
-		pager->alias = (int) alias_struct;
-	   }
-	   else Panic("Out of kernel memory");
-
-	   /* JMM - Add binding to this pager under components */
-	   pager_mux_hash_insert(pager, &dp_memory_object_subsystem);
-	   vs->vs_next_seqno = 0;
-	   pager->ip_receiver = ipc_space_kernel;
-	}
-
-	/*
-	 * Set up associations between this port
-	 * and this default_pager structure
-	 */
-
-	vs->vs_mem_obj_port = pager;
-
-	/*
-	 * After this, other threads might receive requests
-	 * for this memory object or find it in the port list.
-	 */
-
-	vstruct_list_insert(vs);
-	default_pager_add(vs, TRUE);
-
-	return KERN_SUCCESS;
-}
+#endif
 
 kern_return_t
 dp_memory_object_init(
-	MACH_PORT_FACE		mem_obj,
-	MACH_PORT_FACE		control_port,
+	memory_object_t		mem_obj,
+	memory_object_control_t	control,
 	vm_size_t		pager_page_size)
 {
-	mach_port_seqno_t	seqno;
 	vstruct_t		vs;
-	static char		here[] = "memory_object_init";
 
 	assert(pager_page_size == vm_page_size);
 
-	vs_lookup(mem_obj, vs);
-	vs_lock(vs, seqno);
+	memory_object_control_reference(control);
 
-	if (vs->vs_control_port != MACH_PORT_NULL)
+	vs_lookup(mem_obj, vs);
+	vs_lock(vs);
+
+	if (vs->vs_control != MEMORY_OBJECT_CONTROL_NULL)
 		Panic("bad request");
 
-	vs->vs_control_port = control_port;
-	vs->vs_control_refs = 1;
-	vs->vs_object_name = MACH_PORT_NULL;
-	vs->vs_name_refs = 1;
-
+	vs->vs_control = control;
 	vs_unlock(vs);
 
 	return KERN_SUCCESS;
@@ -538,45 +369,45 @@ dp_memory_object_init(
 
 kern_return_t
 dp_memory_object_synchronize(
-	MACH_PORT_FACE		mem_obj,
-	MACH_PORT_FACE		control_port,
-	vm_object_offset_t	offset,
-	vm_offset_t		length,
+	memory_object_t		mem_obj,
+	memory_object_offset_t	offset,
+	vm_size_t		length,
 	vm_sync_t		flags)
 {
-	mach_port_seqno_t	seqno;
 	vstruct_t	vs;
-	static char	here[] = "memory_object_synchronize";
 
 	vs_lookup(mem_obj, vs);
-	vs_lock(vs, seqno);
-	vs_check_request(vs, control_port);
+	vs_lock(vs);
 	vs_unlock(vs);
 
-	memory_object_synchronize_completed(
-				vm_object_lookup(control_port), 
-				offset, length);
+	memory_object_synchronize_completed(vs->vs_control, offset, length);
 
 	return KERN_SUCCESS;
 }
 
 kern_return_t
-dp_memory_object_terminate(
-	MACH_PORT_FACE		mem_obj,
-	MACH_PORT_FACE		control_port)
+dp_memory_object_unmap(
+	memory_object_t		mem_obj)
 {
-	mach_port_seqno_t	seqno;
+	panic("dp_memory_object_unmap");
+
+	return KERN_FAILURE;
+}
+
+kern_return_t
+dp_memory_object_terminate(
+	memory_object_t		mem_obj)
+{
+	memory_object_control_t	control;
 	vstruct_t		vs;
-	mach_port_urefs_t	request_refs;
 	kern_return_t		kr;
-	static char		here[] = "memory_object_terminate";
 
 	/* 
 	 * control port is a receive right, not a send right.
 	 */
 
 	vs_lookup(mem_obj, vs);
-	vs_lock(vs, seqno);
+	vs_lock(vs);
 
 	/*
 	 * Wait for read and write requests to terminate.
@@ -588,17 +419,12 @@ dp_memory_object_terminate(
 	/*
 	 * After memory_object_terminate both memory_object_init
 	 * and a no-senders notification are possible, so we need
-	 * to clean up the request and name ports but leave
-	 * the mem_obj port.
-	 *
-	 * A concurrent default_pager_objects might be allocating
-	 * more references for the name port.  In this case,
-	 * we must first wait for it to finish.
+	 * to clean up our reference to the memory_object_control
+	 * to prepare for a new init.
 	 */
 
-	vs_wait_for_refs(vs);
-
-	vs->vs_control_port = MACH_PORT_NULL;
+	control = vs->vs_control;
+	vs->vs_control = MEMORY_OBJECT_CONTROL_NULL;
 
 	/* a bit of special case ugliness here.  Wakeup any waiting reads */
 	/* these data requests had to be removed from the seqno traffic   */
@@ -607,54 +433,72 @@ dp_memory_object_terminate(
 	/* synchronous interface.  The new async will be able to return   */
 	/* failure during its sync phase.   In the mean time ... */
 
-		thread_wakeup(&vs->vs_waiting_write);
-		thread_wakeup(&vs->vs_waiting_async);
-
-	request_refs = vs->vs_control_refs;
-	vs->vs_control_refs = 0;
-
-	vs->vs_object_name = MACH_PORT_NULL;
-
-	assert(vs->vs_name_refs != 0);
-	vs->vs_name_refs = 0;
+	thread_wakeup(&vs->vs_writers);
+	thread_wakeup(&vs->vs_async_pending);
 
 	vs_unlock(vs);
 
 	/*
-	 * Now we deallocate our various port rights.
+	 * Now we deallocate our reference on the control.
 	 */
-
-	{
-		int i;
-		for(i=0; i<request_refs; i++)
-			ipc_port_release_send(control_port);
-	}
-        if(control_port->alias != (int)NULL) 
-                kfree((vm_offset_t) (control_port->alias), 
-					sizeof(struct vstruct_alias));
-	ipc_port_release_receive(control_port);
+	memory_object_control_deallocate(control);
 	return KERN_SUCCESS;
 }
 
 void
-default_pager_no_senders(
-	MACH_PORT_FACE		mem_obj,
-	mach_port_seqno_t	seqno,
-	mach_port_mscount_t	mscount)
+dp_memory_object_reference(
+	memory_object_t		mem_obj)
 {
 	vstruct_t		vs;
-	static char		here[] = "default_pager_no_senders";
+
+	vs_lookup_safe(mem_obj, vs);
+	if (vs == VSTRUCT_NULL)
+		return;
+
+	VS_LOCK(vs);
+	assert(vs->vs_references > 0);
+	vs->vs_references++;
+	VS_UNLOCK(vs);
+}
+
+extern ipc_port_t	max_pages_trigger_port;
+extern int		dp_pages_free;
+extern int		maximum_pages_free;
+void
+dp_memory_object_deallocate(
+	memory_object_t		mem_obj)
+{
+	vstruct_t		vs;
+	mach_port_seqno_t	seqno;
+	ipc_port_t 		trigger;
 
 	/*
-	 * Because we don't give out multiple send rights
+	 * Because we don't give out multiple first references
 	 * for a memory object, there can't be a race
-	 * between getting a no-senders notification
-	 * and creating a new send right for the object.
-	 * Hence we don't keep track of mscount.
+	 * between getting a deallocate call and creating
+	 * a new reference for the object.
 	 */
 
-	vs_lookup(mem_obj, vs);
-	vs_lock(vs, seqno);
+	vs_lookup_safe(mem_obj, vs);
+	if (vs == VSTRUCT_NULL)
+		return;
+
+	VS_LOCK(vs);
+	if (--vs->vs_references > 0) {
+		VS_UNLOCK(vs);
+		return;
+	}
+
+	seqno = vs->vs_next_seqno++;
+	while (vs->vs_seqno != seqno) {
+		default_pager_wait_seqno++;
+		vs->vs_waiting_seqno = TRUE;
+		assert_wait(&vs->vs_seqno, THREAD_UNINT);
+		VS_UNLOCK(vs);
+		thread_block((void (*)(void))0);
+		VS_LOCK(vs);
+	}
+
 	vs_async_wait(vs);	/* wait for pending async IO */
 
 	/* do not delete the vs structure until the referencing pointers */
@@ -668,11 +512,13 @@ default_pager_no_senders(
 		VS_LOCK(vs);
 		vs_async_wait(vs);	/* wait for pending async IO */
 	}
+
+
 	/*
-	 * We shouldn't get a no-senders notification
+	 * We shouldn't get a deallocation call
 	 * when the kernel has the object cached.
 	 */
-	if (vs->vs_control_port != MACH_PORT_NULL)
+	if (vs->vs_control != MEMORY_OBJECT_CONTROL_NULL)
 		Panic("bad request");
 
 	/*
@@ -681,6 +527,14 @@ default_pager_no_senders(
 	 */
 	VS_UNLOCK(vs);
 
+	/* Lock out paging segment removal for the duration of this */
+	/* call.  We are vulnerable to losing a paging segment we rely */
+	/* on as soon as we remove ourselves from the VSL and unlock */
+
+	/* Keep our thread from blocking on attempt to trigger backing */
+	/* store release */
+	backing_store_release_trigger_disable += 1;
+
 	/*
 	 * Remove the memory object port association, and then
 	 * the destroy the port itself.  We must remove the object
@@ -688,32 +542,42 @@ default_pager_no_senders(
 	 * because of default_pager_objects.
 	 */
 	vstruct_list_delete(vs);
+	VSL_UNLOCK();
+
 	ps_vstruct_dealloc(vs);
 
-	/*
-	 * Recover memory that we might have wasted because
-	 * of name conflicts
-	 */
-	while (!queue_empty(&vstruct_list.vsl_leak_queue)) {
-		vs = (vstruct_t) queue_first(&vstruct_list.vsl_leak_queue);
-		queue_remove_first(&vstruct_list.vsl_leak_queue, vs, vstruct_t,
-				   vs_links);
-		kfree((vm_offset_t) vs, sizeof *vs);
+	VSL_LOCK();
+	backing_store_release_trigger_disable -= 1;
+	if(backing_store_release_trigger_disable == 0) {
+		thread_wakeup((event_t)&vm_page_laundry_count);
 	}
 	VSL_UNLOCK();
+
+	PSL_LOCK();
+	if(max_pages_trigger_port
+		&& (backing_store_release_trigger_disable == 0)
+		&& (dp_pages_free > maximum_pages_free)) {
+		trigger = max_pages_trigger_port;
+		max_pages_trigger_port = NULL;
+	} else 
+		trigger = IP_NULL;
+	PSL_UNLOCK();
+
+	if (trigger != IP_NULL) {
+		default_pager_space_alert(trigger, LO_WAT_ALERT);
+		ipc_port_release_send(trigger);
+	}
+
 }
 
 kern_return_t
 dp_memory_object_data_request(
-	MACH_PORT_FACE		mem_obj,
-	MACH_PORT_FACE		reply_to,
-	vm_object_offset_t	offset,
+	memory_object_t		mem_obj,
+	memory_object_offset_t	offset,
 	vm_size_t		length,
 	vm_prot_t		protection_required)
 {
-	mach_port_seqno_t	seqno;
 	vstruct_t		vs;
-	static char		here[] = "memory_object_data_request";
 
 	GSTAT(global_stats.gs_pagein_calls++);
 
@@ -722,8 +586,7 @@ dp_memory_object_data_request(
 	/* port.  As we are expanding this pager to support user interfaces */
 	/* this should be changed to return kern_failure */
 	vs_lookup(mem_obj, vs);
-	vs_lock(vs, seqno);
-	vs_check_request(vs, reply_to);
+	vs_lock(vs);
 
 	/* We are going to relax the strict sequencing here for performance */
 	/* reasons.  We can do this because we know that the read and */
@@ -731,6 +594,7 @@ dp_memory_object_data_request(
 	/* of read and write requests at the cache memory_object level */
 	/* break out wait_for_writers, all of this goes away when */
 	/* we get real control of seqno with the new component interface */
+
 	if (vs->vs_writers != 0) {
 		/* you can't hold on to the seqno and go */
 		/* to sleep like that */
@@ -739,13 +603,13 @@ dp_memory_object_data_request(
 		while (vs->vs_writers != 0) {
 			default_pager_wait_write++;
 			vs->vs_waiting_write = TRUE;
-			assert_wait(&vs->vs_waiting_write, THREAD_UNINT);
+			assert_wait(&vs->vs_writers, THREAD_UNINT);
 			VS_UNLOCK(vs);
 			thread_block((void (*)(void))0);
 			VS_LOCK(vs);
 			vs_async_wait(vs);
 		}
-		if(vs->vs_control_port == MACH_PORT_NULL) {
+		if(vs->vs_control == MEMORY_OBJECT_CONTROL_NULL) {
 			VS_UNLOCK(vs);
 			return KERN_FAILURE;
 		}
@@ -783,28 +647,19 @@ dp_memory_object_data_request(
 
 kern_return_t
 dp_memory_object_data_initialize(
-	MACH_PORT_FACE		mem_obj,
-	MACH_PORT_FACE		control_port,
-	vm_object_offset_t	offset,
-	pointer_t		addr,
-	vm_size_t		data_cnt)
+	memory_object_t		mem_obj,
+	memory_object_offset_t	offset,
+	vm_size_t		size)
 {
-	mach_port_seqno_t	seqno;
 	vstruct_t	vs;
-	static char	here[] = "memory_object_data_initialize";
-
-#ifdef	lint
-	control_port++;
-#endif	/* lint */
 
 	DEBUG(DEBUG_MO_EXTERNAL,
 	      ("mem_obj=0x%x,offset=0x%x,cnt=0x%x\n",
-	       (int)mem_obj, (int)offset, (int)data_cnt));
-	GSTAT(global_stats.gs_pages_init += atop(data_cnt));
+	       (int)mem_obj, (int)offset, (int)size));
+	GSTAT(global_stats.gs_pages_init += atop(size));
 
 	vs_lookup(mem_obj, vs);
-	vs_lock(vs, seqno);
-	vs_check_request(vs, control_port);
+	vs_lock(vs);
 	vs_start_write(vs);
 	vs_unlock(vs);
 
@@ -813,7 +668,7 @@ dp_memory_object_data_initialize(
 	 * loop if the address range specified crosses cluster
 	 * boundaries.
 	 */
-	vs_cluster_write(vs, 0, (vm_offset_t)offset, data_cnt, FALSE, 0);
+	vs_cluster_write(vs, 0, (vm_offset_t)offset, size, FALSE, 0);
 
 	vs_finish_write(vs);
 
@@ -821,80 +676,30 @@ dp_memory_object_data_initialize(
 }
 
 kern_return_t
-dp_memory_object_lock_completed(
-	memory_object_t		mem_obj,
-	MACH_PORT_FACE		control_port,
-	vm_object_offset_t	offset,
-	vm_size_t		length)
-{
-	mach_port_seqno_t	seqno;
-	static char	here[] = "memory_object_lock_completed";
-
-#ifdef	lint
-	mem_obj++; 
-	seqno++; 
-	control_port++; 
-	offset++; 
-	length++;
-#endif	/* lint */
-
-	Panic("illegal");
-	return KERN_FAILURE;
-}
-
-kern_return_t
 dp_memory_object_data_unlock(
 	memory_object_t		mem_obj,
-	MACH_PORT_FACE		control_port,
-	vm_object_offset_t	offset,
-	vm_size_t		data_cnt,
+	memory_object_offset_t	offset,
+	vm_size_t		size,
 	vm_prot_t		desired_access)
 {
-	static char	here[] = "memory_object_data_unlock";
-
-	Panic("illegal");
+	Panic("dp_memory_object_data_unlock: illegal");
 	return KERN_FAILURE;
 }
 
-
-kern_return_t
-dp_memory_object_supply_completed(
-	memory_object_t		mem_obj,
-	MACH_PORT_FACE		control_port,
-	vm_object_offset_t	offset,
-	vm_size_t		length,
-	kern_return_t		result,
-	vm_offset_t		error_offset)
-{
-	static char	here[] = "memory_object_supply_completed";
-
-	Panic("illegal");
-	return KERN_FAILURE;
-}
 
 kern_return_t
 dp_memory_object_data_return(
-	MACH_PORT_FACE		mem_obj,
-	MACH_PORT_FACE		control_port,
-	vm_object_offset_t	offset,
-	pointer_t		addr,
-	vm_size_t		data_cnt,
+	memory_object_t		mem_obj,
+	memory_object_offset_t	offset,
+	vm_size_t		size,
 	boolean_t		dirty,
 	boolean_t		kernel_copy)
 {
-	mach_port_seqno_t	seqno;
 	vstruct_t	vs;
-	static char	here[] = "memory_object_data_return";
-
-#ifdef	lint
-	control_port++;
-	dirty++;
-	kernel_copy++;
-#endif	/* lint */
 
 	DEBUG(DEBUG_MO_EXTERNAL,
-	      ("mem_obj=0x%x,offset=0x%x,addr=0x%xcnt=0x%x\n",
-	       (int)mem_obj, (int)offset, (int)addr, (int)data_cnt));
+	      ("mem_obj=0x%x,offset=0x%x,size=0x%x\n",
+	       (int)mem_obj, (int)offset, (int)size));
 	GSTAT(global_stats.gs_pageout_calls++);
 
 	/* This routine is called by the pageout thread.  The pageout thread */
@@ -913,74 +718,54 @@ dp_memory_object_data_return(
 		/* a synchronous interface */
 		/* return KERN_LOCK_OWNED; */
 		upl_t		upl;
-		upl_system_list_request((vm_object_t)
-                                vs->vs_control_port->ip_kobject,
-                                offset, data_cnt, data_cnt, &upl, NULL, 0,
-				UPL_NOBLOCK | UPL_CLEAN_IN_PLACE 
+		int		page_list_count = 0;
+		memory_object_super_upl_request(vs->vs_control,
+					(memory_object_offset_t)offset,
+					size, size,
+					&upl, NULL, &page_list_count,
+					UPL_NOBLOCK | UPL_CLEAN_IN_PLACE 
 					| UPL_NO_SYNC | UPL_COPYOUT_FROM);
-		uc_upl_abort(upl,0);
-		ipc_port_release_send(control_port);
+		upl_abort(upl,0);
+		upl_deallocate(upl);
 		return KERN_SUCCESS;
 	}
-
-	
 
 	if ((vs->vs_seqno != vs->vs_next_seqno++) || (vs->vs_xfer_pending)) {
 		upl_t	upl;
+		int	page_list_count = 0;
+
 		vs->vs_next_seqno--;
                 VS_UNLOCK(vs);
+
 		/* the call below will not be done by caller when we have */
 		/* a synchronous interface */
 		/* return KERN_LOCK_OWNED; */
-		upl_system_list_request((vm_object_t)
-                                vs->vs_control_port->ip_kobject,
-                                offset, data_cnt, data_cnt, &upl, NULL, 0,
+		memory_object_super_upl_request(vs->vs_control,
+                                (memory_object_offset_t)offset,
+				size, size,
+				&upl, NULL, &page_list_count,
 				UPL_NOBLOCK | UPL_CLEAN_IN_PLACE 
 					| UPL_NO_SYNC | UPL_COPYOUT_FROM);
-		uc_upl_abort(upl,0);
-		ipc_port_release_send(control_port);
+		upl_abort(upl,0);
+		upl_deallocate(upl);
 		return KERN_SUCCESS;
 	}
 
-	if ((data_cnt % vm_page_size) != 0)
+	if ((size % vm_page_size) != 0)
 		Panic("bad alignment");
 
 	vs_start_write(vs);
 
 
         vs->vs_async_pending += 1;  /* protect from backing store contraction */
-
-	/* unroll vs_check_request to avoid re-locking vs */
-
-	if (++vs->vs_control_refs > default_pager_max_urefs) {
-		mach_port_delta_t delta;
-
-		delta = 1 - vs->vs_control_refs;
-		vs->vs_control_refs = 1;
-
-		vs_unlock(vs);
-
-		/*
-		 * Deallocate excess user references.
-		 */
-
-		{
-			int i;
-			delta = -delta;
-			for(i=0; i<delta; i++)
-				ipc_port_release_send(control_port);
-		}
-
-	} else {
-		vs_unlock(vs);
-	}
+	vs_unlock(vs);
 
 	/*
 	 * Write the data via clustered writes. vs_cluster_write will
 	 * loop if the address range specified crosses cluster
 	 * boundaries.
 	 */
-	vs_cluster_write(vs, 0, (vm_offset_t)offset, data_cnt, FALSE, 0);
+	vs_cluster_write(vs, 0, (vm_offset_t)offset, size, FALSE, 0);
 
 	vs_finish_write(vs);
 
@@ -988,9 +773,10 @@ dp_memory_object_data_return(
 
 	VS_LOCK(vs);
 	vs->vs_async_pending -= 1;  /* release vs_async_wait */
-	if (vs->vs_async_pending == 0) {
+	if (vs->vs_async_pending == 0 && vs->vs_waiting_async) {
+		vs->vs_waiting_async = FALSE;
 		VS_UNLOCK(vs);
-		thread_wakeup(&vs->vs_waiting_async);
+		thread_wakeup(&vs->vs_async_pending);
 	} else {
 		VS_UNLOCK(vs);
 	}
@@ -999,16 +785,48 @@ dp_memory_object_data_return(
 	return KERN_SUCCESS;
 }
 
+/*
+ * Routine:	default_pager_memory_object_create
+ * Purpose:
+ * 	Handle requests for memory objects from the
+ * 	kernel.
+ * Notes:
+ * 	Because we only give out the default memory
+ * 	manager port to the kernel, we don't have to
+ * 	be so paranoid about the contents.
+ */
 kern_return_t
-dp_memory_object_change_completed(
-	memory_object_t		mem_obj,
-	memory_object_control_t	memory_control,
-	memory_object_flavor_t	flavor)
+default_pager_memory_object_create(
+	memory_object_default_t	dmm,
+	vm_size_t		new_size,
+	memory_object_t		*new_mem_obj)
 {
-	static char	here[] = "memory_object_change_completed";
+	vstruct_t		vs;
 
-	Panic("illegal");
-	return KERN_FAILURE;
+	assert(dmm == default_pager_object);
+
+	vs = vs_object_create(new_size);
+	if (vs == VSTRUCT_NULL)
+		return KERN_RESOURCE_SHORTAGE;
+
+	vs->vs_next_seqno = 0;
+
+	/*
+	 * Set up associations between this memory object
+	 * and this default_pager structure
+	 */
+
+	vs->vs_mem_obj = ISVS;
+	vs->vs_mem_obj_ikot = IKOT_MEMORY_OBJECT;
+
+	/*
+	 * After this, other threads might receive requests
+	 * for this memory object or find it in the port list.
+	 */
+
+	vstruct_list_insert(vs);
+	*new_mem_obj = vs_to_mem_obj(vs);
+	return KERN_SUCCESS;
 }
 
 /*
@@ -1016,55 +834,38 @@ dp_memory_object_change_completed(
  */
 kern_return_t
 default_pager_object_create(
-	MACH_PORT_FACE	pager,
-	MACH_PORT_FACE	*mem_obj,
-	vm_size_t	size)
+	default_pager_t pager,
+	vm_size_t	size,
+	memory_object_t	*mem_objp)
 {
 	vstruct_t	vs;
-	MACH_PORT_FACE	port;
 	kern_return_t	result;
 	struct vstruct_alias	*alias_struct;
-	static char	here[] = "default_pager_object_create";
 
 
-	if (pager != default_pager_default_port)
+	if (pager != default_pager_object)
 		return KERN_INVALID_ARGUMENT;
 
 	vs = vs_object_create(size);
+	if (vs == VSTRUCT_NULL)
+		return KERN_RESOURCE_SHORTAGE;
 
-	port = ipc_port_alloc_kernel();
-	ipc_port_make_send(port);
-	/* register abstract memory object port with pager mux routine */
-	/* (directs kernel internal calls to the right pager). */
-	alias_struct = (struct vstruct_alias *)
-			kalloc(sizeof(struct vstruct_alias));
-	if(alias_struct != NULL) {
-		alias_struct->vs = vs;
-		alias_struct->name = ISVS;
-		port->alias = (int) alias_struct;
-	}
-	else Panic("Out of kernel memory");
-		
 	/*
-	 * Set up associations between these ports
+	 * Set up associations between the default pager
 	 * and this vstruct structure
 	 */
-
-	vs->vs_mem_obj_port = port;
+	vs->vs_mem_obj = ISVS;
 	vstruct_list_insert(vs);
-	default_pager_add(vs, FALSE);
-
-	*mem_obj = port;
-
+	*mem_objp = vs_to_mem_obj(vs);
 	return KERN_SUCCESS;
 }
 
 kern_return_t
 default_pager_objects(
-	MACH_PORT_FACE			pager,
+	default_pager_t			pager,
 	default_pager_object_array_t	*objectsp,
 	mach_msg_type_number_t		*ocountp,
-	mach_port_array_t		*portsp,
+	memory_object_array_t		*pagersp,
 	mach_msg_type_number_t		*pcountp)
 {
 	vm_offset_t		oaddr = 0;	/* memory for objects */
@@ -1072,16 +873,15 @@ default_pager_objects(
 	default_pager_object_t	* objects;
 	unsigned int		opotential;
 
-	vm_offset_t		paddr = 0;	/* memory for ports */
+	vm_offset_t		paddr = 0;	/* memory for pagers */
 	vm_size_t		psize = 0;	/* current size */
-	MACH_PORT_FACE		 * ports;
+	memory_object_t		* pagers;
 	unsigned int		ppotential;
 
 	unsigned int		actual;
 	unsigned int		num_objects;
 	kern_return_t		kr;
 	vstruct_t		entry;
-	static char		here[] = "default_pager_objects";
 /*
 	if (pager != default_pager_default_port)
 		return KERN_INVALID_ARGUMENT;
@@ -1109,7 +909,7 @@ default_pager_objects(
 	num_objects = 0;
 	opotential = *ocountp;
 
-	ports = (MACH_PORT_FACE *) *portsp;
+	pagers = (memory_object_t *) *pagersp;
 	ppotential = *pcountp;
 
 	VSL_LOCK();
@@ -1140,7 +940,7 @@ default_pager_objects(
 		vm_offset_t	newaddr;
 		vm_size_t	newsize;
 
-		newsize = 2 * round_page(actual * sizeof * ports);
+		newsize = 2 * round_page(actual * sizeof * pagers);
 
 		kr = vm_allocate(kernel_map, &newaddr, newsize, TRUE);
 		if (kr != KERN_SUCCESS)
@@ -1148,8 +948,8 @@ default_pager_objects(
 
 		paddr = newaddr;
 		psize = newsize;
-		ppotential = psize / sizeof * ports;
-		ports = (MACH_PORT_FACE *)paddr;
+		ppotential = psize / sizeof * pagers;
+		pagers = (memory_object_t *)paddr;
 	}
 
 	/*
@@ -1161,7 +961,7 @@ default_pager_objects(
 	num_objects = 0;
 	queue_iterate(&vstruct_list.vsl_queue, entry, vstruct_t, vs_links) {
 
-		MACH_PORT_FACE		port;
+		memory_object_t		pager;
 		vm_size_t		size;
 
 		if ((num_objects >= opotential) ||
@@ -1185,47 +985,25 @@ default_pager_objects(
 
 		VS_LOCK(entry);
 
-		port = entry->vs_object_name;
-		if (port == MACH_PORT_NULL) {
-
-			/*
-			 * The object is waiting for no-senders
-			 * or memory_object_init.
-			 */
+		/*
+		 * We need a reference for our caller.  Adding this
+		 * reference through the linked list could race with
+		 * destruction of the object.  If we find the object
+		 * has no references, just give up on it.
+		 */
+		VS_LOCK(entry);
+		if (entry->vs_references == 0) {
 			VS_UNLOCK(entry);
 			goto not_this_one;
 		}
-
-		/*
-		 * We need a reference for the reply message.
-		 * While we are unlocked, the bucket queue
-		 * can change and the object might be terminated.
-		 * memory_object_terminate will wait for us,
-		 * preventing deallocation of the entry.
-		 */
-
-		if (--entry->vs_name_refs == 0) {
-			VS_UNLOCK(entry);
-
-			/* keep the list locked, wont take long */
-
-			{
-				int i;
-				for(i=0; i<default_pager_max_urefs; i++)
-					ipc_port_make_send(port);
-			}
-			VS_LOCK(entry);
-
-			entry->vs_name_refs += default_pager_max_urefs;
-			vs_finish_refs(entry);
-		}
+		dp_memory_object_reference(vs_to_mem_obj(entry));
 		VS_UNLOCK(entry);
 
 		/* the arrays are wired, so no deadlock worries */
 
 		objects[num_objects].dpo_object = (vm_offset_t) entry;
 		objects[num_objects].dpo_size = size;
-		ports  [num_objects++] = port;
+		pagers [num_objects++] = pager;
 		continue;
 
 	    not_this_one:
@@ -1234,7 +1012,7 @@ default_pager_objects(
 		 */
 		objects[num_objects].dpo_object = (vm_offset_t) 0;
 		objects[num_objects].dpo_size = 0;
-		ports  [num_objects++] = MACH_PORT_NULL;
+		pagers[num_objects++] = MEMORY_OBJECT_NULL;
 
 	}
 
@@ -1270,7 +1048,7 @@ default_pager_objects(
 		*ocountp = num_objects;
 	}
 
-	if (ports == (MACH_PORT_FACE *)*portsp) {
+	if (pagers == (memory_object_t *)*pagersp) {
 
 		/*
 		 * Our returned information fit inline.
@@ -1286,13 +1064,13 @@ default_pager_objects(
 	} else {
 		vm_offset_t used;
 
-		used = round_page(actual * sizeof * ports);
+		used = round_page(actual * sizeof * pagers);
 
 		if (used != psize)
 			(void) vm_deallocate(kernel_map,
 					     paddr + used, psize - used);
 
-		*portsp = (mach_port_array_t)ports;
+		*pagersp = (memory_object_array_t)pagers;
 		*pcountp = num_objects;
 	}
 	(void) vm_map_unwire(kernel_map, (vm_offset_t)objects, 
@@ -1306,13 +1084,14 @@ default_pager_objects(
 	{
 		register int	i;
 		for (i = 0; i < num_objects; i++)
-			ipc_port_dealloc_kernel(ports[i]);
+			if (pagers[i] != MEMORY_OBJECT_NULL)
+				memory_object_deallocate(pagers[i]);
 	}
 
 	if (objects != *objectsp)
 		(void) vm_deallocate(kernel_map, oaddr, osize);
 
-	if (ports != (MACH_PORT_FACE *)*portsp)
+	if (pagers != (memory_object_t *)*pagersp)
 		(void) vm_deallocate(kernel_map, paddr, psize);
 
 	return KERN_RESOURCE_SHORTAGE;
@@ -1320,8 +1099,8 @@ default_pager_objects(
 
 kern_return_t
 default_pager_object_pages(
-	MACH_PORT_FACE			pager,
-	MACH_PORT_FACE			object,
+	default_pager_t			pager,
+	memory_object_t			object,
 	default_pager_page_array_t	*pagesp,
 	mach_msg_type_number_t		*countp)
 {
@@ -1331,10 +1110,10 @@ default_pager_object_pages(
 	unsigned int			potential, actual;
 	kern_return_t			kr;
 
-/*
-	if (pager != default_pager_default_port)
+
+	if (pager != default_pager_object)
 		return KERN_INVALID_ARGUMENT;
-*/
+
 	kr = vm_map_copyout(ipc_kernel_map, (vm_offset_t *)&pages, 
 						(vm_map_copy_t) *pagesp);
 
@@ -1361,7 +1140,7 @@ default_pager_object_pages(
 		queue_iterate(&vstruct_list.vsl_queue, entry, vstruct_t,
 			      vs_links) {
 			VS_LOCK(entry);
-			if (entry->vs_object_name == object) {
+			if (vs_to_mem_obj(entry) == object) {
 				VSL_UNLOCK();
 				goto found_object;
 			}

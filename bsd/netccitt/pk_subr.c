@@ -940,8 +940,7 @@ unsigned pr;
 		lcp -> lcd_window_condition = FALSE;
 
 	if (so && ((so -> so_snd.sb_flags & SB_WAIT) || 
-		   (so -> so_snd.sb_flags & SB_NOTIFY)) ||
-	 	   (so->so_snd.sb_sel.si_flags & SI_SBSEL))
+		   (so -> so_snd.sb_flags & SB_NOTIFY)))
 		sowwakeup (so);
 
 	return (PACKET_OK);

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2001 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -55,10 +55,6 @@
  * 
  *	User-exported virtual memory functions.
  */
-#ifdef MACH_BSD
-/* remove after component interface available */
-extern int	vnode_pager_workaround;
-#endif
 
 #include <vm_cpm.h>
 #include <mach/boolean.h>
@@ -512,6 +508,7 @@ vm_map_64(
 				named_entry_unlock(named_entry);
 				return(KERN_INVALID_OBJECT);
 			}
+			object->true_share = TRUE;
 			named_entry->object = object;
 			named_entry_unlock(named_entry);
 			/* create an extra reference for the named entry */
@@ -528,8 +525,18 @@ vm_map_64(
 				vm_object_unlock(object);
 			}
 		}
-	} else {
-		if ((object = vm_object_enter(port, size, FALSE, FALSE, FALSE))
+	} else if (ip_kotype(port) == IKOT_MEMORY_OBJECT) {
+		/*
+		 * JMM - This is temporary until we unify named entries
+		 * and raw memory objects.
+		 *
+		 * Detected fake ip_kotype for a memory object.  In
+		 * this case, the port isn't really a port at all, but
+		 * instead is just a raw memory object.
+		 */
+		 
+		if ((object = vm_object_enter((memory_object_t)port,
+					      size, FALSE, FALSE, FALSE))
 			== VM_OBJECT_NULL)
 			return(KERN_INVALID_OBJECT);
 
@@ -544,6 +551,8 @@ vm_map_64(
 			}
 			vm_object_unlock(object);
 		}
+	} else {
+		return (KERN_INVALID_OBJECT);
 	}
 
 	*address = trunc_page(*address);
@@ -837,7 +846,7 @@ vm_msync(
 				        kill_pages = -1;
 			}
 			if (kill_pages != -1)
-			        memory_object_deactivate_pages(object, offset, 
+			        vm_object_deactivate_pages(object, offset, 
 							       (vm_object_size_t)flush_size, kill_pages);
 			vm_object_unlock(object);
 			vm_map_unlock(map);
@@ -848,8 +857,8 @@ vm_msync(
 		 * Don't bother to sync internal objects, since there can't
 		 * be any "permanent" storage for these objects anyway.
 		 */
-		if ((object->pager == IP_NULL) || (object->internal) ||
-		    (object->private)) {
+		if ((object->pager == MEMORY_OBJECT_NULL) ||
+		    (object->internal) || (object->private)) {
 			vm_object_unlock(object);
 			vm_map_unlock(map);
 			continue;
@@ -864,7 +873,7 @@ vm_msync(
 
 		vm_map_unlock(map);
 
-		do_sync_req = memory_object_sync(object,
+		do_sync_req = vm_object_sync(object,
 					offset,
 					flush_size,
 					sync_flags & VM_SYNC_INVALIDATE,
@@ -917,31 +926,11 @@ re_iterate:
 
 		queue_enter(&req_q, new_msr, msync_req_t, req_q);
 
-#ifdef MACH_BSD
-		if(((rpc_subsystem_t)pager_mux_hash_lookup(object->pager)) ==
-		((rpc_subsystem_t) &vnode_pager_workaround)) {
-                	(void) vnode_pager_synchronize(
-				object->pager,
-				object->pager_request,
-				offset,
-				flush_size,
-				sync_flags);
-		} else {
-			(void) memory_object_synchronize(
-				object->pager,
-				object->pager_request,
-				offset,
-				flush_size,
-				sync_flags);
-		}
-#else
 		(void) memory_object_synchronize(
 				object->pager,
-				object->pager_request,
 				offset,
 				flush_size,
 				sync_flags);
-#endif
 	}/* while */
 
 	/*
@@ -1249,7 +1238,7 @@ mach_memory_object_memory_entry_64(
 	boolean_t		internal,
 	vm_object_offset_t	size,
 	vm_prot_t		permission,
- 	ipc_port_t		pager,
+ 	memory_object_t		pager,
 	ipc_port_t		*entry_handle)
 {
 	vm_named_entry_t	user_object;
@@ -1305,7 +1294,7 @@ mach_memory_object_memory_entry(
 	boolean_t	internal,
 	vm_size_t	size,
 	vm_prot_t	permission,
- 	ipc_port_t	pager,
+ 	memory_object_t	pager,
 	ipc_port_t	*entry_handle)
 {
 	return mach_memory_object_memory_entry_64( host, internal, 
@@ -1450,10 +1439,11 @@ redo_lookup:
 			/* set up an object which will not be pulled from */
 			/* under us.  */
 
-	      		if (map_entry->needs_copy  || object->shadowed ||
+	      		if ((map_entry->needs_copy  || object->shadowed ||
 			     (object->size > 
 			 	       ((vm_object_size_t)map_entry->vme_end -
-			     	                      map_entry->vme_start))) {
+			     	                      map_entry->vme_start)))
+				&& !object->true_share) {
 		   		if (vm_map_lock_read_to_write(target_map)) {
 		            		vm_map_lock_read(target_map);
 		            		goto redo_lookup;
@@ -1875,6 +1865,10 @@ set_dp_control_port(
 {
         if (host_priv == HOST_PRIV_NULL)
                 return (KERN_INVALID_HOST);
+
+	if (IP_VALID(dynamic_pager_control_port))
+		ipc_port_release_send(dynamic_pager_control_port);
+
 	dynamic_pager_control_port = control_port;
 	return KERN_SUCCESS;
 }
@@ -1886,41 +1880,25 @@ get_dp_control_port(
 {
         if (host_priv == HOST_PRIV_NULL)
                 return (KERN_INVALID_HOST);
-	*control_port = dynamic_pager_control_port;
+
+	*control_port = ipc_port_copy_send(dynamic_pager_control_port);
 	return KERN_SUCCESS;
 	
 }
 
-void
-mach_destroy_upl(
-	ipc_port_t	port)
-{
-	upl_t	upl;
-#if MACH_ASSERT
-	assert(ip_kotype(port) == IKOT_NAMED_ENTRY);
-#endif /* MACH_ASSERT */
-	upl = (upl_t)port->ip_kobject;
-	mutex_lock(&(upl)->Lock);
-	upl->ref_count-=1;
-	if(upl->ref_count == 0) {
-		mutex_unlock(&(upl)->Lock);
-		uc_upl_abort(upl, UPL_ABORT_ERROR);
-	} else
-		mutex_unlock(&(upl)->Lock);
-}
 
 /* Retrieve a upl for an object underlying an address range in a map */
 
 kern_return_t
 vm_map_get_upl(
-	vm_map_t	map,
-	vm_offset_t	offset,
-	vm_size_t	*upl_size,
-	upl_t		*upl,
-	upl_page_info_t	**page_list,
-	int		*count,
-	int		*flags,
-	int             force_data_sync)
+	vm_map_t		map,
+	vm_address_t		offset,
+	vm_size_t		*upl_size,
+	upl_t			*upl,
+	upl_page_info_array_t	page_list,
+	unsigned int		*count,
+	int			*flags,
+	int             	force_data_sync)
 {
 	vm_map_entry_t	entry;
 	int		caller_flags;
@@ -1936,11 +1914,33 @@ vm_map_get_upl(
 	}
 	if(upl == NULL)
 		return KERN_INVALID_ARGUMENT;
+
+
 REDISCOVER_ENTRY:
 	vm_map_lock(map);
 	if (vm_map_lookup_entry(map, offset, &entry)) {
+		if (entry->object.vm_object == VM_OBJECT_NULL ||
+			!entry->object.vm_object->phys_contiguous) {
+        		if((*upl_size/page_size) > MAX_UPL_TRANSFER) {
+               			*upl_size = MAX_UPL_TRANSFER * page_size;
+			}
+		}
 		if((entry->vme_end - offset) < *upl_size) {
 			*upl_size = entry->vme_end - offset;
+		}
+		if (caller_flags & UPL_QUERY_OBJECT_TYPE) {
+			if (entry->object.vm_object == VM_OBJECT_NULL) {
+				*flags = 0;
+			} else if (entry->object.vm_object->private) {
+				*flags = UPL_DEV_MEMORY;
+				if (entry->object.vm_object->phys_contiguous) {
+					*flags |= UPL_PHYS_CONTIG;
+				}
+			} else  {
+				*flags = 0;
+			}
+			vm_map_unlock(map);
+			return KERN_SUCCESS;
 		}
 		/*
 		 *      Create an object if necessary.
@@ -1951,8 +1951,7 @@ REDISCOVER_ENTRY:
 			entry->offset = 0;
 		}
 		if (!(caller_flags & UPL_COPYOUT_FROM)) {
-			if (entry->needs_copy
-				    || entry->object.vm_object->copy) {
+			if (entry->needs_copy)  {
 				vm_map_t		local_map;
 				vm_object_t		object;
 				vm_object_offset_t	offset_hi;
@@ -2003,7 +2002,8 @@ REDISCOVER_ENTRY:
 		}
 					
 		if (sync_cow_data) {
-			if (entry->object.vm_object->shadow) {
+			if (entry->object.vm_object->shadow
+				    || entry->object.vm_object->copy) {
 				int		flags;
 
 				local_object = entry->object.vm_object;
@@ -2036,14 +2036,21 @@ REDISCOVER_ENTRY:
 				    vm_object_unlock(local_object);
 				}
 					
-				memory_object_lock_request(
-					local_object, ((offset - local_start) 
-						+ local_offset) +
-						local_object->paging_offset,
-					(vm_object_size_t)*upl_size, FALSE, 
-					flags,
-					VM_PROT_NO_CHANGE, NULL, 0);
+				if (entry->object.vm_object->shadow && 
+					   entry->object.vm_object->copy) {
+				   vm_object_lock_request(
+					local_object->shadow,
+					(vm_object_offset_t)
+					((offset - local_start) +
+					 local_offset) +
+					local_object->shadow_offset +
+					local_object->paging_offset,
+					*upl_size, FALSE, 
+					MEMORY_OBJECT_DATA_SYNC,
+					VM_PROT_NO_CHANGE);
+				}
 				sync_cow_data = FALSE;
+				vm_object_deallocate(local_object);
 				goto REDISCOVER_ENTRY;
 			}
 		}
@@ -2074,15 +2081,16 @@ REDISCOVER_ENTRY:
 			    vm_object_unlock(local_object);
 			}
 					
-			memory_object_lock_request(
-				   local_object, ((offset - local_start) 
-					   + local_offset) + 
-					   local_object->paging_offset,
+			vm_object_lock_request(
+				   local_object,
+				   (vm_object_offset_t)
+				   ((offset - local_start) + local_offset) + 
+				   local_object->paging_offset,
 				   (vm_object_size_t)*upl_size, FALSE, 
 				   MEMORY_OBJECT_DATA_SYNC,
-				   VM_PROT_NO_CHANGE, 
-				   NULL, 0);
+				   VM_PROT_NO_CHANGE);
 			force_data_sync = FALSE;
+			vm_object_deallocate(local_object);
 			goto REDISCOVER_ENTRY;
 		}
 
@@ -2102,12 +2110,13 @@ REDISCOVER_ENTRY:
 		local_start = entry->vme_start;
 		vm_object_reference(local_object);
 		vm_map_unlock(map);
-		ret = (vm_fault_list_request(local_object, 
-			((offset - local_start) + local_offset),
+		ret = (vm_object_upl_request(local_object, 
+			(vm_object_offset_t)
+				((offset - local_start) + local_offset),
 			*upl_size,
 			upl,
 			page_list,
-			*count,
+			count,
 			caller_flags));
 		vm_object_deallocate(local_object);
 		return(ret);
@@ -2118,227 +2127,6 @@ REDISCOVER_ENTRY:
 
 }
 
-
-kern_return_t
-vm_object_upl_request(
-	vm_object_t 		object,
-	vm_object_offset_t	offset,
-	vm_size_t		size,
-	ipc_port_t		*upl,
-	upl_page_info_t		*page_list,
-	mach_msg_type_number_t	*count,
-	int			cntrl_flags)
-{
-	upl_t	upl_object;
-	ipc_port_t	upl_port;
-	ipc_port_t	previous;
-	upl_page_info_t *pl;
-	kern_return_t	kr;
-
-	pl = page_list;
-	kr = vm_fault_list_request(object, offset, size, &upl_object,
-						&pl, *count, cntrl_flags);
-
-	
-	if(kr != KERN_SUCCESS) {
-		*upl = MACH_PORT_NULL;
-		return KERN_FAILURE;
-	}
-
-	upl_port = ipc_port_alloc_kernel();
-
-
-	ip_lock(upl_port);
-
-	/* make a sonce right */
-	upl_port->ip_sorights++;
-	ip_reference(upl_port);
-
-	upl_port->ip_destination = IP_NULL;
-	upl_port->ip_receiver_name = MACH_PORT_NULL;
-	upl_port->ip_receiver = ipc_space_kernel;
-
-	/* make a send right */
-        upl_port->ip_mscount++;
-        upl_port->ip_srights++;
-        ip_reference(upl_port);
-
-	ipc_port_nsrequest(upl_port, 1, upl_port, &previous);
-	/* nsrequest unlocks user_handle */
-
-	/* Create a named object based on a submap of specified size */
-
-
-	ipc_kobject_set(upl_port, (ipc_kobject_t) upl_object, IKOT_UPL);
-	*upl = upl_port;
-	return KERN_SUCCESS;
-}
-
-kern_return_t
-vm_pager_upl_request(
-	vm_object_t 		object,
-	vm_object_offset_t	offset,
-	vm_size_t		size,
-	vm_size_t		super_size,
-	ipc_port_t		*upl,
-	upl_page_info_t		*page_list,
-	mach_msg_type_number_t	*count,
-	int			cntrl_flags)
-{
-	upl_t	upl_object;
-	ipc_port_t	upl_port;
-	ipc_port_t	previous;
-	upl_page_info_t *pl;
-	kern_return_t	kr;
-
-	pl = page_list;
-	kr = upl_system_list_request(object, offset, size, super_size, 
-					&upl_object, &pl, *count, cntrl_flags);
-
-	if(kr != KERN_SUCCESS) {
-		*upl = MACH_PORT_NULL;
-		return KERN_FAILURE;
-	}
-
-	
-	upl_port = ipc_port_alloc_kernel();
-
-
-	ip_lock(upl_port);
-
-	/* make a sonce right */
-	upl_port->ip_sorights++;
-	ip_reference(upl_port);
-
-	upl_port->ip_destination = IP_NULL;
-	upl_port->ip_receiver_name = MACH_PORT_NULL;
-	upl_port->ip_receiver = ipc_space_kernel;
-
-	/* make a send right */
-        upl_port->ip_mscount++;
-        upl_port->ip_srights++;
-        ip_reference(upl_port);
-
-	ipc_port_nsrequest(upl_port, 1, upl_port, &previous);
-	/* nsrequest unlocks user_handle */
-
-	/* Create a named object based on a submap of specified size */
-
-
-	ipc_kobject_set(upl_port, (ipc_kobject_t) upl_object, IKOT_UPL);
-	*upl = upl_port;
-	return KERN_SUCCESS;
-}
-
-kern_return_t
-vm_upl_map(
-	vm_map_t	map,
-	ipc_port_t	upl_port,
-	vm_offset_t	*dst_addr)
-{
-	upl_t		upl;
-	kern_return_t	kr;
-
-	if (!IP_VALID(upl_port)) {
-		return KERN_INVALID_ARGUMENT;
-	} else if (ip_kotype(upl_port) == IKOT_UPL) {
-		upl_lock(upl);
-		upl = (upl_t)upl_port->ip_kobject;
-		kr = uc_upl_map(map, upl, dst_addr);
-		upl_unlock(upl);
-		return kr;
-	} else {
-		return KERN_FAILURE;
-	}
-}
-
-
-kern_return_t
-vm_upl_unmap(
-	vm_map_t	map,
-	ipc_port_t	upl_port)
-{
-	upl_t		upl;
-	kern_return_t	kr;
-
-	if (!IP_VALID(upl_port)) {
-		return KERN_INVALID_ARGUMENT;
-	} else if (ip_kotype(upl_port) == IKOT_UPL) {
-		upl_lock(upl);
-		upl = (upl_t)upl_port->ip_kobject;
-		kr = uc_upl_un_map(map, upl);
-		upl_unlock(upl);
-		return kr;
-	} else {
-		return KERN_FAILURE;
-	}
-}
-
-kern_return_t
-vm_upl_commit(
-	upl_t 			upl,
-	upl_page_list_ptr_t	page_list,
-	mach_msg_type_number_t	count)
-{
-	kern_return_t kr;
-	upl_lock(upl);
-	if(count) {
-		kr = uc_upl_commit(upl, (upl_page_info_t *)page_list);
-	} else {
-		kr = uc_upl_commit(upl, (upl_page_info_t *) NULL);
-	}
-	upl_unlock(upl);
-	return kr;
-}
-
-kern_return_t
-vm_upl_commit_range(
-	upl_t 			upl,
-	vm_offset_t		offset,
-	vm_size_t		size,
-	upl_page_list_ptr_t	page_list,
-	int			flags,
-	mach_msg_type_number_t	count)
-{
-	kern_return_t kr;
-	upl_lock(upl);
-	if(count) {
-		kr = uc_upl_commit_range(upl, offset, size, flags, 
-					(upl_page_info_t *)page_list);
-	} else {
-		kr = uc_upl_commit_range(upl, offset, size, flags,
-					(upl_page_info_t *) NULL);
-	}
-	upl_unlock(upl);
-	return kr;
-}
-	
-kern_return_t
-vm_upl_abort_range(
-	upl_t		upl,
-	vm_offset_t	offset,
-	vm_size_t	size,
-	int		abort_flags)
-{
-	kern_return_t kr;
-	upl_lock(upl);
-	kr = uc_upl_abort_range(upl, offset, size, abort_flags);
-	upl_unlock(upl);
-	return kr;
-}
-
-kern_return_t
-vm_upl_abort(
-	upl_t		upl,
-	int		abort_type)
-{
-	kern_return_t kr;
-	upl_lock(upl);
-	kr = uc_upl_abort(upl, abort_type);
-	upl_unlock(upl);
-	return kr;
-}
-
 /* ******* Temporary Internal calls to UPL for BSD ***** */
 kern_return_t
 kernel_upl_map(
@@ -2346,62 +2134,31 @@ kernel_upl_map(
 	upl_t		upl,
 	vm_offset_t	*dst_addr)
 {
-	kern_return_t	kr;
-
-	upl_lock(upl);
-	kr = uc_upl_map(map, upl, dst_addr);
-	if(kr ==  KERN_SUCCESS) {
-		upl->ref_count += 1;
-	}
-	upl_unlock(upl);
-	return kr;
+	return (vm_upl_map(map, upl, dst_addr));
 }
 
 
 kern_return_t
 kernel_upl_unmap(
 	vm_map_t	map,
-	upl_t	upl)
+	upl_t		upl)
 {
-	kern_return_t	kr;
-
-		upl_lock(upl);
-		kr = uc_upl_un_map(map, upl);
-		if(kr ==  KERN_SUCCESS) {
-			if(upl->ref_count == 1) {
-				upl_dealloc(upl);
-			} else {
-				upl->ref_count -= 1;
-				upl_unlock(upl);
-			}
-		} else {
-			upl_unlock(upl);
-		}
-		return kr;
+	return(vm_upl_unmap(map, upl));
 }
 
 kern_return_t
 kernel_upl_commit(
 	upl_t 			upl,
-	upl_page_list_ptr_t	page_list,
-	mach_msg_type_number_t	count)
+	upl_page_info_t		*pl,
+	mach_msg_type_number_t  count)
 {
-	kern_return_t kr;
-	upl_lock(upl);
-	upl->ref_count += 1;
-	if(count) {
-		kr = uc_upl_commit(upl, (upl_page_info_t *)page_list);
-	} else {
-		kr = uc_upl_commit(upl, (upl_page_info_t *) NULL);
-	}
-	if(upl->ref_count == 1) {
-		upl_dealloc(upl);
-	} else {
-		upl->ref_count -= 1;
-		upl_unlock(upl);
-	}
+	kern_return_t 	kr;
+
+	kr = upl_commit(upl, pl, count);
+	upl_deallocate(upl);
 	return kr;
 }
+
 
 kern_return_t
 kernel_upl_commit_range(
@@ -2409,146 +2166,56 @@ kernel_upl_commit_range(
 	vm_offset_t		offset,
 	vm_size_t		size,
 	int			flags,
-	upl_page_list_ptr_t	page_list,
-	mach_msg_type_number_t	count)
+	upl_page_info_array_t   pl,
+	mach_msg_type_number_t  count)
 {
-	kern_return_t kr;
-	upl_lock(upl);
-	upl->ref_count += 1;
-	if(count) {
-		kr = uc_upl_commit_range(upl, offset, size, flags, 
-					(upl_page_info_t *)page_list);
-	} else {
-		kr = uc_upl_commit_range(upl, offset, size, flags,
-					(upl_page_info_t *) NULL);
-	}
-	if(upl->ref_count == 1) {
-		upl_dealloc(upl);
-	} else {
-		upl->ref_count -= 1;
-		upl_unlock(upl);
-	}
+	boolean_t		finished = FALSE;
+	kern_return_t 		kr;
+
+	if (flags & UPL_COMMIT_FREE_ON_EMPTY)
+		flags |= UPL_COMMIT_NOTIFY_EMPTY;
+
+	kr = upl_commit_range(upl, offset, size, flags, pl, count, &finished);
+
+	if ((flags & UPL_COMMIT_NOTIFY_EMPTY) && finished)
+		upl_deallocate(upl);
+
 	return kr;
 }
 	
 kern_return_t
 kernel_upl_abort_range(
-	upl_t		upl,
-	vm_offset_t	offset,
-	vm_size_t	size,
-	int		abort_flags)
+	upl_t			upl,
+	vm_offset_t		offset,
+	vm_size_t		size,
+	int			abort_flags)
 {
-	kern_return_t kr;
-	upl_lock(upl);
-	upl->ref_count += 1;
-	kr = uc_upl_abort_range(upl, offset, size, abort_flags);
-	if(upl->ref_count == 1) {
-		upl_dealloc(upl);
-	} else {
-		upl->ref_count -= 1;
-		upl_unlock(upl);
-	}
+	kern_return_t 		kr;
+	boolean_t		finished = FALSE;
+
+	if (abort_flags & UPL_COMMIT_FREE_ON_EMPTY)
+		abort_flags |= UPL_COMMIT_NOTIFY_EMPTY;
+
+	kr = upl_abort_range(upl, offset, size, abort_flags, &finished);
+
+	if ((abort_flags & UPL_COMMIT_FREE_ON_EMPTY) && finished)
+		upl_deallocate(upl);
+
 	return kr;
 }
 
 kern_return_t
 kernel_upl_abort(
-	upl_t		upl,
-	int		abort_type)
+	upl_t			upl,
+	int			abort_type)
 {
-	kern_return_t kr;
-	upl_lock(upl);
-	upl->ref_count += 1;
-	kr = uc_upl_abort(upl, abort_type);
-	if(upl->ref_count == 1) {
-		upl_dealloc(upl);
-	} else {
-		upl->ref_count -= 1;
-		upl_unlock(upl);
-	}
+	kern_return_t	kr;
+
+	kr = upl_abort(upl, abort_type);
+	upl_deallocate(upl);
 	return kr;
 }
 
-
-
-/* code snippet from vm_map */
-kern_return_t   
-vm_object_create_nomap(ipc_port_t  port, vm_object_size_t   size)
-{
-	vm_object_t	object_ptr;
-	return memory_object_create_named(port, size, &object_ptr);
-}
-
-
-/* 
- * Temporary interface to overcome old style ipc artifacts, and allow
- * ubc to call this routine directly.  Will disappear with new RPC
- * component architecture.
- * NOTE: call to memory_object_destroy removes the vm_object's association
- * with its abstract memory object and hence the named flag is set to false.
- */
-kern_return_t
-memory_object_destroy_named(
-	vm_object_t	object,
-	kern_return_t	reason)
-{
-	vm_object_lock(object);
-	if(object->named == FALSE) {
-		panic("memory_object_destroy_named called by party which doesn't hold right");
-	}
-	object->ref_count++;
-	vm_object_res_reference(object);
-	vm_object_unlock(object);
-	return (memory_object_destroy(object, reason));
-}
-
-/* 
- * Temporary interface to overcome old style ipc artifacts, and allow
- * ubc to call this routine directly.  Will disappear with new RPC
- * component architecture.
- * Note: No change is made in the named flag.
- */
-kern_return_t
-memory_object_lock_request_named(
-	vm_object_t			object,
-	vm_object_offset_t		offset,
-	vm_object_size_t		size,
-	memory_object_return_t		should_return,
-	boolean_t			should_flush,
-	vm_prot_t			prot,
-	ipc_port_t			reply_to)
-{
-	vm_object_lock(object);
-	if(object->named == FALSE) {
-		panic("memory_object_lock_request_named called by party which doesn't hold right");
-	}
-	object->ref_count++;
-	vm_object_res_reference(object);
-	vm_object_unlock(object);
-	return (memory_object_lock_request(object,
-			offset, size, should_return, should_flush, prot,
-			reply_to, 0));
-}
-
-kern_return_t
-memory_object_change_attributes_named(
-        vm_object_t             object,
-        memory_object_flavor_t  flavor,
-	memory_object_info_t	attributes,
-	mach_msg_type_number_t	count,
-        ipc_port_t              reply_to,
-        mach_msg_type_name_t    reply_to_type)
-{
-	vm_object_lock(object);
-	if(object->named == FALSE) {
-		panic("memory_object_lock_request_named called by party which doesn't hold right");
-	}
-	object->ref_count++;
-	vm_object_res_reference(object);
-	vm_object_unlock(object);
-	return (memory_object_change_attributes(object, 
-			flavor, attributes, count, reply_to, reply_to_type));
-}
 
 kern_return_t
 vm_get_shared_region(

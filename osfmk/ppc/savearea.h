@@ -34,9 +34,11 @@ struct savearea	*save_alloc(void);				/* Obtains a savearea and allocates blocks
 struct savearea	*save_cpv(struct savearea *);	/* Converts a physical savearea address to virtual */
 unsigned int	*save_deb(unsigned int *msr);	/* Finds virtual of first free block and disableds interrupts */
 void			save_ret(struct savearea *);	/* Returns a savearea to the free list */
+#if DEBUG
 void 			save_free_dump(void);			/* Dump the free chain */
 void			DumpTheSave(struct savearea *);	/* Prints out a savearea */
 void 			DumpBackChain(struct savearea *save); /* Dumps a backchain */
+#endif
 
 #endif /* _PPC_SAVEAREA_H_ */
 

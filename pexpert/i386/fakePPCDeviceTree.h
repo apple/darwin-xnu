@@ -20,41 +20,18 @@
  * @APPLE_LICENSE_HEADER_END@
  */
 
-unsigned long busRange[] = { 0, 0 };
-unsigned long picAddress[] = { 0x00008000, 0x00000000, 0x00000000,
-                                        0xC8000000, 0x00080000};
+extern dt_data gMemoryMapNode;
+extern dt_data gDriversProp;
 
-dt_init fakePPCDeviceTree[] = {
-    NODE( 7, 2 ),
+dt_init fakePPCDeviceTree[] =
+{
+    NODE( 2, 1 ),
         PROP( "name", "device-tree"),
-        PROP( "model", "Power Macintosh"),
-        PROP( "compatible", "AAPL,9900\0MacRISC"),
-        INTPROP( "AAPL,cpu-id", 0x39006086),
-        INTPROP( "clock-frequency", 0x02FAF080),
-        INTPROP( "#address-cells", 1),
-        INTPROP( "#size-cells", 1),
-
-        NODE( 1,0 ),
-            PROP( "name", "ps2controller"),
-
-        NODE( 3,0 ),
-            PROP( "name", "display"),
-            PROP( "model", "silly"),
-            INTPROP( "AAPL,boot-display", 1),
-#if 0
-	NODE( 6,1 ),
-            PROP( "name", "i386generic"),
-            PROP( "device_type", "pci"),
-            INTPROP( "#address-cells", 3),
-            INTPROP( "#size-cells", 2),
-	    PROP( "bus-range", busRange),
-	    NULLPROP( "ranges" ),
-
-	    NODE( 4, 0),
-                PROP( "name", "i386pic"),
-                PROP( "device_type", "pic"),
-                PROP( "reg", picAddress),
-                PROP( "assigned-addresses", picAddress),
-#endif
+        PROP( "compatible", "X86PC"),
+        NODE( 1, 1 ),
+            PROP( "name", "chosen" ),
+            DATANODE( gMemoryMapNode ),
+                PROP( "name", "memory-map" ),
+                DATAPROP( gDriversProp ),
     NODE( 0, 0),
 };

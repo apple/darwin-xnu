@@ -50,14 +50,14 @@ extern struct zone	*ubc_info_zone;
  */
 
 struct ubc_info {
-	void 			* ui_pager;	/* pager */
-	void			*ui_object;	/* VM object corresponding to the pager */
-	long			ui_flags;	/* flags */
-	struct vnode 	*ui_vnode;	/* The vnode associated with this ubc_info */
-	struct ucred 	*ui_ucred;	/* holds credentials for NFS paging */
-	int				ui_holdcnt; /* hold the memory object */
-	off_t			ui_size;	/* file size for the vnode */
-	long			ui_mapped;	/* is it currently mapped */
+	memory_object_t			ui_pager;	/* pager */
+	memory_object_control_t	ui_control;	/* VM control for the pager */
+	long					ui_flags;	/* flags */
+	struct vnode 			*ui_vnode;	/* The vnode for this ubc_info */
+	struct ucred 			*ui_ucred;	/* holds credentials for NFS paging */
+	int						ui_refcount;/* ref count on the ubc_info */
+	off_t					ui_size;	/* file size for the vnode */
+	long					ui_mapped;	/* is it currently mapped */
 };
 
 /* Defines for ui_flags */
@@ -74,7 +74,7 @@ struct ubc_info {
 
 __BEGIN_DECLS
 int	ubc_info_init __P((struct vnode *));
-void	ubc_info_free  __P((struct vnode *));
+void	ubc_info_deallocate  __P((struct ubc_info *));
 int	ubc_setsize __P((struct vnode *, off_t));
 off_t	ubc_getsize __P((struct vnode *));
 int	ubc_uncache __P((struct vnode *));
@@ -82,9 +82,9 @@ int	ubc_umount __P((struct mount *));
 void	ubc_unmountall __P(());
 int	ubc_setcred __P((struct vnode *, struct proc *));
 struct ucred *ubc_getcred __P((struct vnode *));
-void *ubc_getpager __P((struct vnode *));
-void *ubc_getobject __P((struct vnode *, int));
-int ubc_setpager __P((struct vnode *, void *));
+memory_object_t ubc_getpager __P((struct vnode *));
+memory_object_control_t ubc_getobject __P((struct vnode *, int));
+int ubc_setpager __P((struct vnode *, memory_object_t));
 int ubc_setflags __P((struct vnode *, int));
 int ubc_clearflags __P((struct vnode *, int));
 int ubc_issetflags __P((struct vnode *, int));
@@ -92,12 +92,16 @@ off_t ubc_blktooff __P((struct vnode *, daddr_t));
 daddr_t ubc_offtoblk __P((struct vnode *, off_t));
 int ubc_clean __P((struct vnode *, int));
 int	ubc_pushdirty __P((struct vnode *));
+int	ubc_pushdirty_range __P((struct vnode *, off_t, off_t));
 int ubc_hold __P((struct vnode *));
 void ubc_rele __P((struct vnode *));
 void ubc_map __P((struct vnode *));
-int	ubc_release __P((struct vnode *));
+int	ubc_destroy_named __P((struct vnode *));
+int	ubc_release_named __P((struct vnode *));
 int	ubc_invalidate __P((struct vnode *, off_t, size_t));
 int	ubc_isinuse __P((struct vnode *, int));
+
+int	ubc_page_op __P((struct vnode *, off_t, int, vm_offset_t *, int *));
 
 /* cluster IO routines */
 int	cluster_read __P((struct vnode *, struct uio *, off_t, int, int));
@@ -110,6 +114,17 @@ int	cluster_pageout __P((struct vnode *, upl_t, vm_offset_t, off_t, int,
 int	cluster_pagein __P((struct vnode *, upl_t, vm_offset_t, off_t, int,
 		off_t, int, int));
 int	cluster_bp __P((struct buf *));
+
+/* UPL routines */
+int	ubc_create_upl __P((struct vnode *, off_t, long, upl_t *,
+		upl_page_info_t **, int));
+int ubc_upl_map __P((upl_t, vm_offset_t *));
+int ubc_upl_unmap __P((upl_t));
+int ubc_upl_commit __P((upl_t));
+int ubc_upl_commit_range __P((upl_t, vm_offset_t, vm_size_t, int));
+int ubc_upl_abort __P((upl_t, int));
+int ubc_upl_abort_range __P((upl_t, vm_offset_t, vm_size_t, int));
+upl_page_info_t *ubc_upl_pageinfo __P((upl_t));
 __END_DECLS
 
 #define UBCINFOMISSING(vp) \
@@ -136,10 +151,8 @@ __END_DECLS
 		panic("%s: lost ubc_info", (fun));
 
 /* Flags for ubc_getobject() */
+#define UBC_FLAGS_NONE		0x0000
 #define UBC_HOLDOBJECT		0x0001
-#define UBC_NOREACTIVATE	0x0002
-#define	UBC_PAGINGOP		0x0004
-
 
 #endif	/* _SYS_UBC_H_ */
 

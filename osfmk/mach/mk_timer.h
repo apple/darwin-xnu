@@ -31,9 +31,7 @@
 #ifndef	_MACH_MK_TIMER_H_
 #define	_MACH_MK_TIMER_H_
 
-#include <libkern/OSTypes.h>
-
-#include <mach/mach_types.h>
+#include <mach/mach_time.h>
 
 mach_port_name_t	mk_timer_create(void);
 
@@ -42,17 +40,17 @@ kern_return_t	mk_timer_destroy(
 
 kern_return_t	mk_timer_arm(
 					mach_port_name_t	name,
-					AbsoluteTime		expire_time);
+					uint64_t			expire_time);
 
 kern_return_t	mk_timer_cancel(
 					mach_port_name_t	name,
-					AbsoluteTime		*result_time);
+					uint64_t			*result_time);
 
 struct mk_timer_expire_msg {
 	mach_msg_header_t	header;
-	AbsoluteTime		time_of_arming;
-	AbsoluteTime		armed_time;
-	AbsoluteTime		time_of_posting;
+	uint64_t			time_of_arming;
+	uint64_t			armed_time;
+	uint64_t			time_of_posting;
 };
 
 typedef struct mk_timer_expire_msg		mk_timer_expire_msg_t;

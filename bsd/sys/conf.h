@@ -89,7 +89,7 @@ typedef	int  psize_fcn_t	__P((dev_t dev));
 typedef int  read_write_fcn_t 	__P((dev_t dev, struct uio *uio, int ioflag));
 typedef	int  stop_fcn_t 	__P((struct tty *tp, int rw));
 typedef	int  reset_fcn_t 	__P((int uban));
-typedef	int  select_fcn_t 	__P((dev_t dev, int which, struct proc *p));
+typedef	int  select_fcn_t 	__P((dev_t dev, int which, void * wql, struct proc *p));
 typedef	int  mmap_fcn_t 	__P(());
 typedef	int  getc_fcn_t 	__P((dev_t dev));
 typedef	int  putc_fcn_t 	__P((dev_t dev, char c));

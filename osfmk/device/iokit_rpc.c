@@ -416,3 +416,4 @@ void IOGetTime( mach_timespec_t * clock_time)
 {
 	*clock_time = clock_get_system_value();
 }
+

@@ -70,6 +70,7 @@
 #define	PT_STEP		9	/* single step the child */
 #define	PT_ATTACH	10	/* trace some running process */
 #define	PT_DETACH	11	/* stop tracing a process */
+#define PT_DENY_ATTACH  31
 
 #define	PT_FIRSTMACH	32	/* for machine-specific requests */
 #include <machine/ptrace.h>	/* machine-specific requests, if any */

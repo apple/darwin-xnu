@@ -13,9 +13,6 @@ include $(MakeInc_def)
 INSTINC_SUBDIRS = \
         adb \
 	cdb \
-        graphics \
-        hidsystem \
-	network \
 	nvram \
         pci \
 	platform \
@@ -23,16 +20,14 @@ INSTINC_SUBDIRS = \
 	pwr_mgt \
 	rtc \
 	scsi \
-	storage \
 	system_management
 
 INSTINC_SUBDIRS_PPC = \
-	ppc \
-	ndrvsupport
+	ppc
 
 INSTINC_SUBDIRS_I386 = \
-	i386 \
-	ps2
+	ata \
+	i386
 
 EXPINC_SUBDIRS = ${INSTINC_SUBDIRS}
 EXPINC_SUBDIRS_PPC = ${INSTINC_SUBDIRS_PPC}

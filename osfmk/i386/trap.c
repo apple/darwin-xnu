@@ -173,7 +173,7 @@ user_page_fault_continue(
 	register thread_t	cur_thr = current_thread();
 	register struct i386_saved_state *regs = USER_REGS(thr_act);
 
-	if ((kr == KERN_SUCCESS) && (kr == KERN_ABORTED)) {
+	if ((kr == KERN_SUCCESS) || (kr == KERN_ABORTED)) {
 #if	MACH_KDB
 		if (!db_breakpoints_inserted) {
 			db_set_breakpoints();
@@ -1123,7 +1123,7 @@ i386_astintr(int preemption)
 	mp_enable_preemption();
 #endif
 
-	    ast_taken(preemption, mask, s
+	    ast_taken(mask, s
 #if	FAST_IDLE
 		      ,NO_IDLE_THREAD
 #endif	/* FAST_IDLE */

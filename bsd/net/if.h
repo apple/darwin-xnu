@@ -78,6 +78,8 @@
 #define KEV_DL_IF_DETACHED  11
 #define KEV_DL_LINK_OFF	    12
 #define KEV_DL_LINK_ON	    13
+#define KEV_DL_PROTO_ATTACHED	14
+#define KEV_DL_PROTO_DETACHED	15
 
 /*
  * <net/if.h> does not depend on <sys/time.h> on most other systems.  This
@@ -107,9 +109,12 @@
 #define	IFF_MULTICAST	0x8000		/* supports multicast */
 #define IFF_SPLITTER	IFF_LINK2	/* Y splitter in force */
 
-
-
+#ifdef KERNEL_PRIVATE
+/* extended flags definitions:  (all bits are reserved for internal/future use) */
+#define IFEF_AUTOCONFIGURING	0x1
 #define IFEF_DVR_REENTRY_OK	0x20	/* When set, driver may be reentered from its own thread */
+#define IFEF_DETACH_DISABLED	0x80000000
+#endif KERNEL_PRIVATE
 
 
 /* flags set internally only: */
@@ -234,6 +239,16 @@ struct	ifconf {
 #define	ifc_buf	ifc_ifcu.ifcu_buf	/* buffer address */
 #define	ifc_req	ifc_ifcu.ifcu_req	/* array of structures returned */
 };
+
+/*
+ * DLIL KEV_DL_PROTO_ATTACHED/DETACHED structure
+ */
+struct kev_dl_proto_data {
+     struct net_event_data   	link_data;
+     u_long			proto_family;
+     u_long			proto_remaining_count;
+};
+
 
 /*
  * Structure for SIOC[AGD]LIFADDR

@@ -139,9 +139,10 @@ cnioctl(dev, cmd, addr, flag, p)
 
 /*ARGSUSED*/
 int
-cnselect(dev, flag, p)
+cnselect(dev, flag, wql, p)
 	dev_t dev;
 	int flag;
+	void * wql;
 	struct proc *p;
 {
 	dev_t device;
@@ -150,7 +151,7 @@ cnselect(dev, flag, p)
 	    device = constty->t_dev;
 	else
 	    device = cons.t_dev;
-	return ((*cdevsw[major(device)].d_select)(device, flag, p));
+	return ((*cdevsw[major(device)].d_select)(device, flag, wql, p));
 }
 
 #if 0	/* FIXME  - using OSFMK console driver for the moment */

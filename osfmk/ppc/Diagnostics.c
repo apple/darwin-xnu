@@ -59,6 +59,9 @@
 #include <ppc/Diagnostics.h>
 #include <ppc/machine_cpu.h>
 #include <pexpert/pexpert.h>
+#include <ppc/POWERMAC/video_console.h>
+
+extern struct vc_info vinfo;
 
 int diagCall(struct savearea *save) {
 
@@ -69,6 +72,7 @@ int diagCall(struct savearea *save) {
 	natural_t tbu, tbu2, tbl;
 	struct per_proc_info *per_proc;					/* Area for my per_proc address */
 	int cpu;
+	unsigned int tstrt, tend;
 
 	if(!(dgWork.dgFlags & enaDiagSCs)) return 0;	/* If not enabled, cause an exception */
 
@@ -147,12 +151,66 @@ int diagCall(struct savearea *save) {
 			return 1;								/* Return and check for ASTs... */
 
 /*
+ *		Force cache flush
+ */
+		case dgflush:
+		
+#if 1
+			cacheInit();							/* Blow cache */
+#else
+			asm volatile("	mftb %0" : "=r" (tstrt));
+			tend = tstrt;			
+			while((tend - tstrt) < 0x000A2837) {
+				asm volatile("	mftb %0" : "=r" (tend));
+			}
+
+#endif
+			return 1;								/* Return and check for ASTs... */
+
+/*
  *		various hack tests
  */
 		case dgtest:
 		
 			pmap_remove(kernel_pmap, save->save_r4, save->save_r4 + 4096);
 
+			return 1;								/* Return and check for ASTs... */
+			
+		
+
+/*
+ *		Create a physical block map into the current task
+ *		Don't bother to check for any errors.
+ *		parms - vaddr, paddr, size, prot, attributes
+ */
+		case dgBMphys:
+		
+			pmap_map_block(current_act()->map->pmap, save->save_r4, save->save_r5, save->save_r6,	/* Map in the block */
+				save->save_r7, save->save_r8, 0);
+
+			return 1;								/* Return and check for ASTs... */
+		
+
+/*
+ *		Remove any mapping from the current task
+ *		Don't bother to check for any errors.
+ *		parms - vaddr
+ */
+		case dgUnMap:
+		
+			(void)mapping_remove(current_act()->map->pmap, save->save_r4);	/* Remove mapping */
+			return 1;								/* Return and check for ASTs... */
+			
+/*
+ *		Return info for boot screen
+ */
+		case dgBootScreen:
+			
+#if 0
+			ml_set_interrupts_enabled(1);
+			(void)copyout((char *)&vinfo, (char *)save->save_r4, sizeof(struct vc_info));	/* Copy out the video info */
+			ml_set_interrupts_enabled(0);
+#endif
 			return 1;								/* Return and check for ASTs... */
 			
 		

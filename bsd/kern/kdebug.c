@@ -124,7 +124,7 @@ unsigned int debugid, arg1, arg2, arg3, arg4, arg5;
 	    return;
 	  }
 
-	simple_lock(&kd_trace_lock);
+	usimple_lock(&kd_trace_lock);
 	if (kdebug_flags & KDBG_PIDCHECK)
 	  {
 	    /* If kdebug flag is not set for current proc, return  */
@@ -132,7 +132,7 @@ unsigned int debugid, arg1, arg2, arg3, arg4, arg5;
 	    if ((curproc && !(curproc->p_flag & P_KDEBUG)) &&
 		((debugid&0xffff0000) != (MACHDBG_CODE(DBG_MACH_SCHED, 0) | DBG_FUNC_NONE)))
 	      {
-		simple_unlock(&kd_trace_lock);
+		usimple_unlock(&kd_trace_lock);
 		ml_set_interrupts_enabled(s);
 		return;
 	      }
@@ -144,7 +144,7 @@ unsigned int debugid, arg1, arg2, arg3, arg4, arg5;
 	    if ((curproc && (curproc->p_flag & P_KDEBUG)) &&
 		((debugid&0xffff0000) != (MACHDBG_CODE(DBG_MACH_SCHED, 0) | DBG_FUNC_NONE)))
 	      {
-		simple_unlock(&kd_trace_lock);
+		usimple_unlock(&kd_trace_lock);
 		ml_set_interrupts_enabled(s);
 		return;
 	      }
@@ -155,7 +155,7 @@ unsigned int debugid, arg1, arg2, arg3, arg4, arg5;
 	    if ((debugid < kdlog_beg) || (debugid > kdlog_end) 
 		&& (debugid >> 24 != DBG_TRACE))
 	      {
-		simple_unlock(&kd_trace_lock);
+		usimple_unlock(&kd_trace_lock);
 		ml_set_interrupts_enabled(s);
 		return;
 	      }
@@ -168,7 +168,7 @@ unsigned int debugid, arg1, arg2, arg3, arg4, arg5;
 		(debugid & DBG_FUNC_MASK) != kdlog_value4 &&
 		(debugid >> 24 != DBG_TRACE))
 	      {
-		simple_unlock(&kd_trace_lock);
+		usimple_unlock(&kd_trace_lock);
 		ml_set_interrupts_enabled(s);
 		return;
 	      }
@@ -213,7 +213,7 @@ unsigned int debugid, arg1, arg2, arg3, arg4, arg5;
 			kdebug_nolog = 1;
 		kdebug_flags |= KDBG_WRAPPED;
 	}
-	simple_unlock(&kd_trace_lock);
+	usimple_unlock(&kd_trace_lock);
 	ml_set_interrupts_enabled(s);
 }
 
@@ -235,7 +235,7 @@ unsigned int debugid, arg1, arg2, arg3, arg4, arg5;
 	    return;
 	  }
 
-	simple_lock(&kd_trace_lock);
+	usimple_lock(&kd_trace_lock);
 	if (kdebug_flags & KDBG_PIDCHECK)
 	  {
 	    /* If kdebug flag is not set for current proc, return  */
@@ -243,7 +243,7 @@ unsigned int debugid, arg1, arg2, arg3, arg4, arg5;
 	    if ((curproc && !(curproc->p_flag & P_KDEBUG)) &&
 		((debugid&0xffff0000) != (MACHDBG_CODE(DBG_MACH_SCHED, 0) | DBG_FUNC_NONE)))
 	      {
-		simple_unlock(&kd_trace_lock);
+		usimple_unlock(&kd_trace_lock);
 	        ml_set_interrupts_enabled(s);
 		return;
 	      }
@@ -255,7 +255,7 @@ unsigned int debugid, arg1, arg2, arg3, arg4, arg5;
 	    if ((curproc && (curproc->p_flag & P_KDEBUG)) &&
 		((debugid&0xffff0000) != (MACHDBG_CODE(DBG_MACH_SCHED, 0) | DBG_FUNC_NONE)))
 	      {
-		simple_unlock(&kd_trace_lock);
+		usimple_unlock(&kd_trace_lock);
 	        ml_set_interrupts_enabled(s);
 		return;
 	      }
@@ -266,7 +266,7 @@ unsigned int debugid, arg1, arg2, arg3, arg4, arg5;
 	    if ((debugid < kdlog_beg) || (debugid > kdlog_end)
 		&& (debugid >> 24 != DBG_TRACE))
 	      {
-		simple_unlock(&kd_trace_lock);
+		usimple_unlock(&kd_trace_lock);
 		ml_set_interrupts_enabled(s);
 		return;
 	      }
@@ -279,7 +279,7 @@ unsigned int debugid, arg1, arg2, arg3, arg4, arg5;
 		(debugid & DBG_FUNC_MASK) != kdlog_value4 &&
 		(debugid >> 24 != DBG_TRACE))
 	      {
-		simple_unlock(&kd_trace_lock);
+		usimple_unlock(&kd_trace_lock);
 		ml_set_interrupts_enabled(s);
 		return;
 	      }
@@ -321,7 +321,7 @@ unsigned int debugid, arg1, arg2, arg3, arg4, arg5;
 			kdebug_nolog = 1;
 		kdebug_flags |= KDBG_WRAPPED;
 	}
-	simple_unlock(&kd_trace_lock);
+	usimple_unlock(&kd_trace_lock);
 	ml_set_interrupts_enabled(s);
 }
 
@@ -887,10 +887,10 @@ unsigned int my_kdebug_flags;
 kd_buf * my_kd_bufptr;
 
 	s = ml_set_interrupts_enabled(FALSE);
-	simple_lock(&kd_trace_lock);
+	usimple_lock(&kd_trace_lock);
 	my_kdebug_flags = kdebug_flags;
 	my_kd_bufptr = kd_bufptr;
-	simple_unlock(&kd_trace_lock);
+	usimple_unlock(&kd_trace_lock);
 	ml_set_interrupts_enabled(s);
 
 	count = avail/sizeof(kd_buf);

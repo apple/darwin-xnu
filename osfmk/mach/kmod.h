@@ -137,7 +137,7 @@ extern void kmod_init();
 
 extern kern_return_t kmod_create_fake(char *name, char *version);
 
-extern kmod_info_t *kmod_lookupbyname(char * name);
+extern kmod_info_t *kmod_lookupbyname(const char * name);
 extern kmod_info_t *kmod_lookupbyid(kmod_t id);
 
 extern kern_return_t kmod_load_extension(char *name);

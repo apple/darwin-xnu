@@ -28,8 +28,8 @@
 #define _IOKIT_GOSSAMERCPU_H
 
 #include <IOKit/IOCPU.h>
+#include <IOKit/pci/IOPCIBridge.h>
 
-#include "../../pci/drvApplePCI/AppleGracklePCI.h"
 #include "Gossamer.h"
 
 class GossamerCPU : public IOCPU
@@ -41,7 +41,7 @@ private:
     IOService			*heathrow;
     IOCPUInterruptController	*cpuIC;
     static UInt32		restartAddress;
-    AppleGracklePCI     	*grackle;
+    IOPCIBridge			*grackle;
     IOPCI2PCIBridge		*pci2pciBridge;
     unsigned long   		tbLow, tbHigh, tbHigh2;
     GossamerPE                  *gossamerPE;

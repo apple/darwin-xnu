@@ -105,6 +105,8 @@
 #include <netinet/tcp_var.h>
 #include <netinet/tcpip.h>
 #include <netinet/tcp_debug.h>
+/* for wait queue based select */
+#include <kern/wait_queue.h>
 
 /*
  * Read system call.
@@ -431,6 +433,8 @@ ioctl(p, uap, retval)
 
 
 int	selwait, nselcoll;
+#define SEL_FIRSTPASS 1
+#define SEL_SECONDPASS 2
 
 /*
  * Select system call.
@@ -444,8 +448,11 @@ struct select_args {
 };
 
 extern int selcontinue(int error);
-static int selscan(	struct proc *p, u_int32_t *ibits, u_int32_t *obits,
-					int nfd, register_t *retval);
+extern int selprocess(int error, int sel_pass);
+static int selscan(	struct proc *p, struct _select * sel,
+					int nfd, register_t *retval, int sel_pass);
+static int selcount(struct proc *p, u_int32_t *ibits, u_int32_t *obits,
+					int nfd, int * count, int * nfcount);
 
 select(p, uap, retval)
 	register struct proc *p;
@@ -453,11 +460,14 @@ select(p, uap, retval)
 	register_t *retval;
 {
 	int s, error = 0, timo;
-	u_int ni, nw;
+	u_int ni, nw, size;
 	thread_act_t th_act;
 	struct uthread	*uth;
 	struct _select *sel;
 	int needzerofill = 1;
+	int kfcount =0;
+	int nfcount = 0;
+	int count = 0;
 
 	th_act = current_act();
 	uth = get_bsdthread_info(th_act);
@@ -465,8 +475,9 @@ select(p, uap, retval)
 	retval = (int *)get_bsduthreadrval(th_act);
 	*retval = 0;
 
-	if (uap->nd < 0)
+	if (uap->nd < 0) {
 		return (EINVAL);
+	}
 
 	if (uap->nd > p->p_fd->fd_nfiles)
 		uap->nd = p->p_fd->fd_nfiles; /* forgiving; slightly wrong */
@@ -531,19 +542,55 @@ select(p, uap, retval)
 			error = EINVAL;
 			goto continuation;
 		}
-		s = splhigh();
+
 		timeradd(&sel->atv, &time, &sel->atv);
 		timo = hzto(&sel->atv);
-		splx(s);
 	} else
 		timo = 0;
 	sel->poll = timo;
+	sel->nfcount = 0;
+	if (error = selcount(p, sel->ibits, sel->obits, uap->nd, &count, &nfcount)) {
+			goto continuation;
+	}
+
+	sel->nfcount = nfcount;
+	sel->count = count;
+	size = SIZEOF_WAITQUEUE_SUB + (count * SIZEOF_WAITQUEUE_LINK);
+	if (sel->allocsize) {
+		if (uth->uu_wqsub == 0)
+			panic("select: wql memory smashed");
+		/* needed for the select now */
+		if (size > sel->allocsize) {
+			kfree(uth->uu_wqsub,  sel->allocsize);
+			sel->allocsize = size;
+			uth->uu_wqsub = (wait_queue_sub_t)kalloc(sel->allocsize);
+			if (uth->uu_wqsub == (wait_queue_sub_t)NULL)
+				panic("failed to allocate memory for waitqueue\n");
+			sel->wql = (char *)uth->uu_wqsub + SIZEOF_WAITQUEUE_SUB;
+		}
+	} else {
+		sel->count = count;
+		sel->allocsize = size;
+		uth->uu_wqsub = (wait_queue_sub_t)kalloc(sel->allocsize);
+		if (uth->uu_wqsub == (wait_queue_sub_t)NULL)
+			panic("failed to allocate memory for waitqueue\n");
+		sel->wql = (char *)uth->uu_wqsub + SIZEOF_WAITQUEUE_SUB;
+	}
+	bzero(uth->uu_wqsub, size);
+	wait_queue_sub_init(uth->uu_wqsub, (SYNC_POLICY_FIFO | SYNC_POLICY_PREPOST));
+
 continuation:
-	selcontinue(error);
+	selprocess(error, SEL_FIRSTPASS);
 }
 
 int
-selcontinue(error)
+selcontinue(int error)
+{
+	selprocess(error, SEL_SECONDPASS);
+}
+
+int
+selprocess(error, sel_pass)
 {
 	int s, ncoll, timo;
 	u_int ni, nw;
@@ -553,6 +600,10 @@ selcontinue(error)
 	struct select_args *uap;
 	int *retval;
 	struct _select *sel;
+	int unwind = 1;
+	int prepost =0;
+	int somewakeup = 0;
+	int doretry = 0;
 
 	p = current_proc();
 	th_act = current_act();
@@ -561,21 +612,53 @@ selcontinue(error)
 	uth = get_bsdthread_info(th_act);
 	sel = &uth->uu_state.ss_select;
 
+	/* if it is first pass wait queue is not setup yet */
+	if ((error != 0) && (sel_pass == SEL_FIRSTPASS))
+			unwind = 0;
+	if (sel->count == 0)
+			unwind = 0;
 retry:
-	if (error != 0)
+	if (error != 0) {
 	  goto done;
+	}
+
 	ncoll = nselcoll;
 	p->p_flag |= P_SELECT;
-	error = selscan(p, sel->ibits, sel->obits, uap->nd, retval);
-	if (error || *retval)
-		goto done;
-	s = splhigh();
+	/* skip scans if the select is just for timeouts */
+	if (sel->count) {
+		if (sel_pass == SEL_FIRSTPASS)
+			wait_queue_sub_clearrefs(uth->uu_wqsub);
+
+		error = selscan(p, sel, uap->nd, retval, sel_pass);
+		if (error || *retval) {
+			goto done;
+		}
+		if (prepost) {
+			/* if the select of log, then we canwakeup and discover some one
+		 	* else already read the data; go toselct again if time permits
+		 	*/
+		 	prepost = 0;
+		 	doretry = 1;
+		}
+		if (somewakeup) {
+		 	somewakeup = 0;
+		 	doretry = 1;
+		}
+	}
+
 	/* this should be timercmp(&time, &atv, >=) */
 	if (uap->tv && (time.tv_sec > sel->atv.tv_sec ||
 	    time.tv_sec == sel->atv.tv_sec && time.tv_usec >= sel->atv.tv_usec)) {
-		splx(s);
 		goto done;
 	}
+
+	if (doretry) {
+		/* cleanup obits and try again */
+		doretry = 0;
+		sel_pass = SEL_FIRSTPASS;
+		goto retry;
+	}
+
 	/*
 	 * To effect a poll, the timeout argument should be
 	 * non-nil, pointing to a zero-valued timeval structure.
@@ -583,32 +666,45 @@ retry:
 	timo = sel->poll;
 
 	if (uap->tv && (timo == 0)) {
-		splx(s);
 		goto done;
 	}
-	if ((p->p_flag & P_SELECT) == 0 || nselcoll != ncoll) {
-		splx(s);
+
+	/* No spurious wakeups due to colls,no need to check for them */
+	 if ((sel_pass == SEL_SECONDPASS) || ((p->p_flag & P_SELECT) == 0)) {
+		sel_pass = SEL_FIRSTPASS;
 		goto retry;
 	}
+
 	p->p_flag &= ~P_SELECT;
 
-#if 1 /* Use Continuations */
-        error = tsleep0((caddr_t)&selwait, PSOCK | PCATCH, "select", timo, selcontinue);
-        /* NOTREACHED */
-#else
-        error = tsleep((caddr_t)&selwait, PSOCK | PCATCH, "select", timo);
-#endif
-	splx(s);
-	if (error == 0)
+	/* if the select is just for timeout skip check */
+	if (sel->count &&(sel_pass == SEL_SECONDPASS))
+		panic("selprocess: 2nd pass assertwaiting");
+
+	/* Wait Queue Subordinate has waitqueue as first element */
+	if (wait_queue_assert_wait(uth->uu_wqsub, &selwait, THREAD_ABORTSAFE)) {
+		/* If it is true then there are no preposted events */
+        error = tsleep1((caddr_t)&selwait, PSOCK | PCATCH, "select", timo, selcontinue);
+	} else  {
+		prepost = 1;
+		error = 0;
+	}
+
+	sel_pass = SEL_SECONDPASS;
+	if (error == 0) {
+		if (!prepost)
+			somewakeup =1;
 		goto retry;
+	}
 done:
+	if (unwind)
+		wait_subqueue_unlink_all(uth->uu_wqsub);
 	p->p_flag &= ~P_SELECT;
 	/* select is not restarted after signals... */
 	if (error == ERESTART)
 		error = EINTR;
 	if (error == EWOULDBLOCK)
 		error = 0;
-
 	nw = howmany(uap->nd, NFDBITS);
 	ni = nw * sizeof(fd_mask);
 
@@ -636,20 +732,27 @@ done:
 }
 
 static int
-selscan(p, ibits, obits, nfd, retval)
+selscan(p, sel, nfd, retval, sel_pass)
 	struct proc *p;
-	u_int32_t *ibits, *obits;
+	struct _select *sel;
 	int nfd;
 	register_t *retval;
+	int sel_pass;
 {
 	register struct filedesc *fdp = p->p_fd;
 	register int msk, i, j, fd;
 	register u_int32_t bits;
 	struct file *fp;
 	int n = 0;
+	int nc = 0;
 	static int flag[3] = { FREAD, FWRITE, 0 };
 	u_int32_t *iptr, *optr;
 	u_int nw;
+	u_int32_t *ibits, *obits;
+	char * wql;
+	int nfunnel = 0;
+	int count, nfcount;
+	char * wql_ptr;
 
 	/*
 	 * Problems when reboot; due to MacOSX signal probs
@@ -660,26 +763,81 @@ selscan(p, ibits, obits, nfd, retval)
 		return(EIO);
 	}
 
+	ibits = sel->ibits;
+	obits = sel->obits;
+	wql = sel->wql;
+
+	count = sel->count;
+	nfcount = sel->nfcount;
+
+	if (nfcount > count)
+		panic("selcount count<nfcount");
+
 	nw = howmany(nfd, NFDBITS);
 
-	for (msk = 0; msk < 3; msk++) {
-		iptr = (u_int32_t *)&ibits[msk * nw];
-		optr = (u_int32_t *)&obits[msk * nw];
-		for (i = 0; i < nfd; i += NFDBITS) {
-			bits = iptr[i/NFDBITS];
-			while ((j = ffs(bits)) && (fd = i + --j) < nfd) {
-				bits &= ~(1 << j);
-				fp = fdp->fd_ofiles[fd];
-				if (fp == NULL ||
-					(fdp->fd_ofileflags[fd] & UF_RESERVED))
-					return (EBADF);
-				if (fp->f_ops && (*fp->f_ops->fo_select)(fp, flag[msk], p)) {
-					optr[fd/NFDBITS] |= (1 << (fd % NFDBITS));
-					n++;
+	nc = 0;
+	if ( nfcount < count) {
+		/* some or all in kernel funnel */
+		for (msk = 0; msk < 3; msk++) {
+			iptr = (u_int32_t *)&ibits[msk * nw];
+			optr = (u_int32_t *)&obits[msk * nw];
+			for (i = 0; i < nfd; i += NFDBITS) {
+				bits = iptr[i/NFDBITS];
+				while ((j = ffs(bits)) && (fd = i + --j) < nfd) {
+					bits &= ~(1 << j);
+					fp = fdp->fd_ofiles[fd];
+					if (fp == NULL ||
+						(fdp->fd_ofileflags[fd] & UF_RESERVED)) {
+						return(EBADF);
+					}
+					if (sel_pass == SEL_SECONDPASS)
+						wql_ptr = (char *)0;
+					else
+						wql_ptr = (wql+ nc * SIZEOF_WAITQUEUE_LINK);
+					if (fp->f_ops && (fp->f_type != DTYPE_SOCKET) 
+						&& (*fp->f_ops->fo_select)(fp, flag[msk], wql_ptr, p)) {
+						optr[fd/NFDBITS] |= (1 << (fd % NFDBITS));
+						n++;
+					}
+					nc++;
 				}
 			}
 		}
 	}
+
+	if (nfcount) {
+		/* socket file descriptors for scan */
+		thread_funnel_switch(KERNEL_FUNNEL, NETWORK_FUNNEL);
+
+		nc = 0;
+		for (msk = 0; msk < 3; msk++) {
+			iptr = (u_int32_t *)&ibits[msk * nw];
+			optr = (u_int32_t *)&obits[msk * nw];
+			for (i = 0; i < nfd; i += NFDBITS) {
+				bits = iptr[i/NFDBITS];
+				while ((j = ffs(bits)) && (fd = i + --j) < nfd) {
+					bits &= ~(1 << j);
+					fp = fdp->fd_ofiles[fd];
+					if (fp == NULL ||
+						(fdp->fd_ofileflags[fd] & UF_RESERVED)) {
+						return(EBADF);
+					}
+					if (sel_pass == SEL_SECONDPASS)
+						wql_ptr = (char *)0;
+					else
+						wql_ptr = (wql+ nc * SIZEOF_WAITQUEUE_LINK);
+					if (fp->f_ops && (fp->f_type == DTYPE_SOCKET) &&
+						(*fp->f_ops->fo_select)(fp, flag[msk], wql_ptr, p)) {
+						optr[fd/NFDBITS] |= (1 << (fd % NFDBITS));
+						n++;
+					}
+					nc++;
+				}
+			}
+		}
+		thread_funnel_switch(NETWORK_FUNNEL, KERNEL_FUNNEL);
+	}
+
 	*retval = n;
 	return (0);
 }
@@ -694,37 +852,99 @@ seltrue(dev, flag, p)
 	return (1);
 }
 
+static int
+selcount(p, ibits, obits, nfd, count, nfcount)
+	struct proc *p;
+	u_int32_t *ibits, *obits;
+	int nfd;
+	int *count;
+	int *nfcount;
+{
+	register struct filedesc *fdp = p->p_fd;
+	register int msk, i, j, fd;
+	register u_int32_t bits;
+	struct file *fp;
+	int n = 0;
+	int nc = 0;
+	int nfc = 0;
+	static int flag[3] = { FREAD, FWRITE, 0 };
+	u_int32_t *iptr, *fptr, *fbits;
+	u_int nw;
+
+	/*
+	 * Problems when reboot; due to MacOSX signal probs
+	 * in Beaker1C ; verify that the p->p_fd is valid
+	 */
+	if (fdp == NULL) {
+		*count=0;
+		*nfcount=0;
+		return(EIO);
+	}
+
+	nw = howmany(nfd, NFDBITS);
+
+
+	for (msk = 0; msk < 3; msk++) {
+		iptr = (u_int32_t *)&ibits[msk * nw];
+		for (i = 0; i < nfd; i += NFDBITS) {
+			bits = iptr[i/NFDBITS];
+			while ((j = ffs(bits)) && (fd = i + --j) < nfd) {
+				bits &= ~(1 << j);
+				fp = fdp->fd_ofiles[fd];
+				if (fp == NULL ||
+					(fdp->fd_ofileflags[fd] & UF_RESERVED)) {
+						*count=0;
+						*nfcount=0;
+						return(EBADF);
+				}
+				if (fp->f_type == DTYPE_SOCKET)
+					nfc++;
+				n++;
+			}
+		}
+	}
+	*count = n;
+	*nfcount = nfc;
+	return (0);
+}
+
 /*
  * Record a select request.
  */
 void
-selrecord(selector, sip)
+selrecord(selector, sip, p_wql)
 	struct proc *selector;
 	struct selinfo *sip;
+	void * p_wql;
 {
-	int 		oldpri = splhigh();
-	thread_t	my_thread = current_thread();
-	thread_t	selthread;
+	thread_act_t	cur_act = current_act();
+	struct uthread * ut = get_bsdthread_info(cur_act);
 
-	selthread = sip->si_thread;
-	
-	if (selthread == my_thread) {
-		splx(oldpri);
+	/* need to look at collisions */
+
+	if ((p_wql == (void *)0) && ((sip->si_flags & SI_INITED) == 0)) {
 		return;
 	}
-	
-	if (selthread && is_thread_active(selthread) &&
-		get_thread_waitevent(selthread) == (caddr_t)&selwait) {
-		sip->si_flags |= SI_COLL;
-		splx(oldpri);
-	} else {
-		sip->si_thread = my_thread;
-		splx(oldpri);
-		act_reference(current_act());
-		if (selthread) {
-			act_deallocate(getact_thread(selthread));
-		}
+
+	/*do not record if this is second pass of select */
+	if((p_wql == (void *)0)) {
+		return;
 	}
+
+	if ((sip->si_flags & SI_INITED) == 0) {
+		wait_queue_init(&sip->wait_queue, SYNC_POLICY_FIFO);
+		sip->si_flags |= SI_INITED;
+		sip->si_flags &= ~SI_CLEAR;
+	}
+
+	if (sip->si_flags & SI_RECORDED) {
+		sip->si_flags |= SI_COLL;
+	} else
+		sip->si_flags &= ~SI_COLL;
+
+	sip->si_flags |= SI_RECORDED;
+	if (!wait_queue_member(&sip->wait_queue, ut->uu_wqsub))
+		wait_queue_link_noalloc(&sip->wait_queue, ut->uu_wqsub, (wait_queue_link_t)p_wql);
 
 	return;
 }
@@ -733,50 +953,41 @@ void
 selwakeup(sip)
 	register struct selinfo *sip;
 {
-	register thread_t 	the_thread = (thread_t)sip->si_thread;
-	int oldpri;
-	struct proc *p;
-	thread_act_t th_act;
 	
-	if (the_thread == 0)
+	if ((sip->si_flags & SI_INITED) == 0) {
 		return;
+	}
 
 	if (sip->si_flags & SI_COLL) {
 		nselcoll++;
 		sip->si_flags &= ~SI_COLL;
-		wakeup((caddr_t)&selwait);
+#if 0
+		/* will not  support */
+		//wakeup((caddr_t)&selwait);
+#endif
 	}
-	
-	oldpri = splhigh();
 
-	th_act = (thread_act_t)getact_thread(the_thread);
-
-	if (is_thread_active(the_thread)) {
- 		if (get_thread_waitevent(the_thread) == &selwait)
-			clear_wait(the_thread, THREAD_AWAKENED);
-		if (p = current_proc())
-			p->p_flag &= ~P_SELECT;
+	if (sip->si_flags & SI_RECORDED) {
+		wait_queue_wakeup_all(&sip->wait_queue, &selwait, THREAD_AWAKENED);
+		sip->si_flags &= ~SI_RECORDED;
 	}
-	
-	/* th_act = (thread_act_t)getact_thread(the_thread); */
 
-	act_deallocate(th_act);
-	
-	sip->si_thread = 0;
-	
-	splx(oldpri);
 }
 
 void 
 selthreadclear(sip)
 	register struct selinfo *sip;
 {
-	thread_act_t th_act;
 
-	if (sip->si_thread) {
-		th_act = (thread_act_t)getact_thread(sip->si_thread);
-		act_deallocate(th_act);
+	if ((sip->si_flags & SI_INITED) == 0) {
+		return;
 	}
+	if (sip->si_flags & SI_RECORDED) {
+			selwakeup(sip);
+			sip->si_flags &= ~(SI_RECORDED | SI_COLL);
+	}
+	sip->si_flags |= SI_CLEAR;
+	wait_queue_unlinkall_nofree(&sip->wait_queue);
 }
 
 

@@ -21,7 +21,7 @@ __private_extern__ void   free_all(void);     // "Free" all memory blocks
 __private_extern__ void   malloc_reset(void); // Destroy all memory regions
 __private_extern__ void * realloc(void * address, size_t new_size);
 
-
+__private_extern__ char * strrchr(const char *cp, int ch);
 
 __private_extern__ void qsort(
     void * array,

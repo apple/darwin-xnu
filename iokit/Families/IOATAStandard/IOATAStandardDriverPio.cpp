@@ -304,6 +304,10 @@ void IOATAStandardDriver::doATAPIProtocolPio( IOATAStandardCommand *ataCmd )
         }          
     }
 
+    // Wait for BSY = 0 and DRQ = 0 before issuing a packet command.
+
+    waitForStatus( 0, kATAStatusBSY | kATAStatusDRQ, kATABusyTimeoutmS );
+
     for ( i = 0; regmask; i++ )
     {
         if ( regmask & 1 )

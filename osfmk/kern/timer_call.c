@@ -54,7 +54,7 @@ static boolean_t
 
 static void
 timer_call_interrupt(
-	AbsoluteTime		timestamp);
+	uint64_t			timestamp);
 
 #define qe(x)		((queue_entry_t)(x))
 #define TC(x)		((timer_call_t)(x))
@@ -104,9 +104,8 @@ _delayed_call_enqueue(
 	current = TC(queue_first(queue));
 
 	while (TRUE) {
-		if (	queue_end(queue, qe(current))						||
-					CMP_ABSOLUTETIME(&call->deadline,
-											&current->deadline) < 0		) {
+		if (	queue_end(queue, qe(current))			||
+				call->deadline < current->deadline		) {
 			current = TC(queue_prev(qe(current)));
 			break;
 		}
@@ -167,7 +166,7 @@ _set_delayed_call_timer(
 boolean_t
 timer_call_enter(
 	timer_call_t			call,
-	AbsoluteTime			deadline)
+	uint64_t				deadline)
 {
 	boolean_t		result = TRUE;
 	queue_t			delayed;
@@ -203,7 +202,7 @@ boolean_t
 timer_call_enter1(
 	timer_call_t			call,
 	timer_call_param_t		param1,
-	AbsoluteTime			deadline)
+	uint64_t				deadline)
 {
 	boolean_t		result = TRUE;
 	queue_t			delayed;
@@ -261,7 +260,7 @@ timer_call_cancel(
 boolean_t
 timer_call_is_delayed(
 	timer_call_t			call,
-	AbsoluteTime			*deadline)
+	uint64_t				*deadline)
 {
 	boolean_t		result = FALSE;
 	spl_t			s;
@@ -284,7 +283,7 @@ timer_call_is_delayed(
 static
 void
 timer_call_interrupt(
-	AbsoluteTime			timestamp)
+	uint64_t				timestamp)
 {
 	timer_call_t		call;
 	queue_t				delayed = &delayed_call_queues[cpu_number()];
@@ -294,7 +293,7 @@ timer_call_interrupt(
 	call = TC(queue_first(delayed));
 
 	while (!queue_end(delayed, qe(call))) {
-		if (CMP_ABSOLUTETIME(&call->deadline, &timestamp) <= 0) {
+		if (call->deadline <= timestamp) {
 			timer_call_func_t		func;
 			timer_call_param_t		param0, param1;
 

@@ -30,13 +30,18 @@ class RootDomainUserClient;
 enum {
     kRootDomainSleepNotSupported	= 0x00000000,
     kRootDomainSleepSupported 		= 0x00000001,
-    kFrameBufferDeepSleepSupported	= 0x00000002
+    kFrameBufferDeepSleepSupported	= 0x00000002,
+    kPCICantSleep			= 0x00000004
 };
 
 extern "C"
 {
 	IONotifier * registerSleepWakeInterest(IOServiceInterestHandler, void *, void * = 0);
+        IONotifier * registerPrioritySleepWakeInterest(IOServiceInterestHandler handler, void * self, void * ref = 0);
         IOReturn acknowledgeSleepWakeNotification(void * );
+        IOReturn vetoSleepWakeNotification(void * PMrefcon);
+        IOReturn rootDomainRestart ( void );
+        IOReturn rootDomainShutdown ( void );
 }
 
 
@@ -46,20 +51,30 @@ OSDeclareDefaultStructors(IOPMrootDomain)
     
 public:
 
-    virtual  bool start( IOService * provider );
+    class IOService * wrangler;			// we tickle the wrangler on button presses, etc
+
+    static IOPMrootDomain * construct( void );
+    virtual bool start( IOService * provider );
     virtual IOReturn newUserClient ( task_t,  void *, UInt32, IOUserClient ** );
     virtual IOReturn setAggressiveness ( unsigned long, unsigned long );
     virtual IOReturn youAreRoot ( void );
     virtual IOReturn sleepSystem ( void );
+    IOReturn shutdownSystem ( void );
+    IOReturn restartSystem ( void );
     virtual IOReturn receivePowerNotification (UInt32 msg);
     virtual void setSleepSupported( IOOptionBits flags );
     virtual IOOptionBits getSleepSupported();
-    virtual bool activityTickle ( unsigned long, unsigned long x=0 );
+    virtual IOReturn requestPowerDomainState ( IOPMPowerFlags, IOPowerConnection *, unsigned long );
+    virtual void handleSleepTimerExpiration ( void );
+    void wakeFromDoze( void );
 
 private:
 
-    class IORootParent * 	patriarch;			// points to our parent
-    unsigned long		idlePeriod;			// idle timer period
+    class IORootParent * patriarch;			// points to our parent
+    long		sleepSlider;			// pref: idle time before idle sleep
+    long		longestNonSleepSlider;		// pref: longest of other idle times
+    long		extraSleepDelay;		// sleepSlider - longestNonSleepSlider
+    thread_call_t	extraSleepTimer;		// used to wait between say display idle and system idle
 
     virtual void powerChangeDone ( unsigned long );
     virtual void command_received ( void *, void * , void * , void *);
@@ -67,23 +82,52 @@ private:
     virtual bool askChangeDown ( unsigned long stateNum);
     virtual void tellChangeUp ( unsigned long );
     virtual void tellNoChangeDown ( unsigned long );
+    void reportUserInput ( void );
+    static IOReturn sysPowerDownHandler( void * target, void * refCon,
+                                    UInt32 messageType, IOService * service,
+                                    void * messageArgument, vm_size_t argSize );
 
-    bool systemBooting;
-    bool ignoringClamshell;
-    bool allowSleep;
-    bool sleepIsSupported;
+    static IOReturn displayWranglerNotification( void * target, void * refCon,
+                                    UInt32 messageType, IOService * service,
+                                    void * messageArgument, vm_size_t argSize );
+
+    static bool displayWranglerPublished( void * target, void * refCon,
+                                    IOService * newService);
+
+    void setQuickSpinDownTimeout ( void );
+    void adjustPowerState( void );
+    void restoreUserSpinDownTimeout ( void );
+
+    unsigned int user_spindown;       // User's selected disk spindown value
+
+    unsigned int systemBooting:1;
+    unsigned int ignoringClamshell:1;
+    unsigned int allowSleep:1;
+    unsigned int sleepIsSupported:1;
+    unsigned int canSleep:1;
+    unsigned int idleSleepPending:1;
+    unsigned int sleepASAP:1;
+    unsigned int reservedA:1;
+    unsigned int reservedB[2];
+    thread_call_t diskSyncCalloutEntry;
     IOOptionBits platformSleepSupport;
 };
 
 class IORootParent: public IOService
 {
 OSDeclareDefaultStructors(IORootParent)
+
+private:
+    unsigned long mostRecentChange;
     
 public:
 
     bool start ( IOService * nub );
     void shutDownSystem ( void );
+    void restartSystem ( void );
     void sleepSystem ( void );
+    void dozeSystem ( void );
+    void sleepToDoze ( void );
     void wakeSystem ( void );
 };
 

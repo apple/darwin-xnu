@@ -99,6 +99,8 @@ inhc_alloc(struct sockaddr_in *sin)
 		return 0;
 
 	MALLOC(inhc, struct in_hcentry *, sizeof *inhc, M_HOSTCACHE, M_WAITOK);
+	if (inhc == NULL)
+		retturn (ENOMEM);
 	bzero(inhc, sizeof *inhc);
 	inhc->inhc_hc.hc_host = dup_sockaddr((struct sockaddr *)sin, 1);
 	if (in_broadcast(sin->sin_addr, rt->rt_ifp))

@@ -299,6 +299,9 @@ struct in_addr {
 #define	INADDR_ALLRTRS_GROUP	(u_int32_t)0xe0000002	/* 224.0.0.2 */
 #define	INADDR_MAX_LOCAL_GROUP	(u_int32_t)0xe00000ff	/* 224.0.0.255 */
 
+#define IN_LINKLOCALNETNUM	(u_int32_t)0xA9FE0000 /* 169.254.0.0 */
+#define IN_LINKLOCAL(i)		(((u_int32_t)(i) & IN_CLASSB_NET) == IN_LINKLOCALNETNUM)
+
 #define	IN_LOOPBACKNET		127			/* official! */
 
 /*
@@ -508,6 +511,9 @@ struct ifnet; struct mbuf;	/* forward declarations for Standard C */
 int	 in_broadcast __P((struct in_addr, struct ifnet *));
 int	 in_canforward __P((struct in_addr));
 int	 in_cksum __P((struct mbuf *, int));
+int      in_cksum_skip __P((struct mbuf *, u_short, u_short));
+u_short	 in_addword __P((u_short, u_short));
+u_short  in_pseudo __P((u_int, u_int, u_int));
 int	 in_localaddr __P((struct in_addr));
 char 	*inet_ntoa __P((struct in_addr)); /* in libkern */
 u_long	in_netof __P((struct in_addr));

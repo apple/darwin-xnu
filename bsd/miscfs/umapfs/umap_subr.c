@@ -303,7 +303,7 @@ loop:
 	/* XXX end of transmogrified checkalias() */
 
 	if (vp->v_type == VREG)
-		ubc_info_init();
+		ubc_info_init(vp);
 
 	*vpp = vp;
 	VREF(lowervp);	/* Extra VREF will be vrele'd in umap_node_create */

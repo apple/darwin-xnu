@@ -131,9 +131,9 @@ tcp_output(tp)
 
 	KERNEL_DEBUG(DBG_FNC_TCP_OUTPUT | DBG_FUNC_START, 0,0,0,0,0);
 	KERNEL_DEBUG(DBG_LAYER_BEG,
-		     ((tp->t_template->th_dport << 16) | tp->t_template->th_sport),
-		     (((tp->t_template->th_src.s_addr & 0xffff) << 16) |
-		      (tp->t_template->th_dst.s_addr & 0xffff)),
+		     ((tp->t_template->tt_dport << 16) | tp->t_template->tt_sport),
+		     (((tp->t_template->tt_src.s_addr & 0xffff) << 16) |
+		      (tp->t_template->tt_dst.s_addr & 0xffff)),
 		     0,0,0);
 
 	/*
@@ -150,6 +150,10 @@ tcp_output(tp)
 		 * slow start to get ack "clock" running again.
 		 */
 		tp->snd_cwnd = tp->t_maxseg;
+    
+    /* Never send data that's already been acked */
+    if (SEQ_GT(tp->snd_una, tp->snd_nxt))
+        tp->snd_nxt = tp->snd_una;
 again:
 	sendalot = 0;
 	off = tp->snd_nxt - tp->snd_una;
@@ -711,15 +715,21 @@ send:
 
 		th->th_sum = in6_cksum(m, IPPROTO_TCP, sizeof(struct ip6_hdr),
 				       sizeof(struct tcphdr) + optlen + len);
-	} else {
+	} else 
 #endif /* INET6 */
+	{
+
 	if (len + optlen)
 		ipov->ih_len = htons((u_short)(sizeof (struct tcphdr) +
 					       optlen + len));
-	th->th_sum = in_cksum(m, (int)(hdrlen + len));
-#if INET6
+         m->m_pkthdr.csum_flags = CSUM_TCP;
+       	 m->m_pkthdr.csum_data = offsetof(struct tcphdr, th_sum);
+       	 if (len + optlen) {       
+       	         th->th_sum = in_addword(th->th_sum,
+       	             htons((u_short)(optlen + len)));
 	}
-#endif /* INET6 */
+
+	}
 
 	/*
 	 * In transmit state, time the transmission and arrange for
@@ -841,8 +851,11 @@ send:
 	ip->ip_ttl = tp->t_inpcb->inp_ip_ttl;	/* XXX */
 	ip->ip_tos = tp->t_inpcb->inp_ip_tos;	/* XXX */
 
+#define thtoti(x) \
+	((struct tcpiphdr *)(((char *)(x)) - (sizeof (struct ip))))
+
 	KERNEL_DEBUG(DBG_LAYER_END, ((th->th_dport << 16) | th->th_sport),
-		   (((th->th_src.s_addr & 0xffff) << 16) | (th->th_dst.s_addr & 0xffff)),
+		   (((thtoti(th)->ti_src.s_addr & 0xffff) << 16) | (thtoti(th)->ti_dst.s_addr & 0xffff)),
 		    th->th_seq, th->th_ack, th->th_win);
 
 
@@ -871,6 +884,9 @@ send:
 	if (error) {
 out:
 		if (error == ENOBUFS) {
+                        if (!tp->t_timer[TCPT_REXMT] &&
+                             !tp->t_timer[TCPT_PERSIST])
+                                tp->t_timer[TCPT_REXMT] = tp->t_rxtcur;
 			tcp_quench(tp->t_inpcb, 0);
 			KERNEL_DEBUG(DBG_FNC_TCP_OUTPUT | DBG_FUNC_END, 0,0,0,0,0);
 			return (0);

@@ -108,14 +108,19 @@ kern_return_t	task_policy_get(
 
 #define TASK_CATEGORY_POLICY		1
 
+enum task_role {
+	TASK_RENICED = -1,
+	TASK_UNSPECIFIED = 0,
+	TASK_FOREGROUND_APPLICATION,
+	TASK_BACKGROUND_APPLICATION,
+	TASK_CONTROL_APPLICATION,
+	TASK_GRAPHICS_SERVER
+};
+
+typedef enum task_role		task_role_t;
+
 struct task_category_policy {
-	enum {
-		TASK_UNSPECIFIED = 0,
-		TASK_FOREGROUND_APPLICATION,
-		TASK_BACKGROUND_APPLICATION,
- 		TASK_CONTROL_APPLICATION,
-		TASK_GRAPHICS_SERVER,
-	}				role;
+	task_role_t		role;
 };
 
 typedef struct task_category_policy		task_category_policy_data_t;

@@ -43,9 +43,12 @@ extern void initialize_screen(void *, unsigned int);
 static vm_offset_t mapframebuffer(caddr_t,int);
 static vm_offset_t PE_fb_vaddr = 0;
 static int         PE_fb_mode  = TEXT_MODE;
+static KERNBOOTSTRUCT * PE_kbp = 0;
 
 /* private globals */
-PE_state_t PE_state;
+PE_state_t  PE_state;
+dt_data     gMemoryMapNode;
+dt_data     gDriversProp;
 
 /* Clock Frequency Info */
 clock_frequency_info_t gPEClockFrequencyInfo;
@@ -107,9 +110,53 @@ void PE_init_iokit(void)
     unsigned char * data;
     unsigned char * clut;
 
-    dt = (long *) createdt(
-		fakePPCDeviceTree,
-            	&((boot_args*)PE_state.fakePPCBootArgs)->deviceTreeLength);
+    typedef struct {
+        char            name[32];
+        unsigned long   length;
+        unsigned long   value[2];
+    } DriversPackageProp;
+
+    /*
+     * Update the fake device tree with the driver information provided by
+     * the booter.
+     */
+
+	gDriversProp.length   = PE_kbp->numBootDrivers * sizeof(DriversPackageProp);
+    gMemoryMapNode.length = 2 * sizeof(long);
+
+    dt = (long *) createdt( fakePPCDeviceTree,
+            	  &((boot_args*)PE_state.fakePPCBootArgs)->deviceTreeLength );
+
+    if ( dt )
+    {
+        DriversPackageProp * prop = (DriversPackageProp *) gDriversProp.address;
+        int i;
+
+        /* Copy driver info in kernBootStruct to fake device tree */
+
+        for ( i = 0; i < PE_kbp->numBootDrivers; i++, prop++ )
+        {
+            switch ( PE_kbp->driverConfig[i].type )
+            {
+                case kBootDriverTypeKEXT:
+                    sprintf(prop->name, "Driver-%lx", PE_kbp->driverConfig[i].address);
+                    break;
+                
+                 case kBootDriverTypeMKEXT:
+                    sprintf(prop->name, "DriversPackage-%lx", PE_kbp->driverConfig[i].address);
+                    break;
+
+                default:
+                    sprintf(prop->name, "DriverBogus-%lx", PE_kbp->driverConfig[i].address);
+                    break;
+            }
+            prop->length   = sizeof(prop->value);
+            prop->value[0] = PE_kbp->driverConfig[i].address;
+            prop->value[1] = PE_kbp->driverConfig[i].size;
+        }
+
+        *gMemoryMapNode.address = PE_kbp->numBootDrivers + 1;
+    }
 
     /* Setup powermac_info and powermac_machine_info structures */
 
@@ -142,17 +189,19 @@ void PE_init_platform(boolean_t vm_initialized, void * args)
 	if (PE_state.initialized == FALSE)
 	{
         extern unsigned int halt_in_debugger, disableDebugOuput;
-        unsigned int debug_arg;
+        unsigned int        debug_arg;
+
+        PE_kbp = (KERNBOOTSTRUCT *) args;
 
 	    PE_state.initialized        = TRUE;
 	    PE_state.bootArgs           = args;
-	    PE_state.video.v_baseAddr   = ((KERNBOOTSTRUCT *)args)->video.v_baseAddr;
-	    PE_state.video.v_rowBytes   = ((KERNBOOTSTRUCT *)args)->video.v_rowBytes;
-	    PE_state.video.v_height     = ((KERNBOOTSTRUCT *)args)->video.v_height;
-	    PE_state.video.v_width      = ((KERNBOOTSTRUCT *)args)->video.v_width;
-	    PE_state.video.v_depth      = ((KERNBOOTSTRUCT *)args)->video.v_depth;
-        PE_state.video.v_display    = ((KERNBOOTSTRUCT *)args)->video.v_display;
-        PE_fb_mode                  = ((KERNBOOTSTRUCT *)args)->graphicsMode;
+	    PE_state.video.v_baseAddr   = PE_kbp->video.v_baseAddr;
+	    PE_state.video.v_rowBytes   = PE_kbp->video.v_rowBytes;
+	    PE_state.video.v_height     = PE_kbp->video.v_height;
+	    PE_state.video.v_width      = PE_kbp->video.v_width;
+	    PE_state.video.v_depth      = PE_kbp->video.v_depth;
+        PE_state.video.v_display    = PE_kbp->video.v_display;
+        PE_fb_mode                  = PE_kbp->graphicsMode;
 	    PE_state.fakePPCBootArgs    = (boot_args *)&fakePPCBootArgs;
 	    ((boot_args *)PE_state.fakePPCBootArgs)->machineType	= 386;
 
@@ -175,8 +224,8 @@ void PE_init_platform(boolean_t vm_initialized, void * args)
         if (PE_parse_boot_arg("debug", &debug_arg)) {
             if (debug_arg & DB_HALT) halt_in_debugger = 1;
             if (debug_arg & DB_PRT)  disableDebugOuput = FALSE; 
-	}
-	}
+        }
+    }
 
 	if (!vm_initialized)
 	{
@@ -184,13 +233,13 @@ void PE_init_platform(boolean_t vm_initialized, void * args)
         outb(0x21, 0xff);   /* Maskout all interrupts Pic1 */
         outb(0xa1, 0xff);   /* Maskout all interrupts Pic2 */
  
-	pe_identify_machine(args);
+        pe_identify_machine(args);
 	}
 	else
 	{
-	  pe_init_debug();
-        
-	  PE_create_console();
+        pe_init_debug();
+
+        PE_create_console();
 	}
 }
 
@@ -222,6 +271,13 @@ int PE_current_console( PE_Video * info )
          * when we are in Text mode.
          */
         info->v_baseAddr = 0;
+        
+        /*
+         * Scale the size of the text screen from characters
+         * to pixels.
+         */
+        info->v_width  *= 8;   // CHARWIDTH
+        info->v_height *= 16;  // CHARHEIGHT
     }
 
     return (0);
@@ -290,3 +346,21 @@ mapframebuffer( caddr_t physaddr,  /* start of framebuffer */
 
     return vmaddr;
 }
+
+/*
+ * The default (non-functional) PE_poll_input handler.
+ */
+static int
+PE_stub_poll_input(unsigned int options, char * c)
+{
+    *c = 0xff;
+    return 1;  /* 0 for success, 1 for unsupported */
+}
+
+/*
+ * Called by the kernel debugger to poll for keyboard input.
+ * Keyboard drivers may replace the default stub function
+ * with their polled-mode input function.
+ */
+int (*PE_poll_input)(unsigned int options, char * c)
+	= PE_stub_poll_input;

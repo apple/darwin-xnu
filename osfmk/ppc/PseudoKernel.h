@@ -27,6 +27,8 @@
 	Copyright:	(c) 2000 Apple Computer, Inc. All rights reserved.
 */
 
+#include <libkern/OSTypes.h>
+
 #include <ppc/exception.h>
 
 /* Support firmware PseudoKernel FastTrap architectural extension */

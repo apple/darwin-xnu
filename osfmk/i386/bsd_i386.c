@@ -62,7 +62,8 @@ thread_userstack(
     int,
     thread_state_t,
     unsigned int,
-    vm_offset_t *
+    vm_offset_t *,
+	int *
 );
 
 kern_return_t
@@ -102,7 +103,8 @@ thread_userstack(
     int                 flavor,
     thread_state_t      tstate,
     unsigned int        count,
-    vm_offset_t         *user_stack
+    vm_offset_t         *user_stack,
+	int					*customstack
 )
 {
         struct i386_saved_state *state;
@@ -115,10 +117,16 @@ thread_userstack(
         if (*user_stack == 0)
                 *user_stack = USRSTACK;
 
+        if (customstack)
+			*customstack = 0;
         switch (flavor) {
 	case i386_THREAD_STATE:	/* FIXME */
                 state25 = (i386_thread_state_t *) tstate;
                 *user_stack = state25->esp ? state25->esp : USRSTACK;
+				if (customstack && state25->esp)
+						*customstack = 1;
+				else
+						*customstack = 0;
 		break;
 
         case i386_NEW_THREAD_STATE:
@@ -133,6 +141,10 @@ thread_userstack(
                  * If a valid user stack is specified, use it.
                  */
                 *user_stack = uesp ? uesp : USRSTACK;
+				if (customstack && uesp)
+						*customstack = 1;
+				else
+						*customstack = 0;
                 break;
         default :
                 return (KERN_INVALID_ARGUMENT);
@@ -251,6 +263,14 @@ thread_set_child(thread_act_t child, int pid)
 	child->mact.pcb->iss.edx = 1;
 	child->mact.pcb->iss.efl &= ~EFL_CF;
 }
+void thread_set_parent(thread_act_t parent, int pid);
+void
+thread_set_parent(thread_act_t parent, int pid)
+{
+	parent->mact.pcb->iss.eax = pid;
+	parent->mact.pcb->iss.edx = 0;
+	parent->mact.pcb->iss.efl &= ~EFL_CF;
+}
 
 
 
@@ -290,8 +310,6 @@ extern funnel_t * network_flock;
 
 extern struct sysent sysent[];
 
-void  *get_bsdtask_info(
-	task_t);
 
 int set_bsduthreadargs (thread_act_t, struct i386_saved_state *, void *);
 
@@ -299,10 +317,37 @@ void * get_bsduthreadarg(thread_act_t);
 
 void unix_syscall(struct i386_saved_state *);
 
+/* USED ONLY FROM VFORK/EXIT */
 void
 unix_syscall_return(int error)
 {
-  panic("unix_syscall_return not implemented yet!!");
+    thread_act_t		thread;
+	volatile int *rval;
+	struct i386_saved_state *regs;
+
+    thread = current_act();
+    rval = (int *)get_bsduthreadrval(thread);
+
+	regs = USER_REGS(thread);
+
+	if (error == ERESTART) {
+		regs->eip -= 7;
+	}
+	else if (error != EJUSTRETURN) {
+		if (error) {
+		    regs->eax = error;
+		    regs->efl |= EFL_CF;	/* carry bit */
+		} else { /* (not error) */
+		    regs->eax = rval[0];
+		    regs->edx = rval[1];
+		    regs->efl &= ~EFL_CF;
+		} 
+	}
+
+    (void) thread_funnel_set(current_thread()->funnel_lock, FALSE);
+
+    thread_exception_return();
+    /* NOTREACHED */
 }
 
 
@@ -314,13 +359,13 @@ unix_syscall(struct i386_saved_state *regs)
     unsigned short	code;
     struct sysent		*callp;
 	int	nargs, error;
-	int *rval;
+	volatile int *rval;
         int funnel_type;
     vm_offset_t		params;
     extern int nsysent;
 
     thread = current_act();
-    p = get_bsdtask_info(current_task());
+    p = current_proc();
     rval = (int *)get_bsduthreadrval(thread);
 
     //printf("[scall : eax %x]",  regs->eax);
@@ -360,6 +405,10 @@ unix_syscall(struct i386_saved_state *regs)
 
     error = (*(callp->sy_call))(p, (void *) vt, rval);
 	
+#if 0
+	/* May be needed with vfork changes */
+	regs = USER_REGS(thread);
+#endif
 	if (error == ERESTART) {
 		regs->eip -= 7;
 	}

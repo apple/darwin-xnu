@@ -50,15 +50,16 @@
 /*
  */
 
-#include <norma_vm.h>
-#include <mach_rt.h>
+#include <libkern/OSTypes.h>
+#include <libkern/OSAtomic.h>
 
 #include <mach/boolean.h>
 #include <mach/port.h>
-#include <mach/thread_status.h>
+#include <mach/mig.h>
 #include <mach/mig_errors.h>
 #include <mach/mach_types.h>
 #include <mach/mach_traps.h>
+
 #include <kern/ast.h>
 #include <kern/ipc_tt.h>
 #include <kern/ipc_mig.h>
@@ -66,7 +67,6 @@
 #include <kern/thread.h>
 #include <kern/ipc_kobject.h>
 #include <kern/misc_protos.h>
-#include <vm/vm_map.h>
 #include <ipc/port.h>
 #include <ipc/ipc_kmsg.h>
 #include <ipc/ipc_entry.h>
@@ -75,10 +75,7 @@
 #include <ipc/ipc_space.h>
 #include <ipc/ipc_port.h>
 #include <ipc/ipc_pset.h>
-
-/* Default (zeroed) template for qos */
-
-static mach_port_qos_t	qos_template;
+#include <vm/vm_map.h>
 
 /*
  *	Routine:	mach_msg_send_from_kernel
@@ -474,3 +471,248 @@ mig_user_deallocate(
 	kfree((vm_offset_t)data, size);
 }
 
+/*
+ *	Routine:	mig_object_init
+ *	Purpose:
+ *		Initialize the base class portion of a MIG object.  We
+ *		will lazy init the port, so just clear it for now.
+ */
+kern_return_t
+mig_object_init(
+	mig_object_t		mig_object,
+	const IMIGObject	*interface)
+{
+	assert(mig_object != MIG_OBJECT_NULL);
+	mig_object->pVtbl = (IMIGObjectVtbl *)interface;
+	mig_object->port = MACH_PORT_NULL;
+}
+
+/*
+ *	Routine:	mig_object_destroy
+ *	Purpose:
+ *		The object is being freed.  This call lets us clean
+ *		up any state we have have built up over the object's
+ *		lifetime.
+ *	Conditions:
+ *		Since notifications and the port hold references on
+ *		on the object, neither can exist when this is called.
+ *		This is a good place to assert() that condition.
+ */
+void
+mig_object_destroy(
+	mig_object_t	mig_object)
+{
+	assert(mig_object->port == MACH_PORT_NULL);
+	return;
+}
+
+/*
+ *	Routine:	mig_object_reference
+ *	Purpose:
+ *		Pure virtual helper to invoke the MIG object's AddRef
+ *		method.
+ *	Conditions:
+ *		MIG object port may be locked.
+ */
+void
+mig_object_reference(
+	mig_object_t	mig_object)
+{
+	assert(mig_object != MIG_OBJECT_NULL);
+	mig_object->pVtbl->AddRef((IMIGObject *)mig_object);
+}
+
+/*
+ *	Routine:	mig_object_deallocate
+ *	Purpose:
+ *		Pure virtual helper to invoke the MIG object's Release
+ *		method.
+ *	Conditions:
+ *		Nothing locked.
+ */
+void
+mig_object_deallocate(
+	mig_object_t	mig_object)
+{
+	assert(mig_object != MIG_OBJECT_NULL);
+	mig_object->pVtbl->Release((IMIGObject *)mig_object);
+}
+
+/*
+ *	Routine:	convert_mig_object_to_port [interface]
+ *	Purpose:
+ *		Base implementation of MIG outtrans routine to convert from
+ *		a mig object reference to a new send right on the object's
+ *		port.  The object reference is consumed.
+ *	Returns:
+ *		IP_NULL - Null MIG object supplied
+ *		Otherwise, a newly made send right for the port
+ *	Conditions:
+ *		Nothing locked.
+ */
+ipc_port_t
+convert_mig_object_to_port(
+	mig_object_t	mig_object)
+{
+	ipc_port_t	port;
+	boolean_t	deallocate = TRUE;
+
+	if (mig_object == MIG_OBJECT_NULL)
+		return IP_NULL;
+
+	port = mig_object->port;
+	while ((port == IP_NULL) ||
+	       ((port = ipc_port_make_send(port)) == IP_NULL)) {
+		ipc_port_t	previous;
+
+		/*
+		 * Either the port was never set up, or it was just
+		 * deallocated out from under us by the no-senders
+		 * processing.  In either case, we must:
+		 *	Attempt to make one
+		 * 	Arrange for no senders
+		 *	Try to atomically register it with the object
+		 *		Destroy it if we are raced.
+		 */
+		port = ipc_port_alloc_kernel();
+		ip_lock(port);
+		ipc_kobject_set_atomically(port,
+					   (ipc_kobject_t) mig_object,
+					   IKOT_MIG);
+
+		/* make a sonce right for the notification */
+		port->ip_sorights++;
+		ip_reference(port);
+
+		ipc_port_nsrequest(port, 1, port, &previous);
+		/* port unlocked */
+
+		assert(previous == IP_NULL);
+
+		if (OSCompareAndSwap((UInt32)IP_NULL,
+				      (UInt32)port,
+				      (UInt32 *)&mig_object->port)) {
+			deallocate = FALSE;
+		} else {
+			ipc_port_dealloc_kernel(port);
+			port = mig_object->port;
+		}
+	}
+
+	if (deallocate)
+		mig_object->pVtbl->Release((IMIGObject *)mig_object);
+
+	return (port);
+}
+
+
+/*
+ *	Routine:	convert_port_to_mig_object [interface]
+ *	Purpose:
+ *		Base implementation of MIG intrans routine to convert from
+ *		an incoming port reference to a new reference on the
+ *		underlying object. A new reference must be created, because
+ *		the port's reference could go away asynchronously.
+ *	Returns:
+ *		NULL - Not an active MIG object port or iid not supported
+ *		Otherwise, a reference to the underlying MIG interface
+ *	Conditions:
+ *		Nothing locked.
+ */
+mig_object_t
+convert_port_to_mig_object(
+	ipc_port_t	port,
+	const MIGIID	*iid)
+{
+	mig_object_t	mig_object;
+	void 		*ppv;
+
+	if (!IP_VALID(port))
+		return NULL;
+
+	ip_lock(port);
+	if (!ip_active(port) || (ip_kotype(port) != IKOT_MIG)) {
+		ip_unlock(port);
+		return NULL;
+	}
+
+	/*
+	 * Our port points to some MIG object interface.  Now
+	 * query it to get a reference to the desired interface.
+	 */
+	ppv = NULL;
+	mig_object = (mig_object_t)port->ip_kobject;
+	mig_object->pVtbl->QueryInterface((IMIGObject *)mig_object, iid, &ppv);
+	ip_unlock(port);
+	return (mig_object_t)ppv;
+}
+
+/*
+ *	Routine:	mig_object_no_senders [interface]
+ *	Purpose:
+ *		Base implementation of a no-senders notification handler
+ *		for MIG objects. If there truly are no more senders, must
+ *		destroy the port and drop its reference on the object.
+ *	Returns:
+ *		TRUE  - port deallocate and reference dropped
+ *		FALSE - more senders arrived, re-registered for notification
+ *	Conditions:
+ *		Nothing locked.
+ */
+
+boolean_t
+mig_object_no_senders(
+	ipc_port_t		port,
+	mach_port_mscount_t	mscount)
+{
+	mig_object_t		mig_object;
+
+	ip_lock(port);
+	if (port->ip_mscount > mscount) {
+		ipc_port_t 	previous;
+
+		/*
+		 * Somebody created new send rights while the
+		 * notification was in-flight.  Just create a
+		 * new send-once right and re-register with 
+		 * the new (higher) mscount threshold.
+		 */
+		/* make a sonce right for the notification */
+		port->ip_sorights++;
+		ip_reference(port);
+		ipc_port_nsrequest(port, mscount, port, &previous);
+		/* port unlocked */
+
+		assert(previous == IP_NULL);
+		return (FALSE);
+	}
+
+	/*
+	 * Clear the port pointer while we have it locked.
+	 */
+	mig_object = (mig_object_t)port->ip_kobject;
+	mig_object->port = IP_NULL;
+
+	/*
+	 * Bring the sequence number and mscount in
+	 * line with ipc_port_destroy assertion.
+	 */
+	port->ip_mscount = 0;
+	port->ip_messages.imq_seqno = 0;
+	ipc_port_destroy(port); /* releases lock */
+	
+	/*
+	 * Release the port's reference on the object.
+	 */
+	mig_object->pVtbl->Release((IMIGObject *)mig_object);
+	return (TRUE);
+}	
+
+/*
+ * Kernel implementation of the notification chain for MIG object
+ * is kept separate from the actual objects, since there are expected
+ * to be much fewer of them than actual objects.
+ *
+ * The implementation of this part of MIG objects is coming
+ * "Real Soon Now"(TM).
+ */

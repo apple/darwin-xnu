@@ -91,7 +91,7 @@ struct file {
 		int	(*fo_ioctl)	__P((struct file *fp, u_long com,
 					    caddr_t data, struct proc *p));
 		int	(*fo_select)	__P((struct file *fp, int which,
-					    struct proc *p));
+						void * wql, struct proc *p));
 		int	(*fo_close)	__P((struct file *fp, struct proc *p));
 	} *f_ops;
 	off_t	f_offset;

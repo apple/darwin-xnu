@@ -35,9 +35,9 @@
 #ifndef _KERN_THREAD_CALL_H_
 #define _KERN_THREAD_CALL_H_
 
-#include <libkern/OSBase.h>
-
 #include <mach/mach_types.h>
+
+#include <kern/clock.h>
 
 typedef struct call_entry	*thread_call_t;
 typedef void				*thread_call_param_t;
@@ -57,13 +57,13 @@ thread_call_enter1(
 boolean_t
 thread_call_enter_delayed(
 	thread_call_t		call,
-	AbsoluteTime		deadline
+	uint64_t			deadline
 );
 boolean_t
 thread_call_enter1_delayed(
 	thread_call_t			call,
 	thread_call_param_t		param1,
-	AbsoluteTime			deadline
+	uint64_t				deadline
 );
 boolean_t
 thread_call_cancel(
@@ -72,7 +72,7 @@ thread_call_cancel(
 boolean_t
 thread_call_is_delayed(
 	thread_call_t		call,
-	AbsoluteTime		*deadline
+	uint64_t			*deadline
 );
 
 thread_call_t
@@ -100,7 +100,7 @@ void
 thread_call_func_delayed(
 	thread_call_func_t		func,
 	thread_call_param_t		param,
-	AbsoluteTime			deadline
+	uint64_t				deadline
 );
 
 boolean_t
@@ -127,5 +127,23 @@ thread_call_setup(
 );
 
 #endif /* MACH_KERNEL_PRIVATE */
+
+#if		!defined(MACH_KERNEL_PRIVATE) && !defined(ABSOLUTETIME_SCALAR_TYPE)
+
+#include <libkern/OSBase.h>
+
+#define thread_call_enter_delayed(a, b)	\
+	thread_call_enter_delayed((a), __OSAbsoluteTime(b))
+
+#define thread_call_enter1_delayed(a, b, c)	\
+	thread_call_enter1_delayed((a), (b), __OSAbsoluteTime(c))
+
+#define thread_call_is_delayed(a, b)	\
+	thread_call_is_delayed((a), __OSAbsoluteTimePtr(b))
+
+#define thread_call_func_delayed(a, b, c)	\
+	thread_call_func_delayed((a), (b), __OSAbsoluteTime(c))
+
+#endif
 
 #endif /* _KERN_THREAD_CALL_H_ */

@@ -91,6 +91,18 @@ bool RootDomainUserClient::start( IOService * provider )
     fMethods[kPMCancelPowerChange].count1 = 0;
     fMethods[kPMCancelPowerChange].flags = kIOUCScalarIScalarO;
 
+    fMethods[kPMShutdownSystem].object = provider;		// 5
+    fMethods[kPMShutdownSystem].func = (IOMethod)&IOPMrootDomain::shutdownSystem;
+    fMethods[kPMShutdownSystem].count0 = 0;
+    fMethods[kPMShutdownSystem].count1 = 0;
+    fMethods[kPMShutdownSystem].flags = kIOUCScalarIScalarO;
+
+    fMethods[kPMRestartSystem].object = provider;		// 6
+    fMethods[kPMRestartSystem].func = (IOMethod)&IOPMrootDomain::restartSystem;
+    fMethods[kPMRestartSystem].count0 = 0;
+    fMethods[kPMRestartSystem].count1 = 0;
+    fMethods[kPMRestartSystem].flags = kIOUCScalarIScalarO;
+
     return true;
 }
 

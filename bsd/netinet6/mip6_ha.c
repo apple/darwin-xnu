@@ -794,7 +794,7 @@ struct ifnet *ifp;
 #if defined(__FreeBSD__) && __FreeBSD__ >= 3
         mip6_timer_ll_handle =
 #endif
-        timeout(mip6_timer_ll, (void *)0, hz);
+        timeout(mip6_timer_ll_funneled, (void *)0, hz);
     }
     return llp;
 }
@@ -1061,16 +1061,25 @@ struct mip6_ha_list *ha_delete;  /* Home Agent entry to delete */
  ******************************************************************************
  */
 void
+mip6_timer_ll_funneled(arg)
+void  *arg;  /* Not used */
+{
+#ifdef __APPLE__
+	boolean_t   funnel_state;
+    	funnel_state = thread_funnel_set(network_flock, TRUE);
+#endif
+	mip6_timer_ll(arg);
+#ifdef __APPLE__
+        (void) thread_funnel_set(network_flock, FALSE);
+#endif
+}
+void
 mip6_timer_ll(arg)
 void  *arg;  /* Not used */
 {
     struct mip6_link_list  *llp;        /* Current Link list entry */
     struct mip6_ha_list    *halp;       /* Current Home Agent list entry */
     int                    s;
-#ifdef __APPLE__
-	boolean_t   funnel_state;
-    	funnel_state = thread_set_funneled(TRUE);
-#endif
 
     /* Go through the entire Home Agent List and delete all entries
        for which the time has expired. */
@@ -1095,11 +1104,8 @@ void  *arg;  /* Not used */
 #if defined(__FreeBSD__) && __FreeBSD__ >= 3
         mip6_timer_ll_handle =
 #endif
-        timeout(mip6_timer_ll, (void *)0, hz);
+        timeout(mip6_timer_ll_funneled, (void *)0, hz);
     }
-#ifdef __APPLE__
-    (void) thread_set_funneled(funnel_state);
-#endif
 }
 
 

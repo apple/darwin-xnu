@@ -124,6 +124,16 @@ loop:
 	for (ip = INOHASH(dev, inum)->lh_first; ip; ip = ip->i_hash.le_next) {
 		if (inum == ip->i_number && dev == ip->i_dev) {
 			vp = ITOV(ip);
+			if (ip->i_flag & IN_TRANSIT) {
+				/* inode is getting reclaimed wait till
+				 * the operation is complete and return
+				 * error
+				 */
+				ip->i_flag |= IN_WTRANSIT;
+				simple_unlock(&ufs_ihash_slock);
+				tsleep((caddr_t)ip, PINOD, "ufs_ihashget", 0);
+				goto loop;
+			}
 			simple_lock(&vp->v_interlock);
 			simple_unlock(&ufs_ihash_slock);
 			if (vget(vp, LK_EXCLUSIVE | LK_INTERLOCK, p))

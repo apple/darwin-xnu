@@ -3791,13 +3791,23 @@ key_bbcmp(p1, p2, bits)
  * scanning SPD and SAD to check status for each entries,
  * and do to remove or to expire.
  */
+static void
+key_timehandler_funneled(void)
+{
+    	boolean_t funnel_state;
+	funnel_state = thread_funnel_set(network_flock, TRUE);
+	key_timehandler();
+	(void) thread_funnel_set(network_flock, FALSE);
+}
+
 void
 key_timehandler(void)
 {
 	u_int dir;
 	int s;
 
-	thread_funnel_set(network_flock, TRUE);
+    	boolean_t funnel_state;
+	funnel_state = thread_funnel_set(network_flock, TRUE);
 #if __NetBSD__
 	s = splsoftnet();	/*called from softclock()*/
 #else
@@ -4047,11 +4057,10 @@ key_timehandler(void)
 
 #ifndef IPSEC_DEBUG2
 	/* do exchange to tick time !! */
-	(void)timeout((void *)key_timehandler, (void *)0, 100);
+	(void)timeout((void *)key_timehandler_funneled, (void *)0, 100);
 #endif /* IPSEC_DEBUG2 */
 
 	splx(s);
-	thread_funnel_set(network_funnel, FALSE);
 	return;
 }
 
@@ -6616,7 +6625,7 @@ key_init()
 #endif
 
 #ifndef IPSEC_DEBUG2
-	timeout((void *)key_timehandler, (void *)0, hz);
+	timeout((void *)key_timehandler_funneled, (void *)0, hz);
 #endif /*IPSEC_DEBUG2*/
 
 	/* initialize key statistics */

@@ -828,7 +828,7 @@ found:
 	 * Switch to the NETWORK funnel for CTL_NET and KERN_IPC sysctls
 	 */
 
-	if ((req->newptr) && ((name[0] == CTL_NET) || ((name[0] == CTL_KERN) &&
+	if (((name[0] == CTL_NET) || ((name[0] == CTL_KERN) &&
 						       (name[1] == KERN_IPC))))
 	     thread_funnel_switch(KERNEL_FUNNEL, NETWORK_FUNNEL);
 
@@ -846,7 +846,7 @@ found:
 	 * Switch back to the KERNEL funnel, if necessary
 	 */
 
-	if ((req->newptr) && ((name[0] == CTL_NET) || ((name[0] == CTL_KERN) &&
+	if (((name[0] == CTL_NET) || ((name[0] == CTL_KERN) &&
 						       (name[1] == KERN_IPC))))
 	     thread_funnel_switch(NETWORK_FUNNEL, KERNEL_FUNNEL);
 

@@ -134,6 +134,11 @@ struct mount {
 	int		mnt_maxsymlinklen;	/* max size of short symlink */
 	struct statfs	mnt_stat;		/* cache of filesystem stats */
 	qaddr_t		mnt_data;		/* private data */
+	/* Cached values of the IO constraints for the device */
+	u_int32_t	mnt_maxreadcnt;	/* Max. byte count for read */
+	u_int32_t	mnt_maxwritecnt;	/* Max. byte count for write */
+	u_int16_t	mnt_segreadcnt;	/* Max. segment count for read */
+	u_int16_t	mnt_segwritecnt;	/* Max. segment count for write */
 };
 
 /*

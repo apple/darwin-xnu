@@ -36,6 +36,7 @@
 #include <kern/host.h>
 #include <kern/task.h>
 #include <kern/thread.h>
+#include <kern/thread_act.h>
 #include <ppc/exception.h>
 #include <ppc/mappings.h>
 #include <ppc/thread_act.h>
@@ -182,13 +183,18 @@ int vmm_init_context(struct savearea *save)
 		return 1;
 	}
 
-	/* If the client is requesting a newer major version than */
-	/* we currently support, we'll have to fail. In the future, */
-	/* we can add new major versions and support the older ones. */
+	/* Make sure that the version requested is supported */
 	version = save->save_r3;					/* Pick up passed in version */
-	if ((version >> 16) > (kVmmCurrentVersion >> 16)) {
+	if (((version >> 16) < kVmmMinMajorVersion) || ((version >> 16) > (kVmmCurrentVersion >> 16))) {
+		save->save_r3 = KERN_FAILURE;			/* Return failure */
+		return 1;
 	}
-	
+
+	if((version & 0xFFFF) > kVmmCurMinorVersion) {	/* Check for valid minor */
+		save->save_r3 = KERN_FAILURE;			/* Return failure */
+		return 1;
+	}
+
 	act = current_act();						/* Pick up our activation */
 	
 	ml_set_interrupts_enabled(TRUE);			/* This can take a bit of time so pass interruptions */
@@ -440,6 +446,7 @@ void vmm_tear_down_all(thread_act_t act) {
 			return;
 		}
 		
+		save->save_exception = kVmmBogusContext*4;	/* Indicate that this context is bogus now */
 		s = splhigh();								/* Make sure interrupts are off */
 		vmm_force_exit(act, save);					/* Force and exit from VM state */
 		splx(s);									/* Restore interrupts */
@@ -486,9 +493,9 @@ void vmm_tear_down_all(thread_act_t act) {
 **		act   - pointer to current thread activation
 **		index - index of vmm state for this page
 **		va    - virtual address within the client's address
-**			    space (must be page aligned)
+**			    space
 **		ava   - virtual address within the alternate address
-**			    space (must be page aligned)
+**			    space
 **		prot - protection flags
 **
 **	Note that attempted mapping of areas in nested pmaps (shared libraries) or block mapped
@@ -546,18 +553,18 @@ kern_return_t vmm_map_page(
 		
 		if(mp) {								/* We found it... */
 			mpv = hw_cpv(mp);					/* Convert mapping block to virtual */
-			if(!(mpv->PTEr & 1)) break;			/* If we are not write protected, we are ok... */
+			
+			if(!mpv->physent) return KERN_FAILURE;	/* If there is no physical entry (e.g., I/O area), we won't map it */
+			
+			if(!(mpv->PTEr & 1)) break;			/* If we are writable go ahead and map it... */
+	
+			hw_unlock_bit((unsigned int *)&mpv->physent->phys_link, PHYS_LOCK);	/* Unlock the map before we try to fault the write bit on */
 		}
 
 		ml_set_interrupts_enabled(TRUE);		/* Enable interruptions */
 		ret = vm_fault(map, trunc_page(cva), VM_PROT_READ | VM_PROT_WRITE, FALSE);	/* Didn't find it, try to fault it in read/write... */
 		ml_set_interrupts_enabled(FALSE);		/* Disable interruptions */
 		if (ret != KERN_SUCCESS) return KERN_FAILURE;	/* There isn't a page there, return... */
-	}
-
-
-	if(!mpv->physent) {							/* Is this an I/O area, e.g., framebuffer? */
-		return KERN_FAILURE;					/* Yes, we won't map it... */
 	}
 
 /*
@@ -575,6 +582,43 @@ kern_return_t vmm_map_page(
 	return KERN_SUCCESS;
 }
 
+
+/*-----------------------------------------------------------------------
+** vmm_map_execute
+**
+** This function maps a page from within the client's logical
+** address space into the alternate address space of the
+** Virtual Machine Monitor context and then directly starts executing.
+**
+**	See description of vmm_map_page for details. 
+**
+** Outputs:
+**		Normal exit is to run the VM.  Abnormal exit is triggered via a 
+**		non-KERN_SUCCESS return from vmm_map_page or later during the 
+**		attempt to transition into the VM. 
+-----------------------------------------------------------------------*/
+
+vmm_return_code_t vmm_map_execute(
+	thread_act_t 		act,
+	vmm_thread_index_t 	index,
+	vm_offset_t 		cva,
+	vm_offset_t 		ava,
+	vm_prot_t 			prot)
+{
+	kern_return_t		ret;
+	vmmCntrlEntry 		*CEntry;
+
+	CEntry = vmm_get_entry(act, index);			/* Get and validate the index */
+
+	if (CEntry == NULL) return kVmmBogusContext;	/* Return bogus context */
+	
+	ret = vmm_map_page(act, index, cva, ava, prot);	/* Go try to map the page on in */
+	
+	if(ret == KERN_SUCCESS) vmm_execute_vm(act, index);	/* Return was ok, launch the VM */
+	
+	return kVmmInvalidAddress;					/* We had trouble mapping in the page */	
+	
+}
 
 /*-----------------------------------------------------------------------
 ** vmm_get_page_mapping
@@ -754,6 +798,93 @@ boolean_t vmm_get_page_dirty_flag(
 	return (RC & 1);										/* Return the change bit */
 }
 
+
+/*-----------------------------------------------------------------------
+** vmm_protect_page
+**
+** This function sets the protection bits of a mapped page
+**
+** Inputs:
+**		act   - pointer to current thread activation
+**		index - index of vmm state for this page
+**		va    - virtual address within the vmm's address
+**			    space
+**		prot  - Protection flags
+**
+** Outputs:
+**		none
+**		Protection bits of the mapping are modifed
+**
+-----------------------------------------------------------------------*/
+
+kern_return_t vmm_protect_page(
+	thread_act_t 		act,
+	vmm_thread_index_t 	index,
+	vm_offset_t 		va,
+	vm_prot_t			prot)
+{
+	vmmCntrlEntry 		*CEntry;
+	register mapping 	*mpv, *mp;
+	unsigned int		RC;
+
+	CEntry = vmm_get_entry(act, index);						/* Convert index to entry */		
+	if (CEntry == NULL) return KERN_FAILURE;				/* Either this isn't vmm thread or the index is bogus */
+	
+	mp = hw_lock_phys_vir(CEntry->vmmPmap->space, va);		/* Look up the mapping */
+	if((unsigned int)mp & 1) {								/* Did we timeout? */
+		panic("vmm_protect_page: timeout locking physical entry for virtual address (%08X)\n", va);	/* Yeah, scream about it! */
+		return 1;											/* Bad hair day, return dirty... */
+	}
+	if(!mp) return KERN_SUCCESS;							/* Not mapped, just return... */
+	
+	hw_prot_virt(mp, prot);									/* Set the protection */	
+
+	mpv = hw_cpv(mp);										/* Convert mapping block to virtual */
+	hw_unlock_bit((unsigned int *)&mpv->physent->phys_link, PHYS_LOCK);		/* We're done, unlock the physical entry */
+
+	CEntry->vmmLastMap = va & -PAGE_SIZE;					/* Remember the last mapping we changed */
+	CEntry->vmmFlags |= vmmMapDone;							/* Set that we did a map operation */
+
+	return KERN_SUCCESS;									/* Return */
+}
+
+
+/*-----------------------------------------------------------------------
+** vmm_protect_execute
+**
+** This function sets the protection bits of a mapped page
+** and then directly starts executing.
+**
+**	See description of vmm_protect_page for details. 
+**
+** Outputs:
+**		Normal exit is to run the VM.  Abnormal exit is triggered via a 
+**		non-KERN_SUCCESS return from vmm_map_page or later during the 
+**		attempt to transition into the VM. 
+-----------------------------------------------------------------------*/
+
+vmm_return_code_t vmm_protect_execute(
+	thread_act_t 		act,
+	vmm_thread_index_t 	index,
+	vm_offset_t 		va,
+	vm_prot_t			prot)
+{
+	kern_return_t		ret;
+	vmmCntrlEntry 		*CEntry;
+
+	CEntry = vmm_get_entry(act, index);					/* Get and validate the index */
+
+	if (CEntry == NULL) return kVmmBogusContext;		/* Return bogus context */
+	
+	ret = vmm_protect_page(act, index, va, prot);		/* Go try to change access */
+	
+	if(ret == KERN_SUCCESS) vmm_execute_vm(act, index);	/* Return was ok, launch the VM */
+	
+	return kVmmInvalidAddress;							/* We had trouble of some kind (shouldn't happen) */	
+	
+}
+
+
 /*-----------------------------------------------------------------------
 ** vmm_get_float_state
 **
@@ -904,8 +1035,7 @@ kern_return_t vmm_set_timer(
 	CEntry = vmm_get_entry(act, index);				/* Convert index to entry */		
 	if (CEntry == NULL) return KERN_FAILURE;		/* Either this isn't vmm thread or the index is bogus */
 	
-	CEntry->vmmTimer.hi = timerhi;					/* Set the high order part */
-	CEntry->vmmTimer.lo = timerlo;					/* Set the low order part */
+	CEntry->vmmTimer = ((uint64_t)timerhi << 32) | timerlo;
 	
 	vmm_timer_pop(act);								/* Go adjust all of the timer stuff */
 	return KERN_SUCCESS;							/* Leave now... */
@@ -938,8 +1068,8 @@ kern_return_t vmm_get_timer(
 	CEntry = vmm_get_entry(act, index);				/* Convert index to entry */		
 	if (CEntry == NULL) return KERN_FAILURE;		/* Either this isn't vmm thread or the index is bogus */
 
-	CEntry->vmmContextKern->return_params[0] = CEntry->vmmTimer.hi;	/* Return the last timer value */
-	CEntry->vmmContextKern->return_params[1] = CEntry->vmmTimer.lo;	/* Return the last timer value */
+	CEntry->vmmContextKern->return_params[0] = (CEntry->vmmTimer >> 32);	/* Return the last timer value */
+	CEntry->vmmContextKern->return_params[1] = (uint32_t)CEntry->vmmTimer;	/* Return the last timer value */
 	
 	return KERN_SUCCESS;
 }
@@ -969,17 +1099,16 @@ void vmm_timer_pop(
 	vmmCntrlEntry 		*CEntry;
 	vmmCntrlTable		*CTable;
 	int					cvi, any;
-	AbsoluteTime		now, soonest;
+	uint64_t			now, soonest;
 	savearea			*sv;
 		
 	if(!((unsigned int)act->mact.vmmControl & 0xFFFFFFFE)) {	/* Are there any virtual machines? */
 		panic("vmm_timer_pop: No virtual machines defined; act = %08X\n", act);
 	}
 
-	soonest.hi = 0xFFFFFFFF;						/* Max time */
-	soonest.lo = 0xFFFFFFFF;						/* Max time */
+	soonest = 0xFFFFFFFFFFFFFFFFULL;				/* Max time */
 
-	clock_get_uptime((AbsoluteTime *)&now);			/* What time is it? */
+	clock_get_uptime(&now);							/* What time is it? */
 	
 	CTable = act->mact.vmmControl;					/* Make this easier */	
 	any = 0;										/* Haven't found a running unexpired timer yet */
@@ -988,13 +1117,13 @@ void vmm_timer_pop(
 
 		if(!(CTable->vmmc[cvi].vmmFlags & vmmInUse)) continue;	/* Do not check if the entry is empty */
 		
-		if(!(CTable->vmmc[cvi].vmmTimer.hi | CTable->vmmc[cvi].vmmTimer.hi)) {	/* Is the timer reset? */
+		if(CTable->vmmc[cvi].vmmTimer == 0) {	/* Is the timer reset? */
 			CTable->vmmc[cvi].vmmFlags &= ~vmmTimerPop;			/* Clear timer popped */
 			CTable->vmmc[cvi].vmmContextKern->vmmStat &= ~vmmTimerPop;	/* Clear timer popped */
 			continue;								/* Check next */
 		}
 
-		if (CMP_ABSOLUTETIME(&CTable->vmmc[cvi].vmmTimer, &now) <= 0) {
+		if (CTable->vmmc[cvi].vmmTimer <= now) {
 			CTable->vmmc[cvi].vmmFlags |= vmmTimerPop;	/* Set timer popped here */
 			CTable->vmmc[cvi].vmmContextKern->vmmStat |= vmmTimerPop;	/* Set timer popped here */
 			if((unsigned int)&CTable->vmmc[cvi] == (unsigned int)act->mact.vmmCEntry) {	/* Is this the running VM? */
@@ -1002,7 +1131,7 @@ void vmm_timer_pop(
 				if(!sv) {							/* Did we find something? */
 					panic("vmm_timer_pop: no user context; act = %08X\n", act);
 				}
-				sv->save_exception = T_IN_VAIN;		/* Indicate that this is a null exception */
+				sv->save_exception = kVmmReturnNull*4;	/* Indicate that this is a null exception */
 				vmm_force_exit(act, sv);			/* Intercept a running VM */
 			}
 			continue;								/* Check the rest */
@@ -1014,19 +1143,175 @@ void vmm_timer_pop(
 		
 		any = 1;									/* Show we found an active unexpired timer */
 		
-		if (CMP_ABSOLUTETIME(&CTable->vmmc[cvi].vmmTimer, &soonest) < 0) {
-			soonest.hi = CTable->vmmc[cvi].vmmTimer.hi;	/* Set high order lowest timer */
-			soonest.lo = CTable->vmmc[cvi].vmmTimer.lo;	/* Set low order lowest timer */
-		}
+		if (CTable->vmmc[cvi].vmmTimer < soonest)
+			soonest = CTable->vmmc[cvi].vmmTimer;
 	}
 	
 	if(any) {
-		if (!(act->mact.qactTimer.hi | act->mact.qactTimer.lo) || 
-			(CMP_ABSOLUTETIME(&soonest, &act->mact.qactTimer) <= 0)) {
-			act->mact.qactTimer.hi = soonest.hi;	/* Set high order lowest timer */
-			act->mact.qactTimer.lo = soonest.lo;	/* Set low order lowest timer */
-		}
+		if (act->mact.qactTimer == 0 || soonest <= act->mact.qactTimer)
+			act->mact.qactTimer = soonest;	/* Set lowest timer */
 	}
+
+	return;
+}
+
+
+
+/*-----------------------------------------------------------------------
+** vmm_stop_vm
+**
+** This function prevents the specified VM(s) to from running.
+** If any is currently executing, the execution is intercepted
+** with a code of kVmmStopped.  Note that execution of the VM is
+** blocked until a vmmExecuteVM is called with the start flag set to 1.
+** This provides the ability for a thread to stop execution of a VM and
+** insure that it will not be run until the emulator has processed the
+** "virtual" interruption.
+**
+** Inputs:
+**		vmmask - 32 bit mask corresponding to the VMs to put in stop state
+**				 NOTE: if this mask is all 0s, any executing VM is intercepted with
+*     			 a kVmmStopped (but not marked stopped), otherwise this is a no-op. Also note that there
+**				 note that there is a potential race here and the VM may not stop.
+**
+** Outputs:
+**		kernel return code indicating success
+**      or if no VMs are enabled, an invalid syscall exception.
+-----------------------------------------------------------------------*/
+
+int vmm_stop_vm(struct savearea *save)
+{
+
+	thread_act_t		act;
+	vmmCntrlTable		*CTable;
+	int					cvi, i;
+    task_t				task;
+    thread_act_t		fact;
+    unsigned int		vmmask;
+    ReturnHandler		*stopapc;
+
+	ml_set_interrupts_enabled(TRUE);			/* This can take a bit of time so pass interruptions */
+	
+	task = current_task();						/* Figure out who we are */
+
+	task_lock(task);							/* Lock our task */
+
+	fact = (thread_act_t)task->thr_acts.next;	/* Get the first activation on task */
+	act = 0;									/* Pretend we didn't find it yet */
+
+	for(i = 0; i < task->thr_act_count; i++) {	/* All of the activations */
+		if(fact->mact.vmmControl) {				/* Is this a virtual machine monitor? */
+			act = fact;							/* Yeah... */
+			break;								/* Bail the loop... */
+		}
+		fact = (thread_act_t)fact->thr_acts.next;	/* Go to the next one */
+	}
+
+	if(!((unsigned int)act)) {					/* See if we have VMMs yet */
+		task_unlock(task);						/* No, unlock the task */
+		ml_set_interrupts_enabled(FALSE);		/* Set back interruptions */
+		return 0;								/* Go generate a syscall exception */
+	}
+
+	act_lock_thread(act);						/* Make sure this stays 'round */
+	task_unlock(task);							/* Safe to release now */
+
+	CTable = act->mact.vmmControl;				/* Get the pointer to the table */
+	
+	if(!((unsigned int)CTable & -2)) {			/* Are there any all the way up yet? */
+		act_unlock_thread(act);					/* Unlock the activation */
+		ml_set_interrupts_enabled(FALSE);		/* Set back interruptions */
+		return 0;								/* Go generate a syscall exception */
+	}
+	
+	if(!(vmmask = save->save_r3)) {				/* Get the stop mask and check if all zeros */
+		act_unlock_thread(act);					/* Unlock the activation */
+		ml_set_interrupts_enabled(FALSE);		/* Set back interruptions */
+		save->save_r3 = KERN_SUCCESS;			/* Set success */	
+		return 1;								/* Return... */
+	}
+
+	for(cvi = 0; cvi < kVmmMaxContextsPerThread; cvi++) {	/* Search slots */
+		if((0x80000000 & vmmask) && (CTable->vmmc[cvi].vmmFlags & vmmInUse)) {	/* See if we need to stop and if it is in use */
+			hw_atomic_or(&CTable->vmmc[cvi].vmmFlags, vmmXStop);	/* Set this one to stop */
+		}
+		vmmask = vmmask << 1;					/* Slide mask over */
+	}
+	
+	if(hw_compare_and_store(0, 1, &act->mact.emPendRupts)) {	/* See if there is already a stop pending and lock out others if not */
+		act_unlock_thread(act);					/* Already one pending, unlock the activation */
+		ml_set_interrupts_enabled(FALSE);		/* Set back interruptions */
+		save->save_r3 = KERN_SUCCESS;			/* Say we did it... */	
+		return 1;								/* Leave */
+	}
+
+	if(!(stopapc = (ReturnHandler *)kalloc(sizeof(ReturnHandler)))) {	/* Get a return handler control block */
+		act->mact.emPendRupts = 0;				/* No memory, say we have given up request */
+		act_unlock_thread(act);					/* Unlock the activation */
+		ml_set_interrupts_enabled(FALSE);		/* Set back interruptions */
+		save->save_r3 = KERN_RESOURCE_SHORTAGE;	/* No storage... */
+		return 1;								/* Return... */
+	}
+
+	ml_set_interrupts_enabled(FALSE);			/* Disable interruptions for now */
+
+	stopapc->handler = vmm_interrupt;			/* Set interruption routine */
+
+	stopapc->next = act->handlers;				/* Put our interrupt at the start of the list */
+	act->handlers = stopapc;					/* Point to us */
+
+	act_set_apc(act);							/* Set an APC AST */
+	ml_set_interrupts_enabled(TRUE);			/* Enable interruptions now */
+
+	act_unlock_thread(act);						/* Unlock the activation */
+	
+	ml_set_interrupts_enabled(FALSE);			/* Set back interruptions */
+	save->save_r3 = KERN_SUCCESS;				/* Hip, hip, horay... */	
+	return 1;
+}
+
+/*-----------------------------------------------------------------------
+** vmm_interrupt
+**
+** This function is executed asynchronously from an APC AST.
+** It is to be used for anything that needs to interrupt a running VM.
+** This include any kind of interruption generation (other than timer pop)
+** or entering the stopped state.
+**
+** Inputs:
+**		ReturnHandler *rh - the return handler control block as required by the APC.
+**		thread_act_t act  - the activation
+**
+** Outputs:
+**		Whatever needed to be done is done.
+-----------------------------------------------------------------------*/
+
+void vmm_interrupt(ReturnHandler *rh, thread_act_t act) {
+
+	vmmCntrlTable		*CTable;
+	savearea			*sv;
+	boolean_t			inter;
+
+
+
+	kfree((vm_offset_t)rh, sizeof(ReturnHandler));	/* Release the return handler block */
+	
+	inter  = ml_set_interrupts_enabled(FALSE);	/* Disable interruptions for now */
+
+	act->mact.emPendRupts = 0;					/* Say that there are no more interrupts pending */
+	CTable = act->mact.vmmControl;				/* Get the pointer to the table */
+	
+	if(!((unsigned int)CTable & -2)) return;	/* Leave if we aren't doing VMs any more... */
+
+	if(act->mact.vmmCEntry && (act->mact.vmmCEntry->vmmFlags & vmmXStop)) {	/* Do we need to stop the running guy? */
+		sv = (savearea *)find_user_regs(act);	/* Get the user state registers */
+		if(!sv) {								/* Did we find something? */
+			panic("vmm_interrupt: no user context; act = %08X\n", act);
+		}
+		sv->save_exception = kVmmStopped*4;		/* Set a "stopped" exception */
+		vmm_force_exit(act, sv);				/* Intercept a running VM */
+	}
+	ml_set_interrupts_enabled(inter);			/* Put interrupts back to what they were */
 
 	return;
 }

@@ -453,15 +453,19 @@ synthfs_vget(mp, ino, vpp)
 	}
 
 loop:
+	simple_lock(&mntvnode_slock);
 	LIST_FOREACH(vp, &mp->mnt_vnodelist, v_mntvnodes) {
 		if (VTOS(vp)->s_nodeid == *((unsigned long *)ino)) {
             if (vget(vp, LK_EXCLUSIVE, current_proc()) != 0) {
+				simple_unlock(&mntvnode_slock);
                 goto loop;
             };
+			simple_unlock(&mntvnode_slock);
 			*vpp = vp;
 			return 0;
 		};
 	};
+	simple_unlock(&mntvnode_slock);
 	*vpp = NULL;
 	return -1;
 }

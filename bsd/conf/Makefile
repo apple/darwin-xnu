@@ -24,11 +24,11 @@ $(OBJROOT)/$(KERNEL_CONFIG)_$(ARCH_CONFIG)/$(COMPONENT)/doconf:
 	make build_setup 
 
 $(COMPOBJROOT)/$(BSD_KERNEL_CONFIG)/Makefile :  $(SOURCE)/MASTER  \
-	$(SOURCE)/MASTER.$(arch_config) \
+	$(SOURCE)/MASTER.$(ARCH_CONFIG_LC) \
 	$(SOURCE)/Makefile.template  \
-	$(SOURCE)/Makefile.$(arch_config)  \
+	$(SOURCE)/Makefile.$(ARCH_CONFIG_LC)  \
 	$(SOURCE)/files \
-	$(SOURCE)/files.$(arch_config) \
+	$(SOURCE)/files.$(ARCH_CONFIG_LC) \
 	$(OBJROOT)/$(KERNEL_CONFIG)_$(ARCH_CONFIG)/$(COMPONENT)/doconf
 	@echo "Running doconf for $(BSD_KERNEL_CONFIG)";
 	(doconf_target=$(addsuffix /conf, $(TARGET)); \
@@ -37,7 +37,7 @@ $(COMPOBJROOT)/$(BSD_KERNEL_CONFIG)/Makefile :  $(SOURCE)/MASTER  \
 	cd $${doconf_target}; \
 	rm -f $(notdir $?); \
 	cp  $? $${doconf_target}; \
-	$(OBJROOT)/$(KERNEL_CONFIG)_$(ARCH_CONFIG)/$(COMPONENT)/doconf -c -cpu $(arch_config) -d  $(TARGET)/$(BSD_KERNEL_CONFIG) $(BSD_KERNEL_CONFIG); \
+	$(OBJROOT)/$(KERNEL_CONFIG)_$(ARCH_CONFIG)/$(COMPONENT)/doconf -c -cpu $(ARCH_CONFIG_LC) -d  $(TARGET)/$(BSD_KERNEL_CONFIG) $(BSD_KERNEL_CONFIG); \
 	);
 
 .ORDER: $(COMPOBJROOT)/$(BSD_KERNEL_CONFIG)/Makefile 
@@ -52,6 +52,7 @@ do_all: do_setup_conf
 	${MAKE} MAKEFILES=$(TARGET)/$(BSD_KERNEL_CONFIG)/Makefile	\
 		SOURCE=$${next_source}			\
 		TARGET=$(TARGET)					\
+		INCL_MAKEDEP=FALSE	\
 		build_all	\
 	);		\
 	echo "[ $(SOURCE) ] Returning do_all $(COMPONENT) $(BSD_KERNEL_CONFIG) $(ARCH_CONFIG) $(TARGET)";

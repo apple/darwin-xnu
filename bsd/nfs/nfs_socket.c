@@ -948,19 +948,7 @@ nfs_reply(myrep)
 			return (0);
 		if (error)
 			return (error);
-
-		/*
-		 * This is being checked after nfs_receive, but
-		 * it doesn't hurt to check prior, since nfs_receive
-		 * will dereference r_nmp also. Bullet-proofing code
-		 * since changing funnels since the request to the 
-		 * receive can leave us vulnerable for kernel to unmount
-		 * us.
-		 */
-		if (!myrep->r_nmp) {
-			NFSTRACE4(NFSTRC_ECONN, myrep->r_xid, myrep, nmp, 1);
-			return (ECONNABORTED);
-		}
+		
 		/*
 		 * If we slept after putting bits otw, then reply may have
 		 * arrived.  In which case returning is required, or we
@@ -973,11 +961,12 @@ nfs_reply(myrep)
 			return (0);
 		}
 		/*
-		 * Get the next Rpc reply off the socket
+		 * Get the next Rpc reply off the socket. Assume myrep->r_nmp
+		 * is still in tact by checks done in nfs_rcvlock.
 		 */
 		error = nfs_receive(myrep, &nam, &mrep);
 		/*
-		 * Bailout asap if nfsmount struct gone (unmounted)
+		 * Bailout asap if nfsmount struct gone (unmounted). 
 		 */
 		if (!myrep->r_nmp) {
 			NFSTRACE4(NFSTRC_ECONN, myrep->r_xid, myrep, nmp, 2);
@@ -1952,6 +1941,12 @@ nfs_sndlock(flagp, rep)
 			slpflag = 0;
 			slptimeo = 2 * hz;
 		}
+		/*
+		 * Make sure while we slept that the mountpoint didn't go away.
+		 * nfs_sigintr and callers expect it in tact.
+		 */
+		if (!rep->r_nmp) 
+			return (ECONNABORTED); /* don't have lock until out of loop */
 	}
 	*flagp |= NFSMNT_SNDLOCK;
 	return (0);
@@ -2006,6 +2001,12 @@ nfs_rcvlock(rep)
 			slpflag = 0;
 			slptimeo = 2 * hz;
 		}
+		/*
+		 * Make sure while we slept that the mountpoint didn't go away.
+		 * nfs_sigintr and caller nfs_reply expect it in tact.
+		 */
+		if (!rep->r_nmp) 
+			return (ECONNABORTED); /* don't have lock until out of loop */
 	}
 	/*
 	 * nfs_reply will handle it if reply already arrived.

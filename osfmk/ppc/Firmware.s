@@ -323,6 +323,17 @@ ENTRY(CreateShutdownCTX, TAG_NO_FRAME_USED)
 			sc										/* Do it to it */
 			blr										/* Bye bye, Birdie... */
 
+/*
+ *			This is the glue to choke system
+ */
+ 
+ENTRY(ChokeSys, TAG_NO_FRAME_USED)
+			
+			lis		r0,HIGH_ADDR(Choke)				/* Top half of Choke firmware call number */
+			ori		r0,r0,LOW_ADDR(Choke)			/* Bottom half */
+			sc										/* Do it to it */
+			blr										/* Bye bye, Birdie... */
+
 /* 
  *			Used to initialize the SCC for debugging output
  */
@@ -1604,14 +1615,18 @@ ENTRY(CreateFakeDECLL, TAG_NO_FRAME_USED)
 			blr										/* Return to interrupt handler */
 
 /*
- *			Choke the system.  This is just a dummy for now,
- *			but we'll eventually do something.
+ *			Choke the system.  
  */
 
 ENTRY(DoChokeLL, TAG_NO_FRAME_USED)
 
-			BREAKPOINT_TRAP							/* Dummy for now */
-
+			mfsprg	r11,0							; Get the per_proc address 
+			lwz		r11,PP_TEMPWORK1(r11)			; Restore the return address 
+			li		r3,T_CHOKE						; Set external interrupt value
+			mtlr	r11								; Restore the LR 
+			stw		r3,saveexception(r13)			; Modify the exception type to external
+			blr										; Return to interrupt handler 
+			
 /*
  *			Set the low level trace flags 
  */
@@ -2107,6 +2122,7 @@ LEXT(stFloat)
 			.globl	EXT(stVectors)
 
 LEXT(stVectors)
+#if 0
 
 			mfpvr	r6					; Get machine type
 			mr		r5,r3				; Save area address
@@ -2191,6 +2207,8 @@ LEXT(stVectors)
 			lvxl	v31,0,r5
 			mtmsr	r0
 			isync
+
+#endif
 			blr
 
 
@@ -2202,6 +2220,7 @@ LEXT(stVectors)
 			.globl	EXT(stSpecrs)
 
 LEXT(stSpecrs)
+#if 0
 
 			mfmsr	r0					; Save the MSR
 			rlwinm	r4,r0,0,MSR_EE_BIT,MSR_EE_BIT	; Turn off interruptions
@@ -2332,4 +2351,6 @@ nnmax:		stw		r4,(48*4)(r3)
 			
 			mtmsr	r0
 			isync
+
+#endif
 			blr

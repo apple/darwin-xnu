@@ -70,7 +70,7 @@ keydb_newsecpolicy()
 {
 	struct secpolicy *p;
 
-	p = (struct secpolicy *)_MALLOC(sizeof(*p), M_SECA, M_NOWAIT);
+	p = (struct secpolicy *)_MALLOC(sizeof(*p), M_SECA, M_WAITOK);
 	if (!p)
 		return p;
 	bzero(p, sizeof(*p));
@@ -94,7 +94,7 @@ keydb_newsecashead()
 	struct secashead *p;
 	int i;
 
-	p = (struct secashead *)_MALLOC(sizeof(*p), M_SECA, M_NOWAIT);
+	p = (struct secashead *)_MALLOC(sizeof(*p), M_SECA, M_WAITOK);
 	if (!p)
 		return p;
 	bzero(p, sizeof(*p));
@@ -119,7 +119,7 @@ keydb_newsecasvar()
 {
 	struct secasvar *p;
 
-	p = (struct secasvar *)_MALLOC(sizeof(*p), M_SECA, M_NOWAIT);
+	p = (struct secasvar *)_MALLOC(sizeof(*p), M_SECA, M_WAITOK);
 	if (!p)
 		return p;
 	bzero(p, sizeof(*p));
@@ -179,13 +179,13 @@ keydb_newsecreplay(wsize)
 {
 	struct secreplay *p;
 
-	p = (struct secreplay *)_MALLOC(sizeof(*p), M_SECA, M_NOWAIT);
+	p = (struct secreplay *)_MALLOC(sizeof(*p), M_SECA, M_WAITOK);
 	if (!p)
 		return p;
 
 	bzero(p, sizeof(*p));
 	if (wsize != 0) {
-		p->bitmap = (caddr_t)_MALLOC(wsize, M_SECA, M_NOWAIT);
+		p->bitmap = (caddr_t)_MALLOC(wsize, M_SECA, M_WAITOK);
 		if (!p->bitmap) {
 			_FREE(p, M_SECA);
 			return NULL;
@@ -214,7 +214,7 @@ keydb_newsecreg()
 {
 	struct secreg *p;
 
-	p = (struct secreg *)_MALLOC(sizeof(*p), M_SECA, M_NOWAIT);
+	p = (struct secreg *)_MALLOC(sizeof(*p), M_SECA, M_WAITOK);
 	if (p)
 		bzero(p, sizeof(*p));
 	return p;

@@ -25,72 +25,86 @@
 #include "fakePPCStructs.h"
 
 boot_args fakePPCBootArgs = {
-	0, // Revision
-        kBootArgsVersion, // Version
-        "",     // CommandLine
-        0,      // PhysicalDRAM
-        0,      // machine_type
-        0,      // deviceTreeP
-        0,      // deviceTreeLength
-        0,      // topOfKernelData
+    0,                // Revision
+    kBootArgsVersion, // Version
+    "",               // CommandLine
+    0,                // PhysicalDRAM
+    0,                // machine_type
+    0,                // deviceTreeP
+    0,                // deviceTreeLength
+    0,                // topOfKernelData
 };
 
-void * createdt(dt_init *template, long *retSize)
+void * createdt(dt_init * template, long * retSize)
 {
-    dt_init *	next;
-    int 	size, allocSize;
+    dt_init *    next;
+    int          size, allocSize;
     vm_address_t out, saveout;
-    void *	source;
+    void *       source;
     
     // calc size of expanded data
-    for( next = template, allocSize = 0;
-	next;
-	next++) {
-
-	if( next->nodeInit.zero == 0) {
-	    if( next->nodeInit.nProps == 0)
-		break;
-	    allocSize += 2 * sizeof( long);
-	} else
-	    allocSize += (32 + 4 + 3 + next->propInit.length) & (-4);
+    for ( next = template, allocSize = 0;
+          next;
+          next++ )
+    {
+        if ( next->nodeInit.zero == 0 )
+        {
+            if( next->nodeInit.nProps == 0) break;
+            allocSize += 2 * sizeof( long);
+        }
+        else if ( next->dataInit.one == 1 )
+        {
+            allocSize += *(next->dataInit.length);
+        }
+        else
+        {
+            allocSize += (32 + 4 + 3 + next->propInit.length) & (-4);
+        }
     }
-    saveout = out = kalloc( allocSize);
+    saveout = out = kalloc(allocSize);
+    if ( out == 0 ) return 0;
 
     // copy out
-    for( next = template;
-	next;
-	next++) {
-
-	if( next->nodeInit.zero == 0) {
-
-	    if( next->nodeInit.nProps == 0)
-		break;
-	    source = &next->nodeInit.nProps;
-	    size = 2 * sizeof( long);
-
-	} else {
-
-	    bcopy( next->propInit.name, out, 32);
-	    out += 32;
-	    size = next->propInit.length;
-	    *(long *)out = size;
-	    out += sizeof( long);
-	    if( size == 4)
-		source = &next->propInit.value;
-	    else {
-		source = next->propInit.value;
-		size = (size + 3) & (-4);
-	    }
-	}
-        bcopy( source, out, size);
-	out += size;
+    for ( next = template; next; next++)
+    {
+        if ( next->nodeInit.zero == 0 )
+        {
+            if ( next->nodeInit.nProps == 0 ) break;
+            source = &next->nodeInit.nProps;
+            size = 2 * sizeof( long);
+        }
+        else if ( next->dataInit.one == 1 )
+        {
+            *(next->dataInit.address) = out;
+            source = 0;
+            size   = *(next->dataInit.length);
+        }
+        else
+        {
+            bcopy( next->propInit.name, (void *)out, 32);
+            out += 32;
+            size = next->propInit.length;
+            *(long *)out = size;
+            out += sizeof(long);
+            if ( size == 4 )
+                source = &next->propInit.value;
+            else {
+                source = next->propInit.value;
+                size = (size + 3) & (-4);
+            }
+        }
+        if ( source )
+            bcopy(source, (void *)out, size);
+        else
+            bzero((void *)out, size);
+        out += size;
     }
 
     if( allocSize != (out - saveout))
         printf("WARNING: DT corrupt (%x)\n", (out - saveout) - allocSize);
 
     *retSize = allocSize;
-    return( (void *)saveout);
+    return( (void *)saveout );
 }
 
 unsigned char *nptr;

@@ -104,6 +104,11 @@
 #define DBG_FNC_UDP_INPUT	NETDBG_CODE(DBG_NETUDP, (5 << 8))
 #define DBG_FNC_UDP_OUTPUT	NETDBG_CODE(DBG_NETUDP, (6 << 8) | 1)
 
+
+#ifndef offsetof               /* XXX */
+#define        offsetof(type, member)  ((size_t)(&((type *)0)->member))
+#endif
+
 #define __STDC__ 1
 /*
  * UDP protocol implementation.
@@ -128,6 +133,8 @@ struct	inpcbinfo udbinfo;
 #ifndef UDBHASHSIZE
 #define UDBHASHSIZE 16
 #endif
+
+extern  int apple_hwcksum_rx;
 
 struct	udpstat udpstat;	/* from udp_var.h */
 SYSCTL_STRUCT(_net_inet_udp, UDPCTL_STATS, stats, CTLFLAG_RD,
@@ -243,6 +250,8 @@ udp_input(m, iphlen)
 	if (iphlen > sizeof (struct ip)) {
 		ip_stripoptions(m, (struct mbuf *)0);
 		iphlen = sizeof(struct ip);
+		if (m->m_pkthdr.csum_flags & CSUM_TCP_SUM16)
+			m->m_pkthdr.csum_flags = 0; /* invalidate hwcksum */
 	}
 
 	/*
@@ -285,9 +294,27 @@ udp_input(m, iphlen)
 	 * Checksum extended UDP header and data.
 	 */
 	if (uh->uh_sum) {
-		bzero(((struct ipovly *)ip)->ih_x1, 9);
-		((struct ipovly *)ip)->ih_len = uh->uh_ulen;
-		uh->uh_sum = in_cksum(m, len + sizeof (struct ip));
+               if (m->m_pkthdr.csum_flags & CSUM_DATA_VALID) {
+                        if (m->m_pkthdr.csum_flags & CSUM_PSEUDO_HDR)
+                                uh->uh_sum = m->m_pkthdr.csum_data;
+                        else {
+                        	if (apple_hwcksum_rx && (m->m_pkthdr.csum_flags & CSUM_TCP_SUM16)) {
+					bzero(((struct ipovly *)ip)->ih_x1, 9);
+					((struct ipovly *)ip)->ih_len = uh->uh_ulen;
+					uh->uh_sum = in_addword(in_cksum(m, sizeof(struct ip)),
+						 m->m_pkthdr.csum_data & 0xFFFF);
+				}
+				else  {
+			           goto doudpcksum;
+				}
+			}
+                      uh->uh_sum ^= 0xffff;
+                } else {
+doudpcksum:
+			bzero(((struct ipovly *)ip)->ih_x1, 9);
+			((struct ipovly *)ip)->ih_len = uh->uh_ulen;
+			uh->uh_sum = in_cksum(m, len + sizeof (struct ip));
+		}
 		if (uh->uh_sum) {
 			udpstat.udps_badsum++;
 			m_freem(m);
@@ -633,6 +660,11 @@ udp_pcblist SYSCTL_HANDLER_ARGS
 	error = SYSCTL_OUT(req, &xig, sizeof xig);
 	if (error)
 		return error;
+        /*
+         * We are done if there is no pcb
+         */
+        if (n == 0)  
+            return 0; 
 
 	inp_list = _MALLOC(n * sizeof *inp_list, M_TEMP, M_WAITOK);
 	if (inp_list == 0) {
@@ -761,11 +793,14 @@ udp_output(inp, m, addr, control, p)
 	/*
 	 * Stuff checksum and output datagram.
 	 */
-	ui->ui_sum = 0;
 	if (udpcksum) {
-	    if ((ui->ui_sum = in_cksum(m, sizeof (struct udpiphdr) + len)) == 0)
-		ui->ui_sum = 0xffff;
-	}
+                ui->ui_sum = in_pseudo(ui->ui_src.s_addr, ui->ui_dst.s_addr,
+                    htons((u_short)len + sizeof(struct udphdr) + IPPROTO_UDP));
+                m->m_pkthdr.csum_flags = CSUM_UDP; 
+                m->m_pkthdr.csum_data = offsetof(struct udphdr, uh_sum);
+        } 
+	else
+		ui->ui_sum = 0;
 	((struct ip *)ui)->ip_len = sizeof (struct udpiphdr) + len;
 	((struct ip *)ui)->ip_ttl = inp->inp_ip_ttl;	/* XXX */
 	((struct ip *)ui)->ip_tos = inp->inp_ip_tos;	/* XXX */

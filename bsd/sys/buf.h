@@ -237,8 +237,8 @@ struct buf *incore __P((struct vnode *, daddr_t));
 u_int	minphys __P((struct buf *bp));
 int physio __P((void (*)(struct buf *), struct buf *, dev_t, int ,  u_int (*)(struct buf *), struct uio *, int ));
 int count_busy_buffers __P((void));
-struct buf *alloc_io_buf __P((struct vnode *vp));
-void free_io_buf __P((struct buf *bp));
+struct buf *alloc_io_buf __P((struct vnode *, int));
+void free_io_buf __P((struct buf *));
 __END_DECLS
 
 /*

@@ -248,23 +248,26 @@ LEXT(ml_phys_write)
  */
 
 ;			Force a line boundry here
-			.align	5
-			.globl	EXT(set_interrupts_enabled)
+			.align  5
+			.globl  EXT(ml_set_interrupts_enabled)
+ 
+LEXT(ml_set_interrupts_enabled)
 
-LEXT(set_interrupts_enabled)
-
+			mfsprg	r7,0
+			lwz		r4,PP_INTS_ENABLED(r7)
+			mr.		r4,r4
+			beq-	EXT(fake_set_interrupts_enabled)
 			mfmsr	r5								; Get the current MSR
 			mr		r4,r3							; Save the old value
 			rlwinm	r3,r5,17,31,31					; Set return value
 			rlwimi	r5,r4,15,16,16					; Insert new EE bit
-			andi.   r7,r5,lo16(MASK(MSR_EE))			; Interruptions
+			andi.   r8,r5,lo16(MASK(MSR_EE))			; Interruptions
 			bne     CheckPreemption
 NoPreemption:
 			mtmsr   r5                              ; Slam enablement
 			blr
 
 CheckPreemption:
-			mfsprg	r7,0
 			lwz		r8,PP_NEED_AST(r7)
 			lwz		r7,PP_CPU_DATA(r7)
 			li		r6,AST_URGENT
@@ -280,6 +283,24 @@ CheckPreemption:
 			mtmsr	r5
 			blr
 
+
+/*  Emulate a decremeter exception
+ *
+ *	void machine_clock_assist(void)
+ *
+ */
+
+;			Force a line boundry here
+			.align  5
+			.globl  EXT(machine_clock_assist)
+ 
+LEXT(machine_clock_assist)
+
+			mfsprg	r7,0
+			lwz		r4,PP_INTS_ENABLED(r7)
+			mr.		r4,r4
+			beq-	EXT(CreateFakeDEC)
+			blr
 
 /*  Set machine into idle power-saving mode. 
  *
@@ -537,7 +558,7 @@ LEXT(cacheInit)
 			mfsprg	r11,2							; Get CPU specific features
 			mfmsr	r7								; Get the current MSR
 			rlwinm	r4,r9,0,dpm+1,doze-1			; Clear all possible power-saving modes (also disable DPM)	
-			rlwimi	r11,r11,pfL23lckb+1,31,31		; Move pfL23lck to another position (to keep from using non-volatile CRs)
+			rlwimi	r11,r11,pfLClckb+1,31,31		; Move pfLClck to another position (to keep from using non-volatile CRs)
 			rlwinm	r5,r7,0,MSR_DR_BIT+1,MSR_IR_BIT-1	; Turn off translation		
 			rlwinm	r5,r5,0,MSR_EE_BIT+1,MSR_EE_BIT-1	; Turn off interruptions
 			mtcrf	0x87,r11						; Get the feature flags
@@ -565,7 +586,6 @@ cinoDSS:	lis		r5,hi16(EXT(tlb_system_lock))	; Get the TLBIE lock
 			ori		r5,r5,lo16(EXT(tlb_system_lock))	; Grab up the bottom part
 			
 			li		r6,0							; Start at 0
-			lwarx	r2,0,r5							; ?
 
 citlbhang:	lwarx	r2,0,r5							; Get the TLBIE lock
 			mr.		r2,r2							; Is it locked?
@@ -621,7 +641,74 @@ ciwdl1f:	mfspr	r8,msscr0						; Get the control register again
 ;
 
 ciswdl1:	lwz		r0,pfl1dSize(r12)				; Get the level 1 cache size
-			rlwinm	r2,r0,0,1,30					; Double it
+					
+			bf		31,cisnlck						; Skip if pfLClck not set...
+			
+			mfspr	r4,msscr0						; ?
+			rlwinm	r6,r4,0,0,l2pfes-1				; ?
+			mtspr	msscr0,r6						; Set it
+			sync
+			isync
+			
+			mfspr	r8,ldstcr						; Save the LDSTCR
+			li		r2,1							; Get a mask of 0x01
+			lis		r3,0xFFF0						; Point to ROM
+			rlwinm	r11,r0,29,3,31					; Get the amount of memory to handle all indexes
+
+			li		r6,0							; Start here
+			
+cisiniflsh:	dcbf	r6,r3							; Flush each line of the range we use
+			addi	r6,r6,32						; Bump to the next
+			cmplw	r6,r0							; Have we reached the end?
+			blt+	cisiniflsh						; Nope, continue initial flush...
+			
+			sync									; Make sure it is done
+	
+			addi	r11,r11,-1						; Get mask for index wrap	
+			li		r6,0							; Get starting offset
+						
+cislckit:	not		r5,r2							; Lock all but 1 way
+			rlwimi	r5,r8,0,0,23					; Build LDSTCR
+			mtspr	ldstcr,r5						; Lock a way
+			sync									; Clear out memory accesses
+			isync									; Wait for all
+			
+			
+cistouch:	lwzx	r10,r3,r6						; Pick up some trash
+			addi	r6,r6,32						; Go to the next index
+			and.	r0,r6,r11						; See if we are about to do next index
+			bne+	cistouch						; Nope, do more...
+			
+			sync									; Make sure it is all done
+			isync									
+			
+			sub		r6,r6,r11						; Back up to start + 1
+			addi	r6,r6,-1						; Get it right
+			
+cisflush:	dcbf	r3,r6							; Flush everything out
+			addi	r6,r6,32						; Go to the next index
+			and.	r0,r6,r11						; See if we are about to do next index
+			bne+	cisflush						; Nope, do more...
+
+			sync									; Make sure it is all done
+			isync									
+			
+			
+			rlwinm.	r2,r2,1,24,31					; Shift to next way
+			bne+	cislckit						; Do this for all ways...
+
+			mtspr	ldstcr,r8						; Slam back to original
+			sync
+			isync
+			
+			mtspr	msscr0,r4						; ?
+			sync
+			isync
+
+			b		cinoL1							; Go on to level 2...
+			
+
+cisnlck:	rlwinm	r2,r0,0,1,30					; Double cache size
 			add		r0,r0,r2						; Get 3 times cache size
 			rlwinm	r0,r0,26,6,31					; Get 3/2 number of cache lines
 			lis		r3,0xFFF0						; Dead recon ROM address for now
@@ -637,7 +724,8 @@ ciinvdl1:	sync									; Make sure all flushes have been committed
 			rlwinm	r8,r8,0,dce+1,ice-1				; Clear cache enables
 			mtspr	hid0,r8							; and turn off L1 cache
 			sync									; Make sure all is done
-			
+			isync
+
 			ori		r8,r8,lo16(icem|dcem|icfim|dcfim)	; Set the HID0 bits for enable, and invalidate
 			sync
 			isync										
@@ -646,6 +734,7 @@ ciinvdl1:	sync									; Make sure all flushes have been committed
 			rlwinm	r8,r8,0,dcfi+1,icfi-1			; Turn off the invalidate bits
 			mtspr	hid0,r8							; Turn off the invalidate (needed for some older machines)
 			sync
+
 			
 cinoL1:
 ;
@@ -665,7 +754,7 @@ cinoL1:
 			
 			mr		r10,r3							; Take a copy now
 			
-			bf		31,cinol2lck					; Skip if pfL23lck not set...
+			bf		31,cinol2lck					; Skip if pfLClck not set...
 			
 			oris	r10,r10,hi16(l2ionlym|l2donlym)	; Set both instruction- and data-only
 			sync
@@ -686,9 +775,24 @@ cihwfl2:	mfspr	r10,l2cr						; Get back the L2CR
 ciswfl2:
 			lwz		r0,pfl2Size(r12)				; Get the L2 size
 			oris	r2,r3,hi16(l2dom)				; Set L2 to data only mode
-			mtspr	l2cr,r2							; Go into data only mode
-			sync									; Clean it up
-			
+
+			b		ciswfl2doa					; Branch to next line...
+
+			.align  5
+ciswfl2doc:
+			mtspr	l2cr,r2							; Disable L2
+			sync
+			isync
+			b		ciswfl2dod					; It is off, go invalidate it...
+
+ciswfl2doa:
+			b		ciswfl2dob					; Branch to next...
+
+ciswfl2dob:
+			sync								; Finish memory stuff
+			isync								; Stop speculation
+			b		ciswfl2doc					; Jump back up and turn on data only...
+ciswfl2dod:
 			rlwinm	r0,r0,27,5,31					; Get the number of lines
 			lis		r10,0xFFF0						; Dead recon ROM for now
 			mtctr	r0								; Set the number of lines
@@ -817,7 +921,10 @@ cinol3:
 ;			Invalidate and turn on L1s
 ;
 
-cinol2a:	rlwinm	r8,r9,0,dce+1,ice-1				; Clear the I- and D- cache enables
+cinol2a:	
+			bt		31,cinoexit						; Skip if pfLClck set...
+
+			rlwinm	r8,r9,0,dce+1,ice-1				; Clear the I- and D- cache enables
 			mtspr	hid0,r8							; Turn off dem caches
 			sync
 			
@@ -827,7 +934,8 @@ cinol2a:	rlwinm	r8,r9,0,dce+1,ice-1				; Clear the I- and D- cache enables
 			isync											
 
 			mtspr	hid0,r8							; Start the invalidate and turn on L1 cache	
-			mtspr	hid0,r9							; Turn off the invalidate (needed for some older machines)
+
+cinoexit:	mtspr	hid0,r9							; Turn off the invalidate (needed for some older machines) and restore entry conditions
 			sync
 			mtmsr	r7								; Restore MSR to entry
 			isync

@@ -51,6 +51,7 @@ extern "C" {
 
 #include <kern/thread_call.h>
 #include <kern/clock.h>
+
 /*
  * min/max macros.
  */
@@ -281,7 +282,7 @@ static inline IOFixed IOFixedDivide(IOFixed a, IOFixed b)
 
 void IOPanic(const char *reason);
 
-/* The AbsoluteTime clock API exported by kern/clock.h
+/* The API exported by kern/clock.h
    should be used for high resolution timing. */
 
 void IOGetTime( mach_timespec_t * clock_time);

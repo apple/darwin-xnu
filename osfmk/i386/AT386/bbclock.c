@@ -286,6 +286,7 @@ int
 yeartoday(
 	int	year)
 {
+  year += 1900;
 	return((year % 4) ? 365 :
 	       ((year % 100) ? 366 : ((year % 400) ? 365: 366)));
 }

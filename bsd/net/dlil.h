@@ -95,6 +95,7 @@ struct dlil_pr_flt_str {
 			   caddr_t	ioctl_arg);
 
     int	(*filter_detach)(caddr_t  cookie);
+    u_long	reserved[2];
 };
 
 struct dlil_if_flt_str {
@@ -121,7 +122,8 @@ struct dlil_if_flt_str {
     int	(*filter_if_free)(caddr_t      cookie,
 			  struct ifnet *ifnet_ptr);
 
-    int	(*filter_detach)(caddr_t  cookie);
+    int	(*filter_detach)(caddr_t  cookie);	
+    u_long	reserved[2];
 };
 
 
@@ -176,6 +178,7 @@ struct if_proto {
     dl_offer_func		dl_offer;
     dl_ioctl_func		dl_ioctl;
     u_long			protocol_family;
+    u_long			reserved[4];
 
 };
 
@@ -236,6 +239,7 @@ struct dlil_proto_reg_str {
     dl_event_func		event;
     dl_offer_func		offer;
     dl_ioctl_func		ioctl;
+    u_long			reserved[4];
 };
 
 
@@ -287,6 +291,7 @@ struct dlil_ifmod_reg_str {
     int (*del_proto)(struct if_proto  *proto, u_long dl_tag);
     int (*ifmod_ioctl)(struct ifnet *ifp, u_long ioctl_cmd, caddr_t data);
     int	(*shutdown)();
+    u_long	reserved[4];
 };
 
 

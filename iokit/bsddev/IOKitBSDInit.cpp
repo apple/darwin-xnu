@@ -24,9 +24,6 @@
 #include <IOKit/IOService.h>
 #include <IOKit/IODeviceTreeSupport.h>
 #include <IOKit/IOKitKeys.h>
-#include <IOKit/storage/IOMedia.h>
-#include <IOKit/network/IONetworkStack.h>
-#include <IOKit/network/IONetworkInterface.h>
 #include <IOKit/IOPlatformExpert.h>
 
 #include <sys/disklabel.h>
@@ -76,6 +73,28 @@ OSDictionary * IOBSDNameMatching( const char * name )
 	str->release();
 
     return( 0 );
+}
+
+OSDictionary * IOCDMatching( const char * name )
+{
+    OSDictionary *	dict;
+    const OSSymbol *	str;
+
+	dict = IOService::serviceMatching( "IOMedia" );
+	if( dict == 0 ) {
+	   IOLog("Unable to find IOMedia\n");
+	   return 0;
+	} 
+
+	str = OSSymbol::withCString( "CD_ROM_Mode_1" );
+	if( str == 0 ) {
+	    dict->release();
+	    return 0;
+	}
+
+	dict->setObject( "Content", (OSObject *)str );
+	str->release();
+        return( dict );
 }
 
 OSDictionary * IONetworkMatching(  const char * path,
@@ -152,7 +171,7 @@ OSDictionary * IONetworkNamePrefixMatching( const char * prefix )
         if ( str == 0 )
             continue;
 
-        propDict->setObject( kIOInterfaceNamePrefix, (OSObject *) str );
+        propDict->setObject( "IOInterfaceNamePrefix", (OSObject *) str );
         str->release();
         str = 0;
 
@@ -174,26 +193,57 @@ OSDictionary * IONetworkNamePrefixMatching( const char * prefix )
     return( 0 );
 }
 
-static bool IORegisterNetworkInterface( IONetworkInterface * netif )
+static bool IORegisterNetworkInterface( IOService * netif )
 {
-    IONetworkStack * stack;
+    // A network interface is typically named and registered
+    // with BSD after receiving a request from a user space
+    // "namer". However, for cases when the system needs to
+    // root from the network, this registration task must be
+    // done inside the kernel and completed before the root
+    // device is handed to BSD.
 
-    if (( stack = IONetworkStack::getNetworkStack() ))
-    {
-        stack->registerInterface( netif, netif->getNamePrefix() );
+    IOService *    stack;
+    OSNumber *     zero    = 0;
+    OSString *     path    = 0;
+    OSDictionary * dict    = 0;
+    char *         pathBuf = 0;
+    int            len;
+    enum { kMaxPathLen = 512 };
+
+    do {
+        stack = IOService::waitForService(
+                IOService::serviceMatching("IONetworkStack") );
+        if ( stack == 0 ) break;
+
+        dict = OSDictionary::withCapacity(3);
+        if ( dict == 0 ) break;
+
+        zero = OSNumber::withNumber((UInt64) 0, 32);
+        if ( zero == 0 ) break;
+
+        pathBuf = (char *) IOMalloc( kMaxPathLen );
+        if ( pathBuf == 0 ) break;
+
+        len = kMaxPathLen;
+        if ( netif->getPath( pathBuf, &len, gIOServicePlane )
+             == false ) break;
+
+        path = OSString::withCStringNoCopy( pathBuf );
+        if ( path == 0 ) break;
+
+        dict->setObject( "IOInterfaceUnit", zero );
+        dict->setObject( kIOPathMatchKey,   path );
+
+        stack->setProperties( dict );
     }
+    while ( false );
+
+    if ( zero ) zero->release();
+    if ( path ) path->release();
+    if ( dict ) dict->release();
+    if ( pathBuf ) IOFree(pathBuf, kMaxPathLen);
 
 	return ( netif->getProperty( kIOBSDNameKey ) != 0 );
-}
-
-static void IORegisterPrimaryNetworkInterface()
-{
-    IONetworkStack * stack;
-
-    if (( stack = IONetworkStack::getNetworkStack() ))
-    {
-        stack->registerPrimaryInterface( true );
-    }    
 }
 
 OSDictionary * IODiskMatching( const char * path, char * buf, int maxLen )
@@ -293,6 +343,7 @@ kern_return_t IOFindBSDRoot( char * rootName,
     const char *	look = 0;
     int			len;
     bool		forceNet = false;
+    bool		debugInfoPrintedOnce = false;
 
     static int		mountAttempts = 0;
 
@@ -340,10 +391,11 @@ kern_return_t IOFindBSDRoot( char * rootName,
 	// from OpenFirmware path
 	IOLog("From path: \"%s\", ", look);
 
-	if( forceNet || (0 == strncmp( look, "enet", strlen( "enet" ))) )
-           matching = IONetworkMatching( look, str, kMaxPathBuf );
-        else
+	if( forceNet || (0 == strncmp( look, "enet", strlen( "enet" ))) ) {
+            matching = IONetworkMatching( look, str, kMaxPathBuf );
+        } else {
             matching = IODiskMatching( look, str, kMaxPathBuf );
+        }
     }
 
     if( (!matching) && rdBootVar[0] ) {
@@ -352,10 +404,13 @@ kern_return_t IOFindBSDRoot( char * rootName,
 	if( look[0] == '*')
 	    look++;
     
-    if ( strncmp( look, "en", strlen( "en" )) == 0 )
-        matching = IONetworkNamePrefixMatching( "en" );
-    else
-        matching = IOBSDNameMatching( look );
+	if ( strncmp( look, "en", strlen( "en" )) == 0 ) {
+	    matching = IONetworkNamePrefixMatching( "en" );
+	} else if ( strncmp( look, "cdrom", strlen( "cdrom" )) == 0 ) { 
+	    matching = IOCDMatching( look );
+	} else {
+	    matching = IOBSDNameMatching( look );
+	}
     }
 
     if( !matching) {
@@ -364,7 +419,7 @@ kern_return_t IOFindBSDRoot( char * rootName,
         matching = IOService::serviceMatching( "IOMedia" );
         astring = OSString::withCStringNoCopy("Apple_UFS");
         if ( astring ) {
-            matching->setObject(kIOMediaContentKey, astring);
+            matching->setObject("Content", astring);
             astring->release();
         }
     }
@@ -378,8 +433,6 @@ kern_return_t IOFindBSDRoot( char * rootName,
         }
     }
 
-    IOService::waitForService(IOService::serviceMatching("IOMediaBSDClient"));
-
     do {
         t.tv_sec = ROOTDEVICETIMEOUT;
         t.tv_nsec = 0;
@@ -388,6 +441,20 @@ kern_return_t IOFindBSDRoot( char * rootName,
 	if( (!service) || (mountAttempts == 10)) {
             PE_display_icon( 0, "noroot");
             IOLog( "Still waiting for root device\n" );
+
+            if( !debugInfoPrintedOnce) {
+                debugInfoPrintedOnce = true;
+                if( gIOKitDebug & kIOLogDTree) {
+                    IOLog("\nDT plane:\n");
+                    IOPrintPlane( gIODTPlane );
+                }
+                if( gIOKitDebug & kIOLogServiceTree) {
+                    IOLog("\nService plane:\n");
+                    IOPrintPlane( gIOServicePlane );
+                }
+                if( gIOKitDebug & kIOLogMemory)
+                    IOPrintMemory();
+            }
 	}
     } while( !service);
     matching->release();
@@ -401,11 +468,10 @@ kern_return_t IOFindBSDRoot( char * rootName,
 
     if ( service
     &&   service->metaCast( "IONetworkInterface" )
-    &&   !IORegisterNetworkInterface( (IONetworkInterface *) service ) )
+    &&   !IORegisterNetworkInterface( service ) )
     {
         service = 0;
     }
-    IORegisterPrimaryNetworkInterface();
 
     if( service) {
 
@@ -444,10 +510,9 @@ kern_return_t IOFindBSDRoot( char * rootName,
 
     IOFree( str,  kMaxPathBuf + kMaxBootVar );
 
-    if( gIOKitDebug & (kIOLogDTree | kIOLogServiceTree | kIOLogMemory)) {
+    if( (gIOKitDebug & (kIOLogDTree | kIOLogServiceTree | kIOLogMemory)) && !debugInfoPrintedOnce) {
 
-	IOSleep(10 * 1000);
-//	IOService::getPlatform()->waitQuiet();
+	IOService::getPlatform()->waitQuiet();
         if( gIOKitDebug & kIOLogDTree) {
             IOLog("\nDT plane:\n");
             IOPrintPlane( gIODTPlane );

@@ -32,8 +32,6 @@
 #ifndef _KERN_TIMER_CALL_H_
 #define _KERN_TIMER_CALL_H_
 
-#include <libkern/OSBase.h>
-
 #include <mach/mach_types.h>
 
 #ifdef MACH_KERNEL_PRIVATE
@@ -47,13 +45,13 @@ typedef void				(*timer_call_func_t)(
 boolean_t
 timer_call_enter(
 	timer_call_t			call,
-	AbsoluteTime			deadline);
+	uint64_t				deadline);
 
 boolean_t
 timer_call_enter1(
 	timer_call_t			call,
 	timer_call_param_t		param1,
-	AbsoluteTime			deadline);
+	uint64_t				deadline);
 
 boolean_t
 timer_call_cancel(
@@ -62,7 +60,7 @@ timer_call_cancel(
 boolean_t
 timer_call_is_delayed(
 	timer_call_t			call,
-	AbsoluteTime			*deadline);
+	uint64_t				*deadline);
 
 #include <kern/call_entry.h>
 

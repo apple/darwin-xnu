@@ -881,6 +881,21 @@ convert_port_to_upl(
 	return upl;
 }
 
+mach_port_t
+convert_upl_to_port(
+	upl_t		upl)
+{
+	return MACH_PORT_NULL;
+}
+
+__private_extern__ void
+upl_no_senders(
+	upl_t			upl,
+	mach_port_mscount_t	mscount)
+{
+	return;
+}
+
 /*
  *	Routine:	convert_port_entry_to_map
  *	Purpose:

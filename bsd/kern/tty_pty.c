@@ -558,9 +558,10 @@ ptsstop(tp, flush)
 }
 
 FREE_BSDSTATIC int
-ptcselect(dev, rw, p)
+ptcselect(dev, rw, wql, p)
 	dev_t dev;
 	int rw;
+	void * wql;
 	struct proc *p;
 {
 	register struct tty *tp = pt_tty[minor(dev)];
@@ -589,7 +590,7 @@ ptcselect(dev, rw, p)
 		    ((pti->pt_flags&PF_PKT && pti->pt_send) ||
 		     (pti->pt_flags&PF_UCNTL && pti->pt_ucntl)))
 			return (1);
-		selrecord(p, &pti->pt_selr);
+		selrecord(p, &pti->pt_selr, wql);
 		break;
 
 
@@ -605,7 +606,7 @@ ptcselect(dev, rw, p)
 				    return (1);
 			}
 		}
-		selrecord(p, &pti->pt_selw);
+		selrecord(p, &pti->pt_selw, wql);
 		break;
 
 	}

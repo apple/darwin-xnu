@@ -336,7 +336,7 @@ AppleATAPIIX::configure(IOService * forProvider,
 
 //	IOSleep(1000);
 
-    provider = OSDynamicCast(IOPCIDevice, forProvider);
+	provider = (IOPCIDevice *)forProvider->metaCast("IOPCIDevice");
 	if (!provider)
 		return false;
 	

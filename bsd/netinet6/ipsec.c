@@ -1044,7 +1044,7 @@ ipsec_newpcbpolicy()
 {
 	struct inpcbpolicy *p;
 
-	p = (struct inpcbpolicy *)_MALLOC(sizeof(*p), M_SECA, M_NOWAIT);
+	p = (struct inpcbpolicy *)_MALLOC(sizeof(*p), M_SECA, M_WAITOK);
 	return p;
 }
 
@@ -1166,7 +1166,7 @@ ipsec_deepcopy_policy(src)
 	q = &newchain;
 	for (p = src->req; p; p = p->next) {
 		*q = (struct ipsecrequest *)_MALLOC(sizeof(struct ipsecrequest),
-			M_SECA, M_NOWAIT);
+			M_SECA, M_WAITOK);
 		if (*q == NULL)
 			goto fail;
 		bzero(*q, sizeof(**q));

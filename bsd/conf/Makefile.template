@@ -28,6 +28,9 @@ include $(MakeInc_def)
 #
 CFLAGS+= -imacros meta_features.h -DARCH_PRIVATE -DKERNEL -DDRIVER_PRIVATE -D_KERNEL_BUILD -DKERNEL_BUILD -DMACH_KERNEL -DBSD_BUILD -DNCPUS=1 -Wno-four-char-constants -fpascal-strings -D__APPLE__  -I.
 
+# XXX: ld flags for bsd.o
+export LDFLAGS_COMPONENT += -keep_private_externs
+
 #
 # Directories for mig generated files
 #
@@ -97,8 +100,6 @@ do_all: $(COMPONENT).o
 do_build_all: do_depend
 
 %RULES
-
--include Makedep
 
 include $(MakeInc_rule)
 include $(MakeInc_dir)

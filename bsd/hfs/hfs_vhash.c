@@ -128,9 +128,9 @@ loop:
 			(H_DEV(hp) == dev)  &&
 			!(hp->h_meta->h_metaflags & IN_NOEXISTS)) {
 			/* SER XXX kDefault of meta data (ksysfile) is not assumed here */
-			if ((H_FORKTYPE(hp) == forkType) || 
-					(forkType == kAnyFork) ||
-					((forkType == kDefault) && ((H_FORKTYPE(hp) == kDirectory)
+			if ( (forkType == kAnyFork) ||
+				 (H_FORKTYPE(hp) == forkType) || 
+				 ((forkType == kDefault) && ((H_FORKTYPE(hp) == kDirectory)
 							|| (H_FORKTYPE(hp) == kDataFork)))) {
 				vp = HTOV(hp);
 				simple_lock(&vp->v_interlock);

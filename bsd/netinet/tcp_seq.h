@@ -101,6 +101,7 @@
 #ifdef KERNEL
 extern tcp_cc	tcp_ccgen;		/* global connection count */
 
+#ifdef TCP_COMPAT_42
 /*
  * Increment for tcp_iss each second.
  * This is designed to increment at the standard 250 KB/s,
@@ -116,6 +117,7 @@ extern tcp_cc	tcp_ccgen;		/* global connection count */
 #define	TCP_ISSINCR	(122*1024 + tcp_random18())
 
 extern tcp_seq	tcp_iss;		/* tcp initial send seq # */
+#endif /* TCP_COMPAT_42 */
 #else
 #define	TCP_ISSINCR	(250*1024)	/* increment for tcp_iss each second */
 #endif /* KERNEL */

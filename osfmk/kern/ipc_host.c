@@ -57,9 +57,11 @@
  */
 #include <mach/message.h>
 #include <mach/mach_traps.h>
+#include <mach/etap_events.h>
 #include <mach/mach_host_server.h>
 #include <kern/host.h>
 #include <kern/processor.h>
+#include <kern/lock.h>
 #include <kern/task.h>
 #include <kern/thread.h>
 #include <kern/ipc_host.h>
@@ -93,6 +95,8 @@ void ipc_host_init(void)
 {
 	ipc_port_t	port;
 	int i;
+
+	mutex_init(&realhost.lock, ETAP_MISC_MASTER);
 
 	/*
 	 *	Allocate and set up the two host ports.

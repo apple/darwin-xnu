@@ -130,6 +130,14 @@ int main(int argc, char *argv[])
 	DECLARE("vectorCng",	vectorCng);
 	DECLARE("floatCngbit",	floatCngbit);
 	DECLARE("vectorCngbit",	vectorCngbit);
+	DECLARE("bbThreadbit",	bbThreadbit);
+	DECLARE("bbPreemptivebit",	bbPreemptivebit);
+	DECLARE("bbThread",		bbThread);
+	DECLARE("bbPreemptive",	bbPreemptive);
+	DECLARE("fvChkb",		fvChkb);
+	DECLARE("fvChk",		fvChk);
+	DECLARE("userProtKeybit",	userProtKeybit);
+	DECLARE("userProtKey",	userProtKey);
 
 	DECLARE("PCB_SIZE",	sizeof(struct pcb));
 
@@ -181,10 +189,8 @@ int main(int argc, char *argv[])
 	DECLARE("PP_CPU_FLAGS",			offsetof(struct per_proc_info *, cpu_flags));
 	DECLARE("PP_ISTACKPTR",			offsetof(struct per_proc_info *, istackptr));
 	DECLARE("PP_INTSTACK_TOP_SS",	offsetof(struct per_proc_info *, intstack_top_ss));
-#if MACH_KDP || MACH_KDB
 	DECLARE("PP_DEBSTACKPTR",		offsetof(struct per_proc_info *, debstackptr));
 	DECLARE("PP_DEBSTACK_TOP_SS",	offsetof(struct per_proc_info *, debstack_top_ss));
-#endif
 	DECLARE("PP_TEMPWORK1",			offsetof(struct per_proc_info *, tempwork1));
 	DECLARE("PP_USERSPACE",			offsetof(struct per_proc_info *, userspace));
 	DECLARE("PP_USERPMAP",			offsetof(struct per_proc_info *, userpmap));
@@ -201,7 +207,9 @@ int main(int argc, char *argv[])
 	DECLARE("PP_VMX_THREAD", 		offsetof(struct per_proc_info *, VMX_thread));
 	DECLARE("VMX_vmmCtx", 			offsetof(struct per_proc_info *, VMX_vmmCtx));
 	DECLARE("PP_QUICKFRET", 		offsetof(struct per_proc_info *, quickfret));
+	DECLARE("PP_INTS_ENABLED", 		offsetof(struct per_proc_info *, interrupts_enabled));
 	DECLARE("UAW", 					offsetof(struct per_proc_info *, Uassist));
+	DECLARE("ppbbTaskEnv", 			offsetof(struct per_proc_info *, ppbbTaskEnv));
 	DECLARE("liveVRS", 				offsetof(struct per_proc_info *, liveVRSave));
 	DECLARE("liveFPSCR", 			offsetof(struct per_proc_info *, liveFPSCR));
 	DECLARE("spcFlags", 			offsetof(struct per_proc_info *, spcFlags));
@@ -229,8 +237,8 @@ int main(int argc, char *argv[])
 	DECLARE("pfThermalb",			pfThermalb);
 	DECLARE("pfThermInt",			pfThermInt);
 	DECLARE("pfThermIntb",			pfThermIntb);
-	DECLARE("pfL23lck",				pfL23lck);
-	DECLARE("pfL23lckb",			pfL23lckb);
+	DECLARE("pfLClck",				pfLClck);
+	DECLARE("pfLClckb",				pfLClckb);
 	DECLARE("pfWillNap",			pfWillNap);
 	DECLARE("pfWillNapb",			pfWillNapb);
 	DECLARE("pfNoMSRir",			pfNoMSRir);
@@ -271,6 +279,7 @@ int main(int argc, char *argv[])
 	DECLARE("pfMSSCR1", 			offsetof(struct per_proc_info *, pf.pfMSSCR1));
 	DECLARE("pfICTRL", 			offsetof(struct per_proc_info *, pf.pfICTRL));
 	DECLARE("pfLDSTCR", 			offsetof(struct per_proc_info *, pf.pfLDSTCR));
+	DECLARE("pfLDSTDB", 			offsetof(struct per_proc_info *, pf.pfLDSTDB));
 	DECLARE("pfSize", 				sizeof(procFeatures));
 	
 	DECLARE("thrmmaxTemp", 			offsetof(struct per_proc_info *, thrm.maxTemp));
@@ -352,6 +361,7 @@ int main(int argc, char *argv[])
 	DECLARE("emvr31", 				offsetof(struct per_proc_info *, emvr31));
 	DECLARE("empadvr", 				offsetof(struct per_proc_info *, empadvr));
 	DECLARE("ppSize",				sizeof(struct per_proc_info));
+	DECLARE("patcharea", 			offsetof(struct per_proc_info *, patcharea));
 
 	DECLARE("RESETHANDLER_TYPE", 			offsetof(struct resethandler *, type));
 	DECLARE("RESETHANDLER_CALL", 			offsetof(struct resethandler *, call_paddr));
@@ -423,8 +433,10 @@ int main(int argc, char *argv[])
 	DECLARE("kVmmGetVectorState",	kVmmGetVectorState);
 	DECLARE("kVmmSetTimer", 		kVmmSetTimer);
 	DECLARE("kVmmExecuteVM", 		kVmmExecuteVM);
+	DECLARE("kVmmProtectPage", 		kVmmProtectPage);
 
 	DECLARE("kVmmReturnNull",		kVmmReturnNull);
+	DECLARE("kVmmStopped",			kVmmStopped);
 	DECLARE("kVmmBogusContext",		kVmmBogusContext);
 	DECLARE("kVmmReturnDataPageFault",	kVmmReturnDataPageFault);
 	DECLARE("kVmmReturnInstrPageFault",	kVmmReturnInstrPageFault);
@@ -432,6 +444,12 @@ int main(int argc, char *argv[])
 	DECLARE("kVmmReturnProgramException",	kVmmReturnProgramException);
 	DECLARE("kVmmReturnSystemCall",		kVmmReturnSystemCall);
 	DECLARE("kVmmReturnTraceException",	kVmmReturnTraceException);
+
+	DECLARE("kVmmProtXtnd",			kVmmProtXtnd);
+	DECLARE("kVmmProtNARW",			kVmmProtNARW);
+	DECLARE("kVmmProtRORW",			kVmmProtRORW);
+	DECLARE("kVmmProtRWRW",			kVmmProtRWRW);
+	DECLARE("kVmmProtRORO",			kVmmProtRORO);
 	
 	DECLARE("vmmFlags",				offsetof(struct vmmCntrlEntry *, vmmFlags));
 	DECLARE("vmmInUseb",			vmmInUseb);
@@ -477,6 +495,12 @@ int main(int argc, char *argv[])
 	DECLARE("vmmVectVRallb",		vmmVectVRallb);
 	DECLARE("vmmVectVAss",			vmmVectVAss);
 	DECLARE("vmmVectVAssb",			vmmVectVAssb);
+	DECLARE("vmmXStart",			vmmXStart);
+	DECLARE("vmmXStartb",			vmmXStartb);
+	DECLARE("vmmXStop",				vmmXStop);
+	DECLARE("vmmXStopb",			vmmXStopb);
+	DECLARE("vmmKey",				vmmKey);
+	DECLARE("vmmKeyb",				vmmKeyb);
 
 	/* values from kern/task.h */
 	DECLARE("TASK_MACH_EXC_PORT",
@@ -535,8 +559,7 @@ int main(int argc, char *argv[])
 #endif	/* MACH_LDEBUG */
 
 	/* Mutex structure */
-	DECLARE("MUTEX_ILK",	offsetof(mutex_t *, interlock));
-	DECLARE("MUTEX_LOCKED",	offsetof(mutex_t *, locked));
+	DECLARE("LOCK_DATA",	offsetof(mutex_t *, interlock));
 	DECLARE("MUTEX_WAITERS",offsetof(mutex_t *, waiters));
 #if	MACH_LDEBUG
 	DECLARE("MUTEX_TYPE",	offsetof(mutex_t *, type));

@@ -139,6 +139,7 @@ aurpd_start()
 		sopt.sopt_level   = SOL_SOCKET;
 		sopt.sopt_name    = SO_RCVBUF;
 		sopt.sopt_dir     = SOPT_SET;
+		sopt.sopt_p		  = NULL;
 		if ((error = sosetopt(so, &sopt)) != 0)
 			goto out;
 	}
@@ -158,6 +159,7 @@ aurpd_start()
 		sopt.sopt_level   = SOL_SOCKET;
 		sopt.sopt_name    = SO_SNDBUF;
 		sopt.sopt_dir     = SOPT_SET;
+		sopt.sopt_p		  = NULL;
 		if ((error = sosetopt(so, &sopt)) != 0)
 			goto out;
 	}
@@ -165,10 +167,8 @@ aurpd_start()
 	so->so_upcall = aurp_wakeup;
 	so->so_upcallarg = (caddr_t)AE_UDPIP; /* Yuck */
 	so->so_state |= SS_NBIO;
-	so->so_rcv.sb_flags |=SB_NOINTR;
-	so->so_rcv.sb_sel.si_flags |=SI_SBSEL;
-	so->so_snd.sb_flags |=SB_NOINTR;
-	so->so_snd.sb_sel.si_flags |=SI_SBSEL;
+	so->so_rcv.sb_flags |=(SB_SEL|SB_NOINTR);
+	so->so_snd.sb_flags |=(SB_SEL|SB_NOINTR);
 
 out:
 	sbunlock(&so->so_snd);

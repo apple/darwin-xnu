@@ -67,10 +67,8 @@
 
 #include <miscfs/specfs/specdev.h>
 
-
 #include <sys/ubc.h>
 #include <vm/vm_pageout.h>
-
 
 #include <sys/kdebug.h>
 
@@ -129,7 +127,7 @@ struct vop_read_args /* {
     struct buf 				*bp;
     daddr_t 				logBlockNo;
     u_long					fragSize, moveSize, startOffset, ioxfersize;
-    long					devBlockSize = 0;
+    int						devBlockSize = 0;
     off_t 					bytesRemaining;
     int 					retval;
     u_short 				mode;
@@ -343,7 +341,7 @@ struct vop_write_args /* {
     struct timeval tv;
     FCB					*fcb = HTOFCB(hp);
     ExtendedVCB			*vcb = HTOVCB(hp);
-    long				devBlockSize = 0;
+    int					devBlockSize = 0;
     daddr_t 			logBlockNo;
     long				fragSize;
     off_t 				origFileSize, currOffset, writelimit, bytesToAdd;
@@ -390,8 +388,7 @@ struct vop_write_args /* {
     uio = ap->a_uio;
     vp = ap->a_vp;
 
-    if (ioflag & IO_APPEND)
-    	uio->uio_offset = fcb->fcbEOF;
+    if (ioflag & IO_APPEND) uio->uio_offset = fcb->fcbEOF;
     if ((hp->h_meta->h_pflags & APPEND) && uio->uio_offset != fcb->fcbEOF)
     	return (EPERM);
 
@@ -410,7 +407,7 @@ struct vop_write_args /* {
     VOP_DEVBLOCKSIZE(hp->h_meta->h_devvp, &devBlockSize);
 
     resid = uio->uio_resid;
-    origFileSize = fcb->fcbPLen;
+    origFileSize = fcb->fcbEOF;
     flags = ioflag & IO_SYNC ? B_SYNC : 0;
 
     DBG_RW(("\tLEOF is 0x%lX, PEOF is 0x%lX.\n", fcb->fcbEOF, fcb->fcbPLen));
@@ -436,9 +433,6 @@ struct vop_write_args /* {
                 (int)uio->uio_offset, uio->uio_resid, (int)fcb->fcbEOF,  (int)fcb->fcbPLen, 0);
     retval = 0;
 
-    if (fcb->fcbEOF > fcb->fcbMaxEOF)
-        fcb->fcbMaxEOF = fcb->fcbEOF;
-
     /* Now test if we need to extend the file */
     /* Doing so will adjust the fcbPLen for us */
 
@@ -457,60 +451,144 @@ struct vop_write_args /* {
                             ExtendFileC (vcb,
                                             fcb,
                                             bytesToAdd,
+                                            0,
                                             kEFContigBit,
                                             &actualBytesAdded));
 
         (void) hfs_metafilelocking(HTOHFS(hp), kHFSExtentsFileID, LK_RELEASE, cp);
         DBG_VOP_CONT(("\tactual bytes added = 0x%lX bytes, retval = %d...\n", actualBytesAdded, retval));
-        if ((actualBytesAdded == 0) && (retval == E_NONE))
-            retval = ENOSPC;
-        if (retval != E_NONE)
-            break;
+        if ((actualBytesAdded == 0) && (retval == E_NONE)) retval = ENOSPC;
+        if (retval != E_NONE) break;
 
         KERNEL_DEBUG((FSDBG_CODE(DBG_FSRW, 0)) | DBG_FUNC_NONE,
                     (int)uio->uio_offset, uio->uio_resid, (int)fcb->fcbEOF,  (int)fcb->fcbPLen, 0);
     };
 
-    if (UBCISVALID(vp) && retval == E_NONE) {
-	  off_t filesize;
-	  off_t zero_off;
-	  int   lflag;
+	if (UBCISVALID(vp) && retval == E_NONE) {
+		off_t filesize;
+		off_t zero_off;
+		off_t tail_off;
+		off_t inval_start;
+		off_t inval_end;
+		off_t io_start, io_end;
+		int lflag;
+		struct rl_entry *invalid_range;
 
-	  if (writelimit > fcb->fcbEOF)
-	      filesize = writelimit;
-	  else
-	      filesize = fcb->fcbEOF;
+		if (writelimit > fcb->fcbEOF)
+			filesize = writelimit;
+		else
+			filesize = fcb->fcbEOF;
 
-	  lflag = (ioflag & IO_SYNC);
+		lflag = (ioflag & IO_SYNC);
 
-	  if (uio->uio_offset > fcb->fcbMaxEOF) {
-	      zero_off = fcb->fcbMaxEOF;
-	      lflag   |= IO_HEADZEROFILL;
-	  } else
-	      zero_off = 0;
+		if (uio->uio_offset <= fcb->fcbEOF) {
+			zero_off = uio->uio_offset & ~PAGE_MASK_64;
+			
+			/* Check to see whether the area between the zero_offset and the start
+			   of the transfer to see whether is invalid and should be zero-filled
+			   as part of the transfer:
+			 */
+			if (rl_scan(&hp->h_invalidranges, zero_off, uio->uio_offset - 1, &invalid_range) != RL_NOOVERLAP) {
+				lflag |= IO_HEADZEROFILL;
+			};
+		} else {
+			off_t eof_page_base = fcb->fcbEOF & ~PAGE_MASK_64;
+			
+			/* The bytes between fcb->fcbEOF and uio->uio_offset must never be
+			   read without being zeroed.  The current last block is filled with zeroes
+			   if it holds valid data but in all cases merely do a little bookkeeping
+			   to track the area from the end of the current last page to the start of
+			   the area actually written.  For the same reason only the bytes up to the
+			   start of the page where this write will start is invalidated; any remainder
+			   before uio->uio_offset is explicitly zeroed as part of the cluster_write.
+			   
+			   Note that inval_start, the start of the page after the current EOF,
+			   may be past the start of the write, in which case the zeroing
+			   will be handled by the cluser_write of the actual data.
+			 */
+			inval_start = (fcb->fcbEOF + (PAGE_SIZE_64 - 1)) & ~PAGE_MASK_64;
+			inval_end = uio->uio_offset & ~PAGE_MASK_64;
+			zero_off = fcb->fcbEOF;
+			
+			if ((fcb->fcbEOF & PAGE_MASK_64) &&
+				(rl_scan(&hp->h_invalidranges,
+							eof_page_base,
+							fcb->fcbEOF - 1,
+							&invalid_range) != RL_NOOVERLAP)) {
+				/* The page containing the EOF is not valid, so the
+				   entire page must be made inaccessible now.  If the write
+				   starts on a page beyond the page containing the eof
+				   (inval_end > eof_page_base), add the
+				   whole page to the range to be invalidated.  Otherwise
+				   (i.e. if the write starts on the same page), zero-fill
+				   the entire page explicitly now:
+				 */
+				if (inval_end > eof_page_base) {
+					inval_start = eof_page_base;
+				} else {
+					zero_off = eof_page_base;
+				};
+			};
+			
+			if (inval_start < inval_end) {
+				/* There's some range of data that's going to be marked invalid */
+				
+				if (zero_off < inval_start) {
+					/* The pages between inval_start and inval_end are going to be invalidated,
+					   and the actual write will start on a page past inval_end.  Now's the last
+					   chance to zero-fill the page containing the EOF:
+					 */
+					retval = cluster_write(vp, (struct uio *) 0, fcb->fcbEOF, inval_start,
+											zero_off, (off_t)0, devBlockSize, lflag | IO_HEADZEROFILL);
+					if (retval) goto ioerr_exit;
+				};
+				
+				/* Mark the remaining area of the newly allocated space as invalid: */
+				rl_add(inval_start, inval_end - 1 , &hp->h_invalidranges);
+				zero_off = fcb->fcbEOF = inval_end;
+			};
+			
+			if (uio->uio_offset > zero_off) lflag |= IO_HEADZEROFILL;
+		};
 
-	  /*
-	   * if the write starts beyond the current EOF then
-	   * we we'll zero fill from the current EOF to where the write begins
-	   */
-          retval = cluster_write(vp, uio, fcb->fcbEOF, filesize, zero_off,
-				 (off_t)0, devBlockSize, lflag);
+		/* Check to see whether the area between the end of the write and the end of
+		   the page it falls in is invalid and should be zero-filled as part of the transfer:
+		 */
+		tail_off = (writelimit + (PAGE_SIZE_64 - 1)) & ~PAGE_MASK_64;
+		if (tail_off > filesize) tail_off = filesize;
+		if (tail_off > writelimit) {
+			if (rl_scan(&hp->h_invalidranges, writelimit, tail_off - 1, &invalid_range) != RL_NOOVERLAP) {
+				lflag |= IO_TAILZEROFILL;
+			};
+		};
+		
+		/*
+		 * if the write starts beyond the current EOF (possibly advanced in the
+		 * zeroing of the last block, above), then we'll zero fill from the current EOF
+		 * to where the write begins:
+		 *
+		 * NOTE: If (and ONLY if) the portion of the file about to be written is
+		 *       before the current EOF it might be marked as invalid now and must be
+		 *       made readable (removed from the invalid ranges) before cluster_write
+		 *       tries to write it:
+		 */
+		io_start = (lflag & IO_HEADZEROFILL) ? zero_off : uio->uio_offset;
+		io_end = (lflag & IO_TAILZEROFILL) ? tail_off : writelimit;
+		if (io_start < fcb->fcbEOF) {
+			rl_remove(io_start, io_end - 1, &hp->h_invalidranges);
+		};
+		retval = cluster_write(vp, uio, fcb->fcbEOF, filesize, zero_off, tail_off, devBlockSize, lflag);
+				
+		if (uio->uio_offset > fcb->fcbEOF) {
+			fcb->fcbEOF = uio->uio_offset;
 
-	  if (uio->uio_offset > fcb->fcbEOF) {
-	      fcb->fcbEOF = uio->uio_offset;
-
-	      if (fcb->fcbEOF > fcb->fcbMaxEOF)
-		  fcb->fcbMaxEOF = fcb->fcbEOF;
-
-	      ubc_setsize(vp, (off_t)fcb->fcbEOF);       /* XXX check errors */
-	  }
-	  if (resid > uio->uio_resid)
-	      hp->h_nodeflags |= IN_CHANGE | IN_UPDATE;
+			ubc_setsize(vp, (off_t)fcb->fcbEOF);       /* XXX check errors */
+		}
+		if (resid > uio->uio_resid) hp->h_nodeflags |= IN_CHANGE | IN_UPDATE;
 
     } else {
 
         while (retval == E_NONE && uio->uio_resid > 0) {
-
             logBlockNo = currOffset / PAGE_SIZE;
             blkoffset  = currOffset & PAGE_MASK;
 
@@ -614,9 +692,6 @@ struct vop_write_args /* {
                 DBG_VOP(("\textending EOF to 0x%lX...\n", (UInt32)fcb->fcbEOF));
                 fcb->fcbEOF = currOffset;
 
-                if (fcb->fcbEOF > fcb->fcbMaxEOF)
-			        fcb->fcbMaxEOF = fcb->fcbEOF;
-
                 if (UBCISVALID(vp))
                     ubc_setsize(vp, (off_t)fcb->fcbEOF); /* XXX check errors */
             };
@@ -626,11 +701,13 @@ struct vop_write_args /* {
             hp->h_nodeflags |= IN_CHANGE | IN_UPDATE;
         };
     };
+
+ioerr_exit:
     /*
-    * If we successfully wrote any data, and we are not the superuser
-    * we clear the setuid and setgid bits as a precaution against
-    * tampering.
-    */
+	 * If we successfully wrote any data, and we are not the superuser
+     * we clear the setuid and setgid bits as a precaution against
+     * tampering.
+     */
     if (resid > uio->uio_resid && ap->a_cred && ap->a_cred->cr_uid != 0)
     hp->h_meta->h_mode &= ~(ISUID | ISGID);
 
@@ -694,9 +771,9 @@ struct vop_ioctl_args /* {
 
     switch (ap->a_command) {
 	
-    case 1:
+        case 1:
     {   register struct hfsnode *hp;
-        register struct vnode *vp;
+            register struct vnode *vp;
 	register struct radvisory *ra;
 	FCB *fcb;
 	int devBlockSize = 0;
@@ -724,15 +801,15 @@ struct vop_ioctl_args /* {
 
 	DBG_VOP_LOCKS_TEST(error);
 	return (error);
-    }
+            }
 
-    case 2: /* F_READBOOTBLOCKS */
-    case 3: /* F_WRITEBOOTBLOCKS */
-      {
+        case 2: /* F_READBOOTBLOCKS */
+        case 3: /* F_WRITEBOOTBLOCKS */
+            {
 	    struct vnode *vp = ap->a_vp;
 	    struct hfsnode *hp = VTOH(vp);
 	    struct fbootstraptransfer *btd = (struct fbootstraptransfer *)ap->a_data;
-	    u_long devBlockSize;
+	    int devBlockSize;
 	    int error;
 	    struct iovec aiov;
 	    struct uio auio;
@@ -741,8 +818,8 @@ struct vop_ioctl_args /* {
 	    u_long xfersize;
 	    struct buf *bp;
 
-        if ((vp->v_flag & VROOT) == 0) return EINVAL;
-        if (btd->fbt_offset + btd->fbt_length > 1024) return EINVAL;
+            if ((vp->v_flag & VROOT) == 0) return EINVAL;
+            if (btd->fbt_offset + btd->fbt_length > 1024) return EINVAL;
 	    
 	    aiov.iov_base = btd->fbt_buffer;
 	    aiov.iov_len = btd->fbt_length;
@@ -761,33 +838,40 @@ struct vop_ioctl_args /* {
 	      blockNumber = auio.uio_offset / devBlockSize;
 	      error = bread(hp->h_meta->h_devvp, blockNumber, devBlockSize, ap->a_cred, &bp);
 	      if (error) {
-              if (bp) brelse(bp);
-              return error;
-          };
+                  if (bp) brelse(bp);
+                  return error;
+                };
 
-          blockOffset = auio.uio_offset % devBlockSize;
+                blockOffset = auio.uio_offset % devBlockSize;
 	      xfersize = devBlockSize - blockOffset;
 	      error = uiomove((caddr_t)bp->b_data + blockOffset, (int)xfersize, &auio);
-          if (error) {
-              brelse(bp);
-              return error;
-          };
-          if (auio.uio_rw == UIO_WRITE) {
-              error = VOP_BWRITE(bp);
-              if (error) return error;
-          } else {
-              brelse(bp);
-          };
+                if (error) {
+                  brelse(bp);
+                  return error;
+                };
+                if (auio.uio_rw == UIO_WRITE) {
+                  error = VOP_BWRITE(bp);
+                  if (error) return error;
+                } else {
+                  brelse(bp);
+                };
+            };
         };
-      };
-      return 0;
+        return 0;
 
-    default:
-        DBG_VOP_LOCKS_TEST(ENOTTY);
-        return (ENOTTY);
+        case _IOC(IOC_OUT,'h', 4, 0):     /* Create date in local time */
+            {
+            *(time_t *)(ap->a_data) = to_bsd_time(VTOVCB(ap->a_vp)->localCreateDate);
+            return 0;
+            }
+
+        default:
+            DBG_VOP_LOCKS_TEST(ENOTTY);
+            return (ENOTTY);
     }
 
-    return 0;
+    /* Should never get here */
+	return 0;
 }
 
 /* ARGSUSED */
@@ -798,6 +882,7 @@ struct vop_select_args /* {
     int  a_which;
     int  a_fflags;
     struct ucred *a_cred;
+	void *a_wql;
     struct proc *a_p;
 } */ *ap;
 {
@@ -933,8 +1018,11 @@ struct vop_bmap_args /* {
     int					retval = E_NONE;
     daddr_t				logBlockSize;
     size_t				bytesContAvail = 0;
+    off_t blockposition;
     struct proc			*p = NULL;
     int					lockExtBtree;
+    struct rl_entry *invalid_range;
+    enum rl_overlaptype overlaptype;
 
 #define DEBUG_BMAP 0
 #if DEBUG_BMAP
@@ -961,6 +1049,9 @@ struct vop_bmap_args /* {
     if (ap->a_bnp == NULL)
         return (0);
 
+    logBlockSize = GetLogicalBlockSize(ap->a_vp);
+    blockposition = (off_t)(ap->a_bn * logBlockSize);
+        
     lockExtBtree = hasOverflowExtents(hp);
     if (lockExtBtree)
     {
@@ -970,19 +1061,50 @@ struct vop_bmap_args /* {
             return (retval);
     }
 
-	logBlockSize = GetLogicalBlockSize(ap->a_vp);
-
-	retval = MacToVFSError(
-                               MapFileBlockC (HFSTOVCB(hfsmp),
-                                              HTOFCB(hp),
-                                              MAXPHYSIO,
-                                              (off_t)(ap->a_bn * logBlockSize),
-                                              ap->a_bnp,
-                                              &bytesContAvail));
+    retval = MacToVFSError(
+                            MapFileBlockC (HFSTOVCB(hfsmp),
+                                            HTOFCB(hp),
+                                            MAXPHYSIO,
+                                            blockposition,
+                                            ap->a_bnp,
+                                            &bytesContAvail));
 
     if (lockExtBtree) (void) hfs_metafilelocking(hfsmp, kHFSExtentsFileID, LK_RELEASE, p);
 
     if (retval == E_NONE) {
+        /* Adjust the mapping information for invalid file ranges: */
+        overlaptype = rl_scan(&hp->h_invalidranges,
+                            blockposition,
+                            blockposition + MAXPHYSIO - 1,
+                            &invalid_range);
+        if (overlaptype != RL_NOOVERLAP) {
+            switch(overlaptype) {
+                case RL_MATCHINGOVERLAP:
+                case RL_OVERLAPCONTAINSRANGE:
+                case RL_OVERLAPSTARTSBEFORE:
+                    /* There's no valid block for this byte offset: */
+                    *ap->a_bnp = (daddr_t)-1;
+                    bytesContAvail = invalid_range->rl_end + 1 - blockposition;
+                    break;
+                
+                case RL_OVERLAPISCONTAINED:
+                case RL_OVERLAPENDSAFTER:
+                    /* The range of interest hits an invalid block before the end: */
+                    if (invalid_range->rl_start == blockposition) {
+                    	/* There's actually no valid information to be had starting here: */
+                    	*ap->a_bnp = (daddr_t)-1;
+						if ((HTOFCB(hp)->fcbEOF > (invalid_range->rl_end + 1)) &&
+							(invalid_range->rl_end + 1 - blockposition < bytesContAvail)) {
+                    		bytesContAvail = invalid_range->rl_end + 1 - blockposition;
+                    	};
+                    } else {
+                    	bytesContAvail = invalid_range->rl_start - blockposition;
+                    };
+                    break;
+            };
+			if (bytesContAvail > MAXPHYSIO) bytesContAvail = MAXPHYSIO;
+        };
+        
         /* Figure out how many read ahead blocks there are */
         if (ap->a_runp != NULL) {
             if (can_cluster(logBlockSize)) {
@@ -1059,10 +1181,14 @@ struct vop_cmap_args /* {
 {
     struct hfsnode 	*hp = VTOH(ap->a_vp);
     struct hfsmount 	*hfsmp = VTOHFS(ap->a_vp);
+    FCB					*fcb = HTOFCB(hp);
     size_t				bytesContAvail = 0;
     int			retval = E_NONE;
     int					lockExtBtree;
     struct proc		*p = NULL;
+    struct rl_entry *invalid_range;
+    enum rl_overlaptype overlaptype;
+    off_t limit;
 
 #define DEBUG_CMAP 0
 #if DEBUG_CMAP
@@ -1079,18 +1205,20 @@ struct vop_cmap_args /* {
      * Check for underlying vnode requests and ensure that logical
      * to physical mapping is requested.
      */
-    if (ap->a_bpn == NULL)
+    if (ap->a_bpn == NULL) {
         return (0);
+    };
 
     if (lockExtBtree = hasOverflowExtents(hp))
     {
         p = current_proc();
-        if (retval = hfs_metafilelocking(hfsmp, kHFSExtentsFileID, LK_EXCLUSIVE | LK_CANRECURSE, p))
+        if (retval = hfs_metafilelocking(hfsmp, kHFSExtentsFileID, LK_EXCLUSIVE | LK_CANRECURSE, p)) {
             return (retval);
+        };
     }
     retval = MacToVFSError(
 			   MapFileBlockC (HFSTOVCB(hfsmp),
-					  HTOFCB(hp),
+					  fcb,
 					  ap->a_size,
 					  ap->a_foffset,
 					  ap->a_bpn,
@@ -1098,11 +1226,53 @@ struct vop_cmap_args /* {
 
     if (lockExtBtree) (void) hfs_metafilelocking(hfsmp, kHFSExtentsFileID, LK_RELEASE, p);
 
-    if ((retval == E_NONE) && (ap->a_run))
-		*ap->a_run = bytesContAvail;
+    if (retval == E_NONE) {
+        /* Adjust the mapping information for invalid file ranges: */
+        overlaptype = rl_scan(&hp->h_invalidranges,
+                            ap->a_foffset,
+                            ap->a_foffset + (off_t)bytesContAvail - 1,
+                            &invalid_range);
+        if (overlaptype != RL_NOOVERLAP) {
+            switch(overlaptype) {
+                case RL_MATCHINGOVERLAP:
+                case RL_OVERLAPCONTAINSRANGE:
+                case RL_OVERLAPSTARTSBEFORE:
+                    /* There's no valid block for this byte offset: */
+                    *ap->a_bpn = (daddr_t)-1;
+                    
+                    /* There's no point limiting the amount to be returned if the
+                       invalid range that was hit extends all the way to the EOF
+                       (i.e. there's no valid bytes between the end of this range
+                       and the file's EOF):
+                     */
+                    if ((fcb->fcbEOF > (invalid_range->rl_end + 1)) &&
+        				(invalid_range->rl_end + 1 - ap->a_foffset < bytesContAvail)) {
+                    	bytesContAvail = invalid_range->rl_end + 1 - ap->a_foffset;
+                    };
+                    break;
+                
+                case RL_OVERLAPISCONTAINED:
+                case RL_OVERLAPENDSAFTER:
+                    /* The range of interest hits an invalid block before the end: */
+                    if (invalid_range->rl_start == ap->a_foffset) {
+                    	/* There's actually no valid information to be had starting here: */
+                    	*ap->a_bpn = (daddr_t)-1;
+						if ((fcb->fcbEOF > (invalid_range->rl_end + 1)) &&
+							(invalid_range->rl_end + 1 - ap->a_foffset < bytesContAvail)) {
+                    		bytesContAvail = invalid_range->rl_end + 1 - ap->a_foffset;
+                    	};
+                    } else {
+                    	bytesContAvail = invalid_range->rl_start - ap->a_foffset;
+                    };
+                    break;
+            };
+            if (bytesContAvail > ap->a_size) bytesContAvail = ap->a_size;
+        };
+        
+        if (ap->a_run) *ap->a_run = bytesContAvail;
+    };
 
-    if (ap->a_poff)
-		*(int *)ap->a_poff = 0;
+    if (ap->a_poff) *(int *)ap->a_poff = 0;
 
     DBG_IO(("%d:%d.\n", *ap->a_bpn, bytesContAvail));
 
@@ -1147,7 +1317,7 @@ struct vop_strategy_args /* {
 	if (bp->b_flags & B_PAGELIST) {
 	    /*
 	     * if we have a page list associated with this bp,
-	     * then go through cluste_bp since it knows how to 
+	     * then go through cluster_bp since it knows how to 
 	     * deal with a page request that might span non-contiguous
 	     * physical blocks on the disk...
 	     */
@@ -1160,8 +1330,10 @@ struct vop_strategy_args /* {
 	/*
 	 * If we don't already know the filesystem relative block number
 	 * then get it using VOP_BMAP().  If VOP_BMAP() returns the block
-	 * number as -1 then we've got a hole in the file.  HFS filesystems
-	 * don't allow files with holes, so we shouldn't ever see this.
+	 * number as -1 then we've got a hole in the file.  Although HFS
+         * filesystems don't create files with holes, invalidating of
+         * subranges of the file (lazy zero filling) may create such a
+         * situation.
 	 */
 	if (bp->b_blkno == bp->b_lblkno) {
 	    if ((retval = VOP_BMAP(vp, bp->b_lblkno, NULL, &bp->b_blkno, NULL))) {
@@ -1294,22 +1466,19 @@ int hfs_truncate(ap)
      * since there may be extra physical blocks that also need truncation
      */
 
-    if (fcb->fcbEOF > fcb->fcbMaxEOF)
-        fcb->fcbMaxEOF = fcb->fcbEOF;
-
     /*
      * Lengthen the size of the file. We must ensure that the
      * last byte of the file is allocated. Since the smallest
      * value of fcbEOF is 0, length will be at least 1.
      */
     if (length > fcb->fcbEOF) {
-        off_t filePosition;
-	daddr_t logBlockNo;
-	long logBlockSize;
-	long blkOffset;
-	off_t bytestoclear;
-	int blockZeroCount;
-	struct buf *bp=NULL;
+		off_t filePosition;
+		daddr_t logBlockNo;
+		long logBlockSize;
+		long blkOffset;
+		off_t bytestoclear;
+		int blockZeroCount;
+		struct buf *bp=NULL;
 
 	/*
 	 * If we don't have enough physical space then
@@ -1327,6 +1496,7 @@ int hfs_truncate(ap)
                                        ExtendFileC (HTOVCB(hp),
                                                     fcb,
                                                     bytesToAdd,
+                                                    0,
                                                     kEFAllMask,	/* allocate all requested bytes or none */
                                                     &actualBytesAdded));
 
@@ -1348,71 +1518,95 @@ int hfs_truncate(ap)
 	if (! (ap->a_flags & IO_NOZEROFILL)) {
 
 	    if (UBCISVALID(vp) && retval == E_NONE) {
-	        u_long    devBlockSize;
+			struct rl_entry *invalid_range;
+	        int devBlockSize;
+			off_t zero_limit;
+			
+			zero_limit = (fcb->fcbEOF + (PAGE_SIZE_64 - 1)) & ~PAGE_MASK_64;
+			if (length < zero_limit) zero_limit = length;
 
-		if (length > fcb->fcbMaxEOF) {
-
-		    VOP_DEVBLOCKSIZE(hp->h_meta->h_devvp, &devBlockSize);
-		
-		    retval = cluster_write(vp, (struct uio *) 0, fcb->fcbEOF, length, fcb->fcbMaxEOF,
-					   (off_t)0, devBlockSize, ((ap->a_flags & IO_SYNC) | IO_HEADZEROFILL));
-
-		    if (retval)
-		        goto Err_Exit;
-		}
+			if (length > fcb->fcbEOF) {
+		   		/* Extending the file: time to fill out the current last page w. zeroes? */
+		   		if ((fcb->fcbEOF & PAGE_MASK_64) &&
+		   			(rl_scan(&hp->h_invalidranges,
+							 fcb->fcbEOF & ~PAGE_MASK_64,
+							 fcb->fcbEOF - 1,
+							 &invalid_range) == RL_NOOVERLAP)) {
+		   				
+						/* There's some valid data at the start of the (current) last page
+						   of the file, so zero out the remainder of that page to ensure the
+						   entire page contains valid data.  Since there is no invalid range
+						   possible past the (current) eof, there's no need to remove anything
+						   from the invalid range list before calling cluster_write():						 */
+						VOP_DEVBLOCKSIZE(hp->h_meta->h_devvp, &devBlockSize);
+						retval = cluster_write(vp, (struct uio *) 0, fcb->fcbEOF, zero_limit,
+												fcb->fcbEOF, (off_t)0, devBlockSize, (ap->a_flags & IO_SYNC) | IO_HEADZEROFILL);
+						if (retval) goto Err_Exit;
+						
+						/* Merely invalidate the remaining area, if necessary: */
+						if (length > zero_limit) rl_add(zero_limit, length - 1, &hp->h_invalidranges);
+		   		} else {
+					/* The page containing the (current) eof is invalid: just add the
+					   remainder of the page to the invalid list, along with the area
+					   being newly allocated:
+					 */
+					rl_add(fcb->fcbEOF, length - 1, &hp->h_invalidranges);
+				};
+			}
 	    } else {
 
-	    /*
-	     * zero out any new logical space...
-	     */
-	    bytestoclear = length - fcb->fcbEOF;
-	    filePosition = fcb->fcbEOF;
+#if 0
+		    /*
+		     * zero out any new logical space...
+		     */
+		    bytestoclear = length - fcb->fcbEOF;
+		    filePosition = fcb->fcbEOF;
 
-	    while (bytestoclear > 0) {
-	        logBlockNo   = (daddr_t)(filePosition / PAGE_SIZE_64);
-		blkOffset    = (long)(filePosition & PAGE_MASK_64);  
+		    while (bytestoclear > 0) {
+		        logBlockNo   = (daddr_t)(filePosition / PAGE_SIZE_64);
+			blkOffset    = (long)(filePosition & PAGE_MASK_64);  
 
-		if (((off_t)(fcb->fcbPLen) - ((off_t)logBlockNo * (off_t)PAGE_SIZE)) < PAGE_SIZE_64)
-		    logBlockSize = (off_t)(fcb->fcbPLen) - ((off_t)logBlockNo * PAGE_SIZE_64);
-		else
-		    logBlockSize = PAGE_SIZE;
-		
-		if (logBlockSize < blkOffset)
-		    panic("hfs_truncate: bad logBlockSize computed\n");
-		        
-		blockZeroCount = MIN(bytestoclear, logBlockSize - blkOffset);
+			if (((off_t)(fcb->fcbPLen) - ((off_t)logBlockNo * (off_t)PAGE_SIZE)) < PAGE_SIZE_64)
+			    logBlockSize = (off_t)(fcb->fcbPLen) - ((off_t)logBlockNo * PAGE_SIZE_64);
+			else
+			    logBlockSize = PAGE_SIZE;
+			
+			if (logBlockSize < blkOffset)
+			    panic("hfs_truncate: bad logBlockSize computed\n");
+			        
+			blockZeroCount = MIN(bytestoclear, logBlockSize - blkOffset);
 
-		if (blkOffset == 0 && ((bytestoclear >= logBlockSize) || filePosition >= fcb->fcbEOF)) {
-		    bp = getblk(vp, logBlockNo, logBlockSize, 0, 0, BLK_WRITE);
-		    retval = 0;
+			if (blkOffset == 0 && ((bytestoclear >= logBlockSize) || filePosition >= fcb->fcbEOF)) {
+			    bp = getblk(vp, logBlockNo, logBlockSize, 0, 0, BLK_WRITE);
+			    retval = 0;
 
-		} else {
-		    retval = bread(vp, logBlockNo, logBlockSize, ap->a_cred, &bp);
-		    if (retval) {
-		        brelse(bp);
-			goto Err_Exit;
+			} else {
+			    retval = bread(vp, logBlockNo, logBlockSize, ap->a_cred, &bp);
+			    if (retval) {
+			        brelse(bp);
+				goto Err_Exit;
+			    }
+			}
+			bzero((char *)bp->b_data + blkOffset, blockZeroCount);
+					
+			bp->b_flags |= B_DIRTY | B_AGE;
+
+			if (ap->a_flags & IO_SYNC)
+			    VOP_BWRITE(bp);
+			else if (logBlockNo % 32)
+			    bawrite(bp);
+			else
+			    VOP_BWRITE(bp);	/* wait after we issue 32 requests */
+
+			bytestoclear -= blockZeroCount;
+			filePosition += blockZeroCount;
 		    }
-		}
-		bzero((char *)bp->b_data + blkOffset, blockZeroCount);
-				
-		bp->b_flags |= B_DIRTY | B_AGE;
-
-		if (ap->a_flags & IO_SYNC)
-		    VOP_BWRITE(bp);
-		else if (logBlockNo % 32)
-		    bawrite(bp);
-		else
-		    VOP_BWRITE(bp);	/* wait after we issue 32 requests */
-
-		bytestoclear -= blockZeroCount;
-		filePosition += blockZeroCount;
-	    }
+#else
+			panic("hfs_truncate: invoked on non-UBC object?!");
+#endif
 	    };
 	}
 	fcb->fcbEOF = length;
-
-	if (fcb->fcbEOF > fcb->fcbMaxEOF)
-	        fcb->fcbMaxEOF = fcb->fcbEOF;
 
 	if (UBCISVALID(vp))
 	        ubc_setsize(vp, (off_t)fcb->fcbEOF); /* XXX check errors */
@@ -1430,6 +1624,9 @@ int hfs_truncate(ap)
 
 	    vflags = ((length > 0) ? V_SAVE : 0)  | V_SAVEMETA;	
 	    retval = vinvalbuf(vp, vflags, ap->a_cred, ap->a_p, 0, 0);
+	    
+	    /* Any space previously marked as invalid is now irrelevant: */
+	    rl_remove(length, fcb->fcbEOF - 1, &hp->h_invalidranges);
 	}
 
 	/*
@@ -1453,8 +1650,6 @@ int hfs_truncate(ap)
 	    (void) hfs_metafilelocking(HTOHFS(hp), kHFSExtentsFileID, LK_RELEASE, ap->a_p);
 	    if (retval)
 	        goto Err_Exit;
-
-	    fcb->fcbMaxEOF = length;
 	}
 	fcb->fcbEOF = length;
 
@@ -1465,8 +1660,7 @@ int hfs_truncate(ap)
     retval = VOP_UPDATE(vp, &tv, &tv, MNT_WAIT);
     if (retval) {
         DBG_ERR(("Could not update truncate"));
-
-	KERNEL_DEBUG((FSDBG_CODE(DBG_FSRW, 7)) | DBG_FUNC_NONE,
+		KERNEL_DEBUG((FSDBG_CODE(DBG_FSRW, 7)) | DBG_FUNC_NONE,
 		     -1, -1, -1, retval, 0);
     }
 Err_Exit:;
@@ -1489,11 +1683,13 @@ Err_Exit:;
 #% allocate	vp	L L L
 #
 vop_allocate {
-    IN struct vnode *vp;
-    IN off_t length;
-    IN int flags;
-    IN struct ucred *cred;
-    IN struct proc *p;
+	IN struct vnode *vp;
+	IN off_t length;
+	IN int flags;
+	OUT off_t *bytesallocated;
+	IN off_t offset;
+	IN struct ucred *cred;
+	IN struct proc *p;
 };
  * allocate the hfsnode hp to at most length size
  */
@@ -1502,7 +1698,8 @@ int hfs_allocate(ap)
         struct vnode *a_vp;
         off_t a_length;
         u_int32_t  a_flags;
-	off_t *a_bytesallocated;
+        off_t *a_bytesallocated;
+        off_t a_offset;
         struct ucred *a_cred;
         struct proc *a_p;
     } */ *ap;
@@ -1517,6 +1714,7 @@ int hfs_allocate(ap)
     struct timeval tv;
     int retval, retval2;
     FCB *fcb;
+    UInt32 blockHint;
     UInt32 extendFlags =0;   /* For call to ExtendFileC */
     DBG_FUNC_NAME("hfs_allocate");
     DBG_VOP_LOCKS_DECL(1);
@@ -1528,6 +1726,7 @@ int hfs_allocate(ap)
        did nothing.  ExtendFileC will fill this in for us if we actually allocate space */
 
     *(ap->a_bytesallocated) = 0; 
+    fcb = HTOFCB(hp);
 
     /* Now for some error checking */
 
@@ -1541,6 +1740,9 @@ int hfs_allocate(ap)
         return (EISDIR);        /* hfs doesn't support truncating of directories */
     }
 
+    if ((ap->a_flags & ALLOCATEFROMVOL) && (length <= fcb->fcbPLen))
+        return (EINVAL);
+
     /* Fill in the flags word for the call to Extend the file */
 
 	if (ap->a_flags & ALLOCATECONTIG) {
@@ -1551,16 +1753,17 @@ int hfs_allocate(ap)
 		extendFlags |= kEFAllMask;
 	}
 
-    fcb = HTOFCB(hp);
     tv = time;
     retval = E_NONE;
+    blockHint = 0;
     startingPEOF = fcb->fcbPLen;
 
     if (ap->a_flags & ALLOCATEFROMPEOF) {
 		length += fcb->fcbPLen;
 	}
 
-    DBG_RW(("%s: allocate from Ox%lX to Ox%X bytes\n", funcname, fcb->fcbPLen, (u_int)length));
+	if (ap->a_flags & ALLOCATEFROMVOL)
+		blockHint = ap->a_offset / HTOVCB(hp)->blockSize;
 
     /* If no changes are necesary, then we're done */
     if (fcb->fcbPLen == length)
@@ -1582,6 +1785,7 @@ int hfs_allocate(ap)
 								ExtendFileC(HTOVCB(hp),
 											fcb,
 											moreBytesRequested,
+											blockHint,
 											extendFlags,
 											&actualBytesAdded));
 
@@ -1605,16 +1809,9 @@ int hfs_allocate(ap)
          * block size.
          */
 
-		if ((actualBytesAdded != 0) && (moreBytesRequested < actualBytesAdded)) {
-			u_long					blks, blocksize;
-			
-			blocksize = VTOVCB(vp)->blockSize;
-			blks = moreBytesRequested / blocksize;
-			if ((blks * blocksize) != moreBytesRequested)
-				blks++;
-			
-			*(ap->a_bytesallocated) = blks * blocksize;
-		}
+		if ((actualBytesAdded != 0) && (moreBytesRequested < actualBytesAdded))
+			*(ap->a_bytesallocated) =
+				roundup(moreBytesRequested, (off_t)VTOVCB(vp)->blockSize);
 
     } else { /* Shorten the size of the file */
 
@@ -1652,7 +1849,6 @@ int hfs_allocate(ap)
 
         if (fcb->fcbEOF > fcb->fcbPLen) {
 			fcb->fcbEOF = fcb->fcbPLen;
-			fcb->fcbMaxEOF = fcb->fcbPLen;
 
 			if (UBCISVALID(vp))
 				ubc_setsize(vp, (off_t)fcb->fcbEOF); /* XXX check errors */
@@ -1689,7 +1885,7 @@ hfs_pagein(ap)
     register struct vnode *vp;
     struct hfsnode 	  *hp;
     FCB			  *fcb;
-    long		   devBlockSize = 0;
+    int				devBlockSize = 0;
     int 		   retval;
 
     DBG_FUNC_NAME("hfs_pagein");
@@ -1745,7 +1941,8 @@ hfs_pageout(ap)
 	struct hfsnode	*hp =  VTOH(vp);
 	FCB	        *fcb = HTOFCB(hp);
 	int              retval;
-	long             devBlockSize = 0;
+	int              devBlockSize = 0;
+	off_t            end_of_range;
 
 	DBG_FUNC_NAME("hfs_pageout");
 	DBG_VOP_LOCKS_DECL(1);
@@ -1767,8 +1964,17 @@ hfs_pageout(ap)
 
 	VOP_DEVBLOCKSIZE(hp->h_meta->h_devvp, &devBlockSize);
 
+	end_of_range = ap->a_f_offset + ap->a_size - 1;
+
+	if (end_of_range >= (off_t)fcb->fcbEOF)
+	        end_of_range = (off_t)(fcb->fcbEOF - 1);
+
+	if (ap->a_f_offset < (off_t)fcb->fcbEOF)
+	        rl_remove(ap->a_f_offset, end_of_range, &hp->h_invalidranges);
+
 	retval = cluster_pageout(vp, ap->a_pl, ap->a_pl_offset, ap->a_f_offset, ap->a_size,
 				 (off_t)fcb->fcbEOF, devBlockSize, ap->a_flags);
+
 	/*
 	 * If we successfully wrote any data, and we are not the superuser
 	 * we clear the setuid and setgid bits as a precaution against

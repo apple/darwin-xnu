@@ -67,6 +67,7 @@
 #include <mach_kdb.h>
 #include <kern/lock.h>
 #include <kern/queue.h>
+#include <kern/call_entry.h>
 
 /*
  *	A zone is a collection of fixed size blocks for which there
@@ -90,8 +91,10 @@ struct zone {
 	/* boolean_t */	expandable :1,	/* (T) expand zone (with message)? */
 	/* boolean_t */ allows_foreign :1,/* (F) allow non-zalloc space */
 	/* boolean_t */	doing_alloc :1,	/* is zone expanding now? */
-	/* boolean_t */	waiting :1;	/* is thread waiting for expansion? */
+	/* boolean_t */	waiting :1,	/* is thread waiting for expansion? */
+	/* boolean_t */	async_pending :1;	/* asynchronous allocation pending? */
 	struct zone *	next_zone;	/* Link for all-zones list */
+	call_entry_data_t	call_async_alloc;	/* callout for asynchronous alloc */
 #if	ZONE_DEBUG
 	queue_head_t	active_zones;	/* active elements */
 #endif	/* ZONE_DEBUG */

@@ -70,7 +70,6 @@ extern processor_t	master_processor;
 #ifdef MACH_KERNEL_PRIVATE
 
 #include <cpus.h>
-#include <mach_host.h>
 
 #include <mach/mach_types.h>
 #include <kern/cpu_number.h>
@@ -78,9 +77,7 @@ extern processor_t	master_processor;
 #include <kern/queue.h>
 #include <kern/sched.h>
 
-#if	NCPUS > 1
 #include <machine/ast_types.h>
-#endif	/* NCPUS > 1 */
 
 struct processor_set {
 	struct	run_queue	runq;			/* runq for this set */
@@ -99,20 +96,11 @@ struct processor_set {
 	decl_mutex_data(,	lock)			/* lock for everything else */
 	struct ipc_port	*	pset_self;		/* port for operations */
 	struct ipc_port *	pset_name_self;	/* port for information */
-	int					max_priority;	/* maximum priority */
-	int					policies;		/* bit vector for policies */
-	int					set_quantum;	/* current default quantum */
-#if	NCPUS > 1
-	int					quantum_adj_index;			/* runtime quantum adj. */
-	decl_simple_lock_data(,quantum_adj_lock)		/* lock for above */
-	int					machine_quantum[NCPUS+1];	/* ditto */
-#endif	/* NCPUS > 1 */
+	int					set_quanta;		/* timeslice quanta for timesharing */
+	int					machine_quanta[NCPUS+1];
 	integer_t			mach_factor;	/* mach_factor */
 	integer_t			load_average;	/* load_average */
 	long				sched_load;		/* load avg for scheduler */
-	policy_t			policy_default;	/* per set default */
-	policy_base_data_t	policy_base;	/* base attributes */
-	policy_limit_data_t	policy_limit;	/* limit attributes */
 };
 
 struct processor {
@@ -122,9 +110,10 @@ struct processor {
 	struct thread_shuttle
 						*next_thread,	/* next thread to run if dispatched */
 						*idle_thread;	/* this processor's idle thread. */
-	int					quantum;		/* quantum for current thread */
-	boolean_t			first_quantum;	/* first quantum in succession */
-	int					last_quantum;	/* last quantum assigned */
+	timer_call_data_t	quantum_timer;	/* timer for quantum expiration */
+	int					slice_quanta;	/* quanta before timeslice ends */
+	uint64_t			quantum_end;	/* time when current quantum ends */
+	uint64_t			last_dispatch;	/* time of last dispatch */
 
 	processor_set_t		processor_set;		/* processor set I belong to */
 	processor_set_t		processor_set_next;	/* set I will belong to */
@@ -132,11 +121,6 @@ struct processor {
 	decl_simple_lock_data(,lock)
 	struct ipc_port		*processor_self;/* port for operations */
 	int					slot_num;		/* machine-indep slot number */
-#if	NCPUS > 1
-	ast_check_t			ast_check_data;	/* for remote ast_check invocation */
-	queue_chain_t		softclock_queue;/* cpus handling softclocks */
-#endif	/* NCPUS > 1 */
-	/* punt id data temporarily */
 };
 
 extern struct processor	processor_array[NCPUS];

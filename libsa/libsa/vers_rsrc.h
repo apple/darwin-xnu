@@ -23,7 +23,7 @@ typedef enum {
 
 #define BCD_illegal  (0xff)   // full byte, 11111111
 
-int VERS_parse_string(char * vers_string, UInt32 * version_num);
+int VERS_parse_string(const char * vers_string, UInt32 * version_num);
 int VERS_string(char * buffer, UInt32 length, UInt32 vers);
 
 #endif _LIBSA_VERS_H_

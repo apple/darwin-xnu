@@ -56,6 +56,8 @@ private:
     IOLock *                 lock;
     SInt32                   generation;
 
+    IOLock *                 kld_lock;
+
 public:
     /*!
         @function initialize

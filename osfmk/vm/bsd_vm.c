@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2001 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -33,8 +33,12 @@
 #include <ipc/ipc_port.h>
 #include <ipc/ipc_space.h>
 #include <kern/thread.h>
+#include <vm/memory_object.h>
 #include <vm/vm_pageout.h>
 
+#include <libkern/OSAtomic.h>
+
+#include <default_pager/default_pager_types.h>
 
 /* BSD VM COMPONENT INTERFACES */
 int
@@ -89,26 +93,12 @@ int	vnode_pager_workaround;
 typedef int vnode_port_t;
 
 typedef struct vnode_pager {
-	ipc_port_t pager;			/* pager */
-	ipc_port_t pager_handle;	/* pager handle */
-	ipc_port_t vm_obj_handle;	/* memory object's control handle */
-	vnode_port_t vnode_handle;	/* vnode handle */
+	int 			*pager;		/* pager workaround pointer  */
+	unsigned int		pager_ikot;	/* JMM: fake ip_kotype()     */
+	unsigned int		ref_count;	/* reference count	     */
+	memory_object_control_t control_handle;	/* mem object control handle */
+	vnode_port_t 		vnode_handle;	/* vnode handle 	     */
 } *vnode_pager_t;
-
-typedef struct vnode_port_entry {
-	queue_chain_t	links; 		/* queue links */
-	ipc_port_t	name;			/* port name */
-	vnode_pager_t	pager_rec;	/* pager record */
-} *vnode_port_entry_t;
-
-
-#define         VNODE_PORT_HASH_COUNT   127
-#define         vnode_port_hash(name_port) \
-                        (((int)(name_port) & 0xffffff) % VNODE_PORT_HASH_COUNT)
-
-queue_head_t	vnode_port_hashtable[VNODE_PORT_HASH_COUNT];
-zone_t			vnode_port_hash_zone;
-decl_simple_lock_data(,vnode_port_hash_lock)
 
 
 ipc_port_t
@@ -123,49 +113,51 @@ void
 vnode_pager_alloc_map(
 	void);
 
-ipc_port_t
+memory_object_t
 vnode_pager_setup(
 	vnode_port_t,
-	ipc_port_t);
+	memory_object_t);
 
-ipc_port_t
-vnode_pager_lookup(
-	vnode_port_t,
-	ipc_port_t);
 
 kern_return_t
 vnode_pager_init(
-	ipc_port_t, 
-	ipc_port_t, 
+	memory_object_t, 
+	memory_object_control_t, 
 	vm_size_t);
 
 kern_return_t
+vnode_pager_get_object_size(
+	memory_object_t,
+	memory_object_offset_t *);
+
+kern_return_t
 vnode_pager_data_request( 
-	ipc_port_t, 
-	ipc_port_t,
-	vm_object_offset_t, 
+	memory_object_t, 
+	memory_object_offset_t, 
 	vm_size_t, 
 	vm_prot_t);
 
 kern_return_t
 vnode_pager_data_return(
-	ipc_port_t,
-	ipc_port_t,
-	vm_object_offset_t,
-	pointer_t,
+	memory_object_t,
+	memory_object_offset_t,
 	vm_size_t,
 	boolean_t,
 	boolean_t);
 
+kern_return_t
+vnode_pager_data_initialize(
+	memory_object_t,
+	memory_object_offset_t,
+	vm_size_t);
+
 void
-vnode_pager_no_senders(
-	ipc_port_t,
-	mach_port_mscount_t);
+vnode_pager_deallocate(
+	memory_object_t);
 
 kern_return_t
 vnode_pager_terminate(
-	ipc_port_t,
-	ipc_port_t);
+	memory_object_t);
 
 kern_return_t
 vnode_pager_cluster_read(
@@ -179,14 +171,6 @@ vnode_pager_cluster_write(
 	vm_object_offset_t,
 	vm_size_t);
 
-kern_return_t
-memory_object_change_attributes(
-        vm_object_t,
-        memory_object_flavor_t,
-        memory_object_info_t,
-        mach_msg_type_number_t,
-        ipc_port_t,
-        mach_msg_type_name_t);
 
 int    
 vnode_pagein(
@@ -207,25 +191,17 @@ vnode_pageout(
 	int,
 	int *);
 
+vm_object_offset_t
+vnode_pager_get_filesize(
+	vnode_port_t);
+
 vnode_pager_t
 vnode_object_create(
 	vnode_port_t	vp);
 
-void
-vnode_port_hash_init(void);
-
-void
-vnode_port_hash_insert(
-	ipc_port_t,   
-	vnode_pager_t);
-
 vnode_pager_t
-vnode_port_hash_lookup(
-	ipc_port_t);
-
-void
-vnode_port_hash_delete(
-	ipc_port_t);
+vnode_pager_lookup(
+	memory_object_t);
 
 void
 vnode_pager_release_from_cache(
@@ -269,23 +245,40 @@ macx_triggers(
 	mach_port_t	trigger_name)
 {
 	kern_return_t kr;
-	ipc_port_t		default_pager_port = MACH_PORT_NULL;
+	memory_object_default_t	default_pager;
 	ipc_port_t		trigger_port;
 
+	default_pager = MEMORY_OBJECT_DEFAULT_NULL;
 	kr = host_default_memory_manager(host_priv_self(), 
-					&default_pager_port, 0);
+					&default_pager, 0);
 	if(kr != KERN_SUCCESS) {
 		return EINVAL;
 	}
-	trigger_port = trigger_name_to_port(trigger_name);
-	if(trigger_port == NULL) {
-		return EINVAL;
+	if (flags & HI_WAT_ALERT) {
+		trigger_port = trigger_name_to_port(trigger_name);
+		if(trigger_port == NULL) {
+			return EINVAL;
+		}
+		/* trigger_port is locked and active */
+		ipc_port_make_send_locked(trigger_port); 
+		/* now unlocked */
+		default_pager_triggers(default_pager, 
+				       hi_water, low_water,
+				       HI_WAT_ALERT, trigger_port);
 	}
-        /* trigger_port is locked and active */
-        ip_unlock(trigger_port);
-	default_pager_triggers(default_pager_port, 
-			hi_water, low_water, flags, trigger_port);
-	ipc_port_make_send(trigger_port); 
+
+	if (flags & LO_WAT_ALERT) {
+		trigger_port = trigger_name_to_port(trigger_name);
+		if(trigger_port == NULL) {
+			return EINVAL;
+		}
+		/* trigger_port is locked and active */
+		ipc_port_make_send_locked(trigger_port);
+		/* and now its unlocked */
+		default_pager_triggers(default_pager, 
+				       hi_water, low_water,
+				       LO_WAT_ALERT, trigger_port);
+	}
 
 	/*
 	 * Set thread scheduling priority and policy for the current thread
@@ -340,100 +333,47 @@ vnode_pager_bootstrap(void)
 	size = (vm_size_t) sizeof(struct vnode_pager);
 	vnode_pager_zone = zinit(size, (vm_size_t) MAX_VNODE*size,
 				PAGE_SIZE, "vnode pager structures");
-	vnode_port_hash_init();
-
 	return;
 }
 
 /*
  *
  */
-ipc_port_t
+memory_object_t
 vnode_pager_setup(
 	vnode_port_t	vp,
-	ipc_port_t	pager)
+	memory_object_t	pager)
 {
 	vnode_pager_t	vnode_object;
-	kern_return_t	kr;
-	ipc_port_t	previous;
-
-	if (pager &&
-	    (vnode_object = vnode_port_hash_lookup(pager))) {
-		if (vnode_object->vnode_handle == vp) 
-			return(pager);
-	}
 
 	vnode_object = vnode_object_create(vp);
 	if (vnode_object == VNODE_PAGER_NULL)
 		panic("vnode_pager_setup: vnode_object_create() failed");
-
-	vnode_object->pager = ipc_port_alloc_kernel();
-	assert (vnode_object->pager != IP_NULL);
-	pager_mux_hash_insert(vnode_object->pager, 
-			(rpc_subsystem_t)&vnode_pager_workaround);
-
-	vnode_object->pager_handle = ipc_port_make_send(vnode_object->pager);
-
-	vnode_port_hash_insert(vnode_object->pager_handle, vnode_object);
-
-	ipc_port_make_sonce(vnode_object->pager);
-	ip_lock(vnode_object->pager);	/* unlocked in nsrequest below */
-	ipc_port_nsrequest(vnode_object->pager, 1, vnode_object->pager, &previous);
-
-	PAGER_DEBUG(PAGER_INIT, ("vnode_pager_setup: vp %x pager %x vnode_pager %x\n", vp, vnode_object->pager_handle, vnode_object));
-
-	ubc_setpager( vp, vnode_object->pager_handle);
-	return(vnode_object->pager_handle);
-}
-
-/*
- *
- */
-ipc_port_t
-vnode_pager_lookup(
-	vnode_port_t    vp,
-	ipc_port_t	pager)
-{
-	vnode_pager_t	vnode_object;
-	kern_return_t	kr;
-
-	if (pager &&
-	    (vnode_object = vnode_port_hash_lookup(pager))) {
-		if (vnode_object->vnode_handle == vp) 
-			return(vnode_object->vm_obj_handle);
-		else 
-			return NULL;
-	}
-	else 
-		return NULL;
+	return((memory_object_t)vnode_object);
 }
 
 /*
  *
  */
 kern_return_t
-vnode_pager_init(ipc_port_t pager, 
-		ipc_port_t pager_request, 
+vnode_pager_init(memory_object_t mem_obj, 
+		memory_object_control_t control, 
 		vm_size_t pg_size)
 {
 	vnode_pager_t   vnode_object;
 	kern_return_t   kr;
 	memory_object_attr_info_data_t  attributes;
-	vm_object_t	vm_object;
 
 
 	PAGER_DEBUG(PAGER_ALL, ("vnode_pager_init: %x, %x, %x\n", pager, pager_request, pg_size));
 
-	vnode_object = vnode_port_hash_lookup(pager);
-	if (vnode_object == VNODE_PAGER_NULL)
-		panic("vnode_pager_init: lookup failed");
+	if (control == MEMORY_OBJECT_CONTROL_NULL)
+		return KERN_INVALID_ARGUMENT;
 
-	vnode_object->vm_obj_handle = pager_request;
+	vnode_object = vnode_pager_lookup(mem_obj);
 
-	vm_object = vm_object_lookup(pager_request);
-
-	if (vm_object == VM_OBJECT_NULL)
-		panic("vnode_pager_init: vm_object_lookup() failed");
+	memory_object_control_reference(control);
+	vnode_object->control_handle = control;
 
 	attributes.copy_strategy = MEMORY_OBJECT_COPY_DELAY;
 	/* attributes.cluster_size = (1 << (CLUSTER_SHIFT + PAGE_SHIFT));*/
@@ -442,11 +382,10 @@ vnode_pager_init(ipc_port_t pager,
 	attributes.temporary = TRUE;
 
 	kr = memory_object_change_attributes(
-					vm_object,
+					control,
 					MEMORY_OBJECT_ATTRIBUTE_INFO,
 					(memory_object_info_t) &attributes,
-					MEMORY_OBJECT_ATTR_INFO_COUNT,
-					MACH_PORT_NULL, 0);
+					MEMORY_OBJECT_ATTR_INFO_COUNT);
 	if (kr != KERN_SUCCESS)
 		panic("vnode_pager_init: memory_object_change_attributes() failed");
 
@@ -458,22 +397,50 @@ vnode_pager_init(ipc_port_t pager,
  */
 kern_return_t
 vnode_pager_data_return(
-        ipc_port_t		mem_obj,
-        ipc_port_t		control_port,
-        vm_object_offset_t	offset,
-        pointer_t		addr,
+        memory_object_t		mem_obj,
+        memory_object_offset_t	offset,
         vm_size_t		data_cnt,
         boolean_t		dirty,
         boolean_t		kernel_copy)  
 {
 	register vnode_pager_t	vnode_object;
 
-	vnode_object = vnode_port_hash_lookup(mem_obj);
-	if (vnode_object == VNODE_PAGER_NULL)
-		panic("vnode_pager_data_return: lookup failed");
+	vnode_object = vnode_pager_lookup(mem_obj);
 
 	vnode_pager_cluster_write(vnode_object, offset, data_cnt);
 
+	return KERN_SUCCESS;
+}
+
+kern_return_t
+vnode_pager_data_initialize(
+        memory_object_t		mem_obj,
+        memory_object_offset_t	offset,
+        vm_size_t		data_cnt)
+{
+	return KERN_FAILURE;
+}
+
+kern_return_t
+vnode_pager_data_unlock(
+	memory_object_t		mem_obj,
+	memory_object_offset_t	offset,
+	vm_size_t		size,
+	vm_prot_t		desired_access)
+{
+	return KERN_FAILURE;
+}
+
+kern_return_t
+vnode_pager_get_object_size(
+	memory_object_t		mem_obj,
+	memory_object_offset_t	*length)
+{
+	vnode_pager_t	vnode_object;
+
+	vnode_object = vnode_pager_lookup(mem_obj);
+
+	*length = vnode_pager_get_filesize(vnode_object->vnode_handle);
 	return KERN_SUCCESS;
 }
 
@@ -482,23 +449,19 @@ vnode_pager_data_return(
  */
 kern_return_t	
 vnode_pager_data_request(
-	ipc_port_t		mem_obj,
-	ipc_port_t		mem_obj_control,
-	vm_object_offset_t	offset,
+	memory_object_t		mem_obj,
+	memory_object_offset_t	offset,
 	vm_size_t		length,
 	vm_prot_t		protection_required)
 {
 	register vnode_pager_t	vnode_object;
 
-	PAGER_DEBUG(PAGER_ALL, ("vnode_pager_data_request: %x, %x, %x, %x, %x\n", mem_obj, mem_obj_control, offset, length, protection_required));
+	PAGER_DEBUG(PAGER_ALL, ("vnode_pager_data_request: %x, %x, %x, %x\n", mem_obj, offset, length, protection_required));
 
-	vnode_object = vnode_port_hash_lookup(mem_obj);
+	vnode_object = vnode_pager_lookup(mem_obj);
 
-	PAGER_DEBUG(PAGER_PAGEIN, ("vnode_pager_data_request: %x, %x, %x, %x, %x, vnode_object %x\n", mem_obj, mem_obj_control, offset, length, protection_required, vnode_object));
+	PAGER_DEBUG(PAGER_PAGEIN, ("vnode_pager_data_request: %x, %x, %x, %x, vnode_object %x\n", mem_obj, offset, length, protection_required, vnode_object));
 		
-	if (vnode_object == VNODE_PAGER_NULL)
-		panic("vnode_pager_data_request: lookup failed");
-
 	vnode_pager_cluster_read(vnode_object, offset, length);
 
 	return KERN_SUCCESS;
@@ -508,28 +471,36 @@ vnode_pager_data_request(
  *
  */
 void
-vnode_pager_no_senders(
-	ipc_port_t	mem_obj,
-	mach_port_mscount_t mscount)
+vnode_pager_reference(
+	memory_object_t		mem_obj)
+{	
+	register vnode_pager_t	vnode_object;
+	unsigned int		prev_ref_count;
+
+	vnode_object = vnode_pager_lookup(mem_obj);
+	prev_ref_count = OSIncrementAtomic((UInt32 *)&vnode_object->ref_count);
+	assert(prev_ref_count > 0);
+}
+
+/*
+ *
+ */
+void
+vnode_pager_deallocate(
+	memory_object_t		mem_obj)
 {
 	register vnode_pager_t	vnode_object;
 
-	PAGER_DEBUG(PAGER_ALL, ("vnode_pager_nosenders: %x, %x\n", mem_obj, mscount));
+	PAGER_DEBUG(PAGER_ALL, ("vnode_pager_deallocate: %x\n", mem_obj));
 
-	vnode_object = vnode_port_hash_lookup(mem_obj);
-	if (vnode_object == VNODE_PAGER_NULL)
-		panic("vnode_pager_no_senders: lookup failed");
+	vnode_object = vnode_pager_lookup(mem_obj);
 
-	assert(vnode_object->pager_handle == mem_obj);
-
-	pager_mux_hash_delete((ipc_port_t) vnode_object->pager_handle);
-	ipc_port_dealloc_kernel(vnode_object->pager);
-	vnode_port_hash_delete(vnode_object->pager_handle);
-	if (vnode_object->vnode_handle != (vnode_port_t) NULL) {
-		vnode_pager_vrele(vnode_object->vnode_handle);
+	if (OSDecrementAtomic((UInt32 *)&vnode_object->ref_count) == 1) {
+		if (vnode_object->vnode_handle != (vnode_port_t) NULL) {
+			vnode_pager_vrele(vnode_object->vnode_handle);
+		}
+		zfree(vnode_pager_zone, (vm_offset_t) vnode_object);
 	}
-	zfree(vnode_pager_zone, (vm_offset_t) vnode_object);
-
 	return;
 }
 
@@ -538,30 +509,9 @@ vnode_pager_no_senders(
  */
 kern_return_t
 vnode_pager_terminate(
-	ipc_port_t	mem_obj,
-	ipc_port_t	mem_obj_control)
+	memory_object_t	mem_obj)
 {
-	register vnode_pager_t	vnode_object;
-
-	PAGER_DEBUG(PAGER_ALL, ("vnode_pager_terminate: %x, %x\n", mem_obj, mem_obj_control));
-
-	vnode_object = vnode_port_hash_lookup(mem_obj);
-	if (vnode_object == VNODE_PAGER_NULL)
-		panic("vnode_pager_terminate: lookup failed");
-
-	assert(vnode_object->pager_handle == mem_obj);
-
-	/* release extra send right created by the fact that the caller */
-	/* of vnode_pager_setup does not establish a mapping between a  */
-	/* cache object and the mem_obj (AMO).  When a subsequent vm_map */
-	/* is done, vm_map will bump the send right count */
-	ipc_port_release_send(mem_obj);
-
-	/* release a send right because terminate is called directly and */
-	/* not through IPC, the right won't disappear quietly */
-	ipc_port_release_send(mem_obj);
-
-	ipc_port_dealloc_kernel(mem_obj_control);
+	PAGER_DEBUG(PAGER_ALL, ("vnode_pager_terminate: %x\n", mem_obj));
 
 	return(KERN_SUCCESS);
 }
@@ -571,16 +521,39 @@ vnode_pager_terminate(
  */
 kern_return_t
 vnode_pager_synchronize(
-	ipc_port_t		pager,
-	ipc_port_t		pager_request,
-	vm_object_offset_t	offset,
-	vm_offset_t		length,
+	memory_object_t		mem_obj,
+	memory_object_offset_t	offset,
+	vm_size_t		length,
 	vm_sync_t		sync_flags)
 {
-	memory_object_synchronize_completed(vm_object_lookup(pager_request), offset, length);
+	register vnode_pager_t	vnode_object;
+
+	PAGER_DEBUG(PAGER_ALL, ("vnode_pager_synchronize: %x\n", mem_obj));
+
+	vnode_object = vnode_pager_lookup(mem_obj);
+
+	memory_object_synchronize_completed(vnode_object->control_handle, offset, length);
 
 	return (KERN_SUCCESS);
 }
+
+/*
+ *
+ */
+kern_return_t
+vnode_pager_unmap(
+	memory_object_t		mem_obj)
+{
+	register vnode_pager_t	vnode_object;
+
+	PAGER_DEBUG(PAGER_ALL, ("vnode_pager_unmap: %x\n", mem_obj));
+
+	vnode_object = vnode_pager_lookup(mem_obj);
+
+	ubc_unmap(vnode_object->vnode_handle);
+	return KERN_SUCCESS;
+}
+
 
 /*
  *
@@ -603,7 +576,37 @@ vnode_pager_cluster_write(
 	
 	while (cnt) {
 
-		kret = vnode_pageout(vnode_object->vnode_handle, (upl_t )NULL, (vm_offset_t)NULL, offset, size, 0, &local_error);
+		kret = vnode_pageout(vnode_object->vnode_handle, 
+			(upl_t )NULL, (vm_offset_t)NULL, 
+			offset, size, 0, &local_error);
+/*
+		if(kret == PAGER_ABSENT) {
+			Need to work out the defs here, 1 corresponds to 
+			PAGER_ABSENT defined in bsd/vm/vm_pager.h  However, 
+			we should not be including that file here it is a 
+			layering violation.
+*/
+		if(kret == 1) {
+			int	uplflags;
+			upl_t	upl = NULL;
+			int	count = 0;
+			kern_return_t	kr;
+
+        		uplflags = (UPL_NO_SYNC | UPL_CLEAN_IN_PLACE |
+					UPL_SET_INTERNAL | UPL_COPYOUT_FROM);
+		        count = 0;
+        		kr = memory_object_upl_request(
+					vnode_object->control_handle, 
+					offset, size, &upl, NULL, &count, uplflags);
+			if(kr != KERN_SUCCESS) {
+				panic("vnode_pager_cluster_write: upl request failed\n");
+			}
+			upl_abort(upl, 0);
+			upl_deallocate(upl);
+
+			error = 0;
+			local_error = 0;
+		}
 
 		if (local_error != 0) {
 			error = local_error;
@@ -611,6 +614,7 @@ vnode_pager_cluster_write(
 		}
 		cnt -= size;
 		offset += size;
+		size = (cnt < (PAGE_SIZE*32)) ? cnt : (PAGE_SIZE*32); /* effective min */
 	}
 #if 0
 	if (error != 0)
@@ -633,25 +637,39 @@ vnode_pager_cluster_read(
 	int		error = 0;
 	int		local_error = 0;
 	int		kret;
-	int		size;
 
 	if(cnt & PAGE_MASK) {
 		panic("vs_cluster_read: cnt not a multiple of PAGE_SIZE");
 	}
 
-	size = PAGE_SIZE;
+	kret = vnode_pagein(vnode_object->vnode_handle, (upl_t)NULL, (vm_offset_t)NULL, offset, cnt, 2, &local_error);
+/*
+	if(kret == PAGER_ABSENT) {
+	Need to work out the defs here, 1 corresponds to PAGER_ABSENT 
+	defined in bsd/vm/vm_pager.h  However, we should not be including 
+	that file here it is a layering violation.
+*/
+	if(kret == 1) {
+			int	uplflags;
+			upl_t	upl = NULL;
+			int	count = 0;
+			kern_return_t	kr;
 
-	while (cnt) {
+        		uplflags = (UPL_NO_SYNC | 
+				UPL_CLEAN_IN_PLACE | UPL_SET_INTERNAL);
+		        count = 0;
+        		kr = memory_object_upl_request(
+				vnode_object->control_handle, offset, cnt,
+				&upl, NULL, &count, uplflags);
+			if(kr != KERN_SUCCESS) {
+				panic("vnode_pager_cluster_read: upl request failed\n");
+			}
+			upl_abort(upl, 0);
+			upl_deallocate(upl);
 
-		kret = vnode_pagein(vnode_object->vnode_handle, (upl_t)NULL, (vm_offset_t)NULL, offset, size, 0, &local_error);
-
-		if (local_error != 0) {
-			error = local_error;
-			local_error = 0;
-		}
-		cnt -= size;
-		offset += size;
+		error = 1;
 	}
+
 	if (error != 0)
 		return(KERN_FAILURE);
 
@@ -668,7 +686,7 @@ vnode_pager_release_from_cache(
 		int	*cnt)
 {
 	memory_object_free_from_cache(
-			&realhost, (int)&vnode_pager_workaround, cnt);
+			&realhost, &vnode_pager_workaround, cnt);
 }
 
 /*
@@ -683,8 +701,18 @@ vnode_object_create(
 	vnode_object = (struct vnode_pager *) zalloc(vnode_pager_zone);
 	if (vnode_object == VNODE_PAGER_NULL)
 		return(VNODE_PAGER_NULL);
-	vnode_object->pager_handle = IP_NULL;
-	vnode_object->vm_obj_handle = IP_NULL;
+
+	/*
+	 * The vm_map call takes both named entry ports and raw memory
+	 * objects in the same parameter.  We need to make sure that
+	 * vm_map does not see this object as a named entry port.  So,
+	 * we reserve the second word in the object for a fake ip_kotype
+	 * setting - that will tell vm_map to use it as a memory object.
+	 */
+	vnode_object->pager = &vnode_pager_workaround;
+	vnode_object->pager_ikot = IKOT_MEMORY_OBJECT;
+	vnode_object->ref_count = 1;
+	vnode_object->control_handle = MEMORY_OBJECT_CONTROL_NULL;
 	vnode_object->vnode_handle = vp;
 
 	return(vnode_object);
@@ -693,99 +721,14 @@ vnode_object_create(
 /*
  *
  */
-void
-vnode_port_hash_init(void)
-{
-	register vm_size_t	size;
-	register int		i;
-
-
-	size = (vm_size_t) sizeof(struct vnode_port_entry);
-
-	vnode_port_hash_zone = zinit(size,
-				     (vm_size_t) MAX_VNODE * size,
-				     PAGE_SIZE, "vnode_pager port hash");
-
-	for (i = 0; i < VNODE_PORT_HASH_COUNT; i++) 
-		queue_init(&vnode_port_hashtable[i]);
-
-	simple_lock_init(&vnode_port_hash_lock,ETAP_NO_TRACE);
-}
-
-/*
- *
- */
-void
-vnode_port_hash_insert(
-	ipc_port_t		name_port,
-	vnode_pager_t	rec)
-{
-	register vnode_port_entry_t	new_entry;
-
-	new_entry = (vnode_port_entry_t) zalloc(vnode_port_hash_zone);
-	/*
-	 * TODO: Delete the following check once MAX_VNODE is removed 
-	 */
-	if (!new_entry)
-		panic("vnode_port_hash_insert: no space");
-	new_entry->name = name_port;
-	new_entry->pager_rec = rec;
-
-	simple_lock(&vnode_port_hash_lock);
-	queue_enter(&vnode_port_hashtable[vnode_port_hash(name_port)],
-			new_entry, vnode_port_entry_t, links);
-	simple_unlock(&vnode_port_hash_lock);
-}
-
-/*
- *
- */
 vnode_pager_t
-vnode_port_hash_lookup(
-	ipc_port_t	 name_port)
+vnode_pager_lookup(
+	memory_object_t	 name)
 {
-	register queue_t 		bucket;
-	register vnode_port_entry_t	entry;
-	vnode_pager_t			rec;
+	vnode_pager_t	vnode_object;
 
-	bucket = (queue_t) &vnode_port_hashtable[vnode_port_hash(name_port)];
-
-	simple_lock(&vnode_port_hash_lock);
-	entry = (vnode_port_entry_t) queue_first(bucket);
-	while (!queue_end(bucket,&entry->links)) {
-		if (entry->name == name_port) {
-			rec = entry->pager_rec;
-			simple_unlock(&vnode_port_hash_lock);
-			return(rec);
-		}
-		entry = (vnode_port_entry_t)queue_next(&entry->links);
-	}
-	simple_unlock(&vnode_port_hash_lock);
-	return(VNODE_PAGER_NULL);
+	vnode_object = (vnode_pager_t)name;
+	assert(vnode_object->pager == &vnode_pager_workaround);
+	return (vnode_object);
 }
 
-/*
- *
- */
-void
-vnode_port_hash_delete(
-	ipc_port_t name_port)
-{
-	register queue_t bucket;
-	register vnode_port_entry_t entry;
-
-	bucket = (queue_t) &vnode_port_hashtable[vnode_port_hash(name_port)];
-
-	simple_lock(&vnode_port_hash_lock);
-	entry = (vnode_port_entry_t) queue_first(bucket);
-	while (!queue_end(bucket,&entry->links)) {
-		if (entry->name == name_port) {
-			queue_remove(bucket, entry, vnode_port_entry_t,links);
-			simple_unlock(&vnode_port_hash_lock);
-			zfree(vnode_port_hash_zone, (vm_offset_t) entry);
-			return;
-		}
-		entry = (vnode_port_entry_t)queue_next(&entry->links);
-	}
-	simple_unlock(&vnode_port_hash_lock);
-}

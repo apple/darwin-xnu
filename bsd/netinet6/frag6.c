@@ -635,10 +635,6 @@ frag6_slowtimo()
 {
 	struct ip6q *q6;
 	int s;
-#ifdef __APPLE__
-    	boolean_t   funnel_state;
-    	funnel_state = thread_set_funneled(TRUE);
-#endif
 #ifdef __NetBSD__
 	s = splsoftnet();
 #else
@@ -689,9 +685,6 @@ frag6_slowtimo()
 #endif
 
 	splx(s);
-#ifdef __APPLE__
-    	(void) thread_set_funneled(funnel_state);
-#endif
 }
 
 /*

@@ -386,9 +386,8 @@ bsd_init()
 	}
 
 	/*
-	* Initialize the calendar by
-	* reading the BBC, if not already set.
-	*/
+	 * Initialize the calendar.
+	 */
 	IOKitResetTime();
 
 	ubc_init();

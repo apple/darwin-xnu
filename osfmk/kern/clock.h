@@ -32,8 +32,6 @@
 #ifndef	_KERN_CLOCK_H_
 #define	_KERN_CLOCK_H_
 
-#include <libkern/OSBase.h>
-
 #include <mach/message.h>
 #include <mach/clock_types.h>
 #include <mach/mach_time.h>
@@ -151,13 +149,13 @@ extern kern_return_t	clock_sleep_internal(
 							mach_timespec_t	*sleep_time);
 
 typedef void		(*clock_timer_func_t)(
-						AbsoluteTime		timestamp);
+						uint64_t			timestamp);
 
 extern void			clock_set_timer_func(
 						clock_timer_func_t	func);
 
 extern void			clock_set_timer_deadline(
-						AbsoluteTime		deadline);
+						uint64_t			deadline);
 
 extern void			mk_timebase_info(
 						uint32_t			*delta,
@@ -165,8 +163,6 @@ extern void			mk_timebase_info(
 						uint32_t			*abs_to_ns_denom,
 						uint32_t			*proc_to_abs_numer,
 						uint32_t			*proc_to_abs_denom);
-
-#define	scalar_to_AbsoluteTime(x)	(*(AbsoluteTime *)(x))
 
 #endif /* MACH_KERNEL_PRIVATE */
 
@@ -207,6 +203,74 @@ extern void				clock_initialize_calendar(void);
 
 extern mach_timespec_t	clock_get_calendar_offset(void);
 
+extern void				clock_timebase_info(
+							mach_timebase_info_t	info);
+
+extern void				clock_get_uptime(
+							uint64_t		*result);
+
+extern void				clock_interval_to_deadline(
+							uint32_t		interval,
+							uint32_t		scale_factor,
+							uint64_t		*result);
+
+extern void				clock_interval_to_absolutetime_interval(
+							uint32_t		interval,
+							uint32_t		scale_factor,
+							uint64_t		*result);
+
+extern void				clock_absolutetime_interval_to_deadline(
+							uint64_t		abstime,
+							uint64_t		*result);
+
+extern void				clock_deadline_for_periodic_event(
+							uint64_t		interval,
+							uint64_t		abstime,
+							uint64_t		*deadline);
+
+extern void				clock_delay_for_interval(
+							uint32_t		interval,
+							uint32_t		scale_factor);
+
+extern void				clock_delay_until(
+							uint64_t		deadline);
+
+extern void				absolutetime_to_nanoseconds(
+							uint64_t		abstime,
+							uint64_t		*result);
+
+extern void             nanoseconds_to_absolutetime(
+							uint64_t		nanoseconds,
+							uint64_t		*result);
+
+#if		!defined(MACH_KERNEL_PRIVATE) && !defined(ABSOLUTETIME_SCALAR_TYPE)
+
+#include <libkern/OSBase.h>
+
+#define clock_get_uptime(a)		\
+	clock_get_uptime(__OSAbsoluteTimePtr(a))
+
+#define clock_interval_to_deadline(a, b, c)		\
+	clock_interval_to_deadline((a), (b), __OSAbsoluteTimePtr(c))
+
+#define clock_interval_to_absolutetime_interval(a, b, c)	\
+	clock_interval_to_absolutetime_interval((a), (b), __OSAbsoluteTimePtr(c))
+
+#define clock_absolutetime_interval_to_deadline(a, b)	\
+	clock_absolutetime_interval_to_deadline(__OSAbsoluteTime(a), __OSAbsoluteTimePtr(b))
+
+#define clock_deadline_for_periodic_event(a, b, c)	\
+	clock_deadline_for_periodic_event(__OSAbsoluteTime(a), __OSAbsoluteTime(b), __OSAbsoluteTimePtr(c))
+
+#define clock_delay_until(a)	\
+	clock_delay_until(__OSAbsoluteTime(a))
+
+#define absolutetime_to_nanoseconds(a, b)	\
+	absolutetime_to_nanoseconds(__OSAbsoluteTime(a), (b))
+
+#define nanoseconds_to_absolutetime(a, b)	\
+	nanoseconds_to_absolutetime((a), __OSAbsoluteTimePtr(b))
+
 #define AbsoluteTime_to_scalar(x)	(*(uint64_t *)(x))
 
 /* t1 < = > t2 */
@@ -228,46 +292,8 @@ extern mach_timespec_t	clock_get_calendar_offset(void);
 
 #define ADD_ABSOLUTETIME_TICKS(t1, ticks)		\
 	(AbsoluteTime_to_scalar(t1) +=				\
-						(integer_t)(ticks))
+						(int32_t)(ticks))
 
-extern void				clock_timebase_info(
-							mach_timebase_info_t	info);
-
-extern void				clock_get_uptime(
-							AbsoluteTime		*result);
-
-extern void				clock_interval_to_deadline(
-							natural_t			interval,
-							natural_t			scale_factor,
-							AbsoluteTime		*result);
-
-extern void				clock_interval_to_absolutetime_interval(
-							natural_t			interval,
-							natural_t			scale_factor,
-							AbsoluteTime		*result);
-
-extern void				clock_absolutetime_interval_to_deadline(
-							AbsoluteTime		abstime,
-							AbsoluteTime		*result);
-
-extern void				clock_deadline_for_periodic_event(
-							AbsoluteTime		interval,
-							AbsoluteTime		abstime,
-							AbsoluteTime		*deadline);
-
-extern void				clock_delay_for_interval(
-							natural_t			interval,
-							natural_t			scale_factor);
-
-extern void				clock_delay_until(
-							AbsoluteTime		deadline);
-
-extern void				absolutetime_to_nanoseconds(
-							AbsoluteTime		abstime,
-							UInt64				*result);
-
-extern void             nanoseconds_to_absolutetime(
-							UInt64				nanoseconds,
-							AbsoluteTime		*result);
+#endif
 
 #endif	/* _KERN_CLOCK_H_ */

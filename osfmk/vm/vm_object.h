@@ -72,25 +72,23 @@
 #include <kern/queue.h>
 #include <kern/lock.h>
 #include <kern/assert.h>
+#include <kern/ipc_mig.h>
+#include <kern/misc_protos.h>
 #include <kern/macro_help.h>
 #include <ipc/ipc_types.h>
 #include <vm/pmap.h>
-#include <kern/misc_protos.h>
 
 #if	MACH_PAGEMAP
 #include <vm/vm_external.h>
 #endif	/* MACH_PAGEMAP */
 
-typedef struct ipc_port *	pager_request_t;
+typedef memory_object_control_t	pager_request_t;
 #define	PAGER_REQUEST_NULL	((pager_request_t) 0)
 
 /*
  *	Types defined:
  *
  *	vm_object_t		Virtual memory object.
- *
- *	We use "struct ipc_port *" instead of "ipc_port_t"
- *	to avoid include file circularities.
  */
 
 typedef unsigned long long vm_object_size_t;
@@ -124,7 +122,7 @@ struct vm_object {
 	struct vm_object	*shadow;	/* My shadow */
 	vm_object_offset_t	shadow_offset;	/* Offset into shadow */
 
-	struct ipc_port		*pager;		/* Where to get data */
+	memory_object_t		pager;		/* Where to get data */
 	vm_object_offset_t	paging_offset;	/* Offset into memory object */
 	pager_request_t		pager_request;	/* Where data comes back */
 
@@ -236,7 +234,7 @@ struct vm_object {
 						 * an error rather than a
 						 * zero filled page.
 						 */
-	/* boolean_t */		phys_contiguous:1;
+	/* boolean_t */		phys_contiguous:1,
 						/* Memory is wired and
 						 * guaranteed physically 
 						 * contiguous.  However
@@ -244,6 +242,12 @@ struct vm_object {
 						 * and obeys normal virtual
 						 * memory rules w.r.t pmap
 						 * access bits.
+						 */
+	/* boolean_t */		nophyscache:1;
+						/* When mapped at the 
+						 * pmap level, don't allow
+						 * primary caching. (for
+						 * I/O)
 						 */
 						
 
@@ -263,6 +267,8 @@ struct vm_object {
 	vm_external_map_t	existence_map;	/* bitmap of pages written to
 						 * backing storage */
 #endif	/* MACH_PAGEMAP */
+	int			cow_hint;	/* last page present in     */
+						/* shadow but not in object */
 #if	MACH_ASSERT
 	struct vm_object	*paging_object;	/* object which pages to be
 						 * swapped out are temporary
@@ -274,9 +280,10 @@ struct vm_object {
 #endif /* UBC_DEBUG */
 };
 
-extern
+__private_extern__
 vm_object_t	kernel_object;		/* the single kernel object */
 
+__private_extern__
 int		vm_object_absent_max;	/* maximum number of absent pages
 					   at a time for each object */
 
@@ -317,112 +324,19 @@ typedef struct msync_req	*msync_req_t;
  *	Declare procedures that operate on VM objects.
  */
 
-extern void		vm_object_bootstrap(void);
+__private_extern__ void		vm_object_bootstrap(void);
 
-extern void		vm_object_init(void);
+__private_extern__ void		vm_object_init(void);
 
-extern vm_object_t	vm_object_allocate(
+__private_extern__ vm_object_t	vm_object_allocate(
 					vm_object_size_t	size);
-
-#if	MACH_ASSERT
-extern void		vm_object_reference(
-					vm_object_t	object);
-#else	/* MACH_ASSERT */
-#define	vm_object_reference(object)			\
-MACRO_BEGIN						\
-	vm_object_t Object = (object);			\
-	if (Object) {					\
-		vm_object_lock(Object);			\
-		Object->ref_count++;			\
-		vm_object_res_reference(Object);	\
-		vm_object_unlock(Object);		\
-	}						\
-MACRO_END
-#endif	/* MACH_ASSERT */
-
-extern void		vm_object_deallocate(
-					vm_object_t	object);
-
-extern void		vm_object_pmap_protect(
-					vm_object_t		object,
-					vm_object_offset_t	offset,
-					vm_size_t		size,
-					pmap_t			pmap,
-					vm_offset_t		pmap_start,
-					vm_prot_t		prot);
-
-extern void		vm_object_page_remove(
-					vm_object_t		object,
-					vm_object_offset_t	start,
-					vm_object_offset_t	end);
-
-extern boolean_t	vm_object_coalesce(
-					vm_object_t		prev_object,
-					vm_object_t		next_object,
-					vm_object_offset_t	prev_offset,
-					vm_object_offset_t	next_offset,
-					vm_object_size_t	prev_size,
-					vm_object_size_t	next_size);
-
-extern boolean_t	vm_object_shadow(
-					vm_object_t		*object,
-					vm_object_offset_t	*offset,
-					vm_object_size_t	length);
-
-extern void		vm_object_collapse(
-					vm_object_t	object);
-
-extern vm_object_t	vm_object_lookup(
-					ipc_port_t	port);
-
-extern ipc_port_t	vm_object_name(
-					vm_object_t	object);
-
-extern boolean_t	vm_object_copy_quickly(
-				vm_object_t		*_object,
-				vm_object_offset_t	src_offset,
-				vm_object_size_t	size,
-				boolean_t		*_src_needs_copy,
-				boolean_t		*_dst_needs_copy);
-
-extern kern_return_t	vm_object_copy_strategically(
-				vm_object_t		src_object,
-				vm_object_offset_t	src_offset,
-				vm_object_size_t	size,
-				vm_object_t		*dst_object,
-				vm_object_offset_t	*dst_offset,
-				boolean_t		*dst_needs_copy);
-
-extern kern_return_t	vm_object_copy_slowly(
-				vm_object_t		src_object,
-				vm_object_offset_t	src_offset,
-				vm_object_size_t	size,
-				int			interruptible,
-				vm_object_t		*_result_object);
-
-extern void		vm_object_pager_create(
-					vm_object_t	object);
-
-extern void		vm_object_destroy(
-					ipc_port_t	pager);
-
-extern void		vm_object_pager_wakeup(
-					ipc_port_t	pager);
-
-extern void		vm_object_page_map(
-				vm_object_t	object,
-				vm_object_offset_t	offset,
-				vm_object_size_t	size,
-				vm_object_offset_t	(*map_fn)
-					(void *, vm_object_offset_t),
-					void 		*map_fn_data);
 
 #if	TASK_SWAPPER
 
-extern void		vm_object_res_reference(
-					vm_object_t object);
-extern void		vm_object_res_deallocate(
-					vm_object_t object);
+__private_extern__ void	vm_object_res_reference(
+				vm_object_t 		object);
+__private_extern__ void	vm_object_res_deallocate(
+				vm_object_t		object);
 #define	VM_OBJ_RES_INCR(object)	(object)->res_count++
 #define	VM_OBJ_RES_DECR(object)	(object)->res_count--
 
@@ -435,18 +349,160 @@ extern void		vm_object_res_deallocate(
 
 #endif	/* TASK_SWAPPER */
 
-extern vm_object_t	vm_object_enter(
-					ipc_port_t		pager,
+#define vm_object_reference_locked(object)		\
+MACRO_BEGIN						\
+		vm_object_t RLObject = (object);	\
+		assert((RLObject)->ref_count > 0);	\
+		(RLObject)->ref_count++;		\
+		vm_object_res_reference(RLObject);	\
+MACRO_END
+
+
+#if	MACH_ASSERT
+
+__private_extern__ void		vm_object_reference(
+					vm_object_t	object);
+
+#else	/* MACH_ASSERT */
+
+#define	vm_object_reference(object)			\
+MACRO_BEGIN						\
+	vm_object_t RObject = (object);			\
+	if (RObject) {					\
+		vm_object_lock(RObject);		\
+		vm_object_reference_locked(RObject);	\
+		vm_object_unlock(RObject);		\
+	}						\
+MACRO_END
+
+#endif	/* MACH_ASSERT */
+
+__private_extern__ void		vm_object_deallocate(
+					vm_object_t	object);
+
+__private_extern__ kern_return_t vm_object_release_name(
+					vm_object_t	object,
+					int		flags);
+							
+__private_extern__ void		vm_object_pmap_protect(
+					vm_object_t		object,
+					vm_object_offset_t	offset,
+					vm_size_t		size,
+					pmap_t			pmap,
+					vm_offset_t		pmap_start,
+					vm_prot_t		prot);
+
+__private_extern__ void		vm_object_page_remove(
+					vm_object_t		object,
+					vm_object_offset_t	start,
+					vm_object_offset_t	end);
+
+__private_extern__ void		vm_object_deactivate_pages(
+					vm_object_t		object,
+					vm_object_offset_t	offset,
+					vm_object_size_t	size,
+					boolean_t               kill_page);
+
+__private_extern__ boolean_t	vm_object_coalesce(
+					vm_object_t		prev_object,
+					vm_object_t		next_object,
+					vm_object_offset_t	prev_offset,
+					vm_object_offset_t	next_offset,
+					vm_object_size_t	prev_size,
+					vm_object_size_t	next_size);
+
+__private_extern__ boolean_t	vm_object_shadow(
+					vm_object_t		*object,
+					vm_object_offset_t	*offset,
+					vm_object_size_t	length);
+
+__private_extern__ void		vm_object_collapse(
+					vm_object_t	object);
+
+__private_extern__ boolean_t	vm_object_copy_quickly(
+				vm_object_t		*_object,
+				vm_object_offset_t	src_offset,
+				vm_object_size_t	size,
+				boolean_t		*_src_needs_copy,
+				boolean_t		*_dst_needs_copy);
+
+__private_extern__ kern_return_t	vm_object_copy_strategically(
+				vm_object_t		src_object,
+				vm_object_offset_t	src_offset,
+				vm_object_size_t	size,
+				vm_object_t		*dst_object,
+				vm_object_offset_t	*dst_offset,
+				boolean_t		*dst_needs_copy);
+
+__private_extern__ kern_return_t	vm_object_copy_slowly(
+				vm_object_t		src_object,
+				vm_object_offset_t	src_offset,
+				vm_object_size_t	size,
+				int			interruptible,
+				vm_object_t		*_result_object);
+
+__private_extern__ vm_object_t	vm_object_copy_delayed(
+				vm_object_t		src_object,
+				vm_object_offset_t	src_offset,
+				vm_object_size_t	size);
+
+
+
+__private_extern__ kern_return_t	vm_object_destroy(
+					vm_object_t	object,
+					kern_return_t	reason);
+
+__private_extern__ void		vm_object_pager_create(
+					vm_object_t	object);
+
+__private_extern__ void		vm_object_page_map(
+				vm_object_t	object,
+				vm_object_offset_t	offset,
+				vm_object_size_t	size,
+				vm_object_offset_t	(*map_fn)
+					(void *, vm_object_offset_t),
+					void 		*map_fn_data);
+
+__private_extern__ kern_return_t vm_object_upl_request(
+				vm_object_t		object, 
+				vm_object_offset_t	offset,
+				vm_size_t		size,
+				upl_t			*upl,
+				upl_page_info_t		*page_info,
+				unsigned int		*count,
+				int			flags);
+
+__private_extern__ boolean_t vm_object_sync(
+				vm_object_t		object,
+				vm_object_offset_t	offset,
+				vm_size_t		size,
+				boolean_t		should_flush,
+				boolean_t		should_return);
+
+__private_extern__ kern_return_t vm_object_update(
+				vm_object_t		object,
+				vm_object_offset_t	offset,
+				vm_size_t		size, /* should be 64 */
+				memory_object_return_t	should_return,
+				int			flags,
+				vm_prot_t		prot);
+
+__private_extern__ kern_return_t vm_object_lock_request(
+				vm_object_t		object,
+				vm_object_offset_t	offset,
+				vm_object_size_t	size,
+				memory_object_return_t	should_return,
+				int			flags,
+				vm_prot_t		prot);
+
+
+
+__private_extern__ vm_object_t	vm_object_enter(
+					memory_object_t		pager,
 					vm_object_size_t	size,
 					boolean_t		internal,
 					boolean_t		init,
 					boolean_t		check_named);
-
-
-extern vm_object_t	vm_object_copy_delayed(
-				vm_object_t		src_object,
-				vm_object_offset_t	src_offset,
-				vm_object_size_t	size);
 
 
 /*

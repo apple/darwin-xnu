@@ -2873,6 +2873,7 @@ nfsrv_readdirplus(nfsd, slp, procp, mrq)
 	int siz, cnt, fullsiz, eofflag, rdonly, cache, dirlen, ncookies = 0;
 	u_quad_t frev, off, toff, verf;
 	u_long *cookies = NULL, *cookiep;
+	void *file;
 
 	fhp = &nfh.fh_generic;
 	nfsm_srvmtofh(fhp);
@@ -3004,10 +3005,17 @@ again:
 
 	/*
 	 * Probe one of the directory entries to see if the filesystem
-	 * supports VGET.
+	 * supports VGET. See later comment for VFS_VGET changes.
 	 */
-	if (VFS_VGET(vp->v_mount, dp->d_fileno, &nvp) == EOPNOTSUPP) {
-		error = NFSERR_NOTSUPP;
+	if (vp->v_tag == VT_UFS) 
+		file = (void *) dp->d_fileno;
+	else {
+		file = &dp->d_fileno;
+	}
+	
+	if (error = VFS_VGET(vp->v_mount, file, &nvp)) {
+		if (error == EOPNOTSUPP) /* let others get passed back */
+			error = NFSERR_NOTSUPP; 
 		vrele(vp);
 		_FREE((caddr_t)cookies, M_TEMP);
 		_FREE((caddr_t)rbuf, M_TEMP);
@@ -3032,11 +3040,22 @@ again:
 			nlen = dp->d_namlen;
 			rem = nfsm_rndup(nlen)-nlen;
 
-			/*
-			 * For readdir_and_lookup get the vnode using
-			 * the file number.
+			/* 
+			 * Got to get the vnode for lookup per entry.
+			 * HFS+/volfs and others use address of file identifier to VGET
+			 * UFS, nullfs, umapfs use inode (u_int32_t)
+			 * until they are consistent, we must differentiate now. 
+			 * UFS is the only one of the latter class that is exported.
+			 * Note this will be pulled out as we resolve the VGET issue
+			 * of which it should use u_in32_t or addresses. 
 			 */
-			if (VFS_VGET(vp->v_mount, dp->d_fileno, &nvp))
+			  
+			if (vp->v_tag == VT_UFS) 
+				file = (void *) dp->d_fileno;
+			else 
+				file = &dp->d_fileno;
+				
+			if (VFS_VGET(vp->v_mount, file, &nvp))
 				goto invalid;
 			bzero((caddr_t)nfhp, NFSX_V3FH);
 			nfhp->fh_fsid =

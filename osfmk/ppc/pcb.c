@@ -176,13 +176,10 @@ switch_context(
 			  (long)__builtin_return_address(0));
 #endif
 	per_proc_info[cpu_number()].old_thread = old;
+	per_proc_info[cpu_number()].cpu_flags &= ~traceBE;  /* disable branch tracing if on */
 	assert(old_act->kernel_loaded ||
 	       active_stacks[cpu_number()] == old_act->thread->kernel_stack);
 	       
-	if(get_preemption_level() != 1) {					/* Make sure we are not at wrong preemption level */
-		panic("switch_context: Invalid preemption level (%d); old = %08X, cont = %08X, new = %08X\n",
-			get_preemption_level(), old, continuation, new);
-	}
 	check_simple_locks();
 
 	/* Our context might wake up on another processor, so we must
@@ -190,8 +187,8 @@ switch_context(
 	 * so that it can be found by the other if needed
 	 */
 	if(real_ncpus > 1) {	/* This is potentially slow, so only do when actually SMP */
-		fpu_save();			/* Save floating point if used */
-		vec_save();			/* Save vector if used */
+		fpu_save(old_act);	/* Save floating point if used */
+		vec_save(old_act);	/* Save vector if used */
 	}
 
 #if DEBUG
@@ -239,6 +236,9 @@ switch_context(
 
 	retval = Switch_context(old, continuation, new);
 	assert(retval != (struct thread_shuttle*)NULL);
+
+	if (branch_tracing_enabled())
+	  per_proc_info[cpu_number()].cpu_flags |= traceBE;  /* restore branch tracing */
 
 	/* We've returned from having switched context, so we should be
 	 * back in the original context.
@@ -296,9 +296,6 @@ thread_machine_create(
 	sv->save_act = thr_act;									/* Set who owns it */
 	sv->save_vrsave = 0;
 	thr_act->mact.pcb = (pcb_t)sv;							/* Point to the save area */
-
-    thread->kernel_stack = (int)stack_alloc(thread,start_pos);				/* Allocate our kernel stack */
-    assert(thread->kernel_stack);							/* Make sure we got it */
 
 #if	MACH_ASSERT
 	if (watchacts & WA_PCB)
@@ -372,8 +369,8 @@ machine_switch_act(
 	 * so that it can be found by the other if needed
 	 */
 	if(real_ncpus > 1) {	/* This is potentially slow, so only do when actually SMP */
-		fpu_save();			/* Save floating point if used */
-		vec_save();			/* Save vector if used */
+		fpu_save(old);		/* Save floating point if used */
+		vec_save(old);		/* Save vector if used */
 	}
 
 	active_stacks[cpu] = thread->kernel_stack;
@@ -883,10 +880,12 @@ stack_handoff(thread_t old,
   stack = stack_detach(old);
   new->kernel_stack = stack;
 
+  per_proc_info[cpu_number()].cpu_flags &= ~traceBE;
+
 #if NCPUS > 1
   if (real_ncpus > 1) {
-	fpu_save();
-	vec_save();
+	fpu_save(old->top_act);
+	vec_save(old->top_act);
   }
 #endif
 
@@ -907,6 +906,12 @@ stack_handoff(thread_t old,
   thread_machine_set_current(new);
   active_stacks[cpu_number()] = new->kernel_stack;
   per_proc_info[cpu_number()].Uassist = new->top_act->mact.cthread_self;
+#if 1
+  per_proc_info[cpu_number()].ppbbTaskEnv = new->top_act->mact.bbTaskEnv;
+  per_proc_info[cpu_number()].spcFlags = new->top_act->mact.specFlags;
+#endif
+  if (branch_tracing_enabled()) 
+    per_proc_info[cpu_number()].cpu_flags |= traceBE;
   return;
 }
 

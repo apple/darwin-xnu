@@ -189,6 +189,7 @@ __sysctl(p, uap, retval)
 	sysctlfn *fn;
 	int name[CTL_MAXNAME];
 	int i;
+	int error1;
 
 	/*
 	 * all top-level sysctl names are non-terminal
@@ -210,7 +211,8 @@ __sysctl(p, uap, retval)
 	switch (name[0]) {
 	case CTL_KERN:
 		fn = kern_sysctl;
-		if (name[1] != KERN_VNODE)	/* XXX */
+		if ((name[1] != KERN_VNODE) && (name[1] != KERN_FILE) 
+			&& (name[1] != KERN_PROC))
 			dolock = 0;
 		break;
 	case CTL_HW:
@@ -255,8 +257,16 @@ __sysctl(p, uap, retval)
 		  memlock.sl_lock = 1;
 		}
 
-		if (dolock)
-			vslock(uap->old, oldlen);
+		if (dolock && oldlen && (error = vslock(uap->old, oldlen))) {
+			if (name[1] != KERN_PCSAMPLES) {
+		  		memlock.sl_lock = 0;
+		  		if (memlock.sl_want) {
+		        	memlock.sl_want = 0;
+					wakeup((caddr_t)&memlock);
+		  		}
+			}
+			return(error);
+		}
 		savelen = oldlen;
 	}
 
@@ -272,8 +282,11 @@ __sysctl(p, uap, retval)
 					uap->new, uap->newlen, &oldlen);
 
 	if (uap->old != NULL) {
-		if (dolock)
-			vsunlock(uap->old, savelen, B_WRITE);
+		if (dolock && savelen) {
+			error1 = vsunlock(uap->old, savelen, B_WRITE);
+			if (!error &&  error1)
+				error = error1;
+		}
 		if (name[1] != KERN_PCSAMPLES) {
 		  memlock.sl_lock = 0;
 		  if (memlock.sl_want) {
@@ -1096,6 +1109,7 @@ sysctl_procargs(name, namelen, where, sizep)
 	 */
 	pid = name[0];
 
+ restart:
 	p = pfind(pid);
 	if (p == NULL) {
 		return(EINVAL);
@@ -1126,7 +1140,16 @@ sysctl_procargs(name, namelen, where, sizep)
 	if (task == NULL)
 		return(EINVAL);
 	
-	task_reference(task);
+	/*
+	 * A regular task_reference call can block, causing the funnel
+	 * to be dropped and allowing the proc/task to get freed.
+	 * Instead, we issue a non-blocking attempt at the task reference,
+	 * and look up the proc/task all over again if that fails.
+	 */
+	if (!task_reference_try(task)) {
+		mutex_pause();
+		goto restart;
+	}
 
 	ret = kmem_alloc(kernel_map, &copy_start, round_page(arg_size));
 	if (ret != KERN_SUCCESS) {

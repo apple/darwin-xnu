@@ -47,8 +47,8 @@ PPCcallEnt	PPCcalls[] = {
 	PPCcall(bb_enable_bluebox),		/* 0x6005 Enable this thread for use in the blue box virtual machine */
 	PPCcall(bb_disable_bluebox),	/* 0x6006 Disable this thread for use in the blue box virtual machine */
 	PPCcall(bb_settaskenv),			/* 0x6007 Set the BlueBox per thread task environment data */
+	PPCcall(vmm_stop_vm),			/* 0x6008 Stop a running VM */
 
-	PPCcall(dis),					/* 0x6008 disabled */
 	PPCcall(dis),					/* 0x6009 disabled */
 	PPCcall(dis),					/* 0x600A disabled */
 	PPCcall(dis),					/* 0x600B disabled */

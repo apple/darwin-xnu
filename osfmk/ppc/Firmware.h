@@ -95,6 +95,15 @@ extern __inline__ void CreateShutdownCTX(void) {
 		return;
 }
 
+extern void ChokeSys(unsigned int ercd);
+extern __inline__ void ChokeSys(unsigned int ercd) {
+ 		__asm__ volatile("mr   r3,%0" : : "r" (ercd) : "r3");
+        __asm__ volatile("lis  r0,hi16(Choke)" : : : "r0");
+        __asm__ volatile("ori  r0,r0,lo16(Choke)" : : : "r0");
+		__asm__ volatile("sc");
+		return;
+}
+
 typedef struct Boot_Video bootBumbleC;
 
 extern void StoreReal(unsigned int val, unsigned int addr);

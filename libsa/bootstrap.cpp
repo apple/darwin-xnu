@@ -29,6 +29,8 @@ extern "C" {
 #include <libsa/malloc.h>
 };
 
+#include "kld_patch.h"
+
 extern "C" {
 /*****
  * This function is used by IOCatalogue to load a kernel
@@ -49,8 +51,6 @@ extern void (*remove_startup_extension_function)(const char * name);
  * about loading and matching drivers.
  */
 extern int kernelLinkerPresent;
-
-extern IOLock * kld_lock;
 };
 
 
@@ -69,9 +69,6 @@ static KLDBootstrap bootstrap_obj;
  */
 KLDBootstrap::KLDBootstrap() {
 
-    kld_lock = IOLockAlloc();
-    IOLockLock(kld_lock);
-
     kmod_load_function = &load_kernel_extension;
 
     record_startup_extensions_function = &recordStartupExtensions;
@@ -79,8 +76,6 @@ KLDBootstrap::KLDBootstrap() {
     remove_startup_extension_function = &removeStartupExtension;
 
     kernelLinkerPresent = 1;
-
-    IOLockUnlock(kld_lock);
 }
 
 /* The destructor frees all wired memory regions held
@@ -88,16 +83,15 @@ KLDBootstrap::KLDBootstrap() {
  */
 KLDBootstrap::~KLDBootstrap() {
 
-    OSDictionary * startupExtensions;
+    kld_file_cleanup_all_resources();
 
-    IOLockLock(kld_lock);
+   /* Dump all device-tree entries for boot drivers, and all
+    * info on startup extensions. The IOCatalogue will now
+    * get personalities from kextd.
+    */
+    clearStartupExtensionsAndLoaderInfo();
 
+   /* Free all temporary malloc memory.
+    */
     malloc_reset();
-
-    startupExtensions = getStartupExtensions();
-    if (startupExtensions) startupExtensions->release();
-
-    IOLockUnlock(kld_lock);
-    IOLockFree(kld_lock);
-
 }

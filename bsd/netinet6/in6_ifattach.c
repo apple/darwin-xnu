@@ -473,7 +473,7 @@ in6_ifattach(ifp, type, laddr, noloop)
 		bzero(&ia->ia_dstaddr, sizeof(struct sockaddr_in6));
 		ia->ia_dstaddr.sin6_len = sizeof(struct sockaddr_in6);
 		ia->ia_dstaddr.sin6_family = AF_INET6;
-
+#if NGIF > 0
                  if (strcmp(ifp->if_name, "gif") == 0) {
                    	ia->ia_ifa.ifa_dlt = gif_attach_inet(ifp);
 #if DEBUG
@@ -481,6 +481,7 @@ in6_ifattach(ifp, type, laddr, noloop)
 				 ifp->if_name, ifp->if_unit, ia, ia->ia_ifa.ifa_dlt);
 #endif
 		 }
+#endif
 		break;
 	case IN6_IFT_ARCNET:
 		ia->ia_ifa.ifa_rtrequest = nd6_rtrequest;

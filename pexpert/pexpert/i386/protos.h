@@ -63,13 +63,12 @@ __OUT(b, char)
 __OUT(w, short)
 __OUT(l, long)
 
-//------------------------------------------------------------------------
-// from bsd/dev/ppc/busses.h which clashes with mach/device/device_types.h
-typedef int            io_req_t;
+extern void cninit(void);
+extern void bcopy(void * from, void * to, int size);
+extern int  sprintf(char * str, const char * format, ...);
 
-
-// typedef struct ipc_port         *ipc_port_t;
-
-extern void            cninit(void);
+extern boolean_t vc_progress_initialize( void * desc,
+                                         unsigned char * data,
+                                         unsigned char * clut );
 
 #endif /* _PEXPERT_I386_PROTOS_H */

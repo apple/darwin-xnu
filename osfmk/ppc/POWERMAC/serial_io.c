@@ -142,7 +142,7 @@ enum scc_error {SCC_ERR_NONE, SCC_ERR_PARITY, SCC_ERR_BREAK, SCC_ERR_OVERRUN};
 #define SERIAL_CLOCK_FREQUENCY (115200*2) /* Power Mac value */
 #define	convert_baud_rate(rate)	((((SERIAL_CLOCK_FREQUENCY) + (rate)) / (2 * (rate))) - 2)
 
-#define DEFAULT_SPEED 38400
+#define DEFAULT_SPEED 57600
 #define DEFAULT_FLAGS (TF_LITOUT|TF_ECHO)
 
 int	scc_param(struct scc_tty *tp);

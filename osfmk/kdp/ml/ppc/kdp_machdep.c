@@ -285,6 +285,7 @@ kdp_machine_hostinfo(
     int			i;
 
     hostinfo->cpus_mask = 0;
+    hostinfo->cpu_type = 0;
 
     for (i = 0; i < machine_info.max_cpus; i++) {
         m = &machine_slot[i];

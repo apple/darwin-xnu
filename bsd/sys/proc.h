@@ -196,6 +196,8 @@ struct	proc {
 	void * exitarg;			/* exit arg for proc terminate */
 	void * vm_shm;			/* for sysV shared memory */
 	sigset_t p_sigpending;	/* pended Signals as traced process is blocked. */
+	int		p_vforkcnt;		/* number of outstanding vforks */
+    void *  p_vforkact;     /* activation running this vfork proc */
 #if DIAGNOSTIC
 #if SIGNAL_DEBUG
 	unsigned int lockpc[8];
@@ -296,6 +298,11 @@ struct extern_proc {
 #define	P_REBOOT	0x0200000	/* Process called reboot() */
 #define	P_TBE		0x0400000	/* Process is TBE */
 #define	P_SIGTHR	0x0800000	/* signal pending handling thread scheduled */
+#define	P_BTRACE	0x1000000	/* process is being branch traced */
+#define	P_VFORK		0x2000000	/* process has vfork children */
+#define P_NOATTACH	0x4000000
+#define	P_INVFORK	0x8000000	/* proc in vfork */
+
 
 /*
  * Shareable process credentials (always resident).  This includes a reference

@@ -105,6 +105,7 @@ SYSCTL_INT(_net_inet_ip, OID_AUTO, subnets_are_local, CTLFLAG_RW,
 struct in_multihead in_multihead; /* XXX BSS initialization */
 
 extern void arp_rtrequest();
+extern int  ether_detach_inet(struct ifnet *ifp);
 
 
 /*
@@ -252,9 +253,11 @@ in_control(so, cmd, data, ifp, p)
 #endif
                 case SIOCGIFPSRCADDR:
                 case SIOCGIFPDSTADDR:
+#if NGIF > 0
 			if (strcmp(ifp->if_name, "gif") == 0)
 			    dl_tag = gif_attach_inet(ifp);
                         return gif_ioctl(ifp, cmd, data);
+#endif
                 }
         }
 #endif
@@ -302,6 +305,15 @@ in_control(so, cmd, data, ifp, p)
 			}
 
 	switch (cmd) {
+	case SIOCAUTOADDR:
+#if 1
+		if (p && (error = suser(p->p_ucred, &p->p_acflag)) != 0)
+			return error;
+#else
+		if ((so->so_state & SS_PRIV) == 0)
+			return (EPERM);
+#endif
+		break;
 
 	case SIOCAIFADDR:
 	case SIOCDIFADDR:
@@ -321,6 +333,8 @@ in_control(so, cmd, data, ifp, p)
 				return EDESTADDRREQ;
 			}
 		}
+        else if (cmd == SIOCAIFADDR)
+            return (EINVAL);
 		if (cmd == SIOCDIFADDR && ia == 0)
 			return (EADDRNOTAVAIL);
 		/* FALLTHROUGH */
@@ -338,6 +352,8 @@ in_control(so, cmd, data, ifp, p)
 
 		if (ifp == 0)
 			return (EADDRNOTAVAIL);
+        if (ifra->ifra_addr.sin_family != AF_INET && cmd == SIOCSIFADDR)
+            return (EINVAL);
 		if (ia == (struct in_ifaddr *)0) {
 			ia = (struct in_ifaddr *)
 				_MALLOC(sizeof *ia, M_IFADDR, M_WAITOK);
@@ -381,6 +397,16 @@ in_control(so, cmd, data, ifp, p)
 		}
 		break;
 
+	case SIOCPROTOATTACH:
+	case SIOCPROTODETACH:
+		if (p && (error = suser(p->p_ucred, &p->p_acflag)) != 0)
+                    return error;
+		if (ifp == 0)
+			return (EADDRNOTAVAIL);
+                if (strcmp(ifp->if_name, "en"))
+                    return ENODEV;
+                break;
+                
 	case SIOCSIFBRDADDR:
 #if ISFB31
 		if (p && (error = suser(p->p_ucred, &p->p_acflag)) != 0)
@@ -400,6 +426,14 @@ in_control(so, cmd, data, ifp, p)
 		break;
 	}
 	switch (cmd) {
+	case SIOCAUTOADDR:
+		if (ifp == 0)
+			return (EADDRNOTAVAIL);
+		if (ifr->ifr_data)
+			ifp->if_eflags |= IFEF_AUTOCONFIGURING;
+		else
+			ifp->if_eflags &= ~IFEF_AUTOCONFIGURING;
+		break;
 
 	case SIOCGIFADDR:
 		*((struct sockaddr_in *)&ifr->ifr_addr) = ia->ia_addr;
@@ -511,6 +545,17 @@ in_control(so, cmd, data, ifp, p)
 	case SIOCSIFADDR:
 		return (in_ifinit(ifp, ia,
 		    (struct sockaddr_in *) &ifr->ifr_addr, 1));
+
+	case SIOCPROTOATTACH:
+                ether_attach_inet(ifp);
+                break;
+                
+	case SIOCPROTODETACH:
+                // if an ip address is still present, refuse to detach
+                TAILQ_FOREACH(ifa, &ifp->if_addrhead, ifa_link) 
+                    if (ifa->ifa_addr->sa_family == AF_INET)
+                        return EBUSY;
+                return ether_detach_inet(ifp);
 
 	case SIOCSIFNETMASK:
 		i = ifra->ifra_addr.sin_addr.s_addr;
@@ -658,6 +703,26 @@ in_control(so, cmd, data, ifp, p)
 		oia = ia;
 		TAILQ_REMOVE(&in_ifaddrhead, oia, ia_link);
 		IFAFREE(&oia->ia_ifa);
+                
+                /*
+                * If the interface supports multicast, and no address is left,
+                * remove the "all hosts" multicast group from that interface.
+                */
+                if (ifp->if_flags & IFF_MULTICAST) {
+                    struct in_addr addr;
+                    struct in_multi *inm;
+
+                    TAILQ_FOREACH(ifa, &ifp->if_addrhead, ifa_link) 
+                        if (ifa->ifa_addr->sa_family == AF_INET)
+                            break;
+
+                    if (ifa == 0) {
+                        addr.s_addr = htonl(INADDR_ALLHOSTS_GROUP);
+                        IN_LOOKUP_MULTI(addr, ifp, inm);
+                        if (inm)
+                            in_delmulti(inm);
+                    }
+                }
 		splx(s);
 		break;
 
@@ -1033,10 +1098,13 @@ in_ifinit(ifp, ia, sin, scrub)
 	 * multicast group on that interface.
 	 */
 	if (ifp->if_flags & IFF_MULTICAST) {
+                struct in_multi *inm;
 		struct in_addr addr;
 
 		addr.s_addr = htonl(INADDR_ALLHOSTS_GROUP);
-		in_addmulti(&addr, ifp);
+                IN_LOOKUP_MULTI(addr, ifp, inm);
+                if (inm == 0)
+                    in_addmulti(&addr, ifp);
 	}
 	return (error);
 }
@@ -1065,7 +1133,9 @@ in_broadcast(in, ifp)
 	 */
 #define ia ((struct in_ifaddr *)ifa)
 	for (ifa = ifp->if_addrhead.tqh_first; ifa; 
-	     ifa = ifa->ifa_link.tqe_next)
+	     ifa = ifa->ifa_link.tqe_next) {
+		if (ifa->ifa_addr == NULL)
+			return (0);
 		if (ifa->ifa_addr->sa_family == AF_INET &&
 		    (in.s_addr == ia->ia_broadaddr.sin_addr.s_addr ||
 		     in.s_addr == ia->ia_netbroadcast.s_addr ||
@@ -1080,6 +1150,7 @@ in_broadcast(in, ifp)
 		      */
 		     ia->ia_subnetmask != (u_long)0xffffffff)
 			    return 1;
+	}
 	return (0);
 #undef ia
 }
@@ -1119,9 +1190,7 @@ in_addmulti(ap, ifp)
 	if (ifma->ifma_protospec != 0)
 		return ifma->ifma_protospec;
 
-	/* XXX - if_addmulti uses M_WAITOK.  Can this really be called
-	   at interrupt time?  If so, need to fix if_addmulti. XXX */
-	inm = (struct in_multi *) _MALLOC(sizeof(*inm), M_IPMADDR, M_NOWAIT);
+	inm = (struct in_multi *) _MALLOC(sizeof(*inm), M_IPMADDR, M_WAITOK);
 	if (inm == NULL) {
 		splx(s);
 		return (NULL);

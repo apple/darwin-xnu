@@ -71,6 +71,7 @@ public:
     virtual IOReturn getAutoPollList(UInt16 * activeAddressMask) = 0;
     virtual IOReturn setAutoPollEnable(bool enable) = 0;
     virtual IOReturn resetBus(void) = 0;
+    virtual IOReturn cancelAllIO(void) = 0;
     virtual IOReturn flushDevice(IOADBAddress address) = 0;
     virtual IOReturn readFromDevice(IOADBAddress address, IOADBRegister adbRegister,
                                     UInt8 * data, IOByteCount * length) = 0;

@@ -183,8 +183,6 @@ extern void		kdb_on(
 extern void		cnpollc(
 				boolean_t		on);
 				
-extern void		kdb_kintr(void);
-
 extern void		db_phys_copy(
 				vm_offset_t, 
 				vm_offset_t, 

@@ -39,3 +39,6 @@ unsigned long	powerDomainBudget;	// power in mw a domain in this state can deliv
 
 typedef struct IOPMPowerState IOPMPowerState;
 
+enum {
+    kIOPMPowerStateVersion1 = 1
+};

@@ -48,6 +48,21 @@ protected:
 					used by parent */
     unsigned long	desiredDomainState;
 
+    /*! @field requestFlag		set to true when desiredDomainState is set */
+    bool		requestFlag;
+
+    /*! @field preventIdleSleepFlag	true if child has this bit set in its desired state
+					used by parent */
+    unsigned long	preventIdleSleepFlag;
+
+    /*! @field preventSystemSleepFlag	true if child has this bit set in its desired state
+					used by parent */
+    unsigned long	preventSystemSleepFlag;
+
+    /*! @field awaitingAck		true if child has not yet acked our notification
+					used by parent */
+    bool		awaitingAck;
+
 public:
         /*! @function setParentKnowsState
             @abstract Sets the stateKnown variable.
@@ -69,13 +84,55 @@ public:
 
     /*! @function setDesiredDomainState
         @abstract Sets the desiredDomainState variable.
-        @discussion Called by the child. */
+        @discussion Called by the parent. */
     void setDesiredDomainState (unsigned long );
 
     /*! @function getDesiredDomainState
         @abstract Returns the desiredDomainState variable.
-    @discussion Called by the child. */
+    @discussion Called by the parent. */
     unsigned long getDesiredDomainState ( void );
+
+    /*! @function setChildHasRequestedPower
+        @abstract Set the flag that says that the child has called requestPowerDomainState.
+    @discussion Called by the parent. */
+    void setChildHasRequestedPower ( void );
+
+
+    /*! @function childHasRequestedPower
+        @abstract Return the flag that says whether the child has called requestPowerDomainState.
+    @discussion Called by the PCI Aux Power Supply Driver to see if a device driver
+        is power managed. */
+    bool childHasRequestedPower ( void );
+    
+    /*! @function setPreventIdleSleepFlag
+        @abstract Sets the preventIdleSleepFlag variable.
+        @discussion Called by the parent. */
+    void setPreventIdleSleepFlag (unsigned long );
+
+    /*! @function getPreventIdleSleepFlag
+        @abstract Returns the preventIdleSleepFlag variable.
+    @discussion Called by the parent. */
+    bool getPreventIdleSleepFlag ( void );
+    
+    /*! @function setPreventSystemSleepFlag
+        @abstract Sets the preventSystemSleepFlag variable.
+        @discussion Called by the parent. */
+    void setPreventSystemSleepFlag (unsigned long );
+
+    /*! @function getPreventSystemSleepFlag
+        @abstract Returns the preventSystemSleepFlag variable.
+        @discussion Called by the parent. */
+    bool getPreventSystemSleepFlag ( void );
+    
+    /*! @function setAwaitingAck
+        @abstract Sets the awaitingAck variable.
+        @discussion Called by the parent. */
+    void setAwaitingAck ( bool );
+
+    /*! @function getAwaitingAck
+        @abstract Returns the awaitingAck variable.
+        @discussion Called by the parent. */
+    bool getAwaitingAck ( void );
 };
 
 #endif /* ! _IOKIT_IOPOWERCONNECTION_H */

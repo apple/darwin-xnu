@@ -109,6 +109,9 @@
 #include <sys/kdebug.h>
 
 #define DBG_FNC_TCP_CLOSE	NETDBG_CODE(DBG_NETTCP, ((5 << 8) | 2))
+#ifndef offsetof               /* XXX */
+#define        offsetof(type, member)  ((size_t)(&((type *)0)->member))
+#endif
 
 
 int 	tcp_mssdflt = TCP_MSS;
@@ -203,7 +206,9 @@ tcp_init()
 	vm_size_t	str_size;
 	int  i;
 
-	tcp_iss = random();	/* wrong, but better than a constant */
+#ifdef TCP_COMPAT_42
+       tcp_iss = 1;
+#endif /* TCP_COMPAT_42 */
 	tcp_ccgen = 1;
 	tcp_cleartaocache();
 	LIST_INIT(&tcb);
@@ -241,7 +246,7 @@ tcp_init()
 	tcbinfo.dummy_cb = (caddr_t) &dummy_tcb;
 	in_pcb_nat_init(&tcbinfo, AF_INET, IPPROTO_TCP, SOCK_STREAM);
 
-	delack_bitmask = _MALLOC((4 * hashsize)/32, M_PCB, M_NOWAIT);
+	delack_bitmask = _MALLOC((4 * hashsize)/32, M_PCB, M_WAITOK);
 	if (delack_bitmask == 0) 
 	     panic("Delack Memory");
 
@@ -290,6 +295,10 @@ tcp_template(tp)
 	n->tt_win = 0;
 	n->tt_sum = 0;
 	n->tt_urp = 0;
+
+	n->tt_t.th_sum = in_pseudo(n->tt_src.s_addr, n->tt_dst.s_addr,
+	    htons(sizeof(struct tcphdr) + IPPROTO_TCP));
+
 #if INET6
 	n->tt_flow = inp->inp_flow & IPV6_FLOWINFO_MASK;
 	if (ip6_auto_flowlabel) {
@@ -440,7 +449,6 @@ tcp_respond(tp, iph, th, m, ack, seq, flags, isipv6)
 	else
 		nth->th_win = htons((u_short)win);
 	nth->th_urp = 0;
-	nth->th_sum = 0;
 	tlen += sizeof (struct tcphdr);
 #if INET6
 	if (isipv6) {
@@ -466,8 +474,11 @@ tcp_respond(tp, iph, th, m, ack, seq, flags, isipv6)
 	m->m_len = tlen + sizeof(struct ip);
 	m->m_pkthdr.len = tlen + sizeof(struct ip);
 	m->m_pkthdr.rcvif = (struct ifnet *) 0;
-	bzero(ti->ti_x1, sizeof(ti->ti_x1));
-	nth->th_sum = in_cksum(m, tlen + sizeof(struct ip));
+        nth->th_sum = in_pseudo(ip->ip_src.s_addr, ip->ip_dst.s_addr,
+            htons((u_short)(tlen  + IPPROTO_TCP)));
+        m->m_pkthdr.csum_flags = CSUM_TCP;
+        m->m_pkthdr.csum_data = offsetof(struct tcphdr, th_sum);
+
 	ip->ip_len = tlen + sizeof (struct ip);
 	ip->ip_ttl = ip_defttl;
 #if INET6
@@ -846,6 +857,11 @@ tcp_pcblist SYSCTL_HANDLER_ARGS
 	error = SYSCTL_OUT(req, &xig, sizeof xig);
 	if (error)
 		return error;
+        /*
+         * We are done if there is no pcb
+         */
+        if (n == 0)  
+            return 0; 
 
 	inp_list = _MALLOC(n * sizeof *inp_list, M_TEMP, M_WAITOK);
 	if (inp_list == 0)
@@ -996,6 +1012,63 @@ tcp6_ctlinput(cmd, sa, d)
 }
 #endif /* INET6 */
 
+#define TCP_RNDISS_ROUNDS      16
+#define TCP_RNDISS_OUT 7200
+#define TCP_RNDISS_MAX 30000
+
+u_int8_t tcp_rndiss_sbox[128];
+u_int16_t tcp_rndiss_msb;
+u_int16_t tcp_rndiss_cnt;
+long tcp_rndiss_reseed;
+
+u_int16_t
+tcp_rndiss_encrypt(val)
+       u_int16_t val;
+{
+       u_int16_t sum = 0, i;
+  
+       for (i = 0; i < TCP_RNDISS_ROUNDS; i++) {
+               sum += 0x79b9;
+               val ^= ((u_int16_t)tcp_rndiss_sbox[(val^sum) & 0x7f]) << 7;
+               val = ((val & 0xff) << 7) | (val >> 8);
+       }
+
+       return val;
+}
+
+void
+tcp_rndiss_init()
+{
+       struct timeval time;
+
+       getmicrotime(&time);
+       read_random(tcp_rndiss_sbox, sizeof(tcp_rndiss_sbox));
+
+       tcp_rndiss_reseed = time.tv_sec + TCP_RNDISS_OUT;
+       tcp_rndiss_msb = tcp_rndiss_msb == 0x8000 ? 0 : 0x8000; 
+       tcp_rndiss_cnt = 0;
+}
+
+tcp_seq
+tcp_rndiss_next()
+{
+       u_int32_t tmp;
+       struct timeval time;
+
+       getmicrotime(&time);
+
+        if (tcp_rndiss_cnt >= TCP_RNDISS_MAX ||
+           time.tv_sec > tcp_rndiss_reseed)
+                tcp_rndiss_init();
+
+       tmp = random();
+
+       /* (tmp & 0x7fff) ensures a 32768 byte gap between ISS */
+       return ((tcp_rndiss_encrypt(tcp_rndiss_cnt++) | tcp_rndiss_msb) <<16) |
+               (tmp & 0x7fff);
+}
+
+ 
 /*
  * When a source quench is received, close congestion window
  * to one segment.  We will gradually open it again as we proceed.
@@ -1122,6 +1195,8 @@ tcp_rtlookup(inp)
 	struct rtentry *rt;
 
 	ro = &inp->inp_route;
+	if (ro == NULL)
+		return (NULL);
 	rt = ro->ro_rt;
 	if (rt == NULL || !(rt->rt_flags & RTF_UP)) {
 		/* No route yet, so try to acquire one */

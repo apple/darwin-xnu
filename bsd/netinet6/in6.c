@@ -583,9 +583,10 @@ in6_control(so, cmd, data, ifp)
 
 		        if (strcmp(ifp->if_name, "lo") == 0)
 			        dl_tag = lo_attach_inet(ifp);
-
+#if NGIF > 0
 		        if (strcmp(ifp->if_name, "gif") == 0)
 			        dl_tag = gif_attach_inet(ifp);
+#endif
 /* End of temp code */
         		ia->ia_ifa.ifa_dlt = dl_tag;
 
@@ -1449,9 +1450,10 @@ in6_ifinit(ifp, ia, sin6, scrub)
  
          if (strcmp(ifp->if_name, "lo") == 0)
                 dl_tag = lo_attach_inet(ifp);
-
+#if NGIF > 0
          if (strcmp(ifp->if_name, "gif") == 0)
                 dl_tag = gif_attach_inet(ifp);
+#endif
 /* End of temp code */
          ia->ia_ifa.ifa_dlt = dl_tag; 
 #endif
@@ -1590,7 +1592,7 @@ in6_addmulti(maddr6, ifp, errorp)
 		 * and link it into the interface's multicast list.
 		 */
 		in6m = (struct in6_multi *)
-			_MALLOC(sizeof(*in6m), M_IPMADDR, M_NOWAIT);
+			_MALLOC(sizeof(*in6m), M_IPMADDR, M_NOTWAIT);
 		if (in6m == NULL) {
 			splx(s);
 			*errorp = ENOBUFS;

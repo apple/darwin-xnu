@@ -169,7 +169,6 @@ OSStatus ReleaseBTreeBlock(FileReference vp, BlockDescPtr blockPtr, ReleaseBlock
             VOP_BWRITE(bp);
 #else
 			if (options & kLockTransaction) {
-
 	            /*
 	             *
 	             * Set the B_LOCKED flag and unlock the buffer, causing brelse to move
@@ -178,6 +177,10 @@ OSStatus ReleaseBTreeBlock(FileReference vp, BlockDescPtr blockPtr, ReleaseBlock
 	             * isn't going to work.
 	             *
 	             */
+				extern int count_lock_queue __P((void));
+				/* Don't hog all the buffers... */
+				if (count_lock_queue() > kMaxLockedMetaBuffers)
+					hfs_fsync_transaction(vp);
 	            bp->b_flags |= B_LOCKED;
 	        };
             bdwrite(bp);
@@ -253,7 +256,7 @@ OSStatus ExtendBTreeFile(FileReference vp, FSSize minEOF, FSSize maxEOF)
 		extendFlags = kEFAllMask | kEFContigMask;
 	}
 
-    retval = ExtendFileC(vcb, filePtr, bytesToAdd, extendFlags, &actualBytesAdded );
+    retval = ExtendFileC(vcb, filePtr, bytesToAdd, 0, extendFlags, &actualBytesAdded);
 
 	if(H_FILEID(filePtr) != kHFSExtentsFileID)
 		(void) hfs_metafilelocking(VTOHFS(vp), kHFSExtentsFileID, LK_RELEASE, p);

@@ -301,7 +301,6 @@ ffs_fsync(ap)
 	 */
 	cluster_push(vp);
 
-
 	/*
 	 * Flush all dirty buffers associated with a vnode.
 	 */

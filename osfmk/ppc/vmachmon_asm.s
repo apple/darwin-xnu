@@ -67,6 +67,9 @@ LEXT(vmm_dispatch_table)
 			.long	EXT(vmm_set_timer)								; Sets a timer value
 			.long	EXT(vmm_get_timer)								; Gets a timer value
 			.long	EXT(switchIntoVM)								; Switches to the VM context
+			.long	EXT(vmm_protect_page)							; Sets protection values for a page
+			.long	EXT(vmm_map_execute)							; Maps a page an launches VM
+			.long	EXT(vmm_protect_execute)						; Sets protection values for a page and launches VM
 
 			.set	vmm_count,(.-EXT(vmm_dispatch_table))/4			; Get the top number
 
@@ -103,7 +106,7 @@ LEXT(vmm_dispatch)
 			li		r3,1						; Set normal return with check for AST
 			b		EXT(ppcscret)				; Go back to handler...
 			
-vmmBogus:	eqv		r3,r3,r3					; Bogus selector, treat like a bogus system call
+vmmBogus:	li		r3,0						; Bogus selector, treat like a bogus system call
 			b		EXT(ppcscret)				; Go back to handler...
 
 
@@ -122,8 +125,8 @@ LEXT(vmm_get_version_sel)						; Selector based version of get version
 
 LEXT(vmm_get_features_sel)						; Selector based version of get features
 
-			lis		r3,hi16(EXT(vmm_get_features_sel))
-			ori		r3,r3,lo16(EXT(vmm_get_features_sel))
+			lis		r3,hi16(EXT(vmm_get_features))
+			ori		r3,r3,lo16(EXT(vmm_get_features))
 			b		selcomm
 
 
@@ -132,8 +135,12 @@ LEXT(vmm_get_features_sel)						; Selector based version of get features
 
 LEXT(vmm_init_context_sel)						; Selector based version of init context
 
-			lis		r3,hi16(EXT(vmm_init_context_sel))
-			ori		r3,r3,lo16(EXT(vmm_init_context_sel))
+			lwz		r4,saver4(r30)				; Get the passed in version
+			lwz		r5,saver5(r30)				; Get the passed in comm area
+			lis		r3,hi16(EXT(vmm_init_context))
+			stw		r4,saver3(r30)				; Cheat and move this parameter over
+			ori		r3,r3,lo16(EXT(vmm_init_context))
+			stw		r5,saver4(r30)				; Cheat and move this parameter over
 
 selcomm:	mtlr	r3							; Set the real routine address
 			mr		r3,r30						; Pass in the savearea
@@ -150,6 +157,10 @@ selcomm:	mtlr	r3							; Set the real routine address
  *			Then we will setup the new address space to run with, and anything else that is normally part
  *			of a context switch.
  *
+ *			The vmm_execute_vm entry point is for the fused vmm_map_execute and vmm_protect_execute
+ *			calls.  This is called, but never returned from.  We always go directly back to the
+ *			user from here.
+ *
  *			Still need to figure out final floats and vectors. For now, we will go brute
  *			force and when we go into the VM, we will force save any normal floats and 
  *			vectors. Then we will hide them and swap the VM copy (if any) into the normal
@@ -159,10 +170,21 @@ selcomm:	mtlr	r3							; Set the real routine address
  *
  */
  
+ 
+ 			.align	5
+ 			.globl	EXT(vmm_execute_vm)
+
+LEXT(vmm_execute_vm)
+
+ 			lwz		r30,ACT_MACT_PCB(r3)		; Restore the savearea pointer because it could be trash here
+ 			b		EXT(switchIntoVM)			; Join common...
+ 
+ 
  			.align	5
  			.globl	EXT(switchIntoVM)
 
 LEXT(switchIntoVM)
+
 			lwz		r5,vmmControl(r3)			; Pick up the control table address
 			subi	r4,r4,1						; Switch to zero offset
 			rlwinm.	r2,r5,0,0,30				; Is there a context there? (Note: we will ignore bit 31 so that we 
@@ -185,12 +207,35 @@ swvmmBogus:	li		r2,kVmmBogusContext			; Set bogus index return
 
 ;
 ;			Here we check for any immediate intercepts.  So far, the only
-;			one of these is a timer pop.  We will not dispatch if the timer has
-;			already popped.  They need to either reset the timer (i.e. set timer
-;			to 0) or to set a future time.
+;			two of these are a timer pop and and external stop.  We will not dispatch if
+;			either is true.  They need to either reset the timer (i.e. set timer
+;			to 0) or to set a future time, or if it is external stop, set the vmmXStopRst flag.
 ;
 
 swvmChkIntcpt:
+			lwz		r6,vmmCntrl(r5)				; Get the control field
+			rlwinm.	r7,r6,0,vmmXStartb,vmmXStartb	; Clear all but start bit
+			beq+	swvmChkStop					; Do not reset stop
+			andc	r6,r6,r7					; Clear it
+			li		r8,vmmFlags					; Point to the flags
+			stw		r6,vmmCntrl(r5)				; Set the control field
+
+swvmtryx:	lwarx	r4,r8,r2					; Pick up the flags
+			rlwinm	r4,r4,0,vmmXStopb+1,vmmXStopb-1	; Clear the stop bit
+			stwcx.	r4,r8,r2					; Save the updated field
+			bne-	swvmtryx					; Try again...
+
+swvmChkStop:			
+			rlwinm.	r26,r4,0,vmmXStopb,vmmXStopb	; Is this VM stopped?
+			beq+	swvmNoStop					; Nope...
+				
+			li		r2,kVmmStopped				; Set stopped return
+			li		r3,1						; Set normal return with check for AST
+			stw		r2,saver3(r30)				; Pass back the return code
+			stw		r2,return_code(r5)			; Save the exit code
+			b		EXT(ppcscret)				; Go back to handler...
+			
+swvmNoStop:			
 			rlwinm.	r26,r4,0,vmmTimerPopb,vmmTimerPopb	; Did the timer pop?
 			beq+	swvmDoSwitch				; No...
 		
@@ -254,8 +299,11 @@ swvmDoSwitch:
 			stw		r20,saveexception(r30)		; Say we need to emulate a DSI
 			stw		r2,savedsisr(r30)			; Pretend we have a PTE miss			
 			
-swvmNoMap:	rlwimi	r15,r17,32-(floatCngbit-vmmFloatCngdb),floatCngbit,vectorCngbit	; Shift and insert changed bits			
+swvmNoMap:	lwz		r20,vmmContextKern(r27)		; Get the comm area
+			rlwimi	r15,r17,32-(floatCngbit-vmmFloatCngdb),floatCngbit,vectorCngbit	; Shift and insert changed bits			
+			lwz		r20,vmmCntrl(r20)			; Get the control flags
 			rlwimi	r17,r11,8,24,31				; Save the old spf flags
+			rlwimi	r15,r20,32+vmmKeyb-userProtKeybit,userProtKeybit,userProtKeybit	; Set the protection key
 			stw		r15,spcFlags(r10)			; Set per_proc copy of the special flags
 			stw		r15,ACT_MACT_SPF(r26)		; Get the special flags
 
@@ -263,9 +311,9 @@ swvmNoMap:	rlwimi	r15,r17,32-(floatCngbit-vmmFloatCngdb),floatCngbit,vectorCngbi
 			
 			bl		swapCtxt					; First, swap the general register state
 
-			lwz		r17,vmmContextKern(r27)		; Get the comm area
+			lwz		r17,vmmContextKern(r27)		; Get the comm area back
 			
-			lwz		r15,vmmCntrl(r17)			; Get the control flags
+			lwz		r15,vmmCntrl(r17)			; Get the control flags again
 			
 			rlwinm.	r0,r15,0,vmmFloatLoadb,vmmFloatLoadb	; Are there new floating point values?
 			li		r14,vmmppcFPRs				; Get displacement to the new values
@@ -365,7 +413,9 @@ swvmNoNewVects:
 ;
 
 vmmxcng:	mflr	r21							; Save the return point
+			mr		r3,r26						; Pass in the activation
 			bl		EXT(fpu_save)				; Save any floating point context
+			mr		r3,r26						; Pass in the activation
 			bl		EXT(vec_save)				; Save any vector point context
 
 			lis		r10,hi16(EXT(per_proc_info))	; Get top of first per_proc
@@ -461,6 +511,7 @@ LEXT(vmm_exit)
 			rlwinm	r11,r11,0,runningVMbit+1,runningVMbit-1	; Clear the "in VM" flag
 			stw		r0,vmmCEntry(r16)			; Clear pointer to active context
 			stw		r19,vmmFlags(r2)			; Set the status flags
+			rlwinm	r11,r11,0,userProtKeybit+1,userProtKeybit-1	; Set back to normal protection key
 			mfsprg	r10,0						; Get the per_proc block
 			stw		r11,ACT_MACT_SPF(r16)		; Get the special flags
 			stw		r11,spcFlags(r10)			; Set per_proc copy of the special flags
@@ -516,6 +567,7 @@ LEXT(vmm_force_exit)
 			cmplw	r9,r11						; Check if we were in a vm
 			lwz		r3,VMMAP_PMAP(r12)			; Get the pmap for the activation
 			beq-	vfeNotRun					; We were not in a vm....
+			rlwinm	r9,r9,0,userProtKeybit+1,userProtKeybit-1	; Set back to normal protection key
 			stw		r0,vmmCEntry(r26)			; Clear pointer to active context
 			mfsprg	r10,0						; Get the per_proc block
 			stw		r9,ACT_MACT_SPF(r26)		; Get the special flags
@@ -532,7 +584,8 @@ LEXT(vmm_force_exit)
 			stw		r19,vmmStat(r5)				; Save the changed and popped flags
 			bl		swapCtxt					; Exchange the VM context for the emulator one
 			
-			li		r8,kVmmReturnNull			; Set a null return when we force an intercept
+			lwz		r8,saveexception(r30)		; Pick up the exception code
+			rlwinm	r8,r8,30,24,31				; Convert exception to return code
 			stw		r8,saver3(r30)				; Set the return code as the return value also
 			
 

@@ -511,6 +511,7 @@ spec_select(ap)
 		int  a_which;
 		int  a_fflags;
 		struct ucred *a_cred;
+		void * a_wql;
 		struct proc *a_p;
 	} */ *ap;
 {
@@ -523,7 +524,7 @@ spec_select(ap)
 
 	case VCHR:
 		dev = ap->a_vp->v_rdev;
-		return (*cdevsw[major(dev)].d_select)(dev, ap->a_which, ap->a_p);
+		return (*cdevsw[major(dev)].d_select)(dev, ap->a_which, ap->a_wql, ap->a_p);
 	}
 }
 /*
@@ -677,12 +678,16 @@ spec_close(ap)
 		break;
 
 	case VBLK:
+#ifdef DEVFS_IMPLEMENTS_LOCKING
 		/*
 		 * On last close of a block device (that isn't mounted)
 		 * we must invalidate any in core blocks, so that
 		 * we can, for instance, change floppy disks.
 		 */
-		if (error = vinvalbuf(vp, V_SAVE, ap->a_cred, ap->a_p, 0, 0))
+		vn_lock(vp, LK_EXCLUSIVE | LK_RETRY, ap->a_p);
+		error = vinvalbuf(vp, V_SAVE, ap->a_cred, ap->a_p, 0, 0);
+		VOP_UNLOCK(vp, 0, ap->a_p);
+		if (error)
 			return (error);
 		/*
 		 * We do not want to really close the device if it
@@ -695,6 +700,28 @@ spec_close(ap)
 		 */
 		if (vcount(vp) > 1 && (vp->v_flag & VXLOCK) == 0)
 			return (0);
+#else /* DEVFS_IMPLEMENTS_LOCKING */
+		/*
+		 * We do not want to really close the device if it
+		 * is still in use unless we are trying to close it
+		 * forcibly. Since every use (buffer, vnode, swap, cmap)
+		 * holds a reference to the vnode, and because we mark
+		 * any other vnodes that alias this device, when the
+		 * sum of the reference counts on all the aliased
+		 * vnodes descends to one, we are on last close.
+		 */
+		if (vcount(vp) > 1 && (vp->v_flag & VXLOCK) == 0)
+			return (0);
+
+		/*
+		 * On last close of a block device (that isn't mounted)
+		 * we must invalidate any in core blocks, so that
+		 * we can, for instance, change floppy disks.
+		 */
+		error = vinvalbuf(vp, V_SAVE, ap->a_cred, ap->a_p, 0, 0);
+		if (error)
+			return (error);
+#endif /* DEVFS_IMPLEMENTS_LOCKING */
 		devclose = bdevsw[major(dev)].d_close;
 		mode = S_IFBLK;
 		break;

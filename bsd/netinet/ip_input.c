@@ -206,12 +206,6 @@ ip_nat_t *ip_nat_ptr;
 ip_nat_ctl_t *ip_nat_ctl_ptr;
 #endif
 
-#if defined(IPFILTER_LKM) || defined(IPFILTER)
-int iplattach __P((void));
-int (*fr_checkp) __P((struct ip *, int, struct ifnet *, int, struct mbuf **)) = NULL;
-#endif
-
-
 /*
  * We need to save the IP options in case a protocol wants to respond
  * to an incoming packet over the same route if the packet got here
@@ -303,9 +297,6 @@ ip_init()
 #endif
 #if IPNAT
 		ip_nat_init();
-#endif
-#if IPFILTER
-		iplattach();
 #endif
 		ip_initialized = 1;
 	}
@@ -415,7 +406,13 @@ ip_input(struct mbuf *m)
 		ip = mtod(m, struct ip *);
 	}
 
-	sum = in_cksum(m, hlen);
+	if (m->m_pkthdr.rcvif->if_hwassist == 0) 	
+		m->m_pkthdr.csum_flags = 0;
+
+        if (m->m_pkthdr.csum_flags & CSUM_IP_CHECKED) {
+                sum = !(m->m_pkthdr.csum_flags & CSUM_IP_VALID);
+        } else 
+        	sum = in_cksum(m, hlen);
 
 	if (sum) {
 		ipstat.ips_badsum++;
@@ -465,19 +462,6 @@ tooshort:
 
 #if defined(IPFIREWALL) && defined(DUMMYNET)
 iphack:
-#endif
-#if defined(IPFILTER) || defined(IPFILTER_LKM)
-	/*
-	 * Check if we want to allow this packet to be processed.
-	 * Consider it to be bad if not.
-	 */
-	if (fr_checkp) {
-		struct	mbuf	*m1 = m;
-
-		if ((*fr_checkp)(ip, hlen, m->m_pkthdr.rcvif, 0, &m1) || !m1)
-			return;
-		ip = mtod(m = m1, struct ip *);
-	}
 #endif
 #if COMPAT_IPFW
 	if (ip_fw_chk_ptr) {
@@ -676,6 +660,12 @@ pass:
 		goto ours;
 	if (ip->ip_dst.s_addr == INADDR_ANY)
 		goto ours;
+
+	if (m->m_pkthdr.rcvif 
+	    && (m->m_pkthdr.rcvif->if_eflags & IFEF_AUTOCONFIGURING)
+	    && ip->ip_p == IPPROTO_UDP) {
+		goto ours;
+	}
 
 #if defined(NFAITH) && NFAITH > 0
 	/*
@@ -915,6 +905,8 @@ ip_reass(m, fp, where)
 	m->m_data += hlen;
 	m->m_len -= hlen;
 
+	if (m->m_pkthdr.csum_flags & CSUM_TCP_SUM16) 
+               	m->m_pkthdr.csum_flags = 0;
 	/*
 	 * If first fragment to arrive, create a reassembly queue.
 	 */
@@ -959,6 +951,7 @@ ip_reass(m, fp, where)
 			if (i >= ip->ip_len)
 				goto dropfrag;
 			m_adj(dtom(ip), i);
+                        m->m_pkthdr.csum_flags = 0;
 			ip->ip_off += i;
 			ip->ip_len -= i;
 		}
@@ -981,6 +974,7 @@ ip_reass(m, fp, where)
 			GETIP(q)->ip_len -= i;
 			GETIP(q)->ip_off += i;
 			m_adj(q, i);
+                        q->m_pkthdr.csum_flags = 0;
 			break;
 		}
 		nq = q->m_nextpkt;
@@ -1038,6 +1032,12 @@ inserted:
 	for (q = nq; q != NULL; q = nq) {
 		nq = q->m_nextpkt;
 		q->m_nextpkt = NULL;
+		if (q->m_pkthdr.csum_flags & CSUM_TCP_SUM16) 
+                	m->m_pkthdr.csum_flags = 0;
+		else {
+                	m->m_pkthdr.csum_data += q->m_pkthdr.csum_data ;
+               		m->m_pkthdr.csum_flags &= q->m_pkthdr.csum_flags;
+		}
 		m_cat(m, q);
 	}
 

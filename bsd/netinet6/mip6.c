@@ -2763,7 +2763,7 @@ void  *arg;  /* Not used */
 	int                 s;
 #ifdef __APPLE__
 	boolean_t   funnel_state;
-    	funnel_state = thread_set_funneled(TRUE);
+    	funnel_state = thread_funnel_set(network_flock, TRUE);
 #endif
 
 	/* Go through the entire list of Neighbor Advertisement entries. */
@@ -2784,7 +2784,7 @@ void  *arg;  /* Not used */
 			timeout(mip6_timer_na, (void *)0, hz);
 	}
 #ifdef __APPLE__
-    (void) thread_set_funneled(funnel_state);
+        (void) thread_funnel_set(network_flock, FALSE);
 #endif
 }
 
@@ -2808,7 +2808,7 @@ void  *arg;  /* Not used */
 	int              s;
 #ifdef __APPLE__
 	boolean_t   funnel_state;
-    	funnel_state = thread_set_funneled(TRUE);
+    	funnel_state = thread_funnel_set(network_flock, TRUE);
 #endif
 
 	/* Go through the entire list of Binding Cache entries. */
@@ -2835,7 +2835,7 @@ void  *arg;  /* Not used */
 			timeout(mip6_timer_bc, (void *)0, hz);
 	}
 #ifdef __APPLE__
-    	(void) thread_set_funneled(funnel_state);
+        (void) thread_funnel_set(network_flock, FALSE);
 #endif
 	return;
 }
@@ -2850,16 +2850,27 @@ void  *arg;  /* Not used */
  * Ret value:   -
  ******************************************************************************
  */
+
+void
+mip6_timer_prefix_funneled(arg)
+void  *arg;  /* Not used */
+{
+#ifdef __APPLE__
+	boolean_t   funnel_state;
+    	funnel_state = thread_funnel_set(network_flock, TRUE);
+#endif
+	mip6_timer_prefix(arg);
+#ifdef __APPLE__
+        (void) thread_funnel_set(network_flock, FALSE);
+#endif
+}
+
 void
 mip6_timer_prefix(arg)
 void  *arg;  /* Not used */
 {
 	struct mip6_prefix  *pq_entry;   /* Current entry in the prefix list */
 	int                  s;
-#ifdef __APPLE__
-	boolean_t   funnel_state;
-    	funnel_state = thread_set_funneled(TRUE);
-#endif
 
 	/* Go through the entire list of prefix entries. */
 	s = splnet();
@@ -2878,9 +2889,6 @@ void  *arg;  /* Not used */
 #endif
 			timeout(mip6_timer_prefix, (void *)0, hz);
 	}
-#ifdef __APPLE__
-	(void) thread_set_funneled(funnel_state);
-#endif
 	return;
 }
 

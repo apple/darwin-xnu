@@ -376,6 +376,11 @@ devfs_kernel_mount(char * mntname)
 	 */
 	mp = _MALLOC_ZONE((u_long)sizeof(struct mount), M_MOUNT, M_WAITOK);
 	bzero((char *)mp, (u_long)sizeof(struct mount));
+
+    /* Initialize the default IO constraints */
+    mp->mnt_maxreadcnt = mp->mnt_maxwritecnt = MAXPHYS;
+    mp->mnt_segreadcnt = mp->mnt_segwritecnt = 32;
+
 	lockinit(&mp->mnt_lock, PVFS, "vfslock", 0, 0);
 	(void)vfs_busy(mp, LK_NOWAIT, 0, procp);
 	LIST_INIT(&mp->mnt_vnodelist);

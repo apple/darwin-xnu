@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2001 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -293,7 +293,7 @@ ucsfntrans(infn, infnlen, outfn, outfnlen, dir)
 				fnidx = infnlen/2;
 		}
 
-		flags = UTF_NO_NULL_TERM;
+		flags = UTF_NO_NULL_TERM | UTF_DECOMPOSED;
 		if (BYTE_ORDER != BIG_ENDIAN)
 			flags |= UTF_REVERSE_ENDIAN;
 
@@ -780,6 +780,8 @@ packcommonattr (struct attrlist *alist,
 			struct finder_info finfo = {0};
 
 			finfo.fdFlags = ip->i_FinderFlags;
+			finfo.fdLocation.v = -1;
+			finfo.fdLocation.h = -1;
 			if (ITOV(ip)->v_type == VREG) {
 				finfo.fdType = ip->i_FileType;
 				finfo.fdCreator = ip->i_Creator;

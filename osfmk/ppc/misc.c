@@ -110,6 +110,8 @@ int copyout_multiple(const char *src, char *dst, vm_size_t count)
 	return copyout(src + first_count, midpoint, count-first_count);
 }
 
+#define HAVE_ASSEMBLY_BCMP
+#ifndef HAVE_ASSEMBLY_BCMP
 int bcmp(
 	const char	*a,
 	const char	*b,
@@ -125,6 +127,41 @@ int bcmp(
 
 	return len;
 } 
+#endif /* HAVE_ASSEMBLY_BCMP */
+
+#define HAVE_ASSEMBLY_MEMCMP
+#ifndef HAVE_ASSEMBLY_MEMCMP
+int
+memcmp(s1, s2, n)
+	register char *s1, *s2;
+	register n;
+{
+	while (--n >= 0)
+		if (*s1++ != *s2++)
+			return (*--s1 - *--s2);
+	return (0);
+}
+#endif /* HAVE_ASSEMBLY_MEMCMP */
+
+#define HAVE_ASSEMBLY_STRLEN
+#ifndef HAVE_ASSEMBLY_STRLEN
+/*
+ * Abstract:
+ * strlen returns the number of characters in "string" preceeding
+ * the terminating null character.
+ */
+
+size_t
+strlen(
+	register const char *string)
+{
+	register const char *ret = string;
+
+	while (*string++ != '\0')
+		continue;
+	return string - 1 - ret;
+}
+#endif /* HAVE_ASSEMBLY_STRLEN */
 
 #if DEBUG
 void regDump(struct ppc_saved_state *state)
@@ -168,7 +205,7 @@ void regDump(struct ppc_saved_state *state)
 }
 #endif /* DEBUG */
 
-#ifdef 0
+#if 0
 /*
  * invalidate_cache_for_io
  *

@@ -202,6 +202,7 @@
 
 #define F_PEOFPOSMODE 3			/* Make it past all of the SEEK pos modes so that */
 					/* we can keep them in sync should we desire */	
+#define F_VOLPOSMODE	4		/* specify volume starting postion */
 
 /*
  * Advisory file segment locking data type -
@@ -234,10 +235,10 @@ struct radvisory {
 #define	LOCK_UN		0x08		/* unlock file */
 #endif
 
-/*  fstore_t type used by F_DEALLCOATE and F_PREALLCOATE commands */
+/*  fstore_t type used by F_DEALLOCATE and F_PREALLOCATE commands */
 
 typedef struct fstore {
-        u_int32_t fst_flags;	/* IN: flags word */
+	u_int32_t fst_flags;	/* IN: flags word */
 	int 	fst_posmode;	/* IN: indicates use of offset field */
 	off_t	fst_offset;	/* IN: start of the region */
 	off_t	fst_length;	/* IN: size of the region */

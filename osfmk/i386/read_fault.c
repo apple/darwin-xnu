@@ -131,7 +131,7 @@ intel_read_fault(
 			       THREAD_ABORTSAFE,
 			       lo_offset, hi_offset, behavior,
 			       &prot, &result_page, &top_page, (int *)0,
-			       0, map->no_zero_fill, FALSE);
+			       0, map->no_zero_fill, FALSE, map, vaddr);
 
 	if (result != VM_FAULT_SUCCESS) {
 	    vm_object_deallocate(object);

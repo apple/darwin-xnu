@@ -336,7 +336,7 @@ dummynet_io(int pipe_nr, int dir,
          (pipe->queue_size_bytes &&
 	    ip->ip_len + pipe->r_len_bytes > pipe->queue_size_bytes) ||
 		(pkt = (struct dn_pkt *) _MALLOC(sizeof (*pkt),
-			M_IPFW, M_NOWAIT) ) == NULL ) {
+			M_IPFW, M_WAITOK) ) == NULL ) {
 	splx(s);
 	if (dn_debug)
 	    printf("-- dummynet: drop from pipe %d, have %d pks, %d bytes\n",
@@ -552,7 +552,7 @@ ip_dn_ctl(struct sockopt *sopt)
 		b->plr = p->plr ;
 	    } else {
 		int s ;
-		x = _MALLOC(sizeof(struct dn_pipe), M_IPFW, M_DONTWAIT) ;
+		x = _MALLOC(sizeof(struct dn_pipe), M_IPFW, M_NOWAIT) ;
 		if (x == NULL) {
 		    printf("ip_dummynet.c: sorry no memory\n");
 		error = ENOSPC ;

@@ -279,6 +279,27 @@ setpgid(curp, uap, retval)
 	return (enterpgrp(targp, uap->pgid, 0));
 }
 
+struct issetugid_args {
+	int dummy;
+};
+issetugid(p, uap, retval)
+	struct proc *p;
+	struct issetugid_args *uap;
+	register_t *retval;
+{
+	/*
+	 * Note: OpenBSD sets a P_SUGIDEXEC flag set at execve() time,
+	 * we use P_SUGID because we consider changing the owners as
+	 * "tainting" as well.
+	 * This is significant for procs that start as root and "become"
+	 * a user without an exec - programs cannot know *everything*
+	 * that libc *might* have put in their data segment.
+	 */
+
+	*retval = (p->p_flag & P_SUGID) ? 1 : 0;
+	return (0);
+}
+
 struct setuid_args {
 	uid_t	uid;
 };

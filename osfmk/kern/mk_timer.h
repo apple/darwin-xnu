@@ -32,8 +32,6 @@
 #define	_KERN_MK_TIMER_H_
 
 #ifdef MACH_KERNEL_PRIVATE
-#include <libkern/OSBase.h>
-
 #include <mach/mach_types.h>
 
 #include <kern/call_entry.h>
@@ -41,7 +39,7 @@
 struct mk_timer {
 	decl_simple_lock_data(,lock)
 	call_entry_data_t	call_entry;
-	AbsoluteTime		time_of_arming;
+	uint64_t			time_of_arming;
 	boolean_t			is_dead:1,
 						is_armed:1;
 	int					active;

@@ -96,12 +96,20 @@ static int arpt_prune = (5*60*1); /* walk list every 5 minutes */
 static int arpt_keep = (20*60); /* once resolved, good for 20 more minutes */
 static int arpt_down = 20;	/* once declared down, don't send for 20 sec */
 
+/* Apple Hardware SUM16 checksuming */
+int apple_hwcksum_tx = 1;
+int apple_hwcksum_rx = 1;
+
 SYSCTL_INT(_net_link_ether_inet, OID_AUTO, prune_intvl, CTLFLAG_RW,
 	   &arpt_prune, 0, "");
 SYSCTL_INT(_net_link_ether_inet, OID_AUTO, max_age, CTLFLAG_RW, 
 	   &arpt_keep, 0, "");
 SYSCTL_INT(_net_link_ether_inet, OID_AUTO, host_down_time, CTLFLAG_RW,
 	   &arpt_down, 0, "");
+SYSCTL_INT(_net_link_ether_inet, OID_AUTO, apple_hwcksum_tx, CTLFLAG_RW,
+	   &apple_hwcksum_tx, 0, "");
+SYSCTL_INT(_net_link_ether_inet, OID_AUTO, apple_hwcksum_rx, CTLFLAG_RW,
+	   &apple_hwcksum_rx, 0, "");
 
 #define	rt_expire rt_rmx.rmx_expire
 
@@ -523,6 +531,13 @@ in_arpinput(m)
 	op = ntohs(ea->arp_op);
 	(void)memcpy(&isaddr, ea->arp_spa, sizeof (isaddr));
 	(void)memcpy(&itaddr, ea->arp_tpa, sizeof (itaddr));
+    
+    /* Don't respond to requests for 0.0.0.0 */
+    if (itaddr.s_addr == 0 && op == ARPOP_REQUEST) {
+        m_freem(m);
+        return;
+    }
+    
 	for (ia = in_ifaddrhead.tqh_first; ia; ia = ia->ia_link.tqe_next)
 #if BRIDGE
 		/*
@@ -544,18 +559,7 @@ in_arpinput(m)
 		return;
 	}
 	myaddr = ia ? ia->ia_addr.sin_addr : maybe_ia->ia_addr.sin_addr;
-
-#if 0
-	/*
-	 * In order to support BlueBox networking, we need to allow
-	 *   "self-addressed" stamped envelopes
-	 */
-	if (!bcmp((caddr_t)ea->arp_sha, (caddr_t)ac->ac_enaddr,
-	    sizeof (ea->arp_sha))) {
-		m_freem(m);	/* it's from me, ignore it. */
-		return;
-	}
-#endif
+    
 	if (!bcmp((caddr_t)ea->arp_sha, (caddr_t)etherbroadcastaddr,
 	    sizeof (ea->arp_sha))) {
 		log(LOG_ERR,
@@ -668,7 +672,10 @@ reply:
 	ea->arp_op = htons(ARPOP_REPLY);
 	ea->arp_pro = htons(ETHERTYPE_IP); /* let's be sure! */
 	eh = (struct ether_header *)sa.sa_data;
-	(void)memcpy(eh->ether_dhost, ea->arp_tha, sizeof(eh->ether_dhost));
+    if (IN_LINKLOCAL(ntohl(*((u_int32_t*)ea->arp_spa))))
+        (void)memcpy(eh->ether_dhost, etherbroadcastaddr, sizeof(eh->ether_dhost));
+    else
+        (void)memcpy(eh->ether_dhost, ea->arp_tha, sizeof(eh->ether_dhost));
 	eh->ether_type = htons(ETHERTYPE_ARP);
 	sa.sa_family = AF_UNSPEC;
 	sa.sa_len = sizeof(sa);

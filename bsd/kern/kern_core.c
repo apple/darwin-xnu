@@ -185,7 +185,8 @@ coredump(p)
 	 *	into core file.
 	 */
 #if defined (__ppc__)
-	fpu_save();
+	fpu_save(current_act());
+	vec_save(current_act());
 #endif
 	sprintf(core_name, "/cores/core.%d", p->p_pid);
 	NDINIT(&nd, LOOKUP, FOLLOW, UIO_SYSSPACE, core_name, p);

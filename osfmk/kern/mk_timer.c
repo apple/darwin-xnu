@@ -136,7 +136,7 @@ mk_timer_expire(
 	void			*p0,
 	void			*p1)
 {
-	AbsoluteTime		time_of_posting;
+	uint64_t			time_of_posting;
 	mk_timer_t			timer = p0;
 	ipc_port_t			port;
 
@@ -213,9 +213,9 @@ mk_timer_destroy(
 kern_return_t
 mk_timer_arm(
 	mach_port_name_t	name,
-	AbsoluteTime		expire_time)
+	uint64_t			expire_time)
 {
-	AbsoluteTime		time_of_arming;
+	uint64_t			time_of_arming;
 	mk_timer_t			timer;
 	ipc_space_t			myspace = current_space();
 	ipc_port_t			port;
@@ -252,9 +252,9 @@ mk_timer_arm(
 kern_return_t
 mk_timer_cancel(
 	mach_port_name_t	name,
-	AbsoluteTime		*result_time)
+	uint64_t			*result_time)
 {
-	AbsoluteTime		armed_time = { 0, 0 };
+	uint64_t			armed_time = 0;
 	mk_timer_t			timer;
 	ipc_space_t			myspace = current_space();
 	ipc_port_t			port;

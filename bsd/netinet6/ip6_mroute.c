@@ -1268,6 +1268,20 @@ ip6_mforward(ip6, ifp, m)
  * Call from the Slow Timeout mechanism, every half second.
  */
 static void
+expire_upcalls_funneled(unused)
+	void *unused;
+{
+#ifdef __APPLE__
+    	boolean_t   funnel_state;
+    	funnel_state = thread_funnel_set(network_flock, TRUE);
+#endif
+	expire_upcalls(unused);
+#ifdef __APPLE__
+        (void) thread_funnel_set(network_flock, FALSE);
+#endif
+}
+
+static void
 expire_upcalls(unused)
 	void *unused;
 {
@@ -1275,10 +1289,6 @@ expire_upcalls(unused)
 	struct mf6c *mfc, **nptr;
 	int i;
 	int s;
-#ifdef __APPLE__
-    	boolean_t   funnel_state;
-    	funnel_state = thread_set_funneled(TRUE);
-#endif
 
 #if __NetBSD__
 	s = splsoftnet();
@@ -1329,10 +1339,7 @@ expire_upcalls(unused)
 #if defined(__FreeBSD__) && __FreeBSD__ >= 3
 	expire_upcalls_ch =
 #endif
-	timeout(expire_upcalls, (caddr_t)NULL, EXPIRE_TIMEOUT);
-#ifdef __APPLE__
-    	(void) thread_set_funneled(funnel_state);
-#endif
+	timeout(expire_upcalls_funneled, (caddr_t)NULL, EXPIRE_TIMEOUT);
 }
 
 /*

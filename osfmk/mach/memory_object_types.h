@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2001 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -69,30 +69,47 @@
 #include <mach/machine/vm_types.h>
 
 #define VM_64_BIT_DATA_OBJECTS
-#define	SHARED_LIBRARY_SERVER_SUPPORTED
-#define GLOBAL_SHARED_TEXT_SEGMENT 0x70000000
-#define GLOBAL_SHARED_DATA_SEGMENT 0x80000000
-#define GLOBAL_SHARED_SEGMENT_MASK 0xF0000000
 
-typedef mach_port_t	memory_object_default_t;
+typedef unsigned long long	memory_object_offset_t;
+typedef unsigned long long	memory_object_size_t;
 
-typedef	mach_port_t	memory_object_t;
+/*
+ * Temporary until real EMMI version gets re-implemented
+ */
+#ifdef KERNEL_PRIVATE
+typedef struct 		memory_object {
+	int		*pager;
+} *memory_object_t;
+
+typedef struct		memory_object_control {
+	struct vm_object *object;
+} *memory_object_control_t;
+
+#else /* !KERNEL_PRIVATE */
+
+typedef mach_port_t	memory_object_t;
+typedef mach_port_t	memory_object_control_t;
+
+#endif /* !KERNEL_PRIVATE */
+
+typedef memory_object_t *memory_object_array_t;
 					/* A memory object ... */
 					/*  Used by the kernel to retrieve */
 					/*  or store data */
-
-typedef	mach_port_t	memory_object_control_t;
-					/* Provided to a memory manager; ... */
-					/*  used to control a memory object */
 
 typedef	mach_port_t	memory_object_name_t;
 					/* Used to describe the memory ... */
 					/*  object in vm_regions() calls */
 
-typedef mach_port_t     memory_object_rep_t;
-					/* Per-client handle for mem object */
-					/*  Used by user programs to specify */
-					/*  the object to map */
+typedef mach_port_t	memory_object_default_t;
+					/* Registered with the host ... */
+					/*  for creating new internal objects */
+
+#define MEMORY_OBJECT_NULL		((memory_object_t) 0)
+#define MEMORY_OBJECT_CONTROL_NULL	((memory_object_control_t) 0)
+#define MEMORY_OBJECT_NAME_NULL		((memory_object_name_t) 0)
+#define MEMORY_OBJECT_DEFAULT_NULL	((memory_object_default_t) 0)
+
 
 typedef	int		memory_object_copy_strategy_t;
 					/* How memory manager handles copy: */
@@ -141,8 +158,6 @@ typedef	int		memory_object_return_t;
 					/* ... dirty and precious pages. */
 #define		MEMORY_OBJECT_RETURN_ANYTHING	3
 					/* ... any resident page. */
-
-#define		MEMORY_OBJECT_NULL	MACH_PORT_NULL
 
 /* 
  *	Data lock request flags
@@ -237,20 +252,17 @@ typedef struct memory_object_attr_info	memory_object_attr_info_data_t;
 	 f != OLD_MEMORY_OBJECT_ATTRIBUTE_INFO)
 
 
+/*
+ * Used to support options on memory_object_release_name call
+ */
+#define MEMORY_OBJECT_TERMINATE_IDLE	0x1
+#define MEMORY_OBJECT_RESPECT_CACHE	0x2
+#define MEMORY_OBJECT_RELEASE_NO_OP	0x4
+
 
 /*
- *  Even before we have components, we do not want to export upl internal
- *  structure to non mach components.
+ *  Universal Page List data structures
  */
-#ifndef	MACH_KERNEL_PRIVATE
-#ifdef KERNEL_PRIVATE
-typedef struct {
-	unsigned int opaque;
-	} * upl_t;
-#else
-typedef mach_port_t		upl_t; 
-#endif /* KERNEL_PRIVATE */
-#endif
 
 #define MAX_UPL_TRANSFER 64
 
@@ -266,16 +278,13 @@ struct upl_page_info {
 };
 
 typedef struct upl_page_info	upl_page_info_t;
-
-typedef unsigned long long	memory_object_offset_t;
-typedef unsigned long long	memory_object_size_t;
-typedef upl_page_info_t		*upl_page_list_ptr_t;
-typedef mach_port_t		upl_object_t;
-
+typedef upl_page_info_t		*upl_page_info_array_t;
+typedef upl_page_info_array_t	upl_page_list_ptr_t;
 
 
 /* upl invocation flags */
 
+#define UPL_FLAGS_NONE		0x0
 #define UPL_COPYOUT_FROM	0x1
 #define UPL_PRECIOUS		0x2
 #define UPL_NO_SYNC		0x4
@@ -283,13 +292,15 @@ typedef mach_port_t		upl_object_t;
 #define UPL_NOBLOCK		0x10
 #define UPL_RET_ONLY_DIRTY	0x20
 #define UPL_SET_INTERNAL	0x40
+#define	UPL_QUERY_OBJECT_TYPE	0x80
 
 /* upl abort error flags */
 #define UPL_ABORT_RESTART	0x1
 #define UPL_ABORT_UNAVAILABLE	0x2
 #define UPL_ABORT_ERROR		0x4
-#define UPL_ABORT_FREE_ON_EMPTY	0x8
+#define UPL_ABORT_FREE_ON_EMPTY	0x8  /* only implemented in wrappers */
 #define UPL_ABORT_DUMP_PAGES	0x10
+#define UPL_ABORT_NOTIFY_EMPTY	0x20
 
 /* upl pages check flags */
 #define UPL_CHECK_DIRTY         0x1
@@ -300,10 +311,11 @@ typedef mach_port_t		upl_object_t;
 #define UPL_NORDAHEAD   0x4
 
 /* upl commit flags */
-#define UPL_COMMIT_FREE_ON_EMPTY	0x1
+#define UPL_COMMIT_FREE_ON_EMPTY	0x1 /* only implemented in wrappers */
 #define UPL_COMMIT_CLEAR_DIRTY		0x2
 #define UPL_COMMIT_SET_DIRTY		0x4
 #define UPL_COMMIT_INACTIVATE		0x8
+#define UPL_COMMIT_NOTIFY_EMPTY		0x10
 
 /* flags for return of state from vm_map_get_upl,  vm_upl address space */
 /* based call */
@@ -332,6 +344,9 @@ typedef mach_port_t		upl_object_t;
 #define UPL_VALID_PAGE(upl, index) \
 	(((upl)[(index)].phys_addr != 0) ? (!((upl)[(index)].absent)) : FALSE)
 
+#define UPL_PAGEOUT_PAGE(upl, index) \
+	(((upl)[(index)].phys_addr != 0) ? ((upl)[(index)].pageout) : FALSE)
+
 #define UPL_SET_PAGE_FREE_ON_COMMIT(upl, index) \
 	if ((upl)[(index)].phys_addr != 0)     \
 		((upl)[(index)].pageout) =  TRUE
@@ -341,15 +356,33 @@ typedef mach_port_t		upl_object_t;
 		((upl)[(index)].pageout) =  FALSE
 
 
-#ifdef KERNEL_PRIVATE
-/*
- * iokit code doesn't include prerequisite header files, thus the
- * !defined(IOKIT).  But osfmk code defines IOKIT!  Thus the
- * defined(MACH_KERNEL).  To clean this gorp up "just" fix all
- * iokit & driver code to include the prereqs.
+/* 
+ * Flags for the UPL page ops routine.  This routine is not exported
+ * out of the kernel at the moment and so the defs live here.
  */
-#if !defined(IOKIT) || defined(MACH_KERNEL)
-#include <mach/error.h>
+#define UPL_POP_DIRTY		0x1
+#define UPL_POP_PAGEOUT		0x2
+#define UPL_POP_PRECIOUS	0x4
+#define UPL_POP_ABSENT		0x8
+#define UPL_POP_BUSY		0x10
+
+#define UPL_POP_PHYSICAL	0x10000000
+#define UPL_POP_DUMP            0x20000000
+#define UPL_POP_SET		0x40000000
+#define UPL_POP_CLR		0x80000000
+
+
+#ifdef KERNEL_PRIVATE
+
+extern void memory_object_reference(memory_object_t object);
+extern void memory_object_deallocate(memory_object_t object);
+
+extern void memory_object_default_reference(memory_object_default_t);
+extern void memory_object_default_deallocate(memory_object_default_t);
+
+extern void memory_object_control_reference(memory_object_control_t control);
+extern void memory_object_control_deallocate(memory_object_control_t control);
+
 
 /* The call prototyped below is used strictly by UPL_GET_INTERNAL_PAGE_LIST */
 
@@ -364,212 +397,18 @@ extern vm_size_t upl_get_internal_pagelist_offset();
 	(unsigned int)upl + (unsigned int)(upl_offset_to_pagelist = upl_get_internal_pagelist_offset()): \
 	(unsigned int)upl + (unsigned int)upl_offset_to_pagelist))
 
-extern kern_return_t	vm_fault_list_request(
-					vm_object_t		object,
-					vm_object_offset_t	offset,
-					vm_size_t		size,
-					upl_t			*upl,
-					upl_page_info_t	      **user_page_list,
-					int			page_list_count,
-					int			cntrol_flags);
+extern boolean_t	upl_page_present(upl_page_info_t *upl, int index);
 
-extern kern_return_t	upl_system_list_request(
-					vm_object_t		object,
-					vm_object_offset_t	offset,
-					vm_size_t		size,
-					vm_size_t		super_size,
-					upl_t			*upl,
-					upl_page_info_t	      **user_page_list,
-					int			page_list_count,
-					int			cntrol_flags);
+extern boolean_t	upl_dirty_page(upl_page_info_t *upl, int index);
 
-extern kern_return_t	upl_map(
-					vm_map_t	map,
-					upl_t		upl,
-					vm_offset_t	*dst_addr);
+extern boolean_t	upl_valid_page(upl_page_info_t *upl, int index);
 
-extern kern_return_t	upl_un_map(
-					vm_map_t	map,
-					upl_t		upl);
+extern vm_offset_t	upl_phys_page(upl_page_info_t *upl, int index);
 
-extern kern_return_t	upl_commit_range(
-					upl_t		upl,
-					vm_offset_t	offset,
-					vm_size_t	size,
-					boolean_t	free_on_empty,
-					upl_page_info_t	*page_list);
+extern void	   	upl_set_dirty(upl_t   upl);
 
-extern kern_return_t	upl_commit(
-					upl_t		upl,
-					upl_page_info_t	*page_list);
+extern void		upl_clear_dirty(upl_t   upl);
 
-extern upl_t		upl_create(
-					boolean_t	internal);
-
-extern void 		upl_destroy(
-					upl_t		page_list);
-
-extern kern_return_t	upl_abort(
-					upl_t		page_list,
-					int		error);
-
-extern kern_return_t	upl_abort_range(
-					upl_t		page_list,
-					vm_offset_t	offset,
-					vm_size_t	size,
-					int		error);
-
-extern void upl_set_dirty(
-       					 upl_t   upl);
-
-extern void upl_clear_dirty(
-       					 upl_t   upl);
-
-
-
-extern kern_return_t memory_object_page_op(
-					vm_object_t		object,
-					vm_object_offset_t	offset,
-					int			ops,
-					vm_offset_t		*phys_entry,
-					int			*flags);
-
-extern kern_return_t memory_object_release_name(
-					vm_object_t	object,
-					int		flags);
-
-extern kern_return_t vm_map_get_upl(
-					vm_map_t	map,
-					vm_offset_t	offset,
-					vm_size_t	*upl_size,
-					upl_t		*upl,
-					upl_page_info_t	**page_list,
-					int		*count,
-					int		*flags,
-					int             force_data_sync);
-
-extern kern_return_t vm_region_clone(
-					ipc_port_t	src_region,
-					ipc_port_t	dst_region);
-
-extern kern_return_t vm_map_region_replace(
-					vm_map_t	target_map,
-					ipc_port_t	old_region,
-					ipc_port_t	new_region,
-					vm_offset_t	start,  
-					vm_offset_t	end);
-
-
-
-
-#ifndef MACH_KERNEL_PRIVATE
-
-/* address space shared region descriptor */
-
-typedef void *shared_region_mapping_t;
-typedef void *vm_named_entry_t;
-
-extern kern_return_t memory_object_destroy_named(
-					vm_object_t	object,
-					kern_return_t	reason);
-
-extern kern_return_t memory_object_lock_request_named(
-					vm_object_t		object,
-					vm_object_offset_t	offset,
-					memory_object_size_t	size,
-					memory_object_return_t	should_return,
-					int			flags,
-					int			prot,
-					ipc_port_t		reply_to);
-
-extern kern_return_t memory_object_change_attributes_named(
-        				vm_object_t             object,
-        				memory_object_flavor_t  flavor,
-					memory_object_info_t	attributes,
-					int			count,
-        				int              	reply_to,
-        				int    			reply_to_type);
-
-extern kern_return_t memory_object_create_named(
-					ipc_port_t	port,
-					vm_size_t	size,
-					vm_object_t	*object_ptr);
-
-/*
-extern kern_return_t vm_get_shared_region(
-					task_t	task,
-					shared_region_mapping_t	*shared_region);
-
-extern kern_return_t vm_set_shared_region(
-					task_t	task,
-					shared_region_mapping_t	shared_region);
-*/
-
-extern kern_return_t shared_region_mapping_info(
-				shared_region_mapping_t	shared_region,
-				ipc_port_t		*text_region,
-				vm_size_t		*text_size,
-				ipc_port_t		*data_region,
-				vm_size_t		*data_size,
-				vm_offset_t		*region_mappings,
-				vm_offset_t		*client_base,
-				vm_offset_t		*alternate_base,
-				vm_offset_t		*alternate_next,
-				int			*flags,
-				shared_region_mapping_t	*next);
-
-extern kern_return_t shared_region_mapping_create(
-				ipc_port_t		text_region,
-				vm_size_t		text_size,
-				ipc_port_t		data_region,
-				vm_size_t		data_size,
-				vm_offset_t		region_mappings,
-				vm_offset_t		client_base,
-				shared_region_mapping_t	*shared_region);
-
-extern kern_return_t shared_region_mapping_ref(
-				shared_region_mapping_t	shared_region);
-
-extern kern_return_t shared_region_mapping_dealloc(
-				shared_region_mapping_t	shared_region);
-
-extern kern_return_t
-shared_region_object_chain_attach(
-				shared_region_mapping_t	target_region,
-				shared_region_mapping_t	object_chain);
-
-
-#endif MACH_KERNEL_PRIVATE
-
-
-/* 
- * Flags for the UPL page ops routine.  This routine is not exported
- * out of the kernel at the moment and so the defs live here.
- */
-
-
-#define UPL_POP_DIRTY		0x1
-#define UPL_POP_PAGEOUT		0x2
-#define UPL_POP_PRECIOUS	0x4
-#define UPL_POP_ABSENT		0x8
-#define UPL_POP_BUSY		0x10
-
-#define UPL_POP_DUMP            0x20000000
-#define UPL_POP_SET		0x40000000
-#define UPL_POP_CLR		0x80000000
-
-/*
- * Used to support options on memory_object_release_name call
- */
-
-#define MEMORY_OBJECT_TERMINATE_IDLE	0x1
-#define MEMORY_OBJECT_RESPECT_CACHE	0x2
-#define MEMORY_OBJECT_RELEASE_NO_OP	0x4
-
-
-#endif /* !defined(IOKIT) || defined(MACH_KERNEL) */
 #endif /* KERNEL_PRIVATE */
-
-
 
 #endif	/* _MACH_MEMORY_OBJECT_TYPES_H_ */

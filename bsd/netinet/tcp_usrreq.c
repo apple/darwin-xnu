@@ -728,6 +728,10 @@ tcp_connect(tp, nam, p)
 		else
 			return EADDRINUSE;
 	}
+	if ((inp->inp_laddr.s_addr == INADDR_ANY ? ifaddr->sin_addr.s_addr :
+		 inp->inp_laddr.s_addr) == sin->sin_addr.s_addr &&
+	    inp->inp_lport == sin->sin_port)
+			return EINVAL;
 	if (inp->inp_laddr.s_addr == INADDR_ANY)
 		inp->inp_laddr = ifaddr->sin_addr;
 	inp->inp_faddr = sin->sin_addr;
@@ -749,7 +753,13 @@ tcp_connect(tp, nam, p)
 	tcpstat.tcps_connattempt++;
 	tp->t_state = TCPS_SYN_SENT;
 	tp->t_timer[TCPT_KEEP] = tcp_keepinit;
-	tp->iss = tcp_iss; tcp_iss += TCP_ISSINCR/2;
+#ifdef TCP_COMPAT_42
+	tp->iss = tcp_iss;
+	tcp_iss =+ TCP_ISSINCR/2;
+#else /* TCP_COMPAT_42 */
+	tp->iss = tcp_rndiss_next();
+#endif /* !TCP_COMPAT_42 */
+
 	tcp_sendseqinit(tp);
 
 	/*
@@ -845,7 +855,11 @@ tcp6_connect(tp, nam, p)
 	tcpstat.tcps_connattempt++;
 	tp->t_state = TCPS_SYN_SENT;
 	tp->t_timer[TCPT_KEEP] = tcp_keepinit;
+#ifdef TCP_COMPAT_42
 	tp->iss = tcp_iss; tcp_iss += TCP_ISSINCR/2;
+#else
+	tp->iss = tcp_rndiss_next();
+#endif /* TCP_COMPAT_42 */
 	tcp_sendseqinit(tp);
 
 	/*

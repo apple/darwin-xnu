@@ -135,7 +135,7 @@ bsd_hardclock(usermode, pc, numticks)
 	 * assuming that the current state has been around at least
 	 * one tick.
 	 */
-	p = (struct proc *)get_bsdtask_info(current_task());
+	p = (struct proc *)current_proc();
 	if (p && ((p->p_flag & P_WEXIT) == NULL)) {
 	if (usermode) {		
 		if (p) {
@@ -310,7 +310,7 @@ timeout(
 	void					*param,
 	int						interval)
 {
-	AbsoluteTime			deadline;
+	uint64_t		deadline;
 
 	clock_interval_to_deadline(interval, NSEC_PER_SEC / hz, &deadline);
 	thread_call_func_delayed((thread_call_func_t)fcn, param, deadline);

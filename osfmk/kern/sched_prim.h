@@ -151,7 +151,7 @@ extern void		compute_my_priority(
 						thread_t	thread);
 
 /* Periodic scheduler activity */
-extern void		sched_tick_thread(void);
+extern void		sched_tick_init(void);
 
 /* Update priority of thread that has been sleeping or suspended.
  * Used to "catch up" with the system.
@@ -288,11 +288,11 @@ extern void		thread_bind(
 
 /* Set timer for current thread */
 extern void		thread_set_timer(
-					natural_t		interval,
-					natural_t		scale_factor);
+					uint32_t		interval,
+					uint32_t		scale_factor);
 
 extern void		thread_set_timer_deadline(
-					AbsoluteTime	deadline);
+					uint64_t		deadline);
 
 extern void		thread_cancel_timer(void);
 
@@ -366,5 +366,13 @@ MACRO_BEGIN														\
 	thread_block((void (*)(void)) 0);							\
 MACRO_END
 
+#if		!defined(MACH_KERNEL_PRIVATE) && !defined(ABSOLUTETIME_SCALAR_TYPE)
+
+#include <libkern/OSBase.h>
+
+#define thread_set_timer_deadline(a)	\
+	thread_set_timer_deadline(__OSAbsoluteTime(a))
+
+#endif
 
 #endif	/* _KERN_SCHED_PRIM_H_ */
