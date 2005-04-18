@@ -145,6 +145,7 @@ volatile unsigned int pbtcpu = -1;
 
 unsigned int lastTrace;					/* Value of low-level exception trace controls */
 
+
 volatile unsigned int	cpus_holding_bkpts;	/* counter for number of cpus holding
 											   breakpoints (ie: cpus that did not
 											   insert back breakpoints) */
@@ -683,7 +684,9 @@ int Call_DebuggerC(
 	addr64_t		instr_ptr;
 	ppnum_t			instr_pp;
 	unsigned int 	instr;
-	int 			my_cpu, tcpu;
+	int 			my_cpu, tcpu, wasdebugger;
+	struct per_proc_info *pp;
+	uint64_t nowtime, poptime;
 
 	my_cpu = cpu_number();								/* Get our CPU */
 
@@ -731,6 +734,8 @@ int Call_DebuggerC(
 		if (debugger_debug) kprintf("Call_DebuggerC(%d): lasttrace = %08X\n", my_cpu, lastTrace);	/* (TEST/DEBUG) */
 #endif
 		debugger_cpu = my_cpu;							/* Show that we are debugger */
+
+
 		lastTrace = LLTraceSet(0);						/* Disable low-level tracing */
 
 		for(tcpu = 0; tcpu < NCPUS; tcpu++) {			/* Stop all the other guys */
@@ -831,12 +836,16 @@ int Call_DebuggerC(
 debugger_exit:
 #if 0
 	if (debugger_debug) kprintf("Call_DebuggerC(%d): exit - inst = %08X, cpu=%d(%d), run=%d\n", my_cpu, 
-		instr, my_cpu, debugger_cpu, db_run_mode);	/* (TEST/DEBUG) */
+		instr, my_cpu, debugger_cpu, db_run_mode);		/* (TEST/DEBUG) */
 #endif
 	if ((instr == TRAP_DEBUGGER_INST) ||				/* Did we trap to enter debugger? */
 		(instr == TRAP_DIRECT_INST)) saved_state->save_srr0 += TRAP_INST_SIZE;	/* Yes, point past trap */
 
-	if(debugger_cpu == my_cpu) LLTraceSet(lastTrace);	/* Enable tracing on the way out if we are debugger */
+	wasdebugger = 0;									/* Assume not debugger */
+	if(debugger_cpu == my_cpu) {						/* Are the debugger processor? */
+		wasdebugger = 1;								/* Remember that we were the debugger */
+		LLTraceSet(lastTrace);							/* Enable tracing on the way out if we are debugger */
+	}
 
 	wait = FALSE;										/* Assume we are not going to wait */
 	if (db_run_mode == STEP_CONTINUE) {					/* Are we going to run? */
@@ -863,6 +872,7 @@ debugger_exit:
 	debugger_active[my_cpu]--;							/* Say we aren't active anymore */
 
 	if (wait) while(cpus_holding_bkpts);				/* Wait for breakpoints to clear */
+
 
 	hw_atomic_sub(&debug_mode, 1);						/* Set out of debug now */
 

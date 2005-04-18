@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2005 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -317,6 +317,9 @@ processor_doshutdown(
 									processor_offline, processor);
 	if (processor != current_processor())
 		timer_call_shutdown(processor);
+
+	_mk_sp_thread_begin(self, self->last_processor);
+
 	thread_dispatch(old_thread);
 }
 

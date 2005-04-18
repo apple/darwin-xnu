@@ -233,6 +233,10 @@ ip6_mrouter_set(so, sopt)
 	if (so != ip6_mrouter && sopt->sopt_name != MRT6_INIT)
 		return (EACCES);
 
+	if (sopt->sopt_valsize > MCLBYTES)
+		return (EMSGSIZE);
+
+
 	if ((error = soopt_getm(sopt, &m)) != 0) /* XXX */
 		return (error);
 	if ((error = soopt_mcopyin(sopt, m)) != 0) /* XXX */

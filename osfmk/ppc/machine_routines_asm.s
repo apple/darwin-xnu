@@ -925,8 +925,8 @@ LEXT(machine_idle_ret)
  *
  *	There is one bit of hackery in here: we need to enable for
  *	interruptions when we go to sleep and there may be a pending
- *	decrimenter rupt.  So we make the decrimenter 0x7FFFFFFF and enable for
- *	interruptions. The decrimenter rupt vector recognizes this and returns
+ *	decrementer rupt.  So we make the decrementer 0x7FFFFFFF and enable for
+ *	interruptions. The decrementer rupt vector recognizes this and returns
  *	directly back here.
  *
  */
@@ -983,7 +983,7 @@ mpsPF64bit:
 mpsClearDEC:
 			mfmsr	r5								; Get the current MSR
 			rlwinm	r10,r10,0,1,31					; Make 0x7FFFFFFF
-			mtdec	r10								; Load decrimenter with 0x7FFFFFFF
+			mtdec	r10								; Load decrementer with 0x7FFFFFFF
 			isync									; and make sure,
 			mfdec	r9								; really sure, it gets there
 			
@@ -1016,7 +1016,7 @@ mpsNoMSRx:
 			mfspr	r4,hid0							; Yes, this is a duplicate, keep it here
 			mfspr	r4,hid0							; Yes, this is a duplicate, keep it here
 
-			mtmsr	r3								; Enable for interrupts to drain decrimenter
+			mtmsr	r3								; Enable for interrupts to drain decrementer
 				
 			add		r6,r4,r5						; Just waste time
 			add		r6,r6,r4						; A bit more
@@ -1027,7 +1027,7 @@ mpsNoMSRx:
 
 ;
 ;			We are here with translation off, interrupts off, all possible
-;			interruptions drained off, and a decrimenter that will not pop.
+;			interruptions drained off, and a decrementer that will not pop.
 ;
 
 			bl		EXT(cacheInit)					; Clear out the caches.  This will leave them on
@@ -1048,8 +1048,8 @@ mpsNoMSRx:
 			eqv		r4,r4,r4						; Get all foxes
 			rlwinm	r4,r4,0,1,31					; Make 0x7FFFFFFF
 			beq		slSleepNow						; skip if 32-bit...
-			li		r3, 0x4000						; Cause decrimenter to roll over soon
-			mtdec	r3								; Load decrimenter with 0x00004000
+			li		r3,0x4000						; Cause decrementer to roll over soon
+			mtdec	r3								; Load decrementer with 0x00004000
 			isync									; and make sure,
 			mfdec	r3								; really sure, it gets there
 			
@@ -1057,7 +1057,7 @@ slSleepNow:
 			sync									; Sync it all up
 			mtmsr	r5								; Do sleep with interruptions enabled
 			isync									; Take a pill
-			mtdec	r4								; Load decrimenter with 0x7FFFFFFF
+			mtdec	r4								; Load decrementer with 0x7FFFFFFF
 			isync									; and make sure,
 			mfdec	r3								; really sure, it gets there
 			b		slSleepNow						; Go back to sleep if we wake up...
@@ -1195,8 +1195,8 @@ ciswdl1:	lwz		r0,pfl1dSize(r12)				; Get the level 1 cache size
 					
 			bf		31,cisnlck						; Skip if pfLClck not set...
 			
-			mfspr	r4,msscr0						; ?
-			rlwinm	r6,r4,0,0,l2pfes-1				; ?
+			mfspr	r4,msscr0						; 
+			rlwinm	r6,r4,0,0,l2pfes-1				; 
 			mtspr	msscr0,r6						; Set it
 			sync
 			isync
@@ -1252,7 +1252,7 @@ cisflush:	dcbf	r3,r6							; Flush everything out
 			sync
 			isync
 			
-			mtspr	msscr0,r4						; ?
+			mtspr	msscr0,r4						; 
 			sync
 			isync
 
@@ -1458,19 +1458,19 @@ ciinvdl3b:	mfspr	r8,l3cr							; Get the L3CR
 			bne+	ciinvdl3b						; Assume so...
 			sync
 
-			lwz	r10, pfBootConfig(r12)					; ?
-			rlwinm.	r10, r10, 24, 28, 31					; ?
-			beq	ciinvdl3nopdet						; ?
+			lwz	r10, pfBootConfig(r12)					; 
+			rlwinm.	r10, r10, 24, 28, 31					; 
+			beq	ciinvdl3nopdet						; 
 			
-			mfspr	r8,l3pdet						; ?
-			srw	r2, r8, r10						; ?
-			rlwimi	r2, r8, 0, 24, 31					; ?
-			subfic	r10, r10, 32						; ?
-			li	r8, -1							; ?
-			ori	r2, r2, 0x0080						; ?
-			slw	r8, r8, r10						; ?
-			or	r8, r2, r8						; ?
-			mtspr	l3pdet, r8						; ?
+			mfspr	r8,l3pdet						; 
+			srw	r2, r8, r10						; 
+			rlwimi	r2, r8, 0, 24, 31					; 
+			subfic	r10, r10, 32						; 
+			li	r8, -1							; 
+			ori	r2, r2, 0x0080						; 
+			slw	r8, r8, r10						; 
+			or	r8, r2, r8						; 
+			mtspr	l3pdet, r8						; 
 			isync
 
 ciinvdl3nopdet:
@@ -1478,14 +1478,14 @@ ciinvdl3nopdet:
 			rlwinm	r8,r8,0,l3clken+1,l3clken-1		; Clear the clock enable bit
 			mtspr	l3cr,r8							; Disable the clock
 
-			li		r2,128							; ?
-ciinvdl3c:	addi	r2,r2,-1						; ?
-			cmplwi	r2,0							; ?
+			li		r2,128							; 
+ciinvdl3c:	addi	r2,r2,-1						; 
+			cmplwi	r2,0							; 
 			bne+	ciinvdl3c
 
-			mfspr	r10,msssr0						; ?
-			rlwinm	r10,r10,0,vgL3TAG+1,vgL3TAG-1	; ?
-			mtspr	msssr0,r10						; ?
+			mfspr	r10,msssr0						; 
+			rlwinm	r10,r10,0,vgL3TAG+1,vgL3TAG-1	; 
+			mtspr	msssr0,r10						; 
 			sync
 
 			mtspr	l3cr,r3							; Enable it as desired
@@ -2135,4 +2135,33 @@ LEXT(ml_scom_read)
 			cmplwi	r4, 0								; If data pointer is null, just return
 			beqlr										; the received data in r5
 			std		r5,0(r4)							; Pass back the received data			
+			blr											; Leave...
+
+;
+;			Calculates the hdec to dec ratio
+;
+
+			.align	5
+			.globl	EXT(ml_hdec_ratio)
+
+LEXT(ml_hdec_ratio)
+
+			li		r0,0								; Clear the EE bit (and everything else for that matter)
+			mfmsr	r11									; Get the MSR
+			mtmsrd	r0,1								; Set the EE bit only (do not care about RI)
+			rlwinm	r11,r11,0,MSR_EE_BIT,MSR_EE_BIT		; Isolate just the EE bit
+			mfmsr	r10									; Refresh our view of the MSR (VMX/FP may have changed)
+			or		r12,r10,r11							; Turn on EE if on before we turned it off
+
+			mftb	r9									; Get time now
+			mfspr	r2,hdec								; Save hdec
+
+mhrcalc:	mftb	r8									; Get time now
+			sub		r8,r8,r9							; How many ticks?
+			cmplwi	r8,10000							; 10000 yet?
+			blt		mhrcalc								; Nope...
+
+			mfspr	r9,hdec								; Get hdec now
+			sub		r3,r2,r9							; How many ticks?
+			mtmsrd	r12,1								; Flip EE on if needed
 			blr											; Leave...

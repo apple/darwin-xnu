@@ -1410,6 +1410,11 @@ ip_ctloutput(so, sopt)
 			struct mbuf *m;
 			int optname;
 
+			if (sopt->sopt_valsize > MCLBYTES) {
+				error = EMSGSIZE;
+				break;
+			}
+
 			if ((error = soopt_getm(sopt, &m)) != 0) /* XXX */
 				break;
 			if ((error = soopt_mcopyin(sopt, m)) != 0) /* XXX */

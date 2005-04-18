@@ -127,6 +127,8 @@ static int load_return_to_errno(load_return_t lrtn);
 int execve(struct proc *p, struct execve_args *uap, register_t *retval);
 static int execargs_alloc(vm_offset_t *addrp);
 static int execargs_free(vm_offset_t addr);
+static int sugid_scripts = 0;
+SYSCTL_INT (_kern, OID_AUTO, sugid_scripts, CTLFLAG_RW, &sugid_scripts, 0, "");
 
 int
 execv(p, args, retval)
@@ -409,6 +411,14 @@ again:
 		  error = EBADARCH;
 		  goto bad;
 		}
+
+		/* Check to see if SUGID scripts are permitted.  If they aren't then
+		 * clear the SUGID bits.
+		 */
+	        if (sugid_scripts == 0) {
+		   origvattr.va_mode &= ~(VSUID | VSGID);
+        	}
+
 		cp = &exdata.ex_shell[2];		/* skip "#!" */
 		while (cp < &exdata.ex_shell[SHSIZE]) {
 			if (*cp == '\t')		/* convert all tabs to spaces */

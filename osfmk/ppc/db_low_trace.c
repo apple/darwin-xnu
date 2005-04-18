@@ -122,10 +122,13 @@ void db_low_trace(db_expr_t addr, int have_addr, db_expr_t count, char * modif) 
 		ReadReal((addr64_t)xxltr + 64, &(((unsigned int *)&xltr)[16]));		/* Get the second half */
 		ReadReal((addr64_t)xxltr + 96, &(((unsigned int *)&xltr)[24]));		/* Get the second half */
 		
-		db_printf("\n%s%08llX  %1X  %08X %08X - %04X\n", (xxltr != cxltr ? " " : "*"), 
+		db_printf("\n%s%08llX  %1X  %08X %08X - %04X", (xxltr != cxltr ? " " : "*"), 
 			xxltr,
-			xltr.LTR_cpu, xltr.LTR_timeHi, xltr.LTR_timeLo, 
+			(xltr.LTR_cpu & 0xFF), xltr.LTR_timeHi, xltr.LTR_timeLo, 
 			(xltr.LTR_excpt & 0x8000 ? 0xFFFF : xltr.LTR_excpt * 64));	/* Print the first line */
+
+		if(xltr.LTR_cpu & 0xFF00) db_printf(", sflgs = %02X\n", ((xltr.LTR_cpu >> 8) & 0xFF));
+		else db_printf("\n");
 			
 		db_printf("              DAR/DSR/CR: %016llX %08X %08X\n", xltr.LTR_dar, xltr.LTR_dsisr, xltr.LTR_cr);
 		
@@ -533,7 +536,7 @@ void db_dumppca(unsigned int ptegindex) {
 			llslot = ((long long)xpteg[i] << 32) | (long long)xpteg[i + 1];	/* Make a long long version of this */ 
 			space = (llslot >> 12) & (maxAdrSp - 1);		/* Extract the space */
 			llhash = (unsigned long long)space | ((unsigned long long)space << maxAdrSpb) | ((unsigned long long)space << (2 * maxAdrSpb));	/* Get the hash */
-			llhash = llhash & 0x0000001FFFFFFFFF;			/* Make sure we stay within supported ranges */
+			llhash = llhash & 0x0000001FFFFFFFFFULL;		/* Make sure we stay within supported ranges */
 			pva =  (unsigned long long)ptegindex ^ llhash;	/* Get part of the vaddr */
 			llseg = (llslot >> 12) ^ llhash;				/* Get the segment number */
 			api = (llslot >> 7) & 0x1F;						/* Get the API */
@@ -766,32 +769,48 @@ void db_display_xregs(db_expr_t addr, int have_addr, db_expr_t count, char * mod
 	int				i, j, pents;
 
 	stSpecrs(dbspecrs);										/* Save special registers */
-	db_printf("PIR:    %08X\n", dbspecrs[0]);
-	db_printf("PVR:    %08X\n", dbspecrs[1]);
-	db_printf("SDR1:   %08X\n", dbspecrs[22]);
-	db_printf("HID0:   %08X\n", dbspecrs[39]);
-	db_printf("HID1:   %08X\n", dbspecrs[40]);
-	db_printf("L2CR:   %08X\n", dbspecrs[41]);
-	db_printf("MSSCR0: %08X\n", dbspecrs[42]);
-	db_printf("MSSCR1: %08X\n", dbspecrs[43]);
-	db_printf("THRM1:  %08X\n", dbspecrs[44]);
-	db_printf("THRM2:  %08X\n", dbspecrs[45]);
-	db_printf("THRM3:  %08X\n", dbspecrs[46]);
-	db_printf("ICTC:   %08X\n", dbspecrs[47]);
-	db_printf("L2CR2:  %08X\n", dbspecrs[48]);
-	db_printf("DABR:   %08X\n", dbspecrs[49]);
-	db_printf("\n");
-
-	db_printf("DBAT: %08X %08X %08X %08X\n", dbspecrs[2], dbspecrs[3], dbspecrs[4], dbspecrs[5]);
-	db_printf("      %08X %08X %08X %08X\n", dbspecrs[6], dbspecrs[7], dbspecrs[8], dbspecrs[9]);
-	db_printf("IBAT: %08X %08X %08X %08X\n", dbspecrs[10], dbspecrs[11], dbspecrs[12], dbspecrs[13]);
-	db_printf("      %08X %08X %08X %08X\n", dbspecrs[14], dbspecrs[15], dbspecrs[16], dbspecrs[17]);
-	db_printf("SPRG: %08X %08X %08X %08X\n", dbspecrs[18], dbspecrs[19], dbspecrs[20], dbspecrs[21]);
-	db_printf("\n");
-	for(i = 0; i < 16; i += 8) {							/* Print 8 at a time */
-		db_printf("SR%02d: %08X %08X %08X %08X %08X %08X %08X %08X\n", i,
-			dbspecrs[23+i], dbspecrs[24+i], dbspecrs[25+i], dbspecrs[26+i], 
-			dbspecrs[27+i], dbspecrs[28+i], dbspecrs[29+i], dbspecrs[30+i]); 
+	if(per_proc_info[0].pf.Available & pf64Bit) {
+		db_printf("PIR:    %08X\n", dbspecrs[0]);
+		db_printf("PVR:    %08X\n", dbspecrs[1]);
+		db_printf("SDR1:   %08X.%08X\n", dbspecrs[26], dbspecrs[27]);
+		db_printf("HID0:   %08X.%08X\n", dbspecrs[28], dbspecrs[29]);
+		db_printf("HID1:   %08X.%08X\n", dbspecrs[30], dbspecrs[31]);
+		db_printf("HID4:   %08X.%08X\n", dbspecrs[32], dbspecrs[33]);
+		db_printf("HID5:   %08X.%08X\n", dbspecrs[34], dbspecrs[35]);
+		db_printf("SPRG0:  %08X.%08X %08X.%08X\n", dbspecrs[18], dbspecrs[19], dbspecrs[20], dbspecrs[21]);
+		db_printf("SPRG2:  %08X.%08X %08X.%08X\n", dbspecrs[22], dbspecrs[23], dbspecrs[24], dbspecrs[25]);
+		db_printf("\n");
+		for(i = 0; i < (64 * 4); i += 4) {
+			db_printf("SLB %02d: %08X.%08X %08X.%08X\n", i / 4, dbspecrs[80 + i], dbspecrs[81 + i], dbspecrs[82 + i], dbspecrs[83 + i]);
+		}
+	}
+	else {	
+		db_printf("PIR:    %08X\n", dbspecrs[0]);
+		db_printf("PVR:    %08X\n", dbspecrs[1]);
+		db_printf("SDR1:   %08X\n", dbspecrs[22]);
+		db_printf("HID0:   %08X\n", dbspecrs[39]);
+		db_printf("HID1:   %08X\n", dbspecrs[40]);
+		db_printf("L2CR:   %08X\n", dbspecrs[41]);
+		db_printf("MSSCR0: %08X\n", dbspecrs[42]);
+		db_printf("MSSCR1: %08X\n", dbspecrs[43]);
+		db_printf("THRM1:  %08X\n", dbspecrs[44]);
+		db_printf("THRM2:  %08X\n", dbspecrs[45]);
+		db_printf("THRM3:  %08X\n", dbspecrs[46]);
+		db_printf("ICTC:   %08X\n", dbspecrs[47]);
+		db_printf("L2CR2:  %08X\n", dbspecrs[48]);
+		db_printf("DABR:   %08X\n", dbspecrs[49]);
+	
+		db_printf("DBAT: %08X %08X %08X %08X\n", dbspecrs[2], dbspecrs[3], dbspecrs[4], dbspecrs[5]);
+		db_printf("      %08X %08X %08X %08X\n", dbspecrs[6], dbspecrs[7], dbspecrs[8], dbspecrs[9]);
+		db_printf("IBAT: %08X %08X %08X %08X\n", dbspecrs[10], dbspecrs[11], dbspecrs[12], dbspecrs[13]);
+		db_printf("      %08X %08X %08X %08X\n", dbspecrs[14], dbspecrs[15], dbspecrs[16], dbspecrs[17]);
+		db_printf("SPRG: %08X %08X %08X %08X\n", dbspecrs[18], dbspecrs[19], dbspecrs[20], dbspecrs[21]);
+		db_printf("\n");
+		for(i = 0; i < 16; i += 8) {						/* Print 8 at a time */
+			db_printf("SR%02d: %08X %08X %08X %08X %08X %08X %08X %08X\n", i,
+				dbspecrs[23+i], dbspecrs[24+i], dbspecrs[25+i], dbspecrs[26+i], 
+				dbspecrs[27+i], dbspecrs[28+i], dbspecrs[29+i], dbspecrs[30+i]); 
+		}
 	}
 	
 	db_printf("\n");
@@ -918,7 +937,7 @@ void db_check_mappings(db_expr_t addr, int have_addr, db_expr_t count, char * mo
 						llslot = ((long long)xpteg[slot] << 32) | (long long)xpteg[slot + 1];	/* Make a long long version of this */ 
 						space = (llslot >> 12) & (maxAdrSp - 1);	/* Extract the space */
 						llhash = (unsigned long long)space | ((unsigned long long)space << maxAdrSpb) | ((unsigned long long)space << (2 * maxAdrSpb));	/* Get the hash */
-						llhash = llhash & 0x0000001FFFFFFFFF;	/* Make sure we stay within supported ranges */
+						llhash = llhash & 0x0000001FFFFFFFFFULL;	/* Make sure we stay within supported ranges */
 						pva =  i ^ llhash;					/* Get part of the vaddr */
 						llseg = ((llslot >> 12) ^ llhash);	/* Get the segment number */
 						api = (llslot >> 7) & 0x1F;			/* Get the API */

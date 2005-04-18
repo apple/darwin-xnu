@@ -36,7 +36,8 @@ extern int forcenap;
 
 decl_simple_lock_data(, spsLock);
 unsigned int spsLockInit = 0;
-
+uint32_t warFlags = 0;
+#define warDisMBpoff	0x80000000
 #define	MAX_CPUS_SET	0x1
 #define	MAX_CPUS_WAIT	0x2
 
@@ -200,24 +201,31 @@ void ml_thread_policy(
 
 void machine_idle(void)
 {
-        if (per_proc_info[cpu_number()].interrupts_enabled == TRUE) {
-	        int cur_decr;
+	struct per_proc_info	*ppinfo;
 
-	        machine_idle_ppc();
+	ppinfo = getPerProc();
 
+	if ((ppinfo->interrupts_enabled == TRUE) &&
+	    (ppinfo->cpu_flags & SignalReady)) {	/* Check to see if we are allowed to nap */
+		int cur_decr;
+
+		machine_idle_ppc();
 		/*
-		 * protect against a lost decrementer trap
-		 * if the current decrementer value is negative
-		 * by more than 10 ticks, re-arm it since it's 
-		 * unlikely to fire at this point... a hardware
-		 * interrupt got us out of machine_idle and may
-		 * also be contributing to this state
-		 */
+ 		 * protect against a lost decrementer trap
+ 		 * if the current decrementer value is negative
+ 		 * by more than 10 ticks, re-arm it since it's 
+ 		 * unlikely to fire at this point... a hardware
+ 		 * interrupt got us out of machine_idle and may
+ 		 * also be contributing to this state
+ 		 */
 		cur_decr = isync_mfdec();
 
 		if (cur_decr < -10) {
 		        mtdec(1);
 		}
+	}
+	else {
+		(void) ml_set_interrupts_enabled(TRUE);		/* Enable for interruptions even if nap is not allowed */
 	}
 }
 
@@ -559,5 +567,16 @@ be_tracing()
 {
   int mycpu = cpu_number();
   return(per_proc_info[mycpu].cpu_flags & traceBE);
+}
+
+
+void ml_mem_backoff(void) {
+
+	if(warFlags & warDisMBpoff) return;					/* If backoff disabled, exit */
+
+	__asm__ volatile("sync");
+	__asm__ volatile("isync");
+	
+	return;
 }
 

@@ -3944,6 +3944,12 @@ searchfs (p,uap,retval)
 	if (error = copyin((caddr_t) uap->searchblock, (caddr_t) &searchblock,sizeof(struct fssearchblock)))
 		return(error);
 
+	/* Do a sanity check on sizeofsearchparams1 and sizeofsearchparams2.  
+	 */
+	if (searchblock.sizeofsearchparams1 > SEARCHFS_MAX_SEARCHPARMS || 
+		searchblock.sizeofsearchparams2 > SEARCHFS_MAX_SEARCHPARMS)
+		return(EINVAL);
+
 	/* Now malloc a big bunch of space to hold the search parameters, the attrlists and the search state. */
 	/* It all has to do into local memory and it's not that big so we might as well  put it all together. */
 	/* Searchparams1 shall be first so we might as well use that to hold the base address of the allocated*/

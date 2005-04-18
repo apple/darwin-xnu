@@ -1289,6 +1289,10 @@ ip6_ctloutput(so, sopt)
 			{
 				struct mbuf *m;
 
+				if (sopt->sopt_valsize > MCLBYTES) {
+					error = EMSGSIZE;
+					break;
+				}
 				error = soopt_getm(sopt, &m); /* XXX */
 				if (error != NULL)
 					break;
@@ -1481,6 +1485,10 @@ do { \
 				size_t len = 0;
 				struct mbuf *m;
 
+				if (sopt->sopt_valsize > MCLBYTES) {
+					error = EMSGSIZE;
+					break;
+				}
 				if ((error = soopt_getm(sopt, &m)) != 0) /* XXX */
 					break;
 				if ((error = soopt_mcopyin(sopt, m)) != 0) /* XXX */
@@ -1628,6 +1636,10 @@ do { \
 				struct mbuf *m = NULL;
 				struct mbuf **mp = &m;
 
+				if (sopt->sopt_valsize > MCLBYTES) {
+					error = EMSGSIZE;
+					break;
+				}
 				error = soopt_getm(sopt, &m); /* XXX */
 				if (error != NULL)
 					break;

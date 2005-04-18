@@ -135,6 +135,7 @@ int main(int argc, char *argv[])
 	DECLARE("FPUowner",				offsetof(struct per_proc_info *, FPU_owner));
 	DECLARE("VMXowner",				offsetof(struct per_proc_info *, VMX_owner));
 	DECLARE("holdQFret",			offsetof(struct per_proc_info *, holdQFret));
+	DECLARE("rtcPop",				offsetof(struct per_proc_info *, rtcPop));
 
 	DECLARE("PP_SAVE_EXCEPTION_TYPE", offsetof(struct per_proc_info *, save_exception_type));
 	DECLARE("PP_NEED_AST", 			offsetof(struct per_proc_info *, need_ast));
@@ -409,6 +410,8 @@ int main(int argc, char *argv[])
 	DECLARE("hwMaintenances",		offsetof(struct per_proc_info *, hwCtr.hwMaintenances));
 	DECLARE("hwInstrumentations",	offsetof(struct per_proc_info *, hwCtr.hwInstrumentations));
 	DECLARE("hwRedrives",			offsetof(struct per_proc_info *, hwCtr.hwRedrives));
+	DECLARE("hwIgnored",			offsetof(struct per_proc_info *, hwCtr.hwIgnored));
+	DECLARE("hwhdec",				offsetof(struct per_proc_info *, hwCtr.hwhdec));
 	DECLARE("hwSteals",				offsetof(struct per_proc_info *, hwCtr.hwSteals));
 
 	DECLARE("hwMckHang",			offsetof(struct per_proc_info *, hwCtr.hwMckHang));
@@ -1264,6 +1267,7 @@ int main(int argc, char *argv[])
 	DECLARE("dgMisc0",				offsetof(struct lowglo *, lgdgWork.dgMisc0));
 	
 	DECLARE("lgKillResv",			offsetof(struct lowglo *, lgKillResv));
+
 	
 	DECLARE("scomcpu",				offsetof(struct scomcomm *, scomcpu));
 	DECLARE("scomfunc",				offsetof(struct scomcomm *, scomfunc));

@@ -315,6 +315,7 @@ fork1(p1, flags, retval)
 	thread_dup(newth);
 	/* p2 = newth->task->proc; */
 	p2 = (struct proc *)(get_bsdtask_info(get_threadtask(newth)));
+	set_security_token(p2);         /* propagate change of PID */
 
 	AUDIT_ARG(pid, p2->p_pid);
 

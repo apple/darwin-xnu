@@ -228,14 +228,15 @@ parse_machfile(
 )
 {
 	struct machine_slot	*ms;
-	int			ncmds;
+	uint32_t		ncmds;
 	struct load_command	*lcp, *next;
 	struct dylinker_command	*dlp = 0;
 	void *			pager;
 	load_return_t		ret = LOAD_SUCCESS;
 	vm_offset_t		addr, kl_addr;
 	vm_size_t		size,kl_size;
-	int			offset;
+	size_t			offset;
+	size_t			oldoffset;	/* for overflow check */
 	int			pass;
 	struct proc *p = current_proc();		/* XXXX */
 	int			error;
@@ -326,6 +327,12 @@ parse_machfile(
 	 *	Scan through the commands, processing each one as necessary.
 	 */
 	for (pass = 1; pass <= 2; pass++) {
+		/*
+		 * Loop through each of the load_commands indicated by the
+		 * Mach-O header; if an absurd value is provided, we just
+		 * run off the end of the reserved section by incrementing
+		 * the offset too far, so we are implicitly fail-safe.
+		 */
 		offset = sizeof(struct mach_header);
 		ncmds = header->ncmds;
 		while (ncmds--) {
@@ -333,21 +340,27 @@ parse_machfile(
 			 *	Get a pointer to the command.
 			 */
 			lcp = (struct load_command *)(addr + offset);
+			oldoffset = offset;
 			offset += lcp->cmdsize;
 
 			/*
-			 *	Check for valid lcp pointer by checking
-			 *	next offset.
+			 * Perform prevalidation of the struct load_command
+			 * before we attempt to use its contents.  Invalid
+			 * values are ones which result in an overflow, or
+			 * which can not possibly be valid commands, or which
+			 * straddle or exist past the reserved section at the
+			 * start of the image.
 			 */
-			if (offset > header->sizeofcmds
-					+ sizeof(struct mach_header)) {
-				if (kl_addr )
-					kfree(kl_addr, kl_size);
-				return(LOAD_BADMACHO);
+			if (oldoffset > offset ||
+			    lcp->cmdsize < sizeof(struct load_command) ||
+			    offset > header->sizeofcmds + sizeof(struct mach_header)) {
+			    	ret = LOAD_BADMACHO;
+				break;
 			}
 
 			/*
-			 *	Check for valid command.
+			 * Act on struct load_command's for which kernel
+			 * intervention is required.
 			 */
 			switch(lcp->cmd) {
 			case LC_SEGMENT:
@@ -383,7 +396,8 @@ parse_machfile(
 					ret = LOAD_FAILURE;
 				break;
 			default:
-				ret = LOAD_SUCCESS;/* ignore other stuff */
+				/* Other commands are ignored by the kernel */
+				ret = LOAD_SUCCESS;
 			}
 			if (ret != LOAD_SUCCESS)
 				break;

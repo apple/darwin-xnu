@@ -43,6 +43,7 @@
 #include <machine/mach_param.h>	/* HZ */
 #include <machine/commpage.h>
 #include <machine/machine_routines.h>
+#include <ppc/exception.h>
 #include <ppc/proc_reg.h>
 
 #include <pexpert/pexpert.h>
@@ -52,6 +53,8 @@
 int		sysclk_config(void);
 
 int		sysclk_init(void);
+
+void treqs(uint32_t dec);
 
 kern_return_t	sysclk_gettime(
 	mach_timespec_t			*cur_time);
@@ -240,7 +243,7 @@ sysclk_init(void)
 		rtclock_tick_deadline[mycpu] = abstime;
 		rtclock_tick_deadline[mycpu] += rtclock_tick_interval;
 		decr = deadline_to_decrementer(rtclock_tick_deadline[mycpu], abstime);
-		mtdec(decr);
+		treqs(decr);
 
 		return(1);
 	}
@@ -250,7 +253,7 @@ sysclk_init(void)
 	rtclock_tick_deadline[mycpu] = abstime;
 	rtclock_tick_deadline[mycpu] += rtclock_tick_interval;
 	decr = deadline_to_decrementer(rtclock_tick_deadline[mycpu], abstime);
-	mtdec(decr);
+	treqs(decr);
 
 	rtclock_initialized = TRUE;
 
@@ -909,7 +912,7 @@ clock_set_timer_deadline(
 					rtclock_decrementer_min < (natural_t)decr		)
 				decr = rtclock_decrementer_min;
 
-			mtdec(decr);
+			treqs(decr);
 
 			KERNEL_DEBUG_CONSTANT(MACHDBG_CODE(DBG_MACH_EXCP_DECI, 1)
 										| DBG_FUNC_NONE, decr, 2, 0, 0, 0);
@@ -957,7 +960,7 @@ rtclock_intr(
 	 * We may receive interrupts too early, we must reject them.
 	 */
 	if (rtclock_initialized == FALSE) {
-		mtdec(DECREMENTER_MAX);		/* Max the decrementer if not init */
+		treqs(DECREMENTER_MAX);		/* Max the decrementer if not init */
 		return;
 	}
 
@@ -991,7 +994,7 @@ rtclock_intr(
 			rtclock_decrementer_min < (natural_t)decr1		)
 		decr1 = rtclock_decrementer_min;
 
-	mtdec(decr1);
+	treqs(decr1);
 
 	KERNEL_DEBUG_CONSTANT(MACHDBG_CODE(DBG_MACH_EXCP_DECI, 1)
 						  | DBG_FUNC_NONE, decr1, 3, 0, 0, 0);
@@ -1137,4 +1140,25 @@ delay(
 	int		usec)
 {
 	delay_for_interval((usec < 0)? -usec: usec, NSEC_PER_USEC);
+}
+
+/*
+ *	Request a decrementer pop
+ *
+ */
+
+void treqs(uint32_t dec) {
+
+
+	struct per_proc_info *pp;
+	uint64_t nowtime, newtime;
+	
+	nowtime = mach_absolute_time();						/* What time is it? */
+	pp = getPerProc();									/* Get our processor block */
+	newtime = nowtime + (uint64_t)dec;					/* Get requested pop time */
+	pp->rtcPop = newtime;								/* Copy it */
+	
+	mtdec((uint32_t)(newtime - nowtime));				/* Set decrementer */
+	return;
+
 }

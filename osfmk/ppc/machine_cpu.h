@@ -48,4 +48,8 @@ void	cpu_signal_handler(
 void	cpu_exit_wait(
 	int);
 
+typedef void (*broadcastFunc) (int);
+
+int32_t cpu_broadcast(uint32_t *, broadcastFunc, uint32_t);
+
 #endif /* _PPC_MACHINE_CPU_H_ */

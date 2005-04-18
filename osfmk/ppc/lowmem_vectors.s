@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2005 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -89,7 +89,7 @@ EXT(ResetHandler):
 			mtlr	r4
 			blr
 
-resetexc:	cmplwi	r13,RESET_HANDLER_BUPOR				; Special bring up POR sequence?
+resetexc:	cmplwi	r13,RESET_HANDLER_BUPOR			; Special bring up POR sequence?
 			bne		resetexc2						; No...
 			lis		r4,hi16(EXT(resetPOR))			; Get POR code
 			ori		r4,r4,lo16(EXT(resetPOR))		; The rest
@@ -149,23 +149,23 @@ LEXT(extPatchMCK)									; This is patched to a nop for 64-bit
 ;			Fall through here for 970 MCKs.
 ;
 
-			li		r11,1							; ?
-			sldi	r11,r11,32+3					; ?
-			mfspr	r13,hid4						; ?
-			or		r11,r11,r13						; ?
+			li		r11,1							; 
+			sldi	r11,r11,32+3					; 
+			mfspr	r13,hid4						; 
+			or		r11,r11,r13						; 
 			sync
-			mtspr	hid4,r11						; ?
+			mtspr	hid4,r11						; 
 			isync
-			li		r11,1							; ?
-			sldi	r11,r11,32+8					; ?
-			andc	r13,r13,r11						; ?
+			li		r11,1							; 
+			sldi	r11,r11,32+8					; 
+			andc	r13,r13,r11						; 
 			lis		r11,0xE000						; Get the unlikeliest ESID possible
 			sync
-			mtspr	hid4,r13						; ?
-			isync									; ?
+			mtspr	hid4,r13						; 
+			isync									; 
 			
-			srdi	r11,r11,1						; ?
-			slbie	r11								; ?
+			srdi	r11,r11,1						; 
+			slbie	r11								; 
 			sync
 			isync
 		
@@ -179,24 +179,24 @@ LEXT(extPatchMCK)									; This is patched to a nop for 64-bit
 h200aaa:	mfsrr1	r11								; Get the SRR1
 			mfcr	r13								; Save the CR
 			
-			rlwinm.	r11,r11,0,dcmck,dcmck			; ?
-			beq+	notDCache						; ?
+			rlwinm.	r11,r11,0,dcmck,dcmck			; 
+			beq+	notDCache						; 
 			
 			sync
-			mfspr	r11,msscr0						; ?
-			dssall									; ?
+			mfspr	r11,msscr0						; 
+			dssall									; 
 			sync
 			isync
 
-			oris	r11,r11,hi16(dl1hwfm)			; ?
-			mtspr	msscr0,r11						; ?
+			oris	r11,r11,hi16(dl1hwfm)			; 
+			mtspr	msscr0,r11						; 
 			
-rstbsy:		mfspr	r11,msscr0						; ?
+rstbsy:		mfspr	r11,msscr0						; 
 			
-			rlwinm.	r11,r11,0,dl1hwf,dl1hwf			; ?
-			bne		rstbsy							; ?
+			rlwinm.	r11,r11,0,dl1hwf,dl1hwf			; 
+			bne		rstbsy							; 
 			
-			sync									; ?
+			sync									; 
 
 			mfsprg	r11,0							; Get the per_proc
 			mtcrf	255,r13							; Restore CRs
@@ -1398,7 +1398,6 @@ noPerfMonSave64:
 			li		r0,SAVgeneral					; Get the savearea type value
 			lhz		r19,PP_CPU_NUMBER(r2)			; Get the logical processor number											
 			stb		r0,SAVflags+2(r13)				; Mark valid context
-			ori		r23,r23,lo16(EXT(trcWork))		; Get the rest
 			rlwinm	r22,r11,30,0,31					; Divide interrupt code by 2
 			li		r23,trcWork						; Get the trace work area address
 			addi	r22,r22,10						; Adjust code so we shift into CR5
@@ -1443,14 +1442,18 @@ gotTrcEntSF:
 
 			dcbz128	0,r20							; Zap the trace entry
 
+			lwz		r9,SAVflags(r13)				; Get savearea flags
+
 			ld		r16,ruptStamp(r2)				; Get top of time base
 			ld		r0,saver0(r13)					; Get back interrupt time R0 (we need this whether we trace or not)
 			std		r16,LTR_timeHi(r20)				; Set the upper part of TB 
 			ld		r1,saver1(r13)					; Get back interrupt time R1
+			rlwinm	r9,r9,20,16,23					; Isolate the special flags
 			ld		r18,saver2(r13)					; Get back interrupt time R2
-			std		r0,LTR_r0(r20)					; Save off register 0 			
+			std		r0,LTR_r0(r20)					; Save off register 0 	
+			rlwimi	r9,r19,0,24,31					; Slide in the cpu number
 			ld		r3,saver3(r13)					; Restore this one
-			sth		r19,LTR_cpu(r20)				; Stash the cpu number
+			sth		r9,LTR_cpu(r20)					; Stash the cpu number and special flags
 			std		r1,LTR_r1(r20)					; Save off register 1			
 			ld		r4,saver4(r13)					; Restore this one
 			std		r18,LTR_r2(r20)					; Save off register 2 			
@@ -1568,11 +1571,13 @@ Redrive:
 		
 			li		r20,lo16(xcpTable)				; Point to the vector table (note: this must be in 1st 64k of physical memory)
 			la		r12,hwCounts(r2)				; Point to the exception count area
+			andis.	r24,r22,hi16(SAVeat)			; Should we eat this one?		
 			rlwinm	r22,r22,SAVredriveb+1,31,31		; Get a 1 if we are redriving
 			add		r12,r12,r11						; Point to the count
 			lwzx	r20,r20,r11						; Get the interrupt handler
 			lwz		r25,0(r12)						; Get the old value
 			lwz		r23,hwRedrives(r2)				; Get the redrive count
+			crmove	cr3_eq,cr0_eq					; Remember if we are ignoring
 			xori	r24,r22,1						; Get the NOT of the redrive
 			mtctr	r20								; Point to the interrupt handler
 			mtcrf	0x80,r0							; Set our CR0 to the high nybble of possible syscall code
@@ -1581,6 +1586,7 @@ Redrive:
 			crandc	cr0_lt,cr0_lt,cr0_gt			; See if we have R0 equal to 0b10xx...x 
 			stw		r25,0(r12)						; Store it back
 			stw		r23,hwRedrives(r2)				; Save the redrive count
+			bne--	cr3,IgnoreRupt					; Interruption is being ignored...
 			bctr									; Go process the exception...
 	
 
@@ -1639,7 +1645,8 @@ xcpTable:
 			.long	WhoaBaby						; T_SOFT_PATCH			
 			.long	WhoaBaby						; T_MAINTENANCE			
 			.long	WhoaBaby						; T_INSTRUMENTATION		
-
+			.long	WhoaBaby						; T_ARCHDEP0
+			.long	EatRupt							; T_HDEC
 ;
 ;			Just what the heck happened here????
 ;
@@ -1647,6 +1654,15 @@ xcpTable:
 			.align	5
 			
 WhoaBaby:	b		.								; Open the hood and wait for help
+
+			.align	5
+			
+IgnoreRupt:
+			lwz		r20,hwIgnored(r2)				; Grab the ignored interruption count
+			addi	r20,r20,1						; Count this one
+			stw		r20,hwIgnored(r2)				; Save the ignored count
+			b		EatRupt							; Ignore it...
+
 
 													
 ;
@@ -1951,14 +1967,14 @@ xcswNo64:	lwz		r30,SACvrswap+4(r30)			; get real to virtual translation
 ;
 ;			Handle machine check here.
 ;
-; ?
+; 
 ;
 
 			.align	5
 
 MachineCheck:
 
-			bt++	pf64Bitb,mck64					; ?
+			bt++	pf64Bitb,mck64					; 
 			
 			lwz		r27,savesrr1+4(r13)				; Pick up srr1
 
@@ -3109,7 +3125,7 @@ EXT(lowGlo):
 			.long	0								; 5008 Zero
 			.long	0								; 500C Zero cont...
 			.long	EXT(per_proc_info)				; 5010 pointer to per_procs
-			.long	0								;
+			.long	0
 			.long	0								; 5018 reserved
 			.long	0								; 501C reserved
 			.long	0								; 5020 reserved
@@ -3372,8 +3388,38 @@ EXT(killresv):
 			.long	0								; 53F4 reserved			
 			.long	0								; 53F8 reserved			
 			.long	0								; 53FC reserved	
-
-
+			.long	0								; 5400 reserved
+			.long	0								; 5404 reserved
+			.long	0								; 5408 reserved
+			.long	0								; 540C reserved
+			.long	0								; 5410 reserved
+			.long	0								; 5414 reserved
+			.long	0								; 5418 reserved
+			.long	0								; 541C reserved
+			.long	0								; 5420 reserved			
+			.long	0								; 5424 reserved			
+			.long	0								; 5428 reserved			
+			.long	0								; 542C reserved			
+			.long	0								; 5430 reserved			
+			.long	0								; 5434 reserved			
+			.long	0								; 5438 reserved			
+			.long	0								; 543C reserved			
+			.long	0								; 5440 reserved			
+			.long	0								; 5444 reserved			
+			.long	0								; 5448 reserved			
+			.long	0								; 544C reserved			
+			.long	0								; 5450 reserved			
+			.long	0								; 5454 reserved			
+			.long	0								; 5458 reserved			
+			.long	0								; 545C reserved			
+			.long	0								; 5460 reserved			
+			.long	0								; 5464 reserved			
+			.long	0								; 5468 reserved			
+			.long	0								; 546C reserved			
+			.long	0								; 5470 reserved			
+			.long	0								; 5474 reserved			
+			.long	0								; 5478 reserved			
+			.long	0								; 547C reserved	
 ;
 ;	The "shared page" is used for low-level debugging
 ;

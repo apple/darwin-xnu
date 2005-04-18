@@ -62,9 +62,12 @@
 #include <ppc/trap.h>
 
 extern struct vc_info vinfo;
+extern uint32_t warFlags;
+#define warDisMBpoff	0x80000000
 
 kern_return_t testPerfTrap(int trapno, struct savearea *ss, 
 	unsigned int dsisr, addr64_t dar);
+
 
 int diagCall(struct savearea *save) {
 
@@ -74,8 +77,8 @@ int diagCall(struct savearea *save) {
 	} ttt, adj;
 	natural_t tbu, tbu2, tbl;
 	struct per_proc_info *per_proc;					/* Area for my per_proc address */
-	int cpu, ret;
-	unsigned int tstrt, tend, temp, temp2;
+	int cpu, ret, subc;
+	unsigned int tstrt, tend, temp, temp2, oldwar;
 	addr64_t src, snk;
 	uint64_t scom, hid1, hid4, srrwrk, stat;
 	scomcomm sarea;
@@ -370,6 +373,46 @@ int diagCall(struct savearea *save) {
 	
 			return -1;								/* Return and check for ASTs... */
 		
+		case dgWar:									/* Set or reset workaround flags */
+		
+			save->save_r3 = (uint32_t)warFlags;		/* Get the old flags */
+			oldwar = warFlags;						/* Remember the old war flags */
+			
+			subc = (int32_t)save->save_r4;			/* Extract the subcommand */
+			switch(subc) {							/* Do what we need */
+				case 1:								/* Replace all */
+					warFlags = (uint32_t)save->save_r5;	/* Do them all */
+					break;
+				
+				case 2:								/* Turn on selected workarounds */
+					warFlags = warFlags | (uint32_t)save->save_r5;
+					break;
+					
+				case 3:								/* Turn off selected workarounds */
+					warFlags = warFlags & ~((uint32_t)save->save_r5);
+					break;
+				
+				case 4:								/* Start up selected workaround */
+					break;
+				
+				case 5:								/* Stop selected workaround */
+					break;
+				
+				case 6:								/* Reset specific workaround parameters to default */
+					break;
+				
+				case 7:								/* Set workaround parameters */
+					break;
+
+				default:
+				
+					break;
+					
+			}
+
+			save->save_r3 = oldwar;					/* Pass back original */
+			return -1;				
+		
 
 		default:									/* Handle invalid ones */
 			return 0;								/* Return an exception */
@@ -389,3 +432,4 @@ kern_return_t testPerfTrap(int trapno, struct savearea *ss,
 	return KERN_SUCCESS;
 
 }
+

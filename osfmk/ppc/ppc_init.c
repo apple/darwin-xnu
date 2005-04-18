@@ -102,7 +102,8 @@ void ppc_init(boot_args *args)
 	extern vm_offset_t static_memory_end;
 	thread_t		thread;
 	mapping *mp;
-	
+
+
 	/*
 	 * Setup per_proc info for first cpu.
 	 */
@@ -120,6 +121,7 @@ void ppc_init(boot_args *args)
 	per_proc_info[0].need_ast = (unsigned int)&need_ast[0];
 	per_proc_info[0].FPU_owner = 0;
 	per_proc_info[0].VMX_owner = 0;
+	per_proc_info[0].rtcPop = 0xFFFFFFFFFFFFFFFFULL;
 	mp = (mapping *)per_proc_info[0].ppCIOmp;
 	mp->mpFlags = 0x01000000 | mpSpecial | 1;
 	mp->mpSpace = invalSpace;

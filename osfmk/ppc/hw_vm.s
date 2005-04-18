@@ -3605,9 +3605,8 @@ hpfNoPte32:	subic.	r21,r21,1					; See if we have tried all slots
 			
 			bl		mapSelSlot					; Go select a slot (note that the PCA image is already set up)
 
-			cmplwi	cr5,r3,1					; Did we steal a slot?			
-			rlwinm	r5,r4,3,26,28				; Convert index to slot offset
-			add		r19,r19,r5					; Point directly to the PTE
+			cmplwi	cr5,r3,1					; Did we steal a slot?
+			rlwimi	r19,r4,3,26,28				; Insert PTE index into PTEG address yielding PTE address
 			mr		r16,r6						; Remember the PCA image after selection
 			blt+	cr5,hpfInser32				; Nope, no steal...
 			
@@ -3796,9 +3795,8 @@ hpfNoPte64:	subic.	r21,r21,1					; See if we have tried all slots
 			bl		mapSelSlot					; Go select a slot
 
 			cmplwi	cr5,r3,1					; Did we steal a slot?			
-			rlwinm	r5,r4,4,25,27				; Convert index to slot offset
 			mr		r18,r6						; Remember the PCA image after selection
-			add		r19,r19,r5					; Point directly to the PTE
+			insrdi	r19,r4,3,57					; Insert slot index into PTEG address bits 57:59, forming the PTE address
 			lwz		r10,hwSteals(r2)			; Get the steal count
 			blt++	cr5,hpfInser64				; Nope, no steal...
 

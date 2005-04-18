@@ -232,14 +232,14 @@
 #define chud_970_mmcr1		798
 #define chud_970_imc		799
 
-/* PPC SPRs - 7400/7410 Specific */
+/* PPC SPRs - 7400/7410 Specific, Private */
 #define chud_7400_msscr1	1015
-  
-/* PPC SPRs - 64-bit implementations */
+
+/* PPC SPRs - 64-bit implementations,  Private */
 #define chud_ppc64_accr		29
 #define chud_ppc64_ctrl		152
 
-/* PPC SPRs - 970 Specific */
+/* PPC SPRs - 970 Specific, Private */
 #define chud_970_scomc		276
 #define chud_970_scomd		277
 #define chud_970_hsprg0		304

@@ -79,8 +79,9 @@ typedef struct hw_counters {
 	unsigned int hw_Maintenances;			/* Maintenance interruptions */
 	unsigned int hw_Instrumentations;		/* Instrumentation interruptions */
 	unsigned int hw_rsvd14;					/* Reswerved */
+	unsigned int hw_hdec;					/* Hypervisor decrementer */
 	
-	unsigned int hw_spare[19];				/* Pad to 256 bytes */
+	unsigned int hw_spare[18];				/* Pad to 256 bytes */
 
 } hw_counters;
 #pragma pack()

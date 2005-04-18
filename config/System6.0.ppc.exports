@@ -904,6 +904,7 @@ _ml_set_translation_off
 _ml_thrm_init
 _ml_thrm_set
 _ml_throttle
+_ml_mem_backoff
 _mtdar
 _mtdec
 _mtmmcr0

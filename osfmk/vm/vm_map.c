@@ -7874,7 +7874,7 @@ vm_map_simplify_entry(
 		vm_object_deallocate(prev_entry->object.vm_object);
 		vm_map_entry_dispose(map, prev_entry);
 		SAVE_HINT(map, this_entry);
-		counter(c_vm_map_entry_simplified++);
+		counter(c_vm_map_simplified++);
 	}
 	counter(c_vm_map_simplify_entry_called++);
 }

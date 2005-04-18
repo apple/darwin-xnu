@@ -195,13 +195,18 @@ struct hwCtrs {
 	unsigned int	hwSoftPatches;			/* Soft Patch interruptions */
 	unsigned int	hwMaintenances;			/* Maintenance interruptions */
 	unsigned int	hwInstrumentations;		/* Instrumentation interruptions */
-	unsigned int	hwrsvd14;				/* Reswerved */
-/*											0x0B4 */
+	unsigned int	hwrsvd14;				/* Reserved */
+	unsigned int 	hwhdec;					/* 0B4 Hypervisor decrementer */
 
-	unsigned int	hwspare0[17];			/* Reserved */
-	unsigned int	hwRedrives;				/* Number of redriven interrupts */
-	unsigned int	hwSteals;				/* PTE Steals */
-/*											0x100 */
+	unsigned int	hwspare0[11];			/* 0B8 Reserved */
+	unsigned int	hwspare0a;				/* 0E4 Reserved */
+	unsigned int	hwspare0b;				/* 0E8 Reserved */
+	unsigned int	hwspare0c;				/* 0EC Reserved */
+	unsigned int	hwspare0d;				/* 0F0 Reserved */
+	unsigned int	hwIgnored;				/* 0F4 Interruptions ignored */
+	unsigned int	hwRedrives;				/* 0F8 Number of redriven interrupts */
+	unsigned int	hwSteals;				/* 0FC Steals */
+/*											   100 */
 
 	unsigned int 	hwMckHang;				/* ? */
 	unsigned int 	hwMckSLBPE;				/* ? */
@@ -232,8 +237,9 @@ struct hwCtrs {
 	unsigned int	numSIGPtimo;			/* Number of SIGP send timeouts */
 	unsigned int	numSIGPmast;			/* Number of SIGPast messages merged */
 	unsigned int	numSIGPmwake;			/* Number of SIGPwake messages merged */
+	unsigned int	numSIGPcall;			/* Number of SIGPcall messages received */
 	
-	unsigned int	hwspare3[21];			/* Pad to 512 */
+	unsigned int	hwspare3[20];			/* Pad to 512 */
 	
 };
 #pragma pack()
@@ -279,7 +285,7 @@ struct per_proc_info {
 
 	/* PPC cache line boundary here - 020 */
 
-	unsigned int	rsrvd020[2];
+	uint64_t		rtcPop;				/* Real Time Clock pop */
 	unsigned int	need_ast;			/* pointer to need_ast[CPU_NO] */
 /*
  *	Note: the following two pairs of words need to stay in order and each pair must
@@ -320,16 +326,20 @@ struct per_proc_info {
 #define MPsigpFunc		0x0000FF00		/* Current function */
 #define MPsigpIdle		0x00			/* No function pending */
 #define MPsigpSigp		0x04			/* Signal a processor */
+
 #define SIGPast		0					/* Requests an ast on target processor */
 #define SIGPcpureq	1					/* Requests CPU specific function */
 #define SIGPdebug	2					/* Requests a debugger entry */
 #define SIGPwake	3					/* Wake up a sleeping processor */
+#define SIGPcall	4					/* Call a function on a processor */
+
 #define CPRQtemp	0					/* Get temprature of processor */
-#define CPRQtimebase	1					/* Get timebase of processor */
+#define CPRQtimebase	1				/* Get timebase of processor */
 #define CPRQsegload	2					/* Segment registers reload */
 #define CPRQscom	3					/* SCOM */
 #define CPRQchud	4					/* CHUD perfmon */
 #define CPRQsps		5					/* Set Processor Speed */
+
 	unsigned int	MPsigpParm0;		/* SIGP parm 0 */
 	unsigned int	MPsigpParm1;		/* SIGP parm 1 */
 	unsigned int	MPsigpParm2;		/* SIGP parm 2 */
@@ -588,6 +598,7 @@ extern char *trap_type[];
 #define T_MAINTENANCE			(0x2A * T_VECTOR_SIZE)
 #define T_INSTRUMENTATION		(0x2B * T_VECTOR_SIZE)
 #define T_ARCHDEP0				(0x2C * T_VECTOR_SIZE)
+#define T_HDEC					(0x2D * T_VECTOR_SIZE)
 
 #define T_AST					(0x100 * T_VECTOR_SIZE) 
 #define T_MAX					T_CHOKE		 /* Maximum exception no */

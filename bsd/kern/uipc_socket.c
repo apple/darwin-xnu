@@ -126,6 +126,7 @@ MALLOC_DEFINE(M_PCB, "pcb", "protocol control block");
 #define DBG_FNC_SORECEIVE	NETDBG_CODE(DBG_NETSOCK, (8 << 8))
 #define DBG_FNC_SOSHUTDOWN      NETDBG_CODE(DBG_NETSOCK, (9 << 8))
 
+#define MAX_SOOPTGETM_SIZE	(128 * MCLBYTES)
 
 SYSCTL_DECL(_kern_ipc);
 
@@ -2315,6 +2316,9 @@ soopt_getm(struct sockopt *sopt, struct mbuf **mp)
 {
 	struct mbuf *m, *m_prev;
 	int sopt_size = sopt->sopt_valsize;
+
+	if (sopt_size > MAX_SOOPTGETM_SIZE)
+		return EMSGSIZE;
 
 	MGET(m, sopt->sopt_p ? M_WAIT : M_DONTWAIT, MT_DATA);
 	if (m == 0)

@@ -270,6 +270,8 @@
 #define dcfim	0x00000400
 #define spd		22
 #define spdm	0x00000200
+#define hdice	23
+#define hdicem	0x00000100
 #define sge		24
 #define sgem	0x00000080
 #define dcfa	25

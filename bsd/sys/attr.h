@@ -48,6 +48,13 @@
 #define FSOPT_NOFOLLOW 		0x00000001
 #define FSOPT_NOINMEMUPDATE 0x00000002
 
+/* we currently aren't anywhere near this amount for a valid
+ * fssearchblock.sizeofsearchparams1 or fssearchblock.sizeofsearchparams2
+ * but we put a sanity check in to avoid abuse of the value passed in from
+ * user land.
+ */
+#define SEARCHFS_MAX_SEARCHPARMS  4096
+
 typedef u_int32_t text_encoding_t;
 
 typedef u_int32_t fsobj_type_t;

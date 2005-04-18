@@ -61,6 +61,7 @@ int diagCall(struct savearea *save);
 #define dgPerfMon 15
 #define dgMapPage 16
 #define dgScom 17
+#define	dgWar 18
 
 
 typedef struct diagWork {			/* Diagnostic work area */

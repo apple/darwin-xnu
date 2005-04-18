@@ -814,6 +814,7 @@ kaudit_to_bsm(struct kaudit_record *kar, struct au_record **pau)
 		kau_write(rec, tok);
 		/* fall thru */
 
+	case AUE_OPEN:
 	case AUE_OPEN_R:
 	case AUE_OPEN_RT:
 	case AUE_OPEN_RW:
@@ -1047,6 +1048,7 @@ kaudit_to_bsm(struct kaudit_record *kar, struct au_record **pau)
 		break;
 
 	case AUE_SYSCTL:
+	case AUE_SYSCTL_NONADMIN:
 		if (ar->ar_valid_arg & (ARG_CTLNAME | ARG_LEN)) {
 			for (ctr = 0; ctr < ar->ar_arg_len; ctr++) {
 			  tok = au_to_arg32(1, "name", ar->ar_arg_ctlname[ctr]);

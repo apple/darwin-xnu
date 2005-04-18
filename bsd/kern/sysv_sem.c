@@ -990,7 +990,7 @@ semop(p, uap, retval)
 		UNLOCK_AND_RETURN(eval);
 	}
 
-	if (nsops > MAX_SOPS) {
+	if (nsops < 0 || nsops > MAX_SOPS) {
 #ifdef SEM_DEBUG
 		printf("too many sops (max=%d, nsops=%d)\n", MAX_SOPS, nsops);
 #endif

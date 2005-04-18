@@ -65,10 +65,15 @@ typedef struct lowglo {
 	unsigned int	lgRsv184[31];			/* 5184 reserved - push to next line */
 	struct diagWork	lgdgWork;				/* 5200 Start of diagnostic work area */
 	unsigned int	lgRsv220[24];			/* 5220 reserved */
-	unsigned int	lgRst280[32];			/* 5280 reserved */
+	unsigned int	lgRsv280[32];			/* 5280 reserved */
 	unsigned int	lgKillResv;				/* 5300 line used to kill reservations */
 	unsigned int	lgKillResvpad[31];		/* 5304 pad reservation kill line */
-	unsigned int	lgRsv380[768];			/* 5380 reserved - push to 1 page */
+
+	unsigned int	lgRsv380[32];			/* 5380 - 5400 reserved  */
+
+	unsigned int	lgRsv400[32];			/* 5400 - 5480 reserved  */
+
+	uint32_t		lgRsv480[704];			/* 5480 reserved - push to 1 page */
 
 } lowglo;
 

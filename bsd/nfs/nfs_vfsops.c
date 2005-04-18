@@ -755,7 +755,7 @@ nfs_mount(mp, path, data, ndp, p)
 		return (EPROGMISMATCH);
 #endif /* !NO_COMPAT_PRELITE2 */
 	}
-	if (args.fhsize > NFSX_V3FHMAX)
+	if (args.fhsize < 0 || args.fhsize > NFSX_V3FHMAX)
 		return (EINVAL);
 	error = copyin((caddr_t)args.fh, (caddr_t)nfh, args.fhsize);
 	if (error)

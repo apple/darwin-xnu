@@ -1019,10 +1019,6 @@ getauid(struct proc *p, struct getauid_args *uap, register_t *retval)
 	register struct pcred *pc = p->p_cred;
 	int error;
 
-	error = suser(pc->pc_ucred, &p->p_acflag);
-	if (error)
-		return (error);
-
 	error = copyout((void *)&p->p_au->ai_auid, (void *)uap->auid, 
 				sizeof(*uap->auid));
 	if (error)
@@ -1059,6 +1055,10 @@ setauid(struct proc *p, struct setauid_args *uap, register_t *retval)
 
 /*
  *  System calls to get and set process audit information.
+ *  If the caller is privileged, they get the whole set of
+ *  audit information.  Otherwise, the real audit mask is
+ *  filtered out - but the rest of the information is
+ *  returned.
  */
 struct getaudit_args {
 	struct auditinfo	*auditinfo;
@@ -1068,13 +1068,17 @@ int
 getaudit(struct proc *p, struct getaudit_args *uap, register_t *retval)
 {
 	register struct pcred *pc = p->p_cred;
+	struct auditinfo ai = *p->p_au;
 	int error;
 
+	/* only superuser gets to see the real mask */
 	error = suser(pc->pc_ucred, &p->p_acflag);
-	if (error)
-		return (error);
-	error = copyout((void *)p->p_au, (void *)uap->auditinfo, 
-				sizeof(*uap->auditinfo));
+	if (error) {
+		ai.ai_mask.am_success = ~0;
+		ai.ai_mask.am_failure = ~0;
+	}
+
+	error = copyout((void *)&ai, (void *)uap->auditinfo, sizeof(ai));
 	if (error)
 		return (error);
 
@@ -1115,12 +1119,6 @@ struct getaudit_addr_args {
 int
 getaudit_addr(struct proc *p, struct getaudit_addr_args *uap, register_t *retval)
 {
-	register struct pcred *pc = p->p_cred;
-	int error;
-
-	error = suser(pc->pc_ucred, &p->p_acflag);
-	if (error)
-		return (error);
 	return (ENOSYS);
 }
 

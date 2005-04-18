@@ -193,7 +193,7 @@ EXT(dbfloats):
 		.globl  EXT(dbspecrs)
 		.align	3
 EXT(dbspecrs):
-		.set	.,.+(80*4)
+		.set	.,.+(336*4)
 
 /*
  *		Interrupt and debug stacks go here

@@ -363,6 +363,8 @@ void 			savearea_init(vm_offset_t addr);	/* Boot-time savearea initialization */
 #define SAVredriveb	13						/* Indicates that the low-level fault handler associated */
 #define	SAVinstrument 0x00080000			/* Indicates that we should return instrumentation data */
 #define	SAVinstrumentb 12					/* Indicates that we should return instrumentation data */
+#define	SAVeat 		0x00100000				/* Indicates that interruption should be ignored */
+#define	SAVeatb 	11						/* Indicates that interruption should be ignored */
 #define SAVtype		0x0000FF00				/* Shows type of savearea */
 #define SAVtypeshft	8						/* Shift to position type */
 #define SAVempty	0x86					/* Savearea is on free list */

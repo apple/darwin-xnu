@@ -266,6 +266,7 @@ void ml_set_processor_speed(unsigned long speed);
 void ml_set_processor_voltage(unsigned long voltage);
 unsigned int ml_scom_write(uint32_t reg, uint64_t data);
 unsigned int ml_scom_read(uint32_t reg, uint64_t *data);
+uint32_t ml_hdec_ratio(void);
 
 #endif /* __APPLE_API_PRIVATE */
 

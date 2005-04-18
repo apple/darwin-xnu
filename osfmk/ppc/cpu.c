@@ -443,6 +443,7 @@ cpu_start(
 		proc_info->need_ast = (unsigned int)&need_ast[cpu];
 		proc_info->FPU_owner = 0;
 		proc_info->VMX_owner = 0;
+		proc_info->rtcPop = 0xFFFFFFFFFFFFFFFFULL;
 		mp = (mapping *)(&proc_info->ppCIOmp);
 		mp->mpFlags = 0x01000000 | mpSpecial | 1;
 		mp->mpSpace = invalSpace;
@@ -523,10 +524,10 @@ cpu_signal_handler(
 	int cpu;
 	struct SIGtimebase *timebaseAddr;
 	natural_t tbu, tbu2, tbl;
-	
+	broadcastFunc xfunc;
 	cpu = cpu_number();								/* Get the CPU number */
 	pproc = &per_proc_info[cpu];					/* Point to our block */
-
+	
 /*
  *	Since we've been signaled, wait about 31 ms for the signal lock to pass
  */
@@ -630,11 +631,12 @@ cpu_signal_handler(
 
 						case CPRQsps:
 							{
-							extern void ml_set_processor_speed_slave(unsigned long speed);
+								extern void ml_set_processor_speed_slave(unsigned long speed);
 
-							ml_set_processor_speed_slave(holdParm2);
-							return;
-						}
+								ml_set_processor_speed_slave(holdParm2);
+								return;
+							}
+							
 						default:
 							panic("cpu_signal_handler: unknown CPU request - %08X\n", holdParm1);
 							return;
@@ -652,6 +654,12 @@ cpu_signal_handler(
 				case SIGPwake:						/* Wake up CPU */
 					pproc->hwCtr.numSIGPwake++;		/* Count this one */
 					return;							/* No need to do anything, the interrupt does it all... */
+					
+				case SIGPcall:						/* Call function on CPU */
+					pproc->hwCtr.numSIGPcall++;		/* Count this one */
+					xfunc = holdParm1;				/* Do this since I can't seem to figure C out */
+					xfunc(holdParm2);				/* Call the passed function */
+					return;							/* Done... */
 					
 				default:
 					panic("cpu_signal_handler: unknown SIGP message order - %08X\n", holdParm0);
@@ -865,4 +873,43 @@ cpu_sync_timebase(
 		continue;
 
 	(void)ml_set_interrupts_enabled(intr);
+}
+
+/*
+ *	Call a function on all running processors
+ *
+ *	Note that the synch paramter is used to wait until all functions are complete.
+ *	It is not passed to the other processor and must be known by the called function.
+ *	The called function must do a thread_wakeup on the synch if it decrements the
+ *	synch count to 0.
+ */
+
+
+int32_t cpu_broadcast(uint32_t *synch, broadcastFunc func, uint32_t parm) {
+
+	int sigproc, cpu, ocpu;
+
+	cpu = cpu_number();									/* Who are we? */
+	sigproc = 0;										/* Clear called processor count */
+
+	if(real_ncpus > 1) {								/* Are we just a uni? */
+	
+		assert_wait((event_t)synch, THREAD_UNINT);		/* If more than one processor, we may have to wait */
+
+		for(ocpu = 0; ocpu < real_ncpus; ocpu++) {		/* Tell everyone to call */
+			if(ocpu == cpu) continue;					/* If we talk to ourselves, people will wonder... */
+			hw_atomic_add(synch, 1);					/* Tentatively bump synchronizer  */
+			sigproc++;									/* Tentatively bump signal sent count */
+			if(KERN_SUCCESS != cpu_signal(ocpu, SIGPcall, (uint32_t)func, parm)) {	/* Call the function on the other processor */
+				hw_atomic_sub(synch, 1);				/* Other guy isn't really there, ignore it  */
+				sigproc--;								/* and don't count it */
+			}
+		}
+
+		if(!sigproc) clear_wait(current_thread(), THREAD_AWAKENED);	/* Clear wait if we never signalled */
+		else thread_block(THREAD_CONTINUE_NULL);		/* Wait for everyone to get into step... */
+	}
+
+	return sigproc;										/* Return the number of guys actually signalled */
+
 }
